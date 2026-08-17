@@ -34,6 +34,8 @@ Version 0.6.1 separates pressure-cell classification from the smooth P2G density
 
 Version 0.7 adds an explicit bounded takeover session. Only pure `water` blocks are removed; waterlogged blocks are left untouched. Original block states are retained in memory and restored only where the position is still air or water, so a solid block placed during the test is never overwritten. This is still a temporary test tool: use it in a disposable/test world, because a process or machine crash cannot run the normal restoration hook.
 
+Version 0.7.1 makes live collision displacement use the exact particle volume removed by a new solid instead of an interpolated grid-density estimate, eliminating the small mass loss seen after block placement. Snapshots now include the actual marker-cell mask in addition to smooth density. Marker cells seed the implicit surface, so a shallow puddle remains visible even when no density cell reaches the 0.5 isosurface threshold. Status reports both particle count and occupied marker-cell count.
+
 ## Build
 
 Minecraft 26.2 targets Java 25. On this machine the project is built with the installed JDK 26 while compiling to Java 25 bytecode:

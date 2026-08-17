@@ -418,8 +418,7 @@ public final class FluidSimulationService {
 								int cellZ = blockZ * CELLS_PER_BLOCK + localZ;
 								boolean desired = fullBlock || intersectsSubcell(shape, localX, localY, localZ, inset);
 								if (domain.isSolid(cellX, cellY, cellZ) == desired) continue;
-								if (desired) displacedInBlock += domain.volume(cellX, cellY, cellZ);
-								domain.setSolid(cellX, cellY, cellZ, desired);
+								displacedInBlock += domain.setSolid(cellX, cellY, cellZ, desired);
 								changedCells++;
 							}
 						}
@@ -509,12 +508,12 @@ public final class FluidSimulationService {
 		float cellVolumes = domain.totalVolume();
 		FlipFluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
 		return String.format(
-				"%s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d | visible %d, dense %d | takeover %d | entities %s/%d | maxP %.1f | collision Δ%d, escaped %.3f | %s",
+				"%s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d in %d cells | visible %d, dense %d | takeover %d | entities %s/%d | maxP %.1f | collision Δ%d, escaped %.3f | %s",
 				paused ? "暂停" : "运行",
 				origin.toShortString(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
 				20.0 / stepIntervalTicks,
 				cellVolumes / CELL_VOLUMES_PER_BLOCK, cellVolumes,
-				domain.particleCount(),
+				domain.particleCount(), domain.markerCellCount(),
 				distribution.visibleCells(), distribution.denseCells(), takeoverOriginalBlocks.size(), entityPhysicsEnabled ? "on" : "off", lastAffectedEntities,
 				domain.maximumPressure(),
 				lastCollisionStats.changedCells(), lastCollisionStats.escapedCellVolume() / CELL_VOLUMES_PER_BLOCK, stats
@@ -525,7 +524,7 @@ public final class FluidSimulationService {
 		if (domain == null || !level.dimension().equals(dimension)) return;
 		FluidSnapshotPayload payload = new FluidSnapshotPayload(
 				origin, domain.config().cellSize(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
-				domain.copyQuantizedVolume(), domain.copySolidMask(), debugOverlays
+				domain.copyQuantizedVolume(), domain.copyMarkerMask(), domain.copySolidMask(), debugOverlays
 		);
 		for (ServerPlayer player : level.players()) {
 			if (ServerPlayNetworking.canSend(player, FluidSnapshotPayload.TYPE)) ServerPlayNetworking.send(player, payload);

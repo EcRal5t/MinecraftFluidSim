@@ -14,6 +14,7 @@ public record FluidSnapshotPayload(
 		int sizeY,
 		int sizeZ,
 		byte[] volume,
+		byte[] markers,
 		byte[] solids,
 		boolean debugOverlays
 ) implements CustomPacketPayload {
@@ -28,13 +29,13 @@ public record FluidSnapshotPayload(
 	public FluidSnapshotPayload {
 		if (sizeX < 0 || sizeY < 0 || sizeZ < 0) throw new IllegalArgumentException("Snapshot dimensions cannot be negative");
 		int expected = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
-		if (expected != volume.length || expected != solids.length || expected > MAX_CELLS) {
+		if (expected != volume.length || expected != markers.length || expected != solids.length || expected > MAX_CELLS) {
 			throw new IllegalArgumentException("Invalid snapshot array length");
 		}
 	}
 
 	public static FluidSnapshotPayload clear() {
-		return new FluidSnapshotPayload(BlockPos.ZERO, 1.0F, 0, 0, 0, new byte[0], new byte[0], false);
+		return new FluidSnapshotPayload(BlockPos.ZERO, 1.0F, 0, 0, 0, new byte[0], new byte[0], new byte[0], false);
 	}
 
 	public boolean isClear() {
@@ -53,6 +54,7 @@ public record FluidSnapshotPayload(
 		buffer.writeVarInt(payload.sizeY);
 		buffer.writeVarInt(payload.sizeZ);
 		buffer.writeByteArray(payload.volume);
+		buffer.writeByteArray(payload.markers);
 		buffer.writeByteArray(payload.solids);
 		buffer.writeBoolean(payload.debugOverlays);
 	}
@@ -64,8 +66,9 @@ public record FluidSnapshotPayload(
 		int sizeY = buffer.readVarInt();
 		int sizeZ = buffer.readVarInt();
 		byte[] volume = buffer.readByteArray(MAX_CELLS);
+		byte[] markers = buffer.readByteArray(MAX_CELLS);
 		byte[] solids = buffer.readByteArray(MAX_CELLS);
 		boolean debugOverlays = buffer.readBoolean();
-		return new FluidSnapshotPayload(origin, cellSize, sizeX, sizeY, sizeZ, volume, solids, debugOverlays);
+		return new FluidSnapshotPayload(origin, cellSize, sizeX, sizeY, sizeZ, volume, markers, solids, debugOverlays);
 	}
 }

@@ -34,6 +34,7 @@ import java.util.OptionalDouble;
 public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	private static final int SURFACE_THRESHOLD = 8;
 	private static final float ISO_LEVEL = 0.50F;
+	private static final float MARKER_INTERIOR_LEVEL = 0.65F;
 	private static final int[][] CUBE_TETRAHEDRA = {
 			{0, 5, 1, 6}, {0, 1, 2, 6}, {0, 2, 3, 6},
 			{0, 3, 7, 6}, {0, 7, 4, 6}, {0, 4, 5, 6}
@@ -85,14 +86,16 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 		float blend = Math.min(1.0F, Math.max(0.0F, (float) (now - transition.startedAtNanos()) / SNAPSHOT_BLEND_NANOS));
 		if (blend >= 1.0F || !compatible(from, to)) return to;
 		byte[] volume = new byte[to.volume().length];
+		byte[] markers = new byte[to.markers().length];
 		for (int i = 0; i < volume.length; i++) {
 			int first = Byte.toUnsignedInt(from.volume()[i]);
 			int second = Byte.toUnsignedInt(to.volume()[i]);
 			volume[i] = (byte) Math.round(first + (second - first) * blend);
+			markers[i] = from.markers()[i] != 0 || to.markers()[i] != 0 ? (byte) 1 : (byte) 0;
 		}
 		return new FluidSnapshotPayload(
 				to.origin(), to.cellSize(), to.sizeX(), to.sizeY(), to.sizeZ(),
-				volume, to.solids(), to.debugOverlays()
+				volume, markers, to.solids(), to.debugOverlays()
 		);
 	}
 
@@ -102,7 +105,8 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 				&& first.sizeX() == second.sizeX()
 				&& first.sizeY() == second.sizeY()
 				&& first.sizeZ() == second.sizeZ()
-				&& first.volume().length == second.volume().length;
+				&& first.volume().length == second.volume().length
+				&& first.markers().length == second.markers().length;
 	}
 
 	public void render(LevelRenderContext context) {
@@ -198,7 +202,9 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 			weightedDensity += density * weight;
 			weightSum += weight;
 		}
-		return weightSum <= 1.0E-6F ? 0.0F : weightedDensity / weightSum;
+		float density = weightSum <= 1.0E-6F ? 0.0F : weightedDensity / weightSum;
+		if (state.markers()[index(state, x, y, z)] != 0) density = Math.max(density, MARKER_INTERIOR_LEVEL);
+		return density;
 	}
 
 	private static float kernelWeight(int offset) {

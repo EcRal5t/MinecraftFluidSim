@@ -8,6 +8,7 @@ public final class FlipFluidDomainValidation {
 		massAndDamBreak();
 		wallBoundaryReconstruction();
 		waterMovesAlongWallsIntoCorner();
+		solidDisplacementPreservesExactParticleVolume();
 		minecraftSizedBenchmark();
 		System.out.println("FlipFluidDomain validation passed");
 	}
@@ -56,6 +57,18 @@ public final class FlipFluidDomainValidation {
 		float cornerColumn = 0.0F;
 		for (int y = 1; y < domain.sizeY(); y++) cornerColumn += domain.volume(1, y, 1);
 		check(cornerColumn > 0.20F, "particles failed to move tangentially into a wall corner: " + cornerColumn);
+	}
+
+	private static void solidDisplacementPreservesExactParticleVolume() {
+		FlipFluidDomain domain = new FlipFluidDomain(10, 8, 10, config());
+		for (int z = 3; z <= 6; z++) for (int y = 1; y <= 3; y++) for (int x = 3; x <= 6; x++) domain.setVolume(x, y, z, 0.73F);
+		float before = domain.totalVolume();
+		float displaced = 0.0F;
+		for (int z = 4; z <= 5; z++) for (int y = 1; y <= 2; y++) for (int x = 4; x <= 5; x++) displaced += domain.setSolid(x, y, z, true);
+		float restored = domain.addVolumeNear(4, 2, 4, displaced, 5);
+		check(Math.abs(restored - displaced) < 1.0E-5F, "could not restore displaced particle volume");
+		check(Math.abs(domain.totalVolume() - before) < 1.0E-4F,
+				"solid displacement changed particle volume: before=" + before + ", after=" + domain.totalVolume());
 	}
 
 	private static void minecraftSizedBenchmark() {

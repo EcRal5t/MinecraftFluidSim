@@ -91,15 +91,24 @@ public final class FlipFluidDomain {
 	public int sizeY() { return sizeY; }
 	public int sizeZ() { return sizeZ; }
 	public int particleCount() { return particleCount; }
+	public int markerCellCount() {
+		ensureGrid();
+		int result = 0;
+		for (int count : markerCount) if (count > 0) result++;
+		return result;
+	}
 	public FluidSolverConfig config() { return config; }
 
-	public void setSolid(int x, int y, int z, boolean value) {
+	/** Sets collision occupancy and returns the exact particle volume displaced. */
+	public float setSolid(int x, int y, int z, boolean value) {
 		int index = cellIndexChecked(x, y, z);
-		if (solid[index] == value) return;
+		if (solid[index] == value) return 0.0F;
 		solid[index] = value;
 		pressure[index] = 0.0F;
-		if (value && removeParticlesInCell(x, y, z, Float.POSITIVE_INFINITY) > 0.0F) gridDirty = true;
+		float displaced = value ? removeParticlesInCell(x, y, z, Float.POSITIVE_INFINITY) : 0.0F;
 		volume[index] = 0.0F;
+		gridDirty = true;
+		return displaced;
 	}
 
 	public boolean isSolid(int x, int y, int z) { return solid[cellIndexChecked(x, y, z)]; }
@@ -141,6 +150,14 @@ public final class FlipFluidDomain {
 	public byte[] copySolidMask() {
 		byte[] result = new byte[cellCount];
 		for (int i = 0; i < cellCount; i++) result[i] = solid[i] ? (byte) 1 : (byte) 0;
+		return result;
+	}
+
+	/** Actual pressure-phase occupancy, separate from the smooth P2G density. */
+	public byte[] copyMarkerMask() {
+		ensureGrid();
+		byte[] result = new byte[cellCount];
+		for (int i = 0; i < cellCount; i++) result[i] = markerCount[i] > 0 ? (byte) 1 : (byte) 0;
 		return result;
 	}
 
