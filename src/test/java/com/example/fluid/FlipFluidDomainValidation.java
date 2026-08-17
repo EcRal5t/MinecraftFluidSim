@@ -7,6 +7,7 @@ public final class FlipFluidDomainValidation {
 	public static void main(String[] args) {
 		massAndDamBreak();
 		wallBoundaryReconstruction();
+		waterMovesAlongWallsIntoCorner();
 		minecraftSizedBenchmark();
 		System.out.println("FlipFluidDomain validation passed");
 	}
@@ -43,6 +44,18 @@ public final class FlipFluidDomainValidation {
 				"wall boundary lost reconstructed volume: particles=" + particles + ", grid=" + reconstructed);
 		for (int i = 0; i < 40; i++) domain.step();
 		check(Math.abs(reconstructedVolume(domain) - particles) < 1.0E-3F, "wall reconstruction drifted after motion");
+	}
+
+	private static void waterMovesAlongWallsIntoCorner() {
+		FlipFluidDomain domain = new FlipFluidDomain(8, 6, 8, config());
+		for (int z = 0; z < 8; z++) for (int x = 0; x < 8; x++) domain.setSolid(x, 0, z, true);
+		for (int z = 0; z < 8; z++) for (int y = 0; y < 6; y++) domain.setSolid(0, y, z, true);
+		for (int x = 0; x < 8; x++) for (int y = 0; y < 6; y++) domain.setSolid(x, y, 0, true);
+		for (int z = 4; z <= 6; z++) for (int y = 1; y <= 4; y++) for (int x = 4; x <= 6; x++) domain.setVolume(x, y, z, 1.0F);
+		for (int step = 0; step < 160; step++) domain.step();
+		float cornerColumn = 0.0F;
+		for (int y = 1; y < domain.sizeY(); y++) cornerColumn += domain.volume(1, y, 1);
+		check(cornerColumn > 0.20F, "particles failed to move tangentially into a wall corner: " + cornerColumn);
 	}
 
 	private static void minecraftSizedBenchmark() {

@@ -148,16 +148,22 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	/** Extracts the 0.5 density isosurface with marching tetrahedra. */
 	private static void renderFluidSurface(Matrix4fc matrix, VertexConsumer vertices, FluidSnapshotPayload state, float h) {
 		Vector3f[] positions = new Vector3f[8];
+		for (int i = 0; i < positions.length; i++) positions[i] = new Vector3f();
 		float[] values = new float[8];
+		int nodeSizeX = state.sizeX() + 2, nodeSizeY = state.sizeY() + 2, nodeSizeZ = state.sizeZ() + 2;
+		float[] scalarNodes = new float[nodeSizeX * nodeSizeY * nodeSizeZ];
+		for (int nodeZ = 0; nodeZ < nodeSizeZ; nodeZ++) for (int nodeY = 0; nodeY < nodeSizeY; nodeY++) for (int nodeX = 0; nodeX < nodeSizeX; nodeX++) {
+			scalarNodes[(nodeZ * nodeSizeY + nodeY) * nodeSizeX + nodeX] = scalar(state, nodeX - 1, nodeY - 1, nodeZ - 1);
+		}
 		for (int z = -1; z < state.sizeZ(); z++) for (int y = -1; y < state.sizeY(); y++) for (int x = -1; x < state.sizeX(); x++) {
-			setSurfaceNode(positions, values, 0, state, x, y, z, h);
-			setSurfaceNode(positions, values, 1, state, x + 1, y, z, h);
-			setSurfaceNode(positions, values, 2, state, x + 1, y + 1, z, h);
-			setSurfaceNode(positions, values, 3, state, x, y + 1, z, h);
-			setSurfaceNode(positions, values, 4, state, x, y, z + 1, h);
-			setSurfaceNode(positions, values, 5, state, x + 1, y, z + 1, h);
-			setSurfaceNode(positions, values, 6, state, x + 1, y + 1, z + 1, h);
-			setSurfaceNode(positions, values, 7, state, x, y + 1, z + 1, h);
+			setSurfaceNode(positions, values, 0, state, scalarNodes, nodeSizeX, nodeSizeY, x, y, z, h);
+			setSurfaceNode(positions, values, 1, state, scalarNodes, nodeSizeX, nodeSizeY, x + 1, y, z, h);
+			setSurfaceNode(positions, values, 2, state, scalarNodes, nodeSizeX, nodeSizeY, x + 1, y + 1, z, h);
+			setSurfaceNode(positions, values, 3, state, scalarNodes, nodeSizeX, nodeSizeY, x, y + 1, z, h);
+			setSurfaceNode(positions, values, 4, state, scalarNodes, nodeSizeX, nodeSizeY, x, y, z + 1, h);
+			setSurfaceNode(positions, values, 5, state, scalarNodes, nodeSizeX, nodeSizeY, x + 1, y, z + 1, h);
+			setSurfaceNode(positions, values, 6, state, scalarNodes, nodeSizeX, nodeSizeY, x + 1, y + 1, z + 1, h);
+			setSurfaceNode(positions, values, 7, state, scalarNodes, nodeSizeX, nodeSizeY, x, y + 1, z + 1, h);
 			boolean crosses = false;
 			boolean first = values[0] >= ISO_LEVEL;
 			for (int i = 1; i < values.length; i++) if ((values[i] >= ISO_LEVEL) != first) { crosses = true; break; }
@@ -168,20 +174,35 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 
 	private static void setSurfaceNode(
 			Vector3f[] positions, float[] values, int slot, FluidSnapshotPayload state,
+			float[] scalarNodes, int nodeSizeX, int nodeSizeY,
 			int x, int y, int z, float h
 	) {
-		positions[slot] = new Vector3f(
+		positions[slot].set(
 				state.origin().getX() + (x + 0.5F) * h,
 				state.origin().getY() + (y + 0.5F) * h,
 				state.origin().getZ() + (z + 0.5F) * h
 		);
-		values[slot] = scalar(state, x, y, z);
+		values[slot] = scalarNodes[((z + 1) * nodeSizeY + (y + 1)) * nodeSizeX + (x + 1)];
 	}
 
 	private static float scalar(FluidSnapshotPayload state, int x, int y, int z) {
 		if (!inside(state, x, y, z) || isSolid(state, x, y, z)) return 0.0F;
-		int raw = Byte.toUnsignedInt(state.volume()[index(state, x, y, z)]);
-		return raw < SURFACE_THRESHOLD ? 0.0F : raw / 255.0F;
+		float weightedDensity = 0.0F;
+		float weightSum = 0.0F;
+		for (int dz = -1; dz <= 1; dz++) for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+			int sampleX = x + dx, sampleY = y + dy, sampleZ = z + dz;
+			if (!inside(state, sampleX, sampleY, sampleZ) || isSolid(state, sampleX, sampleY, sampleZ)) continue;
+			float weight = kernelWeight(dx) * kernelWeight(dy) * kernelWeight(dz);
+			int raw = Byte.toUnsignedInt(state.volume()[index(state, sampleX, sampleY, sampleZ)]);
+			float density = raw < SURFACE_THRESHOLD ? 0.0F : raw / 255.0F;
+			weightedDensity += density * weight;
+			weightSum += weight;
+		}
+		return weightSum <= 1.0E-6F ? 0.0F : weightedDensity / weightSum;
+	}
+
+	private static float kernelWeight(int offset) {
+		return offset == 0 ? 2.0F : 1.0F;
 	}
 
 	private static void renderTetrahedron(

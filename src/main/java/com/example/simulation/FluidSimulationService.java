@@ -39,7 +39,7 @@ public final class FluidSimulationService {
 	private static final double HARD_PAUSE_MILLIS = 200.0;
 	private static final int HARD_PAUSE_STREAK = 3;
 	private static final int MAX_STEP_INTERVAL_TICKS = 4;
-	private static final int RECOVERY_STEPS = 40;
+	private static final int RECOVERY_STEPS = 8;
 	private static final double AIM_DISTANCE = 16.0;
 	private static final int ENTITY_SAMPLES_XZ = 3;
 	private static final int ENTITY_SAMPLES_Y = 5;
@@ -444,7 +444,8 @@ public final class FluidSimulationService {
 		if (domain == null) return "没有活动流体域";
 		String stats = lastStats == null
 				? "尚未步进"
-				: String.format("%.2f ms, PCG %d, residual %.4g", lastStepMilliseconds, lastStats.pressureIterations(), lastStats.pressureResidual());
+				: String.format("%.2f ms, substeps %d, PCG %d, residual %.4g",
+						lastStepMilliseconds, lastStats.substeps(), lastStats.pressureIterations(), lastStats.pressureResidual());
 		float cellVolumes = domain.totalVolume();
 		FlipFluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
 		return String.format(

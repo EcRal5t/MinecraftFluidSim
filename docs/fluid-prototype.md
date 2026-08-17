@@ -65,4 +65,6 @@ Version 0.5 adds bounded server-authoritative entity coupling. A 3×5×3 quadrat
 
 Version 0.6 replaces the active VOF transport with the 3D PIC/FLIP cycle derived from the Godot reference. Particle-carried volume eliminates the VOF haze without wall-contact or forced-leveling patches. Boundary-normalized density reconstruction and marching tetrahedra provide a continuous client surface. Snapshots interpolate across 200 ms, collision/bounds overlays are optional, and expensive domains reduce their simulation frequency before the hard pause guard is considered.
 
+Version 0.6.1 fixes two 2D-to-3D translation errors. Pressure phase classification uses the cell containing each marker rather than all eight cells touched by its trilinear P2G kernel. Solid contact follows the reference's axis-separated CCD: only normal motion is constrained, so contact with one or two walls cannot freeze tangential motion. A compact `[1,2,1]^3` density reconstruction kernel is evaluated client-side before isosurface extraction; it changes only visualization and closes subcell sampling cavities without moving particle volume.
+
 No command other than the explicitly requested capture reads world fluid state, and none of the commands currently changes world blocks. `/realwater remove` discards the active domain.

@@ -29,6 +29,8 @@ Entities inside the active domain are sampled at 45 points across their bounding
 
 There are no wall-contact, corner-filling, or forced-leveling rules in the active physics. Solid behavior comes from zero-normal MAC velocities plus particle collision, as in the Godot algorithm. Boundary-aware density-kernel normalization preserves particle mass when reconstructing cells next to solids. Client snapshots are blended over their 200 ms interval, and the client extracts one continuous isosurface instead of drawing a separate cuboid for every half-block cell.
 
+Version 0.6.1 separates pressure-cell classification from the smooth P2G density field: a pressure cell must actually contain a marker particle instead of merely receiving a tiny interpolation weight. Particle collision now constrains only the wall-normal coordinate, matching the Godot CCD pass and preserving tangential motion along walls and corners. The client convolves reconstructed density before isosurface extraction so sparse sampling does not create internal triangular cavities.
+
 ## Build
 
 Minecraft 26.2 targets Java 25. On this machine the project is built with the installed JDK 26 while compiling to Java 25 bytecode:

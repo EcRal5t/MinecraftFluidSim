@@ -25,6 +25,7 @@ public final class FlipFluidDomain {
 	private final int cellCount;
 	private final FluidSolverConfig config;
 	private final boolean[] solid;
+	private final int[] markerCount;
 	private final float[] volume;
 	private final float[] pressure;
 	private final float[] divergence;
@@ -66,6 +67,7 @@ public final class FlipFluidDomain {
 		this.cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
 		this.config = config;
 		this.solid = new boolean[cellCount];
+		this.markerCount = new int[cellCount];
 		this.volume = new float[cellCount];
 		this.pressure = new float[cellCount];
 		this.divergence = new float[cellCount];
@@ -238,6 +240,7 @@ public final class FlipFluidDomain {
 
 	private void rebuildGridFromParticles() {
 		Arrays.fill(volume, 0.0F);
+		Arrays.fill(markerCount, 0);
 		Arrays.fill(velocityX, 0.0F);
 		Arrays.fill(velocityY, 0.0F);
 		Arrays.fill(velocityZ, 0.0F);
@@ -245,6 +248,7 @@ public final class FlipFluidDomain {
 		Arrays.fill(velocityWeightY, 0.0F);
 		Arrays.fill(velocityWeightZ, 0.0F);
 		for (int i = 0; i < particleCount; i++) {
+			markerCount[particleCellIndex(i)]++;
 			splatCenter(particleX[i], particleY[i], particleZ[i], particleVolume[i]);
 			splatFaceField(velocityX, velocityWeightX, 0, particleX[i], particleY[i], particleZ[i], particleVelocityX[i], particleVolume[i]);
 			splatFaceField(velocityY, velocityWeightY, 1, particleX[i], particleY[i], particleZ[i], particleVelocityY[i], particleVolume[i]);
@@ -255,6 +259,14 @@ public final class FlipFluidDomain {
 		normalize(velocityZ, velocityWeightZ);
 		enforceSolidFaceVelocities();
 		gridDirty = false;
+	}
+
+	private int particleCellIndex(int particle) {
+		float h = config.cellSize();
+		int x = Math.min(sizeX - 1, Math.max(0, (int) Math.floor(particleX[particle] / h)));
+		int y = Math.min(sizeY - 1, Math.max(0, (int) Math.floor(particleY[particle] / h)));
+		int z = Math.min(sizeZ - 1, Math.max(0, (int) Math.floor(particleZ[particle] / h)));
+		return cellIndex(x, y, z);
 	}
 
 	private void splatCenter(float px, float py, float pz, float particleAmount) {
@@ -463,27 +475,64 @@ public final class FlipFluidDomain {
 		float maxX = sizeX * h - radius, maxY = sizeY * h - radius, maxZ = sizeZ * h - radius;
 		for (int i = 0; i < particleCount; i++) {
 			float nx = clamp(particleX[i] + particleVelocityX[i] * dt, minX, maxX);
-			if (!collides(nx, particleY[i], particleZ[i], radius)) particleX[i] = nx; else particleVelocityX[i] = 0.0F;
+			if (!centerInSolid(nx, particleY[i], particleZ[i])) particleX[i] = nx; else particleVelocityX[i] = 0.0F;
 			float ny = clamp(particleY[i] + particleVelocityY[i] * dt, minY, maxY);
-			if (!collides(particleX[i], ny, particleZ[i], radius)) particleY[i] = ny; else particleVelocityY[i] = 0.0F;
+			if (!centerInSolid(particleX[i], ny, particleZ[i])) particleY[i] = ny; else particleVelocityY[i] = 0.0F;
 			float nz = clamp(particleZ[i] + particleVelocityZ[i] * dt, minZ, maxZ);
-			if (!collides(particleX[i], particleY[i], nz, radius)) particleZ[i] = nz; else particleVelocityZ[i] = 0.0F;
+			if (!centerInSolid(particleX[i], particleY[i], nz)) particleZ[i] = nz; else particleVelocityZ[i] = 0.0F;
+			constrainToSolidFaces(i, radius);
 		}
 		gridDirty = true;
 	}
 
-	private boolean collides(float px, float py, float pz, float radius) {
+	private boolean centerInSolid(float px, float py, float pz) {
 		float h = config.cellSize();
-		int minX = Math.max(0, (int) Math.floor((px - radius) / h));
-		int maxX = Math.min(sizeX - 1, (int) Math.floor((px + radius - 1.0E-6F) / h));
-		int minY = Math.max(0, (int) Math.floor((py - radius) / h));
-		int maxY = Math.min(sizeY - 1, (int) Math.floor((py + radius - 1.0E-6F) / h));
-		int minZ = Math.max(0, (int) Math.floor((pz - radius) / h));
-		int maxZ = Math.min(sizeZ - 1, (int) Math.floor((pz + radius - 1.0E-6F) / h));
-		for (int z = minZ; z <= maxZ; z++) for (int y = minY; y <= maxY; y++) for (int x = minX; x <= maxX; x++) {
-			if (solid[cellIndex(x, y, z)]) return true;
+		int x = Math.min(sizeX - 1, Math.max(0, (int) Math.floor(px / h)));
+		int y = Math.min(sizeY - 1, Math.max(0, (int) Math.floor(py / h)));
+		int z = Math.min(sizeZ - 1, Math.max(0, (int) Math.floor(pz / h)));
+		return solid[cellIndex(x, y, z)];
+	}
+
+	/**
+	 * Mirrors the Godot CCD contact pass: constrain only the coordinate normal
+	 * to a neighboring solid face. Tangential motion remains free, including
+	 * along a wall edge or inside a corner.
+	 */
+	private void constrainToSolidFaces(int particle, float radius) {
+		float h = config.cellSize();
+		int x = Math.min(sizeX - 1, Math.max(0, (int) Math.floor(particleX[particle] / h)));
+		int y = Math.min(sizeY - 1, Math.max(0, (int) Math.floor(particleY[particle] / h)));
+		int z = Math.min(sizeZ - 1, Math.max(0, (int) Math.floor(particleZ[particle] / h)));
+		float localX = particleX[particle] - x * h;
+		float localY = particleY[particle] - y * h;
+		float localZ = particleZ[particle] - z * h;
+		float contactMinimum = radius + h * 1.0E-3F;
+		float contactMaximum = h - contactMinimum;
+
+		if (x > 0 && localX < radius && solid[cellIndex(x - 1, y, z)]) {
+			particleX[particle] = x * h + contactMinimum;
+			particleVelocityX[particle] = Math.max(0.0F, particleVelocityX[particle]);
 		}
-		return false;
+		if (x + 1 < sizeX && localX > h - radius && solid[cellIndex(x + 1, y, z)]) {
+			particleX[particle] = x * h + contactMaximum;
+			particleVelocityX[particle] = Math.min(0.0F, particleVelocityX[particle]);
+		}
+		if (y > 0 && localY < radius && solid[cellIndex(x, y - 1, z)]) {
+			particleY[particle] = y * h + contactMinimum;
+			particleVelocityY[particle] = Math.max(0.0F, particleVelocityY[particle]);
+		}
+		if (y + 1 < sizeY && localY > h - radius && solid[cellIndex(x, y + 1, z)]) {
+			particleY[particle] = y * h + contactMaximum;
+			particleVelocityY[particle] = Math.min(0.0F, particleVelocityY[particle]);
+		}
+		if (z > 0 && localZ < radius && solid[cellIndex(x, y, z - 1)]) {
+			particleZ[particle] = z * h + contactMinimum;
+			particleVelocityZ[particle] = Math.max(0.0F, particleVelocityZ[particle]);
+		}
+		if (z + 1 < sizeZ && localZ > h - radius && solid[cellIndex(x, y, z + 1)]) {
+			particleZ[particle] = z * h + contactMaximum;
+			particleVelocityZ[particle] = Math.min(0.0F, particleVelocityZ[particle]);
+		}
 	}
 
 	private void enforceSolidFaceVelocities() {
@@ -578,7 +627,7 @@ public final class FlipFluidDomain {
 	}
 
 	private void ensureGrid() { if (gridDirty) rebuildGridFromParticles(); }
-	private boolean isFluid(int index) { return !solid[index] && volume[index] > config.fluidEpsilon(); }
+	private boolean isFluid(int index) { return !solid[index] && markerCount[index] > 0; }
 	private boolean isAir(int index) { return !solid[index] && !isFluid(index); }
 	private boolean faceActive(int first, int second) { return !solid[first] && !solid[second] && (isFluid(first) || isFluid(second)); }
 	private float fluidPressure(int index) { return isFluid(index) ? pressure[index] : 0.0F; }
