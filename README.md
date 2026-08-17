@@ -8,6 +8,7 @@ This version is a safe test harness, not yet a global replacement for vanilla wa
 
 - `/realwater demo` creates a paused mathematical dam-break domain about nine blocks in front of the player. It does not change blocks.
 - `/realwater capture` samples vanilla water and collision shapes in a 12×8×12-block region centered near the player. It does not remove the vanilla water.
+- `/realwater takeover` performs the same capture, then temporarily replaces standalone vanilla water blocks with air so only the simulated water remains. `/realwater remove`, starting another domain, or a normal server shutdown restores the captured block states.
 - `/realwater pour [1-16]` injects that many block-volumes of simulated water where the crosshair enters the domain. The default is one bucket/block.
 - `/realwater drain [1-16]` removes simulated water along the crosshair ray. The default is one bucket/block.
 - `/realwater refresh` immediately re-samples collision geometry; this also happens automatically every five server ticks.
@@ -30,6 +31,8 @@ Entities inside the active domain are sampled at 45 points across their bounding
 There are no wall-contact, corner-filling, or forced-leveling rules in the active physics. Solid behavior comes from zero-normal MAC velocities plus particle collision, as in the Godot algorithm. Boundary-aware density-kernel normalization preserves particle mass when reconstructing cells next to solids. Client snapshots are blended over their 200 ms interval, and the client extracts one continuous isosurface instead of drawing a separate cuboid for every half-block cell.
 
 Version 0.6.1 separates pressure-cell classification from the smooth P2G density field: a pressure cell must actually contain a marker particle instead of merely receiving a tiny interpolation weight. Particle collision now constrains only the wall-normal coordinate, matching the Godot CCD pass and preserving tangential motion along walls and corners. The client convolves reconstructed density before isosurface extraction so sparse sampling does not create internal triangular cavities.
+
+Version 0.7 adds an explicit bounded takeover session. Only pure `water` blocks are removed; waterlogged blocks are left untouched. Original block states are retained in memory and restored only where the position is still air or water, so a solid block placed during the test is never overwritten. This is still a temporary test tool: use it in a disposable/test world, because a process or machine crash cannot run the normal restoration hook.
 
 ## Build
 

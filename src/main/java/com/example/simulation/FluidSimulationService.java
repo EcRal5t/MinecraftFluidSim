@@ -13,6 +13,8 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.entity.Entity;
@@ -23,6 +25,7 @@ import net.minecraft.world.phys.shapes.BooleanOp;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.WeakHashMap;
 
@@ -48,9 +51,11 @@ public final class FluidSimulationService {
 	private static final double SIMULATION_TICKS_PER_SECOND = 20.0;
 	private static final Map<MinecraftServer, FluidSimulationService> SERVICES = new WeakHashMap<>();
 
+	private final Map<BlockPos, BlockState> takeoverOriginalBlocks = new HashMap<>();
 	private FlipFluidDomain domain;
 	private BlockPos origin = BlockPos.ZERO;
 	private ResourceKey<Level> dimension;
+	private ResourceKey<Level> takeoverDimension;
 	private boolean paused = true;
 	private long tick;
 	private double lastStepMilliseconds;
@@ -70,7 +75,8 @@ public final class FluidSimulationService {
 	}
 
 	public static void removeServer(MinecraftServer server) {
-		SERVICES.remove(server);
+		FluidSimulationService service = SERVICES.remove(server);
+		if (service != null) service.restoreTakeover(server);
 	}
 
 	public boolean exists() {
@@ -86,6 +92,7 @@ public final class FluidSimulationService {
 		BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
 		origin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
 		ServerLevel level = player.level();
+		restoreTakeover(level.getServer());
 		createEmpty(level);
 		refreshCollisions(level);
 
@@ -102,9 +109,10 @@ public final class FluidSimulationService {
 		sendSnapshot(level);
 	}
 
-	public int captureNearbyWater(ServerPlayer player) {
-		origin = player.blockPosition().offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
+	public CaptureResult captureNearbyWater(ServerPlayer player, boolean takeover) {
 		ServerLevel level = player.level();
+		restoreTakeover(level.getServer());
+		origin = player.blockPosition().offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
 		createEmpty(level);
 		refreshCollisions(level);
 		int wetCells = 0;
@@ -132,9 +140,49 @@ public final class FluidSimulationService {
 				}
 			}
 		}
+		int removedBlocks = takeover ? beginTakeover(level) : 0;
 		paused = true;
 		sendSnapshot(level);
-		return wetCells;
+		return new CaptureResult(wetCells, removedBlocks);
+	}
+
+	/** Temporarily replaces only standalone vanilla water blocks, never waterlogged blocks. */
+	private int beginTakeover(ServerLevel level) {
+		takeoverDimension = level.dimension();
+		int removed = 0;
+		for (int blockZ = 0; blockZ < BLOCK_SIZE_Z; blockZ++) for (int blockY = 0; blockY < BLOCK_SIZE_Y; blockY++) for (int blockX = 0; blockX < BLOCK_SIZE_X; blockX++) {
+			BlockPos pos = origin.offset(blockX, blockY, blockZ);
+			BlockState state = level.getBlockState(pos);
+			if (!state.is(Blocks.WATER)) continue;
+			if (level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS)) {
+				takeoverOriginalBlocks.put(pos.immutable(), state);
+				removed++;
+			}
+		}
+		if (removed == 0) takeoverDimension = null;
+		return removed;
+	}
+
+	public RestorationStats restoreTakeover(MinecraftServer server) {
+		if (takeoverOriginalBlocks.isEmpty()) {
+			takeoverDimension = null;
+			return RestorationStats.EMPTY;
+		}
+		ServerLevel level = takeoverDimension == null ? null : server.getLevel(takeoverDimension);
+		if (level == null) return new RestorationStats(0, takeoverOriginalBlocks.size());
+		int restored = 0, skipped = 0;
+		for (Map.Entry<BlockPos, BlockState> entry : takeoverOriginalBlocks.entrySet()) {
+			BlockState current = level.getBlockState(entry.getKey());
+			if (!current.isAir() && !current.is(Blocks.WATER)) {
+				skipped++;
+				continue;
+			}
+			if (level.setBlock(entry.getKey(), entry.getValue(), Block.UPDATE_ALL)) restored++;
+			else skipped++;
+		}
+		takeoverOriginalBlocks.clear();
+		takeoverDimension = null;
+		return new RestorationStats(restored, skipped);
 	}
 
 	private void createEmpty(ServerLevel level) {
@@ -191,6 +239,7 @@ public final class FluidSimulationService {
 		if (domain == null) return;
 		ServerLevel level = server.getLevel(dimension);
 		if (level == null) return;
+		maintainTakeover(level);
 		tick++;
 		boolean collisionsChanged = false;
 		if (tick % COLLISION_REFRESH_INTERVAL_TICKS == 0) {
@@ -212,6 +261,15 @@ public final class FluidSimulationService {
 			RealWaterMod.LOGGER.warn("Auto-paused fluid domain after {} consecutive steps above {} ms", HARD_PAUSE_STREAK, HARD_PAUSE_MILLIS);
 		}
 		if (tick % SNAPSHOT_INTERVAL_TICKS == 0 || paused) sendSnapshot(level);
+	}
+
+	private void maintainTakeover(ServerLevel level) {
+		if (takeoverOriginalBlocks.isEmpty() || !level.dimension().equals(takeoverDimension)) return;
+		for (BlockPos pos : takeoverOriginalBlocks.keySet()) {
+			if (level.getBlockState(pos).is(Blocks.WATER)) {
+				level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS);
+			}
+		}
 	}
 
 	private void stepOnce() {
@@ -431,13 +489,15 @@ public final class FluidSimulationService {
 		return new CellTarget(x, y, z);
 	}
 
-	public void remove(MinecraftServer server) {
+	public RestorationStats remove(MinecraftServer server) {
+		RestorationStats restoration = restoreTakeover(server);
 		domain = null;
 		dimension = null;
 		paused = true;
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			if (ServerPlayNetworking.canSend(player, FluidSnapshotPayload.TYPE)) ServerPlayNetworking.send(player, FluidSnapshotPayload.clear());
 		}
+		return restoration;
 	}
 
 	public String status() {
@@ -449,13 +509,13 @@ public final class FluidSimulationService {
 		float cellVolumes = domain.totalVolume();
 		FlipFluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
 		return String.format(
-				"%s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d | visible %d, dense %d | entities %s/%d | maxP %.1f | collision Δ%d, escaped %.3f | %s",
+				"%s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d | visible %d, dense %d | takeover %d | entities %s/%d | maxP %.1f | collision Δ%d, escaped %.3f | %s",
 				paused ? "暂停" : "运行",
 				origin.toShortString(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
 				20.0 / stepIntervalTicks,
 				cellVolumes / CELL_VOLUMES_PER_BLOCK, cellVolumes,
 				domain.particleCount(),
-				distribution.visibleCells(), distribution.denseCells(), entityPhysicsEnabled ? "on" : "off", lastAffectedEntities,
+				distribution.visibleCells(), distribution.denseCells(), takeoverOriginalBlocks.size(), entityPhysicsEnabled ? "on" : "off", lastAffectedEntities,
 				domain.maximumPressure(),
 				lastCollisionStats.changedCells(), lastCollisionStats.escapedCellVolume() / CELL_VOLUMES_PER_BLOCK, stats
 		);
@@ -473,6 +533,12 @@ public final class FluidSimulationService {
 	}
 
 	public record CellTarget(int x, int y, int z) { }
+
+	public record CaptureResult(int wetCells, int removedVanillaBlocks) { }
+
+	public record RestorationStats(int restoredBlocks, int skippedBlocks) {
+		private static final RestorationStats EMPTY = new RestorationStats(0, 0);
+	}
 
 	public record WaterEditResult(boolean domainExists, CellTarget target, float requestedCellVolume, float changedCellVolume) {
 		private static final WaterEditResult NO_DOMAIN = new WaterEditResult(false, null, 0.0F, 0.0F);

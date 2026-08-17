@@ -16,7 +16,8 @@ public final class RealWaterCommands {
 		CommandRegistrationCallback.EVENT.register((dispatcher, buildContext, selection) -> dispatcher.register(
 				Commands.literal("realwater")
 						.then(Commands.literal("demo").executes(context -> createDemo(context.getSource())))
-						.then(Commands.literal("capture").executes(context -> capture(context.getSource())))
+						.then(Commands.literal("capture").executes(context -> capture(context.getSource(), false)))
+						.then(Commands.literal("takeover").executes(context -> capture(context.getSource(), true)))
 						.then(Commands.literal("pour")
 								.executes(context -> editWater(context.getSource(), 1, true))
 								.then(Commands.argument("buckets", IntegerArgumentType.integer(1, 16))
@@ -53,12 +54,19 @@ public final class RealWaterCommands {
 		return 1;
 	}
 
-	private static int capture(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+	private static int capture(CommandSourceStack source, boolean takeover) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		int cells = service.captureNearbyWater(player);
-		source.sendSuccess(() -> Component.literal("已捕获附近水体：" + cells + " 个非空子格；测试域当前暂停"), false);
-		return cells;
+		FluidSimulationService.CaptureResult result = service.captureNearbyWater(player, takeover);
+		if (takeover) {
+			source.sendSuccess(() -> Component.literal(String.format(
+					"已接管附近水体：%d 个非空子格，暂时移除 %d 个原版水方块；/realwater remove 将恢复原方块；测试域当前暂停",
+					result.wetCells(), result.removedVanillaBlocks()
+			)), false);
+		} else {
+			source.sendSuccess(() -> Component.literal("已只读捕获附近水体：" + result.wetCells() + " 个非空子格；测试域当前暂停"), false);
+		}
+		return result.wetCells();
 	}
 
 	private static int setPaused(CommandSourceStack source, boolean paused) {
@@ -145,8 +153,11 @@ public final class RealWaterCommands {
 
 	private static int remove(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		service.remove(source.getServer());
-		source.sendSuccess(() -> Component.literal("已移除活动流体域和客户端调试快照"), false);
+		FluidSimulationService.RestorationStats restoration = service.remove(source.getServer());
+		source.sendSuccess(() -> Component.literal(String.format(
+				"已移除活动流体域和客户端调试快照；恢复 %d 个原版水方块，跳过 %d 个已被玩家占用的位置",
+				restoration.restoredBlocks(), restoration.skippedBlocks()
+		)), false);
 		return 1;
 	}
 
