@@ -59,6 +59,9 @@ public final class RealWaterCommands {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
 		FluidSimulationService.CaptureResult result = service.captureNearbyWater(player, takeover);
 		if (takeover) {
+			if (result.removedVanillaBlocks() < 0) {
+				return fail(source, "接管已取消：无法写入崩溃恢复备份；原版水没有被修改，请查看日志");
+			}
 			source.sendSuccess(() -> Component.literal(String.format(
 					"已接管附近水体：%d 个非空子格，暂时移除 %d 个原版水方块；/realwater remove 将恢复原方块；测试域当前暂停",
 					result.wetCells(), result.removedVanillaBlocks()

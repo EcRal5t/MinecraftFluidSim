@@ -19,6 +19,7 @@ public final class RealWaterMod implements ModInitializer {
 		PayloadTypeRegistry.clientboundPlay().register(FluidSnapshotPayload.TYPE, FluidSnapshotPayload.CODEC);
 		RealWaterCommands.register();
 		ServerTickEvents.END_SERVER_TICK.register(server -> FluidSimulationService.get(server).tick(server));
+		ServerLifecycleEvents.SERVER_STARTED.register(FluidSimulationService::recoverTakeoverBackup);
 		ServerLifecycleEvents.SERVER_STOPPING.register(FluidSimulationService::removeServer);
 		LOGGER.info("Real Water bounded 3D prototype initialized");
 	}

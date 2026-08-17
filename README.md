@@ -32,9 +32,11 @@ There are no wall-contact, corner-filling, or forced-leveling rules in the activ
 
 Version 0.6.1 separates pressure-cell classification from the smooth P2G density field: a pressure cell must actually contain a marker particle instead of merely receiving a tiny interpolation weight. Particle collision now constrains only the wall-normal coordinate, matching the Godot CCD pass and preserving tangential motion along walls and corners. The client convolves reconstructed density before isosurface extraction so sparse sampling does not create internal triangular cavities.
 
-Version 0.7 adds an explicit bounded takeover session. Only pure `water` blocks are removed; waterlogged blocks are left untouched. Original block states are retained in memory and restored only where the position is still air or water, so a solid block placed during the test is never overwritten. This is still a temporary test tool: use it in a disposable/test world, because a process or machine crash cannot run the normal restoration hook.
+Version 0.7 adds an explicit bounded takeover session. Only pure `water` blocks are removed; waterlogged blocks are left untouched. Original block states are restored only where the position is still air or water, so a solid block placed during the test is never overwritten.
 
 Version 0.7.1 makes live collision displacement use the exact particle volume removed by a new solid instead of an interpolated grid-density estimate, eliminating the small mass loss seen after block placement. Snapshots now include the actual marker-cell mask in addition to smooth density. Marker cells seed the implicit surface, so a shallow puddle remains visible even when no density cell reaches the 0.5 isosurface threshold. Status reports both particle count and occupied marker-cell count.
+
+Version 0.8 makes takeover restoration crash-safe. Before any vanilla water is removed, the exact dimension, block positions, and block states are written to `realwater-takeover-backup.nbt` in the world directory through a temporary file and atomic replacement. A leftover journal is recovered automatically when that world next starts. The journal is deleted only after restoration completes; if it cannot be written, takeover is refused without modifying the world.
 
 ## Build
 
@@ -45,7 +47,7 @@ $env:JAVA_HOME = 'D:\ProgramFiles\BienCreng\jdk-26.0.2'
 ./gradlew.bat assemble --offline --no-daemon
 ```
 
-See [docs/fluid-prototype.md](docs/fluid-prototype.md) for the numerical model, standalone validation, and benchmark.
+See [docs/fluid-prototype.md](docs/fluid-prototype.md) for the numerical model, standalone validation, and benchmark. For maintenance and handoff, use [docs/maintenance-routing.md](docs/maintenance-routing.md) and the copy-ready [docs/next-session-initial-prompt.md](docs/next-session-initial-prompt.md).
 
 ## License
 

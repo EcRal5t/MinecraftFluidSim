@@ -25,6 +25,7 @@ import net.minecraft.world.phys.shapes.BooleanOp;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.WeakHashMap;
@@ -77,6 +78,18 @@ public final class FluidSimulationService {
 	public static void removeServer(MinecraftServer server) {
 		FluidSimulationService service = SERVICES.remove(server);
 		if (service != null) service.restoreTakeover(server);
+	}
+
+	public static void recoverTakeoverBackup(MinecraftServer server) {
+		try {
+			TakeoverBackupStore.RecoveryResult result = TakeoverBackupStore.recover(server);
+			if (result.found()) {
+				RealWaterMod.LOGGER.warn("Recovered unfinished Real Water takeover: restored {} blocks, skipped {} occupied positions",
+						result.restoredBlocks(), result.skippedBlocks());
+			}
+		} catch (IOException | RuntimeException exception) {
+			RealWaterMod.LOGGER.error("Could not recover the unfinished Real Water takeover; backup was preserved", exception);
+		}
 	}
 
 	public boolean exists() {
@@ -148,18 +161,38 @@ public final class FluidSimulationService {
 
 	/** Temporarily replaces only standalone vanilla water blocks, never waterlogged blocks. */
 	private int beginTakeover(ServerLevel level) {
-		takeoverDimension = level.dimension();
-		int removed = 0;
+		Map<BlockPos, BlockState> candidates = new HashMap<>();
 		for (int blockZ = 0; blockZ < BLOCK_SIZE_Z; blockZ++) for (int blockY = 0; blockY < BLOCK_SIZE_Y; blockY++) for (int blockX = 0; blockX < BLOCK_SIZE_X; blockX++) {
 			BlockPos pos = origin.offset(blockX, blockY, blockZ);
 			BlockState state = level.getBlockState(pos);
 			if (!state.is(Blocks.WATER)) continue;
+			candidates.put(pos.immutable(), state);
+		}
+		if (candidates.isEmpty()) return 0;
+		try {
+			TakeoverBackupStore.write(level.getServer(), level.dimension(), candidates);
+		} catch (IOException | RuntimeException exception) {
+			RealWaterMod.LOGGER.error("Refusing water takeover because its crash-recovery backup could not be written", exception);
+			return -1;
+		}
+
+		takeoverDimension = level.dimension();
+		int removed = 0;
+		for (Map.Entry<BlockPos, BlockState> entry : candidates.entrySet()) {
+			BlockPos pos = entry.getKey();
 			if (level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS)) {
-				takeoverOriginalBlocks.put(pos.immutable(), state);
+				takeoverOriginalBlocks.put(pos, entry.getValue());
 				removed++;
 			}
 		}
-		if (removed == 0) takeoverDimension = null;
+		if (removed == 0) {
+			takeoverDimension = null;
+			try {
+				TakeoverBackupStore.delete(level.getServer());
+			} catch (IOException exception) {
+				RealWaterMod.LOGGER.warn("Could not delete an unused Real Water takeover backup", exception);
+			}
+		}
 		return removed;
 	}
 
@@ -182,6 +215,11 @@ public final class FluidSimulationService {
 		}
 		takeoverOriginalBlocks.clear();
 		takeoverDimension = null;
+		try {
+			TakeoverBackupStore.delete(server);
+		} catch (IOException exception) {
+			RealWaterMod.LOGGER.warn("Could not delete the completed Real Water takeover backup; startup recovery remains safe", exception);
+		}
 		return new RestorationStats(restored, skipped);
 	}
 
