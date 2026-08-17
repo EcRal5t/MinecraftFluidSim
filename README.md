@@ -2,19 +2,32 @@
 
 A Minecraft Java 26.2 Fabric prototype for bounded, pressure-based 3D water simulation.
 
-This version is a safe test harness, not yet a global replacement for vanilla water. It owns one temporary server-side MAC-grid domain, sends quantized volume snapshots to clients, and displays the result as blue debug particles. It does not persist simulation data or modify world blocks automatically.
+This version is a safe test harness, not yet a global replacement for vanilla water. It owns one temporary server-side 3D PIC/FLIP domain, sends reconstructed density and collision snapshots to clients, and rebuilds a translucent isosurface every frame. It does not persist simulation data or modify world blocks automatically.
 
 ## In-game commands
 
 - `/realwater demo` creates a paused mathematical dam-break domain about nine blocks in front of the player. It does not change blocks.
-- `/realwater capture` samples vanilla water and full-cube collisions in a 12×8×12-block region centered near the player. It does not remove the vanilla water.
+- `/realwater capture` samples vanilla water and collision shapes in a 12×8×12-block region centered near the player. It does not remove the vanilla water.
+- `/realwater pour [1-16]` injects that many block-volumes of simulated water where the crosshair enters the domain. The default is one bucket/block.
+- `/realwater drain [1-16]` removes simulated water along the crosshair ray. The default is one bucket/block.
+- `/realwater refresh` immediately re-samples collision geometry; this also happens automatically every five server ticks.
+- `/realwater entities [true|false]` reports or toggles bounded entity buoyancy and drag.
+- `/realwater debug [true|false]` shows or hides the orange collision cells and yellow domain bounds. It is hidden by default.
 - `/realwater step [1-20]` advances a paused domain by a bounded number of steps.
-- `/realwater run` advances once per server tick and sends a client snapshot every four ticks.
+- `/realwater run` advances at 20 Hz when affordable and automatically lowers the simulation rate under sustained load.
 - `/realwater pause` pauses automatic stepping.
 - `/realwater status` reports grid size, total water, maximum pressure, solve iterations, residual, and time.
 - `/realwater remove` removes the temporary domain and client debug view.
 
-The service automatically pauses if one simulation step exceeds 75 ms to protect the game tick.
+The blue mesh is a marching-tetrahedra isosurface reconstructed from the current water particles. With `/realwater debug true`, translucent orange faces show collision subcells and yellow edges show the bounded domain. A 40 ms soft budget lowers stepping to 10, 6.7, or 5 Hz instead of stopping; only three consecutive steps above 200 ms auto-pause the domain.
+
+Collision sampling runs at the same two-cells-per-block resolution as the fluid. Slabs, stairs, fences, and other non-full collision shapes therefore occupy only the subcells they intersect. If a newly placed block overlaps simulated water, the service conservatively moves that water into nearby capacity when possible and reports any volume that could not fit in the bounded domain.
+
+The active solver follows the same structure as the Godot reference: particle-to-grid transfer, gravity, MAC-grid pressure projection, a 90% FLIP / 10% PIC grid-to-particle transfer, and particle advection with solid collision. A full solver cell starts with eight markers; at two cells per Minecraft axis this is about 64 particles per full water block, rather than 4096. Particle volume is conserved directly, so water cannot turn into a domain-wide low-density VOF haze.
+
+Entities inside the active domain are sampled at 45 points across their bounding box. Their submerged fraction produces buoyancy, while drag moves their velocity toward the local MAC-grid water velocity. Flying/spectating players, passengers, no-physics entities, and entities already handled by vanilla water are skipped. This is currently one-way coupling: water moves entities, but entities do not yet push momentum back into the water field.
+
+There are no wall-contact, corner-filling, or forced-leveling rules in the active physics. Solid behavior comes from zero-normal MAC velocities plus particle collision, as in the Godot algorithm. Boundary-aware density-kernel normalization preserves particle mass when reconstructing cells next to solids. Client snapshots are blended over their 200 ms interval, and the client extracts one continuous isosurface instead of drawing a separate cuboid for every half-block cell.
 
 ## Build
 

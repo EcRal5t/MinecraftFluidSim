@@ -14,7 +14,8 @@ public record FluidSolverConfig(
 		int maxPressureIterations,
 		float pressureTolerance,
 		float maxCourantNumber,
-		float fluidEpsilon
+		float fluidEpsilon,
+		float interfaceCompression
 ) {
 	public FluidSolverConfig {
 		if (!(cellSize > 0.0F)) throw new IllegalArgumentException("cellSize must be positive");
@@ -29,6 +30,9 @@ public record FluidSolverConfig(
 		if (!(fluidEpsilon > 0.0F && fluidEpsilon < 1.0F)) {
 			throw new IllegalArgumentException("fluidEpsilon must be in (0, 1)");
 		}
+		if (!(interfaceCompression >= 0.0F && interfaceCompression <= 1.0F)) {
+			throw new IllegalArgumentException("interfaceCompression must be in [0, 1]");
+		}
 	}
 
 	public static FluidSolverConfig prototypeDefaults() {
@@ -40,7 +44,8 @@ public record FluidSolverConfig(
 				200,
 				1.0E-5F,
 				0.45F,
-				1.0E-4F
+				2.0E-3F,
+				0.80F
 		);
 	}
 }

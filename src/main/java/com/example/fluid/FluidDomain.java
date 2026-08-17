@@ -1,6 +1,9 @@
 package com.example.fluid;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
 
 /**
  * A fixed-size, single-density, free-surface 3D MAC-grid fluid domain.
@@ -120,6 +123,37 @@ public final class FluidDomain {
 		return volume[cellIndexChecked(x, y, z)];
 	}
 
+	/**
+	 * Adds up to {@code amount} cell-volumes near a cell, filling the closest
+	 * available cells first. The return value is the amount actually inserted.
+	 */
+	public float addVolumeNear(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
+		validateVolumeEdit(amount, maxRadius);
+		float remaining = amount;
+		for (CellCandidate candidate : nearbyCells(centerX, centerY, centerZ, maxRadius)) {
+			int index = candidate.index();
+			float added = Math.min(remaining, 1.0F - volume[index]);
+			volume[index] += added;
+			remaining -= added;
+			if (remaining <= 1.0E-6F) break;
+		}
+		return amount - remaining;
+	}
+
+	/** Removes up to {@code amount} cell-volumes, starting with nearby cells. */
+	public float removeVolumeNear(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
+		validateVolumeEdit(amount, maxRadius);
+		float remaining = amount;
+		for (CellCandidate candidate : nearbyCells(centerX, centerY, centerZ, maxRadius)) {
+			int index = candidate.index();
+			float removed = Math.min(remaining, volume[index]);
+			volume[index] -= removed;
+			remaining -= removed;
+			if (remaining <= 1.0E-6F) break;
+		}
+		return amount - remaining;
+	}
+
 	public float pressure(int x, int y, int z) {
 		return pressure[cellIndexChecked(x, y, z)];
 	}
@@ -136,6 +170,33 @@ public final class FluidDomain {
 		return velocityZ[zFaceIndexChecked(x, y, faceZ)];
 	}
 
+	/** Returns whether a local-space point lies below the reconstructed VOF surface. */
+	public boolean containsFluidAt(float localX, float localY, float localZ) {
+		float h = config.cellSize();
+		int x = (int) Math.floor(localX / h);
+		int y = (int) Math.floor(localY / h);
+		int z = (int) Math.floor(localZ / h);
+		if (x < 0 || x >= sizeX || y < 0 || y >= sizeY || z < 0 || z >= sizeZ) return false;
+		int index = cellIndex(x, y, z);
+		if (solid[index] || volume[index] <= config.fluidEpsilon()) return false;
+		float heightInCell = localY - y * h;
+		return heightInCell < volume[index] * h;
+	}
+
+	/** Samples the staggered velocity field at a local-space point, in blocks per second. */
+	public VelocitySample sampleVelocity(float localX, float localY, float localZ) {
+		if (localX < 0.0F || localX > sizeX * config.cellSize()
+				|| localY < 0.0F || localY > sizeY * config.cellSize()
+				|| localZ < 0.0F || localZ > sizeZ * config.cellSize()) {
+			return VelocitySample.ZERO;
+		}
+		return new VelocitySample(
+				sampleX(localX, localY, localZ),
+				sampleY(localX, localY, localZ),
+				sampleZ(localX, localY, localZ)
+		);
+	}
+
 	public float totalVolume() {
 		double sum = 0.0;
 		for (float value : volume) sum += value;
@@ -148,10 +209,32 @@ public final class FluidDomain {
 		return maximum;
 	}
 
+	public VolumeDistribution volumeDistribution(float visibleThreshold) {
+		if (!(visibleThreshold >= 0.0F && visibleThreshold <= 1.0F)) {
+			throw new IllegalArgumentException("visibleThreshold must be in [0, 1]");
+		}
+		int activeCells = 0;
+		int visibleCells = 0;
+		int denseCells = 0;
+		for (float value : volume) {
+			if (value > config.fluidEpsilon()) activeCells++;
+			if (value >= visibleThreshold) visibleCells++;
+			if (value >= 0.90F) denseCells++;
+		}
+		return new VolumeDistribution(activeCells, visibleCells, denseCells);
+	}
+
 	/** Quantizes cell volume to an unsigned byte for compact debug snapshots. */
 	public byte[] copyQuantizedVolume() {
 		byte[] result = new byte[cellCount];
 		for (int i = 0; i < cellCount; i++) result[i] = (byte) Math.round(clamp01(volume[i]) * 255.0F);
+		return result;
+	}
+
+	/** Copies static collision occupancy for client debug rendering. */
+	public byte[] copySolidMask() {
+		byte[] result = new byte[cellCount];
+		for (int i = 0; i < cellCount; i++) result[i] = solid[i] ? (byte) 1 : (byte) 0;
 		return result;
 	}
 
@@ -185,6 +268,7 @@ public final class FluidDomain {
 			projectVelocity(substepTime);
 			enforceSolidFaceVelocities();
 			advectVolume(substepTime);
+			compressVolumeInterface(substepTime);
 		}
 
 		return new StepStats(substeps, iterationTotal, lastPressureResidual, before, totalVolume());
@@ -511,6 +595,67 @@ public final class FluidDomain {
 		volumeScratch = old;
 	}
 
+	/**
+	 * Applies a bounded, conservative anti-diffusive VOF flux. Upwind transport
+	 * is deliberately stable but smears a sharp 0/1 interface; this moves volume
+	 * from the less-filled side of each interface toward the more-filled side.
+	 */
+	private void compressVolumeInterface(float dt) {
+		float strength = config.interfaceCompression() * dt / config.timeStep();
+		if (strength <= 0.0F) return;
+		Arrays.fill(fluxX, 0.0F);
+		Arrays.fill(fluxY, 0.0F);
+		Arrays.fill(fluxZ, 0.0F);
+		Arrays.fill(outgoing, 0.0F);
+		Arrays.fill(incoming, 0.0F);
+
+		forEachTransportFace((axis, face, lower, upper, ignoredSpeed) -> {
+			float difference = volume[upper] - volume[lower];
+			if (Math.abs(difference) <= config.fluidEpsilon()) return;
+			int donor = difference > 0.0F ? lower : upper;
+			int receiver = difference > 0.0F ? upper : lower;
+			float transferable = Math.min(volume[donor], 1.0F - volume[receiver]);
+			float amount = strength * Math.abs(difference) * transferable;
+			if (amount <= config.fluidEpsilon()) return;
+			float signedAmount = donor == lower ? amount : -amount;
+			setFlux(axis, face, signedAmount);
+			outgoing[donor] += amount;
+			incoming[receiver] += amount;
+		});
+
+		for (int i = 0; i < cellCount; i++) {
+			donorScale[i] = outgoing[i] > volume[i] ? volume[i] / outgoing[i] : 1.0F;
+		}
+		Arrays.fill(outgoing, 0.0F);
+		Arrays.fill(incoming, 0.0F);
+		forEachStoredFlux((axis, face, lower, upper, signedAmount) -> {
+			int donor = signedAmount >= 0.0F ? lower : upper;
+			int receiver = signedAmount >= 0.0F ? upper : lower;
+			float amount = Math.abs(signedAmount) * donorScale[donor];
+			outgoing[donor] += amount;
+			incoming[receiver] += amount;
+		});
+		for (int i = 0; i < cellCount; i++) {
+			float capacityAfterOutflow = 1.0F - volume[i] + outgoing[i];
+			receiverScale[i] = incoming[i] > capacityAfterOutflow
+					? Math.max(0.0F, capacityAfterOutflow / incoming[i])
+					: 1.0F;
+		}
+
+		System.arraycopy(volume, 0, volumeScratch, 0, cellCount);
+		forEachStoredFlux((axis, face, lower, upper, signedAmount) -> {
+			int donor = signedAmount >= 0.0F ? lower : upper;
+			int receiver = signedAmount >= 0.0F ? upper : lower;
+			float accepted = Math.abs(signedAmount) * donorScale[donor] * receiverScale[receiver];
+			volumeScratch[donor] -= accepted;
+			volumeScratch[receiver] += accepted;
+		});
+		for (int i = 0; i < cellCount; i++) volumeScratch[i] = solid[i] ? 0.0F : clamp01(volumeScratch[i]);
+		float[] old = volume;
+		volume = volumeScratch;
+		volumeScratch = old;
+	}
+
 	private void forEachTransportFace(FaceConsumer consumer) {
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
 			int lower = cellIndex(x - 1, y, z), upper = cellIndex(x, y, z);
@@ -650,6 +795,29 @@ public final class FluidDomain {
 	private static float clamp01(float value) { return Math.max(0.0F, Math.min(1.0F, value)); }
 	private static float lerp(float first, float second, float t) { return first + (second - first) * t; }
 
+	private void validateVolumeEdit(float amount, int maxRadius) {
+		if (!Float.isFinite(amount) || amount < 0.0F) throw new IllegalArgumentException("amount must be finite and non-negative");
+		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
+	}
+
+	private List<CellCandidate> nearbyCells(int centerX, int centerY, int centerZ, int maxRadius) {
+		int minX = Math.max(0, centerX - maxRadius), maxX = Math.min(sizeX - 1, centerX + maxRadius);
+		int minY = Math.max(0, centerY - maxRadius), maxY = Math.min(sizeY - 1, centerY + maxRadius);
+		int minZ = Math.max(0, centerZ - maxRadius), maxZ = Math.min(sizeZ - 1, centerZ + maxRadius);
+		int radiusSquared = maxRadius * maxRadius;
+		List<CellCandidate> result = new ArrayList<>();
+		for (int z = minZ; z <= maxZ; z++) for (int y = minY; y <= maxY; y++) for (int x = minX; x <= maxX; x++) {
+			int dx = x - centerX, dy = y - centerY, dz = z - centerZ;
+			int distanceSquared = dx * dx + dy * dy + dz * dz;
+			int index = cellIndex(x, y, z);
+			if (distanceSquared <= radiusSquared && !solid[index]) result.add(new CellCandidate(index, distanceSquared));
+		}
+		result.sort(Comparator.comparingInt(CellCandidate::distanceSquared));
+		return result;
+	}
+
+	private record CellCandidate(int index, int distanceSquared) { }
+
 	@FunctionalInterface
 	private interface FaceConsumer {
 		void accept(int axis, int faceIndex, int lowerCell, int upperCell, float amountOrSpeed);
@@ -665,5 +833,11 @@ public final class FluidDomain {
 		public float relativeVolumeError() {
 			return volumeBefore == 0.0F ? 0.0F : Math.abs(volumeAfter - volumeBefore) / volumeBefore;
 		}
+	}
+
+	public record VolumeDistribution(int activeCells, int visibleCells, int denseCells) { }
+
+	public record VelocitySample(float x, float y, float z) {
+		private static final VelocitySample ZERO = new VelocitySample(0.0F, 0.0F, 0.0F);
 	}
 }

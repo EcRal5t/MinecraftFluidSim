@@ -1,6 +1,6 @@
 # 3D fluid prototype
 
-The first implementation milestone is intentionally independent from Minecraft and rendering. It answers three questions before chunk storage, networking, or surface meshing add more variables:
+The current implementation keeps its numerical core independent from Minecraft and rendering. Its validation answers three questions before chunk storage and persistence add more variables:
 
 1. Does a three-dimensional pressure projection converge for a small active domain?
 2. Does a resting column produce a hydrostatic pressure gradient?
@@ -11,14 +11,17 @@ The first implementation milestone is intentionally independent from Minecraft a
 - Positive Y is up, matching Minecraft coordinates.
 - Water is incompressible and has a constant density of 1000 simulation units.
 - Atmospheric pressure is zero gauge pressure.
-- Volume fraction lives at cell centers and is bounded to `[0, 1]`.
+- Marker particles carry liquid volume and velocity.
+- Eight particles initialize one full solver cell.
 - Velocity lives on the three sets of cell faces (a staggered MAC grid).
 - Pressure lives at cell centers and is solved with diagonally preconditioned conjugate gradients.
 - Static solid cells impose a zero normal face velocity.
-- Velocity uses semi-Lagrangian advection for stability.
-- Volume uses conservative, capacity-limited upwind transport.
+- Particle-to-grid and grid-to-particle transfers use trilinear interpolation, the 3D counterpart of the Godot shaders' bilinear interpolation.
+- Grid-to-particle transfer blends 90% FLIP with 10% PIC.
+- Particles are advected through the projected velocity field and collide against the solid-cell mask axis by axis.
+- Cell density is reconstructed from particle volume; valid kernel weights are normalized at solid/domain boundaries so reconstruction does not visually lose mass beside walls.
 
-The prototype does not yet contain FLIP marker particles. This is deliberate: a dense Eulerian volume field establishes pressure, conservation, and Minecraft collision semantics with much less state. FLIP/APIC markers can be introduced later only in active surface cells if semi-Lagrangian velocity dissipation is visibly excessive.
+This is a direct three-dimensional adaptation of the reference project's PIC/FLIP cycle: clear grid, P2G, forces, divergence/pressure, projection, G2P, and particle advection. It does not add wall-wetting, corner attraction, or forced surface-leveling rules. The earlier VOF solver remains only as a standalone comparison and is no longer selected by the Minecraft service.
 
 ## Manual validation
 
@@ -29,16 +32,14 @@ $out = 'build\prototype-test'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 javac --release 25 -Xlint:all -d $out `
   'src\main\java\com\example\fluid\FluidSolverConfig.java' `
-  'src\main\java\com\example\fluid\FluidDomain.java' `
-  'src\test\java\com\example\fluid\FluidDomainValidation.java' `
-  'src\test\java\com\example\fluid\FluidDomainBenchmark.java'
-java -ea -cp $out com.example.fluid.FluidDomainValidation
-java -cp $out com.example.fluid.FluidDomainBenchmark 64 5
+  'src\main\java\com\example\fluid\FlipFluidDomain.java' `
+  'src\test\java\com\example\fluid\FlipFluidDomainValidation.java'
+java -ea -cp $out com.example.fluid.FlipFluidDomainValidation
 ```
 
 ## Next integration boundary
 
-The first Minecraft-facing adapter should create one bounded `FluidDomain` for a test chamber and copy full cube collisions into its solid mask. It should not replace arbitrary oceans yet. The server owns the domain and steps it at 20 Hz; the client receives coarse volume/velocity snapshots and interpolates them for rendering.
+The Minecraft adapter creates one bounded `FlipFluidDomain` for a test chamber and samples block collision shapes into its solid mask. It does not replace arbitrary oceans yet. The server owns the domain and targets 20 Hz; the client receives coarse density snapshots and interpolates them for rendering.
 
 Before expanding to chunk-scale persistence, add:
 
@@ -47,12 +48,21 @@ Before expanding to chunk-scale persistence, add:
 - entity buoyancy sampling;
 - domain split/merge rules;
 - a chunk-section codec for volume and face velocity;
-- a surface extractor that does not expose the simulation grid as thousands of Minecraft particles.
+- particle reseeding to keep marker distribution uniform over very long runs;
+- two-way momentum coupling from entities back into the fluid.
 
 ## Current Minecraft harness
 
-The Fabric harness now owns one temporary `24×16×24` cell domain representing a `12×8×12` block region at two cells per block. It starts paused, remains entirely in memory, and has a 75 ms automatic-pause guard.
+The Fabric harness now owns one temporary `24×16×24` cell domain representing a `12×8×12` block region at two cells per block. It starts paused and remains entirely in memory. A soft 40 ms budget adaptively reduces simulation frequency; three consecutive steps above 200 ms trigger the final safety pause.
 
-Use `/realwater demo` for a block-independent dam-break field or `/realwater capture` to sample nearby vanilla water and full-cube collision shapes. The server sends an unsigned-byte volume snapshot every four running ticks. The client visualizes a bounded random sample as blue dust particles; these are debug points, not simulated entities.
+Use `/realwater demo` for a block-independent dam-break field or `/realwater capture` to sample nearby vanilla water and collision shapes. The server sends unsigned-byte reconstructed-density and solid-mask snapshots every four running ticks. The client extracts a continuous blue isosurface; translucent orange is captured collision and yellow edges are the domain boundary when debug overlays are enabled. The mesh contains only current state, so it has no drifting or historical particle trail.
+
+Version 0.3 adds bounded interaction and live collision updates. `/realwater pour` and `/realwater drain` edit water in block-volume units along the player's view ray. Collision shapes are sampled into the 2×2×2 subcells of each Minecraft block every five server ticks, including partial shapes rather than only full cubes. New solids displace overlapping water into nearby free capacity before any remainder is allowed to leave the bounded domain.
+
+Version 0.4 addresses long-run free-surface dilution. A conservative anti-diffusive face flux moves volume from the less-filled side of an interface toward its more-filled side, using the same donor and receiver capacity limiters as advection. The Minecraft-sized diagnostic records total volume, active/visible/dense cell counts, and volume by height; total mass remains unchanged while the stable surface occupies far fewer low-fill cells.
+
+Version 0.5 adds bounded server-authoritative entity coupling. A 3×5×3 quadrature over each entity bounding box estimates submerged fraction and mean local staggered-grid velocity. Buoyancy is scaled to reach neutral force near 72% immersion, and linear drag relaxes entity velocity toward the water velocity. The coupling is deliberately one-way for this milestone and can be disabled with `/realwater entities false`.
+
+Version 0.6 replaces the active VOF transport with the 3D PIC/FLIP cycle derived from the Godot reference. Particle-carried volume eliminates the VOF haze without wall-contact or forced-leveling patches. Boundary-normalized density reconstruction and marching tetrahedra provide a continuous client surface. Snapshots interpolate across 200 ms, collision/bounds overlays are optional, and expensive domains reduce their simulation frequency before the hard pause guard is considered.
 
 No command other than the explicitly requested capture reads world fluid state, and none of the commands currently changes world blocks. `/realwater remove` discards the active domain.
