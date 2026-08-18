@@ -11,3 +11,4 @@ pluginManagement {
 
 // Should match your mod id.
 rootProject.name = 'realwater'
+include 'gpu-probe'

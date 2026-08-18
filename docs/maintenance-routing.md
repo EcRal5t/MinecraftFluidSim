@@ -107,6 +107,16 @@ M0 takeover codec、真实文件与故障注入回归：
 
 该套件覆盖正常创建/删除、写入前、原子发布后、移除第 N 块、恢复第 N 块、删除前、损坏/未知版本、维度未加载、残留临时文件、原子移动不可用、WARNING 发布失败、删除失败、世界恢复失败和玩家实体方块保护。
 
+独立 M1-A Windows/NVIDIA GPU probe：
+
+```powershell
+./gradlew.bat :gpu-probe:runGpuFlipValidation --offline --no-daemon `
+  '-PgpuProbeNativesDir=Z:\Games\Minecraft\Pure\.minecraft\versions\26.2-Fabric 0.19.3\26.2-Fabric 0.19.3-natives\lwjgl\3.4.1-snapshot\x64' `
+  -PgpuProbeDevice=0
+```
+
+入口在 `gpu-probe/src/main/java/com/example/gpuprobe`：`VulkanCapabilityProbe` 负责无窗口 Vulkan/Shaderc/VMA 能力门，`VulkanFlipPipeline` 负责 3D 数值阶段，`GpuFlipProbeValidation` 负责 CPU/GPU、静水、守恒与两档 benchmark，`GpuProbeService` 和 `RealWaterGpuProbeMod` 只提供不读写世界的游戏内可视化命令。实测与未完成边界见 [`gpu-probe-report.md`](gpu-probe-report.md)。
+
 游戏内基本回归顺序：
 
 ```text
@@ -137,14 +147,14 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 ./gradlew.bat clean assemble compileTestJava --offline --no-daemon
 ```
 
-部署前只读检查 `javaw.exe/java.exe` 命令行是否包含 `26.2-Fabric 0.19.3`。游戏运行时不要替换 jar，也不要替用户结束进程；请用户关闭游戏后再复制。部署时只保留一个 `realwater-*.jar`，复制后比较 SHA-256。
+部署前只读检查 `javaw.exe/java.exe` 命令行是否包含 `26.2-Fabric 0.19.3`。游戏运行时不要替换 jar，也不要替用户结束进程；请用户关闭游戏后再复制。部署时主 Mod 只保留一个版本的 `realwater-<version>.jar`；可另外保留一个 `realwater-gpu-probe-<version>.jar`，但同一 Mod id 不得有重复版本。复制后比较 SHA-256。
 
 ## 下一阶段建议
 
-1. 按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 完成测试世界的正常删除、强制中断恢复和邻接更新冒烟；保留备份、命令计数和日志。
-2. 冒烟通过后才开始独立 Windows/NVIDIA Vulkan GPU probe，不进入正式存档且保留 CPU 回退。
-3. 再做动态域/分块域设计，避免当前 12×8×12 人工边界成为不可见墙。
-4. 设计 chunk-section 粒子/速度持久化格式；不要直接把当前单域对象序列化成长期格式。
+1. 按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 补完测试世界的强制中断恢复和邻接更新冒烟；正常 takeover → remove 已通过，仍需保留备份、命令计数和日志。
+2. 进服验证可选 probe jar 的 `demo/step/run/status/benchmark/remove` 和集成服务器 native；它不得进入正式存档或接管世界。
+3. 继续 M1 的 device-local/staging、压力算法对照、变密度 CPU 候选和设备丢失恢复检查点，不把当前 Jacobi/host-visible 缓冲冻结为正式布局。
+4. M1 门通过后再做动态域/分块域设计，避免当前 12×8×12 人工边界成为不可见墙；chunk-section 格式不得直接序列化当前单域或 GPU 缓冲。
 5. 之后考虑实体到水的反向动量耦合、粒子 reseeding、自由表面压力权重和更高分辨率。
 
 扩大功能前保持“小域、可移除、可恢复、可量化状态”这四个安全边界。

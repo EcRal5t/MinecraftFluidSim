@@ -42,6 +42,12 @@ Version 0.8.1 completes the automated M0 transaction hardening without changing 
 
 While either recovery file exists, keep a full world backup and do not remove or downgrade Real Water. First run `/realwater remove`, or let startup recovery finish, and confirm both files have disappeared. An administrator who manually deletes the recovery files or removes the mod before recovery can defeat safeguards that code can no longer enforce.
 
+## Optional windowless GPU probe
+
+The separate `realwater-gpu-probe` jar is an M1 development probe, not a replacement backend for the main Mod. It initializes Vulkan lazily without a GLFW window or surface, never reads or changes world blocks, and never writes simulation data to a save. `/realwatergpu demo` exposes its GPU dam-break through the existing client surface renderer; `step`, `run`, `pause`, `status`, `benchmark [12|32] [device]`, and `remove` are independent from the main `/realwater` lifecycle. If Vulkan initialization fails, only this visual demo falls back to an isolated CPU domain. The main Mod remains CPU-authoritative with or without the probe jar.
+
+See [docs/gpu-probe-report.md](docs/gpu-probe-report.md) for the two-GPU capability results, CPU/GPU correctness tolerances, static-column validation, the real 2,097,152-marker benchmark, readback measurements, commands, and remaining M1 work.
+
 ## Build
 
 Minecraft 26.2 targets Java 25. On this machine the project is built with the installed JDK 26 while compiling to Java 25 bytecode:
@@ -55,6 +61,14 @@ The standalone M0 journal/transaction suite uses only the already-resolved offli
 
 ```powershell
 ./gradlew.bat runTakeoverJournalValidation --offline --no-daemon
+```
+
+The optional GPU module has a windowless correctness/benchmark task. It requires the LWJGL native directory extracted by this Minecraft installation:
+
+```powershell
+./gradlew.bat :gpu-probe:runGpuFlipValidation --offline --no-daemon `
+  '-PgpuProbeNativesDir=Z:\Games\Minecraft\Pure\.minecraft\versions\26.2-Fabric 0.19.3\26.2-Fabric 0.19.3-natives\lwjgl\3.4.1-snapshot\x64' `
+  -PgpuProbeDevice=0
 ```
 
 See [docs/fluid-prototype.md](docs/fluid-prototype.md) for the current numerical model, standalone validation, and benchmark. For maintenance and handoff, use [docs/maintenance-routing.md](docs/maintenance-routing.md). The confirmed path from this bounded prototype to multi-material, gas, chemistry, granular deposits, persistence, and optional GPU execution is documented in [docs/long-term-roadmap.md](docs/long-term-roadmap.md).
