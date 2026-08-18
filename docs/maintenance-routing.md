@@ -1,13 +1,13 @@
 # Real Water 维护路由
 
-当前主 Mod：`0.8.2`。可选 GPU probe：`0.1.12`。版本历史、实测数据和长期阶段定义分别见 [`fluid-prototype.md`](fluid-prototype.md)、[`gpu-probe-report.md`](gpu-probe-report.md) 与 [`long-term-roadmap.md`](long-term-roadmap.md)。本文只回答“代码在哪里、改完跑什么”。
+当前主 Mod：`0.8.2`。可选 GPU probe：`0.1.13`。版本历史、实测数据和长期阶段定义分别见 [`fluid-prototype.md`](fluid-prototype.md)、[`gpu-probe-report.md`](gpu-probe-report.md) 与 [`long-term-roadmap.md`](long-term-roadmap.md)。本文只回答“代码在哪里、改完跑什么”。
 
 ## 不可混用的状态
 
 - 物理真值：marker 的 `particleVolume`；精确加水、删水和固体挤水只按它结算。
 - 数值离散：`markerCount` 决定压力流体格；平滑 `volume[]` 只是 P2G 密度。
 - 渲染重建：density 塑形，marker mask 保证浅水内部，solid mask 裁剪固体；渲染不得反改水量。
-- 调度：CPU 主域以完整 step wall time 调频；GPU probe 的 Vulkan timestamp 只衡量设备命令流，超时保护仍看 wall time。
+- 调度：CPU 主域以完整 step wall time 调频；GPU probe 的 Vulkan timestamp 只衡量设备命令流，异步 ring 的超时保护仍看服务器线程 scheduling/backpressure wall。
 - 世界事务：`capture` 只读；只有 `takeover` 在 journal 与 WARNING 原子发布后移除纯 `Blocks.WATER`。waterlogged 不在范围内。
 
 ## 主 Mod 路由
@@ -42,7 +42,7 @@
 |---|---|
 | Fabric 命令与入口 | `RealWaterGpuProbeMod.java` |
 | demo/benchmark 生命周期、CPU fallback、wall-time 保护 | `GpuProbeService.java` |
-| Vulkan FLIP 资源与 dispatch/同步/内存/timestamp | `VulkanFlipPipeline.java` |
+| Vulkan FLIP 资源与 dispatch/三槽 staging ring/fence/内存/timestamp | `VulkanFlipPipeline.java` |
 | 主计算 shader | `src/main/resources/assets/realwater_gpu_probe/shaders/flip.comp` |
 | shader 资源加载与缺失诊断 | `GpuProbeShaderSource.java` |
 | 无窗口 Vulkan/Shaderc/VMA 能力探测 | `VulkanCapabilityProbe.java` |
@@ -97,4 +97,4 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 - 同一 Mod id 只启用一个 jar；旧版改为 `.disabled`，复制后比较 SHA-256。
 - 请求人工 smoke 只针对自动门无法覆盖的打包命令、真实渲染、真实碰撞采样或世界事务。
 
-下一项 M1 工作是 bounded ring staging；它会改变 Vulkan 提交/回读生命周期，必须保留 wall-time 调度真值与 CPU fallback。M0 强制中断恢复和邻接更新人工门仍按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 执行。
+bounded ring staging 已在 probe 0.1.13 完成：普通 step 使用三个独立的 command/fence/query/64 B staging 槽，不再逐步 `vkQueueWaitIdle`；显式 snapshot/full-state 读回先收敛 ring，再走串行 bulk staging。下一项 M1 工作是 CPU 变密度面系数候选实验；运行时设备丢失的 CPU 可读检查点仍未完成。M0 强制中断恢复和邻接更新人工门仍按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 执行。

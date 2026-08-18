@@ -235,21 +235,29 @@ final class GpuLargeDomainValidation {
 	}
 
 	private static Timing time(VulkanFlipPipeline gpu, int steps) {
-		double wallTotal = 0.0, wallMinimum = Double.POSITIVE_INFINITY, wallMaximum = 0.0;
+		double schedulingTotal = 0.0, schedulingMinimum = Double.POSITIVE_INFINITY, schedulingMaximum = 0.0;
 		double gpuTotal = 0.0, gpuMinimum = Double.POSITIVE_INFINITY, gpuMaximum = 0.0;
+		gpu.beginGpuTimingCapture();
+		long batchStarted = System.nanoTime();
 		for (int i = 0; i < steps; i++) {
 			gpu.step();
-			double wallMillis = gpu.lastStepMilliseconds(), gpuMillis = gpu.lastGpuStepMilliseconds();
+			double schedulingMillis = gpu.lastStepMilliseconds();
+			schedulingTotal += schedulingMillis;
+			schedulingMinimum = Math.min(schedulingMinimum, schedulingMillis);
+			schedulingMaximum = Math.max(schedulingMaximum, schedulingMillis);
+		}
+		long[] gpuNanos = gpu.endGpuTimingCapture();
+		double throughputWallAverage = (System.nanoTime() - batchStarted) / 1_000_000.0 / steps;
+		require(gpuNanos.length == steps, "GPU timing capture count does not match submitted steps");
+		for (long nanos : gpuNanos) {
+			double gpuMillis = nanos / 1_000_000.0;
 			require(Double.isFinite(gpuMillis) && gpuMillis > 0.0, "missing GPU timestamp while timing");
-			wallTotal += wallMillis;
-			wallMinimum = Math.min(wallMinimum, wallMillis);
-			wallMaximum = Math.max(wallMaximum, wallMillis);
 			gpuTotal += gpuMillis;
 			gpuMinimum = Math.min(gpuMinimum, gpuMillis);
 			gpuMaximum = Math.max(gpuMaximum, gpuMillis);
 		}
 		return new Timing(steps, gpuTotal / steps, gpuMinimum, gpuMaximum,
-				wallTotal / steps, wallMinimum, wallMaximum);
+				throughputWallAverage, schedulingTotal / steps, schedulingMinimum, schedulingMaximum);
 	}
 
 	private static int firstOccupied(VulkanFlipPipeline.PressureProfile profile) {
@@ -284,11 +292,12 @@ final class GpuLargeDomainValidation {
 	}
 
 	private record Timing(int steps, double gpuAverageMillis, double gpuMinimumMillis, double gpuMaximumMillis,
-	                      double wallAverageMillis, double wallMinimumMillis, double wallMaximumMillis) {
+	                      double throughputWallAverageMillis, double schedulingWallAverageMillis,
+	                      double schedulingWallMinimumMillis, double schedulingWallMaximumMillis) {
 		String format() {
-			return String.format("steps=%d GPU avg=%.3fms min=%.3fms max=%.3fms wall avg=%.3fms min=%.3fms max=%.3fms",
+			return String.format("steps=%d GPU avg=%.3fms min=%.3fms max=%.3fms throughput wall avg=%.3fms scheduling wall avg=%.3fms min=%.3fms max=%.3fms",
 					steps, gpuAverageMillis, gpuMinimumMillis, gpuMaximumMillis,
-					wallAverageMillis, wallMinimumMillis, wallMaximumMillis);
+					throughputWallAverageMillis, schedulingWallAverageMillis, schedulingWallMinimumMillis, schedulingWallMaximumMillis);
 		}
 	}
 

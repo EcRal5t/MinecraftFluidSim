@@ -27,6 +27,7 @@ public final class GpuFlipProbeValidation {
 		List<String> results = new ArrayList<>();
 		results.add(validateProbeCommandTree());
 		results.add(validateTimestampQueries(device));
+		results.add(validateBoundedSubmissionRing(device));
 		results.add(validateManualStepScheduling());
 		results.add(validateDamBreak(device));
 		results.add(validateHydrostaticColumn(device));
@@ -61,17 +62,44 @@ public final class GpuFlipProbeValidation {
 		try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device)) {
 			require(gpu.hasTimestampQueries(), "selected compute queue does not support Vulkan timestamp queries");
 			gpu.initializeDamBreak();
-			double wallTotal = 0.0, gpuTotal = 0.0;
+			double schedulingTotal = 0.0, completionWallTotal = 0.0, gpuTotal = 0.0;
 			for (int step = 0; step < 4; step++) {
+				long started = System.nanoTime();
 				gpu.step();
-				double wallMillis = gpu.lastStepMilliseconds(), gpuMillis = gpu.lastGpuStepMilliseconds();
+				double schedulingMillis = gpu.lastStepMilliseconds(), gpuMillis = gpu.lastGpuStepMilliseconds();
+				double completionWallMillis = (System.nanoTime() - started) / 1_000_000.0;
 				require(Double.isFinite(gpuMillis) && gpuMillis > 0.0, "invalid Vulkan timestamp duration");
-				require(gpuMillis <= wallMillis + 0.25, "GPU timestamp exceeds enclosing wall duration");
-				wallTotal += wallMillis;
+				require(Double.isFinite(schedulingMillis) && schedulingMillis >= 0.0, "invalid scheduling wall duration");
+				require(gpuMillis <= completionWallMillis + 0.25, "GPU timestamp exceeds completed wall duration");
+				schedulingTotal += schedulingMillis;
+				completionWallTotal += completionWallMillis;
 				gpuTotal += gpuMillis;
 			}
-			return String.format("correctness timestamp queries: steps=4 GPU avg %.3fms wall avg %.3fms",
-					gpuTotal / 4.0, wallTotal / 4.0);
+			return String.format("correctness timestamp queries: steps=4 GPU avg %.3fms scheduling wall avg %.3fms completed wall avg %.3fms",
+					gpuTotal / 4.0, schedulingTotal / 4.0, completionWallTotal / 4.0);
+		}
+	}
+
+	private static String validateBoundedSubmissionRing(int device) {
+		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(24, 16, 24, CELL_SIZE, DT, GRAVITY, RHO,
+				32, 24 * 16 * 24 * 8);
+		try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device)) {
+			gpu.initializeDamBreak();
+			gpu.diagnostics();
+			require(gpu.submissionRingSize() == 3, "unexpected Vulkan submission ring size");
+			require(gpu.regularStagingBytes() == 3L * 64L, "regular staging ring is not three compact diagnostic slots");
+			for (int step = 0; step < 6; step++) gpu.step();
+			VulkanFlipPipeline.Diagnostics diagnostics = gpu.diagnostics();
+			require(gpu.maximumOutstandingSubmissions() == gpu.submissionRingSize(),
+					"Vulkan submissions did not exercise every bounded ring slot");
+			require(close(diagnostics.particleVolume(), gpu.totalParticleVolume(), 1.0E-3F),
+					"ring-staged diagnostics changed particle volume");
+			require(Double.isFinite(gpu.lastGpuStepMilliseconds()) && gpu.lastGpuStepMilliseconds() > 0.0,
+					"ring-staged timestamp is unavailable");
+			String result = String.format("correctness bounded staging ring: slots=%d bytes=%d maximumOutstanding=%d volume=%.3f closeWithOutstanding=3",
+					gpu.submissionRingSize(), gpu.regularStagingBytes(), gpu.maximumOutstandingSubmissions(), diagnostics.particleVolume());
+			for (int step = 0; step < gpu.submissionRingSize(); step++) gpu.step();
+			return result;
 		}
 	}
 
@@ -125,7 +153,7 @@ public final class GpuFlipProbeValidation {
 			require(close(gpu.reconstructedDensityVolume(), gpu.totalParticleVolume(), 0.20F),
 					"boundary-normalized surface density does not close to particle volume");
 			return "correctness dam: device=" + gpu.deviceName()
-					+ String.format(" particles=%d volume=%.3f cells centerDifference=%.4f postDiv=%.6f preDiv=%.6f GPU timestamp=%.3fms wall=%.3fms CPU=%.3fms markerCells=%d",
+					+ String.format(" particles=%d volume=%.3f cells centerDifference=%.4f postDiv=%.6f preDiv=%.6f GPU timestamp=%.3fms scheduling wall=%.3fms CPU=%.3fms markerCells=%d",
 					gpu.particleCount(), gpu.totalParticleVolume(), centerDifference, diagnostics.maximumDivergence(),
 					diagnostics.preProjectionMaximumDivergence(), gpuDeviceMillis / 6.0, gpuWallMillis / 6.0, cpuMillis / 6.0, markers);
 		}
@@ -442,21 +470,29 @@ public final class GpuFlipProbeValidation {
 	}
 
 	private static Timing time(VulkanFlipPipeline gpu, int steps) {
-		double wallTotal = 0.0, wallMinimum = Double.POSITIVE_INFINITY, wallMaximum = 0.0;
+		double schedulingTotal = 0.0, schedulingMinimum = Double.POSITIVE_INFINITY, schedulingMaximum = 0.0;
 		double gpuTotal = 0.0, gpuMinimum = Double.POSITIVE_INFINITY, gpuMaximum = 0.0;
+		gpu.beginGpuTimingCapture();
+		long batchStarted = System.nanoTime();
 		for (int i = 0; i < steps; i++) {
 			gpu.step();
-			double wallMillis = gpu.lastStepMilliseconds(), gpuMillis = gpu.lastGpuStepMilliseconds();
+			double schedulingMillis = gpu.lastStepMilliseconds();
+			schedulingTotal += schedulingMillis;
+			schedulingMinimum = Math.min(schedulingMinimum, schedulingMillis);
+			schedulingMaximum = Math.max(schedulingMaximum, schedulingMillis);
+		}
+		long[] gpuNanos = gpu.endGpuTimingCapture();
+		double throughputWallAverage = (System.nanoTime() - batchStarted) / 1_000_000.0 / steps;
+		require(gpuNanos.length == steps, "GPU timing capture count does not match submitted steps");
+		for (long nanos : gpuNanos) {
+			double gpuMillis = nanos / 1_000_000.0;
 			require(Double.isFinite(gpuMillis) && gpuMillis > 0.0, "missing GPU timestamp while timing");
-			wallTotal += wallMillis;
-			wallMinimum = Math.min(wallMinimum, wallMillis);
-			wallMaximum = Math.max(wallMaximum, wallMillis);
 			gpuTotal += gpuMillis;
 			gpuMinimum = Math.min(gpuMinimum, gpuMillis);
 			gpuMaximum = Math.max(gpuMaximum, gpuMillis);
 		}
 		return new Timing(steps, gpuTotal / steps, gpuMinimum, gpuMaximum,
-				wallTotal / steps, wallMinimum, wallMaximum);
+				throughputWallAverage, schedulingTotal / steps, schedulingMinimum, schedulingMaximum);
 	}
 
 	private static int firstOccupied(VulkanFlipPipeline.PressureProfile profile) {
@@ -506,18 +542,19 @@ public final class GpuFlipProbeValidation {
 	}
 
 	private record Timing(int steps, double gpuAverageMillis, double gpuMinimumMillis, double gpuMaximumMillis,
-	                      double wallAverageMillis, double wallMinimumMillis, double wallMaximumMillis) {
+	                      double throughputWallAverageMillis, double schedulingWallAverageMillis,
+	                      double schedulingWallMinimumMillis, double schedulingWallMaximumMillis) {
 		String format() {
-			return String.format("steps=%d GPU avg=%.3fms min=%.3fms max=%.3fms wall avg=%.3fms min=%.3fms max=%.3fms",
+			return String.format("steps=%d GPU avg=%.3fms min=%.3fms max=%.3fms throughput wall avg=%.3fms scheduling wall avg=%.3fms min=%.3fms max=%.3fms",
 					steps, gpuAverageMillis, gpuMinimumMillis, gpuMaximumMillis,
-					wallAverageMillis, wallMinimumMillis, wallMaximumMillis);
+					throughputWallAverageMillis, schedulingWallAverageMillis, schedulingWallMinimumMillis, schedulingWallMaximumMillis);
 		}
 	}
 	private record PressureResult(VulkanFlipPipeline.PressureSolver solver, int iterations, double gpuMilliseconds,
 	                              double wallMilliseconds,
 	                              VulkanFlipPipeline.Diagnostics diagnostics) {
 		String format() {
-			return String.format("%s/%d GPU %.3fms wall %.3fms step6 div %.6f->%.6f", solver.label(), iterations,
+			return String.format("%s/%d GPU %.3fms scheduling wall %.3fms step6 div %.6f->%.6f", solver.label(), iterations,
 					gpuMilliseconds, wallMilliseconds,
 					diagnostics.preProjectionMaximumDivergence(), diagnostics.maximumDivergence());
 		}

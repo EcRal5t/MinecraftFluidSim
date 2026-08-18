@@ -172,7 +172,7 @@ final class GpuProbeService {
 		if (backend == null) return "没有活动 GPU probe 域；主 Real Water CPU 后端不受影响";
 		String conflict = FluidSimulationService.get(server).exists() ? " | 与主域冲突，已暂停" : "";
 		return String.format(Locale.ROOT,
-				"%s | backend %s | origin %s | grid %dx%dx%d | water %.2f blocks (%.2f cells) | particles %d | step wall %.3f ms | steps %d | %s | %s%s%s%s",
+				"%s | backend %s | origin %s | grid %dx%dx%d | water %.2f blocks (%.2f cells) | particles %d | scheduling wall %.3f ms | steps %d | %s | %s%s%s%s",
 				paused ? "暂停" : "运行", backend.name(), origin.toShortString(), NX, NY, NZ,
 				backend.volumeCells() / 8.0F, backend.volumeCells(), backend.particleCount(), backend.lastStepMilliseconds(), completedSteps,
 				backend.diagnostics(),
@@ -233,22 +233,32 @@ final class GpuProbeService {
 			if (large) pipeline.initializeFull(); else pipeline.initializeDamBreak();
 			int warmup = large ? 1 : 3, measured = large ? 3 : 20;
 			for (int i = 0; i < warmup; i++) pipeline.step();
-			double wallTotal = 0.0, wallMinimum = Double.POSITIVE_INFINITY, wallMaximum = 0.0;
+			pipeline.diagnostics();
+			double schedulingTotal = 0.0, schedulingMinimum = Double.POSITIVE_INFINITY, schedulingMaximum = 0.0;
 			double gpuTotal = 0.0, gpuMinimum = Double.POSITIVE_INFINITY, gpuMaximum = 0.0;
+			pipeline.beginGpuTimingCapture();
+			long batchStarted = System.nanoTime();
 			for (int i = 0; i < measured; i++) {
 				pipeline.step();
-				double wallMillis = pipeline.lastStepMilliseconds(), gpuMillis = pipeline.lastGpuStepMilliseconds();
-				if (!Double.isFinite(gpuMillis)) throw new IllegalStateException("Vulkan timestamp queries unavailable on " + pipeline.deviceName());
-				wallTotal += wallMillis; wallMinimum = Math.min(wallMinimum, wallMillis); wallMaximum = Math.max(wallMaximum, wallMillis);
+				double schedulingMillis = pipeline.lastStepMilliseconds();
+				schedulingTotal += schedulingMillis;
+				schedulingMinimum = Math.min(schedulingMinimum, schedulingMillis);
+				schedulingMaximum = Math.max(schedulingMaximum, schedulingMillis);
+			}
+			long[] gpuNanos = pipeline.endGpuTimingCapture();
+			double throughputWallAverage = (System.nanoTime() - batchStarted) / 1_000_000.0 / measured;
+			if (gpuNanos.length != measured) throw new IllegalStateException("Vulkan timestamp capture count mismatch on " + pipeline.deviceName());
+			for (long nanos : gpuNanos) {
+				double gpuMillis = nanos / 1_000_000.0;
 				gpuTotal += gpuMillis; gpuMinimum = Math.min(gpuMinimum, gpuMillis); gpuMaximum = Math.max(gpuMaximum, gpuMillis);
 			}
 			VulkanFlipPipeline.Diagnostics diagnostics = pipeline.diagnostics();
 			VulkanFlipPipeline.ReadbackStats readback = pipeline.measureReadback();
 			return String.format(Locale.ROOT,
-					"%s | memory %s | pressure %s/%d | %dx%dx%d grid | particles %d | %d steps GPU timestamp avg %.3f ms (%.3f..%.3f), wall avg %.3f ms (%.3f..%.3f) | divergence %.5f→%.5f | regular diagnostics 64 B/step | snapshot %d B %.3f ms | diagnostic full-state %d B %.3f ms",
+					"%s | memory %s | pressure %s/%d | %dx%dx%d grid | particles %d | %d steps GPU timestamp avg %.3f ms (%.3f..%.3f), throughput wall avg %.3f ms, scheduling wall avg %.3f ms (%.3f..%.3f) | divergence %.5f→%.5f | regular diagnostics 64 B/step through 3-slot ring | snapshot %d B %.3f ms | diagnostic full-state %d B %.3f ms",
 					pipeline.deviceName(), pipeline.memoryMode().label(), pressureSolver.label(), pressureIterations,
 					grid, ny, grid, pipeline.particleCount(), measured, gpuTotal / measured, gpuMinimum, gpuMaximum,
-					wallTotal / measured, wallMinimum, wallMaximum,
+					throughputWallAverage, schedulingTotal / measured, schedulingMinimum, schedulingMaximum,
 					diagnostics.preProjectionMaximumDivergence(), diagnostics.maximumDivergence(),
 					readback.compactBytes(), readback.compactNanos() / 1_000_000.0,
 					readback.fullBytes(), readback.fullNanos() / 1_000_000.0);
@@ -314,7 +324,7 @@ final class GpuProbeService {
 			String timing = Double.isFinite(gpuMillis)
 					? String.format(Locale.ROOT, "GPU timestamp %.3f ms", gpuMillis)
 					: "GPU timestamp 尚未步进";
-			return String.format(Locale.ROOT, "%s | diag readback 64 B/step | maxP %.1f | divergence %.5f→%.5f RMS %.5f | GPU volume %.3f cells",
+			return String.format(Locale.ROOT, "%s | diag readback 64 B/step through 3-slot ring | maxP %.1f | divergence %.5f→%.5f RMS %.5f | GPU volume %.3f cells",
 					timing, d.maximumPressure(), d.preProjectionMaximumDivergence(), d.maximumDivergence(), d.rmsDivergence(), d.particleVolume());
 		}
 		@Override public void close() { pipeline.close(); }
