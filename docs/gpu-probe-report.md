@@ -1,8 +1,8 @@
 # M1 Windows/NVIDIA Vulkan GPU probe report
 
-Date: 2026-08-19. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.6. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
+Date: 2026-08-19. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.7. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
 
-This is an M1-E correctness, data-movement and pressure-algorithm probe, not the production GPU backend. It has no takeover code, does not read world blocks or collision state, does not write a save, and owns no chunk tickets. The main `realwater` Mod remains the CPU-authoritative implementation whether the optional probe jar is installed or not. The initial two-level multigrid gate now passes without internal solids; solid-aware coarsening and a fuller hierarchy are still required before backend integration.
+This is an M1-F correctness, data-movement and pressure-algorithm probe, not the production GPU backend. It has no takeover code, does not read world blocks or collision state, does not write a save, and owns no chunk tickets. The main `realwater` Mod remains the CPU-authoritative implementation whether the optional probe jar is installed or not. The two-level multigrid gate now includes synthetic internal solids; a fuller hierarchy and read-only real-world collision ingestion are still required before backend integration.
 
 ## Layer boundary
 
@@ -42,7 +42,7 @@ The same dam-break input is also run through device-local and persistently mappe
 
 Probe 0.1.4 adds two experimental solvers without changing the Poisson matrix, fluid-cell classification or projection: red-black Gauss-Seidel with SOR `omega=1.65`, and a conjugate-gradient path expressed as PCG with the identity preconditioner. Probe 0.1.5 adds a diagonal/Jacobi-preconditioned PCG comparison. PCG reuses post-grid-prep face-weight buffers for direction and matrix-vector scratch; the diagonal variant temporarily reuses the smooth-density buffer for `z=M^-1r`, after density has finished its physical role and before post-advection surface density is rebuilt. Both perform workgroup reductions before bounded global atomic accumulation and never read an iteration scalar back to the CPU. Jacobi remains the game-demo default.
 
-Probe 0.1.6 adds a two-level geometric multigrid solver. Each V-cycle applies two unit-weight red-black Gauss-Seidel fine-grid pre-smoothing sweeps, restricts the fine residual to a half-resolution rediscretized grid, runs 24 coarse Jacobi iterations, trilinearly prolongs the correction, and applies three fine-grid post-smoothing sweeps. Restriction and prolongation use four additional device-local coarse scratch buffers. They never alter marker particles, `particleVolume`, fine marker classification, surface density or snapshot masks. The current probe has no internal solid geometry, so this result does not yet validate coarse obstacle topology.
+Probe 0.1.6 adds a two-level geometric multigrid solver. Each V-cycle applies two unit-weight red-black Gauss-Seidel fine-grid pre-smoothing sweeps, restricts the fine residual to a half-resolution grid, runs 24 coarse Jacobi iterations, prolongs the correction, and applies three fine-grid post-smoothing sweeps. Probe 0.1.7 makes its coarse topology solid-aware: fine-grid connections are aggregated into a coarse diagonal and positive X/Y/Z face weights, fluid-solid faces remain closed, fluid-air faces retain their zero-pressure diagonal contribution, and prolongation near mixed-solid aggregates uses local injection instead of interpolating through a wall. Eight coarse scratch buffers remain numerical state only; they never alter marker particles, `particleVolume`, fine marker classification, surface density or snapshot masks.
 
 The fixed current-domain first step gives this maximum-divergence convergence curve on the RTX 5070 Ti. Each point starts from the identical particle state; time is the complete physical step including the 64-byte diagnostic copy.
 
@@ -52,11 +52,13 @@ The fixed current-domain first step gives this maximum-divergence convergence cu
 | RBGS/SOR | 16 / 32 / 48 sweeps | 0.378236 / 0.105281 / 0.028933 | 0.424 / 0.654 / 0.875 ms |
 | PCG, identity preconditioner | 16 / 24 / 32 | 0.209116 / 0.017929 / 0.001239 | 1.214 / 1.388 / 1.676 ms |
 | PCG, diagonal preconditioner | 16 / 24 / 32 | 0.940274 / 0.031761 / 0.005039 | 0.856 / 1.035 / 1.351 ms |
-| MG2 V-cycle | 1 / 2 / 3 cycles | 0.228483 / 0.065028 / 0.026593 | 0.415 / 0.676 / 0.820 ms |
+| MG2 V-cycle | 1 / 2 / 3 cycles | 0.270847 / 0.064497 / 0.026499 | 0.395 / 0.693 / 0.798 ms |
 
-Across six evolving steps, Jacobi 96, RBGS/SOR 48, identity-PCG 32, diagonal-PCG 32 and MG2 with two V-cycles produced step-six maximum divergences of approximately 0.23785, 0.05666, 0.01192, 0.01768 and 0.11593. Their representative RTX 5070 Ti averages were 0.889, 1.077, 1.396, 1.559 and 0.872 ms. All retained exactly 2,592.000 solver-cell volumes. Thus MG2 is the best small-domain low-cost candidate, while identity-PCG buys another order of magnitude in residual at higher dispatch/reduction cost. The diagonal preconditioner does not improve this matrix.
+Across six evolving steps, Jacobi 96, RBGS/SOR 48, identity-PCG 32, diagonal-PCG 32 and MG2 with two V-cycles produced step-six maximum divergences of approximately 0.23785, 0.05667, 0.01242, 0.01768 and 0.11600. Their representative RTX 5070 Ti averages were 1.066, 1.057, 1.587, 1.281 and 0.714 ms. All retained exactly 2,592.000 solver-cell volumes. Thus MG2 is the best small-domain low-cost candidate, while identity-PCG buys another order of magnitude in residual at higher dispatch/reduction cost. The diagonal preconditioner does not improve this matrix.
 
-That ordering does not scale unchanged. Across the final repeated 64³ grid partial-dam runs on the RTX 5070 Ti, Jacobi 64 averaged 1.822–1.856 ms and reduced the identical first-step divergence from 0.98100 to 0.16684; MG2 with two cycles averaged 1.659–1.861 ms and reached 0.17802. By step four, MG2 consistently left 0.44299 maximum divergence versus Jacobi's 0.46867. The identical first-step MG2 curve was 0.259019 / 0.178021 / 0.139896 for one / two / three cycles at 1.387–1.431 / 1.668–1.693 / 1.883–1.914 ms minimum observed time. Identity-PCG needed 22.697–23.426 ms for a similar first-step residual. MG2 therefore establishes a real cost/quality Pareto point instead of merely spending an order of magnitude more time for a lower residual. Jacobi remains the default because the current result excludes internal solid geometry; the next pressure work is solid-aware coarsening and a fuller hierarchy, not more diagonal-PCG tuning.
+That ordering does not scale unchanged. In the solid-aware 64³ grid partial-dam run on the RTX 5070 Ti, Jacobi 64 averaged 1.891 ms and reduced the identical first-step divergence from 0.98100 to 0.16684; MG2 with two cycles averaged 1.812 ms and reached 0.17807. By step four, MG2 left 0.44294 maximum divergence versus Jacobi's 0.46867. The identical first-step MG2 curve was 0.266631 / 0.178072 / 0.139916 for one / two / three cycles at 1.494 / 1.714 / 1.910 ms minimum observed time. Identity-PCG needed 25.163 ms for a similar first-step residual. On the RTX 4060 Ti, MG2 averaged 2.650 ms versus Jacobi's 2.971 ms with the same numerical results. MG2 therefore establishes a cross-device cost/quality Pareto point instead of merely spending an order of magnitude more time for a lower residual. Jacobi remains the demo default until a fuller hierarchy and real-world collision ingestion pass.
+
+The synthetic obstacle case uses a one-solver-cell vertical wall crossed by a one-cell horizontal shelf: 228 solid cells, 39,648 markers and exactly 4,956.000 solver-cell volumes. After eight steps, neither Jacobi nor MG2 placed any marker inside a solid. The coarse X coupling across every covered thin-wall face was exactly 0.000000 while an adjacent open face remained 1.000. MG2 reduced maximum divergence from 5.27196 to 0.32734 versus Jacobi's 4.79586 to 0.42489. Device-local and host-visible MG2 runs produced zero marker/solid mismatches and no meaningful pressure or center-of-mass difference. This is a numerical/collision test using generated masks; it does not read Minecraft blocks.
 
 ## Throughput and readback
 
@@ -64,12 +66,12 @@ The step time includes queue completion and the regular 64-byte diagnostic stagi
 
 | Device / memory / case | Markers | Pressure iterations | Step time | Snapshot readback | Full-state readback |
 |---|---:|---:|---:|---:|---:|
-| RTX 5070 Ti, device-local, current 12×8×12-block dam | 20,736 | 96 | 0.895 ms average (0.711–2.232) | 36,864 B / 0.659 ms | 2,983,744 B / 57.150 ms |
-| RTX 5070 Ti, host-visible baseline, current dam | 20,736 | 96 | 7.121 ms average (6.252–8.705) | 36,864 B / 0.523 ms | 2,983,744 B / 45.546 ms |
-| RTX 4060 Ti, device-local, current 12×8×12-block dam | 20,736 | 96 | 2.304 ms average (2.032–6.324) | 36,864 B / 0.721 ms | 2,983,744 B / 65.777 ms |
-| RTX 4060 Ti, host-visible baseline, current dam | 20,736 | 96 | 8.720 ms average (7.056–11.941) | 36,864 B / 0.527 ms | 2,983,744 B / 46.296 ms |
-| RTX 5070 Ti, device-local, full 32³ blocks / 64³ grid | 2,097,152 | 64 | 4.985 ms average (4.490–5.957) | 1,048,576 B / 15.770 ms | 84,557,888 B / 1,363.802 ms |
-| RTX 4060 Ti, device-local, full 32³ blocks / 64³ grid | 2,097,152 | 64 | 7.112 ms average (6.682–7.964) | 1,048,576 B / 18.227 ms | 84,557,888 B / 1,477.106 ms |
+| RTX 5070 Ti, device-local, current 12×8×12-block dam | 20,736 | 96 | 0.840 ms average (0.672–2.221) | 36,864 B / 0.796 ms | 3,002,176 B / 60.639 ms |
+| RTX 5070 Ti, host-visible baseline, current dam | 20,736 | 96 | 7.420 ms average (6.354–8.736) | 36,864 B / 0.538 ms | 3,002,176 B / 48.837 ms |
+| RTX 4060 Ti, device-local, current 12×8×12-block dam | 20,736 | 96 | 1.893 ms average (1.474–5.288) | 36,864 B / 0.804 ms | 3,002,176 B / 69.429 ms |
+| RTX 4060 Ti, host-visible baseline, current dam | 20,736 | 96 | 9.802 ms average (7.123–11.726) | 36,864 B / 0.546 ms | 3,002,176 B / 54.033 ms |
+| RTX 5070 Ti, device-local, full 32³ blocks / 64³ grid | 2,097,152 | 64 | 4.985 ms average (4.433–5.803) | 1,048,576 B / 18.922 ms | 85,082,176 B / 1,478.902 ms |
+| RTX 4060 Ti, device-local, full 32³ blocks / 64³ grid | 2,097,152 | 64 | 7.202 ms average (6.553–8.408) | 1,048,576 B / 17.406 ms | 85,082,176 B / 1,466.113 ms |
 
 The 32³ benchmark really allocates and advances all 2,097,152 full-water markers. Gravity is zero in that throughput case because a completely full closed box has a pressure nullspace and no free atmospheric surface. Its exact marker ledger is 262,144 solver-cell volumes, equal to 32,768 Minecraft block-volumes.
 
@@ -101,7 +103,7 @@ All handled probe commands and their chat/detail output are appended as UTF-8 bl
 
 - Add a dedicated-server classpath smoke. Integrated-server device-local visualization, paused multi-step control, continuous run/pause, status, both benchmark sizes, command transcript output and cleanup have passed; forced CPU fallback passed on 0.1.1.
 - Replace the single reusable staging buffer and CPU wall-clock timing with bounded ring staging and Vulkan timestamp queries before calling the layout production-ready. Full-state readback remains diagnostic-only.
-- Extend the successful two-level multigrid experiment to solid-aware coarse topology and a fuller hierarchy. MG2 passed the no-internal-solid two-scale cost/quality gate, while identity-PCG, diagonal-PCG and RBGS/SOR did not. Jacobi remains the correctness/default baseline until the missing geometry gate passes.
+- Extend the successful solid-aware two-level multigrid experiment to a fuller hierarchy and read-only real-world collision ingestion. MG2 passed the synthetic thin-wall/shelf and two-scale cost/quality gates, while identity-PCG, diagonal-PCG and RBGS/SOR did not. Jacobi remains the correctness/default baseline until the remaining integration gates pass.
 - Complete the CPU variable-density face-coefficient experiment before M3 and measure CPU/GPU break-even across more occupancies.
 - Add a CPU-readable checkpoint and recovery path for runtime device loss. The main Mod already remains CPU-only; the optional visual probe currently pauses on a step failure rather than pretending incomplete buffers are valid.
 

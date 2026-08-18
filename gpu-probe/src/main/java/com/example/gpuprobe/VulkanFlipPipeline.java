@@ -22,11 +22,12 @@ import static org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceFeatures2;
 /** Windowless 3D PIC/FLIP probe backend with an explicit device-local production path and host-visible baseline. */
 final class VulkanFlipPipeline implements AutoCloseable {
 	private static final int LOCAL_SIZE = 256;
-	private static final int BUFFER_COUNT = 23;
+	private static final int BUFFER_COUNT = 27;
 	private static final int PUSH_BYTES = 52;
 	private static final int MG_PRE_SMOOTHING_SWEEPS = 2;
 	private static final int MG_COARSE_ITERATIONS = 24;
 	private static final int MG_POST_SMOOTHING_SWEEPS = 3;
+	private static final CellSelector NO_CELLS = (x, y, z) -> false;
 
 	private static final int POSITIONS = 0;
 	private static final int VELOCITIES = 1;
@@ -51,6 +52,10 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private static final int COARSE_MASK = 20;
 	private static final int COARSE_PRESSURE_A = 21;
 	private static final int COARSE_PRESSURE_B = 22;
+	private static final int COARSE_DIAGONAL = 23;
+	private static final int COARSE_X_WEIGHT = 24;
+	private static final int COARSE_Y_WEIGHT = 25;
+	private static final int COARSE_Z_WEIGHT = 26;
 
 	private static final int STAGE_CLEAR = 0;
 	private static final int STAGE_P2G = 1;
@@ -103,6 +108,10 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			layout(set=0,binding=20,std430) buffer CoarseMask { uint value[]; } coarseMask;
 			layout(set=0,binding=21,std430) buffer CoarsePressureA { float value[]; } coarsePa;
 			layout(set=0,binding=22,std430) buffer CoarsePressureB { float value[]; } coarsePb;
+			layout(set=0,binding=23,std430) buffer CoarseDiagonal { float value[]; } coarseDiagonal;
+			layout(set=0,binding=24,std430) buffer CoarseXWeight { float value[]; } coarseXWeight;
+			layout(set=0,binding=25,std430) buffer CoarseYWeight { float value[]; } coarseYWeight;
+			layout(set=0,binding=26,std430) buffer CoarseZWeight { float value[]; } coarseZWeight;
 			shared float diagnosticSquared[256];
 			shared float diagnosticVolume[256];
 			shared float diagnosticWeightedX[256];
@@ -132,7 +141,6 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			bool fluid(ivec3 c) { return insideCell(c) && solids.value[ci(c)] == 0u && markers.value[ci(c)] > 0u; }
 			bool solid(ivec3 c) { return !insideCell(c) || solids.value[ci(c)] != 0u; }
 			bool coarseFluid(ivec3 c) { return insideCoarse(c) && (coarseMask.value[coarseCi(c)] & 1u) != 0u; }
-			bool coarseSolid(ivec3 c) { return !insideCoarse(c) || (coarseMask.value[coarseCi(c)] & 2u) != 0u; }
 			bool validU(ivec3 f) { return f.x > 0 && f.x < pc.nx && f.y >= 0 && f.y < pc.ny && f.z >= 0 && f.z < pc.nz && !solid(f + ivec3(-1,0,0)) && !solid(f); }
 			bool validV(ivec3 f) { return f.y > 0 && f.y < pc.ny && f.x >= 0 && f.x < pc.nx && f.z >= 0 && f.z < pc.nz && !solid(f + ivec3(0,-1,0)) && !solid(f); }
 			bool validW(ivec3 f) { return f.z > 0 && f.z < pc.nz && f.x >= 0 && f.x < pc.nx && f.y >= 0 && f.y < pc.ny && !solid(f + ivec3(0,0,-1)) && !solid(f); }
@@ -191,7 +199,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 
 			void clearStage(uint id) {
 			    if(id<uint(cellCount())){density.value[id]=0.0;markers.value[id]=0u;pa.value[id]=0.0;pb.value[id]=0.0;divergence.value[id]=0.0;snapshot.value[id]=0u;}
-			    if(id<uint(coarseCount())){coarseRhs.value[id]=0.0;coarseMask.value[id]=0u;coarsePa.value[id]=0.0;coarsePb.value[id]=0.0;}
+			    if(id<uint(coarseCount())){coarseRhs.value[id]=0.0;coarseMask.value[id]=0u;coarsePa.value[id]=0.0;coarsePb.value[id]=0.0;coarseDiagonal.value[id]=0.0;coarseXWeight.value[id]=0.0;coarseYWeight.value[id]=0.0;coarseZWeight.value[id]=0.0;}
 			    if(id<uint(uCount())){u.value[id]=0.0;uw.value[id]=0.0;uold.value[id]=0.0;}
 			    if(id<uint(vCount())){v.value[id]=0.0;vw.value[id]=0.0;vold.value[id]=0.0;}
 			    if(id<uint(wCount())){w.value[id]=0.0;ww.value[id]=0.0;wold.value[id]=0.0;}
@@ -267,28 +275,35 @@ final class VulkanFlipPipeline implements AutoCloseable {
 
 			void mgRestrictStage(uint id) {
 			    if(id>=uint(coarseCount()))return;int ix=int(id)%coarseNx();int yz=int(id)/coarseNx();ivec3 cc=ivec3(ix,yz%coarseNy(),yz/coarseNy());
-			    float residualSum=0.0;int childCount=0;bool anyFluid=false;bool allSolid=true;
+			    float residualSum=0.0;float coarseD=0.0;float xWeight=0.0;float yWeight=0.0;float zWeight=0.0;int childCount=0;bool anyFluid=false;bool anySolid=false;
 			    ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));
 			    for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){
-			        ivec3 c=cc*2+ivec3(x,y,z);if(!insideCell(c))continue;childCount++;allSolid=allSolid&&solid(c);if(!fluid(c))continue;anyFluid=true;
+			        ivec3 c=cc*2+ivec3(x,y,z);if(!insideCell(c))continue;childCount++;anySolid=anySolid||solid(c);if(!fluid(c))continue;anyFluid=true;
 			        float sum=0.0;float diagonal=0.0;for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(solid(nb))continue;diagonal+=1.0;if(fluid(nb))sum+=pa.value[ci(nb)];}
 			        float rhs=-(pc.rho/pc.dt)*divergence.value[ci(c)]*pc.h*pc.h;residualSum+=rhs-(diagonal*pa.value[ci(c)]-sum);
+			        for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(solid(nb))continue;if(!fluid(nb)){coarseD+=0.25;continue;}ivec3 nc=nb/2;if(all(equal(nc,cc)))continue;coarseD+=0.25;if(n==1)xWeight+=0.25;else if(n==3)yWeight+=0.25;else if(n==5)zWeight+=0.25;}
 			    }
-			    coarseMask.value[id]=anyFluid?1u:(allSolid?2u:0u);coarseRhs.value[id]=anyFluid&&childCount>0?4.0*residualSum/float(childCount):0.0;coarsePa.value[id]=0.0;coarsePb.value[id]=0.0;
+			    coarseMask.value[id]=(anyFluid?1u:0u)|(anySolid?2u:0u);coarseRhs.value[id]=anyFluid&&childCount>0?4.0*residualSum/float(childCount):0.0;coarsePa.value[id]=0.0;coarsePb.value[id]=0.0;coarseDiagonal.value[id]=coarseD;coarseXWeight.value[id]=xWeight;coarseYWeight.value[id]=yWeight;coarseZWeight.value[id]=zWeight;
 			}
 			void mgCoarseJacobiStage(uint id) {
 			    if(id>=uint(coarseCount()))return;int ix=int(id)%coarseNx();int yz=int(id)/coarseNx();ivec3 c=ivec3(ix,yz%coarseNy(),yz/coarseNy());bool even=(pc.iteration&1)==0;
 			    if(!coarseFluid(c)){if(even)coarsePb.value[id]=0.0;else coarsePa.value[id]=0.0;return;}
-			    ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));float sum=0.0;float diagonal=0.0;
-			    for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(coarseSolid(nb))continue;diagonal+=1.0;if(coarseFluid(nb)){int ni=coarseCi(nb);sum+=even?coarsePa.value[ni]:coarsePb.value[ni];}}
-			    float next=diagonal>0.0?(sum+coarseRhs.value[id])/diagonal:0.0;if(even)coarsePb.value[id]=next;else coarsePa.value[id]=next;
+			    float sum=0.0;if(c.x+1<coarseNx()&&coarseFluid(c+ivec3(1,0,0)))sum+=coarseXWeight.value[id]*(even?coarsePa.value[coarseCi(c+ivec3(1,0,0))]:coarsePb.value[coarseCi(c+ivec3(1,0,0))]);
+			    if(c.x>0&&coarseFluid(c-ivec3(1,0,0))){int ni=coarseCi(c-ivec3(1,0,0));sum+=coarseXWeight.value[ni]*(even?coarsePa.value[ni]:coarsePb.value[ni]);}
+			    if(c.y+1<coarseNy()&&coarseFluid(c+ivec3(0,1,0)))sum+=coarseYWeight.value[id]*(even?coarsePa.value[coarseCi(c+ivec3(0,1,0))]:coarsePb.value[coarseCi(c+ivec3(0,1,0))]);
+			    if(c.y>0&&coarseFluid(c-ivec3(0,1,0))){int ni=coarseCi(c-ivec3(0,1,0));sum+=coarseYWeight.value[ni]*(even?coarsePa.value[ni]:coarsePb.value[ni]);}
+			    if(c.z+1<coarseNz()&&coarseFluid(c+ivec3(0,0,1)))sum+=coarseZWeight.value[id]*(even?coarsePa.value[coarseCi(c+ivec3(0,0,1))]:coarsePb.value[coarseCi(c+ivec3(0,0,1))]);
+			    if(c.z>0&&coarseFluid(c-ivec3(0,0,1))){int ni=coarseCi(c-ivec3(0,0,1));sum+=coarseZWeight.value[ni]*(even?coarsePa.value[ni]:coarsePb.value[ni]);}
+			    float diagonal=coarseDiagonal.value[id];float next=diagonal>0.0?(sum+coarseRhs.value[id])/diagonal:0.0;if(even)coarsePb.value[id]=next;else coarsePa.value[id]=next;
 			}
 			float mgCoarsePressure(ivec3 c) {
 			    c=clamp(c,ivec3(0),ivec3(coarseNx()-1,coarseNy()-1,coarseNz()-1));if(!coarseFluid(c))return 0.0;return (pc.flags&1)==0?coarsePa.value[coarseCi(c)]:coarsePb.value[coarseCi(c)];
 			}
 			void mgProlongStage(uint id) {
 			    if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);if(!fluid(c))return;
-			    vec3 q=vec3(c)*0.5-vec3(0.25);ivec3 base=ivec3(floor(q));vec3 fraction=fract(q);float correction=0.0;
+			    vec3 q=vec3(c)*0.5-vec3(0.25);ivec3 base=ivec3(floor(q));vec3 fraction=fract(q);float correction=0.0;bool nearSolid=false;
+			    for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 sampleCell=clamp(base+ivec3(x,y,z),ivec3(0),ivec3(coarseNx()-1,coarseNy()-1,coarseNz()-1));nearSolid=nearSolid||((coarseMask.value[coarseCi(sampleCell)]&2u)!=0u);}
+			    if(nearSolid){pa.value[id]+=mgCoarsePressure(c/2);return;}
 			    for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 o=ivec3(x,y,z);vec3 weight=mix(vec3(1.0)-fraction,fraction,vec3(o));correction+=mgCoarsePressure(base+o)*weight.x*weight.y*weight.z;}
 			    pa.value[id]+=correction;
 			}
@@ -391,29 +406,38 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	float totalParticleVolume() { return particleVolumeLedger; }
 
 	void initializeDamBreak() {
-		initialize((x, y, z) -> x < config.nx() * 2 / 5 && y < config.ny() * 3 / 4);
+		initialize((x, y, z) -> x < config.nx() * 2 / 5 && y < config.ny() * 3 / 4, NO_CELLS);
 	}
 
 	void initializeColumn() {
 		initialize((x, y, z) -> x >= config.nx() / 3 && x < config.nx() * 2 / 3
-				&& z >= config.nz() / 3 && z < config.nz() * 2 / 3 && y < config.ny() * 3 / 4);
+				&& z >= config.nz() / 3 && z < config.nz() * 2 / 3 && y < config.ny() * 3 / 4, NO_CELLS);
 	}
 
 	void initializeFull() {
-		initialize((x, y, z) -> true);
+		initialize((x, y, z) -> true, NO_CELLS);
 	}
 
-	private void initialize(CellSelector selector) {
+	void initializeObstacleDamBreak() {
+		initialize((x, y, z) -> x < config.nx() * 3 / 4 && y < config.ny() * 3 / 4,
+				(x, y, z) -> {
+					boolean centralZ = z >= config.nz() / 4 && z < config.nz() * 3 / 4;
+					boolean thinWall = x == config.nx() / 2 && y < config.ny() * 3 / 4 && centralZ;
+					boolean shelf = y == config.ny() / 2 && x >= config.nx() / 3 && x < config.nx() * 2 / 3 && centralZ;
+					return thinWall || shelf;
+				});
+	}
+
+	private void initialize(CellSelector selector, CellSelector solidSelector) {
 		GpuBuffer upload = memoryMode == MemoryMode.HOST_VISIBLE ? buffer(POSITIONS) : transferBuffer;
 		MemoryUtil.memSet(upload.mappedAddress(), 0, buffer(POSITIONS).size());
 		FloatBuffer positions = upload.floats(buffer(POSITIONS).size());
 		if (memoryMode == MemoryMode.HOST_VISIBLE) {
 			MemoryUtil.memSet(buffer(VELOCITIES).mappedAddress(), 0, buffer(VELOCITIES).size());
-			MemoryUtil.memSet(buffer(SOLIDS).mappedAddress(), 0, buffer(SOLIDS).size());
 		}
 		particleCount = 0;
 		for (int z = 0; z < config.nz(); z++) for (int y = 0; y < config.ny(); y++) for (int x = 0; x < config.nx(); x++) {
-			if (!selector.filled(x, y, z)) continue;
+			if (!selector.filled(x, y, z) || solidSelector.filled(x, y, z)) continue;
 			for (int slot = 0; slot < 8; slot++) {
 				if (particleCount >= config.maxParticles()) throw new IllegalStateException("GPU marker capacity exceeded");
 				float ox = (slot & 1) == 0 ? 0.25F : 0.75F;
@@ -432,6 +456,8 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		}
 		particleVolumeLedger = particleCount * 0.125F;
 		if (memoryMode == MemoryMode.DEVICE_LOCAL_STAGING) uploadInitialState();
+		int solidCells = populateSolidMask(solidSelector);
+		if (memoryMode == MemoryMode.DEVICE_LOCAL_STAGING && solidCells > 0) uploadSolidMask();
 		rebuildSnapshot();
 	}
 
@@ -472,6 +498,34 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			if (!occupied[cell]) { occupied[cell] = true; count++; }
 		}
 		return count;
+	}
+
+	int solidCellCount() {
+		IntBuffer solids = copiedBuffer(SOLIDS).asIntBuffer();
+		int count = 0;
+		for (int i = 0; i < config.cellCount(); i++) if (solids.get(i) != 0) count++;
+		return count;
+	}
+
+	int particlesInsideSolidCount() {
+		FloatBuffer positions = copiedBuffer(POSITIONS).asFloatBuffer();
+		IntBuffer solids = copiedBuffer(SOLIDS).asIntBuffer();
+		int count = 0;
+		for (int i = 0; i < particleCount; i++) {
+			int base = i * 4;
+			int x = Math.clamp((int) Math.floor(positions.get(base) / config.cellSize()), 0, config.nx() - 1);
+			int y = Math.clamp((int) Math.floor(positions.get(base + 1) / config.cellSize()), 0, config.ny() - 1);
+			int z = Math.clamp((int) Math.floor(positions.get(base + 2) / config.cellSize()), 0, config.nz() - 1);
+			if (solids.get(x + config.nx() * (y + config.ny() * z)) != 0) count++;
+		}
+		return count;
+	}
+
+	float[] coarseXWeights() {
+		FloatBuffer weights = copiedBuffer(COARSE_X_WEIGHT).asFloatBuffer();
+		float[] copy = new float[coarseCellCount()];
+		weights.get(copy);
+		return copy;
 	}
 
 	float reconstructedDensityVolume() {
@@ -660,6 +714,34 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		}
 	}
 
+	private int populateSolidMask(CellSelector solidSelector) {
+		GpuBuffer target = memoryMode == MemoryMode.HOST_VISIBLE ? buffer(SOLIDS) : transferBuffer;
+		MemoryUtil.memSet(target.mappedAddress(), 0, buffer(SOLIDS).size());
+		IntBuffer mask = target.bytes(buffer(SOLIDS).size()).asIntBuffer();
+		int count = 0;
+		for (int z = 0; z < config.nz(); z++) for (int y = 0; y < config.ny(); y++) for (int x = 0; x < config.nx(); x++) {
+			if (!solidSelector.filled(x, y, z)) continue;
+			mask.put(x + config.nx() * (y + config.ny() * z), 1);
+			count++;
+		}
+		return count;
+	}
+
+	private void uploadSolidMask() {
+		try (MemoryStack stack = stackPush()) {
+			check(vkResetCommandPool(device, commandPool, 0), "vkResetCommandPool(solids)");
+			VkCommandBufferBeginInfo begin = VkCommandBufferBeginInfo.calloc(stack).sType$Default();
+			check(vkBeginCommandBuffer(commandBuffer, begin), "vkBeginCommandBuffer(solids)");
+			VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack);
+			barrier.get(0).sType$Default().srcAccessMask(VK_ACCESS_HOST_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
+			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, barrier, null, null);
+			copyBuffer(stack, transferBuffer, buffer(SOLIDS), buffer(SOLIDS).size());
+			barrier.get(0).srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, barrier, null, null);
+			submitAndWait(stack, "solids");
+		}
+	}
+
 	private ByteBuffer readableBuffer(int index) {
 		GpuBuffer source = buffer(index);
 		if (memoryMode == MemoryMode.HOST_VISIBLE) return source.bytes();
@@ -798,6 +880,8 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		addBuffer((long) config.cellCount() * Float.BYTES); addBuffer((long) config.cellCount() * Integer.BYTES);
 		addBuffer((long) config.cellCount() * Integer.BYTES); addBuffer(16L * Integer.BYTES);
 		addBuffer((long) coarseCellCount() * Float.BYTES); addBuffer((long) coarseCellCount() * Integer.BYTES);
+		addBuffer((long) coarseCellCount() * Float.BYTES); addBuffer((long) coarseCellCount() * Float.BYTES);
+		addBuffer((long) coarseCellCount() * Float.BYTES); addBuffer((long) coarseCellCount() * Float.BYTES);
 		addBuffer((long) coarseCellCount() * Float.BYTES); addBuffer((long) coarseCellCount() * Float.BYTES);
 		if (buffers.size() != BUFFER_COUNT) throw new IllegalStateException("Wrong GPU buffer count");
 		if (memoryMode == MemoryMode.DEVICE_LOCAL_STAGING) {

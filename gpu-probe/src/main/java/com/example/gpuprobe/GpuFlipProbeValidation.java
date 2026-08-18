@@ -29,6 +29,7 @@ public final class GpuFlipProbeValidation {
 		results.add(validateDamBreak(device));
 		results.add(validateHydrostaticColumn(device));
 		results.add(validateMultigridHydrostaticColumn(device));
+		results.add(validateMultigridObstacles(device));
 		results.add(validatePressureSolvers(device));
 		results.add(validatePressureConvergenceCurves(device));
 		results.add(validateMemoryModes(device));
@@ -144,6 +145,55 @@ public final class GpuFlipProbeValidation {
 		}
 	}
 
+	private static String validateMultigridObstacles(int device) {
+		VulkanFlipPipeline.Config jacobiConfig = new VulkanFlipPipeline.Config(24, 16, 24, CELL_SIZE, DT, GRAVITY, RHO,
+				96, 24 * 16 * 24 * 8);
+		VulkanFlipPipeline.Config mgConfig = new VulkanFlipPipeline.Config(24, 16, 24, CELL_SIZE, DT, GRAVITY, RHO,
+				2, 24 * 16 * 24 * 8);
+		try (VulkanFlipPipeline jacobi = new VulkanFlipPipeline(jacobiConfig, device);
+		     VulkanFlipPipeline multigrid = new VulkanFlipPipeline(mgConfig, device,
+				     VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL)) {
+			jacobi.initializeObstacleDamBreak();
+			multigrid.initializeObstacleDamBreak();
+			require(jacobi.particleCount() == multigrid.particleCount(), "obstacle solver particle counts differ");
+			require(jacobi.solidCellCount() == 228 && multigrid.solidCellCount() == 228, "synthetic obstacle cell count");
+			float volume = multigrid.totalParticleVolume();
+			float blockedCoupling = 0.0F;
+			float openCoupling = 0.0F;
+			for (int step = 0; step < 8; step++) {
+				jacobi.step();
+				multigrid.step();
+				VulkanFlipPipeline.Diagnostics jacobiDiagnostics = jacobi.diagnostics();
+				VulkanFlipPipeline.Diagnostics mgDiagnostics = multigrid.diagnostics();
+				requireFinite(jacobiDiagnostics); requireFinite(mgDiagnostics);
+				require(close(mgDiagnostics.particleVolume(), volume, 1.0E-3F), "MG2 obstacle volume changed");
+				require(mgDiagnostics.maximumDivergence() <= mgDiagnostics.preProjectionMaximumDivergence() * 0.50F + 3.0E-3F,
+						"MG2 obstacle projection did not sufficiently reduce divergence at step " + step);
+				if (step == 0) {
+					float[] xWeights = multigrid.coarseXWeights();
+					int coarseNx = 12, coarseNy = 8;
+					for (int z = 3; z < 9; z++) for (int y = 0; y < 6; y++) {
+						blockedCoupling = Math.max(blockedCoupling, Math.abs(xWeights[5 + coarseNx * (y + coarseNy * z)]));
+					}
+					openCoupling = xWeights[5];
+				}
+			}
+			require(blockedCoupling <= 1.0E-6F, "MG2 coarse operator crossed thin wall: " + blockedCoupling);
+			require(openCoupling >= 0.99F, "MG2 coarse operator lost open face: " + openCoupling);
+			require(jacobi.particlesInsideSolidCount() == 0 && multigrid.particlesInsideSolidCount() == 0,
+					"particles entered synthetic obstacle");
+			VulkanFlipPipeline.SnapshotData jacobiSnapshot = jacobi.snapshot();
+			VulkanFlipPipeline.SnapshotData mgSnapshot = multigrid.snapshot();
+			require(mismatches(jacobiSnapshot.solids(), mgSnapshot.solids()) == 0, "obstacle solid snapshots differ");
+			VulkanFlipPipeline.Diagnostics jacobiDiagnostics = jacobi.diagnostics();
+			VulkanFlipPipeline.Diagnostics mgDiagnostics = multigrid.diagnostics();
+			return String.format("correctness MG2 obstacles: solids=228 particles=%d volume=%.3f cells coarseWall=%.6f open=%.3f inside=0 JacobiDiv %.5f->%.5f MG2Div %.5f->%.5f",
+					multigrid.particleCount(), volume, blockedCoupling, openCoupling,
+					jacobiDiagnostics.preProjectionMaximumDivergence(), jacobiDiagnostics.maximumDivergence(),
+					mgDiagnostics.preProjectionMaximumDivergence(), mgDiagnostics.maximumDivergence());
+		}
+	}
+
 	private static String validatePressureSolvers(int device) {
 		List<PressureResult> results = new ArrayList<>();
 		for (VulkanFlipPipeline.PressureSolver solver : VulkanFlipPipeline.PressureSolver.values()) {
@@ -219,8 +269,13 @@ public final class GpuFlipProbeValidation {
 		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(24, 16, 24, CELL_SIZE, DT, GRAVITY, RHO, iterations, 24 * 16 * 24 * 8);
 		try (VulkanFlipPipeline deviceLocal = new VulkanFlipPipeline(config, device, VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, solver);
 		     VulkanFlipPipeline hostVisible = new VulkanFlipPipeline(config, device, VulkanFlipPipeline.MemoryMode.HOST_VISIBLE, solver)) {
-			deviceLocal.initializeDamBreak();
-			hostVisible.initializeDamBreak();
+			if (solver == VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL) {
+				deviceLocal.initializeObstacleDamBreak();
+				hostVisible.initializeObstacleDamBreak();
+			} else {
+				deviceLocal.initializeDamBreak();
+				hostVisible.initializeDamBreak();
+			}
 			for (int i = 0; i < steps; i++) { deviceLocal.step(); hostVisible.step(); }
 			VulkanFlipPipeline.Diagnostics deviceDiagnostics = deviceLocal.diagnostics();
 			VulkanFlipPipeline.Diagnostics hostDiagnostics = hostVisible.diagnostics();
@@ -228,16 +283,18 @@ public final class GpuFlipProbeValidation {
 			VulkanFlipPipeline.SnapshotData deviceSnapshot = deviceLocal.snapshot();
 			VulkanFlipPipeline.SnapshotData hostSnapshot = hostVisible.snapshot();
 			int markerMismatches = mismatches(deviceSnapshot.markers(), hostSnapshot.markers());
+			int solidMismatches = mismatches(deviceSnapshot.solids(), hostSnapshot.solids());
 			double densityMae = meanAbsoluteByteDifference(deviceSnapshot.density(), hostSnapshot.density());
 			float centerDifference = Math.abs(deviceDiagnostics.centerOfMassX() - hostDiagnostics.centerOfMassX());
 			float pressureDifference = Math.abs(deviceDiagnostics.maximumPressure() - hostDiagnostics.maximumPressure());
 			require(markerMismatches == 0, solver + " device-local/host-visible marker masks differ in " + markerMismatches + " cells");
+			require(solidMismatches == 0, solver + " device-local/host-visible solid masks differ in " + solidMismatches + " cells");
 			require(densityMae <= 0.05, solver + " device-local/host-visible density MAE " + densityMae);
 			require(centerDifference <= 1.0E-3F, solver + " device-local/host-visible center difference " + centerDifference);
 			require(pressureDifference <= Math.max(0.05F, hostDiagnostics.maximumPressure() * 1.0E-4F),
 					solver + " device-local/host-visible pressure difference " + pressureDifference);
-			return String.format("correctness %s: steps=%d markersMismatch=%d densityMAE=%.4f centerDifference=%.6f pressureDifference=%.6f",
-					label, steps, markerMismatches, densityMae, centerDifference, pressureDifference);
+			return String.format("correctness %s: steps=%d markersMismatch=%d solidMismatch=%d densityMAE=%.4f centerDifference=%.6f pressureDifference=%.6f",
+					label, steps, markerMismatches, solidMismatches, densityMae, centerDifference, pressureDifference);
 		}
 	}
 
