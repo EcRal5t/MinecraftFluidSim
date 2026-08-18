@@ -43,6 +43,8 @@ Version 0.8.1 completes the automated M0 transaction hardening without changing 
 
 Version 0.8.2 adds an append-only UTF-8 transcript at `logs/realwater-commands.log`. Every `/realwater` and `/realwatergpu` command that reaches its handler records the exact command, source, all success/failure/detail output, and Brigadier result code as one timestamped block. `/realwater logpath` prints its absolute location. Syntax errors rejected before a handler runs, such as a misspelled subcommand, remain in Minecraft's `latest.log` because Fabric exposes no command-execution callback at that parse boundary.
 
+The M0 takeover transaction milestone is complete. The normal real-world smoke restored 48 standalone water blocks; a separate forced-process-interruption smoke restored all 60 captured water blocks on the next world start, deleted both recovery files, cleared the takeover lock and left the bounded adjacent-water, sand/gravel, redstone and neighbor-sensitive setup stable. These tests do not expand takeover beyond pure `water` blocks.
+
 While either recovery file exists, keep a full world backup and do not remove or downgrade Real Water. First run `/realwater remove`, or let startup recovery finish, and confirm both files have disappeared. An administrator who manually deletes the recovery files or removes the mod before recovery can defeat safeguards that code can no longer enforce.
 
 ## Optional windowless GPU probe

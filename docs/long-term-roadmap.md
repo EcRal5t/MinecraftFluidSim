@@ -457,7 +457,7 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 
 完成条件：自动测试通过，加一次真实世界的创建、正常删除和强制中断恢复冒烟测试；测试世界保留备份。
 
-当前状态（2026-08-18）：v1 codec、原子文件层和 16 场景故障注入自动回归已通过；真实世界正常 takeover → 运行 → remove 已按日志通过（48 个原版水方块恢复，journal 与 WARNING 删除）。强制中断恢复及邻接更新冒烟仍是 M0 未完成人工门槛，步骤见 [`m0-takeover-smoke.md`](m0-takeover-smoke.md)。
+当前状态（2026-08-19，M0 完成）：v1 codec、原子文件层和 16 场景故障注入自动回归已通过；真实世界正常 takeover → 运行 → remove 已恢复 48 个纯水方块并删除 journal/WARNING。强制中断门又接管 480 个非空子格、移除 60 个纯水方块，重启后报告 `restored 60, already restored 0, skipped 0`；两个恢复文件消失，`takeover lock 无`，相邻水、沙砾、红石和更新敏感方块均正常。完整步骤与证据见 [`m0-takeover-smoke.md`](m0-takeover-smoke.md)。
 
 ### M1：GPU 能力探针（不进入正式存档）
 
@@ -489,7 +489,7 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 - 建立可配置的单区域 marker/cell 上限和多区域总预算、状态统计和管理命令；预算拒绝必须报告所需量、单域上限和服务器剩余额度；
 - 区域墙必须可见/可调试，不再有未说明的不可见边界。
 
-当前状态（2026-08-19，M2 前置）：`FluidRegion` 已承接旧服务的 domain/维度/原点和容量预留，纯内存 `FluidRegionManager` 已实现登记、选择、移除、原子替换以及 required/per-region/remaining 预算拒绝。拒绝候选不会移除旧区域，也不会触碰其 marker 或精确 `particleVolume`。当前 `FluidSimulationService` 仍以一个 `24×16×24` 区域的兼容额度运行，调度、碰撞、实体力、快照和 takeover 编排仍保持原行为；尚未开放多区域 tick、控制器、chunk ticket、协议或任何 `region-state` 存档。`reservedMarkerCapacity` 目前只做接纳预留，尚未成为 `FlipFluidDomain` 所有 marker 创建路径的运行时硬上限；真正开放多区域前必须补齐该 enforcement。独立自动门覆盖接纳、选择、拒绝不变性和容量统计，takeover journal 16 场景与活动 FLIP 门继续通过。
+当前状态（2026-08-19，M2 前置）：`FluidRegion` 已承接旧服务的 domain/维度/原点和容量预留，纯内存 `FluidRegionManager` 已实现登记、选择、移除、原子替换以及 required/per-region/remaining 预算拒绝。拒绝候选不会移除旧区域，也不会触碰其 marker 或精确 `particleVolume`。当前 `FluidSimulationService` 仍以一个 `24×16×24` 区域的兼容额度运行，调度、碰撞、实体力、快照和 takeover 编排仍保持原行为；尚未开放多区域 tick、控制器、chunk ticket、协议或任何 `region-state` 存档。`reservedMarkerCapacity` 目前只做接纳预留，尚未成为 `FlipFluidDomain` 所有 marker 创建路径的运行时硬上限；真正开放多区域前必须补齐该 enforcement。独立自动门覆盖接纳、选择、拒绝不变性和容量统计，takeover journal 16 场景与活动 FLIP 门继续通过。M0 强制中断门使用的是该重构部署前、但事务实现相同的 0.8.2 jar；这足以关闭未改动的 M0 事务门，`dc8d1a9` manager 适配层的实机兼容 smoke 则属于 M2 集成工作。
 
 完成条件：反复休眠/唤醒/重启后水量不变；方块更新和实体进入可靠唤醒；任一关联 chunk 卸载时不发生半区域步进；未加载区不占粒子内存；协议不兼容能被明确拒绝而非错位解码。
 
@@ -637,8 +637,8 @@ CPU 单线程参考场景固定随机种子、遍历顺序和输入，能稳定�
 
 ## 十三、接下来三项实际工作
 
-1. 完成 M0 强制中断恢复和邻接更新人工门；测试世界保持备份。
-2. 在 CPU 参考路径设计 `FluidRegionManager` 和 chunk-section 状态，不改变当前 PIC/FLIP 不变量，也不提前改变存档格式。
-3. M0 人工门完成后评审 `region-state v1` 的原子检查点、兼容矩阵、失败回滚与迁移方案，再决定 M2 持久化实现边界。
+1. 将调度运行态下沉到每个 `FluidRegion`，并让 capture、pour、固体挤水及未来 reseeding 统一受真实 marker 运行时预算约束；保持单区域命令兼容。
+2. 设计控制器、可见边界闭合扫描、跨 chunk 完整加载判定和 required/per-region/remaining 预算拒绝；尚不扩大 takeover 范围。
+3. 评审 `region-state v1` 的原子检查点、兼容矩阵、失败回滚与迁移方案，得到明确批准后才实现持久化。
 
-这三项都完成前，不扩大 takeover 范围，不改变世界长期存档格式，也不把 GPU 设为必需运行条件。
+这些 M2 门完成前，不扩大 takeover 范围，不改变世界长期存档格式，也不把 GPU 设为必需运行条件。

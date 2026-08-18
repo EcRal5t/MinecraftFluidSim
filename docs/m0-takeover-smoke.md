@@ -34,3 +34,10 @@
 出现任一情况立即停止，不再执行新的 takeover，并保留世界副本、journal、WARNING 和日志：恢复文件不可读或未删除；`status` 仍显示 lock；安全位置缺水；玩家实体方块被覆盖；相邻水/沙砾/红石发生无界连锁；启动日志出现恢复异常。
 
 回传以下内容即可继续定位：A/B 两轮的 takeover、remove、status 完整文本；恢复前后截图；`Recovered unfinished` 或异常日志片段；两个恢复文件最终是否存在。
+
+## 已完成结果
+
+- 正常路径已恢复 48 个纯原版水方块，journal 与 WARNING 均删除，玩家实体方块保护正常。
+- 2026-08-19 强制中断路径接管 480 个非空子格并暂时移除 60 个纯原版水方块。重启日志为 `restored 60, already restored 0, skipped 0`；两个恢复文件随后消失，`/realwater status` 显示 `takeover lock 无`，相邻水、沙砾、红石及更新敏感方块均正常。
+
+M0 人工门已完成。后续只有修改 takeover 事务、journal、恢复 update flags 或扩大接管范围时才重跑相应场景。
