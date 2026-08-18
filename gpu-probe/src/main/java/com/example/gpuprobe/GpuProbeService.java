@@ -177,15 +177,21 @@ final class GpuProbeService {
 		paused = true;
 	}
 
-	static String benchmark(int deviceIndex, int blockSize) {
+	static String benchmark(int deviceIndex, int blockSize, VulkanFlipPipeline.PressureSolver pressureSolver) {
 		if (blockSize != 12 && blockSize != 32) throw new IllegalArgumentException("benchmark 只接受 12 或 32 方块边长");
 		boolean large = blockSize == 32;
 		int grid = large ? 64 : 24;
 		int ny = large ? 64 : 16;
 		int particles = large ? 2_097_152 : 24 * 16 * 24 * 8;
+		int pressureIterations = switch (pressureSolver) {
+			case JACOBI -> large ? 64 : PRESSURE_ITERATIONS;
+			case RBGS_SOR -> large ? 64 : 48;
+			case PCG -> large ? 64 : 32;
+		};
 		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(grid, ny, grid, H, DT, large ? 0.0F : GRAVITY, RHO,
-				large ? 64 : PRESSURE_ITERATIONS, particles);
-		try (VulkanFlipPipeline pipeline = new VulkanFlipPipeline(config, deviceIndex)) {
+				pressureIterations, particles);
+		try (VulkanFlipPipeline pipeline = new VulkanFlipPipeline(config, deviceIndex,
+				VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, pressureSolver)) {
 			if (large) pipeline.initializeFull(); else pipeline.initializeDamBreak();
 			int warmup = large ? 1 : 3, measured = large ? 3 : 20;
 			for (int i = 0; i < warmup; i++) pipeline.step();
@@ -195,10 +201,13 @@ final class GpuProbeService {
 				double millis = pipeline.lastStepMilliseconds();
 				total += millis; minimum = Math.min(minimum, millis); maximum = Math.max(maximum, millis);
 			}
+			VulkanFlipPipeline.Diagnostics diagnostics = pipeline.diagnostics();
 			VulkanFlipPipeline.ReadbackStats readback = pipeline.measureReadback();
 			return String.format(Locale.ROOT,
-					"%s | memory %s | %dx%dx%d grid | particles %d | %d steps avg %.3f ms (%.3f..%.3f) | regular diagnostics 64 B/step | snapshot %d B %.3f ms | diagnostic full-state %d B %.3f ms",
-					pipeline.deviceName(), pipeline.memoryMode().label(), grid, ny, grid, pipeline.particleCount(), measured, total / measured, minimum, maximum,
+					"%s | memory %s | pressure %s/%d | %dx%dx%d grid | particles %d | %d steps avg %.3f ms (%.3f..%.3f) | divergence %.5f→%.5f | regular diagnostics 64 B/step | snapshot %d B %.3f ms | diagnostic full-state %d B %.3f ms",
+					pipeline.deviceName(), pipeline.memoryMode().label(), pressureSolver.label(), pressureIterations,
+					grid, ny, grid, pipeline.particleCount(), measured, total / measured, minimum, maximum,
+					diagnostics.preProjectionMaximumDivergence(), diagnostics.maximumDivergence(),
 					readback.compactBytes(), readback.compactNanos() / 1_000_000.0,
 					readback.fullBytes(), readback.fullNanos() / 1_000_000.0);
 		}
@@ -236,7 +245,7 @@ final class GpuProbeService {
 	private static final class VulkanBackend implements Backend {
 		private final VulkanFlipPipeline pipeline;
 		private VulkanBackend(VulkanFlipPipeline pipeline) { this.pipeline = pipeline; }
-		@Override public String name() { return "Vulkan/" + pipeline.memoryMode().label() + "/" + pipeline.deviceName(); }
+		@Override public String name() { return "Vulkan/" + pipeline.memoryMode().label() + "/" + pipeline.pressureSolver().label() + "/" + pipeline.deviceName(); }
 		@Override public void step() { pipeline.step(); }
 		@Override public int particleCount() { return pipeline.particleCount(); }
 		@Override public float volumeCells() { return pipeline.totalParticleVolume(); }

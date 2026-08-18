@@ -2,6 +2,7 @@ package com.example.gpuprobe;
 
 import com.example.logging.RealWaterCommandLog;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.api.ModInitializer;
@@ -13,6 +14,8 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.Locale;
 
 /** Optional M1 probe. It owns no world blocks, chunk tickets, or save files. */
 public final class RealWaterGpuProbeMod implements ModInitializer {
@@ -37,11 +40,13 @@ public final class RealWaterGpuProbeMod implements ModInitializer {
 								.then(Commands.argument("count", IntegerArgumentType.integer(1, 20))
 										.executes(context -> audit(context, () -> step(context.getSource(), IntegerArgumentType.getInteger(context, "count"))))))
 						.then(Commands.literal("benchmark")
-								.executes(context -> audit(context, () -> benchmark(context.getSource(), 12, 0)))
+								.executes(context -> audit(context, () -> benchmark(context.getSource(), 12, 0, VulkanFlipPipeline.PressureSolver.JACOBI)))
 								.then(Commands.argument("blocks", IntegerArgumentType.integer(12, 32))
-										.executes(context -> audit(context, () -> benchmark(context.getSource(), IntegerArgumentType.getInteger(context, "blocks"), 0)))
+										.executes(context -> audit(context, () -> benchmark(context.getSource(), IntegerArgumentType.getInteger(context, "blocks"), 0, VulkanFlipPipeline.PressureSolver.JACOBI)))
 										.then(Commands.argument("device", IntegerArgumentType.integer(0, 15))
-												.executes(context -> audit(context, () -> benchmark(context.getSource(), IntegerArgumentType.getInteger(context, "blocks"), IntegerArgumentType.getInteger(context, "device")))))))
+												.executes(context -> audit(context, () -> benchmark(context.getSource(), IntegerArgumentType.getInteger(context, "blocks"), IntegerArgumentType.getInteger(context, "device"), VulkanFlipPipeline.PressureSolver.JACOBI)))
+												.then(Commands.argument("solver", StringArgumentType.word())
+														.executes(context -> audit(context, () -> benchmark(context.getSource(), IntegerArgumentType.getInteger(context, "blocks"), IntegerArgumentType.getInteger(context, "device"), StringArgumentType.getString(context, "solver"))))))))
 						.then(Commands.literal("status").executes(context -> audit(context, () -> status(context.getSource()))))
 						.then(Commands.literal("remove").executes(context -> audit(context, () -> remove(context.getSource()))))
 		));
@@ -107,11 +112,24 @@ public final class RealWaterGpuProbeMod implements ModInitializer {
 		return succeed(source, "已执行 " + completed + " 个 probe 步；" + service.status(source.getServer()), completed);
 	}
 
-	private static int benchmark(net.minecraft.commands.CommandSourceStack source, int blocks, int device) {
+	private static int benchmark(net.minecraft.commands.CommandSourceStack source, int blocks, int device, String solverName) {
+		VulkanFlipPipeline.PressureSolver solver = switch (solverName.toLowerCase(Locale.ROOT)) {
+			case "jacobi" -> VulkanFlipPipeline.PressureSolver.JACOBI;
+			case "rbgs", "sor", "rbgs_sor" -> VulkanFlipPipeline.PressureSolver.RBGS_SOR;
+			case "pcg" -> VulkanFlipPipeline.PressureSolver.PCG;
+			default -> null;
+		};
+		if (solver == null) return fail(source, "pressure solver 只支持 jacobi、rbgs 或 pcg");
+		return benchmark(source, blocks, device, solver);
+	}
+
+	private static int benchmark(net.minecraft.commands.CommandSourceStack source, int blocks, int device,
+	                             VulkanFlipPipeline.PressureSolver solver) {
 		if (blocks != 12 && blocks != 32) return fail(source, "benchmark 方块边长只支持 12 或 32");
-		RealWaterCommandLog.sendSuccess(source, "开始无窗口 GPU benchmark；32 方块档会让服务器主线程停顿数秒，但不访问世界或存档", false);
+		RealWaterCommandLog.sendSuccess(source, "开始无窗口 GPU benchmark（pressure " + solver.label()
+				+ "）；32 方块档会让服务器主线程停顿数秒，但不访问世界或存档", false);
 		try {
-			String report = GpuProbeService.benchmark(device, blocks);
+			String report = GpuProbeService.benchmark(device, blocks, solver);
 			RealWaterCommandLog.sendSuccess(source, report, false);
 			LOGGER.info("GPU benchmark: {}", report);
 			return 1;

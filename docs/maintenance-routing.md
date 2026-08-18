@@ -115,7 +115,7 @@ M0 takeover codec、真实文件与故障注入回归：
 
 `RealWaterCommandLog` 包装两个命令树并收集处理器输出，`CommandAuditFile` 只负责 UTF-8 追加格式。目标为服务器游戏目录的 `logs/realwater-commands.log`；`/realwater logpath` 可显示绝对路径。该文件不是物理真值、存档或恢复 journal，写入失败只进入普通错误日志，不能阻塞或改变命令结果。Brigadier 在进入处理器前拒绝的拼写/语法错误只存在于 `latest.log`。
 
-独立 M1-B Windows/NVIDIA GPU probe：
+独立 M1-C Windows/NVIDIA GPU probe：
 
 ```powershell
 ./gradlew.bat :gpu-probe:runGpuFlipValidation --offline --no-daemon `
@@ -123,7 +123,7 @@ M0 takeover codec、真实文件与故障注入回归：
   -PgpuProbeDevice=0
 ```
 
-入口在 `gpu-probe/src/main/java/com/example/gpuprobe`：`VulkanCapabilityProbe` 负责无窗口 Vulkan/Shaderc/VMA 能力门，`VulkanFlipPipeline` 负责 device-local 3D 数值阶段、staging 上传/快照和每步 64 B 诊断回读，`GpuFlipProbeValidation` 负责 CPU/GPU、两种内存模式、静水、守恒与两档 benchmark，`GpuProbeService` 和 `RealWaterGpuProbeMod` 只提供不读写世界的游戏内可视化命令。实测与未完成边界见 [`gpu-probe-report.md`](gpu-probe-report.md)。
+入口在 `gpu-probe/src/main/java/com/example/gpuprobe`：`VulkanCapabilityProbe` 负责无窗口 Vulkan/Shaderc/VMA 能力门，`VulkanFlipPipeline` 负责 device-local 3D 数值阶段、staging 上传/快照、每步 64 B 诊断回读，以及共享同一 Poisson 离散的 Jacobi、RBGS/SOR 和 identity-PCG 实验；`GpuFlipProbeValidation` 负责 CPU/GPU、两种内存模式、静水、守恒、压力收敛曲线与两档 benchmark，`GpuProbeService` 和 `RealWaterGpuProbeMod` 只提供不读写世界的游戏内可视化命令。实测与未完成边界见 [`gpu-probe-report.md`](gpu-probe-report.md)。
 
 游戏内基本回归顺序：
 
@@ -161,7 +161,7 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 
 1. 按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 补完测试世界的强制中断恢复和邻接更新冒烟；正常 takeover → remove 已通过，仍需保留备份、命令计数和日志。
 2. probe 0.1.3 的 device-local 可视化、暂停多步、连续运行、status、两档 benchmark 和 remove 已通过，0.1.1 的 CPU fallback 已通过；后续补 dedicated-server classpath 冒烟。probe 不得进入正式存档或接管世界。
-3. 继续 M1 的压力算法对照、变密度 CPU 候选、timestamp query/ring staging 和设备丢失恢复检查点，不把当前固定迭代 Jacobi 冻结为正式压力算法。
+3. 继续 M1 的预条件/多重网格压力路线、变密度 CPU 候选、timestamp query/ring staging 和设备丢失恢复检查点；identity-PCG 与 RBGS/SOR 均未通过 64³ 替换门，不能因小域结果切换默认 Jacobi。
 4. M1 门通过后再做动态域/分块域设计，避免当前 12×8×12 人工边界成为不可见墙；chunk-section 格式不得直接序列化当前单域或 GPU 缓冲。
 5. 之后考虑实体到水的反向动量耦合、粒子 reseeding、自由表面压力权重和更高分辨率。
 

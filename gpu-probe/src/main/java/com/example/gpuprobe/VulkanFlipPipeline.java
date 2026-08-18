@@ -23,7 +23,7 @@ import static org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceFeatures2;
 final class VulkanFlipPipeline implements AutoCloseable {
 	private static final int LOCAL_SIZE = 256;
 	private static final int BUFFER_COUNT = 19;
-	private static final int PUSH_BYTES = 48;
+	private static final int PUSH_BYTES = 52;
 
 	private static final int POSITIONS = 0;
 	private static final int VELOCITIES = 1;
@@ -57,6 +57,13 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private static final int STAGE_CLEAR_SURFACE = 9;
 	private static final int STAGE_SURFACE_P2G = 10;
 	private static final int STAGE_DIAGNOSTICS = 11;
+	private static final int STAGE_RBGS = 12;
+	private static final int STAGE_PCG_INIT = 13;
+	private static final int STAGE_PCG_CLEAR = 14;
+	private static final int STAGE_PCG_APPLY = 15;
+	private static final int STAGE_PCG_REDUCE = 16;
+	private static final int STAGE_PCG_UPDATE_XR = 17;
+	private static final int STAGE_PCG_UPDATE_P = 18;
 
 	private static final String SHADER = """
 			#version 450
@@ -90,7 +97,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			layout(push_constant,std430) uniform Params {
 			    int stage; int nx; int ny; int nz;
 			    int particleCount; int iteration; int pressureIterations; int flags;
-			    float dt; float h; float gravity; float rho;
+			    float dt; float h; float gravity; float rho; int solver;
 			} pc;
 
 			int cellCount() { return pc.nx * pc.ny * pc.nz; }
@@ -149,7 +156,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 
 			float pressureAt(ivec3 c) {
 			    if(!fluid(c)) return 0.0;
-			    int i=ci(c); return (pc.pressureIterations & 1)==0 ? pa.value[i] : pb.value[i];
+			    int i=ci(c); if(pc.solver!=0)return pa.value[i];return (pc.pressureIterations & 1)==0 ? pa.value[i] : pb.value[i];
 			}
 			void diagnosticAdd(uint index,float amount) {
 			    uint previous=diagnostics.value[index];
@@ -201,6 +208,35 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			    if(even)pb.value[id]=next;else pa.value[id]=next;
 			}
 
+			void rbgsStage(uint id) {
+			    if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;int iy=yz%pc.ny;int iz=yz/pc.ny;ivec3 c=ivec3(ix,iy,iz);
+			    if(!fluid(c)){pa.value[id]=0.0;return;}if(((ix+iy+iz)&1)!=pc.flags)return;
+			    ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));
+			    float sum=0.0;float diagonal=0.0;for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(solid(nb))continue;diagonal+=1.0;if(fluid(nb))sum+=pa.value[ci(nb)];}
+			    float rhs=(pc.rho/pc.dt)*divergence.value[id];float next=diagonal>0.0?(sum-rhs*pc.h*pc.h)/diagonal:0.0;pa.value[id]=mix(pa.value[id],next,1.65);
+			}
+
+			void pcgInitStage(uint id) {
+			    if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);float rhs=fluid(c)?-(pc.rho/pc.dt)*divergence.value[id]*pc.h*pc.h:0.0;pa.value[id]=0.0;pb.value[id]=rhs;uw.value[id]=rhs;vw.value[id]=0.0;
+			}
+			void pcgClearStage(uint id) { if(id==0u){if(pc.flags==0){diagnostics.value[8]=0u;diagnostics.value[9]=0u;}diagnostics.value[10]=0u;} }
+			void pcgApplyStage(uint id) {
+			    if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);if(!fluid(c)){vw.value[id]=0.0;return;}
+			    ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));float sum=0.0;float diagonal=0.0;
+			    for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(solid(nb))continue;diagonal+=1.0;if(fluid(nb))sum+=uw.value[ci(nb)];}vw.value[id]=diagonal*uw.value[id]-sum;
+			}
+			void pcgReduceStage(uint id) {
+			    uint local=gl_LocalInvocationID.x;float first=0.0;float second=0.0;if(id<uint(cellCount())){float r=pb.value[id];first=r*r;if(pc.flags==0)second=uw.value[id]*vw.value[id];}
+			    diagnosticSquared[local]=first;diagnosticVolume[local]=second;barrier();for(uint stride=128u;stride>0u;stride>>=1u){if(local<stride){diagnosticSquared[local]+=diagnosticSquared[local+stride];diagnosticVolume[local]+=diagnosticVolume[local+stride];}barrier();}
+			    if(local==0u){diagnosticAdd(pc.flags==0?8u:10u,diagnosticSquared[0]);if(pc.flags==0)diagnosticAdd(9u,diagnosticVolume[0]);}
+			}
+			void pcgUpdateXrStage(uint id) {
+			    if(id>=uint(cellCount()))return;float rr=uintBitsToFloat(diagnostics.value[8]);float pap=uintBitsToFloat(diagnostics.value[9]);float alpha=abs(pap)>1e-20?rr/pap:0.0;pa.value[id]+=alpha*uw.value[id];pb.value[id]-=alpha*vw.value[id];
+			}
+			void pcgUpdatePStage(uint id) {
+			    if(id>=uint(cellCount()))return;float oldRr=uintBitsToFloat(diagnostics.value[8]);float newRr=uintBitsToFloat(diagnostics.value[10]);float beta=oldRr>1e-20?newRr/oldRr:0.0;uw.value[id]=pb.value[id]+beta*uw.value[id];
+			}
+
 			void projectStage(uint id) {
 			    if(id<uint(uCount())){int fx=int(id)%(pc.nx+1);int yz=int(id)/(pc.nx+1);int fy=yz%pc.ny;int fz=yz/pc.ny;ivec3 f=ivec3(fx,fy,fz);if(!validU(f))u.value[id]=0.0;else{ivec3 l=f+ivec3(-1,0,0),r=f;if(fluid(l)||fluid(r))u.value[id]-=(pc.dt/pc.rho)*(pressureAt(r)-pressureAt(l))/pc.h;}}
 			    if(id<uint(vCount())){int fx=int(id)%pc.nx;int yz=int(id)/pc.nx;int fy=yz%(pc.ny+1);int fz=yz/(pc.ny+1);ivec3 f=ivec3(fx,fy,fz);if(!validV(f))v.value[id]=0.0;else{ivec3 b=f+ivec3(0,-1,0),t=f;if(fluid(b)||fluid(t))v.value[id]-=(pc.dt/pc.rho)*(pressureAt(t)-pressureAt(b))/pc.h;}}
@@ -241,11 +277,12 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			    if(local==0u){diagnosticAdd(3,diagnosticSquared[0]);diagnosticAdd(4,diagnosticVolume[0]);diagnosticAdd(5,diagnosticWeightedX[0]);atomicMax(diagnostics.value[2],diagnosticPressure[0]);}
 			}
 
-			void main(){uint id=gl_GlobalInvocationID.x;if(pc.stage==0)clearStage(id);else if(pc.stage==1)p2gStage(id);else if(pc.stage==2)prepStage(id);else if(pc.stage==3)divergenceStage(id);else if(pc.stage==4)jacobiStage(id);else if(pc.stage==5)projectStage(id);else if(pc.stage==6)g2pStage(id);else if(pc.stage==7)advectStage(id);else if(pc.stage==8)snapshotStage(id);else if(pc.stage==9)clearSurfaceStage(id);else if(pc.stage==10)surfaceP2gStage(id);else if(pc.stage==11)diagnosticsStage(id);}
+			void main(){uint id=gl_GlobalInvocationID.x;if(pc.stage==0)clearStage(id);else if(pc.stage==1)p2gStage(id);else if(pc.stage==2)prepStage(id);else if(pc.stage==3)divergenceStage(id);else if(pc.stage==4)jacobiStage(id);else if(pc.stage==5)projectStage(id);else if(pc.stage==6)g2pStage(id);else if(pc.stage==7)advectStage(id);else if(pc.stage==8)snapshotStage(id);else if(pc.stage==9)clearSurfaceStage(id);else if(pc.stage==10)surfaceP2gStage(id);else if(pc.stage==11)diagnosticsStage(id);else if(pc.stage==12)rbgsStage(id);else if(pc.stage==13)pcgInitStage(id);else if(pc.stage==14)pcgClearStage(id);else if(pc.stage==15)pcgApplyStage(id);else if(pc.stage==16)pcgReduceStage(id);else if(pc.stage==17)pcgUpdateXrStage(id);else if(pc.stage==18)pcgUpdatePStage(id);}
 			""";
 
 	private final Config config;
 	private final MemoryMode memoryMode;
+	private final PressureSolver pressureSolver;
 	private final List<GpuBuffer> buffers = new ArrayList<>(BUFFER_COUNT);
 	private GpuBuffer transferBuffer;
 	private VkInstance instance;
@@ -268,12 +305,17 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private long lastStepNanos;
 
 	VulkanFlipPipeline(Config config, int deviceIndex) {
-		this(config, deviceIndex, MemoryMode.DEVICE_LOCAL_STAGING);
+		this(config, deviceIndex, MemoryMode.DEVICE_LOCAL_STAGING, PressureSolver.JACOBI);
 	}
 
 	VulkanFlipPipeline(Config config, int deviceIndex, MemoryMode memoryMode) {
+		this(config, deviceIndex, memoryMode, PressureSolver.JACOBI);
+	}
+
+	VulkanFlipPipeline(Config config, int deviceIndex, MemoryMode memoryMode, PressureSolver pressureSolver) {
 		this.config = config;
 		this.memoryMode = memoryMode;
+		this.pressureSolver = pressureSolver;
 		try {
 			createInstanceAndDevice(deviceIndex);
 			allocateBuffers();
@@ -287,6 +329,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	Config config() { return config; }
 	String deviceName() { return deviceName; }
 	MemoryMode memoryMode() { return memoryMode; }
+	PressureSolver pressureSolver() { return pressureSolver; }
 	int particleCount() { return particleCount; }
 	double lastStepMilliseconds() { return lastStepNanos / 1_000_000.0; }
 	float totalParticleVolume() { return particleVolumeLedger; }
@@ -385,7 +428,8 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	Diagnostics diagnostics() { return lastDiagnostics; }
 
 	PressureProfile pressureProfile() {
-		FloatBuffer pressure = copiedBuffer((config.pressureIterations() & 1) == 0 ? PRESSURE_A : PRESSURE_B).asFloatBuffer();
+		int pressureIndex = pressureSolver == PressureSolver.JACOBI && (config.pressureIterations() & 1) != 0 ? PRESSURE_B : PRESSURE_A;
+		FloatBuffer pressure = copiedBuffer(pressureIndex).asFloatBuffer();
 		IntBuffer markers = copiedBuffer(MARKERS).asIntBuffer();
 		double[] sums = new double[config.ny()];
 		int[] counts = new int[config.ny()];
@@ -444,10 +488,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 				computeBarrier(barrier);
 				dispatch(push, STAGE_DIVERGENCE, 0, 1, config.cellCount());
 				computeBarrier(barrier);
-				for (int iteration = 0; iteration < config.pressureIterations(); iteration++) {
-					dispatch(push, STAGE_JACOBI, iteration, config.cellCount());
-					computeBarrier(barrier);
-				}
+				solvePressure(push, barrier);
 				dispatch(push, STAGE_PROJECT, 0, maxFaceCount());
 				computeBarrier(barrier);
 				// Diagnostics must observe the projected field, not the pressure RHS.
@@ -483,6 +524,45 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			check(vkQueueSubmit(queue, submit, VK_NULL_HANDLE), "vkQueueSubmit");
 			check(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
 			updateCachedDiagnostics(memoryMode == MemoryMode.DEVICE_LOCAL_STAGING ? transferBuffer.bytes(buffer(DIAGNOSTICS).size()) : buffer(DIAGNOSTICS).bytes());
+		}
+	}
+
+	private void solvePressure(ByteBuffer push, VkMemoryBarrier.Buffer barrier) {
+		switch (pressureSolver) {
+			case JACOBI -> {
+				for (int iteration = 0; iteration < config.pressureIterations(); iteration++) {
+					dispatch(push, STAGE_JACOBI, iteration, config.cellCount());
+					computeBarrier(barrier);
+				}
+			}
+			case RBGS_SOR -> {
+				for (int iteration = 0; iteration < config.pressureIterations(); iteration++) {
+					dispatch(push, STAGE_RBGS, iteration, 0, config.cellCount());
+					computeBarrier(barrier);
+					dispatch(push, STAGE_RBGS, iteration, 1, config.cellCount());
+					computeBarrier(barrier);
+				}
+			}
+			case PCG -> {
+				dispatch(push, STAGE_PCG_INIT, 0, config.cellCount());
+				computeBarrier(barrier);
+				for (int iteration = 0; iteration < config.pressureIterations(); iteration++) {
+					dispatch(push, STAGE_PCG_CLEAR, iteration, 0, 1);
+					computeBarrier(barrier);
+					dispatch(push, STAGE_PCG_APPLY, iteration, config.cellCount());
+					computeBarrier(barrier);
+					dispatch(push, STAGE_PCG_REDUCE, iteration, 0, config.cellCount());
+					computeBarrier(barrier);
+					dispatch(push, STAGE_PCG_UPDATE_XR, iteration, config.cellCount());
+					computeBarrier(barrier);
+					dispatch(push, STAGE_PCG_CLEAR, iteration, 1, 1);
+					computeBarrier(barrier);
+					dispatch(push, STAGE_PCG_REDUCE, iteration, 1, config.cellCount());
+					computeBarrier(barrier);
+					dispatch(push, STAGE_PCG_UPDATE_P, iteration, config.cellCount());
+					computeBarrier(barrier);
+				}
+			}
 		}
 	}
 
@@ -575,6 +655,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		push.putInt(stage).putInt(config.nx()).putInt(config.ny()).putInt(config.nz());
 		push.putInt(particleCount).putInt(iteration).putInt(config.pressureIterations()).putInt(flags);
 		push.putFloat(config.timeStep()).putFloat(config.cellSize()).putFloat(config.gravity()).putFloat(config.density());
+		push.putInt(pressureSolver.code());
 		push.flip();
 		vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
 		vkCmdDispatch(commandBuffer, groups(workItems), 1, 1);
@@ -794,6 +875,14 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		DEVICE_LOCAL_STAGING("device-local+staging"), HOST_VISIBLE("host-visible baseline");
 		private final String label;
 		MemoryMode(String label) { this.label = label; }
+		String label() { return label; }
+	}
+	enum PressureSolver {
+		JACOBI(0, "Jacobi"), RBGS_SOR(1, "RBGS/SOR(omega=1.65)"), PCG(2, "PCG(identity)");
+		private final int code;
+		private final String label;
+		PressureSolver(int code, String label) { this.code = code; this.label = label; }
+		int code() { return code; }
 		String label() { return label; }
 	}
 	@FunctionalInterface private interface CellSelector { boolean filled(int x, int y, int z); }
