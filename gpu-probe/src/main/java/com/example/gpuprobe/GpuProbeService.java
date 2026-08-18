@@ -188,8 +188,8 @@ final class GpuProbeService {
 			}
 			VulkanFlipPipeline.ReadbackStats readback = pipeline.measureReadback();
 			return String.format(Locale.ROOT,
-					"%s | %dx%dx%d grid | particles %d | %d steps avg %.3f ms (%.3f..%.3f) | compact %d B %.3f ms | full %d B %.3f ms",
-					pipeline.deviceName(), grid, ny, grid, pipeline.particleCount(), measured, total / measured, minimum, maximum,
+					"%s | memory %s | %dx%dx%d grid | particles %d | %d steps avg %.3f ms (%.3f..%.3f) | regular diagnostics 64 B/step | snapshot %d B %.3f ms | diagnostic full-state %d B %.3f ms",
+					pipeline.deviceName(), pipeline.memoryMode().label(), grid, ny, grid, pipeline.particleCount(), measured, total / measured, minimum, maximum,
 					readback.compactBytes(), readback.compactNanos() / 1_000_000.0,
 					readback.fullBytes(), readback.fullNanos() / 1_000_000.0);
 		}
@@ -227,7 +227,7 @@ final class GpuProbeService {
 	private static final class VulkanBackend implements Backend {
 		private final VulkanFlipPipeline pipeline;
 		private VulkanBackend(VulkanFlipPipeline pipeline) { this.pipeline = pipeline; }
-		@Override public String name() { return "Vulkan/" + pipeline.deviceName(); }
+		@Override public String name() { return "Vulkan/" + pipeline.memoryMode().label() + "/" + pipeline.deviceName(); }
 		@Override public void step() { pipeline.step(); }
 		@Override public int particleCount() { return pipeline.particleCount(); }
 		@Override public float volumeCells() { return pipeline.totalParticleVolume(); }
@@ -238,8 +238,8 @@ final class GpuProbeService {
 		}
 		@Override public String diagnostics() {
 			VulkanFlipPipeline.Diagnostics d = pipeline.diagnostics();
-			return String.format(Locale.ROOT, "maxP %.1f | divergence %.5f→%.5f RMS %.5f",
-					d.maximumPressure(), d.preProjectionMaximumDivergence(), d.maximumDivergence(), d.rmsDivergence());
+			return String.format(Locale.ROOT, "diag readback 64 B/step | maxP %.1f | divergence %.5f→%.5f RMS %.5f | GPU volume %.3f cells",
+					d.maximumPressure(), d.preProjectionMaximumDivergence(), d.maximumDivergence(), d.rmsDivergence(), d.particleVolume());
 		}
 		@Override public void close() { pipeline.close(); }
 	}

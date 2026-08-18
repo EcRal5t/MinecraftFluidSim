@@ -62,7 +62,7 @@ public final class RealWaterGpuProbeMod implements ModInitializer {
 		ServerPlayer player = source.getPlayerOrException();
 		GpuProbeService.CreationResult result = GpuProbeService.get(source.getServer()).createDemo(player, deviceIndex);
 		if (!result.created()) return fail(source, result.detail());
-		String backend = result.gpu() ? "Vulkan GPU" : "CPU fallback（" + result.detail() + "）";
+		String backend = result.gpu() ? "Vulkan GPU（device-local + staging）" : "CPU fallback（" + result.detail() + "）";
 		return succeed(source, "已创建暂停的独立 24×16×24 溃坝 probe；backend " + backend
 				+ "；不读取碰撞、不修改方块或存档；使用 /realwatergpu step 或 /realwatergpu run", 1);
 	}

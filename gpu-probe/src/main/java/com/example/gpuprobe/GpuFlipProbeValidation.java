@@ -26,7 +26,9 @@ public final class GpuFlipProbeValidation {
 		List<String> results = new ArrayList<>();
 		results.add(validateDamBreak(device));
 		results.add(validateHydrostaticColumn(device));
-		results.add(benchmarkCurrentDomain(device));
+		results.add(validateMemoryModes(device));
+		results.add(benchmarkCurrentDomain(device, VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING));
+		results.add(benchmarkCurrentDomain(device, VulkanFlipPipeline.MemoryMode.HOST_VISIBLE));
 		if (!skipLarge) results.add(benchmarkThirtyTwoCubedBlocks(device));
 		for (String result : results) System.out.println(result);
 		System.out.printf("GPU FLIP validation passed on device %d in %.3f s%n", device, secondsSince(suiteStarted));
@@ -54,6 +56,7 @@ public final class GpuFlipProbeValidation {
 				cpuMillis += (System.nanoTime() - cpuStarted) / 1_000_000.0;
 				diagnostics = gpu.diagnostics();
 				requireFinite(diagnostics);
+				require(close(diagnostics.particleVolume(), expectedVolume, 1.0E-3F), "GPU-resident particle volume diagnostic changed");
 				require(diagnostics.maximumDivergence() <= diagnostics.preProjectionMaximumDivergence() * 0.55F + 2.0E-3F,
 						"pressure projection did not sufficiently reduce maximum divergence");
 				require(close(gpu.totalParticleVolume(), expectedVolume, 1.0E-4F), "GPU particle volume changed");
@@ -83,6 +86,7 @@ public final class GpuFlipProbeValidation {
 			VulkanFlipPipeline.Diagnostics diagnostics = gpu.diagnostics();
 			requireFinite(diagnostics);
 			require(close(gpu.totalParticleVolume(), volume, 1.0E-4F), "column particle volume changed");
+			require(close(diagnostics.particleVolume(), volume, 1.0E-3F), "column GPU-resident particle volume changed");
 			require(diagnostics.maximumPressure() > 100.0F, "column did not develop hydrostatic pressure");
 			VulkanFlipPipeline.PressureProfile profile = gpu.pressureProfile();
 			int lowest = firstOccupied(profile), highest = lastOccupied(profile);
@@ -95,14 +99,40 @@ public final class GpuFlipProbeValidation {
 		}
 	}
 
-	private static String benchmarkCurrentDomain(int device) {
+	private static String validateMemoryModes(int device) {
 		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(24, 16, 24, CELL_SIZE, DT, GRAVITY, RHO, 96, 24 * 16 * 24 * 8);
-		try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device)) {
+		try (VulkanFlipPipeline deviceLocal = new VulkanFlipPipeline(config, device, VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING);
+		     VulkanFlipPipeline hostVisible = new VulkanFlipPipeline(config, device, VulkanFlipPipeline.MemoryMode.HOST_VISIBLE)) {
+			deviceLocal.initializeDamBreak();
+			hostVisible.initializeDamBreak();
+			for (int i = 0; i < 6; i++) { deviceLocal.step(); hostVisible.step(); }
+			VulkanFlipPipeline.Diagnostics deviceDiagnostics = deviceLocal.diagnostics();
+			VulkanFlipPipeline.Diagnostics hostDiagnostics = hostVisible.diagnostics();
+			requireFinite(deviceDiagnostics); requireFinite(hostDiagnostics);
+			VulkanFlipPipeline.SnapshotData deviceSnapshot = deviceLocal.snapshot();
+			VulkanFlipPipeline.SnapshotData hostSnapshot = hostVisible.snapshot();
+			int markerMismatches = mismatches(deviceSnapshot.markers(), hostSnapshot.markers());
+			double densityMae = meanAbsoluteByteDifference(deviceSnapshot.density(), hostSnapshot.density());
+			float centerDifference = Math.abs(deviceDiagnostics.centerOfMassX() - hostDiagnostics.centerOfMassX());
+			float pressureDifference = Math.abs(deviceDiagnostics.maximumPressure() - hostDiagnostics.maximumPressure());
+			require(markerMismatches == 0, "device-local/host-visible marker masks differ in " + markerMismatches + " cells");
+			require(densityMae <= 0.05, "device-local/host-visible density MAE " + densityMae);
+			require(centerDifference <= 1.0E-3F, "device-local/host-visible center difference " + centerDifference);
+			require(pressureDifference <= Math.max(0.05F, hostDiagnostics.maximumPressure() * 1.0E-4F),
+					"device-local/host-visible pressure difference " + pressureDifference);
+			return String.format("correctness memory modes: steps=6 markersMismatch=%d densityMAE=%.4f centerDifference=%.6f pressureDifference=%.6f",
+					markerMismatches, densityMae, centerDifference, pressureDifference);
+		}
+	}
+
+	private static String benchmarkCurrentDomain(int device, VulkanFlipPipeline.MemoryMode memoryMode) {
+		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(24, 16, 24, CELL_SIZE, DT, GRAVITY, RHO, 96, 24 * 16 * 24 * 8);
+		try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device, memoryMode)) {
 			gpu.initializeDamBreak();
 			for (int i = 0; i < 3; i++) gpu.step();
 			Timing timing = time(gpu, 20);
 			VulkanFlipPipeline.ReadbackStats readback = gpu.measureReadback();
-			return "benchmark current 12x8x12 blocks / 24x16x24 grid: " + timing.format()
+			return "benchmark current 12x8x12 blocks / 24x16x24 grid [" + memoryMode + "]: " + timing.format()
 					+ String.format(" particles=%d compact=%dB/%.3fms full=%dB/%.3fms checksums=%016x/%016x",
 					gpu.particleCount(), readback.compactBytes(), readback.compactNanos() / 1_000_000.0,
 					readback.fullBytes(), readback.fullNanos() / 1_000_000.0, readback.compactChecksum(), readback.fullChecksum());
@@ -169,6 +199,20 @@ public final class GpuFlipProbeValidation {
 		return result;
 	}
 
+	private static int mismatches(byte[] left, byte[] right) {
+		if (left.length != right.length) throw new IllegalArgumentException("array sizes differ");
+		int count = 0;
+		for (int i = 0; i < left.length; i++) if (left[i] != right[i]) count++;
+		return count;
+	}
+
+	private static double meanAbsoluteByteDifference(byte[] left, byte[] right) {
+		if (left.length != right.length) throw new IllegalArgumentException("array sizes differ");
+		long total = 0L;
+		for (int i = 0; i < left.length; i++) total += Math.abs(Byte.toUnsignedInt(left[i]) - Byte.toUnsignedInt(right[i]));
+		return (double) total / left.length;
+	}
+
 	private static boolean close(float actual, float expected, float tolerance) { return Math.abs(actual - expected) <= tolerance; }
 	private static double secondsSince(long started) { return (System.nanoTime() - started) / 1_000_000_000.0; }
 
@@ -177,6 +221,7 @@ public final class GpuFlipProbeValidation {
 		require(Float.isFinite(diagnostics.maximumDivergence()), "non-finite post-projection divergence");
 		require(Float.isFinite(diagnostics.rmsDivergence()), "non-finite RMS divergence");
 		require(Float.isFinite(diagnostics.maximumPressure()), "non-finite pressure");
+		require(Float.isFinite(diagnostics.particleVolume()), "non-finite particle volume");
 		require(Float.isFinite(diagnostics.centerOfMassX()), "non-finite center of mass");
 	}
 

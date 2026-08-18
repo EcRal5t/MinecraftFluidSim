@@ -6,6 +6,7 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
@@ -18,10 +19,7 @@ import static org.lwjgl.vulkan.EXTShaderAtomicFloat.VK_EXT_SHADER_ATOMIC_FLOAT_E
 import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceFeatures2;
 
-/**
- * Windowless 3D PIC/FLIP probe backend. Buffers deliberately use host-visible coherent memory in M1 so
- * correctness and full-vs-compact readback can be measured before a device-local production layout is chosen.
- */
+/** Windowless 3D PIC/FLIP probe backend with an explicit device-local production path and host-visible baseline. */
 final class VulkanFlipPipeline implements AutoCloseable {
 	private static final int LOCAL_SIZE = 256;
 	private static final int BUFFER_COUNT = 19;
@@ -58,6 +56,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private static final int STAGE_SNAPSHOT = 8;
 	private static final int STAGE_CLEAR_SURFACE = 9;
 	private static final int STAGE_SURFACE_P2G = 10;
+	private static final int STAGE_DIAGNOSTICS = 11;
 
 	private static final String SHADER = """
 			#version 450
@@ -83,6 +82,10 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			layout(set=0,binding=16,std430) readonly buffer Solids { uint value[]; } solids;
 			layout(set=0,binding=17,std430) buffer Snapshot { uint value[]; } snapshot;
 			layout(set=0,binding=18,std430) buffer Diagnostics { uint value[]; } diagnostics;
+			shared float diagnosticSquared[256];
+			shared float diagnosticVolume[256];
+			shared float diagnosticWeightedX[256];
+			shared uint diagnosticPressure[256];
 
 			layout(push_constant,std430) uniform Params {
 			    int stage; int nx; int ny; int nz;
@@ -147,6 +150,10 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			float pressureAt(ivec3 c) {
 			    if(!fluid(c)) return 0.0;
 			    int i=ci(c); return (pc.pressureIterations & 1)==0 ? pa.value[i] : pb.value[i];
+			}
+			void diagnosticAdd(uint index,float amount) {
+			    uint previous=diagnostics.value[index];
+			    for(;;){uint next=floatBitsToUint(uintBitsToFloat(previous)+amount);uint observed=atomicCompSwap(diagnostics.value[index],previous,next);if(observed==previous)return;previous=observed;}
 			}
 
 			void clearStage(uint id) {
@@ -225,12 +232,22 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			    ivec3 center=ivec3(clamp(floor(q),vec3(0.0),vec3(pc.nx-1,pc.ny-1,pc.nz-1)));
 			    if(!solid(center))atomicOr(snapshot.value[ci(center)],1u<<8);splatDensity(q-vec3(0.5),pv.w);
 			}
+			void diagnosticsStage(uint id) {
+			    uint local=gl_LocalInvocationID.x;float squared=0.0;float volume=0.0;float weightedX=0.0;uint pressureBits=0u;
+			    if(id<uint(cellCount())){ivec3 c=ivec3(int(id)%pc.nx,(int(id)/pc.nx)%pc.ny,int(id)/(pc.nx*pc.ny));float d=divergence.value[id];squared=d*d;if(fluid(c))pressureBits=floatBitsToUint(abs(pressureAt(c)));}
+			    if(id<uint(pc.particleCount)){vec4 pv=positions.value[id];volume=pv.w;weightedX=(pv.x/pc.h)*pv.w;}
+			    diagnosticSquared[local]=squared;diagnosticVolume[local]=volume;diagnosticWeightedX[local]=weightedX;diagnosticPressure[local]=pressureBits;barrier();
+			    for(uint stride=128u;stride>0u;stride>>=1u){if(local<stride){diagnosticSquared[local]+=diagnosticSquared[local+stride];diagnosticVolume[local]+=diagnosticVolume[local+stride];diagnosticWeightedX[local]+=diagnosticWeightedX[local+stride];diagnosticPressure[local]=max(diagnosticPressure[local],diagnosticPressure[local+stride]);}barrier();}
+			    if(local==0u){diagnosticAdd(3,diagnosticSquared[0]);diagnosticAdd(4,diagnosticVolume[0]);diagnosticAdd(5,diagnosticWeightedX[0]);atomicMax(diagnostics.value[2],diagnosticPressure[0]);}
+			}
 
-			void main(){uint id=gl_GlobalInvocationID.x;if(pc.stage==0)clearStage(id);else if(pc.stage==1)p2gStage(id);else if(pc.stage==2)prepStage(id);else if(pc.stage==3)divergenceStage(id);else if(pc.stage==4)jacobiStage(id);else if(pc.stage==5)projectStage(id);else if(pc.stage==6)g2pStage(id);else if(pc.stage==7)advectStage(id);else if(pc.stage==8)snapshotStage(id);else if(pc.stage==9)clearSurfaceStage(id);else if(pc.stage==10)surfaceP2gStage(id);}
+			void main(){uint id=gl_GlobalInvocationID.x;if(pc.stage==0)clearStage(id);else if(pc.stage==1)p2gStage(id);else if(pc.stage==2)prepStage(id);else if(pc.stage==3)divergenceStage(id);else if(pc.stage==4)jacobiStage(id);else if(pc.stage==5)projectStage(id);else if(pc.stage==6)g2pStage(id);else if(pc.stage==7)advectStage(id);else if(pc.stage==8)snapshotStage(id);else if(pc.stage==9)clearSurfaceStage(id);else if(pc.stage==10)surfaceP2gStage(id);else if(pc.stage==11)diagnosticsStage(id);}
 			""";
 
 	private final Config config;
+	private final MemoryMode memoryMode;
 	private final List<GpuBuffer> buffers = new ArrayList<>(BUFFER_COUNT);
+	private GpuBuffer transferBuffer;
 	private VkInstance instance;
 	private VkPhysicalDevice physicalDevice;
 	private VkDevice device;
@@ -246,10 +263,17 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private long commandPool;
 	private VkCommandBuffer commandBuffer;
 	private int particleCount;
+	private float particleVolumeLedger;
+	private Diagnostics lastDiagnostics = new Diagnostics(0.0F, 0.0F, 0.0F, 0.0F, 0.0F, Float.NaN);
 	private long lastStepNanos;
 
 	VulkanFlipPipeline(Config config, int deviceIndex) {
+		this(config, deviceIndex, MemoryMode.DEVICE_LOCAL_STAGING);
+	}
+
+	VulkanFlipPipeline(Config config, int deviceIndex, MemoryMode memoryMode) {
 		this.config = config;
+		this.memoryMode = memoryMode;
 		try {
 			createInstanceAndDevice(deviceIndex);
 			allocateBuffers();
@@ -262,14 +286,10 @@ final class VulkanFlipPipeline implements AutoCloseable {
 
 	Config config() { return config; }
 	String deviceName() { return deviceName; }
+	MemoryMode memoryMode() { return memoryMode; }
 	int particleCount() { return particleCount; }
 	double lastStepMilliseconds() { return lastStepNanos / 1_000_000.0; }
-	float totalParticleVolume() {
-		FloatBuffer positions = buffer(POSITIONS).floats();
-		double total = 0.0;
-		for (int i = 0; i < particleCount; i++) total += positions.get(i * 4 + 3);
-		return (float) total;
-	}
+	float totalParticleVolume() { return particleVolumeLedger; }
 
 	void initializeDamBreak() {
 		initialize((x, y, z) -> x < config.nx() * 2 / 5 && y < config.ny() * 3 / 4);
@@ -285,11 +305,13 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	}
 
 	private void initialize(CellSelector selector) {
-		FloatBuffer positions = buffer(POSITIONS).floats();
-		FloatBuffer velocities = buffer(VELOCITIES).floats();
-		MemoryUtil.memSet(buffer(POSITIONS).mappedAddress(), 0, buffer(POSITIONS).size());
-		MemoryUtil.memSet(buffer(VELOCITIES).mappedAddress(), 0, buffer(VELOCITIES).size());
-		MemoryUtil.memSet(buffer(SOLIDS).mappedAddress(), 0, buffer(SOLIDS).size());
+		GpuBuffer upload = memoryMode == MemoryMode.HOST_VISIBLE ? buffer(POSITIONS) : transferBuffer;
+		MemoryUtil.memSet(upload.mappedAddress(), 0, buffer(POSITIONS).size());
+		FloatBuffer positions = upload.floats(buffer(POSITIONS).size());
+		if (memoryMode == MemoryMode.HOST_VISIBLE) {
+			MemoryUtil.memSet(buffer(VELOCITIES).mappedAddress(), 0, buffer(VELOCITIES).size());
+			MemoryUtil.memSet(buffer(SOLIDS).mappedAddress(), 0, buffer(SOLIDS).size());
+		}
 		particleCount = 0;
 		for (int z = 0; z < config.nz(); z++) for (int y = 0; y < config.ny(); y++) for (int x = 0; x < config.nx(); x++) {
 			if (!selector.filled(x, y, z)) continue;
@@ -306,10 +328,11 @@ final class VulkanFlipPipeline implements AutoCloseable {
 				positions.put(base + 1, (y + oy) * config.cellSize());
 				positions.put(base + 2, (z + oz) * config.cellSize());
 				positions.put(base + 3, 0.125F);
-				velocities.put(base, 0.0F); velocities.put(base + 1, 0.0F); velocities.put(base + 2, 0.0F); velocities.put(base + 3, 0.0F);
 				particleCount++;
 			}
 		}
+		particleVolumeLedger = particleCount * 0.125F;
+		if (memoryMode == MemoryMode.DEVICE_LOCAL_STAGING) uploadInitialState();
 		rebuildSnapshot();
 	}
 
@@ -324,7 +347,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	}
 
 	SnapshotData snapshot() {
-		IntBuffer packed = buffer(SNAPSHOT).ints();
+		IntBuffer packed = readableBuffer(SNAPSHOT).order(ByteOrder.nativeOrder()).asIntBuffer();
 		byte[] density = new byte[config.cellCount()];
 		byte[] markers = new byte[config.cellCount()];
 		byte[] solids = new byte[config.cellCount()];
@@ -338,7 +361,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	}
 
 	int markerCellCountFromParticles() {
-		FloatBuffer positions = buffer(POSITIONS).floats();
+		FloatBuffer positions = copiedBuffer(POSITIONS).asFloatBuffer();
 		boolean[] occupied = new boolean[config.cellCount()];
 		int count = 0;
 		for (int i = 0; i < particleCount; i++) {
@@ -353,42 +376,17 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	}
 
 	float reconstructedDensityVolume() {
-		FloatBuffer density = buffer(DENSITY).floats();
+		FloatBuffer density = copiedBuffer(DENSITY).asFloatBuffer();
 		double total = 0.0;
 		for (int i = 0; i < config.cellCount(); i++) total += density.get(i);
 		return (float) total;
 	}
 
-	Diagnostics diagnostics() {
-		FloatBuffer div = buffer(DIVERGENCE).floats();
-		FloatBuffer pressure = buffer((config.pressureIterations() & 1) == 0 ? PRESSURE_A : PRESSURE_B).floats();
-		FloatBuffer positions = buffer(POSITIONS).floats();
-		IntBuffer gpuDiagnostics = buffer(DIAGNOSTICS).ints();
-		double sumSquared = 0.0;
-		float maxDivergence = 0.0F;
-		float maxPressure = 0.0F;
-		for (int i = 0; i < config.cellCount(); i++) {
-			float d = div.get(i);
-			if (!Float.isFinite(d)) throw new IllegalStateException("Non-finite divergence at cell " + i);
-			maxDivergence = Math.max(maxDivergence, Math.abs(d));
-			sumSquared += (double) d * d;
-			float p = pressure.get(i);
-			if (!Float.isFinite(p)) throw new IllegalStateException("Non-finite pressure at cell " + i);
-			maxPressure = Math.max(maxPressure, Math.abs(p));
-		}
-		double weightedX = 0.0;
-		for (int i = 0; i < particleCount; i++) {
-			int base = i * 4;
-			weightedX += positions.get(base) / config.cellSize() * positions.get(base + 3);
-		}
-		return new Diagnostics(Float.intBitsToFloat(gpuDiagnostics.get(0)), maxDivergence,
-				(float) Math.sqrt(sumSquared / config.cellCount()), maxPressure,
-				particleCount == 0 ? Float.NaN : (float) (weightedX / totalParticleVolume()));
-	}
+	Diagnostics diagnostics() { return lastDiagnostics; }
 
 	PressureProfile pressureProfile() {
-		FloatBuffer pressure = buffer((config.pressureIterations() & 1) == 0 ? PRESSURE_A : PRESSURE_B).floats();
-		IntBuffer markers = buffer(MARKERS).ints();
+		FloatBuffer pressure = copiedBuffer((config.pressureIterations() & 1) == 0 ? PRESSURE_A : PRESSURE_B).asFloatBuffer();
+		IntBuffer markers = copiedBuffer(MARKERS).asIntBuffer();
 		double[] sums = new double[config.ny()];
 		int[] counts = new int[config.ny()];
 		for (int z = 0; z < config.nz(); z++) for (int y = 0; y < config.ny(); y++) for (int x = 0; x < config.nx(); x++) {
@@ -408,20 +406,19 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		long fullBytes = 0L;
 		for (int i = 0; i < buffers.size(); i++) {
 			GpuBuffer current = buffer(i);
-			fullChecksum ^= Long.rotateLeft(checksum(current), i * 7);
+			fullChecksum ^= Long.rotateLeft(checksum(readableBuffer(i), current.size()), i * 7);
 			fullBytes += current.size();
 		}
 		long fullNanos = System.nanoTime() - fullStarted;
 		long compactStarted = System.nanoTime();
-		long compactChecksum = checksum(buffer(SNAPSHOT));
+		long compactChecksum = checksum(readableBuffer(SNAPSHOT), buffer(SNAPSHOT).size());
 		long compactNanos = System.nanoTime() - compactStarted;
 		return new ReadbackStats(fullBytes, buffer(SNAPSHOT).size(), fullNanos, compactNanos, fullChecksum, compactChecksum);
 	}
 
-	private long checksum(GpuBuffer buffer) {
-		ByteBuffer bytes = buffer.bytes();
+	private long checksum(ByteBuffer bytes, long byteCount) {
 		long checksum = 0xcbf29ce484222325L;
-		for (int i = 0; i < bytes.capacity(); i += 4) checksum = (checksum ^ Integer.toUnsignedLong(bytes.getInt(i))) * 0x100000001b3L;
+		for (int i = 0; i < byteCount; i += 4) checksum = (checksum ^ Integer.toUnsignedLong(bytes.getInt(i))) * 0x100000001b3L;
 		return checksum;
 	}
 
@@ -433,8 +430,10 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptorSet), null);
 			VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack);
-			barrier.get(0).sType$Default().srcAccessMask(VK_ACCESS_HOST_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
-			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, barrier, null, null);
+			barrier.get(0).sType$Default().srcAccessMask(VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT)
+					.dstAccessMask(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, barrier, null, null);
 			ByteBuffer push = stack.malloc(PUSH_BYTES);
 			dispatch(push, STAGE_CLEAR, 0, maxGridCount());
 			computeBarrier(barrier);
@@ -466,14 +465,105 @@ final class VulkanFlipPipeline implements AutoCloseable {
 				computeBarrier(barrier);
 			}
 			dispatch(push, STAGE_SNAPSHOT, 0, fullStep ? 1 : 0, config.cellCount());
-			barrier.get(0).srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT);
-			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, barrier, null, null);
+			computeBarrier(barrier);
+			dispatch(push, STAGE_DIAGNOSTICS, 0, Math.max(config.cellCount(), particleCount));
+			if (memoryMode == MemoryMode.DEVICE_LOCAL_STAGING) {
+				barrier.get(0).srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
+				vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, barrier, null, null);
+				copyBuffer(stack, buffer(DIAGNOSTICS), transferBuffer, buffer(DIAGNOSTICS).size());
+				barrier.get(0).srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT);
+				vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, barrier, null, null);
+			} else {
+				barrier.get(0).srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT);
+				vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, barrier, null, null);
+			}
 			check(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
 			VkSubmitInfo.Buffer submit = VkSubmitInfo.calloc(1, stack);
 			submit.get(0).sType$Default().pCommandBuffers(stack.pointers(commandBuffer));
 			check(vkQueueSubmit(queue, submit, VK_NULL_HANDLE), "vkQueueSubmit");
 			check(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
+			updateCachedDiagnostics(memoryMode == MemoryMode.DEVICE_LOCAL_STAGING ? transferBuffer.bytes(buffer(DIAGNOSTICS).size()) : buffer(DIAGNOSTICS).bytes());
 		}
+	}
+
+	private void uploadInitialState() {
+		try (MemoryStack stack = stackPush()) {
+			check(vkResetCommandPool(device, commandPool, 0), "vkResetCommandPool(upload)");
+			VkCommandBufferBeginInfo begin = VkCommandBufferBeginInfo.calloc(stack).sType$Default();
+			check(vkBeginCommandBuffer(commandBuffer, begin), "vkBeginCommandBuffer(upload)");
+			VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack);
+			barrier.get(0).sType$Default().srcAccessMask(VK_ACCESS_HOST_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
+			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, barrier, null, null);
+			copyBuffer(stack, transferBuffer, buffer(POSITIONS), buffer(POSITIONS).size());
+			vkCmdFillBuffer(commandBuffer, buffer(VELOCITIES).handle(), 0, buffer(VELOCITIES).size(), 0);
+			vkCmdFillBuffer(commandBuffer, buffer(SOLIDS).handle(), 0, buffer(SOLIDS).size(), 0);
+			barrier.get(0).srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, barrier, null, null);
+			submitAndWait(stack, "upload");
+		}
+	}
+
+	private ByteBuffer readableBuffer(int index) {
+		GpuBuffer source = buffer(index);
+		if (memoryMode == MemoryMode.HOST_VISIBLE) return source.bytes();
+		copyDeviceBufferToHost(source);
+		return transferBuffer.bytes(source.size());
+	}
+
+	private ByteBuffer copiedBuffer(int index) {
+		GpuBuffer source = buffer(index);
+		ByteBuffer readable = readableBuffer(index).duplicate().order(ByteOrder.nativeOrder());
+		readable.position(0).limit(Math.toIntExact(source.size()));
+		ByteBuffer copy = ByteBuffer.allocate(Math.toIntExact(source.size())).order(ByteOrder.nativeOrder());
+		copy.put(readable).flip();
+		return copy;
+	}
+
+	private void copyDeviceBufferToHost(GpuBuffer source) {
+		if (source.size() > transferBuffer.size()) throw new IllegalArgumentException("Transfer buffer too small");
+		try (MemoryStack stack = stackPush()) {
+			check(vkResetCommandPool(device, commandPool, 0), "vkResetCommandPool(readback)");
+			VkCommandBufferBeginInfo begin = VkCommandBufferBeginInfo.calloc(stack).sType$Default();
+			check(vkBeginCommandBuffer(commandBuffer, begin), "vkBeginCommandBuffer(readback)");
+			VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack);
+			barrier.get(0).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
+			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, barrier, null, null);
+			copyBuffer(stack, source, transferBuffer, source.size());
+			barrier.get(0).srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT);
+			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, barrier, null, null);
+			submitAndWait(stack, "readback");
+		}
+	}
+
+	private void copyBuffer(MemoryStack stack, GpuBuffer source, GpuBuffer destination, long bytes) {
+		VkBufferCopy.Buffer region = VkBufferCopy.calloc(1, stack);
+		region.get(0).srcOffset(0).dstOffset(0).size(bytes);
+		vkCmdCopyBuffer(commandBuffer, source.handle(), destination.handle(), region);
+	}
+
+	private void submitAndWait(MemoryStack stack, String label) {
+		check(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer(" + label + ")");
+		VkSubmitInfo.Buffer submit = VkSubmitInfo.calloc(1, stack);
+		submit.get(0).sType$Default().pCommandBuffers(stack.pointers(commandBuffer));
+		check(vkQueueSubmit(queue, submit, VK_NULL_HANDLE), "vkQueueSubmit(" + label + ")");
+		check(vkQueueWaitIdle(queue), "vkQueueWaitIdle(" + label + ")");
+	}
+
+	private void updateCachedDiagnostics(ByteBuffer bytes) {
+		IntBuffer diagnostics = bytes.duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
+		float pre = Float.intBitsToFloat(diagnostics.get(0));
+		float post = Float.intBitsToFloat(diagnostics.get(1));
+		float maxPressure = Float.intBitsToFloat(diagnostics.get(2));
+		float sumSquared = Float.intBitsToFloat(diagnostics.get(3));
+		float volume = Float.intBitsToFloat(diagnostics.get(4));
+		float weightedX = Float.intBitsToFloat(diagnostics.get(5));
+		float rms = (float) Math.sqrt(sumSquared / config.cellCount());
+		float centerX = volume == 0.0F ? Float.NaN : weightedX / volume;
+		if (!Float.isFinite(pre) || !Float.isFinite(post) || !Float.isFinite(maxPressure)
+				|| !Float.isFinite(rms) || (particleCount > 0 && (!Float.isFinite(volume) || !Float.isFinite(centerX)))) {
+			throw new IllegalStateException("Non-finite compact GPU diagnostics");
+		}
+		lastDiagnostics = new Diagnostics(pre, post, rms, maxPressure, volume, centerX);
 	}
 
 	private void dispatch(ByteBuffer push, int stage, int iteration, int workItems) {
@@ -547,27 +637,41 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		addBuffer((long) config.cellCount() * Float.BYTES); addBuffer((long) config.cellCount() * Integer.BYTES);
 		addBuffer((long) config.cellCount() * Integer.BYTES); addBuffer(16L * Integer.BYTES);
 		if (buffers.size() != BUFFER_COUNT) throw new IllegalStateException("Wrong GPU buffer count");
+		if (memoryMode == MemoryMode.DEVICE_LOCAL_STAGING) {
+			long transferBytes = 0L;
+			for (GpuBuffer buffer : buffers) transferBytes = Math.max(transferBytes, buffer.size());
+			transferBuffer = createBuffer(transferBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true);
+		}
 	}
 
-	private void addBuffer(long bytes) { buffers.add(createBuffer(bytes)); }
+	private void addBuffer(long bytes) {
+		int memoryProperties = memoryMode == MemoryMode.DEVICE_LOCAL_STAGING
+				? VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+				: VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+		buffers.add(createBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				memoryProperties, memoryMode == MemoryMode.HOST_VISIBLE));
+	}
 
-	private GpuBuffer createBuffer(long bytes) {
+	private GpuBuffer createBuffer(long bytes, int usage, int memoryProperties, boolean map) {
 		long handle = VK_NULL_HANDLE;
 		long memory = VK_NULL_HANDLE;
 		long mappedAddress = NULL;
 		try (MemoryStack stack = stackPush()) {
 			VkBufferCreateInfo info = VkBufferCreateInfo.calloc(stack).sType$Default().size(bytes)
-					.usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT).sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+					.usage(usage).sharingMode(VK_SHARING_MODE_EXCLUSIVE);
 			LongBuffer bufferPointer = stack.mallocLong(1); check(vkCreateBuffer(device, info, null, bufferPointer), "vkCreateBuffer");
 			handle = bufferPointer.get(0);
 			VkMemoryRequirements requirements = VkMemoryRequirements.calloc(stack); vkGetBufferMemoryRequirements(device, handle, requirements);
-			int type = findMemoryType(requirements.memoryTypeBits(), VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stack);
+			int type = findMemoryType(requirements.memoryTypeBits(), memoryProperties, stack);
 			VkMemoryAllocateInfo allocation = VkMemoryAllocateInfo.calloc(stack).sType$Default().allocationSize(requirements.size()).memoryTypeIndex(type);
 			LongBuffer memoryPointer = stack.mallocLong(1); check(vkAllocateMemory(device, allocation, null, memoryPointer), "vkAllocateMemory");
 			memory = memoryPointer.get(0); check(vkBindBufferMemory(device, handle, memory, 0), "vkBindBufferMemory");
-			PointerBuffer mapped = stack.mallocPointer(1); check(vkMapMemory(device, memory, 0, bytes, 0, mapped), "vkMapMemory");
-			mappedAddress = mapped.get(0);
-			MemoryUtil.memSet(mappedAddress, 0, bytes);
+			if (map) {
+				PointerBuffer mapped = stack.mallocPointer(1); check(vkMapMemory(device, memory, 0, bytes, 0, mapped), "vkMapMemory");
+				mappedAddress = mapped.get(0);
+				MemoryUtil.memSet(mappedAddress, 0, bytes);
+			}
 			return new GpuBuffer(handle, memory, mappedAddress, bytes);
 		} catch (RuntimeException | LinkageError exception) {
 			if (mappedAddress != NULL) vkUnmapMemory(device, memory);
@@ -624,7 +728,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private int findMemoryType(int bits, int required, MemoryStack stack) {
 		VkPhysicalDeviceMemoryProperties memory = VkPhysicalDeviceMemoryProperties.calloc(stack); vkGetPhysicalDeviceMemoryProperties(physicalDevice, memory);
 		for (int i = 0; i < memory.memoryTypeCount(); i++) if ((bits & (1 << i)) != 0 && (memory.memoryTypes(i).propertyFlags() & required) == required) return i;
-		throw new IllegalStateException("No host-visible coherent Vulkan memory type");
+		throw new IllegalStateException("No Vulkan memory type for required flags 0x" + Integer.toHexString(required));
 	}
 
 	private static ByteBuffer compileShader(String source) {
@@ -642,6 +746,12 @@ final class VulkanFlipPipeline implements AutoCloseable {
 
 	private GpuBuffer buffer(int index) { return buffers.get(index); }
 	private static void check(int result, String operation) { if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed with VkResult " + result); }
+	private void destroyBuffer(GpuBuffer buffer) {
+		if (buffer == null) return;
+		if (buffer.mappedAddress() != NULL) vkUnmapMemory(device, buffer.memory());
+		vkDestroyBuffer(device, buffer.handle(), null);
+		vkFreeMemory(device, buffer.memory(), null);
+	}
 
 	@Override public void close() {
 		if (device != null) {
@@ -652,7 +762,8 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			if (shaderModule != VK_NULL_HANDLE) vkDestroyShaderModule(device, shaderModule, null);
 			if (pipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, pipelineLayout, null);
 			if (descriptorLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, descriptorLayout, null);
-			for (GpuBuffer buffer : buffers) { vkUnmapMemory(device, buffer.memory()); vkDestroyBuffer(device, buffer.handle(), null); vkFreeMemory(device, buffer.memory(), null); }
+			destroyBuffer(transferBuffer); transferBuffer = null;
+			for (GpuBuffer buffer : buffers) destroyBuffer(buffer);
 			buffers.clear(); vkDestroyDevice(device, null); device = null;
 		}
 		if (instance != null) { vkDestroyInstance(instance, null); instance = null; }
@@ -670,13 +781,20 @@ final class VulkanFlipPipeline implements AutoCloseable {
 
 	record SnapshotData(byte[] density, byte[] markers, byte[] solids) { }
 	record Diagnostics(float preProjectionMaximumDivergence, float maximumDivergence, float rmsDivergence,
-	                   float maximumPressure, float centerOfMassX) { }
+	                   float maximumPressure, float particleVolume, float centerOfMassX) { }
 	record PressureProfile(float[] averageByY, int[] fluidCellsByY) { }
 	record ReadbackStats(long fullBytes, long compactBytes, long fullNanos, long compactNanos, long fullChecksum, long compactChecksum) { }
 	private record GpuBuffer(long handle, long memory, long mappedAddress, long size) {
-		FloatBuffer floats() { return MemoryUtil.memFloatBuffer(mappedAddress, Math.toIntExact(size / Float.BYTES)); }
-		IntBuffer ints() { return MemoryUtil.memIntBuffer(mappedAddress, Math.toIntExact(size / Integer.BYTES)); }
-		ByteBuffer bytes() { return MemoryUtil.memByteBuffer(mappedAddress, Math.toIntExact(size)); }
+		FloatBuffer floats(long byteCount) { return MemoryUtil.memFloatBuffer(requireMapped(), Math.toIntExact(byteCount / Float.BYTES)); }
+		ByteBuffer bytes() { return bytes(size); }
+		ByteBuffer bytes(long byteCount) { return MemoryUtil.memByteBuffer(requireMapped(), Math.toIntExact(byteCount)).order(ByteOrder.nativeOrder()); }
+		private long requireMapped() { if (mappedAddress == NULL) throw new IllegalStateException("GPU buffer is not host mapped"); return mappedAddress; }
+	}
+	enum MemoryMode {
+		DEVICE_LOCAL_STAGING("device-local+staging"), HOST_VISIBLE("host-visible baseline");
+		private final String label;
+		MemoryMode(String label) { this.label = label; }
+		String label() { return label; }
 	}
 	@FunctionalInterface private interface CellSelector { boolean filled(int x, int y, int z); }
 }

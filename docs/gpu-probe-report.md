@@ -1,15 +1,15 @@
 # M1 Windows/NVIDIA Vulkan GPU probe report
 
-Date: 2026-08-18. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.1. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
+Date: 2026-08-18. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.2. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
 
-This is an M1-A correctness and data-movement probe, not the production GPU backend and not the completion of all M1 pressure-algorithm experiments. It has no takeover code, does not read world blocks or collision state, does not write a save, and owns no chunk tickets. The main `realwater` Mod remains the CPU-authoritative implementation whether the optional probe jar is installed or not.
+This is an M1-B correctness and data-movement probe, not the production GPU backend and not the completion of all M1 pressure-algorithm experiments. It has no takeover code, does not read world blocks or collision state, does not write a save, and owns no chunk tickets. The main `realwater` Mod remains the CPU-authoritative implementation whether the optional probe jar is installed or not.
 
 ## Layer boundary
 
 - Physical truth: every GPU marker stores its own `particleVolume`; the validation ledger uses particle count times `1/8` solver-cell volume. Smoothed density never estimates total water.
 - Numerical discretization: 3D P2G density/marker/MAC velocity transfer, saved pre-projection velocities, gravity, fixed-iteration Jacobi pressure, MAC projection, 90% FLIP / 10% PIC G2P, and axis-separated particle advection/collision are Vulkan compute stages.
 - Rendering reconstruction: a compact density + marker + solid snapshot is generated on the GPU and sent through the existing client marching-tetrahedra payload. Marker occupancy remains the shallow-water seed.
-- Scheduling: the visual probe is a separate 20 Hz server-tick service. Three consecutive steps above 200 ms pause only the probe. It does not replace the main service's 40 ms adaptive CPU scheduler.
+- Scheduling: compute SSBOs require device-local memory. Initialization uploads through a host-coherent staging buffer; a normal physical step copies only a 64-byte workgroup-reduced diagnostic block to the host, and the compact surface snapshot is staged only on the client snapshot cadence. Full-state readback is an explicit benchmark/validation operation. The visual probe is a separate 20 Hz server-tick service. Three consecutive steps above 200 ms pause only the probe. It does not replace the main service's 40 ms adaptive CPU scheduler.
 - World transaction: none. `/realwatergpu remove` releases memory and clears its debug snapshot only.
 
 ## Runtime capability
@@ -36,19 +36,24 @@ The fixed dam-break input is a `24×16×24` solver grid with `h=0.5`, `dt=0.05`,
 
 The static-column case retains 375.000 solver-cell volumes. After eight steps on the RTX 5070 Ti, maximum pressure is 14,316.000 Pa, mean bottom-layer pressure is 9,391.479 Pa, mean top-layer pressure is 1.468 Pa, and maximum divergence falls from 2.880272 before projection to 0.000005 after projection. This verifies pressure direction and projected incompressibility for this bounded case.
 
+The same dam-break input is also run through device-local and persistently mapped host-visible SSBOs on each GPU. After six steps, both devices produced zero marker-mask mismatches, density-byte mean absolute error 0.0000, center-of-mass differences no greater than 0.000001 cell, and maximum-pressure differences within the validation tolerance. This is a numerical equivalence gate for the memory migration; it does not require CPU/GPU or cross-driver bit equality.
+
 ## Throughput and readback
 
-These figures use persistently mapped, host-visible coherent SSBOs. They deliberately measure a simple correctness layout before selecting a production device-local/staging layout.
+The step time includes queue completion and the regular 64-byte diagnostic staging copy. “Snapshot” is the packed density/marker/solid surface field requested separately; “full state” is a diagnostic-only staged scan of all 19 SSBOs, including CPU checksum cost. It is deliberately absent from a normal step.
 
-| Device / case | Markers | Pressure iterations | Step time | Compact readback | Full-state readback |
+| Device / memory / case | Markers | Pressure iterations | Step time | Snapshot readback | Full-state readback |
 |---|---:|---:|---:|---:|---:|
-| RTX 5070 Ti, current 12×8×12-block dam | 20,736 | 96 | 7.214 ms average (6.152–8.984) | 36,864 B / 0.580 ms | 2,965,312 B / 52.873 ms |
-| RTX 4060 Ti, current 12×8×12-block dam | 20,736 | 96 | 2.613 ms average (2.166–3.278) | 36,864 B / 0.586 ms | 2,965,312 B / 58.160 ms |
-| RTX 5070 Ti, full 32³ blocks / 64³ grid | 2,097,152 | 64 | 655.271 ms average (651.785–657.227) | 1,048,576 B / 17.097 ms | 84,033,600 B / 1,333.124 ms |
+| RTX 5070 Ti, device-local, current 12×8×12-block dam | 20,736 | 96 | 0.906 ms average (0.718–2.145) | 36,864 B / 0.632 ms | 2,965,312 B / 57.056 ms |
+| RTX 5070 Ti, host-visible baseline, current dam | 20,736 | 96 | 7.226 ms average (6.227–8.554) | 36,864 B / 0.570 ms | 2,965,312 B / 46.013 ms |
+| RTX 4060 Ti, device-local, current 12×8×12-block dam | 20,736 | 96 | 0.760 ms average (0.650–1.772) | 36,864 B / 0.597 ms | 2,965,312 B / 59.469 ms |
+| RTX 4060 Ti, host-visible baseline, current dam | 20,736 | 96 | 2.745 ms average (2.220–5.365) | 36,864 B / 0.728 ms | 2,965,312 B / 50.809 ms |
+| RTX 5070 Ti, device-local, full 32³ blocks / 64³ grid | 2,097,152 | 64 | 5.520 ms average (4.765–6.163) | 1,048,576 B / 16.786 ms | 84,033,600 B / 1,350.285 ms |
+| RTX 4060 Ti, device-local, full 32³ blocks / 64³ grid | 2,097,152 | 64 | 7.162 ms average (6.758–7.955) | 1,048,576 B / 16.687 ms | 84,033,600 B / 1,399.735 ms |
 
 The 32³ benchmark really allocates and advances all 2,097,152 full-water markers. Gravity is zero in that throughput case because a completely full closed box has a pressure nullspace and no free atmospheric surface. Its exact marker ledger is 262,144 solver-cell volumes, equal to 32,768 Minecraft block-volumes.
 
-The smaller 4060 Ti outperforming the 5070 Ti on this layout is evidence that host-visible memory topology and synchronization dominate this probe. The full-state readback cost also confirms that production steps must keep particles and grid state device-local and read back only compact snapshots and bounded diagnostics.
+Moving the compute state off host-visible memory improves the current-domain step by about 8.0× on the RTX 5070 Ti and 3.6× on the RTX 4060 Ti. It also reverses the misleading M1-A large-domain result: the same RTX 5070 Ti 32³ case falls from roughly 655 ms to 5.52 ms once the 84 MB working set stays device-local. The roughly 17 ms 1 MiB snapshot and 1.35–1.40 s full diagnostic scan show why snapshot cadence, bounded queries and future ring staging still matter even though the physical step is fast.
 
 ## Commands
 
@@ -66,8 +71,8 @@ All handled probe commands and their chat/detail output are appended as UTF-8 bl
 
 ## Remaining M1 work
 
-- Load the optional jar in the actual integrated-server and dedicated-server classpaths; the standalone headless path and both local GPUs are verified, but the in-game visual smoke is still pending.
-- Move production candidates to device-local memory with staging/ring buffers and timestamp queries; keep full-state readback diagnostic-only.
+- Repeat the integrated-server visual/status/benchmark smoke with probe 0.1.2. Probe 0.1.1 already passed native loading, dam-break visualization, status/benchmark commands, command transcript output and forced CPU fallback in the integrated server; a dedicated-server classpath smoke remains pending.
+- Replace the single reusable staging buffer and CPU wall-clock timing with bounded ring staging and Vulkan timestamp queries before calling the layout production-ready. Full-state readback remains diagnostic-only.
 - Compare pressure PCG/global reductions, red-black GS/SOR, and a multigrid or preconditioned route, including residual curves and dispatch/barrier cost. Current Jacobi is only the correctness baseline.
 - Complete the CPU variable-density face-coefficient experiment before M3 and measure CPU/GPU break-even across more occupancies.
 - Add a CPU-readable checkpoint and recovery path for runtime device loss. The main Mod already remains CPU-only; the optional visual probe currently pauses on a step failure rather than pretending incomplete buffers are valid.
