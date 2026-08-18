@@ -450,10 +450,14 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private long descriptorSet;
 	private long commandPool;
 	private VkCommandBuffer commandBuffer;
+	private long timestampQueryPool;
+	private float timestampPeriodNanos;
+	private int timestampValidBits;
 	private int particleCount;
 	private float particleVolumeLedger;
 	private Diagnostics lastDiagnostics = new Diagnostics(0.0F, 0.0F, 0.0F, 0.0F, 0.0F, Float.NaN);
 	private long lastStepNanos;
+	private long lastGpuStepNanos = -1L;
 
 	VulkanFlipPipeline(Config config, int deviceIndex) {
 		this(config, deviceIndex, MemoryMode.DEVICE_LOCAL_STAGING, PressureSolver.JACOBI);
@@ -483,6 +487,8 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	PressureSolver pressureSolver() { return pressureSolver; }
 	int particleCount() { return particleCount; }
 	double lastStepMilliseconds() { return lastStepNanos / 1_000_000.0; }
+	double lastGpuStepMilliseconds() { return lastGpuStepNanos < 0L ? Double.NaN : lastGpuStepNanos / 1_000_000.0; }
+	boolean hasTimestampQueries() { return timestampQueryPool != VK_NULL_HANDLE; }
 	float totalParticleVolume() { return particleVolumeLedger; }
 
 	void initializeDamBreak() {
@@ -702,6 +708,10 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			check(vkResetCommandPool(device, commandPool, 0), "vkResetCommandPool");
 			VkCommandBufferBeginInfo begin = VkCommandBufferBeginInfo.calloc(stack).sType$Default();
 			check(vkBeginCommandBuffer(commandBuffer, begin), "vkBeginCommandBuffer");
+			if (fullStep && timestampQueryPool != VK_NULL_HANDLE) {
+				vkCmdResetQueryPool(commandBuffer, timestampQueryPool, 0, 2);
+				vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampQueryPool, 0);
+			}
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptorSet), null);
 			VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack);
@@ -749,13 +759,31 @@ final class VulkanFlipPipeline implements AutoCloseable {
 				barrier.get(0).srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT);
 				vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, barrier, null, null);
 			}
+			if (fullStep && timestampQueryPool != VK_NULL_HANDLE) {
+				vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampQueryPool, 1);
+			}
 			check(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
 			VkSubmitInfo.Buffer submit = VkSubmitInfo.calloc(1, stack);
 			submit.get(0).sType$Default().pCommandBuffers(stack.pointers(commandBuffer));
 			check(vkQueueSubmit(queue, submit, VK_NULL_HANDLE), "vkQueueSubmit");
 			check(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
+			if (fullStep && timestampQueryPool != VK_NULL_HANDLE) updateGpuTimestamp(stack);
 			updateCachedDiagnostics(memoryMode == MemoryMode.DEVICE_LOCAL_STAGING ? transferBuffer.bytes(buffer(DIAGNOSTICS).size()) : buffer(DIAGNOSTICS).bytes());
 		}
+	}
+
+	private void updateGpuTimestamp(MemoryStack stack) {
+		LongBuffer timestamps = stack.mallocLong(2);
+		check(vkGetQueryPoolResults(device, timestampQueryPool, 0, 2, timestamps, Long.BYTES,
+				VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT), "vkGetQueryPoolResults(timestamp)");
+		long ticks;
+		if (timestampValidBits == Long.SIZE) {
+			ticks = timestamps.get(1) - timestamps.get(0);
+		} else {
+			long mask = (1L << timestampValidBits) - 1L;
+			ticks = (timestamps.get(1) - timestamps.get(0)) & mask;
+		}
+		lastGpuStepNanos = Math.max(1L, Math.round(ticks * (double) timestampPeriodNanos));
 	}
 
 	private void solvePressure(ByteBuffer push, VkMemoryBarrier.Buffer barrier) {
@@ -1057,6 +1085,8 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			vkGetPhysicalDeviceProperties(physicalDevice, properties);
 			deviceName = properties.deviceNameString();
 			queueFamily = findComputeQueue(physicalDevice, stack);
+			timestampPeriodNanos = properties.limits().timestampPeriod();
+			timestampValidBits = timestampValidBits(physicalDevice, queueFamily, stack);
 
 			VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFeatures = VkPhysicalDeviceShaderAtomicFloatFeaturesEXT.calloc(stack).sType$Default();
 			VkPhysicalDeviceFeatures2 features = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default().pNext(atomicFeatures.address());
@@ -1167,6 +1197,13 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			LongBuffer commandPoolPointer = stack.mallocLong(1); check(vkCreateCommandPool(device, commandPoolInfo, null, commandPoolPointer), "vkCreateCommandPool"); commandPool = commandPoolPointer.get(0);
 			VkCommandBufferAllocateInfo commandInfo = VkCommandBufferAllocateInfo.calloc(stack).sType$Default().commandPool(commandPool).level(VK_COMMAND_BUFFER_LEVEL_PRIMARY).commandBufferCount(1);
 			PointerBuffer commandPointer = stack.mallocPointer(1); check(vkAllocateCommandBuffers(device, commandInfo, commandPointer), "vkAllocateCommandBuffers"); commandBuffer = new VkCommandBuffer(commandPointer.get(0), device);
+			if (timestampPeriodNanos > 0.0F && timestampValidBits > 0) {
+				VkQueryPoolCreateInfo queryInfo = VkQueryPoolCreateInfo.calloc(stack).sType$Default()
+						.queryType(VK_QUERY_TYPE_TIMESTAMP).queryCount(2);
+				LongBuffer queryPointer = stack.mallocLong(1);
+				check(vkCreateQueryPool(device, queryInfo, null, queryPointer), "vkCreateQueryPool(timestamp)");
+				timestampQueryPool = queryPointer.get(0);
+			}
 		}
 	}
 
@@ -1176,6 +1213,14 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		int fallback = -1;
 		for (int i = 0; i < properties.capacity(); i++) if ((properties.get(i).queueFlags() & VK_QUEUE_COMPUTE_BIT) != 0) { fallback = i; if ((properties.get(i).queueFlags() & VK_QUEUE_GRAPHICS_BIT) == 0) return i; }
 		if (fallback < 0) throw new IllegalStateException("No compute queue on selected device"); return fallback;
+	}
+
+	private static int timestampValidBits(VkPhysicalDevice physical, int queueFamily, MemoryStack stack) {
+		IntBuffer count = stack.ints(0);
+		vkGetPhysicalDeviceQueueFamilyProperties(physical, count, null);
+		VkQueueFamilyProperties.Buffer properties = VkQueueFamilyProperties.calloc(count.get(0), stack);
+		vkGetPhysicalDeviceQueueFamilyProperties(physical, count, properties);
+		return properties.get(queueFamily).timestampValidBits();
 	}
 
 	private int findMemoryType(int bits, int required, MemoryStack stack) {
@@ -1210,6 +1255,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		if (device != null) {
 			vkDeviceWaitIdle(device);
 			if (commandPool != VK_NULL_HANDLE) vkDestroyCommandPool(device, commandPool, null);
+			if (timestampQueryPool != VK_NULL_HANDLE) vkDestroyQueryPool(device, timestampQueryPool, null);
 			if (descriptorPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(device, descriptorPool, null);
 			if (pipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, pipeline, null);
 			if (shaderModule != VK_NULL_HANDLE) vkDestroyShaderModule(device, shaderModule, null);
