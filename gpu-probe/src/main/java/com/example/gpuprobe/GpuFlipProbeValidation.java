@@ -28,12 +28,15 @@ public final class GpuFlipProbeValidation {
 		results.add(validateManualStepScheduling());
 		results.add(validateDamBreak(device));
 		results.add(validateHydrostaticColumn(device));
+		results.add(validateMultigridHydrostaticColumn(device));
 		results.add(validatePressureSolvers(device));
 		results.add(validatePressureConvergenceCurves(device));
 		results.add(validateMemoryModes(device));
+		results.add(validateMultigridMemoryModes(device));
 		results.add(benchmarkCurrentDomain(device, VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING));
 		results.add(benchmarkCurrentDomain(device, VulkanFlipPipeline.MemoryMode.HOST_VISIBLE));
 		if (!skipLarge) {
+			results.add(benchmarkLargeMultigridCurve(device));
 			results.add(benchmarkLargePressureSolvers(device));
 			results.add(benchmarkThirtyTwoCubedBlocks(device));
 		}
@@ -117,11 +120,35 @@ public final class GpuFlipProbeValidation {
 		}
 	}
 
+	private static String validateMultigridHydrostaticColumn(int device) {
+		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(16, 20, 16, CELL_SIZE, DT, GRAVITY, RHO, 2, 16 * 20 * 16 * 8);
+		try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,
+				VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL)) {
+			gpu.initializeColumn();
+			float volume = gpu.totalParticleVolume();
+			for (int i = 0; i < 8; i++) gpu.step();
+			VulkanFlipPipeline.Diagnostics diagnostics = gpu.diagnostics();
+			requireFinite(diagnostics);
+			require(close(diagnostics.particleVolume(), volume, 1.0E-3F), "MG2 column particle volume changed");
+			require(diagnostics.maximumDivergence() <= diagnostics.preProjectionMaximumDivergence() * 0.20F + 2.0E-3F,
+					"MG2 column projection did not sufficiently reduce divergence");
+			VulkanFlipPipeline.PressureProfile profile = gpu.pressureProfile();
+			int lowest = firstOccupied(profile), highest = lastOccupied(profile);
+			require(lowest >= 0 && highest > lowest, "MG2 column pressure profile has insufficient occupied layers");
+			float bottom = profile.averageByY()[lowest], top = profile.averageByY()[highest];
+			require(Float.isFinite(bottom) && Float.isFinite(top) && bottom > 8_000.0F && bottom < 11_000.0F
+					&& Math.abs(top) < 100.0F && diagnostics.maximumPressure() > 10_000.0F && diagnostics.maximumPressure() < 16_000.0F,
+					"MG2 hydrostatic pressure profile failed: max=" + diagnostics.maximumPressure() + ", bottom=" + bottom + ", top=" + top);
+			return String.format("correctness MG2 column: cycles=2 volume=%.3f cells maxP=%.3fPa bottomP=%.3fPa topP=%.3fPa postDiv=%.6f preDiv=%.6f",
+					volume, diagnostics.maximumPressure(), bottom, top, diagnostics.maximumDivergence(), diagnostics.preProjectionMaximumDivergence());
+		}
+	}
+
 	private static String validatePressureSolvers(int device) {
 		List<PressureResult> results = new ArrayList<>();
 		for (VulkanFlipPipeline.PressureSolver solver : VulkanFlipPipeline.PressureSolver.values()) {
-			int iterations = switch (solver) { case JACOBI -> 96; case RBGS_SOR -> 48; case PCG, PCG_DIAGONAL -> 32; };
-			float maximumRatio = switch (solver) { case JACOBI -> 0.25F; case RBGS_SOR -> 0.08F; case PCG, PCG_DIAGONAL -> 0.02F; };
+			int iterations = switch (solver) { case JACOBI -> 96; case RBGS_SOR -> 48; case PCG, PCG_DIAGONAL -> 32; case MULTIGRID_TWO_LEVEL -> 2; };
+			float maximumRatio = switch (solver) { case JACOBI -> 0.25F; case RBGS_SOR -> 0.08F; case PCG, PCG_DIAGONAL -> 0.02F; case MULTIGRID_TWO_LEVEL -> 0.20F; };
 			VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(24, 16, 24, CELL_SIZE, DT, GRAVITY, RHO,
 					iterations, 24 * 16 * 24 * 8);
 			try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,
@@ -151,6 +178,7 @@ public final class GpuFlipProbeValidation {
 				case JACOBI -> new int[] {32, 64, 96};
 				case RBGS_SOR -> new int[] {16, 32, 48};
 				case PCG, PCG_DIAGONAL -> new int[] {16, 24, 32};
+				case MULTIGRID_TWO_LEVEL -> new int[] {1, 2, 3};
 			};
 			List<CurvePoint> points = new ArrayList<>();
 			for (int iterations : iterationCounts) {
@@ -160,9 +188,16 @@ public final class GpuFlipProbeValidation {
 						VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, solver)) {
 					gpu.initializeDamBreak();
 					gpu.step();
-					VulkanFlipPipeline.Diagnostics diagnostics = gpu.diagnostics();
+					double minimumMillis = Double.POSITIVE_INFINITY;
+					VulkanFlipPipeline.Diagnostics diagnostics = null;
+					for (int sample = 0; sample < 3; sample++) {
+						gpu.initializeDamBreak();
+						gpu.step();
+						minimumMillis = Math.min(minimumMillis, gpu.lastStepMilliseconds());
+						diagnostics = gpu.diagnostics();
+					}
 					requireFinite(diagnostics);
-					points.add(new CurvePoint(iterations, gpu.lastStepMilliseconds(), diagnostics.maximumDivergence()));
+					points.add(new CurvePoint(iterations, minimumMillis, diagnostics.maximumDivergence()));
 				}
 			}
 			require(points.getLast().maximumDivergence() < points.getFirst().maximumDivergence(), solver + " convergence curve did not improve");
@@ -172,12 +207,21 @@ public final class GpuFlipProbeValidation {
 	}
 
 	private static String validateMemoryModes(int device) {
-		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(24, 16, 24, CELL_SIZE, DT, GRAVITY, RHO, 96, 24 * 16 * 24 * 8);
-		try (VulkanFlipPipeline deviceLocal = new VulkanFlipPipeline(config, device, VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING);
-		     VulkanFlipPipeline hostVisible = new VulkanFlipPipeline(config, device, VulkanFlipPipeline.MemoryMode.HOST_VISIBLE)) {
+		return validateMemoryModes(device, VulkanFlipPipeline.PressureSolver.JACOBI, 96, 6, "memory modes");
+	}
+
+	private static String validateMultigridMemoryModes(int device) {
+		return validateMemoryModes(device, VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL, 2, 4, "MG2 memory modes");
+	}
+
+	private static String validateMemoryModes(int device, VulkanFlipPipeline.PressureSolver solver, int iterations,
+	                                          int steps, String label) {
+		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(24, 16, 24, CELL_SIZE, DT, GRAVITY, RHO, iterations, 24 * 16 * 24 * 8);
+		try (VulkanFlipPipeline deviceLocal = new VulkanFlipPipeline(config, device, VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, solver);
+		     VulkanFlipPipeline hostVisible = new VulkanFlipPipeline(config, device, VulkanFlipPipeline.MemoryMode.HOST_VISIBLE, solver)) {
 			deviceLocal.initializeDamBreak();
 			hostVisible.initializeDamBreak();
-			for (int i = 0; i < 6; i++) { deviceLocal.step(); hostVisible.step(); }
+			for (int i = 0; i < steps; i++) { deviceLocal.step(); hostVisible.step(); }
 			VulkanFlipPipeline.Diagnostics deviceDiagnostics = deviceLocal.diagnostics();
 			VulkanFlipPipeline.Diagnostics hostDiagnostics = hostVisible.diagnostics();
 			requireFinite(deviceDiagnostics); requireFinite(hostDiagnostics);
@@ -187,13 +231,13 @@ public final class GpuFlipProbeValidation {
 			double densityMae = meanAbsoluteByteDifference(deviceSnapshot.density(), hostSnapshot.density());
 			float centerDifference = Math.abs(deviceDiagnostics.centerOfMassX() - hostDiagnostics.centerOfMassX());
 			float pressureDifference = Math.abs(deviceDiagnostics.maximumPressure() - hostDiagnostics.maximumPressure());
-			require(markerMismatches == 0, "device-local/host-visible marker masks differ in " + markerMismatches + " cells");
-			require(densityMae <= 0.05, "device-local/host-visible density MAE " + densityMae);
-			require(centerDifference <= 1.0E-3F, "device-local/host-visible center difference " + centerDifference);
+			require(markerMismatches == 0, solver + " device-local/host-visible marker masks differ in " + markerMismatches + " cells");
+			require(densityMae <= 0.05, solver + " device-local/host-visible density MAE " + densityMae);
+			require(centerDifference <= 1.0E-3F, solver + " device-local/host-visible center difference " + centerDifference);
 			require(pressureDifference <= Math.max(0.05F, hostDiagnostics.maximumPressure() * 1.0E-4F),
-					"device-local/host-visible pressure difference " + pressureDifference);
-			return String.format("correctness memory modes: steps=6 markersMismatch=%d densityMAE=%.4f centerDifference=%.6f pressureDifference=%.6f",
-					markerMismatches, densityMae, centerDifference, pressureDifference);
+					solver + " device-local/host-visible pressure difference " + pressureDifference);
+			return String.format("correctness %s: steps=%d markersMismatch=%d densityMAE=%.4f centerDifference=%.6f pressureDifference=%.6f",
+					label, steps, markerMismatches, densityMae, centerDifference, pressureDifference);
 		}
 	}
 
@@ -238,7 +282,7 @@ public final class GpuFlipProbeValidation {
 		int grid = 64, capacity = 32 * 32 * 32 * 64;
 		List<String> results = new ArrayList<>();
 		for (VulkanFlipPipeline.PressureSolver solver : VulkanFlipPipeline.PressureSolver.values()) {
-			int iterations = switch (solver) { case JACOBI -> 64; case RBGS_SOR -> 64; case PCG, PCG_DIAGONAL -> 64; };
+			int iterations = switch (solver) { case JACOBI -> 64; case RBGS_SOR -> 64; case PCG, PCG_DIAGONAL -> 64; case MULTIGRID_TWO_LEVEL -> 2; };
 			VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(grid, grid, grid, CELL_SIZE, DT, GRAVITY, RHO,
 					iterations, capacity);
 			try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,
@@ -259,6 +303,34 @@ public final class GpuFlipProbeValidation {
 			}
 		}
 		return "benchmark pressure solvers 32^3-block domain / partial dam: " + String.join(" | ", results);
+	}
+
+	private static String benchmarkLargeMultigridCurve(int device) {
+		int grid = 64, capacity = 32 * 32 * 32 * 64;
+		List<CurvePoint> points = new ArrayList<>();
+		for (int cycles : new int[] {1, 2, 3}) {
+			VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(grid, grid, grid, CELL_SIZE, DT, GRAVITY, RHO,
+					cycles, capacity);
+			try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,
+					VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL)) {
+				gpu.initializeDamBreak();
+				gpu.step();
+				double minimumMillis = Double.POSITIVE_INFINITY;
+				VulkanFlipPipeline.Diagnostics diagnostics = null;
+				for (int sample = 0; sample < 3; sample++) {
+					gpu.initializeDamBreak();
+					gpu.step();
+					minimumMillis = Math.min(minimumMillis, gpu.lastStepMilliseconds());
+					diagnostics = gpu.diagnostics();
+				}
+				requireFinite(diagnostics);
+				require(close(diagnostics.particleVolume(), gpu.totalParticleVolume(), 0.1F), "MG2 large curve volume changed");
+				points.add(new CurvePoint(cycles, minimumMillis, diagnostics.maximumDivergence()));
+			}
+		}
+		require(points.getLast().maximumDivergence() < points.getFirst().maximumDivergence(), "MG2 large convergence curve did not improve");
+		return "benchmark MG2 64^3-grid convergence curve: "
+				+ points.stream().map(CurvePoint::format).reduce((a, b) -> a + ", " + b).orElseThrow();
 	}
 
 	private static FlipFluidDomain cpuDamBreak(VulkanFlipPipeline.Config config) {

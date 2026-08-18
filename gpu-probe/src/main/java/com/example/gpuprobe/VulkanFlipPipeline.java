@@ -22,8 +22,11 @@ import static org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceFeatures2;
 /** Windowless 3D PIC/FLIP probe backend with an explicit device-local production path and host-visible baseline. */
 final class VulkanFlipPipeline implements AutoCloseable {
 	private static final int LOCAL_SIZE = 256;
-	private static final int BUFFER_COUNT = 19;
+	private static final int BUFFER_COUNT = 23;
 	private static final int PUSH_BYTES = 52;
+	private static final int MG_PRE_SMOOTHING_SWEEPS = 2;
+	private static final int MG_COARSE_ITERATIONS = 24;
+	private static final int MG_POST_SMOOTHING_SWEEPS = 3;
 
 	private static final int POSITIONS = 0;
 	private static final int VELOCITIES = 1;
@@ -44,6 +47,10 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private static final int SOLIDS = 16;
 	private static final int SNAPSHOT = 17;
 	private static final int DIAGNOSTICS = 18;
+	private static final int COARSE_RHS = 19;
+	private static final int COARSE_MASK = 20;
+	private static final int COARSE_PRESSURE_A = 21;
+	private static final int COARSE_PRESSURE_B = 22;
 
 	private static final int STAGE_CLEAR = 0;
 	private static final int STAGE_P2G = 1;
@@ -64,6 +71,9 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private static final int STAGE_PCG_REDUCE = 16;
 	private static final int STAGE_PCG_UPDATE_XR = 17;
 	private static final int STAGE_PCG_UPDATE_P = 18;
+	private static final int STAGE_MG_RESTRICT = 19;
+	private static final int STAGE_MG_COARSE_JACOBI = 20;
+	private static final int STAGE_MG_PROLONG = 21;
 
 	private static final String SHADER = """
 			#version 450
@@ -89,6 +99,10 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			layout(set=0,binding=16,std430) readonly buffer Solids { uint value[]; } solids;
 			layout(set=0,binding=17,std430) buffer Snapshot { uint value[]; } snapshot;
 			layout(set=0,binding=18,std430) buffer Diagnostics { uint value[]; } diagnostics;
+			layout(set=0,binding=19,std430) buffer CoarseRhs { float value[]; } coarseRhs;
+			layout(set=0,binding=20,std430) buffer CoarseMask { uint value[]; } coarseMask;
+			layout(set=0,binding=21,std430) buffer CoarsePressureA { float value[]; } coarsePa;
+			layout(set=0,binding=22,std430) buffer CoarsePressureB { float value[]; } coarsePb;
 			shared float diagnosticSquared[256];
 			shared float diagnosticVolume[256];
 			shared float diagnosticWeightedX[256];
@@ -101,16 +115,24 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			} pc;
 
 			int cellCount() { return pc.nx * pc.ny * pc.nz; }
+			int coarseNx() { return (pc.nx + 1) / 2; }
+			int coarseNy() { return (pc.ny + 1) / 2; }
+			int coarseNz() { return (pc.nz + 1) / 2; }
+			int coarseCount() { return coarseNx() * coarseNy() * coarseNz(); }
 			int uCount() { return (pc.nx + 1) * pc.ny * pc.nz; }
 			int vCount() { return pc.nx * (pc.ny + 1) * pc.nz; }
 			int wCount() { return pc.nx * pc.ny * (pc.nz + 1); }
 			bool insideCell(ivec3 c) { return all(greaterThanEqual(c, ivec3(0))) && all(lessThan(c, ivec3(pc.nx,pc.ny,pc.nz))); }
 			int ci(ivec3 c) { return c.x + pc.nx * (c.y + pc.ny * c.z); }
+			bool insideCoarse(ivec3 c) { return all(greaterThanEqual(c, ivec3(0))) && all(lessThan(c, ivec3(coarseNx(),coarseNy(),coarseNz()))); }
+			int coarseCi(ivec3 c) { return c.x + coarseNx() * (c.y + coarseNy() * c.z); }
 			int ui(ivec3 f) { return f.x + (pc.nx + 1) * (f.y + pc.ny * f.z); }
 			int vi(ivec3 f) { return f.x + pc.nx * (f.y + (pc.ny + 1) * f.z); }
 			int wi(ivec3 f) { return f.x + pc.nx * (f.y + pc.ny * f.z); }
 			bool fluid(ivec3 c) { return insideCell(c) && solids.value[ci(c)] == 0u && markers.value[ci(c)] > 0u; }
 			bool solid(ivec3 c) { return !insideCell(c) || solids.value[ci(c)] != 0u; }
+			bool coarseFluid(ivec3 c) { return insideCoarse(c) && (coarseMask.value[coarseCi(c)] & 1u) != 0u; }
+			bool coarseSolid(ivec3 c) { return !insideCoarse(c) || (coarseMask.value[coarseCi(c)] & 2u) != 0u; }
 			bool validU(ivec3 f) { return f.x > 0 && f.x < pc.nx && f.y >= 0 && f.y < pc.ny && f.z >= 0 && f.z < pc.nz && !solid(f + ivec3(-1,0,0)) && !solid(f); }
 			bool validV(ivec3 f) { return f.y > 0 && f.y < pc.ny && f.x >= 0 && f.x < pc.nx && f.z >= 0 && f.z < pc.nz && !solid(f + ivec3(0,-1,0)) && !solid(f); }
 			bool validW(ivec3 f) { return f.z > 0 && f.z < pc.nz && f.x >= 0 && f.x < pc.nx && f.y >= 0 && f.y < pc.ny && !solid(f + ivec3(0,0,-1)) && !solid(f); }
@@ -169,6 +191,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 
 			void clearStage(uint id) {
 			    if(id<uint(cellCount())){density.value[id]=0.0;markers.value[id]=0u;pa.value[id]=0.0;pb.value[id]=0.0;divergence.value[id]=0.0;snapshot.value[id]=0u;}
+			    if(id<uint(coarseCount())){coarseRhs.value[id]=0.0;coarseMask.value[id]=0u;coarsePa.value[id]=0.0;coarsePb.value[id]=0.0;}
 			    if(id<uint(uCount())){u.value[id]=0.0;uw.value[id]=0.0;uold.value[id]=0.0;}
 			    if(id<uint(vCount())){v.value[id]=0.0;vw.value[id]=0.0;vold.value[id]=0.0;}
 			    if(id<uint(wCount())){w.value[id]=0.0;ww.value[id]=0.0;wold.value[id]=0.0;}
@@ -217,7 +240,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			    if(!fluid(c)){pa.value[id]=0.0;return;}if(((ix+iy+iz)&1)!=pc.flags)return;
 			    ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));
 			    float sum=0.0;float diagonal=0.0;for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(solid(nb))continue;diagonal+=1.0;if(fluid(nb))sum+=pa.value[ci(nb)];}
-			    float rhs=(pc.rho/pc.dt)*divergence.value[id];float next=diagonal>0.0?(sum-rhs*pc.h*pc.h)/diagonal:0.0;pa.value[id]=mix(pa.value[id],next,1.65);
+			    float rhs=(pc.rho/pc.dt)*divergence.value[id];float next=diagonal>0.0?(sum-rhs*pc.h*pc.h)/diagonal:0.0;pa.value[id]=mix(pa.value[id],next,pc.solver==4?1.0:1.65);
 			}
 
 			void pcgInitStage(uint id) {
@@ -240,6 +263,34 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			}
 			void pcgUpdatePStage(uint id) {
 			    if(id>=uint(cellCount()))return;float oldRr=uintBitsToFloat(diagnostics.value[8]);float newRr=uintBitsToFloat(diagnostics.value[10]);float beta=oldRr>1e-20?newRr/oldRr:0.0;uw.value[id]=(pc.solver==3?density.value[id]:pb.value[id])+beta*uw.value[id];
+			}
+
+			void mgRestrictStage(uint id) {
+			    if(id>=uint(coarseCount()))return;int ix=int(id)%coarseNx();int yz=int(id)/coarseNx();ivec3 cc=ivec3(ix,yz%coarseNy(),yz/coarseNy());
+			    float residualSum=0.0;int childCount=0;bool anyFluid=false;bool allSolid=true;
+			    ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));
+			    for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){
+			        ivec3 c=cc*2+ivec3(x,y,z);if(!insideCell(c))continue;childCount++;allSolid=allSolid&&solid(c);if(!fluid(c))continue;anyFluid=true;
+			        float sum=0.0;float diagonal=0.0;for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(solid(nb))continue;diagonal+=1.0;if(fluid(nb))sum+=pa.value[ci(nb)];}
+			        float rhs=-(pc.rho/pc.dt)*divergence.value[ci(c)]*pc.h*pc.h;residualSum+=rhs-(diagonal*pa.value[ci(c)]-sum);
+			    }
+			    coarseMask.value[id]=anyFluid?1u:(allSolid?2u:0u);coarseRhs.value[id]=anyFluid&&childCount>0?4.0*residualSum/float(childCount):0.0;coarsePa.value[id]=0.0;coarsePb.value[id]=0.0;
+			}
+			void mgCoarseJacobiStage(uint id) {
+			    if(id>=uint(coarseCount()))return;int ix=int(id)%coarseNx();int yz=int(id)/coarseNx();ivec3 c=ivec3(ix,yz%coarseNy(),yz/coarseNy());bool even=(pc.iteration&1)==0;
+			    if(!coarseFluid(c)){if(even)coarsePb.value[id]=0.0;else coarsePa.value[id]=0.0;return;}
+			    ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));float sum=0.0;float diagonal=0.0;
+			    for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(coarseSolid(nb))continue;diagonal+=1.0;if(coarseFluid(nb)){int ni=coarseCi(nb);sum+=even?coarsePa.value[ni]:coarsePb.value[ni];}}
+			    float next=diagonal>0.0?(sum+coarseRhs.value[id])/diagonal:0.0;if(even)coarsePb.value[id]=next;else coarsePa.value[id]=next;
+			}
+			float mgCoarsePressure(ivec3 c) {
+			    c=clamp(c,ivec3(0),ivec3(coarseNx()-1,coarseNy()-1,coarseNz()-1));if(!coarseFluid(c))return 0.0;return (pc.flags&1)==0?coarsePa.value[coarseCi(c)]:coarsePb.value[coarseCi(c)];
+			}
+			void mgProlongStage(uint id) {
+			    if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);if(!fluid(c))return;
+			    vec3 q=vec3(c)*0.5-vec3(0.25);ivec3 base=ivec3(floor(q));vec3 fraction=fract(q);float correction=0.0;
+			    for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 o=ivec3(x,y,z);vec3 weight=mix(vec3(1.0)-fraction,fraction,vec3(o));correction+=mgCoarsePressure(base+o)*weight.x*weight.y*weight.z;}
+			    pa.value[id]+=correction;
 			}
 
 			void projectStage(uint id) {
@@ -282,7 +333,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			    if(local==0u){diagnosticAdd(3,diagnosticSquared[0]);diagnosticAdd(4,diagnosticVolume[0]);diagnosticAdd(5,diagnosticWeightedX[0]);atomicMax(diagnostics.value[2],diagnosticPressure[0]);}
 			}
 
-			void main(){uint id=gl_GlobalInvocationID.x;if(pc.stage==0)clearStage(id);else if(pc.stage==1)p2gStage(id);else if(pc.stage==2)prepStage(id);else if(pc.stage==3)divergenceStage(id);else if(pc.stage==4)jacobiStage(id);else if(pc.stage==5)projectStage(id);else if(pc.stage==6)g2pStage(id);else if(pc.stage==7)advectStage(id);else if(pc.stage==8)snapshotStage(id);else if(pc.stage==9)clearSurfaceStage(id);else if(pc.stage==10)surfaceP2gStage(id);else if(pc.stage==11)diagnosticsStage(id);else if(pc.stage==12)rbgsStage(id);else if(pc.stage==13)pcgInitStage(id);else if(pc.stage==14)pcgClearStage(id);else if(pc.stage==15)pcgApplyStage(id);else if(pc.stage==16)pcgReduceStage(id);else if(pc.stage==17)pcgUpdateXrStage(id);else if(pc.stage==18)pcgUpdatePStage(id);}
+			void main(){uint id=gl_GlobalInvocationID.x;if(pc.stage==0)clearStage(id);else if(pc.stage==1)p2gStage(id);else if(pc.stage==2)prepStage(id);else if(pc.stage==3)divergenceStage(id);else if(pc.stage==4)jacobiStage(id);else if(pc.stage==5)projectStage(id);else if(pc.stage==6)g2pStage(id);else if(pc.stage==7)advectStage(id);else if(pc.stage==8)snapshotStage(id);else if(pc.stage==9)clearSurfaceStage(id);else if(pc.stage==10)surfaceP2gStage(id);else if(pc.stage==11)diagnosticsStage(id);else if(pc.stage==12)rbgsStage(id);else if(pc.stage==13)pcgInitStage(id);else if(pc.stage==14)pcgClearStage(id);else if(pc.stage==15)pcgApplyStage(id);else if(pc.stage==16)pcgReduceStage(id);else if(pc.stage==17)pcgUpdateXrStage(id);else if(pc.stage==18)pcgUpdatePStage(id);else if(pc.stage==19)mgRestrictStage(id);else if(pc.stage==20)mgCoarseJacobiStage(id);else if(pc.stage==21)mgProlongStage(id);}
 			""";
 
 	private final Config config;
@@ -568,7 +619,28 @@ final class VulkanFlipPipeline implements AutoCloseable {
 					computeBarrier(barrier);
 				}
 			}
+			case MULTIGRID_TWO_LEVEL -> {
+				for (int cycle = 0; cycle < config.pressureIterations(); cycle++) {
+					for (int sweep = 0; sweep < MG_PRE_SMOOTHING_SWEEPS; sweep++) smoothFineGrid(push, barrier, sweep);
+					dispatch(push, STAGE_MG_RESTRICT, cycle, coarseCellCount());
+					computeBarrier(barrier);
+					for (int iteration = 0; iteration < MG_COARSE_ITERATIONS; iteration++) {
+						dispatch(push, STAGE_MG_COARSE_JACOBI, iteration, coarseCellCount());
+						computeBarrier(barrier);
+					}
+					dispatch(push, STAGE_MG_PROLONG, cycle, MG_COARSE_ITERATIONS & 1, config.cellCount());
+					computeBarrier(barrier);
+					for (int sweep = 0; sweep < MG_POST_SMOOTHING_SWEEPS; sweep++) smoothFineGrid(push, barrier, sweep);
+				}
+			}
 		}
+	}
+
+	private void smoothFineGrid(ByteBuffer push, VkMemoryBarrier.Buffer barrier, int sweep) {
+		dispatch(push, STAGE_RBGS, sweep, 0, config.cellCount());
+		computeBarrier(barrier);
+		dispatch(push, STAGE_RBGS, sweep, 1, config.cellCount());
+		computeBarrier(barrier);
 	}
 
 	private void uploadInitialState() {
@@ -674,6 +746,9 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private static int groups(int workItems) { return Math.max(1, (workItems + LOCAL_SIZE - 1) / LOCAL_SIZE); }
 	private int maxFaceCount() { return Math.max(config.uCount(), Math.max(config.vCount(), config.wCount())); }
 	private int maxGridCount() { return Math.max(config.cellCount(), maxFaceCount()); }
+	private int coarseCellCount() {
+		return Math.multiplyExact(Math.multiplyExact((config.nx() + 1) / 2, (config.ny() + 1) / 2), (config.nz() + 1) / 2);
+	}
 
 	private void createInstanceAndDevice(int deviceIndex) {
 		try (MemoryStack stack = stackPush()) {
@@ -722,6 +797,8 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		addBuffer((long) config.cellCount() * Float.BYTES); addBuffer((long) config.cellCount() * Float.BYTES);
 		addBuffer((long) config.cellCount() * Float.BYTES); addBuffer((long) config.cellCount() * Integer.BYTES);
 		addBuffer((long) config.cellCount() * Integer.BYTES); addBuffer(16L * Integer.BYTES);
+		addBuffer((long) coarseCellCount() * Float.BYTES); addBuffer((long) coarseCellCount() * Integer.BYTES);
+		addBuffer((long) coarseCellCount() * Float.BYTES); addBuffer((long) coarseCellCount() * Float.BYTES);
 		if (buffers.size() != BUFFER_COUNT) throw new IllegalStateException("Wrong GPU buffer count");
 		if (memoryMode == MemoryMode.DEVICE_LOCAL_STAGING) {
 			long transferBytes = 0L;
@@ -884,7 +961,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	}
 	enum PressureSolver {
 		JACOBI(0, "Jacobi"), RBGS_SOR(1, "RBGS/SOR(omega=1.65)"), PCG(2, "PCG(identity)"),
-		PCG_DIAGONAL(3, "PCG(diagonal)");
+		PCG_DIAGONAL(3, "PCG(diagonal)"), MULTIGRID_TWO_LEVEL(4, "MG2(V-cycle 2+24+3)");
 		private final int code;
 		private final String label;
 		PressureSolver(int code, String label) { this.code = code; this.label = label; }
