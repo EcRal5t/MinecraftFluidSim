@@ -74,6 +74,17 @@ tasks.register("runVariableDensityFaceCoefficientValidation", JavaExec) {
 	mainClass = "com.example.fluid.VariableDensityFaceCoefficientValidation"
 }
 
+tasks.register("runFluidRegionManagerValidation", JavaExec) {
+	group = "verification"
+	description = "Runs the in-memory fluid-region admission, selection and atomic-replacement regression."
+	dependsOn tasks.named("testClasses")
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = "com.example.simulation.FluidRegionManagerValidation"
+	def validationWorkDir = layout.buildDirectory.dir("fluid-region-validation-work").get().asFile
+	workingDir validationWorkDir
+	doFirst { validationWorkDir.mkdirs() }
+}
+
 java {
 	// Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
 	// if it is present.

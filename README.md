@@ -2,7 +2,7 @@
 
 A Minecraft Java 26.2 Fabric prototype for bounded, pressure-based 3D water simulation.
 
-This version is a safe test harness, not yet a global replacement for vanilla water. It owns one temporary server-side 3D PIC/FLIP domain, sends reconstructed density and collision snapshots to clients, and rebuilds a translucent isosurface every frame. It does not persist simulation data or modify world blocks automatically.
+This version is a safe test harness, not yet a global replacement for vanilla water. Its new in-memory `FluidRegionManager` currently exposes only one selected temporary server-side 3D PIC/FLIP region, sends reconstructed density and collision snapshots to clients, and rebuilds a translucent isosurface every frame. Region replacement is budget-checked before the old region is removed, but multi-region ticking, controller discovery, network region ids and persistence are not enabled yet. It does not persist simulation data or modify world blocks automatically.
 
 ## In-game commands
 

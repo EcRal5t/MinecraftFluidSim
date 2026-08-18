@@ -489,6 +489,8 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 - 建立可配置的单区域 marker/cell 上限和多区域总预算、状态统计和管理命令；预算拒绝必须报告所需量、单域上限和服务器剩余额度；
 - 区域墙必须可见/可调试，不再有未说明的不可见边界。
 
+当前状态（2026-08-19，M2 前置）：`FluidRegion` 已承接旧服务的 domain/维度/原点和容量预留，纯内存 `FluidRegionManager` 已实现登记、选择、移除、原子替换以及 required/per-region/remaining 预算拒绝。拒绝候选不会移除旧区域，也不会触碰其 marker 或精确 `particleVolume`。当前 `FluidSimulationService` 仍以一个 `24×16×24` 区域的兼容额度运行，调度、碰撞、实体力、快照和 takeover 编排仍保持原行为；尚未开放多区域 tick、控制器、chunk ticket、协议或任何 `region-state` 存档。`reservedMarkerCapacity` 目前只做接纳预留，尚未成为 `FlipFluidDomain` 所有 marker 创建路径的运行时硬上限；真正开放多区域前必须补齐该 enforcement。独立自动门覆盖接纳、选择、拒绝不变性和容量统计，takeover journal 16 场景与活动 FLIP 门继续通过。
+
 完成条件：反复休眠/唤醒/重启后水量不变；方块更新和实体进入可靠唤醒；任一关联 chunk 卸载时不发生半区域步进；未加载区不占粒子内存；协议不兼容能被明确拒绝而非错位解码。
 
 ### M2.5：自由表面基础与守恒 reseeding
