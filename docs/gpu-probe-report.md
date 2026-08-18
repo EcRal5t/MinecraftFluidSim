@@ -1,8 +1,8 @@
 # M1 Windows/NVIDIA Vulkan GPU probe report
 
-Date: 2026-08-19. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.4. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
+Date: 2026-08-19. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.5. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
 
-This is an M1-C correctness, data-movement and pressure-algorithm probe, not the production GPU backend and not the completion of the multigrid/preconditioning gate. It has no takeover code, does not read world blocks or collision state, does not write a save, and owns no chunk tickets. The main `realwater` Mod remains the CPU-authoritative implementation whether the optional probe jar is installed or not.
+This is an M1-D correctness, data-movement and pressure-algorithm probe, not the production GPU backend and not the completion of the multigrid/strong-preconditioning gate. It has no takeover code, does not read world blocks or collision state, does not write a save, and owns no chunk tickets. The main `realwater` Mod remains the CPU-authoritative implementation whether the optional probe jar is installed or not.
 
 ## Layer boundary
 
@@ -40,7 +40,7 @@ The same dam-break input is also run through device-local and persistently mappe
 
 ## Pressure solver comparison
 
-Probe 0.1.4 adds two experimental solvers without changing the Poisson matrix, fluid-cell classification or projection: red-black Gauss-Seidel with SOR `omega=1.65`, and a conjugate-gradient path expressed as PCG with the identity preconditioner. PCG reuses post-grid-prep face-weight buffers for direction and matrix-vector scratch, performs workgroup reductions before bounded global atomic accumulation, and never reads an iteration scalar back to the CPU. Jacobi remains the game-demo default.
+Probe 0.1.4 adds two experimental solvers without changing the Poisson matrix, fluid-cell classification or projection: red-black Gauss-Seidel with SOR `omega=1.65`, and a conjugate-gradient path expressed as PCG with the identity preconditioner. Probe 0.1.5 adds a diagonal/Jacobi-preconditioned PCG comparison. PCG reuses post-grid-prep face-weight buffers for direction and matrix-vector scratch; the diagonal variant temporarily reuses the smooth-density buffer for `z=M^-1r`, after density has finished its physical role and before post-advection surface density is rebuilt. Both perform workgroup reductions before bounded global atomic accumulation and never read an iteration scalar back to the CPU. Jacobi remains the game-demo default.
 
 The fixed current-domain first step gives this maximum-divergence convergence curve on the RTX 5070 Ti. Each point starts from the identical particle state; time is the complete physical step including the 64-byte diagnostic copy.
 
@@ -49,10 +49,11 @@ The fixed current-domain first step gives this maximum-divergence convergence cu
 | Jacobi | 32 / 64 / 96 | 0.223824 / 0.145660 / 0.103966 | 0.408 / 0.660 / 0.787 ms |
 | RBGS/SOR | 16 / 32 / 48 sweeps | 0.378236 / 0.105281 / 0.028933 | 0.424 / 0.654 / 0.875 ms |
 | PCG, identity preconditioner | 16 / 24 / 32 | 0.209116 / 0.017929 / 0.001239 | 1.214 / 1.388 / 1.676 ms |
+| PCG, diagonal preconditioner | 16 / 24 / 32 | 0.940274 / 0.031761 / 0.005039 | 0.856 / 1.035 / 1.351 ms |
 
-Across six evolving steps, Jacobi 96, RBGS/SOR 48 and PCG 32 averaged 0.872, 0.860 and 1.418 ms respectively; their step-six maximum divergences were 0.237851, 0.056668 and 0.011747. All retained exactly 2,592.000 solver-cell volumes. Thus RBGS/SOR is the best small-domain cost/quality candidate, while unpreconditioned PCG buys another order of magnitude in residual at higher dispatch/reduction cost.
+Across six evolving steps, Jacobi 96, RBGS/SOR 48, identity-PCG 32 and diagonal-PCG 32 produced step-six maximum divergences of approximately 0.23785, 0.05666, 0.01202 and 0.01768. All retained exactly 2,592.000 solver-cell volumes. Thus RBGS/SOR is the best small-domain cost/quality candidate, while identity-PCG buys another order of magnitude in residual at higher dispatch/reduction cost. The diagonal preconditioner does not improve this matrix.
 
-That ordering does not scale unchanged. In the 64³ grid partial-dam case on the RTX 5070 Ti, Jacobi 64 averaged 2.006 ms and reduced the identical first-step divergence from 0.98100 to 0.16684; RBGS/SOR 64 averaged 2.581 ms and reached 0.26758; PCG 64 averaged 24.662 ms and reached 0.16784. On the RTX 4060 Ti the respective averages were 2.663, 3.935 and 18.043 ms, with first-step results 0.16684, 0.26758 and 0.18939. Identity-PCG therefore fails the large-domain cost gate, and RBGS/SOR does not retain its small-domain advantage. The evidence points to a real preconditioner or multigrid hierarchy rather than selecting either experiment as the new default.
+That ordering does not scale unchanged. In a representative 64³ grid partial-dam run on the RTX 5070 Ti, Jacobi 64 averaged 2.441 ms and reduced the identical first-step divergence from 0.98100 to 0.16684; RBGS/SOR 64 averaged 2.587 ms and reached 0.26758; identity-PCG 64 averaged 25.922 ms and reached 0.16644; diagonal-PCG 64 averaged 25.990 ms and reached 0.17082. By step four, diagonal-PCG also left more divergence than identity-PCG, 0.34753 versus 0.22504. Identity-PCG therefore fails the large-domain cost gate, diagonal preconditioning adds no benefit, and RBGS/SOR does not retain its small-domain advantage. The evidence points to multigrid or a substantially stronger preconditioner rather than selecting any experiment as the new default.
 
 ## Throughput and readback
 
@@ -82,7 +83,7 @@ The optional `realwater-gpu-probe` jar adds:
 - `/realwatergpu probe [device]`: run the windowless Vulkan/Shaderc/VMA capability check.
 - `/realwatergpu demo [device]`: create a paused visual dam-break about nine blocks ahead. GPU initialization failure creates an isolated CPU fallback demo; it never changes the main Mod backend.
 - `/realwatergpu step [1-20]`, `run`, `pause`, `status`: control and inspect the independent demo.
-- `/realwatergpu benchmark [12|32] [device] [jacobi|rbgs|pcg]`: run the current-domain or real 32³-block benchmark with an optional experimental pressure solver. Omission keeps Jacobi. The 32 case intentionally stalls the server thread for several seconds and never accesses world data.
+- `/realwatergpu benchmark [12|32] [device] [jacobi|rbgs|pcg|pcgdiag]`: run the current-domain or real 32³-block benchmark with an optional experimental pressure solver. Omission keeps Jacobi. The 32 case intentionally stalls the server thread for several seconds and never accesses world data.
 - `/realwatergpu remove`: free probe resources and clear the debug snapshot.
 
 The main `/realwater` domain and the probe share the existing debug snapshot channel, so the probe refuses creation while a main domain exists and auto-pauses if one appears later.
@@ -93,7 +94,7 @@ All handled probe commands and their chat/detail output are appended as UTF-8 bl
 
 - Add a dedicated-server classpath smoke. Integrated-server device-local visualization, paused multi-step control, continuous run/pause, status, both benchmark sizes, command transcript output and cleanup have passed; forced CPU fallback passed on 0.1.1.
 - Replace the single reusable staging buffer and CPU wall-clock timing with bounded ring staging and Vulkan timestamp queries before calling the layout production-ready. Full-state readback remains diagnostic-only.
-- Implement and measure a real preconditioner or multigrid hierarchy. Identity-PCG and RBGS/SOR now have residual curves and small/large-domain timing evidence, and neither passed the large-domain replacement gate; Jacobi remains the correctness/default baseline.
+- Implement and measure a multigrid hierarchy or substantially stronger preconditioner. Identity-PCG, diagonal-PCG and RBGS/SOR now have residual curves and small/large-domain timing evidence, and none passed the large-domain replacement gate; Jacobi remains the correctness/default baseline.
 - Complete the CPU variable-density face-coefficient experiment before M3 and measure CPU/GPU break-even across more occupancies.
 - Add a CPU-readable checkpoint and recovery path for runtime device loss. The main Mod already remains CPU-only; the optional visual probe currently pauses on a step failure rather than pretending incomplete buffers are valid.
 

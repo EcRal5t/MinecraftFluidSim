@@ -120,8 +120,8 @@ public final class GpuFlipProbeValidation {
 	private static String validatePressureSolvers(int device) {
 		List<PressureResult> results = new ArrayList<>();
 		for (VulkanFlipPipeline.PressureSolver solver : VulkanFlipPipeline.PressureSolver.values()) {
-			int iterations = switch (solver) { case JACOBI -> 96; case RBGS_SOR -> 48; case PCG -> 32; };
-			float maximumRatio = switch (solver) { case JACOBI -> 0.25F; case RBGS_SOR -> 0.08F; case PCG -> 0.02F; };
+			int iterations = switch (solver) { case JACOBI -> 96; case RBGS_SOR -> 48; case PCG, PCG_DIAGONAL -> 32; };
+			float maximumRatio = switch (solver) { case JACOBI -> 0.25F; case RBGS_SOR -> 0.08F; case PCG, PCG_DIAGONAL -> 0.02F; };
 			VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(24, 16, 24, CELL_SIZE, DT, GRAVITY, RHO,
 					iterations, 24 * 16 * 24 * 8);
 			try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,
@@ -150,7 +150,7 @@ public final class GpuFlipProbeValidation {
 			int[] iterationCounts = switch (solver) {
 				case JACOBI -> new int[] {32, 64, 96};
 				case RBGS_SOR -> new int[] {16, 32, 48};
-				case PCG -> new int[] {16, 24, 32};
+				case PCG, PCG_DIAGONAL -> new int[] {16, 24, 32};
 			};
 			List<CurvePoint> points = new ArrayList<>();
 			for (int iterations : iterationCounts) {
@@ -238,7 +238,7 @@ public final class GpuFlipProbeValidation {
 		int grid = 64, capacity = 32 * 32 * 32 * 64;
 		List<String> results = new ArrayList<>();
 		for (VulkanFlipPipeline.PressureSolver solver : VulkanFlipPipeline.PressureSolver.values()) {
-			int iterations = switch (solver) { case JACOBI -> 64; case RBGS_SOR -> 64; case PCG -> 64; };
+			int iterations = switch (solver) { case JACOBI -> 64; case RBGS_SOR -> 64; case PCG, PCG_DIAGONAL -> 64; };
 			VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(grid, grid, grid, CELL_SIZE, DT, GRAVITY, RHO,
 					iterations, capacity);
 			try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,

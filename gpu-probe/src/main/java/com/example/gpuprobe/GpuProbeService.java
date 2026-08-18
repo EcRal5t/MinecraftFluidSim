@@ -186,7 +186,7 @@ final class GpuProbeService {
 		int pressureIterations = switch (pressureSolver) {
 			case JACOBI -> large ? 64 : PRESSURE_ITERATIONS;
 			case RBGS_SOR -> large ? 64 : 48;
-			case PCG -> large ? 64 : 32;
+			case PCG, PCG_DIAGONAL -> large ? 64 : 32;
 		};
 		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(grid, ny, grid, H, DT, large ? 0.0F : GRAVITY, RHO,
 				pressureIterations, particles);

@@ -158,6 +158,10 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			    if(!fluid(c)) return 0.0;
 			    int i=ci(c); if(pc.solver!=0)return pa.value[i];return (pc.pressureIterations & 1)==0 ? pa.value[i] : pb.value[i];
 			}
+			float matrixDiagonal(ivec3 c) {
+			    ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));float diagonal=0.0;
+			    for(int n=0;n<6;n++)if(!solid(c+offsets[n]))diagonal+=1.0;return diagonal;
+			}
 			void diagnosticAdd(uint index,float amount) {
 			    uint previous=diagnostics.value[index];
 			    for(;;){uint next=floatBitsToUint(uintBitsToFloat(previous)+amount);uint observed=atomicCompSwap(diagnostics.value[index],previous,next);if(observed==previous)return;previous=observed;}
@@ -217,7 +221,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			}
 
 			void pcgInitStage(uint id) {
-			    if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);float rhs=fluid(c)?-(pc.rho/pc.dt)*divergence.value[id]*pc.h*pc.h:0.0;pa.value[id]=0.0;pb.value[id]=rhs;uw.value[id]=rhs;vw.value[id]=0.0;
+			    if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);float rhs=fluid(c)?-(pc.rho/pc.dt)*divergence.value[id]*pc.h*pc.h:0.0;float diagonal=pc.solver==3?matrixDiagonal(c):1.0;float z=diagonal>0.0?rhs/diagonal:0.0;pa.value[id]=0.0;pb.value[id]=rhs;density.value[id]=z;uw.value[id]=pc.solver==3?z:rhs;vw.value[id]=0.0;
 			}
 			void pcgClearStage(uint id) { if(id==0u){if(pc.flags==0){diagnostics.value[8]=0u;diagnostics.value[9]=0u;}diagnostics.value[10]=0u;} }
 			void pcgApplyStage(uint id) {
@@ -226,15 +230,16 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			    for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(solid(nb))continue;diagonal+=1.0;if(fluid(nb))sum+=uw.value[ci(nb)];}vw.value[id]=diagonal*uw.value[id]-sum;
 			}
 			void pcgReduceStage(uint id) {
-			    uint local=gl_LocalInvocationID.x;float first=0.0;float second=0.0;if(id<uint(cellCount())){float r=pb.value[id];first=r*r;if(pc.flags==0)second=uw.value[id]*vw.value[id];}
+			    uint local=gl_LocalInvocationID.x;float first=0.0;float second=0.0;if(id<uint(cellCount())){float r=pb.value[id];first=r*(pc.solver==3?density.value[id]:r);if(pc.flags==0)second=uw.value[id]*vw.value[id];}
 			    diagnosticSquared[local]=first;diagnosticVolume[local]=second;barrier();for(uint stride=128u;stride>0u;stride>>=1u){if(local<stride){diagnosticSquared[local]+=diagnosticSquared[local+stride];diagnosticVolume[local]+=diagnosticVolume[local+stride];}barrier();}
 			    if(local==0u){diagnosticAdd(pc.flags==0?8u:10u,diagnosticSquared[0]);if(pc.flags==0)diagnosticAdd(9u,diagnosticVolume[0]);}
 			}
 			void pcgUpdateXrStage(uint id) {
 			    if(id>=uint(cellCount()))return;float rr=uintBitsToFloat(diagnostics.value[8]);float pap=uintBitsToFloat(diagnostics.value[9]);float alpha=abs(pap)>1e-20?rr/pap:0.0;pa.value[id]+=alpha*uw.value[id];pb.value[id]-=alpha*vw.value[id];
+			    if(pc.solver==3){int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);float diagonal=matrixDiagonal(c);density.value[id]=fluid(c)&&diagonal>0.0?pb.value[id]/diagonal:0.0;}
 			}
 			void pcgUpdatePStage(uint id) {
-			    if(id>=uint(cellCount()))return;float oldRr=uintBitsToFloat(diagnostics.value[8]);float newRr=uintBitsToFloat(diagnostics.value[10]);float beta=oldRr>1e-20?newRr/oldRr:0.0;uw.value[id]=pb.value[id]+beta*uw.value[id];
+			    if(id>=uint(cellCount()))return;float oldRr=uintBitsToFloat(diagnostics.value[8]);float newRr=uintBitsToFloat(diagnostics.value[10]);float beta=oldRr>1e-20?newRr/oldRr:0.0;uw.value[id]=(pc.solver==3?density.value[id]:pb.value[id])+beta*uw.value[id];
 			}
 
 			void projectStage(uint id) {
@@ -543,7 +548,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 					computeBarrier(barrier);
 				}
 			}
-			case PCG -> {
+			case PCG, PCG_DIAGONAL -> {
 				dispatch(push, STAGE_PCG_INIT, 0, config.cellCount());
 				computeBarrier(barrier);
 				for (int iteration = 0; iteration < config.pressureIterations(); iteration++) {
@@ -878,7 +883,8 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		String label() { return label; }
 	}
 	enum PressureSolver {
-		JACOBI(0, "Jacobi"), RBGS_SOR(1, "RBGS/SOR(omega=1.65)"), PCG(2, "PCG(identity)");
+		JACOBI(0, "Jacobi"), RBGS_SOR(1, "RBGS/SOR(omega=1.65)"), PCG(2, "PCG(identity)"),
+		PCG_DIAGONAL(3, "PCG(diagonal)");
 		private final int code;
 		private final String label;
 		PressureSolver(int code, String label) { this.code = code; this.label = label; }

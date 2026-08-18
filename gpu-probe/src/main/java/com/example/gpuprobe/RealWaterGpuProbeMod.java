@@ -117,9 +117,10 @@ public final class RealWaterGpuProbeMod implements ModInitializer {
 			case "jacobi" -> VulkanFlipPipeline.PressureSolver.JACOBI;
 			case "rbgs", "sor", "rbgs_sor" -> VulkanFlipPipeline.PressureSolver.RBGS_SOR;
 			case "pcg" -> VulkanFlipPipeline.PressureSolver.PCG;
+			case "pcgdiag", "pcg_diagonal", "diagonal" -> VulkanFlipPipeline.PressureSolver.PCG_DIAGONAL;
 			default -> null;
 		};
-		if (solver == null) return fail(source, "pressure solver 只支持 jacobi、rbgs 或 pcg");
+		if (solver == null) return fail(source, "pressure solver 只支持 jacobi、rbgs、pcg 或 pcgdiag");
 		return benchmark(source, blocks, device, solver);
 	}
 
