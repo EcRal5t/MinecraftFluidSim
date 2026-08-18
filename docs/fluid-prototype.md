@@ -23,6 +23,10 @@ The current implementation keeps its numerical core independent from Minecraft a
 
 This is a direct three-dimensional adaptation of the reference project's PIC/FLIP cycle: clear grid, P2G, forces, divergence/pressure, projection, G2P, and particle advection. It does not add wall-wetting, corner attraction, or forced surface-leveling rules. The earlier VOF solver remains only as a standalone comparison and is no longer selected by the Minecraft service.
 
+## Variable-density coefficient experiment
+
+The active Minecraft solver remains constant-density. A separate 12-cell CPU finite-volume column now compares three future M3 face coefficients for `div((1/rho) grad(p))`: arithmetic averaging of `1/rho`, inversion after averaging `rho`, and a conservative coefficient weighted by the reconstructed interface distance. The gate covers 1:1, water/oil 1.25:1, and mercury/water 13.6:1 ratios at interface fractions 0.25, 0.50, and 0.75. All candidates keep the matrix symmetric positive definite and converge in 12 diagonal-PCG iterations; only the distance-weighted coefficient reproduces the discrete hydrostatic pressure and eliminates interface parasitic velocity for every tested fraction. It is the selected integration candidate, not an active solver change: M2.5 must still provide a trustworthy fractional interface distance, and M3 must validate the result in 3D connected columns before adoption.
+
 ## Manual validation
 
 The validation programs have no external test dependency. With a Java 25+ JDK:
@@ -35,6 +39,12 @@ javac --release 25 -Xlint:all -d $out `
   'src\main\java\com\example\fluid\FlipFluidDomain.java' `
   'src\test\java\com\example\fluid\FlipFluidDomainValidation.java'
 java -ea -cp $out com.example.fluid.FlipFluidDomainValidation
+```
+
+Run the isolated variable-density selection gate through Gradle:
+
+```powershell
+./gradlew.bat runVariableDensityFaceCoefficientValidation --offline --no-daemon
 ```
 
 ## Next integration boundary

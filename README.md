@@ -51,6 +51,8 @@ The separate `realwater-gpu-probe` jar is an M1 development probe, not a replace
 
 See [docs/gpu-probe-report.md](docs/gpu-probe-report.md) for the two-GPU capability results, CPU/GPU correctness tolerances, static-column validation, the real 2,097,152-marker benchmark, readback measurements, commands, and remaining M1 work.
 
+The standalone CPU M1 coefficient gate has selected an interface-distance-weighted conservative `1/rho` face coefficient for future variable-density work. This is an experimental M3 input, not an integration into the current constant-density `FlipFluidDomain`; fractional interface reconstruction and 3D connected-column validation remain prerequisites.
+
 ## Build
 
 Minecraft 26.2 targets Java 25. On this machine the project is built with the installed JDK 26 while compiling to Java 25 bytecode:

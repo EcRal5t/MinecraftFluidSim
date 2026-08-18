@@ -108,6 +108,8 @@ The 0.1.12 packaged jar contains the extracted shader and both validation classe
 
 Probe 0.1.13 replaces the pipeline's single command buffer, single universal staging buffer and per-step queue-idle wait with a fixed three-slot submission ring. Each ordinary step owns its command pool/buffer, fence, two timestamp queries and 64-byte diagnostic staging block until completion; a daemon completion worker waits fences and decodes results in queue order. Reuse waits only the selected slot, so memory is bounded while server ticks may submit ahead. Initialization, compact snapshots and explicit full-state diagnostics use one separate serialized bulk staging buffer after the ring is settled. Automated validation asserts the exact three slots, 192 regular staging bytes, three outstanding submissions, finite per-slot timestamps and unchanged marker-volume diagnostics. The RTX 5070 Ti full suite and RTX 4060 Ti `--skip-large` lifecycle suite both passed. The 64³ full-water gate retained all 2,097,152 markers and 262,144.0 solver-cell volumes at 4.777 ms GPU / 4.913 ms throughput wall. No shader, physical equation, pressure solver, marker classification, collision rule, rendering field, world access or save format changed.
 
+The companion CPU variable-density face-coefficient gate is now complete. Its isolated 12-cell column compared `average(1/rho)`, `1/average(rho)` and an interface-distance conservative coefficient at 1:1, water/oil 1.25:1 and mercury/water 13.6:1 density ratios. Every assembled matrix was symmetric positive definite and each diagonal-PCG solve converged in 12 iterations with residual RMS at or below `2.36e-14`. The distance-weighted candidate's aggregate hydrostatic pressure-plus-parasitic-velocity score was `3.48e-15`, versus `1.08` for `1/average(rho)` and `9.12` for `average(1/rho)`. It is selected for later M3 integration, contingent on M2.5 reconstructing the interface fraction; it does not change the constant-density CPU domain or the GPU shader.
+
 ## Commands
 
 The optional `realwater-gpu-probe` jar adds:
@@ -126,7 +128,7 @@ All handled probe commands and their chat/detail output are appended as UTF-8 bl
 ## Remaining M1 work
 
 - The 0.1.8 integrated-server `worlddemo` creation, stepping, continuous scheduling, status and cleanup smoke has passed. If a visual mismatch is observed, capture a screenshot of the relevant partial shape; the optional after-capture block-edit freeze observation is still useful but is not required for the already-enforced immutable in-memory mask. Probe 0.1.9 MGH passed both packaged benchmark sizes, probe 0.1.10 passed the corrected `/realwatergpu probe 1` form, and probe 0.1.11 passed packaged pre-step/stepped status, timestamp/wall benchmark and cleanup. Jacobi remains the generated-demo correctness/default baseline and MG2 remains the read-only `worlddemo` backend.
-- Complete the CPU variable-density face-coefficient experiment before M3 and measure CPU/GPU break-even across more occupancies.
+- The CPU variable-density face-coefficient experiment is complete; the interface-distance conservative coefficient is the M3 candidate. Continue measuring CPU/GPU break-even across more occupancies without treating this isolated coefficient gate as active multi-material integration.
 - Add a CPU-readable checkpoint and recovery path for runtime device loss. The main Mod already remains CPU-only; the optional visual probe currently pauses on a step failure rather than pretending incomplete buffers are valid.
 
 Run the automated suite with the Minecraft native directory:

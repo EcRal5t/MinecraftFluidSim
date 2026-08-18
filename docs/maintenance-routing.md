@@ -18,6 +18,7 @@
 | 初始化、tick、启动/停止恢复、网络注册 | `src/main/java/com/example/RealWaterMod.java` | 服务生命周期与 payload 注册 |
 | 单域生命周期、世界采样、调度、实体力、快照 | `src/main/java/com/example/simulation/FluidSimulationService.java` | 域尺寸/频率变化同时检查 payload、renderer 与 benchmark |
 | 活动 PIC/FLIP 核心 | `src/main/java/com/example/fluid/FlipFluidDomain.java` | P2G、PCG、投影、90/10 G2P、逐轴碰撞；Minecraft 不使用旧 `FluidDomain` |
+| CPU 变密度面系数实验 | `src/test/java/com/example/fluid/VariableDensityPressureExperiment.java` | 门在 `VariableDensityFaceCoefficientValidation.java`；它只选 M3 候选，尚未接入活动核心 |
 | solver 参数 | `src/main/java/com/example/fluid/FluidSolverConfig.java` | 改 CFL、压力容差或 FLIP 比例时跑长期数值门 |
 | takeover 编排 | `TakeoverTransaction.java`、`TakeoverBackupStore.java` | journal/WARNING 发布完成前禁止修改世界 |
 | takeover codec 与原子文件 | `TakeoverJournalCodec.java`、`TakeoverJournalFiles.java` | v1 必须继续可读；未知/损坏/恢复失败状态必须锁住新 takeover |
@@ -59,7 +60,8 @@
 | 改动范围 | 默认验证 | 何时升级 |
 |---|---|---|
 | 文档、路由、纯日志文字 | `compileJava` 或无需运行时门 | 命令树/资源打包变化才跑专服或进服 |
-| CPU 物理/碰撞/调度 | clean build + `FlipFluidDomainValidation`；表面相关再跑 surface diagnostic | takeover 改动另跑 16 场景；客户端协议改动再进服 |
+| CPU 变密度面系数实验 | `runVariableDensityFaceCoefficientValidation` | 将来接入活动 3D 核心时再升级到 `FlipFluidDomainValidation`、M2.5 分数界面门和 M3 连通器门 |
+| CPU 物理/碰撞/调度 | `compileTestJava` + `FlipFluidDomainValidation`；表面相关再跑 surface diagnostic | takeover 改动另跑 16 场景；只有请求进服验证或发布时才 clean build |
 | takeover/codec/文件事务 | `runTakeoverJournalValidation` | 真实世界修改只按 smoke 文档并保留备份 |
 | 指令 transcript | `runCommandAuditValidation` | Fabric 命令包装变化再进服 |
 | GPU shader、dispatch、压力数值 | RTX 5070 Ti `--skip-large` 快速门 | hierarchy、容量、buffer 布局或 64³ 性能变化才跑完整 device 0 |
@@ -77,12 +79,13 @@ GPU 快速门：
 CPU 与事务入口：
 
 ```powershell
+./gradlew.bat runVariableDensityFaceCoefficientValidation --offline --no-daemon
 ./gradlew.bat runTakeoverJournalValidation runCommandAuditValidation --offline --no-daemon
 & "$env:JAVA_HOME\bin\java.exe" -ea -cp 'build\classes\java\main;build\classes\java\test' com.example.fluid.FlipFluidDomainValidation
 & "$env:JAVA_HOME\bin\java.exe" -ea -cp 'build\classes\java\main;build\classes\java\test' com.example.fluid.FlipFluidSurfaceDiagnostic
 ```
 
-发布前 clean 构建：
+需要进服验证或发布时的 clean 构建：
 
 ```powershell
 $env:JAVA_HOME = 'D:\ProgramFiles\BienCreng\jdk-26.0.2'
@@ -93,8 +96,9 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 ## 部署边界
 
 - mods：`Z:\Games\Minecraft\Pure\.minecraft\versions\26.2-Fabric 0.19.3\mods`。
+- 开发阶段优先跑定向自动门；只有自动门覆盖不了、确实需要用户进游戏验证时才做 Mod 构建与部署，并同时给出待验证指令。
 - 先检查 `javaw.exe/java.exe` 命令行；包含 `26.2-Fabric 0.19.3` 时请用户关闭，绝不代为结束进程。
 - 同一 Mod id 只启用一个 jar；旧版改为 `.disabled`，复制后比较 SHA-256。
 - 请求人工 smoke 只针对自动门无法覆盖的打包命令、真实渲染、真实碰撞采样或世界事务。
 
-bounded ring staging 已在 probe 0.1.13 完成：普通 step 使用三个独立的 command/fence/query/64 B staging 槽，不再逐步 `vkQueueWaitIdle`；显式 snapshot/full-state 读回先收敛 ring，再走串行 bulk staging。下一项 M1 工作是 CPU 变密度面系数候选实验；运行时设备丢失的 CPU 可读检查点仍未完成。M0 强制中断恢复和邻接更新人工门仍按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 执行。
+bounded ring staging 已在 probe 0.1.13 完成：普通 step 使用三个独立的 command/fence/query/64 B staging 槽，不再逐步 `vkQueueWaitIdle`；显式 snapshot/full-state 读回先收敛 ring，再走串行 bulk staging。CPU 变密度面系数实验已选出按界面距离加权的守恒通量候选，但尚未接入活动求解器；下一项 M1 工作是运行时设备丢失的 CPU 可读检查点。M0 强制中断恢复和邻接更新人工门仍按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 执行。
