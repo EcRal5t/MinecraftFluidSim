@@ -78,7 +78,7 @@ public final class RealWaterGpuProbeMod implements ModInitializer {
 		ServerPlayer player = source.getPlayerOrException();
 		GpuProbeService.CreationResult result = GpuProbeService.get(source.getServer()).createDemo(player, deviceIndex);
 		if (!result.created()) return fail(source, result.detail());
-		String backend = result.gpu() ? "Vulkan GPU（device-local + 3-slot staging ring）" : "CPU fallback（" + result.detail() + "）";
+		String backend = result.gpu() ? "Vulkan GPU（device-local + 3-slot staging ring + CPU checkpoint）" : "CPU fallback（" + result.detail() + "）";
 		return succeed(source, "已创建暂停的独立 24×16×24 溃坝 probe；backend " + backend
 				+ "；不读取碰撞、不修改方块或存档；使用 /realwatergpu step 或 /realwatergpu run", 1);
 	}
@@ -88,7 +88,7 @@ public final class RealWaterGpuProbeMod implements ModInitializer {
 		ServerPlayer player = source.getPlayerOrException();
 		GpuProbeService.CreationResult result = GpuProbeService.get(source.getServer()).createWorldDemo(player, deviceIndex);
 		if (!result.created()) return fail(source, result.detail());
-		String backend = result.gpu() ? "Vulkan GPU（device-local + 3-slot staging ring + MG2）" : "CPU fallback（" + result.detail() + "）";
+		String backend = result.gpu() ? "Vulkan GPU（device-local + 3-slot staging ring + MG2 + CPU checkpoint）" : "CPU fallback（" + result.detail() + "）";
 		return succeed(source, "已创建暂停的 24×16×24 只读世界碰撞 probe；backend " + backend
 				+ "；仅捕获一次已加载区块碰撞并冻结使用，不申请区块票、不修改方块或存档；"
 				+ GpuProbeService.get(source.getServer()).status(source.getServer()), 1);

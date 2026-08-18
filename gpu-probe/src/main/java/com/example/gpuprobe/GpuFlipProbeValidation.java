@@ -28,6 +28,7 @@ public final class GpuFlipProbeValidation {
 		results.add(validateProbeCommandTree());
 		results.add(validateTimestampQueries(device));
 		results.add(validateBoundedSubmissionRing(device));
+		results.add(validateCpuReadableCheckpoint(device));
 		results.add(validateManualStepScheduling());
 		results.add(validateDamBreak(device));
 		results.add(validateHydrostaticColumn(device));
@@ -101,6 +102,55 @@ public final class GpuFlipProbeValidation {
 			for (int step = 0; step < gpu.submissionRingSize(); step++) gpu.step();
 			return result;
 		}
+	}
+
+	private static String validateCpuReadableCheckpoint(int device) {
+		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(24, 16, 24, CELL_SIZE, DT, GRAVITY, RHO,
+				2, 24 * 16 * 24 * 8);
+		StringBuilder modes = new StringBuilder();
+		for (VulkanFlipPipeline.MemoryMode mode : VulkanFlipPipeline.MemoryMode.values()) {
+			try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device, mode,
+					VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL)) {
+				gpu.initializeObstacleDamBreak();
+				for (int step = 0; step < 4; step++) gpu.step();
+				VulkanFlipPipeline.Diagnostics diagnostics = gpu.diagnostics();
+				GpuProbeCheckpoint checkpoint = gpu.captureCheckpoint(4L);
+				require(checkpoint.generation() == 4L, "checkpoint generation changed");
+				require(checkpoint.particleCount() == gpu.particleCount(), "checkpoint particle count changed");
+				require(close(checkpoint.volumeCells(), gpu.totalParticleVolume(), 1.0E-4F),
+						"checkpoint particle volume changed");
+				require(Math.abs(checkpoint.centerOfMassX() - diagnostics.centerOfMassX()) <= 1.0E-3F,
+						"checkpoint center of mass differs from completed GPU generation");
+				require(checkpoint.solidCellCount() > 0, "checkpoint lost obstacle solids");
+				long expectedCpuBytes = (long) checkpoint.particleCount() * 7L * Float.BYTES + config.cellCount();
+				long expectedReadbackBytes = (long) checkpoint.particleCount() * 8L * Float.BYTES
+						+ (long) config.cellCount() * Integer.BYTES;
+				require(checkpoint.cpuBytes() == expectedCpuBytes, "checkpoint CPU footprint is not compact and bounded");
+				require(checkpoint.gpuReadbackBytes() == expectedReadbackBytes, "checkpoint readback byte count changed");
+
+				FlipFluidDomain recovered = checkpoint.restore(GpuProbeService.cpuConfig());
+				require(recovered.particleCount() == checkpoint.particleCount(), "CPU recovery particle count changed");
+				require(close(recovered.totalVolume(), checkpoint.volumeCells(), 1.0E-4F), "CPU recovery volume changed");
+				require(Math.abs(recovered.centerOfMassX() - checkpoint.centerOfMassX()) <= 1.0E-5F,
+						"CPU recovery center of mass changed");
+				require(nonzero(recovered.copySolidMask()) == checkpoint.solidCellCount(), "CPU recovery solid mask changed");
+				float recoveredVolume = recovered.totalVolume();
+				recovered.step();
+				require(close(recovered.totalVolume(), recoveredVolume, 1.0E-4F),
+						"CPU recovery first step changed particle truth");
+
+				for (int step = 0; step < 2; step++) gpu.step();
+				FlipFluidDomain rolledBack = checkpoint.restore(GpuProbeService.cpuConfig());
+				require(Math.abs(rolledBack.centerOfMassX() - checkpoint.centerOfMassX()) <= 1.0E-5F,
+						"checkpoint mutated after newer GPU submissions");
+				require(!GpuProbeService.checkpointDue(23, checkpoint)
+						&& GpuProbeService.checkpointDue(24, checkpoint), "checkpoint cadence is not twenty generations");
+				if (!modes.isEmpty()) modes.append(',');
+				modes.append(mode);
+			}
+		}
+		return String.format("correctness CPU-readable runtime recovery checkpoint: modes=%s generation=4 interval=20",
+				modes);
 	}
 
 	private static String validateManualStepScheduling() {

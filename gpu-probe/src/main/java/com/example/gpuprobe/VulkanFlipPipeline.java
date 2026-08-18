@@ -277,6 +277,32 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		return new SnapshotData(density, markers, solids);
 	}
 
+	GpuProbeCheckpoint captureCheckpoint(long generation) {
+		awaitSubmittedWork();
+		float[] positionVolume = new float[Math.multiplyExact(particleCount, 4)];
+		float[] particleVelocities = new float[Math.multiplyExact(particleCount, 3)];
+		if (particleCount > 0) {
+			copiedBuffer(POSITIONS, (long) positionVolume.length * Float.BYTES).asFloatBuffer().get(positionVolume);
+			FloatBuffer gpuVelocities = copiedBuffer(VELOCITIES,
+					(long) particleCount * 4L * Float.BYTES).asFloatBuffer();
+			for (int particle = 0; particle < particleCount; particle++) {
+				int gpuBase = particle * 4, cpuBase = particle * 3;
+				particleVelocities[cpuBase] = gpuVelocities.get(gpuBase);
+				particleVelocities[cpuBase + 1] = gpuVelocities.get(gpuBase + 1);
+				particleVelocities[cpuBase + 2] = gpuVelocities.get(gpuBase + 2);
+			}
+		}
+		IntBuffer gpuSolids = copiedBuffer(SOLIDS).asIntBuffer();
+		byte[] solidMask = new byte[config.cellCount()];
+		for (int cell = 0; cell < solidMask.length; cell++) {
+			int solid = gpuSolids.get(cell);
+			if (solid != 0 && solid != 1) throw new IllegalStateException("GPU checkpoint contains invalid solid state");
+			solidMask[cell] = (byte) solid;
+		}
+		return new GpuProbeCheckpoint(generation, config.nx(), config.ny(), config.nz(), config.cellSize(),
+				particleCount, particleVolumeLedger, positionVolume, particleVelocities, solidMask);
+	}
+
 	int markerCellCountFromParticles() {
 		FloatBuffer positions = copiedBuffer(POSITIONS).asFloatBuffer();
 		boolean[] occupied = new boolean[config.cellCount()];
@@ -647,24 +673,36 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	}
 
 	private ByteBuffer readableBuffer(int index) {
+		return readableBuffer(index, buffer(index).size());
+	}
+
+	private ByteBuffer readableBuffer(int index, long byteCount) {
 		awaitSubmittedWork();
 		GpuBuffer source = buffer(index);
-		if (memoryMode == MemoryMode.HOST_VISIBLE) return source.bytes();
-		return copyDeviceBufferToHost(source);
+		if (byteCount < 0L || byteCount > source.size()) throw new IllegalArgumentException("Readback byte range exceeds source buffer");
+		if (memoryMode == MemoryMode.HOST_VISIBLE) return source.bytes(byteCount);
+		return copyDeviceBufferToHost(source, byteCount);
 	}
 
 	private ByteBuffer copiedBuffer(int index) {
+		return copiedBuffer(index, buffer(index).size());
+	}
+
+	private ByteBuffer copiedBuffer(int index, long byteCount) {
 		GpuBuffer source = buffer(index);
-		ByteBuffer readable = readableBuffer(index).duplicate().order(ByteOrder.nativeOrder());
-		readable.position(0).limit(Math.toIntExact(source.size()));
-		ByteBuffer copy = ByteBuffer.allocate(Math.toIntExact(source.size())).order(ByteOrder.nativeOrder());
+		if (byteCount < 0L || byteCount > source.size()) throw new IllegalArgumentException("Copy byte range exceeds source buffer");
+		ByteBuffer readable = readableBuffer(index, byteCount).duplicate().order(ByteOrder.nativeOrder());
+		readable.position(0).limit(Math.toIntExact(byteCount));
+		ByteBuffer copy = ByteBuffer.allocate(Math.toIntExact(byteCount)).order(ByteOrder.nativeOrder());
 		copy.put(readable).flip();
 		return copy;
 	}
 
-	private ByteBuffer copyDeviceBufferToHost(GpuBuffer source) {
+	private ByteBuffer copyDeviceBufferToHost(GpuBuffer source, long byteCount) {
 		SubmissionSlot slot = acquireSubmissionSlot();
-		if (source.size() > bulkTransferBuffer.size()) throw new IllegalArgumentException("Bulk transfer staging buffer too small");
+		if (byteCount > source.size() || byteCount > bulkTransferBuffer.size()) {
+			throw new IllegalArgumentException("Bulk transfer staging buffer too small");
+		}
 		try (MemoryStack stack = stackPush()) {
 			check(vkResetCommandPool(device, slot.commandPool(), 0), "vkResetCommandPool(readback)");
 			recordingCommandBuffer = slot.commandBuffer();
@@ -673,13 +711,13 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack);
 			barrier.get(0).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
 			vkCmdPipelineBarrier(recordingCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, barrier, null, null);
-			copyBuffer(stack, source, bulkTransferBuffer, source.size());
+			copyBuffer(stack, source, bulkTransferBuffer, byteCount);
 			barrier.get(0).srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT);
 			vkCmdPipelineBarrier(recordingCommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, barrier, null, null);
 			submitAndWait(stack, slot, "readback");
 		}
 		finally { recordingCommandBuffer = null; }
-		return bulkTransferBuffer.bytes(source.size());
+		return bulkTransferBuffer.bytes(byteCount);
 	}
 
 	private void copyBuffer(MemoryStack stack, GpuBuffer source, GpuBuffer destination, long bytes) {
@@ -707,7 +745,15 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	}
 
 	private void awaitSubmittedWork() {
-		for (SubmissionSlot slot : submissionRing) awaitSlotCompletion(slot);
+		Throwable failure = null;
+		for (SubmissionSlot slot : submissionRing) {
+			try {
+				awaitSlotCompletion(slot);
+			} catch (RuntimeException | LinkageError exception) {
+				if (failure == null) failure = exception; else failure.addSuppressed(exception);
+			}
+		}
+		rethrow(failure);
 	}
 
 	private void awaitSlotCompletion(SubmissionSlot slot) {
@@ -1054,6 +1100,10 @@ final class VulkanFlipPipeline implements AutoCloseable {
 
 	private GpuBuffer buffer(int index) { return buffers.get(index); }
 	private static void check(int result, String operation) { if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed with VkResult " + result); }
+	private static void rethrow(Throwable failure) {
+		if (failure instanceof RuntimeException runtime) throw runtime;
+		if (failure instanceof LinkageError linkage) throw linkage;
+	}
 	private void destroyBuffer(GpuBuffer buffer) {
 		if (buffer == null) return;
 		if (buffer.mappedAddress() != NULL) vkUnmapMemory(device, buffer.memory());
@@ -1070,7 +1120,11 @@ final class VulkanFlipPipeline implements AutoCloseable {
 				completionExecutor.shutdown();
 				completionExecutor = null;
 			}
-			vkDeviceWaitIdle(device);
+			int idleResult = vkDeviceWaitIdle(device);
+			if (idleResult != VK_SUCCESS) {
+				IllegalStateException idleFailure = new IllegalStateException("vkDeviceWaitIdle(close) failed with VkResult " + idleResult);
+				if (completionFailure == null) completionFailure = idleFailure; else completionFailure.addSuppressed(idleFailure);
+			}
 			for (SubmissionSlot slot : submissionRing) {
 				if (slot.timestampQueryPool() != VK_NULL_HANDLE) vkDestroyQueryPool(device, slot.timestampQueryPool(), null);
 				if (slot.fence() != VK_NULL_HANDLE) vkDestroyFence(device, slot.fence(), null);
@@ -1088,8 +1142,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			buffers.clear(); vkDestroyDevice(device, null); device = null;
 		}
 		if (instance != null) { vkDestroyInstance(instance, null); instance = null; }
-		if (completionFailure instanceof RuntimeException runtime) throw runtime;
-		if (completionFailure instanceof LinkageError linkage) throw linkage;
+		rethrow(completionFailure);
 	}
 
 	record Config(int nx, int ny, int nz, float cellSize, float timeStep, float gravity, float density, int pressureIterations, int maxParticles) {

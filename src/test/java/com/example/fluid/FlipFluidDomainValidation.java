@@ -9,6 +9,7 @@ public final class FlipFluidDomainValidation {
 		wallBoundaryReconstruction();
 		waterMovesAlongWallsIntoCorner();
 		solidDisplacementPreservesExactParticleVolume();
+		particleCheckpointRestoreIsTransactional();
 		minecraftSizedBenchmark();
 		System.out.println("FlipFluidDomain validation passed");
 	}
@@ -69,6 +70,42 @@ public final class FlipFluidDomainValidation {
 		check(Math.abs(restored - displaced) < 1.0E-5F, "could not restore displaced particle volume");
 		check(Math.abs(domain.totalVolume() - before) < 1.0E-4F,
 				"solid displacement changed particle volume: before=" + before + ", after=" + domain.totalVolume());
+	}
+
+	private static void particleCheckpointRestoreIsTransactional() {
+		FlipFluidDomain domain = new FlipFluidDomain(6, 5, 4, config());
+		byte[] solids = new byte[6 * 5 * 4];
+		solids[5 + 6 * (4 + 5 * 3)] = 1;
+		float[] positions = {
+				0.25F, 0.25F, 0.25F, 0.125F,
+				1.25F, 0.75F, 0.75F, 0.0625F
+		};
+		float[] velocities = {0.5F, -0.25F, 0.125F, -0.125F, 0.25F, -0.5F};
+		FlipParticleState state = new FlipParticleState(6, 5, 4, 0.5F, 2, 0.1875F,
+				positions, velocities, solids);
+		domain.restoreParticleState(state);
+		check(domain.particleCount() == 2, "checkpoint particle count changed");
+		check(Math.abs(domain.totalVolume() - 0.1875F) < 1.0E-6F, "checkpoint particle volume changed");
+		check(domain.markerCellCount() == 2, "checkpoint marker occupancy changed");
+		check(domain.isSolid(5, 4, 3), "checkpoint solid mask changed");
+		float beforeStep = domain.totalVolume();
+		domain.step();
+		check(Math.abs(domain.totalVolume() - beforeStep) < 1.0E-6F, "restored checkpoint lost volume on its first CPU step");
+
+		float preservedVolume = domain.totalVolume();
+		float[] invalidPositions = positions.clone();
+		invalidPositions[0] = 2.75F;
+		invalidPositions[1] = 2.25F;
+		invalidPositions[2] = 1.75F;
+		boolean rejected = false;
+		try {
+			domain.restoreParticleState(new FlipParticleState(6, 5, 4, 0.5F, 2, 0.1875F,
+					invalidPositions, velocities, solids));
+		}
+		catch (IllegalArgumentException expected) { rejected = true; }
+		check(rejected, "checkpoint particle inside solid was accepted");
+		check(Math.abs(domain.totalVolume() - preservedVolume) < 1.0E-6F,
+				"rejected checkpoint partially mutated the particle ledger");
 	}
 
 	private static void minecraftSizedBenchmark() {

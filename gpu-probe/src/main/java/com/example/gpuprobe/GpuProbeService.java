@@ -26,6 +26,7 @@ final class GpuProbeService {
 	private static final float H = 0.5F, DT = 1.0F / 20.0F, GRAVITY = 9.81F, RHO = 1_000.0F;
 	private static final int PRESSURE_ITERATIONS = 96;
 	private static final int SNAPSHOT_INTERVAL_TICKS = 4;
+	private static final int CHECKPOINT_INTERVAL_STEPS = 20;
 	private static final Map<MinecraftServer, GpuProbeService> SERVICES = new WeakHashMap<>();
 
 	private Backend backend;
@@ -35,9 +36,12 @@ final class GpuProbeService {
 	private long tick;
 	private int completedSteps;
 	private int hardOverrunStreak;
+	private int runtimeRecoveryCount;
+	private double lastSchedulingWallMilliseconds;
 	private String fallbackReason;
 	private String failure;
 	private String collisionDescription;
+	private GpuProbeCheckpoint checkpoint;
 
 	private GpuProbeService() { }
 
@@ -91,11 +95,13 @@ final class GpuProbeService {
 		collisionDescription = newCollisionDescription;
 		fallbackReason = null;
 		failure = null;
+		checkpoint = null;
 		VulkanFlipPipeline pipeline = null;
 		try {
 			pipeline = new VulkanFlipPipeline(gpuConfig(pressureSolver), deviceIndex,
 					VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, pressureSolver);
 			if (solidCells == null) pipeline.initializeDamBreak(); else pipeline.initializeDamBreakWithSolids(solidCells);
+			checkpoint = pipeline.captureCheckpoint(0L);
 			backend = new VulkanBackend(pipeline);
 		} catch (RuntimeException | LinkageError exception) {
 			if (pipeline != null) {
@@ -110,6 +116,8 @@ final class GpuProbeService {
 		tick = 0;
 		completedSteps = 0;
 		hardOverrunStreak = 0;
+		runtimeRecoveryCount = 0;
+		lastSchedulingWallMilliseconds = 0.0;
 		sendSnapshot(player.level());
 		return new CreationResult(true, backend instanceof VulkanBackend, fallbackReason);
 	}
@@ -146,39 +154,114 @@ final class GpuProbeService {
 		ServerLevel level = server.getLevel(dimension);
 		if (level == null || paused) return;
 		tick++;
-		if (!stepOnce()) return;
+		if (!stepOnce()) {
+			sendSnapshot(level);
+			return;
+		}
 		if (tick % SNAPSHOT_INTERVAL_TICKS == 0 || paused) sendSnapshot(level);
 	}
 
 	private boolean stepOnce() {
+		long started = System.nanoTime();
 		try {
 			backend.step();
-			completedSteps++;
-			if (backend.lastStepMilliseconds() > 200.0) hardOverrunStreak++; else hardOverrunStreak = 0;
+			int nextGeneration = Math.addExact(completedSteps, 1);
+			if (backend instanceof VulkanBackend vulkan && checkpointDue(nextGeneration, checkpoint)) {
+				GpuProbeCheckpoint candidate = vulkan.captureCheckpoint(nextGeneration);
+				if (candidate.generation() != nextGeneration) throw new IllegalStateException("GPU checkpoint generation mismatch");
+				checkpoint = candidate;
+			}
+			completedSteps = nextGeneration;
+			lastSchedulingWallMilliseconds = (System.nanoTime() - started) / 1_000_000.0;
+			if (lastSchedulingWallMilliseconds > 200.0) hardOverrunStreak++; else hardOverrunStreak = 0;
 			if (hardOverrunStreak >= 3) {
 				paused = true;
 				failure = "连续三步超过 200 ms，probe 已自动暂停";
 			}
 			return true;
 		} catch (RuntimeException | LinkageError exception) {
-			paused = true;
-			failure = exception.getClass().getSimpleName() + ": " + safeMessage(exception);
-			RealWaterGpuProbeMod.LOGGER.error("GPU probe step failed; isolated demo paused and main CPU mod is unaffected", exception);
+			lastSchedulingWallMilliseconds = (System.nanoTime() - started) / 1_000_000.0;
+			recoverRuntimeFailure(exception, "step/checkpoint");
 			return false;
 		}
 	}
 
+	static boolean checkpointDue(int completedGeneration, GpuProbeCheckpoint current) {
+		return current != null && completedGeneration - current.generation() >= CHECKPOINT_INTERVAL_STEPS;
+	}
+
+	private boolean recoverRuntimeFailure(Throwable failureCause, String operation) {
+		paused = true;
+		String cause = failureCause.getClass().getSimpleName() + ": " + safeMessage(failureCause);
+		if (!(backend instanceof VulkanBackend failedVulkan)) {
+			failure = operation + " failed without a recoverable GPU checkpoint: " + cause;
+			RealWaterGpuProbeMod.LOGGER.error("CPU fallback operation failed; isolated demo paused", failureCause);
+			return false;
+		}
+		if (checkpoint == null) {
+			backend = null;
+			failure = operation + " failed without a recoverable GPU checkpoint: " + cause;
+			try { failedVulkan.close(); }
+			catch (RuntimeException | LinkageError closeFailure) { failureCause.addSuppressed(closeFailure); }
+			RealWaterGpuProbeMod.LOGGER.error("GPU probe operation failed without a recoverable checkpoint; backend disabled", failureCause);
+			return false;
+		}
+
+		GpuProbeCheckpoint recoveryPoint = checkpoint;
+		CpuBackend recovered;
+		try {
+			recovered = new CpuBackend(recoveryPoint.restore(cpuConfig()));
+		} catch (RuntimeException recoveryFailure) {
+			failureCause.addSuppressed(recoveryFailure);
+			backend = null;
+			failure = operation + " failed and CPU checkpoint restore was rejected: " + cause;
+			try { failedVulkan.close(); }
+			catch (RuntimeException | LinkageError closeFailure) { failureCause.addSuppressed(closeFailure); }
+			RealWaterGpuProbeMod.LOGGER.error("GPU probe operation and CPU checkpoint recovery both failed; backend disabled", failureCause);
+			return false;
+		}
+
+		backend = recovered;
+		completedSteps = Math.toIntExact(recoveryPoint.generation());
+		hardOverrunStreak = 0;
+		runtimeRecoveryCount++;
+		fallbackReason = String.format(Locale.ROOT, "runtime GPU failure; restored CPU checkpoint generation %d", recoveryPoint.generation());
+		failure = String.format(Locale.ROOT,
+				"%s failed (%s); rolled back to CPU checkpoint generation %d and paused",
+				operation, cause, recoveryPoint.generation());
+		try { failedVulkan.close(); }
+		catch (RuntimeException | LinkageError closeFailure) { failureCause.addSuppressed(closeFailure); }
+		RealWaterGpuProbeMod.LOGGER.error("GPU probe operation failed; restored isolated CPU fallback from the last complete checkpoint and paused", failureCause);
+		return true;
+	}
+
 	String status(MinecraftServer server) {
-		if (backend == null) return "没有活动 GPU probe 域；主 Real Water CPU 后端不受影响";
+		if (backend == null) return failure == null
+				? "没有活动 GPU probe 域；主 Real Water CPU 后端不受影响"
+				: "GPU probe 后端已停用；主 Real Water CPU 后端不受影响 | failure: " + failure;
+		String diagnostics;
+		try {
+			diagnostics = backend.diagnostics();
+		} catch (RuntimeException | LinkageError exception) {
+			if (!recoverRuntimeFailure(exception, "status diagnostics") || backend == null) {
+				return "GPU probe 后端已停用；主 Real Water CPU 后端不受影响 | failure: " + failure;
+			}
+			diagnostics = backend.diagnostics();
+		}
 		String conflict = FluidSimulationService.get(server).exists() ? " | 与主域冲突，已暂停" : "";
+		String checkpointStatus = checkpoint == null ? "" : String.format(Locale.ROOT,
+				" | checkpoint gen %d age %d steps CPU %d B/readback %d B | recoveries %d",
+				checkpoint.generation(), completedSteps - checkpoint.generation(), checkpoint.cpuBytes(),
+				checkpoint.gpuReadbackBytes(), runtimeRecoveryCount);
 		return String.format(Locale.ROOT,
-				"%s | backend %s | origin %s | grid %dx%dx%d | water %.2f blocks (%.2f cells) | particles %d | scheduling wall %.3f ms | steps %d | %s | %s%s%s%s",
+				"%s | backend %s | origin %s | grid %dx%dx%d | water %.2f blocks (%.2f cells) | particles %d | scheduling wall %.3f ms | steps %d | %s | %s%s%s%s%s",
 				paused ? "暂停" : "运行", backend.name(), origin.toShortString(), NX, NY, NZ,
-				backend.volumeCells() / 8.0F, backend.volumeCells(), backend.particleCount(), backend.lastStepMilliseconds(), completedSteps,
-				backend.diagnostics(),
+				backend.volumeCells() / 8.0F, backend.volumeCells(), backend.particleCount(), lastSchedulingWallMilliseconds, completedSteps,
+				diagnostics,
 				collisionDescription,
 				fallbackReason == null ? "" : " | CPU fallback: " + fallbackReason,
 				failure == null ? "" : " | failure: " + failure,
+				checkpointStatus,
 				conflict);
 	}
 
@@ -195,7 +278,13 @@ final class GpuProbeService {
 
 	private void sendSnapshot(ServerLevel level) {
 		if (backend == null || !level.dimension().equals(dimension)) return;
-		Snapshot snapshot = backend.snapshot();
+		Snapshot snapshot;
+		try {
+			snapshot = backend.snapshot();
+		} catch (RuntimeException | LinkageError exception) {
+			if (!recoverRuntimeFailure(exception, "snapshot readback") || backend == null) return;
+			snapshot = backend.snapshot();
+		}
 		FluidSnapshotPayload payload = new FluidSnapshotPayload(origin, H, NX, NY, NZ,
 				snapshot.density(), snapshot.markers(), snapshot.solids(), true);
 		for (ServerPlayer player : level.players()) {
@@ -209,6 +298,7 @@ final class GpuProbeService {
 			catch (RuntimeException | LinkageError exception) { RealWaterGpuProbeMod.LOGGER.warn("Failed to close GPU probe backend", exception); }
 		}
 		backend = null;
+		checkpoint = null;
 		dimension = null;
 		collisionDescription = null;
 		paused = true;
@@ -272,8 +362,7 @@ final class GpuProbeService {
 	}
 
 	static FlipFluidDomain createCpuDamBreak(byte[] solidCells) {
-		FluidSolverConfig config = new FluidSolverConfig(H, RHO, GRAVITY, DT, 200, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F);
-		FlipFluidDomain domain = new FlipFluidDomain(NX, NY, NZ, config);
+		FlipFluidDomain domain = new FlipFluidDomain(NX, NY, NZ, cpuConfig());
 		if (solidCells != null) {
 			if (solidCells.length != NX * NY * NZ) throw new IllegalArgumentException("solid mask size does not match CPU grid");
 			for (int z = 0; z < NZ; z++) for (int y = 0; y < NY; y++) for (int x = 0; x < NX; x++) {
@@ -284,6 +373,10 @@ final class GpuProbeService {
 			if (!domain.isSolid(x, y, z)) domain.setVolume(x, y, z, 1.0F);
 		}
 		return domain;
+	}
+
+	static FluidSolverConfig cpuConfig() {
+		return new FluidSolverConfig(H, RHO, GRAVITY, DT, 200, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F);
 	}
 
 	private static String safeMessage(Throwable throwable) {
@@ -314,6 +407,7 @@ final class GpuProbeService {
 		@Override public float volumeCells() { return pipeline.totalParticleVolume(); }
 		@Override public double lastStepMilliseconds() { return pipeline.lastStepMilliseconds(); }
 		@Override public double lastGpuStepMilliseconds() { return pipeline.lastGpuStepMilliseconds(); }
+		GpuProbeCheckpoint captureCheckpoint(long generation) { return pipeline.captureCheckpoint(generation); }
 		@Override public Snapshot snapshot() {
 			VulkanFlipPipeline.SnapshotData data = pipeline.snapshot();
 			return new Snapshot(data.density(), data.markers(), data.solids());

@@ -1,6 +1,6 @@
 # Real Water 维护路由
 
-当前主 Mod：`0.8.2`。可选 GPU probe：`0.1.13`。版本历史、实测数据和长期阶段定义分别见 [`fluid-prototype.md`](fluid-prototype.md)、[`gpu-probe-report.md`](gpu-probe-report.md) 与 [`long-term-roadmap.md`](long-term-roadmap.md)。本文只回答“代码在哪里、改完跑什么”。
+当前主 Mod：`0.8.2`。可选 GPU probe：`0.1.14`。版本历史、实测数据和长期阶段定义分别见 [`fluid-prototype.md`](fluid-prototype.md)、[`gpu-probe-report.md`](gpu-probe-report.md) 与 [`long-term-roadmap.md`](long-term-roadmap.md)。本文只回答“代码在哪里、改完跑什么”。
 
 ## 不可混用的状态
 
@@ -18,6 +18,7 @@
 | 初始化、tick、启动/停止恢复、网络注册 | `src/main/java/com/example/RealWaterMod.java` | 服务生命周期与 payload 注册 |
 | 单域生命周期、世界采样、调度、实体力、快照 | `src/main/java/com/example/simulation/FluidSimulationService.java` | 域尺寸/频率变化同时检查 payload、renderer 与 benchmark |
 | 活动 PIC/FLIP 核心 | `src/main/java/com/example/fluid/FlipFluidDomain.java` | P2G、PCG、投影、90/10 G2P、逐轴碰撞；Minecraft 不使用旧 `FluidDomain` |
+| CPU marker 内存交接状态 | `src/main/java/com/example/fluid/FlipParticleState.java` | 不可变位置/体积/速度/solid；`particleVolume` 账本必须闭合；不是存档或渲染协议 |
 | CPU 变密度面系数实验 | `src/test/java/com/example/fluid/VariableDensityPressureExperiment.java` | 门在 `VariableDensityFaceCoefficientValidation.java`；它只选 M3 候选，尚未接入活动核心 |
 | solver 参数 | `src/main/java/com/example/fluid/FluidSolverConfig.java` | 改 CFL、压力容差或 FLIP 比例时跑长期数值门 |
 | takeover 编排 | `TakeoverTransaction.java`、`TakeoverBackupStore.java` | journal/WARNING 发布完成前禁止修改世界 |
@@ -44,6 +45,7 @@
 | Fabric 命令与入口 | `RealWaterGpuProbeMod.java` |
 | demo/benchmark 生命周期、CPU fallback、wall-time 保护 | `GpuProbeService.java` |
 | Vulkan FLIP 资源与 dispatch/三槽 staging ring/fence/内存/timestamp | `VulkanFlipPipeline.java` |
+| GPU 完整代次检查点与 CPU 恢复 | `GpuProbeCheckpoint.java`、`GpuProbeService.java` | 初始 generation 0 必须成功；每 20 步替换一次；失败只使用上一完整代次并保持暂停 |
 | 主计算 shader | `src/main/resources/assets/realwater_gpu_probe/shaders/flip.comp` |
 | shader 资源加载与缺失诊断 | `GpuProbeShaderSource.java` |
 | 无窗口 Vulkan/Shaderc/VMA 能力探测 | `VulkanCapabilityProbe.java` |
@@ -101,4 +103,4 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 - 同一 Mod id 只启用一个 jar；旧版改为 `.disabled`，复制后比较 SHA-256。
 - 请求人工 smoke 只针对自动门无法覆盖的打包命令、真实渲染、真实碰撞采样或世界事务。
 
-bounded ring staging 已在 probe 0.1.13 完成：普通 step 使用三个独立的 command/fence/query/64 B staging 槽，不再逐步 `vkQueueWaitIdle`；显式 snapshot/full-state 读回先收敛 ring，再走串行 bulk staging。CPU 变密度面系数实验已选出按界面距离加权的守恒通量候选，但尚未接入活动求解器；下一项 M1 工作是运行时设备丢失的 CPU 可读检查点。M0 强制中断恢复和邻接更新人工门仍按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 执行。
+probe 0.1.14 已完成运行时 GPU 失败的 CPU 可读恢复边界：generation 0 与每 20 步的完整 marker/velocity/solid 检查点先收敛三槽 ring，再通过 bulk staging 读入不可变 `FlipParticleState`；失败时回滚上一完整代次、切换隔离 CPU fallback 并保持暂停。常规 step 仍只回读 64 B，检查点 wall time 计入服务器超时保护。下一项 M1 工作是更多 occupancy 的 CPU/GPU break-even。M0 强制中断恢复和邻接更新人工门仍按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 执行。

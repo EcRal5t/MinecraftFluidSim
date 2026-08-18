@@ -99,6 +99,36 @@ public final class FlipFluidDomain {
 	}
 	public FluidSolverConfig config() { return config; }
 
+	/** Replaces this domain from one validated, immutable in-memory marker state. */
+	public void restoreParticleState(FlipParticleState state) {
+		if (state == null) throw new IllegalArgumentException("Particle state must not be null");
+		state.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize());
+		int restoredCount = state.particleCount();
+		if (restoredCount > MAX_PARTICLES) throw new IllegalArgumentException("Particle state exceeds CPU capacity");
+		ensureParticleCapacity(restoredCount);
+		float[] positionVolume = state.positionVolume();
+		float[] particleVelocities = state.particleVelocities();
+		byte[] solidMask = state.solidMask();
+		for (int i = 0; i < cellCount; i++) solid[i] = solidMask[i] != 0;
+		for (int particle = 0; particle < restoredCount; particle++) {
+			int positionBase = particle * 4, velocityBase = particle * 3;
+			particleX[particle] = positionVolume[positionBase];
+			particleY[particle] = positionVolume[positionBase + 1];
+			particleZ[particle] = positionVolume[positionBase + 2];
+			particleVolume[particle] = positionVolume[positionBase + 3];
+			particleVelocityX[particle] = particleVelocities[velocityBase];
+			particleVelocityY[particle] = particleVelocities[velocityBase + 1];
+			particleVelocityZ[particle] = particleVelocities[velocityBase + 2];
+		}
+		particleCount = restoredCount;
+		Arrays.fill(pressure, 0.0F);
+		Arrays.fill(divergence, 0.0F);
+		pressureAnchor = -1;
+		lastPressureIterations = 0;
+		lastPressureResidual = 0.0F;
+		gridDirty = true;
+	}
+
 	/** Sets collision occupancy and returns the exact particle volume displaced. */
 	public float setSolid(int x, int y, int z, boolean value) {
 		int index = cellIndexChecked(x, y, z);

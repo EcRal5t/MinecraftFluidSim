@@ -463,7 +463,15 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 
 按 9.4 建立独立测试 Mod，并生成运行时模块/native、设备、求解算法、吞吐、显存、全量/压缩回读、CPU 对照和稳定性报告。CPU 小域同时完成变密度面系数候选实验；GPU 比较 PCG、red-black GS/SOR 与多网格/预条件路线。32³ 满水场景必须实际分配约 210 万 marker，而不是继承当前 262,144 上限后只测八分之一装填。M1 可以与 CPU 区域设计并行调研，但主 Mod 不得在探针完成前把存档格式绑定到 GPU 缓冲区。
 
-当前状态（2026-08-19，M1-K）：独立 `gpu-probe` 子项目已在本机 RTX 5070 Ti 与 RTX 4060 Ti 上完成无窗口 Vulkan/Shaderc/VMA/float-atomic 探测，并实现完整 3D P2G → 压力投影 → G2P → advect 正确性管线。0.1.1–0.1.8 已建立集成服务器可视化、命令日志、CPU fallback、device-local + staging、64 B 常规诊断、暂停多步调度、压力算法对照、solid-aware MG2 和冻结只读真实碰撞捕获；RTX 5070 Ti `worlddemo` 的 13,824 个 marker 在 347 步后仍保持 1,728.000 格体积并正常 remove。0.1.9 新增自适应 packed 全层级 MGH：当前 24×16×24 小域只保留有用的首个粗层，64³ 网格递归使用 32³→16³→8³→4³，逐层聚合 fluid/air/solid 对角和面耦合，执行 restriction、平滑、阻尼 prolongation 与细网格前后平滑。双卡自动门覆盖 MGH 静水、device-local/host-visible 等价、四层 packed 拓扑和 64³ 收敛曲线；另有 64³ 深层障碍门证明四层薄墙耦合均为 0、开放面均为 1、1,162,240 个 marker 无一进入 solid 且 145,280.000 格体积不变。RTX 5070 Ti 上两个 MGH V-cycle 的同输入首步结果约为 1.54 ms Vulkan timestamp / 0.14448，优于同为两次的 MG2 0.17807，并接近 MG2 三次 0.13992；两档进服 benchmark 也已通过。0.1.10 修正 `probe [device]` 参数节点，并由结构回归及 RTX 4060 Ti `probe 1` 进服冒烟锁定两种形式；保持 EULA false 的 dedicated-server 门也已通过。0.1.11 在完整物理命令流与 64 B 诊断 copy 外包围 Vulkan timestamp query，status/benchmark 分别报告 GPU 设备时间和 CPU wall time；双卡完整自动门已通过，64³ 网格的 2,097,152 marker 步进分别为约 4.40/4.78 ms（5070 Ti GPU/wall）与 7.36/7.65 ms（4060 Ti GPU/wall）。timestamp 只改变性能观测，连续超时保护仍以 wall time 为真值，未改物理、数值离散、渲染或调度阈值。0.1.12 将主 GLSL 原样移入资源文件，并把小域快速门与 64³ 发布门拆开。0.1.13 用三个独立的 command pool/buffer、fence、timestamp query 和 64 B 映射 staging 槽替换普通 step 的单缓冲区 + `vkQueueWaitIdle` 生命周期；槽位复用只等待对应 fence，显式 snapshot/full-state 读回先收敛 ring 再使用串行 bulk staging。5070 Ti 完整门和 4060 Ti 小域专项均通过；真实 2,097,152-marker 满水门保持 262,144.0 格精确体积，约为 4.777 ms GPU timestamp / 4.913 ms throughput wall。调度与连续超时仍使用服务器线程的 scheduling/backpressure wall，timestamp 仍只做设备观测。CPU 小域也已完成三种变密度面系数对照，按界面距离加权的守恒通量候选在最高 13.6:1 密度比及非居中界面保持离散静水平衡，活动求解器尚未接入该候选。详见 [`gpu-probe-report.md`](gpu-probe-report.md)。这不代表整个 M1 完成：运行时设备丢失检查点和更多 occupancy 的 CPU/GPU break-even 仍未完成；主 Mod 保持 CPU 权威，`worlddemo` 仍保持 MG2，普通 probe demo 仍保持 Jacobi，MGH 先作为显式 benchmark 候选。
+当前状态（2026-08-19，M1-L）：独立 `gpu-probe` 子项目已在本机 RTX 5070 Ti 与 RTX 4060 Ti 上完成无窗口 Vulkan/Shaderc/VMA/float-atomic 探测，并实现完整 3D P2G → 压力投影 → G2P → advect 正确性管线。
+
+- 0.1.1–0.1.8 已建立集成服务器可视化、命令日志、CPU fallback、device-local + staging、64 B 常规诊断、暂停多步调度、压力算法对照、solid-aware MG2 和冻结只读真实碰撞捕获；RTX 5070 Ti `worlddemo` 的 13,824 个 marker 在 347 步后仍保持 1,728.000 格体积并正常 remove。
+- 0.1.9 新增自适应 packed 全层级 MGH：当前 24×16×24 小域只保留有用的首个粗层，64³ 网格递归使用 32³→16³→8³→4³，逐层聚合 fluid/air/solid 对角和面耦合，执行 restriction、平滑、阻尼 prolongation 与细网格前后平滑。双卡自动门覆盖 MGH 静水、device-local/host-visible 等价、四层 packed 拓扑和 64³ 收敛曲线；另有 64³ 深层障碍门证明四层薄墙耦合均为 0、开放面均为 1、1,162,240 个 marker 无一进入 solid 且 145,280.000 格体积不变。RTX 5070 Ti 上两个 MGH V-cycle 的同输入首步结果约为 1.54 ms Vulkan timestamp / 0.14448，优于同为两次的 MG2 0.17807，并接近 MG2 三次 0.13992；两档进服 benchmark 也已通过。
+- 0.1.10 修正 `probe [device]` 参数节点，并由结构回归及 RTX 4060 Ti `probe 1` 进服冒烟锁定两种形式；保持 EULA false 的 dedicated-server 门也已通过。
+- 0.1.11 在完整物理命令流与 64 B 诊断 copy 外包围 Vulkan timestamp query，status/benchmark 分别报告 GPU 设备时间和 CPU wall time；双卡完整自动门已通过，64³ 网格的 2,097,152 marker 步进分别为约 4.40/4.78 ms（5070 Ti GPU/wall）与 7.36/7.65 ms（4060 Ti GPU/wall）。timestamp 只改变性能观测，连续超时保护仍以 wall time 为真值，未改物理、数值离散、渲染或调度阈值。
+- 0.1.12 将主 GLSL 原样移入资源文件，并把小域快速门与 64³ 发布门拆开。
+- 0.1.13 用三个独立的 command pool/buffer、fence、timestamp query 和 64 B 映射 staging 槽替换普通 step 的单缓冲区 + `vkQueueWaitIdle` 生命周期；槽位复用只等待对应 fence，显式 snapshot/full-state 读回先收敛 ring 再使用串行 bulk staging。5070 Ti 完整门和 4060 Ti 小域专项均通过；真实 2,097,152-marker 满水门保持 262,144.0 格精确体积，约为 4.777 ms GPU timestamp / 4.913 ms throughput wall。调度与连续超时仍使用服务器线程的 scheduling/backpressure wall，timestamp 仍只做设备观测。CPU 小域也已完成三种变密度面系数对照，按界面距离加权的守恒通量候选在最高 13.6:1 密度比及非居中界面保持离散静水平衡，活动求解器尚未接入该候选。
+- 0.1.14 新增 generation 0 必备、每 20 步更新的 CPU 可读 marker/velocity/solid 检查点；任何 GPU 同步读取路径失败都会丢弃更新但未检查点化的代次，恢复到隔离 CPU fallback 并保持暂停。检查点只存在内存，常规 step 仍只回读 64 B，周期检查点的 wall time 纳入服务器超时保护；双卡 device-local/host-visible 小域恢复门均已通过。详见 [`gpu-probe-report.md`](gpu-probe-report.md)。这不代表整个 M1 完成：更多 occupancy 的 CPU/GPU break-even 和后续长时人工稳定性门仍未完成；主 Mod 保持 CPU 权威，`worlddemo` 仍保持 MG2，普通 probe demo 仍保持 Jacobi，MGH 先作为显式 benchmark 候选。
 
 ### M2：多区域、选区控制器、持久化与休眠
 
@@ -625,8 +633,8 @@ CPU 单线程参考场景固定随机种子、遍历顺序和输入，能稳定�
 
 ## 十三、接下来三项实际工作
 
-1. 为可选 GPU probe 增加有界、代次一致的 CPU 可读检查点和运行时设备丢失恢复门；失败域必须暂停，主 Mod 继续保持 CPU 权威。
-2. 补测更多 occupancy 的 CPU/GPU break-even，并在后续人工窗口完成 M0 强制中断恢复、邻接更新及 GPU 长时渲染稳定性门。
+1. 补测更多 occupancy 的 CPU/GPU break-even，区分固定提交成本、marker 数和 fluid-cell 稀疏度，不改变正式后端选择。
+2. 在后续人工窗口完成 M0 强制中断恢复、邻接更新及 GPU 长时渲染稳定性门；测试世界保持备份，不主动制造操作系统级驱动重置。
 3. 在 CPU 参考路径设计 `FluidRegionManager` 和 chunk-section 状态，不改变当前 PIC/FLIP 不变量；M0 人工门与 M1 恢复路径完成后再开始持久化格式评审。
 
 这三项都完成前，不扩大 takeover 范围，不改变世界长期存档格式，也不把 GPU 设为必需运行条件。
