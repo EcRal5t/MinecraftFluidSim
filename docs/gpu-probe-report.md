@@ -76,6 +76,8 @@ The 0.1.2 integrated-server smoke on the RTX 5070 Ti measured the current domain
 
 Probe 0.1.4 then passed all three integrated-server pressure benchmark commands. On the live RTX 5070 Ti, Jacobi 96 averaged 0.876 ms and ended at divergence 5.93165→0.11767, RBGS/SOR 48 averaged 1.479 ms and ended at 9.95173→0.01688, and identity-PCG 32 averaged 1.649 ms and ended at 10.12072→0.02222. These ending divergence pairs are per-solver stability evidence, not a same-input convergence comparison: each command advanced its own dam for 23 steps and therefore finished from a different particle state. The automated fresh-state curves above remain the fair convergence evidence.
 
+Probe 0.1.5 also passed the integrated-server diagonal-PCG command. On the live RTX 5070 Ti, diagonal-PCG 32 averaged 1.783 ms over 20 steps, retained all 20,736 particles, and ended at divergence 10.12744→0.01579; regular diagnostics remained 64 B per step. This validates the command/parser and packaged shader path, while the same-input automated curves remain the evidence that diagonal preconditioning should not replace the default.
+
 ## Commands
 
 The optional `realwater-gpu-probe` jar adds:
