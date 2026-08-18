@@ -25,6 +25,7 @@ public final class GpuFlipProbeValidation {
 		boolean skipLarge = args.length > 1 && "--skip-large".equals(args[1]);
 		long suiteStarted = System.nanoTime();
 		List<String> results = new ArrayList<>();
+		results.add(validateProbeCommandTree());
 		results.add(validateManualStepScheduling());
 		results.add(validateDamBreak(device));
 		results.add(validateHydrostaticColumn(device));
@@ -49,6 +50,15 @@ public final class GpuFlipProbeValidation {
 		}
 		for (String result : results) System.out.println(result);
 		System.out.printf("GPU FLIP validation passed on device %d in %.3f s%n", device, secondsSince(suiteStarted));
+	}
+
+	private static String validateProbeCommandTree() {
+		var probe = RealWaterGpuProbeMod.probeCommand().build();
+		require("probe".equals(probe.getName()) && probe.getCommand() != null, "probe command lost its default executor");
+		var device = probe.getChild("device");
+		require(device != null && device.getCommand() != null, "probe device argument is not nested under probe");
+		require(probe.getChildren().size() == 1, "probe command has an unexpected child layout");
+		return "correctness command tree: /realwatergpu probe and /realwatergpu probe <device> are both executable";
 	}
 
 	private static String validateManualStepScheduling() {

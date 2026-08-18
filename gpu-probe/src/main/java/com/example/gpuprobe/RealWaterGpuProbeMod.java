@@ -3,6 +3,8 @@ package com.example.gpuprobe;
 import com.example.logging.RealWaterCommandLog;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.api.ModInitializer;
@@ -26,9 +28,7 @@ public final class RealWaterGpuProbeMod implements ModInitializer {
 	public void onInitialize() {
 		CommandRegistrationCallback.EVENT.register((dispatcher, buildContext, selection) -> dispatcher.register(
 				Commands.literal("realwatergpu")
-						.then(Commands.literal("probe").executes(context -> audit(context, () -> runProbe(context.getSource(), 0))))
-								.then(Commands.argument("device", IntegerArgumentType.integer(0, 15))
-										.executes(context -> audit(context, () -> runProbe(context.getSource(), IntegerArgumentType.getInteger(context, "device")))))
+						.then(probeCommand())
 						.then(Commands.literal("demo")
 								.executes(context -> audit(context, () -> createDemo(context.getSource(), 0)))
 								.then(Commands.argument("device", IntegerArgumentType.integer(0, 15))
@@ -60,6 +60,13 @@ public final class RealWaterGpuProbeMod implements ModInitializer {
 			lastReport = null;
 		});
 		LOGGER.info("Real Water optional GPU probe initialized; Vulkan remains lazy and CPU Real Water remains authoritative");
+	}
+
+	static LiteralArgumentBuilder<CommandSourceStack> probeCommand() {
+		return LiteralArgumentBuilder.<CommandSourceStack>literal("probe")
+				.executes(context -> audit(context, () -> runProbe(context.getSource(), 0)))
+				.then(RequiredArgumentBuilder.<CommandSourceStack, Integer>argument("device", IntegerArgumentType.integer(0, 15))
+						.executes(context -> audit(context, () -> runProbe(context.getSource(), IntegerArgumentType.getInteger(context, "device")))));
 	}
 
 	private static int audit(CommandContext<CommandSourceStack> context, RealWaterCommandLog.Action action) throws CommandSyntaxException {
