@@ -2,7 +2,7 @@
 
 Date: 2026-08-19. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.16. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
 
-This is an M1-M correctness, data-movement, collision-ingestion, runtime-recovery and occupancy probe, not the production GPU backend. It has no takeover code, never writes blocks or save data, and owns no chunk tickets. The ordinary generated demo and every headless benchmark remain world-independent. The explicit `worlddemo` command captures collision once from chunks already loaded around the player, then runs only from the frozen in-memory subcell mask. The main `realwater` Mod remains CPU-authoritative whether the optional probe jar is installed or not.
+This is the completed M1 correctness, data-movement, collision-ingestion, runtime-recovery and occupancy probe, not the production GPU backend. It has no takeover code, never writes blocks or save data, and owns no chunk tickets. The ordinary generated demo and every headless benchmark remain world-independent. The explicit `worlddemo` command captures collision once from chunks already loaded around the player, then runs only from the frozen in-memory subcell mask. The main `realwater` Mod remains CPU-authoritative whether the optional probe jar is installed or not.
 
 ## Layer boundary
 
@@ -159,9 +159,15 @@ The main `/realwater` domain and the probe share the existing debug snapshot cha
 
 All handled probe commands and their chat/detail output are appended as UTF-8 blocks to `logs/realwater-commands.log`; `/realwater logpath` reports the exact absolute path. This diagnostic transcript is the only new file written by the probe integration and is not world/save state.
 
-## Remaining M1 work
+## M1 completion
 
-- Every automated M1 capability, 1,000-step surface regression, pressure-candidate, memory-mode, 64³ capacity, compact/full readback, bounded-ring, runtime-recovery, variable-density coefficient and corrected occupancy break-even gate is complete. The Minecraft-rendered 1,317-step edge/corner regression also passed. The only remaining M1 window is the 30-minute resource-stability observation: check exact marker volume, absence of driver reset or tick deadlock, and bounded process/VRAM behavior before clean `/realwatergpu remove`. The known post-5,000-step marker-distribution drift is recorded above as M2.5 work; M1 resource stability must not be misreported as long-term free-surface acceptance. No deliberate operating-system-level driver reset is required.
+Every automated M1 capability, 1,000-step surface regression, pressure-candidate, memory-mode, 64³ capacity, compact/full readback, bounded-ring, runtime-recovery, variable-density coefficient and corrected occupancy break-even gate is complete. The Minecraft-rendered 1,317-step edge/corner regression also passed.
+
+The integrated stability gate completed on the RTX 4060 Ti from 06:33:07 to 07:04:51 on 2026-08-19. The final paused status at step 38,073 retained 20,736 particles and exactly 2,592.000 solver cells, checkpoint generation 38,060 with age 13, and zero recoveries. The server remained responsive; scheduling/backpressure wall was 1.588 ms and the final four-substep GPU timestamp was 3.722 ms. An endpoint operating-system sample showed about 1.69 GiB Java working set, 3.07 GiB private memory and 736 MiB total device usage on the 4060 Ti. `/realwatergpu remove` then released the probe and visual snapshot normally, without world or save writes.
+
+An earlier RTX 5070 Ti attempt was intentionally excluded from the steady-topology gate: powering off the display directly attached to that card changed the Windows display topology and crashed Minecraft's OpenGL render thread in `GpuSurface.present`/`glfwSwapBuffers`, with native frames in `d3d11.dll` and NVIDIA `nvoglv64.dll`. The probe fence thread was blocked, there was no Vulkan device-loss/recovery report and no Windows TDR event. OBS and NVIDIA capture hooks were loaded. This is recorded as an external display-present-path incident rather than a compute-pipeline failure; monitor/device topology must remain stable during the M1 result above.
+
+M1 is complete. The known post-5,000-step marker-distribution drift remains M2.5 work and is not misreported as long-term free-surface acceptance. The probe remains optional and read-only with respect to worlds/saves, and no production backend has been selected.
 
 Run the automated suite with the Minecraft native directory:
 
