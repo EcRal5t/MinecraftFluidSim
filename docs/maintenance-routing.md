@@ -160,7 +160,7 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 ## 下一阶段建议
 
 1. 按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 补完测试世界的强制中断恢复和邻接更新冒烟；正常 takeover → remove 已通过，仍需保留备份、命令计数和日志。
-2. 进服只需复验 probe 0.1.3 在暂停状态下 `/realwatergpu step 6` 确实完成 6 步；0.1.2 的 device-local 可视化、status、两档 benchmark 和 remove 已通过，0.1.1 的 CPU fallback 已通过。probe 不得进入正式存档或接管世界。
+2. probe 0.1.3 的 device-local 可视化、暂停多步、连续运行、status、两档 benchmark 和 remove 已通过，0.1.1 的 CPU fallback 已通过；后续补 dedicated-server classpath 冒烟。probe 不得进入正式存档或接管世界。
 3. 继续 M1 的压力算法对照、变密度 CPU 候选、timestamp query/ring staging 和设备丢失恢复检查点，不把当前固定迭代 Jacobi 冻结为正式压力算法。
 4. M1 门通过后再做动态域/分块域设计，避免当前 12×8×12 人工边界成为不可见墙；chunk-section 格式不得直接序列化当前单域或 GPU 缓冲。
 5. 之后考虑实体到水的反向动量耦合、粒子 reseeding、自由表面压力权重和更高分辨率。
