@@ -123,6 +123,14 @@ M0 takeover codec、真实文件与故障注入回归：
   -PgpuProbeDevice=0
 ```
 
+dedicated-server classpath 门使用同一子项目且保持测试 EULA 为 `false`，因此只验证 `Env=SERVER` 下两 Mod 的加载/初始化，不开端口、不生成世界：
+
+```powershell
+./gradlew.bat :gpu-probe:runServer --offline --no-daemon
+```
+
+首次使用若缺少 Loom 的 `fabric-log4j-util` 开发运行时辅助包，可联网执行一次同任务填充 Gradle cache；它不是 Mod 运行依赖，也不得复制进 mods。成功日志必须同时出现 `Env=SERVER`、`realwater 0.8.2`、`realwater_gpu_probe 0.1.10` 和两个 initializer，随后因 `eula=false` 正常退出。
+
 入口在 `gpu-probe/src/main/java/com/example/gpuprobe`：`VulkanCapabilityProbe` 负责无窗口 Vulkan/Shaderc/VMA 能力门，`VulkanFlipPipeline` 负责 device-local 3D 数值阶段、staging 上传/快照、每步 64 B 诊断回读，以及共享同一细网格 Poisson 离散的 Jacobi、RBGS/SOR、两种 PCG、solid-aware 两层 MG2 和自适应 packed 全层级 MGH 实验；`WorldCollisionSnapshot` 仅通过 `getChunkNow` 捕获已加载区块的冻结 2×2×2 subcell 碰撞 mask；`GpuFlipProbeValidation` 负责 CPU/GPU、两种内存模式、MG2/MGH 静水和障碍物、四层拓扑、守恒、压力收敛曲线及两档 benchmark。`GpuProbeService` 和 `RealWaterGpuProbeMod` 不修改世界；只有显式 `worlddemo` 在创建时做一次只读碰撞捕获，普通 demo/benchmark 仍不读取世界。实测与未完成边界见 [`gpu-probe-report.md`](gpu-probe-report.md)。
 
 游戏内基本回归顺序：
@@ -160,7 +168,7 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 ## 下一阶段建议
 
 1. 按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 补完测试世界的强制中断恢复和邻接更新冒烟；正常 takeover → remove 已通过，仍需保留备份、命令计数和日志。
-2. probe 0.1.4 的 device-local 可视化、暂停多步、连续运行、status、两档 benchmark、三种 pressure 参数和 remove 已通过，0.1.5 的 diagonal-PCG、0.1.6 的 MG2 游戏内 benchmark 也已通过，0.1.1 的 CPU fallback 已通过；0.1.7 的 solid-aware MG2 双卡自动门和 RTX 5070 Ti 打包命令冒烟均已通过。0.1.8 的方块展开/GPU/CPU-fallback 双卡自动门和 RTX 5070 Ti `worlddemo` 创建、步进、连续运行、status、remove 进服冒烟已通过。0.1.9 的 packed 全层级 MGH 双卡自动门及两档 `benchmark ... mgh` 打包命令均已通过；冒烟同时发现 `probe` 的可选 device 节点误挂在根命令，0.1.10 已修正并通过命令树结构回归与 `probe 1` 打包命令，后续还需 dedicated-server classpath 冒烟。probe 不得接管世界；`worlddemo` 只允许冻结只读快照。
+2. probe 0.1.4 的 device-local 可视化、暂停多步、连续运行、status、两档 benchmark、三种 pressure 参数和 remove 已通过，0.1.5 的 diagonal-PCG、0.1.6 的 MG2 游戏内 benchmark 也已通过，0.1.1 的 CPU fallback 已通过；0.1.7 的 solid-aware MG2 双卡自动门和 RTX 5070 Ti 打包命令冒烟均已通过。0.1.8 的方块展开/GPU/CPU-fallback 双卡自动门和 RTX 5070 Ti `worlddemo` 创建、步进、连续运行、status、remove 进服冒烟已通过。0.1.9 的 packed 全层级 MGH 双卡自动门及两档 `benchmark ... mgh` 打包命令均已通过；冒烟同时发现 `probe` 的可选 device 节点误挂在根命令，0.1.10 已修正并通过命令树结构回归、`probe 1` 打包命令和保持 EULA false 的 dedicated-server classpath 门。probe 不得接管世界；`worlddemo` 只允许冻结只读快照。
 3. 继续 M1 的变密度 CPU 候选、timestamp query/ring staging 和设备丢失恢复检查点；MG2 与 MGH 已通过合成薄墙/薄板、方块展开碰撞与 64³ cost/quality 门，MGH 尚未替换 MG2 或普通 demo 的 Jacobi 默认，identity/diagonal-PCG 与 RBGS/SOR 未通过。剩余集成门完成前不得切换主 Mod 后端。
 4. M1 门通过后再做动态域/分块域设计，避免当前 12×8×12 人工边界成为不可见墙；chunk-section 格式不得直接序列化当前单域或 GPU 缓冲。
 5. 之后考虑实体到水的反向动量耦合、粒子 reseeding、自由表面压力权重和更高分辨率。

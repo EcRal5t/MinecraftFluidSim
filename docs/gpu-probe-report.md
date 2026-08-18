@@ -98,6 +98,8 @@ Probe 0.1.8 passed its integrated-server `worlddemo` command/API and numerical s
 
 Probe 0.1.9 passed its complete headless suite on both GPUs and its packaged integrated-server MGH smoke on the RTX 5070 Ti. The 24×16×24 command averaged 0.880 ms over 20 evolved steps, retained all 20,736 particles and ended at divergence 10.86908→0.10806. The 64³ full-water command allocated 2,097,152 particles, averaged 7.146 ms over three steps under live rendering contention, retained zero divergence as expected for the gravity-free closed box, staged its 1,048,576-byte snapshot in 16.244 ms and completed the explicit 85,231,680-byte full-state diagnostic in 1,379.330 ms. Both commands returned success and did not access world state. The smoke also revealed that `/realwatergpu probe` worked only without its documented device argument: the Brigadier `device` node had been attached to the root rather than beneath `probe`. Probe 0.1.10 corrects that nesting and adds an automated tree-structure gate proving that both the default executor and nested device executor exist. Its packaged `/realwatergpu probe 1` smoke then selected the RTX 4060 Ti, passed Vulkan 1.4.329, Shaderc, VMA, float-atomic and checksum checks, and completed the dispatch in 0.973 ms. Both documented probe forms are now closed by automated and integrated evidence.
 
+The 0.1.10 dedicated-server classpath smoke also passes. Loom launched Minecraft 26.2 with Fabric Loader 0.19.3 in `Env=SERVER`, loaded Real Water 0.8.2 and `realwater_gpu_probe` 0.1.10 among 44 mods, set Java compatibility to 25, and both Mod initializers completed without a client-only linkage error. The probe reported that Vulkan remained lazy and the main CPU backend authoritative. The smoke deliberately kept `gpu-probe/run/eula.txt` at `false`, so the process exited before opening a port or creating a world. After the one missing Loom runtime helper was cached, the same gate reproduced with `--offline`.
+
 ## Commands
 
 The optional `realwater-gpu-probe` jar adds:
@@ -115,7 +117,6 @@ All handled probe commands and their chat/detail output are appended as UTF-8 bl
 
 ## Remaining M1 work
 
-- Add a dedicated-server classpath smoke. Integrated-server device-local visualization, paused multi-step control, continuous run/pause, status, both benchmark sizes, command transcript output and cleanup have passed; forced CPU fallback passed on 0.1.1.
 - Replace the single reusable staging buffer and CPU wall-clock timing with bounded ring staging and Vulkan timestamp queries before calling the layout production-ready. Full-state readback remains diagnostic-only.
 - The 0.1.8 integrated-server `worlddemo` creation, stepping, continuous scheduling, status and cleanup smoke has passed. If a visual mismatch is observed, capture a screenshot of the relevant partial shape; the optional after-capture block-edit freeze observation is still useful but is not required for the already-enforced immutable in-memory mask. Probe 0.1.9 MGH passed both packaged benchmark sizes, and probe 0.1.10 passed the corrected `/realwatergpu probe 1` form. Jacobi remains the generated-demo correctness/default baseline and MG2 remains the read-only `worlddemo` backend.
 - Complete the CPU variable-density face-coefficient experiment before M3 and measure CPU/GPU break-even across more occupancies.
