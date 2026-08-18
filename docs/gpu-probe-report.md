@@ -73,6 +73,8 @@ Moving the compute state off host-visible memory improves the current-domain ste
 
 The 0.1.2 integrated-server smoke on the RTX 5070 Ti measured the current domain at 0.886 ms average and the full 32³ case at 26.045 ms average while Minecraft was also rendering on that GPU. The difference from the 5.520 ms headless result is live GPU contention, not a change in particle volume or numerical stages. Both remain below the 40 ms soft budget. The requested full-state benchmark readback took 1,356.478 ms and is still intentionally excluded from normal stepping. Status reported the exact 2,592.000-cell GPU marker-volume reduction, and `remove` released the visualization without touching world state. This smoke also exposed that paused `/realwatergpu step 6` executed only one step. Probe 0.1.3 then completed all six requested paused steps (`RESULT: 6`), ran 217 total steps at 1.061 ms last-step time, retained exactly 2,592.000 cells of GPU marker volume, reduced divergence from 2.08417 to 0.00114, and removed cleanly. The command-count fix and the three-step hard-overrun guard are both now verified.
 
+Probe 0.1.4 then passed all three integrated-server pressure benchmark commands. On the live RTX 5070 Ti, Jacobi 96 averaged 0.876 ms and ended at divergence 5.93165→0.11767, RBGS/SOR 48 averaged 1.479 ms and ended at 9.95173→0.01688, and identity-PCG 32 averaged 1.649 ms and ended at 10.12072→0.02222. These ending divergence pairs are per-solver stability evidence, not a same-input convergence comparison: each command advanced its own dam for 23 steps and therefore finished from a different particle state. The automated fresh-state curves above remain the fair convergence evidence.
+
 ## Commands
 
 The optional `realwater-gpu-probe` jar adds:
