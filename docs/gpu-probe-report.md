@@ -89,6 +89,8 @@ Probe 0.1.6 passed the integrated-server MG2 command. On the live RTX 5070 Ti, t
 
 Probe 0.1.7 passed the packaged solid-aware MG2 command on the live RTX 5070 Ti. Two V-cycles averaged 0.890 ms over 20 steps, retained all 20,736 particles, and ended at divergence 10.86908→0.10805; regular diagnostics remained 64 B per step and the solid-aware coarse topology increased the requested full-state diagnostic to 3,002,176 B. This closes the integrated-server packaging gate for the generated-solid topology changes. It does not yet validate Minecraft block ingestion: 0.1.7 still uses only generated masks and remains world-independent.
 
+Probe 0.1.8 passed its integrated-server `worlddemo` command/API and numerical smoke on the live RTX 5070 Ti. The non-loading capture covered four loaded chunks and found 2,816 solid solver cells in 356 Minecraft blocks. Excluding those solids from the dam initialized 13,824 markers carrying exactly 1,728.000 solver-cell volumes (216.000 Minecraft blocks). Eight paused steps ran at 0.655 ms last-step time and reduced divergence from 1.22451 to 0.06943. Continuous execution reached 347 steps at 0.749 ms last-step time, retained exactly 1,728.000 cells, and reduced divergence from 2.87115 to 0.05586 before clean removal. Status preserved the `frozen-world/read-only` count throughout. The transcript proves the loaded-chunk API, packaged MG2, volume ledger, scheduling, status and cleanup paths; visual alignment of particular partial shapes and the optional after-capture block-edit freeze check are manual observations rather than log-derived claims.
+
 ## Commands
 
 The optional `realwater-gpu-probe` jar adds:
@@ -108,7 +110,7 @@ All handled probe commands and their chat/detail output are appended as UTF-8 bl
 
 - Add a dedicated-server classpath smoke. Integrated-server device-local visualization, paused multi-step control, continuous run/pause, status, both benchmark sizes, command transcript output and cleanup have passed; forced CPU fallback passed on 0.1.1.
 - Replace the single reusable staging buffer and CPU wall-clock timing with bounded ring staging and Vulkan timestamp queries before calling the layout production-ready. Full-state readback remains diagnostic-only.
-- Run the 0.1.8 integrated-server `worlddemo` smoke against full blocks and partial shapes, verify status reports `frozen-world/read-only`, then edit a block and confirm the frozen mask does not change. The automatic two-GPU ingestion gate has passed; this game/API and renderer gate remains. Extend MG2 to a fuller hierarchy afterward. Jacobi remains the generated-demo correctness/default baseline.
+- The 0.1.8 integrated-server `worlddemo` creation, stepping, continuous scheduling, status and cleanup smoke has passed. If a visual mismatch is observed, capture a screenshot of the relevant partial shape; the optional after-capture block-edit freeze observation is still useful but is not required for the already-enforced immutable in-memory mask. Extend MG2 to a fuller hierarchy next. Jacobi remains the generated-demo correctness/default baseline.
 - Complete the CPU variable-density face-coefficient experiment before M3 and measure CPU/GPU break-even across more occupancies.
 - Add a CPU-readable checkpoint and recovery path for runtime device loss. The main Mod already remains CPU-only; the optional visual probe currently pauses on a step failure rather than pretending incomplete buffers are valid.
 
