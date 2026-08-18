@@ -473,7 +473,7 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 - 0.1.13 用三个独立的 command pool/buffer、fence、timestamp query 和 64 B 映射 staging 槽替换普通 step 的单缓冲区 + `vkQueueWaitIdle` 生命周期；槽位复用只等待对应 fence，显式 snapshot/full-state 读回先收敛 ring 再使用串行 bulk staging。5070 Ti 完整门和 4060 Ti 小域专项均通过；真实 2,097,152-marker 满水门保持 262,144.0 格精确体积，约为 4.777 ms GPU timestamp / 4.913 ms throughput wall。调度与连续超时仍使用服务器线程的 scheduling/backpressure wall，timestamp 仍只做设备观测。CPU 小域也已完成三种变密度面系数对照，按界面距离加权的守恒通量候选在最高 13.6:1 密度比及非居中界面保持离散静水平衡，活动求解器尚未接入该候选。
 - 0.1.14 新增 generation 0 必备、每 20 步更新的 CPU 可读 marker/velocity/solid 检查点；任何 GPU 同步读取路径失败都会丢弃更新但未检查点化的代次，恢复到隔离 CPU fallback 并保持暂停。检查点只存在内存，常规 step 仍只回读 64 B，周期检查点的 wall time 纳入服务器超时保护；双卡 device-local/host-visible 小域恢复门均已通过。
 - 0.1.15 用独立无窗口矩阵分离测量网格规模、marker 数和压力流体格数量。RTX 5070 Ti 上，固定 `24×16×24` 网格的一个 marker 仍是 CPU 较快，4 marker 仅约 4% GPU 优势而视作持平，16 marker 起超过 10% 优势；当前 2,592 流体格/20,736-marker 参考域为 11.464 ms CPU wall 对 0.598 ms GPU completed-batch throughput wall，即 19.19×。固定流体格增加 marker 的成本显著小于固定 marker 增加流体格，说明当前 CPU PCG 更受活动压力拓扑影响，而 dense-grid GPU 在此范围主要承受约 0.35–0.60 ms 固定底价。比较保持 marker 账本，timestamp 不参与调度决策，也不选择正式后端。详见 [`gpu-probe-report.md`](gpu-probe-report.md)。M1 只剩一次 Minecraft 渲染同时运行的 30 分钟人工稳定性门；主 Mod 保持 CPU 权威，`worlddemo` 仍保持 MG2，普通 probe demo 仍保持 Jacobi，MGH 先作为显式 benchmark 候选。
-- 0.1.16 修复普通 GPU demo 在约 979–1,304 步出现的 GPU 特有快速表面坍缩：每个 50 ms 物理步固定执行四个 12.5 ms 完整子步，域边界和 solid 法向接触使用与 CPU 一致的 `0.45h` marker 半径，切向仍自由。1,000 步自动门要求 GPU/CPU 都保持三层 marker，并比较边缘/内部 density；5070 Ti 完整小域及 64³ 门通过。更正后的当前参考域为 11.646 ms CPU wall 对 2.257 ms GPU throughput wall（5.16×），64³ / 2,097,152-marker 满水物理步为 11.548 ms GPU / 11.744 ms throughput wall。GPU 的 36,000 步特征化仍在第 5,000 步后显示长期 marker 压缩，精确 marker 水量不变；CPU 与 GPU 都缺少 reseeding 是共享的结构性风险，但这组长测数据只来自 GPU。该问题明确留给 M2.5，不以更多子步或渲染找平掩盖。M1 人工门先复核原截图时间窗，再完成驱动/tick/内存稳定性观察；主 Mod 继续 CPU 权威。
+- 0.1.16 修复普通 GPU demo 在约 979–1,304 步出现的 GPU 特有快速表面坍缩：每个 50 ms 物理步固定执行四个 12.5 ms 完整子步，域边界和 solid 法向接触使用与 CPU 一致的 `0.45h` marker 半径，切向仍自由。1,000 步自动门要求 GPU/CPU 都保持三层 marker，并比较边缘/内部 density；5070 Ti 完整小域及 64³ 门通过。更正后的当前参考域为 11.646 ms CPU wall 对 2.257 ms GPU throughput wall（5.16×），64³ / 2,097,152-marker 满水物理步为 11.548 ms GPU / 11.744 ms throughput wall。GPU 的 36,000 步特征化仍在第 5,000 步后显示长期 marker 压缩，精确 marker 水量不变；CPU 与 GPU 都缺少 reseeding 是共享的结构性风险，但这组长测数据只来自 GPU。该问题明确留给 M2.5，不以更多子步或渲染找平掩盖。2026-08-19 的实机复测在第 1,317 步确认原固定边缘/角落凹坑显著消退，体积仍为 2,592.000 格且 recovery 为 0；残余小凹坑按 M2.5 验收。M1 只剩 30 分钟驱动/tick/进程内存/显存稳定性观察；主 Mod 继续 CPU 权威。
 
 ### M2：多区域、选区控制器、持久化与休眠
 
@@ -635,7 +635,7 @@ CPU 单线程参考场景固定随机种子、遍历顺序和输入，能稳定�
 
 ## 十三、接下来三项实际工作
 
-1. 在后续人工窗口先复核 GPU demo 第 1,000–1,300 步水面不再出现原来的额外边缘/角落坍缩，再继续完成 30 分钟驱动、tick、进程内存与显存稳定性门并正常 remove；长期 marker 压缩另按 M2.5 验收，不主动制造操作系统级驱动重置。
+1. 完成 GPU demo 30 分钟驱动、tick、进程内存与显存稳定性门并正常 remove；第 1,317 步实机水面回归已通过，长期 marker 压缩另按 M2.5 验收，不主动制造操作系统级驱动重置。
 2. 完成 M0 强制中断恢复和邻接更新人工门；测试世界保持备份。
 3. 在 CPU 参考路径设计 `FluidRegionManager` 和 chunk-section 状态，不改变当前 PIC/FLIP 不变量；M0 人工门与 M1 稳定性门完成后再开始持久化格式评审。
 
