@@ -224,7 +224,7 @@ final class GpuProbeService {
 			case JACOBI -> large ? 64 : PRESSURE_ITERATIONS;
 			case RBGS_SOR -> large ? 64 : 48;
 			case PCG, PCG_DIAGONAL -> large ? 64 : 32;
-			case MULTIGRID_TWO_LEVEL -> 2;
+			case MULTIGRID_TWO_LEVEL, MULTIGRID_HIERARCHY -> 2;
 		};
 		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(grid, ny, grid, H, DT, large ? 0.0F : GRAVITY, RHO,
 				pressureIterations, particles);
@@ -252,7 +252,8 @@ final class GpuProbeService {
 	}
 
 	private static VulkanFlipPipeline.Config gpuConfig(VulkanFlipPipeline.PressureSolver pressureSolver) {
-		int iterations = pressureSolver == VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL ? 2 : PRESSURE_ITERATIONS;
+		int iterations = pressureSolver == VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL
+				|| pressureSolver == VulkanFlipPipeline.PressureSolver.MULTIGRID_HIERARCHY ? 2 : PRESSURE_ITERATIONS;
 		return new VulkanFlipPipeline.Config(NX, NY, NZ, H, DT, GRAVITY, RHO, iterations, NX * NY * NZ * 8);
 	}
 

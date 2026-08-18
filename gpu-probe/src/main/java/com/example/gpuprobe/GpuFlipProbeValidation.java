@@ -28,17 +28,22 @@ public final class GpuFlipProbeValidation {
 		results.add(validateManualStepScheduling());
 		results.add(validateDamBreak(device));
 		results.add(validateHydrostaticColumn(device));
-		results.add(validateMultigridHydrostaticColumn(device));
+		results.add(validateMultigridHydrostaticColumn(device, VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL, "MG2"));
+		results.add(validateMultigridHydrostaticColumn(device, VulkanFlipPipeline.PressureSolver.MULTIGRID_HIERARCHY, "MGH"));
 		results.add(validateMultigridObstacles(device));
 		results.add(validateWorldCollisionMaskIngestion(device));
 		results.add(validatePressureSolvers(device));
 		results.add(validatePressureConvergenceCurves(device));
 		results.add(validateMemoryModes(device));
 		results.add(validateMultigridMemoryModes(device));
+		results.add(validateHierarchyMemoryModes(device));
 		results.add(benchmarkCurrentDomain(device, VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING));
 		results.add(benchmarkCurrentDomain(device, VulkanFlipPipeline.MemoryMode.HOST_VISIBLE));
 		if (!skipLarge) {
+			results.add(validateLargeHierarchyHydrostaticColumn(device));
+			results.add(validateLargeHierarchyObstacles(device));
 			results.add(benchmarkLargeMultigridCurve(device));
+			results.add(benchmarkLargeHierarchyCurve(device));
 			results.add(benchmarkLargePressureSolvers(device));
 			results.add(benchmarkThirtyTwoCubedBlocks(device));
 		}
@@ -122,27 +127,29 @@ public final class GpuFlipProbeValidation {
 		}
 	}
 
-	private static String validateMultigridHydrostaticColumn(int device) {
+	private static String validateMultigridHydrostaticColumn(int device, VulkanFlipPipeline.PressureSolver solver,
+	                                                         String label) {
 		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(16, 20, 16, CELL_SIZE, DT, GRAVITY, RHO, 2, 16 * 20 * 16 * 8);
 		try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,
-				VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL)) {
+				VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, solver)) {
 			gpu.initializeColumn();
 			float volume = gpu.totalParticleVolume();
 			for (int i = 0; i < 8; i++) gpu.step();
 			VulkanFlipPipeline.Diagnostics diagnostics = gpu.diagnostics();
 			requireFinite(diagnostics);
-			require(close(diagnostics.particleVolume(), volume, 1.0E-3F), "MG2 column particle volume changed");
+			require(close(diagnostics.particleVolume(), volume, 1.0E-3F), label + " column particle volume changed");
 			require(diagnostics.maximumDivergence() <= diagnostics.preProjectionMaximumDivergence() * 0.20F + 2.0E-3F,
-					"MG2 column projection did not sufficiently reduce divergence");
+					label + " column projection did not sufficiently reduce divergence");
 			VulkanFlipPipeline.PressureProfile profile = gpu.pressureProfile();
 			int lowest = firstOccupied(profile), highest = lastOccupied(profile);
-			require(lowest >= 0 && highest > lowest, "MG2 column pressure profile has insufficient occupied layers");
+			require(lowest >= 0 && highest > lowest, label + " column pressure profile has insufficient occupied layers");
 			float bottom = profile.averageByY()[lowest], top = profile.averageByY()[highest];
 			require(Float.isFinite(bottom) && Float.isFinite(top) && bottom > 8_000.0F && bottom < 11_000.0F
 					&& Math.abs(top) < 100.0F && diagnostics.maximumPressure() > 10_000.0F && diagnostics.maximumPressure() < 16_000.0F,
-					"MG2 hydrostatic pressure profile failed: max=" + diagnostics.maximumPressure() + ", bottom=" + bottom + ", top=" + top);
-			return String.format("correctness MG2 column: cycles=2 volume=%.3f cells maxP=%.3fPa bottomP=%.3fPa topP=%.3fPa postDiv=%.6f preDiv=%.6f",
-					volume, diagnostics.maximumPressure(), bottom, top, diagnostics.maximumDivergence(), diagnostics.preProjectionMaximumDivergence());
+					label + " hydrostatic pressure profile failed: max=" + diagnostics.maximumPressure() + ", bottom=" + bottom + ", top=" + top);
+			return String.format("correctness %s column: cycles=2 levels=%d volume=%.3f cells maxP=%.3fPa bottomP=%.3fPa topP=%.3fPa postDiv=%.6f preDiv=%.6f",
+					label, gpu.multigridLevelCount(), volume, diagnostics.maximumPressure(), bottom, top,
+					diagnostics.maximumDivergence(), diagnostics.preProjectionMaximumDivergence());
 		}
 	}
 
@@ -153,45 +160,66 @@ public final class GpuFlipProbeValidation {
 				2, 24 * 16 * 24 * 8);
 		try (VulkanFlipPipeline jacobi = new VulkanFlipPipeline(jacobiConfig, device);
 		     VulkanFlipPipeline multigrid = new VulkanFlipPipeline(mgConfig, device,
-				     VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL)) {
+				     VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL);
+		     VulkanFlipPipeline hierarchy = new VulkanFlipPipeline(mgConfig, device,
+				     VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, VulkanFlipPipeline.PressureSolver.MULTIGRID_HIERARCHY)) {
 			jacobi.initializeObstacleDamBreak();
 			multigrid.initializeObstacleDamBreak();
-			require(jacobi.particleCount() == multigrid.particleCount(), "obstacle solver particle counts differ");
-			require(jacobi.solidCellCount() == 228 && multigrid.solidCellCount() == 228, "synthetic obstacle cell count");
+			hierarchy.initializeObstacleDamBreak();
+			require(jacobi.particleCount() == multigrid.particleCount()
+					&& multigrid.particleCount() == hierarchy.particleCount(), "obstacle solver particle counts differ");
+			require(jacobi.solidCellCount() == 228 && multigrid.solidCellCount() == 228
+					&& hierarchy.solidCellCount() == 228, "synthetic obstacle cell count");
 			float volume = multigrid.totalParticleVolume();
-			float blockedCoupling = 0.0F;
-			float openCoupling = 0.0F;
+			float blockedCoupling = 0.0F, hierarchyBlockedCoupling = 0.0F;
+			float openCoupling = 0.0F, hierarchyOpenCoupling = 0.0F;
 			for (int step = 0; step < 8; step++) {
 				jacobi.step();
 				multigrid.step();
+				hierarchy.step();
 				VulkanFlipPipeline.Diagnostics jacobiDiagnostics = jacobi.diagnostics();
 				VulkanFlipPipeline.Diagnostics mgDiagnostics = multigrid.diagnostics();
-				requireFinite(jacobiDiagnostics); requireFinite(mgDiagnostics);
+				VulkanFlipPipeline.Diagnostics hierarchyDiagnostics = hierarchy.diagnostics();
+				requireFinite(jacobiDiagnostics); requireFinite(mgDiagnostics); requireFinite(hierarchyDiagnostics);
 				require(close(mgDiagnostics.particleVolume(), volume, 1.0E-3F), "MG2 obstacle volume changed");
+				require(close(hierarchyDiagnostics.particleVolume(), volume, 1.0E-3F), "MGH obstacle volume changed");
 				require(mgDiagnostics.maximumDivergence() <= mgDiagnostics.preProjectionMaximumDivergence() * 0.50F + 3.0E-3F,
 						"MG2 obstacle projection did not sufficiently reduce divergence at step " + step);
+				require(hierarchyDiagnostics.maximumDivergence() <= hierarchyDiagnostics.preProjectionMaximumDivergence() * 0.50F + 3.0E-3F,
+						"MGH obstacle projection did not sufficiently reduce divergence at step " + step);
 				if (step == 0) {
 					float[] xWeights = multigrid.coarseXWeights();
+					float[] hierarchyXWeights = hierarchy.coarseXWeights();
 					int coarseNx = 12, coarseNy = 8;
 					for (int z = 3; z < 9; z++) for (int y = 0; y < 6; y++) {
-						blockedCoupling = Math.max(blockedCoupling, Math.abs(xWeights[5 + coarseNx * (y + coarseNy * z)]));
+						int cell = 5 + coarseNx * (y + coarseNy * z);
+						blockedCoupling = Math.max(blockedCoupling, Math.abs(xWeights[cell]));
+						hierarchyBlockedCoupling = Math.max(hierarchyBlockedCoupling, Math.abs(hierarchyXWeights[cell]));
 					}
 					openCoupling = xWeights[5];
+					hierarchyOpenCoupling = hierarchyXWeights[5];
 				}
 			}
 			require(blockedCoupling <= 1.0E-6F, "MG2 coarse operator crossed thin wall: " + blockedCoupling);
 			require(openCoupling >= 0.99F, "MG2 coarse operator lost open face: " + openCoupling);
-			require(jacobi.particlesInsideSolidCount() == 0 && multigrid.particlesInsideSolidCount() == 0,
+			require(hierarchyBlockedCoupling <= 1.0E-6F, "MGH coarse operator crossed thin wall: " + hierarchyBlockedCoupling);
+			require(hierarchyOpenCoupling >= 0.99F, "MGH coarse operator lost open face: " + hierarchyOpenCoupling);
+			require(jacobi.particlesInsideSolidCount() == 0 && multigrid.particlesInsideSolidCount() == 0
+					&& hierarchy.particlesInsideSolidCount() == 0,
 					"particles entered synthetic obstacle");
 			VulkanFlipPipeline.SnapshotData jacobiSnapshot = jacobi.snapshot();
 			VulkanFlipPipeline.SnapshotData mgSnapshot = multigrid.snapshot();
+			VulkanFlipPipeline.SnapshotData hierarchySnapshot = hierarchy.snapshot();
 			require(mismatches(jacobiSnapshot.solids(), mgSnapshot.solids()) == 0, "obstacle solid snapshots differ");
+			require(mismatches(mgSnapshot.solids(), hierarchySnapshot.solids()) == 0, "MGH obstacle solid snapshot differs");
 			VulkanFlipPipeline.Diagnostics jacobiDiagnostics = jacobi.diagnostics();
 			VulkanFlipPipeline.Diagnostics mgDiagnostics = multigrid.diagnostics();
-			return String.format("correctness MG2 obstacles: solids=228 particles=%d volume=%.3f cells coarseWall=%.6f open=%.3f inside=0 JacobiDiv %.5f->%.5f MG2Div %.5f->%.5f",
-					multigrid.particleCount(), volume, blockedCoupling, openCoupling,
+			VulkanFlipPipeline.Diagnostics hierarchyDiagnostics = hierarchy.diagnostics();
+			return String.format("correctness MG2/MGH obstacles: solids=228 particles=%d volume=%.3f cells coarseWall=%.6f/%.6f open=%.3f/%.3f inside=0 JacobiDiv %.5f->%.5f MG2Div %.5f->%.5f MGHDiv %.5f->%.5f",
+					multigrid.particleCount(), volume, blockedCoupling, hierarchyBlockedCoupling, openCoupling, hierarchyOpenCoupling,
 					jacobiDiagnostics.preProjectionMaximumDivergence(), jacobiDiagnostics.maximumDivergence(),
-					mgDiagnostics.preProjectionMaximumDivergence(), mgDiagnostics.maximumDivergence());
+					mgDiagnostics.preProjectionMaximumDivergence(), mgDiagnostics.maximumDivergence(),
+					hierarchyDiagnostics.preProjectionMaximumDivergence(), hierarchyDiagnostics.maximumDivergence());
 		}
 	}
 
@@ -257,8 +285,8 @@ public final class GpuFlipProbeValidation {
 	private static String validatePressureSolvers(int device) {
 		List<PressureResult> results = new ArrayList<>();
 		for (VulkanFlipPipeline.PressureSolver solver : VulkanFlipPipeline.PressureSolver.values()) {
-			int iterations = switch (solver) { case JACOBI -> 96; case RBGS_SOR -> 48; case PCG, PCG_DIAGONAL -> 32; case MULTIGRID_TWO_LEVEL -> 2; };
-			float maximumRatio = switch (solver) { case JACOBI -> 0.25F; case RBGS_SOR -> 0.08F; case PCG, PCG_DIAGONAL -> 0.02F; case MULTIGRID_TWO_LEVEL -> 0.20F; };
+			int iterations = switch (solver) { case JACOBI -> 96; case RBGS_SOR -> 48; case PCG, PCG_DIAGONAL -> 32; case MULTIGRID_TWO_LEVEL, MULTIGRID_HIERARCHY -> 2; };
+			float maximumRatio = switch (solver) { case JACOBI -> 0.25F; case RBGS_SOR -> 0.08F; case PCG, PCG_DIAGONAL -> 0.02F; case MULTIGRID_TWO_LEVEL, MULTIGRID_HIERARCHY -> 0.20F; };
 			VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(24, 16, 24, CELL_SIZE, DT, GRAVITY, RHO,
 					iterations, 24 * 16 * 24 * 8);
 			try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,
@@ -288,7 +316,7 @@ public final class GpuFlipProbeValidation {
 				case JACOBI -> new int[] {32, 64, 96};
 				case RBGS_SOR -> new int[] {16, 32, 48};
 				case PCG, PCG_DIAGONAL -> new int[] {16, 24, 32};
-				case MULTIGRID_TWO_LEVEL -> new int[] {1, 2, 3};
+				case MULTIGRID_TWO_LEVEL, MULTIGRID_HIERARCHY -> new int[] {1, 2, 3};
 			};
 			List<CurvePoint> points = new ArrayList<>();
 			for (int iterations : iterationCounts) {
@@ -324,12 +352,17 @@ public final class GpuFlipProbeValidation {
 		return validateMemoryModes(device, VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL, 2, 4, "MG2 memory modes");
 	}
 
+	private static String validateHierarchyMemoryModes(int device) {
+		return validateMemoryModes(device, VulkanFlipPipeline.PressureSolver.MULTIGRID_HIERARCHY, 2, 4, "MGH memory modes");
+	}
+
 	private static String validateMemoryModes(int device, VulkanFlipPipeline.PressureSolver solver, int iterations,
 	                                          int steps, String label) {
 		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(24, 16, 24, CELL_SIZE, DT, GRAVITY, RHO, iterations, 24 * 16 * 24 * 8);
 		try (VulkanFlipPipeline deviceLocal = new VulkanFlipPipeline(config, device, VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, solver);
 		     VulkanFlipPipeline hostVisible = new VulkanFlipPipeline(config, device, VulkanFlipPipeline.MemoryMode.HOST_VISIBLE, solver)) {
-			if (solver == VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL) {
+			if (solver == VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL
+					|| solver == VulkanFlipPipeline.PressureSolver.MULTIGRID_HIERARCHY) {
 				deviceLocal.initializeObstacleDamBreak();
 				hostVisible.initializeObstacleDamBreak();
 			} else {
@@ -399,7 +432,7 @@ public final class GpuFlipProbeValidation {
 		int grid = 64, capacity = 32 * 32 * 32 * 64;
 		List<String> results = new ArrayList<>();
 		for (VulkanFlipPipeline.PressureSolver solver : VulkanFlipPipeline.PressureSolver.values()) {
-			int iterations = switch (solver) { case JACOBI -> 64; case RBGS_SOR -> 64; case PCG, PCG_DIAGONAL -> 64; case MULTIGRID_TWO_LEVEL -> 2; };
+			int iterations = switch (solver) { case JACOBI -> 64; case RBGS_SOR -> 64; case PCG, PCG_DIAGONAL -> 64; case MULTIGRID_TWO_LEVEL, MULTIGRID_HIERARCHY -> 2; };
 			VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(grid, grid, grid, CELL_SIZE, DT, GRAVITY, RHO,
 					iterations, capacity);
 			try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,
@@ -445,9 +478,139 @@ public final class GpuFlipProbeValidation {
 				points.add(new CurvePoint(cycles, minimumMillis, diagnostics.maximumDivergence()));
 			}
 		}
-		require(points.getLast().maximumDivergence() < points.getFirst().maximumDivergence(), "MG2 large convergence curve did not improve");
+		requireStrictlyImproving(points, "MG2 large convergence curve");
 		return "benchmark MG2 64^3-grid convergence curve: "
 				+ points.stream().map(CurvePoint::format).reduce((a, b) -> a + ", " + b).orElseThrow();
+	}
+
+	private static String validateLargeHierarchyHydrostaticColumn(int device) {
+		int grid = 64, capacity = 32 * 32 * 32 * 64;
+		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(grid, grid, grid, CELL_SIZE, DT, GRAVITY, RHO,
+				2, capacity);
+		try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,
+				VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, VulkanFlipPipeline.PressureSolver.MULTIGRID_HIERARCHY)) {
+			gpu.initializeColumn();
+			float volume = gpu.totalParticleVolume();
+			for (int step = 0; step < 8; step++) gpu.step();
+			VulkanFlipPipeline.Diagnostics diagnostics = gpu.diagnostics();
+			requireFinite(diagnostics);
+			require(gpu.multigridLevelCount() == 4, "large MGH column did not use four levels");
+			require(close(diagnostics.particleVolume(), volume, 0.1F), "large MGH column volume changed");
+			require(diagnostics.maximumDivergence() < diagnostics.preProjectionMaximumDivergence(),
+					"large MGH column projection failed");
+			VulkanFlipPipeline.PressureProfile profile = gpu.pressureProfile();
+			int lowest = firstOccupied(profile), highest = lastOccupied(profile);
+			require(lowest >= 0 && highest > lowest, "large MGH column pressure profile has insufficient layers");
+			float bottom = profile.averageByY()[lowest], top = profile.averageByY()[highest];
+			require(Float.isFinite(bottom) && Float.isFinite(top) && bottom > top && diagnostics.maximumPressure() > 10_000.0F,
+					"large MGH hydrostatic pressure direction failed");
+			return String.format("correctness MGH 64^3 column: levels=4 volume=%.3f cells maxP=%.3fPa bottomP=%.3fPa topP=%.3fPa div %.5f->%.5f",
+					volume, diagnostics.maximumPressure(), bottom, top,
+					diagnostics.preProjectionMaximumDivergence(), diagnostics.maximumDivergence());
+		}
+	}
+
+	private static String validateLargeHierarchyObstacles(int device) {
+		int grid = 64, capacity = 32 * 32 * 32 * 64;
+		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(grid, grid, grid, CELL_SIZE, DT, GRAVITY, RHO,
+				2, capacity);
+		try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,
+				VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, VulkanFlipPipeline.PressureSolver.MULTIGRID_HIERARCHY)) {
+			gpu.initializeObstacleDamBreak();
+			float volume = gpu.totalParticleVolume();
+			gpu.step();
+			VulkanFlipPipeline.Diagnostics diagnostics = gpu.diagnostics();
+			requireFinite(diagnostics);
+			require(close(diagnostics.particleVolume(), volume, 0.1F), "large MGH obstacle volume changed");
+			require(diagnostics.maximumDivergence() < diagnostics.preProjectionMaximumDivergence(),
+					"large MGH obstacle projection failed");
+			require(gpu.particlesInsideSolidCount() == 0, "large MGH particle entered a solid");
+			float[] weights = gpu.packedHierarchyXWeights();
+			int[] dimensions = {32, 16, 8, 4};
+			int offset = 0;
+			StringBuilder blockedSummary = new StringBuilder(), openSummary = new StringBuilder();
+			for (int level = 0; level < dimensions.length; level++) {
+				int dimension = dimensions[level], wallX = dimension / 2 - 1;
+				int wallYEnd = 24 >> level, wallZStart = 8 >> level, wallZEnd = 24 >> level;
+				float blocked = 0.0F;
+				for (int z = wallZStart; z < wallZEnd; z++) for (int y = 0; y < wallYEnd; y++) {
+					blocked = Math.max(blocked, Math.abs(weights[offset + wallX + dimension * (y + dimension * z)]));
+				}
+				float open = weights[offset + wallX];
+				require(blocked <= 1.0E-6F, "MGH hierarchy crossed thin wall at level " + (level + 1) + ": " + blocked);
+				require(open >= 0.99F, "MGH hierarchy lost open face at level " + (level + 1) + ": " + open);
+				if (level > 0) { blockedSummary.append('/'); openSummary.append('/'); }
+				blockedSummary.append(String.format("%.1f", blocked));
+				openSummary.append(String.format("%.1f", open));
+				offset += dimension * dimension * dimension;
+			}
+			return String.format("correctness MGH 64^3 obstacles: levels=4 solids=%d particles=%d volume=%.3f cells wall=%s open=%s inside=0 div %.5f->%.5f",
+					gpu.solidCellCount(), gpu.particleCount(), volume, blockedSummary, openSummary,
+					diagnostics.preProjectionMaximumDivergence(), diagnostics.maximumDivergence());
+		}
+	}
+
+	private static String benchmarkLargeHierarchyCurve(int device) {
+		int grid = 64, capacity = 32 * 32 * 32 * 64;
+		List<CurvePoint> points = new ArrayList<>();
+		int levels = 0;
+		String topology = "";
+		for (int cycles : new int[] {1, 2, 3}) {
+			VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(grid, grid, grid, CELL_SIZE, DT, GRAVITY, RHO,
+					cycles, capacity);
+			try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,
+					VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, VulkanFlipPipeline.PressureSolver.MULTIGRID_HIERARCHY)) {
+				levels = gpu.multigridLevelCount();
+				gpu.initializeDamBreak();
+				gpu.step();
+				if (cycles == 1) topology = validateHierarchyTopology(gpu);
+				double minimumMillis = Double.POSITIVE_INFINITY;
+				VulkanFlipPipeline.Diagnostics diagnostics = null;
+				for (int sample = 0; sample < 3; sample++) {
+					gpu.initializeDamBreak();
+					gpu.step();
+					minimumMillis = Math.min(minimumMillis, gpu.lastStepMilliseconds());
+					diagnostics = gpu.diagnostics();
+				}
+				requireFinite(diagnostics);
+				points.add(new CurvePoint(cycles, minimumMillis, diagnostics.maximumDivergence()));
+			}
+		}
+		require(levels == 4, "64^3 MGH hierarchy level count: " + levels);
+		requireStrictlyImproving(points, "MGH large convergence curve");
+		require(points.get(1).maximumDivergence() < 0.16F, "MGH two-cycle 64^3 quality gate failed");
+		require(points.get(2).maximumDivergence() < 0.11F, "MGH three-cycle 64^3 quality gate failed");
+		return "benchmark MGH 64^3-grid convergence curve (" + topology + "): "
+				+ points.stream().map(CurvePoint::format).reduce((a, b) -> a + ", " + b).orElseThrow();
+	}
+
+	private static String validateHierarchyTopology(VulkanFlipPipeline gpu) {
+		VulkanFlipPipeline.HierarchyLevelStats[] stats = gpu.hierarchyLevelStats();
+		int[] expectedCells = {32 * 32 * 32, 16 * 16 * 16, 8 * 8 * 8, 4 * 4 * 4};
+		require(stats.length == expectedCells.length, "64^3 MGH topology length: " + stats.length);
+		StringBuilder fluidCells = new StringBuilder();
+		for (int i = 0; i < stats.length; i++) {
+			VulkanFlipPipeline.HierarchyLevelStats level = stats[i];
+			require(level.level() == i + 1 && level.cells() == expectedCells[i], "MGH packed level shape mismatch at " + (i + 1));
+			require(level.fluidCells() > 0, "MGH packed level has no fluid at " + (i + 1));
+			require(Float.isFinite(level.maximumRhs()) && level.maximumRhs() > 0.0F, "MGH level RHS invalid at " + (i + 1));
+			require(Float.isFinite(level.maximumPressure()) && level.maximumPressure() > 0.0F, "MGH level pressure invalid at " + (i + 1));
+			require(Float.isFinite(level.minimumPositiveDiagonal()) && level.minimumPositiveDiagonal() > 0.0F,
+					"MGH level diagonal invalid at " + (i + 1));
+			require(level.maximumDiagonal() <= 6.0F + 1.0E-5F, "MGH level diagonal exceeds fine operator at " + (i + 1));
+			require(level.maximumWeight() >= 0.0F && level.maximumWeight() <= 1.0F + 1.0E-5F,
+					"MGH level coupling weight invalid at " + (i + 1));
+			if (i > 0) fluidCells.append('/');
+			fluidCells.append(level.fluidCells());
+		}
+		return "levels=4 cells=32768/4096/512/64 fluid=" + fluidCells;
+	}
+
+	private static void requireStrictlyImproving(List<CurvePoint> points, String label) {
+		for (int i = 1; i < points.size(); i++) {
+			require(points.get(i).maximumDivergence() < points.get(i - 1).maximumDivergence(),
+					label + " did not improve from point " + i + " to " + (i + 1));
+		}
 	}
 
 	private static FlipFluidDomain cpuDamBreak(VulkanFlipPipeline.Config config) {
