@@ -81,6 +81,8 @@ Probe 0.1.4 then passed all three integrated-server pressure benchmark commands.
 
 Probe 0.1.5 also passed the integrated-server diagonal-PCG command. On the live RTX 5070 Ti, diagonal-PCG 32 averaged 1.783 ms over 20 steps, retained all 20,736 particles, and ended at divergence 10.12744→0.01579; regular diagnostics remained 64 B per step. This validates the command/parser and packaged shader path, while the same-input automated curves remain the evidence that diagonal preconditioning should not replace the default.
 
+Probe 0.1.6 passed the integrated-server MG2 command. On the live RTX 5070 Ti, two V-cycles averaged 0.798 ms over 20 steps, retained all 20,736 particles, and ended at divergence 10.81817→0.29078; regular diagnostics remained 64 B per step and the full diagnostic readback reflected the four new coarse buffers. This validates the packaged command and V-cycle path. As with the earlier solver commands, the evolved ending pair is not substituted for the automated same-input convergence curves.
+
 ## Commands
 
 The optional `realwater-gpu-probe` jar adds:
