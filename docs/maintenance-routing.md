@@ -1,6 +1,6 @@
 # Real Water 维护路由
 
-本文面向接棒开发者，回答“某项功能要去哪里改、改完验证什么”。当前基线为 `0.8.1`，Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2，Java 25 字节码。
+本文面向接棒开发者，回答“某项功能要去哪里改、改完验证什么”。当前基线为 `0.8.2`，Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2，Java 25 字节码。
 
 已确认的多材料、气体、化学、颗粒、世界接管与 GPU 长期路线见 [`long-term-roadmap.md`](long-term-roadmap.md)。本文仍只描述当前 0.8 代码路径。
 
@@ -106,6 +106,14 @@ M0 takeover codec、真实文件与故障注入回归：
 ```
 
 该套件覆盖正常创建/删除、写入前、原子发布后、移除第 N 块、恢复第 N 块、删除前、损坏/未知版本、维度未加载、残留临时文件、原子移动不可用、WARNING 发布失败、删除失败、世界恢复失败和玩家实体方块保护。
+
+指令 transcript 文件回归：
+
+```powershell
+./gradlew.bat runCommandAuditValidation --offline --no-daemon
+```
+
+`RealWaterCommandLog` 包装两个命令树并收集处理器输出，`CommandAuditFile` 只负责 UTF-8 追加格式。目标为服务器游戏目录的 `logs/realwater-commands.log`；`/realwater logpath` 可显示绝对路径。该文件不是物理真值、存档或恢复 journal，写入失败只进入普通错误日志，不能阻塞或改变命令结果。Brigadier 在进入处理器前拒绝的拼写/语法错误只存在于 `latest.log`。
 
 独立 M1-A Windows/NVIDIA GPU probe：
 

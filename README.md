@@ -18,6 +18,7 @@ This version is a safe test harness, not yet a global replacement for vanilla wa
 - `/realwater run` advances at 20 Hz when affordable and automatically lowers the simulation rate under sustained load.
 - `/realwater pause` pauses automatic stepping.
 - `/realwater status` reports grid size, total water, maximum pressure, solve iterations, residual, and time.
+- `/realwater logpath` prints the absolute path of the dedicated UTF-8 command transcript.
 - `/realwater remove` removes the temporary domain and client debug view.
 
 The blue mesh is a marching-tetrahedra isosurface reconstructed from the current water particles. With `/realwater debug true`, translucent orange faces show collision subcells and yellow edges show the bounded domain. A 40 ms soft budget lowers stepping to 10, 6.7, or 5 Hz instead of stopping; only three consecutive steps above 200 ms auto-pause the domain.
@@ -40,11 +41,13 @@ Version 0.8 makes takeover restoration crash-safe. Before any vanilla water is r
 
 Version 0.8.1 completes the automated M0 transaction hardening without changing takeover-journal v1. An existing, corrupt, unknown-version, unloaded-dimension, or otherwise unresolved journal locks every new takeover and is never overwritten. The journal and `realwater-takeover-WARNING.txt` must both be atomically published before world mutation; filesystems without atomic move support fail closed. Restoration failures and cleanup failures preserve the journal for an idempotent retry. The warning names the world, dimension, backed-up block count, and recovery steps.
 
+Version 0.8.2 adds an append-only UTF-8 transcript at `logs/realwater-commands.log`. Every `/realwater` and `/realwatergpu` command that reaches its handler records the exact command, source, all success/failure/detail output, and Brigadier result code as one timestamped block. `/realwater logpath` prints its absolute location. Syntax errors rejected before a handler runs, such as a misspelled subcommand, remain in Minecraft's `latest.log` because Fabric exposes no command-execution callback at that parse boundary.
+
 While either recovery file exists, keep a full world backup and do not remove or downgrade Real Water. First run `/realwater remove`, or let startup recovery finish, and confirm both files have disappeared. An administrator who manually deletes the recovery files or removes the mod before recovery can defeat safeguards that code can no longer enforce.
 
 ## Optional windowless GPU probe
 
-The separate `realwater-gpu-probe` jar is an M1 development probe, not a replacement backend for the main Mod. It initializes Vulkan lazily without a GLFW window or surface, never reads or changes world blocks, and never writes simulation data to a save. `/realwatergpu demo` exposes its GPU dam-break through the existing client surface renderer; `step`, `run`, `pause`, `status`, `benchmark [12|32] [device]`, and `remove` are independent from the main `/realwater` lifecycle. If Vulkan initialization fails, only this visual demo falls back to an isolated CPU domain. The main Mod remains CPU-authoritative with or without the probe jar.
+The separate `realwater-gpu-probe` jar is an M1 development probe, not a replacement backend for the main Mod. It initializes Vulkan lazily without a GLFW window or surface, never reads or changes world blocks, and never writes simulation data to a save. `/realwatergpu demo` exposes its GPU dam-break through the existing client surface renderer; `step`, `run`, `pause`, `status`, `benchmark [12|32] [device]`, and `remove` are independent from the main `/realwater` lifecycle. If Vulkan initialization fails, only this visual demo falls back to an isolated CPU domain. The main Mod remains CPU-authoritative with or without the probe jar. Its command transcript is diagnostic output in the normal game logs directory, not simulation persistence.
 
 See [docs/gpu-probe-report.md](docs/gpu-probe-report.md) for the two-GPU capability results, CPU/GPU correctness tolerances, static-column validation, the real 2,097,152-marker benchmark, readback measurements, commands, and remaining M1 work.
 

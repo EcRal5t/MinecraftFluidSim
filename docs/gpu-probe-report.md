@@ -1,6 +1,6 @@
 # M1 Windows/NVIDIA Vulkan GPU probe report
 
-Date: 2026-08-18. Main Mod: Real Water 0.8.1. Optional probe Mod: `realwater_gpu_probe` 0.1.0. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
+Date: 2026-08-18. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.1. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
 
 This is an M1-A correctness and data-movement probe, not the production GPU backend and not the completion of all M1 pressure-algorithm experiments. It has no takeover code, does not read world blocks or collision state, does not write a save, and owns no chunk tickets. The main `realwater` Mod remains the CPU-authoritative implementation whether the optional probe jar is installed or not.
 
@@ -61,6 +61,8 @@ The optional `realwater-gpu-probe` jar adds:
 - `/realwatergpu remove`: free probe resources and clear the debug snapshot.
 
 The main `/realwater` domain and the probe share the existing debug snapshot channel, so the probe refuses creation while a main domain exists and auto-pauses if one appears later.
+
+All handled probe commands and their chat/detail output are appended as UTF-8 blocks to `logs/realwater-commands.log`; `/realwater logpath` reports the exact absolute path. This diagnostic transcript is the only new file written by the probe integration and is not world/save state.
 
 ## Remaining M1 work
 

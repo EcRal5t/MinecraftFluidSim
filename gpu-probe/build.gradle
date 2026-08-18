@@ -7,7 +7,7 @@ base {
 	archivesName = 'realwater-gpu-probe'
 }
 
-version = '0.1.0'
+version = '0.1.1'
 group = project.group
 
 loom {

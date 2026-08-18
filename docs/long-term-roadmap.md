@@ -2,7 +2,7 @@
 
 本文记录从 `0.8.0` 有界 3D PIC/FLIP 水体原型走向“可混合、可反应、包含气体和颗粒沉积物的世界流体系统”的已确认需求、技术边界、数据不变量和分阶段验收门槛。它是长期方向文档，不替代 [`maintenance-routing.md`](maintenance-routing.md) 的当前代码路由，也不表示后续存档格式已经冻结。
 
-基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、Mod 0.8.1、Java 25 字节码。活动求解器仍是 [`FlipFluidDomain.java`](../src/main/java/com/example/fluid/FlipFluidDomain.java)，不得切回旧 VOF。`0.8.x` 是路线形成期的历史版本号，不表示已经完成未来 1.0 的 80%。
+基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、Mod 0.8.2、Java 25 字节码。活动求解器仍是 [`FlipFluidDomain.java`](../src/main/java/com/example/fluid/FlipFluidDomain.java)，不得切回旧 VOF。`0.8.x` 是路线形成期的历史版本号，不表示已经完成未来 1.0 的 80%。
 
 ## 零、发布切割线
 
