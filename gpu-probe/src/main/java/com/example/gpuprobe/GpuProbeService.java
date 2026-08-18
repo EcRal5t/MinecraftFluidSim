@@ -16,6 +16,8 @@ import net.minecraft.world.phys.Vec3;
 import java.util.Locale;
 import java.util.Map;
 import java.util.WeakHashMap;
+import java.util.function.BooleanSupplier;
+import java.util.function.IntSupplier;
 
 /** In-memory, world-read-free service for the optional GPU visualization demo. */
 final class GpuProbeService {
@@ -82,13 +84,20 @@ final class GpuProbeService {
 	int step(ServerLevel level, int count) {
 		if (backend == null || !level.dimension().equals(dimension)) return 0;
 		if (FluidSimulationService.get(level.getServer()).exists()) return 0;
+		int completed = runManualLoop(count, this::stepOnce, () -> hardOverrunStreak);
+		sendSnapshot(level);
+		return completed;
+	}
+
+	static int runManualLoop(int count, BooleanSupplier step, IntSupplier hardOverrunStreak) {
 		int completed = 0;
 		for (int i = 0; i < count; i++) {
-			if (!stepOnce()) break;
+			if (!step.getAsBoolean()) break;
 			completed++;
-			if (paused) break;
+			// Manual stepping is intentionally available while paused. Stop only at the hard
+			// overrun guard; the ordinary paused flag must not collapse "step N" to one step.
+			if (hardOverrunStreak.getAsInt() >= 3) break;
 		}
-		sendSnapshot(level);
 		return completed;
 	}
 

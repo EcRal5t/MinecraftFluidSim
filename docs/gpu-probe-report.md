@@ -1,6 +1,6 @@
 # M1 Windows/NVIDIA Vulkan GPU probe report
 
-Date: 2026-08-18. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.2. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
+Date: 2026-08-19. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.3. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
 
 This is an M1-B correctness and data-movement probe, not the production GPU backend and not the completion of all M1 pressure-algorithm experiments. It has no takeover code, does not read world blocks or collision state, does not write a save, and owns no chunk tickets. The main `realwater` Mod remains the CPU-authoritative implementation whether the optional probe jar is installed or not.
 
@@ -55,6 +55,8 @@ The 32³ benchmark really allocates and advances all 2,097,152 full-water marker
 
 Moving the compute state off host-visible memory improves the current-domain step by about 8.0× on the RTX 5070 Ti and 3.6× on the RTX 4060 Ti. It also reverses the misleading M1-A large-domain result: the same RTX 5070 Ti 32³ case falls from roughly 655 ms to 5.52 ms once the 84 MB working set stays device-local. The roughly 17 ms 1 MiB snapshot and 1.35–1.40 s full diagnostic scan show why snapshot cadence, bounded queries and future ring staging still matter even though the physical step is fast.
 
+The 0.1.2 integrated-server smoke on the RTX 5070 Ti measured the current domain at 0.886 ms average and the full 32³ case at 26.045 ms average while Minecraft was also rendering on that GPU. The difference from the 5.520 ms headless result is live GPU contention, not a change in particle volume or numerical stages. Both remain below the 40 ms soft budget. The requested full-state benchmark readback took 1,356.478 ms and is still intentionally excluded from normal stepping. Status reported the exact 2,592.000-cell GPU marker-volume reduction, and `remove` released the visualization without touching world state. This smoke also exposed that paused `/realwatergpu step 6` executed only one step; 0.1.3 fixes the command loop while preserving the three-step hard-overrun guard.
+
 ## Commands
 
 The optional `realwater-gpu-probe` jar adds:
@@ -71,7 +73,7 @@ All handled probe commands and their chat/detail output are appended as UTF-8 bl
 
 ## Remaining M1 work
 
-- Repeat the integrated-server visual/status/benchmark smoke with probe 0.1.2. Probe 0.1.1 already passed native loading, dam-break visualization, status/benchmark commands, command transcript output and forced CPU fallback in the integrated server; a dedicated-server classpath smoke remains pending.
+- Verify the corrected paused `step N` count with probe 0.1.3. Probe 0.1.2 passed integrated-server device-local visualization, status, both benchmark sizes, command transcript output and cleanup; 0.1.1 already passed forced CPU fallback. A dedicated-server classpath smoke remains pending.
 - Replace the single reusable staging buffer and CPU wall-clock timing with bounded ring staging and Vulkan timestamp queries before calling the layout production-ready. Full-state readback remains diagnostic-only.
 - Compare pressure PCG/global reductions, red-black GS/SOR, and a multigrid or preconditioned route, including residual curves and dispatch/barrier cost. Current Jacobi is only the correctness baseline.
 - Complete the CPU variable-density face-coefficient experiment before M3 and measure CPU/GPU break-even across more occupancies.

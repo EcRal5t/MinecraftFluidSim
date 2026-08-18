@@ -6,6 +6,7 @@ import com.example.fluid.FluidSolverConfig;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Standalone M1 correctness and throughput gate. It never starts Minecraft, opens a window, or accesses a save.
@@ -24,6 +25,7 @@ public final class GpuFlipProbeValidation {
 		boolean skipLarge = args.length > 1 && "--skip-large".equals(args[1]);
 		long suiteStarted = System.nanoTime();
 		List<String> results = new ArrayList<>();
+		results.add(validateManualStepScheduling());
 		results.add(validateDamBreak(device));
 		results.add(validateHydrostaticColumn(device));
 		results.add(validateMemoryModes(device));
@@ -32,6 +34,17 @@ public final class GpuFlipProbeValidation {
 		if (!skipLarge) results.add(benchmarkThirtyTwoCubedBlocks(device));
 		for (String result : results) System.out.println(result);
 		System.out.printf("GPU FLIP validation passed on device %d in %.3f s%n", device, secondsSince(suiteStarted));
+	}
+
+	private static String validateManualStepScheduling() {
+		AtomicInteger executed = new AtomicInteger();
+		int completed = GpuProbeService.runManualLoop(6, () -> { executed.incrementAndGet(); return true; }, () -> 0);
+		require(completed == 6 && executed.get() == 6, "paused manual step count collapsed");
+		executed.set(0);
+		completed = GpuProbeService.runManualLoop(20, () -> { executed.incrementAndGet(); return true; },
+				() -> executed.get() >= 3 ? 3 : executed.get());
+		require(completed == 3 && executed.get() == 3, "manual step ignored hard-overrun guard");
+		return "correctness manual scheduling: requested=6 completed=6 hardGuard=3";
 	}
 
 	private static String validateDamBreak(int device) {

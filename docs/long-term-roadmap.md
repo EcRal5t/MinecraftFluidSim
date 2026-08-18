@@ -461,7 +461,7 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 
 按 9.4 建立独立测试 Mod，并生成运行时模块/native、设备、求解算法、吞吐、显存、全量/压缩回读、CPU 对照和稳定性报告。CPU 小域同时完成变密度面系数候选实验；GPU 比较 PCG、red-black GS/SOR 与多网格/预条件路线。32³ 满水场景必须实际分配约 210 万 marker，而不是继承当前 262,144 上限后只测八分之一装填。M1 可以与 CPU 区域设计并行调研，但主 Mod 不得在探针完成前把存档格式绑定到 GPU 缓冲区。
 
-当前状态（2026-08-18，M1-B）：独立 `gpu-probe` 子项目已在本机 RTX 5070 Ti 与 RTX 4060 Ti 上完成无窗口 Vulkan/Shaderc/VMA/float-atomic 探测，并实现完整 3D P2G → Jacobi 压力 → 投影 → G2P → advect 正确性管线。0.1.1 的集成服务器可视化、命令日志和 CPU fallback 已实际进服通过；0.1.2 把计算 SSBO 切到 device-local，使用 staging 初始化/按需快照，每个物理步只回读 workgroup 归约后的 64 B 压力、散度、粒子体积与质心诊断。相同输入的 device-local/host-visible 对照、固定溃坝 CPU/GPU 容差、静水压力、投影前后散度、当前小域和真实 2,097,152-marker 的 32³ 方块吞吐/回读均有自动门和报告。详见 [`gpu-probe-report.md`](gpu-probe-report.md)。这不代表整个 M1 完成：PCG/RBGS/多网格对照、timestamp query/ring staging、变密度 CPU 候选和运行时设备丢失检查点仍未完成。
+当前状态（2026-08-19，M1-B）：独立 `gpu-probe` 子项目已在本机 RTX 5070 Ti 与 RTX 4060 Ti 上完成无窗口 Vulkan/Shaderc/VMA/float-atomic 探测，并实现完整 3D P2G → Jacobi 压力 → 投影 → G2P → advect 正确性管线。0.1.1 的集成服务器可视化、命令日志和 CPU fallback 已实际进服通过；0.1.2 把计算 SSBO 切到 device-local，使用 staging 初始化/按需快照，每个物理步只回读 workgroup 归约后的 64 B 压力、散度、粒子体积与质心诊断，并已通过集成服务器两档 benchmark；0.1.3 修正暂停状态下 `step N` 只执行一步的调度错误。相同输入的 device-local/host-visible 对照、固定溃坝 CPU/GPU 容差、静水压力、投影前后散度、当前小域和真实 2,097,152-marker 的 32³ 方块吞吐/回读均有自动门和报告。详见 [`gpu-probe-report.md`](gpu-probe-report.md)。这不代表整个 M1 完成：PCG/RBGS/多网格对照、timestamp query/ring staging、变密度 CPU 候选和运行时设备丢失检查点仍未完成。
 
 ### M2：多区域、选区控制器、持久化与休眠
 
