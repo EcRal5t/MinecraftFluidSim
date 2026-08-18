@@ -17,13 +17,14 @@ public final class FlipFluidDomain {
 	private static final int PARTICLES_PER_FULL_CELL = 8;
 	private static final float PARTICLE_VOLUME = 1.0F / PARTICLES_PER_FULL_CELL;
 	private static final float FLIP_RATIO = 0.90F;
-	private static final int MAX_PARTICLES = 262_144;
+	private static final int DEFAULT_MAX_PARTICLES = 262_144;
 
 	private final int sizeX;
 	private final int sizeY;
 	private final int sizeZ;
 	private final int cellCount;
 	private final FluidSolverConfig config;
+	private final int maximumParticleCount;
 	private final boolean[] solid;
 	private final int[] markerCount;
 	private final float[] volume;
@@ -46,13 +47,13 @@ public final class FlipFluidDomain {
 	private final float[] direction;
 	private final float[] matrixDirection;
 
-	private float[] particleX = new float[16_384];
-	private float[] particleY = new float[16_384];
-	private float[] particleZ = new float[16_384];
-	private float[] particleVelocityX = new float[16_384];
-	private float[] particleVelocityY = new float[16_384];
-	private float[] particleVelocityZ = new float[16_384];
-	private float[] particleVolume = new float[16_384];
+	private float[] particleX;
+	private float[] particleY;
+	private float[] particleZ;
+	private float[] particleVelocityX;
+	private float[] particleVelocityY;
+	private float[] particleVelocityZ;
+	private float[] particleVolume;
 	private int particleCount;
 	private boolean gridDirty = true;
 	private int pressureAnchor = -1;
@@ -60,12 +61,26 @@ public final class FlipFluidDomain {
 	private float lastPressureResidual;
 
 	public FlipFluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config) {
+		this(sizeX, sizeY, sizeZ, config, DEFAULT_MAX_PARTICLES);
+	}
+
+	public FlipFluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config, int maximumParticleCount) {
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2) throw new IllegalArgumentException("All dimensions must be at least two cells");
+		if (maximumParticleCount <= 0) throw new IllegalArgumentException("Maximum particle count must be positive");
 		this.sizeX = sizeX;
 		this.sizeY = sizeY;
 		this.sizeZ = sizeZ;
 		this.cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
 		this.config = config;
+		this.maximumParticleCount = maximumParticleCount;
+		int initialParticleCapacity = Math.min(16_384, maximumParticleCount);
+		this.particleX = new float[initialParticleCapacity];
+		this.particleY = new float[initialParticleCapacity];
+		this.particleZ = new float[initialParticleCapacity];
+		this.particleVelocityX = new float[initialParticleCapacity];
+		this.particleVelocityY = new float[initialParticleCapacity];
+		this.particleVelocityZ = new float[initialParticleCapacity];
+		this.particleVolume = new float[initialParticleCapacity];
 		this.solid = new boolean[cellCount];
 		this.markerCount = new int[cellCount];
 		this.volume = new float[cellCount];
@@ -91,6 +106,7 @@ public final class FlipFluidDomain {
 	public int sizeY() { return sizeY; }
 	public int sizeZ() { return sizeZ; }
 	public int particleCount() { return particleCount; }
+	public int maximumParticleCount() { return maximumParticleCount; }
 	public int markerCellCount() {
 		ensureGrid();
 		int result = 0;
@@ -104,7 +120,7 @@ public final class FlipFluidDomain {
 		if (state == null) throw new IllegalArgumentException("Particle state must not be null");
 		state.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize());
 		int restoredCount = state.particleCount();
-		if (restoredCount > MAX_PARTICLES) throw new IllegalArgumentException("Particle state exceeds CPU capacity");
+		if (restoredCount > maximumParticleCount) throw new IllegalArgumentException("Particle state exceeds domain marker budget");
 		ensureParticleCapacity(restoredCount);
 		float[] positionVolume = state.positionVolume();
 		float[] particleVelocities = state.particleVelocities();
@@ -145,9 +161,15 @@ public final class FlipFluidDomain {
 
 	public void setVolume(int x, int y, int z, float value) {
 		int index = cellIndexChecked(x, y, z);
-		if (solid[index] && value > 0.0F) throw new IllegalStateException("Cannot place fluid in a solid cell");
+		float clamped = clamp01(value);
+		if (solid[index] && clamped > 0.0F) throw new IllegalStateException("Cannot place fluid in a solid cell");
+		int existingParticles = particleCountInCell(x, y, z);
+		int requiredParticles = particlesRequired(clamped);
+		if ((long) particleCount - existingParticles + requiredParticles > maximumParticleCount) {
+			throw new ParticleBudgetExceededException(requiredParticles, maximumParticleCount - particleCount + existingParticles);
+		}
 		removeParticlesInCell(x, y, z, Float.POSITIVE_INFINITY);
-		spawnCellVolume(x, y, z, clamp01(value));
+		spawnCellVolume(x, y, z, clamped);
 		gridDirty = true;
 	}
 
@@ -234,19 +256,37 @@ public final class FlipFluidDomain {
 	}
 
 	public float addVolumeNear(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
+		return addVolumeNearBudgeted(centerX, centerY, centerZ, amount, maxRadius).addedVolume();
+	}
+
+	public VolumeAddition addVolumeNearBudgeted(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
 		validateVolumeEdit(amount, maxRadius);
-		ensureGrid();
+		float[] exactCellVolume = exactCellVolumes();
 		float remaining = amount;
+		boolean markerBudgetLimited = false;
 		for (CellCandidate candidate : nearbyCells(centerX, centerY, centerZ, maxRadius)) {
 			int index = candidate.index();
 			int x = index % sizeX, yz = index / sizeX, y = yz % sizeY, z = yz / sizeY;
-			float added = Math.min(remaining, Math.max(0.0F, 1.0F - volume[index]));
+			float requestedForCell = Math.min(remaining, Math.max(0.0F, 1.0F - exactCellVolume[index]));
+			int availableMarkers = maximumParticleCount - particleCount;
+			float markerCapacity = availableMarkers * PARTICLE_VOLUME;
+			float added = Math.min(requestedForCell, markerCapacity);
+			if (added <= 1.0E-6F) {
+				if (requestedForCell > 1.0E-6F && availableMarkers == 0) markerBudgetLimited = true;
+				if (markerBudgetLimited) break;
+				continue;
+			}
 			spawnCellVolume(x, y, z, added);
+			exactCellVolume[index] += added;
 			remaining -= added;
+			if (added + 1.0E-6F < requestedForCell) {
+				markerBudgetLimited = true;
+				break;
+			}
 			if (remaining <= 1.0E-6F) break;
 		}
 		gridDirty = true;
-		return amount - remaining;
+		return new VolumeAddition(amount - remaining, markerBudgetLimited);
 	}
 
 	public float removeVolumeNear(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
@@ -598,6 +638,10 @@ public final class FlipFluidDomain {
 	}
 
 	private void spawnCellVolume(int x, int y, int z, float amount) {
+		int requiredParticles = particlesRequired(amount);
+		if ((long) particleCount + requiredParticles > maximumParticleCount) {
+			throw new ParticleBudgetExceededException(requiredParticles, maximumParticleCount - particleCount);
+		}
 		float remaining = amount;
 		int slot = 0;
 		while (remaining > 1.0E-6F) {
@@ -608,7 +652,7 @@ public final class FlipFluidDomain {
 	}
 
 	private void spawnParticle(int cellX, int cellY, int cellZ, int slot, float amount) {
-		if (particleCount >= MAX_PARTICLES) throw new IllegalStateException("FLIP particle limit exceeded");
+		if (particleCount >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
 		ensureParticleCapacity(particleCount + 1);
 		float h = config.cellSize();
 		float radiusFraction = 0.45F;
@@ -643,6 +687,29 @@ public final class FlipFluidDomain {
 		return removed;
 	}
 
+	private int particleCountInCell(int cellX, int cellY, int cellZ) {
+		float h = config.cellSize();
+		int count = 0;
+		for (int particle = 0; particle < particleCount; particle++) {
+			if ((int) Math.floor(particleX[particle] / h) == cellX
+					&& (int) Math.floor(particleY[particle] / h) == cellY
+					&& (int) Math.floor(particleZ[particle] / h) == cellZ) count++;
+		}
+		return count;
+	}
+
+	private float[] exactCellVolumes() {
+		float[] exact = new float[cellCount];
+		float h = config.cellSize();
+		for (int particle = 0; particle < particleCount; particle++) {
+			int x = (int) Math.floor(particleX[particle] / h);
+			int y = (int) Math.floor(particleY[particle] / h);
+			int z = (int) Math.floor(particleZ[particle] / h);
+			if (inside(x, y, z)) exact[cellIndex(x, y, z)] += particleVolume[particle];
+		}
+		return exact;
+	}
+
 	private void removeParticle(int index) {
 		int last = --particleCount;
 		if (index == last) return;
@@ -652,8 +719,11 @@ public final class FlipFluidDomain {
 	}
 
 	private void ensureParticleCapacity(int required) {
+		if (required > maximumParticleCount) {
+			throw new ParticleBudgetExceededException(required - particleCount, maximumParticleCount - particleCount);
+		}
 		if (required <= particleX.length) return;
-		int capacity = Math.min(MAX_PARTICLES, Math.max(required, particleX.length * 2));
+		int capacity = Math.min(maximumParticleCount, Math.max(required, Math.max(1, particleX.length * 2)));
 		particleX = Arrays.copyOf(particleX, capacity); particleY = Arrays.copyOf(particleY, capacity); particleZ = Arrays.copyOf(particleZ, capacity);
 		particleVelocityX = Arrays.copyOf(particleVelocityX, capacity); particleVelocityY = Arrays.copyOf(particleVelocityY, capacity); particleVelocityZ = Arrays.copyOf(particleVelocityZ, capacity);
 		particleVolume = Arrays.copyOf(particleVolume, capacity);
@@ -711,6 +781,10 @@ public final class FlipFluidDomain {
 		if (!Float.isFinite(amount) || amount < 0.0F) throw new IllegalArgumentException("amount must be finite and non-negative");
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
 	}
+	private static int particlesRequired(float amount) {
+		if (amount <= 1.0E-6F) return 0;
+		return (int) Math.ceil((amount - 1.0E-6F) / PARTICLE_VOLUME);
+	}
 	private static double dot(float[] first, float[] second) { double sum = 0.0; for (int i = 0; i < first.length; i++) sum += (double) first[i] * second[i]; return sum; }
 	private static float clamp01(float value) { return clamp(value, 0.0F, 1.0F); }
 	private static float clamp(float value, float min, float max) { return Math.max(min, Math.min(max, value)); }
@@ -719,8 +793,23 @@ public final class FlipFluidDomain {
 	@FunctionalInterface private interface SplatConsumer { void accept(int index, float weight); }
 	private record CellCandidate(int index, int distanceSquared) { }
 	public record VelocitySample(float x, float y, float z) { private static final VelocitySample ZERO = new VelocitySample(0.0F, 0.0F, 0.0F); }
+	public record VolumeAddition(float addedVolume, boolean markerBudgetLimited) { }
 	public record VolumeDistribution(int activeCells, int visibleCells, int denseCells) { }
 	public record StepStats(int substeps, int pressureIterations, float pressureResidual, float volumeBefore, float volumeAfter) {
 		public float relativeVolumeError() { return volumeBefore == 0.0F ? 0.0F : Math.abs(volumeAfter - volumeBefore) / volumeBefore; }
+	}
+
+	public static final class ParticleBudgetExceededException extends IllegalStateException {
+		private final int requiredMarkers;
+		private final int availableMarkers;
+
+		private ParticleBudgetExceededException(int requiredMarkers, int availableMarkers) {
+			super("FLIP marker budget exceeded: requires " + requiredMarkers + ", available " + Math.max(0, availableMarkers));
+			this.requiredMarkers = requiredMarkers;
+			this.availableMarkers = Math.max(0, availableMarkers);
+		}
+
+		public int requiredMarkers() { return requiredMarkers; }
+		public int availableMarkers() { return availableMarkers; }
 	}
 }

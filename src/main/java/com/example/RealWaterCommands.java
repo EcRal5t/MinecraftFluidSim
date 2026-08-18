@@ -2,6 +2,7 @@ package com.example;
 
 import com.example.logging.RealWaterCommandLog;
 import com.example.simulation.FluidSimulationService;
+import com.example.simulation.FluidRegion;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
@@ -102,18 +103,21 @@ public final class RealWaterCommands {
 		return succeed(source, String.format(
 				"已在子格 %d,%d,%d %s %.3f 方块水%s",
 				result.target().x(), result.target().y(), result.target().z(), action, result.changedBlocks(),
-				result.changedCellVolume() + 1.0E-4F < result.requestedCellVolume() ? "（附近容量不足）" : ""
+				result.changedCellVolume() + 1.0E-4F < result.requestedCellVolume()
+						? (result.markerBudgetLimited() ? "（marker 预算已满）" : "（附近空间不足）")
+						: ""
 		), commandResult);
 	}
 
 	private static int refreshCollisions(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
 		if (!service.exists()) return fail(source, "请先使用 /realwater demo 或 /realwater capture");
-		FluidSimulationService.CollisionStats stats = service.refreshCollisions(source.getLevel());
+		FluidRegion.CollisionStats stats = service.refreshCollisions(source.getLevel());
 		service.sendSnapshot(source.getLevel());
 		return succeed(source, String.format(
-				"碰撞已刷新：变化 %d 个子格，挤出 %.3f 方块水，域容量不足损失 %.3f 方块水",
-				stats.changedCells(), stats.displacedCellVolume() / 8.0F, stats.escapedCellVolume() / 8.0F
+				"碰撞已刷新：变化 %d 个子格，挤出 %.3f 方块水，未能重放 %.3f 方块水%s",
+				stats.changedCells(), stats.displacedCellVolume() / 8.0F, stats.escapedCellVolume() / 8.0F,
+				stats.markerBudgetLimited() ? "（marker 预算受限）" : ""
 		), 1);
 	}
 

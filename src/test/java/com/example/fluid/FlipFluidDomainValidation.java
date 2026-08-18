@@ -9,9 +9,65 @@ public final class FlipFluidDomainValidation {
 		wallBoundaryReconstruction();
 		waterMovesAlongWallsIntoCorner();
 		solidDisplacementPreservesExactParticleVolume();
+		markerBudgetIsHardAndConservative();
 		particleCheckpointRestoreIsTransactional();
 		minecraftSizedBenchmark();
 		System.out.println("FlipFluidDomain validation passed");
+	}
+
+	private static void markerBudgetIsHardAndConservative() {
+		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config(), 10);
+		domain.setVolume(0, 0, 0, 1.0F);
+		check(domain.particleCount() == 8 && Math.abs(domain.totalVolume() - 1.0F) < 1.0E-6F,
+				"full cell did not use the expected exact marker ledger");
+		FlipFluidDomain.VolumeAddition partial = domain.addVolumeNearBudgeted(1, 0, 0, 1.0F, 2);
+		check(Math.abs(partial.addedVolume() - 0.25F) < 1.0E-6F && partial.markerBudgetLimited(),
+				"remaining marker budget was not conservatively exposed");
+		check(domain.particleCount() == 10 && Math.abs(domain.totalVolume() - 1.25F) < 1.0E-6F,
+				"budgeted addition manufactured or lost exact particle volume");
+
+		float preserved = domain.totalVolume();
+		boolean rejected = false;
+		try {
+			domain.setVolume(3, 3, 3, 1.0F);
+		} catch (FlipFluidDomain.ParticleBudgetExceededException expected) {
+			rejected = expected.requiredMarkers() == 8 && expected.availableMarkers() == 0;
+		}
+		check(rejected, "setVolume did not report the exhausted hard marker budget");
+		check(domain.particleCount() == 10 && Math.abs(domain.totalVolume() - preserved) < 1.0E-6F,
+				"rejected setVolume partially mutated the exact marker ledger");
+
+		FlipFluidDomain replacement = new FlipFluidDomain(4, 4, 4, config(), 8);
+		replacement.setVolume(0, 0, 0, 0.5F);
+		replacement.setVolume(1, 0, 0, 0.5F);
+		rejected = false;
+		try {
+			replacement.setVolume(0, 0, 0, 1.0F);
+		} catch (FlipFluidDomain.ParticleBudgetExceededException expected) {
+			rejected = true;
+		}
+		check(rejected && replacement.particleCount() == 8 && Math.abs(replacement.totalVolume() - 1.0F) < 1.0E-6F,
+				"failed in-place replacement deleted the cell's old marker volume");
+
+		float[] oversizedPositionVolume = new float[44];
+		for (int marker = 0; marker < 11; marker++) {
+			oversizedPositionVolume[marker * 4] = 0.25F;
+			oversizedPositionVolume[marker * 4 + 1] = 0.25F;
+			oversizedPositionVolume[marker * 4 + 2] = 0.25F;
+			oversizedPositionVolume[marker * 4 + 3] = 0.125F;
+		}
+		FlipParticleState oversized = new FlipParticleState(
+				4, 4, 4, 0.5F, 11, 11.0F / 8.0F,
+				oversizedPositionVolume, new float[33], new byte[64]
+		);
+		rejected = false;
+		try {
+			domain.restoreParticleState(oversized);
+		} catch (IllegalArgumentException expected) {
+			rejected = true;
+		}
+		check(rejected && domain.particleCount() == 10 && Math.abs(domain.totalVolume() - preserved) < 1.0E-6F,
+				"oversized checkpoint bypassed the marker budget or mutated the domain");
 	}
 
 	private static void massAndDamBreak() {

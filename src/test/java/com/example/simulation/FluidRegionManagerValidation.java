@@ -28,9 +28,32 @@ public final class FluidRegionManagerValidation {
 
 	public static void main(String[] args) {
 		validateAdmissionAndSelection();
+		validateRuntimeStateFollowsRegion();
 		validateAtomicReplacement();
 		validatePerRegionAndTotalRejectionDetails();
 		System.out.println("FluidRegionManager validation passed");
+	}
+
+	private static void validateRuntimeStateFollowsRegion() {
+		FluidRegionManager manager = manager();
+		FluidRegion first = region(2, 2, 2, 64L);
+		FluidRegion second = region(2, 2, 2, 64L);
+		first.setPaused(false);
+		first.incrementTick();
+		first.setStepIntervalTicks(3);
+		first.setEntityPhysicsEnabled(false);
+		first.setDebugOverlays(true);
+		require(manager.add(first).accepted() && manager.add(second).accepted(), "runtime-state setup failed");
+		require(manager.select(second.id()), "could not select pristine second region");
+		require(second.paused() && second.tick() == 0L && second.stepIntervalTicks() == 1,
+				"new region inherited pacing state from another region");
+		require(second.entityPhysicsEnabled() && !second.debugOverlays(),
+				"new region inherited interaction or rendering state from another region");
+		require(manager.select(first.id()), "could not reselect first region");
+		require(!first.paused() && first.tick() == 1L && first.stepIntervalTicks() == 3,
+				"selection lost the region's pacing state");
+		require(!first.entityPhysicsEnabled() && first.debugOverlays(),
+				"selection lost the region's interaction or rendering state");
 	}
 
 	private static void validateAdmissionAndSelection() {
@@ -95,7 +118,7 @@ public final class FluidRegionManagerValidation {
 
 	private static FluidRegion region(int nx, int ny, int nz, long reservedMarkers) {
 		return new FluidRegion(new UUID(0L, ++nextRegionId), DIMENSION, BlockPos.ZERO,
-				new FlipFluidDomain(nx, ny, nz, CONFIG), reservedMarkers);
+				new FlipFluidDomain(nx, ny, nz, CONFIG, Math.toIntExact(reservedMarkers)), reservedMarkers);
 	}
 
 	private static void require(boolean condition, String message) {

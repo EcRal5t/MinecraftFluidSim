@@ -383,7 +383,7 @@ M6 必须把原版桶边缘行为写成自动化矩阵，而不是只测玩家�
 
 当前 `24×16×24` 求解网格有 9,216 个 cell；满水约 73,728 个 marker。`32×32×32` 方块在每轴 2 cell 时是 `64³ = 262,144` 个 cell、约 2,097,152 个满水 marker，约为当前 cell/particle 规模的 28.4 倍。全加载区块再显式填空气远超这一规模，因此必须同时依赖稀疏活动格、休眠和可选 GPU。
 
-当前 `FlipFluidDomain.MAX_PARTICLES = 262_144`，只等于上述 32³ 方块目标的 cell 数，是满水 marker 需求的八分之一。它是 0.8 单域防失控硬上限，不是未来区域容量承诺：M1 的 32³ 探针必须使用独立可配置缓冲预算并实测显存，M2 则把单区域与全服务器 marker 上限显式配置、拒绝超预算创建；不得简单放大一个 JVM 全局数组常量。
+`FlipFluidDomain` 的独立测试默认上限仍为 262,144 marker，而当前 Minecraft 兼容区域显式使用 73,728（9,216 格 × 8）marker 硬预算；它们都不是未来区域容量承诺。M1 的 32³ 探针使用独立可配置缓冲预算并实测显存；M2 的 manager 已显式接纳单区域/全服务器预算，domain 实例也拒绝越界创建与 checkpoint restore。正式多区域仍须配置、统计并验证总预算，不得简单放大一个 JVM 全局常量。
 
 ### 9.2 活动等级
 
@@ -472,7 +472,7 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 - 0.1.12 将主 GLSL 原样移入资源文件，并把小域快速门与 64³ 发布门拆开。
 - 0.1.13 用三个独立的 command pool/buffer、fence、timestamp query 和 64 B 映射 staging 槽替换普通 step 的单缓冲区 + `vkQueueWaitIdle` 生命周期；槽位复用只等待对应 fence，显式 snapshot/full-state 读回先收敛 ring 再使用串行 bulk staging。5070 Ti 完整门和 4060 Ti 小域专项均通过；真实 2,097,152-marker 满水门保持 262,144.0 格精确体积，约为 4.777 ms GPU timestamp / 4.913 ms throughput wall。调度与连续超时仍使用服务器线程的 scheduling/backpressure wall，timestamp 仍只做设备观测。CPU 小域也已完成三种变密度面系数对照，按界面距离加权的守恒通量候选在最高 13.6:1 密度比及非居中界面保持离散静水平衡，活动求解器尚未接入该候选。
 - 0.1.14 新增 generation 0 必备、每 20 步更新的 CPU 可读 marker/velocity/solid 检查点；任何 GPU 同步读取路径失败都会丢弃更新但未检查点化的代次，恢复到隔离 CPU fallback 并保持暂停。检查点只存在内存，常规 step 仍只回读 64 B，周期检查点的 wall time 纳入服务器超时保护；双卡 device-local/host-visible 小域恢复门均已通过。
-- 0.1.15 用独立无窗口矩阵分离测量网格规模、marker 数和压力流体格数量。RTX 5070 Ti 上，固定 `24×16×24` 网格的一个 marker 仍是 CPU 较快，4 marker 仅约 4% GPU 优势而视作持平，16 marker 起超过 10% 优势；当前 2,592 流体格/20,736-marker 参考域为 11.464 ms CPU wall 对 0.598 ms GPU completed-batch throughput wall，即 19.19×。固定流体格增加 marker 的成本显著小于固定 marker 增加流体格，说明当前 CPU PCG 更受活动压力拓扑影响，而 dense-grid GPU 在此范围主要承受约 0.35–0.60 ms 固定底价。比较保持 marker 账本，timestamp 不参与调度决策，也不选择正式后端。详见 [`gpu-probe-report.md`](gpu-probe-report.md)。M1 只剩一次 Minecraft 渲染同时运行的 30 分钟人工稳定性门；主 Mod 保持 CPU 权威，`worlddemo` 仍保持 MG2，普通 probe demo 仍保持 Jacobi，MGH 先作为显式 benchmark 候选。
+- 0.1.15 用独立无窗口矩阵分离测量网格规模、marker 数和压力流体格数量。RTX 5070 Ti 上，固定 `24×16×24` 网格的一个 marker 仍是 CPU 较快，4 marker 仅约 4% GPU 优势而视作持平，16 marker 起超过 10% 优势；当时的 2,592 流体格/20,736-marker 参考域为 11.464 ms CPU wall 对 0.598 ms GPU completed-batch throughput wall，即 19.19×。固定流体格增加 marker 的成本显著小于固定 marker 增加流体格，说明当前 CPU PCG 更受活动压力拓扑影响。比较保持 marker 账本，timestamp 不参与调度决策，也不选择正式后端；这些单子步性能数值已由下一项 0.1.16 的四子步重测取代。
 - 0.1.16 修复普通 GPU demo 在约 979–1,304 步出现的 GPU 特有快速表面坍缩：每个 50 ms 物理步固定执行四个 12.5 ms 完整子步，域边界和 solid 法向接触使用与 CPU 一致的 `0.45h` marker 半径，切向仍自由。1,000 步自动门要求 GPU/CPU 都保持三层 marker，并比较边缘/内部 density；5070 Ti 完整小域及 64³ 门通过。更正后的当前参考域为 11.646 ms CPU wall 对 2.257 ms GPU throughput wall（5.16×），64³ / 2,097,152-marker 满水物理步为 11.548 ms GPU / 11.744 ms throughput wall。GPU 的 36,000 步特征化仍在第 5,000 步后显示长期 marker 压缩，精确 marker 水量不变；CPU 与 GPU 都缺少 reseeding 是共享的结构性风险，但这组长测数据只来自 GPU。该问题明确留给 M2.5，不以更多子步或渲染找平掩盖。2026-08-19 的实机复测在第 1,317 步确认原固定边缘/角落凹坑显著消退；RTX 4060 Ti 随后完成 31 分 44 秒、38,073 步稳定性门，最终保持 20,736 marker、2,592.000 格精确体积、recovery 0，并正常 remove。一次关闭 5070 Ti 直连显示器导致的 OpenGL `glfwSwapBuffers` 原生崩溃被单独记录为外部显示拓扑事件，没有 Vulkan device-loss 证据。M1 至此完成，主 Mod 继续 CPU 权威。
 
 ### M2：多区域、选区控制器、持久化与休眠
@@ -489,7 +489,7 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 - 建立可配置的单区域 marker/cell 上限和多区域总预算、状态统计和管理命令；预算拒绝必须报告所需量、单域上限和服务器剩余额度；
 - 区域墙必须可见/可调试，不再有未说明的不可见边界。
 
-当前状态（2026-08-19，M2 前置）：`FluidRegion` 已承接旧服务的 domain/维度/原点和容量预留，纯内存 `FluidRegionManager` 已实现登记、选择、移除、原子替换以及 required/per-region/remaining 预算拒绝。拒绝候选不会移除旧区域，也不会触碰其 marker 或精确 `particleVolume`。当前 `FluidSimulationService` 仍以一个 `24×16×24` 区域的兼容额度运行，调度、碰撞、实体力、快照和 takeover 编排仍保持原行为；尚未开放多区域 tick、控制器、chunk ticket、协议或任何 `region-state` 存档。`reservedMarkerCapacity` 目前只做接纳预留，尚未成为 `FlipFluidDomain` 所有 marker 创建路径的运行时硬上限；真正开放多区域前必须补齐该 enforcement。独立自动门覆盖接纳、选择、拒绝不变性和容量统计，takeover journal 16 场景与活动 FLIP 门继续通过。M0 强制中断门使用的是该重构部署前、但事务实现相同的 0.8.2 jar；这足以关闭未改动的 M0 事务门，`dc8d1a9` manager 适配层的实机兼容 smoke 则属于 M2 集成工作。
+当前状态（2026-08-19，M2 前置完成）：`FluidRegion` 已承接 domain/维度/原点、pause/tick/调频、碰撞统计、实体力与 debug 运行态；选择区域不会串用这些状态。纯内存 `FluidRegionManager` 已实现登记、选择、移除、原子替换以及 required/per-region/remaining 预算拒绝。每个 `FlipFluidDomain` 的实际 marker 硬上限与 manager 预留一致，capture、pour、固体挤水和 checkpoint restore 等所有 CPU marker 创建/恢复路径均受它约束；预算不足不会从平滑 density 猜水量，`setVolume` 在修改原 marker 前原子预检。自动门覆盖部分接受、精确水量守恒、超额恢复拒绝和失败不变性。当前服务仍只运行一个 `24×16×24` 兼容区域；尚未开放控制器、多区域 tick、chunk ticket、协议或任何 `region-state` 存档，takeover 边界与 journal v1 未变。
 
 完成条件：反复休眠/唤醒/重启后水量不变；方块更新和实体进入可靠唤醒；任一关联 chunk 卸载时不发生半区域步进；未加载区不占粒子内存；协议不兼容能被明确拒绝而非错位解码。
 
@@ -637,8 +637,8 @@ CPU 单线程参考场景固定随机种子、遍历顺序和输入，能稳定�
 
 ## 十三、接下来三项实际工作
 
-1. 将调度运行态下沉到每个 `FluidRegion`，并让 capture、pour、固体挤水及未来 reseeding 统一受真实 marker 运行时预算约束；保持单区域命令兼容。
-2. 设计控制器、可见边界闭合扫描、跨 chunk 完整加载判定和 required/per-region/remaining 预算拒绝；尚不扩大 takeover 范围。
+1. 正式进入 M2：设计控制器、可见边界闭合扫描、跨 chunk 完整加载判定和预算拒绝；尚不扩大 takeover 范围。
+2. 建立多区域 tick 生命周期、ACTIVE/REDUCED/睡眠/整域 UNLOADED 状态机及 region id/代次网络协议门。
 3. 评审 `region-state v1` 的原子检查点、兼容矩阵、失败回滚与迁移方案，得到明确批准后才实现持久化。
 
 这些 M2 门完成前，不扩大 takeover 范围，不改变世界长期存档格式，也不把 GPU 设为必需运行条件。

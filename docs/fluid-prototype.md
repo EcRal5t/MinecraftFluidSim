@@ -49,7 +49,7 @@ Run the isolated variable-density selection gate through Gradle:
 
 ## Next integration boundary
 
-The Minecraft adapter creates one bounded `FlipFluidDomain` for a test chamber and samples block collision shapes into its solid mask. The domain's immutable identity, dimension, origin and capacity reservation now live in `FluidRegion`, selected through an in-memory `FluidRegionManager`; the compatibility service still admits exactly one region and targets 20 Hz. This is an ownership boundary only: it does not enable arbitrary oceans, multi-region ticking, persistence or a new network protocol. The client receives the same coarse density snapshots and interpolates them for rendering.
+The Minecraft adapter creates one bounded `FlipFluidDomain` for a test chamber and samples block collision shapes into its solid mask. Identity, dimension, origin, pause/pacing/collision state and the instance's hard marker budget live in `FluidRegion`, selected through an in-memory `FluidRegionManager`; the compatibility service still admits exactly one region and targets 20 Hz. Every CPU marker creation and checkpoint-restore path observes that budget, while exact water remains the sum of `particleVolume`. This ownership boundary does not yet enable arbitrary oceans, multi-region ticking, persistence or a new network protocol. The client receives the same coarse density snapshots and interpolates them for rendering.
 
 Before expanding to chunk-scale persistence, add:
 
