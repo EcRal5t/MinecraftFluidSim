@@ -85,6 +85,8 @@ Probe 0.1.5 also passed the integrated-server diagonal-PCG command. On the live 
 
 Probe 0.1.6 passed the integrated-server MG2 command. On the live RTX 5070 Ti, two V-cycles averaged 0.798 ms over 20 steps, retained all 20,736 particles, and ended at divergence 10.81817→0.29078; regular diagnostics remained 64 B per step and the full diagnostic readback reflected the four new coarse buffers. This validates the packaged command and V-cycle path. As with the earlier solver commands, the evolved ending pair is not substituted for the automated same-input convergence curves.
 
+Probe 0.1.7 passed the packaged solid-aware MG2 command on the live RTX 5070 Ti. Two V-cycles averaged 0.890 ms over 20 steps, retained all 20,736 particles, and ended at divergence 10.86908→0.10805; regular diagnostics remained 64 B per step and the solid-aware coarse topology increased the requested full-state diagnostic to 3,002,176 B. This closes the integrated-server packaging gate for the generated-solid topology changes. It does not yet validate Minecraft block ingestion: 0.1.7 still uses only generated masks and remains world-independent.
+
 ## Commands
 
 The optional `realwater-gpu-probe` jar adds:
