@@ -2,7 +2,7 @@
 
 本文记录从 `0.8.0` 有界 3D PIC/FLIP 水体原型走向“可混合、可反应、包含气体和颗粒沉积物的世界流体系统”的已确认需求、技术边界、数据不变量和分阶段验收门槛。它是长期方向文档，不替代 [`maintenance-routing.md`](maintenance-routing.md) 的当前代码路由，也不表示后续存档格式已经冻结。
 
-基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、Mod 0.8.0、Java 25 字节码。活动求解器仍是 [`FlipFluidDomain.java`](../src/main/java/com/example/fluid/FlipFluidDomain.java)，不得切回旧 VOF。现有 `0.8.0` 是路线形成前的历史版本号，不表示已经完成未来 1.0 的 80%。
+基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、Mod 0.8.1、Java 25 字节码。活动求解器仍是 [`FlipFluidDomain.java`](../src/main/java/com/example/fluid/FlipFluidDomain.java)，不得切回旧 VOF。`0.8.x` 是路线形成期的历史版本号，不表示已经完成未来 1.0 的 80%。
 
 ## 零、发布切割线
 
@@ -454,6 +454,8 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 - 修正 README/日志，使 takeover 的世界修改边界准确可见。
 
 完成条件：自动测试通过，加一次真实世界的创建、正常删除和强制中断恢复冒烟测试；测试世界保留备份。
+
+当前状态（2026-08-18）：v1 codec、原子文件层和 16 场景故障注入自动回归已通过；真实世界正常删除、强制中断恢复及邻接更新冒烟仍是 M0 最后一项人工门槛，步骤见 [`m0-takeover-smoke.md`](m0-takeover-smoke.md)。
 
 ### M1：GPU 能力探针（不进入正式存档）
 

@@ -1,6 +1,6 @@
 # Real Water 维护路由
 
-本文面向接棒开发者，回答“某项功能要去哪里改、改完验证什么”。当前基线为 `0.8.0`，Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2，Java 25 字节码。
+本文面向接棒开发者，回答“某项功能要去哪里改、改完验证什么”。当前基线为 `0.8.1`，Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2，Java 25 字节码。
 
 已确认的多材料、气体、化学、颗粒、世界接管与 GPU 长期路线见 [`long-term-roadmap.md`](long-term-roadmap.md)。本文仍只描述当前 0.8 代码路径。
 
@@ -34,7 +34,8 @@ Godot 参考工程位于 `D:\Proj\Godot\260331-FluidSim`。对应流程是 `clea
 | 域尺寸、帧预算、快照频率 | `FluidSimulationService.java` 顶部常量 | 同步检查网络量、客户端网格和基准测试 |
 | demo 初始水体 | `FluidSimulationService.createDemo` | 创建后默认暂停；不要直接改世界方块 |
 | 捕获原版水 | `captureNearbyWater` | `capture` 只读；`takeover` 才能移除原版纯水块 |
-| takeover 与恢复 | `FluidSimulationService`、`TakeoverBackupStore.java` | 必须先成功落盘 NBT，再修改世界；恢复完成后才删 journal |
+| takeover 与恢复 | `FluidSimulationService`、`TakeoverBackupStore.java`、`TakeoverTransaction.java` | 必须先原子发布 v1 NBT 和 WARNING，再修改世界；恢复与文件删除都完成后事务才解锁 |
+| takeover codec/文件层 | `TakeoverJournalCodec.java`、`TakeoverJournalFiles.java` | v1 字段保持兼容；旧/损坏 journal 禁止覆盖；原子移动不可用时拒绝接管，不退化为普通 move |
 | 放置方块挤水 | `refreshCollisions`、`FlipFluidDomain.setSolid` | `setSolid` 返回实际删除的粒子体积；禁止改回平滑密度估算 |
 | pour/drain | `pourWater`、`drainWater`、`addVolumeNear`、`removeVolumeNear` | 单位换算是每方块 8 个 cell-volume |
 | 服务器步进和自动降频 | `tick`、`stepOnce`、`updateStepPacing` | 40 ms 是软预算；连续 3 次超过 200 ms 才硬暂停 |
@@ -66,6 +67,7 @@ Godot 参考工程位于 `D:\Proj\Godot\260331-FluidSim`。对应流程是 `clea
 6. takeover journal 必须先于世界修改写入，且恢复时只覆盖当前仍为空气或水的位置。
 7. 不得自动替换 waterlogged 方块；当前 takeover 只处理 `Blocks.WATER`。
 8. 服务端是物理真值，客户端渲染不得反向修改水量。
+9. journal 或 WARNING 任一处于未解决状态时必须锁住新 takeover；临时文件不是已发布真值，可在确认没有已发布文件时清理。
 
 ## 常见现象到代码位置
 
@@ -96,6 +98,14 @@ $env:JAVA_HOME = 'D:\ProgramFiles\BienCreng\jdk-26.0.2'
 ```
 
 `FluidDomainValidation`、`FluidDomainBenchmark`、`FluidDomainSurfaceDiagnostic` 只对应旧 VOF 对照实现，不代表当前游戏路径。
+
+M0 takeover codec、真实文件与故障注入回归：
+
+```powershell
+./gradlew.bat runTakeoverJournalValidation --offline --no-daemon
+```
+
+该套件覆盖正常创建/删除、写入前、原子发布后、移除第 N 块、恢复第 N 块、删除前、损坏/未知版本、维度未加载、残留临时文件、原子移动不可用、WARNING 发布失败、删除失败、世界恢复失败和玩家实体方块保护。
 
 游戏内基本回归顺序：
 
@@ -131,8 +141,8 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 
 ## 下一阶段建议
 
-1. 先在游戏中完成 0.8 takeover journal 的创建、正常删除和启动恢复冒烟测试。
-2. 给 journal 编解码补独立测试或故障注入命令，验证“写入后、移除中、恢复中”三个中断点。
+1. 按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 完成测试世界的正常删除、强制中断恢复和邻接更新冒烟；保留备份、命令计数和日志。
+2. 冒烟通过后才开始独立 Windows/NVIDIA Vulkan GPU probe，不进入正式存档且保留 CPU 回退。
 3. 再做动态域/分块域设计，避免当前 12×8×12 人工边界成为不可见墙。
 4. 设计 chunk-section 粒子/速度持久化格式；不要直接把当前单域对象序列化成长期格式。
 5. 之后考虑实体到水的反向动量耦合、粒子 reseeding、自由表面压力权重和更高分辨率。

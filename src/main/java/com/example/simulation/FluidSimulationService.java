@@ -30,7 +30,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.WeakHashMap;
 
-/** Owns one bounded prototype domain per running server. Nothing is persisted yet. */
+/** Owns one bounded in-memory fluid domain per server; only takeover recovery metadata is persisted. */
 public final class FluidSimulationService {
 	public static final int BLOCK_SIZE_X = 12;
 	public static final int BLOCK_SIZE_Y = 8;
@@ -68,6 +68,8 @@ public final class FluidSimulationService {
 	private int stepIntervalTicks = 1;
 	private int hardOverrunStreak;
 	private int recoveryStreak;
+	private String lastTakeoverFailure;
+	private boolean takeoverMaintenanceEnabled;
 
 	private FluidSimulationService() { }
 
@@ -81,14 +83,12 @@ public final class FluidSimulationService {
 	}
 
 	public static void recoverTakeoverBackup(MinecraftServer server) {
-		try {
-			TakeoverBackupStore.RecoveryResult result = TakeoverBackupStore.recover(server);
-			if (result.found()) {
-				RealWaterMod.LOGGER.warn("Recovered unfinished Real Water takeover: restored {} blocks, skipped {} occupied positions",
-						result.restoredBlocks(), result.skippedBlocks());
-			}
-		} catch (IOException | RuntimeException exception) {
-			RealWaterMod.LOGGER.error("Could not recover the unfinished Real Water takeover; backup was preserved", exception);
+		RestorationStats result = get(server).restoreTakeover(server);
+		if (result.completed() && result.journalFound()) {
+			RealWaterMod.LOGGER.warn(
+					"Recovered unfinished Real Water takeover: restored {} blocks, already restored {}, skipped {} occupied positions",
+					result.restoredBlocks(), result.alreadyRestoredBlocks(), result.skippedBlocks()
+			);
 		}
 	}
 
@@ -100,12 +100,13 @@ public final class FluidSimulationService {
 		return paused;
 	}
 
-	public void createDemo(ServerPlayer player) {
+	public boolean createDemo(ServerPlayer player) {
 		Vec3 look = player.getLookAngle();
 		BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
-		origin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
 		ServerLevel level = player.level();
-		restoreTakeover(level.getServer());
+		RestorationStats restoration = restoreTakeover(level.getServer());
+		if (!restoration.completed()) return false;
+		origin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
 		createEmpty(level);
 		refreshCollisions(level);
 
@@ -120,11 +121,15 @@ public final class FluidSimulationService {
 		}
 		paused = true;
 		sendSnapshot(level);
+		return true;
 	}
 
 	public CaptureResult captureNearbyWater(ServerPlayer player, boolean takeover) {
 		ServerLevel level = player.level();
-		restoreTakeover(level.getServer());
+		RestorationStats restoration = restoreTakeover(level.getServer());
+		if (!restoration.completed()) {
+			return new CaptureResult(0, -1, restoration.failure());
+		}
 		origin = player.blockPosition().offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
 		createEmpty(level);
 		refreshCollisions(level);
@@ -156,7 +161,7 @@ public final class FluidSimulationService {
 		int removedBlocks = takeover ? beginTakeover(level) : 0;
 		paused = true;
 		sendSnapshot(level);
-		return new CaptureResult(wetCells, removedBlocks);
+		return new CaptureResult(wetCells, removedBlocks, removedBlocks < 0 ? lastTakeoverFailure : null);
 	}
 
 	/** Temporarily replaces only standalone vanilla water blocks, never waterlogged blocks. */
@@ -170,57 +175,64 @@ public final class FluidSimulationService {
 		}
 		if (candidates.isEmpty()) return 0;
 		try {
-			TakeoverBackupStore.write(level.getServer(), level.dimension(), candidates);
+			TakeoverBackupStore.BeginResult result = TakeoverBackupStore.begin(level.getServer(), level.dimension(), candidates);
+			takeoverDimension = level.dimension();
+			for (BlockPos position : result.removedPositions()) {
+				takeoverOriginalBlocks.put(position, candidates.get(position));
+			}
+			takeoverMaintenanceEnabled = result.removedBlocks() > 0;
+			lastTakeoverFailure = null;
+			if (result.removedBlocks() == 0) {
+				RestorationStats cleanup = restoreTakeover(level.getServer());
+				if (!cleanup.completed()) return -1;
+			}
+			return result.removedBlocks();
 		} catch (IOException | RuntimeException exception) {
-			RealWaterMod.LOGGER.error("Refusing water takeover because its crash-recovery backup could not be written", exception);
+			String beginFailure = "接管事务启动失败：" + exception.getMessage();
+			RealWaterMod.LOGGER.error("Refusing water takeover; no recovery file will be overwritten", exception);
+			RestorationStats rollback = restoreTakeover(level.getServer());
+			lastTakeoverFailure = rollback.completed()
+					? beginFailure + "；已安全回滚，原版水未保持接管状态"
+					: beginFailure + "；自动回滚未完成，journal 已锁定新 takeover：" + rollback.failure();
 			return -1;
 		}
-
-		takeoverDimension = level.dimension();
-		int removed = 0;
-		for (Map.Entry<BlockPos, BlockState> entry : candidates.entrySet()) {
-			BlockPos pos = entry.getKey();
-			if (level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS)) {
-				takeoverOriginalBlocks.put(pos, entry.getValue());
-				removed++;
-			}
-		}
-		if (removed == 0) {
-			takeoverDimension = null;
-			try {
-				TakeoverBackupStore.delete(level.getServer());
-			} catch (IOException exception) {
-				RealWaterMod.LOGGER.warn("Could not delete an unused Real Water takeover backup", exception);
-			}
-		}
-		return removed;
 	}
 
 	public RestorationStats restoreTakeover(MinecraftServer server) {
-		if (takeoverOriginalBlocks.isEmpty()) {
-			takeoverDimension = null;
-			return RestorationStats.EMPTY;
-		}
-		ServerLevel level = takeoverDimension == null ? null : server.getLevel(takeoverDimension);
-		if (level == null) return new RestorationStats(0, takeoverOriginalBlocks.size());
-		int restored = 0, skipped = 0;
-		for (Map.Entry<BlockPos, BlockState> entry : takeoverOriginalBlocks.entrySet()) {
-			BlockState current = level.getBlockState(entry.getKey());
-			if (!current.isAir() && !current.is(Blocks.WATER)) {
-				skipped++;
-				continue;
-			}
-			if (level.setBlock(entry.getKey(), entry.getValue(), Block.UPDATE_ALL)) restored++;
-			else skipped++;
-		}
-		takeoverOriginalBlocks.clear();
-		takeoverDimension = null;
+		// Once restoration begins, never let the tick hook remove a block that an interrupted pass already restored.
+		takeoverMaintenanceEnabled = false;
 		try {
-			TakeoverBackupStore.delete(server);
-		} catch (IOException exception) {
-			RealWaterMod.LOGGER.warn("Could not delete the completed Real Water takeover backup; startup recovery remains safe", exception);
+			TakeoverBackupStore.RecoveryResult result = TakeoverBackupStore.recover(server);
+			if (!result.found() && !takeoverOriginalBlocks.isEmpty()) {
+				lastTakeoverFailure = "活动接管缺少 on-disk journal；已停止替换域，需从世界备份核对";
+				RealWaterMod.LOGGER.error(lastTakeoverFailure);
+				return RestorationStats.failed(false, 0, 0, 0, lastTakeoverFailure);
+			}
+			takeoverOriginalBlocks.clear();
+			takeoverDimension = null;
+			lastTakeoverFailure = null;
+			return new RestorationStats(
+					result.found(), result.restoredBlocks(), result.alreadyRestoredBlocks(), result.skippedBlocks(), true, null
+			);
+		} catch (TakeoverTransaction.RecoveryException exception) {
+			if (exception.worldPassCompleted()) {
+				takeoverOriginalBlocks.clear();
+				takeoverDimension = null;
+			}
+			lastTakeoverFailure = "恢复未完成，journal 已保留并锁定新 takeover：" + exception.getMessage();
+			RealWaterMod.LOGGER.error("Could not finish the Real Water takeover recovery; recovery files were preserved", exception);
+			return RestorationStats.failed(
+					true,
+					exception.restoredBlocks(),
+					exception.alreadyRestoredBlocks(),
+					exception.skippedBlocks(),
+					lastTakeoverFailure
+			);
+		} catch (IOException | RuntimeException exception) {
+			lastTakeoverFailure = "恢复未完成，journal 已保留并锁定新 takeover：" + exception.getMessage();
+			RealWaterMod.LOGGER.error("Could not recover the unfinished Real Water takeover; recovery files were preserved", exception);
+			return RestorationStats.failed(TakeoverBackupStore.isLocked(server), 0, 0, 0, lastTakeoverFailure);
 		}
-		return new RestorationStats(restored, skipped);
 	}
 
 	private void createEmpty(ServerLevel level) {
@@ -302,7 +314,7 @@ public final class FluidSimulationService {
 	}
 
 	private void maintainTakeover(ServerLevel level) {
-		if (takeoverOriginalBlocks.isEmpty() || !level.dimension().equals(takeoverDimension)) return;
+		if (!takeoverMaintenanceEnabled || takeoverOriginalBlocks.isEmpty() || !level.dimension().equals(takeoverDimension)) return;
 		for (BlockPos pos : takeoverOriginalBlocks.keySet()) {
 			if (level.getBlockState(pos).is(Blocks.WATER)) {
 				level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS);
@@ -528,6 +540,10 @@ public final class FluidSimulationService {
 
 	public RestorationStats remove(MinecraftServer server) {
 		RestorationStats restoration = restoreTakeover(server);
+		if (!restoration.completed()) {
+			paused = true;
+			return restoration;
+		}
 		domain = null;
 		dimension = null;
 		paused = true;
@@ -537,8 +553,12 @@ public final class FluidSimulationService {
 		return restoration;
 	}
 
-	public String status() {
-		if (domain == null) return "没有活动流体域";
+	public String status(MinecraftServer server) {
+		String takeoverLock = TakeoverBackupStore.lockDescription(server);
+		if (domain == null) {
+			return "没有活动流体域 | takeover lock " + takeoverLock
+					+ (lastTakeoverFailure == null ? "" : " | " + lastTakeoverFailure);
+		}
 		String stats = lastStats == null
 				? "尚未步进"
 				: String.format("%.2f ms, substeps %d, PCG %d, residual %.4g",
@@ -546,13 +566,14 @@ public final class FluidSimulationService {
 		float cellVolumes = domain.totalVolume();
 		FlipFluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
 		return String.format(
-				"%s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d in %d cells | visible %d, dense %d | takeover %d | entities %s/%d | maxP %.1f | collision Δ%d, escaped %.3f | %s",
+				"%s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d in %d cells | visible %d, dense %d | takeover %d, lock %s | entities %s/%d | maxP %.1f | collision Δ%d, escaped %.3f | %s",
 				paused ? "暂停" : "运行",
 				origin.toShortString(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
 				20.0 / stepIntervalTicks,
 				cellVolumes / CELL_VOLUMES_PER_BLOCK, cellVolumes,
 				domain.particleCount(), domain.markerCellCount(),
-				distribution.visibleCells(), distribution.denseCells(), takeoverOriginalBlocks.size(), entityPhysicsEnabled ? "on" : "off", lastAffectedEntities,
+				distribution.visibleCells(), distribution.denseCells(), takeoverOriginalBlocks.size(), takeoverLock,
+				entityPhysicsEnabled ? "on" : "off", lastAffectedEntities,
 				domain.maximumPressure(),
 				lastCollisionStats.changedCells(), lastCollisionStats.escapedCellVolume() / CELL_VOLUMES_PER_BLOCK, stats
 		);
@@ -571,10 +592,29 @@ public final class FluidSimulationService {
 
 	public record CellTarget(int x, int y, int z) { }
 
-	public record CaptureResult(int wetCells, int removedVanillaBlocks) { }
+	public String lastTakeoverFailure() {
+		return lastTakeoverFailure;
+	}
 
-	public record RestorationStats(int restoredBlocks, int skippedBlocks) {
-		private static final RestorationStats EMPTY = new RestorationStats(0, 0);
+	public record CaptureResult(int wetCells, int removedVanillaBlocks, String failure) { }
+
+	public record RestorationStats(
+			boolean journalFound,
+			int restoredBlocks,
+			int alreadyRestoredBlocks,
+			int skippedBlocks,
+			boolean completed,
+			String failure
+	) {
+		private static RestorationStats failed(
+				boolean journalFound,
+				int restoredBlocks,
+				int alreadyRestoredBlocks,
+				int skippedBlocks,
+				String failure
+		) {
+			return new RestorationStats(journalFound, restoredBlocks, alreadyRestoredBlocks, skippedBlocks, false, failure);
+		}
 	}
 
 	public record WaterEditResult(boolean domainExists, CellTarget target, float requestedCellVolume, float changedCellVolume) {

@@ -38,6 +38,10 @@ Version 0.7.1 makes live collision displacement use the exact particle volume re
 
 Version 0.8 makes takeover restoration crash-safe. Before any vanilla water is removed, the exact dimension, block positions, and block states are written to `realwater-takeover-backup.nbt` in the world directory through a temporary file and atomic replacement. A leftover journal is recovered automatically when that world next starts. The journal is deleted only after restoration completes; if it cannot be written, takeover is refused without modifying the world.
 
+Version 0.8.1 completes the automated M0 transaction hardening without changing takeover-journal v1. An existing, corrupt, unknown-version, unloaded-dimension, or otherwise unresolved journal locks every new takeover and is never overwritten. The journal and `realwater-takeover-WARNING.txt` must both be atomically published before world mutation; filesystems without atomic move support fail closed. Restoration failures and cleanup failures preserve the journal for an idempotent retry. The warning names the world, dimension, backed-up block count, and recovery steps.
+
+While either recovery file exists, keep a full world backup and do not remove or downgrade Real Water. First run `/realwater remove`, or let startup recovery finish, and confirm both files have disappeared. An administrator who manually deletes the recovery files or removes the mod before recovery can defeat safeguards that code can no longer enforce.
+
 ## Build
 
 Minecraft 26.2 targets Java 25. On this machine the project is built with the installed JDK 26 while compiling to Java 25 bytecode:
@@ -45,6 +49,12 @@ Minecraft 26.2 targets Java 25. On this machine the project is built with the in
 ```powershell
 $env:JAVA_HOME = 'D:\ProgramFiles\BienCreng\jdk-26.0.2'
 ./gradlew.bat assemble --offline --no-daemon
+```
+
+The standalone M0 journal/transaction suite uses only the already-resolved offline compile classpath:
+
+```powershell
+./gradlew.bat runTakeoverJournalValidation --offline --no-daemon
 ```
 
 See [docs/fluid-prototype.md](docs/fluid-prototype.md) for the current numerical model, standalone validation, and benchmark. For maintenance and handoff, use [docs/maintenance-routing.md](docs/maintenance-routing.md). The confirmed path from this bounded prototype to multi-material, gas, chemistry, granular deposits, persistence, and optional GPU execution is documented in [docs/long-term-roadmap.md](docs/long-term-roadmap.md).

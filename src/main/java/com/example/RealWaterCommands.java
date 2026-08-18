@@ -49,7 +49,9 @@ public final class RealWaterCommands {
 	private static int createDemo(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		service.createDemo(player);
+		if (!service.createDemo(player)) {
+			return fail(source, "无法替换活动域：" + service.lastTakeoverFailure());
+		}
 		source.sendSuccess(() -> Component.literal("已创建暂停的 24×16×24 溃坝测试域；使用 /realwater step 或 /realwater run"), false);
 		return 1;
 	}
@@ -58,12 +60,12 @@ public final class RealWaterCommands {
 		ServerPlayer player = source.getPlayerOrException();
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
 		FluidSimulationService.CaptureResult result = service.captureNearbyWater(player, takeover);
+		if (result.failure() != null) {
+			return fail(source, (takeover ? "接管" : "捕获") + "已取消：" + result.failure());
+		}
 		if (takeover) {
-			if (result.removedVanillaBlocks() < 0) {
-				return fail(source, "接管已取消：无法写入崩溃恢复备份；原版水没有被修改，请查看日志");
-			}
 			source.sendSuccess(() -> Component.literal(String.format(
-					"已接管附近水体：%d 个非空子格，暂时移除 %d 个原版水方块；/realwater remove 将恢复原方块；测试域当前暂停",
+					"已接管附近水体：%d 个非空子格，暂时移除 %d 个原版水方块；请保留世界备份，在 /realwater remove 完成且 WARNING 消失前不要卸载或降级 Mod；测试域当前暂停",
 					result.wetCells(), result.removedVanillaBlocks()
 			)), false);
 		} else {
@@ -144,22 +146,25 @@ public final class RealWaterCommands {
 		if (!service.exists()) return fail(source, "请先使用 /realwater demo 或 /realwater capture");
 		int completed = service.step(source.getLevel(), count);
 		if (completed == 0) return fail(source, "活动流体域位于其他维度");
-		source.sendSuccess(() -> Component.literal("已执行 " + completed + " 个流体步；" + service.status()), false);
+		source.sendSuccess(() -> Component.literal("已执行 " + completed + " 个流体步；" + service.status(source.getServer())), false);
 		return completed;
 	}
 
 	private static int status(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		source.sendSuccess(() -> Component.literal(service.status()), false);
+		source.sendSuccess(() -> Component.literal(service.status(source.getServer())), false);
 		return service.exists() ? 1 : 0;
 	}
 
 	private static int remove(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
 		FluidSimulationService.RestorationStats restoration = service.remove(source.getServer());
+		if (!restoration.completed()) {
+			return fail(source, "移除已暂停：" + restoration.failure() + "；请保留 Mod 与世界备份并查看日志后重试");
+		}
 		source.sendSuccess(() -> Component.literal(String.format(
-				"已移除活动流体域和客户端调试快照；恢复 %d 个原版水方块，跳过 %d 个已被玩家占用的位置",
-				restoration.restoredBlocks(), restoration.skippedBlocks()
+				"已移除活动流体域和客户端调试快照；恢复 %d 个原版水方块，确认 %d 个已恢复位置，跳过 %d 个已被玩家占用的位置；journal 与 WARNING 已删除",
+				restoration.restoredBlocks(), restoration.alreadyRestoredBlocks(), restoration.skippedBlocks()
 		)), false);
 		return 1;
 	}
