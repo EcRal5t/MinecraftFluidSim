@@ -418,8 +418,10 @@ final class GpuProbeService {
 			String timing = Double.isFinite(gpuMillis)
 					? String.format(Locale.ROOT, "GPU timestamp %.3f ms", gpuMillis)
 					: "GPU timestamp 尚未步进";
-			return String.format(Locale.ROOT, "%s | diag readback 64 B/step through 3-slot ring | maxP %.1f | divergence %.5f→%.5f RMS %.5f | GPU volume %.3f cells",
-					timing, d.maximumPressure(), d.preProjectionMaximumDivergence(), d.maximumDivergence(), d.rmsDivergence(), d.particleVolume());
+			return String.format(Locale.ROOT, "%s | %d×%.2f ms physical substeps | diag readback 64 B/step through 3-slot ring | maxP %.1f | divergence %.5f→%.5f RMS %.5f | GPU volume %.3f cells",
+					timing, pipeline.physicalSubstepsPerStep(),
+					pipeline.config().timeStep() * 1_000.0F / pipeline.physicalSubstepsPerStep(),
+					d.maximumPressure(), d.preProjectionMaximumDivergence(), d.maximumDivergence(), d.rmsDivergence(), d.particleVolume());
 		}
 		@Override public void close() { pipeline.close(); }
 	}

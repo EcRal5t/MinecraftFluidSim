@@ -1,6 +1,6 @@
 # Real Water 维护路由
 
-当前主 Mod：`0.8.2`。可选 GPU probe：`0.1.15`。版本历史、实测数据和长期阶段定义分别见 [`fluid-prototype.md`](fluid-prototype.md)、[`gpu-probe-report.md`](gpu-probe-report.md) 与 [`long-term-roadmap.md`](long-term-roadmap.md)。本文只回答“代码在哪里、改完跑什么”。
+当前主 Mod：`0.8.2`。可选 GPU probe：`0.1.16`。版本历史、实测数据和长期阶段定义分别见 [`fluid-prototype.md`](fluid-prototype.md)、[`gpu-probe-report.md`](gpu-probe-report.md) 与 [`long-term-roadmap.md`](long-term-roadmap.md)。本文只回答“代码在哪里、改完跑什么”。
 
 ## 不可混用的状态
 
@@ -51,6 +51,7 @@
 | 无窗口 Vulkan/Shaderc/VMA 能力探测 | `VulkanCapabilityProbe.java` | 不创建窗口/surface，不触碰世界 |
 | 已加载区块的冻结只读碰撞采样 | `WorldCollisionSnapshot.java` | 只用非加载读取，不持 chunk ticket |
 | 小域正确性与快速 benchmark | `GpuFlipProbeValidation.java` | marker 账本、内存模式和压力容差 |
+| GPU 长期表面/marker CPU 对照门 | `GpuLongRunSurfaceValidation.java` | 1,000 个 50 ms 物理步；检查 marker 层数、压力流体格、边缘/内部 density；不把平滑 density 当水量 |
 | M1 occupancy CPU/GPU break-even 发布矩阵 | `GpuOccupancyBreakEvenValidation.java` | 独立任务，固定初态七批中位数；分离网格、marker 数、压力流体格数；不得用 timestamp 代替 throughput wall |
 | 64³ 深层 MGH、压力算法与 2,097,152-marker 发布门 | `GpuLargeDomainValidation.java` | 仅 hierarchy、布局、容量或大域性能变化时运行 |
 
@@ -67,7 +68,7 @@
 | CPU 物理/碰撞/调度 | `compileTestJava` + `FlipFluidDomainValidation`；表面相关再跑 surface diagnostic | takeover 改动另跑 16 场景；只有请求进服验证或发布时才 clean build |
 | takeover/codec/文件事务 | `runTakeoverJournalValidation` | 真实世界修改只按 smoke 文档并保留备份 |
 | 指令 transcript | `runCommandAuditValidation` | Fabric 命令包装变化再进服 |
-| GPU shader、dispatch、压力数值 | RTX 5070 Ti `--skip-large` 快速门 | hierarchy、容量、buffer 布局或 64³ 性能变化才跑完整 device 0 |
+| GPU shader、dispatch、压力数值 | RTX 5070 Ti `--skip-large` 快速门；长期表面相关先跑 `runGpuLongRunSurfaceValidation` | hierarchy、容量、buffer 布局或 64³ 性能变化才跑完整 device 0 |
 | GPU occupancy 性能矩阵 | RTX 5070 Ti `runGpuOccupancyBenchmark` | 仅重测 break-even 或发布相关性能结论时运行；不因普通代码改动重复，且不据此切正式后端 |
 | 设备选择、queue family、显存类型、Vulkan 生命周期 | device 0 快速门 + device 1 对应专项 | 发布里程碑才做双卡完整门 |
 | entrypoint、依赖、资源路径、环境注解 | `:gpu-probe:runServer`，保持 `eula=false` | 客户端渲染/命令打包变化再请求进服 smoke |
@@ -78,6 +79,14 @@ GPU 快速门：
 ./gradlew.bat :gpu-probe:runGpuFlipValidation --offline --no-daemon `
   '-PgpuProbeNativesDir=Z:\Games\Minecraft\Pure\.minecraft\versions\26.2-Fabric 0.19.3\26.2-Fabric 0.19.3-natives\lwjgl\3.4.1-snapshot\x64' `
   -PgpuProbeDevice=0 -PgpuProbeSkipLarge=true
+```
+
+GPU 1,000 物理步表面/marker 对照门：
+
+```powershell
+./gradlew.bat :gpu-probe:runGpuLongRunSurfaceValidation --offline --no-daemon `
+  '-PgpuProbeNativesDir=Z:\Games\Minecraft\Pure\.minecraft\versions\26.2-Fabric 0.19.3\26.2-Fabric 0.19.3-natives\lwjgl\3.4.1-snapshot\x64' `
+  -PgpuProbeDevice=0
 ```
 
 M1 occupancy 发布矩阵：
@@ -113,4 +122,4 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 - 同一 Mod id 只启用一个 jar；旧版改为 `.disabled`，复制后比较 SHA-256。
 - 请求人工 smoke 只针对自动门无法覆盖的打包命令、真实渲染、真实碰撞采样或世界事务。
 
-probe 0.1.15 已完成 M1 occupancy break-even 自动门：独立矩阵在相同确定性初态下分别扫描网格规模、每格 marker 数和压力流体格数，比较活动 CPU PCG step wall 与 GPU Jacobi/96 completed-batch throughput wall；七个重置批次中位数避免单次 ring/线程抖动决定结论。5070 Ti 的当前 `24×16×24` 网格在 1 marker 时 CPU 更快，4 marker 近似持平，16 marker 起有明确 GPU 优势，当前 20,736-marker 参考域约为 19.19×。这不改变正式后端选择、shader、物理、渲染或存档。M1 只剩 30 分钟实机渲染稳定性人工门；M0 强制中断恢复和邻接更新人工门仍按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 执行。
+probe 0.1.16 将每个 50 ms GPU 物理步明确离散为四个 12.5 ms 子步，并把域/solid 接触半径对齐到 CPU 的 `0.45h`；碰撞仍只裁剪墙面法向，切向自由。独立 1,000 步门要求 GPU 与 CPU 保持相同的三层 marker 和近似边缘密度，覆盖此前约 979–1,304 步出现的额外 GPU 坍缩。完整四子步后，5070 Ti 当前参考域为 11.646 ms CPU wall 对 2.257 ms GPU completed-batch throughput wall，即 5.16×；单 marker crossover 后移到约 1,024 流体格。GPU 的 36,000 步无窗口特征化仍从第 5,000 步起暴露长期 marker 压缩，精确 `particleVolume` 未变；CPU 与 GPU 当前都未实现 reseeding，因此这是一项共享的结构性风险，但现有长测数据只来自 GPU。它属于 M2.5，不能用渲染找平关闭。M1 尚需确认原截图时间窗的实机水面，并完成 30 分钟驱动/tick/内存稳定性门；M0 强制中断恢复和邻接更新人工门仍按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 执行。

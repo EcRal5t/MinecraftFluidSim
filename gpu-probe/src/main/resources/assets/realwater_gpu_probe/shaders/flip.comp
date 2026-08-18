@@ -311,12 +311,26 @@ void g2pStage(uint id) {
     vec3 flip=oldv+(pic-before);velocities.value[id]=vec4(mix(pic,flip,0.90),0.0);
 }
 
+void constrainToSolidFaces(inout vec3 p,inout vec3 vel) {
+    float radius=0.45*pc.h;float contactMinimum=radius+0.001*pc.h;float contactMaximum=pc.h-contactMinimum;
+    ivec3 c=ivec3(clamp(floor(p/pc.h),vec3(0.0),vec3(pc.nx-1,pc.ny-1,pc.nz-1)));vec3 local=p-vec3(c)*pc.h;
+    if(c.x>0&&local.x<radius&&solid(c+ivec3(-1,0,0))){p.x=float(c.x)*pc.h+contactMinimum;vel.x=max(0.0,vel.x);}
+    if(c.x+1<pc.nx&&local.x>pc.h-radius&&solid(c+ivec3(1,0,0))){p.x=float(c.x)*pc.h+contactMaximum;vel.x=min(0.0,vel.x);}
+    if(c.y>0&&local.y<radius&&solid(c+ivec3(0,-1,0))){p.y=float(c.y)*pc.h+contactMinimum;vel.y=max(0.0,vel.y);}
+    if(c.y+1<pc.ny&&local.y>pc.h-radius&&solid(c+ivec3(0,1,0))){p.y=float(c.y)*pc.h+contactMaximum;vel.y=min(0.0,vel.y);}
+    if(c.z>0&&local.z<radius&&solid(c+ivec3(0,0,-1))){p.z=float(c.z)*pc.h+contactMinimum;vel.z=max(0.0,vel.z);}
+    if(c.z+1<pc.nz&&local.z>pc.h-radius&&solid(c+ivec3(0,0,1))){p.z=float(c.z)*pc.h+contactMaximum;vel.z=min(0.0,vel.z);}
+}
+
 void advectStage(uint id) {
-    if(id>=uint(pc.particleCount))return;vec3 p=positions.value[id].xyz;vec3 vel=velocities.value[id].xyz;vec3 limit=vec3(pc.nx,pc.ny,pc.nz)*pc.h;
-    float nx=clamp(p.x+vel.x*pc.dt,0.05*pc.h,limit.x-0.05*pc.h);ivec3 cx=ivec3(floor(vec3(nx,p.y,p.z)/pc.h));if(solid(cx))vel.x=0.0;else p.x=nx;
-    float ny=clamp(p.y+vel.y*pc.dt,0.05*pc.h,limit.y-0.05*pc.h);ivec3 cy=ivec3(floor(vec3(p.x,ny,p.z)/pc.h));if(solid(cy))vel.y=0.0;else p.y=ny;
-    float nz=clamp(p.z+vel.z*pc.dt,0.05*pc.h,limit.z-0.05*pc.h);ivec3 cz=ivec3(floor(vec3(p.x,p.y,nz)/pc.h));if(solid(cz))vel.z=0.0;else p.z=nz;
-    if(p.x<=0.051*pc.h||p.x>=limit.x-0.051*pc.h)vel.x=0.0;if(p.y<=0.051*pc.h||p.y>=limit.y-0.051*pc.h)vel.y=0.0;if(p.z<=0.051*pc.h||p.z>=limit.z-0.051*pc.h)vel.z=0.0;
+    if(id>=uint(pc.particleCount))return;vec3 p=positions.value[id].xyz;vec3 vel=velocities.value[id].xyz;vec3 limit=vec3(pc.nx,pc.ny,pc.nz)*pc.h;float radius=0.45*pc.h;
+    float nx=clamp(p.x+vel.x*pc.dt,radius,limit.x-radius);ivec3 cx=ivec3(floor(vec3(nx,p.y,p.z)/pc.h));if(solid(cx))vel.x=0.0;else p.x=nx;
+    float ny=clamp(p.y+vel.y*pc.dt,radius,limit.y-radius);ivec3 cy=ivec3(floor(vec3(p.x,ny,p.z)/pc.h));if(solid(cy))vel.y=0.0;else p.y=ny;
+    float nz=clamp(p.z+vel.z*pc.dt,radius,limit.z-radius);ivec3 cz=ivec3(floor(vec3(p.x,p.y,nz)/pc.h));if(solid(cz))vel.z=0.0;else p.z=nz;
+    if(p.x<=radius+0.001*pc.h)vel.x=max(0.0,vel.x);if(p.x>=limit.x-radius-0.001*pc.h)vel.x=min(0.0,vel.x);
+    if(p.y<=radius+0.001*pc.h)vel.y=max(0.0,vel.y);if(p.y>=limit.y-radius-0.001*pc.h)vel.y=min(0.0,vel.y);
+    if(p.z<=radius+0.001*pc.h)vel.z=max(0.0,vel.z);if(p.z>=limit.z-radius-0.001*pc.h)vel.z=min(0.0,vel.z);
+    constrainToSolidFaces(p,vel);
     positions.value[id].xyz=p;velocities.value[id].xyz=vel;
 }
 

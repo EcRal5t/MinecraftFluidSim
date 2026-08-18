@@ -29,6 +29,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private static final int BUFFER_COUNT = 27;
 	private static final int PUSH_BYTES = 88;
 	private static final int SUBMISSION_RING_SIZE = 3;
+	private static final int PHYSICAL_SUBSTEPS = 4;
 	private static final int MG_PRE_SMOOTHING_SWEEPS = 2;
 	private static final int MG_COARSE_ITERATIONS = 24;
 	private static final int MG_POST_SMOOTHING_SWEEPS = 3;
@@ -114,6 +115,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private long descriptorPool;
 	private long descriptorSet;
 	private VkCommandBuffer recordingCommandBuffer;
+	private float recordingTimeStep;
 	private ExecutorService completionExecutor;
 	private float timestampPeriodNanos;
 	private int timestampValidBits;
@@ -162,6 +164,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	boolean hasTimestampQueries() { return timestampPeriodNanos > 0.0F && timestampValidBits > 0; }
 	int submissionRingSize() { return SUBMISSION_RING_SIZE; }
 	int maximumOutstandingSubmissions() { return maximumOutstandingSubmissions; }
+	int physicalSubstepsPerStep() { return PHYSICAL_SUBSTEPS; }
 	long regularStagingBytes() {
 		long bytes = 0L;
 		for (SubmissionSlot slot : submissionRing) bytes += slot.stagingBuffer().size();
@@ -450,6 +453,8 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private void recordAndSubmit(boolean fullStep) {
 		long started = System.nanoTime();
 		SubmissionSlot slot = acquireSubmissionSlot();
+		int physicalSubsteps = fullStep ? PHYSICAL_SUBSTEPS : 1;
+		recordingTimeStep = config.timeStep() / physicalSubsteps;
 		try (MemoryStack stack = stackPush()) {
 			check(vkResetCommandPool(device, slot.commandPool(), 0), "vkResetCommandPool(step-ring)");
 			recordingCommandBuffer = slot.commandBuffer();
@@ -467,11 +472,12 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			vkCmdPipelineBarrier(recordingCommandBuffer, VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
 					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, barrier, null, null);
 			ByteBuffer push = stack.malloc(PUSH_BYTES);
-			dispatch(push, STAGE_CLEAR, 0, maxGridCount());
-			computeBarrier(barrier);
-			dispatch(push, STAGE_P2G, 0, particleCount);
-			computeBarrier(barrier);
-			if (fullStep) {
+			for (int physicalSubstep = 0; physicalSubstep < physicalSubsteps; physicalSubstep++) {
+				dispatch(push, STAGE_CLEAR, 0, maxGridCount());
+				computeBarrier(barrier);
+				dispatch(push, STAGE_P2G, 0, particleCount);
+				computeBarrier(barrier);
+				if (!fullStep) break;
 				dispatch(push, STAGE_GRID_PREP, 0, maxFaceCount());
 				computeBarrier(barrier);
 				dispatch(push, STAGE_DIVERGENCE, 0, 1, config.cellCount());
@@ -486,8 +492,9 @@ final class VulkanFlipPipeline implements AutoCloseable {
 				computeBarrier(barrier);
 				dispatch(push, STAGE_ADVECT, 0, particleCount);
 				computeBarrier(barrier);
-				// The network surface must represent post-advection particles, while pressure markers above
-				// remain the exact occupancy used by this pressure solve for diagnostics.
+				if (physicalSubstep + 1 < physicalSubsteps) continue;
+				// The network surface represents the final post-advection substep. Pressure markers above
+				// remain the exact occupancy used by the final pressure solve for diagnostics.
 				dispatch(push, STAGE_CLEAR_SURFACE, 0, config.cellCount());
 				computeBarrier(barrier);
 				dispatch(push, STAGE_SURFACE_P2G, 0, particleCount);
@@ -512,6 +519,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		}
 		finally {
 			recordingCommandBuffer = null;
+			recordingTimeStep = 0.0F;
 		}
 		long schedulingNanos = System.nanoTime() - started;
 		if (fullStep) lastStepNanos = schedulingNanos;
@@ -834,7 +842,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		push.clear();
 		push.putInt(stage).putInt(config.nx()).putInt(config.ny()).putInt(config.nz());
 		push.putInt(particleCount).putInt(iteration).putInt(config.pressureIterations()).putInt(flags);
-		push.putFloat(config.timeStep()).putFloat(config.cellSize()).putFloat(config.gravity()).putFloat(config.density());
+		push.putFloat(recordingTimeStep).putFloat(config.cellSize()).putFloat(config.gravity()).putFloat(config.density());
 		push.putInt(pressureSolver.code());
 		putHierarchyLevel(push, currentLevel);
 		putHierarchyLevel(push, otherLevel);

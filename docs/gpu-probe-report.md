@@ -1,6 +1,6 @@
 # M1 Windows/NVIDIA Vulkan GPU probe report
 
-Date: 2026-08-19. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.15. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
+Date: 2026-08-19. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.16. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
 
 This is an M1-M correctness, data-movement, collision-ingestion, runtime-recovery and occupancy probe, not the production GPU backend. It has no takeover code, never writes blocks or save data, and owns no chunk tickets. The ordinary generated demo and every headless benchmark remain world-independent. The explicit `worlddemo` command captures collision once from chunks already loaded around the player, then runs only from the frozen in-memory subcell mask. The main `realwater` Mod remains CPU-authoritative whether the optional probe jar is installed or not.
 
@@ -121,16 +121,26 @@ Representative RTX 5070 Ti results:
 
 | Grid / initial occupancy | CPU wall | GPU timestamp | GPU throughput wall | CPU / GPU throughput |
 |---|---:|---:|---:|---:|
-| `24×16×24`, 1 fluid cell × 1 marker | 0.238 ms | 0.312 ms | 0.357 ms | 0.67× |
-| `24×16×24`, 4 fluid cells × 1 marker | 0.401 ms | 0.317 ms | 0.383 ms | 1.04× |
-| `24×16×24`, 16 fluid cells × 1 marker | 0.596 ms | 0.350 ms | 0.392 ms | 1.52× |
-| `24×16×24`, 1,024 fluid cells × 1 marker | 3.040 ms | 0.492 ms | 0.544 ms | 5.59× |
-| `24×16×24`, 8,192 fluid cells × 1 marker | 23.979 ms | 0.531 ms | 0.610 ms | 39.31× |
-| `24×16×24`, current 2,592-cell / 20,736-marker count | 11.464 ms | 0.529 ms | 0.598 ms | 19.19× |
-| `4³`, 25% cells × 8 markers | 0.566 ms | 0.320 ms | 0.390 ms | 1.45× |
-| `32³`, 25% cells × 8 markers | 49.775 ms | 0.556 ms | 0.691 ms | 72.06× |
+| `24×16×24`, 1 fluid cell × 1 marker | 0.240 ms | 1.370 ms | 1.481 ms | 0.16× |
+| `24×16×24`, 4 fluid cells × 1 marker | 0.453 ms | 1.493 ms | 1.604 ms | 0.28× |
+| `24×16×24`, 16 fluid cells × 1 marker | 0.617 ms | 1.498 ms | 1.626 ms | 0.38× |
+| `24×16×24`, 1,024 fluid cells × 1 marker | 2.872 ms | 2.082 ms | 2.202 ms | 1.30× |
+| `24×16×24`, 8,192 fluid cells × 1 marker | 23.864 ms | 2.155 ms | 2.254 ms | 10.59× |
+| `24×16×24`, current 2,592-cell / 20,736-marker count | 11.646 ms | 2.171 ms | 2.257 ms | 5.16× |
+| `4³`, 25% cells × 8 markers | 0.538 ms | 1.269 ms | 1.423 ms | 0.38× |
+| `32³`, 25% cells × 8 markers | 50.077 ms | 2.165 ms | 2.282 ms | 21.95× |
 
-The sampled current-grid crossover is between one and four single-marker fluid cells, but the four-marker advantage is only 4% and is treated as parity; the first sustained sampled point with at least 10% margin is 16 cells/markers. At fixed 1,024 pressure-fluid cells, raising marker count from 1,024 to 8,192 changes CPU wall from 2.914 to 4.969 ms and GPU throughput from 0.555 to 0.568 ms. At fixed 8,192 markers, raising pressure-fluid cells from 1,024 to 8,192 changes CPU wall from 4.983 to 24.189 ms and GPU throughput from 0.572 to 0.636 ms. Thus this dense-grid GPU implementation is dominated by its roughly 0.35–0.60 ms dispatch/ring floor over the tested current grid, whereas the current CPU PCG cost is much more sensitive to active pressure-cell topology than to marker count alone. All rows preserve their exact marker count and `particleVolume` ledger; none changes the shader, pressure discretization, renderer, scheduler threshold, world access or save format. The result closes the M1 break-even measurement but does not switch the formal backend.
+Probe 0.1.16 remeasures this matrix after defining one 50 ms physical step as four complete 12.5 ms numerical substeps. The sampled current-grid single-marker crossover is now 1,024 fluid cells/markers, and the 25%-occupancy grid crossover is `16³`. At fixed 1,024 pressure-fluid cells, raising marker count from 1,024 to 8,192 changes CPU wall from 2.778 to 4.981 ms and GPU throughput from 2.228 to 2.213 ms. At fixed 8,192 markers, raising pressure-fluid cells from 1,024 to 8,192 changes CPU wall from 4.988 to 24.164 ms and GPU throughput from 2.217 to 2.231 ms. The four-substep dense-grid GPU floor is roughly 1.4–2.3 ms over the tested current grid, whereas the current CPU PCG cost remains much more sensitive to active pressure topology. All rows preserve their exact marker count and `particleVolume` ledger. The result supersedes the 0.1.15 performance values, closes the M1 break-even measurement for the corrected physical step, and does not switch the formal backend.
+
+## Long-run surface regression and limit
+
+Probe 0.1.16 fixes a GPU-specific rapid-collapse path observed in the rendered generated demo around steps 979–1,304. The old GPU advection integrated the full 50 ms tick once and constrained domain contact at `0.05h`, while the CPU reference used CFL substeps and a `0.45h` marker contact radius. GPU physical steps now record four full P2G → pressure → G2P → advection substeps at 12.5 ms each. Domain and frozen-solid contact use the same `0.45h` radius; only the contacted normal coordinate and outward normal velocity are clipped, so tangential motion remains free. Snapshot reconstruction still runs only after the final substep, and one timestamp spans all four substeps. Checkpoint generation, scheduler overrun accounting and the three-slot ring remain per 50 ms physical step.
+
+`GpuLongRunSurfaceValidation` advances the same generated dam for 1,000 physical steps on GPU and CPU, then compares raw post-advection marker occupancy and quantized density columns rather than screenshots. On the RTX 5070 Ti the corrected GPU retained marker layers `y=0..2` and 1,728 marker cells, matching the CPU layer/count. A representative GPU edge minimum/mean density-column sum was `2.157/2.672` cells versus CPU `2.576/3.069`; GPU interior mean was `2.753` versus CPU `3.148`. The prior one-layer GPU state would fail every marker/edge threshold. Exact marker volume remained 2,592.000 solver cells.
+
+The correction does not claim to finish M2.5. A separate non-gating 36,000-step characterization retained exact particle volume but showed the remaining no-reseeding drift: GPU marker occupancy changed from `y=0..2`, 1,727 cells at step 1,000 to `y=0..1`, 1,152 cells by step 5,000. Edge minimum/mean density declined from `2.169/2.681` at 1,000 to `1.506/2.057` at 36,000; interior mean declined from `2.746` to `2.141`. This is the already-planned long-time marker-distribution problem: it requires conservative reseeding driven by the exact per-marker `particleVolume` ledger and fractional free-surface work. Increasing substeps again, relaxing the gate or leveling the rendered mesh is not an accepted fix.
+
+The corrected 5070 Ti device-local current-domain physical step measures about 2.05–2.17 ms GPU timestamp and 2.09–2.26 ms completed-batch wall. The real 64³ / 2,097,152-marker full-water physical step passed at 11.548 ms GPU timestamp and 11.744 ms throughput wall with 262,144.0 solver-cell volume. The second GPU was not repeated because no device selection, queue, memory type or Vulkan lifecycle changed.
 
 ## Commands
 
@@ -149,7 +159,7 @@ All handled probe commands and their chat/detail output are appended as UTF-8 bl
 
 ## Remaining M1 work
 
-- Every automated M1 capability, correctness, pressure-candidate, memory-mode, 64³ capacity, compact/full readback, bounded-ring, runtime-recovery, variable-density coefficient and occupancy break-even gate is complete. The only remaining M1 acceptance item is one 30-minute integrated-server run with Minecraft rendering active, checking exact marker volume, absence of driver reset or tick deadlock, and bounded process/VRAM behavior before clean `/realwatergpu remove`. No deliberate operating-system-level driver reset is required. After that observation is recorded, M1 can be marked complete. Optional partial-shape screenshots and after-capture block edits remain useful diagnostics but are not blockers.
+- Every automated M1 capability, 1,000-step surface regression, pressure-candidate, memory-mode, 64³ capacity, compact/full readback, bounded-ring, runtime-recovery, variable-density coefficient and corrected occupancy break-even gate is complete. The remaining manual window first checks that the original 979–1,304-step edge/corner regression is absent with Minecraft rendering active, then continues to 30 minutes to check exact marker volume, absence of driver reset or tick deadlock, and bounded process/VRAM behavior before clean `/realwatergpu remove`. The known post-5,000-step marker-distribution drift is recorded above as M2.5 work; M1 resource stability must not be misreported as long-term free-surface acceptance. No deliberate operating-system-level driver reset is required.
 
 Run the automated suite with the Minecraft native directory:
 
@@ -163,6 +173,14 @@ Run the standalone occupancy publication matrix only when re-measuring CPU/GPU p
 
 ```powershell
 ./gradlew.bat :gpu-probe:runGpuOccupancyBenchmark --offline --no-daemon `
+  '-PgpuProbeNativesDir=Z:\Games\Minecraft\Pure\.minecraft\versions\26.2-Fabric 0.19.3\26.2-Fabric 0.19.3-natives\lwjgl\3.4.1-snapshot\x64' `
+  -PgpuProbeDevice=0
+```
+
+Run the targeted 1,000-step GPU/CPU surface gate after changing physical substeps, advection, collision, marker classification or snapshot density:
+
+```powershell
+./gradlew.bat :gpu-probe:runGpuLongRunSurfaceValidation --offline --no-daemon `
   '-PgpuProbeNativesDir=Z:\Games\Minecraft\Pure\.minecraft\versions\26.2-Fabric 0.19.3\26.2-Fabric 0.19.3-natives\lwjgl\3.4.1-snapshot\x64' `
   -PgpuProbeDevice=0
 ```

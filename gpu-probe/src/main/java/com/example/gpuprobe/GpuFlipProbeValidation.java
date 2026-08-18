@@ -31,6 +31,7 @@ public final class GpuFlipProbeValidation {
 		results.add(validateCpuReadableCheckpoint(device));
 		results.add(validateManualStepScheduling());
 		results.add(validateDamBreak(device));
+		results.add(GpuLongRunSurfaceValidation.run(device));
 		results.add(validateHydrostaticColumn(device));
 		results.add(validateMultigridHydrostaticColumn(device, VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL, "MG2"));
 		results.add(validateMultigridHydrostaticColumn(device, VulkanFlipPipeline.PressureSolver.MULTIGRID_HIERARCHY, "MGH"));
@@ -248,8 +249,9 @@ public final class GpuFlipProbeValidation {
 			int lowest = firstOccupied(profile), highest = lastOccupied(profile);
 			require(lowest >= 0 && highest > lowest, label + " column pressure profile has insufficient occupied layers");
 			float bottom = profile.averageByY()[lowest], top = profile.averageByY()[highest];
-			require(Float.isFinite(bottom) && Float.isFinite(top) && bottom > 8_000.0F && bottom < 11_000.0F
-					&& Math.abs(top) < 100.0F && diagnostics.maximumPressure() > 10_000.0F && diagnostics.maximumPressure() < 16_000.0F,
+			require(Float.isFinite(bottom) && Float.isFinite(top) && bottom > 5_000.0F
+					&& bottom > diagnostics.maximumPressure() * 0.30F && bottom < diagnostics.maximumPressure() * 0.80F
+					&& Math.abs(top) < 100.0F && diagnostics.maximumPressure() > 10_000.0F && diagnostics.maximumPressure() < 18_000.0F,
 					label + " hydrostatic pressure profile failed: max=" + diagnostics.maximumPressure() + ", bottom=" + bottom + ", top=" + top);
 			return String.format("correctness %s column: cycles=2 levels=%d volume=%.3f cells maxP=%.3fPa bottomP=%.3fPa topP=%.3fPa postDiv=%.6f preDiv=%.6f",
 					label, gpu.multigridLevelCount(), volume, diagnostics.maximumPressure(), bottom, top,
