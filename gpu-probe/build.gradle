@@ -7,7 +7,7 @@ base {
 	archivesName = 'realwater-gpu-probe'
 }
 
-version = '0.1.14'
+version = '0.1.15'
 group = project.group
 
 loom {
@@ -83,4 +83,24 @@ tasks.register('runGpuFlipValidation', JavaExec) {
 	}
 	args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
 	if (providers.gradleProperty('gpuProbeSkipLarge').map(String::toBoolean).getOrElse(false)) args '--skip-large'
+}
+
+tasks.register('runGpuOccupancyBenchmark', JavaExec) {
+	group = 'verification'
+	description = 'Measures the M1 CPU/GPU break-even matrix across grid, marker and fluid-cell occupancy.'
+	dependsOn tasks.named('classes')
+	classpath = sourceSets.main.output + configurations.compileClasspath
+	mainClass = 'com.example.gpuprobe.GpuOccupancyBreakEvenValidation'
+	jvmArgs '--enable-native-access=ALL-UNNAMED'
+	def probeWorkDir = layout.buildDirectory.dir('gpu-occupancy-benchmark-work').get().asFile
+	workingDir probeWorkDir
+	doFirst {
+		probeWorkDir.mkdirs()
+		def nativeDir = providers.gradleProperty('gpuProbeNativesDir').orNull
+		if (nativeDir == null || nativeDir.isBlank()) {
+			throw new GradleException('Pass -PgpuProbeNativesDir=<Minecraft LWJGL native directory>')
+		}
+		systemProperty 'org.lwjgl.librarypath', file(nativeDir).absolutePath
+	}
+	args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
 }

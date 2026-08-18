@@ -1,8 +1,8 @@
 # M1 Windows/NVIDIA Vulkan GPU probe report
 
-Date: 2026-08-19. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.14. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
+Date: 2026-08-19. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.15. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
 
-This is an M1-L correctness, data-movement, collision-ingestion and runtime-recovery probe, not the production GPU backend. It has no takeover code, never writes blocks or save data, and owns no chunk tickets. The ordinary generated demo and every headless benchmark remain world-independent. The explicit `worlddemo` command captures collision once from chunks already loaded around the player, then runs only from the frozen in-memory subcell mask. The main `realwater` Mod remains CPU-authoritative whether the optional probe jar is installed or not.
+This is an M1-M correctness, data-movement, collision-ingestion, runtime-recovery and occupancy probe, not the production GPU backend. It has no takeover code, never writes blocks or save data, and owns no chunk tickets. The ordinary generated demo and every headless benchmark remain world-independent. The explicit `worlddemo` command captures collision once from chunks already loaded around the player, then runs only from the frozen in-memory subcell mask. The main `realwater` Mod remains CPU-authoritative whether the optional probe jar is installed or not.
 
 ## Layer boundary
 
@@ -113,6 +113,25 @@ The companion CPU variable-density face-coefficient gate is now complete. Its is
 
 Probe 0.1.14 adds the CPU-readable runtime recovery boundary without changing the shader or any SSBO binding. `FlipParticleState` validates and immutably owns the marker-volume ledger, positions, velocities and frozen solid mask; `GpuProbeCheckpoint` attaches one completed generation. The current generated dam checkpoint occupies 589,824 CPU bytes and reads 700,416 GPU bytes, while the configured 73,728-marker service maximum remains bounded to 2,073,600 CPU bytes and 2,396,160 readback bytes. Ordinary steps still read only 64 bytes. The automated lifecycle gate captures and restores both device-local and host-visible states, advances the restored CPU domain without volume loss, verifies a 20-generation replacement cadence, and passed `--skip-large` on both RTX 5070 Ti and RTX 4060 Ti. Close now drains every outstanding completion future before resource destruction even when one slot reports failure. No physical equation, marker classification, collision rule, rendering field, scheduler threshold, world access or save format changed. A deliberate operating-system/driver reset was not triggered; the deterministic gate exercises the same validated handoff and rollback state used when Vulkan reports the runtime failure.
 
+## Occupancy break-even
+
+Probe 0.1.15 adds `GpuOccupancyBreakEvenValidation`, a separate headless publication matrix rather than extra cost in the ordinary fast gate. Every row starts from the same deterministic contiguous occupancy on both backends, evolves six physical steps, resets to that initial state seven times, and reports the median batch. Initialization, shader compilation and validation readback are outside the timed region. CPU time is the active `FlipFluidDomain` PCG wall; GPU comparison time is completed-batch throughput wall for the Jacobi/96 correctness baseline. Timestamp remains device observation and scheduling wall remains the runtime guard truth. This comparison therefore measures the present probe implementations, not equivalent fixed iteration work and not the end-to-end latency of a future production backend.
+
+Representative RTX 5070 Ti results:
+
+| Grid / initial occupancy | CPU wall | GPU timestamp | GPU throughput wall | CPU / GPU throughput |
+|---|---:|---:|---:|---:|
+| `24×16×24`, 1 fluid cell × 1 marker | 0.238 ms | 0.312 ms | 0.357 ms | 0.67× |
+| `24×16×24`, 4 fluid cells × 1 marker | 0.401 ms | 0.317 ms | 0.383 ms | 1.04× |
+| `24×16×24`, 16 fluid cells × 1 marker | 0.596 ms | 0.350 ms | 0.392 ms | 1.52× |
+| `24×16×24`, 1,024 fluid cells × 1 marker | 3.040 ms | 0.492 ms | 0.544 ms | 5.59× |
+| `24×16×24`, 8,192 fluid cells × 1 marker | 23.979 ms | 0.531 ms | 0.610 ms | 39.31× |
+| `24×16×24`, current 2,592-cell / 20,736-marker count | 11.464 ms | 0.529 ms | 0.598 ms | 19.19× |
+| `4³`, 25% cells × 8 markers | 0.566 ms | 0.320 ms | 0.390 ms | 1.45× |
+| `32³`, 25% cells × 8 markers | 49.775 ms | 0.556 ms | 0.691 ms | 72.06× |
+
+The sampled current-grid crossover is between one and four single-marker fluid cells, but the four-marker advantage is only 4% and is treated as parity; the first sustained sampled point with at least 10% margin is 16 cells/markers. At fixed 1,024 pressure-fluid cells, raising marker count from 1,024 to 8,192 changes CPU wall from 2.914 to 4.969 ms and GPU throughput from 0.555 to 0.568 ms. At fixed 8,192 markers, raising pressure-fluid cells from 1,024 to 8,192 changes CPU wall from 4.983 to 24.189 ms and GPU throughput from 0.572 to 0.636 ms. Thus this dense-grid GPU implementation is dominated by its roughly 0.35–0.60 ms dispatch/ring floor over the tested current grid, whereas the current CPU PCG cost is much more sensitive to active pressure-cell topology than to marker count alone. All rows preserve their exact marker count and `particleVolume` ledger; none changes the shader, pressure discretization, renderer, scheduler threshold, world access or save format. The result closes the M1 break-even measurement but does not switch the formal backend.
+
 ## Commands
 
 The optional `realwater-gpu-probe` jar adds:
@@ -130,13 +149,20 @@ All handled probe commands and their chat/detail output are appended as UTF-8 bl
 
 ## Remaining M1 work
 
-- The 0.1.8 integrated-server `worlddemo` creation, stepping, continuous scheduling, status and cleanup smoke has passed. If a visual mismatch is observed, capture a screenshot of the relevant partial shape; the optional after-capture block-edit freeze observation is still useful but is not required for the already-enforced immutable in-memory mask. Probe 0.1.9 MGH passed both packaged benchmark sizes, probe 0.1.10 passed the corrected `/realwatergpu probe 1` form, and probe 0.1.11 passed packaged pre-step/stepped status, timestamp/wall benchmark and cleanup. Jacobi remains the generated-demo correctness/default baseline and MG2 remains the read-only `worlddemo` backend.
-- The CPU variable-density face-coefficient experiment is complete; the interface-distance conservative coefficient is the M3 candidate. Continue measuring CPU/GPU break-even across more occupancies without treating this isolated coefficient gate as active multi-material integration.
+- Every automated M1 capability, correctness, pressure-candidate, memory-mode, 64³ capacity, compact/full readback, bounded-ring, runtime-recovery, variable-density coefficient and occupancy break-even gate is complete. The only remaining M1 acceptance item is one 30-minute integrated-server run with Minecraft rendering active, checking exact marker volume, absence of driver reset or tick deadlock, and bounded process/VRAM behavior before clean `/realwatergpu remove`. No deliberate operating-system-level driver reset is required. After that observation is recorded, M1 can be marked complete. Optional partial-shape screenshots and after-capture block edits remain useful diagnostics but are not blockers.
 
 Run the automated suite with the Minecraft native directory:
 
 ```powershell
 ./gradlew.bat :gpu-probe:runGpuFlipValidation --offline --no-daemon `
+  '-PgpuProbeNativesDir=Z:\Games\Minecraft\Pure\.minecraft\versions\26.2-Fabric 0.19.3\26.2-Fabric 0.19.3-natives\lwjgl\3.4.1-snapshot\x64' `
+  -PgpuProbeDevice=0
+```
+
+Run the standalone occupancy publication matrix only when re-measuring CPU/GPU performance:
+
+```powershell
+./gradlew.bat :gpu-probe:runGpuOccupancyBenchmark --offline --no-daemon `
   '-PgpuProbeNativesDir=Z:\Games\Minecraft\Pure\.minecraft\versions\26.2-Fabric 0.19.3\26.2-Fabric 0.19.3-natives\lwjgl\3.4.1-snapshot\x64' `
   -PgpuProbeDevice=0
 ```

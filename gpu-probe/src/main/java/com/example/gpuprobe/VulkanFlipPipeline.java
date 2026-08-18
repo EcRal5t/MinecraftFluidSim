@@ -207,6 +207,17 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		initialize((x, y, z) -> true, NO_CELLS);
 	}
 
+	void initializeOccupancy(int occupiedCells, int markersPerCell) {
+		if (occupiedCells < 1 || occupiedCells > config.cellCount()) {
+			throw new IllegalArgumentException("Occupied-cell count is outside the GPU grid");
+		}
+		if (markersPerCell < 1 || markersPerCell > 8) {
+			throw new IllegalArgumentException("Occupancy benchmark requires one to eight markers per cell");
+		}
+		initialize((x, y, z) -> x + config.nx() * (y + config.ny() * z) < occupiedCells,
+				NO_CELLS, markersPerCell);
+	}
+
 	void initializeObstacleDamBreak() {
 		initialize((x, y, z) -> x < config.nx() * 3 / 4 && y < config.ny() * 3 / 4,
 				(x, y, z) -> {
@@ -218,6 +229,10 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	}
 
 	private void initialize(CellSelector selector, CellSelector solidSelector) {
+		initialize(selector, solidSelector, 8);
+	}
+
+	private void initialize(CellSelector selector, CellSelector solidSelector, int markersPerCell) {
 		SubmissionSlot uploadSlot = memoryMode == MemoryMode.HOST_VISIBLE ? null : acquireSubmissionSlot();
 		GpuBuffer upload = memoryMode == MemoryMode.HOST_VISIBLE ? buffer(POSITIONS) : bulkTransferBuffer;
 		MemoryUtil.memSet(upload.mappedAddress(), 0, buffer(POSITIONS).size());
@@ -228,7 +243,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		particleCount = 0;
 		for (int z = 0; z < config.nz(); z++) for (int y = 0; y < config.ny(); y++) for (int x = 0; x < config.nx(); x++) {
 			if (!selector.filled(x, y, z) || solidSelector.filled(x, y, z)) continue;
-			for (int slot = 0; slot < 8; slot++) {
+			for (int slot = 0; slot < markersPerCell; slot++) {
 				if (particleCount >= config.maxParticles()) throw new IllegalStateException("GPU marker capacity exceeded");
 				float ox = (slot & 1) == 0 ? 0.25F : 0.75F;
 				float oy = (slot & 2) == 0 ? 0.25F : 0.75F;
