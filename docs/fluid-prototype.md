@@ -73,4 +73,4 @@ Version 0.7.1 separates two more quantities that cannot safely be inferred from 
 
 Version 0.8 adds an on-disk takeover journal. It serializes exact block states with Minecraft's NBT codec and atomically publishes the compressed file before world mutation begins. Normal restore deletes the journal only after all safe positions have been processed. A journal left by a crash is replayed on the next server start; occupied player edits are still skipped. This transaction boundary makes the temporary takeover safe enough for broader integration tests.
 
-No command other than the explicitly requested capture reads world fluid state, and none of the commands currently changes world blocks. `/realwater remove` discards the active domain.
+`/realwater capture` only reads world fluid state. The explicitly requested `/realwater takeover` temporarily removes standalone vanilla water after publishing its crash-recovery journal; `/realwater remove`, normal shutdown, or next-start recovery restores safe positions. Other simulation commands do not modify world fluid blocks.

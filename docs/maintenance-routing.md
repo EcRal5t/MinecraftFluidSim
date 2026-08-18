@@ -2,6 +2,8 @@
 
 本文面向接棒开发者，回答“某项功能要去哪里改、改完验证什么”。当前基线为 `0.8.0`，Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2，Java 25 字节码。
 
+已确认的多材料、气体、化学、颗粒、世界接管与 GPU 长期路线见 [`long-term-roadmap.md`](long-term-roadmap.md)。本文仍只描述当前 0.8 代码路径。
+
 ## 先读结论
 
 - 当前活动求解器是 3D PIC/FLIP：[`FlipFluidDomain.java`](../src/main/java/com/example/fluid/FlipFluidDomain.java)。

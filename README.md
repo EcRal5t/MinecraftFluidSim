@@ -47,7 +47,7 @@ $env:JAVA_HOME = 'D:\ProgramFiles\BienCreng\jdk-26.0.2'
 ./gradlew.bat assemble --offline --no-daemon
 ```
 
-See [docs/fluid-prototype.md](docs/fluid-prototype.md) for the numerical model, standalone validation, and benchmark. For maintenance and handoff, use [docs/maintenance-routing.md](docs/maintenance-routing.md) and the copy-ready [docs/next-session-initial-prompt.md](docs/next-session-initial-prompt.md).
+See [docs/fluid-prototype.md](docs/fluid-prototype.md) for the current numerical model, standalone validation, and benchmark. For maintenance and handoff, use [docs/maintenance-routing.md](docs/maintenance-routing.md). The confirmed path from this bounded prototype to multi-material, gas, chemistry, granular deposits, persistence, and optional GPU execution is documented in [docs/long-term-roadmap.md](docs/long-term-roadmap.md).
 
 ## License
 
