@@ -1,8 +1,8 @@
 # M1 Windows/NVIDIA Vulkan GPU probe report
 
-Date: 2026-08-19. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.7. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
+Date: 2026-08-19. Main Mod: Real Water 0.8.2. Optional probe Mod: `realwater_gpu_probe` 0.1.8. Minecraft 26.2, Fabric Loader 0.19.3, Fabric API 0.157.0+26.2, Java 25 bytecode, LWJGL 3.4.1.
 
-This is an M1-F correctness, data-movement and pressure-algorithm probe, not the production GPU backend. It has no takeover code, does not read world blocks or collision state, does not write a save, and owns no chunk tickets. The main `realwater` Mod remains the CPU-authoritative implementation whether the optional probe jar is installed or not. The two-level multigrid gate now includes synthetic internal solids; a fuller hierarchy and read-only real-world collision ingestion are still required before backend integration.
+This is an M1-G correctness, data-movement and collision-ingestion probe, not the production GPU backend. It has no takeover code, never writes blocks or save data, and owns no chunk tickets. The ordinary generated demo and every headless benchmark remain world-independent. The explicit `worlddemo` command captures collision once from chunks already loaded around the player, then runs only from the frozen in-memory subcell mask. The main `realwater` Mod remains CPU-authoritative whether the optional probe jar is installed or not.
 
 ## Layer boundary
 
@@ -10,7 +10,7 @@ This is an M1-F correctness, data-movement and pressure-algorithm probe, not the
 - Numerical discretization: 3D P2G density/marker/MAC velocity transfer, saved pre-projection velocities, gravity, selectable fixed-work pressure solvers including Jacobi and MG2, MAC projection, 90% FLIP / 10% PIC G2P, and axis-separated particle advection/collision are Vulkan compute stages.
 - Rendering reconstruction: a compact density + marker + solid snapshot is generated on the GPU and sent through the existing client marching-tetrahedra payload. Marker occupancy remains the shallow-water seed.
 - Scheduling: compute SSBOs require device-local memory. Initialization uploads through a host-coherent staging buffer; a normal physical step copies only a 64-byte workgroup-reduced diagnostic block to the host, and the compact surface snapshot is staged only on the client snapshot cadence. Full-state readback is an explicit benchmark/validation operation. The visual probe is a separate 20 Hz server-tick service. Three consecutive steps above 200 ms pause only the probe. It does not replace the main service's 40 ms adaptive CPU scheduler.
-- World transaction: none. `/realwatergpu remove` releases memory and clears its debug snapshot only.
+- World transaction: none. `worlddemo` is a bounded read-only snapshot, not a takeover. It obtains only currently loaded chunks through the non-loading `getChunkNow` path, includes a one-block horizontal halo for contextual shapes, samples the same 2×2×2 collision-shape intersections as the CPU service, and refuses creation if any required chunk is absent. It never refreshes the frozen mask automatically. `/realwatergpu remove` releases memory and clears its debug snapshot only.
 
 ## Runtime capability
 
@@ -58,7 +58,9 @@ Across six evolving steps, Jacobi 96, RBGS/SOR 48, identity-PCG 32, diagonal-PCG
 
 That ordering does not scale unchanged. In the solid-aware 64³ grid partial-dam run on the RTX 5070 Ti, Jacobi 64 averaged 1.891 ms and reduced the identical first-step divergence from 0.98100 to 0.16684; MG2 with two cycles averaged 1.812 ms and reached 0.17807. By step four, MG2 left 0.44294 maximum divergence versus Jacobi's 0.46867. The identical first-step MG2 curve was 0.266631 / 0.178072 / 0.139916 for one / two / three cycles at 1.494 / 1.714 / 1.910 ms minimum observed time. Identity-PCG needed 25.163 ms for a similar first-step residual. On the RTX 4060 Ti, MG2 averaged 2.650 ms versus Jacobi's 2.971 ms with the same numerical results. MG2 therefore establishes a cross-device cost/quality Pareto point instead of merely spending an order of magnitude more time for a lower residual. Jacobi remains the demo default until a fuller hierarchy and real-world collision ingestion pass.
 
-The synthetic obstacle case uses a one-solver-cell vertical wall crossed by a one-cell horizontal shelf: 228 solid cells, 39,648 markers and exactly 4,956.000 solver-cell volumes. After eight steps, neither Jacobi nor MG2 placed any marker inside a solid. The coarse X coupling across every covered thin-wall face was exactly 0.000000 while an adjacent open face remained 1.000. MG2 reduced maximum divergence from 5.27196 to 0.32734 versus Jacobi's 4.79586 to 0.42489. Device-local and host-visible MG2 runs produced zero marker/solid mismatches and no meaningful pressure or center-of-mass difference. This is a numerical/collision test using generated masks; it does not read Minecraft blocks.
+The synthetic obstacle case uses a one-solver-cell vertical wall crossed by a one-cell horizontal shelf: 228 solid cells, 39,648 markers and exactly 4,956.000 solver-cell volumes. After eight steps, neither Jacobi nor MG2 placed any marker inside a solid. The coarse X coupling across every covered thin-wall face was exactly 0.000000 while an adjacent open face remained 1.000. MG2 reduced maximum divergence from 5.27196 to 0.32734 versus Jacobi's 4.79586 to 0.42489. Device-local and host-visible MG2 runs produced zero marker/solid mismatches and no meaningful pressure or center-of-mass difference.
+
+Probe 0.1.8 adds the block-mask expansion and frozen-world ingestion path. Its deterministic 12×8×12-block fixture contains full blocks, lower-half collision masks and an internal wall, expanding to exactly 1,320 solid solver cells. Both the GPU MG2 path and isolated CPU fallback receive an identical mask and initialize 16,992 markers carrying exactly 2,124.000 solver-cell volumes. On both GPUs, eight GPU steps retained that volume, left zero particles inside solids, and ended at divergence 4.55874→0.10610. This automated gate validates block/subcell ordering, upload, fallback equivalence, conservation and collision; the actual Minecraft `BlockState`/loaded-chunk capture and client visualization remain an integrated-server smoke gate.
 
 ## Throughput and readback
 
@@ -93,6 +95,7 @@ The optional `realwater-gpu-probe` jar adds:
 
 - `/realwatergpu probe [device]`: run the windowless Vulkan/Shaderc/VMA capability check.
 - `/realwatergpu demo [device]`: create a paused visual dam-break about nine blocks ahead. GPU initialization failure creates an isolated CPU fallback demo; it never changes the main Mod backend.
+- `/realwatergpu worlddemo [device]`: create a paused MG2 dam-break against one frozen read-only snapshot of nearby loaded Minecraft collision shapes. It refuses unloaded required chunks, never adds a chunk ticket, does not sample world water, and does not follow later block edits.
 - `/realwatergpu step [1-20]`, `run`, `pause`, `status`: control and inspect the independent demo.
 - `/realwatergpu benchmark [12|32] [device] [jacobi|rbgs|pcg|pcgdiag|mg2]`: run the current-domain or real 32³-block benchmark with an optional experimental pressure solver. `mg2` uses two V-cycles. Omission keeps Jacobi. The 32 case intentionally stalls the server thread for several seconds and never accesses world data.
 - `/realwatergpu remove`: free probe resources and clear the debug snapshot.
@@ -105,7 +108,7 @@ All handled probe commands and their chat/detail output are appended as UTF-8 bl
 
 - Add a dedicated-server classpath smoke. Integrated-server device-local visualization, paused multi-step control, continuous run/pause, status, both benchmark sizes, command transcript output and cleanup have passed; forced CPU fallback passed on 0.1.1.
 - Replace the single reusable staging buffer and CPU wall-clock timing with bounded ring staging and Vulkan timestamp queries before calling the layout production-ready. Full-state readback remains diagnostic-only.
-- Extend the successful solid-aware two-level multigrid experiment to a fuller hierarchy and read-only real-world collision ingestion. MG2 passed the synthetic thin-wall/shelf and two-scale cost/quality gates, while identity-PCG, diagonal-PCG and RBGS/SOR did not. Jacobi remains the correctness/default baseline until the remaining integration gates pass.
+- Run the 0.1.8 integrated-server `worlddemo` smoke against full blocks and partial shapes, verify status reports `frozen-world/read-only`, then edit a block and confirm the frozen mask does not change. The automatic two-GPU ingestion gate has passed; this game/API and renderer gate remains. Extend MG2 to a fuller hierarchy afterward. Jacobi remains the generated-demo correctness/default baseline.
 - Complete the CPU variable-density face-coefficient experiment before M3 and measure CPU/GPU break-even across more occupancies.
 - Add a CPU-readable checkpoint and recovery path for runtime device loss. The main Mod already remains CPU-only; the optional visual probe currently pauses on a step failure rather than pretending incomplete buffers are valid.
 

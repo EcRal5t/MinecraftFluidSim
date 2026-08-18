@@ -409,6 +409,12 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		initialize((x, y, z) -> x < config.nx() * 2 / 5 && y < config.ny() * 3 / 4, NO_CELLS);
 	}
 
+	void initializeDamBreakWithSolids(byte[] solidCells) {
+		if (solidCells.length != config.cellCount()) throw new IllegalArgumentException("solid mask size does not match GPU grid");
+		initialize((x, y, z) -> x < config.nx() * 2 / 5 && y < config.ny() * 3 / 4,
+				(x, y, z) -> solidCells[x + config.nx() * (y + config.ny() * z)] != 0);
+	}
+
 	void initializeColumn() {
 		initialize((x, y, z) -> x >= config.nx() / 3 && x < config.nx() * 2 / 3
 				&& z >= config.nz() / 3 && z < config.nz() * 2 / 3 && y < config.ny() * 3 / 4, NO_CELLS);

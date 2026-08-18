@@ -33,6 +33,10 @@ public final class RealWaterGpuProbeMod implements ModInitializer {
 								.executes(context -> audit(context, () -> createDemo(context.getSource(), 0)))
 								.then(Commands.argument("device", IntegerArgumentType.integer(0, 15))
 										.executes(context -> audit(context, () -> createDemo(context.getSource(), IntegerArgumentType.getInteger(context, "device"))))))
+						.then(Commands.literal("worlddemo")
+								.executes(context -> audit(context, () -> createWorldDemo(context.getSource(), 0)))
+								.then(Commands.argument("device", IntegerArgumentType.integer(0, 15))
+										.executes(context -> audit(context, () -> createWorldDemo(context.getSource(), IntegerArgumentType.getInteger(context, "device"))))))
 						.then(Commands.literal("run").executes(context -> audit(context, () -> setPaused(context.getSource(), false))))
 						.then(Commands.literal("pause").executes(context -> audit(context, () -> setPaused(context.getSource(), true))))
 						.then(Commands.literal("step")
@@ -72,6 +76,17 @@ public final class RealWaterGpuProbeMod implements ModInitializer {
 				+ "；不读取碰撞、不修改方块或存档；使用 /realwatergpu step 或 /realwatergpu run", 1);
 	}
 
+	private static int createWorldDemo(net.minecraft.commands.CommandSourceStack source, int deviceIndex)
+			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		GpuProbeService.CreationResult result = GpuProbeService.get(source.getServer()).createWorldDemo(player, deviceIndex);
+		if (!result.created()) return fail(source, result.detail());
+		String backend = result.gpu() ? "Vulkan GPU（device-local + staging + MG2）" : "CPU fallback（" + result.detail() + "）";
+		return succeed(source, "已创建暂停的 24×16×24 只读世界碰撞 probe；backend " + backend
+				+ "；仅捕获一次已加载区块碰撞并冻结使用，不申请区块票、不修改方块或存档；"
+				+ GpuProbeService.get(source.getServer()).status(source.getServer()), 1);
+	}
+
 	private static int runProbe(net.minecraft.commands.CommandSourceStack source, int deviceIndex) {
 		try {
 			lastReport = VulkanCapabilityProbe.run(deviceIndex);
@@ -99,14 +114,14 @@ public final class RealWaterGpuProbeMod implements ModInitializer {
 
 	private static int setPaused(net.minecraft.commands.CommandSourceStack source, boolean paused) {
 		GpuProbeService service = GpuProbeService.get(source.getServer());
-		if (!service.exists()) return fail(source, "请先使用 /realwatergpu demo");
+		if (!service.exists()) return fail(source, "请先使用 /realwatergpu demo 或 /realwatergpu worlddemo");
 		service.setPaused(paused);
 		return succeed(source, paused ? "GPU probe 已暂停" : "GPU probe 开始运行", 1);
 	}
 
 	private static int step(net.minecraft.commands.CommandSourceStack source, int count) {
 		GpuProbeService service = GpuProbeService.get(source.getServer());
-		if (!service.exists()) return fail(source, "请先使用 /realwatergpu demo");
+		if (!service.exists()) return fail(source, "请先使用 /realwatergpu demo 或 /realwatergpu worlddemo");
 		int completed = service.step(source.getLevel(), count);
 		if (completed == 0) return fail(source, "probe 步进失败、位于其他维度，或主 Real Water 域正在运行；" + service.status(source.getServer()));
 		return succeed(source, "已执行 " + completed + " 个 probe 步；" + service.status(source.getServer()), completed);

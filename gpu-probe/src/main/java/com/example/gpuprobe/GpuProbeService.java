@@ -19,9 +19,10 @@ import java.util.WeakHashMap;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
 
-/** In-memory, world-read-free service for the optional GPU visualization demo. */
+/** In-memory service for generated demos and explicit read-only world-collision snapshots. */
 final class GpuProbeService {
 	private static final int NX = 24, NY = 16, NZ = 24;
+	private static final int BLOCKS_X = 12, BLOCKS_Y = 8, BLOCKS_Z = 12;
 	private static final float H = 0.5F, DT = 1.0F / 20.0F, GRAVITY = 9.81F, RHO = 1_000.0F;
 	private static final int PRESSURE_ITERATIONS = 96;
 	private static final int SNAPSHOT_INTERVAL_TICKS = 4;
@@ -36,6 +37,7 @@ final class GpuProbeService {
 	private int hardOverrunStreak;
 	private String fallbackReason;
 	private String failure;
+	private String collisionDescription;
 
 	private GpuProbeService() { }
 
@@ -55,21 +57,54 @@ final class GpuProbeService {
 		if (FluidSimulationService.get(server).exists()) {
 			return new CreationResult(false, false, "主 Real Water 域正在使用同一个可视化通道；请先 /realwater remove");
 		}
-		closeBackend();
 		Vec3 look = player.getLookAngle();
 		BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
-		origin = center.offset(-6, -2, -6);
+		BlockPos candidateOrigin = center.offset(-6, -2, -6);
+		return createBackend(player, deviceIndex, candidateOrigin, null,
+				VulkanFlipPipeline.PressureSolver.JACOBI, "collision generated/no world reads");
+	}
+
+	CreationResult createWorldDemo(ServerPlayer player, int deviceIndex) {
+		MinecraftServer server = player.level().getServer();
+		if (FluidSimulationService.get(server).exists()) {
+			return new CreationResult(false, false, "主 Real Water 域正在使用同一个可视化通道；请先 /realwater remove");
+		}
+		Vec3 look = player.getLookAngle();
+		BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
+		BlockPos candidateOrigin = center.offset(-6, -2, -6);
+		WorldCollisionSnapshot.CaptureResult captured = WorldCollisionSnapshot.capture(
+				player.level(), candidateOrigin, BLOCKS_X, BLOCKS_Y, BLOCKS_Z);
+		if (!captured.captured()) return new CreationResult(false, false, captured.failure());
+		String description = String.format(Locale.ROOT,
+				"collision frozen-world/read-only %d solid cells in %d blocks, %d loaded chunks",
+				captured.solidCellCount(), captured.solidBlockCount(), captured.loadedChunkCount());
+		return createBackend(player, deviceIndex, candidateOrigin, captured.solidCells(),
+				VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL, description);
+	}
+
+	private CreationResult createBackend(ServerPlayer player, int deviceIndex, BlockPos candidateOrigin,
+	                                     byte[] solidCells, VulkanFlipPipeline.PressureSolver pressureSolver,
+	                                     String newCollisionDescription) {
+		closeBackend();
+		origin = candidateOrigin;
 		dimension = player.level().dimension();
+		collisionDescription = newCollisionDescription;
 		fallbackReason = null;
 		failure = null;
+		VulkanFlipPipeline pipeline = null;
 		try {
-			VulkanFlipPipeline pipeline = new VulkanFlipPipeline(gpuConfig(), deviceIndex);
-			pipeline.initializeDamBreak();
+			pipeline = new VulkanFlipPipeline(gpuConfig(pressureSolver), deviceIndex,
+					VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, pressureSolver);
+			if (solidCells == null) pipeline.initializeDamBreak(); else pipeline.initializeDamBreakWithSolids(solidCells);
 			backend = new VulkanBackend(pipeline);
 		} catch (RuntimeException | LinkageError exception) {
+			if (pipeline != null) {
+				try { pipeline.close(); }
+				catch (RuntimeException | LinkageError closeFailure) { exception.addSuppressed(closeFailure); }
+			}
 			fallbackReason = exception.getClass().getSimpleName() + ": " + safeMessage(exception);
 			RealWaterGpuProbeMod.LOGGER.warn("GPU demo initialization failed; using isolated CPU fallback", exception);
-			backend = new CpuBackend(createCpuDamBreak());
+			backend = new CpuBackend(createCpuDamBreak(solidCells));
 		}
 		paused = true;
 		tick = 0;
@@ -137,10 +172,11 @@ final class GpuProbeService {
 		if (backend == null) return "没有活动 GPU probe 域；主 Real Water CPU 后端不受影响";
 		String conflict = FluidSimulationService.get(server).exists() ? " | 与主域冲突，已暂停" : "";
 		return String.format(Locale.ROOT,
-				"%s | backend %s | origin %s | grid %dx%dx%d | water %.2f blocks (%.2f cells) | particles %d | step %.3f ms | steps %d | %s%s%s%s",
+				"%s | backend %s | origin %s | grid %dx%dx%d | water %.2f blocks (%.2f cells) | particles %d | step %.3f ms | steps %d | %s | %s%s%s%s",
 				paused ? "暂停" : "运行", backend.name(), origin.toShortString(), NX, NY, NZ,
 				backend.volumeCells() / 8.0F, backend.volumeCells(), backend.particleCount(), backend.lastStepMilliseconds(), completedSteps,
 				backend.diagnostics(),
+				collisionDescription,
 				fallbackReason == null ? "" : " | CPU fallback: " + fallbackReason,
 				failure == null ? "" : " | failure: " + failure,
 				conflict);
@@ -174,6 +210,7 @@ final class GpuProbeService {
 		}
 		backend = null;
 		dimension = null;
+		collisionDescription = null;
 		paused = true;
 	}
 
@@ -214,14 +251,23 @@ final class GpuProbeService {
 		}
 	}
 
-	private static VulkanFlipPipeline.Config gpuConfig() {
-		return new VulkanFlipPipeline.Config(NX, NY, NZ, H, DT, GRAVITY, RHO, PRESSURE_ITERATIONS, NX * NY * NZ * 8);
+	private static VulkanFlipPipeline.Config gpuConfig(VulkanFlipPipeline.PressureSolver pressureSolver) {
+		int iterations = pressureSolver == VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL ? 2 : PRESSURE_ITERATIONS;
+		return new VulkanFlipPipeline.Config(NX, NY, NZ, H, DT, GRAVITY, RHO, iterations, NX * NY * NZ * 8);
 	}
 
-	private static FlipFluidDomain createCpuDamBreak() {
+	static FlipFluidDomain createCpuDamBreak(byte[] solidCells) {
 		FluidSolverConfig config = new FluidSolverConfig(H, RHO, GRAVITY, DT, 200, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F);
 		FlipFluidDomain domain = new FlipFluidDomain(NX, NY, NZ, config);
-		for (int z = 0; z < NZ; z++) for (int y = 0; y < NY * 3 / 4; y++) for (int x = 0; x < NX * 2 / 5; x++) domain.setVolume(x, y, z, 1.0F);
+		if (solidCells != null) {
+			if (solidCells.length != NX * NY * NZ) throw new IllegalArgumentException("solid mask size does not match CPU grid");
+			for (int z = 0; z < NZ; z++) for (int y = 0; y < NY; y++) for (int x = 0; x < NX; x++) {
+				if (solidCells[x + NX * (y + NY * z)] != 0) domain.setSolid(x, y, z, true);
+			}
+		}
+		for (int z = 0; z < NZ; z++) for (int y = 0; y < NY * 3 / 4; y++) for (int x = 0; x < NX * 2 / 5; x++) {
+			if (!domain.isSolid(x, y, z)) domain.setVolume(x, y, z, 1.0F);
+		}
 		return domain;
 	}
 

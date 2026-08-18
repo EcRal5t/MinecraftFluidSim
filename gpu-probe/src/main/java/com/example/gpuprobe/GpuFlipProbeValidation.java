@@ -30,6 +30,7 @@ public final class GpuFlipProbeValidation {
 		results.add(validateHydrostaticColumn(device));
 		results.add(validateMultigridHydrostaticColumn(device));
 		results.add(validateMultigridObstacles(device));
+		results.add(validateWorldCollisionMaskIngestion(device));
 		results.add(validatePressureSolvers(device));
 		results.add(validatePressureConvergenceCurves(device));
 		results.add(validateMemoryModes(device));
@@ -192,6 +193,65 @@ public final class GpuFlipProbeValidation {
 					jacobiDiagnostics.preProjectionMaximumDivergence(), jacobiDiagnostics.maximumDivergence(),
 					mgDiagnostics.preProjectionMaximumDivergence(), mgDiagnostics.maximumDivergence());
 		}
+	}
+
+	private static String validateWorldCollisionMaskIngestion(int device) {
+		int blocksX = 12, blocksY = 8, blocksZ = 12;
+		byte[] blockMasks = new byte[blocksX * blocksY * blocksZ];
+		for (int z = 0; z < blocksZ; z++) for (int x = 0; x < blocksX; x++) {
+			blockMasks[blockIndex(x, 0, z, blocksX, blocksY)] = (byte) 0xff;
+		}
+		// A lower half-block shelf exercises the same eight-bit local ordering used by world shape sampling.
+		int lowerHalfMask = (1 << 0) | (1 << 1) | (1 << 4) | (1 << 5);
+		for (int z = 3; z < 9; z++) for (int x = 3; x < 7; x++) {
+			blockMasks[blockIndex(x, 3, z, blocksX, blocksY)] = (byte) lowerHalfMask;
+		}
+		for (int y = 1; y < 6; y++) for (int z = 5; z < 7; z++) {
+			blockMasks[blockIndex(6, y, z, blocksX, blocksY)] = (byte) 0xff;
+		}
+
+		byte[] solidCells = WorldCollisionSnapshot.expandBlockMasks(blocksX, blocksY, blocksZ, blockMasks);
+		int nx = blocksX * 2, ny = blocksY * 2, nz = blocksZ * 2;
+		int solidCount = WorldCollisionSnapshot.countSolidCells(solidCells);
+		require(solidCount == 1_320, "expanded world collision solid count: " + solidCount);
+		require(solidCells[6 + nx * (6 + ny * 6)] != 0, "lower-half block bit did not map to expected subcell");
+		require(solidCells[6 + nx * (7 + ny * 6)] == 0, "lower-half block occupied upper subcell");
+
+		int expectedFluidCells = 0;
+		for (int z = 0; z < nz; z++) for (int y = 0; y < ny * 3 / 4; y++) for (int x = 0; x < nx * 2 / 5; x++) {
+			if (solidCells[x + nx * (y + ny * z)] == 0) expectedFluidCells++;
+		}
+		FlipFluidDomain cpuFallback = GpuProbeService.createCpuDamBreak(solidCells);
+		require(mismatches(cpuFallback.copySolidMask(), solidCells) == 0, "CPU fallback world collision mask changed");
+		require(close(cpuFallback.totalVolume(), expectedFluidCells, 1.0E-3F), "CPU fallback world collision volume");
+		float cpuVolume = cpuFallback.totalVolume();
+		for (int step = 0; step < 4; step++) cpuFallback.step();
+		require(close(cpuFallback.totalVolume(), cpuVolume, 1.0E-3F), "CPU fallback world collision volume changed");
+		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(nx, ny, nz, CELL_SIZE, DT, GRAVITY, RHO,
+				2, nx * ny * nz * 8);
+		try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,
+				VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL)) {
+			gpu.initializeDamBreakWithSolids(solidCells);
+			require(gpu.solidCellCount() == solidCount, "GPU world collision mask count");
+			require(gpu.particleCount() == expectedFluidCells * 8, "world collision initialization particle count");
+			require(mismatches(gpu.snapshot().solids(), solidCells) == 0, "world collision snapshot changed during upload");
+			float volume = gpu.totalParticleVolume();
+			for (int step = 0; step < 8; step++) {
+				gpu.step();
+				VulkanFlipPipeline.Diagnostics diagnostics = gpu.diagnostics();
+				requireFinite(diagnostics);
+				require(close(diagnostics.particleVolume(), volume, 1.0E-3F), "world collision volume changed");
+			}
+			require(gpu.particlesInsideSolidCount() == 0, "particle entered expanded world collision mask");
+			VulkanFlipPipeline.Diagnostics diagnostics = gpu.diagnostics();
+			return String.format("correctness world collision ingestion: blocks=%dx%dx%d solids=%d particles=%d volume=%.3f cells inside=0 MG2Div %.5f->%.5f",
+					blocksX, blocksY, blocksZ, solidCount, gpu.particleCount(), volume,
+					diagnostics.preProjectionMaximumDivergence(), diagnostics.maximumDivergence());
+		}
+	}
+
+	private static int blockIndex(int x, int y, int z, int blocksX, int blocksY) {
+		return x + blocksX * (y + blocksY * z);
 	}
 
 	private static String validatePressureSolvers(int device) {
