@@ -74,6 +74,14 @@ tasks.register("runVariableDensityFaceCoefficientValidation", JavaExec) {
 	mainClass = "com.example.fluid.VariableDensityFaceCoefficientValidation"
 }
 
+tasks.register("runM3ConnectedVesselValidation", JavaExec) {
+	group = "verification"
+	description = "Runs the standalone M3 3D connected-vessel material, phase and mass-ledger gate."
+	dependsOn tasks.named("testClasses")
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = "com.example.fluid.M3ConnectedVesselValidation"
+}
+
 tasks.register("runFluidRegionManagerValidation", JavaExec) {
 	group = "verification"
 	description = "Runs the in-memory fluid-region admission, selection and atomic-replacement regression."

@@ -16,6 +16,18 @@
 
 组分库存决定质量；材料/物相模型从组成与状态给出参考密度或比体积；marker `particleVolume` 继续表示实际占据体积。混合、反应或相变产生的膨胀/收缩必须成为显式体积源并进入压力步，不能暗改平滑 density。
 
+### M3 独立 CPU 状态冻结
+
+M3 的首个 3D 连通器实验只冻结语义，不冻结 protocol、存档 codec、GPU 布局或字段位宽：
+
+- marker 在现有位置、速度和 `particleVolume` 之外，增加逻辑 `materialId`、局部 `phaseLabel` 与显式 `particleMass`；实验使用 `int` 标签和 `double` 质量，但这不是未来线格式承诺；
+- `materialId` 标识守恒库存属于哪种材料，`phaseLabel` 标识当前不可跨越的液液相分区；两者必须分离，因为同密度材料仍可属于不同相，后续同一材料也可能发生相态转移；
+- `particleVolume` 的 marker 精确和仍是体积真值，`particleMass` 的 marker 精确和是新增质量真值；按材料和相聚合的账本都必须回和到区域总账；
+- 压力离散使用格内 marker 的 `sum(particleMass) / sum(particleVolume)`，不得从平滑 density、PLIC、渲染体积或 material registry 反向结算库存；registry 的参考密度以后只用于创建/校验和状态方程；
+- `markerCount > 0` 仍决定压力流体格。材料和相标签在同密度情况下不得改变 P2G 拓扑、压力矩阵、右端项或投影速度；真正的液液界面算子在后续变密度增量中才消费这些标签。
+
+当前冻结只存在于 `M3ConnectedVesselExperiment` 的测试侧 marker 状态；`FlipFluidDomain`、网络、`region-state v1` 和世界交互仍保持纯水格式与行为。
+
 ## 三层数据定义
 
 1. **species**：ID、显示信息、组成向量、电荷、每 AU 质量和基础颜色。

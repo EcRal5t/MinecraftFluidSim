@@ -145,6 +145,6 @@
 
 ## 接下来三项
 
-1. 冻结最小 M3 marker material/phase/mass 数据定义。
-2. 建立同密度两材料退化的单个独立 3D 门。
-3. 在同一实验中加入 1.25:1 与 13.6:1 的变密度面系数验证，再评审是否接入活动核心。
+1. 在已通过同密度严格退化的独立 3D 连通器中加入 interface-distance-weighted conservative `1/rho`。
+2. 用同一门覆盖 1.25:1 与 13.6:1 静水平衡，再评审是否接入活动核心。
+3. 前述 3D 门通过后才细化最小 registry 与互溶/不可互溶输运；protocol 和 `region-state` 迁移另行评审。

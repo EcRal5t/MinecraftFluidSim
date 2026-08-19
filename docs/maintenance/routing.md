@@ -37,7 +37,7 @@
 | 守恒 reseeding | `src/main/java/com/example/fluid/FlipParticleReseeder.java` | merge/split 保持体积、动量、质心和硬预算 |
 | marker 内存交接 | `src/main/java/com/example/fluid/FlipParticleState.java` | 不可变 position/volume/velocity/solid；不是协议或存档格式 |
 | solver 参数 | `src/main/java/com/example/fluid/FluidSolverConfig.java` | CFL、压力容差、FLIP 比例或时间步只属数值离散；改动选择对应 solver 门 |
-| M3 变密度独立实验 | `src/test/java/com/example/fluid/VariableDensityPressureExperiment.java`、`src/test/java/com/example/fluid/VariableDensityFaceCoefficientValidation.java` | 尚未接入活动核心；先保持独立 CPU 小门 |
+| M3 独立 CPU 实验 | `src/test/java/com/example/fluid/M3ConnectedVesselExperiment.java`、`src/test/java/com/example/fluid/M3ConnectedVesselValidation.java`、`src/test/java/com/example/fluid/VariableDensityPressureExperiment.java` | marker 材料/相/质量状态与变密度算子均未接入活动核心 |
 | takeover 事务 | `src/main/java/com/example/simulation/TakeoverTransaction.java`、`src/main/java/com/example/simulation/TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
 | takeover codec/files | `src/main/java/com/example/simulation/TakeoverJournalCodec.java`、`src/main/java/com/example/simulation/TakeoverJournalFiles.java` | v1 可读；未知/损坏/恢复失败锁住新 takeover |
 | 指令 transcript | `src/main/java/com/example/logging/RealWaterCommandLog.java`、`src/main/java/com/example/logging/CommandAuditFile.java` | 只做 UTF-8 观测；失败不得改变命令结果 |
@@ -80,7 +80,8 @@
 | 改动 | 默认一项 | 升级条件 |
 |---|---|---|
 | 文档 | 无 | 无代码/资源变化就不构建 |
-| 变密度独立实验 | `runVariableDensityFaceCoefficientValidation` | 接入 3D 活动核心才加 M3 连通器门 |
+| M3 marker 材料/相/质量或 3D 连通器实验 | `runM3ConnectedVesselValidation` | 接入活动核心才加对应 solver 门 |
+| 1D 变密度面系数实验 | `runVariableDensityFaceCoefficientValidation` | 将该系数接入 3D 连通器时改跑 M3 连通器门 |
 | manager | `runFluidRegionManagerValidation` | 同时跨 lifecycle/persistence 才加对应门 |
 | lifecycle/tick | `runFluidRegionLifecycleValidation` | 同时改 ownership 才加 persistence |
 | region-state/checkpoint | `runFluidRegionPersistenceValidation` | 真实重启仅里程碑 smoke |
