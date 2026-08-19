@@ -5,5 +5,6 @@
 - 当前文档入口：[`../README.md`](../README.md)
 - 旧混合原型文档：[`legacy-fluid-prototype.md`](legacy-fluid-prototype.md)
 - 旧混合长期路线：[`legacy-long-term-roadmap.md`](legacy-long-term-roadmap.md)
+- 旧长期路线逐节迁移表：[`legacy-long-term-roadmap-migration-map.md`](legacy-long-term-roadmap-migration-map.md)
 - 旧维护路由：[`legacy-maintenance-routing.md`](legacy-maintenance-routing.md)
 - 未采纳/仅供参考的方案：[`proposals/`](proposals/)

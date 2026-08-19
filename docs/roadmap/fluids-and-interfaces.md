@@ -30,8 +30,10 @@ M1 的独立 CPU 系数门已选择按界面距离加权的守恒 `1/rho` 面系
 
 - 不可互溶相共享机械压力；第一版共享速度场的限制必须对外明确。
 - 外表面与内部液液界面分别重建，不能重合或互相吞掉。
+- 内部界面采用 multi-material/partitioned marching tetrahedra；共享界面只生成一次，并具有稳定归属与法向。
 - 客户端 palette、颜色、界面 mesh 和平滑字段都是展示数据，不结算材料质量或体积。
 - protocol 与 `region-state` 的材料字段只有在兼容和迁移方案评审后才冻结；M3 初期实验保持 CPU 独立状态。
+- M3 的基本输入/输出先覆盖纯材料和简单混合物；完整原版桶矩阵留到 M6.1。
 
 ## 实体耦合的长期目标
 
@@ -44,4 +46,9 @@ M1 的独立 CPU 系数门已选择按界面距离加权的守恒 `1/rho` 面系
 - 实体占据体积挤开等量流体，容量不足时显式失败而非删除水量。
 
 Minecraft 首版可使用离散表面采样，不要求一次实现完整刚体联合求解器。
+
+## 技术参考
+
+- 表面张力离散：[Brackbill 等人的 Continuum Surface Force](https://www.sciencedirect.com/science/article/pii/002199919290240Y/pdf)。
+- 压力与刚体耦合：[Batty、Bertails、Bridson 的变分固液耦合](https://www.cs.ubc.ca/~rbridson/docs/batty-siggraph2007-variationalcoupling.pdf)。
 

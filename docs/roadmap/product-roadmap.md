@@ -15,14 +15,17 @@
 | 气体网络、颗粒与沉积 | M5、M8 | [`gases-and-granular.md`](gases-and-granular.md) |
 | section 持久化、ownership、容器与 Mod API | M6、M10 | [`world-integration.md`](world-integration.md) |
 | 扩容、调度、并发与计算后端 | 跨阶段 | [`performance-and-backends.md`](performance-and-backends.md) |
+| 协议、渲染、事务与 feature flag | 跨阶段 | [`cross-cutting-contracts.md`](cross-cutting-contracts.md) |
+| 测试阶梯、里程碑签收与发布门 | 跨阶段 | [`acceptance-and-release.md`](acceptance-and-release.md) |
 
 整理前混合了历史与未来内容的完整原文仍保存在 [`../archive/legacy-long-term-roadmap.md`](../archive/legacy-long-term-roadmap.md)，只用于核对迁移与追溯。
 
 ## 发布切割线
 
-- **1.0**：完成 M3 多液体/可变密度、M4 表面张力/润湿、M5 密闭气体网络与气液压力。范围仍是控制器或开发命令圈定的有界区域。
+- **1.0**：完成 M3 多液体/可变密度、M4 表面张力/润湿、M5 密闭气体网络与气液压力。范围仍是控制器或开发命令圈定的有界区域；这是首个可独立发布维护的产品终点，不是临时演示版。
 - **2.0**：从 M6 ownership 评审与真实世界流体桥开始；未通过 M6.0 的事务/恢复门，不扩大 takeover。
 - M7 化学、M8 颗粒、M9 热力学和 M10 原版/其他 Mod API 在 2.0 后逐项加入，不阻塞 1.0。
+- 版本号按实际验收门决定，不随开发次数自然表示成熟度。
 
 ## 长期产品目标
 
@@ -33,7 +36,7 @@
 5. 颗粒阶段只覆盖沉淀、细沙等低成本沉降/沉积，不承诺通用刚体或弹性固体。
 6. 先在有界工业区域达到可靠、可恢复和可量化，再评审河流、海洋和开放世界接管。
 
-近期不做：逐格求解所有开放空气、逐分子/离子粒子、首版完整化学平衡、通用刚体/弹性体、无界天然洞穴扫描。
+近期不做：逐格求解所有开放空气、逐分子/离子粒子、首版弱酸/缓冲液/活度/动力学/完整化学平衡、通用刚体/弹性体、无界天然洞穴扫描、海洋规模 20 Hz 承诺。M3 不提前实现有限溶解度或表面张力，但必须保留后续数据边界。
 
 ## 必须长期保持的分层
 
@@ -138,7 +141,7 @@
 
 ## 验证策略
 
-验证按风险升级，不是累计清单。日常小增量只跑 [`../maintenance/routing.md`](../maintenance/routing.md) 指定的一项最近门；里程碑关闭时再汇总回答物理真值、数值离散、渲染、调度性能、存档事务、协议和游戏交互中实际受影响的层次。
+验证按风险升级，不是累计清单。日常小增量只跑 [`../maintenance/routing.md`](../maintenance/routing.md) 指定的一项最近门；里程碑关闭时再按 [`acceptance-and-release.md`](acceptance-and-release.md) 汇总实际受影响的层次。
 
 ## 接下来三项
 

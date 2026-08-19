@@ -17,6 +17,8 @@
 - 代码在哪里、改完跑什么：[`maintenance/routing.md`](maintenance/routing.md)
 - 已完成到哪里：[`progress/README.md`](progress/README.md)
 - 下一阶段做什么、该读哪份技术规格：[`roadmap/product-roadmap.md`](roadmap/product-roadmap.md)
+- 跨阶段协议、渲染、事务与功能门：[`roadmap/cross-cutting-contracts.md`](roadmap/cross-cutting-contracts.md)
+- 里程碑如何签收、何时扩大范围：[`roadmap/acceptance-and-release.md`](roadmap/acceptance-and-release.md)
 - 项目运行命令与构建：仓库根目录 [`README.md`](../README.md)
 
 ## 更新规则
