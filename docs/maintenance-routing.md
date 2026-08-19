@@ -82,25 +82,27 @@
 
 ## 按改动选择测试
 
-默认采用最小充分门，不为普通改动重复跑两张显卡或 64³：
+默认采用 KISS 的最小充分门：一个小增量只跑最贴近改动的一项定向门。只有改动跨越共享契约、该门暴露歧义、关闭里程碑或正式发布时才叠加其他门；已经签收的长期/实机门是历史证据，不例行重跑。
 
 | 改动范围 | 默认验证 | 何时升级 |
 |---|---|---|
-| 文档、路由、纯日志文字 | `compileJava` 或无需运行时门 | 命令树/资源打包变化才跑专服或进服 |
+| 文档、路由、纯日志文字 | 无需代码门 | 命令树/资源打包变化才按其实际范围选门 |
 | CPU 变密度面系数实验 | `runVariableDensityFaceCoefficientValidation` | 将来接入活动 3D 核心时再升级到 `FlipFluidDomainValidation`、M2.5 分数界面门和 M3 连通器门 |
-| CPU 区域登记、容量、运行态、独立 tick 或选择逻辑 | `runFluidRegionManagerValidation` + `runFluidRegionLifecycleValidation`；静水提交或 marker 预算变化再跑 `FlipFluidDomainValidation` | 涉及持久 metadata admission/solver ownership 时同时跑 `runFluidRegionPersistenceValidation` |
-| `region-state`、server config、checkpoint、UNLOADED 或删除 | `runFluidRegionPersistenceValidation` + `runFluidRegionManagerValidation` + `runFluidRegionLifecycleValidation` | 改 entrypoint/资源再跑 EULA=false 专服；真实跨 chunk 离开/返回与重启闭环在里程碑 smoke 时进服 |
-| 网络协议、payload header、capability 或客户端排序 | `runFluidNetworkProtocolValidation` + `compileTestJava` | 改 Fabric 配置/入口注册再跑 EULA=false `:runServer`；真实多人/重连渲染只有需要时进服 |
-| 控制器、边界扫描、footprint 或完整加载判定 | `runFluidBoundaryScannerValidation` + `runFluidRegionManagerValidation` | 方块注册/资源变化再跑 EULA=false `runServer`；真实放置、右键和跨 chunk 卸载只有请求进服时再 smoke |
-| CPU 压力、自由表面、MAC 速度外推、体积漂移约束或 binary 碰撞 | `compileTestJava` + `runFlipFreeSurfaceValidation` + `runFlipReseedingValidation` + `FlipFluidDomainValidation`；表面相关再跑 surface diagnostic | marker export/restore 或持久状态受影响时再加 region-state/manager/lifecycle；takeover 改动另跑 16 场景 |
-| runtime cut-cell、partial `VoxelShape`、face aperture 或 CCD | `runFlipCutCellValidation` + `runFluidCutCellShapeValidation` + `runFlipFreeSurfaceValidation` + `FlipFluidDomainValidation` | 改 binary checkpoint fallback/restore 门时加 persistence/manager/lifecycle；真实 partial block/mesh 只在里程碑签收时按 `m2.5-cut-cell-smoke.md` 进服 |
-| CPU marker 创建、merge/split 或长期分布 | `runFlipReseedingValidation` + `FlipFluidDomainValidation`；表面相关再跑 surface diagnostic | 改 `FlipParticleState`、预算或 checkpoint 路径时再加 region-state/manager/lifecycle；只有请求进服验证或发布时才 clean build |
+| CPU 区域登记、容量、运行态、独立 tick 或选择逻辑 | manager 改动跑 `runFluidRegionManagerValidation`；lifecycle/tick 改动跑 `runFluidRegionLifecycleValidation` | 同时跨越两者共享状态才合跑；涉及持久 ownership 再加 persistence |
+| `region-state`、server config、checkpoint、UNLOADED 或删除 | `runFluidRegionPersistenceValidation` | 同时改 manager/lifecycle 所有权才补对应门；真实重启闭环只在里程碑 smoke |
+| 网络协议、payload header、capability 或客户端排序 | `runFluidNetworkProtocolValidation` | 改 Fabric 配置/入口注册再跑 EULA=false `:runServer`；真实多人/重连渲染只有需要时进服 |
+| 控制器、边界扫描、footprint 或完整加载判定 | `runFluidBoundaryScannerValidation` | 同时改 admission/budget 才加 manager；真实交互只在里程碑 smoke |
+| CPU 压力、自由表面、MAC 速度外推或体积漂移约束 | `runFlipFreeSurfaceValidation` | 只有改长期 marker 分布才加 reseeding 长门；活动核心广泛改写或里程碑关闭才跑 domain benchmark/surface diagnostic |
+| runtime cut-cell、partial `VoxelShape`、face aperture 或 CCD | solver 几何/CCD 跑 `runFlipCutCellValidation`；Minecraft shape adapter 跑 `runFluidCutCellShapeValidation` | 同时改压力共享面才加 free-surface；改 checkpoint fallback 才加 persistence；真实 smoke 不重复已签收的 M2.5 清单 |
+| CPU marker 创建、merge/split 或长期分布 | `runFlipReseedingValidation` | 改 `FlipParticleState`/checkpoint 才加 persistence；domain benchmark、长期实机和 clean build 只用于里程碑或发布 |
 | takeover/codec/文件事务 | `runTakeoverJournalValidation` | 真实世界修改只按 smoke 文档并保留备份 |
 | 指令 transcript | `runCommandAuditValidation` | Fabric 命令包装变化再进服 |
 | GPU shader、dispatch、压力数值 | RTX 5070 Ti `--skip-large` 快速门；长期表面相关先跑 `runGpuLongRunSurfaceValidation` | hierarchy、容量、buffer 布局或 64³ 性能变化才跑完整 device 0 |
 | GPU occupancy 性能矩阵 | RTX 5070 Ti `runGpuOccupancyBenchmark` | 仅重测 break-even 或发布相关性能结论时运行；不因普通代码改动重复，且不据此切正式后端 |
 | 设备选择、queue family、显存类型、Vulkan 生命周期 | device 0 快速门 + device 1 对应专项 | 发布里程碑才做双卡完整门 |
 | entrypoint、依赖、资源路径、环境注解 | 主 Mod 用 `:runServer`，probe 用 `:gpu-probe:runServer`，保持 `eula=false` | 客户端渲染/握手或命令打包变化且自动门不足时再请求进服 smoke |
+
+执行规则：文档改动不跑代码门；定向 Gradle task 已隐式编译其依赖，不另加重复的 `compileJava/compileTestJava`；5,000 步、性能 benchmark、clean build 和人工 smoke 都不是日常每提交门。新增覆盖优先扩展最近的现有小门，不为相同不变量堆叠一套新测试程序。人工验证每次只回答一个自动化无法观察的问题，旧场景不累计重演。
 
 GPU 快速门：
 
@@ -161,4 +163,4 @@ probe 0.1.16 将每个 50 ms GPU 物理步明确离散为四个 12.5 ms 子步�
 
 M2 已完成：protocol v1、多区域客户端排序、可见控制器边界、跨 chunk 完整加载、世界级 feature flag/预算、管理命令和 `region-state v1` 均已接通。持久化按 Minecraft section 保存 marker 原始顺序、position/`particleVolume`、velocity 与 solid slice；两槽完整代次校验后最后原子替换 HEAD。缺任一 chunk、破边界或关闭控制器功能门会先整域暂停并 checkpoint，成功才释放 solver 进入 metadata-only `UNLOADED`；恢复保持 operator pause 且先重采样当前碰撞。自动 fault matrix、反复 unload/restore、损坏拒绝和 metadata budget 门在 `runFluidRegionPersistenceValidation`。2026-08-19 的四 chunk 实机门又确认 chunk 离开/返回、破坏/修复边界和正常重启均保持同一 UUID、3,100 marker 与 377.77777 cell-volume，详见 [`m2-region-state-smoke.md`](m2-region-state-smoke.md)。仍无永久 chunk ticket，takeover 边界与 journal v1 未变，GPU probe 仍只读可选。
 
-M2.5 自动实现已接通：PLIC fluid-air `theta`、deterministic conservative reseeding，以及 runtime `2x2x2`/solver-cell cut-solid 均进入活动 CPU 核心。压力相开放面投影前后向空气外推两层 MAC 速度，G2P 对有效面重新归一化，避免极小水滴被未定义的零速空气面人工减速。P2G 重建体积另生成有界的压力目标散度，排开过密 marker、补偿非表面内部欠密，同时跳过合法的自由表面欠填充；它不改 marker `particleVolume`。散度、压力矩阵、对角预条件器和投影共用共享 face aperture；marker 扫掠只截断 partial wall 法向。方块变化按 marker 中心占据和 `exactCellVolume <= openVolume` 两条 exact ledger 规则挤水。`region-state v1` 不迁移：只持久化 full-solid fallback，metadata-only restore 在任何 step/快照前必须从完整已加载世界同步重建 partial mask。自动门覆盖离散水滴弹道、5,000 步静水面不下沉、dam-break 第 1,000→5,000 步表面稳定、reseeding、cut-cell、normal-only CCD 和 documented stair 的精确挤水恢复。protocol、takeover 与 GPU shader 均未改变。固定坐标实机门已确认 stair 后仍为 2,592 格/20,736 marker、`last Δ6, escaped 0`，且小水滴观感明显改善；新增体积漂移约束仍需一次长一点的实机静置复核后才能关闭 M2.5。
+M2.5 已于 2026-08-20 完成：PLIC fluid-air `theta`、deterministic conservative reseeding、runtime cut-solid、自由面 MAC 速度外推和有界 marker 体积分布压力约束均进入活动 CPU 核心。它们保持 marker `particleVolume` 真值、`markerCount` 压力相和 normal-only 碰撞；`region-state v1`、protocol、takeover 与 GPU shader 均未改变。自动门覆盖离散水滴、静水与 dam-break 长期稳定、cut-cell/CCD 和精确挤水。实机先确认 stair/pane、小水滴，最终两分钟趋稳门又保持 2,592.00 格水量、零预算/几何跳过，marker 占据格 `2808→2740→2765`、visible `3001→2880→2880`，无持续液面下降并正常 remove。后续普通改动不重复这组 M2.5 长门；只有重新触及相应数值不变量或发布回归时按上表选择。
