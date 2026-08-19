@@ -81,10 +81,10 @@ final class M3MaterialDynamicsValidation {
 		}
 		seedInterchangeVelocity(domain);
 		for (int y = 1; y <= 2; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
-			domain.setMaterialInCell(x, y, z, registry, light, 22);
+			domain.setMaterialInCell(x, y, z, registry, light);
 		}
 		for (int y = 3; y <= 4; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
-			domain.setMaterialInCell(x, y, z, registry, heavy, 11);
+			domain.setMaterialInCell(x, y, z, registry, heavy);
 		}
 		FlipFluidDomain.MaterialInventory initialHeavy = domain.materialInventory(heavy);
 		FlipFluidDomain.MaterialInventory initialLight = domain.materialInventory(light);

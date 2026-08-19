@@ -39,10 +39,11 @@ public final class FlipFluidDomain {
 	private final double[] exactCellMarkerVolume;
 	private final double[] exactCellMarkerMass;
 	private final double[] cellDensity;
-	private final int[] cellPhaseA;
-	private final int[] cellPhaseB;
-	private final double[] cellPhaseVolumeA;
-	private final double[] cellPhaseVolumeB;
+	private final int[] cellPhaseHead;
+	private int[] phaseEntryLabel;
+	private int[] phaseEntryNext;
+	private double[] phaseEntryVolume;
+	private int phaseEntryCount;
 
 	private final float[] velocityX;
 	private final float[] velocityY;
@@ -118,10 +119,10 @@ public final class FlipFluidDomain {
 		this.exactCellMarkerVolume = new double[cellCount];
 		this.exactCellMarkerMass = new double[cellCount];
 		this.cellDensity = new double[cellCount];
-		this.cellPhaseA = new int[cellCount];
-		this.cellPhaseB = new int[cellCount];
-		this.cellPhaseVolumeA = new double[cellCount];
-		this.cellPhaseVolumeB = new double[cellCount];
+		this.cellPhaseHead = new int[cellCount];
+		this.phaseEntryLabel = new int[initialParticleCapacity];
+		this.phaseEntryNext = new int[initialParticleCapacity];
+		this.phaseEntryVolume = new double[initialParticleCapacity];
 		this.velocityX = new float[(sizeX + 1) * sizeY * sizeZ];
 		this.velocityY = new float[sizeX * (sizeY + 1) * sizeZ];
 		this.velocityZ = new float[sizeX * sizeY * (sizeZ + 1)];
@@ -293,32 +294,65 @@ public final class FlipFluidDomain {
 		return new MaterialInventory(volume, mass, volume == 0.0 ? Double.NaN : weightedY / volume);
 	}
 
+	int phaseCountInCell(int x, int y, int z) {
+		ensureGrid();
+		int result = 0;
+		for (int entry = cellPhaseHead[cellIndexChecked(x, y, z)]; entry >= 0; entry = phaseEntryNext[entry]) result++;
+		return result;
+	}
+
 	/** In-memory M3 assignment only; callers outside the fluid package cannot create world material state yet. */
-	void setMaterialInCell(int x, int y, int z, FluidMaterialRegistry registry,
-	                       int materialHandle, int phaseLabel) {
+	void setMaterialInCell(int x, int y, int z, FluidMaterialRegistry registry, int materialHandle) {
 		if (registry == null) throw new IllegalArgumentException("Material registry must not be null");
-		if (phaseLabel == NO_PHASE) throw new IllegalArgumentException("Reserved phase label");
-		if (materialRegistry != null && materialRegistry != registry) {
-			throw new IllegalArgumentException("A domain cannot mix runtime handles from different material registries");
-		}
+		registry.material(materialHandle);
 		int cell = cellIndexChecked(x, y, z);
-		FluidMaterial material = registry.material(materialHandle);
 		boolean found = false;
 		for (int particle = 0; particle < particleCount; particle++) {
-			if (particleCellIndex(particle) != cell) continue;
-			double mass = (double) particleVolume[particle] * material.referenceDensity();
-			if (!(mass <= Float.MAX_VALUE)) throw new IllegalArgumentException("Material mass exceeds P2G range");
-			particleMass[particle] = mass;
-			particleMaterialHandle[particle] = materialHandle;
-			particlePhaseLabel[particle] = phaseLabel;
-			found = true;
+			if (particleCellIndex(particle) == cell) found = true;
 		}
 		if (!found) throw new IllegalArgumentException("Cannot assign material to an empty pressure cell");
-		materialRegistry = registry;
+		bindMaterialRegistry(registry);
+		for (int particle = 0; particle < particleCount; particle++) {
+			if (particleCellIndex(particle) == cell) assignMarkerMaterial(particle, registry, materialHandle);
+		}
 		gridDirty = true;
 	}
 
+	/** Marker-granular package test injection; indices are intentionally not exposed as a public state contract. */
+	void setMarkerMaterial(int particle, FluidMaterialRegistry registry, int materialHandle) {
+		if (particle < 0 || particle >= particleCount) throw new IllegalArgumentException("Unknown marker index " + particle);
+		if (registry == null) throw new IllegalArgumentException("Material registry must not be null");
+		registry.material(materialHandle);
+		bindMaterialRegistry(registry);
+		assignMarkerMaterial(particle, registry, materialHandle);
+		gridDirty = true;
+	}
+
+	private void bindMaterialRegistry(FluidMaterialRegistry registry) {
+		if (registry == null) throw new IllegalArgumentException("Material registry must not be null");
+		if (materialRegistry != null && materialRegistry != registry) {
+			throw new IllegalArgumentException("A domain cannot mix runtime handles from different material registries");
+		}
+		if (materialRegistry != null) return;
+		double defaultDensity = registry.material(0).referenceDensity();
+		double tolerance = Math.max(1.0E-9, Math.abs(config.density()) * 1.0E-12);
+		if (Math.abs(defaultDensity - config.density()) > tolerance) {
+			throw new IllegalArgumentException("Material handle 0 must match the domain default density");
+		}
+		materialRegistry = registry;
+	}
+
+	private void assignMarkerMaterial(int particle, FluidMaterialRegistry registry, int materialHandle) {
+		FluidMaterial material = registry.material(materialHandle);
+		double mass = (double) particleVolume[particle] * material.referenceDensity();
+		if (!(mass <= Float.MAX_VALUE)) throw new IllegalArgumentException("Material mass exceeds P2G range");
+		particleMass[particle] = mass;
+		particleMaterialHandle[particle] = materialHandle;
+		particlePhaseLabel[particle] = registry.phaseHandle(materialHandle);
+	}
+
 	private boolean hasNonDefaultMaterialState() {
+		if (materialRegistry != null) return true;
 		for (int particle = 0; particle < particleCount; particle++) {
 			if (particleMaterialHandle[particle] != 0 || particlePhaseLabel[particle] != 0) return true;
 			double referenceMass = (double) particleVolume[particle] * config.density();
@@ -534,10 +568,8 @@ public final class FlipFluidDomain {
 		Arrays.fill(exactCellMarkerVolume, 0.0);
 		Arrays.fill(exactCellMarkerMass, 0.0);
 		Arrays.fill(cellDensity, config.density());
-		Arrays.fill(cellPhaseA, NO_PHASE);
-		Arrays.fill(cellPhaseB, NO_PHASE);
-		Arrays.fill(cellPhaseVolumeA, 0.0);
-		Arrays.fill(cellPhaseVolumeB, 0.0);
+		Arrays.fill(cellPhaseHead, -1);
+		phaseEntryCount = 0;
 		freeSurfaceGeometry.clearExactVolumes();
 		Arrays.fill(velocityX, 0.0F);
 		Arrays.fill(velocityY, 0.0F);
@@ -575,19 +607,19 @@ public final class FlipFluidDomain {
 	}
 
 	private void addCellPhaseVolume(int cell, int phase, float amount) {
-		if (cellPhaseA[cell] == phase) {
-			cellPhaseVolumeA[cell] += amount;
-		} else if (cellPhaseB[cell] == phase) {
-			cellPhaseVolumeB[cell] += amount;
-		} else if (cellPhaseA[cell] == NO_PHASE) {
-			cellPhaseA[cell] = phase;
-			cellPhaseVolumeA[cell] = amount;
-		} else if (cellPhaseB[cell] == NO_PHASE) {
-			cellPhaseB[cell] = phase;
-			cellPhaseVolumeB[cell] = amount;
-		} else {
-			throw new IllegalStateException("M3 supports at most two immiscible phases per pressure cell");
+		for (int entry = cellPhaseHead[cell]; entry >= 0; entry = phaseEntryNext[entry]) {
+			if (phaseEntryLabel[entry] != phase) continue;
+			phaseEntryVolume[entry] += amount;
+			return;
 		}
+		if (phaseEntryCount >= phaseEntryLabel.length) {
+			throw new IllegalStateException("Phase entries exceeded the marker capacity");
+		}
+		int entry = phaseEntryCount++;
+		phaseEntryLabel[entry] = phase;
+		phaseEntryVolume[entry] = amount;
+		phaseEntryNext[entry] = cellPhaseHead[cell];
+		cellPhaseHead[cell] = entry;
 	}
 
 	private void extrapolateVelocityIntoAir() {
@@ -817,14 +849,25 @@ public final class FlipFluidDomain {
 	}
 
 	private int dominantPhase(int cell) {
-		return cellPhaseVolumeA[cell] >= cellPhaseVolumeB[cell] ? cellPhaseA[cell] : cellPhaseB[cell];
+		int dominant = NO_PHASE;
+		double dominantVolume = -1.0;
+		for (int entry = cellPhaseHead[cell]; entry >= 0; entry = phaseEntryNext[entry]) {
+			double candidateVolume = phaseEntryVolume[entry];
+			int candidate = phaseEntryLabel[entry];
+			if (candidateVolume > dominantVolume || (candidateVolume == dominantVolume && candidate < dominant)) {
+				dominant = candidate;
+				dominantVolume = candidateVolume;
+			}
+		}
+		return dominant;
 	}
 
 	private double phaseFraction(int cell, int phase) {
 		if (exactCellMarkerVolume[cell] <= 0.0) return 0.0;
-		double phaseVolume = cellPhaseA[cell] == phase ? cellPhaseVolumeA[cell]
-				: cellPhaseB[cell] == phase ? cellPhaseVolumeB[cell] : 0.0;
-		return phaseVolume / exactCellMarkerVolume[cell];
+		for (int entry = cellPhaseHead[cell]; entry >= 0; entry = phaseEntryNext[entry]) {
+			if (phaseEntryLabel[entry] == phase) return phaseEntryVolume[entry] / exactCellMarkerVolume[cell];
+		}
+		return 0.0;
 	}
 
 	private float openFaceFromCell(int cell, int directionX, int directionY, int directionZ) {
@@ -1094,6 +1137,9 @@ public final class FlipFluidDomain {
 		particleMass = Arrays.copyOf(particleMass, capacity);
 		particleMaterialHandle = Arrays.copyOf(particleMaterialHandle, capacity);
 		particlePhaseLabel = Arrays.copyOf(particlePhaseLabel, capacity);
+		phaseEntryLabel = Arrays.copyOf(phaseEntryLabel, capacity);
+		phaseEntryNext = Arrays.copyOf(phaseEntryNext, capacity);
+		phaseEntryVolume = Arrays.copyOf(phaseEntryVolume, capacity);
 	}
 
 	private void setDefaultMaterialState(int particle) {

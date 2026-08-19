@@ -14,6 +14,7 @@ final class M3MaterialTransferValidation {
 		FluidMaterialRegistry registry = registry();
 		validateRegistry(registry);
 		validateActiveDomainP2G(registry);
+		validateActivePhaseAggregation(registry);
 		validateActiveVariableDensityPressure(registry);
 
 		Markers equalDensity = markers(registry, false);
@@ -39,10 +40,10 @@ final class M3MaterialTransferValidation {
 		int a = registry.handle("realwater:material_a");
 		int b = registry.handle("realwater:material_b");
 		int c = registry.handle("realwater:material_c");
-		equal.setMaterialInCell(1, 1, 1, registry, a, 11);
-		equal.setMaterialInCell(2, 1, 1, registry, b, 22);
-		variable.setMaterialInCell(1, 1, 1, registry, a, 11);
-		variable.setMaterialInCell(2, 1, 1, registry, c, 33);
+		equal.setMaterialInCell(1, 1, 1, registry, a);
+		equal.setMaterialInCell(2, 1, 1, registry, b);
+		variable.setMaterialInCell(1, 1, 1, registry, a);
+		variable.setMaterialInCell(2, 1, 1, registry, c);
 		check(!pure.usesMassWeightedP2G() && !equal.usesMassWeightedP2G(),
 				"pure or equal-density active domain left the strict volume-weighted path");
 		check(variable.usesMassWeightedP2G(), "variable-density active domain did not enable mass-weighted P2G");
@@ -78,6 +79,53 @@ final class M3MaterialTransferValidation {
 		return domain;
 	}
 
+	private static void validateActivePhaseAggregation(FluidMaterialRegistry registry) {
+		int a = registry.handle("realwater:material_a");
+		int b = registry.handle("realwater:material_b");
+		int c = registry.handle("realwater:material_c");
+		int d = registry.handle("realwater:material_d");
+		FlipFluidDomain miscible = singleCellDomain();
+		for (int particle = 0; particle < miscible.particleCount(); particle++) {
+			miscible.setMarkerMaterial(particle, registry, (particle & 1) == 0 ? a : d);
+		}
+		check(miscible.phaseCountInCell(1, 1, 1) == 1,
+				"miscible materials did not aggregate into one local liquid phase");
+		checkClose(miscible.materialInventory(a).mass(), 500.0, "miscible material A mass");
+		checkClose(miscible.materialInventory(d).mass(), 525.0, "miscible material D mass");
+		FlipFluidDomain.StepStats miscibleStats = miscible.step();
+		check(miscible.phaseCountInCell(1, 1, 1) == 1,
+				"miscible phase split during an idle active step");
+		check(miscibleStats.relativeVolumeError() <= 1.0E-7F && miscibleStats.relativeMassError() <= 1.0E-12,
+				"miscible active step changed physical inventories");
+
+		FlipFluidDomain junction = singleCellDomain();
+		int[] material = {a, b, c, a, b, c, a, b};
+		for (int particle = 0; particle < material.length; particle++) {
+			junction.setMarkerMaterial(particle, registry, material[particle]);
+		}
+		check(junction.phaseCountInCell(1, 1, 1) == 3,
+				"three-phase junction was truncated to the old two-phase cache");
+		FlipFluidDomain.StepStats junctionStats = junction.step();
+		check(junction.phaseCountInCell(1, 1, 1) == 3,
+				"three-phase junction was lost during pressure/reseeding");
+		checkClose(junction.totalMass(), 950.0, "three-phase marker mass");
+		check(junctionStats.relativeVolumeError() <= 1.0E-7F && junctionStats.relativeMassError() <= 1.0E-12,
+				"three-phase active step changed physical inventories");
+
+		FluidMaterialRegistry wrongDefault = new FluidMaterialRegistry(List.of(registry.material(c)));
+		expectIllegal(() -> singleCellDomain().setMarkerMaterial(0, wrongDefault, 0));
+	}
+
+	private static FlipFluidDomain singleCellDomain() {
+		FluidSolverConfig config = new FluidSolverConfig(
+				1.0F, 1_000.0F, 0.0F, 1.0F / 20.0F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F
+		);
+		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 64);
+		domain.setVolume(1, 1, 1, 1.0F);
+		return domain;
+	}
+
 	private static FluidMaterialRegistry registry() {
 		return new FluidMaterialRegistry(List.of(
 				new FluidMaterial("realwater:material_a", 1_000.0, "realwater:aqueous"),
@@ -99,6 +147,8 @@ final class M3MaterialTransferValidation {
 				"runtime handles are not declaration-order dense");
 		check(registry.areMiscible(a, d), "same miscibility group was rejected");
 		check(!registry.areMiscible(a, b) && !registry.areMiscible(a, c), "unlike miscibility groups were merged");
+		check(registry.phaseHandle(a) == registry.phaseHandle(d), "miscible materials did not share a phase handle");
+		check(registry.phaseHandle(a) != registry.phaseHandle(b), "immiscible materials shared a phase handle");
 		expectIllegal(() -> new FluidMaterial("Bad Id", 1_000.0, "realwater:aqueous"));
 		expectIllegal(() -> new FluidMaterial("realwater:bad", 0.0, "realwater:aqueous"));
 		expectIllegal(() -> new FluidMaterialRegistry(List.of(
@@ -126,8 +176,8 @@ final class M3MaterialTransferValidation {
 		}
 		for (int y = 1; y <= 5; y++) domain.setSolid(1, y, 1, false);
 		for (int y = 1; y <= 4; y++) domain.setVolume(1, y, 1, 1.0F);
-		for (int y = 1; y <= 2; y++) domain.setMaterialInCell(1, y, 1, registry, heavyHandle, 44);
-		for (int y = 3; y <= 4; y++) domain.setMaterialInCell(1, y, 1, registry, lightHandle, 55);
+		for (int y = 1; y <= 2; y++) domain.setMaterialInCell(1, y, 1, registry, heavyHandle);
+		for (int y = 3; y <= 4; y++) domain.setMaterialInCell(1, y, 1, registry, lightHandle);
 
 		double heavyDensity = registry.material(heavyHandle).referenceDensity();
 		double lightDensity = registry.material(lightHandle).referenceDensity();
@@ -170,7 +220,10 @@ final class M3MaterialTransferValidation {
 				registry.handle(variableDensity ? "realwater:material_c" : "realwater:material_a"),
 				registry.handle(variableDensity ? "realwater:material_c" : "realwater:material_b")
 		};
-		int[] phase = {11, 22, variableDensity ? 33 : 11, variableDensity ? 33 : 22};
+		int[] phase = {
+				registry.phaseHandle(material[0]), registry.phaseHandle(material[1]),
+				registry.phaseHandle(material[2]), registry.phaseHandle(material[3])
+		};
 		double[] mass = new double[volume.length];
 		for (int marker = 0; marker < mass.length; marker++) {
 			mass[marker] = volume[marker] * registry.material(material[marker]).referenceDensity();

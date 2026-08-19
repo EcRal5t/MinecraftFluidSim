@@ -37,7 +37,7 @@
 | 守恒 reseeding | `src/main/java/com/example/fluid/FlipParticleReseeder.java` | merge/split 保持体积、质量、动量、质心和硬预算；不跨 material/phase |
 | marker 内存交接 | `src/main/java/com/example/fluid/FlipParticleState.java` | 不可变 position/volume/velocity/solid；不是协议或存档格式 |
 | solver 参数 | `src/main/java/com/example/fluid/FluidSolverConfig.java` | CFL、压力容差、FLIP 比例或时间步只属数值离散；改动选择对应 solver 门 |
-| M3 材料与 CPU 门 | `src/main/java/com/example/fluid/FluidMaterial.java`、`src/main/java/com/example/fluid/FluidMaterialRegistry.java`、`src/test/java/com/example/fluid/M3ConnectedVesselExperiment.java`、`src/test/java/com/example/fluid/M3MaterialTransferValidation.java`、`src/test/java/com/example/fluid/M3MaterialDynamicsValidation.java` | registry 尚非 codec；正式世界入口仍只创建纯水 |
+| M3 材料与 CPU 门 | `src/main/java/com/example/fluid/FluidMaterial.java`、`src/main/java/com/example/fluid/FluidMaterialRegistry.java`、`src/test/java/com/example/fluid/M3ConnectedVesselExperiment.java`、`src/test/java/com/example/fluid/M3MaterialTransferValidation.java`、`src/test/java/com/example/fluid/M3MaterialDynamicsValidation.java` | registry/phase handle 只属进程内；正式 handoff 与世界入口仍只支持纯水 |
 | takeover 事务 | `src/main/java/com/example/simulation/TakeoverTransaction.java`、`src/main/java/com/example/simulation/TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
 | takeover codec/files | `src/main/java/com/example/simulation/TakeoverJournalCodec.java`、`src/main/java/com/example/simulation/TakeoverJournalFiles.java` | v1 可读；未知/损坏/恢复失败锁住新 takeover |
 | 指令 transcript | `src/main/java/com/example/logging/RealWaterCommandLog.java`、`src/main/java/com/example/logging/CommandAuditFile.java` | 只做 UTF-8 观测；失败不得改变命令结果 |

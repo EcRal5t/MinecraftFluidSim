@@ -8,6 +8,7 @@ import java.util.Map;
 public final class FluidMaterialRegistry {
 	private final List<FluidMaterial> materials;
 	private final Map<String, Integer> handleById;
+	private final int[] phaseHandleByMaterial;
 
 	public FluidMaterialRegistry(List<FluidMaterial> definitions) {
 		if (definitions == null || definitions.isEmpty()) {
@@ -18,11 +19,15 @@ public final class FluidMaterialRegistry {
 		}
 		materials = List.copyOf(definitions);
 		Map<String, Integer> handles = new HashMap<>();
+		Map<String, Integer> phaseHandles = new HashMap<>();
+		phaseHandleByMaterial = new int[materials.size()];
 		for (int handle = 0; handle < materials.size(); handle++) {
 			FluidMaterial material = materials.get(handle);
 			if (handles.putIfAbsent(material.id(), handle) != null) {
 				throw new IllegalArgumentException("Duplicate material id " + material.id());
 			}
+			phaseHandleByMaterial[handle] = phaseHandles.computeIfAbsent(
+					material.miscibilityGroup(), ignored -> phaseHandles.size());
 		}
 		handleById = Map.copyOf(handles);
 	}
@@ -42,5 +47,11 @@ public final class FluidMaterialRegistry {
 
 	public boolean areMiscible(int firstHandle, int secondHandle) {
 		return material(firstHandle).miscibilityGroup().equals(material(secondHandle).miscibilityGroup());
+	}
+
+	/** Process-local liquid phase handle; like material handles, this is never a wire or persistence id. */
+	public int phaseHandle(int materialHandle) {
+		material(materialHandle);
+		return phaseHandleByMaterial[materialHandle];
 	}
 }
