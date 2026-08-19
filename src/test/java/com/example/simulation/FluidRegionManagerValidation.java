@@ -32,13 +32,15 @@ public final class FluidRegionManagerValidation {
 		validateAtomicReplacement();
 		validateReplacementPreview();
 		validatePerRegionAndTotalRejectionDetails();
+		validateOverlapRejection();
+		validateBlockedRegionDoesNotBlockPeer();
 		System.out.println("FluidRegionManager validation passed");
 	}
 
 	private static void validateRuntimeStateFollowsRegion() {
 		FluidRegionManager manager = manager();
 		FluidRegion first = region(2, 2, 2, 64L);
-		FluidRegion second = region(2, 2, 2, 64L);
+		FluidRegion second = regionAt(4, 0, 0, 2, 2, 2, 64L);
 		first.setPaused(false);
 		first.incrementTick();
 		first.setStepIntervalTicks(3);
@@ -53,6 +55,8 @@ public final class FluidRegionManagerValidation {
 		require(manager.select(first.id()), "could not reselect first region");
 		require(!first.paused() && first.tick() == 1L && first.stepIntervalTicks() == 3,
 				"selection lost the region's pacing state");
+		require(first.lifecycle().state() == FluidRegionLifecycle.State.REDUCED,
+				"selection lost the region's ACTIVE/REDUCED lifecycle state");
 		require(!first.entityPhysicsEnabled() && first.debugOverlays(),
 				"selection lost the region's interaction or rendering state");
 	}
@@ -60,7 +64,7 @@ public final class FluidRegionManagerValidation {
 	private static void validateAdmissionAndSelection() {
 		FluidRegionManager manager = manager();
 		FluidRegion first = region(2, 2, 2, 64L);
-		FluidRegion second = region(2, 2, 2, 64L);
+		FluidRegion second = regionAt(4, 0, 0, 2, 2, 2, 64L);
 		require(manager.add(first).accepted(), "first region should be admitted");
 		require(manager.add(second).accepted(), "second region should be admitted");
 		require(manager.selected() == first, "first admitted region should remain selected");
@@ -80,7 +84,7 @@ public final class FluidRegionManagerValidation {
 	private static void validateAtomicReplacement() {
 		FluidRegionManager manager = manager();
 		FluidRegion first = region(2, 2, 2, 64L);
-		FluidRegion second = region(2, 2, 2, 64L);
+		FluidRegion second = regionAt(4, 0, 0, 2, 2, 2, 64L);
 		first.domain().setVolume(0, 0, 0, 1.0F);
 		float exactVolume = first.domain().totalVolume();
 		require(manager.add(first).accepted() && manager.add(second).accepted(), "replacement setup failed");
@@ -92,7 +96,7 @@ public final class FluidRegionManagerValidation {
 		require(manager.selected() == first && manager.regions().contains(first), "rejected replacement changed the selected region");
 		require(first.domain().totalVolume() == exactVolume, "region admission changed exact particle volume");
 
-		FluidRegion replacement = region(2, 2, 2, 48L);
+		FluidRegion replacement = regionAt(0, 0, 0, 2, 2, 2, 48L);
 		require(manager.replaceSelected(replacement).accepted(), "valid replacement was rejected");
 		require(manager.selected() == replacement && !manager.regions().contains(first), "valid replacement was not atomic");
 		require(manager.usage().equals(new FluidRegionManager.BudgetUsage(2, 16L, 112L)), "replacement usage mismatch");
@@ -100,9 +104,17 @@ public final class FluidRegionManagerValidation {
 
 	private static void validateReplacementPreview() {
 		FluidRegionManager manager = manager();
+		require(manager.previewAdd(8L, 64L).accepted(), "valid add preview was rejected");
+		require(manager.selected() == null && manager.usage().regionCount() == 0,
+				"add preview changed an empty registry");
 		FluidRegion original = region(2, 2, 2, 64L);
 		require(manager.add(original).accepted(), "preview setup failed");
 		FluidRegionManager.BudgetUsage usage = manager.usage();
+		FluidRegionManager.AdmissionResult addRejected = manager.previewAdd(18L, 128L);
+		require(!addRejected.accepted() && addRejected.failure().contains("requires 18 cells/128 markers"),
+				"add preview omitted capacity detail");
+		require(manager.selected() == original && manager.usage().equals(usage),
+				"rejected add preview changed registry state");
 		FluidRegionManager.AdmissionResult rejected = manager.previewReplacement(18L, 128L);
 		require(!rejected.accepted() && rejected.failure().contains("requires 18 cells/128 markers"),
 				"replacement preview omitted capacity detail");
@@ -121,11 +133,42 @@ public final class FluidRegionManagerValidation {
 				&& perRegion.failure().contains("per-region limit 16/128"), "per-region rejection lacks budget detail");
 
 		FluidRegion first = region(2, 2, 2, 96L);
-		FluidRegion second = region(2, 2, 2, 96L);
+		FluidRegion second = regionAt(4, 0, 0, 2, 2, 2, 96L);
 		require(manager.add(first).accepted(), "total-budget setup failed");
 		FluidRegionManager.AdmissionResult total = manager.add(second);
 		require(!total.accepted() && total.failure().contains("remaining 16/64"), "total rejection lacks remaining budget");
 		require(manager.regions().size() == 1 && manager.selected() == first, "rejected add mutated registry");
+	}
+
+	private static void validateOverlapRejection() {
+		FluidRegionManager manager = manager();
+		FluidRegion first = regionAt(0, 0, 0, 2, 2, 2, 64L);
+		FluidRegion touching = regionAt(1, 0, 0, 2, 2, 2, 64L);
+		require(manager.add(first).accepted() && manager.add(touching).accepted(),
+				"face-touching non-overlapping regions should be admitted");
+		manager.remove(touching.id());
+		FluidRegion overlapping = regionAt(0, 0, 0, 2, 2, 2, 64L);
+		FluidRegionManager.AdmissionResult rejection = manager.addAndSelect(overlapping);
+		require(!rejection.accepted() && rejection.failure().contains("overlaps existing region"),
+				"overlap rejection did not identify its cause");
+		require(manager.selected() == first && manager.regions().size() == 1,
+				"rejected overlapping add changed selection or registry");
+	}
+
+	private static void validateBlockedRegionDoesNotBlockPeer() {
+		FluidRegionManager manager = manager();
+		FluidRegion blocked = regionAt(0, 0, 0, 2, 2, 2, 64L);
+		FluidRegion runnable = regionAt(4, 0, 0, 2, 2, 2, 64L);
+		require(manager.add(blocked).accepted() && manager.add(runnable).accepted(),
+				"independent tick fixture admission failed");
+		blocked.setPaused(false);
+		runnable.setPaused(false);
+		blocked.setAvailabilityFailure("associated chunk missing");
+		for (FluidRegion region : manager.regions()) {
+			if (region.canStep()) region.incrementTick();
+		}
+		require(blocked.tick() == 0L && blocked.paused(), "unavailable region advanced a partial step");
+		require(runnable.tick() == 1L && !runnable.paused(), "blocked region prevented its independent peer from advancing");
 	}
 
 	private static FluidRegionManager manager() {
@@ -133,7 +176,11 @@ public final class FluidRegionManagerValidation {
 	}
 
 	private static FluidRegion region(int nx, int ny, int nz, long reservedMarkers) {
-		return new FluidRegion(new UUID(0L, ++nextRegionId), DIMENSION, BlockPos.ZERO,
+		return regionAt(0, 0, 0, nx, ny, nz, reservedMarkers);
+	}
+
+	private static FluidRegion regionAt(int x, int y, int z, int nx, int ny, int nz, long reservedMarkers) {
+		return new FluidRegion(new UUID(0L, ++nextRegionId), DIMENSION, new BlockPos(x, y, z),
 				new FlipFluidDomain(nx, ny, nz, CONFIG, Math.toIntExact(reservedMarkers)), reservedMarkers);
 	}
 

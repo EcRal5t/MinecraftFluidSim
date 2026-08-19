@@ -11,6 +11,7 @@ public final class FlipFluidDomainValidation {
 		solidDisplacementPreservesExactParticleVolume();
 		markerBudgetIsHardAndConservative();
 		particleCheckpointRestoreIsTransactional();
+		hydrostaticSleepCommitPreservesParticleLedger();
 		minecraftSizedBenchmark();
 		System.out.println("FlipFluidDomain validation passed");
 	}
@@ -162,6 +163,26 @@ public final class FlipFluidDomainValidation {
 		check(rejected, "checkpoint particle inside solid was accepted");
 		check(Math.abs(domain.totalVolume() - preservedVolume) < 1.0E-6F,
 				"rejected checkpoint partially mutated the particle ledger");
+	}
+
+	private static void hydrostaticSleepCommitPreservesParticleLedger() {
+		FlipFluidDomain domain = new FlipFluidDomain(6, 5, 4, config());
+		domain.restoreParticleState(new FlipParticleState(
+				6, 5, 4, 0.5F, 2, 0.1875F,
+				new float[] {
+						0.25F, 0.25F, 0.25F, 0.125F,
+						1.25F, 0.75F, 0.75F, 0.0625F
+				},
+				new float[] {0.5F, -0.25F, 0.125F, -0.125F, 0.25F, -0.5F},
+				new byte[6 * 5 * 4]
+		));
+		float exactVolume = domain.totalVolume();
+		int markerCount = domain.particleCount();
+		check(domain.maximumParticleSpeed() > 0.5F, "sleep fixture did not contain marker momentum");
+		domain.commitHydrostaticSleep();
+		check(domain.maximumParticleSpeed() == 0.0F, "hydrostatic sleep left marker momentum");
+		check(domain.particleCount() == markerCount && Math.abs(domain.totalVolume() - exactVolume) < 1.0E-6F,
+				"hydrostatic scheduling changed the exact particle ledger");
 	}
 
 	private static void minecraftSizedBenchmark() {

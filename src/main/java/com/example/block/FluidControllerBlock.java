@@ -33,7 +33,9 @@ final class FluidControllerBlock extends Block {
 				.activateController(serverPlayer, position);
 		if (result.succeeded()) {
 			player.sendSystemMessage(Component.translatable(
-					"message.realwater.controller.activated",
+					result.selectedExisting()
+							? "message.realwater.controller.selected"
+							: "message.realwater.controller.activated",
 					result.interiorBlocks(), result.sizeX(), result.sizeY(), result.sizeZ(), result.requiredChunks()
 			));
 		} else if (result.disabled()) {

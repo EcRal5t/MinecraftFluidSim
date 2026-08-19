@@ -2,6 +2,7 @@
   "block.realwater.fluid_boundary": "Real Water Boundary",
   "block.realwater.fluid_controller": "Real Water Controller",
   "message.realwater.controller.activated": "Controller region ready: %s interior blocks, %sx%sx%s dense bounds, %s required chunks. The read-only captured domain is paused.",
+  "message.realwater.controller.selected": "Selected the existing controller region: %s interior blocks, %sx%sx%s dense bounds, %s required chunks. Its marker volume was preserved and availability was rechecked.",
   "message.realwater.controller.disabled": "Real Water controllers are disabled. An administrator must run /realwater controllers true.",
   "message.realwater.controller.failed": "Controller activation refused: %s"
 }

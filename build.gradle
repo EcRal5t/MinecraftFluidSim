@@ -85,6 +85,14 @@ tasks.register("runFluidRegionManagerValidation", JavaExec) {
 	doFirst { validationWorkDir.mkdirs() }
 }
 
+tasks.register("runFluidRegionLifecycleValidation", JavaExec) {
+	group = "verification"
+	description = "Runs region scheduling, sleep, wake and checkpoint-gated unload transitions."
+	dependsOn tasks.named("testClasses")
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = "com.example.simulation.FluidRegionLifecycleValidation"
+}
+
 tasks.register("runFluidBoundaryScannerValidation", JavaExec) {
 	group = "verification"
 	description = "Runs visible controller-boundary closure and non-loading cross-chunk scan regression."

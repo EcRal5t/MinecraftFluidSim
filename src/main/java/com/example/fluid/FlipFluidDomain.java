@@ -186,6 +186,29 @@ public final class FlipFluidDomain {
 		return (float) result;
 	}
 
+	/** Maximum marker speed used only as a scheduling observation; it is not a water-volume estimate. */
+	public float maximumParticleSpeed() {
+		float maximumSquared = 0.0F;
+		for (int i = 0; i < particleCount; i++) {
+			float squared = particleVelocityX[i] * particleVelocityX[i]
+					+ particleVelocityY[i] * particleVelocityY[i]
+					+ particleVelocityZ[i] * particleVelocityZ[i];
+			maximumSquared = Math.max(maximumSquared, squared);
+		}
+		return (float) Math.sqrt(maximumSquared);
+	}
+
+	/**
+	 * Commits a validated hydrostatic scheduling transition by removing residual marker momentum.
+	 * Marker positions, counts and particleVolume are unchanged, so the exact water ledger is unchanged.
+	 */
+	public void commitHydrostaticSleep() {
+		Arrays.fill(particleVelocityX, 0, particleCount, 0.0F);
+		Arrays.fill(particleVelocityY, 0, particleCount, 0.0F);
+		Arrays.fill(particleVelocityZ, 0, particleCount, 0.0F);
+		gridDirty = true;
+	}
+
 	public float maximumPressure() {
 		float maximum = 0.0F;
 		for (float value : pressure) maximum = Math.max(maximum, value);

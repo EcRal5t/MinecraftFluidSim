@@ -16,10 +16,12 @@
 |---|---|---|
 | `/realwater` 命令树 | `src/main/java/com/example/RealWaterCommands.java` | 状态操作应留在服务层；输出经过命令 transcript 包装 |
 | 初始化、tick、启动/停止恢复、网络注册 | `src/main/java/com/example/RealWaterMod.java` | 服务生命周期与 payload 注册 |
-| 当前选中区域的 Minecraft 适配、世界采样、调度、实体力、快照 | `src/main/java/com/example/simulation/FluidSimulationService.java` | 域尺寸/频率变化同时检查 region manager、payload、renderer 与 benchmark；takeover 事务仍只在服务层 |
+| 多区域服务编排、独立 tick、选中域命令/快照与 takeover | `src/main/java/com/example/simulation/FluidSimulationService.java` | 每域必须先完整通过 availability 才能读/步进；客户端协议升级前只发布选中域；takeover 事务仍只在服务层 |
+| 指定区域的 Minecraft 碰撞采样与实体单向耦合 | `src/main/java/com/example/simulation/FluidRegionWorldInteraction.java` | 不得隐式读取 selected region；碰撞挤水仍按 marker 账本恢复；实体只受 region AABB 内本域流速影响 |
 | CPU 域数组构造与只读原版水采样 | `src/main/java/com/example/simulation/FluidRegionFactory.java` | marker 硬上限必须等于 manager 预留；采样只写 `particleVolume`，不得从平滑 density 结算 |
-| 区域身份、硬 marker 预算与独立运行态 | `src/main/java/com/example/simulation/FluidRegion.java` | pause/tick/调频/碰撞/实体/debug 跟随区域；预算只限制资源，精确水量仍只来自 domain marker 的 `particleVolume` |
-| 区域登记、选择、原子替换与预算拒绝 | `src/main/java/com/example/simulation/FluidRegionManager.java` | 拒绝不得移除旧区域；报告 required/per-region/remaining；当前服务额度仍锁为一个兼容区域，未开放多区域或存档 |
+| 区域身份、硬 marker 预算与独立运行态 | `src/main/java/com/example/simulation/FluidRegion.java` | tick/调频/碰撞/实体/debug 跟随区域；pause、availability 和 lifecycle 不得混成一个状态；精确水量仍只来自 marker `particleVolume` |
+| ACTIVE/REDUCED/静水休眠与 checkpoint 门控的 UNLOADED 状态 | `src/main/java/com/example/simulation/FluidRegionLifecycle.java` | `runFluidRegionLifecycleValidation`；缺完整已发布 checkpoint 或未释放 live solver 必须拒绝 UNLOADED；状态只属调度，不得从 density 推断水量 |
+| 区域登记、选择、原子替换、空间互斥与预算拒绝 | `src/main/java/com/example/simulation/FluidRegionManager.java` | 拒绝不得移除旧区域；报告 required/per-region/remaining；当前服务最多四域，同维重叠必须拒绝；仍无存档 |
 | 控制器与可见边界方块注册/交互 | `src/main/java/com/example/block/RealWaterBlocks.java`、`FluidControllerBlock.java` | 默认 feature flag 关闭；只读激活，不得扩大 takeover；同步 blockstate/model/item/loot/lang 资源 |
 | 可见闭合边界扫描、footprint 与非加载 chunk 复核 | `src/main/java/com/example/simulation/controller/FluidBoundaryScanner.java`、`FluidRegionFootprint.java`、`FluidControllerRegions.java` | 只认专用边界/控制器；任何目标 block state 前先 `getChunkNow`；缺 chunk、破口、多内腔或预算超限必须拒绝/整域暂停 |
 | 活动 PIC/FLIP 核心与 marker 硬上限 | `src/main/java/com/example/fluid/FlipFluidDomain.java` | P2G、PCG、投影、90/10 G2P、逐轴碰撞；所有 marker 创建/恢复路径受实例预算约束；Minecraft 不使用旧 `FluidDomain` |
@@ -39,7 +41,7 @@
 - 压力/散度：`isFluid`、`solvePressure`、`applyPressureMatrix`、`projectVelocity`。
 - 墙边/墙角卡住：`advectParticles`、`constrainToSolidFaces`；碰撞只约束墙面法向。
 - 水量正常但水面消失：payload marker mask、renderer `scalar` 与等值面阈值。
-- 调度异常：服务 `stepOnce`、`updateStepPacing` 与 `FluidRegion` 运行态、status 的 wall time/substeps/PCG residual。
+- 调度异常：服务 `tickRegion`、`stepOnce`、`updateStepPacing`，`FluidRegionLifecycle` 与 status 的 wall time/substeps/PCG residual；先区分 operator pause、availability block 和 lifecycle state。
 
 ## GPU probe 路由
 
@@ -70,7 +72,7 @@
 |---|---|---|
 | 文档、路由、纯日志文字 | `compileJava` 或无需运行时门 | 命令树/资源打包变化才跑专服或进服 |
 | CPU 变密度面系数实验 | `runVariableDensityFaceCoefficientValidation` | 将来接入活动 3D 核心时再升级到 `FlipFluidDomainValidation`、M2.5 分数界面门和 M3 连通器门 |
-| CPU 区域登记、容量、运行态或选择逻辑 | `runFluidRegionManagerValidation` + marker 预算变化时的 `FlipFluidDomainValidation` | 接入多区域 tick/网络前再升级到协议代次、跨维度、chunk 卸载与整域预算门 |
+| CPU 区域登记、容量、运行态、独立 tick 或选择逻辑 | `runFluidRegionManagerValidation` + `runFluidRegionLifecycleValidation`；静水提交或 marker 预算变化再跑 `FlipFluidDomainValidation` | 接入协议后升级到代次/序号/跨维度 codec 门；接入 checkpoint 后升级保存失败与 UNLOADED 往返门 |
 | 控制器、边界扫描、footprint 或完整加载判定 | `runFluidBoundaryScannerValidation` + `runFluidRegionManagerValidation` | 方块注册/资源变化再跑 EULA=false `runServer`；真实放置、右键和跨 chunk 卸载只有请求进服时再 smoke |
 | CPU 物理/碰撞/调度 | `compileTestJava` + `FlipFluidDomainValidation`；表面相关再跑 surface diagnostic | takeover 改动另跑 16 场景；只有请求进服验证或发布时才 clean build |
 | takeover/codec/文件事务 | `runTakeoverJournalValidation` | 真实世界修改只按 smoke 文档并保留备份 |
@@ -109,6 +111,7 @@ CPU 与事务入口：
 ```powershell
 ./gradlew.bat runVariableDensityFaceCoefficientValidation --offline --no-daemon
 ./gradlew.bat runFluidRegionManagerValidation --offline --no-daemon
+./gradlew.bat runFluidRegionLifecycleValidation --offline --no-daemon
 ./gradlew.bat runFluidBoundaryScannerValidation --offline --no-daemon
 ./gradlew.bat runTakeoverJournalValidation runCommandAuditValidation --offline --no-daemon
 & "$env:JAVA_HOME\bin\java.exe" -ea -cp 'build\classes\java\main;build\classes\java\test' com.example.fluid.FlipFluidDomainValidation
@@ -132,4 +135,4 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 
 probe 0.1.16 将每个 50 ms GPU 物理步明确离散为四个 12.5 ms 子步，并把域/solid 接触半径对齐到 CPU 的 `0.45h`；碰撞仍只裁剪墙面法向，切向自由。独立 1,000 步门要求 GPU 与 CPU 保持相同的三层 marker 和近似边缘密度，覆盖此前约 979–1,304 步出现的额外 GPU 坍缩。完整四子步后，5070 Ti 当前参考域为 11.646 ms CPU wall 对 2.257 ms GPU completed-batch throughput wall，即 5.16×；单 marker crossover 后移到约 1,024 流体格。GPU 的 36,000 步无窗口特征化仍从第 5,000 步起暴露长期 marker 压缩，精确 `particleVolume` 未变；CPU 与 GPU 当前都未实现 reseeding，因此这是一项共享的结构性风险，但现有长测数据只来自 GPU。它属于 M2.5，不能用渲染找平关闭。2026-08-19 的实机渲染复测在第 1,317 步确认原固定边缘/角落凹坑显著消退；RTX 4060 Ti 又完成 31 分 44 秒、38,073 步稳定性门，最终体积仍为 2,592.000 格、recovery 为 0，并正常 remove。M1 已完成，probe 仍是只读可选观测而非正式后端。M0 也已完成：强制中断恢复 60/60 个纯水方块、清除 journal/WARNING、解除 lock，邻接结构正常；仅在事务或接管边界变化时按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 重跑。
 
-M2 第一项正式门已完成：`FluidRegion` 拥有 domain/维度/原点、pause/tick/调频/碰撞/实体/debug 运行态、实例 marker 硬预算和可选 controller footprint，`FluidRegionManager` 负责身份、选择、无分配预检、原子替换与 required/per-region/remaining 接纳。专用控制器/边界方块形成可见外壳；六邻域扫描只认这两种方块，任何 block state 前先做非加载 chunk 检查，并拒绝破口、多内腔、缺失 chunk 和预算超限。运行时任一关联 chunk 卸载或原边界破损都会在碰撞、实体、交互和 step 前整域暂停。capture、pour、固体挤水和 checkpoint restore 继续受同一 marker 上限约束，精确水量仍只按 `particleVolume`。当前服务额度仍锁为一个内存区域；控制器 feature flag 默认关闭，没有并行多域、chunk ticket、协议、休眠/`UNLOADED` 状态机或 `region-state` 存档变化，takeover 边界未扩大。
+M2 第二增量已接通纯内存多区域：服务最多接纳四个同等上限域并逐域 tick，同维空间重叠拒绝；任一控制器域缺 chunk/破边界只冻结该域，不阻断独立同伴。控制器首次右键追加并选择域，再次右键只重选且保留 marker 与运行态；客户端在新协议前仍只显示全局选中域。`FluidRegionLifecycle` 分离 operator pause、availability 与 ACTIVE/REDUCED/HYDROSTATIC_SLEEP；连续 200 个低速、低压力残差且无碰撞/实体活动的完整步才休眠，方块变化、实体接触、pour/drain、手动 step/run 会唤醒。静水提交只清零残余 marker 动量并断言 marker 数和 `particleVolume` 不变。`UNLOADED` 枚举和双条件门已建立，但当前没有已发布 checkpoint、不会调用转换，也不会释放 solver；仍无 chunk ticket、协议或 `region-state` 存档变化，takeover 边界未扩大。

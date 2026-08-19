@@ -49,9 +49,27 @@ public final class FluidRegionManager {
 		BudgetUsage current = usage();
 		AdmissionResult admission = evaluate(candidate, current.regionCount() + 1, current.reservedCells(), current.reservedMarkers());
 		if (!admission.accepted()) return admission;
+		AdmissionResult placement = evaluatePlacement(candidate, null);
+		if (!placement.accepted()) return placement;
 		regions.put(candidate.id(), candidate);
 		if (selectedId == null) selectedId = candidate.id();
 		return admission;
+	}
+
+	public AdmissionResult addAndSelect(FluidRegion candidate) {
+		AdmissionResult admission = add(candidate);
+		if (admission.accepted()) selectedId = candidate.id();
+		return admission;
+	}
+
+	/** Evaluates an addition before allocating its solver arrays; placement is checked after allocation. */
+	public AdmissionResult previewAdd(long requiredCells, long requiredMarkers) {
+		if (requiredCells <= 0L || requiredMarkers <= 0L) {
+			throw new IllegalArgumentException("Fluid region capacity requirements must be positive");
+		}
+		BudgetUsage current = usage();
+		return evaluate(requiredCells, requiredMarkers, current.regionCount() + 1,
+				current.reservedCells(), current.reservedMarkers());
 	}
 
 	/** Atomically replaces the selected region after evaluating the candidate against the remaining regions. */
@@ -69,6 +87,8 @@ public final class FluidRegionManager {
 		long baseMarkers = current.reservedMarkers() - (selected == null ? 0L : selected.reservedMarkerCapacity());
 		AdmissionResult admission = evaluate(candidate, regionCount, baseCells, baseMarkers);
 		if (!admission.accepted()) return admission;
+		AdmissionResult placement = evaluatePlacement(candidate, selected);
+		if (!placement.accepted()) return placement;
 
 		if (selected != null) regions.remove(selected.id());
 		regions.put(candidate.id(), candidate);
@@ -112,6 +132,16 @@ public final class FluidRegionManager {
 		long requiredCells = candidate.reservedCellCapacity();
 		long requiredMarkers = candidate.reservedMarkerCapacity();
 		return evaluate(requiredCells, requiredMarkers, regionCount, baseCells, baseMarkers);
+	}
+
+	private AdmissionResult evaluatePlacement(FluidRegion candidate, FluidRegion ignored) {
+		for (FluidRegion existing : regions.values()) {
+			if (existing == ignored) continue;
+			if (candidate.spatiallyOverlaps(existing)) {
+				return AdmissionResult.rejected("region overlaps existing region " + existing.id());
+			}
+		}
+		return AdmissionResult.ACCEPTED;
 	}
 
 	private AdmissionResult evaluate(long requiredCells, long requiredMarkers, int regionCount, long baseCells, long baseMarkers) {

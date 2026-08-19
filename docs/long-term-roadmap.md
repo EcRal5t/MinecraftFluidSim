@@ -489,7 +489,7 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 - 建立可配置的单区域 marker/cell 上限和多区域总预算、状态统计和管理命令；预算拒绝必须报告所需量、单域上限和服务器剩余额度；
 - 区域墙必须可见/可调试，不再有未说明的不可见边界。
 
-当前状态（2026-08-19，M2 第一项正式门完成）：`FluidRegion` 已承接 domain/维度/原点、pause/tick/调频、碰撞统计、实体力、debug 运行态、实例 marker 硬上限和可选 controller footprint；选择区域不会串用这些状态。纯内存 `FluidRegionManager` 已实现登记、选择、移除、无 solver 分配的 replacement 预检、原子替换以及 required/per-region/remaining 预算拒绝。专用控制器与边界方块提供真实可见外壳；六邻域有界扫描只认这两种外壳方块，要求恰好一个闭合内部，并在每次方块状态读取前以 `getChunkNow` 验证目标 chunk，不申请 ticket。破口、多内腔、缺 chunk、1,152 内部方块扫描上限或当前 9,216-cell/73,728-marker 致密域预算超限均失败且不替换旧域。激活只读采样原版水到 marker `particleVolume` 并保持暂停，不移除世界水；运行时任何关联 chunk 卸载或原边界破损都在碰撞、实体、pour/drain 和 step 前暂停整域，不把缺失部分临时当墙。客户端继续只用 density+marker+solid 重建，正式控制器域默认不显示 debug。当前仍只有一个内存区域，feature flag 默认关闭；尚无并行多域 tick、chunk ticket、ACTIVE/REDUCED/睡眠/`UNLOADED` 状态机、协议或任何 `region-state` 存档，takeover 边界与 journal v1 未变。
+当前状态（2026-08-19，M2 第二增量完成）：纯内存服务最多接纳四个区域，单域仍限 9,216 cell/73,728 marker，总预留限 36,864/294,912；同维空间重叠拒绝。控制器首次激活追加并选择区域，再次激活只选择既有区域而不重建 marker；开发命令仍原子替换选中域。server tick 遍历各域，任一控制器域的缺 chunk/破边界在任何碰撞、实体或 solver 访问前冻结整个该域，但不阻断其他 ready 域，未把缺失部分临时当墙。`FluidRegionLifecycle` 已把 operator pause、availability 与 ACTIVE/REDUCED/HYDROSTATIC_SLEEP 分开：连续 200 个完整低速/低残差且无碰撞/实体活动的步才提交静水休眠，只清零残余 marker 动量并断言 marker 数和 `particleVolume` 未变；方块变化、实体接触、水量编辑与显式 step/run 唤醒。`UNLOADED` 双条件门要求完整 checkpoint 已发布且 live solver 已释放；当前服务没有 checkpoint，因而绝不调用该转换。客户端仍只用 density+marker+solid 重建全局选中域；尚无 region id/代次/序号协议、chunk ticket 或任何 `region-state` 存档，takeover 边界与 journal v1 未变。
 
 完成条件：反复休眠/唤醒/重启后水量不变；方块更新和实体进入可靠唤醒；任一关联 chunk 卸载时不发生半区域步进；未加载区不占粒子内存；协议不兼容能被明确拒绝而非错位解码。
 
@@ -637,8 +637,8 @@ CPU 单线程参考场景固定随机种子、遍历顺序和输入，能稳定�
 
 ## 十三、接下来三项实际工作
 
-1. 建立多区域 tick 生命周期以及 ACTIVE/REDUCED/睡眠/整域 `UNLOADED` 状态机，先证明任一关联 chunk 卸载都不会半域步进。
-2. 建立 region id/代次/序号网络协议门、capability 协商与 codec 兼容矩阵。
-3. 评审 `region-state v1` 的原子检查点、兼容矩阵、失败回滚与迁移方案，得到明确批准后才实现持久化。
+1. 建立 region id/代次/序号网络协议门、capability 协商与 codec 兼容矩阵，使多个 server region 可同时安全呈现。
+2. 评审 `region-state v1` 的原子检查点、兼容矩阵、失败回滚与迁移方案，得到明确批准后才实现持久化。
+3. 在 checkpoint 发布/释放 solver 的故障注入门通过后接通整域 `UNLOADED` 往返，并证明未加载域不占 marker 数组内存。
 
 这些 M2 门完成前，不扩大 takeover 范围，不改变世界长期存档格式，也不把 GPU 设为必需运行条件。

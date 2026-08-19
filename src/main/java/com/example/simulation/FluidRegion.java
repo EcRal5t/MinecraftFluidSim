@@ -17,7 +17,7 @@ public final class FluidRegion {
 	private final FlipFluidDomain domain;
 	private final long reservedMarkerCapacity;
 	private final FluidRegionFootprint footprint;
-	private boolean paused = true;
+	private final FluidRegionLifecycle lifecycle = new FluidRegionLifecycle();
 	private long tick;
 	private double lastStepMilliseconds;
 	private FlipFluidDomain.StepStats lastStats;
@@ -28,7 +28,6 @@ public final class FluidRegion {
 	private int stepIntervalTicks = 1;
 	private int hardOverrunStreak;
 	private int recoveryStreak;
-	private String availabilityFailure;
 
 	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FlipFluidDomain domain, long reservedMarkerCapacity) {
 		this(id, dimension, origin, domain, reservedMarkerCapacity, null);
@@ -66,12 +65,29 @@ public final class FluidRegion {
 	public long reservedMarkerCapacity() { return reservedMarkerCapacity; }
 	public FluidRegionFootprint footprint() { return footprint; }
 	public boolean controllerManaged() { return footprint != null; }
+	public FluidRegionLifecycle lifecycle() { return lifecycle; }
 	public long reservedCellCapacity() {
 		return Math.multiplyExact(Math.multiplyExact((long) domain.sizeX(), domain.sizeY()), domain.sizeZ());
 	}
 
-	boolean paused() { return paused; }
-	void setPaused(boolean value) { paused = value; }
+	boolean spatiallyOverlaps(FluidRegion other) {
+		if (!dimension.equals(other.dimension)) return false;
+		return overlaps(origin.getX(), maximumWorldX(), other.origin.getX(), other.maximumWorldX())
+				&& overlaps(origin.getY(), maximumWorldY(), other.origin.getY(), other.maximumWorldY())
+				&& overlaps(origin.getZ(), maximumWorldZ(), other.origin.getZ(), other.maximumWorldZ());
+	}
+
+	private double maximumWorldX() { return origin.getX() + domain.sizeX() * domain.config().cellSize(); }
+	private double maximumWorldY() { return origin.getY() + domain.sizeY() * domain.config().cellSize(); }
+	private double maximumWorldZ() { return origin.getZ() + domain.sizeZ() * domain.config().cellSize(); }
+	private static boolean overlaps(double firstMin, double firstMax, double secondMin, double secondMax) {
+		return firstMin < secondMax && secondMin < firstMax;
+	}
+
+	boolean paused() { return lifecycle.operatorPaused(); }
+	void setPaused(boolean value) { lifecycle.setOperatorPaused(value, stepIntervalTicks); }
+	boolean canStep() { return lifecycle.canStep(); }
+	void wakeForActivity() { lifecycle.wakeForActivity(stepIntervalTicks); }
 	long incrementTick() { return ++tick; }
 	long tick() { return tick; }
 	double lastStepMilliseconds() { return lastStepMilliseconds; }
@@ -92,13 +108,20 @@ public final class FluidRegion {
 	int lastAffectedEntities() { return lastAffectedEntities; }
 	void setLastAffectedEntities(int value) { lastAffectedEntities = value; }
 	int stepIntervalTicks() { return stepIntervalTicks; }
-	void setStepIntervalTicks(int value) { stepIntervalTicks = value; }
+	void setStepIntervalTicks(int value) {
+		if (value <= 0) throw new IllegalArgumentException("step interval must be positive");
+		stepIntervalTicks = value;
+		lifecycle.onStepIntervalChanged(value);
+	}
 	int hardOverrunStreak() { return hardOverrunStreak; }
 	void setHardOverrunStreak(int value) { hardOverrunStreak = value; }
 	int recoveryStreak() { return recoveryStreak; }
 	void setRecoveryStreak(int value) { recoveryStreak = value; }
-	String availabilityFailure() { return availabilityFailure; }
-	void setAvailabilityFailure(String value) { availabilityFailure = value; }
+	String availabilityFailure() { return lifecycle.availabilityFailure(); }
+	void setAvailabilityFailure(String value) {
+		if (value == null) lifecycle.clearAvailabilityBlock();
+		else lifecycle.blockAvailability(value);
+	}
 
 	public record CollisionStats(int changedCells, float displacedCellVolume, float escapedCellVolume, boolean markerBudgetLimited) {
 		static final CollisionStats EMPTY = new CollisionStats(0, 0.0F, 0.0F, false);
