@@ -38,6 +38,7 @@ public final class FluidProtocolServer {
 				FluidProtocolResponsePayload.TYPE, FluidProtocolResponsePayload.CODEC
 		);
 		PayloadTypeRegistry.clientboundPlay().register(FluidSnapshotPayload.TYPE, FluidSnapshotPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(FluidMaterialSnapshotPayload.TYPE, FluidMaterialSnapshotPayload.CODEC);
 
 		ServerConfigurationNetworking.registerGlobalReceiver(
 				FluidProtocolResponsePayload.TYPE, FluidProtocolServer::receiveResponse
@@ -65,8 +66,15 @@ public final class FluidProtocolServer {
 	}
 
 	public static boolean send(ServerPlayer player, FluidSnapshotPayload payload) {
-		if (!isNegotiated(player.level().getServer(), player.getUUID())
+		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.CURRENT_VERSION)
 				|| !ServerPlayNetworking.canSend(player, FluidSnapshotPayload.TYPE)) return false;
+		ServerPlayNetworking.send(player, payload);
+		return true;
+	}
+
+	public static boolean send(ServerPlayer player, FluidMaterialSnapshotPayload payload) {
+		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.MATERIAL_SNAPSHOT_VERSION)
+				|| !ServerPlayNetworking.canSend(player, FluidMaterialSnapshotPayload.TYPE)) return false;
 		ServerPlayNetworking.send(player, payload);
 		return true;
 	}
@@ -109,13 +117,23 @@ public final class FluidProtocolServer {
 	}
 
 	private static boolean isNegotiated(MinecraftServer server, UUID playerId) {
+		return negotiatedSession(server, playerId) != null;
+	}
+
+	private static boolean isNegotiated(MinecraftServer server, UUID playerId, int version) {
+		FluidProtocol.Negotiation negotiation = negotiatedSession(server, playerId);
+		return negotiation != null && negotiation.selectedVersion() == version;
+	}
+
+	private static FluidProtocol.Negotiation negotiatedSession(MinecraftServer server, UUID playerId) {
 		synchronized (SESSIONS) {
 			Map<UUID, FluidProtocol.Negotiation> serverSessions = SESSIONS.get(server);
 			FluidProtocol.Negotiation negotiation = serverSessions == null ? null : serverSessions.get(playerId);
-			return negotiation != null && negotiation.accepted()
-					&& negotiation.selectedVersion() == FluidProtocol.CURRENT_VERSION
-					&& (negotiation.capabilities() & FluidProtocol.REQUIRED_CAPABILITIES)
-					== FluidProtocol.REQUIRED_CAPABILITIES;
+			if (negotiation == null || !negotiation.accepted()
+					|| (negotiation.capabilities() & FluidProtocol.REQUIRED_CAPABILITIES) != FluidProtocol.REQUIRED_CAPABILITIES) return null;
+			if (negotiation.selectedVersion() == FluidProtocol.CURRENT_VERSION) return negotiation;
+			return negotiation.selectedVersion() == FluidProtocol.MATERIAL_SNAPSHOT_VERSION
+					&& (negotiation.capabilities() & FluidProtocol.CAP_MATERIAL_SNAPSHOT) != 0L ? negotiation : null;
 		}
 	}
 
@@ -131,19 +149,22 @@ public final class FluidProtocolServer {
 	private static final class HandshakeTask implements ConfigurationTask {
 		private final ServerConfigurationPacketListenerImpl listener;
 		private final MinecraftServer server;
-		private final FluidProtocolOfferPayload offer = new FluidProtocolOfferPayload(FluidProtocol.serverOffer());
+		private final FluidProtocolOfferPayload offer;
 		private int ticks;
 
 		private HandshakeTask(ServerConfigurationPacketListenerImpl listener, MinecraftServer server) {
 			this.listener = listener;
 			this.server = server;
+			this.offer = new FluidProtocolOfferPayload(FluidProtocol.serverOffer(
+					FluidSimulationService.get(server).materialFeatureEnabled()
+			));
 		}
 
 		@Override
 		public void start(Consumer<Packet<?>> sender) {
 			if (!ServerConfigurationNetworking.canSend(listener, FluidProtocolOfferPayload.TYPE)) {
 				listener.disconnect(Component.literal(
-						"This server requires the Real Water client Mod and protocol " + FluidProtocol.CURRENT_VERSION
+						"This server requires the Real Water client Mod and protocol " + offer.offer().maximumVersion()
 				));
 				return;
 			}

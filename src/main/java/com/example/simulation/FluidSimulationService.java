@@ -61,6 +61,7 @@ public final class FluidSimulationService {
 	private boolean defaultEntityPhysicsEnabled = true;
 	private boolean defaultDebugOverlays;
 	private boolean controllerFeatureEnabled;
+	private final boolean materialFeatureEnabled;
 	private String lastTakeoverFailure;
 	private boolean takeoverMaintenanceEnabled;
 
@@ -76,6 +77,7 @@ public final class FluidSimulationService {
 		}
 		serverConfigLocked = configurationLocked;
 		controllerFeatureEnabled = serverConfig.controllersEnabled();
+		materialFeatureEnabled = serverConfig.materialsEnabled();
 		regionManager = new FluidRegionManager(serverConfig.limits());
 		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked);
 		if (configurationLocked) regionOperations.recordIssue(
@@ -137,6 +139,10 @@ public final class FluidSimulationService {
 			}
 		}
 		return null;
+	}
+
+	public boolean materialFeatureEnabled() {
+		return materialFeatureEnabled;
 	}
 
 	public ControllerActivation activateController(ServerPlayer player, BlockPos controllerPosition) {

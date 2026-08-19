@@ -28,6 +28,10 @@ public final class FluidProtocol {
 		return new Offer(MIN_VERSION, CURRENT_VERSION, REQUIRED_CAPABILITIES, 0L);
 	}
 
+	public static Offer serverOffer(boolean materialsEnabled) {
+		return materialsEnabled ? materialServerOffer() : serverOffer();
+	}
+
 	/** Standalone M3 offer; the live server does not use it until material gameplay is enabled. */
 	public static Offer materialServerOffer() {
 		return new Offer(MATERIAL_SNAPSHOT_VERSION, MATERIAL_SNAPSHOT_VERSION,

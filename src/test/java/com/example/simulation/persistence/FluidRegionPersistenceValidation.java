@@ -283,10 +283,25 @@ public final class FluidRegionPersistenceValidation {
 	private static void validateWorldConfig() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "config-");
 		FluidServerConfig defaults = FluidServerConfig.loadOrCreate(root);
-		require(!defaults.controllersEnabled() && defaults.limits().maximumRegions() == 4, "safe default config changed");
-		FluidServerConfig enabled = defaults.withControllersEnabled(true);
+		require(!defaults.controllersEnabled() && !defaults.materialsEnabled() && defaults.limits().maximumRegions() == 4,
+				"safe default config changed");
+		FluidServerConfig enabled = defaults.withControllersEnabled(true).withMaterialsEnabled(true);
 		enabled.save(root);
 		require(FluidServerConfig.loadOrCreate(root).equals(enabled), "world-local config did not round-trip");
+
+		Path legacyRoot = Files.createTempDirectory(Path.of("."), "config-v1-");
+		Files.createDirectories(FluidServerConfig.path(legacyRoot).getParent());
+		Files.writeString(FluidServerConfig.path(legacyRoot), """
+				formatVersion=1
+				controllersEnabled=true
+				maximumRegions=4
+				maximumCellsPerRegion=9216
+				maximumMarkersPerRegion=73728
+				maximumTotalCells=36864
+				maximumTotalMarkers=294912
+				""");
+		FluidServerConfig legacy = FluidServerConfig.loadOrCreate(legacyRoot);
+		require(legacy.controllersEnabled() && !legacy.materialsEnabled(), "v1 config did not migrate with materials safely disabled");
 		Files.writeString(FluidServerConfig.path(root), "formatVersion=99\ncontrollersEnabled=false\n");
 		expectIOException(() -> FluidServerConfig.loadOrCreate(root), "unknown config version was silently replaced");
 	}

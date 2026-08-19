@@ -27,6 +27,9 @@ public final class FluidNetworkProtocolValidation {
 
 	private static void validateNegotiationMatrix() {
 		FluidProtocol.Offer offer = FluidProtocol.serverOffer();
+		require(FluidProtocol.serverOffer(false).equals(offer)
+				&& FluidProtocol.serverOffer(true).equals(FluidProtocol.materialServerOffer()),
+				"material feature gate did not select a strict v1/v2 server offer");
 		FluidProtocol.Negotiation accepted = FluidProtocol.negotiate(offer);
 		require(accepted.accepted() && accepted.selectedVersion() == FluidProtocol.CURRENT_VERSION
 				&& accepted.capabilities() == FluidProtocol.REQUIRED_CAPABILITIES,
