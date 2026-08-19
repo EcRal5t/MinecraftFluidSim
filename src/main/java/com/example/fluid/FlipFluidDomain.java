@@ -282,6 +282,17 @@ public final class FlipFluidDomain {
 		return result;
 	}
 
+	MaterialInventory materialInventory(int materialHandle) {
+		double volume = 0.0, mass = 0.0, weightedY = 0.0;
+		for (int particle = 0; particle < particleCount; particle++) {
+			if (particleMaterialHandle[particle] != materialHandle) continue;
+			volume += particleVolume[particle];
+			mass += particleMass[particle];
+			weightedY += particleY[particle] / config.cellSize() * particleVolume[particle];
+		}
+		return new MaterialInventory(volume, mass, volume == 0.0 ? Double.NaN : weightedY / volume);
+	}
+
 	/** In-memory M3 assignment only; callers outside the fluid package cannot create world material state yet. */
 	void setMaterialInCell(int x, int y, int z, FluidMaterialRegistry registry,
 	                       int materialHandle, int phaseLabel) {
@@ -1183,6 +1194,7 @@ public final class FlipFluidDomain {
 	public record VolumeAddition(float addedVolume, boolean markerBudgetLimited) { }
 	public record VolumeDistribution(int activeCells, int visibleCells, int denseCells) { }
 	public record SolidDistribution(int partialCells, int fullCells) { }
+	record MaterialInventory(double volume, double mass, double centerY) { }
 	public record StepStats(
 			int substeps,
 			int pressureIterations,
