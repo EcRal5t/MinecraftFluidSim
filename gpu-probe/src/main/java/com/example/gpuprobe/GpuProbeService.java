@@ -2,9 +2,9 @@ package com.example.gpuprobe;
 
 import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FluidSolverConfig;
+import com.example.network.FluidProtocolServer;
 import com.example.network.FluidSnapshotPayload;
 import com.example.simulation.FluidSimulationService;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
@@ -15,6 +15,7 @@ import net.minecraft.world.phys.Vec3;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.WeakHashMap;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
@@ -32,6 +33,9 @@ final class GpuProbeService {
 	private Backend backend;
 	private BlockPos origin = BlockPos.ZERO;
 	private ResourceKey<Level> dimension;
+	private UUID regionId;
+	private long snapshotSequence;
+	private boolean hiddenForMainConflict;
 	private boolean paused = true;
 	private long tick;
 	private int completedSteps;
@@ -89,9 +93,12 @@ final class GpuProbeService {
 	private CreationResult createBackend(ServerPlayer player, int deviceIndex, BlockPos candidateOrigin,
 	                                     byte[] solidCells, VulkanFlipPipeline.PressureSolver pressureSolver,
 	                                     String newCollisionDescription) {
+		sendRemoval(player.level().getServer());
 		closeBackend();
 		origin = candidateOrigin;
 		dimension = player.level().dimension();
+		regionId = UUID.randomUUID();
+		snapshotSequence = 0L;
 		collisionDescription = newCollisionDescription;
 		fallbackReason = null;
 		failure = null;
@@ -147,10 +154,15 @@ final class GpuProbeService {
 	void tick(MinecraftServer server) {
 		if (backend == null) return;
 		if (FluidSimulationService.get(server).exists()) {
+			if (!hiddenForMainConflict) {
+				sendRemoval(server);
+				hiddenForMainConflict = true;
+			}
 			paused = true;
 			failure = "主 Real Water 域已启动，GPU probe 已暂停以避免快照冲突";
 			return;
 		}
+		hiddenForMainConflict = false;
 		ServerLevel level = server.getLevel(dimension);
 		if (level == null || paused) return;
 		tick++;
@@ -266,10 +278,8 @@ final class GpuProbeService {
 	}
 
 	void remove(MinecraftServer server) {
+		sendRemoval(server);
 		closeBackend();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-			if (ServerPlayNetworking.canSend(player, FluidSnapshotPayload.TYPE)) ServerPlayNetworking.send(player, FluidSnapshotPayload.clear());
-		}
 		FluidSimulationService main = FluidSimulationService.get(server);
 		if (main.exists()) {
 			for (ServerLevel level : server.getAllLevels()) main.sendSnapshot(level);
@@ -285,11 +295,22 @@ final class GpuProbeService {
 			if (!recoverRuntimeFailure(exception, "snapshot readback") || backend == null) return;
 			snapshot = backend.snapshot();
 		}
-		FluidSnapshotPayload payload = new FluidSnapshotPayload(origin, H, NX, NY, NZ,
-				snapshot.density(), snapshot.markers(), snapshot.solids(), true);
+		FluidSnapshotPayload payload = FluidSnapshotPayload.snapshot(
+				dimension.identifier(), regionId, 1L, ++snapshotSequence, origin, H, NX, NY, NZ,
+				snapshot.density(), snapshot.markers(), snapshot.solids(), true
+		);
 		for (ServerPlayer player : level.players()) {
-			if (ServerPlayNetworking.canSend(player, FluidSnapshotPayload.TYPE)) ServerPlayNetworking.send(player, payload);
+			FluidProtocolServer.send(player, payload);
 		}
+		hiddenForMainConflict = false;
+	}
+
+	private void sendRemoval(MinecraftServer server) {
+		if (regionId == null || dimension == null) return;
+		FluidSnapshotPayload payload = FluidSnapshotPayload.removeRegion(
+				dimension.identifier(), regionId, 1L, ++snapshotSequence
+		);
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) FluidProtocolServer.send(player, payload);
 	}
 
 	private void closeBackend() {
@@ -300,6 +321,9 @@ final class GpuProbeService {
 		backend = null;
 		checkpoint = null;
 		dimension = null;
+		regionId = null;
+		snapshotSequence = 0L;
+		hiddenForMainConflict = false;
 		collisionDescription = null;
 		paused = true;
 	}

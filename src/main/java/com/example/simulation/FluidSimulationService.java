@@ -4,10 +4,10 @@ import com.example.RealWaterMod;
 import com.example.block.RealWaterBlocks;
 import com.example.fluid.FlipFluidDomain;
 import com.example.network.FluidSnapshotPayload;
+import com.example.network.FluidProtocolServer;
 import com.example.simulation.controller.FluidBoundaryScanner;
 import com.example.simulation.controller.FluidControllerRegions;
 import com.example.simulation.controller.FluidRegionFootprint;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
@@ -25,7 +25,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.WeakHashMap;
 
-/** Adapts the currently selected in-memory fluid region to Minecraft; only takeover recovery metadata is persisted. */
+/** Adapts in-memory fluid regions to Minecraft; only takeover recovery metadata is persisted. */
 public final class FluidSimulationService {
 	public static final int BLOCK_SIZE_X = 12;
 	public static final int BLOCK_SIZE_Y = 8;
@@ -273,6 +273,7 @@ public final class FluidSimulationService {
 	}
 
 	private void createEmpty(ServerLevel level, BlockPos origin) {
+		FluidRegion replaced = activeRegion();
 		FluidRegion candidate = FluidRegionFactory.createCommandRegion(
 				level, origin, BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z,
 				CELLS_PER_BLOCK, COMPATIBILITY_REGION_MARKERS
@@ -281,6 +282,7 @@ public final class FluidSimulationService {
 		candidate.setDebugOverlays(defaultDebugOverlays);
 		FluidRegionManager.AdmissionResult admission = regionManager.replaceSelected(candidate);
 		if (!admission.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + admission.failure());
+		if (replaced != null) sendRegionRemoval(level.getServer(), replaced);
 	}
 
 	public boolean setPaused(boolean value, ServerLevel level) {
@@ -329,18 +331,17 @@ public final class FluidSimulationService {
 			ServerLevel takeoverLevel = server.getLevel(takeoverDimension);
 			if (takeoverLevel != null) maintainTakeover(takeoverLevel);
 		}
-		FluidRegion selected = activeRegion();
 		for (FluidRegion region : regionManager.regions()) {
 			ServerLevel level = server.getLevel(region.dimension());
 			if (level == null) {
 				region.setAvailabilityFailure("dimension is not loaded");
 				continue;
 			}
-			tickRegion(level, region, region == selected);
+			tickRegion(level, region);
 		}
 	}
 
-	private void tickRegion(ServerLevel level, FluidRegion region, boolean selected) {
+	private void tickRegion(ServerLevel level, FluidRegion region) {
 		if (!ensureRegionAvailable(level, region)) return;
 		long tick = region.incrementTick();
 		boolean collisionsChanged = false;
@@ -353,11 +354,11 @@ public final class FluidSimulationService {
 		region.setLastAffectedEntities(affectedEntities);
 		if (collisionsChanged || affectedEntities > 0) region.wakeForActivity();
 		if (!region.canStep()) {
-			if (selected && collisionsChanged) sendSnapshot(level);
+			if (collisionsChanged) sendSnapshot(level, region);
 			return;
 		}
 		if (tick % region.stepIntervalTicks() != 0) {
-			if (selected && collisionsChanged) sendSnapshot(level);
+			if (collisionsChanged) sendSnapshot(level, region);
 			return;
 		}
 		stepOnce(region);
@@ -382,8 +383,10 @@ public final class FluidSimulationService {
 			RealWaterMod.LOGGER.warn("Auto-paused fluid region {} after {} consecutive steps above {} ms",
 					region.id(), HARD_PAUSE_STREAK, HARD_PAUSE_MILLIS);
 		}
-		if (selected && (tick % SNAPSHOT_INTERVAL_TICKS == 0 || region.paused()
-				|| region.lifecycle().state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP)) sendSnapshot(level);
+		if (tick % SNAPSHOT_INTERVAL_TICKS == 0 || region.paused()
+				|| region.lifecycle().state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP) {
+			sendSnapshot(level, region);
+		}
 	}
 
 	private void maintainTakeover(ServerLevel level) {
@@ -543,7 +546,7 @@ public final class FluidSimulationService {
 		}
 		regionManager.clear();
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-			if (ServerPlayNetworking.canSend(player, FluidSnapshotPayload.TYPE)) ServerPlayNetworking.send(player, FluidSnapshotPayload.clear());
+			FluidProtocolServer.send(player, FluidSnapshotPayload.clearAll());
 		}
 		return restoration;
 	}
@@ -595,17 +598,37 @@ public final class FluidSimulationService {
 	}
 
 	public void sendSnapshot(ServerLevel level) {
-		if (!hasRegionIn(level)) return;
-		FlipFluidDomain domain = domain();
-		FluidSnapshotPayload payload = new FluidSnapshotPayload(
-				origin(), domain.config().cellSize(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
-				domain.copyQuantizedVolume(), domain.copyMarkerMask(), domain.copySolidMask(), activeRegion().debugOverlays()
-		);
-		for (ServerPlayer player : level.getServer().getPlayerList().getPlayers()) {
-			if (!ServerPlayNetworking.canSend(player, FluidSnapshotPayload.TYPE)) continue;
-			ServerPlayNetworking.send(player,
-					player.level().dimension().equals(level.dimension()) ? payload : FluidSnapshotPayload.clear());
+		FluidRegion region = activeRegion();
+		if (region != null && level.dimension().equals(region.dimension())) sendSnapshot(level, region);
+	}
+
+	public void sendSnapshots(ServerPlayer player) {
+		for (FluidRegion region : regionManager.regions()) {
+			if (!player.level().dimension().equals(region.dimension())) continue;
+			FluidProtocolServer.send(player, createSnapshot(region));
 		}
+	}
+
+	private void sendSnapshot(ServerLevel level, FluidRegion region) {
+		if (!level.dimension().equals(region.dimension())) return;
+		FluidSnapshotPayload payload = createSnapshot(region);
+		for (ServerPlayer player : level.players()) FluidProtocolServer.send(player, payload);
+	}
+
+	private static FluidSnapshotPayload createSnapshot(FluidRegion region) {
+		FlipFluidDomain domain = region.domain();
+		return FluidSnapshotPayload.snapshot(
+				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence(),
+				region.origin(), domain.config().cellSize(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
+				domain.copyQuantizedVolume(), domain.copyMarkerMask(), domain.copySolidMask(), region.debugOverlays()
+		);
+	}
+
+	private static void sendRegionRemoval(MinecraftServer server, FluidRegion region) {
+		FluidSnapshotPayload payload = FluidSnapshotPayload.removeRegion(
+				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence()
+		);
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) FluidProtocolServer.send(player, payload);
 	}
 
 	private FluidRegion activeRegion() {

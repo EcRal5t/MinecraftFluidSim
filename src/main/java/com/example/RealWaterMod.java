@@ -1,12 +1,11 @@
 package com.example;
 
 import com.example.block.RealWaterBlocks;
-import com.example.network.FluidSnapshotPayload;
+import com.example.network.FluidProtocolServer;
 import com.example.simulation.FluidSimulationService;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
-import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.minecraft.resources.Identifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,11 +17,14 @@ public final class RealWaterMod implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		RealWaterBlocks.register();
-		PayloadTypeRegistry.clientboundPlay().register(FluidSnapshotPayload.TYPE, FluidSnapshotPayload.CODEC);
+		FluidProtocolServer.register();
 		RealWaterCommands.register();
 		ServerTickEvents.END_SERVER_TICK.register(server -> FluidSimulationService.get(server).tick(server));
 		ServerLifecycleEvents.SERVER_STARTED.register(FluidSimulationService::recoverTakeoverBackup);
-		ServerLifecycleEvents.SERVER_STOPPING.register(FluidSimulationService::removeServer);
+		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+			FluidProtocolServer.clearServer(server);
+			FluidSimulationService.removeServer(server);
+		});
 		LOGGER.info("Real Water bounded 3D prototype initialized");
 	}
 

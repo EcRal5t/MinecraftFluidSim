@@ -17,7 +17,9 @@ public final class FluidRegion {
 	private final FlipFluidDomain domain;
 	private final long reservedMarkerCapacity;
 	private final FluidRegionFootprint footprint;
+	private final long generation = 1L;
 	private final FluidRegionLifecycle lifecycle = new FluidRegionLifecycle();
+	private long snapshotSequence;
 	private long tick;
 	private double lastStepMilliseconds;
 	private FlipFluidDomain.StepStats lastStats;
@@ -65,6 +67,7 @@ public final class FluidRegion {
 	public long reservedMarkerCapacity() { return reservedMarkerCapacity; }
 	public FluidRegionFootprint footprint() { return footprint; }
 	public boolean controllerManaged() { return footprint != null; }
+	public long generation() { return generation; }
 	public FluidRegionLifecycle lifecycle() { return lifecycle; }
 	public long reservedCellCapacity() {
 		return Math.multiplyExact(Math.multiplyExact((long) domain.sizeX(), domain.sizeY()), domain.sizeZ());
@@ -88,6 +91,10 @@ public final class FluidRegion {
 	void setPaused(boolean value) { lifecycle.setOperatorPaused(value, stepIntervalTicks); }
 	boolean canStep() { return lifecycle.canStep(); }
 	void wakeForActivity() { lifecycle.wakeForActivity(stepIntervalTicks); }
+	long nextSnapshotSequence() {
+		if (snapshotSequence == Long.MAX_VALUE) throw new IllegalStateException("Snapshot sequence exhausted");
+		return ++snapshotSequence;
+	}
 	long incrementTick() { return ++tick; }
 	long tick() { return tick; }
 	double lastStepMilliseconds() { return lastStepMilliseconds; }

@@ -2,6 +2,7 @@ package com.example.client;
 
 import com.example.RealWaterMod;
 import com.example.network.FluidSnapshotPayload;
+import com.example.network.FluidSnapshotLedger;
 import com.mojang.blaze3d.PrimitiveTopology;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
@@ -24,8 +25,12 @@ import org.joml.Matrix4fc;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
 
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalDouble;
+import java.util.UUID;
 
 /**
  * Rebuilds a translucent, current-state surface from the latest volume
@@ -62,22 +67,42 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 			() -> "Real Water debug surface",
 			RenderType.BIG_BUFFER_SIZE
 	);
-	private volatile SnapshotTransition latest;
-	private FluidSnapshotPayload extracted;
+	private final FluidSnapshotLedger ledger = new FluidSnapshotLedger();
+	private final Map<UUID, SnapshotTransition> latest = new LinkedHashMap<>();
+	private volatile List<FluidSnapshotPayload> extracted = List.of();
 
-	public void accept(FluidSnapshotPayload payload) {
-		if (payload.isClear()) {
-			latest = null;
-			return;
+	public synchronized void accept(FluidSnapshotPayload payload, int negotiatedVersion) {
+		FluidSnapshotLedger.Decision decision = ledger.evaluate(payload, negotiatedVersion);
+		switch (decision) {
+			case CLEAR_ALL -> latest.clear();
+			case REMOVE_REGION -> latest.remove(payload.regionId());
+			case ACCEPT_SNAPSHOT -> {
+				SnapshotTransition old = latest.get(payload.regionId());
+				FluidSnapshotPayload from = old == null ? payload : old.to();
+				latest.put(payload.regionId(), new SnapshotTransition(from, payload, System.nanoTime()));
+			}
+			case REJECT_PROTOCOL -> RealWaterMod.LOGGER.error(
+					"Discarded Real Water snapshot protocol {} after negotiating {}",
+					payload.protocolVersion(), negotiatedVersion
+			);
+			case REJECT_PALETTE -> RealWaterMod.LOGGER.error(
+					"Discarded Real Water region {} with unsupported palette {}",
+					payload.regionId(), payload.paletteVersion()
+			);
+			case IGNORE_STALE -> { }
 		}
-		SnapshotTransition old = latest;
-		FluidSnapshotPayload from = old == null ? payload : old.to();
-		latest = new SnapshotTransition(from, payload, System.nanoTime());
 	}
 
 	public void extract(LevelExtractionContext context) {
-		SnapshotTransition transition = latest;
-		extracted = transition == null ? null : interpolate(transition, System.nanoTime());
+		List<SnapshotTransition> transitions;
+		synchronized (this) {
+			transitions = List.copyOf(latest.values());
+		}
+		long now = System.nanoTime();
+		extracted = transitions.stream()
+				.map(transition -> interpolate(transition, now))
+				.filter(payload -> payload.dimension().equals(context.level().dimension().identifier()))
+				.toList();
 	}
 
 	private static FluidSnapshotPayload interpolate(SnapshotTransition transition, long now) {
@@ -94,13 +119,18 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 			markers[i] = from.markers()[i] != 0 || to.markers()[i] != 0 ? (byte) 1 : (byte) 0;
 		}
 		return new FluidSnapshotPayload(
-				to.origin(), to.cellSize(), to.sizeX(), to.sizeY(), to.sizeZ(),
-				volume, markers, to.solids(), to.debugOverlays()
+				to.protocolVersion(), to.kind(), to.dimension(), to.regionId(), to.generation(), to.sequence(),
+				to.paletteVersion(), to.origin(), to.cellSize(), to.sizeX(), to.sizeY(), to.sizeZ(),
+				volume, markers, to.solids(), to.debugOverlays(), to.extensions()
 		);
 	}
 
 	private static boolean compatible(FluidSnapshotPayload first, FluidSnapshotPayload second) {
-		return first.origin().equals(second.origin())
+		return first.regionId().equals(second.regionId())
+				&& first.generation() == second.generation()
+				&& first.paletteVersion() == second.paletteVersion()
+				&& first.dimension().equals(second.dimension())
+				&& first.origin().equals(second.origin())
 				&& Float.compare(first.cellSize(), second.cellSize()) == 0
 				&& first.sizeX() == second.sizeX()
 				&& first.sizeY() == second.sizeY()
@@ -110,8 +140,8 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	}
 
 	public void render(LevelRenderContext context) {
-		FluidSnapshotPayload state = extracted;
-		if (state == null || state.volume().length == 0) return;
+		List<FluidSnapshotPayload> states = extracted;
+		if (states.isEmpty()) return;
 
 		RenderPipeline pipeline = RenderPipelines.DEBUG_FILLED_BOX;
 		VertexFormat format = pipeline.getVertexFormatBinding(0);
@@ -123,7 +153,8 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 				primitive == PrimitiveTopology.QUADS ? RenderSystem.getProjectionType().vertexSorting() : null
 		);
 
-		buildGeometry(context, stagedBuffer.getVertexBuilder(draw), state);
+		VertexConsumer vertices = stagedBuffer.getVertexBuilder(draw);
+		for (FluidSnapshotPayload state : states) buildGeometry(context, vertices, state);
 		stagedBuffer.upload();
 		StagedVertexBuffer.ExecuteInfo info = stagedBuffer.getExecuteInfo(draw);
 		if (info != null) execute(Minecraft.getInstance(), info, pipeline);
@@ -416,7 +447,14 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 
 	@Override
 	public void close() {
+		clear();
 		stagedBuffer.close();
+	}
+
+	public synchronized void clear() {
+		latest.clear();
+		ledger.clear();
+		extracted = List.of();
 	}
 
 	private record SnapshotTransition(FluidSnapshotPayload from, FluidSnapshotPayload to, long startedAtNanos) { }

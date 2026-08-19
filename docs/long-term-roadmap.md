@@ -489,7 +489,7 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 - 建立可配置的单区域 marker/cell 上限和多区域总预算、状态统计和管理命令；预算拒绝必须报告所需量、单域上限和服务器剩余额度；
 - 区域墙必须可见/可调试，不再有未说明的不可见边界。
 
-当前状态（2026-08-19，M2 第二增量完成）：纯内存服务最多接纳四个区域，单域仍限 9,216 cell/73,728 marker，总预留限 36,864/294,912；同维空间重叠拒绝。控制器首次激活追加并选择区域，再次激活只选择既有区域而不重建 marker；开发命令仍原子替换选中域。server tick 遍历各域，任一控制器域的缺 chunk/破边界在任何碰撞、实体或 solver 访问前冻结整个该域，但不阻断其他 ready 域，未把缺失部分临时当墙。`FluidRegionLifecycle` 已把 operator pause、availability 与 ACTIVE/REDUCED/HYDROSTATIC_SLEEP 分开：连续 200 个完整低速/低残差且无碰撞/实体活动的步才提交静水休眠，只清零残余 marker 动量并断言 marker 数和 `particleVolume` 未变；方块变化、实体接触、水量编辑与显式 step/run 唤醒。`UNLOADED` 双条件门要求完整 checkpoint 已发布且 live solver 已释放；当前服务没有 checkpoint，因而绝不调用该转换。客户端仍只用 density+marker+solid 重建全局选中域；尚无 region id/代次/序号协议、chunk ticket 或任何 `region-state` 存档，takeover 边界与 journal v1 未变。
+当前状态（2026-08-19，M2 第三增量完成）：纯内存服务最多接纳四个区域，单域仍限 9,216 cell/73,728 marker，总预留限 36,864/294,912；同维空间重叠拒绝。控制器首次激活追加并选择区域，再次激活只选择既有区域而不重建 marker；开发命令仍原子替换选中域。server tick 遍历各域，任一控制器域的缺 chunk/破边界在任何碰撞、实体或 solver 访问前冻结整个该域，但不阻断其他 ready 域。`FluidRegionLifecycle` 分离 operator pause、availability 与 ACTIVE/REDUCED/HYDROSTATIC_SLEEP，静水提交不改变 marker 数或 `particleVolume`；`UNLOADED` 仍因没有 checkpoint 而不可进入。网络配置阶段现以挂起 task 协商独立 protocol v1 与 region identity、generation/sequence、optional sections、multi-region render 四项 capability；缺客户端、版本无交集或必需能力缺失会给可读原因并拒绝进入 play。CPU 与可选 GPU probe 的快照均带 dimension、region UUID、generation、单调 sequence、纯水 palette 版本及 type/length 可跳过段。客户端为每域保留顺序水位和 removal tombstone，拒绝旧代次/旧序号，按当前维度同时重建所有区域；density+marker+solid 仍仅属渲染。独立兼容矩阵覆盖协商、codec 往返、未知可选段和乱序拒绝。尚无 chunk ticket 或任何 `region-state` 存档，takeover 边界与 journal v1 未变。
 
 完成条件：反复休眠/唤醒/重启后水量不变；方块更新和实体进入可靠唤醒；任一关联 chunk 卸载时不发生半区域步进；未加载区不占粒子内存；协议不兼容能被明确拒绝而非错位解码。
 
@@ -637,8 +637,8 @@ CPU 单线程参考场景固定随机种子、遍历顺序和输入，能稳定�
 
 ## 十三、接下来三项实际工作
 
-1. 建立 region id/代次/序号网络协议门、capability 协商与 codec 兼容矩阵，使多个 server region 可同时安全呈现。
-2. 评审 `region-state v1` 的原子检查点、兼容矩阵、失败回滚与迁移方案，得到明确批准后才实现持久化。
-3. 在 checkpoint 发布/释放 solver 的故障注入门通过后接通整域 `UNLOADED` 往返，并证明未加载域不占 marker 数组内存。
+1. 评审 `region-state v1` 的原子检查点、兼容矩阵、失败回滚与迁移方案，得到明确批准后才实现持久化。
+2. 在 checkpoint 发布/释放 solver 的故障注入门通过后接通整域 `UNLOADED` 往返，并证明未加载域不占 marker 数组内存。
+3. 增加区域管理命令与可配置单域/总预算，在不改变 marker 真值的前提下暴露选择、列表和拒绝诊断。
 
 这些 M2 门完成前，不扩大 takeover 范围，不改变世界长期存档格式，也不把 GPU 设为必需运行条件。

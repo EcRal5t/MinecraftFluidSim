@@ -16,7 +16,7 @@
 |---|---|---|
 | `/realwater` 命令树 | `src/main/java/com/example/RealWaterCommands.java` | 状态操作应留在服务层；输出经过命令 transcript 包装 |
 | 初始化、tick、启动/停止恢复、网络注册 | `src/main/java/com/example/RealWaterMod.java` | 服务生命周期与 payload 注册 |
-| 多区域服务编排、独立 tick、选中域命令/快照与 takeover | `src/main/java/com/example/simulation/FluidSimulationService.java` | 每域必须先完整通过 availability 才能读/步进；客户端协议升级前只发布选中域；takeover 事务仍只在服务层 |
+| 多区域服务编排、独立 tick、选中域命令、全域快照与 takeover | `src/main/java/com/example/simulation/FluidSimulationService.java` | 每域必须先完整通过 availability 才能读/步进；快照必须使用本域 id/generation/sequence；takeover 事务仍只在服务层 |
 | 指定区域的 Minecraft 碰撞采样与实体单向耦合 | `src/main/java/com/example/simulation/FluidRegionWorldInteraction.java` | 不得隐式读取 selected region；碰撞挤水仍按 marker 账本恢复；实体只受 region AABB 内本域流速影响 |
 | CPU 域数组构造与只读原版水采样 | `src/main/java/com/example/simulation/FluidRegionFactory.java` | marker 硬上限必须等于 manager 预留；采样只写 `particleVolume`，不得从平滑 density 结算 |
 | 区域身份、硬 marker 预算与独立运行态 | `src/main/java/com/example/simulation/FluidRegion.java` | tick/调频/碰撞/实体/debug 跟随区域；pause、availability 和 lifecycle 不得混成一个状态；精确水量仍只来自 marker `particleVolume` |
@@ -31,9 +31,10 @@
 | takeover 编排 | `TakeoverTransaction.java`、`TakeoverBackupStore.java` | journal/WARNING 发布完成前禁止修改世界 |
 | takeover codec 与原子文件 | `TakeoverJournalCodec.java`、`TakeoverJournalFiles.java` | v1 必须继续可读；未知/损坏/恢复失败状态必须锁住新 takeover |
 | 指令 transcript | `logging/RealWaterCommandLog.java`、`CommandAuditFile.java` | 只做 UTF-8 观测，失败不得改变命令结果 |
-| 网络快照 | `network/FluidSnapshotPayload.java` | record、codec、`clear()`、服务端构造与客户端读取必须同步 |
-| 客户端水面 | `src/client/java/com/example/client/ClientFluidVolumeRenderer.java` | density/marker/solid、200 ms 插值、marching tetrahedra |
-| 客户端绑定 | `src/client/java/com/example/client/RealWaterModClient.java` | payload 接收、extract、render、close |
+| 协议版本/capability 协商与服务器 session 门 | `network/FluidProtocol.java`、`FluidProtocolServer.java`、`FluidProtocolOfferPayload.java`、`FluidProtocolResponsePayload.java` | 配置 task 未完成不得进入 play；协议版本独立于 journal/region-state；改动跑 `runFluidNetworkProtocolValidation` |
+| 多区域网络快照与乱序水位 | `network/FluidSnapshotPayload.java`、`FluidSnapshotLedger.java` | dimension/id/generation/sequence/palette 和可跳过长度段必须同步；removal tombstone 禁止旧包复活 |
+| 客户端多区域水面 | `src/client/java/com/example/client/ClientFluidVolumeRenderer.java` | 每 region 独立 200 ms 插值，再按当前 dimension 合并 marching-tetrahedra draw；density/marker/solid 不得反改物理 |
+| 客户端握手与绑定 | `src/client/java/com/example/client/RealWaterModClient.java` | configuration offer/response、play snapshot、重配置/断线清理必须成套 |
 
 高频定位：
 
@@ -73,6 +74,7 @@
 | 文档、路由、纯日志文字 | `compileJava` 或无需运行时门 | 命令树/资源打包变化才跑专服或进服 |
 | CPU 变密度面系数实验 | `runVariableDensityFaceCoefficientValidation` | 将来接入活动 3D 核心时再升级到 `FlipFluidDomainValidation`、M2.5 分数界面门和 M3 连通器门 |
 | CPU 区域登记、容量、运行态、独立 tick 或选择逻辑 | `runFluidRegionManagerValidation` + `runFluidRegionLifecycleValidation`；静水提交或 marker 预算变化再跑 `FlipFluidDomainValidation` | 接入协议后升级到代次/序号/跨维度 codec 门；接入 checkpoint 后升级保存失败与 UNLOADED 往返门 |
+| 网络协议、payload header、capability 或客户端排序 | `runFluidNetworkProtocolValidation` + `compileTestJava` | 改 Fabric 配置/入口注册再跑 EULA=false `:runServer`；真实多人/重连渲染只有需要时进服 |
 | 控制器、边界扫描、footprint 或完整加载判定 | `runFluidBoundaryScannerValidation` + `runFluidRegionManagerValidation` | 方块注册/资源变化再跑 EULA=false `runServer`；真实放置、右键和跨 chunk 卸载只有请求进服时再 smoke |
 | CPU 物理/碰撞/调度 | `compileTestJava` + `FlipFluidDomainValidation`；表面相关再跑 surface diagnostic | takeover 改动另跑 16 场景；只有请求进服验证或发布时才 clean build |
 | takeover/codec/文件事务 | `runTakeoverJournalValidation` | 真实世界修改只按 smoke 文档并保留备份 |
@@ -80,7 +82,7 @@
 | GPU shader、dispatch、压力数值 | RTX 5070 Ti `--skip-large` 快速门；长期表面相关先跑 `runGpuLongRunSurfaceValidation` | hierarchy、容量、buffer 布局或 64³ 性能变化才跑完整 device 0 |
 | GPU occupancy 性能矩阵 | RTX 5070 Ti `runGpuOccupancyBenchmark` | 仅重测 break-even 或发布相关性能结论时运行；不因普通代码改动重复，且不据此切正式后端 |
 | 设备选择、queue family、显存类型、Vulkan 生命周期 | device 0 快速门 + device 1 对应专项 | 发布里程碑才做双卡完整门 |
-| entrypoint、依赖、资源路径、环境注解 | `:gpu-probe:runServer`，保持 `eula=false` | 客户端渲染/命令打包变化再请求进服 smoke |
+| entrypoint、依赖、资源路径、环境注解 | 主 Mod 用 `:runServer`，probe 用 `:gpu-probe:runServer`，保持 `eula=false` | 客户端渲染/握手或命令打包变化且自动门不足时再请求进服 smoke |
 
 GPU 快速门：
 
@@ -113,6 +115,7 @@ CPU 与事务入口：
 ./gradlew.bat runFluidRegionManagerValidation --offline --no-daemon
 ./gradlew.bat runFluidRegionLifecycleValidation --offline --no-daemon
 ./gradlew.bat runFluidBoundaryScannerValidation --offline --no-daemon
+./gradlew.bat runFluidNetworkProtocolValidation --offline --no-daemon
 ./gradlew.bat runTakeoverJournalValidation runCommandAuditValidation --offline --no-daemon
 & "$env:JAVA_HOME\bin\java.exe" -ea -cp 'build\classes\java\main;build\classes\java\test' com.example.fluid.FlipFluidDomainValidation
 & "$env:JAVA_HOME\bin\java.exe" -ea -cp 'build\classes\java\main;build\classes\java\test' com.example.fluid.FlipFluidSurfaceDiagnostic
@@ -135,4 +138,4 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 
 probe 0.1.16 将每个 50 ms GPU 物理步明确离散为四个 12.5 ms 子步，并把域/solid 接触半径对齐到 CPU 的 `0.45h`；碰撞仍只裁剪墙面法向，切向自由。独立 1,000 步门要求 GPU 与 CPU 保持相同的三层 marker 和近似边缘密度，覆盖此前约 979–1,304 步出现的额外 GPU 坍缩。完整四子步后，5070 Ti 当前参考域为 11.646 ms CPU wall 对 2.257 ms GPU completed-batch throughput wall，即 5.16×；单 marker crossover 后移到约 1,024 流体格。GPU 的 36,000 步无窗口特征化仍从第 5,000 步起暴露长期 marker 压缩，精确 `particleVolume` 未变；CPU 与 GPU 当前都未实现 reseeding，因此这是一项共享的结构性风险，但现有长测数据只来自 GPU。它属于 M2.5，不能用渲染找平关闭。2026-08-19 的实机渲染复测在第 1,317 步确认原固定边缘/角落凹坑显著消退；RTX 4060 Ti 又完成 31 分 44 秒、38,073 步稳定性门，最终体积仍为 2,592.000 格、recovery 为 0，并正常 remove。M1 已完成，probe 仍是只读可选观测而非正式后端。M0 也已完成：强制中断恢复 60/60 个纯水方块、清除 journal/WARNING、解除 lock，邻接结构正常；仅在事务或接管边界变化时按 [`m0-takeover-smoke.md`](m0-takeover-smoke.md) 重跑。
 
-M2 第二增量已接通纯内存多区域：服务最多接纳四个同等上限域并逐域 tick，同维空间重叠拒绝；任一控制器域缺 chunk/破边界只冻结该域，不阻断独立同伴。控制器首次右键追加并选择域，再次右键只重选且保留 marker 与运行态；客户端在新协议前仍只显示全局选中域。`FluidRegionLifecycle` 分离 operator pause、availability 与 ACTIVE/REDUCED/HYDROSTATIC_SLEEP；连续 200 个低速、低压力残差且无碰撞/实体活动的完整步才休眠，方块变化、实体接触、pour/drain、手动 step/run 会唤醒。静水提交只清零残余 marker 动量并断言 marker 数和 `particleVolume` 不变。`UNLOADED` 枚举和双条件门已建立，但当前没有已发布 checkpoint、不会调用转换，也不会释放 solver；仍无 chunk ticket、协议或 `region-state` 存档变化，takeover 边界未扩大。
+M2 第三增量已接通 protocol v1：配置阶段挂起 task 协商版本与四项必需 capability，不兼容在 play 前可读拒绝；CPU 与可选 probe 快照统一携带 dimension、region UUID、generation、sequence、纯水 palette 和 type/length 可选段。客户端逐域拒绝旧序号、以 removal tombstone 防延迟复活，并同时重建当前维度最多四域；命令选择仍只影响交互目标。`runFluidNetworkProtocolValidation` 是协商/codec/未知可选段/乱序矩阵的唯一快速门。物理 `particleVolume`、`markerCount` 离散、density+marker+solid 重建职责均未改变；仍无 chunk ticket、checkpoint 或 `region-state` 存档变化，takeover 边界未扩大。
