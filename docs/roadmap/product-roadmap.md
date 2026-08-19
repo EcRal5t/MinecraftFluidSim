@@ -1,8 +1,22 @@
 # Real Water 产品路线
 
-本文只描述尚未完成的目标。当前基线已经完成 M0、M1、M2 和 M2.5；完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md) 与 [`../architecture/region-state-v1.md`](../architecture/region-state-v1.md)。旧的混合路线原文保存在 [`../archive/legacy-long-term-roadmap.md`](../archive/legacy-long-term-roadmap.md)，不再作为规范。
+本文是尚未完成里程碑的总表。当前基线已经完成 M0、M1、M2 和 M2.5；完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md) 与 [`../architecture/region-state-v1.md`](../architecture/region-state-v1.md)。
 
 基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、主 Mod 0.8.2、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
+
+## 技术规格路由
+
+本文件只管理阶段顺序、范围和完成条件。实现某一阶段时再读对应主题，不把全部长期设计塞回 README：
+
+| 主题 | 覆盖阶段 | 详细规格 |
+|---|---|---|
+| 材料、混合物、化学与热力学 | M3、M7、M9 | [`materials-and-chemistry.md`](materials-and-chemistry.md) |
+| 多液体、自由界面、润湿与实体耦合 | M3、M4 | [`fluids-and-interfaces.md`](fluids-and-interfaces.md) |
+| 气体网络、颗粒与沉积 | M5、M8 | [`gases-and-granular.md`](gases-and-granular.md) |
+| section 持久化、ownership、容器与 Mod API | M6、M10 | [`world-integration.md`](world-integration.md) |
+| 扩容、调度、并发与计算后端 | 跨阶段 | [`performance-and-backends.md`](performance-and-backends.md) |
+
+整理前混合了历史与未来内容的完整原文仍保存在 [`../archive/legacy-long-term-roadmap.md`](../archive/legacy-long-term-roadmap.md)，只用于核对迁移与追溯。
 
 ## 发布切割线
 
