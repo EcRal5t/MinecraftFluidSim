@@ -1,4 +1,6 @@
-# Real Water 维护路由
+# Archived: Real Water 维护路由
+
+> 此文件保留 2026-08-20 整理前的维护路由与混入的进度摘要，仅供追溯。现行路由见 [`../maintenance/routing.md`](../maintenance/routing.md)。内部旧路径按历史原样保留。
 
 当前主 Mod：`0.8.2`。可选 GPU probe：`0.1.16`。版本历史、实测数据和长期阶段定义分别见 [`fluid-prototype.md`](fluid-prototype.md)、[`gpu-probe-report.md`](gpu-probe-report.md) 与 [`long-term-roadmap.md`](long-term-roadmap.md)。本文只回答“代码在哪里、改完跑什么”。
 

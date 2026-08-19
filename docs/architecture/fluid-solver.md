@@ -1,0 +1,39 @@
+# Active CPU fluid solver
+
+本文只描述当前生效的 CPU 流体契约。实现历史见 [`../progress/README.md`](../progress/README.md)，未来多材料路线见 [`../roadmap/product-roadmap.md`](../roadmap/product-roadmap.md)。Minecraft 活动核心是 `src/main/java/com/example/fluid/FlipFluidDomain.java`；旧 `FluidDomain.java` 只保留为未接入游戏的 VOF 对照。
+
+## 状态边界
+
+- **物理真值**：全部 marker `particleVolume` 的精确和。精确加水、删水、碰撞挤水和恢复只按 marker 账本结算。
+- **数值离散**：`markerCount > 0` 决定压力流体格；平滑 `volume[]`、PLIC 分数、cut-cell 开口和目标散度都不是第二套水量。
+- **渲染重建**：客户端使用 density + marker + solid 重建；marker mask 是浅水可见的必要内部种子，渲染不得反写物理。
+- **调度策略**：ACTIVE/REDUCED/休眠/UNLOADED 只控制何时持有或步进状态，不得改变 marker 账本。
+- **碰撞**：墙面只约束法向，切向保持自由；禁止恢复吸墙、墙角偏置或受支撑强制找平。
+
+## 当前 PIC/FLIP 循环
+
+1. marker 向 MAC 网格做 P2G，重建 velocity、平滑 volume 和 containing-cell `markerCount`。
+2. 压力相开放 MAC 面向空气外推两层，避免未定义空气数组零值阻尼小水滴。
+3. 施加重力，以共享 cut-face aperture 构造散度和压力系统。
+4. PLIC ghost-fluid `theta` 在压力矩阵、预条件器和投影中保持一致。
+5. 有界 rest-volume 目标只修正数值 marker 压缩，不编辑 `particleVolume`，也不强制液面水平。
+6. 投影后的有效 MAC 速度再次外推，G2P 使用 90% FLIP / 10% PIC。
+7. marker 逐轴扫掠并与 runtime cut-cell 碰撞，只截断命中轴法向。
+8. 每个完整物理步末执行确定性守恒 reseeding：过密格 merge，欠采样格 split，硬预算不足无损跳过。
+
+## 固体与自由表面
+
+- solver 分辨率为每 Minecraft 方块每轴 2 cell。
+- 每个 solver cell 另持有 runtime `2x2x2` occupancy，因此一个方块以 `4x4x4` 微体素保守采样 `VoxelShape`。
+- 开放格体积为 1/8 增量，共享面开口为 1/4 增量；散度、PCG 和投影必须读取同一几何。
+- PLIC 分数来自 containing-cell marker 精确体积和除以开放体积；`theta >= 0.05` 是公开的条件数正则化。
+- `region-state v1` 只持久化 full-solid fallback。恢复后必须从完整已加载的当前世界重建 partial geometry 才能 step。
+
+## 当前范围
+
+- 水为常密度 1000 simulation units，外部空气使用零表压。
+- 服务端 CPU 是物理规范；可选 GPU probe 仍只读、可回退，不写世界或存档。
+- 已接通最多四个有界区域、控制器边界、独立调度和 `region-state v1`；当前集成说明见根 [`README.md`](../../README.md)。
+- 多材料、可变密度、液液界面和组分质量账本尚未进入活动核心，属于 M3。
+
+代码职责和最小验证任务只在 [`../maintenance/routing.md`](../maintenance/routing.md) 维护。

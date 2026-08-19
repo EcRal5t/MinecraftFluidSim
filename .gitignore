@@ -40,7 +40,7 @@ replay_*.log
 *.hprof
 *.jfr
 
-docs/maintaince/
+docs/maintenance/next-session-initial-prompt.md
 AGENTS.md
 .claude
 .agents

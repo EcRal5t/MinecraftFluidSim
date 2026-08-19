@@ -1,4 +1,6 @@
-# 3D fluid prototype
+# Archived: 3D fluid prototype
+
+> 此文件保留 2026-08-20 整理前混合的当前模型、版本史和未来边界，仅供追溯。现行规范见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md)。内部旧路径按历史原样保留。
 
 The current implementation keeps its numerical core independent from Minecraft and rendering. Its validation answers three questions before chunk storage and persistence add more variables:
 

@@ -1,4 +1,6 @@
-# Real Water 长期产品规格与实现路线
+# Archived: Real Water 长期产品规格与实现路线
+
+> 此文件保留 2026-08-20 整理前混合的产品规格、已完成进度和未来路线，仅供追溯。现行未来路线见 [`../roadmap/product-roadmap.md`](../roadmap/product-roadmap.md)。内部旧路径按历史原样保留。
 
 本文记录从 `0.8.0` 有界 3D PIC/FLIP 水体原型走向“可混合、可反应、包含气体和颗粒沉积物的世界流体系统”的已确认需求、技术边界、数据不变量和分阶段验收门槛。它是长期方向文档，不替代 [`maintenance-routing.md`](maintenance-routing.md) 的当前代码路由，也不表示后续存档格式已经冻结。
 
