@@ -34,7 +34,7 @@
 | marker 分布压力约束 | `src/main/java/com/example/fluid/FlipVolumeDriftCorrection.java` | P2G 只生成目标散度，不结算或找平精确水量 |
 | runtime cut-cell | `src/main/java/com/example/fluid/FlipCutCellGeometry.java` | 散度、矩阵、预条件器和投影共享 face aperture |
 | marker CCD | `src/main/java/com/example/fluid/FlipParticleCollision.java` | 只截断命中法向，切向自由 |
-| 守恒 reseeding | `src/main/java/com/example/fluid/FlipParticleReseeder.java` | merge/split 保持体积、动量、质心和硬预算 |
+| 守恒 reseeding | `src/main/java/com/example/fluid/FlipParticleReseeder.java` | merge/split 保持体积、质量、动量、质心和硬预算；不跨 material/phase |
 | marker 内存交接 | `src/main/java/com/example/fluid/FlipParticleState.java` | 不可变 position/volume/velocity/solid；不是协议或存档格式 |
 | solver 参数 | `src/main/java/com/example/fluid/FluidSolverConfig.java` | CFL、压力容差、FLIP 比例或时间步只属数值离散；改动选择对应 solver 门 |
 | M3 材料定义与独立 CPU 实验 | `src/main/java/com/example/fluid/FluidMaterial.java`、`src/main/java/com/example/fluid/FluidMaterialRegistry.java`、`src/test/java/com/example/fluid/M3ConnectedVesselExperiment.java`、`src/test/java/com/example/fluid/M3MaterialTransferValidation.java` | registry 尚非 codec；marker 材料/相/质量与变密度算子均未接入活动核心 |

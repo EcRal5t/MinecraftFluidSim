@@ -66,6 +66,7 @@ public final class FlipFluidDomain {
 	private int[] particleMaterialHandle;
 	private int[] particlePhaseLabel;
 	private int particleCount;
+	private FluidMaterialRegistry materialRegistry;
 	private boolean gridDirty = true;
 	private int pressureAnchor = -1;
 	private int lastPressureIterations;
@@ -161,6 +162,7 @@ public final class FlipFluidDomain {
 			setDefaultMaterialState(particle);
 		}
 		particleCount = restoredCount;
+		materialRegistry = null;
 		Arrays.fill(pressure, 0.0F);
 		Arrays.fill(divergence, 0.0F);
 		pressureAnchor = -1;
@@ -171,6 +173,9 @@ public final class FlipFluidDomain {
 
 	/** Exports an immutable CPU marker/velocity/solid handoff without serializing reconstructed density. */
 	public FlipParticleState exportParticleState() {
+		if (hasNonDefaultMaterialState()) {
+			throw new IllegalStateException("Multi-material markers cannot use the pure-water particle handoff");
+		}
 		float[] positionVolume = new float[particleCount * 4];
 		float[] velocities = new float[particleCount * 3];
 		byte[] solidMask = cutCells.copyBinaryFullMask();
@@ -259,6 +264,49 @@ public final class FlipFluidDomain {
 		double result = 0.0;
 		for (int particle = 0; particle < particleCount; particle++) result += particleMass[particle];
 		return result;
+	}
+
+	/** In-memory M3 assignment only; callers outside the fluid package cannot create world material state yet. */
+	void setMaterialInCell(int x, int y, int z, FluidMaterialRegistry registry,
+	                       int materialHandle, int phaseLabel) {
+		if (registry == null) throw new IllegalArgumentException("Material registry must not be null");
+		if (materialRegistry != null && materialRegistry != registry) {
+			throw new IllegalArgumentException("A domain cannot mix runtime handles from different material registries");
+		}
+		int cell = cellIndexChecked(x, y, z);
+		FluidMaterial material = registry.material(materialHandle);
+		boolean found = false;
+		for (int particle = 0; particle < particleCount; particle++) {
+			if (particleCellIndex(particle) != cell) continue;
+			double mass = (double) particleVolume[particle] * material.referenceDensity();
+			if (!(mass <= Float.MAX_VALUE)) throw new IllegalArgumentException("Material mass exceeds P2G range");
+			particleMass[particle] = mass;
+			particleMaterialHandle[particle] = materialHandle;
+			particlePhaseLabel[particle] = phaseLabel;
+			found = true;
+		}
+		if (!found) throw new IllegalArgumentException("Cannot assign material to an empty pressure cell");
+		materialRegistry = registry;
+		gridDirty = true;
+	}
+
+	private boolean hasNonDefaultMaterialState() {
+		for (int particle = 0; particle < particleCount; particle++) {
+			if (particleMaterialHandle[particle] != 0 || particlePhaseLabel[particle] != 0) return true;
+			double referenceMass = (double) particleVolume[particle] * config.density();
+			double tolerance = Math.max(1.0E-9, Math.abs(referenceMass) * 1.0E-12);
+			if (Math.abs(particleMass[particle] - referenceMass) > tolerance) return true;
+		}
+		return false;
+	}
+
+	boolean usesMassWeightedP2G() {
+		for (int particle = 0; particle < particleCount; particle++) {
+			double referenceMass = (double) particleVolume[particle] * config.density();
+			double tolerance = Math.max(1.0E-9, Math.abs(referenceMass) * 1.0E-12);
+			if (Math.abs(particleMass[particle] - referenceMass) > tolerance) return true;
+		}
+		return false;
 	}
 
 	/** Maximum marker speed used only as a scheduling observation; it is not a water-volume estimate. */
@@ -414,6 +462,7 @@ public final class FlipFluidDomain {
 
 	public StepStats step() {
 		float before = totalVolume();
+		double massBefore = totalMass();
 		int substeps = calculateSubsteps(config.timeStep());
 		float dt = config.timeStep() / substeps;
 		int pressureIterations = 0;
@@ -437,18 +486,17 @@ public final class FlipFluidDomain {
 				solid,
 				particleX, particleY, particleZ,
 				particleVelocityX, particleVelocityY, particleVelocityZ,
-				particleVolume, particleCount,
+				particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel,
+				particleCount, usesMassWeightedP2G(),
 				this::markerPositionAllowed
 		);
 		particleCount = reseeding.particleCount();
-		// The active domain is still pure water. Material-aware reseeding arrives with multi-material input.
-		synchronizeDefaultMaterialState();
 		gridDirty = true;
 		rebuildGridFromParticles();
 		return new StepStats(
-				substeps, pressureIterations, lastPressureResidual, before, totalVolume(),
+				substeps, pressureIterations, lastPressureResidual, before, totalVolume(), massBefore, totalMass(),
 				reseeding.merged(), reseeding.split(), reseeding.budgetSkipped(), reseeding.geometrySkipped(),
-				reseeding.ledgerError()
+				reseeding.ledgerError(), reseeding.massLedgerError()
 		);
 	}
 
@@ -462,14 +510,16 @@ public final class FlipFluidDomain {
 		Arrays.fill(velocityWeightX, 0.0F);
 		Arrays.fill(velocityWeightY, 0.0F);
 		Arrays.fill(velocityWeightZ, 0.0F);
+		boolean massWeighted = usesMassWeightedP2G();
 		for (int i = 0; i < particleCount; i++) {
 			int particleCell = particleCellIndex(i);
 			markerCount[particleCell]++;
 			freeSurfaceGeometry.addExactVolume(particleCell, particleVolume[i]);
 			splatCenter(particleX[i], particleY[i], particleZ[i], particleVolume[i]);
-			splatFaceField(velocityX, velocityWeightX, 0, particleX[i], particleY[i], particleZ[i], particleVelocityX[i], particleVolume[i]);
-			splatFaceField(velocityY, velocityWeightY, 1, particleX[i], particleY[i], particleZ[i], particleVelocityY[i], particleVolume[i]);
-			splatFaceField(velocityZ, velocityWeightZ, 2, particleX[i], particleY[i], particleZ[i], particleVelocityZ[i], particleVolume[i]);
+			float transferWeight = massWeighted ? (float) particleMass[i] : particleVolume[i];
+			splatFaceField(velocityX, velocityWeightX, 0, particleX[i], particleY[i], particleZ[i], particleVelocityX[i], transferWeight);
+			splatFaceField(velocityY, velocityWeightY, 1, particleX[i], particleY[i], particleZ[i], particleVelocityY[i], transferWeight);
+			splatFaceField(velocityZ, velocityWeightZ, 2, particleX[i], particleY[i], particleZ[i], particleVelocityZ[i], transferWeight);
 		}
 		normalize(velocityX, velocityWeightX);
 		normalize(velocityY, velocityWeightY);
@@ -939,10 +989,6 @@ public final class FlipFluidDomain {
 		particlePhaseLabel = Arrays.copyOf(particlePhaseLabel, capacity);
 	}
 
-	private void synchronizeDefaultMaterialState() {
-		for (int particle = 0; particle < particleCount; particle++) setDefaultMaterialState(particle);
-	}
-
 	private void setDefaultMaterialState(int particle) {
 		particleMass[particle] = (double) particleVolume[particle] * config.density();
 		particleMaterialHandle[particle] = 0;
@@ -1047,13 +1093,17 @@ public final class FlipFluidDomain {
 			float pressureResidual,
 			float volumeBefore,
 			float volumeAfter,
+			double massBefore,
+			double massAfter,
 			int reseededMerges,
 			int reseededSplits,
 			int reseedBudgetSkipped,
 			int reseedGeometrySkipped,
-			double reseedLedgerError
+			double reseedLedgerError,
+			double reseedMassLedgerError
 	) {
 		public float relativeVolumeError() { return volumeBefore == 0.0F ? 0.0F : Math.abs(volumeAfter - volumeBefore) / volumeBefore; }
+		public double relativeMassError() { return massBefore == 0.0 ? 0.0 : Math.abs(massAfter - massBefore) / massBefore; }
 	}
 
 	public static final class ParticleBudgetExceededException extends IllegalStateException {

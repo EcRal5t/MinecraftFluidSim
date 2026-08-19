@@ -26,7 +26,7 @@ M3 的首个 3D 连通器实验只冻结语义，不冻结 protocol、存档 cod
 - 压力离散使用格内 marker 的 `sum(particleMass) / sum(particleVolume)`，不得从平滑 density、PLIC、渲染体积或 material registry 反向结算库存；registry 的参考密度以后只用于创建/校验和状态方程；
 - `markerCount > 0` 仍决定压力流体格。材料和相标签在同密度情况下不得改变 P2G 拓扑、压力矩阵、右端项或投影速度；真正的液液界面算子在后续变密度增量中才消费这些标签。
 
-活动 `FlipFluidDomain` 已为每个纯水 marker 分配默认 material/phase 与显式质量，但尚未开放多材料输入；网络、`region-state v1` 和世界交互仍保持纯水格式与行为。独立实验继续负责变密度与多材料验收。
+活动 `FlipFluidDomain` 已为 marker 分配 material/phase 与显式质量，包内 CPU 门可注入多材料；质量加权 P2G 和 material/phase 内守恒 reseeding 已接通。正式世界入口、网络和 `region-state v1` 仍保持纯水格式与行为。
 
 最小 `FluidMaterialRegistry` 以稳定字符串键声明材料，按声明顺序分配只在当前进程有效的稠密 handle；handle 不得直接写入存档或网络。当前定义只包含正有限参考密度和互溶组：参考密度只用于创建/校验 marker 质量，互溶性只比较组键。黏度、颜色、species、codec 和数据包加载等到对应数值或展示消费者出现时再加入。
 

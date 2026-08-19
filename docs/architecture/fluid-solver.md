@@ -5,7 +5,8 @@
 ## 状态边界
 
 - **物理真值**：全部 marker `particleVolume` 的精确和。精确加水、删水、碰撞挤水和恢复只按 marker 账本结算。
-- **M3 预接线**：活动 marker 已同时持有默认材料 handle、相标签和显式 `particleMass`；当前世界入口仍只创建纯水，因此质量严格等于 `config.density * particleVolume`，多材料输入尚未开放。
+- **M3 预接线**：活动 marker 同时持有材料 handle、相标签和显式 `particleMass`；包内测试可分配多材料，正式世界入口仍只创建纯水。存在变密度时 P2G 按质量/动量加权，同密度域继续逐位退化到原体积权重路径。
+- **交接边界**：当前 `FlipParticleState` 仍是纯水 handoff。任何非默认 material/phase/mass 状态导出都会显式失败，不能静默丢标签后进入 `region-state v1`。
 - **数值离散**：`markerCount > 0` 决定压力流体格；平滑 `volume[]`、PLIC 分数、cut-cell 开口和目标散度都不是第二套水量。
 - **渲染重建**：客户端使用 density + marker + solid 重建；marker mask 是浅水可见的必要内部种子，渲染不得反写物理。
 - **调度策略**：ACTIVE/REDUCED/休眠/UNLOADED 只控制何时持有或步进状态，不得改变 marker 账本。
@@ -13,14 +14,14 @@
 
 ## 当前 PIC/FLIP 循环
 
-1. marker 向 MAC 网格做 P2G，重建 velocity、平滑 volume 和 containing-cell `markerCount`。
+1. marker 向 MAC 网格做 P2G，重建 velocity、平滑 volume 和 containing-cell `markerCount`；变密度域从 marker 质量/动量求面速度，同密度域保持原体积权重。
 2. 压力相开放 MAC 面向空气外推两层，避免未定义空气数组零值阻尼小水滴。
 3. 施加重力，以共享 cut-face aperture 构造散度和压力系统。
 4. PLIC ghost-fluid `theta` 在压力矩阵、预条件器和投影中保持一致。
 5. 有界 rest-volume 目标只修正数值 marker 压缩，不编辑 `particleVolume`，也不强制液面水平。
 6. 投影后的有效 MAC 速度再次外推，G2P 使用 90% FLIP / 10% PIC。
 7. marker 逐轴扫掠并与 runtime cut-cell 碰撞，只截断命中轴法向。
-8. 每个完整物理步末执行确定性守恒 reseeding：过密格 merge，欠采样格 split，硬预算不足无损跳过。
+8. 每个完整物理步末执行确定性守恒 reseeding：过密格 merge，欠采样格 split，硬预算不足无损跳过；merge 不跨 material/phase，split 同时分割质量并继承标签。
 
 ## 固体与自由表面
 
@@ -32,7 +33,7 @@
 
 ## 当前范围
 
-- 水仍以常密度 1000 simulation units 求压，外部空气使用零表压；显式 marker 质量尚未改变压力算子。
+- 压力仍以常密度 1000 simulation units 求解，外部空气使用零表压；显式 marker 质量已经用于 P2G 与 reseeding，但尚未进入活动压力算子。
 - 服务端 CPU 是物理规范；可选 GPU probe 仍只读、可回退，不写世界或存档。
 - 已接通最多四个有界区域、控制器边界、独立调度和 `region-state v1`；当前集成说明见根 [`README.md`](../../README.md)。
 - 多材料、可变密度、液液界面和组分质量账本尚未进入活动核心，属于 M3。

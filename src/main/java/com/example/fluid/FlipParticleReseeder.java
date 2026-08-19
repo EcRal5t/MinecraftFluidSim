@@ -52,20 +52,27 @@ final class FlipParticleReseeder {
 			float[] velocityY,
 			float[] velocityZ,
 			float[] particleVolume,
+			double[] particleMass,
+			int[] particleMaterialHandle,
+			int[] particlePhaseLabel,
 			int particleCount,
+			boolean massWeightedDynamics,
 			PositionValidator positionValidator
 	) {
 		ensureScratchCapacity(particleX.length);
 		double volumeBefore = totalVolume(particleVolume, particleCount);
+		double massBefore = totalMass(particleMass, particleCount);
 		buildCellLists(particleX, particleY, particleZ, particleVolume, particleCount);
 		MergeResult mergeResult = mergeOverpopulatedCells(
-				particleX, particleY, particleZ, velocityX, velocityY, velocityZ, particleVolume, particleCount,
-				positionValidator
+				particleX, particleY, particleZ, velocityX, velocityY, velocityZ,
+				particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel,
+				particleCount, massWeightedDynamics, positionValidator
 		);
 		int merged = mergeResult.merged();
 		if (merged > 0) {
 			particleCount = compactParticles(
-					particleX, particleY, particleZ, velocityX, velocityY, velocityZ, particleVolume, particleCount
+					particleX, particleY, particleZ, velocityX, velocityY, velocityZ,
+					particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel, particleCount
 			);
 		}
 
@@ -84,7 +91,8 @@ final class FlipParticleReseeder {
 				int source = largestMarker(cell, particleVolume);
 				if (source < 0 || !splitParticle(
 						solid, cell, source, particleCount,
-						particleX, particleY, particleZ, velocityX, velocityY, velocityZ, particleVolume,
+						particleX, particleY, particleZ, velocityX, velocityY, velocityZ,
+						particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel,
 						positionValidator
 				)) {
 					geometrySkipped += minimum - cellMarkerCount[cell];
@@ -99,8 +107,10 @@ final class FlipParticleReseeder {
 		}
 
 		double volumeAfter = totalVolume(particleVolume, particleCount);
+		double massAfter = totalMass(particleMass, particleCount);
 		double ledgerError = volumeAfter - volumeBefore;
-		return new Result(particleCount, merged, split, budgetSkipped, geometrySkipped, ledgerError);
+		return new Result(particleCount, merged, split, budgetSkipped, geometrySkipped,
+				ledgerError, massAfter - massBefore);
 	}
 
 	private MergeResult mergeOverpopulatedCells(
@@ -111,7 +121,11 @@ final class FlipParticleReseeder {
 			float[] velocityY,
 			float[] velocityZ,
 			float[] particleVolume,
+			double[] particleMass,
+			int[] particleMaterialHandle,
+			int[] particlePhaseLabel,
 			int particleCount,
+			boolean massWeightedDynamics,
 			PositionValidator positionValidator
 	) {
 		Arrays.fill(removed, 0, particleCount, false);
@@ -128,14 +142,19 @@ final class FlipParticleReseeder {
 			Arrays.sort(localParticles, 0, localCount);
 			Arrays.fill(representative, 0, localCount, false);
 			selectDistributedRepresentatives(particleX, particleY, particleZ, localCount);
+			ensureMaterialRepresentatives(particleMaterialHandle, particlePhaseLabel, localCount);
 			for (int local = 0; local < localCount; local++) {
 				if (representative[local]) continue;
 				int source = localParticles[local];
-				int targetLocal = nearestRepresentative(particleX, particleY, particleZ, source, localCount);
+				int targetLocal = nearestRepresentative(
+						particleX, particleY, particleZ, particleMaterialHandle, particlePhaseLabel,
+						source, localCount
+				);
 				int target = localParticles[targetLocal];
 				if (!mergeParticleInto(
 						target, source, particleX, particleY, particleZ,
-						velocityX, velocityY, velocityZ, particleVolume, positionValidator
+						velocityX, velocityY, velocityZ, particleVolume, particleMass,
+						massWeightedDynamics, positionValidator
 				)) {
 					geometrySkipped++;
 					continue;
@@ -173,14 +192,35 @@ final class FlipParticleReseeder {
 		}
 	}
 
+	private void ensureMaterialRepresentatives(int[] particleMaterialHandle, int[] particlePhaseLabel, int count) {
+		for (int candidate = 0; candidate < count; candidate++) {
+			int particle = localParticles[candidate];
+			boolean represented = false;
+			for (int existing = 0; existing < count; existing++) if (representative[existing]) {
+				int representativeParticle = localParticles[existing];
+				if (particleMaterialHandle[representativeParticle] == particleMaterialHandle[particle]
+						&& particlePhaseLabel[representativeParticle] == particlePhaseLabel[particle]) {
+					represented = true;
+					break;
+				}
+			}
+			if (!represented) representative[candidate] = true;
+		}
+	}
+
 	private int nearestRepresentative(
-			float[] particleX, float[] particleY, float[] particleZ, int particle, int count
+			float[] particleX, float[] particleY, float[] particleZ,
+			int[] particleMaterialHandle, int[] particlePhaseLabel,
+			int particle, int count
 	) {
 		int best = -1;
 		float bestDistance = Float.POSITIVE_INFINITY;
 		for (int local = 0; local < count; local++) {
 			if (!representative[local]) continue;
-			float distance = distanceSquared(particleX, particleY, particleZ, particle, localParticles[local]);
+			int representativeParticle = localParticles[local];
+			if (particleMaterialHandle[representativeParticle] != particleMaterialHandle[particle]
+					|| particlePhaseLabel[representativeParticle] != particlePhaseLabel[particle]) continue;
+			float distance = distanceSquared(particleX, particleY, particleZ, particle, representativeParticle);
 			if (distance < bestDistance) {
 				bestDistance = distance;
 				best = local;
@@ -199,6 +239,8 @@ final class FlipParticleReseeder {
 			float[] velocityY,
 			float[] velocityZ,
 			float[] particleVolume,
+			double[] particleMass,
+			boolean massWeightedDynamics,
 			PositionValidator positionValidator
 	) {
 		double targetVolume = particleVolume[target];
@@ -211,10 +253,14 @@ final class FlipParticleReseeder {
 		particleX[target] = mergedX;
 		particleY[target] = mergedY;
 		particleZ[target] = mergedZ;
-		velocityX[target] = (float) ((velocityX[target] * targetVolume + velocityX[source] * sourceVolume) / mergedVolume);
-		velocityY[target] = (float) ((velocityY[target] * targetVolume + velocityY[source] * sourceVolume) / mergedVolume);
-		velocityZ[target] = (float) ((velocityZ[target] * targetVolume + velocityZ[source] * sourceVolume) / mergedVolume);
+		double targetWeight = massWeightedDynamics ? particleMass[target] : targetVolume;
+		double sourceWeight = massWeightedDynamics ? particleMass[source] : sourceVolume;
+		double mergedWeight = targetWeight + sourceWeight;
+		velocityX[target] = (float) ((velocityX[target] * targetWeight + velocityX[source] * sourceWeight) / mergedWeight);
+		velocityY[target] = (float) ((velocityY[target] * targetWeight + velocityY[source] * sourceWeight) / mergedWeight);
+		velocityZ[target] = (float) ((velocityZ[target] * targetWeight + velocityZ[source] * sourceWeight) / mergedWeight);
 		particleVolume[target] = (float) mergedVolume;
+		particleMass[target] += particleMass[source];
 		return true;
 	}
 
@@ -230,6 +276,9 @@ final class FlipParticleReseeder {
 			float[] velocityY,
 			float[] velocityZ,
 			float[] particleVolume,
+			double[] particleMass,
+			int[] particleMaterialHandle,
+			int[] particlePhaseLabel,
 			PositionValidator positionValidator
 	) {
 		int x = cell % sizeX;
@@ -272,13 +321,18 @@ final class FlipParticleReseeder {
 				}
 			}
 		}
-		copyParticle(source, destination, particleX, particleY, particleZ, velocityX, velocityY, velocityZ, particleVolume);
+		copyParticle(source, destination, particleX, particleY, particleZ,
+				velocityX, velocityY, velocityZ, particleVolume, particleMass,
+				particleMaterialHandle, particlePhaseLabel);
 		particleX[destination] = destinationX;
 		particleY[destination] = destinationY;
 		particleZ[destination] = destinationZ;
 		float firstVolume = particleVolume[source] * 0.5F;
 		particleVolume[destination] = particleVolume[source] - firstVolume;
 		particleVolume[source] = firstVolume;
+		double firstMass = particleMass[source] * 0.5;
+		particleMass[destination] = particleMass[source] - firstMass;
+		particleMass[source] = firstMass;
 		return true;
 	}
 
@@ -339,6 +393,9 @@ final class FlipParticleReseeder {
 			float[] velocityY,
 			float[] velocityZ,
 			float[] particleVolume,
+			double[] particleMass,
+			int[] particleMaterialHandle,
+			int[] particlePhaseLabel,
 			int particleCount
 	) {
 		int destination = 0;
@@ -346,7 +403,8 @@ final class FlipParticleReseeder {
 			if (removed[source]) continue;
 			if (destination != source) copyParticle(
 					source, destination, particleX, particleY, particleZ,
-					velocityX, velocityY, velocityZ, particleVolume
+					velocityX, velocityY, velocityZ, particleVolume, particleMass,
+					particleMaterialHandle, particlePhaseLabel
 			);
 			destination++;
 		}
@@ -362,7 +420,10 @@ final class FlipParticleReseeder {
 			float[] velocityX,
 			float[] velocityY,
 			float[] velocityZ,
-			float[] particleVolume
+			float[] particleVolume,
+			double[] particleMass,
+			int[] particleMaterialHandle,
+			int[] particlePhaseLabel
 	) {
 		particleX[destination] = particleX[source];
 		particleY[destination] = particleY[source];
@@ -371,6 +432,9 @@ final class FlipParticleReseeder {
 		velocityY[destination] = velocityY[source];
 		velocityZ[destination] = velocityZ[source];
 		particleVolume[destination] = particleVolume[source];
+		particleMass[destination] = particleMass[source];
+		particleMaterialHandle[destination] = particleMaterialHandle[source];
+		particlePhaseLabel[destination] = particlePhaseLabel[source];
 	}
 
 	private int minimumMarkers(float exactVolume) {
@@ -405,6 +469,12 @@ final class FlipParticleReseeder {
 		return total;
 	}
 
+	private static double totalMass(double[] particleMass, int particleCount) {
+		double total = 0.0;
+		for (int particle = 0; particle < particleCount; particle++) total += particleMass[particle];
+		return total;
+	}
+
 	private void ensureScratchCapacity(int particleCapacity) {
 		if (nextParticle.length < particleCapacity) nextParticle = new int[particleCapacity];
 		if (removed.length < particleCapacity) removed = new boolean[particleCapacity];
@@ -428,6 +498,7 @@ final class FlipParticleReseeder {
 			int split,
 			int budgetSkipped,
 			int geometrySkipped,
-			double ledgerError
+			double ledgerError,
+			double massLedgerError
 	) { }
 }

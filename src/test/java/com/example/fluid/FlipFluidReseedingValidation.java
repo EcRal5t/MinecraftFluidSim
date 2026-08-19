@@ -13,6 +13,7 @@ public final class FlipFluidReseedingValidation {
 		nonBinaryVolumesRemainWithinFloatLedgerTolerance();
 		hardBudgetSkipsWithoutMutation();
 		reseedingIsBitDeterministic();
+		multiMaterialReseedingPreservesInventories();
 		longRunShearDistributionRemainsBounded();
 		longRunDamBreakDistributionRemainsBounded();
 		System.out.println("FlipFluid reseeding validation passed");
@@ -115,6 +116,41 @@ public final class FlipFluidReseedingValidation {
 			fixture.volume[particle] = 0.0625F;
 		}
 		return fixture;
+	}
+
+	private static void multiMaterialReseedingPreservesInventories() {
+		Fixture fixture = new Fixture(64, 16);
+		for (int particle = 0; particle < fixture.count; particle++) {
+			fixture.x[particle] = 1.10F + 0.20F * (particle & 3);
+			fixture.y[particle] = 1.15F + 0.20F * ((particle >> 2) & 3);
+			fixture.z[particle] = 1.20F + 0.10F * (particle & 1);
+			fixture.vx[particle] = (particle % 4 - 2) * 0.125F;
+			fixture.vy[particle] = (particle % 3 - 1) * 0.25F;
+			fixture.vz[particle] = (particle & 1) == 0 ? 0.125F : -0.125F;
+			fixture.volume[particle] = 0.0625F;
+			boolean second = (particle & 1) != 0;
+			fixture.mass[particle] = fixture.volume[particle] * (second ? 800.0 : 1_000.0);
+			fixture.material[particle] = second ? 202 : 101;
+			fixture.phase[particle] = second ? 22 : 11;
+		}
+		MaterialLedger before = fixture.materialLedger(fixture.count);
+		FlipParticleReseeder.Result result = fixture.reseedMaterialAware(64);
+		MaterialLedger after = fixture.materialLedger(result.particleCount());
+		check(result.merged() > 0 && result.particleCount() <= 12,
+				"multi-material overpopulation did not reduce without crossing labels: " + result);
+		check(Math.abs(result.massLedgerError()) <= 1.0E-12, "multi-material reseeding changed exact mass");
+		check(Math.abs(after.massA - before.massA) <= 1.0E-12
+				&& Math.abs(after.massB - before.massB) <= 1.0E-12,
+				"multi-material reseeding moved mass across material ledgers");
+		check(Math.abs(after.momentumX - before.momentumX) <= 2.0E-5
+				&& Math.abs(after.momentumY - before.momentumY) <= 2.0E-5
+				&& Math.abs(after.momentumZ - before.momentumZ) <= 2.0E-5,
+				"multi-material reseeding changed mass-weighted momentum");
+		for (int particle = 0; particle < result.particleCount(); particle++) {
+			check((fixture.material[particle] == 101 && fixture.phase[particle] == 11)
+					|| (fixture.material[particle] == 202 && fixture.phase[particle] == 22),
+					"reseeding crossed a material/phase boundary");
+		}
 	}
 
 	private static void longRunShearDistributionRemainsBounded() {
@@ -323,6 +359,9 @@ public final class FlipFluidReseedingValidation {
 		private final float[] vy;
 		private final float[] vz;
 		private final float[] volume;
+		private final double[] mass;
+		private final int[] material;
+		private final int[] phase;
 		private final int count;
 
 		private Fixture(int capacity, int count) {
@@ -333,14 +372,38 @@ public final class FlipFluidReseedingValidation {
 			this.vy = new float[capacity];
 			this.vz = new float[capacity];
 			this.volume = new float[capacity];
+			this.mass = new double[capacity];
+			this.material = new int[capacity];
+			this.phase = new int[capacity];
 			this.count = count;
 		}
 
 		private FlipParticleReseeder.Result reseed(int maximumParticleCount) {
+			for (int particle = 0; particle < count; particle++) mass[particle] = volume[particle] * 1_000.0;
 			return new FlipParticleReseeder(SIZE, SIZE, SIZE, CELL_SIZE, maximumParticleCount).reseed(
-					solid, x, y, z, vx, vy, vz, volume, count,
+					solid, x, y, z, vx, vy, vz, volume, mass, material, phase, count, false,
 					(candidateX, candidateY, candidateZ) -> true
 			);
+		}
+
+		private FlipParticleReseeder.Result reseedMaterialAware(int maximumParticleCount) {
+			return new FlipParticleReseeder(SIZE, SIZE, SIZE, CELL_SIZE, maximumParticleCount).reseed(
+					solid, x, y, z, vx, vy, vz, volume, mass, material, phase, count, true,
+					(candidateX, candidateY, candidateZ) -> true
+			);
+		}
+
+		private MaterialLedger materialLedger(int particleCount) {
+			double massA = 0.0, massB = 0.0;
+			double momentumX = 0.0, momentumY = 0.0, momentumZ = 0.0;
+			for (int particle = 0; particle < particleCount; particle++) {
+				if (material[particle] == 101) massA += mass[particle];
+				else if (material[particle] == 202) massB += mass[particle];
+				momentumX += mass[particle] * vx[particle];
+				momentumY += mass[particle] * vy[particle];
+				momentumZ += mass[particle] * vz[particle];
+			}
+			return new MaterialLedger(massA, massB, momentumX, momentumY, momentumZ);
 		}
 
 		private Ledger ledger() {
@@ -376,6 +439,14 @@ public final class FlipFluidReseedingValidation {
 			double centroidX,
 			double centroidY,
 			double centroidZ
+	) { }
+
+	private record MaterialLedger(
+			double massA,
+			double massB,
+			double momentumX,
+			double momentumY,
+			double momentumZ
 	) { }
 
 	private record Distribution(

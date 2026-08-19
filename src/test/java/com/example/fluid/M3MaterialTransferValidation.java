@@ -13,6 +13,7 @@ final class M3MaterialTransferValidation {
 	static Summary validate() {
 		FluidMaterialRegistry registry = registry();
 		validateRegistry(registry);
+		validateActiveDomainP2G(registry);
 
 		Markers equalDensity = markers(registry, false);
 		Transfer equalTransfer = transfer(equalDensity);
@@ -28,6 +29,52 @@ final class M3MaterialTransferValidation {
 		return new Summary(variableDensity.totalVolume(), variableDensity.totalMass(),
 				variableDensity.momentum(0), maximumDifference(
 						variableTransfer.volumeWeightedVelocity(), variableTransfer.massWeightedVelocity()));
+	}
+
+	private static void validateActiveDomainP2G(FluidMaterialRegistry registry) {
+		FlipFluidDomain pure = activeDomainWithShear();
+		FlipFluidDomain equal = activeDomainWithShear();
+		FlipFluidDomain variable = activeDomainWithShear();
+		int a = registry.handle("realwater:material_a");
+		int b = registry.handle("realwater:material_b");
+		int c = registry.handle("realwater:material_c");
+		equal.setMaterialInCell(1, 1, 1, registry, a, 11);
+		equal.setMaterialInCell(2, 1, 1, registry, b, 22);
+		variable.setMaterialInCell(1, 1, 1, registry, a, 11);
+		variable.setMaterialInCell(2, 1, 1, registry, c, 33);
+		check(!pure.usesMassWeightedP2G() && !equal.usesMassWeightedP2G(),
+				"pure or equal-density active domain left the strict volume-weighted path");
+		check(variable.usesMassWeightedP2G(), "variable-density active domain did not enable mass-weighted P2G");
+		float pureVelocity = pure.sampleVelocity(2.0F, 1.5F, 1.5F).x();
+		float equalVelocity = equal.sampleVelocity(2.0F, 1.5F, 1.5F).x();
+		float variableVelocity = variable.sampleVelocity(2.0F, 1.5F, 1.5F).x();
+		check(Float.floatToRawIntBits(pureVelocity) == Float.floatToRawIntBits(equalVelocity),
+				"equal-density material labels changed active P2G velocity");
+		check(Math.abs(variableVelocity - pureVelocity) > 1.0E-4F,
+				"active variable-density P2G did not change the shared face velocity");
+		checkClose(variable.totalMass(), 1_800.0, "active marker mass ledger");
+		expectIllegalState(variable::exportParticleState);
+	}
+
+	private static FlipFluidDomain activeDomainWithShear() {
+		FluidSolverConfig config = new FluidSolverConfig(
+				1.0F, 1_000.0F, 0.0F, 1.0F / 20.0F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F
+		);
+		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 64);
+		domain.setVolume(1, 1, 1, 1.0F);
+		domain.setVolume(2, 1, 1, 1.0F);
+		FlipParticleState initial = domain.exportParticleState();
+		float[] positionVolume = initial.copyPositionVolume();
+		float[] velocity = initial.copyParticleVelocities();
+		for (int particle = 0; particle < initial.particleCount(); particle++) {
+			velocity[particle * 3] = positionVolume[particle * 4] >= 2.0F ? 1.0F : 0.0F;
+		}
+		domain.restoreParticleState(new FlipParticleState(
+				domain.sizeX(), domain.sizeY(), domain.sizeZ(), config.cellSize(), initial.particleCount(),
+				initial.totalVolume(), positionVolume, velocity, initial.copySolidMask()
+		));
+		return domain;
 	}
 
 	private static FluidMaterialRegistry registry() {
@@ -155,6 +202,15 @@ final class M3MaterialTransferValidation {
 			action.run();
 			throw new AssertionError("Expected invalid material state to be rejected");
 		} catch (IllegalArgumentException expected) {
+			// Expected.
+		}
+	}
+
+	private static void expectIllegalState(Runnable action) {
+		try {
+			action.run();
+			throw new AssertionError("Expected unsupported multi-material handoff to fail closed");
+		} catch (IllegalStateException expected) {
 			// Expected.
 		}
 	}
