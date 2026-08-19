@@ -18,7 +18,7 @@
 | 初始化、tick、启动/停止恢复、网络注册 | `src/main/java/com/example/RealWaterMod.java` | 服务生命周期与 payload 注册 |
 | 多区域 Minecraft 编排、独立 tick、物理交互、全域快照与 takeover | `src/main/java/com/example/simulation/FluidSimulationService.java` | 每域必须先完整通过 availability 才能读/步进；快照必须使用本域 id/generation/sequence；takeover 世界事务仍只在服务层 |
 | checkpoint 重试、UNLOADED 往返、持久删除与区域管理 | `src/main/java/com/example/simulation/FluidRegionOperations.java` | 缺 chunk/破边界先暂停并发布，成功才释放；恢复保持暂停并通过回调刷新当前碰撞；不直接 step solver 或修改世界方块 |
-| 指定区域的 Minecraft 碰撞采样与实体单向耦合 | `src/main/java/com/example/simulation/FluidRegionWorldInteraction.java` | 不得隐式读取 selected region；碰撞挤水仍按 marker 账本恢复；实体只受 region AABB 内本域流速影响 |
+| 指定区域的 Minecraft 碰撞采样与实体单向耦合 | `src/main/java/com/example/simulation/FluidRegionWorldInteraction.java` | 不得隐式读取 selected region；每方块 `VoxelShape` 保守采样成 `4x4x4` 微体素；碰撞挤水仍按 marker 账本恢复；实体只受 region AABB 内本域流速影响 |
 | CPU 域数组构造与只读原版水采样 | `src/main/java/com/example/simulation/FluidRegionFactory.java` | marker 硬上限必须等于 manager 预留；采样只写 `particleVolume`，不得从平滑 density 结算 |
 | 区域身份、硬 marker 预算、metadata-only solver ownership 与独立运行态 | `src/main/java/com/example/simulation/FluidRegion.java` | tick/调频/碰撞/实体/debug 跟随区域；UNLOADED 仍占预算但不持 solver/marker 数组；restore 后必须先重采样碰撞；精确水量仍只来自 marker `particleVolume` |
 | ACTIVE/REDUCED/静水休眠与 checkpoint 门控的 UNLOADED 状态 | `src/main/java/com/example/simulation/FluidRegionLifecycle.java` | `runFluidRegionLifecycleValidation`；缺完整已发布 checkpoint 或未释放 live solver 必须拒绝 UNLOADED；restore 保持 operator pause；状态只属调度，不得从 density 推断水量 |
@@ -28,8 +28,10 @@
 | `region-state v1` 数据、codec、CRC 与两槽原子文件 | `src/main/java/com/example/simulation/persistence/`、`docs/region-state-v1.md` | marker 原始顺序/position/`particleVolume`/velocity/solid 必须闭合；section UUID/dimension/generation/CRC 与 manifest 一致；HEAD 永远最后发布；改动跑 `runFluidRegionPersistenceValidation` |
 | 控制器与可见边界方块注册/交互 | `src/main/java/com/example/block/RealWaterBlocks.java`、`FluidControllerBlock.java` | 默认 feature flag 关闭；只读激活，不得扩大 takeover；同步 blockstate/model/item/loot/lang 资源 |
 | 可见闭合边界扫描、footprint 与非加载 chunk 复核 | `src/main/java/com/example/simulation/controller/FluidBoundaryScanner.java`、`FluidRegionFootprint.java`、`FluidControllerRegions.java` | 只认专用边界/控制器；任何目标 block state 前先 `getChunkNow`；缺 chunk、破口、多内腔或预算超限必须拒绝/整域暂停 |
-| 活动 PIC/FLIP 编排与 marker 硬上限 | `src/main/java/com/example/fluid/FlipFluidDomain.java` | P2G、PCG、投影、90/10 G2P、逐轴碰撞；所有 marker 创建/恢复路径受实例预算约束；Minecraft 不使用旧 `FluidDomain` |
-| M2.5 PLIC 自由表面几何与 ghost-fluid 权重 | `src/main/java/com/example/fluid/FlipFreeSurfaceGeometry.java`、`docs/m2.5-free-surface-reseeding.md` | 每格分数只来自该格 marker `particleVolume` 精确和；`markerCount` 仍决定压力相区；矩阵、预条件器和投影必须共用同一 `theta`；当前 solid 在 solver-cell 分辨率仍为 0/1 |
+| 活动 PIC/FLIP 编排与 marker 硬上限 | `src/main/java/com/example/fluid/FlipFluidDomain.java` | P2G、PCG、投影、90/10 G2P 与各数值 helper 的唯一活动编排；所有 marker 创建/恢复路径受实例预算约束；Minecraft 不使用旧 `FluidDomain` |
+| M2.5 runtime cut-cell 体积与共享面开口 | `src/main/java/com/example/fluid/FlipCutCellGeometry.java`、`FluidRegionWorldInteraction.java` | `2x2x2`/solver-cell occupancy 只属运行时数值几何；散度、矩阵、预条件器、投影共用同一 face aperture；`region-state v1` 只存 full-solid fallback，restore 必须先重采样 |
+| M2.5 marker normal-only CCD | `src/main/java/com/example/fluid/FlipParticleCollision.java` | partial solid 用微体素扫掠点碰撞，完整 solid 保持 `0.45h`；命中只截断法向轴，切向不可冻结；改动跑 cut-cell 与墙角门 |
+| M2.5 PLIC 自由表面几何与 ghost-fluid 权重 | `src/main/java/com/example/fluid/FlipFreeSurfaceGeometry.java`、`docs/m2.5-free-surface-reseeding.md` | 每格分数只来自该格 marker `particleVolume` 精确和除以 runtime open volume；`markerCount` 仍决定压力相区；矩阵、预条件器和投影必须共用同一 `theta` 与 cut-face aperture |
 | M2.5 守恒 marker 重采样 | `src/main/java/com/example/fluid/FlipParticleReseeder.java`、`docs/m2.5-free-surface-reseeding.md` | 完整 step 后先 merge 再 split；体积、动量、体积质心与遍历确定性必须闭合；预算不足只能跳过 split，不能删 marker 或从 density 补水 |
 | CPU marker 内存交接状态 | `src/main/java/com/example/fluid/FlipParticleState.java` | 不可变位置/体积/速度/solid；`particleVolume` 账本必须闭合；不是存档或渲染协议 |
 | CPU 变密度面系数实验 | `src/test/java/com/example/fluid/VariableDensityPressureExperiment.java` | 门在 `VariableDensityFaceCoefficientValidation.java`；它只选 M3 候选，尚未接入活动核心 |
@@ -47,8 +49,9 @@
 - 精确水量或粒子丢失：`setSolid`、`spawnCellVolume`、`removeParticlesInCell`、服务层 `escaped`。
 - 压力/散度：`isFluid`、`solvePressure`、`applyPressureMatrix`、`projectVelocity`。
 - 分数自由表面：`FlipFreeSurfaceGeometry.rebuild`、`pressureTheta`、`pressureFaceCoefficient`、`pressureDifference`；先跑 `runFlipFreeSurfaceValidation`。
+- partial 方块、面开口或挤水：`FlipCutCellGeometry`、`FlipParticleCollision`、`FluidRegionWorldInteraction.sampleCutCellMask`、`setSolidMicroMask`；先跑 `runFlipCutCellValidation` + `runFluidCutCellShapeValidation`。
 - marker 长期压缩/过密：`FlipParticleReseeder`、`StepStats` 的 reseed 诊断；先跑 `runFlipReseedingValidation`，不要用渲染扩张或强制找平。
-- 墙边/墙角卡住：`advectParticles`、`constrainToSolidFaces`；碰撞只约束墙面法向。
+- 墙边/墙角卡住：`FlipParticleCollision.advect` 与 `constrainToFullSolidFaces`；碰撞只约束墙面法向。
 - 水量正常但水面消失：payload marker mask、renderer `scalar` 与等值面阈值。
 - 调度异常：服务 `tickRegion`、`stepOnce`、`updateStepPacing`，`FluidRegionLifecycle` 与 status 的 wall time/substeps/PCG residual；先区分 operator pause、availability block 和 lifecycle state。
 
@@ -85,7 +88,8 @@
 | `region-state`、server config、checkpoint、UNLOADED 或删除 | `runFluidRegionPersistenceValidation` + `runFluidRegionManagerValidation` + `runFluidRegionLifecycleValidation` | 改 entrypoint/资源再跑 EULA=false 专服；真实跨 chunk 离开/返回与重启闭环在里程碑 smoke 时进服 |
 | 网络协议、payload header、capability 或客户端排序 | `runFluidNetworkProtocolValidation` + `compileTestJava` | 改 Fabric 配置/入口注册再跑 EULA=false `:runServer`；真实多人/重连渲染只有需要时进服 |
 | 控制器、边界扫描、footprint 或完整加载判定 | `runFluidBoundaryScannerValidation` + `runFluidRegionManagerValidation` | 方块注册/资源变化再跑 EULA=false `runServer`；真实放置、右键和跨 chunk 卸载只有请求进服时再 smoke |
-| CPU 压力、自由表面或碰撞 | `compileTestJava` + `runFlipFreeSurfaceValidation` + `FlipFluidDomainValidation`；表面相关再跑 surface diagnostic | marker export/restore 或持久状态受影响时再加 region-state/manager/lifecycle；takeover 改动另跑 16 场景 |
+| CPU 压力、自由表面或 binary 碰撞 | `compileTestJava` + `runFlipFreeSurfaceValidation` + `FlipFluidDomainValidation`；表面相关再跑 surface diagnostic | marker export/restore 或持久状态受影响时再加 region-state/manager/lifecycle；takeover 改动另跑 16 场景 |
+| runtime cut-cell、partial `VoxelShape`、face aperture 或 CCD | `runFlipCutCellValidation` + `runFluidCutCellShapeValidation` + `runFlipFreeSurfaceValidation` + `FlipFluidDomainValidation` | 改 binary checkpoint fallback/restore 门时加 persistence/manager/lifecycle；真实 partial block/mesh 只在里程碑签收时按 `m2.5-cut-cell-smoke.md` 进服 |
 | CPU marker 创建、merge/split 或长期分布 | `runFlipReseedingValidation` + `FlipFluidDomainValidation`；表面相关再跑 surface diagnostic | 改 `FlipParticleState`、预算或 checkpoint 路径时再加 region-state/manager/lifecycle；只有请求进服验证或发布时才 clean build |
 | takeover/codec/文件事务 | `runTakeoverJournalValidation` | 真实世界修改只按 smoke 文档并保留备份 |
 | 指令 transcript | `runCommandAuditValidation` | Fabric 命令包装变化再进服 |
@@ -123,6 +127,7 @@ CPU 与事务入口：
 ```powershell
 ./gradlew.bat runVariableDensityFaceCoefficientValidation --offline --no-daemon
 ./gradlew.bat runFlipFreeSurfaceValidation runFlipReseedingValidation --offline --no-daemon
+./gradlew.bat runFlipCutCellValidation runFluidCutCellShapeValidation --offline --no-daemon
 ./gradlew.bat runFluidRegionManagerValidation --offline --no-daemon
 ./gradlew.bat runFluidRegionLifecycleValidation --offline --no-daemon
 ./gradlew.bat runFluidRegionPersistenceValidation --offline --no-daemon
@@ -152,4 +157,4 @@ probe 0.1.16 将每个 50 ms GPU 物理步明确离散为四个 12.5 ms 子步�
 
 M2 已完成：protocol v1、多区域客户端排序、可见控制器边界、跨 chunk 完整加载、世界级 feature flag/预算、管理命令和 `region-state v1` 均已接通。持久化按 Minecraft section 保存 marker 原始顺序、position/`particleVolume`、velocity 与 solid slice；两槽完整代次校验后最后原子替换 HEAD。缺任一 chunk、破边界或关闭控制器功能门会先整域暂停并 checkpoint，成功才释放 solver 进入 metadata-only `UNLOADED`；恢复保持 operator pause 且先重采样当前碰撞。自动 fault matrix、反复 unload/restore、损坏拒绝和 metadata budget 门在 `runFluidRegionPersistenceValidation`。2026-08-19 的四 chunk 实机门又确认 chunk 离开/返回、破坏/修复边界和正常重启均保持同一 UUID、3,100 marker 与 377.77777 cell-volume，详见 [`m2-region-state-smoke.md`](m2-region-state-smoke.md)。仍无永久 chunk ticket，takeover 边界与 journal v1 未变，GPU probe 仍只读可选。
 
-M2.5 第一活动增量已接通：每个 marker 占据格从精确 `particleVolume` 和重建 PLIC 平面，fluid-air 面在压力矩阵、对角预条件器和投影中共用 `theta >= 0.05`；格心以下的极薄层明确走正则化，不伪称得到未解析的压力位置。完整 step 后的 deterministic reseeding 对 `>12` marker 格先合并到 8，再按精确格体积把欠采样格维持在 1/2/4 marker 下限，硬预算拒绝无损。固定种子门覆盖任意非整数静水面、0.25 格薄层、阶梯斜面、墙角切向运动、5,000 步剪切和 5,000 步动态 dam-break；后者保持 `y=1..3`、每个至少半格水的格 `>=4` marker、最大 11，精确总体积不变。`region-state v1`、protocol、takeover 与 GPU shader 均未改变。M2.5 尚未关闭：Minecraft 碰撞目前仍在每轴两个 solver cell 的分辨率离散成 binary solid；真正的 cut-cell fluid-solid 面积/体积分数需要先完成运行态、checkpoint 兼容与 `region-state v1` 迁移/可选扩展评审。
+M2.5 自动实现已接通：PLIC fluid-air `theta`、deterministic conservative reseeding，以及 runtime `2x2x2`/solver-cell cut-solid 均进入活动 CPU 核心。散度、压力矩阵、对角预条件器和投影共用共享 face aperture；marker 扫掠只截断 partial wall 法向。方块变化按 marker 中心占据和 `exactCellVolume <= openVolume` 两条 exact ledger 规则挤水。`region-state v1` 不迁移：只持久化 full-solid fallback，metadata-only restore 在任何 step/快照前必须从完整已加载世界同步重建 partial mask。自动门覆盖自由面、reseeding、cut-cell 面/体积分数、normal-only CCD、600 步 partial obstacle、slab/stair/post/pane 采样和 persistence/lifecycle/protocol 回归。protocol、takeover 与 GPU shader 均未改变。真实 Minecraft partial-shape collision/visual smoke 尚待按 [`m2.5-cut-cell-smoke.md`](m2.5-cut-cell-smoke.md) 签收；通过后即可关闭 M2.5。

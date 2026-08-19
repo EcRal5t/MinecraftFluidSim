@@ -26,9 +26,11 @@ public final class FlipFluidDomain {
 	private final FluidSolverConfig config;
 	private final int maximumParticleCount;
 	private final boolean[] solid;
+	private final FlipCutCellGeometry cutCells;
 	private final int[] markerCount;
 	private final FlipFreeSurfaceGeometry freeSurfaceGeometry;
 	private final FlipParticleReseeder particleReseeder;
+	private final FlipParticleCollision particleCollision;
 	private final float[] volume;
 	private final float[] pressure;
 	private final float[] divergence;
@@ -84,9 +86,11 @@ public final class FlipFluidDomain {
 		this.particleVelocityZ = new float[initialParticleCapacity];
 		this.particleVolume = new float[initialParticleCapacity];
 		this.solid = new boolean[cellCount];
+		this.cutCells = new FlipCutCellGeometry(sizeX, sizeY, sizeZ);
 		this.markerCount = new int[cellCount];
 		this.freeSurfaceGeometry = new FlipFreeSurfaceGeometry(sizeX, sizeY, sizeZ);
 		this.particleReseeder = new FlipParticleReseeder(sizeX, sizeY, sizeZ, config.cellSize(), maximumParticleCount);
+		this.particleCollision = new FlipParticleCollision(sizeX, sizeY, sizeZ, config.cellSize(), solid, cutCells);
 		this.volume = new float[cellCount];
 		this.pressure = new float[cellCount];
 		this.divergence = new float[cellCount];
@@ -129,6 +133,7 @@ public final class FlipFluidDomain {
 		float[] positionVolume = state.positionVolume();
 		float[] particleVelocities = state.particleVelocities();
 		byte[] solidMask = state.solidMask();
+		cutCells.restoreBinaryMask(solidMask);
 		for (int i = 0; i < cellCount; i++) solid[i] = solidMask[i] != 0;
 		for (int particle = 0; particle < restoredCount; particle++) {
 			int positionBase = particle * 4, velocityBase = particle * 3;
@@ -153,8 +158,7 @@ public final class FlipFluidDomain {
 	public FlipParticleState exportParticleState() {
 		float[] positionVolume = new float[particleCount * 4];
 		float[] velocities = new float[particleCount * 3];
-		byte[] solidMask = new byte[cellCount];
-		for (int index = 0; index < cellCount; index++) solidMask[index] = (byte) (solid[index] ? 1 : 0);
+		byte[] solidMask = cutCells.copyBinaryFullMask();
 		for (int particle = 0; particle < particleCount; particle++) {
 			int positionBase = particle * 4;
 			int velocityBase = particle * 3;
@@ -174,22 +178,44 @@ public final class FlipFluidDomain {
 
 	/** Sets collision occupancy and returns the exact particle volume displaced. */
 	public float setSolid(int x, int y, int z, boolean value) {
+		return setSolidMicroMask(x, y, z, value ? FlipCutCellGeometry.FULL_MASK : 0);
+	}
+
+	/**
+	 * Replaces one runtime 2x2x2 cut-cell mask and returns exact marker volume
+	 * whose centers became occupied or exceeds the new open-cell capacity. This
+	 * geometry is deliberately not persisted.
+	 */
+	public float setSolidMicroMask(int x, int y, int z, int mask) {
 		int index = cellIndexChecked(x, y, z);
-		if (solid[index] == value) return 0.0F;
-		solid[index] = value;
+		int previous = cutCells.mask(index);
+		if (previous == mask) return 0.0F;
+		cutCells.replaceMask(index, mask);
+		solid[index] = mask == FlipCutCellGeometry.FULL_MASK;
 		pressure[index] = 0.0F;
-		float displaced = value ? removeParticlesInCell(x, y, z, Float.POSITIVE_INFINITY) : 0.0F;
+		int newlyOccupied = mask & ~previous;
+		float displaced = newlyOccupied == 0 ? 0.0F : removeParticlesInMicroMask(x, y, z, newlyOccupied);
+		float excess = Math.max(0.0F, exactVolumeInCell(x, y, z) - cutCells.openCellVolume(index));
+		if (excess > 1.0E-6F) displaced += removeParticlesInCell(x, y, z, excess);
 		volume[index] = 0.0F;
 		gridDirty = true;
 		return displaced;
 	}
 
 	public boolean isSolid(int x, int y, int z) { return solid[cellIndexChecked(x, y, z)]; }
+	public int solidMicroMask(int x, int y, int z) { return cutCells.mask(cellIndexChecked(x, y, z)); }
+	public float solidVolumeFraction(int x, int y, int z) {
+		return 1.0F - cutCells.openCellVolume(cellIndexChecked(x, y, z));
+	}
+	public float openFaceFractionX(int x, int y, int z) { return cutCells.xFaceOpen(x, y, z); }
+	public float openFaceFractionY(int x, int y, int z) { return cutCells.yFaceOpen(x, y, z); }
+	public float openFaceFractionZ(int x, int y, int z) { return cutCells.zFaceOpen(x, y, z); }
 
 	public void setVolume(int x, int y, int z, float value) {
 		int index = cellIndexChecked(x, y, z);
-		float clamped = clamp01(value);
-		if (solid[index] && clamped > 0.0F) throw new IllegalStateException("Cannot place fluid in a solid cell");
+		float requested = clamp01(value);
+		if (solid[index] && requested > 0.0F) throw new IllegalStateException("Cannot place fluid in a solid cell");
+		float clamped = Math.min(requested, cutCells.openCellVolume(index));
 		int existingParticles = particleCountInCell(x, y, z);
 		int requiredParticles = particlesRequired(clamped);
 		if ((long) particleCount - existingParticles + requiredParticles > maximumParticleCount) {
@@ -250,9 +276,7 @@ public final class FlipFluidDomain {
 	}
 
 	public byte[] copySolidMask() {
-		byte[] result = new byte[cellCount];
-		for (int i = 0; i < cellCount; i++) result[i] = solid[i] ? (byte) 1 : (byte) 0;
-		return result;
+		return cutCells.copyBinaryFullMask();
 	}
 
 	/** Actual pressure-phase occupancy, separate from the smooth P2G density. */
@@ -274,14 +298,27 @@ public final class FlipFluidDomain {
 		return new VolumeDistribution(active, visible, dense);
 	}
 
+	public SolidDistribution solidDistribution() {
+		int partial = 0, full = 0;
+		for (int index = 0; index < cellCount; index++) {
+			int mask = cutCells.mask(index);
+			if (mask == FlipCutCellGeometry.FULL_MASK) full++;
+			else if (mask != 0) partial++;
+		}
+		return new SolidDistribution(partial, full);
+	}
+
 	public boolean containsFluidAt(float localX, float localY, float localZ) {
 		ensureGrid();
 		float h = config.cellSize();
 		int x = (int) Math.floor(localX / h), y = (int) Math.floor(localY / h), z = (int) Math.floor(localZ / h);
 		if (!inside(x, y, z)) return false;
 		int index = cellIndex(x, y, z);
-		if (solid[index] || volume[index] <= config.fluidEpsilon()) return false;
-		return localY - y * h < clamp01(volume[index]) * h;
+		if (solid[index] || cutCells.pointInsideSolid(localX, localY, localZ, h)
+				|| volume[index] <= config.fluidEpsilon()) return false;
+		float openVolume = cutCells.openCellVolume(index);
+		float reconstructedFill = openVolume <= 0.0F ? 0.0F : clamp01(volume[index] / openVolume);
+		return localY - y * h < reconstructedFill * h;
 	}
 
 	public VelocitySample sampleVelocity(float localX, float localY, float localZ) {
@@ -317,7 +354,8 @@ public final class FlipFluidDomain {
 		for (CellCandidate candidate : nearbyCells(centerX, centerY, centerZ, maxRadius)) {
 			int index = candidate.index();
 			int x = index % sizeX, yz = index / sizeX, y = yz % sizeY, z = yz / sizeY;
-			float requestedForCell = Math.min(remaining, Math.max(0.0F, 1.0F - exactCellVolume[index]));
+			float requestedForCell = Math.min(remaining,
+					Math.max(0.0F, cutCells.openCellVolume(index) - exactCellVolume[index]));
 			int availableMarkers = maximumParticleCount - particleCount;
 			float markerCapacity = availableMarkers * PARTICLE_VOLUME;
 			float added = Math.min(requestedForCell, markerCapacity);
@@ -376,7 +414,8 @@ public final class FlipFluidDomain {
 				solid,
 				particleX, particleY, particleZ,
 				particleVelocityX, particleVelocityY, particleVelocityZ,
-				particleVolume, particleCount
+				particleVolume, particleCount,
+				this::markerPositionAllowed
 		);
 		particleCount = reseeding.particleCount();
 		gridDirty = true;
@@ -410,7 +449,7 @@ public final class FlipFluidDomain {
 		normalize(velocityX, velocityWeightX);
 		normalize(velocityY, velocityWeightY);
 		normalize(velocityZ, velocityWeightZ);
-		freeSurfaceGeometry.rebuild(solid, markerCount);
+		freeSurfaceGeometry.rebuild(solid, markerCount, cutCells);
 		enforceSolidFaceVelocities();
 		gridDirty = false;
 	}
@@ -491,7 +530,7 @@ public final class FlipFluidDomain {
 		float impulse = config.gravity() * dt;
 		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z);
-			if (faceActive(below, above)) velocityY[yFaceIndex(x, y, z)] -= impulse;
+			if (faceActive(below, above, cutCells.yFaceOpen(x, y, z))) velocityY[yFaceIndex(x, y, z)] -= impulse;
 		}
 	}
 
@@ -505,9 +544,12 @@ public final class FlipFluidDomain {
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int index = cellIndex(x, y, z);
 			if (!isFluid(index) || index == pressureAnchor) { divergence[index] = 0.0F; continue; }
-			float div = (velocityX[xFaceIndex(x + 1, y, z)] - velocityX[xFaceIndex(x, y, z)]
-					+ velocityY[yFaceIndex(x, y + 1, z)] - velocityY[yFaceIndex(x, y, z)]
-					+ velocityZ[zFaceIndex(x, y, z + 1)] - velocityZ[zFaceIndex(x, y, z)]) * inverseCell;
+			float div = (cutCells.xFaceOpen(x + 1, y, z) * velocityX[xFaceIndex(x + 1, y, z)]
+					- cutCells.xFaceOpen(x, y, z) * velocityX[xFaceIndex(x, y, z)]
+					+ cutCells.yFaceOpen(x, y + 1, z) * velocityY[yFaceIndex(x, y + 1, z)]
+					- cutCells.yFaceOpen(x, y, z) * velocityY[yFaceIndex(x, y, z)]
+					+ cutCells.zFaceOpen(x, y, z + 1) * velocityZ[zFaceIndex(x, y, z + 1)]
+					- cutCells.zFaceOpen(x, y, z) * velocityZ[zFaceIndex(x, y, z)]) * inverseCell;
 			divergence[index] = div;
 			rhs[index] = rhsScale * div;
 			fluidCells++;
@@ -587,9 +629,24 @@ public final class FlipFluidDomain {
 
 	private float neighborValue(int neighbor, float[] source) { return isFluid(neighbor) && neighbor != pressureAnchor ? source[neighbor] : 0.0F; }
 	private float pressureFaceCoefficient(int fluid, int neighbor, int directionX, int directionY, int directionZ) {
-		if (solid[neighbor]) return 0.0F;
-		if (isFluid(neighbor)) return 1.0F;
-		return 1.0F / freeSurfaceGeometry.pressureTheta(fluid, directionX, directionY, directionZ);
+		float openArea = openFaceFromCell(fluid, directionX, directionY, directionZ);
+		if (openArea <= 0.0F || solid[neighbor]) return 0.0F;
+		if (isFluid(neighbor)) return openArea;
+		return openArea / freeSurfaceGeometry.pressureTheta(fluid, directionX, directionY, directionZ);
+	}
+
+	private float openFaceFromCell(int cell, int directionX, int directionY, int directionZ) {
+		int x = cell % sizeX;
+		int yz = cell / sizeX;
+		int y = yz % sizeY;
+		int z = yz / sizeY;
+		if (directionX < 0) return cutCells.xFaceOpen(x, y, z);
+		if (directionX > 0) return cutCells.xFaceOpen(x + 1, y, z);
+		if (directionY < 0) return cutCells.yFaceOpen(x, y, z);
+		if (directionY > 0) return cutCells.yFaceOpen(x, y + 1, z);
+		if (directionZ < 0) return cutCells.zFaceOpen(x, y, z);
+		if (directionZ > 0) return cutCells.zFaceOpen(x, y, z + 1);
+		throw new IllegalArgumentException("Pressure face direction must be axial");
 	}
 
 	private void applyPreconditioner(float[] source, float[] destination) {
@@ -620,26 +677,29 @@ public final class FlipFluidDomain {
 	}
 
 	private boolean hasAirNeighbor(int x, int y, int z) {
-		return (x > 0 && isAir(cellIndex(x - 1, y, z))) || (x + 1 < sizeX && isAir(cellIndex(x + 1, y, z)))
-				|| (y > 0 && isAir(cellIndex(x, y - 1, z))) || (y + 1 < sizeY && isAir(cellIndex(x, y + 1, z)))
-				|| (z > 0 && isAir(cellIndex(x, y, z - 1))) || (z + 1 < sizeZ && isAir(cellIndex(x, y, z + 1)));
+		return (x > 0 && cutCells.xFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x - 1, y, z)))
+				|| (x + 1 < sizeX && cutCells.xFaceOpen(x + 1, y, z) > 0.0F && isAir(cellIndex(x + 1, y, z)))
+				|| (y > 0 && cutCells.yFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x, y - 1, z)))
+				|| (y + 1 < sizeY && cutCells.yFaceOpen(x, y + 1, z) > 0.0F && isAir(cellIndex(x, y + 1, z)))
+				|| (z > 0 && cutCells.zFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x, y, z - 1)))
+				|| (z + 1 < sizeZ && cutCells.zFaceOpen(x, y, z + 1) > 0.0F && isAir(cellIndex(x, y, z + 1)));
 	}
 
 	private void projectVelocity(float dt) {
 		float scale = dt / (config.density() * config.cellSize());
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
 			int left = cellIndex(x - 1, y, z), right = cellIndex(x, y, z), face = xFaceIndex(x, y, z);
-			if (!faceActive(left, right)) velocityX[face] = 0.0F;
+			if (!faceActive(left, right, cutCells.xFaceOpen(x, y, z))) velocityX[face] = 0.0F;
 			else velocityX[face] -= scale * pressureDifference(left, right, 1, 0, 0);
 		}
 		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z), face = yFaceIndex(x, y, z);
-			if (!faceActive(below, above)) velocityY[face] = 0.0F;
+			if (!faceActive(below, above, cutCells.yFaceOpen(x, y, z))) velocityY[face] = 0.0F;
 			else velocityY[face] -= scale * pressureDifference(below, above, 0, 1, 0);
 		}
 		for (int z = 1; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int back = cellIndex(x, y, z - 1), front = cellIndex(x, y, z), face = zFaceIndex(x, y, z);
-			if (!faceActive(back, front)) velocityZ[face] = 0.0F;
+			if (!faceActive(back, front, cutCells.zFaceOpen(x, y, z))) velocityZ[face] = 0.0F;
 			else velocityZ[face] -= scale * pressureDifference(back, front, 0, 0, 1);
 		}
 	}
@@ -670,83 +730,26 @@ public final class FlipFluidDomain {
 	}
 
 	private void advectParticles(float dt) {
-		float h = config.cellSize(), radius = h * 0.45F;
-		float minX = radius, minY = radius, minZ = radius;
-		float maxX = sizeX * h - radius, maxY = sizeY * h - radius, maxZ = sizeZ * h - radius;
-		for (int i = 0; i < particleCount; i++) {
-			float nx = clamp(particleX[i] + particleVelocityX[i] * dt, minX, maxX);
-			if (!centerInSolid(nx, particleY[i], particleZ[i])) particleX[i] = nx; else particleVelocityX[i] = 0.0F;
-			float ny = clamp(particleY[i] + particleVelocityY[i] * dt, minY, maxY);
-			if (!centerInSolid(particleX[i], ny, particleZ[i])) particleY[i] = ny; else particleVelocityY[i] = 0.0F;
-			float nz = clamp(particleZ[i] + particleVelocityZ[i] * dt, minZ, maxZ);
-			if (!centerInSolid(particleX[i], particleY[i], nz)) particleZ[i] = nz; else particleVelocityZ[i] = 0.0F;
-			constrainToSolidFaces(i, radius);
-		}
+		particleCollision.advect(
+				particleX, particleY, particleZ,
+				particleVelocityX, particleVelocityY, particleVelocityZ,
+				particleCount, dt
+		);
 		gridDirty = true;
-	}
-
-	private boolean centerInSolid(float px, float py, float pz) {
-		float h = config.cellSize();
-		int x = Math.min(sizeX - 1, Math.max(0, (int) Math.floor(px / h)));
-		int y = Math.min(sizeY - 1, Math.max(0, (int) Math.floor(py / h)));
-		int z = Math.min(sizeZ - 1, Math.max(0, (int) Math.floor(pz / h)));
-		return solid[cellIndex(x, y, z)];
-	}
-
-	/**
-	 * Mirrors the Godot CCD contact pass: constrain only the coordinate normal
-	 * to a neighboring solid face. Tangential motion remains free, including
-	 * along a wall edge or inside a corner.
-	 */
-	private void constrainToSolidFaces(int particle, float radius) {
-		float h = config.cellSize();
-		int x = Math.min(sizeX - 1, Math.max(0, (int) Math.floor(particleX[particle] / h)));
-		int y = Math.min(sizeY - 1, Math.max(0, (int) Math.floor(particleY[particle] / h)));
-		int z = Math.min(sizeZ - 1, Math.max(0, (int) Math.floor(particleZ[particle] / h)));
-		float localX = particleX[particle] - x * h;
-		float localY = particleY[particle] - y * h;
-		float localZ = particleZ[particle] - z * h;
-		float contactMinimum = radius + h * 1.0E-3F;
-		float contactMaximum = h - contactMinimum;
-
-		if (x > 0 && localX < radius && solid[cellIndex(x - 1, y, z)]) {
-			particleX[particle] = x * h + contactMinimum;
-			particleVelocityX[particle] = Math.max(0.0F, particleVelocityX[particle]);
-		}
-		if (x + 1 < sizeX && localX > h - radius && solid[cellIndex(x + 1, y, z)]) {
-			particleX[particle] = x * h + contactMaximum;
-			particleVelocityX[particle] = Math.min(0.0F, particleVelocityX[particle]);
-		}
-		if (y > 0 && localY < radius && solid[cellIndex(x, y - 1, z)]) {
-			particleY[particle] = y * h + contactMinimum;
-			particleVelocityY[particle] = Math.max(0.0F, particleVelocityY[particle]);
-		}
-		if (y + 1 < sizeY && localY > h - radius && solid[cellIndex(x, y + 1, z)]) {
-			particleY[particle] = y * h + contactMaximum;
-			particleVelocityY[particle] = Math.min(0.0F, particleVelocityY[particle]);
-		}
-		if (z > 0 && localZ < radius && solid[cellIndex(x, y, z - 1)]) {
-			particleZ[particle] = z * h + contactMinimum;
-			particleVelocityZ[particle] = Math.max(0.0F, particleVelocityZ[particle]);
-		}
-		if (z + 1 < sizeZ && localZ > h - radius && solid[cellIndex(x, y, z + 1)]) {
-			particleZ[particle] = z * h + contactMaximum;
-			particleVelocityZ[particle] = Math.min(0.0F, particleVelocityZ[particle]);
-		}
 	}
 
 	private void enforceSolidFaceVelocities() {
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) {
 			velocityX[xFaceIndex(0, y, z)] = 0.0F; velocityX[xFaceIndex(sizeX, y, z)] = 0.0F;
-			for (int x = 1; x < sizeX; x++) if (solid[cellIndex(x - 1, y, z)] || solid[cellIndex(x, y, z)]) velocityX[xFaceIndex(x, y, z)] = 0.0F;
+			for (int x = 1; x < sizeX; x++) if (cutCells.xFaceOpen(x, y, z) <= 0.0F) velocityX[xFaceIndex(x, y, z)] = 0.0F;
 		}
 		for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) {
 			velocityY[yFaceIndex(x, 0, z)] = 0.0F; velocityY[yFaceIndex(x, sizeY, z)] = 0.0F;
-			for (int y = 1; y < sizeY; y++) if (solid[cellIndex(x, y - 1, z)] || solid[cellIndex(x, y, z)]) velocityY[yFaceIndex(x, y, z)] = 0.0F;
+			for (int y = 1; y < sizeY; y++) if (cutCells.yFaceOpen(x, y, z) <= 0.0F) velocityY[yFaceIndex(x, y, z)] = 0.0F;
 		}
 		for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			velocityZ[zFaceIndex(x, y, 0)] = 0.0F; velocityZ[zFaceIndex(x, y, sizeZ)] = 0.0F;
-			for (int z = 1; z < sizeZ; z++) if (solid[cellIndex(x, y, z - 1)] || solid[cellIndex(x, y, z)]) velocityZ[zFaceIndex(x, y, z)] = 0.0F;
+			for (int z = 1; z < sizeZ; z++) if (cutCells.zFaceOpen(x, y, z) <= 0.0F) velocityZ[zFaceIndex(x, y, z)] = 0.0F;
 		}
 	}
 
@@ -756,12 +759,20 @@ public final class FlipFluidDomain {
 			throw new ParticleBudgetExceededException(requiredParticles, maximumParticleCount - particleCount);
 		}
 		float remaining = amount;
-		int slot = 0;
+		int slot = firstOpenSlot(cellIndex(x, y, z), 0);
 		while (remaining > 1.0E-6F) {
+			if (slot < 0) throw new IllegalStateException("Cut-cell open volume was exhausted while spawning markers");
 			float piece = Math.min(PARTICLE_VOLUME, remaining);
-			spawnParticle(x, y, z, slot++ & 7, piece);
+			spawnParticle(x, y, z, slot, piece);
 			remaining -= piece;
+			slot = firstOpenSlot(cellIndex(x, y, z), slot + 1);
 		}
+	}
+
+	private int firstOpenSlot(int cell, int first) {
+		int mask = cutCells.mask(cell);
+		for (int slot = first; slot < 8; slot++) if ((mask & 1 << slot) == 0) return slot;
+		return -1;
 	}
 
 	private void spawnParticle(int cellX, int cellY, int cellZ, int slot, float amount) {
@@ -800,6 +811,26 @@ public final class FlipFluidDomain {
 		return removed;
 	}
 
+	private float removeParticlesInMicroMask(int cellX, int cellY, int cellZ, int microMask) {
+		float h = config.cellSize(), removed = 0.0F;
+		for (int particle = particleCount - 1; particle >= 0; particle--) {
+			if ((int) Math.floor(particleX[particle] / h) != cellX
+					|| (int) Math.floor(particleY[particle] / h) != cellY
+					|| (int) Math.floor(particleZ[particle] / h) != cellZ) continue;
+			float localX = particleX[particle] / h - cellX;
+			float localY = particleY[particle] / h - cellY;
+			float localZ = particleZ[particle] / h - cellZ;
+			int microX = Math.min(1, Math.max(0, (int) Math.floor(localX * 2.0F)));
+			int microY = Math.min(1, Math.max(0, (int) Math.floor(localY * 2.0F)));
+			int microZ = Math.min(1, Math.max(0, (int) Math.floor(localZ * 2.0F)));
+			int bit = 1 << (microX + 2 * (microY + 2 * microZ));
+			if ((microMask & bit) == 0) continue;
+			removed += particleVolume[particle];
+			removeParticle(particle);
+		}
+		return removed;
+	}
+
 	private int particleCountInCell(int cellX, int cellY, int cellZ) {
 		float h = config.cellSize();
 		int count = 0;
@@ -809,6 +840,16 @@ public final class FlipFluidDomain {
 					&& (int) Math.floor(particleZ[particle] / h) == cellZ) count++;
 		}
 		return count;
+	}
+
+	private float exactVolumeInCell(int cellX, int cellY, int cellZ) {
+		float h = config.cellSize(), result = 0.0F;
+		for (int particle = 0; particle < particleCount; particle++) {
+			if ((int) Math.floor(particleX[particle] / h) == cellX
+					&& (int) Math.floor(particleY[particle] / h) == cellY
+					&& (int) Math.floor(particleZ[particle] / h) == cellZ) result += particleVolume[particle];
+		}
+		return result;
 	}
 
 	private float[] exactCellVolumes() {
@@ -857,9 +898,14 @@ public final class FlipFluidDomain {
 	}
 
 	private void ensureGrid() { if (gridDirty) rebuildGridFromParticles(); }
+	private boolean markerPositionAllowed(float x, float y, float z) {
+		return !particleCollision.centerInSolid(x, y, z);
+	}
 	private boolean isFluid(int index) { return !solid[index] && markerCount[index] > 0; }
 	private boolean isAir(int index) { return !solid[index] && !isFluid(index); }
-	private boolean faceActive(int first, int second) { return !solid[first] && !solid[second] && (isFluid(first) || isFluid(second)); }
+	private boolean faceActive(int first, int second, float openArea) {
+		return openArea > 0.0F && !solid[first] && !solid[second] && (isFluid(first) || isFluid(second));
+	}
 	private boolean inside(int x, int y, int z) { return x >= 0 && x < sizeX && y >= 0 && y < sizeY && z >= 0 && z < sizeZ; }
 	private int cellIndex(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
 	private int xFaceIndex(int x, int y, int z) { return (z * sizeY + y) * (sizeX + 1) + x; }
@@ -907,6 +953,7 @@ public final class FlipFluidDomain {
 	public record VelocitySample(float x, float y, float z) { private static final VelocitySample ZERO = new VelocitySample(0.0F, 0.0F, 0.0F); }
 	public record VolumeAddition(float addedVolume, boolean markerBudgetLimited) { }
 	public record VolumeDistribution(int activeCells, int visibleCells, int denseCells) { }
+	public record SolidDistribution(int partialCells, int fullCells) { }
 	public record StepStats(
 			int substeps,
 			int pressureIterations,

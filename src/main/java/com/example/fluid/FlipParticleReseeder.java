@@ -52,14 +52,17 @@ final class FlipParticleReseeder {
 			float[] velocityY,
 			float[] velocityZ,
 			float[] particleVolume,
-			int particleCount
+			int particleCount,
+			PositionValidator positionValidator
 	) {
 		ensureScratchCapacity(particleX.length);
 		double volumeBefore = totalVolume(particleVolume, particleCount);
 		buildCellLists(particleX, particleY, particleZ, particleVolume, particleCount);
-		int merged = mergeOverpopulatedCells(
-				particleX, particleY, particleZ, velocityX, velocityY, velocityZ, particleVolume, particleCount
+		MergeResult mergeResult = mergeOverpopulatedCells(
+				particleX, particleY, particleZ, velocityX, velocityY, velocityZ, particleVolume, particleCount,
+				positionValidator
 		);
+		int merged = mergeResult.merged();
 		if (merged > 0) {
 			particleCount = compactParticles(
 					particleX, particleY, particleZ, velocityX, velocityY, velocityZ, particleVolume, particleCount
@@ -69,7 +72,7 @@ final class FlipParticleReseeder {
 		buildCellLists(particleX, particleY, particleZ, particleVolume, particleCount);
 		int split = 0;
 		int budgetSkipped = 0;
-		int geometrySkipped = 0;
+		int geometrySkipped = mergeResult.geometrySkipped();
 		for (int cell = 0; cell < cellCount; cell++) {
 			if (solid[cell] || cellMarkerCount[cell] == 0) continue;
 			int minimum = minimumMarkers(cellExactVolume[cell]);
@@ -81,7 +84,8 @@ final class FlipParticleReseeder {
 				int source = largestMarker(cell, particleVolume);
 				if (source < 0 || !splitParticle(
 						solid, cell, source, particleCount,
-						particleX, particleY, particleZ, velocityX, velocityY, velocityZ, particleVolume
+						particleX, particleY, particleZ, velocityX, velocityY, velocityZ, particleVolume,
+						positionValidator
 				)) {
 					geometrySkipped += minimum - cellMarkerCount[cell];
 					break;
@@ -99,7 +103,7 @@ final class FlipParticleReseeder {
 		return new Result(particleCount, merged, split, budgetSkipped, geometrySkipped, ledgerError);
 	}
 
-	private int mergeOverpopulatedCells(
+	private MergeResult mergeOverpopulatedCells(
 			float[] particleX,
 			float[] particleY,
 			float[] particleZ,
@@ -107,10 +111,12 @@ final class FlipParticleReseeder {
 			float[] velocityY,
 			float[] velocityZ,
 			float[] particleVolume,
-			int particleCount
+			int particleCount,
+			PositionValidator positionValidator
 	) {
 		Arrays.fill(removed, 0, particleCount, false);
 		int merged = 0;
+		int geometrySkipped = 0;
 		for (int cell = 0; cell < cellCount; cell++) {
 			int count = cellMarkerCount[cell];
 			if (count <= MAXIMUM_MARKERS_PER_CELL) continue;
@@ -127,15 +133,18 @@ final class FlipParticleReseeder {
 				int source = localParticles[local];
 				int targetLocal = nearestRepresentative(particleX, particleY, particleZ, source, localCount);
 				int target = localParticles[targetLocal];
-				mergeParticleInto(
+				if (!mergeParticleInto(
 						target, source, particleX, particleY, particleZ,
-						velocityX, velocityY, velocityZ, particleVolume
-				);
+						velocityX, velocityY, velocityZ, particleVolume, positionValidator
+				)) {
+					geometrySkipped++;
+					continue;
+				}
 				removed[source] = true;
 				merged++;
 			}
 		}
-		return merged;
+		return new MergeResult(merged, geometrySkipped);
 	}
 
 	private void selectDistributedRepresentatives(float[] particleX, float[] particleY, float[] particleZ, int count) {
@@ -180,7 +189,7 @@ final class FlipParticleReseeder {
 		return best;
 	}
 
-	private static void mergeParticleInto(
+	private static boolean mergeParticleInto(
 			int target,
 			int source,
 			float[] particleX,
@@ -189,18 +198,24 @@ final class FlipParticleReseeder {
 			float[] velocityX,
 			float[] velocityY,
 			float[] velocityZ,
-			float[] particleVolume
+			float[] particleVolume,
+			PositionValidator positionValidator
 	) {
 		double targetVolume = particleVolume[target];
 		double sourceVolume = particleVolume[source];
 		double mergedVolume = targetVolume + sourceVolume;
-		particleX[target] = (float) ((particleX[target] * targetVolume + particleX[source] * sourceVolume) / mergedVolume);
-		particleY[target] = (float) ((particleY[target] * targetVolume + particleY[source] * sourceVolume) / mergedVolume);
-		particleZ[target] = (float) ((particleZ[target] * targetVolume + particleZ[source] * sourceVolume) / mergedVolume);
+		float mergedX = (float) ((particleX[target] * targetVolume + particleX[source] * sourceVolume) / mergedVolume);
+		float mergedY = (float) ((particleY[target] * targetVolume + particleY[source] * sourceVolume) / mergedVolume);
+		float mergedZ = (float) ((particleZ[target] * targetVolume + particleZ[source] * sourceVolume) / mergedVolume);
+		if (!positionValidator.allowed(mergedX, mergedY, mergedZ)) return false;
+		particleX[target] = mergedX;
+		particleY[target] = mergedY;
+		particleZ[target] = mergedZ;
 		velocityX[target] = (float) ((velocityX[target] * targetVolume + velocityX[source] * sourceVolume) / mergedVolume);
 		velocityY[target] = (float) ((velocityY[target] * targetVolume + velocityY[source] * sourceVolume) / mergedVolume);
 		velocityZ[target] = (float) ((velocityZ[target] * targetVolume + velocityZ[source] * sourceVolume) / mergedVolume);
 		particleVolume[target] = (float) mergedVolume;
+		return true;
 	}
 
 	private boolean splitParticle(
@@ -214,7 +229,8 @@ final class FlipParticleReseeder {
 			float[] velocityX,
 			float[] velocityY,
 			float[] velocityZ,
-			float[] particleVolume
+			float[] particleVolume,
+			PositionValidator positionValidator
 	) {
 		int x = cell % sizeX;
 		int yz = cell / sizeX;
@@ -232,20 +248,34 @@ final class FlipParticleReseeder {
 				bestAxis = axis;
 			}
 		}
-		copyParticle(source, destination, particleX, particleY, particleZ, velocityX, velocityY, velocityZ, particleVolume);
+		float sourceX = particleX[source], sourceY = particleY[source], sourceZ = particleZ[source];
+		float destinationX = sourceX, destinationY = sourceY, destinationZ = sourceZ;
 		if (bestAxis >= 0 && bestRoom > cellSize * 1.0E-4F) {
 			float displacement = Math.min(cellSize * 0.20F, bestRoom * 0.80F);
 			if (bestAxis == 0) {
-				particleX[source] -= displacement;
-				particleX[destination] += displacement;
+				if (positionValidator.allowed(sourceX - displacement, sourceY, sourceZ)
+						&& positionValidator.allowed(sourceX + displacement, sourceY, sourceZ)) {
+					particleX[source] = sourceX - displacement;
+					destinationX = sourceX + displacement;
+				}
 			} else if (bestAxis == 1) {
-				particleY[source] -= displacement;
-				particleY[destination] += displacement;
+				if (positionValidator.allowed(sourceX, sourceY - displacement, sourceZ)
+						&& positionValidator.allowed(sourceX, sourceY + displacement, sourceZ)) {
+					particleY[source] = sourceY - displacement;
+					destinationY = sourceY + displacement;
+				}
 			} else {
-				particleZ[source] -= displacement;
-				particleZ[destination] += displacement;
+				if (positionValidator.allowed(sourceX, sourceY, sourceZ - displacement)
+						&& positionValidator.allowed(sourceX, sourceY, sourceZ + displacement)) {
+					particleZ[source] = sourceZ - displacement;
+					destinationZ = sourceZ + displacement;
+				}
 			}
 		}
+		copyParticle(source, destination, particleX, particleY, particleZ, velocityX, velocityY, velocityZ, particleVolume);
+		particleX[destination] = destinationX;
+		particleY[destination] = destinationY;
+		particleZ[destination] = destinationZ;
 		float firstVolume = particleVolume[source] * 0.5F;
 		particleVolume[destination] = particleVolume[source] - firstVolume;
 		particleVolume[source] = firstVolume;
@@ -386,6 +416,11 @@ final class FlipParticleReseeder {
 		localParticles = new int[capacity];
 		representative = new boolean[capacity];
 	}
+
+	@FunctionalInterface
+	interface PositionValidator { boolean allowed(float x, float y, float z); }
+
+	private record MergeResult(int merged, int geometrySkipped) { }
 
 	record Result(
 			int particleCount,

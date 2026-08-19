@@ -665,6 +665,7 @@ public final class FluidSimulationService {
 		BlockPos origin = region.origin();
 		float cellVolumes = domain.totalVolume();
 		FlipFluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
+		FlipFluidDomain.SolidDistribution solids = domain.solidDistribution();
 		FluidRegion.CollisionStats collision = region.lastCollisionStats();
 		FluidRegionFootprint footprint = region.footprint();
 		String regionSource = footprint == null
@@ -673,7 +674,7 @@ public final class FluidSimulationService {
 						+ footprint.boundaryBlocks().size() + ", chunks " + footprint.requiredChunks().size();
 		String availability = region.availabilityFailure() == null ? "ready" : "blocked: " + region.availabilityFailure();
 		return String.format(
-				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | entities %s/%d | maxP %.1f | collision Δ%d, escaped %.3f%s | %s",
+				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | entities %s/%d | maxP %.1f | collision partial/full %d/%d, Δ%d, escaped %.3f%s | %s",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",
 				region.id().toString().substring(0, 8),
 				usage.regionCount(), regionManager.limits().maximumRegions(),
@@ -687,6 +688,7 @@ public final class FluidSimulationService {
 				distribution.visibleCells(), distribution.denseCells(), takeoverOriginalBlocks.size(), takeoverLock,
 				region.entityPhysicsEnabled() ? "on" : "off", region.lastAffectedEntities(),
 				domain.maximumPressure(),
+				solids.partialCells(), solids.fullCells(),
 				collision.changedCells(), collision.escapedCellVolume() / CELL_VOLUMES_PER_BLOCK,
 				collision.markerBudgetLimited() ? " (marker budget)" : "", stats
 		);

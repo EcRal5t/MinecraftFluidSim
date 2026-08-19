@@ -14,6 +14,9 @@ import net.minecraft.world.phys.shapes.BooleanOp;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /** Minecraft collision sampling and one-way entity coupling for an explicitly supplied region. */
 final class FluidRegionWorldInteraction {
 	private static final int ENTITY_SAMPLES_XZ = 3;
@@ -115,6 +118,7 @@ final class FluidRegionWorldInteraction {
 		float escaped = 0.0F;
 		boolean markerBudgetLimited = false;
 		double inset = 1.0E-5;
+		List<Displacement> restorations = new ArrayList<>();
 
 		for (int blockZ = 0; blockZ < blockSizeZ; blockZ++) {
 			for (int blockY = 0; blockY < blockSizeY; blockY++) {
@@ -132,11 +136,11 @@ final class FluidRegionWorldInteraction {
 								int cellX = blockX * cellsPerBlock + localX;
 								int cellY = blockY * cellsPerBlock + localY;
 								int cellZ = blockZ * cellsPerBlock + localZ;
-								boolean desired = fullBlock || intersectsSubcell(
+								int desired = fullBlock ? 0xFF : sampleCutCellMask(
 										shape, localX, localY, localZ, cellsPerBlock, inset
 								);
-								if (domain.isSolid(cellX, cellY, cellZ) == desired) continue;
-								displacedInBlock += domain.setSolid(cellX, cellY, cellZ, desired);
+								if (domain.solidMicroMask(cellX, cellY, cellZ) == desired) continue;
+								displacedInBlock += domain.setSolidMicroMask(cellX, cellY, cellZ, desired);
 								changedCells++;
 							}
 						}
@@ -147,20 +151,23 @@ final class FluidRegionWorldInteraction {
 						int centerX = blockX * cellsPerBlock + cellsPerBlock / 2;
 						int centerY = blockY * cellsPerBlock + cellsPerBlock / 2;
 						int centerZ = blockZ * cellsPerBlock + cellsPerBlock / 2;
-						FlipFluidDomain.VolumeAddition restoration = domain.addVolumeNearBudgeted(
-								centerX, centerY, centerZ, displacedInBlock, 8
-						);
-						escaped += displacedInBlock - restoration.addedVolume();
-						markerBudgetLimited |= restoration.markerBudgetLimited();
+						restorations.add(new Displacement(centerX, centerY, centerZ, displacedInBlock));
 					}
 				}
 			}
+		}
+		for (Displacement request : restorations) {
+			FlipFluidDomain.VolumeAddition restoration = domain.addVolumeNearBudgeted(
+					request.centerX(), request.centerY(), request.centerZ(), request.volume(), 8
+			);
+			escaped += request.volume() - restoration.addedVolume();
+			markerBudgetLimited |= restoration.markerBudgetLimited();
 		}
 
 		return new FluidRegion.CollisionStats(changedCells, displaced, escaped, markerBudgetLimited);
 	}
 
-	private static boolean intersectsSubcell(
+	static int sampleCutCellMask(
 			VoxelShape shape,
 			int localX,
 			int localY,
@@ -168,14 +175,28 @@ final class FluidRegionWorldInteraction {
 			int cellsPerBlock,
 			double inset
 	) {
-		if (shape.isEmpty()) return false;
-		double size = 1.0 / cellsPerBlock;
-		double minX = localX * size + inset, minY = localY * size + inset, minZ = localZ * size + inset;
-		double maxX = (localX + 1) * size - inset, maxY = (localY + 1) * size - inset, maxZ = (localZ + 1) * size - inset;
-		return Shapes.joinIsNotEmpty(shape, Shapes.box(minX, minY, minZ, maxX, maxY, maxZ), BooleanOp.AND);
+		if (shape.isEmpty()) return 0;
+		int subdivisions = cellsPerBlock * 2;
+		double size = 1.0 / subdivisions;
+		int mask = 0;
+		for (int microZ = 0; microZ < 2; microZ++) for (int microY = 0; microY < 2; microY++) for (int microX = 0; microX < 2; microX++) {
+			int sampleX = localX * 2 + microX;
+			int sampleY = localY * 2 + microY;
+			int sampleZ = localZ * 2 + microZ;
+			double minX = sampleX * size + inset, minY = sampleY * size + inset, minZ = sampleZ * size + inset;
+			double maxX = (sampleX + 1) * size - inset;
+			double maxY = (sampleY + 1) * size - inset;
+			double maxZ = (sampleZ + 1) * size - inset;
+			if (Shapes.joinIsNotEmpty(shape, Shapes.box(minX, minY, minZ, maxX, maxY, maxZ), BooleanOp.AND)) {
+				mask |= 1 << (microX + 2 * (microY + 2 * microZ));
+			}
+		}
+		return mask;
 	}
 
 	private record EntityFluidContact(double submergedFraction, Vec3 fluidVelocity) {
 		private static final EntityFluidContact DRY = new EntityFluidContact(0.0, Vec3.ZERO);
 	}
+
+	private record Displacement(int centerX, int centerY, int centerZ, float volume) { }
 }

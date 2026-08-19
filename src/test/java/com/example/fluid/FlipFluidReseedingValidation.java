@@ -284,7 +284,8 @@ public final class FlipFluidReseedingValidation {
 
 		private FlipParticleReseeder.Result reseed(int maximumParticleCount) {
 			return new FlipParticleReseeder(SIZE, SIZE, SIZE, CELL_SIZE, maximumParticleCount).reseed(
-					solid, x, y, z, vx, vy, vz, volume, count
+					solid, x, y, z, vx, vy, vz, volume, count,
+					(candidateX, candidateY, candidateZ) -> true
 			);
 		}
 

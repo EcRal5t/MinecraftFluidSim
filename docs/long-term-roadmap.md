@@ -500,7 +500,7 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 - 固定种子回归覆盖薄层、斜面、墙角切向运动和静水自由表面；
 - 客户端 marker mask 继续承担浅水种子，不能因数值改动退回只看密度等值面。
 
-当前状态（2026-08-19，第一活动增量完成，M2.5 尚未关闭）：`FlipFreeSurfaceGeometry` 已从每格 marker `particleVolume` 精确和与分数梯度重建 PLIC 平面；fluid-air 面在压力矩阵、对角预条件器和速度投影中共用 `theta >= 0.05`，`markerCount` 仍独立决定压力相区。0.60/0.75/1.00 格自由面通过定量静水压力门，0.25 格薄层明确按格心以下正则化验收稳定性而不虚报几何精度。`FlipParticleReseeder` 每个完整 step 后先把 `>12` marker 格确定性合并到 8，再按精确格体积维持 1/2/4 marker 下限；split/merge 保持体积、体积加权动量和质心，硬预算不足无损跳过。5,000 步剪切与动态 dam-break 都保留 `y=1..3` 三层，半格以上每格至少 4 marker、最大不超过 12，总体积不变；薄层、阶梯斜面和既有墙角切向门也通过。定义与结果见 [`m2.5-free-surface-reseeding.md`](m2.5-free-surface-reseeding.md)。尚未完成项是 subcell cut-solid 面积/体积分数：当前 Minecraft 碰撞仍在每方块 2×2×2 solver-cell 分辨率离散成 binary solid。它需要先评审运行态、checkpoint 和 `region-state v1` 的兼容扩展，不能在物理核心里偷偷加入无法恢复的 transient 几何。
+当前状态（2026-08-19，自动实现完成，等待实机 partial-shape 签收）：`FlipFreeSurfaceGeometry` 已从每格 marker `particleVolume` 精确和与分数梯度重建 PLIC 平面；fluid-air 面在压力矩阵、对角预条件器和速度投影中共用 `theta >= 0.05`，`markerCount` 仍独立决定压力相区。`FlipParticleReseeder` 每个完整 step 后确定性 merge/split，保持体积、体积加权动量和质心并服从硬预算。新增 runtime cut-cell 在每个 solver cell 内用 `2x2x2` occupancy（每方块 `4x4x4`）重建 `VoxelShape`，给出 1/8 开放体积与 1/4 共享面开口；散度、压力矩阵、预条件器和投影共用该开口，marker 微体素扫掠只截断法向。方块变化按 marker 中心占据及 `exactCellVolume <= openVolume` 精确挤水。`region-state v1` 无迁移：partial geometry 不持久化，full-solid binary fallback 后必须经现有 `collisionRefreshRequired` 门从完整当前世界重建才能 step。自动门已经覆盖静水、薄层、斜面、两组 5,000 步 marker 分布、cut-cell SPD 路径、normal-only CCD、600 步 partial obstacle、slab/stair/post/pane 采样，以及 persistence/manager/lifecycle/boundary/protocol 回归。定义与结果见 [`m2.5-free-surface-reseeding.md`](m2.5-free-surface-reseeding.md)。M2.5 只剩 [`m2.5-cut-cell-smoke.md`](m2.5-cut-cell-smoke.md) 的真实碰撞与视觉签收；通过后关闭。
 
 完成条件：静水自由表面压力、体积守恒和长期 marker 分布达到规定容差；M3 开始前不得留下已知的一阶自由表面压力边界错误。
 
@@ -639,8 +639,8 @@ CPU 单线程参考场景固定随机种子、遍历顺序和输入，能稳定�
 
 ## 十三、接下来三项实际工作
 
-1. 评审 M2.5 剩余的 subcell cut-solid 表示：对比“运行时由 Minecraft `VoxelShape` 重采样、v1 checkpoint 保留 binary 保守回退”和“`region-state` 可跳过 solid-fraction 扩展”，明确重启/卸载恢复语义与旧 reader 行为后再选。
-2. 为选定 solid fraction 表示建立 cut-cell 面积、体积、压力零通量、marker CCD 与方块变化挤水门；不得用平滑 density 估算固体排开的精确水量。
-3. 通过 region-state 故障矩阵和真实 partial-shape collision smoke 后关闭 M2.5，再把 PLIC interface distance 交给 M3 的变密度 3D 连通器门。
+1. 按 [`m2.5-cut-cell-smoke.md`](m2.5-cut-cell-smoke.md) 签收真实 stair/pane 的 partial collision、exact 水量和客户端视觉；若通过，记录结果并正式关闭 M2.5。
+2. 冻结 M3 marker 材料/相标签与质量账本，先建立同密度两材料退化为当前纯水解的 3D 连通器门。
+3. 把已选的 interface-distance-weighted conservative `1/rho` 面系数接入独立 3D variable-density column，覆盖 1.25:1 与 13.6:1 密度比后再考虑活动域协议/存档变化。
 
 上述 M2.5 工作不扩大 takeover 范围，不改变 `takeover-journal v1`，也不把 GPU 设为必需运行条件。

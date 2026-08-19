@@ -38,6 +38,7 @@ public final class FlipFluidFreeSurfaceValidation {
 			boolean[] solid = new boolean[cellCount];
 			int[] markerCount = new int[cellCount];
 			FlipFreeSurfaceGeometry geometry = new FlipFreeSurfaceGeometry(sizeX, sizeY, sizeZ);
+			FlipCutCellGeometry cutCells = new FlipCutCellGeometry(sizeX, sizeY, sizeZ);
 			geometry.clearExactVolumes();
 			for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) {
 				int lower = index(sizeX, sizeY, x, 0, z);
@@ -47,7 +48,7 @@ public final class FlipFluidFreeSurfaceValidation {
 				geometry.addExactVolume(lower, 1.0F);
 				geometry.addExactVolume(surface, fraction);
 			}
-			geometry.rebuild(solid, markerCount);
+			geometry.rebuild(solid, markerCount, cutCells);
 			int surface = index(sizeX, sizeY, 2, 1, 2);
 			float expected = fraction >= 1.0F - 1.0E-6F
 					? 0.5F : Math.max(FlipFreeSurfaceGeometry.MINIMUM_THETA, fraction - 0.5F);

@@ -9,8 +9,9 @@ import java.util.Arrays;
  * it never replaces the marker ledger. A centered fraction gradient supplies the
  * orientation. Pressure still uses {@code markerCount > 0} for phase classification,
  * so interfaces that would put an occupied cell center outside liquid are regularized
- * to {@link #MINIMUM_THETA}. Current solid cells are binary at solver resolution and
- * therefore expose either a fully open or fully closed pressure face.</p>
+ * to {@link #MINIMUM_THETA}. Runtime cut-cell open volume normalizes the local
+ * liquid fraction; shared solid-face aperture is applied separately by the
+ * pressure operator.</p>
  */
 final class FlipFreeSurfaceGeometry {
 	static final float MINIMUM_THETA = 0.05F;
@@ -48,10 +49,11 @@ final class FlipFreeSurfaceGeometry {
 		exactCellVolume[cellIndex] += particleVolume;
 	}
 
-	void rebuild(boolean[] solid, int[] markerCount) {
+	void rebuild(boolean[] solid, int[] markerCount, FlipCutCellGeometry cutCells) {
 		for (int index = 0; index < exactCellVolume.length; index++) {
+			float openVolume = cutCells.openCellVolume(index);
 			liquidFraction[index] = solid[index] || markerCount[index] == 0
-					? 0.0F : clamp(exactCellVolume[index], 0.0F, 1.0F);
+					? 0.0F : clamp(exactCellVolume[index] / Math.max(openVolume, FRACTION_EPSILON), 0.0F, 1.0F);
 			normalX[index] = 0.0F;
 			normalY[index] = 0.0F;
 			normalZ[index] = 0.0F;

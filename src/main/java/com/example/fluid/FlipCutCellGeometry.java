@@ -1,0 +1,159 @@
+package com.example.fluid;
+
+import java.util.Arrays;
+
+/**
+ * Runtime-only cut-cell solid geometry for the CPU FLIP solver.
+ *
+ * <p>Each solver cell owns a 2x2x2 occupancy mask. Cell-open volume and the
+ * shared 2x2 face apertures are numerical geometry; they never contribute to
+ * the exact marker-volume ledger. Domain boundary faces are closed.</p>
+ */
+final class FlipCutCellGeometry {
+	static final int MICRO_CELLS_PER_AXIS = 2;
+	static final int FULL_MASK = 0xFF;
+	private static final float MICRO_VOLUME = 1.0F / 8.0F;
+	private static final float MICRO_FACE_AREA = 1.0F / 4.0F;
+
+	private final int sizeX;
+	private final int sizeY;
+	private final int sizeZ;
+	private final byte[] occupancy;
+	private final float[] openCellVolume;
+	private final float[] openFaceX;
+	private final float[] openFaceY;
+	private final float[] openFaceZ;
+	private boolean facesDirty = true;
+
+	FlipCutCellGeometry(int sizeX, int sizeY, int sizeZ) {
+		this.sizeX = sizeX;
+		this.sizeY = sizeY;
+		this.sizeZ = sizeZ;
+		int cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		occupancy = new byte[cellCount];
+		openCellVolume = new float[cellCount];
+		Arrays.fill(openCellVolume, 1.0F);
+		openFaceX = new float[(sizeX + 1) * sizeY * sizeZ];
+		openFaceY = new float[sizeX * (sizeY + 1) * sizeZ];
+		openFaceZ = new float[sizeX * sizeY * (sizeZ + 1)];
+	}
+
+	int mask(int index) {
+		return Byte.toUnsignedInt(occupancy[index]);
+	}
+
+	boolean fullySolid(int index) {
+		return mask(index) == FULL_MASK;
+	}
+
+	float openCellVolume(int index) {
+		return openCellVolume[index];
+	}
+
+	int replaceMask(int index, int requestedMask) {
+		if ((requestedMask & ~FULL_MASK) != 0) throw new IllegalArgumentException("Cut-cell mask must fit eight bits");
+		int previous = mask(index);
+		if (previous == requestedMask) return previous;
+		occupancy[index] = (byte) requestedMask;
+		openCellVolume[index] = 1.0F - Integer.bitCount(requestedMask) * MICRO_VOLUME;
+		facesDirty = true;
+		return previous;
+	}
+
+	void restoreBinaryMask(byte[] binaryMask) {
+		if (binaryMask.length != occupancy.length) throw new IllegalArgumentException("Solid mask length changed");
+		for (int index = 0; index < binaryMask.length; index++) {
+			int mask = binaryMask[index] == 0 ? 0 : FULL_MASK;
+			occupancy[index] = (byte) mask;
+			openCellVolume[index] = mask == 0 ? 1.0F : 0.0F;
+		}
+		facesDirty = true;
+	}
+
+	byte[] copyBinaryFullMask() {
+		byte[] result = new byte[occupancy.length];
+		for (int index = 0; index < result.length; index++) result[index] = fullySolid(index) ? (byte) 1 : 0;
+		return result;
+	}
+
+	float xFaceOpen(int x, int y, int z) {
+		ensureFaces();
+		return openFaceX[xFaceIndex(x, y, z)];
+	}
+
+	float yFaceOpen(int x, int y, int z) {
+		ensureFaces();
+		return openFaceY[yFaceIndex(x, y, z)];
+	}
+
+	float zFaceOpen(int x, int y, int z) {
+		ensureFaces();
+		return openFaceZ[zFaceIndex(x, y, z)];
+	}
+
+	boolean pointInsideSolid(float x, float y, float z, float cellSize) {
+		int microX = microCoordinate(x, cellSize, sizeX);
+		int microY = microCoordinate(y, cellSize, sizeY);
+		int microZ = microCoordinate(z, cellSize, sizeZ);
+		return microSolid(microX, microY, microZ);
+	}
+
+	private void ensureFaces() {
+		if (!facesDirty) return;
+		Arrays.fill(openFaceX, 0.0F);
+		Arrays.fill(openFaceY, 0.0F);
+		Arrays.fill(openFaceZ, 0.0F);
+		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
+			int left = mask(cellIndex(x - 1, y, z));
+			int right = mask(cellIndex(x, y, z));
+			int open = 0;
+			for (int microZ = 0; microZ < 2; microZ++) for (int microY = 0; microY < 2; microY++) {
+				if (!occupied(left, 1, microY, microZ) && !occupied(right, 0, microY, microZ)) open++;
+			}
+			openFaceX[xFaceIndex(x, y, z)] = open * MICRO_FACE_AREA;
+		}
+		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int below = mask(cellIndex(x, y - 1, z));
+			int above = mask(cellIndex(x, y, z));
+			int open = 0;
+			for (int microZ = 0; microZ < 2; microZ++) for (int microX = 0; microX < 2; microX++) {
+				if (!occupied(below, microX, 1, microZ) && !occupied(above, microX, 0, microZ)) open++;
+			}
+			openFaceY[yFaceIndex(x, y, z)] = open * MICRO_FACE_AREA;
+		}
+		for (int z = 1; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int back = mask(cellIndex(x, y, z - 1));
+			int front = mask(cellIndex(x, y, z));
+			int open = 0;
+			for (int microY = 0; microY < 2; microY++) for (int microX = 0; microX < 2; microX++) {
+				if (!occupied(back, microX, microY, 1) && !occupied(front, microX, microY, 0)) open++;
+			}
+			openFaceZ[zFaceIndex(x, y, z)] = open * MICRO_FACE_AREA;
+		}
+		facesDirty = false;
+	}
+
+	private boolean microSolid(int microX, int microY, int microZ) {
+		int cellX = microX / MICRO_CELLS_PER_AXIS;
+		int cellY = microY / MICRO_CELLS_PER_AXIS;
+		int cellZ = microZ / MICRO_CELLS_PER_AXIS;
+		int localX = microX & 1;
+		int localY = microY & 1;
+		int localZ = microZ & 1;
+		return occupied(mask(cellIndex(cellX, cellY, cellZ)), localX, localY, localZ);
+	}
+
+	private static int microCoordinate(float coordinate, float cellSize, int cellCount) {
+		float microSize = cellSize / MICRO_CELLS_PER_AXIS;
+		return Math.min(cellCount * MICRO_CELLS_PER_AXIS - 1, Math.max(0, (int) Math.floor(coordinate / microSize)));
+	}
+
+	private static boolean occupied(int mask, int x, int y, int z) {
+		return (mask & 1 << (x + 2 * (y + 2 * z))) != 0;
+	}
+
+	private int cellIndex(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
+	private int xFaceIndex(int x, int y, int z) { return (z * sizeY + y) * (sizeX + 1) + x; }
+	private int yFaceIndex(int x, int y, int z) { return (z * (sizeY + 1) + y) * sizeX + x; }
+	private int zFaceIndex(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
+}
