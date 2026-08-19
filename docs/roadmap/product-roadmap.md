@@ -147,6 +147,6 @@
 
 ## 接下来三项
 
-1. 评审 protocol、`region-state` 与多材料快照迁移；未完成评审前不写入正式世界数据。
-2. 在只读多材料快照上建立外表面/内部界面不重合的自动几何门。
-3. 接通客户端 palette 与两类 mesh 后，再决定唯一需要的实机视觉场景。
+1. 按 [`m3-material-state-migration.md`](../architecture/m3-material-state-migration.md) 在只读多材料内存快照上建立外表面/内部界面不重合的自动几何门。
+2. 保留 v1 的同时分别实现 network v2 与 `region-state v2` 兼容/故障门。
+3. 接通 controller feature gate、客户端 palette 与两类 mesh 后，再决定唯一需要的实机视觉场景。

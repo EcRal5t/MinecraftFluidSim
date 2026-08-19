@@ -26,6 +26,7 @@
 | 世界配置 | `src/main/java/com/example/simulation/FluidServerConfig.java` | v1 配置 fail-closed；预算重启后生效 |
 | controller 持久化协调 | `src/main/java/com/example/simulation/FluidRegionPersistence.java` | manifest admission、checkpoint、quarantine 与 takeover journal 分离 |
 | `region-state v1` | `src/main/java/com/example/simulation/persistence/`、`docs/architecture/region-state-v1.md` | 两槽完整代次、CRC、账本和 HEAD 最后发布 |
+| M3 跨层迁移边界 | `docs/architecture/m3-material-state-migration.md` | v1 保留；network v2 与 region-state v2 独立；运行时 handle 不上链 |
 | 控制器与边界块 | `src/main/java/com/example/block/RealWaterBlocks.java`、`src/main/java/com/example/block/FluidControllerBlock.java` | feature flag 默认关闭；只读激活；资源同步 |
 | 闭合边界扫描 | `src/main/java/com/example/simulation/controller/` | 非加载读取；缺 chunk/破口/多内腔/超预算拒绝或整域暂停 |
 | 活动 PIC/FLIP 编排 | `src/main/java/com/example/fluid/FlipFluidDomain.java` | 唯一活动核心；旧 `FluidDomain` 不接回 Minecraft |
