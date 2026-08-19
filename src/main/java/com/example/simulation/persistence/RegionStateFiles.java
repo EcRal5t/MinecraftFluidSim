@@ -94,7 +94,7 @@ public final class RegionStateFiles {
 		injector.check(FaultPoint.AFTER_MANIFEST_WRITE, manifestPath);
 		RegionState verified = readSlot(temporary);
 		verified.validate();
-		verified.reconstruct();
+		validateReconstruction(verified);
 		injector.check(FaultPoint.AFTER_TEMP_VALIDATION, temporary);
 		atomicMover.move(temporary, inactivePath, false);
 		if (!Files.isDirectory(inactivePath) || Files.exists(temporary)) throw new IOException("Atomic slot publisher did not publish " + inactivePath);
@@ -163,6 +163,12 @@ public final class RegionStateFiles {
 		validateHeadBinding(head, state.manifest());
 		state.validate();
 		return state;
+	}
+
+	private static void validateReconstruction(RegionState state) throws IOException {
+		if (state.manifest().formatVersion() == 1) state.reconstruct();
+		else if (state.manifest().formatVersion() == 2) state.reconstructMaterial();
+		else throw new IOException("Unsupported region-state version " + state.manifest().formatVersion());
 	}
 
 	private RegionState readSlot(Path slot) throws IOException {

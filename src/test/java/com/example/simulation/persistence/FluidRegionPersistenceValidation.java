@@ -1,6 +1,7 @@
 package com.example.simulation.persistence;
 
 import com.example.fluid.FlipFluidDomain;
+import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipParticleState;
 import com.example.fluid.FluidMaterial;
 import com.example.fluid.FluidSolverConfig;
@@ -52,79 +53,80 @@ public final class FluidRegionPersistenceValidation {
 	}
 
 	private static void validateMaterialV2Codec() throws Exception {
-		RegionState pure = RegionState.capture(populatedRegion(new UUID(15L, 16L)), 1L);
+		FluidRegion region = populatedRegion(new UUID(15L, 16L));
 		List<FluidMaterial> palette = List.of(
 				new FluidMaterial("realwater:water", 1_000.0, "realwater:water"),
 				new FluidMaterial("realwater:oil", 800.0, "realwater:oil")
 		);
-		FlipParticleState particles = pure.reconstruct();
-		float[] allPositions = particles.copyPositionVolume();
-		int[] counts = new int[palette.size()];
-		double[] volumes = new double[palette.size()], masses = new double[palette.size()];
+		FlipParticleState pureParticles = region.domain().exportParticleState();
+		float[] positions = pureParticles.copyPositionVolume();
+		double[] markerMass = new double[pureParticles.particleCount()];
+		int[] materialIndices = new int[pureParticles.particleCount()];
 		double totalMass = 0.0;
-		for (int ordinal = 0; ordinal < particles.particleCount(); ordinal++) {
+		for (int ordinal = 0; ordinal < pureParticles.particleCount(); ordinal++) {
 			int material = ordinal & 1;
-			double volume = allPositions[ordinal * 4 + 3];
-			double mass = volume * palette.get(material).referenceDensity();
-			counts[material]++; volumes[material] += volume; masses[material] += mass; totalMass += mass;
+			materialIndices[ordinal] = material;
+			markerMass[ordinal] = positions[ordinal * 4 + 3] * palette.get(material).referenceDensity();
+			totalMass += markerMass[ordinal];
 		}
-		List<RegionSectionState> sections = new ArrayList<>();
-		List<RegionManifest.SectionDescriptor> descriptors = new ArrayList<>();
-		for (RegionSectionState pureSection : pure.sections()) {
-			int[] ordinals = pureSection.markerOrdinals();
-			float[] positionVolume = pureSection.positionVolume();
-			double[] markerMass = new double[ordinals.length];
-			int[] materialIndices = new int[ordinals.length];
-			for (int marker = 0; marker < ordinals.length; marker++) {
-				int material = ordinals[marker] & 1;
-				materialIndices[marker] = material;
-				markerMass[marker] = positionVolume[marker * 4 + 3] * palette.get(material).referenceDensity();
-			}
-			RegionSectionState section = signedSection(new RegionSectionState(2, pureSection.regionId(), pureSection.dimensionId(),
-					pureSection.checkpointGeneration(), pureSection.sectionX(), pureSection.sectionY(), pureSection.sectionZ(),
-					pureSection.localStartX(), pureSection.localStartY(), pureSection.localStartZ(), pureSection.sizeX(), pureSection.sizeY(),
-					pureSection.sizeZ(), ordinals, positionVolume, pureSection.velocities(), markerMass, materialIndices,
-					pureSection.solidMask(), List.of(), 0L));
-			sections.add(section);
-			descriptors.add(new RegionManifest.SectionDescriptor(section.sectionX(), section.sectionY(), section.sectionZ(),
-					section.markerCount(), Double.doubleToRawLongBits(sumVolumes(section.positionVolume())),
-					Double.doubleToRawLongBits(sum(section.markerMass())), section.checksum()));
-		}
-		descriptors.sort(RegionManifest.SectionDescriptor::compareTo);
-		List<RegionManifest.MaterialLedger> ledgers = new ArrayList<>();
-		for (int material = 0; material < palette.size(); material++) {
-			ledgers.add(new RegionManifest.MaterialLedger(counts[material], Double.doubleToRawLongBits(volumes[material]),
-					Double.doubleToRawLongBits(masses[material])));
-		}
-		RegionManifest base = pure.manifest();
-		RegionManifest unsigned = new RegionManifest(2, base.regionId(), base.dimensionId(), base.checkpointGeneration(),
-				base.networkGeneration(), base.origin(), base.sizeX(), base.sizeY(), base.sizeZ(), base.solverConfig(),
-				base.reservedMarkerCapacity(), base.runtime(), base.footprint(), base.totalMarkerCount(), base.totalVolumeBits(),
-				palette, Double.doubleToRawLongBits(totalMass), ledgers, descriptors, List.of(), 0L);
-		RegionManifest manifest = new RegionManifest(2, unsigned.regionId(), unsigned.dimensionId(), unsigned.checkpointGeneration(),
-				unsigned.networkGeneration(), unsigned.origin(), unsigned.sizeX(), unsigned.sizeY(), unsigned.sizeZ(), unsigned.solverConfig(),
-				unsigned.reservedMarkerCapacity(), unsigned.runtime(), unsigned.footprint(), unsigned.totalMarkerCount(), unsigned.totalVolumeBits(),
-				unsigned.materialPalette(), unsigned.totalMassBits(), unsigned.materialLedgers(), unsigned.sections(), unsigned.extensions(),
-				RegionStateIntegrity.manifestChecksum(unsigned));
-		RegionState state = new RegionState(manifest, sections);
+		FlipMaterialParticleState expected = new FlipMaterialParticleState(pureParticles.sizeX(), pureParticles.sizeY(), pureParticles.sizeZ(),
+				pureParticles.cellSize(), pureParticles.particleCount(), sumVolumes(positions), totalMass, palette, positions,
+				pureParticles.copyParticleVelocities(), pureParticles.copySolidMask(), markerMass, materialIndices);
+		region.domain().restoreMaterialParticleState(expected);
+		RegionState state = RegionState.captureMaterial(region, 1L);
 		state.validate();
 		expectIOException(state::reconstruct, "material v2 was silently reconstructed as pure water");
+		assertMaterialStateEquals(expected, state.reconstructMaterial());
 
 		RegionStateCodec codec = new RegionStateCodec();
-		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(manifest));
-		require(decodedManifest.equals(manifest), "region-state v2 manifest did not round-trip");
-		for (RegionSectionState section : sections) {
+		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
+		require(decodedManifest.equals(state.manifest()), "region-state v2 manifest did not round-trip");
+		for (RegionSectionState section : state.sections()) {
 			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
 			require(decoded.formatVersion() == 2 && Arrays.equals(decoded.markerMass(), section.markerMass())
 					&& Arrays.equals(decoded.materialPaletteIndex(), section.materialPaletteIndex())
 					&& decoded.checksum() == section.checksum(), "region-state v2 section did not round-trip");
 		}
-		CompoundTag missingMass = codec.encodeSection(sections.getFirst());
+		CompoundTag missingMass = codec.encodeSection(state.sections().getFirst());
 		missingMass.remove("MassBits");
 		expectIOException(() -> codec.decodeSection(missingMass), "v2 section missing marker mass was accepted");
-		CompoundTag encodedV1 = codec.encodeManifest(base);
+		int changedIndex = 0;
+		while (state.sections().get(changedIndex).markerCount() == 0) changedIndex++;
+		RegionSectionState originalSection = state.sections().get(changedIndex);
+		double[] changedMass = originalSection.markerMass();
+		changedMass[0] += 1.0;
+		RegionSectionState changedSection = signedSection(new RegionSectionState(2, originalSection.regionId(),
+				originalSection.dimensionId(), originalSection.checkpointGeneration(), originalSection.sectionX(), originalSection.sectionY(),
+				originalSection.sectionZ(), originalSection.localStartX(), originalSection.localStartY(), originalSection.localStartZ(),
+				originalSection.sizeX(), originalSection.sizeY(), originalSection.sizeZ(), originalSection.markerOrdinals(),
+				originalSection.positionVolume(), originalSection.velocities(), changedMass, originalSection.materialPaletteIndex(),
+				originalSection.solidMask(), originalSection.extensions(), 0L));
+		List<RegionSectionState> changedSections = new ArrayList<>(state.sections());
+		changedSections.set(changedIndex, changedSection);
+		List<RegionManifest.SectionDescriptor> changedDescriptors = new ArrayList<>(state.manifest().sections());
+		for (int descriptor = 0; descriptor < changedDescriptors.size(); descriptor++) {
+			RegionManifest.SectionDescriptor current = changedDescriptors.get(descriptor);
+			if (current.key().equals(changedSection.key())) {
+				changedDescriptors.set(descriptor, new RegionManifest.SectionDescriptor(current.sectionX(), current.sectionY(), current.sectionZ(),
+						current.markerCount(), current.volumeBits(), Double.doubleToRawLongBits(sum(changedMass)), changedSection.checksum()));
+			}
+		}
+		RegionManifest base = state.manifest();
+		RegionManifest changedManifest = signedManifest(new RegionManifest(2, base.regionId(), base.dimensionId(), base.checkpointGeneration(),
+				base.networkGeneration(), base.origin(), base.sizeX(), base.sizeY(), base.sizeZ(), base.solverConfig(),
+				base.reservedMarkerCapacity(), base.runtime(), base.footprint(), base.totalMarkerCount(), base.totalVolumeBits(),
+				base.materialPalette(), base.totalMassBits(), base.materialLedgers(), changedDescriptors, base.extensions(), 0L));
+		expectIOException(() -> new RegionState(changedManifest, changedSections).validate(),
+				"rechecksummed v2 marker-mass corruption escaped exact material ledgers");
+		RegionManifest v1Manifest = RegionState.capture(populatedRegion(new UUID(17L, 18L)), 1L).manifest();
+		CompoundTag encodedV1 = codec.encodeManifest(v1Manifest);
 		require(encodedV1.get("Materials") == null && encodedV1.get("MassBits") == null,
 				"v1 manifest acquired v2 material fields");
+
+		Path root = Files.createTempDirectory(Path.of("."), "material-v2-");
+		RegionStateFiles files = new RegionStateFiles(root);
+		files.publish(state);
+		assertMaterialStateEquals(expected, files.read(region.id()).reconstructMaterial());
 	}
 
 	private static void validateExactRoundTripAndMetadataUnload() throws Exception {
@@ -201,15 +203,15 @@ public final class FluidRegionPersistenceValidation {
 	}
 
 	private static void validateFaultMatrix() throws Exception {
+		FluidMaterial water = new FluidMaterial("realwater:water", 1_000.0, "realwater:water");
 		for (RegionStateFiles.FaultPoint point : RegionStateFiles.FaultPoint.values()) {
 			Path root = Files.createTempDirectory(Path.of("."), "fault-" + point.name().toLowerCase() + "-");
 			FluidRegion region = populatedRegion(UUID.randomUUID());
 			RegionStateFiles files = new RegionStateFiles(root);
 			RegionState first = RegionState.capture(region, 1L);
 			files.publish(first);
-			require(region.recordPublishedCheckpoint(1L), "fixture did not advance checkpoint generation");
-			region.domain().setVolume(4, 1, 4, 0.375F);
-			RegionState second = RegionState.capture(region, 2L);
+			FlipParticleState pure = first.reconstruct();
+			RegionState second = RegionState.migrateV1(first, 2L, water);
 			try {
 				files.publish(second, (observed, path) -> { if (observed == point) throw new IOException("injected " + point); });
 				throw new AssertionError("Fault point did not interrupt publication: " + point);
@@ -218,7 +220,13 @@ public final class FluidRegionPersistenceValidation {
 			long expectedGeneration = point == RegionStateFiles.FaultPoint.AFTER_HEAD_PUBLISH ? 2L : 1L;
 			require(reopened.manifest().checkpointGeneration() == expectedGeneration,
 					"fault exposed a mixed or unexpected generation at " + point);
-			reopened.reconstruct();
+			if (expectedGeneration == 1L) {
+				require(reopened.manifest().formatVersion() == 1, "pre-HEAD migration fault exposed v2");
+				assertParticleStateEquals(pure, reopened.reconstruct());
+			} else {
+				require(reopened.manifest().formatVersion() == 2, "post-HEAD migration did not expose v2");
+				assertMigratedWaterState(pure, reopened.reconstructMaterial(), water);
+			}
 		}
 	}
 
@@ -313,6 +321,42 @@ public final class FluidRegionPersistenceValidation {
 		require(Arrays.equals(expected.copySolidMask(), actual.copySolidMask()), "solid mask changed across persistence");
 	}
 
+	private static void assertMaterialStateEquals(FlipMaterialParticleState expected, FlipMaterialParticleState actual) {
+		require(expected.materials().equals(actual.materials()), "material palette changed across persistence");
+		require(Double.doubleToRawLongBits(expected.totalVolume()) == Double.doubleToRawLongBits(actual.totalVolume())
+				&& Double.doubleToRawLongBits(expected.totalMass()) == Double.doubleToRawLongBits(actual.totalMass()),
+				"material total ledger changed across persistence");
+		require(Arrays.equals(floatBits(expected.copyPositionVolume()), floatBits(actual.copyPositionVolume())),
+				"material marker order/position/particleVolume changed across persistence");
+		require(Arrays.equals(floatBits(expected.copyParticleVelocities()), floatBits(actual.copyParticleVelocities())),
+				"material marker velocity changed across persistence");
+		require(Arrays.equals(expected.copyParticleMass(), actual.copyParticleMass())
+				&& Arrays.equals(expected.copyMaterialPaletteIndex(), actual.copyMaterialPaletteIndex()),
+				"material marker mass or palette index changed across persistence");
+		require(Arrays.equals(expected.copySolidMask(), actual.copySolidMask()), "material solid mask changed across persistence");
+	}
+
+	private static void assertMigratedWaterState(
+			FlipParticleState pure, FlipMaterialParticleState migrated, FluidMaterial water
+	) {
+		require(migrated.materials().equals(List.of(water)), "v1 migration did not create the frozen default-water palette");
+		require(Arrays.equals(floatBits(pure.copyPositionVolume()), floatBits(migrated.copyPositionVolume()))
+				&& Arrays.equals(floatBits(pure.copyParticleVelocities()), floatBits(migrated.copyParticleVelocities()))
+				&& Arrays.equals(pure.copySolidMask(), migrated.copySolidMask()), "v1 migration changed pure-water physical state");
+		float[] positions = pure.copyPositionVolume();
+		double[] mass = migrated.copyParticleMass();
+		int[] materials = migrated.copyMaterialPaletteIndex();
+		double totalMass = 0.0;
+		for (int marker = 0; marker < pure.particleCount(); marker++) {
+			double expectedMass = positions[marker * 4 + 3] * water.referenceDensity();
+			require(Double.doubleToRawLongBits(mass[marker]) == Double.doubleToRawLongBits(expectedMass) && materials[marker] == 0,
+					"v1 migration changed marker mass or default material assignment");
+			totalMass += expectedMass;
+		}
+		require(Double.doubleToRawLongBits(totalMass) == Double.doubleToRawLongBits(migrated.totalMass()),
+				"v1 migration total mass ledger changed");
+	}
+
 	private static int[] floatBits(float[] values) {
 		int[] result = new int[values.length];
 		for (int i = 0; i < values.length; i++) result[i] = Float.floatToRawIntBits(values[i]);
@@ -325,6 +369,14 @@ public final class FluidRegionPersistenceValidation {
 				section.sizeX(), section.sizeY(), section.sizeZ(), section.markerOrdinals(), section.positionVolume(),
 				section.velocities(), section.markerMass(), section.materialPaletteIndex(), section.solidMask(), section.extensions(),
 				RegionStateIntegrity.sectionChecksum(section));
+	}
+
+	private static RegionManifest signedManifest(RegionManifest manifest) {
+		return new RegionManifest(manifest.formatVersion(), manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(),
+				manifest.networkGeneration(), manifest.origin(), manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
+				manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(), manifest.totalVolumeBits(),
+				manifest.materialPalette(), manifest.totalMassBits(), manifest.materialLedgers(), manifest.sections(), manifest.extensions(),
+				RegionStateIntegrity.manifestChecksum(manifest));
 	}
 
 	private static double sumVolumes(float[] positionVolume) {
