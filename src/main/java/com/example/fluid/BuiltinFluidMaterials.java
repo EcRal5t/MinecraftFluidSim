@@ -10,4 +10,14 @@ public final class BuiltinFluidMaterials {
 	public static final List<FluidMaterial> M3_PALETTE = List.of(WATER, OIL, MERCURY);
 
 	private BuiltinFluidMaterials() { }
+
+	/** Display-only palette metadata; it never participates in marker inventory or solver coefficients. */
+	public static int displayArgb(String materialId) {
+		return switch (materialId) {
+			case "realwater:water" -> 0xff197ae8;
+			case "realwater:oil" -> 0xffc89a32;
+			case "realwater:mercury" -> 0xffaeb6c2;
+			default -> 0xffff00ff;
+		};
+	}
 }

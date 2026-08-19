@@ -1,5 +1,7 @@
 package com.example.network;
 
+import com.example.fluid.FluidMaterialRenderSnapshot;
+import com.example.fluid.FluidMaterialSurfaceMesher;
 import io.netty.buffer.Unpooled;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
@@ -179,6 +181,20 @@ public final class FluidNetworkProtocolValidation {
 		require(decoded.extensions().size() == 1 && decoded.extensions().getFirst().type() == 91
 				&& Arrays.equals(decoded.extensions().getFirst().data(), new byte[] {4, 5, 6}),
 				"material v2 unknown optional section was not length-delimited");
+		FluidMaterialRenderSnapshot renderSnapshot = decoded.toRenderSnapshot();
+		require(renderSnapshot.materials().size() == decoded.materials().size()
+				&& Arrays.equals(renderSnapshot.copyTotalVolume(), decoded.totalVolume()),
+				"material v2 payload did not rebuild CPU mesher fields");
+		FluidMaterialSurfaceMesher.Mesh mesh = FluidMaterialSurfaceMesher.build(renderSnapshot);
+		require(!mesh.outerTriangles().isEmpty() && !mesh.interfaceTriangles().isEmpty()
+				&& mesh.overlappingCategoryTriangles() == 0,
+				"material v2 payload lost its partitioned outer/internal surfaces");
+		FluidMaterialSnapshotPayload generated = FluidMaterialSnapshotPayload.snapshot(
+				DIMENSION, REGION, 5L, 1L, decoded.origin(), renderSnapshot, false);
+		require(Arrays.equals(generated.totalVolume(), decoded.totalVolume())
+				&& Arrays.deepEquals(generated.materialFractions(), decoded.materialFractions())
+				&& Arrays.deepEquals(generated.phaseFractions(), decoded.phaseFractions()),
+				"server material snapshot factory changed quantized reconstruction fields");
 
 		FluidMaterialSnapshotLedger ledger = new FluidMaterialSnapshotLedger();
 		require(ledger.evaluate(materialSnapshot(1L, 1L, 1), negotiation)

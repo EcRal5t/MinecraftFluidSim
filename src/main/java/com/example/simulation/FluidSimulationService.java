@@ -6,6 +6,8 @@ import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipParticleState;
+import com.example.fluid.FluidMaterialRenderSnapshot;
+import com.example.network.FluidMaterialSnapshotPayload;
 import com.example.network.FluidSnapshotPayload;
 import com.example.network.FluidProtocolServer;
 import com.example.simulation.controller.FluidBoundaryScanner;
@@ -621,6 +623,7 @@ public final class FluidSimulationService {
 		regionManager.clear();
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			FluidProtocolServer.send(player, FluidSnapshotPayload.clearAll());
+			FluidProtocolServer.send(player, FluidMaterialSnapshotPayload.clearAll());
 		}
 		return restoration;
 	}
@@ -717,14 +720,20 @@ public final class FluidSimulationService {
 	public void sendSnapshots(ServerPlayer player) {
 		for (FluidRegion region : regionManager.regions()) {
 			if (!region.solverLoaded() || !player.level().dimension().equals(region.dimension())) continue;
-			FluidProtocolServer.send(player, createSnapshot(region));
+			if (materialFeatureEnabled) FluidProtocolServer.send(player, createMaterialSnapshot(region));
+			else FluidProtocolServer.send(player, createSnapshot(region));
 		}
 	}
 
 	private void sendSnapshot(ServerLevel level, FluidRegion region) {
 		if (!region.solverLoaded() || !level.dimension().equals(region.dimension())) return;
-		FluidSnapshotPayload payload = createSnapshot(region);
-		for (ServerPlayer player : level.players()) FluidProtocolServer.send(player, payload);
+		if (materialFeatureEnabled) {
+			FluidMaterialSnapshotPayload payload = createMaterialSnapshot(region);
+			for (ServerPlayer player : level.players()) FluidProtocolServer.send(player, payload);
+		} else {
+			FluidSnapshotPayload payload = createSnapshot(region);
+			for (ServerPlayer player : level.players()) FluidProtocolServer.send(player, payload);
+		}
 	}
 
 	private static FluidSnapshotPayload createSnapshot(FluidRegion region) {
@@ -737,10 +746,17 @@ public final class FluidSimulationService {
 	}
 
 	private static void sendRegionRemoval(MinecraftServer server, FluidRegion region) {
-		FluidSnapshotPayload payload = FluidSnapshotPayload.removeRegion(
-				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence()
+		long sequence = region.nextSnapshotSequence();
+		FluidSnapshotPayload purePayload = FluidSnapshotPayload.removeRegion(
+				region.dimension().identifier(), region.id(), region.generation(), sequence
 		);
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) FluidProtocolServer.send(player, payload);
+		FluidMaterialSnapshotPayload materialPayload = FluidMaterialSnapshotPayload.removeRegion(
+				region.dimension().identifier(), region.id(), region.generation(), sequence
+		);
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			FluidProtocolServer.send(player, purePayload);
+			FluidProtocolServer.send(player, materialPayload);
+		}
 	}
 
 	private FluidRegion activeRegion() {
@@ -770,6 +786,14 @@ public final class FluidSimulationService {
 
 	public record SelectionResult(boolean succeeded, UUID regionId, String failure) {
 		static SelectionResult failed(String failure) { return new SelectionResult(false, null, failure); }
+	}
+
+	private static FluidMaterialSnapshotPayload createMaterialSnapshot(FluidRegion region) {
+		FluidMaterialRenderSnapshot snapshot = region.domain().copyMaterialRenderSnapshot();
+		return FluidMaterialSnapshotPayload.snapshot(
+				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence(), region.origin(),
+				snapshot, region.debugOverlays()
+		);
 	}
 
 	private static void bindDefaultMaterialState(FlipFluidDomain domain) {

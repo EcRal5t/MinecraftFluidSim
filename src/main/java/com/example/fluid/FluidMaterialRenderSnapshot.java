@@ -79,6 +79,21 @@ public final class FluidMaterialRenderSnapshot {
 		);
 	}
 
+	/** Rebuilds display-only CPU mesher input from validated quantized wire fields. */
+	public static FluidMaterialRenderSnapshot fromQuantizedFields(
+			int sizeX, int sizeY, int sizeZ, float cellSize,
+			List<FluidMaterial> materials, List<String> phaseGroups,
+			byte[] totalVolume, byte[] markers, byte[] solids,
+			byte[][] materialFractions, byte[][] phaseFractions
+	) {
+		int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		return new FluidMaterialRenderSnapshot(
+				sizeX, sizeY, sizeZ, cellSize, materials, phaseGroups, totalVolume, markers, solids,
+				materialFractions, markerFields(materialFractions, cells),
+				phaseFractions, markerFields(phaseFractions, cells)
+		);
+	}
+
 	public int sizeX() { return sizeX; }
 	public int sizeY() { return sizeY; }
 	public int sizeZ() { return sizeZ; }
@@ -114,6 +129,17 @@ public final class FluidMaterialRenderSnapshot {
 		if (fields == null || fields.length != expectedFields) throw new IllegalArgumentException("Invalid " + label + " palette");
 		byte[][] result = new byte[fields.length][];
 		for (int field = 0; field < fields.length; field++) result[field] = copyField(fields[field], cells, label);
+		return result;
+	}
+
+	private static byte[][] markerFields(byte[][] fractions, int cells) {
+		byte[][] result = new byte[fractions.length][cells];
+		for (int field = 0; field < fractions.length; field++) {
+			if (fractions[field] == null || fractions[field].length != cells) {
+				throw new IllegalArgumentException("Invalid quantized fraction field");
+			}
+			for (int cell = 0; cell < cells; cell++) if (fractions[field][cell] != 0) result[field][cell] = 1;
+		}
 		return result;
 	}
 

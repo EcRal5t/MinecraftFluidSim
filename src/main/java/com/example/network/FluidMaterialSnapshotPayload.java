@@ -2,6 +2,8 @@ package com.example.network;
 
 import com.example.RealWaterMod;
 import com.example.fluid.FluidMaterial;
+import com.example.fluid.BuiltinFluidMaterials;
+import com.example.fluid.FluidMaterialRenderSnapshot;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -123,6 +125,39 @@ public record FluidMaterialSnapshotPayload(
 			Identifier dimension, UUID regionId, long generation, long sequence
 	) {
 		return empty(Kind.REMOVE_REGION, dimension, regionId, generation, sequence);
+	}
+
+	public static FluidMaterialSnapshotPayload snapshot(
+			Identifier dimension, UUID regionId, long generation, long sequence, BlockPos origin,
+			FluidMaterialRenderSnapshot snapshot, boolean debugOverlays
+	) {
+		List<MaterialEntry> materials = snapshot.materials().stream()
+				.map(material -> new MaterialEntry(material.id(), material.referenceDensity(), material.miscibilityGroup(),
+						BuiltinFluidMaterials.displayArgb(material.id())))
+				.toList();
+		byte[][] materialFractions = new byte[materials.size()][];
+		for (int material = 0; material < materialFractions.length; material++) {
+			materialFractions[material] = snapshot.copyMaterialFractions(material);
+		}
+		byte[][] phaseFractions = new byte[snapshot.phaseGroups().size()][];
+		for (int phase = 0; phase < phaseFractions.length; phase++) phaseFractions[phase] = snapshot.copyPhaseFractions(phase);
+		return new FluidMaterialSnapshotPayload(
+				FluidProtocol.MATERIAL_SNAPSHOT_VERSION, Kind.SNAPSHOT, dimension, regionId, generation, sequence,
+				FluidProtocol.MATERIAL_PALETTE_VERSION, origin, snapshot.cellSize(), snapshot.sizeX(), snapshot.sizeY(), snapshot.sizeZ(),
+				materials, snapshot.phaseGroups(), snapshot.copyTotalVolume(), snapshot.copyMarkers(), snapshot.copySolids(),
+				materialFractions, phaseFractions, debugOverlays, List.of()
+		);
+	}
+
+	public FluidMaterialRenderSnapshot toRenderSnapshot() {
+		if (!isSnapshot()) throw new IllegalStateException("Only material snapshot payloads contain mesher fields");
+		List<FluidMaterial> definitions = materials.stream()
+				.map(material -> new FluidMaterial(material.id(), material.referenceDensity(), material.phaseGroup()))
+				.toList();
+		return FluidMaterialRenderSnapshot.fromQuantizedFields(
+				sizeX, sizeY, sizeZ, cellSize, definitions, phaseGroups, totalVolume, markers, solids,
+				materialFractions, phaseFractions
+		);
 	}
 
 	public static FluidMaterialSnapshotPayload clearAll() {
