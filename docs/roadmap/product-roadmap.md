@@ -147,6 +147,6 @@
 
 ## 接下来三项
 
-1. 按 [`m3-material-state-migration.md`](../architecture/m3-material-state-migration.md) 保留 network v1，并实现独立 v2 codec/capability/ordering 门。
-2. 保留 `region-state v1` reader，并实现 v2 material/mass 账本与双槽故障门。
-3. 接通 controller feature gate、客户端 palette 与已验证的两类 mesh 后，再决定唯一需要的实机视觉场景。
+1. 保留 `region-state v1` reader，并实现 v2 material/mass 账本与双槽故障门。
+2. 把已验证的 network v2、只读 material snapshot 与 mesher 接入默认关闭的 controller feature gate。
+3. 接通客户端 palette/两类 mesh 后，再决定唯一需要的实机视觉场景。

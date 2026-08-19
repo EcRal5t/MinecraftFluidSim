@@ -12,8 +12,9 @@
 
 ## 网络迁移
 
-现有 `fluid_snapshot_v1` packet ID 与 codec 保持逐字节不变。多材料使用独立 v2 payload/type，并通过新的可选
-capability 协商；不能在 v1 的可选 extension 中藏入客户端必须理解的材料字段。
+现有 `fluid_snapshot_v1` packet ID 与 codec 保持逐字节不变。独立 `fluid_snapshot_v2` codec/type 与 material
+capability 已通过 standalone 门，但 live server offer/receiver 仍固定 v1，等待 controller feature gate；不能在 v1
+的可选 extension 中藏入客户端必须理解的材料字段。
 
 - v1 只表示 pure-water palette。协商到 v1 的客户端可以继续观察纯水区域。
 - v2 palette 使用稳定 material ID 和展示属性；per-cell phase/material 重建字段是量化展示数据，不携带精确质量。
@@ -50,7 +51,6 @@ v2 section 在 v1 marker 位置/体积、速度和 solid slice 之外必须包�
 ## 实施顺序与门
 
 1. 先实现不涉及网络/存档的只读多材料内存快照，并证明外表面与内部界面字段最小充分。
-2. 再新增独立 network v2 codec/ordering/capability 门，保留 v1 round-trip。
-3. 再新增 region-state v2 records/codec 与 v1→v2 双槽故障矩阵；在此之前不允许正式多材料 checkpoint。
+2. 独立 network v2 codec/ordering/capability 门已完成并保留 v1 round-trip；尚未注册 live play 路径。
+3. 下一步新增 region-state v2 records/codec 与 v1→v2 双槽故障矩阵；在此之前不允许正式多材料 checkpoint。
 4. 最后接入 controller feature gate 和客户端 mesh；自动几何门通过后只安排一个明确的实机视觉场景。
-

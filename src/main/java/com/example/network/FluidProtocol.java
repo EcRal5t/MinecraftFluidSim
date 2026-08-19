@@ -5,22 +5,33 @@ import java.util.Objects;
 /** Version and capability negotiation shared by configuration payloads and standalone codec tests. */
 public final class FluidProtocol {
 	public static final int MIN_VERSION = 1;
-	public static final int MAX_VERSION = 1;
+	public static final int MAX_VERSION = 2;
+	/** Live play traffic remains v1 until the M3 feature gate registers and selects v2. */
 	public static final int CURRENT_VERSION = 1;
+	public static final int MATERIAL_SNAPSHOT_VERSION = 2;
 	public static final int PURE_WATER_PALETTE_VERSION = 1;
+	public static final int MATERIAL_PALETTE_VERSION = 1;
 
 	public static final long CAP_REGION_IDENTITY = 1L;
 	public static final long CAP_GENERATION_SEQUENCE = 1L << 1;
 	public static final long CAP_OPTIONAL_SECTIONS = 1L << 2;
 	public static final long CAP_MULTI_REGION_RENDER = 1L << 3;
+	public static final long CAP_MATERIAL_SNAPSHOT = 1L << 4;
 	public static final long SUPPORTED_CAPABILITIES = CAP_REGION_IDENTITY
+			| CAP_GENERATION_SEQUENCE | CAP_OPTIONAL_SECTIONS | CAP_MULTI_REGION_RENDER | CAP_MATERIAL_SNAPSHOT;
+	public static final long REQUIRED_CAPABILITIES = CAP_REGION_IDENTITY
 			| CAP_GENERATION_SEQUENCE | CAP_OPTIONAL_SECTIONS | CAP_MULTI_REGION_RENDER;
-	public static final long REQUIRED_CAPABILITIES = SUPPORTED_CAPABILITIES;
 
 	private FluidProtocol() { }
 
 	public static Offer serverOffer() {
-		return new Offer(MIN_VERSION, MAX_VERSION, REQUIRED_CAPABILITIES, 0L);
+		return new Offer(MIN_VERSION, CURRENT_VERSION, REQUIRED_CAPABILITIES, 0L);
+	}
+
+	/** Standalone M3 offer; the live server does not use it until material gameplay is enabled. */
+	public static Offer materialServerOffer() {
+		return new Offer(MATERIAL_SNAPSHOT_VERSION, MATERIAL_SNAPSHOT_VERSION,
+				REQUIRED_CAPABILITIES | CAP_MATERIAL_SNAPSHOT, 0L);
 	}
 
 	public static Negotiation negotiate(Offer offer) {

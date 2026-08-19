@@ -42,8 +42,8 @@
 | takeover 事务 | `src/main/java/com/example/simulation/TakeoverTransaction.java`、`src/main/java/com/example/simulation/TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
 | takeover codec/files | `src/main/java/com/example/simulation/TakeoverJournalCodec.java`、`src/main/java/com/example/simulation/TakeoverJournalFiles.java` | v1 可读；未知/损坏/恢复失败锁住新 takeover |
 | 指令 transcript | `src/main/java/com/example/logging/RealWaterCommandLog.java`、`src/main/java/com/example/logging/CommandAuditFile.java` | 只做 UTF-8 观测；失败不得改变命令结果 |
-| protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | protocol 与两种存档版本独立；配置未完成不得进 play |
-| 多区域快照 | `src/main/java/com/example/network/FluidSnapshotPayload.java`、`src/main/java/com/example/network/FluidSnapshotLedger.java` | dimension/id/generation/sequence/palette/tombstone 一致 |
+| protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 仍为 v1；v2 material capability 尚未接 play |
+| 多区域快照 | `src/main/java/com/example/network/FluidSnapshotPayload.java`、`src/main/java/com/example/network/FluidSnapshotLedger.java`、`src/main/java/com/example/network/FluidMaterialSnapshotPayload.java`、`src/main/java/com/example/network/FluidMaterialSnapshotLedger.java` | v1/v2 type 独立；dimension/id/generation/sequence/palette/tombstone 一致 |
 | 客户端水面 | `src/client/java/com/example/client/ClientFluidVolumeRenderer.java` | 每域独立插值，按当前维度合并；不得反写物理 |
 | 客户端握手与绑定 | `src/client/java/com/example/client/RealWaterModClient.java` | configuration/play 注册、断线与重配置清理成套 |
 
