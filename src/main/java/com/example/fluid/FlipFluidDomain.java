@@ -18,6 +18,7 @@ public final class FlipFluidDomain {
 	private static final float PARTICLE_VOLUME = 1.0F / PARTICLES_PER_FULL_CELL;
 	private static final float FLIP_RATIO = 0.90F;
 	private static final int DEFAULT_MAX_PARTICLES = 262_144;
+	private static final int NO_PHASE = Integer.MIN_VALUE;
 
 	private final int sizeX;
 	private final int sizeY;
@@ -35,6 +36,13 @@ public final class FlipFluidDomain {
 	private final float[] volume;
 	private final float[] pressure;
 	private final float[] divergence;
+	private final double[] exactCellMarkerVolume;
+	private final double[] exactCellMarkerMass;
+	private final double[] cellDensity;
+	private final int[] cellPhaseA;
+	private final int[] cellPhaseB;
+	private final double[] cellPhaseVolumeA;
+	private final double[] cellPhaseVolumeB;
 
 	private final float[] velocityX;
 	private final float[] velocityY;
@@ -71,6 +79,7 @@ public final class FlipFluidDomain {
 	private int pressureAnchor = -1;
 	private int lastPressureIterations;
 	private float lastPressureResidual;
+	private boolean variableDensityActive;
 
 	public FlipFluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config) {
 		this(sizeX, sizeY, sizeZ, config, DEFAULT_MAX_PARTICLES);
@@ -106,6 +115,13 @@ public final class FlipFluidDomain {
 		this.volume = new float[cellCount];
 		this.pressure = new float[cellCount];
 		this.divergence = new float[cellCount];
+		this.exactCellMarkerVolume = new double[cellCount];
+		this.exactCellMarkerMass = new double[cellCount];
+		this.cellDensity = new double[cellCount];
+		this.cellPhaseA = new int[cellCount];
+		this.cellPhaseB = new int[cellCount];
+		this.cellPhaseVolumeA = new double[cellCount];
+		this.cellPhaseVolumeB = new double[cellCount];
 		this.velocityX = new float[(sizeX + 1) * sizeY * sizeZ];
 		this.velocityY = new float[sizeX * (sizeY + 1) * sizeZ];
 		this.velocityZ = new float[sizeX * sizeY * (sizeZ + 1)];
@@ -270,6 +286,7 @@ public final class FlipFluidDomain {
 	void setMaterialInCell(int x, int y, int z, FluidMaterialRegistry registry,
 	                       int materialHandle, int phaseLabel) {
 		if (registry == null) throw new IllegalArgumentException("Material registry must not be null");
+		if (phaseLabel == NO_PHASE) throw new IllegalArgumentException("Reserved phase label");
 		if (materialRegistry != null && materialRegistry != registry) {
 			throw new IllegalArgumentException("A domain cannot mix runtime handles from different material registries");
 		}
@@ -503,6 +520,13 @@ public final class FlipFluidDomain {
 	private void rebuildGridFromParticles() {
 		Arrays.fill(volume, 0.0F);
 		Arrays.fill(markerCount, 0);
+		Arrays.fill(exactCellMarkerVolume, 0.0);
+		Arrays.fill(exactCellMarkerMass, 0.0);
+		Arrays.fill(cellDensity, config.density());
+		Arrays.fill(cellPhaseA, NO_PHASE);
+		Arrays.fill(cellPhaseB, NO_PHASE);
+		Arrays.fill(cellPhaseVolumeA, 0.0);
+		Arrays.fill(cellPhaseVolumeB, 0.0);
 		freeSurfaceGeometry.clearExactVolumes();
 		Arrays.fill(velocityX, 0.0F);
 		Arrays.fill(velocityY, 0.0F);
@@ -510,16 +534,25 @@ public final class FlipFluidDomain {
 		Arrays.fill(velocityWeightX, 0.0F);
 		Arrays.fill(velocityWeightY, 0.0F);
 		Arrays.fill(velocityWeightZ, 0.0F);
-		boolean massWeighted = usesMassWeightedP2G();
+		variableDensityActive = usesMassWeightedP2G();
 		for (int i = 0; i < particleCount; i++) {
 			int particleCell = particleCellIndex(i);
 			markerCount[particleCell]++;
+			exactCellMarkerVolume[particleCell] += particleVolume[i];
+			exactCellMarkerMass[particleCell] += particleMass[i];
+			addCellPhaseVolume(particleCell, particlePhaseLabel[i], particleVolume[i]);
 			freeSurfaceGeometry.addExactVolume(particleCell, particleVolume[i]);
 			splatCenter(particleX[i], particleY[i], particleZ[i], particleVolume[i]);
-			float transferWeight = massWeighted ? (float) particleMass[i] : particleVolume[i];
+			float transferWeight = variableDensityActive ? (float) particleMass[i] : particleVolume[i];
 			splatFaceField(velocityX, velocityWeightX, 0, particleX[i], particleY[i], particleZ[i], particleVelocityX[i], transferWeight);
 			splatFaceField(velocityY, velocityWeightY, 1, particleX[i], particleY[i], particleZ[i], particleVelocityY[i], transferWeight);
 			splatFaceField(velocityZ, velocityWeightZ, 2, particleX[i], particleY[i], particleZ[i], particleVelocityZ[i], transferWeight);
+		}
+		for (int cell = 0; cell < cellCount; cell++) if (markerCount[cell] > 0) {
+			cellDensity[cell] = exactCellMarkerMass[cell] / exactCellMarkerVolume[cell];
+			if (!(Double.isFinite(cellDensity[cell]) && cellDensity[cell] > 0.0)) {
+				throw new IllegalStateException("Marker inventory produced invalid cell density");
+			}
 		}
 		normalize(velocityX, velocityWeightX);
 		normalize(velocityY, velocityWeightY);
@@ -528,6 +561,22 @@ public final class FlipFluidDomain {
 		enforceSolidFaceVelocities();
 		extrapolateVelocityIntoAir();
 		gridDirty = false;
+	}
+
+	private void addCellPhaseVolume(int cell, int phase, float amount) {
+		if (cellPhaseA[cell] == phase) {
+			cellPhaseVolumeA[cell] += amount;
+		} else if (cellPhaseB[cell] == phase) {
+			cellPhaseVolumeB[cell] += amount;
+		} else if (cellPhaseA[cell] == NO_PHASE) {
+			cellPhaseA[cell] = phase;
+			cellPhaseVolumeA[cell] = amount;
+		} else if (cellPhaseB[cell] == NO_PHASE) {
+			cellPhaseB[cell] = phase;
+			cellPhaseVolumeB[cell] = amount;
+		} else {
+			throw new IllegalStateException("M3 supports at most two immiscible phases per pressure cell");
+		}
 	}
 
 	private void extrapolateVelocityIntoAir() {
@@ -728,8 +777,43 @@ public final class FlipFluidDomain {
 	private float pressureFaceCoefficient(int fluid, int neighbor, int directionX, int directionY, int directionZ) {
 		float openArea = openFaceFromCell(fluid, directionX, directionY, directionZ);
 		if (openArea <= 0.0F || solid[neighbor]) return 0.0F;
-		if (isFluid(neighbor)) return openArea;
-		return openArea / freeSurfaceGeometry.pressureTheta(fluid, directionX, directionY, directionZ);
+		float densityScale = variableDensityActive ? pressureDensityScale(fluid, neighbor) : 1.0F;
+		if (isFluid(neighbor)) return openArea * densityScale;
+		return openArea * densityScale / freeSurfaceGeometry.pressureTheta(fluid, directionX, directionY, directionZ);
+	}
+
+	private float pressureDensityScale(int first, int second) {
+		if (isFluid(first) && isFluid(second)) {
+			return (float) (config.density() / materialFaceEffectiveDensity(first, second));
+		}
+		int fluid = isFluid(first) ? first : second;
+		return (float) (config.density() / cellDensity[fluid]);
+	}
+
+	private double materialFaceEffectiveDensity(int one, int two) {
+		int first = Math.min(one, two), second = Math.max(one, two);
+		double fraction = 0.5;
+		int firstPhase = dominantPhase(first), secondPhase = dominantPhase(second);
+		if (firstPhase != NO_PHASE && secondPhase != NO_PHASE && firstPhase != secondPhase) {
+			double firstSigned = phaseFraction(first, firstPhase) - 0.5;
+			double secondSigned = phaseFraction(second, firstPhase) - 0.5;
+			double denominator = firstSigned - secondSigned;
+			if (firstSigned > 0.0 && secondSigned < 0.0 && denominator > 1.0E-12) {
+				fraction = Math.max(0.05, Math.min(0.95, firstSigned / denominator));
+			}
+		}
+		return fraction * cellDensity[first] + (1.0 - fraction) * cellDensity[second];
+	}
+
+	private int dominantPhase(int cell) {
+		return cellPhaseVolumeA[cell] >= cellPhaseVolumeB[cell] ? cellPhaseA[cell] : cellPhaseB[cell];
+	}
+
+	private double phaseFraction(int cell, int phase) {
+		if (exactCellMarkerVolume[cell] <= 0.0) return 0.0;
+		double phaseVolume = cellPhaseA[cell] == phase ? cellPhaseVolumeA[cell]
+				: cellPhaseB[cell] == phase ? cellPhaseVolumeB[cell] : 0.0;
+		return phaseVolume / exactCellMarkerVolume[cell];
 	}
 
 	private float openFaceFromCell(int cell, int directionX, int directionY, int directionZ) {
@@ -787,17 +871,29 @@ public final class FlipFluidDomain {
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
 			int left = cellIndex(x - 1, y, z), right = cellIndex(x, y, z), face = xFaceIndex(x, y, z);
 			if (!faceActive(left, right, cutCells.xFaceOpen(x, y, z))) velocityX[face] = 0.0F;
-			else velocityX[face] -= scale * pressureDifference(left, right, 1, 0, 0);
+			else {
+				float difference = pressureDifference(left, right, 1, 0, 0);
+				if (variableDensityActive) difference *= pressureDensityScale(left, right);
+				velocityX[face] -= scale * difference;
+			}
 		}
 		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z), face = yFaceIndex(x, y, z);
 			if (!faceActive(below, above, cutCells.yFaceOpen(x, y, z))) velocityY[face] = 0.0F;
-			else velocityY[face] -= scale * pressureDifference(below, above, 0, 1, 0);
+			else {
+				float difference = pressureDifference(below, above, 0, 1, 0);
+				if (variableDensityActive) difference *= pressureDensityScale(below, above);
+				velocityY[face] -= scale * difference;
+			}
 		}
 		for (int z = 1; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int back = cellIndex(x, y, z - 1), front = cellIndex(x, y, z), face = zFaceIndex(x, y, z);
 			if (!faceActive(back, front, cutCells.zFaceOpen(x, y, z))) velocityZ[face] = 0.0F;
-			else velocityZ[face] -= scale * pressureDifference(back, front, 0, 0, 1);
+			else {
+				float difference = pressureDifference(back, front, 0, 0, 1);
+				if (variableDensityActive) difference *= pressureDensityScale(back, front);
+				velocityZ[face] -= scale * difference;
+			}
 		}
 	}
 

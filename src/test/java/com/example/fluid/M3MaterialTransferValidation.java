@@ -14,6 +14,7 @@ final class M3MaterialTransferValidation {
 		FluidMaterialRegistry registry = registry();
 		validateRegistry(registry);
 		validateActiveDomainP2G(registry);
+		validateActiveVariableDensityPressure(registry);
 
 		Markers equalDensity = markers(registry, false);
 		Transfer equalTransfer = transfer(equalDensity);
@@ -82,17 +83,20 @@ final class M3MaterialTransferValidation {
 				new FluidMaterial("realwater:material_a", 1_000.0, "realwater:aqueous"),
 				new FluidMaterial("realwater:material_b", 1_000.0, "realwater:immiscible_b"),
 				new FluidMaterial("realwater:material_c", 800.0, "realwater:immiscible_c"),
-				new FluidMaterial("realwater:material_d", 1_050.0, "realwater:aqueous")
+				new FluidMaterial("realwater:material_d", 1_050.0, "realwater:aqueous"),
+				new FluidMaterial("realwater:material_e", 13_600.0, "realwater:immiscible_e")
 		));
 	}
 
 	private static void validateRegistry(FluidMaterialRegistry registry) {
-		check(registry.size() == 4, "material registry size changed");
+		check(registry.size() == 5, "material registry size changed");
 		int a = registry.handle("realwater:material_a");
 		int b = registry.handle("realwater:material_b");
 		int c = registry.handle("realwater:material_c");
 		int d = registry.handle("realwater:material_d");
-		check(a == 0 && b == 1 && c == 2 && d == 3, "runtime handles are not declaration-order dense");
+		int e = registry.handle("realwater:material_e");
+		check(a == 0 && b == 1 && c == 2 && d == 3 && e == 4,
+				"runtime handles are not declaration-order dense");
 		check(registry.areMiscible(a, d), "same miscibility group was rejected");
 		check(!registry.areMiscible(a, b) && !registry.areMiscible(a, c), "unlike miscibility groups were merged");
 		expectIllegal(() -> new FluidMaterial("Bad Id", 1_000.0, "realwater:aqueous"));
@@ -101,6 +105,56 @@ final class M3MaterialTransferValidation {
 				registry.material(a), registry.material(a))));
 		expectIllegal(() -> registry.material(-1));
 		expectIllegal(() -> registry.handle("realwater:missing"));
+	}
+
+	private static void validateActiveVariableDensityPressure(FluidMaterialRegistry registry) {
+		validateActiveHydrostaticColumn(registry, "water-oil-1.25:1",
+				registry.handle("realwater:material_a"), registry.handle("realwater:material_c"));
+		validateActiveHydrostaticColumn(registry, "mercury-water-13.6:1",
+				registry.handle("realwater:material_e"), registry.handle("realwater:material_a"));
+	}
+
+	private static void validateActiveHydrostaticColumn(FluidMaterialRegistry registry, String name,
+	                                                    int heavyHandle, int lightHandle) {
+		FluidSolverConfig config = new FluidSolverConfig(
+				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
+				200, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F
+		);
+		FlipFluidDomain domain = new FlipFluidDomain(4, 7, 4, config, 128);
+		for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
+			for (int x = 0; x < domain.sizeX(); x++) domain.setSolid(x, y, z, true);
+		}
+		for (int y = 1; y <= 5; y++) domain.setSolid(1, y, 1, false);
+		for (int y = 1; y <= 4; y++) domain.setVolume(1, y, 1, 1.0F);
+		for (int y = 1; y <= 2; y++) domain.setMaterialInCell(1, y, 1, registry, heavyHandle, 44);
+		for (int y = 3; y <= 4; y++) domain.setMaterialInCell(1, y, 1, registry, lightHandle, 55);
+
+		double heavyDensity = registry.material(heavyHandle).referenceDensity();
+		double lightDensity = registry.material(lightHandle).referenceDensity();
+		FlipFluidDomain.StepStats stats = domain.step();
+		double[] expected = {
+				config.gravity() * (1.5 * lightDensity + 0.5 * (heavyDensity + lightDensity) + heavyDensity),
+				config.gravity() * (1.5 * lightDensity + 0.5 * (heavyDensity + lightDensity)),
+				config.gravity() * 1.5 * lightDensity,
+				config.gravity() * 0.5 * lightDensity
+		};
+		double maximumExpected = expected[0], maximumError = 0.0;
+		double[] actual = new double[4];
+		for (int y = 1; y <= 4; y++) {
+			actual[y - 1] = domain.pressure(1, y, 1);
+			maximumError = Math.max(maximumError, Math.abs(actual[y - 1] - expected[y - 1]));
+		}
+		double pressureError = maximumError / maximumExpected;
+		check(pressureError <= 2.0E-5, name + " active pressure missed analytic hydrostatics: " + pressureError
+				+ ", actual=" + Arrays.toString(actual) + ", expected=" + Arrays.toString(expected));
+		check(stats.pressureIterations() > 0 && stats.pressureIterations() <= 32,
+				name + " active PCG iteration count escaped the column bound");
+		check(stats.pressureResidual() <= 1.0E-3F, name + " active PCG residual is too large");
+		check(domain.maximumParticleSpeed() <= 2.0E-4F, name + " active projection left parasitic marker velocity");
+		check(stats.relativeVolumeError() <= 1.0E-7F && stats.relativeMassError() <= 1.0E-12,
+				name + " active step changed physical inventories");
+		System.out.printf("  active %-18s pressureErr=%.3g PCG=%d residual=%.3g maxSpeed=%.3g%n",
+				name, pressureError, stats.pressureIterations(), stats.pressureResidual(), domain.maximumParticleSpeed());
 	}
 
 	private static Markers markers(FluidMaterialRegistry registry, boolean variableDensity) {

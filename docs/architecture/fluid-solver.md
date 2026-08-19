@@ -17,7 +17,7 @@
 1. marker 向 MAC 网格做 P2G，重建 velocity、平滑 volume 和 containing-cell `markerCount`；变密度域从 marker 质量/动量求面速度，同密度域保持原体积权重。
 2. 压力相开放 MAC 面向空气外推两层，避免未定义空气数组零值阻尼小水滴。
 3. 施加重力，以共享 cut-face aperture 构造散度和压力系统。
-4. PLIC ghost-fluid `theta` 在压力矩阵、预条件器和投影中保持一致。
+4. PLIC ghost-fluid `theta` 在压力矩阵、预条件器和投影中保持一致；变密度域还在三处共享 `rho_ref / rho_face`，其中液液面使用相体积分数给出的界面距离加权密度。
 5. 有界 rest-volume 目标只修正数值 marker 压缩，不编辑 `particleVolume`，也不强制液面水平。
 6. 投影后的有效 MAC 速度再次外推，G2P 使用 90% FLIP / 10% PIC。
 7. marker 逐轴扫掠并与 runtime cut-cell 碰撞，只截断命中轴法向。
@@ -33,7 +33,8 @@
 
 ## 当前范围
 
-- 压力仍以常密度 1000 simulation units 求解，外部空气使用零表压；显式 marker 质量已经用于 P2G 与 reseeding，但尚未进入活动压力算子。
+- 正式世界仍只创建密度 1000 的纯水，外部空气使用零表压。包内 M3 输入已接入活动变系数压力算子，并通过 1.25:1 与 13.6:1 竖直界面静水门。
+- 当前活动材料几何每个压力格最多容纳两个不可互溶 phase；第三个 phase 显式失败，不会丢弃或合并库存。多相交汇扩展留在内部界面增量。
 - 服务端 CPU 是物理规范；可选 GPU probe 仍只读、可回退，不写世界或存档。
 - 已接通最多四个有界区域、控制器边界、独立调度和 `region-state v1`；当前集成说明见根 [`README.md`](../../README.md)。
 - 多材料、可变密度、液液界面和组分质量账本尚未进入活动核心，属于 M3。
