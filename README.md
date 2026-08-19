@@ -21,7 +21,7 @@ This version is a safe bounded-region harness, not yet a global replacement for 
 - `/realwater step [1-20]` advances a paused domain by a bounded number of steps.
 - `/realwater run` advances at 20 Hz when affordable and automatically lowers the simulation rate under sustained load.
 - `/realwater pause` pauses automatic stepping.
-- `/realwater status` reports the selected id, lifecycle, total region budget, grid size, total water, maximum pressure, solve iterations, residual, and time.
+- `/realwater status` reports the selected id, lifecycle, total region budget, grid size, total water, maximum pressure, solve iterations, residual, time, and any marker reseeding merge/split or skipped-split diagnostics from the latest step.
 - `/realwater logpath` prints the absolute path of the dedicated UTF-8 command transcript.
 - `/realwater remove` restores any active takeover, atomically quarantines committed controller state, then removes all registered regions and client debug views. Unknown/corrupt state is never silently deleted.
 
@@ -37,7 +37,9 @@ M2 was accepted on 2026-08-19 with a four-chunk controller region: chunk unload/
 
 Collision sampling runs at the same two-cells-per-block resolution as the fluid. Slabs, stairs, fences, and other non-full collision shapes therefore occupy only the subcells they intersect. If a newly placed block overlaps simulated water, the service conservatively moves that water into nearby capacity when possible and reports any volume that could not fit in the bounded domain.
 
-The active solver follows the same structure as the Godot reference: particle-to-grid transfer, gravity, MAC-grid pressure projection, a 90% FLIP / 10% PIC grid-to-particle transfer, and particle advection with solid collision. A full solver cell starts with eight markers; at two cells per Minecraft axis this is about 64 particles per full water block, rather than 4096. Particle volume is conserved directly, so water cannot turn into a domain-wide low-density VOF haze.
+The active solver follows the same structure as the Godot reference: particle-to-grid transfer, gravity, MAC-grid pressure projection, a 90% FLIP / 10% PIC grid-to-particle transfer, and particle advection with solid collision. A full solver cell starts with eight markers; at two cells per Minecraft axis this is about 64 particles per full water block, rather than 4096. Particle volume is conserved directly, so water cannot turn into a domain-wide low-density VOF haze. The first active M2.5 increment reconstructs a PLIC plane from each occupied cell's exact marker-volume sum and uses one shared ghost-fluid distance in the pressure matrix, preconditioner and projection. A deterministic end-of-step reseeder conservatively merges cells above 12 markers and splits under-sampled cells without exceeding their region budget.
+
+The M2.5 offline gates cover fractional hydrostatic surfaces, a regularized 0.25-cell thin layer, a fixed stair slope, wall/corner tangential motion, and two 5,000-step marker-distribution runs. Exact marker volume remains unchanged. Minecraft collision is still binary at the current two-solver-cells-per-block resolution; true subcell cut-solid fractions require a separate checkpoint/`region-state v1` compatibility decision, so M2.5 is not yet marked complete. See [docs/m2.5-free-surface-reseeding.md](docs/m2.5-free-surface-reseeding.md).
 
 Scheduling enters hydrostatic sleep only after 200 consecutive completed steps with low marker speed, low pressure residual, no collision change and no affected entity. The transition removes residual marker momentum but does not move, create, delete or resize markers; marker count and exact `particleVolume` are checked unchanged. Collision updates, entity contact, pour/drain, manual step or run wake the region. This is a scheduling approximation, separate from the pressure discretization and from client surface reconstruction.
 

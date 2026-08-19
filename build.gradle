@@ -93,6 +93,22 @@ tasks.register("runFluidRegionLifecycleValidation", JavaExec) {
 	mainClass = "com.example.simulation.FluidRegionLifecycleValidation"
 }
 
+tasks.register("runFlipFreeSurfaceValidation", JavaExec) {
+	group = "verification"
+	description = "Runs deterministic M2.5 PLIC geometry and fractional hydrostatic pressure gates."
+	dependsOn tasks.named("testClasses")
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = "com.example.fluid.FlipFluidFreeSurfaceValidation"
+}
+
+tasks.register("runFlipReseedingValidation", JavaExec) {
+	group = "verification"
+	description = "Runs deterministic M2.5 conservative marker merge/split and budget gates."
+	dependsOn tasks.named("testClasses")
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = "com.example.fluid.FlipFluidReseedingValidation"
+}
+
 tasks.register("runFluidRegionPersistenceValidation", JavaExec) {
 	group = "verification"
 	description = "Runs region-state v1 exact-ledger, atomic publication, corruption and UNLOADED regressions."

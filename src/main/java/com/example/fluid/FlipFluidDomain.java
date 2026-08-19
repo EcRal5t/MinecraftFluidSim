@@ -27,6 +27,8 @@ public final class FlipFluidDomain {
 	private final int maximumParticleCount;
 	private final boolean[] solid;
 	private final int[] markerCount;
+	private final FlipFreeSurfaceGeometry freeSurfaceGeometry;
+	private final FlipParticleReseeder particleReseeder;
 	private final float[] volume;
 	private final float[] pressure;
 	private final float[] divergence;
@@ -83,6 +85,8 @@ public final class FlipFluidDomain {
 		this.particleVolume = new float[initialParticleCapacity];
 		this.solid = new boolean[cellCount];
 		this.markerCount = new int[cellCount];
+		this.freeSurfaceGeometry = new FlipFreeSurfaceGeometry(sizeX, sizeY, sizeZ);
+		this.particleReseeder = new FlipParticleReseeder(sizeX, sizeY, sizeZ, config.cellSize(), maximumParticleCount);
 		this.volume = new float[cellCount];
 		this.pressure = new float[cellCount];
 		this.divergence = new float[cellCount];
@@ -367,13 +371,27 @@ public final class FlipFluidDomain {
 			gridToParticles();
 			advectParticles(dt);
 		}
+		ensureParticleCapacity(particleReseeder.capacityUpperBound(particleCount));
+		FlipParticleReseeder.Result reseeding = particleReseeder.reseed(
+				solid,
+				particleX, particleY, particleZ,
+				particleVelocityX, particleVelocityY, particleVelocityZ,
+				particleVolume, particleCount
+		);
+		particleCount = reseeding.particleCount();
+		gridDirty = true;
 		rebuildGridFromParticles();
-		return new StepStats(substeps, pressureIterations, lastPressureResidual, before, totalVolume());
+		return new StepStats(
+				substeps, pressureIterations, lastPressureResidual, before, totalVolume(),
+				reseeding.merged(), reseeding.split(), reseeding.budgetSkipped(), reseeding.geometrySkipped(),
+				reseeding.ledgerError()
+		);
 	}
 
 	private void rebuildGridFromParticles() {
 		Arrays.fill(volume, 0.0F);
 		Arrays.fill(markerCount, 0);
+		freeSurfaceGeometry.clearExactVolumes();
 		Arrays.fill(velocityX, 0.0F);
 		Arrays.fill(velocityY, 0.0F);
 		Arrays.fill(velocityZ, 0.0F);
@@ -381,7 +399,9 @@ public final class FlipFluidDomain {
 		Arrays.fill(velocityWeightY, 0.0F);
 		Arrays.fill(velocityWeightZ, 0.0F);
 		for (int i = 0; i < particleCount; i++) {
-			markerCount[particleCellIndex(i)]++;
+			int particleCell = particleCellIndex(i);
+			markerCount[particleCell]++;
+			freeSurfaceGeometry.addExactVolume(particleCell, particleVolume[i]);
 			splatCenter(particleX[i], particleY[i], particleZ[i], particleVolume[i]);
 			splatFaceField(velocityX, velocityWeightX, 0, particleX[i], particleY[i], particleZ[i], particleVelocityX[i], particleVolume[i]);
 			splatFaceField(velocityY, velocityWeightY, 1, particleX[i], particleY[i], particleZ[i], particleVelocityY[i], particleVolume[i]);
@@ -390,6 +410,7 @@ public final class FlipFluidDomain {
 		normalize(velocityX, velocityWeightX);
 		normalize(velocityY, velocityWeightY);
 		normalize(velocityZ, velocityWeightZ);
+		freeSurfaceGeometry.rebuild(solid, markerCount);
 		enforceSolidFaceVelocities();
 		gridDirty = false;
 	}
@@ -523,33 +544,67 @@ public final class FlipFluidDomain {
 			int index = cellIndex(x, y, z);
 			if (!isFluid(index) || index == pressureAnchor) continue;
 			float value = 0.0F;
-			int diagonal = 0;
-			if (x > 0) { diagonal += faceDiagonal(cellIndex(x - 1, y, z)); value -= neighborValue(cellIndex(x - 1, y, z), source); }
-			if (x + 1 < sizeX) { diagonal += faceDiagonal(cellIndex(x + 1, y, z)); value -= neighborValue(cellIndex(x + 1, y, z), source); }
-			if (y > 0) { diagonal += faceDiagonal(cellIndex(x, y - 1, z)); value -= neighborValue(cellIndex(x, y - 1, z), source); }
-			if (y + 1 < sizeY) { diagonal += faceDiagonal(cellIndex(x, y + 1, z)); value -= neighborValue(cellIndex(x, y + 1, z), source); }
-			if (z > 0) { diagonal += faceDiagonal(cellIndex(x, y, z - 1)); value -= neighborValue(cellIndex(x, y, z - 1), source); }
-			if (z + 1 < sizeZ) { diagonal += faceDiagonal(cellIndex(x, y, z + 1)); value -= neighborValue(cellIndex(x, y, z + 1), source); }
+			float diagonal = 0.0F;
+			if (x > 0) {
+				int neighbor = cellIndex(x - 1, y, z);
+				float coefficient = pressureFaceCoefficient(index, neighbor, -1, 0, 0);
+				diagonal += coefficient;
+				value -= coefficient * neighborValue(neighbor, source);
+			}
+			if (x + 1 < sizeX) {
+				int neighbor = cellIndex(x + 1, y, z);
+				float coefficient = pressureFaceCoefficient(index, neighbor, 1, 0, 0);
+				diagonal += coefficient;
+				value -= coefficient * neighborValue(neighbor, source);
+			}
+			if (y > 0) {
+				int neighbor = cellIndex(x, y - 1, z);
+				float coefficient = pressureFaceCoefficient(index, neighbor, 0, -1, 0);
+				diagonal += coefficient;
+				value -= coefficient * neighborValue(neighbor, source);
+			}
+			if (y + 1 < sizeY) {
+				int neighbor = cellIndex(x, y + 1, z);
+				float coefficient = pressureFaceCoefficient(index, neighbor, 0, 1, 0);
+				diagonal += coefficient;
+				value -= coefficient * neighborValue(neighbor, source);
+			}
+			if (z > 0) {
+				int neighbor = cellIndex(x, y, z - 1);
+				float coefficient = pressureFaceCoefficient(index, neighbor, 0, 0, -1);
+				diagonal += coefficient;
+				value -= coefficient * neighborValue(neighbor, source);
+			}
+			if (z + 1 < sizeZ) {
+				int neighbor = cellIndex(x, y, z + 1);
+				float coefficient = pressureFaceCoefficient(index, neighbor, 0, 0, 1);
+				diagonal += coefficient;
+				value -= coefficient * neighborValue(neighbor, source);
+			}
 			destination[index] = (diagonal * source[index] + value) * inverseCellSquared;
 		}
 	}
 
-	private int faceDiagonal(int neighbor) { return solid[neighbor] ? 0 : 1; }
 	private float neighborValue(int neighbor, float[] source) { return isFluid(neighbor) && neighbor != pressureAnchor ? source[neighbor] : 0.0F; }
+	private float pressureFaceCoefficient(int fluid, int neighbor, int directionX, int directionY, int directionZ) {
+		if (solid[neighbor]) return 0.0F;
+		if (isFluid(neighbor)) return 1.0F;
+		return 1.0F / freeSurfaceGeometry.pressureTheta(fluid, directionX, directionY, directionZ);
+	}
 
 	private void applyPreconditioner(float[] source, float[] destination) {
 		float cellSquared = config.cellSize() * config.cellSize();
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int index = cellIndex(x, y, z);
 			if (!isFluid(index) || index == pressureAnchor) { destination[index] = 0.0F; continue; }
-			int diagonal = 0;
-			if (x > 0 && !solid[cellIndex(x - 1, y, z)]) diagonal++;
-			if (x + 1 < sizeX && !solid[cellIndex(x + 1, y, z)]) diagonal++;
-			if (y > 0 && !solid[cellIndex(x, y - 1, z)]) diagonal++;
-			if (y + 1 < sizeY && !solid[cellIndex(x, y + 1, z)]) diagonal++;
-			if (z > 0 && !solid[cellIndex(x, y, z - 1)]) diagonal++;
-			if (z + 1 < sizeZ && !solid[cellIndex(x, y, z + 1)]) diagonal++;
-			destination[index] = diagonal == 0 ? 0.0F : source[index] * cellSquared / diagonal;
+			float diagonal = 0.0F;
+			if (x > 0) diagonal += pressureFaceCoefficient(index, cellIndex(x - 1, y, z), -1, 0, 0);
+			if (x + 1 < sizeX) diagonal += pressureFaceCoefficient(index, cellIndex(x + 1, y, z), 1, 0, 0);
+			if (y > 0) diagonal += pressureFaceCoefficient(index, cellIndex(x, y - 1, z), 0, -1, 0);
+			if (y + 1 < sizeY) diagonal += pressureFaceCoefficient(index, cellIndex(x, y + 1, z), 0, 1, 0);
+			if (z > 0) diagonal += pressureFaceCoefficient(index, cellIndex(x, y, z - 1), 0, 0, -1);
+			if (z + 1 < sizeZ) diagonal += pressureFaceCoefficient(index, cellIndex(x, y, z + 1), 0, 0, 1);
+			destination[index] = diagonal == 0.0F ? 0.0F : source[index] * cellSquared / diagonal;
 		}
 	}
 
@@ -575,18 +630,30 @@ public final class FlipFluidDomain {
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
 			int left = cellIndex(x - 1, y, z), right = cellIndex(x, y, z), face = xFaceIndex(x, y, z);
 			if (!faceActive(left, right)) velocityX[face] = 0.0F;
-			else velocityX[face] -= scale * (fluidPressure(right) - fluidPressure(left));
+			else velocityX[face] -= scale * pressureDifference(left, right, 1, 0, 0);
 		}
 		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z), face = yFaceIndex(x, y, z);
 			if (!faceActive(below, above)) velocityY[face] = 0.0F;
-			else velocityY[face] -= scale * (fluidPressure(above) - fluidPressure(below));
+			else velocityY[face] -= scale * pressureDifference(below, above, 0, 1, 0);
 		}
 		for (int z = 1; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int back = cellIndex(x, y, z - 1), front = cellIndex(x, y, z), face = zFaceIndex(x, y, z);
 			if (!faceActive(back, front)) velocityZ[face] = 0.0F;
-			else velocityZ[face] -= scale * (fluidPressure(front) - fluidPressure(back));
+			else velocityZ[face] -= scale * pressureDifference(back, front, 0, 0, 1);
 		}
+	}
+
+	private float pressureDifference(int first, int second, int directionX, int directionY, int directionZ) {
+		boolean firstFluid = isFluid(first);
+		boolean secondFluid = isFluid(second);
+		if (firstFluid && secondFluid) return pressure[second] - pressure[first];
+		if (firstFluid) {
+			float theta = freeSurfaceGeometry.pressureTheta(first, directionX, directionY, directionZ);
+			return -pressure[first] / theta;
+		}
+		float theta = freeSurfaceGeometry.pressureTheta(second, -directionX, -directionY, -directionZ);
+		return pressure[second] / theta;
 	}
 
 	private void gridToParticles() {
@@ -793,7 +860,6 @@ public final class FlipFluidDomain {
 	private boolean isFluid(int index) { return !solid[index] && markerCount[index] > 0; }
 	private boolean isAir(int index) { return !solid[index] && !isFluid(index); }
 	private boolean faceActive(int first, int second) { return !solid[first] && !solid[second] && (isFluid(first) || isFluid(second)); }
-	private float fluidPressure(int index) { return isFluid(index) ? pressure[index] : 0.0F; }
 	private boolean inside(int x, int y, int z) { return x >= 0 && x < sizeX && y >= 0 && y < sizeY && z >= 0 && z < sizeZ; }
 	private int cellIndex(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
 	private int xFaceIndex(int x, int y, int z) { return (z * sizeY + y) * (sizeX + 1) + x; }
@@ -841,7 +907,18 @@ public final class FlipFluidDomain {
 	public record VelocitySample(float x, float y, float z) { private static final VelocitySample ZERO = new VelocitySample(0.0F, 0.0F, 0.0F); }
 	public record VolumeAddition(float addedVolume, boolean markerBudgetLimited) { }
 	public record VolumeDistribution(int activeCells, int visibleCells, int denseCells) { }
-	public record StepStats(int substeps, int pressureIterations, float pressureResidual, float volumeBefore, float volumeAfter) {
+	public record StepStats(
+			int substeps,
+			int pressureIterations,
+			float pressureResidual,
+			float volumeBefore,
+			float volumeAfter,
+			int reseededMerges,
+			int reseededSplits,
+			int reseedBudgetSkipped,
+			int reseedGeometrySkipped,
+			double reseedLedgerError
+	) {
 		public float relativeVolumeError() { return volumeBefore == 0.0F ? 0.0F : Math.abs(volumeAfter - volumeBefore) / volumeBefore; }
 	}
 

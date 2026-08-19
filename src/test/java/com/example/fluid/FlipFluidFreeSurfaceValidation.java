@@ -1,0 +1,146 @@
+package com.example.fluid;
+
+/** Deterministic M2.5 gates for PLIC volume reconstruction and ghost-fluid pressure weights. */
+public final class FlipFluidFreeSurfaceValidation {
+	private FlipFluidFreeSurfaceValidation() { }
+
+	public static void main(String[] args) {
+		planeVolumeInversionIsAccurate();
+		axisAlignedInterfaceDistanceUsesExactCellLedger();
+		fractionalHydrostaticColumnsBalanceGravity();
+		thinLayerRegularizationRemainsStable();
+		waterDescendsAStairSlope();
+		System.out.println("FlipFluid free-surface validation passed");
+	}
+
+	private static void planeVolumeInversionIsAccurate() {
+		float[][] normals = {
+				{1.0F, 0.0F, 0.0F},
+				{0.0F, -1.0F, 0.0F},
+				{0.70710677F, 0.70710677F, 0.0F},
+				{-0.26726124F, 0.5345225F, 0.8017837F}
+		};
+		float[] fractions = {0.05F, 0.25F, 0.50F, 0.75F, 0.95F};
+		for (float[] normal : normals) for (float fraction : fractions) {
+			float offset = FlipFreeSurfaceGeometry.solvePlaneOffset(normal[0], normal[1], normal[2], fraction);
+			float reconstructed = FlipFreeSurfaceGeometry.unitCubeLiquidFraction(
+					normal[0], normal[1], normal[2], offset
+			);
+			check(Math.abs(reconstructed - fraction) < 2.0E-6F,
+					"PLIC inversion drifted: expected=" + fraction + ", reconstructed=" + reconstructed);
+		}
+	}
+
+	private static void axisAlignedInterfaceDistanceUsesExactCellLedger() {
+		for (float fraction : new float[] {0.25F, 0.60F, 0.75F, 1.0F}) {
+			int sizeX = 5, sizeY = 4, sizeZ = 5;
+			int cellCount = sizeX * sizeY * sizeZ;
+			boolean[] solid = new boolean[cellCount];
+			int[] markerCount = new int[cellCount];
+			FlipFreeSurfaceGeometry geometry = new FlipFreeSurfaceGeometry(sizeX, sizeY, sizeZ);
+			geometry.clearExactVolumes();
+			for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) {
+				int lower = index(sizeX, sizeY, x, 0, z);
+				int surface = index(sizeX, sizeY, x, 1, z);
+				markerCount[lower] = 8;
+				markerCount[surface] = 1;
+				geometry.addExactVolume(lower, 1.0F);
+				geometry.addExactVolume(surface, fraction);
+			}
+			geometry.rebuild(solid, markerCount);
+			int surface = index(sizeX, sizeY, 2, 1, 2);
+			float expected = fraction >= 1.0F - 1.0E-6F
+					? 0.5F : Math.max(FlipFreeSurfaceGeometry.MINIMUM_THETA, fraction - 0.5F);
+			float actual = geometry.pressureTheta(surface, 0, 1, 0);
+			check(Math.abs(actual - expected) < 2.0E-5F,
+					"axis-aligned theta did not follow the exact cell fraction: fraction=" + fraction + ", theta=" + actual);
+			check(Math.abs(geometry.liquidFraction(surface) - fraction) < 1.0E-7F,
+					"geometry did not retain the exact per-cell marker sum");
+		}
+	}
+
+	private static void fractionalHydrostaticColumnsBalanceGravity() {
+		for (float surfaceFraction : new float[] {0.60F, 0.75F, 1.0F}) {
+			FluidSolverConfig config = strictConfig();
+			FlipFluidDomain domain = new FlipFluidDomain(2, 5, 2, config);
+			for (int z = 0; z < 2; z++) for (int x = 0; x < 2; x++) {
+				domain.setVolume(x, 0, z, 1.0F);
+				domain.setVolume(x, 1, z, 1.0F);
+				domain.setVolume(x, 2, z, surfaceFraction);
+			}
+			float exactVolume = domain.totalVolume();
+			domain.step();
+			float theta = surfaceFraction >= 1.0F - 1.0E-6F ? 0.5F : surfaceFraction - 0.5F;
+			for (int y = 0; y <= 2; y++) {
+				float expected = config.density() * config.gravity() * config.cellSize() * (2 - y + theta);
+				float actual = domain.pressure(0, y, 0);
+				float relativeError = Math.abs(actual - expected) / Math.max(1.0F, expected);
+				check(relativeError < 2.0E-4F,
+						"fractional hydrostatic pressure missed the analytic column: fraction=" + surfaceFraction
+								+ ", y=" + y + ", expected=" + expected + ", actual=" + actual);
+			}
+			check(domain.maximumParticleSpeed() < 2.0E-4F,
+					"fractional hydrostatic projection left parasitic marker velocity: " + domain.maximumParticleSpeed());
+			check(Math.abs(domain.totalVolume() - exactVolume) < 1.0E-6F,
+					"fractional pressure changed the exact marker ledger");
+		}
+	}
+
+	private static void thinLayerRegularizationRemainsStable() {
+		FluidSolverConfig config = strictConfig();
+		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config);
+		for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) domain.setVolume(x, 0, z, 0.25F);
+		float exactVolume = domain.totalVolume();
+		for (int step = 0; step < 40; step++) {
+			FlipFluidDomain.StepStats stats = domain.step();
+			check(Float.isFinite(stats.pressureResidual()), "thin-layer pressure residual became non-finite");
+			check(stats.relativeVolumeError() < 1.0E-6F, "thin-layer step changed marker volume");
+		}
+		check(Math.abs(domain.totalVolume() - exactVolume) < 1.0E-6F, "thin layer lost exact marker volume");
+		check(domain.maximumParticleSpeed() < 2.0E-3F,
+				"theta regularization did not keep a sub-center thin layer stable: " + domain.maximumParticleSpeed());
+	}
+
+	private static void waterDescendsAStairSlope() {
+		FluidSolverConfig config = new FluidSolverConfig(
+				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
+				200, 1.0E-5F, 0.35F, 2.0E-3F, 0.80F
+		);
+		FlipFluidDomain domain = new FlipFluidDomain(12, 8, 4, config);
+		for (int z = 0; z < 4; z++) for (int x = 0; x < 12; x++) {
+			int topSolid = x < 2 ? 3 : x < 4 ? 2 : 1;
+			for (int y = 0; y <= topSolid; y++) domain.setSolid(x, y, z, true);
+		}
+		for (int z = 0; z < 4; z++) for (int x = 0; x < 4; x++) {
+			int firstFluid = x < 2 ? 4 : 3;
+			for (int y = firstFluid; y <= 6; y++) domain.setVolume(x, y, z, 1.0F);
+		}
+		float exactVolume = domain.totalVolume();
+		float initialCenter = domain.centerOfMassX();
+		for (int step = 0; step < 300; step++) {
+			FlipFluidDomain.StepStats stats = domain.step();
+			check(Float.isFinite(stats.pressureResidual()), "stair-slope pressure residual became non-finite");
+			check(stats.relativeVolumeError() < 2.0E-6F, "stair-slope flow changed marker volume");
+		}
+		check(domain.centerOfMassX() > initialCenter + 1.0F,
+				"water did not descend the fixed stair slope: before=" + initialCenter + ", after=" + domain.centerOfMassX());
+		check(Math.abs(domain.totalVolume() - exactVolume) < 1.0E-4F,
+				"stair-slope flow changed the exact particle ledger");
+		domain.exportParticleState();
+	}
+
+	private static FluidSolverConfig strictConfig() {
+		return new FluidSolverConfig(
+				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
+				300, 1.0E-7F, 0.40F, 2.0E-3F, 0.80F
+		);
+	}
+
+	private static int index(int sizeX, int sizeY, int x, int y, int z) {
+		return (z * sizeY + y) * sizeX + x;
+	}
+
+	private static void check(boolean condition, String message) {
+		if (!condition) throw new AssertionError(message);
+	}
+}

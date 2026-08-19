@@ -652,8 +652,15 @@ public final class FluidSimulationService {
 		FlipFluidDomain.StepStats lastStats = region.lastStats();
 		String stats = lastStats == null
 				? "尚未步进"
-				: String.format("%.2f ms, substeps %d, PCG %d, residual %.4g",
-						region.lastStepMilliseconds(), lastStats.substeps(), lastStats.pressureIterations(), lastStats.pressureResidual());
+				: String.format("%.2f ms, substeps %d, PCG %d, residual %.4g%s",
+						region.lastStepMilliseconds(), lastStats.substeps(), lastStats.pressureIterations(), lastStats.pressureResidual(),
+						lastStats.reseededMerges() == 0 && lastStats.reseededSplits() == 0
+								&& lastStats.reseedBudgetSkipped() == 0 && lastStats.reseedGeometrySkipped() == 0
+								? ""
+								: String.format(", reseed split %d/merge %d, skipped budget %d/geometry %d, ledger %.3g",
+										lastStats.reseededSplits(), lastStats.reseededMerges(),
+										lastStats.reseedBudgetSkipped(), lastStats.reseedGeometrySkipped(),
+										lastStats.reseedLedgerError()));
 		FlipFluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
 		float cellVolumes = domain.totalVolume();

@@ -20,12 +20,14 @@ The current implementation keeps its numerical core independent from Minecraft a
 - Grid-to-particle transfer blends 90% FLIP with 10% PIC.
 - Particles are advected through the projected velocity field and collide against the solid-cell mask axis by axis.
 - Cell density is reconstructed from particle volume; valid kernel weights are normalized at solid/domain boundaries so reconstruction does not visually lose mass beside walls.
+- Marker-occupied cells adjacent to air reconstruct a PLIC plane from the exact per-cell marker-volume sum and its fraction gradient. A ghost-fluid distance `theta >= 0.05` is shared by the pressure matrix, diagonal preconditioner and velocity projection; `markerCount`, not PLIC or smooth density, still decides the pressure phase.
+- Once per complete physical step, deterministic conservative reseeding merges cells above 12 markers back to eight representatives and splits under-sampled cells to an exact-volume-dependent minimum of one, two or four markers. It preserves marker volume, volume-weighted momentum and centroid within the declared float tolerance and never exceeds the domain marker budget.
 
 This is a direct three-dimensional adaptation of the reference project's PIC/FLIP cycle: clear grid, P2G, forces, divergence/pressure, projection, G2P, and particle advection. It does not add wall-wetting, corner attraction, or forced surface-leveling rules. The earlier VOF solver remains only as a standalone comparison and is no longer selected by the Minecraft service.
 
 ## Variable-density coefficient experiment
 
-The active Minecraft solver remains constant-density. A separate 12-cell CPU finite-volume column now compares three future M3 face coefficients for `div((1/rho) grad(p))`: arithmetic averaging of `1/rho`, inversion after averaging `rho`, and a conservative coefficient weighted by the reconstructed interface distance. The gate covers 1:1, water/oil 1.25:1, and mercury/water 13.6:1 ratios at interface fractions 0.25, 0.50, and 0.75. All candidates keep the matrix symmetric positive definite and converge in 12 diagonal-PCG iterations; only the distance-weighted coefficient reproduces the discrete hydrostatic pressure and eliminates interface parasitic velocity for every tested fraction. It is the selected integration candidate, not an active solver change: M2.5 must still provide a trustworthy fractional interface distance, and M3 must validate the result in 3D connected columns before adoption.
+The active Minecraft solver remains constant-density. A separate 12-cell CPU finite-volume column now compares three future M3 face coefficients for `div((1/rho) grad(p))`: arithmetic averaging of `1/rho`, inversion after averaging `rho`, and a conservative coefficient weighted by the reconstructed interface distance. The gate covers 1:1, water/oil 1.25:1, and mercury/water 13.6:1 ratios at interface fractions 0.25, 0.50, and 0.75. All candidates keep the matrix symmetric positive definite and converge in 12 diagonal-PCG iterations; only the distance-weighted coefficient reproduces the discrete hydrostatic pressure and eliminates interface parasitic velocity for every tested fraction. It is the selected integration candidate, not an active solver change: the first M2.5 increment now supplies a fluid-air PLIC distance, while cut-solid completion and M3's 3D connected-column gates remain prerequisites for adoption.
 
 ## Manual validation
 
@@ -47,17 +49,22 @@ Run the isolated variable-density selection gate through Gradle:
 ./gradlew.bat runVariableDensityFaceCoefficientValidation --offline --no-daemon
 ```
 
+Run the active M2.5 free-surface and reseeding gates through Gradle:
+
+```powershell
+./gradlew.bat runFlipFreeSurfaceValidation runFlipReseedingValidation --offline --no-daemon
+```
+
 ## Next integration boundary
 
 The Minecraft adapter can own up to four bounded `FlipFluidDomain` instances by default and samples block collision shapes into each solid mask. Identity, dimension, origin, collision/entity/debug state, controller footprint and the hard marker budget live in `FluidRegion`; in `UNLOADED`, the same object keeps only immutable metadata and its manager reservation while releasing solver and marker arrays. `FluidRegionLifecycle` separately owns operator pause, availability and ACTIVE/REDUCED/hydrostatic-sleep/UNLOADED scheduling. Commands target one selected region, while protocol-v1 snapshots identify and render every loaded region in the player's dimension. Every CPU marker creation and checkpoint restore observes its hard budget, and exact water remains the sum of marker `particleVolume`.
 
-The next numerical boundary after M2 is:
+The remaining numerical boundary after the first active M2.5 increment is:
 
-- fractional-cell free-surface pressure weights;
+- subcell cut-solid face/volume fractions with an explicit `region-state v1` compatibility decision;
 - active-cell/sparse pressure iteration;
 - entity buoyancy sampling;
 - domain split/merge rules;
-- particle reseeding to keep marker distribution uniform over very long runs;
 - two-way momentum coupling from entities back into the fluid.
 
 ## Current Minecraft harness
@@ -91,6 +98,8 @@ Version 0.8 adds an on-disk takeover journal. It serializes exact block states w
 Version 0.8.1 keeps takeover-journal v1 byte-structure compatibility and hardens its transaction boundary. Existing or unreadable recovery state locks new takeover, journal and human-readable warning publication are both atomic prerequisites, non-atomic filesystems fail closed, and restore/delete failures remain retryable. The standalone fault suite exercises every named interruption boundary without loading or modifying a real world.
 
 Version 0.8.2 routes handled `/realwater` and `/realwatergpu` commands and their complete responses to the append-only UTF-8 `logs/realwater-commands.log` transcript. This is observability only: it does not participate in particle volume, numerical fields, rendering state, scheduling or world recovery.
+
+The first active M2.5 increment adds PLIC-derived fluid-air pressure distances and conservative marker reseeding without changing the 0.8.2 save, transaction or protocol formats. Arbitrary 0.60/0.75/1.00-cell hydrostatic surfaces meet the quantitative pressure/velocity gate; a 0.25-cell layer remains stable under the explicitly declared `theta=0.05` regularization. Fixed-seed 5,000-step shear and dam-break gates retain three marker layers, bound populated cells to 12 markers and preserve the marker-volume ledger. Solver-cell solid occupancy is still binary at the existing 2×2×2-per-block collision resolution, so true cut-solid fractions remain the item that prevents declaring M2.5 closed. The frozen definitions and results are in [`m2.5-free-surface-reseeding.md`](m2.5-free-surface-reseeding.md).
 
 The optional M1-H `gpu-probe` subproject provides a windowless Vulkan version of the complete 3D P2G → gravity → pressure projection → 90/10 FLIP/PIC G2P → axis-separated advection cycle. It keeps marker volume as truth and produces density/marker/solid snapshots on the GPU for the existing renderer. Compute state resides in device-local memory; initialization and explicit bulk reads use serialized staging, while ordinary steps use three independent command/fence/query slots with one 64-byte diagnostic staging block each. Jacobi, RBGS/SOR, identity-PCG, diagonal-PCG, two-level MG2 and packed full-hierarchy MGH share the same fine-grid Poisson discretization and have automated convergence curves plus current/64³-grid timing comparisons. The simple PCG/RBGS alternatives fail the large-grid replacement gate; MG2 is the low-cost baseline and MGH improves the two-cycle 64³ residual by recursively traversing 32³→16³→8³→4³ coarse levels. Coarse diagonal and per-axis face weights are aggregated from fluid/air/solid connections at every restriction, and prolongation near mixed-solid aggregates uses topology-safe injection so a one-cell wall is not erased. In addition to the generated thin-wall/shelf gate, 0.1.8 expands per-block 2×2×2 collision bits into the solver mask and verifies identical GPU/CPU-fallback solids, exact particle volume and zero GPU particles inside solids on both devices. `/realwatergpu worlddemo` captures the same full/partial collision-shape semantics once through non-loading access to already-loaded chunks, then freezes the mask; it never writes the world or save. The generated demo remains the Jacobi baseline, `worlddemo` explicitly exercises MG2, and the packaged 0.1.9 `benchmark ... mgh` path has passed while MGH remains an explicit candidate. Probe 0.1.10 adds a command-tree regression for both `/realwatergpu probe` forms. Probe 0.1.11 adds per-step Vulkan timestamps, and 0.1.12 extracts the byte-identical GLSL resource while splitting small/64³ validation. Probe 0.1.13 removes the physical-step `vkQueueWaitIdle` lifecycle with a bounded three-slot staging ring; GPU timestamp, completed-batch throughput wall and server scheduling/backpressure wall are reported separately. Probe 0.1.14 adds an immutable CPU-readable generation checkpoint containing exact marker position/volume, velocity and solid state. Generation 0 is mandatory, the probe refreshes it every 20 steps, and a later Vulkan failure restores the last complete generation into `FlipFluidDomain` before leaving the isolated fallback paused. Probe 0.1.15 measures CPU/GPU break-even independently across grid scale, marker density and pressure-fluid-cell occupancy with reset seven-batch medians. Probe 0.1.16 uses four 12.5 ms numerical substeps per 50 ms physical step, aligns normal-only particle contact to the CPU `0.45h` radius and adds a 1,000-step CPU/GPU marker-distribution gate. It preserves exact marker ledgers and treats completed-batch wall, not timestamp alone, as the performance comparison. Same-input memory-mode comparison, dam-break CPU/GPU tolerance, long-run surface characterization, MG2/MGH hydrostatic pressure, four-level topology, exact particle-volume, occupancy and 2,097,152-marker throughput checks are recorded in [`gpu-probe-report.md`](gpu-probe-report.md).
 
