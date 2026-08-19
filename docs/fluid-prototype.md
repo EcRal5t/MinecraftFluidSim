@@ -22,6 +22,7 @@ The current implementation keeps its numerical core independent from Minecraft a
 - Cell density is reconstructed from particle volume; valid kernel weights are normalized at solid/domain boundaries so reconstruction does not visually lose mass beside walls.
 - Marker-occupied cells adjacent to air reconstruct a PLIC plane from the exact per-cell marker-volume sum and its fraction gradient. A ghost-fluid distance `theta >= 0.05` is shared by the pressure matrix, diagonal preconditioner and velocity projection; `markerCount`, not PLIC or smooth density, still decides the pressure phase.
 - Pressure-phase MAC faces are extrapolated two open-air layers before and after projection. G2P renormalizes only those valid faces, so an undefined air-array zero cannot act as artificial drag on a small droplet.
+- A bounded rest-volume target derived from reconstructed P2G volume enters only the pressure RHS. It expands over-dense marker distributions and converges under-dense interior cells while ignoring legitimate free-surface deficits; it never edits or settles the exact marker-volume ledger.
 - Once per complete physical step, deterministic conservative reseeding merges cells above 12 markers back to eight representatives and splits under-sampled cells to an exact-volume-dependent minimum of one, two or four markers. It preserves marker volume, volume-weighted momentum and centroid within the declared float tolerance and never exceeds the domain marker budget.
 
 This is a direct three-dimensional adaptation of the reference project's PIC/FLIP cycle: clear grid, P2G, forces, divergence/pressure, projection, G2P, and particle advection. It does not add wall-wetting, corner attraction, or forced surface-leveling rules. The earlier VOF solver remains only as a standalone comparison and is no longer selected by the Minecraft service.
@@ -61,9 +62,9 @@ Run the active M2.5 free-surface and reseeding gates through Gradle:
 
 The Minecraft adapter can own up to four bounded `FlipFluidDomain` instances by default and samples block collision shapes into each solid mask. Identity, dimension, origin, collision/entity/debug state, controller footprint and the hard marker budget live in `FluidRegion`; in `UNLOADED`, the same object keeps only immutable metadata and its manager reservation while releasing solver and marker arrays. `FluidRegionLifecycle` separately owns operator pause, availability and ACTIVE/REDUCED/hydrostatic-sleep/UNLOADED scheduling. Commands target one selected region, while protocol-v1 snapshots identify and render every loaded region in the player's dimension. Every CPU marker creation and checkpoint restore observes its hard budget, and exact water remains the sum of marker `particleVolume`.
 
-After the automatic M2.5 cut-cell candidate, the next numerical/integration boundaries are:
+After the automatic M2.5 solver candidate, the next numerical/integration boundaries are:
 
-- a fixed-coordinate repeat of exact stair displacement/restoration and small-droplet visual motion before closing M2.5;
+- one longer Minecraft settling-surface observation before closing M2.5; fixed-coordinate stair displacement/restoration and small-droplet visual motion have passed;
 - active-cell/sparse pressure iteration;
 - entity buoyancy sampling;
 - domain split/merge rules;

@@ -212,6 +212,7 @@ public final class FlipFluidReseedingValidation {
 		float exactVolume = domain.totalVolume();
 		long merges = 0, splits = 0, budgetSkipped = 0, geometrySkipped = 0;
 		double maximumLedgerError = 0.0;
+		DamSurface settledReference = null;
 		for (int step = 0; step < 5_000; step++) {
 			FlipFluidDomain.StepStats stats = domain.step();
 			merges += stats.reseededMerges();
@@ -220,12 +221,20 @@ public final class FlipFluidReseedingValidation {
 			geometrySkipped += stats.reseedGeometrySkipped();
 			maximumLedgerError = Math.max(maximumLedgerError, Math.abs(stats.reseedLedgerError()));
 			check(stats.relativeVolumeError() < 2.0E-6F, "long-run dam-break step changed marker volume");
+			if (step + 1 == 1_000) settledReference = damSurface(domain);
 		}
-		Distribution distribution = distribution(domain.exportParticleState());
+		FlipParticleState finalState = domain.exportParticleState();
+		Distribution distribution = distribution(finalState);
+		DamSurface finalSurface = damSurface(domain);
 		System.out.printf(
-				"Reseeding dam-break: markers %d, occupied %d, y=%d..%d, min/max %d/%d, merge/split %d/%d%n",
+				"Reseeding dam-break: markers %d, occupied %d, y=%d..%d, min/max %d/%d, "
+						+ "top/above %.3f/%.3f, max/excess %.3f/%.3f, comY %.3f, visible %d, "
+						+ "merge/split %d/%d%n",
 				domain.particleCount(), distribution.occupiedCells, distribution.minimumY, distribution.maximumY,
-				distribution.minimumQualifyingMarkers, distribution.maximumMarkers, merges, splits
+				distribution.minimumQualifyingMarkers, distribution.maximumMarkers,
+				finalSurface.targetTopLayerVolume, finalSurface.volumeAboveTarget,
+				finalSurface.maximumCellVolume, finalSurface.excessCellVolume,
+				finalSurface.centerOfMassY, finalSurface.visibleCells, merges, splits
 		);
 		check(Math.abs(domain.totalVolume() - exactVolume) < 1.0E-4F, "long-run dam-break changed exact marker volume");
 		check(budgetSkipped == 0, "long-run dam-break reseeding exhausted its hard marker budget");
@@ -235,8 +244,51 @@ public final class FlipFluidReseedingValidation {
 		check(distribution.maximumMarkers <= 12, "dam-break left an overpopulated marker cell");
 		check(distribution.minimumQualifyingMarkers >= 4,
 				"dam-break left a half-full marker cell under-sampled");
-		check(distribution.maximumY >= 3,
-				"long-run dam-break collapsed below its three-cell mean physical depth");
+		check(distribution.occupiedCells >= 216,
+				"long-run dam-break compressed 216 cell-volumes into too few pressure cells: "
+						+ distribution.occupiedCells);
+		check(finalSurface.targetTopLayerVolume >= 48.0,
+				"long-run dam-break collapsed its third physical layer: " + finalSurface.targetTopLayerVolume);
+		check(finalSurface.volumeAboveTarget < 2.0,
+				"volume-drift correction sprayed persistent water above the target depth: "
+						+ finalSurface.volumeAboveTarget);
+		check(finalSurface.maximumCellVolume <= 2.0 && finalSurface.excessCellVolume <= 32.0,
+				"long-run dam-break retained severe containing-cell compression: " + finalSurface);
+		check(settledReference != null
+				&& Math.abs(finalSurface.centerOfMassY - settledReference.centerOfMassY) < 0.03
+				&& Math.abs(finalSurface.visibleCells - settledReference.visibleCells) < 16,
+				"dam-break surface continued to sink after the settled reference: at 1000="
+						+ settledReference + ", at 5000=" + finalSurface);
+	}
+
+	private static DamSurface damSurface(FlipFluidDomain domain) {
+		FlipParticleState state = domain.exportParticleState();
+		float[] particles = state.copyPositionVolume();
+		float[] cellVolumes = new float[state.sizeX() * state.sizeY() * state.sizeZ()];
+		double weightedY = 0.0, totalVolume = 0.0;
+		double targetTopLayerVolume = 0.0, volumeAboveTarget = 0.0;
+		for (int particle = 0; particle < state.particleCount(); particle++) {
+			int base = particle * 4;
+			float amount = particles[base + 3];
+			int x = Math.min(state.sizeX() - 1, (int) Math.floor(particles[base] / state.cellSize()));
+			int y = Math.min(state.sizeY() - 1, (int) Math.floor(particles[base + 1] / state.cellSize()));
+			int z = Math.min(state.sizeZ() - 1, (int) Math.floor(particles[base + 2] / state.cellSize()));
+			cellVolumes[(z * state.sizeY() + y) * state.sizeX() + x] += amount;
+			weightedY += particles[base + 1] / state.cellSize() * amount;
+			totalVolume += amount;
+			if (y == 3) targetTopLayerVolume += amount;
+			else if (y > 3) volumeAboveTarget += amount;
+		}
+		double maximumCellVolume = 0.0, excessCellVolume = 0.0;
+		for (float cellVolume : cellVolumes) {
+			maximumCellVolume = Math.max(maximumCellVolume, cellVolume);
+			excessCellVolume += Math.max(0.0, cellVolume - 1.0F);
+		}
+		FlipFluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
+		return new DamSurface(
+				weightedY / totalVolume, targetTopLayerVolume, volumeAboveTarget,
+				maximumCellVolume, excessCellVolume, distribution.visibleCells()
+		);
 	}
 
 	private static void checkLedger(Ledger before, Ledger after, double tolerance, String operation) {
@@ -332,5 +384,14 @@ public final class FlipFluidReseedingValidation {
 			int maximumY,
 			int minimumQualifyingMarkers,
 			int maximumMarkers
+	) { }
+
+	private record DamSurface(
+			double centerOfMassY,
+			double targetTopLayerVolume,
+			double volumeAboveTarget,
+			double maximumCellVolume,
+			double excessCellVolume,
+			int visibleCells
 	) { }
 }

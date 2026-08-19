@@ -7,9 +7,11 @@ public final class FlipFluidFreeSurfaceValidation {
 	public static void main(String[] args) {
 		planeVolumeInversionIsAccurate();
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
+		volumeDriftCorrectionPreservesLegitimateSurfaceDeficits();
 		fractionalHydrostaticColumnsBalanceGravity();
 		thinLayerRegularizationRemainsStable();
 		isolatedDropletReceivesUndilutedGravity();
+		longRunHydrostaticSurfaceDoesNotSink();
 		waterDescendsAStairSlope();
 		System.out.println("FlipFluid free-surface validation passed");
 	}
@@ -59,6 +61,22 @@ public final class FlipFluidFreeSurfaceValidation {
 			check(Math.abs(geometry.liquidFraction(surface) - fraction) < 1.0E-7F,
 					"geometry did not retain the exact per-cell marker sum");
 		}
+	}
+
+	private static void volumeDriftCorrectionPreservesLegitimateSurfaceDeficits() {
+		float dt = 0.05F;
+		check(Math.abs(FlipVolumeDriftCorrection.targetDivergence(1.25F, 1.25F, 1.0F, true, dt) - 0.25F) < 1.0E-7F,
+				"overfilled surface cell did not request pressure expansion");
+		check(Math.abs(FlipVolumeDriftCorrection.targetDivergence(0.75F, 0.75F, 1.0F, false, dt) + 0.25F) < 1.0E-7F,
+				"underfilled interior cell did not request pressure convergence");
+		check(FlipVolumeDriftCorrection.targetDivergence(0.75F, 0.75F, 1.0F, true, dt) == 0.0F,
+				"legitimate underfilled free-surface cell was compressed");
+		check(FlipVolumeDriftCorrection.targetDivergence(0.75F, 1.0F, 1.0F, false, dt) == 0.0F,
+				"full exact interior cell was corrected from a smoothed-density deficit");
+		check(FlipVolumeDriftCorrection.targetDivergence(0.5F, 0.5F, 0.5F, false, dt) == 0.0F,
+				"cut-cell rest volume did not use its open capacity");
+		check(Math.abs(FlipVolumeDriftCorrection.targetDivergence(4.0F, 4.0F, 1.0F, false, dt) - 2.0F) < 1.0E-7F,
+				"volume-drift correction did not obey its per-step cap");
 	}
 
 	private static void fractionalHydrostaticColumnsBalanceGravity() {
@@ -128,6 +146,35 @@ public final class FlipFluidFreeSurfaceValidation {
 				"isolated droplet changed the exact marker ledger");
 	}
 
+	private static void longRunHydrostaticSurfaceDoesNotSink() {
+		FluidSolverConfig config = strictConfig();
+		FlipFluidDomain domain = new FlipFluidDomain(4, 8, 4, config, 4 * 8 * 4 * 8);
+		for (int z = 0; z < 4; z++) for (int x = 0; x < 4; x++) domain.setSolid(x, 0, z, true);
+		for (int z = 0; z < 4; z++) for (int y = 1; y <= 4; y++) for (int x = 0; x < 4; x++) {
+			domain.setVolume(x, y, z, 1.0F);
+		}
+		FlipParticleState initial = domain.exportParticleState();
+		float initialCenterY = centerOfMassY(initial);
+		FlipFluidDomain.VolumeDistribution initialDistribution = domain.volumeDistribution(8.0F / 255.0F);
+		for (int step = 0; step < 5_000; step++) domain.step();
+
+		FlipParticleState result = domain.exportParticleState();
+		double[] layers = exactLayerVolumes(result);
+		check(result.particleCount() == initial.particleCount(), "hydrostatic marker count drifted over 5,000 steps");
+		check(Math.abs(centerOfMassY(result) - initialCenterY) < 5.0E-4F,
+				"hydrostatic physical surface sank over 5,000 steps");
+		for (int y = 1; y <= 4; y++) {
+			check(Math.abs(layers[y] - 16.0) < 1.0E-7,
+					"hydrostatic layer changed exact marker volume at y=" + y + ": " + layers[y]);
+		}
+		FlipFluidDomain.VolumeDistribution resultDistribution = domain.volumeDistribution(8.0F / 255.0F);
+		check(resultDistribution.equals(initialDistribution),
+				"hydrostatic reconstructed surface changed over 5,000 steps: before="
+						+ initialDistribution + ", after=" + resultDistribution);
+		check(domain.maximumParticleSpeed() < 1.0E-4F,
+				"hydrostatic drift correction created persistent marker motion: " + domain.maximumParticleSpeed());
+	}
+
 	private static void waterDescendsAStairSlope() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
@@ -175,6 +222,17 @@ public final class FlipFluidFreeSurfaceValidation {
 			volume += positionVolume[offset + 3];
 		}
 		return (float) (weightedY / volume);
+	}
+
+	private static double[] exactLayerVolumes(FlipParticleState state) {
+		double[] layers = new double[state.sizeY()];
+		float[] positionVolume = state.copyPositionVolume();
+		for (int offset = 0; offset < positionVolume.length; offset += 4) {
+			int y = Math.min(state.sizeY() - 1,
+					Math.max(0, (int) Math.floor(positionVolume[offset + 1] / state.cellSize())));
+			layers[y] += positionVolume[offset + 3];
+		}
+		return layers;
 	}
 
 	private static void check(boolean condition, String message) {

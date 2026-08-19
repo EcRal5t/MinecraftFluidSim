@@ -111,6 +111,10 @@ final class FlipFreeSurfaceGeometry {
 		return liquidFraction[index];
 	}
 
+	float exactCellVolume(int index) {
+		return exactCellVolume[index];
+	}
+
 	private float sampleFraction(int x, int y, int z, float fallback, boolean[] solid) {
 		if (!inside(x, y, z)) return fallback;
 		int index = cellIndex(x, y, z);

@@ -569,8 +569,10 @@ public final class FlipFluidDomain {
 					- cutCells.yFaceOpen(x, y, z) * velocityY[yFaceIndex(x, y, z)]
 					+ cutCells.zFaceOpen(x, y, z + 1) * velocityZ[zFaceIndex(x, y, z + 1)]
 					- cutCells.zFaceOpen(x, y, z) * velocityZ[zFaceIndex(x, y, z)]) * inverseCell;
-			divergence[index] = div;
-			rhs[index] = rhsScale * div;
+			// Solve toward the drift target: div(u_projected) = targetDivergence.
+			float correctedDivergence = div - volumeDriftDivergence(index, dt);
+			divergence[index] = correctedDivergence;
+			rhs[index] = rhsScale * correctedDivergence;
 			fluidCells++;
 		}
 		if (fluidCells == 0) { lastPressureIterations = 0; lastPressureResidual = 0.0F; return; }
@@ -596,6 +598,16 @@ public final class FlipFluidDomain {
 			rz = nextRz;
 		}
 		lastPressureResidual = (float) Math.sqrt(dot(residual, residual) / fluidCells);
+	}
+
+	private float volumeDriftDivergence(int index, float dt) {
+		float openVolume = cutCells.openCellVolume(index);
+		int x = index % sizeX, yz = index / sizeX;
+		int y = yz % sizeY, z = yz / sizeY;
+		return FlipVolumeDriftCorrection.targetDivergence(
+				volume[index], freeSurfaceGeometry.exactCellVolume(index), openVolume,
+				hasAirNeighbor(x, y, z), dt
+		);
 	}
 
 	private void applyPressureMatrix(float[] source, float[] destination) {
