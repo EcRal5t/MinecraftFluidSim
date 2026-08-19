@@ -100,7 +100,6 @@ public final class FluidMaterialRenderSnapshot {
 	byte[] markerField() { return markers; }
 	byte[] solidField() { return solids; }
 	byte[] phaseFractionField(int phase) { return phaseFractions[phase]; }
-	byte[] phaseMarkerField(int phase) { return phaseMarkers[phase]; }
 
 	private static int clampCell(float position, float cellSize, int size) {
 		return Math.min(size - 1, Math.max(0, (int) Math.floor(position / cellSize)));

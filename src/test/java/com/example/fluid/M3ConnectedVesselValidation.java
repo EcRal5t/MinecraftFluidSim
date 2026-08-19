@@ -24,6 +24,7 @@ public final class M3ConnectedVesselValidation {
 		validateVariableDensityScenarios();
 		M3MaterialTransferValidation.Summary transfer = M3MaterialTransferValidation.validate();
 		M3MaterialDynamicsValidation.validate();
+		M3MaterialSurfaceValidation.validate();
 
 		System.out.printf("M3 connected-vessel gate passed: cells=%d markers=%d volume=%.3f BV mass=%.3f MU "
 				+ "PCG=%d residual=%.3g maxVelocity=%.3g transferMass=%.3f MU%n",

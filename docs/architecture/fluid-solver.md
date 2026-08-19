@@ -10,6 +10,7 @@
 - **数值离散**：`markerCount > 0` 决定压力流体格；平滑 `volume[]`、PLIC 分数、cut-cell 开口和目标散度都不是第二套水量。
 - **渲染重建**：客户端使用 density + marker + solid 重建；marker mask 是浅水可见的必要内部种子，渲染不得反写物理。
 - **M3 材料重建**：`FluidMaterialRenderSnapshot` 从 marker 只读派生总体积、逐材料/phase 量化分数与各自 marker 种子；每格分数确定性回和到 255，但这些字段不携带精确库存，也尚未成为网络 payload。
+- **M3 界面几何**：`FluidMaterialSurfaceMesher` 只从上述快照生成总液相外表面和 partitioned tetrahedra 液液面。phase pair 只拥有一份共享面；相组成由 marker 格外推、再由总液相裁剪，不能用平滑 density 决定材料归属。
 - **调度策略**：ACTIVE/REDUCED/休眠/UNLOADED 只控制何时持有或步进状态，不得改变 marker 账本。
 - **碰撞**：墙面只约束法向，切向保持自由；禁止恢复吸墙、墙角偏置或受支撑强制找平。
 

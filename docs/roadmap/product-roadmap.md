@@ -147,6 +147,6 @@
 
 ## 接下来三项
 
-1. 在已冻结的只读多材料内存快照上建立外表面/内部界面不重合的自动几何门。
-2. 按 [`m3-material-state-migration.md`](../architecture/m3-material-state-migration.md) 保留 v1，并分别实现 network v2 与 `region-state v2` 兼容/故障门。
-3. 接通 controller feature gate、客户端 palette 与两类 mesh 后，再决定唯一需要的实机视觉场景。
+1. 按 [`m3-material-state-migration.md`](../architecture/m3-material-state-migration.md) 保留 network v1，并实现独立 v2 codec/capability/ordering 门。
+2. 保留 `region-state v1` reader，并实现 v2 material/mass 账本与双槽故障门。
+3. 接通 controller feature gate、客户端 palette 与已验证的两类 mesh 后，再决定唯一需要的实机视觉场景。
