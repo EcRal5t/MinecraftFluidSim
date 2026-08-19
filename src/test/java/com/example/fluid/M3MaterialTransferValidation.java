@@ -92,6 +92,13 @@ final class M3MaterialTransferValidation {
 				"miscible materials did not aggregate into one local liquid phase");
 		checkClose(miscible.materialInventory(a).mass(), 500.0, "miscible material A mass");
 		checkClose(miscible.materialInventory(d).mass(), 525.0, "miscible material D mass");
+		int mixedCell = 1 + 4 * (1 + 4);
+		FluidMaterialRenderSnapshot mixedSnapshot = miscible.copyMaterialRenderSnapshot();
+		check(mixedSnapshot.phaseFraction(registry.phaseHandle(a), mixedCell) == 255,
+				"miscible render snapshot did not expose one complete phase");
+		check(mixedSnapshot.materialFraction(a, mixedCell) == 128
+				&& mixedSnapshot.materialFraction(d, mixedCell) == 127,
+				"miscible render fractions were not deterministically normalized");
 		FlipFluidDomain.StepStats miscibleStats = miscible.step();
 		check(miscible.phaseCountInCell(1, 1, 1) == 1,
 				"miscible phase split during an idle active step");
@@ -105,6 +112,12 @@ final class M3MaterialTransferValidation {
 		}
 		check(junction.phaseCountInCell(1, 1, 1) == 3,
 				"three-phase junction was truncated to the old two-phase cache");
+		FluidMaterialRenderSnapshot junctionSnapshot = junction.copyMaterialRenderSnapshot();
+		int phaseA = registry.phaseHandle(a), phaseB = registry.phaseHandle(b), phaseC = registry.phaseHandle(c);
+		check(junctionSnapshot.phaseFraction(phaseA, mixedCell) == 96
+				&& junctionSnapshot.phaseFraction(phaseB, mixedCell) == 95
+				&& junctionSnapshot.phaseFraction(phaseC, mixedCell) == 64,
+				"three-phase render fractions lost deterministic partitioning");
 		FlipFluidDomain.StepStats junctionStats = junction.step();
 		check(junction.phaseCountInCell(1, 1, 1) == 3,
 				"three-phase junction was lost during pressure/reseeding");

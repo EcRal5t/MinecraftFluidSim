@@ -419,6 +419,18 @@ public final class FlipFluidDomain {
 		return result;
 	}
 
+	/** Read-only M3 rendering reconstruction; it contains no exact inventory and is not a wire format. */
+	public FluidMaterialRenderSnapshot copyMaterialRenderSnapshot() {
+		ensureGrid();
+		if (materialRegistry == null) throw new IllegalStateException("Material render snapshot requires a bound registry");
+		return FluidMaterialRenderSnapshot.capture(
+				sizeX, sizeY, sizeZ, config.cellSize(), materialRegistry,
+				copyQuantizedVolume(), copyMarkerMask(), copySolidMask(),
+				particleX, particleY, particleZ, particleVolume, particleMaterialHandle, particleCount,
+				exactCellMarkerVolume
+		);
+	}
+
 	public VolumeDistribution volumeDistribution(float visibleThreshold) {
 		ensureGrid();
 		int active = 0, visible = 0, dense = 0;
