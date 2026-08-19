@@ -22,12 +22,13 @@ public final class M3ConnectedVesselValidation {
 		validateStrictDegeneration(reference, singleMaterial, "single-material mass model");
 		validateStrictDegeneration(reference, twoMaterial, "equal-density two-material model");
 		validateVariableDensityScenarios();
+		M3MaterialTransferValidation.Summary transfer = M3MaterialTransferValidation.validate();
 
 		System.out.printf("M3 connected-vessel gate passed: cells=%d markers=%d volume=%.3f BV mass=%.3f MU "
-				+ "PCG=%d residual=%.3g maxVelocity=%.3g%n",
+				+ "PCG=%d residual=%.3g maxVelocity=%.3g transferMass=%.3f MU%n",
 				topology.cellCount(), labeled.size(), M3ConnectedVesselExperiment.ledger(labeled).totalVolume(),
 				M3ConnectedVesselExperiment.ledger(labeled).totalMass(), reference.pcgIterations(),
-				reference.pcgResidualRms(), reference.maximumVelocity());
+				reference.pcgResidualRms(), reference.maximumVelocity(), transfer.mass());
 	}
 
 	private static void validateVariableDensityScenarios() {

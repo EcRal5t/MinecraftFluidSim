@@ -28,6 +28,8 @@ M3 的首个 3D 连通器实验只冻结语义，不冻结 protocol、存档 cod
 
 当前冻结只存在于 `M3ConnectedVesselExperiment` 的测试侧 marker 状态；`FlipFluidDomain`、网络、`region-state v1` 和世界交互仍保持纯水格式与行为。
 
+最小 `FluidMaterialRegistry` 以稳定字符串键声明材料，按声明顺序分配只在当前进程有效的稠密 handle；handle 不得直接写入存档或网络。当前定义只包含正有限参考密度和互溶组：参考密度只用于创建/校验 marker 质量，互溶性只比较组键。黏度、颜色、species、codec 和数据包加载等到对应数值或展示消费者出现时再加入。
+
 ## 三层数据定义
 
 1. **species**：ID、显示信息、组成向量、电荷、每 AU 质量和基础颜色。
