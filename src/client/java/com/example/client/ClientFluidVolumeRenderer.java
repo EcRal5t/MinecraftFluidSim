@@ -1,6 +1,10 @@
 package com.example.client;
 
 import com.example.RealWaterMod;
+import com.example.fluid.FluidMaterialSurfaceMesher;
+import com.example.network.FluidMaterialSnapshotLedger;
+import com.example.network.FluidMaterialSnapshotPayload;
+import com.example.network.FluidProtocol;
 import com.example.network.FluidSnapshotPayload;
 import com.example.network.FluidSnapshotLedger;
 import com.mojang.blaze3d.PrimitiveTopology;
@@ -68,8 +72,11 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 			RenderType.BIG_BUFFER_SIZE
 	);
 	private final FluidSnapshotLedger ledger = new FluidSnapshotLedger();
+	private final FluidMaterialSnapshotLedger materialLedger = new FluidMaterialSnapshotLedger();
 	private final Map<UUID, SnapshotTransition> latest = new LinkedHashMap<>();
+	private final Map<UUID, MaterialFrame> latestMaterials = new LinkedHashMap<>();
 	private volatile List<FluidSnapshotPayload> extracted = List.of();
+	private volatile List<MaterialFrame> extractedMaterials = List.of();
 
 	public synchronized void accept(FluidSnapshotPayload payload, int negotiatedVersion) {
 		FluidSnapshotLedger.Decision decision = ledger.evaluate(payload, negotiatedVersion);
@@ -93,6 +100,23 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 		}
 	}
 
+	public synchronized void accept(FluidMaterialSnapshotPayload payload, FluidProtocol.Negotiation negotiation) {
+		FluidMaterialSnapshotLedger.Decision decision = materialLedger.evaluate(payload, negotiation);
+		switch (decision) {
+			case CLEAR_ALL -> latestMaterials.clear();
+			case REMOVE_REGION -> latestMaterials.remove(payload.regionId());
+			case ACCEPT_SNAPSHOT -> latestMaterials.put(payload.regionId(), new MaterialFrame(
+					payload, FluidMaterialSurfaceMesher.build(payload.toRenderSnapshot())
+			));
+			case REJECT_PROTOCOL -> RealWaterMod.LOGGER.error(
+					"Discarded Real Water material snapshot protocol {} after negotiation", payload.protocolVersion());
+			case REJECT_PALETTE -> RealWaterMod.LOGGER.error(
+					"Discarded Real Water material region {} with unsupported palette {}",
+					payload.regionId(), payload.paletteVersion());
+			case IGNORE_STALE -> { }
+		}
+	}
+
 	public void extract(LevelExtractionContext context) {
 		List<SnapshotTransition> transitions;
 		synchronized (this) {
@@ -103,6 +127,11 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 				.map(transition -> interpolate(transition, now))
 				.filter(payload -> payload.dimension().equals(context.level().dimension().identifier()))
 				.toList();
+		synchronized (this) {
+			extractedMaterials = latestMaterials.values().stream()
+					.filter(frame -> frame.payload().dimension().equals(context.level().dimension().identifier()))
+					.toList();
+		}
 	}
 
 	private static FluidSnapshotPayload interpolate(SnapshotTransition transition, long now) {
@@ -141,7 +170,8 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 
 	public void render(LevelRenderContext context) {
 		List<FluidSnapshotPayload> states = extracted;
-		if (states.isEmpty()) return;
+		List<MaterialFrame> materialStates = extractedMaterials;
+		if (states.isEmpty() && materialStates.isEmpty()) return;
 
 		RenderPipeline pipeline = RenderPipelines.DEBUG_FILLED_BOX;
 		VertexFormat format = pipeline.getVertexFormatBinding(0);
@@ -155,6 +185,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 
 		VertexConsumer vertices = stagedBuffer.getVertexBuilder(draw);
 		for (FluidSnapshotPayload state : states) buildGeometry(context, vertices, state);
+		for (MaterialFrame state : materialStates) buildMaterialGeometry(context, vertices, state);
 		stagedBuffer.upload();
 		StagedVertexBuffer.ExecuteInfo info = stagedBuffer.getExecuteInfo(draw);
 		if (info != null) execute(Minecraft.getInstance(), info, pipeline);
@@ -178,6 +209,82 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 
 		if (state.debugOverlays()) renderBounds(matrix, vertices, state);
 		poses.popPose();
+	}
+
+	private static void buildMaterialGeometry(LevelRenderContext context, VertexConsumer vertices, MaterialFrame frame) {
+		FluidMaterialSnapshotPayload state = frame.payload();
+		PoseStack poses = context.poseStack();
+		Vec3 camera = context.levelState().cameraRenderState.pos;
+		poses.pushPose();
+		poses.translate(-camera.x, -camera.y, -camera.z);
+		Matrix4fc matrix = poses.last().pose();
+		byte[][] materialFractions = state.materialFractions();
+		for (FluidMaterialSurfaceMesher.Triangle triangle : frame.mesh().outerTriangles()) {
+			int material = dominantMaterial(state, materialFractions, triangle.centroid());
+			emitMaterialTriangle(matrix, vertices, state, triangle, state.materials().get(material).argb(), 0.62F);
+		}
+		for (FluidMaterialSurfaceMesher.InterfaceTriangle owned : frame.mesh().interfaceTriangles()) {
+			int first = phaseArgb(state, owned.firstPhase());
+			int second = phaseArgb(state, owned.secondPhase());
+			emitMaterialTriangle(matrix, vertices, state, owned.triangle(), blendArgb(first, second), 0.48F);
+		}
+		poses.popPose();
+	}
+
+	private static int dominantMaterial(
+			FluidMaterialSnapshotPayload state, byte[][] fractions, FluidMaterialSurfaceMesher.Point point
+	) {
+		int x = Math.max(0, Math.min(state.sizeX() - 1, (int) Math.floor(point.x() / state.cellSize())));
+		int y = Math.max(0, Math.min(state.sizeY() - 1, (int) Math.floor(point.y() / state.cellSize())));
+		int z = Math.max(0, Math.min(state.sizeZ() - 1, (int) Math.floor(point.z() / state.cellSize())));
+		int cell = x + state.sizeX() * (y + state.sizeY() * z);
+		int best = 0, bestFraction = -1;
+		for (int material = 0; material < fractions.length; material++) {
+			int fraction = Byte.toUnsignedInt(fractions[material][cell]);
+			if (fraction > bestFraction) { best = material; bestFraction = fraction; }
+		}
+		return best;
+	}
+
+	private static int phaseArgb(FluidMaterialSnapshotPayload state, int phase) {
+		String group = state.phaseGroups().get(phase);
+		for (FluidMaterialSnapshotPayload.MaterialEntry material : state.materials()) {
+			if (material.phaseGroup().equals(group)) return material.argb();
+		}
+		return 0xffff00ff;
+	}
+
+	private static int blendArgb(int first, int second) {
+		int red = (((first >>> 16) & 0xff) + ((second >>> 16) & 0xff)) / 2;
+		int green = (((first >>> 8) & 0xff) + ((second >>> 8) & 0xff)) / 2;
+		int blue = ((first & 0xff) + (second & 0xff)) / 2;
+		return 0xff000000 | red << 16 | green << 8 | blue;
+	}
+
+	private static void emitMaterialTriangle(
+			Matrix4fc matrix, VertexConsumer vertices, FluidMaterialSnapshotPayload state,
+		FluidMaterialSurfaceMesher.Triangle triangle, int argb, float alpha
+	) {
+		FluidMaterialSurfaceMesher.Point normal = triangle.normal();
+		double length = Math.sqrt(normal.x() * normal.x() + normal.y() * normal.y() + normal.z() * normal.z());
+		float vertical = length <= 1.0E-9 ? 0.0F : (float) Math.abs(normal.y() / length);
+		float light = 0.78F + 0.22F * vertical;
+		float red = ((argb >>> 16) & 0xff) / 255.0F * light;
+		float green = ((argb >>> 8) & 0xff) / 255.0F * light;
+		float blue = (argb & 0xff) / 255.0F * light;
+		emitMaterialVertex(matrix, vertices, state, triangle.a(), red, green, blue, alpha);
+		emitMaterialVertex(matrix, vertices, state, triangle.b(), red, green, blue, alpha);
+		emitMaterialVertex(matrix, vertices, state, triangle.c(), red, green, blue, alpha);
+		emitMaterialVertex(matrix, vertices, state, triangle.c(), red, green, blue, alpha);
+	}
+
+	private static void emitMaterialVertex(
+			Matrix4fc matrix, VertexConsumer vertices, FluidMaterialSnapshotPayload state,
+			FluidMaterialSurfaceMesher.Point point, float red, float green, float blue, float alpha
+	) {
+		vertex(vertices, matrix,
+				state.origin().getX() + (float) point.x(), state.origin().getY() + (float) point.y(),
+				state.origin().getZ() + (float) point.z(), red, green, blue, alpha);
 	}
 
 	/** Extracts the 0.5 density isosurface with marching tetrahedra. */
@@ -454,8 +561,12 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	public synchronized void clear() {
 		latest.clear();
 		ledger.clear();
+		latestMaterials.clear();
+		materialLedger.clear();
 		extracted = List.of();
+		extractedMaterials = List.of();
 	}
 
 	private record SnapshotTransition(FluidSnapshotPayload from, FluidSnapshotPayload to, long startedAtNanos) { }
+	private record MaterialFrame(FluidMaterialSnapshotPayload payload, FluidMaterialSurfaceMesher.Mesh mesh) { }
 }
