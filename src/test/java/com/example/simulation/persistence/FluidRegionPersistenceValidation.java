@@ -3,6 +3,7 @@ package com.example.simulation.persistence;
 import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipParticleState;
+import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FluidMaterial;
 import com.example.fluid.FluidSolverConfig;
 import com.example.simulation.FluidRegion;
@@ -126,7 +127,13 @@ public final class FluidRegionPersistenceValidation {
 		Path root = Files.createTempDirectory(Path.of("."), "material-v2-");
 		RegionStateFiles files = new RegionStateFiles(root);
 		files.publish(state);
-		assertMaterialStateEquals(expected, files.read(region.id()).reconstructMaterial());
+		FlipMaterialParticleState restored = files.read(region.id()).reconstructMaterial();
+		assertMaterialStateEquals(expected, restored);
+		require(region.recordPublishedCheckpoint(1L) && region.releaseSolverAfterCheckpoint(1L),
+				"material controller fixture did not release its published solver");
+		region.restoreMaterialSolver(restored, 1L);
+		require(region.domain().hasMaterialState(), "material controller restore lost its bound registry");
+		assertMaterialStateEquals(expected, region.domain().exportMaterialParticleState());
 	}
 
 	private static void validateExactRoundTripAndMetadataUnload() throws Exception {
@@ -203,7 +210,7 @@ public final class FluidRegionPersistenceValidation {
 	}
 
 	private static void validateFaultMatrix() throws Exception {
-		FluidMaterial water = new FluidMaterial("realwater:water", 1_000.0, "realwater:water");
+		FluidMaterial water = BuiltinFluidMaterials.WATER;
 		for (RegionStateFiles.FaultPoint point : RegionStateFiles.FaultPoint.values()) {
 			Path root = Files.createTempDirectory(Path.of("."), "fault-" + point.name().toLowerCase() + "-");
 			FluidRegion region = populatedRegion(UUID.randomUUID());
@@ -211,7 +218,7 @@ public final class FluidRegionPersistenceValidation {
 			RegionState first = RegionState.capture(region, 1L);
 			files.publish(first);
 			FlipParticleState pure = first.reconstruct();
-			RegionState second = RegionState.migrateV1(first, 2L, water);
+			RegionState second = RegionState.migrateV1(first, 2L, BuiltinFluidMaterials.M3_PALETTE);
 			try {
 				files.publish(second, (observed, path) -> { if (observed == point) throw new IOException("injected " + point); });
 				throw new AssertionError("Fault point did not interrupt publication: " + point);
@@ -225,7 +232,13 @@ public final class FluidRegionPersistenceValidation {
 				assertParticleStateEquals(pure, reopened.reconstruct());
 			} else {
 				require(reopened.manifest().formatVersion() == 2, "post-HEAD migration did not expose v2");
-				assertMigratedWaterState(pure, reopened.reconstructMaterial(), water);
+				for (int material = 1; material < reopened.manifest().materialLedgers().size(); material++) {
+					RegionManifest.MaterialLedger empty = reopened.manifest().materialLedgers().get(material);
+					require(empty.markerCount() == 0 && empty.volumeBits() == Double.doubleToRawLongBits(0.0)
+							&& empty.massBits() == Double.doubleToRawLongBits(0.0),
+							"v1 migration did not preserve exact zero ledger for an unused material");
+				}
+				assertMigratedWaterState(pure, reopened.reconstructMaterial(), BuiltinFluidMaterials.M3_PALETTE);
 			}
 		}
 	}
@@ -352,9 +365,10 @@ public final class FluidRegionPersistenceValidation {
 	}
 
 	private static void assertMigratedWaterState(
-			FlipParticleState pure, FlipMaterialParticleState migrated, FluidMaterial water
+			FlipParticleState pure, FlipMaterialParticleState migrated, List<FluidMaterial> palette
 	) {
-		require(migrated.materials().equals(List.of(water)), "v1 migration did not create the frozen default-water palette");
+		FluidMaterial water = palette.getFirst();
+		require(migrated.materials().equals(palette), "v1 migration did not create the frozen M3 palette");
 		require(Arrays.equals(floatBits(pure.copyPositionVolume()), floatBits(migrated.copyPositionVolume()))
 				&& Arrays.equals(floatBits(pure.copyParticleVelocities()), floatBits(migrated.copyParticleVelocities()))
 				&& Arrays.equals(pure.copySolidMask(), migrated.copySolidMask()), "v1 migration changed pure-water physical state");

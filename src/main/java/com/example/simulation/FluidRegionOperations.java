@@ -23,9 +23,9 @@ final class FluidRegionOperations {
 	private boolean creationLocked;
 	private long serviceTick;
 
-	FluidRegionOperations(Path worldRoot, FluidRegionManager manager, boolean configurationLocked) {
+	FluidRegionOperations(Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean materialsEnabled) {
 		this.manager = manager;
-		this.persistence = new FluidRegionPersistence(worldRoot);
+		this.persistence = new FluidRegionPersistence(worldRoot, materialsEnabled);
 		creationLocked = configurationLocked;
 		List<String> metadataIssues = persistence.loadMetadata(manager);
 		issues.addAll(metadataIssues);

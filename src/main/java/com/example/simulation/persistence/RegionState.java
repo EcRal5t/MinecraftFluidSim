@@ -129,8 +129,16 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	public static RegionState migrateV1(
 			RegionState source, long checkpointGeneration, FluidMaterial defaultMaterial
 	) throws IOException {
+		return migrateV1(source, checkpointGeneration, List.of(defaultMaterial));
+	}
+
+	public static RegionState migrateV1(
+			RegionState source, long checkpointGeneration, List<FluidMaterial> materialPalette
+	) throws IOException {
 		if (source.manifest().formatVersion() != 1) throw new IOException("Only region-state v1 can be migrated to v2");
 		if (checkpointGeneration <= source.manifest().checkpointGeneration()) throw new IOException("Migration generation must advance");
+		if (materialPalette == null || materialPalette.isEmpty()) throw new IOException("Migration requires a material palette");
+		FluidMaterial defaultMaterial = materialPalette.getFirst();
 		FlipParticleState particles = source.reconstruct();
 		float[] allPositions = particles.copyPositionVolume();
 		double[] allMass = new double[particles.particleCount()];
@@ -158,12 +166,15 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		migratedSections.sort(Comparator.comparing(RegionSectionState::key));
 		descriptors.sort(Comparator.naturalOrder());
 		RegionManifest base = source.manifest();
-		List<RegionManifest.MaterialLedger> ledgers = List.of(new RegionManifest.MaterialLedger(particles.particleCount(),
-				base.totalVolumeBits(), Double.doubleToRawLongBits(totalMass)));
+		List<RegionManifest.MaterialLedger> ledgers = new ArrayList<>(materialPalette.size());
+		ledgers.add(new RegionManifest.MaterialLedger(particles.particleCount(), base.totalVolumeBits(), Double.doubleToRawLongBits(totalMass)));
+		for (int material = 1; material < materialPalette.size(); material++) {
+			ledgers.add(new RegionManifest.MaterialLedger(0, Double.doubleToRawLongBits(0.0), Double.doubleToRawLongBits(0.0)));
+		}
 		RegionManifest unsigned = new RegionManifest(2, base.regionId(), base.dimensionId(), checkpointGeneration,
 				base.networkGeneration(), base.origin(), base.sizeX(), base.sizeY(), base.sizeZ(), base.solverConfig(),
 				base.reservedMarkerCapacity(), base.runtime(), base.footprint(), base.totalMarkerCount(), base.totalVolumeBits(),
-				List.of(defaultMaterial), Double.doubleToRawLongBits(totalMass), ledgers, descriptors, base.extensions(), 0L);
+				materialPalette, Double.doubleToRawLongBits(totalMass), ledgers, descriptors, base.extensions(), 0L);
 		return new RegionState(withChecksum(unsigned), migratedSections);
 	}
 

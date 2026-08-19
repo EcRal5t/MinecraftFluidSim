@@ -2,7 +2,10 @@ package com.example.simulation;
 
 import com.example.RealWaterMod;
 import com.example.block.RealWaterBlocks;
+import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FlipFluidDomain;
+import com.example.fluid.FlipMaterialParticleState;
+import com.example.fluid.FlipParticleState;
 import com.example.network.FluidSnapshotPayload;
 import com.example.network.FluidProtocolServer;
 import com.example.simulation.controller.FluidBoundaryScanner;
@@ -79,7 +82,7 @@ public final class FluidSimulationService {
 		controllerFeatureEnabled = serverConfig.controllersEnabled();
 		materialFeatureEnabled = serverConfig.materialsEnabled();
 		regionManager = new FluidRegionManager(serverConfig.limits());
-		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked);
+		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, materialFeatureEnabled);
 		if (configurationLocked) regionOperations.recordIssue(
 				"server.properties 不可用，已安全使用默认预算并关闭控制器；原文件未覆盖");
 	}
@@ -199,6 +202,7 @@ public final class FluidSimulationService {
 		if (!admission.accepted()) return ControllerActivation.failed(admission.failure());
 		refreshCollisions(level, candidate);
 		FluidRegionFactory.captureVanillaWater(level, candidate);
+		if (materialFeatureEnabled) bindDefaultMaterialState(candidate.domain());
 		candidate.setPaused(true);
 		try {
 			regionOperations.checkpoint(candidate);
@@ -240,6 +244,7 @@ public final class FluidSimulationService {
 				}
 			}
 		}
+		if (materialFeatureEnabled) bindDefaultMaterialState(domain);
 		activeRegion().setPaused(true);
 		sendSnapshot(level);
 		return true;
@@ -262,6 +267,7 @@ public final class FluidSimulationService {
 		}
 		refreshCollisions(level);
 		int wetCells = FluidRegionFactory.captureVanillaWater(level, activeRegion());
+		if (materialFeatureEnabled) bindDefaultMaterialState(activeRegion().domain());
 		int removedBlocks = takeover ? beginTakeover(level) : 0;
 		activeRegion().setPaused(true);
 		sendSnapshot(level);
@@ -764,6 +770,25 @@ public final class FluidSimulationService {
 
 	public record SelectionResult(boolean succeeded, UUID regionId, String failure) {
 		static SelectionResult failed(String failure) { return new SelectionResult(false, null, failure); }
+	}
+
+	private static void bindDefaultMaterialState(FlipFluidDomain domain) {
+		if (domain.hasMaterialState()) return;
+		FlipParticleState pure = domain.exportParticleState();
+		float[] positionVolume = pure.copyPositionVolume();
+		double[] markerMass = new double[pure.particleCount()];
+		int[] material = new int[pure.particleCount()];
+		double totalVolume = 0.0, totalMass = 0.0;
+		for (int marker = 0; marker < pure.particleCount(); marker++) {
+			double volume = positionVolume[marker * 4 + 3];
+			markerMass[marker] = volume * BuiltinFluidMaterials.WATER.referenceDensity();
+			totalVolume += volume;
+			totalMass += markerMass[marker];
+		}
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
+				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), totalVolume, totalMass,
+				BuiltinFluidMaterials.M3_PALETTE, positionVolume, pure.copyParticleVelocities(), pure.copySolidMask(), markerMass, material
+		));
 	}
 
 	public record ControllerActivation(

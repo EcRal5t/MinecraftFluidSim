@@ -1,6 +1,6 @@
 package com.example.simulation;
 
-import com.example.fluid.FlipParticleState;
+import com.example.fluid.BuiltinFluidMaterials;
 import com.example.simulation.persistence.RegionManifest;
 import com.example.simulation.persistence.RegionState;
 import com.example.simulation.persistence.RegionStateFiles;
@@ -17,9 +17,11 @@ import java.util.List;
 /** Coordinates persistent controller state without coupling it to world takeover transactions. */
 final class FluidRegionPersistence {
 	private final RegionStateFiles files;
+	private final boolean materialsEnabled;
 
-	FluidRegionPersistence(Path worldRoot) {
+	FluidRegionPersistence(Path worldRoot, boolean materialsEnabled) {
 		files = new RegionStateFiles(worldRoot);
+		this.materialsEnabled = materialsEnabled;
 	}
 
 	List<String> loadMetadata(FluidRegionManager manager) {
@@ -33,6 +35,9 @@ final class FluidRegionPersistence {
 		for (var issue : discovery.issues().entrySet()) issues.add(issue.getKey().getFileName() + " 已锁定：" + issue.getValue());
 		for (RegionManifest manifest : discovery.manifests()) {
 			try {
+				if (manifest.formatVersion() == 2 && !materialsEnabled) {
+					throw new IOException("region-state v2 requires the materials feature gate");
+				}
 				validateControllerGeometry(manifest);
 				Identifier dimensionId = Identifier.tryParse(manifest.dimensionId());
 				if (dimensionId == null) throw new IOException("invalid dimension");
@@ -53,7 +58,9 @@ final class FluidRegionPersistence {
 	long checkpoint(FluidRegion region) throws IOException {
 		if (!region.controllerManaged() || !region.solverLoaded()) throw new IOException("Region has no persistent live solver");
 		long generation = Math.addExact(region.checkpointGeneration(), 1L);
-		long published = files.publish(RegionState.capture(region, generation));
+		long published = files.publish(region.domain().hasMaterialState()
+				? RegionState.captureMaterial(region, generation)
+				: RegionState.capture(region, generation));
 		if (!region.recordPublishedCheckpoint(published)) throw new IOException("Published checkpoint was not accepted by the live region");
 		return published;
 	}
@@ -74,8 +81,21 @@ final class FluidRegionPersistence {
 				|| manifest.reservedMarkerCapacity() != region.reservedMarkerCapacity()) {
 			throw new IOException("Committed checkpoint no longer matches admitted region metadata");
 		}
-		FlipParticleState particles = state.reconstruct();
-		region.restoreSolver(particles, manifest.checkpointGeneration());
+		if (materialsEnabled && manifest.formatVersion() == 1) {
+			long migratedGeneration = Math.addExact(manifest.checkpointGeneration(), 1L);
+			state = RegionState.migrateV1(state, migratedGeneration, BuiltinFluidMaterials.M3_PALETTE);
+			files.publish(state);
+			if (!region.adoptMigratedCheckpoint(manifest.checkpointGeneration(), migratedGeneration)) {
+				throw new IOException("Published v2 migration was not accepted by unloaded region metadata");
+			}
+			manifest = state.manifest();
+		}
+		if (manifest.formatVersion() == 2) {
+			if (!materialsEnabled) throw new IOException("Material checkpoint cannot restore while the feature gate is disabled");
+			region.restoreMaterialSolver(state.reconstructMaterial(), manifest.checkpointGeneration());
+		} else {
+			region.restoreSolver(state.reconstruct(), manifest.checkpointGeneration());
+		}
 	}
 
 	void delete(FluidRegion region) throws IOException {

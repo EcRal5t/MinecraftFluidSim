@@ -154,6 +154,7 @@ public final class FlipFluidDomain {
 		return result;
 	}
 	public FluidSolverConfig config() { return config; }
+	public boolean hasMaterialState() { return materialRegistry != null; }
 
 	/** Replaces this domain from one validated, immutable in-memory marker state. */
 	public void restoreParticleState(FlipParticleState state) {

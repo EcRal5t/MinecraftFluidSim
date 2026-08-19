@@ -2,6 +2,7 @@ package com.example.simulation;
 
 import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FlipParticleState;
+import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FluidSolverConfig;
 import com.example.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
@@ -254,6 +255,29 @@ public final class FluidRegion {
 		domain = restored;
 		collisionRefreshRequired = true;
 		lifecycle.restoreFromUnloaded(unloadedResumeState, stepIntervalTicks);
+	}
+
+	/** Restores exact multi-material marker truth into a fresh solver. The region remains operator-paused. */
+	public void restoreMaterialSolver(FlipMaterialParticleState state, long loadedCheckpointGeneration) {
+		Objects.requireNonNull(state, "state");
+		if (domain != null || lifecycle.state() != FluidRegionLifecycle.State.UNLOADED) {
+			throw new IllegalStateException("Only an unloaded region can restore a solver");
+		}
+		if (loadedCheckpointGeneration != checkpointGeneration) {
+			throw new IllegalArgumentException("Checkpoint generation changed while restoring");
+		}
+		FlipFluidDomain restored = new FlipFluidDomain(sizeX, sizeY, sizeZ, solverConfig, (int) reservedMarkerCapacity);
+		restored.restoreMaterialParticleState(state);
+		domain = restored;
+		collisionRefreshRequired = true;
+		lifecycle.restoreFromUnloaded(unloadedResumeState, stepIntervalTicks);
+	}
+
+	boolean adoptMigratedCheckpoint(long previousGeneration, long migratedGeneration) {
+		if (domain != null || lifecycle.state() != FluidRegionLifecycle.State.UNLOADED
+				|| checkpointGeneration != previousGeneration || migratedGeneration <= previousGeneration) return false;
+		checkpointGeneration = migratedGeneration;
+		return true;
 	}
 
 	public record PersistedRuntime(
