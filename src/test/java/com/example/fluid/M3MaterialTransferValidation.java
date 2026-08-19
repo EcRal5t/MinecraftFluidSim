@@ -56,6 +56,23 @@ final class M3MaterialTransferValidation {
 				"active variable-density P2G did not change the shared face velocity");
 		checkClose(variable.totalMass(), 1_800.0, "active marker mass ledger");
 		expectIllegalState(variable::exportParticleState);
+		FlipMaterialParticleState handoff = variable.exportMaterialParticleState();
+		check(handoff.materials().equals(registry.materials()) && handoff.totalMass() == variable.totalMass()
+				&& handoff.totalVolume() == variable.totalVolume(),
+				"material handoff changed the stable palette or exact ledgers");
+		FlipFluidDomain restored = new FlipFluidDomain(4, 4, 4, variable.config(), 64);
+		restored.restoreMaterialParticleState(handoff);
+		check(restored.usesMassWeightedP2G() && restored.totalMass() == variable.totalMass()
+				&& restored.totalVolume() == variable.totalVolume(),
+				"material handoff did not restore variable-density marker truth");
+		checkClose(restored.materialInventory(a).mass(), 1_000.0, "restored material A mass");
+		checkClose(restored.materialInventory(c).mass(), 800.0, "restored material C mass");
+		expectIllegalState(restored::exportParticleState);
+		expectIllegal(() -> new FlipMaterialParticleState(
+				handoff.sizeX(), handoff.sizeY(), handoff.sizeZ(), handoff.cellSize(), handoff.particleCount(),
+				handoff.totalVolume(), handoff.totalMass() + 1.0, handoff.materials(), handoff.copyPositionVolume(),
+				handoff.copyParticleVelocities(), handoff.copySolidMask(), handoff.copyParticleMass(),
+				handoff.copyMaterialPaletteIndex()));
 	}
 
 	private static FlipFluidDomain activeDomainWithShear() {

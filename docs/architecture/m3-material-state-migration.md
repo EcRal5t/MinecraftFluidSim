@@ -37,6 +37,9 @@ v2 section 在 v1 marker 位置/体积、速度和 solid slice 之外必须包�
 `particleMass` raw bits。运行时 phase handle 不持久化；加载后由 palette 的 miscibility-group key 确定性重建。
 所有必需字段都进入 section/manifest checksum，不使用可跳过 extension 承载物理真值。
 
+上述字段已先在不可变 `FlipMaterialParticleState` 内存 handoff 中冻结并通过导出/恢复账本门；它不是 codec，
+`region-state v2` 仍必须独立执行长度、checksum、generation、palette 与预算校验。
+
 ## 发布、失败与兼容
 
 1. v1 纯水 generation 可继续读写 v1，不因安装新版本自动改盘。

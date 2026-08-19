@@ -6,7 +6,7 @@
 
 - **物理真值**：全部 marker `particleVolume` 的精确和。精确加水、删水、碰撞挤水和恢复只按 marker 账本结算。
 - **M3 预接线**：活动 marker 同时持有材料 handle、相标签和显式 `particleMass`；包内测试可分配多材料，正式世界入口仍只创建纯水。存在变密度时 P2G 按质量/动量加权，同密度域继续逐位退化到原体积权重路径。
-- **交接边界**：当前 `FlipParticleState` 仍是纯水 handoff。任何非默认 material/phase/mass 状态导出都会显式失败，不能静默丢标签后进入 `region-state v1`。
+- **交接边界**：`FlipParticleState` 仍只允许纯水；任何非默认 material/phase/mass 状态导出都会显式失败。`FlipMaterialParticleState` 是独立内存 handoff，保存稳定 palette、每 marker material index 与 raw `double mass`，但尚未接入正式 region ownership 或磁盘。
 - **数值离散**：`markerCount > 0` 决定压力流体格；平滑 `volume[]`、PLIC 分数、cut-cell 开口和目标散度都不是第二套水量。
 - **渲染重建**：客户端使用 density + marker + solid 重建；marker mask 是浅水可见的必要内部种子，渲染不得反写物理。
 - **M3 材料重建**：`FluidMaterialRenderSnapshot` 从 marker 只读派生总体积、逐材料/phase 量化分数与各自 marker 种子；每格分数确定性回和到 255，但这些字段不携带精确库存，也尚未成为网络 payload。
