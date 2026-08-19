@@ -489,7 +489,7 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 - 建立可配置的单区域 marker/cell 上限和多区域总预算、状态统计和管理命令；预算拒绝必须报告所需量、单域上限和服务器剩余额度；
 - 区域墙必须可见/可调试，不再有未说明的不可见边界。
 
-当前状态（2026-08-19，M2 自动实现门完成、实机签收待测）：服务按世界配置接纳默认最多四个区域、单域 9,216 cell/73,728 marker、总预留 36,864/294,912；预算可在 `<world>/realwater/server.properties` 调整并于重启后生效。控制器首次激活追加、只读采样并立即发布初始 checkpoint，再次激活只选择既有区域；开发命令拒绝隐式覆盖持久控制器域。server tick 遍历各域，缺任一关联 chunk、破边界或关闭独立 controller flag 时，在任何碰撞、实体或 solver 访问前暂停整域；`region-state v1` 随后按 chunk section 保存 marker 原始顺序、position/`particleVolume`、velocity 与 solid slice。两槽不可变完整代次经 UUID/dimension/generation/CRC/账本复核后最后原子发布 HEAD；发布失败保留暂停的 live solver，成功才释放数组进入仍占 manager 预算的 metadata-only `UNLOADED`。重新可用时全量恢复、保持 operator pause，并在任何 step 前重采样当前世界碰撞。启动只 admission manifest；未知、损坏、混代、超预算或实验格式均保留并锁住新控制器创建。`/realwater regions list|select|checkpoint` 提供管理入口。protocol v1 继续在配置阶段协商四项能力，客户端逐域维护 generation/sequence 与 removal tombstone。自动门覆盖反复 unload/restore、精确 marker ledger、缺片/损坏、原子 move 拒绝和每个发布 fault point；仍无永久 chunk ticket，takeover 边界与 journal v1 未变，GPU probe 仍只读可选。最终 M2 签收只剩真实客户端跨 chunk 离开/返回、边界破坏/修复与世界重启 smoke。
+当前状态（2026-08-19，M2 完成）：服务按世界配置接纳默认最多四个区域、单域 9,216 cell/73,728 marker、总预留 36,864/294,912；预算可在 `<world>/realwater/server.properties` 调整并于重启后生效。控制器首次激活追加、只读采样并立即发布初始 checkpoint，再次激活只选择既有区域；开发命令拒绝隐式覆盖持久控制器域。server tick 遍历各域，缺任一关联 chunk、破边界或关闭独立 controller flag 时，在任何碰撞、实体或 solver 访问前暂停整域；`region-state v1` 随后按 chunk section 保存 marker 原始顺序、position/`particleVolume`、velocity 与 solid slice。两槽不可变完整代次经 UUID/dimension/generation/CRC/账本复核后最后原子发布 HEAD；发布失败保留暂停的 live solver，成功才释放数组进入仍占 manager 预算的 metadata-only `UNLOADED`。重新可用时全量恢复、保持 operator pause，并在任何 step 前重采样当前世界碰撞。启动只 admission manifest；未知、损坏、混代、超预算或实验格式均保留并锁住新控制器创建。`/realwater regions list|select|checkpoint` 提供管理入口。protocol v1 继续在配置阶段协商四项能力，客户端逐域维护 generation/sequence 与 removal tombstone。自动门覆盖反复 unload/restore、精确 marker ledger、缺片/损坏、原子 move 拒绝和每个发布 fault point。四 chunk 实机签收又完成 chunk 离开/返回、破坏/修复边界与正常重启，区域 UUID `723dbb82-a5e4-470b-a4ab-f69436108184` 全程保持 3,100 marker 和 377.77777 cell-volume；详见 [`m2-region-state-smoke.md`](m2-region-state-smoke.md)。仍无永久 chunk ticket，takeover 边界与 journal v1 未变，GPU probe 仍只读可选。
 
 完成条件：反复休眠/唤醒/重启后水量不变；方块更新和实体进入可靠唤醒；任一关联 chunk 卸载时不发生半区域步进；未加载区不占粒子内存；协议不兼容能被明确拒绝而非错位解码。
 
@@ -637,8 +637,8 @@ CPU 单线程参考场景固定随机种子、遍历顺序和输入，能稳定�
 
 ## 十三、接下来三项实际工作
 
-1. 完成 M2 实机签收：跨 chunk 控制器域离开加载范围后应整域消失为 `UNLOADED`，返回后保持暂停且 marker/水量不变；破坏/修复边界走相同闭环。
-2. 正常退出并重启同一世界，确认 metadata 启动、控制器域恢复、多区域客户端 tombstone 和管理命令输出一致，再正式标记 M2 完成。
-3. M2 签收后进入 M2.5，先冻结分数格自由表面压力与守恒 reseeding 的定量门，不用渲染找平处理长期 marker 分布。
+1. 进入 M2.5，先冻结分数格流体-空气/流体-固体面积、体积分数与自由表面压力权重的离散定义和定量静水门。
+2. 设计仅在 marker 过稀/过密时触发的守恒 reseeding；任何合并/拆分都必须精确重分配 `particleVolume`，不得从 density 猜水量。
+3. 建立薄层、斜面、墙角切向运动和长期 marker 分布的固定种子回归，再评审是否接入活动 `FlipFluidDomain`。
 
-上述 smoke 不扩大 takeover 范围，不改变 `takeover-journal v1`，也不把 GPU 设为必需运行条件。
+上述 M2.5 工作不扩大 takeover 范围，不改变 `takeover-journal v1`，也不把 GPU 设为必需运行条件。
