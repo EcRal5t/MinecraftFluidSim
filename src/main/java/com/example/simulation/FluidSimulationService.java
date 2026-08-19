@@ -18,14 +18,18 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.storage.LevelResource;
 import net.minecraft.world.phys.Vec3;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.WeakHashMap;
 
-/** Adapts in-memory fluid regions to Minecraft; only takeover recovery metadata is persisted. */
+/** Adapts fluid regions to Minecraft while delegating region-state lifecycle and takeover transactions. */
 public final class FluidSimulationService {
 	public static final int BLOCK_SIZE_X = 12;
 	public static final int BLOCK_SIZE_Y = 8;
@@ -45,17 +49,14 @@ public final class FluidSimulationService {
 	private static final long COMPATIBILITY_REGION_CELLS = (long) BLOCK_SIZE_X * BLOCK_SIZE_Y * BLOCK_SIZE_Z
 			* CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
 	private static final long COMPATIBILITY_REGION_MARKERS = COMPATIBILITY_REGION_CELLS * 8L;
-	private static final int MAX_REGIONS = 4;
-	private static final int MAX_CONTROLLER_INTERIOR_BLOCKS = Math.toIntExact(
-			COMPATIBILITY_REGION_CELLS / CELL_VOLUMES_PER_BLOCK
-	);
 	private static final Map<MinecraftServer, FluidSimulationService> SERVICES = new WeakHashMap<>();
 
 	private final Map<BlockPos, BlockState> takeoverOriginalBlocks = new HashMap<>();
-	private final FluidRegionManager regionManager = new FluidRegionManager(new FluidRegionManager.Limits(
-			MAX_REGIONS, COMPATIBILITY_REGION_CELLS, COMPATIBILITY_REGION_MARKERS,
-			COMPATIBILITY_REGION_CELLS * MAX_REGIONS, COMPATIBILITY_REGION_MARKERS * MAX_REGIONS
-	));
+	private final Path worldRoot;
+	private final boolean serverConfigLocked;
+	private FluidServerConfig serverConfig;
+	private final FluidRegionManager regionManager;
+	private final FluidRegionOperations regionOperations;
 	private ResourceKey<Level> takeoverDimension;
 	private boolean defaultEntityPhysicsEnabled = true;
 	private boolean defaultDebugOverlays;
@@ -63,19 +64,40 @@ public final class FluidSimulationService {
 	private String lastTakeoverFailure;
 	private boolean takeoverMaintenanceEnabled;
 
-	private FluidSimulationService() { }
+	private FluidSimulationService(MinecraftServer server) {
+		worldRoot = server.getWorldPath(LevelResource.ROOT);
+		boolean configurationLocked = false;
+		try {
+			serverConfig = FluidServerConfig.loadOrCreate(worldRoot);
+		} catch (IOException exception) {
+			serverConfig = FluidServerConfig.defaults();
+			configurationLocked = true;
+			RealWaterMod.LOGGER.error("Could not load Real Water world config; controllers remain disabled", exception);
+		}
+		serverConfigLocked = configurationLocked;
+		controllerFeatureEnabled = serverConfig.controllersEnabled();
+		regionManager = new FluidRegionManager(serverConfig.limits());
+		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked);
+		if (configurationLocked) regionOperations.recordIssue(
+				"server.properties 不可用，已安全使用默认预算并关闭控制器；原文件未覆盖");
+	}
 
 	public static FluidSimulationService get(MinecraftServer server) {
-		return SERVICES.computeIfAbsent(server, ignored -> new FluidSimulationService());
+		return SERVICES.computeIfAbsent(server, FluidSimulationService::new);
 	}
 
 	public static void removeServer(MinecraftServer server) {
 		FluidSimulationService service = SERVICES.remove(server);
-		if (service != null) service.restoreTakeover(server);
+		if (service != null) {
+			service.checkpointForShutdown();
+			service.restoreTakeover(server);
+		}
 	}
 
 	public static void recoverTakeoverBackup(MinecraftServer server) {
-		RestorationStats result = get(server).restoreTakeover(server);
+		FluidSimulationService service = get(server);
+		for (String issue : service.regionOperations.issues()) RealWaterMod.LOGGER.error("Real Water persistent region issue: {}", issue);
+		RestorationStats result = service.restoreTakeover(server);
 		if (result.completed() && result.journalFound()) {
 			RealWaterMod.LOGGER.warn(
 					"Recovered unfinished Real Water takeover: restored {} blocks, already restored {}, skipped {} occupied positions",
@@ -97,13 +119,24 @@ public final class FluidSimulationService {
 		return controllerFeatureEnabled;
 	}
 
-	public void setControllerFeatureEnabled(boolean enabled) {
+	/** Returns null on success; the world-local flag is durably replaced before runtime state changes. */
+	public String setControllerFeatureEnabled(boolean enabled) {
+		if (serverConfigLocked) return "server.properties 未通过 v1 校验；原文件已保留，请修复后重启服务器";
+		FluidServerConfig replacement = serverConfig.withControllersEnabled(enabled);
+		try {
+			replacement.save(worldRoot);
+		} catch (IOException exception) {
+			RealWaterMod.LOGGER.error("Could not persist Real Water controller feature flag", exception);
+			return exception.getMessage();
+		}
+		serverConfig = replacement;
 		controllerFeatureEnabled = enabled;
 		if (!enabled) {
 			for (FluidRegion region : regionManager.regions()) {
 				if (region.controllerManaged()) region.setAvailabilityFailure("controller feature flag is disabled");
 			}
 		}
+		return null;
 	}
 
 	public ControllerActivation activateController(ServerPlayer player, BlockPos controllerPosition) {
@@ -121,9 +154,14 @@ public final class FluidSimulationService {
 			sendSnapshot(level);
 			return ControllerActivation.selected(existingFootprint);
 		}
+		if (regionOperations.creationLocked()) {
+			return ControllerActivation.failed("存在未解决或超预算的 region-state；已锁住新控制器区域，详见 /realwater regions list 与日志");
+		}
 
 		FluidBoundaryScanner.ScanResult scan = FluidControllerRegions.scan(
-				level, controllerPosition, MAX_CONTROLLER_INTERIOR_BLOCKS
+				level, controllerPosition, (int) Math.max(1L, Math.min(Integer.MAX_VALUE,
+						regionManager.limits().maximumCellsPerRegion() / CELL_VOLUMES_PER_BLOCK)
+				)
 		);
 		if (!scan.succeeded()) return ControllerActivation.failed(scan.failure());
 		FluidRegionFootprint footprint = scan.footprint();
@@ -156,6 +194,13 @@ public final class FluidSimulationService {
 		refreshCollisions(level, candidate);
 		FluidRegionFactory.captureVanillaWater(level, candidate);
 		candidate.setPaused(true);
+		try {
+			regionOperations.checkpoint(candidate);
+		} catch (IOException | RuntimeException exception) {
+			candidate.setAvailabilityFailure("initial checkpoint failed: " + exception.getMessage());
+			RealWaterMod.LOGGER.error("Controller region {} exists in memory but its initial checkpoint failed", candidate.id(), exception);
+			return ControllerActivation.failed("区域已安全暂停，但初始 checkpoint 失败：" + exception.getMessage());
+		}
 		sendSnapshot(level);
 		return ControllerActivation.created(footprint);
 	}
@@ -166,8 +211,17 @@ public final class FluidSimulationService {
 		ServerLevel level = player.level();
 		RestorationStats restoration = restoreTakeover(level.getServer());
 		if (!restoration.completed()) return false;
+		if (activeRegion() != null && activeRegion().controllerManaged()) {
+			lastTakeoverFailure = "拒绝用开发测试域覆盖持久控制器区域；请先显式移除控制器区域";
+			return false;
+		}
 		BlockPos newOrigin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
-		createEmpty(level, newOrigin);
+		try {
+			createEmpty(level, newOrigin);
+		} catch (IllegalStateException exception) {
+			lastTakeoverFailure = exception.getMessage();
+			return false;
+		}
 		refreshCollisions(level);
 
 		FlipFluidDomain domain = domain();
@@ -191,8 +245,15 @@ public final class FluidSimulationService {
 		if (!restoration.completed()) {
 			return new CaptureResult(0, -1, restoration.failure());
 		}
+		if (activeRegion() != null && activeRegion().controllerManaged()) {
+			return new CaptureResult(0, -1, "拒绝用开发捕获域覆盖持久控制器区域；请先显式移除控制器区域");
+		}
 		BlockPos newOrigin = player.blockPosition().offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
-		createEmpty(level, newOrigin);
+		try {
+			createEmpty(level, newOrigin);
+		} catch (IllegalStateException exception) {
+			return new CaptureResult(0, -1, exception.getMessage());
+		}
 		refreshCollisions(level);
 		int wetCells = FluidRegionFactory.captureVanillaWater(level, activeRegion());
 		int removedBlocks = takeover ? beginTakeover(level) : 0;
@@ -274,6 +335,12 @@ public final class FluidSimulationService {
 
 	private void createEmpty(ServerLevel level, BlockPos origin) {
 		FluidRegion replaced = activeRegion();
+		if (replaced != null && replaced.controllerManaged()) {
+			throw new IllegalStateException("Refusing to replace a persistent controller region; remove it explicitly first");
+		}
+		FluidRegionManager.AdmissionResult preview = regionManager.previewReplacement(
+				COMPATIBILITY_REGION_CELLS, COMPATIBILITY_REGION_MARKERS);
+		if (!preview.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + preview.failure());
 		FluidRegion candidate = FluidRegionFactory.createCommandRegion(
 				level, origin, BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z,
 				CELLS_PER_BLOCK, COMPATIBILITY_REGION_MARKERS
@@ -327,6 +394,7 @@ public final class FluidSimulationService {
 	}
 
 	public void tick(MinecraftServer server) {
+		regionOperations.advanceTick();
 		if (takeoverDimension != null) {
 			ServerLevel takeoverLevel = server.getLevel(takeoverDimension);
 			if (takeoverLevel != null) maintainTakeover(takeoverLevel);
@@ -334,7 +402,7 @@ public final class FluidSimulationService {
 		for (FluidRegion region : regionManager.regions()) {
 			ServerLevel level = server.getLevel(region.dimension());
 			if (level == null) {
-				region.setAvailabilityFailure("dimension is not loaded");
+				regionOperations.unloadForFailure(server, region, "dimension is not loaded", FluidSimulationService::sendRegionRemoval);
 				continue;
 			}
 			tickRegion(level, region);
@@ -399,22 +467,10 @@ public final class FluidSimulationService {
 	}
 
 	private boolean ensureRegionAvailable(ServerLevel level, FluidRegion region) {
-		if (!region.controllerManaged()) {
-			region.setAvailabilityFailure(null);
-			return true;
-		}
-		String failure = controllerFeatureEnabled
-				? FluidControllerRegions.availabilityFailure(level, region.footprint())
-				: "controller feature flag is disabled";
-		if (failure == null) {
-			region.setAvailabilityFailure(null);
-			return true;
-		}
-		if (!failure.equals(region.availabilityFailure())) {
-			RealWaterMod.LOGGER.warn("Pausing controller region {}: {}", region.id(), failure);
-		}
-		region.setAvailabilityFailure(failure);
-		return false;
+		return regionOperations.ensureAvailable(
+				level, region, controllerFeatureEnabled, this::refreshCollisions, this::sendSnapshot,
+				FluidSimulationService::sendRegionRemoval
+		);
 	}
 
 	private static void stepOnce(FluidRegion region) {
@@ -490,6 +546,7 @@ public final class FluidSimulationService {
 				level, region, CELLS_PER_BLOCK
 		);
 		region.setLastCollisionStats(stats);
+		region.markCollisionRefreshed();
 		if (stats.changedCells() > 0) region.wakeForActivity();
 		return stats;
 	}
@@ -544,11 +601,29 @@ public final class FluidSimulationService {
 			if (region != null) region.setPaused(true);
 			return restoration;
 		}
+		String persistenceFailure = regionOperations.deletePersistentRegions();
+		if (persistenceFailure != null) return RestorationStats.failed(false, 0, 0, 0, persistenceFailure);
 		regionManager.clear();
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			FluidProtocolServer.send(player, FluidSnapshotPayload.clearAll());
 		}
 		return restoration;
+	}
+
+	public List<String> regionSummaries() {
+		return regionOperations.summaries();
+	}
+
+	public SelectionResult selectRegion(String prefix) {
+		return regionOperations.select(prefix);
+	}
+
+	public String checkpointSelected() {
+		return regionOperations.checkpointSelected();
+	}
+
+	private void checkpointForShutdown() {
+		regionOperations.checkpointForShutdown();
 	}
 
 	public String status(MinecraftServer server) {
@@ -559,7 +634,20 @@ public final class FluidSimulationService {
 			return "没有活动流体域 | regions 0/" + regionManager.limits().maximumRegions()
 					+ " | controller flag " + (controllerFeatureEnabled ? "on" : "off")
 					+ " | takeover lock " + takeoverLock
+					+ (regionOperations.issues().isEmpty() ? "" : " | persistence issues " + regionOperations.issues().size())
 					+ (lastTakeoverFailure == null ? "" : " | " + lastTakeoverFailure);
+		}
+		FluidRegionManager.BudgetUsage selectedUsage = regionManager.usage();
+		if (!region.solverLoaded()) {
+			return String.format(
+					"UNLOADED/PAUSED | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | controller %s | %s | origin %s | grid %dx%dx%d | checkpoint %d, water %.3f cells, markers %d | controller flag %s | takeover lock %s%s",
+					region.id().toString().substring(0, 8), selectedUsage.regionCount(), regionManager.limits().maximumRegions(),
+					selectedUsage.reservedCells(), regionManager.limits().maximumTotalCells(), selectedUsage.reservedMarkers(),
+					regionManager.limits().maximumTotalMarkers(), region.footprint().controllerPosition().toShortString(),
+					region.availabilityFailure() == null ? "awaiting explicit run" : "blocked: " + region.availabilityFailure(),
+					region.origin().toShortString(), region.sizeX(), region.sizeY(), region.sizeZ(), region.checkpointGeneration(),
+					region.checkpointVolume(), region.checkpointMarkerCount(), controllerFeatureEnabled ? "on" : "off", takeoverLock,
+					regionOperations.issues().isEmpty() ? "" : " | persistence issues " + regionOperations.issues().size());
 		}
 		FlipFluidDomain.StepStats lastStats = region.lastStats();
 		String stats = lastStats == null
@@ -604,13 +692,13 @@ public final class FluidSimulationService {
 
 	public void sendSnapshots(ServerPlayer player) {
 		for (FluidRegion region : regionManager.regions()) {
-			if (!player.level().dimension().equals(region.dimension())) continue;
+			if (!region.solverLoaded() || !player.level().dimension().equals(region.dimension())) continue;
 			FluidProtocolServer.send(player, createSnapshot(region));
 		}
 	}
 
 	private void sendSnapshot(ServerLevel level, FluidRegion region) {
-		if (!level.dimension().equals(region.dimension())) return;
+		if (!region.solverLoaded() || !level.dimension().equals(region.dimension())) return;
 		FluidSnapshotPayload payload = createSnapshot(region);
 		for (ServerPlayer player : level.players()) FluidProtocolServer.send(player, payload);
 	}
@@ -655,6 +743,10 @@ public final class FluidSimulationService {
 	}
 
 	public record CaptureResult(int wetCells, int removedVanillaBlocks, String failure) { }
+
+	public record SelectionResult(boolean succeeded, UUID regionId, String failure) {
+		static SelectionResult failed(String failure) { return new SelectionResult(false, null, failure); }
+	}
 
 	public record ControllerActivation(
 			boolean succeeded,

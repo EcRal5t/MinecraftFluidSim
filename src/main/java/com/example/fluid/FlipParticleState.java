@@ -103,12 +103,17 @@ public final class FlipParticleState {
 				+ (long) particleVelocities.length * Float.BYTES + solidMask.length;
 	}
 
-	void requireCompatible(int expectedX, int expectedY, int expectedZ, float expectedCellSize) {
+	public void requireCompatible(int expectedX, int expectedY, int expectedZ, float expectedCellSize) {
 		if (sizeX != expectedX || sizeY != expectedY || sizeZ != expectedZ
 				|| Math.abs(cellSize - expectedCellSize) > 1.0E-7F) {
 			throw new IllegalArgumentException("Particle state does not match the target domain");
 		}
 	}
+
+	public float[] copyPositionVolume() { return positionVolume.clone(); }
+	public float[] copyParticleVelocities() { return particleVelocities.clone(); }
+	public byte[] copySolidMask() { return solidMask.clone(); }
+
 	float[] positionVolume() { return positionVolume; }
 	float[] particleVelocities() { return particleVelocities; }
 	byte[] solidMask() { return solidMask; }

@@ -1,6 +1,8 @@
 package com.example.simulation;
 
 import com.example.fluid.FlipFluidDomain;
+import com.example.fluid.FlipParticleState;
+import com.example.fluid.FluidSolverConfig;
 import com.example.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
@@ -14,16 +16,25 @@ public final class FluidRegion {
 	private final UUID id;
 	private final ResourceKey<Level> dimension;
 	private final BlockPos origin;
-	private final FlipFluidDomain domain;
+	private final int sizeX;
+	private final int sizeY;
+	private final int sizeZ;
+	private final FluidSolverConfig solverConfig;
 	private final long reservedMarkerCapacity;
 	private final FluidRegionFootprint footprint;
-	private final long generation = 1L;
+	private final long generation;
 	private final FluidRegionLifecycle lifecycle = new FluidRegionLifecycle();
+	private FlipFluidDomain domain;
+	private long checkpointGeneration;
+	private int checkpointMarkerCount;
+	private float checkpointVolume;
+	private FluidRegionLifecycle.State unloadedResumeState = FluidRegionLifecycle.State.ACTIVE;
 	private long snapshotSequence;
 	private long tick;
 	private double lastStepMilliseconds;
 	private FlipFluidDomain.StepStats lastStats;
 	private CollisionStats lastCollisionStats = CollisionStats.EMPTY;
+	private boolean collisionRefreshRequired;
 	private boolean entityPhysicsEnabled = true;
 	private boolean debugOverlays;
 	private int lastAffectedEntities;
@@ -43,34 +54,107 @@ public final class FluidRegion {
 			long reservedMarkerCapacity,
 			FluidRegionFootprint footprint
 	) {
+		this(id, dimension, origin, Objects.requireNonNull(domain, "domain").sizeX(), domain.sizeY(), domain.sizeZ(),
+				domain.config(), reservedMarkerCapacity, footprint, 1L, domain);
+	}
+
+	private FluidRegion(
+			UUID id,
+			ResourceKey<Level> dimension,
+			BlockPos origin,
+			int sizeX,
+			int sizeY,
+			int sizeZ,
+			FluidSolverConfig solverConfig,
+			long reservedMarkerCapacity,
+			FluidRegionFootprint footprint,
+			long generation,
+			FlipFluidDomain domain
+	) {
 		this.id = Objects.requireNonNull(id, "id");
 		this.dimension = Objects.requireNonNull(dimension, "dimension");
 		this.origin = Objects.requireNonNull(origin, "origin").immutable();
-		this.domain = Objects.requireNonNull(domain, "domain");
+		if (sizeX < 2 || sizeY < 2 || sizeZ < 2) throw new IllegalArgumentException("Region dimensions must be at least two solver cells");
+		this.sizeX = sizeX;
+		this.sizeY = sizeY;
+		this.sizeZ = sizeZ;
+		this.solverConfig = Objects.requireNonNull(solverConfig, "solverConfig");
 		if (reservedMarkerCapacity <= 0L || reservedMarkerCapacity > Integer.MAX_VALUE) {
 			throw new IllegalArgumentException("Reserved marker capacity must fit a positive CPU marker budget");
 		}
-		if (reservedMarkerCapacity != domain.maximumParticleCount()) {
+		if (domain != null && reservedMarkerCapacity != domain.maximumParticleCount()) {
 			throw new IllegalArgumentException("Reserved marker capacity must equal the domain hard marker budget");
 		}
+		if (generation <= 0L) throw new IllegalArgumentException("Region generation must be positive");
 		this.reservedMarkerCapacity = reservedMarkerCapacity;
 		this.footprint = footprint;
+		this.generation = generation;
+		this.domain = domain;
 		if (footprint != null && !origin.equals(footprint.minimumInterior())) {
 			throw new IllegalArgumentException("A controller region origin must equal its minimum interior block");
 		}
 	}
 
+	/** Creates a metadata-only controller region. No solver or marker arrays are allocated. */
+	public static FluidRegion unloaded(
+			UUID id,
+			ResourceKey<Level> dimension,
+			BlockPos origin,
+			int sizeX,
+			int sizeY,
+			int sizeZ,
+			FluidSolverConfig solverConfig,
+			long reservedMarkerCapacity,
+			FluidRegionFootprint footprint,
+			long generation,
+			long checkpointGeneration,
+			int checkpointMarkerCount,
+			float checkpointVolume,
+			PersistedRuntime runtime
+	) {
+		Objects.requireNonNull(footprint, "footprint");
+		Objects.requireNonNull(runtime, "runtime");
+		if (checkpointGeneration <= 0L) throw new IllegalArgumentException("Checkpoint generation must be positive");
+		FluidRegion region = new FluidRegion(id, dimension, origin, sizeX, sizeY, sizeZ, solverConfig,
+				reservedMarkerCapacity, footprint, generation, null);
+		region.checkpointGeneration = checkpointGeneration;
+		if (checkpointMarkerCount < 0 || checkpointMarkerCount > reservedMarkerCapacity
+				|| !Float.isFinite(checkpointVolume) || checkpointVolume < 0.0F) {
+			throw new IllegalArgumentException("Invalid checkpoint marker ledger");
+		}
+		region.checkpointMarkerCount = checkpointMarkerCount;
+		region.checkpointVolume = checkpointVolume;
+		region.unloadedResumeState = runtime.resumeState();
+		region.entityPhysicsEnabled = runtime.entityPhysicsEnabled();
+		region.debugOverlays = runtime.debugOverlays();
+		region.stepIntervalTicks = runtime.stepIntervalTicks();
+		region.tick = runtime.tick();
+		region.lifecycle.initializeUnloaded();
+		return region;
+	}
+
 	public UUID id() { return id; }
 	public ResourceKey<Level> dimension() { return dimension; }
 	public BlockPos origin() { return origin; }
-	public FlipFluidDomain domain() { return domain; }
+	public int sizeX() { return sizeX; }
+	public int sizeY() { return sizeY; }
+	public int sizeZ() { return sizeZ; }
+	public FluidSolverConfig solverConfig() { return solverConfig; }
+	public FlipFluidDomain domain() {
+		if (domain == null) throw new IllegalStateException("Region solver is unloaded");
+		return domain;
+	}
+	public boolean solverLoaded() { return domain != null; }
 	public long reservedMarkerCapacity() { return reservedMarkerCapacity; }
 	public FluidRegionFootprint footprint() { return footprint; }
 	public boolean controllerManaged() { return footprint != null; }
 	public long generation() { return generation; }
+	public long checkpointGeneration() { return checkpointGeneration; }
+	public int checkpointMarkerCount() { return checkpointMarkerCount; }
+	public float checkpointVolume() { return checkpointVolume; }
 	public FluidRegionLifecycle lifecycle() { return lifecycle; }
 	public long reservedCellCapacity() {
-		return Math.multiplyExact(Math.multiplyExact((long) domain.sizeX(), domain.sizeY()), domain.sizeZ());
+		return Math.multiplyExact(Math.multiplyExact((long) sizeX, sizeY), sizeZ);
 	}
 
 	boolean spatiallyOverlaps(FluidRegion other) {
@@ -80,16 +164,16 @@ public final class FluidRegion {
 				&& overlaps(origin.getZ(), maximumWorldZ(), other.origin.getZ(), other.maximumWorldZ());
 	}
 
-	private double maximumWorldX() { return origin.getX() + domain.sizeX() * domain.config().cellSize(); }
-	private double maximumWorldY() { return origin.getY() + domain.sizeY() * domain.config().cellSize(); }
-	private double maximumWorldZ() { return origin.getZ() + domain.sizeZ() * domain.config().cellSize(); }
+	private double maximumWorldX() { return origin.getX() + sizeX * solverConfig.cellSize(); }
+	private double maximumWorldY() { return origin.getY() + sizeY * solverConfig.cellSize(); }
+	private double maximumWorldZ() { return origin.getZ() + sizeZ * solverConfig.cellSize(); }
 	private static boolean overlaps(double firstMin, double firstMax, double secondMin, double secondMax) {
 		return firstMin < secondMax && secondMin < firstMax;
 	}
 
 	boolean paused() { return lifecycle.operatorPaused(); }
 	void setPaused(boolean value) { lifecycle.setOperatorPaused(value, stepIntervalTicks); }
-	boolean canStep() { return lifecycle.canStep(); }
+	boolean canStep() { return domain != null && lifecycle.canStep(); }
 	void wakeForActivity() { lifecycle.wakeForActivity(stepIntervalTicks); }
 	long nextSnapshotSequence() {
 		if (snapshotSequence == Long.MAX_VALUE) throw new IllegalStateException("Snapshot sequence exhausted");
@@ -105,6 +189,8 @@ public final class FluidRegion {
 	}
 	CollisionStats lastCollisionStats() { return lastCollisionStats; }
 	void setLastCollisionStats(CollisionStats value) { lastCollisionStats = Objects.requireNonNull(value, "value"); }
+	public boolean collisionRefreshRequired() { return collisionRefreshRequired; }
+	void markCollisionRefreshed() { collisionRefreshRequired = false; }
 	boolean entityPhysicsEnabled() { return entityPhysicsEnabled; }
 	void setEntityPhysicsEnabled(boolean enabled) {
 		entityPhysicsEnabled = enabled;
@@ -128,6 +214,62 @@ public final class FluidRegion {
 	void setAvailabilityFailure(String value) {
 		if (value == null) lifecycle.clearAvailabilityBlock();
 		else lifecycle.blockAvailability(value);
+	}
+
+	public PersistedRuntime persistedRuntime() {
+		FluidRegionLifecycle.State resumeState = lifecycle.state() == FluidRegionLifecycle.State.UNLOADED
+				? unloadedResumeState : lifecycle.state();
+		return new PersistedRuntime(resumeState, entityPhysicsEnabled, debugOverlays, stepIntervalTicks, tick);
+	}
+
+	/** Records a complete durable generation while keeping the live solver allocated. */
+	public boolean recordPublishedCheckpoint(long publishedGeneration) {
+		if (!controllerManaged() || domain == null || publishedGeneration <= checkpointGeneration) return false;
+		checkpointMarkerCount = domain.particleCount();
+		checkpointVolume = domain.totalVolume();
+		checkpointGeneration = publishedGeneration;
+		return true;
+	}
+
+	/** Releases the solver only after the caller has durably published the supplied generation. */
+	public boolean releaseSolverAfterCheckpoint(long publishedGeneration) {
+		if (!controllerManaged() || domain == null || publishedGeneration <= 0L || publishedGeneration != checkpointGeneration) return false;
+		unloadedResumeState = lifecycle.state() == FluidRegionLifecycle.State.UNLOADED
+				? FluidRegionLifecycle.State.ACTIVE : lifecycle.state();
+		domain = null;
+		return lifecycle.requestUnload(true, true);
+	}
+
+	/** Restores exact marker truth into a fresh solver. The region remains operator-paused. */
+	public void restoreSolver(FlipParticleState state, long loadedCheckpointGeneration) {
+		Objects.requireNonNull(state, "state");
+		if (domain != null || lifecycle.state() != FluidRegionLifecycle.State.UNLOADED) {
+			throw new IllegalStateException("Only an unloaded region can restore a solver");
+		}
+		if (loadedCheckpointGeneration != checkpointGeneration) {
+			throw new IllegalArgumentException("Checkpoint generation changed while restoring");
+		}
+		FlipFluidDomain restored = new FlipFluidDomain(sizeX, sizeY, sizeZ, solverConfig, (int) reservedMarkerCapacity);
+		restored.restoreParticleState(state);
+		domain = restored;
+		collisionRefreshRequired = true;
+		lifecycle.restoreFromUnloaded(unloadedResumeState, stepIntervalTicks);
+	}
+
+	public record PersistedRuntime(
+			FluidRegionLifecycle.State resumeState,
+			boolean entityPhysicsEnabled,
+			boolean debugOverlays,
+			int stepIntervalTicks,
+			long tick
+	) {
+		public PersistedRuntime {
+			Objects.requireNonNull(resumeState, "resumeState");
+			if (resumeState == FluidRegionLifecycle.State.UNLOADED) {
+				throw new IllegalArgumentException("Persisted resume state cannot be UNLOADED");
+			}
+			if (stepIntervalTicks <= 0 || tick < 0L) throw new IllegalArgumentException("Invalid persisted runtime");
+		}
 	}
 
 	public record CollisionStats(int changedCells, float displacedCellVolume, float escapedCellVolume, boolean markerBudgetLimited) {

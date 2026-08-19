@@ -93,6 +93,17 @@ tasks.register("runFluidRegionLifecycleValidation", JavaExec) {
 	mainClass = "com.example.simulation.FluidRegionLifecycleValidation"
 }
 
+tasks.register("runFluidRegionPersistenceValidation", JavaExec) {
+	group = "verification"
+	description = "Runs region-state v1 exact-ledger, atomic publication, corruption and UNLOADED regressions."
+	dependsOn tasks.named("testClasses")
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = "com.example.simulation.persistence.FluidRegionPersistenceValidation"
+	def validationWorkDir = layout.buildDirectory.dir("fluid-region-persistence-validation-work").get().asFile
+	workingDir validationWorkDir
+	doFirst { validationWorkDir.mkdirs() }
+}
+
 tasks.register("runFluidNetworkProtocolValidation", JavaExec) {
 	group = "verification"
 	description = "Runs Real Water protocol negotiation, codec and snapshot ordering compatibility checks."

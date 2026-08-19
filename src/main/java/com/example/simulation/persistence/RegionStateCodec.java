@@ -1,0 +1,225 @@
+package com.example.simulation.persistence;
+
+import com.example.fluid.FluidSolverConfig;
+import com.example.simulation.FluidRegion;
+import com.example.simulation.FluidRegionLifecycle;
+import com.example.simulation.controller.FluidRegionFootprint;
+import net.minecraft.core.BlockPos;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
+import net.minecraft.resources.Identifier;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+
+/** Strict NBT codec for region-state v1. */
+final class RegionStateCodec {
+	static final int FORMAT_VERSION = 1;
+	static final int PALETTE_VERSION = 1;
+	static final int MAX_SECTIONS = 4_096;
+
+	CompoundTag encodeManifest(RegionManifest manifest) {
+		CompoundTag root = identity(manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration());
+		root.putLong("NetworkGeneration", manifest.networkGeneration());
+		root.putLong("Origin", manifest.origin().asLong());
+		root.putInt("SizeX", manifest.sizeX()); root.putInt("SizeY", manifest.sizeY()); root.putInt("SizeZ", manifest.sizeZ());
+		root.put("Solver", encodeConfig(manifest.solverConfig()));
+		root.putLong("MarkerBudget", manifest.reservedMarkerCapacity());
+		root.put("Runtime", encodeRuntime(manifest.runtime()));
+		root.put("Footprint", encodeFootprint(manifest.footprint()));
+		root.putInt("MarkerCount", manifest.totalMarkerCount());
+		root.putLong("VolumeBits", manifest.totalVolumeBits());
+		ListTag sections = new ListTag();
+		for (RegionManifest.SectionDescriptor descriptor : manifest.sections()) {
+			CompoundTag section = new CompoundTag();
+			section.putInt("X", descriptor.sectionX()); section.putInt("Y", descriptor.sectionY()); section.putInt("Z", descriptor.sectionZ());
+			section.putInt("MarkerCount", descriptor.markerCount()); section.putLong("VolumeBits", descriptor.volumeBits());
+			section.putLong("Checksum", descriptor.checksum()); sections.add(section);
+		}
+		root.put("Sections", sections);
+		root.put("Extensions", encodeExtensions(manifest.extensions()));
+		root.putLong("Checksum", manifest.checksum());
+		return root;
+	}
+
+	RegionManifest decodeManifest(CompoundTag root) throws IOException {
+		Identity identity = decodeIdentity(root, "manifest");
+		require(root, "NetworkGeneration", Tag.TAG_LONG); require(root, "Origin", Tag.TAG_LONG);
+		require(root, "SizeX", Tag.TAG_INT); require(root, "SizeY", Tag.TAG_INT); require(root, "SizeZ", Tag.TAG_INT);
+		require(root, "Solver", Tag.TAG_COMPOUND); require(root, "MarkerBudget", Tag.TAG_LONG);
+		require(root, "Runtime", Tag.TAG_COMPOUND); require(root, "Footprint", Tag.TAG_COMPOUND);
+		require(root, "MarkerCount", Tag.TAG_INT); require(root, "VolumeBits", Tag.TAG_LONG);
+		require(root, "Sections", Tag.TAG_LIST); require(root, "Extensions", Tag.TAG_LIST); require(root, "Checksum", Tag.TAG_LONG);
+		ListTag encodedSections = root.getListOrEmpty("Sections");
+		if (encodedSections.isEmpty() || encodedSections.size() > MAX_SECTIONS) throw new IOException("Invalid manifest section count");
+		List<RegionManifest.SectionDescriptor> sections = new ArrayList<>(encodedSections.size());
+		for (int i = 0; i < encodedSections.size(); i++) {
+			CompoundTag section = compoundAt(encodedSections, i, "section descriptor");
+			require(section, "X", Tag.TAG_INT); require(section, "Y", Tag.TAG_INT); require(section, "Z", Tag.TAG_INT);
+			require(section, "MarkerCount", Tag.TAG_INT); require(section, "VolumeBits", Tag.TAG_LONG); require(section, "Checksum", Tag.TAG_LONG);
+			sections.add(new RegionManifest.SectionDescriptor(section.getIntOr("X", 0), section.getIntOr("Y", 0), section.getIntOr("Z", 0),
+					section.getIntOr("MarkerCount", -1), section.getLongOr("VolumeBits", 0L), section.getLongOr("Checksum", -1L)));
+		}
+		try {
+			return new RegionManifest(identity.id(), identity.dimension(), identity.generation(), root.getLongOr("NetworkGeneration", -1L),
+					BlockPos.of(root.getLongOr("Origin", 0L)), root.getIntOr("SizeX", -1), root.getIntOr("SizeY", -1), root.getIntOr("SizeZ", -1),
+					decodeConfig(root.getCompoundOrEmpty("Solver")), root.getLongOr("MarkerBudget", -1L),
+					decodeRuntime(root.getCompoundOrEmpty("Runtime")), decodeFootprint(root.getCompoundOrEmpty("Footprint")),
+					root.getIntOr("MarkerCount", -1), root.getLongOr("VolumeBits", 0L), sections,
+					decodeExtensions(root.getListOrEmpty("Extensions")), root.getLongOr("Checksum", -1L));
+		} catch (IllegalArgumentException exception) {
+			throw new IOException("Invalid region manifest: " + exception.getMessage(), exception);
+		}
+	}
+
+	CompoundTag encodeSection(RegionSectionState section) {
+		CompoundTag root = identity(section.regionId(), section.dimensionId(), section.checkpointGeneration());
+		root.putInt("SectionX", section.sectionX()); root.putInt("SectionY", section.sectionY()); root.putInt("SectionZ", section.sectionZ());
+		root.putInt("StartX", section.localStartX()); root.putInt("StartY", section.localStartY()); root.putInt("StartZ", section.localStartZ());
+		root.putInt("SizeX", section.sizeX()); root.putInt("SizeY", section.sizeY()); root.putInt("SizeZ", section.sizeZ());
+		root.putIntArray("Ordinals", section.markerOrdinals());
+		root.putIntArray("PositionVolumeBits", floatBits(section.positionVolume()));
+		root.putIntArray("VelocityBits", floatBits(section.velocities()));
+		root.putByteArray("Solids", section.solidMask());
+		root.put("Extensions", encodeExtensions(section.extensions()));
+		root.putLong("Checksum", section.checksum());
+		return root;
+	}
+
+	RegionSectionState decodeSection(CompoundTag root) throws IOException {
+		Identity identity = decodeIdentity(root, "section");
+		for (String field : List.of("SectionX", "SectionY", "SectionZ", "StartX", "StartY", "StartZ", "SizeX", "SizeY", "SizeZ")) {
+			require(root, field, Tag.TAG_INT);
+		}
+		require(root, "Ordinals", Tag.TAG_INT_ARRAY); require(root, "PositionVolumeBits", Tag.TAG_INT_ARRAY);
+		require(root, "VelocityBits", Tag.TAG_INT_ARRAY); require(root, "Solids", Tag.TAG_BYTE_ARRAY);
+		require(root, "Extensions", Tag.TAG_LIST); require(root, "Checksum", Tag.TAG_LONG);
+		try {
+			return new RegionSectionState(identity.id(), identity.dimension(), identity.generation(),
+					root.getIntOr("SectionX", 0), root.getIntOr("SectionY", 0), root.getIntOr("SectionZ", 0),
+					root.getIntOr("StartX", -1), root.getIntOr("StartY", -1), root.getIntOr("StartZ", -1),
+					root.getIntOr("SizeX", -1), root.getIntOr("SizeY", -1), root.getIntOr("SizeZ", -1),
+					root.getIntArray("Ordinals").orElseThrow(), floats(root.getIntArray("PositionVolumeBits").orElseThrow()),
+					floats(root.getIntArray("VelocityBits").orElseThrow()), root.getByteArray("Solids").orElseThrow(),
+					decodeExtensions(root.getListOrEmpty("Extensions")), root.getLongOr("Checksum", -1L));
+		} catch (IllegalArgumentException exception) {
+			throw new IOException("Invalid region section: " + exception.getMessage(), exception);
+		}
+	}
+
+	private static CompoundTag identity(UUID id, String dimension, long generation) {
+		CompoundTag tag = new CompoundTag();
+		tag.putInt("Version", FORMAT_VERSION); tag.putInt("Palette", PALETTE_VERSION);
+		tag.putLong("UuidMost", id.getMostSignificantBits()); tag.putLong("UuidLeast", id.getLeastSignificantBits());
+		tag.putString("Dimension", dimension); tag.putLong("Generation", generation);
+		return tag;
+	}
+
+	private static Identity decodeIdentity(CompoundTag tag, String context) throws IOException {
+		require(tag, "Version", Tag.TAG_INT); require(tag, "Palette", Tag.TAG_INT);
+		int version = tag.getIntOr("Version", -1), palette = tag.getIntOr("Palette", -1);
+		if (version != FORMAT_VERSION) throw new IOException("Unsupported region-state " + context + " version " + version);
+		if (palette != PALETTE_VERSION) throw new IOException("Unsupported pure-water palette " + palette);
+		require(tag, "UuidMost", Tag.TAG_LONG); require(tag, "UuidLeast", Tag.TAG_LONG);
+		require(tag, "Dimension", Tag.TAG_STRING); require(tag, "Generation", Tag.TAG_LONG);
+		String dimension = tag.getStringOr("Dimension", "");
+		if (Identifier.tryParse(dimension) == null) throw new IOException("Invalid persisted dimension " + dimension);
+		long generation = tag.getLongOr("Generation", -1L);
+		if (generation <= 0L) throw new IOException("Invalid checkpoint generation");
+		return new Identity(new UUID(tag.getLongOr("UuidMost", 0L), tag.getLongOr("UuidLeast", 0L)), dimension, generation);
+	}
+
+	private static CompoundTag encodeConfig(FluidSolverConfig config) {
+		CompoundTag tag = new CompoundTag();
+		tag.putInt("CellSize", Float.floatToRawIntBits(config.cellSize())); tag.putInt("Density", Float.floatToRawIntBits(config.density()));
+		tag.putInt("Gravity", Float.floatToRawIntBits(config.gravity())); tag.putInt("TimeStep", Float.floatToRawIntBits(config.timeStep()));
+		tag.putInt("PressureIterations", config.maxPressureIterations()); tag.putInt("PressureTolerance", Float.floatToRawIntBits(config.pressureTolerance()));
+		tag.putInt("Courant", Float.floatToRawIntBits(config.maxCourantNumber())); tag.putInt("FluidEpsilon", Float.floatToRawIntBits(config.fluidEpsilon()));
+		tag.putInt("InterfaceCompression", Float.floatToRawIntBits(config.interfaceCompression()));
+		return tag;
+	}
+
+	private static FluidSolverConfig decodeConfig(CompoundTag tag) throws IOException {
+		for (String field : List.of("CellSize", "Density", "Gravity", "TimeStep", "PressureIterations", "PressureTolerance", "Courant", "FluidEpsilon", "InterfaceCompression")) require(tag, field, Tag.TAG_INT);
+		return new FluidSolverConfig(bits(tag, "CellSize"), bits(tag, "Density"), bits(tag, "Gravity"), bits(tag, "TimeStep"),
+				tag.getIntOr("PressureIterations", -1), bits(tag, "PressureTolerance"), bits(tag, "Courant"), bits(tag, "FluidEpsilon"), bits(tag, "InterfaceCompression"));
+	}
+
+	private static CompoundTag encodeRuntime(FluidRegion.PersistedRuntime runtime) {
+		CompoundTag tag = new CompoundTag();
+		tag.putString("ResumeState", runtime.resumeState().name()); tag.putBoolean("EntityPhysics", runtime.entityPhysicsEnabled());
+		tag.putBoolean("Debug", runtime.debugOverlays()); tag.putInt("StepInterval", runtime.stepIntervalTicks()); tag.putLong("Tick", runtime.tick());
+		return tag;
+	}
+
+	private static FluidRegion.PersistedRuntime decodeRuntime(CompoundTag tag) throws IOException {
+		require(tag, "ResumeState", Tag.TAG_STRING); require(tag, "EntityPhysics", Tag.TAG_BYTE); require(tag, "Debug", Tag.TAG_BYTE);
+		require(tag, "StepInterval", Tag.TAG_INT); require(tag, "Tick", Tag.TAG_LONG);
+		try {
+			return new FluidRegion.PersistedRuntime(FluidRegionLifecycle.State.valueOf(tag.getStringOr("ResumeState", "")),
+					tag.getBooleanOr("EntityPhysics", false), tag.getBooleanOr("Debug", false),
+					tag.getIntOr("StepInterval", -1), tag.getLongOr("Tick", -1L));
+		} catch (IllegalArgumentException exception) {
+			throw new IOException("Invalid persisted runtime", exception);
+		}
+	}
+
+	private static CompoundTag encodeFootprint(FluidRegionFootprint footprint) {
+		CompoundTag tag = new CompoundTag();
+		tag.putLong("Controller", footprint.controllerPosition().asLong()); tag.putLong("Minimum", footprint.minimumInterior().asLong());
+		tag.putLong("Maximum", footprint.maximumInterior().asLong()); tag.putLongArray("Interior", longs(footprint.interiorBlocks()));
+		tag.putLongArray("Boundary", longs(footprint.boundaryBlocks())); tag.putLongArray("Chunks", longs(footprint.requiredChunks()));
+		return tag;
+	}
+
+	private static FluidRegionFootprint decodeFootprint(CompoundTag tag) throws IOException {
+		require(tag, "Controller", Tag.TAG_LONG); require(tag, "Minimum", Tag.TAG_LONG); require(tag, "Maximum", Tag.TAG_LONG);
+		require(tag, "Interior", Tag.TAG_LONG_ARRAY); require(tag, "Boundary", Tag.TAG_LONG_ARRAY); require(tag, "Chunks", Tag.TAG_LONG_ARRAY);
+		return new FluidRegionFootprint(BlockPos.of(tag.getLongOr("Controller", 0L)), BlockPos.of(tag.getLongOr("Minimum", 0L)),
+				BlockPos.of(tag.getLongOr("Maximum", 0L)), set(tag.getLongArray("Interior").orElseThrow()),
+				set(tag.getLongArray("Boundary").orElseThrow()), set(tag.getLongArray("Chunks").orElseThrow()));
+	}
+
+	private static ListTag encodeExtensions(List<RegionExtension> extensions) {
+		ListTag list = new ListTag();
+		for (RegionExtension extension : extensions) {
+			CompoundTag tag = new CompoundTag(); tag.putString("Type", extension.type()); tag.putByteArray("Payload", extension.payload()); list.add(tag);
+		}
+		return list;
+	}
+
+	private static List<RegionExtension> decodeExtensions(ListTag list) throws IOException {
+		List<RegionExtension> extensions = new ArrayList<>(list.size());
+		for (int i = 0; i < list.size(); i++) {
+			CompoundTag tag = compoundAt(list, i, "extension"); require(tag, "Type", Tag.TAG_STRING); require(tag, "Payload", Tag.TAG_BYTE_ARRAY);
+			try { extensions.add(new RegionExtension(tag.getStringOr("Type", ""), tag.getByteArray("Payload").orElseThrow())); }
+			catch (IllegalArgumentException exception) { throw new IOException("Invalid extension", exception); }
+		}
+		return extensions;
+	}
+
+	private static CompoundTag compoundAt(ListTag list, int index, String context) throws IOException {
+		Tag tag = list.get(index);
+		if (tag.getId() != Tag.TAG_COMPOUND) throw new IOException("Invalid " + context + " at index " + index);
+		return (CompoundTag) tag;
+	}
+
+	private static void require(CompoundTag tag, String field, byte type) throws IOException {
+		Tag value = tag.get(field);
+		if (value == null || value.getId() != type) throw new IOException("Missing or invalid region-state field '" + field + "'");
+	}
+
+	private static float bits(CompoundTag tag, String field) { return Float.intBitsToFloat(tag.getIntOr(field, 0)); }
+	private static int[] floatBits(float[] floats) { int[] bits = new int[floats.length]; for (int i = 0; i < floats.length; i++) bits[i] = Float.floatToRawIntBits(floats[i]); return bits; }
+	private static float[] floats(int[] bits) { float[] floats = new float[bits.length]; for (int i = 0; i < bits.length; i++) floats[i] = Float.intBitsToFloat(bits[i]); return floats; }
+	private static long[] longs(Set<Long> values) { return values.stream().mapToLong(Long::longValue).sorted().toArray(); }
+	private static Set<Long> set(long[] values) { Set<Long> result = new HashSet<>(); Arrays.stream(values).forEach(result::add); return result; }
+
+	private record Identity(UUID id, String dimension, long generation) { }
+}

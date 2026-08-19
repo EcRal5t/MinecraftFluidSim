@@ -145,6 +145,29 @@ public final class FlipFluidDomain {
 		gridDirty = true;
 	}
 
+	/** Exports an immutable CPU marker/velocity/solid handoff without serializing reconstructed density. */
+	public FlipParticleState exportParticleState() {
+		float[] positionVolume = new float[particleCount * 4];
+		float[] velocities = new float[particleCount * 3];
+		byte[] solidMask = new byte[cellCount];
+		for (int index = 0; index < cellCount; index++) solidMask[index] = (byte) (solid[index] ? 1 : 0);
+		for (int particle = 0; particle < particleCount; particle++) {
+			int positionBase = particle * 4;
+			int velocityBase = particle * 3;
+			positionVolume[positionBase] = particleX[particle];
+			positionVolume[positionBase + 1] = particleY[particle];
+			positionVolume[positionBase + 2] = particleZ[particle];
+			positionVolume[positionBase + 3] = particleVolume[particle];
+			velocities[velocityBase] = particleVelocityX[particle];
+			velocities[velocityBase + 1] = particleVelocityY[particle];
+			velocities[velocityBase + 2] = particleVelocityZ[particle];
+		}
+		return new FlipParticleState(
+				sizeX, sizeY, sizeZ, config.cellSize(), particleCount,
+				totalVolume(), positionVolume, velocities, solidMask
+		);
+	}
+
 	/** Sets collision occupancy and returns the exact particle volume displaced. */
 	public float setSolid(int x, int y, int z, boolean value) {
 		int index = cellIndexChecked(x, y, z);

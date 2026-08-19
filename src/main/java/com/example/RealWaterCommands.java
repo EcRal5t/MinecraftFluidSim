@@ -5,6 +5,7 @@ import com.example.simulation.FluidSimulationService;
 import com.example.simulation.FluidRegion;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -38,6 +39,12 @@ public final class RealWaterCommands {
 								.executes(context -> audit(context, () -> controllerFeatureStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
 										.executes(context -> audit(context, () -> setControllerFeature(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+						.then(Commands.literal("regions")
+								.then(Commands.literal("list").executes(context -> audit(context, () -> listRegions(context.getSource()))))
+								.then(Commands.literal("select")
+										.then(Commands.argument("uuid", StringArgumentType.word())
+												.executes(context -> audit(context, () -> selectRegion(context.getSource(), StringArgumentType.getString(context, "uuid"))))))
+								.then(Commands.literal("checkpoint").executes(context -> audit(context, () -> checkpointRegion(context.getSource())))))
 						.then(Commands.literal("debug")
 								.executes(context -> audit(context, () -> debugStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
@@ -148,8 +155,28 @@ public final class RealWaterCommands {
 
 	private static int setControllerFeature(CommandSourceStack source, boolean enabled) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		service.setControllerFeatureEnabled(enabled);
+		String failure = service.setControllerFeatureEnabled(enabled);
+		if (failure != null) return fail(source, "控制器功能门未改变；配置原子发布失败：" + failure);
 		return succeed(source, "控制器功能门已" + (enabled ? "开启" : "关闭；现有控制器域已暂停但未删除"), 1);
+	}
+
+	private static int listRegions(CommandSourceStack source) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		java.util.List<String> regions = service.regionSummaries();
+		if (regions.isEmpty()) return succeed(source, "没有已登记区域；" + service.status(source.getServer()), 0);
+		return succeed(source, "区域列表（* 为当前选择）：\n" + String.join("\n", regions), regions.size());
+	}
+
+	private static int selectRegion(CommandSourceStack source, String prefix) {
+		FluidSimulationService.SelectionResult result = FluidSimulationService.get(source.getServer()).selectRegion(prefix);
+		if (!result.succeeded()) return fail(source, result.failure());
+		return succeed(source, "已选择区域 " + result.regionId() + "；区域保持原有暂停/运行状态", 1);
+	}
+
+	private static int checkpointRegion(CommandSourceStack source) {
+		String result = FluidSimulationService.get(source.getServer()).checkpointSelected();
+		if (result.contains("失败") || result.startsWith("没有")) return fail(source, result);
+		return succeed(source, result, 1);
 	}
 
 	private static int debugStatus(CommandSourceStack source) {

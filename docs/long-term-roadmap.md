@@ -489,7 +489,7 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 - 建立可配置的单区域 marker/cell 上限和多区域总预算、状态统计和管理命令；预算拒绝必须报告所需量、单域上限和服务器剩余额度；
 - 区域墙必须可见/可调试，不再有未说明的不可见边界。
 
-当前状态（2026-08-19，M2 第三增量完成）：纯内存服务最多接纳四个区域，单域仍限 9,216 cell/73,728 marker，总预留限 36,864/294,912；同维空间重叠拒绝。控制器首次激活追加并选择区域，再次激活只选择既有区域而不重建 marker；开发命令仍原子替换选中域。server tick 遍历各域，任一控制器域的缺 chunk/破边界在任何碰撞、实体或 solver 访问前冻结整个该域，但不阻断其他 ready 域。`FluidRegionLifecycle` 分离 operator pause、availability 与 ACTIVE/REDUCED/HYDROSTATIC_SLEEP，静水提交不改变 marker 数或 `particleVolume`；`UNLOADED` 仍因没有 checkpoint 而不可进入。网络配置阶段现以挂起 task 协商独立 protocol v1 与 region identity、generation/sequence、optional sections、multi-region render 四项 capability；缺客户端、版本无交集或必需能力缺失会给可读原因并拒绝进入 play。CPU 与可选 GPU probe 的快照均带 dimension、region UUID、generation、单调 sequence、纯水 palette 版本及 type/length 可跳过段。客户端为每域保留顺序水位和 removal tombstone，拒绝旧代次/旧序号，按当前维度同时重建所有区域；density+marker+solid 仍仅属渲染。独立兼容矩阵覆盖协商、codec 往返、未知可选段和乱序拒绝。尚无 chunk ticket 或任何 `region-state` 存档，takeover 边界与 journal v1 未变。
+当前状态（2026-08-19，M2 自动实现门完成、实机签收待测）：服务按世界配置接纳默认最多四个区域、单域 9,216 cell/73,728 marker、总预留 36,864/294,912；预算可在 `<world>/realwater/server.properties` 调整并于重启后生效。控制器首次激活追加、只读采样并立即发布初始 checkpoint，再次激活只选择既有区域；开发命令拒绝隐式覆盖持久控制器域。server tick 遍历各域，缺任一关联 chunk、破边界或关闭独立 controller flag 时，在任何碰撞、实体或 solver 访问前暂停整域；`region-state v1` 随后按 chunk section 保存 marker 原始顺序、position/`particleVolume`、velocity 与 solid slice。两槽不可变完整代次经 UUID/dimension/generation/CRC/账本复核后最后原子发布 HEAD；发布失败保留暂停的 live solver，成功才释放数组进入仍占 manager 预算的 metadata-only `UNLOADED`。重新可用时全量恢复、保持 operator pause，并在任何 step 前重采样当前世界碰撞。启动只 admission manifest；未知、损坏、混代、超预算或实验格式均保留并锁住新控制器创建。`/realwater regions list|select|checkpoint` 提供管理入口。protocol v1 继续在配置阶段协商四项能力，客户端逐域维护 generation/sequence 与 removal tombstone。自动门覆盖反复 unload/restore、精确 marker ledger、缺片/损坏、原子 move 拒绝和每个发布 fault point；仍无永久 chunk ticket，takeover 边界与 journal v1 未变，GPU probe 仍只读可选。最终 M2 签收只剩真实客户端跨 chunk 离开/返回、边界破坏/修复与世界重启 smoke。
 
 完成条件：反复休眠/唤醒/重启后水量不变；方块更新和实体进入可靠唤醒；任一关联 chunk 卸载时不发生半区域步进；未加载区不占粒子内存；协议不兼容能被明确拒绝而非错位解码。
 
@@ -637,8 +637,8 @@ CPU 单线程参考场景固定随机种子、遍历顺序和输入，能稳定�
 
 ## 十三、接下来三项实际工作
 
-1. 评审 `region-state v1` 的原子检查点、兼容矩阵、失败回滚与迁移方案，得到明确批准后才实现持久化。
-2. 在 checkpoint 发布/释放 solver 的故障注入门通过后接通整域 `UNLOADED` 往返，并证明未加载域不占 marker 数组内存。
-3. 增加区域管理命令与可配置单域/总预算，在不改变 marker 真值的前提下暴露选择、列表和拒绝诊断。
+1. 完成 M2 实机签收：跨 chunk 控制器域离开加载范围后应整域消失为 `UNLOADED`，返回后保持暂停且 marker/水量不变；破坏/修复边界走相同闭环。
+2. 正常退出并重启同一世界，确认 metadata 启动、控制器域恢复、多区域客户端 tombstone 和管理命令输出一致，再正式标记 M2 完成。
+3. M2 签收后进入 M2.5，先冻结分数格自由表面压力与守恒 reseeding 的定量门，不用渲染找平处理长期 marker 分布。
 
-这些 M2 门完成前，不扩大 takeover 范围，不改变世界长期存档格式，也不把 GPU 设为必需运行条件。
+上述 smoke 不扩大 takeover 范围，不改变 `takeover-journal v1`，也不把 GPU 设为必需运行条件。

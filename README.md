@@ -2,7 +2,7 @@
 
 A Minecraft Java 26.2 Fabric prototype for bounded, pressure-based 3D water simulation.
 
-This version is a safe test harness, not yet a global replacement for vanilla water. Its in-memory `FluidRegionManager` can tick and render up to four non-overlapping server-side 3D PIC/FLIP regions independently under per-region and total budgets. One region remains selected for commands, but every region in the player's dimension now has an independently ordered client surface. Each region owns its solver, marker budget, pause/availability state and ACTIVE/REDUCED/hydrostatic-sleep lifecycle. There is still no region persistence or checkpoint-backed `UNLOADED` transition, and ordinary simulation does not modify world blocks automatically.
+This version is a safe bounded-region harness, not yet a global replacement for vanilla water. Its `FluidRegionManager` can tick and render up to four non-overlapping server-side 3D PIC/FLIP regions independently under configurable per-region and total budgets. One region remains selected for commands, while every region in the player's dimension has an independently ordered client surface. Controller regions persist through `region-state v1`: a missing required chunk, broken shell or disabled feature flag checkpoints the whole region before releasing its solver into metadata-only `UNLOADED`. Ordinary simulation still does not modify world blocks automatically.
 
 ## In-game commands
 
@@ -13,22 +13,25 @@ This version is a safe test harness, not yet a global replacement for vanilla wa
 - `/realwater drain [1-16]` removes simulated water along the crosshair ray. The default is one bucket/block.
 - `/realwater refresh` immediately re-samples collision geometry; this also happens automatically every five server ticks.
 - `/realwater entities [true|false]` reports or toggles bounded entity buoyancy and drag.
-- `/realwater controllers [true|false]` reports or toggles the in-memory controller feature gate. It defaults to off; disabling it pauses an existing controller region without deleting its water.
+- `/realwater controllers [true|false]` reports or atomically persists the world-local controller feature gate. It defaults to off; disabling it checkpoints and unloads existing controller regions without deleting their water.
+- `/realwater regions list` lists selected, loaded and persisted/unloaded regions plus locked persistence issues.
+- `/realwater regions select <uuid-or-prefix>` changes the command target without changing its pause state.
+- `/realwater regions checkpoint` pauses and atomically checkpoints the selected controller region.
 - `/realwater debug [true|false]` shows or hides the orange collision cells and yellow domain bounds. It is hidden by default.
 - `/realwater step [1-20]` advances a paused domain by a bounded number of steps.
 - `/realwater run` advances at 20 Hz when affordable and automatically lowers the simulation rate under sustained load.
 - `/realwater pause` pauses automatic stepping.
 - `/realwater status` reports the selected id, lifecycle, total region budget, grid size, total water, maximum pressure, solve iterations, residual, and time.
 - `/realwater logpath` prints the absolute path of the dedicated UTF-8 command transcript.
-- `/realwater remove` restores any active takeover, then removes all in-memory regions and client debug views.
+- `/realwater remove` restores any active takeover, atomically quarantines committed controller state, then removes all registered regions and client debug views. Unknown/corrupt state is never silently deleted.
 
 The blue mesh is a marching-tetrahedra isosurface reconstructed from the current water particles. With `/realwater debug true`, translucent orange faces show collision subcells and yellow edges show the bounded domain. A 40 ms soft budget lowers stepping to 10, 6.7, or 5 Hz instead of stopping; only three consecutive steps above 200 ms auto-pause the domain.
 
 ## Opt-in M2 controller region
 
-Controller gameplay is deliberately administrator-enabled and still in-memory. Obtain `realwater:fluid_boundary` and `realwater:fluid_controller` with `/give`, build a complete one-block-thick shell from those visible blocks, replace one shell block with the controller, run `/realwater controllers true`, then empty-hand right-click the controller. The six-neighbour scan accepts exactly one enclosed interior. It refuses an open shell, a controller touching multiple separate chambers, an unloaded associated chunk, a scan over 1,152 interior blocks, a dense solver bounding box over the 9,216-cell / 73,728-marker per-region budget, the four-region/total budget, or overlap with an existing region.
+Controller gameplay is deliberately administrator-enabled. Obtain `realwater:fluid_boundary` and `realwater:fluid_controller` with `/give`, build a complete one-block-thick shell from those visible blocks, replace one shell block with the controller, run `/realwater controllers true`, then empty-hand right-click the controller. The six-neighbour scan accepts exactly one enclosed interior. It refuses an open shell, a controller touching multiple separate chambers, an unloaded associated chunk, a scan beyond the configured per-region budget, the total budget, overlap with an existing region, or unresolved persistent state. Defaults remain 1,152 interior blocks, 9,216 cells / 73,728 markers per region, four regions and 36,864 / 294,912 total reservations; administrators can edit `<world>/realwater/server.properties` while the server is stopped.
 
-First activation appends and selects a paused region, read-only samples vanilla water inside the shell into exact marker `particleVolume`, and does not remove any water block or create a takeover journal. Right-clicking its controller again only selects the existing region and preserves its marker ledger and runtime state. All interior and boundary chunks must already be fully loaded; the Mod does not acquire a chunk ticket. If any required chunk later unloads or an original visible boundary block is removed/replaced, collision sampling, entity coupling, pour/drain and stepping stop before reading or mutating that partial region. Other ready regions continue ticking. The blocked region requires an explicit `/realwater run` after its shell and chunks are ready again; this is not the future checkpointed `UNLOADED` state.
+First activation appends and selects a paused region, read-only samples vanilla water inside the shell into exact marker `particleVolume`, and publishes its initial checkpoint without removing any water block or creating a takeover journal. Right-clicking its controller again only selects the existing region. All interior and boundary chunks must already be fully loaded; the Mod acquires no permanent chunk ticket. If any required chunk later unloads or the visible shell breaks, collision sampling, entity coupling, pour/drain and stepping stop before partial access. A complete two-slot checkpoint is validated and HEAD is atomically published before the live solver arrays are released. Returning chunks or a repaired shell restore the exact marker order/volume/velocity, re-sample current collision, and remain paused until explicit `/realwater run`. Other ready regions continue ticking throughout.
 
 Collision sampling runs at the same two-cells-per-block resolution as the fluid. Slabs, stairs, fences, and other non-full collision shapes therefore occupy only the subcells they intersect. If a newly placed block overlaps simulated water, the service conservatively moves that water into nearby capacity when possible and reports any volume that could not fit in the bounded domain.
 

@@ -83,10 +83,7 @@ public final class FluidRegionLifecycle {
 		return true;
 	}
 
-	/**
-	 * The live service must not call this until an atomic, complete checkpoint has been published and
-	 * the solver arrays can be released. The current in-memory M2 gate therefore always passes false.
-	 */
+	/** The caller must prove both publication and solver release before committing UNLOADED. */
 	boolean requestUnload(boolean completeCheckpointPublished, boolean liveSolverReleased) {
 		if (!completeCheckpointPublished || !liveSolverReleased) return false;
 		operatorPaused = true;
@@ -94,6 +91,22 @@ public final class FluidRegionLifecycle {
 		quietCompletedSteps = 0;
 		state = State.UNLOADED;
 		return true;
+	}
+
+	void initializeUnloaded() {
+		operatorPaused = true;
+		availabilityFailure = null;
+		quietCompletedSteps = 0;
+		state = State.UNLOADED;
+	}
+
+	void restoreFromUnloaded(State resumeState, int stepIntervalTicks) {
+		if (state != State.UNLOADED) throw new IllegalStateException("Region is not unloaded");
+		if (resumeState == State.UNLOADED) throw new IllegalArgumentException("Resume state cannot be UNLOADED");
+		state = resumeState == State.HYDROSTATIC_SLEEP ? State.HYDROSTATIC_SLEEP : runningState(stepIntervalTicks);
+		operatorPaused = true;
+		availabilityFailure = null;
+		quietCompletedSteps = 0;
 	}
 
 	private static State runningState(int stepIntervalTicks) {
