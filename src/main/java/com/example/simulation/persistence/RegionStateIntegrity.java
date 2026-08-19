@@ -1,6 +1,7 @@
 package com.example.simulation.persistence;
 
 import com.example.fluid.FluidSolverConfig;
+import com.example.fluid.FluidMaterial;
 import com.example.simulation.FluidRegion;
 import com.example.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
@@ -21,13 +22,17 @@ final class RegionStateIntegrity {
 	static long sectionChecksum(RegionSectionState section) {
 		return checksum(out -> {
 			writeIdentity(out, section.regionId().getMostSignificantBits(), section.regionId().getLeastSignificantBits(),
-					section.dimensionId(), section.checkpointGeneration());
+					section.dimensionId(), section.checkpointGeneration(), section.formatVersion());
 			out.writeInt(section.sectionX()); out.writeInt(section.sectionY()); out.writeInt(section.sectionZ());
 			out.writeInt(section.localStartX()); out.writeInt(section.localStartY()); out.writeInt(section.localStartZ());
 			out.writeInt(section.sizeX()); out.writeInt(section.sizeY()); out.writeInt(section.sizeZ());
 			writeInts(out, section.markerOrdinals());
 			writeFloats(out, section.positionVolume());
 			writeFloats(out, section.velocities());
+			if (section.formatVersion() == 2) {
+				writeDoubles(out, section.markerMass());
+				writeInts(out, section.materialPaletteIndex());
+			}
 			writeBytes(out, section.solidMask());
 			writeExtensions(out, section.extensions());
 		});
@@ -36,7 +41,7 @@ final class RegionStateIntegrity {
 	static long manifestChecksum(RegionManifest manifest) {
 		return checksum(out -> {
 			writeIdentity(out, manifest.regionId().getMostSignificantBits(), manifest.regionId().getLeastSignificantBits(),
-					manifest.dimensionId(), manifest.checkpointGeneration());
+					manifest.dimensionId(), manifest.checkpointGeneration(), manifest.formatVersion());
 			out.writeLong(manifest.networkGeneration());
 			writeBlockPos(out, manifest.origin());
 			out.writeInt(manifest.sizeX()); out.writeInt(manifest.sizeY()); out.writeInt(manifest.sizeZ());
@@ -46,12 +51,22 @@ final class RegionStateIntegrity {
 			writeFootprint(out, manifest.footprint());
 			out.writeInt(manifest.totalMarkerCount());
 			out.writeLong(manifest.totalVolumeBits());
+			if (manifest.formatVersion() == 2) {
+				writeMaterials(out, manifest.materialPalette());
+				out.writeLong(manifest.totalMassBits());
+				out.writeInt(manifest.materialLedgers().size());
+				for (RegionManifest.MaterialLedger ledger : manifest.materialLedgers()) {
+					out.writeInt(ledger.markerCount()); out.writeLong(ledger.volumeBits()); out.writeLong(ledger.massBits());
+				}
+			}
 			List<RegionManifest.SectionDescriptor> descriptors = new ArrayList<>(manifest.sections());
 			descriptors.sort(Comparator.naturalOrder());
 			out.writeInt(descriptors.size());
 			for (RegionManifest.SectionDescriptor descriptor : descriptors) {
 				out.writeInt(descriptor.sectionX()); out.writeInt(descriptor.sectionY()); out.writeInt(descriptor.sectionZ());
-				out.writeInt(descriptor.markerCount()); out.writeLong(descriptor.volumeBits()); out.writeLong(descriptor.checksum());
+				out.writeInt(descriptor.markerCount()); out.writeLong(descriptor.volumeBits());
+				if (manifest.formatVersion() == 2) out.writeLong(descriptor.massBits());
+				out.writeLong(descriptor.checksum());
 			}
 			writeExtensions(out, manifest.extensions());
 		});
@@ -69,9 +84,19 @@ final class RegionStateIntegrity {
 		}
 	}
 
-	private static void writeIdentity(DataOutputStream out, long most, long least, String dimension, long generation) throws IOException {
-		out.writeInt(1); out.writeInt(1);
+	private static void writeIdentity(
+			DataOutputStream out, long most, long least, String dimension, long generation, int formatVersion
+	) throws IOException {
+		out.writeInt(formatVersion); out.writeInt(formatVersion);
 		out.writeLong(most); out.writeLong(least); out.writeUTF(dimension); out.writeLong(generation);
+	}
+
+	private static void writeMaterials(DataOutputStream out, List<FluidMaterial> materials) throws IOException {
+		out.writeInt(materials.size());
+		for (FluidMaterial material : materials) {
+			out.writeUTF(material.id()); out.writeLong(Double.doubleToRawLongBits(material.referenceDensity()));
+			out.writeUTF(material.miscibilityGroup());
+		}
 	}
 
 	private static void writeConfig(DataOutputStream out, FluidSolverConfig config) throws IOException {
@@ -127,6 +152,11 @@ final class RegionStateIntegrity {
 	private static void writeFloats(DataOutputStream out, float[] values) throws IOException {
 		out.writeInt(values.length);
 		for (float value : values) out.writeInt(Float.floatToRawIntBits(value));
+	}
+
+	private static void writeDoubles(DataOutputStream out, double[] values) throws IOException {
+		out.writeInt(values.length);
+		for (double value : values) out.writeLong(Double.doubleToRawLongBits(value));
 	}
 
 	private static void writeBytes(DataOutputStream out, byte[] values) throws IOException {

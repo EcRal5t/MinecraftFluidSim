@@ -103,6 +103,9 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	}
 
 	public FlipParticleState reconstruct() throws IOException {
+		if (manifest.formatVersion() != 1) {
+			throw new IOException("Material region-state v2 cannot use the pure-water reconstruction path");
+		}
 		validate();
 		int count = manifest.totalMarkerCount();
 		float[] positions = new float[Math.multiplyExact(count, 4)];
@@ -156,19 +159,68 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		for (RegionSectionState section : sections) {
 			if (!actual.add(section.key())) throw new IOException("Duplicate section payload");
 			if (!section.regionId().equals(manifest.regionId()) || !section.dimensionId().equals(manifest.dimensionId())
-					|| section.checkpointGeneration() != manifest.checkpointGeneration()) throw new IOException("Mixed section ownership");
+					|| section.checkpointGeneration() != manifest.checkpointGeneration()
+					|| section.formatVersion() != manifest.formatVersion()) throw new IOException("Mixed section ownership or format");
 			if (RegionStateIntegrity.sectionChecksum(section) != section.checksum()) throw new IOException("Section checksum mismatch");
 			validateSectionOwnership(section);
 			RegionManifest.SectionDescriptor descriptor = expected.get(section.key());
 			long volumeBits = Double.doubleToRawLongBits(sumVolumes(section.positionVolume()));
+			long massBits = manifest.formatVersion() == 2 ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L;
 			if (descriptor == null || descriptor.markerCount() != section.markerCount()
-					|| descriptor.volumeBits() != volumeBits || descriptor.checksum() != section.checksum()) {
+					|| descriptor.volumeBits() != volumeBits || descriptor.massBits() != massBits
+					|| descriptor.checksum() != section.checksum()) {
 				throw new IOException("Section does not match its manifest descriptor");
 			}
 			markerCount = Math.addExact(markerCount, section.markerCount());
 		}
 		if (markerCount != manifest.totalMarkerCount() || markerCount > manifest.reservedMarkerCapacity()) {
 			throw new IOException("Manifest marker count/budget mismatch");
+		}
+		if (manifest.formatVersion() == 2) validateMaterialLedgers();
+	}
+
+	private void validateMaterialLedgers() throws IOException {
+		int count = manifest.totalMarkerCount(), paletteSize = manifest.materialPalette().size();
+		double[] volumesByOrdinal = new double[count], massByOrdinal = new double[count];
+		int[] materialByOrdinal = new int[count];
+		boolean[] seen = new boolean[count];
+		for (RegionSectionState section : sections) {
+			int[] ordinals = section.markerOrdinals(), materials = section.materialPaletteIndex();
+			float[] positionVolume = section.positionVolume();
+			double[] mass = section.markerMass();
+			for (int marker = 0; marker < ordinals.length; marker++) {
+				int ordinal = ordinals[marker], material = materials[marker];
+				if (ordinal < 0 || ordinal >= count || seen[ordinal]) throw new IOException("Duplicate or invalid marker ordinal");
+				if (material < 0 || material >= paletteSize) throw new IOException("Material palette index out of range");
+				seen[ordinal] = true;
+				volumesByOrdinal[ordinal] = positionVolume[marker * 4 + 3];
+				massByOrdinal[ordinal] = mass[marker];
+				materialByOrdinal[ordinal] = material;
+			}
+		}
+		int[] markerCounts = new int[paletteSize];
+		double[] volumes = new double[paletteSize], masses = new double[paletteSize];
+		double totalVolume = 0.0, totalMass = 0.0;
+		for (int ordinal = 0; ordinal < count; ordinal++) {
+			if (!seen[ordinal]) throw new IOException("Missing marker ordinal");
+			int material = materialByOrdinal[ordinal];
+			markerCounts[material]++;
+			volumes[material] += volumesByOrdinal[ordinal];
+			masses[material] += massByOrdinal[ordinal];
+			totalVolume += volumesByOrdinal[ordinal];
+			totalMass += massByOrdinal[ordinal];
+		}
+		if (Double.doubleToRawLongBits(totalVolume) != manifest.totalVolumeBits()
+				|| Double.doubleToRawLongBits(totalMass) != manifest.totalMassBits()) {
+			throw new IOException("Material manifest total ledger mismatch");
+		}
+		for (int material = 0; material < paletteSize; material++) {
+			RegionManifest.MaterialLedger expected = manifest.materialLedgers().get(material);
+			if (expected.markerCount() != markerCounts[material]
+					|| expected.volumeBits() != Double.doubleToRawLongBits(volumes[material])
+					|| expected.massBits() != Double.doubleToRawLongBits(masses[material])) {
+				throw new IOException("Material marker ledger mismatch at palette index " + material);
+			}
 		}
 	}
 
@@ -200,23 +252,30 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 
 	private static RegionSectionState withChecksum(RegionSectionState section) {
 		long checksum = RegionStateIntegrity.sectionChecksum(section);
-		return new RegionSectionState(section.regionId(), section.dimensionId(), section.checkpointGeneration(),
+		return new RegionSectionState(section.formatVersion(), section.regionId(), section.dimensionId(), section.checkpointGeneration(),
 				section.sectionX(), section.sectionY(), section.sectionZ(), section.localStartX(), section.localStartY(), section.localStartZ(),
 				section.sizeX(), section.sizeY(), section.sizeZ(), section.markerOrdinals(), section.positionVolume(),
-				section.velocities(), section.solidMask(), section.extensions(), checksum);
+				section.velocities(), section.markerMass(), section.materialPaletteIndex(), section.solidMask(), section.extensions(), checksum);
 	}
 
 	private static RegionManifest withChecksum(RegionManifest manifest) {
 		long checksum = RegionStateIntegrity.manifestChecksum(manifest);
-		return new RegionManifest(manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(), manifest.networkGeneration(),
+		return new RegionManifest(manifest.formatVersion(), manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(), manifest.networkGeneration(),
 				manifest.origin(), manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 				manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(),
-				manifest.totalVolumeBits(), manifest.sections(), manifest.extensions(), checksum);
+				manifest.totalVolumeBits(), manifest.materialPalette(), manifest.totalMassBits(), manifest.materialLedgers(),
+				manifest.sections(), manifest.extensions(), checksum);
 	}
 
 	private static double sumVolumes(float[] positionVolume) {
 		double result = 0.0;
 		for (int index = 3; index < positionVolume.length; index += 4) result += positionVolume[index];
+		return result;
+	}
+
+	private static double sum(double[] values) {
+		double result = 0.0;
+		for (double value : values) result += value;
 		return result;
 	}
 }

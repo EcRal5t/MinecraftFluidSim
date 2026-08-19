@@ -2,6 +2,7 @@ package com.example.simulation.persistence;
 
 import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FlipParticleState;
+import com.example.fluid.FluidMaterial;
 import com.example.fluid.FluidSolverConfig;
 import com.example.simulation.FluidRegion;
 import com.example.simulation.FluidRegionLifecycle;
@@ -42,11 +43,88 @@ public final class FluidRegionPersistenceValidation {
 
 	public static void main(String[] args) throws Exception {
 		validateExactRoundTripAndMetadataUnload();
+		validateMaterialV2Codec();
 		validateUnknownExtensions();
 		validateFaultMatrix();
 		validateCorruptionAndAtomicMoveFailure();
 		validateWorldConfig();
 		System.out.println("Fluid region persistence validation passed");
+	}
+
+	private static void validateMaterialV2Codec() throws Exception {
+		RegionState pure = RegionState.capture(populatedRegion(new UUID(15L, 16L)), 1L);
+		List<FluidMaterial> palette = List.of(
+				new FluidMaterial("realwater:water", 1_000.0, "realwater:water"),
+				new FluidMaterial("realwater:oil", 800.0, "realwater:oil")
+		);
+		FlipParticleState particles = pure.reconstruct();
+		float[] allPositions = particles.copyPositionVolume();
+		int[] counts = new int[palette.size()];
+		double[] volumes = new double[palette.size()], masses = new double[palette.size()];
+		double totalMass = 0.0;
+		for (int ordinal = 0; ordinal < particles.particleCount(); ordinal++) {
+			int material = ordinal & 1;
+			double volume = allPositions[ordinal * 4 + 3];
+			double mass = volume * palette.get(material).referenceDensity();
+			counts[material]++; volumes[material] += volume; masses[material] += mass; totalMass += mass;
+		}
+		List<RegionSectionState> sections = new ArrayList<>();
+		List<RegionManifest.SectionDescriptor> descriptors = new ArrayList<>();
+		for (RegionSectionState pureSection : pure.sections()) {
+			int[] ordinals = pureSection.markerOrdinals();
+			float[] positionVolume = pureSection.positionVolume();
+			double[] markerMass = new double[ordinals.length];
+			int[] materialIndices = new int[ordinals.length];
+			for (int marker = 0; marker < ordinals.length; marker++) {
+				int material = ordinals[marker] & 1;
+				materialIndices[marker] = material;
+				markerMass[marker] = positionVolume[marker * 4 + 3] * palette.get(material).referenceDensity();
+			}
+			RegionSectionState section = signedSection(new RegionSectionState(2, pureSection.regionId(), pureSection.dimensionId(),
+					pureSection.checkpointGeneration(), pureSection.sectionX(), pureSection.sectionY(), pureSection.sectionZ(),
+					pureSection.localStartX(), pureSection.localStartY(), pureSection.localStartZ(), pureSection.sizeX(), pureSection.sizeY(),
+					pureSection.sizeZ(), ordinals, positionVolume, pureSection.velocities(), markerMass, materialIndices,
+					pureSection.solidMask(), List.of(), 0L));
+			sections.add(section);
+			descriptors.add(new RegionManifest.SectionDescriptor(section.sectionX(), section.sectionY(), section.sectionZ(),
+					section.markerCount(), Double.doubleToRawLongBits(sumVolumes(section.positionVolume())),
+					Double.doubleToRawLongBits(sum(section.markerMass())), section.checksum()));
+		}
+		descriptors.sort(RegionManifest.SectionDescriptor::compareTo);
+		List<RegionManifest.MaterialLedger> ledgers = new ArrayList<>();
+		for (int material = 0; material < palette.size(); material++) {
+			ledgers.add(new RegionManifest.MaterialLedger(counts[material], Double.doubleToRawLongBits(volumes[material]),
+					Double.doubleToRawLongBits(masses[material])));
+		}
+		RegionManifest base = pure.manifest();
+		RegionManifest unsigned = new RegionManifest(2, base.regionId(), base.dimensionId(), base.checkpointGeneration(),
+				base.networkGeneration(), base.origin(), base.sizeX(), base.sizeY(), base.sizeZ(), base.solverConfig(),
+				base.reservedMarkerCapacity(), base.runtime(), base.footprint(), base.totalMarkerCount(), base.totalVolumeBits(),
+				palette, Double.doubleToRawLongBits(totalMass), ledgers, descriptors, List.of(), 0L);
+		RegionManifest manifest = new RegionManifest(2, unsigned.regionId(), unsigned.dimensionId(), unsigned.checkpointGeneration(),
+				unsigned.networkGeneration(), unsigned.origin(), unsigned.sizeX(), unsigned.sizeY(), unsigned.sizeZ(), unsigned.solverConfig(),
+				unsigned.reservedMarkerCapacity(), unsigned.runtime(), unsigned.footprint(), unsigned.totalMarkerCount(), unsigned.totalVolumeBits(),
+				unsigned.materialPalette(), unsigned.totalMassBits(), unsigned.materialLedgers(), unsigned.sections(), unsigned.extensions(),
+				RegionStateIntegrity.manifestChecksum(unsigned));
+		RegionState state = new RegionState(manifest, sections);
+		state.validate();
+		expectIOException(state::reconstruct, "material v2 was silently reconstructed as pure water");
+
+		RegionStateCodec codec = new RegionStateCodec();
+		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(manifest));
+		require(decodedManifest.equals(manifest), "region-state v2 manifest did not round-trip");
+		for (RegionSectionState section : sections) {
+			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
+			require(decoded.formatVersion() == 2 && Arrays.equals(decoded.markerMass(), section.markerMass())
+					&& Arrays.equals(decoded.materialPaletteIndex(), section.materialPaletteIndex())
+					&& decoded.checksum() == section.checksum(), "region-state v2 section did not round-trip");
+		}
+		CompoundTag missingMass = codec.encodeSection(sections.getFirst());
+		missingMass.remove("MassBits");
+		expectIOException(() -> codec.decodeSection(missingMass), "v2 section missing marker mass was accepted");
+		CompoundTag encodedV1 = codec.encodeManifest(base);
+		require(encodedV1.get("Materials") == null && encodedV1.get("MassBits") == null,
+				"v1 manifest acquired v2 material fields");
 	}
 
 	private static void validateExactRoundTripAndMetadataUnload() throws Exception {
@@ -118,7 +196,7 @@ public final class FluidRegionPersistenceValidation {
 		require(codec.decodeSection(codec.encodeSection(signedSection)).extensions().equals(List.of(extension)),
 				"unknown length-delimited section extension was not retained");
 		CompoundTag future = codec.encodeManifest(signed);
-		future.putInt("Version", 2);
+		future.putInt("Version", 3); future.putInt("Palette", 3);
 		expectIOException(() -> codec.decodeManifest(future), "unknown region-state version was accepted");
 	}
 
@@ -242,10 +320,23 @@ public final class FluidRegionPersistenceValidation {
 	}
 
 	private static RegionSectionState signedSection(RegionSectionState section) {
-		return new RegionSectionState(section.regionId(), section.dimensionId(), section.checkpointGeneration(), section.sectionX(),
+		return new RegionSectionState(section.formatVersion(), section.regionId(), section.dimensionId(), section.checkpointGeneration(), section.sectionX(),
 				section.sectionY(), section.sectionZ(), section.localStartX(), section.localStartY(), section.localStartZ(),
 				section.sizeX(), section.sizeY(), section.sizeZ(), section.markerOrdinals(), section.positionVolume(),
-				section.velocities(), section.solidMask(), section.extensions(), RegionStateIntegrity.sectionChecksum(section));
+				section.velocities(), section.markerMass(), section.materialPaletteIndex(), section.solidMask(), section.extensions(),
+				RegionStateIntegrity.sectionChecksum(section));
+	}
+
+	private static double sumVolumes(float[] positionVolume) {
+		double result = 0.0;
+		for (int index = 3; index < positionVolume.length; index += 4) result += positionVolume[index];
+		return result;
+	}
+
+	private static double sum(double[] values) {
+		double result = 0.0;
+		for (double value : values) result += value;
+		return result;
 	}
 
 	private static void expectIOException(IoAction action, String message) throws Exception {
