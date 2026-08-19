@@ -11,7 +11,7 @@ import java.util.List;
  * <p>The update order mirrors the user's Godot compute implementation: P2G,
  * grid forces, pressure projection, G2P, then particle advection with solid
  * collision. Eight marker particles represent one full grid cell. Particles
- * carry volume, so the liquid mass cannot diffuse into a low-density VOF haze.</p>
+	 * carry exact volume and mass inventories, so liquid cannot diffuse into a low-density VOF haze.</p>
  */
 public final class FlipFluidDomain {
 	private static final int PARTICLES_PER_FULL_CELL = 8;
@@ -62,6 +62,9 @@ public final class FlipFluidDomain {
 	private float[] particleVelocityY;
 	private float[] particleVelocityZ;
 	private float[] particleVolume;
+	private double[] particleMass;
+	private int[] particleMaterialHandle;
+	private int[] particlePhaseLabel;
 	private int particleCount;
 	private boolean gridDirty = true;
 	private int pressureAnchor = -1;
@@ -89,6 +92,9 @@ public final class FlipFluidDomain {
 		this.particleVelocityY = new float[initialParticleCapacity];
 		this.particleVelocityZ = new float[initialParticleCapacity];
 		this.particleVolume = new float[initialParticleCapacity];
+		this.particleMass = new double[initialParticleCapacity];
+		this.particleMaterialHandle = new int[initialParticleCapacity];
+		this.particlePhaseLabel = new int[initialParticleCapacity];
 		this.solid = new boolean[cellCount];
 		this.cutCells = new FlipCutCellGeometry(sizeX, sizeY, sizeZ);
 		this.markerCount = new int[cellCount];
@@ -152,6 +158,7 @@ public final class FlipFluidDomain {
 			particleVelocityX[particle] = particleVelocities[velocityBase];
 			particleVelocityY[particle] = particleVelocities[velocityBase + 1];
 			particleVelocityZ[particle] = particleVelocities[velocityBase + 2];
+			setDefaultMaterialState(particle);
 		}
 		particleCount = restoredCount;
 		Arrays.fill(pressure, 0.0F);
@@ -247,6 +254,13 @@ public final class FlipFluidDomain {
 		return (float) result;
 	}
 
+	/** Exact marker-mass inventory; reconstructed grid density is never used for this ledger. */
+	public double totalMass() {
+		double result = 0.0;
+		for (int particle = 0; particle < particleCount; particle++) result += particleMass[particle];
+		return result;
+	}
+
 	/** Maximum marker speed used only as a scheduling observation; it is not a water-volume estimate. */
 	public float maximumParticleSpeed() {
 		float maximumSquared = 0.0F;
@@ -261,7 +275,7 @@ public final class FlipFluidDomain {
 
 	/**
 	 * Commits a validated hydrostatic scheduling transition by removing residual marker momentum.
-	 * Marker positions, counts and particleVolume are unchanged, so the exact water ledger is unchanged.
+	 * Marker positions, counts, particleVolume and particleMass are unchanged, so both exact ledgers are unchanged.
 	 */
 	public void commitHydrostaticSleep() {
 		Arrays.fill(particleVelocityX, 0, particleCount, 0.0F);
@@ -427,6 +441,8 @@ public final class FlipFluidDomain {
 				this::markerPositionAllowed
 		);
 		particleCount = reseeding.particleCount();
+		// The active domain is still pure water. Material-aware reseeding arrives with multi-material input.
+		synchronizeDefaultMaterialState();
 		gridDirty = true;
 		rebuildGridFromParticles();
 		return new StepStats(
@@ -827,6 +843,7 @@ public final class FlipFluidDomain {
 		particleVelocityY[particleCount] = 0.0F;
 		particleVelocityZ[particleCount] = 0.0F;
 		particleVolume[particleCount] = amount;
+		setDefaultMaterialState(particleCount);
 		particleCount++;
 	}
 
@@ -834,8 +851,10 @@ public final class FlipFluidDomain {
 		float h = config.cellSize(), removed = 0.0F;
 		for (int i = particleCount - 1; i >= 0 && removed < maximum; i--) {
 			if ((int) Math.floor(particleX[i] / h) != cellX || (int) Math.floor(particleY[i] / h) != cellY || (int) Math.floor(particleZ[i] / h) != cellZ) continue;
-			float take = Math.min(particleVolume[i], maximum - removed);
+			float previousVolume = particleVolume[i];
+			float take = Math.min(previousVolume, maximum - removed);
 			particleVolume[i] -= take;
+			particleMass[i] *= particleVolume[i] / previousVolume;
 			removed += take;
 			if (particleVolume[i] <= 1.0E-6F) removeParticle(i);
 		}
@@ -901,6 +920,9 @@ public final class FlipFluidDomain {
 		particleX[index] = particleX[last]; particleY[index] = particleY[last]; particleZ[index] = particleZ[last];
 		particleVelocityX[index] = particleVelocityX[last]; particleVelocityY[index] = particleVelocityY[last]; particleVelocityZ[index] = particleVelocityZ[last];
 		particleVolume[index] = particleVolume[last];
+		particleMass[index] = particleMass[last];
+		particleMaterialHandle[index] = particleMaterialHandle[last];
+		particlePhaseLabel[index] = particlePhaseLabel[last];
 	}
 
 	private void ensureParticleCapacity(int required) {
@@ -912,6 +934,19 @@ public final class FlipFluidDomain {
 		particleX = Arrays.copyOf(particleX, capacity); particleY = Arrays.copyOf(particleY, capacity); particleZ = Arrays.copyOf(particleZ, capacity);
 		particleVelocityX = Arrays.copyOf(particleVelocityX, capacity); particleVelocityY = Arrays.copyOf(particleVelocityY, capacity); particleVelocityZ = Arrays.copyOf(particleVelocityZ, capacity);
 		particleVolume = Arrays.copyOf(particleVolume, capacity);
+		particleMass = Arrays.copyOf(particleMass, capacity);
+		particleMaterialHandle = Arrays.copyOf(particleMaterialHandle, capacity);
+		particlePhaseLabel = Arrays.copyOf(particlePhaseLabel, capacity);
+	}
+
+	private void synchronizeDefaultMaterialState() {
+		for (int particle = 0; particle < particleCount; particle++) setDefaultMaterialState(particle);
+	}
+
+	private void setDefaultMaterialState(int particle) {
+		particleMass[particle] = (double) particleVolume[particle] * config.density();
+		particleMaterialHandle[particle] = 0;
+		particlePhaseLabel[particle] = 0;
 	}
 
 	private List<CellCandidate> nearbyCells(int centerX, int centerY, int centerZ, int maxRadius) {

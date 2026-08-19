@@ -7,6 +7,7 @@ public final class FlipFluidFreeSurfaceValidation {
 	public static void main(String[] args) {
 		planeVolumeInversionIsAccurate();
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
+		pureWaterMarkerMassLedgerTracksVolume();
 		volumeDriftCorrectionPreservesLegitimateSurfaceDeficits();
 		fractionalHydrostaticColumnsBalanceGravity();
 		thinLayerRegularizationRemainsStable();
@@ -14,6 +15,21 @@ public final class FlipFluidFreeSurfaceValidation {
 		longRunHydrostaticSurfaceDoesNotSink();
 		waterDescendsAStairSlope();
 		System.out.println("FlipFluid free-surface validation passed");
+	}
+
+	private static void pureWaterMarkerMassLedgerTracksVolume() {
+		FluidSolverConfig config = FluidSolverConfig.prototypeDefaults();
+		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 128);
+		domain.setVolume(1, 1, 1, 1.0F);
+		domain.setVolume(2, 1, 1, 0.375F);
+		check(Math.abs(domain.totalMass() - (double) config.density() * domain.totalVolume()) <= 1.0E-9,
+				"pure-water marker mass did not match the exact volume ledger");
+		domain.removeVolumeNear(2, 1, 1, 0.125F, 0);
+		check(Math.abs(domain.totalMass() - (double) config.density() * domain.totalVolume()) <= 1.0E-9,
+				"partial marker drain did not remove proportional mass");
+		domain.step();
+		check(Math.abs(domain.totalMass() - (double) config.density() * domain.totalVolume()) <= 1.0E-9,
+				"pure-water reseeding did not preserve the mass/volume relation");
 	}
 
 	private static void planeVolumeInversionIsAccurate() {

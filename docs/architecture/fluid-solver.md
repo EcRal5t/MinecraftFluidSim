@@ -5,6 +5,7 @@
 ## 状态边界
 
 - **物理真值**：全部 marker `particleVolume` 的精确和。精确加水、删水、碰撞挤水和恢复只按 marker 账本结算。
+- **M3 预接线**：活动 marker 已同时持有默认材料 handle、相标签和显式 `particleMass`；当前世界入口仍只创建纯水，因此质量严格等于 `config.density * particleVolume`，多材料输入尚未开放。
 - **数值离散**：`markerCount > 0` 决定压力流体格；平滑 `volume[]`、PLIC 分数、cut-cell 开口和目标散度都不是第二套水量。
 - **渲染重建**：客户端使用 density + marker + solid 重建；marker mask 是浅水可见的必要内部种子，渲染不得反写物理。
 - **调度策略**：ACTIVE/REDUCED/休眠/UNLOADED 只控制何时持有或步进状态，不得改变 marker 账本。
@@ -31,7 +32,7 @@
 
 ## 当前范围
 
-- 水为常密度 1000 simulation units，外部空气使用零表压。
+- 水仍以常密度 1000 simulation units 求压，外部空气使用零表压；显式 marker 质量尚未改变压力算子。
 - 服务端 CPU 是物理规范；可选 GPU probe 仍只读、可回退，不写世界或存档。
 - 已接通最多四个有界区域、控制器边界、独立调度和 `region-state v1`；当前集成说明见根 [`README.md`](../../README.md)。
 - 多材料、可变密度、液液界面和组分质量账本尚未进入活动核心，属于 M3。
