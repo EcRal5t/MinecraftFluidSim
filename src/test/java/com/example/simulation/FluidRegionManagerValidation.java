@@ -30,6 +30,7 @@ public final class FluidRegionManagerValidation {
 		validateAdmissionAndSelection();
 		validateRuntimeStateFollowsRegion();
 		validateAtomicReplacement();
+		validateReplacementPreview();
 		validatePerRegionAndTotalRejectionDetails();
 		System.out.println("FluidRegionManager validation passed");
 	}
@@ -95,6 +96,21 @@ public final class FluidRegionManagerValidation {
 		require(manager.replaceSelected(replacement).accepted(), "valid replacement was rejected");
 		require(manager.selected() == replacement && !manager.regions().contains(first), "valid replacement was not atomic");
 		require(manager.usage().equals(new FluidRegionManager.BudgetUsage(2, 16L, 112L)), "replacement usage mismatch");
+	}
+
+	private static void validateReplacementPreview() {
+		FluidRegionManager manager = manager();
+		FluidRegion original = region(2, 2, 2, 64L);
+		require(manager.add(original).accepted(), "preview setup failed");
+		FluidRegionManager.BudgetUsage usage = manager.usage();
+		FluidRegionManager.AdmissionResult rejected = manager.previewReplacement(18L, 128L);
+		require(!rejected.accepted() && rejected.failure().contains("requires 18 cells/128 markers"),
+				"replacement preview omitted capacity detail");
+		require(manager.selected() == original && manager.usage().equals(usage),
+				"replacement preview changed registry state");
+		require(manager.previewReplacement(8L, 64L).accepted(), "valid replacement preview was rejected");
+		require(manager.selected() == original && manager.usage().equals(usage),
+				"accepted replacement preview changed registry state");
 	}
 
 	private static void validatePerRegionAndTotalRejectionDetails() {

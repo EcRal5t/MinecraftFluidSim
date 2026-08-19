@@ -1,5 +1,6 @@
 package com.example;
 
+import com.example.block.RealWaterBlocks;
 import com.example.network.FluidSnapshotPayload;
 import com.example.simulation.FluidSimulationService;
 import net.fabricmc.api.ModInitializer;
@@ -16,6 +17,7 @@ public final class RealWaterMod implements ModInitializer {
 
 	@Override
 	public void onInitialize() {
+		RealWaterBlocks.register();
 		PayloadTypeRegistry.clientboundPlay().register(FluidSnapshotPayload.TYPE, FluidSnapshotPayload.CODEC);
 		RealWaterCommands.register();
 		ServerTickEvents.END_SERVER_TICK.register(server -> FluidSimulationService.get(server).tick(server));

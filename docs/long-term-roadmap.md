@@ -489,7 +489,7 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 - 建立可配置的单区域 marker/cell 上限和多区域总预算、状态统计和管理命令；预算拒绝必须报告所需量、单域上限和服务器剩余额度；
 - 区域墙必须可见/可调试，不再有未说明的不可见边界。
 
-当前状态（2026-08-19，M2 前置完成）：`FluidRegion` 已承接 domain/维度/原点、pause/tick/调频、碰撞统计、实体力与 debug 运行态；选择区域不会串用这些状态。纯内存 `FluidRegionManager` 已实现登记、选择、移除、原子替换以及 required/per-region/remaining 预算拒绝。每个 `FlipFluidDomain` 的实际 marker 硬上限与 manager 预留一致，capture、pour、固体挤水和 checkpoint restore 等所有 CPU marker 创建/恢复路径均受它约束；预算不足不会从平滑 density 猜水量，`setVolume` 在修改原 marker 前原子预检。自动门覆盖部分接受、精确水量守恒、超额恢复拒绝和失败不变性。当前服务仍只运行一个 `24×16×24` 兼容区域；尚未开放控制器、多区域 tick、chunk ticket、协议或任何 `region-state` 存档，takeover 边界与 journal v1 未变。
+当前状态（2026-08-19，M2 第一项正式门完成）：`FluidRegion` 已承接 domain/维度/原点、pause/tick/调频、碰撞统计、实体力、debug 运行态、实例 marker 硬上限和可选 controller footprint；选择区域不会串用这些状态。纯内存 `FluidRegionManager` 已实现登记、选择、移除、无 solver 分配的 replacement 预检、原子替换以及 required/per-region/remaining 预算拒绝。专用控制器与边界方块提供真实可见外壳；六邻域有界扫描只认这两种外壳方块，要求恰好一个闭合内部，并在每次方块状态读取前以 `getChunkNow` 验证目标 chunk，不申请 ticket。破口、多内腔、缺 chunk、1,152 内部方块扫描上限或当前 9,216-cell/73,728-marker 致密域预算超限均失败且不替换旧域。激活只读采样原版水到 marker `particleVolume` 并保持暂停，不移除世界水；运行时任何关联 chunk 卸载或原边界破损都在碰撞、实体、pour/drain 和 step 前暂停整域，不把缺失部分临时当墙。客户端继续只用 density+marker+solid 重建，正式控制器域默认不显示 debug。当前仍只有一个内存区域，feature flag 默认关闭；尚无并行多域 tick、chunk ticket、ACTIVE/REDUCED/睡眠/`UNLOADED` 状态机、协议或任何 `region-state` 存档，takeover 边界与 journal v1 未变。
 
 完成条件：反复休眠/唤醒/重启后水量不变；方块更新和实体进入可靠唤醒；任一关联 chunk 卸载时不发生半区域步进；未加载区不占粒子内存；协议不兼容能被明确拒绝而非错位解码。
 
@@ -637,8 +637,8 @@ CPU 单线程参考场景固定随机种子、遍历顺序和输入，能稳定�
 
 ## 十三、接下来三项实际工作
 
-1. 正式进入 M2：设计控制器、可见边界闭合扫描、跨 chunk 完整加载判定和预算拒绝；尚不扩大 takeover 范围。
-2. 建立多区域 tick 生命周期、ACTIVE/REDUCED/睡眠/整域 UNLOADED 状态机及 region id/代次网络协议门。
+1. 建立多区域 tick 生命周期以及 ACTIVE/REDUCED/睡眠/整域 `UNLOADED` 状态机，先证明任一关联 chunk 卸载都不会半域步进。
+2. 建立 region id/代次/序号网络协议门、capability 协商与 codec 兼容矩阵。
 3. 评审 `region-state v1` 的原子检查点、兼容矩阵、失败回滚与迁移方案，得到明确批准后才实现持久化。
 
 这些 M2 门完成前，不扩大 takeover 范围，不改变世界长期存档格式，也不把 GPU 设为必需运行条件。

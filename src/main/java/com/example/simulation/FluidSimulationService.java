@@ -1,22 +1,23 @@
 package com.example.simulation;
 
 import com.example.RealWaterMod;
+import com.example.block.RealWaterBlocks;
 import com.example.fluid.FlipFluidDomain;
-import com.example.fluid.FluidSolverConfig;
 import com.example.network.FluidSnapshotPayload;
+import com.example.simulation.controller.FluidBoundaryScanner;
+import com.example.simulation.controller.FluidControllerRegions;
+import com.example.simulation.controller.FluidRegionFootprint;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.AABB;
@@ -28,7 +29,6 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 import java.util.WeakHashMap;
 
 /** Adapts the currently selected in-memory fluid region to Minecraft; only takeover recovery metadata is persisted. */
@@ -54,6 +54,9 @@ public final class FluidSimulationService {
 	private static final long COMPATIBILITY_REGION_CELLS = (long) BLOCK_SIZE_X * BLOCK_SIZE_Y * BLOCK_SIZE_Z
 			* CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
 	private static final long COMPATIBILITY_REGION_MARKERS = COMPATIBILITY_REGION_CELLS * 8L;
+	private static final int MAX_CONTROLLER_INTERIOR_BLOCKS = Math.toIntExact(
+			COMPATIBILITY_REGION_CELLS / CELL_VOLUMES_PER_BLOCK
+	);
 	private static final Map<MinecraftServer, FluidSimulationService> SERVICES = new WeakHashMap<>();
 
 	private final Map<BlockPos, BlockState> takeoverOriginalBlocks = new HashMap<>();
@@ -64,6 +67,7 @@ public final class FluidSimulationService {
 	private ResourceKey<Level> takeoverDimension;
 	private boolean defaultEntityPhysicsEnabled = true;
 	private boolean defaultDebugOverlays;
+	private boolean controllerFeatureEnabled;
 	private String lastTakeoverFailure;
 	private boolean takeoverMaintenanceEnabled;
 
@@ -95,6 +99,62 @@ public final class FluidSimulationService {
 	public boolean paused() {
 		FluidRegion region = activeRegion();
 		return region == null || region.paused();
+	}
+
+	public boolean controllerFeatureEnabled() {
+		return controllerFeatureEnabled;
+	}
+
+	public void setControllerFeatureEnabled(boolean enabled) {
+		controllerFeatureEnabled = enabled;
+		FluidRegion region = activeRegion();
+		if (!enabled && region != null && region.controllerManaged()) {
+			region.setPaused(true);
+			region.setAvailabilityFailure("controller feature flag is disabled");
+		}
+	}
+
+	public ControllerActivation activateController(ServerPlayer player, BlockPos controllerPosition) {
+		if (!controllerFeatureEnabled) return ControllerActivation.DISABLED;
+		ServerLevel level = player.level();
+		if (!level.getBlockState(controllerPosition).is(RealWaterBlocks.FLUID_CONTROLLER)) {
+			return ControllerActivation.failed("目标方块不再是 Real Water 控制器");
+		}
+
+		FluidBoundaryScanner.ScanResult scan = FluidControllerRegions.scan(
+				level, controllerPosition, MAX_CONTROLLER_INTERIOR_BLOCKS
+		);
+		if (!scan.succeeded()) return ControllerActivation.failed(scan.failure());
+		FluidRegionFootprint footprint = scan.footprint();
+		long requiredCells;
+		long requiredMarkers;
+		try {
+			requiredCells = Math.multiplyExact(footprint.denseBlockCapacity(), CELL_VOLUMES_PER_BLOCK);
+			requiredMarkers = Math.multiplyExact(requiredCells, 8L);
+		} catch (ArithmeticException exception) {
+			return ControllerActivation.failed("控制器区域尺寸溢出资源计数");
+		}
+		FluidRegionManager.AdmissionResult preview = regionManager.previewReplacement(requiredCells, requiredMarkers);
+		if (!preview.accepted()) return ControllerActivation.failed(preview.failure());
+
+		RestorationStats restoration = restoreTakeover(level.getServer());
+		if (!restoration.completed()) return ControllerActivation.failed(restoration.failure());
+		String availabilityFailure = FluidControllerRegions.availabilityFailure(level, footprint);
+		if (availabilityFailure != null) return ControllerActivation.failed(availabilityFailure);
+
+		FluidRegion candidate;
+		try {
+			candidate = FluidRegionFactory.createControllerRegion(level, footprint, CELLS_PER_BLOCK, requiredMarkers);
+		} catch (IllegalArgumentException | ArithmeticException exception) {
+			return ControllerActivation.failed("无法分配控制器区域：" + exception.getMessage());
+		}
+		FluidRegionManager.AdmissionResult admission = regionManager.replaceSelected(candidate);
+		if (!admission.accepted()) return ControllerActivation.failed(admission.failure());
+		refreshCollisions(level);
+		FluidRegionFactory.captureVanillaWater(level, candidate);
+		candidate.setPaused(true);
+		sendSnapshot(level);
+		return ControllerActivation.succeeded(footprint);
 	}
 
 	public boolean createDemo(ServerPlayer player) {
@@ -131,33 +191,7 @@ public final class FluidSimulationService {
 		BlockPos newOrigin = player.blockPosition().offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
 		createEmpty(level, newOrigin);
 		refreshCollisions(level);
-		int wetCells = 0;
-		FlipFluidDomain domain = domain();
-		BlockPos origin = origin();
-		float cellSize = domain.config().cellSize();
-
-		for (int z = 0; z < domain.sizeZ(); z++) {
-			for (int y = 0; y < domain.sizeY(); y++) {
-				for (int x = 0; x < domain.sizeX(); x++) {
-					double worldX = origin.getX() + (x + 0.5) * cellSize;
-					double worldY = origin.getY() + (y + 0.5) * cellSize;
-					double worldZ = origin.getZ() + (z + 0.5) * cellSize;
-					BlockPos blockPos = BlockPos.containing(worldX, worldY, worldZ);
-					BlockState state = level.getBlockState(blockPos);
-					if (domain.isSolid(x, y, z)) continue;
-					FluidState fluid = state.getFluidState();
-					if (!fluid.is(FluidTags.WATER)) continue;
-					float waterHeight = fluid.getHeight(level, blockPos);
-					double cellBottom = origin.getY() + y * cellSize;
-					double localBottom = cellBottom - Math.floor(cellBottom);
-					float fraction = Mth.clamp((float) ((waterHeight - localBottom) / cellSize), 0.0F, 1.0F);
-					if (fraction > 0.0F) {
-						domain.setVolume(x, y, z, fraction);
-						wetCells++;
-					}
-				}
-			}
-		}
+		int wetCells = FluidRegionFactory.captureVanillaWater(level, activeRegion());
 		int removedBlocks = takeover ? beginTakeover(level) : 0;
 		activeRegion().setPaused(true);
 		sendSnapshot(level);
@@ -236,28 +270,22 @@ public final class FluidSimulationService {
 	}
 
 	private void createEmpty(ServerLevel level, BlockPos origin) {
-		float cellSize = 1.0F / CELLS_PER_BLOCK;
-		FluidSolverConfig config = new FluidSolverConfig(
-				cellSize, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F
+		FluidRegion candidate = FluidRegionFactory.createCommandRegion(
+				level, origin, BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z,
+				CELLS_PER_BLOCK, COMPATIBILITY_REGION_MARKERS
 		);
-		FlipFluidDomain domain = new FlipFluidDomain(
-				BLOCK_SIZE_X * CELLS_PER_BLOCK,
-				BLOCK_SIZE_Y * CELLS_PER_BLOCK,
-				BLOCK_SIZE_Z * CELLS_PER_BLOCK,
-				config,
-				Math.toIntExact(COMPATIBILITY_REGION_MARKERS)
-		);
-		FluidRegion candidate = new FluidRegion(UUID.randomUUID(), level.dimension(), origin, domain, COMPATIBILITY_REGION_MARKERS);
 		candidate.setEntityPhysicsEnabled(defaultEntityPhysicsEnabled);
 		candidate.setDebugOverlays(defaultDebugOverlays);
 		FluidRegionManager.AdmissionResult admission = regionManager.replaceSelected(candidate);
 		if (!admission.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + admission.failure());
 	}
 
-	public void setPaused(boolean value) {
+	public boolean setPaused(boolean value, ServerLevel level) {
 		FluidRegion region = activeRegion();
-		if (region != null) region.setPaused(value);
+		if (region == null) return false;
+		if (!value && !ensureRegionAvailable(level, region)) return false;
+		region.setPaused(value);
+		return true;
 	}
 
 	public boolean entityPhysicsEnabled() {
@@ -286,6 +314,7 @@ public final class FluidSimulationService {
 	public int step(ServerLevel level, int count) {
 		if (!hasRegionIn(level)) return 0;
 		FluidRegion region = activeRegion();
+		if (!ensureRegionAvailable(level, region)) return -1;
 		for (int i = 0; i < count; i++) stepOnce(region);
 		sendSnapshot(level);
 		return count;
@@ -296,6 +325,7 @@ public final class FluidSimulationService {
 		if (region == null) return;
 		ServerLevel level = server.getLevel(region.dimension());
 		if (level == null) return;
+		if (!ensureRegionAvailable(level, region)) return;
 		maintainTakeover(level);
 		long tick = region.incrementTick();
 		boolean collisionsChanged = false;
@@ -329,6 +359,26 @@ public final class FluidSimulationService {
 		}
 	}
 
+	private boolean ensureRegionAvailable(ServerLevel level, FluidRegion region) {
+		if (!region.controllerManaged()) {
+			region.setAvailabilityFailure(null);
+			return true;
+		}
+		String failure = controllerFeatureEnabled
+				? FluidControllerRegions.availabilityFailure(level, region.footprint())
+				: "controller feature flag is disabled";
+		if (failure == null) {
+			region.setAvailabilityFailure(null);
+			return true;
+		}
+		if (!failure.equals(region.availabilityFailure())) {
+			RealWaterMod.LOGGER.warn("Pausing controller region {}: {}", region.id(), failure);
+		}
+		region.setAvailabilityFailure(failure);
+		region.setPaused(true);
+		return false;
+	}
+
 	private static void stepOnce(FluidRegion region) {
 		long start = System.nanoTime();
 		FlipFluidDomain.StepStats stats = region.domain().step();
@@ -358,12 +408,15 @@ public final class FluidSimulationService {
 	}
 
 	private int applyEntityForces(ServerLevel level) {
-		BlockPos origin = origin();
+		FluidRegion region = activeRegion();
+		BlockPos origin = region.origin();
+		FlipFluidDomain domain = region.domain();
+		float cellSize = domain.config().cellSize();
 		AABB bounds = new AABB(
 				origin.getX(), origin.getY(), origin.getZ(),
-				origin.getX() + BLOCK_SIZE_X,
-				origin.getY() + BLOCK_SIZE_Y,
-				origin.getZ() + BLOCK_SIZE_Z
+				origin.getX() + domain.sizeX() * cellSize,
+				origin.getY() + domain.sizeY() * cellSize,
+				origin.getZ() + domain.sizeZ() * cellSize
 		);
 		int affected = 0;
 		for (Entity entity : level.getEntities((Entity) null, bounds, this::canAffectEntity)) {
@@ -436,6 +489,10 @@ public final class FluidSimulationService {
 
 	public WaterEditResult pourWater(ServerPlayer player, int buckets) {
 		if (!hasRegionIn(player.level())) return WaterEditResult.NO_DOMAIN;
+		FluidRegion region = activeRegion();
+		if (!ensureRegionAvailable(player.level(), region)) {
+			return WaterEditResult.blocked(region.availabilityFailure());
+		}
 		CellTarget target = findAimedCell(player, false);
 		if (target == null) return WaterEditResult.NO_TARGET;
 		float requested = buckets * CELL_VOLUMES_PER_BLOCK;
@@ -443,37 +500,47 @@ public final class FluidSimulationService {
 				target.x(), target.y(), target.z(), requested, 6
 		);
 		sendSnapshot(player.level());
-		return new WaterEditResult(true, target, requested, addition.addedVolume(), addition.markerBudgetLimited());
+		return new WaterEditResult(true, target, requested, addition.addedVolume(), addition.markerBudgetLimited(), null);
 	}
 
 	public WaterEditResult drainWater(ServerPlayer player, int buckets) {
 		if (!hasRegionIn(player.level())) return WaterEditResult.NO_DOMAIN;
+		FluidRegion region = activeRegion();
+		if (!ensureRegionAvailable(player.level(), region)) {
+			return WaterEditResult.blocked(region.availabilityFailure());
+		}
 		CellTarget target = findAimedCell(player, true);
 		if (target == null) return WaterEditResult.NO_TARGET;
 		float requested = buckets * CELL_VOLUMES_PER_BLOCK;
 		float changed = domain().removeVolumeNear(target.x(), target.y(), target.z(), requested, 6);
 		sendSnapshot(player.level());
-		return new WaterEditResult(true, target, requested, changed, false);
+		return new WaterEditResult(true, target, requested, changed, false, null);
 	}
 
 	/** Re-samples Minecraft collision shapes at the simulation's subcell resolution. */
 	public FluidRegion.CollisionStats refreshCollisions(ServerLevel level) {
 		FluidRegion region = activeRegion();
 		if (region == null || !level.dimension().equals(region.dimension())) return FluidRegion.CollisionStats.EMPTY;
+		if (!ensureRegionAvailable(level, region)) return region.lastCollisionStats();
 		FlipFluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
+		FluidRegionFootprint footprint = region.footprint();
+		int blockSizeX = domain.sizeX() / CELLS_PER_BLOCK;
+		int blockSizeY = domain.sizeY() / CELLS_PER_BLOCK;
+		int blockSizeZ = domain.sizeZ() / CELLS_PER_BLOCK;
 		int changedCells = 0;
 		float displaced = 0.0F;
 		float escaped = 0.0F;
 		boolean markerBudgetLimited = false;
 		double inset = 1.0E-5;
 
-		for (int blockZ = 0; blockZ < BLOCK_SIZE_Z; blockZ++) {
-			for (int blockY = 0; blockY < BLOCK_SIZE_Y; blockY++) {
-				for (int blockX = 0; blockX < BLOCK_SIZE_X; blockX++) {
+		for (int blockZ = 0; blockZ < blockSizeZ; blockZ++) {
+			for (int blockY = 0; blockY < blockSizeY; blockY++) {
+				for (int blockX = 0; blockX < blockSizeX; blockX++) {
 					BlockPos pos = origin.offset(blockX, blockY, blockZ);
-					BlockState state = level.getBlockState(pos);
-					boolean fullBlock = state.isCollisionShapeFullBlock(level, pos);
+					boolean outsideScannedInterior = footprint != null && !footprint.containsInterior(pos);
+					BlockState state = outsideScannedInterior ? Blocks.BEDROCK.defaultBlockState() : level.getBlockState(pos);
+					boolean fullBlock = outsideScannedInterior || state.isCollisionShapeFullBlock(level, pos);
 					VoxelShape shape = fullBlock ? Shapes.block() : state.getCollisionShape(level, pos);
 					float displacedInBlock = 0.0F;
 
@@ -582,7 +649,8 @@ public final class FluidSimulationService {
 		String takeoverLock = TakeoverBackupStore.lockDescription(server);
 		FluidRegion region = activeRegion();
 		if (region == null) {
-			return "没有活动流体域 | takeover lock " + takeoverLock
+			return "没有活动流体域 | controller flag " + (controllerFeatureEnabled ? "on" : "off")
+					+ " | takeover lock " + takeoverLock
 					+ (lastTakeoverFailure == null ? "" : " | " + lastTakeoverFailure);
 		}
 		FlipFluidDomain.StepStats lastStats = region.lastStats();
@@ -595,9 +663,16 @@ public final class FluidSimulationService {
 		float cellVolumes = domain.totalVolume();
 		FlipFluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
 		FluidRegion.CollisionStats collision = region.lastCollisionStats();
+		FluidRegionFootprint footprint = region.footprint();
+		String regionSource = footprint == null
+				? "command"
+				: "controller " + footprint.controllerPosition().toShortString() + ", boundary "
+						+ footprint.boundaryBlocks().size() + ", chunks " + footprint.requiredChunks().size();
+		String availability = region.availabilityFailure() == null ? "ready" : "blocked: " + region.availabilityFailure();
 		return String.format(
-				"%s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | entities %s/%d | maxP %.1f | collision Δ%d, escaped %.3f%s | %s",
+				"%s | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | entities %s/%d | maxP %.1f | collision Δ%d, escaped %.3f%s | %s",
 				region.paused() ? "暂停" : "运行",
+				regionSource, availability,
 				origin.toShortString(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
 				20.0 / region.stepIntervalTicks(),
 				cellVolumes / CELL_VOLUMES_PER_BLOCK, cellVolumes,
@@ -647,6 +722,33 @@ public final class FluidSimulationService {
 
 	public record CaptureResult(int wetCells, int removedVanillaBlocks, String failure) { }
 
+	public record ControllerActivation(
+			boolean succeeded,
+			boolean disabled,
+			String failure,
+			int interiorBlocks,
+			int sizeX,
+			int sizeY,
+			int sizeZ,
+			int requiredChunks
+	) {
+		private static final ControllerActivation DISABLED = new ControllerActivation(
+				false, true, "controller feature flag is disabled", 0, 0, 0, 0, 0
+		);
+
+		private static ControllerActivation failed(String failure) {
+			return new ControllerActivation(false, false, failure, 0, 0, 0, 0, 0);
+		}
+
+		private static ControllerActivation succeeded(FluidRegionFootprint footprint) {
+			return new ControllerActivation(
+					true, false, null, footprint.interiorBlocks().size(),
+					footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ(),
+					footprint.requiredChunks().size()
+			);
+		}
+	}
+
 	public record RestorationStats(
 			boolean journalFound,
 			int restoredBlocks,
@@ -671,10 +773,15 @@ public final class FluidSimulationService {
 			CellTarget target,
 			float requestedCellVolume,
 			float changedCellVolume,
-			boolean markerBudgetLimited
+			boolean markerBudgetLimited,
+			String failure
 	) {
-		private static final WaterEditResult NO_DOMAIN = new WaterEditResult(false, null, 0.0F, 0.0F, false);
-		private static final WaterEditResult NO_TARGET = new WaterEditResult(true, null, 0.0F, 0.0F, false);
+		private static final WaterEditResult NO_DOMAIN = new WaterEditResult(false, null, 0.0F, 0.0F, false, null);
+		private static final WaterEditResult NO_TARGET = new WaterEditResult(true, null, 0.0F, 0.0F, false, null);
+
+		private static WaterEditResult blocked(String failure) {
+			return new WaterEditResult(true, null, 0.0F, 0.0F, false, failure);
+		}
 
 		public float changedBlocks() {
 			return changedCellVolume / CELL_VOLUMES_PER_BLOCK;

@@ -76,6 +76,19 @@ public final class FluidRegionManager {
 		return admission;
 	}
 
+	/** Evaluates a replacement before allocating its solver arrays; no registry or selection state is changed. */
+	public AdmissionResult previewReplacement(long requiredCells, long requiredMarkers) {
+		if (requiredCells <= 0L || requiredMarkers <= 0L) {
+			throw new IllegalArgumentException("Fluid region capacity requirements must be positive");
+		}
+		FluidRegion selected = selected();
+		BudgetUsage current = usage();
+		int regionCount = selected == null ? current.regionCount() + 1 : current.regionCount();
+		long baseCells = current.reservedCells() - (selected == null ? 0L : selected.reservedCellCapacity());
+		long baseMarkers = current.reservedMarkers() - (selected == null ? 0L : selected.reservedMarkerCapacity());
+		return evaluate(requiredCells, requiredMarkers, regionCount, baseCells, baseMarkers);
+	}
+
 	public boolean select(UUID id) {
 		if (!regions.containsKey(id)) return false;
 		selectedId = id;
@@ -98,6 +111,10 @@ public final class FluidRegionManager {
 	private AdmissionResult evaluate(FluidRegion candidate, int regionCount, long baseCells, long baseMarkers) {
 		long requiredCells = candidate.reservedCellCapacity();
 		long requiredMarkers = candidate.reservedMarkerCapacity();
+		return evaluate(requiredCells, requiredMarkers, regionCount, baseCells, baseMarkers);
+	}
+
+	private AdmissionResult evaluate(long requiredCells, long requiredMarkers, int regionCount, long baseCells, long baseMarkers) {
 		long remainingCells = limits.maximumTotalCells() - baseCells;
 		long remainingMarkers = limits.maximumTotalMarkers() - baseMarkers;
 		String requirement = "requires " + requiredCells + " cells/" + requiredMarkers + " markers; per-region limit "

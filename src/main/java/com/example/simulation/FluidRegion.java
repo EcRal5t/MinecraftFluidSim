@@ -1,6 +1,7 @@
 package com.example.simulation;
 
 import com.example.fluid.FlipFluidDomain;
+import com.example.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
@@ -15,6 +16,7 @@ public final class FluidRegion {
 	private final BlockPos origin;
 	private final FlipFluidDomain domain;
 	private final long reservedMarkerCapacity;
+	private final FluidRegionFootprint footprint;
 	private boolean paused = true;
 	private long tick;
 	private double lastStepMilliseconds;
@@ -26,8 +28,20 @@ public final class FluidRegion {
 	private int stepIntervalTicks = 1;
 	private int hardOverrunStreak;
 	private int recoveryStreak;
+	private String availabilityFailure;
 
 	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FlipFluidDomain domain, long reservedMarkerCapacity) {
+		this(id, dimension, origin, domain, reservedMarkerCapacity, null);
+	}
+
+	public FluidRegion(
+			UUID id,
+			ResourceKey<Level> dimension,
+			BlockPos origin,
+			FlipFluidDomain domain,
+			long reservedMarkerCapacity,
+			FluidRegionFootprint footprint
+	) {
 		this.id = Objects.requireNonNull(id, "id");
 		this.dimension = Objects.requireNonNull(dimension, "dimension");
 		this.origin = Objects.requireNonNull(origin, "origin").immutable();
@@ -39,6 +53,10 @@ public final class FluidRegion {
 			throw new IllegalArgumentException("Reserved marker capacity must equal the domain hard marker budget");
 		}
 		this.reservedMarkerCapacity = reservedMarkerCapacity;
+		this.footprint = footprint;
+		if (footprint != null && !origin.equals(footprint.minimumInterior())) {
+			throw new IllegalArgumentException("A controller region origin must equal its minimum interior block");
+		}
 	}
 
 	public UUID id() { return id; }
@@ -46,6 +64,8 @@ public final class FluidRegion {
 	public BlockPos origin() { return origin; }
 	public FlipFluidDomain domain() { return domain; }
 	public long reservedMarkerCapacity() { return reservedMarkerCapacity; }
+	public FluidRegionFootprint footprint() { return footprint; }
+	public boolean controllerManaged() { return footprint != null; }
 	public long reservedCellCapacity() {
 		return Math.multiplyExact(Math.multiplyExact((long) domain.sizeX(), domain.sizeY()), domain.sizeZ());
 	}
@@ -77,6 +97,8 @@ public final class FluidRegion {
 	void setHardOverrunStreak(int value) { hardOverrunStreak = value; }
 	int recoveryStreak() { return recoveryStreak; }
 	void setRecoveryStreak(int value) { recoveryStreak = value; }
+	String availabilityFailure() { return availabilityFailure; }
+	void setAvailabilityFailure(String value) { availabilityFailure = value; }
 
 	public record CollisionStats(int changedCells, float displacedCellVolume, float escapedCellVolume, boolean markerBudgetLimited) {
 		static final CollisionStats EMPTY = new CollisionStats(0, 0.0F, 0.0F, false);

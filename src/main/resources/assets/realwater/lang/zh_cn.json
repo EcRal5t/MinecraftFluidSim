@@ -1,0 +1,7 @@
+{
+  "block.realwater.fluid_boundary": "真实水体边界",
+  "block.realwater.fluid_controller": "真实水体控制器",
+  "message.realwater.controller.activated": "控制器区域已就绪：%s 个内部方块，致密范围 %sx%sx%s，关联 %s 个完整加载区块；只读捕获域当前暂停。",
+  "message.realwater.controller.disabled": "真实水体控制器功能门尚未开启；管理员需先执行 /realwater controllers true。",
+  "message.realwater.controller.failed": "控制器激活被拒绝：%s"
+}

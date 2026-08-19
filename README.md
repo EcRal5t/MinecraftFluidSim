@@ -2,7 +2,7 @@
 
 A Minecraft Java 26.2 Fabric prototype for bounded, pressure-based 3D water simulation.
 
-This version is a safe test harness, not yet a global replacement for vanilla water. Its in-memory `FluidRegionManager` currently exposes only one selected temporary server-side 3D PIC/FLIP region, sends reconstructed density and collision snapshots to clients, and rebuilds a translucent isosurface every frame. Each region owns independent pause/pacing state and a hard marker budget; replacement is budget-checked before the old region is removed. Multi-region ticking, controller discovery, network region ids and persistence are not enabled yet. It does not persist simulation data or modify world blocks automatically.
+This version is a safe test harness, not yet a global replacement for vanilla water. Its in-memory `FluidRegionManager` currently exposes only one selected temporary server-side 3D PIC/FLIP region, sends reconstructed density and collision snapshots to clients, and rebuilds a translucent isosurface every frame. Each region owns independent pause/pacing state and a hard marker budget; replacement is budget-checked before the old region is removed. The first opt-in M2 controller gate is available: dedicated visible boundary blocks can define a closed, fully loaded cross-chunk region, but multi-region ticking, network region ids, sleep/unload checkpoints and persistence are not enabled yet. It does not persist simulation data or modify world blocks automatically.
 
 ## In-game commands
 
@@ -13,6 +13,7 @@ This version is a safe test harness, not yet a global replacement for vanilla wa
 - `/realwater drain [1-16]` removes simulated water along the crosshair ray. The default is one bucket/block.
 - `/realwater refresh` immediately re-samples collision geometry; this also happens automatically every five server ticks.
 - `/realwater entities [true|false]` reports or toggles bounded entity buoyancy and drag.
+- `/realwater controllers [true|false]` reports or toggles the in-memory controller feature gate. It defaults to off; disabling it pauses an existing controller region without deleting its water.
 - `/realwater debug [true|false]` shows or hides the orange collision cells and yellow domain bounds. It is hidden by default.
 - `/realwater step [1-20]` advances a paused domain by a bounded number of steps.
 - `/realwater run` advances at 20 Hz when affordable and automatically lowers the simulation rate under sustained load.
@@ -22,6 +23,12 @@ This version is a safe test harness, not yet a global replacement for vanilla wa
 - `/realwater remove` removes the temporary domain and client debug view.
 
 The blue mesh is a marching-tetrahedra isosurface reconstructed from the current water particles. With `/realwater debug true`, translucent orange faces show collision subcells and yellow edges show the bounded domain. A 40 ms soft budget lowers stepping to 10, 6.7, or 5 Hz instead of stopping; only three consecutive steps above 200 ms auto-pause the domain.
+
+## Opt-in M2 controller region
+
+Controller gameplay is deliberately administrator-enabled and still in-memory. Obtain `realwater:fluid_boundary` and `realwater:fluid_controller` with `/give`, build a complete one-block-thick shell from those visible blocks, replace one shell block with the controller, run `/realwater controllers true`, then empty-hand right-click the controller. The six-neighbour scan accepts exactly one enclosed interior. It refuses an open shell, a controller touching multiple separate chambers, an unloaded associated chunk, a scan over 1,152 interior blocks, or a dense solver bounding box over the current 9,216-cell / 73,728-marker per-region budget.
+
+Activation read-only samples vanilla water inside the shell into exact marker `particleVolume`, starts paused, and does not remove any water block or create a takeover journal. All interior and boundary chunks must already be fully loaded; the Mod does not acquire a chunk ticket. If any required chunk later unloads or an original visible boundary block is removed/replaced, collision sampling, entity coupling, pour/drain and stepping stop before reading or mutating the partial region, and the whole in-memory domain remains paused until the shell and chunks are ready again. This is not yet the future checkpointed `UNLOADED` state.
 
 Collision sampling runs at the same two-cells-per-block resolution as the fluid. Slabs, stairs, fences, and other non-full collision shapes therefore occupy only the subcells they intersect. If a newly placed block overlaps simulated water, the service conservatively moves that water into nearby capacity when possible and reports any volume that could not fit in the bounded domain.
 

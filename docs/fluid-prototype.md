@@ -49,7 +49,7 @@ Run the isolated variable-density selection gate through Gradle:
 
 ## Next integration boundary
 
-The Minecraft adapter creates one bounded `FlipFluidDomain` for a test chamber and samples block collision shapes into its solid mask. Identity, dimension, origin, pause/pacing/collision state and the instance's hard marker budget live in `FluidRegion`, selected through an in-memory `FluidRegionManager`; the compatibility service still admits exactly one region and targets 20 Hz. Every CPU marker creation and checkpoint-restore path observes that budget, while exact water remains the sum of `particleVolume`. This ownership boundary does not yet enable arbitrary oceans, multi-region ticking, persistence or a new network protocol. The client receives the same coarse density snapshots and interpolates them for rendering.
+The Minecraft adapter creates one bounded `FlipFluidDomain` for a test chamber and samples block collision shapes into its solid mask. Identity, dimension, origin, pause/pacing/collision state, optional controller footprint and the instance's hard marker budget live in `FluidRegion`, selected through an in-memory `FluidRegionManager`; the compatibility service still admits exactly one region and targets 20 Hz. The opt-in controller path discovers exactly one interior behind dedicated visible boundary blocks, requires every associated chunk to be already loaded without acquiring tickets, and preflights the dense solver/marker budget before allocation or replacement. Every CPU marker creation and checkpoint-restore path observes that budget, while exact water remains the sum of `particleVolume`. This ownership boundary does not yet enable arbitrary oceans, multi-region ticking, persistence, sleep/`UNLOADED` transitions or a new network protocol. The client receives the same coarse density snapshots and interpolates them for rendering.
 
 Before expanding to chunk-scale persistence, add:
 
@@ -64,6 +64,8 @@ Before expanding to chunk-scale persistence, add:
 ## Current Minecraft harness
 
 The Fabric harness now owns one temporary `24×16×24` cell domain representing a `12×8×12` block region at two cells per block. It starts paused and remains entirely in memory. A soft 40 ms budget adaptively reduces simulation frequency; three consecutive steps above 200 ms trigger the final safety pause.
+
+The first formal M2 controller path can instead allocate a smaller or differently shaped dense bounding box around a dedicated visible shell. Non-interior blocks inside a non-rectangular bounding box are solid collision cells. Controller activation only reads vanilla water and reconstructs marker volume; it never calls takeover. Runtime availability is a scheduling/lifecycle guard: a missing associated chunk, disabled controller flag or broken original shell pauses the entire region before collision sampling, entity forces, water edits or solver steps. It does not reinterpret missing chunks as walls and does not yet serialize an `UNLOADED` checkpoint.
 
 Use `/realwater demo` for a block-independent dam-break field or `/realwater capture` to sample nearby vanilla water and collision shapes. The server sends unsigned-byte reconstructed-density and solid-mask snapshots every four running ticks. The client extracts a continuous blue isosurface; translucent orange is captured collision and yellow edges are the domain boundary when debug overlays are enabled. The mesh contains only current state, so it has no drifting or historical particle trail.
 

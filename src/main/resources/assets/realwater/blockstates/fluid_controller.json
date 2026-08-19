@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "realwater:block/fluid_controller"
+    }
+  }
+}

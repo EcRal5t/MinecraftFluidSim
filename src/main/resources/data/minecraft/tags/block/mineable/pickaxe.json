@@ -1,0 +1,7 @@
+{
+  "replace": false,
+  "values": [
+    "realwater:fluid_boundary",
+    "realwater:fluid_controller"
+  ]
+}

@@ -34,6 +34,10 @@ public final class RealWaterCommands {
 								.executes(context -> audit(context, () -> entityPhysicsStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
 										.executes(context -> audit(context, () -> setEntityPhysics(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+						.then(Commands.literal("controllers")
+								.executes(context -> audit(context, () -> controllerFeatureStatus(context.getSource())))
+								.then(Commands.argument("enabled", BoolArgumentType.bool())
+										.executes(context -> audit(context, () -> setControllerFeature(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
 						.then(Commands.literal("debug")
 								.executes(context -> audit(context, () -> debugStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
@@ -83,7 +87,9 @@ public final class RealWaterCommands {
 	private static int setPaused(CommandSourceStack source, boolean paused) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
 		if (!service.exists()) return fail(source, "请先使用 /realwater demo 或 /realwater capture");
-		service.setPaused(paused);
+		if (!service.setPaused(paused, source.getLevel())) {
+			return fail(source, "流体域当前不能运行；" + service.status(source.getServer()));
+		}
 		return succeed(source, paused ? "流体模拟已暂停" : "流体模拟开始运行", 1);
 	}
 
@@ -95,6 +101,7 @@ public final class RealWaterCommands {
 				? service.pourWater(player, buckets)
 				: service.drainWater(player, buckets);
 		if (!result.domainExists()) return fail(source, "请先创建流体域，并处于相同维度");
+		if (result.failure() != null) return fail(source, "控制器域当前不可修改：" + result.failure());
 		if (result.target() == null) {
 			return fail(source, pour ? "请把准星对准黄色模拟域内的水面、地面或障碍物" : "准星方向没有模拟水体");
 		}
@@ -133,6 +140,18 @@ public final class RealWaterCommands {
 		return succeed(source, "实体水动力已" + (enabled ? "开启" : "关闭"), 1);
 	}
 
+	private static int controllerFeatureStatus(CommandSourceStack source) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		return succeed(source, "控制器功能门：" + (service.controllerFeatureEnabled() ? "开启" : "关闭"),
+				service.controllerFeatureEnabled() ? 1 : 0);
+	}
+
+	private static int setControllerFeature(CommandSourceStack source, boolean enabled) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		service.setControllerFeatureEnabled(enabled);
+		return succeed(source, "控制器功能门已" + (enabled ? "开启" : "关闭；现有控制器域已暂停但未删除"), 1);
+	}
+
 	private static int debugStatus(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
 		int result = service.debugOverlays() ? 1 : 0;
@@ -151,6 +170,7 @@ public final class RealWaterCommands {
 		if (!service.exists()) return fail(source, "请先使用 /realwater demo 或 /realwater capture");
 		int completed = service.step(source.getLevel(), count);
 		if (completed == 0) return fail(source, "活动流体域位于其他维度");
+		if (completed < 0) return fail(source, "控制器域未完整加载或边界已打开；" + service.status(source.getServer()));
 		return succeed(source, "已执行 " + completed + " 个流体步；" + service.status(source.getServer()), completed);
 	}
 

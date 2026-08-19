@@ -85,6 +85,14 @@ tasks.register("runFluidRegionManagerValidation", JavaExec) {
 	doFirst { validationWorkDir.mkdirs() }
 }
 
+tasks.register("runFluidBoundaryScannerValidation", JavaExec) {
+	group = "verification"
+	description = "Runs visible controller-boundary closure and non-loading cross-chunk scan regression."
+	dependsOn tasks.named("testClasses")
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = "com.example.simulation.controller.FluidBoundaryScannerValidation"
+}
+
 java {
 	// Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
 	// if it is present.
