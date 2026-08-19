@@ -24,21 +24,50 @@ final class M3ConnectedVesselExperiment {
 	private static final double GRAVITY = 9.81;
 	private static final int MAX_PCG_ITERATIONS = 256;
 	private static final double PCG_TOLERANCE = 1.0E-12;
+	private static final int MATERIAL_INTERFACE_LOWER_Y = 2;
 
 	private M3ConnectedVesselExperiment() { }
 
 	static Topology uTube() {
-		int sizeX = 9, sizeY = 8, sizeZ = 4;
+		return connectedVessel(6, 6, 1.0, 1.0);
+	}
+
+	static Scenario balancedScenario(String name, double heavyDensity, double lightDensity,
+	                                 double lowerMaterialDistanceFraction,
+	                                 int leftTopY, int rightTopY, double rightSurfaceDistanceFraction) {
+		double interfaceDensity = lowerMaterialDistanceFraction * heavyDensity
+				+ (1.0 - lowerMaterialDistanceFraction) * lightDensity;
+		double rightLightDistance = rightTopY - MATERIAL_INTERFACE_LOWER_Y - 1
+				+ rightSurfaceDistanceFraction;
+		double leftSurfaceDistanceFraction = (rightLightDistance * lightDensity + interfaceDensity) / heavyDensity
+				- (leftTopY - MATERIAL_INTERFACE_LOWER_Y);
+		return new Scenario(name, heavyDensity, lightDensity, lowerMaterialDistanceFraction,
+				leftTopY, rightTopY, leftSurfaceDistanceFraction, rightSurfaceDistanceFraction);
+	}
+
+	static Topology variableDensityTube(Scenario scenario) {
+		return connectedVessel(scenario.leftTopY(), scenario.rightTopY(),
+				scenario.leftSurfaceDistanceFraction(), scenario.rightSurfaceDistanceFraction());
+	}
+
+	private static Topology connectedVessel(int leftTopY, int rightTopY,
+	                                        double leftSurfaceDistanceFraction,
+	                                        double rightSurfaceDistanceFraction) {
+		int sizeX = 9, sizeY = Math.max(leftTopY, rightTopY) + 2, sizeZ = 4;
 		boolean[] fluid = new boolean[sizeX * sizeY * sizeZ];
 		for (int z = 1; z <= 2; z++) {
 			for (int y = 1; y <= 2; y++) {
 				for (int x = 1; x <= 7; x++) fluid[gridIndex(sizeX, sizeZ, x, y, z)] = true;
 			}
-			for (int y = 3; y <= 6; y++) {
-				for (int x : new int[] {1, 2, 6, 7}) fluid[gridIndex(sizeX, sizeZ, x, y, z)] = true;
+			for (int y = 3; y <= leftTopY; y++) for (int x : new int[] {1, 2}) {
+				fluid[gridIndex(sizeX, sizeZ, x, y, z)] = true;
+			}
+			for (int y = 3; y <= rightTopY; y++) for (int x : new int[] {6, 7}) {
+				fluid[gridIndex(sizeX, sizeZ, x, y, z)] = true;
 			}
 		}
-		return new Topology(sizeX, sizeY, sizeZ, fluid);
+		return new Topology(sizeX, sizeY, sizeZ, fluid, leftTopY, rightTopY,
+				leftSurfaceDistanceFraction, rightSurfaceDistanceFraction);
 	}
 
 	static MarkerState singleMaterialState(Topology topology) {
@@ -47,6 +76,25 @@ final class M3ConnectedVesselExperiment {
 
 	static MarkerState equalDensityTwoMaterialState(Topology topology) {
 		return markerState(topology, true);
+	}
+
+	static MarkerState variableDensityState(Topology topology, Scenario scenario) {
+		int count = topology.cellCount();
+		int[] cell = new int[count];
+		float[] volume = new float[count];
+		double[] mass = new double[count];
+		int[] material = new int[count];
+		int[] phase = new int[count];
+		for (int marker = 0; marker < count; marker++) {
+			boolean light = topology.x(marker) >= 6 && topology.y(marker) > MATERIAL_INTERFACE_LOWER_Y;
+			double density = light ? scenario.lightDensity() : scenario.heavyDensity();
+			cell[marker] = marker;
+			volume[marker] = MARKER_VOLUME;
+			mass[marker] = density * MARKER_VOLUME;
+			material[marker] = light ? MATERIAL_B : MATERIAL_A;
+			phase[marker] = light ? PHASE_B : PHASE_A;
+		}
+		return new MarkerState(cell, volume, mass, material, phase);
 	}
 
 	private static MarkerState markerState(Topology topology, boolean splitLabels) {
@@ -78,6 +126,11 @@ final class M3ConnectedVesselExperiment {
 
 	/** M3 candidate path: pressure density is derived only from exact marker mass and volume inventories. */
 	static Result runMarkerMassModel(Topology topology, MarkerState state) {
+		return runMarkerMassModel(topology, state, 0.5);
+	}
+
+	static Result runMarkerMassModel(Topology topology, MarkerState state,
+	                                 double lowerMaterialDistanceFraction) {
 		int cells = topology.cellCount();
 		int[] markerCount = new int[cells];
 		double[] cellVolume = new double[cells];
@@ -97,7 +150,31 @@ final class M3ConnectedVesselExperiment {
 				throw new IllegalArgumentException("Marker inventory produced an invalid density");
 			}
 		}
-		return project(topology, markerCount, density);
+		return project(topology, markerCount, density, lowerMaterialDistanceFraction);
+	}
+
+	static double[] expectedHydrostaticPressure(Topology topology, Scenario scenario) {
+		double[] result = new double[topology.cellCount()];
+		double interfaceDensity = scenario.interfaceEffectiveDensity();
+		for (int cell = 0; cell < result.length; cell++) {
+			int x = topology.x(cell), y = topology.y(cell);
+			double pressureDensityHeight;
+			if (x <= 2) {
+				pressureDensityHeight = scenario.heavyDensity()
+						* (scenario.leftTopY() - y + scenario.leftSurfaceDistanceFraction());
+			} else if (x >= 6 && y > MATERIAL_INTERFACE_LOWER_Y) {
+				pressureDensityHeight = scenario.lightDensity()
+						* (scenario.rightTopY() - y + scenario.rightSurfaceDistanceFraction());
+			} else {
+				pressureDensityHeight = scenario.lightDensity()
+						* (scenario.rightTopY() - MATERIAL_INTERFACE_LOWER_Y - 1
+						+ scenario.rightSurfaceDistanceFraction())
+						+ interfaceDensity
+						+ scenario.heavyDensity() * (MATERIAL_INTERFACE_LOWER_Y - y);
+			}
+			result[cell] = GRAVITY * CELL_SIZE * pressureDensityHeight;
+		}
+		return result;
 	}
 
 	static Ledger ledger(MarkerState state) {
@@ -122,16 +199,26 @@ final class M3ConnectedVesselExperiment {
 	}
 
 	private static Result project(Topology topology, int[] markerCount, double[] density) {
+		return project(topology, markerCount, density, 0.5);
+	}
+
+	private static Result project(Topology topology, int[] markerCount, double[] density,
+	                              double lowerMaterialDistanceFraction) {
 		Face[] faces = topology.faces();
 		double[] inverseDensityByFace = new double[faces.length];
 		for (int faceIndex = 0; faceIndex < faces.length; faceIndex++) {
 			Face face = faces[faceIndex];
 			double lowDensity = density[face.lowCell()];
-			if (face.highCell() >= 0
-					&& Double.doubleToLongBits(lowDensity) != Double.doubleToLongBits(density[face.highCell()])) {
-				throw new IllegalArgumentException("Variable-density faces are outside this M3 increment");
+			if (face.highCell() < 0) {
+				inverseDensityByFace[faceIndex] = 1.0 / (lowDensity * face.surfaceDistanceFraction());
+				continue;
 			}
-			inverseDensityByFace[faceIndex] = 1.0 / lowDensity;
+			double highDensity = density[face.highCell()];
+			double effectiveDensity = Double.doubleToLongBits(lowDensity) == Double.doubleToLongBits(highDensity)
+					? lowDensity
+					: lowerMaterialDistanceFraction * lowDensity
+					+ (1.0 - lowerMaterialDistanceFraction) * highDensity;
+			inverseDensityByFace[faceIndex] = 1.0 / effectiveDensity;
 		}
 
 		int cells = topology.cellCount();
@@ -318,6 +405,30 @@ final class M3ConnectedVesselExperiment {
 	record Inventory(double volume, double mass) { }
 	record Ledger(double totalVolume, double totalMass,
 	              Map<Integer, Inventory> byMaterial, Map<Integer, Inventory> byPhase) { }
+	record Scenario(String name, double heavyDensity, double lightDensity,
+	                double lowerMaterialDistanceFraction, int leftTopY, int rightTopY,
+	                double leftSurfaceDistanceFraction, double rightSurfaceDistanceFraction) {
+		Scenario {
+			if (!(heavyDensity > lightDensity && lightDensity > 0.0)) {
+				throw new IllegalArgumentException("Scenario requires positive heavy and light densities");
+			}
+			if (!(lowerMaterialDistanceFraction > 0.0 && lowerMaterialDistanceFraction < 1.0)) {
+				throw new IllegalArgumentException("Material interface distance must be inside (0,1)");
+			}
+			if (leftTopY < MATERIAL_INTERFACE_LOWER_Y || rightTopY <= MATERIAL_INTERFACE_LOWER_Y) {
+				throw new IllegalArgumentException("Scenario column heights do not contain the material interface");
+			}
+			if (!(leftSurfaceDistanceFraction > 0.0 && leftSurfaceDistanceFraction <= 1.0)
+					|| !(rightSurfaceDistanceFraction > 0.0 && rightSurfaceDistanceFraction <= 1.0)) {
+				throw new IllegalArgumentException("Free-surface distance must be inside (0,1]");
+			}
+		}
+
+		double interfaceEffectiveDensity() {
+			return lowerMaterialDistanceFraction * heavyDensity
+					+ (1.0 - lowerMaterialDistanceFraction) * lightDensity;
+		}
+	}
 
 	record Result(int[] markerCount, double[] cellDensity, double[] inverseDensityByFace,
 	              double[] pressureMatrix, double[] rightHandSide, double[] pressure,
@@ -338,10 +449,21 @@ final class M3ConnectedVesselExperiment {
 		private final int[] cellToGrid;
 		private final Face[] faces;
 
-		private Topology(int sizeX, int sizeY, int sizeZ, boolean[] fluid) {
+		private final int leftTopY;
+		private final int rightTopY;
+		private final double leftSurfaceDistanceFraction;
+		private final double rightSurfaceDistanceFraction;
+
+		private Topology(int sizeX, int sizeY, int sizeZ, boolean[] fluid,
+		                 int leftTopY, int rightTopY,
+		                 double leftSurfaceDistanceFraction, double rightSurfaceDistanceFraction) {
 			this.sizeX = sizeX;
 			this.sizeY = sizeY;
 			this.sizeZ = sizeZ;
+			this.leftTopY = leftTopY;
+			this.rightTopY = rightTopY;
+			this.leftSurfaceDistanceFraction = leftSurfaceDistanceFraction;
+			this.rightSurfaceDistanceFraction = rightSurfaceDistanceFraction;
 			gridToCell = new int[fluid.length];
 			Arrays.fill(gridToCell, -1);
 			int count = 0;
@@ -358,8 +480,10 @@ final class M3ConnectedVesselExperiment {
 					int high = cellAt(x + axis.dx, y + axis.dy, z + axis.dz);
 					if (high >= 0) {
 						builtFaces.add(new Face(cell, high, axis));
-					} else if (axis == Axis.Y && y == 6 && (x <= 2 || x >= 6)) {
-						builtFaces.add(new Face(cell, -1, axis));
+					} else if (axis == Axis.Y && x <= 2 && y == leftTopY) {
+						builtFaces.add(new Face(cell, -1, axis, leftSurfaceDistanceFraction));
+					} else if (axis == Axis.Y && x >= 6 && y == rightTopY) {
+						builtFaces.add(new Face(cell, -1, axis, rightSurfaceDistanceFraction));
 					}
 				}
 			}
@@ -423,7 +547,11 @@ final class M3ConnectedVesselExperiment {
 		}
 	}
 
-	record Face(int lowCell, int highCell, Axis axis) { }
+	record Face(int lowCell, int highCell, Axis axis, double surfaceDistanceFraction) {
+		Face(int lowCell, int highCell, Axis axis) {
+			this(lowCell, highCell, axis, 1.0);
+		}
+	}
 
 	private static final class MutableInventory {
 		private double volume;

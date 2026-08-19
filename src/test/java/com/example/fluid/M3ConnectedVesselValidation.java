@@ -21,12 +21,63 @@ public final class M3ConnectedVesselValidation {
 		validateNumerics(reference);
 		validateStrictDegeneration(reference, singleMaterial, "single-material mass model");
 		validateStrictDegeneration(reference, twoMaterial, "equal-density two-material model");
+		validateVariableDensityScenarios();
 
 		System.out.printf("M3 connected-vessel gate passed: cells=%d markers=%d volume=%.3f BV mass=%.3f MU "
 				+ "PCG=%d residual=%.3g maxVelocity=%.3g%n",
 				topology.cellCount(), labeled.size(), M3ConnectedVesselExperiment.ledger(labeled).totalVolume(),
 				M3ConnectedVesselExperiment.ledger(labeled).totalMass(), reference.pcgIterations(),
 				reference.pcgResidualRms(), reference.maximumVelocity());
+	}
+
+	private static void validateVariableDensityScenarios() {
+		double interfaceFraction = 0.25;
+		M3ConnectedVesselExperiment.Scenario[] scenarios = {
+				M3ConnectedVesselExperiment.balancedScenario(
+						"water-oil-1.25:1", 1_000.0, 800.0, interfaceFraction, 6, 7, 0.5),
+				M3ConnectedVesselExperiment.balancedScenario(
+						"mercury-water-13.6:1", 13_600.0, 1_000.0, interfaceFraction, 2, 7, 0.5)
+		};
+		for (M3ConnectedVesselExperiment.Scenario scenario : scenarios) {
+			M3ConnectedVesselExperiment.Topology topology = M3ConnectedVesselExperiment.variableDensityTube(scenario);
+			M3ConnectedVesselExperiment.MarkerState state = M3ConnectedVesselExperiment.variableDensityState(topology, scenario);
+			M3ConnectedVesselExperiment.Result result = M3ConnectedVesselExperiment.runMarkerMassModel(
+					topology, state, scenario.lowerMaterialDistanceFraction());
+			validateNumerics(result);
+			validateVariableDensityHydrostatics(topology, scenario, result);
+			System.out.printf("  %-25s rhoInterface=%.3f pressureErr=%.3g PCG=%d residual=%.3g maxVelocity=%.3g%n",
+					scenario.name(), scenario.interfaceEffectiveDensity(), pressureRelativeError(
+							result.pressure(), M3ConnectedVesselExperiment.expectedHydrostaticPressure(topology, scenario)),
+					result.pcgIterations(), result.pcgResidualRms(), result.maximumVelocity());
+		}
+	}
+
+	private static void validateVariableDensityHydrostatics(M3ConnectedVesselExperiment.Topology topology,
+	                                                        M3ConnectedVesselExperiment.Scenario scenario,
+	                                                        M3ConnectedVesselExperiment.Result result) {
+		double[] expectedPressure = M3ConnectedVesselExperiment.expectedHydrostaticPressure(topology, scenario);
+		check(pressureRelativeError(result.pressure(), expectedPressure) <= 1.0E-10,
+				scenario.name() + " missed analytic hydrostatic pressure");
+		int variableFaces = 0;
+		for (int faceIndex = 0; faceIndex < topology.faces().length; faceIndex++) {
+			M3ConnectedVesselExperiment.Face face = topology.faces()[faceIndex];
+			if (face.highCell() < 0
+					|| result.cellDensity()[face.lowCell()] == result.cellDensity()[face.highCell()]) continue;
+			variableFaces++;
+			double actual = 1.0 / result.inverseDensityByFace()[faceIndex];
+			check(Math.abs(actual - scenario.interfaceEffectiveDensity()) <= 1.0E-9,
+					scenario.name() + " did not use the distance-weighted conservative interface density");
+		}
+		check(variableFaces == 4, scenario.name() + " must expose one 2x2 horizontal material interface");
+	}
+
+	private static double pressureRelativeError(double[] actual, double[] expected) {
+		double maximumExpected = 0.0, maximumError = 0.0;
+		for (int cell = 0; cell < actual.length; cell++) {
+			maximumExpected = Math.max(maximumExpected, Math.abs(expected[cell]));
+			maximumError = Math.max(maximumError, Math.abs(actual[cell] - expected[cell]));
+		}
+		return maximumError / maximumExpected;
 	}
 
 	private static void validateTopology(M3ConnectedVesselExperiment.Topology topology) {
