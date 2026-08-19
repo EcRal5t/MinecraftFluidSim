@@ -161,7 +161,8 @@ public final class FlipFluidReseedingValidation {
 		check(Math.abs(domain.totalVolume() - exactVolume) < 1.0E-4F, "long-run shear changed exact marker volume");
 		check(budgetSkipped == 0, "ordinary long-run reseeding exhausted its hard marker budget");
 		check(geometrySkipped == 0, "ordinary long-run reseeding could not place a conservative split");
-		check(maximumLedgerError < 2.0E-7, "ordinary long-run reseeding exceeded float-ledger tolerance");
+		check(maximumLedgerError < 2.0E-7,
+				"ordinary long-run reseeding exceeded float-ledger tolerance: " + maximumLedgerError);
 		check(distribution.maximumMarkers <= 12, "overpopulated cell escaped the merge threshold");
 		check(distribution.minimumQualifyingMarkers >= 4,
 				"a cell carrying at least half a cell-volume remained under-sampled");
@@ -229,7 +230,8 @@ public final class FlipFluidReseedingValidation {
 		check(Math.abs(domain.totalVolume() - exactVolume) < 1.0E-4F, "long-run dam-break changed exact marker volume");
 		check(budgetSkipped == 0, "long-run dam-break reseeding exhausted its hard marker budget");
 		check(geometrySkipped == 0, "long-run dam-break could not place a conservative split");
-		check(maximumLedgerError < 2.0E-7, "long-run dam-break exceeded float-ledger tolerance");
+		check(maximumLedgerError < 2.0E-7,
+				"long-run dam-break exceeded float-ledger tolerance: " + maximumLedgerError);
 		check(distribution.maximumMarkers <= 12, "dam-break left an overpopulated marker cell");
 		check(distribution.minimumQualifyingMarkers >= 4,
 				"dam-break left a half-full marker cell under-sampled");

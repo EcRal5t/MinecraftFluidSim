@@ -545,7 +545,10 @@ public final class FluidSimulationService {
 		FluidRegion.CollisionStats stats = FluidRegionWorldInteraction.refreshCollisions(
 				level, region, CELLS_PER_BLOCK
 		);
-		region.setLastCollisionStats(stats);
+		if (stats.changedCells() > 0 || stats.displacedCellVolume() > 0.0F
+				|| stats.escapedCellVolume() > 0.0F || stats.markerBudgetLimited()) {
+			region.setLastCollisionStats(stats);
+		}
 		region.markCollisionRefreshed();
 		if (stats.changedCells() > 0) region.wakeForActivity();
 		return stats;
@@ -674,7 +677,7 @@ public final class FluidSimulationService {
 						+ footprint.boundaryBlocks().size() + ", chunks " + footprint.requiredChunks().size();
 		String availability = region.availabilityFailure() == null ? "ready" : "blocked: " + region.availabilityFailure();
 		return String.format(
-				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | entities %s/%d | maxP %.1f | collision partial/full %d/%d, Δ%d, escaped %.3f%s | %s",
+				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | entities %s/%d | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",
 				region.id().toString().substring(0, 8),
 				usage.regionCount(), regionManager.limits().maximumRegions(),

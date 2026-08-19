@@ -1,5 +1,7 @@
 package com.example.simulation;
 
+import com.example.fluid.FlipFluidDomain;
+import com.example.fluid.FluidSolverConfig;
 import net.minecraft.world.phys.shapes.BooleanOp;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
@@ -14,6 +16,7 @@ public final class FluidCutCellShapeValidation {
 		halfSlabPreservesSolverAlignedFaces();
 		stairCornerProducesFractionalSolverCells();
 		thinPaneRemainsAClosedConservativeBarrier();
+		documentedStairPlacementRestoresExactLedger();
 		System.out.println("Minecraft cut-cell shape validation passed");
 	}
 
@@ -45,11 +48,46 @@ public final class FluidCutCellShapeValidation {
 		}
 	}
 
+	private static void documentedStairPlacementRestoresExactLedger() {
+		FluidSolverConfig config = new FluidSolverConfig(
+				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				160, 5.0E-5F, 0.40F, 2.0E-3F, 0.80F
+		);
+		FlipFluidDomain domain = new FlipFluidDomain(24, 16, 24, config, 73_728);
+		for (int z = 0; z < 24; z++) for (int y = 0; y < 12; y++) for (int x = 0; x < 9; x++) {
+			domain.setVolume(x, y, z, 1.0F);
+		}
+		float initialVolume = domain.totalVolume();
+		VoxelShape stair = Shapes.joinUnoptimized(
+				Shapes.box(0.0, 0.0, 0.0, 1.0, 0.5, 1.0),
+				Shapes.box(0.0, 0.5, 0.5, 1.0, 1.0, 1.0),
+				BooleanOp.OR
+		);
+		float displaced = 0.0F;
+		for (int localZ = 0; localZ < 2; localZ++) for (int localY = 0; localY < 2; localY++) {
+			for (int localX = 0; localX < 2; localX++) {
+				displaced += domain.setSolidMicroMask(
+						4 + localX, 2 + localY, 4 + localZ, sample(stair, localX, localY, localZ)
+				);
+			}
+		}
+		FlipFluidDomain.VolumeAddition restoration = domain.addVolumeNearBudgeted(5, 3, 5, displaced, 8);
+		checkClose(displaced, 6.0F, 0.0F, "documented stair displacement");
+		checkClose(restoration.addedVolume(), displaced, 0.0F, "documented stair restoration");
+		check(!restoration.markerBudgetLimited(), "documented stair restoration exhausted marker budget");
+		checkClose(domain.totalVolume(), initialVolume, 0.0F, "documented stair exact marker ledger");
+	}
+
 	private static int sample(VoxelShape shape, int localX, int localY, int localZ) {
 		return FluidRegionWorldInteraction.sampleCutCellMask(shape, localX, localY, localZ, 2, INSET);
 	}
 
 	private static void check(boolean condition, String message) {
 		if (!condition) throw new AssertionError(message);
+	}
+
+	private static void checkClose(float actual, float expected, float tolerance, String message) {
+		check(Math.abs(actual - expected) <= tolerance,
+				message + ": expected=" + expected + ", actual=" + actual);
 	}
 }

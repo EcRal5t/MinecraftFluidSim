@@ -9,6 +9,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
 		fractionalHydrostaticColumnsBalanceGravity();
 		thinLayerRegularizationRemainsStable();
+		isolatedDropletReceivesUndilutedGravity();
 		waterDescendsAStairSlope();
 		System.out.println("FlipFluid free-surface validation passed");
 	}
@@ -102,6 +103,31 @@ public final class FlipFluidFreeSurfaceValidation {
 				"theta regularization did not keep a sub-center thin layer stable: " + domain.maximumParticleSpeed());
 	}
 
+	private static void isolatedDropletReceivesUndilutedGravity() {
+		float timeStep = 1.0F / 20.0F;
+		FluidSolverConfig config = new FluidSolverConfig(
+				0.5F, 1_000.0F, 9.81F, timeStep,
+				200, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F
+		);
+		FlipFluidDomain domain = new FlipFluidDomain(8, 32, 8, config);
+		domain.setVolume(4, 24, 4, 0.125F);
+		float exactVolume = domain.totalVolume();
+		float initialCenterY = centerOfMassY(domain.exportParticleState());
+		int steps = 8;
+		for (int step = 0; step < steps; step++) domain.step();
+
+		float expectedFall = config.gravity() * timeStep * timeStep * steps * (steps + 1) * 0.5F;
+		float actualFall = initialCenterY - centerOfMassY(domain.exportParticleState());
+		check(Math.abs(actualFall - expectedFall) < 2.0E-5F,
+				"isolated droplet gravity was diluted by undefined air faces: expected fall="
+						+ expectedFall + ", actual=" + actualFall);
+		check(Math.abs(domain.maximumParticleSpeed() - config.gravity() * timeStep * steps) < 2.0E-5F,
+				"isolated droplet velocity did not accumulate gravity without damping: "
+						+ domain.maximumParticleSpeed());
+		check(Math.abs(domain.totalVolume() - exactVolume) < 1.0E-7F,
+				"isolated droplet changed the exact marker ledger");
+	}
+
 	private static void waterDescendsAStairSlope() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
@@ -139,6 +165,16 @@ public final class FlipFluidFreeSurfaceValidation {
 
 	private static int index(int sizeX, int sizeY, int x, int y, int z) {
 		return (z * sizeY + y) * sizeX + x;
+	}
+
+	private static float centerOfMassY(FlipParticleState state) {
+		float[] positionVolume = state.copyPositionVolume();
+		double weightedY = 0.0, volume = 0.0;
+		for (int offset = 0; offset < positionVolume.length; offset += 4) {
+			weightedY += positionVolume[offset + 1] * positionVolume[offset + 3];
+			volume += positionVolume[offset + 3];
+		}
+		return (float) (weightedY / volume);
 	}
 
 	private static void check(boolean condition, String message) {

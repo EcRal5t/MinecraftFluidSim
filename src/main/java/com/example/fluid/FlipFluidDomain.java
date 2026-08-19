@@ -31,6 +31,7 @@ public final class FlipFluidDomain {
 	private final FlipFreeSurfaceGeometry freeSurfaceGeometry;
 	private final FlipParticleReseeder particleReseeder;
 	private final FlipParticleCollision particleCollision;
+	private final FlipVelocityExtrapolator velocityExtrapolator;
 	private final float[] volume;
 	private final float[] pressure;
 	private final float[] divergence;
@@ -44,6 +45,9 @@ public final class FlipFluidDomain {
 	private final float[] velocityWeightX;
 	private final float[] velocityWeightY;
 	private final float[] velocityWeightZ;
+	private final boolean[] velocityValidX;
+	private final boolean[] velocityValidY;
+	private final boolean[] velocityValidZ;
 
 	private final float[] rhs;
 	private final float[] residual;
@@ -91,6 +95,7 @@ public final class FlipFluidDomain {
 		this.freeSurfaceGeometry = new FlipFreeSurfaceGeometry(sizeX, sizeY, sizeZ);
 		this.particleReseeder = new FlipParticleReseeder(sizeX, sizeY, sizeZ, config.cellSize(), maximumParticleCount);
 		this.particleCollision = new FlipParticleCollision(sizeX, sizeY, sizeZ, config.cellSize(), solid, cutCells);
+		this.velocityExtrapolator = new FlipVelocityExtrapolator(sizeX, sizeY, sizeZ, cutCells);
 		this.volume = new float[cellCount];
 		this.pressure = new float[cellCount];
 		this.divergence = new float[cellCount];
@@ -103,6 +108,9 @@ public final class FlipFluidDomain {
 		this.velocityWeightX = new float[velocityX.length];
 		this.velocityWeightY = new float[velocityY.length];
 		this.velocityWeightZ = new float[velocityZ.length];
+		this.velocityValidX = new boolean[velocityX.length];
+		this.velocityValidY = new boolean[velocityY.length];
+		this.velocityValidZ = new boolean[velocityZ.length];
 		this.rhs = new float[cellCount];
 		this.residual = new float[cellCount];
 		this.preconditioned = new float[cellCount];
@@ -406,6 +414,7 @@ public final class FlipFluidDomain {
 			pressureIterations += lastPressureIterations;
 			projectVelocity(dt);
 			enforceSolidFaceVelocities();
+			extrapolateVelocityIntoAir();
 			gridToParticles();
 			advectParticles(dt);
 		}
@@ -451,7 +460,17 @@ public final class FlipFluidDomain {
 		normalize(velocityZ, velocityWeightZ);
 		freeSurfaceGeometry.rebuild(solid, markerCount, cutCells);
 		enforceSolidFaceVelocities();
+		extrapolateVelocityIntoAir();
 		gridDirty = false;
+	}
+
+	private void extrapolateVelocityIntoAir() {
+		velocityExtrapolator.rebuildAndExtrapolate(
+				solid, markerCount,
+				velocityX, velocityY, velocityZ,
+				velocityValidX, velocityValidY, velocityValidZ,
+				velocityWeightX, velocityWeightY, velocityWeightZ
+		);
 	}
 
 	private int particleCellIndex(int particle) {
@@ -914,25 +933,46 @@ public final class FlipFluidDomain {
 	private int cellIndexChecked(int x, int y, int z) { if (!inside(x, y, z)) throw new IndexOutOfBoundsException(); return cellIndex(x, y, z); }
 
 	private float sampleX(float[] field, float x, float y, float z) {
-		float h = config.cellSize(); return trilinear(field, sizeX + 1, sizeY, sizeZ, x / h, y / h - 0.5F, z / h - 0.5F);
+		float h = config.cellSize();
+		return trilinearValid(field, velocityValidX, sizeX + 1, sizeY, sizeZ,
+				x / h, y / h - 0.5F, z / h - 0.5F);
 	}
 	private float sampleY(float[] field, float x, float y, float z) {
-		float h = config.cellSize(); return trilinear(field, sizeX, sizeY + 1, sizeZ, x / h - 0.5F, y / h, z / h - 0.5F);
+		float h = config.cellSize();
+		return trilinearValid(field, velocityValidY, sizeX, sizeY + 1, sizeZ,
+				x / h - 0.5F, y / h, z / h - 0.5F);
 	}
 	private float sampleZ(float[] field, float x, float y, float z) {
-		float h = config.cellSize(); return trilinear(field, sizeX, sizeY, sizeZ + 1, x / h - 0.5F, y / h - 0.5F, z / h);
+		float h = config.cellSize();
+		return trilinearValid(field, velocityValidZ, sizeX, sizeY, sizeZ + 1,
+				x / h - 0.5F, y / h - 0.5F, z / h);
 	}
 
-	private static float trilinear(float[] values, int nx, int ny, int nz, float x, float y, float z) {
+	private static float trilinearValid(
+			float[] values, boolean[] valid, int nx, int ny, int nz, float x, float y, float z
+	) {
 		float cx = clamp(x, 0.0F, nx - 1.0F), cy = clamp(y, 0.0F, ny - 1.0F), cz = clamp(z, 0.0F, nz - 1.0F);
 		int x0 = (int) Math.floor(cx), y0 = (int) Math.floor(cy), z0 = (int) Math.floor(cz);
 		int x1 = Math.min(x0 + 1, nx - 1), y1 = Math.min(y0 + 1, ny - 1), z1 = Math.min(z0 + 1, nz - 1);
 		float fx = cx - x0, fy = cy - y0, fz = cz - z0;
-		float c00 = lerp(values[(z0 * ny + y0) * nx + x0], values[(z0 * ny + y0) * nx + x1], fx);
-		float c10 = lerp(values[(z0 * ny + y1) * nx + x0], values[(z0 * ny + y1) * nx + x1], fx);
-		float c01 = lerp(values[(z1 * ny + y0) * nx + x0], values[(z1 * ny + y0) * nx + x1], fx);
-		float c11 = lerp(values[(z1 * ny + y1) * nx + x0], values[(z1 * ny + y1) * nx + x1], fx);
-		return lerp(lerp(c00, c10, fy), lerp(c01, c11, fy), fz);
+		float weighted = 0.0F, weightSum = 0.0F;
+		for (int offsetZ = 0; offsetZ <= 1; offsetZ++) {
+			int sampleZ = offsetZ == 0 ? z0 : z1;
+			float weightZ = offsetZ == 0 ? 1.0F - fz : fz;
+			for (int offsetY = 0; offsetY <= 1; offsetY++) {
+				int sampleY = offsetY == 0 ? y0 : y1;
+				float weightY = offsetY == 0 ? 1.0F - fy : fy;
+				for (int offsetX = 0; offsetX <= 1; offsetX++) {
+					int sampleX = offsetX == 0 ? x0 : x1;
+					float weight = (offsetX == 0 ? 1.0F - fx : fx) * weightY * weightZ;
+					int index = (sampleZ * ny + sampleY) * nx + sampleX;
+					if (!valid[index] || weight <= 0.0F) continue;
+					weighted += values[index] * weight;
+					weightSum += weight;
+				}
+			}
+		}
+		return weightSum <= 1.0E-8F ? 0.0F : weighted / weightSum;
 	}
 
 	private void validateVolumeEdit(float amount, int maxRadius) {

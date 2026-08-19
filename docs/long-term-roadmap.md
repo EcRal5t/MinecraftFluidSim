@@ -500,7 +500,7 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 - 固定种子回归覆盖薄层、斜面、墙角切向运动和静水自由表面；
 - 客户端 marker mask 继续承担浅水种子，不能因数值改动退回只看密度等值面。
 
-当前状态（2026-08-19，自动实现完成，等待实机 partial-shape 签收）：`FlipFreeSurfaceGeometry` 已从每格 marker `particleVolume` 精确和与分数梯度重建 PLIC 平面；fluid-air 面在压力矩阵、对角预条件器和速度投影中共用 `theta >= 0.05`，`markerCount` 仍独立决定压力相区。`FlipParticleReseeder` 每个完整 step 后确定性 merge/split，保持体积、体积加权动量和质心并服从硬预算。新增 runtime cut-cell 在每个 solver cell 内用 `2x2x2` occupancy（每方块 `4x4x4`）重建 `VoxelShape`，给出 1/8 开放体积与 1/4 共享面开口；散度、压力矩阵、预条件器和投影共用该开口，marker 微体素扫掠只截断法向。方块变化按 marker 中心占据及 `exactCellVolume <= openVolume` 精确挤水。`region-state v1` 无迁移：partial geometry 不持久化，full-solid binary fallback 后必须经现有 `collisionRefreshRequired` 门从完整当前世界重建才能 step。自动门已经覆盖静水、薄层、斜面、两组 5,000 步 marker 分布、cut-cell SPD 路径、normal-only CCD、600 步 partial obstacle、slab/stair/post/pane 采样，以及 persistence/manager/lifecycle/boundary/protocol 回归。定义与结果见 [`m2.5-free-surface-reseeding.md`](m2.5-free-surface-reseeding.md)。M2.5 只剩 [`m2.5-cut-cell-smoke.md`](m2.5-cut-cell-smoke.md) 的真实碰撞与视觉签收；通过后关闭。
+当前状态（2026-08-19，自动实现完成，等待一次固定坐标复核）：`FlipFreeSurfaceGeometry` 已从每格 marker `particleVolume` 精确和与分数梯度重建 PLIC 平面；fluid-air 面在压力矩阵、对角预条件器和速度投影中共用 `theta >= 0.05`，`markerCount` 仍独立决定压力相区。`FlipVelocityExtrapolator` 由压力相开放 MAC 面向空气外推两层，G2P 只归一化有效面；0.125 格孤立水滴的 8 步位移 `0.88290024` 与半隐式欧拉离散值 `0.88290006` 一致，不再被未定义空气面的零值人工减速。`FlipParticleReseeder` 每个完整 step 后确定性 merge/split，保持体积、体积加权动量和质心并服从硬预算。新增 runtime cut-cell 在每个 solver cell 内用 `2x2x2` occupancy（每方块 `4x4x4`）重建 `VoxelShape`，给出 1/8 开放体积与 1/4 共享面开口；散度、压力矩阵、预条件器和投影共用该开口，marker 微体素扫掠只截断法向。方块变化按 marker 中心占据及 `exactCellVolume <= openVolume` 精确挤水。`region-state v1` 无迁移：partial geometry 不持久化，full-solid binary fallback 后必须经现有 `collisionRefreshRequired` 门从完整当前世界重建才能 step。自动门已经覆盖静水、薄层、水滴弹道、斜面、两组 5,000 步 marker 分布、cut-cell SPD 路径、normal-only CCD、600 步 partial obstacle、slab/stair/post/pane 采样和固定 demo stair 的 6 格精确挤水恢复。第一次实机 smoke 已确认形状分类和运行稳定，但 exact 水量从 2,592 降至 2,587；最近非零 collision 诊断现在不会再被后续零变化 refresh 覆盖。定义与结果见 [`m2.5-free-surface-reseeding.md`](m2.5-free-surface-reseeding.md)。M2.5 只剩 [`m2.5-cut-cell-smoke.md`](m2.5-cut-cell-smoke.md) 固定坐标的 exact 水量与小水滴观感复核；通过后关闭。
 
 完成条件：静水自由表面压力、体积守恒和长期 marker 分布达到规定容差；M3 开始前不得留下已知的一阶自由表面压力边界错误。
 
@@ -639,7 +639,7 @@ CPU 单线程参考场景固定随机种子、遍历顺序和输入，能稳定�
 
 ## 十三、接下来三项实际工作
 
-1. 按 [`m2.5-cut-cell-smoke.md`](m2.5-cut-cell-smoke.md) 签收真实 stair/pane 的 partial collision、exact 水量和客户端视觉；若通过，记录结果并正式关闭 M2.5。
+1. 按 [`m2.5-cut-cell-smoke.md`](m2.5-cut-cell-smoke.md) 在固定 `origin+2,+1,+2` 坐标复核 stair 的 exact 水量，并确认小水滴不再明显慢落；若通过，记录结果并正式关闭 M2.5。
 2. 冻结 M3 marker 材料/相标签与质量账本，先建立同密度两材料退化为当前纯水解的 3D 连通器门。
 3. 把已选的 interface-distance-weighted conservative `1/rho` 面系数接入独立 3D variable-density column，覆盖 1.25:1 与 13.6:1 密度比后再考虑活动域协议/存档变化。
 
