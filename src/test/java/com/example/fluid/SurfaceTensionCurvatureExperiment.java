@@ -44,12 +44,12 @@ final class SurfaceTensionCurvatureExperiment {
 	 */
 	static double meanCurvature(double[] colour, int size, int x, int y, int z, double cellSize) {
 		double inverseTwoCell = 0.5 / cellSize;
-		double nxPlus = interfaceNormal(colour, size, x + 1, y, z, cellSize)[0];
-		double nxMinus = interfaceNormal(colour, size, x - 1, y, z, cellSize)[0];
-		double nyPlus = interfaceNormal(colour, size, x, y + 1, z, cellSize)[1];
-		double nyMinus = interfaceNormal(colour, size, x, y - 1, z, cellSize)[1];
-		double nzPlus = interfaceNormal(colour, size, x, y, z + 1, cellSize)[2];
-		double nzMinus = interfaceNormal(colour, size, x, y, z - 1, cellSize)[2];
+		double nxPlus = interfaceNormal(colour, size, Math.min(size - 1, x + 1), y, z, cellSize)[0];
+		double nxMinus = interfaceNormal(colour, size, Math.max(0, x - 1), y, z, cellSize)[0];
+		double nyPlus = interfaceNormal(colour, size, x, Math.min(size - 1, y + 1), z, cellSize)[1];
+		double nyMinus = interfaceNormal(colour, size, x, Math.max(0, y - 1), z, cellSize)[1];
+		double nzPlus = interfaceNormal(colour, size, x, y, Math.min(size - 1, z + 1), cellSize)[2];
+		double nzMinus = interfaceNormal(colour, size, x, y, Math.max(0, z - 1), cellSize)[2];
 		return -((nxPlus - nxMinus) + (nyPlus - nyMinus) + (nzPlus - nzMinus)) * inverseTwoCell;
 	}
 
@@ -87,6 +87,29 @@ final class SurfaceTensionCurvatureExperiment {
 			count++;
 		}
 		return count == 0 ? 0.0 : sum / count;
+	}
+
+	/**
+	 * Continuum surface force {@code sigma * kappa * grad(c)} on the smoothed colour function. Kept as the shared
+	 * input for the later static-droplet projection gate; it is not used by the curvature gate itself.
+	 */
+	static double[][] surfaceTensionForce(double[] colour, int size, double cellSize, double sigma) {
+		double[] smoothed = smooth(colour, size);
+		double[] forceX = new double[smoothed.length];
+		double[] forceY = new double[smoothed.length];
+		double[] forceZ = new double[smoothed.length];
+		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
+			int cell = index(size, x, y, z);
+			double gradientX = centralDifference(smoothed, size, x, y, z, 1, 0, 0) / cellSize;
+			double gradientY = centralDifference(smoothed, size, x, y, z, 0, 1, 0) / cellSize;
+			double gradientZ = centralDifference(smoothed, size, x, y, z, 0, 0, 1) / cellSize;
+			double kappa = meanCurvature(smoothed, size, x, y, z, cellSize);
+			double scale = sigma * kappa;
+			forceX[cell] = scale * gradientX;
+			forceY[cell] = scale * gradientY;
+			forceZ[cell] = scale * gradientZ;
+		}
+		return new double[][] {forceX, forceY, forceZ};
 	}
 
 	private static double fraction(int x, int y, int z, double cellSize, InsidePredicate predicate) {
