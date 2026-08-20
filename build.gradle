@@ -82,6 +82,14 @@ tasks.register("runM3ConnectedVesselValidation", JavaExec) {
 	mainClass = "com.example.fluid.M3ConnectedVesselValidation"
 }
 
+tasks.register("runSurfaceTensionCurvatureValidation", JavaExec) {
+	group = "verification"
+	description = "Runs the standalone M4 surface-tension normal, mean-curvature and Laplace jump gate."
+	dependsOn tasks.named("testClasses")
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = "com.example.fluid.SurfaceTensionCurvatureValidation"
+}
+
 tasks.register("runFluidRegionManagerValidation", JavaExec) {
 	group = "verification"
 	description = "Runs the in-memory fluid-region admission, selection and atomic-replacement regression."
