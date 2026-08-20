@@ -90,6 +90,14 @@ tasks.register("runSurfaceTensionCurvatureValidation", JavaExec) {
 	mainClass = "com.example.fluid.SurfaceTensionCurvatureValidation"
 }
 
+tasks.register("runM4SurfaceTensionValidation", JavaExec) {
+	group = "verification"
+	description = "Runs the M4 active-solver surface-tension Laplace, parasitic-flow and ledger-conservation gate."
+	dependsOn tasks.named("testClasses")
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = "com.example.fluid.M4SurfaceTensionValidation"
+}
+
 tasks.register("runFluidRegionManagerValidation", JavaExec) {
 	group = "verification"
 	description = "Runs the in-memory fluid-region admission, selection and atomic-replacement regression."

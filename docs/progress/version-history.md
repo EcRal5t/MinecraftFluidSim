@@ -31,4 +31,8 @@
 - **0.9.0**：M3 验收候选。marker 材料/相/质量账本、变密度 `1/rho` 面系数、互溶组聚合、不可互溶分层、门控 `region-state v2`、门控 protocol v2 + material capability、客户端 partitioned mesh，以及瞬态 `/realwater materialdemo` 与只影响下次重启的 `/realwater materials`。
 - **0.9.1**：修复实机复看发现的两个渲染缺陷——外表面主导材料在自由面外侧空格被误判为 palette 0，以及液液界面裁剪到等值面导致与自由面共面闪烁；并对噪声级相分数设下限。详见 [`m3-multi-fluid.md`](m3-multi-fluid.md)。
 
+## 0.10.0：M4 表面张力与润湿
+
+- **0.10.0**：液气界面 `p_interface = σ κ` ghost-fluid 压力跳跃进入活动压力 RHS 与投影；近壁曲率法向施加 Young 接触角，不写死吸墙或墙角偏置。`σ=0` 逐位退化回 M3，wire 与 `region-state` 字节仍不携带 M4 字段。自动门覆盖静滴 Laplace 跳跃、无持续寄生流、合并/断开守恒和不同接触角铺展。详见 [`m4-surface-tension.md`](m4-surface-tension.md)。
+
 可选 GPU probe 使用独立版本线，完整 0.1.0–0.1.16 结果见 [`m1-gpu-probe-report.md`](m1-gpu-probe-report.md)。

@@ -39,6 +39,11 @@ public final class FlipFluidDomain {
 	private final double[] exactCellMarkerVolume;
 	private final double[] exactCellMarkerMass;
 	private final double[] cellDensity;
+	private final float[] surfaceTensionPressure;
+	private final double[] surfaceTensionColor;
+	private final double[] surfaceTensionSmoothed;
+	private boolean surfaceTensionActive;
+	private static final int[][] SURFACE_TENSION_DIRECTIONS = {{-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0}, {0,0,-1}, {0,0,1}};
 	private final int[] cellPhaseHead;
 	private int[] phaseEntryLabel;
 	private int[] phaseEntryNext;
@@ -119,6 +124,9 @@ public final class FlipFluidDomain {
 		this.exactCellMarkerVolume = new double[cellCount];
 		this.exactCellMarkerMass = new double[cellCount];
 		this.cellDensity = new double[cellCount];
+		this.surfaceTensionPressure = new float[cellCount];
+		this.surfaceTensionColor = new double[cellCount];
+		this.surfaceTensionSmoothed = new double[cellCount];
 		this.cellPhaseHead = new int[cellCount];
 		this.phaseEntryLabel = new int[initialParticleCapacity];
 		this.phaseEntryNext = new int[initialParticleCapacity];
@@ -317,6 +325,9 @@ public final class FlipFluidDomain {
 	}
 
 	public float pressure(int x, int y, int z) { return pressure[cellIndexChecked(x, y, z)]; }
+
+	/** Package-private test accessor for the free-surface pressure jump {@code sigma * kappa} at a cell. */
+	float surfaceTensionPressureAt(int x, int y, int z) { return surfaceTensionPressure[cellIndexChecked(x, y, z)]; }
 
 	public float totalVolume() {
 		double result = 0.0;
@@ -638,6 +649,7 @@ public final class FlipFluidDomain {
 		Arrays.fill(velocityWeightY, 0.0F);
 		Arrays.fill(velocityWeightZ, 0.0F);
 		variableDensityActive = usesMassWeightedP2G();
+		surfaceTensionActive = hasAnySurfaceTension();
 		for (int i = 0; i < particleCount; i++) {
 			int particleCell = particleCellIndex(i);
 			markerCount[particleCell]++;
@@ -661,6 +673,7 @@ public final class FlipFluidDomain {
 		normalize(velocityY, velocityWeightY);
 		normalize(velocityZ, velocityWeightZ);
 		freeSurfaceGeometry.rebuild(solid, markerCount, cutCells);
+		rebuildSurfaceTensionPressure();
 		enforceSolidFaceVelocities();
 		extrapolateVelocityIntoAir();
 		gridDirty = false;
@@ -788,7 +801,8 @@ public final class FlipFluidDomain {
 					+ cutCells.zFaceOpen(x, y, z + 1) * velocityZ[zFaceIndex(x, y, z + 1)]
 					- cutCells.zFaceOpen(x, y, z) * velocityZ[zFaceIndex(x, y, z)]) * inverseCell;
 			// Solve toward the drift target: div(u_projected) = targetDivergence.
-			float correctedDivergence = div - volumeDriftDivergence(index, dt);
+			float correctedDivergence = div + surfaceTensionBoundaryDivergence(index, dt)
+					- volumeDriftDivergence(index, dt);
 			divergence[index] = correctedDivergence;
 			rhs[index] = rhsScale * correctedDivergence;
 			fluidCells++;
@@ -826,6 +840,217 @@ public final class FlipFluidDomain {
 				volume[index], freeSurfaceGeometry.exactCellVolume(index), openVolume,
 				hasAirNeighbor(x, y, z), dt
 		);
+	}
+
+	private boolean hasAnySurfaceTension() {
+		if (materialRegistry == null) return false;
+		for (FluidMaterial material : materialRegistry.materials()) {
+			if (material.surfaceTension() > 0.0) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Liquid-gas surface tension for a pressure cell. Immiscible phases use the first registry material
+	 * of the dominant phase; miscible composition-dependent tension is not modelled yet.
+	 */
+	private double surfaceTensionAtCell(int cell) {
+		if (materialRegistry == null) return 0.0;
+		int phase = dominantPhase(cell);
+		if (phase == NO_PHASE) return 0.0;
+		for (int handle = 0; handle < materialRegistry.size(); handle++) {
+			if (materialRegistry.phaseHandle(handle) == phase) {
+				return materialRegistry.material(handle).surfaceTension();
+			}
+		}
+		return 0.0;
+	}
+
+	/** Rebuilds the cell-centred surface-tension pressure {@code sigma * kappa} used as the free-surface jump. */
+	private void rebuildSurfaceTensionPressure() {
+		Arrays.fill(surfaceTensionPressure, 0.0F);
+		if (!surfaceTensionActive) return;
+		for (int index = 0; index < cellCount; index++) {
+			if (solid[index]) {
+				surfaceTensionColor[index] = 0.0;
+				continue;
+			}
+			double openVolume = cutCells.openCellVolume(index);
+			surfaceTensionColor[index] = openVolume > 0.0
+					? clamp((float) (exactCellMarkerVolume[index] / openVolume), 0.0F, 1.0F)
+					: 0.0;
+		}
+		smoothSurfaceTensionColor();
+		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int index = cellIndex(x, y, z);
+			if (solid[index] || markerCount[index] == 0) continue;
+			double sigma = surfaceTensionAtCell(index);
+			if (sigma <= 0.0) continue;
+			double kappa = surfaceTensionMeanCurvature(x, y, z);
+			surfaceTensionPressure[index] = (float) (sigma * kappa);
+		}
+	}
+
+	private void smoothSurfaceTensionColor() {
+		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int index = cellIndex(x, y, z);
+			double sum = 0.0;
+			int count = 0;
+			for (int dz = -1; dz <= 1; dz++) for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+				int sx = x + dx, sy = y + dy, sz = z + dz;
+				if (!inside(sx, sy, sz)) continue;
+				int neighbor = cellIndex(sx, sy, sz);
+				if (solid[neighbor]) continue;
+				sum += surfaceTensionColor[neighbor];
+				count++;
+			}
+			surfaceTensionSmoothed[index] = count == 0 ? surfaceTensionColor[index] : sum / count;
+		}
+	}
+
+	private double surfaceTensionCentralDifference(int x, int y, int z, int dx, int dy, int dz) {
+		int xPlus = Math.min(sizeX - 1, Math.max(0, x + dx));
+		int xMinus = Math.min(sizeX - 1, Math.max(0, x - dx));
+		int yPlus = Math.min(sizeY - 1, Math.max(0, y + dy));
+		int yMinus = Math.min(sizeY - 1, Math.max(0, y - dy));
+		int zPlus = Math.min(sizeZ - 1, Math.max(0, z + dz));
+		int zMinus = Math.min(sizeZ - 1, Math.max(0, z - dz));
+		return 0.5 * (surfaceTensionSmoothed[cellIndex(xPlus, yPlus, zPlus)]
+				- surfaceTensionSmoothed[cellIndex(xMinus, yMinus, zMinus)]);
+	}
+
+	/** Unit interface normal at a cell centre, pointing from gas into liquid. */
+	private double surfaceTensionNormalComponent(int x, int y, int z, int component) {
+		double gradientX = surfaceTensionCentralDifference(x, y, z, 1, 0, 0);
+		double gradientY = surfaceTensionCentralDifference(x, y, z, 0, 1, 0);
+		double gradientZ = surfaceTensionCentralDifference(x, y, z, 0, 0, 1);
+		double length = Math.sqrt(gradientX * gradientX + gradientY * gradientY + gradientZ * gradientZ);
+		double epsilon = 1.0E-6 / config.cellSize();
+		if (length <= epsilon) return component == 2 ? 1.0 : 0.0;
+		double normalX = gradientX / length;
+		double normalY = gradientY / length;
+		double normalZ = gradientZ / length;
+		double[] solidNormal = surfaceTensionSolidNormal(x, y, z);
+		if (solidNormal == null) {
+			return switch (component) {
+				case 0 -> normalX;
+				case 1 -> normalY;
+				default -> normalZ;
+			};
+		}
+		double contactAngle = surfaceTensionContactAngleAtCell(cellIndex(x, y, z));
+		double cosTheta = Math.cos(contactAngle);
+		double sinTheta = Math.sin(contactAngle);
+		double nsx = solidNormal[0], nsy = solidNormal[1], nsz = solidNormal[2];
+		double dot = normalX * nsx + normalY * nsy + normalZ * nsz;
+		double tangentX = normalX - dot * nsx;
+		double tangentY = normalY - dot * nsy;
+		double tangentZ = normalZ - dot * nsz;
+		double tangentLength = Math.sqrt(tangentX * tangentX + tangentY * tangentY + tangentZ * tangentZ);
+		if (tangentLength <= 1.0E-9) {
+			tangentX = Math.abs(nsx) < 0.9 ? 1.0 : 0.0;
+			tangentY = Math.abs(nsx) < 0.9 ? 0.0 : 1.0;
+			tangentZ = 0.0;
+			dot = tangentX * nsx + tangentY * nsy + tangentZ * nsz;
+			tangentX -= dot * nsx;
+			tangentY -= dot * nsy;
+			tangentZ -= dot * nsz;
+			tangentLength = Math.sqrt(tangentX * tangentX + tangentY * tangentY + tangentZ * tangentZ);
+		}
+		double adjustedX = -cosTheta * nsx + sinTheta * tangentX / tangentLength;
+		double adjustedY = -cosTheta * nsy + sinTheta * tangentY / tangentLength;
+		double adjustedZ = -cosTheta * nsz + sinTheta * tangentZ / tangentLength;
+		return switch (component) {
+			case 0 -> adjustedX;
+			case 1 -> adjustedY;
+			default -> adjustedZ;
+		};
+	}
+
+	private double[] surfaceTensionSolidNormal(int x, int y, int z) {
+		double normalX = 0.0, normalY = 0.0, normalZ = 0.0;
+		int count = 0;
+		for (int[] direction : SURFACE_TENSION_DIRECTIONS) {
+			int dx = direction[0], dy = direction[1], dz = direction[2];
+			int sx = x + dx, sy = y + dy, sz = z + dz;
+			if (!inside(sx, sy, sz) || !solid[cellIndex(sx, sy, sz)]) continue;
+			normalX -= dx;
+			normalY -= dy;
+			normalZ -= dz;
+			count++;
+		}
+		if (count == 0) return null;
+		double length = Math.sqrt(normalX * normalX + normalY * normalY + normalZ * normalZ);
+		if (length <= 1.0E-9) return null;
+		return new double[] {normalX / length, normalY / length, normalZ / length};
+	}
+
+	private double surfaceTensionContactAngleAtCell(int cell) {
+		if (materialRegistry == null) return Math.PI / 2.0;
+		int phase = dominantPhase(cell);
+		if (phase == NO_PHASE) return Math.PI / 2.0;
+		for (int handle = 0; handle < materialRegistry.size(); handle++) {
+			if (materialRegistry.phaseHandle(handle) == phase) {
+				return materialRegistry.material(handle).contactAngleRadians();
+			}
+		}
+		return Math.PI / 2.0;
+	}
+
+	/** Mean curvature {@code kappa = -div(n)}; positive for a liquid sphere surrounded by gas. */
+	private double surfaceTensionMeanCurvature(int x, int y, int z) {
+		double inverseTwoCell = 0.5 / config.cellSize();
+		double nxPlus = surfaceTensionNeighborNormal(x, y, z, 1, 0, 0, 0);
+		double nxMinus = surfaceTensionNeighborNormal(x, y, z, -1, 0, 0, 0);
+		double nyPlus = surfaceTensionNeighborNormal(x, y, z, 0, 1, 0, 1);
+		double nyMinus = surfaceTensionNeighborNormal(x, y, z, 0, -1, 0, 1);
+		double nzPlus = surfaceTensionNeighborNormal(x, y, z, 0, 0, 1, 2);
+		double nzMinus = surfaceTensionNeighborNormal(x, y, z, 0, 0, -1, 2);
+		return -((nxPlus - nxMinus) + (nyPlus - nyMinus) + (nzPlus - nzMinus)) * inverseTwoCell;
+	}
+
+	/** Neighbor normal used in the divergence; a solid neighbour reuses the cell's own Young-adjusted normal. */
+	private double surfaceTensionNeighborNormal(int x, int y, int z, int dx, int dy, int dz, int component) {
+		int nx = x + dx, ny = y + dy, nz = z + dz;
+		if (inside(nx, ny, nz) && solid[cellIndex(nx, ny, nz)]) {
+			return surfaceTensionNormalComponent(x, y, z, component);
+		}
+		return surfaceTensionNormalComponent(Math.min(sizeX - 1, Math.max(0, nx)),
+				Math.min(sizeY - 1, Math.max(0, ny)),
+				Math.min(sizeZ - 1, Math.max(0, nz)), component);
+	}
+
+	/**
+	 * Divergence of the free-surface pressure-jump boundary velocity. This is the RHS source that makes
+	 * the ghost-fluid projection consistent with {@code p_interface = sigma * kappa} at every open air face.
+	 */
+	private float surfaceTensionBoundaryDivergence(int index, float dt) {
+		if (!surfaceTensionActive) return 0.0F;
+		int x = index % sizeX;
+		int yz = index / sizeX;
+		int y = yz % sizeY;
+		int z = yz / sizeY;
+		float inverseCell = 1.0F / config.cellSize();
+		float scale = dt / (config.density() * config.cellSize());
+		float result = 0.0F;
+		if (x > 0) result += surfaceTensionBoundaryFace(index, cellIndex(x - 1, y, z), -1, 0, 0, scale, inverseCell);
+		if (x + 1 < sizeX) result += surfaceTensionBoundaryFace(index, cellIndex(x + 1, y, z), 1, 0, 0, scale, inverseCell);
+		if (y > 0) result += surfaceTensionBoundaryFace(index, cellIndex(x, y - 1, z), 0, -1, 0, scale, inverseCell);
+		if (y + 1 < sizeY) result += surfaceTensionBoundaryFace(index, cellIndex(x, y + 1, z), 0, 1, 0, scale, inverseCell);
+		if (z > 0) result += surfaceTensionBoundaryFace(index, cellIndex(x, y, z - 1), 0, 0, -1, scale, inverseCell);
+		if (z + 1 < sizeZ) result += surfaceTensionBoundaryFace(index, cellIndex(x, y, z + 1), 0, 0, 1, scale, inverseCell);
+		return result;
+	}
+
+	private float surfaceTensionBoundaryFace(int fluid, int neighbor, int directionX, int directionY, int directionZ,
+	                                         float scale, float inverseCell) {
+		if (!isAir(neighbor)) return 0.0F;
+		float openArea = openFaceFromCell(fluid, directionX, directionY, directionZ);
+		if (openArea <= 0.0F) return 0.0F;
+		float theta = freeSurfaceGeometry.pressureTheta(fluid, directionX, directionY, directionZ);
+		if (theta <= 0.0F) return 0.0F;
+		float densityScale = variableDensityActive ? pressureDensityScale(fluid, neighbor) : 1.0F;
+		return -openArea * scale * densityScale * surfaceTensionPressure[fluid] / theta * inverseCell;
 	}
 
 	private void applyPressureMatrix(float[] source, float[] destination) {
@@ -1017,10 +1242,10 @@ public final class FlipFluidDomain {
 		if (firstFluid && secondFluid) return pressure[second] - pressure[first];
 		if (firstFluid) {
 			float theta = freeSurfaceGeometry.pressureTheta(first, directionX, directionY, directionZ);
-			return -pressure[first] / theta;
+			return (surfaceTensionPressure[first] - pressure[first]) / theta;
 		}
 		float theta = freeSurfaceGeometry.pressureTheta(second, -directionX, -directionY, -directionZ);
-		return pressure[second] / theta;
+		return (pressure[second] - surfaceTensionPressure[second]) / theta;
 	}
 
 	private void gridToParticles() {

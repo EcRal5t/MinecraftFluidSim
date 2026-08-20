@@ -1,8 +1,8 @@
 # Real Water 产品路线
 
-本文是尚未完成里程碑的总表。当前基线已经完成 M0、M1、M2、M2.5 和 M3；完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md)、[`../architecture/region-state-v1.md`](../architecture/region-state-v1.md) 与 [`../architecture/m3-material-state-migration.md`](../architecture/m3-material-state-migration.md)。
+本文是尚未完成里程碑的总表。当前基线已经完成 M0、M1、M2、M2.5、M3 和 M4 液气首版；完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md)、[`../architecture/region-state-v1.md`](../architecture/region-state-v1.md) 与 [`../architecture/m3-material-state-migration.md`](../architecture/m3-material-state-migration.md)。
 
-基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、主 Mod 0.9.1、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
+基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、主 Mod 0.10.0、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
 
 ## 技术规格路由
 
@@ -67,16 +67,14 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
 - 正式世界入口（桶、原版方块替换、takeover）仍只创建纯水；完整桶矩阵属 M6.1。
 - reseeding 不跨 material/phase 合并；不得用跨材料合并或渲染补丁掩盖亚格滞留。
 
-## M4：表面张力与润湿
+## M4：表面张力与润湿（已完成液气首版）
 
-- 数据驱动液气/液液表面张力和固体接触角。
-- 使用界面曲率与 balanced-force 压力跳跃/体积力，不写死吸墙或浅水聚集。
-- 覆盖静滴压力跳跃、无持续伪流、合并/断开守恒、不同接触角铺展。
-- M3 遗留的界面锐度问题在此解决：当前液液界面在亚格尺度真实混相，且为逐 tetrahedron 分片平面重建，视觉呈锯齿。
-  实测粗糙度与阈值敏感性见 [`../progress/m3-multi-fluid.md`](../progress/m3-multi-fluid.md)；曲率驱动的物理锐化属本阶段，
-  逐顶点法线平滑属渲染改进，两者都不得用渲染补丁替代物理。
-
-完成条件：不得以墙角偏置、受支撑强制找平或渲染收缩替代表面张力。
+- 液气界面 `σ κ` 压力跳跃与 Young 接触角已进入活动核心；`σ=0` 逐位退化回 M3。证据见 [`../progress/m4-surface-tension.md`](../progress/m4-surface-tension.md)。
+- 仍约束后续阶段：
+  - 液液界面尚未使用材料对 `σ12`；后续需在材料数据边界中定义不破坏 v2 round-trip 的冻结方式。
+  - M3 遗留的液液界面亚格混相/锯齿仍保留：曲率驱动的物理锐化与逐顶点法线平滑尚未实现，且不得用渲染补丁替代物理。
+  - 不得以墙角偏置、受支撑强制找平或渲染收缩替代表面张力。
+- 完成条件：液液 `σ12` 与界面锐化归入 M4.1，与 M5 气体网络并行评估。
 
 ## M5：空气区域网络与气液压力
 
@@ -147,6 +145,6 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
 
 ## 接下来三项
 
-1. 进入 M4：先冻结数据驱动的液气/液液表面张力与接触角数据边界，不改 protocol 或存档。
-2. 建立静滴 Laplace 压力跳跃与"无持续伪流"的最小独立 CPU 门，作为 balanced-force 实现的前置。
-3. 再评估界面锐化对现有液液界面重建与客户端 mesh 的影响，必要时才安排一次实机视觉场景。
+1. M4.1：冻结液液 `σ12` 材料对边界，并在活动核心接入液液压力跳跃；不改变现有 wire/存档，直到格式迁移评审通过。
+2. M4.1：评估液液界面曲率锐化对现有 partitioned mesh 与客户端重建的影响；必要时安排一次实机视觉场景。
+3. 进入 M5：先冻结密闭气体网络识别、有限气体库存与气液压力边界，再安排对应 CPU 门。
