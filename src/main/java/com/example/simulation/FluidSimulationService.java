@@ -150,6 +150,24 @@ public final class FluidSimulationService {
 		return materialFeatureEnabled;
 	}
 
+	public boolean configuredMaterialFeatureEnabled() {
+		return serverConfig.materialsEnabled();
+	}
+
+	/** Persists the next-startup material gate; live sessions keep their negotiated protocol until restart. */
+	public String setMaterialFeatureForRestart(boolean enabled) {
+		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
+		FluidServerConfig replacement = serverConfig.withMaterialsEnabled(enabled);
+		try {
+			replacement.save(worldRoot);
+		} catch (IOException exception) {
+			RealWaterMod.LOGGER.error("Could not persist Real Water material feature flag", exception);
+			return exception.getMessage();
+		}
+		serverConfig = replacement;
+		return null;
+	}
+
 	public ControllerActivation activateController(ServerPlayer player, BlockPos controllerPosition) {
 		if (!controllerFeatureEnabled) return ControllerActivation.DISABLED;
 		ServerLevel level = player.level();
@@ -218,6 +236,18 @@ public final class FluidSimulationService {
 	}
 
 	public boolean createDemo(ServerPlayer player) {
+		return createDemo(player, false);
+	}
+
+	public boolean createMaterialDemo(ServerPlayer player) {
+		if (!materialFeatureEnabled) {
+			lastTakeoverFailure = "材料功能门未在本次启动启用；先保存配置并重启";
+			return false;
+		}
+		return createDemo(player, true);
+	}
+
+	private boolean createDemo(ServerPlayer player, boolean layeredMaterials) {
 		Vec3 look = player.getLookAngle();
 		BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
 		ServerLevel level = player.level();
@@ -247,6 +277,7 @@ public final class FluidSimulationService {
 			}
 		}
 		if (materialFeatureEnabled) bindDefaultMaterialState(domain);
+		if (layeredMaterials) assignLayeredDemoMaterials(domain, fillY / 2.0F * domain.config().cellSize());
 		activeRegion().setPaused(true);
 		sendSnapshot(level);
 		return true;
@@ -812,6 +843,25 @@ public final class FluidSimulationService {
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), totalVolume, totalMass,
 				BuiltinFluidMaterials.M3_PALETTE, positionVolume, pure.copyParticleVelocities(), pure.copySolidMask(), markerMass, material
+		));
+	}
+
+	private static void assignLayeredDemoMaterials(FlipFluidDomain domain, float interfaceY) {
+		FlipMaterialParticleState state = domain.exportMaterialParticleState();
+		float[] positionVolume = state.copyPositionVolume();
+		double[] markerMass = state.copyParticleMass();
+		int[] materials = state.copyMaterialPaletteIndex();
+		double totalMass = 0.0;
+		for (int marker = 0; marker < state.particleCount(); marker++) {
+			int material = positionVolume[marker * 4 + 1] >= interfaceY ? 1 : 0;
+			materials[marker] = material;
+			markerMass[marker] = positionVolume[marker * 4 + 3]
+					* BuiltinFluidMaterials.M3_PALETTE.get(material).referenceDensity();
+			totalMass += markerMass[marker];
+		}
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
+				state.sizeX(), state.sizeY(), state.sizeZ(), state.cellSize(), state.particleCount(), state.totalVolume(), totalMass,
+				state.materials(), positionVolume, state.copyParticleVelocities(), state.copySolidMask(), markerMass, materials
 		));
 	}
 

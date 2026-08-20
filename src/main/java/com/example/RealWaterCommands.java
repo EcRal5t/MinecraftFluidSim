@@ -20,6 +20,7 @@ public final class RealWaterCommands {
 		CommandRegistrationCallback.EVENT.register((dispatcher, buildContext, selection) -> dispatcher.register(
 				Commands.literal("realwater")
 						.then(Commands.literal("demo").executes(context -> audit(context, () -> createDemo(context.getSource()))))
+						.then(Commands.literal("materialdemo").executes(context -> audit(context, () -> createMaterialDemo(context.getSource()))))
 						.then(Commands.literal("capture").executes(context -> audit(context, () -> capture(context.getSource(), false))))
 						.then(Commands.literal("takeover").executes(context -> audit(context, () -> capture(context.getSource(), true))))
 						.then(Commands.literal("pour")
@@ -39,6 +40,10 @@ public final class RealWaterCommands {
 								.executes(context -> audit(context, () -> controllerFeatureStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
 										.executes(context -> audit(context, () -> setControllerFeature(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+						.then(Commands.literal("materials")
+								.executes(context -> audit(context, () -> materialFeatureStatus(context.getSource())))
+								.then(Commands.argument("enabled", BoolArgumentType.bool())
+										.executes(context -> audit(context, () -> setMaterialFeature(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
 						.then(Commands.literal("regions")
 								.then(Commands.literal("list").executes(context -> audit(context, () -> listRegions(context.getSource()))))
 								.then(Commands.literal("select")
@@ -72,6 +77,15 @@ public final class RealWaterCommands {
 			return fail(source, "无法替换活动域：" + service.lastTakeoverFailure());
 		}
 		return succeed(source, "已创建暂停的 24×16×24 溃坝测试域；使用 /realwater step 或 /realwater run", 1);
+	}
+
+	private static int createMaterialDemo(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		if (!service.createMaterialDemo(player)) {
+			return fail(source, "无法创建多材料测试域：" + service.lastTakeoverFailure());
+		}
+		return succeed(source, "已创建暂停的上油下水溃坝测试域（瞬态，不写 region-state）；使用 /realwater step 或 /realwater run", 1);
 	}
 
 	private static int capture(CommandSourceStack source, boolean takeover) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -158,6 +172,22 @@ public final class RealWaterCommands {
 		String failure = service.setControllerFeatureEnabled(enabled);
 		if (failure != null) return fail(source, "控制器功能门未改变；配置原子发布失败：" + failure);
 		return succeed(source, "控制器功能门已" + (enabled ? "开启" : "关闭；现有控制器域已暂停但未删除"), 1);
+	}
+
+	private static int materialFeatureStatus(CommandSourceStack source) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		boolean live = service.materialFeatureEnabled();
+		boolean configured = service.configuredMaterialFeatureEnabled();
+		String message = "材料功能门：本次启动" + (live ? "开启" : "关闭") + "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
+		return succeed(source, live == configured ? message : message + "；重启服务器后才会切换协议", live ? 1 : 0);
+	}
+
+	private static int setMaterialFeature(CommandSourceStack source, boolean enabled) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		String failure = service.setMaterialFeatureForRestart(enabled);
+		if (failure != null) return fail(source, "材料功能门未改变；配置原子发布失败：" + failure);
+		return succeed(source, "材料功能门配置已" + (enabled ? "开启" : "关闭")
+				+ "；本次启动仍为" + (service.materialFeatureEnabled() ? "开启" : "关闭") + "，重启服务器后生效", 1);
 	}
 
 	private static int listRegions(CommandSourceStack source) {
