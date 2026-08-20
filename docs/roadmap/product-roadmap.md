@@ -69,7 +69,7 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
 
 ## M4：表面张力与润湿（已完成）
 
-- 液气界面 `σ κ` 压力跳跃与 Young 接触角已进入活动核心；`σ=0` 逐位退化回 M3。证据见 [`../progress/m4-surface-tension.md`](../progress/m4-surface-tension.md)。
+- 液气界面 `σ κ` 压力跳跃与 Young 接触角已进入活动核心；`σ=0` 逐位退化回 M3。实机视觉 smoke 已确认不同 Young 角的球冠形状差异。证据见 [`../progress/m4-surface-tension.md`](../progress/m4-surface-tension.md)。
 - M4.1 液液 `σ12` 已进入活动核心：`FluidMaterialRegistry` 持有运行时-only phase 无序对张力，活动核心以相体积分数场 balanced-force CSF 接入压力投影；同密度满域液滴通过 Laplace 跳跃与无持续寄生流门。
 - 仍约束后续阶段：
   - M3 遗留的液液界面亚格混相/锯齿仍保留：曲率驱动的物理锐化与逐顶点法线平滑尚未实现，且不得用渲染补丁替代物理。
