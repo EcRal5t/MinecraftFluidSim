@@ -1,33 +1,43 @@
 # M3 material snapshot and persistence migration
 
-本文冻结 M3 多材料跨层状态的兼容边界，不表示协议或 `region-state v2` 已经实现。活动 CPU 真值仍见
-[`fluid-solver.md`](fluid-solver.md)，已发布的纯水事务语义仍以 [`region-state-v1.md`](region-state-v1.md) 为准。
+本文冻结 M3 多材料跨层状态的兼容边界。协议 v2、`region-state v2` 与客户端界面渲染都已实现，并统一由
+`materialsEnabled` 配置门控制；门关闭时全部路径严格退化为纯水 v1。活动 CPU 真值见
+[`fluid-solver.md`](fluid-solver.md)，纯水事务语义仍以 [`region-state-v1.md`](region-state-v1.md) 为准。
+
+## 功能门
+
+`materialsEnabled` 保存在世界配置里，配置格式自身有版本：v1 配置继续可读并强制 `materialsEnabled=false`，保存时写 v2。
+
+- 门只在服务器启动时读取一次。`/realwater materials <bool>` 只原子保存“下次重启生效”的配置，绝不在现有连接中途切换协议。
+- 门关闭：live offer 严格 v1，region-state 只写 v1，活动核心只走纯水路径。
+- 门开启：live offer 只提供 protocol 2 且要求 material capability，控制器区域使用 `region-state v2`，客户端重建 partitioned mesh。
+- 门开启但磁盘上是 v1 的控制器区域，在非活动槽原子迁移为单材料水 v2 后才恢复 solver；门关闭却发现 v2 时保留并锁住该区域，不静默丢弃。
 
 ## 不可混用的状态
 
 - marker `particleVolume` 与显式 `particleMass` 分别是体积、质量真值；稳定 material ID 决定逐材料账本归属。
 - 运行时 material/phase handle、格内相分数、dominant label、平滑 density 与 mesh 都是可重建状态，不进入物理账本。
 - M3 phase 由稳定 miscibility-group key 重建；当前进程内整数 handle 不写入网络或存档。
-- 正式世界入口在 v2 reader/writer、故障门和 feature gate 完成前仍只创建纯水。
+- 正式世界入口（桶、原版方块替换、takeover）仍只创建纯水；多材料入口只有瞬态 `/realwater materialdemo`。
 
 ## 网络迁移
 
-现有 `fluid_snapshot_v1` packet ID 与 codec 保持逐字节不变。独立 `fluid_snapshot_v2` codec/type 与 material
-capability 已通过 standalone 门，但 live server offer/receiver 仍固定 v1，等待 controller feature gate；不能在 v1
-的可选 extension 中藏入客户端必须理解的材料字段。
+现有 `fluid_snapshot_v1` packet ID 与 codec 保持逐字节不变。`fluid_snapshot_v2` 是独立 codec/type，携带材料
+palette 与量化展示字段；两种 payload 都注册，但发送由协商会话隔离，不做降级伪装。
 
 - v1 只表示 pure-water palette。协商到 v1 的客户端可以继续观察纯水区域。
 - v2 palette 使用稳定 material ID 和展示属性；per-cell phase/material 重建字段是量化展示数据，不携带精确质量。
-- 服务端若存在启用的多材料玩法，缺少 v2/capability 的连接必须在配置阶段得到可读拒绝，不能把多材料区域降级成蓝色水。
+- 门开启时缺少 v2/capability 的连接在配置阶段得到可读拒绝，不能把多材料区域降级成蓝色水。
 - v1/v2 均保持 region UUID、generation、sequence 与 tombstone 排序；未知 palette 或必需段拒绝整份快照。
-- 客户端只读消费 palette/相字段，绝不回传或结算物理库存。
+- 客户端只读消费 palette/相字段，绝不回传或结算物理库存；v1 与 v2 各自持有独立 ledger、状态 map 和清理路径。
 
 ## `region-state v2` 迁移
 
 HEAD 的 envelope、双不可变槽和“最后原子发布 HEAD”保持不变。格式版本属于 manifest/section generation；
-reader 按 manifest version 分派，不能根据缺失字段猜版本。
+reader 按 manifest version 分派，不能根据缺失字段猜版本。v1 的 canonical bytes 与 CRC 路径未被触碰：
+完整性编码已把 Version/Palette 固化进 CRC，v2 因此是显式分支而不是 v1 的扩展。
 
-v2 manifest 在 v1 元数据之外必须包含：
+v2 manifest 在 v1 元数据之外包含：
 
 - 有序的稳定 material palette：material ID、miscibility-group key、参考密度 raw bits；
 - 精确总质量 raw bits，以及按 palette 顺序的 marker count、体积和质量账本；
@@ -38,7 +48,11 @@ v2 section 在 v1 marker 位置/体积、速度和 solid slice 之外必须包�
 所有必需字段都进入 section/manifest checksum，不使用可跳过 extension 承载物理真值。
 
 上述字段已先在不可变 `FlipMaterialParticleState` 内存 handoff 中冻结并通过导出/恢复账本门；它不是 codec，
-`region-state v2` 仍必须独立执行长度、checksum、generation、palette 与预算校验。
+`region-state v2` 仍独立执行长度、checksum、generation、palette 与预算校验。
+
+账本校验的数值边界：总账与逐材料账本都按原始 marker ordinal 精确求和后逐位比对。禁止要求“逐材料子账再相加”
+逐位等于总账——浮点加法不满足结合律，重排求和顺序会得到不同 raw bits。因此 section 与 manifest 各自按 ordinal
+重算，而不是互相二次求和；校验也不只依赖 checksum：重算 CRC 后篡改单 marker 质量仍会被精确账本本身拒绝。
 
 ## 发布、失败与兼容
 
@@ -51,9 +65,13 @@ v2 section 在 v1 marker 位置/体积、速度和 solid slice 之外必须包�
 
 只有 controller-managed 区域可进入 v2。`demo`、`capture` 与 `takeover` 继续瞬态，避免与原版水恢复重复。
 
-## 实施顺序与门
+## 已通过的跨层门
 
-1. 先实现不涉及网络/存档的只读多材料内存快照，并证明外表面与内部界面字段最小充分。
-2. 独立 network v2 codec/ordering/capability 门已完成并保留 v1 round-trip；尚未注册 live play 路径。
-3. 下一步新增 region-state v2 records/codec 与 v1→v2 双槽故障矩阵；在此之前不允许正式多材料 checkpoint。
-4. 最后接入 controller feature gate 和客户端 mesh；自动几何门通过后只安排一个明确的实机视觉场景。
+1. 只读多材料内存快照证明外表面与内部界面字段最小充分（`runM3ConnectedVesselValidation`）。
+2. network v2 codec/ordering/capability 与门控 live 协商，且保留 v1 round-trip（`runFluidNetworkProtocolValidation`）。
+3. `region-state v2` records/codec、v1→v2 双槽跨格式故障矩阵、重算 CRC 后的质量篡改拒绝，以及 feature-on
+   控制器的 v1→v2 恢复与新 v2 checkpoint 生命周期（`runFluidRegionPersistenceValidation`）。
+4. 客户端 partitioned mesh 与瞬态 `/realwater materialdemo` 入口；渲染外观由一次实机视觉场景确认，结果记入
+   [`../progress/README.md`](../progress/README.md) 指向的里程碑记录。
+
+后续阶段修改这些边界时，仍只跑 [`../maintenance/routing.md`](../maintenance/routing.md) 指定的对应一项门。

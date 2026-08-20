@@ -11,8 +11,10 @@ This document defines the implemented first persistent Real Water region format.
 - v1 records exact marker position/volume floats, marker velocity, the solid mask, the full CPU solver configuration,
   visible controller footprint, region/runtime identity and reserved budgets.
 - This is the first format on the `26.2` branch. No earlier region-state format is accepted or overwritten. Unknown,
-  corrupt or incomplete data is retained and reported as locked. If a later v2 is needed, it must keep an explicit v1
-  reader and publish a new generation before replacing v1's HEAD.
+  corrupt or incomplete data is retained and reported as locked.
+- The M3 material format `region-state v2` now exists behind the `materialsEnabled` gate. It keeps this v1 reader and
+  v1's canonical bytes/CRC path untouched, dispatches on manifest version, and publishes a new full generation in the
+  inactive slot before HEAD points at it. See [`m3-material-state-migration.md`](m3-material-state-migration.md).
 - Experimental files created by another branch are not compatible and are never auto-migrated or deleted.
 
 ## Layout and atomic commit

@@ -23,10 +23,10 @@
 | 区域身份、solver ownership、运行态 | `src/main/java/com/example/simulation/FluidRegion.java` | UNLOADED 不持 solver 但仍占预算；恢复先刷新碰撞 |
 | 调度生命周期 | `src/main/java/com/example/simulation/FluidRegionLifecycle.java` | 调度状态不得移动、创建、删除或缩放 marker |
 | 区域登记、选择、空间与预算 | `src/main/java/com/example/simulation/FluidRegionManager.java` | 拒绝不替换旧域；报告 required/per-region/remaining |
-| 世界配置 | `src/main/java/com/example/simulation/FluidServerConfig.java` | v1 配置 fail-closed；预算重启后生效 |
-| controller 持久化协调 | `src/main/java/com/example/simulation/FluidRegionPersistence.java` | manifest admission、checkpoint、quarantine 与 takeover journal 分离 |
-| `region-state v1` | `src/main/java/com/example/simulation/persistence/`、`docs/architecture/region-state-v1.md` | 两槽完整代次、CRC、账本和 HEAD 最后发布 |
-| M3 跨层迁移边界 | `docs/architecture/m3-material-state-migration.md` | v1 保留；network v2 与 region-state v2 独立；运行时 handle 不上链 |
+| 世界配置 | `src/main/java/com/example/simulation/FluidServerConfig.java` | v1/v2 配置 fail-closed；v1 强制 materials 关闭；预算与材料门重启后生效 |
+| controller 持久化协调 | `src/main/java/com/example/simulation/FluidRegionPersistence.java` | manifest admission、checkpoint、quarantine 与 takeover journal 分离；按材料门分派 v1/v2 |
+| `region-state v1`/门控 v2 | `src/main/java/com/example/simulation/persistence/`、`docs/architecture/region-state-v1.md` | 两槽完整代次、CRC、账本和 HEAD 最后发布；v1 canonical bytes 不变 |
+| M3 跨层迁移边界 | `docs/architecture/m3-material-state-migration.md` | 单一 `materialsEnabled` 门；network v2 与 region-state v2 独立版本；运行时 handle 不上链 |
 | 控制器与边界块 | `src/main/java/com/example/block/RealWaterBlocks.java`、`src/main/java/com/example/block/FluidControllerBlock.java` | feature flag 默认关闭；只读激活；资源同步 |
 | 闭合边界扫描 | `src/main/java/com/example/simulation/controller/` | 非加载读取；缺 chunk/破口/多内腔/超预算拒绝或整域暂停 |
 | 活动 PIC/FLIP 编排 | `src/main/java/com/example/fluid/FlipFluidDomain.java` | 唯一活动核心；旧 `FluidDomain` 不接回 Minecraft |
@@ -38,13 +38,13 @@
 | 守恒 reseeding | `src/main/java/com/example/fluid/FlipParticleReseeder.java` | merge/split 保持体积、质量、动量、质心和硬预算；不跨 material/phase |
 | marker 内存交接 | `src/main/java/com/example/fluid/FlipParticleState.java`、`src/main/java/com/example/fluid/FlipMaterialParticleState.java` | 纯水与多材料类型分离；都不是协议或存档格式 |
 | solver 参数 | `src/main/java/com/example/fluid/FluidSolverConfig.java` | CFL、压力容差、FLIP 比例或时间步只属数值离散；改动选择对应 solver 门 |
-| M3 材料与 CPU 门 | `src/main/java/com/example/fluid/FluidMaterial.java`、`src/main/java/com/example/fluid/FluidMaterialRegistry.java`、`src/main/java/com/example/fluid/FluidMaterialRenderSnapshot.java`、`src/main/java/com/example/fluid/FluidMaterialSurfaceMesher.java`、`src/test/java/com/example/fluid/M3ConnectedVesselExperiment.java`、`src/test/java/com/example/fluid/M3MaterialTransferValidation.java`、`src/test/java/com/example/fluid/M3MaterialDynamicsValidation.java`、`src/test/java/com/example/fluid/M3MaterialSurfaceValidation.java` | snapshot/mesh 是只读重建且尚非 wire；正式 handoff/世界仍只支持纯水 |
+| M3 材料与 CPU 门 | `src/main/java/com/example/fluid/FluidMaterial.java`、`src/main/java/com/example/fluid/FluidMaterialRegistry.java`、`src/main/java/com/example/fluid/BuiltinFluidMaterials.java`、`src/main/java/com/example/fluid/FluidMaterialRenderSnapshot.java`、`src/main/java/com/example/fluid/FluidMaterialSurfaceMesher.java`、`src/test/java/com/example/fluid/M3ConnectedVesselExperiment.java`、`src/test/java/com/example/fluid/M3MaterialTransferValidation.java`、`src/test/java/com/example/fluid/M3MaterialDynamicsValidation.java`、`src/test/java/com/example/fluid/M3MaterialSurfaceValidation.java` | snapshot/mesh 只读重建，量化字段不结算库存；正式世界入口（桶、方块、takeover）仍只创建纯水 |
 | takeover 事务 | `src/main/java/com/example/simulation/TakeoverTransaction.java`、`src/main/java/com/example/simulation/TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
 | takeover codec/files | `src/main/java/com/example/simulation/TakeoverJournalCodec.java`、`src/main/java/com/example/simulation/TakeoverJournalFiles.java` | v1 可读；未知/损坏/恢复失败锁住新 takeover |
 | 指令 transcript | `src/main/java/com/example/logging/RealWaterCommandLog.java`、`src/main/java/com/example/logging/CommandAuditFile.java` | 只做 UTF-8 观测；失败不得改变命令结果 |
-| protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 仍为 v1；v2 material capability 尚未接 play |
+| protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 由材料门决定严格 v1 或严格 v2 + material capability；不做降级伪装 |
 | 多区域快照 | `src/main/java/com/example/network/FluidSnapshotPayload.java`、`src/main/java/com/example/network/FluidSnapshotLedger.java`、`src/main/java/com/example/network/FluidMaterialSnapshotPayload.java`、`src/main/java/com/example/network/FluidMaterialSnapshotLedger.java` | v1/v2 type 独立；dimension/id/generation/sequence/palette/tombstone 一致 |
-| 客户端水面 | `src/client/java/com/example/client/ClientFluidVolumeRenderer.java` | 每域独立插值，按当前维度合并；不得反写物理 |
+| 客户端水面 | `src/client/java/com/example/client/ClientFluidVolumeRenderer.java` | 每域独立插值，按当前维度合并；v1 与 v2 状态/ledger/清理互相独立；不得反写物理 |
 | 客户端握手与绑定 | `src/client/java/com/example/client/RealWaterModClient.java` | configuration/play 注册、断线与重配置清理成套 |
 
 详细的 M2.5 数值定义只在 [`../progress/m2.5-fluid-foundation.md`](../progress/m2.5-fluid-foundation.md) 保存。
@@ -58,6 +58,8 @@
 - partial 方块/穿墙：`FlipCutCellGeometry`、`FlipParticleCollision`、world interaction mask。
 - 水量正常但水面消失：snapshot marker mask、renderer scalar/iso threshold。
 - 调度异常：服务 `tickRegion`/`stepOnce`、`FluidRegionLifecycle`、wall time/substeps/residual。
+- 液液界面不可见或与外表面重合：`FluidMaterialSurfaceMesher` 的 phase 裁剪、快照量化分数、客户端 `MaterialFrame` 重建。
+- 多材料区域被锁住或只显示纯水：`materialsEnabled` 本次启动值、config 版本、manifest formatVersion、协商 capability。
 
 ## 可选 GPU probe
 
@@ -81,8 +83,9 @@
 | 改动 | 默认一项 | 升级条件 |
 |---|---|---|
 | 文档 | 无 | 无代码/资源变化就不构建 |
-| M3 marker 材料/相/质量或 3D 连通器实验 | `runM3ConnectedVesselValidation` | 接入活动核心才加对应 solver 门 |
-| 1D 变密度面系数实验 | `runVariableDensityFaceCoefficientValidation` | 将该系数接入 3D 连通器时改跑 M3 连通器门 |
+| M3 marker 材料/相/质量、变密度压力或材料界面 mesh | `runM3ConnectedVesselValidation` | 该门已含活动核心连通器与翻转分层；只有同时改 wire/存档才加对应门 |
+| 1D 变密度面系数实验 | `runVariableDensityFaceCoefficientValidation` | 已接入 3D 连通器，改该系数改跑 M3 连通器门 |
+| 材料门配置或 live 协商 | `runFluidNetworkProtocolValidation` | 改 payload 注册/entrypoint 才跑 EULA=false server |
 | manager | `runFluidRegionManagerValidation` | 同时跨 lifecycle/persistence 才加对应门 |
 | lifecycle/tick | `runFluidRegionLifecycleValidation` | 同时改 ownership 才加 persistence |
 | region-state/checkpoint | `runFluidRegionPersistenceValidation` | 真实重启仅里程碑 smoke |
