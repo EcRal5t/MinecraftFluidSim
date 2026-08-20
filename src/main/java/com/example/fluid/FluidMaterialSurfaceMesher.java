@@ -11,6 +11,11 @@ public final class FluidMaterialSurfaceMesher {
 	private static final double ISO_LEVEL = 0.5;
 	private static final double MARKER_INTERIOR_LEVEL = 0.65;
 	private static final int SURFACE_THRESHOLD = 8;
+	/** Keeps liquid/liquid geometry strictly inside the free surface so the two categories never render coplanar. */
+	private static final double INTERFACE_INSET = 0.06;
+	/** Prunes noise-level smoothed phase tails that would otherwise emit partition planes far from real material. */
+	private static final double MIN_PHASE_PRESENCE = 0.05;
+	private static final int MAX_MATERIAL_SAMPLE_RADIUS = 2;
 	private static final double EPSILON = 1.0E-9;
 	private static final int[][] CUBE_TETRAHEDRA = {
 			{0, 5, 1, 6}, {0, 1, 2, 6}, {0, 2, 3, 6},
@@ -68,6 +73,69 @@ public final class FluidMaterialSurfaceMesher {
 		return new Mesh(outer, interfaces, duplicateOuter, duplicateInterfaces, overlaps);
 	}
 
+	/**
+	 * Display-only dominant material at a surface point. Only marker-bearing cells vote, so a sample that lands in the
+	 * empty cell outside the free surface cannot silently default to palette entry 0. Returns -1 when no material is
+	 * resolvable, which callers must skip rather than paint with an arbitrary colour.
+	 */
+	public static int dominantMaterialAt(FluidMaterialRenderSnapshot snapshot, Point point) {
+		if (snapshot == null || point == null) throw new IllegalArgumentException("Material sample needs a snapshot and point");
+		double[] weightByMaterial = new double[snapshot.materials().size()];
+		for (int radius = 1; radius <= MAX_MATERIAL_SAMPLE_RADIUS; radius++) {
+			Arrays.fill(weightByMaterial, 0.0);
+			double support = radius * snapshot.cellSize();
+			int baseX = (int) Math.floor(point.x / snapshot.cellSize());
+			int baseY = (int) Math.floor(point.y / snapshot.cellSize());
+			int baseZ = (int) Math.floor(point.z / snapshot.cellSize());
+			for (int dz = -radius; dz <= radius; dz++) for (int dy = -radius; dy <= radius; dy++) {
+				for (int dx = -radius; dx <= radius; dx++) {
+					int x = baseX + dx, y = baseY + dy, z = baseZ + dz;
+					if (!inside(snapshot, x, y, z) || solid(snapshot, x, y, z)) continue;
+					int cell = index(snapshot, x, y, z);
+					if (snapshot.markerField()[cell] == 0) continue;
+					double weight = supportWeight(point.x, x, snapshot.cellSize(), support)
+							* supportWeight(point.y, y, snapshot.cellSize(), support)
+							* supportWeight(point.z, z, snapshot.cellSize(), support);
+					if (weight <= 0.0) continue;
+					for (int material = 0; material < weightByMaterial.length; material++) {
+						weightByMaterial[material] += weight * snapshot.materialFraction(material, cell);
+					}
+				}
+			}
+			int best = -1;
+			double bestWeight = 0.0;
+			for (int material = 0; material < weightByMaterial.length; material++) {
+				if (weightByMaterial[material] > bestWeight) { best = material; bestWeight = weightByMaterial[material]; }
+			}
+			if (best >= 0) return best;
+		}
+		return -1;
+	}
+
+	/** Trilinear total-liquid level at an arbitrary point, using the same cell-centre nodes the surface is built from. */
+	public static double liquidLevelAt(FluidMaterialRenderSnapshot snapshot, Point point) {
+		if (snapshot == null || point == null) throw new IllegalArgumentException("Liquid sample needs a snapshot and point");
+		double nodeX = point.x / snapshot.cellSize() - 0.5;
+		double nodeY = point.y / snapshot.cellSize() - 0.5;
+		double nodeZ = point.z / snapshot.cellSize() - 0.5;
+		int baseX = (int) Math.floor(nodeX), baseY = (int) Math.floor(nodeY), baseZ = (int) Math.floor(nodeZ);
+		double fractionX = nodeX - baseX, fractionY = nodeY - baseY, fractionZ = nodeZ - baseZ;
+		double result = 0.0;
+		for (int dz = 0; dz <= 1; dz++) for (int dy = 0; dy <= 1; dy++) for (int dx = 0; dx <= 1; dx++) {
+			double weight = (dx == 0 ? 1.0 - fractionX : fractionX)
+					* (dy == 0 ? 1.0 - fractionY : fractionY)
+					* (dz == 0 ? 1.0 - fractionZ : fractionZ);
+			if (weight <= 0.0) continue;
+			result += weight * liquidScalar(snapshot, baseX + dx, baseY + dy, baseZ + dz);
+		}
+		return result;
+	}
+
+	private static double supportWeight(double coordinate, int cell, double cellSize, double support) {
+		double center = (cell + 0.5) * cellSize;
+		return Math.max(0.0, 1.0 - Math.abs(coordinate - center) / support);
+	}
+
 	private static void setCube(
 			FluidMaterialRenderSnapshot snapshot, double[] liquid, int nodeSizeX, int nodeSizeY,
 			int x, int y, int z, Point[] points, double[] values, double[][] phases
@@ -121,7 +189,7 @@ public final class FluidMaterialSurfaceMesher {
 	) {
 		boolean[] present = new boolean[phases.length];
 		for (int phase = 0; phase < phases.length; phase++) for (int vertex : tetrahedron) {
-			if (phases[phase][vertex] > 0.0 && liquid[vertex] >= ISO_LEVEL) present[phase] = true;
+			if (phases[phase][vertex] >= MIN_PHASE_PRESENCE && liquid[vertex] >= ISO_LEVEL) present[phase] = true;
 		}
 		List<InterfaceTriangle> result = new ArrayList<>();
 		for (int first = 0; first < phases.length; first++) if (present[first]) {
@@ -162,7 +230,7 @@ public final class FluidMaterialSurfaceMesher {
 		}
 		if (polygon.size() < 3) return List.of();
 		sortPolygon(polygon);
-		polygon = clip(polygon, vertex -> vertex.liquid - ISO_LEVEL);
+		polygon = clip(polygon, vertex -> vertex.liquid - (ISO_LEVEL + INTERFACE_INSET));
 		for (int phase = 0; phase < phases.length && polygon.size() >= 3; phase++) {
 			if (phase == first || phase == second) continue;
 			int competitor = phase;

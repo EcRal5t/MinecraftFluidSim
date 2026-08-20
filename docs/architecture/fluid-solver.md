@@ -12,6 +12,7 @@
 - **渲染重建**：客户端使用 density + marker + solid 重建；marker mask 是浅水可见的必要内部种子，渲染不得反写物理。
 - **M3 材料重建**：`FluidMaterialRenderSnapshot` 从 marker 只读派生总体积、逐材料/phase 量化分数与各自 marker 种子；每格分数确定性回和到 255。这些量化字段是 `fluid_snapshot_v2` 的展示数据，不携带精确库存，客户端也不得回写。
 - **M3 界面几何**：`FluidMaterialSurfaceMesher` 只从上述快照生成总液相外表面和 partitioned tetrahedra 液液面。phase pair 只拥有一份共享面；相组成由 marker 格外推、再由总液相裁剪，不能用平滑 density 决定材料归属。服务端和客户端共用同一 mesher，客户端只在接受新 v2 快照时重建，不参与每帧物理。
+- **M3 着色与不重合**：外表面颜色只由**含 marker 的格**投票，采样点按支持半径加权；落在自由面外侧空格的样本不得回退成 palette 0，无法解析时跳过该三角形而不是涂错色。液液面按固定 inset 裁剪到自由面**严格内侧**，因此两类几何不共面；并对噪声级相分数设下限，避免远离真实材料的伪界面。这两条都是渲染重建阈值，不触碰物理账本。
 - **调度策略**：ACTIVE/REDUCED/休眠/UNLOADED 只控制何时持有或步进状态，不得改变 marker 账本。
 - **碰撞**：墙面只约束法向，切向保持自由；禁止恢复吸墙、墙角偏置或受支撑强制找平。
 

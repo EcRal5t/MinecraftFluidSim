@@ -1,6 +1,7 @@
 package com.example.client;
 
 import com.example.RealWaterMod;
+import com.example.fluid.FluidMaterialRenderSnapshot;
 import com.example.fluid.FluidMaterialSurfaceMesher;
 import com.example.network.FluidMaterialSnapshotLedger;
 import com.example.network.FluidMaterialSnapshotPayload;
@@ -105,9 +106,12 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 		switch (decision) {
 			case CLEAR_ALL -> latestMaterials.clear();
 			case REMOVE_REGION -> latestMaterials.remove(payload.regionId());
-			case ACCEPT_SNAPSHOT -> latestMaterials.put(payload.regionId(), new MaterialFrame(
-					payload, FluidMaterialSurfaceMesher.build(payload.toRenderSnapshot())
-			));
+			case ACCEPT_SNAPSHOT -> {
+				FluidMaterialRenderSnapshot snapshot = payload.toRenderSnapshot();
+				latestMaterials.put(payload.regionId(), new MaterialFrame(
+						payload, snapshot, FluidMaterialSurfaceMesher.build(snapshot)
+				));
+			}
 			case REJECT_PROTOCOL -> RealWaterMod.LOGGER.error(
 					"Discarded Real Water material snapshot protocol {} after negotiation", payload.protocolVersion());
 			case REJECT_PALETTE -> RealWaterMod.LOGGER.error(
@@ -218,9 +222,9 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 		poses.pushPose();
 		poses.translate(-camera.x, -camera.y, -camera.z);
 		Matrix4fc matrix = poses.last().pose();
-		byte[][] materialFractions = state.materialFractions();
 		for (FluidMaterialSurfaceMesher.Triangle triangle : frame.mesh().outerTriangles()) {
-			int material = dominantMaterial(state, materialFractions, triangle.centroid());
+			int material = FluidMaterialSurfaceMesher.dominantMaterialAt(frame.snapshot(), triangle.centroid());
+			if (material < 0) continue;
 			emitMaterialTriangle(matrix, vertices, state, triangle, state.materials().get(material).argb(), 0.62F);
 		}
 		for (FluidMaterialSurfaceMesher.InterfaceTriangle owned : frame.mesh().interfaceTriangles()) {
@@ -229,21 +233,6 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 			emitMaterialTriangle(matrix, vertices, state, owned.triangle(), blendArgb(first, second), 0.48F);
 		}
 		poses.popPose();
-	}
-
-	private static int dominantMaterial(
-			FluidMaterialSnapshotPayload state, byte[][] fractions, FluidMaterialSurfaceMesher.Point point
-	) {
-		int x = Math.max(0, Math.min(state.sizeX() - 1, (int) Math.floor(point.x() / state.cellSize())));
-		int y = Math.max(0, Math.min(state.sizeY() - 1, (int) Math.floor(point.y() / state.cellSize())));
-		int z = Math.max(0, Math.min(state.sizeZ() - 1, (int) Math.floor(point.z() / state.cellSize())));
-		int cell = x + state.sizeX() * (y + state.sizeY() * z);
-		int best = 0, bestFraction = -1;
-		for (int material = 0; material < fractions.length; material++) {
-			int fraction = Byte.toUnsignedInt(fractions[material][cell]);
-			if (fraction > bestFraction) { best = material; bestFraction = fraction; }
-		}
-		return best;
 	}
 
 	private static int phaseArgb(FluidMaterialSnapshotPayload state, int phase) {
@@ -568,5 +557,9 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	}
 
 	private record SnapshotTransition(FluidSnapshotPayload from, FluidSnapshotPayload to, long startedAtNanos) { }
-	private record MaterialFrame(FluidMaterialSnapshotPayload payload, FluidMaterialSurfaceMesher.Mesh mesh) { }
+	private record MaterialFrame(
+			FluidMaterialSnapshotPayload payload,
+			FluidMaterialRenderSnapshot snapshot,
+			FluidMaterialSurfaceMesher.Mesh mesh
+	) { }
 }
