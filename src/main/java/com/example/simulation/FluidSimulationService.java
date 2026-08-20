@@ -9,6 +9,7 @@ import com.example.fluid.FlipParticleState;
 import com.example.fluid.FluidMaterial;
 import com.example.fluid.FluidMaterialRegistry;
 import com.example.fluid.FluidMaterialRenderSnapshot;
+import com.example.fluid.FluidSolverConfig;
 import com.example.network.FluidMaterialSnapshotPayload;
 import com.example.network.FluidSnapshotPayload;
 import com.example.network.FluidProtocolServer;
@@ -265,26 +266,19 @@ public final class FluidSimulationService {
 			return false;
 		}
 		BlockPos newOrigin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
-		try {
-			createEmpty(level, newOrigin);
-		} catch (IllegalStateException exception) {
-			lastTakeoverFailure = exception.getMessage();
-			return false;
-		}
-		refreshCollisions(level);
-		FlipFluidDomain domain = domain();
-		for (int z = 0; z < domain.sizeZ(); z++) for (int x = 0; x < domain.sizeX(); x++) {
-			domain.setSolid(x, 0, z, true);
-		}
-		int centerX = domain.sizeX() / 2, centerZ = domain.sizeZ() / 2;
-		for (int z = centerZ - 2; z <= centerZ + 2; z++) {
-			for (int y = 1; y <= 5; y++) {
-				for (int x = centerX - 2; x <= centerX + 2; x++) {
-					if (!domain.isSolid(x, y, z)) domain.setVolume(x, y, z, 1.0F);
-				}
-			}
-		}
-		bindTensionDemoMaterial(domain, angleDegrees);
+try {
+createTensionEmpty(level, newOrigin);
+} catch (IllegalStateException exception) {
+lastTakeoverFailure = exception.getMessage();
+return false;
+}
+refreshCollisions(level);
+FlipFluidDomain domain = domain();
+for (int z = 0; z < domain.sizeZ(); z++) for (int x = 0; x < domain.sizeX(); x++) {
+domain.setSolid(x, 0, z, true);
+}
+restoreTensionCap(domain, angleDegrees);
+bindTensionDemoMaterial(domain, angleDegrees);
 		activeRegion().setPaused(true);
 		sendSnapshot(level);
 		return true;
@@ -311,6 +305,91 @@ public final class FluidSimulationService {
 				pure.totalVolume(), totalMass, registry.materials(), positionVolume, velocities,
 				pure.copySolidMask(), markerMass, material
 		));
+	}
+
+	private void createTensionEmpty(ServerLevel level, BlockPos origin) {
+		FluidRegion replaced = activeRegion();
+		if (replaced != null && replaced.controllerManaged()) {
+			throw new IllegalStateException("Refusing to replace a persistent controller region; remove it explicitly first");
+		}
+		FluidRegionManager.AdmissionResult preview = regionManager.previewReplacement(
+				COMPATIBILITY_REGION_CELLS, COMPATIBILITY_REGION_MARKERS);
+		if (!preview.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + preview.failure());
+		FluidSolverConfig config = new FluidSolverConfig(
+				0.5F, 1_000.0F, 9.81F, 1.0F / 40.0F,
+				300, 1.0E-5F, 0.35F, 2.0E-3F, 0.80F
+		);
+		FlipFluidDomain domain = new FlipFluidDomain(
+				BLOCK_SIZE_X * CELLS_PER_BLOCK, BLOCK_SIZE_Y * CELLS_PER_BLOCK, BLOCK_SIZE_Z * CELLS_PER_BLOCK,
+				config, Math.toIntExact(COMPATIBILITY_REGION_MARKERS)
+		);
+		FluidRegion candidate = new FluidRegion(
+				UUID.randomUUID(), level.dimension(), origin, domain, COMPATIBILITY_REGION_MARKERS
+		);
+		candidate.setEntityPhysicsEnabled(defaultEntityPhysicsEnabled);
+		candidate.setDebugOverlays(defaultDebugOverlays);
+		FluidRegionManager.AdmissionResult admission = regionManager.replaceSelected(candidate);
+		if (!admission.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + admission.failure());
+		if (replaced != null) sendRegionRemoval(level.getServer(), replaced);
+	}
+
+	private static void restoreTensionCap(FlipFluidDomain domain, int angleDegrees) {
+		int sx = domain.sizeX(), sy = domain.sizeY(), sz = domain.sizeZ();
+		float cellSize = domain.config().cellSize();
+		double wallY = 0.5 * cellSize;
+		double targetCellVolume = 220.0;
+		double theta = Math.toRadians(angleDegrees);
+		double cos = Math.cos(theta), sin = Math.sin(theta);
+		double radiusCells = Math.cbrt(3.0 * targetCellVolume / (Math.PI * (1.0 - cos) * (1.0 - cos) * (2.0 + cos)));
+		double radius = radiusCells * cellSize;
+		double centerX = 0.5 * (sx - 1) * cellSize;
+		double centerY = wallY - radius * cos;
+		double centerZ = 0.5 * (sz - 1) * cellSize;
+		int particleCount = 0;
+		for (int z = 0; z < sz; z++) for (int y = 1; y < sy; y++) for (int x = 0; x < sx; x++) {
+			if (sphericalCapFraction(x, y, z, cellSize, centerX, centerY, centerZ, radius, wallY) > 1.0E-6) {
+				particleCount += 8;
+			}
+		}
+		float[] positionVolume = new float[particleCount * 4];
+		float[] velocities = new float[particleCount * 3];
+		float totalVolume = 0.0F;
+		int particle = 0;
+		for (int z = 0; z < sz; z++) for (int y = 1; y < sy; y++) for (int x = 0; x < sx; x++) {
+			double fraction = sphericalCapFraction(x, y, z, cellSize, centerX, centerY, centerZ, radius, wallY);
+			if (fraction <= 1.0E-6) continue;
+			float perMarker = (float) (fraction / 8.0);
+			for (int slot = 0; slot < 8; slot++) {
+				int base = particle * 4;
+				positionVolume[base] = (x + 0.5F) * cellSize;
+				positionVolume[base + 1] = (y + 0.5F) * cellSize;
+				positionVolume[base + 2] = (z + 0.5F) * cellSize;
+				positionVolume[base + 3] = perMarker;
+				totalVolume += perMarker;
+				particle++;
+			}
+		}
+		domain.restoreParticleState(new FlipParticleState(
+				sx, sy, sz, cellSize, particleCount, totalVolume, positionVolume, velocities, domain.copySolidMask()
+		));
+	}
+
+	private static double sphericalCapFraction(int x, int y, int z, double cellSize,
+	                                           double centerX, double centerY, double centerZ,
+	                                           double radius, double wallY) {
+		double px = x * cellSize, py = y * cellSize, pz = z * cellSize;
+		int samples = 4;
+		int hits = 0;
+		for (int subZ = 0; subZ < samples; subZ++) for (int subY = 0; subY < samples; subY++) {
+			for (int subX = 0; subX < samples; subX++) {
+				double sx = px + (subX + 0.5) * cellSize / samples;
+				double sy = py + (subY + 0.5) * cellSize / samples;
+				double sz = pz + (subZ + 0.5) * cellSize / samples;
+				double dx = sx - centerX, dy = sy - centerY, dz = sz - centerZ;
+				if (sy >= wallY && dx * dx + dy * dy + dz * dz <= radius * radius) hits++;
+			}
+		}
+		return (double) hits / (samples * samples * samples);
 	}
 
 	private boolean createDemo(ServerPlayer player, boolean layeredMaterials) {

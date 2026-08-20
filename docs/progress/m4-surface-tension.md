@@ -13,7 +13,7 @@ M4/M4.1 已完成活动核心液气表面张力、固体接触角和液液 `σ12
 - `FluidMaterialRegistry` 增加运行时-only 的 `LiquidPairTension`（非负，phase handle 无序对去重）；活动核心对每个 `σ12>0` 的相 pair 以相体积分数场构造 balanced-force CSF 动量，再进入同一压力投影。
 - wire 与 `region-state` 字节仍不携带 M4/M4.1 字段，decode 侧以 `σ=0`、`π/2`、空 pair 表重建；内建材料保持 M3 缺省，因此 v2 round-trip 无损。真实数值要等格式迁移评审通过后再进入存档。
 - 正式世界入口仍只创建纯水。
-- 新增瞬态开发命令 `/realwater tensiondemo [角度1-179]`（需材料门）：创建带固壁底面的单材料液滴，使用 `σ=100`（视觉放大）和指定 Young 角，用于实机视觉验证；该命令不写 `region-state`，不改 wire/存档。
+- 新增瞬态开发命令 `/realwater tensiondemo [角度1-179]`（需材料门）：创建带固壁底面、同体积球形冠的单材料液滴，使用 `σ=100`（视觉放大）和指定 Young 角，用于实机视觉验证；该命令不写 `region-state`，不改 wire/存档。当前求解器无黏性，动态运行会持续波动，因此视觉验证以暂停状态下的球冠形状差异为准。
 
 ## 验证结果
 

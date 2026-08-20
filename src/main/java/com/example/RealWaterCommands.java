@@ -100,8 +100,7 @@ public final class RealWaterCommands {
 		if (!service.createTensionDemo(player, angleDegrees)) {
 			return fail(source, "无法创建表面张力测试域：" + service.lastTakeoverFailure());
 		}
-		return succeed(source, "已创建暂停的表面张力液滴测试域（σ=100，θ=" + angleDegrees
-				+ "°；瞬态，不写 region-state）；使用 /realwater step 或 /realwater run", 1);
+		return succeed(source, "已创建暂停的表面张力球形冠液滴（σ=100，θ=" + angleDegrees + "°；同体积球冠，瞬态，不写 region-state）；先比较 θ=30° 与 θ=120° 的暂停形状，再用 /realwater step 或 /realwater run", 1);
 	}
 
 	private static int capture(CommandSourceStack source, boolean takeover) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
