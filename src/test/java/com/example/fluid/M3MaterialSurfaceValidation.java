@@ -139,10 +139,10 @@ final class M3MaterialSurfaceValidation {
 
 	private static FluidMaterialRegistry registry() {
 		return new FluidMaterialRegistry(List.of(
-				new FluidMaterial("realwater:water", 1_000.0, "realwater:aqueous"),
-				new FluidMaterial("realwater:miscible", 1_050.0, "realwater:aqueous"),
-				new FluidMaterial("realwater:oil", 800.0, "realwater:oil"),
-				new FluidMaterial("realwater:heavy", 13_600.0, "realwater:heavy")
+				new FluidMaterial("realwater:water", 1_000.0, "realwater:aqueous", 0.0, Math.PI / 2.0),
+				new FluidMaterial("realwater:miscible", 1_050.0, "realwater:aqueous", 0.0, Math.PI / 2.0),
+				new FluidMaterial("realwater:oil", 800.0, "realwater:oil", 0.0, Math.PI / 2.0),
+				new FluidMaterial("realwater:heavy", 13_600.0, "realwater:heavy", 0.0, Math.PI / 2.0)
 		));
 	}
 

@@ -191,7 +191,7 @@ final class RegionStateCodec {
 			require(tag, "Id", Tag.TAG_STRING); require(tag, "DensityBits", Tag.TAG_LONG); require(tag, "MiscibilityGroup", Tag.TAG_STRING);
 			try {
 				result.add(new FluidMaterial(tag.getStringOr("Id", ""), Double.longBitsToDouble(tag.getLongOr("DensityBits", 0L)),
-						tag.getStringOr("MiscibilityGroup", "")));
+						tag.getStringOr("MiscibilityGroup", ""), 0.0, Math.PI / 2.0));
 			} catch (IllegalArgumentException exception) {
 				throw new IOException("Invalid material palette entry", exception);
 			}

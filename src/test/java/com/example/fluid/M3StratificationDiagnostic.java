@@ -11,8 +11,8 @@ public final class M3StratificationDiagnostic {
 
 	public static void main(String[] args) {
 		FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
-				new FluidMaterial("realwater:water", 1_000.0, "realwater:aqueous"),
-				new FluidMaterial("realwater:oil", 800.0, "realwater:oil")
+				new FluidMaterial("realwater:water", 1_000.0, "realwater:aqueous", 0.0, Math.PI / 2.0),
+				new FluidMaterial("realwater:oil", 800.0, "realwater:oil", 0.0, Math.PI / 2.0)
 		));
 		int water = registry.handle("realwater:water");
 		int oil = registry.handle("realwater:oil");

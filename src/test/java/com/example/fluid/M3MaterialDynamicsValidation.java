@@ -66,8 +66,8 @@ final class M3MaterialDynamicsValidation {
 
 	private static LayeringResult densityInversionLayersConservatively() {
 		FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
-				new FluidMaterial("realwater:heavy", 1_000.0, "realwater:heavy_phase"),
-				new FluidMaterial("realwater:light", 800.0, "realwater:light_phase")
+				new FluidMaterial("realwater:heavy", 1_000.0, "realwater:heavy_phase", 0.0, Math.PI / 2.0),
+				new FluidMaterial("realwater:light", 800.0, "realwater:light_phase", 0.0, Math.PI / 2.0)
 		));
 		int heavy = registry.handle("realwater:heavy"), light = registry.handle("realwater:light");
 		FluidSolverConfig config = config();

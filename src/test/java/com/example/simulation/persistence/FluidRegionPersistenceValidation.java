@@ -56,8 +56,8 @@ public final class FluidRegionPersistenceValidation {
 	private static void validateMaterialV2Codec() throws Exception {
 		FluidRegion region = populatedRegion(new UUID(15L, 16L));
 		List<FluidMaterial> palette = List.of(
-				new FluidMaterial("realwater:water", 1_000.0, "realwater:water"),
-				new FluidMaterial("realwater:oil", 800.0, "realwater:oil")
+				new FluidMaterial("realwater:water", 1_000.0, "realwater:water", 0.0, Math.PI / 2.0),
+				new FluidMaterial("realwater:oil", 800.0, "realwater:oil", 0.0, Math.PI / 2.0)
 		);
 		FlipParticleState pureParticles = region.domain().exportParticleState();
 		float[] positions = pureParticles.copyPositionVolume();

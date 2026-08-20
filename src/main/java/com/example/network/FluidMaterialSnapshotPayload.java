@@ -152,7 +152,7 @@ public record FluidMaterialSnapshotPayload(
 	public FluidMaterialRenderSnapshot toRenderSnapshot() {
 		if (!isSnapshot()) throw new IllegalStateException("Only material snapshot payloads contain mesher fields");
 		List<FluidMaterial> definitions = materials.stream()
-				.map(material -> new FluidMaterial(material.id(), material.referenceDensity(), material.phaseGroup()))
+				.map(material -> new FluidMaterial(material.id(), material.referenceDensity(), material.phaseGroup(), 0.0, Math.PI / 2.0))
 				.toList();
 		return FluidMaterialRenderSnapshot.fromQuantizedFields(
 				sizeX, sizeY, sizeZ, cellSize, definitions, phaseGroups, totalVolume, markers, solids,
@@ -272,7 +272,7 @@ public record FluidMaterialSnapshotPayload(
 	private static void validatePalette(List<MaterialEntry> materials, List<String> phaseGroups) {
 		Set<String> materialIds = new HashSet<>(), phases = new HashSet<>();
 		for (String phase : phaseGroups) {
-			new FluidMaterial("realwater:validation", 1.0, phase);
+			new FluidMaterial("realwater:validation", 1.0, phase, 0.0, Math.PI / 2.0);
 			if (!phases.add(phase)) throw new IllegalArgumentException("Duplicate phase group " + phase);
 		}
 		for (MaterialEntry material : materials) {
@@ -306,7 +306,7 @@ public record FluidMaterialSnapshotPayload(
 
 	public record MaterialEntry(String id, double referenceDensity, String phaseGroup, int argb) {
 		public MaterialEntry {
-			new FluidMaterial(id, referenceDensity, phaseGroup);
+			new FluidMaterial(id, referenceDensity, phaseGroup, 0.0, Math.PI / 2.0);
 		}
 	}
 

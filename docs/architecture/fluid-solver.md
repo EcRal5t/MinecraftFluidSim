@@ -6,6 +6,7 @@
 
 - **物理真值**：全部 marker `particleVolume` 的精确和。精确加水、删水、碰撞挤水和恢复只按 marker 账本结算。
 - **M3 材料真值**：活动 marker 同时持有材料 handle、相标签和显式 `particleMass`；逐材料质量账本与 marker 体积账本各自独立结算，互不换算。存在变密度时 P2G 按质量/动量加权，同密度域继续逐位退化到原体积权重路径。
+- **M4 数据契约**：`FluidMaterial` 冻结 `surfaceTension`（非负，0 为 M3 退化）与 `contactAngleRadians`（开区间 `(0, π)`，`π/2` 为无曲率中性）两个字段。当前 wire 与 `region-state` 字节都不携带它们，decode 侧用 `σ=0`、`π/2` 重建，冻结的内建材料也保持该缺省以保证 v2 无损 round-trip；真实数值要等 solver 消费它们、且格式迁移方案评审通过后再进入存档。
 - **材料门**：多材料只在 `materialsEnabled` 配置门本次启动为开时绑定。门开时 demo、capture 和控制器区域都绑定内建 palette，纯水区域即 palette index 0 的单材料状态；门关时活动核心继续走纯水路径。
 - **交接边界**：`FlipParticleState` 仍只允许纯水；任何非默认 material/phase/mass 状态导出都会显式失败。`FlipMaterialParticleState` 是独立内存 handoff，保存稳定 palette、每 marker material index 与 raw `double mass`；它本身不是 wire 或磁盘格式，`region-state v2` 仍独立校验长度、checksum、generation、palette 与预算。
 - **数值离散**：`markerCount > 0` 决定压力流体格；平滑 `volume[]`、PLIC 分数、cut-cell 开口和目标散度都不是第二套水量。

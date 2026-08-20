@@ -158,11 +158,11 @@ final class M3MaterialTransferValidation {
 
 	private static FluidMaterialRegistry registry() {
 		return new FluidMaterialRegistry(List.of(
-				new FluidMaterial("realwater:material_a", 1_000.0, "realwater:aqueous"),
-				new FluidMaterial("realwater:material_b", 1_000.0, "realwater:immiscible_b"),
-				new FluidMaterial("realwater:material_c", 800.0, "realwater:immiscible_c"),
-				new FluidMaterial("realwater:material_d", 1_050.0, "realwater:aqueous"),
-				new FluidMaterial("realwater:material_e", 13_600.0, "realwater:immiscible_e")
+				new FluidMaterial("realwater:material_a", 1_000.0, "realwater:aqueous", 0.0, Math.PI / 2.0),
+				new FluidMaterial("realwater:material_b", 1_000.0, "realwater:immiscible_b", 0.0, Math.PI / 2.0),
+				new FluidMaterial("realwater:material_c", 800.0, "realwater:immiscible_c", 0.0, Math.PI / 2.0),
+				new FluidMaterial("realwater:material_d", 1_050.0, "realwater:aqueous", 0.0, Math.PI / 2.0),
+				new FluidMaterial("realwater:material_e", 13_600.0, "realwater:immiscible_e", 0.0, Math.PI / 2.0)
 		));
 	}
 
@@ -179,8 +179,11 @@ final class M3MaterialTransferValidation {
 		check(!registry.areMiscible(a, b) && !registry.areMiscible(a, c), "unlike miscibility groups were merged");
 		check(registry.phaseHandle(a) == registry.phaseHandle(d), "miscible materials did not share a phase handle");
 		check(registry.phaseHandle(a) != registry.phaseHandle(b), "immiscible materials shared a phase handle");
-		expectIllegal(() -> new FluidMaterial("Bad Id", 1_000.0, "realwater:aqueous"));
-		expectIllegal(() -> new FluidMaterial("realwater:bad", 0.0, "realwater:aqueous"));
+		expectIllegal(() -> new FluidMaterial("Bad Id", 1_000.0, "realwater:aqueous", 0.0, Math.PI / 2.0));
+		expectIllegal(() -> new FluidMaterial("realwater:bad", 0.0, "realwater:aqueous", 0.0, Math.PI / 2.0));
+		expectIllegal(() -> new FluidMaterial("realwater:bad", 1_000.0, "realwater:aqueous", -1.0, Math.PI / 2.0));
+		expectIllegal(() -> new FluidMaterial("realwater:bad", 1_000.0, "realwater:aqueous", 0.0, 0.0));
+		expectIllegal(() -> new FluidMaterial("realwater:bad", 1_000.0, "realwater:aqueous", 0.0, Math.PI));
 		expectIllegal(() -> new FluidMaterialRegistry(List.of(
 				registry.material(a), registry.material(a))));
 		expectIllegal(() -> registry.material(-1));
