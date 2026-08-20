@@ -19,6 +19,7 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完�
 |---|---|
 | 创建开发域 | `/realwater demo`、`capture`、`takeover` |
 | 多材料开发域（需材料门） | `/realwater materialdemo` |
+| 表面张力液滴开发域（需材料门） | `/realwater tensiondemo [角度1-179]` |
 | 操作水量与碰撞 | `/realwater pour [1-16]`、`drain [1-16]`、`refresh` |
 | 运行控制 | `/realwater run`、`pause`、`step [1-20]`、`status` |
 | 区域与控制器 | `/realwater controllers [true|false]`、`regions list`、`regions select <uuid>`、`regions checkpoint` |

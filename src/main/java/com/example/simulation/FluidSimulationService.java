@@ -6,6 +6,8 @@ import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipParticleState;
+import com.example.fluid.FluidMaterial;
+import com.example.fluid.FluidMaterialRegistry;
 import com.example.fluid.FluidMaterialRenderSnapshot;
 import com.example.network.FluidMaterialSnapshotPayload;
 import com.example.network.FluidSnapshotPayload;
@@ -244,7 +246,71 @@ public final class FluidSimulationService {
 			lastTakeoverFailure = "材料功能门未在本次启动启用；先保存配置并重启";
 			return false;
 		}
+
 		return createDemo(player, true);
+	}
+
+	public boolean createTensionDemo(ServerPlayer player, int angleDegrees) {
+		if (!materialFeatureEnabled) {
+			lastTakeoverFailure = "材料功能门未在本次启动启用；先保存配置并重启";
+			return false;
+		}
+		Vec3 look = player.getLookAngle();
+		BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
+		ServerLevel level = player.level();
+		RestorationStats restoration = restoreTakeover(level.getServer());
+		if (!restoration.completed()) return false;
+		if (activeRegion() != null && activeRegion().controllerManaged()) {
+			lastTakeoverFailure = "拒绝用开发测试域覆盖持久控制器区域；请先显式移除控制器区域";
+			return false;
+		}
+		BlockPos newOrigin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
+		try {
+			createEmpty(level, newOrigin);
+		} catch (IllegalStateException exception) {
+			lastTakeoverFailure = exception.getMessage();
+			return false;
+		}
+		refreshCollisions(level);
+		FlipFluidDomain domain = domain();
+		for (int z = 0; z < domain.sizeZ(); z++) for (int x = 0; x < domain.sizeX(); x++) {
+			domain.setSolid(x, 0, z, true);
+		}
+		int centerX = domain.sizeX() / 2, centerZ = domain.sizeZ() / 2;
+		for (int z = centerZ - 2; z <= centerZ + 2; z++) {
+			for (int y = 1; y <= 5; y++) {
+				for (int x = centerX - 2; x <= centerX + 2; x++) {
+					if (!domain.isSolid(x, y, z)) domain.setVolume(x, y, z, 1.0F);
+				}
+			}
+		}
+		bindTensionDemoMaterial(domain, angleDegrees);
+		activeRegion().setPaused(true);
+		sendSnapshot(level);
+		return true;
+	}
+
+	private static void bindTensionDemoMaterial(FlipFluidDomain domain, int angleDegrees) {
+		FlipParticleState pure = domain.exportParticleState();
+		float[] positionVolume = pure.copyPositionVolume();
+		float[] velocities = pure.copyParticleVelocities();
+		double[] markerMass = new double[pure.particleCount()];
+		int[] material = new int[pure.particleCount()];
+		FluidMaterial tensionWater = new FluidMaterial("realwater:tension_water", domain.config().density(),
+				"realwater:tension_water", 0.5, Math.toRadians(angleDegrees));
+		FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(tensionWater));
+		double totalMass = 0.0;
+		for (int marker = 0; marker < pure.particleCount(); marker++) {
+			double volume = positionVolume[marker * 4 + 3];
+			markerMass[marker] = volume * tensionWater.referenceDensity();
+			totalMass += markerMass[marker];
+			material[marker] = 0;
+		}
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
+				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
+				pure.totalVolume(), totalMass, registry.materials(), positionVolume, velocities,
+				pure.copySolidMask(), markerMass, material
+		));
 	}
 
 	private boolean createDemo(ServerPlayer player, boolean layeredMaterials) {

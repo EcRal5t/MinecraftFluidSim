@@ -21,6 +21,11 @@ public final class RealWaterCommands {
 				Commands.literal("realwater")
 						.then(Commands.literal("demo").executes(context -> audit(context, () -> createDemo(context.getSource()))))
 						.then(Commands.literal("materialdemo").executes(context -> audit(context, () -> createMaterialDemo(context.getSource()))))
+						.then(Commands.literal("tensiondemo")
+								.executes(context -> audit(context, () -> createTensionDemo(context.getSource(), 30)))
+								.then(Commands.argument("angle", IntegerArgumentType.integer(1, 179))
+										.executes(context -> audit(context, () -> createTensionDemo(
+												context.getSource(), IntegerArgumentType.getInteger(context, "angle"))))))
 						.then(Commands.literal("capture").executes(context -> audit(context, () -> capture(context.getSource(), false))))
 						.then(Commands.literal("takeover").executes(context -> audit(context, () -> capture(context.getSource(), true))))
 						.then(Commands.literal("pour")
@@ -86,6 +91,17 @@ public final class RealWaterCommands {
 			return fail(source, "无法创建多材料测试域：" + service.lastTakeoverFailure());
 		}
 		return succeed(source, "已创建暂停的上油下水溃坝测试域（瞬态，不写 region-state）；使用 /realwater step 或 /realwater run", 1);
+	}
+
+	private static int createTensionDemo(CommandSourceStack source, int angleDegrees)
+			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		if (!service.createTensionDemo(player, angleDegrees)) {
+			return fail(source, "无法创建表面张力测试域：" + service.lastTakeoverFailure());
+		}
+		return succeed(source, "已创建暂停的表面张力液滴测试域（σ=0.5，θ=" + angleDegrees
+				+ "°；瞬态，不写 region-state）；使用 /realwater step 或 /realwater run", 1);
 	}
 
 	private static int capture(CommandSourceStack source, boolean takeover) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
