@@ -297,7 +297,7 @@ public final class FluidSimulationService {
 		double[] markerMass = new double[pure.particleCount()];
 		int[] material = new int[pure.particleCount()];
 		FluidMaterial tensionWater = new FluidMaterial("realwater:tension_water", domain.config().density(),
-				"realwater:tension_water", 0.5, Math.toRadians(angleDegrees));
+				"realwater:tension_water", 100.0, Math.toRadians(angleDegrees));
 		FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(tensionWater));
 		double totalMass = 0.0;
 		for (int marker = 0; marker < pure.particleCount(); marker++) {

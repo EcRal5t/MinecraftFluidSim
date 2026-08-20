@@ -100,7 +100,7 @@ public final class RealWaterCommands {
 		if (!service.createTensionDemo(player, angleDegrees)) {
 			return fail(source, "无法创建表面张力测试域：" + service.lastTakeoverFailure());
 		}
-		return succeed(source, "已创建暂停的表面张力液滴测试域（σ=0.5，θ=" + angleDegrees
+		return succeed(source, "已创建暂停的表面张力液滴测试域（σ=100，θ=" + angleDegrees
 				+ "°；瞬态，不写 region-state）；使用 /realwater step 或 /realwater run", 1);
 	}
 
