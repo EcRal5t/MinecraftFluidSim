@@ -1,8 +1,8 @@
 # Real Water 产品路线
 
-本文是尚未完成里程碑的总表。当前基线已经完成 M0、M1、M2 和 M2.5；完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md) 与 [`../architecture/region-state-v1.md`](../architecture/region-state-v1.md)。
+本文是尚未完成里程碑的总表。当前基线已经完成 M0、M1、M2、M2.5 和 M3；完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md)、[`../architecture/region-state-v1.md`](../architecture/region-state-v1.md) 与 [`../architecture/m3-material-state-migration.md`](../architecture/m3-material-state-migration.md)。
 
-基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、主 Mod 0.8.2、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
+基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、主 Mod 0.9.1、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
 
 ## 技术规格路由
 
@@ -22,7 +22,7 @@
 
 ## 发布切割线
 
-- **1.0**：完成 M3 多液体/可变密度、M4 表面张力/润湿、M5 密闭气体网络与气液压力。范围仍是控制器或开发命令圈定的有界区域；这是首个可独立发布维护的产品终点，不是临时演示版。
+- **1.0**：M3 多液体/可变密度已完成；仍需 M4 表面张力/润湿与 M5 密闭气体网络及气液压力。范围仍是控制器或开发命令圈定的有界区域；这是首个可独立发布维护的产品终点，不是临时演示版。
 - **2.0**：从 M6 ownership 评审与真实世界流体桥开始；未通过 M6.0 的事务/恢复门，不扩大 takeover。
 - M7 化学、M8 颗粒、M9 热力学和 M10 原版/其他 Mod API 在 2.0 后逐项加入，不阻塞 1.0。
 - 版本号按实际验收门决定，不随开发次数自然表示成熟度。
@@ -56,25 +56,25 @@
 - 客户端 palette/界面字段是展示数据，不成为材料库存。
 - 世界、bucket、region、checkpoint 和网络单位必须显式换算，不能用渲染 density 充当库存。
 
-## M3：多液体、可变密度与连通器
+## M4 起点约束（由 M3 冻结）
 
-按 KISS 分三步推进：
+M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/m3-multi-fluid.md)。后续阶段必须继续保持：
 
-1. 冻结最小 marker 材料/相标签和质量账本，保持独立 CPU 状态，不改 protocol、存档或世界交互。
-2. 建立同密度两材料严格退化为当前纯水解的一个 3D 连通器门。
-3. 在同一独立 3D column 接入已选的 interface-distance-weighted conservative `1/rho` 面系数，覆盖 1.25:1 与 13.6:1。
-
-通过上述前置后，才依次加入 registry、互溶组、不可互溶分层、多材质快照和 partitioned marching tetrahedra 内部界面。完整桶矩阵留到 M6.1。
-
-当前 CPU tranche 已完成上述三步，并在活动核心通过不同截面连通器与重轻液翻转分层；物理真值仍由 marker 体积和逐材料质量账本独立结算。正式 handoff、protocol、存档和世界入口尚未接入多材料。
-
-完成条件：同液 U 形管等高，不同截面连通器静水平衡，不同密度液柱压强匹配，油水翻转后稳定分层；质量/体积守恒，外表面与内部界面可见且不重合。
+- marker 体积与逐材料质量是两套独立真值账本；单一纯水必须严格退化为当前 `particleVolume` 解。
+- 稀疏 mixture handle 只在多组分格存在，不为每个 marker 复制完整组分 map。
+- 不可互溶相共享压力/速度框架；模型不能声称已解析界面滑移或乳化。
+- 客户端 palette/界面字段是展示数据，不成为材料库存。
+- 正式世界入口（桶、原版方块替换、takeover）仍只创建纯水；完整桶矩阵属 M6.1。
+- reseeding 不跨 material/phase 合并；不得用跨材料合并或渲染补丁掩盖亚格滞留。
 
 ## M4：表面张力与润湿
 
 - 数据驱动液气/液液表面张力和固体接触角。
 - 使用界面曲率与 balanced-force 压力跳跃/体积力，不写死吸墙或浅水聚集。
 - 覆盖静滴压力跳跃、无持续伪流、合并/断开守恒、不同接触角铺展。
+- M3 遗留的界面锐度问题在此解决：当前液液界面在亚格尺度真实混相，且为逐 tetrahedron 分片平面重建，视觉呈锯齿。
+  实测粗糙度与阈值敏感性见 [`../progress/m3-multi-fluid.md`](../progress/m3-multi-fluid.md)；曲率驱动的物理锐化属本阶段，
+  逐顶点法线平滑属渲染改进，两者都不得用渲染补丁替代物理。
 
 完成条件：不得以墙角偏置、受支撑强制找平或渲染收缩替代表面张力。
 
@@ -147,6 +147,6 @@
 
 ## 接下来三项
 
-1. 保留 `region-state v1` reader，并实现 v2 material/mass 账本与双槽故障门。
-2. 把已验证的 network v2、只读 material snapshot 与 mesher 接入默认关闭的 controller feature gate。
-3. 接通客户端 palette/两类 mesh 后，再决定唯一需要的实机视觉场景。
+1. 进入 M4：先冻结数据驱动的液气/液液表面张力与接触角数据边界，不改 protocol 或存档。
+2. 建立静滴 Laplace 压力跳跃与"无持续伪流"的最小独立 CPU 门，作为 balanced-force 实现的前置。
+3. 再评估界面锐化对现有液液界面重建与客户端 mesh 的影响，必要时才安排一次实机视觉场景。

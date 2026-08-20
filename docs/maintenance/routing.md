@@ -47,7 +47,7 @@
 | 客户端水面 | `src/client/java/com/example/client/ClientFluidVolumeRenderer.java` | 每域独立插值，按当前维度合并；v1 与 v2 状态/ledger/清理互相独立；不得反写物理 |
 | 客户端握手与绑定 | `src/client/java/com/example/client/RealWaterModClient.java` | configuration/play 注册、断线与重配置清理成套 |
 
-详细的 M2.5 数值定义只在 [`../progress/m2.5-fluid-foundation.md`](../progress/m2.5-fluid-foundation.md) 保存。
+详细的 M2.5 数值定义只在 [`../progress/m2.5-fluid-foundation.md`](../progress/m2.5-fluid-foundation.md) 保存；M3 材料/界面的验收结果与已量化限制只在 [`../progress/m3-multi-fluid.md`](../progress/m3-multi-fluid.md) 保存。
 
 ## 高频定位
 

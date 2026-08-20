@@ -8,6 +8,7 @@
 | M1 可选 GPU probe | 2026-08-19 | probe 0.1.16 完成双卡、64³、恢复、长期表面和实机稳定性门；仍只读可选 | [`m1-gpu-probe-report.md`](m1-gpu-probe-report.md) |
 | M2 多区域与持久化 | 2026-08-19 | 控制器、闭合边界、跨 chunk 完整加载、protocol v1 与 `region-state v1` 完成 | [`m2-region-state-smoke.md`](m2-region-state-smoke.md) |
 | M2.5 自由表面基础 | 2026-08-20 | PLIC、cut-cell、MAC 外推、守恒 reseeding 和体积分布压力约束完成 | [`m2.5-fluid-foundation.md`](m2.5-fluid-foundation.md)、[`m2.5-smoke.md`](m2.5-smoke.md) |
+| M3 多液体与可变密度 | 2026-08-20 | 材料/质量账本、变密度连通器、门控 protocol v2 与 `region-state v2`、液液界面渲染完成 | [`m3-multi-fluid.md`](m3-multi-fluid.md) |
 
 补充记录：
 

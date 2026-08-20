@@ -1,6 +1,6 @@
 # Real Water Prototype
 
-Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完成 M0–M2.5：主 Mod 由 CPU 权威求解，支持最多四个独立区域、控制器闭合边界、跨 chunk 完整加载、原子持久化，以及分数自由面和 cut-cell 碰撞。下一阶段是 M3 多液体与可变密度。
+Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完成 M0–M3：主 Mod 由 CPU 权威求解，支持最多四个独立区域、控制器闭合边界、跨 chunk 完整加载、原子持久化、分数自由面和 cut-cell 碰撞，并在默认关闭的材料门后提供多液体、可变密度与液液界面。下一阶段是 M4 表面张力与润湿。
 
 这还不是原版水的全局替代。普通模拟不自动修改世界；控制器功能默认关闭。
 

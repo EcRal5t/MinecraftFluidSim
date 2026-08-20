@@ -26,4 +26,9 @@
 - **M2**：多区域 manager、控制器可见边界、完整 chunk 门、protocol v1、独立生命周期和 `region-state v1`。详见 [`m2-region-state-smoke.md`](m2-region-state-smoke.md)。
 - **M2.5**：PLIC fluid-air 压力距离、runtime cut-cell、有效 MAC 面外推、守恒 marker reseeding 和压力-only rest-volume 约束。详见 [`m2.5-fluid-foundation.md`](m2.5-fluid-foundation.md)。
 
+## 0.9–0.9.1：M3 多液体与可变密度
+
+- **0.9.0**：M3 验收候选。marker 材料/相/质量账本、变密度 `1/rho` 面系数、互溶组聚合、不可互溶分层、门控 `region-state v2`、门控 protocol v2 + material capability、客户端 partitioned mesh，以及瞬态 `/realwater materialdemo` 与只影响下次重启的 `/realwater materials`。
+- **0.9.1**：修复实机复看发现的两个渲染缺陷——外表面主导材料在自由面外侧空格被误判为 palette 0，以及液液界面裁剪到等值面导致与自由面共面闪烁；并对噪声级相分数设下限。详见 [`m3-multi-fluid.md`](m3-multi-fluid.md)。
+
 可选 GPU probe 使用独立版本线，完整 0.1.0–0.1.16 结果见 [`m1-gpu-probe-report.md`](m1-gpu-probe-report.md)。

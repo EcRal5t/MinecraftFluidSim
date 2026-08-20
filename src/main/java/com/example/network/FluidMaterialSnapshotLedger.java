@@ -4,7 +4,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-/** Client-side v2 ordering/capability gate, kept separate from the live v1 ledger until M3 activation. */
+/** Client-side v2 ordering/capability gate, kept independent from the v1 ledger's state and cursors. */
 public final class FluidMaterialSnapshotLedger {
 	private final Map<UUID, Cursor> cursors = new HashMap<>();
 

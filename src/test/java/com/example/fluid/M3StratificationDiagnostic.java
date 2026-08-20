@@ -48,6 +48,67 @@ public final class M3StratificationDiagnostic {
 		System.out.printf("conservation: dVolume=%.3e dMass=%.3e maxSpeed=%.3g%n",
 				domain.totalVolume() - initialVolume, domain.totalMass() - initialMass,
 				domain.maximumParticleSpeed());
+		reportInterfaceRoughness(domain, water, oil);
+	}
+
+	/**
+	 * Separates two causes of a visually jagged interface: genuine sub-cell phase mixing plus reconstruction
+	 * resolution, versus reconstruction dropouts. A nominally horizontal settled interface should deviate on the
+	 * order of the cell size, and the mesh should stay contiguous across the tank's horizontal extent.
+	 */
+	private static void reportInterfaceRoughness(FlipFluidDomain domain, int water, int oil) {
+		FlipMaterialParticleState state = domain.exportMaterialParticleState();
+		float[] positionVolume = state.copyPositionVolume();
+		int[] materials = state.copyMaterialPaletteIndex();
+		int sizeX = domain.sizeX(), sizeY = domain.sizeY(), sizeZ = domain.sizeZ();
+		double cellSize = state.cellSize();
+		double[] waterByCell = new double[sizeX * sizeY * sizeZ];
+		double[] oilByCell = new double[sizeX * sizeY * sizeZ];
+		for (int marker = 0; marker < state.particleCount(); marker++) {
+			int x = (int) Math.floor(positionVolume[marker * 4] / cellSize);
+			int y = (int) Math.floor(positionVolume[marker * 4 + 1] / cellSize);
+			int z = (int) Math.floor(positionVolume[marker * 4 + 2] / cellSize);
+			if (x < 0 || x >= sizeX || y < 0 || y >= sizeY || z < 0 || z >= sizeZ) continue;
+			int cell = x + sizeX * (y + sizeY * z);
+			if (materials[marker] == water) waterByCell[cell] += positionVolume[marker * 4 + 3];
+			else if (materials[marker] == oil) oilByCell[cell] += positionVolume[marker * 4 + 3];
+		}
+		int mixedCells = 0, waterOnlyCells = 0, oilOnlyCells = 0;
+		double minorityFractionSum = 0.0;
+		for (int cell = 0; cell < waterByCell.length; cell++) {
+			boolean hasWater = waterByCell[cell] > 0.0, hasOil = oilByCell[cell] > 0.0;
+			if (hasWater && hasOil) {
+				mixedCells++;
+				double total = waterByCell[cell] + oilByCell[cell];
+				minorityFractionSum += Math.min(waterByCell[cell], oilByCell[cell]) / total;
+			} else if (hasWater) waterOnlyCells++;
+			else if (hasOil) oilOnlyCells++;
+		}
+		System.out.printf("phase mixing: mixed=%d waterOnly=%d oilOnly=%d meanMinorityFraction=%.3f%n",
+				mixedCells, waterOnlyCells, oilOnlyCells,
+				mixedCells == 0 ? 0.0 : minorityFractionSum / mixedCells);
+
+		FluidMaterialSurfaceMesher.Mesh mesh = FluidMaterialSurfaceMesher.build(domain.copyMaterialRenderSnapshot());
+		double sum = 0.0, minimum = Double.POSITIVE_INFINITY, maximum = Double.NEGATIVE_INFINITY;
+		int count = 0;
+		for (FluidMaterialSurfaceMesher.InterfaceTriangle triangle : mesh.interfaceTriangles()) {
+			double y = triangle.triangle().centroid().y();
+			sum += y;
+			minimum = Math.min(minimum, y);
+			maximum = Math.max(maximum, y);
+			count++;
+		}
+		if (count == 0) {
+			System.out.println("interface roughness: no interface triangles");
+			return;
+		}
+		double mean = sum / count, squared = 0.0;
+		for (FluidMaterialSurfaceMesher.InterfaceTriangle triangle : mesh.interfaceTriangles()) {
+			double deviation = triangle.triangle().centroid().y() - mean;
+			squared += deviation * deviation;
+		}
+		System.out.printf("interface roughness: triangles=%d meanY=%.3f rms=%.3f cells, span=%.3f..%.3f%n",
+				count, mean, Math.sqrt(squared / count) / cellSize, minimum, maximum);
 	}
 
 	private static void report(FlipFluidDomain domain, int water, int oil, int step) {
