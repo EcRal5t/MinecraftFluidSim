@@ -13,8 +13,9 @@ public static void main(String[] args) {
 	validateNoSustainedParasiticFlow();
 	validateMergeBreakupConservation();
 	validateContactAngleSpreading();
+	validateLiquidPairPressureJump();
 	System.out.println("M4 surface-tension solver gate passed: static droplet Laplace jump, "
-			+ "contact-angle spreading, no sustained parasitic flow and exact marker conservation");
+			+ "contact-angle spreading, liquid-pair pressure jump, no sustained parasitic flow and exact marker conservation");
 }
 
 private static void validateSigmaZeroDegeneration() {
@@ -179,6 +180,119 @@ return new DropletMetrics(contactCells, centerOfMassY, domain.maximumParticleSpe
 }
 
 private record DropletMetrics(int contactCells, double centerOfMassY, float maximumSpeed) { }
+
+	private static void validateLiquidPairPressureJump() {
+		FluidSolverConfig config = new FluidSolverConfig(
+				0.5F, 1_000.0F, 0.0F, 1.0F / 20.0F,
+				800, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F
+		);
+		int size = 20;
+		double radius = 4.0;
+		double sigma12 = 0.0728;
+		FlipFluidDomain domain = liquidPairDroplet(size, config, radius, sigma12);
+		double exactVolume = domain.totalVolume();
+		FlipFluidDomain.StepStats stats = domain.step();
+		double measuredJump = averagePressureInside(domain, size, radius) - averagePressureOutside(domain, size, radius);
+		double expectedJump = sigma12 * SurfaceTensionCurvatureExperiment.interfaceMeanCurvature(
+				binarySphereColour(size, radius, config.cellSize()), size, config.cellSize());
+		double jumpError = Math.abs(measuredJump - expectedJump) / expectedJump;
+		System.out.printf("  liquid-pair droplet sigma12=%.4f expectedJump=%.5f measuredJump=%.5f error=%.3g "
+				+ "PCG=%d residual=%.3g maxSpeed=%.3g%n",
+				sigma12, expectedJump, measuredJump, jumpError,
+				stats.pressureIterations(), stats.pressureResidual(), domain.maximumParticleSpeed());
+		check(jumpError <= 0.25, "liquid-pair droplet missed the Laplace pressure jump: measured="
+				+ measuredJump + " expected=" + expectedJump);
+		check(stats.pressureIterations() > 0 && stats.pressureIterations() <= 800,
+				"liquid-pair droplet PCG iteration count escaped the bound");
+		check(stats.pressureResidual() <= 1.0E-3F, "liquid-pair droplet PCG residual is too large");
+		check(Math.abs(domain.totalVolume() - exactVolume) <= 1.0E-6F,
+				"liquid-pair surface tension changed exact marker volume");
+		for (int step = 0; step < 5; step++) {
+			FlipFluidDomain.StepStats noFlowStats = domain.step();
+			check(Float.isFinite(noFlowStats.pressureResidual()), "liquid-pair droplet pressure residual became non-finite");
+			check(Math.abs(domain.totalVolume() - exactVolume) <= 1.0E-6F,
+					"liquid-pair surface tension changed exact marker volume");
+			check(domain.maximumParticleSpeed() <= 5.0E-4F,
+					"liquid-pair droplet developed sustained parasitic velocity: "
+							+ domain.maximumParticleSpeed() + " at step " + step);
+		}
+	}
+
+	private static FlipFluidDomain liquidPairDroplet(int size, FluidSolverConfig config, double radius, double sigma12) {
+		FlipFluidDomain domain = new FlipFluidDomain(size, size, size, config, size * size * size * 8);
+		int particleCount = size * size * size * 8;
+		float[] positionVolume = new float[particleCount * 4];
+		float[] velocities = new float[particleCount * 3];
+		float totalVolume = 0.0F;
+		int particle = 0;
+		float h = config.cellSize();
+		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
+			for (int slot = 0; slot < 8; slot++) {
+				int base = particle * 4;
+				positionVolume[base] = (x + 0.5F) * h;
+				positionVolume[base + 1] = (y + 0.5F) * h;
+				positionVolume[base + 2] = (z + 0.5F) * h;
+				positionVolume[base + 3] = 0.125F;
+				totalVolume += 0.125F;
+				particle++;
+			}
+		}
+		domain.restoreParticleState(new FlipParticleState(size, size, size, h, particleCount,
+				totalVolume, positionVolume, velocities, domain.copySolidMask()));
+		FluidMaterial a = new FluidMaterial("realwater:a", config.density(), "realwater:a", 0.0, Math.PI / 2.0);
+		FluidMaterial b = new FluidMaterial("realwater:b", config.density(), "realwater:b", 0.0, Math.PI / 2.0);
+		FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(a, b),
+				List.of(new FluidMaterialRegistry.LiquidPairTension(0, 1, sigma12)));
+		double[] colour = SurfaceTensionCurvatureExperiment.sphereColour(size, radius, h);
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			int x = Math.min(size - 1, (int) Math.floor(positionVolume[marker * 4] / h));
+			int y = Math.min(size - 1, (int) Math.floor(positionVolume[marker * 4 + 1] / h));
+			int z = Math.min(size - 1, (int) Math.floor(positionVolume[marker * 4 + 2] / h));
+			int materialHandle = colour[(z * size + y) * size + x] >= 0.5 ? 1 : 0;
+			domain.setMarkerMaterial(marker, registry, materialHandle);
+		}
+		return domain;
+	}
+
+	private static double[] binarySphereColour(int size, double radius, double cellSize) {
+		double[] colour = SurfaceTensionCurvatureExperiment.sphereColour(size, radius, cellSize);
+		for (int i = 0; i < colour.length; i++) colour[i] = colour[i] >= 0.5 ? 1.0 : 0.0;
+		return colour;
+	}
+
+	private static double averagePressureInside(FlipFluidDomain domain, int size, double radius) {
+		byte[] mask = domain.copyMarkerMask();
+		double sum = 0.0;
+		int cells = 0;
+		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
+			if (mask[(z * size + y) * size + x] == 0) continue;
+			double dx = (x + 0.5) * domain.config().cellSize() - 0.5 * (size - 1) * domain.config().cellSize();
+			double dy = (y + 0.5) * domain.config().cellSize() - 0.5 * (size - 1) * domain.config().cellSize();
+			double dz = (z + 0.5) * domain.config().cellSize() - 0.5 * (size - 1) * domain.config().cellSize();
+			if (dx * dx + dy * dy + dz * dz <= radius * radius) {
+				sum += domain.pressure(x, y, z);
+				cells++;
+			}
+		}
+		return cells == 0 ? 0.0 : sum / cells;
+	}
+
+	private static double averagePressureOutside(FlipFluidDomain domain, int size, double radius) {
+		byte[] mask = domain.copyMarkerMask();
+		double sum = 0.0;
+		int cells = 0;
+		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
+			if (mask[(z * size + y) * size + x] == 0) continue;
+			double dx = (x + 0.5) * domain.config().cellSize() - 0.5 * (size - 1) * domain.config().cellSize();
+			double dy = (y + 0.5) * domain.config().cellSize() - 0.5 * (size - 1) * domain.config().cellSize();
+			double dz = (z + 0.5) * domain.config().cellSize() - 0.5 * (size - 1) * domain.config().cellSize();
+			if (dx * dx + dy * dy + dz * dz > radius * radius) {
+				sum += domain.pressure(x, y, z);
+				cells++;
+			}
+		}
+		return cells == 0 ? 0.0 : sum / cells;
+	}
 
 private static void validateMergeBreakupConservation() {
 FluidSolverConfig config = new FluidSolverConfig(

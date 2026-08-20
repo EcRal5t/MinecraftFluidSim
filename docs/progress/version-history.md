@@ -33,6 +33,6 @@
 
 ## 0.10.0：M4 表面张力与润湿
 
-- **0.10.0**：液气界面 `p_interface = σ κ` ghost-fluid 压力跳跃进入活动压力 RHS 与投影；近壁曲率法向施加 Young 接触角，不写死吸墙或墙角偏置。`σ=0` 逐位退化回 M3，wire 与 `region-state` 字节仍不携带 M4 字段。自动门覆盖静滴 Laplace 跳跃、无持续寄生流、合并/断开守恒和不同接触角铺展。详见 [`m4-surface-tension.md`](m4-surface-tension.md)。
+- **0.10.0**：液气界面 `p_interface = σ κ` ghost-fluid 压力跳跃进入活动压力 RHS 与投影；近壁曲率法向施加 Young 接触角，不写死吸墙或墙角偏置。液液 `σ12` 以 `FluidMaterialRegistry.LiquidPairTension` 定义并按 balanced-force CSF 接入活动核心。`σ=0` 逐位退化回 M3，wire 与 `region-state` 字节仍不携带 M4/M4.1 字段。自动门覆盖静滴 Laplace 跳跃、液液 `σ12` 跳跃、无持续寄生流、合并/断开守恒和不同接触角铺展。详见 [`m4-surface-tension.md`](m4-surface-tension.md)。
 
 可选 GPU probe 使用独立版本线，完整 0.1.0–0.1.16 结果见 [`m1-gpu-probe-report.md`](m1-gpu-probe-report.md)。

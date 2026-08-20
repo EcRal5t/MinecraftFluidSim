@@ -86,7 +86,7 @@
 | M3 marker 材料/相/质量、变密度压力或材料界面 mesh | `runM3ConnectedVesselValidation` | 该门已含活动核心连通器与翻转分层；只有同时改 wire/存档才加对应门 |
 | 1D 变密度面系数实验 | `runVariableDensityFaceCoefficientValidation` | 已接入 3D 连通器，改该系数改跑 M3 连通器门 |
 | M4 表面张力曲率/Laplace 独立实验 | `runSurfaceTensionCurvatureValidation` | 接入活动核心压力算子后才加对应 solver 门 |
-| M4 活动核心表面张力/润湿 | `runM4SurfaceTensionValidation` | 该门已含静滴 Laplace、无持续寄生流、合并/断开守恒和接触角铺展；只有改 wire/存档才加对应门 |
+| M4 活动核心表面张力/润湿/液液 | `runM4SurfaceTensionValidation` | 该门已含静滴 Laplace、液液 `σ12` 跳跃、无持续寄生流、合并/断开守恒和接触角铺展；只有改 wire/存档才加对应门 |
 | 材料门配置或 live 协商 | `runFluidNetworkProtocolValidation` | 改 payload 注册/entrypoint 才跑 EULA=false server |
 | manager | `runFluidRegionManagerValidation` | 同时跨 lifecycle/persistence 才加对应门 |
 | lifecycle/tick | `runFluidRegionLifecycleValidation` | 同时改 ownership 才加 persistence |

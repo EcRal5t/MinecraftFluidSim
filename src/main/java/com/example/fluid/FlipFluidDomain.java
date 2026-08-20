@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 /**
  * A bounded three-dimensional PIC/FLIP liquid domain.
@@ -42,7 +43,9 @@ public final class FlipFluidDomain {
 	private final float[] surfaceTensionPressure;
 	private final double[] surfaceTensionColor;
 	private final double[] surfaceTensionSmoothed;
+	private final double[] surfaceTensionPairCurvature;
 	private boolean surfaceTensionActive;
+	private boolean liquidPairTensionActive;
 	private static final int[][] SURFACE_TENSION_DIRECTIONS = {{-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0}, {0,0,-1}, {0,0,1}};
 	private final int[] cellPhaseHead;
 	private int[] phaseEntryLabel;
@@ -127,6 +130,7 @@ public final class FlipFluidDomain {
 		this.surfaceTensionPressure = new float[cellCount];
 		this.surfaceTensionColor = new double[cellCount];
 		this.surfaceTensionSmoothed = new double[cellCount];
+		this.surfaceTensionPairCurvature = new double[cellCount];
 		this.cellPhaseHead = new int[cellCount];
 		this.phaseEntryLabel = new int[initialParticleCapacity];
 		this.phaseEntryNext = new int[initialParticleCapacity];
@@ -605,6 +609,7 @@ public final class FlipFluidDomain {
 			System.arraycopy(velocityY, 0, p2gVelocityY, 0, velocityY.length);
 			System.arraycopy(velocityZ, 0, p2gVelocityZ, 0, velocityZ.length);
 			applyGravity(dt);
+			applyLiquidPairSurfaceTensionForce(dt);
 			enforceSolidFaceVelocities();
 			solvePressure(dt);
 			pressureIterations += lastPressureIterations;
@@ -650,6 +655,7 @@ public final class FlipFluidDomain {
 		Arrays.fill(velocityWeightZ, 0.0F);
 		variableDensityActive = usesMassWeightedP2G();
 		surfaceTensionActive = hasAnySurfaceTension();
+		liquidPairTensionActive = hasAnyLiquidPairTension();
 		for (int i = 0; i < particleCount; i++) {
 			int particleCell = particleCellIndex(i);
 			markerCount[particleCell]++;
@@ -848,6 +854,71 @@ public final class FlipFluidDomain {
 			if (material.surfaceTension() > 0.0) return true;
 		}
 		return false;
+	}
+
+	private boolean hasAnyLiquidPairTension() {
+		if (materialRegistry == null) return false;
+		for (double tension : materialRegistry.liquidPairTensions().values()) {
+			if (tension > 0.0) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Adds balanced-force CSF momentum for every immiscible liquid pair with a positive {@code sigma12}.
+	 * The force uses the same face density scaling as the variable-density pressure projection, and the
+	 * pressure RHS is built from the resulting velocity, so the pressure solve cancels the gradient part.
+	 */
+	private void applyLiquidPairSurfaceTensionForce(float dt) {
+		if (!liquidPairTensionActive) return;
+		float scale = dt / (config.density() * config.cellSize());
+		for (Map.Entry<Long, Double> entry : materialRegistry.liquidPairTensions().entrySet()) {
+			if (entry.getValue() <= 0.0) continue;
+			int firstPhase = (int) (entry.getKey() >>> 32);
+			int secondPhase = (int) (entry.getKey() & 0xffffffffL);
+			applyLiquidPairSurfaceTensionPair(firstPhase, secondPhase, entry.getValue(), scale);
+		}
+	}
+
+	private void applyLiquidPairSurfaceTensionPair(int phaseA, int phaseB, double tension, float scale) {
+		for (int index = 0; index < cellCount; index++) {
+			if (solid[index]) {
+				surfaceTensionColor[index] = 0.0;
+				continue;
+			}
+			surfaceTensionColor[index] = phaseFraction(index, phaseB);
+		}
+		smoothSurfaceTensionColor();
+		Arrays.fill(surfaceTensionPairCurvature, 0.0);
+		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int index = cellIndex(x, y, z);
+			if (solid[index] || markerCount[index] == 0) continue;
+			surfaceTensionPairCurvature[index] = surfaceTensionMeanCurvature(x, y, z);
+		}
+		float inverseCell = 1.0F / config.cellSize();
+		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
+			int left = cellIndex(x - 1, y, z), right = cellIndex(x, y, z), face = xFaceIndex(x, y, z);
+			applyLiquidPairFaceForce(left, right, face, tension, scale, inverseCell, cutCells.xFaceOpen(x, y, z), velocityX);
+		}
+		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z), face = yFaceIndex(x, y, z);
+			applyLiquidPairFaceForce(below, above, face, tension, scale, inverseCell, cutCells.yFaceOpen(x, y, z), velocityY);
+		}
+		for (int z = 1; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int back = cellIndex(x, y, z - 1), front = cellIndex(x, y, z), face = zFaceIndex(x, y, z);
+			applyLiquidPairFaceForce(back, front, face, tension, scale, inverseCell, cutCells.zFaceOpen(x, y, z), velocityZ);
+		}
+	}
+
+	private void applyLiquidPairFaceForce(int first, int second, int face, double tension, float scale,
+	                                      float inverseCell, float openArea, float[] velocity) {
+		if (openArea <= 0.0F || !isFluid(first) || !isFluid(second)) return;
+		double delta = surfaceTensionSmoothed[second] - surfaceTensionSmoothed[first];
+		if (Math.abs(delta) <= 1.0E-12) return;
+		float densityScale = variableDensityActive ? pressureDensityScale(first, second) : 1.0F;
+		double kappa = 0.5 * (surfaceTensionPairCurvature[first] + surfaceTensionPairCurvature[second]);
+		float forceDifference = (float) (tension * kappa * delta);
+		velocity[face] += scale * densityScale * forceDifference;
 	}
 
 	/**
