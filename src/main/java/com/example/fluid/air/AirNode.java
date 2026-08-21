@@ -19,7 +19,8 @@ final class AirNode {
 
 	AirNode(double availableVolume, long standardVolumeNanos) {
 		setAvailableVolume(availableVolume);
-		this.standardVolumeNanos = Math.max(0L, standardVolumeNanos);
+		if (standardVolumeNanos < 0L) throw new IllegalArgumentException("Gas inventory cannot be negative");
+		this.standardVolumeNanos = standardVolumeNanos;
 	}
 
 	long standardVolumeNanos() { return standardVolumeNanos; }
@@ -34,7 +35,7 @@ final class AirNode {
 	double availableVolume() { return availableVolume; }
 
 	void setAvailableVolume(double value) {
-		if (!(value >= 0.0) || Double.isNaN(value)) {
+		if (!(value >= 0.0) || Double.isNaN(value) || Double.isInfinite(value)) {
 			throw new IllegalArgumentException("Available volume must be finite and non-negative");
 		}
 		this.availableVolume = value;

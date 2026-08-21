@@ -41,6 +41,7 @@ replay_*.log
 *.jfr
 
 docs/maintenance/next-session-initial-prompt.md
+docs/archive/review
 AGENTS.md
 .claude
 .agents

@@ -25,8 +25,8 @@ public final class AirNetwork {
 	public static final double MAX_GAUGE_PRESSURE = 20.0 * REFERENCE_PRESSURE;
 	/** Numerical floor for cavity gauge pressure; a cavity cannot be pulled below near-vacuum. */
 	public static final double MIN_GAUGE_PRESSURE = -0.99 * REFERENCE_PRESSURE;
-	/** Available-volume regularisation (m³) for the isothermal state equation. */
-	public static final double MIN_AVAILABLE_VOLUME = 1.0E-4;
+	/** Available-volume regularisation (m³) for the isothermal state equation; equal to one nanovolume quantum so a newly discovered cavity always starts at gauge zero. */
+	public static final double MIN_AVAILABLE_VOLUME = 1.0E-9;
 	/** Constant air density (kg/m³) used by orifice flow; refined in M9. */
 	public static final double AIR_DENSITY = 1.2;
 	/** The ambient reservoir: gauge pressure zero, unbounded inventory, never stored as a node. */
@@ -91,8 +91,10 @@ public final class AirNetwork {
 		int existing = findEdge(firstNode, secondNode);
 		if (existing >= 0) {
 			AirEdge edge = edges.get(existing);
-			edges.set(existing, new AirEdge(firstNode, secondNode,
-					edge.areaSquareMeters() + areaSquareMeters, dischargeCoefficient));
+			double combinedArea = edge.areaSquareMeters() + areaSquareMeters;
+			double combinedDischarge = (edge.dischargeCoefficient() * edge.areaSquareMeters()
+					+ dischargeCoefficient * areaSquareMeters) / combinedArea;
+			edges.set(existing, new AirEdge(firstNode, secondNode, combinedArea, combinedDischarge));
 			return;
 		}
 		edges.add(new AirEdge(firstNode, secondNode, areaSquareMeters, dischargeCoefficient));
@@ -222,9 +224,19 @@ public final class AirNetwork {
 	 */
 	public void mergeNodes(int targetNodeId, int... sourceNodeIds) {
 		if (sourceNodeIds.length == 0) throw new IllegalArgumentException("A merge needs at least one source");
-		AirNode target = sealed(targetNodeId);
 		for (int sourceNodeId : sourceNodeIds) {
 			if (sourceNodeId == targetNodeId) throw new IllegalArgumentException("Cannot merge a node into itself");
+			sealed(sourceNodeId);
+		}
+		for (int first = 0; first < sourceNodeIds.length; first++) {
+			for (int second = first + 1; second < sourceNodeIds.length; second++) {
+				if (sourceNodeIds[first] == sourceNodeIds[second]) {
+					throw new IllegalArgumentException("Cannot merge the same source node twice");
+				}
+			}
+		}
+		AirNode target = sealed(targetNodeId);
+		for (int sourceNodeId : sourceNodeIds) {
 			AirNode source = sealed(sourceNodeId);
 			target.setStandardVolumeNanos(target.standardVolumeNanos() + source.standardVolumeNanos());
 			nodes.remove(sourceNodeId);
@@ -329,6 +341,15 @@ public final class AirNetwork {
 	public void remapNodes(double[] availableVolumes, long[] inventoriesNanos) {
 		if (availableVolumes.length != inventoriesNanos.length) {
 			throw new IllegalArgumentException("Slot arrays must have equal length");
+		}
+		for (int slot = 0; slot < availableVolumes.length; slot++) {
+			if (!(availableVolumes[slot] >= 0.0) || Double.isNaN(availableVolumes[slot])
+					|| Double.isInfinite(availableVolumes[slot])) {
+				throw new IllegalArgumentException("Available volume must be finite and non-negative");
+			}
+			if (inventoriesNanos[slot] < 0L) {
+				throw new IllegalArgumentException("Inventory cannot be negative");
+			}
 		}
 		long oldSum = sealedInventoryNanos();
 		nodes.clear();

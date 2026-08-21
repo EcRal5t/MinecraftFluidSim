@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * A bounded three-dimensional PIC/FLIP liquid domain.
@@ -770,34 +771,41 @@ public final class FlipFluidDomain {
 		double[] availableVolumes = result.sealedAvailableVolume();
 		long[] inventoriesNanos = new long[sealed];
 		if (previousSealedNodeCount > 0 && sealed > 0) {
-			int[][] overlap = new int[previousSealedNodeCount + 1][sealed + 1];
-			int[] ambientOverlap = new int[previousSealedNodeCount + 1];
+			int previous = previousSealedNodeCount;
+			int[] ambientOverlap = new int[previous + 1];
+			TreeMap<Long, Integer> overlap = new TreeMap<>();
 			int[] newLabels = result.cellNodeId();
 			for (int cell = 0; cell < cellCount; cell++) {
 				int old = airCellNodeId[cell];
 				if (old < 1) continue;
 				int now = newLabels[cell];
-				if (now >= 1) overlap[old][now]++;
-				else if (now == 0) ambientOverlap[old]++;
+				if (now >= 1) {
+					long key = ((long) old << 32) | (now & 0xffffffffL);
+					overlap.merge(key, 1, Integer::sum);
+				} else if (now == 0) {
+					ambientOverlap[old]++;
+				}
 			}
 			boolean[] contributed = new boolean[sealed + 1];
-			for (int old = 1; old <= previousSealedNodeCount; old++) {
+			for (int old = 1; old <= previous; old++) {
 				long inventory = airNetwork.standardVolumeNanos(old);
 				if (inventory <= 0L || ambientOverlap[old] > 0) continue;
+				Map<Long, Integer> oldOverlap = overlap.subMap(
+						(long) old << 32, (long) (old + 1) << 32);
 				int totalOverlap = 0;
 				int destinations = 0;
-				for (int node = 1; node <= sealed; node++) if (overlap[old][node] > 0) {
-					totalOverlap += overlap[old][node];
+				for (int count : oldOverlap.values()) {
+					totalOverlap += count;
 					destinations++;
 				}
 				if (destinations == 0) continue;
 				long assigned = 0L;
 				int remaining = destinations;
-				for (int node = 1; node <= sealed; node++) {
-					if (overlap[old][node] == 0) continue;
+				for (Map.Entry<Long, Integer> entry : oldOverlap.entrySet()) {
+					int node = (int) (entry.getKey() & 0xffffffffL);
 					remaining--;
 					long share = remaining == 0 ? inventory - assigned
-							: (long) Math.floor((double) inventory * overlap[old][node] / totalOverlap);
+							: (long) Math.floor((double) inventory * entry.getValue() / totalOverlap);
 					assigned += share;
 					inventoriesNanos[node - 1] += share;
 					contributed[node] = true;
@@ -805,12 +813,12 @@ public final class FlipFluidDomain {
 			}
 			for (int node = 1; node <= sealed; node++) {
 				if (!contributed[node]) {
-					inventoriesNanos[node - 1] = AirNetwork.nanos(availableVolumes[node - 1]);
+					inventoriesNanos[node - 1] = Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1]));
 				}
 			}
 		} else {
 			for (int node = 1; node <= sealed; node++) {
-				inventoriesNanos[node - 1] = AirNetwork.nanos(availableVolumes[node - 1]);
+				inventoriesNanos[node - 1] = Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1]));
 			}
 		}
 		airNetwork.remapNodes(availableVolumes, inventoriesNanos);

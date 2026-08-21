@@ -44,4 +44,3 @@
 1. `/realwater airdemo pressure` → `/realwater run`：左侧密闭腔液面被压下、右侧抬高，形成并保持约 1.4 m 高差；`/realwater status` 显示 `gas node …p=…Pa V0=…m³`。
 2. `/realwater remove` 后 `airdemo vacuum` 复测反号（约 2.1 m）。
 3. `/realwater debug true` 观察灰色气体区域随液面压缩/膨胀。
-

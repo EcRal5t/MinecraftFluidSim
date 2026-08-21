@@ -26,6 +26,10 @@ public final class AirNetworkValidation {
 		network.updateAvailableVolume(node, 16.0);
 		checkRelative(network.gaugePressure(node), -0.5 * AirNetwork.REFERENCE_PRESSURE, "doubled volume must halve absolute pressure below ambient");
 
+		int tiny = network.addNode(5.0E-5, 5.0E-5);
+		check(network.gaugePressure(tiny) == 0.0, "sub-millilitre cavity must start at gauge zero");
+		int tinyNano = network.addNode(1.0E-9, 1.0E-9);
+		check(network.gaugePressure(tinyNano) == 0.0, "one-nanovolume cavity must start at gauge zero");
 		int evacuated = network.addNode(1.0, 1.0);
 		network.updateAvailableVolume(evacuated, 1.0E4);
 		check(network.gaugePressure(evacuated) == AirNetwork.MIN_GAUGE_PRESSURE,

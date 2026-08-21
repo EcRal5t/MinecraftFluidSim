@@ -33,8 +33,8 @@ public record FluidSnapshotPayload(
 		List<Extension> extensions
 ) implements CustomPacketPayload {
 	private static final int MAX_CELLS = 1 << 20;
-	private static final int MAX_EXTENSIONS = 16;
-	private static final int MAX_EXTENSION_BYTES = 1 << 16;
+	public static final int MAX_EXTENSIONS = 16;
+	public static final int MAX_EXTENSION_BYTES = 1 << 16;
 	private static final UUID NIL_REGION_ID = new UUID(0L, 0L);
 	private static final Identifier CLEAR_DIMENSION = Identifier.fromNamespaceAndPath("minecraft", "overworld");
 

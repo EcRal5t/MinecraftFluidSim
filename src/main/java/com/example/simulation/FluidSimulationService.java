@@ -175,6 +175,7 @@ public final class FluidSimulationService {
 	public ControllerActivation activateController(ServerPlayer player, BlockPos controllerPosition) {
 		if (!controllerFeatureEnabled) return ControllerActivation.DISABLED;
 		ServerLevel level = player.level();
+		restoreAirDemoScaffolding(level.getServer());
 		if (!level.getBlockState(controllerPosition).is(RealWaterBlocks.FLUID_CONTROLLER)) {
 			return ControllerActivation.failed("目标方块不再是 Real Water 控制器");
 		}
@@ -298,43 +299,49 @@ public final class FluidSimulationService {
 	 * no surface tension, no material gate; writes no region-state and the scaffold restores on
 	 * removal, replacement or server shutdown.
 	 */
-	public boolean createAirDemo(ServerPlayer player, boolean vacuum) {
-		Vec3 look = player.getLookAngle();
-		BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
-		ServerLevel level = player.level();
-		RestorationStats restoration = restoreTakeover(level.getServer());
-		if (!restoration.completed()) return false;
-		if (activeRegion() != null && activeRegion().controllerManaged()) {
-			lastTakeoverFailure = "拒绝用开发测试域覆盖持久控制器区域；请先显式移除控制器区域";
-			return false;
+		public boolean createAirDemo(ServerPlayer player, boolean vacuum) {
+			Vec3 look = player.getLookAngle();
+			BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
+			ServerLevel level = player.level();
+			restoreAirDemoScaffolding(level.getServer());
+			RestorationStats restoration = restoreTakeover(level.getServer());
+			if (!restoration.completed()) return false;
+			if (activeRegion() != null && activeRegion().controllerManaged()) {
+				lastTakeoverFailure = "拒绝用开发测试域覆盖持久控制器区域；请先显式移除控制器区域";
+				return false;
+			}
+			BlockPos newOrigin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
+			try {
+				createTransientEmptyRegion(level, newOrigin);
+			} catch (IllegalStateException exception) {
+				lastTakeoverFailure = exception.getMessage();
+				return false;
+			}
+			placeAirDemoScaffolding(level, newOrigin);
+			refreshCollisions(level);
+			FlipFluidDomain domain = domain();
+			fillAirDemoWater(domain);
+			domain.step();
+			AirNetwork network = domain.airNetwork();
+			if (network.nodeCount() < 1) {
+				lastTakeoverFailure = "左侧气腔未密闭；玻璃只替换空气方块，请清理模拟区域内的其他方块后重试";
+				restoreAirDemoScaffolding(level.getServer());
+				FluidRegion failedRegion = activeRegion();
+				if (failedRegion != null && !failedRegion.controllerManaged()) {
+					regionManager.remove(failedRegion.id());
+					sendRegionRemoval(level.getServer(), failedRegion);
+				}
+				return false;
+			}
+			int node = network.nodeIds().get(0);
+			// pressure adds inventory (p = P0(V0/V - 1) > 0), vacuum removes it; the soft gas spring
+			// settles near a third of the preset head, so presets are scaled for a visible difference
+			network.setStandardVolume(node, vacuum ? network.availableVolume(node) * 0.78
+					: network.availableVolume(node) / 0.70);
+			activeRegion().setPaused(true);
+			sendSnapshot(level);
+			return true;
 		}
-		BlockPos newOrigin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
-		restoreAirDemoScaffolding(level.getServer());
-		try {
-			createTransientEmptyRegion(level, newOrigin);
-		} catch (IllegalStateException exception) {
-			lastTakeoverFailure = exception.getMessage();
-			return false;
-		}
-		placeAirDemoScaffolding(level, newOrigin);
-		refreshCollisions(level);
-		FlipFluidDomain domain = domain();
-		fillAirDemoWater(domain);
-		domain.step();
-		AirNetwork network = domain.airNetwork();
-		if (network.nodeCount() < 1) {
-			lastTakeoverFailure = "左侧气腔未密闭；玻璃只替换空气方块，请清理模拟区域内的其他方块后重试";
-			return false;
-		}
-		int node = network.nodeIds().get(0);
-		// pressure adds inventory (p = P0(V0/V - 1) > 0), vacuum removes it; the soft gas spring
-		// settles near a third of the preset head, so presets are scaled for a visible difference
-		network.setStandardVolume(node, vacuum ? network.availableVolume(node) * 0.78
-				: network.availableVolume(node) / 0.70);
-		activeRegion().setPaused(true);
-		sendSnapshot(level);
-		return true;
-	}
 
 	/** Glass U-tube layout in region-relative block coordinates: shell, sealed-left roof and a divider with a bottom doorway. */
 	private static boolean isAirDemoScaffoldBlock(int bx, int by, int bz) {
@@ -1048,7 +1055,8 @@ public final class FluidSimulationService {
 	private static FluidSnapshotPayload createSnapshot(FluidRegion region) {
 		FlipFluidDomain domain = region.domain();
 		List<FluidSnapshotPayload.Extension> extensions = List.of();
-		if (domain.gasPressureActive()) {
+		long cellCount = (long) domain.sizeX() * domain.sizeY() * domain.sizeZ();
+		if (domain.gasPressureActive() && cellCount <= FluidSnapshotPayload.MAX_EXTENSION_BYTES) {
 			extensions = List.of(new FluidSnapshotPayload.Extension(
 					FluidSnapshotPayload.EXTENSION_GAS_NODES, domain.copyGasNodeMask()));
 		}
