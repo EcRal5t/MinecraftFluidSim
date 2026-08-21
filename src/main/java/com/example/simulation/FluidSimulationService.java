@@ -266,19 +266,19 @@ public final class FluidSimulationService {
 			return false;
 		}
 		BlockPos newOrigin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
-try {
-createTensionEmpty(level, newOrigin);
-} catch (IllegalStateException exception) {
-lastTakeoverFailure = exception.getMessage();
-return false;
-}
-refreshCollisions(level);
-FlipFluidDomain domain = domain();
-for (int z = 0; z < domain.sizeZ(); z++) for (int x = 0; x < domain.sizeX(); x++) {
-domain.setSolid(x, 0, z, true);
-}
-restoreTensionCap(domain, angleDegrees);
-bindTensionDemoMaterial(domain, angleDegrees);
+		try {
+			createTensionEmpty(level, newOrigin);
+		} catch (IllegalStateException exception) {
+			lastTakeoverFailure = exception.getMessage();
+			return false;
+		}
+		refreshCollisions(level);
+		FlipFluidDomain domain = domain();
+		for (int z = 0; z < domain.sizeZ(); z++) for (int x = 0; x < domain.sizeX(); x++) {
+			domain.setSolid(x, 0, z, true);
+		}
+		restoreTensionCap(domain, angleDegrees);
+		bindTensionDemoMaterial(domain, angleDegrees);
 		activeRegion().setPaused(true);
 		sendSnapshot(level);
 		return true;

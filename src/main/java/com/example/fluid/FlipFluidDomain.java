@@ -874,13 +874,12 @@ public final class FlipFluidDomain {
 		float scale = dt / (config.density() * config.cellSize());
 		for (Map.Entry<Long, Double> entry : materialRegistry.liquidPairTensions().entrySet()) {
 			if (entry.getValue() <= 0.0) continue;
-			int firstPhase = (int) (entry.getKey() >>> 32);
 			int secondPhase = (int) (entry.getKey() & 0xffffffffL);
-			applyLiquidPairSurfaceTensionPair(firstPhase, secondPhase, entry.getValue(), scale);
+			applyLiquidPairSurfaceTensionPair(secondPhase, entry.getValue(), scale);
 		}
 	}
 
-	private void applyLiquidPairSurfaceTensionPair(int phaseA, int phaseB, double tension, float scale) {
+	private void applyLiquidPairSurfaceTensionPair(int phaseB, double tension, float scale) {
 		for (int index = 0; index < cellCount; index++) {
 			if (solid[index]) {
 				surfaceTensionColor[index] = 0.0;
