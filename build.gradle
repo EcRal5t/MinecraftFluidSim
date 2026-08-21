@@ -98,6 +98,14 @@ tasks.register("runM4SurfaceTensionValidation", JavaExec) {
 	mainClass = "com.example.fluid.M4SurfaceTensionValidation"
 }
 
+tasks.register("runAirNetworkValidation", JavaExec) {
+	group = "verification"
+	description = "Runs the standalone M5 gas-network isothermal EoS, orifice transport and exact-ledger gate."
+	dependsOn tasks.named("testClasses")
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = "com.example.fluid.air.AirNetworkValidation"
+}
+
 tasks.register("runFluidRegionManagerValidation", JavaExec) {
 	group = "verification"
 	description = "Runs the in-memory fluid-region admission, selection and atomic-replacement regression."
