@@ -44,6 +44,9 @@ public final class FlipFluidDomain {
 	private final double[] surfaceTensionColor;
 	private final double[] surfaceTensionSmoothed;
 	private final double[] surfaceTensionPairCurvature;
+	private final double[] surfaceTensionNormalX;
+	private final double[] surfaceTensionNormalY;
+	private final double[] surfaceTensionNormalZ;
 	private boolean surfaceTensionActive;
 	private boolean liquidPairTensionActive;
 	private static final int[][] SURFACE_TENSION_DIRECTIONS = {{-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0}, {0,0,-1}, {0,0,1}};
@@ -131,6 +134,9 @@ public final class FlipFluidDomain {
 		this.surfaceTensionColor = new double[cellCount];
 		this.surfaceTensionSmoothed = new double[cellCount];
 		this.surfaceTensionPairCurvature = new double[cellCount];
+		this.surfaceTensionNormalX = new double[cellCount];
+		this.surfaceTensionNormalY = new double[cellCount];
+		this.surfaceTensionNormalZ = new double[cellCount];
 		this.cellPhaseHead = new int[cellCount];
 		this.phaseEntryLabel = new int[initialParticleCapacity];
 		this.phaseEntryNext = new int[initialParticleCapacity];
@@ -888,6 +894,7 @@ public final class FlipFluidDomain {
 			surfaceTensionColor[index] = phaseFraction(index, phaseB);
 		}
 		smoothSurfaceTensionColor();
+		rebuildSurfaceTensionNormals();
 		Arrays.fill(surfaceTensionPairCurvature, 0.0);
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int index = cellIndex(x, y, z);
@@ -951,6 +958,7 @@ public final class FlipFluidDomain {
 					: 0.0;
 		}
 		smoothSurfaceTensionColor();
+		rebuildSurfaceTensionNormals();
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int index = cellIndex(x, y, z);
 			if (solid[index] || markerCount[index] == 0) continue;
@@ -989,52 +997,60 @@ public final class FlipFluidDomain {
 				- surfaceTensionSmoothed[cellIndex(xMinus, yMinus, zMinus)]);
 	}
 
-	/** Unit interface normal at a cell centre, pointing from gas into liquid. */
-	private double surfaceTensionNormalComponent(int x, int y, int z, int component) {
-		double gradientX = surfaceTensionCentralDifference(x, y, z, 1, 0, 0);
-		double gradientY = surfaceTensionCentralDifference(x, y, z, 0, 1, 0);
-		double gradientZ = surfaceTensionCentralDifference(x, y, z, 0, 0, 1);
-		double length = Math.sqrt(gradientX * gradientX + gradientY * gradientY + gradientZ * gradientZ);
+	/** Unit interface normal at a cell centre, pointing from gas into liquid, computed once per cell into the cache. */
+	private void rebuildSurfaceTensionNormals() {
 		double epsilon = 1.0E-6 / config.cellSize();
-		if (length <= epsilon) return component == 2 ? 1.0 : 0.0;
-		double normalX = gradientX / length;
-		double normalY = gradientY / length;
-		double normalZ = gradientZ / length;
-		double[] solidNormal = surfaceTensionSolidNormal(x, y, z);
-		if (solidNormal == null) {
-			return switch (component) {
-				case 0 -> normalX;
-				case 1 -> normalY;
-				default -> normalZ;
-			};
+		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int index = cellIndex(x, y, z);
+			if (solid[index]) {
+				surfaceTensionNormalX[index] = 0.0;
+				surfaceTensionNormalY[index] = 0.0;
+				surfaceTensionNormalZ[index] = 1.0;
+				continue;
+			}
+			double gradientX = surfaceTensionCentralDifference(x, y, z, 1, 0, 0);
+			double gradientY = surfaceTensionCentralDifference(x, y, z, 0, 1, 0);
+			double gradientZ = surfaceTensionCentralDifference(x, y, z, 0, 0, 1);
+			double length = Math.sqrt(gradientX * gradientX + gradientY * gradientY + gradientZ * gradientZ);
+			if (length <= epsilon) {
+				surfaceTensionNormalX[index] = 0.0;
+				surfaceTensionNormalY[index] = 0.0;
+				surfaceTensionNormalZ[index] = 1.0;
+				continue;
+			}
+			double normalX = gradientX / length;
+			double normalY = gradientY / length;
+			double normalZ = gradientZ / length;
+			double[] solidNormal = surfaceTensionSolidNormal(x, y, z);
+			if (solidNormal == null) {
+				surfaceTensionNormalX[index] = normalX;
+				surfaceTensionNormalY[index] = normalY;
+				surfaceTensionNormalZ[index] = normalZ;
+				continue;
+			}
+			double contactAngle = surfaceTensionContactAngleAtCell(index);
+			double cosTheta = Math.cos(contactAngle);
+			double sinTheta = Math.sin(contactAngle);
+			double nsx = solidNormal[0], nsy = solidNormal[1], nsz = solidNormal[2];
+			double dot = normalX * nsx + normalY * nsy + normalZ * nsz;
+			double tangentX = normalX - dot * nsx;
+			double tangentY = normalY - dot * nsy;
+			double tangentZ = normalZ - dot * nsz;
+			double tangentLength = Math.sqrt(tangentX * tangentX + tangentY * tangentY + tangentZ * tangentZ);
+			if (tangentLength <= 1.0E-9) {
+				tangentX = Math.abs(nsx) < 0.9 ? 1.0 : 0.0;
+				tangentY = Math.abs(nsx) < 0.9 ? 0.0 : 1.0;
+				tangentZ = 0.0;
+				dot = tangentX * nsx + tangentY * nsy + tangentZ * nsz;
+				tangentX -= dot * nsx;
+				tangentY -= dot * nsy;
+				tangentZ -= dot * nsz;
+				tangentLength = Math.sqrt(tangentX * tangentX + tangentY * tangentY + tangentZ * tangentZ);
+			}
+			surfaceTensionNormalX[index] = -cosTheta * nsx + sinTheta * tangentX / tangentLength;
+			surfaceTensionNormalY[index] = -cosTheta * nsy + sinTheta * tangentY / tangentLength;
+			surfaceTensionNormalZ[index] = -cosTheta * nsz + sinTheta * tangentZ / tangentLength;
 		}
-		double contactAngle = surfaceTensionContactAngleAtCell(cellIndex(x, y, z));
-		double cosTheta = Math.cos(contactAngle);
-		double sinTheta = Math.sin(contactAngle);
-		double nsx = solidNormal[0], nsy = solidNormal[1], nsz = solidNormal[2];
-		double dot = normalX * nsx + normalY * nsy + normalZ * nsz;
-		double tangentX = normalX - dot * nsx;
-		double tangentY = normalY - dot * nsy;
-		double tangentZ = normalZ - dot * nsz;
-		double tangentLength = Math.sqrt(tangentX * tangentX + tangentY * tangentY + tangentZ * tangentZ);
-		if (tangentLength <= 1.0E-9) {
-			tangentX = Math.abs(nsx) < 0.9 ? 1.0 : 0.0;
-			tangentY = Math.abs(nsx) < 0.9 ? 0.0 : 1.0;
-			tangentZ = 0.0;
-			dot = tangentX * nsx + tangentY * nsy + tangentZ * nsz;
-			tangentX -= dot * nsx;
-			tangentY -= dot * nsy;
-			tangentZ -= dot * nsz;
-			tangentLength = Math.sqrt(tangentX * tangentX + tangentY * tangentY + tangentZ * tangentZ);
-		}
-		double adjustedX = -cosTheta * nsx + sinTheta * tangentX / tangentLength;
-		double adjustedY = -cosTheta * nsy + sinTheta * tangentY / tangentLength;
-		double adjustedZ = -cosTheta * nsz + sinTheta * tangentZ / tangentLength;
-		return switch (component) {
-			case 0 -> adjustedX;
-			case 1 -> adjustedY;
-			default -> adjustedZ;
-		};
 	}
 
 	private double[] surfaceTensionSolidNormal(int x, int y, int z) {
@@ -1083,11 +1099,19 @@ public final class FlipFluidDomain {
 	private double surfaceTensionNeighborNormal(int x, int y, int z, int dx, int dy, int dz, int component) {
 		int nx = x + dx, ny = y + dy, nz = z + dz;
 		if (inside(nx, ny, nz) && solid[cellIndex(nx, ny, nz)]) {
-			return surfaceTensionNormalComponent(x, y, z, component);
+			return cachedSurfaceTensionNormal(cellIndex(x, y, z), component);
 		}
-		return surfaceTensionNormalComponent(Math.min(sizeX - 1, Math.max(0, nx)),
+		return cachedSurfaceTensionNormal(cellIndex(Math.min(sizeX - 1, Math.max(0, nx)),
 				Math.min(sizeY - 1, Math.max(0, ny)),
-				Math.min(sizeZ - 1, Math.max(0, nz)), component);
+				Math.min(sizeZ - 1, Math.max(0, nz))), component);
+	}
+
+	private double cachedSurfaceTensionNormal(int cell, int component) {
+		return switch (component) {
+			case 0 -> surfaceTensionNormalX[cell];
+			case 1 -> surfaceTensionNormalY[cell];
+			default -> surfaceTensionNormalZ[cell];
+		};
 	}
 
 	/**
