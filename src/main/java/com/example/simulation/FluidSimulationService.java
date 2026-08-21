@@ -10,6 +10,7 @@ import com.example.fluid.FluidMaterial;
 import com.example.fluid.FluidMaterialRegistry;
 import com.example.fluid.FluidMaterialRenderSnapshot;
 import com.example.fluid.FluidSolverConfig;
+import com.example.fluid.air.AirNetwork;
 import com.example.network.FluidMaterialSnapshotPayload;
 import com.example.network.FluidSnapshotPayload;
 import com.example.network.FluidProtocolServer;
@@ -267,7 +268,7 @@ public final class FluidSimulationService {
 		}
 		BlockPos newOrigin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
 		try {
-			createTensionEmpty(level, newOrigin);
+			createTransientEmptyRegion(level, newOrigin);
 		} catch (IllegalStateException exception) {
 			lastTakeoverFailure = exception.getMessage();
 			return false;
@@ -282,6 +283,66 @@ public final class FluidSimulationService {
 		activeRegion().setPaused(true);
 		sendSnapshot(level);
 		return true;
+	}
+
+	/**
+	 * Creates a paused transient U-tube demo: the left chamber is sealed with a gas pocket
+	 * preset above or below ambient pressure, the right chamber is open to ambient. Running it
+	 * shows the gas pressure holding a sustained liquid-level difference. Pure water, no
+	 * surface tension, no material gate; writes no region-state and touches no vanilla water.
+	 */
+	public boolean createAirDemo(ServerPlayer player, boolean vacuum) {
+		Vec3 look = player.getLookAngle();
+		BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
+		ServerLevel level = player.level();
+		RestorationStats restoration = restoreTakeover(level.getServer());
+		if (!restoration.completed()) return false;
+		if (activeRegion() != null && activeRegion().controllerManaged()) {
+			lastTakeoverFailure = "拒绝用开发测试域覆盖持久控制器区域；请先显式移除控制器区域";
+			return false;
+		}
+		BlockPos newOrigin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
+		try {
+			createTransientEmptyRegion(level, newOrigin);
+		} catch (IllegalStateException exception) {
+			lastTakeoverFailure = exception.getMessage();
+			return false;
+		}
+		refreshCollisions(level);
+		FlipFluidDomain domain = domain();
+		buildAirDemoUtube(domain);
+		domain.step();
+		AirNetwork network = domain.airNetwork();
+		if (network.nodeCount() != 1) {
+			lastTakeoverFailure = "气压演示域未形成单一密闭气腔；当前节点数 " + network.nodeCount();
+			return false;
+		}
+		int node = network.nodeIds().get(0);
+		double available = network.availableVolume(node);
+		network.setStandardVolume(node, vacuum ? available * 1.15 : available * 0.85);
+		activeRegion().setPaused(true);
+		sendSnapshot(level);
+		return true;
+	}
+
+	/** Sealed-left / open-right U-tube with a water-filled bottom passage in the transient demo grid. */
+	private static void buildAirDemoUtube(FlipFluidDomain domain) {
+		int sx = domain.sizeX(), sy = domain.sizeY(), sz = domain.sizeZ();
+		for (int z = 0; z < sz; z++) for (int y = 0; y < sy; y++) for (int x = 0; x < sx; x++) {
+			// the shell keeps every air cell away from the boundary layer except the open right top
+			boolean shell = x == 0 || x == sx - 1 || z == 0 || z == sz - 1 || y == 0;
+			boolean roof = y == sy - 1 && x <= 12;
+			boolean divider = (x == 11 || x == 12) && y >= 5;
+			if (shell || roof || divider) domain.setSolid(x, y, z, true);
+		}
+		for (int z = 1; z < sz - 1; z++) for (int y = 1; y <= 6; y++) {
+			for (int x = 1; x <= 10; x++) domain.setVolume(x, y, z, 1.0F);
+			for (int x = 13; x <= sx - 2; x++) domain.setVolume(x, y, z, 1.0F);
+		}
+		for (int z = 1; z < sz - 1; z++) for (int y = 1; y <= 4; y++) {
+			domain.setVolume(11, y, z, 1.0F);
+			domain.setVolume(12, y, z, 1.0F);
+		}
 	}
 
 	private static void bindTensionDemoMaterial(FlipFluidDomain domain, int angleDegrees) {
@@ -307,7 +368,7 @@ public final class FluidSimulationService {
 		));
 	}
 
-	private void createTensionEmpty(ServerLevel level, BlockPos origin) {
+	private void createTransientEmptyRegion(ServerLevel level, BlockPos origin) {
 		FluidRegion replaced = activeRegion();
 		if (replaced != null && replaced.controllerManaged()) {
 			throw new IllegalStateException("Refusing to replace a persistent controller region; remove it explicitly first");
@@ -867,8 +928,9 @@ public final class FluidSimulationService {
 				: "controller " + footprint.controllerPosition().toShortString() + ", boundary "
 						+ footprint.boundaryBlocks().size() + ", chunks " + footprint.requiredChunks().size();
 		String availability = region.availabilityFailure() == null ? "ready" : "blocked: " + region.availabilityFailure();
+		String gas = gasSummary(domain);
 		return String.format(
-				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | entities %s/%d | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s",
+				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | entities %s/%d | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s%s",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",
 				region.id().toString().substring(0, 8),
 				usage.regionCount(), regionManager.limits().maximumRegions(),
@@ -884,8 +946,27 @@ public final class FluidSimulationService {
 				domain.maximumPressure(),
 				solids.partialCells(), solids.fullCells(),
 				collision.changedCells(), collision.escapedCellVolume() / CELL_VOLUMES_PER_BLOCK,
-				collision.markerBudgetLimited() ? " (marker budget)" : "", stats
+				collision.markerBudgetLimited() ? " (marker budget)" : "", stats,
+				gas.isEmpty() ? "" : " | " + gas
 		);
+	}
+
+	/** Read-only gas-network summary for status output; empty when no sealed cavity exists. */
+	private static String gasSummary(FlipFluidDomain domain) {
+		AirNetwork network = domain.airNetwork();
+		List<Integer> ids = network.nodeIds();
+		if (ids.isEmpty()) return "";
+		StringBuilder builder = new StringBuilder("gas ");
+		for (int i = 0; i < ids.size() && i < 4; i++) {
+			int id = ids.get(i);
+			if (i > 0) builder.append("; ");
+			builder.append(String.format("node %d p=%+.0f Pa V0=%.2f m³",
+					id, network.gaugePressure(id), network.standardVolume(id)));
+		}
+		if (ids.size() > 4) builder.append("; +").append(ids.size() - 4).append(" more");
+		builder.append(String.format(", vented %.2f m³ drawn %.2f m³",
+				AirNetwork.cubicMeters(network.ventedNanos()), AirNetwork.cubicMeters(network.drawnFromAmbientNanos())));
+		return builder.toString();
 	}
 
 	public void sendSnapshot(ServerLevel level) {

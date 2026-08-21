@@ -26,6 +26,16 @@ public final class RealWaterCommands {
 								.then(Commands.argument("angle", IntegerArgumentType.integer(1, 179))
 										.executes(context -> audit(context, () -> createTensionDemo(
 												context.getSource(), IntegerArgumentType.getInteger(context, "angle"))))))
+						.then(Commands.literal("airdemo")
+								.executes(context -> audit(context, () -> createAirDemo(context.getSource(), "pressure")))
+								.then(Commands.argument("mode", StringArgumentType.word())
+										.suggests((context, builder) -> {
+											builder.suggest("pressure");
+											builder.suggest("vacuum");
+											return builder.buildFuture();
+										})
+										.executes(context -> audit(context, () -> createAirDemo(
+												context.getSource(), StringArgumentType.getString(context, "mode"))))))
 						.then(Commands.literal("capture").executes(context -> audit(context, () -> capture(context.getSource(), false))))
 						.then(Commands.literal("takeover").executes(context -> audit(context, () -> capture(context.getSource(), true))))
 						.then(Commands.literal("pour")
@@ -101,6 +111,21 @@ public final class RealWaterCommands {
 			return fail(source, "无法创建表面张力测试域：" + service.lastTakeoverFailure());
 		}
 		return succeed(source, "已创建暂停的表面张力球形冠液滴（σ=100，θ=" + angleDegrees + "°；同体积球冠，瞬态，不写 region-state）；先比较 θ=30° 与 θ=120° 的暂停形状，再用 /realwater step 或 /realwater run", 1);
+	}
+
+	private static int createAirDemo(CommandSourceStack source, String mode)
+			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+		boolean vacuum = "vacuum".equals(mode);
+		if (!vacuum && !"pressure".equals(mode)) {
+			return fail(source, "airdemo 模式必须是 pressure 或 vacuum");
+		}
+		ServerPlayer player = source.getPlayerOrException();
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		if (!service.createAirDemo(player, vacuum)) {
+			return fail(source, "无法创建气压测试域：" + service.lastTakeoverFailure());
+		}
+		return succeed(source, "已创建暂停的气压 U 型管域（左腔密闭气" + (vacuum ? "体预置负压" : "体预置正压")
+				+ "，右腔通大气；瞬态，不写 region-state）；用 /realwater run 观察两侧液面差并保持，/realwater status 查看气压", 1);
 	}
 
 	private static int capture(CommandSourceStack source, boolean takeover) throws com.mojang.brigadier.exceptions.CommandSyntaxException {

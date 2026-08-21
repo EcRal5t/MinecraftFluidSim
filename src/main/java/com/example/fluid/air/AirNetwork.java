@@ -35,6 +35,9 @@ public final class AirNetwork {
 	/** Converts cubic metres to exact nanovolume quanta. */
 	public static long nanos(double cubicMeters) { return AirNode.toNanos(cubicMeters); }
 
+	/** Converts nanovolume quanta to cubic metres. */
+	public static double cubicMeters(long nanos) { return nanos * AirNode.NANO_VOLUME; }
+
 	private final TreeMap<Integer, AirNode> nodes = new TreeMap<>();
 	private final List<AirEdge> edges = new ArrayList<>();
 	private int nextNodeId = 1;
