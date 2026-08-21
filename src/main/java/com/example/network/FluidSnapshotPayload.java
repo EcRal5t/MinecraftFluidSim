@@ -39,6 +39,10 @@ public record FluidSnapshotPayload(
 	private static final Identifier CLEAR_DIMENSION = Identifier.fromNamespaceAndPath("minecraft", "overworld");
 
 	public static final Type<FluidSnapshotPayload> TYPE = new Type<>(RealWaterMod.id("fluid_snapshot_v1"));
+
+	/** Extension type carrying the per-cell sealed gas node mask for debug overlays. */
+	public static final int EXTENSION_GAS_NODES = 1;
+
 	public static final StreamCodec<FriendlyByteBuf, FluidSnapshotPayload> CODEC = StreamCodec.of(
 			FluidSnapshotPayload::encode,
 			FluidSnapshotPayload::decode
@@ -107,6 +111,29 @@ public record FluidSnapshotPayload(
 				FluidProtocol.CURRENT_VERSION, Kind.SNAPSHOT, dimension, regionId, generation, sequence,
 				FluidProtocol.PURE_WATER_PALETTE_VERSION, origin, cellSize, sizeX, sizeY, sizeZ,
 				volume, markers, solids, debugOverlays, List.of()
+		);
+	}
+
+	public static FluidSnapshotPayload snapshot(
+			Identifier dimension,
+			UUID regionId,
+			long generation,
+			long sequence,
+			BlockPos origin,
+			float cellSize,
+			int sizeX,
+			int sizeY,
+			int sizeZ,
+			byte[] volume,
+			byte[] markers,
+			byte[] solids,
+			boolean debugOverlays,
+			List<Extension> extensions
+	) {
+		return new FluidSnapshotPayload(
+				FluidProtocol.CURRENT_VERSION, Kind.SNAPSHOT, dimension, regionId, generation, sequence,
+				FluidProtocol.PURE_WATER_PALETTE_VERSION, origin, cellSize, sizeX, sizeY, sizeZ,
+				volume, markers, solids, debugOverlays, extensions
 		);
 	}
 

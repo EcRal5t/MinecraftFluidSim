@@ -94,7 +94,7 @@
 | M5 气体 EoS/孔流/库存账本（无网格） | `runAirNetworkValidation` | 接入活动核心后改跑 M5 耦合门 |
 | M5 空腔扫描/环境判定/几何边 | `runAirCavityScannerValidation` | 改 cut-cell 共享面定义才加 cut-cell 门 |
 | M5 活动核心气液耦合/界面气压 | `runM5GasLiquidCouplingValidation` | 该门已含逐位退化、准静态单调压缩、负压悬液与孔链均压；只有改 wire/存档才加对应门 |
-| `airdemo`/气体状态输出 | `runM5GasLiquidCouplingValidation` | 改 entrypoint/payload 注册才跑 EULA=false server |
+| `airdemo` 玻璃脚手架/gas debug extension | `runFluidNetworkProtocolValidation` | 改 entrypoint/payload 注册才跑 EULA=false server；玻璃恢复账本无自动门，属实机 smoke 项 |
 | 材料门配置或 live 协商 | `runFluidNetworkProtocolValidation` | 改 payload 注册/entrypoint 才跑 EULA=false server |
 | manager | `runFluidRegionManagerValidation` | 同时跨 lifecycle/persistence 才加对应门 |
 | lifecycle/tick | `runFluidRegionLifecycleValidation` | 同时改 ownership 才加 persistence |

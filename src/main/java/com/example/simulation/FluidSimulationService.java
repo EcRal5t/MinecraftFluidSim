@@ -239,6 +239,10 @@ public final class FluidSimulationService {
 		return ControllerActivation.created(footprint);
 	}
 
+	/** World blocks the airdemo glass scaffold replaced, for restoration; null dimension means no scaffold. */
+	private final Map<BlockPos, BlockState> airDemoScaffolding = new HashMap<>();
+	private ResourceKey<Level> airDemoScaffoldingDimension;
+
 	public boolean createDemo(ServerPlayer player) {
 		return createDemo(player, false);
 	}
@@ -260,6 +264,7 @@ public final class FluidSimulationService {
 		Vec3 look = player.getLookAngle();
 		BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
 		ServerLevel level = player.level();
+		restoreAirDemoScaffolding(level.getServer());
 		RestorationStats restoration = restoreTakeover(level.getServer());
 		if (!restoration.completed()) return false;
 		if (activeRegion() != null && activeRegion().controllerManaged()) {
@@ -286,13 +291,12 @@ public final class FluidSimulationService {
 	}
 
 	/**
-	 * Creates a paused transient gas-pressure demo from a container the player built out of real
-	 * blocks: it must be fully closed and split by an inner divider whose bottom opening sits
-	 * below the water line, forming two sealed gas chambers over one connected water body. The
-	 * command samples the world geometry, fills the lower part of each chamber with water and
-	 * presets the two gas pockets to opposite gauge pressures; running it then shows the divider
-	 * holding a sustained liquid-level difference. Pure water, no surface tension, no material
-	 * gate; writes no region-state and modifies no world blocks.
+	 * Creates a paused transient gas-pressure demo: a glass U-tube is scaffolded into the world
+	 * (replacing only air), the lower part is filled with water, and the sealed left chamber's
+	 * gas pocket is preset above or below ambient pressure while the right chamber stays open.
+	 * Running it shows the gas pressure holding a sustained liquid-level difference. Pure water,
+	 * no surface tension, no material gate; writes no region-state and the scaffold restores on
+	 * removal, replacement or server shutdown.
 	 */
 	public boolean createAirDemo(ServerPlayer player, boolean vacuum) {
 		Vec3 look = player.getLookAngle();
@@ -305,85 +309,86 @@ public final class FluidSimulationService {
 			return false;
 		}
 		BlockPos newOrigin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
+		restoreAirDemoScaffolding(level.getServer());
 		try {
 			createTransientEmptyRegion(level, newOrigin);
 		} catch (IllegalStateException exception) {
 			lastTakeoverFailure = exception.getMessage();
 			return false;
 		}
+		placeAirDemoScaffolding(level, newOrigin);
 		refreshCollisions(level);
 		FlipFluidDomain domain = domain();
-		domain.step();
-		if (domain.airNetwork().nodeCount() < 1) {
-			lastTakeoverFailure = "未检测到密闭空间；请在准星方向的 12×8×12 模拟区域内建一个完全封闭的房间"
-					+ "（墙壁无缺口、留顶盖）";
-			return false;
-		}
-		if (!fillAirDemoWater(domain)) {
-			lastTakeoverFailure = "密闭气腔内空间不足，无法注入演示水体；请加大容器";
-			return false;
-		}
+		fillAirDemoWater(domain);
 		domain.step();
 		AirNetwork network = domain.airNetwork();
-		if (network.nodeCount() < 2) {
-			lastTakeoverFailure = "注水后空气未分成两个密闭气腔；请在房间中间加一道隔墙，并在隔墙底部留高度不超过"
-					+ "房间一半的门洞，让水位淹没门洞把两侧空气分开；当前密闭气腔数 " + network.nodeCount();
+		if (network.nodeCount() < 1) {
+			lastTakeoverFailure = "左侧气腔未密闭；玻璃只替换空气方块，请清理模拟区域内的其他方块后重试";
 			return false;
 		}
-		int first = network.nodeIds().get(0);
-		int second = network.nodeIds().get(1);
-		double firstAvailable = network.availableVolume(first);
-		double secondAvailable = network.availableVolume(second);
-		if (vacuum) {
-			network.setStandardVolume(first, firstAvailable * 1.25);
-			network.setStandardVolume(second, secondAvailable * 0.80);
-		} else {
-			network.setStandardVolume(first, firstAvailable * 0.88);
-			network.setStandardVolume(second, secondAvailable * 1.08);
-		}
+		int node = network.nodeIds().get(0);
+		network.setStandardVolume(node, network.availableVolume(node) * (vacuum ? 1.25 : 0.88));
 		activeRegion().setPaused(true);
 		sendSnapshot(level);
 		return true;
 	}
 
-	/**
-	 * Fills the lower half of every sealed gas cavity with water, so a divided room splits its
-	 * air into two pockets above the connected water body. Returns false when no cavity had room
-	 * for water; the partial boundary cell keeps the gas volume continuous.
-	 */
-	private static boolean fillAirDemoWater(FlipFluidDomain domain) {
-		int[] bounds = new int[domain.airNetwork().nodeCount() * 4];
-		java.util.Arrays.fill(bounds, Integer.MAX_VALUE);
-		for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
-			for (int x = 0; x < domain.sizeX(); x++) {
-				int node = domain.airNodeAt(x, y, z);
-				if (node < 1) continue;
-				int base = (node - 1) * 4;
-				bounds[base] = Math.min(bounds[base], y);
-				bounds[base + 1] = Math.max(bounds[base + 1], y);
-				bounds[base + 2] = Math.min(bounds[base + 2], x);
-				bounds[base + 3] = Math.max(bounds[base + 3], x);
+	/** Glass U-tube layout in region-relative block coordinates: shell, sealed-left roof and a divider with a bottom doorway. */
+	private static boolean isAirDemoScaffoldBlock(int bx, int by, int bz) {
+		boolean shell = bx == 0 || bx == BLOCK_SIZE_X - 1 || bz == 0 || bz == BLOCK_SIZE_Z - 1 || by == 0;
+		boolean roof = by == BLOCK_SIZE_Y - 1 && bx <= 6;
+		boolean divider = bx == 6 && by >= 3;
+		return shell || roof || divider;
+	}
+
+	private void placeAirDemoScaffolding(ServerLevel level, BlockPos origin) {
+		airDemoScaffolding.clear();
+		airDemoScaffoldingDimension = level.dimension();
+		BlockState glass = Blocks.GLASS.defaultBlockState();
+		for (int by = 0; by < BLOCK_SIZE_Y; by++) for (int bz = 0; bz < BLOCK_SIZE_Z; bz++) {
+			for (int bx = 0; bx < BLOCK_SIZE_X; bx++) {
+				if (!isAirDemoScaffoldBlock(bx, by, bz)) continue;
+				BlockPos pos = origin.offset(bx, by, bz);
+				BlockState previous = level.getBlockState(pos);
+				if (!previous.isAir()) continue;
+				if (level.setBlock(pos, glass, Block.UPDATE_ALL)) airDemoScaffolding.put(pos, previous);
 			}
 		}
-		boolean filled = false;
-		for (int node = 1; node <= domain.airNetwork().nodeCount(); node++) {
-			int base = (node - 1) * 4;
-			if (bounds[base] == Integer.MAX_VALUE) continue;
-			double waterLine = bounds[base] + 0.5 * (bounds[base + 1] + 1 - bounds[base]);
-			for (int y = bounds[base]; y <= bounds[base + 1]; y++) {
-				double fraction = Math.min(1.0, waterLine - y);
-				if (fraction <= 0.0) break;
-				for (int x = bounds[base + 2]; x <= bounds[base + 3]; x++) {
-					for (int z = 0; z < domain.sizeZ(); z++) {
-						if (domain.airNodeAt(x, y, z) == node && !domain.isSolid(x, y, z)) {
-							domain.setVolume(x, y, z, (float) fraction);
-							filled = true;
+	}
+
+	/** Restores the world blocks the airdemo glass scaffold replaced; player-edited positions are left alone. */
+	public void restoreAirDemoScaffolding(MinecraftServer server) {
+		if (airDemoScaffoldingDimension == null) return;
+		ServerLevel level = server.getLevel(airDemoScaffoldingDimension);
+		if (level != null) {
+			for (Map.Entry<BlockPos, BlockState> entry : airDemoScaffolding.entrySet()) {
+				if (!level.getBlockState(entry.getKey()).is(Blocks.GLASS)) continue;
+				level.setBlock(entry.getKey(), entry.getValue(), Block.UPDATE_ALL);
+			}
+		}
+		airDemoScaffolding.clear();
+		airDemoScaffoldingDimension = null;
+	}
+
+	/** Fills both chambers to 3.5 blocks; the two-block doorway column stays inside the fill range and submerged. */
+	private static void fillAirDemoWater(FlipFluidDomain domain) {
+		for (int bz = 1; bz <= BLOCK_SIZE_Z - 2; bz++) {
+			for (int bx = 1; bx <= BLOCK_SIZE_X - 2; bx++) {
+				for (int by = 1; by <= 3; by++) {
+					float fraction = by <= 2 ? 1.0F : 0.5F;
+					for (int localZ = 0; localZ < CELLS_PER_BLOCK; localZ++) {
+						for (int localY = 0; localY < CELLS_PER_BLOCK; localY++) {
+							for (int localX = 0; localX < CELLS_PER_BLOCK; localX++) {
+								int x = bx * CELLS_PER_BLOCK + localX;
+								int y = by * CELLS_PER_BLOCK + localY;
+								int z = bz * CELLS_PER_BLOCK + localZ;
+								if (!domain.isSolid(x, y, z)) domain.setVolume(x, y, z, fraction);
+							}
 						}
 					}
 				}
 			}
 		}
-		return filled;
 	}
 
 	private static void bindTensionDemoMaterial(FlipFluidDomain domain, int angleDegrees) {
@@ -498,6 +503,7 @@ public final class FluidSimulationService {
 		Vec3 look = player.getLookAngle();
 		BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
 		ServerLevel level = player.level();
+		restoreAirDemoScaffolding(level.getServer());
 		RestorationStats restoration = restoreTakeover(level.getServer());
 		if (!restoration.completed()) return false;
 		if (activeRegion() != null && activeRegion().controllerManaged()) {
@@ -532,6 +538,7 @@ public final class FluidSimulationService {
 
 	public CaptureResult captureNearbyWater(ServerPlayer player, boolean takeover) {
 		ServerLevel level = player.level();
+		restoreAirDemoScaffolding(level.getServer());
 		RestorationStats restoration = restoreTakeover(level.getServer());
 		if (!restoration.completed()) {
 			return new CaptureResult(0, -1, restoration.failure());
@@ -896,6 +903,7 @@ public final class FluidSimulationService {
 			if (region != null) region.setPaused(true);
 			return restoration;
 		}
+		restoreAirDemoScaffolding(server);
 		String persistenceFailure = regionOperations.deletePersistentRegions();
 		if (persistenceFailure != null) return RestorationStats.failed(false, 0, 0, 0, persistenceFailure);
 		regionManager.clear();
@@ -1036,10 +1044,16 @@ public final class FluidSimulationService {
 
 	private static FluidSnapshotPayload createSnapshot(FluidRegion region) {
 		FlipFluidDomain domain = region.domain();
+		List<FluidSnapshotPayload.Extension> extensions = List.of();
+		if (domain.gasPressureActive()) {
+			extensions = List.of(new FluidSnapshotPayload.Extension(
+					FluidSnapshotPayload.EXTENSION_GAS_NODES, domain.copyGasNodeMask()));
+		}
 		return FluidSnapshotPayload.snapshot(
 				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence(),
 				region.origin(), domain.config().cellSize(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
-				domain.copyQuantizedVolume(), domain.copyMarkerMask(), domain.copySolidMask(), region.debugOverlays()
+				domain.copyQuantizedVolume(), domain.copyMarkerMask(), domain.copySolidMask(), region.debugOverlays(),
+				extensions
 		);
 	}
 

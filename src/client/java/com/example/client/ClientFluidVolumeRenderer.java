@@ -62,6 +62,10 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	private static final float SOLID_GREEN = 0.42F;
 	private static final float SOLID_BLUE = 0.08F;
 	private static final float SOLID_ALPHA = 0.20F;
+	private static final float GAS_RED = 0.55F;
+	private static final float GAS_GREEN = 0.55F;
+	private static final float GAS_BLUE = 0.58F;
+	private static final float GAS_ALPHA = 0.10F;
 	private static final float BOUNDS_ALPHA = 0.82F;
 
 	private static final Vector4f COLOR_MODULATOR = new Vector4f(1.0F, 1.0F, 1.0F, 1.0F);
@@ -210,9 +214,48 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 				if (state.solids()[index(state, x, y, z)] != 0) renderSolidCell(matrix, vertices, state, x, y, z, h);
 			}
 		}
+		byte[] gasNodes = gasNodeMask(state);
+		if (state.debugOverlays() && gasNodes != null) for (int z = 0; z < state.sizeZ(); z++) {
+			for (int y = 0; y < state.sizeY(); y++) for (int x = 0; x < state.sizeX(); x++) {
+				if (gasNodes[index(state, x, y, z)] != 0) renderGasCell(matrix, vertices, state, gasNodes, x, y, z, h);
+			}
+		}
 
 		if (state.debugOverlays()) renderBounds(matrix, vertices, state);
 		poses.popPose();
+	}
+
+	/** Per-cell sealed gas node ids from the snapshot extension, or null when absent. */
+	private static byte[] gasNodeMask(FluidSnapshotPayload state) {
+		for (FluidSnapshotPayload.Extension extension : state.extensions()) {
+			if (extension.type() == FluidSnapshotPayload.EXTENSION_GAS_NODES
+					&& extension.data().length == state.volume().length) {
+				return extension.data();
+			}
+		}
+		return null;
+	}
+
+	private static void renderGasCell(
+			Matrix4fc matrix, VertexConsumer vertices, FluidSnapshotPayload state, byte[] gasNodes,
+			int x, int y, int z, float h
+	) {
+		float minX = state.origin().getX() + x * h;
+		float minY = state.origin().getY() + y * h;
+		float minZ = state.origin().getZ() + z * h;
+		float maxX = minX + h;
+		float maxY = minY + h;
+		float maxZ = minZ + h;
+		if (!isGas(gasNodes, state, x - 1, y, z)) quadX(matrix, vertices, minX, minY, maxY, minZ, maxZ, false, GAS_RED, GAS_GREEN, GAS_BLUE, GAS_ALPHA);
+		if (!isGas(gasNodes, state, x + 1, y, z)) quadX(matrix, vertices, maxX, minY, maxY, minZ, maxZ, true, GAS_RED, GAS_GREEN, GAS_BLUE, GAS_ALPHA);
+		if (!isGas(gasNodes, state, x, y - 1, z)) quadY(matrix, vertices, minY, minX, maxX, minZ, maxZ, false, GAS_RED, GAS_GREEN, GAS_BLUE, GAS_ALPHA);
+		if (!isGas(gasNodes, state, x, y + 1, z)) quadY(matrix, vertices, maxY, minX, maxX, minZ, maxZ, true, GAS_RED, GAS_GREEN, GAS_BLUE, GAS_ALPHA);
+		if (!isGas(gasNodes, state, x, y, z - 1)) quadZ(matrix, vertices, minZ, minX, maxX, minY, maxY, false, GAS_RED, GAS_GREEN, GAS_BLUE, GAS_ALPHA);
+		if (!isGas(gasNodes, state, x, y, z + 1)) quadZ(matrix, vertices, maxZ, minX, maxX, minY, maxY, true, GAS_RED, GAS_GREEN, GAS_BLUE, GAS_ALPHA);
+	}
+
+	private static boolean isGas(byte[] gasNodes, FluidSnapshotPayload state, int x, int y, int z) {
+		return inside(state, x, y, z) && gasNodes[index(state, x, y, z)] != 0;
 	}
 
 	private static void buildMaterialGeometry(LevelRenderContext context, VertexConsumer vertices, MaterialFrame frame) {

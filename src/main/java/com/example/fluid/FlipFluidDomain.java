@@ -189,6 +189,21 @@ public final class FlipFluidDomain {
 		if (airCellNodeId == null) return -1;
 		return airCellNodeId[cellIndexChecked(x, y, z)];
 	}
+
+	/**
+	 * Read-only gas node mask for debug snapshots: one unsigned byte per cell holding the sealed
+	 * cavity id (clamped to 255; 0 for ambient air, non-air cells and before the first scan).
+	 * Display data only; it never feeds the solver.
+	 */
+	public byte[] copyGasNodeMask() {
+		byte[] mask = new byte[cellCount];
+		if (airCellNodeId == null) return mask;
+		for (int cell = 0; cell < cellCount; cell++) {
+			int node = airCellNodeId[cell];
+			mask[cell] = node >= 1 ? (byte) Math.min(255, node) : 0;
+		}
+		return mask;
+	}
 	public int maximumParticleCount() { return maximumParticleCount; }
 	public int markerCellCount() {
 		ensureGrid();

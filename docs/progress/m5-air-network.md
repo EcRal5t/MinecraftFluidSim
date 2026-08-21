@@ -39,9 +39,9 @@
 
 ## 实机 smoke
 
-实机首测发现首版 `airdemo` 用 solver-only 墙构造 U 型管，被周期性世界碰撞重采样清除且不可见（水自由摊平）。修正后的交互与控制器玩法一致，容器由玩家用真实方块建造：
+实机首测发现首版 `airdemo` 用 solver-only 墙构造 U 型管，被周期性世界碰撞重采样清除且不可见（水自由摊平）。修正为命令自动搭建玻璃 U 型管：玻璃只替换空气方块，恢复账本覆盖 `/realwater remove`、创建其他开发域与正常关服（异常崩溃后残留玻璃可手拆）；密闭气腔经 `fluid_snapshot_v1` 的 gas-node extension 传给客户端，`debug true` 时以高度透明灰色逐格显示。
 
-1. 建一个完全封闭的房间（位于准星方向 12×8×12 模拟区域内、≤8 格高），中间一道隔墙、底部留高度不超过房间一半的门洞。
-2. 对准房间 `/realwater airdemo pressure` → `/realwater run`：两侧液面形成并保持约 2 m 的气压支撑高差；`/realwater status` 显示 `gas node …p=…Pa V0=…m³` 两条。
-3. `/realwater remove` 后 `airdemo vacuum` 复测反号（另一侧抬高）。
+1. `/realwater airdemo pressure` → `/realwater run`：左侧密闭腔液面被压下、右侧抬高，形成并保持约 1.4 m 高差；`/realwater status` 显示 `gas node …p=…Pa V0=…m³`。
+2. `/realwater remove` 后 `airdemo vacuum` 复测反号（约 2.1 m）。
+3. `/realwater debug true` 观察灰色气体区域随液面压缩/膨胀。
 
