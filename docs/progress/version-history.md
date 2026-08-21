@@ -36,3 +36,7 @@
 - **0.10.0**：液气界面 `p_interface = σ κ` ghost-fluid 压力跳跃进入活动压力 RHS 与投影；近壁曲率法向施加 Young 接触角，不写死吸墙或墙角偏置。液液 `σ12` 以 `FluidMaterialRegistry.LiquidPairTension` 定义并按 balanced-force CSF 接入活动核心。`σ=0` 逐位退化回 M3，wire 与 `region-state` 字节仍不携带 M4/M4.1 字段。自动门覆盖静滴 Laplace 跳跃、液液 `σ12` 跳跃、无持续寄生流、合并/断开守恒和不同接触角铺展；另提供瞬态 `/realwater tensiondemo [角度]` 开发命令用于实机视觉验证。详见 [`m4-surface-tension.md`](m4-surface-tension.md)。
 
 可选 GPU probe 使用独立版本线，完整 0.1.0–0.1.16 结果见 [`m1-gpu-probe-report.md`](m1-gpu-probe-report.md)。
+
+## 0.11.0：M5 空气区域网络与气液压力
+
+- **0.11.0**：密闭气腔 flood fill 识别（预算 fail-open）、`long` 纳体积量子精确气体账本（`sealed + vented == drawnFromAmbient`）、等温状态方程、CONTAM 幂律有限速率孔流与拓扑事件库存迁移进入活动核心；自由面 ghost-fluid 跳跃升级为 `σκ + p_gas`，环境空气贡献为零，开放水域与 M4 逐位一致。气体状态 runtime-only，不进 wire/存档；新增瞬态 `/realwater airdemo [pressure|vacuum]` 与 status 气体段。详见 [`m5-air-network.md`](m5-air-network.md)。

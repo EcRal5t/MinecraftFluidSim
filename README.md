@@ -1,6 +1,6 @@
 # Real Water Prototype
 
-Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完成 M0–M4：主 Mod 由 CPU 权威求解，支持最多四个独立区域、控制器闭合边界、跨 chunk 完整加载、原子持久化、分数自由面和 cut-cell 碰撞，并在默认关闭的材料门后提供多液体、可变密度、液液界面，以及液气表面张力和 Young 接触角润湿。下一阶段是 M5 空气区域网络与气液压力。
+Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完成 M0–M5：主 Mod 由 CPU 权威求解，支持最多四个独立区域、控制器闭合边界、跨 chunk 完整加载、原子持久化、分数自由面和 cut-cell 碰撞，在默认关闭的材料门后提供多液体、可变密度、液液界面、液气表面张力和 Young 接触角润湿，并对密闭气腔提供等温气压、有限速率孔流与气液压力耦合。下一阶段是 M6 世界 ownership 与流体桥。
 
 这还不是原版水的全局替代。普通模拟不自动修改世界；控制器功能默认关闭。
 
@@ -20,6 +20,7 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完�
 | 创建开发域 | `/realwater demo`、`capture`、`takeover` |
 | 多材料开发域（需材料门） | `/realwater materialdemo` |
 | 表面张力液滴开发域（需材料门） | `/realwater tensiondemo [角度1-179]` |
+| 气压 U 型管开发域 | `/realwater airdemo [pressure\|vacuum]` |
 | 操作水量与碰撞 | `/realwater pour [1-16]`、`drain [1-16]`、`refresh` |
 | 运行控制 | `/realwater run`、`pause`、`step [1-20]`、`status` |
 | 区域与控制器 | `/realwater controllers [true|false]`、`regions list`、`regions select <uuid>`、`regions checkpoint` |
@@ -30,6 +31,8 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完�
 控制器玩法：用 `realwater:fluid_boundary` 建造完整的一格厚封闭外壳，以一个 `realwater:fluid_controller` 替换外壳方块，开启 `/realwater controllers true`，再空手右击控制器。首次激活只读采样内部原版水并创建暂停区域，不执行 takeover。
 
 多材料玩法：`/realwater materials true` 后重启服务器（单人模式退回主菜单再进入世界），再用 `/realwater materialdemo` 创建上油下水的暂停溃坝域。该域是瞬态的，不写 `region-state`，也不读取或接管原版水；桶与方块入口仍只支持纯水。
+
+气压玩法：`/realwater airdemo pressure`（或 `vacuum`）创建左腔密闭、右腔通大气的 U 型管域；`/realwater run` 后两侧液面形成并保持由气压支撑的稳定高差（正压约 1.8 m、负压约 1.3 m），`/realwater status` 的 gas 段显示密闭腔压力与库存。该域同样瞬态，不写 `region-state`。
 
 ## 构建
 

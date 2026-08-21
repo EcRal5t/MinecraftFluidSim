@@ -33,6 +33,8 @@
 | 自由面几何 | `src/main/java/com/example/fluid/FlipFreeSurfaceGeometry.java` | exact per-cell marker 和构造分数；`markerCount` 仍定压力相 |
 | MAC 空气外推 | `src/main/java/com/example/fluid/FlipVelocityExtrapolator.java` | 开放压力面播种；G2P 不采未定义空气零值 |
 | marker 分布压力约束 | `src/main/java/com/example/fluid/FlipVolumeDriftCorrection.java` | P2G 只生成目标散度，不结算或找平精确水量 |
+| M5 气体网络引擎 | `src/main/java/com/example/fluid/air/AirNode.java`、`src/main/java/com/example/fluid/air/AirEdge.java`、`src/main/java/com/example/fluid/air/AirNetwork.java` | 纳体积量子精确库存，`sealed + vented == drawn` 恒等；EoS/孔流只是派生；runtime-only，不是协议或存档 |
+| M5 空腔拓扑扫描 | `src/main/java/com/example/fluid/AirCavityScanner.java` | 预算内 flood fill；触达边界层或超预算即 ambient，绝不保存为有限密闭库存；部分开口面成为几何孔流边 |
 | runtime cut-cell | `src/main/java/com/example/fluid/FlipCutCellGeometry.java` | 散度、矩阵、预条件器和投影共享 face aperture |
 | marker CCD | `src/main/java/com/example/fluid/FlipParticleCollision.java` | 只截断命中法向，切向自由 |
 | 守恒 reseeding | `src/main/java/com/example/fluid/FlipParticleReseeder.java` | merge/split 保持体积、质量、动量、质心和硬预算；不跨 material/phase |
@@ -60,6 +62,8 @@
 - 调度异常：服务 `tickRegion`/`stepOnce`、`FluidRegionLifecycle`、wall time/substeps/residual。
 - 液液界面不可见或与外表面重合：`FluidMaterialSurfaceMesher` 的 phase 裁剪、快照量化分数、客户端 `MaterialFrame` 重建。
 - 多材料区域被锁住或只显示纯水：`materialsEnabled` 本次启动值、config 版本、manifest formatVersion、协商 capability。
+- 密闭液面不响应或气压异常：`AirCavityScanner` 环境判定与扫描预算、`AirNetwork` EoS/孔流、`FlipFluidDomain` 界面压力两处消费点。
+- 气体账本不平或腔体拓扑事件异常：`AirNetwork` 的 remap/merge/split 与开孔 vent 记账。
 
 ## 可选 GPU probe
 
@@ -87,6 +91,10 @@
 | 1D 变密度面系数实验 | `runVariableDensityFaceCoefficientValidation` | 已接入 3D 连通器，改该系数改跑 M3 连通器门 |
 | M4 表面张力曲率/Laplace 独立实验 | `runSurfaceTensionCurvatureValidation` | 接入活动核心压力算子后才加对应 solver 门 |
 | M4 活动核心表面张力/润湿/液液 | `runM4SurfaceTensionValidation` | 该门已含静滴 Laplace、液液 `σ12` 跳跃、无持续寄生流、合并/断开守恒和接触角铺展；只有改 wire/存档才加对应门 |
+| M5 气体 EoS/孔流/库存账本（无网格） | `runAirNetworkValidation` | 接入活动核心后改跑 M5 耦合门 |
+| M5 空腔扫描/环境判定/几何边 | `runAirCavityScannerValidation` | 改 cut-cell 共享面定义才加 cut-cell 门 |
+| M5 活动核心气液耦合/界面气压 | `runM5GasLiquidCouplingValidation` | 该门已含逐位退化、准静态单调压缩、负压悬液与孔链均压；只有改 wire/存档才加对应门 |
+| `airdemo`/气体状态输出 | `runM5GasLiquidCouplingValidation` | 改 entrypoint/payload 注册才跑 EULA=false server |
 | 材料门配置或 live 协商 | `runFluidNetworkProtocolValidation` | 改 payload 注册/entrypoint 才跑 EULA=false server |
 | manager | `runFluidRegionManagerValidation` | 同时跨 lifecycle/persistence 才加对应门 |
 | lifecycle/tick | `runFluidRegionLifecycleValidation` | 同时改 ownership 才加 persistence |

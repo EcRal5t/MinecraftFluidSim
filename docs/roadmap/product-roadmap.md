@@ -1,8 +1,8 @@
 # Real Water 产品路线
 
-本文是尚未完成里程碑的总表。当前基线已经完成 M0、M1、M2、M2.5、M3 和 M4 液气首版；完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md)、[`../architecture/region-state-v1.md`](../architecture/region-state-v1.md) 与 [`../architecture/m3-material-state-migration.md`](../architecture/m3-material-state-migration.md)。
+本文是尚未完成里程碑的总表。当前基线已经完成 M0、M1、M2、M2.5、M3、M4 和 M5；完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md)、[`../architecture/region-state-v1.md`](../architecture/region-state-v1.md) 与 [`../architecture/m3-material-state-migration.md`](../architecture/m3-material-state-migration.md)。
 
-基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、主 Mod 0.10.0、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
+基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、主 Mod 0.11.0、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
 
 ## 技术规格路由
 
@@ -75,14 +75,13 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
   - M3 遗留的液液界面亚格混相/锯齿仍保留：曲率驱动的物理锐化与逐顶点法线平滑尚未实现，且不得用渲染补丁替代物理。
   - 不得以墙角偏置、受支撑强制找平或渲染收缩替代表面张力。
 
-## M5：空气区域网络与气液压力
+## M5：空气区域网络与气液压力（已完成）
 
-- 环境大气节点、密闭区域识别、区域分裂/合并与有限开口边。
-- 保存气体组分库存；液面体积改变更新气体可用体积，气压成为自由面边界。
-- 控制器域使用已知边界；未来天然空腔搜索默认最多 512 BV，触达未加载/环境/预算即停止。
-- 覆盖小孔/大开口有限均压、开孔库存守恒、汞柱和气液耦合。
-
-完成条件：达到有界工业系统 1.0；不扫描整片洞穴或逐格求解开放大气。
+- 密闭气腔识别、纳体积量子精确气体账本、等温 EoS、有限速率孔流、拓扑事件库存迁移与 `p_gas` 自由面边界均已进入活动核心；开放水域与 M4 逐位一致，气体状态 runtime-only。证据见 [`../progress/m5-air-network.md`](../progress/m5-air-network.md)。
+- 仍约束后续阶段：
+  - 气体库存不进 wire/存档；进存档需 region-state v3 与格式迁移评审。
+  - 天然空腔搜索入口与 512 BV 默认预算留待未来阶段；控制器域只消费已知边界。
+  - 气体温度/内能（M9）、气相反应（M7）与喷流细网格不在 M5 范围。
 
 ## M6：世界 ownership 与流体桥
 
@@ -144,6 +143,6 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
 
 ## 接下来三项
 
-1. 进入 M5：先冻结密闭气体网络识别、有限气体库存与气液压力边界，再安排对应 CPU 门。
-2. M5 气液压力边界需要复用 M4 的 ghost-fluid 自由面压力跳跃与 M4.1 的 balanced-force 液液 CSF，不引入第二套表面力离散。
+1. M6.0 设计评审：最小原型比较代理占位方块与"空气 + 独立 registry"，冻结 ownership、region-state、原版方块替换和解除接管的共同代次/恢复状态机。
+2. 气体状态进存档前先做 region-state v3 格式迁移评审；当前 runtime-only 重建语义已量化记录。
 3. 液液界面锐化/逐顶点平滑转入渲染里程碑评估，实机视觉复看结果将作为基线证据。

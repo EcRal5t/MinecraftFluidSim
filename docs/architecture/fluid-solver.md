@@ -9,6 +9,10 @@
 - **M4 数据契约**：`FluidMaterial` 冻结 `surfaceTension`（非负，0 为 M3 退化）与 `contactAngleRadians`（开区间 `(0, π)`，`π/2` 为无曲率中性）两个字段。当前 wire 与 `region-state` 字节都不携带它们，decode 侧用 `σ=0`、`π/2` 重建，冻结的内建材料也保持该缺省以保证 v2 无损 round-trip；真实数值要等 solver 消费它们、且格式迁移方案评审通过后再进入存档。
 - **M4 活动核心**：`σ>0` 时自由液气面使用 `p_interface = σ κ` 的 ghost-fluid 压力跳跃，曲率从 exact marker 液相分数一次平滑后 `κ=-div(n)` 计算；该压力跳跃同时进入压力 RHS 与投影，`σ=0` 逐位退化回 M3。固体润湿只在曲率法向中施加 Young 边界：近壁法向满足 `n·n_solid = -cosθ`，不使用吸墙或墙角偏置。
 - **M4.1 液液数据边界**：`FluidMaterialRegistry` 增加运行时-only 的 `LiquidPairTension`（非负，按 phase handle 无序对去重）。液液 `σ12` 与 M4 单相字段一样不进入 material snapshot、wire 或 `region-state` 字节；decode 路径重建空 pair 表，保持 v2 无损 round-trip。真实数值要等格式迁移评审通过后再进入存档。
+- **M5 气体真值**：每个密闭气腔的库存是标准状态等效体积，以 `long` 纳体积量子（1e-9 m³）精确记账；恒等式 `sealed + vented == drawnFromAmbient` 在 long 算术下严格成立，覆盖节点创建、注入、孔流输运、合并、分裂与 vent。液体 marker 账本与气体库存是两套独立真值，互不换算。
+- **M5 数值离散**：气腔可用体积 `V_avail` 每子步由扫描器从平滑液体体积场连续推导（含界面格残差，归属相邻最小 node id 的腔，ambient 优先）；表压由等温状态方程 `p = P0·(V0/max(V,V_min) − 1)` 派生并钳制在数值窗口。拓扑重扫按格多数归属迁移库存，真分裂按重叠计数比例分配、末项取余；新腔按环境平衡初始化（记为 drawn），开孔/消失经 remap 差额记为 vented。孔流按 CONTAM 幂律输运并钳制到均压分配，压差单调衰减不越过平衡。
+- **M5 界面气压**：自由液气面的 ghost-fluid 跳跃升级为 `p_interface = σ κ + p_gas(该面空气格所属密闭腔)`，按面解析同一腔的双面液柱；环境大气贡献恰好为零，因此无密闭腔时活动核心与 M4 逐位一致。空腔扫描触达边界层或预算耗尽即分类 ambient，绝不保存为有限库存；部分开口面成为几何孔流边而非连通。
+- **M5 运行时边界**：气体状态 runtime-only，不进 wire、`region-state` 或客户端快照；重启后密闭腔按环境平衡重建（`p=0`）。无独立配置门——气体不改变持久化格式，开放水域行为与 M4 逐位相同。
 - **材料门**：多材料只在 `materialsEnabled` 配置门本次启动为开时绑定。门开时 demo、capture 和控制器区域都绑定内建 palette，纯水区域即 palette index 0 的单材料状态；门关时活动核心继续走纯水路径。
 - **交接边界**：`FlipParticleState` 仍只允许纯水；任何非默认 material/phase/mass 状态导出都会显式失败。`FlipMaterialParticleState` 是独立内存 handoff，保存稳定 palette、每 marker material index 与 raw `double mass`；它本身不是 wire 或磁盘格式，`region-state v2` 仍独立校验长度、checksum、generation、palette 与预算。
 - **数值离散**：`markerCount > 0` 决定压力流体格；平滑 `volume[]`、PLIC 分数、cut-cell 开口和目标散度都不是第二套水量。
@@ -22,13 +26,14 @@
 ## 当前 PIC/FLIP 循环
 
 1. marker 向 MAC 网格做 P2G，重建 velocity、平滑 volume 和 containing-cell `markerCount`；变密度域从 marker 质量/动量求面速度，同密度域保持原体积权重。
-2. 压力相开放 MAC 面向空气外推两层，避免未定义空气数组零值阻尼小水滴。
-3. 施加重力，以共享 cut-face aperture 构造散度和压力系统。
-4. PLIC ghost-fluid `theta` 在压力矩阵、预条件器和投影中保持一致；变密度域还在三处共享 `rho_ref / rho_face`，其中液液面使用相体积分数给出的界面距离加权密度。M4 表面张力在自由液气面施加 `p_interface = σ κ`：曲率法向在近壁处施加 Young 接触角，压力跳跃同时进入压力 RHS 和投影，`σ=0` 保持 M3 逐位退化。M4.1 液液 `σ12` 以 balanced-force CSF 动量形式按相体积分数场加入 MAC 速度，再进入同一压力投影。
-5. 有界 rest-volume 目标只修正数值 marker 压缩，不编辑 `particleVolume`，也不强制液面水平。
-6. 投影后的有效 MAC 速度再次外推，G2P 使用 90% FLIP / 10% PIC。
-7. marker 逐轴扫掠并与 runtime cut-cell 碰撞，只截断命中轴法向。
-8. 每个完整物理步末执行确定性守恒 reseeding：过密格 merge，欠采样格 split，硬预算不足无损跳过；merge 不跨 material/phase，split 同时分割质量并继承标签。
+2. 气体网络重扫：空腔拓扑 flood fill、库存迁移、`V_avail` 刷新、几何孔流边重建与有限速率输运，然后求出各密闭腔 `p_gas`（无密闭腔时此步只产生 ambient 标记，后续路径与 M4 逐位一致）。
+3. 压力相开放 MAC 面向空气外推两层，避免未定义空气数组零值阻尼小水滴。
+4. 施加重力，以共享 cut-face aperture 构造散度和压力系统。
+5. PLIC ghost-fluid `theta` 在压力矩阵、预条件器和投影中保持一致；变密度域还在三处共享 `rho_ref / rho_face`，其中液液面使用相体积分数给出的界面距离加权密度。M4 表面张力在自由液气面施加 `p_interface = σ κ`：曲率法向在近壁处施加 Young 接触角，压力跳跃同时进入压力 RHS 和投影，`σ=0` 保持 M3 逐位退化。M4.1 液液 `σ12` 以 balanced-force CSF 动量形式按相体积分数场加入 MAC 速度，再进入同一压力投影。M5 密闭气压叠加进同一 `p_interface`（按面解析空气格所属腔），环境空气贡献为零。
+6. 有界 rest-volume 目标只修正数值 marker 压缩，不编辑 `particleVolume`，也不强制液面水平。
+7. 投影后的有效 MAC 速度再次外推，G2P 使用 90% FLIP / 10% PIC。
+8. marker 逐轴扫掠并与 runtime cut-cell 碰撞，只截断命中轴法向。
+9. 每个完整物理步末执行确定性守恒 reseeding：过密格 merge，欠采样格 split，硬预算不足无损跳过；merge 不跨 material/phase，split 同时分割质量并继承标签。
 
 ## 固体与自由表面
 
@@ -44,6 +49,7 @@
 - 变系数压力算子已在活动核心生效，并通过 1.25:1 与 13.6:1 竖直界面静水门、不同截面连通器和重轻液翻转分层门。
 - M4 液气表面张力与固体接触角已进入活动核心：静滴 Laplace 跳跃、无持续寄生流、合并/断开守恒和不同接触角铺展均已覆盖。
 - M4.1 液液 `σ12` 已进入活动核心：同密度两相满域液滴通过 Laplace 跳跃门和 5 步无持续寄生流门；液液 `σ12` 尚未进入 wire/存档。
+- M5 密闭气体网络已进入活动核心：等温 EoS、有限速率孔流、拓扑事件库存迁移与 `p_gas` 自由面边界均已生效；开放水域与 M4 逐位一致，气体状态 runtime-only 不进存档。
 - 活动材料几何按格稀疏聚合实际出现的 phase，条目总数不超过域 marker 容量；多相交汇不会截断为两个相。该状态只服务压力离散，内部界面 mesh 另由上述 mesher 重建。
 - 服务端 CPU 是物理规范；可选 GPU probe 仍只读、可回退，不写世界或存档。
 - 已接通最多四个有界区域、控制器边界、独立调度、`region-state v1` 与门控 `region-state v2`；当前集成说明见根 [`README.md`](../../README.md)。

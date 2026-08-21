@@ -22,6 +22,10 @@ final class M3MaterialDynamicsValidation {
 			open(domain, 1, y, 1);
 			for (int x = 6; x <= 7; x++) for (int z = 1; z <= 2; z++) open(domain, x, y, z);
 		}
+		// vent both column tops through the boundary layer so the air above the water is ambient;
+		// a sealed pocket would (correctly, since M5) act as a gas spring and hold a level difference
+		open(domain, 1, 8, 1);
+		for (int x = 6; x <= 7; x++) for (int z = 1; z <= 2; z++) open(domain, x, 8, z);
 		for (int x = 1; x <= 7; x++) domain.setVolume(x, 1, 1, 1.0F);
 		for (int x = 6; x <= 7; x++) domain.setVolume(x, 1, 2, 1.0F);
 		for (int y = 2; y <= 6; y++) domain.setVolume(1, y, 1, 1.0F);
@@ -76,6 +80,8 @@ final class M3MaterialDynamicsValidation {
 		for (int y = 1; y <= 5; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
 			open(domain, x, y, z);
 		}
+		// vent the box top through the boundary layer so the gas pocket above the liquid is ambient
+		for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) open(domain, x, 6, z);
 		for (int y = 1; y <= 4; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
