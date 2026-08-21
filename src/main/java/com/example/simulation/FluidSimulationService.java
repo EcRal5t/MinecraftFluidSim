@@ -327,7 +327,10 @@ public final class FluidSimulationService {
 			return false;
 		}
 		int node = network.nodeIds().get(0);
-		network.setStandardVolume(node, network.availableVolume(node) * (vacuum ? 1.25 : 0.88));
+		// pressure adds inventory (p = P0(V0/V - 1) > 0), vacuum removes it; the soft gas spring
+		// settles near a third of the preset head, so presets are scaled for a visible difference
+		network.setStandardVolume(node, vacuum ? network.availableVolume(node) * 0.78
+				: network.availableVolume(node) / 0.70);
 		activeRegion().setPaused(true);
 		sendSnapshot(level);
 		return true;

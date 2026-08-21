@@ -65,7 +65,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	private static final float GAS_RED = 0.55F;
 	private static final float GAS_GREEN = 0.55F;
 	private static final float GAS_BLUE = 0.58F;
-	private static final float GAS_ALPHA = 0.10F;
+	private static final float GAS_ALPHA = 0.18F;
 	private static final float BOUNDS_ALPHA = 0.82F;
 
 	private static final Vector4f COLOR_MODULATOR = new Vector4f(1.0F, 1.0F, 1.0F, 1.0F);

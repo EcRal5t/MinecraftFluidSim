@@ -124,9 +124,11 @@ public final class RealWaterCommands {
 		if (!service.createAirDemo(player, vacuum)) {
 			return fail(source, "无法创建气压测试域：" + service.lastTakeoverFailure());
 		}
-		return succeed(source, "已在准星方向的封闭房间内创建暂停的气压演示域（两个密闭气腔分别预置"
-				+ (vacuum ? "负压与正压" : "正压与较负压力") + "，下半注水；瞬态，不写 region-state、不改世界方块）；"
-				+ "用 /realwater run 观察两侧液面差并保持，/realwater status 查看气压", 1);
+		return succeed(source, "已在准星方向搭好玻璃 U 型管并创建暂停的气压演示域（"
+				+ (vacuum ? "封顶侧气腔预置负压，运行后封顶侧液面被吸升约 1.5 格"
+						: "封顶侧气腔预置正压，运行后封顶侧液面被压低约 2 格")
+				+ "；玻璃只替换空气，remove 时恢复；瞬态不写 region-state）；"
+				+ "用 /realwater run 观察，/realwater status 查看气压，/realwater debug true 以灰色显示密闭气体", 1);
 	}
 
 	private static int capture(CommandSourceStack source, boolean takeover) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
