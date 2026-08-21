@@ -106,6 +106,14 @@ tasks.register("runAirNetworkValidation", JavaExec) {
 	mainClass = "com.example.fluid.air.AirNetworkValidation"
 }
 
+tasks.register("runAirCavityScannerValidation", JavaExec) {
+	group = "verification"
+	description = "Runs the standalone M5 cavity topology, available-volume, geometric-edge and scan-budget gate."
+	dependsOn tasks.named("testClasses")
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = "com.example.fluid.AirCavityScannerValidation"
+}
+
 tasks.register("runFluidRegionManagerValidation", JavaExec) {
 	group = "verification"
 	description = "Runs the in-memory fluid-region admission, selection and atomic-replacement regression."
