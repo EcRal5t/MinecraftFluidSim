@@ -32,6 +32,9 @@ public final class AirNetwork {
 	/** The ambient reservoir: gauge pressure zero, unbounded inventory, never stored as a node. */
 	public static final int AMBIENT_NODE = 0;
 
+	/** Converts cubic metres to exact nanovolume quanta. */
+	public static long nanos(double cubicMeters) { return AirNode.toNanos(cubicMeters); }
+
 	private final TreeMap<Integer, AirNode> nodes = new TreeMap<>();
 	private final List<AirEdge> edges = new ArrayList<>();
 	private int nextNodeId = 1;
@@ -311,6 +314,30 @@ public final class AirNetwork {
 		}
 		edges.clear();
 		edges.addAll(rewired);
+	}
+
+	/**
+	 * Replaces the whole node set with slot-ordered nodes (ids 1..n) and clears all edges.
+	 * The caller's topology mapping is responsible for inventory conservation; the net
+	 * difference between the removed and replaced sums books as drawn (growth, e.g. newly
+	 * discovered cavities starting at ambient equilibrium) or vented (loss, e.g. a cavity
+	 * that opened to ambient or vanished under liquid), keeping the ledger identity exact.
+	 */
+	public void remapNodes(double[] availableVolumes, long[] inventoriesNanos) {
+		if (availableVolumes.length != inventoriesNanos.length) {
+			throw new IllegalArgumentException("Slot arrays must have equal length");
+		}
+		long oldSum = sealedInventoryNanos();
+		nodes.clear();
+		edges.clear();
+		long newSum = 0L;
+		for (int slot = 0; slot < inventoriesNanos.length; slot++) {
+			nodes.put(slot + 1, new AirNode(availableVolumes[slot], inventoriesNanos[slot]));
+			newSum += inventoriesNanos[slot];
+		}
+		nextNodeId = inventoriesNanos.length + 1;
+		if (newSum > oldSum) drawnFromAmbientNanos += newSum - oldSum;
+		else if (newSum < oldSum) ventedNanos += oldSum - newSum;
 	}
 
 	public long sealedInventoryNanos() {

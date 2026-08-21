@@ -43,7 +43,7 @@ public final class AirCavityScannerValidation {
 
 		Grid halfMetre = tank(n, true, 0.5F);
 		AirCavityScanner.Result scaled = new AirCavityScanner(n, n, n, 0.5F, n * n * n)
-				.scan(halfMetre.solid, halfMetre.markerCount, halfMetre.exactVolume, halfMetre.cutCells);
+				.scan(halfMetre.solid, halfMetre.markerCount, halfMetre.liquidVolume, halfMetre.cutCells);
 		checkRelative(scaled.sealedAvailableVolume()[0], 6 * 6 * 3 * 0.125, "half-metre cavity volume");
 	}
 
@@ -55,7 +55,7 @@ public final class AirCavityScannerValidation {
 			boolean shell = x == 0 || x == n - 1 || z == 0 || z == n - 1 || y == 0;
 			boolean divider = (x == 3 || x == 4) && y <= 5;
 			if (shell || divider) grid.solid[i] = true;
-			else if (y <= 1) { grid.markerCount[i] = 8; grid.exactVolume[i] = 1.0; }
+			else if (y <= 1) { grid.markerCount[i] = 8; grid.liquidVolume[i] = 1.0F; }
 		}
 		AirCavityScanner.Result result = scan(grid, n * n * n);
 		check(result.sealedNodeCount() == 0, "open U-tube air must classify as ambient");
@@ -76,7 +76,7 @@ public final class AirCavityScannerValidation {
 			if (outerShell || divider) grid.solid[i] = true;
 		}
 		AirCavityScanner.Result result = new AirCavityScanner(sizeX, sizeY, sizeZ, 1.0F, sizeX * sizeY * sizeZ)
-				.scan(grid.solid, grid.markerCount, grid.exactVolume, grid.cutCells);
+				.scan(grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells);
 		check(result.sealedNodeCount() == 2, "two isolated boxes must produce two sealed nodes, got " + result.sealedNodeCount());
 		checkRelative(result.sealedAvailableVolume()[0], 7 * 6 * 6, "first sealed cavity volume");
 		checkRelative(result.sealedAvailableVolume()[1], 6 * 6 * 6, "second sealed cavity volume");
@@ -115,7 +115,7 @@ public final class AirCavityScannerValidation {
 		for (int z = 1; z < n - 1; z++) for (int x = 1; x < n - 1; x++) {
 			int i = (z * n + 3) * n + x;
 			grid.markerCount[i] = 1;
-			grid.exactVolume[i] = 0.5;
+			grid.liquidVolume[i] = 0.5F;
 		}
 		AirCavityScanner.Result result = scan(grid, n * n * n);
 		check(result.sealedNodeCount() == 1, "partially filled sealed tank must stay one cavity");
@@ -126,7 +126,7 @@ public final class AirCavityScannerValidation {
 		for (int z = 1; z < n - 1; z++) for (int x = 1; x < n - 1; x++) {
 			int i = (z * n + 3) * n + x;
 			openGrid.markerCount[i] = 1;
-			openGrid.exactVolume[i] = 0.5;
+			openGrid.liquidVolume[i] = 0.5F;
 		}
 		AirCavityScanner.Result openResult = scan(openGrid, n * n * n);
 		check(openResult.sealedNodeCount() == 0, "residual next to ambient must not create sealed inventory");
@@ -136,7 +136,7 @@ public final class AirCavityScannerValidation {
 		int n = 8;
 		Grid grid = tank(n, true, 1.0F);
 		AirCavityScanner.Result result = new AirCavityScanner(n, n, n, 1.0F, 50)
-				.scan(grid.solid, grid.markerCount, grid.exactVolume, grid.cutCells);
+				.scan(grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells);
 		check(result.stopReason() == AirCavityScanner.StopReason.BUDGET_EXHAUSTED, "budget must stop the scan");
 		check(result.sealedNodeCount() == 0, "budget exhaustion must classify air as ambient, never sealed");
 		check(result.visitedAirCells() <= 50, "visited cells must respect the budget, got " + result.visitedAirCells());
@@ -149,7 +149,7 @@ public final class AirCavityScannerValidation {
 	private static AirCavityScanner.Result scan(Grid grid, int budget) {
 		int n = grid.sizeX;
 		return new AirCavityScanner(n, grid.sizeY, grid.sizeZ, grid.cellSize, budget)
-				.scan(grid.solid, grid.markerCount, grid.exactVolume, grid.cutCells);
+				.scan(grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells);
 	}
 
 	private static Grid tank(int n, boolean roof, float cellSize) {
@@ -158,7 +158,7 @@ public final class AirCavityScannerValidation {
 			int i = (z * n + y) * n + x;
 			boolean shell = x == 0 || x == n - 1 || z == 0 || z == n - 1 || y == 0 || (roof && y == n - 1);
 			if (shell) grid.solid[i] = true;
-			else if (y <= 3) { grid.markerCount[i] = 8; grid.exactVolume[i] = 1.0; }
+			else if (y <= 3) { grid.markerCount[i] = 8; grid.liquidVolume[i] = 1.0F; }
 		}
 		return grid;
 	}
@@ -170,7 +170,7 @@ public final class AirCavityScannerValidation {
 		final float cellSize;
 		final boolean[] solid;
 		final int[] markerCount;
-		final double[] exactVolume;
+		final float[] liquidVolume;
 		final FlipCutCellGeometry cutCells;
 
 		Grid(int sizeX, int sizeY, int sizeZ, float cellSize) {
@@ -180,7 +180,7 @@ public final class AirCavityScannerValidation {
 			this.cellSize = cellSize;
 			this.solid = new boolean[sizeX * sizeY * sizeZ];
 			this.markerCount = new int[sizeX * sizeY * sizeZ];
-			this.exactVolume = new double[sizeX * sizeY * sizeZ];
+			this.liquidVolume = new float[sizeX * sizeY * sizeZ];
 			this.cutCells = new FlipCutCellGeometry(sizeX, sizeY, sizeZ);
 		}
 

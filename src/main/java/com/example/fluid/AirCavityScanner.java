@@ -6,19 +6,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-/**
- * Grid topology scan that labels air cells into gas-network nodes (M5).
- *
- * <p>An air cell is non-solid with no markers and positive open volume. Six-neighbour
- * flood fill passes only through fully open faces; a partially open face between two
- * different components becomes a finite-rate geometric edge instead of a connection.
- * A component is ambient (node 0, gauge zero) when it touches the domain boundary
- * layer or when the scan budget is exhausted — never a sealed cavity with finite
- * inventory. Partially filled surface cells contribute their air residual to the
- * adjacent node with the smallest id (ambient wins), so available volume follows the
- * liquid surface smoothly instead of jumping per cell.</p>
- */
-final class AirCavityScanner {
+	/**
+	 * Grid topology scan that labels air cells into gas-network nodes (M5).
+	 *
+	 * <p>An air cell is non-solid with no markers and positive open volume. Six-neighbour
+	 * flood fill passes only through fully open faces; a partially open face between two
+	 * different components becomes a finite-rate geometric edge instead of a connection.
+	 * A component is ambient (node 0, gauge zero) when it touches the domain boundary
+	 * layer or when the scan budget is exhausted — never a sealed cavity with finite
+	 * inventory. Cavity volume is measured continuously from the smoothed liquid-volume
+	 * field: every attributed cell contributes its open volume minus the clamped liquid
+	 * fraction, so available volume follows the liquid surface without marker-quantisation
+	 * jitter. A partially filled surface cell attributes to the adjacent node with the
+	 * smallest id (ambient wins).</p>
+	 */
+	final class AirCavityScanner {
 	/** Face area at or above this fraction counts as fully open for connectivity. */
 	private static final float FULL_FACE_THRESHOLD = 1.0F - 1.0E-4F;
 
@@ -63,7 +65,7 @@ final class AirCavityScanner {
 		this.floodStack = new int[cellCount];
 	}
 
-	Result scan(boolean[] solid, int[] markerCount, double[] exactCellMarkerVolume, FlipCutCellGeometry cutCells) {
+	Result scan(boolean[] solid, int[] markerCount, float[] cellLiquidVolume, FlipCutCellGeometry cutCells) {
 		boolean budgetExhausted = false;
 		int visitedAirCells = 0;
 		int sealedNodes = 0;
@@ -101,9 +103,11 @@ final class AirCavityScanner {
 		double[] sealedAvailableVolume = new double[sealedNodes];
 		for (int cell = 0; cell < cellCount; cell++) {
 			int nodeId = cellNodeId[cell];
-			if (nodeId >= 1) sealedAvailableVolume[nodeId - 1] += cutCells.openCellVolume(cell) * cellVolumeCubicMeters;
+			if (nodeId >= 1) {
+				sealedAvailableVolume[nodeId - 1] += cellAirVolume(cell, cellLiquidVolume, cutCells);
+			}
 		}
-		addInterfaceResiduals(cellNodeId, solid, markerCount, exactCellMarkerVolume, cutCells, sealedAvailableVolume);
+		addInterfaceResiduals(cellNodeId, solid, markerCount, cellLiquidVolume, cutCells, sealedAvailableVolume);
 		List<GeometricEdge> edges = collectGeometricEdges(cellNodeId, cutCells);
 		return new Result(cellNodeId, sealedNodes, sealedAvailableVolume, edges, visitedAirCells,
 				budgetExhausted ? StopReason.BUDGET_EXHAUSTED : StopReason.COMPLETED);
@@ -145,14 +149,18 @@ final class AirCavityScanner {
 		throw new IllegalArgumentException("Cells are not face-adjacent");
 	}
 
+	/** Continuous air volume of one cell: open volume minus the clamped liquid fraction. */
+	private double cellAirVolume(int cell, float[] cellLiquidVolume, FlipCutCellGeometry cutCells) {
+		float openVolume = cutCells.openCellVolume(cell);
+		float liquid = Math.min(Math.max(cellLiquidVolume[cell], 0.0F), openVolume);
+		return (openVolume - liquid) * cellVolumeCubicMeters;
+	}
+
 	private void addInterfaceResiduals(int[] cellNodeId, boolean[] solid, int[] markerCount,
-	                                   double[] exactCellMarkerVolume, FlipCutCellGeometry cutCells,
+	                                   float[] cellLiquidVolume, FlipCutCellGeometry cutCells,
 	                                   double[] sealedAvailableVolume) {
 		for (int cell = 0; cell < cellNodeId.length; cell++) {
 			if (solid[cell] || markerCount[cell] == 0) continue;
-			double openVolume = cutCells.openCellVolume(cell);
-			double residual = openVolume - exactCellMarkerVolume[cell];
-			if (!(residual > 0.0)) continue;
 			int attributed = -1;
 			int x = cell % sizeX;
 			int yz = cell / sizeX;
@@ -169,7 +177,7 @@ final class AirCavityScanner {
 				attributed = attributed < 0 ? cellNodeId[neighbor] : Math.min(attributed, cellNodeId[neighbor]);
 				if (attributed == 0) break;
 			}
-			if (attributed >= 1) sealedAvailableVolume[attributed - 1] += residual * cellVolumeCubicMeters;
+			if (attributed >= 1) sealedAvailableVolume[attributed - 1] += cellAirVolume(cell, cellLiquidVolume, cutCells);
 		}
 	}
 

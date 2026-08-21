@@ -1,5 +1,7 @@
 package com.example.fluid;
 
+import com.example.fluid.air.AirNetwork;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -87,6 +89,11 @@ public final class FlipFluidDomain {
 	private int[] particlePhaseLabel;
 	private int particleCount;
 	private FluidMaterialRegistry materialRegistry;
+	private final AirNetwork airNetwork;
+	private final AirCavityScanner airScanner;
+	private int[] airCellNodeId;
+	private int previousSealedNodeCount;
+	private boolean gasPressureActive;
 	private boolean gridDirty = true;
 	private int pressureAnchor = -1;
 	private int lastPressureIterations;
@@ -158,12 +165,21 @@ public final class FlipFluidDomain {
 		this.preconditioned = new float[cellCount];
 		this.direction = new float[cellCount];
 		this.matrixDirection = new float[cellCount];
+		this.airNetwork = new AirNetwork();
+		this.airScanner = new AirCavityScanner(sizeX, sizeY, sizeZ, config.cellSize(), cellCount);
+		this.airCellNodeId = null;
 	}
 
 	public int sizeX() { return sizeX; }
 	public int sizeY() { return sizeY; }
 	public int sizeZ() { return sizeZ; }
 	public int particleCount() { return particleCount; }
+
+	/** Runtime-only gas network of this domain; it is not a wire or save format. */
+	public AirNetwork airNetwork() { return airNetwork; }
+
+	/** True when the current grid contains at least one sealed gas cavity with finite inventory. */
+	public boolean gasPressureActive() { return gasPressureActive; }
 	public int maximumParticleCount() { return maximumParticleCount; }
 	public int markerCellCount() {
 		ensureGrid();
@@ -611,6 +627,7 @@ public final class FlipFluidDomain {
 		int pressureIterations = 0;
 		for (int substep = 0; substep < substeps; substep++) {
 			rebuildGridFromParticles();
+			updateGasNetwork(dt);
 			System.arraycopy(velocityX, 0, p2gVelocityX, 0, velocityX.length);
 			System.arraycopy(velocityY, 0, p2gVelocityY, 0, velocityY.length);
 			System.arraycopy(velocityZ, 0, p2gVelocityZ, 0, velocityZ.length);
@@ -714,6 +731,80 @@ public final class FlipFluidDomain {
 				velocityValidX, velocityValidY, velocityValidZ,
 				velocityWeightX, velocityWeightY, velocityWeightZ
 		);
+	}
+
+	/**
+	 * Refreshes the gas network from the current grid: rescans cavity topology, migrates
+	 * sealed inventories onto the new slots (majority mapping, proportional split with exact
+	 * remainder on a genuine pinch), refreshes available volumes and geometric orifice edges,
+	 * then advances finite-rate orifice transport. New cavities start at ambient equilibrium;
+	 * a cavity that opens to ambient or vanishes under liquid vents through the remap ledger.
+	 */
+	private void updateGasNetwork(float dt) {
+		AirCavityScanner.Result result = airScanner.scan(solid, markerCount, volume, cutCells);
+		int sealed = result.sealedNodeCount();
+		double[] availableVolumes = result.sealedAvailableVolume();
+		long[] inventoriesNanos = new long[sealed];
+		if (previousSealedNodeCount > 0 && sealed > 0) {
+			int[][] overlap = new int[previousSealedNodeCount + 1][sealed + 1];
+			int[] ambientOverlap = new int[previousSealedNodeCount + 1];
+			int[] newLabels = result.cellNodeId();
+			for (int cell = 0; cell < cellCount; cell++) {
+				int old = airCellNodeId[cell];
+				if (old < 1) continue;
+				int now = newLabels[cell];
+				if (now >= 1) overlap[old][now]++;
+				else if (now == 0) ambientOverlap[old]++;
+			}
+			boolean[] contributed = new boolean[sealed + 1];
+			for (int old = 1; old <= previousSealedNodeCount; old++) {
+				long inventory = airNetwork.standardVolumeNanos(old);
+				if (inventory <= 0L || ambientOverlap[old] > 0) continue;
+				int totalOverlap = 0;
+				int destinations = 0;
+				for (int node = 1; node <= sealed; node++) if (overlap[old][node] > 0) {
+					totalOverlap += overlap[old][node];
+					destinations++;
+				}
+				if (destinations == 0) continue;
+				long assigned = 0L;
+				int remaining = destinations;
+				for (int node = 1; node <= sealed; node++) {
+					if (overlap[old][node] == 0) continue;
+					remaining--;
+					long share = remaining == 0 ? inventory - assigned
+							: (long) Math.floor((double) inventory * overlap[old][node] / totalOverlap);
+					assigned += share;
+					inventoriesNanos[node - 1] += share;
+					contributed[node] = true;
+				}
+			}
+			for (int node = 1; node <= sealed; node++) {
+				if (!contributed[node]) {
+					inventoriesNanos[node - 1] = AirNetwork.nanos(availableVolumes[node - 1]);
+				}
+			}
+		} else {
+			for (int node = 1; node <= sealed; node++) {
+				inventoriesNanos[node - 1] = AirNetwork.nanos(availableVolumes[node - 1]);
+			}
+		}
+		airNetwork.remapNodes(availableVolumes, inventoriesNanos);
+		for (AirCavityScanner.GeometricEdge edge : result.geometricEdges()) {
+			airNetwork.addOrMergeEdge(edge.firstNode(), edge.secondNode(), edge.areaSquareMeters(), 0.65);
+		}
+		airCellNodeId = result.cellNodeId();
+		previousSealedNodeCount = sealed;
+		gasPressureActive = sealed > 0;
+		if (gasPressureActive) airNetwork.stepEdges(dt);
+	}
+
+	/** Gauge pressure of the sealed cavity owning an air cell; zero for ambient and inactive gas. */
+	private float gasPressureOfAirCell(int airCell) {
+		if (!gasPressureActive) return 0.0F;
+		int node = airCellNodeId[airCell];
+		if (node <= 0) return 0.0F;
+		return (float) airNetwork.gaugePressure(node);
 	}
 
 	private int particleCellIndex(int particle) {
@@ -1116,10 +1207,12 @@ public final class FlipFluidDomain {
 
 	/**
 	 * Divergence of the free-surface pressure-jump boundary velocity. This is the RHS source that makes
-	 * the ghost-fluid projection consistent with {@code p_interface = sigma * kappa} at every open air face.
+	 * the ghost-fluid projection consistent with {@code p_interface = sigma * kappa + p_gas} at every
+	 * open air face; the gas term reads the sealed cavity that owns the air cell and stays exactly
+	 * zero for ambient air, so the M4 path is bit-identical whenever no sealed cavity exists.
 	 */
 	private float surfaceTensionBoundaryDivergence(int index, float dt) {
-		if (!surfaceTensionActive) return 0.0F;
+		if (!surfaceTensionActive && !gasPressureActive) return 0.0F;
 		int x = index % sizeX;
 		int yz = index / sizeX;
 		int y = yz % sizeY;
@@ -1143,8 +1236,10 @@ public final class FlipFluidDomain {
 		if (openArea <= 0.0F) return 0.0F;
 		float theta = freeSurfaceGeometry.pressureTheta(fluid, directionX, directionY, directionZ);
 		if (theta <= 0.0F) return 0.0F;
+		float gas = gasPressureOfAirCell(neighbor);
+		float jump = gas == 0.0F ? surfaceTensionPressure[fluid] : surfaceTensionPressure[fluid] + gas;
 		float densityScale = variableDensityActive ? pressureDensityScale(fluid, neighbor) : 1.0F;
-		return -openArea * scale * densityScale * surfaceTensionPressure[fluid] / theta * inverseCell;
+		return -openArea * scale * densityScale * jump / theta * inverseCell;
 	}
 
 	private void applyPressureMatrix(float[] source, float[] destination) {
@@ -1336,10 +1431,14 @@ public final class FlipFluidDomain {
 		if (firstFluid && secondFluid) return pressure[second] - pressure[first];
 		if (firstFluid) {
 			float theta = freeSurfaceGeometry.pressureTheta(first, directionX, directionY, directionZ);
-			return (surfaceTensionPressure[first] - pressure[first]) / theta;
+			float gas = gasPressureOfAirCell(second);
+			float jump = gas == 0.0F ? surfaceTensionPressure[first] : surfaceTensionPressure[first] + gas;
+			return (jump - pressure[first]) / theta;
 		}
 		float theta = freeSurfaceGeometry.pressureTheta(second, -directionX, -directionY, -directionZ);
-		return (pressure[second] - surfaceTensionPressure[second]) / theta;
+		float gas = gasPressureOfAirCell(first);
+		float jump = gas == 0.0F ? surfaceTensionPressure[second] : surfaceTensionPressure[second] + gas;
+		return (pressure[second] - jump) / theta;
 	}
 
 	private void gridToParticles() {
