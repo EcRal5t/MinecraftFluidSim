@@ -124,8 +124,9 @@ public final class RealWaterCommands {
 		if (!service.createAirDemo(player, vacuum)) {
 			return fail(source, "无法创建气压测试域：" + service.lastTakeoverFailure());
 		}
-		return succeed(source, "已创建暂停的气压 U 型管域（左腔密闭气" + (vacuum ? "体预置负压" : "体预置正压")
-				+ "，右腔通大气；瞬态，不写 region-state）；用 /realwater run 观察两侧液面差并保持，/realwater status 查看气压", 1);
+		return succeed(source, "已在准星方向的封闭房间内创建暂停的气压演示域（两个密闭气腔分别预置"
+				+ (vacuum ? "负压与正压" : "正压与较负压力") + "，下半注水；瞬态，不写 region-state、不改世界方块）；"
+				+ "用 /realwater run 观察两侧液面差并保持，/realwater status 查看气压", 1);
 	}
 
 	private static int capture(CommandSourceStack source, boolean takeover) throws com.mojang.brigadier.exceptions.CommandSyntaxException {

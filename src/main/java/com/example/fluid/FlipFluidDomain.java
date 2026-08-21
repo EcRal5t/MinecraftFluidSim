@@ -180,6 +180,15 @@ public final class FlipFluidDomain {
 
 	/** True when the current grid contains at least one sealed gas cavity with finite inventory. */
 	public boolean gasPressureActive() { return gasPressureActive; }
+
+	/**
+	 * Gas node owning the air cell at a grid position: 0 ambient, at least 1 sealed, -1 when the
+	 * cell is not air or no scan has run yet.
+	 */
+	public int airNodeAt(int x, int y, int z) {
+		if (airCellNodeId == null) return -1;
+		return airCellNodeId[cellIndexChecked(x, y, z)];
+	}
 	public int maximumParticleCount() { return maximumParticleCount; }
 	public int markerCellCount() {
 		ensureGrid();

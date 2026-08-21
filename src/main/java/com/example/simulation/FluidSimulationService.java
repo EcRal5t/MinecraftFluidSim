@@ -286,10 +286,13 @@ public final class FluidSimulationService {
 	}
 
 	/**
-	 * Creates a paused transient U-tube demo: the left chamber is sealed with a gas pocket
-	 * preset above or below ambient pressure, the right chamber is open to ambient. Running it
-	 * shows the gas pressure holding a sustained liquid-level difference. Pure water, no
-	 * surface tension, no material gate; writes no region-state and touches no vanilla water.
+	 * Creates a paused transient gas-pressure demo from a container the player built out of real
+	 * blocks: it must be fully closed and split by an inner divider whose bottom opening sits
+	 * below the water line, forming two sealed gas chambers over one connected water body. The
+	 * command samples the world geometry, fills the lower part of each chamber with water and
+	 * presets the two gas pockets to opposite gauge pressures; running it then shows the divider
+	 * holding a sustained liquid-level difference. Pure water, no surface tension, no material
+	 * gate; writes no region-state and modifies no world blocks.
 	 */
 	public boolean createAirDemo(ServerPlayer player, boolean vacuum) {
 		Vec3 look = player.getLookAngle();
@@ -310,39 +313,77 @@ public final class FluidSimulationService {
 		}
 		refreshCollisions(level);
 		FlipFluidDomain domain = domain();
-		buildAirDemoUtube(domain);
 		domain.step();
-		AirNetwork network = domain.airNetwork();
-		if (network.nodeCount() != 1) {
-			lastTakeoverFailure = "气压演示域未形成单一密闭气腔；当前节点数 " + network.nodeCount();
+		if (domain.airNetwork().nodeCount() < 1) {
+			lastTakeoverFailure = "未检测到密闭空间；请在准星方向的 12×8×12 模拟区域内建一个完全封闭的房间"
+					+ "（墙壁无缺口、留顶盖）";
 			return false;
 		}
-		int node = network.nodeIds().get(0);
-		double available = network.availableVolume(node);
-		network.setStandardVolume(node, vacuum ? available * 1.15 : available * 0.85);
+		if (!fillAirDemoWater(domain)) {
+			lastTakeoverFailure = "密闭气腔内空间不足，无法注入演示水体；请加大容器";
+			return false;
+		}
+		domain.step();
+		AirNetwork network = domain.airNetwork();
+		if (network.nodeCount() < 2) {
+			lastTakeoverFailure = "注水后空气未分成两个密闭气腔；请在房间中间加一道隔墙，并在隔墙底部留高度不超过"
+					+ "房间一半的门洞，让水位淹没门洞把两侧空气分开；当前密闭气腔数 " + network.nodeCount();
+			return false;
+		}
+		int first = network.nodeIds().get(0);
+		int second = network.nodeIds().get(1);
+		double firstAvailable = network.availableVolume(first);
+		double secondAvailable = network.availableVolume(second);
+		if (vacuum) {
+			network.setStandardVolume(first, firstAvailable * 1.25);
+			network.setStandardVolume(second, secondAvailable * 0.80);
+		} else {
+			network.setStandardVolume(first, firstAvailable * 0.88);
+			network.setStandardVolume(second, secondAvailable * 1.08);
+		}
 		activeRegion().setPaused(true);
 		sendSnapshot(level);
 		return true;
 	}
 
-	/** Sealed-left / open-right U-tube with a water-filled bottom passage in the transient demo grid. */
-	private static void buildAirDemoUtube(FlipFluidDomain domain) {
-		int sx = domain.sizeX(), sy = domain.sizeY(), sz = domain.sizeZ();
-		for (int z = 0; z < sz; z++) for (int y = 0; y < sy; y++) for (int x = 0; x < sx; x++) {
-			// the shell keeps every air cell away from the boundary layer except the open right top
-			boolean shell = x == 0 || x == sx - 1 || z == 0 || z == sz - 1 || y == 0;
-			boolean roof = y == sy - 1 && x <= 12;
-			boolean divider = (x == 11 || x == 12) && y >= 5;
-			if (shell || roof || divider) domain.setSolid(x, y, z, true);
+	/**
+	 * Fills the lower half of every sealed gas cavity with water, so a divided room splits its
+	 * air into two pockets above the connected water body. Returns false when no cavity had room
+	 * for water; the partial boundary cell keeps the gas volume continuous.
+	 */
+	private static boolean fillAirDemoWater(FlipFluidDomain domain) {
+		int[] bounds = new int[domain.airNetwork().nodeCount() * 4];
+		java.util.Arrays.fill(bounds, Integer.MAX_VALUE);
+		for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
+			for (int x = 0; x < domain.sizeX(); x++) {
+				int node = domain.airNodeAt(x, y, z);
+				if (node < 1) continue;
+				int base = (node - 1) * 4;
+				bounds[base] = Math.min(bounds[base], y);
+				bounds[base + 1] = Math.max(bounds[base + 1], y);
+				bounds[base + 2] = Math.min(bounds[base + 2], x);
+				bounds[base + 3] = Math.max(bounds[base + 3], x);
+			}
 		}
-		for (int z = 1; z < sz - 1; z++) for (int y = 1; y <= 6; y++) {
-			for (int x = 1; x <= 10; x++) domain.setVolume(x, y, z, 1.0F);
-			for (int x = 13; x <= sx - 2; x++) domain.setVolume(x, y, z, 1.0F);
+		boolean filled = false;
+		for (int node = 1; node <= domain.airNetwork().nodeCount(); node++) {
+			int base = (node - 1) * 4;
+			if (bounds[base] == Integer.MAX_VALUE) continue;
+			double waterLine = bounds[base] + 0.5 * (bounds[base + 1] + 1 - bounds[base]);
+			for (int y = bounds[base]; y <= bounds[base + 1]; y++) {
+				double fraction = Math.min(1.0, waterLine - y);
+				if (fraction <= 0.0) break;
+				for (int x = bounds[base + 2]; x <= bounds[base + 3]; x++) {
+					for (int z = 0; z < domain.sizeZ(); z++) {
+						if (domain.airNodeAt(x, y, z) == node && !domain.isSolid(x, y, z)) {
+							domain.setVolume(x, y, z, (float) fraction);
+							filled = true;
+						}
+					}
+				}
+			}
 		}
-		for (int z = 1; z < sz - 1; z++) for (int y = 1; y <= 4; y++) {
-			domain.setVolume(11, y, z, 1.0F);
-			domain.setVolume(12, y, z, 1.0F);
-		}
+		return filled;
 	}
 
 	private static void bindTensionDemoMaterial(FlipFluidDomain domain, int angleDegrees) {

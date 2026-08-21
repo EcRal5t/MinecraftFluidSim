@@ -39,4 +39,9 @@
 
 ## 实机 smoke
 
-待部署后执行：`/realwater airdemo pressure` → `/realwater run`，观察左腔液面被气压压下、右腔抬高并保持稳定差（约 1.8 m）；`/realwater airdemo vacuum` 观察左腔被吸升约 1.3 m；`/realwater status` 应显示 `gas node 1 p=…Pa V0=…m³`。
+实机首测发现首版 `airdemo` 用 solver-only 墙构造 U 型管，被周期性世界碰撞重采样清除且不可见（水自由摊平）。修正后的交互与控制器玩法一致，容器由玩家用真实方块建造：
+
+1. 建一个完全封闭的房间（位于准星方向 12×8×12 模拟区域内、≤8 格高），中间一道隔墙、底部留高度不超过房间一半的门洞。
+2. 对准房间 `/realwater airdemo pressure` → `/realwater run`：两侧液面形成并保持约 2 m 的气压支撑高差；`/realwater status` 显示 `gas node …p=…Pa V0=…m³` 两条。
+3. `/realwater remove` 后 `airdemo vacuum` 复测反号（另一侧抬高）。
+

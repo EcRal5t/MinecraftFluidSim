@@ -32,7 +32,7 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完�
 
 多材料玩法：`/realwater materials true` 后重启服务器（单人模式退回主菜单再进入世界），再用 `/realwater materialdemo` 创建上油下水的暂停溃坝域。该域是瞬态的，不写 `region-state`，也不读取或接管原版水；桶与方块入口仍只支持纯水。
 
-气压玩法：`/realwater airdemo pressure`（或 `vacuum`）创建左腔密闭、右腔通大气的 U 型管域；`/realwater run` 后两侧液面形成并保持由气压支撑的稳定高差（正压约 1.8 m、负压约 1.3 m），`/realwater status` 的 gas 段显示密闭腔压力与库存。该域同样瞬态，不写 `region-state`。
+气压玩法：先用实体方块建一个完全封闭的房间（须整体位于准星方向约 9 格处的 12×8×12 模拟区域内、不超过 8 格高），房间中间加一道隔墙并在隔墙底部留高度不超过房间一半的门洞；对准房间执行 `/realwater airdemo pressure`（或 `vacuum`）自动下半注水并把两侧气腔预置成不同压力；`/realwater run` 后两侧液面形成并保持由气压支撑的稳定高差（约 2 m），`/realwater status` 的 gas 段显示密闭腔压力与库存。该域瞬态，不写 `region-state`，也不放置或修改任何世界方块。
 
 ## 构建
 
