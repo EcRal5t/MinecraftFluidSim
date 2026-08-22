@@ -121,7 +121,7 @@ public final class FluidTransferService {
 		if (region.controllerManaged()) return pourController(service, region, player, hand, held, volume, cell);
 		TransferOutcome outcome = pourIntoCell(service, region, cell, volume, 6);
 		if (!outcome.transferred()) return new TransferOutcome(false, true, held, outcome.message());
-		if (player.hasInfiniteMaterials() && held.is(Items.WATER_BUCKET)) {
+		if (player.hasInfiniteMaterials()) {
 			service.sendSnapshotFor(player);
 			return new TransferOutcome(true, true, held.copy(), outcome.message());
 		}
@@ -159,7 +159,7 @@ public final class FluidTransferService {
 		ControllerTransfer transaction = executeControllerTransfer(
 				service, region, player.level(), actor, held,
 				ContainerTransferJournal.Operation.INSERT, volumeNanos, 0L, cell,
-				(rawAfter, before) -> player.hasInfiniteMaterials() && before.is(Items.WATER_BUCKET) ? before.copy() : rawAfter
+				(rawAfter, before) -> player.hasInfiniteMaterials() ? before.copy() : rawAfter
 		);
 		if (!transaction.outcome().transferred()) return transaction.outcome();
 		player.setItemInHand(hand, transaction.outcome().stack());
