@@ -465,8 +465,8 @@ public final class FlipFluidDomain {
 		if (materialRegistry != null) return true;
 		for (int particle = 0; particle < particleCount; particle++) {
 			if (particleMaterialHandle[particle] != 0 || particlePhaseLabel[particle] != 0) return true;
-			double referenceMass = (double) particleVolume[particle] * config.density();
-			double tolerance = Math.max(1.0E-9, Math.abs(referenceMass) * 1.0E-12);
+			float referenceMass = particleVolume[particle] * config.density();
+			float tolerance = Math.max(1.0E-5F, Math.ulp(referenceMass) * 8.0F);
 			if (Math.abs(particleMass[particle] - referenceMass) > tolerance) return true;
 		}
 		return false;

@@ -16,6 +16,8 @@ import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.DispenserBlock;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 
 import java.io.IOException;
 import java.util.UUID;
@@ -103,8 +105,8 @@ public final class FluidTransferService {
 			return transaction.outcome().stack();
 		}
 		TransferOutcome outcome = kind == TransferKind.POUR
-				? pourIntoCell(service, region, cell, heldVolumeNanos(stack))
-				: scoopFromCell(service, region, cell, heldFreeNanos(stack), heldBaseVolumeNanos(stack));
+				? pourIntoCell(service, region, cell, heldVolumeNanos(stack), 1)
+				: scoopFromCell(service, region, cell, heldFreeNanos(stack), heldBaseVolumeNanos(stack), 1);
 		if (outcome == null || !outcome.transferred()) return stack;
 		service.sendSnapshot(level, region);
 		return outcome.stack();
@@ -116,10 +118,10 @@ public final class FluidTransferService {
 	) {
 		Long volume = heldVolumeNanos(held);
 		if (volume == null || volume <= 0L) return null;
-		int[] cell = service.aimedCellNear(player, false);
+		int[] cell = playerPourTargetCell(service, region, player);
 		if (cell == null) return null;
 		if (region.controllerManaged()) return pourController(service, region, player, hand, held, volume, cell);
-		TransferOutcome outcome = pourIntoCell(service, region, cell, volume);
+		TransferOutcome outcome = pourIntoCell(service, region, cell, volume, 1);
 		if (!outcome.transferred()) return new TransferOutcome(false, true, held, outcome.message());
 		if (player.hasInfiniteMaterials() && held.is(Items.WATER_BUCKET)) {
 			service.sendSnapshotFor(player);
@@ -137,7 +139,7 @@ public final class FluidTransferService {
 		int[] cell = service.aimedCellNear(player, true);
 		if (cell == null) return null;
 		if (region.controllerManaged()) return scoopController(service, region, player, hand, held, capacity, cell);
-		TransferOutcome outcome = scoopFromCell(service, region, cell, capacity, heldBaseVolumeNanos(held));
+		TransferOutcome outcome = scoopFromCell(service, region, cell, capacity, heldBaseVolumeNanos(held), 1);
 		if (!outcome.transferred()) return new TransferOutcome(false, false, held, outcome.message());
 		if (player.hasInfiniteMaterials() && held.is(Items.BUCKET)) {
 			ItemStack filled = outcome.stack();
@@ -235,8 +237,8 @@ public final class FluidTransferService {
 		service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_PREPARE);
 
 		TransferOutcome rawOutcome = operation == ContainerTransferJournal.Operation.INSERT
-				? pourIntoCell(service, region, cell, requestedNanos)
-				: scoopFromCell(service, region, cell, requestedNanos, baseVolumeNanos);
+				? pourIntoCell(service, region, cell, requestedNanos, 1)
+				: scoopFromCell(service, region, cell, requestedNanos, baseVolumeNanos, 1);
 		if (rawOutcome == null || !rawOutcome.transferred()) {
 			deleteQuietly(service, transactionId);
 			return new ControllerTransfer(rawOutcome == null
@@ -325,11 +327,11 @@ public final class FluidTransferService {
 
 
 	private static TransferOutcome pourIntoCell(
-			FluidSimulationService service, FluidRegion region, int[] cell, long volumeNanos
+			FluidSimulationService service, FluidRegion region, int[] cell, long volumeNanos, int maxRadius
 	) {
 		if (volumeNanos <= 0L) return null;
 		FlipFluidDomain.ExactVolumeTransfer inserted = region.domain().tryInsertExactVolume(
-				cell[0], cell[1], cell[2], nanosToCellVolume(volumeNanos), 6);
+				cell[0], cell[1], cell[2], nanosToCellVolume(volumeNanos), maxRadius);
 		if (!inserted.transferred()) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "空间或 marker 预算不足，未能注入");
 		}
@@ -340,11 +342,11 @@ public final class FluidTransferService {
 	}
 
 	private static TransferOutcome scoopFromCell(
-			FluidSimulationService service, FluidRegion region, int[] cell, long capacityNanos, long baseVolumeNanos
+			FluidSimulationService service, FluidRegion region, int[] cell, long capacityNanos, long baseVolumeNanos, int maxRadius
 	) {
 		if (capacityNanos <= 0L) return null;
 		FlipFluidDomain.ExactVolumeTransfer extracted = region.domain().tryExtractExactVolume(
-				cell[0], cell[1], cell[2], nanosToCellVolume(capacityNanos), 6);
+				cell[0], cell[1], cell[2], nanosToCellVolume(capacityNanos), maxRadius);
 		if (!extracted.transferred() || extracted.volume() <= 0.0) {
 			return new TransferOutcome(false, false, withVolume(baseVolumeNanos), "准星处没有足够水体");
 		}
@@ -397,6 +399,18 @@ public final class FluidTransferService {
 
 	static long cellVolumeToNanos(double cellVolume) {
 		return ContainerFluidLedger.volumeToNanos(cellVolume / FluidSimulationService.CELL_VOLUMES_PER_BLOCK);
+	}
+
+	private static int[] playerPourTargetCell(
+			FluidSimulationService service, FluidRegion region, ServerPlayer player
+	) {
+		BlockHitResult hit = (BlockHitResult) player.pick(5.0, 1.0F, false);
+		if (hit.getType() != HitResult.Type.BLOCK) return null;
+		BlockPos hitPos = hit.getBlockPos();
+		BlockPos targetBlock = player.level().getBlockState(hitPos).canBeReplaced()
+				? hitPos
+				: hitPos.relative(hit.getDirection());
+		return service.cellAtBlock(player.level(), region, targetBlock);
 	}
 
 	private record TransferOutcome(boolean transferred, boolean filled, ItemStack stack, String message) { }
