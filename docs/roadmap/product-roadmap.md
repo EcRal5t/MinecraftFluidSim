@@ -1,8 +1,8 @@
 # Real Water 产品路线
 
-本文是尚未完成里程碑的总表。当前基线已经完成 M0、M1、M2、M2.5、M3、M4 和 M5；完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md)、[`../architecture/region-state-v1.md`](../architecture/region-state-v1.md) 与 [`../architecture/m3-material-state-migration.md`](../architecture/m3-material-state-migration.md)。
+本文是尚未完成里程碑的总表。当前基线已经完成 M0、M1、M2、M2.5、M3、M4、M5 和 M6；完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md)、[`../architecture/region-state-v1.md`](../architecture/region-state-v1.md)、[`../architecture/m3-material-state-migration.md`](../architecture/m3-material-state-migration.md) 与 [`../architecture/world-ownership-and-containers.md`](../architecture/world-ownership-and-containers.md)。
 
-基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、主 Mod 0.11.0、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
+基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、主 Mod 0.12.0、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
 
 ## 技术规格路由
 
@@ -22,8 +22,8 @@
 
 ## 发布切割线
 
-- **1.0**：M3 多液体/可变密度已完成；仍需 M4 表面张力/润湿与 M5 密闭气体网络及气液压力。范围仍是控制器或开发命令圈定的有界区域；这是首个可独立发布维护的产品终点，不是临时演示版。
-- **2.0**：从 M6 ownership 评审与真实世界流体桥开始；未通过 M6.0 的事务/恢复门，不扩大 takeover。
+- **1.0 能力线**：M3 多液体/可变密度、M4 表面张力/润湿与 M5 密闭气体网络及气液压力均已完成；范围仍是控制器或开发命令圈定的有界区域。
+- **2.0 集成线**：M6 ownership 评审、真实世界流体桥和容器已完成；后续仍不得跳过显式边界、事务恢复门或开放世界规模评审。
 - M7 化学、M8 颗粒、M9 热力学和 M10 原版/其他 Mod API 在 2.0 后逐项加入，不阻塞 1.0。
 - 版本号按实际验收门决定，不随开发次数自然表示成熟度。
 
@@ -56,7 +56,7 @@
 - 客户端 palette/界面字段是展示数据，不成为材料库存。
 - 世界、bucket、region、checkpoint 和网络单位必须显式换算，不能用渲染 density 充当库存。
 
-## M4 起点约束（由 M3 冻结）
+## M3 起点约束（后续阶段继续保持）
 
 M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/m3-multi-fluid.md)。后续阶段必须继续保持：
 
@@ -64,7 +64,7 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
 - 稀疏 mixture handle 只在多组分格存在，不为每个 marker 复制完整组分 map。
 - 不可互溶相共享压力/速度框架；模型不能声称已解析界面滑移或乳化。
 - 客户端 palette/界面字段是展示数据，不成为材料库存。
-- 正式世界入口（桶、原版方块替换、takeover）仍只创建纯水；完整桶矩阵属 M6.1。
+- 正式世界入口中的 ownership 与桶矩阵已由 M6 完成；未来新增材料/容器路径仍必须保留体积与质量独立真值、稳定材料 ID 和跨持久域事务。
 - reseeding 不跨 material/phase 合并；不得用跨材料合并或渲染补丁掩盖亚格滞留。
 
 ## M4：表面张力与润湿（已完成）
@@ -83,23 +83,10 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
   - 天然空腔搜索入口与 512 BV 默认预算留待未来阶段；控制器域只消费已知边界。
   - 气体温度/内能（M9）、气相反应（M7）与喷流细网格不在 M5 范围。
 
-## M6：世界 ownership 与流体桥
+## M6：世界 ownership 与流体桥（已完成）
 
-### M6.0 设计评审（已完成）
-
-- 2026-08-22 选定**空气 + 独立 ownership registry** 路线；代理占位方块因活塞/爆炸/水流/落沙静默侵蚀、实心变体挡光挡通行、类空气变体无法承载邻居方块被拒绝。证据、冻结的共同状态机（LEGACY_CONTROLLER/PREPARED/OWNED_COMMITTED/RELEASING/LOCKED）、acquire 提交顺序（slot 验证 → WAL+WARNING → 世界修改 → HEAD 最后发布）、崩溃恢复按 committed generation 判定表、release 保守语义与格式边界见 [`../progress/m6.0-ownership-review.md`](../progress/m6.0-ownership-review.md)。
-- 仍约束 M6.1：
-  - 原版水流入 owned air（边界破口）需要显式策略；控制器闭合外壳是第一道防线，不得静默吸收。
-  - 持久 ownership 只走 controller 区域；dev takeover 保持瞬态语义。
-  - 不引入 section 独立提交：region-state 已按 section 分片、region 级原子代。
-  - 新配置门 `worldBridgeEnabled`（config v3），默认关闭，fail-closed。
-
-### M6.1 世界桥与容器
-
-- 实现纯材料满桶、部分桶、混合物容器和合并配方。
-- 覆盖玩家、发射器、合成、漏斗、掉落/死亡、创造和其他 Mod 行为矩阵。
-- 按 chunk 持久化 ownership 水；先让其真实流动，再适配灭火等原版行为。
-- 扩大范围必须显式配置、可恢复，且不覆盖玩家实体方块。
+- M6.0 选定**空气 + 独立 ownership registry**，M6.1 完成 region-state HEAD 键控的 crash-safe ownership、精确部分/混合材料容器、玩家/发射器转移与跨持久域 WAL；主 Mod 0.12.0 的自动与实机证据见 [`../progress/m6-world-bridge-and-containers.md`](../progress/m6-world-bridge-and-containers.md)，现行契约见 [`../architecture/world-ownership-and-containers.md`](../architecture/world-ownership-and-containers.md)。
+- 仍约束后续阶段：原版水流入破损 owned 边界不得静默吸收；持久 ownership 只走 controller 区域；未知/损坏 sidecar 必须 fail-closed；灭火、湿润、岩浆和外部 Mod API 留到 M10。
 
 ## M7：守恒化学
 
@@ -144,6 +131,6 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
 
 ## 接下来三项
 
-1. M6.1b 容器：数值表示实验（float `particleVolume` ↔ long 纳体积）、solver 精确转移原语（all-or-nothing）、部分桶/混合物容器、行为矩阵与跨持久域转移 WAL；M6.1 关闭时升 0.12.0。M6.1a（crash-safe 持久 ownership）已于 2026-08-22 完成并过实机 Smoke A。
+1. M7 守恒化学：先冻结 species/reaction codec、稀疏库存和硬预算，再接入首批强电解质与计量反应；不把颜色当作组分真值。
 2. 气体状态进存档前先做 region-state v3 格式迁移评审；当前 runtime-only 重建语义已量化记录。
-3. 液液界面锐化/逐顶点平滑转入渲染里程碑评估，实机视觉复看结果将作为基线证据。
+3. 液液界面锐化/逐顶点平滑与 CPU/GPU 后端切换分别进入专项量化；不得用渲染修补或调度放宽掩盖物理/性能问题。

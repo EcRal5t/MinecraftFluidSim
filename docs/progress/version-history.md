@@ -40,3 +40,7 @@
 ## 0.11.0：M5 空气区域网络与气液压力
 
 - **0.11.0**：密闭气腔 flood fill 识别（预算 fail-open）、`long` 纳体积量子精确气体账本（`sealed + vented == drawnFromAmbient`）、等温状态方程、CONTAM 幂律有限速率孔流与拓扑事件库存迁移进入活动核心；自由面 ghost-fluid 跳跃升级为 `σκ + p_gas`，环境空气贡献为零，开放水域与 M4 逐位一致。气体状态 runtime-only，不进 wire/存档；新增瞬态 `/realwater airdemo [pressure|vacuum]` 与 status 气体段。详见 [`m5-air-network.md`](m5-air-network.md)。
+
+## 0.12.0：M6 世界 ownership、流体桥与容器
+
+- **0.12.0**：控制器区域通过 region-state HEAD 键控的 WAL/committed sidecar crash-safe 接管内部原版水；新增 `long` 纳体积部分纯水桶、保存逐材料体积与独立质量的 canonical 混合材料桶、solver all-or-nothing 精确转移、玩家/发射器目标路由、创造外部 source/scoop 语义、部分桶守恒合并配方，以及 region/item 跨持久域 container-transfer WAL v2。未知/损坏/代次失配一律保留并锁定；堆叠与组件损坏安全拒绝。完整 CPU 回归、专用服务器启动与实机 Smoke C 通过。详见 [`m6-world-bridge-and-containers.md`](m6-world-bridge-and-containers.md)。

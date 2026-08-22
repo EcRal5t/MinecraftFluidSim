@@ -14,6 +14,7 @@
 
 - 当前 CPU 流体不变量：[`architecture/fluid-solver.md`](architecture/fluid-solver.md)
 - 当前区域存档格式：[`architecture/region-state-v1.md`](architecture/region-state-v1.md)
+- 当前世界 ownership、精确容器与跨持久域事务：[`architecture/world-ownership-and-containers.md`](architecture/world-ownership-and-containers.md)
 - 代码在哪里、改完跑什么：[`maintenance/routing.md`](maintenance/routing.md)
 - 已完成到哪里：[`progress/README.md`](progress/README.md)
 - 下一阶段做什么、该读哪份技术规格：[`roadmap/product-roadmap.md`](roadmap/product-roadmap.md)

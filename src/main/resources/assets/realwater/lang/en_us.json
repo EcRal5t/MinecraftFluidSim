@@ -7,6 +7,7 @@
   "item.realwater.material_bucket.volume": "%s: %s",
   "item.realwater.material_bucket.mixture": "%s-material mixture",
   "item.realwater.material_bucket.mass": "Mass: %s MU",
+  "item.realwater.material_bucket.component": "  %s — %s; mass %s MU",
   "message.realwater.controller.activated": "Controller region ready: %s interior blocks, %sx%sx%s dense bounds, %s required chunks. The read-only captured domain is paused.",
   "message.realwater.controller.selected": "Selected the existing controller region: %s interior blocks, %sx%sx%s dense bounds, %s required chunks. Its marker volume was preserved and availability was rechecked.",
   "message.realwater.controller.disabled": "Real Water controllers are disabled. An administrator must run /realwater controllers true.",

@@ -93,6 +93,16 @@ public final class MaterialBucketItem extends Item {
 			if (mass > 0.0) tooltip.accept(Component.translatable("item.realwater.material_bucket.mass",
 					String.format("%.12g", mass))
 					.withStyle(ChatFormatting.DARK_GRAY));
+			if (mixture.components().size() > 1) {
+				for (FluidMixture.Component fluid : mixture.components()) {
+					String componentVolume = String.format("%.2f%% (%.9f m³)",
+							100.0 * fluid.volumeNanos() / ContainerFluidLedger.NANOS_PER_BLOCK,
+							ContainerFluidLedger.nanosToVolume(fluid.volumeNanos()));
+					tooltip.accept(Component.translatable("item.realwater.material_bucket.component",
+							fluid.materialId(), componentVolume, String.format("%.12g", fluid.mass()))
+							.withStyle(ChatFormatting.DARK_GRAY));
+				}
+			}
 		}
 	}
 }

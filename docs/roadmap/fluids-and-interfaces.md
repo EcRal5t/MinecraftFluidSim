@@ -35,7 +35,7 @@ M1 的独立 CPU 系数门已选择按界面距离加权的守恒 `1/rho` 面系
 - 内部界面采用 multi-material/partitioned marching tetrahedra；共享界面只生成一次，并具有稳定归属与法向。
 - 客户端 palette、颜色、界面 mesh 和平滑字段都是展示数据，不结算材料质量或体积。
 - protocol 与 `region-state` 的材料字段只有在兼容和迁移方案评审后才冻结；M3 初期实验保持 CPU 独立状态。
-- M3 的基本输入/输出先覆盖纯材料和简单混合物；完整原版桶矩阵留到 M6.1。
+- M6 已完成纯水、部分水、单材料与 canonical 混合物的玩家/发射器容器矩阵；后续这里只扩展新物性的输运模型，原版行为与外部 Mod API 留到 M10。
 
 CPU 参考 mesher 已实现 pairwise partitioned tetrahedra：每个 pair 的 `f_a = f_b` 平面再由其他 phase dominance 与总液相边界裁剪。自动门覆盖互溶材料不生成内部面、二相平面单一归属、三相交汇三组 pair，以及外表面/内部面无重复三角形；该几何尚未接入客户端绘制。
 

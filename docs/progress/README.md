@@ -13,6 +13,7 @@
 | M5 空气区域网络与气液压力 | 2026-08-22 | 密闭气腔识别、纳体积精确气体账本、等温 EoS、有限速率孔流与 `p_gas` 自由面边界完成；准静态压缩 0.91%、负压悬液 6.73%、孔链有限均压；开放水域与 M4 逐位一致，气体状态 runtime-only | [`m5-air-network.md`](m5-air-network.md) |
 | M6.0 ownership 设计评审 | 2026-08-22 | 选定"空气 + 独立 registry"路线，拒绝代理占位方块；冻结共同状态机、acquire 提交顺序、崩溃恢复判定表与格式边界；不升版本 | [`m6.0-ownership-review.md`](m6.0-ownership-review.md) |
 | M6.1a 无容器 crash-safe ownership | 2026-08-22 | config v3 `worldBridgeEnabled`、分段世代、per-region WAL 与 region-HEAD 键控恢复、激活 acquire/保守 release/启动恢复全部落地并过实机 Smoke A；不升版本 | [`m6.1a-world-ownership.md`](m6.1a-world-ownership.md) |
+| M6 世界 ownership、流体桥与容器 | 2026-08-23 | crash-safe ownership、精确部分/材料混合桶、玩家/发射器统一转移与跨持久域 WAL v2 完成；完整 CPU 回归、EULA=false 启动与实机 Smoke C 通过，主 Mod 0.12.0 | [`m6-world-bridge-and-containers.md`](m6-world-bridge-and-containers.md) |
 
 补充记录：
 

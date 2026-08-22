@@ -8,7 +8,7 @@
 - 数值离散：`markerCount` 压力相、平滑 `volume[]`、PLIC、cut-cell 和压力目标。
 - 渲染重建：density + marker + solid，只读消费服务端快照。
 - 调度策略：ACTIVE/REDUCED/休眠/UNLOADED 与 CPU wall-time pacing。
-- 世界事务：只有 takeover 在 journal + WARNING 发布后移除纯 `Blocks.WATER`。
+- 世界事务：瞬态 takeover 与持久 controller ownership 都只在各自 journal/WARNING 原子发布后修改原版方块；region/container 转移另由独立 WAL 跨持久域收敛。
 
 ## 主 Mod 代码职责
 
@@ -40,17 +40,15 @@
 | 守恒 reseeding | `src/main/java/com/example/fluid/FlipParticleReseeder.java` | merge/split 保持体积、质量、动量、质心和硬预算；不跨 material/phase |
 | marker 内存交接 | `src/main/java/com/example/fluid/FlipParticleState.java`、`src/main/java/com/example/fluid/FlipMaterialParticleState.java` | 纯水与多材料类型分离；都不是协议或存档格式 |
 | solver 参数 | `src/main/java/com/example/fluid/FluidSolverConfig.java` | CFL、压力容差、FLIP 比例或时间步只属数值离散；改动选择对应 solver 门 |
-| M3 材料与 CPU 门 | `src/main/java/com/example/fluid/FluidMaterial.java`、`src/main/java/com/example/fluid/FluidMaterialRegistry.java`、`src/main/java/com/example/fluid/BuiltinFluidMaterials.java`、`src/main/java/com/example/fluid/FluidMaterialRenderSnapshot.java`、`src/main/java/com/example/fluid/FluidMaterialSurfaceMesher.java`、`src/test/java/com/example/fluid/M3ConnectedVesselExperiment.java`、`src/test/java/com/example/fluid/M3MaterialTransferValidation.java`、`src/test/java/com/example/fluid/M3MaterialDynamicsValidation.java`、`src/test/java/com/example/fluid/M3MaterialSurfaceValidation.java` | snapshot/mesh 只读重建，量化字段不结算库存；正式世界入口（桶、方块、takeover）仍只创建纯水 |
+| M3 材料与 CPU 门 | `src/main/java/com/example/fluid/FluidMaterial.java`、`src/main/java/com/example/fluid/FluidMaterialRegistry.java`、`src/main/java/com/example/fluid/BuiltinFluidMaterials.java`、`src/main/java/com/example/fluid/FluidMaterialRenderSnapshot.java`、`src/main/java/com/example/fluid/FluidMaterialSurfaceMesher.java`、`src/test/java/com/example/fluid/M3ConnectedVesselExperiment.java`、`src/test/java/com/example/fluid/M3MaterialTransferValidation.java`、`src/test/java/com/example/fluid/M3MaterialDynamicsValidation.java`、`src/test/java/com/example/fluid/M3MaterialSurfaceValidation.java` | snapshot/mesh 只读重建，量化字段不结算库存；M6 容器可向 controller 区域转移已注册材料，但 ownership acquire 与瞬态 takeover 仍只采集纯原版水 |
 | takeover 事务 | `src/main/java/com/example/simulation/TakeoverTransaction.java`、`src/main/java/com/example/simulation/TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
-| M6 世界 ownership 事务 | `src/main/java/com/example/simulation/ownership/` | prepare→WAL→WARNING→世界修改→region HEAD 最后发布→committed 重建；恢复按 region HEAD 对比 WAL base/target 判定；玩家方块优先；不碰 takeover-journal v1 |
+| M6 世界 ownership 事务 | `src/main/java/com/example/simulation/ownership/`、`docs/architecture/world-ownership-and-containers.md` | prepare→WAL→WARNING→世界修改→region HEAD 最后发布→committed 重建；恢复按 region HEAD 对比 WAL base/target 判定；首次/失败 staging 只清理自有暂存，unknown/corrupt/身份失配锁定；玩家方块优先；不碰 takeover-journal v1 |
 | M6 容器纳体积账本 | `src/main/java/com/example/item/ContainerFluidLedger.java` | 容器真值是 long 纳体积（1 BV=1e9）；换算半量子内舍入、漂移有界并记录，不用 damage/density 结算 |
-| M6 精确转移原语 | `src/main/java/com/example/fluid/FlipFluidDomain.java` 的 `tryInsertExactVolume`/`tryExtractExactVolume` | all-or-nothing；insert 先规划后落子、refuse 零残留；extract 双精度可用性预检+整 marker+尾拆分；返回精确 double 实际量，由服务层换算量子 |
-| M6 容器物品/组件 | `src/main/java/com/example/item/RealWaterComponents.java`、`PartialWaterBucketItem.java`、`MaterialBucketItem.java`、`RealWaterItems.java` | `water_volume`/`fluid_volume` 组件是容器真值；`material_id` 是稳定材料键（运行时才解析 handle）；耐久条/tooltip 只读；满/空在服务层规范化为原版桶 |
+| M6 精确转移原语 | `src/main/java/com/example/fluid/FlipFluidDomain.java` 的 `tryInsertExactVolume`/`tryExtractExactVolume`、`tryInsertExactMaterial`、`tryInsertExactMixture`/`tryExtractExactMixture` | all-or-nothing；insert 先规划后落子、refuse 零残留；extract 双精度预检+整 marker+尾拆分；逐材料体积和独立质量都必须闭合，服务层再换算纳体积量子 |
+| M6 容器物品/组件 | `src/main/java/com/example/item/RealWaterComponents.java`、`ContainerFluidLedger.java`、`FluidMixture.java`、`PartialWaterBucketItem.java`、`MaterialBucketItem.java`、`RealWaterItems.java` | `water_volume`/`fluid_volume` 是体积真值；`fluid_mass_bits` 与 `mixture_components` 保存总/逐材料独立质量；单材料 `material_id` 是稳定键；tooltip 只读；仅纯水满/空规范化为原版桶，材料空桶仍为自定义物品 |
 | M6 部分桶合并配方 | `src/main/java/com/example/item/RealWaterRecipes.java`、`src/main/resources/data/realwater/recipe/partial_water_bucket_merge.json` | 动态配方：先填满一桶，溢出作为 recipe remainder 留在第二输入；精确账本由 `ContainerFluidLedger.mergeOutput/mergeRemainder` 结算 |
-
-| M6 桶入口（玩家/发射器） | `src/main/java/com/example/simulation/FluidTransferService.java`、`src/main/java/com/example/mixin/ItemStackMixin.java`、`RealWaterMod.java` 的 dispenser 注册 | worldBridge 门控；只拦截选中区域或目标在区域内；成功/失败都不得让原版水绕过 ledger；容器真值仍由账本/组件结算 |
-| M6 容器转移 WAL | `src/main/java/com/example/simulation/ContainerTransferJournal.java`、`ContainerTransferStore.java`、`FluidTransferService` 的 controller 路径 | 只用于 controller 区域玩家/发射器桶转移；PREPARED→solver 修改→REGION_COMMITTED→checkpoint→物品修改→清理；恢复按 region HEAD 对比 base/target，HEAD=base 丢弃、HEAD=target 收敛 after、其他锁定；玩家离线/发射器未加载保持 pending 并锁住新转移 |
-
+| M6 桶入口（玩家/发射器） | `src/main/java/com/example/simulation/FluidTransferService.java`、`src/main/java/com/example/mixin/ItemStackMixin.java`、`RealWaterMod.java` 的 dispenser 注册 | worldBridge 门控；只按准星/发射方向命中的区域路由，命令选区无关；堆叠/损坏组件安全拒绝；成功/失败都不得让原版水绕过 ledger；创造 source/scoop 明确记账并保留 operator pause 意图 |
+| M6 容器转移 WAL | `src/main/java/com/example/simulation/ContainerTransferJournal.java`、`ContainerTransferStore.java`、`ContainerTransferRecovery.java`、`FluidTransferService` 的 controller 路径 | 只用于 controller 区域玩家/发射器桶转移；PREPARED WAL→求解器修改→含 after 的 REGION_COMMITTED WAL→checkpoint/HEAD→actor after durable save→清理；HEAD=base 丢弃、HEAD=target 收敛 after、其他锁定；v2 携带 mixture+mass，v1 仅纯水可恢复；未知 store 内容全局锁；actor 未加载保持 pending |
 | takeover codec/files | `src/main/java/com/example/simulation/TakeoverJournalCodec.java`、`src/main/java/com/example/simulation/TakeoverJournalFiles.java` | v1 可读；未知/损坏/恢复失败锁住新 takeover |
 | 指令 transcript | `src/main/java/com/example/logging/RealWaterCommandLog.java`、`src/main/java/com/example/logging/CommandAuditFile.java` | 只做 UTF-8 观测；失败不得改变命令结果 |
 | protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 由材料门决定严格 v1 或严格 v2 + material capability；不做降级伪装 |
@@ -74,6 +72,7 @@
 - 密闭液面不响应或气压异常：`AirCavityScanner` 环境判定与扫描预算、`AirNetwork` EoS/孔流、`FlipFluidDomain` 界面压力两处消费点。
 - 气体账本不平或腔体拓扑事件异常：`AirNetwork` 的 remap/merge/split 与开孔 vent 记账。
 - ownership 状态不明或区域被锁：`/realwater ownership`、`OwnershipStore.scanIssues/recoverUnfinished`、WAL 与 region HEAD 的 base/target 判定。
+- 容器转移锁或物品/区域不一致：`<world>/realwater/container-transfer/` 严格扫描结果、`ContainerTransferRecovery` 的 HEAD 判定、actor 是否在线/已加载；不要手删未知或损坏 WAL。
 
 ## 可选 GPU probe
 

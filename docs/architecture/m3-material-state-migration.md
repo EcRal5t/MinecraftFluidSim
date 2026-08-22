@@ -18,7 +18,7 @@
 - marker `particleVolume` 与显式 `particleMass` 分别是体积、质量真值；稳定 material ID 决定逐材料账本归属。
 - 运行时 material/phase handle、格内相分数、dominant label、平滑 density 与 mesh 都是可重建状态，不进入物理账本。
 - M3 phase 由稳定 miscibility-group key 重建；当前进程内整数 handle 不写入网络或存档。
-- 正式世界入口（桶、原版方块替换、takeover）仍只创建纯水；多材料入口只有瞬态 `/realwater materialdemo`。
+- M6 后正式 controller 桶入口可精确装取/放出已注册材料与 canonical 混合物；ownership acquire、原版方块采样与瞬态 takeover 仍只把原版水解释为纯水。多材料容器与跨持久域事务见 [`world-ownership-and-containers.md`](world-ownership-and-containers.md)。
 
 ## 网络迁移
 
