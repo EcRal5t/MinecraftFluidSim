@@ -720,29 +720,38 @@ public final class FlipFluidDomain {
 		}
 		if (available < volume) return new ExactVolumeTransfer(false, 0.0);
 
-		double remaining = volume;
-		double removed = 0.0;
-		for (int i = particleCount - 1; i >= 0 && remaining > 0.0; i--) {
-			if (!near[cellIndex(
-					(int) Math.floor(particleX[i] / h), (int) Math.floor(particleY[i] / h), (int) Math.floor(particleZ[i] / h))]) {
-				continue;
-			}
-			float previousVolume = particleVolume[i];
-			double take = Math.min(previousVolume, remaining);
-			float newVolume = (float) (previousVolume - take);
-			if (newVolume <= 1.0E-6F) newVolume = 0.0F;
-			particleVolume[i] = newVolume;
-			particleMass[i] *= newVolume / previousVolume;
-			double actual = previousVolume - newVolume;
-			if (newVolume <= 0.0F) {
-				removeParticle(i);
-			}
-			removed += actual;
-			remaining -= actual;
-		}
-		gridDirty = true;
-		return new ExactVolumeTransfer(true, removed);
-	}
+double remaining = volume;
+double removed = 0.0;
+for (CellCandidate candidate : cells) {
+if (remaining <= 0.0) break;
+int cell = candidate.index();
+while (remaining > 0.0) {
+int particle = firstParticleInCell(cell);
+if (particle < 0) break;
+float previousVolume = particleVolume[particle];
+double take = Math.min(previousVolume, remaining);
+float newVolume = (float) (previousVolume - take);
+if (newVolume <= 1.0E-6F) newVolume = 0.0F;
+particleVolume[particle] = newVolume;
+particleMass[particle] *= newVolume / previousVolume;
+double actual = previousVolume - newVolume;
+if (newVolume <= 0.0F) {
+removeParticle(particle);
+}
+removed += actual;
+remaining -= actual;
+}
+}
+gridDirty = true;
+return new ExactVolumeTransfer(true, removed);
+}
+
+private int firstParticleInCell(int cell) {
+for (int i = 0; i < particleCount; i++) {
+if (particleCellIndex(i) == cell) return i;
+}
+return -1;
+}
 
 	private record InsertAllocation(int x, int y, int z, double amount) { }
 
