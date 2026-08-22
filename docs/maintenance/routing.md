@@ -44,6 +44,7 @@
 | takeover 事务 | `src/main/java/com/example/simulation/TakeoverTransaction.java`、`src/main/java/com/example/simulation/TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
 | M6 世界 ownership 事务 | `src/main/java/com/example/simulation/ownership/` | prepare→WAL→WARNING→世界修改→region HEAD 最后发布→committed 重建；恢复按 region HEAD 对比 WAL base/target 判定；玩家方块优先；不碰 takeover-journal v1 |
 | M6 容器纳体积账本 | `src/main/java/com/example/item/ContainerFluidLedger.java` | 容器真值是 long 纳体积（1 BV=1e9）；换算半量子内舍入、漂移有界并记录，不用 damage/density 结算 |
+| M6 精确转移原语 | `src/main/java/com/example/fluid/FlipFluidDomain.java` 的 `tryInsertExactVolume`/`tryExtractExactVolume` | all-or-nothing；insert 先规划后落子、refuse 零残留；extract 双精度可用性预检+整 marker+尾拆分；返回精确 double 实际量，由服务层换算量子 |
 | takeover codec/files | `src/main/java/com/example/simulation/TakeoverJournalCodec.java`、`src/main/java/com/example/simulation/TakeoverJournalFiles.java` | v1 可读；未知/损坏/恢复失败锁住新 takeover |
 | 指令 transcript | `src/main/java/com/example/logging/RealWaterCommandLog.java`、`src/main/java/com/example/logging/CommandAuditFile.java` | 只做 UTF-8 观测；失败不得改变命令结果 |
 | protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 由材料门决定严格 v1 或严格 v2 + material capability；不做降级伪装 |
