@@ -50,7 +50,3 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 - [完成进度与验收证据](docs/progress/README.md)
 - [未来里程碑与技术规格](docs/roadmap/product-roadmap.md)
 - [代码与测试维护路由](docs/maintenance/routing.md)
-
-## License
-
-CC0-1.0
