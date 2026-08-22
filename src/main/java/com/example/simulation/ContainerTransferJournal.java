@@ -1,6 +1,8 @@
 package com.example.simulation;
 
+import com.example.item.MaterialBucketItem;
 import com.example.item.PartialWaterBucketItem;
+import com.example.item.RealWaterComponents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -41,16 +43,22 @@ return new Actor(ActorType.DISPENSER, null, null, dimensionId, pos, slot);
 }
 }
 
-public enum ItemKind { BUCKET, WATER_BUCKET, PARTIAL }
+public enum ItemKind { BUCKET, WATER_BUCKET, PARTIAL, MATERIAL_BUCKET }
 
-public record ItemFingerprint(ItemKind kind, long nanos) {
+public record ItemFingerprint(ItemKind kind, long nanos, String materialId) {
 public static ItemFingerprint of(ItemStack stack) {
-if (stack.is(Items.BUCKET)) return new ItemFingerprint(ItemKind.BUCKET, -1L);
-if (stack.is(Items.WATER_BUCKET)) return new ItemFingerprint(ItemKind.WATER_BUCKET, -1L);
+if (stack.is(Items.BUCKET)) return new ItemFingerprint(ItemKind.BUCKET, -1L, null);
+if (stack.is(Items.WATER_BUCKET)) return new ItemFingerprint(ItemKind.WATER_BUCKET, -1L, null);
 if (stack.getItem() instanceof PartialWaterBucketItem) {
 long nanos = PartialWaterBucketItem.volume(stack);
 if (nanos <= 0L) throw new IllegalArgumentException("Partial bucket has no valid volume");
-return new ItemFingerprint(ItemKind.PARTIAL, nanos);
+return new ItemFingerprint(ItemKind.PARTIAL, nanos, null);
+}
+if (stack.getItem() instanceof MaterialBucketItem) {
+long nanos = MaterialBucketItem.volume(stack);
+String materialId = MaterialBucketItem.materialId(stack);
+if (nanos <= 0L || materialId == null) throw new IllegalArgumentException("Material bucket has no valid volume/material");
+return new ItemFingerprint(ItemKind.MATERIAL_BUCKET, nanos, materialId);
 }
 throw new IllegalArgumentException("Unsupported container item for transfer WAL: " + stack.getItem());
 }
@@ -60,6 +68,12 @@ return switch (kind) {
 case BUCKET -> new ItemStack(Items.BUCKET);
 case WATER_BUCKET -> new ItemStack(Items.WATER_BUCKET);
 case PARTIAL -> PartialWaterBucketItem.withVolume(nanos);
+case MATERIAL_BUCKET -> {
+ItemStack stack = new ItemStack(com.example.item.RealWaterItems.MATERIAL_BUCKET);
+stack.set(RealWaterComponents.FLUID_VOLUME, nanos);
+stack.set(RealWaterComponents.MATERIAL_ID, materialId);
+yield stack;
+}
 };
 }
 }

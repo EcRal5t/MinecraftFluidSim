@@ -215,6 +215,16 @@ public final class FlipFluidDomain {
 	public FluidSolverConfig config() { return config; }
 	public boolean hasMaterialState() { return materialRegistry != null; }
 
+	/** Returns the bound material registry, or null for a pure-water domain. */
+	public FluidMaterialRegistry materialRegistry() { return materialRegistry; }
+
+	/** Resolves a stable material id to the runtime handle of the bound registry. */
+	public int materialHandle(String materialId) {
+		if (materialRegistry == null) throw new IllegalStateException("Material registry is not bound");
+		return materialRegistry.handle(materialId);
+	}
+
+
 	/** Replaces this domain from one validated, immutable in-memory marker state. */
 	public void restoreParticleState(FlipParticleState state) {
 		if (state == null) throw new IllegalArgumentException("Particle state must not be null");

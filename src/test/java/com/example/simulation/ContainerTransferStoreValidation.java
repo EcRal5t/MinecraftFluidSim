@@ -39,9 +39,9 @@ public final class ContainerTransferStoreValidation {
 		UUID region = UUID.randomUUID();
 		ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND");
 		ContainerTransferJournal.ItemFingerprint before = new ContainerTransferJournal.ItemFingerprint(
-				ContainerTransferJournal.ItemKind.WATER_BUCKET, -1L);
+				ContainerTransferJournal.ItemKind.WATER_BUCKET, -1L, null);
 		ContainerTransferJournal.ItemFingerprint after = new ContainerTransferJournal.ItemFingerprint(
-				ContainerTransferJournal.ItemKind.BUCKET, -1L);
+				ContainerTransferJournal.ItemKind.BUCKET, -1L, null);
 		ContainerTransferJournal prepared = new ContainerTransferJournal(
 				tx, region, "minecraft:overworld", 3L, 4L,
 				ContainerTransferJournal.Operation.INSERT, 1_000_000_000L, actor, before, before,
@@ -68,9 +68,9 @@ public final class ContainerTransferStoreValidation {
 		UUID tx = UUID.randomUUID();
 		UUID region = UUID.randomUUID();
 		ContainerTransferJournal.ItemFingerprint before = new ContainerTransferJournal.ItemFingerprint(
-				ContainerTransferJournal.ItemKind.BUCKET, -1L);
+				ContainerTransferJournal.ItemKind.BUCKET, -1L, null);
 		ContainerTransferJournal.ItemFingerprint after = new ContainerTransferJournal.ItemFingerprint(
-				ContainerTransferJournal.ItemKind.PARTIAL, 500_000_000L);
+				ContainerTransferJournal.ItemKind.PARTIAL, 500_000_000L, null);
 
 		ContainerTransferJournal player = new ContainerTransferJournal(
 				tx, region, "minecraft:overworld", 0L, 1L,
@@ -90,13 +90,28 @@ public final class ContainerTransferStoreValidation {
 		);
 		store.write(dispenser);
 		check(dispenser.equals(store.read(tx2)), "dispenser actor WAL did not round-trip");
+
+		UUID tx3 = UUID.randomUUID();
+		ContainerTransferJournal.ItemFingerprint materialBefore = new ContainerTransferJournal.ItemFingerprint(
+				ContainerTransferJournal.ItemKind.MATERIAL_BUCKET, 1_000_000_000L, "realwater:oil");
+		ContainerTransferJournal.ItemFingerprint materialAfter = new ContainerTransferJournal.ItemFingerprint(
+				ContainerTransferJournal.ItemKind.BUCKET, -1L, null);
+		ContainerTransferJournal material = new ContainerTransferJournal(
+				tx3, region, "minecraft:overworld", 2L, 3L,
+				ContainerTransferJournal.Operation.INSERT, 1_000_000_000L,
+				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
+				materialBefore, materialAfter, ContainerTransferJournal.Phase.REGION_COMMITTED
+		);
+		store.write(material);
+		check(material.equals(store.read(tx3)), "material bucket fingerprint did not round-trip");
+
 	}
 
 	private static void testValidation() throws Exception {
 		Path root = Files.createTempDirectory("realwater-wal-validation");
 		ContainerTransferStore store = new ContainerTransferStore(root);
 		ContainerTransferJournal.ItemFingerprint item = new ContainerTransferJournal.ItemFingerprint(
-				ContainerTransferJournal.ItemKind.BUCKET, -1L);
+				ContainerTransferJournal.ItemKind.BUCKET, -1L, null);
 		ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND");
 
 		ContainerTransferJournal badGeneration = new ContainerTransferJournal(
@@ -116,7 +131,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal badPartial = new ContainerTransferJournal(
 				UUID.randomUUID(), UUID.randomUUID(), "minecraft:overworld", 0L, 1L,
 				ContainerTransferJournal.Operation.INSERT, 1L, actor,
-				new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.PARTIAL, -1L),
+				new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.PARTIAL, -1L, null),
 				item, ContainerTransferJournal.Phase.PREPARED
 		);
 		checkThrows(IOException.class, () -> store.write(badPartial), "invalid partial volume must be rejected");
@@ -127,7 +142,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferStore store = new ContainerTransferStore(root);
 		UUID tx = UUID.randomUUID();
 		ContainerTransferJournal.ItemFingerprint item = new ContainerTransferJournal.ItemFingerprint(
-				ContainerTransferJournal.ItemKind.BUCKET, -1L);
+				ContainerTransferJournal.ItemKind.BUCKET, -1L, null);
 		ContainerTransferJournal journal = new ContainerTransferJournal(
 				tx, UUID.randomUUID(), "minecraft:overworld", 0L, 1L,
 				ContainerTransferJournal.Operation.EXTRACT, 1L,

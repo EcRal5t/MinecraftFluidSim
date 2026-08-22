@@ -245,6 +245,7 @@ operation, volumeNanos, actor, beforeItem, afterItem, phase);
 private static void putFingerprint(CompoundTag root, String prefix, ContainerTransferJournal.ItemFingerprint item) throws IOException {
 root.putString(prefix + "Kind", itemKindName(item.kind()));
 root.putLong(prefix + "Nanos", item.nanos());
+if (item.materialId() != null) root.putString(prefix + "MaterialId", item.materialId());
 }
 
 private static ContainerTransferJournal.ItemFingerprint getFingerprint(CompoundTag root, String prefix) throws IOException {
@@ -252,16 +253,21 @@ requireType(root, prefix + "Kind", Tag.TAG_STRING);
 requireType(root, prefix + "Nanos", Tag.TAG_LONG);
 ContainerTransferJournal.ItemKind kind = parseItemKind(root.getStringOr(prefix + "Kind", ""));
 long nanos = root.getLongOr(prefix + "Nanos", 0L);
+String materialId = root.getStringOr(prefix + "MaterialId", null);
 if (kind == ContainerTransferJournal.ItemKind.PARTIAL) {
 if (!com.example.item.ContainerFluidLedger.isPartialBucket(nanos)) {
 throw new IOException(prefix + " partial bucket nanovolume is invalid: " + nanos);
 }
-} else if (nanos != -1L) {
-throw new IOException(prefix + " non-partial bucket must not carry a nanovolume");
+} else if (kind == ContainerTransferJournal.ItemKind.MATERIAL_BUCKET) {
+if (materialId == null || Identifier.tryParse(materialId) == null || nanos <= 0L
+|| nanos > com.example.item.ContainerFluidLedger.NANOS_PER_BLOCK) {
+throw new IOException(prefix + " material bucket fingerprint is invalid");
 }
-return new ContainerTransferJournal.ItemFingerprint(kind, nanos);
+} else if (materialId != null || nanos != -1L) {
+throw new IOException(prefix + " non-material bucket must not carry material id or nanovolume");
 }
-
+return new ContainerTransferJournal.ItemFingerprint(kind, nanos, materialId);
+}
 private static void validateDimension(String dimensionId) throws IOException {
 if (Identifier.tryParse(dimensionId) == null) throw new IOException("Invalid container transfer WAL dimension: " + dimensionId);
 }
@@ -301,6 +307,7 @@ return switch (kind) {
 case BUCKET -> "BUCKET";
 case WATER_BUCKET -> "WATER_BUCKET";
 case PARTIAL -> "PARTIAL";
+case MATERIAL_BUCKET -> "MATERIAL_BUCKET";
 };
 }
 
@@ -309,10 +316,10 @@ return switch (name) {
 case "BUCKET" -> ContainerTransferJournal.ItemKind.BUCKET;
 case "WATER_BUCKET" -> ContainerTransferJournal.ItemKind.WATER_BUCKET;
 case "PARTIAL" -> ContainerTransferJournal.ItemKind.PARTIAL;
+case "MATERIAL_BUCKET" -> ContainerTransferJournal.ItemKind.MATERIAL_BUCKET;
 default -> throw new IOException("Unknown container transfer item kind: " + name);
 };
 }
-
 private static String phaseName(ContainerTransferJournal.Phase phase) {
 return phase == ContainerTransferJournal.Phase.PREPARED ? "PREPARED" : "REGION_COMMITTED";
 }
