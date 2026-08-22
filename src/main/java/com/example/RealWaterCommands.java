@@ -46,6 +46,8 @@ public final class RealWaterCommands {
 								.executes(context -> audit(context, () -> editWater(context.getSource(), 1, false)))
 								.then(Commands.argument("buckets", IntegerArgumentType.integer(1, 16))
 										.executes(context -> audit(context, () -> editWater(context.getSource(), IntegerArgumentType.getInteger(context, "buckets"), false)))))
+						.then(Commands.literal("empty").executes(context -> audit(context, () -> emptyRegion(context.getSource()))))
+
 						.then(Commands.literal("refresh").executes(context -> audit(context, () -> refreshCollisions(context.getSource()))))
 						.then(Commands.literal("entities")
 								.executes(context -> audit(context, () -> entityPhysicsStatus(context.getSource())))
@@ -201,6 +203,15 @@ public final class RealWaterCommands {
 						: ""
 		), commandResult);
 	}
+
+	private static int emptyRegion(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		String result = service.emptySelectedRegion(player.level());
+		if (result.contains("失败") || result.startsWith("没有")) return fail(source, result);
+		return succeed(source, result, 1);
+	}
+
 
 	private static int refreshCollisions(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());

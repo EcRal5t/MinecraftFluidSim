@@ -329,11 +329,11 @@ public final class FluidTransferService {
 	) {
 		if (volumeNanos <= 0L) return null;
 		FlipFluidDomain.ExactVolumeTransfer inserted = region.domain().tryInsertExactVolume(
-				cell[0], cell[1], cell[2], ContainerFluidLedger.nanosToFloatVolume(volumeNanos), 6);
+				cell[0], cell[1], cell[2], nanosToCellVolume(volumeNanos), 6);
 		if (!inserted.transferred()) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "空间或 marker 预算不足，未能注入");
 		}
-		long poured = Math.min(ContainerFluidLedger.volumeToNanos(inserted.volume()), volumeNanos);
+		long poured = Math.min(cellVolumeToNanos(inserted.volume()), volumeNanos);
 		region.wakeForActivity();
 		return new TransferOutcome(true, true, withVolume(volumeNanos - poured),
 				String.format("已注入 %.2f%% 桶", 100.0 * poured / ContainerFluidLedger.NANOS_PER_BLOCK));
@@ -344,11 +344,11 @@ public final class FluidTransferService {
 	) {
 		if (capacityNanos <= 0L) return null;
 		FlipFluidDomain.ExactVolumeTransfer extracted = region.domain().tryExtractExactVolume(
-				cell[0], cell[1], cell[2], ContainerFluidLedger.nanosToFloatVolume(capacityNanos), 6);
+				cell[0], cell[1], cell[2], nanosToCellVolume(capacityNanos), 6);
 		if (!extracted.transferred() || extracted.volume() <= 0.0) {
 			return new TransferOutcome(false, false, withVolume(baseVolumeNanos), "准星处没有足够水体");
 		}
-		long taken = Math.min(ContainerFluidLedger.volumeToNanos(extracted.volume()), capacityNanos);
+		long taken = Math.min(cellVolumeToNanos(extracted.volume()), capacityNanos);
 		region.wakeForActivity();
 		return new TransferOutcome(true, false, withVolume(baseVolumeNanos + taken),
 				String.format("已舀取 %.2f%% 桶", 100.0 * taken / ContainerFluidLedger.NANOS_PER_BLOCK));
@@ -389,6 +389,14 @@ public final class FluidTransferService {
 	/** Canonicalizes to a vanilla bucket, a vanilla water bucket or a partial bucket. */
 	private static ItemStack withVolume(long nanos) {
 		return PartialWaterBucketItem.withVolume(nanos);
+	}
+
+	static float nanosToCellVolume(long nanos) {
+		return (float) (ContainerFluidLedger.nanosToVolume(nanos) * FluidSimulationService.CELL_VOLUMES_PER_BLOCK);
+	}
+
+	static long cellVolumeToNanos(double cellVolume) {
+		return ContainerFluidLedger.volumeToNanos(cellVolume / FluidSimulationService.CELL_VOLUMES_PER_BLOCK);
 	}
 
 	private record TransferOutcome(boolean transferred, boolean filled, ItemStack stack, String message) { }

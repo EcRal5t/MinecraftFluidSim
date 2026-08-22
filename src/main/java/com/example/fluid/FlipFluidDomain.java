@@ -644,6 +644,13 @@ public final class FlipFluidDomain {
 		return amount - remaining;
 	}
 
+	/** Removes every marker; the exact marker-volume ledger becomes zero immediately. */
+	public void removeAllWaterExact() {
+		particleCount = 0;
+		gridDirty = true;
+	}
+
+
 	/**
 	 * M6 container transfer primitive: all-or-nothing insertion of an exact volume near the
 	 * target. Cells, pieces and the marker budget are planned before any state changes, so a

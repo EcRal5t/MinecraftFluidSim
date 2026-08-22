@@ -51,7 +51,7 @@ public final class FluidSimulationService {
 	public static final int BLOCK_SIZE_Y = 8;
 	public static final int BLOCK_SIZE_Z = 12;
 	public static final int CELLS_PER_BLOCK = 2;
-	private static final int CELL_VOLUMES_PER_BLOCK = CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
+	static final int CELL_VOLUMES_PER_BLOCK = CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
 	private static final int SNAPSHOT_INTERVAL_TICKS = 4;
 	private static final int COLLISION_REFRESH_INTERVAL_TICKS = 5;
 	private static final double STEP_BUDGET_MILLIS = 40.0;
@@ -1155,6 +1155,32 @@ public final class FluidSimulationService {
 	public String checkpointSelected() {
 		return regionOperations.checkpointSelected();
 	}
+
+	public String emptySelectedRegion(ServerLevel level) {
+		FluidRegion region = activeRegion();
+		if (region == null || !level.dimension().equals(region.dimension())) return "没有活动流体域或位于其他维度";
+		if (!ensureRegionAvailable(level, region)) return "控制器域当前不可用：" + region.availabilityFailure();
+		FlipFluidDomain domain = region.domain();
+		float beforeBlocks = domain.totalVolume() / CELL_VOLUMES_PER_BLOCK;
+		int beforeParticles = domain.particleCount();
+		domain.removeAllWaterExact();
+		region.wakeForActivity();
+		if (region.controllerManaged()) {
+			try {
+				long generation = regionOperations.checkpoint(region);
+				sendSnapshot(level, region);
+				return String.format("已抹除全部水体：%.3f 方块水（%d 个 marker），checkpoint %d 已发布",
+						beforeBlocks, beforeParticles, generation);
+			} catch (IOException | RuntimeException exception) {
+				region.setPaused(true);
+				region.setAvailabilityFailure("empty 后 checkpoint 失败，活动 solver 已清空；重启后可能恢复旧水量：" + exception.getMessage());
+				return "已从活动 solver 抹除全部水体，但 checkpoint 失败；区域已暂停：" + exception.getMessage();
+			}
+		}
+		sendSnapshot(level, region);
+		return String.format("已抹除全部水体：%.3f 方块水（%d 个 marker）", beforeBlocks, beforeParticles);
+	}
+
 
 	private void checkpointForShutdown() {
 		regionOperations.checkpointForShutdown(region -> !hasPendingContainerTransfer(region.id()));

@@ -21,6 +21,7 @@ public final class ContainerTransferStoreValidation {
 			run("player and dispenser actor codecs", ContainerTransferStoreValidation::testActorCodecs);
 			run("invalid generations and dimensions are rejected", ContainerTransferStoreValidation::testValidation);
 			run("delete removes the transaction", ContainerTransferStoreValidation::testDelete);
+			run("nanovolume and solver cell-volume conversion", ContainerTransferStoreValidation::testNanosCellConversion);
 			System.out.println("ContainerTransferStoreValidation passed " + passed + " scenarios");
 		} finally {
 			try (var paths = Files.walk(root)) {
@@ -136,6 +137,17 @@ public final class ContainerTransferStoreValidation {
 		store.write(journal);
 		store.delete(tx);
 		check(!store.hasAny(), "store should be empty after deleting the only transaction");
+	}
+
+	private static void testNanosCellConversion() {
+		check(FluidTransferService.nanosToCellVolume(1_000_000_000L) == 8.0F,
+				"one bucket must convert to eight solver cell volumes");
+		check(FluidTransferService.cellVolumeToNanos(8.0) == 1_000_000_000L,
+				"eight solver cell volumes must convert back to one bucket");
+		check(FluidTransferService.nanosToCellVolume(500_000_000L) == 4.0F,
+				"half a bucket must convert to four solver cell volumes");
+		check(FluidTransferService.cellVolumeToNanos(1.0) == 125_000_000L,
+				"one solver cell volume must be one eighth of a bucket");
 	}
 
 	private static void run(String name, ThrowingRunnable scenario) throws Exception {
