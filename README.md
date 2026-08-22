@@ -11,6 +11,7 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完�
 - 控制器区域必须具备完整可见边界和全部已加载 chunk；Mod 不持有永久 chunk ticket。
 - `region-state v1` 使用原子检查点。未知、损坏或未解决状态会锁住新控制器创建，不会被静默删除。
 - 材料功能门默认关闭，且只在服务器启动时读取一次。开启后控制器区域改用 `region-state v2`，连接必须协商 protocol v2；关闭门时磁盘上的 v2 区域会被保留并锁住，不会静默降级或删除。
+- 世界桥功能门（`/realwater worldbridge`）默认关闭且重启生效。开启后新激活的控制器区域会通过可恢复的 ownership 事务一次性移除内部纯原版水（WAL 与 WARNING 先行，region HEAD 最后提交）；移除含持久 ownership 的区域前必须先排空其水体。
 - 可选 GPU probe 只读、不修改世界或存档；主 Mod 始终以 CPU 为物理规范。
 
 ## 常用命令
@@ -25,10 +26,12 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完�
 | 运行控制 | `/realwater run`、`pause`、`step [1-20]`、`status` |
 | 区域与控制器 | `/realwater controllers [true|false]`、`regions list`、`regions select <uuid>`、`regions checkpoint` |
 | 材料功能门（下次重启生效） | `/realwater materials [true|false]` |
+| 世界桥功能门（下次重启生效） | `/realwater worldbridge [true|false]` |
+| Ownership 对账报告 | `/realwater ownership` |
 | 调试与实体 | `/realwater debug [true|false]`、`entities [true|false]`、`logpath` |
 | 安全移除 | `/realwater remove` |
 
-控制器玩法：用 `realwater:fluid_boundary` 建造完整的一格厚封闭外壳，以一个 `realwater:fluid_controller` 替换外壳方块，开启 `/realwater controllers true`，再空手右击控制器。首次激活只读采样内部原版水并创建暂停区域，不执行 takeover。
+控制器玩法：用 `realwater:fluid_boundary` 建造完整的一格厚封闭外壳，以一个 `realwater:fluid_controller` 替换外壳方块，开启 `/realwater controllers true`，再空手右击控制器。首次激活只读采样内部原版水并创建暂停区域；若同时开启 `/realwater worldbridge true` 并重启，激活会一次性移除内部纯原版水并建立可恢复 ownership（`/realwater ownership` 查看对账）。
 
 多材料玩法：`/realwater materials true` 后重启服务器（单人模式退回主菜单再进入世界），再用 `/realwater materialdemo` 创建上油下水的暂停溃坝域。该域是瞬态的，不写 `region-state`，也不读取或接管原版水；桶与方块入口仍只支持纯水。
 

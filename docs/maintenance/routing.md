@@ -42,7 +42,7 @@
 | solver 参数 | `src/main/java/com/example/fluid/FluidSolverConfig.java` | CFL、压力容差、FLIP 比例或时间步只属数值离散；改动选择对应 solver 门 |
 | M3 材料与 CPU 门 | `src/main/java/com/example/fluid/FluidMaterial.java`、`src/main/java/com/example/fluid/FluidMaterialRegistry.java`、`src/main/java/com/example/fluid/BuiltinFluidMaterials.java`、`src/main/java/com/example/fluid/FluidMaterialRenderSnapshot.java`、`src/main/java/com/example/fluid/FluidMaterialSurfaceMesher.java`、`src/test/java/com/example/fluid/M3ConnectedVesselExperiment.java`、`src/test/java/com/example/fluid/M3MaterialTransferValidation.java`、`src/test/java/com/example/fluid/M3MaterialDynamicsValidation.java`、`src/test/java/com/example/fluid/M3MaterialSurfaceValidation.java` | snapshot/mesh 只读重建，量化字段不结算库存；正式世界入口（桶、方块、takeover）仍只创建纯水 |
 | takeover 事务 | `src/main/java/com/example/simulation/TakeoverTransaction.java`、`src/main/java/com/example/simulation/TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
-| M6.0 ownership 原型事务核心 | `src/main/java/com/example/simulation/ownership/` | journal→WARNING→世界修改→committed 最后发布；恢复按 committed generation 判定 PRE/POST-COMMIT；玩家方块优先；M6.1 按冻结状态机在其上正式化，不碰 takeover-journal v1 |
+| M6 世界 ownership 事务 | `src/main/java/com/example/simulation/ownership/` | prepare→WAL→WARNING→世界修改→region HEAD 最后发布→committed 重建；恢复按 region HEAD 对比 WAL base/target 判定；玩家方块优先；不碰 takeover-journal v1 |
 | takeover codec/files | `src/main/java/com/example/simulation/TakeoverJournalCodec.java`、`src/main/java/com/example/simulation/TakeoverJournalFiles.java` | v1 可读；未知/损坏/恢复失败锁住新 takeover |
 | 指令 transcript | `src/main/java/com/example/logging/RealWaterCommandLog.java`、`src/main/java/com/example/logging/CommandAuditFile.java` | 只做 UTF-8 观测；失败不得改变命令结果 |
 | protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 由材料门决定严格 v1 或严格 v2 + material capability；不做降级伪装 |
@@ -65,6 +65,7 @@
 - 多材料区域被锁住或只显示纯水：`materialsEnabled` 本次启动值、config 版本、manifest formatVersion、协商 capability。
 - 密闭液面不响应或气压异常：`AirCavityScanner` 环境判定与扫描预算、`AirNetwork` EoS/孔流、`FlipFluidDomain` 界面压力两处消费点。
 - 气体账本不平或腔体拓扑事件异常：`AirNetwork` 的 remap/merge/split 与开孔 vent 记账。
+- ownership 状态不明或区域被锁：`/realwater ownership`、`OwnershipStore.scanIssues/recoverUnfinished`、WAL 与 region HEAD 的 base/target 判定。
 
 ## 可选 GPU probe
 
@@ -107,7 +108,7 @@
 | Minecraft `VoxelShape` adapter | `runFluidCutCellShapeValidation` | 不因纯 adapter 改动跑长期 solver 门 |
 | marker merge/split/长期分布 | `runFlipReseedingValidation` | 改 checkpoint/state 才加 persistence |
 | takeover 事务 | `runTakeoverJournalValidation` | 真实世界只在事务里程碑 smoke |
-| M6.0 ownership 原型事务/codec | `runM6OwnershipPrototypeValidation` | M6.1 正式化 ownership 时并入对应正式门 |
+| M6 ownership 事务/WAL/committed | `runM6OwnershipValidation` | 改 region-state 共享契约才加 persistence 门；真实世界只在事务里程碑 smoke |
 | transcript | `runCommandAuditValidation` | 命令包装变化且自动门不足才进服 |
 | GPU shader/dispatch/压力 | device 0 `--skip-large` | hierarchy/layout/capacity/大域性能才跑 64³ |
 | Vulkan device/queue/memory/lifecycle | device 0 快速门 + device 1 专项 | 双卡完整门只在发布里程碑 |

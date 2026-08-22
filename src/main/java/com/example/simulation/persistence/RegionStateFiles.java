@@ -62,23 +62,31 @@ public final class RegionStateFiles {
 		Files.createDirectories(root);
 		Head current = null;
 		if (Files.exists(region)) {
-			if (!Files.isDirectory(region) || !Files.exists(region.resolve(HEAD))) {
+			if (!Files.isDirectory(region)) {
 				throw new IOException("Uncommitted or unknown region-state data locks " + region);
 			}
-			current = readHead(region, id);
-			RegionState committed = readGeneration(region, current);
-			if (current.generation() == state.manifest().checkpointGeneration()) {
-				if (current.manifestChecksum() != state.manifest().checksum()) {
-					throw new IOException("Checkpoint generation collision for " + id);
+			if (!Files.exists(region.resolve(HEAD))) {
+				// A first publication that crashed before its HEAD publish leaves only our own staged
+				// slots behind; those are discarded so the retry can proceed. Anything else stays locked.
+				discardKnownStagedLeftovers(region);
+				if (!isEmptyDirectory(region)) throw new IOException("Uncommitted or unknown region-state data locks " + region);
+			} else {
+				current = readHead(region, id);
+				RegionState committed = readGeneration(region, current);
+				if (current.generation() == state.manifest().checkpointGeneration()) {
+					if (current.manifestChecksum() != state.manifest().checksum()) {
+						throw new IOException("Checkpoint generation collision for " + id);
+					}
+					return PreparedGeneration.alreadyCommitted(id, current.generation());
 				}
-				return PreparedGeneration.alreadyCommitted(id, current.generation());
+				if (state.manifest().checkpointGeneration() <= current.generation()) {
+					throw new IOException("Checkpoint generation did not advance for " + id);
+				}
+				committed.validate();
 			}
-			if (state.manifest().checkpointGeneration() <= current.generation()) {
-				throw new IOException("Checkpoint generation did not advance for " + id);
-			}
-			committed.validate();
-		} else {
-			Files.createDirectory(region);
+		}
+		if (current == null) {
+			Files.createDirectories(region);
 		}
 
 		String inactive = current == null || current.slot().equals(SLOT_B) ? SLOT_A : SLOT_B;
@@ -166,6 +174,16 @@ public final class RegionStateFiles {
 		return readGeneration(region, readHead(region, id));
 	}
 
+	/**
+	 * HEAD generation of a committed region, or 0 when no generation was ever committed. A present
+	 * but corrupt HEAD still throws; whether staged leftovers may be retried is decided by prepare.
+	 */
+	public long committedGeneration(UUID id) throws IOException {
+		Path region = regionPath(id);
+		if (!Files.exists(region) || !Files.exists(region.resolve(HEAD))) return 0L;
+		return readHead(region, id).generation();
+	}
+
 	/** Reads only committed manifests. Locked paths are retained and returned as issues. */
 	public Discovery discover() throws IOException {
 		if (!Files.exists(root)) return new Discovery(List.of(), Map.of());
@@ -195,6 +213,24 @@ public final class RegionStateFiles {
 		atomicMover.move(region, quarantine, false);
 		try { deleteTree(quarantine); } catch (IOException ignored) { }
 		return quarantine;
+	}
+
+	private static void discardKnownStagedLeftovers(Path region) throws IOException {
+		Set<String> known = Set.of(SLOT_A, SLOT_B, SLOT_A + ".tmp", SLOT_B + ".tmp", HEAD + ".tmp");
+		try (DirectoryStream<Path> entries = Files.newDirectoryStream(region)) {
+			for (Path entry : entries) {
+				if (!known.contains(entry.getFileName().toString())) return;
+			}
+		}
+		try (DirectoryStream<Path> entries = Files.newDirectoryStream(region)) {
+			for (Path entry : entries) deleteTree(entry);
+		}
+	}
+
+	private static boolean isEmptyDirectory(Path region) throws IOException {
+		try (DirectoryStream<Path> entries = Files.newDirectoryStream(region)) {
+			return !entries.iterator().hasNext();
+		}
 	}
 
 	private RegionState readGeneration(Path region, Head head) throws IOException {
@@ -292,9 +328,27 @@ public final class RegionStateFiles {
 		}
 	}
 
+	/** Windows antivirus/indexing can briefly hold handles inside freshly written directories. */
 	private static void atomicMove(Path source, Path target, boolean replace) throws IOException {
-		if (replace) Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-		else Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+		StandardCopyOption[] options = replace
+				? new StandardCopyOption[] {StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING}
+				: new StandardCopyOption[] {StandardCopyOption.ATOMIC_MOVE};
+		IOException denied = null;
+		for (int attempt = 0; attempt < 5; attempt++) {
+			try {
+				Files.move(source, target, options);
+				return;
+			} catch (java.nio.file.AccessDeniedException accessDenied) {
+				denied = accessDenied;
+				try {
+					Thread.sleep(25L << attempt);
+				} catch (InterruptedException interrupted) {
+					Thread.currentThread().interrupt();
+					throw accessDenied;
+				}
+			}
+		}
+		throw denied;
 	}
 
 	public enum FaultPoint { BEFORE_SLOT_WRITE, AFTER_SECTION_WRITE, AFTER_MANIFEST_WRITE, AFTER_TEMP_VALIDATION, AFTER_SLOT_PUBLISH, BEFORE_HEAD_PUBLISH, AFTER_HEAD_PUBLISH }

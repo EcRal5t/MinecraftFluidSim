@@ -72,6 +72,7 @@ public final class FluidSimulationService {
 	private boolean controllerFeatureEnabled;
 	private final boolean materialFeatureEnabled;
 	private final boolean worldBridgeFeatureEnabled;
+	private List<String> ownershipIssues = List.of();
 	private String lastTakeoverFailure;
 	private boolean takeoverMaintenanceEnabled;
 
@@ -93,6 +94,8 @@ public final class FluidSimulationService {
 		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, materialFeatureEnabled);
 		if (configurationLocked) regionOperations.recordIssue(
 				"server.properties 不可用，已安全使用默认预算并关闭控制器；原文件未覆盖");
+		ownershipIssues = regionOperations.scanOwnershipIssues();
+		for (String issue : ownershipIssues) RealWaterMod.LOGGER.error("Real Water world ownership issue: {}", issue);
 	}
 
 	public static FluidSimulationService get(MinecraftServer server) {
@@ -117,6 +120,18 @@ public final class FluidSimulationService {
 					result.restoredBlocks(), result.alreadyRestoredBlocks(), result.skippedBlocks()
 			);
 		}
+	}
+
+	/** Boot-time ownership recovery; refreshes the issue list so resolved WALs stop locking creation. */
+	public static void recoverWorldOwnership(MinecraftServer server) {
+		FluidSimulationService service = get(server);
+		List<String> failures = service.regionOperations.recoverUnfinishedOwnership(server);
+		List<String> refreshed = new java.util.ArrayList<>(service.regionOperations.scanOwnershipIssues());
+		for (String failure : failures) {
+			refreshed.add(failure);
+			RealWaterMod.LOGGER.error("Real Water world ownership recovery failed: {}", failure);
+		}
+		service.ownershipIssues = refreshed;
 	}
 
 	public boolean exists() {
@@ -179,6 +194,24 @@ public final class FluidSimulationService {
 		return null;
 	}
 
+	public boolean configuredWorldBridgeFeatureEnabled() {
+		return serverConfig.worldBridgeEnabled();
+	}
+
+	/** Persists the next-startup world-bridge gate; ownership binds to this boot's value. */
+	public String setWorldBridgeFeatureForRestart(boolean enabled) {
+		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
+		FluidServerConfig replacement = serverConfig.withWorldBridgeEnabled(enabled);
+		try {
+			replacement.save(worldRoot);
+		} catch (IOException exception) {
+			RealWaterMod.LOGGER.error("Could not persist Real Water world-bridge feature flag", exception);
+			return exception.getMessage();
+		}
+		serverConfig = replacement;
+		return null;
+	}
+
 	public ControllerActivation activateController(ServerPlayer player, BlockPos controllerPosition) {
 		if (!controllerFeatureEnabled) return ControllerActivation.DISABLED;
 		ServerLevel level = player.level();
@@ -195,8 +228,8 @@ public final class FluidSimulationService {
 			sendSnapshot(level);
 			return ControllerActivation.selected(existingFootprint);
 		}
-		if (regionOperations.creationLocked()) {
-			return ControllerActivation.failed("存在未解决或超预算的 region-state；已锁住新控制器区域，详见 /realwater regions list 与日志");
+		if (regionOperations.creationLocked() || !ownershipIssues.isEmpty()) {
+			return ControllerActivation.failed("存在未解决或超预算的 region-state/ownership；已锁住新控制器区域，详见 /realwater regions list、/realwater ownership 与日志");
 		}
 
 		FluidBoundaryScanner.ScanResult scan = FluidControllerRegions.scan(
@@ -237,7 +270,11 @@ public final class FluidSimulationService {
 		if (materialFeatureEnabled) bindDefaultMaterialState(candidate.domain());
 		candidate.setPaused(true);
 		try {
-			regionOperations.checkpoint(candidate);
+			if (worldBridgeFeatureEnabled) {
+				regionOperations.acquireOwnership(level, candidate);
+			} else {
+				regionOperations.checkpoint(candidate);
+			}
 		} catch (IOException | RuntimeException exception) {
 			candidate.setAvailabilityFailure("initial checkpoint failed: " + exception.getMessage());
 			RealWaterMod.LOGGER.error("Controller region {} exists in memory but its initial checkpoint failed", candidate.id(), exception);
@@ -921,7 +958,7 @@ public final class FluidSimulationService {
 			return restoration;
 		}
 		restoreAirDemoScaffolding(server);
-		String persistenceFailure = regionOperations.deletePersistentRegions();
+		String persistenceFailure = regionOperations.deletePersistentRegions(server);
 		if (persistenceFailure != null) return RestorationStats.failed(false, 0, 0, 0, persistenceFailure);
 		regionManager.clear();
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
@@ -933,6 +970,24 @@ public final class FluidSimulationService {
 
 	public List<String> regionSummaries() {
 		return regionOperations.summaries();
+	}
+
+	/** Read-only ownership reconciliation report across every controller region. */
+	public String ownershipReport(MinecraftServer server) {
+		StringBuilder report = new StringBuilder("worldbridge flag ")
+				.append(worldBridgeFeatureEnabled ? "on" : "off")
+				.append("（配置 ")
+				.append(configuredWorldBridgeFeatureEnabled() ? "on" : "off")
+				.append("）");
+		boolean any = false;
+		for (FluidRegion region : regionManager.regions()) {
+			if (!region.controllerManaged()) continue;
+			any = true;
+			report.append("\n").append(regionOperations.ownershipSummary(server, region));
+		}
+		if (!any) report.append("\n没有控制器区域");
+		for (String issue : ownershipIssues) report.append("\n! ").append(issue);
+		return report.toString();
 	}
 
 	public SelectionResult selectRegion(String prefix) {
@@ -954,20 +1009,23 @@ public final class FluidSimulationService {
 		if (region == null) {
 			return "没有活动流体域 | regions 0/" + regionManager.limits().maximumRegions()
 					+ " | controller flag " + (controllerFeatureEnabled ? "on" : "off")
+					+ ", bridge " + (worldBridgeFeatureEnabled ? "on" : "off")
 					+ " | takeover lock " + takeoverLock
 					+ (regionOperations.issues().isEmpty() ? "" : " | persistence issues " + regionOperations.issues().size())
+					+ (ownershipIssues.isEmpty() ? "" : " | ownership issues " + ownershipIssues.size())
 					+ (lastTakeoverFailure == null ? "" : " | " + lastTakeoverFailure);
 		}
 		FluidRegionManager.BudgetUsage selectedUsage = regionManager.usage();
 		if (!region.solverLoaded()) {
 			return String.format(
-					"UNLOADED/PAUSED | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | controller %s | %s | origin %s | grid %dx%dx%d | checkpoint %d, water %.3f cells, markers %d | controller flag %s | takeover lock %s%s",
+					"UNLOADED/PAUSED | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | controller %s | %s | origin %s | grid %dx%dx%d | checkpoint %d, water %.3f cells, markers %d | controller flag %s, bridge %s | takeover lock %s%s",
 					region.id().toString().substring(0, 8), selectedUsage.regionCount(), regionManager.limits().maximumRegions(),
 					selectedUsage.reservedCells(), regionManager.limits().maximumTotalCells(), selectedUsage.reservedMarkers(),
 					regionManager.limits().maximumTotalMarkers(), region.footprint().controllerPosition().toShortString(),
 					region.availabilityFailure() == null ? "awaiting explicit run" : "blocked: " + region.availabilityFailure(),
 					region.origin().toShortString(), region.sizeX(), region.sizeY(), region.sizeZ(), region.checkpointGeneration(),
-					region.checkpointVolume(), region.checkpointMarkerCount(), controllerFeatureEnabled ? "on" : "off", takeoverLock,
+					region.checkpointVolume(), region.checkpointMarkerCount(), controllerFeatureEnabled ? "on" : "off",
+					worldBridgeFeatureEnabled ? "on" : "off", takeoverLock,
 					regionOperations.issues().isEmpty() ? "" : " | persistence issues " + regionOperations.issues().size());
 		}
 		FlipFluidDomain.StepStats lastStats = region.lastStats();

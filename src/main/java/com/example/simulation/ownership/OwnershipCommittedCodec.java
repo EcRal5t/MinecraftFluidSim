@@ -10,16 +10,14 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
-/** Strict codec for the disposable M6.0 committed ownership registry layout. */
-final class OwnershipCommittedProtoCodec {
+/** Strict codec for the committed ownership registry v1 layout. */
+final class OwnershipCommittedCodec {
 	static final int FORMAT_VERSION = 1;
 	static final int MAX_OWNED_BLOCKS = 65_536;
 
-	CompoundTag encode(OwnershipCommittedProto state) throws IOException {
-		if (!OwnershipCommittedProto.PROTO_REGION_ID.equals(state.regionId())) {
-			throw new IOException("Committed ownership has an unexpected region id: " + state.regionId());
-		}
+	CompoundTag encode(OwnershipCommitted state) throws IOException {
 		if (Identifier.tryParse(state.dimensionId()) == null) {
 			throw new IOException("Invalid committed ownership dimension: " + state.dimensionId());
 		}
@@ -27,12 +25,13 @@ final class OwnershipCommittedProtoCodec {
 
 		CompoundTag root = new CompoundTag();
 		root.putInt("Version", FORMAT_VERSION);
-		root.putString("RegionId", state.regionId());
+		root.putLong("RegionUuidMost", state.regionId().getMostSignificantBits());
+		root.putLong("RegionUuidLeast", state.regionId().getLeastSignificantBits());
 		root.putString("Dimension", state.dimensionId());
 		root.putLong("Generation", state.generation());
 		ListTag entries = new ListTag();
 		Set<Long> positions = new HashSet<>();
-		for (OwnershipJournalProto.BlockEntry entry : state.ownedBlocks()) {
+		for (OwnershipJournal.BlockEntry entry : state.ownedBlocks()) {
 			if (!positions.add(entry.packedPosition())) {
 				throw new IOException("Committed ownership contains duplicate block position " + entry.packedPosition());
 			}
@@ -45,17 +44,15 @@ final class OwnershipCommittedProtoCodec {
 		return root;
 	}
 
-	OwnershipCommittedProto decode(CompoundTag root) throws IOException {
+	OwnershipCommitted decode(CompoundTag root) throws IOException {
 		requireType(root, "Version", Tag.TAG_INT);
 		int version = root.getIntOr("Version", -1);
 		if (version != FORMAT_VERSION) {
 			throw new IOException("Unsupported committed ownership version " + version + "; expected v" + FORMAT_VERSION);
 		}
-		requireType(root, "RegionId", Tag.TAG_STRING);
-		String regionId = root.getStringOr("RegionId", "");
-		if (!OwnershipCommittedProto.PROTO_REGION_ID.equals(regionId)) {
-			throw new IOException("Committed ownership has an unexpected region id: " + regionId);
-		}
+		requireType(root, "RegionUuidMost", Tag.TAG_LONG);
+		requireType(root, "RegionUuidLeast", Tag.TAG_LONG);
+		UUID regionId = new UUID(root.getLongOr("RegionUuidMost", 0L), root.getLongOr("RegionUuidLeast", 0L));
 		requireType(root, "Dimension", Tag.TAG_STRING);
 		String dimensionId = root.getStringOr("Dimension", "");
 		if (Identifier.tryParse(dimensionId) == null) {
@@ -69,7 +66,7 @@ final class OwnershipCommittedProtoCodec {
 		requireType(root, "Owned", Tag.TAG_LIST);
 		ListTag entries = root.getListOrEmpty("Owned");
 		validateOwnedCount(entries.size());
-		List<OwnershipJournalProto.BlockEntry> owned = new ArrayList<>(entries.size());
+		List<OwnershipJournal.BlockEntry> owned = new ArrayList<>(entries.size());
 		Set<Long> positions = new HashSet<>();
 		for (int i = 0; i < entries.size(); i++) {
 			Tag rawEntry = entries.get(i);
@@ -83,9 +80,9 @@ final class OwnershipCommittedProtoCodec {
 				throw new IOException("Committed ownership contains duplicate block position " + position);
 			}
 			requireType(block, "State", Tag.TAG_COMPOUND);
-			owned.add(new OwnershipJournalProto.BlockEntry(position, block.getCompoundOrEmpty("State")));
+			owned.add(new OwnershipJournal.BlockEntry(position, block.getCompoundOrEmpty("State")));
 		}
-		return new OwnershipCommittedProto(regionId, dimensionId, generation, owned);
+		return new OwnershipCommitted(regionId, dimensionId, generation, owned);
 	}
 
 	private static void validateOwnedCount(int size) throws IOException {

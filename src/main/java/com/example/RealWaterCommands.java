@@ -3,7 +3,6 @@ package com.example;
 import com.example.logging.RealWaterCommandLog;
 import com.example.simulation.FluidSimulationService;
 import com.example.simulation.FluidRegion;
-import com.example.simulation.ownership.OwnershipProtoStore;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -60,6 +59,11 @@ public final class RealWaterCommands {
 								.executes(context -> audit(context, () -> materialFeatureStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
 										.executes(context -> audit(context, () -> setMaterialFeature(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+						.then(Commands.literal("worldbridge")
+								.executes(context -> audit(context, () -> worldBridgeFeatureStatus(context.getSource())))
+								.then(Commands.argument("enabled", BoolArgumentType.bool())
+										.executes(context -> audit(context, () -> setWorldBridgeFeature(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+						.then(Commands.literal("ownership").executes(context -> audit(context, () -> ownershipReport(context.getSource()))))
 						.then(Commands.literal("regions")
 								.then(Commands.literal("list").executes(context -> audit(context, () -> listRegions(context.getSource()))))
 								.then(Commands.literal("select")
@@ -77,15 +81,6 @@ public final class RealWaterCommands {
 								.then(Commands.argument("count", IntegerArgumentType.integer(1, 20))
 										.executes(context -> audit(context, () -> step(context.getSource(), IntegerArgumentType.getInteger(context, "count"))))))
 						.then(Commands.literal("status").executes(context -> audit(context, () -> status(context.getSource()))))
-						.then(Commands.literal("ownproto")
-								.then(Commands.literal("acquire")
-										.executes(context -> audit(context, () -> ownProtoAcquire(context.getSource(), 2)))
-										.then(Commands.argument("radius", IntegerArgumentType.integer(1, 4))
-												.executes(context -> audit(context, () -> ownProtoAcquire(
-														context.getSource(), IntegerArgumentType.getInteger(context, "radius"))))))
-								.then(Commands.literal("reconcile").executes(context -> audit(context, () -> ownProtoReconcile(context.getSource()))))
-								.then(Commands.literal("release").executes(context -> audit(context, () -> ownProtoRelease(context.getSource()))))
-								.then(Commands.literal("status").executes(context -> audit(context, () -> ownProtoStatus(context.getSource())))))
 						.then(Commands.literal("logpath").executes(context -> audit(context, () -> logPath(context.getSource()))))
 						.then(Commands.literal("remove").executes(context -> audit(context, () -> remove(context.getSource()))))
 		));
@@ -243,6 +238,27 @@ public final class RealWaterCommands {
 				+ "；本次启动仍为" + (service.materialFeatureEnabled() ? "开启" : "关闭") + "，重启服务器后生效", 1);
 	}
 
+	private static int worldBridgeFeatureStatus(CommandSourceStack source) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		boolean live = service.worldBridgeFeatureEnabled();
+		boolean configured = service.configuredWorldBridgeFeatureEnabled();
+		String message = "世界桥功能门：本次启动" + (live ? "开启" : "关闭") + "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
+		return succeed(source, live == configured ? message : message + "；重启服务器后才会切换", live ? 1 : 0);
+	}
+
+	private static int setWorldBridgeFeature(CommandSourceStack source, boolean enabled) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		String failure = service.setWorldBridgeFeatureForRestart(enabled);
+		if (failure != null) return fail(source, "世界桥功能门未改变；配置原子发布失败：" + failure);
+		return succeed(source, "世界桥功能门配置已" + (enabled ? "开启" : "关闭")
+				+ "；本次启动仍为" + (service.worldBridgeFeatureEnabled() ? "开启" : "关闭")
+				+ "，重启服务器后生效；开启后新激活的控制器区域将一次性移除内部原版水并建立可恢复 ownership", 1);
+	}
+
+	private static int ownershipReport(CommandSourceStack source) {
+		return succeed(source, FluidSimulationService.get(source.getServer()).ownershipReport(source.getServer()), 1);
+	}
+
 	private static int listRegions(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
 		java.util.List<String> regions = service.regionSummaries();
@@ -304,39 +320,6 @@ public final class RealWaterCommands {
 				"已移除活动流体域和客户端调试快照；恢复 %d 个原版水方块，确认 %d 个已恢复位置，跳过 %d 个已被玩家占用的位置；journal 与 WARNING 已删除",
 				restoration.restoredBlocks(), restoration.alreadyRestoredBlocks(), restoration.skippedBlocks()
 		), 1);
-	}
-
-	/** Disposable M6.0 route-B prototype: air + independent ownership registry. */
-	private static int ownProtoAcquire(CommandSourceStack source, int radius)
-			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-		ServerPlayer player = source.getPlayerOrException();
-		OwnershipProtoStore.AcquireOutcome outcome = OwnershipProtoStore.acquire(player, radius);
-		if (outcome.failure() != null) {
-			return fail(source, "原型 B acquire 已取消：" + outcome.failure());
-		}
-		return succeed(source, String.format(
-				"原型 B ownership 已提交：第 %d 代，本次持有 %d 个水位置，共持有 %d 个；世界写入只发生在本次事务，journal 与 WARNING 已清理；注册表位于 realwater/ownership-proto/committed.nbt",
-				outcome.generation(), outcome.transitionBlocks(), outcome.totalOwnedBlocks()
-		), 1);
-	}
-
-	private static int ownProtoReconcile(CommandSourceStack source) {
-		return succeed(source, OwnershipProtoStore.reconcileReport(source.getServer()), 1);
-	}
-
-	private static int ownProtoRelease(CommandSourceStack source) {
-		OwnershipProtoStore.ReleaseOutcome outcome = OwnershipProtoStore.release(source.getServer());
-		if (outcome.failure() != null) {
-			return fail(source, "原型 B release 已取消：" + outcome.failure());
-		}
-		return succeed(source, String.format(
-				"原型 B ownership 已解除：第 %d 代，持有清空；水按原样恢复，玩家实体方块未被覆盖，journal 与 WARNING 已清理",
-				outcome.generation()
-		), 1);
-	}
-
-	private static int ownProtoStatus(CommandSourceStack source) {
-		return succeed(source, OwnershipProtoStore.statusReport(source.getServer()), 1);
 	}
 
 	private static int fail(CommandSourceStack source, String message) {

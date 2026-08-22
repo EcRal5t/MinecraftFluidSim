@@ -37,6 +37,13 @@ final class FluidRegionOperations {
 	List<String> issues() { return List.copyOf(issues); }
 	void recordIssue(String issue) { issues.add(issue); }
 	long checkpoint(FluidRegion region) throws IOException { return persistence.checkpoint(region); }
+	void acquireOwnership(ServerLevel level, FluidRegion region) throws IOException { persistence.acquireOwnership(level, region); }
+	List<String> scanOwnershipIssues() { return persistence.scanOwnershipIssues(); }
+	List<String> recoverUnfinishedOwnership(MinecraftServer server) { return persistence.recoverUnfinishedOwnership(server); }
+
+	String ownershipSummary(MinecraftServer server, FluidRegion region) {
+		return persistence.ownershipSummary(server, region);
+	}
 
 	boolean ensureAvailable(
 			ServerLevel level,
@@ -127,10 +134,17 @@ final class FluidRegionOperations {
 		}
 	}
 
-	String deletePersistentRegions() {
+	String deletePersistentRegions(MinecraftServer server) {
 		if (creationLocked) return "存在未解决的 region-state；拒绝把未登记数据误报为已删除，请先按日志人工恢复或隔离";
 		for (FluidRegion region : manager.regions()) {
 			if (!region.controllerManaged()) continue;
+			String releaseFailure = persistence.releaseOwnership(server, region);
+			if (releaseFailure != null) {
+				for (FluidRegion retained : manager.regions()) retained.setPaused(true);
+				String failure = "ownership 解除未完成，移除已中止：" + releaseFailure;
+				issues.add(failure);
+				return failure;
+			}
 			try {
 				persistence.delete(region);
 			} catch (IOException exception) {

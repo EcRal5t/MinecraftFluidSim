@@ -11,36 +11,37 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.UUID;
 
 /**
- * Narrow, injectable file boundary for the disposable M6.0 ownership prototype. The committed
- * registry file is the sole commit point and is published last, with a read-back verification
- * before it replaces the previous generation.
+ * Narrow, injectable file boundary for one region's ownership store. The WAL and WARNING refuse
+ * to overwrite; the committed registry is published with a read-back verification and may replace
+ * a previous generation, but it is never the transaction commit point — region-state HEAD is.
  */
-final class OwnershipProtoFiles {
-	static final String DIRECTORY_NAME = "ownership-proto";
-	static final String JOURNAL_FILE_NAME = "journal.nbt";
+public final class OwnershipFiles {
+	static final String ROOT_DIRECTORY_NAME = "ownership";
+	static final String WAL_FILE_NAME = "wal.nbt";
 	static final String WARNING_FILE_NAME = "WARNING.txt";
 	static final String COMMITTED_FILE_NAME = "committed.nbt";
 	private static final long MAX_COMPRESSED_NBT_BYTES = 16L * 1024L * 1024L;
 
 	private final Path directory;
-	private final OwnershipJournalProtoCodec journalCodec;
-	private final OwnershipCommittedProtoCodec committedCodec;
+	private final OwnershipJournalCodec journalCodec;
+	private final OwnershipCommittedCodec committedCodec;
 	private final AtomicMover atomicMover;
 	private final AtomicReplacer atomicReplacer;
 	private final DeleteOperation deleteOperation;
 
-	OwnershipProtoFiles(Path worldRoot) {
-		this(worldRoot.resolve("realwater").resolve(DIRECTORY_NAME),
-				new OwnershipJournalProtoCodec(), new OwnershipCommittedProtoCodec(),
-				OwnershipProtoFiles::atomicMove, OwnershipProtoFiles::atomicMoveReplacing, Files::deleteIfExists);
+	public OwnershipFiles(Path worldRoot, UUID regionId) {
+		this(worldRoot.resolve("realwater").resolve(ROOT_DIRECTORY_NAME).resolve(regionId.toString()),
+				new OwnershipJournalCodec(), new OwnershipCommittedCodec(),
+				OwnershipFiles::atomicMove, OwnershipFiles::atomicMoveReplacing, Files::deleteIfExists);
 	}
 
-	OwnershipProtoFiles(
+	OwnershipFiles(
 			Path directory,
-			OwnershipJournalProtoCodec journalCodec,
-			OwnershipCommittedProtoCodec committedCodec,
+			OwnershipJournalCodec journalCodec,
+			OwnershipCommittedCodec committedCodec,
 			AtomicMover atomicMover,
 			AtomicReplacer atomicReplacer,
 			DeleteOperation deleteOperation
@@ -54,9 +55,9 @@ final class OwnershipProtoFiles {
 	}
 
 	/** Any unresolved transition, orphaned warning, or unreadable committed state locks new transitions. */
-	void assertUnlockedForTransition() throws IOException {
-		if (hasJournal()) {
-			throw new IOException("An unresolved ownership transition journal already exists at " + journalPath());
+	public void assertUnlockedForTransition() throws IOException {
+		if (hasWAL()) {
+			throw new IOException("An unresolved ownership transition WAL already exists at " + walPath());
 		}
 		if (hasWarning()) {
 			throw new IOException("An orphaned ownership warning exists at " + warningPath() + "; recovery must complete first");
@@ -67,29 +68,29 @@ final class OwnershipProtoFiles {
 		deleteStaleTemporaryFiles();
 	}
 
-	void publishJournal(OwnershipJournalProto journal) throws IOException {
-		if (hasJournal() || hasWarning()) {
+	void publishWAL(OwnershipJournal journal) throws IOException {
+		if (hasWAL() || hasWarning()) {
 			throw new IOException("Refusing to overwrite an unresolved ownership transition");
 		}
 		CompoundTag encoded = journalCodec.encode(journal);
-		writeAtomically(journalTemporaryPath(), journalPath(), temporary -> NbtIo.writeCompressed(encoded, temporary));
+		writeAtomically(walTemporaryPath(), walPath(), temporary -> NbtIo.writeCompressed(encoded, temporary));
 	}
 
-	OwnershipJournalProto readJournal() throws IOException {
-		if (!hasJournal()) throw new IOException("Ownership journal does not exist at " + journalPath());
-		CompoundTag root = NbtIo.readCompressed(journalPath(), NbtAccounter.create(MAX_COMPRESSED_NBT_BYTES));
+	OwnershipJournal readWAL() throws IOException {
+		if (!hasWAL()) throw new IOException("Ownership WAL does not exist at " + walPath());
+		CompoundTag root = NbtIo.readCompressed(walPath(), NbtAccounter.create(MAX_COMPRESSED_NBT_BYTES));
 		return journalCodec.decode(root);
 	}
 
 	void publishWarning(String warning) throws IOException {
-		if (!hasJournal()) throw new IOException("Cannot publish the ownership warning before the journal");
+		if (!hasWAL()) throw new IOException("Cannot publish the ownership warning before the WAL");
 		if (hasWarning()) throw new IOException("Refusing to overwrite ownership warning " + warningPath());
 		byte[] bytes = warning.getBytes(StandardCharsets.UTF_8);
 		writeAtomically(warningTemporaryPath(), warningPath(), temporary -> Files.write(temporary, bytes));
 	}
 
-	/** Publishes the committed generation; this replacement is the transition's sole commit point. */
-	void publishCommitted(OwnershipCommittedProto state) throws IOException {
+	/** Publishes the committed registry; written after the region HEAD commit, rebuildable from the WAL. */
+	void publishCommitted(OwnershipCommitted state) throws IOException {
 		CompoundTag encoded = committedCodec.encode(state);
 		Files.createDirectories(directory);
 		Path temporary = committedTemporaryPath();
@@ -97,8 +98,7 @@ final class OwnershipProtoFiles {
 		try {
 			NbtIo.writeCompressed(encoded, temporary);
 			forceFile(temporary);
-			// Verify the staged generation decodes identically before it may become authoritative.
-			OwnershipCommittedProto reread = committedCodec.decode(
+			OwnershipCommitted reread = committedCodec.decode(
 					NbtIo.readCompressed(temporary, NbtAccounter.create(MAX_COMPRESSED_NBT_BYTES)));
 			if (!reread.equals(state)) {
 				throw new IOException("Staged committed ownership did not read back identically");
@@ -117,7 +117,7 @@ final class OwnershipProtoFiles {
 		}
 	}
 
-	OwnershipCommittedProto readCommitted() throws IOException {
+	public OwnershipCommitted readCommitted() throws IOException {
 		if (!hasCommitted()) throw new IOException("Committed ownership does not exist at " + committedPath());
 		CompoundTag root = NbtIo.readCompressed(committedPath(), NbtAccounter.create(MAX_COMPRESSED_NBT_BYTES));
 		return committedCodec.decode(root);
@@ -125,36 +125,50 @@ final class OwnershipProtoFiles {
 
 	void deleteTransaction() throws IOException {
 		deleteOperation.deleteIfExists(warningPath());
-		deleteOperation.deleteIfExists(journalPath());
+		deleteOperation.deleteIfExists(walPath());
 		deleteStaleTemporaryFiles();
 	}
 
 	void deleteStaleTemporaryFiles() throws IOException {
-		deleteOperation.deleteIfExists(journalTemporaryPath());
+		deleteOperation.deleteIfExists(walTemporaryPath());
 		deleteOperation.deleteIfExists(warningTemporaryPath());
 		deleteOperation.deleteIfExists(committedTemporaryPath());
 	}
 
-	boolean hasJournal() {
-		return Files.exists(journalPath());
+	/** Removes the whole ownership directory after a completed release plus region removal. */
+	public void deleteStore() throws IOException {
+		if (!Files.exists(directory)) return;
+		try (var paths = Files.walk(directory)) {
+			for (Path entry : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+				deleteOperation.deleteIfExists(entry);
+			}
+		}
 	}
 
-	boolean hasWarning() {
+	public boolean hasWAL() {
+		return Files.exists(walPath());
+	}
+
+	public boolean hasWarning() {
 		return Files.exists(warningPath());
 	}
 
-	boolean hasCommitted() {
+	public boolean hasCommitted() {
 		return Files.exists(committedPath());
 	}
 
-	boolean isLocked() {
-		return hasJournal() || hasWarning();
+	public boolean exists() {
+		return Files.exists(directory);
 	}
 
-	String lockDescription() {
-		if (hasJournal() && hasWarning()) return "未解决 ownership 原型 journal 与 WARNING";
-		if (hasJournal()) return "未解决或不可读 ownership 原型 journal";
-		if (hasWarning()) return "孤立 ownership 原型 WARNING（需人工核对恢复）";
+	public boolean isLocked() {
+		return hasWAL() || hasWarning();
+	}
+
+	public String lockDescription() {
+		if (hasWAL() && hasWarning()) return "未解决 ownership WAL 与 WARNING";
+		if (hasWAL()) return "未解决或不可读 ownership WAL";
+		if (hasWarning()) return "孤立 ownership WARNING（需人工核对恢复）";
 		return "无";
 	}
 
@@ -162,8 +176,8 @@ final class OwnershipProtoFiles {
 		return directory;
 	}
 
-	Path journalPath() {
-		return directory.resolve(JOURNAL_FILE_NAME);
+	Path walPath() {
+		return directory.resolve(WAL_FILE_NAME);
 	}
 
 	Path warningPath() {
@@ -174,8 +188,8 @@ final class OwnershipProtoFiles {
 		return directory.resolve(COMMITTED_FILE_NAME);
 	}
 
-	Path journalTemporaryPath() {
-		return directory.resolve(JOURNAL_FILE_NAME + ".tmp");
+	Path walTemporaryPath() {
+		return directory.resolve(WAL_FILE_NAME + ".tmp");
 	}
 
 	Path warningTemporaryPath() {
@@ -211,12 +225,32 @@ final class OwnershipProtoFiles {
 		}
 	}
 
+	/** Windows antivirus/indexing can briefly hold handles on freshly written files. */
 	private static void atomicMove(Path source, Path target) throws IOException {
-		Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+		moveWithRetry(source, target, StandardCopyOption.ATOMIC_MOVE);
 	}
 
 	private static void atomicMoveReplacing(Path source, Path target) throws IOException {
-		Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+		moveWithRetry(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+	}
+
+	private static void moveWithRetry(Path source, Path target, StandardCopyOption... options) throws IOException {
+		IOException denied = null;
+		for (int attempt = 0; attempt < 5; attempt++) {
+			try {
+				Files.move(source, target, options);
+				return;
+			} catch (java.nio.file.AccessDeniedException accessDenied) {
+				denied = accessDenied;
+				try {
+					Thread.sleep(25L << attempt);
+				} catch (InterruptedException interrupted) {
+					Thread.currentThread().interrupt();
+					throw accessDenied;
+				}
+			}
+		}
+		throw denied;
 	}
 
 	@FunctionalInterface

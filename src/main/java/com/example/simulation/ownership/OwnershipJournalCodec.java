@@ -10,27 +10,30 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
-/** Strict codec for the disposable M6.0 ownership-proto journal layout. */
-final class OwnershipJournalProtoCodec {
+/** Strict codec for the ownership transition WAL v1 layout. */
+final class OwnershipJournalCodec {
 	static final int FORMAT_VERSION = 1;
 	static final int MAX_TRANSITION_BLOCKS = 65_536;
 
-	CompoundTag encode(OwnershipJournalProto journal) throws IOException {
+	CompoundTag encode(OwnershipJournal journal) throws IOException {
 		validateDimension(journal.dimensionId());
 		validateBlockCount(journal.blocks().size());
 
 		CompoundTag root = new CompoundTag();
 		root.putInt("Version", FORMAT_VERSION);
+		root.putLong("RegionUuidMost", journal.regionId().getMostSignificantBits());
+		root.putLong("RegionUuidLeast", journal.regionId().getLeastSignificantBits());
 		root.putString("Dimension", journal.dimensionId());
 		root.putLong("BaseGeneration", journal.baseGeneration());
 		root.putLong("TargetGeneration", journal.targetGeneration());
 		root.putString("Operation", operationName(journal.operation()));
 		ListTag entries = new ListTag();
 		Set<Long> positions = new HashSet<>();
-		for (OwnershipJournalProto.BlockEntry entry : journal.blocks()) {
+		for (OwnershipJournal.BlockEntry entry : journal.blocks()) {
 			if (!positions.add(entry.packedPosition())) {
-				throw new IOException("Ownership journal contains duplicate block position " + entry.packedPosition());
+				throw new IOException("Ownership WAL contains duplicate block position " + entry.packedPosition());
 			}
 			CompoundTag state = entry.state();
 			validateState(state, entry.packedPosition());
@@ -43,12 +46,15 @@ final class OwnershipJournalProtoCodec {
 		return root;
 	}
 
-	OwnershipJournalProto decode(CompoundTag root) throws IOException {
+	OwnershipJournal decode(CompoundTag root) throws IOException {
 		requireType(root, "Version", Tag.TAG_INT);
 		int version = root.getIntOr("Version", -1);
 		if (version != FORMAT_VERSION) {
-			throw new IOException("Unsupported ownership journal version " + version + "; expected v" + FORMAT_VERSION);
+			throw new IOException("Unsupported ownership WAL version " + version + "; expected v" + FORMAT_VERSION);
 		}
+		requireType(root, "RegionUuidMost", Tag.TAG_LONG);
+		requireType(root, "RegionUuidLeast", Tag.TAG_LONG);
+		UUID regionId = new UUID(root.getLongOr("RegionUuidMost", 0L), root.getLongOr("RegionUuidLeast", 0L));
 
 		requireType(root, "Dimension", Tag.TAG_STRING);
 		String dimensionId = root.getStringOr("Dimension", "");
@@ -59,58 +65,58 @@ final class OwnershipJournalProtoCodec {
 		requireType(root, "TargetGeneration", Tag.TAG_LONG);
 		long targetGeneration = root.getLongOr("TargetGeneration", Long.MIN_VALUE);
 		if (baseGeneration < 0L || targetGeneration != baseGeneration + 1L) {
-			throw new IOException("Ownership journal generations are inconsistent: base " + baseGeneration
+			throw new IOException("Ownership WAL generations are inconsistent: base " + baseGeneration
 					+ ", target " + targetGeneration);
 		}
 
 		requireType(root, "Operation", Tag.TAG_STRING);
-		OwnershipJournalProto.Operation operation = parseOperation(root.getStringOr("Operation", ""));
+		OwnershipJournal.Operation operation = parseOperation(root.getStringOr("Operation", ""));
 
 		requireType(root, "Blocks", Tag.TAG_LIST);
 		ListTag entries = root.getListOrEmpty("Blocks");
 		validateBlockCount(entries.size());
-		List<OwnershipJournalProto.BlockEntry> blocks = new ArrayList<>(entries.size());
+		List<OwnershipJournal.BlockEntry> blocks = new ArrayList<>(entries.size());
 		Set<Long> positions = new HashSet<>();
 		for (int i = 0; i < entries.size(); i++) {
 			Tag rawEntry = entries.get(i);
 			if (rawEntry.getId() != Tag.TAG_COMPOUND) {
-				throw new IOException("Ownership journal block entry " + i + " is not a compound");
+				throw new IOException("Ownership WAL block entry " + i + " is not a compound");
 			}
 			CompoundTag block = (CompoundTag) rawEntry;
 			requireType(block, "Pos", Tag.TAG_LONG);
 			long position = block.getLongOr("Pos", 0L);
 			if (!positions.add(position)) {
-				throw new IOException("Ownership journal contains duplicate block position " + position);
+				throw new IOException("Ownership WAL contains duplicate block position " + position);
 			}
 			requireType(block, "State", Tag.TAG_COMPOUND);
 			CompoundTag state = block.getCompoundOrEmpty("State");
 			validateState(state, position);
-			blocks.add(new OwnershipJournalProto.BlockEntry(position, state));
+			blocks.add(new OwnershipJournal.BlockEntry(position, state));
 		}
-		return new OwnershipJournalProto(dimensionId, baseGeneration, targetGeneration, operation, blocks);
+		return new OwnershipJournal(regionId, dimensionId, baseGeneration, targetGeneration, operation, blocks);
 	}
 
-	private static String operationName(OwnershipJournalProto.Operation operation) {
-		return operation == OwnershipJournalProto.Operation.ACQUIRE ? "ACQUIRE" : "RELEASE";
+	private static String operationName(OwnershipJournal.Operation operation) {
+		return operation == OwnershipJournal.Operation.ACQUIRE ? "ACQUIRE" : "RELEASE";
 	}
 
-	private static OwnershipJournalProto.Operation parseOperation(String name) throws IOException {
+	private static OwnershipJournal.Operation parseOperation(String name) throws IOException {
 		return switch (name) {
-			case "ACQUIRE" -> OwnershipJournalProto.Operation.ACQUIRE;
-			case "RELEASE" -> OwnershipJournalProto.Operation.RELEASE;
-			default -> throw new IOException("Unknown ownership journal operation: " + name);
+			case "ACQUIRE" -> OwnershipJournal.Operation.ACQUIRE;
+			case "RELEASE" -> OwnershipJournal.Operation.RELEASE;
+			default -> throw new IOException("Unknown ownership WAL operation: " + name);
 		};
 	}
 
 	private static void validateDimension(String dimensionId) throws IOException {
 		if (Identifier.tryParse(dimensionId) == null) {
-			throw new IOException("Invalid ownership journal dimension: " + dimensionId);
+			throw new IOException("Invalid ownership WAL dimension: " + dimensionId);
 		}
 	}
 
 	private static void validateBlockCount(int size) throws IOException {
 		if (size > MAX_TRANSITION_BLOCKS) {
-			throw new IOException("Ownership journal contains too many blocks: " + size);
+			throw new IOException("Ownership WAL contains too many blocks: " + size);
 		}
 	}
 
@@ -125,7 +131,7 @@ final class OwnershipJournalProtoCodec {
 	private static void requireType(CompoundTag tag, String name, byte type) throws IOException {
 		Tag value = tag.get(name);
 		if (value == null || value.getId() != type) {
-			throw new IOException("Ownership journal field '" + name + "' is missing or has the wrong NBT type");
+			throw new IOException("Ownership WAL field '" + name + "' is missing or has the wrong NBT type");
 		}
 	}
 }
