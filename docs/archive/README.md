@@ -8,3 +8,4 @@
 - 旧长期路线逐节迁移表：[`legacy-long-term-roadmap-migration-map.md`](legacy-long-term-roadmap-migration-map.md)
 - 旧维护路由：[`legacy-maintenance-routing.md`](legacy-maintenance-routing.md)
 - 未采纳/仅供参考的方案：[`proposals/`](proposals/)
+- 当前待评审的 M7 详细推行提案：[`proposals/m7-conservative-chemistry-plan.md`](proposals/m7-conservative-chemistry-plan.md)
