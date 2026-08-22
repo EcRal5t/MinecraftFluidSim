@@ -200,6 +200,14 @@ tasks.register("runFluidBoundaryScannerValidation", JavaExec) {
 	mainClass = "com.example.simulation.controller.FluidBoundaryScannerValidation"
 }
 
+tasks.register("runM6ContainerValidation", JavaExec) {
+	group = "verification"
+	description = "Runs the M6 container nanovolume ledger, conversion and round-trip drift gate."
+	dependsOn tasks.named("testClasses")
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = "com.example.item.M6ContainerValidation"
+}
+
 tasks.register("runM6OwnershipValidation", JavaExec) {
 	group = "verification"
 	description = "Runs the joint M6 world-ownership WAL, region HEAD and fault-injection gate."
