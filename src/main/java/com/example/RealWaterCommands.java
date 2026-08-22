@@ -63,6 +63,23 @@ public final class RealWaterCommands {
 								.executes(context -> audit(context, () -> worldBridgeFeatureStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
 										.executes(context -> audit(context, () -> setWorldBridgeFeature(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+						.then(Commands.literal("transferwal")
+								.executes(context -> audit(context, () -> transferWalFaultStatus(context.getSource())))
+								.then(Commands.literal("fault")
+										.executes(context -> audit(context, () -> transferWalFaultStatus(context.getSource())))
+										.then(Commands.argument("point", StringArgumentType.word())
+												.suggests((context, builder) -> {
+													builder.suggest("none");
+													builder.suggest("beforePrepare");
+													builder.suggest("afterPrepare");
+													builder.suggest("afterSolver");
+													builder.suggest("afterWal");
+													builder.suggest("afterCheckpoint");
+													return builder.buildFuture();
+												})
+												.executes(context -> audit(context, () -> setTransferWalFault(context.getSource(),
+														StringArgumentType.getString(context, "point")))))))
+
 						.then(Commands.literal("ownership").executes(context -> audit(context, () -> ownershipReport(context.getSource()))))
 						.then(Commands.literal("regions")
 								.then(Commands.literal("list").executes(context -> audit(context, () -> listRegions(context.getSource()))))
@@ -253,6 +270,28 @@ public final class RealWaterCommands {
 		return succeed(source, "世界桥功能门配置已" + (enabled ? "开启" : "关闭")
 				+ "；本次启动仍为" + (service.worldBridgeFeatureEnabled() ? "开启" : "关闭")
 				+ "，重启服务器后生效；开启后新激活的控制器区域将一次性移除内部原版水并建立可恢复 ownership", 1);
+	}
+
+
+	private static int transferWalFaultStatus(CommandSourceStack source) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		return succeed(source, "容器转移故障注入点：" + service.containerTransferFault(), 1);
+	}
+
+	private static int setTransferWalFault(CommandSourceStack source, String pointName) {
+		FluidSimulationService.ContainerTransferFaultPoint point = switch (pointName) {
+			case "none" -> FluidSimulationService.ContainerTransferFaultPoint.NONE;
+			case "beforePrepare" -> FluidSimulationService.ContainerTransferFaultPoint.BEFORE_PREPARE;
+			case "afterPrepare" -> FluidSimulationService.ContainerTransferFaultPoint.AFTER_PREPARE;
+			case "afterSolver" -> FluidSimulationService.ContainerTransferFaultPoint.AFTER_SOLVER;
+			case "afterWal" -> FluidSimulationService.ContainerTransferFaultPoint.AFTER_WAL;
+			case "afterCheckpoint" -> FluidSimulationService.ContainerTransferFaultPoint.AFTER_CHECKPOINT;
+			default -> null;
+		};
+		if (point == null) return fail(source, "未知故障注入点：" + pointName);
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		service.setContainerTransferFault(point);
+		return succeed(source, "容器转移故障注入点已设为 " + point, 1);
 	}
 
 	private static int ownershipReport(CommandSourceStack source) {

@@ -214,6 +214,7 @@ public final class FluidTransferService {
 					null);
 		}
 		if (requestedNanos <= 0L) return new ControllerTransfer(null, null);
+		service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.BEFORE_PREPARE);
 		long baseGeneration = region.checkpointGeneration();
 		long targetGeneration = Math.addExact(baseGeneration, 1L);
 		UUID transactionId = UUID.randomUUID();
@@ -231,6 +232,7 @@ public final class FluidTransferService {
 							"容器转移 WAL 发布失败：" + exception.getMessage()),
 					null);
 		}
+		service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_PREPARE);
 
 		TransferOutcome rawOutcome = operation == ContainerTransferJournal.Operation.INSERT
 				? pourIntoCell(service, region, cell, requestedNanos)
@@ -241,6 +243,7 @@ public final class FluidTransferService {
 					? new TransferOutcome(false, operation == ContainerTransferJournal.Operation.INSERT, beforeStack, "转移未执行")
 					: rawOutcome, null);
 		}
+		service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_SOLVER);
 
 		ItemStack finalAfter = finalItemResolver.resolve(rawOutcome.stack(), beforeStack);
 		ContainerTransferJournal committed = new ContainerTransferJournal(
@@ -259,6 +262,9 @@ public final class FluidTransferService {
 							region.availabilityFailure()),
 					null);
 		}
+		service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_WAL);
+
+
 
 		long publishedGeneration;
 		try {
@@ -279,6 +285,9 @@ public final class FluidTransferService {
 							region.availabilityFailure()),
 					transactionId);
 		}
+		service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_CHECKPOINT);
+
+
 
 		return new ControllerTransfer(new TransferOutcome(true, operation == ContainerTransferJournal.Operation.INSERT,
 				finalAfter, rawOutcome.message()), transactionId);

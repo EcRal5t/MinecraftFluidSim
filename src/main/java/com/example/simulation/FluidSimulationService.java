@@ -74,6 +74,7 @@ public final class FluidSimulationService {
 	private final FluidRegionManager regionManager;
 	private final FluidRegionOperations regionOperations;
 	private final ContainerTransferStore containerTransfers;
+	private ContainerTransferFaultPoint containerTransferFault = ContainerTransferFaultPoint.NONE;
 	private ResourceKey<Level> takeoverDimension;
 	private boolean defaultEntityPhysicsEnabled = true;
 	private boolean defaultDebugOverlays;
@@ -118,6 +119,30 @@ public final class FluidSimulationService {
 	long checkpointControllerRegion(FluidRegion region) throws IOException {
 		return regionOperations.checkpoint(region);
 	}
+
+	public enum ContainerTransferFaultPoint {
+		NONE,
+		BEFORE_PREPARE,
+		AFTER_PREPARE,
+		AFTER_SOLVER,
+		AFTER_WAL,
+		AFTER_CHECKPOINT
+	}
+
+	public void setContainerTransferFault(ContainerTransferFaultPoint point) {
+		containerTransferFault = point == null ? ContainerTransferFaultPoint.NONE : point;
+	}
+
+	public ContainerTransferFaultPoint containerTransferFault() {
+		return containerTransferFault;
+	}
+
+	void injectContainerTransferFault(ContainerTransferFaultPoint point) {
+		if (containerTransferFault == point) {
+			throw new RuntimeException("Injected container transfer fault: " + point);
+		}
+	}
+
 
 	boolean hasPendingContainerTransfer(UUID regionId) {
 		try {
