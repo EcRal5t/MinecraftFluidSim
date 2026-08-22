@@ -666,6 +666,10 @@ public final class FlipFluidDomain {
 	 * float remainder; the returned volume is the exact double sum of the stored pieces.
 	 */
 	public ExactVolumeTransfer tryInsertExactVolume(int centerX, int centerY, int centerZ, float volume, int maxRadius) {
+		return tryInsertExactVolume(centerX, centerY, centerZ, volume, maxRadius, 0);
+	}
+
+	public ExactVolumeTransfer tryInsertExactVolume(int centerX, int centerY, int centerZ, float volume, int maxRadius, int materialHandle) {
 		validateVolumeEdit(volume, maxRadius);
 		if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0);
 		float[] exactCellVolume = exactCellVolumes();
@@ -695,7 +699,7 @@ public final class FlipFluidDomain {
 			while (left > 0.0) {
 				float piece = left >= PARTICLE_VOLUME ? PARTICLE_VOLUME : (float) left;
 				if (slot < 0) throw new IllegalStateException("Cut-cell open volume was exhausted while spawning markers");
-				spawnParticle(allocation.x(), allocation.y(), allocation.z(), slot, piece);
+				spawnParticle(allocation.x(), allocation.y(), allocation.z(), slot, piece, materialHandle);
 				inserted += piece;
 				left -= piece;
 				slot = firstOpenSlot(cellIndex(allocation.x(), allocation.y(), allocation.z()), slot + 1);
@@ -711,22 +715,27 @@ public final class FlipFluidDomain {
 	 * splits the last one, so the returned volume is the exact double sum of real marker
 	 * decreases and exceeds the request by at most one ulp of the split marker.
 	 */
-	public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int centerZ, float volume, int maxRadius) {
-		validateVolumeEdit(volume, maxRadius);
-		if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0);
-		java.util.List<CellCandidate> cells = nearbyCells(centerX, centerY, centerZ, maxRadius);
-		boolean[] near = new boolean[sizeX * sizeY * sizeZ];
-		for (CellCandidate candidate : cells) near[candidate.index()] = true;
-		float h = config.cellSize();
-		double available = 0.0;
-		for (int i = 0; i < particleCount; i++) {
-			if (!near[cellIndex(
-					(int) Math.floor(particleX[i] / h), (int) Math.floor(particleY[i] / h), (int) Math.floor(particleZ[i] / h))]) {
-				continue;
-			}
-			available += particleVolume[i];
-		}
-		if (available < volume) return new ExactVolumeTransfer(false, 0.0);
+public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int centerZ, float volume, int maxRadius) {
+return tryExtractExactVolume(centerX, centerY, centerZ, volume, maxRadius, 0);
+}
+
+public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int centerZ, float volume, int maxRadius, int materialHandle) {
+validateVolumeEdit(volume, maxRadius);
+if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0);
+java.util.List<CellCandidate> cells = nearbyCells(centerX, centerY, centerZ, maxRadius);
+boolean[] near = new boolean[sizeX * sizeY * sizeZ];
+for (CellCandidate candidate : cells) near[candidate.index()] = true;
+float h = config.cellSize();
+double available = 0.0;
+for (int i = 0; i < particleCount; i++) {
+if (particleMaterialHandle[i] != materialHandle) continue;
+if (!near[cellIndex(
+(int) Math.floor(particleX[i] / h), (int) Math.floor(particleY[i] / h), (int) Math.floor(particleZ[i] / h))]) {
+continue;
+}
+available += particleVolume[i];
+}
+if (available < volume) return new ExactVolumeTransfer(false, 0.0);
 
 double remaining = volume;
 double removed = 0.0;
@@ -737,7 +746,7 @@ boolean progress = true;
 while (remaining > 0.0 && progress) {
 progress = false;
 for (int i = particleCount - 1; i >= 0; i--) {
-if (particleCellIndex(i) != cell) continue;
+if (particleCellIndex(i) != cell || particleMaterialHandle[i] != materialHandle) continue;
 float previousVolume = particleVolume[i];
 double take = Math.min(previousVolume, remaining);
 float newVolume = (float) (previousVolume - take);
@@ -1649,30 +1658,39 @@ return new ExactVolumeTransfer(true, removed);
 		return -1;
 	}
 
-	private void spawnParticle(int cellX, int cellY, int cellZ, int slot, float amount) {
-		if (particleCount >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
-		ensureParticleCapacity(particleCount + 1);
-		float h = config.cellSize();
-		float radiusFraction = 0.45F;
-		float ox = (slot & 1) == 0 ? 0.25F : 0.75F;
-		float oy = (slot & 2) == 0 ? 0.25F : 0.75F;
-		float oz = (slot & 4) == 0 ? 0.25F : 0.75F;
-		if (cellX == 0 || solid[cellIndex(cellX - 1, cellY, cellZ)]) ox = Math.max(ox, radiusFraction);
-		if (cellX + 1 == sizeX || solid[cellIndex(cellX + 1, cellY, cellZ)]) ox = Math.min(ox, 1.0F - radiusFraction);
-		if (cellY == 0 || solid[cellIndex(cellX, cellY - 1, cellZ)]) oy = Math.max(oy, radiusFraction);
-		if (cellY + 1 == sizeY || solid[cellIndex(cellX, cellY + 1, cellZ)]) oy = Math.min(oy, 1.0F - radiusFraction);
-		if (cellZ == 0 || solid[cellIndex(cellX, cellY, cellZ - 1)]) oz = Math.max(oz, radiusFraction);
-		if (cellZ + 1 == sizeZ || solid[cellIndex(cellX, cellY, cellZ + 1)]) oz = Math.min(oz, 1.0F - radiusFraction);
-		particleX[particleCount] = (cellX + ox) * h;
-		particleY[particleCount] = (cellY + oy) * h;
-		particleZ[particleCount] = (cellZ + oz) * h;
-		particleVelocityX[particleCount] = 0.0F;
-		particleVelocityY[particleCount] = 0.0F;
-		particleVelocityZ[particleCount] = 0.0F;
-		particleVolume[particleCount] = amount;
-		setDefaultMaterialState(particleCount);
-		particleCount++;
-	}
+private void spawnParticle(int cellX, int cellY, int cellZ, int slot, float amount) {
+spawnParticle(cellX, cellY, cellZ, slot, amount, 0);
+}
+
+private void spawnParticle(int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle) {
+if (particleCount >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
+ensureParticleCapacity(particleCount + 1);
+float h = config.cellSize();
+float radiusFraction = 0.45F;
+float ox = (slot & 1) == 0 ? 0.25F : 0.75F;
+float oy = (slot & 2) == 0 ? 0.25F : 0.75F;
+float oz = (slot & 4) == 0 ? 0.25F : 0.75F;
+if (cellX == 0 || solid[cellIndex(cellX - 1, cellY, cellZ)]) ox = Math.max(ox, radiusFraction);
+if (cellX + 1 == sizeX || solid[cellIndex(cellX + 1, cellY, cellZ)]) ox = Math.min(ox, 1.0F - radiusFraction);
+if (cellY == 0 || solid[cellIndex(cellX, cellY - 1, cellZ)]) oy = Math.max(oy, radiusFraction);
+if (cellY + 1 == sizeY || solid[cellIndex(cellX, cellY + 1, cellZ)]) oy = Math.min(oy, 1.0F - radiusFraction);
+if (cellZ == 0 || solid[cellIndex(cellX, cellY, cellZ - 1)]) oz = Math.max(oz, radiusFraction);
+if (cellZ + 1 == sizeZ || solid[cellIndex(cellX, cellY, cellZ + 1)]) oz = Math.min(oz, 1.0F - radiusFraction);
+particleX[particleCount] = (cellX + ox) * h;
+particleY[particleCount] = (cellY + oy) * h;
+particleZ[particleCount] = (cellZ + oz) * h;
+particleVelocityX[particleCount] = 0.0F;
+particleVelocityY[particleCount] = 0.0F;
+particleVelocityZ[particleCount] = 0.0F;
+particleVolume[particleCount] = amount;
+if (materialRegistry != null) {
+assignMarkerMaterial(particleCount, materialRegistry, materialHandle);
+} else {
+if (materialHandle != 0) throw new IllegalArgumentException("Material handle requires a bound material registry");
+setDefaultMaterialState(particleCount);
+}
+particleCount++;
+}
 
 	private float removeParticlesInCell(int cellX, int cellY, int cellZ, float maximum) {
 		float h = config.cellSize(), removed = 0.0F;
