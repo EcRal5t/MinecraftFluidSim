@@ -5,6 +5,8 @@ import com.example.item.ContainerFluidLedger;
 import com.example.item.PartialWaterBucketItem;
 import com.example.item.RealWaterComponents;
 import com.example.item.RealWaterItems;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.dispenser.BlockSource;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -14,13 +16,14 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.DispenserBlock;
 
 /**
- * Single server-side entry point for player bucket transfers with owned regions. Every path
- * settles on the exact primitives: insertion is all-or-nothing against the container's balance,
- * extraction credits at most the container's free space, and the item is only replaced after the
- * region mutation succeeded. Full and empty pure-water states canonicalize to vanilla buckets;
- * partial volumes always live in the Real Water component.
+ * Single server-side entry point for player and dispenser bucket transfers with owned regions.
+ * Every path settles on the exact primitives: insertion is all-or-nothing against the container's
+ * balance, extraction credits at most the container's free space, and the item is only replaced
+ * after the region mutation succeeded. Full and empty pure-water states canonicalize to vanilla
+ * buckets; partial volumes always live in the Real Water component.
  */
 public final class FluidTransferService {
 	private FluidTransferService() { }
@@ -59,6 +62,33 @@ public final class FluidTransferService {
 		return InteractionResult.FAIL;
 	}
 
+	/**
+	 * Dispenser path. Returns {@code null} only for vanilla bucket items when the dispenser should
+	 * fall through to vanilla behaviour; partial buckets never have a vanilla fallback and always
+	 * return a stack.
+	 */
+	public static ItemStack handleDispenserUse(BlockSource source, ItemStack stack) {
+		FluidSimulationService service = FluidSimulationService.get(source.level().getServer());
+		boolean vanillaItem = stack.is(Items.WATER_BUCKET) || stack.is(Items.BUCKET);
+		if (!service.worldBridgeFeatureEnabled()) return vanillaItem ? null : stack;
+		TransferKind kind = classify(stack);
+		if (kind == TransferKind.NONE) return stack;
+		ServerLevel level = source.level();
+		BlockPos target = source.pos().relative(source.state().getValue(DispenserBlock.FACING));
+		FluidRegion region = service.regionAtBlock(level, target);
+		if (region == null) return vanillaItem ? null : stack;
+		if (!service.ensureRegionAvailable(level, region)) return stack;
+		int[] cell = service.cellAtBlock(level, region, target);
+		if (cell == null) return stack;
+		TransferOutcome outcome = kind == TransferKind.POUR
+				? pourIntoCell(service, region, cell, heldVolumeNanos(stack))
+				: scoopFromCell(service, region, cell, heldFreeNanos(stack), heldBaseVolumeNanos(stack));
+		if (outcome == null || !outcome.transferred()) return stack;
+		service.sendSnapshot(level, region);
+		return outcome.stack();
+	}
+
+
 	private static TransferOutcome pour(
 			FluidSimulationService service, FluidRegion region, ServerPlayer player, ItemStack held
 	) {
@@ -66,17 +96,10 @@ public final class FluidTransferService {
 		if (volume == null || volume <= 0L) return null;
 		int[] cell = service.aimedCellNear(player, false);
 		if (cell == null) return null;
-		FlipFluidDomain.ExactVolumeTransfer inserted = region.domain().tryInsertExactVolume(
-				cell[0], cell[1], cell[2], ContainerFluidLedger.nanosToFloatVolume(volume), 6);
-		if (!inserted.transferred()) {
-			return new TransferOutcome(false, true, held, "空间或 marker 预算不足，未能注入");
-		}
-		long poured = Math.min(ContainerFluidLedger.volumeToNanos(inserted.volume()), volume);
-		region.wakeForActivity();
+		TransferOutcome outcome = pourIntoCell(service, region, cell, volume);
+		if (!outcome.transferred()) return new TransferOutcome(false, true, held, outcome.message());
 		service.sendSnapshotFor(player);
-		ItemStack result = withVolume(volume - poured);
-		return new TransferOutcome(true, true, result,
-				String.format("已注入 %.2f%% 桶", 100.0 * poured / ContainerFluidLedger.NANOS_PER_BLOCK));
+		return outcome;
 	}
 
 	private static TransferOutcome scoop(
@@ -86,16 +109,39 @@ public final class FluidTransferService {
 		if (capacity <= 0L) return null;
 		int[] cell = service.aimedCellNear(player, true);
 		if (cell == null) return null;
-		FlipFluidDomain.ExactVolumeTransfer extracted = region.domain().tryExtractExactVolume(
-				cell[0], cell[1], cell[2], ContainerFluidLedger.nanosToFloatVolume(capacity), 6);
-		if (!extracted.transferred() || extracted.volume() <= 0.0) {
-			return new TransferOutcome(false, false, held, "准星处没有足够水体");
-		}
-		long taken = Math.min(ContainerFluidLedger.volumeToNanos(extracted.volume()), capacity);
-		region.wakeForActivity();
+		TransferOutcome outcome = scoopFromCell(service, region, cell, capacity, heldBaseVolumeNanos(held));
+		if (!outcome.transferred()) return new TransferOutcome(false, false, held, outcome.message());
 		service.sendSnapshotFor(player);
-		ItemStack result = withVolume(heldBaseVolumeNanos(held) + taken);
-		return new TransferOutcome(true, false, result,
+		return outcome;
+	}
+
+	private static TransferOutcome pourIntoCell(
+			FluidSimulationService service, FluidRegion region, int[] cell, long volumeNanos
+	) {
+		if (volumeNanos <= 0L) return null;
+		FlipFluidDomain.ExactVolumeTransfer inserted = region.domain().tryInsertExactVolume(
+				cell[0], cell[1], cell[2], ContainerFluidLedger.nanosToFloatVolume(volumeNanos), 6);
+		if (!inserted.transferred()) {
+			return new TransferOutcome(false, true, withVolume(volumeNanos), "空间或 marker 预算不足，未能注入");
+		}
+		long poured = Math.min(ContainerFluidLedger.volumeToNanos(inserted.volume()), volumeNanos);
+		region.wakeForActivity();
+		return new TransferOutcome(true, true, withVolume(volumeNanos - poured),
+				String.format("已注入 %.2f%% 桶", 100.0 * poured / ContainerFluidLedger.NANOS_PER_BLOCK));
+	}
+
+	private static TransferOutcome scoopFromCell(
+			FluidSimulationService service, FluidRegion region, int[] cell, long capacityNanos, long baseVolumeNanos
+	) {
+		if (capacityNanos <= 0L) return null;
+		FlipFluidDomain.ExactVolumeTransfer extracted = region.domain().tryExtractExactVolume(
+				cell[0], cell[1], cell[2], ContainerFluidLedger.nanosToFloatVolume(capacityNanos), 6);
+		if (!extracted.transferred() || extracted.volume() <= 0.0) {
+			return new TransferOutcome(false, false, withVolume(baseVolumeNanos), "准星处没有足够水体");
+		}
+		long taken = Math.min(ContainerFluidLedger.volumeToNanos(extracted.volume()), capacityNanos);
+		region.wakeForActivity();
+		return new TransferOutcome(true, false, withVolume(baseVolumeNanos + taken),
 				String.format("已舀取 %.2f%% 桶", 100.0 * taken / ContainerFluidLedger.NANOS_PER_BLOCK));
 	}
 

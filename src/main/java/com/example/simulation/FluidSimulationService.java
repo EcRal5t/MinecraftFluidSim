@@ -820,7 +820,7 @@ public final class FluidSimulationService {
 		}
 	}
 
-	private boolean ensureRegionAvailable(ServerLevel level, FluidRegion region) {
+	public boolean ensureRegionAvailable(ServerLevel level, FluidRegion region) {
 		return regionOperations.ensureAvailable(
 				level, region, controllerFeatureEnabled, this::refreshCollisions, this::sendSnapshot,
 				FluidSimulationService::sendRegionRemoval
@@ -1112,6 +1112,35 @@ public final class FluidSimulationService {
 		return ensureRegionAvailable(player.level(), region);
 	}
 
+	/** Returns the first region whose solver bounds contain the block position. */
+	public FluidRegion regionAtBlock(ServerLevel level, BlockPos pos) {
+		for (FluidRegion region : regionManager.regions()) {
+			if (!region.dimension().equals(level.dimension())) continue;
+			BlockPos origin = region.origin();
+			double h = region.solverConfig().cellSize();
+			if (pos.getX() >= origin.getX() && pos.getX() < origin.getX() + region.sizeX() * h
+					&& pos.getY() >= origin.getY() && pos.getY() < origin.getY() + region.sizeY() * h
+					&& pos.getZ() >= origin.getZ() && pos.getZ() < origin.getZ() + region.sizeZ() * h) {
+				return region;
+			}
+		}
+		return null;
+	}
+
+	/** Resolves the solver cell containing the center of a block position inside a loaded region. */
+	public int[] cellAtBlock(ServerLevel level, FluidRegion region, BlockPos pos) {
+		if (!level.dimension().equals(region.dimension()) || !region.solverLoaded()) return null;
+		FlipFluidDomain domain = region.domain();
+		BlockPos origin = region.origin();
+		double h = domain.config().cellSize();
+		int x = Mth.floor((pos.getX() + 0.5 - origin.getX()) / h);
+		int y = Mth.floor((pos.getY() + 0.5 - origin.getY()) / h);
+		int z = Mth.floor((pos.getZ() + 0.5 - origin.getZ()) / h);
+		if (x < 0 || x >= domain.sizeX() || y < 0 || y >= domain.sizeY() || z < 0 || z >= domain.sizeZ()) return null;
+		return new int[] {x, y, z};
+	}
+
+
 	/** Resolves the transfer target cell near the player's aim; requireFluid selects scoop semantics. */
 	public int[] aimedCellNear(ServerPlayer player, boolean requireFluid) {
 		FluidRegion region = activeRegion();
@@ -1169,7 +1198,7 @@ public final class FluidSimulationService {
 		}
 	}
 
-	private void sendSnapshot(ServerLevel level, FluidRegion region) {
+	public void sendSnapshot(ServerLevel level, FluidRegion region) {
 		if (!region.solverLoaded() || !level.dimension().equals(region.dimension())) return;
 		if (materialFeatureEnabled) {
 			FluidMaterialSnapshotPayload payload = createMaterialSnapshot(region);
