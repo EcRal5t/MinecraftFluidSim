@@ -10,6 +10,9 @@
 	"license": "CC0-1.0",
 	"icon": "assets/modid/icon.png",
 	"environment": "*",
+	"mixins": [
+		"realwater.mixins.json"
+	],
 	"entrypoints": {
 		"main": [
 			"com.example.RealWaterMod"

@@ -116,11 +116,13 @@ public final class M6ContainerValidation {
 		check(ContainerFluidLedger.isPartialBucket(BUCKET - 1L), "one quantum short is a partial bucket");
 		check(!ContainerFluidLedger.isPartialBucket(0L) && !ContainerFluidLedger.isPartialBucket(BUCKET),
 				"empty and full are not partial");
+		check(!ContainerFluidLedger.isPartialBucket(-1L) && !ContainerFluidLedger.isPartialBucket(BUCKET + 1L),
+				"invalid component values are not partial buckets");
 
 		check(ContainerFluidLedger.barWidth(0L) == 1, "empty volume shows the minimum bar");
 		check(ContainerFluidLedger.barWidth(BUCKET) == 13, "a full volume shows the maximum bar");
 		check(ContainerFluidLedger.barWidth(BUCKET / 2L) == 7, "half volume rounds to a 7-segment bar");
-		for (long nanos : new long[] {1L, BUCKET / 4L, BUCKET - 1L}) {
+		for (long nanos : new long[] {-1L, 1L, BUCKET / 4L, BUCKET - 1L}) {
 			int width = ContainerFluidLedger.barWidth(nanos);
 			check(width >= 1 && width <= 13, "bar width left the display range for " + nanos);
 		}

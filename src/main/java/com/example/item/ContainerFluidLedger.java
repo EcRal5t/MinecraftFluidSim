@@ -54,9 +54,8 @@ public final class ContainerFluidLedger {
 		return Math.subtractExact(a, b);
 	}
 
-	/** Partial containers hold strictly between empty and one full bucket. */
+	/** Partial containers hold strictly between empty and one full bucket; invalid values return false. */
 	public static boolean isPartialBucket(long nanos) {
-		requireNonNegative(nanos);
 		return nanos > 0L && nanos < NANOS_PER_BLOCK;
 	}
 

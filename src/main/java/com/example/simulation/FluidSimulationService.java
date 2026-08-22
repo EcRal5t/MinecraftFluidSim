@@ -28,6 +28,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.LevelResource;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
 import java.io.IOException;
@@ -1099,6 +1100,65 @@ public final class FluidSimulationService {
 	public void sendSnapshot(ServerLevel level) {
 		FluidRegion region = activeRegion();
 		if (region != null && level.dimension().equals(region.dimension())) sendSnapshot(level, region);
+	}
+
+	/** Transfer-service queries: region presence, selection and availability in one dimension. */
+	public FluidRegion selectedRegionIn(ServerLevel level) {
+		FluidRegion selected = regionManager.selected();
+		return selected != null && selected.dimension().equals(level.dimension()) ? selected : null;
+	}
+
+	public boolean ensureRegionAvailableFor(ServerPlayer player, FluidRegion region) {
+		return ensureRegionAvailable(player.level(), region);
+	}
+
+	/** Resolves the transfer target cell near the player's aim; requireFluid selects scoop semantics. */
+	public int[] aimedCellNear(ServerPlayer player, boolean requireFluid) {
+		FluidRegion region = activeRegion();
+		if (region == null || !player.level().dimension().equals(region.dimension())) return null;
+		Vec3 start = player.getEyePosition();
+		Vec3 direction = player.getLookAngle();
+		FlipFluidDomain domain = region.domain();
+		double step = domain.config().cellSize() * 0.25;
+		CellTarget previousOpen = null;
+		CellTarget previousSample = null;
+		for (double distance = 0.0; distance <= AIM_DISTANCE; distance += step) {
+			Vec3 point = start.add(direction.scale(distance));
+			CellTarget cell = worldToCell(point);
+			if (cell == null) {
+				if (!requireFluid && previousOpen != null) return cellTargetArray(previousOpen);
+				continue;
+			}
+			if (cell.equals(previousSample)) continue;
+			previousSample = cell;
+			if (requireFluid) {
+				if (domain.volume(cell.x(), cell.y(), cell.z()) > domain.config().fluidEpsilon()) {
+					return cellTargetArray(cell);
+				}
+			} else if (domain.isSolid(cell.x(), cell.y(), cell.z())) {
+				return previousOpen == null ? null : cellTargetArray(previousOpen);
+			} else if (domain.volume(cell.x(), cell.y(), cell.z()) > domain.config().fluidEpsilon()) {
+				return cellTargetArray(previousOpen == null ? cell : previousOpen);
+			} else {
+				previousOpen = cell;
+			}
+		}
+		return null;
+	}
+
+	private static int[] cellTargetArray(CellTarget target) {
+		return new int[] {target.x(), target.y(), target.z()};
+	}
+
+	public void sendSnapshotFor(ServerPlayer player) {
+		FluidRegion region = activeRegion();
+		if (region != null && region.solverLoaded() && player.level().dimension().equals(region.dimension())) {
+			if (materialFeatureEnabled) {
+				FluidProtocolServer.send(player, createMaterialSnapshot(region));
+			} else {
+				FluidProtocolServer.send(player, createSnapshot(region));
+			}
+		}
 	}
 
 	public void sendSnapshots(ServerPlayer player) {
