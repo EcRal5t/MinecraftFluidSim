@@ -330,8 +330,13 @@ public final class FluidTransferService {
 			FluidSimulationService service, FluidRegion region, int[] cell, long volumeNanos, int maxRadius
 	) {
 		if (volumeNanos <= 0L) return null;
-		FlipFluidDomain.ExactVolumeTransfer inserted = region.domain().tryInsertExactVolume(
-				cell[0], cell[1], cell[2], nanosToCellVolume(volumeNanos), maxRadius);
+		float requestedCellVolume = nanosToCellVolume(volumeNanos);
+		FlipFluidDomain domain = region.domain();
+		if (domain.totalOpenVolume() - domain.totalVolume() + 1.0E-6F < requestedCellVolume) {
+			return new TransferOutcome(false, true, withVolume(volumeNanos), "空间或 marker 预算不足，未能注入");
+		}
+		FlipFluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(
+				cell[0], cell[1], cell[2], requestedCellVolume, maxRadius);
 		if (!inserted.transferred()) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "空间或 marker 预算不足，未能注入");
 		}

@@ -386,6 +386,14 @@ public final class FlipFluidDomain {
 		return (float) result;
 	}
 
+	/** Total open cell volume across the domain; global capacity for exact bucket insertion. */
+	public float totalOpenVolume() {
+		float result = 0.0F;
+		for (int cell = 0; cell < cellCount; cell++) result += cutCells.openCellVolume(cell);
+		return result;
+	}
+
+
 	/** Exact marker-mass inventory; reconstructed grid density is never used for this ledger. */
 	public double totalMass() {
 		double result = 0.0;
