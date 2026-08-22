@@ -33,6 +33,13 @@ public final class MaterialBucketItem extends Item {
 		return value;
 	}
 
+	/** Returns true when this material bucket has neither volume nor material id and can scoop. */
+	public static boolean isEmptyMaterialBucket(ItemStack stack) {
+		return stack.getItem() instanceof MaterialBucketItem
+				&& volume(stack) < 0L
+				&& materialId(stack) == null;
+	}
+
 	@Override
 	public boolean isBarVisible(ItemStack stack) {
 		long nanos = volume(stack);

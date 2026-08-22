@@ -411,6 +411,24 @@ public final class FlipFluidDomain {
 		return result;
 	}
 
+	/** Returns the material handle with the largest exact marker volume in the given cell. */
+	public int dominantMaterialInCell(int x, int y, int z) {
+		int cell = cellIndexChecked(x, y, z);
+		if (materialRegistry == null) return 0;
+		float[] volumes = new float[materialRegistry.size()];
+		float h = config.cellSize();
+		for (int particle = 0; particle < particleCount; particle++) {
+			if (particleCellIndex(particle) != cell) continue;
+			volumes[particleMaterialHandle[particle]] += particleVolume[particle];
+		}
+		int best = 0;
+		for (int handle = 1; handle < volumes.length; handle++) {
+			if (volumes[handle] > volumes[best]) best = handle;
+		}
+		return best;
+	}
+
+
 	MaterialInventory materialInventory(int materialHandle) {
 		double volume = 0.0, mass = 0.0, weightedY = 0.0;
 		for (int particle = 0; particle < particleCount; particle++) {

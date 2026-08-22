@@ -55,6 +55,7 @@ public final class FluidTransferService {
 			case POUR -> pour(service, region, player, hand, held);
 			case SCOOP -> scoop(service, region, player, hand, held);
 			case MATERIAL_POUR -> pourMaterial(service, region, player, hand, held);
+			case MATERIAL_SCOOP -> scoopMaterial(service, region, player, hand, held);
 			case NONE -> null;
 		};
 		if (outcome == null) return null;
@@ -94,6 +95,9 @@ public final class FluidTransferService {
 		if (kind == TransferKind.MATERIAL_POUR) {
 			if (!service.materialFeatureEnabled() || !region.domain().hasMaterialState()) return stack;
 			materialHandle = region.domain().materialRegistry().handle(MaterialBucketItem.materialId(stack));
+		} else if (kind == TransferKind.MATERIAL_SCOOP) {
+			if (!service.materialFeatureEnabled() || !region.domain().hasMaterialState()) return stack;
+			materialHandle = region.domain().dominantMaterialInCell(cell[0], cell[1], cell[2]);
 		}
 		int resolvedMaterialHandle = materialHandle;
 
@@ -115,6 +119,10 @@ public final class FluidTransferService {
 						ContainerTransferJournal.Operation.INSERT, MaterialBucketItem.volume(stack), 0L, cell,
 						(requested, base) -> pourMaterialIntoCell(service, region, cell, requested, resolvedMaterialHandle, 6),
 						(rawAfter, before) -> rawAfter);
+				case MATERIAL_SCOOP -> executeControllerTransfer(service, region, level, actor, stack,
+						ContainerTransferJournal.Operation.EXTRACT, ContainerFluidLedger.NANOS_PER_BLOCK, 0L, cell,
+						(requested, base) -> scoopMaterialIntoCell(service, region, cell, requested, base, resolvedMaterialHandle, 6),
+						(rawAfter, before) -> rawAfter);
 				case NONE -> null;
 			};
 			if (!transaction.outcome().transferred()) return stack;
@@ -127,6 +135,7 @@ public final class FluidTransferService {
 			case POUR -> pourIntoCell(service, region, cell, heldVolumeNanos(stack), 6, 0);
 			case SCOOP -> scoopFromCell(service, region, cell, heldFreeNanos(stack), heldBaseVolumeNanos(stack), 6, 0);
 			case MATERIAL_POUR -> pourMaterialIntoCell(service, region, cell, MaterialBucketItem.volume(stack), resolvedMaterialHandle, 6);
+			case MATERIAL_SCOOP -> scoopMaterialIntoCell(service, region, cell, ContainerFluidLedger.NANOS_PER_BLOCK, 0L, resolvedMaterialHandle, 6);
 			case NONE -> null;
 		};
 		if (outcome == null || !outcome.transferred()) return stack;
@@ -193,28 +202,60 @@ public final class FluidTransferService {
 		return outcome;
 	}
 
-	private static TransferOutcome scoop(
-			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held
-	) {
-		long capacity = heldFreeNanos(held);
-		if (capacity <= 0L) return null;
-		int[] cell = service.aimedCellNear(player, true);
-		if (cell == null) return null;
-		if (region.controllerManaged()) return scoopController(service, region, player, hand, held, capacity, cell);
-		TransferOutcome outcome = scoopFromCell(service, region, cell, capacity, heldBaseVolumeNanos(held), 6, 0);
-		if (!outcome.transferred()) return new TransferOutcome(false, false, held, outcome.message());
-		if (player.hasInfiniteMaterials() && held.is(Items.BUCKET)) {
-			ItemStack filled = outcome.stack();
-			if (!player.getInventory().contains(filled)) {
-				player.getInventory().add(filled);
-			}
-			service.sendSnapshotFor(player);
-			return new TransferOutcome(true, false, held.copy(), outcome.message());
-		}
-		service.sendSnapshotFor(player);
-		return outcome;
-	}
+private static TransferOutcome scoop(
+FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held
+) {
+long capacity = heldFreeNanos(held);
+if (capacity <= 0L) return null;
+int[] cell = service.aimedCellNear(player, true);
+if (cell == null) return null;
+if (region.controllerManaged()) return scoopController(service, region, player, hand, held, capacity, cell);
+TransferOutcome outcome = scoopFromCell(service, region, cell, capacity, heldBaseVolumeNanos(held), 6, 0);
+if (!outcome.transferred()) return new TransferOutcome(false, false, held, outcome.message());
+if (player.hasInfiniteMaterials() && held.is(Items.BUCKET)) {
+ItemStack filled = outcome.stack();
+if (!player.getInventory().contains(filled)) {
+player.getInventory().add(filled);
+}
+service.sendSnapshotFor(player);
+return new TransferOutcome(true, false, held.copy(), outcome.message());
+}
+service.sendSnapshotFor(player);
+return outcome;
+}
 
+private static TransferOutcome scoopMaterial(
+FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held
+) {
+if (!service.materialFeatureEnabled()) {
+return new TransferOutcome(false, false, held, "材料功能门未开启");
+}
+if (!region.domain().hasMaterialState()) {
+return new TransferOutcome(false, false, held, "该区域不是材料区域");
+}
+int[] cell = service.aimedCellNear(player, true);
+if (cell == null) return new TransferOutcome(false, false, held, "准星处没有模拟流体");
+int materialHandle = region.domain().dominantMaterialInCell(cell[0], cell[1], cell[2]);
+long capacityNanos = ContainerFluidLedger.NANOS_PER_BLOCK;
+if (region.controllerManaged()) {
+ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
+ControllerTransfer transaction = executeControllerTransfer(
+service, region, player.level(), actor, held,
+ContainerTransferJournal.Operation.EXTRACT, capacityNanos, 0L, cell,
+(requested, base) -> scoopMaterialIntoCell(service, region, cell, requested, base, materialHandle, 6),
+(rawAfter, before) -> rawAfter
+);
+if (!transaction.outcome().transferred()) return transaction.outcome();
+player.setItemInHand(hand, transaction.outcome().stack());
+player.getInventory().setChanged();
+service.sendSnapshotFor(player);
+return transaction.outcome();
+}
+TransferOutcome outcome = scoopMaterialIntoCell(service, region, cell, capacityNanos, 0L, materialHandle, 6);
+if (!outcome.transferred()) return new TransferOutcome(false, false, held, outcome.message());
+service.sendSnapshotFor(player);
+return outcome;
+}
 	private static TransferOutcome pourController(
 			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held,
 			long volumeNanos, int[] cell
@@ -447,19 +488,37 @@ public final class FluidTransferService {
 				String.format("已注入 %.2f%% 桶 %s", 100.0 * poured / ContainerFluidLedger.NANOS_PER_BLOCK, materialId));
 	}
 
-	private static ItemStack withMaterialVolume(long nanos, String materialId) {
-		if (nanos <= 0L) return new ItemStack(Items.BUCKET);
-		ItemStack stack = new ItemStack(RealWaterItems.MATERIAL_BUCKET);
-		stack.set(RealWaterComponents.FLUID_VOLUME, nanos);
-		stack.set(RealWaterComponents.MATERIAL_ID, materialId);
-		return stack;
-	}
+private static ItemStack withMaterialVolume(long nanos, String materialId) {
+if (nanos <= 0L) return new ItemStack(Items.BUCKET);
+ItemStack stack = new ItemStack(RealWaterItems.MATERIAL_BUCKET);
+stack.set(RealWaterComponents.FLUID_VOLUME, nanos);
+stack.set(RealWaterComponents.MATERIAL_ID, materialId);
+return stack;
+}
 
+private static TransferOutcome scoopMaterialIntoCell(
+FluidSimulationService service, FluidRegion region, int[] cell, long capacityNanos, long baseVolumeNanos,
+int materialHandle, int maxRadius
+) {
+if (capacityNanos <= 0L) return null;
+FlipFluidDomain domain = region.domain();
+String materialId = domain.materialRegistry().material(materialHandle).id();
+FlipFluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(
+cell[0], cell[1], cell[2], nanosToCellVolume(capacityNanos), maxRadius, materialHandle);
+if (!extracted.transferred() || extracted.volume() <= 0.0) {
+return new TransferOutcome(false, false, withMaterialVolume(baseVolumeNanos, materialId), "准星处没有足够流体");
+}
+long taken = Math.min(cellVolumeToNanos(extracted.volume()), capacityNanos);
+region.wakeForActivity();
+return new TransferOutcome(true, false, withMaterialVolume(baseVolumeNanos + taken, materialId),
+String.format("已舀取 %.2f%% 桶 %s", 100.0 * taken / ContainerFluidLedger.NANOS_PER_BLOCK, materialId));
+}
 	private enum TransferKind {
 		NONE,
 		POUR,
 		SCOOP,
-		MATERIAL_POUR
+		MATERIAL_POUR,
+		MATERIAL_SCOOP
 	}
 
 	private static TransferKind classify(ItemStack stack) {
@@ -469,6 +528,7 @@ public final class FluidTransferService {
 			return PartialWaterBucketItem.volume(stack) > 0L ? TransferKind.POUR : TransferKind.NONE;
 		}
 		if (stack.getItem() instanceof MaterialBucketItem) {
+			if (MaterialBucketItem.isEmptyMaterialBucket(stack)) return TransferKind.MATERIAL_SCOOP;
 			return MaterialBucketItem.volume(stack) > 0L && MaterialBucketItem.materialId(stack) != null
 					? TransferKind.MATERIAL_POUR
 					: TransferKind.NONE;
