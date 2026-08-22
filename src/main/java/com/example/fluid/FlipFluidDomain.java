@@ -644,6 +644,103 @@ public final class FlipFluidDomain {
 		return amount - remaining;
 	}
 
+	/**
+	 * M6 container transfer primitive: all-or-nothing insertion of an exact volume near the
+	 * target. Cells, pieces and the marker budget are planned before any state changes, so a
+	 * refusal leaves the domain untouched. Pieces are {@code PARTICLE_VOLUME} chunks plus one
+	 * float remainder; the returned volume is the exact double sum of the stored pieces.
+	 */
+	public ExactVolumeTransfer tryInsertExactVolume(int centerX, int centerY, int centerZ, float volume, int maxRadius) {
+		validateVolumeEdit(volume, maxRadius);
+		if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0);
+		float[] exactCellVolume = exactCellVolumes();
+		java.util.List<InsertAllocation> plan = new java.util.ArrayList<>();
+		long requiredMarkers = 0L;
+		double remaining = volume;
+		for (CellCandidate candidate : nearbyCells(centerX, centerY, centerZ, maxRadius)) {
+			if (remaining <= 0.0) break;
+			int index = candidate.index();
+			float capacity = Math.max(0.0F, cutCells.openCellVolume(index) - exactCellVolume[index]);
+			double allocate = Math.min(capacity, remaining);
+			if (allocate <= 0.0) continue;
+			requiredMarkers += (long) Math.ceil(allocate / PARTICLE_VOLUME);
+			if (particleCount + requiredMarkers > maximumParticleCount) {
+				return new ExactVolumeTransfer(false, 0.0);
+			}
+			int x = index % sizeX, yz = index / sizeX, y = yz % sizeY, z = yz / sizeY;
+			plan.add(new InsertAllocation(x, y, z, allocate));
+			remaining -= allocate;
+		}
+		if (remaining > 0.0) return new ExactVolumeTransfer(false, 0.0);
+
+		double inserted = 0.0;
+		for (InsertAllocation allocation : plan) {
+			double left = allocation.amount();
+			int slot = firstOpenSlot(cellIndex(allocation.x(), allocation.y(), allocation.z()), 0);
+			while (left > 0.0) {
+				float piece = left >= PARTICLE_VOLUME ? PARTICLE_VOLUME : (float) left;
+				if (slot < 0) throw new IllegalStateException("Cut-cell open volume was exhausted while spawning markers");
+				spawnParticle(allocation.x(), allocation.y(), allocation.z(), slot, piece);
+				inserted += piece;
+				left -= piece;
+				slot = firstOpenSlot(cellIndex(allocation.x(), allocation.y(), allocation.z()), slot + 1);
+			}
+		}
+		gridDirty = true;
+		return new ExactVolumeTransfer(true, inserted);
+	}
+
+	/**
+	 * M6 container transfer primitive: all-or-nothing extraction of an exact volume near the
+	 * target. Availability is verified in double precision first; removal takes whole markers and
+	 * splits the last one, so the returned volume is the exact double sum of real marker
+	 * decreases and exceeds the request by at most one ulp of the split marker.
+	 */
+	public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int centerZ, float volume, int maxRadius) {
+		validateVolumeEdit(volume, maxRadius);
+		if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0);
+		java.util.List<CellCandidate> cells = nearbyCells(centerX, centerY, centerZ, maxRadius);
+		boolean[] near = new boolean[sizeX * sizeY * sizeZ];
+		for (CellCandidate candidate : cells) near[candidate.index()] = true;
+		float h = config.cellSize();
+		double available = 0.0;
+		for (int i = 0; i < particleCount; i++) {
+			if (!near[cellIndex(
+					(int) Math.floor(particleX[i] / h), (int) Math.floor(particleY[i] / h), (int) Math.floor(particleZ[i] / h))]) {
+				continue;
+			}
+			available += particleVolume[i];
+		}
+		if (available < volume) return new ExactVolumeTransfer(false, 0.0);
+
+		double remaining = volume;
+		double removed = 0.0;
+		for (int i = particleCount - 1; i >= 0 && remaining > 0.0; i--) {
+			if (!near[cellIndex(
+					(int) Math.floor(particleX[i] / h), (int) Math.floor(particleY[i] / h), (int) Math.floor(particleZ[i] / h))]) {
+				continue;
+			}
+			float previousVolume = particleVolume[i];
+			double take = Math.min(previousVolume, remaining);
+			float newVolume = (float) (previousVolume - take);
+			if (newVolume <= 1.0E-6F) newVolume = 0.0F;
+			particleVolume[i] = newVolume;
+			particleMass[i] *= newVolume / previousVolume;
+			double actual = previousVolume - newVolume;
+			if (newVolume <= 0.0F) {
+				removeParticle(i);
+			}
+			removed += actual;
+			remaining -= actual;
+		}
+		gridDirty = true;
+		return new ExactVolumeTransfer(true, removed);
+	}
+
+	private record InsertAllocation(int x, int y, int z, double amount) { }
+
+	public record ExactVolumeTransfer(boolean transferred, double volume) { }
+
 	public StepStats step() {
 		float before = totalVolume();
 		double massBefore = totalMass();

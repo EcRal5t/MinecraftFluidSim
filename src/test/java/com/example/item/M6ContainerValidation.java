@@ -27,6 +27,9 @@ public final class M6ContainerValidation {
 		run("conversions round real marker volumes within half a quantum", M6ContainerValidation::testConversions);
 		run("bucket canonicalization boundaries", M6ContainerValidation::testCanonicalization);
 		run("round-trip drift stays bounded over ten thousand cycles", M6ContainerValidation::testRoundTrip);
+		run("exact insert plans or refuses atomically", M6ContainerValidation::testExactInsert);
+		run("exact extract removes exactly or refuses", M6ContainerValidation::testExactExtract);
+		run("full bucket round-trips through the primitives", M6ContainerValidation::testBucketRoundTrip);
 		System.out.println("M6ContainerValidation passed " + passed + " scenarios");
 	}
 
@@ -161,6 +164,96 @@ public final class M6ContainerValidation {
 				"round-trip drift exceeded the documented bound: " + worstDriftNanos + " quanta");
 		System.out.println("  worst combined drift over 10000 cycles: " + worstDriftNanos + " quanta ("
 				+ String.format("%.3e", worstDriftNanos / 1.0E9) + " m^3)");
+	}
+
+	private static void testExactInsert() {
+		FlipFluidDomain domain = new FlipFluidDomain(6, 4, 6, CONFIG, 512);
+		domain.setSolid(0, 0, 0, true);
+		FlipFluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(3, 2, 3, 0.375F, 2);
+		check(inserted.transferred() && Math.abs(inserted.volume() - 0.375) < 1.0E-9,
+				"exact insert did not report the planned volume");
+		check(Math.abs(sumMarkerVolumes(domain) - inserted.volume()) < 1.0E-9,
+				"marker ledger did not gain the inserted volume");
+
+		int particlesBefore = domain.particleCount();
+		double volumesBefore = sumMarkerVolumes(domain);
+		FlipFluidDomain.ExactVolumeTransfer oversized = domain.tryInsertExactVolume(3, 2, 3, 100.0F, 3);
+		check(!oversized.transferred(), "insert beyond open capacity was accepted");
+		check(domain.particleCount() == particlesBefore && Math.abs(sumMarkerVolumes(domain) - volumesBefore) < 1.0E-9,
+				"refused insert left partial state");
+
+		FlipFluidDomain tiny = new FlipFluidDomain(6, 4, 6, CONFIG, 4);
+		FlipFluidDomain.ExactVolumeTransfer budget = tiny.tryInsertExactVolume(3, 2, 3, 1.0F, 2);
+		check(!budget.transferred() && tiny.particleCount() == 0 && sumMarkerVolumes(tiny) == 0.0,
+				"marker-budget refusal left partial state");
+		check(tiny.tryInsertExactVolume(3, 2, 3, 0.0F, 2).transferred(),
+				"a zero-volume insert is a successful no-op");
+	}
+
+	private static void testExactExtract() {
+		FlipFluidDomain domain = new FlipFluidDomain(6, 4, 6, CONFIG, 512);
+		domain.tryInsertExactVolume(3, 2, 3, 0.375F, 2);
+		double before = sumMarkerVolumes(domain);
+		int particlesBefore = domain.particleCount();
+
+		FlipFluidDomain.ExactVolumeTransfer oversized = domain.tryExtractExactVolume(3, 2, 3, 0.5F, 2);
+		check(!oversized.transferred(), "extract beyond availability was accepted");
+		check(domain.particleCount() == particlesBefore && sumMarkerVolumes(domain) == before,
+				"refused extract left partial state");
+
+		FlipFluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(3, 2, 3, 0.25F, 2);
+		check(extracted.transferred() && Math.abs(extracted.volume() - 0.25) < 1.0E-12,
+				"whole-marker extraction was not exact");
+		check(Math.abs(sumMarkerVolumes(domain) - (before - extracted.volume())) < 1.0E-12,
+				"marker ledger did not lose the extracted volume");
+		check(domain.tryExtractExactVolume(3, 2, 3, 0.0F, 2).transferred(),
+				"a zero-volume extract is a successful no-op");
+	}
+
+	/**
+	 * Exercises the service-level credit rules over the real primitives: extraction credits at
+	 * most the container's free space (overshoot quanta are dropped and reported), insertion
+	 * debits at most the container's balance. The combined ledger drift stays tiny and bounded.
+	 */
+	private static void testBucketRoundTrip() {
+		FlipFluidDomain domain = new FlipFluidDomain(6, 4, 6, CONFIG, 512);
+		// Initial pour: a full bucket empties into the region.
+		long containerNanos = BUCKET;
+		FlipFluidDomain.ExactVolumeTransfer filled = domain.tryInsertExactVolume(3, 2, 3,
+				ContainerFluidLedger.nanosToFloatVolume(containerNanos), 3);
+		check(filled.transferred(), "could not insert one bucket volume");
+		containerNanos = ContainerFluidLedger.checkedSubtract(containerNanos,
+				Math.min(ContainerFluidLedger.volumeToNanos(filled.volume()), containerNanos));
+		long initialNanos = ContainerFluidLedger.volumeToNanos(sumMarkerVolumes(domain));
+		long worstDrift = 0L;
+		for (int cycle = 0; cycle < 100; cycle++) {
+			FlipFluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(3, 2, 3,
+					ContainerFluidLedger.nanosToFloatVolume(BUCKET - containerNanos), 3);
+			check(extracted.transferred(), "full-bucket extraction failed");
+			long taken = ContainerFluidLedger.volumeToNanos(extracted.volume());
+			containerNanos = ContainerFluidLedger.checkedAdd(containerNanos,
+					Math.min(taken, BUCKET - containerNanos));
+
+			FlipFluidDomain.ExactVolumeTransfer reinserted = domain.tryInsertExactVolume(3, 2, 3,
+					ContainerFluidLedger.nanosToFloatVolume(containerNanos), 3);
+			check(reinserted.transferred(), "re-insertion failed");
+			long given = ContainerFluidLedger.volumeToNanos(reinserted.volume());
+			containerNanos = ContainerFluidLedger.checkedSubtract(containerNanos, Math.min(given, containerNanos));
+
+			long regionNanos = ContainerFluidLedger.volumeToNanos(sumMarkerVolumes(domain));
+			worstDrift = Math.max(worstDrift, Math.abs(regionNanos + containerNanos - initialNanos));
+			check(containerNanos >= 0L && containerNanos <= BUCKET, "container balance left its valid range");
+		}
+		check(worstDrift <= 200L, "primitive round-trip drift exceeded the bound: " + worstDrift);
+		System.out.println("  worst bucket round-trip drift over 100 cycles: " + worstDrift + " quanta");
+	}
+
+	private static double sumMarkerVolumes(FlipFluidDomain domain) {
+		FlipParticleState state = domain.exportParticleState();
+		float[] markers = state.copyPositionVolume();
+		double sum = 0.0;
+		for (int i = 0; i < state.particleCount(); i++) sum += markers[i * 4 + 3];
+		return sum;
 	}
 
 	private static void check(boolean condition, String message) {
