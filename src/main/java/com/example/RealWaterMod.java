@@ -1,6 +1,8 @@
 package com.example;
 
 import com.example.block.RealWaterBlocks;
+import com.example.item.RealWaterComponents;
+import com.example.item.RealWaterItems;
 import com.example.network.FluidProtocolServer;
 import com.example.simulation.FluidSimulationService;
 import net.fabricmc.api.ModInitializer;
@@ -17,6 +19,8 @@ public final class RealWaterMod implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		RealWaterBlocks.register();
+		RealWaterComponents.register();
+		RealWaterItems.register();
 		FluidProtocolServer.register();
 		RealWaterCommands.register();
 		ServerTickEvents.END_SERVER_TICK.register(server -> FluidSimulationService.get(server).tick(server));

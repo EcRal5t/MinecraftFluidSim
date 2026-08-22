@@ -64,6 +64,12 @@ public final class ContainerFluidLedger {
 		return nanos == NANOS_PER_BLOCK;
 	}
 
+	/** Read-only durability-bar width for a partial volume; invalid volumes show the minimum. */
+	public static int barWidth(long nanos) {
+		if (nanos <= 0L) return 1;
+		return (int) Math.min(13L, Math.max(1L, Math.round(13.0 * nanos / NANOS_PER_BLOCK)));
+	}
+
 	private static void requireNonNegative(long nanos) {
 		if (nanos < 0L) throw new IllegalArgumentException("Nanovolume must not be negative: " + nanos);
 	}
