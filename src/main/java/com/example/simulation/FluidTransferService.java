@@ -99,8 +99,6 @@ public final class FluidTransferService {
 			if (!transaction.outcome().transferred()) return stack;
 			source.blockEntity().setItem(slot, transaction.outcome().stack());
 			source.blockEntity().setChanged();
-			level.save(null, false, false);
-			if (transaction.transactionId() != null) deleteQuietly(service, transaction.transactionId());
 			service.sendSnapshot(level, region);
 			return transaction.outcome().stack();
 		}
@@ -166,8 +164,6 @@ public final class FluidTransferService {
 		if (!transaction.outcome().transferred()) return transaction.outcome();
 		player.setItemInHand(hand, transaction.outcome().stack());
 		player.getInventory().setChanged();
-		player.level().getServer().getPlayerList().saveAll();
-		if (transaction.transactionId() != null) deleteQuietly(service, transaction.transactionId());
 		service.sendSnapshotFor(player);
 		return transaction.outcome();
 	}
@@ -191,8 +187,6 @@ public final class FluidTransferService {
 		}
 		player.setItemInHand(hand, transaction.outcome().stack());
 		player.getInventory().setChanged();
-		player.level().getServer().getPlayerList().saveAll();
-		if (transaction.transactionId() != null) deleteQuietly(service, transaction.transactionId());
 		service.sendSnapshotFor(player);
 		return transaction.outcome();
 	}
