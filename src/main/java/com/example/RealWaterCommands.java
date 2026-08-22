@@ -3,6 +3,7 @@ package com.example;
 import com.example.logging.RealWaterCommandLog;
 import com.example.simulation.FluidSimulationService;
 import com.example.simulation.FluidRegion;
+import com.example.simulation.ownership.OwnershipProtoStore;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -76,6 +77,15 @@ public final class RealWaterCommands {
 								.then(Commands.argument("count", IntegerArgumentType.integer(1, 20))
 										.executes(context -> audit(context, () -> step(context.getSource(), IntegerArgumentType.getInteger(context, "count"))))))
 						.then(Commands.literal("status").executes(context -> audit(context, () -> status(context.getSource()))))
+						.then(Commands.literal("ownproto")
+								.then(Commands.literal("acquire")
+										.executes(context -> audit(context, () -> ownProtoAcquire(context.getSource(), 2)))
+										.then(Commands.argument("radius", IntegerArgumentType.integer(1, 4))
+												.executes(context -> audit(context, () -> ownProtoAcquire(
+														context.getSource(), IntegerArgumentType.getInteger(context, "radius"))))))
+								.then(Commands.literal("reconcile").executes(context -> audit(context, () -> ownProtoReconcile(context.getSource()))))
+								.then(Commands.literal("release").executes(context -> audit(context, () -> ownProtoRelease(context.getSource()))))
+								.then(Commands.literal("status").executes(context -> audit(context, () -> ownProtoStatus(context.getSource())))))
 						.then(Commands.literal("logpath").executes(context -> audit(context, () -> logPath(context.getSource()))))
 						.then(Commands.literal("remove").executes(context -> audit(context, () -> remove(context.getSource()))))
 		));
@@ -294,6 +304,39 @@ public final class RealWaterCommands {
 				"已移除活动流体域和客户端调试快照；恢复 %d 个原版水方块，确认 %d 个已恢复位置，跳过 %d 个已被玩家占用的位置；journal 与 WARNING 已删除",
 				restoration.restoredBlocks(), restoration.alreadyRestoredBlocks(), restoration.skippedBlocks()
 		), 1);
+	}
+
+	/** Disposable M6.0 route-B prototype: air + independent ownership registry. */
+	private static int ownProtoAcquire(CommandSourceStack source, int radius)
+			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		OwnershipProtoStore.AcquireOutcome outcome = OwnershipProtoStore.acquire(player, radius);
+		if (outcome.failure() != null) {
+			return fail(source, "原型 B acquire 已取消：" + outcome.failure());
+		}
+		return succeed(source, String.format(
+				"原型 B ownership 已提交：第 %d 代，本次持有 %d 个水位置，共持有 %d 个；世界写入只发生在本次事务，journal 与 WARNING 已清理；注册表位于 realwater/ownership-proto/committed.nbt",
+				outcome.generation(), outcome.transitionBlocks(), outcome.totalOwnedBlocks()
+		), 1);
+	}
+
+	private static int ownProtoReconcile(CommandSourceStack source) {
+		return succeed(source, OwnershipProtoStore.reconcileReport(source.getServer()), 1);
+	}
+
+	private static int ownProtoRelease(CommandSourceStack source) {
+		OwnershipProtoStore.ReleaseOutcome outcome = OwnershipProtoStore.release(source.getServer());
+		if (outcome.failure() != null) {
+			return fail(source, "原型 B release 已取消：" + outcome.failure());
+		}
+		return succeed(source, String.format(
+				"原型 B ownership 已解除：第 %d 代，持有清空；水按原样恢复，玩家实体方块未被覆盖，journal 与 WARNING 已清理",
+				outcome.generation()
+		), 1);
+	}
+
+	private static int ownProtoStatus(CommandSourceStack source) {
+		return succeed(source, OwnershipProtoStore.statusReport(source.getServer()), 1);
 	}
 
 	private static int fail(CommandSourceStack source, String message) {

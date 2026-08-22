@@ -200,6 +200,17 @@ tasks.register("runFluidBoundaryScannerValidation", JavaExec) {
 	mainClass = "com.example.simulation.controller.FluidBoundaryScannerValidation"
 }
 
+tasks.register("runM6OwnershipPrototypeValidation", JavaExec) {
+	group = "verification"
+	description = "Runs the disposable M6.0 ownership-proto codec, transaction and fault-injection gate."
+	dependsOn tasks.named("testClasses")
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = "com.example.simulation.ownership.M6OwnershipPrototypeValidation"
+	def validationWorkDir = layout.buildDirectory.dir("m6-ownership-proto-validation-work").get().asFile
+	workingDir validationWorkDir
+	doFirst { validationWorkDir.mkdirs() }
+}
+
 java {
 	// Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
 	// if it is present.
