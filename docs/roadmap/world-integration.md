@@ -61,7 +61,7 @@
 - 恢复判定以 region HEAD generation 对比 WAL base/target（base=事务前 region HEAD，target=被提交的 checkpoint generation），语义与 M6.0 决策记录的判定表一致。
 - release 首版保守：区域 marker 体积为 0 才允许；否则拒绝并提示先排水（M6.1b 容器提供真实转移路径）。
 - 已知限制：committed.nbt 被外部删除与 region-state 目录被删除同属"存档被手动破坏"类，不设防；损坏（可读出但不合法）才 LOCKED。
-- 增量状态（2026-08-22 落地）：config v3 `worldBridgeEnabled`、`RegionStateFiles.prepare/commit/abort`、`simulation/ownership/` 正式包（WAL/committed codec、per-region 文件层、`OwnershipCoordinator` 联合事务与 region-HEAD 键控恢复、`OwnershipStore` 启动扫描/恢复）、激活 acquire、remove 保守 release（marker 非零拒绝）、restore 一致性检查、`/realwater worldbridge` 与 `/realwater ownership` 命令、`runM6OwnershipValidation` 门均已生效；M6.0 的 `ownproto` 原型命令面已删除。剩余：实机 Smoke A。
+- 增量状态（2026-08-22 关闭）：M6.1a 全部落地并过实机 Smoke A，证据与已知边界见 [`../progress/m6.1a-world-ownership.md`](../progress/m6.1a-world-ownership.md)；M6.0 的 `ownproto` 原型命令面已删除。
 
 ## M6.1 容器真值
 

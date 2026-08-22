@@ -144,6 +144,6 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
 
 ## 接下来三项
 
-1. M6.1a ownership 核心：按 M6.0 冻结结果实现 config v3 `worldBridgeEnabled` 门、`RegionStateFiles` prepare/commit 分段、ownership WAL 与 controller acquire、启动 reconcile 与 LOCKED，形成无容器的 crash-safe 持久 ownership。
-2. M6.1b 容器：在 ownership 之上实现精确转移原语、部分桶/混合物容器、行为矩阵与跨持久域恢复。
-3. 气体状态进存档前先做 region-state v3 格式迁移评审；当前 runtime-only 重建语义已量化记录。液液界面锐化/逐顶点平滑转入渲染里程碑评估。
+1. M6.1b 容器：数值表示实验（float `particleVolume` ↔ long 纳体积）、solver 精确转移原语（all-or-nothing）、部分桶/混合物容器、行为矩阵与跨持久域转移 WAL；M6.1 关闭时升 0.12.0。M6.1a（crash-safe 持久 ownership）已于 2026-08-22 完成并过实机 Smoke A。
+2. 气体状态进存档前先做 region-state v3 格式迁移评审；当前 runtime-only 重建语义已量化记录。
+3. 液液界面锐化/逐顶点平滑转入渲染里程碑评估，实机视觉复看结果将作为基线证据。

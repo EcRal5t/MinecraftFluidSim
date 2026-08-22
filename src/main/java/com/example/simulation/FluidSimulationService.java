@@ -958,14 +958,16 @@ public final class FluidSimulationService {
 			return restoration;
 		}
 		restoreAirDemoScaffolding(server);
-		String persistenceFailure = regionOperations.deletePersistentRegions(server);
-		if (persistenceFailure != null) return RestorationStats.failed(false, 0, 0, 0, persistenceFailure);
+		FluidRegionOperations.RegionRemoval removal = regionOperations.deletePersistentRegions(server);
+		if (removal.failure() != null) return RestorationStats.failed(false, 0, 0, 0, removal.failure());
 		regionManager.clear();
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			FluidProtocolServer.send(player, FluidSnapshotPayload.clearAll());
 			FluidProtocolServer.send(player, FluidMaterialSnapshotPayload.clearAll());
 		}
-		return restoration;
+		return new RestorationStats(restoration.journalFound(), restoration.restoredBlocks(),
+				restoration.alreadyRestoredBlocks(), restoration.skippedBlocks(),
+				removal.releasedBlocks(), removal.releasedSkipped(), true, null);
 	}
 
 	public List<String> regionSummaries() {
@@ -1054,7 +1056,7 @@ public final class FluidSimulationService {
 		String availability = region.availabilityFailure() == null ? "ready" : "blocked: " + region.availabilityFailure();
 		String gas = gasSummary(domain);
 		return String.format(
-				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | entities %s/%d | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s%s",
+				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s%s",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",
 				region.id().toString().substring(0, 8),
 				usage.regionCount(), regionManager.limits().maximumRegions(),
@@ -1066,6 +1068,7 @@ public final class FluidSimulationService {
 				cellVolumes / CELL_VOLUMES_PER_BLOCK, cellVolumes,
 				domain.particleCount(), domain.maximumParticleCount(), domain.markerCellCount(),
 				distribution.visibleCells(), distribution.denseCells(), takeoverOriginalBlocks.size(), takeoverLock,
+				worldBridgeFeatureEnabled ? "on" : "off",
 				region.entityPhysicsEnabled() ? "on" : "off", region.lastAffectedEntities(),
 				domain.maximumPressure(),
 				solids.partialCells(), solids.fullCells(),
@@ -1263,9 +1266,22 @@ public final class FluidSimulationService {
 			int restoredBlocks,
 			int alreadyRestoredBlocks,
 			int skippedBlocks,
+			int ownershipRestoredBlocks,
+			int ownershipSkippedBlocks,
 			boolean completed,
 			String failure
 	) {
+		RestorationStats(
+				boolean journalFound,
+				int restoredBlocks,
+				int alreadyRestoredBlocks,
+				int skippedBlocks,
+				boolean completed,
+				String failure
+		) {
+			this(journalFound, restoredBlocks, alreadyRestoredBlocks, skippedBlocks, 0, 0, completed, failure);
+		}
+
 		private static RestorationStats failed(
 				boolean journalFound,
 				int restoredBlocks,
@@ -1273,7 +1289,7 @@ public final class FluidSimulationService {
 				int skippedBlocks,
 				String failure
 		) {
-			return new RestorationStats(journalFound, restoredBlocks, alreadyRestoredBlocks, skippedBlocks, false, failure);
+			return new RestorationStats(journalFound, restoredBlocks, alreadyRestoredBlocks, skippedBlocks, 0, 0, false, failure);
 		}
 	}
 

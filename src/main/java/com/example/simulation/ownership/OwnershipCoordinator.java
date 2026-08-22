@@ -105,9 +105,16 @@ public final class OwnershipCoordinator {
 		ownershipFiles.publishWarning(warning);
 		failures.hit(FailurePoint.AFTER_WARNING_PUBLISH, 0);
 
+		int restored = 0;
+		int alreadyRestored = 0;
+		int skipped = 0;
 		int processed = 0;
 		for (OwnershipJournal.BlockEntry entry : wal.blocks()) {
-			world.restore(committed.dimensionId(), entry);
+			switch (world.restore(committed.dimensionId(), entry)) {
+				case RESTORED -> restored++;
+				case ALREADY_RESTORED -> alreadyRestored++;
+				case SKIPPED_OCCUPIED -> skipped++;
+			}
 			processed++;
 			failures.hit(FailurePoint.AFTER_RESTORE_BLOCK, processed);
 		}
@@ -119,7 +126,7 @@ public final class OwnershipCoordinator {
 		failures.hit(FailurePoint.AFTER_COMMITTED_WRITE, 0);
 		failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
 		ownershipFiles.deleteTransaction();
-		return new ReleaseResult(published);
+		return new ReleaseResult(published, restored, alreadyRestored, skipped);
 	}
 
 	public static RecoveryResult recover(
@@ -304,7 +311,7 @@ public final class OwnershipCoordinator {
 
 	public record AcquireResult(long generation, int ownedBlocks) { }
 
-	public record ReleaseResult(long generation) { }
+	public record ReleaseResult(long generation, int restoredBlocks, int alreadyRestoredBlocks, int skippedBlocks) { }
 
 	/**
 	 * Field meanings depend on {@link Kind}: for {@code ACQUIRE_ROLLED_BACK} they count the water

@@ -134,27 +134,33 @@ final class FluidRegionOperations {
 		}
 	}
 
-	String deletePersistentRegions(MinecraftServer server) {
-		if (creationLocked) return "存在未解决的 region-state；拒绝把未登记数据误报为已删除，请先按日志人工恢复或隔离";
+	RegionRemoval deletePersistentRegions(MinecraftServer server) {
+		if (creationLocked) return RegionRemoval.failed("存在未解决的 region-state；拒绝把未登记数据误报为已删除，请先按日志人工恢复或隔离");
+		int releasedBlocks = 0;
+		int releasedSkipped = 0;
 		for (FluidRegion region : manager.regions()) {
 			if (!region.controllerManaged()) continue;
-			String releaseFailure = persistence.releaseOwnership(server, region);
-			if (releaseFailure != null) {
+			FluidRegionPersistence.ReleaseAttempt release = persistence.releaseOwnership(server, region);
+			if (release.failure() != null) {
 				for (FluidRegion retained : manager.regions()) retained.setPaused(true);
-				String failure = "ownership 解除未完成，移除已中止：" + releaseFailure;
-				issues.add(failure);
-				return failure;
+				return RegionRemoval.failed("ownership 解除未完成，移除已中止：" + release.failure());
 			}
+			releasedBlocks += release.restoredBlocks();
+			releasedSkipped += release.skippedBlocks();
 			try {
 				persistence.delete(region);
 			} catch (IOException exception) {
 				for (FluidRegion retained : manager.regions()) retained.setPaused(true);
-				String failure = "持久区域删除未完成，内存 registry 已保留：" + exception.getMessage();
-				issues.add(failure);
-				return failure;
+				return RegionRemoval.failed("持久区域删除未完成，内存 registry 已保留：" + exception.getMessage());
 			}
 		}
-		return null;
+		return new RegionRemoval(null, releasedBlocks, releasedSkipped);
+	}
+
+	record RegionRemoval(String failure, int releasedBlocks, int releasedSkipped) {
+		static RegionRemoval failed(String failure) {
+			return new RegionRemoval(failure, 0, 0);
+		}
 	}
 
 	List<String> summaries() {

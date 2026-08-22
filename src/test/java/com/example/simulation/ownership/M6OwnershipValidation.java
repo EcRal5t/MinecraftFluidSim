@@ -253,7 +253,8 @@ public final class M6OwnershipValidation {
 			Fixture fixture = new Fixture(root, 3);
 			acquire(fixture, FailureInjector.NONE);
 			OwnershipCoordinator.ReleaseResult result = release(fixture, FailureInjector.NONE);
-			check(result.generation() == 2L, "release generation is wrong");
+			check(result.generation() == 2L && result.restoredBlocks() == 3
+					&& result.skippedBlocks() == 0, "release counts are wrong");
 			check(fixture.world().allOriginal(), "release did not restore the preimage");
 			check(fixture.ownershipFiles().readCommitted().ownedBlocks().isEmpty(), "release did not clear ownership");
 			check(!fixture.ownershipFiles().isLocked(), "release kept the WAL");

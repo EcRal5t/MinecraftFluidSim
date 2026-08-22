@@ -316,9 +316,13 @@ public final class RealWaterCommands {
 		if (!restoration.completed()) {
 			return fail(source, "移除已暂停：" + restoration.failure() + "；请保留 Mod 与世界备份并查看日志后重试");
 		}
+		String ownership = restoration.ownershipRestoredBlocks() == 0 && restoration.ownershipSkippedBlocks() == 0
+				? ""
+				: String.format("；ownership 释放恢复 %d 格原版水、跳过 %d 个玩家占用位置",
+						restoration.ownershipRestoredBlocks(), restoration.ownershipSkippedBlocks());
 		return succeed(source, String.format(
-				"已移除活动流体域和客户端调试快照；恢复 %d 个原版水方块，确认 %d 个已恢复位置，跳过 %d 个已被玩家占用的位置；journal 与 WARNING 已删除",
-				restoration.restoredBlocks(), restoration.alreadyRestoredBlocks(), restoration.skippedBlocks()
+				"已移除活动流体域和客户端调试快照；恢复 %d 个原版水方块，确认 %d 个已恢复位置，跳过 %d 个已被玩家占用的位置；journal 与 WARNING 已删除%s",
+				restoration.restoredBlocks(), restoration.alreadyRestoredBlocks(), restoration.skippedBlocks(), ownership
 		), 1);
 	}
 

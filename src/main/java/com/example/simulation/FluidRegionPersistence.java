@@ -136,22 +136,22 @@ final class FluidRegionPersistence {
 	 * volume, restores the vanilla preimage with player blocks winning, and never runs unless the
 	 * final region checkpoint can be staged and committed.
 	 */
-	String releaseOwnership(MinecraftServer server, FluidRegion region) {
+	ReleaseAttempt releaseOwnership(MinecraftServer server, FluidRegion region) {
 		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
-		if (!ownershipFiles.exists()) return null;
+		if (!ownershipFiles.exists()) return ReleaseAttempt.NOT_OWNED;
 		try {
 			ownershipFiles.assertUnlockedForTransition();
 			if (region.solverLoaded() ? region.domain().totalVolume() > 0.0F : region.checkpointVolume() > 0.0F) {
-				return "区域 " + region.id() + " 仍持有水体；请先排空（drain）后再移除";
+				return ReleaseAttempt.refused("区域 " + region.id() + " 仍持有水体；请先排空（drain）后再移除");
 			}
 			if (!ownershipFiles.hasCommitted()) {
 				ownershipFiles.deleteStore();
-				return null;
+				return ReleaseAttempt.NOT_OWNED;
 			}
 			OwnershipCommitted committed = ownershipFiles.readCommitted();
 			if (committed.ownedBlocks().isEmpty()) {
 				ownershipFiles.deleteStore();
-				return null;
+				return ReleaseAttempt.NOT_OWNED;
 			}
 			if (!region.solverLoaded()) restore(region);
 			long baseGeneration = files.committedGeneration(region.id());
@@ -162,13 +162,13 @@ final class FluidRegionPersistence {
 			String warning = OwnershipStore.warningText(ownershipStore.worldRoot(),
 					region.id(), committed.dimensionId(), OwnershipJournal.Operation.RELEASE,
 					baseGeneration, generation, committed.ownedBlocks().size());
-			OwnershipCoordinator.release(files, ownershipFiles, staged, warning,
-					OwnershipStore.worldAccess(server), OwnershipCoordinator.FailureInjector.NONE);
-			if (!region.recordPublishedCheckpoint(generation)) {
-				throw new IOException("Release checkpoint " + generation + " was not accepted by the live region");
+			OwnershipCoordinator.ReleaseResult result = OwnershipCoordinator.release(files, ownershipFiles,
+					staged, warning, OwnershipStore.worldAccess(server), OwnershipCoordinator.FailureInjector.NONE);
+			if (!region.recordPublishedCheckpoint(result.generation())) {
+				throw new IOException("Release checkpoint " + result.generation() + " was not accepted by the live region");
 			}
 			ownershipFiles.deleteStore();
-			return null;
+			return new ReleaseAttempt(null, result.restoredBlocks(), result.skippedBlocks());
 		} catch (IOException | RuntimeException failure) {
 			try {
 				OwnershipCoordinator.recover(files, ownershipFiles,
@@ -177,7 +177,15 @@ final class FluidRegionPersistence {
 				failure.addSuppressed(recoveryFailure);
 			}
 			RealWaterMod.LOGGER.error("World ownership release failed for region {}", region.id(), failure);
-			return "区域 " + region.id() + " ownership 解除失败：" + failure.getMessage();
+			return ReleaseAttempt.refused("区域 " + region.id() + " ownership 解除失败：" + failure.getMessage());
+		}
+	}
+
+	record ReleaseAttempt(String failure, int restoredBlocks, int skippedBlocks) {
+		static final ReleaseAttempt NOT_OWNED = new ReleaseAttempt(null, 0, 0);
+
+		static ReleaseAttempt refused(String failure) {
+			return new ReleaseAttempt(failure, 0, 0);
 		}
 	}
 
