@@ -18,9 +18,15 @@ import com.example.simulation.controller.FluidBoundaryScanner;
 import com.example.simulation.controller.FluidControllerRegions;
 import com.example.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.entity.DispenserBlockEntity;
+
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
@@ -67,6 +73,7 @@ public final class FluidSimulationService {
 	private FluidServerConfig serverConfig;
 	private final FluidRegionManager regionManager;
 	private final FluidRegionOperations regionOperations;
+	private final ContainerTransferStore containerTransfers;
 	private ResourceKey<Level> takeoverDimension;
 	private boolean defaultEntityPhysicsEnabled = true;
 	private boolean defaultDebugOverlays;
@@ -93,15 +100,131 @@ public final class FluidSimulationService {
 		worldBridgeFeatureEnabled = serverConfig.worldBridgeEnabled();
 		regionManager = new FluidRegionManager(serverConfig.limits());
 		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, materialFeatureEnabled);
+		containerTransfers = new ContainerTransferStore(worldRoot);
 		if (configurationLocked) regionOperations.recordIssue(
 				"server.properties 不可用，已安全使用默认预算并关闭控制器；原文件未覆盖");
 		ownershipIssues = regionOperations.scanOwnershipIssues();
 		for (String issue : ownershipIssues) RealWaterMod.LOGGER.error("Real Water world ownership issue: {}", issue);
 	}
 
+	ContainerTransferStore containerTransfers() {
+		return containerTransfers;
+	}
+
+	long committedRegionGeneration(UUID regionId) throws IOException {
+		return regionOperations.committedGeneration(regionId);
+	}
+
+	long checkpointControllerRegion(FluidRegion region) throws IOException {
+		return regionOperations.checkpoint(region);
+	}
+
+	boolean hasPendingContainerTransfer(UUID regionId) {
+		try {
+			for (UUID transactionId : containerTransfers.listTransactions()) {
+				try {
+					if (containerTransfers.read(transactionId).regionId().equals(regionId)) return true;
+				} catch (IOException unreadable) {
+					return true;
+				}
+			}
+			return false;
+		} catch (IOException listingFailure) {
+			return true;
+		}
+	}
+
+	public void recoverContainerTransfers(MinecraftServer server) {
+		try {
+			if (!containerTransfers.hasAny()) return;
+			for (UUID transactionId : containerTransfers.listTransactions()) {
+				processContainerTransfer(server, transactionId);
+			}
+		} catch (IOException exception) {
+			RealWaterMod.LOGGER.error("Could not scan container transfer WALs", exception);
+		}
+	}
+
+	void cleanupContainerTransfers(MinecraftServer server) {
+		recoverContainerTransfers(server);
+	}
+
+	private void processContainerTransfer(MinecraftServer server, UUID transactionId) {
+		try {
+			ContainerTransferJournal journal = containerTransfers.read(transactionId);
+			long head = committedRegionGeneration(journal.regionId());
+			if (head == journal.baseGeneration()) {
+				containerTransfers.delete(transactionId);
+				RealWaterMod.LOGGER.warn("Discarded uncommitted container transfer WAL {} for region {}", transactionId, journal.regionId());
+			} else if (head == journal.targetGeneration()) {
+				if (applyAfterItem(server, journal)) {
+					containerTransfers.delete(transactionId);
+					RealWaterMod.LOGGER.warn("Converged container transfer WAL {} to the after item", transactionId);
+				}
+			} else {
+				RealWaterMod.LOGGER.error("Container transfer WAL {} is locked: region {} HEAD {} is neither base {} nor target {}",
+						transactionId, journal.regionId(), head, journal.baseGeneration(), journal.targetGeneration());
+			}
+		} catch (IOException | RuntimeException exception) {
+			RealWaterMod.LOGGER.error("Could not recover container transfer WAL {}", transactionId, exception);
+		}
+	}
+
+	private boolean applyAfterItem(MinecraftServer server, ContainerTransferJournal journal) {
+		ContainerTransferJournal.Actor actor = journal.actor();
+		return switch (actor.type()) {
+			case PLAYER_HAND -> applyAfterItemToPlayer(server, actor, journal);
+			case DISPENSER -> applyAfterItemToDispenser(server, actor, journal);
+		};
+	}
+
+	private boolean applyAfterItemToPlayer(
+			MinecraftServer server,
+			ContainerTransferJournal.Actor actor,
+			ContainerTransferJournal journal
+	) {
+		ServerPlayer player = server.getPlayerList().getPlayer(actor.playerId());
+		if (player == null) return false;
+		InteractionHand hand = "OFF_HAND".equals(actor.hand()) ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+		ItemStack current = player.getItemInHand(hand);
+		if (!fingerprintMatches(current, journal.beforeItem()) && !fingerprintMatches(current, journal.afterItem())) return false;
+		player.setItemInHand(hand, journal.afterItem().toStack());
+		player.getInventory().setChanged();
+		return true;
+	}
+
+	private boolean applyAfterItemToDispenser(
+			MinecraftServer server,
+			ContainerTransferJournal.Actor actor,
+			ContainerTransferJournal journal
+	) {
+		Identifier dimensionId = Identifier.tryParse(actor.actorDimensionId());
+		if (dimensionId == null) return false;
+		ServerLevel level = server.getLevel(ResourceKey.create(Registries.DIMENSION, dimensionId));
+		if (level == null || !(level.getBlockEntity(actor.dispenserPos()) instanceof DispenserBlockEntity dispenser)) return false;
+		ItemStack current = dispenser.getItem(actor.dispenserSlot());
+		if (!fingerprintMatches(current, journal.beforeItem()) && !fingerprintMatches(current, journal.afterItem())) return false;
+		dispenser.setItem(actor.dispenserSlot(), journal.afterItem().toStack());
+		dispenser.setChanged();
+		return true;
+	}
+
+	private static boolean fingerprintMatches(ItemStack stack, ContainerTransferJournal.ItemFingerprint fingerprint) {
+		try {
+			return ContainerTransferJournal.ItemFingerprint.of(stack).equals(fingerprint);
+		} catch (IllegalArgumentException invalid) {
+			return false;
+		}
+	}
+
+
+
 	public static FluidSimulationService get(MinecraftServer server) {
 		return SERVICES.computeIfAbsent(server, FluidSimulationService::new);
 	}
+
+
+
 
 	public static void removeServer(MinecraftServer server) {
 		FluidSimulationService service = SERVICES.remove(server);
@@ -749,6 +872,8 @@ public final class FluidSimulationService {
 
 	public void tick(MinecraftServer server) {
 		regionOperations.advanceTick();
+		cleanupContainerTransfers(server);
+
 		if (takeoverDimension != null) {
 			ServerLevel takeoverLevel = server.getLevel(takeoverDimension);
 			if (takeoverLevel != null) maintainTakeover(takeoverLevel);
@@ -821,6 +946,11 @@ public final class FluidSimulationService {
 	}
 
 	public boolean ensureRegionAvailable(ServerLevel level, FluidRegion region) {
+		if (hasPendingContainerTransfer(region.id())) {
+			region.setAvailabilityFailure("存在未完成容器转移 WAL；恢复完成后才能继续");
+			return false;
+		}
+
 		return regionOperations.ensureAvailable(
 				level, region, controllerFeatureEnabled, this::refreshCollisions, this::sendSnapshot,
 				FluidSimulationService::sendRegionRemoval
@@ -1002,7 +1132,7 @@ public final class FluidSimulationService {
 	}
 
 	private void checkpointForShutdown() {
-		regionOperations.checkpointForShutdown();
+		regionOperations.checkpointForShutdown(region -> !hasPendingContainerTransfer(region.id()));
 	}
 
 	public String status(MinecraftServer server) {

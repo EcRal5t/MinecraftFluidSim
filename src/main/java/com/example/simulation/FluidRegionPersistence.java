@@ -27,6 +27,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.UUID;
 
 /** Coordinates persistent controller state and its joint world-ownership transactions. */
 final class FluidRegionPersistence {
@@ -88,6 +89,11 @@ final class FluidRegionPersistence {
 		if (!region.recordPublishedCheckpoint(published)) throw new IOException("Published checkpoint was not accepted by the live region");
 		return published;
 	}
+
+	long committedGeneration(UUID regionId) throws IOException {
+		return files.committedGeneration(regionId);
+	}
+
 
 	/**
 	 * Joint acquire: samples no fluid state of its own — the caller has already captured markers.

@@ -12,6 +12,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Predicate;
+
 
 /** Persistence-backed availability and administration for regions; it never steps physics or changes world blocks. */
 final class FluidRegionOperations {
@@ -37,6 +39,7 @@ final class FluidRegionOperations {
 	List<String> issues() { return List.copyOf(issues); }
 	void recordIssue(String issue) { issues.add(issue); }
 	long checkpoint(FluidRegion region) throws IOException { return persistence.checkpoint(region); }
+	long committedGeneration(UUID regionId) throws IOException { return persistence.committedGeneration(regionId); }
 	void acquireOwnership(ServerLevel level, FluidRegion region) throws IOException { persistence.acquireOwnership(level, region); }
 	List<String> scanOwnershipIssues() { return persistence.scanOwnershipIssues(); }
 	List<String> recoverUnfinishedOwnership(MinecraftServer server) { return persistence.recoverUnfinishedOwnership(server); }
@@ -209,9 +212,14 @@ final class FluidRegionOperations {
 		}
 	}
 
-	void checkpointForShutdown() {
+	void checkpointForShutdown(Predicate<FluidRegion> shouldCheckpoint) {
 		for (FluidRegion region : manager.regions()) {
 			if (!region.controllerManaged() || !region.solverLoaded()) continue;
+			if (!shouldCheckpoint.test(region)) {
+				RealWaterMod.LOGGER.warn("Skipping shutdown checkpoint for controller region {} because a container transfer WAL is unresolved", region.id());
+				continue;
+			}
+
 			region.setPaused(true);
 			try {
 				long generation = persistence.checkpoint(region);

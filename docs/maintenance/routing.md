@@ -49,6 +49,8 @@
 | M6 部分桶合并配方 | `src/main/java/com/example/item/RealWaterRecipes.java`、`src/main/resources/data/realwater/recipe/partial_water_bucket_merge.json` | 动态配方：先填满一桶，溢出作为 recipe remainder 留在第二输入；精确账本由 `ContainerFluidLedger.mergeOutput/mergeRemainder` 结算 |
 
 | M6 桶入口（玩家/发射器） | `src/main/java/com/example/simulation/FluidTransferService.java`、`src/main/java/com/example/mixin/ItemStackMixin.java`、`RealWaterMod.java` 的 dispenser 注册 | worldBridge 门控；只拦截选中区域或目标在区域内；成功/失败都不得让原版水绕过 ledger；容器真值仍由账本/组件结算 |
+| M6 容器转移 WAL | `src/main/java/com/example/simulation/ContainerTransferJournal.java`、`ContainerTransferStore.java`、`FluidTransferService` 的 controller 路径 | 只用于 controller 区域玩家/发射器桶转移；PREPARED→solver 修改→REGION_COMMITTED→checkpoint→物品修改→清理；恢复按 region HEAD 对比 base/target，HEAD=base 丢弃、HEAD=target 收敛 after、其他锁定；玩家离线/发射器未加载保持 pending 并锁住新转移 |
+
 | takeover codec/files | `src/main/java/com/example/simulation/TakeoverJournalCodec.java`、`src/main/java/com/example/simulation/TakeoverJournalFiles.java` | v1 可读；未知/损坏/恢复失败锁住新 takeover |
 | 指令 transcript | `src/main/java/com/example/logging/RealWaterCommandLog.java`、`src/main/java/com/example/logging/CommandAuditFile.java` | 只做 UTF-8 观测；失败不得改变命令结果 |
 | protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 由材料门决定严格 v1 或严格 v2 + material capability；不做降级伪装 |
@@ -115,7 +117,8 @@
 | marker merge/split/长期分布 | `runFlipReseedingValidation` | 改 checkpoint/state 才加 persistence |
 | takeover 事务 | `runTakeoverJournalValidation` | 真实世界只在事务里程碑 smoke |
 | M6 ownership 事务/WAL/committed | `runM6OwnershipValidation` | 改 region-state 共享契约才加 persistence 门；真实世界只在事务里程碑 smoke |
-| M6 容器账本/换算/物品/桶入口 | `runM6ContainerValidation` | 改协议 payload 才加 protocol 门；新增 mixin/资源打包跑 EULA=false server；转移 WAL 落地后扩展本门 |
+| M6 容器账本/换算/物品/桶入口 | `runM6ContainerValidation` | 改协议 payload 才加 protocol 门；新增 mixin/资源打包跑 EULA=false server |
+| M6 容器转移 WAL | `runContainerTransferValidation` | 改恢复/actor 收敛才加 EULA=true server；真实崩溃收敛在 Smoke C |
 | transcript | `runCommandAuditValidation` | 命令包装变化且自动门不足才进服 |
 | GPU shader/dispatch/压力 | device 0 `--skip-large` | hierarchy/layout/capacity/大域性能才跑 64³ |
 | Vulkan device/queue/memory/lifecycle | device 0 快速门 + device 1 专项 | 双卡完整门只在发布里程碑 |

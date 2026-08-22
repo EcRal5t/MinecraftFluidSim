@@ -35,6 +35,7 @@ public final class RealWaterMod implements ModInitializer {
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			FluidSimulationService.recoverTakeoverBackup(server);
 			FluidSimulationService.recoverWorldOwnership(server);
+			FluidSimulationService.get(server).recoverContainerTransfers(server);
 		});
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
 			FluidSimulationService.get(server).restoreAirDemoScaffolding(server);
