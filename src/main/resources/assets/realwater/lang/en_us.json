@@ -1,8 +1,6 @@
 {
   "block.realwater.fluid_boundary": "Real Water Boundary",
   "block.realwater.fluid_controller": "Real Water Controller",
-  "block.realwater.fluid_proxy": "Fluid Ownership Proxy (solid, M6.0 prototype)",
-  "block.realwater.fluid_proxy_air": "Fluid Ownership Proxy (air-like, M6.0 prototype)",
   "message.realwater.controller.activated": "Controller region ready: %s interior blocks, %sx%sx%s dense bounds, %s required chunks. The read-only captured domain is paused.",
   "message.realwater.controller.selected": "Selected the existing controller region: %s interior blocks, %sx%sx%s dense bounds, %s required chunks. Its marker volume was preserved and availability was rechecked.",
   "message.realwater.controller.disabled": "Real Water controllers are disabled. An administrator must run /realwater controllers true.",

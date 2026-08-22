@@ -1,7 +1,6 @@
 package com.example;
 
 import com.example.block.RealWaterBlocks;
-import com.example.block.RealWaterPrototypeBlocks;
 import com.example.network.FluidProtocolServer;
 import com.example.simulation.FluidSimulationService;
 import com.example.simulation.ownership.OwnershipProtoStore;
@@ -19,7 +18,6 @@ public final class RealWaterMod implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		RealWaterBlocks.register();
-		RealWaterPrototypeBlocks.register();
 		FluidProtocolServer.register();
 		RealWaterCommands.register();
 		ServerTickEvents.END_SERVER_TICK.register(server -> FluidSimulationService.get(server).tick(server));

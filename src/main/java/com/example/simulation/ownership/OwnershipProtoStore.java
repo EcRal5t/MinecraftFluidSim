@@ -232,10 +232,11 @@ public final class OwnershipProtoStore {
 		) throws IOException {
 			ServerLevel level = requireLevel(dimensionId);
 			BlockPos position = BlockPos.of(block.packedPosition());
-			BlockState original = originalState(block);
+			originalState(block);
 			BlockState current = level.getBlockState(position);
 			if (current.isAir()) return OwnershipProtoTransaction.InspectOutcome.OWNED_AIR;
-			if (current.equals(original)) return OwnershipProtoTransaction.InspectOutcome.PREIMAGE_PRESENT;
+			// Any water level counts as vanilla water returning into owned air, matching restore occupancy.
+			if (current.is(Blocks.WATER)) return OwnershipProtoTransaction.InspectOutcome.PREIMAGE_PRESENT;
 			return OwnershipProtoTransaction.InspectOutcome.OCCUPIED;
 		}
 

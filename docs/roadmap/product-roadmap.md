@@ -85,13 +85,14 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
 
 ## M6：世界 ownership 与流体桥
 
-### M6.0 设计评审
+### M6.0 设计评审（已完成）
 
-- 最小原型比较代理占位方块与“空气 + 独立 registry”。
-- 评估方块机制、其他 Mod 可观察行为、失配恢复、存档成本和玩家编辑。
-- 冻结 ownership、region-state、原版方块替换和解除接管的共同代次/恢复状态机。
-
-完成条件：选择一条路线并记录拒绝另一条的证据、格式风险和迁移方案。未通过不得进入 M6.1。
+- 2026-08-22 选定**空气 + 独立 ownership registry** 路线；代理占位方块因活塞/爆炸/水流/落沙静默侵蚀、实心变体挡光挡通行、类空气变体无法承载邻居方块被拒绝。证据、冻结的共同状态机（LEGACY_CONTROLLER/PREPARED/OWNED_COMMITTED/RELEASING/LOCKED）、acquire 提交顺序（slot 验证 → WAL+WARNING → 世界修改 → HEAD 最后发布）、崩溃恢复按 committed generation 判定表、release 保守语义与格式边界见 [`../progress/m6.0-ownership-review.md`](../progress/m6.0-ownership-review.md)。
+- 仍约束 M6.1：
+  - 原版水流入 owned air（边界破口）需要显式策略；控制器闭合外壳是第一道防线，不得静默吸收。
+  - 持久 ownership 只走 controller 区域；dev takeover 保持瞬态语义。
+  - 不引入 section 独立提交：region-state 已按 section 分片、region 级原子代。
+  - 新配置门 `worldBridgeEnabled`（config v3），默认关闭，fail-closed。
 
 ### M6.1 世界桥与容器
 
@@ -143,6 +144,6 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
 
 ## 接下来三项
 
-1. M6.0 设计评审：最小原型比较代理占位方块与"空气 + 独立 registry"，冻结 ownership、region-state、原版方块替换和解除接管的共同代次/恢复状态机。
-2. 气体状态进存档前先做 region-state v3 格式迁移评审；当前 runtime-only 重建语义已量化记录。
-3. 液液界面锐化/逐顶点平滑转入渲染里程碑评估，实机视觉复看结果将作为基线证据。
+1. M6.1a ownership 核心：按 M6.0 冻结结果实现 config v3 `worldBridgeEnabled` 门、`RegionStateFiles` prepare/commit 分段、ownership WAL 与 controller acquire、启动 reconcile 与 LOCKED，形成无容器的 crash-safe 持久 ownership。
+2. M6.1b 容器：在 ownership 之上实现精确转移原语、部分桶/混合物容器、行为矩阵与跨持久域恢复。
+3. 气体状态进存档前先做 region-state v3 格式迁移评审；当前 runtime-only 重建语义已量化记录。液液界面锐化/逐顶点平滑转入渲染里程碑评估。
