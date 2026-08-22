@@ -4,6 +4,7 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.item.TooltipFlag;
 
 /**
@@ -24,6 +25,15 @@ public final class PartialWaterBucketItem extends Item {
 		Long value = stack.get(RealWaterComponents.WATER_VOLUME);
 		if (value == null || !ContainerFluidLedger.isPartialBucket(value)) return -1L;
 		return value;
+	}
+
+	/** Canonicalizes a nanovolume to a vanilla bucket, a vanilla water bucket or a partial bucket. */
+	public static ItemStack withVolume(long nanos) {
+		if (nanos <= 0L) return new ItemStack(Items.BUCKET);
+		if (nanos >= ContainerFluidLedger.NANOS_PER_BLOCK) return new ItemStack(Items.WATER_BUCKET);
+		ItemStack stack = new ItemStack(RealWaterItems.PARTIAL_WATER_BUCKET);
+		stack.set(RealWaterComponents.WATER_VOLUME, nanos);
+		return stack;
 	}
 
 	@Override

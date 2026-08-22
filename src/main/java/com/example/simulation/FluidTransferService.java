@@ -3,8 +3,6 @@ package com.example.simulation;
 import com.example.fluid.FlipFluidDomain;
 import com.example.item.ContainerFluidLedger;
 import com.example.item.PartialWaterBucketItem;
-import com.example.item.RealWaterComponents;
-import com.example.item.RealWaterItems;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.dispenser.BlockSource;
 import net.minecraft.network.chat.Component;
@@ -191,11 +189,7 @@ public final class FluidTransferService {
 
 	/** Canonicalizes to a vanilla bucket, a vanilla water bucket or a partial bucket. */
 	private static ItemStack withVolume(long nanos) {
-		if (nanos <= 0L) return new ItemStack(Items.BUCKET);
-		if (nanos >= ContainerFluidLedger.NANOS_PER_BLOCK) return new ItemStack(Items.WATER_BUCKET);
-		ItemStack stack = new ItemStack(RealWaterItems.PARTIAL_WATER_BUCKET);
-		stack.set(RealWaterComponents.WATER_VOLUME, nanos);
-		return stack;
+		return PartialWaterBucketItem.withVolume(nanos);
 	}
 
 	private record TransferOutcome(boolean transferred, boolean filled, ItemStack stack, String message) { }

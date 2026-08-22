@@ -3,6 +3,7 @@ package com.example;
 import com.example.block.RealWaterBlocks;
 import com.example.item.RealWaterComponents;
 import com.example.item.RealWaterItems;
+import com.example.item.RealWaterRecipes;
 import com.example.network.FluidProtocolServer;
 import com.example.simulation.FluidSimulationService;
 import com.example.simulation.FluidTransferService;
@@ -26,6 +27,7 @@ public final class RealWaterMod implements ModInitializer {
 		RealWaterBlocks.register();
 		RealWaterComponents.register();
 		RealWaterItems.register();
+		RealWaterRecipes.register();
 		registerDispenserBehaviors();
 		FluidProtocolServer.register();
 		RealWaterCommands.register();

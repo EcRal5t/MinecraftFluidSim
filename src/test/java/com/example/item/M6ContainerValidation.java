@@ -119,6 +119,20 @@ public final class M6ContainerValidation {
 		check(!ContainerFluidLedger.isPartialBucket(-1L) && !ContainerFluidLedger.isPartialBucket(BUCKET + 1L),
 				"invalid component values are not partial buckets");
 
+		check(ContainerFluidLedger.mergeOutput(BUCKET / 2L, BUCKET / 2L) == BUCKET,
+				"two halves merge into one full bucket");
+		check(ContainerFluidLedger.mergeRemainder(BUCKET / 2L, BUCKET / 2L) == 0L,
+				"exact full merge leaves no remainder");
+		check(ContainerFluidLedger.mergeOutput(BUCKET / 2L, BUCKET * 3L / 4L) == BUCKET,
+				"overfull merge still caps at one full bucket");
+		check(ContainerFluidLedger.mergeRemainder(BUCKET / 2L, BUCKET * 3L / 4L) == BUCKET / 4L,
+				"overflow stays as the recipe remainder");
+		check(ContainerFluidLedger.mergeOutput(BUCKET / 4L, BUCKET / 4L) == BUCKET / 2L,
+				"two quarter buckets merge into one half bucket");
+		check(ContainerFluidLedger.mergeRemainder(BUCKET / 4L, BUCKET / 4L) == 0L,
+				"underfull merge leaves no remainder");
+
+
 		check(ContainerFluidLedger.barWidth(0L) == 1, "empty volume shows the minimum bar");
 		check(ContainerFluidLedger.barWidth(BUCKET) == 13, "a full volume shows the maximum bar");
 		check(ContainerFluidLedger.barWidth(BUCKET / 2L) == 7, "half volume rounds to a 7-segment bar");

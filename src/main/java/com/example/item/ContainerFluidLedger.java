@@ -63,6 +63,18 @@ public final class ContainerFluidLedger {
 		return nanos == NANOS_PER_BLOCK;
 	}
 
+	/** Exact two-bucket merge: the output is filled up to one bucket, the rest stays as remainder. */
+	public static long mergeOutput(long firstNanos, long secondNanos) {
+		requireNonNegative(firstNanos);
+		requireNonNegative(secondNanos);
+		return Math.min(Math.addExact(firstNanos, secondNanos), NANOS_PER_BLOCK);
+	}
+
+	public static long mergeRemainder(long firstNanos, long secondNanos) {
+		return Math.addExact(firstNanos, secondNanos) - mergeOutput(firstNanos, secondNanos);
+	}
+
+
 	/** Read-only durability-bar width for a partial volume; invalid volumes show the minimum. */
 	public static int barWidth(long nanos) {
 		if (nanos <= 0L) return 1;
