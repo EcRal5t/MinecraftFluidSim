@@ -55,7 +55,7 @@ public final class FluidTransferService {
 		if (outcome.transferred()) {
 			player.setItemInHand(hand, outcome.stack());
 			level.playSound(null, player.getX(), player.getY() + 1.0, player.getZ(),
-					outcome.filled() ? SoundEvents.BUCKET_FILL : SoundEvents.BUCKET_EMPTY,
+					outcome.filled() ? SoundEvents.BUCKET_EMPTY : SoundEvents.BUCKET_FILL,
 					SoundSource.BLOCKS, 1.0F, 1.0F);
 			return InteractionResult.SUCCESS;
 		}
@@ -98,6 +98,10 @@ public final class FluidTransferService {
 		if (cell == null) return null;
 		TransferOutcome outcome = pourIntoCell(service, region, cell, volume);
 		if (!outcome.transferred()) return new TransferOutcome(false, true, held, outcome.message());
+		if (player.hasInfiniteMaterials() && held.is(Items.WATER_BUCKET)) {
+			service.sendSnapshotFor(player);
+			return new TransferOutcome(true, true, held.copy(), outcome.message());
+		}
 		service.sendSnapshotFor(player);
 		return outcome;
 	}
@@ -111,6 +115,14 @@ public final class FluidTransferService {
 		if (cell == null) return null;
 		TransferOutcome outcome = scoopFromCell(service, region, cell, capacity, heldBaseVolumeNanos(held));
 		if (!outcome.transferred()) return new TransferOutcome(false, false, held, outcome.message());
+		if (player.hasInfiniteMaterials() && held.is(Items.BUCKET)) {
+			ItemStack filled = outcome.stack();
+			if (!player.getInventory().contains(filled)) {
+				player.getInventory().add(filled);
+			}
+			service.sendSnapshotFor(player);
+			return new TransferOutcome(true, false, held.copy(), outcome.message());
+		}
 		service.sendSnapshotFor(player);
 		return outcome;
 	}
