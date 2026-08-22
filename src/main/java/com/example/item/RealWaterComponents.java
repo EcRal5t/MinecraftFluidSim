@@ -17,6 +17,10 @@ import net.minecraft.resources.ResourceKey;
 public final class RealWaterComponents {
 	/** Exact pure-water volume in nanovolume quanta; strictly between empty and one bucket. */
 	public static final DataComponentType<Long> WATER_VOLUME = register("water_volume");
+	/** Exact material-container volume in nanovolume quanta; between empty and one bucket. */
+	public static final DataComponentType<Long> FLUID_VOLUME = register("fluid_volume");
+	/** Stable material id carried by a Real Water material container. */
+	public static final DataComponentType<String> MATERIAL_ID = registerString("material_id");
 
 	private RealWaterComponents() { }
 
@@ -28,5 +32,11 @@ public final class RealWaterComponents {
 		ResourceKey<DataComponentType<?>> key = ResourceKey.create(Registries.DATA_COMPONENT_TYPE, RealWaterMod.id(path));
 		return Registry.register(BuiltInRegistries.DATA_COMPONENT_TYPE, key,
 				DataComponentType.<Long>builder().persistent(Codec.LONG).networkSynchronized(ByteBufCodecs.VAR_LONG).build());
+	}
+
+	private static DataComponentType<String> registerString(String path) {
+		ResourceKey<DataComponentType<?>> key = ResourceKey.create(Registries.DATA_COMPONENT_TYPE, RealWaterMod.id(path));
+		return Registry.register(BuiltInRegistries.DATA_COMPONENT_TYPE, key,
+				DataComponentType.<String>builder().persistent(Codec.STRING).networkSynchronized(ByteBufCodecs.STRING_UTF8).build());
 	}
 }

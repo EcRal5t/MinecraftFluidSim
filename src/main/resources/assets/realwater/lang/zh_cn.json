@@ -3,6 +3,8 @@
   "block.realwater.fluid_controller": "真实水体控制器",
   "item.realwater.partial_water_bucket": "部分水桶",
   "item.realwater.partial_water_bucket.volume": "水量 %s",
+  "item.realwater.material_bucket": "真实水体材料桶",
+  "item.realwater.material_bucket.volume": "%s %s",
   "message.realwater.controller.activated": "控制器区域已就绪：%s 个内部方块，致密范围 %sx%sx%s，关联 %s 个完整加载区块；只读捕获域当前暂停。",
   "message.realwater.controller.selected": "已选择现有控制器区域：%s 个内部方块，致密范围 %sx%sx%s，关联 %s 个区块；保留原 marker 水量，并重新检查可用性。",
   "message.realwater.controller.disabled": "真实水体控制器功能门尚未开启；管理员需先执行 /realwater controllers true。",

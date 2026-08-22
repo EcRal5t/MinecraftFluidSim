@@ -45,7 +45,7 @@
 | M6 世界 ownership 事务 | `src/main/java/com/example/simulation/ownership/` | prepare→WAL→WARNING→世界修改→region HEAD 最后发布→committed 重建；恢复按 region HEAD 对比 WAL base/target 判定；玩家方块优先；不碰 takeover-journal v1 |
 | M6 容器纳体积账本 | `src/main/java/com/example/item/ContainerFluidLedger.java` | 容器真值是 long 纳体积（1 BV=1e9）；换算半量子内舍入、漂移有界并记录，不用 damage/density 结算 |
 | M6 精确转移原语 | `src/main/java/com/example/fluid/FlipFluidDomain.java` 的 `tryInsertExactVolume`/`tryExtractExactVolume` | all-or-nothing；insert 先规划后落子、refuse 零残留；extract 双精度可用性预检+整 marker+尾拆分；返回精确 double 实际量，由服务层换算量子 |
-| M6 容器物品/组件 | `src/main/java/com/example/item/RealWaterComponents.java`、`PartialWaterBucketItem.java`、`RealWaterItems.java` | `water_volume` 组件是容器真值（partial ∈ (0,1BV)）；耐久条/tooltip 只读；满/空在服务层规范化为原版桶 |
+| M6 容器物品/组件 | `src/main/java/com/example/item/RealWaterComponents.java`、`PartialWaterBucketItem.java`、`MaterialBucketItem.java`、`RealWaterItems.java` | `water_volume`/`fluid_volume` 组件是容器真值；`material_id` 是稳定材料键（运行时才解析 handle）；耐久条/tooltip 只读；满/空在服务层规范化为原版桶 |
 | M6 部分桶合并配方 | `src/main/java/com/example/item/RealWaterRecipes.java`、`src/main/resources/data/realwater/recipe/partial_water_bucket_merge.json` | 动态配方：先填满一桶，溢出作为 recipe remainder 留在第二输入；精确账本由 `ContainerFluidLedger.mergeOutput/mergeRemainder` 结算 |
 
 | M6 桶入口（玩家/发射器） | `src/main/java/com/example/simulation/FluidTransferService.java`、`src/main/java/com/example/mixin/ItemStackMixin.java`、`RealWaterMod.java` 的 dispenser 注册 | worldBridge 门控；只拦截选中区域或目标在区域内；成功/失败都不得让原版水绕过 ledger；容器真值仍由账本/组件结算 |

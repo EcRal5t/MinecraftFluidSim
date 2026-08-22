@@ -16,6 +16,8 @@ import net.minecraft.world.item.Item;
 public final class RealWaterItems {
 	public static final Item PARTIAL_WATER_BUCKET = register("partial_water_bucket",
 			properties -> new PartialWaterBucketItem(properties.stacksTo(1).useItemDescriptionPrefix()));
+	public static final Item MATERIAL_BUCKET = register("material_bucket",
+			properties -> new MaterialBucketItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 
 	private RealWaterItems() { }
 
