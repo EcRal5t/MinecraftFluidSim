@@ -43,6 +43,7 @@ final class FluidRegionOperations {
 	void acquireOwnership(ServerLevel level, FluidRegion region) throws IOException { persistence.acquireOwnership(level, region); }
 	List<String> scanOwnershipIssues() { return persistence.scanOwnershipIssues(); }
 	List<String> recoverUnfinishedOwnership(MinecraftServer server) { return persistence.recoverUnfinishedOwnership(server); }
+	String ownershipLockDescription(FluidRegion region) { return persistence.ownershipLockDescription(region); }
 
 	String ownershipSummary(MinecraftServer server, FluidRegion region) {
 		return persistence.ownershipSummary(server, region);
@@ -59,6 +60,12 @@ final class FluidRegionOperations {
 		if (!region.controllerManaged()) {
 			region.setAvailabilityFailure(null);
 			return true;
+		}
+		String ownershipLock = persistence.ownershipLockDescription(region);
+		if (ownershipLock != null) {
+			region.setPaused(true);
+			region.setAvailabilityFailure("存在未解决 ownership 状态；恢复完成前不能运行或 checkpoint：" + ownershipLock);
+			return false;
 		}
 		String failure = controllersEnabled
 				? com.example.simulation.controller.FluidControllerRegions.availabilityFailure(level, region.footprint())
@@ -199,6 +206,12 @@ final class FluidRegionOperations {
 		if (region == null) return "没有选中区域";
 		if (!region.controllerManaged()) return "开发命令区域不写入 region-state";
 		if (!region.solverLoaded()) return "区域已是 metadata-only UNLOADED；checkpoint " + region.checkpointGeneration();
+		String ownershipLock = persistence.ownershipLockDescription(region);
+		if (ownershipLock != null) {
+			region.setPaused(true);
+			region.setAvailabilityFailure("存在未解决 ownership 状态；拒绝 checkpoint：" + ownershipLock);
+			return region.availabilityFailure();
+		}
 		region.setPaused(true);
 		try {
 			long generation = persistence.checkpoint(region);

@@ -13,19 +13,21 @@
 
 M6 最终审查还修复了：首次 publication staging 残留、prepare 失败未 abort、unknown/corrupt ownership 布局被过度恢复、旧 v1 材料 WAL 缺失独立质量却可能被接受、材料桶只保存总体材料、桶转移错误依赖选区、运行区域转移后被错误暂停、stacked empty bucket 可能丢物，以及 Gradle `check` 对非 JUnit validation main 的错误“无测试”失败。
 
+关闭后的独立代码复核确认并修复了五个遗漏：非 float 友好桶量曾按请求而非实际 marker 变化结算；已加载 controller 曾可绕过 ownership sidecar 锁继续步进/checkpoint；极端组件质量之和可溢出；正 double 但转为零 float 的材料体积可生成零体积 marker；未解容器 WAL 会逐 tick 重复写 ERROR。当前服务层采用向下 float 规划和实际量结算，WAL 的 committed 量与 before/after 物品差一致，材料余量逐组件保留，所有普通 checkpoint 由持久化边界统一检查 ownership 锁，重复锁日志按状态去重。
+
 ## 自动与启动门
 
 关闭前运行一次完整 CPU 回归（2026-08-23，约 1 分 15 秒），覆盖 `check`、当前 solver/free-surface/cut-cell/reseeding、M3/M4/M5、manager/lifecycle/controller、protocol、persistence、takeover、ownership 与容器相关 JavaExec 门，全部通过。最终受影响层的定向结果：
 
 | 门 | 结果 |
 |---|---|
-| `runM6ContainerValidation` | 9 组通过：量化/规范化、组件 codec、混合体积+独立质量、stack/creative/target/dispenser、tooltip 所依赖数据契约 |
-| `runContainerTransferValidation` | 10 组通过：WAL v2、v1 兼容边界、HEAD 决策、actor 收敛、严格 store 扫描与故障恢复 |
+| `runM6ContainerValidation` | 10 组通过：量化/规范化、组件 codec、混合体积+独立质量、stack/creative/target/dispenser、tooltip 数据契约、极端质量和 sub-float 体积拒绝 |
+| `runContainerTransferValidation` | 13 组通过：WAL v2、v1 兼容边界、HEAD 决策、actor 收敛、严格 store 扫描与故障恢复、实际 marker 结算、逐材料余量、loaded ownership checkpoint 锁 |
 | `runM6OwnershipValidation` | 21 场景通过：prepare/abort/staging、PRE/POST-COMMIT、release、玩家优先、启动次序、unknown/corrupt/代次失配锁定 |
 | `runFluidRegionPersistenceValidation` | 分段检查点、v1/v2 与 config v3 迁移通过 |
 | `runM3ConnectedVesselValidation` | 多材料体积/质量与变密度连通器回归通过 |
 | `clean assemble compileTestJava check` | Java 25 clean release 构建通过 |
-| EULA=false dedicated server | Minecraft 26.2、Fabric Loader 0.19.3、主 Mod 与可选 GPU probe 完成加载/入口启动，然后按原版 EULA 门正常停止 |
+| Dedicated server 启动 | Minecraft 26.2、Fabric Loader 0.19.3、主 Mod 与可选 GPU probe 完成加载/入口启动；当前服务器已接受 EULA，启动门须进入世界后用 `stop` 正常退出 |
 
 ## 实机 Smoke C（用户于 2026-08-23 签收）
 

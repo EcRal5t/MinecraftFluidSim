@@ -379,10 +379,10 @@ long afterMaterial = materialVolume(journal.afterItem());
 boolean prepared = journal.phase() == ContainerTransferJournal.Phase.PREPARED;
 boolean valid;
 if (journal.operation() == ContainerTransferJournal.Operation.INSERT) {
-boolean pure = beforePure == amount && beforePure > 0L
-&& (prepared || afterPure == 0L || journal.afterItem().equals(journal.beforeItem()));
-boolean material = beforeMaterial == amount && beforeMaterial > 0L
-&& (prepared || afterMaterial == 0L || journal.afterItem().equals(journal.beforeItem()));
+boolean pure = beforePure >= amount && beforePure > 0L
+&& (prepared || afterPure == beforePure - amount || journal.afterItem().equals(journal.beforeItem()));
+boolean material = beforeMaterial >= amount && beforeMaterial > 0L
+&& (prepared || afterMaterial == beforeMaterial - amount || journal.afterItem().equals(journal.beforeItem()));
 valid = pure || material;
 } else {
 boolean pure = beforePure >= 0L && beforePure <= bucket - amount

@@ -330,8 +330,8 @@ OwnershipCommit
 | 改动 | 默认跑 | 升级条件 |
 |---|---|---|
 | ownership 状态机/journal | `runM6OwnershipStateMachineValidation` | 改 region-state 才加 `runFluidRegionPersistenceValidation` |
-| 容器账本/数据组件/配方 | `runM6ContainerValidation` | 改正式世界入口/协议才加 `runFluidNetworkProtocolValidation` 或 EULA=false server |
-| ownership 方块/世界放置/邻居更新 | 自动门无法观察，使用 GameTest 或人工 smoke | 改 entrypoint/资源打包才加 EULA=false server |
+| 容器账本/数据组件/配方 | `runM6ContainerValidation` | 改正式世界入口/协议才加 `runFluidNetworkProtocolValidation` 或 EULA=true server 并正常 `stop` |
+| ownership 方块/世界放置/邻居更新 | 自动门无法观察，使用 GameTest 或人工 smoke | 改 entrypoint/资源打包才加 EULA=true server 并正常 `stop` |
 | 活动核心（流动耦合） | `runFlipFreeSurfaceValidation` | 改长期 marker 分布才加 reseeding 门 |
 | 文档 | 无 | 无代码/资源变化不构建 |
 

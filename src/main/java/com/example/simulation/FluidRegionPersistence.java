@@ -83,6 +83,10 @@ final class FluidRegionPersistence {
 
 	long checkpoint(FluidRegion region) throws IOException {
 		if (!region.controllerManaged() || !region.solverLoaded()) throw new IOException("Region has no persistent live solver");
+		String ownershipLock = ownershipLockDescription(region);
+		if (ownershipLock != null) {
+			throw new IOException("Unresolved world ownership state blocks checkpoint: " + ownershipLock);
+		}
 		long generation = Math.addExact(region.checkpointGeneration(), 1L);
 		long published = files.publish(region.domain().hasMaterialState()
 				? RegionState.captureMaterial(region, generation)
@@ -93,6 +97,30 @@ final class FluidRegionPersistence {
 
 	long committedGeneration(UUID regionId) throws IOException {
 		return files.committedGeneration(regionId);
+	}
+
+	/** Per-region fail-closed guard used for both loaded stepping and every ordinary checkpoint path. */
+	String ownershipLockDescription(FluidRegion region) {
+		if (!region.controllerManaged()) return null;
+		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
+		if (ownershipFiles.isLocked()) return ownershipFiles.lockDescription();
+		if (!ownershipFiles.hasCommitted()) return null;
+		try {
+			OwnershipCommitted committed = ownershipFiles.readCommitted();
+			if (!committed.regionId().equals(region.id())) {
+				return "committed ownership 记录了其他区域 " + committed.regionId();
+			}
+			if (!committed.dimensionId().equals(region.dimension().identifier().toString())) {
+				return "committed ownership 维度与区域不一致";
+			}
+			if (committed.generation() > region.checkpointGeneration()) {
+				return "committed ownership generation " + committed.generation()
+						+ " 超前于活动区域 checkpoint " + region.checkpointGeneration();
+			}
+			return null;
+		} catch (IOException | RuntimeException invalid) {
+			return "ownership committed 状态不可读：" + invalid.getMessage();
+		}
 	}
 
 

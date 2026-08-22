@@ -78,6 +78,9 @@ public final class FluidSimulationService {
 	private final ContainerTransferStore containerTransfers;
 	/** Transactions which changed the live solver but have not yet proved a committed region HEAD. */
 	private final Set<UUID> runtimeDirtyContainerTransfers = new HashSet<>();
+	/** Prevents an unresolved WAL from emitting the same ERROR every server tick. */
+	private final Map<UUID, String> reportedContainerTransferLocks = new HashMap<>();
+	private Set<String> reportedContainerTransferStoreIssues = Set.of();
 	private ContainerTransferFaultPoint containerTransferFault = ContainerTransferFaultPoint.NONE;
 	private ResourceKey<Level> takeoverDimension;
 	private boolean defaultEntityPhysicsEnabled = true;
@@ -197,11 +200,17 @@ public final class FluidSimulationService {
 		try {
 			ContainerTransferStore.Scan scan = containerTransfers.scan();
 			if (!scan.issues().isEmpty()) {
+				Set<String> currentIssues = Set.copyOf(scan.issues());
 				for (String issue : scan.issues()) {
-					RealWaterMod.LOGGER.error("Container-transfer recovery store is globally LOCKED: {}", issue);
+					if (!reportedContainerTransferStoreIssues.contains(issue)) {
+						RealWaterMod.LOGGER.error("Container-transfer recovery store is globally LOCKED: {}", issue);
+					}
 				}
+				reportedContainerTransferStoreIssues = currentIssues;
 				return;
 			}
+			reportedContainerTransferStoreIssues = Set.of();
+			reportedContainerTransferLocks.keySet().retainAll(new HashSet<>(scan.transactions()));
 			for (UUID transactionId : scan.transactions()) {
 				processContainerTransfer(server, transactionId);
 			}
@@ -222,31 +231,42 @@ public final class FluidSimulationService {
 					head, journal, runtimeDirtyContainerTransfers.contains(transactionId));
 			switch (decision) {
 				case LOCK_LIVE_SOLVER_DIRTY -> {
-					RealWaterMod.LOGGER.error(
-							"Container transfer WAL {} remains locked: its live solver changed but region {} HEAD is still {}; restart is required to restore the base checkpoint",
-							transactionId, journal.regionId(), head);
+					logContainerTransferLockOnce(transactionId,
+							"Container transfer WAL " + transactionId + " remains locked: its live solver changed but region "
+									+ journal.regionId() + " HEAD is still " + head
+									+ "; restart is required to restore the base checkpoint");
 				}
 				case DISCARD_UNCOMMITTED -> {
-				containerTransfers.delete(transactionId);
-				RealWaterMod.LOGGER.warn("Discarded uncommitted container transfer WAL {} for region {}", transactionId, journal.regionId());
+					containerTransfers.delete(transactionId);
+					reportedContainerTransferLocks.remove(transactionId);
+					RealWaterMod.LOGGER.warn("Discarded uncommitted container transfer WAL {} for region {}", transactionId, journal.regionId());
 				}
 				case CONVERGE_AFTER_ITEM -> {
 				if (applyAfterItem(server, journal)) {
 					persistAfterItem(server, journal);
-					adoptRecoveredContainerCheckpoint(journal);
-					containerTransfers.delete(transactionId);
-					RealWaterMod.LOGGER.warn("Converged container transfer WAL {} to a durably saved after item", transactionId);
+						adoptRecoveredContainerCheckpoint(journal);
+						containerTransfers.delete(transactionId);
+						reportedContainerTransferLocks.remove(transactionId);
+						RealWaterMod.LOGGER.warn("Converged container transfer WAL {} to a durably saved after item", transactionId);
+					}
 				}
-				}
-				case LOCK_TARGET_WITHOUT_AFTER_ITEM -> RealWaterMod.LOGGER.error(
-						"Container transfer WAL {} is locked: region {} HEAD committed target {}, but WAL phase {} contains no authoritative after-item",
-						transactionId, journal.regionId(), head, journal.phase());
-				case LOCK_GENERATION_MISMATCH ->
-				RealWaterMod.LOGGER.error("Container transfer WAL {} is locked: region {} HEAD {} is neither base {} nor target {}",
-						transactionId, journal.regionId(), head, journal.baseGeneration(), journal.targetGeneration());
+				case LOCK_TARGET_WITHOUT_AFTER_ITEM -> logContainerTransferLockOnce(transactionId,
+						"Container transfer WAL " + transactionId + " is locked: region " + journal.regionId()
+								+ " HEAD committed target " + head + ", but WAL phase " + journal.phase()
+								+ " contains no authoritative after-item");
+				case LOCK_GENERATION_MISMATCH -> logContainerTransferLockOnce(transactionId,
+						"Container transfer WAL " + transactionId + " is locked: region " + journal.regionId()
+								+ " HEAD " + head + " is neither base " + journal.baseGeneration()
+								+ " nor target " + journal.targetGeneration());
 			}
 		} catch (IOException | RuntimeException exception) {
 			RealWaterMod.LOGGER.error("Could not recover container transfer WAL {}", transactionId, exception);
+		}
+	}
+
+	private void logContainerTransferLockOnce(UUID transactionId, String message) {
+		if (!message.equals(reportedContainerTransferLocks.put(transactionId, message))) {
+			RealWaterMod.LOGGER.error(message);
 		}
 	}
 

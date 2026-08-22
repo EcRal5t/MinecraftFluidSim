@@ -25,14 +25,19 @@ public record FluidMixture(List<Component> components) {
 		canonical.sort(Comparator.comparing(Component::materialId));
 		Set<String> ids = new HashSet<>();
 		long totalVolume = 0L;
+		double totalMass = 0.0;
 		for (Component component : canonical) {
 			if (!ids.add(component.materialId())) {
 				throw new IllegalArgumentException("Duplicate fluid-mixture material " + component.materialId());
 			}
 			totalVolume = Math.addExact(totalVolume, component.volumeNanos());
+			totalMass += component.mass();
 		}
 		if (totalVolume > ContainerFluidLedger.NANOS_PER_BLOCK) {
 			throw new IllegalArgumentException("Fluid mixture exceeds one bucket");
+		}
+		if (!(Double.isFinite(totalMass) && totalMass > 0.0)) {
+			throw new IllegalArgumentException("Fluid mixture total mass must be finite and positive");
 		}
 		components = List.copyOf(canonical);
 	}
@@ -61,7 +66,7 @@ public record FluidMixture(List<Component> components) {
 					.append(Long.toUnsignedString(component.massBits(), 16));
 		}
 		if (result.length() > MAX_ENCODED_LENGTH) {
-			throw new IllegalStateException("Fluid-mixture handle exceeds the persisted component limit");
+			throw new IllegalArgumentException("Fluid-mixture handle exceeds the persisted component limit");
 		}
 		return result.toString();
 	}

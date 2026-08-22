@@ -92,7 +92,7 @@
 | CPU 变密度面系数实验 | `runVariableDensityFaceCoefficientValidation` | 将来接入活动 3D 核心时再升级到 `FlipFluidDomainValidation`、M2.5 分数界面门和 M3 连通器门 |
 | CPU 区域登记、容量、运行态、独立 tick 或选择逻辑 | manager 改动跑 `runFluidRegionManagerValidation`；lifecycle/tick 改动跑 `runFluidRegionLifecycleValidation` | 同时跨越两者共享状态才合跑；涉及持久 ownership 再加 persistence |
 | `region-state`、server config、checkpoint、UNLOADED 或删除 | `runFluidRegionPersistenceValidation` | 同时改 manager/lifecycle 所有权才补对应门；真实重启闭环只在里程碑 smoke |
-| 网络协议、payload header、capability 或客户端排序 | `runFluidNetworkProtocolValidation` | 改 Fabric 配置/入口注册再跑 EULA=false `:runServer`；真实多人/重连渲染只有需要时进服 |
+| 网络协议、payload header、capability 或客户端排序 | `runFluidNetworkProtocolValidation` | 改 Fabric 配置/入口注册再跑 EULA=true `:runServer` 并正常 `stop`；真实多人/重连渲染只有需要时进服 |
 | 控制器、边界扫描、footprint 或完整加载判定 | `runFluidBoundaryScannerValidation` | 同时改 admission/budget 才加 manager；真实交互只在里程碑 smoke |
 | CPU 压力、自由表面、MAC 速度外推或体积漂移约束 | `runFlipFreeSurfaceValidation` | 只有改长期 marker 分布才加 reseeding 长门；活动核心广泛改写或里程碑关闭才跑 domain benchmark/surface diagnostic |
 | runtime cut-cell、partial `VoxelShape`、face aperture 或 CCD | solver 几何/CCD 跑 `runFlipCutCellValidation`；Minecraft shape adapter 跑 `runFluidCutCellShapeValidation` | 同时改压力共享面才加 free-surface；改 checkpoint fallback 才加 persistence；真实 smoke 不重复已签收的 M2.5 清单 |
@@ -102,7 +102,7 @@
 | GPU shader、dispatch、压力数值 | RTX 5070 Ti `--skip-large` 快速门；长期表面相关先跑 `runGpuLongRunSurfaceValidation` | hierarchy、容量、buffer 布局或 64³ 性能变化才跑完整 device 0 |
 | GPU occupancy 性能矩阵 | RTX 5070 Ti `runGpuOccupancyBenchmark` | 仅重测 break-even 或发布相关性能结论时运行；不因普通代码改动重复，且不据此切正式后端 |
 | 设备选择、queue family、显存类型、Vulkan 生命周期 | device 0 快速门 + device 1 对应专项 | 发布里程碑才做双卡完整门 |
-| entrypoint、依赖、资源路径、环境注解 | 主 Mod 用 `:runServer`，probe 用 `:gpu-probe:runServer`，保持 `eula=false` | 客户端渲染/握手或命令打包变化且自动门不足时再请求进服 smoke |
+| entrypoint、依赖、资源路径、环境注解 | 主 Mod 用 `:runServer`，probe 用 `:gpu-probe:runServer`，使用已接受 EULA 的运行目录并正常 `stop` | 客户端渲染/握手或命令打包变化且自动门不足时再请求进服 smoke |
 
 执行规则：文档改动不跑代码门；定向 Gradle task 已隐式编译其依赖，不另加重复的 `compileJava/compileTestJava`；5,000 步、性能 benchmark、clean build 和人工 smoke 都不是日常每提交门。新增覆盖优先扩展最近的现有小门，不为相同不变量堆叠一套新测试程序。人工验证每次只回答一个自动化无法观察的问题，旧场景不累计重演。
 

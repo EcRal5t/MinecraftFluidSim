@@ -1141,7 +1141,7 @@ M7: integrate conservative chemical marker transport
 runM7ChemicalPersistenceValidation
 ```
 
-它可复用/扩展 `runFluidRegionPersistenceValidation` fixture，但职责和 fault matrix 已显著扩大时应独立 task。改服务器配置/资源 reload 注册后再跑一次 EULA=false dedicated-server startup。
+它可复用/扩展 `runFluidRegionPersistenceValidation` fixture，但职责和 fault matrix 已显著扩大时应独立 task。改服务器配置/资源 reload 注册后再跑一次 EULA=true dedicated-server startup，并用 `stop` 正常退出。
 
 推荐提交：
 
@@ -1193,7 +1193,7 @@ runFluidNetworkProtocolValidation
 runM7IndicatorValidation
 ```
 
-改 payload/entrypoint/item/resource 注册后跑 EULA=false startup。只有颜色和真实交互自动门无法观察时才请求用户进游戏。
+改 payload/entrypoint/item/resource 注册后跑 EULA=true startup，并用 `stop` 正常退出。只有颜色和真实交互自动门无法观察时才请求用户进游戏。
 
 推荐提交：
 
@@ -1455,7 +1455,7 @@ README.md
 - [ ] 100 BV indicator 添加与大连通 eraser 语义已通过；
 - [ ] chemistry-off M0–M6 回归和 v1/v2 golden bytes 通过；
 - [ ] 典型小域没有新增无界 REDUCED/PAUSED；
-- [ ] EULA=false registration startup 通过；需要 actor durable save 时 EULA=true 专项通过；
+- [ ] EULA=true registration startup 与正常 `stop` 通过；需要 actor durable save 时再进入对应专项场景；
 - [ ] 两个 M7 实机 smoke 通过，或明确证明无需人工观察；
 - [ ] architecture/routing/progress/roadmap/README 已同步；
 - [ ] clean build、版本、部署 JAR 与 SHA-256 已记录。

@@ -869,6 +869,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		if (available < volume) return new ExactMixtureTransfer(false, List.of());
 
 		double remaining = volume;
+		double settlementTolerance = Math.ulp(volume);
 		java.util.List<ExtractionAllocation> plan = new java.util.ArrayList<>();
 		int ledgerSize = materialRegistry == null ? 1 : materialRegistry.size();
 		double[] volumeBefore = new double[ledgerSize];
@@ -889,6 +890,14 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				double take = Math.min(previousVolume, remaining);
 				float newVolume = (float) (previousVolume - take);
 				double actual = previousVolume - newVolume;
+				// A nearest-float remainder may round downward and remove more than requested.
+				// Keep the authoritative marker delta at or below the caller's remaining cap;
+				// a later marker can settle any still-representable remainder.
+				if (actual > remaining && newVolume < previousVolume) {
+					newVolume = Math.nextUp(newVolume);
+					actual = previousVolume - newVolume;
+					settlementTolerance = Math.max(settlementTolerance, Math.ulp(previousVolume));
+				}
 				if (actual <= 0.0) continue;
 				double previousMass = particleMass[i];
 				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
@@ -898,7 +907,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				remaining -= actual;
 			}
 		}
-		if (remaining > Math.ulp(volume)) return new ExactMixtureTransfer(false, List.of());
+		if (remaining > settlementTolerance) return new ExactMixtureTransfer(false, List.of());
 		for (ExtractionAllocation allocation : plan) {
 			particleVolume[allocation.particle()] = allocation.newVolume();
 			particleMass[allocation.particle()] = allocation.newMass();
@@ -1839,6 +1848,7 @@ private void spawnParticle(
 int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass
 ) {
 if (particleCount >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
+if (!(Float.isFinite(amount) && amount > 0.0F)) throw new IllegalArgumentException("Marker volume must be finite and positive");
 if (!(Double.isFinite(mass) && mass > 0.0)) throw new IllegalArgumentException("Marker mass must be finite and positive");
 ensureParticleCapacity(particleCount + 1);
 float h = config.cellSize();
@@ -2047,9 +2057,9 @@ particleCount++;
 	}
 	private void validateMaterialPortion(MaterialPortion portion) {
 		if (portion == null || !(Double.isFinite(portion.volume()) && portion.volume() > 0.0
-				&& portion.volume() <= Float.MAX_VALUE)
+				&& portion.volume() <= Float.MAX_VALUE && (float) portion.volume() > 0.0F)
 				|| !(Double.isFinite(portion.mass()) && portion.mass() > 0.0)) {
-			throw new IllegalArgumentException("Material portion ledgers must be finite and positive");
+			throw new IllegalArgumentException("Material portion ledgers must be finite, positive and float-representable");
 		}
 		if (materialRegistry == null) {
 			if (portion.materialHandle() != 0) {

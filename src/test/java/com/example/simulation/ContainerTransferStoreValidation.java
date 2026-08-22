@@ -1,21 +1,36 @@
 package com.example.simulation;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Registry;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
+import com.example.item.ContainerFluidLedger;
 import com.example.item.FluidMixture;
 import com.example.fluid.FlipFluidDomain;
+import com.example.fluid.FlipMaterialParticleState;
+import com.example.fluid.FlipParticleState;
+import com.example.fluid.FluidMaterial;
 import com.example.fluid.FluidSolverConfig;
+import com.example.simulation.controller.FluidRegionFootprint;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /** Standalone codec/file fault gate for the short-lived container-transfer WAL. */
 public final class ContainerTransferStoreValidation {
+	private static final ResourceKey<Registry<Level>> DIMENSION_REGISTRY = ResourceKey.createRegistryKey(
+			Identifier.fromNamespaceAndPath("realwater", "container_transfer_validation_registry"));
+	private static final ResourceKey<Level> DIMENSION = ResourceKey.create(DIMENSION_REGISTRY,
+			Identifier.fromNamespaceAndPath("realwater", "container_transfer_validation"));
 	private static int passed;
 
 	private ContainerTransferStoreValidation() { }
@@ -32,7 +47,10 @@ public final class ContainerTransferStoreValidation {
 			run("corrupt named WAL locks without deletion", ContainerTransferStoreValidation::testCorruptWal);
 			run("v1 pure WAL migrates while v1 material WAL locks", ContainerTransferStoreValidation::testLegacyMigration);
 			run("nanovolume and solver cell-volume conversion", ContainerTransferStoreValidation::testNanosCellConversion);
+			run("non-float-friendly transfers settle actual marker volume", ContainerTransferStoreValidation::testActualMarkerSettlement);
+			run("material service settlement preserves component residuals", ContainerTransferStoreValidation::testMaterialSettlement);
 			run("partial outlet requests only available marker volume", ContainerTransferStoreValidation::testPartialOutlet);
+			run("ownership sidecar lock blocks loaded checkpoints", ContainerTransferStoreValidation::testOwnershipCheckpointLock);
 			System.out.println("ContainerTransferStoreValidation passed " + passed + " scenarios");
 		} finally {
 			try (var paths = Files.walk(root)) {
@@ -71,6 +89,24 @@ public final class ContainerTransferStoreValidation {
 		check(committed.equals(store.read(tx)), "committed WAL did not atomically replace prepared");
 		store.delete(tx);
 		check(!store.listTransactions().contains(tx), "deleted WAL was still listed");
+
+		UUID partialTx = UUID.randomUUID();
+		ContainerTransferJournal.ItemFingerprint partialBefore = new ContainerTransferJournal.ItemFingerprint(
+				ContainerTransferJournal.ItemKind.PARTIAL, 999_999_999L, null);
+		ContainerTransferJournal partialPrepared = new ContainerTransferJournal(
+				partialTx, region, "minecraft:overworld", 4L, 5L,
+				ContainerTransferJournal.Operation.INSERT, 999_999_999L, actor, partialBefore, partialBefore,
+				ContainerTransferJournal.Phase.PREPARED);
+		store.write(partialPrepared);
+		ContainerTransferJournal partialCommitted = new ContainerTransferJournal(
+				partialTx, region, "minecraft:overworld", 4L, 5L,
+				ContainerTransferJournal.Operation.INSERT, 999_999_940L, actor, partialBefore,
+				new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.PARTIAL, 59L, null),
+				ContainerTransferJournal.Phase.REGION_COMMITTED);
+		store.write(partialCommitted);
+		check(partialCommitted.equals(store.read(partialTx)),
+				"committed WAL did not accept the primitive's actual partial-pour settlement");
+		store.delete(partialTx);
 	}
 
 	private static void testActorCodecs() throws Exception {
@@ -303,6 +339,76 @@ public final class ContainerTransferStoreValidation {
 				"one solver cell volume must be one eighth of a bucket");
 	}
 
+	private static void testActualMarkerSettlement() {
+		FluidSolverConfig config = new FluidSolverConfig(
+				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+		for (long requested : new long[] {1L, 59L, 333_333_333L, 999_999_999L, 1_000_000_000L}) {
+			float plannedVolume = FluidTransferService.nanosToCellVolumeAtMost(requested);
+			long plannedNanos = FluidTransferService.cellVolumeToNanos(plannedVolume);
+			check(plannedNanos > 0L && plannedNanos <= requested,
+					"downward request quantization exceeded its item balance for " + requested);
+
+			FlipFluidDomain domain = new FlipFluidDomain(6, 4, 6, config, 1_024);
+			FlipFluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(3, 2, 3, plannedVolume, 3);
+			check(inserted.transferred(), "edge-volume insertion failed for " + requested);
+			long insertedNanos = FluidTransferService.settledNanos(inserted.volume(), requested);
+			check(insertedNanos > 0L && insertedNanos <= requested,
+					"actual insertion exceeded the source item for " + requested);
+
+			long extractRequest = FluidTransferService.extractableNanos(
+					domain, new int[] {3, 2, 3}, ContainerFluidLedger.NANOS_PER_BLOCK, 3, 0);
+			FlipFluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(
+					3, 2, 3, FluidTransferService.nanosToCellVolumeAtMost(extractRequest), 3, 0);
+			check(extracted.transferred(), "edge-volume extraction failed for " + requested);
+			long extractedNanos = FluidTransferService.settledNanos(extracted.volume(), extractRequest);
+			check(extractedNanos == insertedNanos && domain.totalVolumeExact() == 0.0,
+					"actual marker settlement did not round-trip for " + requested + ": inserted="
+							+ insertedNanos + ", extracted=" + extractedNanos + ", residual=" + domain.totalVolumeExact());
+		}
+	}
+
+	private static void testMaterialSettlement() {
+		FluidSolverConfig config = new FluidSolverConfig(
+				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+		FlipFluidDomain domain = new FlipFluidDomain(6, 4, 6, config, 1_024);
+		domain.setVolume(1, 1, 1, 0.125F);
+		FlipParticleState pure = domain.exportParticleState();
+		List<FluidMaterial> materials = List.of(
+				new FluidMaterial("realwater:water", 1_000.0, "realwater:aqueous", 0.0, Math.PI / 2.0),
+				new FluidMaterial("realwater:oil", 800.0, "realwater:oil", 0.0, Math.PI / 2.0));
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
+				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
+				domain.totalVolumeExact(), 125.0, materials, pure.copyPositionVolume(),
+				pure.copyParticleVelocities(), pure.copySolidMask(), new double[] {125.0}, new int[] {0}));
+		domain.removeAllWaterExact();
+
+		FluidMixture source = new FluidMixture(List.of(
+				new FluidMixture.Component("realwater:oil", 333_333_333L, 266.6666664),
+				new FluidMixture.Component("realwater:water", 666_666_666L, 666.666666)));
+		List<FlipFluidDomain.MaterialPortion> planned = FluidTransferService.planMaterialInsertion(domain, source);
+		FlipFluidDomain.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(3, 2, 3, planned, 3);
+		check(inserted.transferred(), "non-float-friendly material insertion failed");
+		FluidTransferService.MaterialInsertionSettlement settlement =
+				FluidTransferService.settleMaterialInsertion(source, inserted.portions());
+		check(settlement.insertedNanos() > 0L && settlement.insertedNanos() <= source.totalVolumeNanos(),
+				"material insertion exceeded its source mixture");
+		long remainingNanos = settlement.remaining() == null ? 0L : settlement.remaining().totalVolumeNanos();
+		check(settlement.insertedNanos() + remainingNanos == source.totalVolumeNanos(),
+				"material insertion did not retain every component residual quantum");
+
+		long request = FluidTransferService.extractableNanos(
+				domain, new int[] {3, 2, 3}, ContainerFluidLedger.NANOS_PER_BLOCK, 3, -1);
+		FlipFluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
+				3, 2, 3, FluidTransferService.nanosToCellVolumeAtMost(request), 3);
+		check(extracted.transferred(), "material extraction failed after service-planned insertion");
+		FluidMixture bucket = FluidTransferService.mixtureFromExtraction(domain, extracted.portions(), request);
+		check(bucket.totalVolumeNanos() == settlement.insertedNanos() && domain.totalVolumeExact() == 0.0,
+				"material extraction credited the request instead of actual per-material marker deltas");
+		check(Math.abs(bucket.totalMass() + (settlement.remaining() == null ? 0.0 : settlement.remaining().totalMass())
+				- source.totalMass()) <= 1.0E-12,
+				"material insertion/extraction lost the independent mass ledger");
+	}
+
 	private static void testPartialOutlet() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
@@ -315,6 +421,40 @@ public final class ContainerTransferStoreValidation {
 				2, 2, 2, FluidTransferService.nanosToCellVolume(requested), 1, 0);
 		check(transfer.transferred() && domain.totalVolumeExact() == 0.0,
 				"partial outlet request could not be settled by the exact primitive");
+	}
+
+	private static void testOwnershipCheckpointLock() throws Exception {
+		Path root = Files.createTempDirectory("realwater-ownership-checkpoint-lock");
+		try {
+			FluidSolverConfig config = new FluidSolverConfig(
+					0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+			UUID regionId = UUID.randomUUID();
+			BlockPos origin = BlockPos.ZERO;
+			BlockPos controller = new BlockPos(-1, 0, 0);
+			FluidRegionFootprint footprint = new FluidRegionFootprint(
+					controller, origin, origin, Set.of(origin.asLong()), Set.of(controller.asLong()),
+					Set.of(ChunkPos.pack(0, 0)));
+			FlipFluidDomain domain = new FlipFluidDomain(2, 2, 2, config, 64);
+			domain.setVolume(1, 1, 1, 0.25F);
+			FluidRegion region = new FluidRegion(regionId, DIMENSION,
+					origin, domain, 64L, footprint);
+			FluidRegionPersistence persistence = new FluidRegionPersistence(root, false);
+			check(persistence.checkpoint(region) == 1L, "fixture did not publish its first checkpoint");
+
+			Path ownershipDirectory = root.resolve("realwater").resolve("ownership").resolve(regionId.toString());
+			Files.createDirectories(ownershipDirectory);
+			Files.writeString(ownershipDirectory.resolve("WARNING.txt"), "unfinished ownership transition");
+			check(persistence.ownershipLockDescription(region) != null,
+					"loaded region did not expose its ownership sidecar lock");
+			checkThrows(IOException.class, () -> persistence.checkpoint(region),
+					"loaded region published a checkpoint through an ownership lock");
+			check(region.checkpointGeneration() == 1L && persistence.committedGeneration(regionId) == 1L,
+					"refused checkpoint advanced the live or durable generation");
+		} finally {
+			try (var paths = Files.walk(root)) {
+				for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+			}
+		}
 	}
 
 	private static void run(String name, ThrowingRunnable scenario) throws Exception {

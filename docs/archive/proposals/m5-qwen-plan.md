@@ -285,7 +285,7 @@ Gradle 门：`runM5GasLiquidCouplingValidation`。升级条件：该阶段同时
   - `utube`：U 型管双密闭顶，预置不等 `V0`，演示液柱差；
   - `bell`（钟罩）：倒扣杯体困住空气压入水中，演示气袋托住液面。
   - 三个场景均纯水 σ=0，**不要求材料门**，只要求气门；不得使用 σ=100 之类视觉放大（该放大是 tensiondemo 专属的 M4 视觉验证设计，勿复用、勿当 bug 修）。
-- 定向门：`runM5GasLiquidCouplingValidation`（命令装配属服务层薄封装，自动门覆盖物理；命令注册不触及 entrypoint/依赖/资源打包，不跑 EULA=false server）。
+- 定向门：`runM5GasLiquidCouplingValidation`（命令装配属服务层薄封装，自动门覆盖物理；命令注册不触及 entrypoint/依赖/资源打包，不跑专用服务器启动门）。
 
 ### Phase 5 — 里程碑关闭与签收
 
@@ -309,7 +309,7 @@ Gradle 门：`runM5GasLiquidCouplingValidation`。升级条件：该阶段同时
 | 气体 EoS/孔流/库存迁移（无网格） | `runAirNetworkValidation` | 接入活动核心后改跑 M5 耦合门 |
 | 空腔扫描/环境判定/几何边候选 | `runAirCavityScannerValidation` | 改 cut-cell 共享面定义才加 cut-cell 门 |
 | M5 活动核心气液耦合/界面压力 | `runM5GasLiquidCouplingValidation` | 该门已含退化与守恒；只有改 wire/存档才加对应门 |
-| 气体配置门/服务装配/airdemo | `runM5GasLiquidCouplingValidation` | 改 entrypoint/payload 注册才跑 EULA=false server |
+| 气体配置门/服务装配/airdemo | `runM5GasLiquidCouplingValidation` | 改 entrypoint/payload 注册才跑 EULA=true server 并正常 `stop` |
 
 日常规则不变：一个小增量只跑最贴近的一项；里程碑关闭才汇总。
 

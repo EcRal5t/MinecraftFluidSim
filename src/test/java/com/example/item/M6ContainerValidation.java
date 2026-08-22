@@ -33,6 +33,7 @@ public final class M6ContainerValidation {
 		run("exact extract removes exactly or refuses", M6ContainerValidation::testExactExtract);
 		run("sub-micro residual and independent material mass survive exact transfer", M6ContainerValidation::testExactMaterialMass);
 		run("multi-material container and solver transfer close every component ledger", M6ContainerValidation::testMixtureTransfer);
+		run("malformed mixture mass and sub-float portions are rejected", M6ContainerValidation::testMixtureHardening);
 		run("full bucket round-trips through the primitives", M6ContainerValidation::testBucketRoundTrip);
 		System.out.println("M6ContainerValidation passed " + passed + " scenarios");
 	}
@@ -340,6 +341,27 @@ public final class M6ContainerValidation {
 						+ volumeBeforeRefusal + ", extractedV=" + extractedVolume + ", residualV="
 						+ domain.totalVolumeExact() + ", extractedM=" + extractedMass + ", residualM="
 						+ domain.totalMass());
+	}
+
+	private static void testMixtureHardening() {
+		try {
+			new FluidMixture(List.of(
+					new FluidMixture.Component("realwater:oil", 1L, Double.MAX_VALUE),
+					new FluidMixture.Component("realwater:water", 1L, Double.MAX_VALUE)));
+			throw new AssertionError("Expected non-finite mixture total-mass rejection");
+		} catch (IllegalArgumentException expected) {
+			// A malformed item must be rejected during construction, before tooltip/WAL callers.
+		}
+
+		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, CONFIG, 64);
+		try {
+			domain.tryInsertExactMixture(2, 2, 2,
+					List.of(new FlipFluidDomain.MaterialPortion(0, 1.0E-300, 1.0)), 1);
+			throw new AssertionError("Expected sub-float material volume rejection");
+		} catch (IllegalArgumentException expected) {
+			check(domain.particleCount() == 0 && domain.totalVolumeExact() == 0.0,
+					"sub-float rejection created a zero-volume marker");
+		}
 	}
 
 	/**

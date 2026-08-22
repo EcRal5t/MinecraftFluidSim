@@ -396,7 +396,7 @@ return outcome;
 		}
 		ContainerTransferJournal committed = new ContainerTransferJournal(
 				transactionId, region.id(), level.dimension().identifier().toString(),
-				baseGeneration, targetGeneration, operation, requestedNanos, actor,
+				baseGeneration, targetGeneration, operation, rawOutcome.volumeNanos(), actor,
 				beforeFingerprint, afterFingerprint,
 				ContainerTransferJournal.Phase.REGION_COMMITTED
 		);
@@ -451,7 +451,7 @@ return outcome;
 
 
 		return new ControllerTransfer(new TransferOutcome(true, operation == ContainerTransferJournal.Operation.INSERT,
-				finalAfter, rawOutcome.message()), transactionId);
+				finalAfter, rawOutcome.message(), rawOutcome.volumeNanos()), transactionId);
 	}
 
 	private static ControllerTransfer failedControllerTransfer(
@@ -504,7 +504,10 @@ return outcome;
 			FluidSimulationService service, FluidRegion region, int[] cell, long volumeNanos, int maxRadius, int materialHandle
 	) {
 		if (volumeNanos <= 0L) return null;
-		float requestedCellVolume = nanosToCellVolume(volumeNanos);
+		float requestedCellVolume = nanosToCellVolumeAtMost(volumeNanos);
+		if (requestedCellVolume <= 0.0F) {
+			return new TransferOutcome(false, true, withVolume(volumeNanos), "容器余量小于 solver 可表示体积，未能注入");
+		}
 		FlipFluidDomain domain = region.domain();
 		if (domain.totalOpenVolume() - domain.totalVolume() + 1.0E-6F < requestedCellVolume) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "空间或 marker 预算不足，未能注入");
@@ -514,25 +517,29 @@ return outcome;
 		if (!inserted.transferred()) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "空间或 marker 预算不足，未能注入");
 		}
-		long poured = volumeNanos;
+		long poured = settledNanos(inserted.volume(), volumeNanos);
 		region.wakeForActivity();
 		return new TransferOutcome(true, true, withVolume(volumeNanos - poured),
-				String.format("已注入 %.2f%% 桶", 100.0 * poured / ContainerFluidLedger.NANOS_PER_BLOCK));
+				String.format("已注入 %.2f%% 桶", 100.0 * poured / ContainerFluidLedger.NANOS_PER_BLOCK), poured);
 	}
 
 	private static TransferOutcome scoopFromCell(
 			FluidSimulationService service, FluidRegion region, int[] cell, long capacityNanos, long baseVolumeNanos, int maxRadius, int materialHandle
 	) {
 		if (capacityNanos <= 0L) return null;
+		float requestedCellVolume = nanosToCellVolumeAtMost(capacityNanos);
+		if (requestedCellVolume <= 0.0F) {
+			return new TransferOutcome(false, false, withVolume(baseVolumeNanos), "容器余量小于 solver 可表示体积");
+		}
 		FlipFluidDomain.ExactVolumeTransfer extracted = region.domain().tryExtractExactVolume(
-				cell[0], cell[1], cell[2], nanosToCellVolume(capacityNanos), maxRadius, materialHandle);
+				cell[0], cell[1], cell[2], requestedCellVolume, maxRadius, materialHandle);
 		if (!extracted.transferred() || extracted.volume() <= 0.0) {
 			return new TransferOutcome(false, false, withVolume(baseVolumeNanos), "准星处没有足够水体");
 		}
-		long taken = capacityNanos;
+		long taken = settledNanos(extracted.volume(), capacityNanos);
 		region.wakeForActivity();
 		return new TransferOutcome(true, false, withVolume(baseVolumeNanos + taken),
-				String.format("已舀取 %.2f%% 桶", 100.0 * taken / ContainerFluidLedger.NANOS_PER_BLOCK));
+				String.format("已舀取 %.2f%% 桶", 100.0 * taken / ContainerFluidLedger.NANOS_PER_BLOCK), taken);
 	}
 
 
@@ -541,13 +548,9 @@ return outcome;
 	) {
 		if (mixture == null) return null;
 		FlipFluidDomain domain = region.domain();
-		java.util.List<FlipFluidDomain.MaterialPortion> portions = new java.util.ArrayList<>();
+		java.util.List<FlipFluidDomain.MaterialPortion> portions;
 		try {
-			for (FluidMixture.Component component : mixture.components()) {
-				int handle = domain.materialRegistry().handle(component.materialId());
-				portions.add(new FlipFluidDomain.MaterialPortion(handle,
-						nanosToCellVolume(component.volumeNanos()), component.mass()));
-			}
+			portions = planMaterialInsertion(domain, mixture);
 		} catch (IllegalArgumentException unknownMaterial) {
 			return new TransferOutcome(false, true, mixture.toStack(),
 					"区域材料 registry 不接受该混合物：" + unknownMaterial.getMessage());
@@ -557,11 +560,15 @@ return outcome;
 		if (!inserted.transferred()) {
 			return new TransferOutcome(false, true, mixture.toStack(), "空间或 marker 预算不足，未能注入混合物");
 		}
+		MaterialInsertionSettlement settlement = settleMaterialInsertion(mixture, inserted.portions());
+		ItemStack after = settlement.remaining() == null
+				? new ItemStack(RealWaterItems.MATERIAL_BUCKET)
+				: settlement.remaining().toStack();
 		region.wakeForActivity();
-		return new TransferOutcome(true, true, new ItemStack(RealWaterItems.MATERIAL_BUCKET),
+		return new TransferOutcome(true, true, after,
 				String.format("已注入 %.2f%% 桶（%d 种材料）",
-						100.0 * mixture.totalVolumeNanos() / ContainerFluidLedger.NANOS_PER_BLOCK,
-						mixture.components().size()));
+						100.0 * settlement.insertedNanos() / ContainerFluidLedger.NANOS_PER_BLOCK,
+						mixture.components().size()), settlement.insertedNanos());
 	}
 
 private static TransferOutcome scoopMaterialIntoCell(
@@ -569,24 +576,31 @@ FluidSimulationService service, FluidRegion region, int[] cell, long capacityNan
 ) {
 if (capacityNanos <= 0L) return null;
 FlipFluidDomain domain = region.domain();
+float requestedCellVolume = nanosToCellVolumeAtMost(capacityNanos);
+if (requestedCellVolume <= 0.0F) {
+return new TransferOutcome(false, false, new ItemStack(RealWaterItems.MATERIAL_BUCKET),
+"容器余量小于 solver 可表示体积");
+}
 FlipFluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
-cell[0], cell[1], cell[2], nanosToCellVolume(capacityNanos), maxRadius);
+cell[0], cell[1], cell[2], requestedCellVolume, maxRadius);
 if (!extracted.transferred() || extracted.portions().isEmpty()) {
 return new TransferOutcome(false, false, new ItemStack(RealWaterItems.MATERIAL_BUCKET), "准星处没有足够流体");
 }
 FluidMixture mixture = mixtureFromExtraction(domain, extracted.portions(), capacityNanos);
+long taken = mixture.totalVolumeNanos();
 region.wakeForActivity();
 return new TransferOutcome(true, false, mixture.toStack(),
 String.format("已舀取 %.2f%% 桶（%d 种材料）",
-100.0 * capacityNanos / ContainerFluidLedger.NANOS_PER_BLOCK, mixture.components().size()));
+100.0 * taken / ContainerFluidLedger.NANOS_PER_BLOCK, mixture.components().size()), taken);
 }
 
 	/** Deterministic largest-remainder-style apportionment; component masses remain exact doubles. */
-	private static FluidMixture mixtureFromExtraction(
-			FlipFluidDomain domain, java.util.List<FlipFluidDomain.MaterialPortion> portions, long totalNanos
+	static FluidMixture mixtureFromExtraction(
+			FlipFluidDomain domain, java.util.List<FlipFluidDomain.MaterialPortion> portions, long capacityNanos
 	) {
 		double totalVolume = 0.0;
 		for (FlipFluidDomain.MaterialPortion portion : portions) totalVolume += portion.volume();
+		long totalNanos = settledNanos(totalVolume, capacityNanos);
 		long remainingNanos = totalNanos;
 		double remainingVolume = totalVolume;
 		java.util.List<FluidMixture.Component> components = new java.util.ArrayList<>(portions.size());
@@ -603,6 +617,56 @@ String.format("已舀取 %.2f%% 桶（%d 种材料）",
 		}
 		return new FluidMixture(components);
 	}
+
+	static java.util.List<FlipFluidDomain.MaterialPortion> planMaterialInsertion(
+			FlipFluidDomain domain, FluidMixture mixture
+	) {
+		java.util.List<FlipFluidDomain.MaterialPortion> portions = new java.util.ArrayList<>(mixture.components().size());
+		for (FluidMixture.Component component : mixture.components()) {
+			int handle = domain.materialRegistry().handle(component.materialId());
+			float plannedVolume = nanosToCellVolumeAtMost(component.volumeNanos());
+			long plannedNanos = cellVolumeToNanos(plannedVolume);
+			if (plannedNanos <= 0L) throw new IllegalArgumentException(
+					"材料组分小于 solver 可表示体积：" + component.materialId());
+			double plannedMass = plannedNanos == component.volumeNanos()
+					? component.mass()
+					: component.mass() * plannedNanos / component.volumeNanos();
+			portions.add(new FlipFluidDomain.MaterialPortion(handle, plannedVolume, plannedMass));
+		}
+		return java.util.List.copyOf(portions);
+	}
+
+	static MaterialInsertionSettlement settleMaterialInsertion(
+			FluidMixture sourceMixture, java.util.List<FlipFluidDomain.MaterialPortion> insertedPortions
+	) {
+		if (insertedPortions.size() != sourceMixture.components().size()) {
+			throw new IllegalStateException("材料注入返回的组分数与请求不一致");
+		}
+		java.util.List<FluidMixture.Component> remaining = new java.util.ArrayList<>();
+		long insertedNanos = 0L;
+		for (int i = 0; i < sourceMixture.components().size(); i++) {
+			FluidMixture.Component source = sourceMixture.components().get(i);
+			FlipFluidDomain.MaterialPortion actual = insertedPortions.get(i);
+			long componentNanos = settledNanos(actual.volume(), source.volumeNanos());
+			insertedNanos = Math.addExact(insertedNanos, componentNanos);
+			long remainingNanos = source.volumeNanos() - componentNanos;
+			double remainingMass = source.mass() - actual.mass();
+			if (remainingNanos == 0L) {
+				if (Double.doubleToRawLongBits(actual.mass()) != source.massBits()) {
+					throw new IllegalStateException("完整材料组分注入未结算其全部质量：" + source.materialId());
+				}
+			} else {
+				if (!(Double.isFinite(remainingMass) && remainingMass > 0.0)) {
+					throw new IllegalStateException("材料组分余量没有正有限质量：" + source.materialId());
+				}
+				remaining.add(new FluidMixture.Component(source.materialId(), remainingNanos, remainingMass));
+			}
+		}
+		return new MaterialInsertionSettlement(insertedNanos,
+				remaining.isEmpty() ? null : new FluidMixture(remaining));
+	}
+
+	record MaterialInsertionSettlement(long insertedNanos, FluidMixture remaining) { }
 	private enum TransferKind {
 		NONE,
 		POUR,
@@ -652,8 +716,27 @@ String.format("已舀取 %.2f%% 桶（%d 种材料）",
 		return (float) (ContainerFluidLedger.nanosToVolume(nanos) * FluidSimulationService.CELL_VOLUMES_PER_BLOCK);
 	}
 
+	/** Largest float cell volume whose nanovolume settlement does not exceed the source/capacity. */
+	static float nanosToCellVolumeAtMost(long nanos) {
+		if (nanos <= 0L) return 0.0F;
+		float volume = nanosToCellVolume(nanos);
+		while (volume > 0.0F && cellVolumeToNanos(volume) > nanos) volume = Math.nextDown(volume);
+		return volume;
+	}
+
 	static long cellVolumeToNanos(double cellVolume) {
 		return ContainerFluidLedger.volumeToNanos(cellVolume / FluidSimulationService.CELL_VOLUMES_PER_BLOCK);
+	}
+
+	/** Converts the primitive's authoritative marker delta and rejects impossible item overshoot. */
+	static long settledNanos(double actualCellVolume, long maximumNanos) {
+		if (maximumNanos <= 0L) throw new IllegalArgumentException("Settlement limit must be positive");
+		long actualNanos = cellVolumeToNanos(actualCellVolume);
+		if (actualNanos <= 0L || actualNanos > maximumNanos) {
+			throw new IllegalStateException("Solver transfer settled " + actualNanos
+					+ " nanovolume quanta outside 1.." + maximumNanos);
+		}
+		return actualNanos;
 	}
 
 	static long extractableNanos(
@@ -663,11 +746,11 @@ String.format("已舀取 %.2f%% 桶（%d 种材料）",
 		double availableCellVolume = domain.exactVolumeNear(
 				cell[0], cell[1], cell[2], maxRadius, materialHandle);
 		if (!(availableCellVolume > 0.0)) return 0L;
-		double availableNanos = availableCellVolume / FluidSimulationService.CELL_VOLUMES_PER_BLOCK
-				* ContainerFluidLedger.NANOS_PER_BLOCK;
-		long request = Math.min(capacityNanos,
-				availableNanos >= Long.MAX_VALUE ? Long.MAX_VALUE : (long) Math.floor(availableNanos));
-		while (request > 0L && nanosToCellVolume(request) > availableCellVolume) request--;
+		long availableNanos = cellVolumeToNanos(availableCellVolume);
+		long request = Math.min(capacityNanos, availableNanos);
+		float requestCellVolume = nanosToCellVolumeAtMost(request);
+		while (requestCellVolume > availableCellVolume) requestCellVolume = Math.nextDown(requestCellVolume);
+		request = requestCellVolume <= 0.0F ? 0L : cellVolumeToNanos(requestCellVolume);
 		// A material mixture must assign at least one nanovolume quantum to every possible
 		// component. Below that bound the independent per-material volume ledger cannot be encoded.
 		if (materialHandle < 0 && domain.hasMaterialState()
@@ -684,5 +767,9 @@ String.format("已舀取 %.2f%% 桶（%d 种材料）",
 				: hitPos.relative(hit.getDirection());
 	}
 
-	private record TransferOutcome(boolean transferred, boolean filled, ItemStack stack, String message) { }
+	private record TransferOutcome(boolean transferred, boolean filled, ItemStack stack, String message, long volumeNanos) {
+		private TransferOutcome(boolean transferred, boolean filled, ItemStack stack, String message) {
+			this(transferred, filled, stack, message, 0L);
+		}
+	}
 }

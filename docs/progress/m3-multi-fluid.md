@@ -32,8 +32,8 @@ material surfaces outer=672 interface=138 junction=238 planeError=0.00 colourChe
 M3 connected-vessel gate passed: cells=60 markers=60 volume=7.500 BV mass=7500.000 MU
 ```
 
-`runFluidRegionPersistenceValidation`、`runFluidNetworkProtocolValidation` 通过；主 Mod EULA=false 启动门在
-protocol 注册增量时通过一次。
+`runFluidRegionPersistenceValidation`、`runFluidNetworkProtocolValidation` 通过；主 Mod 专用服务器启动门在
+protocol 注册增量时通过一次。当前后续启动验证均在已接受 EULA 的服务器中进入世界，再用 `stop` 正常退出。
 
 完成条件对应关系：同液 U 形管等高由 `maxVelocity <= 1e-8` 的静止解给出；不同截面连通器静水平衡由活动核心
 `headDiff 4.000 -> 0.188` 给出；不同密度液柱压强匹配由 1.25:1 与 13.6:1 解析静压误差给出；油水翻转后稳定分层由

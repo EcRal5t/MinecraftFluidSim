@@ -42,13 +42,13 @@
 | solver 参数 | `src/main/java/com/example/fluid/FluidSolverConfig.java` | CFL、压力容差、FLIP 比例或时间步只属数值离散；改动选择对应 solver 门 |
 | M3 材料与 CPU 门 | `src/main/java/com/example/fluid/FluidMaterial.java`、`src/main/java/com/example/fluid/FluidMaterialRegistry.java`、`src/main/java/com/example/fluid/BuiltinFluidMaterials.java`、`src/main/java/com/example/fluid/FluidMaterialRenderSnapshot.java`、`src/main/java/com/example/fluid/FluidMaterialSurfaceMesher.java`、`src/test/java/com/example/fluid/M3ConnectedVesselExperiment.java`、`src/test/java/com/example/fluid/M3MaterialTransferValidation.java`、`src/test/java/com/example/fluid/M3MaterialDynamicsValidation.java`、`src/test/java/com/example/fluid/M3MaterialSurfaceValidation.java` | snapshot/mesh 只读重建，量化字段不结算库存；M6 容器可向 controller 区域转移已注册材料，但 ownership acquire 与瞬态 takeover 仍只采集纯原版水 |
 | takeover 事务 | `src/main/java/com/example/simulation/TakeoverTransaction.java`、`src/main/java/com/example/simulation/TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
-| M6 世界 ownership 事务 | `src/main/java/com/example/simulation/ownership/`、`docs/architecture/world-ownership-and-containers.md` | prepare→WAL→WARNING→世界修改→region HEAD 最后发布→committed 重建；恢复按 region HEAD 对比 WAL base/target 判定；首次/失败 staging 只清理自有暂存，unknown/corrupt/身份失配锁定；玩家方块优先；不碰 takeover-journal v1 |
+| M6 世界 ownership 事务 | `src/main/java/com/example/simulation/ownership/`、`src/main/java/com/example/simulation/FluidRegionPersistence.java`、`docs/architecture/world-ownership-and-containers.md` | prepare→WAL→WARNING→世界修改→region HEAD 最后发布→committed 重建；恢复按 region HEAD 对比 WAL base/target 判定；首次/失败 staging 只清理自有暂存，unknown/corrupt/身份失配锁定；已加载区域也必须在 step/empty/checkpoint 前检查 per-region sidecar；玩家方块优先；不碰 takeover-journal v1 |
 | M6 容器纳体积账本 | `src/main/java/com/example/item/ContainerFluidLedger.java` | 容器真值是 long 纳体积（1 BV=1e9）；换算半量子内舍入、漂移有界并记录，不用 damage/density 结算 |
 | M6 精确转移原语 | `src/main/java/com/example/fluid/FlipFluidDomain.java` 的 `tryInsertExactVolume`/`tryExtractExactVolume`、`tryInsertExactMaterial`、`tryInsertExactMixture`/`tryExtractExactMixture` | all-or-nothing；insert 先规划后落子、refuse 零残留；extract 双精度预检+整 marker+尾拆分；逐材料体积和独立质量都必须闭合，服务层再换算纳体积量子 |
 | M6 容器物品/组件 | `src/main/java/com/example/item/RealWaterComponents.java`、`ContainerFluidLedger.java`、`FluidMixture.java`、`PartialWaterBucketItem.java`、`MaterialBucketItem.java`、`RealWaterItems.java` | `water_volume`/`fluid_volume` 是体积真值；`fluid_mass_bits` 与 `mixture_components` 保存总/逐材料独立质量；单材料 `material_id` 是稳定键；tooltip 只读；仅纯水满/空规范化为原版桶，材料空桶仍为自定义物品 |
 | M6 部分桶合并配方 | `src/main/java/com/example/item/RealWaterRecipes.java`、`src/main/resources/data/realwater/recipe/partial_water_bucket_merge.json` | 动态配方：先填满一桶，溢出作为 recipe remainder 留在第二输入；精确账本由 `ContainerFluidLedger.mergeOutput/mergeRemainder` 结算 |
-| M6 桶入口（玩家/发射器） | `src/main/java/com/example/simulation/FluidTransferService.java`、`src/main/java/com/example/mixin/ItemStackMixin.java`、`RealWaterMod.java` 的 dispenser 注册 | worldBridge 门控；只按准星/发射方向命中的区域路由，命令选区无关；堆叠/损坏组件安全拒绝；成功/失败都不得让原版水绕过 ledger；创造 source/scoop 明确记账并保留 operator pause 意图 |
-| M6 容器转移 WAL | `src/main/java/com/example/simulation/ContainerTransferJournal.java`、`ContainerTransferStore.java`、`ContainerTransferRecovery.java`、`FluidTransferService` 的 controller 路径 | 只用于 controller 区域玩家/发射器桶转移；PREPARED WAL→求解器修改→含 after 的 REGION_COMMITTED WAL→checkpoint/HEAD→actor after durable save→清理；HEAD=base 丢弃、HEAD=target 收敛 after、其他锁定；v2 携带 mixture+mass，v1 仅纯水可恢复；未知 store 内容全局锁；actor 未加载保持 pending |
+| M6 桶入口（玩家/发射器） | `src/main/java/com/example/simulation/FluidTransferService.java`、`src/main/java/com/example/mixin/ItemStackMixin.java`、`RealWaterMod.java` 的 dispenser 注册 | worldBridge 门控；只按准星/发射方向命中的区域路由，命令选区无关；请求先向下量化为不超过物品余额/容量的 float，物品按原语返回的实际 marker 变动结算，材料余量逐组件保留；堆叠/损坏组件安全拒绝；创造 source/scoop 明确记账并保留 operator pause 意图 |
+| M6 容器转移 WAL | `src/main/java/com/example/simulation/ContainerTransferJournal.java`、`ContainerTransferStore.java`、`ContainerTransferRecovery.java`、`FluidTransferService` 的 controller 路径 | 只用于 controller 区域玩家/发射器桶转移；PREPARED 携带请求上限→求解器修改→REGION_COMMITTED 携带实际结算量和 after→checkpoint/HEAD→actor after durable save→清理；HEAD=base 丢弃、HEAD=target 收敛 after、其他锁定；v2 携带 mixture+mass，v1 仅纯水可恢复；未知 store 内容全局锁；actor 未加载保持 pending；同一未解锁状态只记一次错误日志 |
 | takeover codec/files | `src/main/java/com/example/simulation/TakeoverJournalCodec.java`、`src/main/java/com/example/simulation/TakeoverJournalFiles.java` | v1 可读；未知/损坏/恢复失败锁住新 takeover |
 | 指令 transcript | `src/main/java/com/example/logging/RealWaterCommandLog.java`、`src/main/java/com/example/logging/CommandAuditFile.java` | 只做 UTF-8 观测；失败不得改变命令结果 |
 | protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 由材料门决定严格 v1 或严格 v2 + material capability；不做降级伪装 |
@@ -103,12 +103,12 @@
 | M5 气体 EoS/孔流/库存账本（无网格） | `runAirNetworkValidation` | 接入活动核心后改跑 M5 耦合门 |
 | M5 空腔扫描/环境判定/几何边 | `runAirCavityScannerValidation` | 改 cut-cell 共享面定义才加 cut-cell 门 |
 | M5 活动核心气液耦合/界面气压 | `runM5GasLiquidCouplingValidation` | 该门已含逐位退化、准静态单调压缩、负压悬液与孔链均压；只有改 wire/存档才加对应门 |
-| `airdemo` 玻璃脚手架/gas debug extension | `runFluidNetworkProtocolValidation` | 改 entrypoint/payload 注册才跑 EULA=false server；玻璃恢复账本无自动门，属实机 smoke 项 |
-| 材料门配置或 live 协商 | `runFluidNetworkProtocolValidation` | 改 payload 注册/entrypoint 才跑 EULA=false server |
+| `airdemo` 玻璃脚手架/gas debug extension | `runFluidNetworkProtocolValidation` | 改 entrypoint/payload 注册才跑 EULA=true server 并用 `stop` 正常退出；玻璃恢复账本无自动门，属实机 smoke 项 |
+| 材料门配置或 live 协商 | `runFluidNetworkProtocolValidation` | 改 payload 注册/entrypoint 才跑 EULA=true server 并用 `stop` 正常退出 |
 | manager | `runFluidRegionManagerValidation` | 同时跨 lifecycle/persistence 才加对应门 |
 | lifecycle/tick | `runFluidRegionLifecycleValidation` | 同时改 ownership 才加 persistence |
 | region-state/checkpoint | `runFluidRegionPersistenceValidation` | 真实重启仅里程碑 smoke |
-| protocol/snapshot | `runFluidNetworkProtocolValidation` | 改入口/注册才跑 EULA=false server |
+| protocol/snapshot | `runFluidNetworkProtocolValidation` | 改入口/注册才跑 EULA=true server 并用 `stop` 正常退出 |
 | controller/footprint | `runFluidBoundaryScannerValidation` | 改 admission/budget 才加 manager |
 | 压力/自由面/MAC/drift | `runFlipFreeSurfaceValidation` | 改长期 marker 分布才加 reseeding |
 | cut-cell/CCD | `runFlipCutCellValidation` | 改 Minecraft shape adapter 改跑 shape 门；跨压力共享面才加 free-surface |
@@ -116,8 +116,8 @@
 | marker merge/split/长期分布 | `runFlipReseedingValidation` | 改 checkpoint/state 才加 persistence |
 | takeover 事务 | `runTakeoverJournalValidation` | 真实世界只在事务里程碑 smoke |
 | M6 ownership 事务/WAL/committed | `runM6OwnershipValidation` | 改 region-state 共享契约才加 persistence 门；真实世界只在事务里程碑 smoke |
-| M6 容器账本/换算/物品/桶入口 | `runM6ContainerValidation` | 改协议 payload 才加 protocol 门；新增 mixin/资源打包跑 EULA=false server |
-| M6 容器转移 WAL | `runContainerTransferValidation` | 改恢复/actor 收敛才加 EULA=true server；真实崩溃收敛在 Smoke C |
+| M6 容器账本/换算/物品/桶入口 | `runM6ContainerValidation` | 改协议 payload 才加 protocol 门；新增 mixin/资源打包跑 EULA=true server 并用 `stop` 正常退出 |
+| M6 容器转移 WAL | `runContainerTransferValidation` | 改恢复/actor 收敛才加 EULA=true server 并用 `stop` 正常退出；真实崩溃收敛在 Smoke C |
 | transcript | `runCommandAuditValidation` | 命令包装变化且自动门不足才进服 |
 | GPU shader/dispatch/压力 | device 0 `--skip-large` | hierarchy/layout/capacity/大域性能才跑 64³ |
 | Vulkan device/queue/memory/lifecycle | device 0 快速门 + device 1 专项 | 双卡完整门只在发布里程碑 |

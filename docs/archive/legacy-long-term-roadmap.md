@@ -469,7 +469,7 @@ GPU 浮点执行不要求逐 bit 等同 CPU，但守恒量必须满足同一上�
 
 - 0.1.1–0.1.8 已建立集成服务器可视化、命令日志、CPU fallback、device-local + staging、64 B 常规诊断、暂停多步调度、压力算法对照、solid-aware MG2 和冻结只读真实碰撞捕获；RTX 5070 Ti `worlddemo` 的 13,824 个 marker 在 347 步后仍保持 1,728.000 格体积并正常 remove。
 - 0.1.9 新增自适应 packed 全层级 MGH：当前 24×16×24 小域只保留有用的首个粗层，64³ 网格递归使用 32³→16³→8³→4³，逐层聚合 fluid/air/solid 对角和面耦合，执行 restriction、平滑、阻尼 prolongation 与细网格前后平滑。双卡自动门覆盖 MGH 静水、device-local/host-visible 等价、四层 packed 拓扑和 64³ 收敛曲线；另有 64³ 深层障碍门证明四层薄墙耦合均为 0、开放面均为 1、1,162,240 个 marker 无一进入 solid 且 145,280.000 格体积不变。RTX 5070 Ti 上两个 MGH V-cycle 的同输入首步结果约为 1.54 ms Vulkan timestamp / 0.14448，优于同为两次的 MG2 0.17807，并接近 MG2 三次 0.13992；两档进服 benchmark 也已通过。
-- 0.1.10 修正 `probe [device]` 参数节点，并由结构回归及 RTX 4060 Ti `probe 1` 进服冒烟锁定两种形式；保持 EULA false 的 dedicated-server 门也已通过。
+- 0.1.10 修正 `probe [device]` 参数节点，并由结构回归及 RTX 4060 Ti `probe 1` 进服冒烟锁定两种形式；当时的 dedicated-server classpath 门停在 EULA gate，当前启动门改为使用已接受 EULA 的运行目录并以 `stop` 正常退出。
 - 0.1.11 在完整物理命令流与 64 B 诊断 copy 外包围 Vulkan timestamp query，status/benchmark 分别报告 GPU 设备时间和 CPU wall time；双卡完整自动门已通过，64³ 网格的 2,097,152 marker 步进分别为约 4.40/4.78 ms（5070 Ti GPU/wall）与 7.36/7.65 ms（4060 Ti GPU/wall）。timestamp 只改变性能观测，连续超时保护仍以 wall time 为真值，未改物理、数值离散、渲染或调度阈值。
 - 0.1.12 将主 GLSL 原样移入资源文件，并把小域快速门与 64³ 发布门拆开。
 - 0.1.13 用三个独立的 command pool/buffer、fence、timestamp query 和 64 B 映射 staging 槽替换普通 step 的单缓冲区 + `vkQueueWaitIdle` 生命周期；槽位复用只等待对应 fence，显式 snapshot/full-state 读回先收敛 ring 再使用串行 bulk staging。5070 Ti 完整门和 4060 Ti 小域专项均通过；真实 2,097,152-marker 满水门保持 262,144.0 格精确体积，约为 4.777 ms GPU timestamp / 4.913 ms throughput wall。调度与连续超时仍使用服务器线程的 scheduling/backpressure wall，timestamp 仍只做设备观测。CPU 小域也已完成三种变密度面系数对照，按界面距离加权的守恒通量候选在最高 13.6:1 密度比及非居中界面保持离散静水平衡，活动求解器尚未接入该候选。
