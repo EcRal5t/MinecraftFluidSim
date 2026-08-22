@@ -51,6 +51,18 @@
 
 最终世界桥不能长期依赖在原版水位置持续写空气；选定的 ownership 层必须让原版 fluid tick、方块放置与邻居更新能判断该位置由 Real Water 管理。
 
+**M6.0 已于 2026-08-22 关闭**：选定空气 + 独立 registry；证据与冻结的状态机/提交顺序/恢复判定见 [`../progress/m6.0-ownership-review.md`](../progress/m6.0-ownership-review.md)。
+
+### M6.1a 实现注记（由 M6.0 原型与分段世代增量冻结）
+
+- 布局：`<world>/realwater/ownership/<region-uuid>/{wal.nbt, WARNING.txt, committed.nbt}`。WAL v1 携带 region UUID、dimension、base/target generation、operation（ACQUIRE/RELEASE）与 preimage 条目；committed v1 携带 region UUID、dimension、generation 与 owned 条目。
+- **region-state HEAD 是唯一提交点**。acquire 顺序：`RegionStateFiles.prepare` 暂存并验证 G+1 → 发布 ownership WAL → WARNING → 世界修改 → `RegionStateFiles.commit` 发布 HEAD → 写 committed.nbt → 清理 WAL/WARNING。committed.nbt 写在 HEAD 之后，崩溃落在两者之间时由 POST-COMMIT 恢复从 WAL 重建（owned = ACQUIRE 条目 / RELEASE 为空）；committed.nbt 存在但损坏或不匹配代次则 LOCKED，绝不静默重写。
+- controller acquire 的候选在扫描与移除之间是同一服务器 tick，玩家不可能插入编辑，因此 acquire 期 owned 集合恒等于候选集合；任何非 REMOVED 结果按异常走回滚。玩家方块优先只在恢复/对账路径出现（跨启动的 PRE-COMMIT 回滚跳过已占用位置）。
+- 恢复判定以 region HEAD generation 对比 WAL base/target（base=事务前 region HEAD，target=被提交的 checkpoint generation），语义与 M6.0 决策记录的判定表一致。
+- release 首版保守：区域 marker 体积为 0 才允许；否则拒绝并提示先排水（M6.1b 容器提供真实转移路径）。
+- 已知限制：committed.nbt 被外部删除与 region-state 目录被删除同属"存档被手动破坏"类，不设防；损坏（可读出但不合法）才 LOCKED。
+- 增量状态：config v3 `worldBridgeEnabled` 与 `RegionStateFiles.prepare/commit/abort` 已落地；服务层接线（激活 acquire、remove release、启动恢复、reconcile、`/realwater worldbridge` 命令）为 M6.1a 剩余工作。M6.0 的 `ownproto` 命令面在正式接线时由 ownership 包正式化取代。
+
 ## M6.1 容器真值
 
 - 一桶容量为 1 BV。
