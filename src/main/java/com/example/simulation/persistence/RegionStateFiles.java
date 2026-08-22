@@ -48,6 +48,14 @@ public final class RegionStateFiles {
 	}
 
 	public long publish(RegionState state, FaultInjector injector) throws IOException {
+		return commit(prepare(state, injector), injector);
+	}
+
+	/**
+	 * Stages a fully verified generation in the inactive slot without publishing HEAD. Ownership
+	 * transactions interleave their world WAL and world mutation between this and {@link #commit}.
+	 */
+	public PreparedGeneration prepare(RegionState state, FaultInjector injector) throws IOException {
 		state.validate();
 		UUID id = state.manifest().regionId();
 		Path region = regionPath(id);
@@ -63,7 +71,7 @@ public final class RegionStateFiles {
 				if (current.manifestChecksum() != state.manifest().checksum()) {
 					throw new IOException("Checkpoint generation collision for " + id);
 				}
-				return current.generation();
+				return PreparedGeneration.alreadyCommitted(id, current.generation());
 			}
 			if (state.manifest().checkpointGeneration() <= current.generation()) {
 				throw new IOException("Checkpoint generation did not advance for " + id);
@@ -99,8 +107,17 @@ public final class RegionStateFiles {
 		atomicMover.move(temporary, inactivePath, false);
 		if (!Files.isDirectory(inactivePath) || Files.exists(temporary)) throw new IOException("Atomic slot publisher did not publish " + inactivePath);
 		injector.check(FaultPoint.AFTER_SLOT_PUBLISH, inactivePath);
+		return new PreparedGeneration(id, state.manifest().checkpointGeneration(), inactive, state.manifest().checksum(),
+				current == null ? null : current.generation(), current == null ? null : current.manifestChecksum());
+	}
 
-		Head next = new Head(id, state.manifest().checkpointGeneration(), inactive, state.manifest().checksum());
+	/** Publishes HEAD for a staged generation; this is the sole commit point. */
+	public long commit(PreparedGeneration prepared, FaultInjector injector) throws IOException {
+		if (prepared.alreadyCommitted()) return prepared.generation();
+		UUID id = prepared.id();
+		Path region = regionPath(id);
+		validateBaseUnchanged(prepared, region);
+		Head next = new Head(id, prepared.generation(), prepared.slot(), prepared.manifestChecksum());
 		Path headTemporary = region.resolve(HEAD + ".tmp");
 		NbtIo.writeCompressed(encodeHead(next), headTemporary);
 		forceFile(headTemporary);
@@ -110,6 +127,28 @@ public final class RegionStateFiles {
 		readGeneration(region, readHead(region, id));
 		injector.check(FaultPoint.AFTER_HEAD_PUBLISH, region.resolve(HEAD));
 		return next.generation();
+	}
+
+	/** Discards a staged generation; the base committed generation stays authoritative. */
+	public void abort(PreparedGeneration prepared) throws IOException {
+		if (prepared.alreadyCommitted()) return;
+		Path region = regionPath(prepared.id());
+		deleteTree(region.resolve(HEAD + ".tmp"));
+		deleteTree(region.resolve(prepared.slot()));
+		if (prepared.baseGeneration() == null && !Files.exists(region.resolve(HEAD))) {
+			deleteTree(region);
+		}
+	}
+
+	private void validateBaseUnchanged(PreparedGeneration prepared, Path region) throws IOException {
+		if (prepared.baseGeneration() == null) {
+			if (Files.exists(region.resolve(HEAD))) throw new IOException("Base HEAD appeared for " + prepared.id());
+			return;
+		}
+		Head current = readHead(region, prepared.id());
+		if (current.generation() != prepared.baseGeneration() || current.manifestChecksum() != prepared.baseManifestChecksum()) {
+			throw new IOException("Base HEAD moved before commit for " + prepared.id());
+		}
 	}
 
 	public RegionManifest readManifest(UUID id) throws IOException {
@@ -261,6 +300,32 @@ public final class RegionStateFiles {
 	public enum FaultPoint { BEFORE_SLOT_WRITE, AFTER_SECTION_WRITE, AFTER_MANIFEST_WRITE, AFTER_TEMP_VALIDATION, AFTER_SLOT_PUBLISH, BEFORE_HEAD_PUBLISH, AFTER_HEAD_PUBLISH }
 	@FunctionalInterface public interface FaultInjector { void check(FaultPoint point, Path path) throws IOException; }
 	@FunctionalInterface interface AtomicMover { void move(Path source, Path target, boolean replace) throws IOException; }
+
+	/**
+	 * A staged-but-uncommitted generation. {@code slot == null} marks an idempotent no-op whose
+	 * generation is already committed; {@code baseGeneration == null} marks a first publication.
+	 */
+	public record PreparedGeneration(
+			UUID id,
+			long generation,
+			String slot,
+			long manifestChecksum,
+			Long baseGeneration,
+			Long baseManifestChecksum
+	) {
+		public PreparedGeneration {
+			java.util.Objects.requireNonNull(id, "id");
+		}
+
+		static PreparedGeneration alreadyCommitted(UUID id, long generation) {
+			return new PreparedGeneration(id, generation, null, 0L, null, null);
+		}
+
+		public boolean alreadyCommitted() {
+			return slot == null;
+		}
+	}
+
 	public record Discovery(List<RegionManifest> manifests, Map<Path, String> issues) {
 		public Discovery { manifests = List.copyOf(manifests); issues = Map.copyOf(issues); }
 	}

@@ -71,6 +71,7 @@ public final class FluidSimulationService {
 	private boolean defaultDebugOverlays;
 	private boolean controllerFeatureEnabled;
 	private final boolean materialFeatureEnabled;
+	private final boolean worldBridgeFeatureEnabled;
 	private String lastTakeoverFailure;
 	private boolean takeoverMaintenanceEnabled;
 
@@ -87,6 +88,7 @@ public final class FluidSimulationService {
 		serverConfigLocked = configurationLocked;
 		controllerFeatureEnabled = serverConfig.controllersEnabled();
 		materialFeatureEnabled = serverConfig.materialsEnabled();
+		worldBridgeFeatureEnabled = serverConfig.worldBridgeEnabled();
 		regionManager = new FluidRegionManager(serverConfig.limits());
 		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, materialFeatureEnabled);
 		if (configurationLocked) regionOperations.recordIssue(
@@ -152,6 +154,11 @@ public final class FluidSimulationService {
 
 	public boolean materialFeatureEnabled() {
 		return materialFeatureEnabled;
+	}
+
+	/** Live world-bridge gate; ownership gameplay binds to this boot's value like the material gate. */
+	public boolean worldBridgeFeatureEnabled() {
+		return worldBridgeFeatureEnabled;
 	}
 
 	public boolean configuredMaterialFeatureEnabled() {

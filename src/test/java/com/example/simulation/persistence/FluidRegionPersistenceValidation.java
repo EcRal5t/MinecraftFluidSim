@@ -48,6 +48,7 @@ public final class FluidRegionPersistenceValidation {
 		validateMaterialV2Codec();
 		validateUnknownExtensions();
 		validateFaultMatrix();
+		validateStagedGeneration();
 		validateCorruptionAndAtomicMoveFailure();
 		validateWorldConfig();
 		System.out.println("Fluid region persistence validation passed");
@@ -296,9 +297,9 @@ public final class FluidRegionPersistenceValidation {
 	private static void validateWorldConfig() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "config-");
 		FluidServerConfig defaults = FluidServerConfig.loadOrCreate(root);
-		require(!defaults.controllersEnabled() && !defaults.materialsEnabled() && defaults.limits().maximumRegions() == 4,
-				"safe default config changed");
-		FluidServerConfig enabled = defaults.withControllersEnabled(true).withMaterialsEnabled(true);
+		require(!defaults.controllersEnabled() && !defaults.materialsEnabled() && !defaults.worldBridgeEnabled()
+				&& defaults.limits().maximumRegions() == 4, "safe default config changed");
+		FluidServerConfig enabled = defaults.withControllersEnabled(true).withMaterialsEnabled(true).withWorldBridgeEnabled(true);
 		enabled.save(root);
 		require(FluidServerConfig.loadOrCreate(root).equals(enabled), "world-local config did not round-trip");
 
@@ -314,9 +315,60 @@ public final class FluidRegionPersistenceValidation {
 				maximumTotalMarkers=294912
 				""");
 		FluidServerConfig legacy = FluidServerConfig.loadOrCreate(legacyRoot);
-		require(legacy.controllersEnabled() && !legacy.materialsEnabled(), "v1 config did not migrate with materials safely disabled");
+		require(legacy.controllersEnabled() && !legacy.materialsEnabled() && !legacy.worldBridgeEnabled(),
+				"v1 config did not migrate with materials and world bridge safely disabled");
+
+		Path v2Root = Files.createTempDirectory(Path.of("."), "config-v2-");
+		Files.createDirectories(FluidServerConfig.path(v2Root).getParent());
+		Files.writeString(FluidServerConfig.path(v2Root), """
+				formatVersion=2
+				controllersEnabled=false
+				materialsEnabled=true
+				maximumRegions=4
+				maximumCellsPerRegion=9216
+				maximumMarkersPerRegion=73728
+				maximumTotalCells=36864
+				maximumTotalMarkers=294912
+				""");
+		FluidServerConfig v2 = FluidServerConfig.loadOrCreate(v2Root);
+		require(v2.materialsEnabled() && !v2.worldBridgeEnabled(), "v2 config did not keep the world bridge safely disabled");
+		Files.writeString(FluidServerConfig.path(v2Root), Files.readString(FluidServerConfig.path(v2Root))
+				.replace("formatVersion=2", "formatVersion=3"));
+		expectIOException(() -> FluidServerConfig.loadOrCreate(v2Root), "v3 config without the worldBridgeEnabled key was accepted");
+
 		Files.writeString(FluidServerConfig.path(root), "formatVersion=99\ncontrollersEnabled=false\n");
 		expectIOException(() -> FluidServerConfig.loadOrCreate(root), "unknown config version was silently replaced");
+	}
+
+	/** prepare/commit/abort split: staging must stay unreadable until HEAD publishes, and a moved base must fail closed. */
+	private static void validateStagedGeneration() throws Exception {
+		Path root = Files.createTempDirectory(Path.of("."), "staged-");
+		RegionStateFiles files = new RegionStateFiles(root);
+		UUID id = UUID.randomUUID();
+
+		RegionState first = RegionState.capture(populatedRegion(id), 1L);
+		RegionStateFiles.PreparedGeneration preparedFirst = files.prepare(first, (point, path) -> { });
+		require(!preparedFirst.alreadyCommitted(), "first staging was marked idempotent");
+		expectIOException(() -> files.read(id), "uncommitted staging exposed a readable generation");
+		files.commit(preparedFirst, (point, path) -> { });
+		require(files.read(id).manifest().checkpointGeneration() == 1L, "first staged commit did not publish");
+
+		RegionState second = RegionState.capture(populatedRegion(id), 2L);
+		RegionStateFiles.PreparedGeneration preparedSecond = files.prepare(second, (point, path) -> { });
+		require(files.read(id).manifest().checkpointGeneration() == 1L, "staging exposed the uncommitted generation");
+		files.abort(preparedSecond);
+		require(files.read(id).manifest().checkpointGeneration() == 1L, "abort changed the committed generation");
+		files.publish(second);
+		require(files.read(id).manifest().checkpointGeneration() == 2L, "publish after abort did not advance");
+
+		RegionStateFiles.PreparedGeneration stale = files.prepare(RegionState.capture(populatedRegion(id), 3L), (point, path) -> { });
+		files.publish(RegionState.capture(populatedRegion(id), 4L));
+		expectIOException(() -> files.commit(stale, (point, path) -> { }), "commit on a moved base was accepted");
+		require(files.read(id).manifest().checkpointGeneration() == 4L, "moved-base failure changed the committed generation");
+
+		RegionStateFiles.PreparedGeneration repeat = files.prepare(RegionState.capture(populatedRegion(id), 4L), (point, path) -> { });
+		require(repeat.alreadyCommitted() && files.commit(repeat, (point, path) -> { }) == 4L,
+				"idempotent re-staging was not recognized");
 	}
 
 	private static FluidRegion populatedRegion(UUID id) {

@@ -11,13 +11,14 @@ import java.nio.file.StandardOpenOption;
 import java.util.Properties;
 import java.util.Objects;
 
-/** World-local controller/material feature gates and hard region budgets. */
+/** World-local controller/material/world-bridge feature gates and hard region budgets. */
 public record FluidServerConfig(
 		boolean controllersEnabled,
 		boolean materialsEnabled,
+		boolean worldBridgeEnabled,
 		FluidRegionManager.Limits limits
 ) {
-	private static final int FORMAT_VERSION = 2;
+	private static final int FORMAT_VERSION = 3;
 	private static final int DEFAULT_REGIONS = 4;
 	private static final long DEFAULT_CELLS = 9_216L;
 	private static final long DEFAULT_MARKERS = 73_728L;
@@ -26,12 +27,16 @@ public record FluidServerConfig(
 		Objects.requireNonNull(limits, "limits");
 	}
 
+	public FluidServerConfig(boolean controllersEnabled, boolean materialsEnabled, FluidRegionManager.Limits limits) {
+		this(controllersEnabled, materialsEnabled, false, limits);
+	}
+
 	public FluidServerConfig(boolean controllersEnabled, FluidRegionManager.Limits limits) {
-		this(controllersEnabled, false, limits);
+		this(controllersEnabled, false, false, limits);
 	}
 
 	public static FluidServerConfig defaults() {
-		return new FluidServerConfig(false, false, new FluidRegionManager.Limits(DEFAULT_REGIONS, DEFAULT_CELLS, DEFAULT_MARKERS,
+		return new FluidServerConfig(false, false, false, new FluidRegionManager.Limits(DEFAULT_REGIONS, DEFAULT_CELLS, DEFAULT_MARKERS,
 				DEFAULT_CELLS * DEFAULT_REGIONS, DEFAULT_MARKERS * DEFAULT_REGIONS));
 	}
 
@@ -50,16 +55,19 @@ public record FluidServerConfig(
 		try (InputStream input = Files.newInputStream(path)) { properties.load(input); }
 		try {
 			int version = integer(properties, "formatVersion");
-			if (version != 1 && version != FORMAT_VERSION) throw new IOException("Unsupported Real Water server config version " + version);
+			if (version < 1 || version > FORMAT_VERSION) throw new IOException("Unsupported Real Water server config version " + version);
 			String controllers = required(properties, "controllersEnabled");
 			if (!controllers.equals("true") && !controllers.equals("false")) throw new IOException("controllersEnabled must be true or false");
 			String materials = version == 1 ? "false" : required(properties, "materialsEnabled");
 			if (!materials.equals("true") && !materials.equals("false")) throw new IOException("materialsEnabled must be true or false");
+			String worldBridge = version >= 3 ? required(properties, "worldBridgeEnabled") : "false";
+			if (!worldBridge.equals("true") && !worldBridge.equals("false")) throw new IOException("worldBridgeEnabled must be true or false");
 			FluidRegionManager.Limits limits = new FluidRegionManager.Limits(
 					integer(properties, "maximumRegions"), positiveLong(properties, "maximumCellsPerRegion"),
 					positiveLong(properties, "maximumMarkersPerRegion"), positiveLong(properties, "maximumTotalCells"),
 					positiveLong(properties, "maximumTotalMarkers"));
-			return new FluidServerConfig(Boolean.parseBoolean(controllers), Boolean.parseBoolean(materials), limits);
+			return new FluidServerConfig(Boolean.parseBoolean(controllers), Boolean.parseBoolean(materials),
+					Boolean.parseBoolean(worldBridge), limits);
 		} catch (IllegalArgumentException exception) {
 			throw new IOException("Invalid Real Water server config: " + exception.getMessage(), exception);
 		}
@@ -72,6 +80,7 @@ public record FluidServerConfig(
 		properties.setProperty("formatVersion", Integer.toString(FORMAT_VERSION));
 		properties.setProperty("controllersEnabled", Boolean.toString(controllersEnabled));
 		properties.setProperty("materialsEnabled", Boolean.toString(materialsEnabled));
+		properties.setProperty("worldBridgeEnabled", Boolean.toString(worldBridgeEnabled));
 		properties.setProperty("maximumRegions", Integer.toString(limits.maximumRegions()));
 		properties.setProperty("maximumCellsPerRegion", Long.toString(limits.maximumCellsPerRegion()));
 		properties.setProperty("maximumMarkersPerRegion", Long.toString(limits.maximumMarkersPerRegion()));
@@ -90,11 +99,15 @@ public record FluidServerConfig(
 	}
 
 	public FluidServerConfig withControllersEnabled(boolean enabled) {
-		return new FluidServerConfig(enabled, materialsEnabled, limits);
+		return new FluidServerConfig(enabled, materialsEnabled, worldBridgeEnabled, limits);
 	}
 
 	public FluidServerConfig withMaterialsEnabled(boolean enabled) {
-		return new FluidServerConfig(controllersEnabled, enabled, limits);
+		return new FluidServerConfig(controllersEnabled, enabled, worldBridgeEnabled, limits);
+	}
+
+	public FluidServerConfig withWorldBridgeEnabled(boolean enabled) {
+		return new FluidServerConfig(controllersEnabled, materialsEnabled, enabled, limits);
 	}
 
 	private static String required(Properties properties, String key) throws IOException {

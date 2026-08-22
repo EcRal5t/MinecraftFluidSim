@@ -23,7 +23,7 @@
 | 区域身份、solver ownership、运行态 | `src/main/java/com/example/simulation/FluidRegion.java` | UNLOADED 不持 solver 但仍占预算；恢复先刷新碰撞 |
 | 调度生命周期 | `src/main/java/com/example/simulation/FluidRegionLifecycle.java` | 调度状态不得移动、创建、删除或缩放 marker |
 | 区域登记、选择、空间与预算 | `src/main/java/com/example/simulation/FluidRegionManager.java` | 拒绝不替换旧域；报告 required/per-region/remaining |
-| 世界配置 | `src/main/java/com/example/simulation/FluidServerConfig.java` | v1/v2 配置 fail-closed；v1 强制 materials 关闭；预算与材料门重启后生效 |
+| 世界配置 | `src/main/java/com/example/simulation/FluidServerConfig.java` | v1/v2/v3 配置 fail-closed；v1 强制 materials/worldBridge 关闭，v2 强制 worldBridge 关闭；预算与各功能门重启后生效 |
 | controller 持久化协调 | `src/main/java/com/example/simulation/FluidRegionPersistence.java` | manifest admission、checkpoint、quarantine 与 takeover journal 分离；按材料门分派 v1/v2 |
 | `region-state v1`/门控 v2 | `src/main/java/com/example/simulation/persistence/`、`docs/architecture/region-state-v1.md` | 两槽完整代次、CRC、账本和 HEAD 最后发布；v1 canonical bytes 不变 |
 | M3 跨层迁移边界 | `docs/architecture/m3-material-state-migration.md` | 单一 `materialsEnabled` 门；network v2 与 region-state v2 独立版本；运行时 handle 不上链 |
