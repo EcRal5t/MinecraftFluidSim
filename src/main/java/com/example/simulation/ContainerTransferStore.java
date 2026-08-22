@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -24,7 +25,7 @@ import java.util.UUID;
  */
 public final class ContainerTransferStore {
 private static final String ROOT_DIRECTORY_NAME = "container-transfer";
-private static final int FORMAT_VERSION = 1;
+private static final int FORMAT_VERSION = 2;
 private static final long MAX_COMPRESSED_NBT_BYTES = 4L * 1024L * 1024L;
 private static final String TEMP_SUFFIX = ".tmp";
 
@@ -37,27 +38,54 @@ this.directory = worldRoot.toAbsolutePath().normalize()
 }
 
 public boolean hasAny() throws IOException {
-if (!Files.exists(directory)) return false;
-try (DirectoryStream<Path> entries = Files.newDirectoryStream(directory, "*.nbt")) {
-return entries.iterator().hasNext();
-}
+return scan().hasAny();
 }
 
 public List<UUID> listTransactions() throws IOException {
+return scan().transactions();
+}
+
+/**
+ * Strict discovery for this short-lived recovery store. Any foreign name, directory, staged
+ * temporary, corrupt WAL, or filename/payload mismatch is retained and reported. Callers treat
+ * even one issue as a global lock because its region cannot be identified safely.
+ */
+public Scan scan() throws IOException {
+if (!Files.exists(directory)) return new Scan(List.of(), List.of());
+if (!Files.isDirectory(directory)) {
+return new Scan(List.of(), List.of("container-transfer root is not a directory: " + directory));
+}
 List<UUID> ids = new ArrayList<>();
-if (!Files.exists(directory)) return ids;
-try (DirectoryStream<Path> entries = Files.newDirectoryStream(directory, "*.nbt")) {
+List<String> issues = new ArrayList<>();
+try (DirectoryStream<Path> entries = Files.newDirectoryStream(directory)) {
 for (Path entry : entries) {
 String name = entry.getFileName().toString();
-if (!name.endsWith(".nbt")) continue;
+if (!Files.isRegularFile(entry) || !name.endsWith(".nbt")) {
+issues.add("unknown container-transfer content is preserved: " + entry);
+continue;
+}
+UUID id;
 try {
-ids.add(UUID.fromString(name.substring(0, name.length() - 4)));
-} catch (IllegalArgumentException ignored) {
-// Unknown files are reported as locked by the caller; never silently delete them.
+id = UUID.fromString(name.substring(0, name.length() - 4));
+} catch (IllegalArgumentException invalidName) {
+issues.add("unknown container-transfer WAL name is preserved: " + entry);
+continue;
+}
+try {
+ContainerTransferJournal journal = read(id);
+if (!journal.transactionId().equals(id)) {
+issues.add("container-transfer WAL filename/payload mismatch: " + entry);
+continue;
+}
+ids.add(id);
+} catch (IOException | RuntimeException invalidWal) {
+issues.add("unreadable container-transfer WAL is preserved: " + entry + " (" + invalidWal.getMessage() + ")");
 }
 }
 }
-return List.copyOf(ids);
+ids.sort(Comparator.comparing(UUID::toString));
+issues.sort(String::compareTo);
+return new Scan(List.copyOf(ids), List.copyOf(issues));
 }
 
 public ContainerTransferJournal read(UUID transactionId) throws IOException {
@@ -68,6 +96,7 @@ return decode(root);
 }
 
 public void write(ContainerTransferJournal journal) throws IOException {
+assertHealthyLayout();
 Files.createDirectories(directory);
 Path path = path(journal.transactionId());
 Path temporary = path.resolveSibling(path.getFileName() + TEMP_SUFFIX);
@@ -92,9 +121,27 @@ throw exception;
 }
 
 public void delete(UUID transactionId) throws IOException {
+assertHealthyLayout();
 deleteIfExists(path(transactionId));
 Path temporary = path(transactionId).resolveSibling(path(transactionId).getFileName() + TEMP_SUFFIX);
 deleteIfExists(temporary);
+}
+
+private void assertHealthyLayout() throws IOException {
+Scan scan = scan();
+if (!scan.issues().isEmpty()) {
+throw new IOException("Container-transfer store is locked: " + String.join("; ", scan.issues()));
+}
+}
+
+Path directoryPath() {
+return directory;
+}
+
+public record Scan(List<UUID> transactions, List<String> issues) {
+public boolean hasAny() {
+return !transactions.isEmpty() || !issues.isEmpty();
+}
 }
 
 private Path path(UUID transactionId) {
@@ -131,6 +178,7 @@ throw denied;
 }
 
 private static CompoundTag encode(ContainerTransferJournal journal) throws IOException {
+validateTransferShape(journal);
 CompoundTag root = new CompoundTag();
 root.putInt("Version", FORMAT_VERSION);
 root.putLong("TxUuidMost", journal.transactionId().getMostSignificantBits());
@@ -177,7 +225,9 @@ return root;
 private static ContainerTransferJournal decode(CompoundTag root) throws IOException {
 requireType(root, "Version", Tag.TAG_INT);
 int version = root.getIntOr("Version", -1);
-if (version != FORMAT_VERSION) throw new IOException("Unsupported container transfer WAL version " + version);
+if (version != 1 && version != FORMAT_VERSION) {
+throw new IOException("Unsupported container transfer WAL version " + version);
+}
 
 requireType(root, "TxUuidMost", Tag.TAG_LONG);
 requireType(root, "TxUuidLeast", Tag.TAG_LONG);
@@ -232,41 +282,69 @@ root.getIntOr("DispenserSlot", -1)
 default -> throw new IOException("Unknown actor type " + actorType);
 }
 
-ContainerTransferJournal.ItemFingerprint beforeItem = getFingerprint(root, "Before");
-ContainerTransferJournal.ItemFingerprint afterItem = getFingerprint(root, "After");
+ContainerTransferJournal.ItemFingerprint beforeItem = getFingerprint(root, "Before", version);
+ContainerTransferJournal.ItemFingerprint afterItem = getFingerprint(root, "After", version);
 
 requireType(root, "Phase", Tag.TAG_STRING);
 ContainerTransferJournal.Phase phase = parsePhase(root.getStringOr("Phase", ""));
 
-return new ContainerTransferJournal(transactionId, regionId, dimensionId, baseGeneration, targetGeneration,
+ContainerTransferJournal journal = new ContainerTransferJournal(
+transactionId, regionId, dimensionId, baseGeneration, targetGeneration,
 operation, volumeNanos, actor, beforeItem, afterItem, phase);
+validateTransferShape(journal);
+return journal;
 }
 
 private static void putFingerprint(CompoundTag root, String prefix, ContainerTransferJournal.ItemFingerprint item) throws IOException {
 root.putString(prefix + "Kind", itemKindName(item.kind()));
 root.putLong(prefix + "Nanos", item.nanos());
 if (item.materialId() != null) root.putString(prefix + "MaterialId", item.materialId());
+root.putLong(prefix + "MassBits", item.massBits());
 }
 
-private static ContainerTransferJournal.ItemFingerprint getFingerprint(CompoundTag root, String prefix) throws IOException {
+private static ContainerTransferJournal.ItemFingerprint getFingerprint(CompoundTag root, String prefix, int version) throws IOException {
 requireType(root, prefix + "Kind", Tag.TAG_STRING);
 requireType(root, prefix + "Nanos", Tag.TAG_LONG);
 ContainerTransferJournal.ItemKind kind = parseItemKind(root.getStringOr(prefix + "Kind", ""));
 long nanos = root.getLongOr(prefix + "Nanos", 0L);
 String materialId = root.getStringOr(prefix + "MaterialId", null);
+long massBits;
+if (version >= 2) {
+requireType(root, prefix + "MassBits", Tag.TAG_LONG);
+massBits = root.getLongOr(prefix + "MassBits", -1L);
+} else {
+if (kind == ContainerTransferJournal.ItemKind.MATERIAL_BUCKET) {
+throw new IOException("Legacy v1 material-bucket WAL has no independent mass ledger; manual recovery is required");
+}
+massBits = -1L;
+}
 if (kind == ContainerTransferJournal.ItemKind.PARTIAL) {
 if (!com.example.item.ContainerFluidLedger.isPartialBucket(nanos)) {
 throw new IOException(prefix + " partial bucket nanovolume is invalid: " + nanos);
 }
 } else if (kind == ContainerTransferJournal.ItemKind.MATERIAL_BUCKET) {
-if (materialId == null || Identifier.tryParse(materialId) == null || nanos <= 0L
-|| nanos > com.example.item.ContainerFluidLedger.NANOS_PER_BLOCK) {
+double mass = Double.longBitsToDouble(massBits);
+if (materialId == null || nanos <= 0L
+|| nanos > com.example.item.ContainerFluidLedger.NANOS_PER_BLOCK
+|| !(Double.isFinite(mass) && mass > 0.0)) {
 throw new IOException(prefix + " material bucket fingerprint is invalid");
 }
-} else if (materialId != null || nanos != -1L) {
+try {
+com.example.item.FluidMixture mixture = materialId.startsWith("v1;")
+? com.example.item.FluidMixture.decode(materialId)
+: new com.example.item.FluidMixture(java.util.List.of(
+new com.example.item.FluidMixture.Component(materialId, nanos, massBits)));
+if (mixture.totalVolumeNanos() != nanos
+|| Double.doubleToRawLongBits(mixture.totalMass()) != massBits) {
+throw new IllegalArgumentException("mixture totals disagree with fingerprint");
+}
+} catch (IllegalArgumentException invalidMixture) {
+throw new IOException(prefix + " material bucket mixture is invalid", invalidMixture);
+}
+} else if (materialId != null || nanos != -1L || massBits != -1L) {
 throw new IOException(prefix + " non-material bucket must not carry material id or nanovolume");
 }
-return new ContainerTransferJournal.ItemFingerprint(kind, nanos, materialId);
+return new ContainerTransferJournal.ItemFingerprint(kind, nanos, materialId, massBits);
 }
 private static void validateDimension(String dimensionId) throws IOException {
 if (Identifier.tryParse(dimensionId) == null) throw new IOException("Invalid container transfer WAL dimension: " + dimensionId);
@@ -276,6 +354,64 @@ private static void validateGeneration(long base, long target) throws IOExceptio
 if (base < 0L || target != base + 1L) {
 throw new IOException("Container transfer WAL generations are inconsistent: base " + base + ", target " + target);
 }
+}
+
+/** Rejects syntactically valid WALs whose item delta cannot settle the declared solver delta. */
+private static void validateTransferShape(ContainerTransferJournal journal) throws IOException {
+if (journal.operation() == null || journal.phase() == null
+|| journal.beforeItem() == null || journal.afterItem() == null) {
+throw new IOException("Container transfer WAL is incomplete");
+}
+long bucket = com.example.item.ContainerFluidLedger.NANOS_PER_BLOCK;
+long amount = journal.volumeNanos();
+if (amount <= 0L || amount > bucket) {
+throw new IOException("Container transfer WAL volume is outside one bucket: " + amount);
+}
+if (journal.phase() == ContainerTransferJournal.Phase.PREPARED
+&& !journal.beforeItem().equals(journal.afterItem())) {
+throw new IOException("Prepared container transfer must not claim an after-item mutation");
+}
+
+long beforePure = pureVolume(journal.beforeItem());
+long afterPure = pureVolume(journal.afterItem());
+long beforeMaterial = materialVolume(journal.beforeItem());
+long afterMaterial = materialVolume(journal.afterItem());
+boolean prepared = journal.phase() == ContainerTransferJournal.Phase.PREPARED;
+boolean valid;
+if (journal.operation() == ContainerTransferJournal.Operation.INSERT) {
+boolean pure = beforePure == amount && beforePure > 0L
+&& (prepared || afterPure == 0L || journal.afterItem().equals(journal.beforeItem()));
+boolean material = beforeMaterial == amount && beforeMaterial > 0L
+&& (prepared || afterMaterial == 0L || journal.afterItem().equals(journal.beforeItem()));
+valid = pure || material;
+} else {
+boolean pure = beforePure >= 0L && beforePure <= bucket - amount
+&& (prepared || afterPure == beforePure + amount);
+boolean material = beforeMaterial == 0L
+&& (prepared || afterMaterial == amount);
+valid = pure || material;
+}
+if (!valid) {
+throw new IOException("Container transfer item delta does not match " + journal.operation()
++ " volume " + amount + ": " + journal.beforeItem() + " -> " + journal.afterItem());
+}
+}
+
+private static long pureVolume(ContainerTransferJournal.ItemFingerprint item) {
+return switch (item.kind()) {
+case BUCKET -> 0L;
+case WATER_BUCKET -> com.example.item.ContainerFluidLedger.NANOS_PER_BLOCK;
+case PARTIAL -> item.nanos();
+case EMPTY_MATERIAL_BUCKET, MATERIAL_BUCKET -> -1L;
+};
+}
+
+private static long materialVolume(ContainerTransferJournal.ItemFingerprint item) {
+return switch (item.kind()) {
+case EMPTY_MATERIAL_BUCKET -> 0L;
+case MATERIAL_BUCKET -> item.nanos();
+case BUCKET, WATER_BUCKET, PARTIAL -> -1L;
+};
 }
 
 private static String operationName(ContainerTransferJournal.Operation operation) {
@@ -307,6 +443,7 @@ return switch (kind) {
 case BUCKET -> "BUCKET";
 case WATER_BUCKET -> "WATER_BUCKET";
 case PARTIAL -> "PARTIAL";
+case EMPTY_MATERIAL_BUCKET -> "EMPTY_MATERIAL_BUCKET";
 case MATERIAL_BUCKET -> "MATERIAL_BUCKET";
 };
 }
@@ -316,6 +453,7 @@ return switch (name) {
 case "BUCKET" -> ContainerTransferJournal.ItemKind.BUCKET;
 case "WATER_BUCKET" -> ContainerTransferJournal.ItemKind.WATER_BUCKET;
 case "PARTIAL" -> ContainerTransferJournal.ItemKind.PARTIAL;
+case "EMPTY_MATERIAL_BUCKET" -> ContainerTransferJournal.ItemKind.EMPTY_MATERIAL_BUCKET;
 case "MATERIAL_BUCKET" -> ContainerTransferJournal.ItemKind.MATERIAL_BUCKET;
 default -> throw new IOException("Unknown container transfer item kind: " + name);
 };

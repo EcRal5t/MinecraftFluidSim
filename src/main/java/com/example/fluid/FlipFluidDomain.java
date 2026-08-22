@@ -324,7 +324,7 @@ public final class FlipFluidDomain {
 			velocities[velocityBase + 2] = particleVelocityZ[particle];
 		}
 		return new FlipMaterialParticleState(
-				sizeX, sizeY, sizeZ, config.cellSize(), particleCount, totalVolume(), totalMass(), materialRegistry.materials(),
+				sizeX, sizeY, sizeZ, config.cellSize(), particleCount, totalVolumeExact(), totalMass(), materialRegistry.materials(),
 				positionVolume, velocities, copySolidMask(),
 				Arrays.copyOf(particleMass, particleCount), Arrays.copyOf(particleMaterialHandle, particleCount)
 		);
@@ -391,14 +391,23 @@ public final class FlipFluidDomain {
 	float surfaceTensionPressureAt(int x, int y, int z) { return surfaceTensionPressure[cellIndexChecked(x, y, z)]; }
 
 	public float totalVolume() {
+		return (float) totalVolumeExact();
+	}
+
+	/** Exact double sum of the float marker-volume truth, in stable marker ordinal order. */
+	public double totalVolumeExact() {
 		double result = 0.0;
 		for (int i = 0; i < particleCount; i++) result += particleVolume[i];
-		return (float) result;
+		return result;
 	}
 
 	/** Total open cell volume across the domain; global capacity for exact bucket insertion. */
 	public float totalOpenVolume() {
-		float result = 0.0F;
+		return (float) totalOpenVolumeExact();
+	}
+
+	public double totalOpenVolumeExact() {
+		double result = 0.0;
 		for (int cell = 0; cell < cellCount; cell++) result += cutCells.openCellVolume(cell);
 		return result;
 	}
@@ -426,6 +435,19 @@ public final class FlipFluidDomain {
 			if (volumes[handle] > volumes[best]) best = handle;
 		}
 		return best;
+	}
+
+	/** Exact nearby marker volume for planning a partial container extraction; -1 selects all materials. */
+	public double exactVolumeNear(int centerX, int centerY, int centerZ, int maxRadius, int materialHandle) {
+		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
+		boolean[] near = new boolean[cellCount];
+		for (CellCandidate candidate : nearbyCells(centerX, centerY, centerZ, maxRadius)) near[candidate.index()] = true;
+		double result = 0.0;
+		for (int particle = 0; particle < particleCount; particle++) {
+			if (materialHandle >= 0 && particleMaterialHandle[particle] != materialHandle) continue;
+			if (near[particleCellIndex(particle)]) result += particleVolume[particle];
+		}
+		return result;
 	}
 
 
@@ -638,14 +660,14 @@ public final class FlipFluidDomain {
 
 	public VolumeAddition addVolumeNearBudgeted(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
 		validateVolumeEdit(amount, maxRadius);
-		float[] exactCellVolume = exactCellVolumes();
+		double[] exactCellVolume = exactCellVolumes();
 		float remaining = amount;
 		boolean markerBudgetLimited = false;
 		for (CellCandidate candidate : nearbyCells(centerX, centerY, centerZ, maxRadius)) {
 			int index = candidate.index();
 			int x = index % sizeX, yz = index / sizeX, y = yz % sizeY, z = yz / sizeY;
-			float requestedForCell = Math.min(remaining,
-					Math.max(0.0F, cutCells.openCellVolume(index) - exactCellVolume[index]));
+			float requestedForCell = (float) Math.min(remaining,
+					Math.max(0.0, cutCells.openCellVolume(index) - exactCellVolume[index]));
 			int availableMarkers = maximumParticleCount - particleCount;
 			float markerCapacity = availableMarkers * PARTICLE_VOLUME;
 			float added = Math.min(requestedForCell, markerCapacity);
@@ -699,42 +721,106 @@ public final class FlipFluidDomain {
 
 	public ExactVolumeTransfer tryInsertExactVolume(int centerX, int centerY, int centerZ, float volume, int maxRadius, int materialHandle) {
 		validateVolumeEdit(volume, maxRadius);
-		if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0);
-		float[] exactCellVolume = exactCellVolumes();
+		if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0, 0.0);
+		double mass = materialRegistry == null
+				? (double) volume * config.density()
+				: (double) volume * materialRegistry.material(materialHandle).referenceDensity();
+		return tryInsertExactMaterial(centerX, centerY, centerZ, volume, mass, maxRadius, materialHandle);
+	}
+
+	/** Inserts independent material volume and mass ledgers without deriving either from the other. */
+	public ExactVolumeTransfer tryInsertExactMaterial(
+			int centerX, int centerY, int centerZ, float volume, double mass, int maxRadius, int materialHandle
+	) {
+		if (volume == 0.0F && mass == 0.0) return new ExactVolumeTransfer(true, 0.0, 0.0);
+		ExactMixtureTransfer transfer = tryInsertExactMixture(centerX, centerY, centerZ,
+				List.of(new MaterialPortion(materialHandle, volume, mass)), maxRadius);
+		return transfer.transferred()
+				? new ExactVolumeTransfer(true, transfer.portions().getFirst().volume(),
+						transfer.portions().getFirst().mass())
+				: new ExactVolumeTransfer(false, 0.0, 0.0);
+	}
+
+	/** Plans every mixture component against shared capacity before inserting any marker. */
+	public ExactMixtureTransfer tryInsertExactMixture(
+			int centerX, int centerY, int centerZ, List<MaterialPortion> portions, int maxRadius
+	) {
+		if (portions == null || portions.isEmpty()) throw new IllegalArgumentException("Mixture insertion is empty");
+		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
+		java.util.Set<Integer> materialHandles = new java.util.HashSet<>();
+		for (MaterialPortion portion : portions) {
+			validateMaterialPortion(portion);
+			if (!materialHandles.add(portion.materialHandle())) {
+				throw new IllegalArgumentException("Mixture insertion contains duplicate material handle "
+						+ portion.materialHandle());
+			}
+		}
+		double[] exactCellVolume = exactCellVolumes();
 		java.util.List<InsertAllocation> plan = new java.util.ArrayList<>();
 		long requiredMarkers = 0L;
-		double remaining = volume;
-		for (CellCandidate candidate : nearbyCells(centerX, centerY, centerZ, maxRadius)) {
-			if (remaining <= 0.0) break;
-			int index = candidate.index();
-			float capacity = Math.max(0.0F, cutCells.openCellVolume(index) - exactCellVolume[index]);
-			double allocate = Math.min(capacity, remaining);
-			if (allocate <= 0.0) continue;
-			requiredMarkers += (long) Math.ceil(allocate / PARTICLE_VOLUME);
-			if (particleCount + requiredMarkers > maximumParticleCount) {
-				return new ExactVolumeTransfer(false, 0.0);
+		List<CellCandidate> nearby = nearbyCells(centerX, centerY, centerZ, maxRadius);
+		for (int portionIndex = 0; portionIndex < portions.size(); portionIndex++) {
+			MaterialPortion portion = portions.get(portionIndex);
+			double remaining = portion.volume();
+			for (CellCandidate candidate : nearby) {
+				if (remaining <= 0.0) break;
+				int index = candidate.index();
+				double capacity = Math.max(0.0, cutCells.openCellVolume(index) - exactCellVolume[index]);
+				double allocate = Math.min(capacity, remaining);
+				if (allocate <= 0.0) continue;
+				requiredMarkers += (long) Math.ceil(allocate / PARTICLE_VOLUME);
+				if (particleCount + requiredMarkers > maximumParticleCount) {
+					return new ExactMixtureTransfer(false, List.of());
+				}
+				int x = index % sizeX, yz = index / sizeX, y = yz % sizeY, z = yz / sizeY;
+				plan.add(new InsertAllocation(x, y, z, allocate, portion.materialHandle(), portionIndex));
+				exactCellVolume[index] += allocate;
+				remaining -= allocate;
 			}
-			int x = index % sizeX, yz = index / sizeX, y = yz % sizeY, z = yz / sizeY;
-			plan.add(new InsertAllocation(x, y, z, allocate));
-			remaining -= allocate;
+			if (remaining > 0.0) return new ExactMixtureTransfer(false, List.of());
 		}
-		if (remaining > 0.0) return new ExactVolumeTransfer(false, 0.0);
 
-		double inserted = 0.0;
+		double[] inserted = new double[portions.size()];
+		double[] insertedMass = new double[portions.size()];
+		double[] volumeLeft = new double[portions.size()];
+		double[] massLeft = new double[portions.size()];
+		for (int i = 0; i < portions.size(); i++) {
+			volumeLeft[i] = portions.get(i).volume();
+			massLeft[i] = portions.get(i).mass();
+		}
 		for (InsertAllocation allocation : plan) {
+			int portionIndex = allocation.portionIndex();
 			double left = allocation.amount();
 			int slot = firstOpenSlot(cellIndex(allocation.x(), allocation.y(), allocation.z()), 0);
 			while (left > 0.0) {
-				float piece = left >= PARTICLE_VOLUME ? PARTICLE_VOLUME : (float) left;
+				boolean allocationRemainder = left < PARTICLE_VOLUME;
+				float piece = allocationRemainder ? (float) left : PARTICLE_VOLUME;
 				if (slot < 0) throw new IllegalStateException("Cut-cell open volume was exhausted while spawning markers");
-				spawnParticle(allocation.x(), allocation.y(), allocation.z(), slot, piece, materialHandle);
-				inserted += piece;
-				left -= piece;
+				boolean finalPortionPiece = volumeLeft[portionIndex] - piece
+						<= Math.ulp((float) volumeLeft[portionIndex]);
+				double pieceMass = finalPortionPiece ? massLeft[portionIndex]
+						: massLeft[portionIndex] * piece / volumeLeft[portionIndex];
+				spawnParticle(allocation.x(), allocation.y(), allocation.z(), slot, piece,
+						allocation.materialHandle(), pieceMass);
+				inserted[portionIndex] += piece;
+				insertedMass[portionIndex] += pieceMass;
+				left = allocationRemainder ? 0.0 : left - piece;
+				if (finalPortionPiece) {
+					volumeLeft[portionIndex] = 0.0;
+					massLeft[portionIndex] = 0.0;
+				} else {
+					volumeLeft[portionIndex] -= piece;
+					massLeft[portionIndex] -= pieceMass;
+				}
 				slot = firstOpenSlot(cellIndex(allocation.x(), allocation.y(), allocation.z()), slot + 1);
 			}
 		}
 		gridDirty = true;
-		return new ExactVolumeTransfer(true, inserted);
+		List<MaterialPortion> result = new java.util.ArrayList<>(portions.size());
+		for (int i = 0; i < portions.size(); i++) {
+			result.add(new MaterialPortion(portions.get(i).materialHandle(), inserted[i], insertedMass[i]));
+		}
+		return new ExactMixtureTransfer(true, List.copyOf(result));
 	}
 
 	/**
@@ -748,55 +834,107 @@ return tryExtractExactVolume(centerX, centerY, centerZ, volume, maxRadius, 0);
 }
 
 public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int centerZ, float volume, int maxRadius, int materialHandle) {
-validateVolumeEdit(volume, maxRadius);
-if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0);
-java.util.List<CellCandidate> cells = nearbyCells(centerX, centerY, centerZ, maxRadius);
-boolean[] near = new boolean[sizeX * sizeY * sizeZ];
-for (CellCandidate candidate : cells) near[candidate.index()] = true;
-float h = config.cellSize();
-double available = 0.0;
-for (int i = 0; i < particleCount; i++) {
-if (particleMaterialHandle[i] != materialHandle) continue;
-if (!near[cellIndex(
-(int) Math.floor(particleX[i] / h), (int) Math.floor(particleY[i] / h), (int) Math.floor(particleZ[i] / h))]) {
-continue;
+	validateVolumeEdit(volume, maxRadius);
+	if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0, 0.0);
+	ExactMixtureTransfer transfer = tryExtractExactMixtureInternal(
+			centerX, centerY, centerZ, volume, maxRadius, materialHandle);
+	if (!transfer.transferred()) return new ExactVolumeTransfer(false, 0.0, 0.0);
+	MaterialPortion portion = transfer.portions().getFirst();
+	return new ExactVolumeTransfer(true, portion.volume(), portion.mass());
 }
-available += particleVolume[i];
-}
-if (available < volume) return new ExactVolumeTransfer(false, 0.0);
 
-double remaining = volume;
-double removed = 0.0;
-for (CellCandidate candidate : cells) {
-if (remaining <= 0.0) break;
-int cell = candidate.index();
-boolean progress = true;
-while (remaining > 0.0 && progress) {
-progress = false;
-for (int i = particleCount - 1; i >= 0; i--) {
-if (particleCellIndex(i) != cell || particleMaterialHandle[i] != materialHandle) continue;
-float previousVolume = particleVolume[i];
-double take = Math.min(previousVolume, remaining);
-float newVolume = (float) (previousVolume - take);
-if (newVolume <= 1.0E-6F) newVolume = 0.0F;
-double actual = previousVolume - newVolume;
-if (actual <= 0.0) continue;
-particleVolume[i] = newVolume;
-particleMass[i] *= newVolume / previousVolume;
-if (newVolume <= 0.0F) removeParticle(i);
-removed += actual;
-remaining -= actual;
-progress = true;
-break;
-}
-}
-}
-gridDirty = true;
-return new ExactVolumeTransfer(true, removed);
-}
-	private record InsertAllocation(int x, int y, int z, double amount) { }
+	/** Extracts nearby materials in deterministic cell/marker order and returns every component. */
+	public ExactMixtureTransfer tryExtractExactMixture(
+			int centerX, int centerY, int centerZ, float volume, int maxRadius
+	) {
+		validateVolumeEdit(volume, maxRadius);
+		if (volume <= 0.0F) return new ExactMixtureTransfer(volume == 0.0F, List.of());
+		return tryExtractExactMixtureInternal(centerX, centerY, centerZ, volume, maxRadius, -1);
+	}
 
-	public record ExactVolumeTransfer(boolean transferred, double volume) { }
+	private ExactMixtureTransfer tryExtractExactMixtureInternal(
+			int centerX, int centerY, int centerZ, float volume, int maxRadius, int requiredMaterialHandle
+	) {
+		java.util.List<CellCandidate> cells = nearbyCells(centerX, centerY, centerZ, maxRadius);
+		boolean[] near = new boolean[sizeX * sizeY * sizeZ];
+		for (CellCandidate candidate : cells) near[candidate.index()] = true;
+		float h = config.cellSize();
+		double available = 0.0;
+		for (int i = 0; i < particleCount; i++) {
+			if (requiredMaterialHandle >= 0 && particleMaterialHandle[i] != requiredMaterialHandle) continue;
+			if (!near[cellIndex((int) Math.floor(particleX[i] / h), (int) Math.floor(particleY[i] / h),
+					(int) Math.floor(particleZ[i] / h))]) continue;
+			available += particleVolume[i];
+		}
+		if (available < volume) return new ExactMixtureTransfer(false, List.of());
+
+		double remaining = volume;
+		java.util.List<ExtractionAllocation> plan = new java.util.ArrayList<>();
+		int ledgerSize = materialRegistry == null ? 1 : materialRegistry.size();
+		double[] volumeBefore = new double[ledgerSize];
+		double[] massBefore = new double[ledgerSize];
+		for (int particle = 0; particle < particleCount; particle++) {
+			volumeBefore[particleMaterialHandle[particle]] += particleVolume[particle];
+			massBefore[particleMaterialHandle[particle]] += particleMass[particle];
+		}
+		java.util.Set<Integer> changedHandles = new java.util.TreeSet<>();
+		for (CellCandidate candidate : cells) {
+			if (remaining <= 0.0) break;
+			int cell = candidate.index();
+			for (int i = particleCount - 1; i >= 0; i--) {
+				if (remaining <= 0.0) break;
+				if (particleCellIndex(i) != cell
+						|| requiredMaterialHandle >= 0 && particleMaterialHandle[i] != requiredMaterialHandle) continue;
+				float previousVolume = particleVolume[i];
+				double take = Math.min(previousVolume, remaining);
+				float newVolume = (float) (previousVolume - take);
+				double actual = previousVolume - newVolume;
+				if (actual <= 0.0) continue;
+				double previousMass = particleMass[i];
+				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
+				int handle = particleMaterialHandle[i];
+				plan.add(new ExtractionAllocation(i, newVolume, newMass));
+				changedHandles.add(handle);
+				remaining -= actual;
+			}
+		}
+		if (remaining > Math.ulp(volume)) return new ExactMixtureTransfer(false, List.of());
+		for (ExtractionAllocation allocation : plan) {
+			particleVolume[allocation.particle()] = allocation.newVolume();
+			particleMass[allocation.particle()] = allocation.newMass();
+		}
+		// Do not compact during indexed writes: removeParticle swaps the last marker into the current
+		// index and could invalidate a later planned ordinal. Compact only after every ledger edit.
+		for (int particle = particleCount - 1; particle >= 0; particle--) {
+			if (particleVolume[particle] == 0.0F) removeParticle(particle);
+		}
+		gridDirty = true;
+		double[] volumeAfter = new double[ledgerSize];
+		double[] massAfter = new double[ledgerSize];
+		for (int particle = 0; particle < particleCount; particle++) {
+			volumeAfter[particleMaterialHandle[particle]] += particleVolume[particle];
+			massAfter[particleMaterialHandle[particle]] += particleMass[particle];
+		}
+		List<MaterialPortion> result = new java.util.ArrayList<>(changedHandles.size());
+		for (int handle : changedHandles) {
+			double removedVolume = volumeBefore[handle] - volumeAfter[handle];
+			double removedMass = massBefore[handle] - massAfter[handle];
+			if (removedVolume > 0.0 && removedMass > 0.0) {
+				result.add(new MaterialPortion(handle, removedVolume, removedMass));
+			}
+		}
+		return new ExactMixtureTransfer(true, List.copyOf(result));
+}
+	private record InsertAllocation(
+			int x, int y, int z, double amount, int materialHandle, int portionIndex
+	) { }
+	private record ExtractionAllocation(
+			int particle, float newVolume, double newMass
+	) { }
+
+	public record ExactVolumeTransfer(boolean transferred, double volume, double mass) { }
+	public record ExactMixtureTransfer(boolean transferred, List<MaterialPortion> portions) { }
+	public record MaterialPortion(int materialHandle, double volume, double mass) { }
 
 	public StepStats step() {
 		float before = totalVolume();
@@ -1691,7 +1829,17 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, 0);
 }
 
 private void spawnParticle(int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle) {
+double mass = materialRegistry == null
+? (double) amount * config.density()
+: (double) amount * materialRegistry.material(materialHandle).referenceDensity();
+spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass);
+}
+
+private void spawnParticle(
+int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass
+) {
 if (particleCount >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
+if (!(Double.isFinite(mass) && mass > 0.0)) throw new IllegalArgumentException("Marker mass must be finite and positive");
 ensureParticleCapacity(particleCount + 1);
 float h = config.cellSize();
 float radiusFraction = 0.45F;
@@ -1711,12 +1859,11 @@ particleVelocityX[particleCount] = 0.0F;
 particleVelocityY[particleCount] = 0.0F;
 particleVelocityZ[particleCount] = 0.0F;
 particleVolume[particleCount] = amount;
-if (materialRegistry != null) {
-assignMarkerMaterial(particleCount, materialRegistry, materialHandle);
-} else {
-if (materialHandle != 0) throw new IllegalArgumentException("Material handle requires a bound material registry");
-setDefaultMaterialState(particleCount);
-}
+if (materialRegistry != null) materialRegistry.material(materialHandle);
+else if (materialHandle != 0) throw new IllegalArgumentException("Material handle requires a bound material registry");
+particleMass[particleCount] = mass;
+particleMaterialHandle[particleCount] = materialHandle;
+particlePhaseLabel[particleCount] = materialRegistry == null ? 0 : materialRegistry.phaseHandle(materialHandle);
 particleCount++;
 }
 
@@ -1775,8 +1922,8 @@ particleCount++;
 		return result;
 	}
 
-	private float[] exactCellVolumes() {
-		float[] exact = new float[cellCount];
+	private double[] exactCellVolumes() {
+		double[] exact = new double[cellCount];
 		float h = config.cellSize();
 		for (int particle = 0; particle < particleCount; particle++) {
 			int x = (int) Math.floor(particleX[particle] / h);
@@ -1897,6 +2044,20 @@ particleCount++;
 	private void validateVolumeEdit(float amount, int maxRadius) {
 		if (!Float.isFinite(amount) || amount < 0.0F) throw new IllegalArgumentException("amount must be finite and non-negative");
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
+	}
+	private void validateMaterialPortion(MaterialPortion portion) {
+		if (portion == null || !(Double.isFinite(portion.volume()) && portion.volume() > 0.0
+				&& portion.volume() <= Float.MAX_VALUE)
+				|| !(Double.isFinite(portion.mass()) && portion.mass() > 0.0)) {
+			throw new IllegalArgumentException("Material portion ledgers must be finite and positive");
+		}
+		if (materialRegistry == null) {
+			if (portion.materialHandle() != 0) {
+				throw new IllegalArgumentException("Material handle requires a bound registry");
+			}
+		} else {
+			materialRegistry.material(portion.materialHandle());
+		}
 	}
 	private static int particlesRequired(float amount) {
 		if (amount <= 1.0E-6F) return 0;

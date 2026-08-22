@@ -33,11 +33,29 @@ public final class MaterialBucketItem extends Item {
 		return value;
 	}
 
+	/** Returns the independent exact material mass, or -1 when missing/invalid. */
+	public static double mass(ItemStack stack) {
+		Long bits = stack.get(RealWaterComponents.FLUID_MASS_BITS);
+		if (bits == null) return -1.0;
+		double value = Double.longBitsToDouble(bits);
+		return Double.isFinite(value) && value > 0.0 ? value : -1.0;
+	}
+
+	public static FluidMixture mixture(ItemStack stack) {
+		try {
+			return FluidMixture.fromStack(stack);
+		} catch (IllegalArgumentException invalid) {
+			return null;
+		}
+	}
+
 	/** Returns true when this material bucket has neither volume nor material id and can scoop. */
 	public static boolean isEmptyMaterialBucket(ItemStack stack) {
 		return stack.getItem() instanceof MaterialBucketItem
 				&& volume(stack) < 0L
-				&& materialId(stack) == null;
+				&& materialId(stack) == null
+				&& mass(stack) < 0.0
+				&& stack.get(RealWaterComponents.MIXTURE_COMPONENTS) == null;
 	}
 
 	@Override
@@ -62,12 +80,19 @@ public final class MaterialBucketItem extends Item {
 	public void appendHoverText(ItemStack stack, TooltipContext context, net.minecraft.world.item.component.TooltipDisplay tooltipDisplay,
 			java.util.function.Consumer<Component> tooltip, TooltipFlag flag) {
 		long nanos = volume(stack);
-		String material = materialId(stack);
-		if (nanos > 0L && material != null) {
+		FluidMixture mixture = mixture(stack);
+		if (nanos > 0L && mixture != null) {
+			Component material = mixture.components().size() == 1
+					? Component.literal(mixture.components().getFirst().materialId())
+					: Component.translatable("item.realwater.material_bucket.mixture", mixture.components().size());
+			double mass = mass(stack);
 			tooltip.accept(Component.translatable("item.realwater.material_bucket.volume",
 					material, String.format("%.2f%% (%.9f m³)", 100.0 * nanos / ContainerFluidLedger.NANOS_PER_BLOCK,
 							ContainerFluidLedger.nanosToVolume(nanos)))
 					.withStyle(ChatFormatting.GRAY));
+			if (mass > 0.0) tooltip.accept(Component.translatable("item.realwater.material_bucket.mass",
+					String.format("%.12g", mass))
+					.withStyle(ChatFormatting.DARK_GRAY));
 		}
 	}
 }

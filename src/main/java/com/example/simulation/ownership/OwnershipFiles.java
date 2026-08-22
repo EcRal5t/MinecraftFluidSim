@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -56,6 +57,7 @@ public final class OwnershipFiles {
 
 	/** Any unresolved transition, orphaned warning, or unreadable committed state locks new transitions. */
 	public void assertUnlockedForTransition() throws IOException {
+		validateKnownLayout();
 		if (hasWAL()) {
 			throw new IOException("An unresolved ownership transition WAL already exists at " + walPath());
 		}
@@ -138,6 +140,7 @@ public final class OwnershipFiles {
 	/** Removes the whole ownership directory after a completed release plus region removal. */
 	public void deleteStore() throws IOException {
 		if (!Files.exists(directory)) return;
+		validateKnownLayout();
 		try (var paths = Files.walk(directory)) {
 			for (Path entry : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
 				deleteOperation.deleteIfExists(entry);
@@ -162,14 +165,45 @@ public final class OwnershipFiles {
 	}
 
 	public boolean isLocked() {
-		return hasWAL() || hasWarning();
+		if (hasWAL() || hasWarning()) return true;
+		try {
+			validateKnownLayout();
+			if (hasCommitted()) readCommitted();
+			return false;
+		} catch (IOException invalid) {
+			return true;
+		}
 	}
 
 	public String lockDescription() {
 		if (hasWAL() && hasWarning()) return "未解决 ownership WAL 与 WARNING";
 		if (hasWAL()) return "未解决或不可读 ownership WAL";
 		if (hasWarning()) return "孤立 ownership WARNING（需人工核对恢复）";
-		return "无";
+		try {
+			validateKnownLayout();
+			if (hasCommitted()) readCommitted();
+			return "无";
+		} catch (IOException invalid) {
+			return "未知、损坏或不可读 ownership 内容：" + invalid.getMessage();
+		}
+	}
+
+	/** Refuses to ignore or delete future/foreign files inside this region's sidecar directory. */
+	void validateKnownLayout() throws IOException {
+		if (!Files.exists(directory)) return;
+		if (!Files.isDirectory(directory)) {
+			throw new IOException("Ownership path is not a directory: " + directory);
+		}
+		Set<String> known = Set.of(
+				WAL_FILE_NAME, WARNING_FILE_NAME, COMMITTED_FILE_NAME,
+				WAL_FILE_NAME + ".tmp", WARNING_FILE_NAME + ".tmp", COMMITTED_FILE_NAME + ".tmp");
+		try (var entries = Files.newDirectoryStream(directory)) {
+			for (Path entry : entries) {
+				if (!known.contains(entry.getFileName().toString()) || Files.isDirectory(entry)) {
+					throw new IOException("Unknown ownership content is preserved at " + entry);
+				}
+			}
+		}
 	}
 
 	Path directoryPath() {

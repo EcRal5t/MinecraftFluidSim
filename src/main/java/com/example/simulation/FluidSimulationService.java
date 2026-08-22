@@ -40,8 +40,10 @@ import net.minecraft.world.phys.Vec3;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
 
@@ -74,6 +76,8 @@ public final class FluidSimulationService {
 	private final FluidRegionManager regionManager;
 	private final FluidRegionOperations regionOperations;
 	private final ContainerTransferStore containerTransfers;
+	/** Transactions which changed the live solver but have not yet proved a committed region HEAD. */
+	private final Set<UUID> runtimeDirtyContainerTransfers = new HashSet<>();
 	private ContainerTransferFaultPoint containerTransferFault = ContainerTransferFaultPoint.NONE;
 	private ResourceKey<Level> takeoverDimension;
 	private boolean defaultEntityPhysicsEnabled = true;
@@ -146,23 +150,59 @@ public final class FluidSimulationService {
 
 	boolean hasPendingContainerTransfer(UUID regionId) {
 		try {
-			for (UUID transactionId : containerTransfers.listTransactions()) {
-				try {
-					if (containerTransfers.read(transactionId).regionId().equals(regionId)) return true;
-				} catch (IOException unreadable) {
-					return true;
-				}
+			ContainerTransferStore.Scan scan = containerTransfers.scan();
+			if (!scan.issues().isEmpty()) return true;
+			for (UUID transactionId : scan.transactions()) {
+				if (containerTransfers.read(transactionId).regionId().equals(regionId)) return true;
 			}
 			return false;
-		} catch (IOException listingFailure) {
+		} catch (IOException | RuntimeException listingFailure) {
 			return true;
 		}
 	}
 
+	boolean hasAnyContainerTransferLock() {
+		try {
+			return containerTransfers.scan().hasAny();
+		} catch (IOException | RuntimeException scanFailure) {
+			return true;
+		}
+	}
+
+	boolean hasContainerTransferStoreIssues() {
+		try {
+			return !containerTransfers.scan().issues().isEmpty();
+		} catch (IOException | RuntimeException scanFailure) {
+			return true;
+		}
+	}
+
+	void markContainerTransferSolverDirty(UUID transactionId) {
+		runtimeDirtyContainerTransfers.add(transactionId);
+	}
+
+	void markContainerTransferSolverClean(UUID transactionId) {
+		runtimeDirtyContainerTransfers.remove(transactionId);
+	}
+
+	void markContainerTransferRegionCommitted(UUID transactionId) {
+		runtimeDirtyContainerTransfers.remove(transactionId);
+	}
+
+	void lockContainerTransferRegion(FluidRegion region, String failure) {
+		region.setAvailabilityFailure(failure);
+	}
+
 	public void recoverContainerTransfers(MinecraftServer server) {
 		try {
-			if (!containerTransfers.hasAny()) return;
-			for (UUID transactionId : containerTransfers.listTransactions()) {
+			ContainerTransferStore.Scan scan = containerTransfers.scan();
+			if (!scan.issues().isEmpty()) {
+				for (String issue : scan.issues()) {
+					RealWaterMod.LOGGER.error("Container-transfer recovery store is globally LOCKED: {}", issue);
+				}
+				return;
+			}
+			for (UUID transactionId : scan.transactions()) {
 				processContainerTransfer(server, transactionId);
 			}
 		} catch (IOException exception) {
@@ -178,20 +218,62 @@ public final class FluidSimulationService {
 		try {
 			ContainerTransferJournal journal = containerTransfers.read(transactionId);
 			long head = committedRegionGeneration(journal.regionId());
-			if (head == journal.baseGeneration()) {
+			ContainerTransferRecovery.Decision decision = ContainerTransferRecovery.decide(
+					head, journal, runtimeDirtyContainerTransfers.contains(transactionId));
+			switch (decision) {
+				case LOCK_LIVE_SOLVER_DIRTY -> {
+					RealWaterMod.LOGGER.error(
+							"Container transfer WAL {} remains locked: its live solver changed but region {} HEAD is still {}; restart is required to restore the base checkpoint",
+							transactionId, journal.regionId(), head);
+				}
+				case DISCARD_UNCOMMITTED -> {
 				containerTransfers.delete(transactionId);
 				RealWaterMod.LOGGER.warn("Discarded uncommitted container transfer WAL {} for region {}", transactionId, journal.regionId());
-			} else if (head == journal.targetGeneration()) {
-				if (applyAfterItem(server, journal)) {
-					containerTransfers.delete(transactionId);
-					RealWaterMod.LOGGER.warn("Converged container transfer WAL {} to the after item", transactionId);
 				}
-			} else {
+				case CONVERGE_AFTER_ITEM -> {
+				if (applyAfterItem(server, journal)) {
+					persistAfterItem(server, journal);
+					adoptRecoveredContainerCheckpoint(journal);
+					containerTransfers.delete(transactionId);
+					RealWaterMod.LOGGER.warn("Converged container transfer WAL {} to a durably saved after item", transactionId);
+				}
+				}
+				case LOCK_TARGET_WITHOUT_AFTER_ITEM -> RealWaterMod.LOGGER.error(
+						"Container transfer WAL {} is locked: region {} HEAD committed target {}, but WAL phase {} contains no authoritative after-item",
+						transactionId, journal.regionId(), head, journal.phase());
+				case LOCK_GENERATION_MISMATCH ->
 				RealWaterMod.LOGGER.error("Container transfer WAL {} is locked: region {} HEAD {} is neither base {} nor target {}",
 						transactionId, journal.regionId(), head, journal.baseGeneration(), journal.targetGeneration());
 			}
 		} catch (IOException | RuntimeException exception) {
 			RealWaterMod.LOGGER.error("Could not recover container transfer WAL {}", transactionId, exception);
+		}
+	}
+
+	private void adoptRecoveredContainerCheckpoint(ContainerTransferJournal journal) throws IOException {
+		for (FluidRegion region : regionManager.regions()) {
+			if (!region.id().equals(journal.regionId()) || !region.solverLoaded()) continue;
+			if (region.checkpointGeneration() == journal.targetGeneration()) return;
+			if (region.checkpointGeneration() != journal.baseGeneration()
+					|| !region.recordPublishedCheckpoint(journal.targetGeneration())) {
+				throw new IOException("Live region did not adopt recovered container checkpoint "
+						+ journal.targetGeneration());
+			}
+			return;
+		}
+	}
+
+	/** The WAL is deleted only after the actor's owning save file has been forced through Minecraft. */
+	private void persistAfterItem(MinecraftServer server, ContainerTransferJournal journal) throws IOException {
+		switch (journal.actor().type()) {
+			case PLAYER_HAND -> server.getPlayerList().saveAll();
+			case DISPENSER -> {
+				Identifier dimensionId = Identifier.tryParse(journal.actor().actorDimensionId());
+				if (dimensionId == null) throw new IOException("Container transfer actor dimension is invalid");
+				ServerLevel level = server.getLevel(ResourceKey.create(Registries.DIMENSION, dimensionId));
+				if (level == null) throw new IOException("Container transfer actor dimension is not loaded");
+				level.save(null, false, false);
+			}
 		}
 	}
 
@@ -363,6 +445,9 @@ public final class FluidSimulationService {
 
 	public ControllerActivation activateController(ServerPlayer player, BlockPos controllerPosition) {
 		if (!controllerFeatureEnabled) return ControllerActivation.DISABLED;
+		if (hasContainerTransferStoreIssues()) {
+			return ControllerActivation.failed("container-transfer 恢复目录含未知或损坏内容；已全局锁住新控制器，详见日志");
+		}
 		ServerLevel level = player.level();
 		restoreAirDemoScaffolding(level.getServer());
 		if (!level.getBlockState(controllerPosition).is(RealWaterBlocks.FLUID_CONTROLLER)) {
@@ -425,9 +510,10 @@ public final class FluidSimulationService {
 				regionOperations.checkpoint(candidate);
 			}
 		} catch (IOException | RuntimeException exception) {
+			regionManager.remove(candidate.id());
 			candidate.setAvailabilityFailure("initial checkpoint failed: " + exception.getMessage());
-			RealWaterMod.LOGGER.error("Controller region {} exists in memory but its initial checkpoint failed", candidate.id(), exception);
-			return ControllerActivation.failed("区域已安全暂停，但初始 checkpoint 失败：" + exception.getMessage());
+			RealWaterMod.LOGGER.error("Controller region {} was rejected after its initial checkpoint failed", candidate.id(), exception);
+			return ControllerActivation.failed("区域未创建；初始 checkpoint/ownership 事务失败：" + exception.getMessage());
 		}
 		sendSnapshot(level);
 		return ControllerActivation.created(footprint);
@@ -906,6 +992,10 @@ public final class FluidSimulationService {
 		for (FluidRegion region : regionManager.regions()) {
 			ServerLevel level = server.getLevel(region.dimension());
 			if (level == null) {
+				if (hasPendingContainerTransfer(region.id())) {
+					region.setAvailabilityFailure("dimension is not loaded; unresolved container transfer WAL prevents unload checkpoint");
+					continue;
+				}
 				regionOperations.unloadForFailure(server, region, "dimension is not loaded", FluidSimulationService::sendRegionRemoval);
 				continue;
 			}
@@ -1107,6 +1197,10 @@ public final class FluidSimulationService {
 	}
 
 	public RestorationStats remove(MinecraftServer server) {
+		if (hasAnyContainerTransferLock()) {
+			return RestorationStats.failed(false, 0, 0, 0,
+					"存在未完成或不可识别的容器转移 WAL；拒绝移除区域，先完成恢复");
+		}
 		RestorationStats restoration = restoreTakeover(server);
 		if (!restoration.completed()) {
 			FluidRegion region = activeRegion();
@@ -1153,6 +1247,10 @@ public final class FluidSimulationService {
 	}
 
 	public String checkpointSelected() {
+		FluidRegion selected = activeRegion();
+		if (selected != null && hasPendingContainerTransfer(selected.id())) {
+			return "区域存在未完成或不可识别的容器转移 WAL；拒绝发布额外 checkpoint";
+		}
 		return regionOperations.checkpointSelected();
 	}
 
@@ -1295,6 +1393,7 @@ public final class FluidSimulationService {
 
 	/** Returns the first region whose solver bounds contain the block position. */
 	public FluidRegion regionAtBlock(ServerLevel level, BlockPos pos) {
+		if (pos == null) return null;
 		for (FluidRegion region : regionManager.regions()) {
 			if (!region.dimension().equals(level.dimension())) continue;
 			BlockPos origin = region.origin();
@@ -1303,6 +1402,26 @@ public final class FluidSimulationService {
 					&& pos.getY() >= origin.getY() && pos.getY() < origin.getY() + region.sizeY() * h
 					&& pos.getZ() >= origin.getZ() && pos.getZ() < origin.getZ() + region.sizeZ() * h) {
 				return region;
+			}
+		}
+		return null;
+	}
+
+	/** First region volume intersected by the player's ray; selection is intentionally irrelevant. */
+	public FluidRegion aimedRegion(ServerPlayer player) {
+		Vec3 start = player.getEyePosition();
+		Vec3 direction = player.getLookAngle();
+		for (double distance = 0.0; distance <= AIM_DISTANCE; distance += 0.125) {
+			Vec3 point = start.add(direction.scale(distance));
+			for (FluidRegion region : regionManager.regions()) {
+				if (!region.dimension().equals(player.level().dimension())) continue;
+				BlockPos origin = region.origin();
+				double h = region.solverConfig().cellSize();
+				if (point.x >= origin.getX() && point.x < origin.getX() + region.sizeX() * h
+						&& point.y >= origin.getY() && point.y < origin.getY() + region.sizeY() * h
+						&& point.z >= origin.getZ() && point.z < origin.getZ() + region.sizeZ() * h) {
+					return region;
+				}
 			}
 		}
 		return null;
@@ -1323,9 +1442,9 @@ public final class FluidSimulationService {
 
 
 	/** Resolves the transfer target cell near the player's aim; requireFluid selects scoop semantics. */
-	public int[] aimedCellNear(ServerPlayer player, boolean requireFluid) {
-		FluidRegion region = activeRegion();
-		if (region == null || !player.level().dimension().equals(region.dimension())) return null;
+	public int[] aimedCellNear(ServerPlayer player, FluidRegion region, boolean requireFluid) {
+		if (region == null || !region.solverLoaded()
+				|| !player.level().dimension().equals(region.dimension())) return null;
 		Vec3 start = player.getEyePosition();
 		Vec3 direction = player.getLookAngle();
 		FlipFluidDomain domain = region.domain();
@@ -1334,7 +1453,7 @@ public final class FluidSimulationService {
 		CellTarget previousSample = null;
 		for (double distance = 0.0; distance <= AIM_DISTANCE; distance += step) {
 			Vec3 point = start.add(direction.scale(distance));
-			CellTarget cell = worldToCell(point);
+			CellTarget cell = worldToCell(region, point);
 			if (cell == null) {
 				if (!requireFluid && previousOpen != null) return cellTargetArray(previousOpen);
 				continue;
@@ -1356,12 +1475,28 @@ public final class FluidSimulationService {
 		return null;
 	}
 
+	private static CellTarget worldToCell(FluidRegion region, Vec3 point) {
+		FlipFluidDomain domain = region.domain();
+		BlockPos origin = region.origin();
+		float h = domain.config().cellSize();
+		int x = Mth.floor((point.x - origin.getX()) / h);
+		int y = Mth.floor((point.y - origin.getY()) / h);
+		int z = Mth.floor((point.z - origin.getZ()) / h);
+		if (x < 0 || x >= domain.sizeX() || y < 0 || y >= domain.sizeY()
+				|| z < 0 || z >= domain.sizeZ()) return null;
+		return new CellTarget(x, y, z);
+	}
+
 	private static int[] cellTargetArray(CellTarget target) {
 		return new int[] {target.x(), target.y(), target.z()};
 	}
 
 	public void sendSnapshotFor(ServerPlayer player) {
 		FluidRegion region = activeRegion();
+		if (region != null) sendSnapshotFor(player, region);
+	}
+
+	public void sendSnapshotFor(ServerPlayer player, FluidRegion region) {
 		if (region != null && region.solverLoaded() && player.level().dimension().equals(region.dimension())) {
 			if (materialFeatureEnabled) {
 				FluidProtocolServer.send(player, createMaterialSnapshot(region));

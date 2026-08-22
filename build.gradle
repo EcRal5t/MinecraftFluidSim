@@ -44,6 +44,13 @@ tasks.withType(JavaCompile).configureEach {
 	it.options.release = 25
 }
 
+// This project deliberately uses executable validation mains instead of a JUnit engine.
+// Gradle 9 otherwise turns the standard lifecycle `check` task red merely because test
+// sources exist while no framework-discoverable tests do.
+tasks.withType(Test).configureEach {
+	failOnNoDiscoveredTests = false
+}
+
 tasks.register("runTakeoverJournalValidation", JavaExec) {
 	group = "verification"
 	description = "Runs the standalone takeover journal codec/file/fault regression suite."

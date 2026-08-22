@@ -123,8 +123,9 @@ final class OwnershipJournalCodec {
 	private static void validateState(CompoundTag state, long position) throws IOException {
 		requireType(state, "Name", Tag.TAG_STRING);
 		String blockId = state.getStringOr("Name", "");
-		if (Identifier.tryParse(blockId) == null) {
-			throw new IOException("Invalid block state id at ownership position " + position + ": " + blockId);
+		if (!"minecraft:water".equals(blockId)) {
+			throw new IOException("Ownership position " + position
+					+ " is not pure Minecraft water: " + blockId);
 		}
 	}
 

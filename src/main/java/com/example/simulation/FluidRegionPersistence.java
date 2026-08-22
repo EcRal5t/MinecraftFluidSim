@@ -53,9 +53,10 @@ final class FluidRegionPersistence {
 		List<String> issues = new ArrayList<>();
 		RegionStateFiles.Discovery discovery;
 		try {
+			files.recoverKnownFirstPublicationStaging();
 			discovery = files.discover();
 		} catch (IOException exception) {
-			return List.of("无法扫描 region-state：" + exception.getMessage());
+			return List.of("无法恢复或扫描 region-state：" + exception.getMessage());
 		}
 		for (var issue : discovery.issues().entrySet()) issues.add(issue.getKey().getFileName() + " 已锁定：" + issue.getValue());
 		for (RegionManifest manifest : discovery.manifests()) {
@@ -120,20 +121,33 @@ final class FluidRegionPersistence {
 		String warning = OwnershipStore.warningText(ownershipStore.worldRoot(),
 				region.id(), dimensionId, OwnershipJournal.Operation.ACQUIRE,
 				baseGeneration, generation, candidates.size());
+		long publishedGeneration;
 		try {
-			OwnershipCoordinator.acquire(files, ownershipFiles, staged, candidates, warning,
+			OwnershipCoordinator.AcquireResult result = OwnershipCoordinator.acquire(
+					files, ownershipFiles, staged, candidates, warning,
 					OwnershipStore.worldAccess(level.getServer()), OwnershipCoordinator.FailureInjector.NONE);
+			publishedGeneration = result.generation();
 		} catch (IOException | RuntimeException failure) {
+			OwnershipCoordinator.RecoveryResult recovery;
 			try {
-				OwnershipCoordinator.recover(files, ownershipFiles,
+				recovery = OwnershipCoordinator.recover(files, ownershipFiles,
 						OwnershipStore.worldAccess(level.getServer()), OwnershipCoordinator.FailureInjector.NONE);
 			} catch (IOException recoveryFailure) {
 				failure.addSuppressed(recoveryFailure);
+				throw failure;
 			}
-			throw failure;
+			if (recovery.kind() != OwnershipCoordinator.RecoveryResult.Kind.COMPLETED
+					|| files.committedGeneration(region.id()) != generation) {
+				throw failure;
+			}
+			publishedGeneration = generation;
+			RealWaterMod.LOGGER.warn(
+					"Controller ownership acquire for {} completed through in-process post-commit recovery",
+					region.id());
 		}
-		if (!region.recordPublishedCheckpoint(generation)) {
-			throw new IOException("Acquired ownership checkpoint " + generation + " was not accepted by the live region");
+		if (!region.recordPublishedCheckpoint(publishedGeneration)) {
+			throw new IOException("Acquired ownership checkpoint " + publishedGeneration
+					+ " was not accepted by the live region");
 		}
 	}
 

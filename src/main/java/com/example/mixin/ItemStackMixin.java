@@ -14,8 +14,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * Routes bucket use toward the world-bridge transfer service before vanilla item behaviour.
- * Only server-side, world-bridge-enabled, bucket-family items with an owned region selected are
- * intercepted; everything else returns without touching vanilla logic.
+ * Only server-side, world-bridge-enabled bucket-family items aimed at an owned region are
+ * intercepted; everything else returns without touching vanilla logic. Command selection is
+ * deliberately irrelevant to physical transfer targeting.
  */
 @Mixin(ItemStack.class)
 abstract class ItemStackMixin {

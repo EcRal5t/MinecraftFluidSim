@@ -1,6 +1,11 @@
 package com.example;
 
 import com.example.logging.RealWaterCommandLog;
+import com.example.fluid.BuiltinFluidMaterials;
+import com.example.fluid.FluidMaterial;
+import com.example.item.ContainerFluidLedger;
+import com.example.item.FluidMixture;
+import com.example.item.RealWaterItems;
 import com.example.simulation.FluidSimulationService;
 import com.example.simulation.FluidRegion;
 import com.mojang.brigadier.arguments.BoolArgumentType;
@@ -12,6 +17,9 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.ItemStack;
+
+import java.util.List;
 
 public final class RealWaterCommands {
 	private RealWaterCommands() { }
@@ -21,6 +29,18 @@ public final class RealWaterCommands {
 				Commands.literal("realwater")
 						.then(Commands.literal("demo").executes(context -> audit(context, () -> createDemo(context.getSource()))))
 						.then(Commands.literal("materialdemo").executes(context -> audit(context, () -> createMaterialDemo(context.getSource()))))
+						.then(Commands.literal("materialbucket")
+								.then(Commands.argument("material", StringArgumentType.word())
+										.suggests((context, builder) -> {
+											builder.suggest("empty");
+											builder.suggest("water");
+											builder.suggest("oil");
+											builder.suggest("mercury");
+											builder.suggest("water_oil_mix");
+											return builder.buildFuture();
+										})
+										.executes(context -> audit(context, () -> giveMaterialBucket(
+												context.getSource(), StringArgumentType.getString(context, "material"))))))
 						.then(Commands.literal("tensiondemo")
 								.executes(context -> audit(context, () -> createTensionDemo(context.getSource(), 30)))
 								.then(Commands.argument("angle", IntegerArgumentType.integer(1, 179))
@@ -125,6 +145,41 @@ public final class RealWaterCommands {
 			return fail(source, "无法创建多材料测试域：" + service.lastTakeoverFailure());
 		}
 		return succeed(source, "已创建暂停的上油下水溃坝测试域（瞬态，不写 region-state）；使用 /realwater step 或 /realwater run", 1);
+	}
+
+	/** Explicit debug/creative source for exercising material controller transfers and mixtures. */
+	private static int giveMaterialBucket(CommandSourceStack source, String requested) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		if (!service.materialFeatureEnabled()) return fail(source, "材料功能门本次启动未开启");
+		ItemStack stack;
+		String description;
+		if ("empty".equals(requested)) {
+			stack = new ItemStack(RealWaterItems.MATERIAL_BUCKET);
+			description = "空材料桶";
+		} else if ("water_oil_mix".equals(requested)) {
+			stack = new FluidMixture(List.of(
+					new FluidMixture.Component(BuiltinFluidMaterials.WATER.id(),
+							ContainerFluidLedger.NANOS_PER_BLOCK / 2L, 4.0 * BuiltinFluidMaterials.WATER.referenceDensity()),
+					new FluidMixture.Component(BuiltinFluidMaterials.OIL.id(),
+							ContainerFluidLedger.NANOS_PER_BLOCK / 2L, 4.0 * BuiltinFluidMaterials.OIL.referenceDensity())
+			)).toStack();
+			description = "半水半油混合材料桶";
+		} else {
+			FluidMaterial material = switch (requested) {
+				case "water", "realwater:water" -> BuiltinFluidMaterials.WATER;
+				case "oil", "realwater:oil" -> BuiltinFluidMaterials.OIL;
+				case "mercury", "realwater:mercury" -> BuiltinFluidMaterials.MERCURY;
+				default -> null;
+			};
+			if (material == null) return fail(source, "未知材料：" + requested);
+			stack = new FluidMixture(List.of(new FluidMixture.Component(material.id(),
+					ContainerFluidLedger.NANOS_PER_BLOCK, 8.0 * material.referenceDensity()))).toStack();
+			description = material.id() + " 满材料桶";
+		}
+		if (!player.getInventory().add(stack)) player.drop(stack, false);
+		player.getInventory().setChanged();
+		return succeed(source, "已生成 " + description + "（显式 creative/debug 外部源）", 1);
 	}
 
 	private static int createTensionDemo(CommandSourceStack source, int angleDegrees)

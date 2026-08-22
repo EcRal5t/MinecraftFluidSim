@@ -3,9 +3,9 @@ package com.example.simulation;
 import com.example.RealWaterMod;
 import com.example.fluid.FlipFluidDomain;
 import com.example.item.ContainerFluidLedger;
+import com.example.item.FluidMixture;
 import com.example.item.MaterialBucketItem;
 import com.example.item.PartialWaterBucketItem;
-import com.example.item.RealWaterComponents;
 import com.example.item.RealWaterItems;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.dispenser.BlockSource;
@@ -45,17 +45,28 @@ public final class FluidTransferService {
 		TransferKind kind = classify(held);
 		if (kind == TransferKind.NONE) return null;
 		ServerLevel level = player.level();
-		FluidRegion region = service.selectedRegionIn(level);
+		boolean pouring = kind == TransferKind.POUR || kind == TransferKind.MATERIAL_POUR;
+		BlockPos targetBlock = pouring ? playerPourTargetBlock(player) : null;
+		if (pouring && targetBlock == null) return null;
+		FluidRegion region = pouring ? service.regionAtBlock(level, targetBlock) : service.aimedRegion(player);
 		if (region == null) return null;
+		if (held.getCount() != 1) {
+			player.sendSystemMessage(Component.literal("真实水体转移一次只接受 1 个桶；堆叠保持不变"), true);
+			return InteractionResult.FAIL;
+		}
 		if (!service.ensureRegionAvailableFor(player, region)) {
 			return InteractionResult.FAIL;
 		}
+		int[] cell = pouring
+				? service.cellAtBlock(level, region, targetBlock)
+				: service.aimedCellNear(player, region, true);
+		if (cell == null) return null;
 
 		TransferOutcome outcome = switch (kind) {
-			case POUR -> pour(service, region, player, hand, held);
-			case SCOOP -> scoop(service, region, player, hand, held);
-			case MATERIAL_POUR -> pourMaterial(service, region, player, hand, held);
-			case MATERIAL_SCOOP -> scoopMaterial(service, region, player, hand, held);
+			case POUR -> pour(service, region, player, hand, held, cell);
+			case SCOOP -> scoop(service, region, player, hand, held, cell);
+			case MATERIAL_POUR -> pourMaterial(service, region, player, hand, held, cell);
+			case MATERIAL_SCOOP -> scoopMaterial(service, region, player, hand, held, cell);
 			case NONE -> null;
 		};
 		if (outcome == null) return null;
@@ -88,18 +99,28 @@ public final class FluidTransferService {
 		BlockPos target = source.pos().relative(source.state().getValue(DispenserBlock.FACING));
 		FluidRegion region = service.regionAtBlock(level, target);
 		if (region == null) return vanillaItem ? null : stack;
+		if (stack.getCount() != 1) return stack;
 		if (!service.ensureRegionAvailable(level, region)) return stack;
 		int[] cell = service.cellAtBlock(level, region, target);
 		if (cell == null) return stack;
-		int materialHandle = -1;
+		FluidMixture heldMixture = null;
 		if (kind == TransferKind.MATERIAL_POUR) {
 			if (!service.materialFeatureEnabled() || !region.domain().hasMaterialState()) return stack;
-			materialHandle = region.domain().materialRegistry().handle(MaterialBucketItem.materialId(stack));
+			heldMixture = MaterialBucketItem.mixture(stack);
+			if (heldMixture == null) return stack;
 		} else if (kind == TransferKind.MATERIAL_SCOOP) {
 			if (!service.materialFeatureEnabled() || !region.domain().hasMaterialState()) return stack;
-			materialHandle = region.domain().dominantMaterialInCell(cell[0], cell[1], cell[2]);
 		}
-		int resolvedMaterialHandle = materialHandle;
+		FluidMixture resolvedMixture = heldMixture;
+		long extractionRequest = switch (kind) {
+			case SCOOP -> extractableNanos(region.domain(), cell, heldFreeNanos(stack), 6, 0);
+			case MATERIAL_SCOOP -> extractableNanos(region.domain(), cell,
+					ContainerFluidLedger.NANOS_PER_BLOCK, 6, -1);
+			default -> 0L;
+		};
+		if ((kind == TransferKind.SCOOP || kind == TransferKind.MATERIAL_SCOOP) && extractionRequest <= 0L) {
+			return stack;
+		}
 
 		if (region.controllerManaged()) {
 			int slot = findDispenserSlot(source, stack);
@@ -112,16 +133,16 @@ public final class FluidTransferService {
 						(requested, base) -> pourIntoCell(service, region, cell, requested, 6, 0),
 						(rawAfter, before) -> rawAfter);
 				case SCOOP -> executeControllerTransfer(service, region, level, actor, stack,
-						ContainerTransferJournal.Operation.EXTRACT, heldFreeNanos(stack), heldBaseVolumeNanos(stack), cell,
+						ContainerTransferJournal.Operation.EXTRACT, extractionRequest, heldBaseVolumeNanos(stack), cell,
 						(requested, base) -> scoopFromCell(service, region, cell, requested, base, 6, 0),
 						(rawAfter, before) -> rawAfter);
 				case MATERIAL_POUR -> executeControllerTransfer(service, region, level, actor, stack,
 						ContainerTransferJournal.Operation.INSERT, MaterialBucketItem.volume(stack), 0L, cell,
-						(requested, base) -> pourMaterialIntoCell(service, region, cell, requested, resolvedMaterialHandle, 6),
+						(requested, base) -> pourMaterialIntoCell(service, region, cell, resolvedMixture, 6),
 						(rawAfter, before) -> rawAfter);
 				case MATERIAL_SCOOP -> executeControllerTransfer(service, region, level, actor, stack,
-						ContainerTransferJournal.Operation.EXTRACT, ContainerFluidLedger.NANOS_PER_BLOCK, 0L, cell,
-						(requested, base) -> scoopMaterialIntoCell(service, region, cell, requested, base, resolvedMaterialHandle, 6),
+						ContainerTransferJournal.Operation.EXTRACT, extractionRequest, 0L, cell,
+						(requested, base) -> scoopMaterialIntoCell(service, region, cell, requested, 6),
 						(rawAfter, before) -> rawAfter);
 				case NONE -> null;
 			};
@@ -133,9 +154,9 @@ public final class FluidTransferService {
 		}
 		TransferOutcome outcome = switch (kind) {
 			case POUR -> pourIntoCell(service, region, cell, heldVolumeNanos(stack), 6, 0);
-			case SCOOP -> scoopFromCell(service, region, cell, heldFreeNanos(stack), heldBaseVolumeNanos(stack), 6, 0);
-			case MATERIAL_POUR -> pourMaterialIntoCell(service, region, cell, MaterialBucketItem.volume(stack), resolvedMaterialHandle, 6);
-			case MATERIAL_SCOOP -> scoopMaterialIntoCell(service, region, cell, ContainerFluidLedger.NANOS_PER_BLOCK, 0L, resolvedMaterialHandle, 6);
+			case SCOOP -> scoopFromCell(service, region, cell, extractionRequest, heldBaseVolumeNanos(stack), 6, 0);
+			case MATERIAL_POUR -> pourMaterialIntoCell(service, region, cell, resolvedMixture, 6);
+			case MATERIAL_SCOOP -> scoopMaterialIntoCell(service, region, cell, extractionRequest, 6);
 			case NONE -> null;
 		};
 		if (outcome == null || !outcome.transferred()) return stack;
@@ -145,87 +166,79 @@ public final class FluidTransferService {
 
 
 	private static TransferOutcome pour(
-			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held
+			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held,
+			int[] cell
 	) {
 		Long volume = heldVolumeNanos(held);
 		if (volume == null || volume <= 0L) return null;
-		int[] cell = playerPourTargetCell(service, region, player);
-		if (cell == null) return null;
 		if (region.controllerManaged()) return pourController(service, region, player, hand, held, volume, cell);
 		TransferOutcome outcome = pourIntoCell(service, region, cell, volume, 6, 0);
 		if (!outcome.transferred()) return new TransferOutcome(false, true, held, outcome.message());
 		if (player.hasInfiniteMaterials()) {
-			service.sendSnapshotFor(player);
+			service.sendSnapshotFor(player, region);
 			return new TransferOutcome(true, true, held.copy(), outcome.message());
 		}
-		service.sendSnapshotFor(player);
+		service.sendSnapshotFor(player, region);
 		return outcome;
 	}
 
 
 	private static TransferOutcome pourMaterial(
-			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held
+			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held,
+			int[] cell
 	) {
-		String materialId = MaterialBucketItem.materialId(held);
-		long volumeNanos = MaterialBucketItem.volume(held);
-		if (materialId == null || volumeNanos <= 0L) return null;
+		FluidMixture mixture = MaterialBucketItem.mixture(held);
+		if (mixture == null) return null;
+		long volumeNanos = mixture.totalVolumeNanos();
 		if (!service.materialFeatureEnabled()) {
 			return new TransferOutcome(false, true, held, "材料功能门未开启");
 		}
 		if (!region.domain().hasMaterialState()) {
 			return new TransferOutcome(false, true, held, "该区域不是材料区域");
 		}
-		int materialHandle = region.domain().materialRegistry().handle(materialId);
-		int[] cell = playerPourTargetCell(service, region, player);
-		if (cell == null) return null;
 		if (region.controllerManaged()) {
 			ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
 			ControllerTransfer transaction = executeControllerTransfer(
 					service, region, player.level(), actor, held,
 					ContainerTransferJournal.Operation.INSERT, volumeNanos, 0L, cell,
-					(requested, base) -> pourMaterialIntoCell(service, region, cell, requested, materialHandle, 6),
+					(requested, base) -> pourMaterialIntoCell(service, region, cell, mixture, 6),
 					(rawAfter, before) -> player.hasInfiniteMaterials() ? before.copy() : rawAfter
 			);
 			if (!transaction.outcome().transferred()) return transaction.outcome();
 			player.setItemInHand(hand, transaction.outcome().stack());
 			player.getInventory().setChanged();
-			service.sendSnapshotFor(player);
+			service.sendSnapshotFor(player, region);
 			return transaction.outcome();
 		}
-		TransferOutcome outcome = pourMaterialIntoCell(service, region, cell, volumeNanos, materialHandle, 6);
+		TransferOutcome outcome = pourMaterialIntoCell(service, region, cell, mixture, 6);
 		if (!outcome.transferred()) return new TransferOutcome(false, true, held, outcome.message());
 		if (player.hasInfiniteMaterials()) {
-			service.sendSnapshotFor(player);
+			service.sendSnapshotFor(player, region);
 			return new TransferOutcome(true, true, held.copy(), outcome.message());
 		}
-		service.sendSnapshotFor(player);
+		service.sendSnapshotFor(player, region);
 		return outcome;
 	}
 
 private static TransferOutcome scoop(
-FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held
+FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held, int[] cell
 ) {
 long capacity = heldFreeNanos(held);
 if (capacity <= 0L) return null;
-int[] cell = service.aimedCellNear(player, true);
-if (cell == null) return null;
-if (region.controllerManaged()) return scoopController(service, region, player, hand, held, capacity, cell);
-TransferOutcome outcome = scoopFromCell(service, region, cell, capacity, heldBaseVolumeNanos(held), 6, 0);
+long requested = extractableNanos(region.domain(), cell, capacity, 6, 0);
+if (requested <= 0L) return new TransferOutcome(false, false, held, "准星处没有可装入的水体");
+if (region.controllerManaged()) return scoopController(service, region, player, hand, held, requested, cell);
+TransferOutcome outcome = scoopFromCell(service, region, cell, requested, heldBaseVolumeNanos(held), 6, 0);
 if (!outcome.transferred()) return new TransferOutcome(false, false, held, outcome.message());
-if (player.hasInfiniteMaterials() && held.is(Items.BUCKET)) {
-ItemStack filled = outcome.stack();
-if (!player.getInventory().contains(filled)) {
-player.getInventory().add(filled);
-}
-service.sendSnapshotFor(player);
-return new TransferOutcome(true, false, held.copy(), outcome.message());
-}
-service.sendSnapshotFor(player);
+// Creative pour is an explicit external source, but scoop always replaces the hand. Treating
+// scoop as a hidden sink when an equivalent filled bucket already exists loses real solver water
+// and cannot be represented by the controller WAL.
+service.sendSnapshotFor(player, region);
 return outcome;
 }
 
 private static TransferOutcome scoopMaterial(
-FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held
+FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held, int[] cell
 ) {
 if (!service.materialFeatureEnabled()) {
 return new TransferOutcome(false, false, held, "材料功能门未开启");
@@ -233,27 +246,26 @@ return new TransferOutcome(false, false, held, "材料功能门未开启");
 if (!region.domain().hasMaterialState()) {
 return new TransferOutcome(false, false, held, "该区域不是材料区域");
 }
-int[] cell = service.aimedCellNear(player, true);
-if (cell == null) return new TransferOutcome(false, false, held, "准星处没有模拟流体");
-int materialHandle = region.domain().dominantMaterialInCell(cell[0], cell[1], cell[2]);
 long capacityNanos = ContainerFluidLedger.NANOS_PER_BLOCK;
+long requestedNanos = extractableNanos(region.domain(), cell, capacityNanos, 6, -1);
+if (requestedNanos <= 0L) return new TransferOutcome(false, false, held, "准星处没有可装入的材料流体");
 if (region.controllerManaged()) {
 ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
 ControllerTransfer transaction = executeControllerTransfer(
 service, region, player.level(), actor, held,
-ContainerTransferJournal.Operation.EXTRACT, capacityNanos, 0L, cell,
-(requested, base) -> scoopMaterialIntoCell(service, region, cell, requested, base, materialHandle, 6),
+ContainerTransferJournal.Operation.EXTRACT, requestedNanos, 0L, cell,
+(requested, base) -> scoopMaterialIntoCell(service, region, cell, requested, 6),
 (rawAfter, before) -> rawAfter
 );
 if (!transaction.outcome().transferred()) return transaction.outcome();
 player.setItemInHand(hand, transaction.outcome().stack());
 player.getInventory().setChanged();
-service.sendSnapshotFor(player);
+service.sendSnapshotFor(player, region);
 return transaction.outcome();
 }
-TransferOutcome outcome = scoopMaterialIntoCell(service, region, cell, capacityNanos, 0L, materialHandle, 6);
+TransferOutcome outcome = scoopMaterialIntoCell(service, region, cell, requestedNanos, 6);
 if (!outcome.transferred()) return new TransferOutcome(false, false, held, outcome.message());
-service.sendSnapshotFor(player);
+service.sendSnapshotFor(player, region);
 return outcome;
 }
 	private static TransferOutcome pourController(
@@ -270,7 +282,7 @@ return outcome;
 		if (!transaction.outcome().transferred()) return transaction.outcome();
 		player.setItemInHand(hand, transaction.outcome().stack());
 		player.getInventory().setChanged();
-		service.sendSnapshotFor(player);
+		service.sendSnapshotFor(player, region);
 		return transaction.outcome();
 	}
 
@@ -283,18 +295,12 @@ return outcome;
 				service, region, player.level(), actor, held,
 				ContainerTransferJournal.Operation.EXTRACT, capacityNanos, heldBaseVolumeNanos(held), cell,
 				(requested, base) -> scoopFromCell(service, region, cell, requested, base, 6, 0),
-				(rawAfter, before) -> player.hasInfiniteMaterials() && before.is(Items.BUCKET) ? before.copy() : rawAfter
+				(rawAfter, before) -> rawAfter
 		);
 		if (!transaction.outcome().transferred()) return transaction.outcome();
-		if (player.hasInfiniteMaterials() && held.is(Items.BUCKET)) {
-			ItemStack filled = PartialWaterBucketItem.withVolume(ContainerFluidLedger.NANOS_PER_BLOCK);
-			if (!player.getInventory().contains(filled)) {
-				player.getInventory().add(filled);
-			}
-		}
 		player.setItemInHand(hand, transaction.outcome().stack());
 		player.getInventory().setChanged();
-		service.sendSnapshotFor(player);
+		service.sendSnapshotFor(player, region);
 		return transaction.outcome();
 	}
 
@@ -318,11 +324,20 @@ return outcome;
 					null);
 		}
 		if (requestedNanos <= 0L) return new ControllerTransfer(null, null);
-		service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.BEFORE_PREPARE);
+		try {
+			service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.BEFORE_PREPARE);
+		} catch (RuntimeException injected) {
+			return failedControllerTransfer(operation, beforeStack, injected.getMessage(), null);
+		}
 		long baseGeneration = region.checkpointGeneration();
 		long targetGeneration = Math.addExact(baseGeneration, 1L);
 		UUID transactionId = UUID.randomUUID();
-		ContainerTransferJournal.ItemFingerprint beforeFingerprint = ContainerTransferJournal.ItemFingerprint.of(beforeStack);
+		ContainerTransferJournal.ItemFingerprint beforeFingerprint;
+		try {
+			beforeFingerprint = ContainerTransferJournal.ItemFingerprint.of(beforeStack);
+		} catch (IllegalArgumentException invalidItem) {
+			return failedControllerTransfer(operation, beforeStack, invalidItem.getMessage(), null);
+		}
 		ContainerTransferJournal prepared = new ContainerTransferJournal(
 				transactionId, region.id(), level.dimension().identifier().toString(),
 				baseGeneration, targetGeneration, operation, requestedNanos, actor,
@@ -336,22 +351,53 @@ return outcome;
 							"容器转移 WAL 发布失败：" + exception.getMessage()),
 					null);
 		}
-		service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_PREPARE);
+		try {
+			service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_PREPARE);
+		} catch (RuntimeException injected) {
+			return failedControllerTransfer(operation, beforeStack, injected.getMessage(), transactionId);
+		}
 
-		TransferOutcome rawOutcome = executor.execute(requestedNanos, baseVolumeNanos);
+		service.markContainerTransferSolverDirty(transactionId);
+		TransferOutcome rawOutcome;
+		try {
+			rawOutcome = executor.execute(requestedNanos, baseVolumeNanos);
+		} catch (RuntimeException transferFailure) {
+			String failure = "容器转移执行异常，区域已锁定；重启后从 base checkpoint 恢复："
+					+ transferFailure.getMessage();
+			service.lockContainerTransferRegion(region, failure);
+			return failedControllerTransfer(operation, beforeStack, failure, transactionId);
+		}
 		if (rawOutcome == null || !rawOutcome.transferred()) {
+			service.markContainerTransferSolverClean(transactionId);
 			deleteQuietly(service, transactionId);
 			return new ControllerTransfer(rawOutcome == null
 					? new TransferOutcome(false, operation == ContainerTransferJournal.Operation.INSERT, beforeStack, "转移未执行")
 					: rawOutcome, null);
 		}
-		service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_SOLVER);
+		try {
+			service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_SOLVER);
+		} catch (RuntimeException injected) {
+			String failure = injected.getMessage() + "；区域已锁定，重启后从 base checkpoint 恢复";
+			service.lockContainerTransferRegion(region, failure);
+			return failedControllerTransfer(operation, beforeStack,
+					failure, transactionId);
+		}
 
-		ItemStack finalAfter = finalItemResolver.resolve(rawOutcome.stack(), beforeStack);
+		ItemStack finalAfter;
+		ContainerTransferJournal.ItemFingerprint afterFingerprint;
+		try {
+			finalAfter = finalItemResolver.resolve(rawOutcome.stack(), beforeStack);
+			afterFingerprint = ContainerTransferJournal.ItemFingerprint.of(finalAfter);
+		} catch (RuntimeException invalidAfterItem) {
+			region.setPaused(true);
+			region.setAvailabilityFailure("容器转移 after-item 无法写入 WAL，区域已锁定；重启后恢复："
+					+ invalidAfterItem.getMessage());
+			return failedControllerTransfer(operation, beforeStack, region.availabilityFailure(), transactionId);
+		}
 		ContainerTransferJournal committed = new ContainerTransferJournal(
 				transactionId, region.id(), level.dimension().identifier().toString(),
 				baseGeneration, targetGeneration, operation, requestedNanos, actor,
-				beforeFingerprint, ContainerTransferJournal.ItemFingerprint.of(finalAfter),
+				beforeFingerprint, afterFingerprint,
 				ContainerTransferJournal.Phase.REGION_COMMITTED
 		);
 		try {
@@ -364,7 +410,14 @@ return outcome;
 							region.availabilityFailure()),
 					null);
 		}
-		service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_WAL);
+		try {
+			service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_WAL);
+		} catch (RuntimeException injected) {
+			String failure = injected.getMessage() + "；区域已锁定，重启后恢复";
+			service.lockContainerTransferRegion(region, failure);
+			return failedControllerTransfer(operation, beforeStack,
+					failure, transactionId);
+		}
 
 
 
@@ -387,12 +440,28 @@ return outcome;
 							region.availabilityFailure()),
 					transactionId);
 		}
-		service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_CHECKPOINT);
+		service.markContainerTransferRegionCommitted(transactionId);
+		try {
+			service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_CHECKPOINT);
+		} catch (RuntimeException injected) {
+			return failedControllerTransfer(operation, beforeStack,
+					injected.getMessage() + "；已提交区域，WAL 将收敛物品", transactionId);
+		}
 
 
 
 		return new ControllerTransfer(new TransferOutcome(true, operation == ContainerTransferJournal.Operation.INSERT,
 				finalAfter, rawOutcome.message()), transactionId);
+	}
+
+	private static ControllerTransfer failedControllerTransfer(
+			ContainerTransferJournal.Operation operation,
+			ItemStack beforeStack,
+			String message,
+			UUID transactionId
+	) {
+		return new ControllerTransfer(new TransferOutcome(false,
+				operation == ContainerTransferJournal.Operation.INSERT, beforeStack, message), transactionId);
 	}
 
 	private static int findDispenserSlot(BlockSource source, ItemStack stack) {
@@ -445,7 +514,7 @@ return outcome;
 		if (!inserted.transferred()) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "空间或 marker 预算不足，未能注入");
 		}
-		long poured = Math.min(cellVolumeToNanos(inserted.volume()), volumeNanos);
+		long poured = volumeNanos;
 		region.wakeForActivity();
 		return new TransferOutcome(true, true, withVolume(volumeNanos - poured),
 				String.format("已注入 %.2f%% 桶", 100.0 * poured / ContainerFluidLedger.NANOS_PER_BLOCK));
@@ -460,7 +529,7 @@ return outcome;
 		if (!extracted.transferred() || extracted.volume() <= 0.0) {
 			return new TransferOutcome(false, false, withVolume(baseVolumeNanos), "准星处没有足够水体");
 		}
-		long taken = Math.min(cellVolumeToNanos(extracted.volume()), capacityNanos);
+		long taken = capacityNanos;
 		region.wakeForActivity();
 		return new TransferOutcome(true, false, withVolume(baseVolumeNanos + taken),
 				String.format("已舀取 %.2f%% 桶", 100.0 * taken / ContainerFluidLedger.NANOS_PER_BLOCK));
@@ -468,51 +537,72 @@ return outcome;
 
 
 	private static TransferOutcome pourMaterialIntoCell(
-			FluidSimulationService service, FluidRegion region, int[] cell, long volumeNanos, int materialHandle, int maxRadius
+			FluidSimulationService service, FluidRegion region, int[] cell, FluidMixture mixture, int maxRadius
 	) {
-		if (volumeNanos <= 0L) return null;
+		if (mixture == null) return null;
 		FlipFluidDomain domain = region.domain();
-		String materialId = domain.materialRegistry().material(materialHandle).id();
-		float requestedCellVolume = nanosToCellVolume(volumeNanos);
-		if (domain.totalOpenVolume() - domain.totalVolume() + 1.0E-6F < requestedCellVolume) {
-			return new TransferOutcome(false, true, withMaterialVolume(volumeNanos, materialId), "空间或 marker 预算不足，未能注入");
+		java.util.List<FlipFluidDomain.MaterialPortion> portions = new java.util.ArrayList<>();
+		try {
+			for (FluidMixture.Component component : mixture.components()) {
+				int handle = domain.materialRegistry().handle(component.materialId());
+				portions.add(new FlipFluidDomain.MaterialPortion(handle,
+						nanosToCellVolume(component.volumeNanos()), component.mass()));
+			}
+		} catch (IllegalArgumentException unknownMaterial) {
+			return new TransferOutcome(false, true, mixture.toStack(),
+					"区域材料 registry 不接受该混合物：" + unknownMaterial.getMessage());
 		}
-		FlipFluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(
-				cell[0], cell[1], cell[2], requestedCellVolume, maxRadius, materialHandle);
+		FlipFluidDomain.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(
+				cell[0], cell[1], cell[2], portions, maxRadius);
 		if (!inserted.transferred()) {
-			return new TransferOutcome(false, true, withMaterialVolume(volumeNanos, materialId), "空间或 marker 预算不足，未能注入");
+			return new TransferOutcome(false, true, mixture.toStack(), "空间或 marker 预算不足，未能注入混合物");
 		}
-		long poured = Math.min(cellVolumeToNanos(inserted.volume()), volumeNanos);
 		region.wakeForActivity();
-		return new TransferOutcome(true, true, withMaterialVolume(volumeNanos - poured, materialId),
-				String.format("已注入 %.2f%% 桶 %s", 100.0 * poured / ContainerFluidLedger.NANOS_PER_BLOCK, materialId));
+		return new TransferOutcome(true, true, new ItemStack(RealWaterItems.MATERIAL_BUCKET),
+				String.format("已注入 %.2f%% 桶（%d 种材料）",
+						100.0 * mixture.totalVolumeNanos() / ContainerFluidLedger.NANOS_PER_BLOCK,
+						mixture.components().size()));
 	}
 
-private static ItemStack withMaterialVolume(long nanos, String materialId) {
-if (nanos <= 0L) return new ItemStack(Items.BUCKET);
-ItemStack stack = new ItemStack(RealWaterItems.MATERIAL_BUCKET);
-stack.set(RealWaterComponents.FLUID_VOLUME, nanos);
-stack.set(RealWaterComponents.MATERIAL_ID, materialId);
-return stack;
-}
-
 private static TransferOutcome scoopMaterialIntoCell(
-FluidSimulationService service, FluidRegion region, int[] cell, long capacityNanos, long baseVolumeNanos,
-int materialHandle, int maxRadius
+FluidSimulationService service, FluidRegion region, int[] cell, long capacityNanos, int maxRadius
 ) {
 if (capacityNanos <= 0L) return null;
 FlipFluidDomain domain = region.domain();
-String materialId = domain.materialRegistry().material(materialHandle).id();
-FlipFluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(
-cell[0], cell[1], cell[2], nanosToCellVolume(capacityNanos), maxRadius, materialHandle);
-if (!extracted.transferred() || extracted.volume() <= 0.0) {
-return new TransferOutcome(false, false, withMaterialVolume(baseVolumeNanos, materialId), "准星处没有足够流体");
+FlipFluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
+cell[0], cell[1], cell[2], nanosToCellVolume(capacityNanos), maxRadius);
+if (!extracted.transferred() || extracted.portions().isEmpty()) {
+return new TransferOutcome(false, false, new ItemStack(RealWaterItems.MATERIAL_BUCKET), "准星处没有足够流体");
 }
-long taken = Math.min(cellVolumeToNanos(extracted.volume()), capacityNanos);
+FluidMixture mixture = mixtureFromExtraction(domain, extracted.portions(), capacityNanos);
 region.wakeForActivity();
-return new TransferOutcome(true, false, withMaterialVolume(baseVolumeNanos + taken, materialId),
-String.format("已舀取 %.2f%% 桶 %s", 100.0 * taken / ContainerFluidLedger.NANOS_PER_BLOCK, materialId));
+return new TransferOutcome(true, false, mixture.toStack(),
+String.format("已舀取 %.2f%% 桶（%d 种材料）",
+100.0 * capacityNanos / ContainerFluidLedger.NANOS_PER_BLOCK, mixture.components().size()));
 }
+
+	/** Deterministic largest-remainder-style apportionment; component masses remain exact doubles. */
+	private static FluidMixture mixtureFromExtraction(
+			FlipFluidDomain domain, java.util.List<FlipFluidDomain.MaterialPortion> portions, long totalNanos
+	) {
+		double totalVolume = 0.0;
+		for (FlipFluidDomain.MaterialPortion portion : portions) totalVolume += portion.volume();
+		long remainingNanos = totalNanos;
+		double remainingVolume = totalVolume;
+		java.util.List<FluidMixture.Component> components = new java.util.ArrayList<>(portions.size());
+		for (int i = 0; i < portions.size(); i++) {
+			FlipFluidDomain.MaterialPortion portion = portions.get(i);
+			int componentsLeft = portions.size() - i;
+			long nanos = componentsLeft == 1 ? remainingNanos
+					: Math.max(1L, Math.min(remainingNanos - (componentsLeft - 1L),
+					Math.round(remainingNanos * portion.volume() / remainingVolume)));
+			String materialId = domain.materialRegistry().material(portion.materialHandle()).id();
+			components.add(new FluidMixture.Component(materialId, nanos, portion.mass()));
+			remainingNanos -= nanos;
+			remainingVolume -= portion.volume();
+		}
+		return new FluidMixture(components);
+	}
 	private enum TransferKind {
 		NONE,
 		POUR,
@@ -529,7 +619,7 @@ String.format("已舀取 %.2f%% 桶 %s", 100.0 * taken / ContainerFluidLedger.NA
 		}
 		if (stack.getItem() instanceof MaterialBucketItem) {
 			if (MaterialBucketItem.isEmptyMaterialBucket(stack)) return TransferKind.MATERIAL_SCOOP;
-			return MaterialBucketItem.volume(stack) > 0L && MaterialBucketItem.materialId(stack) != null
+			return MaterialBucketItem.mixture(stack) != null
 					? TransferKind.MATERIAL_POUR
 					: TransferKind.NONE;
 		}
@@ -566,16 +656,32 @@ String.format("已舀取 %.2f%% 桶 %s", 100.0 * taken / ContainerFluidLedger.NA
 		return ContainerFluidLedger.volumeToNanos(cellVolume / FluidSimulationService.CELL_VOLUMES_PER_BLOCK);
 	}
 
-	private static int[] playerPourTargetCell(
-			FluidSimulationService service, FluidRegion region, ServerPlayer player
+	static long extractableNanos(
+			FlipFluidDomain domain, int[] cell, long capacityNanos, int maxRadius, int materialHandle
 	) {
+		if (capacityNanos <= 0L) return 0L;
+		double availableCellVolume = domain.exactVolumeNear(
+				cell[0], cell[1], cell[2], maxRadius, materialHandle);
+		if (!(availableCellVolume > 0.0)) return 0L;
+		double availableNanos = availableCellVolume / FluidSimulationService.CELL_VOLUMES_PER_BLOCK
+				* ContainerFluidLedger.NANOS_PER_BLOCK;
+		long request = Math.min(capacityNanos,
+				availableNanos >= Long.MAX_VALUE ? Long.MAX_VALUE : (long) Math.floor(availableNanos));
+		while (request > 0L && nanosToCellVolume(request) > availableCellVolume) request--;
+		// A material mixture must assign at least one nanovolume quantum to every possible
+		// component. Below that bound the independent per-material volume ledger cannot be encoded.
+		if (materialHandle < 0 && domain.hasMaterialState()
+				&& request < domain.materialRegistry().size()) return 0L;
+		return request;
+	}
+
+	private static BlockPos playerPourTargetBlock(ServerPlayer player) {
 		BlockHitResult hit = (BlockHitResult) player.pick(5.0, 1.0F, false);
 		if (hit.getType() != HitResult.Type.BLOCK) return null;
 		BlockPos hitPos = hit.getBlockPos();
-		BlockPos targetBlock = player.level().getBlockState(hitPos).canBeReplaced()
+		return player.level().getBlockState(hitPos).canBeReplaced()
 				? hitPos
 				: hitPos.relative(hit.getDirection());
-		return service.cellAtBlock(player.level(), region, targetBlock);
 	}
 
 	private record TransferOutcome(boolean transferred, boolean filled, ItemStack stack, String message) { }

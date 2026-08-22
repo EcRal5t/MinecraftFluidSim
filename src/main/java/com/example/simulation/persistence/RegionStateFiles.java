@@ -148,6 +148,35 @@ public final class RegionStateFiles {
 		}
 	}
 
+	/**
+	 * Removes the inactive generation after WAL recovery has proved that HEAD still names the base.
+	 * The active slot is never touched. For an aborted first publication there is no HEAD, so only
+	 * the implementation's known staged filenames are eligible for deletion.
+	 */
+	public void discardUncommittedAfterRollback(UUID id, long expectedBaseGeneration) throws IOException {
+		Path region = regionPath(id);
+		if (!Files.exists(region)) return;
+		if (expectedBaseGeneration == 0L) {
+			if (Files.exists(region.resolve(HEAD))) {
+				throw new IOException("A region HEAD appeared while discarding first-publication staging for " + id);
+			}
+			discardKnownStagedLeftovers(region);
+			if (!isEmptyDirectory(region)) {
+				throw new IOException("Unknown content prevents staged rollback cleanup for " + id);
+			}
+			Files.delete(region);
+			return;
+		}
+		Head current = readHead(region, id);
+		if (current.generation() != expectedBaseGeneration) {
+			throw new IOException("Region HEAD moved while discarding rolled-back staging for " + id);
+		}
+		String inactive = current.slot().equals(SLOT_A) ? SLOT_B : SLOT_A;
+		deleteTree(region.resolve(inactive));
+		deleteTree(region.resolve(inactive + ".tmp"));
+		deleteTree(region.resolve(HEAD + ".tmp"));
+	}
+
 	private void validateBaseUnchanged(PreparedGeneration prepared, Path region) throws IOException {
 		if (prepared.baseGeneration() == null) {
 			if (Files.exists(region.resolve(HEAD))) throw new IOException("Base HEAD appeared for " + prepared.id());
@@ -184,14 +213,46 @@ public final class RegionStateFiles {
 		return readHead(region, id).generation();
 	}
 
+	/**
+	 * Removes only a never-committed first generation whose directory contains the exact staged
+	 * filenames produced by this implementation and no HEAD. This recovery must run before
+	 * metadata discovery: after a crash before the first HEAD publish there is no admitted UUID
+	 * through which a controller retry could otherwise reach {@link #prepare}.
+	 *
+	 * <p>Unknown names, non-directories and any directory with a HEAD are left untouched. Discovery
+	 * will report them as locked.</p>
+	 */
+	public void recoverKnownFirstPublicationStaging() throws IOException {
+		if (!Files.exists(root)) return;
+		if (!Files.isDirectory(root)) throw new IOException("Region-state root is not a directory: " + root);
+		try (DirectoryStream<Path> entries = Files.newDirectoryStream(root)) {
+			for (Path region : entries) {
+				if (!Files.isDirectory(region) || region.getFileName().toString().startsWith(".")) continue;
+				try {
+					UUID.fromString(region.getFileName().toString());
+				} catch (IllegalArgumentException unknownName) {
+					continue;
+				}
+				if (Files.exists(region.resolve(HEAD))) continue;
+				discardKnownStagedLeftovers(region);
+				if (isEmptyDirectory(region)) Files.delete(region);
+			}
+		}
+	}
+
 	/** Reads only committed manifests. Locked paths are retained and returned as issues. */
 	public Discovery discover() throws IOException {
 		if (!Files.exists(root)) return new Discovery(List.of(), Map.of());
+		if (!Files.isDirectory(root)) throw new IOException("Region-state root is not a directory: " + root);
 		List<RegionManifest> manifests = new ArrayList<>();
 		Map<Path, String> issues = new HashMap<>();
 		try (DirectoryStream<Path> entries = Files.newDirectoryStream(root)) {
 			for (Path entry : entries) {
-				if (!Files.isDirectory(entry) || entry.getFileName().toString().startsWith(".")) continue;
+				if (entry.getFileName().toString().startsWith(".")) continue;
+				if (!Files.isDirectory(entry)) {
+					issues.put(entry, "Unknown non-directory content in region-state root");
+					continue;
+				}
 				try {
 					UUID id = UUID.fromString(entry.getFileName().toString());
 					manifests.add(readManifest(id));

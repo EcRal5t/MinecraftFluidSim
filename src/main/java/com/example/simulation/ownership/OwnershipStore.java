@@ -50,10 +50,12 @@ public final class OwnershipStore {
 	 * unreadable or inconsistent committed registries stay locked and reported.
 	 */
 	public List<String> scanIssues() {
-		List<String> issues = new ArrayList<>();
-		for (UUID regionId : discoverRegions()) {
+		Discovery discovery = discoverRegions();
+		List<String> issues = new ArrayList<>(discovery.issues());
+		for (UUID regionId : discovery.regions()) {
 			OwnershipFiles files = files(regionId);
 			try {
+				files.validateKnownLayout();
 				if (files.hasWAL() || files.hasWarning()) {
 					issues.add(regionId + " 存在未解决 ownership 事务（" + files.lockDescription() + "）；等待启动恢复");
 					continue;
@@ -81,11 +83,24 @@ public final class OwnershipStore {
 
 	/** Boot-time recovery of unresolved transitions; the world must already be fully started. */
 	public List<String> recoverUnfinished(MinecraftServer server) {
-		List<String> issues = new ArrayList<>();
-		for (UUID regionId : discoverRegions()) {
+		Discovery discovery = discoverRegions();
+		List<String> issues = new ArrayList<>(discovery.issues());
+		for (UUID regionId : discovery.regions()) {
 			OwnershipFiles files = files(regionId);
-			if (!files.isLocked()) continue;
 			try {
+				files.validateKnownLayout();
+				// A corrupt committed registry is itself a lock even when there is no WAL to replay.
+				// Force strict decoding here instead of asking the coordinator to recover a transaction
+				// which does not exist.
+				if (!files.hasWAL() && !files.hasWarning()) {
+					if (files.hasCommitted()) files.readCommitted();
+					files.deleteStaleTemporaryFiles();
+					continue;
+				}
+				if (!files.isLocked()) {
+					files.deleteStaleTemporaryFiles();
+					continue;
+				}
 				OwnershipCoordinator.RecoveryResult result = OwnershipCoordinator.recover(
 						regionFiles, files, worldAccess(server), OwnershipCoordinator.FailureInjector.NONE);
 				RealWaterMod.LOGGER.warn("Recovered unfinished world ownership transition for region {}: {} ({}, {}, {})",
@@ -100,24 +115,35 @@ public final class OwnershipStore {
 		return issues;
 	}
 
-	List<UUID> discoverRegions() {
+	private Discovery discoverRegions() {
 		Path root = worldRoot.resolve("realwater").resolve(OwnershipFiles.ROOT_DIRECTORY_NAME);
-		if (!Files.isDirectory(root)) return List.of();
+		if (!Files.exists(root)) return new Discovery(List.of(), List.of());
 		List<UUID> regions = new ArrayList<>();
+		List<String> issues = new ArrayList<>();
+		if (!Files.isDirectory(root)) {
+			issues.add("ownership root 不是目录，已锁定：" + root);
+			return new Discovery(List.of(), issues);
+		}
 		try (DirectoryStream<Path> entries = Files.newDirectoryStream(root)) {
 			for (Path entry : entries) {
-				if (!Files.isDirectory(entry) || entry.getFileName().toString().startsWith(".")) continue;
+				if (!Files.isDirectory(entry)) {
+					issues.add("ownership root 含未知文件（已保留并锁定）：" + entry.getFileName());
+					continue;
+				}
 				try {
 					regions.add(UUID.fromString(entry.getFileName().toString()));
-				} catch (IllegalArgumentException ignored) {
-					RealWaterMod.LOGGER.warn("Ignoring unrecognised ownership directory {}", entry);
+				} catch (IllegalArgumentException unknown) {
+					issues.add("ownership root 含未知目录（已保留并锁定）：" + entry.getFileName());
 				}
 			}
 		} catch (IOException exception) {
 			RealWaterMod.LOGGER.error("Could not scan the ownership directory {}", root, exception);
+			issues.add("无法完整扫描 ownership root（已锁定）：" + exception.getMessage());
 		}
-		return List.copyOf(regions);
+		return new Discovery(List.copyOf(regions), List.copyOf(issues));
 	}
+
+	private record Discovery(List<UUID> regions, List<String> issues) { }
 
 	public static OwnershipCoordinator.WorldAccess worldAccess(MinecraftServer server) {
 		return new MinecraftWorldAccess(server);

@@ -21,6 +21,10 @@ public final class RealWaterComponents {
 	public static final DataComponentType<Long> FLUID_VOLUME = register("fluid_volume");
 	/** Stable material id carried by a Real Water material container. */
 	public static final DataComponentType<String> MATERIAL_ID = registerString("material_id");
+	/** Raw IEEE-754 double bits of the independent material-mass ledger. */
+	public static final DataComponentType<Long> FLUID_MASS_BITS = register("fluid_mass_bits");
+	/** Canonical encoded per-material nanovolume/mass inventory for multi-component buckets. */
+	public static final DataComponentType<String> MIXTURE_COMPONENTS = registerString("mixture_components");
 
 	private RealWaterComponents() { }
 

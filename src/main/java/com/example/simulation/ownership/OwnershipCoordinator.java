@@ -36,39 +36,50 @@ public final class OwnershipCoordinator {
 		String dimensionId = target.manifest().dimensionId();
 
 		RegionStateFiles.PreparedGeneration prepared = regionFiles.prepare(target, (point, path) -> { });
-		long baseGeneration = prepared.baseGeneration() == null ? 0L : prepared.baseGeneration();
-		if (target.manifest().checkpointGeneration() != baseGeneration + 1L) {
-			throw new IOException("Acquire target generation must be one past the committed region HEAD "
-					+ baseGeneration + ", got " + target.manifest().checkpointGeneration());
-		}
-		failures.hit(FailurePoint.AFTER_REGION_PREPARE, 0);
-		OwnershipJournal wal = new OwnershipJournal(regionId, dimensionId, baseGeneration,
-				target.manifest().checkpointGeneration(), OwnershipJournal.Operation.ACQUIRE, candidates);
-		ownershipFiles.publishWAL(wal);
-		failures.hit(FailurePoint.AFTER_WAL_PUBLISH, 0);
-		ownershipFiles.publishWarning(warning);
-		failures.hit(FailurePoint.AFTER_WARNING_PUBLISH, 0);
-
-		// Candidates are scanned and removed in the same server tick, so every position must still
-		// match; anything else aborts into the recovery path instead of being silently skipped.
-		int removed = 0;
-		for (OwnershipJournal.BlockEntry entry : candidates) {
-			if (world.removeWater(dimensionId, entry) != RemoveOutcome.REMOVED) {
-				throw new IOException("Owned water position " + entry.packedPosition()
-						+ " changed between scan and removal");
+		try {
+			long baseGeneration = prepared.baseGeneration() == null ? 0L : prepared.baseGeneration();
+			if (target.manifest().checkpointGeneration() != baseGeneration + 1L) {
+				throw new IOException("Acquire target generation must be one past the committed region HEAD "
+						+ baseGeneration + ", got " + target.manifest().checkpointGeneration());
 			}
-			removed++;
-			failures.hit(FailurePoint.AFTER_REMOVE_BLOCK, removed);
-		}
+			failures.hit(FailurePoint.AFTER_REGION_PREPARE, 0);
+			OwnershipJournal wal = new OwnershipJournal(regionId, dimensionId, baseGeneration,
+					target.manifest().checkpointGeneration(), OwnershipJournal.Operation.ACQUIRE, candidates);
+			ownershipFiles.publishWAL(wal);
+			failures.hit(FailurePoint.AFTER_WAL_PUBLISH, 0);
+			ownershipFiles.publishWarning(warning);
+			failures.hit(FailurePoint.AFTER_WARNING_PUBLISH, 0);
 
-		failures.hit(FailurePoint.BEFORE_HEAD_PUBLISH, 0);
-		long published = regionFiles.commit(prepared, (point, path) -> { });
-		failures.hit(FailurePoint.AFTER_HEAD_PUBLISH, 0);
-		ownershipFiles.publishCommitted(new OwnershipCommitted(regionId, dimensionId, published, candidates));
-		failures.hit(FailurePoint.AFTER_COMMITTED_WRITE, 0);
-		failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
-		ownershipFiles.deleteTransaction();
-		return new AcquireResult(published, candidates.size());
+			// Candidates are scanned and removed in the same server tick, so every position must still
+			// match; anything else aborts into the recovery path instead of being silently skipped.
+			int removed = 0;
+			for (OwnershipJournal.BlockEntry entry : candidates) {
+				if (world.removeWater(dimensionId, entry) != RemoveOutcome.REMOVED) {
+					throw new IOException("Owned water position " + entry.packedPosition()
+							+ " changed between scan and removal");
+				}
+				removed++;
+				failures.hit(FailurePoint.AFTER_REMOVE_BLOCK, removed);
+			}
+
+			failures.hit(FailurePoint.BEFORE_HEAD_PUBLISH, 0);
+			long published = regionFiles.commit(prepared, (point, path) -> { });
+			failures.hit(FailurePoint.AFTER_HEAD_PUBLISH, 0);
+			ownershipFiles.publishCommitted(new OwnershipCommitted(regionId, dimensionId, published, candidates));
+			failures.hit(FailurePoint.AFTER_COMMITTED_WRITE, 0);
+			failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
+			ownershipFiles.deleteTransaction();
+			return new AcquireResult(published, candidates.size());
+		} catch (IOException | RuntimeException failure) {
+			if (!ownershipFiles.hasWAL()) {
+				try {
+					regionFiles.abort(prepared);
+				} catch (IOException abortFailure) {
+					failure.addSuppressed(abortFailure);
+				}
+			}
+			throw failure;
+		}
 	}
 
 	/** Caller must first refuse the release while the region still holds marker volume. */
@@ -92,41 +103,52 @@ public final class OwnershipCoordinator {
 		if (committed.ownedBlocks().isEmpty()) throw new IOException("Ownership registry holds no owned positions");
 
 		RegionStateFiles.PreparedGeneration prepared = regionFiles.prepare(target, (point, path) -> { });
-		long baseGeneration = prepared.baseGeneration() == null ? 0L : prepared.baseGeneration();
-		if (target.manifest().checkpointGeneration() != baseGeneration + 1L) {
-			throw new IOException("Release target generation must be one past the committed region HEAD "
-					+ baseGeneration + ", got " + target.manifest().checkpointGeneration());
-		}
-		failures.hit(FailurePoint.AFTER_REGION_PREPARE, 0);
-		OwnershipJournal wal = new OwnershipJournal(regionId, committed.dimensionId(), baseGeneration,
-				target.manifest().checkpointGeneration(), OwnershipJournal.Operation.RELEASE, committed.ownedBlocks());
-		ownershipFiles.publishWAL(wal);
-		failures.hit(FailurePoint.AFTER_WAL_PUBLISH, 0);
-		ownershipFiles.publishWarning(warning);
-		failures.hit(FailurePoint.AFTER_WARNING_PUBLISH, 0);
-
-		int restored = 0;
-		int alreadyRestored = 0;
-		int skipped = 0;
-		int processed = 0;
-		for (OwnershipJournal.BlockEntry entry : wal.blocks()) {
-			switch (world.restore(committed.dimensionId(), entry)) {
-				case RESTORED -> restored++;
-				case ALREADY_RESTORED -> alreadyRestored++;
-				case SKIPPED_OCCUPIED -> skipped++;
+		try {
+			long baseGeneration = prepared.baseGeneration() == null ? 0L : prepared.baseGeneration();
+			if (target.manifest().checkpointGeneration() != baseGeneration + 1L) {
+				throw new IOException("Release target generation must be one past the committed region HEAD "
+						+ baseGeneration + ", got " + target.manifest().checkpointGeneration());
 			}
-			processed++;
-			failures.hit(FailurePoint.AFTER_RESTORE_BLOCK, processed);
-		}
+			failures.hit(FailurePoint.AFTER_REGION_PREPARE, 0);
+			OwnershipJournal wal = new OwnershipJournal(regionId, committed.dimensionId(), baseGeneration,
+					target.manifest().checkpointGeneration(), OwnershipJournal.Operation.RELEASE, committed.ownedBlocks());
+			ownershipFiles.publishWAL(wal);
+			failures.hit(FailurePoint.AFTER_WAL_PUBLISH, 0);
+			ownershipFiles.publishWarning(warning);
+			failures.hit(FailurePoint.AFTER_WARNING_PUBLISH, 0);
 
-		failures.hit(FailurePoint.BEFORE_HEAD_PUBLISH, 0);
-		long published = regionFiles.commit(prepared, (point, path) -> { });
-		failures.hit(FailurePoint.AFTER_HEAD_PUBLISH, 0);
-		ownershipFiles.publishCommitted(new OwnershipCommitted(regionId, committed.dimensionId(), published, List.of()));
-		failures.hit(FailurePoint.AFTER_COMMITTED_WRITE, 0);
-		failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
-		ownershipFiles.deleteTransaction();
-		return new ReleaseResult(published, restored, alreadyRestored, skipped);
+			int restored = 0;
+			int alreadyRestored = 0;
+			int skipped = 0;
+			int processed = 0;
+			for (OwnershipJournal.BlockEntry entry : wal.blocks()) {
+				switch (world.restore(committed.dimensionId(), entry)) {
+					case RESTORED -> restored++;
+					case ALREADY_RESTORED -> alreadyRestored++;
+					case SKIPPED_OCCUPIED -> skipped++;
+				}
+				processed++;
+				failures.hit(FailurePoint.AFTER_RESTORE_BLOCK, processed);
+			}
+
+			failures.hit(FailurePoint.BEFORE_HEAD_PUBLISH, 0);
+			long published = regionFiles.commit(prepared, (point, path) -> { });
+			failures.hit(FailurePoint.AFTER_HEAD_PUBLISH, 0);
+			ownershipFiles.publishCommitted(new OwnershipCommitted(regionId, committed.dimensionId(), published, List.of()));
+			failures.hit(FailurePoint.AFTER_COMMITTED_WRITE, 0);
+			failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
+			ownershipFiles.deleteTransaction();
+			return new ReleaseResult(published, restored, alreadyRestored, skipped);
+		} catch (IOException | RuntimeException failure) {
+			if (!ownershipFiles.hasWAL()) {
+				try {
+					regionFiles.abort(prepared);
+				} catch (IOException abortFailure) {
+					failure.addSuppressed(abortFailure);
+				}
+			}
+			throw failure;
+		}
 	}
 
 	public static RecoveryResult recover(
@@ -148,7 +170,7 @@ public final class OwnershipCoordinator {
 		}
 		long head = regionFiles.committedGeneration(wal.regionId());
 
-		if (head == wal.baseGeneration()) return rollbackToBase(ownershipFiles, world, failures, wal);
+		if (head == wal.baseGeneration()) return rollbackToBase(regionFiles, ownershipFiles, world, failures, wal);
 		if (head == wal.targetGeneration()) return completeCommitted(ownershipFiles, world, failures, wal);
 		throw new IOException("Ownership is LOCKED: region HEAD generation " + head + " matches neither WAL base "
 				+ wal.baseGeneration() + " nor target " + wal.targetGeneration() + " for region " + wal.regionId());
@@ -178,6 +200,7 @@ public final class OwnershipCoordinator {
 
 	/** Pre-commit crash: the world returns to the pre-transition state; player blocks always win. */
 	private static RecoveryResult rollbackToBase(
+			RegionStateFiles regionFiles,
 			OwnershipFiles ownershipFiles,
 			WorldAccess world,
 			FailureInjector failures,
@@ -205,6 +228,7 @@ public final class OwnershipCoordinator {
 			failures.hit(FailurePoint.AFTER_RESTORE_BLOCK, processed);
 		}
 		failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
+		regionFiles.discardUncommittedAfterRollback(wal.regionId(), wal.baseGeneration());
 		ownershipFiles.deleteTransaction();
 		return wal.operation() == OwnershipJournal.Operation.ACQUIRE
 				? RecoveryResult.acquireRolledBack(applied, alreadyApplied, skipped)

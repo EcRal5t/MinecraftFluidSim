@@ -35,6 +35,7 @@ final class OwnershipCommittedCodec {
 			if (!positions.add(entry.packedPosition())) {
 				throw new IOException("Committed ownership contains duplicate block position " + entry.packedPosition());
 			}
+			validateWaterState(entry.state(), entry.packedPosition());
 			CompoundTag block = new CompoundTag();
 			block.putLong("Pos", entry.packedPosition());
 			block.put("State", entry.state());
@@ -80,7 +81,9 @@ final class OwnershipCommittedCodec {
 				throw new IOException("Committed ownership contains duplicate block position " + position);
 			}
 			requireType(block, "State", Tag.TAG_COMPOUND);
-			owned.add(new OwnershipJournal.BlockEntry(position, block.getCompoundOrEmpty("State")));
+			CompoundTag state = block.getCompoundOrEmpty("State");
+			validateWaterState(state, position);
+			owned.add(new OwnershipJournal.BlockEntry(position, state));
 		}
 		return new OwnershipCommitted(regionId, dimensionId, generation, owned);
 	}
@@ -88,6 +91,15 @@ final class OwnershipCommittedCodec {
 	private static void validateOwnedCount(int size) throws IOException {
 		if (size > MAX_OWNED_BLOCKS) {
 			throw new IOException("Committed ownership contains too many blocks: " + size);
+		}
+	}
+
+	private static void validateWaterState(CompoundTag state, long position) throws IOException {
+		requireType(state, "Name", Tag.TAG_STRING);
+		String blockId = state.getStringOr("Name", "");
+		if (!"minecraft:water".equals(blockId)) {
+			throw new IOException("Committed ownership position " + position
+					+ " is not pure Minecraft water: " + blockId);
 		}
 	}
 

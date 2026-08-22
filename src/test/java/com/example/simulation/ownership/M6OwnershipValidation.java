@@ -52,7 +52,8 @@ public final class M6OwnershipValidation {
 		run("wal and committed codec strictness", M6OwnershipValidation::testCodecs);
 		run("normal acquire commits the joint state", M6OwnershipValidation::testNormalAcquire);
 		run("acquire rejects a non-adjacent target generation", M6OwnershipValidation::testGenerationGuard);
-		run("crash after region prepare leaves staged slot recoverable", M6OwnershipValidation::testCrashAfterPrepare);
+		run("crash after region prepare aborts private staging", M6OwnershipValidation::testCrashAfterPrepare);
+		run("boot removes known first-publication staging", M6OwnershipValidation::testBootCleansFirstPublicationStaging);
 		run("crash after WAL publish rolls forward to recovery", M6OwnershipValidation::testCrashAfterWalPublish);
 		run("mid-mutation crash rolls back every removed block", M6OwnershipValidation::testCrashMidMutation);
 		run("player block wins in pre-commit rollback", M6OwnershipValidation::testPlayerWinsInRollback);
@@ -67,6 +68,8 @@ public final class M6OwnershipValidation {
 		run("reconcile classifies air, player and water", M6OwnershipValidation::testReconcile);
 		run("regions are isolated from each other's locks", M6OwnershipValidation::testRegionIsolation);
 		run("warning without WAL requires manual check", M6OwnershipValidation::testOrphanWarning);
+		run("unknown ownership content locks and is preserved", M6OwnershipValidation::testUnknownOwnershipLayout);
+		run("corrupt committed registry locks during boot recovery", M6OwnershipValidation::testCorruptCommittedLock);
 		System.out.println("M6OwnershipValidation passed " + passed + " scenarios");
 	}
 
@@ -109,6 +112,12 @@ public final class M6OwnershipValidation {
 		CompoundTag negative = committedCodec.encode(committed);
 		negative.putLong("Generation", -1L);
 		expectIOException(() -> committedCodec.decode(negative));
+		CompoundTag stone = new CompoundTag();
+		stone.putString("Name", "minecraft:stone");
+		List<OwnershipJournal.BlockEntry> nonWater = List.of(new OwnershipJournal.BlockEntry(7L, stone));
+		expectIOException(() -> journalCodec.encode(new OwnershipJournal(regionId, DIMENSION_ID, 1L, 2L,
+				OwnershipJournal.Operation.ACQUIRE, nonWater)));
+		expectIOException(() -> committedCodec.encode(new OwnershipCommitted(regionId, DIMENSION_ID, 1L, nonWater)));
 	}
 
 	private static void testNormalAcquire() throws Exception {
@@ -141,7 +150,10 @@ public final class M6OwnershipValidation {
 			expectIOException(() -> acquire(fixture, failAt(FailurePoint.AFTER_REGION_PREPARE, 0)));
 			check(!fixture.ownershipFiles().hasWAL() && fixture.world().allOriginal(),
 					"post-prepare crash published the WAL or modified the world");
-			// The staged slot is our own leftover: a retry succeeds, but unknown content stays locked.
+			Path regionDirectory = root.resolve("realwater").resolve("region-state")
+					.resolve(fixture.regionId().toString());
+			check(!Files.exists(regionDirectory), "failed prepare retained a private staged generation");
+			// A retry starts from a genuinely clean first publication; unknown content still stays locked.
 			OwnershipCoordinator.AcquireResult retry = acquire(fixture, FailureInjector.NONE);
 			check(retry.generation() == 1L && fixture.world().airCount() == 3, "staged-slot retry did not recover");
 			UUID foreignRegion = UUID.randomUUID();
@@ -149,6 +161,24 @@ public final class M6OwnershipValidation {
 			Files.createDirectories(foreignDirectory);
 			Files.writeString(foreignDirectory.resolve("mystery.dat"), "foreign data");
 			expectIOException(() -> acquire(new Fixture(root, 2, foreignRegion), FailureInjector.NONE));
+		});
+	}
+
+	private static void testBootCleansFirstPublicationStaging() throws Exception {
+		withTemporaryWorld(root -> {
+			UUID regionId = UUID.randomUUID();
+			RegionStateFiles files = new RegionStateFiles(root);
+			RegionState staged = RegionState.capture(populatedRegion(regionId), 1L);
+			files.prepare(staged, (point, path) -> { });
+			Path regionDirectory = root.resolve("realwater").resolve("region-state").resolve(regionId.toString());
+			check(Files.isDirectory(regionDirectory) && files.committedGeneration(regionId) == 0L,
+					"fixture did not create an uncommitted first publication");
+
+			RegionStateFiles reopened = new RegionStateFiles(root);
+			reopened.recoverKnownFirstPublicationStaging();
+			check(!Files.exists(regionDirectory), "boot retained known headless first-publication staging");
+			check(reopened.discover().issues().isEmpty() && reopened.discover().manifests().isEmpty(),
+					"cleaned first publication remained globally locked");
 		});
 	}
 
@@ -210,6 +240,11 @@ public final class M6OwnershipValidation {
 			check(fixture.world().airCount() == 4
 					&& fixture.regionFiles().committedGeneration(fixture.regionId()) == 0L,
 					"pre-HEAD crash state is wrong");
+			// Real startup loads region metadata before ownership recovery. The absent HEAD proves the
+			// staged region is uncommitted; discarding it must not discard the ownership WAL needed to
+			// restore the already-mutated world.
+			new RegionStateFiles(root).recoverKnownFirstPublicationStaging();
+			check(fixture.ownershipFiles().hasWAL(), "region staging cleanup deleted the ownership WAL");
 			OwnershipCoordinator.RecoveryResult recovery = recover(fixture, FailureInjector.NONE);
 			check(recovery.kind() == OwnershipCoordinator.RecoveryResult.Kind.ACQUIRE_ROLLED_BACK
 					&& recovery.restored() == 4, "pre-HEAD crash did not roll the world fully back");
@@ -362,6 +397,44 @@ public final class M6OwnershipValidation {
 			Files.writeString(fixture.ownershipFiles().warningPath(), "orphaned warning");
 			expectIOException(() -> recover(fixture, FailureInjector.NONE));
 			check(fixture.ownershipFiles().isLocked(), "orphan warning was silently removed");
+		});
+	}
+
+	private static void testUnknownOwnershipLayout() throws Exception {
+		withTemporaryWorld(root -> {
+			Path ownershipRoot = root.resolve("realwater").resolve(OwnershipFiles.ROOT_DIRECTORY_NAME);
+			Files.createDirectories(ownershipRoot);
+			Path rootMystery = ownershipRoot.resolve("mystery.dat");
+			Files.writeString(rootMystery, "foreign root data");
+			OwnershipStore store = new OwnershipStore(root);
+			check(!store.scanIssues().isEmpty(), "unknown ownership-root file was ignored");
+			check(Files.exists(rootMystery), "scan deleted unknown ownership-root content");
+
+			UUID regionId = UUID.randomUUID();
+			OwnershipFiles files = store.files(regionId);
+			Files.createDirectories(files.directoryPath());
+			Path regionMystery = files.directoryPath().resolve("future-format.bin");
+			Files.writeString(regionMystery, "future data");
+			check(files.isLocked(), "unknown per-region ownership content did not lock");
+			expectIOException(files::deleteStore);
+			check(Files.exists(regionMystery), "deleteStore removed unknown ownership content");
+		});
+	}
+
+	private static void testCorruptCommittedLock() throws Exception {
+		withTemporaryWorld(root -> {
+			UUID regionId = UUID.randomUUID();
+			OwnershipStore store = new OwnershipStore(root);
+			OwnershipFiles files = store.files(regionId);
+			Files.createDirectories(files.directoryPath());
+			byte[] corrupt = {8, 7, 6, 5};
+			Files.write(files.committedPath(), corrupt);
+			check(files.isLocked() && !store.scanIssues().isEmpty(),
+					"corrupt committed ownership was not reported as locked");
+			check(!store.recoverUnfinished(null).isEmpty(),
+					"boot recovery silently accepted corrupt committed ownership");
+			check(java.util.Arrays.equals(corrupt, Files.readAllBytes(files.committedPath())),
+					"boot recovery rewrote corrupt committed ownership");
 		});
 	}
 
