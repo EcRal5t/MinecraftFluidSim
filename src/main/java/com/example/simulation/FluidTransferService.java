@@ -105,8 +105,8 @@ public final class FluidTransferService {
 			return transaction.outcome().stack();
 		}
 		TransferOutcome outcome = kind == TransferKind.POUR
-				? pourIntoCell(service, region, cell, heldVolumeNanos(stack), 2)
-				: scoopFromCell(service, region, cell, heldFreeNanos(stack), heldBaseVolumeNanos(stack), 2);
+				? pourIntoCell(service, region, cell, heldVolumeNanos(stack), 6)
+				: scoopFromCell(service, region, cell, heldFreeNanos(stack), heldBaseVolumeNanos(stack), 6);
 		if (outcome == null || !outcome.transferred()) return stack;
 		service.sendSnapshot(level, region);
 		return outcome.stack();
@@ -121,7 +121,7 @@ public final class FluidTransferService {
 		int[] cell = playerPourTargetCell(service, region, player);
 		if (cell == null) return null;
 		if (region.controllerManaged()) return pourController(service, region, player, hand, held, volume, cell);
-		TransferOutcome outcome = pourIntoCell(service, region, cell, volume, 2);
+		TransferOutcome outcome = pourIntoCell(service, region, cell, volume, 6);
 		if (!outcome.transferred()) return new TransferOutcome(false, true, held, outcome.message());
 		if (player.hasInfiniteMaterials() && held.is(Items.WATER_BUCKET)) {
 			service.sendSnapshotFor(player);
@@ -139,7 +139,7 @@ public final class FluidTransferService {
 		int[] cell = service.aimedCellNear(player, true);
 		if (cell == null) return null;
 		if (region.controllerManaged()) return scoopController(service, region, player, hand, held, capacity, cell);
-		TransferOutcome outcome = scoopFromCell(service, region, cell, capacity, heldBaseVolumeNanos(held), 2);
+		TransferOutcome outcome = scoopFromCell(service, region, cell, capacity, heldBaseVolumeNanos(held), 6);
 		if (!outcome.transferred()) return new TransferOutcome(false, false, held, outcome.message());
 		if (player.hasInfiniteMaterials() && held.is(Items.BUCKET)) {
 			ItemStack filled = outcome.stack();
@@ -237,8 +237,8 @@ public final class FluidTransferService {
 		service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_PREPARE);
 
 		TransferOutcome rawOutcome = operation == ContainerTransferJournal.Operation.INSERT
-				? pourIntoCell(service, region, cell, requestedNanos, 2)
-				: scoopFromCell(service, region, cell, requestedNanos, baseVolumeNanos, 2);
+				? pourIntoCell(service, region, cell, requestedNanos, 6)
+				: scoopFromCell(service, region, cell, requestedNanos, baseVolumeNanos, 6);
 		if (rawOutcome == null || !rawOutcome.transferred()) {
 			deleteQuietly(service, transactionId);
 			return new ControllerTransfer(rawOutcome == null
