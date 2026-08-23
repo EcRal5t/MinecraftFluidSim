@@ -108,6 +108,9 @@ public final class ChemicalRegistry {
 		Map<String, String> dissociationConsumer = new HashMap<>();
 		for (ChemicalReaction reaction : reactions) {
 			ChemicalPhaseDefinition phase = phases.get(phaseHandle(reaction.phaseId()));
+			if (!Collections.disjoint(reaction.reactants().keySet(), reaction.products().keySet())) {
+				throw new IllegalArgumentException("Chemical reaction has direct non-terminating feedback: " + reaction.id());
+			}
 			for (String id : union(reaction.reactants().keySet(), reaction.products().keySet())) {
 				if (!speciesHandles.containsKey(id)) throw new IllegalArgumentException(
 						"Reaction " + reaction.id() + " references unknown species " + id);

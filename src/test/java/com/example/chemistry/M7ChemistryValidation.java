@@ -135,18 +135,45 @@ public final class M7ChemistryValidation {
 	private static void validateInvalidDefinitions() {
 		ChemicalSpecies h = new ChemicalSpecies("test:h", Map.of("H", 1), 0, ExactRational.ONE, 0xff000000);
 		ChemicalSpecies o = new ChemicalSpecies("test:o", Map.of("O", 1), 0, ExactRational.ONE, 0xff000000);
+		ChemicalSpecies hAlias = new ChemicalSpecies("test:h_alias", Map.of("H", 1), 0, ExactRational.ONE, 0xff000000);
+		ChemicalSpecies hAlias2 = new ChemicalSpecies("test:h_alias2", Map.of("H", 1), 0, ExactRational.ONE, 0xff000000);
+		ChemicalSpecies chargedH = new ChemicalSpecies("test:charged_h", Map.of("H", 1), 1, ExactRational.ONE, 0xff000000);
+		ChemicalSpecies heavyH = new ChemicalSpecies("test:heavy_h", Map.of("H", 1), 0, ExactRational.of(2), 0xff000000);
+		List<ChemicalSpecies> all = List.of(h, o, hAlias, hAlias2, chargedH, heavyH);
 		ChemicalPhaseDefinition phase = new ChemicalPhaseDefinition("test:phase", "test:material",
-				List.of("test:h", "test:o"), Map.of("test:h", ExactRational.ONE), false);
+				List.of("test:h", "test:o", "test:h_alias", "test:h_alias2", "test:charged_h", "test:heavy_h"),
+				Map.of("test:h", ExactRational.ONE), false);
 		expectFailure(() -> new ChemicalRegistry(List.of(h, h), List.of(phase), List.of()), "duplicate species accepted");
 		ChemicalReaction unbalanced = new ChemicalReaction("test:bad", ChemicalReaction.Kind.INSTANTANEOUS,
 				"test:phase", Map.of("test:h", 1), Map.of("test:o", 1), ExactRational.ZERO);
-		expectFailure(() -> new ChemicalRegistry(List.of(h, o), List.of(phase), List.of(unbalanced)),
+		expectFailure(() -> new ChemicalRegistry(all, List.of(phase), List.of(unbalanced)),
 				"unbalanced reaction accepted");
+		ChemicalReaction badCharge = new ChemicalReaction("test:bad_charge", ChemicalReaction.Kind.INSTANTANEOUS,
+				"test:phase", Map.of("test:h", 1), Map.of("test:charged_h", 1), ExactRational.ZERO);
+		expectFailure(() -> new ChemicalRegistry(all, List.of(phase), List.of(badCharge)),
+				"charge-unbalanced reaction accepted");
+		ChemicalReaction badMass = new ChemicalReaction("test:bad_mass", ChemicalReaction.Kind.INSTANTANEOUS,
+				"test:phase", Map.of("test:h", 1), Map.of("test:heavy_h", 1), ExactRational.ZERO);
+		expectFailure(() -> new ChemicalRegistry(all, List.of(phase), List.of(badMass)),
+				"mass-unbalanced reaction accepted");
+		ChemicalReaction self = new ChemicalReaction("test:self", ChemicalReaction.Kind.INSTANTANEOUS,
+				"test:phase", Map.of("test:h", 1), Map.of("test:h", 1), ExactRational.ZERO);
+		expectFailure(() -> new ChemicalRegistry(all, List.of(phase), List.of(self)),
+				"direct non-terminating reaction accepted");
+		ChemicalReaction consumesA = new ChemicalReaction("test:consume_a", ChemicalReaction.Kind.INSTANTANEOUS,
+				"test:phase", Map.of("test:h", 1), Map.of("test:h_alias", 1), ExactRational.ZERO);
+		ChemicalReaction consumesB = new ChemicalReaction("test:consume_b", ChemicalReaction.Kind.INSTANTANEOUS,
+				"test:phase", Map.of("test:h", 1), Map.of("test:h_alias2", 1), ExactRational.ZERO);
+		expectFailure(() -> new ChemicalRegistry(all, List.of(phase),
+				List.of(consumesA, consumesB)), "competing instantaneous consumers accepted");
+		expectFailure(() -> new ChemicalReaction("test:volume", ChemicalReaction.Kind.INSTANTANEOUS,
+				"test:phase", Map.of("test:h", 1), Map.of("test:h_alias", 1), ExactRational.ONE),
+				"nonzero reaction volume change accepted");
 		ChemicalReaction a = new ChemicalReaction("test:a", ChemicalReaction.Kind.COMPLETE_DISSOCIATION,
-				"test:phase", Map.of("test:h", 1), Map.of("test:o", 1), ExactRational.ZERO);
+				"test:phase", Map.of("test:h", 1), Map.of("test:h_alias", 1), ExactRational.ZERO);
 		ChemicalReaction b = new ChemicalReaction("test:b", ChemicalReaction.Kind.COMPLETE_DISSOCIATION,
-				"test:phase", Map.of("test:o", 1), Map.of("test:h", 1), ExactRational.ZERO);
-		expectFailure(() -> new ChemicalRegistry(List.of(h, o), List.of(phase), List.of(a, b)),
+				"test:phase", Map.of("test:h_alias", 1), Map.of("test:h", 1), ExactRational.ZERO);
+		expectFailure(() -> new ChemicalRegistry(all, List.of(phase), List.of(a, b)),
 				"dissociation cycle accepted");
 	}
 
