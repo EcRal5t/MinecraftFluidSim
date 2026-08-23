@@ -716,6 +716,9 @@ public final class M8GranularValidation {
 		}
 		require(moved && locallyHeld,
 				"whole-bucket fixture did not exercise moving and locally held parcels together");
+		GranularStateSnapshot settled = domain.exportGranularState();
+		require(!settled.depositGroups().isEmpty() && settled.activeParcels().size() < 1_024,
+				"whole-bucket local contacts did not make progress into conservative deposits");
 	}
 
 	private static long granularMotionSignature(GranularStateSnapshot state) {
