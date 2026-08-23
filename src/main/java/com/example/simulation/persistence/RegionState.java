@@ -5,6 +5,8 @@ import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipChemicalParticleState;
 import com.example.fluid.FluidMaterial;
 import com.example.chemistry.ChemicalRegistry;
+import com.example.chemistry.ChemicalAuditLedgerCodec;
+import com.example.chemistry.ChemicalTransferLedger;
 import com.example.simulation.FluidRegion;
 
 import java.io.IOException;
@@ -19,6 +21,7 @@ import java.util.Set;
 
 /** Complete, validated checkpoint generation. */
 public record RegionState(RegionManifest manifest, List<RegionSectionState> sections) {
+	private static final String CHEMICAL_AUDIT_EXTENSION = "realwater:chemical_audit_v1";
 	public RegionState {
 		sections = List.copyOf(sections);
 	}
@@ -28,7 +31,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		FlipParticleState particles = region.domain().exportParticleState();
 		return capture(region, checkpointGeneration, new CapturedParticles(1, List.of(), particles.copyPositionVolume(),
 				particles.copyParticleVelocities(), particles.copySolidMask(), new double[0], new int[0],
-				"", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L));
+				"", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L,
+				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY));
 	}
 
 	/** Captures an explicitly material-bound CPU domain without routing it through the pure-water handoff. */
@@ -37,7 +41,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		FlipMaterialParticleState particles = region.domain().exportMaterialParticleState();
 		return capture(region, checkpointGeneration, new CapturedParticles(2, particles.materials(), particles.copyPositionVolume(),
 				particles.copyParticleVelocities(), particles.copySolidMask(), particles.copyParticleMass(),
-				particles.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L));
+				particles.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L,
+				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY));
 	}
 
 	public static RegionState captureChemical(FluidRegion region, long checkpointGeneration) throws IOException {
@@ -48,7 +53,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				materials.copyPositionVolume(), materials.copyParticleVelocities(), materials.copySolidMask(),
 				materials.copyParticleMass(), materials.copyMaterialPaletteIndex(), particles.registryFingerprint(),
 				particles.speciesPalette(), particles.mixtures(), particles.copyMarkerMixtureIndex(),
-				particles.copyIndicator(), particles.copySpeciesTotals(), particles.residualLedgerBits()));
+				particles.copyIndicator(), particles.copySpeciesTotals(), particles.residualLedgerBits(),
+				particles.externalSource(), particles.escapedSink()));
 	}
 
 	private static RegionState capture(FluidRegion region, long checkpointGeneration, CapturedParticles particles) throws IOException {
@@ -143,12 +149,16 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					section.formatVersion() >= 2 ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L, section.checksum()));
 		}
 		List<RegionManifest.MaterialLedger> materialLedgers = materialLedgers(particles);
+		List<RegionExtension> manifestExtensions = particles.formatVersion() == 3
+				? List.of(new RegionExtension(CHEMICAL_AUDIT_EXTENSION, ChemicalAuditLedgerCodec.encode(
+						particles.externalSource(), particles.escapedSink())))
+				: List.of();
 		RegionManifest unsigned = new RegionManifest(particles.formatVersion(), region.id(), region.dimension().identifier().toString(), checkpointGeneration,
 				region.generation(), region.origin(), region.sizeX(), region.sizeY(), region.sizeZ(), region.solverConfig(),
 				region.reservedMarkerCapacity(), region.persistedRuntime(), region.footprint(), particles.particleCount(),
 				Double.doubleToRawLongBits(sumVolumes(positionVolume)), particles.materialPalette(),
 				particles.formatVersion() >= 2 ? Double.doubleToRawLongBits(sum(particles.markerMass())) : 0L,
-				materialLedgers, descriptors, List.of(), particles.registryFingerprint(),
+				materialLedgers, descriptors, manifestExtensions, particles.registryFingerprint(),
 				particles.formatVersion() == 3 ? com.example.chemistry.ChemicalLimits.QUANTA_PER_AU : 0L,
 				particles.speciesPalette(), particles.chemicalMixtures(), particles.chemicalSpeciesTotals(),
 				particles.chemicalResidualLedgerBits(), 0L);
@@ -251,9 +261,21 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				manifest.totalMarkerCount(), manifest.totalVolume(), manifest.totalMass(), manifest.materialPalette(),
 				particles.positionVolume(), particles.velocities(), particles.solidMask(), particles.markerMass(),
 				particles.materialPaletteIndex());
+		ChemicalAuditLedgerCodec.AuditLedgers audit = decodeChemicalAuditExtension();
 		return new FlipChemicalParticleState(materials, registry, manifest.chemicalMixtures(),
 				particles.chemicalMixtureIndex(), particles.indicator(), manifest.chemicalSpeciesTotals(),
-				manifest.chemicalResidualLedgerBits());
+				manifest.chemicalResidualLedgerBits(), audit.externalSource(), audit.escapedSink());
+	}
+
+	private ChemicalAuditLedgerCodec.AuditLedgers decodeChemicalAuditExtension() throws IOException {
+		RegionExtension found = null;
+		for (RegionExtension extension : manifest.extensions()) {
+			if (!CHEMICAL_AUDIT_EXTENSION.equals(extension.type())) continue;
+			if (found != null) throw new IOException("Duplicate region-state v3 chemical audit ledger");
+			found = extension;
+		}
+		if (found == null) throw new IOException("Region-state v3 chemical audit ledger is missing");
+		return ChemicalAuditLedgerCodec.decode(found.payload());
 	}
 
 	private ReconstructedParticles reconstructParticles() throws IOException {
@@ -348,6 +370,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	}
 
 	private void validateChemicalLedgers() throws IOException {
+		decodeChemicalAuditExtension();
 		int count = manifest.totalMarkerCount();
 		int[] mixtureByOrdinal = new int[count];
 		boolean[] seen = new boolean[count];
@@ -552,7 +575,9 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			int[] chemicalMixtureIndex,
 			byte[] indicator,
 			long[] chemicalSpeciesTotals,
-			long chemicalResidualLedgerBits
+			long chemicalResidualLedgerBits,
+			ChemicalTransferLedger externalSource,
+			ChemicalTransferLedger escapedSink
 	) {
 		int particleCount() { return positionVolume.length / 4; }
 	}

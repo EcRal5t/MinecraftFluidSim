@@ -473,6 +473,7 @@ public final class FlipFluidDomain {
 			throw new IllegalArgumentException("Restored chemical species ledger mismatch");
 		}
 		chemicalParcels = restored;
+		chemicalParcels.restoreAuditLedgers(state.externalSource(), state.escapedSink());
 		chemicalPreviousCells = new int[maximumParticleCount];
 	}
 
@@ -551,7 +552,8 @@ public final class FlipFluidDomain {
 			indicator[marker] = chemicalParcels.indicator(marker) ? (byte) 1 : 0;
 		}
 		return FlipChemicalParticleState.capture(
-				exportMaterialParticleState(), chemicalParcels.registry(), mixtures, indicator);
+				exportMaterialParticleState(), chemicalParcels.registry(), mixtures, indicator,
+				chemicalParcels.externalSource(), chemicalParcels.escapedSink());
 	}
 
 	/** Collision edit that returns the complete parcel ledger for conservative nearby restoration. */

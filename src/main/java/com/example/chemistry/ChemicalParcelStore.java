@@ -33,8 +33,38 @@ public final class ChemicalParcelStore {
 	public long totalQuanta() { return totalQuanta; }
 	public ChemicalTransferLedger escapedSink() { return escapedSink; }
 	public ChemicalTransferLedger externalSource() { return externalSource; }
-	public void recordEscapedSink(ChemicalTransferLedger ledger) { escapedSink = escapedSink.plus(ledger); }
-	public void recordExternalSource(ChemicalTransferLedger ledger) { externalSource = externalSource.plus(ledger); }
+	public void recordEscapedSink(ChemicalTransferLedger ledger) {
+		validateAuditLedger(ledger);
+		escapedSink = escapedSink.plus(ledger);
+	}
+	public void recordExternalSource(ChemicalTransferLedger ledger) {
+		validateAuditLedger(ledger);
+		externalSource = externalSource.plus(ledger);
+	}
+	public void restoreAuditLedgers(ChemicalTransferLedger source, ChemicalTransferLedger sink) {
+		if (!externalSource.isEmpty() || !escapedSink.isEmpty()) {
+			throw new IllegalStateException("Chemical audit ledgers can only be restored into a fresh parcel store");
+		}
+		validateAuditLedger(source);
+		validateAuditLedger(sink);
+		externalSource = source;
+		escapedSink = sink;
+	}
+
+	private void validateAuditLedger(ChemicalTransferLedger ledger) {
+		if (ledger == null) throw new IllegalArgumentException("Chemical audit ledger is missing");
+		for (ChemicalTransferLedger.Group group : ledger.groups()) {
+			ChemicalPhaseDefinition phase = registry.phase(registry.phaseHandleForMaterial(group.materialId()));
+			if (group.indicator() && !phase.acceptsIndicator()) throw new IllegalArgumentException("Audit indicator/phase mismatch");
+			ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(
+					registry, group.speciesQuanta(), group.massResidual());
+			requireCompatible(record, group.materialId(), group.indicator());
+			double tolerance = Math.max(1.0E-9, Math.ulp(group.mass()) * 8.0);
+			if (Math.abs(record.markerMass(registry) - group.mass()) > tolerance) {
+				throw new IllegalArgumentException("Chemical audit species/mass ledger mismatch");
+			}
+		}
+	}
 
 	public void requireCompatible(ChemicalMixtureRecord record, String materialId, boolean indicator) {
 		validateRecord(record);

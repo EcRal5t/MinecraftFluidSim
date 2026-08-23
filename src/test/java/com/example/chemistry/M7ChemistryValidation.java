@@ -15,6 +15,7 @@ public final class M7ChemistryValidation {
 		validateRationalsAndCodec();
 		validateCanonicalRegistry();
 		validateBundledDataDefinitions();
+		validateAuditLedgerCodec();
 		validateRegistrySnapshot();
 		validateInvalidDefinitions();
 		validateStrongElectrolytes();
@@ -78,6 +79,23 @@ public final class M7ChemistryValidation {
 			}
 		}
 		return List.copyOf(result);
+	}
+
+	private static void validateAuditLedgerCodec() throws Exception {
+		ChemicalRegistry registry = BuiltinChemicalDefinitions.REGISTRY;
+		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry,
+				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU), 856.0);
+		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
+				"realwater:water", true, 1.0, 1_000.0, mixture.massResidualBits(), mixture.stableAmounts(registry))));
+		byte[] encoded = ChemicalAuditLedgerCodec.encode(ledger, ChemicalTransferLedger.EMPTY);
+		ChemicalAuditLedgerCodec.AuditLedgers decoded = ChemicalAuditLedgerCodec.decode(encoded);
+		check(decoded.externalSource().groups().equals(ledger.groups()) && decoded.escapedSink().isEmpty(),
+				"chemical audit ledger did not round-trip canonically");
+		byte[] truncated = java.util.Arrays.copyOf(encoded, encoded.length - 1);
+		try {
+			ChemicalAuditLedgerCodec.decode(truncated);
+			throw new AssertionError("Truncated chemical audit payload was accepted");
+		} catch (java.io.IOException expected) { }
 	}
 
 	@FunctionalInterface

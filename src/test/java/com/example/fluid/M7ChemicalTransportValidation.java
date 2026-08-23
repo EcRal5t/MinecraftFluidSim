@@ -193,6 +193,9 @@ public final class M7ChemicalTransportValidation {
 		source.setMarkerChemical(0, Map.of(
 				BuiltinChemicalDefinitions.H2O, 123_457L,
 				BuiltinChemicalDefinitions.NACL, 999L), true);
+		var auditFixture = source.chemicalLedgerForMarkerRange(0, 1);
+		source.chemicalParcels().recordExternalSource(auditFixture);
+		source.chemicalParcels().recordEscapedSink(auditFixture);
 		FlipChemicalParticleState state = source.exportChemicalParticleState();
 		FlipFluidDomain restored = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 64);
 		restored.restoreChemicalParticleState(state, CHEMISTRY);
@@ -205,6 +208,9 @@ public final class M7ChemicalTransportValidation {
 				"chemical handoff changed canonical mixture table");
 		check(state.residualLedgerBits() == restored.exportChemicalParticleState().residualLedgerBits(),
 				"chemical handoff changed raw residual ledger");
+		check(state.externalSource().groups().equals(restored.exportChemicalParticleState().externalSource().groups())
+				&& state.escapedSink().groups().equals(restored.exportChemicalParticleState().escapedSink().groups()),
+				"chemical handoff changed external source/sink audit ledgers");
 	}
 
 	private static void validateChemicalContainerRoundTrip() {

@@ -79,6 +79,9 @@ public final class FluidRegionPersistenceValidation {
 		region.domain().setMarkerChemical(0, java.util.Map.of(
 				BuiltinChemicalDefinitions.H2O, 123_457L,
 				BuiltinChemicalDefinitions.NACL, 9_999L), true);
+		var auditFixture = region.domain().chemicalLedgerForMarkerRange(0, 1);
+		region.domain().chemicalParcels().recordExternalSource(auditFixture);
+		region.domain().chemicalParcels().recordEscapedSink(auditFixture);
 		FlipChemicalParticleState expected = region.domain().exportChemicalParticleState();
 		RegionState state = RegionState.captureChemical(region, 1L);
 		state.validate();
@@ -527,7 +530,9 @@ public final class FluidRegionPersistenceValidation {
 				&& Arrays.equals(expected.copyMarkerMixtureIndex(), actual.copyMarkerMixtureIndex())
 				&& Arrays.equals(expected.copyIndicator(), actual.copyIndicator())
 				&& Arrays.equals(expected.copySpeciesTotals(), actual.copySpeciesTotals())
-				&& expected.residualLedgerBits() == actual.residualLedgerBits(),
+				&& expected.residualLedgerBits() == actual.residualLedgerBits()
+				&& expected.externalSource().groups().equals(actual.externalSource().groups())
+				&& expected.escapedSink().groups().equals(actual.escapedSink().groups()),
 				"chemical handoff changed across persistence");
 	}
 

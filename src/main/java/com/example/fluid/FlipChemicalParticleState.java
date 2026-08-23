@@ -3,6 +3,7 @@ package com.example.fluid;
 import com.example.chemistry.ChemicalLimits;
 import com.example.chemistry.ChemicalMixtureRecord;
 import com.example.chemistry.ChemicalRegistry;
+import com.example.chemistry.ChemicalTransferLedger;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -21,6 +22,8 @@ public final class FlipChemicalParticleState {
 	private final byte[] indicator;
 	private final long[] speciesTotals;
 	private final long residualLedgerBits;
+	private final ChemicalTransferLedger externalSource;
+	private final ChemicalTransferLedger escapedSink;
 
 	public FlipChemicalParticleState(
 			FlipMaterialParticleState materials,
@@ -29,7 +32,9 @@ public final class FlipChemicalParticleState {
 			int[] markerMixtureIndex,
 			byte[] indicator,
 			long[] speciesTotals,
-			long residualLedgerBits
+			long residualLedgerBits,
+			ChemicalTransferLedger externalSource,
+			ChemicalTransferLedger escapedSink
 	) {
 		this.materials = java.util.Objects.requireNonNull(materials, "materials");
 		java.util.Objects.requireNonNull(registry, "registry");
@@ -81,11 +86,14 @@ public final class FlipChemicalParticleState {
 			throw new IllegalArgumentException("Chemical mass residual ledger mismatch");
 		}
 		this.residualLedgerBits = residualLedgerBits;
+		this.externalSource = java.util.Objects.requireNonNull(externalSource, "externalSource");
+		this.escapedSink = java.util.Objects.requireNonNull(escapedSink, "escapedSink");
 	}
 
 	public static FlipChemicalParticleState capture(
 			FlipMaterialParticleState materials, ChemicalRegistry registry,
-			List<ChemicalMixtureRecord> markerMixtures, byte[] indicator
+			List<ChemicalMixtureRecord> markerMixtures, byte[] indicator,
+			ChemicalTransferLedger externalSource, ChemicalTransferLedger escapedSink
 	) {
 		if (markerMixtures.size() != materials.particleCount()) throw new IllegalArgumentException("Marker mixture count mismatch");
 		ArrayList<StableMixture> perMarker = new ArrayList<>(markerMixtures.size());
@@ -105,7 +113,7 @@ public final class FlipChemicalParticleState {
 			residual += mixture.massResidual();
 		}
 		return new FlipChemicalParticleState(materials, registry, table, markerTable, indicator, totals,
-				Double.doubleToRawLongBits(residual));
+				Double.doubleToRawLongBits(residual), externalSource, escapedSink);
 	}
 
 	public FlipMaterialParticleState materials() { return materials; }
@@ -117,6 +125,8 @@ public final class FlipChemicalParticleState {
 	public long[] copySpeciesTotals() { return speciesTotals.clone(); }
 	public long residualLedgerBits() { return residualLedgerBits; }
 	public double residualLedger() { return Double.longBitsToDouble(residualLedgerBits); }
+	public ChemicalTransferLedger externalSource() { return externalSource; }
+	public ChemicalTransferLedger escapedSink() { return escapedSink; }
 	public int particleCount() { return materials.particleCount(); }
 	public long cpuBytes() {
 		long tableBytes = 0L;

@@ -152,7 +152,9 @@ public final class M7RegionChemistryPersistenceValidation {
 				&& Arrays.equals(expected.copyMarkerMixtureIndex(), actual.copyMarkerMixtureIndex())
 				&& Arrays.equals(expected.copyIndicator(), actual.copyIndicator())
 				&& Arrays.equals(expected.copySpeciesTotals(), actual.copySpeciesTotals())
-				&& expected.residualLedgerBits() == actual.residualLedgerBits(),
+				&& expected.residualLedgerBits() == actual.residualLedgerBits()
+				&& expected.externalSource().groups().equals(actual.externalSource().groups())
+				&& expected.escapedSink().groups().equals(actual.escapedSink().groups()),
 				"chemical state changed across migration persistence");
 	}
 
