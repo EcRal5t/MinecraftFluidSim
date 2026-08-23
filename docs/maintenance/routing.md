@@ -52,6 +52,7 @@
 | M7 化学真值与定义 | `src/main/java/com/example/chemistry/`、`docs/architecture/chemistry-state.md` | exact rational 定义、stable-ID canonical registry、packed parcel、逐 species/组成/charge/mass 守恒和全部硬预算；reaction 保留 marker residual，完整 transfer/audit 与 parcel/bucket 小预算分离；不得借 display 值结算 |
 | M7 marker/存档/容器接入 | `FlipChemicalParticleState`、`ChemicalContents`、`FluidTransferService`、`ContainerTransferStore`、`RegionState` | indicator provenance 不隔离反应；只有创造放出记 external source；legacy/chemical item 表示互斥；chemical v3 WAL 在 gate/registry identity 不明时保留，actor durable save 前不得删除 |
 | M7 protocol/玩法 | `FluidChemicalSnapshotPayload`、`FluidChemicalSnapshotLedger`、`ChemicalIndicatorItem`、`RealWaterCommands` | protocol v3 只发 Top-4/pH/indicator 展示；指示剂/抹除器是不消耗 operator 工具并按 cut-face/phase 全量 plan；`chemstatus` 完整库存只供管理员并写 transcript |
+| M8 颗粒定义与库存 | `src/main/java/com/example/granular/`、`docs/architecture/granular-state.md` | solid SVQ、独立质量与固相组成分别闭合；parcel/deposit 只做原子 plan/commit；bulk/porosity/显示字段不结算排水；runtime handle 不上链 |
 | takeover codec/files | `src/main/java/com/example/simulation/TakeoverJournalCodec.java`、`src/main/java/com/example/simulation/TakeoverJournalFiles.java` | v1 可读；未知/损坏/恢复失败锁住新 takeover |
 | 指令 transcript | `src/main/java/com/example/logging/RealWaterCommandLog.java`、`src/main/java/com/example/logging/CommandAuditFile.java` | 只做 UTF-8 观测；失败不得改变命令结果 |
 | protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 由 chemistry/materials 门决定严格 v3/v2/v1 及必需 capability；不做降级伪装 |
@@ -140,6 +141,7 @@
 | M6 容器账本、物品、入口与转移 WAL | `containers` | 已合并账本/原语与 WAL/recovery；改协议才追加 `protocol` |
 | transcript | `audit` | 命令包装变化且自动门不足才进服 |
 | M7 definition/registry/parcel/reaction/pH/indicator/化学守恒 | `chemistry` | 改 marker merge/split 才追加 `reseeding`；改存档/容器/协议再分别追加最近 selector |
+| M8 颗粒 definition/registry、SVQ、parcel/deposit、力学/排水/孔隙/休眠 | `granular` | 改共享 pressure/cut-cell/air 路径才追加最近 `free-surface`/`cut-cell`/`gas-liquid`；改持久化/容器/协议/化学桥再分别追加对应 selector |
 | GPU shader/dispatch/压力 | device 0 `--skip-large` | hierarchy/layout/capacity/大域性能才跑 64³ |
 | Vulkan device/queue/memory/lifecycle | device 0 快速门 + device 1 专项 | 双卡完整门只在发布里程碑 |
 

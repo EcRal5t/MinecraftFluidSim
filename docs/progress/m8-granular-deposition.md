@@ -26,3 +26,14 @@ moving-solid capacity source 与 pressure/free-surface/air 共享同一耦合几
 
 下一增量只实现无 Minecraft 依赖的 registry、SVQ 库存与 parcel/deposit 事务，并新增现有 runner 下唯一的
 `granular` selector；在该门通过前不修改 region-state、protocol、item 或生产 solver。
+
+## M8.1a definition 与库存 core（2026-08-24）
+
+- 新增有硬预算的 particulate material/carrier 定义、按 stable ID 排序的 canonical registry 与 SHA-256 fingerprint；
+- 新增 `2^27 SVQ/BV` 的 exact cell-volume 换算和向下 container nanos 换算；
+- 新增固定上限 primitive SoA active parcel、稀疏 canonical deposit groups 与 skeleton/bulk capacity 分离；
+- parcel split/merge 与 parcel↔deposit/wake 保持 SVQ 和独立质量，预算/第九组/bulk overflow 拒绝均为零残留；
+- `CpuValidationSuite` 只增加一个 `granular` 领域并纳入 fast/milestone，不增加 Gradle task。
+
+最近门 `runCpuValidation -PcpuValidation=granular` 通过：full 场景包含 10,000 次 parcel↔deposit 往返，runner
+0.080 秒、granular 本体 0.068 秒。此增量未接 solver、Minecraft、存档、容器或协议，因此未累计其他 selector。
