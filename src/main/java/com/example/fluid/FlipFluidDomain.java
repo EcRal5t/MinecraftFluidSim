@@ -272,6 +272,9 @@ public final class FlipFluidDomain {
 		return granularDepositDynamics == null ? 0 : granularDepositDynamics.sleepingColumnCount();
 	}
 	public GranularDepositDynamics.Stats lastGranularDepositStats() { return lastGranularDepositStats; }
+	public int lastGranularCapacityHeld() {
+		return granularCollision == null ? 0 : granularCollision.lastCapacityHeld();
+	}
 	public GranularStateSnapshot exportGranularState() {
 		if (granularRegistry == null) throw new IllegalStateException("Granular state is not bound");
 		return GranularStateSnapshot.capture(sizeX, sizeY, sizeZ, granularRegistry, granularParcels,
@@ -2045,10 +2048,11 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				GranularMechanics.stepVelocities(granularParcels, granularRegistry, granularEnvironment(),
 						config.cellSize(), config.gravity(), dt);
 				granularCollision.preview(granularParcels, granularRegistry, dt);
+				granularCollision.resolveCapacity(granularParcels, granularCoupling,
+						cell -> SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell)));
 				granularNextCoupling.rebuild(granularParcels, granularDeposits, granularCollision::previewPosition);
 				if (!granularOccupancyFitsGeometry(granularNextCoupling)) {
-					granularCollision.holdPosition(granularParcels);
-					granularNextCoupling.rebuild(granularParcels, granularDeposits, granularCollision::previewPosition);
+					throw new IllegalStateException("Locally resolved granular occupancy exceeds geometry");
 				}
 				pressureGranularCoupling = granularNextCoupling;
 			}
@@ -2078,19 +2082,36 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		lastPhaseTransferStats = precipitationEnabled
 				? transferGranularPhases(phaseTransferCells) : new PhaseTransferStats(0, 0, 0, 0L);
 		if (granularInventory != null && granularParcels.count() > 1) {
+			granularCoupling.rebuild(granularParcels, granularDeposits);
+			long[] compactedSolid = granularCoupling.copySolidSvq();
 			granularInventory.compactActive(
 					index -> granularParcelCell(granularParcels.parcel(index)),
-					parcel -> granularCollision.positionValid(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq()),
+					(first, second, merged) -> planGranularMerge(compactedSolid, first, second, merged),
 					granularMergeVelocityDelta(), GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP);
+			granularCoupling.rebuild(granularParcels, granularDeposits);
+			if (!granularCoupling.matchesSolidSvq(compactedSolid)) {
+				throw new IllegalStateException("Granular active compaction differs from its exact occupancy plan");
+			}
 		}
 		if (granularDepositDynamics != null) {
+			long[] dynamicsSolid = null;
 			if (hasGranularInventory() || granularDepositDynamics.dirtyColumnCount() != 0) {
-				lastGranularDepositStats = granularDepositDynamics.step(granularDepositEnvironment(), config.timeStep());
+				granularCoupling.rebuild(granularParcels, granularDeposits);
+				dynamicsSolid = granularCoupling.copySolidSvq();
+				long[] plannedDynamicsSolid = dynamicsSolid;
+				lastGranularDepositStats = granularDepositDynamics.step(
+						granularDepositEnvironment(plannedDynamicsSolid), config.timeStep());
 			} else {
 				lastGranularDepositStats = new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
 			}
 			if (hasGranularInventory()) {
 				granularCoupling.rebuild(granularParcels, granularDeposits);
+				if (!granularCoupling.matchesSolidSvq(dynamicsSolid)) {
+					throw new IllegalStateException("Granular deposit transition differs from its exact occupancy plan");
+				}
+				if (!granularOccupancyFitsGeometry(granularCoupling)) {
+					throw new IllegalStateException("Granular deposit transition exceeds geometry");
+				}
 				pressureGranularCoupling = granularCoupling;
 			} else {
 				granularCoupling.clear(); pressureGranularCoupling = null;
@@ -2335,7 +2356,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		};
 	}
 
-	private GranularDepositDynamics.Environment granularDepositEnvironment() {
+	private GranularDepositDynamics.Environment granularDepositEnvironment(long[] plannedSolid) {
 		return new GranularDepositDynamics.Environment() {
 			@Override public long geometricOpenSvq(int cell) {
 				return SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
@@ -2383,10 +2404,70 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						sampleY(velocityY, px, py, pz), sampleZ(velocityZ, px, py, pz));
 			}
 
+			@Override public boolean planSettlement(GranularParcelStore.Parcel parcel, int cell) {
+				GranularCouplingFields.Position position = parcelPosition(parcel);
+				granularCoupling.removePlannedParcel(plannedSolid, position, parcel.solidVolumeSvq());
+				if (granularCoupling.tryPlanCell(plannedSolid, cell, parcel.solidVolumeSvq(),
+						FlipFluidDomain.this::granularGeometricOpenSvq)) return true;
+				restorePlannedParcel(plannedSolid, position, parcel.solidVolumeSvq(), "settlement");
+				return false;
+			}
+
+			@Override public void cancelSettlement(GranularParcelStore.Parcel parcel, int cell) {
+				granularCoupling.removePlannedCell(plannedSolid, cell, parcel.solidVolumeSvq());
+				restorePlannedParcel(plannedSolid, parcelPosition(parcel), parcel.solidVolumeSvq(), "settlement rollback");
+			}
+
+			@Override public boolean planRelaxation(int fromCell, int toCell, long solidSvq) {
+				granularCoupling.removePlannedCell(plannedSolid, fromCell, solidSvq);
+				if (granularCoupling.tryPlanCell(plannedSolid, toCell, solidSvq,
+						FlipFluidDomain.this::granularGeometricOpenSvq)) return true;
+				restorePlannedCell(plannedSolid, fromCell, solidSvq, "relaxation");
+				return false;
+			}
+
+			@Override public void cancelRelaxation(int fromCell, int toCell, long solidSvq) {
+				granularCoupling.removePlannedCell(plannedSolid, toCell, solidSvq);
+				restorePlannedCell(plannedSolid, fromCell, solidSvq, "relaxation rollback");
+			}
+
+			@Override public boolean planWake(int cell, long solidSvq, float x, float y, float z) {
+				granularCoupling.removePlannedCell(plannedSolid, cell, solidSvq);
+				GranularCouplingFields.Position position = new GranularCouplingFields.Position(x, y, z);
+				if (granularCoupling.tryPlanParcel(plannedSolid, position, solidSvq,
+						FlipFluidDomain.this::granularGeometricOpenSvq)) return true;
+				restorePlannedCell(plannedSolid, cell, solidSvq, "wake");
+				return false;
+			}
+
+			@Override public void cancelWake(int cell, long solidSvq, float x, float y, float z) {
+				granularCoupling.removePlannedParcel(plannedSolid,
+						new GranularCouplingFields.Position(x, y, z), solidSvq);
+				restorePlannedCell(plannedSolid, cell, solidSvq, "wake rollback");
+			}
+
 			@Override public void onSolidChanged(int cell) {
 				if (precipitationEnabled) chemicalParcels.markDirtyCell(cell);
 			}
 		};
+	}
+
+	private static GranularCouplingFields.Position parcelPosition(GranularParcelStore.Parcel parcel) {
+		return new GranularCouplingFields.Position(parcel.x(), parcel.y(), parcel.z());
+	}
+
+	private void restorePlannedParcel(
+			long[] plannedSolid, GranularCouplingFields.Position position, long solidSvq, String transition
+	) {
+		if (!granularCoupling.tryPlanParcel(plannedSolid, position, solidSvq, this::granularGeometricOpenSvq)) {
+			throw new IllegalStateException("Granular " + transition + " could not restore parcel occupancy");
+		}
+	}
+
+	private void restorePlannedCell(long[] plannedSolid, int cell, long solidSvq, String transition) {
+		if (!granularCoupling.tryPlanCell(plannedSolid, cell, solidSvq, this::granularGeometricOpenSvq)) {
+			throw new IllegalStateException("Granular " + transition + " could not restore deposit occupancy");
+		}
 	}
 
 	private int captureReactiveGranularCells() {
@@ -2948,6 +3029,28 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			if (coupling.solidSvq(cell) > SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell))) return false;
 		}
 		return true;
+	}
+
+	private boolean planGranularMerge(
+			long[] planned, GranularParcelStore.Parcel first, GranularParcelStore.Parcel second,
+			GranularParcelStore.Parcel merged
+	) {
+		if (!granularCollision.positionValid(merged.x(), merged.y(), merged.z(), merged.solidVolumeSvq())) return false;
+		GranularCouplingFields.Position firstPosition = new GranularCouplingFields.Position(first.x(), first.y(), first.z());
+		GranularCouplingFields.Position secondPosition = new GranularCouplingFields.Position(second.x(), second.y(), second.z());
+		granularCoupling.removePlannedParcel(planned, firstPosition, first.solidVolumeSvq());
+		granularCoupling.removePlannedParcel(planned, secondPosition, second.solidVolumeSvq());
+		GranularCouplingFields.Position mergedPosition = new GranularCouplingFields.Position(
+				merged.x(), merged.y(), merged.z());
+		if (granularCoupling.tryPlanParcel(planned, mergedPosition, merged.solidVolumeSvq(),
+				this::granularGeometricOpenSvq)) return true;
+		if (!granularCoupling.tryPlanParcel(planned, firstPosition, first.solidVolumeSvq(),
+				this::granularGeometricOpenSvq)
+				|| !granularCoupling.tryPlanParcel(planned, secondPosition, second.solidVolumeSvq(),
+				this::granularGeometricOpenSvq)) {
+			throw new IllegalStateException("Rejected granular compaction could not restore exact occupancy");
+		}
+		return false;
 	}
 
 	private boolean hasAnySurfaceTension() {

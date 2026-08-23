@@ -49,6 +49,9 @@ public final class GranularCouplingFields {
 
 	public long solidSvq(int cell) { requireCell(cell); return solidSvq[cell]; }
 	public long[] copySolidSvq() { return solidSvq.clone(); }
+	public boolean matchesSolidSvq(long[] expected) {
+		return expected != null && expected.length == cellCount && Arrays.equals(solidSvq, expected);
+	}
 	public long totalSolidSvq() { return totalSolidSvq; }
 	public void clear() {
 		if (totalSolidSvq == 0L) return;
@@ -98,6 +101,50 @@ public final class GranularCouplingFields {
 			plannedSolidSvq[cell] = Math.addExact(plannedSolidSvq[cell], candidateShare[candidate]);
 		}
 		return true;
+	}
+
+	/** Removes one parcel using the exact same shares as rebuild/placement planning. */
+	public void removePlannedParcel(long[] plannedSolidSvq, Position position, long parcelSvq) {
+		if (plannedSolidSvq == null || plannedSolidSvq.length != cellCount || position == null) {
+			throw new IllegalArgumentException("Granular removal plan is incomplete");
+		}
+		int candidates = allocate(position.x(), position.y(), position.z(), parcelSvq);
+		for (int candidate = 0; candidate < candidates; candidate++) {
+			int cell = candidateCell[candidate];
+			if (plannedSolidSvq[cell] < candidateShare[candidate]) {
+				throw new IllegalStateException("Granular placement plan underflow");
+			}
+		}
+		for (int candidate = 0; candidate < candidates; candidate++) {
+			int cell = candidateCell[candidate];
+			plannedSolidSvq[cell] -= candidateShare[candidate];
+		}
+	}
+
+	/** Plans cell-local deposit skeleton volume against the same exact geometric capacity. */
+	public boolean tryPlanCell(
+			long[] plannedSolidSvq, int cell, long solidSvq, IntToLongFunction geometricCapacity
+	) {
+		if (plannedSolidSvq == null || plannedSolidSvq.length != cellCount || geometricCapacity == null) {
+			throw new IllegalArgumentException("Granular cell plan is incomplete");
+		}
+		requireCell(cell);
+		if (solidSvq <= 0L) throw new IllegalArgumentException("Granular cell plan volume is invalid");
+		long capacity = geometricCapacity.applyAsLong(cell);
+		if (capacity < 0L || Math.addExact(plannedSolidSvq[cell], solidSvq) > capacity) return false;
+		plannedSolidSvq[cell] += solidSvq;
+		return true;
+	}
+
+	public void removePlannedCell(long[] plannedSolidSvq, int cell, long solidSvq) {
+		if (plannedSolidSvq == null || plannedSolidSvq.length != cellCount) {
+			throw new IllegalArgumentException("Granular cell removal plan is incomplete");
+		}
+		requireCell(cell);
+		if (solidSvq <= 0L || plannedSolidSvq[cell] < solidSvq) {
+			throw new IllegalStateException("Granular cell removal plan underflow");
+		}
+		plannedSolidSvq[cell] -= solidSvq;
 	}
 
 	private float voidFraction(int cell, float geometricOpen) {

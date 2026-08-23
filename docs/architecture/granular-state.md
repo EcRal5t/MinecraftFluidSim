@@ -128,6 +128,12 @@ F_buoyancy = -rho_f V_submerged g
 每个 parcel 的 exact SVQ 以定点权重 + largest remainder 分配到最多 8 格，deposit SVQ 直接归格。该 occupancy
 field 每次严格回和到物理库存，但自身只是可重建数值离散。
 
+collision preview 的容量拒绝必须逐 parcel 局部处理：从当前 exact occupancy 移除该 parcel 后再计划候选位置，
+失败只保留并接触化该 parcel。解析按固定 operation budget 重试，使先后次序相反的已腾空格能在同一 substep 继续传播；
+禁止任一预测格超容就回退全域 preview 或把无关 parcel 速度一起清零。active compaction、active→deposit、deposit
+松弛和 wake→active 也必须在提交前更新同一份 active+deposit 联合 occupancy plan；只检查单个 parcel、单独 deposit
+bulk 或下一步重建后才发现超容都不构成合法提交。
+
 每个 substep 预测 collision-resolved `S_next`，不先提交位置。moving-solid 容量源为：
 
 ```text

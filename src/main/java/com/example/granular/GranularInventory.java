@@ -10,6 +10,7 @@ public final class GranularInventory {
 	private final GranularDepositStore deposits;
 	private final int[] activeHeadByCell, activeNext, mergeFirst, mergeSecond;
 	private final boolean[] mergePaired;
+	private final ActiveMerge[] plannedMerge;
 	private SolidCompositionPool compositions;
 
 	public GranularInventory(GranularParcelStore parcels, GranularDepositStore deposits) {
@@ -21,6 +22,7 @@ public final class GranularInventory {
 		this.mergeFirst = new int[parcels.capacity() / 2];
 		this.mergeSecond = new int[parcels.capacity() / 2];
 		this.mergePaired = new boolean[parcels.capacity()];
+		this.plannedMerge = new ActiveMerge[parcels.capacity() / 2];
 	}
 
 	public void bindSolidCompositions(SolidCompositionPool pool) {
@@ -63,7 +65,16 @@ public final class GranularInventory {
 			IntUnaryOperator cellOfParcel, Predicate<GranularParcelStore.Parcel> geometryValid,
 			float maximumVelocityDelta, int maximumEvaluations
 	) {
-		if (cellOfParcel == null || geometryValid == null || !(Float.isFinite(maximumVelocityDelta)
+		if (geometryValid == null) throw new IllegalArgumentException("Active granular geometry predicate is missing");
+		return compactActive(cellOfParcel, (first, second, merged) -> geometryValid.test(merged),
+				maximumVelocityDelta, maximumEvaluations);
+	}
+
+	public CompactionStats compactActive(
+			IntUnaryOperator cellOfParcel, ActiveMergeAcceptance mergeAcceptance,
+			float maximumVelocityDelta, int maximumEvaluations
+	) {
+		if (cellOfParcel == null || mergeAcceptance == null || !(Float.isFinite(maximumVelocityDelta)
 				&& maximumVelocityDelta >= 0.0F) || maximumEvaluations < 0) {
 			throw new IllegalArgumentException("Active granular compaction input is invalid");
 		}
@@ -81,8 +92,9 @@ public final class GranularInventory {
 				evaluations++;
 				if (mergePaired[first]) continue;
 				ActiveMerge merge = activeMerge(first, second, maximumVelocityDelta);
-				if (merge == null || !geometryValid.test(merge.parcel())) continue;
+				if (merge == null || !mergeAcceptance.test(parcels.parcel(first), candidate, merge.parcel())) continue;
 				mergeFirst[pairs] = first; mergeSecond[pairs] = second; pairs++;
+				plannedMerge[pairs - 1] = merge;
 				mergePaired[first] = true; mergePaired[second] = true;
 				break;
 			}
@@ -90,7 +102,7 @@ public final class GranularInventory {
 		}
 		for (int pair = pairs - 1; pair >= 0; pair--) {
 			ActiveMerge merge = activeMerge(mergeFirst[pair], mergeSecond[pair], maximumVelocityDelta);
-			if (merge == null || !geometryValid.test(merge.parcel())) {
+			if (merge == null || !merge.equals(plannedMerge[pair])) {
 				throw new IllegalStateException("Active granular merge plan changed before commit");
 			}
 			if (merge.composition() != null) {
@@ -99,6 +111,7 @@ public final class GranularInventory {
 			}
 			parcels.overwrite(mergeFirst[pair], merge.parcel());
 			parcels.removeSwap(mergeSecond[pair]);
+			plannedMerge[pair] = null;
 		}
 		return new CompactionStats(pairs, evaluations);
 	}
@@ -166,5 +179,10 @@ public final class GranularInventory {
 	public double totalMass() { return parcels.totalMass() + deposits.totalMass(); }
 
 	public record CompactionStats(int merges, int evaluations) { }
+	@FunctionalInterface
+	public interface ActiveMergeAcceptance {
+		boolean test(GranularParcelStore.Parcel first, GranularParcelStore.Parcel second,
+		             GranularParcelStore.Parcel merged);
+	}
 	private record ActiveMerge(GranularParcelStore.Parcel parcel, SolidCompositionRecord composition) { }
 }

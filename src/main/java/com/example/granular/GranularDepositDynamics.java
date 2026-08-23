@@ -27,6 +27,12 @@ public final class GranularDepositDynamics {
 		boolean horizontalPathOpen(int fromCell, int directionX, int directionZ);
 		double shields(int surfaceCell, ParticulateMaterial material);
 		Velocity wakeVelocity(int surfaceCell);
+		default boolean planSettlement(GranularParcelStore.Parcel parcel, int cell) { return true; }
+		default void cancelSettlement(GranularParcelStore.Parcel parcel, int cell) { }
+		default boolean planRelaxation(int fromCell, int toCell, long solidSvq) { return true; }
+		default void cancelRelaxation(int fromCell, int toCell, long solidSvq) { }
+		default boolean planWake(int cell, long solidSvq, float x, float y, float z) { return true; }
+		default void cancelWake(int cell, long solidSvq, float x, float y, float z) { }
 		default void onSolidChanged(int cell) { }
 	}
 
@@ -107,6 +113,7 @@ public final class GranularDepositDynamics {
 				int cell = cell(x, y, z);
 				long open = environment.geometricOpenSvq(cell);
 				if (open <= 0L) continue;
+				if (!environment.planSettlement(parcel, cell)) continue;
 				if (inventory.depositParcel(parcelIndex, cell, open)) {
 					environment.onSolidChanged(sourceCell);
 					environment.onSolidChanged(cell);
@@ -114,6 +121,7 @@ public final class GranularDepositDynamics {
 					deposited = true; settled++; operations++;
 					break;
 				}
+				environment.cancelSettlement(parcel, cell);
 			}
 			if (!deposited) parcelIndex++;
 		}
@@ -158,12 +166,15 @@ public final class GranularDepositDynamics {
 		float height = (float) ((double) columnSurfaceSvq(column) / SolidVolume.SVQ_PER_CELL * cellSize);
 		float px = (x + 0.5F) * cellSize, py = Math.min(sizeY * cellSize - cellSize * 0.05F,
 				height + cellSize * 0.05F), pz = (z + 0.5F) * cellSize;
+		if (!environment.planWake(surfaceCell, erosion, px, py, pz)) return false;
 		try {
 			boolean woken = inventory.wake(surfaceCell, exposed.materialHandle(), exposed.solidCompositionHandle(), erosion,
 					px, py, pz, velocity.x(), velocity.y(), velocity.z());
 			if (woken) environment.onSolidChanged(surfaceCell);
+			else environment.cancelWake(surfaceCell, erosion, px, py, pz);
 			return woken;
 		} catch (IllegalArgumentException compositionSplitUnavailable) {
+			environment.cancelWake(surfaceCell, erosion, px, py, pz);
 			return false;
 		}
 	}
@@ -198,6 +209,7 @@ public final class GranularDepositDynamics {
 			int receiver = cell(receiverX, y, receiverZ);
 			long open = environment.geometricOpenSvq(receiver);
 			if (open <= 0L) continue;
+			if (!environment.planRelaxation(surfaceCell, receiver, requestedSkeleton)) continue;
 			if (deposits.tryMove(surfaceCell, receiver, exposed.materialHandle(),
 					exposed.solidCompositionHandle(), requestedSkeleton, open)) {
 				environment.onSolidChanged(surfaceCell);
@@ -205,6 +217,7 @@ public final class GranularDepositDynamics {
 				disturbColumn(receiverX, receiverZ);
 				return true;
 			}
+			environment.cancelRelaxation(surfaceCell, receiver, requestedSkeleton);
 		}
 		return false;
 	}

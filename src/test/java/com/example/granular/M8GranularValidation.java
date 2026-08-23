@@ -35,6 +35,7 @@ public final class M8GranularValidation {
 		porousBedPreservesHydrostatics();
 		settlingRelaxationSleepAndWakeAreLocal();
 		solverCouplingPreservesInventories(fast ? 8 : 80);
+		wholeBucketCongestionRemainsLocal(fast ? 16 : 40);
 		emptyGranularGateHasBoundedWallTime(fast ? 8 : 24);
 		System.out.println("M8 granular core gate passed: exact inventory, coupling, repose, sleep and local wake");
 	}
@@ -667,6 +668,68 @@ public final class M8GranularValidation {
 		FlipFluidDomain.GranularInsertion refused = sealed.tryInsertExactGranular(1, 1, 1, sand, 0, svq, mass);
 		require(!refused.inserted() && sealed.totalGranularSolidVolumeSvq() == 0L,
 				"sealed granular insertion did not refuse atomically");
+	}
+
+	private static void wholeBucketCongestionRemainsLocal(int steps) {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
+		domain.bindGranular(granular, liquids);
+		double density = granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND))
+				.referenceDensity();
+		GranularTransferLedger bucket = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
+				BuiltinGranularDefinitions.FINE_SAND, SolidVolume.SVQ_PER_BV,
+				SolidVolume.toCellVolume(SolidVolume.SVQ_PER_BV) * density, null)));
+		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted()
+				&& domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted(),
+				"two-bucket granular congestion fixture could not be inserted");
+		long exactSvq = Math.multiplyExact(2L, SolidVolume.SVQ_PER_BV);
+		double exactMass = 2.0 * bucket.totalMass();
+		long previous = granularMotionSignature(domain.exportGranularState());
+		int unchangedSteps = 0;
+		boolean moved = false, locallyHeld = false;
+		for (int step = 0; step < steps; step++) {
+			try {
+				domain.step();
+			} catch (RuntimeException failure) {
+				GranularStateSnapshot failed = domain.exportGranularState();
+				throw new AssertionError("whole-bucket congestion failed at logical step " + step
+						+ ": active=" + failed.activeParcels().size() + ", deposits="
+						+ failed.depositGroups().size() + ", held=" + domain.lastGranularCapacityHeld()
+						+ ", dynamics=" + domain.lastGranularDepositStats(), failure);
+			}
+			GranularStateSnapshot state = domain.exportGranularState();
+			long signature = granularMotionSignature(state);
+			if (!state.activeParcels().isEmpty() && signature == previous) unchangedSteps++;
+			else unchangedSteps = 0;
+			moved |= signature != previous;
+			locallyHeld |= domain.lastGranularCapacityHeld() > 0
+					&& domain.lastGranularCapacityHeld() < state.activeParcels().size();
+			require(unchangedSteps < 6,
+					"whole-bucket granular inventory froze globally while active parcels remained");
+			require(domain.totalGranularSolidVolumeSvq() == exactSvq
+					&& rawClose(domain.totalGranularMass(), exactMass),
+					"whole-bucket congestion changed exact granular inventory");
+			previous = signature;
+		}
+		require(moved && locallyHeld,
+				"whole-bucket fixture did not exercise moving and locally held parcels together");
+	}
+
+	private static long granularMotionSignature(GranularStateSnapshot state) {
+		long signature = 0xcbf29ce484222325L;
+		for (GranularStateSnapshot.ActiveParcel parcel : state.activeParcels()) {
+			signature = (signature ^ Float.floatToRawIntBits(parcel.x())) * 0x100000001b3L;
+			signature = (signature ^ Float.floatToRawIntBits(parcel.y())) * 0x100000001b3L;
+			signature = (signature ^ Float.floatToRawIntBits(parcel.z())) * 0x100000001b3L;
+		}
+		for (GranularStateSnapshot.DepositGroup group : state.depositGroups()) {
+			signature = (signature ^ group.cell()) * 0x100000001b3L;
+			signature = (signature ^ group.solidVolumeSvq()) * 0x100000001b3L;
+		}
+		return signature;
 	}
 
 	private static void emptyGranularGateHasBoundedWallTime(int samples) {

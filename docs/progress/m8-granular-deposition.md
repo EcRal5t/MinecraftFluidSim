@@ -272,3 +272,18 @@ M8 尚不在完成索引中：最后只等待一个真实 controller 合并场�
   `9B9523413BF48C6251AEB100BA5E2B5DC227434308D99CAF58B0F1264B1B5146`；上一 SVQ 修正版可恢复地保存为
   `realwater-0.14.0-pre-morphology-fix.jar.disabled`，其 hash 仍为
   `0B2008122E141FAC4B1236C15DEE83C04170B46C287859AF78B8E66F9FAE9DED`，mods 目录只有一个主 Mod JAR 启用。
+
+## M8.13 整桶局部拥塞与联合排水修正（2026-08-24）
+
+- 形态候选把两桶细沙打散后，实机仍在下落数帧后把全部散点同时卡住；舀走一部分会暂时恢复几帧。生产代码确认
+  任一 `S_next` 格超出 cut-cell 容量时会回退整个 granular preview，并把全域 active parcel 速度清零。旧门只分别
+  覆盖了整桶初始位置不重叠和单 parcel solver 推进，没有覆盖整桶跨格时局部拥塞，因而漏检。
+- preview 现从当前 exact occupancy 逐 parcel 做 remove/try-add；失败只保留该 parcel 并形成局部向下接触。解析在
+  131,072-operation 预算内交替顺序重试，使下层腾出的空间能在同一 substep 向上游传播，不再用全域冻结保护守恒。
+- 新整桶 fixture 随后暴露第二层错误：同一步有 217 个 parcel 转为 deposit 时，旧 settlement 只检查 deposit 自身的
+  bulk/几何容量，忽略其余 active parcel 的 8 格插值排水，下一步出现单格 `21,996,260 > 16,777,216 SVQ`。
+  active compaction、settlement、八邻域 relaxation 与 wake 现全部在提交前更新同一份 active+deposit 联合 exact
+  occupancy plan；失败原子恢复原计划，提交后仍重建并验证几何容量。
+- `granular` selector 沿用已有任务增加两桶、1024 parcel、40-step 动态回归：必须在同一步实际出现局部 held 和继续
+  moving，两者不得退化成全域静止；active 未结算时不得连续六步状态不变，且每步 total SVQ/mass 精确闭合。完整
+  granular 门通过，runner 2.209 秒；没有增加 selector 或长期常态测试。
