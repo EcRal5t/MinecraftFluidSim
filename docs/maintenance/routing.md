@@ -49,6 +49,7 @@
 | M6 部分桶合并配方 | `src/main/java/com/example/item/RealWaterRecipes.java`、`src/main/resources/data/realwater/recipe/partial_water_bucket_merge.json` | 动态配方：先填满一桶，溢出作为 recipe remainder 留在第二输入；精确账本由 `ContainerFluidLedger.mergeOutput/mergeRemainder` 结算 |
 | M6 桶入口（玩家/发射器） | `src/main/java/com/example/simulation/FluidTransferService.java`、`src/main/java/com/example/mixin/ItemStackMixin.java`、`RealWaterMod.java` 的 dispenser 注册 | worldBridge 门控；只按准星/发射方向命中的区域路由，命令选区无关；请求先向下量化为不超过物品余额/容量的 float，物品按原语返回的实际 marker 变动结算，材料余量逐组件保留；堆叠/损坏组件安全拒绝；创造 source/scoop 明确记账并保留 operator pause 意图 |
 | M6 容器转移 WAL | `src/main/java/com/example/simulation/ContainerTransferJournal.java`、`ContainerTransferStore.java`、`ContainerTransferRecovery.java`、`FluidTransferService` 的 controller 路径 | 只用于 controller 区域玩家/发射器桶转移；PREPARED 携带请求上限→求解器修改→REGION_COMMITTED 携带实际结算量和 after→checkpoint/HEAD→actor after durable save→清理；HEAD=base 丢弃、HEAD=target 收敛 after、其他锁定；v2 携带 mixture+mass，v1 仅纯水可恢复；未知 store 内容全局锁；actor 未加载保持 pending；同一未解锁状态只记一次错误日志 |
+| M7 化学真值与定义 | `src/main/java/com/example/chemistry/`、`docs/architecture/chemistry-state.md` | exact rational 定义、stable-ID canonical registry、packed parcel、逐 species/组成/charge/mass 守恒和全部硬预算；不得借 display 值结算 |
 | takeover codec/files | `src/main/java/com/example/simulation/TakeoverJournalCodec.java`、`src/main/java/com/example/simulation/TakeoverJournalFiles.java` | v1 可读；未知/损坏/恢复失败锁住新 takeover |
 | 指令 transcript | `src/main/java/com/example/logging/RealWaterCommandLog.java`、`src/main/java/com/example/logging/CommandAuditFile.java` | 只做 UTF-8 观测；失败不得改变命令结果 |
 | protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 由材料门决定严格 v1 或严格 v2 + material capability；不做降级伪装 |
@@ -94,14 +95,14 @@
 所有主 Mod CPU 门由一个 JVM runner 执行，避免每个历史阶段各保留一个 Gradle task/JVM。默认命令运行短门集合；定向选择和分层集合使用同一入口：
 
 ```powershell
-# 12 个日常短门；不含磁盘故障矩阵、M3/M4 集成和长期平衡
+# 13 个日常短门；不含磁盘故障矩阵、M3/M4 集成和长期平衡
 ./gradlew.bat runCpuValidation --offline --no-daemon
 
 # 一个或多个直接受影响领域；显式 selector 总是运行该领域完整门
 ./gradlew.bat runCpuValidation -PcpuValidation=containers --offline --no-daemon
 ./gradlew.bat runCpuValidation -PcpuValidation=region-state,ownership --offline --no-daemon
 
-# 18 个领域的短里程碑门；长期场景另行隔离
+# 19 个领域的短里程碑门；长期场景另行隔离
 ./gradlew.bat runCpuValidation -PcpuValidation=milestone --offline --no-daemon
 
 # 仅 M5 平衡、5,000 步自由面与两项 5,000 步 reseeding 长跑
@@ -135,6 +136,7 @@
 | M6 ownership 事务/WAL/committed | `ownership` | 改 region-state 共享契约才追加 `region-state` |
 | M6 容器账本、物品、入口与转移 WAL | `containers` | 已合并账本/原语与 WAL/recovery；改协议才追加 `protocol` |
 | transcript | `audit` | 命令包装变化且自动门不足才进服 |
+| M7 definition/registry/parcel/reaction/pH/indicator/化学守恒 | `chemistry` | 改 marker merge/split 才追加 `reseeding`；改存档/容器/协议再分别追加最近 selector |
 | GPU shader/dispatch/压力 | device 0 `--skip-large` | hierarchy/layout/capacity/大域性能才跑 64³ |
 | Vulkan device/queue/memory/lifecycle | device 0 快速门 + device 1 专项 | 双卡完整门只在发布里程碑 |
 

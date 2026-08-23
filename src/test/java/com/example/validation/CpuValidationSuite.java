@@ -1,5 +1,6 @@
 package com.example.validation;
 
+import com.example.chemistry.M7ChemistryValidation;
 import com.example.fluid.AirCavityScannerValidation;
 import com.example.fluid.FlipCutCellValidation;
 import com.example.fluid.FlipFluidFreeSurfaceValidation;
@@ -32,11 +33,11 @@ public final class CpuValidationSuite {
 	private static final String[] FAST = {"--fast"};
 	private static final List<String> FAST_GROUP = List.of(
 			"audit", "air-network", "air-cavity", "region-manager", "lifecycle",
-			"free-surface", "reseeding", "cut-cell", "shape", "protocol", "boundary", "containers");
+			"free-surface", "reseeding", "cut-cell", "shape", "protocol", "boundary", "containers", "chemistry");
 	private static final List<String> MILESTONE_GROUP = List.of(
 			"materials", "surface-tension", "air-network", "air-cavity", "gas-liquid",
 			"region-manager", "lifecycle", "free-surface", "reseeding", "cut-cell", "shape",
-			"region-state", "protocol", "boundary", "takeover", "containers", "ownership", "audit");
+			"region-state", "protocol", "boundary", "takeover", "containers", "ownership", "audit", "chemistry");
 	private static final List<String> SOAK_GROUP = List.of("gas-liquid", "free-surface", "reseeding");
 
 	private CpuValidationSuite() { }
@@ -93,6 +94,8 @@ public final class CpuValidationSuite {
 
 	private static Map<String, Gate> gates() {
 		LinkedHashMap<String, Gate> gates = new LinkedHashMap<>();
+		gate(gates, "chemistry", () -> M7ChemistryValidation.main(NONE),
+				() -> M7ChemistryValidation.main(FAST));
 		gate(gates, "materials", () -> M3ConnectedVesselValidation.main(NONE));
 		gate(gates, "surface-tension", () -> M4SurfaceTensionValidation.main(NONE));
 		gate(gates, "air-network", () -> AirNetworkValidation.main(NONE));

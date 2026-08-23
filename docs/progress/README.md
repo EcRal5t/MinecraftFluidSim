@@ -14,6 +14,7 @@
 | M6.0 ownership 设计评审 | 2026-08-22 | 选定"空气 + 独立 registry"路线，拒绝代理占位方块；冻结共同状态机、acquire 提交顺序、崩溃恢复判定表与格式边界；不升版本 | [`m6.0-ownership-review.md`](m6.0-ownership-review.md) |
 | M6.1a 无容器 crash-safe ownership | 2026-08-22 | config v3 `worldBridgeEnabled`、分段世代、per-region WAL 与 region-HEAD 键控恢复、激活 acquire/保守 release/启动恢复全部落地并过实机 Smoke A；不升版本 | [`m6.1a-world-ownership.md`](m6.1a-world-ownership.md) |
 | M6 世界 ownership、流体桥与容器 | 2026-08-23 | crash-safe ownership、精确部分/材料混合桶、玩家/发射器统一转移与跨持久域 WAL v2 完成；完整 CPU 回归、专用服务器启动与实机 Smoke C 通过，主 Mod 0.12.0 | [`m6-world-bridge-and-containers.md`](m6-world-bridge-and-containers.md) |
+| M7.0 守恒化学状态设计评审 | 2026-08-23 | 冻结 absolute parcel record、exact codec/fingerprint、硬预算、v3 边界和守恒验收；纯 Java core 门通过，未打开 gameplay | [`m7.0-chemistry-state-review.md`](m7.0-chemistry-state-review.md) |
 
 补充记录：
 
