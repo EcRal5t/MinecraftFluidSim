@@ -58,6 +58,7 @@ public final class FluidRegionPersistenceValidation {
 		System.out.println("Fluid region persistence validation passed");
 	}
 
+
 	private static void validateChemicalV3Codec() throws Exception {
 		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		FluidRegion region = populatedRegion(new UUID(19L, 20L));
@@ -138,6 +139,10 @@ public final class FluidRegionPersistenceValidation {
 				pureParticles.copyParticleVelocities(), pureParticles.copySolidMask(), markerMass, materialIndices);
 		region.domain().restoreMaterialParticleState(expected);
 		RegionState state = RegionState.captureMaterial(region, 1L);
+		require(state.manifest().checksum() == 1_833_858_350L
+				&& state.sections().stream().map(RegionSectionState::checksum).toList().equals(List.of(
+				2_322_127_614L, 2_368_282_172L, 2_710_607_279L, 3_147_109_226L)),
+				"region-state v2 canonical golden bytes changed");
 		state.validate();
 		expectIOException(state::reconstruct, "material v2 was silently reconstructed as pure water");
 		assertMaterialStateEquals(expected, state.reconstructMaterial());
@@ -182,7 +187,12 @@ public final class FluidRegionPersistenceValidation {
 				base.materialPalette(), base.totalMassBits(), base.materialLedgers(), changedDescriptors, base.extensions(), 0L));
 		expectIOException(() -> new RegionState(changedManifest, changedSections).validate(),
 				"rechecksummed v2 marker-mass corruption escaped exact material ledgers");
-		RegionManifest v1Manifest = RegionState.capture(populatedRegion(new UUID(17L, 18L)), 1L).manifest();
+		RegionState v1State = RegionState.capture(populatedRegion(new UUID(17L, 18L)), 1L);
+		RegionManifest v1Manifest = v1State.manifest();
+		require(v1Manifest.checksum() == 3_787_058_426L
+				&& v1State.sections().stream().map(RegionSectionState::checksum).toList().equals(List.of(
+				2_773_569_827L, 3_307_158_646L, 2_205_742_042L, 252_601_808L)),
+				"region-state v1 canonical golden bytes changed");
 		CompoundTag encodedV1 = codec.encodeManifest(v1Manifest);
 		require(encodedV1.get("Materials") == null && encodedV1.get("MassBits") == null,
 				"v1 manifest acquired v2 material fields");
@@ -483,6 +493,7 @@ public final class FluidRegionPersistenceValidation {
 				interior, Set.of(controller.asLong()), chunks);
 		return new FluidRegion(id, DIMENSION, origin, domain, 512L, footprint);
 	}
+
 
 	private static void assertParticleStateEquals(FlipParticleState expected, FlipParticleState actual) {
 		require(expected.particleCount() == actual.particleCount(), "marker count changed across persistence");

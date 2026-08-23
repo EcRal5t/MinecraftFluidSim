@@ -2,6 +2,10 @@ package com.example.simulation;
 
 import com.example.RealWaterMod;
 import com.example.block.RealWaterBlocks;
+import com.example.chemistry.BuiltinChemicalDefinitions;
+import com.example.chemistry.ChemicalRegistry;
+import com.example.chemistry.ChemicalRegistryStore;
+import com.example.chemistry.ChemicalReactionEngine;
 import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FlipMaterialParticleState;
@@ -17,6 +21,7 @@ import com.example.network.FluidProtocolServer;
 import com.example.simulation.controller.FluidBoundaryScanner;
 import com.example.simulation.controller.FluidControllerRegions;
 import com.example.simulation.controller.FluidRegionFootprint;
+import com.example.simulation.persistence.RegionStateFiles;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
@@ -88,6 +93,8 @@ public final class FluidSimulationService {
 	private boolean controllerFeatureEnabled;
 	private final boolean materialFeatureEnabled;
 	private final boolean worldBridgeFeatureEnabled;
+	private final boolean chemistryFeatureEnabled;
+	private final ChemicalRegistry chemicalRegistry;
 	private List<String> ownershipIssues = List.of();
 	private String lastTakeoverFailure;
 	private boolean takeoverMaintenanceEnabled;
@@ -102,12 +109,39 @@ public final class FluidSimulationService {
 			configurationLocked = true;
 			RealWaterMod.LOGGER.error("Could not load Real Water world config; controllers remain disabled", exception);
 		}
+		ChemicalRegistry bootChemicalRegistry = null;
+		if (serverConfig.chemistryEnabled()) {
+			try {
+				ChemicalRegistryStore registryStore = new ChemicalRegistryStore(worldRoot);
+				if (!registryStore.exists()) {
+					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discover();
+					if (!regions.issues().isEmpty() || regions.manifests().stream()
+							.anyMatch(manifest -> manifest.formatVersion() == 3)) {
+						throw new IOException("region-state v3 or unreadable region data exists but chemistry/registry.nbt is missing");
+					}
+				}
+				ChemicalRegistryStore.LoadResult loaded = registryStore.loadOrCreate(BuiltinChemicalDefinitions.REGISTRY);
+				bootChemicalRegistry = loaded.registry();
+				if (loaded.definitionMismatch()) {
+					RealWaterMod.LOGGER.warn("Chemical datapack definitions differ from the authoritative world registry {}; existing inventory keeps world semantics",
+							loaded.registry().fingerprint());
+				} else if (loaded.created()) {
+					RealWaterMod.LOGGER.info("Published authoritative chemical registry snapshot {}", loaded.registry().fingerprint());
+				}
+			} catch (IOException | RuntimeException exception) {
+				configurationLocked = true;
+				RealWaterMod.LOGGER.error("Chemical registry is LOCKED; chemistry and controller creation remain disabled", exception);
+			}
+		}
 		serverConfigLocked = configurationLocked;
 		controllerFeatureEnabled = serverConfig.controllersEnabled();
 		materialFeatureEnabled = serverConfig.materialsEnabled();
 		worldBridgeFeatureEnabled = serverConfig.worldBridgeEnabled();
+		chemicalRegistry = bootChemicalRegistry;
+		chemistryFeatureEnabled = serverConfig.chemistryEnabled() && chemicalRegistry != null;
 		regionManager = new FluidRegionManager(serverConfig.limits());
-		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, materialFeatureEnabled);
+		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, materialFeatureEnabled,
+				chemistryFeatureEnabled, chemicalRegistry);
 		containerTransfers = new ContainerTransferStore(worldRoot);
 		if (configurationLocked) regionOperations.recordIssue(
 				"server.properties 不可用，已安全使用默认预算并关闭控制器；原文件未覆盖");
@@ -422,6 +456,15 @@ public final class FluidSimulationService {
 		return materialFeatureEnabled;
 	}
 
+	public boolean chemistryFeatureEnabled() {
+		return chemistryFeatureEnabled;
+	}
+
+	public ChemicalRegistry chemicalRegistry() {
+		if (chemicalRegistry == null) throw new IllegalStateException("Authoritative chemical registry is unavailable");
+		return chemicalRegistry;
+	}
+
 	/** Live world-bridge gate; ownership gameplay binds to this boot's value like the material gate. */
 	public boolean worldBridgeFeatureEnabled() {
 		return worldBridgeFeatureEnabled;
@@ -434,6 +477,7 @@ public final class FluidSimulationService {
 	/** Persists the next-startup material gate; live sessions keep their negotiated protocol until restart. */
 	public String setMaterialFeatureForRestart(boolean enabled) {
 		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
+		if (!enabled && serverConfig.chemistryEnabled()) return "请先关闭 chemistry；chemistry=true 要求 materials=true";
 		FluidServerConfig replacement = serverConfig.withMaterialsEnabled(enabled);
 		try {
 			replacement.save(worldRoot);
@@ -1043,7 +1087,16 @@ public final class FluidSimulationService {
 			if (collisionsChanged) sendSnapshot(level, region);
 			return;
 		}
-		stepOnce(region);
+		try {
+			stepOnce(region);
+		} catch (ChemicalReactionEngine.BudgetExceededException budget) {
+			String failure = "chemistry-blocked PAUSED：" + budget.getMessage();
+			region.blockChemistry(failure);
+			RealWaterMod.LOGGER.error("Region {} exhausted a frozen chemistry budget; parcel commit was rejected and the region is paused",
+					region.id(), budget);
+			sendSnapshot(level, region);
+			return;
+		}
 		updateStepPacing(region);
 		FlipFluidDomain.StepStats stats = region.lastStats();
 		float residualLimit = Math.max(1.0E-5F, region.domain().config().pressureTolerance() * 4.0F);
@@ -1424,6 +1477,25 @@ public final class FluidSimulationService {
 				return region;
 			}
 		}
+		return null;
+	}
+
+	public boolean configuredChemistryFeatureEnabled() {
+		return serverConfig.chemistryEnabled();
+	}
+
+	/** Persists the next-startup chemistry gate; the registry/protocol remain fixed for this boot. */
+	public String setChemistryFeatureForRestart(boolean enabled) {
+		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
+		if (enabled && !serverConfig.materialsEnabled()) return "chemistry=true 要求先启用 materials";
+		FluidServerConfig replacement = serverConfig.withChemistryEnabled(enabled);
+		try {
+			replacement.save(worldRoot);
+		} catch (IOException exception) {
+			RealWaterMod.LOGGER.error("Could not persist Real Water chemistry feature flag", exception);
+			return exception.getMessage();
+		}
+		serverConfig = replacement;
 		return null;
 	}
 

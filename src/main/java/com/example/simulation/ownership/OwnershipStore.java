@@ -1,6 +1,7 @@
 package com.example.simulation.ownership;
 
 import com.example.RealWaterMod;
+import com.example.chemistry.ChemicalRegistry;
 import com.example.simulation.persistence.RegionStateFiles;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
@@ -33,8 +34,13 @@ public final class OwnershipStore {
 	private final RegionStateFiles regionFiles;
 
 	public OwnershipStore(Path worldRoot) {
+		this(worldRoot, null);
+	}
+
+	public OwnershipStore(Path worldRoot, ChemicalRegistry chemicalRegistry) {
 		this.worldRoot = worldRoot.toAbsolutePath().normalize();
-		this.regionFiles = new RegionStateFiles(worldRoot);
+		this.regionFiles = chemicalRegistry == null
+				? new RegionStateFiles(worldRoot) : new RegionStateFiles(worldRoot, chemicalRegistry);
 	}
 
 	public OwnershipFiles files(UUID regionId) {

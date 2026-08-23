@@ -17,6 +17,7 @@ import com.example.simulation.ContainerTransferStoreValidation;
 import com.example.simulation.FluidCutCellShapeValidation;
 import com.example.simulation.FluidRegionLifecycleValidation;
 import com.example.simulation.FluidRegionManagerValidation;
+import com.example.simulation.M7RegionChemistryPersistenceValidation;
 import com.example.simulation.TakeoverJournalValidation;
 import com.example.simulation.controller.FluidBoundaryScannerValidation;
 import com.example.simulation.ownership.M6OwnershipValidation;
@@ -116,7 +117,10 @@ public final class CpuValidationSuite {
 				() -> FlipFluidReseedingValidation.main(FAST));
 		gate(gates, "cut-cell", () -> FlipCutCellValidation.main(NONE));
 		gate(gates, "shape", () -> FluidCutCellShapeValidation.main(NONE));
-		gate(gates, "region-state", () -> FluidRegionPersistenceValidation.main(NONE));
+		gate(gates, "region-state", () -> {
+			FluidRegionPersistenceValidation.main(NONE);
+			M7RegionChemistryPersistenceValidation.main(NONE);
+		});
 		gate(gates, "protocol", () -> FluidNetworkProtocolValidation.main(NONE));
 		gate(gates, "boundary", () -> FluidBoundaryScannerValidation.main(NONE));
 		gate(gates, "takeover", () -> TakeoverJournalValidation.main(NONE));

@@ -1,9 +1,11 @@
 package com.example.simulation;
 
 import com.example.fluid.FlipFluidDomain;
+import com.example.fluid.FlipChemicalParticleState;
 import com.example.fluid.FlipParticleState;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FluidSolverConfig;
+import com.example.chemistry.ChemicalRegistry;
 import com.example.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
@@ -42,6 +44,7 @@ public final class FluidRegion {
 	private int stepIntervalTicks = 1;
 	private int hardOverrunStreak;
 	private int recoveryStreak;
+	private String chemistryBlockFailure;
 
 	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FlipFluidDomain domain, long reservedMarkerCapacity) {
 		this(id, dimension, origin, domain, reservedMarkerCapacity, null);
@@ -216,6 +219,12 @@ public final class FluidRegion {
 		if (value == null) lifecycle.clearAvailabilityBlock();
 		else lifecycle.blockAvailability(value);
 	}
+	String chemistryBlockFailure() { return chemistryBlockFailure; }
+	void blockChemistry(String failure) {
+		chemistryBlockFailure = Objects.requireNonNull(failure, "failure");
+		setPaused(true);
+		setAvailabilityFailure(failure);
+	}
 
 	public PersistedRuntime persistedRuntime() {
 		FluidRegionLifecycle.State resumeState = lifecycle.state() == FluidRegionLifecycle.State.UNLOADED
@@ -268,6 +277,25 @@ public final class FluidRegion {
 		}
 		FlipFluidDomain restored = new FlipFluidDomain(sizeX, sizeY, sizeZ, solverConfig, (int) reservedMarkerCapacity);
 		restored.restoreMaterialParticleState(state);
+		domain = restored;
+		collisionRefreshRequired = true;
+		lifecycle.restoreFromUnloaded(unloadedResumeState, stepIntervalTicks);
+	}
+
+	/** Restores exact material/species/indicator truth into a fresh CPU solver. */
+	public void restoreChemicalSolver(
+			FlipChemicalParticleState state, ChemicalRegistry registry, long loadedCheckpointGeneration
+	) {
+		Objects.requireNonNull(state, "state");
+		Objects.requireNonNull(registry, "registry");
+		if (domain != null || lifecycle.state() != FluidRegionLifecycle.State.UNLOADED) {
+			throw new IllegalStateException("Only an unloaded region can restore a solver");
+		}
+		if (loadedCheckpointGeneration != checkpointGeneration) {
+			throw new IllegalArgumentException("Checkpoint generation changed while restoring");
+		}
+		FlipFluidDomain restored = new FlipFluidDomain(sizeX, sizeY, sizeZ, solverConfig, (int) reservedMarkerCapacity);
+		restored.restoreChemicalParticleState(state, registry);
 		domain = restored;
 		collisionRefreshRequired = true;
 		lifecycle.restoreFromUnloaded(unloadedResumeState, stepIntervalTicks);

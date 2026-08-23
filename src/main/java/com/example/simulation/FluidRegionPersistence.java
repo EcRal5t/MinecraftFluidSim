@@ -1,6 +1,7 @@
 package com.example.simulation;
 
 import com.example.RealWaterMod;
+import com.example.chemistry.ChemicalRegistry;
 import com.example.fluid.BuiltinFluidMaterials;
 import com.example.simulation.controller.FluidRegionFootprint;
 import com.example.simulation.ownership.OwnershipCommitted;
@@ -34,11 +35,21 @@ final class FluidRegionPersistence {
 	private final RegionStateFiles files;
 	private final OwnershipStore ownershipStore;
 	private final boolean materialsEnabled;
+	private final boolean chemistryEnabled;
+	private final ChemicalRegistry chemicalRegistry;
 
 	FluidRegionPersistence(Path worldRoot, boolean materialsEnabled) {
-		files = new RegionStateFiles(worldRoot);
-		ownershipStore = new OwnershipStore(worldRoot);
+		this(worldRoot, materialsEnabled, false, null);
+	}
+
+	FluidRegionPersistence(
+			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry
+	) {
+		files = chemicalRegistry == null ? new RegionStateFiles(worldRoot) : new RegionStateFiles(worldRoot, chemicalRegistry);
+		ownershipStore = new OwnershipStore(worldRoot, chemicalRegistry);
 		this.materialsEnabled = materialsEnabled;
+		this.chemistryEnabled = chemistryEnabled;
+		this.chemicalRegistry = chemicalRegistry;
 	}
 
 	List<String> scanOwnershipIssues() {
@@ -61,8 +72,16 @@ final class FluidRegionPersistence {
 		for (var issue : discovery.issues().entrySet()) issues.add(issue.getKey().getFileName() + " 已锁定：" + issue.getValue());
 		for (RegionManifest manifest : discovery.manifests()) {
 			try {
-				if (manifest.formatVersion() == 2 && !materialsEnabled) {
-					throw new IOException("region-state v2 requires the materials feature gate");
+				if (manifest.formatVersion() >= 2 && !materialsEnabled) {
+					throw new IOException("region-state v" + manifest.formatVersion() + " requires the materials feature gate");
+				}
+				if (manifest.formatVersion() == 3) {
+					if (!chemistryEnabled || chemicalRegistry == null) {
+						throw new IOException("region-state v3 requires the chemistry feature gate and authoritative registry snapshot");
+					}
+					if (!manifest.registryFingerprint().equals(chemicalRegistry.fingerprint())) {
+						throw new IOException("region-state v3 registry fingerprint does not match the world snapshot");
+					}
 				}
 				validateControllerGeometry(manifest);
 				Identifier dimensionId = Identifier.tryParse(manifest.dimensionId());
@@ -88,9 +107,7 @@ final class FluidRegionPersistence {
 			throw new IOException("Unresolved world ownership state blocks checkpoint: " + ownershipLock);
 		}
 		long generation = Math.addExact(region.checkpointGeneration(), 1L);
-		long published = files.publish(region.domain().hasMaterialState()
-				? RegionState.captureMaterial(region, generation)
-				: RegionState.capture(region, generation));
+		long published = files.publish(captureForFeatureGate(region, generation));
 		if (!region.recordPublishedCheckpoint(published)) throw new IOException("Published checkpoint was not accepted by the live region");
 		return published;
 	}
@@ -143,9 +160,7 @@ final class FluidRegionPersistence {
 			throw new IOException("Region checkpoint " + region.checkpointGeneration()
 					+ " is out of sync with its committed HEAD " + baseGeneration);
 		}
-		RegionState staged = region.domain().hasMaterialState()
-				? RegionState.captureMaterial(region, generation)
-				: RegionState.capture(region, generation);
+		RegionState staged = captureForFeatureGate(region, generation);
 		String warning = OwnershipStore.warningText(ownershipStore.worldRoot(),
 				region.id(), dimensionId, OwnershipJournal.Operation.ACQUIRE,
 				baseGeneration, generation, candidates.size());
@@ -204,9 +219,7 @@ final class FluidRegionPersistence {
 			if (!region.solverLoaded()) restore(region);
 			long baseGeneration = files.committedGeneration(region.id());
 			long generation = baseGeneration + 1L;
-			RegionState staged = region.domain().hasMaterialState()
-					? RegionState.captureMaterial(region, generation)
-					: RegionState.capture(region, generation);
+			RegionState staged = captureForFeatureGate(region, generation);
 			String warning = OwnershipStore.warningText(ownershipStore.worldRoot(),
 					region.id(), committed.dimensionId(), OwnershipJournal.Operation.RELEASE,
 					baseGeneration, generation, committed.ownedBlocks().size());
@@ -306,6 +319,37 @@ final class FluidRegionPersistence {
 				throw new IOException("Committed world ownership does not match the region checkpoint");
 			}
 		}
+		if (chemistryEnabled) {
+			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
+			if (manifest.formatVersion() == 3) {
+				region.restoreChemicalSolver(state.reconstructChemical(chemicalRegistry), chemicalRegistry,
+						manifest.checkpointGeneration());
+				return;
+			}
+			long previousGeneration = manifest.checkpointGeneration();
+			RegionState materialState = state;
+			if (manifest.formatVersion() == 1) {
+				materialState = RegionState.migrateV1(state, Math.addExact(previousGeneration, 1L),
+						BuiltinFluidMaterials.M3_PALETTE);
+			}
+			region.restoreMaterialSolver(materialState.reconstructMaterial(), previousGeneration);
+			try {
+				region.domain().bindChemistry(chemicalRegistry);
+				long migratedGeneration = Math.addExact(previousGeneration, 1L);
+				files.publish(RegionState.captureChemical(region, migratedGeneration));
+				if (!region.recordPublishedCheckpoint(migratedGeneration)) {
+					throw new IOException("Published v3 migration was not accepted by live region metadata");
+				}
+				RealWaterMod.LOGGER.info("Atomically migrated controller region {} from region-state v{} to v3 generation {}",
+						region.id(), manifest.formatVersion(), migratedGeneration);
+				return;
+			} catch (IOException | RuntimeException failure) {
+				if (region.checkpointGeneration() == previousGeneration) {
+					region.releaseSolverAfterCheckpoint(previousGeneration);
+				}
+				throw failure;
+			}
+		}
 		if (materialsEnabled && manifest.formatVersion() == 1) {
 			long migratedGeneration = Math.addExact(manifest.checkpointGeneration(), 1L);
 			state = RegionState.migrateV1(state, migratedGeneration, BuiltinFluidMaterials.M3_PALETTE);
@@ -315,12 +359,26 @@ final class FluidRegionPersistence {
 			}
 			manifest = state.manifest();
 		}
-		if (manifest.formatVersion() == 2) {
+		if (manifest.formatVersion() == 3) {
+			throw new IOException("Chemical checkpoint cannot restore while the feature gate is disabled");
+		} else if (manifest.formatVersion() == 2) {
 			if (!materialsEnabled) throw new IOException("Material checkpoint cannot restore while the feature gate is disabled");
 			region.restoreMaterialSolver(state.reconstructMaterial(), manifest.checkpointGeneration());
 		} else {
 			region.restoreSolver(state.reconstruct(), manifest.checkpointGeneration());
 		}
+	}
+
+	private RegionState captureForFeatureGate(FluidRegion region, long generation) throws IOException {
+		if (chemistryEnabled) {
+			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
+			if (!region.domain().hasMaterialState()) throw new IOException("Chemistry requires a material-bound domain");
+			if (!region.domain().hasChemistryState()) region.domain().bindChemistry(chemicalRegistry);
+			return RegionState.captureChemical(region, generation);
+		}
+		return region.domain().hasMaterialState()
+				? RegionState.captureMaterial(region, generation)
+				: RegionState.capture(region, generation);
 	}
 
 	void delete(FluidRegion region) throws IOException {

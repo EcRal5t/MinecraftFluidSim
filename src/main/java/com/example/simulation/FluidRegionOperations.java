@@ -1,6 +1,7 @@
 package com.example.simulation;
 
 import com.example.RealWaterMod;
+import com.example.chemistry.ChemicalRegistry;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 
@@ -25,9 +26,12 @@ final class FluidRegionOperations {
 	private boolean creationLocked;
 	private long serviceTick;
 
-	FluidRegionOperations(Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean materialsEnabled) {
+	FluidRegionOperations(
+			Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean materialsEnabled,
+			boolean chemistryEnabled, ChemicalRegistry chemicalRegistry
+	) {
 		this.manager = manager;
-		this.persistence = new FluidRegionPersistence(worldRoot, materialsEnabled);
+		this.persistence = new FluidRegionPersistence(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry);
 		creationLocked = configurationLocked;
 		List<String> metadataIssues = persistence.loadMetadata(manager);
 		issues.addAll(metadataIssues);
@@ -57,6 +61,10 @@ final class FluidRegionOperations {
 			SnapshotSender snapshotSender,
 			RemovalSender removalSender
 	) {
+		if (region.chemistryBlockFailure() != null) {
+			region.setAvailabilityFailure(region.chemistryBlockFailure());
+			return false;
+		}
 		if (!region.controllerManaged()) {
 			region.setAvailabilityFailure(null);
 			return true;

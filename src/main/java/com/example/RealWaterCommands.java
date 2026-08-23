@@ -81,6 +81,10 @@ public final class RealWaterCommands {
 								.executes(context -> audit(context, () -> materialFeatureStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
 										.executes(context -> audit(context, () -> setMaterialFeature(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+						.then(Commands.literal("chemistry")
+								.executes(context -> audit(context, () -> chemistryFeatureStatus(context.getSource())))
+								.then(Commands.argument("enabled", BoolArgumentType.bool())
+										.executes(context -> audit(context, () -> setChemistryFeature(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
 						.then(Commands.literal("worldbridge")
 								.executes(context -> audit(context, () -> worldBridgeFeatureStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
@@ -319,6 +323,25 @@ public final class RealWaterCommands {
 		if (failure != null) return fail(source, "材料功能门未改变；配置原子发布失败：" + failure);
 		return succeed(source, "材料功能门配置已" + (enabled ? "开启" : "关闭")
 				+ "；本次启动仍为" + (service.materialFeatureEnabled() ? "开启" : "关闭") + "，重启服务器后生效", 1);
+	}
+
+	private static int chemistryFeatureStatus(CommandSourceStack source) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		boolean live = service.chemistryFeatureEnabled();
+		boolean configured = service.configuredChemistryFeatureEnabled();
+		String message = "化学功能门：本次启动" + (live ? "开启" : "关闭")
+				+ "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
+		return succeed(source, live == configured ? message : message + "；重启服务器后才会切换存档与协议",
+				live ? 1 : 0);
+	}
+
+	private static int setChemistryFeature(CommandSourceStack source, boolean enabled) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		String failure = service.setChemistryFeatureForRestart(enabled);
+		if (failure != null) return fail(source, "化学功能门未改变；配置原子发布失败：" + failure);
+		return succeed(source, "化学功能门配置已" + (enabled ? "开启" : "关闭")
+				+ "；本次启动仍为" + (service.chemistryFeatureEnabled() ? "开启" : "关闭")
+				+ "，重启服务器后生效", 1);
 	}
 
 	private static int worldBridgeFeatureStatus(CommandSourceStack source) {
