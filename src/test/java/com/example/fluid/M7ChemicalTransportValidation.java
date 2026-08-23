@@ -332,24 +332,29 @@ public final class M7ChemicalTransportValidation {
 	private static void validatePerformanceBudgets() {
 		FlipFluidDomain baseline = benchmarkDomain(false);
 		FlipFluidDomain chemical = benchmarkDomain(true);
-		for (int warmup = 0; warmup < 8; warmup++) {
+		for (int warmup = 0; warmup < 30; warmup++) {
 			baseline.step();
 			chemical.step();
 		}
 		long[] baselineSamples = new long[15];
 		long[] chemicalSamples = new long[15];
+		double[] pairedDeltaSamples = new double[15];
 		for (int sample = 0; sample < baselineSamples.length; sample++) {
 			if ((sample & 1) == 0) {
-				baselineSamples[sample] = timedSteps(baseline, 3);
-				chemicalSamples[sample] = timedSteps(chemical, 3);
+				baselineSamples[sample] = timedSteps(baseline, 20);
+				chemicalSamples[sample] = timedSteps(chemical, 20);
 			} else {
-				chemicalSamples[sample] = timedSteps(chemical, 3);
-				baselineSamples[sample] = timedSteps(baseline, 3);
+				chemicalSamples[sample] = timedSteps(chemical, 20);
+				baselineSamples[sample] = timedSteps(baseline, 20);
 			}
+			pairedDeltaSamples[sample] = (double) chemicalSamples[sample] / baselineSamples[sample] - 1.0;
 		}
 		long baselineMedian = percentile(baselineSamples, 0.50);
 		long chemicalMedian = percentile(chemicalSamples, 0.50);
-		double stepDelta = (double) chemicalMedian / baselineMedian - 1.0;
+		Arrays.sort(pairedDeltaSamples);
+		double stepDelta = pairedDeltaSamples[pairedDeltaSamples.length / 2];
+		System.out.printf("M7.0 clean-step raw median: baseline=%.3f ms chemistry=%.3f ms paired-delta=%.2f%%%n",
+				baselineMedian / 20_000_000.0, chemicalMedian / 20_000_000.0, stepDelta * 100.0);
 		check(stepDelta <= 0.05,
 				"chemistry-on clean-step median overhead exceeds 5%: " + stepDelta * 100.0 + "%");
 
@@ -359,7 +364,7 @@ public final class M7ChemicalTransportValidation {
 		long residentBytes = Math.addExact(new ChemicalParcelStore(CHEMISTRY, 73_728, 9_216).cpuBytes(),
 				2L * 73_728L * Integer.BYTES);
 		System.out.printf("M7.0 budgets: heap=%.2f MiB clean-step-median=%.3f/%.3f ms delta=%.2f%% acid-base-p95=%.3f ms%n",
-				residentBytes / 1048576.0, baselineMedian / 3_000_000.0, chemicalMedian / 3_000_000.0,
+				residentBytes / 1048576.0, baselineMedian / 20_000_000.0, chemicalMedian / 20_000_000.0,
 				stepDelta * 100.0, reactionP95 / 1_000_000.0);
 	}
 
