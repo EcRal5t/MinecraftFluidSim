@@ -5,16 +5,22 @@ import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FluidMaterialRegistry;
 import com.example.fluid.FluidSolverConfig;
 
+import java.io.StringReader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 
 /** M8 granular definition and exact inventory gate. Mechanics are added to this selector incrementally. */
 public final class M8GranularValidation {
 	private M8GranularValidation() { }
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws Exception {
 		boolean fast = Arrays.asList(args).contains("--fast");
 		registryIsCanonicalAndBounded();
+		registryDefinitionsAndWorldSnapshotAreStrict();
 		solidVolumeConversionsAreConservative();
 		parcelSplitMergePreservesInventory();
 		depositCapacityAndGroupBudgetAreAtomic();
@@ -26,6 +32,74 @@ public final class M8GranularValidation {
 		solverCouplingPreservesInventories(fast ? 8 : 80);
 		System.out.println("M8 granular core gate passed: exact inventory, coupling, repose, sleep and local wake");
 	}
+
+	private static void registryDefinitionsAndWorldSnapshotAreStrict() throws Exception {
+		String materialJson = "{\"reference_density\":\"2600.0\",\"primary_grain_diameter_meters\":\"0.0005\","
+				+ "\"rest_porosity_q\":\"380000\",\"repose_angle_degrees\":\"32.0\",\"static_friction\":\"0.6\","
+				+ "\"dynamic_friction\":\"0.45\",\"restitution\":\"0.1\",\"critical_shields\":\"0.05\","
+				+ "\"erosion_rate_svq_per_second\":\"4194304\",\"maximum_active_parcel_svq\":\"262144\","
+				+ "\"base_argb\":\"#ffc2a065\",\"display_texture\":\"realwater:fine_sand\",\"reactive\":false}";
+		ParticulateMaterial decoded = GranularDefinitionCodec.decodeMaterial(
+				BuiltinGranularDefinitions.FINE_SAND, new StringReader(materialJson));
+		require(decoded.equals(BuiltinGranularDefinitions.createRegistry().material(
+				BuiltinGranularDefinitions.createRegistry().materialHandle(BuiltinGranularDefinitions.FINE_SAND))),
+				"granular material JSON codec changed the frozen definition");
+		expectFailure(() -> GranularDefinitionCodec.decodeMaterial("test:bad",
+				new StringReader(materialJson.replace("\"2600.0\"", "2600.0"))),
+				"JSON number bypassed granular decimal-string codec");
+
+		var rootUrl = M8GranularValidation.class.getClassLoader().getResource("data/realwater/realwater");
+		require(rootUrl != null && rootUrl.getProtocol().equals("file"), "bundled granular resource root is missing");
+		Path resourceRoot = Path.of(rootUrl.toURI());
+		GranularRegistry bundled = new GranularRegistry(
+				decodeDirectory(resourceRoot.resolve("particulate_materials"), GranularDefinitionCodec::decodeMaterial),
+				decodeDirectory(resourceRoot.resolve("granular_carriers"), GranularDefinitionCodec::decodeCarrier));
+		GranularRegistry frozen = BuiltinGranularDefinitions.createRegistry();
+		require(bundled.fingerprint().equals(frozen.fingerprint()),
+				"bundled granular datapack definitions differ from the frozen fixture registry");
+
+		Path world = Files.createTempDirectory("realwater-granular-registry-");
+		try {
+			GranularRegistryStore store = new GranularRegistryStore(world);
+			GranularRegistryStore.LoadResult first = store.loadOrCreate(bundled);
+			require(first.created() && !first.definitionMismatch(), "first granular registry snapshot was not published");
+			List<ParticulateMaterial> changedMaterials = new ArrayList<>(bundled.materials());
+			ParticulateMaterial original = changedMaterials.getFirst();
+			changedMaterials.set(0, new ParticulateMaterial(original.id(), original.referenceDensity(),
+					original.primaryGrainDiameterMeters(), original.restPorosityQ(), original.reposeAngleRadians(),
+					original.staticFriction(), original.dynamicFriction(), original.restitution(), original.criticalShields(),
+					original.erosionRateSvqPerSecond(), original.maximumActiveParcelSvq(), original.baseArgb() ^ 0x00010101,
+					original.displayTextureId(), original.reactive()));
+			GranularRegistryStore.LoadResult mismatch = store.loadOrCreate(
+					new GranularRegistry(changedMaterials, bundled.carriers()));
+			require(mismatch.definitionMismatch() && mismatch.registry().fingerprint().equals(bundled.fingerprint()),
+					"changed granular definitions reinterpreted the authoritative world snapshot");
+			Files.writeString(world.resolve("realwater").resolve("granular").resolve("foreign.bin"), "foreign");
+			try {
+				store.read();
+				throw new AssertionError("unknown granular registry content was ignored");
+			} catch (java.io.IOException expected) { }
+		} finally {
+			try (var paths = Files.walk(world)) {
+				for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+			}
+		}
+	}
+
+	private static <T> List<T> decodeDirectory(Path directory, FileDecoder<T> decoder) throws Exception {
+		ArrayList<T> result = new ArrayList<>();
+		try (var files = Files.walk(directory)) {
+			for (Path file : files.filter(path -> path.toString().endsWith(".json")).sorted().toList()) {
+				String relative = directory.relativize(file).toString().replace('\\', '/');
+				String id = "realwater:" + relative.substring(0, relative.length() - 5);
+				try (var reader = Files.newBufferedReader(file)) { result.add(decoder.decode(id, reader)); }
+			}
+		}
+		return List.copyOf(result);
+	}
+
+	@FunctionalInterface
+	private interface FileDecoder<T> { T decode(String stableId, java.io.Reader reader); }
 
 	private static void registryIsCanonicalAndBounded() {
 		GranularRegistry builtins = BuiltinGranularDefinitions.createRegistry();

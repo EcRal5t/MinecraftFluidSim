@@ -15,7 +15,7 @@ import com.example.fluid.FluidMaterialRegistry;
 import com.example.fluid.FluidMaterialRenderSnapshot;
 import com.example.fluid.FluidSolverConfig;
 import com.example.fluid.air.AirNetwork;
-import com.example.granular.BuiltinGranularDefinitions;
+import com.example.granular.GranularDataPackLoader;
 import com.example.granular.GranularRegistry;
 import com.example.granular.GranularRegistryStore;
 import com.example.network.FluidMaterialSnapshotPayload;
@@ -136,10 +136,11 @@ public final class FluidSimulationService {
 								bootChemicalRegistry.fingerprint(), invalidDatapack);
 					}
 				} else {
-					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discover();
+					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discoverCommittedStructure();
 					if (!regions.issues().isEmpty() || regions.manifests().stream()
-							.anyMatch(manifest -> manifest.formatVersion() == 3)) {
-						throw new IOException("region-state v3 or unreadable region data exists but chemistry/registry.nbt is missing");
+							.anyMatch(manifest -> manifest.formatVersion() == 3
+									|| manifest.formatVersion() == 5 && manifest.hasChemicalState())) {
+						throw new IOException("chemical region-state or unreadable region data exists but chemistry/registry.nbt is missing");
 					}
 					ChemicalRegistry datapackDefinitions = ChemicalDataPackLoader.load(server.getResourceManager());
 					validateSupportedChemicalMaterials(datapackDefinitions);
@@ -162,24 +163,37 @@ public final class FluidSimulationService {
 		if (serverConfig.granularEnabled()) {
 			try {
 				GranularRegistryStore registryStore = new GranularRegistryStore(worldRoot);
-				GranularRegistry definitions = BuiltinGranularDefinitions.createRegistry();
 				if (registryStore.exists()) {
 					bootGranularRegistry = registryStore.read();
 					validateSupportedGranularCarriers(bootGranularRegistry);
-					if (!definitions.fingerprint().equals(bootGranularRegistry.fingerprint())) {
-						RealWaterMod.LOGGER.warn("Granular definitions differ from authoritative world registry {}; existing solid inventory keeps world semantics",
-								bootGranularRegistry.fingerprint());
+					try {
+						GranularRegistry datapackDefinitions = GranularDataPackLoader.load(server.getResourceManager());
+						if (!datapackDefinitions.fingerprint().equals(bootGranularRegistry.fingerprint())) {
+							RealWaterMod.LOGGER.warn("Granular datapack definitions differ from authoritative world registry {}; existing solid inventory keeps world semantics",
+									bootGranularRegistry.fingerprint());
+						}
+					} catch (IOException | RuntimeException invalidDatapack) {
+						RealWaterMod.LOGGER.warn("Current granular datapack definitions are invalid; the valid authoritative world registry {} remains active and inventory is not reinterpreted",
+								bootGranularRegistry.fingerprint(), invalidDatapack);
 					}
 				} else {
-					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discover();
+					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discoverCommittedStructure();
 					if (!regions.issues().isEmpty() || regions.manifests().stream()
 							.anyMatch(manifest -> manifest.formatVersion() == 5)) {
 						throw new IOException("region-state v5 or unreadable region data exists but granular/registry.nbt is missing");
 					}
-					GranularRegistryStore.LoadResult loaded = registryStore.loadOrCreate(definitions);
-					bootGranularRegistry = loaded.registry(); validateSupportedGranularCarriers(bootGranularRegistry);
-					if (loaded.created()) RealWaterMod.LOGGER.info("Published authoritative granular registry snapshot {}",
-							bootGranularRegistry.fingerprint());
+					GranularRegistry datapackDefinitions = GranularDataPackLoader.load(server.getResourceManager());
+					validateSupportedGranularCarriers(datapackDefinitions);
+					GranularRegistryStore.LoadResult loaded = registryStore.loadOrCreate(datapackDefinitions);
+					bootGranularRegistry = loaded.registry();
+					validateSupportedGranularCarriers(bootGranularRegistry);
+					if (loaded.definitionMismatch()) {
+						RealWaterMod.LOGGER.warn("Granular registry appeared during first publication and differs from datapack definitions; world snapshot {} remains authoritative",
+								loaded.registry().fingerprint());
+					} else if (loaded.created()) {
+						RealWaterMod.LOGGER.info("Published authoritative granular registry snapshot {}",
+								bootGranularRegistry.fingerprint());
+					}
 				}
 			} catch (IOException | RuntimeException exception) {
 				configurationLocked = true;

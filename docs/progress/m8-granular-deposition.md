@@ -89,7 +89,9 @@ SVQ/mass 守恒断言，没有新增常态 gate。因碰撞和 free-surface/cut-
 - server config 升为 v5，新增 granular/precipitation 重启门及 server parcel/deposit-group 硬预算；旧 v1--v4
   reader 明确关闭未知新门。依赖链为 granular→materials、precipitation→granular+chemistry，不能通过关掉依赖绕过。
 - 首次启用发布 `<world>/realwater/granular/registry.nbt`，之后 world snapshot 的 stable ID、物性、carrier 与 fingerprint
-  权威。snapshot 丢失而 v5/不可读 region 已存在时锁定，禁止拿当前 definitions 猜测重建。
+  权威。首次定义来自 strict `data/*/realwater/particulate_materials` 与 `granular_carriers`，物理数值要求十进制字符串；
+  当前 data pack 与已存在 snapshot 不同只告警而不重解释库存。snapshot 丢失而 v5/不可读 region 已存在时锁定，禁止拿
+  当前 definitions 猜测重建。
 - `region-state v4` 继续为气体持久化评审预留并严格拒绝；颗粒使用 v5 的完整 generation，而不是向 v3 附加 sidecar。
   manifest/section required typed extension 保存 active parcel 与 deposit group 的 exact SVQ、raw mass、材料 palette、运动学、
   porosity 和 composition reference，并在 section/material/global 三层复核独立账本。
@@ -101,3 +103,6 @@ SVQ/mass 守恒断言，没有新增常态 gate。因碰撞和 free-surface/cut-
 最近门 `runCpuValidation -PcpuValidation=region-state --rerun-tasks` 通过，覆盖 config v5、非空 active+deposit v5
 codec/NBT/disk round-trip、reserved-v4 与缺 extension 拒绝、v1/v2/v3→v5 原子迁移及 granular-off 保留锁定；runner
 2.795 秒。该增量没有修改 solver 路径，因此不累计 solver selectors。
+
+data-pack loader 接入后复跑 `granular,region-state --rerun-tasks`，bundled definitions/fingerprint、snapshot first publish、
+definition mismatch 保留及 unknown store content 锁定均通过；两域 runner 3.159 秒。

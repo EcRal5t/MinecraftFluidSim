@@ -272,6 +272,19 @@ public final class RegionStateFiles {
 
 	/** Fully validates committed generations during discovery. Locked paths are retained as issues. */
 	public Discovery discover() throws IOException {
+		return discover(true);
+	}
+
+	/**
+	 * Validates HEAD, every committed file, CRC and format-local ledgers without resolving stable
+	 * registry ids. This is used only while deciding whether a missing world registry may be first
+	 * published; ordinary admission must use {@link #discover()}.
+	 */
+	public Discovery discoverCommittedStructure() throws IOException {
+		return discover(false);
+	}
+
+	private Discovery discover(boolean reconstruct) throws IOException {
 		if (!Files.exists(root)) return new Discovery(List.of(), Map.of());
 		if (!Files.isDirectory(root)) throw new IOException("Region-state root is not a directory: " + root);
 		List<RegionManifest> manifests = new ArrayList<>();
@@ -286,7 +299,7 @@ public final class RegionStateFiles {
 				try {
 					UUID id = UUID.fromString(entry.getFileName().toString());
 					RegionState committed = read(id);
-					validateReconstruction(committed);
+					if (reconstruct) validateReconstruction(committed);
 					manifests.add(committed.manifest());
 				} catch (IllegalArgumentException | IOException exception) {
 					issues.put(entry, exception.getMessage());
