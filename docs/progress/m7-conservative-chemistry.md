@@ -44,9 +44,21 @@
 （4×4×4 内部）以及不遮光的空心边界框架。首次命令实测又发现零 marker 化学域被 handoff/codec 的非空 mixture-table
 校验拒绝；现已冻结并覆盖合法空状态：零 marker 必须空 table，非空域仍必须具备逐 marker 有效引用。
 
-修复后的发布 JAR 已重新通过 `boundary,containers,region-state,chemistry`、离线 `clean assemble compileTestJava` 和根项目
-专用服务器正常 `Done`/`stop`，并部署为 mods 目录唯一启用的主 Mod；SHA-256 为
-`42538F4CBAB86C7680E8705DE6BA806968003989AF126FA116E9DDEC4150F5A0`，0.12.0 保持 `.disabled`。
+第二次实机签收暴露了三个可复现的 M7 问题。第一，逐 species 独立 largest-remainder 在极小 marker 上可能让每种 species
+都舍入为零；全量事务正确地拒绝该计划并把 region 置为 `chemistry-blocked PAUSED`，所以后续桶操作静默拒绝，重启则从
+最后完整 checkpoint 恢复。现按 marker ordinal 为零总量 parcel 做确定性修复：从总量最大的 donor 已分配条目搬运一个
+quantum，逐 species 总量不变；若总 quanta 确实少于 live marker 数量仍整体拒绝。暂停原因和不可用区域原因现直接反馈给
+玩家。第二，浅水重建格可能有正密度但没有 marker；指示剂入口现在只沿正 cut-face 在 Manhattan 距离 2 内吸附到真实
+marker cell，墙后仍拒绝。第三，化学桶 tooltip 在每个 material/indicator group 下显示逐 species stable ID、exact AU 与
+quanta，不再只有组总量。
+
+上述修复分别通过极小 parcel 反应守恒/indicator provenance、浅水吸附/不可穿墙、完整 `chemistry`、`containers` 与
+`lifecycle` 最近门，并重新通过离线 `clean assemble compileTestJava`。发布 JAR 已部署为 mods 目录唯一启用的主 Mod；
+SHA-256 为 `37CB7D3D15648707D2366F7304BCD4C6DCBC8937E34A5B9EA5698E2B96416377`，0.12.0 保持 `.disabled`。
+
+同次实机截图中的黑色三角面登记为 M7 外独立渲染债：其三角拓扑外观更符合客户端表面 mesh/透明深度伪影，现有证据
+不足以归因于密闭域或 marker 输运。按冻结范围，本轮不改逐顶点法线、液面锐化或液液物理，也不以渲染补丁掩盖潜在
+输运问题；后续应在开放/密闭域分别建立最小视觉 fixture 后单独评审。
 
 自动门无法观察的混合酸碱颜色、真实玩家/发射器物品事务和跨重启视觉/账本一致性，合并为一次用户实机场景；该场景签收后
 才把 M7 从“自动关闭”改为“完整关闭”。
