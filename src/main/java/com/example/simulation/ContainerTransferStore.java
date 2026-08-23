@@ -25,7 +25,7 @@ import java.util.UUID;
  */
 public final class ContainerTransferStore {
 private static final String ROOT_DIRECTORY_NAME = "container-transfer";
-private static final int FORMAT_VERSION = 2;
+private static final int FORMAT_VERSION = 3;
 private static final long MAX_COMPRESSED_NBT_BYTES = 4L * 1024L * 1024L;
 private static final String TEMP_SUFFIX = ".tmp";
 
@@ -178,7 +178,7 @@ throw denied;
 }
 
 private static CompoundTag encode(ContainerTransferJournal journal) throws IOException {
-validateTransferShape(journal);
+validateTransferShape(journal, true);
 CompoundTag root = new CompoundTag();
 root.putInt("Version", FORMAT_VERSION);
 root.putLong("TxUuidMost", journal.transactionId().getMostSignificantBits());
@@ -219,13 +219,14 @@ root.putInt("DispenserSlot", actor.dispenserSlot());
 putFingerprint(root, "Before", journal.beforeItem());
 putFingerprint(root, "After", journal.afterItem());
 root.putString("Phase", phaseName(journal.phase()));
+root.putLong("TargetManifestChecksum", journal.targetManifestChecksum());
 return root;
 }
 
 private static ContainerTransferJournal decode(CompoundTag root) throws IOException {
 requireType(root, "Version", Tag.TAG_INT);
 int version = root.getIntOr("Version", -1);
-if (version != 1 && version != FORMAT_VERSION) {
+if (version < 1 || version > FORMAT_VERSION) {
 throw new IOException("Unsupported container transfer WAL version " + version);
 }
 
@@ -287,11 +288,16 @@ ContainerTransferJournal.ItemFingerprint afterItem = getFingerprint(root, "After
 
 requireType(root, "Phase", Tag.TAG_STRING);
 ContainerTransferJournal.Phase phase = parsePhase(root.getStringOr("Phase", ""));
+long targetManifestChecksum = -1L;
+if (version >= 3) {
+requireType(root, "TargetManifestChecksum", Tag.TAG_LONG);
+targetManifestChecksum = root.getLongOr("TargetManifestChecksum", -1L);
+}
 
 ContainerTransferJournal journal = new ContainerTransferJournal(
 transactionId, regionId, dimensionId, baseGeneration, targetGeneration,
-operation, volumeNanos, actor, beforeItem, afterItem, phase);
-validateTransferShape(journal);
+operation, volumeNanos, actor, beforeItem, afterItem, targetManifestChecksum, phase);
+validateTransferShape(journal, version >= 3);
 return journal;
 }
 
@@ -341,6 +347,16 @@ throw new IllegalArgumentException("mixture totals disagree with fingerprint");
 } catch (IllegalArgumentException invalidMixture) {
 throw new IOException(prefix + " material bucket mixture is invalid", invalidMixture);
 }
+} else if (kind == ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET) {
+if (version < 3) throw new IOException("Chemical bucket fingerprint requires container-transfer WAL v3");
+try {
+com.example.item.ChemicalContents contents = com.example.item.ChemicalContents.decode(materialId);
+if (contents.totalVolumeNanos() != nanos || Double.doubleToRawLongBits(contents.totalMass()) != massBits) {
+throw new IllegalArgumentException("chemical totals disagree with fingerprint");
+}
+} catch (RuntimeException invalidChemical) {
+throw new IOException(prefix + " chemical bucket fingerprint is invalid", invalidChemical);
+}
 } else if (materialId != null || nanos != -1L || massBits != -1L) {
 throw new IOException(prefix + " non-material bucket must not carry material id or nanovolume");
 }
@@ -357,7 +373,7 @@ throw new IOException("Container transfer WAL generations are inconsistent: base
 }
 
 /** Rejects syntactically valid WALs whose item delta cannot settle the declared solver delta. */
-private static void validateTransferShape(ContainerTransferJournal journal) throws IOException {
+private static void validateTransferShape(ContainerTransferJournal journal, boolean requireTargetChecksum) throws IOException {
 if (journal.operation() == null || journal.phase() == null
 || journal.beforeItem() == null || journal.afterItem() == null) {
 throw new IOException("Container transfer WAL is incomplete");
@@ -370,6 +386,11 @@ throw new IOException("Container transfer WAL volume is outside one bucket: " + 
 if (journal.phase() == ContainerTransferJournal.Phase.PREPARED
 && !journal.beforeItem().equals(journal.afterItem())) {
 throw new IOException("Prepared container transfer must not claim an after-item mutation");
+}
+if (journal.phase() == ContainerTransferJournal.Phase.PREPARED) {
+if (journal.targetManifestChecksum() != -1L) throw new IOException("Prepared container transfer cannot bind a target checksum");
+} else if (requireTargetChecksum && journal.targetManifestChecksum() < 0L) {
+throw new IOException("Committed container-transfer WAL v3 must bind the staged manifest checksum");
 }
 
 long beforePure = pureVolume(journal.beforeItem());
@@ -402,14 +423,14 @@ return switch (item.kind()) {
 case BUCKET -> 0L;
 case WATER_BUCKET -> com.example.item.ContainerFluidLedger.NANOS_PER_BLOCK;
 case PARTIAL -> item.nanos();
-case EMPTY_MATERIAL_BUCKET, MATERIAL_BUCKET -> -1L;
+case EMPTY_MATERIAL_BUCKET, MATERIAL_BUCKET, CHEMICAL_BUCKET -> -1L;
 };
 }
 
 private static long materialVolume(ContainerTransferJournal.ItemFingerprint item) {
 return switch (item.kind()) {
 case EMPTY_MATERIAL_BUCKET -> 0L;
-case MATERIAL_BUCKET -> item.nanos();
+case MATERIAL_BUCKET, CHEMICAL_BUCKET -> item.nanos();
 case BUCKET, WATER_BUCKET, PARTIAL -> -1L;
 };
 }
@@ -445,6 +466,7 @@ case WATER_BUCKET -> "WATER_BUCKET";
 case PARTIAL -> "PARTIAL";
 case EMPTY_MATERIAL_BUCKET -> "EMPTY_MATERIAL_BUCKET";
 case MATERIAL_BUCKET -> "MATERIAL_BUCKET";
+case CHEMICAL_BUCKET -> "CHEMICAL_BUCKET";
 };
 }
 
@@ -455,6 +477,7 @@ case "WATER_BUCKET" -> ContainerTransferJournal.ItemKind.WATER_BUCKET;
 case "PARTIAL" -> ContainerTransferJournal.ItemKind.PARTIAL;
 case "EMPTY_MATERIAL_BUCKET" -> ContainerTransferJournal.ItemKind.EMPTY_MATERIAL_BUCKET;
 case "MATERIAL_BUCKET" -> ContainerTransferJournal.ItemKind.MATERIAL_BUCKET;
+case "CHEMICAL_BUCKET" -> ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET;
 default -> throw new IOException("Unknown container transfer item kind: " + name);
 };
 }

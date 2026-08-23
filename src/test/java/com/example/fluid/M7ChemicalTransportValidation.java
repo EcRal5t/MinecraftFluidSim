@@ -5,8 +5,11 @@ import com.example.chemistry.BuiltinChemicalDefinitions;
 import com.example.chemistry.ChemicalMixtureRecord;
 import com.example.chemistry.ChemicalParcelStore;
 import com.example.chemistry.ChemicalRegistry;
+import com.example.item.ChemicalContents;
+import com.example.item.ContainerFluidLedger;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 
 /** Active-domain M7 gate for marker ownership, reaction placement and conservative reseeding hooks. */
@@ -26,6 +29,7 @@ public final class M7ChemicalTransportValidation {
 		validateMergeAndCompaction();
 		validateCollisionDisplacement();
 		validateChemicalHandoff();
+		validateChemicalContainerRoundTrip();
 		System.out.println("M7 chemical transport gate passed: packed budget, same-cell reaction, separation and reseeding conservation");
 	}
 
@@ -165,6 +169,53 @@ public final class M7ChemicalTransportValidation {
 				"chemical handoff changed canonical mixture table");
 		check(state.residualLedgerBits() == restored.exportChemicalParticleState().residualLedgerBits(),
 				"chemical handoff changed raw residual ledger");
+	}
+
+	private static void validateChemicalContainerRoundTrip() {
+		FlipFluidDomain source = domainWithCell(1, 1, 1, 0.25F);
+		for (int marker = 0; marker < source.particleCount(); marker++) {
+			source.setMarkerChemical(marker, Map.of(
+					BuiltinChemicalDefinitions.H2O, 12_345_678L + marker,
+					BuiltinChemicalDefinitions.NACL, 456_789L + marker), true);
+		}
+		long[] expectedSpecies = source.chemicalParcels().speciesTotals(source.particleCount());
+		long expectedResidual = source.exportChemicalParticleState().residualLedgerBits();
+		double expectedMass = source.totalMass();
+
+		FlipFluidDomain.ExactChemicalTransfer extracted = source.tryExtractExactChemical(1, 1, 1, 0.25F, 0);
+		check(extracted.transferred() && source.particleCount() == 0,
+				"chemical bucket extraction was not all-or-nothing");
+		ChemicalContents contents = ChemicalContents.fromLedger(extracted.ledger(), CHEMISTRY,
+				ContainerFluidLedger.volumeToNanos(extracted.ledger().totalVolume()));
+		check(ChemicalContents.decode(contents.encode()).equals(contents),
+				"chemical bucket canonical codec did not round-trip");
+		FlipFluidDomain restored = source;
+		FlipFluidDomain.ExactChemicalTransfer inserted = restored.tryInsertExactChemical(
+				1, 1, 1, contents.toLedger(CHEMISTRY), 0);
+		check(inserted.transferred(), "canonical chemical bucket could not be inserted");
+		check(Arrays.equals(expectedSpecies, restored.chemicalParcels().speciesTotals(restored.particleCount())),
+				"chemical bucket round-trip changed species inventory");
+		check(restored.exportChemicalParticleState().residualLedgerBits() == expectedResidual,
+				"chemical bucket round-trip changed raw mass residual ledger");
+		check(Double.doubleToRawLongBits(restored.totalMass()) == Double.doubleToRawLongBits(expectedMass),
+				"chemical bucket round-trip changed exact mass");
+		for (int marker = 0; marker < restored.particleCount(); marker++) {
+			check(restored.chemicalParcels().indicator(marker), "chemical bucket round-trip lost indicator provenance");
+		}
+
+		ChemicalContents incompatible = new ChemicalContents(CHEMISTRY.fingerprint(),
+				com.example.chemistry.ChemicalLimits.QUANTA_PER_AU, List.of(new ChemicalContents.Group(
+				BuiltinFluidMaterials.OIL.id(), false, 1L,
+				Double.doubleToRawLongBits(CHEMISTRY.species(CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H2O))
+						.massPerAu().toDouble()), Double.doubleToRawLongBits(0.0),
+				List.of(new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O,
+						com.example.chemistry.ChemicalLimits.QUANTA_PER_AU)))));
+		try {
+			incompatible.validateAgainst(CHEMISTRY);
+			throw new AssertionError("Expected chemical phase incompatibility rejection");
+		} catch (IllegalArgumentException expected) {
+			// The item remains intact; no solver mutation is attempted.
+		}
 	}
 
 	private static FlipFluidDomain domainWithCell(int x, int y, int z, float volume) {

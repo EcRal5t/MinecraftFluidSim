@@ -2,6 +2,8 @@ package com.example.simulation;
 
 import com.example.item.MaterialBucketItem;
 import com.example.item.FluidMixture;
+import com.example.item.ChemicalContents;
+import com.example.item.RealWaterComponents;
 import com.example.item.PartialWaterBucketItem;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.item.ItemStack;
@@ -25,8 +27,16 @@ long volumeNanos,
 Actor actor,
 ItemFingerprint beforeItem,
 ItemFingerprint afterItem,
+long targetManifestChecksum,
 Phase phase
 ) {
+public ContainerTransferJournal(
+UUID transactionId, UUID regionId, String dimensionId, long baseGeneration, long targetGeneration,
+Operation operation, long volumeNanos, Actor actor, ItemFingerprint beforeItem, ItemFingerprint afterItem, Phase phase
+) {
+this(transactionId, regionId, dimensionId, baseGeneration, targetGeneration, operation, volumeNanos,
+actor, beforeItem, afterItem, -1L, phase);
+}
 public enum Operation { INSERT, EXTRACT }
 
 public enum Phase { PREPARED, REGION_COMMITTED }
@@ -43,7 +53,7 @@ return new Actor(ActorType.DISPENSER, null, null, dimensionId, pos, slot);
 }
 }
 
-public enum ItemKind { BUCKET, WATER_BUCKET, PARTIAL, EMPTY_MATERIAL_BUCKET, MATERIAL_BUCKET }
+public enum ItemKind { BUCKET, WATER_BUCKET, PARTIAL, EMPTY_MATERIAL_BUCKET, MATERIAL_BUCKET, CHEMICAL_BUCKET }
 
 public record ItemFingerprint(ItemKind kind, long nanos, String materialId, long massBits) {
 public ItemFingerprint(ItemKind kind, long nanos, String materialId) {
@@ -66,6 +76,18 @@ if (MaterialBucketItem.isEmptyMaterialBucket(stack)) {
 return new ItemFingerprint(ItemKind.EMPTY_MATERIAL_BUCKET, -1L, null, -1L);
 }
 long nanos = MaterialBucketItem.volume(stack);
+String chemicalEncoded = stack.get(RealWaterComponents.CHEMICAL_CONTENTS);
+if (chemicalEncoded != null) {
+ChemicalContents contents = ChemicalContents.decode(chemicalEncoded);
+Long persistedMass = stack.get(RealWaterComponents.FLUID_MASS_BITS);
+if (stack.get(RealWaterComponents.MATERIAL_ID) != null
+|| stack.get(RealWaterComponents.MIXTURE_COMPONENTS) != null
+|| nanos != contents.totalVolumeNanos() || persistedMass == null
+|| persistedMass != Double.doubleToRawLongBits(contents.totalMass())) {
+throw new IllegalArgumentException("Chemical bucket has conflicting or mismatched ledgers");
+}
+return new ItemFingerprint(ItemKind.CHEMICAL_BUCKET, nanos, chemicalEncoded, persistedMass);
+}
 FluidMixture mixture = MaterialBucketItem.mixture(stack);
 double mass = MaterialBucketItem.mass(stack);
 if (nanos <= 0L || mixture == null || !(mass > 0.0)) {
@@ -95,6 +117,14 @@ if (mixture.totalVolumeNanos() != nanos
 throw new IllegalStateException("Material WAL fingerprint ledgers disagree");
 }
 yield mixture.toStack();
+}
+case CHEMICAL_BUCKET -> {
+ChemicalContents contents = ChemicalContents.decode(materialId);
+if (contents.totalVolumeNanos() != nanos
+|| Double.doubleToRawLongBits(contents.totalMass()) != massBits) {
+throw new IllegalStateException("Chemical WAL fingerprint ledgers disagree");
+}
+yield contents.toStack();
 }
 };
 }

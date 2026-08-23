@@ -1,5 +1,6 @@
 package com.example.item;
 
+import com.example.chemistry.ChemicalRegistry;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
@@ -49,13 +50,19 @@ public final class MaterialBucketItem extends Item {
 		}
 	}
 
+	public static ChemicalContents chemicalContents(ItemStack stack, ChemicalRegistry registry) {
+		try { return ChemicalContents.fromStack(stack, registry); }
+		catch (IllegalArgumentException invalid) { return null; }
+	}
+
 	/** Returns true when this material bucket has neither volume nor material id and can scoop. */
 	public static boolean isEmptyMaterialBucket(ItemStack stack) {
 		return stack.getItem() instanceof MaterialBucketItem
 				&& volume(stack) < 0L
 				&& materialId(stack) == null
 				&& mass(stack) < 0.0
-				&& stack.get(RealWaterComponents.MIXTURE_COMPONENTS) == null;
+				&& stack.get(RealWaterComponents.MIXTURE_COMPONENTS) == null
+				&& stack.get(RealWaterComponents.CHEMICAL_CONTENTS) == null;
 	}
 
 	@Override
@@ -81,6 +88,27 @@ public final class MaterialBucketItem extends Item {
 			java.util.function.Consumer<Component> tooltip, TooltipFlag flag) {
 		long nanos = volume(stack);
 		FluidMixture mixture = mixture(stack);
+		ChemicalContents chemical = null;
+		String chemicalEncoded = stack.get(RealWaterComponents.CHEMICAL_CONTENTS);
+		if (chemicalEncoded != null && stack.get(RealWaterComponents.MATERIAL_ID) == null
+				&& stack.get(RealWaterComponents.MIXTURE_COMPONENTS) == null) {
+			try {
+				ChemicalContents decoded = ChemicalContents.decode(chemicalEncoded);
+				Long massBits = stack.get(RealWaterComponents.FLUID_MASS_BITS);
+				if (decoded.totalVolumeNanos() == nanos && massBits != null
+						&& massBits == Double.doubleToRawLongBits(decoded.totalMass())) chemical = decoded;
+			} catch (IllegalArgumentException ignored) { }
+		}
+		if (nanos > 0L && chemical != null) {
+			tooltip.accept(Component.translatable("item.realwater.material_bucket.chemical",
+					chemical.groups().size(), chemical.totalQuanta()).withStyle(ChatFormatting.GRAY));
+			for (ChemicalContents.Group group : chemical.groups()) {
+				tooltip.accept(Component.literal((group.indicator() ? "[indicator] " : "") + group.materialId()
+						+ " · " + String.format("%.9f m³", ContainerFluidLedger.nanosToVolume(group.volumeNanos())))
+						.withStyle(ChatFormatting.DARK_GRAY));
+			}
+			return;
+		}
 		if (nanos > 0L && mixture != null) {
 			Component material = mixture.components().size() == 1
 					? Component.literal(mixture.components().getFirst().materialId())

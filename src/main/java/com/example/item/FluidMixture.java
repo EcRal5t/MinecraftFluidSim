@@ -93,6 +93,7 @@ public record FluidMixture(List<Component> components) {
 
 	public static FluidMixture fromStack(ItemStack stack) {
 		if (!(stack.getItem() instanceof MaterialBucketItem)) return null;
+		if (stack.get(RealWaterComponents.CHEMICAL_CONTENTS) != null) return null;
 		long volume = MaterialBucketItem.volume(stack);
 		if (volume <= 0L) return null;
 		String encoded = stack.get(RealWaterComponents.MIXTURE_COMPONENTS);

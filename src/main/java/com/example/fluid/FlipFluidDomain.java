@@ -5,6 +5,7 @@ import com.example.chemistry.ChemicalParcelStore;
 import com.example.chemistry.ChemicalDisplaySnapshot;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.chemistry.ChemicalTransferLedger;
+import com.example.chemistry.ChemicalLimits;
 import com.example.fluid.air.AirNetwork;
 
 import java.util.ArrayList;
@@ -235,6 +236,20 @@ public final class FlipFluidDomain {
 		if (chemicalParcels == null) throw new IllegalStateException("Chemistry is not bound");
 		return ChemicalDisplaySnapshot.build(chemicalParcels.registry(), chemicalParcels,
 				sizeX, sizeY, sizeZ, config.cellSize(), particleX, particleY, particleZ, particleVolume, particleCount);
+	}
+
+	/** Auditable exact ledger for a stable ordinal range, used immediately after planned external insertion. */
+	public ChemicalTransferLedger chemicalLedgerForMarkerRange(int fromInclusive, int toExclusive) {
+		if (chemicalParcels == null) throw new IllegalStateException("Chemistry is not bound");
+		if (fromInclusive < 0 || toExclusive < fromInclusive || toExclusive > particleCount) {
+			throw new IndexOutOfBoundsException("Invalid chemical marker range");
+		}
+		ChemicalTransferLedger.Builder result = ChemicalTransferLedger.builder(chemicalParcels.registry());
+		for (int marker = fromInclusive; marker < toExclusive; marker++) {
+			result.add(materialRegistry.material(particleMaterialHandle[marker]).id(), chemicalParcels.indicator(marker),
+					particleVolume[marker], particleMass[marker], chemicalParcels.record(marker));
+		}
+		return result.build();
 	}
 
 	/** Converts every current material marker to the registry-defined default carrier. */
@@ -1029,6 +1044,65 @@ public final class FlipFluidDomain {
 		}
 		gridDirty = true;
 		return new ExactChemicalTransfer(true, ledger);
+	}
+
+	/** All-or-nothing extraction of full species/residual/indicator truth for a chemical container. */
+	public ExactChemicalTransfer tryExtractExactChemical(
+			int centerX, int centerY, int centerZ, float volume, int maxRadius
+	) {
+		if (chemicalParcels == null) throw new IllegalStateException("Chemical extraction requires chemistry");
+		validateVolumeEdit(volume, maxRadius);
+		if (volume <= 0.0F) return new ExactChemicalTransfer(volume == 0.0F, ChemicalTransferLedger.EMPTY);
+		List<CellCandidate> cells = nearbyCells(centerX, centerY, centerZ, maxRadius);
+		boolean[] near = new boolean[cellCount]; for (CellCandidate candidate : cells) near[candidate.index()] = true;
+		double available = 0.0;
+		for (int marker = 0; marker < particleCount; marker++) if (near[particleCellIndex(marker)]) {
+			available += particleVolume[marker];
+		}
+		if (available < volume) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+
+		double remaining = volume, settlementTolerance = Math.ulp(volume);
+		List<ExtractionAllocation> plan = new ArrayList<>();
+		ChemicalTransferLedger.Builder ledger = ChemicalTransferLedger.builder(chemicalParcels.registry());
+		for (CellCandidate candidate : cells) {
+			if (remaining <= 0.0) break;
+			for (int marker = particleCount - 1; marker >= 0 && remaining > 0.0; marker--) {
+				if (particleCellIndex(marker) != candidate.index()) continue;
+				float previousVolume = particleVolume[marker];
+				double take = Math.min(previousVolume, remaining);
+				float newVolume = (float) (previousVolume - take);
+				double actual = previousVolume - newVolume;
+				if (actual > remaining && newVolume < previousVolume) {
+					newVolume = Math.nextUp(newVolume); actual = previousVolume - newVolume;
+					settlementTolerance = Math.max(settlementTolerance, Math.ulp(previousVolume));
+				}
+				if (actual <= 0.0) continue;
+				double previousMass = particleMass[marker];
+				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
+				double removedMass = previousMass - newMass;
+				ChemicalParcelStore.SplitPlan chemicalPlan = chemicalParcels.planTruncate(
+						marker, newVolume, previousVolume - newVolume, newMass, removedMass);
+				ledger.add(materialRegistry.material(particleMaterialHandle[marker]).id(), chemicalParcels.indicator(marker),
+						actual, removedMass, chemicalPlan.removed());
+				plan.add(new ExtractionAllocation(marker, newVolume, newMass, chemicalPlan));
+				remaining -= actual;
+			}
+		}
+		if (remaining > settlementTolerance) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		ChemicalTransferLedger removed = ledger.build();
+		if (removed.totalQuanta() > ChemicalLimits.MAX_BUCKET_TOTAL_QUANTA) {
+			return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		}
+		for (ExtractionAllocation allocation : plan) {
+			if (allocation.chemicalPlan().kept() != null) {
+				chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
+			}
+			particleVolume[allocation.particle()] = allocation.newVolume();
+			particleMass[allocation.particle()] = allocation.newMass();
+		}
+		for (int marker = particleCount - 1; marker >= 0; marker--) if (particleVolume[marker] == 0.0F) removeParticle(marker);
+		gridDirty = true;
+		return new ExactChemicalTransfer(true, removed);
 	}
 
 	/**

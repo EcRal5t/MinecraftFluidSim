@@ -98,7 +98,8 @@ public final class RealWaterCommands {
 													builder.suggest("none");
 													builder.suggest("beforePrepare");
 													builder.suggest("afterPrepare");
-													builder.suggest("afterSolver");
+											builder.suggest("afterSolver");
+											builder.suggest("afterStage");
 													builder.suggest("afterWal");
 													builder.suggest("afterCheckpoint");
 													return builder.buildFuture();
@@ -373,6 +374,7 @@ public final class RealWaterCommands {
 			case "beforePrepare" -> FluidSimulationService.ContainerTransferFaultPoint.BEFORE_PREPARE;
 			case "afterPrepare" -> FluidSimulationService.ContainerTransferFaultPoint.AFTER_PREPARE;
 			case "afterSolver" -> FluidSimulationService.ContainerTransferFaultPoint.AFTER_SOLVER;
+			case "afterStage" -> FluidSimulationService.ContainerTransferFaultPoint.AFTER_STAGE;
 			case "afterWal" -> FluidSimulationService.ContainerTransferFaultPoint.AFTER_WAL;
 			case "afterCheckpoint" -> FluidSimulationService.ContainerTransferFaultPoint.AFTER_CHECKPOINT;
 			default -> null;

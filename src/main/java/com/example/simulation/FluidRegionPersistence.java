@@ -116,6 +116,33 @@ final class FluidRegionPersistence {
 		return files.committedGeneration(regionId);
 	}
 
+	long committedManifestChecksum(UUID regionId) throws IOException {
+		return files.committedManifestChecksum(regionId);
+	}
+
+	StagedCheckpoint stageCheckpoint(FluidRegion region, long targetGeneration) throws IOException {
+		if (targetGeneration != region.checkpointGeneration() + 1L) {
+			throw new IOException("Staged checkpoint target does not advance the live region by one generation");
+		}
+		String ownershipLock = ownershipLockDescription(region);
+		if (ownershipLock != null) throw new IOException("Unresolved world ownership state blocks staging: " + ownershipLock);
+		RegionStateFiles.PreparedGeneration prepared = files.prepare(
+				captureForFeatureGate(region, targetGeneration), (point, path) -> { });
+		return new StagedCheckpoint(prepared, prepared.manifestChecksum());
+	}
+
+	long commitStagedCheckpoint(FluidRegion region, StagedCheckpoint staged) throws IOException {
+		long published = files.commit(staged.prepared(), (point, path) -> { });
+		if (!region.recordPublishedCheckpoint(published)) throw new IOException("Published staged checkpoint was not accepted");
+		return published;
+	}
+
+	void abortStagedCheckpoint(StagedCheckpoint staged) throws IOException {
+		files.abort(staged.prepared());
+	}
+
+	record StagedCheckpoint(RegionStateFiles.PreparedGeneration prepared, long manifestChecksum) { }
+
 	/** Per-region fail-closed guard used for both loaded stepping and every ordinary checkpoint path. */
 	String ownershipLockDescription(FluidRegion region) {
 		if (!region.controllerManaged()) return null;

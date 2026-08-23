@@ -224,6 +224,12 @@ public final class RegionStateFiles {
 		return readHead(region, id).generation();
 	}
 
+	public long committedManifestChecksum(UUID id) throws IOException {
+		Path region = regionPath(id);
+		if (!Files.exists(region.resolve(HEAD))) return -1L;
+		return readHead(region, id).manifestChecksum();
+	}
+
 	/**
 	 * Removes only a never-committed first generation whose directory contains the exact staged
 	 * filenames produced by this implementation and no HEAD. This recovery must run before

@@ -25,6 +25,8 @@ public final class RealWaterComponents {
 	public static final DataComponentType<Long> FLUID_MASS_BITS = register("fluid_mass_bits");
 	/** Canonical encoded per-material nanovolume/mass inventory for multi-component buckets. */
 	public static final DataComponentType<String> MIXTURE_COMPONENTS = registerString("mixture_components");
+	/** Canonical ChemicalContents v1; mutually exclusive with material_id/mixture_components. */
+	public static final DataComponentType<String> CHEMICAL_CONTENTS = registerString("chemical_contents");
 
 	private RealWaterComponents() { }
 

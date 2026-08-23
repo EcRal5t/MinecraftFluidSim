@@ -10,7 +10,10 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
 import com.example.item.ContainerFluidLedger;
+import com.example.item.ChemicalContents;
 import com.example.item.FluidMixture;
+import com.example.chemistry.BuiltinChemicalDefinitions;
+import com.example.chemistry.ChemicalLimits;
 import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipParticleState;
@@ -83,6 +86,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal committed = new ContainerTransferJournal(
 				tx, region, "minecraft:overworld", 3L, 4L,
 				ContainerTransferJournal.Operation.INSERT, 1_000_000_000L, actor, before, after,
+				0x1234L,
 				ContainerTransferJournal.Phase.REGION_COMMITTED
 		);
 		store.write(committed);
@@ -102,6 +106,7 @@ public final class ContainerTransferStoreValidation {
 				partialTx, region, "minecraft:overworld", 4L, 5L,
 				ContainerTransferJournal.Operation.INSERT, 999_999_940L, actor, partialBefore,
 				new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.PARTIAL, 59L, null),
+				0x2345L,
 				ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(partialCommitted);
 		check(partialCommitted.equals(store.read(partialTx)),
@@ -123,6 +128,7 @@ public final class ContainerTransferStoreValidation {
 				tx, region, "minecraft:overworld", 0L, 1L,
 				ContainerTransferJournal.Operation.EXTRACT, 500_000_000L,
 				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "OFF_HAND"), before, after,
+				0x3456L,
 				ContainerTransferJournal.Phase.REGION_COMMITTED
 		);
 		store.write(player);
@@ -151,7 +157,7 @@ public final class ContainerTransferStoreValidation {
 				tx3, region, "minecraft:overworld", 2L, 3L,
 				ContainerTransferJournal.Operation.INSERT, 1_000_000_000L,
 				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
-				materialBefore, materialAfter, ContainerTransferJournal.Phase.REGION_COMMITTED
+				materialBefore, materialAfter, 0x4567L, ContainerTransferJournal.Phase.REGION_COMMITTED
 		);
 		store.write(material);
 		check(material.equals(store.read(tx3)), "material bucket fingerprint did not round-trip");
@@ -163,9 +169,27 @@ public final class ContainerTransferStoreValidation {
 				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
 				new ContainerTransferJournal.ItemFingerprint(
 						ContainerTransferJournal.ItemKind.EMPTY_MATERIAL_BUCKET, -1L, null),
-				materialBefore, ContainerTransferJournal.Phase.REGION_COMMITTED);
+				materialBefore, 0x5678L, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(emptyMaterial);
 		check(emptyMaterial.equals(store.read(tx4)), "empty material bucket fingerprint did not round-trip");
+
+		ChemicalContents chemicalContents = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
+				ChemicalLimits.QUANTA_PER_AU, List.of(new ChemicalContents.Group(
+						"realwater:water", true, ContainerFluidLedger.NANOS_PER_BLOCK,
+						Double.doubleToRawLongBits(144.0), Double.doubleToRawLongBits(0.0),
+						List.of(new ChemicalContents.SpeciesAmount(
+								BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU)))));
+		ContainerTransferJournal.ItemFingerprint chemicalBefore = new ContainerTransferJournal.ItemFingerprint(
+				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, ContainerFluidLedger.NANOS_PER_BLOCK,
+				chemicalContents.encode(), Double.doubleToRawLongBits(chemicalContents.totalMass()));
+		UUID tx5 = UUID.randomUUID();
+		ContainerTransferJournal chemical = new ContainerTransferJournal(
+				tx5, region, "minecraft:overworld", 4L, 5L,
+				ContainerTransferJournal.Operation.INSERT, ContainerFluidLedger.NANOS_PER_BLOCK,
+				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
+				chemicalBefore, materialAfter, 0x5abcL, ContainerTransferJournal.Phase.REGION_COMMITTED);
+		store.write(chemical);
+		check(chemical.equals(store.read(tx5)), "chemical bucket WAL v3 fingerprint did not round-trip");
 
 		ContainerTransferJournal wrongFamily = new ContainerTransferJournal(
 				UUID.randomUUID(), region, "minecraft:overworld", 4L, 5L,
@@ -231,6 +255,7 @@ public final class ContainerTransferStoreValidation {
 				prepared.baseGeneration(), prepared.targetGeneration(), prepared.operation(), prepared.volumeNanos(),
 				prepared.actor(), prepared.beforeItem(),
 				new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.WATER_BUCKET, -1L, null),
+				0x6789L,
 				ContainerTransferJournal.Phase.REGION_COMMITTED);
 		check(ContainerTransferRecovery.decide(4L, prepared, false)
 				== ContainerTransferRecovery.Decision.DISCARD_UNCOMMITTED,
@@ -238,9 +263,12 @@ public final class ContainerTransferStoreValidation {
 		check(ContainerTransferRecovery.decide(4L, committed, true)
 				== ContainerTransferRecovery.Decision.LOCK_LIVE_SOLVER_DIRTY,
 				"current-process dirty solver must never be rolled back as if restarted");
-		check(ContainerTransferRecovery.decide(5L, committed, false)
+		check(ContainerTransferRecovery.decide(5L, 0x6789L, committed, false)
 				== ContainerTransferRecovery.Decision.CONVERGE_AFTER_ITEM,
 				"target HEAD plus committed after-item must converge");
+		check(ContainerTransferRecovery.decide(5L, 0x6788L, committed, false)
+				== ContainerTransferRecovery.Decision.LOCK_CHECKSUM_MISMATCH,
+				"target HEAD with a different manifest checksum must lock");
 		check(ContainerTransferRecovery.decide(5L, prepared, false)
 				== ContainerTransferRecovery.Decision.LOCK_TARGET_WITHOUT_AFTER_ITEM,
 				"target HEAD without an authoritative after-item must lock");

@@ -44,6 +44,16 @@ final class FluidRegionOperations {
 	void recordIssue(String issue) { issues.add(issue); }
 	long checkpoint(FluidRegion region) throws IOException { return persistence.checkpoint(region); }
 	long committedGeneration(UUID regionId) throws IOException { return persistence.committedGeneration(regionId); }
+	long committedManifestChecksum(UUID regionId) throws IOException { return persistence.committedManifestChecksum(regionId); }
+	FluidRegionPersistence.StagedCheckpoint stageCheckpoint(FluidRegion region, long target) throws IOException {
+		return persistence.stageCheckpoint(region, target);
+	}
+	long commitStagedCheckpoint(FluidRegion region, FluidRegionPersistence.StagedCheckpoint staged) throws IOException {
+		return persistence.commitStagedCheckpoint(region, staged);
+	}
+	void abortStagedCheckpoint(FluidRegionPersistence.StagedCheckpoint staged) throws IOException {
+		persistence.abortStagedCheckpoint(staged);
+	}
 	void acquireOwnership(ServerLevel level, FluidRegion region) throws IOException { persistence.acquireOwnership(level, region); }
 	List<String> scanOwnershipIssues() { return persistence.scanOwnershipIssues(); }
 	List<String> recoverUnfinishedOwnership(MinecraftServer server) { return persistence.recoverUnfinishedOwnership(server); }

@@ -158,6 +158,22 @@ public final class FluidSimulationService {
 		return regionOperations.committedGeneration(regionId);
 	}
 
+	long committedRegionManifestChecksum(UUID regionId) throws IOException {
+		return regionOperations.committedManifestChecksum(regionId);
+	}
+
+	FluidRegionPersistence.StagedCheckpoint stageControllerRegionCheckpoint(FluidRegion region, long target) throws IOException {
+		return regionOperations.stageCheckpoint(region, target);
+	}
+
+	long commitControllerRegionCheckpoint(FluidRegion region, FluidRegionPersistence.StagedCheckpoint staged) throws IOException {
+		return regionOperations.commitStagedCheckpoint(region, staged);
+	}
+
+	void abortControllerRegionCheckpoint(FluidRegionPersistence.StagedCheckpoint staged) throws IOException {
+		regionOperations.abortStagedCheckpoint(staged);
+	}
+
 	long checkpointControllerRegion(FluidRegion region) throws IOException {
 		return regionOperations.checkpoint(region);
 	}
@@ -167,6 +183,7 @@ public final class FluidSimulationService {
 		BEFORE_PREPARE,
 		AFTER_PREPARE,
 		AFTER_SOLVER,
+		AFTER_STAGE,
 		AFTER_WAL,
 		AFTER_CHECKPOINT
 	}
@@ -262,8 +279,9 @@ public final class FluidSimulationService {
 		try {
 			ContainerTransferJournal journal = containerTransfers.read(transactionId);
 			long head = committedRegionGeneration(journal.regionId());
+			long headChecksum = committedRegionManifestChecksum(journal.regionId());
 			ContainerTransferRecovery.Decision decision = ContainerTransferRecovery.decide(
-					head, journal, runtimeDirtyContainerTransfers.contains(transactionId));
+					head, headChecksum, journal, runtimeDirtyContainerTransfers.contains(transactionId));
 			switch (decision) {
 				case LOCK_LIVE_SOLVER_DIRTY -> {
 					logContainerTransferLockOnce(transactionId,
@@ -289,6 +307,9 @@ public final class FluidSimulationService {
 						"Container transfer WAL " + transactionId + " is locked: region " + journal.regionId()
 								+ " HEAD committed target " + head + ", but WAL phase " + journal.phase()
 								+ " contains no authoritative after-item");
+				case LOCK_CHECKSUM_MISMATCH -> logContainerTransferLockOnce(transactionId,
+						"Container transfer WAL " + transactionId + " is locked: target generation checksum "
+								+ journal.targetManifestChecksum() + " does not match HEAD " + headChecksum);
 				case LOCK_GENERATION_MISMATCH -> logContainerTransferLockOnce(transactionId,
 						"Container transfer WAL " + transactionId + " is locked: region " + journal.regionId()
 								+ " HEAD " + head + " is neither base " + journal.baseGeneration()
