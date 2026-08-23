@@ -119,7 +119,7 @@ public final class FluidSimulationService {
 			RealWaterMod.LOGGER.error("Could not load Real Water world config; controllers remain disabled", exception);
 		}
 		ChemicalRegistry bootChemicalRegistry = null;
-		if (serverConfig.chemistryEnabled()) {
+		if (serverConfig.chemistryEnabled() || serverConfig.granularEnabled()) {
 			try {
 				ChemicalRegistryStore registryStore = new ChemicalRegistryStore(worldRoot);
 				if (registryStore.exists()) {
@@ -156,18 +156,20 @@ public final class FluidSimulationService {
 				}
 			} catch (IOException | RuntimeException exception) {
 				configurationLocked = true;
-				RealWaterMod.LOGGER.error("Chemical registry is LOCKED; chemistry and controller creation remain disabled", exception);
+				RealWaterMod.LOGGER.error("Chemical registry is LOCKED; chemistry/granular registry dependencies and controller creation remain disabled", exception);
 			}
 		}
 		GranularRegistry bootGranularRegistry = null;
 		if (serverConfig.granularEnabled()) {
 			try {
-				GranularRegistryStore registryStore = new GranularRegistryStore(worldRoot);
+				if (bootChemicalRegistry == null) throw new IOException("Authoritative chemical registry dependency is unavailable");
+				GranularRegistryStore registryStore = new GranularRegistryStore(worldRoot, bootChemicalRegistry);
 				if (registryStore.exists()) {
 					bootGranularRegistry = registryStore.read();
 					validateSupportedGranularCarriers(bootGranularRegistry);
 					try {
-						GranularRegistry datapackDefinitions = GranularDataPackLoader.load(server.getResourceManager());
+						GranularRegistry datapackDefinitions = GranularDataPackLoader.load(
+								server.getResourceManager(), bootChemicalRegistry);
 						if (!datapackDefinitions.fingerprint().equals(bootGranularRegistry.fingerprint())) {
 							RealWaterMod.LOGGER.warn("Granular datapack definitions differ from authoritative world registry {}; existing solid inventory keeps world semantics",
 									bootGranularRegistry.fingerprint());
@@ -182,7 +184,8 @@ public final class FluidSimulationService {
 							.anyMatch(manifest -> manifest.formatVersion() == 5)) {
 						throw new IOException("region-state v5 or unreadable region data exists but granular/registry.nbt is missing");
 					}
-					GranularRegistry datapackDefinitions = GranularDataPackLoader.load(server.getResourceManager());
+					GranularRegistry datapackDefinitions = GranularDataPackLoader.load(
+							server.getResourceManager(), bootChemicalRegistry);
 					validateSupportedGranularCarriers(datapackDefinitions);
 					GranularRegistryStore.LoadResult loaded = registryStore.loadOrCreate(datapackDefinitions);
 					bootGranularRegistry = loaded.registry();
@@ -209,7 +212,7 @@ public final class FluidSimulationService {
 		granularRegistry = bootGranularRegistry;
 		granularFeatureEnabled = serverConfig.granularEnabled() && granularRegistry != null;
 		precipitationFeatureEnabled = serverConfig.precipitationEnabled()
-				&& granularFeatureEnabled && chemistryFeatureEnabled;
+				&& granularFeatureEnabled && chemistryFeatureEnabled && granularRegistry.hasReactiveRules();
 		regionManager = new FluidRegionManager(serverConfig.limits());
 		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, materialFeatureEnabled,
 				chemistryFeatureEnabled, chemicalRegistry, granularFeatureEnabled, granularRegistry);

@@ -106,3 +106,16 @@ codec/NBT/disk round-trip、reserved-v4 与缺 extension 拒绝、v1/v2/v3→v5 
 
 data-pack loader 接入后复跑 `granular,region-state --rerun-tasks`，bundled definitions/fingerprint、snapshot first publish、
 definition mismatch 保留及 unknown store content 锁定均通过；两域 runner 3.159 秒。
+
+## M8.5 固液规则与化学 registry 依赖（2026-08-24）
+
+- granular registry snapshot v2 现一并冻结 `solid_liquid_reactions`、canonical rule 顺序及依赖的 world chemical
+  registry fingerprint；同 phase 竞争消费、未知 phase/species/material、inert target、非 exact-species 守恒、负容量或
+  超预算在首次发布前拒绝。
+- granular gate 单独开启也会先原子冻结 chemical registry definitions 作为规则身份依赖，但不会分配 chemical runtime
+  state 或运行 M7 reaction；以后启用 precipitation 不能拿新的 datapack 化学含义解释旧 granular snapshot。
+- bundled 首条规则是 aqueous Na+/Cl- ↔ reactive precipitate 的可逆、单目标饱和规则。本 checkpoint 只冻结定义与
+  identity，尚未修改 liquid/solid inventory；相转移要等 `SolidCompositionRecord` 和原子 plan/commit 接入。
+
+最近 `granular --rerun-tasks` 通过，包含 rule codec、bundled fingerprint 与 registry snapshot round-trip；runner
+1.412 秒。

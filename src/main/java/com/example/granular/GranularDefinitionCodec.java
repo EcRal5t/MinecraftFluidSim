@@ -1,16 +1,20 @@
 package com.example.granular;
 
+import com.example.chemistry.ExactRational;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import java.io.Reader;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 /** Strict JSON codecs for data/&lt;namespace&gt;/realwater/{particulate_materials,granular_carriers}. */
 public final class GranularDefinitionCodec {
 	public static final String MATERIALS_PATH = "realwater/particulate_materials";
 	public static final String CARRIERS_PATH = "realwater/granular_carriers";
+	public static final String REACTIONS_PATH = "realwater/solid_liquid_reactions";
 
 	private GranularDefinitionCodec() { }
 
@@ -36,6 +40,18 @@ public final class GranularDefinitionCodec {
 				finiteDouble(root, "maximum_reynolds"));
 	}
 
+	public static SolidLiquidReaction decodeReaction(String stableId, Reader input) {
+		JsonObject root = object(input);
+		requireOnly(root, "liquid_phase", "aqueous_stoichiometry", "solid_material", "solid_composition",
+				"saturation_capacity_extent_per_bv", "solid_volume_svq_per_extent",
+				"accessible_surface_svq_per_cell_step", "reversible");
+		return new SolidLiquidReaction(stableId, string(root, "liquid_phase"), integerMap(root, "aqueous_stoichiometry"),
+				string(root, "solid_material"), integerMap(root, "solid_composition"),
+				ExactRational.parse(string(root, "saturation_capacity_extent_per_bv")),
+				exactLong(root, "solid_volume_svq_per_extent"),
+				exactLong(root, "accessible_surface_svq_per_cell_step"), bool(root, "reversible"));
+	}
+
 	private static JsonObject object(Reader input) {
 		JsonElement root;
 		try { root = JsonParser.parseReader(input); }
@@ -59,6 +75,20 @@ public final class GranularDefinitionCodec {
 			throw new IllegalArgumentException(name + " is outside the integer range");
 		}
 		return (int) value;
+	}
+
+	private static Map<String, Integer> integerMap(JsonObject root, String name) {
+		JsonElement element = required(root, name);
+		if (!element.isJsonObject()) throw new IllegalArgumentException(name + " must be an object");
+		TreeMap<String, Integer> result = new TreeMap<>();
+		for (Map.Entry<String, JsonElement> entry : element.getAsJsonObject().entrySet()) {
+			if (!entry.getValue().isJsonPrimitive() || !entry.getValue().getAsJsonPrimitive().isString()) {
+				throw new IllegalArgumentException(name + "." + entry.getKey() + " must be an integer string");
+			}
+			JsonObject wrapper = new JsonObject(); wrapper.add("value", entry.getValue());
+			result.put(entry.getKey(), exactInt(wrapper, "value"));
+		}
+		return Map.copyOf(result);
 	}
 
 	private static long exactLong(JsonObject root, String name) {

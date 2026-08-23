@@ -1,5 +1,7 @@
 package com.example.granular;
 
+import com.example.chemistry.ChemicalRegistry;
+import com.example.chemistry.ExactRational;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtAccounter;
@@ -16,16 +18,19 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 /** World-authoritative immutable granular registry snapshot with atomic first publication. */
 public final class GranularRegistryStore {
-	private static final int FORMAT_VERSION = 1;
+	private static final int FORMAT_VERSION = 2;
 	private static final long MAX_BYTES = 4L * 1024L * 1024L;
 	private static final Set<String> KNOWN_FILES = Set.of("registry.nbt", "registry.nbt.tmp");
 	private final Path directory;
+	private final ChemicalRegistry chemicalRegistry;
 
-	public GranularRegistryStore(Path worldRoot) {
+	public GranularRegistryStore(Path worldRoot, ChemicalRegistry chemicalRegistry) {
 		directory = worldRoot.toAbsolutePath().normalize().resolve("realwater").resolve("granular");
+		this.chemicalRegistry = java.util.Objects.requireNonNull(chemicalRegistry, "chemicalRegistry");
 	}
 
 	public LoadResult loadOrCreate(GranularRegistry definitions) throws IOException {
@@ -67,14 +72,23 @@ public final class GranularRegistryStore {
 		catch (RuntimeException invalid) { throw new IOException("Unreadable granular registry snapshot " + path, invalid); }
 		requireAll(root, Map.of("Version", Tag.TAG_INT, "SvqPerBv", Tag.TAG_LONG, "PorosityScale", Tag.TAG_INT,
 				"Fingerprint", Tag.TAG_STRING, "Canonical", Tag.TAG_BYTE_ARRAY,
-				"Materials", Tag.TAG_LIST, "Carriers", Tag.TAG_LIST));
+				"ChemicalFingerprint", Tag.TAG_STRING, "Materials", Tag.TAG_LIST,
+				"Carriers", Tag.TAG_LIST, "Reactions", Tag.TAG_LIST));
 		if (root.getIntOr("Version", -1) != FORMAT_VERSION || root.getLongOr("SvqPerBv", -1L) != SolidVolume.SVQ_PER_BV
 				|| root.getIntOr("PorosityScale", -1) != GranularLimits.POROSITY_SCALE) {
 			throw new IOException("Unsupported granular registry version or unit scale");
 		}
 		try {
+			String chemicalFingerprint = root.getStringOr("ChemicalFingerprint", "");
+			List<SolidLiquidReaction> reactions = decodeReactions(root.getListOrEmpty("Reactions"));
+			if (!reactions.isEmpty() && !chemicalRegistry.fingerprint().equals(chemicalFingerprint)) {
+				throw new IOException("Granular registry chemical dependency fingerprint mismatch");
+			}
 			GranularRegistry registry = new GranularRegistry(decodeMaterials(root.getListOrEmpty("Materials")),
-					decodeCarriers(root.getListOrEmpty("Carriers")));
+					decodeCarriers(root.getListOrEmpty("Carriers")), reactions, reactions.isEmpty() ? null : chemicalRegistry);
+			if (!registry.chemicalRegistryFingerprint().equals(chemicalFingerprint)) {
+				throw new IOException("Granular registry chemical dependency is non-canonical");
+			}
 			if (!registry.fingerprint().equals(root.getStringOr("Fingerprint", ""))
 					|| !java.util.Arrays.equals(registry.canonicalBytes(), root.getByteArray("Canonical").orElseThrow())) {
 				throw new IOException("Granular registry fingerprint/canonical bytes mismatch");
@@ -90,6 +104,7 @@ public final class GranularRegistryStore {
 		root.putInt("Version", FORMAT_VERSION); root.putLong("SvqPerBv", SolidVolume.SVQ_PER_BV);
 		root.putInt("PorosityScale", GranularLimits.POROSITY_SCALE);
 		root.putString("Fingerprint", registry.fingerprint()); root.putByteArray("Canonical", registry.canonicalBytes());
+		root.putString("ChemicalFingerprint", registry.chemicalRegistryFingerprint());
 		ListTag materials = new ListTag();
 		for (ParticulateMaterial material : registry.materials()) {
 			CompoundTag tag = new CompoundTag();
@@ -110,7 +125,27 @@ public final class GranularRegistryStore {
 			tag.putLong("MaximumReynoldsBits", bits(carrier.maximumReynolds())); carriers.add(tag);
 		}
 		root.put("Carriers", carriers);
+		ListTag reactions = new ListTag();
+		for (SolidLiquidReaction reaction : registry.reactions()) {
+			CompoundTag tag = new CompoundTag(); tag.putString("Id", reaction.id());
+			tag.putString("Phase", reaction.liquidPhaseId()); tag.put("Aqueous", encodeSide(reaction.aqueousStoichiometry()));
+			tag.putString("SolidMaterial", reaction.solidMaterialId()); tag.put("Solid", encodeSide(reaction.solidComposition()));
+			tag.putString("Capacity", reaction.saturationCapacityExtentPerBv().canonical());
+			tag.putLong("SolidSvq", reaction.solidVolumeSvqPerExtent());
+			tag.putLong("SurfaceSvq", reaction.accessibleSurfaceSvqPerCellStep());
+			tag.putBoolean("Reversible", reaction.reversible()); reactions.add(tag);
+		}
+		root.put("Reactions", reactions);
 		return root;
+	}
+
+	private static ListTag encodeSide(Map<String, Integer> side) {
+		ListTag list = new ListTag();
+		for (Map.Entry<String, Integer> entry : new TreeMap<>(side).entrySet()) {
+			CompoundTag term = new CompoundTag(); term.putString("Species", entry.getKey());
+			term.putInt("Coefficient", entry.getValue()); list.add(term);
+		}
+		return list;
 	}
 
 	private static List<ParticulateMaterial> decodeMaterials(ListTag list) throws IOException {
@@ -145,6 +180,41 @@ public final class GranularRegistryStore {
 					value(tag, "MaximumReynoldsBits")));
 		}
 		return List.copyOf(result);
+	}
+
+	private static List<SolidLiquidReaction> decodeReactions(ListTag list) throws IOException {
+		if (list.size() > GranularLimits.MAX_REACTIONS) throw new IOException("Invalid solid-liquid reaction count");
+		List<SolidLiquidReaction> result = new ArrayList<>(list.size());
+		for (int index = 0; index < list.size(); index++) {
+			CompoundTag tag = compound(list, index, "solid-liquid reaction");
+			requireAll(tag, Map.ofEntries(Map.entry("Id", Tag.TAG_STRING), Map.entry("Phase", Tag.TAG_STRING),
+					Map.entry("Aqueous", Tag.TAG_LIST), Map.entry("SolidMaterial", Tag.TAG_STRING),
+					Map.entry("Solid", Tag.TAG_LIST), Map.entry("Capacity", Tag.TAG_STRING),
+					Map.entry("SolidSvq", Tag.TAG_LONG), Map.entry("SurfaceSvq", Tag.TAG_LONG),
+					Map.entry("Reversible", Tag.TAG_BYTE)));
+			result.add(new SolidLiquidReaction(tag.getStringOr("Id", ""), tag.getStringOr("Phase", ""),
+					decodeSide(tag.getListOrEmpty("Aqueous")), tag.getStringOr("SolidMaterial", ""),
+					decodeSide(tag.getListOrEmpty("Solid")), ExactRational.parse(tag.getStringOr("Capacity", "")),
+					tag.getLongOr("SolidSvq", -1L), tag.getLongOr("SurfaceSvq", -1L),
+					tag.getBooleanOr("Reversible", false)));
+		}
+		return List.copyOf(result);
+	}
+
+	private static Map<String, Integer> decodeSide(ListTag list) throws IOException {
+		if (list.isEmpty() || list.size() > GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES) {
+			throw new IOException("Invalid solid-liquid side entry count");
+		}
+		TreeMap<String, Integer> result = new TreeMap<>();
+		for (int index = 0; index < list.size(); index++) {
+			CompoundTag term = compound(list, index, "solid-liquid term");
+			requireAll(term, Map.of("Species", Tag.TAG_STRING, "Coefficient", Tag.TAG_INT));
+			String species = term.getStringOr("Species", "");
+			if (result.put(species, term.getIntOr("Coefficient", -1)) != null) {
+				throw new IOException("Duplicate solid-liquid species " + species);
+			}
+		}
+		return Map.copyOf(result);
 	}
 
 	private void validateLayout() throws IOException {

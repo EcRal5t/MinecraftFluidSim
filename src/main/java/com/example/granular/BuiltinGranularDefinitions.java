@@ -1,12 +1,17 @@
 package com.example.granular;
 
+import com.example.chemistry.BuiltinChemicalDefinitions;
+import com.example.chemistry.ExactRational;
+
 import java.util.List;
+import java.util.Map;
 
 /** Deterministic built-in definitions used by the first M8 datapack and validation fixtures. */
 public final class BuiltinGranularDefinitions {
 	public static final String FINE_SAND = "realwater:fine_sand";
 	public static final String LIGHT_BEADS = "realwater:light_beads";
 	public static final String PRECIPITATE = "realwater:precipitate";
+	public static final String SODIUM_CHLORIDE_PRECIPITATION = "realwater:sodium_chloride";
 
 	private BuiltinGranularDefinitions() { }
 
@@ -19,7 +24,13 @@ public final class BuiltinGranularDefinitions {
 				new GranularCarrier("realwater:water", 1.002e-3, 100_000.0),
 				new GranularCarrier("realwater:oil", 6.5e-2, 10_000.0),
 				new GranularCarrier("realwater:mercury", 1.526e-3, 100_000.0)
-		));
+		), List.of(new SolidLiquidReaction(SODIUM_CHLORIDE_PRECIPITATION,
+				BuiltinChemicalDefinitions.AQUEOUS, Map.of(
+						BuiltinChemicalDefinitions.NA_PLUS, 64,
+						BuiltinChemicalDefinitions.CL_MINUS, 64), PRECIPITATE, Map.of(
+						BuiltinChemicalDefinitions.NA_PLUS, 64,
+						BuiltinChemicalDefinitions.CL_MINUS, 64), ExactRational.of(1_000_000L),
+				1L, 4_096L, true)), BuiltinChemicalDefinitions.REGISTRY);
 	}
 
 	private static ParticulateMaterial material(

@@ -1,5 +1,6 @@
 package com.example.granular;
 
+import com.example.chemistry.BuiltinChemicalDefinitions;
 import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FluidMaterialRegistry;
@@ -53,14 +54,16 @@ public final class M8GranularValidation {
 		Path resourceRoot = Path.of(rootUrl.toURI());
 		GranularRegistry bundled = new GranularRegistry(
 				decodeDirectory(resourceRoot.resolve("particulate_materials"), GranularDefinitionCodec::decodeMaterial),
-				decodeDirectory(resourceRoot.resolve("granular_carriers"), GranularDefinitionCodec::decodeCarrier));
+				decodeDirectory(resourceRoot.resolve("granular_carriers"), GranularDefinitionCodec::decodeCarrier),
+				decodeDirectory(resourceRoot.resolve("solid_liquid_reactions"), GranularDefinitionCodec::decodeReaction),
+				BuiltinChemicalDefinitions.REGISTRY);
 		GranularRegistry frozen = BuiltinGranularDefinitions.createRegistry();
 		require(bundled.fingerprint().equals(frozen.fingerprint()),
 				"bundled granular datapack definitions differ from the frozen fixture registry");
 
 		Path world = Files.createTempDirectory("realwater-granular-registry-");
 		try {
-			GranularRegistryStore store = new GranularRegistryStore(world);
+			GranularRegistryStore store = new GranularRegistryStore(world, BuiltinChemicalDefinitions.REGISTRY);
 			GranularRegistryStore.LoadResult first = store.loadOrCreate(bundled);
 			require(first.created() && !first.definitionMismatch(), "first granular registry snapshot was not published");
 			List<ParticulateMaterial> changedMaterials = new ArrayList<>(bundled.materials());
@@ -71,7 +74,8 @@ public final class M8GranularValidation {
 					original.erosionRateSvqPerSecond(), original.maximumActiveParcelSvq(), original.baseArgb() ^ 0x00010101,
 					original.displayTextureId(), original.reactive()));
 			GranularRegistryStore.LoadResult mismatch = store.loadOrCreate(
-					new GranularRegistry(changedMaterials, bundled.carriers()));
+					new GranularRegistry(changedMaterials, bundled.carriers(), bundled.reactions(),
+							BuiltinChemicalDefinitions.REGISTRY));
 			require(mismatch.definitionMismatch() && mismatch.registry().fingerprint().equals(bundled.fingerprint()),
 					"changed granular definitions reinterpreted the authoritative world snapshot");
 			Files.writeString(world.resolve("realwater").resolve("granular").resolve("foreign.bin"), "foreign");
@@ -105,7 +109,8 @@ public final class M8GranularValidation {
 		GranularRegistry builtins = BuiltinGranularDefinitions.createRegistry();
 		GranularRegistry reordered = new GranularRegistry(
 				List.of(builtins.materials().get(2), builtins.materials().get(0), builtins.materials().get(1)),
-				List.of(builtins.carriers().get(1), builtins.carriers().get(2), builtins.carriers().get(0)));
+				List.of(builtins.carriers().get(1), builtins.carriers().get(2), builtins.carriers().get(0)),
+				builtins.reactions(), BuiltinChemicalDefinitions.REGISTRY);
 		require(builtins.fingerprint().equals(reordered.fingerprint()), "registry fingerprint depends on input order");
 		expectFailure(() -> new GranularRegistry(List.of(builtins.materials().get(0), builtins.materials().get(0)),
 				builtins.carriers()), "duplicate material accepted");

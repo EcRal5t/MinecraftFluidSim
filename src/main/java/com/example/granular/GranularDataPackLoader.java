@@ -1,5 +1,6 @@
 package com.example.granular;
 
+import com.example.chemistry.ChemicalRegistry;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.server.packs.resources.ResourceManager;
@@ -17,13 +18,15 @@ import java.util.Set;
 public final class GranularDataPackLoader {
 	private GranularDataPackLoader() { }
 
-	public static GranularRegistry load(ResourceManager resources) throws IOException {
+	public static GranularRegistry load(ResourceManager resources, ChemicalRegistry chemicalRegistry) throws IOException {
 		if (resources == null) throw new IOException("Granular datapack resource manager is missing");
 		List<ParticulateMaterial> materials = loadCategory(resources, GranularDefinitionCodec.MATERIALS_PATH,
 				GranularDefinitionCodec::decodeMaterial);
 		List<GranularCarrier> carriers = loadCategory(resources, GranularDefinitionCodec.CARRIERS_PATH,
 				GranularDefinitionCodec::decodeCarrier);
-		try { return new GranularRegistry(materials, carriers); }
+		List<SolidLiquidReaction> reactions = loadCategory(resources, GranularDefinitionCodec.REACTIONS_PATH,
+				GranularDefinitionCodec::decodeReaction);
+		try { return new GranularRegistry(materials, carriers, reactions, chemicalRegistry); }
 		catch (RuntimeException invalid) {
 			throw new IOException("Granular datapack registry is invalid: " + invalid.getMessage(), invalid);
 		}
@@ -57,6 +60,7 @@ public final class GranularDataPackLoader {
 		definitions.sort(Comparator.comparing(definition -> switch (definition) {
 			case ParticulateMaterial value -> value.id();
 			case GranularCarrier value -> value.liquidMaterialId();
+			case SolidLiquidReaction value -> value.id();
 			default -> throw new IllegalStateException("Unknown granular definition type");
 		}));
 		return List.copyOf(definitions);
