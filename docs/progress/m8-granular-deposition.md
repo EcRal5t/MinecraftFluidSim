@@ -315,3 +315,7 @@ M8 尚不在完成索引中：最后只等待一个真实 controller 合并场�
   SVQ/mass 漂移；十秒后只剩 12/1024 active。新增同一 selector 内的单桶真实产品回归，不增加 Gradle task：全部
   512 parcel 在第 117 步（5.85 秒）转为 deposit，200 步时进入 granular sleep-ready，派生 bulk 为
   `1.612903 BV`。完整门 runner 2.394 秒，空 granular gate 中位数开销 +0.1%。
+- 修正提交为 `a1b42c8`；随后 `clean assemble compileTestJava --offline --no-daemon` 成功，根 `:runServer` 加载到
+  `Done` 并经 `stop` 正常保存。新实机候选 SHA-256 为
+  `79F517F4697559BA24D7A176AEBDA01F2F605D6F5CE6CED5E19837F9FA179E56`；上一局部拥塞候选以
+  `realwater-0.14.0-pre-settlement-morphology-fix.jar.disabled` 可恢复保留，同一主 Mod id 只有一个启用 JAR。
