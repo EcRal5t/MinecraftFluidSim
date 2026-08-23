@@ -240,3 +240,9 @@ M8 尚不在完成索引中：最后只等待一个真实 controller 合并场�
   或 Gradle task。完整 `granular,chemistry --rerun-tasks` 通过，分别 1.910/0.987 秒，runner 合计 2.897 秒。
 - 崩溃世界的两个容器 WAL 均已收敛且 `container-transfer` 目录为空；停服路径在 05:19:59 成功发布新的 v5 HEAD，
   因此保留该世界并按正常严格 reader 恢复，不手删或猜测修复任何状态。
+- 修正后 `clean assemble compileTestJava --offline --no-daemon` 成功（15 秒），根 `:runServer` 加载 0.14.0 到 `Done`
+  并正常 `stop`。崩溃世界的只读副本随后作为独立 dedicated universe 启动：严格 reader 接受原 region UUID、v5 HEAD、
+  registry 和空 WAL，没有 `LOCKED`；无玩家时只按既有完整 chunk 门暂停。原世界 HEAD SHA-256 前后均为
+  `79DE83CCC696BFA997A0C72E3B11645269AF0894BB094A6826866F336476715C`，烟测未改原件。
+- 新候选 JAR 已部署，SHA-256 为 `0B2008122E141FAC4B1236C15DEE83C04170B46C287859AF78B8E66F9FAE9DED`；
+  崩溃版候选可恢复地保留为 `realwater-0.14.0-pre-svq-fix.jar.disabled`，同 Mod id 仍只有一个启用 JAR。
