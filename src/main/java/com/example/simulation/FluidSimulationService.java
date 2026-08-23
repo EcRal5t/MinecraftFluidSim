@@ -24,6 +24,7 @@ import com.example.simulation.controller.FluidControllerRegions;
 import com.example.simulation.controller.FluidRegionFootprint;
 import com.example.simulation.persistence.RegionStateFiles;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
@@ -1534,6 +1535,40 @@ public final class FluidSimulationService {
 		}
 		return null;
 	}
+
+	/**
+	 * Resolves either an interior block or a visible controller shell block to the exact region
+	 * and interior block used by a container transfer. A shell is a port only when it has one
+	 * face-adjacent interior in one region; shared, edge and corner shells fail closed.
+	 */
+	public TransferTarget transferTargetAtBlock(ServerLevel level, BlockPos position) {
+		return transferTargetAtBlock(level, position, null);
+	}
+
+	/** Dispenser variant: the interior must continue in the dispenser's facing direction. */
+	public TransferTarget transferTargetAtBlock(
+			ServerLevel level, BlockPos position, Direction boundaryInteriorDirection
+	) {
+		if (position == null) return null;
+		FluidRegion direct = regionAtBlock(level, position);
+		if (direct != null) return new TransferTarget(direct, position.immutable());
+		if (!RealWaterBlocks.isBoundary(level.getBlockState(position))) return null;
+
+		TransferTarget resolved = null;
+		for (FluidRegion region : regionManager.regions()) {
+			FluidRegionFootprint footprint = region.footprint();
+			if (footprint == null || !region.dimension().equals(level.dimension())) continue;
+			BlockPos interior = boundaryInteriorDirection == null
+					? footprint.uniqueAdjacentInterior(position)
+					: footprint.adjacentInteriorAlong(position, boundaryInteriorDirection);
+			if (interior == null) continue;
+			if (resolved != null) return null;
+			resolved = new TransferTarget(region, interior);
+		}
+		return resolved;
+	}
+
+	public record TransferTarget(FluidRegion region, BlockPos interiorBlock) { }
 
 	public boolean configuredChemistryFeatureEnabled() {
 		return serverConfig.chemistryEnabled();

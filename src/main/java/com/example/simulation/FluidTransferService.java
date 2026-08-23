@@ -1,6 +1,7 @@
 package com.example.simulation;
 
 import com.example.RealWaterMod;
+import com.example.block.RealWaterBlocks;
 import com.example.fluid.FlipFluidDomain;
 import com.example.item.ContainerFluidLedger;
 import com.example.item.ChemicalContents;
@@ -50,7 +51,12 @@ public final class FluidTransferService {
 		boolean pouring = kind == TransferKind.POUR || kind == TransferKind.MATERIAL_POUR;
 		BlockPos targetBlock = pouring ? playerPourTargetBlock(player) : null;
 		if (pouring && targetBlock == null) return null;
-		FluidRegion region = pouring ? service.regionAtBlock(level, targetBlock) : service.aimedRegion(player);
+		FluidSimulationService.TransferTarget transferTarget = pouring
+				? service.transferTargetAtBlock(level, targetBlock)
+				: null;
+		FluidRegion region = pouring
+				? transferTarget == null ? null : transferTarget.region()
+				: service.aimedRegion(player);
 		if (region == null) return null;
 		if (held.getCount() != 1) {
 			player.sendSystemMessage(Component.literal("真实水体转移一次只接受 1 个桶；堆叠保持不变"), true);
@@ -60,7 +66,7 @@ public final class FluidTransferService {
 			return InteractionResult.FAIL;
 		}
 		int[] cell = pouring
-				? service.cellAtBlock(level, region, targetBlock)
+				? service.cellAtBlock(level, region, transferTarget.interiorBlock())
 				: service.aimedCellNear(player, region, true);
 		if (cell == null) return null;
 
@@ -98,12 +104,14 @@ public final class FluidTransferService {
 		TransferKind kind = classify(stack);
 		if (kind == TransferKind.NONE) return stack;
 		ServerLevel level = source.level();
-		BlockPos target = source.pos().relative(source.state().getValue(DispenserBlock.FACING));
-		FluidRegion region = service.regionAtBlock(level, target);
+		var facing = source.state().getValue(DispenserBlock.FACING);
+		BlockPos target = source.pos().relative(facing);
+		FluidSimulationService.TransferTarget transferTarget = service.transferTargetAtBlock(level, target, facing);
+		FluidRegion region = transferTarget == null ? null : transferTarget.region();
 		if (region == null) return vanillaItem ? null : stack;
 		if (stack.getCount() != 1) return stack;
 		if (!service.ensureRegionAvailable(level, region)) return stack;
-		int[] cell = service.cellAtBlock(level, region, target);
+		int[] cell = service.cellAtBlock(level, region, transferTarget.interiorBlock());
 		if (cell == null) return stack;
 		FluidMixture heldMixture = null;
 		ChemicalContents heldChemical = null;
@@ -882,6 +890,7 @@ String.format("已舀取 %.2f%% 桶（%d 种材料）",
 		BlockHitResult hit = (BlockHitResult) player.pick(5.0, 1.0F, false);
 		if (hit.getType() != HitResult.Type.BLOCK) return null;
 		BlockPos hitPos = hit.getBlockPos();
+		if (RealWaterBlocks.isBoundary(player.level().getBlockState(hitPos))) return hitPos;
 		return player.level().getBlockState(hitPos).canBeReplaced()
 				? hitPos
 				: hitPos.relative(hit.getDirection());

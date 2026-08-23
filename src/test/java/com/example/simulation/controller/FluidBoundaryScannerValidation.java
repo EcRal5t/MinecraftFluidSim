@@ -1,6 +1,7 @@
 package com.example.simulation.controller;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.world.level.ChunkPos;
 
 import java.util.HashSet;
@@ -33,6 +34,16 @@ public final class FluidBoundaryScannerValidation {
 				"closed scan included a boundary or outside block");
 		require(footprint.boundaryBlocks().size() == 6 && footprint.requiredChunks().size() == 1,
 				"closed scan did not retain its visible shell/chunk ownership");
+		BlockPos westFace = new BlockPos(0, 1, 1);
+		BlockPos interior = new BlockPos(1, 1, 1);
+		require(interior.equals(footprint.uniqueAdjacentInterior(westFace)),
+				"face shell did not resolve to its unique adjacent interior");
+		require(interior.equals(footprint.adjacentInteriorAlong(westFace, Direction.EAST)),
+				"dispenser-facing shell did not continue into the interior");
+		require(footprint.adjacentInteriorAlong(westFace, Direction.WEST) == null,
+				"backwards dispenser direction crossed a controller shell");
+		require(footprint.uniqueAdjacentInterior(new BlockPos(0, 0, 0)) == null,
+				"shell corner guessed a diagonal transfer target");
 	}
 
 	private static void validateBreachIsRejected() {

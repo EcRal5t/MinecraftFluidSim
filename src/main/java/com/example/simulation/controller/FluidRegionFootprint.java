@@ -1,6 +1,7 @@
 package com.example.simulation.controller;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.world.level.ChunkPos;
 
 import java.util.Objects;
@@ -43,6 +44,29 @@ public record FluidRegionFootprint(
 
 	public boolean containsInterior(BlockPos position) {
 		return interiorBlocks.contains(position.asLong());
+	}
+
+	/**
+	 * Resolves a shell block to its sole face-adjacent interior block. Corners, edges and stale
+	 * positions deliberately return {@code null}; container routing must never guess diagonally.
+	 */
+	public BlockPos uniqueAdjacentInterior(BlockPos boundaryPosition) {
+		if (!boundaryBlocks.contains(boundaryPosition.asLong())) return null;
+		BlockPos resolved = null;
+		for (Direction direction : Direction.values()) {
+			BlockPos candidate = boundaryPosition.relative(direction);
+			if (!containsInterior(candidate)) continue;
+			if (resolved != null) return null;
+			resolved = candidate.immutable();
+		}
+		return resolved;
+	}
+
+	/** Returns the interior immediately beyond a dispenser-facing shell block, if there is one. */
+	public BlockPos adjacentInteriorAlong(BlockPos boundaryPosition, Direction direction) {
+		if (!boundaryBlocks.contains(boundaryPosition.asLong())) return null;
+		BlockPos candidate = boundaryPosition.relative(direction);
+		return containsInterior(candidate) ? candidate.immutable() : null;
 	}
 
 	public int blockSizeX() {
