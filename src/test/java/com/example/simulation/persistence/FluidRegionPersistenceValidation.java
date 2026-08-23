@@ -109,6 +109,24 @@ public final class FluidRegionPersistenceValidation {
 		files.publish(state);
 		assertChemicalStateEquals(expected, files.read(region.id()).reconstructChemical(chemistry));
 
+		FluidRegion emptyRegion = emptyRegion(new UUID(21L, 22L));
+		FlipParticleState emptyPure = emptyRegion.domain().exportParticleState();
+		emptyRegion.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
+				emptyPure.sizeX(), emptyPure.sizeY(), emptyPure.sizeZ(), emptyPure.cellSize(), 0, 0.0, 0.0,
+				BuiltinFluidMaterials.M3_PALETTE, new float[0], new float[0], emptyPure.copySolidMask(),
+				new double[0], new int[0]));
+		emptyRegion.domain().bindChemistry(chemistry);
+		FlipChemicalParticleState emptyExpected = emptyRegion.domain().exportChemicalParticleState();
+		require(emptyExpected.particleCount() == 0 && emptyExpected.mixtures().isEmpty(),
+				"empty chemistry handoff invented a parcel mixture");
+		RegionState emptyState = RegionState.captureChemical(emptyRegion, 1L);
+		emptyState.validate();
+		RegionManifest emptyManifest = codec.decodeManifest(codec.encodeManifest(emptyState.manifest()));
+		require(emptyManifest.chemicalMixtures().isEmpty(), "empty v3 manifest invented a chemical mixture");
+		assertChemicalStateEquals(emptyExpected, emptyState.reconstructChemical(chemistry));
+		files.publish(emptyState);
+		assertChemicalStateEquals(emptyExpected, files.read(emptyRegion.id()).reconstructChemical(chemistry));
+
 		CompoundTag missingIndicator = codec.encodeSection(state.sections().stream()
 				.filter(section -> section.markerCount() > 0).findFirst().orElseThrow());
 		missingIndicator.remove("Indicator");
@@ -495,6 +513,19 @@ public final class FluidRegionPersistenceValidation {
 		FluidRegionFootprint footprint = new FluidRegionFootprint(controller, origin, new BlockPos(17, 17, 17),
 				interior, Set.of(controller.asLong()), chunks);
 		return new FluidRegion(id, DIMENSION, origin, domain, 512L, footprint);
+	}
+
+	private static FluidRegion emptyRegion(UUID id) {
+		BlockPos origin = new BlockPos(32, 16, 32);
+		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, CONFIG, 4_096);
+		Set<Long> interior = new HashSet<>();
+		for (int z = 32; z <= 35; z++) for (int y = 16; y <= 19; y++) {
+			for (int x = 32; x <= 35; x++) interior.add(new BlockPos(x, y, z).asLong());
+		}
+		BlockPos controller = new BlockPos(31, 17, 33);
+		FluidRegionFootprint footprint = new FluidRegionFootprint(controller, origin, new BlockPos(35, 19, 35),
+				interior, Set.of(controller.asLong()), Set.of(ChunkPos.pack(2, 2)));
+		return new FluidRegion(id, DIMENSION, origin, domain, 4_096L, footprint);
 	}
 
 

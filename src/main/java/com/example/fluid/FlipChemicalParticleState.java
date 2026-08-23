@@ -40,9 +40,9 @@ public final class FlipChemicalParticleState {
 		java.util.Objects.requireNonNull(registry, "registry");
 		this.registryFingerprint = registry.fingerprint();
 		this.speciesPalette = registry.species().stream().map(com.example.chemistry.ChemicalSpecies::id).toList();
-		if (mixtureTable == null || mixtureTable.isEmpty()
-				|| mixtureTable.size() > materials.particleCount()) {
-			throw new IllegalArgumentException("Chemical mixture table is empty or over marker budget");
+		if (mixtureTable == null || mixtureTable.size() > materials.particleCount()
+				|| (materials.particleCount() > 0 && mixtureTable.isEmpty())) {
+			throw new IllegalArgumentException("Chemical mixture table disagrees with marker inventory");
 		}
 		ArrayList<StableMixture> canonical = new ArrayList<>(mixtureTable);
 		canonical.sort(StableMixture.ORDER);

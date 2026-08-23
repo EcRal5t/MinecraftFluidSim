@@ -102,7 +102,8 @@ public record RegionManifest(
 				if (!registryFingerprint.matches("[0-9a-f]{64}") || auScale != ChemicalLimits.QUANTA_PER_AU
 						|| speciesPalette.isEmpty() || speciesPalette.size() > ChemicalLimits.MAX_SPECIES
 						|| chemicalSpeciesTotals.length != speciesPalette.size()
-						|| chemicalMixtures.isEmpty() || chemicalMixtures.size() > reservedMarkerCapacity
+						|| chemicalMixtures.size() > totalMarkerCount
+						|| (totalMarkerCount > 0 && chemicalMixtures.isEmpty())
 						|| !Double.isFinite(Double.longBitsToDouble(chemicalResidualLedgerBits))) {
 					throw new IllegalArgumentException("Invalid region-state v3 chemical manifest");
 				}

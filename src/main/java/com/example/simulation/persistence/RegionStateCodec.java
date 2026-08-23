@@ -289,7 +289,7 @@ final class RegionStateCodec {
 	private static List<FlipChemicalParticleState.StableMixture> decodeChemicalMixtures(
 			ListTag list, List<String> speciesPalette
 	) throws IOException {
-		if (list.isEmpty() || list.size() > Integer.MAX_VALUE - 1) throw new IOException("Invalid chemical mixture table size");
+		if (list.size() > Integer.MAX_VALUE - 1) throw new IOException("Invalid chemical mixture table size");
 		List<FlipChemicalParticleState.StableMixture> result = new ArrayList<>(list.size());
 		for (int i = 0; i < list.size(); i++) {
 			CompoundTag tag = compoundAt(list, i, "chemical mixture");

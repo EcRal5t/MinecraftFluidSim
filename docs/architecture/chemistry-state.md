@@ -68,7 +68,8 @@ pH 是只读展示：`C=|H+-OH-|/BV`、`C0=10^-6 AU/BV`、`strength=min(7,log10(
   per-marker table index 和 indicator bits；它不是 wire/save codec。
 - v3 manifest 保存 fingerprint、AU scale、stable species palette、canonical mixture table 与 region species/residual ledgers；
   section 保存 per-marker mixture index、indicator bit和 section ledgers。累计 external-source/escaped-sink 通过有界 canonical
-  manifest extension 持久化并在恢复时复核。HEAD 仍是最后且唯一提交点。
+  manifest extension 持久化并在恢复时复核。零 marker 化学域的 canonical mixture table 必须为空；非空域必须至少一项，且
+  每个 marker 仍须引用有效 table index。HEAD 仍是最后且唯一提交点。
 - material bucket 的 legacy 表示（`material_id`/`mixture_components`）与 chemical 表示（总 volume/mass +
   `ChemicalContents v1`）互斥。双表示、foreign fingerprint、超预算或账本失配保持物品不变并拒绝。
 - protocol v3 只发 bounded display palette、Top-4 权重、量化 pH/indicator fraction；不发 exact AU、residual 或权威 ledger。
