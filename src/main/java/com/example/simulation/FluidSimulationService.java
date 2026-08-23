@@ -26,6 +26,7 @@ import com.example.simulation.persistence.RegionStateFiles;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
@@ -1241,6 +1242,11 @@ public final class FluidSimulationService {
 			region.blockChemistry(failure);
 			RealWaterMod.LOGGER.error("Region {} exhausted a frozen chemistry budget; parcel commit was rejected and the region is paused",
 					region.id(), budget);
+			for (ServerPlayer player : level.players()) {
+				player.sendSystemMessage(Component.literal(
+						"真实水体化学步骤已整体拒绝，区域被安全暂停：" + budget.getMessage()
+								+ "；未提交部分 parcel 修改，请查看 /realwater status"));
+			}
 			sendSnapshot(level, region);
 			return;
 		}
@@ -1609,7 +1615,11 @@ public final class FluidSimulationService {
 	}
 
 	public boolean ensureRegionAvailableFor(ServerPlayer player, FluidRegion region) {
-		return ensureRegionAvailable(player.level(), region);
+		boolean available = ensureRegionAvailable(player.level(), region);
+		if (!available) {
+			player.sendSystemMessage(Component.literal("真实水体目标区域不可用：" + region.availabilityFailure()), true);
+		}
+		return available;
 	}
 
 	/** Returns the first region whose solver bounds contain the block position. */
