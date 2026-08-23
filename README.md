@@ -32,6 +32,9 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完�
 | 化学功能门（下次重启生效） | `/realwater chemistry [true|false]` |
 | 化学开发域与试剂（需化学门） | `/realwater chemistrydemo`、`reagent <hcl|naoh|nacl|nano3|kcl|kno3|water|indicator|eraser>` |
 | 管理员完整化学库存 | `/realwater chemstatus` |
+| 颗粒/沉淀门（下次重启生效） | `/realwater granular [true|false]`、`precipitation [true|false]` |
+| 干颗粒容器调试取得 | `/realwater granularcontainer <empty|fine_sand|light_beads>` |
+| 管理员完整颗粒库存 | `/realwater granstatus` |
 | 世界桥功能门（下次重启生效） | `/realwater worldbridge [true|false]` |
 | Ownership 对账报告 | `/realwater ownership` |
 | 调试与实体 | `/realwater debug [true|false]`、`entities [true|false]`、`logpath` |
@@ -42,6 +45,8 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完�
 多材料玩法：`/realwater materials true` 后重启服务器（单人模式退回主菜单再进入世界）。`/realwater materialdemo` 会创建上油下水的瞬态暂停溃坝域，不写 `region-state`，也不读取或接管原版水。正式材料容器入口需要材料门和世界桥均已生效：空材料桶可从准星所指控制器区域装取，材料桶可向目标区域放出；多成分 tooltip 逐项显示稳定材料 ID、体积占比/绝对体积和独立质量。纯水满桶规范化为原版水桶，部分纯水保留在专用部分桶；材料/混合物保留在材料桶。调试取得命令只用于显式测试来源。
 
 化学玩法：先依次设置 `/realwater materials true`、`/realwater chemistry true` 与容器入口所需的 `/realwater worldbridge true`，再重启。`chemistrydemo` 建立左右 HCl/NaOH 的暂停开发域；`reagent` 提供明确记作外部 source 的试剂桶，以及不消耗的通用指示剂与抹除器 operator 工具。指示剂只标记当前通过开放 cut-face 连通且同 chemical phase 的 marker，最多 100 BV；浅液面瞄准可在开放面内向两格内吸附到实际 marker，后来混入的未标水不会自动染色。空材料桶可完整保存 species、质量 residual 与 indicator，tooltip 按 material/indicator group 列出每个 stable species 的精确 AU/quanta；原版空桶只接受未标记纯 H2O。完整逐 species 真值只由管理员 `chemstatus` 按需查看并写入 transcript。
+
+颗粒玩法：先开启 materials、granular 与容器入口所需的 worldbridge，反应沉淀还需 chemistry+precipitation，随后重启。颗粒只进入显式闭壳 controller；满干颗粒容器对壳面中心放出，空容器从实际目标格附近的 active/exposed inventory 有界装取，玩家和发射器使用同一 v4 WAL 事务。`granularcontainer` 只生成经 world registry 校验的惰性测试来源，不能伪造反应性组成；`granstatus` 在服务端报告 exact SVQ、mass、solid species 与 source/sink，客户端只显示量化 deposit 表面和 active samples。
 
 气压玩法：`/realwater airdemo pressure`（或 `vacuum`）在准星方向自动搭一座玻璃 U 型管（左腔密闭、右腔通大气）并下半注水；`/realwater run` 后两侧液面形成并保持由气压支撑的稳定高差（正压约 1.4 m、负压约 2.1 m），`/realwater status` 的 gas 段显示密闭腔压力与库存。玻璃只替换空气方块，`/realwater remove`、创建其他开发域或正常关服时自动恢复原状；异常崩溃后残留的玻璃可自行拆掉。`/realwater debug true` 时密闭气腔以高度透明灰色显示。该域瞬态，不写 `region-state`。
 

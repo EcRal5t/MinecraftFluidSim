@@ -6,12 +6,16 @@ import com.example.fluid.FluidMaterial;
 import com.example.item.ContainerFluidLedger;
 import com.example.item.ChemicalContents;
 import com.example.item.FluidMixture;
+import com.example.item.GranularContents;
 import com.example.item.RealWaterItems;
 import com.example.chemistry.BuiltinChemicalDefinitions;
 import com.example.chemistry.ChemicalLimits;
 import com.example.chemistry.ChemicalMixtureRecord;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.chemistry.ChemicalTransferLedger;
+import com.example.granular.BuiltinGranularDefinitions;
+import com.example.granular.GranularTransferLedger;
+import com.example.granular.SolidVolume;
 import com.example.simulation.FluidSimulationService;
 import com.example.simulation.FluidRegion;
 import com.mojang.brigadier.arguments.BoolArgumentType;
@@ -51,6 +55,14 @@ public final class RealWaterCommands {
 											return builder.buildFuture();
 										})
 										.executes(context -> audit(context, () -> giveMaterialBucket(
+												context.getSource(), StringArgumentType.getString(context, "material"))))))
+						.then(Commands.literal("granularcontainer")
+								.then(Commands.argument("material", StringArgumentType.word())
+										.suggests((context, builder) -> {
+											builder.suggest("empty"); builder.suggest("fine_sand"); builder.suggest("light_beads");
+											return builder.buildFuture();
+										})
+										.executes(context -> audit(context, () -> giveGranularContainer(
 												context.getSource(), StringArgumentType.getString(context, "material"))))))
 						.then(Commands.literal("reagent")
 								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
@@ -238,6 +250,36 @@ public final class RealWaterCommands {
 			stack = new FluidMixture(List.of(new FluidMixture.Component(material.id(),
 					ContainerFluidLedger.NANOS_PER_BLOCK, 8.0 * material.referenceDensity()))).toStack();
 			description = material.id() + " 满材料桶";
+		}
+		if (!player.getInventory().add(stack)) player.drop(stack, false);
+		player.getInventory().setChanged();
+		return succeed(source, "已生成 " + description + "（显式 creative/debug 外部源）", 1);
+	}
+
+	/** Explicit debug source for exercising authoritative granular controller transfers. */
+	private static int giveGranularContainer(CommandSourceStack source, String requested) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		if (!service.granularFeatureEnabled()) return fail(source, "颗粒功能门本次启动未开启");
+		ItemStack stack; String description;
+		if ("empty".equals(requested)) {
+			stack = new ItemStack(RealWaterItems.GRANULAR_CONTAINER); description = "空干颗粒容器";
+		} else {
+			String materialId = switch (requested) {
+				case "fine_sand", "sand", BuiltinGranularDefinitions.FINE_SAND -> BuiltinGranularDefinitions.FINE_SAND;
+				case "light_beads", "beads", BuiltinGranularDefinitions.LIGHT_BEADS -> BuiltinGranularDefinitions.LIGHT_BEADS;
+				default -> null;
+			};
+			if (materialId == null) return fail(source, "未知或不可直接生成的颗粒材料：" + requested);
+			var registry = service.granularRegistry();
+			var material = registry.material(registry.materialHandle(materialId));
+			if (material.reactive()) return fail(source, "反应性固体只能由守恒相转移或已有容器产生");
+			long svq = SolidVolume.SVQ_PER_BV;
+			double mass = SolidVolume.toCellVolume(svq) * material.referenceDensity();
+			GranularTransferLedger ledger = new GranularTransferLedger(List.of(
+					new GranularTransferLedger.Group(material.id(), svq, mass, null)));
+			stack = GranularContents.fromLedger(ledger, registry, null).toStack();
+			description = material.id() + " 满干颗粒容器";
 		}
 		if (!player.getInventory().add(stack)) player.drop(stack, false);
 		player.getInventory().setChanged();

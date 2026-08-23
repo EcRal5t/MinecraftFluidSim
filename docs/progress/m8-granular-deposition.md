@@ -204,3 +204,8 @@ granular 0.434 秒，runner 合计 1.584 秒；服务端、客户端与测试 so
 因本修正触及 pressure 顺序与 runtime gas available-volume 选择，最近门使用 `--rerun-tasks` 运行
 `granular,free-surface,cut-cell,gas-liquid`：四域分别 1.950/1.953/0.656/46.270 秒，runner 合计 50.829 秒，全部通过。
 剩余 M8 关闭项只有自动门无法证明的客户端颗粒可见性、真实 controller 干容器转移及实机重启恢复。
+
+为把上述人工项收敛到一个真实 controller 场景，新增 `/realwater granularcontainer
+<empty|fine_sand|light_beads>`：它只从已冻结的 world registry 生成惰性 canonical `GranularContents v1`，满载 1 BV
+skeleton，并在命令反馈中明确标作 creative/debug 外部源；反应性 material 被拒绝，不能借命令伪造 solid composition。
+命令层编译和完整 `containers` selector 通过（1.391 秒）。
