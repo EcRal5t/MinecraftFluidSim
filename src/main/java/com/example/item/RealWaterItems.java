@@ -18,6 +18,8 @@ public final class RealWaterItems {
 			properties -> new PartialWaterBucketItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 	public static final Item MATERIAL_BUCKET = register("material_bucket",
 			properties -> new MaterialBucketItem(properties.stacksTo(1).useItemDescriptionPrefix()));
+	public static final Item GRANULAR_CONTAINER = register("granular_container",
+			properties -> new GranularContainerItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 	public static final Item CHEMICAL_INDICATOR = register("chemical_indicator",
 			properties -> new ChemicalIndicatorItem(properties.stacksTo(1).useItemDescriptionPrefix(), false));
 	public static final Item CHEMICAL_ERASER = register("chemical_eraser",

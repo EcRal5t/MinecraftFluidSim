@@ -148,3 +148,24 @@ definition mismatch 保留及 unknown store content 锁定均通过；两域 run
 最近门 `runCpuValidation -PcpuValidation=granular,chemistry,region-state --rerun-tasks` 全部通过：granular 1.097 秒、
 chemistry 1.200 秒、region-state 2.300 秒，runner 合计 4.602 秒。下一增量才进入 dry granular container 与独立
 container-transfer WAL v4；不会把固体塞入现有 liquid/chemical WAL v3。
+
+## M8.7 干式颗粒容器与跨域 WAL v4（2026-08-24）
+
+- `GranularContents v1` 以 stable material group 保存 exact SVQ、raw mass、optional stable-species composition、
+  SVQ scale 与 granular registry fingerprint；最多 16 组/64 个组成项/64 KiB，和全部液体组件严格互斥。tooltip 与
+  durability bar 只读该账本，空容器没有隐藏零值组件。
+- solver 侧新增 stable-ledger 的 all-or-nothing dry insertion 与有界 extraction：注入会按材料 parcel 上限切分并在
+  commit 前检查组合池/parcel/全域容量；舀取只取附近 active parcel 与每格 exposed deposit group，不取深层组，且在
+  删除库存前由 item adapter 验证可表示性。reactive partial split 不可精确时保留原库存。
+- particulate external-source/escaped-sink audit 作为独立 stable-ID 累计真值进入 v5 granular manifest；manifest payload
+  内部版本 2 可读旧版本 1，旧存档补空 audit，不从现存库存猜历史。创造放出才增加 source；普通 item↔region 转移不
+  制造 source/sink。
+- container-transfer WAL 升为 v4：resource kind 明确区分 `FLUID_NANOS` 与 `GRANULAR_SVQ`，item fingerprint 保存独立
+  solid SVQ 和完整 granular contents；PREPARED/实际结算/checksum/HEAD/actor durable-save 顺序复用同一事务路径。
+  v1/v2/v3 仍按原液体格式读取；未知门、registry、fingerprint、组成或 actor 状态继续保留并 LOCKED。
+- 玩家与发射器入口只允许向实际命中的闭壳 controller 区域转移颗粒，单次 count 必须为 1；空干式容器沿准星命中的
+  真实颗粒格舀取，装有颗粒的容器沿目标方块端口注入。command/demo 区域不接受颗粒容器。
+
+最近门 `runCpuValidation -PcpuValidation=granular,containers,region-state --rerun-tasks` 全部通过：granular 1.225 秒、
+containers 0.437 秒、region-state 1.851 秒，runner 合计 3.516 秒。下一增量进入 protocol v4 的有界只读 display
+snapshot、客户端颗粒绘制与管理员诊断；exact SVQ/mass/species 不上链。

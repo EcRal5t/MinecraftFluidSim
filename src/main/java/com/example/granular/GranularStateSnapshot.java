@@ -88,6 +88,7 @@ public final class GranularStateSnapshot {
 	private final List<DepositGroup> depositGroups;
 	private final long totalSolidVolumeSvq;
 	private final long totalMassBits;
+	private final GranularAuditLedger externalSource, escapedSink;
 
 	/** Compatibility constructor for inert v5 fixtures. */
 	public GranularStateSnapshot(
@@ -96,7 +97,8 @@ public final class GranularStateSnapshot {
 			long totalSolidVolumeSvq, long totalMassBits
 	) {
 		this(sizeX, sizeY, sizeZ, registryFingerprint, "", materialPalette, List.of(), Map.of(),
-				activeParcels, depositGroups, totalSolidVolumeSvq, totalMassBits);
+				activeParcels, depositGroups, totalSolidVolumeSvq, totalMassBits,
+				GranularAuditLedger.EMPTY, GranularAuditLedger.EMPTY);
 	}
 
 	public GranularStateSnapshot(
@@ -104,6 +106,18 @@ public final class GranularStateSnapshot {
 			List<String> materialPalette, List<StableComposition> solidCompositions,
 			Map<String, Long> solidSpeciesTotals, List<ActiveParcel> activeParcels, List<DepositGroup> depositGroups,
 			long totalSolidVolumeSvq, long totalMassBits
+	) {
+		this(sizeX, sizeY, sizeZ, registryFingerprint, chemicalRegistryFingerprint, materialPalette,
+				solidCompositions, solidSpeciesTotals, activeParcels, depositGroups, totalSolidVolumeSvq,
+				totalMassBits, GranularAuditLedger.EMPTY, GranularAuditLedger.EMPTY);
+	}
+
+	public GranularStateSnapshot(
+			int sizeX, int sizeY, int sizeZ, String registryFingerprint, String chemicalRegistryFingerprint,
+			List<String> materialPalette, List<StableComposition> solidCompositions,
+			Map<String, Long> solidSpeciesTotals, List<ActiveParcel> activeParcels, List<DepositGroup> depositGroups,
+			long totalSolidVolumeSvq, long totalMassBits,
+			GranularAuditLedger externalSource, GranularAuditLedger escapedSink
 	) {
 		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0) throw new IllegalArgumentException("Invalid granular snapshot dimensions");
 		if (registryFingerprint == null || !registryFingerprint.matches("[0-9a-f]{64}")) {
@@ -165,6 +179,12 @@ public final class GranularStateSnapshot {
 			throw new IllegalArgumentException("Granular snapshot total ledger mismatch");
 		}
 		this.totalSolidVolumeSvq = totalSolidVolumeSvq; this.totalMassBits = totalMassBits;
+		this.externalSource = java.util.Objects.requireNonNull(externalSource, "externalSource");
+		this.escapedSink = java.util.Objects.requireNonNull(escapedSink, "escapedSink");
+		if ((this.externalSource.requiresChemistry() || this.escapedSink.requiresChemistry())
+				&& this.chemicalRegistryFingerprint.isEmpty()) {
+			throw new IllegalArgumentException("Reactive granular audit requires chemical registry identity");
+		}
 	}
 
 	public static GranularStateSnapshot capture(
@@ -176,6 +196,17 @@ public final class GranularStateSnapshot {
 			int sizeX, int sizeY, int sizeZ, GranularRegistry registry,
 			GranularParcelStore parcels, GranularDepositStore deposits, SolidCompositionPool pool
 	) {
+		return capture(sizeX, sizeY, sizeZ, registry, parcels, deposits, pool,
+				GranularAuditLedger.EMPTY, GranularAuditLedger.EMPTY);
+	}
+
+	public static GranularStateSnapshot capture(
+			int sizeX, int sizeY, int sizeZ, GranularRegistry registry,
+			GranularParcelStore parcels, GranularDepositStore deposits, SolidCompositionPool pool,
+			GranularAuditLedger externalSource, GranularAuditLedger escapedSink
+	) {
+		externalSource.validateAgainst(registry, pool == null ? null : pool.registry());
+		escapedSink.validateAgainst(registry, pool == null ? null : pool.registry());
 		List<String> palette = registry.materials().stream().map(ParticulateMaterial::id).toList();
 		Set<Integer> usedHandles = new HashSet<>(); TreeSet<StableComposition> unique = new TreeSet<>(StableComposition.ORDER);
 		java.util.function.IntFunction<StableComposition> stable = handle -> {
@@ -210,7 +241,7 @@ public final class GranularStateSnapshot {
 		double mass = parcels.totalMass() + deposits.totalMass();
 		return new GranularStateSnapshot(sizeX, sizeY, sizeZ, registry.fingerprint(),
 				pool == null ? "" : pool.registry().fingerprint(), palette, table, totals, active, deposit,
-				volume, Double.doubleToRawLongBits(mass));
+				volume, Double.doubleToRawLongBits(mass), externalSource, escapedSink);
 	}
 
 	public void restoreInto(
@@ -365,4 +396,6 @@ public final class GranularStateSnapshot {
 	public long totalSolidVolumeSvq() { return totalSolidVolumeSvq; }
 	public long totalMassBits() { return totalMassBits; }
 	public double totalMass() { return Double.longBitsToDouble(totalMassBits); }
+	public GranularAuditLedger externalSource() { return externalSource; }
+	public GranularAuditLedger escapedSink() { return escapedSink; }
 }

@@ -1,10 +1,15 @@
 package com.example.item;
 
+import com.example.chemistry.BuiltinChemicalDefinitions;
 import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipParticleState;
 import com.example.fluid.FluidMaterial;
 import com.example.fluid.FluidSolverConfig;
+import com.example.granular.BuiltinGranularDefinitions;
+import com.example.granular.GranularRegistry;
+import com.example.granular.SolidCompositionRecord;
+import com.example.granular.SolidVolume;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -34,8 +39,38 @@ public final class M6ContainerValidation {
 		run("sub-micro residual and independent material mass survive exact transfer", M6ContainerValidation::testExactMaterialMass);
 		run("multi-material container and solver transfer close every component ledger", M6ContainerValidation::testMixtureTransfer);
 		run("malformed mixture mass and sub-float portions are rejected", M6ContainerValidation::testMixtureHardening);
+		run("granular contents are canonical and registry-bound", M6ContainerValidation::testGranularContents);
 		run("full bucket round-trips through the primitives", M6ContainerValidation::testBucketRoundTrip);
 		System.out.println("M6ContainerValidation passed " + passed + " scenarios");
+	}
+
+	private static void testGranularContents() {
+		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
+		SolidCompositionRecord solid = SolidCompositionRecord.fromStableAmounts(
+				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(
+						BuiltinChemicalDefinitions.CL_MINUS, 640L,
+						BuiltinChemicalDefinitions.NA_PLUS, 640L), 0.0);
+		List<GranularContents.SpeciesAmount> species = java.util.Map.of(
+				BuiltinChemicalDefinitions.CL_MINUS, 640L,
+				BuiltinChemicalDefinitions.NA_PLUS, 640L).entrySet().stream()
+				.sorted(java.util.Map.Entry.comparingByKey())
+				.map(entry -> new GranularContents.SpeciesAmount(entry.getKey(), entry.getValue())).toList();
+		GranularContents contents = new GranularContents(registry.fingerprint(), SolidVolume.SVQ_PER_BV, List.of(
+				new GranularContents.Group(BuiltinGranularDefinitions.FINE_SAND, 65_536L, 127.5),
+				new GranularContents.Group(BuiltinGranularDefinitions.PRECIPITATE, 10L,
+						Double.doubleToRawLongBits(solid.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
+						Double.doubleToRawLongBits(0.0), species)));
+		contents.validateAgainst(registry, BuiltinChemicalDefinitions.REGISTRY);
+		GranularContents decoded = GranularContents.decode(contents.encode());
+		check(contents.equals(decoded) && decoded.totalSolidVolumeSvq() == 65_546L,
+				"granular contents canonical round-trip changed exact inventory");
+		try {
+			new GranularContents("0".repeat(64), SolidVolume.SVQ_PER_BV, decoded.groups())
+					.validateAgainst(registry, BuiltinChemicalDefinitions.REGISTRY);
+			throw new AssertionError("Expected foreign granular registry rejection");
+		} catch (IllegalArgumentException expected) {
+			// expected
+		}
 	}
 
 	private static void testArithmetic() {

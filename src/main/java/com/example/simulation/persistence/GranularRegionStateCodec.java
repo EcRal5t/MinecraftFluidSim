@@ -1,6 +1,7 @@
 package com.example.simulation.persistence;
 
 import com.example.granular.GranularLimits;
+import com.example.granular.GranularAuditLedger;
 import com.example.granular.GranularStateSnapshot;
 import com.example.granular.SolidVolume;
 import com.example.chemistry.ChemicalLimits;
@@ -27,7 +28,7 @@ final class GranularRegionStateCodec {
 	static final int KNOWN_CAPABILITIES = CAP_MATERIALS | CAP_GRANULAR | CAP_CHEMISTRY | CAP_PRECIPITATION;
 	private static final int MANIFEST_MAGIC = 0x47524d35;
 	private static final int SECTION_MAGIC = 0x47525335;
-	private static final int PAYLOAD_VERSION = 1;
+	private static final int PAYLOAD_VERSION = 2;
 
 	record MaterialLedger(
 			int activeCount, long activeSvq, long activeMassBits,
@@ -43,7 +44,7 @@ final class GranularRegionStateCodec {
 			int capabilities, String registryFingerprint, long svqPerBv, int porosityScale,
 			int activeBudget, int depositGroupBudget, List<String> materialPalette,
 			String chemicalRegistryFingerprint, List<GranularStateSnapshot.StableComposition> solidCompositions,
-			Map<String, Long> solidSpeciesTotals,
+			Map<String, Long> solidSpeciesTotals, GranularAuditLedger externalSource, GranularAuditLedger escapedSink,
 			int activeCount, int depositGroupCount, int depositCellCount,
 			long activeSvq, long activeMassBits, long depositSvq, long depositMassBits,
 			List<MaterialLedger> materialLedgers, List<SectionLedger> sectionLedgers
@@ -71,6 +72,7 @@ final class GranularRegionStateCodec {
 			for (Map.Entry<String, Long> entry : new TreeMap<>(data.solidSpeciesTotals()).entrySet()) {
 				out.writeUTF(entry.getKey()); out.writeLong(entry.getValue());
 			}
+			writeAudit(out, data.externalSource()); writeAudit(out, data.escapedSink());
 			out.writeInt(data.activeCount()); out.writeInt(data.depositGroupCount()); out.writeInt(data.depositCellCount());
 			out.writeLong(data.activeSvq()); out.writeLong(data.activeMassBits());
 			out.writeLong(data.depositSvq()); out.writeLong(data.depositMassBits());
@@ -88,9 +90,11 @@ final class GranularRegionStateCodec {
 
 	ManifestData decodeManifest(byte[] bytes) throws IOException {
 		try (DataInputStream input = input(bytes)) {
-			if (input.readInt() != MANIFEST_MAGIC || input.readInt() != PAYLOAD_VERSION) {
+			if (input.readInt() != MANIFEST_MAGIC) {
 				throw new IOException("Unknown granular manifest payload");
 			}
+			int payloadVersion = input.readInt();
+			if (payloadVersion != 1 && payloadVersion != PAYLOAD_VERSION) throw new IOException("Unknown granular manifest payload");
 			int capabilities = input.readInt();
 			if ((capabilities & ~KNOWN_CAPABILITIES) != 0
 					|| (capabilities & (CAP_MATERIALS | CAP_GRANULAR)) != (CAP_MATERIALS | CAP_GRANULAR)
@@ -132,6 +136,8 @@ final class GranularRegionStateCodec {
 				String id = input.readUTF(); long amount = positive(input.readLong(), "solid species total");
 				if (speciesTotals.put(id, amount) != null) throw new IOException("Duplicate solid species ledger id " + id);
 			}
+			GranularAuditLedger externalSource = payloadVersion >= 2 ? readAudit(input) : GranularAuditLedger.EMPTY;
+			GranularAuditLedger escapedSink = payloadVersion >= 2 ? readAudit(input) : GranularAuditLedger.EMPTY;
 			int activeCount = bounded(input.readInt(), 0, activeBudget, "active count");
 			int depositCount = bounded(input.readInt(), 0, depositBudget, "deposit group count");
 			int depositCells = bounded(input.readInt(), 0, depositCount, "deposit cell count");
@@ -158,10 +164,42 @@ final class GranularRegionStateCodec {
 			requireEnd(input);
 			return new ManifestData(capabilities, fingerprint, svqScale, porosityScale, activeBudget, depositBudget,
 					List.copyOf(palette), chemicalFingerprint, List.copyOf(compositions), Map.copyOf(speciesTotals),
+					externalSource, escapedSink,
 					activeCount, depositCount, depositCells, activeSvq, activeMass,
 					depositSvq, depositMass, List.copyOf(ledgers), List.copyOf(sections));
 		} catch (EOFException truncated) { throw new IOException("Truncated granular manifest payload", truncated); }
 		catch (IllegalArgumentException invalid) { throw new IOException("Invalid granular manifest payload: " + invalid.getMessage(), invalid); }
+	}
+
+	private static void writeAudit(DataOutputStream output, GranularAuditLedger ledger) throws IOException {
+		output.writeInt(ledger.entries().size());
+		for (GranularAuditLedger.Entry entry : ledger.entries()) {
+			output.writeUTF(entry.materialId()); output.writeLong(entry.solidVolumeSvq()); output.writeLong(entry.massBits());
+			output.writeLong(entry.massResidualBits()); output.writeInt(entry.composition().size());
+			for (GranularAuditLedger.SpeciesAmount amount : entry.composition()) {
+				output.writeUTF(amount.speciesId()); output.writeLong(amount.amountQuanta());
+			}
+		}
+	}
+
+	private static GranularAuditLedger readAudit(DataInputStream input) throws IOException {
+		int count = bounded(input.readInt(), 0, GranularLimits.MAX_MATERIALS, "granular audit entries");
+		ArrayList<GranularAuditLedger.Entry> entries = new ArrayList<>(count);
+		for (int index = 0; index < count; index++) {
+			String materialId = input.readUTF(); long svq = positive(input.readLong(), "granular audit SVQ");
+			long massBits = input.readLong();
+			if (!(Double.isFinite(Double.longBitsToDouble(massBits)) && Double.longBitsToDouble(massBits) > 0.0)) {
+				throw new IOException("Invalid granular audit mass");
+			}
+			long residualBits = input.readLong();
+			int speciesCount = bounded(input.readInt(), 0, GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES,
+					"granular audit composition entries");
+			ArrayList<GranularAuditLedger.SpeciesAmount> composition = new ArrayList<>(speciesCount);
+			for (int species = 0; species < speciesCount; species++) composition.add(
+					new GranularAuditLedger.SpeciesAmount(input.readUTF(), positive(input.readLong(), "granular audit species amount")));
+			entries.add(new GranularAuditLedger.Entry(materialId, svq, massBits, residualBits, composition));
+		}
+		return new GranularAuditLedger(entries);
 	}
 
 	byte[] encodeSection(SectionData data) {
@@ -188,9 +226,11 @@ final class GranularRegionStateCodec {
 
 	SectionData decodeSection(byte[] bytes, int activeBudget, int depositBudget) throws IOException {
 		try (DataInputStream input = input(bytes)) {
-			if (input.readInt() != SECTION_MAGIC || input.readInt() != PAYLOAD_VERSION) {
+			if (input.readInt() != SECTION_MAGIC) {
 				throw new IOException("Unknown granular section payload");
 			}
+			int payloadVersion = input.readInt();
+			if (payloadVersion != 1 && payloadVersion != PAYLOAD_VERSION) throw new IOException("Unknown granular section payload");
 			int activeCount = bounded(input.readInt(), 0, activeBudget, "section active entries");
 			List<ActiveEntry> active = new ArrayList<>(activeCount);
 			for (int index = 0; index < activeCount; index++) {

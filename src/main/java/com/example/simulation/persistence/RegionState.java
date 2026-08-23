@@ -377,7 +377,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			return new GranularStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
 					granular.registryFingerprint(), granular.chemicalRegistryFingerprint(), granular.materialPalette(),
 					granular.solidCompositions(), granular.solidSpeciesTotals(), Arrays.asList(active), deposits,
-					totalSvq, Double.doubleToRawLongBits(totalMass));
+					totalSvq, Double.doubleToRawLongBits(totalMass), granular.externalSource(), granular.escapedSink());
 		} catch (IllegalArgumentException invalid) {
 			throw new IOException("Invalid region-state v5 granular inventory: " + invalid.getMessage(), invalid);
 		}
@@ -648,7 +648,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					expected.chemicalRegistryFingerprint(), expected.materialPalette(), expected.solidCompositions(),
 					expected.solidSpeciesTotals(), Arrays.asList(active), deposits,
 					Math.addExact(totalActiveSvq, totalDepositSvq),
-					Double.doubleToRawLongBits(totalActiveMass + totalDepositMass));
+					Double.doubleToRawLongBits(totalActiveMass + totalDepositMass),
+					expected.externalSource(), expected.escapedSink());
 		} catch (IllegalArgumentException invalid) {
 			throw new IOException("Invalid v5 granular state: " + invalid.getMessage(), invalid);
 		}
@@ -875,12 +876,14 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		}
 		int capabilities = GranularRegionStateCodec.CAP_MATERIALS | GranularRegionStateCodec.CAP_GRANULAR
 				| (chemicalState ? GranularRegionStateCodec.CAP_CHEMISTRY : 0)
-				| (!snapshot.solidCompositions().isEmpty() ? GranularRegionStateCodec.CAP_PRECIPITATION : 0);
+				| (!snapshot.solidCompositions().isEmpty() || snapshot.externalSource().requiresChemistry()
+				|| snapshot.escapedSink().requiresChemistry() ? GranularRegionStateCodec.CAP_PRECIPITATION : 0);
 		return new GranularRegionStateCodec.ManifestData(capabilities, snapshot.registryFingerprint(),
 				SolidVolume.SVQ_PER_BV, GranularLimits.POROSITY_SCALE,
 				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
 				snapshot.materialPalette(), snapshot.chemicalRegistryFingerprint(), snapshot.solidCompositions(),
-				snapshot.solidSpeciesTotals(), snapshot.activeParcels().size(), snapshot.depositGroups().size(), depositCells,
+				snapshot.solidSpeciesTotals(), snapshot.externalSource(), snapshot.escapedSink(),
+				snapshot.activeParcels().size(), snapshot.depositGroups().size(), depositCells,
 				allActiveSvq, Double.doubleToRawLongBits(canonicalActiveMass), allDepositSvq,
 				Double.doubleToRawLongBits(canonicalDepositMass), List.copyOf(materialLedgers), List.copyOf(sectionLedgers));
 	}

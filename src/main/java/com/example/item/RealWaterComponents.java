@@ -27,6 +27,8 @@ public final class RealWaterComponents {
 	public static final DataComponentType<String> MIXTURE_COMPONENTS = registerString("mixture_components");
 	/** Canonical ChemicalContents v1; mutually exclusive with material_id/mixture_components. */
 	public static final DataComponentType<String> CHEMICAL_CONTENTS = registerString("chemical_contents");
+	/** Canonical dry GranularContents v1; mutually exclusive with every liquid component. */
+	public static final DataComponentType<String> GRANULAR_CONTENTS = registerString("granular_contents");
 
 	private RealWaterComponents() { }
 

@@ -12,8 +12,12 @@ import net.minecraft.nbt.NbtIo;
 import com.example.item.ContainerFluidLedger;
 import com.example.item.ChemicalContents;
 import com.example.item.FluidMixture;
+import com.example.item.GranularContents;
 import com.example.chemistry.BuiltinChemicalDefinitions;
 import com.example.chemistry.ChemicalLimits;
+import com.example.granular.BuiltinGranularDefinitions;
+import com.example.granular.SolidCompositionRecord;
+import com.example.granular.SolidVolume;
 import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipParticleState;
@@ -48,7 +52,7 @@ public final class ContainerTransferStoreValidation {
 			run("recovery state machine locks every ambiguous commit boundary", ContainerTransferStoreValidation::testRecoveryStateMachine);
 			run("unknown and staged files lock without deletion", ContainerTransferStoreValidation::testUnknownLayout);
 			run("corrupt named WAL locks without deletion", ContainerTransferStoreValidation::testCorruptWal);
-			run("v1 pure WAL migrates while v1 material WAL locks", ContainerTransferStoreValidation::testLegacyMigration);
+			run("v1-v3 fluid WALs remain readable while v1 material locks", ContainerTransferStoreValidation::testLegacyMigration);
 			run("nanovolume and solver cell-volume conversion", ContainerTransferStoreValidation::testNanosCellConversion);
 			run("non-float-friendly transfers settle actual marker volume", ContainerTransferStoreValidation::testActualMarkerSettlement);
 			run("material service settlement preserves component residuals", ContainerTransferStoreValidation::testMaterialSettlement);
@@ -227,6 +231,52 @@ public final class ContainerTransferStoreValidation {
 		checkThrows(IOException.class, () -> store.write(wrongFamily),
 				"material insertion must not converge to a vanilla empty bucket");
 
+		var granularRegistry = BuiltinGranularDefinitions.createRegistry();
+		long inertSvq = SolidVolume.SVQ_PER_CELL;
+		long reactiveSvq = SolidVolume.SVQ_PER_CELL / 2L;
+		SolidCompositionRecord reactive = SolidCompositionRecord.fromStableAmounts(
+				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(
+						BuiltinChemicalDefinitions.NA_PLUS, 64L,
+						BuiltinChemicalDefinitions.CL_MINUS, 64L), 0.0);
+		GranularContents granularContents = new GranularContents(granularRegistry.fingerprint(),
+				SolidVolume.SVQ_PER_BV, List.of(
+				new GranularContents.Group(BuiltinGranularDefinitions.FINE_SAND, inertSvq, 650.0),
+				new GranularContents.Group(BuiltinGranularDefinitions.PRECIPITATE, reactiveSvq,
+						Double.doubleToRawLongBits(reactive.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
+						reactive.massResidualBits(), reactive.stableAmounts(BuiltinChemicalDefinitions.REGISTRY)
+						.entrySet().stream().sorted(java.util.Map.Entry.comparingByKey())
+						.map(entry -> new GranularContents.SpeciesAmount(
+								entry.getKey(), entry.getValue())).toList())));
+		ContainerTransferJournal.ItemFingerprint granularBefore = new ContainerTransferJournal.ItemFingerprint(
+				ContainerTransferJournal.ItemKind.GRANULAR_CONTAINER, -1L,
+				granularContents.totalSolidVolumeSvq(), granularContents.encode(),
+				Double.doubleToRawLongBits(granularContents.totalMass()));
+		ContainerTransferJournal.ItemFingerprint granularAfter = new ContainerTransferJournal.ItemFingerprint(
+				ContainerTransferJournal.ItemKind.EMPTY_GRANULAR_CONTAINER, -1L, -1L, null, -1L);
+		UUID tx7 = UUID.randomUUID();
+		ContainerTransferJournal granular = ContainerTransferJournal.granular(
+				tx7, region, "minecraft:overworld", 6L, 7L,
+				ContainerTransferJournal.Operation.INSERT, granularContents.totalSolidVolumeSvq(),
+				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
+				granularBefore, granularAfter, 0x7abcL,
+				ContainerTransferJournal.Phase.REGION_COMMITTED);
+		store.write(granular);
+		check(granular.equals(store.read(tx7)), "granular container WAL v4 fingerprint did not round-trip");
+		check(granular.requiresGranularRegistry() && granular.requiresChemicalRegistry(),
+				"reactive granular WAL did not declare both registry dependencies");
+		granular.validateGranularRegistry(granularRegistry, BuiltinChemicalDefinitions.REGISTRY);
+		checkThrows(IllegalArgumentException.class,
+				() -> granular.validateGranularRegistry(BuiltinGranularDefinitions.createRegistry(), null),
+				"reactive granular WAL was accepted without chemistry");
+
+		ContainerTransferJournal wrongGranularFamily = ContainerTransferJournal.granular(
+				UUID.randomUUID(), region, "minecraft:overworld", 7L, 8L,
+				ContainerTransferJournal.Operation.INSERT, granularContents.totalSolidVolumeSvq(),
+				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"), granularBefore,
+				materialAfter, -1L, ContainerTransferJournal.Phase.PREPARED);
+		checkThrows(IOException.class, () -> store.write(wrongGranularFamily),
+				"granular insertion must not converge to a liquid container family");
+
 	}
 
 	private static void testValidation() throws Exception {
@@ -348,11 +398,22 @@ public final class ContainerTransferStoreValidation {
 		Path purePath = pureStore.directoryPath().resolve(pure.transactionId() + ".nbt");
 		CompoundTag pureNbt = NbtIo.readCompressed(purePath, NbtAccounter.create(4L * 1024L * 1024L));
 		pureNbt.putInt("Version", 1);
+		pureNbt.remove("ResourceKind");
+		pureNbt.remove("BeforeSolidVolumeSvq");
+		pureNbt.remove("AfterSolidVolumeSvq");
 		pureNbt.remove("BeforeMassBits");
 		pureNbt.remove("AfterMassBits");
 		NbtIo.writeCompressed(pureNbt, purePath);
 		check(pureStore.read(pure.transactionId()).equals(pure) && pureStore.scan().issues().isEmpty(),
 				"legacy v1 pure-water WAL did not migrate in memory");
+		pureNbt.putInt("Version", 2);
+		pureNbt.putLong("BeforeMassBits", -1L);
+		pureNbt.putLong("AfterMassBits", -1L);
+		NbtIo.writeCompressed(pureNbt, purePath);
+		check(pureStore.read(pure.transactionId()).equals(pure), "legacy v2 pure-water WAL was not readable");
+		pureNbt.putInt("Version", 3);
+		NbtIo.writeCompressed(pureNbt, purePath);
+		check(pureStore.read(pure.transactionId()).equals(pure), "legacy v3 pure-water WAL was not readable");
 
 		Path materialRoot = Files.createTempDirectory("realwater-wal-v1-material");
 		ContainerTransferStore materialStore = new ContainerTransferStore(materialRoot);
@@ -368,6 +429,9 @@ public final class ContainerTransferStoreValidation {
 		Path materialPath = materialStore.directoryPath().resolve(legacyMaterial.transactionId() + ".nbt");
 		CompoundTag materialNbt = NbtIo.readCompressed(materialPath, NbtAccounter.create(4L * 1024L * 1024L));
 		materialNbt.putInt("Version", 1);
+		materialNbt.remove("ResourceKind");
+		materialNbt.remove("BeforeSolidVolumeSvq");
+		materialNbt.remove("AfterSolidVolumeSvq");
 		materialNbt.remove("BeforeMassBits");
 		materialNbt.remove("AfterMassBits");
 		NbtIo.writeCompressed(materialNbt, materialPath);

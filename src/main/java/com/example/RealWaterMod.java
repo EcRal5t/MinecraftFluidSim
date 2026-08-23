@@ -67,6 +67,10 @@ public final class RealWaterMod implements ModInitializer {
 			ItemStack result = FluidTransferService.handleDispenserUse(source, stack);
 			return result != null ? result : stack;
 		});
+		DispenserBlock.registerBehavior(RealWaterItems.GRANULAR_CONTAINER, (source, stack) -> {
+			ItemStack result = FluidTransferService.handleDispenserUse(source, stack);
+			return result != null ? result : stack;
+		});
 	}
 
 

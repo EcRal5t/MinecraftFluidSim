@@ -148,11 +148,16 @@ public final class FluidRegionPersistenceValidation {
 						granular.materialHandle(BuiltinGranularDefinitions.PRECIPITATE), 1)), List.of(), 10L,
 				Double.doubleToRawLongBits(composition.totalMass(BuiltinChemicalDefinitions.REGISTRY)));
 		reactiveRegion.domain().restoreGranularState(reactiveFixture, granular, liquids);
+		var removedReactive = reactiveRegion.domain().tryExtractExactGranular(1, 1, 1, 10L, 0, true);
+		require(removedReactive.transferred()
+				&& reactiveRegion.domain().tryInsertExactGranular(1, 1, 1, removedReactive.ledger(), 0, true).inserted(),
+				"reactive granular audit fixture could not cross the region boundary");
+		GranularStateSnapshot reactiveExpected = reactiveRegion.domain().exportGranularState();
 		RegionState reactiveState = RegionState.captureGranular(reactiveRegion, 1L);
 		reactiveState.validate();
 		GranularStateSnapshot reactiveRoundTrip = reactiveState.reconstructGranular(granular);
 		reactiveRoundTrip.validateSolidCompositionMasses(BuiltinChemicalDefinitions.REGISTRY);
-		assertGranularStateEquals(reactiveFixture, reactiveRoundTrip);
+		assertGranularStateEquals(reactiveExpected, reactiveRoundTrip);
 		Path reactiveRoot = Files.createTempDirectory(Path.of("."), "reactive-granular-v5-");
 		new RegionStateFiles(reactiveRoot, BuiltinChemicalDefinitions.REGISTRY, granular).publish(reactiveState);
 
@@ -708,6 +713,8 @@ public final class FluidRegionPersistenceValidation {
 				&& expected.solidSpeciesTotals().equals(actual.solidSpeciesTotals())
 				&& expected.activeParcels().equals(actual.activeParcels())
 				&& expected.depositGroups().equals(actual.depositGroups())
+				&& expected.externalSource().equals(actual.externalSource())
+				&& expected.escapedSink().equals(actual.escapedSink())
 				&& expected.totalSolidVolumeSvq() == actual.totalSolidVolumeSvq()
 				&& expected.totalMassBits() == actual.totalMassBits(),
 				"granular inventory changed across persistence");

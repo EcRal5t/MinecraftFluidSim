@@ -364,6 +364,24 @@ public final class FluidSimulationService {
 	private void processContainerTransfer(MinecraftServer server, UUID transactionId) {
 		try {
 			ContainerTransferJournal journal = containerTransfers.read(transactionId);
+			if (journal.requiresGranularRegistry()) {
+				if (!granularFeatureEnabled || granularRegistry == null) {
+					logContainerTransferLockOnce(transactionId,
+							"Container transfer WAL " + transactionId
+									+ " remains locked: granular recovery requires the enabled authoritative world registry");
+					return;
+				}
+				try {
+					journal.validateGranularRegistry(granularRegistry,
+							chemistryFeatureEnabled ? chemicalRegistry : null);
+				} catch (RuntimeException foreignRegistry) {
+					logContainerTransferLockOnce(transactionId,
+							"Container transfer WAL " + transactionId
+									+ " remains locked: granular item registry identity is foreign or invalid ("
+									+ foreignRegistry.getMessage() + ")");
+					return;
+				}
+			}
 			if (journal.requiresChemicalRegistry()) {
 				if (!chemistryFeatureEnabled || chemicalRegistry == null) {
 					logContainerTransferLockOnce(transactionId,
@@ -1971,6 +1989,26 @@ public final class FluidSimulationService {
 				return cellTargetArray(previousOpen == null ? cell : previousOpen);
 			} else {
 				previousOpen = cell;
+			}
+		}
+		return null;
+	}
+
+	/** First ray-intersected cell carrying active or exposed/deep granular inventory truth. */
+	public int[] aimedGranularCellNear(ServerPlayer player, FluidRegion region) {
+		if (region == null || !region.solverLoaded() || !region.domain().hasGranularState()
+				|| !player.level().dimension().equals(region.dimension())) return null;
+		Vec3 start = player.getEyePosition();
+		Vec3 direction = player.getLookAngle();
+		FlipFluidDomain domain = region.domain();
+		double step = domain.config().cellSize() * 0.25;
+		CellTarget previous = null;
+		for (double distance = 0.0; distance <= AIM_DISTANCE; distance += step) {
+			CellTarget cell = worldToCell(region, start.add(direction.scale(distance)));
+			if (cell == null || cell.equals(previous)) continue;
+			previous = cell;
+			if (domain.granularSolidVolumeSvq(cell.x(), cell.y(), cell.z()) > 0L) {
+				return cellTargetArray(cell);
 			}
 		}
 		return null;

@@ -24,6 +24,7 @@ public final class M8GranularValidation {
 		registryDefinitionsAndWorldSnapshotAreStrict();
 		solidCompositionStateIsIndependentAndPersistent();
 		phaseTransferPrecipitatesAndDissolves();
+		exactDryContainerTransferIsAtomic();
 		solidVolumeConversionsAreConservative();
 		parcelSplitMergePreservesInventory();
 		depositCapacityAndGroupBudgetAreAtomic();
@@ -34,6 +35,52 @@ public final class M8GranularValidation {
 		settlingRelaxationSleepAndWakeAreLocal();
 		solverCouplingPreservesInventories(fast ? 8 : 80);
 		System.out.println("M8 granular core gate passed: exact inventory, coupling, repose, sleep and local wake");
+	}
+
+	private static void exactDryContainerTransferIsAtomic() {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
+		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		FlipFluidDomain domain = new FlipFluidDomain(6, 6, 6, config, 6 * 6 * 6 * 8);
+		domain.bindGranular(registry, liquids); domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		long reactiveSvq = 4_096L;
+		SolidCompositionRecord reactive = SolidCompositionRecord.fromStableAmounts(
+				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(
+						BuiltinChemicalDefinitions.CL_MINUS, reactiveSvq * 64L,
+						BuiltinChemicalDefinitions.NA_PLUS, reactiveSvq * 64L), 0.0);
+		GranularTransferLedger input = new GranularTransferLedger(List.of(
+				new GranularTransferLedger.Group(BuiltinGranularDefinitions.FINE_SAND,
+						SolidVolume.SVQ_PER_CELL + 65_536L, 2_600.25, null),
+				new GranularTransferLedger.Group(BuiltinGranularDefinitions.PRECIPITATE, reactiveSvq,
+						reactive.totalMass(BuiltinChemicalDefinitions.REGISTRY), reactive)));
+		FlipFluidDomain.GranularInsertion inserted = domain.tryInsertExactGranular(2, 2, 2, input, 3, true);
+		require(inserted.inserted() && domain.totalGranularSolidVolumeSvq() == input.totalSolidVolumeSvq()
+				&& rawClose(domain.totalGranularMass(), input.totalMass()),
+				"dry granular insertion did not preserve exact volume/mass across nearby cells");
+		FlipFluidDomain.GranularExtraction extracted = domain.tryExtractExactGranular(
+				2, 2, 2, SolidVolume.SVQ_PER_BV, 3, true);
+		require(extracted.transferred() && extracted.ledger().totalSolidVolumeSvq() == input.totalSolidVolumeSvq()
+				&& rawClose(extracted.ledger().totalMass(), input.totalMass())
+				&& domain.totalGranularSolidVolumeSvq() == 0L,
+				"dry granular extraction did not close the active inventory");
+		GranularTransferLedger.Group extractedReactive = extracted.ledger().groups().stream()
+				.filter(group -> group.materialId().equals(BuiltinGranularDefinitions.PRECIPITATE)).findFirst().orElseThrow();
+		require(extractedReactive.composition().equals(reactive),
+				"dry granular extraction changed reactive solid composition");
+		require(domain.granularExternalSource().entries().size() == 2
+				&& domain.granularEscapedSink().entries().size() == 2
+				&& domain.granularExternalSource().entries().stream().mapToLong(GranularAuditLedger.Entry::solidVolumeSvq).sum()
+				== input.totalSolidVolumeSvq(), "dry granular boundary audit did not close source/sink SVQ");
+
+		FlipFluidDomain sealed = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) sealed.setVolume(x, y, z, 1.0F);
+		sealed.bindGranular(registry, liquids); sealed.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		GranularTransferLedger small = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
+				BuiltinGranularDefinitions.FINE_SAND, 1_024L, 1.0, null)));
+		require(!sealed.tryInsertExactGranular(1, 1, 1, small, 1).inserted()
+				&& sealed.totalGranularSolidVolumeSvq() == 0L,
+				"sealed dry granular insertion was not rejected atomically");
 	}
 
 	private static void phaseTransferPrecipitatesAndDissolves() {

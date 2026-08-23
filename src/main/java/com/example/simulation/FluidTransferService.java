@@ -6,10 +6,14 @@ import com.example.fluid.FlipFluidDomain;
 import com.example.item.ContainerFluidLedger;
 import com.example.item.ChemicalContents;
 import com.example.item.FluidMixture;
+import com.example.item.GranularContainerItem;
+import com.example.item.GranularContents;
 import com.example.item.MaterialBucketItem;
 import com.example.item.PartialWaterBucketItem;
 import com.example.item.RealWaterItems;
 import com.example.item.RealWaterComponents;
+import com.example.granular.GranularTransferLedger;
+import com.example.granular.SolidVolume;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.dispenser.BlockSource;
 import net.minecraft.network.chat.Component;
@@ -48,7 +52,8 @@ public final class FluidTransferService {
 		TransferKind kind = classify(held);
 		if (kind == TransferKind.NONE) return null;
 		ServerLevel level = player.level();
-		boolean pouring = kind == TransferKind.POUR || kind == TransferKind.MATERIAL_POUR;
+		boolean pouring = kind == TransferKind.POUR || kind == TransferKind.MATERIAL_POUR
+				|| kind == TransferKind.GRANULAR_POUR;
 		BlockPos targetBlock = pouring ? playerPourTargetBlock(player) : null;
 		if (pouring && targetBlock == null) return null;
 		FluidSimulationService.TransferTarget transferTarget = pouring
@@ -67,7 +72,9 @@ public final class FluidTransferService {
 		}
 		int[] cell = pouring
 				? service.cellAtBlock(level, region, transferTarget.interiorBlock())
-				: service.aimedCellNear(player, region, true);
+				: kind == TransferKind.GRANULAR_SCOOP
+						? service.aimedGranularCellNear(player, region)
+						: service.aimedCellNear(player, region, true);
 		if (cell == null) return null;
 
 		TransferOutcome outcome = switch (kind) {
@@ -75,6 +82,8 @@ public final class FluidTransferService {
 			case SCOOP -> scoop(service, region, player, hand, held, cell);
 			case MATERIAL_POUR -> pourMaterial(service, region, player, hand, held, cell);
 			case MATERIAL_SCOOP -> scoopMaterial(service, region, player, hand, held, cell);
+			case GRANULAR_POUR -> pourGranular(service, region, player, hand, held, cell);
+			case GRANULAR_SCOOP -> scoopGranular(service, region, player, hand, held, cell);
 			case NONE -> null;
 		};
 		if (outcome == null) return null;
@@ -115,6 +124,7 @@ public final class FluidTransferService {
 		if (cell == null) return stack;
 		FluidMixture heldMixture = null;
 		ChemicalContents heldChemical = null;
+		GranularContents heldGranular = null;
 		if (kind == TransferKind.MATERIAL_POUR) {
 			if (!service.materialFeatureEnabled() || !region.domain().hasMaterialState()) return stack;
 			if (stack.get(RealWaterComponents.CHEMICAL_CONTENTS) != null) {
@@ -127,16 +137,32 @@ public final class FluidTransferService {
 			}
 		} else if (kind == TransferKind.MATERIAL_SCOOP) {
 			if (!service.materialFeatureEnabled() || !region.domain().hasMaterialState()) return stack;
+		} else if (kind == TransferKind.GRANULAR_POUR) {
+			if (!service.granularFeatureEnabled() || !region.domain().hasGranularState()
+					|| !region.controllerManaged()) return stack;
+			try {
+				heldGranular = GranularContents.fromStack(stack, service.granularRegistry(),
+						service.chemistryFeatureEnabled() ? service.chemicalRegistry() : null);
+			} catch (RuntimeException invalid) {
+				return stack;
+			}
+			if (heldGranular == null) return stack;
+		} else if (kind == TransferKind.GRANULAR_SCOOP) {
+			if (!service.granularFeatureEnabled() || !region.domain().hasGranularState()
+					|| !region.controllerManaged()) return stack;
 		}
 		FluidMixture resolvedMixture = heldMixture;
 		ChemicalContents resolvedChemical = heldChemical;
+		GranularContents resolvedGranular = heldGranular;
 		long extractionRequest = switch (kind) {
 			case SCOOP -> extractableNanos(region.domain(), cell, heldFreeNanos(stack), 6, 0);
 			case MATERIAL_SCOOP -> extractableNanos(region.domain(), cell,
 					ContainerFluidLedger.NANOS_PER_BLOCK, 6, -1);
+			case GRANULAR_SCOOP -> SolidVolume.SVQ_PER_BV;
 			default -> 0L;
 		};
-		if ((kind == TransferKind.SCOOP || kind == TransferKind.MATERIAL_SCOOP) && extractionRequest <= 0L) {
+		if ((kind == TransferKind.SCOOP || kind == TransferKind.MATERIAL_SCOOP
+				|| kind == TransferKind.GRANULAR_SCOOP) && extractionRequest <= 0L) {
 			return stack;
 		}
 
@@ -166,6 +192,18 @@ public final class FluidTransferService {
 								? scoopChemicalIntoCell(region, cell, requested, 6, service.chemicalRegistry())
 								: scoopMaterialIntoCell(service, region, cell, requested, 6),
 						(rawAfter, before) -> rawAfter);
+				case GRANULAR_POUR -> executeControllerTransfer(service, region, level, actor, stack,
+						ContainerTransferJournal.Operation.INSERT,
+						ContainerTransferJournal.ResourceKind.GRANULAR_SVQ,
+						resolvedGranular.totalSolidVolumeSvq(), 0L, cell,
+						(requested, base) -> pourGranularIntoCell(service, region, cell, resolvedGranular, 6, false),
+						(rawAfter, before) -> rawAfter);
+				case GRANULAR_SCOOP -> executeControllerTransfer(service, region, level, actor, stack,
+						ContainerTransferJournal.Operation.EXTRACT,
+						ContainerTransferJournal.ResourceKind.GRANULAR_SVQ,
+						extractionRequest, 0L, cell,
+						(requested, base) -> scoopGranularIntoCell(service, region, cell, requested, 6),
+						(rawAfter, before) -> rawAfter);
 				case NONE -> null;
 			};
 			if (!transaction.outcome().transferred()) return stack;
@@ -183,6 +221,7 @@ public final class FluidTransferService {
 			case MATERIAL_SCOOP -> service.chemistryFeatureEnabled() && region.domain().hasChemistryState()
 					? scoopChemicalIntoCell(region, cell, extractionRequest, 6, service.chemicalRegistry())
 					: scoopMaterialIntoCell(service, region, cell, extractionRequest, 6);
+			case GRANULAR_POUR, GRANULAR_SCOOP -> null;
 			case NONE -> null;
 		};
 		if (outcome == null || !outcome.transferred()) return stack;
@@ -313,6 +352,68 @@ if (!outcome.transferred()) return new TransferOutcome(false, false, held, outco
 service.sendSnapshotFor(player, region);
 return outcome;
 }
+
+	private static TransferOutcome pourGranular(
+			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand,
+			ItemStack held, int[] cell
+	) {
+		if (!service.granularFeatureEnabled()) {
+			return new TransferOutcome(false, true, held, "颗粒功能门本次启动未开启；干式容器保持不变");
+		}
+		if (!region.controllerManaged()) {
+			return new TransferOutcome(false, true, held, "颗粒容器只允许在闭壳控制器区域转移");
+		}
+		if (!region.domain().hasGranularState()) {
+			return new TransferOutcome(false, true, held, "该区域不是颗粒区域");
+		}
+		GranularContents contents;
+		try {
+			contents = GranularContents.fromStack(held, service.granularRegistry(),
+					service.chemistryFeatureEnabled() ? service.chemicalRegistry() : null);
+		} catch (RuntimeException invalid) {
+			return new TransferOutcome(false, true, held, "颗粒容器内容损坏、双重表示或 registry 不匹配");
+		}
+		if (contents == null) return new TransferOutcome(false, true, held, "颗粒容器没有有效库存");
+		ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
+		ControllerTransfer transaction = executeControllerTransfer(service, region, player.level(), actor, held,
+				ContainerTransferJournal.Operation.INSERT, ContainerTransferJournal.ResourceKind.GRANULAR_SVQ,
+				contents.totalSolidVolumeSvq(), 0L, cell,
+				(requested, base) -> pourGranularIntoCell(service, region, cell, contents, 6,
+						player.hasInfiniteMaterials()),
+				(rawAfter, before) -> player.hasInfiniteMaterials() ? before.copy() : rawAfter);
+		if (!transaction.outcome().transferred()) return transaction.outcome();
+		player.setItemInHand(hand, transaction.outcome().stack());
+		player.getInventory().setChanged();
+		service.sendSnapshotFor(player, region);
+		return transaction.outcome();
+	}
+
+	private static TransferOutcome scoopGranular(
+			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand,
+			ItemStack held, int[] cell
+	) {
+		if (!service.granularFeatureEnabled()) {
+			return new TransferOutcome(false, false, held, "颗粒功能门本次启动未开启；干式容器保持不变");
+		}
+		if (!region.controllerManaged()) {
+			return new TransferOutcome(false, false, held, "颗粒容器只允许在闭壳控制器区域转移");
+		}
+		if (!region.domain().hasGranularState() || !GranularContainerItem.isEmpty(held)) {
+			return new TransferOutcome(false, false, held, "干式容器不为空或该区域不是颗粒区域");
+		}
+		ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
+		ControllerTransfer transaction = executeControllerTransfer(service, region, player.level(), actor, held,
+				ContainerTransferJournal.Operation.EXTRACT, ContainerTransferJournal.ResourceKind.GRANULAR_SVQ,
+				SolidVolume.SVQ_PER_BV, 0L, cell,
+				(requested, base) -> scoopGranularIntoCell(service, region, cell, requested, 6),
+				(rawAfter, before) -> rawAfter);
+		if (!transaction.outcome().transferred()) return transaction.outcome();
+		player.setItemInHand(hand, transaction.outcome().stack());
+		player.getInventory().setChanged();
+		service.sendSnapshotFor(player, region);
+		return transaction.outcome();
+	}
+
 	private static TransferOutcome pourController(
 			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held,
 			long volumeNanos, int[] cell
@@ -362,13 +463,32 @@ return outcome;
 			TransferExecutor executor,
 			FinalItemResolver finalItemResolver
 	) {
+		return executeControllerTransfer(service, region, level, actor, beforeStack, operation,
+				ContainerTransferJournal.ResourceKind.FLUID_NANOS, requestedNanos, baseVolumeNanos,
+				cell, executor, finalItemResolver);
+	}
+
+	private static ControllerTransfer executeControllerTransfer(
+			FluidSimulationService service,
+			FluidRegion region,
+			ServerLevel level,
+			ContainerTransferJournal.Actor actor,
+			ItemStack beforeStack,
+			ContainerTransferJournal.Operation operation,
+			ContainerTransferJournal.ResourceKind resourceKind,
+			long requestedAmount,
+			long baseAmount,
+			int[] cell,
+			TransferExecutor executor,
+			FinalItemResolver finalItemResolver
+	) {
 		if (service.hasPendingContainerTransfer(region.id())) {
 			return new ControllerTransfer(
 					new TransferOutcome(false, operation == ContainerTransferJournal.Operation.INSERT, beforeStack,
 							"区域存在未完成容器转移 WAL，已锁定"),
 					null);
 		}
-		if (requestedNanos <= 0L) return new ControllerTransfer(null, null);
+		if (requestedAmount <= 0L) return new ControllerTransfer(null, null);
 		try {
 			service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.BEFORE_PREPARE);
 		} catch (RuntimeException injected) {
@@ -383,11 +503,9 @@ return outcome;
 		} catch (IllegalArgumentException invalidItem) {
 			return failedControllerTransfer(operation, beforeStack, invalidItem.getMessage(), null);
 		}
-		ContainerTransferJournal prepared = new ContainerTransferJournal(
-				transactionId, region.id(), level.dimension().identifier().toString(),
-				baseGeneration, targetGeneration, operation, requestedNanos, actor,
-				beforeFingerprint, beforeFingerprint, ContainerTransferJournal.Phase.PREPARED
-		);
+		ContainerTransferJournal prepared = transferJournal(transactionId, region, level, baseGeneration,
+				targetGeneration, operation, resourceKind, requestedAmount, actor, beforeFingerprint,
+				beforeFingerprint, -1L, ContainerTransferJournal.Phase.PREPARED);
 		try {
 			service.containerTransfers().write(prepared);
 		} catch (IOException exception) {
@@ -405,7 +523,7 @@ return outcome;
 		service.markContainerTransferSolverDirty(transactionId);
 		TransferOutcome rawOutcome;
 		try {
-			rawOutcome = executor.execute(requestedNanos, baseVolumeNanos);
+			rawOutcome = executor.execute(requestedAmount, baseAmount);
 		} catch (RuntimeException transferFailure) {
 			String failure = "容器转移执行异常，区域已锁定；重启后从 base checkpoint 恢复："
 					+ transferFailure.getMessage();
@@ -444,7 +562,7 @@ return outcome;
 			staged = service.stageControllerRegionCheckpoint(region, targetGeneration);
 		} catch (IOException | RuntimeException stagingFailure) {
 			region.setPaused(true);
-			region.setAvailabilityFailure("容器转移 v3 checkpoint staging 失败，区域已锁定；重启后恢复："
+			region.setAvailabilityFailure("容器转移 checkpoint staging 失败，区域已锁定；重启后恢复："
 					+ stagingFailure.getMessage());
 			return failedControllerTransfer(operation, beforeStack, region.availabilityFailure(), transactionId);
 		}
@@ -455,12 +573,10 @@ return outcome;
 			service.lockContainerTransferRegion(region, failure);
 			return failedControllerTransfer(operation, beforeStack, failure, transactionId);
 		}
-		ContainerTransferJournal committed = new ContainerTransferJournal(
-				transactionId, region.id(), level.dimension().identifier().toString(),
-				baseGeneration, targetGeneration, operation, rawOutcome.volumeNanos(), actor,
+		ContainerTransferJournal committed = transferJournal(transactionId, region, level, baseGeneration,
+				targetGeneration, operation, resourceKind, rawOutcome.resourceAmount(), actor,
 				beforeFingerprint, afterFingerprint, staged.manifestChecksum(),
-				ContainerTransferJournal.Phase.REGION_COMMITTED
-		);
+				ContainerTransferJournal.Phase.REGION_COMMITTED);
 		try {
 			service.containerTransfers().write(committed);
 		} catch (IOException exception) {
@@ -514,7 +630,24 @@ return outcome;
 
 
 		return new ControllerTransfer(new TransferOutcome(true, operation == ContainerTransferJournal.Operation.INSERT,
-				finalAfter, rawOutcome.message(), rawOutcome.volumeNanos()), transactionId);
+				finalAfter, rawOutcome.message(), rawOutcome.resourceAmount()), transactionId);
+	}
+
+	private static ContainerTransferJournal transferJournal(
+			UUID transactionId, FluidRegion region, ServerLevel level, long baseGeneration, long targetGeneration,
+			ContainerTransferJournal.Operation operation, ContainerTransferJournal.ResourceKind resourceKind,
+			long amount, ContainerTransferJournal.Actor actor,
+			ContainerTransferJournal.ItemFingerprint before, ContainerTransferJournal.ItemFingerprint after,
+			long checksum, ContainerTransferJournal.Phase phase
+	) {
+		if (resourceKind == ContainerTransferJournal.ResourceKind.GRANULAR_SVQ) {
+			return ContainerTransferJournal.granular(transactionId, region.id(),
+					level.dimension().identifier().toString(), baseGeneration, targetGeneration,
+					operation, amount, actor, before, after, checksum, phase);
+		}
+		return new ContainerTransferJournal(transactionId, region.id(),
+				level.dimension().identifier().toString(), baseGeneration, targetGeneration,
+				operation, amount, actor, before, after, checksum, phase);
 	}
 
 	private static ControllerTransfer failedControllerTransfer(
@@ -729,6 +862,61 @@ String.format("已舀取 %.2f%% 桶（%d 种材料）",
 100.0 * taken / ContainerFluidLedger.NANOS_PER_BLOCK, mixture.components().size()), taken);
 }
 
+	private static TransferOutcome pourGranularIntoCell(
+			FluidSimulationService service, FluidRegion region, int[] cell, GranularContents contents,
+			int maxRadius, boolean externalSource
+	) {
+		GranularTransferLedger ledger;
+		try {
+			ledger = contents.toLedger(service.granularRegistry(),
+					service.chemistryFeatureEnabled() ? service.chemicalRegistry() : null);
+		} catch (RuntimeException invalid) {
+			return new TransferOutcome(false, true, contents.toStack(),
+					"颗粒容器 registry 或账本不合法：" + invalid.getMessage());
+		}
+		FlipFluidDomain.GranularInsertion inserted = region.domain().tryInsertExactGranular(
+				cell[0], cell[1], cell[2], ledger, maxRadius, externalSource);
+		if (!inserted.inserted()) {
+			return new TransferOutcome(false, true, contents.toStack(),
+					"空间、颗粒 parcel 或组成预算不足，未能注入：" + inserted.failure());
+		}
+		if (inserted.solidVolumeSvq() != contents.totalSolidVolumeSvq()
+				|| Double.doubleToRawLongBits(inserted.mass()) != Double.doubleToRawLongBits(contents.totalMass())) {
+			throw new IllegalStateException("颗粒注入没有结算完整独立库存");
+		}
+		region.wakeForActivity();
+		return new TransferOutcome(true, true, new ItemStack(RealWaterItems.GRANULAR_CONTAINER),
+				String.format("已注入 %.2f%% 干式容器（%d 种材料）",
+						100.0 * inserted.solidVolumeSvq() / SolidVolume.SVQ_PER_BV, contents.groups().size()),
+				inserted.solidVolumeSvq());
+	}
+
+	private static TransferOutcome scoopGranularIntoCell(
+			FluidSimulationService service, FluidRegion region, int[] cell, long capacitySvq, int maxRadius
+	) {
+		GranularContents[] planned = new GranularContents[1];
+		FlipFluidDomain.GranularExtraction extracted = region.domain().tryExtractExactGranular(
+				cell[0], cell[1], cell[2], capacitySvq, maxRadius, false, ledger -> {
+					try {
+						planned[0] = GranularContents.fromLedger(ledger, service.granularRegistry(),
+								service.chemistryFeatureEnabled() ? service.chemicalRegistry() : null);
+						return true;
+					} catch (RuntimeException unrepresentable) {
+						return false;
+					}
+				});
+		if (!extracted.transferred() || planned[0] == null) {
+			return new TransferOutcome(false, false, new ItemStack(RealWaterItems.GRANULAR_CONTAINER),
+					"准星处没有可访问且能由当前干式容器表示的颗粒库存");
+		}
+		long taken = extracted.ledger().totalSolidVolumeSvq();
+		if (taken != planned[0].totalSolidVolumeSvq()) throw new IllegalStateException("颗粒舀取 SVQ 账本不一致");
+		region.wakeForActivity();
+		return new TransferOutcome(true, false, planned[0].toStack(),
+				String.format("已舀取 %.2f%% 干式容器（%d 种材料）",
+						100.0 * taken / SolidVolume.SVQ_PER_BV, planned[0].groups().size()), taken);
+	}
+
 	/** Deterministic largest-remainder-style apportionment; component masses remain exact doubles. */
 	static FluidMixture mixtureFromExtraction(
 			FlipFluidDomain domain, java.util.List<FlipFluidDomain.MaterialPortion> portions, long capacityNanos
@@ -807,7 +995,9 @@ String.format("已舀取 %.2f%% 桶（%d 种材料）",
 		POUR,
 		SCOOP,
 		MATERIAL_POUR,
-		MATERIAL_SCOOP
+		MATERIAL_SCOOP,
+		GRANULAR_POUR,
+		GRANULAR_SCOOP
 	}
 
 	private static TransferKind classify(ItemStack stack) {
@@ -821,6 +1011,11 @@ String.format("已舀取 %.2f%% 桶（%d 种材料）",
 			return (stack.get(RealWaterComponents.CHEMICAL_CONTENTS) != null || MaterialBucketItem.mixture(stack) != null)
 					? TransferKind.MATERIAL_POUR
 					: TransferKind.NONE;
+		}
+		if (stack.getItem() instanceof GranularContainerItem) {
+			if (GranularContainerItem.isEmpty(stack)) return TransferKind.GRANULAR_SCOOP;
+			return GranularContainerItem.unvalidatedContents(stack) == null
+					? TransferKind.NONE : TransferKind.GRANULAR_POUR;
 		}
 		return TransferKind.NONE;
 	}
@@ -903,7 +1098,7 @@ String.format("已舀取 %.2f%% 桶（%d 种材料）",
 				: hitPos.relative(hit.getDirection());
 	}
 
-	private record TransferOutcome(boolean transferred, boolean filled, ItemStack stack, String message, long volumeNanos) {
+	private record TransferOutcome(boolean transferred, boolean filled, ItemStack stack, String message, long resourceAmount) {
 		private TransferOutcome(boolean transferred, boolean filled, ItemStack stack, String message) {
 			this(transferred, filled, stack, message, 0L);
 		}
