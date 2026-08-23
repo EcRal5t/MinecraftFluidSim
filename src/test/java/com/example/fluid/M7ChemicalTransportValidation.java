@@ -25,6 +25,7 @@ public final class M7ChemicalTransportValidation {
 		validateSplitAndIndicator();
 		validateMergeAndCompaction();
 		validateCollisionDisplacement();
+		validateChemicalHandoff();
 		System.out.println("M7 chemical transport gate passed: packed budget, same-cell reaction, separation and reseeding conservation");
 	}
 
@@ -145,6 +146,25 @@ public final class M7ChemicalTransportValidation {
 		int indicated = 0;
 		for (int marker = 0; marker < domain.particleCount(); marker++) if (domain.chemicalParcels().indicator(marker)) indicated++;
 		check(indicated > 0, "collision restoration lost indicator provenance");
+	}
+
+	private static void validateChemicalHandoff() {
+		FlipFluidDomain source = domainWithCell(1, 1, 1, 0.25F);
+		source.setMarkerChemical(0, Map.of(
+				BuiltinChemicalDefinitions.H2O, 123_457L,
+				BuiltinChemicalDefinitions.NACL, 999L), true);
+		FlipChemicalParticleState state = source.exportChemicalParticleState();
+		FlipFluidDomain restored = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+		restored.restoreChemicalParticleState(state, CHEMISTRY);
+		check(Arrays.equals(source.chemicalParcels().speciesTotals(source.particleCount()),
+				restored.chemicalParcels().speciesTotals(restored.particleCount())),
+				"chemical handoff changed species inventory");
+		check(Arrays.equals(state.copyIndicator(), restored.exportChemicalParticleState().copyIndicator()),
+				"chemical handoff changed indicator bits");
+		check(state.mixtures().equals(restored.exportChemicalParticleState().mixtures()),
+				"chemical handoff changed canonical mixture table");
+		check(state.residualLedgerBits() == restored.exportChemicalParticleState().residualLedgerBits(),
+				"chemical handoff changed raw residual ledger");
 	}
 
 	private static FlipFluidDomain domainWithCell(int x, int y, int z, float volume) {

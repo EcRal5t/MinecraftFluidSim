@@ -1,11 +1,14 @@
 package com.example.simulation.persistence;
 
 import com.example.fluid.FlipFluidDomain;
+import com.example.fluid.FlipChemicalParticleState;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipParticleState;
 import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FluidMaterial;
 import com.example.fluid.FluidSolverConfig;
+import com.example.chemistry.BuiltinChemicalDefinitions;
+import com.example.chemistry.ChemicalRegistry;
 import com.example.simulation.FluidRegion;
 import com.example.simulation.FluidRegionLifecycle;
 import com.example.simulation.FluidRegionManager;
@@ -46,12 +49,71 @@ public final class FluidRegionPersistenceValidation {
 	public static void main(String[] args) throws Exception {
 		validateExactRoundTripAndMetadataUnload();
 		validateMaterialV2Codec();
+		validateChemicalV3Codec();
 		validateUnknownExtensions();
 		validateFaultMatrix();
 		validateStagedGeneration();
 		validateCorruptionAndAtomicMoveFailure();
 		validateWorldConfig();
 		System.out.println("Fluid region persistence validation passed");
+	}
+
+	private static void validateChemicalV3Codec() throws Exception {
+		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		FluidRegion region = populatedRegion(new UUID(19L, 20L));
+		FlipParticleState pure = region.domain().exportParticleState();
+		double[] mass = new double[pure.particleCount()];
+		int[] material = new int[pure.particleCount()];
+		double totalMass = 0.0;
+		float[] positionVolume = pure.copyPositionVolume();
+		for (int marker = 0; marker < pure.particleCount(); marker++) {
+			mass[marker] = positionVolume[marker * 4 + 3] * BuiltinFluidMaterials.WATER.referenceDensity();
+			totalMass += mass[marker];
+		}
+		region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
+				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(),
+				totalMass, BuiltinFluidMaterials.M3_PALETTE, positionVolume, pure.copyParticleVelocities(),
+				pure.copySolidMask(), mass, material));
+		region.domain().bindChemistry(chemistry);
+		region.domain().setMarkerChemical(0, java.util.Map.of(
+				BuiltinChemicalDefinitions.H2O, 123_457L,
+				BuiltinChemicalDefinitions.NACL, 9_999L), true);
+		FlipChemicalParticleState expected = region.domain().exportChemicalParticleState();
+		RegionState state = RegionState.captureChemical(region, 1L);
+		state.validate();
+		expectIOException(state::reconstruct, "chemical v3 was silently reconstructed as pure water");
+		expectIOException(state::reconstructMaterial, "chemical v3 was silently reconstructed as material v2");
+		assertChemicalStateEquals(expected, state.reconstructChemical(chemistry));
+
+		RegionStateCodec codec = new RegionStateCodec();
+		RegionManifest manifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
+		require(manifest.equals(state.manifest())
+				&& Arrays.equals(manifest.chemicalSpeciesTotals(), state.manifest().chemicalSpeciesTotals()),
+				"region-state v3 manifest did not round-trip");
+		for (RegionSectionState section : state.sections()) {
+			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
+			require(decoded.formatVersion() == 3
+					&& Arrays.equals(decoded.chemicalMixtureIndex(), section.chemicalMixtureIndex())
+					&& Arrays.equals(decoded.indicator(), section.indicator())
+					&& Arrays.equals(decoded.chemicalSpeciesTotals(), section.chemicalSpeciesTotals())
+					&& decoded.chemicalResidualLedgerBits() == section.chemicalResidualLedgerBits(),
+					"region-state v3 section did not round-trip");
+		}
+
+		Path root = Files.createTempDirectory(Path.of("."), "chemical-v3-");
+		RegionStateFiles files = new RegionStateFiles(root, chemistry);
+		files.publish(state);
+		assertChemicalStateEquals(expected, files.read(region.id()).reconstructChemical(chemistry));
+
+		CompoundTag missingIndicator = codec.encodeSection(state.sections().stream()
+				.filter(section -> section.markerCount() > 0).findFirst().orElseThrow());
+		missingIndicator.remove("Indicator");
+		expectIOException(() -> codec.decodeSection(missingIndicator), "v3 section missing indicator bits was accepted");
+		CompoundTag foreignFingerprint = codec.encodeManifest(state.manifest());
+		foreignFingerprint.putString("RegistryFingerprint", "0".repeat(64));
+		RegionManifest foreign = signedManifest(codec.decodeManifest(foreignFingerprint));
+		expectIOException(() -> new RegionState(foreign, state.sections()).reconstructChemical(chemistry),
+				"foreign v3 registry was accepted without authoritative reconstruction");
 	}
 
 	private static void validateMaterialV2Codec() throws Exception {
@@ -206,7 +268,7 @@ public final class FluidRegionPersistenceValidation {
 		require(codec.decodeSection(codec.encodeSection(signedSection)).extensions().equals(List.of(extension)),
 				"unknown length-delimited section extension was not retained");
 		CompoundTag future = codec.encodeManifest(signed);
-		future.putInt("Version", 3); future.putInt("Palette", 3);
+		future.putInt("Version", 4); future.putInt("Palette", 4);
 		expectIOException(() -> codec.decodeManifest(future), "unknown region-state version was accepted");
 	}
 
@@ -298,8 +360,10 @@ public final class FluidRegionPersistenceValidation {
 		Path root = Files.createTempDirectory(Path.of("."), "config-");
 		FluidServerConfig defaults = FluidServerConfig.loadOrCreate(root);
 		require(!defaults.controllersEnabled() && !defaults.materialsEnabled() && !defaults.worldBridgeEnabled()
+				&& !defaults.chemistryEnabled()
 				&& defaults.limits().maximumRegions() == 4, "safe default config changed");
-		FluidServerConfig enabled = defaults.withControllersEnabled(true).withMaterialsEnabled(true).withWorldBridgeEnabled(true);
+		FluidServerConfig enabled = defaults.withControllersEnabled(true).withMaterialsEnabled(true)
+				.withWorldBridgeEnabled(true).withChemistryEnabled(true);
 		enabled.save(root);
 		require(FluidServerConfig.loadOrCreate(root).equals(enabled), "world-local config did not round-trip");
 
@@ -315,7 +379,8 @@ public final class FluidRegionPersistenceValidation {
 				maximumTotalMarkers=294912
 				""");
 		FluidServerConfig legacy = FluidServerConfig.loadOrCreate(legacyRoot);
-		require(legacy.controllersEnabled() && !legacy.materialsEnabled() && !legacy.worldBridgeEnabled(),
+		require(legacy.controllersEnabled() && !legacy.materialsEnabled() && !legacy.worldBridgeEnabled()
+				&& !legacy.chemistryEnabled(),
 				"v1 config did not migrate with materials and world bridge safely disabled");
 
 		Path v2Root = Files.createTempDirectory(Path.of("."), "config-v2-");
@@ -331,10 +396,37 @@ public final class FluidRegionPersistenceValidation {
 				maximumTotalMarkers=294912
 				""");
 		FluidServerConfig v2 = FluidServerConfig.loadOrCreate(v2Root);
-		require(v2.materialsEnabled() && !v2.worldBridgeEnabled(), "v2 config did not keep the world bridge safely disabled");
+		require(v2.materialsEnabled() && !v2.worldBridgeEnabled() && !v2.chemistryEnabled(),
+				"v2 config did not keep newer features safely disabled");
 		Files.writeString(FluidServerConfig.path(v2Root), Files.readString(FluidServerConfig.path(v2Root))
 				.replace("formatVersion=2", "formatVersion=3"));
 		expectIOException(() -> FluidServerConfig.loadOrCreate(v2Root), "v3 config without the worldBridgeEnabled key was accepted");
+
+		Path v3Root = Files.createTempDirectory(Path.of("."), "config-v3-");
+		Files.createDirectories(FluidServerConfig.path(v3Root).getParent());
+		Files.writeString(FluidServerConfig.path(v3Root), """
+				formatVersion=3
+				controllersEnabled=true
+				materialsEnabled=true
+				worldBridgeEnabled=true
+				maximumRegions=4
+				maximumCellsPerRegion=9216
+				maximumMarkersPerRegion=73728
+				maximumTotalCells=36864
+				maximumTotalMarkers=294912
+				""");
+		require(!FluidServerConfig.loadOrCreate(v3Root).chemistryEnabled(),
+				"v3 config did not keep chemistry safely disabled");
+		Files.writeString(FluidServerConfig.path(v3Root), Files.readString(FluidServerConfig.path(v3Root))
+				.replace("formatVersion=3", "formatVersion=4"));
+		expectIOException(() -> FluidServerConfig.loadOrCreate(v3Root),
+				"v4 config without chemistryEnabled was accepted");
+		Files.writeString(FluidServerConfig.path(v3Root), Files.readString(FluidServerConfig.path(v3Root))
+				+ "chemistryEnabled=true\n");
+		Files.writeString(FluidServerConfig.path(v3Root), Files.readString(FluidServerConfig.path(v3Root))
+				.replace("materialsEnabled=true", "materialsEnabled=false"));
+		expectIOException(() -> FluidServerConfig.loadOrCreate(v3Root),
+				"chemistry=true/materials=false config was accepted");
 
 		Files.writeString(FluidServerConfig.path(root), "formatVersion=99\ncontrollersEnabled=false\n");
 		expectIOException(() -> FluidServerConfig.loadOrCreate(root), "unknown config version was silently replaced");
@@ -416,6 +508,18 @@ public final class FluidRegionPersistenceValidation {
 		require(Arrays.equals(expected.copySolidMask(), actual.copySolidMask()), "material solid mask changed across persistence");
 	}
 
+	private static void assertChemicalStateEquals(FlipChemicalParticleState expected, FlipChemicalParticleState actual) {
+		assertMaterialStateEquals(expected.materials(), actual.materials());
+		require(expected.registryFingerprint().equals(actual.registryFingerprint())
+				&& expected.speciesPalette().equals(actual.speciesPalette())
+				&& expected.mixtures().equals(actual.mixtures())
+				&& Arrays.equals(expected.copyMarkerMixtureIndex(), actual.copyMarkerMixtureIndex())
+				&& Arrays.equals(expected.copyIndicator(), actual.copyIndicator())
+				&& Arrays.equals(expected.copySpeciesTotals(), actual.copySpeciesTotals())
+				&& expected.residualLedgerBits() == actual.residualLedgerBits(),
+				"chemical handoff changed across persistence");
+	}
+
 	private static void assertMigratedWaterState(
 			FlipParticleState pure, FlipMaterialParticleState migrated, List<FluidMaterial> palette
 	) {
@@ -449,7 +553,8 @@ public final class FluidRegionPersistenceValidation {
 				section.sectionY(), section.sectionZ(), section.localStartX(), section.localStartY(), section.localStartZ(),
 				section.sizeX(), section.sizeY(), section.sizeZ(), section.markerOrdinals(), section.positionVolume(),
 				section.velocities(), section.markerMass(), section.materialPaletteIndex(), section.solidMask(), section.extensions(),
-				RegionStateIntegrity.sectionChecksum(section));
+				section.chemicalMixtureIndex(), section.indicator(), section.chemicalSpeciesTotals(),
+				section.chemicalResidualLedgerBits(), RegionStateIntegrity.sectionChecksum(section));
 	}
 
 	private static RegionManifest signedManifest(RegionManifest manifest) {
@@ -457,7 +562,8 @@ public final class FluidRegionPersistenceValidation {
 				manifest.networkGeneration(), manifest.origin(), manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 				manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(), manifest.totalVolumeBits(),
 				manifest.materialPalette(), manifest.totalMassBits(), manifest.materialLedgers(), manifest.sections(), manifest.extensions(),
-				RegionStateIntegrity.manifestChecksum(manifest));
+				manifest.registryFingerprint(), manifest.auScale(), manifest.speciesPalette(), manifest.chemicalMixtures(),
+				manifest.chemicalSpeciesTotals(), manifest.chemicalResidualLedgerBits(), RegionStateIntegrity.manifestChecksum(manifest));
 	}
 
 	private static double sumVolumes(float[] positionVolume) {

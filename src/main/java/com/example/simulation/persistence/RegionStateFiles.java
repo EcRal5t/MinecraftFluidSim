@@ -1,5 +1,6 @@
 package com.example.simulation.persistence;
 
+import com.example.chemistry.ChemicalRegistry;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
@@ -32,15 +33,25 @@ public final class RegionStateFiles {
 	private final Path root;
 	private final RegionStateCodec codec;
 	private final AtomicMover atomicMover;
+	private final ChemicalRegistry chemicalRegistry;
 
 	public RegionStateFiles(Path worldRoot) {
-		this(worldRoot, RegionStateFiles::atomicMove);
+		this(worldRoot, RegionStateFiles::atomicMove, null);
+	}
+
+	public RegionStateFiles(Path worldRoot, ChemicalRegistry chemicalRegistry) {
+		this(worldRoot, RegionStateFiles::atomicMove, chemicalRegistry);
 	}
 
 	RegionStateFiles(Path worldRoot, AtomicMover atomicMover) {
+		this(worldRoot, atomicMover, null);
+	}
+
+	RegionStateFiles(Path worldRoot, AtomicMover atomicMover, ChemicalRegistry chemicalRegistry) {
 		this.root = worldRoot.toAbsolutePath().normalize().resolve("realwater").resolve("region-state");
 		this.codec = new RegionStateCodec();
 		this.atomicMover = atomicMover;
+		this.chemicalRegistry = chemicalRegistry;
 	}
 
 	public long publish(RegionState state) throws IOException {
@@ -301,9 +312,13 @@ public final class RegionStateFiles {
 		return state;
 	}
 
-	private static void validateReconstruction(RegionState state) throws IOException {
+	private void validateReconstruction(RegionState state) throws IOException {
 		if (state.manifest().formatVersion() == 1) state.reconstruct();
 		else if (state.manifest().formatVersion() == 2) state.reconstructMaterial();
+		else if (state.manifest().formatVersion() == 3) {
+			if (chemicalRegistry == null) throw new IOException("region-state v3 verification requires the authoritative chemical registry");
+			state.reconstructChemical(chemicalRegistry);
+		}
 		else throw new IOException("Unsupported region-state version " + state.manifest().formatVersion());
 	}
 

@@ -29,9 +29,15 @@ final class RegionStateIntegrity {
 			writeInts(out, section.markerOrdinals());
 			writeFloats(out, section.positionVolume());
 			writeFloats(out, section.velocities());
-			if (section.formatVersion() == 2) {
+			if (section.formatVersion() >= 2) {
 				writeDoubles(out, section.markerMass());
 				writeInts(out, section.materialPaletteIndex());
+			}
+			if (section.formatVersion() == 3) {
+				writeInts(out, section.chemicalMixtureIndex());
+				writeBytes(out, section.indicator());
+				writeLongs(out, section.chemicalSpeciesTotals());
+				out.writeLong(section.chemicalResidualLedgerBits());
 			}
 			writeBytes(out, section.solidMask());
 			writeExtensions(out, section.extensions());
@@ -51,7 +57,7 @@ final class RegionStateIntegrity {
 			writeFootprint(out, manifest.footprint());
 			out.writeInt(manifest.totalMarkerCount());
 			out.writeLong(manifest.totalVolumeBits());
-			if (manifest.formatVersion() == 2) {
+			if (manifest.formatVersion() >= 2) {
 				writeMaterials(out, manifest.materialPalette());
 				out.writeLong(manifest.totalMassBits());
 				out.writeInt(manifest.materialLedgers().size());
@@ -59,13 +65,29 @@ final class RegionStateIntegrity {
 					out.writeInt(ledger.markerCount()); out.writeLong(ledger.volumeBits()); out.writeLong(ledger.massBits());
 				}
 			}
+			if (manifest.formatVersion() == 3) {
+				out.writeUTF(manifest.registryFingerprint());
+				out.writeLong(manifest.auScale());
+				out.writeInt(manifest.speciesPalette().size());
+				for (String species : manifest.speciesPalette()) out.writeUTF(species);
+				out.writeInt(manifest.chemicalMixtures().size());
+				for (com.example.fluid.FlipChemicalParticleState.StableMixture mixture : manifest.chemicalMixtures()) {
+					out.writeInt(mixture.components().size());
+					for (com.example.fluid.FlipChemicalParticleState.Component component : mixture.components()) {
+						out.writeUTF(component.speciesId()); out.writeLong(component.amountQuanta());
+					}
+					out.writeLong(mixture.massResidualBits());
+				}
+				writeLongs(out, manifest.chemicalSpeciesTotals());
+				out.writeLong(manifest.chemicalResidualLedgerBits());
+			}
 			List<RegionManifest.SectionDescriptor> descriptors = new ArrayList<>(manifest.sections());
 			descriptors.sort(Comparator.naturalOrder());
 			out.writeInt(descriptors.size());
 			for (RegionManifest.SectionDescriptor descriptor : descriptors) {
 				out.writeInt(descriptor.sectionX()); out.writeInt(descriptor.sectionY()); out.writeInt(descriptor.sectionZ());
 				out.writeInt(descriptor.markerCount()); out.writeLong(descriptor.volumeBits());
-				if (manifest.formatVersion() == 2) out.writeLong(descriptor.massBits());
+				if (manifest.formatVersion() >= 2) out.writeLong(descriptor.massBits());
 				out.writeLong(descriptor.checksum());
 			}
 			writeExtensions(out, manifest.extensions());
@@ -157,6 +179,11 @@ final class RegionStateIntegrity {
 	private static void writeDoubles(DataOutputStream out, double[] values) throws IOException {
 		out.writeInt(values.length);
 		for (double value : values) out.writeLong(Double.doubleToRawLongBits(value));
+	}
+
+	private static void writeLongs(DataOutputStream out, long[] values) throws IOException {
+		out.writeInt(values.length);
+		for (long value : values) out.writeLong(value);
 	}
 
 	private static void writeBytes(DataOutputStream out, byte[] values) throws IOException {

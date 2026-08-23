@@ -1,6 +1,8 @@
 package com.example.simulation.persistence;
 
 import com.example.fluid.FluidMaterial;
+import com.example.fluid.FlipChemicalParticleState;
+import com.example.chemistry.ChemicalLimits;
 import com.example.fluid.FluidSolverConfig;
 import com.example.simulation.FluidRegion;
 import com.example.simulation.FluidRegionLifecycle;
@@ -8,6 +10,7 @@ import com.example.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.resources.Identifier;
 
@@ -16,13 +19,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
-/** Strict, version-dispatched NBT codec for region-state v1 and v2. */
+/** Strict, version-dispatched NBT codec for region-state v1 through v3. */
 final class RegionStateCodec {
 	static final int MIN_FORMAT_VERSION = 1;
-	static final int MAX_FORMAT_VERSION = 2;
+	static final int MAX_FORMAT_VERSION = 3;
 	static final int MAX_MATERIALS = 256;
 	static final int MAX_SECTIONS = 4_096;
 
@@ -37,17 +41,25 @@ final class RegionStateCodec {
 		root.put("Footprint", encodeFootprint(manifest.footprint()));
 		root.putInt("MarkerCount", manifest.totalMarkerCount());
 		root.putLong("VolumeBits", manifest.totalVolumeBits());
-		if (manifest.formatVersion() == 2) {
+		if (manifest.formatVersion() >= 2) {
 			root.put("Materials", encodeMaterials(manifest.materialPalette()));
 			root.putLong("MassBits", manifest.totalMassBits());
 			root.put("MaterialLedgers", encodeMaterialLedgers(manifest.materialLedgers()));
+		}
+		if (manifest.formatVersion() == 3) {
+			root.putString("RegistryFingerprint", manifest.registryFingerprint());
+			root.putLong("AuScale", manifest.auScale());
+			root.put("SpeciesPalette", encodeStrings(manifest.speciesPalette()));
+			root.put("ChemicalMixtures", encodeChemicalMixtures(manifest.chemicalMixtures(), manifest.speciesPalette()));
+			root.putLongArray("ChemicalSpeciesTotals", manifest.chemicalSpeciesTotals());
+			root.putLong("ChemicalResidualBits", manifest.chemicalResidualLedgerBits());
 		}
 		ListTag sections = new ListTag();
 		for (RegionManifest.SectionDescriptor descriptor : manifest.sections()) {
 			CompoundTag section = new CompoundTag();
 			section.putInt("X", descriptor.sectionX()); section.putInt("Y", descriptor.sectionY()); section.putInt("Z", descriptor.sectionZ());
 			section.putInt("MarkerCount", descriptor.markerCount()); section.putLong("VolumeBits", descriptor.volumeBits());
-			if (manifest.formatVersion() == 2) section.putLong("MassBits", descriptor.massBits());
+			if (manifest.formatVersion() >= 2) section.putLong("MassBits", descriptor.massBits());
 			section.putLong("Checksum", descriptor.checksum()); sections.add(section);
 		}
 		root.put("Sections", sections);
@@ -72,7 +84,7 @@ final class RegionStateCodec {
 			require(section, "X", Tag.TAG_INT); require(section, "Y", Tag.TAG_INT); require(section, "Z", Tag.TAG_INT);
 			require(section, "MarkerCount", Tag.TAG_INT); require(section, "VolumeBits", Tag.TAG_LONG); require(section, "Checksum", Tag.TAG_LONG);
 			long massBits = 0L;
-			if (identity.version() == 2) {
+			if (identity.version() >= 2) {
 				require(section, "MassBits", Tag.TAG_LONG);
 				massBits = section.getLongOr("MassBits", 0L);
 			}
@@ -83,12 +95,29 @@ final class RegionStateCodec {
 		List<FluidMaterial> materials = List.of();
 		long totalMassBits = 0L;
 		List<RegionManifest.MaterialLedger> materialLedgers = List.of();
-		if (identity.version() == 2) {
+		if (identity.version() >= 2) {
 			require(root, "Materials", Tag.TAG_LIST); require(root, "MassBits", Tag.TAG_LONG);
 			require(root, "MaterialLedgers", Tag.TAG_LIST);
 			materials = decodeMaterials(root.getListOrEmpty("Materials"));
 			totalMassBits = root.getLongOr("MassBits", 0L);
 			materialLedgers = decodeMaterialLedgers(root.getListOrEmpty("MaterialLedgers"));
+		}
+		String registryFingerprint = "";
+		long auScale = 0L;
+		List<String> speciesPalette = List.of();
+		List<FlipChemicalParticleState.StableMixture> chemicalMixtures = List.of();
+		long[] chemicalSpeciesTotals = new long[0];
+		long chemicalResidualBits = 0L;
+		if (identity.version() == 3) {
+			require(root, "RegistryFingerprint", Tag.TAG_STRING); require(root, "AuScale", Tag.TAG_LONG);
+			require(root, "SpeciesPalette", Tag.TAG_LIST); require(root, "ChemicalMixtures", Tag.TAG_LIST);
+			require(root, "ChemicalSpeciesTotals", Tag.TAG_LONG_ARRAY); require(root, "ChemicalResidualBits", Tag.TAG_LONG);
+			registryFingerprint = root.getStringOr("RegistryFingerprint", "");
+			auScale = root.getLongOr("AuScale", -1L);
+			speciesPalette = decodeStrings(root.getListOrEmpty("SpeciesPalette"), ChemicalLimits.MAX_SPECIES, "species palette");
+			chemicalMixtures = decodeChemicalMixtures(root.getListOrEmpty("ChemicalMixtures"), speciesPalette);
+			chemicalSpeciesTotals = root.getLongArray("ChemicalSpeciesTotals").orElseThrow();
+			chemicalResidualBits = root.getLongOr("ChemicalResidualBits", 0L);
 		}
 		try {
 			return new RegionManifest(identity.version(), identity.id(), identity.dimension(), identity.generation(), root.getLongOr("NetworkGeneration", -1L),
@@ -96,7 +125,8 @@ final class RegionStateCodec {
 					decodeConfig(root.getCompoundOrEmpty("Solver")), root.getLongOr("MarkerBudget", -1L),
 					decodeRuntime(root.getCompoundOrEmpty("Runtime")), decodeFootprint(root.getCompoundOrEmpty("Footprint")),
 					root.getIntOr("MarkerCount", -1), root.getLongOr("VolumeBits", 0L), materials, totalMassBits, materialLedgers, sections,
-					decodeExtensions(root.getListOrEmpty("Extensions")), root.getLongOr("Checksum", -1L));
+					decodeExtensions(root.getListOrEmpty("Extensions")), registryFingerprint, auScale, speciesPalette,
+					chemicalMixtures, chemicalSpeciesTotals, chemicalResidualBits, root.getLongOr("Checksum", -1L));
 		} catch (IllegalArgumentException exception) {
 			throw new IOException("Invalid region manifest: " + exception.getMessage(), exception);
 		}
@@ -110,9 +140,15 @@ final class RegionStateCodec {
 		root.putIntArray("Ordinals", section.markerOrdinals());
 		root.putIntArray("PositionVolumeBits", floatBits(section.positionVolume()));
 		root.putIntArray("VelocityBits", floatBits(section.velocities()));
-		if (section.formatVersion() == 2) {
+		if (section.formatVersion() >= 2) {
 			root.putLongArray("MassBits", doubleBits(section.markerMass()));
 			root.putIntArray("MaterialPaletteIndices", section.materialPaletteIndex());
+		}
+		if (section.formatVersion() == 3) {
+			root.putIntArray("ChemicalMixtureIndices", section.chemicalMixtureIndex());
+			root.putByteArray("Indicator", section.indicator());
+			root.putLongArray("ChemicalSpeciesTotals", section.chemicalSpeciesTotals());
+			root.putLong("ChemicalResidualBits", section.chemicalResidualLedgerBits());
 		}
 		root.putByteArray("Solids", section.solidMask());
 		root.put("Extensions", encodeExtensions(section.extensions()));
@@ -130,10 +166,20 @@ final class RegionStateCodec {
 		require(root, "Extensions", Tag.TAG_LIST); require(root, "Checksum", Tag.TAG_LONG);
 		double[] markerMass = new double[0];
 		int[] materialPaletteIndex = new int[0];
-		if (identity.version() == 2) {
+		if (identity.version() >= 2) {
 			require(root, "MassBits", Tag.TAG_LONG_ARRAY); require(root, "MaterialPaletteIndices", Tag.TAG_INT_ARRAY);
 			markerMass = doubles(root.getLongArray("MassBits").orElseThrow());
 			materialPaletteIndex = root.getIntArray("MaterialPaletteIndices").orElseThrow();
+		}
+		int[] chemicalMixtureIndex = new int[0]; byte[] indicator = new byte[0];
+		long[] chemicalSpeciesTotals = new long[0]; long chemicalResidualBits = 0L;
+		if (identity.version() == 3) {
+			require(root, "ChemicalMixtureIndices", Tag.TAG_INT_ARRAY); require(root, "Indicator", Tag.TAG_BYTE_ARRAY);
+			require(root, "ChemicalSpeciesTotals", Tag.TAG_LONG_ARRAY); require(root, "ChemicalResidualBits", Tag.TAG_LONG);
+			chemicalMixtureIndex = root.getIntArray("ChemicalMixtureIndices").orElseThrow();
+			indicator = root.getByteArray("Indicator").orElseThrow();
+			chemicalSpeciesTotals = root.getLongArray("ChemicalSpeciesTotals").orElseThrow();
+			chemicalResidualBits = root.getLongOr("ChemicalResidualBits", 0L);
 		}
 		try {
 			return new RegionSectionState(identity.version(), identity.id(), identity.dimension(), identity.generation(),
@@ -143,7 +189,8 @@ final class RegionStateCodec {
 					root.getIntArray("Ordinals").orElseThrow(), floats(root.getIntArray("PositionVolumeBits").orElseThrow()),
 					floats(root.getIntArray("VelocityBits").orElseThrow()), markerMass, materialPaletteIndex,
 					root.getByteArray("Solids").orElseThrow(),
-					decodeExtensions(root.getListOrEmpty("Extensions")), root.getLongOr("Checksum", -1L));
+					decodeExtensions(root.getListOrEmpty("Extensions")), chemicalMixtureIndex, indicator,
+					chemicalSpeciesTotals, chemicalResidualBits, root.getLongOr("Checksum", -1L));
 		} catch (IllegalArgumentException exception) {
 			throw new IOException("Invalid region section: " + exception.getMessage(), exception);
 		}
@@ -195,6 +242,76 @@ final class RegionStateCodec {
 			} catch (IllegalArgumentException exception) {
 				throw new IOException("Invalid material palette entry", exception);
 			}
+		}
+		return List.copyOf(result);
+	}
+
+	private static ListTag encodeStrings(List<String> values) {
+		ListTag list = new ListTag();
+		for (String value : values) list.add(StringTag.valueOf(value));
+		return list;
+	}
+
+	private static List<String> decodeStrings(ListTag list, int maximum, String label) throws IOException {
+		if (list.isEmpty() || list.size() > maximum) throw new IOException("Invalid " + label + " size");
+		List<String> result = new ArrayList<>(list.size());
+		Set<String> unique = new HashSet<>();
+		for (int i = 0; i < list.size(); i++) {
+			Tag value = list.get(i);
+			if (!(value instanceof StringTag text)) throw new IOException("Invalid " + label + " entry");
+			String decoded = text.asString().orElseThrow();
+			if (!unique.add(decoded)) throw new IOException("Duplicate " + label + " entry");
+			result.add(decoded);
+		}
+		return List.copyOf(result);
+	}
+
+	private static ListTag encodeChemicalMixtures(
+			List<FlipChemicalParticleState.StableMixture> mixtures, List<String> speciesPalette
+	) {
+		Map<String, Integer> indices = new java.util.HashMap<>();
+		for (int i = 0; i < speciesPalette.size(); i++) indices.put(speciesPalette.get(i), i);
+		ListTag list = new ListTag();
+		for (FlipChemicalParticleState.StableMixture mixture : mixtures) {
+			CompoundTag tag = new CompoundTag();
+			int[] species = new int[mixture.components().size()]; long[] amounts = new long[species.length];
+			for (int entry = 0; entry < species.length; entry++) {
+				Integer palette = indices.get(mixture.components().get(entry).speciesId());
+				if (palette == null) throw new IllegalArgumentException("Mixture references species outside stable palette");
+				species[entry] = palette; amounts[entry] = mixture.components().get(entry).amountQuanta();
+			}
+			tag.putIntArray("Species", species); tag.putLongArray("Amounts", amounts);
+			tag.putLong("ResidualBits", mixture.massResidualBits()); list.add(tag);
+		}
+		return list;
+	}
+
+	private static List<FlipChemicalParticleState.StableMixture> decodeChemicalMixtures(
+			ListTag list, List<String> speciesPalette
+	) throws IOException {
+		if (list.isEmpty() || list.size() > Integer.MAX_VALUE - 1) throw new IOException("Invalid chemical mixture table size");
+		List<FlipChemicalParticleState.StableMixture> result = new ArrayList<>(list.size());
+		for (int i = 0; i < list.size(); i++) {
+			CompoundTag tag = compoundAt(list, i, "chemical mixture");
+			require(tag, "Species", Tag.TAG_INT_ARRAY); require(tag, "Amounts", Tag.TAG_LONG_ARRAY);
+			require(tag, "ResidualBits", Tag.TAG_LONG);
+			int[] species = tag.getIntArray("Species").orElseThrow();
+			long[] amounts = tag.getLongArray("Amounts").orElseThrow();
+			if (species.length == 0 || species.length != amounts.length
+					|| species.length > ChemicalLimits.MAX_SPECIES_PER_PARCEL) throw new IOException("Invalid chemical mixture entries");
+			List<FlipChemicalParticleState.Component> components = new ArrayList<>(species.length);
+			for (int entry = 0; entry < species.length; entry++) {
+				if (species[entry] < 0 || species[entry] >= speciesPalette.size() || amounts[entry] <= 0L) {
+					throw new IOException("Invalid chemical mixture palette index/amount");
+				}
+				components.add(new FlipChemicalParticleState.Component(speciesPalette.get(species[entry]), amounts[entry]));
+			}
+			try { result.add(new FlipChemicalParticleState.StableMixture(components, tag.getLongOr("ResidualBits", 0L))); }
+			catch (IllegalArgumentException invalid) { throw new IOException("Invalid chemical mixture", invalid); }
+		}
+		for (int i = 1; i < result.size(); i++) {
+			// The handoff constructor performs the authoritative canonical-order check as well.
+			if (result.get(i - 1).equals(result.get(i))) throw new IOException("Duplicate chemical mixture table entry");
 		}
 		return List.copyOf(result);
 	}

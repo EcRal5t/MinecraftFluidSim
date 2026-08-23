@@ -2,7 +2,9 @@ package com.example.simulation.persistence;
 
 import com.example.fluid.FlipParticleState;
 import com.example.fluid.FlipMaterialParticleState;
+import com.example.fluid.FlipChemicalParticleState;
 import com.example.fluid.FluidMaterial;
+import com.example.chemistry.ChemicalRegistry;
 import com.example.simulation.FluidRegion;
 
 import java.io.IOException;
@@ -25,7 +27,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		requireCaptureable(region, checkpointGeneration);
 		FlipParticleState particles = region.domain().exportParticleState();
 		return capture(region, checkpointGeneration, new CapturedParticles(1, List.of(), particles.copyPositionVolume(),
-				particles.copyParticleVelocities(), particles.copySolidMask(), new double[0], new int[0]));
+				particles.copyParticleVelocities(), particles.copySolidMask(), new double[0], new int[0],
+				"", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L));
 	}
 
 	/** Captures an explicitly material-bound CPU domain without routing it through the pure-water handoff. */
@@ -34,7 +37,18 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		FlipMaterialParticleState particles = region.domain().exportMaterialParticleState();
 		return capture(region, checkpointGeneration, new CapturedParticles(2, particles.materials(), particles.copyPositionVolume(),
 				particles.copyParticleVelocities(), particles.copySolidMask(), particles.copyParticleMass(),
-				particles.copyMaterialPaletteIndex()));
+				particles.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L));
+	}
+
+	public static RegionState captureChemical(FluidRegion region, long checkpointGeneration) throws IOException {
+		requireCaptureable(region, checkpointGeneration);
+		FlipChemicalParticleState particles = region.domain().exportChemicalParticleState();
+		FlipMaterialParticleState materials = particles.materials();
+		return capture(region, checkpointGeneration, new CapturedParticles(3, materials.materials(),
+				materials.copyPositionVolume(), materials.copyParticleVelocities(), materials.copySolidMask(),
+				materials.copyParticleMass(), materials.copyMaterialPaletteIndex(), particles.registryFingerprint(),
+				particles.speciesPalette(), particles.mixtures(), particles.copyMarkerMixtureIndex(),
+				particles.copyIndicator(), particles.copySpeciesTotals(), particles.residualLedgerBits()));
 	}
 
 	private static RegionState capture(FluidRegion region, long checkpointGeneration, CapturedParticles particles) throws IOException {
@@ -87,22 +101,35 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					int[] savedOrdinals = new int[ordinals.size()];
 					float[] savedPositions = new float[ordinals.size() * 4];
 					float[] savedVelocities = new float[ordinals.size() * 3];
-					double[] savedMass = particles.formatVersion() == 2 ? new double[ordinals.size()] : new double[0];
-					int[] savedMaterials = particles.formatVersion() == 2 ? new int[ordinals.size()] : new int[0];
+					double[] savedMass = particles.formatVersion() >= 2 ? new double[ordinals.size()] : new double[0];
+					int[] savedMaterials = particles.formatVersion() >= 2 ? new int[ordinals.size()] : new int[0];
+					int[] savedMixtures = particles.formatVersion() == 3 ? new int[ordinals.size()] : new int[0];
+					byte[] savedIndicator = particles.formatVersion() == 3 ? new byte[ordinals.size()] : new byte[0];
 					for (int i = 0; i < ordinals.size(); i++) {
 						int ordinal = ordinals.get(i);
 						savedOrdinals[i] = ordinal;
 						System.arraycopy(positionVolume, ordinal * 4, savedPositions, i * 4, 4);
 						System.arraycopy(velocities, ordinal * 3, savedVelocities, i * 3, 3);
-						if (particles.formatVersion() == 2) {
+						if (particles.formatVersion() >= 2) {
 							savedMass[i] = particles.markerMass()[ordinal];
 							savedMaterials[i] = particles.materialPaletteIndex()[ordinal];
 						}
+						if (particles.formatVersion() == 3) {
+							savedMixtures[i] = particles.chemicalMixtureIndex()[ordinal];
+							savedIndicator[i] = particles.indicator()[ordinal];
+						}
+					}
+					long[] sectionSpecies = particles.formatVersion() == 3
+							? chemicalTotals(particles, savedMixtures) : new long[0];
+					double sectionResidual = 0.0;
+					if (particles.formatVersion() == 3) for (int mixture : savedMixtures) {
+						sectionResidual += Double.longBitsToDouble(particles.chemicalMixtures().get(mixture).massResidualBits());
 					}
 					RegionSectionState unsigned = new RegionSectionState(particles.formatVersion(), region.id(), region.dimension().identifier().toString(),
 							checkpointGeneration, sectionX, sectionY, sectionZ, startX, startY, startZ,
 							sliceX, sliceY, sliceZ, savedOrdinals, savedPositions, savedVelocities, savedMass, savedMaterials,
-							solidSlice, List.of(), 0L);
+							solidSlice, List.of(), savedMixtures, savedIndicator, sectionSpecies,
+							particles.formatVersion() == 3 ? Double.doubleToRawLongBits(sectionResidual) : 0L, 0L);
 					sectionStates.add(withChecksum(unsigned));
 				}
 			}
@@ -113,15 +140,18 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		for (RegionSectionState section : sectionStates) {
 			descriptors.add(new RegionManifest.SectionDescriptor(section.sectionX(), section.sectionY(), section.sectionZ(),
 					section.markerCount(), Double.doubleToRawLongBits(sumVolumes(section.positionVolume())),
-					section.formatVersion() == 2 ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L, section.checksum()));
+					section.formatVersion() >= 2 ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L, section.checksum()));
 		}
 		List<RegionManifest.MaterialLedger> materialLedgers = materialLedgers(particles);
 		RegionManifest unsigned = new RegionManifest(particles.formatVersion(), region.id(), region.dimension().identifier().toString(), checkpointGeneration,
 				region.generation(), region.origin(), region.sizeX(), region.sizeY(), region.sizeZ(), region.solverConfig(),
 				region.reservedMarkerCapacity(), region.persistedRuntime(), region.footprint(), particles.particleCount(),
 				Double.doubleToRawLongBits(sumVolumes(positionVolume)), particles.materialPalette(),
-				particles.formatVersion() == 2 ? Double.doubleToRawLongBits(sum(particles.markerMass())) : 0L,
-				materialLedgers, descriptors, List.of(), 0L);
+				particles.formatVersion() >= 2 ? Double.doubleToRawLongBits(sum(particles.markerMass())) : 0L,
+				materialLedgers, descriptors, List.of(), particles.registryFingerprint(),
+				particles.formatVersion() == 3 ? com.example.chemistry.ChemicalLimits.QUANTA_PER_AU : 0L,
+				particles.speciesPalette(), particles.chemicalMixtures(), particles.chemicalSpeciesTotals(),
+				particles.chemicalResidualLedgerBits(), 0L);
 		return new RegionState(withChecksum(unsigned), sectionStates);
 	}
 
@@ -208,13 +238,33 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				particles.materialPaletteIndex());
 	}
 
+	public FlipChemicalParticleState reconstructChemical(ChemicalRegistry registry) throws IOException {
+		if (manifest.formatVersion() != 3) throw new IOException("Only region-state v3 has chemical state");
+		if (registry == null || !manifest.registryFingerprint().equals(registry.fingerprint())
+				|| !manifest.speciesPalette().equals(registry.species().stream()
+				.map(com.example.chemistry.ChemicalSpecies::id).toList())) {
+			throw new IOException("Region-state v3 registry fingerprint/palette mismatch");
+		}
+		ReconstructedParticles particles = reconstructParticles();
+		FlipMaterialParticleState materials = new FlipMaterialParticleState(
+				manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize(),
+				manifest.totalMarkerCount(), manifest.totalVolume(), manifest.totalMass(), manifest.materialPalette(),
+				particles.positionVolume(), particles.velocities(), particles.solidMask(), particles.markerMass(),
+				particles.materialPaletteIndex());
+		return new FlipChemicalParticleState(materials, registry, manifest.chemicalMixtures(),
+				particles.chemicalMixtureIndex(), particles.indicator(), manifest.chemicalSpeciesTotals(),
+				manifest.chemicalResidualLedgerBits());
+	}
+
 	private ReconstructedParticles reconstructParticles() throws IOException {
 		validate();
 		int count = manifest.totalMarkerCount();
 		float[] positions = new float[Math.multiplyExact(count, 4)];
 		float[] velocities = new float[Math.multiplyExact(count, 3)];
-		double[] markerMass = manifest.formatVersion() == 2 ? new double[count] : new double[0];
-		int[] materialPaletteIndex = manifest.formatVersion() == 2 ? new int[count] : new int[0];
+		double[] markerMass = manifest.formatVersion() >= 2 ? new double[count] : new double[0];
+		int[] materialPaletteIndex = manifest.formatVersion() >= 2 ? new int[count] : new int[0];
+		int[] chemicalMixtureIndex = manifest.formatVersion() == 3 ? new int[count] : new int[0];
+		byte[] indicator = manifest.formatVersion() == 3 ? new byte[count] : new byte[0];
 		byte[] solids = new byte[Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ())];
 		boolean[] seenMarkers = new boolean[count];
 		boolean[] seenSolids = new boolean[solids.length];
@@ -224,15 +274,21 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			float[] sectionVelocities = section.velocities();
 			double[] sectionMass = section.markerMass();
 			int[] sectionMaterials = section.materialPaletteIndex();
+			int[] sectionMixtures = section.chemicalMixtureIndex();
+			byte[] sectionIndicator = section.indicator();
 			for (int i = 0; i < ordinals.length; i++) {
 				int ordinal = ordinals[i];
 				if (ordinal < 0 || ordinal >= count || seenMarkers[ordinal]) throw new IOException("Duplicate or invalid marker ordinal");
 				seenMarkers[ordinal] = true;
 				System.arraycopy(sectionPositions, i * 4, positions, ordinal * 4, 4);
 				System.arraycopy(sectionVelocities, i * 3, velocities, ordinal * 3, 3);
-				if (manifest.formatVersion() == 2) {
+				if (manifest.formatVersion() >= 2) {
 					markerMass[ordinal] = sectionMass[i];
 					materialPaletteIndex[ordinal] = sectionMaterials[i];
+				}
+				if (manifest.formatVersion() == 3) {
+					chemicalMixtureIndex[ordinal] = sectionMixtures[i];
+					indicator[ordinal] = sectionIndicator[i];
 				}
 			}
 			byte[] slice = section.solidMask();
@@ -251,7 +307,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		for (boolean seen : seenSolids) if (!seen) throw new IOException("Incomplete solid-mask coverage");
 		double volume = sumVolumes(positions);
 		if (Double.doubleToRawLongBits(volume) != manifest.totalVolumeBits()) throw new IOException("Marker volume ledger mismatch");
-		return new ReconstructedParticles(positions, velocities, solids, markerMass, materialPaletteIndex);
+		return new ReconstructedParticles(positions, velocities, solids, markerMass, materialPaletteIndex,
+				chemicalMixtureIndex, indicator);
 	}
 
 	public void validate() throws IOException {
@@ -275,7 +332,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			validateSectionOwnership(section);
 			RegionManifest.SectionDescriptor descriptor = expected.get(section.key());
 			long volumeBits = Double.doubleToRawLongBits(sumVolumes(section.positionVolume()));
-			long massBits = manifest.formatVersion() == 2 ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L;
+			long massBits = manifest.formatVersion() >= 2 ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L;
 			if (descriptor == null || descriptor.markerCount() != section.markerCount()
 					|| descriptor.volumeBits() != volumeBits || descriptor.massBits() != massBits
 					|| descriptor.checksum() != section.checksum()) {
@@ -286,7 +343,59 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		if (markerCount != manifest.totalMarkerCount() || markerCount > manifest.reservedMarkerCapacity()) {
 			throw new IOException("Manifest marker count/budget mismatch");
 		}
-		if (manifest.formatVersion() == 2) validateMaterialLedgers();
+		if (manifest.formatVersion() >= 2) validateMaterialLedgers();
+		if (manifest.formatVersion() == 3) validateChemicalLedgers();
+	}
+
+	private void validateChemicalLedgers() throws IOException {
+		int count = manifest.totalMarkerCount();
+		int[] mixtureByOrdinal = new int[count];
+		boolean[] seen = new boolean[count];
+		Map<String, Integer> speciesHandles = new HashMap<>();
+		for (int species = 0; species < manifest.speciesPalette().size(); species++) {
+			if (speciesHandles.put(manifest.speciesPalette().get(species), species) != null) {
+				throw new IOException("Duplicate stable species palette entry");
+			}
+		}
+		for (RegionSectionState section : sections) {
+			long[] sectionTotals = new long[manifest.speciesPalette().size()];
+			double sectionResidual = 0.0;
+			int[] ordinals = section.markerOrdinals(), mixtures = section.chemicalMixtureIndex();
+			for (int marker = 0; marker < ordinals.length; marker++) {
+				int ordinal = ordinals[marker], mixtureIndex = mixtures[marker];
+				if (ordinal < 0 || ordinal >= count || seen[ordinal]
+						|| mixtureIndex < 0 || mixtureIndex >= manifest.chemicalMixtures().size()) {
+					throw new IOException("Invalid v3 marker ordinal/mixture index");
+				}
+				seen[ordinal] = true; mixtureByOrdinal[ordinal] = mixtureIndex;
+				FlipChemicalParticleState.StableMixture mixture = manifest.chemicalMixtures().get(mixtureIndex);
+				sectionResidual += Double.longBitsToDouble(mixture.massResidualBits());
+				for (FlipChemicalParticleState.Component component : mixture.components()) {
+					Integer species = speciesHandles.get(component.speciesId());
+					if (species == null) throw new IOException("Mixture references species outside stable palette");
+					sectionTotals[species] = Math.addExact(sectionTotals[species], component.amountQuanta());
+				}
+			}
+			if (!Arrays.equals(sectionTotals, section.chemicalSpeciesTotals())
+					|| Double.doubleToRawLongBits(sectionResidual) != section.chemicalResidualLedgerBits()) {
+				throw new IOException("Section chemical ledger mismatch");
+			}
+		}
+		long[] totals = new long[manifest.speciesPalette().size()];
+		double residual = 0.0;
+		for (int ordinal = 0; ordinal < count; ordinal++) {
+			if (!seen[ordinal]) throw new IOException("Missing v3 marker ordinal");
+			FlipChemicalParticleState.StableMixture mixture = manifest.chemicalMixtures().get(mixtureByOrdinal[ordinal]);
+			residual += Double.longBitsToDouble(mixture.massResidualBits());
+			for (FlipChemicalParticleState.Component component : mixture.components()) {
+				int species = speciesHandles.get(component.speciesId());
+				totals[species] = Math.addExact(totals[species], component.amountQuanta());
+			}
+		}
+		if (!Arrays.equals(totals, manifest.chemicalSpeciesTotals())
+				|| Double.doubleToRawLongBits(residual) != manifest.chemicalResidualLedgerBits()) {
+			throw new IOException("Manifest chemical ledger mismatch");
+		}
 	}
 
 	private void validateMaterialLedgers() throws IOException {
@@ -365,7 +474,9 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		return new RegionSectionState(section.formatVersion(), section.regionId(), section.dimensionId(), section.checkpointGeneration(),
 				section.sectionX(), section.sectionY(), section.sectionZ(), section.localStartX(), section.localStartY(), section.localStartZ(),
 				section.sizeX(), section.sizeY(), section.sizeZ(), section.markerOrdinals(), section.positionVolume(),
-				section.velocities(), section.markerMass(), section.materialPaletteIndex(), section.solidMask(), section.extensions(), checksum);
+				section.velocities(), section.markerMass(), section.materialPaletteIndex(), section.solidMask(), section.extensions(),
+				section.chemicalMixtureIndex(), section.indicator(), section.chemicalSpeciesTotals(),
+				section.chemicalResidualLedgerBits(), checksum);
 	}
 
 	private static RegionManifest withChecksum(RegionManifest manifest) {
@@ -374,7 +485,9 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				manifest.origin(), manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 				manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(),
 				manifest.totalVolumeBits(), manifest.materialPalette(), manifest.totalMassBits(), manifest.materialLedgers(),
-				manifest.sections(), manifest.extensions(), checksum);
+				manifest.sections(), manifest.extensions(), manifest.registryFingerprint(), manifest.auScale(),
+				manifest.speciesPalette(), manifest.chemicalMixtures(), manifest.chemicalSpeciesTotals(),
+				manifest.chemicalResidualLedgerBits(), checksum);
 	}
 
 	private static List<RegionManifest.MaterialLedger> materialLedgers(CapturedParticles particles) {
@@ -408,6 +521,23 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		return result;
 	}
 
+	private static long[] chemicalTotals(CapturedParticles particles, int[] mixtureIndices) {
+		long[] totals = new long[particles.speciesPalette().size()];
+		Map<String, Integer> handles = new HashMap<>();
+		for (int species = 0; species < particles.speciesPalette().size(); species++) {
+			handles.put(particles.speciesPalette().get(species), species);
+		}
+		for (int mixtureIndex : mixtureIndices) {
+			FlipChemicalParticleState.StableMixture mixture = particles.chemicalMixtures().get(mixtureIndex);
+			for (FlipChemicalParticleState.Component component : mixture.components()) {
+				Integer handle = handles.get(component.speciesId());
+				if (handle == null) throw new IllegalArgumentException("Chemical mixture references species outside palette");
+				totals[handle] = Math.addExact(totals[handle], component.amountQuanta());
+			}
+		}
+		return totals;
+	}
+
 	private record CapturedParticles(
 			int formatVersion,
 			List<FluidMaterial> materialPalette,
@@ -415,7 +545,14 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			float[] velocities,
 			byte[] solidMask,
 			double[] markerMass,
-			int[] materialPaletteIndex
+			int[] materialPaletteIndex,
+			String registryFingerprint,
+			List<String> speciesPalette,
+			List<FlipChemicalParticleState.StableMixture> chemicalMixtures,
+			int[] chemicalMixtureIndex,
+			byte[] indicator,
+			long[] chemicalSpeciesTotals,
+			long chemicalResidualLedgerBits
 	) {
 		int particleCount() { return positionVolume.length / 4; }
 	}
@@ -425,6 +562,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			float[] velocities,
 			byte[] solidMask,
 			double[] markerMass,
-			int[] materialPaletteIndex
+			int[] materialPaletteIndex,
+			int[] chemicalMixtureIndex,
+			byte[] indicator
 	) { }
 }

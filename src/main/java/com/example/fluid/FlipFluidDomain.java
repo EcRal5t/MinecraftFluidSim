@@ -329,6 +329,30 @@ public final class FlipFluidDomain {
 		gridDirty = true;
 	}
 
+	/** Restores a validated v3 chemical handoff against the authoritative world registry. */
+	public void restoreChemicalParticleState(FlipChemicalParticleState state, ChemicalRegistry registry) {
+		if (state == null || registry == null) throw new IllegalArgumentException("Chemical restore state/registry is missing");
+		if (!state.registryFingerprint().equals(registry.fingerprint())
+				|| !state.speciesPalette().equals(registry.species().stream()
+				.map(com.example.chemistry.ChemicalSpecies::id).toList())) {
+			throw new IllegalArgumentException("Chemical handoff registry identity mismatch");
+		}
+		restoreMaterialParticleState(state.materials());
+		ChemicalParcelStore restored = new ChemicalParcelStore(registry, maximumParticleCount, cellCount);
+		int[] tableIndex = state.copyMarkerMixtureIndex();
+		byte[] indicator = state.copyIndicator();
+		for (int marker = 0; marker < particleCount; marker++) {
+			ChemicalMixtureRecord mixture = state.mixtures().get(tableIndex[marker]).toRuntime(registry);
+			restored.requireCompatible(mixture, materialRegistry.material(particleMaterialHandle[marker]).id(), indicator[marker] != 0);
+			restored.assign(marker, mixture, indicator[marker] != 0);
+		}
+		if (!Arrays.equals(restored.speciesTotals(particleCount), state.copySpeciesTotals())) {
+			throw new IllegalArgumentException("Restored chemical species ledger mismatch");
+		}
+		chemicalParcels = restored;
+		chemicalPreviousCells = new int[maximumParticleCount];
+	}
+
 	/** Exports an immutable CPU marker/velocity/solid handoff without serializing reconstructed density. */
 	public FlipParticleState exportParticleState() {
 		if (hasNonDefaultMaterialState()) {
@@ -392,6 +416,19 @@ public final class FlipFluidDomain {
 		float volume = setSolidMicroMaskInternal(x, y, z, mask, displaced);
 		if (displaced != null) chemicalParcels.recordEscapedSink(displaced.build());
 		return volume;
+	}
+
+	/** Exports canonical stable-ID chemical state; runtime mixture handles never cross this boundary. */
+	public FlipChemicalParticleState exportChemicalParticleState() {
+		if (chemicalParcels == null) throw new IllegalStateException("Chemical particle handoff requires chemistry");
+		ArrayList<ChemicalMixtureRecord> mixtures = new ArrayList<>(particleCount);
+		byte[] indicator = new byte[particleCount];
+		for (int marker = 0; marker < particleCount; marker++) {
+			mixtures.add(chemicalParcels.record(marker));
+			indicator[marker] = chemicalParcels.indicator(marker) ? (byte) 1 : 0;
+		}
+		return FlipChemicalParticleState.capture(
+				exportMaterialParticleState(), chemicalParcels.registry(), mixtures, indicator);
 	}
 
 	/** Collision edit that returns the complete parcel ledger for conservative nearby restoration. */

@@ -10,10 +10,11 @@ import java.util.Map;
 public final class M7ChemistryValidation {
 	private M7ChemistryValidation() { }
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws Exception {
 		boolean fast = args.length > 0 && args[0].equals("--fast");
 		validateRationalsAndCodec();
 		validateCanonicalRegistry();
+		validateRegistrySnapshot();
 		validateInvalidDefinitions();
 		validateStrongElectrolytes();
 		validateAcidBase();
@@ -49,6 +50,37 @@ public final class M7ChemistryValidation {
 				"registry canonical bytes depend on file order");
 		check(reference.fingerprint().equals(shuffled.fingerprint()), "registry fingerprint depends on file order");
 		check(reference.fingerprint().matches("[0-9a-f]{64}"), "fingerprint is not SHA-256 hex");
+	}
+
+	private static void validateRegistrySnapshot() throws Exception {
+		java.nio.file.Path root = java.nio.file.Files.createTempDirectory("realwater-chemistry-registry-");
+		try {
+			ChemicalRegistryStore store = new ChemicalRegistryStore(root);
+			ChemicalRegistryStore.LoadResult first = store.loadOrCreate(BuiltinChemicalDefinitions.REGISTRY);
+			check(first.created() && !first.definitionMismatch(), "first registry snapshot was not atomically published");
+			ChemicalRegistryStore.LoadResult second = store.loadOrCreate(BuiltinChemicalDefinitions.REGISTRY);
+			check(!second.created() && !second.definitionMismatch(), "stable registry snapshot reported mismatch");
+			List<ChemicalSpecies> changedSpecies = new ArrayList<>(BuiltinChemicalDefinitions.species());
+			ChemicalSpecies original = changedSpecies.getFirst();
+			changedSpecies.set(0, new ChemicalSpecies(original.id(), original.composition(), original.charge(),
+					original.massPerAu(), original.baseArgb() ^ 0x00010101));
+			ChemicalRegistry changed = new ChemicalRegistry(
+					changedSpecies, BuiltinChemicalDefinitions.phases(), BuiltinChemicalDefinitions.reactions());
+			ChemicalRegistryStore.LoadResult mismatch = store.loadOrCreate(changed);
+			check(mismatch.definitionMismatch(), "data definition change did not report snapshot mismatch");
+			check(mismatch.registry().fingerprint().equals(BuiltinChemicalDefinitions.REGISTRY.fingerprint()),
+					"data definition change reinterpreted authoritative inventory");
+			java.nio.file.Files.writeString(root.resolve("realwater").resolve("chemistry").resolve("foreign.bin"), "foreign");
+			expectFailure(() -> {
+				try { store.read(); } catch (java.io.IOException expected) { throw new RuntimeException(expected); }
+			}, "unknown registry store content was ignored");
+		} finally {
+			try (var paths = java.nio.file.Files.walk(root)) {
+				for (java.nio.file.Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+					java.nio.file.Files.deleteIfExists(path);
+				}
+			}
+		}
 	}
 
 	private static void validateInvalidDefinitions() {
