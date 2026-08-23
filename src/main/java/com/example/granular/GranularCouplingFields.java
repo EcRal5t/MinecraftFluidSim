@@ -22,12 +22,22 @@ public final class GranularCouplingFields {
 	}
 
 	public void rebuild(GranularParcelStore parcels, GranularDepositStore deposits) {
+		rebuild(parcels, deposits, (index, parcel) -> new Position(parcel.x(), parcel.y(), parcel.z()));
+	}
+
+	public void rebuild(GranularParcelStore parcels, GranularDepositStore deposits, PositionSource positions) {
 		if (parcels == null || deposits == null || deposits.cellCount() != cellCount) {
 			throw new IllegalArgumentException("Granular coupling inventory dimensions differ");
 		}
+		if (positions == null) throw new IllegalArgumentException("Granular position source is missing");
 		Arrays.fill(solidSvq, 0L);
 		deposits.forEachCell((cell, volume, porosity) -> solidSvq[cell] = Math.addExact(solidSvq[cell], volume));
-		for (int parcel = 0; parcel < parcels.count(); parcel++) distribute(parcels.parcel(parcel));
+		for (int parcel = 0; parcel < parcels.count(); parcel++) {
+			GranularParcelStore.Parcel inventory = parcels.parcel(parcel);
+			Position position = positions.position(parcel, inventory);
+			if (position == null) throw new IllegalStateException("Granular position source returned null");
+			distribute(position.x(), position.y(), position.z(), inventory.solidVolumeSvq());
+		}
 		long expected = Math.addExact(parcels.totalSolidVolumeSvq(), deposits.totalSolidVolumeSvq());
 		long actual = totalSolidSvq();
 		if (actual != expected) throw new IllegalStateException("Granular occupancy does not re-sum to exact inventory");
@@ -67,8 +77,11 @@ public final class GranularCouplingFields {
 		return Math.max(0.0F, Math.min(1.0F, effectiveOpenCellVolume(cell, geometricOpen) / geometricOpen));
 	}
 
-	private void distribute(GranularParcelStore.Parcel parcel) {
-		double gx = parcel.x() / cellSize - 0.5, gy = parcel.y() / cellSize - 0.5, gz = parcel.z() / cellSize - 0.5;
+	private void distribute(float positionX, float positionY, float positionZ, long parcelSvq) {
+		if (!(Float.isFinite(positionX) && Float.isFinite(positionY) && Float.isFinite(positionZ)) || parcelSvq <= 0L) {
+			throw new IllegalArgumentException("Granular occupancy parcel is invalid");
+		}
+		double gx = positionX / cellSize - 0.5, gy = positionY / cellSize - 0.5, gz = positionZ / cellSize - 0.5;
 		int x0 = (int) Math.floor(gx), y0 = (int) Math.floor(gy), z0 = (int) Math.floor(gz);
 		double fx = gx - x0, fy = gy - y0, fz = gz - z0;
 		int candidates = 0;
@@ -85,13 +98,13 @@ public final class GranularCouplingFields {
 		if (!(weightSum > 0.0)) throw new IllegalStateException("Granular parcel has no in-domain occupancy support");
 		long assigned = 0L;
 		for (int candidate = 0; candidate < candidates; candidate++) {
-			double exact = parcel.solidVolumeSvq() * candidateWeight[candidate] / weightSum;
+			double exact = parcelSvq * candidateWeight[candidate] / weightSum;
 			long share = (long) Math.floor(exact);
 			candidateShare[candidate] = share;
 			candidateRemainder[candidate] = exact - share;
 			assigned = Math.addExact(assigned, share);
 		}
-		long remaining = parcel.solidVolumeSvq() - assigned;
+		long remaining = parcelSvq - assigned;
 		while (remaining-- > 0L) {
 			int best = 0;
 			for (int candidate = 1; candidate < candidates; candidate++) {
@@ -110,5 +123,18 @@ public final class GranularCouplingFields {
 
 	private void requireCell(int cell) {
 		if (cell < 0 || cell >= cellCount) throw new IllegalArgumentException("Unknown granular coupling cell " + cell);
+	}
+
+	public record Position(float x, float y, float z) {
+		public Position {
+			if (!(Float.isFinite(x) && Float.isFinite(y) && Float.isFinite(z))) {
+				throw new IllegalArgumentException("Granular coupling position must be finite");
+			}
+		}
+	}
+
+	@FunctionalInterface
+	public interface PositionSource {
+		Position position(int index, GranularParcelStore.Parcel parcel);
 	}
 }

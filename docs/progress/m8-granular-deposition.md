@@ -49,3 +49,20 @@ moving-solid capacity source 与 pressure/free-surface/air 共享同一耦合几
 最近门 `runCpuValidation -PcpuValidation=granular` 再次通过：heavy/light 终速匹配 root oracle、neutral horizontal
 drag 的 parcel+fluid 动量闭合、parcel 跨格前后 `sum(ΔS)=0`；full granular 本体 0.080 秒。仍未触碰共享 fluid
 路径，所以未追加旧 selector。
+
+## M8.2a CPU solver 联合几何（2026-08-24）
+
+- `FlipFluidDomain` 可显式绑定 granular+liquid registry；0.5 m cell/SVQ、carrier palette 和一次绑定身份均严格校验，
+  无服务入口时不会自动创建颗粒状态。
+- 每个 substep 在 P2G 后执行 buoyancy/drag 与等量 MAC 反冲量，granular 最大速度进入同一 CFL；独立小半径
+  `FlipGranularCollision` 先生成 CCD preview，pressure 成功后才提交对应位置。
+- current/preview 两代 `GranularCouplingFields` 分别提供 exact occupancy；free-surface 使用 current capacity，pressure
+  RHS/matrix/preconditioner/projection 使用 preview 的同一对称 face void，moving-solid target 使用 exact `ΔSVQ/dt`。
+- water/material/chemical insert capacity、surface-tension fraction 和 volume drift 统一扣 skeleton；runtime gas scanner 的
+  available volume 同样扣 skeleton，但 topology/库存格式不变。
+- full sealed region 的外部 solid insert 在修改前拒绝；有空气的 fixture 步进不改变一枚 liquid marker volume、solid
+  SVQ 或独立 mass。
+
+最近门先跑 `granular` 通过（80 个集成 solver steps，0.318 秒）；因实际修改共享 pressure/cut-cell/air 路径，随后用
+`--rerun-tasks` 跑 `granular,free-surface,cut-cell,gas-liquid`，4 域 runner 47.232 秒全部通过，其中长期 gas-liquid
+44.247 秒。gate-off 的既有 free-surface/cut-cell/gas-liquid 结果未回退。

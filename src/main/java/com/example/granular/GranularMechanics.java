@@ -11,10 +11,17 @@ public final class GranularMechanics {
 			GranularParcelStore parcels, GranularRegistry registry, Environment environment,
 			double cellSizeMeters, double dt
 	) {
+		return stepVelocities(parcels, registry, environment, cellSizeMeters, GRAVITY, dt);
+	}
+
+	public static StepStats stepVelocities(
+			GranularParcelStore parcels, GranularRegistry registry, Environment environment,
+			double cellSizeMeters, double gravity, double dt
+	) {
 		if (parcels == null || registry == null || environment == null) {
 			throw new IllegalArgumentException("Granular mechanics input is missing");
 		}
-		if (!(Double.isFinite(cellSizeMeters) && cellSizeMeters > 0.0
+		if (!(Double.isFinite(cellSizeMeters) && cellSizeMeters > 0.0 && Double.isFinite(gravity) && gravity >= 0.0
 				&& Double.isFinite(dt) && dt > 0.0)) {
 			throw new IllegalArgumentException("Granular mechanics scale and dt must be finite and positive");
 		}
@@ -28,7 +35,7 @@ public final class GranularMechanics {
 			double fraction = clamp(fluid.submergedFraction(), 0.0, 1.0);
 			double oldX = parcel.velocityX(), oldY = parcel.velocityY(), oldZ = parcel.velocityZ();
 			double newX = oldX, newY = oldY, newZ = oldZ;
-			double externalAccelerationY = -GRAVITY;
+			double externalAccelerationY = -gravity;
 			double dragRate = 0.0;
 			if (fluid.hasLiquid() && fraction > 0.0) {
 				submerged++;
@@ -36,7 +43,7 @@ public final class GranularMechanics {
 				double solidVolumeM3 = parcel.solidVolumeSvq() / (double) SolidVolume.SVQ_PER_BV;
 				double massKg = parcel.mass() * cellVolumeM3;
 				if (!(Double.isFinite(massKg) && massKg > 0.0)) throw new IllegalStateException("Invalid parcel mass scale");
-				externalAccelerationY += fluid.density() * solidVolumeM3 * fraction * GRAVITY / massKg;
+				externalAccelerationY += fluid.density() * solidVolumeM3 * fraction * gravity / massKg;
 				double slipX = oldX - fluid.velocityX(), slipY = oldY - fluid.velocityY(), slipZ = oldZ - fluid.velocityZ();
 				double slip = Math.sqrt(slipX * slipX + slipY * slipY + slipZ * slipZ);
 				double diameter = material.primaryGrainDiameterMeters();
@@ -69,7 +76,7 @@ public final class GranularMechanics {
 			if (fluid.hasLiquid() && fraction > 0.0) {
 				// Parcel momentum change minus gravity/buoyancy external impulse is the drag impulse.
 				double hydrodynamicX = parcel.mass() * (nextX - oldX);
-				double hydrodynamicY = parcel.mass() * (nextY - oldY + GRAVITY * dt);
+				double hydrodynamicY = parcel.mass() * (nextY - oldY + gravity * dt);
 				double hydrodynamicZ = parcel.mass() * (nextZ - oldZ);
 				double fluidX = -hydrodynamicX, fluidY = -hydrodynamicY, fluidZ = -hydrodynamicZ;
 				environment.addFluidImpulse(parcel.x(), parcel.y(), parcel.z(), fluidX, fluidY, fluidZ);

@@ -1,5 +1,10 @@
 package com.example.granular;
 
+import com.example.fluid.BuiltinFluidMaterials;
+import com.example.fluid.FlipFluidDomain;
+import com.example.fluid.FluidMaterialRegistry;
+import com.example.fluid.FluidSolverConfig;
+
 import java.util.Arrays;
 import java.util.List;
 
@@ -17,6 +22,7 @@ public final class M8GranularValidation {
 		mechanicsMatchesTerminalVelocity();
 		twoWayDragPreservesMomentum();
 		couplingOccupancyResumsExactly();
+		solverCouplingPreservesInventories(fast ? 8 : 80);
 		System.out.println("M8 granular core gate passed: canonical registry, exact inventory, drag and coupling occupancy");
 	}
 
@@ -179,6 +185,41 @@ public final class M8GranularValidation {
 				400_000, Math.toRadians(30.0), 0.6, 0.4, 0.1, 0.05, 1L,
 				GranularLimits.MAX_PARCEL_VOLUME_SVQ, 0xffffffff, "realwater:neutral_probe", false)),
 				List.of(new GranularCarrier("realwater:water", 1.002e-3, 100_000.0)));
+	}
+
+	private static void solverCouplingPreservesInventories(int steps) {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				200, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		FlipFluidDomain domain = new FlipFluidDomain(4, 8, 4, config, 4 * 8 * 4 * 8);
+		for (int z = 0; z < 4; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 4; x++) {
+			domain.setVolume(x, y, z, 1.0F);
+		}
+		domain.bindGranular(granular, liquids);
+		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		double mass = SolidVolume.toCellVolume(svq) * granular.material(sand).referenceDensity();
+		FlipFluidDomain.GranularInsertion inserted = domain.tryInsertExactGranular(2, 5, 2, sand, 0, svq, mass);
+		require(inserted.inserted(), "solver granular insertion was rejected: " + inserted.failure());
+		double waterBefore = domain.totalVolumeExact();
+		for (int step = 0; step < steps; step++) {
+			FlipFluidDomain.StepStats stats = domain.step();
+			require(Float.isFinite(stats.pressureResidual()), "granular pressure coupling produced non-finite residual");
+		}
+		require(Double.doubleToRawLongBits(domain.totalVolumeExact()) == Double.doubleToRawLongBits(waterBefore),
+				"granular coupling changed exact liquid volume");
+		require(domain.totalGranularSolidVolumeSvq() == svq, "solver granular coupling changed solid SVQ");
+		require(rawClose(domain.totalGranularMass(), mass), "solver granular coupling changed solid mass");
+
+		FlipFluidDomain sealed = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) {
+			sealed.setVolume(x, y, z, 1.0F);
+		}
+		sealed.bindGranular(granular, liquids);
+		FlipFluidDomain.GranularInsertion refused = sealed.tryInsertExactGranular(1, 1, 1, sand, 0, svq, mass);
+		require(!refused.inserted() && sealed.totalGranularSolidVolumeSvq() == 0L,
+				"sealed granular insertion did not refuse atomically");
 	}
 
 	private static GranularMechanics.Environment constantWater(

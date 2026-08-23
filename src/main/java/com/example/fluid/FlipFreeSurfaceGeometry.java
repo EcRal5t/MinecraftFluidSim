@@ -1,5 +1,7 @@
 package com.example.fluid;
 
+import com.example.granular.GranularCouplingFields;
+
 import java.util.Arrays;
 
 /**
@@ -50,8 +52,15 @@ final class FlipFreeSurfaceGeometry {
 	}
 
 	void rebuild(boolean[] solid, int[] markerCount, FlipCutCellGeometry cutCells) {
+		rebuild(solid, markerCount, cutCells, null);
+	}
+
+	void rebuild(boolean[] solid, int[] markerCount, FlipCutCellGeometry cutCells,
+	             GranularCouplingFields granular) {
 		for (int index = 0; index < exactCellVolume.length; index++) {
-			float openVolume = cutCells.openCellVolume(index);
+			float geometricOpen = cutCells.openCellVolume(index);
+			float openVolume = granular == null ? geometricOpen
+					: granular.effectiveOpenCellVolume(index, geometricOpen);
 			liquidFraction[index] = solid[index] || markerCount[index] == 0
 					? 0.0F : clamp(exactCellVolume[index] / Math.max(openVolume, FRACTION_EPSILON), 0.0F, 1.0F);
 			normalX[index] = 0.0F;

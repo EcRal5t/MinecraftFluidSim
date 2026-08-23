@@ -16,6 +16,10 @@
 - **材料门**：多材料只在 `materialsEnabled` 配置门本次启动为开时绑定。门开时 demo、capture 和控制器区域都绑定内建 palette，纯水区域即 palette index 0 的单材料状态；门关时活动核心继续走纯水路径。
 - **交接边界**：`FlipParticleState` 仍只允许纯水；任何非默认 material/phase/mass 状态导出都会显式失败。`FlipMaterialParticleState` 保存稳定 palette、每 marker material index 与 raw `double mass`；`FlipChemicalParticleState` 再组合 authoritative registry fingerprint、canonical mixture table、per-marker table index/indicator 及 source/sink audit。二者都只是内存 handoff，不是 wire 或磁盘格式；`region-state v2/v3` 各自独立校验长度、checksum、generation、palette、registry 与预算。
 - **M6 世界/容器边界**：ownership sidecar、region-state 和 container-transfer WAL 分别提交；容器 `long` 纳体积与逐材料 raw `double` 质量在服务边界同 marker 账本核对。精确转移原语只提交完整成功结果，拒绝时不得留下 solver 残量。完整契约见 [`world-ownership-and-containers.md`](world-ownership-and-containers.md)。
+- **M8 开发中边界**：显式绑定的 0.5 m CPU 域可持有 exact-SVQ active parcel/deposit 库存；current/preview
+  skeleton occupancy 通过同一 face void 和 moving-solid target 进入 free-surface、pressure matrix/projection、volume
+  drift 与 runtime gas available volume，浮力/阻力向 MAC 散回等量反冲量。当前尚无 gameplay/config/persistence
+  入口，v1/v2/v3 格式未改变；完整冻结契约见 [`granular-state.md`](granular-state.md)。
 - **数值离散**：`markerCount > 0` 决定压力流体格；平滑 `volume[]`、PLIC 分数、cut-cell 开口和目标散度都不是第二套水量。
 - **渲染重建**：客户端使用 density + marker + solid 重建；marker mask 是浅水可见的必要内部种子，渲染不得反写物理。
 - **M3 材料重建**：`FluidMaterialRenderSnapshot` 从 marker 只读派生总体积、逐材料/phase 量化分数与各自 marker 种子；每格分数确定性回和到 255。这些量化字段是 `fluid_snapshot_v2` 的展示数据，不携带精确库存，客户端也不得回写。
