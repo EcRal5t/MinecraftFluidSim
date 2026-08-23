@@ -266,3 +266,9 @@ M8 尚不在完成索引中：最后只等待一个真实 controller 合并场�
 - `granular` selector 增补三个已有失败域内断言：dry insert 至少 32 个不同量化位置、连续 precipitation 合并仍闭合
   aqueous+solid truth、active/deposit reactive merge 后 composition handle 唯一且 v5 capture canonical。没有新增
   selector 或 Gradle task。液面黑三角仍按既有独立视觉债处理，本增量不修改 liquid mesher。
+- 完整受影响门 `granular,chemistry,region-state,containers,protocol` 分别用时 1.847/0.984/1.940/0.191/0.157 秒，
+  runner 合计 5.119 秒；随后 `clean assemble compileTestJava` 成功（16 秒），根 `:runServer` 加载 0.14.0 到 `Done`
+  并正常 `stop`。新实机候选 SHA-256 为
+  `9B9523413BF48C6251AEB100BA5E2B5DC227434308D99CAF58B0F1264B1B5146`；上一 SVQ 修正版可恢复地保存为
+  `realwater-0.14.0-pre-morphology-fix.jar.disabled`，其 hash 仍为
+  `0B2008122E141FAC4B1236C15DEE83C04170B46C287859AF78B8E66F9FAE9DED`，mods 目录只有一个主 Mod JAR 启用。
