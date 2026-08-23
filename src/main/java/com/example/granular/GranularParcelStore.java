@@ -69,6 +69,12 @@ public final class GranularParcelStore {
 				contactAge[index], flags[index]);
 	}
 
+	public void overwrite(int index, Parcel parcel) {
+		requireIndex(index);
+		validate(parcel);
+		write(index, parcel);
+	}
+
 	public Parcel removeSwap(int index) {
 		Parcel removed = parcel(index);
 		int last = count - 1;

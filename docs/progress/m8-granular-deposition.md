@@ -37,3 +37,15 @@ moving-solid capacity source 与 pressure/free-surface/air 共享同一耦合几
 
 最近门 `runCpuValidation -PcpuValidation=granular` 通过：full 场景包含 10,000 次 parcel↔deposit 往返，runner
 0.080 秒、granular 本体 0.068 秒。此增量未接 solver、Minecraft、存档、容器或协议，因此未累计其他 selector。
+
+## M8.1b mechanics 与 coupling core（2026-08-24）
+
+- Schiller--Naumann/Stokes 极限的半隐式 velocity relaxation 已进入纯 granular core；浮力使用实际 parcel mass/
+  skeleton volume，当地 carrier 密度/黏度来自显式 sample；hydrodynamic 反冲量由环境接口接收。
+- `GranularCouplingFields` 将 parcel exact SVQ 以 trilinear weight + deterministic largest remainder 分配到最多
+  8 格，并合入 deposit skeleton；每次 rebuild 独立核对 occupancy 与物理库存精确相等。
+- moving-solid target、effective cell capacity 与对称保守 face void 已形成 typed coupling API；尚未接入压力路径。
+
+最近门 `runCpuValidation -PcpuValidation=granular` 再次通过：heavy/light 终速匹配 root oracle、neutral horizontal
+drag 的 parcel+fluid 动量闭合、parcel 跨格前后 `sum(ΔS)=0`；full granular 本体 0.080 秒。仍未触碰共享 fluid
+路径，所以未追加旧 selector。

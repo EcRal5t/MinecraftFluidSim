@@ -131,6 +131,14 @@ public final class GranularDepositStore {
 		return total;
 	}
 
+	public void forEachCell(CellConsumer consumer) {
+		if (consumer == null) throw new IllegalArgumentException("Deposit cell consumer is missing");
+		for (int cell = 0; cell < headByCell.length; cell++) {
+			long volume = cellSolidVolumeSvq(cell);
+			if (volume > 0L) consumer.accept(cell, volume, porosityQByCell[cell]);
+		}
+	}
+
 	private void validate(SolidPortion portion) {
 		if (portion == null) throw new IllegalArgumentException("Granular solid portion is missing");
 		ParticulateMaterial material = registry.material(portion.materialHandle());
@@ -199,5 +207,10 @@ public final class GranularDepositStore {
 
 	private void requireCell(int cell) {
 		if (cell < 0 || cell >= headByCell.length) throw new IllegalArgumentException("Unknown deposit cell " + cell);
+	}
+
+	@FunctionalInterface
+	public interface CellConsumer {
+		void accept(int cell, long solidVolumeSvq, int porosityQ);
 	}
 }
