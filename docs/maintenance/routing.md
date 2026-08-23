@@ -23,9 +23,9 @@
 | 区域身份、solver ownership、运行态 | `src/main/java/com/example/simulation/FluidRegion.java` | UNLOADED 不持 solver 但仍占预算；恢复先刷新碰撞 |
 | 调度生命周期 | `src/main/java/com/example/simulation/FluidRegionLifecycle.java` | 调度状态不得移动、创建、删除或缩放 marker |
 | 区域登记、选择、空间与预算 | `src/main/java/com/example/simulation/FluidRegionManager.java` | 拒绝不替换旧域；报告 required/per-region/remaining |
-| 世界配置 | `src/main/java/com/example/simulation/FluidServerConfig.java` | v1/v2/v3 配置 fail-closed；v1 强制 materials/worldBridge 关闭，v2 强制 worldBridge 关闭；预算与各功能门重启后生效 |
-| controller 持久化协调 | `src/main/java/com/example/simulation/FluidRegionPersistence.java` | manifest admission、checkpoint、quarantine 与 takeover journal 分离；按材料门分派 v1/v2 |
-| `region-state v1`/门控 v2 | `src/main/java/com/example/simulation/persistence/`、`docs/architecture/region-state-v1.md` | 两槽完整代次、CRC、账本和 HEAD 最后发布；v1 canonical bytes 不变 |
+| 世界配置 | `src/main/java/com/example/simulation/FluidServerConfig.java` | v1–v4 配置 fail-closed；旧 reader 强制未知新门关闭；`chemistry=true` 要求 `materials=true`；预算与各功能门重启后生效 |
+| controller 持久化协调 | `src/main/java/com/example/simulation/FluidRegionPersistence.java` | manifest admission、checkpoint、quarantine 与 takeover journal 分离；按 chemistry/materials 门严格分派 v3/v2/v1 |
+| `region-state v1`/门控 v2/v3 | `src/main/java/com/example/simulation/persistence/`、`docs/architecture/region-state-v1.md`、`docs/architecture/chemistry-state.md` | 两槽完整代次、CRC、账本和 HEAD 最后发布；v1/v2 canonical bytes 不变；v3 缺 authoritative chemistry registry 时锁定 |
 | M3 跨层迁移边界 | `docs/architecture/m3-material-state-migration.md` | 单一 `materialsEnabled` 门；network v2 与 region-state v2 独立版本；运行时 handle 不上链 |
 | 控制器与边界块 | `src/main/java/com/example/block/RealWaterBlocks.java`、`src/main/java/com/example/block/FluidControllerBlock.java` | feature flag 默认关闭；只读激活；资源同步 |
 | 闭合边界扫描 | `src/main/java/com/example/simulation/controller/` | 非加载读取；缺 chunk/破口/多内腔/超预算拒绝或整域暂停 |
@@ -50,10 +50,12 @@
 | M6 桶入口（玩家/发射器） | `src/main/java/com/example/simulation/FluidTransferService.java`、`src/main/java/com/example/mixin/ItemStackMixin.java`、`RealWaterMod.java` 的 dispenser 注册 | worldBridge 门控；只按准星/发射方向命中的区域路由，命令选区无关；请求先向下量化为不超过物品余额/容量的 float，物品按原语返回的实际 marker 变动结算，材料余量逐组件保留；堆叠/损坏组件安全拒绝；创造 source/scoop 明确记账并保留 operator pause 意图 |
 | M6 容器转移 WAL | `src/main/java/com/example/simulation/ContainerTransferJournal.java`、`ContainerTransferStore.java`、`ContainerTransferRecovery.java`、`FluidTransferService` 的 controller 路径 | 只用于 controller 区域玩家/发射器桶转移；PREPARED 携带请求上限→求解器修改→REGION_COMMITTED 携带实际结算量和 after→checkpoint/HEAD→actor after durable save→清理；HEAD=base 丢弃、HEAD=target 收敛 after、其他锁定；v2 携带 mixture+mass，v1 仅纯水可恢复；未知 store 内容全局锁；actor 未加载保持 pending；同一未解锁状态只记一次错误日志 |
 | M7 化学真值与定义 | `src/main/java/com/example/chemistry/`、`docs/architecture/chemistry-state.md` | exact rational 定义、stable-ID canonical registry、packed parcel、逐 species/组成/charge/mass 守恒和全部硬预算；不得借 display 值结算 |
+| M7 marker/存档/容器接入 | `FlipChemicalParticleState`、`ChemicalContents`、`FluidTransferService`、`ContainerTransferStore`、`RegionState` | indicator provenance 不隔离反应；外部 source/escaped sink 显式持久审计；legacy/chemical item 表示互斥；v3 WAL 在 actor durable save 前不得删除 |
+| M7 protocol/玩法 | `FluidChemicalSnapshotPayload`、`FluidChemicalSnapshotLedger`、`ChemicalIndicatorItem`、`RealWaterCommands` | protocol v3 只发 Top-4/pH/indicator 展示；指示剂按 cut-face/phase 全量 plan；`chemstatus` 完整库存只供管理员并写 transcript |
 | takeover codec/files | `src/main/java/com/example/simulation/TakeoverJournalCodec.java`、`src/main/java/com/example/simulation/TakeoverJournalFiles.java` | v1 可读；未知/损坏/恢复失败锁住新 takeover |
 | 指令 transcript | `src/main/java/com/example/logging/RealWaterCommandLog.java`、`src/main/java/com/example/logging/CommandAuditFile.java` | 只做 UTF-8 观测；失败不得改变命令结果 |
-| protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 由材料门决定严格 v1 或严格 v2 + material capability；不做降级伪装 |
-| 多区域快照 | `src/main/java/com/example/network/FluidSnapshotPayload.java`、`src/main/java/com/example/network/FluidSnapshotLedger.java`、`src/main/java/com/example/network/FluidMaterialSnapshotPayload.java`、`src/main/java/com/example/network/FluidMaterialSnapshotLedger.java` | v1/v2 type 独立；dimension/id/generation/sequence/palette/tombstone 一致 |
+| protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 由 chemistry/materials 门决定严格 v3/v2/v1 及必需 capability；不做降级伪装 |
+| 多区域快照 | `FluidSnapshotPayload`/`Ledger`、`FluidMaterialSnapshotPayload`/`Ledger`、`FluidChemicalSnapshotPayload`/`Ledger` | v1/v2/v3 type 独立；dimension/id/generation/sequence/palette/tombstone 一致；v3 exact inventory 不上链 |
 | 客户端水面 | `src/client/java/com/example/client/ClientFluidVolumeRenderer.java` | 每域独立插值，按当前维度合并；v1 与 v2 状态/ledger/清理互相独立；不得反写物理 |
 | 客户端握手与绑定 | `src/client/java/com/example/client/RealWaterModClient.java` | configuration/play 注册、断线与重配置清理成套 |
 
@@ -74,6 +76,7 @@
 - 气体账本不平或腔体拓扑事件异常：`AirNetwork` 的 remap/merge/split 与开孔 vent 记账。
 - ownership 状态不明或区域被锁：`/realwater ownership`、`OwnershipStore.scanIssues/recoverUnfinished`、WAL 与 region HEAD 的 base/target 判定。
 - 容器转移锁或物品/区域不一致：`<world>/realwater/container-transfer/` 严格扫描结果、`ContainerTransferRecovery` 的 HEAD 判定、actor 是否在线/已加载；不要手删未知或损坏 WAL。
+- 化学区域锁或颜色/库存不符：先查 registry fingerprint、v3 HEAD 与 `/realwater chemstatus`；颜色、pH 和 Top-4 residual 都是只读展示，不能用于修复库存。
 
 ## 可选 GPU probe
 

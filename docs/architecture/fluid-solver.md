@@ -14,7 +14,7 @@
 - **M5 界面气压**：自由液气面的 ghost-fluid 跳跃升级为 `p_interface = σ κ + p_gas(该面空气格所属密闭腔)`，按面解析同一腔的双面液柱；环境大气贡献恰好为零，因此无密闭腔时活动核心与 M4 逐位一致。空腔扫描触达边界层或预算耗尽即分类 ambient，绝不保存为有限库存；部分开口面成为几何孔流边而非连通。
 - **M5 运行时边界**：气体库存/压力 runtime-only，不进 wire、`region-state` 或客户端快照；仅 `fluid_snapshot_v1` 可携带只读调试用 gas node mask 扩展（display data，不携带库存/压力）。重启后密闭腔按环境平衡重建（`p=0`）。无独立配置门——气体不改变持久化格式，开放水域行为与 M4 逐位相同。
 - **材料门**：多材料只在 `materialsEnabled` 配置门本次启动为开时绑定。门开时 demo、capture 和控制器区域都绑定内建 palette，纯水区域即 palette index 0 的单材料状态；门关时活动核心继续走纯水路径。
-- **交接边界**：`FlipParticleState` 仍只允许纯水；任何非默认 material/phase/mass 状态导出都会显式失败。`FlipMaterialParticleState` 是独立内存 handoff，保存稳定 palette、每 marker material index 与 raw `double mass`；它本身不是 wire 或磁盘格式，`region-state v2` 仍独立校验长度、checksum、generation、palette 与预算。
+- **交接边界**：`FlipParticleState` 仍只允许纯水；任何非默认 material/phase/mass 状态导出都会显式失败。`FlipMaterialParticleState` 保存稳定 palette、每 marker material index 与 raw `double mass`；`FlipChemicalParticleState` 再组合 authoritative registry fingerprint、canonical mixture table、per-marker table index/indicator 及 source/sink audit。二者都只是内存 handoff，不是 wire 或磁盘格式；`region-state v2/v3` 各自独立校验长度、checksum、generation、palette、registry 与预算。
 - **M6 世界/容器边界**：ownership sidecar、region-state 和 container-transfer WAL 分别提交；容器 `long` 纳体积与逐材料 raw `double` 质量在服务边界同 marker 账本核对。精确转移原语只提交完整成功结果，拒绝时不得留下 solver 残量。完整契约见 [`world-ownership-and-containers.md`](world-ownership-and-containers.md)。
 - **数值离散**：`markerCount > 0` 决定压力流体格；平滑 `volume[]`、PLIC 分数、cut-cell 开口和目标散度都不是第二套水量。
 - **渲染重建**：客户端使用 density + marker + solid 重建；marker mask 是浅水可见的必要内部种子，渲染不得反写物理。
@@ -53,7 +53,7 @@
 - M5 密闭气体网络已进入活动核心：等温 EoS、有限速率孔流、拓扑事件库存迁移与 `p_gas` 自由面边界均已生效；开放水域与 M4 逐位一致，气体状态 runtime-only 不进存档。
 - 活动材料几何按格稀疏聚合实际出现的 phase，条目总数不超过域 marker 容量；多相交汇不会截断为两个相。该状态只服务压力离散，内部界面 mesh 另由上述 mesher 重建。
 - 服务端 CPU 是物理规范；可选 GPU probe 仍只读、可回退，不写世界或存档。
-- 已接通最多四个有界区域、控制器边界、独立调度、`region-state v1` 与门控 `region-state v2`；M6 已加入 crash-safe ownership 与容器转移，当前集成说明见根 [`README.md`](../../README.md)。
-- 多材料 marker、逐材料质量账本、可变密度共享压力、门控 protocol v2 与客户端液液界面渲染已进入活动路径；跨层兼容边界见 [`m3-material-state-migration.md`](m3-material-state-migration.md)。
+- 已接通最多四个有界区域、控制器边界、独立调度和门控 `region-state v1/v2/v3`；M6 已加入 crash-safe ownership 与容器转移，M7 已加入 marker 化学 parcel 与 v3 WAL，当前集成说明见根 [`README.md`](../../README.md)。
+- 多材料 marker、逐材料质量账本、可变密度共享压力、严格 protocol v1/v2/v3 与客户端液液/化学只读重建已进入活动路径；材料边界见 [`m3-material-state-migration.md`](m3-material-state-migration.md)，化学边界见 [`chemistry-state.md`](chemistry-state.md)。
 
 代码职责和最小验证任务只在 [`../maintenance/routing.md`](../maintenance/routing.md) 维护。

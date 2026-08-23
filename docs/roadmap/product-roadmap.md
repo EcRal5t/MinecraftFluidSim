@@ -2,7 +2,7 @@
 
 本文是尚未完成里程碑的总表。当前基线已经完成 M0、M1、M2、M2.5、M3、M4、M5 和 M6；完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md)、[`../architecture/region-state-v1.md`](../architecture/region-state-v1.md)、[`../architecture/m3-material-state-migration.md`](../architecture/m3-material-state-migration.md) 与 [`../architecture/world-ownership-and-containers.md`](../architecture/world-ownership-and-containers.md)。
 
-基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、主 Mod 0.12.0、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
+基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、主 Mod 0.13.0、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
 
 ## 技术规格路由
 
@@ -24,7 +24,7 @@
 
 - **1.0 能力线**：M3 多液体/可变密度、M4 表面张力/润湿与 M5 密闭气体网络及气液压力均已完成；范围仍是控制器或开发命令圈定的有界区域。
 - **2.0 集成线**：M6 ownership 评审、真实世界流体桥和容器已完成；后续仍不得跳过显式边界、事务恢复门或开放世界规模评审。
-- M7 化学、M8 颗粒、M9 热力学和 M10 原版/其他 Mod API 在 2.0 后逐项加入，不阻塞 1.0。
+- M7 化学已在 2.0 集成线上完成；M8 颗粒、M9 热力学和 M10 原版/其他 Mod API 继续逐项加入。
 - 版本号按实际验收门决定，不随开发次数自然表示成熟度。
 
 ## 长期产品目标
@@ -79,7 +79,7 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
 
 - 密闭气腔识别、纳体积量子精确气体账本、等温 EoS、有限速率孔流、拓扑事件库存迁移与 `p_gas` 自由面边界均已进入活动核心；开放水域与 M4 逐位一致，气体状态 runtime-only。证据见 [`../progress/m5-air-network.md`](../progress/m5-air-network.md)。
 - 仍约束后续阶段：
-  - 气体库存不进 wire/存档；进存档需 region-state v3 与格式迁移评审。
+  - 气体库存不进 wire/存档；M7 已占用 region-state v3，气体进存档需独立 region-state v4 与格式迁移评审。
   - 天然空腔搜索入口与 512 BV 默认预算留待未来阶段；控制器域只消费已知边界。
   - 气体温度/内能（M9）、气相反应（M7）与喷流细网格不在 M5 范围。
 
@@ -88,13 +88,12 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
 - M6.0 选定**空气 + 独立 ownership registry**，M6.1 完成 region-state HEAD 键控的 crash-safe ownership、精确部分/混合材料容器、玩家/发射器转移与跨持久域 WAL；主 Mod 0.12.0 的自动与实机证据见 [`../progress/m6-world-bridge-and-containers.md`](../progress/m6-world-bridge-and-containers.md)，现行契约见 [`../architecture/world-ownership-and-containers.md`](../architecture/world-ownership-and-containers.md)。
 - 仍约束后续阶段：原版水流入破损 owned 边界不得静默吸收；持久 ownership 只走 controller 区域；未知/损坏 sidecar 必须 fail-closed；灭火、湿润、岩浆和外部 Mod API 留到 M10。
 
-## M7：守恒化学
+## M7：守恒化学（已完成）
 
-- species/phase/reaction codec、稀疏组分库存和硬上限。
-- 强电解质完全解离、同格计量反应、游戏化 pH 与指示剂。
-- 每步质量、声明组成、电荷和液体体积账本闭合；颜色只在客户端派生。
-
-首批验收：NaNO3+KCl 与 NaCl+KNO3 得到相同离子库存；HCl+NaOH 中和且过量物正确剩余。
+M7 已以主 Mod 0.13.0 闭合：marker parcel、strong-electrolyte reaction、v3 region/protocol/container WAL、化学桶和指示剂
+均进入生产路径。现行契约见 [`../architecture/chemistry-state.md`](../architecture/chemistry-state.md)，自动与实机验收记录见
+[`../progress/m7-conservative-chemistry.md`](../progress/m7-conservative-chemistry.md)。后续阶段不得把气相化学、沉淀或热状态
+回填进 M7 v3。
 
 ## M8：颗粒沉淀与低成本沉积
 
@@ -131,6 +130,6 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
 
 ## 接下来三项
 
-1. M7 守恒化学：先冻结 species/reaction codec、稀疏库存和硬预算，再接入首批强电解质与计量反应；不把颜色当作组分真值。
-2. 气体状态进存档前先做 region-state v3 格式迁移评审；当前 runtime-only 重建语义已量化记录。
+1. M8 颗粒沉淀：先冻结颗粒库存、排水与沉积休眠边界，再选择低成本模型；不预建完整 MPM。
+2. 气体状态进存档前先做 region-state v4 格式迁移评审；当前 runtime-only 重建语义保持不变。
 3. 液液界面锐化/逐顶点平滑与 CPU/GPU 后端切换分别进入专项量化；不得用渲染修补或调度放宽掩盖物理/性能问题。

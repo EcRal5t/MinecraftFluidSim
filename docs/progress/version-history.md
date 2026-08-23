@@ -44,3 +44,7 @@
 ## 0.12.0：M6 世界 ownership、流体桥与容器
 
 - **0.12.0**：控制器区域通过 region-state HEAD 键控的 WAL/committed sidecar crash-safe 接管内部原版水；新增 `long` 纳体积部分纯水桶、保存逐材料体积与独立质量的 canonical 混合材料桶、solver all-or-nothing 精确转移、玩家/发射器目标路由、创造外部 source/scoop 语义、部分桶守恒合并配方，以及 region/item 跨持久域 container-transfer WAL v2。未知/损坏/代次失配一律保留并锁定；堆叠与组件损坏安全拒绝。完整 CPU 回归、专用服务器启动与实机 Smoke C 通过。详见 [`m6-world-bridge-and-containers.md`](m6-world-bridge-and-containers.md)。
+
+## 0.13.0：M7 守恒化学
+
+- **0.13.0**：新增 exact-rational species/phase/reaction registry、每 marker packed parcel 与 indicator provenance；强电解质完整解离和同格同 chemical-phase 的 `H+ + OH- -> H2O` 在最终 advection 后守恒执行。region-state、protocol 和 container-transfer WAL 分别升门控 v3；化学桶保存 fingerprint、逐 species quanta、质量 residual 与 indicator group，外部 source/escaped sink 可审计并持久化。客户端只读使用 Top-4、pH 与 indicator 派生颜色；新增通用指示剂、抹除器、化学 demo/reagent/管理员库存命令。v1/v2 bytes/readers 和 chemistry-off 路径保持兼容。详见 [`m7-conservative-chemistry.md`](m7-conservative-chemistry.md)。

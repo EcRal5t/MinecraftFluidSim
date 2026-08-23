@@ -31,7 +31,7 @@
 不得经过 `double`。
 
 registry 对 stable ID 排序后分配 runtime handle，以 canonical UTF-8 bytes 计算 SHA-256 fingerprint。首次启用化学时
-原子发布世界级 registry snapshot；之后 snapshot 是已有库存的唯一解释。数据包定义变化只产生 mismatch 报告，不重解释
+原子发布 `<world>/realwater/chemistry/registry.nbt`；之后 snapshot 是已有库存的唯一解释。数据包定义变化只产生 mismatch 报告，不重解释
 存量。未知/损坏 snapshot、v3 存在而 snapshot 缺失、fingerprint/identity/generation 失配一律保留并全局 `LOCKED`。
 
 loader 在发布前拒绝未知引用、重复 ID、负库存/系数、组成/电荷/exact mass 不守恒、非零体积变化、完整解离环、
@@ -67,15 +67,28 @@ pH 是只读展示：`C=|H+-OH-|/BV`、`C0=10^-6 AU/BV`、`strength=min(7,log10(
 - 内存 handoff `FlipChemicalParticleState` 组合 material handoff、registry fingerprint、canonical mixture table、
   per-marker table index 和 indicator bits；它不是 wire/save codec。
 - v3 manifest 保存 fingerprint、AU scale、stable species palette、canonical mixture table 与 region species/residual ledgers；
-  section 保存 per-marker mixture index、indicator bit和 section ledgers。HEAD 仍是最后且唯一提交点。
+  section 保存 per-marker mixture index、indicator bit和 section ledgers。累计 external-source/escaped-sink 通过有界 canonical
+  manifest extension 持久化并在恢复时复核。HEAD 仍是最后且唯一提交点。
 - material bucket 的 legacy 表示（`material_id`/`mixture_components`）与 chemical 表示（总 volume/mass +
   `ChemicalContents v1`）互斥。双表示、foreign fingerprint、超预算或账本失配保持物品不变并拒绝。
 - protocol v3 只发 bounded display palette、Top-4 权重、量化 pH/indicator fraction；不发 exact AU、residual 或权威 ledger。
-- WAL v3 的 region after 必须先 staging，`REGION_COMMITTED` 携带 after/checksum，随后才发布 HEAD；actor after durable save
-  成功后才能删 WAL。v1/v2 reader/recovery 不变。
+- WAL v3 固定为 `PREPARED(before)` → solver 修改 → stage v3 checkpoint → `REGION_COMMITTED(after/checksum)` → 发布 HEAD
+  → actor after → durable save → 删除 WAL。gate 关闭、actor 未加载、registry/checksum/generation 歧义都保留并锁定；
+  v1/v2 reader/recovery 不变。
+
+## 玩法与只读展示
+
+legacy 材料桶倒入化学域时，新增 marker 明确绑定该 material 的 registry default carrier；空材料桶从化学域抽取时生成
+`ChemicalContents v1`。原版空桶只允许抽取未标记且只含规范 H2O carrier 的 parcel。创造放出累计 external source，创造装取
+仍替换手中容器，不产生隐藏 sink。
+
+通用指示剂与可重复使用抹除器按正面积 cut-face 和 compatible chemical phase flood fill；扫描上限为 region 完整 cell
+预算，添加上限为 100 BV，任何超限都在修改前整体拒绝。后来混入的 marker 保持自身 indicator provenance。
+
+客户端只从 material、bounded species palette、pH 与 indicator fraction 派生颜色；indicator 为零时 pH 不改变颜色。
+`/realwater chemstatus` 是管理员按需的完整逐 species 观测并进入 transcript，display snapshot 和 tooltip 都不参与结算。
 
 ## 兼容与提交
 
 v1/v2 到 v3 只在非活动槽生成完整新代，回读验证后发布 HEAD；崩溃后只能看到旧完整代或新完整 v3。化学门关闭发现
 v3 时保留并锁定，不降级。unknown/corrupt/over-budget 永不通过“合理默认”修复。ownership sidecar 与 HEAD 语义不变。
-

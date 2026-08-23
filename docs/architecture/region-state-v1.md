@@ -15,6 +15,9 @@ This document defines the implemented first persistent Real Water region format.
 - The M3 material format `region-state v2` now exists behind the `materialsEnabled` gate. It keeps this v1 reader and
   v1's canonical bytes/CRC path untouched, dispatches on manifest version, and publishes a new full generation in the
   inactive slot before HEAD points at it. See [`m3-material-state-migration.md`](m3-material-state-migration.md).
+- The M7 chemical format `region-state v3` exists behind `chemistryEnabled && materialsEnabled`. It preserves the v1/v2
+  readers and canonical bytes while adding authoritative registry identity, canonical mixture tables, per-marker indicator,
+  species/residual ledgers and bounded source/sink audit. See [`chemistry-state.md`](chemistry-state.md).
 - Experimental files created by another branch are not compatible and are never auto-migrated or deleted.
 
 ## Layout and atomic commit

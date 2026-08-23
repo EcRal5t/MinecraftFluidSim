@@ -45,7 +45,9 @@ Acquire 顺序固定为：
 
 ## 容器转移 WAL
 
-布局为 `<world>/realwater/container-transfer/<transaction-uuid>.nbt`，当前格式 v2。WAL 记录区域与目标代次、INSERT/EXTRACT、玩家手或发射器槽 actor、操作前后完整物品 fingerprint（含 mixture 与独立质量）以及 PREPARED/REGION_COMMITTED phase。
+布局为 `<world>/realwater/container-transfer/<transaction-uuid>.nbt`。M6 材料事务格式为 v2；M7 化学域使用兼容 reader 下的
+v3，额外保存 chemical contents、registry identity、staged target checksum 与实际部分结算量，详见
+[`chemistry-state.md`](chemistry-state.md)。WAL 记录区域与目标代次、INSERT/EXTRACT、玩家手或发射器槽 actor、操作前后完整物品 fingerprint（含 mixture/chemical contents 与独立质量）以及 PREPARED/REGION_COMMITTED phase。
 
 顺序固定为：原子发布带 before item 与请求上限的 PREPARED WAL → 求解器精确修改 → 以实际 marker 变动量及完整 after item 原子替换为 REGION_COMMITTED WAL → 发布目标 region-state HEAD → 当前调用把 actor 改为 after item → 随后 tick 幂等重放 after item、强制保存 actor 所属存档 → 删除 WAL。PREPARED 和 REGION_COMMITTED 的 `volumeNanos` 因而允许分别表示请求上限和实际结算量；后者必须与 before/after fingerprint 的差一致。`REGION_COMMITTED` 表示 WAL 已具备 target 提交所需的权威 after item；region-state HEAD 仍是物理提交点。恢复判定为：
 

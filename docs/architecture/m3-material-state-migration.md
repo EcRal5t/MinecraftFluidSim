@@ -1,7 +1,8 @@
 # M3 material snapshot and persistence migration
 
-本文冻结 M3 多材料跨层状态的兼容边界。协议 v2、`region-state v2` 与客户端界面渲染都已实现，并统一由
-`materialsEnabled` 配置门控制；门关闭时全部路径严格退化为纯水 v1。活动 CPU 真值见
+本文冻结 M3 多材料跨层状态的兼容边界。协议 v2、`region-state v2` 与客户端界面渲染都已实现，并由
+`materialsEnabled && !chemistryEnabled` 选择；两个门都关闭时全部路径严格退化为纯水 v1，化学门开启则由 M7 严格选择
+protocol/region-state v3。活动 CPU 真值见
 [`fluid-solver.md`](fluid-solver.md)，纯水事务语义仍以 [`region-state-v1.md`](region-state-v1.md) 为准。
 
 ## 功能门
@@ -10,7 +11,7 @@
 
 - 门只在服务器启动时读取一次。`/realwater materials <bool>` 只原子保存“下次重启生效”的配置，绝不在现有连接中途切换协议。
 - 门关闭：live offer 严格 v1，region-state 只写 v1，活动核心只走纯水路径。
-- 门开启：live offer 只提供 protocol 2 且要求 material capability，控制器区域使用 `region-state v2`，客户端重建 partitioned mesh。
+- 材料门开启且化学门关闭：live offer 只提供 protocol 2 且要求 material capability，控制器区域使用 `region-state v2`，客户端重建 partitioned mesh。化学门开启时改由 [`chemistry-state.md`](chemistry-state.md) 的严格 v3 规则接管。
 - 门开启但磁盘上是 v1 的控制器区域，在非活动槽原子迁移为单材料水 v2 后才恢复 solver；门关闭却发现 v2 时保留并锁住该区域，不静默丢弃。
 
 ## 不可混用的状态
