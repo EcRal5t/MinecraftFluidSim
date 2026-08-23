@@ -14,6 +14,7 @@ import com.example.granular.BuiltinGranularDefinitions;
 import com.example.granular.GranularLimits;
 import com.example.granular.GranularRegistry;
 import com.example.granular.GranularStateSnapshot;
+import com.example.granular.SolidCompositionRecord;
 import com.example.granular.SolidVolume;
 import com.example.simulation.FluidRegion;
 import com.example.simulation.FluidRegionLifecycle;
@@ -117,6 +118,43 @@ public final class FluidRegionPersistenceValidation {
 		files.publish(state);
 		RegionState restored = files.read(region.id());
 		assertGranularStateEquals(expected, restored.reconstructGranular(granular));
+
+		FluidRegion reactiveRegion = populatedRegion(new UUID(25L, 26L));
+		FlipParticleState reactivePure = reactiveRegion.domain().exportParticleState();
+		float[] reactivePositions = reactivePure.copyPositionVolume();
+		double[] reactiveLiquidMass = new double[reactivePure.particleCount()]; double reactiveTotalMass = 0.0;
+		for (int marker = 0; marker < reactiveLiquidMass.length; marker++) {
+			reactiveLiquidMass[marker] = reactivePositions[marker * 4 + 3] * BuiltinFluidMaterials.WATER.referenceDensity();
+			reactiveTotalMass += reactiveLiquidMass[marker];
+		}
+		reactiveRegion.domain().restoreMaterialParticleState(new FlipMaterialParticleState(reactivePure.sizeX(),
+				reactivePure.sizeY(), reactivePure.sizeZ(), reactivePure.cellSize(), reactivePure.particleCount(),
+				reactivePure.totalVolume(), reactiveTotalMass, BuiltinFluidMaterials.M3_PALETTE, reactivePositions,
+				reactivePure.copyParticleVelocities(), reactivePure.copySolidMask(), reactiveLiquidMass,
+				new int[reactivePure.particleCount()]));
+		reactiveRegion.domain().bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		SolidCompositionRecord composition = SolidCompositionRecord.fromStableAmounts(
+				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(BuiltinChemicalDefinitions.NA_PLUS, 640L,
+						BuiltinChemicalDefinitions.CL_MINUS, 640L), 0.0);
+		GranularStateSnapshot reactiveFixture = new GranularStateSnapshot(reactiveRegion.sizeX(), reactiveRegion.sizeY(),
+				reactiveRegion.sizeZ(), granular.fingerprint(), BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
+				granular.materials().stream().map(com.example.granular.ParticulateMaterial::id).toList(),
+				List.of(new GranularStateSnapshot.StableComposition(List.of(
+						new GranularStateSnapshot.CompositionComponent(BuiltinChemicalDefinitions.CL_MINUS, 640L),
+						new GranularStateSnapshot.CompositionComponent(BuiltinChemicalDefinitions.NA_PLUS, 640L)), 0L)),
+				java.util.Map.of(BuiltinChemicalDefinitions.CL_MINUS, 640L, BuiltinChemicalDefinitions.NA_PLUS, 640L),
+				List.of(new GranularStateSnapshot.ActiveParcel(0.75F, 0.75F, 0.75F, 0.0F, 0.0F, 0.0F,
+						10L, composition.totalMass(BuiltinChemicalDefinitions.REGISTRY),
+						granular.materialHandle(BuiltinGranularDefinitions.PRECIPITATE), 1)), List.of(), 10L,
+				Double.doubleToRawLongBits(composition.totalMass(BuiltinChemicalDefinitions.REGISTRY)));
+		reactiveRegion.domain().restoreGranularState(reactiveFixture, granular, liquids);
+		RegionState reactiveState = RegionState.captureGranular(reactiveRegion, 1L);
+		reactiveState.validate();
+		GranularStateSnapshot reactiveRoundTrip = reactiveState.reconstructGranular(granular);
+		reactiveRoundTrip.validateSolidCompositionMasses(BuiltinChemicalDefinitions.REGISTRY);
+		assertGranularStateEquals(reactiveFixture, reactiveRoundTrip);
+		Path reactiveRoot = Files.createTempDirectory(Path.of("."), "reactive-granular-v5-");
+		new RegionStateFiles(reactiveRoot, BuiltinChemicalDefinitions.REGISTRY, granular).publish(reactiveState);
 
 		CompoundTag reservedV4 = codec.encodeManifest(state.manifest());
 		reservedV4.putInt("Version", 4); reservedV4.putInt("Palette", 4);
@@ -664,7 +702,10 @@ public final class FluidRegionPersistenceValidation {
 
 	private static void assertGranularStateEquals(GranularStateSnapshot expected, GranularStateSnapshot actual) {
 		require(expected.registryFingerprint().equals(actual.registryFingerprint())
+				&& expected.chemicalRegistryFingerprint().equals(actual.chemicalRegistryFingerprint())
 				&& expected.materialPalette().equals(actual.materialPalette())
+				&& expected.solidCompositions().equals(actual.solidCompositions())
+				&& expected.solidSpeciesTotals().equals(actual.solidSpeciesTotals())
 				&& expected.activeParcels().equals(actual.activeParcels())
 				&& expected.depositGroups().equals(actual.depositGroups())
 				&& expected.totalSolidVolumeSvq() == actual.totalSolidVolumeSvq()

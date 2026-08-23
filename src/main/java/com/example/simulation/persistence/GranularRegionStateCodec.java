@@ -3,6 +3,7 @@ package com.example.simulation.persistence;
 import com.example.granular.GranularLimits;
 import com.example.granular.GranularStateSnapshot;
 import com.example.granular.SolidVolume;
+import com.example.chemistry.ChemicalLimits;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -12,6 +13,8 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 /** Canonical bounded payload nested inside the jointly committed region-state v5 generation. */
 final class GranularRegionStateCodec {
@@ -39,6 +42,8 @@ final class GranularRegionStateCodec {
 	record ManifestData(
 			int capabilities, String registryFingerprint, long svqPerBv, int porosityScale,
 			int activeBudget, int depositGroupBudget, List<String> materialPalette,
+			String chemicalRegistryFingerprint, List<GranularStateSnapshot.StableComposition> solidCompositions,
+			Map<String, Long> solidSpeciesTotals,
 			int activeCount, int depositGroupCount, int depositCellCount,
 			long activeSvq, long activeMassBits, long depositSvq, long depositMassBits,
 			List<MaterialLedger> materialLedgers, List<SectionLedger> sectionLedgers
@@ -54,6 +59,18 @@ final class GranularRegionStateCodec {
 			out.writeInt(data.activeBudget()); out.writeInt(data.depositGroupBudget());
 			out.writeInt(data.materialPalette().size());
 			for (String id : data.materialPalette()) out.writeUTF(id);
+			out.writeUTF(data.chemicalRegistryFingerprint());
+			out.writeInt(data.solidCompositions().size());
+			for (GranularStateSnapshot.StableComposition composition : data.solidCompositions()) {
+				out.writeLong(composition.massResidualBits()); out.writeInt(composition.components().size());
+				for (GranularStateSnapshot.CompositionComponent component : composition.components()) {
+					out.writeUTF(component.speciesId()); out.writeLong(component.amountQuanta());
+				}
+			}
+			out.writeInt(data.solidSpeciesTotals().size());
+			for (Map.Entry<String, Long> entry : new TreeMap<>(data.solidSpeciesTotals()).entrySet()) {
+				out.writeUTF(entry.getKey()); out.writeLong(entry.getValue());
+			}
 			out.writeInt(data.activeCount()); out.writeInt(data.depositGroupCount()); out.writeInt(data.depositCellCount());
 			out.writeLong(data.activeSvq()); out.writeLong(data.activeMassBits());
 			out.writeLong(data.depositSvq()); out.writeLong(data.depositMassBits());
@@ -91,6 +108,30 @@ final class GranularRegionStateCodec {
 			int materialCount = bounded(input.readInt(), 1, GranularLimits.MAX_MATERIALS, "material palette");
 			List<String> palette = new ArrayList<>(materialCount);
 			for (int index = 0; index < materialCount; index++) palette.add(input.readUTF());
+			String chemicalFingerprint = input.readUTF();
+			if (!chemicalFingerprint.isEmpty() && !chemicalFingerprint.matches("[0-9a-f]{64}")) {
+				throw new IOException("Invalid solid composition chemical registry fingerprint");
+			}
+			int compositionCount = bounded(input.readInt(), 0,
+					GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION + GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
+					"solid composition table");
+			List<GranularStateSnapshot.StableComposition> compositions = new ArrayList<>(compositionCount);
+			for (int index = 0; index < compositionCount; index++) {
+				long residual = input.readLong();
+				int entries = bounded(input.readInt(), 1, GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES,
+						"solid composition entries");
+				List<GranularStateSnapshot.CompositionComponent> components = new ArrayList<>(entries);
+				for (int entry = 0; entry < entries; entry++) components.add(
+						new GranularStateSnapshot.CompositionComponent(input.readUTF(), positive(input.readLong(),
+								"solid composition amount")));
+				compositions.add(new GranularStateSnapshot.StableComposition(List.copyOf(components), residual));
+			}
+			int speciesLedgerCount = bounded(input.readInt(), 0, ChemicalLimits.MAX_SPECIES, "solid species ledger");
+			TreeMap<String, Long> speciesTotals = new TreeMap<>();
+			for (int index = 0; index < speciesLedgerCount; index++) {
+				String id = input.readUTF(); long amount = positive(input.readLong(), "solid species total");
+				if (speciesTotals.put(id, amount) != null) throw new IOException("Duplicate solid species ledger id " + id);
+			}
 			int activeCount = bounded(input.readInt(), 0, activeBudget, "active count");
 			int depositCount = bounded(input.readInt(), 0, depositBudget, "deposit group count");
 			int depositCells = bounded(input.readInt(), 0, depositCount, "deposit cell count");
@@ -116,9 +157,11 @@ final class GranularRegionStateCodec {
 			}
 			requireEnd(input);
 			return new ManifestData(capabilities, fingerprint, svqScale, porosityScale, activeBudget, depositBudget,
-					List.copyOf(palette), activeCount, depositCount, depositCells, activeSvq, activeMass,
+					List.copyOf(palette), chemicalFingerprint, List.copyOf(compositions), Map.copyOf(speciesTotals),
+					activeCount, depositCount, depositCells, activeSvq, activeMass,
 					depositSvq, depositMass, List.copyOf(ledgers), List.copyOf(sections));
 		} catch (EOFException truncated) { throw new IOException("Truncated granular manifest payload", truncated); }
+		catch (IllegalArgumentException invalid) { throw new IOException("Invalid granular manifest payload: " + invalid.getMessage(), invalid); }
 	}
 
 	byte[] encodeSection(SectionData data) {
@@ -205,6 +248,10 @@ final class GranularRegionStateCodec {
 	private static long positiveOrZero(long value, String label) throws IOException {
 		if (value < 0L) throw new IOException("Negative " + label);
 		return value;
+	}
+
+	private static long positive(long value, String label) throws IOException {
+		if (value <= 0L) throw new IOException("Non-positive " + label); return value;
 	}
 
 	private static void requireMass(long bits, int count, String label) throws IOException {

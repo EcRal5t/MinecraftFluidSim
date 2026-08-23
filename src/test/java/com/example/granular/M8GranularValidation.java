@@ -22,6 +22,7 @@ public final class M8GranularValidation {
 		boolean fast = Arrays.asList(args).contains("--fast");
 		registryIsCanonicalAndBounded();
 		registryDefinitionsAndWorldSnapshotAreStrict();
+		solidCompositionStateIsIndependentAndPersistent();
 		solidVolumeConversionsAreConservative();
 		parcelSplitMergePreservesInventory();
 		depositCapacityAndGroupBudgetAreAtomic();
@@ -32,6 +33,47 @@ public final class M8GranularValidation {
 		settlingRelaxationSleepAndWakeAreLocal();
 		solverCouplingPreservesInventories(fast ? 8 : 80);
 		System.out.println("M8 granular core gate passed: exact inventory, coupling, repose, sleep and local wake");
+	}
+
+	private static void solidCompositionStateIsIndependentAndPersistent() {
+		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
+		int precipitate = registry.materialHandle(BuiltinGranularDefinitions.PRECIPITATE);
+		SolidCompositionPool compositions = new SolidCompositionPool(BuiltinChemicalDefinitions.REGISTRY, 4);
+		SolidCompositionRecord activeRecord = SolidCompositionRecord.fromStableAmounts(
+				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(
+						BuiltinChemicalDefinitions.NA_PLUS, 640L,
+						BuiltinChemicalDefinitions.CL_MINUS, 640L), 0.0);
+		int activeComposition = compositions.create(activeRecord);
+		GranularParcelStore parcels = new GranularParcelStore(registry, 4);
+		parcels.add(new GranularParcelStore.Parcel(0.5F, 0.5F, 0.5F, 0.0F, 0.0F, 0.0F,
+				10L, activeRecord.totalMass(BuiltinChemicalDefinitions.REGISTRY), precipitate, activeComposition,
+				0, (byte) 0));
+		SolidCompositionRecord depositRecord = SolidCompositionRecord.fromStableAmounts(
+				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(
+						BuiltinChemicalDefinitions.NA_PLUS, 1_280L,
+						BuiltinChemicalDefinitions.CL_MINUS, 1_280L), 0.0);
+		int depositComposition = compositions.create(depositRecord);
+		GranularDepositStore deposits = new GranularDepositStore(registry, 8, 4);
+		require(deposits.tryAdd(0, new GranularDepositStore.SolidPortion(precipitate, depositComposition, 20L,
+				depositRecord.totalMass(BuiltinChemicalDefinitions.REGISTRY)), SolidVolume.SVQ_PER_CELL),
+				"reactive deposit fixture was rejected");
+		GranularStateSnapshot snapshot = GranularStateSnapshot.capture(2, 2, 2, registry, parcels, deposits, compositions);
+		snapshot.validateSolidCompositionMasses(BuiltinChemicalDefinitions.REGISTRY);
+		require(snapshot.solidSpeciesTotals().get(BuiltinChemicalDefinitions.NA_PLUS) == 1_920L
+				&& snapshot.solidSpeciesTotals().get(BuiltinChemicalDefinitions.CL_MINUS) == 1_920L,
+				"solid species totals did not close");
+
+		GranularParcelStore restoredParcels = new GranularParcelStore(registry, 4);
+		GranularDepositStore restoredDeposits = new GranularDepositStore(registry, 8, 4);
+		SolidCompositionPool restoredCompositions = new SolidCompositionPool(BuiltinChemicalDefinitions.REGISTRY, 4);
+		snapshot.restoreInto(registry, restoredParcels, restoredDeposits, restoredCompositions,
+				ignored -> SolidVolume.SVQ_PER_CELL);
+		GranularStateSnapshot restored = GranularStateSnapshot.capture(
+				2, 2, 2, registry, restoredParcels, restoredDeposits, restoredCompositions);
+		require(restored.solidSpeciesTotals().equals(snapshot.solidSpeciesTotals())
+				&& restored.totalSolidVolumeSvq() == snapshot.totalSolidVolumeSvq()
+				&& restored.totalMassBits() == snapshot.totalMassBits(),
+				"solid composition snapshot round-trip changed inventory");
 	}
 
 	private static void registryDefinitionsAndWorldSnapshotAreStrict() throws Exception {

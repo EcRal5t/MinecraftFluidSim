@@ -17,6 +17,7 @@ import com.example.granular.GranularMechanics;
 import com.example.granular.GranularParcelStore;
 import com.example.granular.GranularRegistry;
 import com.example.granular.GranularStateSnapshot;
+import com.example.granular.SolidCompositionPool;
 import com.example.granular.SolidVolume;
 
 import java.util.ArrayList;
@@ -121,6 +122,7 @@ public final class FlipFluidDomain {
 	private GranularParcelStore granularParcels;
 	private GranularDepositStore granularDeposits;
 	private GranularInventory granularInventory;
+	private SolidCompositionPool solidCompositions;
 	private GranularDepositDynamics granularDepositDynamics;
 	private GranularDepositDynamics.Stats lastGranularDepositStats =
 			new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
@@ -259,10 +261,15 @@ public final class FlipFluidDomain {
 	public GranularDepositDynamics.Stats lastGranularDepositStats() { return lastGranularDepositStats; }
 	public GranularStateSnapshot exportGranularState() {
 		if (granularRegistry == null) throw new IllegalStateException("Granular state is not bound");
-		return GranularStateSnapshot.capture(sizeX, sizeY, sizeZ, granularRegistry, granularParcels, granularDeposits);
+		return GranularStateSnapshot.capture(sizeX, sizeY, sizeZ, granularRegistry, granularParcels,
+				granularDeposits, solidCompositions);
 	}
 	public long totalGranularSolidVolumeSvq() { return granularInventory == null ? 0L : granularInventory.totalSolidVolumeSvq(); }
 	public double totalGranularMass() { return granularInventory == null ? 0.0 : granularInventory.totalMass(); }
+	public SolidCompositionPool solidCompositions() {
+		if (solidCompositions == null) throw new IllegalStateException("Solid composition state is not bound");
+		return solidCompositions;
+	}
 
 	/** Binds the runtime granular registry without changing any v1/v2/v3 handoff or persistence bytes. */
 	public void bindGranular(GranularRegistry registry, FluidMaterialRegistry liquidRegistry) {
@@ -282,6 +289,10 @@ public final class FlipFluidDomain {
 				throw new IllegalArgumentException("No granular carrier definition for liquid " + material.id());
 			}
 		}
+		if (chemicalParcels != null && registry.hasReactiveRules()
+				&& !registry.chemicalRegistryFingerprint().equals(chemicalParcels.registry().fingerprint())) {
+			throw new IllegalArgumentException("Granular registry chemical dependency mismatch");
+		}
 		granularRegistry = registry;
 		granularParcels = new GranularParcelStore(registry, GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION);
 		granularDeposits = new GranularDepositStore(registry, cellCount,
@@ -296,6 +307,7 @@ public final class FlipFluidDomain {
 				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION);
 		granularCarrierMaterialByCell = new int[cellCount];
 		granularCarrierVolumeByCell = new double[cellCount];
+		bindSolidCompositionPoolIfReady();
 		gridDirty = true;
 	}
 
@@ -314,7 +326,7 @@ public final class FlipFluidDomain {
 			liquidRegistry = materialRegistry;
 		}
 		bindGranular(registry, liquidRegistry);
-		snapshot.restoreInto(registry, granularParcels, granularDeposits,
+		snapshot.restoreInto(registry, granularParcels, granularDeposits, solidCompositions,
 				cell -> SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell)));
 		granularDeposits.forEachCell((cell, ignoredVolume, ignoredPorosity) -> granularDepositDynamics.disturbCell(cell));
 		gridDirty = true;
@@ -331,6 +343,9 @@ public final class FlipFluidDomain {
 			throw new IllegalArgumentException("Granular insertion inventory is invalid");
 		}
 		granularRegistry.material(materialHandle);
+		if (compositionHandle != 0 && (solidCompositions == null || !solidCompositions.isLive(compositionHandle))) {
+			throw new IllegalArgumentException("Granular insertion has no live solid composition");
+		}
 		ensureGrid();
 		long geometricSvq = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
 		if (Math.addExact(granularCoupling.solidSvq(cell), solidVolumeSvq) > geometricSvq) {
@@ -544,6 +559,10 @@ public final class FlipFluidDomain {
 			}
 			return;
 		}
+		if (granularRegistry != null && granularRegistry.hasReactiveRules()
+				&& !granularRegistry.chemicalRegistryFingerprint().equals(registry.fingerprint())) {
+			throw new IllegalArgumentException("Granular registry chemical dependency mismatch");
+		}
 		ChemicalParcelStore candidate = new ChemicalParcelStore(registry, maximumParticleCount, cellCount);
 		for (FluidMaterial material : materialRegistry.materials()) registry.phaseHandleForMaterial(material.id());
 		for (int marker = 0; marker < particleCount; marker++) {
@@ -553,6 +572,19 @@ public final class FlipFluidDomain {
 		chemicalParcels = candidate;
 		chemicalPreviousCells = new int[maximumParticleCount];
 		chemicalMovingMarkers = new int[maximumParticleCount];
+		bindSolidCompositionPoolIfReady();
+	}
+
+	private void bindSolidCompositionPoolIfReady() {
+		if (solidCompositions != null || granularRegistry == null || chemicalParcels == null
+				|| !granularRegistry.hasReactiveRules()) return;
+		if (!granularRegistry.chemicalRegistryFingerprint().equals(chemicalParcels.registry().fingerprint())) {
+			throw new IllegalArgumentException("Granular registry chemical dependency mismatch");
+		}
+		int depositCapacity = Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
+				Math.multiplyExact(cellCount, GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL));
+		solidCompositions = new SolidCompositionPool(chemicalParcels.registry(),
+				Math.addExact(GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, depositCapacity));
 	}
 
 	/** Test/command reagent injection on one marker using absolute species quanta. */

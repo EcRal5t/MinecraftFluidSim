@@ -340,6 +340,10 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				.map(com.example.granular.ParticulateMaterial::id).toList())) {
 			throw new IOException("Region-state v5 granular registry fingerprint/palette mismatch");
 		}
+		if (!granular.solidCompositions().isEmpty()
+				&& !granular.chemicalRegistryFingerprint().equals(registry.chemicalRegistryFingerprint())) {
+			throw new IOException("Region-state v5 solid composition registry dependency mismatch");
+		}
 		GranularStateSnapshot.ActiveParcel[] active = new GranularStateSnapshot.ActiveParcel[granular.activeCount()];
 		boolean[] seenActive = new boolean[active.length];
 		List<GranularStateSnapshot.DepositGroup> deposits = new ArrayList<>(granular.depositGroupCount());
@@ -371,7 +375,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				+ Double.longBitsToDouble(granular.depositMassBits());
 		try {
 			return new GranularStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
-					granular.registryFingerprint(), granular.materialPalette(), Arrays.asList(active), deposits,
+					granular.registryFingerprint(), granular.chemicalRegistryFingerprint(), granular.materialPalette(),
+					granular.solidCompositions(), granular.solidSpeciesTotals(), Arrays.asList(active), deposits,
 					totalSvq, Double.doubleToRawLongBits(totalMass));
 		} catch (IllegalArgumentException invalid) {
 			throw new IOException("Invalid region-state v5 granular inventory: " + invalid.getMessage(), invalid);
@@ -538,8 +543,11 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		GranularRegionStateCodec.ManifestData expected = codec.decodeManifest(
 				requiredExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION).payload());
 		boolean capabilityChemistry = (expected.capabilities() & GranularRegionStateCodec.CAP_CHEMISTRY) != 0;
+		boolean capabilityPrecipitation = (expected.capabilities() & GranularRegionStateCodec.CAP_PRECIPITATION) != 0;
 		if (capabilityChemistry != manifest.hasChemicalState()
-				|| (expected.capabilities() & GranularRegionStateCodec.CAP_PRECIPITATION) != 0) {
+				|| capabilityPrecipitation != !expected.solidCompositions().isEmpty()
+				|| !expected.solidCompositions().isEmpty() && (!capabilityChemistry
+				|| !expected.chemicalRegistryFingerprint().equals(manifest.registryFingerprint()))) {
 			throw new IOException("Region-state v5 capability set does not match its complete payload");
 		}
 		if (expected.materialLedgers().size() != expected.materialPalette().size()
@@ -637,7 +645,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		}
 		try {
 			new GranularStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), expected.registryFingerprint(),
-					expected.materialPalette(), Arrays.asList(active), deposits,
+					expected.chemicalRegistryFingerprint(), expected.materialPalette(), expected.solidCompositions(),
+					expected.solidSpeciesTotals(), Arrays.asList(active), deposits,
 					Math.addExact(totalActiveSvq, totalDepositSvq),
 					Double.doubleToRawLongBits(totalActiveMass + totalDepositMass));
 		} catch (IllegalArgumentException invalid) {
@@ -865,11 +874,13 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			depositCells += sectionDepositCells;
 		}
 		int capabilities = GranularRegionStateCodec.CAP_MATERIALS | GranularRegionStateCodec.CAP_GRANULAR
-				| (chemicalState ? GranularRegionStateCodec.CAP_CHEMISTRY : 0);
+				| (chemicalState ? GranularRegionStateCodec.CAP_CHEMISTRY : 0)
+				| (!snapshot.solidCompositions().isEmpty() ? GranularRegionStateCodec.CAP_PRECIPITATION : 0);
 		return new GranularRegionStateCodec.ManifestData(capabilities, snapshot.registryFingerprint(),
 				SolidVolume.SVQ_PER_BV, GranularLimits.POROSITY_SCALE,
 				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
-				snapshot.materialPalette(), snapshot.activeParcels().size(), snapshot.depositGroups().size(), depositCells,
+				snapshot.materialPalette(), snapshot.chemicalRegistryFingerprint(), snapshot.solidCompositions(),
+				snapshot.solidSpeciesTotals(), snapshot.activeParcels().size(), snapshot.depositGroups().size(), depositCells,
 				allActiveSvq, Double.doubleToRawLongBits(canonicalActiveMass), allDepositSvq,
 				Double.doubleToRawLongBits(canonicalDepositMass), List.copyOf(materialLedgers), List.copyOf(sectionLedgers));
 	}

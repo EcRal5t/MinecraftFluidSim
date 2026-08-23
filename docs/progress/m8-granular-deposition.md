@@ -119,3 +119,12 @@ definition mismatch 保留及 unknown store content 锁定均通过；两域 run
 
 最近 `granular --rerun-tasks` 通过，包含 rule codec、bundled fingerprint 与 registry snapshot round-trip；runner
 1.412 秒。
+
+- 独立 `SolidCompositionRecord`/primitive pool 已接入：每个 reactive active/deposit inventory 拥有唯一 bounded handle，
+  indicator 与 liquid phase 不进入固相；inert handle 固定为 0。v5 把 runtime handle 改写为 canonical stable-species table，
+  并保存/复核 chemical fingerprint、solid species totals、charge 可导出关系和 raw mass residual。
+- reactive composition 的 active/deposit mass 必须与 exact species mass+residual 闭合；缺 chemical gate/registry、孤儿或
+  复用 handle、table/ledger 不规范一律拒绝。关闭 precipitation 后仍可用 chemistry+granular 机械恢复已存在 reactive solid。
+
+复跑 `granular,region-state --rerun-tasks`，新增非空 reactive active parcel 的 v5 codec/磁盘 readback，inert v5 与旧迁移
+未回退；两域 runner 3.146 秒。

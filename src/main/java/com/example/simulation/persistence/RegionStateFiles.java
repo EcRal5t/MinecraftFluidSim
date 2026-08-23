@@ -359,7 +359,14 @@ public final class RegionStateFiles {
 				if (chemicalRegistry == null) throw new IOException("chemical region-state v5 verification requires the authoritative chemical registry");
 				state.reconstructChemical(chemicalRegistry);
 			} else state.reconstructMaterial();
-			state.reconstructGranular(granularRegistry);
+			var granular = state.reconstructGranular(granularRegistry);
+			if (!granular.solidCompositions().isEmpty()) {
+				if (chemicalRegistry == null) throw new IOException("Reactive region-state v5 verification requires the authoritative chemical registry");
+				try { granular.validateSolidCompositionMasses(chemicalRegistry); }
+				catch (IllegalArgumentException invalid) {
+					throw new IOException("Reactive region-state v5 solid composition validation failed", invalid);
+				}
+			}
 		}
 		else throw new IOException("Unsupported region-state version " + state.manifest().formatVersion());
 	}
