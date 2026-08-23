@@ -16,6 +16,8 @@ public final class ChemicalParcelStore {
 	private final long[] indicatorWords;
 	private final long[] dirtyCellWords;
 	private long totalQuanta;
+	private ChemicalTransferLedger escapedSink = ChemicalTransferLedger.EMPTY;
+	private ChemicalTransferLedger externalSource = ChemicalTransferLedger.EMPTY;
 
 	public ChemicalParcelStore(ChemicalRegistry registry, int reservedMarkerCapacity, int cellCount) {
 		if (cellCount <= 0) throw new IllegalArgumentException("Cell count must be positive");
@@ -29,6 +31,10 @@ public final class ChemicalParcelStore {
 	public ChemicalRegistry registry() { return registry; }
 	public PackedChemicalMixturePool pool() { return pool; }
 	public long totalQuanta() { return totalQuanta; }
+	public ChemicalTransferLedger escapedSink() { return escapedSink; }
+	public ChemicalTransferLedger externalSource() { return externalSource; }
+	public void recordEscapedSink(ChemicalTransferLedger ledger) { escapedSink = escapedSink.plus(ledger); }
+	public void recordExternalSource(ChemicalTransferLedger ledger) { externalSource = externalSource.plus(ledger); }
 
 	public void requireCompatible(ChemicalMixtureRecord record, String materialId, boolean indicator) {
 		validateRecord(record);

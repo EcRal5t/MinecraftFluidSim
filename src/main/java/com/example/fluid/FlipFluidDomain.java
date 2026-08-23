@@ -3,6 +3,7 @@ package com.example.fluid;
 import com.example.chemistry.ChemicalMixtureRecord;
 import com.example.chemistry.ChemicalParcelStore;
 import com.example.chemistry.ChemicalRegistry;
+import com.example.chemistry.ChemicalTransferLedger;
 import com.example.fluid.air.AirNetwork;
 
 import java.util.ArrayList;
@@ -386,6 +387,24 @@ public final class FlipFluidDomain {
 	 * geometry is deliberately not persisted.
 	 */
 	public float setSolidMicroMask(int x, int y, int z, int mask) {
+		ChemicalTransferLedger.Builder displaced = chemicalParcels == null ? null
+				: ChemicalTransferLedger.builder(chemicalParcels.registry());
+		float volume = setSolidMicroMaskInternal(x, y, z, mask, displaced);
+		if (displaced != null) chemicalParcels.recordEscapedSink(displaced.build());
+		return volume;
+	}
+
+	/** Collision edit that returns the complete parcel ledger for conservative nearby restoration. */
+	public ChemicalDisplacement setSolidMicroMaskChemical(int x, int y, int z, int mask) {
+		if (chemicalParcels == null) throw new IllegalStateException("Chemical collision transfer requires chemistry");
+		ChemicalTransferLedger.Builder displaced = ChemicalTransferLedger.builder(chemicalParcels.registry());
+		float volume = setSolidMicroMaskInternal(x, y, z, mask, displaced);
+		return new ChemicalDisplacement(volume, displaced.build());
+	}
+
+	private float setSolidMicroMaskInternal(
+			int x, int y, int z, int mask, ChemicalTransferLedger.Builder chemicalDisplacement
+	) {
 		int index = cellIndexChecked(x, y, z);
 		int previous = cutCells.mask(index);
 		if (previous == mask) return 0.0F;
@@ -393,9 +412,10 @@ public final class FlipFluidDomain {
 		solid[index] = mask == FlipCutCellGeometry.FULL_MASK;
 		pressure[index] = 0.0F;
 		int newlyOccupied = mask & ~previous;
-		float displaced = newlyOccupied == 0 ? 0.0F : removeParticlesInMicroMask(x, y, z, newlyOccupied);
+		float displaced = newlyOccupied == 0 ? 0.0F
+				: removeParticlesInMicroMask(x, y, z, newlyOccupied, chemicalDisplacement);
 		float excess = Math.max(0.0F, exactVolumeInCell(x, y, z) - cutCells.openCellVolume(index));
-		if (excess > 1.0E-6F) displaced += removeParticlesInCell(x, y, z, excess);
+		if (excess > 1.0E-6F) displaced += removeParticlesInCell(x, y, z, excess, chemicalDisplacement);
 		volume[index] = 0.0F;
 		gridDirty = true;
 		return displaced;
@@ -752,7 +772,14 @@ public final class FlipFluidDomain {
 
 	/** Removes every marker; the exact marker-volume ledger becomes zero immediately. */
 	public void removeAllWaterExact() {
-		if (chemicalParcels != null) chemicalParcels.clear(particleCount);
+		if (chemicalParcels != null) {
+			ChemicalTransferLedger.Builder drained = ChemicalTransferLedger.builder(chemicalParcels.registry());
+			for (int marker = 0; marker < particleCount; marker++) drained.add(
+					materialRegistry.material(particleMaterialHandle[marker]).id(), chemicalParcels.indicator(marker),
+					particleVolume[marker], particleMass[marker], chemicalParcels.record(marker));
+			chemicalParcels.recordEscapedSink(drained.build());
+			chemicalParcels.clear(particleCount);
+		}
 		particleCount = 0;
 		gridDirty = true;
 	}
@@ -870,6 +897,94 @@ public final class FlipFluidDomain {
 			result.add(new MaterialPortion(portions.get(i).materialHandle(), inserted[i], insertedMass[i]));
 		}
 		return new ExactMixtureTransfer(true, List.copyOf(result));
+	}
+
+	/** Plans and restores an exact chemical ledger without substituting a default carrier. */
+	public ExactChemicalTransfer tryInsertExactChemical(
+			int centerX, int centerY, int centerZ, ChemicalTransferLedger ledger, int maxRadius
+	) {
+		if (chemicalParcels == null) throw new IllegalStateException("Chemical insertion requires chemistry");
+		if (ledger == null || ledger.isEmpty()) return new ExactChemicalTransfer(ledger != null, ChemicalTransferLedger.EMPTY);
+		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
+		try {
+			if (Math.addExact(chemicalParcels.totalQuanta(), ledger.totalQuanta())
+					> com.example.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
+				return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+			}
+		} catch (ArithmeticException overflow) {
+			return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		}
+		double[] exactCellVolume = exactCellVolumes();
+		List<CellCandidate> nearby = nearbyCells(centerX, centerY, centerZ, maxRadius);
+		List<ChemicalInsertPiece> pieces = new ArrayList<>();
+		for (ChemicalTransferLedger.Group group : ledger.groups()) {
+			int material = materialRegistry.handle(group.materialId());
+			double remaining = group.volume();
+			List<ChemicalPieceDraft> groupPieces = new ArrayList<>();
+			for (CellCandidate candidate : nearby) {
+				if (remaining <= 0.0) break;
+				double capacity = Math.max(0.0, cutCells.openCellVolume(candidate.index()) - exactCellVolume[candidate.index()]);
+				double allocation = Math.min(capacity, remaining);
+				if (allocation <= 0.0) continue;
+				int cellX = candidate.index() % sizeX;
+				int yz = candidate.index() / sizeX;
+				int cellY = yz % sizeY, cellZ = yz / sizeY;
+				double left = allocation;
+				while (left > 0.0) {
+					float piece = (float) Math.min(PARTICLE_VOLUME, left);
+					while (piece > left) piece = Math.nextDown(piece);
+					if (!(piece > 0.0F)) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+					groupPieces.add(new ChemicalPieceDraft(cellX, cellY, cellZ, piece, material));
+					if ((long) particleCount + pieces.size() + groupPieces.size() > maximumParticleCount) {
+						return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+					}
+					left -= piece;
+				}
+				exactCellVolume[candidate.index()] += allocation;
+				remaining -= allocation;
+			}
+			if (remaining > 0.0) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+			float[] weights = new float[groupPieces.size()];
+			int[] ordinals = new int[groupPieces.size()];
+			for (int piece = 0; piece < groupPieces.size(); piece++) {
+				weights[piece] = groupPieces.get(piece).volume();
+				ordinals[piece] = particleCount + pieces.size() + piece;
+			}
+			@SuppressWarnings("unchecked")
+			TreeMap<String, Long>[] distributed = new TreeMap[groupPieces.size()];
+			for (int piece = 0; piece < distributed.length; piece++) distributed[piece] = new TreeMap<>();
+			for (Map.Entry<String, Long> species : group.speciesQuanta().entrySet()) {
+				long[] allocation = com.example.chemistry.BinaryVolumeAllocator.allocate(species.getValue(), weights, ordinals);
+				for (int piece = 0; piece < allocation.length; piece++) if (allocation[piece] > 0L) {
+					distributed[piece].put(species.getKey(), allocation[piece]);
+				}
+			}
+			double volumeLeft = group.volume(), massLeft = group.mass();
+			for (int piece = 0; piece < groupPieces.size(); piece++) {
+				if (distributed[piece].isEmpty()) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+				ChemicalPieceDraft draft = groupPieces.get(piece);
+				boolean last = piece + 1 == groupPieces.size();
+				double mass = last ? massLeft : massLeft * draft.volume() / volumeLeft;
+				ChemicalMixtureRecord withoutResidual = ChemicalMixtureRecord.fromStableAmounts(
+						chemicalParcels.registry(), distributed[piece], 0.0);
+				ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(
+						chemicalParcels.registry(), distributed[piece],
+						mass - withoutResidual.exactSpeciesMass(chemicalParcels.registry()).toDouble());
+				chemicalParcels.requireCompatible(record, group.materialId(), group.indicator());
+				pieces.add(new ChemicalInsertPiece(draft.cellX(), draft.cellY(), draft.cellZ(),
+						draft.volume(), draft.materialHandle(), mass, record, group.indicator()));
+				volumeLeft -= draft.volume();
+				massLeft -= mass;
+			}
+		}
+		for (ChemicalInsertPiece piece : pieces) {
+			int slot = firstOpenSlot(cellIndex(piece.cellX(), piece.cellY(), piece.cellZ()), 0);
+			if (slot < 0) throw new IllegalStateException("Chemical insertion lost its planned open slot");
+			spawnChemicalParticle(piece.cellX(), piece.cellY(), piece.cellZ(), slot, piece.volume(),
+					piece.materialHandle(), piece.mass(), piece.mixture(), piece.indicator());
+		}
+		gridDirty = true;
+		return new ExactChemicalTransfer(true, ledger);
 	}
 
 	/**
@@ -996,12 +1111,19 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	private record InsertAllocation(
 			int x, int y, int z, double amount, int materialHandle, int portionIndex
 	) { }
+	private record ChemicalPieceDraft(int cellX, int cellY, int cellZ, float volume, int materialHandle) { }
+	private record ChemicalInsertPiece(
+			int cellX, int cellY, int cellZ, float volume, int materialHandle, double mass,
+			ChemicalMixtureRecord mixture, boolean indicator
+	) { }
 	private record ExtractionAllocation(
 			int particle, float newVolume, double newMass, ChemicalParcelStore.SplitPlan chemicalPlan
 	) { }
 
 	public record ExactVolumeTransfer(boolean transferred, double volume, double mass) { }
 	public record ExactMixtureTransfer(boolean transferred, List<MaterialPortion> portions) { }
+	public record ExactChemicalTransfer(boolean transferred, ChemicalTransferLedger ledger) { }
+	public record ChemicalDisplacement(float volume, ChemicalTransferLedger ledger) { }
 	public record MaterialPortion(int materialHandle, double volume, double mass) { }
 
 	public StepStats step() {
@@ -1923,6 +2045,13 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass);
 private void spawnParticle(
 int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass
 ) {
+spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, null, false);
+}
+
+private void spawnParticle(
+int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
+ChemicalMixtureRecord chemicalMixture, boolean indicator
+) {
 if (particleCount >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
 if (!(Float.isFinite(amount) && amount > 0.0F)) throw new IllegalArgumentException("Marker volume must be finite and positive");
 if (!(Double.isFinite(mass) && mass > 0.0)) throw new IllegalArgumentException("Marker mass must be finite and positive");
@@ -1951,14 +2080,36 @@ particleMass[particleCount] = mass;
 particleMaterialHandle[particleCount] = materialHandle;
 particlePhaseLabel[particleCount] = materialRegistry == null ? 0 : materialRegistry.phaseHandle(materialHandle);
 if (chemicalParcels != null) {
-chemicalParcels.assignDefault(particleCount, materialRegistry.material(materialHandle).id(),
-amount, config.cellSize(), mass, false);
+if (chemicalMixture == null) chemicalParcels.assignDefault(
+particleCount, materialRegistry.material(materialHandle).id(), amount, config.cellSize(), mass, false);
+else {
+chemicalParcels.requireCompatible(chemicalMixture, materialRegistry.material(materialHandle).id(), indicator);
+chemicalParcels.assign(particleCount, chemicalMixture, indicator);
+}
 chemicalParcels.markDirtyCell(cellIndex(cellX, cellY, cellZ));
 }
 particleCount++;
 }
 
+private void spawnChemicalParticle(
+int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
+ChemicalMixtureRecord mixture, boolean indicator
+) {
+spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, indicator);
+}
+
 	private float removeParticlesInCell(int cellX, int cellY, int cellZ, float maximum) {
+		ChemicalTransferLedger.Builder removedChemistry = chemicalParcels == null ? null
+				: ChemicalTransferLedger.builder(chemicalParcels.registry());
+		float removed = removeParticlesInCell(cellX, cellY, cellZ, maximum, removedChemistry);
+		if (removedChemistry != null) chemicalParcels.recordEscapedSink(removedChemistry.build());
+		return removed;
+	}
+
+	private float removeParticlesInCell(
+			int cellX, int cellY, int cellZ, float maximum,
+			ChemicalTransferLedger.Builder removedChemistry
+	) {
 		float h = config.cellSize(), removed = 0.0F;
 		for (int i = particleCount - 1; i >= 0 && removed < maximum; i--) {
 			if ((int) Math.floor(particleX[i] / h) != cellX || (int) Math.floor(particleY[i] / h) != cellY || (int) Math.floor(particleZ[i] / h) != cellZ) continue;
@@ -1966,12 +2117,19 @@ particleCount++;
 			float take = Math.min(previousVolume, maximum - removed);
 			double previousMass = particleMass[i];
 			float newVolume = previousVolume - take;
+			if (chemicalParcels != null && newVolume <= 1.0E-6F) {
+				take = previousVolume;
+				newVolume = 0.0F;
+			}
 			double newMass = previousMass * newVolume / previousVolume;
 			if (chemicalParcels != null) {
 				chemicalParcels.markDirtyCell(cellIndex(cellX, cellY, cellZ));
-				if (newVolume > 1.0E-6F) {
-					ChemicalParcelStore.SplitPlan plan = chemicalParcels.planTruncate(
-							i, newVolume, take, newMass, previousMass - newMass);
+				ChemicalParcelStore.SplitPlan plan = chemicalParcels.planTruncate(
+						i, newVolume, take, newMass, previousMass - newMass);
+				if (removedChemistry != null) removedChemistry.add(
+						materialRegistry.material(particleMaterialHandle[i]).id(), chemicalParcels.indicator(i),
+						take, previousMass - newMass, plan.removed());
+				if (newVolume > 0.0F) {
 					chemicalParcels.commitTruncate(i, plan);
 				}
 			}
@@ -1983,7 +2141,10 @@ particleCount++;
 		return removed;
 	}
 
-	private float removeParticlesInMicroMask(int cellX, int cellY, int cellZ, int microMask) {
+	private float removeParticlesInMicroMask(
+			int cellX, int cellY, int cellZ, int microMask,
+			ChemicalTransferLedger.Builder removedChemistry
+	) {
 		float h = config.cellSize(), removed = 0.0F;
 		for (int particle = particleCount - 1; particle >= 0; particle--) {
 			if ((int) Math.floor(particleX[particle] / h) != cellX
@@ -1997,6 +2158,9 @@ particleCount++;
 			int microZ = Math.min(1, Math.max(0, (int) Math.floor(localZ * 2.0F)));
 			int bit = 1 << (microX + 2 * (microY + 2 * microZ));
 			if ((microMask & bit) == 0) continue;
+			if (chemicalParcels != null && removedChemistry != null) removedChemistry.add(
+					materialRegistry.material(particleMaterialHandle[particle]).id(), chemicalParcels.indicator(particle),
+					particleVolume[particle], particleMass[particle], chemicalParcels.record(particle));
 			removed += particleVolume[particle];
 			removeParticle(particle);
 		}

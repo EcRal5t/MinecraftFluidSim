@@ -1,5 +1,6 @@
 package com.example.simulation;
 
+import com.example.chemistry.ChemicalTransferLedger;
 import com.example.fluid.FlipFluidDomain;
 import com.example.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
@@ -129,6 +130,7 @@ final class FluidRegionWorldInteraction {
 					boolean fullBlock = outsideScannedInterior || state.isCollisionShapeFullBlock(level, pos);
 					VoxelShape shape = fullBlock ? Shapes.block() : state.getCollisionShape(level, pos);
 					float displacedInBlock = 0.0F;
+					ChemicalTransferLedger displacedChemistry = ChemicalTransferLedger.EMPTY;
 
 					for (int localZ = 0; localZ < cellsPerBlock; localZ++) {
 						for (int localY = 0; localY < cellsPerBlock; localY++) {
@@ -140,7 +142,14 @@ final class FluidRegionWorldInteraction {
 										shape, localX, localY, localZ, cellsPerBlock, inset
 								);
 								if (domain.solidMicroMask(cellX, cellY, cellZ) == desired) continue;
-								displacedInBlock += domain.setSolidMicroMask(cellX, cellY, cellZ, desired);
+								if (domain.hasChemistryState()) {
+									FlipFluidDomain.ChemicalDisplacement chemical = domain.setSolidMicroMaskChemical(
+											cellX, cellY, cellZ, desired);
+									displacedInBlock += chemical.volume();
+									displacedChemistry = displacedChemistry.plus(chemical.ledger());
+								} else {
+									displacedInBlock += domain.setSolidMicroMask(cellX, cellY, cellZ, desired);
+								}
 								changedCells++;
 							}
 						}
@@ -151,17 +160,28 @@ final class FluidRegionWorldInteraction {
 						int centerX = blockX * cellsPerBlock + cellsPerBlock / 2;
 						int centerY = blockY * cellsPerBlock + cellsPerBlock / 2;
 						int centerZ = blockZ * cellsPerBlock + cellsPerBlock / 2;
-						restorations.add(new Displacement(centerX, centerY, centerZ, displacedInBlock));
+						restorations.add(new Displacement(
+								centerX, centerY, centerZ, displacedInBlock, displacedChemistry));
 					}
 				}
 			}
 		}
 		for (Displacement request : restorations) {
-			FlipFluidDomain.VolumeAddition restoration = domain.addVolumeNearBudgeted(
-					request.centerX(), request.centerY(), request.centerZ(), request.volume(), 8
-			);
-			escaped += request.volume() - restoration.addedVolume();
-			markerBudgetLimited |= restoration.markerBudgetLimited();
+			if (domain.hasChemistryState()) {
+				FlipFluidDomain.ExactChemicalTransfer restoration = domain.tryInsertExactChemical(
+						request.centerX(), request.centerY(), request.centerZ(), request.chemistry(), 8);
+				if (!restoration.transferred()) {
+					escaped += request.volume();
+					domain.chemicalParcels().recordEscapedSink(request.chemistry());
+					markerBudgetLimited |= domain.particleCount() >= domain.maximumParticleCount();
+				}
+			} else {
+				FlipFluidDomain.VolumeAddition restoration = domain.addVolumeNearBudgeted(
+						request.centerX(), request.centerY(), request.centerZ(), request.volume(), 8
+				);
+				escaped += request.volume() - restoration.addedVolume();
+				markerBudgetLimited |= restoration.markerBudgetLimited();
+			}
 		}
 
 		return new FluidRegion.CollisionStats(changedCells, displaced, escaped, markerBudgetLimited);
@@ -198,5 +218,7 @@ final class FluidRegionWorldInteraction {
 		private static final EntityFluidContact DRY = new EntityFluidContact(0.0, Vec3.ZERO);
 	}
 
-	private record Displacement(int centerX, int centerY, int centerZ, float volume) { }
+	private record Displacement(
+			int centerX, int centerY, int centerZ, float volume, ChemicalTransferLedger chemistry
+	) { }
 }

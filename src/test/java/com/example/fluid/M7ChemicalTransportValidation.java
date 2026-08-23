@@ -24,6 +24,7 @@ public final class M7ChemicalTransportValidation {
 		validateAdjacentCellsDoNotReact();
 		validateSplitAndIndicator();
 		validateMergeAndCompaction();
+		validateCollisionDisplacement();
 		System.out.println("M7 chemical transport gate passed: packed budget, same-cell reaction, separation and reseeding conservation");
 	}
 
@@ -117,6 +118,33 @@ public final class M7ChemicalTransportValidation {
 			if (parcels.indicator(marker)) indicated++; else plain++;
 		}
 		check(plain > 0 && indicated > 0, "merge crossed indicator provenance groups");
+	}
+
+	private static void validateCollisionDisplacement() {
+		FlipFluidDomain domain = domainWithCell(1, 1, 1, 1.0F);
+		domain.setMarkerChemical(0, Map.of(
+				BuiltinChemicalDefinitions.H2O, 100_000L,
+				BuiltinChemicalDefinitions.NACL, 10_000L), true);
+		long[] before = domain.chemicalParcels().speciesTotals(domain.particleCount());
+		double volumeBefore = domain.totalVolumeExact();
+		FlipFluidDomain.ChemicalDisplacement displaced = domain.setSolidMicroMaskChemical(1, 1, 1, 0xff);
+		check(domain.particleCount() == 0 && domain.chemicalParcels().totalQuanta() == 0L,
+				"collision did not remove parcel ownership");
+		check(displaced.ledger().totalQuanta() == Arrays.stream(before).sum(),
+				"collision displacement ledger lost species");
+		check(domain.chemicalParcels().escapedSink().isEmpty(),
+				"recoverable collision displacement was recorded as escaped before restoration");
+		domain.setSolidMicroMaskChemical(1, 1, 1, 0);
+		FlipFluidDomain.ExactChemicalTransfer restored = domain.tryInsertExactChemical(
+				1, 1, 1, displaced.ledger(), 0);
+		check(restored.transferred(), "exact collision chemistry could not be restored");
+		check(Double.doubleToRawLongBits(domain.totalVolumeExact()) == Double.doubleToRawLongBits(volumeBefore),
+				"collision restoration changed exact marker volume");
+		check(Arrays.equals(before, domain.chemicalParcels().speciesTotals(domain.particleCount())),
+				"collision restoration changed species inventory");
+		int indicated = 0;
+		for (int marker = 0; marker < domain.particleCount(); marker++) if (domain.chemicalParcels().indicator(marker)) indicated++;
+		check(indicated > 0, "collision restoration lost indicator provenance");
 	}
 
 	private static FlipFluidDomain domainWithCell(int x, int y, int z, float volume) {
