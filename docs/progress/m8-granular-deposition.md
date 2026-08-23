@@ -209,3 +209,20 @@ granular 0.434 秒，runner 合计 1.584 秒；服务端、客户端与测试 so
 <empty|fine_sand|light_beads>`：它只从已冻结的 world registry 生成惰性 canonical `GranularContents v1`，满载 1 BV
 skeleton，并在命令反馈中明确标作 creative/debug 外部源；反应性 material 被拒绝，不能借命令伪造 solid composition。
 命令层编译和完整 `containers` selector 通过（1.391 秒）。
+
+## M8.10 0.14.0 实机候选（2026-08-24）
+
+- 主 Mod 版本升为 0.14.0。完整相关门以 `--rerun-tasks` 运行 `granular,chemistry,region-state,containers,protocol`：
+  五域分别 2.114/1.230/2.367/0.279/0.182 秒，runner 合计 6.172 秒，全部通过；同轮代表性空门 benchmark
+  为 baseline 10.238 ms、granular gate-on/empty 10.308 ms（+0.7%）。
+- `milestone` 的 20 个短域全部通过，runner 合计 8.840 秒；其独立空门 benchmark 为 baseline 10.367 ms、
+  granular gate-on/empty 10.292 ms（-0.7%）。未因候选发布修改 pacing 或自动暂停阈值。
+- JDK 26.0.2 下执行 `clean assemble compileTestJava --offline --no-daemon` 成功（20 秒）；精确根任务
+  `:runServer --offline` 以 Java 25 target 加载 Minecraft 26.2、Fabric Loader 0.19.3 和 realwater 0.14.0，进入
+  `Done` 后接受 `stop` 并正常保存（21 秒）。
+- 候选 JAR 已部署为 `realwater-0.14.0.jar`，SHA-256 为
+  `3B5ADB61833DC210D7B437A4119CB4B79E0181B7A67FCDA3C2C588E6CDF26EE2`；同一 Mod id 只有这一份启用，
+  旧 `realwater-0.13.0.jar` 已可恢复地改名为 `.disabled`。独立只读 GPU probe 保持 0.1.16。
+
+M8 尚不在完成索引中：最后只等待一个真实 controller 合并场景确认客户端颗粒可见性、玩家/发射器干容器事务、
+反应沉淀和正常重启后的 v5 恢复。通过后再关闭路线图 M8 并将 0.14.0 从实机候选记为已验收基线。

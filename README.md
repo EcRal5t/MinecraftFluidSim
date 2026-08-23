@@ -1,6 +1,6 @@
 # Real Water Prototype
 
-Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完成 M0–M7，主 Mod 0.13.0 由 CPU 权威求解，支持最多四个独立区域、控制器闭合边界、跨 chunk 完整加载、原子持久化、分数自由面和 cut-cell 碰撞；在默认关闭的材料门后提供多液体、可变密度、液液界面、液气表面张力和 Young 接触角润湿，并对密闭气腔提供等温气压、有限速率孔流与气液压力耦合。M6 加入可恢复的真实世界 ownership、精确容器和跨 region/item WAL；M7 再加入随 marker 守恒输运的液相强电解质、同格反应、pH 指示剂、化学桶以及 v3 存档/协议/WAL。
+Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。M0–M7 已验收；当前部署主 Mod 0.14.0 的 M8 实机候选，仍由 CPU 权威求解。系统支持最多四个独立区域、控制器闭合边界、跨 chunk 完整加载、原子持久化、分数自由面和 cut-cell 碰撞；在默认关闭的材料门后提供多液体、可变密度、液液界面、表面张力和润湿，并对密闭气腔提供等温气压、有限速率孔流与气液压力耦合。M6 加入可恢复的真实世界 ownership、精确容器和跨 region/item WAL；M7 加入守恒液相强电解质、同格反应、指示剂与化学桶；M8 候选加入守恒 active parcel/deposit、精确排水、浮力/阻力、孔隙水、局部唤醒、固液相转移及 v5/v4 持久化、协议和干颗粒容器事务。
 
 这还不是原版水的全局替代。普通模拟不自动修改世界；控制器功能默认关闭。
 
@@ -62,7 +62,7 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 
 代码职责、最小测试选择和专项 Gradle 命令不在这里重复，统一从 [文档索引](docs/README.md) 进入：
 
-- [当前架构契约](docs/architecture/fluid-solver.md)、[M6 世界 ownership/容器契约](docs/architecture/world-ownership-and-containers.md)与[M7 化学状态契约](docs/architecture/chemistry-state.md)
+- [当前架构契约](docs/architecture/fluid-solver.md)、[M6 世界 ownership/容器契约](docs/architecture/world-ownership-and-containers.md)、[M7 化学状态契约](docs/architecture/chemistry-state.md)与[M8 颗粒状态契约](docs/architecture/granular-state.md)
 - [完成进度与验收证据](docs/progress/README.md)
 - [未来里程碑与技术规格](docs/roadmap/product-roadmap.md)
 - [代码与测试维护路由](docs/maintenance/routing.md)

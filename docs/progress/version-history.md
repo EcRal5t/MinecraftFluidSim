@@ -48,3 +48,7 @@
 ## 0.13.0：M7 守恒化学
 
 - **0.13.0**：新增 exact-rational species/phase/reaction registry、每 marker packed parcel 与 indicator provenance；强电解质完整解离和同格同 chemical-phase 的 `H+ + OH- -> H2O` 在最终 advection 后守恒执行。region-state、protocol 和 container-transfer WAL 分别升门控 v3；化学桶保存 fingerprint、逐 species quanta、质量 residual 与 indicator group，外部 source/escaped sink 可审计并持久化。客户端只读使用 Top-4、pH 与 indicator 派生颜色；新增通用指示剂、抹除器、化学 demo/reagent/管理员库存命令。v1/v2 bytes/readers 和 chemistry-off 路径保持兼容。详见 [`m7-conservative-chemistry.md`](m7-conservative-chemistry.md)。
+
+## 0.14.0：M8 实机候选
+
+- **0.14.0-rc**：新增数据驱动颗粒 registry、守恒 active parcel/deposit inventory、浮力/阻力、moving-solid pressure source、精确排水、孔隙水、安息角沉积、休眠与局部唤醒；化学相转移保存固相 species composition。联合区域状态使用严格门控 `region-state v5`，只读颗粒展示使用 protocol v4，干颗粒玩家/发射器转移使用 container-transfer WAL v4。旧 reader 与门关闭语义保持，自动完成门、clean build 和专用服务器启动已通过；客户端可见性、真实 controller 转移与重启恢复仍待一次合并实机验收。详见 [`m8-granular-deposition.md`](m8-granular-deposition.md)。
