@@ -27,6 +27,7 @@ public final class GranularDepositDynamics {
 		boolean horizontalPathOpen(int fromCell, int directionX, int directionZ);
 		double shields(int surfaceCell, ParticulateMaterial material);
 		Velocity wakeVelocity(int surfaceCell);
+		default void onSolidChanged(int cell) { }
 	}
 
 	private final GranularRegistry registry;
@@ -100,12 +101,15 @@ public final class GranularDepositDynamics {
 			}
 			int x = coordinate(parcel.x(), sizeX), yStart = coordinate(parcel.y(), sizeY);
 			int z = coordinate(parcel.z(), sizeZ);
+			int sourceCell = cell(x, yStart, z);
 			boolean deposited = false;
 			for (int y = yStart; y < sizeY; y++) {
 				int cell = cell(x, y, z);
 				long open = environment.geometricOpenSvq(cell);
 				if (open <= 0L) continue;
 				if (inventory.depositParcel(parcelIndex, cell, open)) {
+					environment.onSolidChanged(sourceCell);
+					environment.onSolidChanged(cell);
 					disturbCell(cell);
 					deposited = true; settled++; operations++;
 					break;
@@ -155,8 +159,10 @@ public final class GranularDepositDynamics {
 		float px = (x + 0.5F) * cellSize, py = Math.min(sizeY * cellSize - cellSize * 0.05F,
 				height + cellSize * 0.05F), pz = (z + 0.5F) * cellSize;
 		try {
-			return inventory.wake(surfaceCell, exposed.materialHandle(), exposed.solidCompositionHandle(), erosion,
+			boolean woken = inventory.wake(surfaceCell, exposed.materialHandle(), exposed.solidCompositionHandle(), erosion,
 					px, py, pz, velocity.x(), velocity.y(), velocity.z());
+			if (woken) environment.onSolidChanged(surfaceCell);
+			return woken;
 		} catch (IllegalArgumentException compositionSplitUnavailable) {
 			return false;
 		}
@@ -194,6 +200,8 @@ public final class GranularDepositDynamics {
 			if (open <= 0L) continue;
 			if (deposits.tryMove(surfaceCell, receiver, exposed.materialHandle(),
 					exposed.solidCompositionHandle(), requestedSkeleton, open)) {
+				environment.onSolidChanged(surfaceCell);
+				environment.onSolidChanged(receiver);
 				disturbColumn(receiverX, receiverZ);
 				return true;
 			}

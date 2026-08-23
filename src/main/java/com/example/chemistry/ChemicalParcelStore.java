@@ -151,6 +151,34 @@ public final class ChemicalParcelStore {
 		return markerHandles[marker] != 0 && pool.isLive(markerHandles[marker]);
 	}
 
+	/** Commits an already-complete same-cell phase-transfer plan without exposing partial marker updates. */
+	public void commitPlannedReplacements(int[] markers, ChemicalMixtureRecord[] replacements) {
+		long candidate = validatePlannedReplacements(markers, replacements);
+		for (int index = 0; index < markers.length; index++) pool.overwrite(markerHandles[markers[index]], replacements[index]);
+		totalQuanta = candidate;
+	}
+
+	public void requireCanCommitPlannedReplacements(int[] markers, ChemicalMixtureRecord[] replacements) {
+		validatePlannedReplacements(markers, replacements);
+	}
+
+	private long validatePlannedReplacements(int[] markers, ChemicalMixtureRecord[] replacements) {
+		if (markers == null || replacements == null || markers.length == 0 || markers.length != replacements.length) {
+			throw new IllegalArgumentException("Chemical replacement plan is empty or inconsistent");
+		}
+		long candidate = totalQuanta; java.util.HashSet<Integer> unique = new java.util.HashSet<>();
+		for (int index = 0; index < markers.length; index++) {
+			int marker = markers[index]; requireAssigned(marker); validateRecord(replacements[index]);
+			if (!unique.add(marker)) throw new IllegalArgumentException("Chemical replacement plan repeats a marker");
+			candidate = Math.addExact(Math.subtractExact(candidate, record(marker).totalQuanta()),
+					replacements[index].totalQuanta());
+		}
+		if (candidate > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
+			throw new ChemicalReactionEngine.BudgetExceededException("Phase transfer exceeds region chemical inventory budget");
+		}
+		return candidate;
+	}
+
 	public boolean isCanonicalDefaultCarrier(int marker, String materialId) {
 		requireAssigned(marker);
 		if (indicator(marker)) return false;
@@ -297,6 +325,19 @@ public final class ChemicalParcelStore {
 	public boolean hasDirtyCells() {
 		for (long word : dirtyCellWords) if (word != 0L) return true;
 		return false;
+	}
+
+	public int[] dirtyCells() {
+		int count = 0;
+		for (long word : dirtyCellWords) count += Long.bitCount(word);
+		int[] result = new int[count]; int target = 0;
+		for (int word = 0; word < dirtyCellWords.length; word++) {
+			long bits = dirtyCellWords[word];
+			while (bits != 0L) {
+				int bit = Long.numberOfTrailingZeros(bits); result[target++] = (word << 6) + bit; bits &= bits - 1L;
+			}
+		}
+		return result;
 	}
 
 	/** Full plan/validate/commit logical step. A failure leaves all parcel records and dirty bits unchanged. */

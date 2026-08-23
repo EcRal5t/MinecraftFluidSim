@@ -23,6 +23,7 @@ public final class M8GranularValidation {
 		registryIsCanonicalAndBounded();
 		registryDefinitionsAndWorldSnapshotAreStrict();
 		solidCompositionStateIsIndependentAndPersistent();
+		phaseTransferPrecipitatesAndDissolves();
 		solidVolumeConversionsAreConservative();
 		parcelSplitMergePreservesInventory();
 		depositCapacityAndGroupBudgetAreAtomic();
@@ -33,6 +34,67 @@ public final class M8GranularValidation {
 		settlingRelaxationSleepAndWakeAreLocal();
 		solverCouplingPreservesInventories(fast ? 8 : 80);
 		System.out.println("M8 granular core gate passed: exact inventory, coupling, repose, sleep and local wake");
+	}
+
+	private static void phaseTransferPrecipitatesAndDissolves() {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		domain.setVolume(1, 1, 1, 1.0F);
+		domain.bindGranular(granular, liquids);
+		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		domain.setPrecipitationEnabled(true);
+		domain.setMarkerChemical(0, java.util.Map.of(
+				BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
+				BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), true);
+		long[] combinedBefore = combinedSpecies(domain);
+		double massBefore = domain.totalMass() + domain.totalGranularMass();
+		double occupiedBefore = domain.totalVolumeExact()
+				+ SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq());
+		domain.step();
+		require(domain.lastPhaseTransferStats().precipitations() == 1
+				&& domain.lastPhaseTransferStats().signedSolidSvq() == 4_096L,
+				"supersaturated aqueous inventory did not precipitate to the bounded target");
+		require(java.util.Arrays.equals(combinedBefore, combinedSpecies(domain)),
+				"precipitation changed combined aqueous+solid species");
+		require(rawClose(massBefore, domain.totalMass() + domain.totalGranularMass()),
+				"precipitation changed combined liquid+solid mass");
+		require(rawClose(occupiedBefore, domain.totalVolumeExact()
+				+ SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq())),
+				"precipitation did not exchange liquid and solid volume exactly");
+
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			domain.setMarkerChemical(marker, java.util.Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L),
+					(marker & 1) == 0);
+		}
+		long[] beforeDissolution = combinedSpecies(domain);
+		double massBeforeDissolution = domain.totalMass() + domain.totalGranularMass();
+		double occupiedBeforeDissolution = domain.totalVolumeExact()
+				+ SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq());
+		domain.step();
+		require(domain.lastPhaseTransferStats().dissolutions() == 1
+				&& domain.totalGranularSolidVolumeSvq() == 0L,
+				"undersaturated liquid did not dissolve the accessible precipitate");
+		require(java.util.Arrays.equals(beforeDissolution, combinedSpecies(domain)),
+				"dissolution changed combined aqueous+solid species");
+		require(rawClose(massBeforeDissolution, domain.totalMass() + domain.totalGranularMass()),
+				"dissolution changed combined liquid+solid mass");
+		require(rawClose(occupiedBeforeDissolution, domain.totalVolumeExact()
+				+ SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq())),
+				"dissolution did not exchange liquid and solid volume exactly");
+		boolean indicated = false;
+		for (int marker = 0; marker < domain.particleCount(); marker++) indicated |= domain.chemicalParcels().indicator(marker);
+		require(indicated, "dissolution erased carrier-marker indicator provenance");
+	}
+
+	private static long[] combinedSpecies(FlipFluidDomain domain) {
+		long[] result = domain.chemicalParcels().speciesTotals(domain.particleCount());
+		if (domain.totalGranularSolidVolumeSvq() == 0L) return result;
+		long[] solid = domain.solidCompositions().speciesTotals();
+		for (int species = 0; species < result.length; species++) result[species] = Math.addExact(result[species], solid[species]);
+		return result;
 	}
 
 	private static void solidCompositionStateIsIndependentAndPersistent() {

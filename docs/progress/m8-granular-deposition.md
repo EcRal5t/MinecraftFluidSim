@@ -128,3 +128,23 @@ definition mismatch 保留及 unknown store content 锁定均通过；两域 run
 
 复跑 `granular,region-state --rerun-tasks`，新增非空 reactive active parcel 的 v5 codec/磁盘 readback，inert v5 与旧迁移
 未回退；两域 runner 3.146 秒。
+
+## M8.6 同格固液相转移（2026-08-24）
+
+- 新增纯 saturation planner：只在同 cell、同 chemical phase 内按冻结规则计算一次 signed extent；aqueous species、
+  reactive solid composition、solid SVQ、marker volume 与双方独立 raw mass 同时生成替换 plan，硬预算或不可表示拆分在
+  commit 前拒绝。
+- precipitation 生成有唯一 composition handle 的 active parcel；reversible dissolution 只消费一个确定的可接触 active
+  parcel 或 exposed deposit group，partial solid split 同时拆 species/SVQ/mass，普通 inventory API 仍拒绝无 composition
+  plan 的 reactive partial move。
+- M7 aqueous reaction 每 logical step 仍只运行一次；固液相转移随后只消费 chemical dirty cells。反应性 parcel 跨格，
+  以及 settle/repose/wake 改变固体所在格时，只把旧/新局部格重新标 dirty；sleeping deposit 不做全域轮询。
+- `precipitationEnabled` 已贯穿新 controller、v5 restore/migration 与 checkpoint 前绑定；规则/registry/chemistry/granular
+  任一依赖缺失时不能开启。预算或 representation block 会暂停该 region，当前 plan 保持未提交，之前已完成的 cell
+  transfer 保持为已提交真值，避免错误声称整 logical step 回滚。
+- gate fixture 在满液格用 Na+/Cl- 触发 4096 SVQ surface cap 的沉淀，再换成欠饱和载液完整溶解；两次均核对
+  aqueous+solid species、独立 mass、liquid+solid volume 守恒，并确认 indicator provenance 不随相转移扩散。
+
+最近门 `runCpuValidation -PcpuValidation=granular,chemistry,region-state --rerun-tasks` 全部通过：granular 1.097 秒、
+chemistry 1.200 秒、region-state 2.300 秒，runner 合计 4.602 秒。下一增量才进入 dry granular container 与独立
+container-transfer WAL v4；不会把固体塞入现有 liquid/chemical WAL v3。

@@ -63,11 +63,12 @@ public final class M7RegionChemistryPersistenceValidation {
 			RegionStateFiles initialFiles = sourceVersion == 3 ? new RegionStateFiles(root, chemistry) : new RegionStateFiles(root);
 			initialFiles.publish(old);
 			FluidRegionManager manager = manager();
-			FluidRegionPersistence persistence = new FluidRegionPersistence(root, true, true, chemistry, true, granular);
+			FluidRegionPersistence persistence = new FluidRegionPersistence(root, true, true, chemistry, true, granular, true);
 			check(persistence.loadMetadata(manager).isEmpty(), "legacy checkpoint was locked before v5 migration");
 			FluidRegion admitted = manager.regions().getFirst(); persistence.restore(admitted);
 			check(admitted.solverLoaded() && admitted.domain().hasChemistryState()
-					&& admitted.domain().hasGranularState() && admitted.checkpointGeneration() == 2L,
+					&& admitted.domain().hasGranularState() && admitted.domain().precipitationEnabled()
+					&& admitted.checkpointGeneration() == 2L,
 					"v" + sourceVersion + " checkpoint did not migrate atomically to granular v5");
 			RegionState migrated = new RegionStateFiles(root, chemistry, granular).read(id);
 			check(migrated.manifest().formatVersion() == 5 && migrated.manifest().hasChemicalState()

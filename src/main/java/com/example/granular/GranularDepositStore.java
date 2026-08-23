@@ -103,7 +103,16 @@ public final class GranularDepositStore {
 
 	/** Removes up to requested SVQ from one exact group, preserving floating mass by remainder. */
 	public SolidPortion take(int cell, int material, int composition, long requestedSvq) {
-		SolidPortion result = peekTake(cell, material, composition, requestedSvq);
+		return takeInternal(cell, material, composition, requestedSvq, false);
+	}
+
+	/** Caller owns the corresponding composition split plan and commits it in the same transaction. */
+	public SolidPortion takeCompositionAware(int cell, int material, int composition, long requestedSvq) {
+		return takeInternal(cell, material, composition, requestedSvq, true);
+	}
+
+	private SolidPortion takeInternal(int cell, int material, int composition, long requestedSvq, boolean allowReactivePartial) {
+		SolidPortion result = peekTakeInternal(cell, material, composition, requestedSvq, allowReactivePartial);
 		requireCell(cell);
 		int previous = -1, entry = headByCell[cell];
 		while (entry >= 0 && (materialHandle[entry] != material || solidCompositionHandle[entry] != composition)) {
@@ -121,12 +130,22 @@ public final class GranularDepositStore {
 	}
 
 	public SolidPortion peekTake(int cell, int material, int composition, long requestedSvq) {
+		return peekTakeInternal(cell, material, composition, requestedSvq, false);
+	}
+
+	public SolidPortion peekTakeCompositionAware(int cell, int material, int composition, long requestedSvq) {
+		return peekTakeInternal(cell, material, composition, requestedSvq, true);
+	}
+
+	private SolidPortion peekTakeInternal(
+			int cell, int material, int composition, long requestedSvq, boolean allowReactivePartial
+	) {
 		requireCell(cell);
 		if (requestedSvq <= 0L) throw new IllegalArgumentException("Requested deposit volume must be positive");
 		int entry = find(cell, material, composition);
 		if (entry < 0) throw new IllegalArgumentException("Unknown deposit material group");
 		long takenVolume = Math.min(requestedSvq, solidVolumeSvq[entry]);
-		if (composition != 0 && takenVolume != solidVolumeSvq[entry]) {
+		if (!allowReactivePartial && composition != 0 && takenVolume != solidVolumeSvq[entry]) {
 			throw new IllegalArgumentException("Reactive deposit requires a composition-aware split plan");
 		}
 		double takenMass = takenVolume == solidVolumeSvq[entry] ? mass[entry]

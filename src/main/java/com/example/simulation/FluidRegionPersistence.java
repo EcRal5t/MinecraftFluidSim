@@ -41,6 +41,7 @@ final class FluidRegionPersistence {
 	private final ChemicalRegistry chemicalRegistry;
 	private final boolean granularEnabled;
 	private final GranularRegistry granularRegistry;
+	private final boolean precipitationEnabled;
 
 	FluidRegionPersistence(Path worldRoot, boolean materialsEnabled) {
 		this(worldRoot, materialsEnabled, false, null);
@@ -56,6 +57,13 @@ final class FluidRegionPersistence {
 			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
 			boolean granularEnabled, GranularRegistry granularRegistry
 	) {
+		this(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry, granularEnabled, granularRegistry, false);
+	}
+
+	FluidRegionPersistence(
+			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
+			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled
+	) {
 		files = granularRegistry == null
 				? chemicalRegistry == null ? new RegionStateFiles(worldRoot) : new RegionStateFiles(worldRoot, chemicalRegistry)
 				: new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry);
@@ -65,6 +73,7 @@ final class FluidRegionPersistence {
 		this.chemicalRegistry = chemicalRegistry;
 		this.granularEnabled = granularEnabled;
 		this.granularRegistry = granularRegistry;
+		this.precipitationEnabled = precipitationEnabled;
 	}
 
 	List<String> scanOwnershipIssues() {
@@ -432,6 +441,7 @@ final class FluidRegionPersistence {
 			if (!region.domain().hasGranularState()) {
 				region.domain().bindGranular(granularRegistry, region.domain().materialRegistry());
 			}
+			enablePrecipitationIfConfigured(region);
 			return RegionState.captureGranular(region, generation);
 		}
 		if (chemistryEnabled) {
@@ -465,6 +475,7 @@ final class FluidRegionPersistence {
 					region.domain().bindChemistry(chemicalRegistry);
 					publishGranularMigration(region, previousGeneration, manifest.formatVersion());
 				}
+				enablePrecipitationIfConfigured(region);
 				return;
 			}
 			if (manifest.formatVersion() == 1) {
@@ -484,6 +495,7 @@ final class FluidRegionPersistence {
 				region.domain().bindChemistry(chemicalRegistry);
 			}
 			region.domain().bindGranular(granularRegistry, region.domain().materialRegistry());
+			enablePrecipitationIfConfigured(region);
 			publishGranularMigration(region, previousGeneration, manifest.formatVersion());
 		} catch (IOException | RuntimeException failure) {
 			if (region.solverLoaded() && region.checkpointGeneration() == previousGeneration) {
@@ -491,6 +503,10 @@ final class FluidRegionPersistence {
 			}
 			throw failure;
 		}
+	}
+
+	private void enablePrecipitationIfConfigured(FluidRegion region) {
+		if (precipitationEnabled) region.domain().setPrecipitationEnabled(true);
 	}
 
 	private void publishGranularMigration(FluidRegion region, long previousGeneration, int sourceVersion) throws IOException {

@@ -48,6 +48,17 @@ public final class SolidCompositionPool {
 		return new SolidCompositionRecord(recordSpecies, recordAmounts, residualBits[handle]);
 	}
 
+	public void overwrite(int handle, SolidCompositionRecord record) {
+		requireLive(handle); validate(record);
+		int base = handle * GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES;
+		int previous = Byte.toUnsignedInt(entryCount[handle]);
+		if (previous > record.entryCount()) {
+			Arrays.fill(species, base + record.entryCount(), base + previous, (short) 0);
+			Arrays.fill(amounts, base + record.entryCount(), base + previous, 0L);
+		}
+		write(handle, record);
+	}
+
 	public void release(int handle) {
 		requireLive(handle);
 		int count = Byte.toUnsignedInt(entryCount[handle]), base = handle * GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES;

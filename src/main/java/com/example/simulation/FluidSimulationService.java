@@ -16,6 +16,7 @@ import com.example.fluid.FluidMaterialRenderSnapshot;
 import com.example.fluid.FluidSolverConfig;
 import com.example.fluid.air.AirNetwork;
 import com.example.granular.GranularDataPackLoader;
+import com.example.granular.GranularPhaseTransferEngine;
 import com.example.granular.GranularRegistry;
 import com.example.granular.GranularRegistryStore;
 import com.example.network.FluidMaterialSnapshotPayload;
@@ -215,7 +216,8 @@ public final class FluidSimulationService {
 				&& granularFeatureEnabled && chemistryFeatureEnabled && granularRegistry.hasReactiveRules();
 		regionManager = new FluidRegionManager(serverConfig.limits());
 		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, materialFeatureEnabled,
-				chemistryFeatureEnabled, chemicalRegistry, granularFeatureEnabled, granularRegistry);
+				chemistryFeatureEnabled, chemicalRegistry, granularFeatureEnabled, granularRegistry,
+				precipitationFeatureEnabled);
 		containerTransfers = new ContainerTransferStore(worldRoot);
 		if (configurationLocked) regionOperations.recordIssue(
 				"server.properties 不可用，已安全使用默认预算并关闭控制器；原文件未覆盖");
@@ -699,6 +701,7 @@ public final class FluidSimulationService {
 		if (materialFeatureEnabled) bindDefaultMaterialState(candidate.domain());
 		if (chemistryFeatureEnabled) candidate.domain().bindChemistry(chemicalRegistry);
 		if (granularFeatureEnabled) candidate.domain().bindGranular(granularRegistry, candidate.domain().materialRegistry());
+		if (precipitationFeatureEnabled) candidate.domain().setPrecipitationEnabled(true);
 		candidate.setPaused(true);
 		try {
 			if (worldBridgeFeatureEnabled) {
@@ -1353,6 +1356,18 @@ public final class FluidSimulationService {
 				player.sendSystemMessage(Component.literal(
 						"真实水体化学步骤已整体拒绝，区域被安全暂停：" + budget.getMessage()
 								+ "；未提交部分 parcel 修改，请查看 /realwater status"));
+			}
+			sendSnapshot(level, region);
+			return;
+		} catch (GranularPhaseTransferEngine.BlockedException blocked) {
+			String failure = "granular-phase-blocked PAUSED：" + blocked.getMessage();
+			region.blockGranular(failure);
+			RealWaterMod.LOGGER.error("Region {} rejected a granular phase-transfer plan and is paused",
+					region.id(), blocked);
+			for (ServerPlayer player : level.players()) {
+				player.sendSystemMessage(Component.literal(
+						"真实水体固液相转移被安全暂停：" + blocked.getMessage()
+								+ "；当前 plan 未提交，先前已提交 cell 保持，请查看 /realwater status"));
 			}
 			sendSnapshot(level, region);
 			return;

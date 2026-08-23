@@ -47,6 +47,7 @@ public final class FluidRegion {
 	private int hardOverrunStreak;
 	private int recoveryStreak;
 	private String chemistryBlockFailure;
+	private String granularBlockFailure;
 
 	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FlipFluidDomain domain, long reservedMarkerCapacity) {
 		this(id, dimension, origin, domain, reservedMarkerCapacity, null);
@@ -224,6 +225,12 @@ public final class FluidRegion {
 	String chemistryBlockFailure() { return chemistryBlockFailure; }
 	void blockChemistry(String failure) {
 		chemistryBlockFailure = Objects.requireNonNull(failure, "failure");
+		setPaused(true);
+		setAvailabilityFailure(failure);
+	}
+	String granularBlockFailure() { return granularBlockFailure; }
+	void blockGranular(String failure) {
+		granularBlockFailure = Objects.requireNonNull(failure, "failure");
 		setPaused(true);
 		setAvailabilityFailure(failure);
 	}

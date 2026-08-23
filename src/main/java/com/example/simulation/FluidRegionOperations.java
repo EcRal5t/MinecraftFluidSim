@@ -39,9 +39,18 @@ final class FluidRegionOperations {
 			boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
 			boolean granularEnabled, GranularRegistry granularRegistry
 	) {
+		this(worldRoot, manager, configurationLocked, materialsEnabled, chemistryEnabled, chemicalRegistry,
+				granularEnabled, granularRegistry, false);
+	}
+
+	FluidRegionOperations(
+			Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean materialsEnabled,
+			boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
+			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled
+	) {
 		this.manager = manager;
 		this.persistence = new FluidRegionPersistence(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry,
-				granularEnabled, granularRegistry);
+				granularEnabled, granularRegistry, precipitationEnabled);
 		creationLocked = configurationLocked;
 		List<String> metadataIssues = persistence.loadMetadata(manager);
 		issues.addAll(metadataIssues);
@@ -83,6 +92,10 @@ final class FluidRegionOperations {
 	) {
 		if (region.chemistryBlockFailure() != null) {
 			region.setAvailabilityFailure(region.chemistryBlockFailure());
+			return false;
+		}
+		if (region.granularBlockFailure() != null) {
+			region.setAvailabilityFailure(region.granularBlockFailure());
 			return false;
 		}
 		if (!region.controllerManaged()) {
