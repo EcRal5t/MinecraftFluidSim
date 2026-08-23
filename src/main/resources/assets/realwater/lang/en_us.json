@@ -9,6 +9,7 @@
   "item.realwater.material_bucket.mass": "Mass: %s MU",
   "item.realwater.material_bucket.component": "  %s — %s; mass %s MU",
   "item.realwater.material_bucket.chemical": "Chemical contents: %s groups, %s quanta",
+  "item.realwater.material_bucket.species": "    Species %s: %s AU (%s quanta)",
   "item.realwater.chemical_indicator": "Universal Chemical Indicator",
   "item.realwater.chemical_eraser": "Chemical Indicator Eraser",
   "message.realwater.controller.activated": "Controller region ready: %s interior blocks, %sx%sx%s dense bounds, %s required chunks. The read-only captured domain is paused.",

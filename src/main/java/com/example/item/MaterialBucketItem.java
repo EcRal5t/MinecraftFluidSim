@@ -106,6 +106,11 @@ public final class MaterialBucketItem extends Item {
 				tooltip.accept(Component.literal((group.indicator() ? "[indicator] " : "") + group.materialId()
 						+ " · " + String.format("%.9f m³", ContainerFluidLedger.nanosToVolume(group.volumeNanos())))
 						.withStyle(ChatFormatting.DARK_GRAY));
+				for (ChemicalContents.SpeciesAmount species : group.species()) {
+					tooltip.accept(Component.translatable("item.realwater.material_bucket.species",
+							species.speciesId(), formatAu(species.amountQuanta(), chemical.auScale()),
+							Long.toString(species.amountQuanta())).withStyle(ChatFormatting.DARK_GRAY));
+				}
 			}
 			return;
 		}
@@ -132,5 +137,11 @@ public final class MaterialBucketItem extends Item {
 				}
 			}
 		}
+	}
+
+	/** Exact, locale-independent display of the canonical quanta/AU ratio. */
+	private static String formatAu(long quanta, long auScale) {
+		return java.math.BigDecimal.valueOf(quanta).divide(java.math.BigDecimal.valueOf(auScale))
+				.stripTrailingZeros().toPlainString();
 	}
 }

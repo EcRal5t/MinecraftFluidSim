@@ -9,6 +9,7 @@
   "item.realwater.material_bucket.mass": "质量：%s MU",
   "item.realwater.material_bucket.component": "  %s — %s；质量 %s MU",
   "item.realwater.material_bucket.chemical": "化学内容：%s 组，%s quanta",
+  "item.realwater.material_bucket.species": "    成分 %s：%s AU（%s quanta）",
   "item.realwater.chemical_indicator": "通用化学指示剂",
   "item.realwater.chemical_eraser": "化学指示剂抹除器",
   "message.realwater.controller.activated": "控制器区域已就绪：%s 个内部方块，致密范围 %sx%sx%s，关联 %s 个完整加载区块；只读捕获域当前暂停。",

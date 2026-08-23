@@ -41,7 +41,7 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完�
 
 多材料玩法：`/realwater materials true` 后重启服务器（单人模式退回主菜单再进入世界）。`/realwater materialdemo` 会创建上油下水的瞬态暂停溃坝域，不写 `region-state`，也不读取或接管原版水。正式材料容器入口需要材料门和世界桥均已生效：空材料桶可从准星所指控制器区域装取，材料桶可向目标区域放出；多成分 tooltip 逐项显示稳定材料 ID、体积占比/绝对体积和独立质量。纯水满桶规范化为原版水桶，部分纯水保留在专用部分桶；材料/混合物保留在材料桶。调试取得命令只用于显式测试来源。
 
-化学玩法：先依次设置 `/realwater materials true`、`/realwater chemistry true` 与容器入口所需的 `/realwater worldbridge true`，再重启。`chemistrydemo` 建立左右 HCl/NaOH 的暂停开发域；`reagent` 提供明确记作外部 source 的试剂桶、通用指示剂与可重复使用抹除器。指示剂只标记当前通过开放 cut-face 连通且同 chemical phase 的 marker，最多 100 BV，后来混入的未标水不会自动染色。空材料桶可完整保存 species、质量 residual 与 indicator；原版空桶只接受未标记纯 H2O。完整逐 species 真值只由管理员 `chemstatus` 按需查看并写入 transcript。
+化学玩法：先依次设置 `/realwater materials true`、`/realwater chemistry true` 与容器入口所需的 `/realwater worldbridge true`，再重启。`chemistrydemo` 建立左右 HCl/NaOH 的暂停开发域；`reagent` 提供明确记作外部 source 的试剂桶、通用指示剂与可重复使用抹除器。指示剂只标记当前通过开放 cut-face 连通且同 chemical phase 的 marker，最多 100 BV；浅液面瞄准可在开放面内向两格内吸附到实际 marker，后来混入的未标水不会自动染色。空材料桶可完整保存 species、质量 residual 与 indicator，tooltip 按 material/indicator group 列出每个 stable species 的精确 AU/quanta；原版空桶只接受未标记纯 H2O。完整逐 species 真值只由管理员 `chemstatus` 按需查看并写入 transcript。
 
 气压玩法：`/realwater airdemo pressure`（或 `vacuum`）在准星方向自动搭一座玻璃 U 型管（左腔密闭、右腔通大气）并下半注水；`/realwater run` 后两侧液面形成并保持由气压支撑的稳定高差（正压约 1.4 m、负压约 2.1 m），`/realwater status` 的 gas 段显示密闭腔压力与库存。玻璃只替换空气方块，`/realwater remove`、创建其他开发域或正常关服时自动恢复原状；异常崩溃后残留的玻璃可自行拆掉。`/realwater debug true` 时密闭气腔以高度透明灰色显示。该域瞬态，不写 `region-state`。
 
