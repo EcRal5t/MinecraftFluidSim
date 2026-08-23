@@ -54,11 +54,12 @@
 | M7 protocol/玩法 | `FluidChemicalSnapshotPayload`、`FluidChemicalSnapshotLedger`、`ChemicalIndicatorItem`、`RealWaterCommands` | protocol v3 只发 Top-4/pH/indicator 展示；指示剂/抹除器是不消耗 operator 工具并按 cut-face/phase 全量 plan；`chemstatus` 完整库存只供管理员并写 transcript |
 | M8 颗粒定义、库存与世界 registry | `src/main/java/com/example/granular/`、`data/*/realwater/particulate_materials`、`data/*/realwater/granular_carriers`、`data/*/realwater/solid_liquid_reactions`、`docs/architecture/granular-state.md` | strict data-pack definition 只用于首次 world snapshot；snapshot 冻结 stable-ID/fingerprint、固液规则及 chemical registry fingerprint 依赖；solid SVQ、独立质量与固相组成分别闭合；runtime handle 不上链 |
 | M8 `region-state v5` | `GranularStateSnapshot`、`GranularRegionStateCodec`、`RegionState`、`FluidRegionPersistence` | v5 是完整 material + optional chemistry + granular 代次；active/deposit、solid composition/species 分账并逐材料/逐 section/global 闭合；runtime composition handle 必须映射 stable table；v1/v2/v3 只经 inactive slot + HEAD 原子迁移；v4 不读不写 |
+| M8 protocol/诊断 | `GranularDisplaySnapshot`、`FluidGranularSnapshotPayload`、`FluidGranularSnapshotLedger`、`RealWaterCommands` | protocol v4 只发量化 bulk/porosity/top-material 与最多 4096 个 active sample，可选内嵌 v3 化学展示；exact SVQ/mass/species 不上链；`granstatus` 的完整库存/审计只在服务端给管理员并写 transcript |
 | takeover codec/files | `src/main/java/com/example/simulation/TakeoverJournalCodec.java`、`src/main/java/com/example/simulation/TakeoverJournalFiles.java` | v1 可读；未知/损坏/恢复失败锁住新 takeover |
 | 指令 transcript | `src/main/java/com/example/logging/RealWaterCommandLog.java`、`src/main/java/com/example/logging/CommandAuditFile.java` | 只做 UTF-8 观测；失败不得改变命令结果 |
-| protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 由 chemistry/materials 门决定严格 v3/v2/v1 及必需 capability；不做降级伪装 |
-| 多区域快照 | `FluidSnapshotPayload`/`Ledger`、`FluidMaterialSnapshotPayload`/`Ledger`、`FluidChemicalSnapshotPayload`/`Ledger` | v1/v2/v3 type 独立；dimension/id/generation/sequence/palette/tombstone 一致；v3 exact inventory 不上链 |
-| 客户端水面 | `src/client/java/com/example/client/ClientFluidVolumeRenderer.java` | 每域独立插值，按当前维度合并；v1 与 v2 状态/ledger/清理互相独立；不得反写物理 |
+| protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 由 granular/chemistry/materials 门决定严格 v4/v3/v2/v1 及必需 capability；不做降级伪装 |
+| 多区域快照 | `FluidSnapshotPayload`/`Ledger`、`FluidMaterialSnapshotPayload`/`Ledger`、`FluidChemicalSnapshotPayload`/`Ledger`、`FluidGranularSnapshotPayload`/`Ledger` | v1/v2/v3/v4 type 独立；dimension/id/generation/sequence/palette/fingerprint/tombstone 一致；v3/v4 exact inventory 不上链 |
+| 客户端水面与颗粒展示 | `src/client/java/com/example/client/ClientFluidVolumeRenderer.java` | 每域按当前维度合并；各协议状态/ledger/清理互相独立；v4 deposit surface 与 active sample 只读，不得反写物理 |
 | 客户端握手与绑定 | `src/client/java/com/example/client/RealWaterModClient.java` | configuration/play 注册、断线与重配置清理成套 |
 
 详细的 M2.5 数值定义只在 [`../progress/m2.5-fluid-foundation.md`](../progress/m2.5-fluid-foundation.md) 保存；M3 材料/界面的验收结果与已量化限制只在 [`../progress/m3-multi-fluid.md`](../progress/m3-multi-fluid.md) 保存。

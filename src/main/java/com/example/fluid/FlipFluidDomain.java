@@ -12,6 +12,7 @@ import com.example.granular.GranularAuditLedger;
 import com.example.granular.GranularCouplingFields;
 import com.example.granular.GranularDepositDynamics;
 import com.example.granular.GranularDepositStore;
+import com.example.granular.GranularDisplaySnapshot;
 import com.example.granular.GranularInventory;
 import com.example.granular.GranularLimits;
 import com.example.granular.GranularMechanics;
@@ -275,6 +276,11 @@ public final class FlipFluidDomain {
 		if (granularRegistry == null) throw new IllegalStateException("Granular state is not bound");
 		return GranularStateSnapshot.capture(sizeX, sizeY, sizeZ, granularRegistry, granularParcels,
 				granularDeposits, solidCompositions, granularExternalSource, granularEscapedSink);
+	}
+	public GranularDisplaySnapshot copyGranularDisplaySnapshot() {
+		if (granularRegistry == null) throw new IllegalStateException("Granular state is not bound");
+		return GranularDisplaySnapshot.build(sizeX, sizeY, sizeZ, config.cellSize(), granularRegistry,
+				granularParcels, granularDeposits);
 	}
 	public GranularAuditLedger granularExternalSource() { return granularExternalSource; }
 	public GranularAuditLedger granularEscapedSink() { return granularEscapedSink; }

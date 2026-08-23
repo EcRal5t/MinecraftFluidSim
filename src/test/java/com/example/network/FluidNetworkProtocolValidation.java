@@ -2,6 +2,7 @@ package com.example.network;
 
 import com.example.fluid.FluidMaterialRenderSnapshot;
 import com.example.fluid.FluidMaterialSurfaceMesher;
+import com.example.granular.GranularDisplaySnapshot;
 import io.netty.buffer.Unpooled;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
@@ -25,6 +26,7 @@ public final class FluidNetworkProtocolValidation {
 		validateGenerationAndSequenceOrdering();
 		validateMaterialSnapshotV2();
 		validateChemicalSnapshotV3();
+		validateGranularSnapshotV4();
 		System.out.println("Fluid network protocol validation passed");
 	}
 
@@ -32,14 +34,16 @@ public final class FluidNetworkProtocolValidation {
 		FluidProtocol.Offer offer = FluidProtocol.serverOffer();
 		require(FluidProtocol.serverOffer(false).equals(offer)
 				&& FluidProtocol.serverOffer(true).equals(FluidProtocol.materialServerOffer())
-				&& FluidProtocol.serverOffer(true, true).equals(FluidProtocol.chemicalServerOffer()),
-				"material feature gate did not select a strict v1/v2 server offer");
+				&& FluidProtocol.serverOffer(true, true).equals(FluidProtocol.chemicalServerOffer())
+				&& FluidProtocol.serverOffer(true, false, true).equals(FluidProtocol.granularServerOffer(false))
+				&& FluidProtocol.serverOffer(true, true, true).equals(FluidProtocol.granularServerOffer(true)),
+				"feature gates did not select strict v1/v2/v3/v4 server offers");
 		FluidProtocol.Negotiation accepted = FluidProtocol.negotiate(offer);
 		require(accepted.accepted() && accepted.selectedVersion() == FluidProtocol.CURRENT_VERSION
 				&& accepted.capabilities() == FluidProtocol.REQUIRED_CAPABILITIES,
 				"matching protocol/capability offer was not selected exactly");
 
-		FluidProtocol.Negotiation noVersion = FluidProtocol.negotiate(new FluidProtocol.Offer(4, 5, 0L, 0L));
+		FluidProtocol.Negotiation noVersion = FluidProtocol.negotiate(new FluidProtocol.Offer(5, 6, 0L, 0L));
 		require(!noVersion.accepted() && noVersion.failure().contains("do not overlap"),
 				"non-overlapping version range was not rejected readably");
 		long unknown = 1L << 40;
@@ -70,6 +74,70 @@ public final class FluidNetworkProtocolValidation {
 				new FluidProtocolResponsePayload(true, 1, FluidProtocol.REQUIRED_CAPABILITIES | unknown, "")
 		);
 		require(!forgedOptionalCapability.accepted(), "client selected a capability unsupported by this server");
+	}
+
+	private static void validateGranularSnapshotV4() {
+		FluidProtocol.Offer offer = FluidProtocol.granularServerOffer(false);
+		FluidProtocol.Negotiation negotiation = FluidProtocol.negotiate(offer);
+		long required = FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_GRANULAR_SNAPSHOT;
+		require(negotiation.accepted() && negotiation.selectedVersion() == FluidProtocol.GRANULAR_SNAPSHOT_VERSION
+				&& (negotiation.capabilities() & required) == required
+				&& (negotiation.capabilities() & FluidProtocol.CAP_CHEMICAL_SNAPSHOT) == 0L,
+				"granular v4 did not negotiate material+granular capabilities strictly");
+		FluidProtocol.Negotiation omitted = FluidProtocol.validateResponse(offer,
+				new FluidProtocolResponsePayload(true, 4,
+						FluidProtocol.REQUIRED_CAPABILITIES | FluidProtocol.CAP_MATERIAL_SNAPSHOT, ""));
+		require(!omitted.accepted(), "granular v4 response omitted the granular capability");
+
+		FluidGranularSnapshotPayload payload = granularSnapshot(9L, 13L, "c".repeat(64), false);
+		FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer()); FluidGranularSnapshotPayload decoded;
+		try {
+			FluidGranularSnapshotPayload.CODEC.encode(buffer, payload);
+			decoded = FluidGranularSnapshotPayload.CODEC.decode(buffer);
+		} finally { buffer.release(); }
+		require(decoded.material().generation() == 9L && decoded.material().sequence() == 13L
+				&& decoded.registryFingerprint().equals(payload.registryFingerprint())
+				&& decoded.granularMaterials().equals(payload.granularMaterials())
+				&& Arrays.equals(decoded.depositBulkFill(), payload.depositBulkFill())
+				&& Arrays.equals(decoded.depositPorosity(), payload.depositPorosity())
+				&& Arrays.equals(decoded.depositTopMaterial(), payload.depositTopMaterial())
+				&& decoded.activeParcels().equals(payload.activeParcels()) && decoded.chemical() == null,
+				"granular v4 display payload did not round-trip");
+
+		FluidGranularSnapshotLedger ledger = new FluidGranularSnapshotLedger();
+		require(ledger.evaluate(granularSnapshot(1L, 1L, "c".repeat(64), false), negotiation)
+				== FluidGranularSnapshotLedger.Decision.ACCEPT_SNAPSHOT, "first granular snapshot was rejected");
+		require(ledger.evaluate(granularSnapshot(1L, 1L, "c".repeat(64), false), negotiation)
+				== FluidGranularSnapshotLedger.Decision.IGNORE_STALE, "duplicate granular sequence was accepted");
+		require(ledger.evaluate(granularSnapshot(1L, 2L, "d".repeat(64), false), negotiation)
+				== FluidGranularSnapshotLedger.Decision.REJECT_REGISTRY, "foreign granular fingerprint was accepted");
+		require(ledger.evaluate(FluidGranularSnapshotPayload.removeRegion(
+				FluidMaterialSnapshotPayload.removeRegion(DIMENSION, REGION, 1L, 3L)), negotiation)
+				== FluidGranularSnapshotLedger.Decision.REMOVE_REGION, "granular tombstone was rejected");
+		require(ledger.evaluate(granularSnapshot(1L, 2L, "c".repeat(64), false), negotiation)
+				== FluidGranularSnapshotLedger.Decision.IGNORE_STALE, "granular tombstone allowed resurrection");
+		require(ledger.evaluate(FluidGranularSnapshotPayload.clearAll(), negotiation)
+				== FluidGranularSnapshotLedger.Decision.CLEAR_ALL, "granular clear-all was rejected");
+
+		FluidProtocol.Negotiation chemicalNegotiation = FluidProtocol.negotiate(FluidProtocol.granularServerOffer(true));
+		require((chemicalNegotiation.capabilities() & FluidProtocol.CAP_CHEMICAL_SNAPSHOT) != 0L,
+				"chemical granular v4 omitted the chemical display capability");
+		FluidGranularSnapshotLedger chemicalLedger = new FluidGranularSnapshotLedger();
+		require(chemicalLedger.evaluate(granularSnapshot(1L, 1L, "c".repeat(64), true), chemicalNegotiation)
+				== FluidGranularSnapshotLedger.Decision.ACCEPT_SNAPSHOT,
+				"granular v4 chemical layer was rejected");
+		require(new FluidGranularSnapshotLedger().evaluate(
+				granularSnapshot(1L, 1L, "c".repeat(64), false), chemicalNegotiation)
+				== FluidGranularSnapshotLedger.Decision.REJECT_PROTOCOL,
+				"chemical granular negotiation accepted an omitted chemical layer");
+
+		FluidGranularSnapshotPayload defaultSized = defaultSizedGranularSnapshot();
+		buffer = new FriendlyByteBuf(Unpooled.buffer());
+		try {
+			FluidGranularSnapshotPayload.CODEC.encode(buffer, defaultSized);
+			require(buffer.writerIndex() <= 512 * 1024,
+					"default 9,216-cell granular snapshot exceeded 512 KiB: " + buffer.writerIndex());
+		} finally { buffer.release(); }
 	}
 
 	private static void validateChemicalSnapshotV3() {
@@ -339,6 +407,36 @@ public final class FluidNetworkProtocolValidation {
 		return new FluidChemicalSnapshotPayload(3, material, "a".repeat(64),
 				List.of(new FluidChemicalSnapshotPayload.SpeciesEntry("realwater:h2o", 0xff197ae8)),
 				top, weights, new byte[cells], ph, new byte[cells]);
+	}
+
+	private static FluidGranularSnapshotPayload granularSnapshot(
+			long generation, long sequence, String fingerprint, boolean withChemical
+	) {
+		byte[] bulk = {(byte) 160, 0, 0, 0, 0, 0, 0, 0};
+		byte[] porosity = {(byte) 102, 0, 0, 0, 0, 0, 0, 0};
+		short[] top = {0, -1, -1, -1, -1, -1, -1, -1};
+		FluidChemicalSnapshotPayload chemical = withChemical
+				? chemicalSnapshot(generation, sequence, "a".repeat(64)) : null;
+		FluidGranularSnapshotPayload.ChemicalLayer layer = chemical == null ? null
+				: new FluidGranularSnapshotPayload.ChemicalLayer(chemical.registryFingerprint(), chemical.species(),
+				chemical.topSpecies(), chemical.topWeights(), chemical.residualWeights(), chemical.ph(),
+				chemical.indicatorFraction());
+		return new FluidGranularSnapshotPayload(4, materialSnapshot(generation, sequence, 1), 1, fingerprint,
+				List.of(new GranularDisplaySnapshot.MaterialEntry("realwater:fine_sand", 0xffc2a065)),
+				bulk, porosity, top, List.of(new GranularDisplaySnapshot.ParcelSample(12_000, 24_000,
+				36_000, 32, 0)), layer);
+	}
+
+	private static FluidGranularSnapshotPayload defaultSizedGranularSnapshot() {
+		FluidChemicalSnapshotPayload chemical = defaultSizedChemicalSnapshot(); int cells = 9_216;
+		byte[] bulk = new byte[cells], porosity = new byte[cells]; short[] top = new short[cells];
+		Arrays.fill(top, (short) -1); bulk[0] = (byte) 128; porosity[0] = (byte) 102; top[0] = 0;
+		return new FluidGranularSnapshotPayload(4, chemical.material(), 1, "c".repeat(64),
+				List.of(new GranularDisplaySnapshot.MaterialEntry("realwater:fine_sand", 0xffc2a065)),
+				bulk, porosity, top, List.of(new GranularDisplaySnapshot.ParcelSample(1, 2, 3, 16, 0)),
+				new FluidGranularSnapshotPayload.ChemicalLayer(chemical.registryFingerprint(), chemical.species(),
+						chemical.topSpecies(), chemical.topWeights(), chemical.residualWeights(), chemical.ph(),
+						chemical.indicatorFraction()));
 	}
 
 	private static void require(boolean condition, String message) {

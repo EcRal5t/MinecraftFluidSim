@@ -169,3 +169,20 @@ container-transfer WAL v4；不会把固体塞入现有 liquid/chemical WAL v3�
 最近门 `runCpuValidation -PcpuValidation=granular,containers,region-state --rerun-tasks` 全部通过：granular 1.225 秒、
 containers 0.437 秒、region-state 1.851 秒，runner 合计 3.516 秒。下一增量进入 protocol v4 的有界只读 display
 snapshot、客户端颗粒绘制与管理员诊断；exact SVQ/mass/species 不上链。
+
+## M8.8 protocol v4、只读颗粒展示与管理员诊断（2026-08-24）
+
+- protocol v4 只在 granular gate 启用时严格协商，并要求 material+granular capability；chemistry 同时启用时还要求
+  chemical capability 且每帧必须携带对应展示层。v1/v2/v3 payload/type/reader 保持独立，不用旧版本伪装降级。
+- server display snapshot 只包含 canonical 颗粒颜色 palette、逐格 8-bit bulk fill/porosity/top-material 与最多 4096 个
+  确定性抽样 active parcel；位置为 16-bit、直径为 8-bit。exact SVQ、raw mass、solid species/composition 和 runtime
+  handle 均不进入 payload，客户端只能重建表面和抽样小颗粒。
+- v4 ledger 对 dimension/region/generation/sequence、granular/chemical registry fingerprint、palette、tombstone 与
+  clear-all 独立门控；默认 24×16×24（9216 格）含化学层的完整 v4 packet 仍低于 512 KiB。
+- 客户端在现有 material surface 后绘制 porosity 着色的 deposit 外表面及 active samples，不反写 solver。管理员
+  `granstatus` 从服务端 exact v5 snapshot 输出总/逐材料 SVQ、mass、固相 species 及 external-source/escaped-sink 审计；
+  `granular`/`precipitation` 命令只改下次重启配置并明确显示 live/configured 差异。
+
+最近门 `runCpuValidation -PcpuValidation=protocol,granular --offline --rerun-tasks` 全部通过：protocol 1.147 秒、
+granular 0.434 秒，runner 合计 1.584 秒；服务端、客户端与测试 source set 同时编译通过。下一步审计 M8 完成门，
+只把自动门无法观察的视觉、真实 controller 转移和重启恢复收敛成一次实机验收。

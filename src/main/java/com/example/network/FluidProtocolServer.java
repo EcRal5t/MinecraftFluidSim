@@ -40,6 +40,7 @@ public final class FluidProtocolServer {
 		PayloadTypeRegistry.clientboundPlay().register(FluidSnapshotPayload.TYPE, FluidSnapshotPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(FluidMaterialSnapshotPayload.TYPE, FluidMaterialSnapshotPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(FluidChemicalSnapshotPayload.TYPE, FluidChemicalSnapshotPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(FluidGranularSnapshotPayload.TYPE, FluidGranularSnapshotPayload.CODEC);
 
 		ServerConfigurationNetworking.registerGlobalReceiver(
 				FluidProtocolResponsePayload.TYPE, FluidProtocolServer::receiveResponse
@@ -83,6 +84,13 @@ public final class FluidProtocolServer {
 	public static boolean send(ServerPlayer player, FluidChemicalSnapshotPayload payload) {
 		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.CHEMICAL_SNAPSHOT_VERSION)
 				|| !ServerPlayNetworking.canSend(player, FluidChemicalSnapshotPayload.TYPE)) return false;
+		ServerPlayNetworking.send(player, payload);
+		return true;
+	}
+
+	public static boolean send(ServerPlayer player, FluidGranularSnapshotPayload payload) {
+		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.GRANULAR_SNAPSHOT_VERSION)
+				|| !ServerPlayNetworking.canSend(player, FluidGranularSnapshotPayload.TYPE)) return false;
 		ServerPlayNetworking.send(player, payload);
 		return true;
 	}
@@ -143,9 +151,13 @@ public final class FluidProtocolServer {
 			if (negotiation.selectedVersion() == FluidProtocol.MATERIAL_SNAPSHOT_VERSION) {
 				return (negotiation.capabilities() & FluidProtocol.CAP_MATERIAL_SNAPSHOT) != 0L ? negotiation : null;
 			}
-			return negotiation.selectedVersion() == FluidProtocol.CHEMICAL_SNAPSHOT_VERSION
-					&& (negotiation.capabilities() & (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_CHEMICAL_SNAPSHOT))
-					== (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_CHEMICAL_SNAPSHOT) ? negotiation : null;
+			if (negotiation.selectedVersion() == FluidProtocol.CHEMICAL_SNAPSHOT_VERSION) {
+				return (negotiation.capabilities() & (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_CHEMICAL_SNAPSHOT))
+						== (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_CHEMICAL_SNAPSHOT) ? negotiation : null;
+			}
+			return negotiation.selectedVersion() == FluidProtocol.GRANULAR_SNAPSHOT_VERSION
+					&& (negotiation.capabilities() & (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_GRANULAR_SNAPSHOT))
+					== (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_GRANULAR_SNAPSHOT) ? negotiation : null;
 		}
 	}
 
@@ -169,7 +181,8 @@ public final class FluidProtocolServer {
 			this.server = server;
 			FluidSimulationService service = FluidSimulationService.get(server);
 			this.offer = new FluidProtocolOfferPayload(FluidProtocol.serverOffer(
-					service.materialFeatureEnabled(), service.chemistryFeatureEnabled()));
+					service.materialFeatureEnabled(), service.chemistryFeatureEnabled(),
+					service.granularFeatureEnabled()));
 		}
 
 		@Override

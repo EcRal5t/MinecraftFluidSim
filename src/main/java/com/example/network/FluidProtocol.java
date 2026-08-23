@@ -5,13 +5,15 @@ import java.util.Objects;
 /** Version and capability negotiation shared by configuration payloads and standalone codec tests. */
 public final class FluidProtocol {
 	public static final int MIN_VERSION = 1;
-	public static final int MAX_VERSION = 3;
+	public static final int MAX_VERSION = 4;
 	/** Live play traffic remains v1 until the M3 feature gate registers and selects v2. */
 	public static final int CURRENT_VERSION = 1;
 	public static final int MATERIAL_SNAPSHOT_VERSION = 2;
 	public static final int CHEMICAL_SNAPSHOT_VERSION = 3;
+	public static final int GRANULAR_SNAPSHOT_VERSION = 4;
 	public static final int PURE_WATER_PALETTE_VERSION = 1;
 	public static final int MATERIAL_PALETTE_VERSION = 1;
+	public static final int GRANULAR_PALETTE_VERSION = 1;
 
 	public static final long CAP_REGION_IDENTITY = 1L;
 	public static final long CAP_GENERATION_SEQUENCE = 1L << 1;
@@ -19,9 +21,10 @@ public final class FluidProtocol {
 	public static final long CAP_MULTI_REGION_RENDER = 1L << 3;
 	public static final long CAP_MATERIAL_SNAPSHOT = 1L << 4;
 	public static final long CAP_CHEMICAL_SNAPSHOT = 1L << 5;
+	public static final long CAP_GRANULAR_SNAPSHOT = 1L << 6;
 	public static final long SUPPORTED_CAPABILITIES = CAP_REGION_IDENTITY
 			| CAP_GENERATION_SEQUENCE | CAP_OPTIONAL_SECTIONS | CAP_MULTI_REGION_RENDER
-			| CAP_MATERIAL_SNAPSHOT | CAP_CHEMICAL_SNAPSHOT;
+			| CAP_MATERIAL_SNAPSHOT | CAP_CHEMICAL_SNAPSHOT | CAP_GRANULAR_SNAPSHOT;
 	public static final long REQUIRED_CAPABILITIES = CAP_REGION_IDENTITY
 			| CAP_GENERATION_SEQUENCE | CAP_OPTIONAL_SECTIONS | CAP_MULTI_REGION_RENDER;
 
@@ -40,6 +43,11 @@ public final class FluidProtocol {
 		return chemistryEnabled ? chemicalServerOffer() : serverOffer(materialsEnabled);
 	}
 
+	public static Offer serverOffer(boolean materialsEnabled, boolean chemistryEnabled, boolean granularEnabled) {
+		if (granularEnabled && !materialsEnabled) throw new IllegalArgumentException("Granular protocol requires materials");
+		return granularEnabled ? granularServerOffer(chemistryEnabled) : serverOffer(materialsEnabled, chemistryEnabled);
+	}
+
 	/** Standalone M3 offer; the live server does not use it until material gameplay is enabled. */
 	public static Offer materialServerOffer() {
 		return new Offer(MATERIAL_SNAPSHOT_VERSION, MATERIAL_SNAPSHOT_VERSION,
@@ -49,6 +57,12 @@ public final class FluidProtocol {
 	public static Offer chemicalServerOffer() {
 		return new Offer(CHEMICAL_SNAPSHOT_VERSION, CHEMICAL_SNAPSHOT_VERSION,
 				REQUIRED_CAPABILITIES | CAP_MATERIAL_SNAPSHOT | CAP_CHEMICAL_SNAPSHOT, 0L);
+	}
+
+	public static Offer granularServerOffer(boolean chemistryEnabled) {
+		long capabilities = REQUIRED_CAPABILITIES | CAP_MATERIAL_SNAPSHOT | CAP_GRANULAR_SNAPSHOT;
+		if (chemistryEnabled) capabilities |= CAP_CHEMICAL_SNAPSHOT;
+		return new Offer(GRANULAR_SNAPSHOT_VERSION, GRANULAR_SNAPSHOT_VERSION, capabilities, 0L);
 	}
 
 	public static Negotiation negotiate(Offer offer) {

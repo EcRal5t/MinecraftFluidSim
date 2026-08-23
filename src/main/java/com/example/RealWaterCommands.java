@@ -109,6 +109,19 @@ public final class RealWaterCommands {
 						.then(Commands.literal("chemstatus")
 								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.executes(context -> audit(context, () -> chemistryInventoryStatus(context.getSource()))))
+						.then(Commands.literal("granular")
+								.executes(context -> audit(context, () -> granularFeatureStatus(context.getSource())))
+								.then(Commands.argument("enabled", BoolArgumentType.bool())
+										.executes(context -> audit(context, () -> setGranularFeature(
+												context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+						.then(Commands.literal("precipitation")
+								.executes(context -> audit(context, () -> precipitationFeatureStatus(context.getSource())))
+								.then(Commands.argument("enabled", BoolArgumentType.bool())
+										.executes(context -> audit(context, () -> setPrecipitationFeature(
+												context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+						.then(Commands.literal("granstatus")
+								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+								.executes(context -> audit(context, () -> granularInventoryStatus(context.getSource()))))
 						.then(Commands.literal("worldbridge")
 								.executes(context -> audit(context, () -> worldBridgeFeatureStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
@@ -435,6 +448,46 @@ public final class RealWaterCommands {
 
 	private static int chemistryInventoryStatus(CommandSourceStack source) {
 		String inventory = FluidSimulationService.get(source.getServer()).chemistryInventoryStatus(source.getLevel());
+		return succeed(source, inventory, inventory.startsWith("region ") ? 1 : 0);
+	}
+
+	private static int granularFeatureStatus(CommandSourceStack source) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		boolean live = service.granularFeatureEnabled(), configured = service.configuredGranularFeatureEnabled();
+		String message = "颗粒功能门：本次启动" + (live ? "开启" : "关闭")
+				+ "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
+		return succeed(source, live == configured ? message : message + "；重启服务器后才会切换存档与协议",
+				live ? 1 : 0);
+	}
+
+	private static int setGranularFeature(CommandSourceStack source, boolean enabled) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		String failure = service.setGranularFeatureForRestart(enabled);
+		if (failure != null) return fail(source, "颗粒功能门未改变：" + failure);
+		return succeed(source, "颗粒功能门配置已" + (enabled ? "开启" : "关闭")
+				+ "；本次启动仍为" + (service.granularFeatureEnabled() ? "开启" : "关闭")
+				+ "，重启服务器后生效", 1);
+	}
+
+	private static int precipitationFeatureStatus(CommandSourceStack source) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		boolean live = service.precipitationFeatureEnabled(), configured = service.configuredPrecipitationFeatureEnabled();
+		String message = "沉淀功能门：本次启动" + (live ? "开启" : "关闭")
+				+ "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
+		return succeed(source, live == configured ? message : message + "；重启服务器后生效", live ? 1 : 0);
+	}
+
+	private static int setPrecipitationFeature(CommandSourceStack source, boolean enabled) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		String failure = service.setPrecipitationFeatureForRestart(enabled);
+		if (failure != null) return fail(source, "沉淀功能门未改变：" + failure);
+		return succeed(source, "沉淀功能门配置已" + (enabled ? "开启" : "关闭")
+				+ "；本次启动仍为" + (service.precipitationFeatureEnabled() ? "开启" : "关闭")
+				+ "，重启服务器后生效", 1);
+	}
+
+	private static int granularInventoryStatus(CommandSourceStack source) {
+		String inventory = FluidSimulationService.get(source.getServer()).granularInventoryStatus(source.getLevel());
 		return succeed(source, inventory, inventory.startsWith("region ") ? 1 : 0);
 	}
 

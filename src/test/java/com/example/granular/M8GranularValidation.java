@@ -58,6 +58,13 @@ public final class M8GranularValidation {
 		require(inserted.inserted() && domain.totalGranularSolidVolumeSvq() == input.totalSolidVolumeSvq()
 				&& rawClose(domain.totalGranularMass(), input.totalMass()),
 				"dry granular insertion did not preserve exact volume/mass across nearby cells");
+		GranularDisplaySnapshot display = domain.copyGranularDisplaySnapshot();
+		require(display.registryFingerprint().equals(registry.fingerprint())
+				&& display.materials().size() == registry.materials().size()
+				&& !display.activeParcels().isEmpty()
+				&& display.activeParcels().size() <= GranularLimits.MAX_DISPLAY_PARCELS_PER_REGION
+				&& display.depositBulkFill().length == 6 * 6 * 6,
+				"bounded granular display snapshot lost its identity, geometry or active sample");
 		FlipFluidDomain.GranularExtraction extracted = domain.tryExtractExactGranular(
 				2, 2, 2, SolidVolume.SVQ_PER_BV, 3, true);
 		require(extracted.transferred() && extracted.ledger().totalSolidVolumeSvq() == input.totalSolidVolumeSvq()

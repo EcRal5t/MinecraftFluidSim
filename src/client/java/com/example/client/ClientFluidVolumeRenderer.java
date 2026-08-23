@@ -7,6 +7,8 @@ import com.example.network.FluidMaterialSnapshotLedger;
 import com.example.network.FluidMaterialSnapshotPayload;
 import com.example.network.FluidChemicalSnapshotLedger;
 import com.example.network.FluidChemicalSnapshotPayload;
+import com.example.network.FluidGranularSnapshotLedger;
+import com.example.network.FluidGranularSnapshotPayload;
 import com.example.chemistry.ChemicalDisplaySnapshot;
 import com.example.network.FluidProtocol;
 import com.example.network.FluidSnapshotPayload;
@@ -82,10 +84,13 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	private final FluidSnapshotLedger ledger = new FluidSnapshotLedger();
 	private final FluidMaterialSnapshotLedger materialLedger = new FluidMaterialSnapshotLedger();
 	private final FluidChemicalSnapshotLedger chemicalLedger = new FluidChemicalSnapshotLedger();
+	private final FluidGranularSnapshotLedger granularLedger = new FluidGranularSnapshotLedger();
 	private final Map<UUID, SnapshotTransition> latest = new LinkedHashMap<>();
 	private final Map<UUID, MaterialFrame> latestMaterials = new LinkedHashMap<>();
+	private final Map<UUID, GranularFrame> latestGranular = new LinkedHashMap<>();
 	private volatile List<FluidSnapshotPayload> extracted = List.of();
 	private volatile List<MaterialFrame> extractedMaterials = List.of();
+	private volatile List<GranularFrame> extractedGranular = List.of();
 
 	public synchronized void accept(FluidSnapshotPayload payload, int negotiatedVersion) {
 		FluidSnapshotLedger.Decision decision = ledger.evaluate(payload, negotiatedVersion);
@@ -153,6 +158,33 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 		}
 	}
 
+	public synchronized void accept(FluidGranularSnapshotPayload payload, FluidProtocol.Negotiation negotiation) {
+		FluidGranularSnapshotLedger.Decision decision = granularLedger.evaluate(payload, negotiation);
+		FluidMaterialSnapshotPayload material = payload.material();
+		switch (decision) {
+			case CLEAR_ALL -> latestGranular.clear();
+			case REMOVE_REGION -> latestGranular.remove(material.regionId());
+			case ACCEPT_SNAPSHOT -> {
+				FluidMaterialRenderSnapshot snapshot = material.toRenderSnapshot();
+				FluidChemicalSnapshotPayload chemicalPayload = payload.toChemicalPayload();
+				ChemicalFrame chemical = chemicalPayload == null ? null : new ChemicalFrame(chemicalPayload,
+						chemicalPayload.topSpecies(), chemicalPayload.topWeights(), chemicalPayload.residualWeights(),
+						chemicalPayload.ph(), chemicalPayload.indicatorFraction());
+				MaterialFrame materialFrame = new MaterialFrame(material, snapshot,
+						FluidMaterialSurfaceMesher.build(snapshot), chemical);
+				latestGranular.put(material.regionId(), new GranularFrame(payload, materialFrame,
+						payload.depositBulkFill(), payload.depositPorosity(), payload.depositTopMaterial()));
+			}
+			case REJECT_PROTOCOL -> RealWaterMod.LOGGER.error(
+					"Discarded Real Water granular snapshot protocol {} after negotiation", payload.protocolVersion());
+			case REJECT_PALETTE -> RealWaterMod.LOGGER.error(
+					"Discarded Real Water granular region {} with an unsupported display palette", material.regionId());
+			case REJECT_REGISTRY -> RealWaterMod.LOGGER.error(
+					"Discarded Real Water granular region {} with a foreign registry fingerprint", material.regionId());
+			case IGNORE_STALE -> { }
+		}
+	}
+
 	public void extract(LevelExtractionContext context) {
 		List<SnapshotTransition> transitions;
 		synchronized (this) {
@@ -166,6 +198,9 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 		synchronized (this) {
 			extractedMaterials = latestMaterials.values().stream()
 					.filter(frame -> frame.payload().dimension().equals(context.level().dimension().identifier()))
+					.toList();
+			extractedGranular = latestGranular.values().stream()
+					.filter(frame -> frame.payload().material().dimension().equals(context.level().dimension().identifier()))
 					.toList();
 		}
 	}
@@ -207,7 +242,8 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	public void render(LevelRenderContext context) {
 		List<FluidSnapshotPayload> states = extracted;
 		List<MaterialFrame> materialStates = extractedMaterials;
-		if (states.isEmpty() && materialStates.isEmpty()) return;
+		List<GranularFrame> granularStates = extractedGranular;
+		if (states.isEmpty() && materialStates.isEmpty() && granularStates.isEmpty()) return;
 
 		RenderPipeline pipeline = RenderPipelines.DEBUG_FILLED_BOX;
 		VertexFormat format = pipeline.getVertexFormatBinding(0);
@@ -222,6 +258,10 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 		VertexConsumer vertices = stagedBuffer.getVertexBuilder(draw);
 		for (FluidSnapshotPayload state : states) buildGeometry(context, vertices, state);
 		for (MaterialFrame state : materialStates) buildMaterialGeometry(context, vertices, state);
+		for (GranularFrame state : granularStates) {
+			buildMaterialGeometry(context, vertices, state.material());
+			buildGranularGeometry(context, vertices, state);
+		}
 		stagedBuffer.upload();
 		StagedVertexBuffer.ExecuteInfo info = stagedBuffer.getExecuteInfo(draw);
 		if (info != null) execute(Minecraft.getInstance(), info, pipeline);
@@ -306,6 +346,79 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 			emitMaterialTriangle(matrix, vertices, state, owned.triangle(), color, 0.48F);
 		}
 		poses.popPose();
+	}
+
+	private static void buildGranularGeometry(LevelRenderContext context, VertexConsumer vertices, GranularFrame frame) {
+		FluidGranularSnapshotPayload payload = frame.payload();
+		FluidMaterialSnapshotPayload state = payload.material();
+		PoseStack poses = context.poseStack();
+		Vec3 camera = context.levelState().cameraRenderState.pos;
+		poses.pushPose(); poses.translate(-camera.x, -camera.y, -camera.z);
+		Matrix4fc matrix = poses.last().pose(); float h = state.cellSize();
+		for (int z = 0; z < state.sizeZ(); z++) for (int y = 0; y < state.sizeY(); y++) {
+			for (int x = 0; x < state.sizeX(); x++) {
+				int cell = granularIndex(state, x, y, z); float fill = Byte.toUnsignedInt(frame.bulkFill()[cell]) / 255.0F;
+				if (fill <= 0.0F) continue;
+				int material = frame.topMaterial()[cell];
+				int color = payload.granularMaterials().get(material).argb();
+				float porosity = Byte.toUnsignedInt(frame.porosity()[cell]) / 255.0F;
+				renderDepositCell(matrix, vertices, state, frame.bulkFill(), x, y, z, h, fill, color,
+						0.72F + 0.18F * (1.0F - porosity));
+			}
+		}
+		for (var sample : payload.activeParcels()) {
+			float centerX = state.origin().getX() + sample.xQ() / 65_535.0F * state.sizeX() * h;
+			float centerY = state.origin().getY() + sample.yQ() / 65_535.0F * state.sizeY() * h;
+			float centerZ = state.origin().getZ() + sample.zQ() / 65_535.0F * state.sizeZ() * h;
+			float half = Math.max(h / 64.0F, sample.diameterQ() / 255.0F * h * 0.5F);
+			int color = payload.granularMaterials().get(sample.materialIndex()).argb();
+			box(matrix, vertices, centerX - half, centerY - half, centerZ - half,
+					centerX + half, centerY + half, centerZ + half,
+					((color >>> 16) & 0xff) / 255.0F, ((color >>> 8) & 0xff) / 255.0F,
+					(color & 0xff) / 255.0F, 0.92F);
+		}
+		poses.popPose();
+	}
+
+	private static void renderDepositCell(
+			Matrix4fc matrix, VertexConsumer vertices, FluidMaterialSnapshotPayload state, byte[] bulk,
+			int x, int y, int z, float h, float fill, int argb, float alpha
+	) {
+		float red = ((argb >>> 16) & 0xff) / 255.0F, green = ((argb >>> 8) & 0xff) / 255.0F,
+				blue = (argb & 0xff) / 255.0F;
+		float minX = state.origin().getX() + x * h, minY = state.origin().getY() + y * h,
+				minZ = state.origin().getZ() + z * h;
+		float maxX = minX + h, maxY = minY + h * fill, maxZ = minZ + h;
+		float left = granularFill(state, bulk, x - 1, y, z) * h;
+		if (left < h * fill) quadX(matrix, vertices, minX, minY + left, maxY, minZ, maxZ,
+				false, red * 0.82F, green * 0.82F, blue * 0.82F, alpha);
+		float right = granularFill(state, bulk, x + 1, y, z) * h;
+		if (right < h * fill) quadX(matrix, vertices, maxX, minY + right, maxY, minZ, maxZ,
+				true, red * 0.82F, green * 0.82F, blue * 0.82F, alpha);
+		float back = granularFill(state, bulk, x, y, z - 1) * h;
+		if (back < h * fill) quadZ(matrix, vertices, minZ, minX, maxX, minY + back, maxY,
+				false, red * 0.86F, green * 0.86F, blue * 0.86F, alpha);
+		float front = granularFill(state, bulk, x, y, z + 1) * h;
+		if (front < h * fill) quadZ(matrix, vertices, maxZ, minX, maxX, minY + front, maxY,
+				true, red * 0.86F, green * 0.86F, blue * 0.86F, alpha);
+		if (fill < 1.0F || granularFill(state, bulk, x, y + 1, z) == 0.0F) {
+			quadY(matrix, vertices, maxY, minX, maxX, minZ, maxZ, true, red, green, blue, alpha);
+		}
+		if (granularFill(state, bulk, x, y - 1, z) == 0.0F) {
+			quadY(matrix, vertices, minY, minX, maxX, minZ, maxZ, false,
+					red * 0.72F, green * 0.72F, blue * 0.72F, alpha);
+		}
+	}
+
+	private static float granularFill(
+			FluidMaterialSnapshotPayload state, byte[] bulk, int x, int y, int z
+	) {
+		if (x < 0 || x >= state.sizeX() || y < 0 || y >= state.sizeY() || z < 0 || z >= state.sizeZ()) return 0.0F;
+		return Byte.toUnsignedInt(bulk[granularIndex(state, x, y, z)]) / 255.0F;
+	}
+
+	private static int granularIndex(FluidMaterialSnapshotPayload state, int x, int y, int z) {
+		return (z * state.sizeY() + y) * state.sizeX() + x;
 	}
 
 	private static int chemicalArgb(MaterialFrame frame, FluidMaterialSurfaceMesher.Point point, int materialArgb) {
@@ -663,8 +776,11 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 		latestMaterials.clear();
 		materialLedger.clear();
 		chemicalLedger.clear();
+		latestGranular.clear();
+		granularLedger.clear();
 		extracted = List.of();
 		extractedMaterials = List.of();
+		extractedGranular = List.of();
 	}
 
 	private record SnapshotTransition(FluidSnapshotPayload from, FluidSnapshotPayload to, long startedAtNanos) { }
@@ -677,5 +793,9 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	private record ChemicalFrame(
 			FluidChemicalSnapshotPayload payload, short[] topSpecies, byte[] topWeights,
 			byte[] residualWeights, byte[] ph, byte[] indicatorFraction
+	) { }
+	private record GranularFrame(
+			FluidGranularSnapshotPayload payload, MaterialFrame material,
+			byte[] bulkFill, byte[] porosity, short[] topMaterial
 	) { }
 }

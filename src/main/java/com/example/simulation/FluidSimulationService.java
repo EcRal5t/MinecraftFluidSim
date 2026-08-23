@@ -21,6 +21,7 @@ import com.example.granular.GranularRegistry;
 import com.example.granular.GranularRegistryStore;
 import com.example.network.FluidMaterialSnapshotPayload;
 import com.example.network.FluidChemicalSnapshotPayload;
+import com.example.network.FluidGranularSnapshotPayload;
 import com.example.network.FluidSnapshotPayload;
 import com.example.network.FluidProtocolServer;
 import com.example.simulation.controller.FluidBoundaryScanner;
@@ -1581,6 +1582,7 @@ public final class FluidSimulationService {
 			FluidProtocolServer.send(player, FluidSnapshotPayload.clearAll());
 			FluidProtocolServer.send(player, FluidMaterialSnapshotPayload.clearAll());
 			FluidProtocolServer.send(player, FluidChemicalSnapshotPayload.clearAll());
+			FluidProtocolServer.send(player, FluidGranularSnapshotPayload.clearAll());
 		}
 		return new RestorationStats(restoration.journalFound(), restoration.restoredBlocks(),
 				restoration.alreadyRestoredBlocks(), restoration.skippedBlocks(),
@@ -1917,6 +1919,47 @@ public final class FluidSimulationService {
 		return text.toString();
 	}
 
+	/** Administrator-only exact granular inventory/audit report; display snapshots never feed this path. */
+	public String granularInventoryStatus(ServerLevel level) {
+		if (!granularFeatureEnabled) return "颗粒功能门本次启动未开启";
+		FluidRegion region = selectedRegionIn(level);
+		if (region == null || !region.solverLoaded() || !region.domain().hasGranularState()) {
+			return "当前维度没有已加载且选中的颗粒区域";
+		}
+		var snapshot = region.domain().exportGranularState();
+		long[] materialSvq = new long[snapshot.materialPalette().size()];
+		double[] materialMass = new double[materialSvq.length];
+		for (var parcel : snapshot.activeParcels()) {
+			materialSvq[parcel.materialPaletteIndex()] = Math.addExact(
+					materialSvq[parcel.materialPaletteIndex()], parcel.solidVolumeSvq());
+			materialMass[parcel.materialPaletteIndex()] += parcel.mass();
+		}
+		for (var deposit : snapshot.depositGroups()) {
+			materialSvq[deposit.materialPaletteIndex()] = Math.addExact(
+					materialSvq[deposit.materialPaletteIndex()], deposit.solidVolumeSvq());
+			materialMass[deposit.materialPaletteIndex()] += deposit.mass();
+		}
+		long sourceSvq = 0L, sinkSvq = 0L;
+		for (var entry : snapshot.externalSource().entries()) sourceSvq = Math.addExact(sourceSvq, entry.solidVolumeSvq());
+		for (var entry : snapshot.escapedSink().entries()) sinkSvq = Math.addExact(sinkSvq, entry.solidVolumeSvq());
+		StringBuilder text = new StringBuilder("region ").append(region.id())
+				.append(" generation ").append(region.checkpointGeneration())
+				.append(" fingerprint ").append(snapshot.registryFingerprint())
+				.append(" totalSvq ").append(snapshot.totalSolidVolumeSvq())
+				.append(" totalMass ").append(snapshot.totalMass())
+				.append(" active ").append(snapshot.activeParcels().size())
+				.append(" depositGroups ").append(snapshot.depositGroups().size())
+				.append(" sourceSvq ").append(sourceSvq).append(" sinkSvq ").append(sinkSvq);
+		for (int material = 0; material < materialSvq.length; material++) if (materialSvq[material] > 0L) {
+			text.append('\n').append(snapshot.materialPalette().get(material)).append(" svq=")
+					.append(materialSvq[material]).append(" mass=").append(materialMass[material]);
+		}
+		for (var species : snapshot.solidSpeciesTotals().entrySet()) {
+			text.append('\n').append("solidSpecies ").append(species.getKey()).append('=').append(species.getValue());
+		}
+		return text.toString();
+	}
+
 	public record IndicatorUseResult(
 			boolean accepted, int scannedCells, int changedMarkers, double affectedBlockVolume,
 			String checkpointWarning, String failure
@@ -2037,7 +2080,9 @@ public final class FluidSimulationService {
 
 	public void sendSnapshotFor(ServerPlayer player, FluidRegion region) {
 		if (region != null && region.solverLoaded() && player.level().dimension().equals(region.dimension())) {
-			if (chemistryFeatureEnabled) {
+			if (granularFeatureEnabled) {
+				FluidProtocolServer.send(player, createGranularSnapshot(region));
+			} else if (chemistryFeatureEnabled) {
 				FluidProtocolServer.send(player, createChemicalSnapshot(region));
 			} else if (materialFeatureEnabled) {
 				FluidProtocolServer.send(player, createMaterialSnapshot(region));
@@ -2050,7 +2095,8 @@ public final class FluidSimulationService {
 	public void sendSnapshots(ServerPlayer player) {
 		for (FluidRegion region : regionManager.regions()) {
 			if (!region.solverLoaded() || !player.level().dimension().equals(region.dimension())) continue;
-			if (chemistryFeatureEnabled) FluidProtocolServer.send(player, createChemicalSnapshot(region));
+			if (granularFeatureEnabled) FluidProtocolServer.send(player, createGranularSnapshot(region));
+			else if (chemistryFeatureEnabled) FluidProtocolServer.send(player, createChemicalSnapshot(region));
 			else if (materialFeatureEnabled) FluidProtocolServer.send(player, createMaterialSnapshot(region));
 			else FluidProtocolServer.send(player, createSnapshot(region));
 		}
@@ -2058,7 +2104,10 @@ public final class FluidSimulationService {
 
 	public void sendSnapshot(ServerLevel level, FluidRegion region) {
 		if (!region.solverLoaded() || !level.dimension().equals(region.dimension())) return;
-		if (chemistryFeatureEnabled) {
+		if (granularFeatureEnabled) {
+			FluidGranularSnapshotPayload payload = createGranularSnapshot(region);
+			for (ServerPlayer player : level.players()) FluidProtocolServer.send(player, payload);
+		} else if (chemistryFeatureEnabled) {
 			FluidChemicalSnapshotPayload payload = createChemicalSnapshot(region);
 			for (ServerPlayer player : level.players()) FluidProtocolServer.send(player, payload);
 		} else if (materialFeatureEnabled) {
@@ -2095,10 +2144,12 @@ public final class FluidSimulationService {
 				region.dimension().identifier(), region.id(), region.generation(), sequence
 		);
 		FluidChemicalSnapshotPayload chemicalPayload = FluidChemicalSnapshotPayload.removeRegion(materialPayload);
+		FluidGranularSnapshotPayload granularPayload = FluidGranularSnapshotPayload.removeRegion(materialPayload);
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			FluidProtocolServer.send(player, purePayload);
 			FluidProtocolServer.send(player, materialPayload);
 			FluidProtocolServer.send(player, chemicalPayload);
+			FluidProtocolServer.send(player, granularPayload);
 		}
 	}
 
@@ -2147,6 +2198,17 @@ public final class FluidSimulationService {
 				material, region.debugOverlays());
 		return FluidChemicalSnapshotPayload.snapshot(base,
 				region.domain().chemicalParcels().registry().fingerprint(), region.domain().copyChemicalDisplaySnapshot());
+	}
+
+	private FluidGranularSnapshotPayload createGranularSnapshot(FluidRegion region) {
+		if (!region.domain().hasGranularState()) throw new IllegalStateException("Granular region is missing parcel state");
+		FluidMaterialRenderSnapshot material = region.domain().copyMaterialRenderSnapshot();
+		FluidMaterialSnapshotPayload base = FluidMaterialSnapshotPayload.snapshot(
+				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence(), region.origin(),
+				material, region.debugOverlays());
+		return FluidGranularSnapshotPayload.snapshot(base, region.domain().copyGranularDisplaySnapshot(),
+				chemistryFeatureEnabled ? chemicalRegistry.fingerprint() : null,
+				chemistryFeatureEnabled ? region.domain().copyChemicalDisplaySnapshot() : null);
 	}
 
 	private static void bindDefaultMaterialState(FlipFluidDomain domain) {

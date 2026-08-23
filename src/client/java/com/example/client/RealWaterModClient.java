@@ -5,6 +5,7 @@ import com.example.network.FluidProtocolOfferPayload;
 import com.example.network.FluidProtocolResponsePayload;
 import com.example.network.FluidMaterialSnapshotPayload;
 import com.example.network.FluidChemicalSnapshotPayload;
+import com.example.network.FluidGranularSnapshotPayload;
 import com.example.network.FluidSnapshotPayload;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -34,6 +35,8 @@ public final class RealWaterModClient implements ClientModInitializer {
 		ClientPlayNetworking.registerGlobalReceiver(FluidMaterialSnapshotPayload.TYPE,
 				(payload, context) -> renderer.accept(payload, negotiated.get()));
 		ClientPlayNetworking.registerGlobalReceiver(FluidChemicalSnapshotPayload.TYPE,
+				(payload, context) -> renderer.accept(payload, negotiated.get()));
+		ClientPlayNetworking.registerGlobalReceiver(FluidGranularSnapshotPayload.TYPE,
 				(payload, context) -> renderer.accept(payload, negotiated.get()));
 		ClientConfigurationConnectionEvents.START.register((listener, client) -> {
 			negotiated.set(null);
