@@ -29,6 +29,7 @@ public final class M7ChemicalTransportValidation {
 		boolean fast = args.length > 0 && args[0].equals("--fast");
 		validatePackedBudgetAndBinaryAllocation();
 		validateSameCellReaction();
+		validateReactionKeepsTinyParcels();
 		validateAdjacentCellsDoNotReact();
 		validateWallSeparatedCellsDoNotReact();
 		validateImmiscibleMarkersDoNotReact();
@@ -120,6 +121,39 @@ public final class M7ChemicalTransportValidation {
 		int indicated = 0;
 		for (int marker = 0; marker < domain.particleCount(); marker++) if (domain.chemicalParcels().indicator(marker)) indicated++;
 		check(indicated == 1, "reaction redistributed the indicator bit");
+	}
+
+	private static void validateReactionKeepsTinyParcels() {
+		final int markerCount = 3;
+		ChemicalParcelStore parcels = new ChemicalParcelStore(CHEMISTRY, markerCount, 64);
+		ChemicalMixtureRecord acid = ChemicalMixtureRecord.fromStableAmounts(
+				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.HCL, 1_000_000L), 0.0);
+		ChemicalMixtureRecord base = ChemicalMixtureRecord.fromStableAmounts(
+				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.NAOH, 1L), 0.0);
+		ChemicalMixtureRecord water = ChemicalMixtureRecord.fromStableAmounts(
+				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.H2O, 1L), 0.0);
+		parcels.assign(0, acid, false);
+		parcels.assign(1, base, true);
+		parcels.assign(2, water, false);
+		parcels.markDirtyCell((1 * 4 + 1) * 4 + 1);
+		float[] positions = {1.5F, 1.5F, 1.5F};
+		float[] volumes = {1.0F, Float.MIN_VALUE, Float.MIN_VALUE};
+		double[] masses = {acid.markerMass(CHEMISTRY), base.markerMass(CHEMISTRY), water.markerMass(CHEMISTRY)};
+		int[] material = new int[markerCount];
+		ChemicalParcelStore.ReactionStats stats = parcels.reactDirtyCells(4, 4, 4, 1.0F,
+				positions, positions, positions, volumes, masses, material,
+				ignored -> BuiltinFluidMaterials.WATER.id(), markerCount);
+		long[] totals = parcels.speciesTotals(markerCount);
+		check(stats.changedMarkers() == markerCount, "tiny-parcel reaction did not commit all replacements");
+		check(totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H_PLUS)] == 999_999L
+				&& totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.CL_MINUS)] == 1_000_000L
+				&& totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)] == 1L
+				&& totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H2O)] == 2L,
+				"tiny-parcel repair changed the reacted species ledger");
+		for (int marker = 0; marker < markerCount; marker++) {
+			check(parcels.record(marker).totalQuanta() > 0L, "reaction left an empty live parcel");
+		}
+		check(parcels.indicator(1), "tiny-parcel repair changed indicator provenance");
 	}
 
 	private static void validateAdjacentCellsDoNotReact() {

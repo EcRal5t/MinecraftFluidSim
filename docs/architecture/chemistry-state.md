@@ -41,6 +41,9 @@ loader 在发布前拒绝未知引用、重复 ID、负库存/系数、组成/�
 每个外部 solver step 仅在最终 advection 后、reseeding 前执行一次 chemistry step。marker 按 `(cell, chemical phase)`
 聚合；不同 chemical phase、相邻格和墙后库存不得反应。indicator 不隔离反应，重分配后仍附着原 marker。逐 species
 使用 marker 二进制精确体积权重 largest-remainder，余数按 marker ordinal 决胜，不依赖 hash、文件或遍历顺序。
+若逐 species 独立分配使极小 marker 的所有项同时舍入为零，则按 marker ordinal 对空 parcel 排序，从当前总量最大的
+非空 parcel（再按 ordinal）搬运其最大 species 项的一枚既有 quantum；该最小确定性修复不改变任何 species 总账，且只在
+维持“每个 live marker 必须有非空 parcel”所必需时执行。反应后总 quanta 少于 live marker 数时仍整体拒绝。
 
 pH 是只读展示：`C=|H+-OH-|/BV`、`C0=10^-6 AU/BV`、`strength=min(7,log10(1+C/C0))`；酸为
 `7-strength`，碱为 `7+strength`，相等为 7。indicator=0 时 pH 不参与颜色。

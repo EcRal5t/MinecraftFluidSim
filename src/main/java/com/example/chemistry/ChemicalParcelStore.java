@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.TreeMap;
 import java.util.function.IntFunction;
 
@@ -336,8 +337,8 @@ public final class ChemicalParcelStore {
 						distributed[i].put(result.mixture().speciesHandle(entry), allocation[i]);
 					}
 				}
+				repairEmptyReactionParcels(distributed, ordinals);
 				for (int i = 0; i < markers.size(); i++) {
-					if (distributed[i].isEmpty()) throw new ChemicalReactionEngine.BudgetExceededException("Reaction produced an empty parcel");
 					ChemicalMixtureRecord withoutResidual = recordFromHandles(distributed[i], 0.0);
 					double markerResidual = markerMass[ordinals[i]] - withoutResidual.exactSpeciesMass(registry).toDouble();
 					replacements[ordinals[i]] = recordFromHandles(distributed[i], markerResidual);
@@ -359,6 +360,51 @@ public final class ChemicalParcelStore {
 		totalQuanta = candidateTotal;
 		Arrays.fill(dirtyCellWords, 0L);
 		return new ReactionStats(cells, evaluations, changed);
+	}
+
+	/**
+	 * Independent per-species largest-remainder allocation can leave an extremely small marker
+	 * with no entry at all. Preserve the frozen non-empty parcel invariant with the minimum exact
+	 * repair: move one already allocated quantum to each empty marker, never creating or deleting
+	 * species. Donors and species are selected deterministically from the largest parcel entry.
+	 */
+	private static void repairEmptyReactionParcels(TreeMap<Integer, Long>[] distributed, int[] ordinals) {
+		long[] parcelTotals = new long[distributed.length];
+		ArrayList<Integer> empty = new ArrayList<>();
+		PriorityQueue<Integer> donors = new PriorityQueue<>((left, right) -> {
+			int total = Long.compare(parcelTotals[right], parcelTotals[left]);
+			return total != 0 ? total : Integer.compare(ordinals[left], ordinals[right]);
+		});
+		for (int parcel = 0; parcel < distributed.length; parcel++) {
+			for (long amount : distributed[parcel].values()) {
+				parcelTotals[parcel] = Math.addExact(parcelTotals[parcel], amount);
+			}
+			if (parcelTotals[parcel] == 0L) empty.add(parcel);
+			else if (parcelTotals[parcel] > 1L) donors.add(parcel);
+		}
+		empty.sort((left, right) -> Integer.compare(ordinals[left], ordinals[right]));
+		for (int target : empty) {
+			Integer donor = donors.poll();
+			if (donor == null || parcelTotals[donor] <= 1L) {
+				throw new ChemicalReactionEngine.BudgetExceededException(
+						"Reaction result has fewer chemical quanta than live markers");
+			}
+			int species = -1;
+			long largest = -1L;
+			for (Map.Entry<Integer, Long> entry : distributed[donor].entrySet()) {
+				if (entry.getValue() > largest) {
+					species = entry.getKey();
+					largest = entry.getValue();
+				}
+			}
+			if (species < 0) throw new IllegalStateException("Non-empty reaction donor lost its species entry");
+			if (largest == 1L) distributed[donor].remove(species);
+			else distributed[donor].put(species, largest - 1L);
+			distributed[target].put(species, 1L);
+			parcelTotals[donor]--;
+			parcelTotals[target] = 1L;
+			if (parcelTotals[donor] > 1L) donors.add(donor);
+		}
 	}
 
 	public long[] speciesTotals(int particleCount) {
