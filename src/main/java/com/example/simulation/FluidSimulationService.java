@@ -16,6 +16,7 @@ import com.example.fluid.FluidMaterialRenderSnapshot;
 import com.example.fluid.FluidSolverConfig;
 import com.example.fluid.air.AirNetwork;
 import com.example.network.FluidMaterialSnapshotPayload;
+import com.example.network.FluidChemicalSnapshotPayload;
 import com.example.network.FluidSnapshotPayload;
 import com.example.network.FluidProtocolServer;
 import com.example.simulation.controller.FluidBoundaryScanner;
@@ -1287,6 +1288,7 @@ public final class FluidSimulationService {
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			FluidProtocolServer.send(player, FluidSnapshotPayload.clearAll());
 			FluidProtocolServer.send(player, FluidMaterialSnapshotPayload.clearAll());
+			FluidProtocolServer.send(player, FluidChemicalSnapshotPayload.clearAll());
 		}
 		return new RestorationStats(restoration.journalFound(), restoration.restoredBlocks(),
 				restoration.alreadyRestoredBlocks(), restoration.skippedBlocks(),
@@ -1590,7 +1592,9 @@ public final class FluidSimulationService {
 
 	public void sendSnapshotFor(ServerPlayer player, FluidRegion region) {
 		if (region != null && region.solverLoaded() && player.level().dimension().equals(region.dimension())) {
-			if (materialFeatureEnabled) {
+			if (chemistryFeatureEnabled) {
+				FluidProtocolServer.send(player, createChemicalSnapshot(region));
+			} else if (materialFeatureEnabled) {
 				FluidProtocolServer.send(player, createMaterialSnapshot(region));
 			} else {
 				FluidProtocolServer.send(player, createSnapshot(region));
@@ -1601,14 +1605,18 @@ public final class FluidSimulationService {
 	public void sendSnapshots(ServerPlayer player) {
 		for (FluidRegion region : regionManager.regions()) {
 			if (!region.solverLoaded() || !player.level().dimension().equals(region.dimension())) continue;
-			if (materialFeatureEnabled) FluidProtocolServer.send(player, createMaterialSnapshot(region));
+			if (chemistryFeatureEnabled) FluidProtocolServer.send(player, createChemicalSnapshot(region));
+			else if (materialFeatureEnabled) FluidProtocolServer.send(player, createMaterialSnapshot(region));
 			else FluidProtocolServer.send(player, createSnapshot(region));
 		}
 	}
 
 	public void sendSnapshot(ServerLevel level, FluidRegion region) {
 		if (!region.solverLoaded() || !level.dimension().equals(region.dimension())) return;
-		if (materialFeatureEnabled) {
+		if (chemistryFeatureEnabled) {
+			FluidChemicalSnapshotPayload payload = createChemicalSnapshot(region);
+			for (ServerPlayer player : level.players()) FluidProtocolServer.send(player, payload);
+		} else if (materialFeatureEnabled) {
 			FluidMaterialSnapshotPayload payload = createMaterialSnapshot(region);
 			for (ServerPlayer player : level.players()) FluidProtocolServer.send(player, payload);
 		} else {
@@ -1641,9 +1649,11 @@ public final class FluidSimulationService {
 		FluidMaterialSnapshotPayload materialPayload = FluidMaterialSnapshotPayload.removeRegion(
 				region.dimension().identifier(), region.id(), region.generation(), sequence
 		);
+		FluidChemicalSnapshotPayload chemicalPayload = FluidChemicalSnapshotPayload.removeRegion(materialPayload);
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			FluidProtocolServer.send(player, purePayload);
 			FluidProtocolServer.send(player, materialPayload);
+			FluidProtocolServer.send(player, chemicalPayload);
 		}
 	}
 
@@ -1682,6 +1692,16 @@ public final class FluidSimulationService {
 				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence(), region.origin(),
 				snapshot, region.debugOverlays()
 		);
+	}
+
+	private static FluidChemicalSnapshotPayload createChemicalSnapshot(FluidRegion region) {
+		if (!region.domain().hasChemistryState()) throw new IllegalStateException("Chemical region is missing parcel state");
+		FluidMaterialRenderSnapshot material = region.domain().copyMaterialRenderSnapshot();
+		FluidMaterialSnapshotPayload base = FluidMaterialSnapshotPayload.snapshot(
+				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence(), region.origin(),
+				material, region.debugOverlays());
+		return FluidChemicalSnapshotPayload.snapshot(base,
+				region.domain().chemicalParcels().registry().fingerprint(), region.domain().copyChemicalDisplaySnapshot());
 	}
 
 	private static void bindDefaultMaterialState(FlipFluidDomain domain) {

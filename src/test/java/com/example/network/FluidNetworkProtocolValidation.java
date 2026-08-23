@@ -24,20 +24,22 @@ public final class FluidNetworkProtocolValidation {
 		validateSnapshotCodecAndOptionalSections();
 		validateGenerationAndSequenceOrdering();
 		validateMaterialSnapshotV2();
+		validateChemicalSnapshotV3();
 		System.out.println("Fluid network protocol validation passed");
 	}
 
 	private static void validateNegotiationMatrix() {
 		FluidProtocol.Offer offer = FluidProtocol.serverOffer();
 		require(FluidProtocol.serverOffer(false).equals(offer)
-				&& FluidProtocol.serverOffer(true).equals(FluidProtocol.materialServerOffer()),
+				&& FluidProtocol.serverOffer(true).equals(FluidProtocol.materialServerOffer())
+				&& FluidProtocol.serverOffer(true, true).equals(FluidProtocol.chemicalServerOffer()),
 				"material feature gate did not select a strict v1/v2 server offer");
 		FluidProtocol.Negotiation accepted = FluidProtocol.negotiate(offer);
 		require(accepted.accepted() && accepted.selectedVersion() == FluidProtocol.CURRENT_VERSION
 				&& accepted.capabilities() == FluidProtocol.REQUIRED_CAPABILITIES,
 				"matching protocol/capability offer was not selected exactly");
 
-		FluidProtocol.Negotiation noVersion = FluidProtocol.negotiate(new FluidProtocol.Offer(3, 4, 0L, 0L));
+		FluidProtocol.Negotiation noVersion = FluidProtocol.negotiate(new FluidProtocol.Offer(4, 5, 0L, 0L));
 		require(!noVersion.accepted() && noVersion.failure().contains("do not overlap"),
 				"non-overlapping version range was not rejected readably");
 		long unknown = 1L << 40;
@@ -68,6 +70,64 @@ public final class FluidNetworkProtocolValidation {
 				new FluidProtocolResponsePayload(true, 1, FluidProtocol.REQUIRED_CAPABILITIES | unknown, "")
 		);
 		require(!forgedOptionalCapability.accepted(), "client selected a capability unsupported by this server");
+	}
+
+	private static void validateChemicalSnapshotV3() {
+		FluidProtocol.Offer offer = FluidProtocol.chemicalServerOffer();
+		FluidProtocol.Negotiation negotiation = FluidProtocol.negotiate(offer);
+		long required = FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_CHEMICAL_SNAPSHOT;
+		require(negotiation.accepted() && negotiation.selectedVersion() == FluidProtocol.CHEMICAL_SNAPSHOT_VERSION
+				&& (negotiation.capabilities() & required) == required,
+				"chemical v3 did not negotiate material+chemistry capabilities strictly");
+		FluidProtocol.Negotiation omitted = FluidProtocol.validateResponse(offer,
+				new FluidProtocolResponsePayload(true, 3,
+						FluidProtocol.REQUIRED_CAPABILITIES | FluidProtocol.CAP_MATERIAL_SNAPSHOT, ""));
+		require(!omitted.accepted(), "chemical v3 response omitted the chemistry capability");
+
+		FluidChemicalSnapshotPayload payload = chemicalSnapshot(7L, 11L, "a".repeat(64));
+		FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
+		FluidChemicalSnapshotPayload decoded;
+		try {
+			FluidChemicalSnapshotPayload.CODEC.encode(buffer, payload);
+			decoded = FluidChemicalSnapshotPayload.CODEC.decode(buffer);
+		} finally { buffer.release(); }
+		require(decoded.material().generation() == 7L && decoded.material().sequence() == 11L
+				&& decoded.registryFingerprint().equals(payload.registryFingerprint())
+				&& decoded.species().equals(payload.species())
+				&& Arrays.equals(decoded.topSpecies(), payload.topSpecies())
+				&& Arrays.equals(decoded.topWeights(), payload.topWeights())
+				&& Arrays.equals(decoded.residualWeights(), payload.residualWeights())
+				&& Arrays.equals(decoded.ph(), payload.ph())
+				&& Arrays.equals(decoded.indicatorFraction(), payload.indicatorFraction()),
+				"chemical v3 display payload did not round-trip");
+		for (int cell = 0; cell < decoded.ph().length; cell++) {
+			int sum = Byte.toUnsignedInt(decoded.residualWeights()[cell]);
+			for (int slot = 0; slot < 4; slot++) sum += Byte.toUnsignedInt(decoded.topWeights()[cell * 4 + slot]);
+			require(sum == 255, "chemical Top-4 quantization did not close");
+		}
+
+		FluidChemicalSnapshotLedger ledger = new FluidChemicalSnapshotLedger();
+		require(ledger.evaluate(chemicalSnapshot(1L, 1L, "a".repeat(64)), negotiation)
+				== FluidChemicalSnapshotLedger.Decision.ACCEPT_SNAPSHOT, "first chemical snapshot was rejected");
+		require(ledger.evaluate(chemicalSnapshot(1L, 1L, "a".repeat(64)), negotiation)
+				== FluidChemicalSnapshotLedger.Decision.IGNORE_STALE, "duplicate chemical sequence was accepted");
+		require(ledger.evaluate(chemicalSnapshot(1L, 2L, "b".repeat(64)), negotiation)
+				== FluidChemicalSnapshotLedger.Decision.REJECT_REGISTRY, "foreign chemical fingerprint was accepted");
+		require(ledger.evaluate(FluidChemicalSnapshotPayload.removeRegion(
+				FluidMaterialSnapshotPayload.removeRegion(DIMENSION, REGION, 1L, 3L)), negotiation)
+				== FluidChemicalSnapshotLedger.Decision.REMOVE_REGION, "chemical tombstone was rejected");
+		require(ledger.evaluate(chemicalSnapshot(1L, 2L, "a".repeat(64)), negotiation)
+				== FluidChemicalSnapshotLedger.Decision.IGNORE_STALE, "chemical tombstone allowed resurrection");
+		require(ledger.evaluate(FluidChemicalSnapshotPayload.clearAll(), negotiation)
+				== FluidChemicalSnapshotLedger.Decision.CLEAR_ALL, "chemical clear-all was rejected");
+
+		FluidChemicalSnapshotPayload defaultSized = defaultSizedChemicalSnapshot();
+		buffer = new FriendlyByteBuf(Unpooled.buffer());
+		try {
+			FluidChemicalSnapshotPayload.CODEC.encode(buffer, defaultSized);
+			require(buffer.writerIndex() <= 512 * 1024,
+					"default 9,216-cell chemical snapshot exceeded 512 KiB: " + buffer.writerIndex());
+		} finally { buffer.release(); }
 	}
 
 	private static void validateConfigurationCodecs() {
@@ -249,6 +309,36 @@ public final class FluidNetworkProtocolValidation {
 				markers, new byte[] {0, 0, 0, 1, 0, 0, 0, 0}, fractions, fractions, false,
 				List.of(new FluidMaterialSnapshotPayload.Extension(91, new byte[] {4, 5, 6}))
 		);
+	}
+
+	private static FluidChemicalSnapshotPayload chemicalSnapshot(long generation, long sequence, String fingerprint) {
+		short[] top = new short[8 * 4]; Arrays.fill(top, (short) -1);
+		byte[] weights = new byte[top.length];
+		for (int cell = 0; cell < 8; cell++) { top[cell * 4] = 0; weights[cell * 4] = (byte) 255; }
+		byte[] ph = new byte[8]; Arrays.fill(ph, (byte) 128);
+		byte[] indicator = new byte[8]; indicator[0] = (byte) 255;
+		return new FluidChemicalSnapshotPayload(3, materialSnapshot(generation, sequence, 1), fingerprint,
+				List.of(new FluidChemicalSnapshotPayload.SpeciesEntry("realwater:h2o", 0xff197ae8)),
+				top, weights, new byte[8], ph, indicator);
+	}
+
+	private static FluidChemicalSnapshotPayload defaultSizedChemicalSnapshot() {
+		int cells = 9_216;
+		byte[] full = new byte[cells]; Arrays.fill(full, (byte) 255);
+		byte[] markers = new byte[cells]; Arrays.fill(markers, (byte) 1);
+		FluidMaterialSnapshotPayload material = new FluidMaterialSnapshotPayload(2,
+				FluidMaterialSnapshotPayload.Kind.SNAPSHOT, DIMENSION, REGION, 1L, 1L, 1, BlockPos.ZERO,
+				0.5F, 24, 16, 24, List.of(new FluidMaterialSnapshotPayload.MaterialEntry(
+				"realwater:water", 1_000.0, "realwater:aqueous", 0xff197ae8)),
+				List.of("realwater:aqueous"), full, markers, new byte[cells],
+				new byte[][] {full}, new byte[][] {full}, false, List.of());
+		short[] top = new short[cells * 4]; Arrays.fill(top, (short) -1);
+		byte[] weights = new byte[cells * 4];
+		for (int cell = 0; cell < cells; cell++) { top[cell * 4] = 0; weights[cell * 4] = (byte) 255; }
+		byte[] ph = new byte[cells]; Arrays.fill(ph, (byte) 128);
+		return new FluidChemicalSnapshotPayload(3, material, "a".repeat(64),
+				List.of(new FluidChemicalSnapshotPayload.SpeciesEntry("realwater:h2o", 0xff197ae8)),
+				top, weights, new byte[cells], ph, new byte[cells]);
 	}
 
 	private static void require(boolean condition, String message) {

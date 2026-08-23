@@ -5,6 +5,9 @@ import com.example.fluid.FluidMaterialRenderSnapshot;
 import com.example.fluid.FluidMaterialSurfaceMesher;
 import com.example.network.FluidMaterialSnapshotLedger;
 import com.example.network.FluidMaterialSnapshotPayload;
+import com.example.network.FluidChemicalSnapshotLedger;
+import com.example.network.FluidChemicalSnapshotPayload;
+import com.example.chemistry.ChemicalDisplaySnapshot;
 import com.example.network.FluidProtocol;
 import com.example.network.FluidSnapshotPayload;
 import com.example.network.FluidSnapshotLedger;
@@ -78,6 +81,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	);
 	private final FluidSnapshotLedger ledger = new FluidSnapshotLedger();
 	private final FluidMaterialSnapshotLedger materialLedger = new FluidMaterialSnapshotLedger();
+	private final FluidChemicalSnapshotLedger chemicalLedger = new FluidChemicalSnapshotLedger();
 	private final Map<UUID, SnapshotTransition> latest = new LinkedHashMap<>();
 	private final Map<UUID, MaterialFrame> latestMaterials = new LinkedHashMap<>();
 	private volatile List<FluidSnapshotPayload> extracted = List.of();
@@ -113,7 +117,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 			case ACCEPT_SNAPSHOT -> {
 				FluidMaterialRenderSnapshot snapshot = payload.toRenderSnapshot();
 				latestMaterials.put(payload.regionId(), new MaterialFrame(
-						payload, snapshot, FluidMaterialSurfaceMesher.build(snapshot)
+						payload, snapshot, FluidMaterialSurfaceMesher.build(snapshot), null
 				));
 			}
 			case REJECT_PROTOCOL -> RealWaterMod.LOGGER.error(
@@ -121,6 +125,30 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 			case REJECT_PALETTE -> RealWaterMod.LOGGER.error(
 					"Discarded Real Water material region {} with unsupported palette {}",
 					payload.regionId(), payload.paletteVersion());
+			case IGNORE_STALE -> { }
+		}
+	}
+
+	public synchronized void accept(FluidChemicalSnapshotPayload payload, FluidProtocol.Negotiation negotiation) {
+		FluidChemicalSnapshotLedger.Decision decision = chemicalLedger.evaluate(payload, negotiation);
+		FluidMaterialSnapshotPayload material = payload.material();
+		switch (decision) {
+			case CLEAR_ALL -> latestMaterials.clear();
+			case REMOVE_REGION -> latestMaterials.remove(material.regionId());
+			case ACCEPT_SNAPSHOT -> {
+				FluidMaterialRenderSnapshot snapshot = material.toRenderSnapshot();
+				latestMaterials.put(material.regionId(), new MaterialFrame(
+						material, snapshot, FluidMaterialSurfaceMesher.build(snapshot), new ChemicalFrame(
+								payload, payload.topSpecies(), payload.topWeights(), payload.residualWeights(),
+								payload.ph(), payload.indicatorFraction())));
+			}
+			case REJECT_PROTOCOL -> RealWaterMod.LOGGER.error(
+					"Discarded Real Water chemical snapshot protocol {} after negotiation", payload.protocolVersion());
+			case REJECT_PALETTE -> RealWaterMod.LOGGER.error(
+					"Discarded Real Water chemical region {} with unsupported material palette {}",
+					material.regionId(), material.paletteVersion());
+			case REJECT_REGISTRY -> RealWaterMod.LOGGER.error(
+					"Discarded Real Water chemical region {} with a foreign registry fingerprint", material.regionId());
 			case IGNORE_STALE -> { }
 		}
 	}
@@ -268,14 +296,53 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 		for (FluidMaterialSurfaceMesher.Triangle triangle : frame.mesh().outerTriangles()) {
 			int material = FluidMaterialSurfaceMesher.dominantMaterialAt(frame.snapshot(), triangle.centroid());
 			if (material < 0) continue;
-			emitMaterialTriangle(matrix, vertices, state, triangle, state.materials().get(material).argb(), 0.62F);
+			int color = chemicalArgb(frame, triangle.centroid(), state.materials().get(material).argb());
+			emitMaterialTriangle(matrix, vertices, state, triangle, color, 0.62F);
 		}
 		for (FluidMaterialSurfaceMesher.InterfaceTriangle owned : frame.mesh().interfaceTriangles()) {
 			int first = phaseArgb(state, owned.firstPhase());
 			int second = phaseArgb(state, owned.secondPhase());
-			emitMaterialTriangle(matrix, vertices, state, owned.triangle(), blendArgb(first, second), 0.48F);
+			int color = chemicalArgb(frame, owned.triangle().centroid(), blendArgb(first, second));
+			emitMaterialTriangle(matrix, vertices, state, owned.triangle(), color, 0.48F);
 		}
 		poses.popPose();
+	}
+
+	private static int chemicalArgb(MaterialFrame frame, FluidMaterialSurfaceMesher.Point point, int materialArgb) {
+		ChemicalFrame chemical = frame.chemical();
+		if (chemical == null) return materialArgb;
+		FluidChemicalSnapshotPayload payload = chemical.payload();
+		FluidMaterialSnapshotPayload state = frame.payload();
+		int x = Math.max(0, Math.min(state.sizeX() - 1, (int) Math.floor(point.x() / state.cellSize())));
+		int y = Math.max(0, Math.min(state.sizeY() - 1, (int) Math.floor(point.y() / state.cellSize())));
+		int z = Math.max(0, Math.min(state.sizeZ() - 1, (int) Math.floor(point.z() / state.cellSize())));
+		int cell = (z * state.sizeY() + y) * state.sizeX() + x;
+		short[] indices = chemical.topSpecies(); byte[] weights = chemical.topWeights();
+		int red = ((materialArgb >>> 16) & 0xff) * Byte.toUnsignedInt(chemical.residualWeights()[cell]);
+		int green = ((materialArgb >>> 8) & 0xff) * Byte.toUnsignedInt(chemical.residualWeights()[cell]);
+		int blue = (materialArgb & 0xff) * Byte.toUnsignedInt(chemical.residualWeights()[cell]);
+		int weightTotal = Byte.toUnsignedInt(chemical.residualWeights()[cell]);
+		for (int slot = 0; slot < ChemicalDisplaySnapshot.TOP_SPECIES; slot++) {
+			int offset = cell * ChemicalDisplaySnapshot.TOP_SPECIES + slot;
+			int species = indices[offset], weight = Byte.toUnsignedInt(weights[offset]);
+			if (species < 0 || weight == 0) continue;
+			int argb = payload.species().get(species).argb();
+			red += ((argb >>> 16) & 0xff) * weight;
+			green += ((argb >>> 8) & 0xff) * weight;
+			blue += (argb & 0xff) * weight;
+			weightTotal += weight;
+		}
+		if (weightTotal > 0) { red /= weightTotal; green /= weightTotal; blue /= weightTotal; }
+		int indicator = Byte.toUnsignedInt(chemical.indicatorFraction()[cell]);
+		if (indicator > 0) {
+			double value = Byte.toUnsignedInt(chemical.ph()[cell]) * 14.0 / 255.0;
+			int phColor = value < 7.0 ? 0xffff3048 : value > 7.0 ? 0xff305cff : 0xff35d06f;
+			double blend = indicator / 255.0 * Math.min(1.0, Math.abs(value - 7.0) / 7.0 + 0.25);
+			red = (int) Math.round(red * (1.0 - blend) + ((phColor >>> 16) & 0xff) * blend);
+			green = (int) Math.round(green * (1.0 - blend) + ((phColor >>> 8) & 0xff) * blend);
+			blue = (int) Math.round(blue * (1.0 - blend) + (phColor & 0xff) * blend);
+		}
+		return 0xff000000 | red << 16 | green << 8 | blue;
 	}
 
 	private static int phaseArgb(FluidMaterialSnapshotPayload state, int phase) {
@@ -595,6 +662,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 		ledger.clear();
 		latestMaterials.clear();
 		materialLedger.clear();
+		chemicalLedger.clear();
 		extracted = List.of();
 		extractedMaterials = List.of();
 	}
@@ -603,6 +671,11 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	private record MaterialFrame(
 			FluidMaterialSnapshotPayload payload,
 			FluidMaterialRenderSnapshot snapshot,
-			FluidMaterialSurfaceMesher.Mesh mesh
+			FluidMaterialSurfaceMesher.Mesh mesh,
+			ChemicalFrame chemical
+	) { }
+	private record ChemicalFrame(
+			FluidChemicalSnapshotPayload payload, short[] topSpecies, byte[] topWeights,
+			byte[] residualWeights, byte[] ph, byte[] indicatorFraction
 	) { }
 }

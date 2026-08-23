@@ -180,7 +180,7 @@ public record FluidMaterialSnapshotPayload(
 
 	@Override public Type<FluidMaterialSnapshotPayload> type() { return TYPE; }
 
-	private static void encode(FriendlyByteBuf buffer, FluidMaterialSnapshotPayload payload) {
+	static void encode(FriendlyByteBuf buffer, FluidMaterialSnapshotPayload payload) {
 		buffer.writeVarInt(payload.protocolVersion);
 		buffer.writeEnum(payload.kind);
 		buffer.writeIdentifier(payload.dimension);
@@ -215,7 +215,7 @@ public record FluidMaterialSnapshotPayload(
 		}
 	}
 
-	private static FluidMaterialSnapshotPayload decode(FriendlyByteBuf buffer) {
+	static FluidMaterialSnapshotPayload decode(FriendlyByteBuf buffer) {
 		int protocolVersion = buffer.readVarInt();
 		Kind kind = buffer.readEnum(Kind.class);
 		Identifier dimension = buffer.readIdentifier();

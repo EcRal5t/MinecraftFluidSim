@@ -2,6 +2,7 @@ package com.example.fluid;
 
 import com.example.chemistry.ChemicalMixtureRecord;
 import com.example.chemistry.ChemicalParcelStore;
+import com.example.chemistry.ChemicalDisplaySnapshot;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.chemistry.ChemicalTransferLedger;
 import com.example.fluid.air.AirNetwork;
@@ -228,6 +229,12 @@ public final class FlipFluidDomain {
 	public ChemicalParcelStore chemicalParcels() {
 		if (chemicalParcels == null) throw new IllegalStateException("Chemistry is not bound");
 		return chemicalParcels;
+	}
+
+	public ChemicalDisplaySnapshot copyChemicalDisplaySnapshot() {
+		if (chemicalParcels == null) throw new IllegalStateException("Chemistry is not bound");
+		return ChemicalDisplaySnapshot.build(chemicalParcels.registry(), chemicalParcels,
+				sizeX, sizeY, sizeZ, config.cellSize(), particleX, particleY, particleZ, particleVolume, particleCount);
 	}
 
 	/** Converts every current material marker to the registry-defined default carrier. */

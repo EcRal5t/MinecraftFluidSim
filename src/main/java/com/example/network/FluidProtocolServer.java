@@ -39,6 +39,7 @@ public final class FluidProtocolServer {
 		);
 		PayloadTypeRegistry.clientboundPlay().register(FluidSnapshotPayload.TYPE, FluidSnapshotPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(FluidMaterialSnapshotPayload.TYPE, FluidMaterialSnapshotPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(FluidChemicalSnapshotPayload.TYPE, FluidChemicalSnapshotPayload.CODEC);
 
 		ServerConfigurationNetworking.registerGlobalReceiver(
 				FluidProtocolResponsePayload.TYPE, FluidProtocolServer::receiveResponse
@@ -75,6 +76,13 @@ public final class FluidProtocolServer {
 	public static boolean send(ServerPlayer player, FluidMaterialSnapshotPayload payload) {
 		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.MATERIAL_SNAPSHOT_VERSION)
 				|| !ServerPlayNetworking.canSend(player, FluidMaterialSnapshotPayload.TYPE)) return false;
+		ServerPlayNetworking.send(player, payload);
+		return true;
+	}
+
+	public static boolean send(ServerPlayer player, FluidChemicalSnapshotPayload payload) {
+		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.CHEMICAL_SNAPSHOT_VERSION)
+				|| !ServerPlayNetworking.canSend(player, FluidChemicalSnapshotPayload.TYPE)) return false;
 		ServerPlayNetworking.send(player, payload);
 		return true;
 	}
@@ -132,8 +140,12 @@ public final class FluidProtocolServer {
 			if (negotiation == null || !negotiation.accepted()
 					|| (negotiation.capabilities() & FluidProtocol.REQUIRED_CAPABILITIES) != FluidProtocol.REQUIRED_CAPABILITIES) return null;
 			if (negotiation.selectedVersion() == FluidProtocol.CURRENT_VERSION) return negotiation;
-			return negotiation.selectedVersion() == FluidProtocol.MATERIAL_SNAPSHOT_VERSION
-					&& (negotiation.capabilities() & FluidProtocol.CAP_MATERIAL_SNAPSHOT) != 0L ? negotiation : null;
+			if (negotiation.selectedVersion() == FluidProtocol.MATERIAL_SNAPSHOT_VERSION) {
+				return (negotiation.capabilities() & FluidProtocol.CAP_MATERIAL_SNAPSHOT) != 0L ? negotiation : null;
+			}
+			return negotiation.selectedVersion() == FluidProtocol.CHEMICAL_SNAPSHOT_VERSION
+					&& (negotiation.capabilities() & (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_CHEMICAL_SNAPSHOT))
+					== (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_CHEMICAL_SNAPSHOT) ? negotiation : null;
 		}
 	}
 
@@ -155,9 +167,9 @@ public final class FluidProtocolServer {
 		private HandshakeTask(ServerConfigurationPacketListenerImpl listener, MinecraftServer server) {
 			this.listener = listener;
 			this.server = server;
+			FluidSimulationService service = FluidSimulationService.get(server);
 			this.offer = new FluidProtocolOfferPayload(FluidProtocol.serverOffer(
-					FluidSimulationService.get(server).materialFeatureEnabled()
-			));
+					service.materialFeatureEnabled(), service.chemistryFeatureEnabled()));
 		}
 
 		@Override
