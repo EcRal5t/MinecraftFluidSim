@@ -37,6 +37,9 @@ public final class RealWaterCommands {
 						.then(Commands.literal("demo").executes(context -> audit(context, () -> createDemo(context.getSource()))))
 						.then(Commands.literal("materialdemo").executes(context -> audit(context, () -> createMaterialDemo(context.getSource()))))
 						.then(Commands.literal("chemistrydemo").executes(context -> audit(context, () -> createChemistryDemo(context.getSource()))))
+						.then(Commands.literal("controllerdemo")
+								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+								.executes(context -> audit(context, () -> createControllerDemo(context.getSource()))))
 						.then(Commands.literal("materialbucket")
 								.then(Commands.argument("material", StringArgumentType.word())
 										.suggests((context, builder) -> {
@@ -180,6 +183,17 @@ public final class RealWaterCommands {
 			return fail(source, "无法创建酸碱化学测试域：" + service.lastTakeoverFailure());
 		}
 		return succeed(source, "已创建暂停的 HCl/NaOH 对半化学域；左半带 indicator，使用 /realwater step 或 /realwater run 观察混合中和", 1);
+	}
+
+	private static int createControllerDemo(CommandSourceStack source) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		net.minecraft.core.BlockPos controller = service.createControllerDemo(player);
+		if (controller == null) {
+			return fail(source, "无法创建快速控制器域：" + service.lastTakeoverFailure());
+		}
+		return succeed(source, "已在 " + controller.toShortString()
+				+ " 创建并激活内部 4×4×4 的空闭壳；区域当前暂停，可直接对壳面中心使用桶", 1);
 	}
 
 	/** Explicit debug/creative source for exercising material controller transfers and mixtures. */

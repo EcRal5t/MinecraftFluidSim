@@ -608,6 +608,98 @@ public final class FluidSimulationService {
 		return ControllerActivation.created(footprint);
 	}
 
+	/**
+	 * Safely builds and activates the small persistent controller fixture used by container and
+	 * chemistry smoke tests. The complete 6x6x6 occupied volume must already be loaded and air;
+	 * failed placement or activation restores every block written by this method.
+	 */
+	public BlockPos createControllerDemo(ServerPlayer player) {
+		final int interiorSize = 4;
+		final int outerSize = interiorSize + 2;
+		ServerLevel level = player.level();
+		Direction facing = player.getDirection();
+		BlockPos nearFace = player.blockPosition().relative(facing, 4).above(2);
+		BlockPos minimum;
+		BlockPos controller;
+		if (facing.getAxis() == Direction.Axis.X) {
+			int minimumX = facing == Direction.EAST ? nearFace.getX() : nearFace.getX() - outerSize + 1;
+			minimum = new BlockPos(minimumX, player.blockPosition().getY(), nearFace.getZ() - 2);
+			controller = new BlockPos(nearFace.getX(), minimum.getY() + 2, minimum.getZ() + 2);
+		} else {
+			int minimumZ = facing == Direction.SOUTH ? nearFace.getZ() : nearFace.getZ() - outerSize + 1;
+			minimum = new BlockPos(nearFace.getX() - 2, player.blockPosition().getY(), minimumZ);
+			controller = new BlockPos(minimum.getX() + 2, minimum.getY() + 2, nearFace.getZ());
+		}
+
+		for (int z = 0; z < outerSize; z++) for (int y = 0; y < outerSize; y++) {
+			for (int x = 0; x < outerSize; x++) {
+				BlockPos position = minimum.offset(x, y, z);
+				if (!level.isInWorldBounds(position) || !level.isInsideBuildHeight(position)) {
+					lastTakeoverFailure = "快速控制器超出世界高度/边界：" + position.toShortString();
+					return null;
+				}
+				if (level.getChunkSource().getChunkNow(position.getX() >> 4, position.getZ() >> 4) == null) {
+					lastTakeoverFailure = "快速控制器需要已加载区块："
+							+ (position.getX() >> 4) + "," + (position.getZ() >> 4);
+					return null;
+				}
+				if (!level.getBlockState(position).isAir()) {
+					lastTakeoverFailure = "快速控制器只替换空气；请清空 " + position.toShortString() + " 后重试";
+					return null;
+				}
+			}
+		}
+
+		List<BlockPos> placed = new java.util.ArrayList<>();
+		try {
+			for (int z = 0; z < outerSize; z++) for (int y = 0; y < outerSize; y++) {
+				for (int x = 0; x < outerSize; x++) {
+					if (x != 0 && x != outerSize - 1 && y != 0 && y != outerSize - 1
+							&& z != 0 && z != outerSize - 1) continue;
+					BlockPos position = minimum.offset(x, y, z);
+					BlockState state = position.equals(controller)
+							? RealWaterBlocks.FLUID_CONTROLLER.defaultBlockState()
+							: RealWaterBlocks.FLUID_BOUNDARY.defaultBlockState();
+					if (!level.setBlock(position, state, Block.UPDATE_ALL)) {
+						throw new IllegalStateException("无法放置壳块 " + position.toShortString());
+					}
+					placed.add(position.immutable());
+				}
+			}
+		} catch (RuntimeException failure) {
+			rollbackControllerDemoBlocks(level, placed);
+			lastTakeoverFailure = "快速控制器已回滚：" + failure.getMessage();
+			return null;
+		}
+
+		ControllerActivation activation;
+		try {
+			activation = activateController(player, controller);
+		} catch (RuntimeException failure) {
+			// An unchecked activation failure may have reached persistent region-state. Keep the
+			// visible shell so recovery never has to guess whether removing it is safe.
+			lastTakeoverFailure = "快速控制器激活异常；为保护可能已发布的 region-state，壳体已保留："
+					+ failure.getMessage();
+			return null;
+		}
+		if (!activation.succeeded()) {
+			rollbackControllerDemoBlocks(level, placed);
+			lastTakeoverFailure = "快速控制器已回滚：" + activation.failure();
+			return null;
+		}
+		lastTakeoverFailure = null;
+		return controller.immutable();
+	}
+
+	private static void rollbackControllerDemoBlocks(ServerLevel level, List<BlockPos> placed) {
+		for (int index = placed.size() - 1; index >= 0; index--) {
+			BlockPos position = placed.get(index);
+			if (RealWaterBlocks.isBoundary(level.getBlockState(position))) {
+				level.setBlock(position, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+			}
+		}
+	}
+
 	/** World blocks the airdemo glass scaffold replaced, for restoration; null dimension means no scaffold. */
 	private final Map<BlockPos, BlockState> airDemoScaffolding = new HashMap<>();
 	private ResourceKey<Level> airDemoScaffoldingDimension;

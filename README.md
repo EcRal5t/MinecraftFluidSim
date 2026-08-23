@@ -20,14 +20,14 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完�
 | 用途 | 命令 |
 |---|---|
 | 创建开发域 | `/realwater demo`、`capture`、`takeover` |
-| 创建多个持久区域 | 用边界块建封闭壳，以控制器替换一个壳块，空手右击；`regions list` 查看 |
+| 创建多个持久区域 | `/realwater controllerdemo` 安全创建 4×4×4 内部测试壳；或手建封闭壳后空手右击控制器；`regions list` 查看 |
 | 多材料开发域（需材料门） | `/realwater materialdemo` |
 | 材料桶调试取得 | `/realwater materialbucket <empty|water|oil|mercury|water_oil_mix>` |
 | 表面张力液滴开发域（需材料门） | `/realwater tensiondemo [角度1-179]` |
 | 气压 U 型管开发域 | `/realwater airdemo [pressure\|vacuum]` |
 | 操作水量与碰撞 | `/realwater pour [1-16]`、`drain [1-16]`、`refresh` |
 | 运行控制 | `/realwater run`、`pause`、`step [1-20]`、`status` |
-| 区域与控制器 | `/realwater controllers [true|false]`、`regions list`、`regions select <uuid>`、`regions checkpoint` |
+| 区域与控制器 | `/realwater controllers [true|false]`、`controllerdemo`、`regions list`、`regions select <uuid>`、`regions checkpoint` |
 | 材料功能门（下次重启生效） | `/realwater materials [true|false]` |
 | 化学功能门（下次重启生效） | `/realwater chemistry [true|false]` |
 | 化学开发域与试剂（需化学门） | `/realwater chemistrydemo`、`reagent <hcl|naoh|nacl|nano3|kcl|kno3|water|indicator|eraser>` |
@@ -37,11 +37,11 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。当前完�
 | 调试与实体 | `/realwater debug [true|false]`、`entities [true|false]`、`logpath` |
 | 安全移除 | `/realwater remove` |
 
-控制器玩法：先用 `/give @s realwater:fluid_boundary` 和 `/give @s realwater:fluid_controller` 取得方块；用边界块建造完整的一格厚封闭外壳，以一个控制器替换壳块，开启 `/realwater controllers true`，再空手右击控制器。每个互不重叠的控制器会新增并选中一个持久区域，默认总预算最多 4 个；用 `/realwater regions list` 和 `/realwater regions select <uuid>` 管理。`demo`/`empty` 是会替换当前开发域的单域兼容命令，不用于建立多个区域。首次激活只读采样内部原版水并创建暂停区域；若同时开启 `/realwater worldbridge true` 并重启，激活会一次性移除内部纯原版水并建立可恢复 ownership（`/realwater ownership` 查看对账）。
+控制器玩法：快速验证可开启 `/realwater controllers true` 后执行管理员命令 `/realwater controllerdemo`，它只在玩家面前完整的空气体积内搭建并自动激活一个内部 4×4×4 的空壳，放置或激活被拒绝时回滚壳块。手工玩法则先用 `/give @s realwater:fluid_boundary` 和 `/give @s realwater:fluid_controller` 取得方块；用边界块建造完整的一格厚封闭外壳，以一个控制器替换壳块，再空手右击控制器。普通边界是透光金属框，但仍保持完整方块碰撞。每个互不重叠的控制器会新增并选中一个持久区域，默认总预算最多 4 个；用 `/realwater regions list` 和 `/realwater regions select <uuid>` 管理。`demo`/`empty` 是会替换当前开发域的单域兼容命令，不用于建立多个区域。首次激活只读采样内部原版水并创建暂停区域；若同时开启 `/realwater worldbridge true` 并重启，激活会一次性移除内部纯原版水并建立可恢复 ownership（`/realwater ownership` 查看对账）。玩家可对壳面中心直接使用容器；外部发射器须正对壳面中心，转移目标严格解析为其正后方的唯一内部格，壳边和壳角不会猜测路由。
 
 多材料玩法：`/realwater materials true` 后重启服务器（单人模式退回主菜单再进入世界）。`/realwater materialdemo` 会创建上油下水的瞬态暂停溃坝域，不写 `region-state`，也不读取或接管原版水。正式材料容器入口需要材料门和世界桥均已生效：空材料桶可从准星所指控制器区域装取，材料桶可向目标区域放出；多成分 tooltip 逐项显示稳定材料 ID、体积占比/绝对体积和独立质量。纯水满桶规范化为原版水桶，部分纯水保留在专用部分桶；材料/混合物保留在材料桶。调试取得命令只用于显式测试来源。
 
-化学玩法：先依次设置 `/realwater materials true` 与 `/realwater chemistry true`，再重启。`chemistrydemo` 建立左右 HCl/NaOH 的暂停开发域；`reagent` 提供明确记作外部 source 的试剂桶、通用指示剂与可重复使用抹除器。指示剂只标记当前通过开放 cut-face 连通且同 chemical phase 的 marker，最多 100 BV，后来混入的未标水不会自动染色。空材料桶可完整保存 species、质量 residual 与 indicator；原版空桶只接受未标记纯 H2O。完整逐 species 真值只由管理员 `chemstatus` 按需查看并写入 transcript。
+化学玩法：先依次设置 `/realwater materials true`、`/realwater chemistry true` 与容器入口所需的 `/realwater worldbridge true`，再重启。`chemistrydemo` 建立左右 HCl/NaOH 的暂停开发域；`reagent` 提供明确记作外部 source 的试剂桶、通用指示剂与可重复使用抹除器。指示剂只标记当前通过开放 cut-face 连通且同 chemical phase 的 marker，最多 100 BV，后来混入的未标水不会自动染色。空材料桶可完整保存 species、质量 residual 与 indicator；原版空桶只接受未标记纯 H2O。完整逐 species 真值只由管理员 `chemstatus` 按需查看并写入 transcript。
 
 气压玩法：`/realwater airdemo pressure`（或 `vacuum`）在准星方向自动搭一座玻璃 U 型管（左腔密闭、右腔通大气）并下半注水；`/realwater run` 后两侧液面形成并保持由气压支撑的稳定高差（正压约 1.4 m、负压约 2.1 m），`/realwater status` 的 gas 段显示密闭腔压力与库存。玻璃只替换空气方块，`/realwater remove`、创建其他开发域或正常关服时自动恢复原状；异常崩溃后残留的玻璃可自行拆掉。`/realwater debug true` 时密闭气腔以高度透明灰色显示。该域瞬态，不写 `region-state`。
 

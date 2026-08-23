@@ -39,6 +39,7 @@ public final class RealWaterBlocks {
 				blockKey,
 				factory.apply(BlockBehaviour.Properties.of()
 						.mapColor(MapColor.METAL)
+						.noOcclusion()
 						.requiresCorrectToolForDrops()
 						.strength(5.0F, 6.0F)
 						.sound(SoundType.METAL)
