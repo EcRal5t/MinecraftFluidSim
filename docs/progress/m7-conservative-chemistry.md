@@ -1,6 +1,6 @@
 # M7 守恒化学
 
-2026-08-23 自动关闭，主 Mod 升至 0.13.0；一次合并实机场景仍待用户签收。M7.0 冻结的 absolute parcel record、硬预算
+2026-08-23 完整关闭，主 Mod 升至 0.13.0。M7.0 冻结的 absolute parcel record、硬预算
 和 v3 边界已完整进入 CPU 权威生产路径，现行契约见 [`../architecture/chemistry-state.md`](../architecture/chemistry-state.md)。
 
 ## 已落地边界
@@ -60,5 +60,8 @@ SHA-256 为 `37CB7D3D15648707D2366F7304BCD4C6DCBC8937E34A5B9EA5698E2B96416377`�
 不足以归因于密闭域或 marker 输运。按冻结范围，本轮不改逐顶点法线、液面锐化或液液物理，也不以渲染补丁掩盖潜在
 输运问题；后续应在开放/密闭域分别建立最小视觉 fixture 后单独评审。
 
-自动门无法观察的混合酸碱颜色、真实玩家/发射器物品事务和跨重启视觉/账本一致性，合并为一次用户实机场景；该场景签收后
-才把 M7 从“自动关闭”改为“完整关闭”。
+最终合并实机场景已由用户签收。修复版启动从 checkpoint 77 恢复 1268 个 marker；浅水指示剂、逐 species tooltip、玩家
+抽取/倒入及发射器“溶液 + 指示剂”桶均符合预期。发射器事务后区域继续以 `ACTIVE` 运行，`chemstatus` 在同一 registry
+fingerprint 下持续报告 H2O、H+/OH- 与旁观离子，过量侧和中和结果符合计量；未出现 `chemistry-blocked`、`LOCKED` 或 Mod
+异常。全部 container-transfer WAL 收敛到 durable actor-after 且目录最终为空，正常关服最后发布 checkpoint 203。至此自动门、
+真实物品事务、视觉派生和重启持久性共同闭合 M7。
