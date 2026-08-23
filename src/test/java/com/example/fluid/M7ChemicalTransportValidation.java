@@ -4,7 +4,11 @@ import com.example.chemistry.BinaryVolumeAllocator;
 import com.example.chemistry.BuiltinChemicalDefinitions;
 import com.example.chemistry.ChemicalMixtureRecord;
 import com.example.chemistry.ChemicalParcelStore;
+import com.example.chemistry.ChemicalPhaseDefinition;
+import com.example.chemistry.ChemicalReaction;
 import com.example.chemistry.ChemicalRegistry;
+import com.example.chemistry.ChemicalSpecies;
+import com.example.chemistry.ExactRational;
 import com.example.item.ChemicalContents;
 import com.example.item.ContainerFluidLedger;
 
@@ -22,28 +26,81 @@ public final class M7ChemicalTransportValidation {
 	private M7ChemicalTransportValidation() { }
 
 	public static void main(String[] args) {
+		boolean fast = args.length > 0 && args[0].equals("--fast");
 		validatePackedBudgetAndBinaryAllocation();
 		validateSameCellReaction();
 		validateAdjacentCellsDoNotReact();
+		validateWallSeparatedCellsDoNotReact();
+		validateImmiscibleMarkersDoNotReact();
 		validateSplitAndIndicator();
 		validateIndicatorFloodFill();
 		validateMergeAndCompaction();
 		validateCollisionDisplacement();
 		validateChemicalHandoff();
 		validateChemicalContainerRoundTrip();
+		if (!fast) validatePerformanceBudgets();
 		System.out.println("M7 chemical transport gate passed: packed budget, same-cell reaction, separation and reseeding conservation");
 	}
 
 	private static void validatePackedBudgetAndBinaryAllocation() {
 		ChemicalParcelStore maximum = new ChemicalParcelStore(CHEMISTRY, 73_728, 9_216);
-		check(maximum.cpuBytes() <= 64L * 1024L * 1024L,
-				"maximum default-domain chemical heap model exceeds 64 MiB: " + maximum.cpuBytes());
+		long residentBytes = Math.addExact(maximum.cpuBytes(), 2L * 73_728L * Integer.BYTES);
+		check(residentBytes <= 64L * 1024L * 1024L,
+				"maximum default-domain chemical heap model exceeds 64 MiB: " + residentBytes);
 		check(maximum.pool().handleCapacity() == 73_729, "packed handle cap is not reservedMarkerCapacity + 1");
 		check(maximum.pool().packedEntryCapacity() == 16 * 73_729, "packed entry cap is not 16 * handle cap");
 		long[] equal = BinaryVolumeAllocator.allocate(5L, new float[]{0.125F, 0.125F}, new int[]{7, 3});
 		check(Arrays.equals(equal, new long[]{2L, 3L}), "largest remainder did not use marker ordinal tie-break");
 		long[] unequal = BinaryVolumeAllocator.allocate(10L, new float[]{0.1F, 0.2F, 0.3F}, new int[]{0, 1, 2});
 		check(Arrays.stream(unequal).sum() == 10L, "binary volume allocation did not close");
+	}
+
+	private static void validateWallSeparatedCellsDoNotReact() {
+		FlipFluidDomain domain = new FlipFluidDomain(5, 4, 4, STATIC_CONFIG, 64);
+		domain.setVolume(1, 1, 1, 0.125F);
+		domain.setVolume(3, 1, 1, 0.125F);
+		domain.setSolid(2, 1, 1, true);
+		domain.setMarkerMaterial(0, MATERIALS, 0);
+		domain.bindChemistry(CHEMISTRY);
+		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.HCL, 10_000L), false);
+		domain.setMarkerChemical(1, Map.of(BuiltinChemicalDefinitions.NAOH, 10_000L), false);
+		domain.step();
+		long[] totals = domain.chemicalParcels().speciesTotals(domain.particleCount());
+		check(totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H_PLUS)] == 10_000L
+				&& totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.OH_MINUS)] == 10_000L,
+				"acid/base reacted through a solid wall");
+	}
+
+	private static void validateImmiscibleMarkersDoNotReact() {
+		ChemicalSpecies acid = new ChemicalSpecies("test:h_plus", Map.of("H", 1), 1, ExactRational.ONE, 0xffff0000);
+		ChemicalSpecies base = new ChemicalSpecies("test:oh_minus", Map.of("H", 1, "O", 1), -1,
+				ExactRational.of(17), 0xff0000ff);
+		ChemicalSpecies water = new ChemicalSpecies("test:h2o", Map.of("H", 2, "O", 1), 0,
+				ExactRational.of(18), 0xff4e9cff);
+		List<String> allowed = List.of(acid.id(), base.id(), water.id());
+		ChemicalPhaseDefinition phaseA = new ChemicalPhaseDefinition("test:phase_a", "test:material_a",
+				allowed, Map.of(water.id(), ExactRational.ONE), true);
+		ChemicalPhaseDefinition phaseB = new ChemicalPhaseDefinition("test:phase_b", "test:material_b",
+				allowed, Map.of(water.id(), ExactRational.ONE), true);
+		ChemicalReaction neutralizeA = new ChemicalReaction("test:neutralize_a", ChemicalReaction.Kind.INSTANTANEOUS,
+				phaseA.id(), Map.of(acid.id(), 1, base.id(), 1), Map.of(water.id(), 1), ExactRational.ZERO);
+		ChemicalRegistry chemistry = new ChemicalRegistry(List.of(acid, base, water),
+				List.of(phaseA, phaseB), List.of(neutralizeA));
+		FluidMaterialRegistry materials = new FluidMaterialRegistry(List.of(
+				new FluidMaterial("test:material_a", 1_000.0, "test:immiscible_a", 0.0, Math.PI / 2.0),
+				new FluidMaterial("test:material_b", 1_000.0, "test:immiscible_b", 0.0, Math.PI / 2.0)));
+		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+		domain.setVolume(1, 1, 1, 0.25F);
+		domain.setMarkerMaterial(0, materials, 0);
+		domain.setMarkerMaterial(1, materials, 1);
+		domain.bindChemistry(chemistry);
+		domain.setMarkerChemical(0, Map.of(acid.id(), 10_000L), false);
+		domain.setMarkerChemical(1, Map.of(base.id(), 10_000L), false);
+		domain.step();
+		long[] totals = domain.chemicalParcels().speciesTotals(domain.particleCount());
+		check(totals[chemistry.speciesHandle(acid.id())] == 10_000L
+				&& totals[chemistry.speciesHandle(base.id())] == 10_000L,
+				"immiscible chemical phases reacted within one grid cell");
 	}
 
 	private static void validateSameCellReaction() {
@@ -269,6 +326,97 @@ public final class M7ChemicalTransportValidation {
 		} catch (IllegalArgumentException expected) {
 			// The item remains intact; no solver mutation is attempted.
 		}
+	}
+
+	/** Frozen M7.0 wall-time budgets, measured only by the explicit full chemistry selector. */
+	private static void validatePerformanceBudgets() {
+		FlipFluidDomain baseline = benchmarkDomain(false);
+		FlipFluidDomain chemical = benchmarkDomain(true);
+		for (int warmup = 0; warmup < 8; warmup++) {
+			baseline.step();
+			chemical.step();
+		}
+		long[] baselineSamples = new long[15];
+		long[] chemicalSamples = new long[15];
+		for (int sample = 0; sample < baselineSamples.length; sample++) {
+			if ((sample & 1) == 0) {
+				baselineSamples[sample] = timedSteps(baseline, 3);
+				chemicalSamples[sample] = timedSteps(chemical, 3);
+			} else {
+				chemicalSamples[sample] = timedSteps(chemical, 3);
+				baselineSamples[sample] = timedSteps(baseline, 3);
+			}
+		}
+		long baselineMedian = percentile(baselineSamples, 0.50);
+		long chemicalMedian = percentile(chemicalSamples, 0.50);
+		double stepDelta = (double) chemicalMedian / baselineMedian - 1.0;
+		check(stepDelta <= 0.05,
+				"chemistry-on clean-step median overhead exceeds 5%: " + stepDelta * 100.0 + "%");
+
+		long reactionP95 = benchmarkAcidBaseReactionP95();
+		check(reactionP95 <= 10_000_000L,
+				"typical acid/base chemistry p95 exceeds 10 ms: " + reactionP95 / 1_000_000.0 + " ms");
+		long residentBytes = Math.addExact(new ChemicalParcelStore(CHEMISTRY, 73_728, 9_216).cpuBytes(),
+				2L * 73_728L * Integer.BYTES);
+		System.out.printf("M7.0 budgets: heap=%.2f MiB clean-step-median=%.3f/%.3f ms delta=%.2f%% acid-base-p95=%.3f ms%n",
+				residentBytes / 1048576.0, baselineMedian / 3_000_000.0, chemicalMedian / 3_000_000.0,
+				stepDelta * 100.0, reactionP95 / 1_000_000.0);
+	}
+
+	private static FlipFluidDomain benchmarkDomain(boolean chemistry) {
+		FlipFluidDomain domain = new FlipFluidDomain(10, 7, 10, STATIC_CONFIG, 4_096);
+		for (int z = 1; z <= 8; z++) for (int y = 1; y <= 4; y++) for (int x = 1; x <= 8; x++) {
+			domain.setVolume(x, y, z, 1.0F);
+		}
+		domain.setMarkerMaterial(0, MATERIALS, 0);
+		if (chemistry) domain.bindChemistry(CHEMISTRY);
+		return domain;
+	}
+
+	private static long timedSteps(FlipFluidDomain domain, int count) {
+		long start = System.nanoTime();
+		for (int step = 0; step < count; step++) {
+			FlipFluidDomain.StepStats stats = domain.step();
+			check(stats.chemistryDirtyCells() == 0, "clean-step benchmark became chemically dirty");
+		}
+		return System.nanoTime() - start;
+	}
+
+	private static long benchmarkAcidBaseReactionP95() {
+		final int markers = 64, cells = 64;
+		ChemicalParcelStore parcels = new ChemicalParcelStore(CHEMISTRY, markers, cells);
+		float[] x = new float[markers], y = new float[markers], z = new float[markers], volume = new float[markers];
+		double[] mass = new double[markers];
+		int[] material = new int[markers];
+		ChemicalMixtureRecord acid = ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY,
+				Map.of(BuiltinChemicalDefinitions.HCL, 1_000_003L), 0.0);
+		ChemicalMixtureRecord base = ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY,
+				Map.of(BuiltinChemicalDefinitions.NAOH, 1_000_003L), 0.0);
+		Arrays.fill(x, 1.5F); Arrays.fill(y, 1.5F); Arrays.fill(z, 1.5F); Arrays.fill(volume, 0.125F);
+		long[] samples = new long[100];
+		for (int iteration = -20; iteration < samples.length; iteration++) {
+			for (int marker = 0; marker < markers; marker++) {
+				ChemicalMixtureRecord input = (marker & 1) == 0 ? acid : base;
+				parcels.assign(marker, input, false);
+				mass[marker] = input.markerMass(CHEMISTRY);
+			}
+			parcels.markDirtyCell((1 * 4 + 1) * 4 + 1);
+			long start = System.nanoTime();
+			ChemicalParcelStore.ReactionStats stats = parcels.reactDirtyCells(4, 4, 4, 1.0F,
+					x, y, z, volume, mass, material, ignored -> BuiltinFluidMaterials.WATER.id(), markers);
+			long elapsed = System.nanoTime() - start;
+			check(stats.dirtyCells() == 1 && stats.changedMarkers() == markers,
+					"acid/base performance fixture did not execute its logical reaction");
+			if (iteration >= 0) samples[iteration] = elapsed;
+		}
+		return percentile(samples, 0.95);
+	}
+
+	private static long percentile(long[] values, double fraction) {
+		long[] sorted = values.clone();
+		Arrays.sort(sorted);
+		int index = Math.max(0, Math.min(sorted.length - 1, (int) Math.ceil(sorted.length * fraction) - 1));
+		return sorted[index];
 	}
 
 	private static Map<String, Long> contentsSpecies(ChemicalContents... contents) {

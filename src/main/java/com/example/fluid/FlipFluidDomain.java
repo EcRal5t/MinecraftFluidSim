@@ -99,6 +99,7 @@ public final class FlipFluidDomain {
 	private FluidMaterialRegistry materialRegistry;
 	private ChemicalParcelStore chemicalParcels;
 	private int[] chemicalPreviousCells;
+	private int[] chemicalMovingMarkers;
 	private final AirNetwork airNetwork;
 	private final AirCavityScanner airScanner;
 	private int[] airCellNodeId;
@@ -369,6 +370,7 @@ public final class FlipFluidDomain {
 		}
 		chemicalParcels = candidate;
 		chemicalPreviousCells = new int[maximumParticleCount];
+		chemicalMovingMarkers = new int[maximumParticleCount];
 	}
 
 	/** Test/command reagent injection on one marker using absolute species quanta. */
@@ -419,6 +421,7 @@ public final class FlipFluidDomain {
 		materialRegistry = null;
 		chemicalParcels = null;
 		chemicalPreviousCells = null;
+		chemicalMovingMarkers = null;
 		Arrays.fill(pressure, 0.0F);
 		Arrays.fill(divergence, 0.0F);
 		pressureAnchor = -1;
@@ -475,6 +478,7 @@ public final class FlipFluidDomain {
 		chemicalParcels = restored;
 		chemicalParcels.restoreAuditLedgers(state.externalSource(), state.escapedSink());
 		chemicalPreviousCells = new int[maximumParticleCount];
+		chemicalMovingMarkers = new int[maximumParticleCount];
 	}
 
 	/** Exports an immutable CPU marker/velocity/solid handoff without serializing reconstructed density. */
@@ -2197,15 +2201,22 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	private void advectParticles(float dt) {
+		int chemicalMovingCount = 0;
 		if (chemicalParcels != null) {
-			for (int marker = 0; marker < particleCount; marker++) chemicalPreviousCells[marker] = particleCellIndex(marker);
+			for (int marker = 0; marker < particleCount; marker++) {
+				if (particleVelocityX[marker] == 0.0F && particleVelocityY[marker] == 0.0F
+						&& particleVelocityZ[marker] == 0.0F) continue;
+				chemicalPreviousCells[marker] = particleCellIndex(marker);
+				chemicalMovingMarkers[chemicalMovingCount++] = marker;
+			}
 		}
 		particleCollision.advect(
 				particleX, particleY, particleZ,
 				particleVelocityX, particleVelocityY, particleVelocityZ,
 				particleCount, dt
 		);
-		if (chemicalParcels != null) for (int marker = 0; marker < particleCount; marker++) {
+		for (int moving = 0; moving < chemicalMovingCount; moving++) {
+			int marker = chemicalMovingMarkers[moving];
 			int previous = chemicalPreviousCells[marker], current = particleCellIndex(marker);
 			if (previous != current) {
 				chemicalParcels.markDirtyCell(previous);

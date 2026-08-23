@@ -193,6 +193,15 @@ public final class M7ChemistryValidation {
 		check(result.amount(registry.speciesHandle(BuiltinChemicalDefinitions.NO3_MINUS)) == 6_000_000L, "nitrate inventory drifted");
 		check(salts.exactSpeciesMass(registry).equals(result.exactSpeciesMass(registry)), "salt dissociation changed exact mass");
 		check(salts.chargeQuanta(registry) == result.chargeQuanta(registry), "salt dissociation changed charge");
+
+		ChemicalMixtureRecord firstPair = engine.react(phase, record(Map.of(
+				BuiltinChemicalDefinitions.NACL, 5_000_003L,
+				BuiltinChemicalDefinitions.KNO3, 5_000_003L))).mixture();
+		ChemicalMixtureRecord secondPair = engine.react(phase, record(Map.of(
+				BuiltinChemicalDefinitions.NANO3, 5_000_003L,
+				BuiltinChemicalDefinitions.KCL, 5_000_003L))).mixture();
+		check(firstPair.equals(secondPair),
+				"equivalent NaCl+KNO3 and NaNO3+KCl inventories did not canonicalize identically");
 	}
 
 	private static void validateAcidBase() {
