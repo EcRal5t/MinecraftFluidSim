@@ -85,15 +85,18 @@ mismatch，不重解释存量；unknown/corrupt/missing/identity mismatch 全部
 composition handle、contact age 和 flags。runtime handle 不上链。drag 使用 physical grain diameter；parcel 数值
 聚合体积不能把许多细粒错误地变成一颗大球。
 
-- split 按最大 parcel SVQ 确定性切分，末项取体积、质量和组成余数；merge 仅限同格、同材料、同组成且速度
-  相近的 parcel，并保持质量、动量和质心。
+- split 按最大 parcel SVQ 确定性切分，末项取体积、质量和组成余数；外部 insert 的各 piece 使用碰撞合法的
+  deterministic sub-cell 低差异位置，并按这些实际位置的同一 8 格 exact occupancy 权重预检容量，禁止把整格
+  piece 重叠在格心或只按目标格伪检容量。merge 仅限同格、同材料、单位 SVQ species 比例相同且速度相近的
+  parcel，并保持质量、动量、质心和 absolute composition；有界 compaction 的候选检查也计入 operation budget。
 - hard capacity 不足时 creation/phase transfer/container insert 在提交前整体拒绝，不能覆盖、删小项或强塞 deposit。
 - inert solid composition handle 为 0；reactive solid 使用独立 bounded `SolidCompositionRecord`，不复用 M7
   `ChemicalMixtureRecord`，也不携带 indicator。
 
 deposit 使用 cell→entry-head 的 primitive 稀疏池。每格保存 porosityQ 和按 material/composition canonical 排序的
-组；单格最多 8 组。相同组必须合并，第 9 组使整个 plan 拒绝。没有液体 marker 但有 deposit 的格和 section 仍是
-有效库存。
+组；单格最多 8 组。runtime composition handle 不是组身份；同材料且单位 SVQ species 比例相同的 reactive inventory
+必须合并 absolute composition 并释放被并入的唯一 handle，第 9 个不相容组才使整个 plan 拒绝。没有液体 marker 但有
+deposit 的格和 section 仍是有效库存。
 
 parcel↔deposit、wake、坡面移动和相转移均使用 plan/commit。成功时逐材料 SVQ、mass、composition 一次移动；
 失败时两端逐位不变。
@@ -179,8 +182,10 @@ M7 dissolved reaction 每 external step 仍只运行一次；随后 M8 针对 `(
 饱和目标，再做 solid-liquid plan/commit。新溶出 species 只标 M7 dirty，下一 external step 才参与 aqueous reaction。
 
 precipitation plan 同时：扣 aqueous species 与 exact mass、保留 marker residual、扣可表示 liquid marker volume、增加
-solid SVQ/mass/composition。dissolution 严格反向且只消费同格 active parcel 或 exposed deposit；深层组、邻格、墙后、
-不同 chemical phase 不参与。indicator 不进入 solid，溶出 species 继承承载液体 marker 自身 provenance。
+solid SVQ/mass/composition。新 active parcel 从实际被扣 volume 的同格 carrier marker 邻域取得碰撞合法位置并继承其
+局部速度；同格 compatible parcel 有余量时先守恒 merge，不能每步无条件在格心新增静止 parcel。dissolution 严格反向且
+只消费同格 active parcel 或 exposed deposit；深层组、邻格、墙后、不同 chemical phase 不参与。indicator 不进入 solid，
+溶出 species 继承承载液体 marker 自身 provenance。
 
 液体 marker 的绝对 `float volume` 仍是 M0–M7 的任意正 IEEE-754 dyadic 真值，不因启用 M8 而量化成整数 SVQ。
 饱和容量从同格 marker 的精确 dyadic 和计算；plan 只向各 marker 加减整数 SVQ，并要求该 delta 在原 float 上精确可表示，
@@ -216,7 +221,8 @@ ledger rebuild。`FlipFluidDomain` 只编排；registry、库存、mechanics、d
   双槽、section descriptor、回读验证、HEAD 最后发布和 quarantine 语义保持。v1/v2/v3→v5 只在 inactive slot
   产生完整空颗粒新代，旧 canonical bytes 不变。
 - protocol v4 严格协商，只发送有界 display palette、deposit bulk fill/porosity display、Top material 和稳定采样的
-  active parcel；不发送 exact SVQ、raw mass、species 或权威 porosity。
+  active parcel；active glyph 尺寸有独立可读性上限，不是 grain diameter、碰撞半径或 exact parcel 体积。客户端不发送
+  exact SVQ、raw mass、species 或权威 porosity。
 - 干颗粒容器 `GranularContents v1` 保存 stable material group、exact SVQ、raw mass、可选 solid composition 和
   registry fingerprint；不携孔隙水、液体、indicator 或 gas，且和 FluidMixture/ChemicalContents 表示互斥。
 - container-transfer WAL v4 使用独立 solid SVQ/resource kind 字段，保持 PREPARED → solver → stage/verify v5 →

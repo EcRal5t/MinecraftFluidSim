@@ -11,6 +11,7 @@ public record GranularDisplaySnapshot(
 		List<MaterialEntry> materials, byte[] depositBulkFill, byte[] depositPorosity,
 		short[] depositTopMaterial, List<ParcelSample> activeParcels
 ) {
+	private static final int MAX_PARCEL_GLYPH_DIAMETER_Q = 24;
 	public GranularDisplaySnapshot {
 		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || !(Float.isFinite(cellSize) && cellSize > 0.0F)
 				|| registryFingerprint == null || !registryFingerprint.matches("[0-9a-f]{64}")) {
@@ -81,8 +82,9 @@ public record GranularDisplaySnapshot(
 					quantizePosition(parcel.x(), sizeX * cellSize),
 					quantizePosition(parcel.y(), sizeY * cellSize),
 					quantizePosition(parcel.z(), sizeZ * cellSize),
-					Math.max(1, quantizeUnit(Math.cbrt(parcel.solidVolumeSvq()
-							/ (double) SolidVolume.SVQ_PER_BV) / cellSize)),
+					Math.min(MAX_PARCEL_GLYPH_DIAMETER_Q, Math.max(1,
+							quantizeUnit(Math.cbrt(parcel.solidVolumeSvq()
+									/ (double) SolidVolume.SVQ_PER_BV) / cellSize))),
 					parcel.materialHandle())));
 		}
 		candidates.sort(Comparator.comparingLong(Candidate::key).thenComparingInt(Candidate::ordinal));

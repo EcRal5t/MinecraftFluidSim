@@ -391,18 +391,23 @@ public final class FlipFluidDomain {
 		}
 		ensureGrid();
 		granularCoupling.rebuild(granularParcels, granularDeposits);
-		long geometricSvq = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
-		if (Math.addExact(granularCoupling.solidSvq(cell), solidVolumeSvq) > geometricSvq) {
-			return GranularInsertion.rejected("Target cell has no solid skeleton capacity");
+		long[] plannedSolid = granularCoupling.copySolidSvq();
+		GranularCouplingFields.Position position = null;
+		for (int attempt = 0; attempt < 16 && position == null; attempt++) {
+			GranularCouplingFields.Position candidate = granularCollision.spawnPosition(
+					cellX, cellY, cellZ, solidVolumeSvq, granularParcels.count() + attempt * 16_384L,
+					Float.NaN, Float.NaN, Float.NaN);
+			if (candidate != null && granularCoupling.tryPlanParcel(plannedSolid, candidate, solidVolumeSvq,
+					this::granularGeometricOpenSvq)) position = candidate;
 		}
+		if (position == null) return GranularInsertion.rejected("Target cell has no collision-valid solid capacity");
 		double insertedCellVolume = SolidVolume.toCellVolume(solidVolumeSvq);
 		if (totalVolumeExact() + SolidVolume.toCellVolume(totalGranularSolidVolumeSvq()) + insertedCellVolume
 				> totalGeometricOpenVolumeExact() + 1.0e-9) {
 			return GranularInsertion.rejected("Sealed region has no combined fluid/solid capacity");
 		}
 		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(
-				(cellX + 0.5F) * config.cellSize(), (cellY + 0.5F) * config.cellSize(),
-				(cellZ + 0.5F) * config.cellSize(), 0.0F, 0.0F, 0.0F,
+				position.x(), position.y(), position.z(), 0.0F, 0.0F, 0.0F,
 				solidVolumeSvq, mass, materialHandle, compositionHandle, 0, (byte) 0);
 		if (!granularParcels.canAdd(parcel)) return GranularInsertion.rejected("Active granular parcel budget exceeded");
 		granularParcels.add(parcel);
@@ -464,19 +469,32 @@ public final class FlipFluidDomain {
 			}
 		}
 		List<CellCandidate> insertionCells = nearbyCells(cellX, cellY, cellZ, maxRadius);
-		long[] plannedSolid = granularCoupling.copySolidSvq(); ArrayList<GranularParcelDraft> positioned = new ArrayList<>(drafts.size());
+		long[] plannedSolid = granularCoupling.copySolidSvq();
+		int[] plannedParcelCounts = new int[cellCount];
+		for (int parcel = 0; parcel < granularParcels.count(); parcel++) {
+			plannedParcelCounts[granularParcelCell(granularParcels.parcel(parcel))]++;
+		}
+		ArrayList<GranularParcelDraft> positioned = new ArrayList<>(drafts.size());
 		for (GranularParcelDraft draft : drafts) {
-			int selected = -1;
+			int selected = -1; GranularCouplingFields.Position selectedPosition = null;
 			for (CellCandidate candidate : insertionCells) {
-				long geometric = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(candidate.index()));
-				if (Math.addExact(plannedSolid[candidate.index()], draft.solidVolumeSvq()) <= geometric) {
-					selected = candidate.index(); break;
+				int candidateX = candidate.index() % sizeX, candidateYz = candidate.index() / sizeX;
+				int candidateY = candidateYz % sizeY, candidateZ = candidateYz / sizeY;
+				for (int attempt = 0; attempt < 16; attempt++) {
+					long sequence = plannedParcelCounts[candidate.index()] + attempt * 16_384L;
+					GranularCouplingFields.Position spawn = granularCollision.spawnPosition(
+							candidateX, candidateY, candidateZ, draft.solidVolumeSvq(), sequence,
+							Float.NaN, Float.NaN, Float.NaN);
+					if (spawn != null && granularCoupling.tryPlanParcel(plannedSolid, spawn, draft.solidVolumeSvq(),
+							this::granularGeometricOpenSvq)) {
+						selected = candidate.index(); selectedPosition = spawn; break;
+					}
 				}
+				if (selected >= 0) break;
 			}
-			if (selected < 0) return GranularInsertion.rejected("Nearby cells have no solid skeleton capacity");
-			plannedSolid[selected] = Math.addExact(plannedSolid[selected], draft.solidVolumeSvq());
-			int selectedX = selected % sizeX, selectedYz = selected / sizeX;
-			positioned.add(draft.at(selectedX, selectedYz % sizeY, selectedYz / sizeY));
+			if (selected < 0) return GranularInsertion.rejected("Nearby cells have no collision-valid solid capacity");
+			plannedParcelCounts[selected]++;
+			positioned.add(draft.at(selected, selectedPosition));
 		}
 		drafts = positioned;
 		if (!granularParcels.hasCapacity(drafts.size())
@@ -491,8 +509,7 @@ public final class FlipFluidDomain {
 				int compositionHandle = draft.composition() == null ? 0 : solidCompositions.create(draft.composition());
 				if (compositionHandle != 0) createdCompositions.add(compositionHandle);
 				granularParcels.add(new GranularParcelStore.Parcel(
-						(draft.cellX() + 0.5F) * config.cellSize(), (draft.cellY() + 0.5F) * config.cellSize(),
-						(draft.cellZ() + 0.5F) * config.cellSize(), 0.0F, 0.0F, 0.0F,
+						draft.x(), draft.y(), draft.z(), 0.0F, 0.0F, 0.0F,
 						draft.solidVolumeSvq(), draft.mass(), draft.materialHandle(), compositionHandle, 0, (byte) 0));
 			}
 		} catch (RuntimeException failure) {
@@ -502,7 +519,7 @@ public final class FlipFluidDomain {
 		}
 		boolean[] changedCells = new boolean[cellCount];
 		for (GranularParcelDraft draft : drafts) {
-			int changed = cellIndex(draft.cellX(), draft.cellY(), draft.cellZ());
+			int changed = draft.cell();
 			if (!changedCells[changed]) { markGranularExternalChange(changed); changedCells[changed] = true; }
 		}
 		granularExternalSource = sourceAfter;
@@ -630,13 +647,14 @@ public final class FlipFluidDomain {
 
 	private record GranularParcelDraft(
 			int materialHandle, long solidVolumeSvq, double mass, SolidCompositionRecord composition,
-			int cellX, int cellY, int cellZ
+			int cell, float x, float y, float z
 	) {
 		GranularParcelDraft(int materialHandle, long solidVolumeSvq, double mass, SolidCompositionRecord composition) {
-			this(materialHandle, solidVolumeSvq, mass, composition, -1, -1, -1);
+			this(materialHandle, solidVolumeSvq, mass, composition, -1, Float.NaN, Float.NaN, Float.NaN);
 		}
-		GranularParcelDraft at(int x, int y, int z) {
-			return new GranularParcelDraft(materialHandle, solidVolumeSvq, mass, composition, x, y, z);
+		GranularParcelDraft at(int cell, GranularCouplingFields.Position position) {
+			return new GranularParcelDraft(materialHandle, solidVolumeSvq, mass, composition,
+					cell, position.x(), position.y(), position.z());
 		}
 	}
 
@@ -2059,6 +2077,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						handle -> materialRegistry.material(handle).id(), particleCount);
 		lastPhaseTransferStats = precipitationEnabled
 				? transferGranularPhases(phaseTransferCells) : new PhaseTransferStats(0, 0, 0, 0L);
+		if (granularInventory != null && granularParcels.count() > 1) {
+			granularInventory.compactActive(
+					index -> granularParcelCell(granularParcels.parcel(index)),
+					parcel -> granularCollision.positionValid(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq()),
+					granularMergeVelocityDelta(), GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP);
+		}
 		if (granularDepositDynamics != null) {
 			if (hasGranularInventory() || granularDepositDynamics.dirtyColumnCount() != 0) {
 				lastGranularDepositStats = granularDepositDynamics.step(granularDepositEnvironment(), config.timeStep());
@@ -2277,6 +2301,10 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		int y = Math.min(sizeY - 1, Math.max(0, (int) Math.floor(positionY / h)));
 		int z = Math.min(sizeZ - 1, Math.max(0, (int) Math.floor(positionZ / h)));
 		return cellIndex(x, y, z);
+	}
+
+	private long granularGeometricOpenSvq(int cell) {
+		return SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
 	}
 
 	private GranularMechanics.Environment granularEnvironment() {
@@ -2701,16 +2729,33 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	private void commitPrecipitation(
 			int cell, SolidLiquidReaction rule, GranularPhaseTransferEngine.Plan plan
 	) {
+		int[] markers = updateMarkers(plan); ChemicalMixtureRecord[] mixtures = updateMixtures(plan);
+		chemicalParcels.requireCanCommitPlannedReplacements(markers, mixtures);
+		int carrierMarker = precipitationCarrierMarker(cell, plan);
+		int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
+		long spawnSequence = ((long) cell << 16) + granularParcels.count();
+		GranularCouplingFields.Position position = granularCollision.spawnPosition(
+				x, y, z, plan.signedSolidSvq(), spawnSequence,
+				particleX[carrierMarker], particleY[carrierMarker], particleZ[carrierMarker]);
+		if (position == null) {
+			throw new GranularPhaseTransferEngine.BlockedException("Precipitation cell has no collision-valid spawn point");
+		}
+		int material = granularRegistry.materialHandle(rule.solidMaterialId());
+		PrecipitationMerge merge = precipitationMerge(cell, material, plan, position, carrierMarker);
+		if (merge != null) {
+			chemicalParcels.commitPlannedReplacements(markers, mixtures); applyMarkerUpdates(plan);
+			solidCompositions.overwrite(merge.compositionHandle(), merge.composition());
+			granularParcels.overwrite(merge.parcelIndex(), merge.parcel());
+			markPhaseTransferDirty(cell);
+			return;
+		}
 		if (!solidCompositions.hasCapacity(1) || !granularParcels.hasCapacity(1)) {
 			throw new GranularPhaseTransferEngine.BlockedException("Precipitation parcel/composition budget exceeded");
 		}
-		int[] markers = updateMarkers(plan); ChemicalMixtureRecord[] mixtures = updateMixtures(plan);
-		chemicalParcels.requireCanCommitPlannedReplacements(markers, mixtures);
 		int composition = solidCompositions.create(plan.transferredComposition());
-		int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
-		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel((x + 0.5F) * config.cellSize(),
-				(y + 0.5F) * config.cellSize(), (z + 0.5F) * config.cellSize(), 0.0F, 0.0F, 0.0F,
-				plan.signedSolidSvq(), plan.signedSolidMass(), granularRegistry.materialHandle(rule.solidMaterialId()),
+		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(position.x(), position.y(), position.z(),
+				particleVelocityX[carrierMarker], particleVelocityY[carrierMarker], particleVelocityZ[carrierMarker],
+				plan.signedSolidSvq(), plan.signedSolidMass(), material,
 				composition, 0, (byte) 0);
 		if (!granularParcels.canAdd(parcel)) {
 			solidCompositions.release(composition);
@@ -2720,6 +2765,58 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		catch (RuntimeException failure) { solidCompositions.release(composition); throw failure; }
 		applyMarkerUpdates(plan); granularParcels.add(parcel);
 		markPhaseTransferDirty(cell);
+	}
+
+	private PrecipitationMerge precipitationMerge(
+			int cell, int material, GranularPhaseTransferEngine.Plan plan,
+			GranularCouplingFields.Position spawned, int carrierMarker
+	) {
+		long maximum = granularRegistry.material(material).maximumActiveParcelSvq();
+		float velocityX = particleVelocityX[carrierMarker], velocityY = particleVelocityY[carrierMarker];
+		float velocityZ = particleVelocityZ[carrierMarker];
+		float maximumVelocityDelta = granularMergeVelocityDelta();
+		for (int parcelIndex = 0; parcelIndex < granularParcels.count(); parcelIndex++) {
+			GranularParcelStore.Parcel existing = granularParcels.parcel(parcelIndex);
+			if (existing.materialHandle() != material || existing.solidCompositionHandle() == 0
+					|| granularParcelCell(existing) != cell) continue;
+			long combinedSvq = Math.addExact(existing.solidVolumeSvq(), plan.signedSolidSvq());
+			if (combinedSvq > maximum || !plan.transferredComposition().proportionalTo(
+					solidCompositions.record(existing.solidCompositionHandle()),
+					plan.signedSolidSvq(), existing.solidVolumeSvq())) continue;
+			float deltaX = existing.velocityX() - velocityX, deltaY = existing.velocityY() - velocityY;
+			float deltaZ = existing.velocityZ() - velocityZ;
+			if (deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ
+					> maximumVelocityDelta * maximumVelocityDelta) continue;
+			double combinedMass = existing.mass() + plan.signedSolidMass();
+			float x = weighted(existing.x(), existing.solidVolumeSvq(), spawned.x(), plan.signedSolidSvq(), combinedSvq);
+			float y = weighted(existing.y(), existing.solidVolumeSvq(), spawned.y(), plan.signedSolidSvq(), combinedSvq);
+			float z = weighted(existing.z(), existing.solidVolumeSvq(), spawned.z(), plan.signedSolidSvq(), combinedSvq);
+			if (!granularCollision.positionValid(x, y, z, combinedSvq)) continue;
+			SolidCompositionRecord composition = solidCompositions.record(existing.solidCompositionHandle())
+					.plus(plan.transferredComposition());
+			GranularParcelStore.Parcel merged = new GranularParcelStore.Parcel(x, y, z,
+					weighted(existing.velocityX(), existing.mass(), velocityX, plan.signedSolidMass(), combinedMass),
+					weighted(existing.velocityY(), existing.mass(), velocityY, plan.signedSolidMass(), combinedMass),
+					weighted(existing.velocityZ(), existing.mass(), velocityZ, plan.signedSolidMass(), combinedMass),
+					combinedSvq, combinedMass, material, existing.solidCompositionHandle(), 0, (byte) 0);
+			return new PrecipitationMerge(parcelIndex, existing.solidCompositionHandle(), composition, merged);
+		}
+		return null;
+	}
+
+	private int precipitationCarrierMarker(int cell, GranularPhaseTransferEngine.Plan plan) {
+		int candidates = 0;
+		for (GranularPhaseTransferEngine.MarkerUpdate update : plan.markerUpdates()) {
+			if (particleVolume[update.marker()] > update.cellVolume()) candidates++;
+		}
+		if (candidates == 0) throw new GranularPhaseTransferEngine.BlockedException(
+				"Precipitation did not remove volume from a carrier marker");
+		int selected = Math.floorMod((long) cell * 31L + granularParcels.count(), candidates);
+		for (GranularPhaseTransferEngine.MarkerUpdate update : plan.markerUpdates()) {
+			if (particleVolume[update.marker()] <= update.cellVolume()) continue;
+			if (selected-- == 0) return update.marker();
+		}
+		throw new IllegalStateException("Precipitation carrier selection changed during planning");
 	}
 
 	private void commitDissolution(
@@ -2808,7 +2905,23 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return Math.abs(left - right) <= Math.max(1.0E-9, Math.max(Math.ulp(left), Math.ulp(right)) * 8.0);
 	}
 
+	private float granularMergeVelocityDelta() {
+		return Math.max(config.cellSize() * 0.5F, config.gravity() * config.timeStep() * 1.25F);
+	}
+
+	private static float weighted(float left, long leftWeight, float right, long rightWeight, long total) {
+		return (float) (((double) left * leftWeight + (double) right * rightWeight) / total);
+	}
+
+	private static float weighted(float left, double leftWeight, float right, double rightWeight, double total) {
+		return (float) ((left * leftWeight + right * rightWeight) / total);
+	}
+
 	private record AccessibleSolid(long totalExtent, SolidEntity selected) { }
+	private record PrecipitationMerge(
+			int parcelIndex, int compositionHandle, SolidCompositionRecord composition,
+			GranularParcelStore.Parcel parcel
+	) { }
 	private record SolidEntity(
 			boolean deposit, int index, int materialHandle, int compositionHandle,
 			long solidSvq, double mass, long extent

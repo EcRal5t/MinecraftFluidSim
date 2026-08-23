@@ -67,6 +67,10 @@ public final class M8GranularValidation {
 				&& display.activeParcels().size() <= GranularLimits.MAX_DISPLAY_PARCELS_PER_REGION
 				&& display.depositBulkFill().length == 6 * 6 * 6,
 				"bounded granular display snapshot lost its identity, geometry or active sample");
+		long distinctPositions = display.activeParcels().stream().map(sample ->
+				((long) sample.xQ() << 32) | ((long) sample.yQ() << 16) | sample.zQ()).distinct().count();
+		require(distinctPositions >= 32L && display.activeParcels().stream().allMatch(sample -> sample.diameterQ() <= 24),
+				"dry granular insertion collapsed representative parcels onto shared cell centers");
 		FlipFluidDomain.GranularExtraction extracted = domain.tryExtractExactGranular(
 				2, 2, 2, SolidVolume.SVQ_PER_BV, 3, true);
 		require(extracted.transferred() && extracted.ledger().totalSolidVolumeSvq() == input.totalSolidVolumeSvq()
@@ -122,6 +126,24 @@ public final class M8GranularValidation {
 		require(rawClose(occupiedBefore, domain.totalVolumeExact()
 				+ SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq())),
 				"precipitation did not exchange liquid and solid volume exactly");
+		GranularStateSnapshot.ActiveParcel precipitated = domain.exportGranularState().activeParcels().getFirst();
+		require(Float.floatToRawIntBits(precipitated.x()) != Float.floatToRawIntBits(0.75F)
+				|| Float.floatToRawIntBits(precipitated.y()) != Float.floatToRawIntBits(0.75F)
+				|| Float.floatToRawIntBits(precipitated.z()) != Float.floatToRawIntBits(0.75F),
+				"precipitation collapsed every new parcel onto the solver-cell center");
+		domain.step();
+		require(domain.totalGranularSolidVolumeSvq() == 8_192L
+				&& domain.exportGranularState().activeParcels().size() == 1,
+				"repeated same-cell precipitation did not merge compatible active parcels: svq="
+						+ domain.totalGranularSolidVolumeSvq() + ", active="
+						+ domain.exportGranularState().activeParcels().size() + ", deposits="
+						+ domain.granularDepositCellCount() + ", parcels="
+						+ domain.exportGranularState().activeParcels());
+		require(java.util.Arrays.equals(combinedBefore, combinedSpecies(domain))
+				&& rawClose(massBefore, domain.totalMass() + domain.totalGranularMass())
+				&& rawClose(occupiedBefore, domain.totalVolumeExact()
+				+ SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq())),
+				"merged precipitation changed combined aqueous/solid truth");
 
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			domain.setMarkerChemical(marker, java.util.Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L),
@@ -131,9 +153,11 @@ public final class M8GranularValidation {
 		double massBeforeDissolution = domain.totalMass() + domain.totalGranularMass();
 		double occupiedBeforeDissolution = domain.totalVolumeExact()
 				+ SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq());
-		domain.step();
-		require(domain.lastPhaseTransferStats().dissolutions() == 1
-				&& domain.totalGranularSolidVolumeSvq() == 0L,
+		boolean dissolved = false;
+		for (int step = 0; step < 16 && domain.totalGranularSolidVolumeSvq() > 0L; step++) {
+			domain.step(); dissolved |= domain.lastPhaseTransferStats().dissolutions() > 0;
+		}
+		require(dissolved && domain.totalGranularSolidVolumeSvq() == 0L,
 				"undersaturated liquid did not dissolve the accessible precipitate");
 		require(java.util.Arrays.equals(beforeDissolution, combinedSpecies(domain)),
 				"dissolution changed combined aqueous+solid species");
@@ -214,6 +238,25 @@ public final class M8GranularValidation {
 				&& merged.depositGroups().size() == 1
 				&& merged.solidSpeciesTotals().get(BuiltinChemicalDefinitions.NA_PLUS) == 1_280L,
 				"proportional reactive deposits did not merge into one persistent canonical group");
+
+		SolidCompositionPool compactCompositions = new SolidCompositionPool(BuiltinChemicalDefinitions.REGISTRY, 8);
+		GranularParcelStore compactParcels = new GranularParcelStore(registry, 8);
+		GranularInventory compactInventory = new GranularInventory(
+				compactParcels, new GranularDepositStore(registry, 1, 4));
+		compactInventory.bindSolidCompositions(compactCompositions);
+		for (int parcel = 0; parcel < 4; parcel++) compactParcels.add(new GranularParcelStore.Parcel(
+				0.20F + parcel * 0.05F, 0.25F, 0.25F, 0.0F, 0.0F, 0.0F, 10L,
+				activeRecord.totalMass(BuiltinChemicalDefinitions.REGISTRY), precipitate,
+				compactCompositions.create(activeRecord), 0, (byte) 0));
+		GranularInventory.CompactionStats firstCompaction = compactInventory.compactActive(
+				ignored -> 0, ignored -> true, 1.0F, GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP);
+		GranularInventory.CompactionStats secondCompaction = compactInventory.compactActive(
+				ignored -> 0, ignored -> true, 1.0F, GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP);
+		require(firstCompaction.merges() == 2 && secondCompaction.merges() == 1
+				&& compactParcels.count() == 1 && compactCompositions.liveCount() == 1
+				&& compactCompositions.speciesTotals()[BuiltinChemicalDefinitions.REGISTRY.speciesHandle(
+						BuiltinChemicalDefinitions.NA_PLUS)] == 2_560L,
+				"bounded active compaction did not preserve reactive composition ownership");
 	}
 
 	private static void registryDefinitionsAndWorldSnapshotAreStrict() throws Exception {

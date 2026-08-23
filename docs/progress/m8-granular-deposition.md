@@ -246,3 +246,23 @@ M8 尚不在完成索引中：最后只等待一个真实 controller 合并场�
   `79DE83CCC696BFA997A0C72E3B11645269AF0894BB094A6826866F336476715C`，烟测未改原件。
 - 新候选 JAR 已部署，SHA-256 为 `0B2008122E141FAC4B1236C15DEE83C04170B46C287859AF78B8E66F9FAE9DED`；
   崩溃版候选可恢复地保留为 `realwater-0.14.0-pre-svq-fix.jar.disabled`，同 Mod id 仍只有一个启用 JAR。
+
+## M8.12 实机颗粒形态与沉积 canonical 修正（2026-08-24）
+
+- SVQ 修正版在原世界继续运行时不再 tick crash，玩家与发射器颗粒容器往返及各物质数量符合预期；但两张运行后
+  截图与 05:41 的 `granstatus` 显示 1 BV 细沙和沉淀仍全部为 active（4824 parcels、depositGroups 0）。细沙实际被
+  切成 512 个最大 parcel，却每 64 个重叠在同一 solver-cell 格心，因而客户端只看见约 8 个黄色大点锁步下落；
+  precipitation 同样逐步在格心创建静止 4096 SVQ 白点。
+- 05:46 后第二段运行开始形成 reactive deposit；退出时 checkpoint 捕获到同格多个 runtime composition handle 的
+  内容规范化为同一 stable composition，因重复 canonical key 拒绝发布。日志明确保留 checkpoint 9 为上一权威代次，
+  没有覆盖 HEAD；这不是可以在 codec 层去重掩盖的显示问题。
+- reactive parcel→deposit 事务现按单位 SVQ 的 exact species 比例识别相容组，合并 absolute composition/SVQ/mass 并
+  释放被并入 handle；checkpoint 因此只会看到一个 canonical group。相同规则也用于 bounded active compaction，旧世界
+  已存在的数千小沉淀可在 operation budget 内逐步合并，而不是必须重建或丢弃。
+- dry insert 使用 collision-valid 的格内低差异位置；容量 plan 复用生产 occupancy 的 8 格 largest-remainder 权重，
+  不因打散位置放宽 skeleton capacity。precipitation 从实际扣体积的 carrier marker 邻域出生并继承局部速度；同格、
+  同组成、近速度且未达材料上限时直接守恒 merge。active display glyph 只缩小到可读上限，deposit 提高不透明度；
+  exact 体积、质量、碰撞半径、bulk 高度和液体 mesh 均未由显示反写。
+- `granular` selector 增补三个已有失败域内断言：dry insert 至少 32 个不同量化位置、连续 precipitation 合并仍闭合
+  aqueous+solid truth、active/deposit reactive merge 后 composition handle 唯一且 v5 capture canonical。没有新增
+  selector 或 Gradle task。液面黑三角仍按既有独立视觉债处理，本增量不修改 liquid mesher。

@@ -363,7 +363,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 				int color = payload.granularMaterials().get(material).argb();
 				float porosity = Byte.toUnsignedInt(frame.porosity()[cell]) / 255.0F;
 				renderDepositCell(matrix, vertices, state, frame.bulkFill(), x, y, z, h, fill, color,
-						0.72F + 0.18F * (1.0F - porosity));
+						0.94F + 0.04F * (1.0F - porosity));
 			}
 		}
 		for (var sample : payload.activeParcels()) {

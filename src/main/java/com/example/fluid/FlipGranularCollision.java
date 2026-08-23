@@ -71,6 +71,57 @@ final class FlipGranularCollision {
 		}
 	}
 
+	/** Deterministic sub-cell placement for representative parcels; no particle-particle contact is implied. */
+	GranularCouplingFields.Position spawnPosition(
+			int cellX, int cellY, int cellZ, long solidVolumeSvq, long sequence,
+			float preferredX, float preferredY, float preferredZ
+	) {
+		if (cellX < 0 || cellX >= sizeX || cellY < 0 || cellY >= sizeY || cellZ < 0 || cellZ >= sizeZ
+				|| solidVolumeSvq <= 0L || sequence < 0L) {
+			throw new IllegalArgumentException("Granular spawn request is outside the domain");
+		}
+		float radius = collisionRadius(solidVolumeSvq);
+		float margin = Math.min(cellSize * 0.45F, radius + cellSize * 0.025F);
+		float minimumX = cellX * cellSize + margin, maximumX = (cellX + 1) * cellSize - margin;
+		float minimumY = cellY * cellSize + margin, maximumY = (cellY + 1) * cellSize - margin;
+		float minimumZ = cellZ * cellSize + margin, maximumZ = (cellZ + 1) * cellSize - margin;
+		boolean preferred = Float.isFinite(preferredX) && Float.isFinite(preferredY) && Float.isFinite(preferredZ);
+		for (int attempt = 0; attempt < 48; attempt++) {
+			long sample = Math.addExact(sequence + 1L, attempt * 65_537L);
+			float unitX = (float) radicalInverse(sample, 2);
+			float unitY = (float) radicalInverse(sample, 3);
+			float unitZ = (float) radicalInverse(sample, 5);
+			float x, y, z;
+			if (preferred) {
+				float jitter = cellSize * 0.32F;
+				x = clamp(preferredX + (unitX - 0.5F) * jitter, minimumX, maximumX);
+				y = clamp(preferredY + (unitY - 0.5F) * jitter, minimumY, maximumY);
+				z = clamp(preferredZ + (unitZ - 0.5F) * jitter, minimumZ, maximumZ);
+			} else {
+				x = minimumX + (maximumX - minimumX) * unitX;
+				y = minimumY + (maximumY - minimumY) * unitY;
+				z = minimumZ + (maximumZ - minimumZ) * unitZ;
+			}
+			if (!sphereTouchesSolid(x, y, z, radius)) {
+				float depositSurface = depositSurfaceY(x, z);
+				if (depositSurface < 0.0F || y - radius > depositSurface + cellSize * 1.0e-5F) {
+					return new GranularCouplingFields.Position(x, y, z);
+				}
+			}
+		}
+		return null;
+	}
+
+	boolean positionValid(float x, float y, float z, long solidVolumeSvq) {
+		float radius = collisionRadius(solidVolumeSvq);
+		if (x < radius || x > sizeX * cellSize - radius
+				|| y < radius || y > sizeY * cellSize - radius
+				|| z < radius || z > sizeZ * cellSize - radius
+				|| sphereTouchesSolid(x, y, z, radius)) return false;
+		float depositSurface = depositSurfaceY(x, z);
+		return depositSurface < 0.0F || y - radius > depositSurface + cellSize * 1.0e-5F;
+	}
+
 	GranularCouplingFields.Position previewPosition(int index, GranularParcelStore.Parcel ignored) {
 		if (index < 0 || index >= previewCount) throw new IllegalArgumentException("Unknown granular preview index");
 		return new GranularCouplingFields.Position(nextX[index], nextY[index], nextZ[index]);
@@ -153,6 +204,15 @@ final class FlipGranularCollision {
 		double cellVolume = SolidVolume.toCellVolume(svq);
 		double radius = Math.cbrt(3.0 * cellVolume / (4.0 * Math.PI)) * cellSize;
 		return (float) clamp(radius, cellSize * 0.02F, cellSize * 0.20F);
+	}
+
+	private static double radicalInverse(long value, int base) {
+		double result = 0.0, place = 1.0 / base;
+		while (value > 0L) {
+			result += value % base * place;
+			value /= base; place /= base;
+		}
+		return result;
 	}
 
 	private static float clamp(float value, float minimum, float maximum) {

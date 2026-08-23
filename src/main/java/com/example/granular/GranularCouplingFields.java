@@ -1,6 +1,7 @@
 package com.example.granular;
 
 import java.util.Arrays;
+import java.util.function.IntToLongFunction;
 
 /** Exact-SVQ occupancy and derived pressure coupling fields for one bounded solver domain. */
 public final class GranularCouplingFields {
@@ -80,12 +81,39 @@ public final class GranularCouplingFields {
 		return (float) (-(nextSolidSvq - solidSvq[cell]) / (double) SolidVolume.SVQ_PER_CELL / dt);
 	}
 
+	/** Plans one positioned parcel against the same exact 8-cell weights used by the production rebuild. */
+	public boolean tryPlanParcel(
+			long[] plannedSolidSvq, Position position, long parcelSvq, IntToLongFunction geometricCapacity
+	) {
+		if (plannedSolidSvq == null || plannedSolidSvq.length != cellCount || position == null
+				|| geometricCapacity == null) throw new IllegalArgumentException("Granular placement plan is incomplete");
+		int candidates = allocate(position.x(), position.y(), position.z(), parcelSvq);
+		for (int candidate = 0; candidate < candidates; candidate++) {
+			int cell = candidateCell[candidate];
+			long capacity = geometricCapacity.applyAsLong(cell);
+			if (capacity < 0L || Math.addExact(plannedSolidSvq[cell], candidateShare[candidate]) > capacity) return false;
+		}
+		for (int candidate = 0; candidate < candidates; candidate++) {
+			int cell = candidateCell[candidate];
+			plannedSolidSvq[cell] = Math.addExact(plannedSolidSvq[cell], candidateShare[candidate]);
+		}
+		return true;
+	}
+
 	private float voidFraction(int cell, float geometricOpen) {
 		if (geometricOpen <= 0.0F) return 0.0F;
 		return Math.max(0.0F, Math.min(1.0F, effectiveOpenCellVolume(cell, geometricOpen) / geometricOpen));
 	}
 
 	private void distribute(float positionX, float positionY, float positionZ, long parcelSvq) {
+		int candidates = allocate(positionX, positionY, positionZ, parcelSvq);
+		for (int candidate = 0; candidate < candidates; candidate++) {
+			solidSvq[candidateCell[candidate]] = Math.addExact(
+					solidSvq[candidateCell[candidate]], candidateShare[candidate]);
+		}
+	}
+
+	private int allocate(float positionX, float positionY, float positionZ, long parcelSvq) {
 		if (!(Float.isFinite(positionX) && Float.isFinite(positionY) && Float.isFinite(positionZ)) || parcelSvq <= 0L) {
 			throw new IllegalArgumentException("Granular occupancy parcel is invalid");
 		}
@@ -123,10 +151,7 @@ public final class GranularCouplingFields {
 			candidateShare[best]++;
 			candidateRemainder[best] = -1.0;
 		}
-		for (int candidate = 0; candidate < candidates; candidate++) {
-			solidSvq[candidateCell[candidate]] = Math.addExact(
-					solidSvq[candidateCell[candidate]], candidateShare[candidate]);
-		}
+		return candidates;
 	}
 
 	private void requireCell(int cell) {

@@ -50,6 +50,7 @@ public final class GranularParcelStore {
 	public int count() { return count; }
 	public int capacity() { return capacity; }
 	public boolean hasCapacity(int additional) { return additional >= 0 && additional <= capacity - count; }
+	long maximumActiveParcelSvq(int material) { return registry.material(material).maximumActiveParcelSvq(); }
 
 	public int add(Parcel parcel) {
 		validate(parcel);
