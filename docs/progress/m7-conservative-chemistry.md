@@ -38,8 +38,14 @@
 
 关闭运行中，短 `milestone` 的 19 个领域以 8.182 s runner 时间通过；完整 `chemistry` 在两个全新 JVM 连续通过；离线
 `clean assemble compileTestJava` 成功。EULA=true 根项目专用服务器加载 `realwater 0.13.0` 到 `Done`，收到 `stop` 后正常保存
-并以 Gradle success 退出，日志无 `LOCKED`/`ERROR`。发布 JAR 已部署为 mods 目录唯一启用的主 Mod，SHA-256 为
-`D7C16A7F2A1DF255143719696A32F8A971E8A2153F8FDFF392239EEDE3875FE2`；0.12.0 已改名为 `.disabled`。
+并以 Gradle success 退出，日志无 `LOCKED`/`ERROR`。第一次实机签收暴露了壳面入口缺陷：玩家把不可替换壳块的外侧空气
+当成目标，外置发射器则把壳块本身当成目标，两者都未到达内部 cell。现已统一为严格的“壳面块 → 唯一面相邻内部格”解析；
+发射器还必须沿朝向继续进入该格，边/角和跨域歧义均拒绝。同期加入只占空气且失败回滚的 `/realwater controllerdemo`
+（4×4×4 内部）以及不遮光的空心边界框架，等待同一实机场景复测。
+
+修复后的发布 JAR 已重新通过 `boundary,containers`、离线 `clean assemble compileTestJava` 和根项目专用服务器正常
+`Done`/`stop`，并部署为 mods 目录唯一启用的主 Mod；SHA-256 为
+`1DE3142B87D4EC07394B56E06119AFC1B41692993E57894A181A190E98DE8B91`，0.12.0 保持 `.disabled`。
 
 自动门无法观察的混合酸碱颜色、真实玩家/发射器物品事务和跨重启视觉/账本一致性，合并为一次用户实机场景；该场景签收后
 才把 M7 从“自动关闭”改为“完整关闭”。
