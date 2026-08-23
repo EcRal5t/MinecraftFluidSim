@@ -1,5 +1,7 @@
 package com.example.fluid;
 
+import com.example.chemistry.ChemicalParcelStore;
+
 import java.util.Arrays;
 
 /** Deterministic, cell-local marker merge/split maintenance for the CPU FLIP reference solver. */
@@ -55,6 +57,7 @@ final class FlipParticleReseeder {
 			double[] particleMass,
 			int[] particleMaterialHandle,
 			int[] particlePhaseLabel,
+			ChemicalParcelStore chemicalParcels,
 			int particleCount,
 			boolean massWeightedDynamics,
 			PositionValidator positionValidator
@@ -66,13 +69,14 @@ final class FlipParticleReseeder {
 		MergeResult mergeResult = mergeOverpopulatedCells(
 				particleX, particleY, particleZ, velocityX, velocityY, velocityZ,
 				particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel,
-				particleCount, massWeightedDynamics, positionValidator
+				chemicalParcels, particleCount, massWeightedDynamics, positionValidator
 		);
 		int merged = mergeResult.merged();
 		if (merged > 0) {
 			particleCount = compactParticles(
 					particleX, particleY, particleZ, velocityX, velocityY, velocityZ,
-					particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel, particleCount
+					particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel,
+					chemicalParcels, particleCount
 			);
 		}
 
@@ -93,7 +97,7 @@ final class FlipParticleReseeder {
 						solid, cell, source, particleCount,
 						particleX, particleY, particleZ, velocityX, velocityY, velocityZ,
 						particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel,
-						positionValidator
+						chemicalParcels, positionValidator
 				)) {
 					geometrySkipped += minimum - cellMarkerCount[cell];
 					break;
@@ -124,6 +128,7 @@ final class FlipParticleReseeder {
 			double[] particleMass,
 			int[] particleMaterialHandle,
 			int[] particlePhaseLabel,
+			ChemicalParcelStore chemicalParcels,
 			int particleCount,
 			boolean massWeightedDynamics,
 			PositionValidator positionValidator
@@ -142,19 +147,23 @@ final class FlipParticleReseeder {
 			Arrays.sort(localParticles, 0, localCount);
 			Arrays.fill(representative, 0, localCount, false);
 			selectDistributedRepresentatives(particleX, particleY, particleZ, localCount);
-			ensureMaterialRepresentatives(particleMaterialHandle, particlePhaseLabel, localCount);
+			ensureMaterialRepresentatives(particleMaterialHandle, particlePhaseLabel, chemicalParcels, localCount);
 			for (int local = 0; local < localCount; local++) {
 				if (representative[local]) continue;
 				int source = localParticles[local];
 				int targetLocal = nearestRepresentative(
 						particleX, particleY, particleZ, particleMaterialHandle, particlePhaseLabel,
-						source, localCount
+						chemicalParcels, source, localCount
 				);
+				if (targetLocal < 0) {
+					geometrySkipped++;
+					continue;
+				}
 				int target = localParticles[targetLocal];
 				if (!mergeParticleInto(
 						target, source, particleX, particleY, particleZ,
 						velocityX, velocityY, velocityZ, particleVolume, particleMass,
-						massWeightedDynamics, positionValidator
+						chemicalParcels, massWeightedDynamics, positionValidator
 				)) {
 					geometrySkipped++;
 					continue;
@@ -192,14 +201,19 @@ final class FlipParticleReseeder {
 		}
 	}
 
-	private void ensureMaterialRepresentatives(int[] particleMaterialHandle, int[] particlePhaseLabel, int count) {
+	private void ensureMaterialRepresentatives(
+			int[] particleMaterialHandle, int[] particlePhaseLabel,
+			ChemicalParcelStore chemicalParcels, int count
+	) {
 		for (int candidate = 0; candidate < count; candidate++) {
 			int particle = localParticles[candidate];
 			boolean represented = false;
 			for (int existing = 0; existing < count; existing++) if (representative[existing]) {
 				int representativeParticle = localParticles[existing];
 				if (particleMaterialHandle[representativeParticle] == particleMaterialHandle[particle]
-						&& particlePhaseLabel[representativeParticle] == particlePhaseLabel[particle]) {
+						&& particlePhaseLabel[representativeParticle] == particlePhaseLabel[particle]
+						&& (chemicalParcels == null
+						|| chemicalParcels.indicator(representativeParticle) == chemicalParcels.indicator(particle))) {
 					represented = true;
 					break;
 				}
@@ -211,6 +225,7 @@ final class FlipParticleReseeder {
 	private int nearestRepresentative(
 			float[] particleX, float[] particleY, float[] particleZ,
 			int[] particleMaterialHandle, int[] particlePhaseLabel,
+			ChemicalParcelStore chemicalParcels,
 			int particle, int count
 	) {
 		int best = -1;
@@ -220,6 +235,7 @@ final class FlipParticleReseeder {
 			int representativeParticle = localParticles[local];
 			if (particleMaterialHandle[representativeParticle] != particleMaterialHandle[particle]
 					|| particlePhaseLabel[representativeParticle] != particlePhaseLabel[particle]) continue;
+			if (chemicalParcels != null && !chemicalParcels.canMerge(representativeParticle, particle)) continue;
 			float distance = distanceSquared(particleX, particleY, particleZ, particle, representativeParticle);
 			if (distance < bestDistance) {
 				bestDistance = distance;
@@ -240,6 +256,7 @@ final class FlipParticleReseeder {
 			float[] velocityZ,
 			float[] particleVolume,
 			double[] particleMass,
+			ChemicalParcelStore chemicalParcels,
 			boolean massWeightedDynamics,
 			PositionValidator positionValidator
 	) {
@@ -261,6 +278,7 @@ final class FlipParticleReseeder {
 		velocityZ[target] = (float) ((velocityZ[target] * targetWeight + velocityZ[source] * sourceWeight) / mergedWeight);
 		particleVolume[target] = (float) mergedVolume;
 		particleMass[target] += particleMass[source];
+		if (chemicalParcels != null) chemicalParcels.merge(target, source, particleMass[target]);
 		return true;
 	}
 
@@ -279,6 +297,7 @@ final class FlipParticleReseeder {
 			double[] particleMass,
 			int[] particleMaterialHandle,
 			int[] particlePhaseLabel,
+			ChemicalParcelStore chemicalParcels,
 			PositionValidator positionValidator
 	) {
 		int x = cell % sizeX;
@@ -321,18 +340,30 @@ final class FlipParticleReseeder {
 				}
 			}
 		}
+		float originalVolume = particleVolume[source];
+		float firstVolume = originalVolume * 0.5F;
+		float secondVolume = originalVolume - firstVolume;
+		if (chemicalParcels != null && !chemicalParcels.canSplit(
+				source, destination, firstVolume, secondVolume)) {
+			particleX[source] = sourceX;
+			particleY[source] = sourceY;
+			particleZ[source] = sourceZ;
+			return false;
+		}
 		copyParticle(source, destination, particleX, particleY, particleZ,
 				velocityX, velocityY, velocityZ, particleVolume, particleMass,
 				particleMaterialHandle, particlePhaseLabel);
 		particleX[destination] = destinationX;
 		particleY[destination] = destinationY;
 		particleZ[destination] = destinationZ;
-		float firstVolume = particleVolume[source] * 0.5F;
-		particleVolume[destination] = particleVolume[source] - firstVolume;
+		particleVolume[destination] = secondVolume;
 		particleVolume[source] = firstVolume;
 		double firstMass = particleMass[source] * 0.5;
 		particleMass[destination] = particleMass[source] - firstMass;
 		particleMass[source] = firstMass;
+		if (chemicalParcels != null) chemicalParcels.split(
+				source, destination, firstVolume, secondVolume,
+				particleMass[source], particleMass[destination]);
 		return true;
 	}
 
@@ -396,6 +427,7 @@ final class FlipParticleReseeder {
 			double[] particleMass,
 			int[] particleMaterialHandle,
 			int[] particlePhaseLabel,
+			ChemicalParcelStore chemicalParcels,
 			int particleCount
 	) {
 		int destination = 0;
@@ -406,6 +438,7 @@ final class FlipParticleReseeder {
 					velocityX, velocityY, velocityZ, particleVolume, particleMass,
 					particleMaterialHandle, particlePhaseLabel
 			);
+			if (chemicalParcels != null && destination != source) chemicalParcels.move(source, destination);
 			destination++;
 		}
 		return destination;

@@ -26,6 +26,21 @@ public record ExactRational(BigInteger numerator, BigInteger denominator) implem
 		return new ExactRational(BigInteger.valueOf(value), BigInteger.ONE);
 	}
 
+	/** Exact rational represented by a finite IEEE-754 float. */
+	public static ExactRational ofFloat(float value) {
+		if (!Float.isFinite(value)) throw new IllegalArgumentException("Float rational must be finite");
+		int bits = Float.floatToRawIntBits(value);
+		boolean negative = (bits & 0x8000_0000) != 0;
+		int exponent = bits >>> 23 & 0xff;
+		int significand = bits & 0x7f_ffff;
+		if (exponent != 0) significand |= 1 << 23;
+		if (negative) significand = -significand;
+		int power = exponent == 0 ? -149 : exponent - 150;
+		return power >= 0
+				? new ExactRational(BigInteger.valueOf(significand).shiftLeft(power), BigInteger.ONE)
+				: new ExactRational(BigInteger.valueOf(significand), BigInteger.ONE.shiftLeft(-power));
+	}
+
 	/** Accepts an integer, a finite decimal, or a numerator/denominator pair. */
 	public static ExactRational parse(String value) {
 		if (value == null || value.isBlank() || !value.equals(value.trim())) {

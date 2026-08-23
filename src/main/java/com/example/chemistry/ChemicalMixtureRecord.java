@@ -24,7 +24,7 @@ public final class ChemicalMixtureRecord {
 			}
 			total = Math.addExact(total, amounts[i]);
 		}
-		if (total > ChemicalLimits.MAX_BUCKET_TOTAL_QUANTA) {
+		if (total > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
 			throw new IllegalArgumentException("Chemical parcel amount is over budget");
 		}
 		double residual = Double.longBitsToDouble(massResidualBits);

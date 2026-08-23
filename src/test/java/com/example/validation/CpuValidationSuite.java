@@ -8,6 +8,7 @@ import com.example.fluid.FlipFluidReseedingValidation;
 import com.example.fluid.M3ConnectedVesselValidation;
 import com.example.fluid.M4SurfaceTensionValidation;
 import com.example.fluid.M5GasLiquidCouplingValidation;
+import com.example.fluid.M7ChemicalTransportValidation;
 import com.example.fluid.air.AirNetworkValidation;
 import com.example.item.M6ContainerValidation;
 import com.example.logging.CommandAuditFileValidation;
@@ -94,8 +95,13 @@ public final class CpuValidationSuite {
 
 	private static Map<String, Gate> gates() {
 		LinkedHashMap<String, Gate> gates = new LinkedHashMap<>();
-		gate(gates, "chemistry", () -> M7ChemistryValidation.main(NONE),
-				() -> M7ChemistryValidation.main(FAST));
+		gate(gates, "chemistry", () -> {
+			M7ChemistryValidation.main(NONE);
+			M7ChemicalTransportValidation.main(NONE);
+		}, () -> {
+			M7ChemistryValidation.main(FAST);
+			M7ChemicalTransportValidation.main(FAST);
+		});
 		gate(gates, "materials", () -> M3ConnectedVesselValidation.main(NONE));
 		gate(gates, "surface-tension", () -> M4SurfaceTensionValidation.main(NONE));
 		gate(gates, "air-network", () -> AirNetworkValidation.main(NONE));
