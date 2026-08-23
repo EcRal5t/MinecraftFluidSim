@@ -2,6 +2,8 @@ package com.example.granular;
 
 /** Fixed-capacity primitive SoA for active granular parcels. */
 public final class GranularParcelStore {
+	public static final byte FLAG_SUPPORTED = 1;
+
 	public record Parcel(
 			float x, float y, float z,
 			float velocityX, float velocityY, float velocityZ,

@@ -22,8 +22,9 @@ public final class M8GranularValidation {
 		mechanicsMatchesTerminalVelocity();
 		twoWayDragPreservesMomentum();
 		couplingOccupancyResumsExactly();
+		settlingRelaxationSleepAndWakeAreLocal();
 		solverCouplingPreservesInventories(fast ? 8 : 80);
-		System.out.println("M8 granular core gate passed: canonical registry, exact inventory, drag and coupling occupancy");
+		System.out.println("M8 granular core gate passed: exact inventory, coupling, repose, sleep and local wake");
 	}
 
 	private static void registryIsCanonicalAndBounded() {
@@ -185,6 +186,105 @@ public final class M8GranularValidation {
 				400_000, Math.toRadians(30.0), 0.6, 0.4, 0.1, 0.05, 1L,
 				GranularLimits.MAX_PARCEL_VOLUME_SVQ, 0xffffffff, "realwater:neutral_probe", false)),
 				List.of(new GranularCarrier("realwater:water", 1.002e-3, 100_000.0)));
+	}
+
+	private static void settlingRelaxationSleepAndWakeAreLocal() {
+		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		int sizeX = 5, sizeY = 2, sizeZ = 3, cellCount = sizeX * sizeY * sizeZ;
+		GranularParcelStore parcels = new GranularParcelStore(registry, 8);
+		GranularDepositStore deposits = new GranularDepositStore(registry, cellCount, 32);
+		GranularInventory inventory = new GranularInventory(parcels, deposits);
+		GranularDepositDynamics dynamics = new GranularDepositDynamics(
+				registry, parcels, deposits, inventory, sizeX, sizeY, sizeZ, 0.5F);
+		long initialSvq = SolidVolume.SVQ_PER_CELL * 3L / 5L;
+		double initialMass = SolidVolume.toCellVolume(initialSvq) * registry.material(sand).referenceDensity();
+		long parcelSvq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		double parcelMass = initialMass * parcelSvq / initialSvq;
+		parcels.add(new GranularParcelStore.Parcel(0.75F, 0.05F, 0.75F, 0.0F, 0.0F, 0.0F,
+				parcelSvq, parcelMass, sand, 0, GranularDepositDynamics.SETTLE_CONTACT_STEPS,
+				GranularParcelStore.FLAG_SUPPORTED));
+		TestDepositEnvironment calm = new TestDepositEnvironment(sizeX, sizeY, sizeZ, 0.0);
+		GranularDepositDynamics.Stats settled = dynamics.step(calm, 0.05F);
+		require(settled.settledParcels() == 1 && parcels.count() == 0, "supported granular parcel did not settle");
+		int centerCell = cellIndex(1, 0, 1, sizeX, sizeY);
+		require(deposits.tryAdd(centerCell, new GranularDepositStore.SolidPortion(
+				sand, 0, initialSvq - parcelSvq, initialMass - parcelMass), SolidVolume.SVQ_PER_CELL),
+				"repose fixture deposit was rejected");
+		dynamics.disturbCell(centerCell);
+		require(inventory.totalSolidVolumeSvq() == initialSvq && rawClose(inventory.totalMass(), initialMass),
+				"settling changed exact granular inventory");
+
+		for (int step = 0; step < 128 && dynamics.dirtyColumnCount() > 0; step++) dynamics.step(calm, 0.05F);
+		require(dynamics.dirtyColumnCount() == 0, "stable granular surface did not leave the dirty queue");
+		require(dynamics.sleepingColumnCount() * 5 >= dynamics.occupiedColumnCount() * 4,
+				"less than 80% of a stable deposit reached sleep");
+		assertReposeBound(deposits, registry.material(sand).reposeAngleRadians(), sizeX, sizeY, sizeZ);
+
+		int remoteCell = cellIndex(4, 0, 1, sizeX, sizeY);
+		long remoteSvq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		double remoteMass = SolidVolume.toCellVolume(remoteSvq) * registry.material(sand).referenceDensity();
+		require(deposits.tryAdd(remoteCell, new GranularDepositStore.SolidPortion(sand, 0, remoteSvq, remoteMass),
+				SolidVolume.SVQ_PER_CELL), "remote wake fixture deposit was rejected");
+		long beforeSubcritical = inventory.totalSolidVolumeSvq();
+		double massBeforeWake = inventory.totalMass();
+		long remoteBefore = deposits.cellSolidVolumeSvq(remoteCell);
+		dynamics.disturbCell(centerCell);
+		GranularDepositDynamics.Stats quiet = dynamics.step(calm, 0.05F);
+		require(quiet.wokenParcels() == 0 && parcels.count() == 0
+				&& inventory.totalSolidVolumeSvq() == beforeSubcritical, "subcritical flow caused granular creep");
+
+		TestDepositEnvironment eroding = new TestDepositEnvironment(sizeX, sizeY, sizeZ, 1.0);
+		GranularDepositDynamics.Stats wake = dynamics.step(eroding, 0.05F);
+		require(wake.wokenParcels() > 0 && parcels.count() == wake.wokenParcels(),
+				"supercritical exposed deposit did not wake locally");
+		require(deposits.cellSolidVolumeSvq(remoteCell) == remoteBefore,
+				"local shear wake touched a sleeping remote deposit");
+		require(inventory.totalSolidVolumeSvq() == beforeSubcritical && rawClose(inventory.totalMass(), massBeforeWake),
+				"local granular wake changed exact inventory");
+	}
+
+	private static void assertReposeBound(GranularDepositStore deposits, double repose,
+	                                      int sizeX, int sizeY, int sizeZ) {
+		long[] bulk = new long[sizeX * sizeZ];
+		for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) {
+			for (int y = 0; y < sizeY; y++) {
+				bulk[z * sizeX + x] += deposits.cellBulkVolumeSvq(cellIndex(x, y, z, sizeX, sizeY));
+			}
+		}
+		for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) {
+			for (int dz = -1; dz <= 1; dz++) for (int dx = -1; dx <= 1; dx++) {
+				if (dx == 0 && dz == 0 || x + dx < 0 || x + dx >= sizeX || z + dz < 0 || z + dz >= sizeZ) continue;
+				double difference = Math.abs((double) bulk[z * sizeX + x] - bulk[(z + dz) * sizeX + x + dx])
+						/ SolidVolume.SVQ_PER_CELL;
+				double limit = Math.hypot(dx, dz) * Math.tan(repose) + 2.0e-6;
+				require(difference <= limit, "granular deposit exceeded its eight-neighbor repose angle");
+			}
+		}
+	}
+
+	private static int cellIndex(int x, int y, int z, int sizeX, int sizeY) {
+		return (z * sizeY + y) * sizeX + x;
+	}
+
+	private static final class TestDepositEnvironment implements GranularDepositDynamics.Environment {
+		private final int sizeX, sizeY, sizeZ;
+		private final double shields;
+
+		private TestDepositEnvironment(int sizeX, int sizeY, int sizeZ, double shields) {
+			this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.shields = shields;
+		}
+
+		@Override public long geometricOpenSvq(int cell) { return SolidVolume.SVQ_PER_CELL; }
+		@Override public boolean horizontalPathOpen(int fromCell, int directionX, int directionZ) {
+			int x = fromCell % sizeX, z = fromCell / (sizeX * sizeY);
+			return x + directionX >= 0 && x + directionX < sizeX
+					&& z + directionZ >= 0 && z + directionZ < sizeZ;
+		}
+		@Override public double shields(int surfaceCell, ParticulateMaterial material) { return shields; }
+		@Override public GranularDepositDynamics.Velocity wakeVelocity(int surfaceCell) {
+			return new GranularDepositDynamics.Velocity(0.2F, 0.0F, 0.0F);
+		}
 	}
 
 	private static void solverCouplingPreservesInventories(int steps) {

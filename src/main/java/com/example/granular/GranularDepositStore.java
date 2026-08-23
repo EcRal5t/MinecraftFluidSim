@@ -12,6 +12,7 @@ public final class GranularDepositStore {
 			}
 		}
 	}
+	public record Group(int materialHandle, int solidCompositionHandle, long solidVolumeSvq, double mass) { }
 
 	private final GranularRegistry registry;
 	private final int[] headByCell, porosityQByCell;
@@ -39,6 +40,34 @@ public final class GranularDepositStore {
 	public int groupCount() { return groupCount; }
 	public int occupiedCellCount() { return occupiedCellCount; }
 	public int porosityQ(int cell) { requireCell(cell); return porosityQByCell[cell]; }
+	public long cellBulkVolumeSvq(int cell) {
+		long skeleton = cellSolidVolumeSvq(cell);
+		return skeleton == 0L ? 0L : SolidVolume.bulkVolumeCeil(skeleton, porosityQByCell[cell]);
+	}
+
+	public Group dominantGroup(int cell) {
+		requireCell(cell);
+		int best = -1;
+		for (int entry = headByCell[cell]; entry >= 0; entry = next[entry]) {
+			if (best < 0 || solidVolumeSvq[entry] > solidVolumeSvq[best]
+					|| solidVolumeSvq[entry] == solidVolumeSvq[best] && compare(entry, best) < 0) best = entry;
+		}
+		return best < 0 ? null : new Group(materialHandle[best], solidCompositionHandle[best],
+				solidVolumeSvq[best], mass[best]);
+	}
+
+	public boolean tryMove(
+			int fromCell, int toCell, int material, int composition, long requestedSvq, long targetOpenSvq
+	) {
+		if (fromCell == toCell) throw new IllegalArgumentException("Deposit move requires two cells");
+		SolidPortion planned;
+		try { planned = peekTake(fromCell, material, composition, requestedSvq); }
+		catch (IllegalArgumentException unavailable) { return false; }
+		if (!tryAdd(toCell, planned, targetOpenSvq)) return false;
+		SolidPortion removed = take(fromCell, material, composition, requestedSvq);
+		if (!removed.equals(planned)) throw new IllegalStateException("Deposit move plan changed before commit");
+		return true;
+	}
 
 	public boolean tryAdd(int cell, SolidPortion portion, long geometricOpenSvq) {
 		requireCell(cell);
@@ -48,9 +77,7 @@ public final class GranularDepositStore {
 		}
 		long oldVolume = cellSolidVolumeSvq(cell);
 		long newVolume = Math.addExact(oldVolume, portion.solidVolumeSvq());
-		int materialPorosity = registry.material(portion.materialHandle()).restPorosityQ();
-		int newPorosity = oldVolume == 0L ? materialPorosity
-				: weightedPorosity(porosityQByCell[cell], oldVolume, materialPorosity, portion.solidVolumeSvq(), newVolume);
+		int newPorosity = porosityAfterAdding(cell, portion, newVolume);
 		if (newVolume > geometricOpenSvq || SolidVolume.bulkVolumeCeil(newVolume, newPorosity) > geometricOpenSvq) return false;
 
 		int existing = find(cell, portion.materialHandle(), portion.solidCompositionHandle());
@@ -200,9 +227,14 @@ public final class GranularDepositStore {
 		porosityQByCell[cell] = (int) ((weighted + total / 2L) / total);
 	}
 
-	private static int weightedPorosity(int first, long firstVolume, int second, long secondVolume, long total) {
-		long numerator = Math.addExact(Math.multiplyExact(firstVolume, first), Math.multiplyExact(secondVolume, second));
-		return (int) ((numerator + total / 2L) / total);
+	private int porosityAfterAdding(int cell, SolidPortion portion, long total) {
+		long weighted = Math.multiplyExact(portion.solidVolumeSvq(),
+				registry.material(portion.materialHandle()).restPorosityQ());
+		for (int entry = headByCell[cell]; entry >= 0; entry = next[entry]) {
+			weighted = Math.addExact(weighted, Math.multiplyExact(solidVolumeSvq[entry],
+					registry.material(materialHandle[entry]).restPorosityQ()));
+		}
+		return (int) ((weighted + total / 2L) / total);
 	}
 
 	private void requireCell(int cell) {

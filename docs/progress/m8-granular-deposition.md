@@ -66,3 +66,20 @@ drag 的 parcel+fluid 动量闭合、parcel 跨格前后 `sum(ΔS)=0`；full gra
 最近门先跑 `granular` 通过（80 个集成 solver steps，0.318 秒）；因实际修改共享 pressure/cut-cell/air 路径，随后用
 `--rerun-tasks` 跑 `granular,free-surface,cut-cell,gas-liquid`，4 域 runner 47.232 秒全部通过，其中长期 gas-liquid
 44.247 秒。gate-off 的既有 free-surface/cut-cell/gas-liquid 结果未回退。
+
+## M8.3 低成本沉积、休眠与局部唤醒（2026-08-24）
+
+- granular collision preview 现同时处理 domain/cut-cell/deposit bulk surface；支撑标志与连续接触年龄仍只在对应
+  pressure 成功后提交，连续 3 个低速支撑 substep 后才允许 parcel 原子转为 deposit。
+- 新增有界 dirty surface-column scheduler；安息角在合法八邻域中按最大超坡量搬运 exact SVQ，对角只有至少一条
+  两段开放 face path 时成立。每 column 每 logical step 至多处理一次，方向同值时按时空确定性轮转，避免固定轴偏置。
+- 连续 20 个 logical step 无坡面移动或 wake 的 column 退出 dirty queue；诊断才扫描 sleep 比例，常态 step 不扫描
+  sleeping deposit。block/cut-cell 变化只扰动实际 column 与一格邻域，覆盖 granular inventory 的碰撞编辑会在改动前拒绝。
+- exposed group 的 Shields 超阈值 wake 受 `erosionRateSvqPerSecond`、材料 parcel 上限和全局 operation/parcel 预算限制；
+  亚临界检查不移动库存，未具备 composition-aware split 的 reactive partial group 保持 deposit，不猜测拆分。
+- deposit porosity 用各 material skeleton SVQ 重新派生，bulk 只用于形态；液体压力容量仍只扣 skeleton。沉积格 face 使用
+  frozen Kozeny--Carman/Darcy 半隐式阻尼，双侧 permeability 采用对称 harmonic closure。
+
+同一 `granular` selector 新增支撑沉积、八邻域 repose、20-step sleep、亚临界 no-creep、超临界局部 wake 及全程
+SVQ/mass 守恒断言，没有新增常态 gate。因碰撞和 free-surface/cut-cell 邻接路径被修改，最近门用 `--rerun-tasks`
+运行 `granular,cut-cell,free-surface`，3 域 runner 2.878 秒全部通过。

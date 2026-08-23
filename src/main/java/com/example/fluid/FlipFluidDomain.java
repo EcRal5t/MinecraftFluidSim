@@ -9,6 +9,7 @@ import com.example.chemistry.ChemicalLimits;
 import com.example.fluid.air.AirNetwork;
 import com.example.granular.GranularCarrier;
 import com.example.granular.GranularCouplingFields;
+import com.example.granular.GranularDepositDynamics;
 import com.example.granular.GranularDepositStore;
 import com.example.granular.GranularInventory;
 import com.example.granular.GranularLimits;
@@ -119,6 +120,9 @@ public final class FlipFluidDomain {
 	private GranularParcelStore granularParcels;
 	private GranularDepositStore granularDeposits;
 	private GranularInventory granularInventory;
+	private GranularDepositDynamics granularDepositDynamics;
+	private GranularDepositDynamics.Stats lastGranularDepositStats =
+			new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
 	private GranularCouplingFields granularCoupling;
 	private GranularCouplingFields granularNextCoupling;
 	private GranularCouplingFields pressureGranularCoupling;
@@ -247,6 +251,11 @@ public final class FlipFluidDomain {
 	public boolean hasChemistryState() { return chemicalParcels != null; }
 	public boolean hasGranularState() { return granularParcels != null; }
 	public int granularParcelCount() { return granularParcels == null ? 0 : granularParcels.count(); }
+	public int granularDepositCellCount() { return granularDeposits == null ? 0 : granularDeposits.occupiedCellCount(); }
+	public int granularSleepingColumnCount() {
+		return granularDepositDynamics == null ? 0 : granularDepositDynamics.sleepingColumnCount();
+	}
+	public GranularDepositDynamics.Stats lastGranularDepositStats() { return lastGranularDepositStats; }
 	public long totalGranularSolidVolumeSvq() { return granularInventory == null ? 0L : granularInventory.totalSolidVolumeSvq(); }
 	public double totalGranularMass() { return granularInventory == null ? 0.0 : granularInventory.totalMass(); }
 
@@ -274,9 +283,11 @@ public final class FlipFluidDomain {
 				Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
 						Math.multiplyExact(cellCount, GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL)));
 		granularInventory = new GranularInventory(granularParcels, granularDeposits);
+		granularDepositDynamics = new GranularDepositDynamics(registry, granularParcels, granularDeposits,
+				granularInventory, sizeX, sizeY, sizeZ, config.cellSize());
 		granularCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
 		granularNextCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
-		granularCollision = new FlipGranularCollision(sizeX, sizeY, sizeZ, config.cellSize(), cutCells,
+		granularCollision = new FlipGranularCollision(sizeX, sizeY, sizeZ, config.cellSize(), cutCells, granularDeposits,
 				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION);
 		granularCarrierMaterialByCell = new int[cellCount];
 		granularCarrierVolumeByCell = new double[cellCount];
@@ -720,15 +731,22 @@ public final class FlipFluidDomain {
 		int index = cellIndexChecked(x, y, z);
 		int previous = cutCells.mask(index);
 		if (previous == mask) return 0.0F;
+		int newlyOccupied = mask & ~previous;
+		if (newlyOccupied != 0 && granularCoupling != null) {
+			ensureGrid();
+			if (granularCoupling.solidSvq(index) > 0L || granularDeposits.cellSolidVolumeSvq(index) > 0L) {
+				throw new IllegalStateException("Cannot overwrite granular inventory with runtime collision geometry");
+			}
+		}
 		cutCells.replaceMask(index, mask);
 		solid[index] = mask == FlipCutCellGeometry.FULL_MASK;
 		pressure[index] = 0.0F;
-		int newlyOccupied = mask & ~previous;
 		float displaced = newlyOccupied == 0 ? 0.0F
 				: removeParticlesInMicroMask(x, y, z, newlyOccupied, chemicalDisplacement);
 		float excess = Math.max(0.0F, exactVolumeInCell(x, y, z) - effectiveOpenCellVolume(index));
 		if (excess > 1.0E-6F) displaced += removeParticlesInCell(x, y, z, excess, chemicalDisplacement);
 		volume[index] = 0.0F;
+		if (granularDepositDynamics != null) granularDepositDynamics.disturbCell(index);
 		gridDirty = true;
 		return displaced;
 	}
@@ -1624,6 +1642,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			}
 			applyGravity(dt);
 			applyLiquidPairSurfaceTensionForce(dt);
+			applyGranularPorousDamping(dt);
 			enforceSolidFaceVelocities();
 			solvePressure(dt);
 			pressureIterations += lastPressureIterations;
@@ -1640,6 +1659,11 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						sizeX, sizeY, sizeZ, config.cellSize(), particleX, particleY, particleZ,
 						particleMass, particleMaterialHandle,
 						handle -> materialRegistry.material(handle).id(), particleCount);
+		if (granularDepositDynamics != null) {
+			lastGranularDepositStats = granularDepositDynamics.step(granularDepositEnvironment(), config.timeStep());
+			granularCoupling.rebuild(granularParcels, granularDeposits);
+			pressureGranularCoupling = granularCoupling;
+		}
 		ensureParticleCapacity(particleReseeder.capacityUpperBound(particleCount));
 		FlipParticleReseeder.Result reseeding = particleReseeder.reseed(
 				solid,
@@ -1871,6 +1895,108 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				addFaceImpulse(velocityZ, velocityWeightZ, 2, x, y, z, impulseZ);
 			}
 		};
+	}
+
+	private GranularDepositDynamics.Environment granularDepositEnvironment() {
+		return new GranularDepositDynamics.Environment() {
+			@Override public long geometricOpenSvq(int cell) {
+				return SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+			}
+
+			@Override public boolean horizontalPathOpen(int fromCell, int directionX, int directionZ) {
+				if (directionX == 0 && directionZ == 0 || Math.abs(directionX) > 1 || Math.abs(directionZ) > 1) {
+					throw new IllegalArgumentException("Granular slope direction is invalid");
+				}
+				int x = fromCell % sizeX, yz = fromCell / sizeX, y = yz % sizeY, z = yz / sizeY;
+				int targetX = x + directionX, targetZ = z + directionZ;
+				if (!inside(targetX, y, targetZ)) return false;
+				if (directionX == 0 || directionZ == 0) {
+					return openFaceFromCell(fromCell, directionX, 0, directionZ) > 0.0F;
+				}
+				boolean xThenZ = openFaceFromCell(fromCell, directionX, 0, 0) > 0.0F;
+				int afterX = cellIndex(targetX, y, z);
+				xThenZ &= openFaceFromCell(afterX, 0, 0, directionZ) > 0.0F;
+				boolean zThenX = openFaceFromCell(fromCell, 0, 0, directionZ) > 0.0F;
+				int afterZ = cellIndex(x, y, targetZ);
+				zThenX &= openFaceFromCell(afterZ, directionX, 0, 0) > 0.0F;
+				return xThenZ || zThenX;
+			}
+
+			@Override public double shields(int surfaceCell, com.example.granular.ParticulateMaterial material) {
+				int x = surfaceCell % sizeX, yz = surfaceCell / sizeX, y = yz % sizeY, z = yz / sizeY;
+				int fluidCell = y + 1 < sizeY ? cellIndex(x, y + 1, z) : surfaceCell;
+				float px = (x + 0.5F) * config.cellSize();
+				float py = (Math.min(sizeY - 1, y + 1) + 0.5F) * config.cellSize();
+				float pz = (z + 0.5F) * config.cellSize();
+				double speed = Math.hypot(sampleX(velocityX, px, py, pz), sampleZ(velocityZ, px, py, pz));
+				CarrierProperties carrier = granularCarrierProperties(fluidCell);
+				double denominator = Math.abs(material.referenceDensity() - carrier.density())
+						* config.gravity() * material.primaryGrainDiameterMeters();
+				if (!(denominator > 1.0e-18)) return speed > 0.0 ? Double.POSITIVE_INFINITY : 0.0;
+				double bedShear = carrier.viscosity() * speed / config.cellSize();
+				return bedShear / denominator;
+			}
+
+			@Override public GranularDepositDynamics.Velocity wakeVelocity(int surfaceCell) {
+				int x = surfaceCell % sizeX, yz = surfaceCell / sizeX, y = yz % sizeY, z = yz / sizeY;
+				float px = (x + 0.5F) * config.cellSize(), py = (y + 0.5F) * config.cellSize();
+				float pz = (z + 0.5F) * config.cellSize();
+				return new GranularDepositDynamics.Velocity(sampleX(velocityX, px, py, pz),
+						sampleY(velocityY, px, py, pz), sampleZ(velocityZ, px, py, pz));
+			}
+		};
+	}
+
+	private record CarrierProperties(double density, double viscosity) { }
+
+	private CarrierProperties granularCarrierProperties(int cell) {
+		int liquidMaterial = granularCarrierMaterialByCell == null ? -1 : granularCarrierMaterialByCell[cell];
+		if (markerCount[cell] <= 0 || liquidMaterial < 0) return new CarrierProperties(1.225, 1.81e-5);
+		String materialId = materialRegistry.material(liquidMaterial).id();
+		GranularCarrier carrier = granularRegistry.carrier(granularRegistry.carrierHandle(materialId));
+		return new CarrierProperties(cellDensity[cell], carrier.dynamicViscosity());
+	}
+
+	private void applyGranularPorousDamping(float dt) {
+		if (granularDeposits == null || granularDeposits.occupiedCellCount() == 0) return;
+		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
+			int left = cellIndex(x - 1, y, z), right = cellIndex(x, y, z);
+			velocityX[xFaceIndex(x, y, z)] *= granularPorousFaceDamping(left, right, dt);
+		}
+		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z);
+			velocityY[yFaceIndex(x, y, z)] *= granularPorousFaceDamping(below, above, dt);
+		}
+		for (int z = 1; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int back = cellIndex(x, y, z - 1), front = cellIndex(x, y, z);
+			velocityZ[zFaceIndex(x, y, z)] *= granularPorousFaceDamping(back, front, dt);
+		}
+	}
+
+	private float granularPorousFaceDamping(int first, int second, float dt) {
+		double firstK = granularPermeability(first), secondK = granularPermeability(second);
+		if (Double.isInfinite(firstK) && Double.isInfinite(secondK)) return 1.0F;
+		double permeability;
+		if (Double.isInfinite(firstK)) permeability = secondK;
+		else if (Double.isInfinite(secondK)) permeability = firstK;
+		else permeability = 2.0 * firstK * secondK / (firstK + secondK);
+		CarrierProperties firstCarrier = granularCarrierProperties(first), secondCarrier = granularCarrierProperties(second);
+		double viscosity = 0.5 * (firstCarrier.viscosity() + secondCarrier.viscosity());
+		double density = 0.5 * (firstCarrier.density() + secondCarrier.density());
+		return (float) (1.0 / (1.0 + dt * viscosity / (density * permeability)));
+	}
+
+	private double granularPermeability(int cell) {
+		GranularDepositStore.Group dominant = granularDeposits.dominantGroup(cell);
+		if (dominant == null) return Double.POSITIVE_INFINITY;
+		double porosity = depositsPorosity(cell);
+		double solid = 1.0 - porosity;
+		double diameter = granularRegistry.material(dominant.materialHandle()).primaryGrainDiameterMeters();
+		return diameter * diameter * porosity * porosity * porosity / (180.0 * solid * solid);
+	}
+
+	private double depositsPorosity(int cell) {
+		return granularDeposits.porosityQ(cell) / (double) GranularLimits.POROSITY_SCALE;
 	}
 
 	private void addFaceImpulse(
