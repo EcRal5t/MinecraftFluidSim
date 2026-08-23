@@ -182,6 +182,11 @@ precipitation plan 同时：扣 aqueous species 与 exact mass、保留 marker r
 solid SVQ/mass/composition。dissolution 严格反向且只消费同格 active parcel 或 exposed deposit；深层组、邻格、墙后、
 不同 chemical phase 不参与。indicator 不进入 solid，溶出 species 继承承载液体 marker 自身 provenance。
 
+液体 marker 的绝对 `float volume` 仍是 M0–M7 的任意正 IEEE-754 dyadic 真值，不因启用 M8 而量化成整数 SVQ。
+饱和容量从同格 marker 的精确 dyadic 和计算；plan 只向各 marker 加减整数 SVQ，并要求该 delta 在原 float 上精确可表示，
+因此原有亚 SVQ 尾数不变。不能表示或会使 marker 非正时整份 plan 拒绝并安全暂停，禁止把绝对 liquid volume 向上/向下
+取整后重写 marker。
+
 每次提交前后验证：
 
 ```text

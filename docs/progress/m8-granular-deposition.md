@@ -226,3 +226,17 @@ skeleton，并在命令反馈中明确标作 creative/debug 外部源；反应�
 
 M8 尚不在完成索引中：最后只等待一个真实 controller 合并场景确认客户端颗粒可见性、玩家/发射器干容器事务、
 反应沉淀和正常重启后的 v5 恢复。通过后再关闭路线图 M8 并将 0.14.0 从实机候选记为已验收基线。
+
+## M8.11 实机候选沉淀崩溃修正（2026-08-24）
+
+- 首次合并实机场景在细沙与 NaCl 已分别完成 v4 容器事务后，`run` 的第二个左右 logical step 触发
+  `SolidVolume.fromCellVolumeExact`：相转移 adapter 错把输运/reseeding 后的任意 `float marker volume` 当成必然对齐
+  整数 SVQ，未对齐时 `IllegalArgumentException` 逃出 server tick。暂停时看到的少量悬浮细沙是尚未步进的 active
+  parcel，不是本次异常原因。
+- 修正保留 M7 marker volume 原始 dyadic 尾数：饱和容量直接从精确 IEEE-754 dyadic 和计算，只按体积权重分配本次
+  solid SVQ delta；每个新 marker volume 必须精确等于旧值加减该整数 SVQ。绝对 liquid volume 不再先量化后重写，
+  species、mass、solid SVQ 和 liquid-volume delta 的既有原子 plan/commit 不变。
+- 原有沉淀→溶解 fixture 改用 `0.1F` 非 SVQ 对齐 marker，直接穿过生产 `FlipFluidDomain.step()`；没有新增 selector
+  或 Gradle task。完整 `granular,chemistry --rerun-tasks` 通过，分别 1.910/0.987 秒，runner 合计 2.897 秒。
+- 崩溃世界的两个容器 WAL 均已收敛且 `container-transfer` 目录为空；停服路径在 05:19:59 成功发布新的 v5 HEAD，
+  因此保留该世界并按正常严格 reader 恢复，不手删或猜测修复任何状态。

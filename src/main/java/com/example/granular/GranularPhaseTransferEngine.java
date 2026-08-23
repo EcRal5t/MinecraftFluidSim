@@ -27,14 +27,13 @@ public final class GranularPhaseTransferEngine {
 	) {
 		if (rule == null || liquid == null || liquid.isEmpty() || existingAccessibleExtent < 0L
 				|| maximumTransferExtent <= 0L) throw new IllegalArgumentException("Invalid phase-transfer planning input");
-		long[] inventory = new long[chemistry.species().size()]; long liquidSvq = 0L;
+		long[] inventory = new long[chemistry.species().size()];
 		int[] ordinals = new int[liquid.size()]; float[] massWeights = new float[liquid.size()];
 		for (int index = 0; index < liquid.size(); index++) {
 			LiquidParcel parcel = liquid.get(index); ordinals[index] = parcel.marker();
 			if (index > 0 && ordinals[index - 1] >= ordinals[index]) {
 				throw new IllegalArgumentException("Phase-transfer liquid markers are not sorted and unique");
 			}
-			liquidSvq = Math.addExact(liquidSvq, parcel.volumeSvq());
 			for (int entry = 0; entry < parcel.mixture().entryCount(); entry++) inventory[parcel.mixture().speciesHandle(entry)] =
 					Math.addExact(inventory[parcel.mixture().speciesHandle(entry)], parcel.mixture().amountAt(entry));
 			double exactMass = parcel.mixture().exactSpeciesMass(chemistry).toDouble(); massWeights[index] = (float) exactMass;
@@ -47,7 +46,7 @@ public final class GranularPhaseTransferEngine {
 			available = Math.min(available, inventory[chemistry.speciesHandle(term.getKey())] / term.getValue());
 		}
 		if (available == Long.MAX_VALUE) available = 0L;
-		long capacity = floorCapacity(rule.saturationCapacityExtentPerBv(), liquidSvq);
+		long capacity = floorCapacity(rule.saturationCapacityExtentPerBv(), liquid);
 		long target = Math.max(0L, Math.subtractExact(Math.addExact(available, existingAccessibleExtent), capacity));
 		long signedExtent = target - existingAccessibleExtent;
 		if (signedExtent == 0L) return Plan.none();
@@ -55,9 +54,6 @@ public final class GranularPhaseTransferEngine {
 		if (magnitude <= 0L) return Plan.none();
 		boolean precipitation = signedExtent > 0L;
 		long solidSvq = Math.multiplyExact(magnitude, rule.solidVolumeSvqPerExtent());
-		long candidateLiquidSvq = precipitation ? Math.subtractExact(liquidSvq, solidSvq)
-				: Math.addExact(liquidSvq, solidSvq);
-		if (candidateLiquidSvq < liquid.size()) throw new BlockedException("Phase transfer would empty a liquid marker");
 
 		TreeMap<Integer, Long> transferred = new TreeMap<>();
 		for (Map.Entry<String, Integer> term : rule.aqueousStoichiometry().entrySet()) transferred.put(
@@ -78,9 +74,8 @@ public final class GranularPhaseTransferEngine {
 		}
 		repairEmpty(distributed, ordinals);
 		float[] volumeWeights = new float[liquid.size()];
-		for (int index = 0; index < liquid.size(); index++) volumeWeights[index] = SolidVolume.toCellVolume(liquid.get(index).volumeSvq());
-		long[] newVolumes = BinaryVolumeAllocator.allocate(candidateLiquidSvq, volumeWeights, ordinals);
-		repairZeroVolumes(newVolumes, ordinals);
+		for (int index = 0; index < liquid.size(); index++) volumeWeights[index] = liquid.get(index).cellVolume();
+		long[] volumeDeltas = BinaryVolumeAllocator.allocate(solidSvq, volumeWeights, ordinals);
 		MarkerUpdate[] updates = new MarkerUpdate[liquid.size()];
 		double oldMass = 0.0, newMass = 0.0;
 		for (int index = 0; index < liquid.size(); index++) {
@@ -88,7 +83,13 @@ public final class GranularPhaseTransferEngine {
 			ChemicalMixtureRecord replacement = record(distributed[index], source.mixture().massResidualBits());
 			double mass = replacement.markerMass(chemistry);
 			if (!(Double.isFinite(mass) && mass > 0.0)) throw new BlockedException("Phase transfer produced non-positive marker mass");
-			updates[index] = new MarkerUpdate(source.marker(), replacement, newVolumes[index], mass);
+			long signedVolumeDelta = precipitation ? -volumeDeltas[index] : volumeDeltas[index];
+			float cellVolume;
+			try { cellVolume = SolidVolume.addCellVolumeSvqExact(source.cellVolume(), signedVolumeDelta); }
+			catch (IllegalArgumentException unrepresentable) {
+				throw new BlockedException("Liquid marker cannot represent the exact SVQ phase-transfer delta");
+			}
+			updates[index] = new MarkerUpdate(source.marker(), replacement, cellVolume, mass);
 			oldMass += source.mass(); newMass += mass;
 		}
 		SolidCompositionRecord solid = recordSolid(transferred);
@@ -118,10 +119,32 @@ public final class GranularPhaseTransferEngine {
 		return new SolidCompositionRecord(species, amounts, Double.doubleToRawLongBits(0.0));
 	}
 
-	private static long floorCapacity(ExactRational capacityPerBv, long liquidSvq) {
-		BigInteger numerator = capacityPerBv.numerator().multiply(BigInteger.valueOf(liquidSvq));
-		BigInteger denominator = capacityPerBv.denominator().multiply(BigInteger.valueOf(SolidVolume.SVQ_PER_BV));
-		return numerator.divide(denominator).longValueExact();
+	private static long floorCapacity(ExactRational capacityPerBv, List<LiquidParcel> liquid) {
+		int minimumExponent = Integer.MAX_VALUE;
+		Dyadic[] volumes = new Dyadic[liquid.size()];
+		for (int index = 0; index < volumes.length; index++) {
+			volumes[index] = dyadic(liquid.get(index).cellVolume());
+			minimumExponent = Math.min(minimumExponent, volumes[index].exponent());
+		}
+		BigInteger exactCellVolume = BigInteger.ZERO;
+		for (Dyadic volume : volumes) exactCellVolume = exactCellVolume.add(
+				BigInteger.valueOf(volume.significand()).shiftLeft(volume.exponent() - minimumExponent));
+		BigInteger numerator = capacityPerBv.numerator().multiply(exactCellVolume);
+		BigInteger denominator = capacityPerBv.denominator().multiply(BigInteger.valueOf(
+				SolidVolume.SVQ_PER_BV / SolidVolume.SVQ_PER_CELL));
+		if (minimumExponent >= 0) numerator = numerator.shiftLeft(minimumExponent);
+		else denominator = denominator.shiftLeft(-minimumExponent);
+		try { return numerator.divide(denominator).longValueExact(); }
+		catch (ArithmeticException overBudget) { throw new BlockedException("Liquid saturation capacity is over budget"); }
+	}
+
+	private static Dyadic dyadic(float value) {
+		int bits = Float.floatToRawIntBits(value);
+		int exponentBits = bits >>> 23 & 0xff;
+		int fraction = bits & 0x7f_ffff;
+		return exponentBits == 0
+				? new Dyadic(fraction, -149)
+				: new Dyadic((1 << 23) | fraction, exponentBits - 150);
 	}
 
 	private static void repairEmpty(TreeMap<Integer, Long>[] distributed, int[] ordinals) {
@@ -146,29 +169,19 @@ public final class GranularPhaseTransferEngine {
 		}
 	}
 
-	private static void repairZeroVolumes(long[] volumes, int[] ordinals) {
-		for (int target = 0; target < volumes.length; target++) if (volumes[target] == 0L) {
-			int donor = -1;
-			for (int candidate = 0; candidate < volumes.length; candidate++) if (volumes[candidate] > 1L
-					&& (donor < 0 || volumes[candidate] > volumes[donor]
-					|| volumes[candidate] == volumes[donor] && ordinals[candidate] < ordinals[donor])) donor = candidate;
-			if (donor < 0) throw new BlockedException("Phase transfer cannot preserve positive marker volumes");
-			volumes[donor]--; volumes[target] = 1L;
-		}
-	}
-
 	private static boolean massClose(double left, double right) {
 		return Math.abs(left - right) <= Math.max(1.0E-9, Math.max(Math.ulp(left), Math.ulp(right)) * 8.0);
 	}
 
-	public record LiquidParcel(int marker, long volumeSvq, double mass, ChemicalMixtureRecord mixture) {
+	public record LiquidParcel(int marker, float cellVolume, double mass, ChemicalMixtureRecord mixture) {
 		public LiquidParcel {
-			if (marker < 0 || volumeSvq <= 0L || !(Double.isFinite(mass) && mass > 0.0) || mixture == null) {
+			if (marker < 0 || !(Float.isFinite(cellVolume) && cellVolume > 0.0F)
+					|| !(Double.isFinite(mass) && mass > 0.0) || mixture == null) {
 				throw new IllegalArgumentException("Invalid phase-transfer liquid parcel");
 			}
 		}
 	}
-	public record MarkerUpdate(int marker, ChemicalMixtureRecord mixture, long volumeSvq, double mass) { }
+	public record MarkerUpdate(int marker, ChemicalMixtureRecord mixture, float cellVolume, double mass) { }
 	public record Plan(long signedExtent, long signedSolidSvq, double signedSolidMass,
 	                   SolidCompositionRecord transferredComposition, List<MarkerUpdate> markerUpdates) {
 		static Plan none() { return new Plan(0L, 0L, 0.0, null, List.of()); }
@@ -183,6 +196,8 @@ public final class GranularPhaseTransferEngine {
 			return amount != 0 ? amount : Integer.compare(right.getKey(), left.getKey());
 		}
 	}
+
+	private record Dyadic(int significand, int exponent) { }
 
 	public static final class BlockedException extends IllegalStateException {
 		public BlockedException(String message) { super(message); }

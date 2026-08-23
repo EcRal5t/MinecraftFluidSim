@@ -98,7 +98,9 @@ public final class M8GranularValidation {
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
-		domain.setVolume(1, 1, 1, 1.0F);
+		// Real transported/reseeded marker volumes are arbitrary IEEE-754 dyadics, not necessarily
+		// integer SVQ. Exercise the production bridge with such a tail instead of an aligned full cell.
+		domain.setVolume(1, 1, 1, 0.1F);
 		domain.bindGranular(granular, liquids);
 		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		domain.setPrecipitationEnabled(true);

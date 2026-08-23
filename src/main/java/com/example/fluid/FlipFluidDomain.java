@@ -2638,7 +2638,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						"Solid-liquid rule is below one representable transfer extent");
 				List<GranularPhaseTransferEngine.LiquidParcel> liquid = new ArrayList<>(markers.size());
 				for (int marker : markers) liquid.add(new GranularPhaseTransferEngine.LiquidParcel(marker,
-						SolidVolume.fromCellVolumeExact(particleVolume[marker]), particleMass[marker], chemicalParcels.record(marker)));
+						particleVolume[marker], particleMass[marker], chemicalParcels.record(marker)));
 				GranularPhaseTransferEngine.Plan plan = granularPhaseTransfer.plan(rule, liquid, existingExtent, perStepExtent);
 				if (plan.changed() && !plan.precipitation() && accessible != null
 						&& -plan.signedExtent() > accessible.selected().extent()) {
@@ -2787,7 +2787,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private void applyMarkerUpdates(GranularPhaseTransferEngine.Plan plan) {
 		for (GranularPhaseTransferEngine.MarkerUpdate update : plan.markerUpdates()) {
-			particleVolume[update.marker()] = SolidVolume.toCellVolume(update.volumeSvq());
+			particleVolume[update.marker()] = update.cellVolume();
 			particleMass[update.marker()] = update.mass();
 		}
 	}

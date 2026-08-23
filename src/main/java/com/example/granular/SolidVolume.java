@@ -26,6 +26,23 @@ public final class SolidVolume {
 		return (long) scaled;
 	}
 
+	/** Applies an integer-SVQ delta without quantizing away an existing marker's sub-SVQ dyadic tail. */
+	public static float addCellVolumeSvqExact(float cellVolume, long signedSvq) {
+		if (!(Float.isFinite(cellVolume) && cellVolume > 0.0F)) {
+			throw new IllegalArgumentException("Marker cell volume must be finite and positive");
+		}
+		double exact = (double) cellVolume + Math.scalb((double) signedSvq, -24);
+		if (!(Double.isFinite(exact) && exact > 0.0 && exact <= Float.MAX_VALUE)) {
+			throw new IllegalArgumentException("SVQ delta would make the marker volume invalid");
+		}
+		float result = (float) exact;
+		double representedDelta = Math.scalb((double) result - cellVolume, 24);
+		if (representedDelta != signedSvq) {
+			throw new IllegalArgumentException("SVQ delta is not exactly representable for this marker volume");
+		}
+		return result;
+	}
+
 	/** Largest solid amount no greater than the supplied container nanovolume. */
 	public static long nanosToSvqAtMost(long nanos) {
 		if (nanos < 0L) throw new IllegalArgumentException("Nanovolume cannot be negative");
