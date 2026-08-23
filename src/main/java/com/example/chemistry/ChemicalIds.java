@@ -9,7 +9,9 @@ final class ChemicalIds {
 	private ChemicalIds() { }
 
 	static String requireId(String value, String label) {
-		if (value == null || !ID.matcher(value).matches()) throw new IllegalArgumentException("Invalid " + label + ": " + value);
+		if (value == null || value.length() > ChemicalLimits.MAX_CHEMICAL_ID_LENGTH || !ID.matcher(value).matches()) {
+			throw new IllegalArgumentException("Invalid " + label + ": " + value);
+		}
 		return value;
 	}
 

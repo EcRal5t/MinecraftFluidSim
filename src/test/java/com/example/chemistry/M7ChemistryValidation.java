@@ -37,6 +37,9 @@ public final class M7ChemistryValidation {
 		expectFailure(() -> ChemicalDefinitionCodec.decodeSpecies("test:bad", new StringReader(species.replace("\"144\"", "144"))),
 				"JSON number bypassed exact rational string codec");
 		expectFailure(() -> ExactRational.parse("1/0"), "zero denominator accepted");
+		expectFailure(() -> ExactRational.parse("1e-500000"), "unbounded decimal scale was accepted");
+		expectFailure(() -> ExactRational.parse("9".repeat(ChemicalLimits.MAX_RATIONAL_TEXT_LENGTH + 1)),
+				"unbounded rational text was accepted");
 	}
 
 	private static void validateCanonicalRegistry() {
@@ -175,6 +178,32 @@ public final class M7ChemistryValidation {
 				"test:phase", Map.of("test:h_alias", 1), Map.of("test:h", 1), ExactRational.ZERO);
 		expectFailure(() -> new ChemicalRegistry(all, List.of(phase), List.of(a, b)),
 				"dissociation cycle accepted");
+
+		ChemicalReaction crossDissociation = new ChemicalReaction("test:cross_dissociation",
+				ChemicalReaction.Kind.COMPLETE_DISSOCIATION, "test:phase",
+				Map.of("test:h", 1), Map.of("test:h_alias", 1), ExactRational.ZERO);
+		ChemicalReaction crossInstantaneous = new ChemicalReaction("test:cross_instantaneous",
+				ChemicalReaction.Kind.INSTANTANEOUS, "test:phase",
+				Map.of("test:h", 1), Map.of("test:h_alias2", 1), ExactRational.ZERO);
+		expectFailure(() -> new ChemicalRegistry(all, List.of(phase),
+				List.of(crossDissociation, crossInstantaneous)),
+				"cross-stratum competing consumers were accepted");
+
+		ChemicalReaction feedsDissociation = new ChemicalReaction("test:feeds_dissociation",
+				ChemicalReaction.Kind.COMPLETE_DISSOCIATION, "test:phase",
+				Map.of("test:h_alias", 1), Map.of("test:h_alias2", 1), ExactRational.ZERO);
+		expectFailure(() -> new ChemicalRegistry(all, List.of(phase),
+				List.of(consumesA, feedsDissociation)),
+				"instantaneous product feeding the completed dissociation stratum was accepted");
+
+		ChemicalRegistry stratified = new ChemicalRegistry(all, List.of(phase), List.of(
+				new ChemicalReaction("test:z_dissociation", ChemicalReaction.Kind.COMPLETE_DISSOCIATION,
+						"test:phase", Map.of("test:h", 1), Map.of("test:h_alias", 1), ExactRational.ZERO),
+				new ChemicalReaction("test:a_instantaneous", ChemicalReaction.Kind.INSTANTANEOUS,
+						"test:phase", Map.of("test:h_alias", 1), Map.of("test:h_alias2", 1), ExactRational.ZERO)));
+		check(stratified.reactionOrder().get(0).kind() == ChemicalReaction.Kind.COMPLETE_DISSOCIATION
+				&& stratified.reactionOrder().get(1).kind() == ChemicalReaction.Kind.INSTANTANEOUS,
+				"reaction order did not keep complete dissociation ahead of instantaneous reactions");
 	}
 
 	private static void validateStrongElectrolytes() {

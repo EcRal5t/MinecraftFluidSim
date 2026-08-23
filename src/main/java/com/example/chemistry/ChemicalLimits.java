@@ -17,6 +17,14 @@ public final class ChemicalLimits {
 	public static final int MAX_BUCKET_GROUPS = 16;
 	public static final int MAX_BUCKET_SPECIES_ENTRIES = 64;
 	public static final int MAX_COMPONENT_BYTES = 64 * 1024;
+	/** Complete internal transfer/audit truth: one group per material/indicator pair. */
+	public static final int MAX_TRANSFER_GROUPS = MAX_PHASES * 2;
+	public static final int MAX_TRANSFER_SPECIES_PER_GROUP = MAX_SPECIES;
+	public static final int MAX_TRANSFER_SPECIES_ENTRIES = MAX_TRANSFER_GROUPS * MAX_TRANSFER_SPECIES_PER_GROUP;
+	public static final int MAX_CHEMICAL_ID_LENGTH = 128;
+	public static final int MAX_RATIONAL_TEXT_LENGTH = 4_096;
+	public static final int MAX_RATIONAL_SCALE = 4_096;
+	public static final int MAX_RATIONAL_BITS = 16_384;
 	public static final double MAX_INDICATOR_VOLUME_BV = 100.0;
 	public static final int DISPLAY_SPECIES_PER_CELL = 4;
 

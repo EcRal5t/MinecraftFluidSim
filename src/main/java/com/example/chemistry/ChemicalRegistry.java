@@ -120,15 +120,31 @@ public final class ChemicalRegistry {
 			validateConservation(reaction);
 			if (reaction.kind() == ChemicalReaction.Kind.INSTANTANEOUS) {
 				for (String reactant : reaction.reactants().keySet()) {
-					String previous = instantaneousConsumer.putIfAbsent(reactant, reaction.id());
+					String key = reaction.phaseId() + '\0' + reactant;
+					String previous = instantaneousConsumer.putIfAbsent(key, reaction.id());
 					if (previous != null) throw new IllegalArgumentException(
 							"Competing instantaneous consumers for " + reactant + ": " + previous + ", " + reaction.id());
 				}
 			} else {
 				String reactant = reaction.reactants().keySet().iterator().next();
-				String previous = dissociationConsumer.putIfAbsent(reactant, reaction.id());
+				String key = reaction.phaseId() + '\0' + reactant;
+				String previous = dissociationConsumer.putIfAbsent(key, reaction.id());
 				if (previous != null) throw new IllegalArgumentException(
 						"Duplicate complete dissociation for " + reactant);
+			}
+		}
+		for (Map.Entry<String, String> consumer : instantaneousConsumer.entrySet()) {
+			String dissociation = dissociationConsumer.get(consumer.getKey());
+			if (dissociation != null) throw new IllegalArgumentException(
+					"Species has competing dissociation/instantaneous consumers: "
+							+ dissociation + ", " + consumer.getValue());
+		}
+		for (ChemicalReaction reaction : reactions) if (reaction.kind() == ChemicalReaction.Kind.INSTANTANEOUS) {
+			for (String product : reaction.products().keySet()) {
+				String dissociation = dissociationConsumer.get(reaction.phaseId() + '\0' + product);
+				if (dissociation != null) throw new IllegalArgumentException(
+						"Instantaneous reaction feeds the completed dissociation stratum: "
+								+ reaction.id() + " -> " + dissociation);
 			}
 		}
 	}
@@ -175,13 +191,22 @@ public final class ChemicalRegistry {
 	}
 
 	private List<ChemicalReaction> topologicalReactionOrder() {
+		ArrayList<ChemicalReaction> order = new ArrayList<>(reactions.size());
+		order.addAll(topologicalReactionOrder(ChemicalReaction.Kind.COMPLETE_DISSOCIATION));
+		order.addAll(topologicalReactionOrder(ChemicalReaction.Kind.INSTANTANEOUS));
+		return List.copyOf(order);
+	}
+
+	private List<ChemicalReaction> topologicalReactionOrder(ChemicalReaction.Kind kind) {
 		int count = reactions.size();
 		List<Set<Integer>> outgoing = new ArrayList<>(count);
 		int[] indegree = new int[count];
 		for (int i = 0; i < count; i++) outgoing.add(new TreeSet<>());
 		for (int before = 0; before < count; before++) {
+			if (reactions.get(before).kind() != kind) continue;
 			for (int after = 0; after < count; after++) {
-				if (before == after) continue;
+				if (before == after || reactions.get(after).kind() != kind
+						|| !reactions.get(before).phaseId().equals(reactions.get(after).phaseId())) continue;
 				if (!Collections.disjoint(reactions.get(before).products().keySet(),
 						reactions.get(after).reactants().keySet()) && outgoing.get(before).add(after)) {
 					indegree[after]++;
@@ -189,14 +214,18 @@ public final class ChemicalRegistry {
 			}
 		}
 		PriorityQueue<Integer> ready = new PriorityQueue<>(Comparator.comparing(i -> reactions.get(i).id()));
-		for (int i = 0; i < count; i++) if (indegree[i] == 0) ready.add(i);
-		List<ChemicalReaction> order = new ArrayList<>(count);
+		int expected = 0;
+		for (int i = 0; i < count; i++) if (reactions.get(i).kind() == kind) {
+			expected++;
+			if (indegree[i] == 0) ready.add(i);
+		}
+		List<ChemicalReaction> order = new ArrayList<>(expected);
 		while (!ready.isEmpty()) {
 			int next = ready.remove();
 			order.add(reactions.get(next));
 			for (int target : outgoing.get(next)) if (--indegree[target] == 0) ready.add(target);
 		}
-		if (order.size() != count) throw new IllegalArgumentException("Chemical reaction graph is non-terminating");
+		if (order.size() != expected) throw new IllegalArgumentException("Chemical reaction graph is non-terminating");
 		return List.copyOf(order);
 	}
 

@@ -12,13 +12,14 @@ public final class ChemicalTransferLedger {
 	private final List<Group> groups;
 
 	public ChemicalTransferLedger(List<Group> groups) {
-		if (groups == null || groups.size() > ChemicalLimits.MAX_BUCKET_GROUPS) {
-			throw new IllegalArgumentException("Chemical transfer groups are over budget");
-		}
+		if (groups == null) throw new IllegalArgumentException("Chemical transfer groups are missing");
 		TreeMap<Key, MutableGroup> canonical = new TreeMap<>();
 		for (Group group : groups) canonical.computeIfAbsent(
 				new Key(group.materialId(), group.indicator()), ignored -> new MutableGroup(group.materialId(), group.indicator()))
 				.add(group);
+		if (canonical.size() > ChemicalLimits.MAX_TRANSFER_GROUPS) {
+			throw new IllegalArgumentException("Chemical transfer groups are over budget");
+		}
 		ArrayList<Group> result = new ArrayList<>(canonical.size());
 		int entries = 0;
 		for (MutableGroup group : canonical.values()) {
@@ -26,7 +27,7 @@ public final class ChemicalTransferLedger {
 			entries = Math.addExact(entries, frozen.speciesQuanta().size());
 			result.add(frozen);
 		}
-		if (entries > ChemicalLimits.MAX_BUCKET_SPECIES_ENTRIES) {
+		if (entries > ChemicalLimits.MAX_TRANSFER_SPECIES_ENTRIES) {
 			throw new IllegalArgumentException("Chemical transfer species entries are over budget");
 		}
 		this.groups = List.copyOf(result);
@@ -78,7 +79,7 @@ public final class ChemicalTransferLedger {
 			}
 			TreeMap<String, Long> canonical = new TreeMap<>();
 			if (speciesQuanta == null || speciesQuanta.isEmpty()
-					|| speciesQuanta.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL) {
+					|| speciesQuanta.size() > ChemicalLimits.MAX_TRANSFER_SPECIES_PER_GROUP) {
 				throw new IllegalArgumentException("Chemical transfer species are empty or over budget");
 			}
 			for (Map.Entry<String, Long> entry : speciesQuanta.entrySet()) {

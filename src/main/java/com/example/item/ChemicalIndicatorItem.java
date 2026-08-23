@@ -7,10 +7,9 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 
-/** Consumable generic indicator or reusable eraser; both edit only marker provenance. */
+/** Reusable operator indicator/eraser tools; both edit only marker provenance. */
 public final class ChemicalIndicatorItem extends Item {
 	private final boolean eraser;
 
@@ -33,10 +32,6 @@ public final class ChemicalIndicatorItem extends Item {
 				result.changedMarkers(), result.scannedCells());
 		if (result.checkpointWarning() != null) message += "；WARNING " + result.checkpointWarning();
 		serverPlayer.sendSystemMessage(Component.literal(message), true);
-		if (!eraser && result.changedMarkers() > 0 && !serverPlayer.isCreative()) {
-			ItemStack held = serverPlayer.getItemInHand(hand);
-			held.shrink(1);
-		}
 		return InteractionResult.SUCCESS_SERVER;
 	}
 }

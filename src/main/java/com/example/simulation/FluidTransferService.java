@@ -148,7 +148,7 @@ public final class FluidTransferService {
 			ControllerTransfer transaction = switch (kind) {
 				case POUR -> executeControllerTransfer(service, region, level, actor, stack,
 						ContainerTransferJournal.Operation.INSERT, heldVolumeNanos(stack), 0L, cell,
-						(requested, base) -> pourIntoCell(service, region, cell, requested, 6, 0),
+						(requested, base) -> pourIntoCell(service, region, cell, requested, 6, 0, false),
 						(rawAfter, before) -> rawAfter);
 				case SCOOP -> executeControllerTransfer(service, region, level, actor, stack,
 						ContainerTransferJournal.Operation.EXTRACT, extractionRequest, heldBaseVolumeNanos(stack), cell,
@@ -157,8 +157,8 @@ public final class FluidTransferService {
 				case MATERIAL_POUR -> executeControllerTransfer(service, region, level, actor, stack,
 						ContainerTransferJournal.Operation.INSERT, MaterialBucketItem.volume(stack), 0L, cell,
 						(requested, base) -> resolvedChemical == null
-								? pourMaterialIntoCell(service, region, cell, resolvedMixture, 6)
-								: pourChemicalIntoCell(region, cell, resolvedChemical, 6),
+								? pourMaterialIntoCell(service, region, cell, resolvedMixture, 6, false)
+								: pourChemicalIntoCell(region, cell, resolvedChemical, 6, false),
 						(rawAfter, before) -> rawAfter);
 				case MATERIAL_SCOOP -> executeControllerTransfer(service, region, level, actor, stack,
 						ContainerTransferJournal.Operation.EXTRACT, extractionRequest, 0L, cell,
@@ -175,11 +175,11 @@ public final class FluidTransferService {
 			return transaction.outcome().stack();
 		}
 		TransferOutcome outcome = switch (kind) {
-			case POUR -> pourIntoCell(service, region, cell, heldVolumeNanos(stack), 6, 0);
+			case POUR -> pourIntoCell(service, region, cell, heldVolumeNanos(stack), 6, 0, false);
 			case SCOOP -> scoopFromCell(service, region, cell, extractionRequest, heldBaseVolumeNanos(stack), 6, 0);
 			case MATERIAL_POUR -> resolvedChemical == null
-					? pourMaterialIntoCell(service, region, cell, resolvedMixture, 6)
-					: pourChemicalIntoCell(region, cell, resolvedChemical, 6);
+					? pourMaterialIntoCell(service, region, cell, resolvedMixture, 6, false)
+					: pourChemicalIntoCell(region, cell, resolvedChemical, 6, false);
 			case MATERIAL_SCOOP -> service.chemistryFeatureEnabled() && region.domain().hasChemistryState()
 					? scoopChemicalIntoCell(region, cell, extractionRequest, 6, service.chemicalRegistry())
 					: scoopMaterialIntoCell(service, region, cell, extractionRequest, 6);
@@ -197,8 +197,9 @@ public final class FluidTransferService {
 	) {
 		Long volume = heldVolumeNanos(held);
 		if (volume == null || volume <= 0L) return null;
+		boolean externalSource = player.hasInfiniteMaterials();
 		if (region.controllerManaged()) return pourController(service, region, player, hand, held, volume, cell);
-		TransferOutcome outcome = pourIntoCell(service, region, cell, volume, 6, 0);
+		TransferOutcome outcome = pourIntoCell(service, region, cell, volume, 6, 0, externalSource);
 		if (!outcome.transferred()) return new TransferOutcome(false, true, held, outcome.message());
 		if (player.hasInfiniteMaterials()) {
 			service.sendSnapshotFor(player, region);
@@ -213,8 +214,12 @@ public final class FluidTransferService {
 			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held,
 			int[] cell
 	) {
-		ChemicalContents chemical = held.get(RealWaterComponents.CHEMICAL_CONTENTS) == null ? null
-				: service.chemistryFeatureEnabled() ? MaterialBucketItem.chemicalContents(held, service.chemicalRegistry()) : null;
+		boolean hasChemicalContents = held.get(RealWaterComponents.CHEMICAL_CONTENTS) != null;
+		if (hasChemicalContents && !service.chemistryFeatureEnabled()) {
+			return new TransferOutcome(false, true, held, "化学功能门本次启动未开启；化学桶保持不变");
+		}
+		ChemicalContents chemical = hasChemicalContents
+				? MaterialBucketItem.chemicalContents(held, service.chemicalRegistry()) : null;
 		FluidMixture mixture = chemical == null ? MaterialBucketItem.mixture(held) : null;
 		if (mixture == null && chemical == null) {
 			return new TransferOutcome(false, true, held, "化学桶内容损坏、双重表示或 registry 不匹配");
@@ -229,13 +234,14 @@ public final class FluidTransferService {
 		if (chemical != null && (!service.chemistryFeatureEnabled() || !region.domain().hasChemistryState())) {
 			return new TransferOutcome(false, true, held, "化学桶只能倒入启用相同 registry 的化学区域");
 		}
+		boolean externalSource = player.hasInfiniteMaterials();
 		if (region.controllerManaged()) {
 			ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
 			ControllerTransfer transaction = executeControllerTransfer(
 					service, region, player.level(), actor, held,
 					ContainerTransferJournal.Operation.INSERT, volumeNanos, 0L, cell,
-					(requested, base) -> chemical == null ? pourMaterialIntoCell(service, region, cell, mixture, 6)
-							: pourChemicalIntoCell(region, cell, chemical, 6),
+					(requested, base) -> chemical == null ? pourMaterialIntoCell(service, region, cell, mixture, 6, externalSource)
+							: pourChemicalIntoCell(region, cell, chemical, 6, externalSource),
 					(rawAfter, before) -> player.hasInfiniteMaterials() ? before.copy() : rawAfter
 			);
 			if (!transaction.outcome().transferred()) return transaction.outcome();
@@ -244,8 +250,8 @@ public final class FluidTransferService {
 			service.sendSnapshotFor(player, region);
 			return transaction.outcome();
 		}
-		TransferOutcome outcome = chemical == null ? pourMaterialIntoCell(service, region, cell, mixture, 6)
-				: pourChemicalIntoCell(region, cell, chemical, 6);
+		TransferOutcome outcome = chemical == null ? pourMaterialIntoCell(service, region, cell, mixture, 6, externalSource)
+				: pourChemicalIntoCell(region, cell, chemical, 6, externalSource);
 		if (!outcome.transferred()) return new TransferOutcome(false, true, held, outcome.message());
 		if (player.hasInfiniteMaterials()) {
 			service.sendSnapshotFor(player, region);
@@ -315,7 +321,7 @@ return outcome;
 		ControllerTransfer transaction = executeControllerTransfer(
 				service, region, player.level(), actor, held,
 				ContainerTransferJournal.Operation.INSERT, volumeNanos, 0L, cell,
-				(requested, base) -> pourIntoCell(service, region, cell, requested, 6, 0),
+				(requested, base) -> pourIntoCell(service, region, cell, requested, 6, 0, player.hasInfiniteMaterials()),
 				(rawAfter, before) -> player.hasInfiniteMaterials() ? before.copy() : rawAfter
 		);
 		if (!transaction.outcome().transferred()) return transaction.outcome();
@@ -558,7 +564,8 @@ return outcome;
 
 
 	private static TransferOutcome pourIntoCell(
-			FluidSimulationService service, FluidRegion region, int[] cell, long volumeNanos, int maxRadius, int materialHandle
+			FluidSimulationService service, FluidRegion region, int[] cell, long volumeNanos, int maxRadius,
+			int materialHandle, boolean externalSource
 	) {
 		if (volumeNanos <= 0L) return null;
 		float requestedCellVolume = nanosToCellVolumeAtMost(volumeNanos);
@@ -566,18 +573,13 @@ return outcome;
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "容器余量小于 solver 可表示体积，未能注入");
 		}
 		FlipFluidDomain domain = region.domain();
-		int firstInsertedMarker = domain.particleCount();
 		if (domain.totalOpenVolume() - domain.totalVolume() + 1.0E-6F < requestedCellVolume) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "空间或 marker 预算不足，未能注入");
 		}
 		FlipFluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(
-				cell[0], cell[1], cell[2], requestedCellVolume, maxRadius, materialHandle);
+				cell[0], cell[1], cell[2], requestedCellVolume, maxRadius, materialHandle, externalSource);
 		if (!inserted.transferred()) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "空间或 marker 预算不足，未能注入");
-		}
-		if (domain.hasChemistryState()) {
-			domain.chemicalParcels().recordExternalSource(
-					domain.chemicalLedgerForMarkerRange(firstInsertedMarker, domain.particleCount()));
 		}
 		long poured = settledNanos(inserted.volume(), volumeNanos);
 		region.wakeForActivity();
@@ -606,11 +608,11 @@ return outcome;
 
 
 	private static TransferOutcome pourMaterialIntoCell(
-			FluidSimulationService service, FluidRegion region, int[] cell, FluidMixture mixture, int maxRadius
+			FluidSimulationService service, FluidRegion region, int[] cell, FluidMixture mixture, int maxRadius,
+			boolean externalSource
 	) {
 		if (mixture == null) return null;
 		FlipFluidDomain domain = region.domain();
-		int firstInsertedMarker = domain.particleCount();
 		java.util.List<FlipFluidDomain.MaterialPortion> portions;
 		try {
 			portions = planMaterialInsertion(domain, mixture);
@@ -619,13 +621,9 @@ return outcome;
 					"区域材料 registry 不接受该混合物：" + unknownMaterial.getMessage());
 		}
 		FlipFluidDomain.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(
-				cell[0], cell[1], cell[2], portions, maxRadius);
+				cell[0], cell[1], cell[2], portions, maxRadius, externalSource);
 		if (!inserted.transferred()) {
 			return new TransferOutcome(false, true, mixture.toStack(), "空间或 marker 预算不足，未能注入混合物");
-		}
-		if (domain.hasChemistryState()) {
-			domain.chemicalParcels().recordExternalSource(
-					domain.chemicalLedgerForMarkerRange(firstInsertedMarker, domain.particleCount()));
 		}
 		MaterialInsertionSettlement settlement = settleMaterialInsertion(mixture, inserted.portions());
 		ItemStack after = settlement.remaining() == null
@@ -639,7 +637,7 @@ return outcome;
 	}
 
 	private static TransferOutcome pourChemicalIntoCell(
-			FluidRegion region, int[] cell, ChemicalContents contents, int maxRadius
+			FluidRegion region, int[] cell, ChemicalContents contents, int maxRadius, boolean externalSource
 	) {
 		FlipFluidDomain domain = region.domain();
 		if (!domain.hasChemistryState()) return new TransferOutcome(false, true, contents.toStack(), "该区域不是化学区域");
@@ -663,12 +661,11 @@ return outcome;
 			com.example.chemistry.ChemicalTransferLedger requested = split.inserted().toLedger(
 					domain.chemicalParcels().registry(), FluidSimulationService.CELL_VOLUMES_PER_BLOCK);
 			FlipFluidDomain.ExactChemicalTransfer inserted = domain.tryInsertExactChemical(
-					cell[0], cell[1], cell[2], requested, maxRadius);
+					cell[0], cell[1], cell[2], requested, maxRadius, externalSource);
 			if (!inserted.transferred()) {
 				candidate /= 2L;
 				continue;
 			}
-			domain.chemicalParcels().recordExternalSource(inserted.ledger());
 			region.wakeForActivity();
 			ItemStack after = split.remaining() == null
 					? new ItemStack(RealWaterItems.MATERIAL_BUCKET) : split.remaining().toStack();
@@ -687,12 +684,22 @@ return outcome;
 		float requested = nanosToCellVolumeAtMost(capacityNanos);
 		if (requested <= 0.0F) return new TransferOutcome(false, false,
 				new ItemStack(RealWaterItems.MATERIAL_BUCKET), "容器余量小于 solver 可表示体积");
+		ChemicalContents[] plannedContents = new ChemicalContents[1];
+		long[] plannedNanos = new long[1];
 		FlipFluidDomain.ExactChemicalTransfer extracted = region.domain().tryExtractExactChemical(
-				cell[0], cell[1], cell[2], requested, maxRadius);
+				cell[0], cell[1], cell[2], requested, maxRadius, ledger -> {
+					try {
+						plannedNanos[0] = settledNanos(ledger.totalVolume(), capacityNanos);
+						plannedContents[0] = ChemicalContents.fromLedger(ledger, registry, plannedNanos[0]);
+						return true;
+					} catch (IllegalArgumentException | ArithmeticException invalidBucket) {
+						return false;
+					}
+				});
 		if (!extracted.transferred() || extracted.ledger().isEmpty()) return new TransferOutcome(false, false,
-				new ItemStack(RealWaterItems.MATERIAL_BUCKET), "准星处没有足够化学流体");
-		long taken = settledNanos(extracted.ledger().totalVolume(), capacityNanos);
-		ChemicalContents contents = ChemicalContents.fromLedger(extracted.ledger(), registry, taken);
+				new ItemStack(RealWaterItems.MATERIAL_BUCKET), "准星处没有足够或可由当前容器表示的化学流体");
+		long taken = plannedNanos[0];
+		ChemicalContents contents = plannedContents[0];
 		region.wakeForActivity();
 		return new TransferOutcome(true, false, contents.toStack(),
 				String.format("已舀取 %.2f%% 桶化学流体（%d 组）", 100.0 * taken

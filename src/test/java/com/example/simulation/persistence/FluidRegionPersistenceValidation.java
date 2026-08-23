@@ -136,6 +136,19 @@ public final class FluidRegionPersistenceValidation {
 		RegionManifest foreign = signedManifest(codec.decodeManifest(foreignFingerprint));
 		expectIOException(() -> new RegionState(foreign, state.sections()).reconstructChemical(chemistry),
 				"foreign v3 registry was accepted without authoritative reconstruction");
+
+		Path regionDir = root.toAbsolutePath().normalize().resolve("realwater").resolve("region-state")
+				.resolve(region.id().toString());
+		CompoundTag head = NbtIo.readCompressed(regionDir.resolve("HEAD.nbt"), NbtAccounter.unlimitedHeap());
+		Path activeSlot = regionDir.resolve(head.getStringOr("Slot", ""));
+		Path section = Files.list(activeSlot)
+				.filter(path -> path.getFileName().toString().startsWith("section_"))
+				.findFirst().orElseThrow();
+		Files.delete(section);
+		RegionStateFiles.Discovery discovery = files.discover();
+		require(discovery.manifests().stream().noneMatch(value -> value.regionId().equals(region.id()))
+				&& discovery.issues().containsKey(regionDir),
+				"discovery admitted a v3 manifest whose committed section was missing");
 	}
 
 	private static void validateMaterialV2Codec() throws Exception {
@@ -361,12 +374,16 @@ public final class FluidRegionPersistenceValidation {
 		require(files.read(region.id()).manifest().checkpointGeneration() == 1L,
 				"failed slot publication changed the committed generation");
 
-		Path regionDir = root.resolve("realwater").resolve("region-state").resolve(region.id().toString());
+		Path regionDir = root.toAbsolutePath().normalize().resolve("realwater").resolve("region-state")
+				.resolve(region.id().toString());
 		CompoundTag head = NbtIo.readCompressed(regionDir.resolve("HEAD.nbt"), NbtAccounter.unlimitedHeap());
 		Path slot = regionDir.resolve(head.getStringOr("Slot", ""));
 		Path section = Files.list(slot).filter(path -> path.getFileName().toString().startsWith("section_")).findFirst().orElseThrow();
 		Files.delete(section);
 		expectIOException(() -> files.read(region.id()), "missing section was accepted");
+		RegionStateFiles.Discovery missingSection = files.discover();
+		require(missingSection.manifests().isEmpty() && missingSection.issues().containsKey(regionDir),
+				"discovery admitted a manifest whose committed section was missing");
 
 		Path headRoot = Files.createTempDirectory(Path.of("."), "head-corrupt-");
 		FluidRegion headRegion = populatedRegion(UUID.randomUUID());

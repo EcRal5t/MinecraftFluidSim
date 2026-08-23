@@ -12,6 +12,10 @@ public record ExactRational(BigInteger numerator, BigInteger denominator) implem
 	public ExactRational {
 		Objects.requireNonNull(numerator, "numerator");
 		Objects.requireNonNull(denominator, "denominator");
+		if (numerator.bitLength() > ChemicalLimits.MAX_RATIONAL_BITS
+				|| denominator.bitLength() > ChemicalLimits.MAX_RATIONAL_BITS) {
+			throw new IllegalArgumentException("Rational magnitude is over budget");
+		}
 		if (denominator.signum() == 0) throw new IllegalArgumentException("Rational denominator is zero");
 		if (denominator.signum() < 0) {
 			numerator = numerator.negate();
@@ -46,6 +50,9 @@ public record ExactRational(BigInteger numerator, BigInteger denominator) implem
 		if (value == null || value.isBlank() || !value.equals(value.trim())) {
 			throw new IllegalArgumentException("Rational text must be non-blank and trimmed");
 		}
+		if (value.length() > ChemicalLimits.MAX_RATIONAL_TEXT_LENGTH) {
+			throw new IllegalArgumentException("Rational text is over budget");
+		}
 		int slash = value.indexOf('/');
 		try {
 			if (slash >= 0) {
@@ -56,6 +63,9 @@ public record ExactRational(BigInteger numerator, BigInteger denominator) implem
 						new BigInteger(value.substring(slash + 1)));
 			}
 			BigDecimal decimal = new BigDecimal(value);
+			if (Math.abs((long) decimal.scale()) > ChemicalLimits.MAX_RATIONAL_SCALE) {
+				throw new IllegalArgumentException("Rational decimal scale is over budget");
+			}
 			BigInteger denominator = decimal.scale() <= 0
 					? BigInteger.ONE : BigInteger.TEN.pow(decimal.scale());
 			BigInteger numerator = decimal.unscaledValue();

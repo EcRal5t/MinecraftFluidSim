@@ -9,7 +9,7 @@ public record RegionExtension(String type, byte[] payload) {
 		Objects.requireNonNull(type, "type");
 		Objects.requireNonNull(payload, "payload");
 		if (type.isBlank() || type.length() > 128) throw new IllegalArgumentException("Invalid extension type");
-		if (payload.length > 1_048_576) throw new IllegalArgumentException("Region extension is too large");
+		if (payload.length > 16 * 1_048_576) throw new IllegalArgumentException("Region extension is too large");
 		payload = payload.clone();
 	}
 

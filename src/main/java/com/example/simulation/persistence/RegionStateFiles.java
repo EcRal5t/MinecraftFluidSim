@@ -257,7 +257,7 @@ public final class RegionStateFiles {
 		}
 	}
 
-	/** Reads only committed manifests. Locked paths are retained and returned as issues. */
+	/** Fully validates committed generations during discovery. Locked paths are retained as issues. */
 	public Discovery discover() throws IOException {
 		if (!Files.exists(root)) return new Discovery(List.of(), Map.of());
 		if (!Files.isDirectory(root)) throw new IOException("Region-state root is not a directory: " + root);
@@ -272,7 +272,9 @@ public final class RegionStateFiles {
 				}
 				try {
 					UUID id = UUID.fromString(entry.getFileName().toString());
-					manifests.add(readManifest(id));
+					RegionState committed = read(id);
+					validateReconstruction(committed);
+					manifests.add(committed.manifest());
 				} catch (IllegalArgumentException | IOException exception) {
 					issues.put(entry, exception.getMessage());
 				}

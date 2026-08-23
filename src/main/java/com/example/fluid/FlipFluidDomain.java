@@ -417,6 +417,7 @@ public final class FlipFluidDomain {
 			return;
 		}
 		ChemicalParcelStore candidate = new ChemicalParcelStore(registry, maximumParticleCount, cellCount);
+		for (FluidMaterial material : materialRegistry.materials()) registry.phaseHandleForMaterial(material.id());
 		for (int marker = 0; marker < particleCount; marker++) {
 			candidate.assignDefault(marker, materialRegistry.material(particleMaterialHandle[marker]).id(),
 					particleVolume[marker], config.cellSize(), particleMass[marker], false);
@@ -517,6 +518,7 @@ public final class FlipFluidDomain {
 			throw new IllegalArgumentException("Chemical handoff registry identity mismatch");
 		}
 		restoreMaterialParticleState(state.materials());
+		for (FluidMaterial material : materialRegistry.materials()) registry.phaseHandleForMaterial(material.id());
 		ChemicalParcelStore restored = new ChemicalParcelStore(registry, maximumParticleCount, cellCount);
 		int[] tableIndex = state.copyMarkerMixtureIndex();
 		byte[] indicator = state.copyIndicator();
@@ -1015,21 +1017,35 @@ public final class FlipFluidDomain {
 	}
 
 	public ExactVolumeTransfer tryInsertExactVolume(int centerX, int centerY, int centerZ, float volume, int maxRadius, int materialHandle) {
+		return tryInsertExactVolume(centerX, centerY, centerZ, volume, maxRadius, materialHandle, false);
+	}
+
+	public ExactVolumeTransfer tryInsertExactVolume(
+			int centerX, int centerY, int centerZ, float volume, int maxRadius, int materialHandle,
+			boolean externalSource
+	) {
 		validateVolumeEdit(volume, maxRadius);
 		if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0, 0.0);
 		double mass = materialRegistry == null
 				? (double) volume * config.density()
 				: (double) volume * materialRegistry.material(materialHandle).referenceDensity();
-		return tryInsertExactMaterial(centerX, centerY, centerZ, volume, mass, maxRadius, materialHandle);
+		return tryInsertExactMaterial(centerX, centerY, centerZ, volume, mass, maxRadius, materialHandle, externalSource);
 	}
 
 	/** Inserts independent material volume and mass ledgers without deriving either from the other. */
 	public ExactVolumeTransfer tryInsertExactMaterial(
 			int centerX, int centerY, int centerZ, float volume, double mass, int maxRadius, int materialHandle
 	) {
+		return tryInsertExactMaterial(centerX, centerY, centerZ, volume, mass, maxRadius, materialHandle, false);
+	}
+
+	private ExactVolumeTransfer tryInsertExactMaterial(
+			int centerX, int centerY, int centerZ, float volume, double mass, int maxRadius, int materialHandle,
+			boolean externalSource
+	) {
 		if (volume == 0.0F && mass == 0.0) return new ExactVolumeTransfer(true, 0.0, 0.0);
 		ExactMixtureTransfer transfer = tryInsertExactMixture(centerX, centerY, centerZ,
-				List.of(new MaterialPortion(materialHandle, volume, mass)), maxRadius);
+				List.of(new MaterialPortion(materialHandle, volume, mass)), maxRadius, externalSource);
 		return transfer.transferred()
 				? new ExactVolumeTransfer(true, transfer.portions().getFirst().volume(),
 						transfer.portions().getFirst().mass())
@@ -1039,6 +1055,13 @@ public final class FlipFluidDomain {
 	/** Plans every mixture component against shared capacity before inserting any marker. */
 	public ExactMixtureTransfer tryInsertExactMixture(
 			int centerX, int centerY, int centerZ, List<MaterialPortion> portions, int maxRadius
+	) {
+		return tryInsertExactMixture(centerX, centerY, centerZ, portions, maxRadius, false);
+	}
+
+	public ExactMixtureTransfer tryInsertExactMixture(
+			int centerX, int centerY, int centerZ, List<MaterialPortion> portions, int maxRadius,
+			boolean externalSource
 	) {
 		if (portions == null || portions.isEmpty()) throw new IllegalArgumentException("Mixture insertion is empty");
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
@@ -1083,6 +1106,8 @@ public final class FlipFluidDomain {
 			volumeLeft[i] = portions.get(i).volume();
 			massLeft[i] = portions.get(i).mass();
 		}
+		List<MaterialInsertPiece> insertPieces = new ArrayList<>();
+		long plannedChemicalQuanta = 0L;
 		for (InsertAllocation allocation : plan) {
 			int portionIndex = allocation.portionIndex();
 			double left = allocation.amount();
@@ -1095,8 +1120,11 @@ public final class FlipFluidDomain {
 						<= Math.ulp((float) volumeLeft[portionIndex]);
 				double pieceMass = finalPortionPiece ? massLeft[portionIndex]
 						: massLeft[portionIndex] * piece / volumeLeft[portionIndex];
-				spawnParticle(allocation.x(), allocation.y(), allocation.z(), slot, piece,
-						allocation.materialHandle(), pieceMass);
+				ChemicalMixtureRecord chemical = chemicalParcels == null ? null : chemicalParcels.defaultRecord(
+						materialRegistry.material(allocation.materialHandle()).id(), piece, config.cellSize(), pieceMass, false);
+				if (chemical != null) plannedChemicalQuanta = Math.addExact(plannedChemicalQuanta, chemical.totalQuanta());
+				insertPieces.add(new MaterialInsertPiece(allocation.x(), allocation.y(), allocation.z(), slot, piece,
+						allocation.materialHandle(), pieceMass, chemical));
 				inserted[portionIndex] += piece;
 				insertedMass[portionIndex] += pieceMass;
 				left = allocationRemainder ? 0.0 : left - piece;
@@ -1110,6 +1138,30 @@ public final class FlipFluidDomain {
 				slot = firstOpenSlot(cellIndex(allocation.x(), allocation.y(), allocation.z()), slot + 1);
 			}
 		}
+		if (chemicalParcels != null && Math.addExact(chemicalParcels.totalQuanta(), plannedChemicalQuanta)
+				> ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
+			return new ExactMixtureTransfer(false, List.of());
+		}
+		ChemicalTransferLedger externalAddition = ChemicalTransferLedger.EMPTY;
+		if (externalSource && chemicalParcels != null) {
+			try {
+				ChemicalTransferLedger.Builder source = ChemicalTransferLedger.builder(chemicalParcels.registry());
+				for (MaterialInsertPiece piece : insertPieces) source.add(
+						materialRegistry.material(piece.materialHandle()).id(), false,
+						piece.volume(), piece.mass(), piece.chemical());
+				externalAddition = source.build();
+				chemicalParcels.requireCanRecordExternalSource(externalAddition);
+			} catch (IllegalArgumentException | ArithmeticException refusedAudit) {
+				return new ExactMixtureTransfer(false, List.of());
+			}
+		}
+		for (MaterialInsertPiece piece : insertPieces) {
+			if (piece.chemical() == null) spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), piece.slot(),
+					piece.volume(), piece.materialHandle(), piece.mass());
+			else spawnChemicalParticle(piece.cellX(), piece.cellY(), piece.cellZ(), piece.slot(), piece.volume(),
+					piece.materialHandle(), piece.mass(), piece.chemical(), false);
+		}
+		if (!externalAddition.isEmpty()) chemicalParcels.recordExternalSource(externalAddition);
 		gridDirty = true;
 		List<MaterialPortion> result = new java.util.ArrayList<>(portions.size());
 		for (int i = 0; i < portions.size(); i++) {
@@ -1121,6 +1173,13 @@ public final class FlipFluidDomain {
 	/** Plans and restores an exact chemical ledger without substituting a default carrier. */
 	public ExactChemicalTransfer tryInsertExactChemical(
 			int centerX, int centerY, int centerZ, ChemicalTransferLedger ledger, int maxRadius
+	) {
+		return tryInsertExactChemical(centerX, centerY, centerZ, ledger, maxRadius, false);
+	}
+
+	public ExactChemicalTransfer tryInsertExactChemical(
+			int centerX, int centerY, int centerZ, ChemicalTransferLedger ledger, int maxRadius,
+			boolean externalSource
 	) {
 		if (chemicalParcels == null) throw new IllegalStateException("Chemical insertion requires chemistry");
 		if (ledger == null || ledger.isEmpty()) return new ExactChemicalTransfer(ledger != null, ChemicalTransferLedger.EMPTY);
@@ -1136,6 +1195,7 @@ public final class FlipFluidDomain {
 		double[] exactCellVolume = exactCellVolumes();
 		List<CellCandidate> nearby = nearbyCells(centerX, centerY, centerZ, maxRadius);
 		List<ChemicalInsertPiece> pieces = new ArrayList<>();
+		try {
 		for (ChemicalTransferLedger.Group group : ledger.groups()) {
 			int material = materialRegistry.handle(group.materialId());
 			double remaining = group.volume();
@@ -1196,12 +1256,22 @@ public final class FlipFluidDomain {
 				massLeft -= mass;
 			}
 		}
+		} catch (IllegalArgumentException | ArithmeticException
+				| com.example.chemistry.ChemicalReactionEngine.BudgetExceededException refusedPlan) {
+			return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		}
+		if (externalSource) try {
+			chemicalParcels.requireCanRecordExternalSource(ledger);
+		} catch (IllegalArgumentException | ArithmeticException refusedAudit) {
+			return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		}
 		for (ChemicalInsertPiece piece : pieces) {
 			int slot = firstOpenSlot(cellIndex(piece.cellX(), piece.cellY(), piece.cellZ()), 0);
 			if (slot < 0) throw new IllegalStateException("Chemical insertion lost its planned open slot");
 			spawnChemicalParticle(piece.cellX(), piece.cellY(), piece.cellZ(), slot, piece.volume(),
 					piece.materialHandle(), piece.mass(), piece.mixture(), piece.indicator());
 		}
+		if (externalSource) chemicalParcels.recordExternalSource(ledger);
 		gridDirty = true;
 		return new ExactChemicalTransfer(true, ledger);
 	}
@@ -1210,7 +1280,16 @@ public final class FlipFluidDomain {
 	public ExactChemicalTransfer tryExtractExactChemical(
 			int centerX, int centerY, int centerZ, float volume, int maxRadius
 	) {
+		return tryExtractExactChemical(centerX, centerY, centerZ, volume, maxRadius, ignored -> true);
+	}
+
+	/** Applies the caller's bounded representation check to the complete ledger before committing removal. */
+	public ExactChemicalTransfer tryExtractExactChemical(
+			int centerX, int centerY, int centerZ, float volume, int maxRadius,
+			java.util.function.Predicate<ChemicalTransferLedger> acceptsLedger
+	) {
 		if (chemicalParcels == null) throw new IllegalStateException("Chemical extraction requires chemistry");
+		if (acceptsLedger == null) throw new IllegalArgumentException("Chemical extraction validator is missing");
 		validateVolumeEdit(volume, maxRadius);
 		if (volume <= 0.0F) return new ExactChemicalTransfer(volume == 0.0F, ChemicalTransferLedger.EMPTY);
 		List<CellCandidate> cells = nearbyCells(centerX, centerY, centerZ, maxRadius);
@@ -1253,6 +1332,7 @@ public final class FlipFluidDomain {
 		if (removed.totalQuanta() > ChemicalLimits.MAX_BUCKET_TOTAL_QUANTA) {
 			return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		}
+		if (!acceptsLedger.test(removed)) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		for (ExtractionAllocation allocation : plan) {
 			if (allocation.chemicalPlan().kept() != null) {
 				chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
@@ -1394,6 +1474,10 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			int cellX, int cellY, int cellZ, float volume, int materialHandle, double mass,
 			ChemicalMixtureRecord mixture, boolean indicator
 	) { }
+	private record MaterialInsertPiece(
+			int cellX, int cellY, int cellZ, int slot, float volume, int materialHandle, double mass,
+			ChemicalMixtureRecord chemical
+	) { }
 	private record ExtractionAllocation(
 			int particle, float newVolume, double newMass, ChemicalParcelStore.SplitPlan chemicalPlan
 	) { }
@@ -1431,7 +1515,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				? new ChemicalParcelStore.ReactionStats(0, 0, 0)
 				: chemicalParcels.reactDirtyCells(
 						sizeX, sizeY, sizeZ, config.cellSize(), particleX, particleY, particleZ,
-						particleVolume, particleMass, particleMaterialHandle,
+						particleMass, particleMaterialHandle,
 						handle -> materialRegistry.material(handle).id(), particleCount);
 		ensureParticleCapacity(particleReseeder.capacityUpperBound(particleCount));
 		FlipParticleReseeder.Result reseeding = particleReseeder.reseed(

@@ -16,6 +16,24 @@ public final class ChemicalReactionEngine {
 		for (int entry = 0; entry < input.entryCount(); entry++) {
 			inventory[input.speciesHandle(entry)] = input.amountAt(entry);
 		}
+		InventoryResult result = reactInventory(phaseHandle, inventory);
+		return new Result(canonical(result.inventory, input.massResidualBits()), result.evaluations);
+	}
+
+	/** Reacts one complete cell/phase inventory without applying the per-parcel 16-entry budget. */
+	public InventoryResult reactInventory(int phaseHandle, long[] input) {
+		if (input == null || input.length != registry.species().size()) {
+			throw new IllegalArgumentException("Reaction inventory layout does not match the registry");
+		}
+		long[] inventory = input.clone();
+		long inputTotal = 0L;
+		for (long amount : inventory) {
+			if (amount < 0L) throw new IllegalArgumentException("Chemical inventory is negative");
+			inputTotal = Math.addExact(inputTotal, amount);
+		}
+		if (inputTotal <= 0L || inputTotal > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
+			throw new BudgetExceededException("Reaction inventory is empty or over budget");
+		}
 		int evaluations = 0;
 		for (ChemicalReaction reaction : registry.reactionOrder()) {
 			if (registry.phaseHandle(reaction.phaseId()) != phaseHandle) continue;
@@ -38,11 +56,12 @@ public final class ChemicalReactionEngine {
 						Math.multiplyExact(extent, product.getValue()));
 			}
 		}
-		ChemicalMixtureRecord output = canonical(inventory, input.massResidualBits());
-		if (output.totalQuanta() > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
+		long outputTotal = 0L;
+		for (long amount : inventory) outputTotal = Math.addExact(outputTotal, amount);
+		if (outputTotal > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
 			throw new BudgetExceededException("Reaction result exceeds region inventory budget");
 		}
-		return new Result(output, evaluations);
+		return new InventoryResult(inventory, evaluations);
 	}
 
 	public ChemicalMixtureRecord addAndReact(
@@ -94,6 +113,13 @@ public final class ChemicalReactionEngine {
 	}
 
 	public record Result(ChemicalMixtureRecord mixture, int evaluations) { }
+	public record InventoryResult(long[] inventory, int evaluations) {
+		public InventoryResult {
+			if (inventory == null) throw new IllegalArgumentException("Reaction result inventory is missing");
+			inventory = inventory.clone();
+		}
+		@Override public long[] inventory() { return inventory.clone(); }
+	}
 
 	public static final class BudgetExceededException extends IllegalStateException {
 		public BudgetExceededException(String message) { super(message); }

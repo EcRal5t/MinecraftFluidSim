@@ -2,12 +2,14 @@ package com.example.fluid;
 
 import com.example.chemistry.BinaryVolumeAllocator;
 import com.example.chemistry.BuiltinChemicalDefinitions;
+import com.example.chemistry.ChemicalAuditLedgerCodec;
 import com.example.chemistry.ChemicalMixtureRecord;
 import com.example.chemistry.ChemicalParcelStore;
 import com.example.chemistry.ChemicalPhaseDefinition;
 import com.example.chemistry.ChemicalReaction;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.chemistry.ChemicalSpecies;
+import com.example.chemistry.ChemicalTransferLedger;
 import com.example.chemistry.ExactRational;
 import com.example.item.ChemicalContents;
 import com.example.item.ContainerFluidLedger;
@@ -28,6 +30,9 @@ public final class M7ChemicalTransportValidation {
 	public static void main(String[] args) {
 		boolean fast = args.length > 0 && args[0].equals("--fast");
 		validatePackedBudgetAndBinaryAllocation();
+		validateInternalTransferLedgerDiversity();
+		validateMissingPhaseRejectedBeforeBinding();
+		validateExternalSourceBoundary();
 		validateSameCellReaction();
 		validateReactionKeepsTinyParcels();
 		validateAdjacentCellsDoNotReact();
@@ -54,6 +59,48 @@ public final class M7ChemicalTransportValidation {
 		check(Arrays.equals(equal, new long[]{2L, 3L}), "largest remainder did not use marker ordinal tie-break");
 		long[] unequal = BinaryVolumeAllocator.allocate(10L, new float[]{0.1F, 0.2F, 0.3F}, new int[]{0, 1, 2});
 		check(Arrays.stream(unequal).sum() == 10L, "binary volume allocation did not close");
+	}
+
+	private static void validateInternalTransferLedgerDiversity() {
+		java.util.TreeMap<String, Long> species = new java.util.TreeMap<>();
+		for (int index = 0; index < 32; index++) species.put("test:species_" + index, 1L);
+		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
+				"realwater:water", false, 1.0, 1.0, Double.doubleToRawLongBits(0.0), species)));
+		try {
+			ChemicalAuditLedgerCodec.AuditLedgers decoded = ChemicalAuditLedgerCodec.decode(
+					ChemicalAuditLedgerCodec.encode(ledger, ChemicalTransferLedger.EMPTY));
+			check(decoded.externalSource().groups().equals(ledger.groups()),
+					"complete internal transfer ledger was truncated to the per-parcel species budget");
+		} catch (java.io.IOException invalid) {
+			throw new AssertionError("complete internal transfer ledger did not round-trip", invalid);
+		}
+	}
+
+	private static void validateMissingPhaseRejectedBeforeBinding() {
+		FluidMaterialRegistry materials = new FluidMaterialRegistry(List.of(
+				BuiltinFluidMaterials.M3_PALETTE.getFirst(),
+				new FluidMaterial("test:missing_phase", 1_000.0, "test:missing_phase", 0.0, Math.PI / 2.0)));
+		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+		domain.setVolume(1, 1, 1, 0.125F);
+		domain.setMarkerMaterial(0, materials, 0);
+		try {
+			domain.bindChemistry(CHEMISTRY);
+			throw new AssertionError("material palette with no chemical phase was accepted");
+		} catch (IllegalArgumentException expected) {
+			check(!domain.hasChemistryState(), "failed chemistry binding left a partial parcel store");
+		}
+	}
+
+	private static void validateExternalSourceBoundary() {
+		FlipFluidDomain domain = domainWithCell(1, 1, 1, 0.125F);
+		FlipFluidDomain.ExactVolumeTransfer survival = domain.tryInsertExactVolume(1, 1, 1,
+				0.125F, 0, 0, false);
+		check(survival.transferred() && domain.chemicalParcels().externalSource().isEmpty(),
+				"conservative insertion was recorded as an external source");
+		FlipFluidDomain.ExactVolumeTransfer creative = domain.tryInsertExactVolume(1, 1, 1,
+				0.125F, 0, 0, true);
+		check(creative.transferred() && !domain.chemicalParcels().externalSource().isEmpty(),
+				"explicit external insertion was not recorded atomically");
 	}
 
 	private static void validateWallSeparatedCellsDoNotReact() {
@@ -108,6 +155,12 @@ public final class M7ChemicalTransportValidation {
 		FlipFluidDomain domain = domainWithCell(1, 1, 1, 1.0F);
 		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.HCL, 1_000_000L), true);
 		domain.setMarkerChemical(1, Map.of(BuiltinChemicalDefinitions.NAOH, 1_000_000L), false);
+		int markerCount = domain.particleCount();
+		long[] residualBits = new long[markerCount];
+		for (int marker = 0; marker < markerCount; marker++) {
+			residualBits[marker] = domain.chemicalParcels().record(marker).massResidualBits();
+		}
+		double massBefore = domain.totalMass();
 		FlipFluidDomain.StepStats stats = domain.step();
 		long[] totals = domain.chemicalParcels().speciesTotals(domain.particleCount());
 		check(totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H_PLUS)] == 0L, "same-cell reaction left H+");
@@ -118,6 +171,13 @@ public final class M7ChemicalTransportValidation {
 				"same-cell reaction lost Cl-");
 		check(stats.chemistryDirtyCells() == 1 && stats.chemistryChangedMarkers() > 0,
 				"logical chemistry did not run exactly on the dirty cell");
+		check(domain.particleCount() == markerCount, "reaction-only step changed marker ownership");
+		for (int marker = 0; marker < markerCount; marker++) {
+			check(domain.chemicalParcels().record(marker).massResidualBits() == residualBits[marker],
+					"same-cell reaction rewrote marker mass residual truth");
+		}
+		check(Math.abs(domain.totalMass() - massBefore) <= Math.max(1.0E-9, Math.ulp(massBefore) * 8.0),
+				"same-cell reaction changed marker mass truth");
 		int indicated = 0;
 		for (int marker = 0; marker < domain.particleCount(); marker++) if (domain.chemicalParcels().indicator(marker)) indicated++;
 		check(indicated == 1, "reaction redistributed the indicator bit");
@@ -137,11 +197,10 @@ public final class M7ChemicalTransportValidation {
 		parcels.assign(2, water, false);
 		parcels.markDirtyCell((1 * 4 + 1) * 4 + 1);
 		float[] positions = {1.5F, 1.5F, 1.5F};
-		float[] volumes = {1.0F, Float.MIN_VALUE, Float.MIN_VALUE};
 		double[] masses = {acid.markerMass(CHEMISTRY), base.markerMass(CHEMISTRY), water.markerMass(CHEMISTRY)};
 		int[] material = new int[markerCount];
 		ChemicalParcelStore.ReactionStats stats = parcels.reactDirtyCells(4, 4, 4, 1.0F,
-				positions, positions, positions, volumes, masses, material,
+				positions, positions, positions, masses, material,
 				ignored -> BuiltinFluidMaterials.WATER.id(), markerCount);
 		long[] totals = parcels.speciesTotals(markerCount);
 		check(stats.changedMarkers() == markerCount, "tiny-parcel reaction did not commit all replacements");
@@ -365,6 +424,15 @@ public final class M7ChemicalTransportValidation {
 		for (int marker = 0; marker < restored.particleCount(); marker++) {
 			check(restored.chemicalParcels().indicator(marker), "chemical bucket round-trip lost indicator provenance");
 		}
+		long[] beforeRefusedSpecies = restored.chemicalParcels().speciesTotals(restored.particleCount());
+		double beforeRefusedVolume = restored.totalVolumeExact();
+		FlipFluidDomain.ExactChemicalTransfer refusedRepresentation = restored.tryExtractExactChemical(
+				1, 1, 1, 0.125F, 0, ignored -> false);
+		check(!refusedRepresentation.transferred()
+				&& Double.doubleToRawLongBits(restored.totalVolumeExact()) == Double.doubleToRawLongBits(beforeRefusedVolume)
+				&& Arrays.equals(beforeRefusedSpecies,
+						restored.chemicalParcels().speciesTotals(restored.particleCount())),
+				"unrepresentable chemical bucket extraction committed marker changes");
 
 		ChemicalContents incompatible = new ChemicalContents(CHEMISTRY.fingerprint(),
 				com.example.chemistry.ChemicalLimits.QUANTA_PER_AU, List.of(new ChemicalContents.Group(
@@ -443,14 +511,14 @@ public final class M7ChemicalTransportValidation {
 	private static long benchmarkAcidBaseReactionP95() {
 		final int markers = 64, cells = 64;
 		ChemicalParcelStore parcels = new ChemicalParcelStore(CHEMISTRY, markers, cells);
-		float[] x = new float[markers], y = new float[markers], z = new float[markers], volume = new float[markers];
+		float[] x = new float[markers], y = new float[markers], z = new float[markers];
 		double[] mass = new double[markers];
 		int[] material = new int[markers];
 		ChemicalMixtureRecord acid = ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY,
 				Map.of(BuiltinChemicalDefinitions.HCL, 1_000_003L), 0.0);
 		ChemicalMixtureRecord base = ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY,
 				Map.of(BuiltinChemicalDefinitions.NAOH, 1_000_003L), 0.0);
-		Arrays.fill(x, 1.5F); Arrays.fill(y, 1.5F); Arrays.fill(z, 1.5F); Arrays.fill(volume, 0.125F);
+		Arrays.fill(x, 1.5F); Arrays.fill(y, 1.5F); Arrays.fill(z, 1.5F);
 		long[] samples = new long[100];
 		for (int iteration = -20; iteration < samples.length; iteration++) {
 			for (int marker = 0; marker < markers; marker++) {
@@ -461,7 +529,7 @@ public final class M7ChemicalTransportValidation {
 			parcels.markDirtyCell((1 * 4 + 1) * 4 + 1);
 			long start = System.nanoTime();
 			ChemicalParcelStore.ReactionStats stats = parcels.reactDirtyCells(4, 4, 4, 1.0F,
-					x, y, z, volume, mass, material, ignored -> BuiltinFluidMaterials.WATER.id(), markers);
+					x, y, z, mass, material, ignored -> BuiltinFluidMaterials.WATER.id(), markers);
 			long elapsed = System.nanoTime() - start;
 			check(stats.dirtyCells() == 1 && stats.changedMarkers() == markers,
 					"acid/base performance fixture did not execute its logical reaction");

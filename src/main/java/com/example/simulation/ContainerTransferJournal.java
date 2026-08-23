@@ -5,6 +5,7 @@ import com.example.item.FluidMixture;
 import com.example.item.ChemicalContents;
 import com.example.item.RealWaterComponents;
 import com.example.item.PartialWaterBucketItem;
+import com.example.chemistry.ChemicalRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -14,7 +15,7 @@ import java.util.UUID;
 /**
  * Short-lived WAL record for one player/dispenser bucket transfer against a controller region.
  * The region-state HEAD remains the only commit point; this WAL only bridges the item side to
- * that commit and is deleted once the item has been mutated.
+ * that commit and is deleted only after the actor's after-item has been durably saved.
  */
 public record ContainerTransferJournal(
 UUID transactionId,
@@ -54,6 +55,17 @@ return new Actor(ActorType.DISPENSER, null, null, dimensionId, pos, slot);
 }
 
 public enum ItemKind { BUCKET, WATER_BUCKET, PARTIAL, EMPTY_MATERIAL_BUCKET, MATERIAL_BUCKET, CHEMICAL_BUCKET }
+
+public boolean requiresChemicalRegistry() {
+return beforeItem.kind() == ItemKind.CHEMICAL_BUCKET || afterItem.kind() == ItemKind.CHEMICAL_BUCKET;
+}
+
+public void validateChemicalRegistry(ChemicalRegistry registry) {
+if (!requiresChemicalRegistry()) return;
+if (registry == null) throw new IllegalArgumentException("Authoritative chemical registry is unavailable");
+beforeItem.validateChemicalRegistry(registry);
+afterItem.validateChemicalRegistry(registry);
+}
 
 public record ItemFingerprint(ItemKind kind, long nanos, String materialId, long massBits) {
 public ItemFingerprint(ItemKind kind, long nanos, String materialId) {
@@ -96,6 +108,12 @@ throw new IllegalArgumentException("Material bucket has no valid volume/material
 return new ItemFingerprint(ItemKind.MATERIAL_BUCKET, nanos, mixture.encode(), Double.doubleToRawLongBits(mass));
 }
 throw new IllegalArgumentException("Unsupported container item for transfer WAL: " + stack.getItem());
+}
+
+public void validateChemicalRegistry(ChemicalRegistry registry) {
+if (kind != ItemKind.CHEMICAL_BUCKET) return;
+ChemicalContents contents = ChemicalContents.decode(materialId);
+contents.validateAgainst(registry);
 }
 
 public ItemStack toStack() {

@@ -116,21 +116,36 @@ public final class FluidSimulationService {
 		if (serverConfig.chemistryEnabled()) {
 			try {
 				ChemicalRegistryStore registryStore = new ChemicalRegistryStore(worldRoot);
-				if (!registryStore.exists()) {
+				if (registryStore.exists()) {
+					bootChemicalRegistry = registryStore.read();
+					validateSupportedChemicalMaterials(bootChemicalRegistry);
+					try {
+						ChemicalRegistry datapackDefinitions = ChemicalDataPackLoader.load(server.getResourceManager());
+						if (!datapackDefinitions.fingerprint().equals(bootChemicalRegistry.fingerprint())) {
+							RealWaterMod.LOGGER.warn("Chemical datapack definitions differ from the authoritative world registry {}; existing inventory keeps world semantics",
+									bootChemicalRegistry.fingerprint());
+						}
+					} catch (IOException | RuntimeException invalidDatapack) {
+						RealWaterMod.LOGGER.warn("Current chemical datapack definitions are invalid; the valid authoritative world registry {} remains active and inventory is not reinterpreted",
+								bootChemicalRegistry.fingerprint(), invalidDatapack);
+					}
+				} else {
 					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discover();
 					if (!regions.issues().isEmpty() || regions.manifests().stream()
 							.anyMatch(manifest -> manifest.formatVersion() == 3)) {
 						throw new IOException("region-state v3 or unreadable region data exists but chemistry/registry.nbt is missing");
 					}
-				}
-				ChemicalRegistry datapackDefinitions = ChemicalDataPackLoader.load(server.getResourceManager());
-				ChemicalRegistryStore.LoadResult loaded = registryStore.loadOrCreate(datapackDefinitions);
-				bootChemicalRegistry = loaded.registry();
-				if (loaded.definitionMismatch()) {
-					RealWaterMod.LOGGER.warn("Chemical datapack definitions differ from the authoritative world registry {}; existing inventory keeps world semantics",
-							loaded.registry().fingerprint());
-				} else if (loaded.created()) {
-					RealWaterMod.LOGGER.info("Published authoritative chemical registry snapshot {}", loaded.registry().fingerprint());
+					ChemicalRegistry datapackDefinitions = ChemicalDataPackLoader.load(server.getResourceManager());
+					validateSupportedChemicalMaterials(datapackDefinitions);
+					ChemicalRegistryStore.LoadResult loaded = registryStore.loadOrCreate(datapackDefinitions);
+					bootChemicalRegistry = loaded.registry();
+					validateSupportedChemicalMaterials(bootChemicalRegistry);
+					if (loaded.definitionMismatch()) {
+						RealWaterMod.LOGGER.warn("Chemical registry appeared during first publication and differs from datapack definitions; world snapshot {} remains authoritative",
+								loaded.registry().fingerprint());
+					} else if (loaded.created()) {
+						RealWaterMod.LOGGER.info("Published authoritative chemical registry snapshot {}", loaded.registry().fingerprint());
+					}
 				}
 			} catch (IOException | RuntimeException exception) {
 				configurationLocked = true;
@@ -151,6 +166,10 @@ public final class FluidSimulationService {
 				"server.properties 不可用，已安全使用默认预算并关闭控制器；原文件未覆盖");
 		ownershipIssues = regionOperations.scanOwnershipIssues();
 		for (String issue : ownershipIssues) RealWaterMod.LOGGER.error("Real Water world ownership issue: {}", issue);
+	}
+
+	private static void validateSupportedChemicalMaterials(ChemicalRegistry registry) {
+		for (var material : BuiltinFluidMaterials.M3_PALETTE) registry.phaseHandleForMaterial(material.id());
 	}
 
 	ContainerTransferStore containerTransfers() {
@@ -281,6 +300,23 @@ public final class FluidSimulationService {
 	private void processContainerTransfer(MinecraftServer server, UUID transactionId) {
 		try {
 			ContainerTransferJournal journal = containerTransfers.read(transactionId);
+			if (journal.requiresChemicalRegistry()) {
+				if (!chemistryFeatureEnabled || chemicalRegistry == null) {
+					logContainerTransferLockOnce(transactionId,
+							"Container transfer WAL " + transactionId
+									+ " remains locked: chemical recovery requires the enabled authoritative world registry");
+					return;
+				}
+				try {
+					journal.validateChemicalRegistry(chemicalRegistry);
+				} catch (RuntimeException foreignRegistry) {
+					logContainerTransferLockOnce(transactionId,
+							"Container transfer WAL " + transactionId
+									+ " remains locked: chemical item registry identity is foreign or invalid ("
+									+ foreignRegistry.getMessage() + ")");
+					return;
+				}
+			}
 			long head = committedRegionGeneration(journal.regionId());
 			long headChecksum = committedRegionManifestChecksum(journal.regionId());
 			ContainerTransferRecovery.Decision decision = ContainerTransferRecovery.decide(

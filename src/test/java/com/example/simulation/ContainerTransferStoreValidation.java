@@ -190,6 +190,21 @@ public final class ContainerTransferStoreValidation {
 				chemicalBefore, materialAfter, 0x5abcL, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(chemical);
 		check(chemical.equals(store.read(tx5)), "chemical bucket WAL v3 fingerprint did not round-trip");
+		check(chemical.requiresChemicalRegistry(), "chemical WAL did not declare its registry dependency");
+		chemical.validateChemicalRegistry(BuiltinChemicalDefinitions.REGISTRY);
+		ChemicalContents foreignContents = new ChemicalContents("0".repeat(64), ChemicalLimits.QUANTA_PER_AU,
+				chemicalContents.groups());
+		ContainerTransferJournal.ItemFingerprint foreignChemical = new ContainerTransferJournal.ItemFingerprint(
+				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, ContainerFluidLedger.NANOS_PER_BLOCK,
+				foreignContents.encode(), Double.doubleToRawLongBits(foreignContents.totalMass()));
+		ContainerTransferJournal foreignJournal = new ContainerTransferJournal(
+				UUID.randomUUID(), region, "minecraft:overworld", 4L, 5L,
+				ContainerTransferJournal.Operation.INSERT, ContainerFluidLedger.NANOS_PER_BLOCK,
+				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
+				foreignChemical, materialAfter, ContainerTransferJournal.Phase.PREPARED);
+		checkThrows(IllegalArgumentException.class,
+				() -> foreignJournal.validateChemicalRegistry(BuiltinChemicalDefinitions.REGISTRY),
+				"foreign chemical WAL fingerprint was accepted by recovery validation");
 		ChemicalContents.Split chemicalPartial = chemicalContents.split(333_333_333L,
 				BuiltinChemicalDefinitions.REGISTRY);
 		ContainerTransferJournal.ItemFingerprint chemicalAfter = new ContainerTransferJournal.ItemFingerprint(

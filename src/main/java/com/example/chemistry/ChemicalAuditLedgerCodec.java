@@ -16,7 +16,7 @@ import java.util.TreeMap;
 public final class ChemicalAuditLedgerCodec {
 	private static final int MAGIC = 0x52574341; // RWCA
 	private static final int VERSION = 1;
-	public static final int MAX_BYTES = 1_048_576;
+	public static final int MAX_BYTES = 16 * 1_048_576;
 
 	private ChemicalAuditLedgerCodec() { }
 
@@ -30,7 +30,7 @@ public final class ChemicalAuditLedgerCodec {
 				writeLedger(output, escapedSink);
 			}
 			byte[] encoded = bytes.toByteArray();
-			if (encoded.length > MAX_BYTES) throw new IllegalArgumentException("Chemical audit ledgers exceed 1 MiB");
+			if (encoded.length > MAX_BYTES) throw new IllegalArgumentException("Chemical audit ledgers exceed 16 MiB");
 			return encoded;
 		} catch (IOException impossible) {
 			throw new IllegalStateException("In-memory chemical audit encoding failed", impossible);
@@ -75,7 +75,7 @@ public final class ChemicalAuditLedgerCodec {
 
 	private static ChemicalTransferLedger readLedger(DataInputStream input) throws IOException {
 		int groups = input.readInt();
-		if (groups < 0 || groups > ChemicalLimits.MAX_BUCKET_GROUPS) throw new IOException("Invalid chemical audit group count");
+		if (groups < 0 || groups > ChemicalLimits.MAX_TRANSFER_GROUPS) throw new IOException("Invalid chemical audit group count");
 		List<ChemicalTransferLedger.Group> result = new ArrayList<>(groups);
 		for (int group = 0; group < groups; group++) {
 			String material = input.readUTF();
@@ -84,7 +84,7 @@ public final class ChemicalAuditLedgerCodec {
 			double mass = Double.longBitsToDouble(input.readLong());
 			long residualBits = input.readLong();
 			int entries = input.readInt();
-			if (entries <= 0 || entries > ChemicalLimits.MAX_SPECIES_PER_PARCEL) {
+			if (entries <= 0 || entries > ChemicalLimits.MAX_TRANSFER_SPECIES_PER_GROUP) {
 				throw new IOException("Invalid chemical audit species count");
 			}
 			TreeMap<String, Long> species = new TreeMap<>();

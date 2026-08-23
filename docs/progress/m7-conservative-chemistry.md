@@ -13,14 +13,16 @@
   raw-double mass residual 经 advection、split/merge、compaction、collision displacement、checkpoint/restore 和容器转移保持。
   drain/escape 与创造插入分别累计 escaped-sink/external-source 审计账本。
 - reaction 每外部 step 只在最终 advection 后、reseeding 前运行一次，并按 `(cell, chemical phase)` 聚合；相邻格、墙后与
-  不可互溶 phase 不反应。species largest-remainder 按 marker 二进制体积和 ordinal 重分配，indicator provenance 不参与分组。
+  不可互溶 phase 不反应。species largest-remainder 按 marker 反应前 exact species mass 和 ordinal 重分配，逐 marker raw
+  residual bits 不变，indicator provenance 不参与分组。
 - region-state v3 保存 registry identity、canonical mixture table、per-marker table index/indicator、region/section species 与
   residual ledger以及 source/sink extension。v1/v2 到 v3 只写非活动槽并最后发布 HEAD；门关闭、未知/损坏、缺 registry、
   fingerprint/代次/账本失配均保留并锁定。
 - `ChemicalContents v1` 与 legacy `FluidMixture v1` 互斥；玩家与发射器沿实际目标 region 执行 count=1 转移。controller
   container-transfer WAL v3 的 actor-after 只有在 v3 HEAD 发布并 durable save 后才允许清除；v1/v2 恢复语义保持。
 - protocol v3 继续携带 v2 material/phase 几何，只新增有界 species palette、每格 Top-4、展示 residual、pH 与 indicator
-  fraction。客户端颜色只读，不反写 solver。通用指示剂按 cut-face/phase flood fill，添加最多 100 BV；抹除器可重复使用。
+  fraction。客户端颜色只读，不反写 solver。通用指示剂与抹除器都是不消耗 operator 工具，按 cut-face/phase flood fill，
+  添加最多 100 BV。
 
 ## 自动验收
 
@@ -65,3 +67,11 @@ SHA-256 为 `37CB7D3D15648707D2366F7304BCD4C6DCBC8937E34A5B9EA5698E2B96416377`�
 fingerprint 下持续报告 H2O、H+/OH- 与旁观离子，过量侧和中和结果符合计量；未出现 `chemistry-blocked`、`LOCKED` 或 Mod
 异常。全部 container-transfer WAL 收敛到 durable actor-after 且目录最终为空，正常关服最后发布 checkpoint 203。至此自动门、
 真实物品事务、视觉派生和重启持久性共同闭合 M7。
+
+## 2026-08-24 双评审复核关闭
+
+在对 `6ac84b6ee^..a1871aa` 做第二轮 GPT 静态审阅，并逐项核实 DeepSeek 独立审阅后，确认并关闭了 residual、chemical WAL recovery、内部 transfer/audit 预算、indicator 跨域消费、material/phase 覆盖、reaction strata、exact-rational 资源上限，以及创造 source 语义、完整 generation discovery、gate 提示和 snapshot-first authority 等边界。完整逐项处置见 [`../archive/review/m7-gpt-review.md`](../archive/review/m7-gpt-review.md) 与 [`../archive/review/m7-review-deepseek.md`](../archive/review/m7-review-deepseek.md)。
+
+本轮保持主 Mod 0.13.0 及 region-state/protocol/container WAL v3 格式不变；indicator/eraser 明确收敛为不消耗的 operator 工具，避免为 M7 增加新的跨持久域 WAL。内部 complete transfer/audit ledger 与 parcel/bucket 小预算分离，但 `ChemicalContents v1` 仍维持原有 bucket 上限，且任何不可表示的抽取在 marker commit 前拒绝。
+
+关闭验证使用 JDK `D:\ProgramFiles\BienCreng\jdk-26.0.2` 和 Gradle offline：最终树的 `chemistry,containers` 两个完整 selector 以 2.859 s runner 时间通过，同轮 `region-state` 完整门亦通过；短 `milestone` 的 19 个领域以 10.387 s 通过；`clean assemble compileTestJava` 成功。未运行与改动无关的 soak、GPU 或新实机场景。至此两份评审均无遗留 finding，M7 正式重新关闭，M8 仍须先走独立颗粒状态设计门。
