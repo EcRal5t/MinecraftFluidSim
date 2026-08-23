@@ -30,6 +30,7 @@ public final class FlipFluidDomain {
 	private static final float FLIP_RATIO = 0.90F;
 	private static final int DEFAULT_MAX_PARTICLES = 262_144;
 	private static final int NO_PHASE = Integer.MIN_VALUE;
+	private static final int INDICATOR_AIM_SNAP_CELLS = 2;
 
 	private final int sizeX;
 	private final int sizeY;
@@ -270,20 +271,28 @@ public final class FlipFluidDomain {
 		if (indicated && !(Double.isFinite(maxAddedBlockVolume) && maxAddedBlockVolume > 0.0)) {
 			throw new IllegalArgumentException("Indicator volume budget must be finite and positive");
 		}
-		int start = cellIndexChecked(startX, startY, startZ);
-		int targetPhase = -1;
-		float dominantVolume = -1.0F;
-		int dominantMarker = Integer.MAX_VALUE;
-		for (int marker = 0; marker < particleCount; marker++) if (particleCellIndex(marker) == start) {
+		int requestedStart = cellIndexChecked(startX, startY, startZ);
+		int[] dominantPhase = new int[cellCount];
+		float[] dominantVolume = new float[cellCount];
+		int[] dominantMarker = new int[cellCount];
+		Arrays.fill(dominantPhase, -1);
+		Arrays.fill(dominantVolume, -1.0F);
+		Arrays.fill(dominantMarker, Integer.MAX_VALUE);
+		for (int marker = 0; marker < particleCount; marker++) {
+			int cell = particleCellIndex(marker);
 			float candidate = particleVolume[marker];
-			if (candidate > dominantVolume || candidate == dominantVolume && marker < dominantMarker) {
-				dominantVolume = candidate;
-				dominantMarker = marker;
-				targetPhase = chemicalParcels.registry().phaseHandleForMaterial(
+			if (candidate > dominantVolume[cell]
+					|| candidate == dominantVolume[cell] && marker < dominantMarker[cell]) {
+				dominantVolume[cell] = candidate;
+				dominantMarker[cell] = marker;
+				dominantPhase[cell] = chemicalParcels.registry().phaseHandleForMaterial(
 						materialRegistry.material(particleMaterialHandle[marker]).id());
 			}
 		}
-		if (targetPhase < 0) return IndicatorEditResult.rejected("Target cell has no chemical liquid");
+		IndicatorAimSeed seed = resolveIndicatorAimSeed(requestedStart, dominantPhase, maxScannedCells);
+		if (seed.cell() < 0) return IndicatorEditResult.rejected(seed.failure());
+		int start = seed.cell();
+		int targetPhase = dominantPhase[start];
 		if (indicated && !chemicalParcels.registry().phase(targetPhase).acceptsIndicator()) {
 			return IndicatorEditResult.rejected("Target chemical phase rejects indicator");
 		}
@@ -306,7 +315,7 @@ public final class FlipFluidDomain {
 		ArrayList<Integer> affected = new ArrayList<>();
 		visited[start] = true;
 		queue.add(start);
-		int scanned = 0;
+		int scanned = seed.scannedCells() - 1;
 		double cellVolume = 0.0;
 		while (!queue.isEmpty()) {
 			int cell = queue.removeFirst();
@@ -335,6 +344,50 @@ public final class FlipFluidDomain {
 		double blockVolume = cellVolume * config.cellSize() * config.cellSize() * config.cellSize();
 		return new IndicatorEditResult(true, scanned, changed, blockVolume, null);
 	}
+
+	/**
+	 * Display density may put the first ray-hit cell one or two cells away from the marker truth in
+	 * shallow water. Snap only through open cut faces and only within that bounded stencil; the
+	 * subsequent phase flood still begins from an actual chemical marker cell.
+	 */
+	private IndicatorAimSeed resolveIndicatorAimSeed(int requested, int[] dominantPhase, int maxScannedCells) {
+		int[] distance = new int[cellCount];
+		Arrays.fill(distance, -1);
+		ArrayDeque<Integer> queue = new ArrayDeque<>();
+		distance[requested] = 0;
+		queue.add(requested);
+		int scanned = 0;
+		while (!queue.isEmpty()) {
+			int cell = queue.removeFirst();
+			if (++scanned > maxScannedCells) {
+				return new IndicatorAimSeed(-1, scanned, "Indicator aim scan budget exceeded");
+			}
+			if (dominantPhase[cell] >= 0) return new IndicatorAimSeed(cell, scanned, null);
+			if (distance[cell] >= INDICATOR_AIM_SNAP_CELLS) continue;
+			int x = cell % sizeX;
+			int yz = cell / sizeX;
+			int y = yz % sizeY;
+			int z = yz / sizeY;
+			if (x > 0) enqueueIndicatorAimNeighbor(cell, cellIndex(x - 1, y, z), -1, 0, 0, distance, queue);
+			if (x + 1 < sizeX) enqueueIndicatorAimNeighbor(cell, cellIndex(x + 1, y, z), 1, 0, 0, distance, queue);
+			if (y > 0) enqueueIndicatorAimNeighbor(cell, cellIndex(x, y - 1, z), 0, -1, 0, distance, queue);
+			if (y + 1 < sizeY) enqueueIndicatorAimNeighbor(cell, cellIndex(x, y + 1, z), 0, 1, 0, distance, queue);
+			if (z > 0) enqueueIndicatorAimNeighbor(cell, cellIndex(x, y, z - 1), 0, 0, -1, distance, queue);
+			if (z + 1 < sizeZ) enqueueIndicatorAimNeighbor(cell, cellIndex(x, y, z + 1), 0, 0, 1, distance, queue);
+		}
+		return new IndicatorAimSeed(-1, scanned, "Target surface has no nearby chemical liquid marker");
+	}
+
+	private void enqueueIndicatorAimNeighbor(
+			int from, int neighbor, int dx, int dy, int dz, int[] distance, ArrayDeque<Integer> queue
+	) {
+		if (distance[neighbor] < 0 && openFaceFromCell(from, dx, dy, dz) > 0.0F) {
+			distance[neighbor] = distance[from] + 1;
+			queue.addLast(neighbor);
+		}
+	}
+
+	private record IndicatorAimSeed(int cell, int scannedCells, String failure) { }
 
 	private void enqueueIndicatorNeighbor(
 			int from, int neighbor, int dx, int dy, int dz, boolean[] compatible,

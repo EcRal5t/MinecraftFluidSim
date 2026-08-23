@@ -87,7 +87,8 @@ legacy 材料桶倒入化学域时，新增 marker 明确绑定该 material 的 
 仍替换手中容器，不产生隐藏 sink。
 
 通用指示剂与可重复使用抹除器按正面积 cut-face 和 compatible chemical phase flood fill；扫描上限为 region 完整 cell
-预算，添加上限为 100 BV，任何超限都在修改前整体拒绝。后来混入的 marker 保持自身 indicator provenance。
+预算，添加上限为 100 BV，任何超限都在修改前整体拒绝。浅液面的第一条显示密度射线可在不穿 solid cut-face 的前提下
+向两格内吸附到最近的实际 chemical marker cell，phase flood 始终从该真值格开始。后来混入的 marker 保持自身 indicator provenance。
 
 客户端只从 material、bounded species palette、pH 与 indicator fraction 派生颜色；indicator 为零时 pH 不改变颜色。
 `/realwater chemstatus` 是管理员按需的完整逐 species 观测并进入 transcript，display snapshot 和 tooltip 都不参与结算。

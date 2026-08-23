@@ -204,6 +204,16 @@ public final class M7ChemicalTransportValidation {
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			check(domain.chemicalParcels().indicator(marker), "connected indicated marker was skipped");
 		}
+		FlipFluidDomain.IndicatorEditResult shallowAim = domain.editIndicatorFloodFill(1, 3, 1,
+				false, 64, Double.POSITIVE_INFINITY);
+		check(shallowAim.accepted() && shallowAim.changedMarkers() == 2,
+				"shallow-surface aim did not snap to nearby chemical marker truth");
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			check(!domain.chemicalParcels().indicator(marker), "shallow-surface eraser skipped a marker");
+		}
+		added = domain.editIndicatorFloodFill(1, 1, 1, true, 64, 100.0);
+		check(added.accepted() && added.changedMarkers() == 2,
+				"indicator could not be restored after shallow-aim regression");
 
 		// A marker introduced after the fill keeps its own unmarked provenance.
 		domain.setVolume(2, 1, 1, 0.25F);
@@ -218,6 +228,15 @@ public final class M7ChemicalTransportValidation {
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			check(!domain.chemicalParcels().indicator(marker), "eraser left an indicated marker");
 		}
+
+		FlipFluidDomain wall = new FlipFluidDomain(5, 4, 4, STATIC_CONFIG, 64);
+		wall.setVolume(1, 1, 1, 0.125F);
+		wall.setSolid(2, 1, 1, true);
+		wall.setMarkerMaterial(0, MATERIALS, 0);
+		wall.bindChemistry(CHEMISTRY);
+		FlipFluidDomain.IndicatorEditResult throughWall = wall.editIndicatorFloodFill(3, 1, 1,
+				true, 64, 100.0);
+		check(!throughWall.accepted(), "shallow-aim snapping crossed a closed cut face");
 	}
 
 	private static void validateMergeAndCompaction() {
