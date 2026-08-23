@@ -271,6 +271,11 @@ public final class FlipFluidDomain {
 	public int granularSleepingColumnCount() {
 		return granularDepositDynamics == null ? 0 : granularDepositDynamics.sleepingColumnCount();
 	}
+	public boolean granularReadyForHydrostaticSleep() {
+		if (granularParcels == null) return true;
+		if (granularParcels.count() != 0 || granularDepositDynamics.dirtyColumnCount() != 0) return false;
+		return !precipitationEnabled || chemicalParcels == null || !chemicalParcels.hasDirtyCells();
+	}
 	public GranularDepositDynamics.Stats lastGranularDepositStats() { return lastGranularDepositStats; }
 	public int lastGranularCapacityHeld() {
 		return granularCollision == null ? 0 : granularCollision.lastCapacityHeld();
@@ -472,6 +477,14 @@ public final class FlipFluidDomain {
 			}
 		}
 		List<CellCandidate> insertionCells = nearbyCells(cellX, cellY, cellZ, maxRadius);
+		// A dry pour is a loose release envelope, not a vertical stack of mutually blocking
+		// numerical parcels. Prefer nearby horizontal cells; vertical cells remain bounded
+		// fallbacks when the port neighborhood or exact occupancy requires them.
+		insertionCells.sort(Comparator
+				.comparingInt((CellCandidate candidate) -> granularInsertionDistance(candidate, cellY))
+				.thenComparingInt(CellCandidate::distanceSquared)
+				.thenComparingInt(CellCandidate::index));
+		int releaseCellCount = granularReleaseCellCount(insertionCells, ledger);
 		long[] plannedSolid = granularCoupling.copySolidSvq();
 		int[] plannedParcelCounts = new int[cellCount];
 		for (int parcel = 0; parcel < granularParcels.count(); parcel++) {
@@ -480,7 +493,23 @@ public final class FlipFluidDomain {
 		ArrayList<GranularParcelDraft> positioned = new ArrayList<>(drafts.size());
 		for (GranularParcelDraft draft : drafts) {
 			int selected = -1; GranularCouplingFields.Position selectedPosition = null;
-			for (CellCandidate candidate : insertionCells) {
+			boolean[] attemptedReleaseCells = new boolean[releaseCellCount];
+			for (int candidateAttempt = 0; candidateAttempt < insertionCells.size(); candidateAttempt++) {
+				int candidateOrdinal;
+				if (candidateAttempt < releaseCellCount) {
+					candidateOrdinal = -1;
+					for (int ordinal = 0; ordinal < releaseCellCount; ordinal++) {
+						if (!attemptedReleaseCells[ordinal] && (candidateOrdinal < 0
+								|| plannedParcelCounts[insertionCells.get(ordinal).index()]
+								< plannedParcelCounts[insertionCells.get(candidateOrdinal).index()])) {
+							candidateOrdinal = ordinal;
+						}
+					}
+					attemptedReleaseCells[candidateOrdinal] = true;
+				} else {
+					candidateOrdinal = candidateAttempt;
+				}
+				CellCandidate candidate = insertionCells.get(candidateOrdinal);
 				int candidateX = candidate.index() % sizeX, candidateYz = candidate.index() / sizeX;
 				int candidateY = candidateYz % sizeY, candidateZ = candidateYz / sizeY;
 				for (int attempt = 0; attempt < 16; attempt++) {
@@ -527,6 +556,38 @@ public final class FlipFluidDomain {
 		}
 		granularExternalSource = sourceAfter;
 		return new GranularInsertion(true, insertedSvq, insertedMass, null);
+	}
+
+	/** Number of nearby cells needed to release the local inventory at its material-defined loose packing. */
+	private int granularReleaseCellCount(List<CellCandidate> insertionCells, GranularTransferLedger ledger) {
+		if (insertionCells.isEmpty()) return 0;
+		boolean[] nearby = new boolean[cellCount];
+		long looseBulkSvq = 0L;
+		for (CellCandidate candidate : insertionCells) {
+			nearby[candidate.index()] = true;
+			looseBulkSvq = Math.addExact(looseBulkSvq,
+					granularDeposits.cellBulkVolumeSvq(candidate.index()));
+		}
+		for (int parcel = 0; parcel < granularParcels.count(); parcel++) {
+			GranularParcelStore.Parcel existing = granularParcels.parcel(parcel);
+			if (nearby[granularParcelCell(existing)]) {
+				looseBulkSvq = Math.addExact(looseBulkSvq, SolidVolume.bulkVolumeCeil(
+						existing.solidVolumeSvq(), granularRegistry.material(existing.materialHandle()).restPorosityQ()));
+			}
+		}
+		for (GranularTransferLedger.Group group : ledger.groups()) {
+			var material = granularRegistry.material(granularRegistry.materialHandle(group.materialId()));
+			looseBulkSvq = Math.addExact(looseBulkSvq,
+					SolidVolume.bulkVolumeCeil(group.solidVolumeSvq(), material.restPorosityQ()));
+		}
+		long cells = Math.addExact(looseBulkSvq, SolidVolume.SVQ_PER_CELL - 1L) / SolidVolume.SVQ_PER_CELL;
+		return (int) Math.min(insertionCells.size(), Math.max(1L, cells));
+	}
+
+	private int granularInsertionDistance(CellCandidate candidate, int centerY) {
+		int yz = candidate.index() / sizeX;
+		int deltaY = yz % sizeY - centerY;
+		return candidate.distanceSquared() + 8 * deltaY * deltaY;
 	}
 
 	/** Extracts only same-cell active parcels and the one exposed deposit group, never deep inventory. */
@@ -2048,11 +2109,14 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				GranularMechanics.stepVelocities(granularParcels, granularRegistry, granularEnvironment(),
 						config.cellSize(), config.gravity(), dt);
 				granularCollision.preview(granularParcels, granularRegistry, dt);
-				granularCollision.resolveCapacity(granularParcels, granularCoupling,
-						cell -> SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell)));
 				granularNextCoupling.rebuild(granularParcels, granularDeposits, granularCollision::previewPosition);
 				if (!granularOccupancyFitsGeometry(granularNextCoupling)) {
-					throw new IllegalStateException("Locally resolved granular occupancy exceeds geometry");
+					granularCollision.resolveCapacity(granularParcels, granularCoupling,
+							cell -> SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell)));
+					granularNextCoupling.rebuild(granularParcels, granularDeposits, granularCollision::previewPosition);
+					if (!granularOccupancyFitsGeometry(granularNextCoupling)) {
+						throw new IllegalStateException("Locally resolved granular occupancy exceeds geometry");
+					}
 				}
 				pressureGranularCoupling = granularNextCoupling;
 			}

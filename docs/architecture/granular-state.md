@@ -85,9 +85,11 @@ mismatch，不重解释存量；unknown/corrupt/missing/identity mismatch 全部
 composition handle、contact age 和 flags。runtime handle 不上链。drag 使用 physical grain diameter；parcel 数值
 聚合体积不能把许多细粒错误地变成一颗大球。
 
-- split 按最大 parcel SVQ 确定性切分，末项取体积、质量和组成余数；外部 insert 的各 piece 使用碰撞合法的
-  deterministic sub-cell 低差异位置，并按这些实际位置的同一 8 格 exact occupancy 权重预检容量，禁止把整格
-  piece 重叠在格心或只按目标格伪检容量。merge 仅限同格、同材料、单位 SVQ species 比例相同且速度相近的
+- split 按最大 parcel SVQ 确定性切分，末项取体积、质量和组成余数；外部 dry insert 先按各材料 rest porosity
+  推导本次及端口近邻既有库存的 loose bulk，至少使用能容纳该 bulk 的近邻格，并优先形成端口附近的水平释放
+  包络，垂直格只作有界容量回退。各 piece 使用碰撞合法的 deterministic sub-cell 低差异位置，并按这些实际位置的
+  同一 8 格 exact occupancy 权重预检容量，禁止把整格 piece 重叠在格心、从最近格依次塞满或只按目标格伪检容量。
+  merge 仅限同格、同材料、单位 SVQ species 比例相同且速度相近的
   parcel，并保持质量、动量、质心和 absolute composition；有界 compaction 的候选检查也计入 operation budget。
 - hard capacity 不足时 creation/phase transfer/container insert 在提交前整体拒绝，不能覆盖、删小项或强塞 deposit。
 - inert solid composition handle 为 0；reactive solid 使用独立 bounded `SolidCompositionRecord`，不复用 M7
@@ -121,7 +123,8 @@ F_buoyancy = -rho_f V_submerged g
 归一 stencil 散回有质量的 MAC faces。无墙、无重力 fixture 中 fluid+parcel 总动量必须闭合。世界/deposit 碰撞
 使用独立半径的 sweep/CCD，只截断法向并按材料摩擦/restitution 更新切向；边界冲量单独报告。
 
-液体和 granular 最大速度共同决定现有 CFL substep 数，颗粒不能使用会穿墙的更粗时间步。
+低能接触使用与 solver cell 尺度绑定的 restitution dead zone，防止每 tick 重施重力后产生永不积累 contact age 的
+亚可见弹跳。液体和 granular 最大速度共同决定现有 CFL substep 数，颗粒不能使用会穿墙的更粗时间步。
 
 ## 精确排水和统一压力几何
 
@@ -160,7 +163,9 @@ u* = u / (1 + dt mu / (rho K))
 ## 沉积、安息角、休眠与局部唤醒
 
 parcel 只有在接触 support、法向速度/动能连续低于材料门、局部 capacity/group/queue 预算可满足且坡面 plan 合法时
-才原子转为 deposit。失败时保持活动 parcel。
+才原子转为 deposit。目标必须是该柱从基面向上的首个真实 bulk-capable 层；活动 occupancy 暂时占满该层时保持
+活动并作确定性表面流动，禁止跳过下层在上方空格生成 deposit。settlement add 与 relaxation receiver 都必须在提交前
+满足八邻域安息角包络；失败时保持活动 parcel 或保留原 deposit。
 
 安息角只在局部 dirty surface 上做守恒松弛。邻域包含四个水平 face，以及通过两段开放 face path 校验的四个对角；
 对角距离为 `sqrt(2)h`，不得穿 closed corner。超过 `distance*tan(reposeAngle)` 的 bulk 高差向下换算成可移动

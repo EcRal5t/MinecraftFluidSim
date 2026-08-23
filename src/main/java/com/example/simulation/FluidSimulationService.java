@@ -1396,6 +1396,7 @@ public final class FluidSimulationService {
 		float residualLimit = Math.max(1.0E-5F, region.domain().config().pressureTolerance() * 4.0F);
 		boolean hydrostaticCandidate = !collisionsChanged && affectedEntities == 0
 				&& region.domain().maximumParticleSpeed() <= HYDROSTATIC_MAX_MARKER_SPEED
+				&& region.domain().granularReadyForHydrostaticSleep()
 				&& stats != null && stats.pressureResidual() <= residualLimit;
 		if (region.lifecycle().observeCompletedStep(hydrostaticCandidate, HYDROSTATIC_QUIET_STEPS)) {
 			float exactVolume = region.domain().totalVolume();

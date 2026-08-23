@@ -35,7 +35,8 @@ public final class M8GranularValidation {
 		porousBedPreservesHydrostatics();
 		settlingRelaxationSleepAndWakeAreLocal();
 		solverCouplingPreservesInventories(fast ? 8 : 80);
-		wholeBucketCongestionRemainsLocal(fast ? 16 : 40);
+		wholeBucketCongestionRemainsLocal(fast ? 40 : 200);
+		if (!fast) singleBucketPourSettlesWithinTenSeconds();
 		emptyGranularGateHasBoundedWallTime(fast ? 8 : 24);
 		System.out.println("M8 granular core gate passed: exact inventory, coupling, repose, sleep and local wake");
 	}
@@ -685,10 +686,21 @@ public final class M8GranularValidation {
 		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted()
 				&& domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted(),
 				"two-bucket granular congestion fixture could not be inserted");
+		long releaseCells = domain.exportGranularState().activeParcels().stream()
+				.map(parcel -> cellIndex(
+						Math.min(7, (int) (parcel.x() / 0.5F)),
+						Math.min(7, (int) (parcel.y() / 0.5F)),
+						Math.min(7, (int) (parcel.z() / 0.5F)), 8, 8))
+				.distinct().count();
+		require(releaseCells >= 24L,
+				"two-bucket release was packed into too few solver cells: " + releaseCells);
+		require(!domain.granularReadyForHydrostaticSleep(),
+				"active granular inventory incorrectly allowed hydrostatic sleep");
 		long exactSvq = Math.multiplyExact(2L, SolidVolume.SVQ_PER_BV);
 		double exactMass = 2.0 * bucket.totalMass();
 		long previous = granularMotionSignature(domain.exportGranularState());
 		int unchangedSteps = 0;
+		int emptyAt = -1;
 		boolean moved = false, locallyHeld = false;
 		for (int step = 0; step < steps; step++) {
 			try {
@@ -701,6 +713,9 @@ public final class M8GranularValidation {
 						+ ", dynamics=" + domain.lastGranularDepositStats(), failure);
 			}
 			GranularStateSnapshot state = domain.exportGranularState();
+			if (emptyAt < 0 && state.activeParcels().isEmpty()) emptyAt = step + 1;
+			assertTransientPileIsGroundedAndBounded(state,
+					granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND)));
 			long signature = granularMotionSignature(state);
 			if (!state.activeParcels().isEmpty() && signature == previous) unchangedSteps++;
 			else unchangedSteps = 0;
@@ -708,7 +723,9 @@ public final class M8GranularValidation {
 			locallyHeld |= domain.lastGranularCapacityHeld() > 0
 					&& domain.lastGranularCapacityHeld() < state.activeParcels().size();
 			require(unchangedSteps < 6,
-					"whole-bucket granular inventory froze globally while active parcels remained");
+					"whole-bucket granular inventory froze globally while active parcels remained: step=" + step
+							+ ", active=" + state.activeParcels().size() + ", deposits="
+							+ state.depositGroups().size() + ", held=" + domain.lastGranularCapacityHeld());
 			require(domain.totalGranularSolidVolumeSvq() == exactSvq
 					&& rawClose(domain.totalGranularMass(), exactMass),
 					"whole-bucket congestion changed exact granular inventory");
@@ -719,6 +736,104 @@ public final class M8GranularValidation {
 		GranularStateSnapshot settled = domain.exportGranularState();
 		require(!settled.depositGroups().isEmpty() && settled.activeParcels().size() < 1_024,
 				"whole-bucket local contacts did not make progress into conservative deposits");
+		if (steps >= 200) require(settled.activeParcels().size() <= 64,
+				"two-bucket loose pour left too much active inventory after ten seconds");
+		if (!settled.activeParcels().isEmpty()) require(!domain.granularReadyForHydrostaticSleep(),
+				"unfinished granular settlement incorrectly allowed hydrostatic sleep");
+		long floorActive = settled.activeParcels().stream().filter(parcel -> parcel.y() < 0.2F).count();
+		long movingActive = settled.activeParcels().stream().filter(parcel ->
+				parcel.velocityX() * parcel.velocityX() + parcel.velocityY() * parcel.velocityY()
+						+ parcel.velocityZ() * parcel.velocityZ() > 0.025F * 0.025F).count();
+		long activeColumns = settled.activeParcels().stream().map(parcel ->
+				Math.min(7, (int) (parcel.z() / 0.5F)) * 8 + Math.min(7, (int) (parcel.x() / 0.5F)))
+				.distinct().count();
+		System.out.printf("  two-bucket granular fixture after %d steps: active=%d emptyAt=%d floor=%d moving=%d columns=%d depositGroups=%d%n",
+				steps, settled.activeParcels().size(), emptyAt, floorActive, movingActive, activeColumns,
+				settled.depositGroups().size());
+	}
+
+	private static void singleBucketPourSettlesWithinTenSeconds() {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
+		domain.bindGranular(granular, liquids);
+		double density = granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND))
+				.referenceDensity();
+		GranularTransferLedger bucket = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
+				BuiltinGranularDefinitions.FINE_SAND, SolidVolume.SVQ_PER_BV,
+				SolidVolume.toCellVolume(SolidVolume.SVQ_PER_BV) * density, null)));
+		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted(),
+				"single-bucket pour fixture could not be inserted");
+		ParticulateMaterial sand = granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND));
+		int emptyAt = -1;
+		for (int step = 0; step < 200; step++) {
+			domain.step();
+			GranularStateSnapshot state = domain.exportGranularState();
+			assertTransientPileIsGroundedAndBounded(state, sand);
+			if (emptyAt < 0 && state.activeParcels().isEmpty()) emptyAt = step + 1;
+			require(domain.totalGranularSolidVolumeSvq() == SolidVolume.SVQ_PER_BV
+					&& rawClose(domain.totalGranularMass(), bucket.totalMass()),
+					"single-bucket pour changed exact granular inventory");
+		}
+		GranularStateSnapshot settled = domain.exportGranularState();
+		require(emptyAt > 0 && emptyAt <= 200 && settled.activeParcels().isEmpty(),
+				"single-bucket pour left active display parcels after ten seconds");
+		require(!settled.depositGroups().isEmpty() && domain.granularReadyForHydrostaticSleep(),
+				"completed single-bucket deposit did not reach granular sleep readiness");
+		long bulkSvq = 0L;
+		for (GranularStateSnapshot.DepositGroup group : settled.depositGroups()) {
+			bulkSvq = Math.addExact(bulkSvq,
+					SolidVolume.bulkVolumeCeil(group.solidVolumeSvq(), group.porosityQ()));
+		}
+		long expectedBulkSvq = SolidVolume.bulkVolumeCeil(SolidVolume.SVQ_PER_BV, sand.restPorosityQ());
+		require(bulkSvq >= expectedBulkSvq
+				&& bulkSvq - expectedBulkSvq < settled.depositGroups().size(),
+				"single-bucket derived bulk volume changed across deposit cells");
+		System.out.printf("  single-bucket loose pour settled all active parcels at step %d, bulk=%.6f BV%n",
+				emptyAt, bulkSvq / (double) SolidVolume.SVQ_PER_BV);
+	}
+
+	private static void assertTransientPileIsGroundedAndBounded(
+			GranularStateSnapshot state, ParticulateMaterial material
+	) {
+		int sizeX = state.sizeX(), sizeY = state.sizeY(), sizeZ = state.sizeZ();
+		long[] skeleton = new long[sizeX * sizeY * sizeZ];
+		int[] porosity = new int[skeleton.length];
+		for (GranularStateSnapshot.DepositGroup group : state.depositGroups()) {
+			skeleton[group.cell()] = Math.addExact(skeleton[group.cell()], group.solidVolumeSvq());
+			if (porosity[group.cell()] != 0 && porosity[group.cell()] != group.porosityQ()) {
+				throw new AssertionError("deposit groups disagree on cell porosity");
+			}
+			porosity[group.cell()] = group.porosityQ();
+		}
+		long[] surface = new long[sizeX * sizeZ];
+		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int cell = cellIndex(x, y, z, sizeX, sizeY);
+			if (skeleton[cell] == 0L) continue;
+			if (y > 0) require(skeleton[cellIndex(x, y - 1, z, sizeX, sizeY)] > 0L,
+					"granular settlement created an unsupported floating deposit cell at "
+							+ x + "," + y + "," + z + " with skeleton=" + skeleton[cell]);
+			long bulk = SolidVolume.bulkVolumeCeil(skeleton[cell], porosity[cell]);
+			surface[z * sizeX + x] = Math.max(surface[z * sizeX + x],
+					Math.addExact(Math.multiplyExact((long) y, SolidVolume.SVQ_PER_CELL), bulk));
+		}
+		long discreteTolerance = 2L * SolidVolume.bulkVolumeCeil(
+				GranularLimits.MAX_PARCEL_VOLUME_SVQ, material.restPorosityQ());
+		for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) {
+			for (int dz = -1; dz <= 1; dz++) for (int dx = -1; dx <= 1; dx++) {
+				if (dx == 0 && dz == 0 || x + dx < 0 || x + dx >= sizeX
+						|| z + dz < 0 || z + dz >= sizeZ) continue;
+				long rise = Math.abs(surface[z * sizeX + x] - surface[(z + dz) * sizeX + x + dx]);
+				long repose = (long) Math.floor(Math.hypot(dx, dz) * Math.tan(material.reposeAngleRadians())
+						* SolidVolume.SVQ_PER_CELL);
+				require(rise <= repose + discreteTolerance,
+						"transient granular settlement produced an over-steep deposit column at "
+								+ x + "," + z + " toward " + (x + dx) + "," + (z + dz)
+								+ ": rise=" + rise + ", limit=" + (repose + discreteTolerance));
+			}
+		}
 	}
 
 	private static long granularMotionSignature(GranularStateSnapshot state) {

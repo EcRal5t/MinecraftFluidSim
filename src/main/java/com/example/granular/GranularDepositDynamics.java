@@ -108,12 +108,26 @@ public final class GranularDepositDynamics {
 			int x = coordinate(parcel.x(), sizeX), yStart = coordinate(parcel.y(), sizeY);
 			int z = coordinate(parcel.z(), sizeZ);
 			int sourceCell = cell(x, yStart, z);
+			ParticulateMaterial material = registry.material(parcel.materialHandle());
+			GranularDepositStore.SolidPortion addition = new GranularDepositStore.SolidPortion(
+					parcel.materialHandle(), parcel.solidCompositionHandle(),
+					parcel.solidVolumeSvq(), parcel.mass());
 			boolean deposited = false;
-			for (int y = yStart; y < sizeY; y++) {
+			for (int y = 0; y <= yStart; y++) {
 				int cell = cell(x, y, z);
 				long open = environment.geometricOpenSvq(cell);
 				if (open <= 0L) continue;
-				if (!environment.planSettlement(parcel, cell)) continue;
+				if (deposits.previewCellBulkVolumeAfterAdd(cell, addition) > open) continue;
+				if (!settlementSlopeAllowed(cell, parcel, material, environment)) {
+					if (rollParcelDownhill(parcelIndex, parcel, cell, environment)) operations++;
+					break;
+				}
+				// The first bulk-capable layer is the only legal target. Active occupancy may make
+				// it temporarily unavailable, but that never licenses a deposit in an upper void.
+				if (!environment.planSettlement(parcel, cell)) {
+					if (rollParcelDownhill(parcelIndex, parcel, cell, environment)) operations++;
+					break;
+				}
 				if (inventory.depositParcel(parcelIndex, cell, open)) {
 					environment.onSolidChanged(sourceCell);
 					environment.onSolidChanged(cell);
@@ -122,6 +136,8 @@ public final class GranularDepositDynamics {
 					break;
 				}
 				environment.cancelSettlement(parcel, cell);
+				if (rollParcelDownhill(parcelIndex, parcel, cell, environment)) operations++;
+				break;
 			}
 			if (!deposited) parcelIndex++;
 		}
@@ -205,11 +221,17 @@ public final class GranularDepositDynamics {
 				Math.min(exposed.solidVolumeSvq(), requestedSkeleton));
 		if (requestedSkeleton <= 0L) return false;
 		int receiverX = bestColumn % sizeX, receiverZ = bestColumn / sizeX;
+		double movedMass = requestedSkeleton == exposed.solidVolumeSvq() ? exposed.mass()
+				: exposed.mass() * ((double) requestedSkeleton / exposed.solidVolumeSvq());
+		GranularDepositStore.SolidPortion moved = new GranularDepositStore.SolidPortion(
+				exposed.materialHandle(), exposed.solidCompositionHandle(), requestedSkeleton, movedMass);
 		for (int y = 0; y < sizeY; y++) {
 			int receiver = cell(receiverX, y, receiverZ);
 			long open = environment.geometricOpenSvq(receiver);
 			if (open <= 0L) continue;
-			if (!environment.planRelaxation(surfaceCell, receiver, requestedSkeleton)) continue;
+			if (deposits.previewCellBulkVolumeAfterAdd(receiver, moved) > open) continue;
+			if (!additionSlopeAllowed(receiver, moved, material, environment)) return false;
+			if (!environment.planRelaxation(surfaceCell, receiver, requestedSkeleton)) return false;
 			if (deposits.tryMove(surfaceCell, receiver, exposed.materialHandle(),
 					exposed.solidCompositionHandle(), requestedSkeleton, open)) {
 				environment.onSolidChanged(surfaceCell);
@@ -218,8 +240,70 @@ public final class GranularDepositDynamics {
 				return true;
 			}
 			environment.cancelRelaxation(surfaceCell, receiver, requestedSkeleton);
+			return false;
 		}
 		return false;
+	}
+
+	private boolean settlementSlopeAllowed(
+			int cell, GranularParcelStore.Parcel parcel, ParticulateMaterial material, Environment environment
+	) {
+		GranularDepositStore.SolidPortion addition = new GranularDepositStore.SolidPortion(
+				parcel.materialHandle(), parcel.solidCompositionHandle(), parcel.solidVolumeSvq(), parcel.mass());
+		return additionSlopeAllowed(cell, addition, material, environment);
+	}
+
+	private boolean additionSlopeAllowed(
+			int cell, GranularDepositStore.SolidPortion addition,
+			ParticulateMaterial material, Environment environment
+	) {
+		int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
+		long previousSurface = columnSurfaceSvq(z * sizeX + x);
+		long previousCellBulk = deposits.cellBulkVolumeSvq(cell);
+		long nextCellBulk = deposits.previewCellBulkVolumeAfterAdd(cell, addition);
+		long addedCellSurface = Math.addExact(Math.multiplyExact((long) y, SolidVolume.SVQ_PER_CELL), nextCellBulk);
+		long candidateSurface = Math.max(previousSurface, addedCellSurface);
+		long discreteAllowance = nextCellBulk - previousCellBulk;
+		for (int neighbor = 0; neighbor < NEIGHBOR_X.length; neighbor++) {
+			int dx = NEIGHBOR_X[neighbor], dz = NEIGHBOR_Z[neighbor];
+			int neighborX = x + dx, neighborZ = z + dz;
+			if (!insideColumn(neighborX, neighborZ) || !environment.horizontalPathOpen(cell, dx, dz)) continue;
+			double distance = neighbor < 4 ? 1.0 : Math.sqrt(2.0);
+			long reposeRise = (long) Math.floor(distance * Math.tan(material.reposeAngleRadians())
+					* SolidVolume.SVQ_PER_CELL);
+			long neighborSurface = columnSurfaceSvq(neighborZ * sizeX + neighborX);
+			if (candidateSurface - neighborSurface > Math.addExact(reposeRise, discreteAllowance)) return false;
+		}
+		return true;
+	}
+
+	/** Low-cost surface flow for a supported parcel whose addition would exceed the local repose envelope. */
+	private boolean rollParcelDownhill(
+			int parcelIndex, GranularParcelStore.Parcel parcel, int surfaceCell, Environment environment
+	) {
+		int x = surfaceCell % sizeX, yz = surfaceCell / sizeX, z = yz / sizeY;
+		int bestNeighbor = -1;
+		long bestSurface = Long.MAX_VALUE;
+		int directionStart = (int) ((parcelIndex * 0x9E3779B9L + logicalStep) & 7L);
+		for (int offset = 0; offset < NEIGHBOR_X.length; offset++) {
+			int neighbor = (directionStart + offset) & 7;
+			int dx = NEIGHBOR_X[neighbor], dz = NEIGHBOR_Z[neighbor];
+			int neighborX = x + dx, neighborZ = z + dz;
+			if (!insideColumn(neighborX, neighborZ)
+					|| !environment.horizontalPathOpen(surfaceCell, dx, dz)) continue;
+			long height = columnSurfaceSvq(neighborZ * sizeX + neighborX);
+			if (height < bestSurface) { bestSurface = height; bestNeighbor = neighbor; }
+		}
+		if (bestNeighbor < 0) return false;
+		float dx = NEIGHBOR_X[bestNeighbor], dz = NEIGHBOR_Z[bestNeighbor];
+		float inverseLength = dx != 0.0F && dz != 0.0F ? (float) (1.0 / Math.sqrt(2.0)) : 1.0F;
+		float speed = Math.max(0.15F, cellSize * 0.75F);
+		parcels.overwrite(parcelIndex, new GranularParcelStore.Parcel(
+				parcel.x(), parcel.y(), parcel.z(), dx * inverseLength * speed, 0.0F,
+				dz * inverseLength * speed, parcel.solidVolumeSvq(), parcel.mass(), parcel.materialHandle(),
+				parcel.solidCompositionHandle(), 0,
+				(byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED)));
+		return true;
 	}
 
 	private long columnBulkSvq(int column) {

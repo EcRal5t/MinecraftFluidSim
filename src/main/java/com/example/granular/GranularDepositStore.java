@@ -46,6 +46,14 @@ public final class GranularDepositStore {
 		return skeleton == 0L ? 0L : SolidVolume.bulkVolumeCeil(skeleton, porosityQByCell[cell]);
 	}
 
+	/** Derived bulk height for an uncommitted add; no sparse inventory is changed. */
+	public long previewCellBulkVolumeAfterAdd(int cell, SolidPortion portion) {
+		requireCell(cell);
+		validate(portion);
+		long total = Math.addExact(cellSolidVolumeSvq(cell), portion.solidVolumeSvq());
+		return SolidVolume.bulkVolumeCeil(total, porosityAfterAdding(cell, portion, total));
+	}
+
 	public Group dominantGroup(int cell) {
 		requireCell(cell);
 		int best = -1;

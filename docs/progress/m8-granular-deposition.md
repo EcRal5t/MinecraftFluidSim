@@ -294,3 +294,24 @@ M8 尚不在完成索引中：最后只等待一个真实 controller 合并场�
   --no-daemon` 成功（15 秒），根 `:runServer` 加载 0.14.0 到 `Done` 后正常 `stop`。新候选 JAR SHA-256 为
   `E7FB9F90879AFCF6C1B86FFF1EA5482D7831BCB67AF12851789024AC1F910F67`；上一形态候选以
   `realwater-0.14.0-pre-local-congestion-fix.jar.disabled` 可恢复保留，同一主 Mod id 仍只有一个启用 JAR。
+
+## M8.14 单桶松散投放、落层形态与休眠修正（2026-08-24）
+
+- 新候选实机仍显示一桶细沙先形成同步下落的少数密团，触底瞬间生成高瘦 deposit 柱，随后缓慢摊平；最终
+  `granstatus` 为 exact `134,217,728 SVQ / 20,800 mass`，但区域在仍有 163 个 active parcel 时错误进入
+  hydrostatic sleep。黄色残留点因此是权威 active inventory，不是客户端陈旧帧；白色点为另一材料的 active sample。
+- 根因不是守恒体积变大：fine sand 的 rest porosity 为 38%，所以 1 BV skeleton 的派生静止 bulk 精确为
+  `1/(1-0.38) = 1.612903 BV`。active glyph 是有尺寸上限的抽样点，不按体积填充；客户端 deposit mesh 的逐格 fill
+  与服务端 bulk 一致，量化误差每占用格小于 1/255 solver cell。
+- dry insert 原先从最近 solver cell 逐格塞满，单桶 512 个最大 parcel 只形成少数竖向高密度列。现在按材料孔隙率
+  计算端口近邻既有库存加本次注入所需的 loose bulk cell 数，在这些格间确定性均衡，并优先使用水平近邻；第二桶
+  会扩大到约 26 个求解格而不是再次叠入第一桶的列。exact 8-cell occupancy、碰撞和原子拒绝门保持不变。
+- contact restitution 增加 cell-scale 低能 dead zone，消除每 tick 重力造成的永久微弹跳。active→deposit 只允许落入
+  从基面向上的首个 bulk-capable 层；该层被 active occupancy 暂占时不得越层生成悬空柱，而是保持 active 并作局部
+  表面流动。settlement 与 relaxation receiver 都在提交前检查八邻域安息角，避免先生成尖柱再慢慢修平。
+- hydrostatic sleep 现在额外要求 active parcel 为零、deposit dirty queue 为空，且启用 precipitation 时没有 pending
+  granular chemistry；不再以清零或未显示速度冒充完成沉积。
+- `granular` 完整门把原两桶拥塞场景延长到 200 步，并逐步拒绝悬空 deposit、超安息角、连续六步全域冻结及任何
+  SVQ/mass 漂移；十秒后只剩 12/1024 active。新增同一 selector 内的单桶真实产品回归，不增加 Gradle task：全部
+  512 parcel 在第 117 步（5.85 秒）转为 deposit，200 步时进入 granular sleep-ready，派生 bulk 为
+  `1.612903 BV`。完整门 runner 2.394 秒，空 granular gate 中位数开销 +0.1%。
