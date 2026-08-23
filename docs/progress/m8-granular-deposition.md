@@ -290,3 +290,7 @@ M8 尚不在完成索引中：最后只等待一个真实 controller 合并场�
 - 截图中的黄色“花团”是同一小区域内几十个原 4.7 cm display cube 相互遮挡后的轮廓，不是单个物理 parcel；只读
   active glyph 上限缩到约 2 cm，使整桶代表 parcel 呈点云。自由落体中同材质 parcel 受同一重力而近似同步仍属低成本
   模型边界；glyph 不添加假位移，也不反写 exact volume、碰撞半径或沉积形态。
+- 完整 `granular,protocol --rerun-tasks` 分别通过 2.225/0.251 秒；`clean assemble compileTestJava --offline
+  --no-daemon` 成功（15 秒），根 `:runServer` 加载 0.14.0 到 `Done` 后正常 `stop`。新候选 JAR SHA-256 为
+  `E7FB9F90879AFCF6C1B86FFF1EA5482D7831BCB67AF12851789024AC1F910F67`；上一形态候选以
+  `realwater-0.14.0-pre-local-congestion-fix.jar.disabled` 可恢复保留，同一主 Mod id 仍只有一个启用 JAR。
