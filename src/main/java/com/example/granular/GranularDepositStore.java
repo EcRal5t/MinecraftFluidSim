@@ -1,6 +1,7 @@
 package com.example.granular;
 
 import java.util.Arrays;
+import java.util.function.Predicate;
 
 /** Sparse primitive deposit inventory. Bulk volume is derived; only skeleton SVQ and mass are conserved here. */
 public final class GranularDepositStore {
@@ -54,6 +55,20 @@ public final class GranularDepositStore {
 		}
 		return best < 0 ? null : new Group(materialHandle[best], solidCompositionHandle[best],
 				solidVolumeSvq[best], mass[best]);
+	}
+
+	/** Finds one canonical in-cell group without exposing the sparse entry representation. */
+	public Group matchingGroup(int cell, int material, Predicate<Group> predicate) {
+		requireCell(cell);
+		if (predicate == null) throw new IllegalArgumentException("Deposit group predicate is missing");
+		registry.material(material);
+		for (int entry = headByCell[cell]; entry >= 0; entry = next[entry]) {
+			if (materialHandle[entry] != material) continue;
+			Group group = new Group(materialHandle[entry], solidCompositionHandle[entry],
+					solidVolumeSvq[entry], mass[entry]);
+			if (predicate.test(group)) return group;
+		}
+		return null;
 	}
 
 	public boolean tryMove(

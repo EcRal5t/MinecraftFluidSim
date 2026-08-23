@@ -7,6 +7,7 @@ import com.example.chemistry.ExactRational;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.TreeMap;
+import java.math.BigInteger;
 
 /** Immutable absolute solid species inventory; indicator and liquid phase never enter this record. */
 public final class SolidCompositionRecord {
@@ -93,6 +94,33 @@ public final class SolidCompositionRecord {
 			result.put(registry.species(speciesHandles[index]).id(), amounts[index]);
 		}
 		return Map.copyOf(result);
+	}
+
+	/** True when both absolute inventories describe the same species ratios per exact solid SVQ. */
+	public boolean proportionalTo(SolidCompositionRecord other, long solidVolumeSvq, long otherSolidVolumeSvq) {
+		if (other == null || solidVolumeSvq <= 0L || otherSolidVolumeSvq <= 0L
+				|| !Arrays.equals(speciesHandles, other.speciesHandles)) return false;
+		BigInteger leftVolume = BigInteger.valueOf(solidVolumeSvq);
+		BigInteger rightVolume = BigInteger.valueOf(otherSolidVolumeSvq);
+		for (int entry = 0; entry < amounts.length; entry++) {
+			if (!BigInteger.valueOf(amounts[entry]).multiply(rightVolume).equals(
+					BigInteger.valueOf(other.amounts[entry]).multiply(leftVolume))) return false;
+		}
+		return true;
+	}
+
+	/** Adds two absolute inventories after their grouping compatibility has been established. */
+	public SolidCompositionRecord plus(SolidCompositionRecord other) {
+		if (other == null || !Arrays.equals(speciesHandles, other.speciesHandles)) {
+			throw new IllegalArgumentException("Solid compositions have different species palettes");
+		}
+		long[] combined = amounts.clone();
+		for (int entry = 0; entry < combined.length; entry++) {
+			combined[entry] = Math.addExact(combined[entry], other.amounts[entry]);
+		}
+		double residual = massResidual() + other.massResidual();
+		if (!Double.isFinite(residual)) throw new ArithmeticException("Solid composition residual overflow");
+		return new SolidCompositionRecord(speciesHandles, combined, Double.doubleToRawLongBits(residual));
 	}
 
 	@Override public boolean equals(Object other) {

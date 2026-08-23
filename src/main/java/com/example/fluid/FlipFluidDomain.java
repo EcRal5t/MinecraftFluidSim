@@ -918,6 +918,7 @@ public final class FlipFluidDomain {
 				Math.multiplyExact(cellCount, GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL));
 		solidCompositions = new SolidCompositionPool(chemicalParcels.registry(),
 				Math.addExact(GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, depositCapacity));
+		granularInventory.bindSolidCompositions(solidCompositions);
 		granularPhaseTransfer = new GranularPhaseTransferEngine(chemicalParcels.registry());
 	}
 

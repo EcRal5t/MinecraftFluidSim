@@ -194,6 +194,26 @@ public final class M8GranularValidation {
 				&& restored.totalSolidVolumeSvq() == snapshot.totalSolidVolumeSvq()
 				&& restored.totalMassBits() == snapshot.totalMassBits(),
 				"solid composition snapshot round-trip changed inventory");
+
+		SolidCompositionPool mergeCompositions = new SolidCompositionPool(BuiltinChemicalDefinitions.REGISTRY, 4);
+		GranularParcelStore mergeParcels = new GranularParcelStore(registry, 4);
+		GranularDepositStore mergeDeposits = new GranularDepositStore(registry, 1, 4);
+		GranularInventory mergeInventory = new GranularInventory(mergeParcels, mergeDeposits);
+		mergeInventory.bindSolidCompositions(mergeCompositions);
+		for (int parcel = 0; parcel < 2; parcel++) {
+			int composition = mergeCompositions.create(activeRecord);
+			mergeParcels.add(new GranularParcelStore.Parcel(0.25F, 0.25F, 0.25F, 0.0F, 0.0F, 0.0F,
+					10L, activeRecord.totalMass(BuiltinChemicalDefinitions.REGISTRY), precipitate, composition,
+					GranularDepositDynamics.SETTLE_CONTACT_STEPS, GranularParcelStore.FLAG_SUPPORTED));
+			require(mergeInventory.depositParcel(0, 0, SolidVolume.SVQ_PER_CELL),
+					"compatible reactive parcel did not enter its deposit group");
+		}
+		GranularStateSnapshot merged = GranularStateSnapshot.capture(
+				1, 1, 1, registry, mergeParcels, mergeDeposits, mergeCompositions);
+		require(mergeDeposits.groupCount() == 1 && mergeCompositions.liveCount() == 1
+				&& merged.depositGroups().size() == 1
+				&& merged.solidSpeciesTotals().get(BuiltinChemicalDefinitions.NA_PLUS) == 1_280L,
+				"proportional reactive deposits did not merge into one persistent canonical group");
 	}
 
 	private static void registryDefinitionsAndWorldSnapshotAreStrict() throws Exception {
