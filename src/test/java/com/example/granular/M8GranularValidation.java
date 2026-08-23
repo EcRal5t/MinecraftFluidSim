@@ -70,7 +70,7 @@ public final class M8GranularValidation {
 				"bounded granular display snapshot lost its identity, geometry or active sample");
 		long distinctPositions = display.activeParcels().stream().map(sample ->
 				((long) sample.xQ() << 32) | ((long) sample.yQ() << 16) | sample.zQ()).distinct().count();
-		require(distinctPositions >= 32L && display.activeParcels().stream().allMatch(sample -> sample.diameterQ() <= 24),
+		require(distinctPositions >= 32L && display.activeParcels().stream().allMatch(sample -> sample.diameterQ() <= 10),
 				"dry granular insertion collapsed representative parcels onto shared cell centers");
 		FlipFluidDomain.GranularExtraction extracted = domain.tryExtractExactGranular(
 				2, 2, 2, SolidVolume.SVQ_PER_BV, 3, true);

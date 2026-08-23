@@ -287,3 +287,6 @@ M8 尚不在完成索引中：最后只等待一个真实 controller 合并场�
 - `granular` selector 沿用已有任务增加两桶、1024 parcel、40-step 动态回归：必须在同一步实际出现局部 held 和继续
   moving，两者不得退化成全域静止；active 未结算时不得连续六步状态不变，且每步 total SVQ/mass 精确闭合。完整
   granular 门通过，runner 2.209 秒；没有增加 selector 或长期常态测试。
+- 截图中的黄色“花团”是同一小区域内几十个原 4.7 cm display cube 相互遮挡后的轮廓，不是单个物理 parcel；只读
+  active glyph 上限缩到约 2 cm，使整桶代表 parcel 呈点云。自由落体中同材质 parcel 受同一重力而近似同步仍属低成本
+  模型边界；glyph 不添加假位移，也不反写 exact volume、碰撞半径或沉积形态。

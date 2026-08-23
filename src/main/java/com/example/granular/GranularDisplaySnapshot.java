@@ -11,7 +11,7 @@ public record GranularDisplaySnapshot(
 		List<MaterialEntry> materials, byte[] depositBulkFill, byte[] depositPorosity,
 		short[] depositTopMaterial, List<ParcelSample> activeParcels
 ) {
-	private static final int MAX_PARCEL_GLYPH_DIAMETER_Q = 24;
+	private static final int MAX_PARCEL_GLYPH_DIAMETER_Q = 10;
 	public GranularDisplaySnapshot {
 		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || !(Float.isFinite(cellSize) && cellSize > 0.0F)
 				|| registryFingerprint == null || !registryFingerprint.matches("[0-9a-f]{64}")) {
