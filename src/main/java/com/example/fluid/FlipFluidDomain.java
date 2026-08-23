@@ -286,6 +286,9 @@ public final class FlipFluidDomain {
 	public GranularAuditLedger granularEscapedSink() { return granularEscapedSink; }
 	public long totalGranularSolidVolumeSvq() { return granularInventory == null ? 0L : granularInventory.totalSolidVolumeSvq(); }
 	public double totalGranularMass() { return granularInventory == null ? 0.0 : granularInventory.totalMass(); }
+	private boolean hasGranularInventory() {
+		return granularParcels != null && (granularParcels.count() != 0 || granularDeposits.groupCount() != 0);
+	}
 	/** Read-only cell inventory used to aim the dry-container scoop at particle/deposit truth. */
 	public long granularSolidVolumeSvq(int cellX, int cellY, int cellZ) {
 		if (granularCoupling == null) return 0L;
@@ -2019,7 +2022,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			System.arraycopy(velocityX, 0, p2gVelocityX, 0, velocityX.length);
 			System.arraycopy(velocityY, 0, p2gVelocityY, 0, velocityY.length);
 			System.arraycopy(velocityZ, 0, p2gVelocityZ, 0, velocityZ.length);
-			if (granularParcels != null) {
+			if (hasGranularInventory()) {
 				GranularMechanics.stepVelocities(granularParcels, granularRegistry, granularEnvironment(),
 						config.cellSize(), config.gravity(), dt);
 				granularCollision.preview(granularParcels, granularRegistry, dt);
@@ -2030,9 +2033,11 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				}
 				pressureGranularCoupling = granularNextCoupling;
 			}
+			// Dampen previously committed flow before body forces so a zero-velocity porous bed retains
+			// the full hydrostatic gravity/pressure balance in the shared projection.
+			applyGranularPorousDamping(dt);
 			applyGravity(dt);
 			applyLiquidPairSurfaceTensionForce(dt);
-			applyGranularPorousDamping(dt);
 			enforceSolidFaceVelocities();
 			solvePressure(dt);
 			pressureIterations += lastPressureIterations;
@@ -2041,7 +2046,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			extrapolateVelocityIntoAir();
 			gridToParticles();
 			advectParticles(dt);
-			if (granularParcels != null) granularCollision.commit(granularParcels);
+			if (hasGranularInventory()) granularCollision.commit(granularParcels);
 		}
 		if (precipitationEnabled) markMovedReactiveGranularCells(granularParcelCountBeforeAdvection);
 		int[] phaseTransferCells = precipitationEnabled ? chemicalParcels.dirtyCells() : new int[0];
@@ -2054,9 +2059,17 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		lastPhaseTransferStats = precipitationEnabled
 				? transferGranularPhases(phaseTransferCells) : new PhaseTransferStats(0, 0, 0, 0L);
 		if (granularDepositDynamics != null) {
-			lastGranularDepositStats = granularDepositDynamics.step(granularDepositEnvironment(), config.timeStep());
-			granularCoupling.rebuild(granularParcels, granularDeposits);
-			pressureGranularCoupling = granularCoupling;
+			if (hasGranularInventory() || granularDepositDynamics.dirtyColumnCount() != 0) {
+				lastGranularDepositStats = granularDepositDynamics.step(granularDepositEnvironment(), config.timeStep());
+			} else {
+				lastGranularDepositStats = new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
+			}
+			if (hasGranularInventory()) {
+				granularCoupling.rebuild(granularParcels, granularDeposits);
+				pressureGranularCoupling = granularCoupling;
+			} else {
+				granularCoupling.clear(); pressureGranularCoupling = null;
+			}
 		}
 		ensureParticleCapacity(particleReseeder.capacityUpperBound(particleCount));
 		FlipParticleReseeder.Result reseeding = particleReseeder.reseed(
@@ -2096,7 +2109,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		variableDensityActive = usesMassWeightedP2G();
 		surfaceTensionActive = hasAnySurfaceTension();
 		liquidPairTensionActive = hasAnyLiquidPairTension();
-		if (granularCarrierMaterialByCell != null) {
+		boolean granularInventoryPresent = hasGranularInventory();
+		if (granularCarrierMaterialByCell != null && granularInventoryPresent) {
 			Arrays.fill(granularCarrierMaterialByCell, -1);
 			Arrays.fill(granularCarrierVolumeByCell, -1.0);
 		}
@@ -2106,7 +2120,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			exactCellMarkerVolume[particleCell] += particleVolume[i];
 			exactCellMarkerMass[particleCell] += particleMass[i];
 			addCellPhaseVolume(particleCell, particlePhaseLabel[i], particleVolume[i]);
-			if (granularCarrierMaterialByCell != null
+			if (granularCarrierMaterialByCell != null && granularInventoryPresent
 					&& (particleVolume[i] > granularCarrierVolumeByCell[particleCell]
 					|| particleVolume[i] == granularCarrierVolumeByCell[particleCell]
 					&& particleMaterialHandle[i] < granularCarrierMaterialByCell[particleCell])) {
@@ -2129,7 +2143,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		normalize(velocityX, velocityWeightX);
 		normalize(velocityY, velocityWeightY);
 		normalize(velocityZ, velocityWeightZ);
-		if (granularCoupling == null) {
+		if (granularCoupling == null || !granularInventoryPresent) {
+			if (granularCoupling != null) granularCoupling.clear();
 			freeSurfaceGeometry.rebuild(solid, markerCount, cutCells);
 			pressureGranularCoupling = null;
 		} else {
@@ -2176,9 +2191,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	 * a cavity that opens to ambient or vanishes under liquid vents through the remap ledger.
 	 */
 	private void updateGasNetwork(float dt) {
-		AirCavityScanner.Result result = granularCoupling == null
+		AirCavityScanner.Result result = pressureGranularCoupling == null
 				? airScanner.scan(solid, markerCount, volume, cutCells)
-				: airScanner.scan(solid, markerCount, volume, cutCells, granularCoupling);
+				: airScanner.scan(solid, markerCount, volume, cutCells, pressureGranularCoupling);
 		int sealed = result.sealedNodeCount();
 		double[] availableVolumes = result.sealedAvailableVolume();
 		long[] inventoriesNanos = new long[sealed];

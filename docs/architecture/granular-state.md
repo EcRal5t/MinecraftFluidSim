@@ -250,8 +250,9 @@ ledger rebuild。`FlipFluidDomain` 只编排；registry、库存、mechanics、d
   冻结八邻域但要求 closed-corner face-path 校验；
 - 16,384 parcel、9,216 cell、65,536 group 的候选 primitive arrays 估算约 3.34 MiB/region，不含持久/显示暂存。
 
-该原型只证明表示和候选 closure 可进入生产实现；实际 solver 仍须通过 terminal velocity、两向动量、统一 pressure、
-孔隙静水、安息角朝向、no-creep、局部 wake、80% sleep 与 gate-on/empty wall-time 门。
+该原型只证明表示和候选 closure 可进入生产实现。生产 solver 的 terminal velocity、两向动量、统一 pressure、
+孔隙静水、安息角朝向、no-creep、局部 wake、80% sleep 与 gate-on/empty wall-time 闭合证据记录在
+[`../progress/m8-granular-deposition.md`](../progress/m8-granular-deposition.md)。
 
 守恒失败属于实现/事务错误，不是升级 MPM 的理由。只有统一低成本模型完成一次记录过的参数/邻域校准后，仍无法
 同时满足安息角朝向、动态坍塌、孔隙压力和局部再悬浮中的至少两项，且缩小材料 validity range/活动范围也不合理时，

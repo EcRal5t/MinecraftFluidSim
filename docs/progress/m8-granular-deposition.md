@@ -186,3 +186,21 @@ snapshot、客户端颗粒绘制与管理员诊断；exact SVQ/mass/species 不�
 最近门 `runCpuValidation -PcpuValidation=protocol,granular --offline --rerun-tasks` 全部通过：protocol 1.147 秒、
 granular 0.434 秒，runner 合计 1.584 秒；服务端、客户端与测试 source set 同时编译通过。下一步审计 M8 完成门，
 只把自动门无法观察的视觉、真实 controller 转移和重启恢复收敛成一次实机验收。
+
+## M8.9 孔隙静水与空门性能完成门（2026-08-24）
+
+- 新增真实 solver porous-bed fixture：底层每格 1/4 cell skeleton、40% porosity，孔隙水仍由普通 marker 拥有；
+  200 步内相邻压力收敛到 `rho*g*h`，最大 marker speed 低于 `3e-4 m/s`，solid SVQ/mass 不变。
+- fixture 发现原 porous damping 在 gravity 之后执行会永久削低静水压力。现改为只半隐式阻尼上一完整代速度，再施加
+  gravity/surface force 和共享 pressure projection；因此零速床保留完整静水压力，pressure 后仍不暴露散度半步。
+- 空 granular inventory 不再重复构建 occupancy、carrier、deposit 或 granular air-volume 路径；coupling total 使用
+  checked cached total，库存归零时显式清空。24×16×24、两层静水的同进程交错中位数为 baseline 9.340 ms、
+  granular gate-on/empty 9.348 ms（+0.1%），液体体积和最大速度逐位一致；门冻结为 5% 或 0.5 ms 计时噪声包络，
+  且绝不越过既有 40 ms pacing。未修改 `REDUCED`/`PAUSED` 阈值。
+- 生产低成本模型现已通过 terminal velocity、两向动量、exact occupancy/moving source、统一 pressure、孔隙静水、
+  八邻域安息角、no-creep、局部 wake 与至少 80% stable-column sleep；没有同时失败的形态/孔压/再悬浮项，MPM
+  评审停止条件未触发。
+
+因本修正触及 pressure 顺序与 runtime gas available-volume 选择，最近门使用 `--rerun-tasks` 运行
+`granular,free-surface,cut-cell,gas-liquid`：四域分别 1.950/1.953/0.656/46.270 秒，runner 合计 50.829 秒，全部通过。
+剩余 M8 关闭项只有自动门无法证明的客户端颗粒可见性、真实 controller 干容器转移及实机重启恢复。

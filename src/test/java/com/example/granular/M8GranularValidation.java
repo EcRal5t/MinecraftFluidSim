@@ -32,8 +32,10 @@ public final class M8GranularValidation {
 		mechanicsMatchesTerminalVelocity();
 		twoWayDragPreservesMomentum();
 		couplingOccupancyResumsExactly();
+		porousBedPreservesHydrostatics();
 		settlingRelaxationSleepAndWakeAreLocal();
 		solverCouplingPreservesInventories(fast ? 8 : 80);
+		emptyGranularGateHasBoundedWallTime(fast ? 8 : 24);
 		System.out.println("M8 granular core gate passed: exact inventory, coupling, repose, sleep and local wake");
 	}
 
@@ -425,6 +427,49 @@ public final class M8GranularValidation {
 				List.of(new GranularCarrier("realwater:water", 1.002e-3, 100_000.0)));
 	}
 
+	private static void porousBedPreservesHydrostatics() {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				200, 1.0e-6F, 0.45F, 2.0e-3F, 0.8F);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
+		int sizeX = 2, sizeY = 5, sizeZ = 2;
+		FlipFluidDomain domain = new FlipFluidDomain(sizeX, sizeY, sizeZ, config, sizeX * sizeY * sizeZ * 8);
+		for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) {
+			domain.setVolume(x, 0, z, 0.75F);
+			domain.setVolume(x, 1, z, 1.0F);
+			domain.setVolume(x, 2, z, 0.75F);
+		}
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long cellSvq = SolidVolume.SVQ_PER_CELL / 4L;
+		double cellMass = SolidVolume.toCellVolume(cellSvq) * registry.material(sand).referenceDensity();
+		ArrayList<GranularStateSnapshot.DepositGroup> groups = new ArrayList<>();
+		for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) groups.add(
+				new GranularStateSnapshot.DepositGroup(cellIndex(x, 0, z, sizeX, sizeY),
+						registry.material(sand).restPorosityQ(), sand, 0, cellSvq, cellMass));
+		long totalSvq = Math.multiplyExact(cellSvq, groups.size());
+		double totalMass = cellMass * groups.size();
+		domain.restoreGranularState(new GranularStateSnapshot(sizeX, sizeY, sizeZ, registry.fingerprint(),
+				registry.materials().stream().map(ParticulateMaterial::id).toList(), List.of(), groups,
+				totalSvq, Double.doubleToRawLongBits(totalMass)), registry, liquids);
+
+		FlipFluidDomain.StepStats stats = null;
+		for (int step = 0; step < 200; step++) stats = domain.step();
+		float[] actualPressure = {domain.pressure(0, 0, 0), domain.pressure(0, 1, 0), domain.pressure(0, 2, 0)};
+		float expectedGradient = config.density() * config.gravity() * config.cellSize();
+		for (int y = 0; y < 2; y++) {
+			float actualGradient = actualPressure[y] - actualPressure[y + 1];
+			float relativeError = Math.abs(actualGradient - expectedGradient) / expectedGradient;
+			require(relativeError < 3.0e-4F, "porous granular bed missed analytic hydrostatic gradient: y="
+					+ y + ", pressure=" + Arrays.toString(actualPressure) + ", expectedGradient="
+					+ expectedGradient + ", speed=" + domain.maximumParticleSpeed() + ", error=" + relativeError);
+		}
+		require(stats.pressureIterations() > 0 && Float.isFinite(stats.pressureResidual())
+				&& domain.maximumParticleSpeed() < 3.0e-4F,
+				"porous granular bed left a non-hydrostatic liquid state");
+		require(domain.totalGranularSolidVolumeSvq() == totalSvq && rawClose(domain.totalGranularMass(), totalMass),
+				"porous hydrostatic projection changed granular truth");
+	}
+
 	private static void settlingRelaxationSleepAndWakeAreLocal() {
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
@@ -557,6 +602,45 @@ public final class M8GranularValidation {
 		FlipFluidDomain.GranularInsertion refused = sealed.tryInsertExactGranular(1, 1, 1, sand, 0, svq, mass);
 		require(!refused.inserted() && sealed.totalGranularSolidVolumeSvq() == 0L,
 				"sealed granular insertion did not refuse atomically");
+	}
+
+	private static void emptyGranularGateHasBoundedWallTime(int samples) {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
+		int sizeX = 24, sizeY = 16, sizeZ = 24, capacity = sizeX * sizeY * sizeZ * 8;
+		FlipFluidDomain baseline = new FlipFluidDomain(sizeX, sizeY, sizeZ, config, capacity);
+		FlipFluidDomain granular = new FlipFluidDomain(sizeX, sizeY, sizeZ, config, capacity);
+		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < sizeX; x++) {
+			baseline.setVolume(x, y, z, 1.0F); granular.setVolume(x, y, z, 1.0F);
+		}
+		granular.bindGranular(BuiltinGranularDefinitions.createRegistry(),
+				new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE));
+		for (int warmup = 0; warmup < 8; warmup++) { baseline.step(); granular.step(); }
+		long[] baselineNanos = new long[samples], granularNanos = new long[samples];
+		for (int sample = 0; sample < samples; sample++) {
+			long start;
+			if ((sample & 1) == 0) {
+				start = System.nanoTime(); baseline.step(); baselineNanos[sample] = System.nanoTime() - start;
+				start = System.nanoTime(); granular.step(); granularNanos[sample] = System.nanoTime() - start;
+			} else {
+				start = System.nanoTime(); granular.step(); granularNanos[sample] = System.nanoTime() - start;
+				start = System.nanoTime(); baseline.step(); baselineNanos[sample] = System.nanoTime() - start;
+			}
+		}
+		Arrays.sort(baselineNanos); Arrays.sort(granularNanos);
+		long baselineMedian = baselineNanos[samples / 2], granularMedian = granularNanos[samples / 2];
+		double overhead = baselineMedian == 0L ? Double.POSITIVE_INFINITY
+				: (granularMedian - baselineMedian) * 100.0 / baselineMedian;
+		System.out.printf("  empty 24x16x24 gate wall-time baseline=%.3f ms granular=%.3f ms overhead=%+.1f%%%n",
+				baselineMedian / 1.0e6, granularMedian / 1.0e6, overhead);
+		require(Double.doubleToRawLongBits(baseline.totalVolumeExact())
+				== Double.doubleToRawLongBits(granular.totalVolumeExact())
+				&& Float.floatToRawIntBits(baseline.maximumParticleSpeed())
+				== Float.floatToRawIntBits(granular.maximumParticleSpeed()),
+				"empty granular inventory changed the baseline liquid result");
+		long relativeOrTimerBound = Math.max((long) Math.ceil(baselineMedian * 1.05), baselineMedian + 500_000L);
+		require(granularMedian <= relativeOrTimerBound && granularMedian <= 40_000_000L,
+				"empty granular gate exceeded its 5%/0.5 ms noise envelope or the existing 40 ms pacing boundary");
 	}
 
 	private static GranularMechanics.Environment constantWater(
