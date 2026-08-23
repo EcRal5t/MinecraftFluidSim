@@ -100,6 +100,10 @@ M7 已以主 Mod 0.13.0 闭合：marker parcel、strong-electrolyte reaction、v
 - 数据驱动颗粒材料、浮力/阻力、孔隙和精确排水。
 - 安息角、沉积休眠、反应沉淀与局部唤醒。
 - 低成本模型不能满足守恒/形态门时才评审 MPM，不预建完整框架。
+- M8.0 已冻结活动 parcel + 守恒 deposit cell、二进制 SVQ、moving-solid pressure source、孔隙水与局部唤醒
+  边界；现行设计见 [`../architecture/granular-state.md`](../architecture/granular-state.md)，推进证据见
+  [`../progress/m8-granular-deposition.md`](../progress/m8-granular-deposition.md)。颗粒联合持久化使用
+  `region-state v5`，不占用气体状态的独立 v4 评审，也不回填 v3。
 
 ## M9：温度、相变和反应热
 
