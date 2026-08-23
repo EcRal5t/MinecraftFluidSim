@@ -88,6 +88,13 @@ public final class ChemicalParcelStore {
 	}
 	public int mixtureHandle(int marker) { requireAssigned(marker); return markerHandles[marker]; }
 	public boolean indicator(int marker) { requireAssigned(marker); return bit(indicatorWords, marker); }
+	/** Changes only indicator provenance; species, mass and the packed mixture handle stay untouched. */
+	public boolean updateIndicator(int marker, boolean value) {
+		requireAssigned(marker);
+		boolean previous = bit(indicatorWords, marker);
+		if (previous != value) setIndicator(marker, value);
+		return previous != value;
+	}
 	public boolean isAssigned(int marker) {
 		requireMarker(marker);
 		return markerHandles[marker] != 0 && pool.isLive(markerHandles[marker]);

@@ -14,6 +14,7 @@ public final class M7ChemistryValidation {
 		boolean fast = args.length > 0 && args[0].equals("--fast");
 		validateRationalsAndCodec();
 		validateCanonicalRegistry();
+		validateBundledDataDefinitions();
 		validateRegistrySnapshot();
 		validateInvalidDefinitions();
 		validateStrongElectrolytes();
@@ -51,6 +52,36 @@ public final class M7ChemistryValidation {
 		check(reference.fingerprint().equals(shuffled.fingerprint()), "registry fingerprint depends on file order");
 		check(reference.fingerprint().matches("[0-9a-f]{64}"), "fingerprint is not SHA-256 hex");
 	}
+
+	private static void validateBundledDataDefinitions() throws Exception {
+		var rootUrl = M7ChemistryValidation.class.getClassLoader().getResource("data/realwater");
+		check(rootUrl != null && rootUrl.getProtocol().equals("file"), "bundled chemical resource root is missing");
+		java.nio.file.Path root = java.nio.file.Path.of(rootUrl.toURI());
+		List<ChemicalSpecies> species = decodeDirectory(root.resolve(ChemicalDefinitionCodec.SPECIES_PATH),
+				ChemicalDefinitionCodec::decodeSpecies);
+		List<ChemicalPhaseDefinition> phases = decodeDirectory(root.resolve(ChemicalDefinitionCodec.PHASES_PATH),
+				ChemicalDefinitionCodec::decodePhase);
+		List<ChemicalReaction> reactions = decodeDirectory(root.resolve(ChemicalDefinitionCodec.REACTIONS_PATH),
+				ChemicalDefinitionCodec::decodeReaction);
+		ChemicalRegistry bundled = new ChemicalRegistry(species, phases, reactions);
+		check(bundled.fingerprint().equals(BuiltinChemicalDefinitions.REGISTRY.fingerprint()),
+				"bundled datapack definitions differ from the frozen registry");
+	}
+
+	private static <T> List<T> decodeDirectory(java.nio.file.Path directory, FileDecoder<T> decoder) throws Exception {
+		ArrayList<T> result = new ArrayList<>();
+		try (var files = java.nio.file.Files.walk(directory)) {
+			for (java.nio.file.Path file : files.filter(path -> path.toString().endsWith(".json")).sorted().toList()) {
+				String relative = directory.relativize(file).toString().replace('\\', '/');
+				String id = "realwater:" + relative.substring(0, relative.length() - 5);
+				try (var reader = java.nio.file.Files.newBufferedReader(file)) { result.add(decoder.decode(id, reader)); }
+			}
+		}
+		return List.copyOf(result);
+	}
+
+	@FunctionalInterface
+	private interface FileDecoder<T> { T decode(String stableId, java.io.Reader reader); }
 
 	private static void validateRegistrySnapshot() throws Exception {
 		java.nio.file.Path root = java.nio.file.Files.createTempDirectory("realwater-chemistry-registry-");

@@ -9,6 +9,7 @@ import com.example.chemistry.ChemicalLimits;
 import com.example.fluid.air.AirNetwork;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
@@ -250,6 +251,106 @@ public final class FlipFluidDomain {
 					particleVolume[marker], particleMass[marker], chemicalParcels.record(marker));
 		}
 		return result.build();
+	}
+
+	/**
+	 * Plans and commits an indicator/eraser flood fill through positive-area cut faces. The fill is
+	 * isolated by chemical phase, while the indicator bit itself never isolates reactions.
+	 */
+	public IndicatorEditResult editIndicatorFloodFill(
+			int startX, int startY, int startZ, boolean indicated, int maxScannedCells, double maxAddedBlockVolume
+	) {
+		if (chemicalParcels == null || materialRegistry == null) {
+			return IndicatorEditResult.rejected("Chemistry is not bound");
+		}
+		if (maxScannedCells <= 0 || maxScannedCells > cellCount) {
+			throw new IllegalArgumentException("Indicator scan budget must be within the region cell budget");
+		}
+		if (indicated && !(Double.isFinite(maxAddedBlockVolume) && maxAddedBlockVolume > 0.0)) {
+			throw new IllegalArgumentException("Indicator volume budget must be finite and positive");
+		}
+		int start = cellIndexChecked(startX, startY, startZ);
+		int targetPhase = -1;
+		float dominantVolume = -1.0F;
+		int dominantMarker = Integer.MAX_VALUE;
+		for (int marker = 0; marker < particleCount; marker++) if (particleCellIndex(marker) == start) {
+			float candidate = particleVolume[marker];
+			if (candidate > dominantVolume || candidate == dominantVolume && marker < dominantMarker) {
+				dominantVolume = candidate;
+				dominantMarker = marker;
+				targetPhase = chemicalParcels.registry().phaseHandleForMaterial(
+						materialRegistry.material(particleMaterialHandle[marker]).id());
+			}
+		}
+		if (targetPhase < 0) return IndicatorEditResult.rejected("Target cell has no chemical liquid");
+		if (indicated && !chemicalParcels.registry().phase(targetPhase).acceptsIndicator()) {
+			return IndicatorEditResult.rejected("Target chemical phase rejects indicator");
+		}
+
+		int[] cellHead = new int[cellCount];
+		int[] markerNext = new int[particleCount];
+		boolean[] compatible = new boolean[cellCount];
+		Arrays.fill(cellHead, -1);
+		for (int marker = particleCount - 1; marker >= 0; marker--) {
+			String materialId = materialRegistry.material(particleMaterialHandle[marker]).id();
+			if (chemicalParcels.registry().phaseHandleForMaterial(materialId) != targetPhase) continue;
+			int cell = particleCellIndex(marker);
+			markerNext[marker] = cellHead[cell];
+			cellHead[cell] = marker;
+			compatible[cell] = true;
+		}
+
+		boolean[] visited = new boolean[cellCount];
+		ArrayDeque<Integer> queue = new ArrayDeque<>();
+		ArrayList<Integer> affected = new ArrayList<>();
+		visited[start] = true;
+		queue.add(start);
+		int scanned = 0;
+		double cellVolume = 0.0;
+		while (!queue.isEmpty()) {
+			int cell = queue.removeFirst();
+			if (++scanned > maxScannedCells) return IndicatorEditResult.rejected("Indicator scan budget exceeded");
+			for (int marker = cellHead[cell]; marker >= 0; marker = markerNext[marker]) {
+				affected.add(marker);
+				cellVolume += particleVolume[marker];
+			}
+			double blockVolume = cellVolume * config.cellSize() * config.cellSize() * config.cellSize();
+			if (indicated && blockVolume > maxAddedBlockVolume) {
+				return IndicatorEditResult.rejected("Indicator volume exceeds " + maxAddedBlockVolume + " BV");
+			}
+			int x = cell % sizeX;
+			int yz = cell / sizeX;
+			int y = yz % sizeY;
+			int z = yz / sizeY;
+			if (x > 0) enqueueIndicatorNeighbor(cell, cellIndex(x - 1, y, z), -1, 0, 0, compatible, visited, queue);
+			if (x + 1 < sizeX) enqueueIndicatorNeighbor(cell, cellIndex(x + 1, y, z), 1, 0, 0, compatible, visited, queue);
+			if (y > 0) enqueueIndicatorNeighbor(cell, cellIndex(x, y - 1, z), 0, -1, 0, compatible, visited, queue);
+			if (y + 1 < sizeY) enqueueIndicatorNeighbor(cell, cellIndex(x, y + 1, z), 0, 1, 0, compatible, visited, queue);
+			if (z > 0) enqueueIndicatorNeighbor(cell, cellIndex(x, y, z - 1), 0, 0, -1, compatible, visited, queue);
+			if (z + 1 < sizeZ) enqueueIndicatorNeighbor(cell, cellIndex(x, y, z + 1), 0, 0, 1, compatible, visited, queue);
+		}
+		int changed = 0;
+		for (int marker : affected) if (chemicalParcels.updateIndicator(marker, indicated)) changed++;
+		double blockVolume = cellVolume * config.cellSize() * config.cellSize() * config.cellSize();
+		return new IndicatorEditResult(true, scanned, changed, blockVolume, null);
+	}
+
+	private void enqueueIndicatorNeighbor(
+			int from, int neighbor, int dx, int dy, int dz, boolean[] compatible,
+			boolean[] visited, ArrayDeque<Integer> queue
+	) {
+		if (!visited[neighbor] && compatible[neighbor] && openFaceFromCell(from, dx, dy, dz) > 0.0F) {
+			visited[neighbor] = true;
+			queue.addLast(neighbor);
+		}
+	}
+
+	public record IndicatorEditResult(
+			boolean accepted, int scannedCells, int changedMarkers, double affectedBlockVolume, String failure
+	) {
+		private static IndicatorEditResult rejected(String failure) {
+			return new IndicatorEditResult(false, 0, 0, 0.0, failure);
+		}
 	}
 
 	/** Converts every current material marker to the registry-defined default carrier. */

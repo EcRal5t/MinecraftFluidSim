@@ -2,7 +2,7 @@ package com.example.simulation;
 
 import com.example.RealWaterMod;
 import com.example.block.RealWaterBlocks;
-import com.example.chemistry.BuiltinChemicalDefinitions;
+import com.example.chemistry.ChemicalDataPackLoader;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.chemistry.ChemicalRegistryStore;
 import com.example.chemistry.ChemicalReactionEngine;
@@ -121,7 +121,8 @@ public final class FluidSimulationService {
 						throw new IOException("region-state v3 or unreadable region data exists but chemistry/registry.nbt is missing");
 					}
 				}
-				ChemicalRegistryStore.LoadResult loaded = registryStore.loadOrCreate(BuiltinChemicalDefinitions.REGISTRY);
+				ChemicalRegistry datapackDefinitions = ChemicalDataPackLoader.load(server.getResourceManager());
+				ChemicalRegistryStore.LoadResult loaded = registryStore.loadOrCreate(datapackDefinitions);
 				bootChemicalRegistry = loaded.registry();
 				if (loaded.definitionMismatch()) {
 					RealWaterMod.LOGGER.warn("Chemical datapack definitions differ from the authoritative world registry {}; existing inventory keeps world semantics",
@@ -588,6 +589,7 @@ public final class FluidSimulationService {
 		refreshCollisions(level, candidate);
 		FluidRegionFactory.captureVanillaWater(level, candidate);
 		if (materialFeatureEnabled) bindDefaultMaterialState(candidate.domain());
+		if (chemistryFeatureEnabled) candidate.domain().bindChemistry(chemicalRegistry);
 		candidate.setPaused(true);
 		try {
 			if (worldBridgeFeatureEnabled) {
@@ -622,9 +624,35 @@ public final class FluidSimulationService {
 		return createDemo(player, true);
 	}
 
+	/** Creates a paused acid/base fixture without changing the mechanical demo geometry. */
+	public boolean createChemistryDemo(ServerPlayer player) {
+		if (!chemistryFeatureEnabled) {
+			lastTakeoverFailure = "化学功能门未在本次启动启用；先启用 materials/chemistry 并重启";
+			return false;
+		}
+		if (!createDemo(player, false)) return false;
+		FlipFluidDomain domain = domain();
+		float[] positionVolume = domain.exportChemicalParticleState().materials().copyPositionVolume();
+		float divider = domain.sizeX() * domain.config().cellSize() / 5.0F;
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			if (positionVolume[marker * 4] < divider) {
+				domain.setMarkerChemical(marker, Map.of("realwater:hcl", 1_000_000L), true);
+			} else {
+				domain.setMarkerChemical(marker, Map.of("realwater:naoh", 1_000_000L), false);
+			}
+		}
+		activeRegion().setPaused(true);
+		sendSnapshot(player.level());
+		return true;
+	}
+
 	public boolean createTensionDemo(ServerPlayer player, int angleDegrees) {
 		if (!materialFeatureEnabled) {
 			lastTakeoverFailure = "材料功能门未在本次启动启用；先保存配置并重启";
+			return false;
+		}
+		if (chemistryFeatureEnabled) {
+			lastTakeoverFailure = "表面张力测试材料没有 M7 chemical phase；chemistry 开启时拒绝混用测试域";
 			return false;
 		}
 		Vec3 look = player.getLookAngle();
@@ -686,6 +714,8 @@ public final class FluidSimulationService {
 			refreshCollisions(level);
 			FlipFluidDomain domain = domain();
 			fillAirDemoWater(domain);
+			if (materialFeatureEnabled) bindDefaultMaterialState(domain);
+			if (chemistryFeatureEnabled) domain.bindChemistry(chemicalRegistry);
 			domain.step();
 			AirNetwork network = domain.airNetwork();
 			if (network.nodeCount() < 1) {
@@ -906,6 +936,7 @@ public final class FluidSimulationService {
 		}
 		if (materialFeatureEnabled) bindDefaultMaterialState(domain);
 		if (layeredMaterials) assignLayeredDemoMaterials(domain, fillY / 2.0F * domain.config().cellSize());
+		if (chemistryFeatureEnabled) domain.bindChemistry(chemicalRegistry);
 		activeRegion().setPaused(true);
 		sendSnapshot(level);
 		return true;
@@ -930,6 +961,7 @@ public final class FluidSimulationService {
 		refreshCollisions(level);
 		int wetCells = FluidRegionFactory.captureVanillaWater(level, activeRegion());
 		if (materialFeatureEnabled) bindDefaultMaterialState(activeRegion().domain());
+		if (chemistryFeatureEnabled) activeRegion().domain().bindChemistry(chemicalRegistry);
 		int removedBlocks = takeover ? beginTakeover(level) : 0;
 		activeRegion().setPaused(true);
 		sendSnapshot(level);
@@ -1520,6 +1552,68 @@ public final class FluidSimulationService {
 		}
 		serverConfig = replacement;
 		return null;
+	}
+
+	/** Applies the bounded indicator/eraser primitive to the actually aimed region. */
+	public IndicatorUseResult editIndicatorAtAim(ServerPlayer player, boolean indicated) {
+		if (!chemistryFeatureEnabled) return IndicatorUseResult.rejected("化学功能门本次启动未开启");
+		FluidRegion region = aimedRegion(player);
+		if (region == null) return IndicatorUseResult.rejected("准星方向没有化学流体区域");
+		if (!ensureRegionAvailableFor(player, region)) {
+			return IndicatorUseResult.rejected("目标控制器区域当前不可用：" + region.availabilityFailure());
+		}
+		int[] cell = aimedCellNear(player, region, true);
+		if (cell == null) return IndicatorUseResult.rejected("准星方向没有化学液体");
+		FlipFluidDomain.IndicatorEditResult edit = region.domain().editIndicatorFloodFill(
+				cell[0], cell[1], cell[2], indicated, Math.toIntExact(region.reservedCellCapacity()), 100.0);
+		if (!edit.accepted()) return IndicatorUseResult.rejected(edit.failure());
+		String checkpointWarning = null;
+		if (edit.changedMarkers() > 0) {
+			region.wakeForActivity();
+			if (region.controllerManaged()) {
+				try {
+					regionOperations.checkpoint(region);
+				} catch (IOException | RuntimeException failure) {
+					checkpointWarning = "live parcel 已修改但 checkpoint 失败：" + failure.getMessage();
+					region.setAvailabilityFailure(checkpointWarning);
+					RealWaterMod.LOGGER.error("Could not checkpoint indicator edit for region {}", region.id(), failure);
+				}
+			}
+		}
+		sendSnapshot(player.level(), region);
+		return new IndicatorUseResult(true, edit.scannedCells(), edit.changedMarkers(),
+				edit.affectedBlockVolume(), checkpointWarning, null);
+	}
+
+	/** Administrator-only command payload; caller is responsible for enforcing permission and transcript logging. */
+	public String chemistryInventoryStatus(ServerLevel level) {
+		if (!chemistryFeatureEnabled) return "化学功能门本次启动未开启";
+		FluidRegion region = selectedRegionIn(level);
+		if (region == null || !region.solverLoaded() || !region.domain().hasChemistryState()) {
+			return "当前维度没有已加载且选中的化学区域";
+		}
+		long[] totals = region.domain().chemicalParcels().speciesTotals(region.domain().particleCount());
+		StringBuilder text = new StringBuilder("region ").append(region.id())
+				.append(" generation ").append(region.checkpointGeneration())
+				.append(" fingerprint ").append(chemicalRegistry.fingerprint())
+				.append(" totalQuanta ").append(region.domain().chemicalParcels().totalQuanta())
+				.append(" residualBits 0x").append(Long.toUnsignedString(
+						region.domain().exportChemicalParticleState().residualLedgerBits(), 16));
+		for (int handle = 0; handle < totals.length; handle++) if (totals[handle] != 0L) {
+			text.append('\n').append(chemicalRegistry.species(handle).id()).append('=').append(totals[handle]);
+		}
+		text.append("\nexternalSourceQuanta=").append(region.domain().chemicalParcels().externalSource().totalQuanta())
+				.append(" escapedSinkQuanta=").append(region.domain().chemicalParcels().escapedSink().totalQuanta());
+		return text.toString();
+	}
+
+	public record IndicatorUseResult(
+			boolean accepted, int scannedCells, int changedMarkers, double affectedBlockVolume,
+			String checkpointWarning, String failure
+	) {
+		private static IndicatorUseResult rejected(String failure) {
+			return new IndicatorUseResult(false, 0, 0, 0.0, null, failure);
+		}
 	}
 
 	/** First region volume intersected by the player's ray; selection is intentionally irrelevant. */

@@ -4,8 +4,14 @@ import com.example.logging.RealWaterCommandLog;
 import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FluidMaterial;
 import com.example.item.ContainerFluidLedger;
+import com.example.item.ChemicalContents;
 import com.example.item.FluidMixture;
 import com.example.item.RealWaterItems;
+import com.example.chemistry.BuiltinChemicalDefinitions;
+import com.example.chemistry.ChemicalLimits;
+import com.example.chemistry.ChemicalMixtureRecord;
+import com.example.chemistry.ChemicalRegistry;
+import com.example.chemistry.ChemicalTransferLedger;
 import com.example.simulation.FluidSimulationService;
 import com.example.simulation.FluidRegion;
 import com.mojang.brigadier.arguments.BoolArgumentType;
@@ -17,6 +23,7 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.permissions.Permissions;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.List;
@@ -29,6 +36,7 @@ public final class RealWaterCommands {
 				Commands.literal("realwater")
 						.then(Commands.literal("demo").executes(context -> audit(context, () -> createDemo(context.getSource()))))
 						.then(Commands.literal("materialdemo").executes(context -> audit(context, () -> createMaterialDemo(context.getSource()))))
+						.then(Commands.literal("chemistrydemo").executes(context -> audit(context, () -> createChemistryDemo(context.getSource()))))
 						.then(Commands.literal("materialbucket")
 								.then(Commands.argument("material", StringArgumentType.word())
 										.suggests((context, builder) -> {
@@ -41,6 +49,16 @@ public final class RealWaterCommands {
 										})
 										.executes(context -> audit(context, () -> giveMaterialBucket(
 												context.getSource(), StringArgumentType.getString(context, "material"))))))
+						.then(Commands.literal("reagent")
+								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+								.then(Commands.argument("kind", StringArgumentType.word())
+										.suggests((context, builder) -> {
+											for (String value : List.of("hcl", "naoh", "nacl", "nano3", "kcl", "kno3",
+													"water", "indicator", "eraser")) builder.suggest(value);
+											return builder.buildFuture();
+										})
+										.executes(context -> audit(context, () -> giveReagent(
+												context.getSource(), StringArgumentType.getString(context, "kind"))))))
 						.then(Commands.literal("tensiondemo")
 								.executes(context -> audit(context, () -> createTensionDemo(context.getSource(), 30)))
 								.then(Commands.argument("angle", IntegerArgumentType.integer(1, 179))
@@ -85,6 +103,9 @@ public final class RealWaterCommands {
 								.executes(context -> audit(context, () -> chemistryFeatureStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
 										.executes(context -> audit(context, () -> setChemistryFeature(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+						.then(Commands.literal("chemstatus")
+								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+								.executes(context -> audit(context, () -> chemistryInventoryStatus(context.getSource()))))
 						.then(Commands.literal("worldbridge")
 								.executes(context -> audit(context, () -> worldBridgeFeatureStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
@@ -152,6 +173,15 @@ public final class RealWaterCommands {
 		return succeed(source, "已创建暂停的上油下水溃坝测试域（瞬态，不写 region-state）；使用 /realwater step 或 /realwater run", 1);
 	}
 
+	private static int createChemistryDemo(CommandSourceStack source) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		if (!service.createChemistryDemo(player)) {
+			return fail(source, "无法创建酸碱化学测试域：" + service.lastTakeoverFailure());
+		}
+		return succeed(source, "已创建暂停的 HCl/NaOH 对半化学域；左半带 indicator，使用 /realwater step 或 /realwater run 观察混合中和", 1);
+	}
+
 	/** Explicit debug/creative source for exercising material controller transfers and mixtures. */
 	private static int giveMaterialBucket(CommandSourceStack source, String requested) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
@@ -185,6 +215,50 @@ public final class RealWaterCommands {
 		if (!player.getInventory().add(stack)) player.drop(stack, false);
 		player.getInventory().setChanged();
 		return succeed(source, "已生成 " + description + "（显式 creative/debug 外部源）", 1);
+	}
+
+	/** Explicit administrator source for exact chemical fixtures and indicator tools. */
+	private static int giveReagent(CommandSourceStack source, String requested) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		if (!service.chemistryFeatureEnabled()) return fail(source, "化学功能门本次启动未开启");
+		ItemStack stack;
+		if ("indicator".equals(requested)) {
+			stack = new ItemStack(RealWaterItems.CHEMICAL_INDICATOR);
+		} else if ("eraser".equals(requested)) {
+			stack = new ItemStack(RealWaterItems.CHEMICAL_ERASER);
+		} else {
+			String species = switch (requested) {
+				case "water" -> BuiltinChemicalDefinitions.H2O;
+				case "hcl" -> BuiltinChemicalDefinitions.HCL;
+				case "naoh" -> BuiltinChemicalDefinitions.NAOH;
+				case "nacl" -> BuiltinChemicalDefinitions.NACL;
+				case "nano3" -> BuiltinChemicalDefinitions.NANO3;
+				case "kcl" -> BuiltinChemicalDefinitions.KCL;
+				case "kno3" -> BuiltinChemicalDefinitions.KNO3;
+				default -> null;
+			};
+			if (species == null) return fail(source, "未知 reagent：" + requested);
+			ChemicalRegistry registry = service.chemicalRegistry();
+			java.util.TreeMap<String, Long> amounts = new java.util.TreeMap<>();
+			if (species.equals(BuiltinChemicalDefinitions.H2O)) {
+				amounts.put(species, 55_555_555_556L);
+			} else {
+				amounts.put(BuiltinChemicalDefinitions.H2O, 50_000_000_000L);
+				amounts.put(species, ChemicalLimits.QUANTA_PER_AU);
+			}
+			double mass = 8_000.0;
+			ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0.0);
+			ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry, amounts,
+					mass - exact.exactSpeciesMass(registry).toDouble());
+			ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
+					BuiltinFluidMaterials.WATER.id(), false, 1.0, mass, mixture.massResidualBits(),
+					mixture.stableAmounts(registry))));
+			stack = ChemicalContents.fromLedger(ledger, registry, ContainerFluidLedger.NANOS_PER_BLOCK).toStack();
+		}
+		if (!player.getInventory().add(stack)) player.drop(stack, false);
+		player.getInventory().setChanged();
+		return succeed(source, "已生成 " + requested + "（显式 creative/debug 化学外部源）", 1);
 	}
 
 	private static int createTensionDemo(CommandSourceStack source, int angleDegrees)
@@ -343,6 +417,11 @@ public final class RealWaterCommands {
 		return succeed(source, "化学功能门配置已" + (enabled ? "开启" : "关闭")
 				+ "；本次启动仍为" + (service.chemistryFeatureEnabled() ? "开启" : "关闭")
 				+ "，重启服务器后生效", 1);
+	}
+
+	private static int chemistryInventoryStatus(CommandSourceStack source) {
+		String inventory = FluidSimulationService.get(source.getServer()).chemistryInventoryStatus(source.getLevel());
+		return succeed(source, inventory, inventory.startsWith("region ") ? 1 : 0);
 	}
 
 	private static int worldBridgeFeatureStatus(CommandSourceStack source) {

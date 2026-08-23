@@ -26,6 +26,7 @@ public final class M7ChemicalTransportValidation {
 		validateSameCellReaction();
 		validateAdjacentCellsDoNotReact();
 		validateSplitAndIndicator();
+		validateIndicatorFloodFill();
 		validateMergeAndCompaction();
 		validateCollisionDisplacement();
 		validateChemicalHandoff();
@@ -91,6 +92,41 @@ public final class M7ChemicalTransportValidation {
 				+ domain.chemicalParcels().record(1).totalQuanta() == before, "split parcel ledgers do not close");
 		check(domain.chemicalParcels().indicator(0) && domain.chemicalParcels().indicator(1),
 				"split did not copy indicator provenance");
+	}
+
+	private static void validateIndicatorFloodFill() {
+		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+		domain.setVolume(1, 1, 1, 0.125F);
+		domain.setVolume(2, 1, 1, 0.125F);
+		domain.setMarkerMaterial(0, MATERIALS, 0);
+		domain.bindChemistry(CHEMISTRY);
+		FlipFluidDomain.IndicatorEditResult rejected = domain.editIndicatorFloodFill(1, 1, 1,
+				true, 64, 0.1);
+		check(!rejected.accepted(), "over-volume indicator fill was partially accepted");
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			check(!domain.chemicalParcels().indicator(marker), "rejected indicator fill changed a marker");
+		}
+		FlipFluidDomain.IndicatorEditResult added = domain.editIndicatorFloodFill(1, 1, 1,
+				true, 64, 100.0);
+		check(added.accepted() && added.changedMarkers() == 2 && added.affectedBlockVolume() == 0.25,
+				"connected aqueous indicator fill did not cover its exact component");
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			check(domain.chemicalParcels().indicator(marker), "connected indicated marker was skipped");
+		}
+
+		// A marker introduced after the fill keeps its own unmarked provenance.
+		domain.setVolume(2, 1, 1, 0.25F);
+		int marked = 0, plain = 0;
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			if (domain.chemicalParcels().indicator(marker)) marked++; else plain++;
+		}
+		check(marked > 0 && plain > 0, "later mixed markers inherited indicator retroactively");
+		FlipFluidDomain.IndicatorEditResult erased = domain.editIndicatorFloodFill(1, 1, 1,
+				false, 64, Double.POSITIVE_INFINITY);
+		check(erased.accepted() && erased.changedMarkers() == marked, "eraser did not clear only current marked provenance");
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			check(!domain.chemicalParcels().indicator(marker), "eraser left an indicated marker");
+		}
 	}
 
 	private static void validateMergeAndCompaction() {
