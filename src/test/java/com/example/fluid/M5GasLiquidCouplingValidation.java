@@ -12,12 +12,46 @@ public final class M5GasLiquidCouplingValidation {
 	private static final float GRAVITY = 9.81F;
 
 	public static void main(String[] args) {
+		if (java.util.Arrays.asList(args).contains("--fast")) {
+			validateShortCouplingSmoke();
+			System.out.println("M5 gas-liquid coupling validation passed (short; equilibrium soaks skipped)");
+			return;
+		}
 		validateOpenTubesStayAmbient();
 		validateSealedCompression();
 		validateNegativeGaugeSuction();
 		validateOrificeEqualization();
 		System.out.println("M5 gas-liquid coupling gate passed: sealed compression, negative-gauge suction, "
 				+ "finite-rate orifice equalization and exact gas/liquid ledgers");
+	}
+
+	/** One-step wiring gate; quantitative equilibrium and long-run stability remain in the soak tier. */
+	private static void validateShortCouplingSmoke() {
+		validateOpenTubesStayAmbient();
+		FlipFluidDomain sealed = utubeDomain(true);
+		sealed.step();
+		double available = sealed.airNetwork().availableVolume(1);
+		sealed.airNetwork().setStandardVolume(1, 0.75 * available);
+		double exactVolume = sealed.totalVolumeExact();
+		double exactMass = sealed.totalMass();
+		FlipFluidDomain.StepStats stats = sealed.step();
+		check(sealed.gasPressureActive() && sealed.airNetwork().gaugePressure(1) < 0.0,
+				"sealed gas pressure was not consumed by the active solver");
+		check(Float.isFinite(stats.pressureResidual()), "short coupling residual became non-finite");
+		check(sealed.totalVolumeExact() == exactVolume && sealed.totalMass() == exactMass,
+				"short coupling smoke changed liquid ledgers");
+		checkLedger(sealed.airNetwork(), "short sealed-cavity smoke");
+
+		FlipFluidDomain chambers = chamberPairDomain();
+		chambers.step();
+		AirNetwork network = chambers.airNetwork();
+		network.setStandardVolume(1, 2.0 * network.availableVolume(1));
+		network.setStandardVolume(3, network.availableVolume(3));
+		double before = Math.abs(network.gaugePressure(1) - network.gaugePressure(3));
+		chambers.step();
+		double after = Math.abs(network.gaugePressure(1) - network.gaugePressure(3));
+		check(after > 0.0 && after < before, "geometric orifice edge did not begin finite-rate equalization");
+		checkLedger(network, "short orifice smoke");
 	}
 
 	private static void validateOpenTubesStayAmbient() {

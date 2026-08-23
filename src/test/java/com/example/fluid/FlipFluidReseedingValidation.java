@@ -8,15 +8,18 @@ public final class FlipFluidReseedingValidation {
 	private FlipFluidReseedingValidation() { }
 
 	public static void main(String[] args) {
+		boolean fast = java.util.Arrays.asList(args).contains("--fast");
 		underpopulatedCellSplitsConservatively();
 		overpopulatedCellMergesConservatively();
 		nonBinaryVolumesRemainWithinFloatLedgerTolerance();
 		hardBudgetSkipsWithoutMutation();
 		reseedingIsBitDeterministic();
 		multiMaterialReseedingPreservesInventories();
-		longRunShearDistributionRemainsBounded();
-		longRunDamBreakDistributionRemainsBounded();
-		System.out.println("FlipFluid reseeding validation passed");
+		if (!fast) {
+			longRunShearDistributionRemainsBounded();
+			longRunDamBreakDistributionRemainsBounded();
+		}
+		System.out.println("FlipFluid reseeding validation passed" + (fast ? " (short; long-run soaks skipped)" : ""));
 	}
 
 	private static void underpopulatedCellSplitsConservatively() {

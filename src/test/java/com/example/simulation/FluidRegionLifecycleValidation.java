@@ -1,5 +1,9 @@
 package com.example.simulation;
 
+import com.example.fluid.FlipFluidDomain;
+import com.example.fluid.FlipParticleState;
+import com.example.fluid.FluidSolverConfig;
+
 /** Deterministic lifecycle transition gate independent of Minecraft chunks and wall-clock timing. */
 public final class FluidRegionLifecycleValidation {
 	private FluidRegionLifecycleValidation() { }
@@ -8,8 +12,30 @@ public final class FluidRegionLifecycleValidation {
 		validatePacingAndOperatorPause();
 		validateAvailabilityRequiresExplicitResume();
 		validateHydrostaticSleepAndWake();
+		validateHydrostaticSleepPreservesMarkerLedger();
 		validateUnloadRequiresPublishedCheckpointAndReleasedSolver();
 		System.out.println("FluidRegionLifecycle validation passed");
+	}
+
+	private static void validateHydrostaticSleepPreservesMarkerLedger() {
+		FluidSolverConfig config = FluidSolverConfig.prototypeDefaults();
+		FlipFluidDomain domain = new FlipFluidDomain(6, 5, 4, config);
+		domain.restoreParticleState(new FlipParticleState(
+				6, 5, 4, config.cellSize(), 2, 0.1875F,
+				new float[] {
+						0.25F, 0.25F, 0.25F, 0.125F,
+						1.25F, 0.75F, 0.75F, 0.0625F
+				},
+				new float[] {0.5F, -0.25F, 0.125F, -0.125F, 0.25F, -0.5F},
+				new byte[6 * 5 * 4]
+		));
+		double volume = domain.totalVolumeExact();
+		double mass = domain.totalMass();
+		int markers = domain.particleCount();
+		domain.commitHydrostaticSleep();
+		require(domain.maximumParticleSpeed() == 0.0F, "hydrostatic sleep left marker momentum");
+		require(domain.particleCount() == markers && domain.totalVolumeExact() == volume && domain.totalMass() == mass,
+				"hydrostatic sleep changed marker ledgers");
 	}
 
 	private static void validatePacingAndOperatorPause() {

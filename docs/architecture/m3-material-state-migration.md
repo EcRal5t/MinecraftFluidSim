@@ -67,10 +67,10 @@ v2 section 在 v1 marker 位置/体积、速度和 solid slice 之外必须包�
 
 ## 已通过的跨层门
 
-1. 只读多材料内存快照证明外表面与内部界面字段最小充分（`runM3ConnectedVesselValidation`）。
-2. network v2 codec/ordering/capability 与门控 live 协商，且保留 v1 round-trip（`runFluidNetworkProtocolValidation`）。
+1. 只读多材料内存快照证明外表面与内部界面字段最小充分（`runCpuValidation -PcpuValidation=materials`）。
+2. network v2 codec/ordering/capability 与门控 live 协商，且保留 v1 round-trip（`runCpuValidation -PcpuValidation=protocol`）。
 3. `region-state v2` records/codec、v1→v2 双槽跨格式故障矩阵、重算 CRC 后的质量篡改拒绝，以及 feature-on
-   控制器的 v1→v2 恢复与新 v2 checkpoint 生命周期（`runFluidRegionPersistenceValidation`）。
+   控制器的 v1→v2 恢复与新 v2 checkpoint 生命周期（`runCpuValidation -PcpuValidation=region-state`）。
 4. 客户端 partitioned mesh 与瞬态 `/realwater materialdemo` 入口；渲染外观已由实机视觉场景确认，结果与已知限制见
    [`../progress/m3-multi-fluid.md`](../progress/m3-multi-fluid.md)。
 

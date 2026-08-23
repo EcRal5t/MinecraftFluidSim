@@ -58,7 +58,7 @@ M7 是 runtime-only，和 M5 气体网络一样：不写存档、不进 wire、�
 |---|---|
 | `src/test/java/com/example/fluid/chemistry/M7ChemistryValidation.java` | M7.0/M7.1 纯化学门：codec、loader 拒绝、离子等价、中和过量、随机守恒 |
 | `src/test/java/com/example/fluid/M7ChemistrySolverValidation.java` | M7.2/M7.3 活动核心门：bind/注入/质量一致/pH/指示剂/纯水不退化 |
-| `build.gradle` | 注册 `runM7ChemistryValidation`、`runM7ChemistrySolverValidation` |
+| `CpuValidationSuite` | 注册 `chemistry-core`、`chemistry-solver` selector；不新增 JavaExec task |
 
 ## 3. 数据模型与内置定义
 
@@ -301,7 +301,7 @@ public double cellPh(int x, int y, int z)
 - split：新粒子继承 `flags[source]`。
 - compact/removeParticle 的交换已经在 `FlipFluidDomain` 侧同步完成，reseeder 内不负责 compaction。
 
-这一改动属于共享 reseeding 契约变更，必须跑 `runFlipReseedingValidation`。
+这一改动属于共享 reseeding 契约变更，必须跑 `runCpuValidation -PcpuValidation=reseeding`。
 
 ## 6. Feature gate 与命令
 
@@ -334,23 +334,17 @@ M7 是未完成里程碑，按 cross-cutting 契约使用独立配置门 `chemis
 6. 随机守恒：固定种子，随机物种/量注入同一 mixture，每次 `addAmount` 后校验质量、电荷、元素 count 与“纯水基准 + 注入”理论值一致；至少 10,000 次。
 7. `SparseMixture` 不可变与 encode/decode 排序。
 
-`build.gradle` 注册：
+在 `CpuValidationSuite` 注册 `chemistry-core` selector，复用唯一的 `runCpuValidation` Gradle task：
 
 ```groovy
-tasks.register("runM7ChemistryValidation", JavaExec) {
-    group = "verification"
-    description = "Runs the M7 species/reaction codec, sparse-mixture and conservation gate."
-    dependsOn tasks.named("testClasses")
-    classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-    mainClass = "com.example.fluid.chemistry.M7ChemistryValidation"
-}
+gate(gates, "chemistry-core", () -> M7ChemistryValidation.main(NONE));
 ```
 
 ### 7.2 `M7ChemistrySolverValidation`（M7.2 起加）
 
 放在 `src/test/java/com/example/fluid/M7ChemistrySolverValidation.java`。覆盖：
 
-1. 未绑定化学时 `step()` 与旧纯水路径完全一致（比较 `FlipFluidDomainValidation` 的基准量：volume、mass、pressure residual、marker count）。
+1. 未绑定化学时 `step()` 与固定纯水 fixture 完全一致（比较 volume、mass、pressure residual、marker count；原孤立 `FlipFluidDomainValidation` 已被分层活动门替代）。
 2. `bindChemistry` 拒绝多材料/重复绑定。
 3. `tryInjectSpecies` 注入 `1 AU HCl` 到静态水格：
    - 返回 `massDelta` 等于 HCl 的声明质量；
@@ -361,14 +355,14 @@ tasks.register("runM7ChemistryValidation", JavaExec) {
 5. 指示剂：BFS 连通域标记/清除；100 BV 上限拒绝且无部分标记；reseeding 后标记不丢失（构造过密格触发 merge，或欠密格触发 split，验证 OR/继承规则）。
 6. 纯水 `exportParticleState` 在绑定化学后仍可导出且格式不变（证明未污染 v1 交接）。
 
-`build.gradle` 注册 `runM7ChemistrySolverValidation`，mainClass `com.example.fluid.M7ChemistrySolverValidation`。
+在 `CpuValidationSuite` 注册 `chemistry-solver` selector，调用 `com.example.fluid.M7ChemistrySolverValidation`。
 
 ### 7.3 最小门选择
 
-- 改 `fluid/chemistry/*` 或 `BuiltinFluidChemistry`：只跑 `runM7ChemistryValidation`。
-- 改 `FlipFluidDomain` 化学注入/指示剂/质量一致：跑 `runM7ChemistrySolverValidation`。
-- 一旦改 `FlipParticleReseeder`：加跑 `runFlipReseedingValidation`（共享契约）。
-- 一旦改 `FluidServerConfig`/命令：加跑 `runFluidRegionPersistenceValidation`？否——只改配置门/命令时跑 `runFluidNetworkProtocolValidation` 不适用；按 routing 原则，如果只加命令且配置迁移属于 region-state 邻接，则在 M7.2 结束后跑一次 `runFluidRegionPersistenceValidation` 确认 v4 迁移与 fail-closed。日常不累计。
+- 改 `fluid/chemistry/*` 或 `BuiltinFluidChemistry`：只跑 `runCpuValidation -PcpuValidation=chemistry-core`。
+- 改 `FlipFluidDomain` 化学注入/指示剂/质量一致：跑 `runCpuValidation -PcpuValidation=chemistry-solver`。
+- 一旦改 `FlipParticleReseeder`：合跑 `-PcpuValidation=chemistry-solver,reseeding`（共享契约）。
+- 一旦改 `FluidServerConfig`/命令：按 routing 原则，在 M7.2 结束后合跑 `-PcpuValidation=chemistry-solver,region-state` 确认 v4 迁移与 fail-closed。日常不累计。
 - 不跑 GPU、不跑 EULA server、不跑 5,000 步。
 
 ## 8. 实施顺序
@@ -382,13 +376,13 @@ tasks.register("runM7ChemistryValidation", JavaExec) {
 5. 新建 `FluidChemistryCodec`。
 6. 写 `BuiltinFluidChemistry`。
 7. 写 `M7ChemistryValidation` 覆盖 7.1 中第 1–5、7 项（随机守恒可随后补）。
-8. 注册 Gradle task，跑绿。
+8. 注册 `chemistry-core` selector，跑绿。
 
 ### M7.1：内置化学验收
 
 1. 补 `M7ChemistryValidation` 的随机守恒（第 6 项）。
 2. 补 codec 对全部 built-in 的往返与非法文本表。
-3. 跑 `runM7ChemistryValidation`，记录输出与耗时。
+3. 跑 `runCpuValidation -PcpuValidation=chemistry-core`，记录输出与耗时。
 
 ### M7.2：活动核心 cell-local 注入
 
@@ -396,8 +390,8 @@ tasks.register("runM7ChemistryValidation", JavaExec) {
 2. 新建 `CellChemistryState`（package-private）。
 3. 实现 `tryInjectSpecies` 与 `cellMixture`/`cellPh`/`cellResidualQuanta`。
 4. 写 `M7ChemistrySolverValidation` 第 1–4 项。
-5. 注册 `runM7ChemistrySolverValidation`，跑绿。
-6. 升级 `FluidServerConfig` v4 与 `FluidSimulationService`/`RealWaterCommands`；跑一次 `runFluidRegionPersistenceValidation` 确认 v1–v4 读取、保存与 fail-closed。
+5. 注册 `chemistry-solver` selector，跑绿。
+6. 升级 `FluidServerConfig` v4 与 `FluidSimulationService`/`RealWaterCommands`；合跑 `-PcpuValidation=chemistry-solver,region-state` 确认 v1–v4 读取、保存与 fail-closed。
 
 ### M7.3：指示剂 parcel 标记
 
@@ -405,7 +399,7 @@ tasks.register("runM7ChemistryValidation", JavaExec) {
 2. `FlipParticleReseeder` 增加标志参数与 merge/split 规则。
 3. 实现 `addIndicator`/`clearIndicator` BFS。
 4. 补 `M7ChemistrySolverValidation` 第 5–6 项。
-5. 跑 `runM7ChemistrySolverValidation` + `runFlipReseedingValidation`。
+5. 跑 `runCpuValidation -PcpuValidation=chemistry-solver,reseeding`。
 
 ### M7 关闭
 
@@ -415,13 +409,13 @@ tasks.register("runM7ChemistryValidation", JavaExec) {
 4. 更新 `docs/roadmap/product-roadmap.md`：M7 标记已完成，保留 M8–M10；把“先冻结 species/reaction codec...”改为已完成摘要。
 5. 若活动核心行为变化，更新 `docs/architecture/fluid-solver.md` 增加 M7 边界：化学 runtime-only、cell-local、`markerCount` 与 `particleVolume` 不变。
 6. 版本号：建议 `0.13.0`；若 M7 只关闭纯化学门且无 gameplay 入口，也可先不升版本，按验收门决定。
-7. 关闭前跑一次完整 CPU 回归（`check` + 所有 CPU JavaExec 门中受影响的：M3 连通器、M7 两项、reseeding、persistence），不需要 GPU、EULA server、5,000 步。
+7. 关闭前跑 `check` 与 `runCpuValidation -PcpuValidation=milestone`；M7 selectors 加入 milestone 短门。不需要 GPU、EULA server 或 `soak`，除非改动风险直接涉及对应长期稳定性。
 
 ## 9. 风险与回退
 
 - **cell-local 化学与 marker 平流脱节**：M7 明确不输运；如果评审认为“同格计量反应”必须在动态网格中随 marker 走，则把 `CellChemistryState` 从 cell-keyed 改为 parcel-keyed（mixture handle 挂在 marker 上，reseeding 携带 handle）。这是 M7 最大的架构分叉，不应在实现中途切换。
 - **H2O 基准量化残差**：`cellResidualQuanta` 只记录不丢弃；关闭 M7 时报告最大残差与触发格数。若残差在随机注入中超过 `1 quantum`/格，说明 H2O 基准量化方案需要改，不能静默继续。
-- **reseeding 契约变更**：M7.3 改了 reseeder 签名，必须跑 `runFlipReseedingValidation`；若该门变慢或失败，不得绕过。
+- **reseeding 契约变更**：M7.3 改了 reseeder 签名，必须显式选择 `reseeding`；若该门变慢或失败，不得绕过。
 - **配置门**：v4 迁移必须保持 v1/v2/v3 旧配置可读且 chemistry/worldBridge/materials 关闭规则不变；任何 fail-closed 放宽都违反 M3/M6 契约。
 
 ## 10. 完成清单（另一 AI 自查）
@@ -435,5 +429,5 @@ tasks.register("runM7ChemistryValidation", JavaExec) {
 - [ ] 指示剂 flood fill 100 BV 拒绝且无部分标记；reseeding 后标记不丢。
 - [ ] 纯水路径未绑定化学时 `exportParticleState`/`step` 行为不变。
 - [ ] `FluidServerConfig` v1–v4 迁移门通过。
-- [ ] `runM7ChemistryValidation`、`runM7ChemistrySolverValidation`、`runFlipReseedingValidation`、`runFluidRegionPersistenceValidation` 全绿。
+- [ ] `chemistry-core`、`chemistry-solver`、`reseeding`、`region-state` selectors 全绿。
 - [ ] routing/progress/roadmap/fluid-solver 文档同步。

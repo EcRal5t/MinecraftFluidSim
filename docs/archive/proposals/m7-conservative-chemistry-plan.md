@@ -1084,10 +1084,10 @@ M7: freeze conservative chemistry state design
 
 此轮不接 solver、不注册 item、不改存档/wire。
 
-新增最近门：
+向统一 CPU runner 新增最近 selector：
 
 ```text
-runM7ChemistryCoreValidation
+runCpuValidation -PcpuValidation=chemistry-core
 ```
 
 推荐提交：
@@ -1109,13 +1109,13 @@ M7: add validated chemical registry and reaction core
 - dirty tracking、sleep/wake 和 diagnostics；
 - chemistry-off bitwise degeneration。
 
-新增最近门：
+向统一 CPU runner 新增最近 selector：
 
 ```text
-runM7ChemicalTransportValidation
+runCpuValidation -PcpuValidation=chemical-transport
 ```
 
-同时保留 `runM3ConnectedVesselValidation` 和 `runFlipReseedingValidation` 的受影响回归，但日常提交仍按 routing 选择最小一项。
+同时保留 `materials` 和 `reseeding` 的受影响回归；需要合跑时使用逗号组合 selector，但日常提交仍按 routing 选择最小集合。
 
 推荐提交：
 
@@ -1135,13 +1135,13 @@ M7: integrate conservative chemical marker transport
 - unknown/corrupt/over-budget/fingerprint mismatch 锁定；
 - loaded/unloaded region restore。
 
-最近门：
+向统一 CPU runner 新增最近 selector：
 
 ```text
-runM7ChemicalPersistenceValidation
+runCpuValidation -PcpuValidation=chemical-persistence
 ```
 
-它可复用/扩展 `runFluidRegionPersistenceValidation` fixture，但职责和 fault matrix 已显著扩大时应独立 task。改服务器配置/资源 reload 注册后再跑一次 EULA=true dedicated-server startup，并用 `stop` 正常退出。
+它可复用/扩展 `region-state` fixture；职责和 fault matrix 扩大时新增 selector，但不得新增独立 JavaExec task。改服务器配置/资源 reload 注册后再跑一次 EULA=true dedicated-server startup，并用 `stop` 正常退出。
 
 推荐提交：
 
@@ -1162,11 +1162,11 @@ M7: persist chemical region state v3
 - debug reagent acquisition；
 - hopper/drop/death/disconnect component round-trip。
 
-最近门：
+向统一 CPU runner 新增最近 selector：
 
 ```text
-runM7ChemicalContainerValidation
-runContainerTransferValidation（只在 WAL/recovery 提交）
+runCpuValidation -PcpuValidation=chemical-containers
+runCpuValidation -PcpuValidation=chemical-containers,containers（只在 WAL/recovery 提交时合跑）
 ```
 
 推荐提交：
@@ -1186,11 +1186,11 @@ M7: bridge chemical containers through WAL v3
 - item/resource/lang/recipe；
 - `chemistrydemo` 和 `chemstatus`。
 
-最近门：
+向统一 CPU runner 新增最近 selector：
 
 ```text
-runFluidNetworkProtocolValidation
-runM7IndicatorValidation
+runCpuValidation -PcpuValidation=protocol
+runCpuValidation -PcpuValidation=indicator
 ```
 
 改 payload/entrypoint/item/resource 注册后跑 EULA=true startup，并用 `stop` 正常退出。只有颜色和真实交互自动门无法观察时才请求用户进游戏。

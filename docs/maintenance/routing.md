@@ -91,38 +91,54 @@
 
 ## 最小充分验证
 
-默认一个小增量只跑最贴近改动的一项。定向 Gradle task 已包含所需编译，不重复叠加 `compileJava`/`compileTestJava`。
+所有主 Mod CPU 门由一个 JVM runner 执行，避免每个历史阶段各保留一个 Gradle task/JVM。默认命令运行短门集合；定向选择和分层集合使用同一入口：
 
-| 改动 | 默认一项 | 升级条件 |
+```powershell
+# 12 个日常短门；不含磁盘故障矩阵、M3/M4 集成和长期平衡
+./gradlew.bat runCpuValidation --offline --no-daemon
+
+# 一个或多个直接受影响领域；显式 selector 总是运行该领域完整门
+./gradlew.bat runCpuValidation -PcpuValidation=containers --offline --no-daemon
+./gradlew.bat runCpuValidation -PcpuValidation=region-state,ownership --offline --no-daemon
+
+# 18 个领域的短里程碑门；长期场景另行隔离
+./gradlew.bat runCpuValidation -PcpuValidation=milestone --offline --no-daemon
+
+# 仅 M5 平衡、5,000 步自由面与两项 5,000 步 reseeding 长跑
+./gradlew.bat runCpuValidation -PcpuValidation=soak --offline --no-daemon
+
+# 查询 selector；`full` 才把全部领域按完整模式串行运行
+./gradlew.bat runCpuValidation -PcpuValidation=list --offline --no-daemon
+```
+
+2026-08-23 同一机器热构建基线：旧 21 个 JavaExec 全门为 82.4 秒；新 `fast`/`milestone` 总耗时分别为 10.0/14.0 秒（runner 本体 2.6/6.7 秒）；`soak` 为 67 秒，`full` 为 71 秒（runner 本体 62.8 秒），二者都不属于普通里程碑。`check` 不隐式依赖 runner。默认一个小增量只选最贴近改动的 selector，不重复叠加编译任务。
+
+| 改动 | `cpuValidation` selector | 升级条件 |
 |---|---|---|
 | 文档 | 无 | 无代码/资源变化就不构建 |
-| M3 marker 材料/相/质量、变密度压力或材料界面 mesh | `runM3ConnectedVesselValidation` | 该门已含活动核心连通器与翻转分层；只有同时改 wire/存档才加对应门 |
-| 1D 变密度面系数实验 | `runVariableDensityFaceCoefficientValidation` | 已接入 3D 连通器，改该系数改跑 M3 连通器门 |
-| M4 表面张力曲率/Laplace 独立实验 | `runSurfaceTensionCurvatureValidation` | 接入活动核心压力算子后才加对应 solver 门 |
-| M4 活动核心表面张力/润湿/液液 | `runM4SurfaceTensionValidation` | 该门已含静滴 Laplace、液液 `σ12` 跳跃、无持续寄生流、合并/断开守恒和接触角铺展；只有改 wire/存档才加对应门 |
-| M5 气体 EoS/孔流/库存账本（无网格） | `runAirNetworkValidation` | 接入活动核心后改跑 M5 耦合门 |
-| M5 空腔扫描/环境判定/几何边 | `runAirCavityScannerValidation` | 改 cut-cell 共享面定义才加 cut-cell 门 |
-| M5 活动核心气液耦合/界面气压 | `runM5GasLiquidCouplingValidation` | 该门已含逐位退化、准静态单调压缩、负压悬液与孔链均压；只有改 wire/存档才加对应门 |
-| `airdemo` 玻璃脚手架/gas debug extension | `runFluidNetworkProtocolValidation` | 改 entrypoint/payload 注册才跑 EULA=true server 并用 `stop` 正常退出；玻璃恢复账本无自动门，属实机 smoke 项 |
-| 材料门配置或 live 协商 | `runFluidNetworkProtocolValidation` | 改 payload 注册/entrypoint 才跑 EULA=true server 并用 `stop` 正常退出 |
-| manager | `runFluidRegionManagerValidation` | 同时跨 lifecycle/persistence 才加对应门 |
-| lifecycle/tick | `runFluidRegionLifecycleValidation` | 同时改 ownership 才加 persistence |
-| region-state/checkpoint | `runFluidRegionPersistenceValidation` | 真实重启仅里程碑 smoke |
-| protocol/snapshot | `runFluidNetworkProtocolValidation` | 改入口/注册才跑 EULA=true server 并用 `stop` 正常退出 |
-| controller/footprint | `runFluidBoundaryScannerValidation` | 改 admission/budget 才加 manager |
-| 压力/自由面/MAC/drift | `runFlipFreeSurfaceValidation` | 改长期 marker 分布才加 reseeding |
-| cut-cell/CCD | `runFlipCutCellValidation` | 改 Minecraft shape adapter 改跑 shape 门；跨压力共享面才加 free-surface |
-| Minecraft `VoxelShape` adapter | `runFluidCutCellShapeValidation` | 不因纯 adapter 改动跑长期 solver 门 |
-| marker merge/split/长期分布 | `runFlipReseedingValidation` | 改 checkpoint/state 才加 persistence |
-| takeover 事务 | `runTakeoverJournalValidation` | 真实世界只在事务里程碑 smoke |
-| M6 ownership 事务/WAL/committed | `runM6OwnershipValidation` | 改 region-state 共享契约才加 persistence 门；真实世界只在事务里程碑 smoke |
-| M6 容器账本/换算/物品/桶入口 | `runM6ContainerValidation` | 改协议 payload 才加 protocol 门；新增 mixin/资源打包跑 EULA=true server 并用 `stop` 正常退出 |
-| M6 容器转移 WAL | `runContainerTransferValidation` | 改恢复/actor 收敛才加 EULA=true server 并用 `stop` 正常退出；真实崩溃收敛在 Smoke C |
-| transcript | `runCommandAuditValidation` | 命令包装变化且自动门不足才进服 |
+| M3 marker 材料/相/质量、变密度压力或材料界面 mesh | `materials` | 已含原 1D 候选的活动三维连通器覆盖；同时改 wire/存档才追加对应 selector |
+| M4 曲率/Laplace、活动表面张力、润湿或液液界面 | `surface-tension` | 解析曲率已合入活动门；同时改材料状态才追加 `materials` |
+| M5 气体 EoS/孔流/库存账本（无网格） | `air-network` | 改活动压力消费才运行完整 `gas-liquid` |
+| M5 空腔扫描/环境判定/几何边 | `air-cavity` | 改 cut-cell 共享面定义才追加 `cut-cell` |
+| M5 活动气液耦合/界面气压 | `gas-liquid` | 显式选择运行完整 42 秒平衡门；普通 `milestone` 只做一阶 wiring/ledger smoke |
+| `airdemo`、材料门或 live 协商 | `protocol` | 改 entrypoint/payload 注册才跑 EULA=true server 并以 `stop` 退出 |
+| manager | `region-manager` | 同时跨 lifecycle/存档才追加对应 selector |
+| lifecycle/tick | `lifecycle` | 同时改 ownership 才追加 `ownership` |
+| region-state/checkpoint | `region-state` | 真实重启仅在自动门无法覆盖事务时做 |
+| protocol/snapshot | `protocol` | 改入口/注册才跑 EULA=true server 并以 `stop` 退出 |
+| controller/footprint | `boundary` | 改 admission/budget 才追加 `region-manager` |
+| 压力/自由面/MAC/drift | `free-surface` | 显式选择含 5,000 步静水；改 marker 分布才追加 `reseeding` |
+| cut-cell/CCD | `cut-cell` | 改 Minecraft shape adapter 追加 `shape`；跨压力共享面追加 `free-surface` |
+| Minecraft `VoxelShape` adapter | `shape` | 不因纯 adapter 改动运行长期 solver 门 |
+| marker merge/split/长期分布 | `reseeding` | 显式选择含两项 5,000 步；改 checkpoint/state 才追加 `region-state` |
+| takeover 事务 | `takeover` | 真实世界只在事务里程碑 smoke |
+| M6 ownership 事务/WAL/committed | `ownership` | 改 region-state 共享契约才追加 `region-state` |
+| M6 容器账本、物品、入口与转移 WAL | `containers` | 已合并账本/原语与 WAL/recovery；改协议才追加 `protocol` |
+| transcript | `audit` | 命令包装变化且自动门不足才进服 |
 | GPU shader/dispatch/压力 | device 0 `--skip-large` | hierarchy/layout/capacity/大域性能才跑 64³ |
 | Vulkan device/queue/memory/lifecycle | device 0 快速门 + device 1 专项 | 双卡完整门只在发布里程碑 |
 
-5,000 步、benchmark、clean build 和人工 smoke 不是日常每提交门。新增覆盖优先扩展最近的现有小门；人工验证每次只回答一个自动化无法观察的问题，不累计重演旧 smoke。
+新增 CPU 覆盖必须扩展 `CpuValidationSuite` 的最近 selector，禁止再为阶段/小功能增加独立 JavaExec task。只有新的失败模式无法归属现有领域时才新增 selector；长期场景必须进入 `soak`，并优先替换同不变量的旧长期场景。已被生产路径严格覆盖的选择实验、无入口 diagnostic 与旧 solver 验证应删除，数值证据保留在 progress 文档。clean build、GPU、服务器启动和人工 smoke 仍按风险触发，不能累计成每提交清单。
 
 ## 构建与部署边界
 

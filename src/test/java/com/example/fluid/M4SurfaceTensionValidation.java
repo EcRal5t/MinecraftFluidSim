@@ -7,6 +7,7 @@ public final class M4SurfaceTensionValidation {
 private M4SurfaceTensionValidation() { }
 
 public static void main(String[] args) {
+	validateCurvatureGeometry();
 	validateSigmaZeroDegeneration();
 	validateActiveSingleCellPressureJump();
 	validateStaticDropletPressureJump();
@@ -16,6 +17,24 @@ public static void main(String[] args) {
 	validateLiquidPairPressureJump();
 	System.out.println("M4 surface-tension solver gate passed: static droplet Laplace jump, "
 			+ "contact-angle spreading, liquid-pair pressure jump, no sustained parasitic flow and exact marker conservation");
+}
+
+/** Analytic geometry checks formerly held by a separate pre-integration M4 task. */
+private static void validateCurvatureGeometry() {
+	int planarSize = 16;
+	double cellSize = 0.5;
+	double[] slab = SurfaceTensionCurvatureExperiment.smooth(
+			SurfaceTensionCurvatureExperiment.slabColour(planarSize, cellSize, 8.0 * cellSize), planarSize);
+	double planar = SurfaceTensionCurvatureExperiment.meanCurvature(slab, planarSize, 8, 8, 8, cellSize);
+	check(Math.abs(planar) <= 1.0E-6, "planar interface curvature must vanish, got " + planar);
+
+	for (double radius : new double[] {3.0, 4.0, 5.0}) {
+		double[] colour = SurfaceTensionCurvatureExperiment.sphereColour(24, radius, cellSize);
+		double curvature = SurfaceTensionCurvatureExperiment.interfaceMeanCurvature(colour, 24, cellSize);
+		double analytic = 2.0 / radius;
+		check(Math.abs(curvature - analytic) / analytic <= 0.06,
+				"sphere R=" + radius + " curvature missed 2/R: " + curvature + " vs " + analytic);
+	}
 }
 
 private static void validateSigmaZeroDegeneration() {

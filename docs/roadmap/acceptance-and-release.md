@@ -25,7 +25,9 @@
 4. 只有自动门观察不到渲染、真实碰撞或事务时，才使用专用世界人工 smoke。
 5. 只有长期稳定性是改动风险时，才做 soak，并记录最大残差、账本误差、marker/mixture 数、显存、GC 与 tick 时间。
 
-当前快速回归是 `src/test/java` 下可执行的 `main()` 类，并要求 `--offline`。在真正需要 GameTest 前，不为测试框架引入未缓存的联网依赖；接入 GameTest 后仍保留独立 main 作为快速数值基线。
+当前 CPU 回归由单一 `runCpuValidation` JavaExec 在同一 JVM 内按 selector 调用 `src/test/java` 的可执行验证，并要求 `--offline`。`fast` 是日常短门，`milestone` 覆盖所有领域的短模式，`soak` 只放长期稳定性，显式领域 selector 运行该领域完整门；具体命令见维护路由。`check` 不隐式全跑这些门。在真正需要 GameTest 前，不为测试框架引入未缓存的联网依赖。
+
+验证预算也是架构约束：新增功能先扩展最近 selector，不得按里程碑复制新的 Gradle task；短里程碑集合的 runner 时间应维持在约 10 秒量级。超过预算的新场景必须拆入 `soak`、替换已覆盖场景或说明为何属于新的不可合并失败域。历史选择实验与只打印数据的 diagnostic 一旦被活动生产路径覆盖，删除可执行源码并只在 progress 保存结论。
 
 ## 可复现性与报告
 

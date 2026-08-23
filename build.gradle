@@ -51,187 +51,23 @@ tasks.withType(Test).configureEach {
 	failOnNoDiscoveredTests = false
 }
 
-tasks.register("runTakeoverJournalValidation", JavaExec) {
+/**
+ * One JVM owns every CPU validation selector. This avoids one Gradle task and JVM startup per
+ * historical milestone while retaining narrow, independently selectable failure domains.
+ * Examples: runCpuValidation (fast), -PcpuValidation=containers, -PcpuValidation=milestone,
+ * -PcpuValidation=soak, or a comma-separated selector list.
+ */
+tasks.register("runCpuValidation", JavaExec) {
 	group = "verification"
-	description = "Runs the standalone takeover journal codec/file/fault regression suite."
+	description = "Runs selected CPU validation gates in one JVM (default: fast; use -PcpuValidation=list)."
 	dependsOn tasks.named("testClasses")
 	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.simulation.TakeoverJournalValidation"
-	def validationWorkDir = layout.buildDirectory.dir("takeover-validation-work").get().asFile
+	mainClass = "com.example.validation.CpuValidationSuite"
+	enableAssertions = true
+	args providers.gradleProperty("cpuValidation").getOrElse("fast")
+	def validationWorkDir = layout.buildDirectory.dir("cpu-validation-work").get().asFile
 	workingDir validationWorkDir
 	doFirst { validationWorkDir.mkdirs() }
-}
-
-tasks.register("runCommandAuditValidation", JavaExec) {
-	group = "verification"
-	description = "Runs the standalone UTF-8 Real Water command transcript file regression."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.logging.CommandAuditFileValidation"
-	def validationWorkDir = layout.buildDirectory.dir("command-audit-validation-work").get().asFile
-	workingDir validationWorkDir
-	doFirst { validationWorkDir.mkdirs() }
-}
-
-tasks.register("runVariableDensityFaceCoefficientValidation", JavaExec) {
-	group = "verification"
-	description = "Runs the standalone CPU variable-density pressure-face coefficient experiment."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.fluid.VariableDensityFaceCoefficientValidation"
-}
-
-tasks.register("runM3ConnectedVesselValidation", JavaExec) {
-	group = "verification"
-	description = "Runs the standalone M3 3D connected-vessel material, phase and mass-ledger gate."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.fluid.M3ConnectedVesselValidation"
-}
-
-tasks.register("runSurfaceTensionCurvatureValidation", JavaExec) {
-	group = "verification"
-	description = "Runs the standalone M4 surface-tension normal, mean-curvature and Laplace jump gate."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.fluid.SurfaceTensionCurvatureValidation"
-}
-
-tasks.register("runM4SurfaceTensionValidation", JavaExec) {
-	group = "verification"
-	description = "Runs the M4 active-solver surface-tension Laplace, parasitic-flow and ledger-conservation gate."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.fluid.M4SurfaceTensionValidation"
-}
-
-tasks.register("runAirNetworkValidation", JavaExec) {
-	group = "verification"
-	description = "Runs the standalone M5 gas-network isothermal EoS, orifice transport and exact-ledger gate."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.fluid.air.AirNetworkValidation"
-}
-
-tasks.register("runAirCavityScannerValidation", JavaExec) {
-	group = "verification"
-	description = "Runs the standalone M5 cavity topology, available-volume, geometric-edge and scan-budget gate."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.fluid.AirCavityScannerValidation"
-}
-
-tasks.register("runM5GasLiquidCouplingValidation", JavaExec) {
-	group = "verification"
-	description = "Runs the M5 active-solver gas-liquid coupling, orifice equalization and ledger gate."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.fluid.M5GasLiquidCouplingValidation"
-}
-
-tasks.register("runFluidRegionManagerValidation", JavaExec) {
-	group = "verification"
-	description = "Runs the in-memory fluid-region admission, selection and atomic-replacement regression."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.simulation.FluidRegionManagerValidation"
-	def validationWorkDir = layout.buildDirectory.dir("fluid-region-validation-work").get().asFile
-	workingDir validationWorkDir
-	doFirst { validationWorkDir.mkdirs() }
-}
-
-tasks.register("runFluidRegionLifecycleValidation", JavaExec) {
-	group = "verification"
-	description = "Runs region scheduling, sleep, wake and checkpoint-gated unload transitions."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.simulation.FluidRegionLifecycleValidation"
-}
-
-tasks.register("runFlipFreeSurfaceValidation", JavaExec) {
-	group = "verification"
-	description = "Runs deterministic M2.5 PLIC geometry and fractional hydrostatic pressure gates."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.fluid.FlipFluidFreeSurfaceValidation"
-}
-
-tasks.register("runFlipReseedingValidation", JavaExec) {
-	group = "verification"
-	description = "Runs deterministic M2.5 conservative marker merge/split and budget gates."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.fluid.FlipFluidReseedingValidation"
-}
-
-tasks.register("runFlipCutCellValidation", JavaExec) {
-	group = "verification"
-	description = "Runs M2.5 runtime cut-cell volume, aperture, collision and checkpoint-fallback gates."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.fluid.FlipCutCellValidation"
-}
-
-tasks.register("runFluidCutCellShapeValidation", JavaExec) {
-	group = "verification"
-	description = "Runs Minecraft VoxelShape-to-cut-cell fractional sampling regressions."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.simulation.FluidCutCellShapeValidation"
-}
-
-tasks.register("runFluidRegionPersistenceValidation", JavaExec) {
-	group = "verification"
-	description = "Runs region-state v1 exact-ledger, atomic publication, corruption and UNLOADED regressions."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.simulation.persistence.FluidRegionPersistenceValidation"
-	def validationWorkDir = layout.buildDirectory.dir("fluid-region-persistence-validation-work").get().asFile
-	workingDir validationWorkDir
-	doFirst { validationWorkDir.mkdirs() }
-}
-
-tasks.register("runFluidNetworkProtocolValidation", JavaExec) {
-	group = "verification"
-	description = "Runs Real Water protocol negotiation, codec and snapshot ordering compatibility checks."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.network.FluidNetworkProtocolValidation"
-}
-
-tasks.register("runFluidBoundaryScannerValidation", JavaExec) {
-	group = "verification"
-	description = "Runs visible controller-boundary closure and non-loading cross-chunk scan regression."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.simulation.controller.FluidBoundaryScannerValidation"
-}
-
-tasks.register("runM6ContainerValidation", JavaExec) {
-	group = "verification"
-	description = "Runs the M6 container nanovolume ledger, conversion and round-trip drift gate."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.item.M6ContainerValidation"
-}
-
-tasks.register("runM6OwnershipValidation", JavaExec) {
-	group = "verification"
-	description = "Runs the joint M6 world-ownership WAL, region HEAD and fault-injection gate."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.simulation.ownership.M6OwnershipValidation"
-	def validationWorkDir = layout.buildDirectory.dir("m6-ownership-validation-work").get().asFile
-	workingDir validationWorkDir
-	doFirst { validationWorkDir.mkdirs() }
-}
-
-tasks.register("runContainerTransferValidation", JavaExec) {
-	group = "verification"
-	description = "Runs the container-transfer WAL codec, atomic replace and rejection gate."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.simulation.ContainerTransferStoreValidation"
 }
 
 

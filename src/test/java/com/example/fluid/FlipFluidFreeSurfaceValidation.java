@@ -5,6 +5,7 @@ public final class FlipFluidFreeSurfaceValidation {
 	private FlipFluidFreeSurfaceValidation() { }
 
 	public static void main(String[] args) {
+		boolean fast = java.util.Arrays.asList(args).contains("--fast");
 		planeVolumeInversionIsAccurate();
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
 		pureWaterMarkerMassLedgerTracksVolume();
@@ -12,9 +13,9 @@ public final class FlipFluidFreeSurfaceValidation {
 		fractionalHydrostaticColumnsBalanceGravity();
 		thinLayerRegularizationRemainsStable();
 		isolatedDropletReceivesUndilutedGravity();
-		longRunHydrostaticSurfaceDoesNotSink();
+		if (!fast) longRunHydrostaticSurfaceDoesNotSink();
 		waterDescendsAStairSlope();
-		System.out.println("FlipFluid free-surface validation passed");
+		System.out.println("FlipFluid free-surface validation passed" + (fast ? " (short; 5,000-step soak skipped)" : ""));
 	}
 
 	private static void pureWaterMarkerMassLedgerTracksVolume() {
