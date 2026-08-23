@@ -635,23 +635,40 @@ return outcome;
 	) {
 		FlipFluidDomain domain = region.domain();
 		if (!domain.hasChemistryState()) return new TransferOutcome(false, true, contents.toStack(), "该区域不是化学区域");
-		com.example.chemistry.ChemicalTransferLedger requested;
 		try {
 			contents.validateAgainst(domain.chemicalParcels().registry());
-			requested = contents.toLedger(domain.chemicalParcels().registry(), FluidSimulationService.CELL_VOLUMES_PER_BLOCK);
 		} catch (IllegalArgumentException invalid) {
 			return new TransferOutcome(false, true, contents.toStack(), "化学桶 registry 或账本不合法：" + invalid.getMessage());
 		}
-		FlipFluidDomain.ExactChemicalTransfer inserted = domain.tryInsertExactChemical(
-				cell[0], cell[1], cell[2], requested, maxRadius);
-		if (!inserted.transferred()) {
-			return new TransferOutcome(false, true, contents.toStack(), "空间、marker 或化学预算不足，未能注入");
+		double spatialCellVolume = Math.max(0.0, domain.totalOpenVolumeExact() - domain.totalVolumeExact());
+		double markerCellVolume = Math.max(0, domain.maximumParticleCount() - domain.particleCount()) * 0.125;
+		long candidate = Math.min(contents.totalVolumeNanos(), Math.min(
+				cellVolumeToNanos(spatialCellVolume), cellVolumeToNanos(markerCellVolume)));
+		while (candidate > 0L) {
+			ChemicalContents.Split split;
+			try {
+				split = contents.split(candidate, domain.chemicalParcels().registry());
+			} catch (IllegalArgumentException belowResolution) {
+				candidate /= 2L;
+				continue;
+			}
+			com.example.chemistry.ChemicalTransferLedger requested = split.inserted().toLedger(
+					domain.chemicalParcels().registry(), FluidSimulationService.CELL_VOLUMES_PER_BLOCK);
+			FlipFluidDomain.ExactChemicalTransfer inserted = domain.tryInsertExactChemical(
+					cell[0], cell[1], cell[2], requested, maxRadius);
+			if (!inserted.transferred()) {
+				candidate /= 2L;
+				continue;
+			}
+			domain.chemicalParcels().recordExternalSource(inserted.ledger());
+			region.wakeForActivity();
+			ItemStack after = split.remaining() == null
+					? new ItemStack(RealWaterItems.MATERIAL_BUCKET) : split.remaining().toStack();
+			return new TransferOutcome(true, true, after,
+					String.format("已注入 %.2f%% 桶化学流体", 100.0 * candidate
+							/ ContainerFluidLedger.NANOS_PER_BLOCK), candidate);
 		}
-		domain.chemicalParcels().recordExternalSource(inserted.ledger());
-		region.wakeForActivity();
-		return new TransferOutcome(true, true, new ItemStack(RealWaterItems.MATERIAL_BUCKET),
-				String.format("已注入 %.2f%% 桶化学流体", 100.0 * contents.totalVolumeNanos()
-						/ ContainerFluidLedger.NANOS_PER_BLOCK), contents.totalVolumeNanos());
+		return new TransferOutcome(false, true, contents.toStack(), "空间、marker 或化学预算不足，未能注入");
 	}
 
 	private static TransferOutcome scoopChemicalIntoCell(

@@ -231,6 +231,17 @@ public final class M7ChemicalTransportValidation {
 				ContainerFluidLedger.volumeToNanos(extracted.ledger().totalVolume()));
 		check(ChemicalContents.decode(contents.encode()).equals(contents),
 				"chemical bucket canonical codec did not round-trip");
+		ChemicalContents.Split partial = contents.split(123_456_789L, CHEMISTRY);
+		check(partial.remaining() != null
+				&& partial.inserted().totalVolumeNanos() + partial.remaining().totalVolumeNanos()
+				== contents.totalVolumeNanos()
+				&& partial.inserted().totalQuanta() + partial.remaining().totalQuanta() == contents.totalQuanta()
+				&& mergedContentsSpecies(partial.inserted(), partial.remaining()).equals(contentsSpecies(contents))
+				&& Math.abs(partial.inserted().totalMass() + partial.remaining().totalMass() - contents.totalMass())
+				<= Math.max(1.0E-9, Math.ulp(contents.totalMass()) * 8.0),
+				"partial chemical bucket split did not close volume/species/mass");
+		partial.inserted().validateAgainst(CHEMISTRY);
+		partial.remaining().validateAgainst(CHEMISTRY);
 		FlipFluidDomain restored = source;
 		FlipFluidDomain.ExactChemicalTransfer inserted = restored.tryInsertExactChemical(
 				1, 1, 1, contents.toLedger(CHEMISTRY), 0);
@@ -258,6 +269,20 @@ public final class M7ChemicalTransportValidation {
 		} catch (IllegalArgumentException expected) {
 			// The item remains intact; no solver mutation is attempted.
 		}
+	}
+
+	private static Map<String, Long> contentsSpecies(ChemicalContents... contents) {
+		java.util.TreeMap<String, Long> totals = new java.util.TreeMap<>();
+		for (ChemicalContents value : contents) for (ChemicalContents.Group group : value.groups()) {
+			for (ChemicalContents.SpeciesAmount species : group.species()) {
+				totals.merge(species.speciesId(), species.amountQuanta(), Math::addExact);
+			}
+		}
+		return Map.copyOf(totals);
+	}
+
+	private static Map<String, Long> mergedContentsSpecies(ChemicalContents first, ChemicalContents second) {
+		return contentsSpecies(first, second);
 	}
 
 	private static FlipFluidDomain domainWithCell(int x, int y, int z, float volume) {

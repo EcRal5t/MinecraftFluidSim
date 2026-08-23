@@ -190,6 +190,19 @@ public final class ContainerTransferStoreValidation {
 				chemicalBefore, materialAfter, 0x5abcL, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(chemical);
 		check(chemical.equals(store.read(tx5)), "chemical bucket WAL v3 fingerprint did not round-trip");
+		ChemicalContents.Split chemicalPartial = chemicalContents.split(333_333_333L,
+				BuiltinChemicalDefinitions.REGISTRY);
+		ContainerTransferJournal.ItemFingerprint chemicalAfter = new ContainerTransferJournal.ItemFingerprint(
+				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, chemicalPartial.remaining().totalVolumeNanos(),
+				chemicalPartial.remaining().encode(), Double.doubleToRawLongBits(chemicalPartial.remaining().totalMass()));
+		UUID tx6 = UUID.randomUUID();
+		ContainerTransferJournal chemicalPartialJournal = new ContainerTransferJournal(
+				tx6, region, "minecraft:overworld", 5L, 6L,
+				ContainerTransferJournal.Operation.INSERT, chemicalPartial.inserted().totalVolumeNanos(),
+				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
+				chemicalBefore, chemicalAfter, 0x6abcL, ContainerTransferJournal.Phase.REGION_COMMITTED);
+		store.write(chemicalPartialJournal);
+		check(chemicalPartialJournal.equals(store.read(tx6)), "partial chemical WAL settlement did not round-trip");
 
 		ContainerTransferJournal wrongFamily = new ContainerTransferJournal(
 				UUID.randomUUID(), region, "minecraft:overworld", 4L, 5L,

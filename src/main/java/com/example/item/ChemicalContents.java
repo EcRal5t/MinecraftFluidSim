@@ -12,6 +12,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.math.BigInteger;
 
 /** Canonical v1 material/indicator/species bucket inventory, independent from legacy FluidMixture v1. */
 public record ChemicalContents(String registryFingerprint, long auScale, List<Group> groups) {
@@ -137,6 +138,87 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 		long result = 0L; for (Group group : groups) for (SpeciesAmount species : group.species()) {
 			result = Math.addExact(result, species.amountQuanta());
 		} return result;
+	}
+
+	/** Exact nanovolume/species split for partial settlement; both outputs remain canonical. */
+	public Split split(long insertedNanos, ChemicalRegistry registry) {
+		validateAgainst(registry);
+		long total = totalVolumeNanos();
+		if (insertedNanos <= 0L || insertedNanos > total) throw new IllegalArgumentException("Invalid chemical split volume");
+		if (insertedNanos == total) return new Split(this, null);
+		long[] insertedGroupVolume = largestRemainderVolumes(insertedNanos);
+		ArrayList<Group> inserted = new ArrayList<>(), remaining = new ArrayList<>();
+		for (int groupIndex = 0; groupIndex < groups.size(); groupIndex++) {
+			Group group = groups.get(groupIndex);
+			long insertedVolume = insertedGroupVolume[groupIndex];
+			long remainingVolume = group.volumeNanos() - insertedVolume;
+			if (insertedVolume == 0L) {
+				remaining.add(group);
+				continue;
+			}
+			if (remainingVolume == 0L) {
+				inserted.add(group);
+				continue;
+			}
+			ArrayList<SpeciesAmount> insertedSpecies = new ArrayList<>(), remainingSpecies = new ArrayList<>();
+			for (SpeciesAmount species : group.species()) {
+				BigInteger numerator = BigInteger.valueOf(species.amountQuanta()).multiply(BigInteger.valueOf(insertedVolume));
+				BigInteger[] division = numerator.divideAndRemainder(BigInteger.valueOf(group.volumeNanos()));
+				long amount = division[0].longValueExact();
+				if (division[1].shiftLeft(1).compareTo(BigInteger.valueOf(group.volumeNanos())) >= 0) amount++;
+				if (amount > 0L) insertedSpecies.add(new SpeciesAmount(species.speciesId(), amount));
+				if (amount < species.amountQuanta()) remainingSpecies.add(
+						new SpeciesAmount(species.speciesId(), species.amountQuanta() - amount));
+			}
+			if (insertedSpecies.isEmpty() || remainingSpecies.isEmpty()) {
+				throw new IllegalArgumentException("Chemical partial settlement is below species quantum resolution");
+			}
+			double groupMass = group.mass();
+			double insertedMass = groupMass * insertedVolume / group.volumeNanos();
+			double remainingMass = groupMass - insertedMass;
+			inserted.add(splitGroup(group, insertedVolume, insertedMass, insertedSpecies, registry));
+			remaining.add(splitGroup(group, remainingVolume, remainingMass, remainingSpecies, registry));
+		}
+		if (inserted.isEmpty() || remaining.isEmpty()) throw new IllegalArgumentException("Chemical split produced an empty side");
+		return new Split(new ChemicalContents(registryFingerprint, auScale, inserted),
+				new ChemicalContents(registryFingerprint, auScale, remaining));
+	}
+
+	private Group splitGroup(
+			Group source, long volume, double mass, List<SpeciesAmount> species, ChemicalRegistry registry
+	) {
+		java.util.TreeMap<String, Long> amounts = new java.util.TreeMap<>();
+		for (SpeciesAmount amount : species) amounts.put(amount.speciesId(), amount.amountQuanta());
+		ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0.0);
+		double residual = mass - exact.exactSpeciesMass(registry).toDouble();
+		return new Group(source.materialId(), source.indicator(), volume, Double.doubleToRawLongBits(mass),
+				Double.doubleToRawLongBits(residual), species);
+	}
+
+	private long[] largestRemainderVolumes(long requested) {
+		long total = totalVolumeNanos(), assigned = 0L;
+		long[] result = new long[groups.size()];
+		BigInteger[] remainders = new BigInteger[groups.size()];
+		BigInteger denominator = BigInteger.valueOf(total);
+		for (int index = 0; index < groups.size(); index++) {
+			BigInteger[] division = BigInteger.valueOf(requested).multiply(BigInteger.valueOf(groups.get(index).volumeNanos()))
+					.divideAndRemainder(denominator);
+			result[index] = division[0].longValueExact();
+			remainders[index] = division[1];
+			assigned = Math.addExact(assigned, result[index]);
+		}
+		Integer[] order = new Integer[groups.size()];
+		for (int index = 0; index < order.length; index++) order[index] = index;
+		java.util.Arrays.sort(order, Comparator.<Integer, BigInteger>comparing(index -> remainders[index]).reversed()
+				.thenComparingInt(Integer::intValue));
+		for (long left = requested - assigned, index = 0; index < left; index++) result[order[(int) index]]++;
+		return result;
+	}
+
+	public record Split(ChemicalContents inserted, ChemicalContents remaining) {
+		public Split {
+			if (inserted == null) throw new IllegalArgumentException("Inserted chemical contents are missing");
+		}
 	}
 
 	public String encode() {
