@@ -2,6 +2,8 @@ package com.example.simulation;
 
 import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FlipChemicalParticleState;
+import com.example.granular.GranularRegistry;
+import com.example.granular.GranularStateSnapshot;
 import com.example.fluid.FlipParticleState;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FluidSolverConfig;
@@ -299,6 +301,17 @@ public final class FluidRegion {
 		domain = restored;
 		collisionRefreshRequired = true;
 		lifecycle.restoreFromUnloaded(unloadedResumeState, stepIntervalTicks);
+	}
+
+	/** Completes a v5 restore after the matching liquid/material generation has been reconstructed. */
+	public void restoreGranularState(
+			GranularStateSnapshot state, GranularRegistry registry, long loadedCheckpointGeneration
+	) {
+		Objects.requireNonNull(state, "state"); Objects.requireNonNull(registry, "registry");
+		if (domain == null || loadedCheckpointGeneration != checkpointGeneration || !domain.hasMaterialState()) {
+			throw new IllegalStateException("Granular restore requires the matching loaded material generation");
+		}
+		domain.restoreGranularState(state, registry, domain.materialRegistry());
 	}
 
 	boolean adoptMigratedCheckpoint(long previousGeneration, long migratedGeneration) {

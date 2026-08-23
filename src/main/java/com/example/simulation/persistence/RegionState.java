@@ -7,6 +7,10 @@ import com.example.fluid.FluidMaterial;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.chemistry.ChemicalAuditLedgerCodec;
 import com.example.chemistry.ChemicalTransferLedger;
+import com.example.granular.GranularLimits;
+import com.example.granular.GranularRegistry;
+import com.example.granular.GranularStateSnapshot;
+import com.example.granular.SolidVolume;
 import com.example.simulation.FluidRegion;
 
 import java.io.IOException;
@@ -32,7 +36,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		return capture(region, checkpointGeneration, new CapturedParticles(1, List.of(), particles.copyPositionVolume(),
 				particles.copyParticleVelocities(), particles.copySolidMask(), new double[0], new int[0],
 				"", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L,
-				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY));
+				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY), null);
 	}
 
 	/** Captures an explicitly material-bound CPU domain without routing it through the pure-water handoff. */
@@ -42,7 +46,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		return capture(region, checkpointGeneration, new CapturedParticles(2, particles.materials(), particles.copyPositionVolume(),
 				particles.copyParticleVelocities(), particles.copySolidMask(), particles.copyParticleMass(),
 				particles.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L,
-				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY));
+				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY), null);
 	}
 
 	public static RegionState captureChemical(FluidRegion region, long checkpointGeneration) throws IOException {
@@ -54,10 +58,38 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				materials.copyParticleMass(), materials.copyMaterialPaletteIndex(), particles.registryFingerprint(),
 				particles.speciesPalette(), particles.mixtures(), particles.copyMarkerMixtureIndex(),
 				particles.copyIndicator(), particles.copySpeciesTotals(), particles.residualLedgerBits(),
-				particles.externalSource(), particles.escapedSink()));
+				particles.externalSource(), particles.escapedSink()), null);
 	}
 
-	private static RegionState capture(FluidRegion region, long checkpointGeneration, CapturedParticles particles) throws IOException {
+	public static RegionState captureGranular(FluidRegion region, long checkpointGeneration) throws IOException {
+		requireCaptureable(region, checkpointGeneration);
+		if (!region.domain().hasGranularState() || !region.domain().hasMaterialState()) {
+			throw new IOException("region-state v5 capture requires material and granular state");
+		}
+		GranularStateSnapshot granular = region.domain().exportGranularState();
+		CapturedParticles particles;
+		if (region.domain().hasChemistryState()) {
+			FlipChemicalParticleState chemical = region.domain().exportChemicalParticleState();
+			FlipMaterialParticleState materials = chemical.materials();
+			particles = new CapturedParticles(5, materials.materials(), materials.copyPositionVolume(),
+					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMass(),
+					materials.copyMaterialPaletteIndex(), chemical.registryFingerprint(), chemical.speciesPalette(),
+					chemical.mixtures(), chemical.copyMarkerMixtureIndex(), chemical.copyIndicator(),
+					chemical.copySpeciesTotals(), chemical.residualLedgerBits(), chemical.externalSource(), chemical.escapedSink());
+		} else {
+			FlipMaterialParticleState materials = region.domain().exportMaterialParticleState();
+			particles = new CapturedParticles(5, materials.materials(), materials.copyPositionVolume(),
+					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMass(),
+					materials.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0],
+					new long[0], 0L, ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY);
+		}
+		return capture(region, checkpointGeneration, particles, granular);
+	}
+
+	private static RegionState capture(
+			FluidRegion region, long checkpointGeneration, CapturedParticles particles,
+			GranularStateSnapshot granular
+	) throws IOException {
 		requireCaptureable(region, checkpointGeneration);
 		int cellsPerBlock = Math.round(1.0F / region.solverConfig().cellSize());
 		if (cellsPerBlock <= 0 || Math.abs(cellsPerBlock * region.solverConfig().cellSize() - 1.0F) > 1.0E-6F
@@ -76,6 +108,25 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					Math.floorDiv((int) Math.floor(region.origin().getY() + positionVolume[base + 1]), 16),
 					Math.floorDiv((int) Math.floor(region.origin().getZ() + positionVolume[base + 2]), 16));
 			markersBySection.computeIfAbsent(key, ignored -> new ArrayList<>()).add(ordinal);
+		}
+		Map<RegionSectionState.SectionKey, List<GranularRegionStateCodec.ActiveEntry>> granularActiveBySection = new HashMap<>();
+		Map<RegionSectionState.SectionKey, List<GranularStateSnapshot.DepositGroup>> granularDepositsBySection = new HashMap<>();
+		if (granular != null) {
+			for (int ordinal = 0; ordinal < granular.activeParcels().size(); ordinal++) {
+				GranularStateSnapshot.ActiveParcel parcel = granular.activeParcels().get(ordinal);
+				RegionSectionState.SectionKey key = sectionKey(region, parcel.x(), parcel.y(), parcel.z());
+				granularActiveBySection.computeIfAbsent(key, ignored -> new ArrayList<>())
+						.add(new GranularRegionStateCodec.ActiveEntry(ordinal, parcel));
+			}
+			for (GranularStateSnapshot.DepositGroup group : granular.depositGroups()) {
+				int cellX = group.cell() % region.sizeX(), yz = group.cell() / region.sizeX();
+				int cellY = yz % region.sizeY(), cellZ = yz / region.sizeY();
+				RegionSectionState.SectionKey key = sectionKey(region,
+						(cellX + 0.5F) * region.solverConfig().cellSize(),
+						(cellY + 0.5F) * region.solverConfig().cellSize(),
+						(cellZ + 0.5F) * region.solverConfig().cellSize());
+				granularDepositsBySection.computeIfAbsent(key, ignored -> new ArrayList<>()).add(group);
+			}
 		}
 
 		List<RegionSectionState> sectionStates = new ArrayList<>();
@@ -109,8 +160,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					float[] savedVelocities = new float[ordinals.size() * 3];
 					double[] savedMass = particles.formatVersion() >= 2 ? new double[ordinals.size()] : new double[0];
 					int[] savedMaterials = particles.formatVersion() >= 2 ? new int[ordinals.size()] : new int[0];
-					int[] savedMixtures = particles.formatVersion() == 3 ? new int[ordinals.size()] : new int[0];
-					byte[] savedIndicator = particles.formatVersion() == 3 ? new byte[ordinals.size()] : new byte[0];
+					int[] savedMixtures = particles.hasChemicalState() ? new int[ordinals.size()] : new int[0];
+					byte[] savedIndicator = particles.hasChemicalState() ? new byte[ordinals.size()] : new byte[0];
 					for (int i = 0; i < ordinals.size(); i++) {
 						int ordinal = ordinals.get(i);
 						savedOrdinals[i] = ordinal;
@@ -120,22 +171,30 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 							savedMass[i] = particles.markerMass()[ordinal];
 							savedMaterials[i] = particles.materialPaletteIndex()[ordinal];
 						}
-						if (particles.formatVersion() == 3) {
+						if (particles.hasChemicalState()) {
 							savedMixtures[i] = particles.chemicalMixtureIndex()[ordinal];
 							savedIndicator[i] = particles.indicator()[ordinal];
 						}
 					}
-					long[] sectionSpecies = particles.formatVersion() == 3
+					long[] sectionSpecies = particles.hasChemicalState()
 							? chemicalTotals(particles, savedMixtures) : new long[0];
 					double sectionResidual = 0.0;
-					if (particles.formatVersion() == 3) for (int mixture : savedMixtures) {
+					if (particles.hasChemicalState()) for (int mixture : savedMixtures) {
 						sectionResidual += Double.longBitsToDouble(particles.chemicalMixtures().get(mixture).massResidualBits());
+					}
+					List<RegionExtension> sectionExtensions = List.of();
+					if (granular != null) {
+						GranularRegionStateCodec.SectionData data = new GranularRegionStateCodec.SectionData(
+								List.copyOf(granularActiveBySection.getOrDefault(key, List.of())),
+								List.copyOf(granularDepositsBySection.getOrDefault(key, List.of())));
+						sectionExtensions = List.of(new RegionExtension(GranularRegionStateCodec.SECTION_EXTENSION,
+								new GranularRegionStateCodec().encodeSection(data)));
 					}
 					RegionSectionState unsigned = new RegionSectionState(particles.formatVersion(), region.id(), region.dimension().identifier().toString(),
 							checkpointGeneration, sectionX, sectionY, sectionZ, startX, startY, startZ,
 							sliceX, sliceY, sliceZ, savedOrdinals, savedPositions, savedVelocities, savedMass, savedMaterials,
-							solidSlice, List.of(), savedMixtures, savedIndicator, sectionSpecies,
-							particles.formatVersion() == 3 ? Double.doubleToRawLongBits(sectionResidual) : 0L, 0L);
+							solidSlice, sectionExtensions, savedMixtures, savedIndicator, sectionSpecies,
+							particles.hasChemicalState() ? Double.doubleToRawLongBits(sectionResidual) : 0L, 0L);
 					sectionStates.add(withChecksum(unsigned));
 				}
 			}
@@ -149,17 +208,19 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					section.formatVersion() >= 2 ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L, section.checksum()));
 		}
 		List<RegionManifest.MaterialLedger> materialLedgers = materialLedgers(particles);
-		List<RegionExtension> manifestExtensions = particles.formatVersion() == 3
-				? List.of(new RegionExtension(CHEMICAL_AUDIT_EXTENSION, ChemicalAuditLedgerCodec.encode(
-						particles.externalSource(), particles.escapedSink())))
-				: List.of();
+		List<RegionExtension> manifestExtensions = new ArrayList<>();
+		if (particles.hasChemicalState()) manifestExtensions.add(new RegionExtension(CHEMICAL_AUDIT_EXTENSION,
+				ChemicalAuditLedgerCodec.encode(particles.externalSource(), particles.escapedSink())));
+		if (granular != null) manifestExtensions.add(new RegionExtension(GranularRegionStateCodec.MANIFEST_EXTENSION,
+				new GranularRegionStateCodec().encodeManifest(granularManifest(granular, sectionStates,
+						particles.hasChemicalState()))));
 		RegionManifest unsigned = new RegionManifest(particles.formatVersion(), region.id(), region.dimension().identifier().toString(), checkpointGeneration,
 				region.generation(), region.origin(), region.sizeX(), region.sizeY(), region.sizeZ(), region.solverConfig(),
 				region.reservedMarkerCapacity(), region.persistedRuntime(), region.footprint(), particles.particleCount(),
 				Double.doubleToRawLongBits(sumVolumes(positionVolume)), particles.materialPalette(),
 				particles.formatVersion() >= 2 ? Double.doubleToRawLongBits(sum(particles.markerMass())) : 0L,
-				materialLedgers, descriptors, manifestExtensions, particles.registryFingerprint(),
-				particles.formatVersion() == 3 ? com.example.chemistry.ChemicalLimits.QUANTA_PER_AU : 0L,
+				materialLedgers, descriptors, List.copyOf(manifestExtensions), particles.registryFingerprint(),
+				particles.hasChemicalState() ? com.example.chemistry.ChemicalLimits.QUANTA_PER_AU : 0L,
 				particles.speciesPalette(), particles.chemicalMixtures(), particles.chemicalSpeciesTotals(),
 				particles.chemicalResidualLedgerBits(), 0L);
 		return new RegionState(withChecksum(unsigned), sectionStates);
@@ -238,8 +299,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	}
 
 	public FlipMaterialParticleState reconstructMaterial() throws IOException {
-		if (manifest.formatVersion() != 2) {
-			throw new IOException("Pure-water region-state v1 cannot use the material reconstruction path");
+		if (manifest.formatVersion() != 2 && !(manifest.formatVersion() == 5 && !manifest.hasChemicalState())) {
+			throw new IOException("This region-state cannot use the material reconstruction path");
 		}
 		ReconstructedParticles particles = reconstructParticles();
 		return new FlipMaterialParticleState(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize(),
@@ -249,7 +310,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	}
 
 	public FlipChemicalParticleState reconstructChemical(ChemicalRegistry registry) throws IOException {
-		if (manifest.formatVersion() != 3) throw new IOException("Only region-state v3 has chemical state");
+		if (!manifest.hasChemicalState()) throw new IOException("This region-state has no chemical state");
 		if (registry == null || !manifest.registryFingerprint().equals(registry.fingerprint())
 				|| !manifest.speciesPalette().equals(registry.species().stream()
 				.map(com.example.chemistry.ChemicalSpecies::id).toList())) {
@@ -265,6 +326,56 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		return new FlipChemicalParticleState(materials, registry, manifest.chemicalMixtures(),
 				particles.chemicalMixtureIndex(), particles.indicator(), manifest.chemicalSpeciesTotals(),
 				manifest.chemicalResidualLedgerBits(), audit.externalSource(), audit.escapedSink());
+	}
+
+	public GranularStateSnapshot reconstructGranular(GranularRegistry registry) throws IOException {
+		if (manifest.formatVersion() != 5) throw new IOException("Only region-state v5 has granular state");
+		if (registry == null) throw new IOException("Authoritative granular registry is unavailable");
+		validate();
+		GranularRegionStateCodec codec = new GranularRegionStateCodec();
+		GranularRegionStateCodec.ManifestData granular = codec.decodeManifest(
+				requiredExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION).payload());
+		if (!granular.registryFingerprint().equals(registry.fingerprint())
+				|| !granular.materialPalette().equals(registry.materials().stream()
+				.map(com.example.granular.ParticulateMaterial::id).toList())) {
+			throw new IOException("Region-state v5 granular registry fingerprint/palette mismatch");
+		}
+		GranularStateSnapshot.ActiveParcel[] active = new GranularStateSnapshot.ActiveParcel[granular.activeCount()];
+		boolean[] seenActive = new boolean[active.length];
+		List<GranularStateSnapshot.DepositGroup> deposits = new ArrayList<>(granular.depositGroupCount());
+		for (RegionSectionState section : sections) {
+			GranularRegionStateCodec.SectionData data = codec.decodeSection(
+					requiredExtension(section.extensions(), GranularRegionStateCodec.SECTION_EXTENSION).payload(),
+					granular.activeBudget(), granular.depositGroupBudget());
+			int previousActiveOrdinal = -1;
+			for (GranularRegionStateCodec.ActiveEntry entry : data.active()) {
+				if (entry.ordinal() < 0 || entry.ordinal() >= active.length || seenActive[entry.ordinal()]) {
+					throw new IOException("Duplicate or invalid granular active ordinal");
+				}
+				if (entry.ordinal() <= previousActiveOrdinal) throw new IOException("Granular section active ordinals are not sorted");
+				previousActiveOrdinal = entry.ordinal();
+				validateGranularSectionPosition(section, entry.parcel().x(), entry.parcel().y(), entry.parcel().z());
+				seenActive[entry.ordinal()] = true; active[entry.ordinal()] = entry.parcel();
+			}
+			for (GranularStateSnapshot.DepositGroup group : data.deposits()) {
+				validateGranularDepositSection(section, group.cell());
+				deposits.add(group);
+			}
+		}
+		for (boolean seen : seenActive) if (!seen) throw new IOException("Missing granular active ordinal");
+		deposits.sort(Comparator.comparingInt(GranularStateSnapshot.DepositGroup::cell)
+				.thenComparingInt(GranularStateSnapshot.DepositGroup::materialPaletteIndex)
+				.thenComparingInt(GranularStateSnapshot.DepositGroup::solidCompositionIndex));
+		long totalSvq = Math.addExact(granular.activeSvq(), granular.depositSvq());
+		double totalMass = Double.longBitsToDouble(granular.activeMassBits())
+				+ Double.longBitsToDouble(granular.depositMassBits());
+		try {
+			return new GranularStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
+					granular.registryFingerprint(), granular.materialPalette(), Arrays.asList(active), deposits,
+					totalSvq, Double.doubleToRawLongBits(totalMass));
+		} catch (IllegalArgumentException invalid) {
+			throw new IOException("Invalid region-state v5 granular inventory: " + invalid.getMessage(), invalid);
+		}
 	}
 
 	private ChemicalAuditLedgerCodec.AuditLedgers decodeChemicalAuditExtension() throws IOException {
@@ -285,8 +396,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		float[] velocities = new float[Math.multiplyExact(count, 3)];
 		double[] markerMass = manifest.formatVersion() >= 2 ? new double[count] : new double[0];
 		int[] materialPaletteIndex = manifest.formatVersion() >= 2 ? new int[count] : new int[0];
-		int[] chemicalMixtureIndex = manifest.formatVersion() == 3 ? new int[count] : new int[0];
-		byte[] indicator = manifest.formatVersion() == 3 ? new byte[count] : new byte[0];
+		int[] chemicalMixtureIndex = manifest.hasChemicalState() ? new int[count] : new int[0];
+		byte[] indicator = manifest.hasChemicalState() ? new byte[count] : new byte[0];
 		byte[] solids = new byte[Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ())];
 		boolean[] seenMarkers = new boolean[count];
 		boolean[] seenSolids = new boolean[solids.length];
@@ -308,7 +419,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					markerMass[ordinal] = sectionMass[i];
 					materialPaletteIndex[ordinal] = sectionMaterials[i];
 				}
-				if (manifest.formatVersion() == 3) {
+				if (manifest.hasChemicalState()) {
 					chemicalMixtureIndex[ordinal] = sectionMixtures[i];
 					indicator[ordinal] = sectionIndicator[i];
 				}
@@ -366,7 +477,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			throw new IOException("Manifest marker count/budget mismatch");
 		}
 		if (manifest.formatVersion() >= 2) validateMaterialLedgers();
-		if (manifest.formatVersion() == 3) validateChemicalLedgers();
+		if (manifest.hasChemicalState()) validateChemicalLedgers();
+		if (manifest.formatVersion() == 5) validateGranularLedgers();
 	}
 
 	private void validateChemicalLedgers() throws IOException {
@@ -418,6 +530,118 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		if (!Arrays.equals(totals, manifest.chemicalSpeciesTotals())
 				|| Double.doubleToRawLongBits(residual) != manifest.chemicalResidualLedgerBits()) {
 			throw new IOException("Manifest chemical ledger mismatch");
+		}
+	}
+
+	private void validateGranularLedgers() throws IOException {
+		GranularRegionStateCodec codec = new GranularRegionStateCodec();
+		GranularRegionStateCodec.ManifestData expected = codec.decodeManifest(
+				requiredExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION).payload());
+		boolean capabilityChemistry = (expected.capabilities() & GranularRegionStateCodec.CAP_CHEMISTRY) != 0;
+		if (capabilityChemistry != manifest.hasChemicalState()
+				|| (expected.capabilities() & GranularRegionStateCodec.CAP_PRECIPITATION) != 0) {
+			throw new IOException("Region-state v5 capability set does not match its complete payload");
+		}
+		if (expected.materialLedgers().size() != expected.materialPalette().size()
+				|| expected.sectionLedgers().size() != sections.size()) {
+			throw new IOException("Region-state v5 granular ledger cardinality mismatch");
+		}
+		Map<RegionSectionState.SectionKey, GranularRegionStateCodec.SectionLedger> sectionLedgers = new HashMap<>();
+		for (GranularRegionStateCodec.SectionLedger ledger : expected.sectionLedgers()) {
+			if (sectionLedgers.put(ledger.key(), ledger) != null) throw new IOException("Duplicate granular section ledger");
+		}
+		GranularStateSnapshot.ActiveParcel[] active = new GranularStateSnapshot.ActiveParcel[expected.activeCount()];
+		boolean[] seenActive = new boolean[active.length];
+		List<GranularStateSnapshot.DepositGroup> deposits = new ArrayList<>(expected.depositGroupCount());
+		int materialCount = expected.materialPalette().size();
+		int[] activeCounts = new int[materialCount], depositCounts = new int[materialCount];
+		long[] activeSvq = new long[materialCount], depositSvq = new long[materialCount];
+		double[] activeMass = new double[materialCount], depositMass = new double[materialCount];
+		for (RegionSectionState section : sections) {
+			GranularRegionStateCodec.SectionData data = codec.decodeSection(
+					requiredExtension(section.extensions(), GranularRegionStateCodec.SECTION_EXTENSION).payload(),
+					expected.activeBudget(), expected.depositGroupBudget());
+			long sectionActiveSvq = 0L, sectionDepositSvq = 0L;
+			double sectionActiveMass = 0.0, sectionDepositMass = 0.0;
+			int depositCells = 0, previousCell = -1;
+			for (GranularRegionStateCodec.ActiveEntry entry : data.active()) {
+				if (entry.ordinal() < 0 || entry.ordinal() >= active.length || seenActive[entry.ordinal()]) {
+					throw new IOException("Duplicate or invalid granular active ordinal");
+				}
+				validateGranularSectionPosition(section, entry.parcel().x(), entry.parcel().y(), entry.parcel().z());
+				seenActive[entry.ordinal()] = true; active[entry.ordinal()] = entry.parcel();
+				int material = entry.parcel().materialPaletteIndex();
+				if (material < 0 || material >= materialCount) throw new IOException("Granular active material is outside palette");
+				sectionActiveSvq = Math.addExact(sectionActiveSvq, entry.parcel().solidVolumeSvq());
+				sectionActiveMass += entry.parcel().mass();
+			}
+			GranularStateSnapshot.DepositGroup previousGroup = null;
+			for (GranularStateSnapshot.DepositGroup group : data.deposits()) {
+				if (previousGroup != null && (previousGroup.cell() > group.cell()
+						|| previousGroup.cell() == group.cell() && (previousGroup.materialPaletteIndex() > group.materialPaletteIndex()
+						|| previousGroup.materialPaletteIndex() == group.materialPaletteIndex()
+						&& previousGroup.solidCompositionIndex() >= group.solidCompositionIndex()))) {
+					throw new IOException("Granular section deposit groups are not canonical");
+				}
+				previousGroup = group;
+				validateGranularDepositSection(section, group.cell()); deposits.add(group);
+				int material = group.materialPaletteIndex();
+				if (material < 0 || material >= materialCount) throw new IOException("Granular deposit material is outside palette");
+				sectionDepositSvq = Math.addExact(sectionDepositSvq, group.solidVolumeSvq());
+				sectionDepositMass += group.mass();
+				if (group.cell() != previousCell) { depositCells++; previousCell = group.cell(); }
+			}
+			GranularRegionStateCodec.SectionLedger ledger = sectionLedgers.remove(section.key());
+			if (ledger == null || ledger.activeCount() != data.active().size()
+					|| ledger.depositGroupCount() != data.deposits().size() || ledger.depositCellCount() != depositCells
+					|| ledger.activeSvq() != sectionActiveSvq || ledger.depositSvq() != sectionDepositSvq
+					|| ledger.activeMassBits() != Double.doubleToRawLongBits(sectionActiveMass)
+					|| ledger.depositMassBits() != Double.doubleToRawLongBits(sectionDepositMass)) {
+				throw new IOException("Granular section does not match its v5 ledger");
+			}
+		}
+		if (!sectionLedgers.isEmpty()) throw new IOException("Granular manifest names missing sections");
+		for (boolean seen : seenActive) if (!seen) throw new IOException("Missing granular active ordinal");
+		deposits.sort(Comparator.comparingInt(GranularStateSnapshot.DepositGroup::cell)
+				.thenComparingInt(GranularStateSnapshot.DepositGroup::materialPaletteIndex)
+				.thenComparingInt(GranularStateSnapshot.DepositGroup::solidCompositionIndex));
+		for (GranularStateSnapshot.ActiveParcel parcel : active) {
+			int material = parcel.materialPaletteIndex(); activeCounts[material]++;
+			activeSvq[material] = Math.addExact(activeSvq[material], parcel.solidVolumeSvq());
+			activeMass[material] += parcel.mass();
+		}
+		for (GranularStateSnapshot.DepositGroup group : deposits) {
+			int material = group.materialPaletteIndex(); depositCounts[material]++;
+			depositSvq[material] = Math.addExact(depositSvq[material], group.solidVolumeSvq());
+			depositMass[material] += group.mass();
+		}
+		long totalActiveSvq = 0L, totalDepositSvq = 0L;
+		for (int material = 0; material < materialCount; material++) {
+			GranularRegionStateCodec.MaterialLedger ledger = expected.materialLedgers().get(material);
+			if (ledger.activeCount() != activeCounts[material] || ledger.activeSvq() != activeSvq[material]
+					|| ledger.activeMassBits() != Double.doubleToRawLongBits(activeMass[material])
+					|| ledger.depositGroupCount() != depositCounts[material] || ledger.depositSvq() != depositSvq[material]
+					|| ledger.depositMassBits() != Double.doubleToRawLongBits(depositMass[material])) {
+				throw new IOException("Granular material ledger mismatch at palette index " + material);
+			}
+			totalActiveSvq = Math.addExact(totalActiveSvq, activeSvq[material]);
+			totalDepositSvq = Math.addExact(totalDepositSvq, depositSvq[material]);
+		}
+		double totalActiveMass = 0.0, totalDepositMass = 0.0;
+		for (GranularStateSnapshot.ActiveParcel parcel : active) totalActiveMass += parcel.mass();
+		for (GranularStateSnapshot.DepositGroup group : deposits) totalDepositMass += group.mass();
+		if (expected.activeSvq() != totalActiveSvq || expected.depositSvq() != totalDepositSvq
+				|| expected.activeMassBits() != Double.doubleToRawLongBits(totalActiveMass)
+				|| expected.depositMassBits() != Double.doubleToRawLongBits(totalDepositMass)) {
+			throw new IOException("Granular manifest total ledger mismatch");
+		}
+		try {
+			new GranularStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), expected.registryFingerprint(),
+					expected.materialPalette(), Arrays.asList(active), deposits,
+					Math.addExact(totalActiveSvq, totalDepositSvq),
+					Double.doubleToRawLongBits(totalActiveMass + totalDepositMass));
+		} catch (IllegalArgumentException invalid) {
+			throw new IOException("Invalid v5 granular state: " + invalid.getMessage(), invalid);
 		}
 	}
 
@@ -492,6 +716,24 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		}
 	}
 
+	private void validateGranularSectionPosition(RegionSectionState section, float x, float y, float z) throws IOException {
+		int sectionX = Math.floorDiv((int) Math.floor(manifest.origin().getX() + x), 16);
+		int sectionY = Math.floorDiv((int) Math.floor(manifest.origin().getY() + y), 16);
+		int sectionZ = Math.floorDiv((int) Math.floor(manifest.origin().getZ() + z), 16);
+		if (sectionX != section.sectionX() || sectionY != section.sectionY() || sectionZ != section.sectionZ()) {
+			throw new IOException("Granular active parcel is stored in the wrong section");
+		}
+	}
+
+	private void validateGranularDepositSection(RegionSectionState section, int cell) throws IOException {
+		int cellCount = Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ());
+		if (cell < 0 || cell >= cellCount) throw new IOException("Granular deposit cell is outside region bounds");
+		int x = cell % manifest.sizeX(), yz = cell / manifest.sizeX();
+		int y = yz % manifest.sizeY(), z = yz / manifest.sizeY();
+		float h = manifest.solverConfig().cellSize();
+		validateGranularSectionPosition(section, (x + 0.5F) * h, (y + 0.5F) * h, (z + 0.5F) * h);
+	}
+
 	private static RegionSectionState withChecksum(RegionSectionState section) {
 		long checksum = RegionStateIntegrity.sectionChecksum(section);
 		return new RegionSectionState(section.formatVersion(), section.regionId(), section.dimensionId(), section.checkpointGeneration(),
@@ -561,6 +803,87 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		return totals;
 	}
 
+	private static RegionSectionState.SectionKey sectionKey(FluidRegion region, float x, float y, float z) {
+		return new RegionSectionState.SectionKey(
+				Math.floorDiv((int) Math.floor(region.origin().getX() + x), 16),
+				Math.floorDiv((int) Math.floor(region.origin().getY() + y), 16),
+				Math.floorDiv((int) Math.floor(region.origin().getZ() + z), 16));
+	}
+
+	private static GranularRegionStateCodec.ManifestData granularManifest(
+			GranularStateSnapshot snapshot, List<RegionSectionState> sections, boolean chemicalState
+	) throws IOException {
+		int materials = snapshot.materialPalette().size();
+		int[] activeCounts = new int[materials], depositCounts = new int[materials];
+		long[] activeSvq = new long[materials], depositSvq = new long[materials];
+		double[] activeMass = new double[materials], depositMass = new double[materials];
+		double canonicalActiveMass = 0.0, canonicalDepositMass = 0.0;
+		for (GranularStateSnapshot.ActiveParcel parcel : snapshot.activeParcels()) {
+			int material = parcel.materialPaletteIndex(); activeCounts[material]++;
+			activeSvq[material] = Math.addExact(activeSvq[material], parcel.solidVolumeSvq());
+			activeMass[material] += parcel.mass();
+			canonicalActiveMass += parcel.mass();
+		}
+		for (GranularStateSnapshot.DepositGroup group : snapshot.depositGroups()) {
+			int material = group.materialPaletteIndex(); depositCounts[material]++;
+			depositSvq[material] = Math.addExact(depositSvq[material], group.solidVolumeSvq());
+			depositMass[material] += group.mass();
+			canonicalDepositMass += group.mass();
+		}
+		List<GranularRegionStateCodec.MaterialLedger> materialLedgers = new ArrayList<>(materials);
+		for (int material = 0; material < materials; material++) {
+			materialLedgers.add(new GranularRegionStateCodec.MaterialLedger(activeCounts[material], activeSvq[material],
+					Double.doubleToRawLongBits(activeMass[material]), depositCounts[material], depositSvq[material],
+					Double.doubleToRawLongBits(depositMass[material])));
+		}
+		List<GranularRegionStateCodec.SectionLedger> sectionLedgers = new ArrayList<>(sections.size());
+		long allActiveSvq = 0L, allDepositSvq = 0L;
+		int depositCells = 0;
+		GranularRegionStateCodec codec = new GranularRegionStateCodec();
+		for (RegionSectionState section : sections) {
+			GranularRegionStateCodec.SectionData data = codec.decodeSection(
+					requiredExtension(section.extensions(), GranularRegionStateCodec.SECTION_EXTENSION).payload(),
+					GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
+			long sectionActiveSvq = 0L, sectionDepositSvq = 0L;
+			double sectionActiveMass = 0.0, sectionDepositMass = 0.0;
+			int sectionDepositCells = 0, previousCell = -1;
+			for (GranularRegionStateCodec.ActiveEntry entry : data.active()) {
+				sectionActiveSvq = Math.addExact(sectionActiveSvq, entry.parcel().solidVolumeSvq());
+				sectionActiveMass += entry.parcel().mass();
+			}
+			for (GranularStateSnapshot.DepositGroup group : data.deposits()) {
+				sectionDepositSvq = Math.addExact(sectionDepositSvq, group.solidVolumeSvq());
+				sectionDepositMass += group.mass();
+				if (group.cell() != previousCell) { sectionDepositCells++; previousCell = group.cell(); }
+			}
+			sectionLedgers.add(new GranularRegionStateCodec.SectionLedger(section.key(), data.active().size(),
+					data.deposits().size(), sectionDepositCells, sectionActiveSvq,
+					Double.doubleToRawLongBits(sectionActiveMass), sectionDepositSvq,
+					Double.doubleToRawLongBits(sectionDepositMass)));
+			allActiveSvq = Math.addExact(allActiveSvq, sectionActiveSvq);
+			allDepositSvq = Math.addExact(allDepositSvq, sectionDepositSvq);
+			depositCells += sectionDepositCells;
+		}
+		int capabilities = GranularRegionStateCodec.CAP_MATERIALS | GranularRegionStateCodec.CAP_GRANULAR
+				| (chemicalState ? GranularRegionStateCodec.CAP_CHEMISTRY : 0);
+		return new GranularRegionStateCodec.ManifestData(capabilities, snapshot.registryFingerprint(),
+				SolidVolume.SVQ_PER_BV, GranularLimits.POROSITY_SCALE,
+				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
+				snapshot.materialPalette(), snapshot.activeParcels().size(), snapshot.depositGroups().size(), depositCells,
+				allActiveSvq, Double.doubleToRawLongBits(canonicalActiveMass), allDepositSvq,
+				Double.doubleToRawLongBits(canonicalDepositMass), List.copyOf(materialLedgers), List.copyOf(sectionLedgers));
+	}
+
+	private static RegionExtension requiredExtension(List<RegionExtension> extensions, String type) throws IOException {
+		RegionExtension found = null;
+		for (RegionExtension extension : extensions) if (type.equals(extension.type())) {
+			if (found != null) throw new IOException("Duplicate required region extension " + type);
+			found = extension;
+		}
+		if (found == null) throw new IOException("Missing required region extension " + type);
+		return found;
+	}
+
 	private record CapturedParticles(
 			int formatVersion,
 			List<FluidMaterial> materialPalette,
@@ -580,6 +903,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			ChemicalTransferLedger escapedSink
 	) {
 		int particleCount() { return positionVolume.length / 4; }
+		boolean hasChemicalState() { return !registryFingerprint.isEmpty(); }
 	}
 
 	private record ReconstructedParticles(

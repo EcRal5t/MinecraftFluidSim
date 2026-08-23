@@ -2,6 +2,7 @@ package com.example.simulation;
 
 import com.example.RealWaterMod;
 import com.example.chemistry.ChemicalRegistry;
+import com.example.granular.GranularRegistry;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 
@@ -30,8 +31,17 @@ final class FluidRegionOperations {
 			Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean materialsEnabled,
 			boolean chemistryEnabled, ChemicalRegistry chemicalRegistry
 	) {
+		this(worldRoot, manager, configurationLocked, materialsEnabled, chemistryEnabled, chemicalRegistry, false, null);
+	}
+
+	FluidRegionOperations(
+			Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean materialsEnabled,
+			boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
+			boolean granularEnabled, GranularRegistry granularRegistry
+	) {
 		this.manager = manager;
-		this.persistence = new FluidRegionPersistence(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry);
+		this.persistence = new FluidRegionPersistence(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry,
+				granularEnabled, granularRegistry);
 		creationLocked = configurationLocked;
 		List<String> metadataIssues = persistence.loadMetadata(manager);
 		issues.addAll(metadataIssues);

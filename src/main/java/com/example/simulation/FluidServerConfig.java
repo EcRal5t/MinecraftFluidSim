@@ -1,5 +1,7 @@
 package com.example.simulation;
 
+import com.example.granular.GranularLimits;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -17,9 +19,13 @@ public record FluidServerConfig(
 		boolean materialsEnabled,
 		boolean worldBridgeEnabled,
 		boolean chemistryEnabled,
+		boolean granularEnabled,
+		boolean precipitationEnabled,
+		long maximumGranularParcels,
+		long maximumGranularDepositGroups,
 		FluidRegionManager.Limits limits
 ) {
-	private static final int FORMAT_VERSION = 4;
+	private static final int FORMAT_VERSION = 5;
 	private static final int DEFAULT_REGIONS = 4;
 	private static final long DEFAULT_CELLS = 9_216L;
 	private static final long DEFAULT_MARKERS = 73_728L;
@@ -29,6 +35,25 @@ public record FluidServerConfig(
 		if (chemistryEnabled && !materialsEnabled) {
 			throw new IllegalArgumentException("chemistryEnabled=true requires materialsEnabled=true");
 		}
+		if (granularEnabled && !materialsEnabled) {
+			throw new IllegalArgumentException("granularEnabled=true requires materialsEnabled=true");
+		}
+		if (precipitationEnabled && !(granularEnabled && chemistryEnabled)) {
+			throw new IllegalArgumentException("precipitationEnabled=true requires granularEnabled=true and chemistryEnabled=true");
+		}
+		if (maximumGranularParcels <= 0L || maximumGranularParcels > GranularLimits.MAX_ACTIVE_PARCELS_PER_SERVER
+				|| maximumGranularDepositGroups <= 0L
+				|| maximumGranularDepositGroups > GranularLimits.MAX_DEPOSIT_GROUPS_PER_SERVER) {
+			throw new IllegalArgumentException("Granular server budgets are outside hard limits");
+		}
+	}
+
+	public FluidServerConfig(
+			boolean controllersEnabled, boolean materialsEnabled, boolean worldBridgeEnabled,
+			boolean chemistryEnabled, FluidRegionManager.Limits limits
+	) {
+		this(controllersEnabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled, false, false,
+				GranularLimits.MAX_ACTIVE_PARCELS_PER_SERVER, GranularLimits.MAX_DEPOSIT_GROUPS_PER_SERVER, limits);
 	}
 
 	public FluidServerConfig(
@@ -75,12 +100,21 @@ public record FluidServerConfig(
 			if (!worldBridge.equals("true") && !worldBridge.equals("false")) throw new IOException("worldBridgeEnabled must be true or false");
 			String chemistry = version >= 4 ? required(properties, "chemistryEnabled") : "false";
 			if (!chemistry.equals("true") && !chemistry.equals("false")) throw new IOException("chemistryEnabled must be true or false");
+			String granular = version >= 5 ? required(properties, "granularEnabled") : "false";
+			if (!granular.equals("true") && !granular.equals("false")) throw new IOException("granularEnabled must be true or false");
+			String precipitation = version >= 5 ? required(properties, "precipitationEnabled") : "false";
+			if (!precipitation.equals("true") && !precipitation.equals("false")) throw new IOException("precipitationEnabled must be true or false");
+			long granularParcels = version >= 5 ? positiveLong(properties, "maximumGranularParcels")
+					: GranularLimits.MAX_ACTIVE_PARCELS_PER_SERVER;
+			long granularDeposits = version >= 5 ? positiveLong(properties, "maximumGranularDepositGroups")
+					: GranularLimits.MAX_DEPOSIT_GROUPS_PER_SERVER;
 			FluidRegionManager.Limits limits = new FluidRegionManager.Limits(
 					integer(properties, "maximumRegions"), positiveLong(properties, "maximumCellsPerRegion"),
 					positiveLong(properties, "maximumMarkersPerRegion"), positiveLong(properties, "maximumTotalCells"),
 					positiveLong(properties, "maximumTotalMarkers"));
 			return new FluidServerConfig(Boolean.parseBoolean(controllers), Boolean.parseBoolean(materials),
-					Boolean.parseBoolean(worldBridge), Boolean.parseBoolean(chemistry), limits);
+					Boolean.parseBoolean(worldBridge), Boolean.parseBoolean(chemistry), Boolean.parseBoolean(granular),
+					Boolean.parseBoolean(precipitation), granularParcels, granularDeposits, limits);
 		} catch (IllegalArgumentException exception) {
 			throw new IOException("Invalid Real Water server config: " + exception.getMessage(), exception);
 		}
@@ -95,6 +129,10 @@ public record FluidServerConfig(
 		properties.setProperty("materialsEnabled", Boolean.toString(materialsEnabled));
 		properties.setProperty("worldBridgeEnabled", Boolean.toString(worldBridgeEnabled));
 		properties.setProperty("chemistryEnabled", Boolean.toString(chemistryEnabled));
+		properties.setProperty("granularEnabled", Boolean.toString(granularEnabled));
+		properties.setProperty("precipitationEnabled", Boolean.toString(precipitationEnabled));
+		properties.setProperty("maximumGranularParcels", Long.toString(maximumGranularParcels));
+		properties.setProperty("maximumGranularDepositGroups", Long.toString(maximumGranularDepositGroups));
 		properties.setProperty("maximumRegions", Integer.toString(limits.maximumRegions()));
 		properties.setProperty("maximumCellsPerRegion", Long.toString(limits.maximumCellsPerRegion()));
 		properties.setProperty("maximumMarkersPerRegion", Long.toString(limits.maximumMarkersPerRegion()));
@@ -113,19 +151,33 @@ public record FluidServerConfig(
 	}
 
 	public FluidServerConfig withControllersEnabled(boolean enabled) {
-		return new FluidServerConfig(enabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled, limits);
+		return new FluidServerConfig(enabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled, granularEnabled,
+				precipitationEnabled, maximumGranularParcels, maximumGranularDepositGroups, limits);
 	}
 
 	public FluidServerConfig withMaterialsEnabled(boolean enabled) {
-		return new FluidServerConfig(controllersEnabled, enabled, worldBridgeEnabled, chemistryEnabled, limits);
+		return new FluidServerConfig(controllersEnabled, enabled, worldBridgeEnabled, chemistryEnabled, granularEnabled,
+				precipitationEnabled, maximumGranularParcels, maximumGranularDepositGroups, limits);
 	}
 
 	public FluidServerConfig withWorldBridgeEnabled(boolean enabled) {
-		return new FluidServerConfig(controllersEnabled, materialsEnabled, enabled, chemistryEnabled, limits);
+		return new FluidServerConfig(controllersEnabled, materialsEnabled, enabled, chemistryEnabled, granularEnabled,
+				precipitationEnabled, maximumGranularParcels, maximumGranularDepositGroups, limits);
 	}
 
 	public FluidServerConfig withChemistryEnabled(boolean enabled) {
-		return new FluidServerConfig(controllersEnabled, materialsEnabled, worldBridgeEnabled, enabled, limits);
+		return new FluidServerConfig(controllersEnabled, materialsEnabled, worldBridgeEnabled, enabled, granularEnabled,
+				precipitationEnabled, maximumGranularParcels, maximumGranularDepositGroups, limits);
+	}
+
+	public FluidServerConfig withGranularEnabled(boolean enabled) {
+		return new FluidServerConfig(controllersEnabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled, enabled,
+				precipitationEnabled, maximumGranularParcels, maximumGranularDepositGroups, limits);
+	}
+
+	public FluidServerConfig withPrecipitationEnabled(boolean enabled) {
+		return new FluidServerConfig(controllersEnabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled,
+				granularEnabled, enabled, maximumGranularParcels, maximumGranularDepositGroups, limits);
 	}
 
 	private static String required(Properties properties, String key) throws IOException {

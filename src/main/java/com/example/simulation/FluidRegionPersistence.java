@@ -3,6 +3,8 @@ package com.example.simulation;
 import com.example.RealWaterMod;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.fluid.BuiltinFluidMaterials;
+import com.example.fluid.FluidMaterialRegistry;
+import com.example.granular.GranularRegistry;
 import com.example.simulation.controller.FluidRegionFootprint;
 import com.example.simulation.ownership.OwnershipCommitted;
 import com.example.simulation.ownership.OwnershipCoordinator;
@@ -37,6 +39,8 @@ final class FluidRegionPersistence {
 	private final boolean materialsEnabled;
 	private final boolean chemistryEnabled;
 	private final ChemicalRegistry chemicalRegistry;
+	private final boolean granularEnabled;
+	private final GranularRegistry granularRegistry;
 
 	FluidRegionPersistence(Path worldRoot, boolean materialsEnabled) {
 		this(worldRoot, materialsEnabled, false, null);
@@ -45,11 +49,22 @@ final class FluidRegionPersistence {
 	FluidRegionPersistence(
 			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry
 	) {
-		files = chemicalRegistry == null ? new RegionStateFiles(worldRoot) : new RegionStateFiles(worldRoot, chemicalRegistry);
-		ownershipStore = new OwnershipStore(worldRoot, chemicalRegistry);
+		this(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry, false, null);
+	}
+
+	FluidRegionPersistence(
+			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
+			boolean granularEnabled, GranularRegistry granularRegistry
+	) {
+		files = granularRegistry == null
+				? chemicalRegistry == null ? new RegionStateFiles(worldRoot) : new RegionStateFiles(worldRoot, chemicalRegistry)
+				: new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry);
+		ownershipStore = new OwnershipStore(worldRoot, chemicalRegistry, granularRegistry);
 		this.materialsEnabled = materialsEnabled;
 		this.chemistryEnabled = chemistryEnabled;
 		this.chemicalRegistry = chemicalRegistry;
+		this.granularEnabled = granularEnabled;
+		this.granularRegistry = granularRegistry;
 	}
 
 	List<String> scanOwnershipIssues() {
@@ -75,13 +90,16 @@ final class FluidRegionPersistence {
 				if (manifest.formatVersion() >= 2 && !materialsEnabled) {
 					throw new IOException("region-state v" + manifest.formatVersion() + " requires the materials feature gate");
 				}
-				if (manifest.formatVersion() == 3) {
+				if (manifest.formatVersion() == 3 || manifest.formatVersion() == 5 && manifest.hasChemicalState()) {
 					if (!chemistryEnabled || chemicalRegistry == null) {
-						throw new IOException("region-state v3 requires the chemistry feature gate and authoritative registry snapshot");
+						throw new IOException("chemical region-state requires the chemistry feature gate and authoritative registry snapshot");
 					}
 					if (!manifest.registryFingerprint().equals(chemicalRegistry.fingerprint())) {
-						throw new IOException("region-state v3 registry fingerprint does not match the world snapshot");
+						throw new IOException("region-state chemical registry fingerprint does not match the world snapshot");
 					}
+				}
+				if (manifest.formatVersion() == 5 && (!granularEnabled || granularRegistry == null)) {
+					throw new IOException("region-state v5 requires the granular feature gate and authoritative registry snapshot");
 				}
 				validateControllerGeometry(manifest);
 				Identifier dimensionId = Identifier.tryParse(manifest.dimensionId());
@@ -346,6 +364,13 @@ final class FluidRegionPersistence {
 				throw new IOException("Committed world ownership does not match the region checkpoint");
 			}
 		}
+		if (granularEnabled) {
+			restoreGranularGeneration(region, state);
+			return;
+		}
+		if (manifest.formatVersion() == 5) {
+			throw new IOException("Granular checkpoint cannot restore while the feature gate is disabled");
+		}
 		if (chemistryEnabled) {
 			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
 			if (manifest.formatVersion() == 3) {
@@ -397,6 +422,18 @@ final class FluidRegionPersistence {
 	}
 
 	private RegionState captureForFeatureGate(FluidRegion region, long generation) throws IOException {
+		if (granularEnabled) {
+			if (granularRegistry == null) throw new IOException("Authoritative granular registry is unavailable");
+			if (!region.domain().hasMaterialState()) throw new IOException("Granular state requires a material-bound domain");
+			if (chemistryEnabled) {
+				if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
+				if (!region.domain().hasChemistryState()) region.domain().bindChemistry(chemicalRegistry);
+			}
+			if (!region.domain().hasGranularState()) {
+				region.domain().bindGranular(granularRegistry, region.domain().materialRegistry());
+			}
+			return RegionState.captureGranular(region, generation);
+		}
 		if (chemistryEnabled) {
 			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
 			if (!region.domain().hasMaterialState()) throw new IOException("Chemistry requires a material-bound domain");
@@ -406,6 +443,64 @@ final class FluidRegionPersistence {
 		return region.domain().hasMaterialState()
 				? RegionState.captureMaterial(region, generation)
 				: RegionState.capture(region, generation);
+	}
+
+	private void restoreGranularGeneration(FluidRegion region, RegionState state) throws IOException {
+		if (granularRegistry == null) throw new IOException("Authoritative granular registry is unavailable");
+		RegionManifest manifest = state.manifest();
+		long previousGeneration = manifest.checkpointGeneration();
+		try {
+			if (manifest.formatVersion() == 5) {
+				if (manifest.hasChemicalState()) {
+					if (!chemistryEnabled || chemicalRegistry == null) {
+						throw new IOException("Chemical granular checkpoint requires the chemistry registry and gate");
+					}
+					region.restoreChemicalSolver(state.reconstructChemical(chemicalRegistry), chemicalRegistry, previousGeneration);
+				} else {
+					region.restoreMaterialSolver(state.reconstructMaterial(), previousGeneration);
+				}
+				region.restoreGranularState(state.reconstructGranular(granularRegistry), granularRegistry, previousGeneration);
+				if (chemistryEnabled && !manifest.hasChemicalState()) {
+					if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
+					region.domain().bindChemistry(chemicalRegistry);
+					publishGranularMigration(region, previousGeneration, manifest.formatVersion());
+				}
+				return;
+			}
+			if (manifest.formatVersion() == 1) {
+				RegionState material = RegionState.migrateV1(state, Math.addExact(previousGeneration, 1L),
+						BuiltinFluidMaterials.M3_PALETTE);
+				region.restoreMaterialSolver(material.reconstructMaterial(), previousGeneration);
+			} else if (manifest.formatVersion() == 2) {
+				region.restoreMaterialSolver(state.reconstructMaterial(), previousGeneration);
+			} else if (manifest.formatVersion() == 3) {
+				if (!chemistryEnabled || chemicalRegistry == null) {
+					throw new IOException("region-state v3 cannot migrate to v5 without its authoritative chemistry");
+				}
+				region.restoreChemicalSolver(state.reconstructChemical(chemicalRegistry), chemicalRegistry, previousGeneration);
+			} else throw new IOException("Unsupported region-state version " + manifest.formatVersion());
+			if (chemistryEnabled && !region.domain().hasChemistryState()) {
+				if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
+				region.domain().bindChemistry(chemicalRegistry);
+			}
+			region.domain().bindGranular(granularRegistry, region.domain().materialRegistry());
+			publishGranularMigration(region, previousGeneration, manifest.formatVersion());
+		} catch (IOException | RuntimeException failure) {
+			if (region.solverLoaded() && region.checkpointGeneration() == previousGeneration) {
+				region.releaseSolverAfterCheckpoint(previousGeneration);
+			}
+			throw failure;
+		}
+	}
+
+	private void publishGranularMigration(FluidRegion region, long previousGeneration, int sourceVersion) throws IOException {
+		long migratedGeneration = Math.addExact(previousGeneration, 1L);
+		files.publish(RegionState.captureGranular(region, migratedGeneration));
+		if (!region.recordPublishedCheckpoint(migratedGeneration)) {
+			throw new IOException("Published v5 migration was not accepted by live region metadata");
+		}
+		RealWaterMod.LOGGER.info("Atomically migrated controller region {} from region-state v{} to v5 generation {}",
+				region.id(), sourceVersion, migratedGeneration);
 	}
 
 	void delete(FluidRegion region) throws IOException {

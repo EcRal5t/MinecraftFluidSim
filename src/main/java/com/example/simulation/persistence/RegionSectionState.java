@@ -61,7 +61,7 @@ public record RegionSectionState(
 					|| chemicalSpeciesTotals.length != 0 || chemicalResidualLedgerBits != 0L) {
 				throw new IllegalArgumentException("region-state v1 cannot contain material state");
 			}
-		} else if (formatVersion == 2 || formatVersion == 3) {
+		} else if (formatVersion == 2 || formatVersion == 3 || formatVersion == 5) {
 			if (markerMass.length != markerOrdinals.length || materialPaletteIndex.length != markerOrdinals.length) {
 				throw new IllegalArgumentException("Section material arrays disagree");
 			}
@@ -71,7 +71,8 @@ public record RegionSectionState(
 					throw new IllegalArgumentException("Invalid section marker material state");
 				}
 			}
-			if (formatVersion == 2) {
+			boolean chemicalState = formatVersion == 3 || formatVersion == 5 && chemicalSpeciesTotals.length > 0;
+			if (!chemicalState) {
 				if (chemicalMixtureIndex.length != 0 || indicator.length != 0
 						|| chemicalSpeciesTotals.length != 0 || chemicalResidualLedgerBits != 0L) {
 					throw new IllegalArgumentException("region-state v2 cannot contain chemical state");
@@ -138,6 +139,7 @@ public record RegionSectionState(
 	@Override public byte[] solidMask() { return solidMask.clone(); }
 
 	public int markerCount() { return markerOrdinals.length; }
+	public boolean hasChemicalState() { return formatVersion == 3 || formatVersion == 5 && chemicalSpeciesTotals.length > 0; }
 
 	public SectionKey key() { return new SectionKey(sectionX, sectionY, sectionZ); }
 

@@ -8,6 +8,8 @@ import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipParticleState;
 import com.example.fluid.FluidSolverConfig;
+import com.example.granular.BuiltinGranularDefinitions;
+import com.example.granular.GranularRegistry;
 import com.example.simulation.controller.FluidRegionFootprint;
 import com.example.simulation.persistence.RegionState;
 import com.example.simulation.persistence.RegionStateFiles;
@@ -41,7 +43,46 @@ public final class M7RegionChemistryPersistenceValidation {
 	public static void main(String[] args) throws Exception {
 		validateFeatureGateAndMigration();
 		validateAtomicFaultBoundary();
-		System.out.println("M7 region chemistry persistence passed: gate lock, v1/v2 migration and v3 fault matrix");
+		validateGranularV5FeatureGateAndMigration();
+		System.out.println("Region persistence passed: v1/v2/v3 migration, v3/v5 gate lock and fault matrix");
+	}
+
+	private static void validateGranularV5FeatureGateAndMigration() throws Exception {
+		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		for (int sourceVersion = 1; sourceVersion <= 3; sourceVersion++) {
+			Path root = Files.createTempDirectory(Path.of("."), "granular-migration-v" + sourceVersion + "-");
+			UUID id = UUID.randomUUID(); FluidRegion source = populatedRegion(id);
+			RegionState old;
+			if (sourceVersion == 1) old = RegionState.capture(source, 1L);
+			else {
+				bindDefaultMaterials(source);
+				if (sourceVersion == 3) { source.domain().bindChemistry(chemistry); old = RegionState.captureChemical(source, 1L); }
+				else old = RegionState.captureMaterial(source, 1L);
+			}
+			RegionStateFiles initialFiles = sourceVersion == 3 ? new RegionStateFiles(root, chemistry) : new RegionStateFiles(root);
+			initialFiles.publish(old);
+			FluidRegionManager manager = manager();
+			FluidRegionPersistence persistence = new FluidRegionPersistence(root, true, true, chemistry, true, granular);
+			check(persistence.loadMetadata(manager).isEmpty(), "legacy checkpoint was locked before v5 migration");
+			FluidRegion admitted = manager.regions().getFirst(); persistence.restore(admitted);
+			check(admitted.solverLoaded() && admitted.domain().hasChemistryState()
+					&& admitted.domain().hasGranularState() && admitted.checkpointGeneration() == 2L,
+					"v" + sourceVersion + " checkpoint did not migrate atomically to granular v5");
+			RegionState migrated = new RegionStateFiles(root, chemistry, granular).read(id);
+			check(migrated.manifest().formatVersion() == 5 && migrated.manifest().hasChemicalState()
+					&& migrated.reconstructGranular(granular).totalSolidVolumeSvq() == 0L,
+					"v" + sourceVersion + " migration did not publish complete empty-granular v5");
+		}
+
+		Path gateRoot = Files.createTempDirectory(Path.of("."), "granular-gate-off-");
+		FluidRegion v5 = populatedRegion(UUID.randomUUID()); bindDefaultMaterials(v5);
+		v5.domain().bindGranular(granular, v5.domain().materialRegistry());
+		new RegionStateFiles(gateRoot, null, granular).publish(RegionState.captureGranular(v5, 1L));
+		FluidRegionManager gateManager = manager();
+		List<String> issues = new FluidRegionPersistence(gateRoot, true, false, null, false, null).loadMetadata(gateManager);
+		check(gateManager.regions().isEmpty() && !issues.isEmpty(),
+				"granular-off discovery did not preserve and lock region-state v5");
 	}
 
 	private static void validateFeatureGateAndMigration() throws Exception {

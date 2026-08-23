@@ -9,6 +9,7 @@ public final class GranularLimits {
 	public static final int MAX_ACTIVE_PARCELS_PER_SERVER = 65_536;
 	public static final int MAX_DEPOSIT_GROUPS_PER_CELL = 8;
 	public static final int MAX_DEPOSIT_GROUPS_PER_REGION = 65_536;
+	public static final int MAX_DEPOSIT_GROUPS_PER_SERVER = 262_144;
 	public static final int MAX_SOLID_COMPOSITION_ENTRIES = 16;
 	public static final int MAX_OPERATIONS_PER_LOGICAL_STEP = 131_072;
 	public static final int MAX_DISPLAY_PARCELS_PER_REGION = 4_096;

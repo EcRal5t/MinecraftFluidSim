@@ -83,3 +83,21 @@ drag 的 parcel+fluid 动量闭合、parcel 跨格前后 `sum(ΔS)=0`；full gra
 同一 `granular` selector 新增支撑沉积、八邻域 repose、20-step sleep、亚临界 no-creep、超临界局部 wake 及全程
 SVQ/mass 守恒断言，没有新增常态 gate。因碰撞和 free-surface/cut-cell 邻接路径被修改，最近门用 `--rerun-tasks`
 运行 `granular,cut-cell,free-surface`，3 域 runner 2.878 秒全部通过。
+
+## M8.4 世界 registry、配置 v5 与 `region-state v5`（2026-08-24）
+
+- server config 升为 v5，新增 granular/precipitation 重启门及 server parcel/deposit-group 硬预算；旧 v1--v4
+  reader 明确关闭未知新门。依赖链为 granular→materials、precipitation→granular+chemistry，不能通过关掉依赖绕过。
+- 首次启用发布 `<world>/realwater/granular/registry.nbt`，之后 world snapshot 的 stable ID、物性、carrier 与 fingerprint
+  权威。snapshot 丢失而 v5/不可读 region 已存在时锁定，禁止拿当前 definitions 猜测重建。
+- `region-state v4` 继续为气体持久化评审预留并严格拒绝；颗粒使用 v5 的完整 generation，而不是向 v3 附加 sidecar。
+  manifest/section required typed extension 保存 active parcel 与 deposit group 的 exact SVQ、raw mass、材料 palette、运动学、
+  porosity 和 composition reference，并在 section/material/global 三层复核独立账本。
+- v1/v2/v3 在 granular gate 首次恢复时写入 inactive slot 的完整 v5、读回验证后才切 HEAD；gate/registry/身份/能力位/
+  unit/账本未知均保留 committed generation 并 LOCKED。v1/v2/v3 canonical bytes 和既有 reader 未改写。
+- 本增量暂不允许非零 reactive solid composition 或 precipitation capability 落盘；它们等 M8 chemistry bridge 绑定
+  固相组成 registry 后再扩充同一 frozen v5 typed payload，避免用 runtime handle 或当前数据包含义占位。
+
+最近门 `runCpuValidation -PcpuValidation=region-state --rerun-tasks` 通过，覆盖 config v5、非空 active+deposit v5
+codec/NBT/disk round-trip、reserved-v4 与缺 extension 拒绝、v1/v2/v3→v5 原子迁移及 granular-off 保留锁定；runner
+2.795 秒。该增量没有修改 solver 路径，因此不累计 solver selectors。

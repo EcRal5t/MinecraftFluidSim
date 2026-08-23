@@ -18,6 +18,16 @@ This document defines the implemented first persistent Real Water region format.
 - The M7 chemical format `region-state v3` exists behind `chemistryEnabled && materialsEnabled`. It preserves the v1/v2
   readers and canonical bytes while adding authoritative registry identity, canonical mixture tables, per-marker indicator,
   species/residual ledgers and bounded source/sink audit. See [`chemistry-state.md`](chemistry-state.md).
+- `region-state v4` remains reserved for the separately reviewed gas-persistence proposal and is deliberately rejected by
+  every reader on this branch. M8 granular state uses `region-state v5`; this numbering is not evidence that gas state was
+  implemented or may be inferred from runtime cavities.
+- A committed v5 generation is one complete material + optional chemistry + granular checkpoint, not a sidecar attached to
+  v3. Its manifest and every participating section require typed `realwater:granular_*_v1` extensions containing stable-ID
+  palette identity, exact active/deposit SVQ and raw-mass ledgers, active parcel kinematics, deposit porosity and solid
+  composition references. The outer manifest/section identity, CRC, slot and HEAD rules remain the only commit protocol.
+- Enabling granular persistence atomically migrates accepted v1/v2/v3 generations to a new complete v5 generation in the
+  inactive slot and publishes HEAD last. Missing world granular registry identity, absent required v5 extensions, unknown
+  capability/unit bits, non-canonical records or ledger disagreement preserve the data and lock the region.
 - Experimental files created by another branch are not compatible and are never auto-migrated or deleted.
 
 ## Layout and atomic commit
@@ -83,4 +93,6 @@ The standalone gate injects failure before/after section writes, manifest public
 publication. Reopening storage after every fault must yield exactly the previous or the new complete generation, never
 a mixed one. It also covers unknown versions, corrupt HEAD/manifest/section checksums, mixed UUID/dimension/generation,
 missing/extra slices, marker-budget rejection, startup metadata admission, unload/load memory release, quarantine
-deletion and v1 optional-section skipping.
+deletion and v1 optional-section skipping. The M8 extension additionally covers exact v1/v2/v3-to-v5 publication,
+reserved-v4 rejection, authoritative granular-registry matching, required v5 extension presence and granular inventory
+ledger reconstruction without changing the v1/v2/v3 canonical byte paths.

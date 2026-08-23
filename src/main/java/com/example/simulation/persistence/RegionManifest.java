@@ -74,7 +74,7 @@ public record RegionManifest(
 					|| chemicalResidualLedgerBits != 0L) {
 				throw new IllegalArgumentException("region-state v1 cannot contain material state");
 			}
-		} else if (formatVersion == 2 || formatVersion == 3) {
+		} else if (formatVersion == 2 || formatVersion == 3 || formatVersion == 5) {
 			FluidMaterialRegistry registry = new FluidMaterialRegistry(materialPalette);
 			double densityTolerance = Math.max(1.0E-9, Math.abs(solverConfig.density()) * 1.0E-12);
 			if (Math.abs(registry.material(0).referenceDensity() - solverConfig.density()) > densityTolerance) {
@@ -92,7 +92,7 @@ public record RegionManifest(
 			if (ledgerMarkers != totalMarkerCount) {
 				throw new IllegalArgumentException("Material marker counts do not match manifest total");
 			}
-			if (formatVersion == 2) {
+			if (formatVersion == 2 || formatVersion == 5 && registryFingerprint.isEmpty()) {
 				if (!registryFingerprint.isEmpty() || auScale != 0L || !speciesPalette.isEmpty()
 						|| !chemicalMixtures.isEmpty() || chemicalSpeciesTotals.length != 0
 						|| chemicalResidualLedgerBits != 0L) {
@@ -181,6 +181,7 @@ public record RegionManifest(
 
 	public double totalVolume() { return Double.longBitsToDouble(totalVolumeBits); }
 	public double totalMass() { return Double.longBitsToDouble(totalMassBits); }
+	public boolean hasChemicalState() { return formatVersion == 3 || formatVersion == 5 && !registryFingerprint.isEmpty(); }
 
 	public record MaterialLedger(int markerCount, long volumeBits, long massBits) {
 		public MaterialLedger {

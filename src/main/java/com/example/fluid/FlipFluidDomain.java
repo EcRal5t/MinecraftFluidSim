@@ -16,6 +16,7 @@ import com.example.granular.GranularLimits;
 import com.example.granular.GranularMechanics;
 import com.example.granular.GranularParcelStore;
 import com.example.granular.GranularRegistry;
+import com.example.granular.GranularStateSnapshot;
 import com.example.granular.SolidVolume;
 
 import java.util.ArrayList;
@@ -256,6 +257,10 @@ public final class FlipFluidDomain {
 		return granularDepositDynamics == null ? 0 : granularDepositDynamics.sleepingColumnCount();
 	}
 	public GranularDepositDynamics.Stats lastGranularDepositStats() { return lastGranularDepositStats; }
+	public GranularStateSnapshot exportGranularState() {
+		if (granularRegistry == null) throw new IllegalStateException("Granular state is not bound");
+		return GranularStateSnapshot.capture(sizeX, sizeY, sizeZ, granularRegistry, granularParcels, granularDeposits);
+	}
 	public long totalGranularSolidVolumeSvq() { return granularInventory == null ? 0L : granularInventory.totalSolidVolumeSvq(); }
 	public double totalGranularMass() { return granularInventory == null ? 0.0 : granularInventory.totalMass(); }
 
@@ -291,6 +296,27 @@ public final class FlipFluidDomain {
 				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION);
 		granularCarrierMaterialByCell = new int[cellCount];
 		granularCarrierVolumeByCell = new double[cellCount];
+		gridDirty = true;
+	}
+
+	public void restoreGranularState(
+			GranularStateSnapshot snapshot, GranularRegistry registry, FluidMaterialRegistry liquidRegistry
+	) {
+		if (snapshot == null) throw new IllegalArgumentException("Granular snapshot is missing");
+		if (snapshot.sizeX() != sizeX || snapshot.sizeY() != sizeY || snapshot.sizeZ() != sizeZ) {
+			throw new IllegalArgumentException("Granular snapshot dimensions changed");
+		}
+		if (granularRegistry != null) throw new IllegalStateException("Granular state is already bound");
+		if (materialRegistry != null) {
+			if (!materialRegistry.materials().equals(liquidRegistry.materials())) {
+				throw new IllegalArgumentException("Granular snapshot liquid palette changed");
+			}
+			liquidRegistry = materialRegistry;
+		}
+		bindGranular(registry, liquidRegistry);
+		snapshot.restoreInto(registry, granularParcels, granularDeposits,
+				cell -> SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell)));
+		granularDeposits.forEachCell((cell, ignoredVolume, ignoredPorosity) -> granularDepositDynamics.disturbCell(cell));
 		gridDirty = true;
 	}
 

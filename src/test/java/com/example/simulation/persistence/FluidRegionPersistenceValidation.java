@@ -6,9 +6,15 @@ import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipParticleState;
 import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FluidMaterial;
+import com.example.fluid.FluidMaterialRegistry;
 import com.example.fluid.FluidSolverConfig;
 import com.example.chemistry.BuiltinChemicalDefinitions;
 import com.example.chemistry.ChemicalRegistry;
+import com.example.granular.BuiltinGranularDefinitions;
+import com.example.granular.GranularLimits;
+import com.example.granular.GranularRegistry;
+import com.example.granular.GranularStateSnapshot;
+import com.example.granular.SolidVolume;
 import com.example.simulation.FluidRegion;
 import com.example.simulation.FluidRegionLifecycle;
 import com.example.simulation.FluidRegionManager;
@@ -50,12 +56,79 @@ public final class FluidRegionPersistenceValidation {
 		validateExactRoundTripAndMetadataUnload();
 		validateMaterialV2Codec();
 		validateChemicalV3Codec();
+		validateGranularV5Codec();
 		validateUnknownExtensions();
 		validateFaultMatrix();
 		validateStagedGeneration();
 		validateCorruptionAndAtomicMoveFailure();
 		validateWorldConfig();
 		System.out.println("Fluid region persistence validation passed");
+	}
+
+	private static void validateGranularV5Codec() throws Exception {
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		FluidRegion region = populatedRegion(new UUID(23L, 24L));
+		FlipParticleState pure = region.domain().exportParticleState();
+		float[] positions = pure.copyPositionVolume();
+		double[] liquidMass = new double[pure.particleCount()];
+		double totalLiquidMass = 0.0;
+		for (int marker = 0; marker < liquidMass.length; marker++) {
+			liquidMass[marker] = positions[marker * 4 + 3] * BuiltinFluidMaterials.WATER.referenceDensity();
+			totalLiquidMass += liquidMass[marker];
+		}
+		region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(pure.sizeX(), pure.sizeY(), pure.sizeZ(),
+				pure.cellSize(), pure.particleCount(), pure.totalVolume(), totalLiquidMass, BuiltinFluidMaterials.M3_PALETTE,
+				positions, pure.copyParticleVelocities(), pure.copySolidMask(), liquidMass, new int[pure.particleCount()]));
+		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long activeSvq = GranularLimits.MAX_PARCEL_VOLUME_SVQ, depositSvq = activeSvq - 17L;
+		double activeMass = 3.25, depositMass = 4.75;
+		int depositCell = (5 * region.sizeY() + 3) * region.sizeX() + 5;
+		GranularStateSnapshot fixture = new GranularStateSnapshot(region.sizeX(), region.sizeY(), region.sizeZ(),
+				granular.fingerprint(), granular.materials().stream().map(com.example.granular.ParticulateMaterial::id).toList(),
+				List.of(new GranularStateSnapshot.ActiveParcel(0.75F, 0.75F, 0.75F,
+						0.125F, -0.25F, 0.0625F, activeSvq, activeMass, sand, 0)),
+				List.of(new GranularStateSnapshot.DepositGroup(depositCell, granular.material(sand).restPorosityQ(),
+						sand, 0, depositSvq, depositMass)), Math.addExact(activeSvq, depositSvq),
+				Double.doubleToRawLongBits(activeMass + depositMass));
+		region.domain().restoreGranularState(fixture, granular, liquids);
+		GranularStateSnapshot expected = region.domain().exportGranularState();
+		RegionState state = RegionState.captureGranular(region, 1L);
+		state.validate();
+		assertMaterialStateEquals(region.domain().exportMaterialParticleState(), state.reconstructMaterial());
+		assertGranularStateEquals(expected, state.reconstructGranular(granular));
+
+		RegionStateCodec codec = new RegionStateCodec();
+		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
+		require(decodedManifest.equals(state.manifest()) && decodedManifest.formatVersion() == 5
+				&& !decodedManifest.hasChemicalState(), "region-state v5 manifest did not round-trip");
+		for (RegionSectionState section : state.sections()) {
+			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
+			require(decoded.formatVersion() == 5 && decoded.key().equals(section.key())
+					&& decoded.extensions().equals(section.extensions())
+					&& Arrays.equals(decoded.markerOrdinals(), section.markerOrdinals())
+					&& Arrays.equals(decoded.solidMask(), section.solidMask())
+					&& decoded.checksum() == section.checksum(),
+					"region-state v5 granular section did not round-trip");
+		}
+
+		Path root = Files.createTempDirectory(Path.of("."), "granular-v5-");
+		RegionStateFiles files = new RegionStateFiles(root, null, granular);
+		files.publish(state);
+		RegionState restored = files.read(region.id());
+		assertGranularStateEquals(expected, restored.reconstructGranular(granular));
+
+		CompoundTag reservedV4 = codec.encodeManifest(state.manifest());
+		reservedV4.putInt("Version", 4); reservedV4.putInt("Palette", 4);
+		expectIOException(() -> codec.decodeManifest(reservedV4), "reserved region-state v4 was treated as a known format");
+		CompoundTag missingGranular = codec.encodeSection(state.sections().getFirst());
+		missingGranular.put("Extensions", new net.minecraft.nbt.ListTag());
+		RegionSectionState unsignedMissing = codec.decodeSection(missingGranular);
+		RegionSectionState signedMissing = signedSection(unsignedMissing);
+		List<RegionSectionState> brokenSections = new ArrayList<>(state.sections());
+		brokenSections.set(0, signedMissing);
+		expectIOException(() -> new RegionState(state.manifest(), brokenSections).validate(),
+				"v5 section missing its required granular payload was accepted");
 	}
 
 
@@ -408,10 +481,11 @@ public final class FluidRegionPersistenceValidation {
 		Path root = Files.createTempDirectory(Path.of("."), "config-");
 		FluidServerConfig defaults = FluidServerConfig.loadOrCreate(root);
 		require(!defaults.controllersEnabled() && !defaults.materialsEnabled() && !defaults.worldBridgeEnabled()
-				&& !defaults.chemistryEnabled()
+				&& !defaults.chemistryEnabled() && !defaults.granularEnabled() && !defaults.precipitationEnabled()
 				&& defaults.limits().maximumRegions() == 4, "safe default config changed");
 		FluidServerConfig enabled = defaults.withControllersEnabled(true).withMaterialsEnabled(true)
-				.withWorldBridgeEnabled(true).withChemistryEnabled(true);
+				.withWorldBridgeEnabled(true).withChemistryEnabled(true).withGranularEnabled(true)
+				.withPrecipitationEnabled(true);
 		enabled.save(root);
 		require(FluidServerConfig.loadOrCreate(root).equals(enabled), "world-local config did not round-trip");
 
@@ -428,7 +502,7 @@ public final class FluidRegionPersistenceValidation {
 				""");
 		FluidServerConfig legacy = FluidServerConfig.loadOrCreate(legacyRoot);
 		require(legacy.controllersEnabled() && !legacy.materialsEnabled() && !legacy.worldBridgeEnabled()
-				&& !legacy.chemistryEnabled(),
+				&& !legacy.chemistryEnabled() && !legacy.granularEnabled() && !legacy.precipitationEnabled(),
 				"v1 config did not migrate with materials and world bridge safely disabled");
 
 		Path v2Root = Files.createTempDirectory(Path.of("."), "config-v2-");
@@ -444,7 +518,8 @@ public final class FluidRegionPersistenceValidation {
 				maximumTotalMarkers=294912
 				""");
 		FluidServerConfig v2 = FluidServerConfig.loadOrCreate(v2Root);
-		require(v2.materialsEnabled() && !v2.worldBridgeEnabled() && !v2.chemistryEnabled(),
+		require(v2.materialsEnabled() && !v2.worldBridgeEnabled() && !v2.chemistryEnabled()
+				&& !v2.granularEnabled() && !v2.precipitationEnabled(),
 				"v2 config did not keep newer features safely disabled");
 		Files.writeString(FluidServerConfig.path(v2Root), Files.readString(FluidServerConfig.path(v2Root))
 				.replace("formatVersion=2", "formatVersion=3"));
@@ -475,6 +550,23 @@ public final class FluidRegionPersistenceValidation {
 				.replace("materialsEnabled=true", "materialsEnabled=false"));
 		expectIOException(() -> FluidServerConfig.loadOrCreate(v3Root),
 				"chemistry=true/materials=false config was accepted");
+
+		Path v5Root = Files.createTempDirectory(Path.of("."), "config-v5-");
+		Files.createDirectories(FluidServerConfig.path(v5Root).getParent());
+		Files.writeString(FluidServerConfig.path(v5Root), """
+				formatVersion=5
+				controllersEnabled=true
+				materialsEnabled=true
+				worldBridgeEnabled=true
+				chemistryEnabled=true
+				maximumRegions=4
+				maximumCellsPerRegion=9216
+				maximumMarkersPerRegion=73728
+				maximumTotalCells=36864
+				maximumTotalMarkers=294912
+				""");
+		expectIOException(() -> FluidServerConfig.loadOrCreate(v5Root),
+				"v5 config without explicit granular gates/budgets was accepted");
 
 		Files.writeString(FluidServerConfig.path(root), "formatVersion=99\ncontrollersEnabled=false\n");
 		expectIOException(() -> FluidServerConfig.loadOrCreate(root), "unknown config version was silently replaced");
@@ -568,6 +660,16 @@ public final class FluidRegionPersistenceValidation {
 				&& Arrays.equals(expected.copyMaterialPaletteIndex(), actual.copyMaterialPaletteIndex()),
 				"material marker mass or palette index changed across persistence");
 		require(Arrays.equals(expected.copySolidMask(), actual.copySolidMask()), "material solid mask changed across persistence");
+	}
+
+	private static void assertGranularStateEquals(GranularStateSnapshot expected, GranularStateSnapshot actual) {
+		require(expected.registryFingerprint().equals(actual.registryFingerprint())
+				&& expected.materialPalette().equals(actual.materialPalette())
+				&& expected.activeParcels().equals(actual.activeParcels())
+				&& expected.depositGroups().equals(actual.depositGroups())
+				&& expected.totalSolidVolumeSvq() == actual.totalSolidVolumeSvq()
+				&& expected.totalMassBits() == actual.totalMassBits(),
+				"granular inventory changed across persistence");
 	}
 
 	private static void assertChemicalStateEquals(FlipChemicalParticleState expected, FlipChemicalParticleState actual) {

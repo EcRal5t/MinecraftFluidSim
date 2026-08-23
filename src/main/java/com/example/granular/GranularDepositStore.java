@@ -166,6 +166,16 @@ public final class GranularDepositStore {
 		}
 	}
 
+	public void forEachGroup(GroupConsumer consumer) {
+		if (consumer == null) throw new IllegalArgumentException("Deposit group consumer is missing");
+		for (int cell = 0; cell < headByCell.length; cell++) {
+			for (int entry = headByCell[cell]; entry >= 0; entry = next[entry]) {
+				consumer.accept(cell, porosityQByCell[cell], materialHandle[entry], solidCompositionHandle[entry],
+						solidVolumeSvq[entry], mass[entry]);
+			}
+		}
+	}
+
 	private void validate(SolidPortion portion) {
 		if (portion == null) throw new IllegalArgumentException("Granular solid portion is missing");
 		ParticulateMaterial material = registry.material(portion.materialHandle());
@@ -244,5 +254,11 @@ public final class GranularDepositStore {
 	@FunctionalInterface
 	public interface CellConsumer {
 		void accept(int cell, long solidVolumeSvq, int porosityQ);
+	}
+
+	@FunctionalInterface
+	public interface GroupConsumer {
+		void accept(int cell, int porosityQ, int materialHandle, int solidCompositionHandle,
+		            long solidVolumeSvq, double mass);
 	}
 }

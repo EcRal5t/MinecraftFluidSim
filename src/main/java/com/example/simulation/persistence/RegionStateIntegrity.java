@@ -33,7 +33,8 @@ final class RegionStateIntegrity {
 				writeDoubles(out, section.markerMass());
 				writeInts(out, section.materialPaletteIndex());
 			}
-			if (section.formatVersion() == 3) {
+			if (section.formatVersion() == 5) out.writeBoolean(section.hasChemicalState());
+			if (section.hasChemicalState()) {
 				writeInts(out, section.chemicalMixtureIndex());
 				writeBytes(out, section.indicator());
 				writeLongs(out, section.chemicalSpeciesTotals());
@@ -65,7 +66,8 @@ final class RegionStateIntegrity {
 					out.writeInt(ledger.markerCount()); out.writeLong(ledger.volumeBits()); out.writeLong(ledger.massBits());
 				}
 			}
-			if (manifest.formatVersion() == 3) {
+			if (manifest.formatVersion() == 5) out.writeBoolean(manifest.hasChemicalState());
+			if (manifest.hasChemicalState()) {
 				out.writeUTF(manifest.registryFingerprint());
 				out.writeLong(manifest.auScale());
 				out.writeInt(manifest.speciesPalette().size());

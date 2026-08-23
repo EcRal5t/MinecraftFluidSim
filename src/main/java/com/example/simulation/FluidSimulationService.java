@@ -15,6 +15,9 @@ import com.example.fluid.FluidMaterialRegistry;
 import com.example.fluid.FluidMaterialRenderSnapshot;
 import com.example.fluid.FluidSolverConfig;
 import com.example.fluid.air.AirNetwork;
+import com.example.granular.BuiltinGranularDefinitions;
+import com.example.granular.GranularRegistry;
+import com.example.granular.GranularRegistryStore;
 import com.example.network.FluidMaterialSnapshotPayload;
 import com.example.network.FluidChemicalSnapshotPayload;
 import com.example.network.FluidSnapshotPayload;
@@ -98,6 +101,9 @@ public final class FluidSimulationService {
 	private final boolean worldBridgeFeatureEnabled;
 	private final boolean chemistryFeatureEnabled;
 	private final ChemicalRegistry chemicalRegistry;
+	private final boolean granularFeatureEnabled;
+	private final boolean precipitationFeatureEnabled;
+	private final GranularRegistry granularRegistry;
 	private List<String> ownershipIssues = List.of();
 	private String lastTakeoverFailure;
 	private boolean takeoverMaintenanceEnabled;
@@ -152,15 +158,47 @@ public final class FluidSimulationService {
 				RealWaterMod.LOGGER.error("Chemical registry is LOCKED; chemistry and controller creation remain disabled", exception);
 			}
 		}
+		GranularRegistry bootGranularRegistry = null;
+		if (serverConfig.granularEnabled()) {
+			try {
+				GranularRegistryStore registryStore = new GranularRegistryStore(worldRoot);
+				GranularRegistry definitions = BuiltinGranularDefinitions.createRegistry();
+				if (registryStore.exists()) {
+					bootGranularRegistry = registryStore.read();
+					validateSupportedGranularCarriers(bootGranularRegistry);
+					if (!definitions.fingerprint().equals(bootGranularRegistry.fingerprint())) {
+						RealWaterMod.LOGGER.warn("Granular definitions differ from authoritative world registry {}; existing solid inventory keeps world semantics",
+								bootGranularRegistry.fingerprint());
+					}
+				} else {
+					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discover();
+					if (!regions.issues().isEmpty() || regions.manifests().stream()
+							.anyMatch(manifest -> manifest.formatVersion() == 5)) {
+						throw new IOException("region-state v5 or unreadable region data exists but granular/registry.nbt is missing");
+					}
+					GranularRegistryStore.LoadResult loaded = registryStore.loadOrCreate(definitions);
+					bootGranularRegistry = loaded.registry(); validateSupportedGranularCarriers(bootGranularRegistry);
+					if (loaded.created()) RealWaterMod.LOGGER.info("Published authoritative granular registry snapshot {}",
+							bootGranularRegistry.fingerprint());
+				}
+			} catch (IOException | RuntimeException exception) {
+				configurationLocked = true;
+				RealWaterMod.LOGGER.error("Granular registry is LOCKED; granular state and controller creation remain disabled", exception);
+			}
+		}
 		serverConfigLocked = configurationLocked;
 		controllerFeatureEnabled = serverConfig.controllersEnabled();
 		materialFeatureEnabled = serverConfig.materialsEnabled();
 		worldBridgeFeatureEnabled = serverConfig.worldBridgeEnabled();
 		chemicalRegistry = bootChemicalRegistry;
 		chemistryFeatureEnabled = serverConfig.chemistryEnabled() && chemicalRegistry != null;
+		granularRegistry = bootGranularRegistry;
+		granularFeatureEnabled = serverConfig.granularEnabled() && granularRegistry != null;
+		precipitationFeatureEnabled = serverConfig.precipitationEnabled()
+				&& granularFeatureEnabled && chemistryFeatureEnabled;
 		regionManager = new FluidRegionManager(serverConfig.limits());
 		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, materialFeatureEnabled,
-				chemistryFeatureEnabled, chemicalRegistry);
+				chemistryFeatureEnabled, chemicalRegistry, granularFeatureEnabled, granularRegistry);
 		containerTransfers = new ContainerTransferStore(worldRoot);
 		if (configurationLocked) regionOperations.recordIssue(
 				"server.properties 不可用，已安全使用默认预算并关闭控制器；原文件未覆盖");
@@ -170,6 +208,13 @@ public final class FluidSimulationService {
 
 	private static void validateSupportedChemicalMaterials(ChemicalRegistry registry) {
 		for (var material : BuiltinFluidMaterials.M3_PALETTE) registry.phaseHandleForMaterial(material.id());
+	}
+
+	private static void validateSupportedGranularCarriers(GranularRegistry registry) {
+		for (var material : BuiltinFluidMaterials.M3_PALETTE) {
+			if (!registry.hasCarrier(material.id())) throw new IllegalArgumentException(
+					"Granular registry has no carrier for " + material.id());
+		}
 	}
 
 	ContainerTransferStore containerTransfers() {
@@ -520,6 +565,12 @@ public final class FluidSimulationService {
 	public boolean chemistryFeatureEnabled() {
 		return chemistryFeatureEnabled;
 	}
+	public boolean granularFeatureEnabled() { return granularFeatureEnabled; }
+	public boolean precipitationFeatureEnabled() { return precipitationFeatureEnabled; }
+	public GranularRegistry granularRegistry() {
+		if (granularRegistry == null) throw new IllegalStateException("Authoritative granular registry is unavailable");
+		return granularRegistry;
+	}
 
 	public ChemicalRegistry chemicalRegistry() {
 		if (chemicalRegistry == null) throw new IllegalStateException("Authoritative chemical registry is unavailable");
@@ -538,7 +589,9 @@ public final class FluidSimulationService {
 	/** Persists the next-startup material gate; live sessions keep their negotiated protocol until restart. */
 	public String setMaterialFeatureForRestart(boolean enabled) {
 		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
-		if (!enabled && serverConfig.chemistryEnabled()) return "请先关闭 chemistry；chemistry=true 要求 materials=true";
+		if (!enabled && (serverConfig.chemistryEnabled() || serverConfig.granularEnabled())) {
+			return "请先关闭 chemistry 与 granular；两者都要求 materials=true";
+		}
 		FluidServerConfig replacement = serverConfig.withMaterialsEnabled(enabled);
 		try {
 			replacement.save(worldRoot);
@@ -628,6 +681,7 @@ public final class FluidSimulationService {
 		FluidRegionFactory.captureVanillaWater(level, candidate);
 		if (materialFeatureEnabled) bindDefaultMaterialState(candidate.domain());
 		if (chemistryFeatureEnabled) candidate.domain().bindChemistry(chemicalRegistry);
+		if (granularFeatureEnabled) candidate.domain().bindGranular(granularRegistry, candidate.domain().materialRegistry());
 		candidate.setPaused(true);
 		try {
 			if (worldBridgeFeatureEnabled) {
@@ -1716,11 +1770,44 @@ public final class FluidSimulationService {
 	public String setChemistryFeatureForRestart(boolean enabled) {
 		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
 		if (enabled && !serverConfig.materialsEnabled()) return "chemistry=true 要求先启用 materials";
+		if (!enabled && serverConfig.precipitationEnabled()) return "请先关闭 precipitation；precipitation=true 要求 chemistry=true";
 		FluidServerConfig replacement = serverConfig.withChemistryEnabled(enabled);
 		try {
 			replacement.save(worldRoot);
 		} catch (IOException exception) {
 			RealWaterMod.LOGGER.error("Could not persist Real Water chemistry feature flag", exception);
+			return exception.getMessage();
+		}
+		serverConfig = replacement;
+		return null;
+	}
+
+	public boolean configuredGranularFeatureEnabled() { return serverConfig.granularEnabled(); }
+	public boolean configuredPrecipitationFeatureEnabled() { return serverConfig.precipitationEnabled(); }
+
+	public String setGranularFeatureForRestart(boolean enabled) {
+		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
+		if (enabled && !serverConfig.materialsEnabled()) return "granular=true 要求先启用 materials";
+		if (!enabled && serverConfig.precipitationEnabled()) return "请先关闭 precipitation；precipitation=true 要求 granular=true";
+		FluidServerConfig replacement = serverConfig.withGranularEnabled(enabled);
+		try { replacement.save(worldRoot); }
+		catch (IOException exception) {
+			RealWaterMod.LOGGER.error("Could not persist Real Water granular feature flag", exception);
+			return exception.getMessage();
+		}
+		serverConfig = replacement;
+		return null;
+	}
+
+	public String setPrecipitationFeatureForRestart(boolean enabled) {
+		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
+		if (enabled && !(serverConfig.chemistryEnabled() && serverConfig.granularEnabled())) {
+			return "precipitation=true 要求先启用 chemistry 与 granular";
+		}
+		FluidServerConfig replacement = serverConfig.withPrecipitationEnabled(enabled);
+		try { replacement.save(worldRoot); }
+		catch (IOException exception) {
+			RealWaterMod.LOGGER.error("Could not persist Real Water precipitation feature flag", exception);
 			return exception.getMessage();
 		}
 		serverConfig = replacement;
