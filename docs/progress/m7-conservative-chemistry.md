@@ -27,8 +27,8 @@
 - `chemistry` 完整门：exact codec/fingerprint、非法定义矩阵、两组等价盐、等量/双向过量酸碱、10,000 次无 long 漂移；
   同格/相邻格/墙后/不可互溶隔离、advection 后 reaction、split/merge/compaction、collision、handoff 与化学桶 round-trip。
 - 冻结性能门实测：73,728-marker/9,216-cell 额外 primitive 常驻模型 13.02 MiB（上限 64 MiB）；代表性静态域
-  chemistry-on/no-dirty 中位 step 增量 -0.33%（上限 5%）；64-marker 酸碱 fixture p95 0.658 ms（上限 10 ms）。
-  同一 JVM 交替测量；阈值未改动现有 40/200 ms pacing。
+  chemistry-on/no-dirty 配对中位 step 增量 1.84%（上限 5%）；64-marker 酸碱 fixture p95 0.642 ms（上限 10 ms）。
+  同一 JVM 交替测量 30-step warmup、15 组各 20 step，并在全新 JVM 重复通过；阈值未改动现有 40/200 ms pacing。
 - `region-state`：v1/v2 golden bytes、v3 canonical/CRC/ledger、v1/v2→v3 与全部发布故障点、UNLOADED、未知/损坏/
   foreign fingerprint 锁定。
 - `containers`：pure/material/chemical ledger、partial settlement、双表示/foreign registry 拒绝、玩家/发射器 actor codec、
@@ -36,6 +36,10 @@
 - `protocol,chemistry`：v1/v2/v3 negotiation、长度攻击、palette、sequence/generation/tombstone/reconnect、Top-4 量化闭合；
   默认 9,216-cell v3 payload 小于 512 KiB。
 
-关闭时执行短 `milestone`、完整 `chemistry`、离线 `clean assemble compileTestJava` 和 EULA=true 专用服务器正常启停；构建与
-部署 SHA-256 在最终发布步骤记录。自动门无法观察的混合酸碱颜色、真实玩家/发射器物品事务和跨重启视觉/账本一致性，合并为
-一次用户实机场景。
+关闭运行中，短 `milestone` 的 19 个领域以 8.182 s runner 时间通过；完整 `chemistry` 在两个全新 JVM 连续通过；离线
+`clean assemble compileTestJava` 成功。EULA=true 根项目专用服务器加载 `realwater 0.13.0` 到 `Done`，收到 `stop` 后正常保存
+并以 Gradle success 退出，日志无 `LOCKED`/`ERROR`。发布 JAR 已部署为 mods 目录唯一启用的主 Mod，SHA-256 为
+`D7C16A7F2A1DF255143719696A32F8A971E8A2153F8FDFF392239EEDE3875FE2`；0.12.0 已改名为 `.disabled`。
+
+自动门无法观察的混合酸碱颜色、真实玩家/发射器物品事务和跨重启视觉/账本一致性，合并为一次用户实机场景；该场景签收后
+才把 M7 从“自动关闭”改为“完整关闭”。
