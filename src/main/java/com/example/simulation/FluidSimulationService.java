@@ -1983,14 +1983,23 @@ public final class FluidSimulationService {
 	}
 
 	/** Explicit old-controller temperature initialization; pending item WAL is a hard generation barrier. */
-	public String initializeSelectedRegionThermal(double initialTemperatureK, String operatorMetadata) {
+	public String initializeSelectedRegionThermal(
+			MinecraftServer server, double initialTemperatureK, String operatorMetadata
+	) {
 		FluidRegion selected = activeRegion();
 		if (!thermalFeatureEnabled) return "热初始化失败：thermal 功能门或权威 registry 本次启动不可用";
 		if (selected == null) return "没有选中区域";
 		if (hasPendingContainerTransfer(selected.id())) {
 			return "热初始化失败：区域存在未完成或不可识别的容器转移 WAL；旧 WAL 不跨初始化代次重解释";
 		}
-		return regionOperations.initializeSelectedThermal(initialTemperatureK, operatorMetadata);
+		long previousGeneration = selected.checkpointGeneration();
+		String result = regionOperations.initializeSelectedThermal(initialTemperatureK, operatorMetadata);
+		if (selected.solverLoaded() && selected.domain().hasThermalState()
+				&& selected.checkpointGeneration() > previousGeneration) {
+			ServerLevel level = server.getLevel(selected.dimension());
+			if (level != null) sendSnapshot(level, selected);
+		}
+		return result;
 	}
 
 

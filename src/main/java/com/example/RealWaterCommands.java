@@ -655,7 +655,7 @@ public final class RealWaterCommands {
 		String operator = source.getEntity() instanceof ServerPlayer player
 				? "player:" + player.getUUID() : "source:" + source.getTextName();
 		String result = FluidSimulationService.get(source.getServer())
-				.initializeSelectedRegionThermal(temperatureK, operator);
+				.initializeSelectedRegionThermal(source.getServer(), temperatureK, operator);
 		if (result.contains("失败") || result.startsWith("没有")) return fail(source, result);
 		return succeed(source, result, 1);
 	}

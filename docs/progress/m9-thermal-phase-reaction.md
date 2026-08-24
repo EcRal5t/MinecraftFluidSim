@@ -437,6 +437,7 @@ gas registry `41b54b…f777` 与 thermal registry `f402a2…6879`，命令查询
 这不是 inventory loss，但原实现把受控迁移等待误报为可重试的 restore failure，也没有给玩家足够证据。
 现在 v1/v2/v3/v5 先从 metadata 进入稳定 operator-required 暂停态：保留 HEAD 和预算，不周期重试、
 不发布快照，每区域只警告一次，并向每个玩家一次性报告 checkpoint/marker/体积及唯一显式入口。
+`thermalinit` 成功切换 v6 HEAD 后立即推送第一帧 thermal snapshot，暂停区域不再需要额外 `step` 或调试命令才恢复显示。
 其他恢复损坏也在本次启动稳定锁定，不再造成 tick 级日志风暴。
 
 将该真实世界复制到 workspace 后执行显式 272.5 K 初始化，production 相变路径又暴露并修正了五类非经验性错误：
