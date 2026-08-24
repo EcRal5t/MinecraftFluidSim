@@ -10,6 +10,7 @@ import com.example.chemistry.ChemicalSpecies;
 import com.example.chemistry.ExactRational;
 import com.example.granular.SolidVolume;
 import com.example.thermal.SignedDyadic;
+import com.example.thermal.GranularEnergyColumn;
 import com.example.thermal.CoherentPhaseStore;
 import com.example.thermal.ThermalBoundaryDefinition;
 import com.example.thermal.ThermalAuditLedger;
@@ -41,6 +42,7 @@ public final class M9ThermalValidation {
 		reactionCommitValidatesEnergyBeforeMutation();
 		phasePlateauUsesTheStateFunctionGap();
 		coherentPhaseInventoryAndExactBatchPlanning();
+		granularEnergyColumnTransactions();
 		exactDyadicAuditDoesNotLoseCancellationRemainders();
 		liquidTransportAndHandoffCloseEnergy();
 		fixedBoundaryAuditsAndFailedStepRollsBack();
@@ -354,6 +356,31 @@ public final class M9ThermalValidation {
 					== Double.doubleToRawLongBits(value == 0.0 ? 0.0 : value),
 					"dyadic conversion did not round-trip " + value);
 		}
+	}
+
+	private static void granularEnergyColumnTransactions() {
+		GranularEnergyColumn column = new GranularEnergyColumn(8, 8);
+		column.addActive(10.0); column.addActive(20.0); column.addActive(30.0);
+		GranularEnergyColumn.DepositKey first = new GranularEnergyColumn.DepositKey(1, 2, 0);
+		GranularEnergyColumn.DepositKey second = new GranularEnergyColumn.DepositKey(2, 2, 0);
+		column.addDeposit(first, 5.0); column.addDeposit(first, 5.0);
+		SignedDyadic initial = column.exactEnergy();
+		column.mergeActive(2, 0);
+		double removedActive = column.takeActivePortion(0, 1L, 4L);
+		double removedDeposit = column.takeDeposit(first, 1L, 4L);
+		column.moveDeposit(first, second, 1L, 3L);
+		SignedDyadic removed = SignedDyadic.of(removedActive).add(SignedDyadic.of(removedDeposit));
+		require(column.activeCount() == 2 && close(column.activeEnergy(0), 30.0)
+				&& close(column.activeEnergy(1), 20.0)
+				&& close(column.depositEnergy(first), 5.0)
+				&& close(column.depositEnergy(second), 2.5)
+				&& column.exactEnergy().add(removed).equals(initial),
+				"granular thermal split/merge/move did not conserve raw energy");
+		GranularEnergyColumn restored = new GranularEnergyColumn(8, 8);
+		restored.restore(column.copyActiveEnergy(), column.depositSnapshot());
+		require(restored.exactEnergy().equals(column.exactEnergy())
+				&& restored.clear().equals(column.exactEnergy()),
+				"granular thermal column handoff/clear did not preserve exact energy");
 	}
 
 	private static void liquidTransportAndHandoffCloseEnergy() {

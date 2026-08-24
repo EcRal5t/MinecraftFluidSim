@@ -126,3 +126,12 @@ non-empty coherent v6。M8 active/deposit 与 gas energy ordinals 仍显式拒�
 
 扩展既有 world-config persistence 场景，覆盖 v6 round-trip、v5 安全退化、v6 缺键拒绝和依赖链。最近门：
 `region-state` 通过；未请求实机。
+
+## M9.9 granular raw-energy column core
+
+新增 `GranularEnergyColumn`，active parcel 以 M8 ordinal 对齐，deposit 以 canonical
+`(cell, materialHandle, compositionHandle)` 对齐，只保存 raw finite `U`；质量、SVQ、组成和位置仍只属于 M8 store。
+该列提供有界 add、swap-remove、merge、按 exact SVQ 比例 split/take、deposit move、canonical handoff 与 clear，
+所有算术在修改前检查 finite/预算。扩展唯一 `thermal` 场景验证跨 active/deposit 的 split/merge/move 后，剩余库存与
+移出能量用 `SignedDyadic` 精确回和。最近门：`thermal` 通过。此提交只建立正交 owner，尚未解除 domain 对
+granular+thermal 同时绑定的拒绝。
