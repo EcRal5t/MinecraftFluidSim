@@ -188,6 +188,10 @@ public record RegionManifest(
 		return formatVersion == 4 || formatVersion == 6 && extensions.stream()
 				.anyMatch(extension -> GasRegionStateCodec.MANIFEST_EXTENSION.equals(extension.type()));
 	}
+	public boolean hasGranularState() {
+		return formatVersion == 5 || formatVersion == 6 && extensions.stream()
+				.anyMatch(extension -> GranularRegionStateCodec.MANIFEST_EXTENSION.equals(extension.type()));
+	}
 	public boolean hasThermalState() { return formatVersion == 6; }
 
 	public record MaterialLedger(int markerCount, long volumeBits, long massBits) {

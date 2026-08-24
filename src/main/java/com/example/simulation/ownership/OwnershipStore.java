@@ -2,8 +2,10 @@ package com.example.simulation.ownership;
 
 import com.example.RealWaterMod;
 import com.example.chemistry.ChemicalRegistry;
+import com.example.fluid.air.GasRegistry;
 import com.example.granular.GranularRegistry;
 import com.example.simulation.persistence.RegionStateFiles;
+import com.example.thermal.ThermalRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.NbtUtils;
@@ -43,10 +45,19 @@ public final class OwnershipStore {
 	}
 
 	public OwnershipStore(Path worldRoot, ChemicalRegistry chemicalRegistry, GranularRegistry granularRegistry) {
+		this(worldRoot, chemicalRegistry, granularRegistry, null, null);
+	}
+
+	public OwnershipStore(
+			Path worldRoot, ChemicalRegistry chemicalRegistry, GranularRegistry granularRegistry,
+			ThermalRegistry thermalRegistry, GasRegistry gasRegistry
+	) {
 		this.worldRoot = worldRoot.toAbsolutePath().normalize();
-		this.regionFiles = granularRegistry == null
-				? chemicalRegistry == null ? new RegionStateFiles(worldRoot) : new RegionStateFiles(worldRoot, chemicalRegistry)
-				: new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry);
+		this.regionFiles = thermalRegistry != null || gasRegistry != null
+				? new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry)
+				: granularRegistry == null
+					? chemicalRegistry == null ? new RegionStateFiles(worldRoot) : new RegionStateFiles(worldRoot, chemicalRegistry)
+					: new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry);
 	}
 
 	public OwnershipFiles files(UUID regionId) {

@@ -4,6 +4,7 @@ import com.example.RealWaterMod;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FluidMaterialRegistry;
+import com.example.fluid.air.GasRegistry;
 import com.example.granular.GranularRegistry;
 import com.example.simulation.controller.FluidRegionFootprint;
 import com.example.simulation.ownership.OwnershipCommitted;
@@ -14,6 +15,7 @@ import com.example.simulation.ownership.OwnershipStore;
 import com.example.simulation.persistence.RegionManifest;
 import com.example.simulation.persistence.RegionState;
 import com.example.simulation.persistence.RegionStateFiles;
+import com.example.thermal.ThermalRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.NbtUtils;
@@ -42,6 +44,9 @@ final class FluidRegionPersistence {
 	private final boolean granularEnabled;
 	private final GranularRegistry granularRegistry;
 	private final boolean precipitationEnabled;
+	private final boolean thermalEnabled;
+	private final ThermalRegistry thermalRegistry;
+	private final GasRegistry gasRegistry;
 
 	FluidRegionPersistence(Path worldRoot, boolean materialsEnabled) {
 		this(worldRoot, materialsEnabled, false, null);
@@ -64,16 +69,30 @@ final class FluidRegionPersistence {
 			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
 			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled
 	) {
-		files = granularRegistry == null
+		this(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry, granularEnabled, granularRegistry,
+				precipitationEnabled, false, null, null);
+	}
+
+	FluidRegionPersistence(
+			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
+			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled,
+			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry
+	) {
+		files = thermalEnabled
+				? new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry)
+				: granularRegistry == null
 				? chemicalRegistry == null ? new RegionStateFiles(worldRoot) : new RegionStateFiles(worldRoot, chemicalRegistry)
 				: new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry);
-		ownershipStore = new OwnershipStore(worldRoot, chemicalRegistry, granularRegistry);
+		ownershipStore = new OwnershipStore(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry);
 		this.materialsEnabled = materialsEnabled;
 		this.chemistryEnabled = chemistryEnabled;
 		this.chemicalRegistry = chemicalRegistry;
 		this.granularEnabled = granularEnabled;
 		this.granularRegistry = granularRegistry;
 		this.precipitationEnabled = precipitationEnabled;
+		this.thermalEnabled = thermalEnabled;
+		this.thermalRegistry = thermalRegistry;
+		this.gasRegistry = gasRegistry;
 	}
 
 	List<String> scanOwnershipIssues() {
@@ -109,6 +128,9 @@ final class FluidRegionPersistence {
 				}
 				if (manifest.formatVersion() == 5 && (!granularEnabled || granularRegistry == null)) {
 					throw new IOException("region-state v5 requires the granular feature gate and authoritative registry snapshot");
+				}
+				if (manifest.formatVersion() == 6 && (!thermalEnabled || thermalRegistry == null || gasRegistry == null)) {
+					throw new IOException("region-state v6 requires the thermal feature gate and authoritative thermal/gas registry snapshots");
 				}
 				validateControllerGeometry(manifest);
 				Identifier dimensionId = Identifier.tryParse(manifest.dimensionId());
@@ -373,6 +395,13 @@ final class FluidRegionPersistence {
 				throw new IOException("Committed world ownership does not match the region checkpoint");
 			}
 		}
+		if (thermalEnabled) {
+			restoreThermalGeneration(region, state);
+			return;
+		}
+		if (manifest.formatVersion() == 6) {
+			throw new IOException("Thermal checkpoint cannot restore while the feature gate is disabled");
+		}
 		if (granularEnabled) {
 			restoreGranularGeneration(region, state);
 			return;
@@ -431,6 +460,27 @@ final class FluidRegionPersistence {
 	}
 
 	private RegionState captureForFeatureGate(FluidRegion region, long generation) throws IOException {
+		if (thermalEnabled) {
+			if (thermalRegistry == null || gasRegistry == null) {
+				throw new IOException("Authoritative thermal/gas registry is unavailable");
+			}
+			if (!region.domain().hasMaterialState()) throw new IOException("Thermal state requires a material-bound domain");
+			if (chemistryEnabled) {
+				if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
+				if (!region.domain().hasChemistryState()) region.domain().bindChemistry(chemicalRegistry);
+			}
+			if (granularEnabled) {
+				if (granularRegistry == null) throw new IOException("Authoritative granular registry is unavailable");
+				if (!region.domain().hasGranularState()) {
+					region.domain().bindGranular(granularRegistry, region.domain().materialRegistry());
+				}
+				enablePrecipitationIfConfigured(region);
+			}
+			if (!region.domain().hasThermalState()) {
+				throw new IOException("Thermal state is not initialized; an old controller requires explicit operator temperature migration");
+			}
+			return RegionState.captureThermal(region, generation);
+		}
 		if (granularEnabled) {
 			if (granularRegistry == null) throw new IOException("Authoritative granular registry is unavailable");
 			if (!region.domain().hasMaterialState()) throw new IOException("Granular state requires a material-bound domain");
@@ -453,6 +503,46 @@ final class FluidRegionPersistence {
 		return region.domain().hasMaterialState()
 				? RegionState.captureMaterial(region, generation)
 				: RegionState.capture(region, generation);
+	}
+
+	private void restoreThermalGeneration(FluidRegion region, RegionState state) throws IOException {
+		if (thermalRegistry == null || gasRegistry == null) {
+			throw new IOException("Authoritative thermal/gas registry is unavailable");
+		}
+		RegionManifest manifest = state.manifest();
+		if (manifest.formatVersion() != 6) {
+			throw new IOException("region-state v" + manifest.formatVersion()
+					+ " has no authoritative internal energy; explicit operator temperature initialization is required");
+		}
+		long generation = manifest.checkpointGeneration();
+		try {
+			if (manifest.hasChemicalState()) {
+				if (!chemistryEnabled || chemicalRegistry == null) {
+					throw new IOException("Chemical thermal checkpoint requires the chemistry registry and gate");
+				}
+				region.restoreChemicalSolver(state.reconstructChemical(chemicalRegistry), chemicalRegistry, generation);
+			} else {
+				region.restoreMaterialSolver(state.reconstructMaterial(), generation);
+			}
+			boolean hasGranular = manifest.hasGranularState();
+			if (hasGranular) {
+				if (!granularEnabled || granularRegistry == null) {
+					throw new IOException("Granular thermal checkpoint requires the granular registry and gate");
+				}
+				region.restoreGranularState(state.reconstructGranular(granularRegistry), granularRegistry, generation);
+			} else if (granularEnabled) {
+				throw new IOException("Thermal checkpoint omits granular truth while the granular gate is enabled");
+			}
+			region.restoreGasState(state.reconstructGas(gasRegistry, chemicalRegistry), gasRegistry, generation);
+			region.restoreThermalState(state.reconstructThermal(thermalRegistry, gasRegistry, chemicalRegistry),
+					thermalRegistry, generation);
+			enablePrecipitationIfConfigured(region);
+		} catch (IOException | RuntimeException failure) {
+			if (region.solverLoaded() && region.checkpointGeneration() == generation) {
+				region.releaseSolverAfterCheckpoint(generation);
+			}
+			throw failure;
+		}
 	}
 
 	private void restoreGranularGeneration(FluidRegion region, RegionState state) throws IOException {

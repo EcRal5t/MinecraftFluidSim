@@ -15,6 +15,9 @@ import com.example.fluid.FluidMaterialRegistry;
 import com.example.fluid.FluidMaterialRenderSnapshot;
 import com.example.fluid.FluidSolverConfig;
 import com.example.fluid.air.AirNetwork;
+import com.example.fluid.air.BuiltinGasDefinitions;
+import com.example.fluid.air.GasRegistry;
+import com.example.fluid.air.GasRegistryStore;
 import com.example.granular.GranularDataPackLoader;
 import com.example.granular.GranularMechanics;
 import com.example.granular.GranularPhaseTransferEngine;
@@ -29,6 +32,10 @@ import com.example.simulation.controller.FluidBoundaryScanner;
 import com.example.simulation.controller.FluidControllerRegions;
 import com.example.simulation.controller.FluidRegionFootprint;
 import com.example.simulation.persistence.RegionStateFiles;
+import com.example.thermal.ThermalDataPackLoader;
+import com.example.thermal.ThermalMaterialDefinition;
+import com.example.thermal.ThermalRegistry;
+import com.example.thermal.ThermalRegistryStore;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.Registries;
@@ -107,6 +114,10 @@ public final class FluidSimulationService {
 	private final boolean granularFeatureEnabled;
 	private final boolean precipitationFeatureEnabled;
 	private final GranularRegistry granularRegistry;
+	private final boolean thermalFeatureEnabled;
+	private final boolean phaseChangeFeatureEnabled;
+	private final ThermalRegistry thermalRegistry;
+	private final GasRegistry gasRegistry;
 	private List<String> ownershipIssues = List.of();
 	private String lastTakeoverFailure;
 	private boolean takeoverMaintenanceEnabled;
@@ -206,6 +217,75 @@ public final class FluidSimulationService {
 				RealWaterMod.LOGGER.error("Granular registry is LOCKED; granular state and controller creation remain disabled", exception);
 			}
 		}
+		GasRegistry bootGasRegistry = null;
+		ThermalRegistry bootThermalRegistry = null;
+		if (serverConfig.thermalEnabled()) {
+			try {
+				GasRegistryStore gasStore = new GasRegistryStore(worldRoot);
+				GasRegistry definitions = BuiltinGasDefinitions.createRegistry();
+				if (!gasStore.exists()) {
+					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discoverCommittedStructure();
+					if (!regions.issues().isEmpty() || regions.manifests().stream()
+							.anyMatch(manifest -> manifest.formatVersion() == 4 || manifest.formatVersion() == 6)) {
+						throw new IOException("gas-bearing region-state or unreadable region data exists but gas/registry.nbt is missing");
+					}
+				}
+				GasRegistryStore.LoadResult loaded = gasStore.loadOrCreate(definitions);
+				bootGasRegistry = loaded.registry();
+				validateSupportedGasComponents(bootGasRegistry);
+				if (loaded.definitionMismatch()) {
+					RealWaterMod.LOGGER.warn("Built-in gas definitions differ from authoritative world registry {}; existing inventory keeps world semantics",
+							bootGasRegistry.fingerprint());
+				} else if (loaded.created()) {
+					RealWaterMod.LOGGER.info("Published authoritative gas registry snapshot {}", bootGasRegistry.fingerprint());
+				}
+
+				String chemicalFingerprint = bootChemicalRegistry == null ? "" : bootChemicalRegistry.fingerprint();
+				String granularFingerprint = bootGranularRegistry == null ? "" : bootGranularRegistry.fingerprint();
+				ThermalRegistryStore thermalStore = new ThermalRegistryStore(
+						worldRoot, chemicalFingerprint, granularFingerprint);
+				if (thermalStore.exists()) {
+					bootThermalRegistry = thermalStore.read();
+					validateSupportedThermalCarriers(bootThermalRegistry, bootChemicalRegistry,
+							bootGranularRegistry, bootGasRegistry);
+					try {
+						ThermalRegistry datapackDefinitions = ThermalDataPackLoader.load(server.getResourceManager(),
+								chemicalFingerprint, granularFingerprint);
+						if (!datapackDefinitions.fingerprint().equals(bootThermalRegistry.fingerprint())) {
+							RealWaterMod.LOGGER.warn("Thermal datapack definitions differ from authoritative world registry {}; existing energy keeps world semantics",
+									bootThermalRegistry.fingerprint());
+						}
+					} catch (IOException | RuntimeException invalidDatapack) {
+						RealWaterMod.LOGGER.warn("Current thermal datapack definitions are invalid; authoritative world registry {} remains active and energy is not reinterpreted",
+								bootThermalRegistry.fingerprint(), invalidDatapack);
+					}
+				} else {
+					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discoverCommittedStructure();
+					if (!regions.issues().isEmpty() || regions.manifests().stream()
+							.anyMatch(manifest -> manifest.formatVersion() == 6)) {
+						throw new IOException("region-state v6 or unreadable region data exists but thermal/registry.nbt is missing");
+					}
+					ThermalRegistry definitionsFromPacks = ThermalDataPackLoader.load(server.getResourceManager(),
+							chemicalFingerprint, granularFingerprint);
+					validateSupportedThermalCarriers(definitionsFromPacks, bootChemicalRegistry,
+							bootGranularRegistry, bootGasRegistry);
+					ThermalRegistryStore.LoadResult thermalLoaded = thermalStore.loadOrCreate(definitionsFromPacks);
+					bootThermalRegistry = thermalLoaded.registry();
+					validateSupportedThermalCarriers(bootThermalRegistry, bootChemicalRegistry,
+							bootGranularRegistry, bootGasRegistry);
+					if (thermalLoaded.definitionMismatch()) {
+						RealWaterMod.LOGGER.warn("Thermal registry appeared during first publication and differs from datapack definitions; world snapshot {} remains authoritative",
+								bootThermalRegistry.fingerprint());
+					} else if (thermalLoaded.created()) {
+						RealWaterMod.LOGGER.info("Published authoritative thermal registry snapshot {}",
+								bootThermalRegistry.fingerprint());
+					}
+				}
+			} catch (IOException | RuntimeException exception) {
+				configurationLocked = true;
+				RealWaterMod.LOGGER.error("Thermal/gas registry is LOCKED; thermal state and controller creation remain disabled", exception);
+			}
+		}
 		serverConfigLocked = configurationLocked;
 		controllerFeatureEnabled = serverConfig.controllersEnabled();
 		materialFeatureEnabled = serverConfig.materialsEnabled();
@@ -216,10 +296,14 @@ public final class FluidSimulationService {
 		granularFeatureEnabled = serverConfig.granularEnabled() && granularRegistry != null;
 		precipitationFeatureEnabled = serverConfig.precipitationEnabled()
 				&& granularFeatureEnabled && chemistryFeatureEnabled && granularRegistry.hasReactiveRules();
+		gasRegistry = bootGasRegistry;
+		thermalRegistry = bootThermalRegistry;
+		thermalFeatureEnabled = serverConfig.thermalEnabled() && thermalRegistry != null && gasRegistry != null;
+		phaseChangeFeatureEnabled = serverConfig.phaseChangeEnabled() && thermalFeatureEnabled;
 		regionManager = new FluidRegionManager(serverConfig.limits());
 		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, materialFeatureEnabled,
 				chemistryFeatureEnabled, chemicalRegistry, granularFeatureEnabled, granularRegistry,
-				precipitationFeatureEnabled);
+				precipitationFeatureEnabled, thermalFeatureEnabled, thermalRegistry, gasRegistry);
 		containerTransfers = new ContainerTransferStore(worldRoot);
 		if (configurationLocked) regionOperations.recordIssue(
 				"server.properties 不可用，已安全使用默认预算并关闭控制器；原文件未覆盖");
@@ -235,6 +319,35 @@ public final class FluidSimulationService {
 		for (var material : BuiltinFluidMaterials.M3_PALETTE) {
 			if (!registry.hasCarrier(material.id())) throw new IllegalArgumentException(
 					"Granular registry has no carrier for " + material.id());
+		}
+	}
+
+	private static void validateSupportedGasComponents(GasRegistry registry) {
+		registry.component(BuiltinGasDefinitions.AIR);
+		registry.component(BuiltinGasDefinitions.WATER_VAPOR);
+	}
+
+	private static void validateSupportedThermalCarriers(
+			ThermalRegistry registry, ChemicalRegistry chemicalRegistry,
+			GranularRegistry granularRegistry, GasRegistry gasRegistry
+	) {
+		for (var material : BuiltinFluidMaterials.M3_PALETTE) {
+			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, material.id());
+		}
+		if (granularRegistry != null) for (var material : granularRegistry.materials()) {
+			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, material.id());
+		}
+		for (var component : gasRegistry.components()) {
+			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS, component.id());
+		}
+		if (chemicalRegistry != null) for (var phase : chemicalRegistry.phases()) {
+			int host = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, phase.materialId());
+			for (String species : phase.allowedSpecies()) registry.speciesOffset(host, species);
+		}
+		if (granularRegistry != null) for (var reaction : granularRegistry.reactions()) {
+			int host = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR,
+					reaction.solidMaterialId());
+			for (String species : reaction.solidComposition().keySet()) registry.speciesOffset(host, species);
 		}
 	}
 
@@ -606,6 +719,8 @@ public final class FluidSimulationService {
 	}
 	public boolean granularFeatureEnabled() { return granularFeatureEnabled; }
 	public boolean precipitationFeatureEnabled() { return precipitationFeatureEnabled; }
+	public boolean thermalFeatureEnabled() { return thermalFeatureEnabled; }
+	public boolean phaseChangeFeatureEnabled() { return phaseChangeFeatureEnabled; }
 	public GranularRegistry granularRegistry() {
 		if (granularRegistry == null) throw new IllegalStateException("Authoritative granular registry is unavailable");
 		return granularRegistry;
@@ -718,10 +833,7 @@ public final class FluidSimulationService {
 		if (!admission.accepted()) return ControllerActivation.failed(admission.failure());
 		refreshCollisions(level, candidate);
 		FluidRegionFactory.captureVanillaWater(level, candidate);
-		if (materialFeatureEnabled) bindDefaultMaterialState(candidate.domain());
-		if (chemistryFeatureEnabled) candidate.domain().bindChemistry(chemicalRegistry);
-		if (granularFeatureEnabled) candidate.domain().bindGranular(granularRegistry, candidate.domain().materialRegistry());
-		if (precipitationFeatureEnabled) candidate.domain().setPrecipitationEnabled(true);
+		bindConfiguredState(candidate.domain());
 		candidate.setPaused(true);
 		try {
 			if (worldBridgeFeatureEnabled) {
@@ -938,8 +1050,7 @@ public final class FluidSimulationService {
 			refreshCollisions(level);
 			FlipFluidDomain domain = domain();
 			fillAirDemoWater(domain);
-			if (materialFeatureEnabled) bindDefaultMaterialState(domain);
-			if (chemistryFeatureEnabled) domain.bindChemistry(chemicalRegistry);
+			bindConfiguredState(domain);
 			domain.step();
 			AirNetwork network = domain.airNetwork();
 			if (network.nodeCount() < 1) {
@@ -1160,7 +1271,7 @@ public final class FluidSimulationService {
 		}
 		if (materialFeatureEnabled) bindDefaultMaterialState(domain);
 		if (layeredMaterials) assignLayeredDemoMaterials(domain, fillY / 2.0F * domain.config().cellSize());
-		if (chemistryFeatureEnabled) domain.bindChemistry(chemicalRegistry);
+		bindConfiguredState(domain);
 		activeRegion().setPaused(true);
 		sendSnapshot(level);
 		return true;
@@ -1184,8 +1295,7 @@ public final class FluidSimulationService {
 		}
 		refreshCollisions(level);
 		int wetCells = FluidRegionFactory.captureVanillaWater(level, activeRegion());
-		if (materialFeatureEnabled) bindDefaultMaterialState(activeRegion().domain());
-		if (chemistryFeatureEnabled) activeRegion().domain().bindChemistry(chemicalRegistry);
+		bindConfiguredState(activeRegion().domain());
 		int removedBlocks = takeover ? beginTakeover(level) : 0;
 		activeRegion().setPaused(true);
 		sendSnapshot(level);
@@ -2291,6 +2401,19 @@ public final class FluidSimulationService {
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), totalVolume, totalMass,
 				BuiltinFluidMaterials.M3_PALETTE, positionVolume, pure.copyParticleVelocities(), pure.copySolidMask(), markerMass, material
 		));
+	}
+
+	private void bindConfiguredState(FlipFluidDomain domain) {
+		if (materialFeatureEnabled) bindDefaultMaterialState(domain);
+		if (chemistryFeatureEnabled && !domain.hasChemistryState()) domain.bindChemistry(chemicalRegistry);
+		if (granularFeatureEnabled && !domain.hasGranularState()) {
+			domain.bindGranular(granularRegistry, domain.materialRegistry());
+		}
+		if (precipitationFeatureEnabled) domain.setPrecipitationEnabled(true);
+		if (thermalFeatureEnabled && !domain.hasThermalState()) {
+			domain.bindGasRegistry(gasRegistry);
+			domain.bindThermal(thermalRegistry, domain.materialRegistry(), GasRegistry.STANDARD_TEMPERATURE_K);
+		}
 	}
 
 	private static void assignLayeredDemoMaterials(FlipFluidDomain domain, float interfaceY) {

@@ -23,8 +23,9 @@ public final class ThermalDataPackLoader {
 		if (resources == null) throw new IOException("Thermal datapack resource manager is missing");
 		List<ThermalMaterialDefinition> materials = loadCategory(resources, ThermalDefinitionCodec.MATERIALS_PATH,
 				ThermalDefinitionCodec::decodeMaterial, true);
-		List<ThermalSpeciesOffset> offsets = loadCategory(resources, ThermalDefinitionCodec.SPECIES_PATH,
-				ThermalDefinitionCodec::decodeSpecies, false);
+		List<ThermalSpeciesOffset> offsets = chemicalRegistryFingerprint.isEmpty() ? List.of()
+				: loadCategory(resources, ThermalDefinitionCodec.SPECIES_PATH,
+						ThermalDefinitionCodec::decodeSpecies, false);
 		List<ThermalPhaseTransition> transitions = loadCategory(resources, ThermalDefinitionCodec.TRANSITIONS_PATH,
 				ThermalDefinitionCodec::decodeTransition, false);
 		List<ThermalBoundaryDefinition> boundaries = loadCategory(resources, ThermalDefinitionCodec.BOUNDARIES_PATH,

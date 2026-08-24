@@ -193,7 +193,7 @@ public final class FluidProtocolServer {
 			FluidSimulationService service = FluidSimulationService.get(server);
 			this.offer = new FluidProtocolOfferPayload(FluidProtocol.serverOffer(
 					service.materialFeatureEnabled(), service.chemistryFeatureEnabled(),
-					service.granularFeatureEnabled()));
+					service.granularFeatureEnabled(), service.thermalFeatureEnabled()));
 		}
 
 		@Override

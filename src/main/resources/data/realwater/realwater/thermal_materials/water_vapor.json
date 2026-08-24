@@ -1,0 +1,1 @@
+{"carrier_kind":"GAS","carrier_id":"realwater:water_vapor","reference_temperature_k":"293.15","reference_specific_energy_eu_per_mu":"2442720.0","conductivity_eu_per_second_meter_k":"0.025","caloric_segments":[{"minimum_temperature_k":"250.0","maximum_temperature_k":"600.0","specific_heat_eu_per_mu_k":"1850.0"}]}

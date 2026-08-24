@@ -8,11 +8,15 @@ import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipParticleState;
 import com.example.fluid.FluidSolverConfig;
+import com.example.fluid.air.BuiltinGasDefinitions;
+import com.example.fluid.air.GasRegistry;
 import com.example.granular.BuiltinGranularDefinitions;
 import com.example.granular.GranularRegistry;
 import com.example.simulation.controller.FluidRegionFootprint;
 import com.example.simulation.persistence.RegionState;
 import com.example.simulation.persistence.RegionStateFiles;
+import com.example.thermal.ThermalMaterialDefinition;
+import com.example.thermal.ThermalRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.Identifier;
@@ -44,7 +48,66 @@ public final class M7RegionChemistryPersistenceValidation {
 		validateFeatureGateAndMigration();
 		validateAtomicFaultBoundary();
 		validateGranularV5FeatureGateAndMigration();
-		System.out.println("Region persistence passed: v1/v2/v3 migration, v3/v5 gate lock and fault matrix");
+		validateThermalV6ProductionGate();
+		System.out.println("Region persistence passed: v1/v2/v3 migration, v3/v5/v6 gates and fault matrix");
+	}
+
+	private static void validateThermalV6ProductionGate() throws Exception {
+		Path root = Files.createTempDirectory(Path.of("."), "thermal-production-v6-");
+		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
+		ThermalRegistry thermal = productionThermalRegistry();
+		FluidRegion source = populatedRegion(UUID.randomUUID());
+		bindDefaultMaterials(source);
+		source.domain().bindGasRegistry(gas);
+		source.domain().bindThermal(thermal, source.domain().materialRegistry(), 300.0);
+		source.domain().setThermalTemperatureInCell(2, 1, 2, 325.0);
+		FluidRegionPersistence persistence = new FluidRegionPersistence(root, true, false, null,
+				false, null, false, true, thermal, gas);
+		check(persistence.checkpoint(source) == 1L, "production thermal checkpoint did not publish v6");
+
+		FluidRegionManager manager = manager();
+		FluidRegionPersistence restoring = new FluidRegionPersistence(root, true, false, null,
+				false, null, false, true, thermal, gas);
+		check(restoring.loadMetadata(manager).isEmpty(), "valid v6 metadata was locked");
+		FluidRegion admitted = manager.regions().getFirst(); restoring.restore(admitted);
+		check(admitted.solverLoaded() && admitted.domain().hasThermalState()
+				&& admitted.domain().exportGasState("").registryFingerprint().equals(gas.fingerprint())
+				&& admitted.domain().thermalAudit().equals(source.domain().thermalAudit()),
+				"production v6 restore did not reconstruct gas plus thermal truth");
+
+		FluidRegionManager gateOff = manager();
+		List<String> gateIssues = new FluidRegionPersistence(root, true).loadMetadata(gateOff);
+		check(gateOff.regions().isEmpty() && gateIssues.stream().anyMatch(issue -> issue.contains("v6")),
+				"thermal-off discovery did not preserve and lock region-state v6");
+
+		Path legacyRoot = Files.createTempDirectory(Path.of("."), "thermal-explicit-init-");
+		FluidRegion legacy = populatedRegion(UUID.randomUUID()); bindDefaultMaterials(legacy);
+		new RegionStateFiles(legacyRoot).publish(RegionState.captureMaterial(legacy, 1L));
+		FluidRegionManager legacyManager = manager();
+		FluidRegionPersistence legacyPersistence = new FluidRegionPersistence(legacyRoot, true, false, null,
+				false, null, false, true, thermal, gas);
+		check(legacyPersistence.loadMetadata(legacyManager).isEmpty(), "legacy metadata should remain selectable for explicit initialization");
+		try {
+			legacyPersistence.restore(legacyManager.regions().getFirst());
+			throw new AssertionError("legacy checkpoint was assigned an implicit temperature");
+		} catch (IOException expected) {
+			check(expected.getMessage().contains("explicit operator"), "legacy thermal refusal did not name explicit initialization");
+		}
+	}
+
+	private static ThermalRegistry productionThermalRegistry() {
+		List<ThermalMaterialDefinition> definitions = new java.util.ArrayList<>();
+		for (var liquid : BuiltinFluidMaterials.M3_PALETTE) definitions.add(new ThermalMaterialDefinition(
+				"test:thermal/" + liquid.id().substring(liquid.id().indexOf(':') + 1),
+				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 293.15, 0.0, 0.5,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 1000.0))));
+		definitions.add(new ThermalMaterialDefinition("test:thermal/air", ThermalMaterialDefinition.CarrierKind.GAS,
+				BuiltinGasDefinitions.AIR, 293.15, 0.0, 0.025,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 718.0))));
+		definitions.add(new ThermalMaterialDefinition("test:thermal/vapor", ThermalMaterialDefinition.CarrierKind.GAS,
+				BuiltinGasDefinitions.WATER_VAPOR, 293.15, 2_400_000.0, 0.025,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 1850.0))));
+		return new ThermalRegistry(definitions);
 	}
 
 	private static void validateGranularV5FeatureGateAndMigration() throws Exception {

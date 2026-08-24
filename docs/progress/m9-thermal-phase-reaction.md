@@ -251,3 +251,19 @@ boundary、container、admin、chemistry、granular、gas 或 phase 事件显式
 
 最近门：`thermal` 通过，并证明 motion 已处于 `HYDROSTATIC_SLEEP` 时 thermal 轴仍可 step。production region/service
 持有与事件接线在后续增量完成。
+
+## M9.19 production registry and complete v6 wiring
+
+server 启动现在实际消费 config v6 的 `thermalEnabled`：先加载/冻结 authoritative gas registry，再以当前 authoritative
+chemical/granular fingerprints 加载或首次发布 thermal registry；已有 v4/v6 却缺 snapshot、未知布局、损坏或依赖 identity
+失配均保持证据并全局 LOCKED。bundled definitions 覆盖三种液体、active granular carriers、air/water-vapor、coherent ice、
+固液与液气 transition，以及所有活动 chemical host/species offset；启动验证不允许缺 carrier 或把缺 formation offset 当零。
+
+新 controller 与开发域在 material/chemistry/granular 绑定完成后，以冻结标准初温 293.15 K 创建 gas topology 与每个库存的
+权威 `U`。checkpoint 只发布完整 v6；恢复固定按 material/optional chemistry、optional granular、gas、thermal 顺序联合重建，
+ownership recovery 也使用相同 registries 验证 HEAD。v1/v2/v3/v5 在 thermal on 时仍可被选中，但 restore 明确拒绝隐式赋温并
+等待后续 operator initialization；thermal off 遇 v6 则保留并锁定。live protocol offer 已实际选择 v5 capability。
+
+扩展既有 `region-state` 场景，覆盖 production coordinator 的 v6 checkpoint/reload、thermal-off 锁定以及旧 v2 不自动赋温。
+最近门：`thermal,region-state,ownership,protocol` 通过；尚未完成显式旧世界初始化命令、production v5 snapshot body、
+container transfer service、phase/dual-sleep tick 编排。

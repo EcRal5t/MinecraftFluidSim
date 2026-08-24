@@ -1,0 +1,1 @@
+{"carrier_kind":"LIQUID","carrier_id":"realwater:mercury","reference_temperature_k":"293.15","reference_specific_energy_eu_per_mu":"0.0","conductivity_eu_per_second_meter_k":"8.3","caloric_segments":[{"minimum_temperature_k":"250.0","maximum_temperature_k":"600.0","specific_heat_eu_per_mu_k":"140.0"}]}
