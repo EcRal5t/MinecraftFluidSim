@@ -508,3 +508,8 @@ registry 中唯一的 solid→liquid transition 解析化学 material ownership�
 清除 3.739 BV liquid、109 coherent groups 和零 granular，原子发布 checkpoint 8；状态为 marker/coherent/U 全零且
 audit closed。正常停服发布 checkpoint 9，第二次启动恢复 0 markers，仍为 `pending-work=no`、audit closed，并正常
 发布 checkpoint 10。整个复现只修改 workspace 世界副本，用户原世界保持 checkpoint 7 不变。
+
+最终 `clean assemble compileTestJava --offline --no-daemon` 从零成功（18 s）。部署 JAR SHA-256 为
+`E61739D14AD34E26638B75AAB76F4A4348726743E83AF23B23FA1DB63D4AABE0`；部署后 mods 目录只有这一份启用的
+`realwater` 0.15.0。上一候选 `641DAC2F…7D75D` 已可恢复地保存为
+`realwater-0.15.0-pre-operator-clear-audit-fix.jar.disabled`；只读 GPU probe 仍是独立 `realwater_gpu_probe` id。
