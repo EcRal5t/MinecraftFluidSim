@@ -45,6 +45,7 @@ public final class RealWaterCommands {
 								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.executes(context -> audit(context, () -> createControllerDemo(context.getSource()))))
 						.then(Commands.literal("materialbucket")
+								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.then(Commands.argument("material", StringArgumentType.word())
 										.suggests((context, builder) -> {
 											builder.suggest("empty");
@@ -57,6 +58,7 @@ public final class RealWaterCommands {
 										.executes(context -> audit(context, () -> giveMaterialBucket(
 												context.getSource(), StringArgumentType.getString(context, "material"))))))
 						.then(Commands.literal("granularcontainer")
+								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.then(Commands.argument("material", StringArgumentType.word())
 										.suggests((context, builder) -> {
 											builder.suggest("empty"); builder.suggest("fine_sand"); builder.suggest("light_beads");

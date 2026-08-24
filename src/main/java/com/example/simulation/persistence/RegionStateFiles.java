@@ -360,9 +360,9 @@ public final class RegionStateFiles {
 				state.reconstructChemical(chemicalRegistry);
 			} else state.reconstructMaterial();
 			var granular = state.reconstructGranular(granularRegistry);
-			if (!granular.solidCompositions().isEmpty()) {
+			if (granular.requiresChemistry()) {
 				if (chemicalRegistry == null) throw new IOException("Reactive region-state v5 verification requires the authoritative chemical registry");
-				try { granular.validateSolidCompositionMasses(chemicalRegistry); }
+				try { granular.validateAgainst(granularRegistry, chemicalRegistry); }
 				catch (IllegalArgumentException invalid) {
 					throw new IOException("Reactive region-state v5 solid composition validation failed", invalid);
 				}

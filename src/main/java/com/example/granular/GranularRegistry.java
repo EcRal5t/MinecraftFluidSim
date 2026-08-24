@@ -2,6 +2,7 @@ package com.example.granular;
 
 import com.example.chemistry.ChemicalPhaseDefinition;
 import com.example.chemistry.ChemicalRegistry;
+import com.example.chemistry.ExactRational;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -68,7 +69,7 @@ public final class GranularRegistry {
 	public String fingerprint() { return fingerprint; }
 
 	private byte[] encodeCanonical() {
-		StringBuilder out = new StringBuilder(2048).append("realwater-granular-registry-v1\n")
+		StringBuilder out = new StringBuilder(2048).append("realwater-granular-registry-v2\n")
 				.append("svq-per-bv=").append(SolidVolume.SVQ_PER_BV).append('\n')
 				.append("porosity-scale=").append(GranularLimits.POROSITY_SCALE).append('\n')
 				.append("chemical-registry=").append(chemicalRegistryFingerprint).append('\n');
@@ -96,7 +97,8 @@ public final class GranularRegistry {
 			appendMap(out, reaction.aqueousStoichiometry()); out.append('|').append(reaction.solidMaterialId()).append('|');
 			appendMap(out, reaction.solidComposition());
 			out.append('|').append(reaction.saturationCapacityExtentPerBv().canonical()).append('|')
-					.append(reaction.solidVolumeSvqPerExtent()).append('|')
+					.append(reaction.solidExtentPerBatch()).append('|')
+					.append(reaction.solidVolumeSvqPerBatch()).append('|')
 					.append(reaction.accessibleSurfaceSvqPerCellStep()).append('|')
 					.append(reaction.reversible()).append('\n');
 		}
@@ -113,6 +115,7 @@ public final class GranularRegistry {
 			if (!reaction.aqueousStoichiometry().equals(reaction.solidComposition())) {
 				throw new IllegalArgumentException("First M8 solid-liquid rules must preserve exact species identities: " + reaction.id());
 			}
+			validateDeclaredSolidVolume(reaction, solid, chemicalRegistry);
 			for (String species : reaction.aqueousStoichiometry().keySet()) {
 				chemicalRegistry.speciesHandle(species);
 				if (!phase.allowedSpecies().contains(species)) throw new IllegalArgumentException(
@@ -122,6 +125,27 @@ public final class GranularRegistry {
 				if (previous != null) throw new IllegalArgumentException(
 						"Competing solid-liquid consumers for " + species + ": " + previous + ", " + reaction.id());
 			}
+		}
+	}
+
+	private static void validateDeclaredSolidVolume(
+			SolidLiquidReaction reaction, ParticulateMaterial solid, ChemicalRegistry chemicalRegistry
+	) {
+		ExactRational exactMassPerBatch = ExactRational.ZERO;
+		for (Map.Entry<String, Integer> term : reaction.solidComposition().entrySet()) {
+			exactMassPerBatch = exactMassPerBatch.add(
+					chemicalRegistry.species(chemicalRegistry.speciesHandle(term.getKey())).massPerAu()
+					.multiply(term.getValue()).multiply(reaction.solidExtentPerBatch())
+					.divide(com.example.chemistry.ChemicalLimits.QUANTA_PER_AU));
+		}
+		double representedDensity = exactMassPerBatch.multiply(SolidVolume.SVQ_PER_BV)
+				.divide(reaction.solidVolumeSvqPerBatch()).toDouble();
+		double tolerance = Math.max(1.0E-9,
+				Math.max(Math.ulp(representedDensity), Math.ulp(solid.referenceDensity())) * 8.0);
+		if (!(Double.isFinite(representedDensity) && representedDensity > 0.0)
+				|| Math.abs(representedDensity - solid.referenceDensity()) > tolerance) {
+			throw new IllegalArgumentException("Solid-liquid declared volume does not conserve its exact mass at the material reference density: "
+					+ reaction.id());
 		}
 	}
 

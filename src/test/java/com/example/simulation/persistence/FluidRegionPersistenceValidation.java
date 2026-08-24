@@ -159,7 +159,19 @@ public final class FluidRegionPersistenceValidation {
 		reactiveRoundTrip.validateSolidCompositionMasses(BuiltinChemicalDefinitions.REGISTRY);
 		assertGranularStateEquals(reactiveExpected, reactiveRoundTrip);
 		Path reactiveRoot = Files.createTempDirectory(Path.of("."), "reactive-granular-v5-");
-		new RegionStateFiles(reactiveRoot, BuiltinChemicalDefinitions.REGISTRY, granular).publish(reactiveState);
+		RegionStateFiles reactiveFiles = new RegionStateFiles(
+				reactiveRoot, BuiltinChemicalDefinitions.REGISTRY, granular);
+		reactiveFiles.publish(reactiveState);
+		reactiveRegion.domain().removeAllGranularExact();
+		GranularStateSnapshot auditOnlyExpected = reactiveRegion.domain().exportGranularState();
+		require(auditOnlyExpected.solidCompositions().isEmpty() && auditOnlyExpected.requiresChemistry(),
+				"reactive clear fixture did not retain audit-only chemistry identity");
+		RegionState auditOnlyState = RegionState.captureGranular(reactiveRegion, 2L);
+		auditOnlyState.validate();
+		GranularStateSnapshot auditOnlyRoundTrip = auditOnlyState.reconstructGranular(granular);
+		auditOnlyRoundTrip.validateAgainst(granular, BuiltinChemicalDefinitions.REGISTRY);
+		assertGranularStateEquals(auditOnlyExpected, auditOnlyRoundTrip);
+		reactiveFiles.publish(auditOnlyState);
 
 		CompoundTag reservedV4 = codec.encodeManifest(state.manifest());
 		reservedV4.putInt("Version", 4); reservedV4.putInt("Palette", 4);

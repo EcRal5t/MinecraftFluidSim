@@ -340,9 +340,11 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				.map(com.example.granular.ParticulateMaterial::id).toList())) {
 			throw new IOException("Region-state v5 granular registry fingerprint/palette mismatch");
 		}
-		if (!granular.solidCompositions().isEmpty()
+		boolean reactivePayload = !granular.solidCompositions().isEmpty()
+				|| granular.externalSource().requiresChemistry() || granular.escapedSink().requiresChemistry();
+		if (reactivePayload
 				&& !granular.chemicalRegistryFingerprint().equals(registry.chemicalRegistryFingerprint())) {
-			throw new IOException("Region-state v5 solid composition registry dependency mismatch");
+			throw new IOException("Region-state v5 reactive granular registry dependency mismatch");
 		}
 		GranularStateSnapshot.ActiveParcel[] active = new GranularStateSnapshot.ActiveParcel[granular.activeCount()];
 		boolean[] seenActive = new boolean[active.length];
@@ -544,9 +546,11 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				requiredExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION).payload());
 		boolean capabilityChemistry = (expected.capabilities() & GranularRegionStateCodec.CAP_CHEMISTRY) != 0;
 		boolean capabilityPrecipitation = (expected.capabilities() & GranularRegionStateCodec.CAP_PRECIPITATION) != 0;
+		boolean reactivePayload = !expected.solidCompositions().isEmpty()
+				|| expected.externalSource().requiresChemistry() || expected.escapedSink().requiresChemistry();
 		if (capabilityChemistry != manifest.hasChemicalState()
-				|| capabilityPrecipitation != !expected.solidCompositions().isEmpty()
-				|| !expected.solidCompositions().isEmpty() && (!capabilityChemistry
+				|| capabilityPrecipitation != reactivePayload
+				|| reactivePayload && (!capabilityChemistry
 				|| !expected.chemicalRegistryFingerprint().equals(manifest.registryFingerprint()))) {
 			throw new IOException("Region-state v5 capability set does not match its complete payload");
 		}
@@ -876,8 +880,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		}
 		int capabilities = GranularRegionStateCodec.CAP_MATERIALS | GranularRegionStateCodec.CAP_GRANULAR
 				| (chemicalState ? GranularRegionStateCodec.CAP_CHEMISTRY : 0)
-				| (!snapshot.solidCompositions().isEmpty() || snapshot.externalSource().requiresChemistry()
-				|| snapshot.escapedSink().requiresChemistry() ? GranularRegionStateCodec.CAP_PRECIPITATION : 0);
+				| (snapshot.requiresChemistry() ? GranularRegionStateCodec.CAP_PRECIPITATION : 0);
 		return new GranularRegionStateCodec.ManifestData(capabilities, snapshot.registryFingerprint(),
 				SolidVolume.SVQ_PER_BV, GranularLimits.POROSITY_SCALE,
 				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,

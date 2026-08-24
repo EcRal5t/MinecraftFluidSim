@@ -47,6 +47,11 @@ public final class ChemicalParcelStore {
 		validateAuditLedger(ledger);
 		externalSource.plus(ledger);
 	}
+	/** Validates the cumulative sink candidate without changing audit truth. */
+	public void requireCanRecordEscapedSink(ChemicalTransferLedger ledger) {
+		validateAuditLedger(ledger);
+		escapedSink.plus(ledger);
+	}
 	public void restoreAuditLedgers(ChemicalTransferLedger source, ChemicalTransferLedger sink) {
 		if (!externalSource.isEmpty() || !escapedSink.isEmpty()) {
 			throw new IllegalStateException("Chemical audit ledgers can only be restored into a fresh parcel store");

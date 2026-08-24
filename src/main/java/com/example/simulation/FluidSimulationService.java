@@ -16,6 +16,7 @@ import com.example.fluid.FluidMaterialRenderSnapshot;
 import com.example.fluid.FluidSolverConfig;
 import com.example.fluid.air.AirNetwork;
 import com.example.granular.GranularDataPackLoader;
+import com.example.granular.GranularMechanics;
 import com.example.granular.GranularPhaseTransferEngine;
 import com.example.granular.GranularRegistry;
 import com.example.granular.GranularRegistryStore;
@@ -1317,7 +1318,12 @@ public final class FluidSimulationService {
 		FluidRegion region = activeRegion();
 		if (!ensureRegionAvailable(level, region)) return -1;
 		region.wakeForActivity();
-		for (int i = 0; i < count; i++) stepOnce(region);
+		try {
+			for (int i = 0; i < count; i++) stepOnce(region);
+		} catch (GranularMechanics.ValidityExceededException invalid) {
+			region.blockGranular("granular-validity-blocked PAUSED：" + invalid.getMessage());
+			return -1;
+		}
 		sendSnapshot(level);
 		return count;
 	}
@@ -1388,6 +1394,16 @@ public final class FluidSimulationService {
 						"真实水体固液相转移被安全暂停：" + blocked.getMessage()
 								+ "；当前 plan 未提交，先前已提交 cell 保持，请查看 /realwater status"));
 			}
+			sendSnapshot(level, region);
+			return;
+		} catch (GranularMechanics.ValidityExceededException invalid) {
+			String failure = "granular-validity-blocked PAUSED：" + invalid.getMessage();
+			region.blockGranular(failure);
+			RealWaterMod.LOGGER.error("Region {} exceeded a frozen granular mechanics validity range and is paused",
+					region.id(), invalid);
+			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+					"真实水体颗粒力学超出定义有效范围，区域被安全暂停：" + invalid.getMessage()
+							+ "；本次速度提交未开始，请查看 /realwater status"));
 			sendSnapshot(level, region);
 			return;
 		}
@@ -1634,8 +1650,23 @@ public final class FluidSimulationService {
 		FlipFluidDomain domain = region.domain();
 		float beforeBlocks = domain.totalVolume() / CELL_VOLUMES_PER_BLOCK;
 		int beforeParticles = domain.particleCount();
-		domain.removeAllWaterExact();
-		FlipFluidDomain.GranularClear granular = domain.removeAllGranularExact();
+		FlipFluidDomain.WaterClearPlan waterPlan;
+		FlipFluidDomain.GranularClearPlan granularPlan;
+		try {
+			waterPlan = domain.planRemoveAllWaterExact();
+			granularPlan = domain.planRemoveAllGranularExact();
+		} catch (RuntimeException failure) {
+			return "清空失败：联合流体/颗粒预检未通过，活动库存未改变：" + failure.getMessage();
+		}
+		FlipFluidDomain.GranularClear granular;
+		try {
+			domain.commitRemoveAllWaterExact(waterPlan);
+			granular = domain.commitRemoveAllGranularExact(granularPlan);
+		} catch (RuntimeException failure) {
+			region.setPaused(true);
+			region.setAvailabilityFailure("empty 联合提交违反已预检不变量：" + failure.getMessage());
+			return "清空联合提交失败；区域已暂停：" + failure.getMessage();
+		}
 		region.wakeForActivity();
 		if (region.controllerManaged()) {
 			try {
@@ -1956,7 +1987,11 @@ public final class FluidSimulationService {
 				.append(" totalMass ").append(snapshot.totalMass())
 				.append(" active ").append(snapshot.activeParcels().size())
 				.append(" depositGroups ").append(snapshot.depositGroups().size())
-				.append(" sourceSvq ").append(sourceSvq).append(" sinkSvq ").append(sinkSvq);
+				.append(" sourceSvq ").append(sourceSvq).append(" sinkSvq ").append(sinkSvq)
+				.append(" boundaryImpulse=[")
+				.append(region.domain().lastGranularBoundaryImpulseX()).append(',')
+				.append(region.domain().lastGranularBoundaryImpulseY()).append(',')
+				.append(region.domain().lastGranularBoundaryImpulseZ()).append(']');
 		for (int material = 0; material < materialSvq.length; material++) if (materialSvq[material] > 0L) {
 			text.append('\n').append(snapshot.materialPalette().get(material)).append(" svq=")
 					.append(materialSvq[material]).append(" mass=").append(materialMass[material]);

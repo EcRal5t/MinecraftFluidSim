@@ -11,11 +11,12 @@ public record SolidLiquidReaction(
 		String id,
 		String liquidPhaseId,
 		Map<String, Integer> aqueousStoichiometry,
-		String solidMaterialId,
-		Map<String, Integer> solidComposition,
-		ExactRational saturationCapacityExtentPerBv,
-		long solidVolumeSvqPerExtent,
-		long accessibleSurfaceSvqPerCellStep,
+	String solidMaterialId,
+	Map<String, Integer> solidComposition,
+	ExactRational saturationCapacityExtentPerBv,
+	long solidExtentPerBatch,
+	long solidVolumeSvqPerBatch,
+	long accessibleSurfaceSvqPerCellStep,
 		boolean reversible
 ) {
 	public SolidLiquidReaction {
@@ -27,8 +28,9 @@ public record SolidLiquidReaction(
 		if (saturationCapacityExtentPerBv == null || saturationCapacityExtentPerBv.signum() < 0) {
 			throw new IllegalArgumentException("Solid-liquid saturation capacity must be non-negative: " + id);
 		}
-		if (solidVolumeSvqPerExtent <= 0L || solidVolumeSvqPerExtent > SolidVolume.SVQ_PER_CELL) {
-			throw new IllegalArgumentException("Solid-liquid extent volume is invalid: " + id);
+		if (solidExtentPerBatch <= 0L || solidExtentPerBatch > GranularLimits.MAX_REACTION_EXTENTS_PER_BATCH
+				|| solidVolumeSvqPerBatch <= 0L || solidVolumeSvqPerBatch > SolidVolume.SVQ_PER_CELL) {
+			throw new IllegalArgumentException("Solid-liquid extent/volume batch is invalid: " + id);
 		}
 		if (accessibleSurfaceSvqPerCellStep <= 0L || accessibleSurfaceSvqPerCellStep > SolidVolume.SVQ_PER_CELL) {
 			throw new IllegalArgumentException("Solid-liquid surface cap is invalid: " + id);

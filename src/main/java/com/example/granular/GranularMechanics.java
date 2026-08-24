@@ -25,7 +25,9 @@ public final class GranularMechanics {
 				&& Double.isFinite(dt) && dt > 0.0)) {
 			throw new IllegalArgumentException("Granular mechanics scale and dt must be finite and positive");
 		}
+		validateCarrierRange(parcels, registry, environment);
 		double maximumSpeed = 0.0, totalFluidImpulseX = 0.0, totalFluidImpulseY = 0.0, totalFluidImpulseZ = 0.0;
+		double boundaryImpulseX = 0.0, boundaryImpulseY = 0.0, boundaryImpulseZ = 0.0;
 		int submerged = 0;
 		for (int index = 0; index < parcels.count(); index++) {
 			GranularParcelStore.Parcel parcel = parcels.parcel(index);
@@ -79,13 +81,39 @@ public final class GranularMechanics {
 				double hydrodynamicY = parcel.mass() * (nextY - oldY + gravity * dt);
 				double hydrodynamicZ = parcel.mass() * (nextZ - oldZ);
 				double fluidX = -hydrodynamicX, fluidY = -hydrodynamicY, fluidZ = -hydrodynamicZ;
-				environment.addFluidImpulse(parcel.x(), parcel.y(), parcel.z(), fluidX, fluidY, fluidZ);
-				totalFluidImpulseX += fluidX; totalFluidImpulseY += fluidY; totalFluidImpulseZ += fluidZ;
+				FluidImpulseApplication application = environment.addFluidImpulse(
+						parcel.x(), parcel.y(), parcel.z(), fluidX, fluidY, fluidZ);
+				if (application == null) throw new IllegalStateException("Granular environment returned no impulse application");
+				totalFluidImpulseX += application.appliedX(); totalFluidImpulseY += application.appliedY();
+				totalFluidImpulseZ += application.appliedZ();
+				boundaryImpulseX += application.boundaryX(); boundaryImpulseY += application.boundaryY();
+				boundaryImpulseZ += application.boundaryZ();
 			}
 			maximumSpeed = Math.max(maximumSpeed, Math.sqrt(newX * newX + newY * newY + newZ * newZ));
 		}
 		return new StepStats(parcels.count(), submerged, maximumSpeed,
-				totalFluidImpulseX, totalFluidImpulseY, totalFluidImpulseZ);
+				totalFluidImpulseX, totalFluidImpulseY, totalFluidImpulseZ,
+				boundaryImpulseX, boundaryImpulseY, boundaryImpulseZ);
+	}
+
+	private static void validateCarrierRange(
+			GranularParcelStore parcels, GranularRegistry registry, Environment environment
+	) {
+		for (int index = 0; index < parcels.count(); index++) {
+			GranularParcelStore.Parcel parcel = parcels.parcel(index);
+			FluidSample fluid = environment.sample(parcel.x(), parcel.y(), parcel.z());
+			if (fluid == null) throw new ValidityExceededException("Granular environment returned no fluid sample");
+			if (!fluid.hasLiquid() || clamp(fluid.submergedFraction(), 0.0, 1.0) <= 0.0) continue;
+			double slipX = parcel.velocityX() - fluid.velocityX();
+			double slipY = parcel.velocityY() - fluid.velocityY();
+			double slipZ = parcel.velocityZ() - fluid.velocityZ();
+			double slip = Math.sqrt(slipX * slipX + slipY * slipY + slipZ * slipZ);
+			double diameter = registry.material(parcel.materialHandle()).primaryGrainDiameterMeters();
+			double reynolds = fluid.density() * diameter * slip / fluid.dynamicViscosity();
+			if (!(Double.isFinite(reynolds) && reynolds <= fluid.maximumReynolds())) {
+				throw new ValidityExceededException("Granular carrier Reynolds validity range exceeded");
+			}
+		}
 	}
 
 	public static double dragCoefficient(double reynolds) {
@@ -122,11 +150,22 @@ public final class GranularMechanics {
 
 	public record StepStats(
 			int parcels, int submergedParcels, double maximumSpeed,
-			double fluidImpulseX, double fluidImpulseY, double fluidImpulseZ
+			double fluidImpulseX, double fluidImpulseY, double fluidImpulseZ,
+			double boundaryImpulseX, double boundaryImpulseY, double boundaryImpulseZ
+	) { }
+
+	public record FluidImpulseApplication(
+			double appliedX, double appliedY, double appliedZ,
+			double boundaryX, double boundaryY, double boundaryZ
 	) { }
 
 	public interface Environment {
 		FluidSample sample(float x, float y, float z);
-		void addFluidImpulse(float x, float y, float z, double impulseX, double impulseY, double impulseZ);
+		FluidImpulseApplication addFluidImpulse(
+				float x, float y, float z, double impulseX, double impulseY, double impulseZ);
+	}
+
+	public static final class ValidityExceededException extends IllegalStateException {
+		public ValidityExceededException(String message) { super(message); }
 	}
 }

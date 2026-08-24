@@ -51,9 +51,10 @@ public final class GranularPhaseTransferEngine {
 		long signedExtent = target - existingAccessibleExtent;
 		if (signedExtent == 0L) return Plan.none();
 		long magnitude = Math.min(Math.abs(signedExtent), maximumTransferExtent);
+		magnitude = magnitude / rule.solidExtentPerBatch() * rule.solidExtentPerBatch();
 		if (magnitude <= 0L) return Plan.none();
 		boolean precipitation = signedExtent > 0L;
-		long solidSvq = Math.multiplyExact(magnitude, rule.solidVolumeSvqPerExtent());
+		long solidSvq = Math.multiplyExact(magnitude / rule.solidExtentPerBatch(), rule.solidVolumeSvqPerBatch());
 
 		TreeMap<Integer, Long> transferred = new TreeMap<>();
 		for (Map.Entry<String, Integer> term : rule.aqueousStoichiometry().entrySet()) transferred.put(

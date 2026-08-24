@@ -121,6 +121,17 @@ public final class GranularCouplingFields {
 		}
 	}
 
+	/** Returns this parcel's exact largest-remainder share in one target cell. */
+	public long parcelShareAtCell(Position position, long parcelSvq, int targetCell) {
+		requireCell(targetCell);
+		if (position == null) throw new IllegalArgumentException("Granular parcel-share position is missing");
+		int candidates = allocate(position.x(), position.y(), position.z(), parcelSvq);
+		for (int candidate = 0; candidate < candidates; candidate++) {
+			if (candidateCell[candidate] == targetCell) return candidateShare[candidate];
+		}
+		return 0L;
+	}
+
 	/** Plans cell-local deposit skeleton volume against the same exact geometric capacity. */
 	public boolean tryPlanCell(
 			long[] plannedSolidSvq, int cell, long solidSvq, IntToLongFunction geometricCapacity

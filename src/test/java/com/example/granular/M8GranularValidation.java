@@ -96,6 +96,17 @@ public final class M8GranularValidation {
 		require(!sealed.tryInsertExactGranular(1, 1, 1, small, 1).inserted()
 				&& sealed.totalGranularSolidVolumeSvq() == 0L,
 				"sealed dry granular insertion was not rejected atomically");
+
+		FlipFluidDomain collision = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		collision.bindGranular(registry, liquids); collision.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		require(collision.tryInsertExactGranular(1, 1, 1, small, 0, true).inserted(),
+				"collision displacement fixture could not insert its local parcel");
+		collision.setSolid(1, 1, 1, true);
+		long collisionSink = collision.granularEscapedSink().entries().stream()
+				.mapToLong(GranularAuditLedger.Entry::solidVolumeSvq).sum();
+		require(collision.totalGranularSolidVolumeSvq() == 0L
+				&& collisionSink == small.totalSolidVolumeSvq(),
+				"runtime collision edit did not conservatively move overlapping granular truth to escaped sink");
 	}
 
 	private static void phaseTransferPrecipitatesAndDissolves() {
@@ -119,7 +130,7 @@ public final class M8GranularValidation {
 				+ SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq());
 		domain.step();
 		require(domain.lastPhaseTransferStats().precipitations() == 1
-				&& domain.lastPhaseTransferStats().signedSolidSvq() == 4_096L,
+				&& domain.lastPhaseTransferStats().signedSolidSvq() == 4_000L,
 				"supersaturated aqueous inventory did not precipitate to the bounded target");
 		require(java.util.Arrays.equals(combinedBefore, combinedSpecies(domain)),
 				"precipitation changed combined aqueous+solid species");
@@ -134,7 +145,7 @@ public final class M8GranularValidation {
 				|| Float.floatToRawIntBits(precipitated.z()) != Float.floatToRawIntBits(0.75F),
 				"precipitation collapsed every new parcel onto the solver-cell center");
 		domain.step();
-		require(domain.totalGranularSolidVolumeSvq() == 8_192L
+		require(domain.totalGranularSolidVolumeSvq() == 8_000L
 				&& domain.exportGranularState().activeParcels().size() == 1,
 				"repeated same-cell precipitation did not merge compatible active parcels: svq="
 						+ domain.totalGranularSolidVolumeSvq() + ", active="
@@ -297,6 +308,13 @@ public final class M8GranularValidation {
 		GranularRegistry frozen = BuiltinGranularDefinitions.createRegistry();
 		require(bundled.fingerprint().equals(frozen.fingerprint()),
 				"bundled granular datapack definitions differ from the frozen fixture registry");
+		SolidLiquidReaction reaction = frozen.reactions().getFirst();
+		expectFailure(() -> new GranularRegistry(frozen.materials(), frozen.carriers(), List.of(
+				new SolidLiquidReaction(reaction.id(), reaction.liquidPhaseId(), reaction.aqueousStoichiometry(),
+						reaction.solidMaterialId(), reaction.solidComposition(), reaction.saturationCapacityExtentPerBv(),
+						1L, 1L, reaction.accessibleSurfaceSvqPerCellStep(), reaction.reversible())),
+				BuiltinChemicalDefinitions.REGISTRY),
+				"solid-liquid rule accepted a declared SVQ volume inconsistent with exact mass/reference density");
 
 		Path world = Files.createTempDirectory("realwater-granular-registry-");
 		try {
@@ -451,6 +469,25 @@ public final class M8GranularValidation {
 			double tolerance = Math.max(2.0e-3, Math.abs(expected) * 0.05);
 			require(Math.abs(actual - expected) <= tolerance, "granular terminal velocity mismatch");
 		}
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		GranularParcelStore invalid = new GranularParcelStore(registry, 1);
+		invalid.add(parcel(sand, 1_024L, 1.0));
+		GranularParcelStore.Parcel before = invalid.parcel(0);
+		GranularMechanics.Environment narrowCarrier = new GranularMechanics.Environment() {
+			@Override public GranularMechanics.FluidSample sample(float x, float y, float z) {
+				return new GranularMechanics.FluidSample(true, -10.0, 0.0, 0.0,
+						1_000.0, 1.002e-3, 1.0, 1.0);
+			}
+			@Override public GranularMechanics.FluidImpulseApplication addFluidImpulse(
+					float x, float y, float z, double ix, double iy, double iz) {
+				throw new AssertionError("invalid Reynolds preflight committed an impulse");
+			}
+		};
+		try {
+			GranularMechanics.stepVelocities(invalid, registry, narrowCarrier, 0.5, 1.0 / 20.0);
+			throw new AssertionError("carrier Reynolds validity overflow was accepted");
+		} catch (GranularMechanics.ValidityExceededException expected) { }
+		require(invalid.parcel(0).equals(before), "carrier validity failure partially changed parcel velocity");
 	}
 
 	private static void twoWayDragPreservesMomentum() {
@@ -930,8 +967,10 @@ public final class M8GranularValidation {
 				return new GranularMechanics.FluidSample(true, velocityX, velocityY, velocityZ,
 						1_000.0, 1.002e-3, 100_000.0, 1.0);
 			}
-			@Override public void addFluidImpulse(float x, float y, float z, double ix, double iy, double iz) {
+			@Override public GranularMechanics.FluidImpulseApplication addFluidImpulse(
+					float x, float y, float z, double ix, double iy, double iz) {
 				if (reaction != null) { reaction[0] += ix; reaction[1] += iy; reaction[2] += iz; }
+				return new GranularMechanics.FluidImpulseApplication(ix, iy, iz, 0.0, 0.0, 0.0);
 			}
 		};
 	}

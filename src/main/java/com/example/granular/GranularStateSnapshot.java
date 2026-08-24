@@ -260,10 +260,12 @@ public final class GranularStateSnapshot {
 				|| !materialPalette.equals(registry.materials().stream().map(ParticulateMaterial::id).toList())) {
 			throw new IllegalArgumentException("Granular snapshot registry identity mismatch");
 		}
-		if (!solidCompositions.isEmpty() && (pool == null
+		if (requiresChemistry() && (pool == null
 				|| !chemicalRegistryFingerprint.equals(pool.registry().fingerprint()))) {
-			throw new IllegalArgumentException("Granular solid composition registry identity mismatch");
+			throw new IllegalArgumentException("Granular reactive payload registry identity mismatch");
 		}
+		externalSource.validateAgainst(registry, pool == null ? null : pool.registry());
+		escapedSink.validateAgainst(registry, pool == null ? null : pool.registry());
 		for (ActiveParcel parcel : activeParcels) {
 			int composition = restoreComposition(parcel.solidCompositionIndex(), parcel.mass(), pool);
 			parcels.add(new GranularParcelStore.Parcel(parcel.x(), parcel.y(), parcel.z(), parcel.velocityX(),
@@ -306,6 +308,17 @@ public final class GranularStateSnapshot {
 				&& !massClose(runtime[group.solidCompositionIndex() - 1].totalMass(registry), group.mass())) {
 			throw new IllegalArgumentException("Deposit solid composition mass ledger mismatch");
 		}
+	}
+
+	public void validateAgainst(GranularRegistry registry, ChemicalRegistry chemistry) {
+		if (registry == null) throw new IllegalArgumentException("Granular registry is missing");
+		if (requiresChemistry() && (chemistry == null
+				|| !chemicalRegistryFingerprint.equals(chemistry.fingerprint()))) {
+			throw new IllegalArgumentException("Granular reactive payload chemical registry identity mismatch");
+		}
+		validateSolidCompositionMasses(chemistry);
+		externalSource.validateAgainst(registry, chemistry);
+		escapedSink.validateAgainst(registry, chemistry);
 	}
 
 	private int restoreComposition(int index, double expectedMass, SolidCompositionPool pool) {
@@ -388,6 +401,9 @@ public final class GranularStateSnapshot {
 	public int sizeZ() { return sizeZ; }
 	public String registryFingerprint() { return registryFingerprint; }
 	public String chemicalRegistryFingerprint() { return chemicalRegistryFingerprint; }
+	public boolean requiresChemistry() {
+		return !solidCompositions.isEmpty() || externalSource.requiresChemistry() || escapedSink.requiresChemistry();
+	}
 	public List<String> materialPalette() { return materialPalette; }
 	public List<StableComposition> solidCompositions() { return solidCompositions; }
 	public Map<String, Long> solidSpeciesTotals() { return solidSpeciesTotals; }

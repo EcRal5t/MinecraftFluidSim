@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.IntPredicate;
 
 /** Cumulative stable-ID audit for solid inventory crossing a region boundary. */
 public record GranularAuditLedger(List<Entry> entries) {
@@ -98,6 +99,41 @@ public record GranularAuditLedger(List<Entry> entries) {
 					solidVolumeSvq, mass, composition, chemistry);
 		});
 		return new GranularAuditLedger(result.entrySet().stream().map(entry -> entry.getValue().build(entry.getKey())).toList());
+	}
+
+	/** Captures a planned subset without applying container group limits or mutating runtime ownership. */
+	public static GranularAuditLedger captureSelected(
+			GranularRegistry registry, GranularParcelStore parcels, IntPredicate selectedParcel,
+			GranularDepositStore deposits, IntPredicate selectedDepositCell, SolidCompositionPool pool
+	) {
+		if (registry == null || parcels == null || selectedParcel == null || deposits == null
+				|| selectedDepositCell == null) throw new IllegalArgumentException("Granular audit selection is incomplete");
+		ChemicalRegistry chemistry = pool == null ? null : pool.registry();
+		TreeMap<String, MutableEntry> result = new TreeMap<>();
+		for (int index = 0; index < parcels.count(); index++) if (selectedParcel.test(index)) {
+			GranularParcelStore.Parcel parcel = parcels.parcel(index);
+			ParticulateMaterial material = registry.material(parcel.materialHandle());
+			SolidCompositionRecord composition = parcel.solidCompositionHandle() == 0 ? null
+					: requireComposition(pool, parcel.solidCompositionHandle());
+			if (material.reactive() != (composition != null)) {
+				throw new IllegalStateException("Granular audit selection material/composition kind mismatch");
+			}
+			result.computeIfAbsent(material.id(), ignored -> new MutableEntry()).add(
+					parcel.solidVolumeSvq(), parcel.mass(), composition, chemistry);
+		}
+		deposits.forEachGroup((cell, porosity, materialHandle, compositionHandle, solidVolumeSvq, mass) -> {
+			if (!selectedDepositCell.test(cell)) return;
+			ParticulateMaterial material = registry.material(materialHandle);
+			SolidCompositionRecord composition = compositionHandle == 0 ? null
+					: requireComposition(pool, compositionHandle);
+			if (material.reactive() != (composition != null)) {
+				throw new IllegalStateException("Granular audit selection material/composition kind mismatch");
+			}
+			result.computeIfAbsent(material.id(), ignored -> new MutableEntry()).add(
+					solidVolumeSvq, mass, composition, chemistry);
+		});
+		return new GranularAuditLedger(result.entrySet().stream()
+				.map(entry -> entry.getValue().build(entry.getKey())).toList());
 	}
 
 	private static SolidCompositionRecord requireComposition(SolidCompositionPool pool, int handle) {

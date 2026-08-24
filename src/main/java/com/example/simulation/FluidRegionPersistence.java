@@ -249,18 +249,19 @@ final class FluidRegionPersistence {
 	}
 
 	/**
-	 * Conservative release before persistent deletion: refuses while the region still holds marker
-	 * volume, restores the vanilla preimage with player blocks winning, and never runs unless the
+	 * Conservative release before persistent deletion: restores the authoritative solver first,
+	 * refuses while either marker or granular inventory remains, restores the vanilla preimage with player blocks winning, and never runs unless the
 	 * final region checkpoint can be staged and committed.
 	 */
 	ReleaseAttempt releaseOwnership(MinecraftServer server, FluidRegion region) {
 		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
-		if (!ownershipFiles.exists()) return ReleaseAttempt.NOT_OWNED;
 		try {
-			ownershipFiles.assertUnlockedForTransition();
-			if (region.solverLoaded() ? region.domain().totalVolume() > 0.0F : region.checkpointVolume() > 0.0F) {
-				return ReleaseAttempt.refused("区域 " + region.id() + " 仍持有水体；请先排空（drain）后再移除");
+			if (!region.solverLoaded()) restore(region);
+			if (region.domain().particleCount() != 0 || region.domain().totalGranularSolidVolumeSvq() > 0L) {
+				return ReleaseAttempt.refused("区域 " + region.id() + " 仍持有流体或颗粒库存；请先 empty 后再移除");
 			}
+			if (!ownershipFiles.exists()) return ReleaseAttempt.NOT_OWNED;
+			ownershipFiles.assertUnlockedForTransition();
 			if (!ownershipFiles.hasCommitted()) {
 				ownershipFiles.deleteStore();
 				return ReleaseAttempt.NOT_OWNED;
@@ -270,7 +271,6 @@ final class FluidRegionPersistence {
 				ownershipFiles.deleteStore();
 				return ReleaseAttempt.NOT_OWNED;
 			}
-			if (!region.solverLoaded()) restore(region);
 			long baseGeneration = files.committedGeneration(region.id());
 			long generation = baseGeneration + 1L;
 			RegionState staged = captureForFeatureGate(region, generation);

@@ -22,7 +22,7 @@ import java.util.TreeMap;
 
 /** World-authoritative immutable granular registry snapshot with atomic first publication. */
 public final class GranularRegistryStore {
-	private static final int FORMAT_VERSION = 2;
+	private static final int FORMAT_VERSION = 3;
 	private static final long MAX_BYTES = 4L * 1024L * 1024L;
 	private static final Set<String> KNOWN_FILES = Set.of("registry.nbt", "registry.nbt.tmp");
 	private final Path directory;
@@ -131,7 +131,8 @@ public final class GranularRegistryStore {
 			tag.putString("Phase", reaction.liquidPhaseId()); tag.put("Aqueous", encodeSide(reaction.aqueousStoichiometry()));
 			tag.putString("SolidMaterial", reaction.solidMaterialId()); tag.put("Solid", encodeSide(reaction.solidComposition()));
 			tag.putString("Capacity", reaction.saturationCapacityExtentPerBv().canonical());
-			tag.putLong("SolidSvq", reaction.solidVolumeSvqPerExtent());
+			tag.putLong("ExtentBatch", reaction.solidExtentPerBatch());
+			tag.putLong("SolidSvqBatch", reaction.solidVolumeSvqPerBatch());
 			tag.putLong("SurfaceSvq", reaction.accessibleSurfaceSvqPerCellStep());
 			tag.putBoolean("Reversible", reaction.reversible()); reactions.add(tag);
 		}
@@ -190,12 +191,14 @@ public final class GranularRegistryStore {
 			requireAll(tag, Map.ofEntries(Map.entry("Id", Tag.TAG_STRING), Map.entry("Phase", Tag.TAG_STRING),
 					Map.entry("Aqueous", Tag.TAG_LIST), Map.entry("SolidMaterial", Tag.TAG_STRING),
 					Map.entry("Solid", Tag.TAG_LIST), Map.entry("Capacity", Tag.TAG_STRING),
-					Map.entry("SolidSvq", Tag.TAG_LONG), Map.entry("SurfaceSvq", Tag.TAG_LONG),
+					Map.entry("ExtentBatch", Tag.TAG_LONG), Map.entry("SolidSvqBatch", Tag.TAG_LONG),
+					Map.entry("SurfaceSvq", Tag.TAG_LONG),
 					Map.entry("Reversible", Tag.TAG_BYTE)));
 			result.add(new SolidLiquidReaction(tag.getStringOr("Id", ""), tag.getStringOr("Phase", ""),
 					decodeSide(tag.getListOrEmpty("Aqueous")), tag.getStringOr("SolidMaterial", ""),
 					decodeSide(tag.getListOrEmpty("Solid")), ExactRational.parse(tag.getStringOr("Capacity", "")),
-					tag.getLongOr("SolidSvq", -1L), tag.getLongOr("SurfaceSvq", -1L),
+					tag.getLongOr("ExtentBatch", -1L), tag.getLongOr("SolidSvqBatch", -1L),
+					tag.getLongOr("SurfaceSvq", -1L),
 					tag.getBooleanOr("Reversible", false)));
 		}
 		return List.copyOf(result);

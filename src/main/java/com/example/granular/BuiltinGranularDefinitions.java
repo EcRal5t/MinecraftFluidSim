@@ -19,7 +19,7 @@ public final class BuiltinGranularDefinitions {
 		return new GranularRegistry(List.of(
 				material(FINE_SAND, 2_600.0, 0.0005, 380_000, 32.0, 0xffc2a065, false),
 				material(LIGHT_BEADS, 500.0, 0.0001, 400_000, 20.0, 0xffe8e8d8, false),
-				material(PRECIPITATE, 2_800.0, 0.00001, 500_000, 25.0, 0xffd8d4c8, true)
+				material(PRECIPITATE, 2_799.97507960832, 0.00001, 500_000, 25.0, 0xffd8d4c8, true)
 		), List.of(
 				new GranularCarrier("realwater:water", 1.002e-3, 100_000.0),
 				new GranularCarrier("realwater:oil", 6.5e-2, 10_000.0),
@@ -30,7 +30,7 @@ public final class BuiltinGranularDefinitions {
 						BuiltinChemicalDefinitions.CL_MINUS, 64), PRECIPITATE, Map.of(
 						BuiltinChemicalDefinitions.NA_PLUS, 64,
 						BuiltinChemicalDefinitions.CL_MINUS, 64), ExactRational.of(1_000_000L),
-				1L, 4_096L, true)), BuiltinChemicalDefinitions.REGISTRY);
+				281L, 400L, 4_096L, true)), BuiltinChemicalDefinitions.REGISTRY);
 	}
 
 	private static ParticulateMaterial material(

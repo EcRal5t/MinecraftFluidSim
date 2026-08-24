@@ -43,12 +43,12 @@ public final class GranularDefinitionCodec {
 	public static SolidLiquidReaction decodeReaction(String stableId, Reader input) {
 		JsonObject root = object(input);
 		requireOnly(root, "liquid_phase", "aqueous_stoichiometry", "solid_material", "solid_composition",
-				"saturation_capacity_extent_per_bv", "solid_volume_svq_per_extent",
+				"saturation_capacity_extent_per_bv", "solid_extent_per_batch", "solid_volume_svq_per_batch",
 				"accessible_surface_svq_per_cell_step", "reversible");
 		return new SolidLiquidReaction(stableId, string(root, "liquid_phase"), integerMap(root, "aqueous_stoichiometry"),
 				string(root, "solid_material"), integerMap(root, "solid_composition"),
 				ExactRational.parse(string(root, "saturation_capacity_extent_per_bv")),
-				exactLong(root, "solid_volume_svq_per_extent"),
+				exactLong(root, "solid_extent_per_batch"), exactLong(root, "solid_volume_svq_per_batch"),
 				exactLong(root, "accessible_surface_svq_per_cell_step"), bool(root, "reversible"));
 	}
 
