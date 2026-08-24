@@ -297,6 +297,37 @@ public final class FlipFluidDomain {
 	private boolean hasGranularInventory() {
 		return granularParcels != null && (granularParcels.count() != 0 || granularDeposits.groupCount() != 0);
 	}
+
+	/** Erases all granular truth as one auditable external sink and releases every owned composition. */
+	public GranularClear removeAllGranularExact() {
+		if (granularInventory == null) return new GranularClear(0L, 0.0, 0, 0);
+		if (!hasGranularInventory()) {
+			granularDepositDynamics.clear(); granularCoupling.clear(); granularNextCoupling.clear();
+			pressureGranularCoupling = null;
+			return new GranularClear(0L, 0.0, 0, 0);
+		}
+		// Capture validates unique runtime composition ownership before either inventory or audit mutates.
+		exportGranularState();
+		GranularAuditLedger removed = GranularAuditLedger.captureInventory(
+				granularRegistry, granularParcels, granularDeposits, solidCompositions);
+		GranularAuditLedger sinkAfter = granularEscapedSink.plus(removed);
+		GranularInventory.ClearStats cleared = granularInventory.clear();
+		long auditSvq = 0L; double auditMass = 0.0;
+		for (GranularAuditLedger.Entry entry : removed.entries()) {
+			auditSvq = Math.addExact(auditSvq, entry.solidVolumeSvq()); auditMass += entry.mass();
+		}
+		if (auditSvq != cleared.solidVolumeSvq() || !massClose(auditMass, cleared.mass())) {
+			throw new IllegalStateException("Granular clear audit differs from removed inventory");
+		}
+		granularEscapedSink = sinkAfter; granularDepositDynamics.clear();
+		granularCoupling.clear(); granularNextCoupling.clear(); pressureGranularCoupling = null;
+		lastGranularDepositStats = new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
+		gridDirty = true;
+		return new GranularClear(cleared.solidVolumeSvq(), cleared.mass(),
+				cleared.activeParcels(), cleared.depositGroups());
+	}
+
+	public record GranularClear(long solidVolumeSvq, double mass, int activeParcels, int depositGroups) { }
 	/** Read-only cell inventory used to aim the dry-container scoop at particle/deposit truth. */
 	public long granularSolidVolumeSvq(int cellX, int cellY, int cellZ) {
 		if (granularCoupling == null) return 0L;

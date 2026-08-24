@@ -208,6 +208,16 @@ public final class M8GranularValidation {
 		require(snapshot.solidSpeciesTotals().get(BuiltinChemicalDefinitions.NA_PLUS) == 1_920L
 				&& snapshot.solidSpeciesTotals().get(BuiltinChemicalDefinitions.CL_MINUS) == 1_920L,
 				"solid species totals did not close");
+		GranularAuditLedger clearedAudit = GranularAuditLedger.captureInventory(
+				registry, parcels, deposits, compositions);
+		GranularInventory clearingInventory = new GranularInventory(parcels, deposits);
+		clearingInventory.bindSolidCompositions(compositions);
+		GranularInventory.ClearStats cleared = clearingInventory.clear();
+		require(cleared.solidVolumeSvq() == 30L && cleared.activeParcels() == 1
+				&& cleared.depositGroups() == 1 && parcels.count() == 0 && deposits.groupCount() == 0
+				&& compositions.liveCount() == 0 && clearedAudit.requiresChemistry()
+				&& clearedAudit.entries().getFirst().solidVolumeSvq() == 30L,
+				"reactive granular clear lost inventory, audit or composition ownership");
 
 		GranularParcelStore restoredParcels = new GranularParcelStore(registry, 4);
 		GranularDepositStore restoredDeposits = new GranularDepositStore(registry, 8, 4);
@@ -750,6 +760,18 @@ public final class M8GranularValidation {
 		System.out.printf("  two-bucket granular fixture after %d steps: active=%d emptyAt=%d floor=%d moving=%d columns=%d depositGroups=%d%n",
 				steps, settled.activeParcels().size(), emptyAt, floorActive, movingActive, activeColumns,
 				settled.depositGroups().size());
+		FlipFluidDomain.GranularClear cleared = domain.removeAllGranularExact();
+		GranularStateSnapshot clearedState = domain.exportGranularState();
+		require(cleared.solidVolumeSvq() == exactSvq && rawClose(cleared.mass(), exactMass)
+				&& cleared.activeParcels() == settled.activeParcels().size()
+				&& cleared.depositGroups() == settled.depositGroups().size()
+				&& domain.totalGranularSolidVolumeSvq() == 0L && domain.granularDepositCellCount() == 0
+				&& clearedState.totalSolidVolumeSvq() == 0L
+				&& clearedState.escapedSink().entries().stream()
+				.mapToLong(GranularAuditLedger.Entry::solidVolumeSvq).sum() == exactSvq
+				&& domain.granularEscapedSink().entries().stream()
+				.mapToLong(GranularAuditLedger.Entry::solidVolumeSvq).sum() == exactSvq,
+				"mixed active/deposit operator clear did not close the escaped sink");
 	}
 
 	private static void singleBucketPourSettlesWithinTenSeconds() {
@@ -764,7 +786,7 @@ public final class M8GranularValidation {
 		GranularTransferLedger bucket = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
 				BuiltinGranularDefinitions.FINE_SAND, SolidVolume.SVQ_PER_BV,
 				SolidVolume.toCellVolume(SolidVolume.SVQ_PER_BV) * density, null)));
-		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted(),
+		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3, true).inserted(),
 				"single-bucket pour fixture could not be inserted");
 		ParticulateMaterial sand = granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND));
 		int emptyAt = -1;
@@ -793,6 +815,17 @@ public final class M8GranularValidation {
 				"single-bucket derived bulk volume changed across deposit cells");
 		System.out.printf("  single-bucket loose pour settled all active parcels at step %d, bulk=%.6f BV%n",
 				emptyAt, bulkSvq / (double) SolidVolume.SVQ_PER_BV);
+		FlipFluidDomain.GranularClear cleared = domain.removeAllGranularExact();
+		long sourceSvq = domain.granularExternalSource().entries().stream()
+				.mapToLong(GranularAuditLedger.Entry::solidVolumeSvq).sum();
+		long sinkSvq = domain.granularEscapedSink().entries().stream()
+				.mapToLong(GranularAuditLedger.Entry::solidVolumeSvq).sum();
+		require(cleared.solidVolumeSvq() == SolidVolume.SVQ_PER_BV
+				&& rawClose(cleared.mass(), bucket.totalMass()) && sourceSvq == sinkSvq
+				&& sinkSvq == SolidVolume.SVQ_PER_BV && domain.totalGranularSolidVolumeSvq() == 0L
+				&& domain.copyGranularDisplaySnapshot().activeParcels().isEmpty()
+				&& domain.granularDepositCellCount() == 0 && domain.granularReadyForHydrostaticSleep(),
+				"single-bucket operator clear did not erase display/state or close source/sink audit");
 	}
 
 	private static void assertTransientPileIsGroundedAndBounded(

@@ -1,6 +1,7 @@
 package com.example.granular;
 
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.function.IntUnaryOperator;
 import java.util.function.Predicate;
 
@@ -177,6 +178,42 @@ public final class GranularInventory {
 	}
 
 	public double totalMass() { return parcels.totalMass() + deposits.totalMass(); }
+
+	/** Releases every active/deposit composition exactly once and clears both inventory stores. */
+	public ClearStats clear() {
+		long solidVolumeSvq = totalSolidVolumeSvq(); double mass = totalMass();
+		int activeParcels = parcels.count(), depositGroups = deposits.groupCount();
+		HashSet<Integer> compositionHandles = new HashSet<>();
+		for (int index = 0; index < parcels.count(); index++) {
+			int handle = parcels.parcel(index).solidCompositionHandle();
+			if (handle != 0 && !compositionHandles.add(handle)) {
+				throw new IllegalStateException("Granular clear found shared solid composition ownership");
+			}
+		}
+		deposits.forEachGroup((cell, porosity, material, handle, volume, groupMass) -> {
+			if (handle != 0 && !compositionHandles.add(handle)) {
+				throw new IllegalStateException("Granular clear found shared solid composition ownership");
+			}
+		});
+		if ((!compositionHandles.isEmpty() && compositions == null)
+				|| (compositions != null && (compositionHandles.size() != compositions.liveCount()
+				|| compositionHandles.stream().anyMatch(handle -> !compositions.isLive(handle))))) {
+			throw new IllegalStateException("Granular clear found invalid solid composition ownership");
+		}
+		while (parcels.count() > 0) {
+			GranularParcelStore.Parcel removed = parcels.removeSwap(parcels.count() - 1);
+			if (removed.solidCompositionHandle() != 0) compositions.release(removed.solidCompositionHandle());
+		}
+		deposits.clear((cell, porosity, material, handle, volume, groupMass) -> {
+			if (handle != 0) compositions.release(handle);
+		});
+		if (compositions != null && compositions.liveCount() != 0) {
+			throw new IllegalStateException("Granular composition pool did not clear");
+		}
+		return new ClearStats(solidVolumeSvq, mass, activeParcels, depositGroups);
+	}
+
+	public record ClearStats(long solidVolumeSvq, double mass, int activeParcels, int depositGroups) { }
 
 	public record CompactionStats(int merges, int evaluations) { }
 	@FunctionalInterface

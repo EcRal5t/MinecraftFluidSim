@@ -55,6 +55,58 @@ public record GranularAuditLedger(List<Entry> entries) {
 		return new GranularAuditLedger(result.entrySet().stream().map(entry -> entry.getValue().build(entry.getKey())).toList());
 	}
 
+	/** Adds another already-stable audit ledger without applying the one-container transfer limit. */
+	public GranularAuditLedger plus(GranularAuditLedger addition) {
+		if (addition == null) throw new IllegalArgumentException("Granular audit addition is missing");
+		TreeMap<String, MutableEntry> result = new TreeMap<>();
+		for (Entry entry : entries) result.put(entry.materialId(), new MutableEntry(entry));
+		for (Entry entry : addition.entries) {
+			result.computeIfAbsent(entry.materialId(), ignored -> new MutableEntry()).add(entry);
+		}
+		return new GranularAuditLedger(result.entrySet().stream().map(entry -> entry.getValue().build(entry.getKey())).toList());
+	}
+
+	/** Captures a complete active+deposit runtime inventory for an operator sink or region-boundary escape. */
+	public static GranularAuditLedger captureInventory(
+			GranularRegistry registry, GranularParcelStore parcels,
+			GranularDepositStore deposits, SolidCompositionPool pool
+	) {
+		if (registry == null || parcels == null || deposits == null) {
+			throw new IllegalArgumentException("Granular audit inventory is missing");
+		}
+		ChemicalRegistry chemistry = pool == null ? null : pool.registry();
+		TreeMap<String, MutableEntry> result = new TreeMap<>();
+		for (int index = 0; index < parcels.count(); index++) {
+			GranularParcelStore.Parcel parcel = parcels.parcel(index);
+			ParticulateMaterial material = registry.material(parcel.materialHandle());
+			SolidCompositionRecord composition = parcel.solidCompositionHandle() == 0 ? null
+					: requireComposition(pool, parcel.solidCompositionHandle());
+			if (material.reactive() != (composition != null)) {
+				throw new IllegalStateException("Granular audit inventory material/composition kind mismatch");
+			}
+			result.computeIfAbsent(material.id(), ignored -> new MutableEntry()).add(
+					parcel.solidVolumeSvq(), parcel.mass(), composition, chemistry);
+		}
+		deposits.forEachGroup((cell, porosity, materialHandle, compositionHandle, solidVolumeSvq, mass) -> {
+			ParticulateMaterial material = registry.material(materialHandle);
+			SolidCompositionRecord composition = compositionHandle == 0 ? null
+					: requireComposition(pool, compositionHandle);
+			if (material.reactive() != (composition != null)) {
+				throw new IllegalStateException("Granular audit inventory material/composition kind mismatch");
+			}
+			result.computeIfAbsent(material.id(), ignored -> new MutableEntry()).add(
+					solidVolumeSvq, mass, composition, chemistry);
+		});
+		return new GranularAuditLedger(result.entrySet().stream().map(entry -> entry.getValue().build(entry.getKey())).toList());
+	}
+
+	private static SolidCompositionRecord requireComposition(SolidCompositionPool pool, int handle) {
+		if (pool == null || !pool.isLive(handle)) {
+			throw new IllegalStateException("Granular audit inventory has no live solid composition");
+		}
+		return pool.record(handle);
+	}
+
 	public void validateAgainst(GranularRegistry registry, ChemicalRegistry chemistry) {
 		if (registry == null) throw new IllegalArgumentException("Granular audit registry is missing");
 		for (Entry entry : entries) {
@@ -112,24 +164,55 @@ public record GranularAuditLedger(List<Entry> entries) {
 	}
 
 	private static final class MutableEntry {
-		private long svq; private double mass, residual; private TreeMap<String, Long> species;
+		private long svq; private double mass, residual; private Boolean reactive;
+		private TreeMap<String, Long> species;
 		MutableEntry() { }
 		MutableEntry(Entry source) {
 			svq = source.solidVolumeSvq(); mass = source.mass(); residual = Double.longBitsToDouble(source.massResidualBits());
+			reactive = source.reactive();
 			if (source.reactive()) {
 				species = new TreeMap<>(); for (SpeciesAmount amount : source.composition()) species.put(amount.speciesId(), amount.amountQuanta());
 			}
 		}
 		void add(GranularTransferLedger.Group group, ChemicalRegistry chemistry) {
-			svq = Math.addExact(svq, group.solidVolumeSvq()); mass += group.mass();
-			if (group.composition() == null) {
+			add(group.solidVolumeSvq(), group.mass(), group.composition(), chemistry);
+		}
+		void add(long addedSvq, double addedMass, SolidCompositionRecord composition, ChemicalRegistry chemistry) {
+			if (addedSvq <= 0L || !(Double.isFinite(addedMass) && addedMass > 0.0)) {
+				throw new IllegalArgumentException("Granular audit inventory portion is invalid");
+			}
+			requireKind(composition != null);
+			svq = Math.addExact(svq, addedSvq); mass += addedMass;
+			if (composition == null) {
 				if (species != null) throw new IllegalArgumentException("Mixed inert/reactive granular audit material");
 				return;
 			}
-			if (species == null) species = new TreeMap<>(); residual += group.composition().massResidual();
-			for (Map.Entry<String, Long> amount : group.composition().stableAmounts(chemistry).entrySet()) {
+			if (chemistry == null || !massClose(composition.totalMass(chemistry), addedMass)) {
+				throw new IllegalArgumentException("Reactive granular audit inventory mass mismatch");
+			}
+			if (species == null) species = new TreeMap<>(); residual += composition.massResidual();
+			for (Map.Entry<String, Long> amount : composition.stableAmounts(chemistry).entrySet()) {
 				species.merge(amount.getKey(), amount.getValue(), Math::addExact);
 			}
+		}
+		void add(Entry entry) {
+			requireKind(entry.reactive());
+			svq = Math.addExact(svq, entry.solidVolumeSvq()); mass += entry.mass();
+			if (!entry.reactive()) {
+				if (species != null) throw new IllegalArgumentException("Mixed inert/reactive granular audit material");
+				return;
+			}
+			if (species == null) species = new TreeMap<>();
+			residual += Double.longBitsToDouble(entry.massResidualBits());
+			for (SpeciesAmount amount : entry.composition()) {
+				species.merge(amount.speciesId(), amount.amountQuanta(), Math::addExact);
+			}
+		}
+		private void requireKind(boolean incomingReactive) {
+			if (reactive != null && reactive != incomingReactive) {
+				throw new IllegalArgumentException("Mixed inert/reactive granular audit material");
+			}
+			reactive = incomingReactive;
 		}
 		Entry build(String materialId) {
 			List<SpeciesAmount> composition = species == null ? List.of() : species.entrySet().stream()

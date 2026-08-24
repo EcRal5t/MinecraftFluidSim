@@ -1627,26 +1627,32 @@ public final class FluidSimulationService {
 	public String emptySelectedRegion(ServerLevel level) {
 		FluidRegion region = activeRegion();
 		if (region == null || !level.dimension().equals(region.dimension())) return "没有活动流体域或位于其他维度";
-		if (!ensureRegionAvailable(level, region)) return "控制器域当前不可用：" + region.availabilityFailure();
+		if (!ensureRegionAvailable(level, region)) return "清空失败：控制器域当前不可用：" + region.availabilityFailure();
+		if (hasPendingContainerTransfer(region.id())) {
+			return "清空失败：区域存在未完成或不可识别的容器转移 WAL；拒绝清空";
+		}
 		FlipFluidDomain domain = region.domain();
 		float beforeBlocks = domain.totalVolume() / CELL_VOLUMES_PER_BLOCK;
 		int beforeParticles = domain.particleCount();
 		domain.removeAllWaterExact();
+		FlipFluidDomain.GranularClear granular = domain.removeAllGranularExact();
 		region.wakeForActivity();
 		if (region.controllerManaged()) {
 			try {
 				long generation = regionOperations.checkpoint(region);
 				sendSnapshot(level, region);
-				return String.format("已抹除全部水体：%.3f 方块水（%d 个 marker），checkpoint %d 已发布",
-						beforeBlocks, beforeParticles, generation);
+				return String.format("已清空区域：%.3f 方块流体（%d 个 marker），%d SVQ 颗粒（active %d，deposit groups %d），checkpoint %d 已发布",
+						beforeBlocks, beforeParticles, granular.solidVolumeSvq(), granular.activeParcels(),
+						granular.depositGroups(), generation);
 			} catch (IOException | RuntimeException exception) {
 				region.setPaused(true);
-				region.setAvailabilityFailure("empty 后 checkpoint 失败，活动 solver 已清空；重启后可能恢复旧水量：" + exception.getMessage());
-				return "已从活动 solver 抹除全部水体，但 checkpoint 失败；区域已暂停：" + exception.getMessage();
+				region.setAvailabilityFailure("empty 后 checkpoint 失败，活动 solver 已清空；重启后可能恢复旧库存：" + exception.getMessage());
+				return "已从活动 solver 清空流体与颗粒，但 checkpoint 失败；区域已暂停：" + exception.getMessage();
 			}
 		}
 		sendSnapshot(level, region);
-		return String.format("已抹除全部水体：%.3f 方块水（%d 个 marker）", beforeBlocks, beforeParticles);
+		return String.format("已清空区域：%.3f 方块流体（%d 个 marker），%d SVQ 颗粒（active %d，deposit groups %d）",
+				beforeBlocks, beforeParticles, granular.solidVolumeSvq(), granular.activeParcels(), granular.depositGroups());
 	}
 
 

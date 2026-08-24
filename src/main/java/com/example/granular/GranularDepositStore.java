@@ -218,6 +218,16 @@ public final class GranularDepositStore {
 		}
 	}
 
+	/** Clears the complete sparse store after reporting every exact group to its inventory owner. */
+	public void clear(GroupConsumer removed) {
+		if (removed == null) throw new IllegalArgumentException("Deposit clear consumer is missing");
+		forEachGroup(removed);
+		Arrays.fill(headByCell, -1); Arrays.fill(porosityQByCell, 0);
+		Arrays.fill(materialHandle, 0); Arrays.fill(solidCompositionHandle, 0);
+		Arrays.fill(solidVolumeSvq, 0L); Arrays.fill(mass, 0.0); Arrays.fill(next, -1);
+		nextUnused = 0; freeCount = 0; groupCount = 0; occupiedCellCount = 0;
+	}
+
 	private void validate(SolidPortion portion) {
 		if (portion == null) throw new IllegalArgumentException("Granular solid portion is missing");
 		ParticulateMaterial material = registry.material(portion.materialHandle());

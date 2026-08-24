@@ -92,6 +92,12 @@ public final class GranularDepositDynamics {
 		return occupied;
 	}
 
+	/** Clears transient dirty/sleep scheduling after the authoritative deposit inventory is erased. */
+	public void clear() {
+		java.util.Arrays.fill(dirtyQueue, 0); java.util.Arrays.fill(stableAge, 0);
+		java.util.Arrays.fill(queued, false); queueHead = 0; queueSize = 0;
+	}
+
 	public Stats step(Environment environment, float dt) {
 		if (environment == null) throw new IllegalArgumentException("Granular deposit environment is missing");
 		if (!(Float.isFinite(dt) && dt > 0.0F)) throw new IllegalArgumentException("Granular deposit dt is invalid");
