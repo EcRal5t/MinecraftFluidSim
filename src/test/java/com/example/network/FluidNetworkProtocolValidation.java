@@ -27,6 +27,7 @@ public final class FluidNetworkProtocolValidation {
 		validateMaterialSnapshotV2();
 		validateChemicalSnapshotV3();
 		validateGranularSnapshotV4();
+		validateThermalSnapshotV5();
 		System.out.println("Fluid network protocol validation passed");
 	}
 
@@ -36,14 +37,16 @@ public final class FluidNetworkProtocolValidation {
 				&& FluidProtocol.serverOffer(true).equals(FluidProtocol.materialServerOffer())
 				&& FluidProtocol.serverOffer(true, true).equals(FluidProtocol.chemicalServerOffer())
 				&& FluidProtocol.serverOffer(true, false, true).equals(FluidProtocol.granularServerOffer(false))
-				&& FluidProtocol.serverOffer(true, true, true).equals(FluidProtocol.granularServerOffer(true)),
-				"feature gates did not select strict v1/v2/v3/v4 server offers");
+				&& FluidProtocol.serverOffer(true, true, true).equals(FluidProtocol.granularServerOffer(true))
+				&& FluidProtocol.serverOffer(true, true, true, true).equals(
+						FluidProtocol.thermalServerOffer(true, true)),
+				"feature gates did not select strict v1/v2/v3/v4/v5 server offers");
 		FluidProtocol.Negotiation accepted = FluidProtocol.negotiate(offer);
 		require(accepted.accepted() && accepted.selectedVersion() == FluidProtocol.CURRENT_VERSION
 				&& accepted.capabilities() == FluidProtocol.REQUIRED_CAPABILITIES,
 				"matching protocol/capability offer was not selected exactly");
 
-		FluidProtocol.Negotiation noVersion = FluidProtocol.negotiate(new FluidProtocol.Offer(5, 6, 0L, 0L));
+		FluidProtocol.Negotiation noVersion = FluidProtocol.negotiate(new FluidProtocol.Offer(6, 7, 0L, 0L));
 		require(!noVersion.accepted() && noVersion.failure().contains("do not overlap"),
 				"non-overlapping version range was not rejected readably");
 		long unknown = 1L << 40;
@@ -74,6 +77,69 @@ public final class FluidNetworkProtocolValidation {
 				new FluidProtocolResponsePayload(true, 1, FluidProtocol.REQUIRED_CAPABILITIES | unknown, "")
 		);
 		require(!forgedOptionalCapability.accepted(), "client selected a capability unsupported by this server");
+	}
+
+	private static void validateThermalSnapshotV5() {
+		FluidProtocol.Offer offer = FluidProtocol.thermalServerOffer(false, false);
+		FluidProtocol.Negotiation negotiation = FluidProtocol.negotiate(offer);
+		long required = FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_THERMAL_SNAPSHOT;
+		require(negotiation.accepted() && negotiation.selectedVersion() == FluidProtocol.THERMAL_SNAPSHOT_VERSION
+				&& (negotiation.capabilities() & required) == required,
+				"thermal v5 did not negotiate material+thermal capabilities strictly");
+		FluidProtocol.Negotiation omitted = FluidProtocol.validateResponse(offer,
+				new FluidProtocolResponsePayload(true, 5,
+						FluidProtocol.REQUIRED_CAPABILITIES | FluidProtocol.CAP_MATERIAL_SNAPSHOT, ""));
+		require(!omitted.accepted(), "thermal v5 response omitted the thermal capability");
+
+		FluidThermalSnapshotPayload payload = thermalSnapshot(11L, 17L, "e".repeat(64));
+		FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
+		FluidThermalSnapshotPayload decoded;
+		try {
+			FluidThermalSnapshotPayload.CODEC.encode(buffer, payload);
+			decoded = FluidThermalSnapshotPayload.CODEC.decode(buffer);
+		} finally { buffer.release(); }
+		require(decoded.material().generation() == 11L && decoded.material().sequence() == 17L
+				&& decoded.registryFingerprint().equals(payload.registryFingerprint())
+				&& Arrays.equals(decoded.cellTemperatureQ(), payload.cellTemperatureQ())
+				&& Arrays.equals(decoded.coherentFraction(), payload.coherentFraction())
+				&& Arrays.equals(decoded.debugFlags(), payload.debugFlags())
+				&& decoded.gasNodes().equals(payload.gasNodes()),
+				"thermal v5 display payload did not round-trip");
+
+		FluidThermalSnapshotLedger ledger = new FluidThermalSnapshotLedger();
+		require(ledger.evaluate(thermalSnapshot(1L, 1L, "e".repeat(64)), negotiation)
+				== FluidThermalSnapshotLedger.Decision.ACCEPT_SNAPSHOT, "first thermal snapshot was rejected");
+		require(ledger.evaluate(thermalSnapshot(1L, 1L, "e".repeat(64)), negotiation)
+				== FluidThermalSnapshotLedger.Decision.IGNORE_STALE, "duplicate thermal sequence was accepted");
+		require(ledger.evaluate(thermalSnapshot(1L, 2L, "f".repeat(64)), negotiation)
+				== FluidThermalSnapshotLedger.Decision.REJECT_REGISTRY, "foreign thermal fingerprint was accepted");
+		require(ledger.evaluate(FluidThermalSnapshotPayload.removeRegion(
+				FluidMaterialSnapshotPayload.removeRegion(DIMENSION, REGION, 1L, 3L)), negotiation)
+				== FluidThermalSnapshotLedger.Decision.REMOVE_REGION, "thermal tombstone was rejected");
+		require(ledger.evaluate(FluidThermalSnapshotPayload.clearAll(), negotiation)
+				== FluidThermalSnapshotLedger.Decision.CLEAR_ALL, "thermal clear-all was rejected");
+
+		FluidProtocol.Negotiation granularNegotiation = FluidProtocol.negotiate(
+				FluidProtocol.thermalServerOffer(true, true));
+		FluidGranularSnapshotPayload granular = granularSnapshot(2L, 1L, "c".repeat(64), true);
+		FluidThermalSnapshotPayload composed = thermalSnapshot(
+				granular.material(), 2L, 1L, "e".repeat(64), null, granular);
+		require(new FluidThermalSnapshotLedger().evaluate(composed, granularNegotiation)
+				== FluidThermalSnapshotLedger.Decision.ACCEPT_SNAPSHOT,
+				"thermal v5 rejected composable v4 granular/v3 chemical display layers");
+
+		FluidGranularSnapshotPayload defaultGranular = defaultSizedGranularSnapshot();
+		int cells = 9_216; short[] temperatures = new short[cells];
+		Arrays.fill(temperatures, (short) (300 * 16));
+		FluidThermalSnapshotPayload defaultSized = new FluidThermalSnapshotPayload(5,
+				defaultGranular.material(), 1, "e".repeat(64), temperatures, new byte[cells], new byte[cells],
+				List.of(new FluidThermalSnapshotPayload.GasNodeDisplay(1, 300 * 16, 0)), null, defaultGranular);
+		buffer = new FriendlyByteBuf(Unpooled.buffer());
+		try {
+			FluidThermalSnapshotPayload.CODEC.encode(buffer, defaultSized);
+			require(buffer.writerIndex() <= 512 * 1024,
+					"default 9,216-cell composed thermal snapshot exceeded 512 KiB: " + buffer.writerIndex());
+		} finally { buffer.release(); }
 	}
 
 	private static void validateGranularSnapshotV4() {
@@ -388,6 +454,22 @@ public final class FluidNetworkProtocolValidation {
 		return new FluidChemicalSnapshotPayload(3, materialSnapshot(generation, sequence, 1), fingerprint,
 				List.of(new FluidChemicalSnapshotPayload.SpeciesEntry("realwater:h2o", 0xff197ae8)),
 				top, weights, new byte[8], ph, indicator);
+	}
+
+	private static FluidThermalSnapshotPayload thermalSnapshot(long generation, long sequence, String fingerprint) {
+		return thermalSnapshot(materialSnapshot(generation, sequence, 1), generation, sequence, fingerprint, null, null);
+	}
+
+	private static FluidThermalSnapshotPayload thermalSnapshot(
+			FluidMaterialSnapshotPayload material, long generation, long sequence, String fingerprint,
+			FluidChemicalSnapshotPayload chemical, FluidGranularSnapshotPayload granular
+	) {
+		short[] temperature = new short[8]; Arrays.fill(temperature, (short) (300 * 16));
+		temperature[7] = (short) FluidThermalSnapshotPayload.EMPTY_TEMPERATURE_Q;
+		byte[] coherent = new byte[8]; coherent[0] = (byte) 128;
+		byte[] flags = new byte[8]; flags[1] = 1;
+		return new FluidThermalSnapshotPayload(5, material, 1, fingerprint, temperature, coherent, flags,
+				List.of(new FluidThermalSnapshotPayload.GasNodeDisplay(1, 310 * 16, -123)), chemical, granular);
 	}
 
 	private static FluidChemicalSnapshotPayload defaultSizedChemicalSnapshot() {

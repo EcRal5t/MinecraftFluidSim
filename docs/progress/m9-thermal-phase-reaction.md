@@ -231,3 +231,13 @@ registry identity 不一致或 item/energy delta 不闭合均保留 WAL 并失�
 
 既有 v1--v4 fluid reader/recovery 保持，v1 material 缺独立质量仍锁定人工处置。最近门：`containers` 通过；
 production transfer service 和 authoritative registry recovery 接线尚未在本增量开放。
+
+## M9.17 protocol v5 display boundary
+
+新增严格 protocol v5 与 `CAP_THERMAL_SNAPSHOT`。v5 内嵌 v2 material geometry，并可组合现有 v3 chemical 或
+v4 granular+chemical 显示层；thermal 层只携 world registry fingerprint、逐格 16-bit 量化温度、8-bit coherent
+fraction/debug flags 与有界 gas node 温压，不发送 raw `U`、source/sink/work 或 exact 相库存。客户端 ledger 联合拒绝
+旧序列、未知 palette、thermal/chemical/granular fingerprint 变化与协商层缺失；accepted thermal 数据目前只作为
+只读 frame，不改变服务端状态或默认材质颜色。
+
+最近门：`protocol` 通过；默认 9,216-cell、含 v4+v3 组合层的 v5 payload 保持在 512 KiB 硬门内。

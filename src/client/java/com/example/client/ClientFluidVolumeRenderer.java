@@ -9,6 +9,8 @@ import com.example.network.FluidChemicalSnapshotLedger;
 import com.example.network.FluidChemicalSnapshotPayload;
 import com.example.network.FluidGranularSnapshotLedger;
 import com.example.network.FluidGranularSnapshotPayload;
+import com.example.network.FluidThermalSnapshotLedger;
+import com.example.network.FluidThermalSnapshotPayload;
 import com.example.chemistry.ChemicalDisplaySnapshot;
 import com.example.network.FluidProtocol;
 import com.example.network.FluidSnapshotPayload;
@@ -85,9 +87,11 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	private final FluidMaterialSnapshotLedger materialLedger = new FluidMaterialSnapshotLedger();
 	private final FluidChemicalSnapshotLedger chemicalLedger = new FluidChemicalSnapshotLedger();
 	private final FluidGranularSnapshotLedger granularLedger = new FluidGranularSnapshotLedger();
+	private final FluidThermalSnapshotLedger thermalLedger = new FluidThermalSnapshotLedger();
 	private final Map<UUID, SnapshotTransition> latest = new LinkedHashMap<>();
 	private final Map<UUID, MaterialFrame> latestMaterials = new LinkedHashMap<>();
 	private final Map<UUID, GranularFrame> latestGranular = new LinkedHashMap<>();
+	private final Map<UUID, FluidThermalSnapshotPayload> latestThermal = new LinkedHashMap<>();
 	private volatile List<FluidSnapshotPayload> extracted = List.of();
 	private volatile List<MaterialFrame> extractedMaterials = List.of();
 	private volatile List<GranularFrame> extractedGranular = List.of();
@@ -181,6 +185,46 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 					"Discarded Real Water granular region {} with an unsupported display palette", material.regionId());
 			case REJECT_REGISTRY -> RealWaterMod.LOGGER.error(
 					"Discarded Real Water granular region {} with a foreign registry fingerprint", material.regionId());
+			case IGNORE_STALE -> { }
+		}
+	}
+
+	public synchronized void accept(FluidThermalSnapshotPayload payload, FluidProtocol.Negotiation negotiation) {
+		FluidThermalSnapshotLedger.Decision decision = thermalLedger.evaluate(payload, negotiation);
+		FluidMaterialSnapshotPayload material = payload.material();
+		switch (decision) {
+			case CLEAR_ALL -> {
+				latestMaterials.clear(); latestGranular.clear(); latestThermal.clear();
+			}
+			case REMOVE_REGION -> {
+				latestMaterials.remove(material.regionId()); latestGranular.remove(material.regionId());
+				latestThermal.remove(material.regionId());
+			}
+			case ACCEPT_SNAPSHOT -> {
+				FluidMaterialRenderSnapshot snapshot = material.toRenderSnapshot();
+				FluidGranularSnapshotPayload granular = payload.granularLayer();
+				FluidChemicalSnapshotPayload chemicalPayload = granular == null
+						? payload.chemicalLayer() : granular.toChemicalPayload();
+				ChemicalFrame chemical = chemicalPayload == null ? null : new ChemicalFrame(chemicalPayload,
+						chemicalPayload.topSpecies(), chemicalPayload.topWeights(), chemicalPayload.residualWeights(),
+						chemicalPayload.ph(), chemicalPayload.indicatorFraction());
+				MaterialFrame materialFrame = new MaterialFrame(material, snapshot,
+						FluidMaterialSurfaceMesher.build(snapshot), chemical);
+				if (granular == null) {
+					latestMaterials.put(material.regionId(), materialFrame); latestGranular.remove(material.regionId());
+				} else {
+					latestGranular.put(material.regionId(), new GranularFrame(granular, materialFrame,
+							granular.depositBulkFill(), granular.depositPorosity(), granular.depositTopMaterial()));
+					latestMaterials.remove(material.regionId());
+				}
+				latestThermal.put(material.regionId(), payload);
+			}
+			case REJECT_PROTOCOL -> RealWaterMod.LOGGER.error(
+					"Discarded Real Water thermal snapshot protocol {} after negotiation", payload.protocolVersion());
+			case REJECT_PALETTE -> RealWaterMod.LOGGER.error(
+					"Discarded Real Water thermal region {} with an unsupported display palette", material.regionId());
+			case REJECT_REGISTRY -> RealWaterMod.LOGGER.error(
+					"Discarded Real Water thermal region {} with a foreign registry fingerprint", material.regionId());
 			case IGNORE_STALE -> { }
 		}
 	}
@@ -777,6 +821,8 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 		materialLedger.clear();
 		chemicalLedger.clear();
 		latestGranular.clear();
+		thermalLedger.clear();
+		latestThermal.clear();
 		granularLedger.clear();
 		extracted = List.of();
 		extractedMaterials = List.of();

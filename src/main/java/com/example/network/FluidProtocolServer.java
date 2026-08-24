@@ -41,6 +41,7 @@ public final class FluidProtocolServer {
 		PayloadTypeRegistry.clientboundPlay().register(FluidMaterialSnapshotPayload.TYPE, FluidMaterialSnapshotPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(FluidChemicalSnapshotPayload.TYPE, FluidChemicalSnapshotPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(FluidGranularSnapshotPayload.TYPE, FluidGranularSnapshotPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(FluidThermalSnapshotPayload.TYPE, FluidThermalSnapshotPayload.CODEC);
 
 		ServerConfigurationNetworking.registerGlobalReceiver(
 				FluidProtocolResponsePayload.TYPE, FluidProtocolServer::receiveResponse
@@ -91,6 +92,13 @@ public final class FluidProtocolServer {
 	public static boolean send(ServerPlayer player, FluidGranularSnapshotPayload payload) {
 		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.GRANULAR_SNAPSHOT_VERSION)
 				|| !ServerPlayNetworking.canSend(player, FluidGranularSnapshotPayload.TYPE)) return false;
+		ServerPlayNetworking.send(player, payload);
+		return true;
+	}
+
+	public static boolean send(ServerPlayer player, FluidThermalSnapshotPayload payload) {
+		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.THERMAL_SNAPSHOT_VERSION)
+				|| !ServerPlayNetworking.canSend(player, FluidThermalSnapshotPayload.TYPE)) return false;
 		ServerPlayNetworking.send(player, payload);
 		return true;
 	}
@@ -155,9 +163,12 @@ public final class FluidProtocolServer {
 				return (negotiation.capabilities() & (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_CHEMICAL_SNAPSHOT))
 						== (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_CHEMICAL_SNAPSHOT) ? negotiation : null;
 			}
-			return negotiation.selectedVersion() == FluidProtocol.GRANULAR_SNAPSHOT_VERSION
-					&& (negotiation.capabilities() & (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_GRANULAR_SNAPSHOT))
+			if (negotiation.selectedVersion() == FluidProtocol.GRANULAR_SNAPSHOT_VERSION) return
+					(negotiation.capabilities() & (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_GRANULAR_SNAPSHOT))
 					== (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_GRANULAR_SNAPSHOT) ? negotiation : null;
+			return negotiation.selectedVersion() == FluidProtocol.THERMAL_SNAPSHOT_VERSION
+					&& (negotiation.capabilities() & (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_THERMAL_SNAPSHOT))
+					== (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_THERMAL_SNAPSHOT) ? negotiation : null;
 		}
 	}
 
