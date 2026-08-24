@@ -87,3 +87,20 @@
 ## 5. 结论
 
 M8 实现与 `granular-state.md` 冻结契约一致，事务、版本门控与守恒账本的结构正确性可验证。**建议在进入 M9 前修复发现 1**（单侧一行语义对齐 + 一个复用现有 fixture 的断言），观察 2–4 可列入技术债跟踪，不阻塞里程碑关闭。
+
+## 6. GPT 联合核实与最终处置（2026-08-24）
+
+本报告原文保留为独立审阅证据。随后与 `m8-gpt-review.md` 逐项映射，结论如下：
+
+- 发现 1 确认有效，且 identity 门也必须覆盖 audit-only payload；现由统一的 `requiresChemistry()` 条件控制 v5
+  capability、capture/readback、reconstruct 与 restore，reactive 清空后空组成表的 v5 fixture 已通过。
+- 观察 2 确认有效并修复：Reynolds validity 在任何 parcel 速度提交前整体预检，服务层转为可读
+  granular-validity PAUSED，失败 fixture 验证 parcel 未改变。
+- 观察 3 确认是自由面/边界动量，而不是流体内部闭合；现不再静默丢弃，无质量 face stencil 的分量进入只读
+  boundary-impulse 诊断并由管理员 `granstatus` 报告。
+- 观察 4 确认有效并收紧：`materialbucket`、`granularcontainer` 现均要求 `COMMANDS_ADMIN`。
+
+联合复核还确认并修复了原报告未列出的 precipitation 联合 occupancy、固液规则声明体积守恒、`remove` 固体排空门、
+Minecraft collision refresh、`empty` 联合 preflight 与过期架构说明。实现提交为 `92e9428`、`a312140`、`cb0bc4f`；
+最后一项同时冻结全部 carrier sample，并把惰性 audit 纳入 readback registry 校验。完整根因、修复映射、
+格式兼容边界与门结果见 `m8-gpt-review.md` 的“联合复核与关闭”。本报告的“有条件通过”据此升级为 **PASS / M8 正式关闭**。

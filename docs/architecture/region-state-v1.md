@@ -24,7 +24,9 @@ This document defines the implemented first persistent Real Water region format.
 - A committed v5 generation is one complete material + optional chemistry + granular checkpoint, not a sidecar attached to
   v3. Its manifest and every participating section require typed `realwater:granular_*_v1` extensions containing stable-ID
   palette identity, exact active/deposit SVQ and raw-mass ledgers, active parcel kinematics, deposit porosity and solid
-  composition references. The outer manifest/section identity, CRC, slot and HEAD rules remain the only commit protocol.
+  composition references plus cumulative source/sink audit. Every audit material ID is checked against the authoritative
+  granular registry during readback; reactive live/audit payloads additionally require the same chemical capability and
+  registry fingerprint. The outer manifest/section identity, CRC, slot and HEAD rules remain the only commit protocol.
 - Enabling granular persistence atomically migrates accepted v1/v2/v3 generations to a new complete v5 generation in the
   inactive slot and publishes HEAD last. Missing world granular registry identity, absent required v5 extensions, unknown
   capability/unit bits, non-canonical records or ledger disagreement preserve the data and lock the region.

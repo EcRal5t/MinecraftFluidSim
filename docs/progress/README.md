@@ -16,7 +16,7 @@
 | M6 世界 ownership、流体桥与容器 | 2026-08-23 | crash-safe ownership、精确部分/材料混合桶、玩家/发射器统一转移与跨持久域 WAL v2 完成；完整 CPU 回归、专用服务器启动与实机 Smoke C 通过，主 Mod 0.12.0 | [`m6-world-bridge-and-containers.md`](m6-world-bridge-and-containers.md) |
 | M7.0 守恒化学状态设计评审 | 2026-08-23 | 冻结 absolute parcel record、exact codec/fingerprint、硬预算、v3 边界和守恒验收；纯 Java core 门通过，未打开 gameplay | [`m7.0-chemistry-state-review.md`](m7.0-chemistry-state-review.md) |
 | M7 守恒化学 | 2026-08-23 | marker parcel、强电解质/中和、v3 region/protocol/WAL、化学桶、指示剂与 source/sink 审计完成；自动发布门与合并实机场景通过，主 Mod 0.13.0 | [`m7-conservative-chemistry.md`](m7-conservative-chemistry.md) |
-| M8 颗粒沉淀与低成本沉积 | 2026-08-24 | 守恒 active parcel/deposit、排水/浮力/阻力/孔隙、安息角沉积、休眠/局部唤醒、固液相转移、v5 region/protocol v4/container WAL v4 与干颗粒容器完成；自动发布门和合并实机场景通过，主 Mod 0.14.0 | [`m8-granular-deposition.md`](m8-granular-deposition.md) |
+| M8 颗粒沉淀与低成本沉积 | 2026-08-24 | 守恒 active parcel/deposit、排水/浮力/阻力/孔隙、安息角沉积、休眠/局部唤醒、固液相转移、v5 region/protocol v4/container WAL v4 与干颗粒容器完成；双 AI 关闭审阅 finding 已修复，自动发布门和合并实机场景通过，主 Mod 0.14.0 | [`m8-granular-deposition.md`](m8-granular-deposition.md) |
 
 补充记录：
 

@@ -16,10 +16,12 @@
 - **材料门**：多材料只在 `materialsEnabled` 配置门本次启动为开时绑定。门开时 demo、capture 和控制器区域都绑定内建 palette，纯水区域即 palette index 0 的单材料状态；门关时活动核心继续走纯水路径。
 - **交接边界**：`FlipParticleState` 仍只允许纯水；任何非默认 material/phase/mass 状态导出都会显式失败。`FlipMaterialParticleState` 保存稳定 palette、每 marker material index 与 raw `double mass`；`FlipChemicalParticleState` 再组合 authoritative registry fingerprint、canonical mixture table、per-marker table index/indicator 及 source/sink audit。二者都只是内存 handoff，不是 wire 或磁盘格式；`region-state v2/v3` 各自独立校验长度、checksum、generation、palette、registry 与预算。
 - **M6 世界/容器边界**：ownership sidecar、region-state 和 container-transfer WAL 分别提交；容器 `long` 纳体积与逐材料 raw `double` 质量在服务边界同 marker 账本核对。精确转移原语只提交完整成功结果，拒绝时不得留下 solver 残量。完整契约见 [`world-ownership-and-containers.md`](world-ownership-and-containers.md)。
-- **M8 开发中边界**：显式绑定的 0.5 m CPU 域可持有 exact-SVQ active parcel/deposit 库存；current/preview
+- **M8 已完成边界**：显式绑定的 0.5 m CPU 域持有 exact-SVQ active parcel/deposit 库存；current/preview
   skeleton occupancy 通过同一 face void 和 moving-solid target 进入 free-surface、pressure matrix/projection、volume
-  drift 与 runtime gas available volume，浮力/阻力向 MAC 散回等量反冲量。当前尚无 gameplay/config/persistence
-  入口，v1/v2/v3 格式未改变；完整冻结契约见 [`granular-state.md`](granular-state.md)。
+  drift 与 runtime gas available volume，浮力/阻力向 MAC 散回等量反冲量。颗粒/沉淀 config v5、完整
+  `region-state v5`、protocol v4、`GranularContents v1` 与 container WAL v4 已进入生产入口，并分别独立门控；
+  M7 v3 未回填，`region-state v4` 仍只为气体持久化评审预留。M9 热状态不得写入这些既有格式。完整冻结契约见
+  [`granular-state.md`](granular-state.md)。
 - **数值离散**：`markerCount > 0` 决定压力流体格；平滑 `volume[]`、PLIC 分数、cut-cell 开口和目标散度都不是第二套水量。
 - **渲染重建**：客户端使用 density + marker + solid 重建；marker mask 是浅水可见的必要内部种子，渲染不得反写物理。
 - **M3 材料重建**：`FluidMaterialRenderSnapshot` 从 marker 只读派生总体积、逐材料/phase 量化分数与各自 marker 种子；每格分数确定性回和到 255。这些量化字段是 `fluid_snapshot_v2` 的展示数据，不携带精确库存，客户端也不得回写。
@@ -57,7 +59,7 @@
 - M5 密闭气体网络已进入活动核心：等温 EoS、有限速率孔流、拓扑事件库存迁移与 `p_gas` 自由面边界均已生效；开放水域与 M4 逐位一致，气体状态 runtime-only 不进存档。
 - 活动材料几何按格稀疏聚合实际出现的 phase，条目总数不超过域 marker 容量；多相交汇不会截断为两个相。该状态只服务压力离散，内部界面 mesh 另由上述 mesher 重建。
 - 服务端 CPU 是物理规范；可选 GPU probe 仍只读、可回退，不写世界或存档。
-- 已接通最多四个有界区域、控制器边界、独立调度和门控 `region-state v1/v2/v3`；M6 已加入 crash-safe ownership 与容器转移，M7 已加入 marker 化学 parcel 与 v3 WAL，当前集成说明见根 [`README.md`](../../README.md)。
+- 已接通最多四个有界区域、控制器边界、独立调度和门控 `region-state v1/v2/v3/v5`（v4 保留并拒绝）；M6 已加入 crash-safe ownership 与容器转移，M7 已加入 marker 化学 parcel 与 v3 WAL，M8 已加入颗粒 v5 状态及 v4 容器 WAL，当前集成说明见根 [`README.md`](../../README.md)。
 - 多材料 marker、逐材料质量账本、可变密度共享压力、严格 protocol v1/v2/v3 与客户端液液/化学只读重建已进入活动路径；材料边界见 [`m3-material-state-migration.md`](m3-material-state-migration.md)，化学边界见 [`chemistry-state.md`](chemistry-state.md)。
 
 代码职责和最小验证任务只在 [`../maintenance/routing.md`](../maintenance/routing.md) 维护。

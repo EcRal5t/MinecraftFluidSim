@@ -72,12 +72,16 @@ restitution、critical Shields、侵蚀速率上限、最大活动 parcel SVQ �
 定义动力黏度与 `schiller_naumann_v1`；实际浮力密度仍从当地 marker mass/volume 得出，缺 carrier 时不猜水黏度。
 
 solid-liquid rule 定义 liquid chemical phase、aqueous stoichiometry、solid material/composition、饱和容量、
-每 extent 的 solid SVQ、接触上限和可逆性。loader 复用 M7 的有界 exact-rational 语义并在发布前拒绝未知引用、
+整数 `extent batch ↔ solid SVQ batch`、接触上限和可逆性。batch 允许保持 M7 单项系数上限的同时表达亚 SVQ/extent
+的物理体积；phase transfer 只能按完整 batch 提交。loader 复用 M7 的有界 exact-rational 语义，并以 exact species mass、
+batch SVQ 与材料 reference density 交叉验证声明体积，在发布前拒绝未知引用、
 竞争消费者、循环、负数、算术溢出以及质量/组成/电荷/声明体积不守恒。
 
-首次开启颗粒门时原子发布 `<world>/realwater/granular/registry.nbt`。canonical snapshot/fingerprint 是已有固体
+首次开启颗粒门时以 granular registry store v3 原子发布 `<world>/realwater/granular/registry.nbt`。canonical
+snapshot/fingerprint 是已有固体
 库存的唯一解释，并冻结单位 scale、材料、carrier、规则及其依赖的 M7 registry fingerprint。数据包变化只报告
-mismatch，不重解释存量；unknown/corrupt/missing/identity mismatch 全部保留并全局 `LOCKED`。
+mismatch，不重解释存量；unknown/corrupt/missing/identity mismatch 全部保留并全局 `LOCKED`。旧 v2 registry 的
+per-extent 整数体积无法无歧义迁移为 batch 规则，必须原样保留并锁定，禁止用当前数据包覆盖。
 
 ## 活动 parcel 与 deposit 库存
 
@@ -119,8 +123,11 @@ F_drag = 0.5 C_D rho_f A_aggregate |u-v| (u-v)
 F_buoyancy = -rho_f V_submerged g
 ```
 
-`Re -> 0` 使用 Stokes 极限。阻力用解析或半隐式 relaxation，不能让 slip 翻号；等量反向冲量按同一确定性
-归一 stencil 散回有质量的 MAC faces。无墙、无重力 fixture 中 fluid+parcel 总动量必须闭合。世界/deposit 碰撞
+`Re -> 0` 使用 Stokes 极限。阻力用解析或半隐式 relaxation，不能让 slip 翻号；本 substep 的全部 carrier sample
+在任何 parcel 速度或流体反冲量提交前一次性冻结并预检最大 Reynolds，越界进入可读 granular-validity PAUSED。
+等量反向冲量按同一确定性归一 stencil
+散回有质量的 MAC faces；无质量 stencil 的未施加分量记入只读 boundary-impulse 诊断，不得静默丢弃或伪装成流体动量。
+无墙、无重力 fixture 中 fluid+parcel 总动量必须闭合。世界/deposit 碰撞
 使用独立半径的 sweep/CCD，只截断法向并按材料摩擦/restitution 更新切向；边界冲量单独报告。
 
 低能接触使用与 solver cell 尺度绑定的 restitution dead zone，防止每 tick 重施重力后产生永不积累 contact age 的
@@ -136,6 +143,12 @@ collision preview 的容量拒绝必须逐 parcel 局部处理：从当前 exact
 禁止任一预测格超容就回退全域 preview 或把无关 parcel 速度一起清零。active compaction、active→deposit、deposit
 松弛和 wake→active 也必须在提交前更新同一份 active+deposit 联合 occupancy plan；只检查单个 parcel、单独 deposit
 bulk 或下一步重建后才发现超容都不构成合法提交。
+
+Minecraft runtime 方块编辑采用“玩家方块优先”的同一所有权语义：刷新发现新 collision micro-mask 覆盖颗粒时，
+必须先捕获所有对该格有 exact 8-cell share 的完整 active parcel 和该格全部 deposit group，预检 cumulative
+`escapedSink`，再释放其唯一 composition ownership 并提交几何。首版不猜测 reactive partial split，也不把局部固体
+搬到未经计划的邻格；因此使用完整实体的保守局部 sink。任何 preflight 失败时世界侧改动保持、solver 区域锁定，
+不得以未捕获异常反复逃出 server tick 或静默删除固体。
 
 每个 substep 预测 collision-resolved `S_next`，不先提交位置。moving-solid 容量源为：
 
@@ -198,6 +211,10 @@ solid SVQ/mass/composition。新 active parcel 从实际被扣 volume 的同格 
 只消费同格 active parcel 或 exposed deposit；深层组、邻格、墙后、不同 chemical phase 不参与。indicator 不进入 solid，
 溶出 species 继承承载液体 marker 自身 provenance。
 
+precipitation create 和 merge 还必须复用生产 coupling 的同一 8-cell largest-remainder occupancy candidate；merge
+先从 candidate 移除旧 parcel shares，再计划合并后的 shares。任何相邻格 `S_i > O_i` 时在 chemical、marker、composition
+或 parcel 修改前以 `BlockedException` 整体拒绝。
+
 液体 marker 的绝对 `float volume` 仍是 M0–M7 的任意正 IEEE-754 dyadic 真值，不因启用 M8 而量化成整数 SVQ。
 饱和容量从同格 marker 的精确 dyadic 和计算；plan 只向各 marker 加减整数 SVQ，并要求该 delta 在原 float 上精确可表示，
 因此原有亚 SVQ 尾数不变。不能表示或会使 marker 非正时整份 plan 拒绝并安全暂停，禁止把绝对 liquid volume 向上/向下
@@ -226,23 +243,29 @@ ledger rebuild。`FlipFluidDomain` 只编排；registry、库存、mechanics、d
 ## 跨层格式
 
 - server config 使用 v5，新增两个门和 granular parcel/deposit 总预算；v1--v4 reader 强制新门关闭。
+- granular world registry store 使用 v3 承载 exact extent/SVQ batch；旧 v2 不重解释、不原地迁移，保留并 LOCKED。
 - `region-state v4` 继续保留给用户已冻结的“气体 runtime-only 状态持久化前独立评审”。M8 使用独立完整
   `region-state v5`；reader 按精确集合 `{1,2,3,5}` 分派，v4 在未评审/未实现时保持 unknown/LOCKED。
 - v5 是 liquid/material/optional chemistry/granular 的单一完整 generation；不得使用 v3 HEAD 加颗粒 sidecar。
   双槽、section descriptor、回读验证、HEAD 最后发布和 quarantine 语义保持。v1/v2/v3→v5 只在 inactive slot
   产生完整空颗粒新代，旧 canonical bytes 不变。
+- 所有 source/sink audit stable material ID 都在 v5 readback 时对 world granular registry 校验；reactive live composition
+  或 reactive audit 任一存在时，还必须由同一 chemical capability、region chemical state、chemical fingerprint 与 world
+  registry dependency 解释。
 - protocol v4 严格协商，只发送有界 display palette、deposit bulk fill/porosity display、Top material 和稳定采样的
   active parcel；active glyph 尺寸有独立可读性上限，不是 grain diameter、碰撞半径或 exact parcel 体积。客户端不发送
   exact SVQ、raw mass、species 或权威 porosity。
 - 干颗粒容器 `GranularContents v1` 保存 stable material group、exact SVQ、raw mass、可选 solid composition 和
   registry fingerprint；不携孔隙水、液体、indicator 或 gas，且和 FluidMixture/ChemicalContents 表示互斥。
+  `/realwater granularcontainer` 与 `materialbucket` 是管理员 debug source，普通玩家不能用命令制造库存。
 - container-transfer WAL v4 使用独立 solid SVQ/resource kind 字段，保持 PREPARED → solver → stage/verify v5 →
   REGION_COMMITTED(after/checksum) → HEAD → actor after → durable save → delete。v1/v2/v3 reader/recovery 不变。
 
 任何 gate、registry、identity、checksum、generation 或 actor durable-save 歧义都保留状态/WAL 并 LOCKED；不能按
 当前数据包、reference density、tooltip 或显示字段修复。
 
-区域级 operator 清空复用 `/realwater empty`：先拒绝任何未完成或不可识别的 container-transfer WAL，再清除液体、
+区域级 operator 清空复用 `/realwater empty`：先拒绝任何未完成或不可识别的 container-transfer WAL，再分别生成
+liquid/chemical sink candidate 与 granular sink/composition-release candidate；两类 fallible preflight 都成功后才清除液体、
 active granular parcel 和 deposit group。被移除的全部固体按 stable material/composition 聚合进 `escapedSink`，exact SVQ、
 raw mass 和 solid species 分账不变；每个 runtime composition handle 恰好释放一次，显示/耦合/dirty queue 同步清空。
 controller 区域必须在反馈成功前以同一完整 `region-state v5` generation 发布 HEAD；checkpoint 失败则暂停区域并保留
@@ -258,6 +281,7 @@ controller 区域必须在反馈成功前以同一完整 `region-state v5` gener
 | deposit cells | region cell budget |
 | groups / deposit cell / region | 8 / 65,536 |
 | solid composition entries / record | 16 |
+| solid-liquid extents / exact volume batch | 131,072 |
 | dirty cells | region cell budget |
 | granular / phase-transfer operations per logical step | 131,072 / 131,072 |
 | protocol active display samples / region | 4,096 |

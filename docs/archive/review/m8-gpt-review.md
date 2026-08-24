@@ -17,10 +17,10 @@ Gradle、自动门或实机场景；既有通过记录只作为历史证据，�
 ## 结论
 
 M8 的总体分层方向正确，但当前不能判定为“万无一失”，也不建议以现有 `HEAD` 直接把 M8 当作无遗留边界进入 M9。
-本次确认 **5 项高风险、1 项中风险、1 项低风险**：
+本次在原关闭点确认 **5 项高风险、1 项中风险、1 项低风险**（最终处置见文末“联合复核与关闭”）：
 
 1. precipitation commit 绕过联合 exact-occupancy 容量计划；
-2. 内置 NaCl 沉淀的权威质量/体积给出约 `498.216` 的实际密度，却声明 `2800`，loader 也没有执行冻结的声明体积校验；
+2. 内置 NaCl 沉淀的权威质量/体积给出 `3985.729650688` 的实际密度，却声明 `2800`，loader 也没有执行冻结的声明体积校验；
 3. v5 对“只剩反应性 source/sink audit”的 capability 写入、验证和 registry identity 门不一致；
 4. `/realwater remove` 只检查液体，可成功移除仍持有固体库存的 controller 区域；
 5. 世界碰撞刷新遇到颗粒占据时抛出未捕获异常，无法真正拒绝已经发生的方块编辑；
@@ -65,7 +65,7 @@ solid SVQ 分到相邻格；相邻格可能已被 active/deposit/cut-cell capaci
 旧位置再 try-add 合并位置，失败时只丢弃 candidate 并在任何 chemical/marker/pool 修改前抛 `BlockedException`。
 checkpoint capture/restore 也应复核 active+deposit 联合 occupancy，避免内部 invariant 错误被写成合法 v5。
 
-### 2. [高] 内置沉淀的实际密度与材料声明相差约 5.62 倍，冻结的 rule volume 校验没有实现
+### 2. [高] 内置沉淀的实际密度与材料声明相差约 42.35%，冻结的 rule volume 校验没有实现
 
 位置：
 
@@ -88,14 +88,15 @@ species map 相等和竞争 consumer；没有把 rule 的 exact species mass、`
 
 ```text
 mass / extent              = 64 * (184 + 280) / 1e9 = 2.9696e-5 raw mass
-cell volume / extent       = 1 SVQ = 2^-24 cell volume
-production implied density = 2.9696e-5 * 2^24 = 498.216206336
+physical volume / extent   = 1 SVQ = 2^-27 BV（1 BV = 1 m³）
+production implied density = 2.9696e-5 * 2^27 = 3985.729650688
 declared reference density = 2800
 ```
 
 生产 `GranularMechanics` 使用 parcel 的实际 `mass / solidVolume` 计算重力、浮力和阻力，不会用 `referenceDensity`
-覆盖历史质量。因此该 NaCl “precipitate”在 1000 密度的水中会按约 498 的轻质颗粒响应，而不是按声明的 2800
-沉降；现有 terminal-velocity 证据使用的是按 reference density 人工创建的 parcel，不能证明 reaction-created parcel。
+覆盖历史质量。因此该 NaCl “precipitate”会按约 3985.73 的密度响应，而不是声明的 2800；两者都比水重，但终速、
+Shields 与阻力尺度仍不一致。现有 terminal-velocity 证据使用的是按 reference density 人工创建的 parcel，不能证明
+reaction-created parcel。初稿曾误把每格 `2^24 SVQ` 当成每 BV scale；本段现按 `SolidVolume.SVQ_PER_BV=2^27` 更正。
 
 建议：先明确 rule 的允许量化误差，再在 `GranularRegistry` 首次构造时用 exact-rational mass 和 SVQ scale 校验每个
 reactive material 的声明密度/体积关系；当前内置系数和 `solid_volume_svq_per_extent` 必须随之修正。不要在运行时把
@@ -255,3 +256,40 @@ checked arithmetic 正是冻结硬预算的一部分，不能假定永不失败�
 
 上述高风险项关闭、最近门通过并按现有 release 文档完成一次必要的真实 controller 方块编辑/重启验证后，才适合重新写
 M8 关闭结论；不应以渲染补丁、当前 datapack 重解释或 density 回填历史 mass 掩盖这些问题。
+
+## 联合复核与关闭（2026-08-24）
+
+用户提供的 Qwen/opencode 报告与本报告逐项映射后，Qwen 的 v5 audit-only finding 被确认；三条观察项也都存在。
+两份报告合并去重后已由 `92e9428 Close M8 granular audit findings` 与
+`a312140 Fail closed on granular collision reconciliation` 修复；最终静态复核又以
+`cb0bc4f Harden granular preflight identity checks` 收紧双采样与惰性 audit readback：
+
+| 原 finding / 观察 | 核实与处置 |
+|---|---|
+| precipitation 绕过 8 格联合 occupancy | create 在任何 chemical/marker/pool 修改前对当前联合 occupancy 执行 `tryPlanParcel`；merge 先 exact remove 旧 shares，再计划合并 shares；失败走 `BlockedException`。 |
+| reaction mass/reference density 不闭合 | rule 改为 exact `extent batch ↔ SVQ batch`；NaCl 为 `281 extent ↔ 400 SVQ`，reference density 冻结为由 M7 exact mass 推出的 `2799.97507960832`；registry loader 在发布前交叉验证。world granular registry store 升至 v3，旧 v2 不猜测迁移并保留/LOCKED。 |
+| v5 audit-only capability/identity | `GranularStateSnapshot.requiresChemistry()` 统一 live composition、external source 与 escaped sink；capture、validate、reconstruct、restore/readback 全部按同一条件要求 capability 和 chemical fingerprint；readback 对惰性 audit 也立即校验 stable material ID。 |
+| `/remove` 丢固体 | release 即使没有 ownership sidecar 也先完整 restore；marker count 或 solid SVQ 任一非零都拒绝并提示先 `empty`。 |
+| 已发生的方块编辑导致 collision refresh 崩 tick | 采用“玩家方块优先”：预检并把对目标格有 exact share 的完整 active parcel、该格全部 deposit group 记入 granular escaped sink，再提交 micro-mask；不做 reactive partial 猜测。异常转为可读 granular-collision PAUSED。 |
+| `/empty` 不是联合 plan/commit | liquid/chemical 与 granular audit/composition release 分别先生成不可变 clear plan；两类 fallible preflight 全部通过后才提交 inventory clear。 |
+| `fluid-solver.md` 过期 | 已改为 M8 完成边界，明确 config v5、region-state v5、protocol/WAL v4 独立门控及 M9 禁止回填。 |
+| Qwen：Reynolds raw throw | 所有 active parcel 的 carrier sample 在本 substep 速度/反冲量提交前冻结并整体预检，避免先前 parcel 的反冲量改变后二次采样越界；服务层转为 granular-validity PAUSED，fixture 验证拒绝零修改。 |
+| Qwen：无质量 stencil 静默丢反冲量 | `addFaceImpulse` 返回是否实际施加；未施加分量累计为只读 boundary impulse，并进入管理员 `granstatus`。 |
+| Qwen：debug source 无权限 | `materialbucket` 与 `granularcontainer` 均要求 `COMMANDS_ADMIN`。 |
+
+关闭没有新增 selector、Gradle task 或长期常态门；覆盖扩展进既有 `granular` 与 `region-state` fixture。最近门已通过：
+
+- `granular` 完整门：2.395 秒；
+- `region-state,ownership,cut-cell,chemistry,audit`：5 个门合计 5.800 秒；
+- `granular,cut-cell,shape,lifecycle` 完整门：4 个门合计 3.342 秒；
+- 最终 `granular,region-state` 完整门：2 个门合计 4.626 秒；
+- 最终 `milestone`：20 个短门合计 9.907 秒；
+- `clean assemble compileTestJava`：离线干净构建成功。
+
+初稿要求追加真实 controller 方块编辑/重启场景；最终实现没有修改 Minecraft `VoxelShape` 采样适配或持久化恢复桥，
+新增接缝已分别由既有 `shape` 门和 solver collision/audit fixture 自动覆盖，且不涉及视觉行为，因此按 release 的风险阶梯
+不再要求重复人工场景。此前 M8 合并实机场景证据仍保留。
+
+这里的 world registry v3 是必要的 fail-closed 边界：已有 v2 snapshot 可能含无法守恒迁移的 per-extent 体积，不能按
+当前 datapack 重解释。文件保持原样，启动必须 LOCKED 并要求人工决定保留旧版本或在确认无须保留 M8 库存后建立新域。
+这不是自动修复或隐藏数据丢失。上述 finding 已关闭，M8 可正式重新关闭；M9 仍须使用独立热状态/格式评审。

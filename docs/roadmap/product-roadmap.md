@@ -102,7 +102,9 @@ M8 已以主 Mod 0.14.0 闭合：守恒 active parcel/deposit、统一排水与�
 通过自动守恒/形态门与合并实机场景，无需启动 MPM 评审。现行契约见
 [`../architecture/granular-state.md`](../architecture/granular-state.md)，验收记录见
 [`../progress/m8-granular-deposition.md`](../progress/m8-granular-deposition.md)。后续不得把 M9 热状态或 runtime-only
-气体状态回填进 v5。
+气体状态回填进 v5。2026-08-24 双 AI 关闭审阅进一步修复 precipitation 联合 occupancy、exact rule volume batch、
+v5 audit-only identity、remove/empty 与 runtime collision 边界，并完成最近门复验；world granular registry store v3
+由此取代无法安全重解释的 v2，旧 snapshot 保留并 LOCKED。
 
 ## M9：温度、相变和反应热
 

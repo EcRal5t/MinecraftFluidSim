@@ -343,3 +343,39 @@ M8.10 发布时尚不在完成索引中：当时只等待一个真实 controller
 M8 以主 Mod 0.14.0 完成：低成本模型同时满足守恒、形态、持久化、协议、容器事务、调度和实机可读性门，未触发
 MPM 停止门。下一产品阶段为 M9；CPU profile/GPU backend、气体 region-state v4 与黑三角视觉 fixture 仍按独立
 技术债推进，不混回 M8。
+
+## M8.16 双 AI 审阅修复与正式重新关闭（2026-08-24）
+
+- 对 `b611e02c^..4566b95` 的 GPT 静态审阅与 Qwen/opencode 独立审阅逐项交叉核实。Qwen 的 v5 audit-only
+  capability finding 与 Reynolds、boundary impulse、debug-source 权限三条观察均确认；GPT 另确认 precipitation
+  occupancy、固液规则声明体积、`remove`、runtime collision 和 `empty` 联合提交边界。原始报告与最终处置分别保存在
+  [`m8-gpt-review.md`](../archive/review/m8-gpt-review.md)、[`m8-qwen-review.md`](../archive/review/m8-qwen-review.md)。
+- precipitation create/merge 现都在 chemical/marker/composition/parcel 修改前复用生产 coupling 的 exact 8-cell
+  largest-remainder plan；merge candidate 先移除旧 shares。相邻 cut-cell/deposit capacity 不足走
+  `GranularPhaseTransferEngine.BlockedException`，双方真值不变。
+- 固液 rule 从不可表达亚 SVQ/extent 的单整数体积改为 bounded exact batch。NaCl 使用 `281 extent ↔ 400 SVQ`，
+  M7 exact species mass 推出的 reference density 为 `2799.97507960832`；loader 发布前要求 exact batch mass、SVQ 与材料
+  density 在纯浮点舍入容差内闭合。granular world registry store 因此升级为 v3；旧 v2 snapshot 不按当前 datapack
+  重解释或猜测迁移，文件保留并全局 LOCKED。
+- v5 用 `GranularStateSnapshot.requiresChemistry()` 统一 live solid composition、reactive external source 与 escaped sink。
+  capability、region chemical state、stored chemical fingerprint、granular registry 的 chemical dependency 在 validate、
+  reconstruct、restore/readback 全链一致；新增的是既有 `region-state` fixture 内的 reactive audit-only round-trip，未增加 task。
+- `/realwater remove` 即使没有 ownership sidecar 也先 restore 完整权威状态，并以 marker count 与 solid SVQ 同时判定精确空域；
+  非空只提示先 `empty`，不删除 region、不暗记 sink。`empty` 则先完成 liquid/chemical 与 granular 两份 clear plan 的全部
+  fallible preflight，再提交库存清除和 v5 checkpoint。
+- runtime Minecraft collision 采用玩家方块优先：对目标 solver cell 有 exact share 的完整 active parcel 与格内全部
+  deposit group 先汇总进 cumulative escaped sink、释放唯一 composition ownership，再提交 micro-mask；不猜 reactive
+  partial split，也不向未计划邻格搬移。预检/提交不变量失败转为 granular-collision PAUSED，不再逃出周期 server tick。
+- mechanics 在本 substep 任何 parcel 速度/流体反冲量写入前冻结全部 carrier sample 并预检 Reynolds validity；越界为
+  granular-validity PAUSED，后续 parcel 不会被前序反冲量诱发第二次未预检采样。v5 readback 对惰性 audit 的 stable material ID
+  也立即核对 authoritative granular registry。无质量 MAC stencil 的未施加反冲量作为 boundary impulse 单独累计并出现在
+  管理员 `granstatus`。`materialbucket` 与 `granularcontainer` debug source 均改为管理员权限。
+- 实现提交为 `92e9428`、`a312140`、`cb0bc4f`。最近门：`granular` 完整门通过（runner 2.395 秒）；
+  `region-state,ownership,cut-cell,chemistry,audit` 五门通过（合计 5.800 秒）；`compileJava compileTestJava` 成功。
+  最终复验的 `granular,cut-cell,shape,lifecycle` 四个完整门合计 3.342 秒；最后硬化后 `granular,region-state` 两个完整门
+  合计 4.626 秒、最终短 `milestone` 20 门合计 9.907 秒，
+  `clean assemble compileTestJava` 离线干净构建成功。覆盖均复用既有 selector/fixture，没有新增 Gradle task 或长期常态测试；
+  改动不涉及新客户端渲染或新 Minecraft shape 采样，既有 `shape` 与 solver collision fixture 已覆盖本次接缝，未追加人工场景。
+
+M8 再次正式关闭。该关闭不回填 M7 v3、region-state v4、region-state v5、protocol v4 或 container WAL v4 以承载
+M9 热状态；M9 开始前仍须独立冻结内能/热容量、温度派生、能量 source/sink、提交顺序、热休眠与新格式边界。

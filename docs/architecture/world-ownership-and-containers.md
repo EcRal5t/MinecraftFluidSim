@@ -21,7 +21,7 @@ Acquire 顺序固定为：
 4. 最后发布目标 region-state HEAD；
 5. 从已提交事务重建/发布 `committed.nbt`，再清理 WAL 与 WARNING。
 
-恢复只比较 HEAD 与 WAL 的 `baseGeneration`/`targetGeneration`：HEAD=base 回滚 preimage（玩家实体方块优先）；HEAD=target 完成 committed ownership，绝不恢复原水；其他代次、未知格式、损坏、身份不符或同代内容不一致全部 LOCKED 并保留证据。首次发布失败与 abort 必须清理自己创建的 staging；未知目录内容不得被当作 staging 删除。Release 仅在区域已精确排空时允许，仍走同类可恢复事务。已加载区域也必须逐区域检查 sidecar；未解决 WAL/WARNING、损坏内容或超前于活动 checkpoint 的 committed generation 会同时阻止步进、排空和所有普通 checkpoint（包括停服 checkpoint），不得只在 UNLOADED restore 时检查。
+恢复只比较 HEAD 与 WAL 的 `baseGeneration`/`targetGeneration`：HEAD=base 回滚 preimage（玩家实体方块优先）；HEAD=target 完成 committed ownership，绝不恢复原水；其他代次、未知格式、损坏、身份不符或同代内容不一致全部 LOCKED 并保留证据。首次发布失败与 abort 必须清理自己创建的 staging；未知目录内容不得被当作 staging 删除。Release/`remove` 必须先恢复完整权威 region-state，再同时确认 marker count 与 granular solid SVQ 都恰好为零；即使 ownership sidecar 不存在也不能跳过库存门，任一非零都拒绝并要求先执行 `empty`，不能删除 region 或把固体暗记为 sink。精确空域的 release 仍走同类可恢复事务。已加载区域也必须逐区域检查 sidecar；未解决 WAL/WARNING、损坏内容或超前于活动 checkpoint 的 committed generation 会同时阻止步进、排空和所有普通 checkpoint（包括停服 checkpoint），不得只在 UNLOADED restore 时检查。
 
 ## 容器真值
 
