@@ -16,8 +16,11 @@ import com.example.thermal.ThermalStateFunction;
 import com.example.thermal.ThermalTransport;
 
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 /** Owns the optional liquid-marker M9 energy column; FlipFluidDomain only supplies carrier/cell orchestration. */
 final class FlipThermalState {
@@ -54,6 +57,39 @@ final class FlipThermalState {
 			}
 		}
 	}
+	enum GranularReactionKind { ADD_ACTIVE, REPLACE_ACTIVE, REMOVE_ACTIVE, REPLACE_DEPOSIT, REMOVE_DEPOSIT }
+
+	record ReactionMarker(int marker, double mass, ChemicalMixtureRecord mixture) {
+		ReactionMarker {
+			if (marker < 0 || !(Double.isFinite(mass) && mass > 0.0) || mixture == null) {
+				throw new IllegalArgumentException("Thermal reaction marker is invalid");
+			}
+		}
+	}
+
+	record GranularReactionEdit(
+			GranularReactionKind kind, int activeOrdinal, GranularEnergyColumn.DepositKey depositKey,
+			int materialHandle, double finalMass, Map<String, Long> finalComposition
+	) {
+		GranularReactionEdit {
+			if (kind == null || finalComposition == null) {
+				throw new IllegalArgumentException("Thermal granular reaction edit is missing");
+			}
+			finalComposition = Map.copyOf(finalComposition);
+			boolean active = kind == GranularReactionKind.ADD_ACTIVE || kind == GranularReactionKind.REPLACE_ACTIVE
+					|| kind == GranularReactionKind.REMOVE_ACTIVE;
+			boolean add = kind == GranularReactionKind.ADD_ACTIVE;
+			boolean remove = kind == GranularReactionKind.REMOVE_ACTIVE || kind == GranularReactionKind.REMOVE_DEPOSIT;
+			if (active != (depositKey == null) || active && add != (activeOrdinal < 0)
+					|| !add && active && activeOrdinal < 0 || !active && activeOrdinal != -1
+					|| remove && (finalMass != 0.0 || materialHandle != -1 || !finalComposition.isEmpty())
+					|| !remove && (materialHandle < 0 || !(Double.isFinite(finalMass) && finalMass > 0.0))) {
+				throw new IllegalArgumentException("Thermal granular reaction edit shape is invalid");
+			}
+		}
+	}
+
+	record ReactionPlan(int cell, SignedDyadic cellEnergy, SignedDyadic inventoryBefore, double equilibriumTemperatureK) { }
 
 	private final ThermalRegistry registry;
 	private final ThermalStateFunction stateFunction;
@@ -215,6 +251,84 @@ final class FlipThermalState {
 				thermalHandle, candidateMass, candidateMixture, markers.chemicalRegistry());
 		double sensible = (internalEnergy[marker] - base) / candidateMass;
 		material.temperatureForSensibleSpecificEnergy(sensible);
+	}
+
+	ReactionPlan requireGranularReaction(
+			int cell, List<ReactionMarker> markerReplacements, GranularReactionEdit granularEdit,
+			MarkerContext markers
+	) {
+		if (cell < 0 || cell >= cellGrid.cellCount() || markerReplacements == null || granularEdit == null) {
+			throw new IllegalArgumentException("Thermal granular reaction plan is invalid");
+		}
+		HashMap<Integer, ReactionMarker> replacements = new HashMap<>();
+		for (ReactionMarker replacement : markerReplacements) {
+			if (replacement.marker() >= markers.markerCount() || markers.cell(replacement.marker()) != cell
+					|| replacements.put(replacement.marker(), replacement) != null) {
+				throw new IllegalArgumentException("Thermal reaction marker set is not unique in its cell");
+			}
+		}
+		ThermalCellGrid.CarrierAccess current = carrierAccess(markers);
+		SignedDyadic cellEnergy = SignedDyadic.ZERO;
+		for (int carrier = 0; carrier < current.carrierCount(); carrier++) if (current.cell(carrier) == cell) {
+			cellEnergy = cellEnergy.add(SignedDyadic.of(current.internalEnergy(carrier)));
+		}
+		ArrayList<ThermalStateFunction.InventoryPortion> finalInventory = new ArrayList<>();
+		for (int marker = 0; marker < markers.markerCount(); marker++) if (markers.cell(marker) == cell) {
+			ReactionMarker replacement = replacements.remove(marker);
+			double mass = replacement == null ? markers.mass(marker) : replacement.mass();
+			ChemicalMixtureRecord mixture = replacement == null ? markers.mixture(marker) : replacement.mixture();
+			finalInventory.add(new ThermalStateFunction.InventoryPortion(
+					materialByFluidHandle[markers.fluidMaterialHandle(marker)], mass,
+					stableAmounts(mixture, markers.chemicalRegistry())));
+		}
+		if (!replacements.isEmpty()) throw new IllegalArgumentException("Thermal reaction names a missing liquid marker");
+		for (CoherentPhaseStore.Group group : coherentPhases.snapshot()) if (group.cell() == cell) {
+			finalInventory.add(new ThermalStateFunction.InventoryPortion(registry.materialHandle(group.phaseId()), group.mass(),
+					group.composition() == null ? Map.of() : group.composition().stableAmounts()));
+		}
+		boolean matchedGranular = granularEdit.kind() == GranularReactionKind.ADD_ACTIVE;
+		for (int active = 0; active < markers.activeParcelCount(); active++) if (markers.activeParcelCell(active) == cell) {
+			if (granularEdit.activeOrdinal() == active) {
+				matchedGranular = true;
+				if (granularEdit.kind() != GranularReactionKind.REMOVE_ACTIVE) addGranularPortion(
+						finalInventory, granularEdit.materialHandle(), granularEdit.finalMass(),
+						granularEdit.finalComposition());
+			} else addGranularPortion(finalInventory, markers.activeParcelMaterial(active),
+					markers.activeParcelMass(active), markers.solidComposition(markers.activeParcelComposition(active)));
+		}
+		for (GranularEnergyColumn.DepositKey key : markers.depositKeys()) if (key.cell() == cell) {
+			if (key.equals(granularEdit.depositKey())) {
+				matchedGranular = true;
+				if (granularEdit.kind() != GranularReactionKind.REMOVE_DEPOSIT) addGranularPortion(
+						finalInventory, granularEdit.materialHandle(), granularEdit.finalMass(),
+						granularEdit.finalComposition());
+			} else addGranularPortion(finalInventory, key.materialHandle(), markers.depositMass(key),
+					markers.solidComposition(key.compositionHandle()));
+		}
+		if (!matchedGranular) throw new IllegalArgumentException("Thermal reaction names a missing granular carrier");
+		if (granularEdit.kind() == GranularReactionKind.ADD_ACTIVE) {
+			addGranularPortion(finalInventory, granularEdit.materialHandle(), granularEdit.finalMass(),
+					granularEdit.finalComposition());
+			granularEnergy.requireAddActive(0.0);
+		}
+		ThermalStateFunction.State state = stateFunction.stateForInventory(finalInventory, cellEnergy.toDouble());
+		return new ReactionPlan(cell, cellEnergy, exactEnergy(markers.markerCount()), state.temperatureK());
+	}
+
+	void addGranularReactionActive() { granularEnergy.addActive(0.0); }
+	double takeGranularReactionActive(int active, long takenSvq, long totalSvq) {
+		return takenSvq == totalSvq ? granularEnergy.removeActiveSwap(active)
+				: granularEnergy.takeActivePortion(active, takenSvq, totalSvq);
+	}
+	double takeGranularReactionDeposit(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
+		return granularEnergy.takeDeposit(key, takenSvq, totalSvq);
+	}
+	void commitGranularReaction(ReactionPlan plan, MarkerContext markers) {
+		if (plan == null) throw new IllegalArgumentException("Thermal granular reaction plan is missing");
+		cellGrid.rebuildWithCellEnergy(carrierAccess(markers), plan.cell(), plan.cellEnergy().toDouble());
+		double[] target = cellGrid.copyInternalEnergy();
+		cellGrid.setCellInternalEnergies(target);
+		audit = audit.withRoundoff(exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore()));
 	}
 
 	double temperatureInCell(int cell, MarkerContext markers) {
@@ -570,6 +684,28 @@ final class FlipThermalState {
 				+ mass * material.sensibleSpecificEnergyAt(temperatureK);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Granular modeled energy is invalid");
 		return energy;
+	}
+
+	private void addGranularPortion(
+			List<ThermalStateFunction.InventoryPortion> inventory, int granularMaterial,
+			double mass, Map<String, Long> composition
+	) {
+		if (granularMaterial < 0 || granularMaterial >= materialByGranularHandle.length) {
+			throw new IllegalArgumentException("Unknown granular reaction thermal material");
+		}
+		inventory.add(new ThermalStateFunction.InventoryPortion(
+				materialByGranularHandle[granularMaterial], mass, composition));
+	}
+
+	private static Map<String, Long> stableAmounts(
+			ChemicalMixtureRecord mixture, ChemicalRegistry chemicalRegistry
+	) {
+		if (mixture == null) return Map.of();
+		if (chemicalRegistry == null) throw new IllegalArgumentException("Thermal chemical registry is missing");
+		TreeMap<String, Long> result = new TreeMap<>();
+		for (int entry = 0; entry < mixture.entryCount(); entry++) result.put(
+				chemicalRegistry.species(mixture.speciesHandle(entry)).id(), mixture.amountAt(entry));
+		return Map.copyOf(result);
 	}
 
 	private void validateTemperature(int marker, double expected, MarkerContext markers) {

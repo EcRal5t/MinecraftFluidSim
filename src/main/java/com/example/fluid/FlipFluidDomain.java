@@ -1132,9 +1132,6 @@ public final class FlipFluidDomain {
 		if (Float.floatToRawIntBits(config.cellSize()) != Float.floatToRawIntBits(0.5F)) {
 			throw new IllegalArgumentException("M9 thermal state currently requires a 0.5 m solver cell");
 		}
-		if (precipitationEnabled) {
-			throw new IllegalStateException("Thermal binding is blocked until solid-liquid reaction energy joins its commit");
-		}
 		bindMaterialRegistry(liquidRegistry);
 		if (thermalState != null) {
 			if (!thermalState.fingerprint().equals(registry.fingerprint())) {
@@ -1642,6 +1639,8 @@ public final class FlipFluidDomain {
 				particleMass[marker] - zeroResidual.exactSpeciesMass(chemicalParcels.registry()).toDouble());
 		chemicalParcels.requireCompatible(record,
 				materialRegistry.material(particleMaterialHandle[marker]).id(), indicator);
+		if (thermalState != null) thermalState.requireReactionState(
+				marker, record, particleMass[marker], thermalMarkerContext());
 		chemicalParcels.assign(marker, record, indicator);
 		chemicalParcels.markDirtyCell(particleCellIndex(marker));
 	}
@@ -3686,9 +3685,15 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		int material = granularRegistry.materialHandle(rule.solidMaterialId());
 		PrecipitationMerge merge = precipitationMerge(cell, material, plan, position, carrierMarker, occupiedBefore);
 		if (merge != null) {
+			FlipThermalState.ReactionPlan thermalPlan = thermalState == null ? null : thermalState.requireGranularReaction(
+					cell, thermalReactionMarkers(plan), new FlipThermalState.GranularReactionEdit(
+							FlipThermalState.GranularReactionKind.REPLACE_ACTIVE, merge.parcelIndex(), null,
+							material, merge.parcel().mass(),
+							merge.composition().stableAmounts(chemicalParcels.registry())), thermalMarkerContext());
 			chemicalParcels.commitPlannedReplacements(markers, mixtures); applyMarkerUpdates(plan);
 			solidCompositions.overwrite(merge.compositionHandle(), merge.composition());
 			granularParcels.overwrite(merge.parcelIndex(), merge.parcel());
+			if (thermalPlan != null) thermalState.commitGranularReaction(thermalPlan, thermalMarkerContext());
 			markPhaseTransferDirty(cell);
 			return;
 		}
@@ -3708,9 +3713,17 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			solidCompositions.release(composition);
 			throw new GranularPhaseTransferEngine.BlockedException("Precipitation active parcel budget exceeded");
 		}
+		FlipThermalState.ReactionPlan thermalPlan = thermalState == null ? null : thermalState.requireGranularReaction(
+				cell, thermalReactionMarkers(plan), new FlipThermalState.GranularReactionEdit(
+						FlipThermalState.GranularReactionKind.ADD_ACTIVE, -1, null, material, parcel.mass(),
+						plan.transferredComposition().stableAmounts(chemicalParcels.registry())), thermalMarkerContext());
 		try { chemicalParcels.commitPlannedReplacements(markers, mixtures); }
 		catch (RuntimeException failure) { solidCompositions.release(composition); throw failure; }
 		applyMarkerUpdates(plan); granularParcels.add(parcel);
+		if (thermalPlan != null) {
+			thermalState.addGranularReactionActive();
+			thermalState.commitGranularReaction(thermalPlan, thermalMarkerContext());
+		}
 		markPhaseTransferDirty(cell);
 	}
 
@@ -3794,6 +3807,24 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 		int[] markers = updateMarkers(plan); ChemicalMixtureRecord[] mixtures = updateMixtures(plan);
 		chemicalParcels.requireCanCommitPlannedReplacements(markers, mixtures);
+		GranularEnergyColumn.DepositKey thermalDepositKey = solid.deposit()
+				? new GranularEnergyColumn.DepositKey(cell, solid.materialHandle(), solid.compositionHandle()) : null;
+		FlipThermalState.GranularReactionKind thermalKind = solid.deposit()
+				? (full ? FlipThermalState.GranularReactionKind.REMOVE_DEPOSIT
+				: FlipThermalState.GranularReactionKind.REPLACE_DEPOSIT)
+				: (full ? FlipThermalState.GranularReactionKind.REMOVE_ACTIVE
+				: FlipThermalState.GranularReactionKind.REPLACE_ACTIVE);
+		Map<String, Long> finalComposition = full ? Map.of()
+				: remaining.stableAmounts(chemicalParcels.registry());
+		FlipThermalState.ReactionPlan thermalPlan = thermalState == null ? null : thermalState.requireGranularReaction(
+				cell, thermalReactionMarkers(plan), new FlipThermalState.GranularReactionEdit(thermalKind,
+						solid.deposit() ? -1 : solid.index(), thermalDepositKey,
+						full ? -1 : solid.materialHandle(), full ? 0.0 : remainingMass,
+						finalComposition), thermalMarkerContext());
+		if (thermalState != null) {
+			if (solid.deposit()) thermalState.previewDepositTake(thermalDepositKey, removedSvq, solid.solidSvq());
+			else thermalState.previewActiveTake(solid.index(), removedSvq, solid.solidSvq());
+		}
 		chemicalParcels.commitPlannedReplacements(markers, mixtures); applyMarkerUpdates(plan);
 		if (solid.deposit()) granularDeposits.takeCompositionAware(cell, solid.materialHandle(),
 				solid.compositionHandle(), removedSvq);
@@ -3804,8 +3835,14 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 					parcel.velocityX(), parcel.velocityY(), parcel.velocityZ(), parcel.solidVolumeSvq() - removedSvq,
 					remainingMass, parcel.materialHandle(), parcel.solidCompositionHandle(), parcel.contactAge(), parcel.flags()));
 		}
+		if (thermalPlan != null) {
+			if (solid.deposit()) thermalState.takeGranularReactionDeposit(
+					thermalDepositKey, removedSvq, solid.solidSvq());
+			else thermalState.takeGranularReactionActive(solid.index(), removedSvq, solid.solidSvq());
+		}
 		if (full) solidCompositions.release(solid.compositionHandle()); else solidCompositions.overwrite(
 				solid.compositionHandle(), remaining);
+		if (thermalPlan != null) thermalState.commitGranularReaction(thermalPlan, thermalMarkerContext());
 		markPhaseTransferDirty(cell);
 	}
 
@@ -3833,6 +3870,15 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		ChemicalMixtureRecord[] result = new ChemicalMixtureRecord[plan.markerUpdates().size()];
 		for (int index = 0; index < result.length; index++) result[index] = plan.markerUpdates().get(index).mixture();
 		return result;
+	}
+
+	private List<FlipThermalState.ReactionMarker> thermalReactionMarkers(
+			GranularPhaseTransferEngine.Plan plan
+	) {
+		ArrayList<FlipThermalState.ReactionMarker> result = new ArrayList<>(plan.markerUpdates().size());
+		for (GranularPhaseTransferEngine.MarkerUpdate update : plan.markerUpdates()) result.add(
+				new FlipThermalState.ReactionMarker(update.marker(), update.mass(), update.mixture()));
+		return List.copyOf(result);
 	}
 
 	private void applyMarkerUpdates(GranularPhaseTransferEngine.Plan plan) {

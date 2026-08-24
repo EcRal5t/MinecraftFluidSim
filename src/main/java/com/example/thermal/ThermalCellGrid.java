@@ -39,6 +39,28 @@ public final class ThermalCellGrid {
 	}
 
 	public void rebuild(CarrierAccess carrierAccess) {
+		rebuildTopology(carrierAccess);
+		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
+			conductivity[cell] /= totalVolume[cell];
+			solveCell(cell, internalEnergy[cell]);
+		}
+	}
+
+	/** Rebuilds changed carrier topology while solving one cell against its pre-commit conserved U. */
+	public void rebuildWithCellEnergy(CarrierAccess carrierAccess, int targetCell, double targetEnergy) {
+		if (targetCell < 0 || targetCell >= cellCount || !Double.isFinite(targetEnergy)) {
+			throw new IllegalArgumentException("Thermal rebuild override is invalid");
+		}
+		rebuildTopology(carrierAccess);
+		if (carrierCount[targetCell] == 0) throw new IllegalArgumentException("Thermal reaction emptied its carrier cell");
+		internalEnergy[targetCell] = targetEnergy;
+		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
+			conductivity[cell] /= totalVolume[cell];
+			solveCell(cell, internalEnergy[cell]);
+		}
+	}
+
+	private void rebuildTopology(CarrierAccess carrierAccess) {
 		if (carrierAccess == null) throw new IllegalArgumentException("Thermal carrier access is missing");
 		this.carriers = carrierAccess;
 		if (carrierAccess.carrierCount() > carrierNext.length) carrierNext = new int[carrierAccess.carrierCount()];
@@ -63,10 +85,6 @@ public final class ThermalCellGrid {
 			internalEnergy[cell] += energy;
 			totalVolume[cell] += volume;
 			conductivity[cell] += volume * carrierAccess.material(carrier).conductivityEuPerSecondMeterK();
-		}
-		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
-			conductivity[cell] /= totalVolume[cell];
-			solveCell(cell, internalEnergy[cell]);
 		}
 	}
 

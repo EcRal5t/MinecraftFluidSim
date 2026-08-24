@@ -1,6 +1,7 @@
 package com.example.fluid;
 
 import com.example.chemistry.ChemicalLimits;
+import com.example.chemistry.BuiltinChemicalDefinitions;
 import com.example.chemistry.ChemicalMixtureRecord;
 import com.example.chemistry.ChemicalParcelStore;
 import com.example.chemistry.ChemicalPhaseDefinition;
@@ -43,6 +44,7 @@ public final class M9ThermalValidation {
 		piecewiseStateFunctionRoundTrips();
 		reactionHeatIsPathIndependentStateEnergy();
 		reactionCommitValidatesEnergyBeforeMutation();
+		granularReactionHeatUsesOneConservedCellEnergy();
 		phasePlateauUsesTheStateFunctionGap();
 		coherentPhaseInventoryAndExactBatchPlanning();
 		granularEnergyColumnTransactions();
@@ -224,6 +226,78 @@ public final class M9ThermalValidation {
 						marker, mixture, candidateMass, markers));
 		require(thermal.exactEnergy(1).equals(before) && close(thermal.temperature(0, markers), 310.0),
 				"reaction heat was not derived from conserved marker internal energy");
+	}
+
+	private static void granularReactionHeatUsesOneConservedCellEnergy() {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 1.0F / 20.0F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		domain.setVolume(1, 1, 1, 0.1F);
+		domain.bindGranular(granular, liquids);
+		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		domain.setMarkerChemical(0, Map.of(
+				BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
+				BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), true);
+		domain.bindThermal(reactiveGranularThermalRegistry(liquids, granular), liquids, 300.0);
+		domain.setPrecipitationEnabled(true);
+		SignedDyadic beforePrecipitation = domain.exactInternalEnergy();
+		domain.step();
+		double precipitationTemperature = domain.thermalTemperatureInCell(1, 1, 1);
+		require(domain.lastPhaseTransferStats().precipitations() == 1
+				&& precipitationTemperature > 300.0
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+				&& Math.abs(domain.exactInternalEnergy().subtract(beforePrecipitation).toDouble()) <= 1.0E-8,
+				"solid formation energy did not emerge as conserved-cell precipitation heat: T="
+						+ precipitationTemperature + " deltaU="
+						+ domain.exactInternalEnergy().subtract(beforePrecipitation));
+
+		for (int marker = 0; marker < domain.particleCount(); marker++) domain.setMarkerChemical(
+				marker, Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L), (marker & 1) == 0);
+		SignedDyadic beforeDissolution = domain.exactInternalEnergy();
+		double temperatureBeforeDissolution = domain.thermalTemperatureInCell(1, 1, 1);
+		boolean dissolved = false;
+		for (int step = 0; step < 16 && domain.totalGranularSolidVolumeSvq() > 0L; step++) {
+			domain.step(); dissolved |= domain.lastPhaseTransferStats().dissolutions() > 0;
+		}
+		double dissolutionTemperature = domain.thermalTemperatureInCell(1, 1, 1);
+		require(dissolved && domain.totalGranularSolidVolumeSvq() == 0L
+				&& dissolutionTemperature < temperatureBeforeDissolution
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+				&& Math.abs(domain.exactInternalEnergy().subtract(beforeDissolution).toDouble()) <= 1.0E-8,
+				"dissolution did not consume sensible energy through the same state function: beforeT="
+						+ temperatureBeforeDissolution + " afterT=" + dissolutionTemperature);
+	}
+
+	private static ThermalRegistry reactiveGranularThermalRegistry(
+			FluidMaterialRegistry liquids, GranularRegistry granular
+	) {
+		java.util.ArrayList<ThermalMaterialDefinition> materials = new java.util.ArrayList<>();
+		for (int handle = 0; handle < liquids.size(); handle++) materials.add(new ThermalMaterialDefinition(
+				"test:thermal/reactive_liquid_" + handle, ThermalMaterialDefinition.CarrierKind.LIQUID,
+				liquids.material(handle).id(), 300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 100.0))));
+		for (int handle = 0; handle < granular.materials().size(); handle++) materials.add(
+				new ThermalMaterialDefinition("test:thermal/reactive_granular_" + handle,
+						ThermalMaterialDefinition.CarrierKind.GRANULAR, granular.material(handle).id(),
+						300.0, 0.0, 1.0,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 100.0))));
+		java.util.ArrayList<ThermalSpeciesOffset> offsets = new java.util.ArrayList<>();
+		for (int material = 0; material < materials.size(); material++) {
+			ThermalMaterialDefinition host = materials.get(material);
+			for (int species = 0; species < BuiltinChemicalDefinitions.REGISTRY.species().size(); species++) {
+				String speciesId = BuiltinChemicalDefinitions.REGISTRY.species(species).id();
+				boolean precipitate = host.carrierKind() == ThermalMaterialDefinition.CarrierKind.GRANULAR
+						&& host.carrierId().equals(BuiltinGranularDefinitions.PRECIPITATE)
+						&& (speciesId.equals(BuiltinChemicalDefinitions.NA_PLUS)
+						|| speciesId.equals(BuiltinChemicalDefinitions.CL_MINUS));
+				offsets.add(new ThermalSpeciesOffset("test:thermal_offset/m" + material + "_s" + species,
+						speciesId, host.id(), precipitate ? ExactRational.of(-1) : ExactRational.ZERO));
+			}
+		}
+		return new ThermalRegistry(materials, offsets, List.of(), BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
+				granular.fingerprint());
 	}
 
 	private static void phasePlateauUsesTheStateFunctionGap() {
