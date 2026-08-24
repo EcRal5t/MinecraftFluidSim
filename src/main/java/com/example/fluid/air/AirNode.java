@@ -14,23 +14,24 @@ final class AirNode {
 	/** One nanovolume quantum in m³. */
 	static final double NANO_VOLUME = 1.0E-9;
 
-	private long standardVolumeNanos;
+	private GasInventory inventory;
 	private double availableVolume;
 
-	AirNode(double availableVolume, long standardVolumeNanos) {
+	AirNode(double availableVolume, GasInventory inventory) {
 		setAvailableVolume(availableVolume);
-		if (standardVolumeNanos < 0L) throw new IllegalArgumentException("Gas inventory cannot be negative");
-		this.standardVolumeNanos = standardVolumeNanos;
+		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
+		this.inventory = inventory;
 	}
 
-	long standardVolumeNanos() { return standardVolumeNanos; }
+	long standardVolumeNanos() { return inventory.standardVolumeNanos(); }
 
-	void setStandardVolumeNanos(long value) {
-		if (value < 0L) throw new IllegalArgumentException("Gas inventory cannot be negative");
-		this.standardVolumeNanos = value;
+	GasInventory inventory() { return inventory; }
+	void setInventory(GasInventory value) {
+		if (value == null) throw new IllegalArgumentException("Gas inventory is missing");
+		inventory = value;
 	}
 
-	double standardVolume() { return standardVolumeNanos * NANO_VOLUME; }
+	double standardVolume() { return standardVolumeNanos() * NANO_VOLUME; }
 
 	double availableVolume() { return availableVolume; }
 

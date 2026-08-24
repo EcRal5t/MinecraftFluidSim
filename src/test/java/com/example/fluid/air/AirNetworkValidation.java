@@ -1,5 +1,9 @@
 package com.example.fluid.air;
 
+import com.example.chemistry.ExactRational;
+
+import java.util.List;
+
 /** Standalone M5 gas-network gate: isothermal state equation, finite-rate orifice equalization and the exact inventory ledger. */
 public final class AirNetworkValidation {
 	private AirNetworkValidation() { }
@@ -10,6 +14,7 @@ public final class AirNetworkValidation {
 		validateHoleOpenClose();
 		validateSplitMergeVentLedger();
 		validateAmbientInteraction();
+		validateComponentTransport();
 		validateGuards();
 		System.out.println("M5 air network gate passed: isothermal EoS, finite-rate orifice equalization, "
 				+ "hole open/close freeze and exact nanovolume ledger");
@@ -187,12 +192,37 @@ public final class AirNetworkValidation {
 		checkLedger(network, "guard probes");
 	}
 
+	private static void validateComponentTransport() {
+		GasRegistry registry = new GasRegistry(List.of(
+				new GasComponentDefinition("test:alpha", 1.0, 0.25,
+						List.of(new GasComponentDefinition.DefaultSpecies("test:a", ExactRational.of(3_000_000_000L)))),
+				new GasComponentDefinition("test:beta", 2.0, 0.5,
+						List.of(new GasComponentDefinition.DefaultSpecies("test:b", ExactRational.of(6_000_000_000L))))),
+				List.of(new GasRegistry.AmbientFraction("test:alpha", ExactRational.parse("1/3")),
+						new GasRegistry.AmbientFraction("test:beta", ExactRational.parse("2/3"))));
+		AirNetwork network = new AirNetwork(registry);
+		int source = network.addNode(3.0, 3.0);
+		int target = network.addNode(1.0, 1.0);
+		GasInventory initial = network.inventory(source).merge(network.inventory(target));
+		int[] split = network.splitNode(source, 1.0, 2.0);
+		network.mergeNodes(target, split[1]);
+		network.addOrMergeEdge(target, split[0], 0.01, 0.65);
+		for (int step = 0; step < 20; step++) network.stepEdges(0.05);
+		GasInventory after = network.inventory(target).merge(network.inventory(split[0]));
+		check(after.standardVolumeNanos() == initial.standardVolumeNanos(),
+				"component transport changed total standard volume");
+		check(after.components().stream().map(GasComponentAmount::componentId).toList()
+				.equals(List.of("test:alpha", "test:beta")), "component transport lost stable identities");
+		check(network.auditClosed(), "component transport did not close mass/species audit");
+	}
+
 	private static void checkLedger(AirNetwork network, String context) {
 		long sealed = network.sealedInventoryNanos();
 		if (sealed + network.ventedNanos() != network.drawnFromAmbientNanos()) {
 			throw new AssertionError("gas ledger identity broken after " + context + ": sealed=" + sealed
 					+ " vented=" + network.ventedNanos() + " drawn=" + network.drawnFromAmbientNanos());
 		}
+		if (!network.auditClosed()) throw new AssertionError("gas component audit broken after " + context);
 	}
 
 	private static void checkRelative(double actual, double expected, String what) {

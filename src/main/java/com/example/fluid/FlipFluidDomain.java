@@ -7,6 +7,7 @@ import com.example.chemistry.ChemicalRegistry;
 import com.example.chemistry.ChemicalTransferLedger;
 import com.example.chemistry.ChemicalLimits;
 import com.example.fluid.air.AirNetwork;
+import com.example.fluid.air.GasInventory;
 import com.example.granular.GranularCarrier;
 import com.example.granular.GranularAuditLedger;
 import com.example.granular.GranularCouplingFields;
@@ -3076,7 +3077,10 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				: airScanner.scan(solid, markerCount, volume, cutCells, pressureGranularCoupling);
 		int sealed = result.sealedNodeCount();
 		double[] availableVolumes = result.sealedAvailableVolume();
-		long[] inventoriesNanos = new long[sealed];
+		ArrayList<GasInventory> inventories = new ArrayList<>(sealed);
+		for (int node = 0; node < sealed; node++) inventories.add(GasInventory.EMPTY);
+		GasInventory sourceDelta = GasInventory.EMPTY;
+		GasInventory sinkDelta = GasInventory.EMPTY;
 		if (previousSealedNodeCount > 0 && sealed > 0) {
 			int previous = previousSealedNodeCount;
 			int[] ambientOverlap = new int[previous + 1];
@@ -3095,40 +3099,55 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			}
 			boolean[] contributed = new boolean[sealed + 1];
 			for (int old = 1; old <= previous; old++) {
-				long inventory = airNetwork.standardVolumeNanos(old);
-				if (inventory <= 0L || ambientOverlap[old] > 0) continue;
+				GasInventory inventory = airNetwork.inventory(old);
+				if (inventory.isEmpty()) continue;
+				if (ambientOverlap[old] > 0) {
+					sinkDelta = sinkDelta.merge(inventory);
+					continue;
+				}
 				Map<Long, Integer> oldOverlap = overlap.subMap(
 						(long) old << 32, (long) (old + 1) << 32);
-				int totalOverlap = 0;
 				int destinations = 0;
 				for (int count : oldOverlap.values()) {
-					totalOverlap += count;
 					destinations++;
 				}
-				if (destinations == 0) continue;
-				long assigned = 0L;
-				int remaining = destinations;
+				if (destinations == 0) {
+					sinkDelta = sinkDelta.merge(inventory);
+					continue;
+				}
+				long[] weights = new long[destinations];
+				int weight = 0;
+				for (int count : oldOverlap.values()) weights[weight++] = count;
+				List<GasInventory> parts = inventory.partition(weights);
+				int part = 0;
 				for (Map.Entry<Long, Integer> entry : oldOverlap.entrySet()) {
 					int node = (int) (entry.getKey() & 0xffffffffL);
-					remaining--;
-					long share = remaining == 0 ? inventory - assigned
-							: (long) Math.floor((double) inventory * entry.getValue() / totalOverlap);
-					assigned += share;
-					inventoriesNanos[node - 1] += share;
+					inventories.set(node - 1, inventories.get(node - 1).merge(parts.get(part++)));
 					contributed[node] = true;
 				}
 			}
 			for (int node = 1; node <= sealed; node++) {
 				if (!contributed[node]) {
-					inventoriesNanos[node - 1] = Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1]));
+					GasInventory created = airNetwork.ambientInventory(
+							Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1])));
+					inventories.set(node - 1, created);
+					sourceDelta = sourceDelta.merge(created);
 				}
 			}
 		} else {
+			if (previousSealedNodeCount > 0) {
+				for (int node = 1; node <= previousSealedNodeCount; node++) {
+					sinkDelta = sinkDelta.merge(airNetwork.inventory(node));
+				}
+			}
 			for (int node = 1; node <= sealed; node++) {
-				inventoriesNanos[node - 1] = Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1]));
+				GasInventory created = airNetwork.ambientInventory(
+						Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1])));
+				inventories.set(node - 1, created);
+				sourceDelta = sourceDelta.merge(created);
 			}
 		}
-		airNetwork.remapNodes(availableVolumes, inventoriesNanos);
+		airNetwork.remapNodes(availableVolumes, inventories, sourceDelta, sinkDelta);
 		for (AirCavityScanner.GeometricEdge edge : result.geometricEdges()) {
 			airNetwork.addOrMergeEdge(edge.firstNode(), edge.secondNode(), edge.areaSquareMeters(), 0.65);
 		}
