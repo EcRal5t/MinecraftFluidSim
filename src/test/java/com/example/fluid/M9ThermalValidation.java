@@ -70,6 +70,7 @@ public final class M9ThermalValidation {
 		containerTransferCarriesAuthoritativeEnergy();
 		liquidTransportAndHandoffCloseEnergy();
 		partialCutFaceUsesPlicThermalContact();
+		productionFixedBoundaryFieldAuditsExchange();
 		fixedBoundaryAuditsAndFailedStepRollsBack();
 		reseedingMovesEnergyWithMarkerTruth();
 		System.out.println("M9 thermal validation passed");
@@ -1213,6 +1214,30 @@ public final class M9ThermalValidation {
 				"partial cut/PLIC contact was dropped from production thermal transport");
 		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"partial cut/PLIC thermal contact did not close its energy audit");
+	}
+
+	private static void productionFixedBoundaryFieldAuditsExchange() {
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		ThermalMaterialDefinition water = new ThermalMaterialDefinition("realwater:thermal/production_boundary_water",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
+				300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 400.0, 4_000.0)));
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = new FlipFluidDomain(4, 3, 3, config, 512);
+		domain.setVolume(0, 1, 1, 1.0F);
+		domain.bindThermal(new ThermalRegistry(List.of(water)), liquids, 300.0);
+		double[] boundaries = new double[4 * 3 * 3 * 6];
+		java.util.Arrays.fill(boundaries, Double.NaN);
+		boundaries[((1 * 3 + 1) * 4) * 6] = 350.0; // -x domain wall of cell (0,1,1)
+		require(domain.replaceThermalBoundaryTemperatures(boundaries)
+				&& !domain.replaceThermalBoundaryTemperatures(boundaries),
+				"production thermal boundary field did not detect an actual world edit exactly once");
+		ThermalTransport.Stats transport = domain.stepThermalOnly(1.0);
+		require(transport.reservoirExchange().compareTo(SignedDyadic.ZERO) > 0
+				&& domain.thermalTemperatureInCell(0, 1, 1) > 300.0
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"production fixed boundary did not heat and audit the authoritative carrier");
 	}
 
 	private static void fixedBoundaryAuditsAndFailedStepRollsBack() {

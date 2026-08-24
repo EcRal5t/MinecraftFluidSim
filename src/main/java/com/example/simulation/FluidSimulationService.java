@@ -128,6 +128,7 @@ public final class FluidSimulationService {
 	private final boolean phaseChangeFeatureEnabled;
 	private final ThermalRegistry thermalRegistry;
 	private final GasRegistry gasRegistry;
+	private final ThermalBoundaryResolver thermalBoundaryResolver;
 	private List<String> ownershipIssues = List.of();
 	private String lastTakeoverFailure;
 	private boolean takeoverMaintenanceEnabled;
@@ -229,6 +230,7 @@ public final class FluidSimulationService {
 		}
 		GasRegistry bootGasRegistry = null;
 		ThermalRegistry bootThermalRegistry = null;
+		ThermalBoundaryResolver bootThermalBoundaryResolver = null;
 		if (serverConfig.thermalEnabled()) {
 			try {
 				GasRegistryStore gasStore = new GasRegistryStore(worldRoot);
@@ -291,7 +293,11 @@ public final class FluidSimulationService {
 								bootThermalRegistry.fingerprint());
 					}
 				}
+				bootThermalBoundaryResolver = new ThermalBoundaryResolver(bootThermalRegistry);
 			} catch (IOException | RuntimeException exception) {
+				bootGasRegistry = null;
+				bootThermalRegistry = null;
+				bootThermalBoundaryResolver = null;
 				configurationLocked = true;
 				RealWaterMod.LOGGER.error("Thermal/gas registry is LOCKED; thermal state and controller creation remain disabled", exception);
 			}
@@ -308,6 +314,7 @@ public final class FluidSimulationService {
 				&& granularFeatureEnabled && chemistryFeatureEnabled && granularRegistry.hasReactiveRules();
 		gasRegistry = bootGasRegistry;
 		thermalRegistry = bootThermalRegistry;
+		thermalBoundaryResolver = bootThermalBoundaryResolver;
 		thermalFeatureEnabled = serverConfig.thermalEnabled() && thermalRegistry != null && gasRegistry != null;
 		phaseChangeFeatureEnabled = serverConfig.phaseChangeEnabled() && thermalFeatureEnabled;
 		regionManager = new FluidRegionManager(serverConfig.limits());
@@ -1793,12 +1800,19 @@ public final class FluidSimulationService {
 		FluidRegion.CollisionStats stats = FluidRegionWorldInteraction.refreshCollisions(
 				level, region, CELLS_PER_BLOCK
 		);
+		boolean thermalBoundaryChanged = false;
+		if (thermalBoundaryResolver != null) try {
+			thermalBoundaryChanged = thermalBoundaryResolver.refresh(level, region, CELLS_PER_BLOCK);
+		} catch (RuntimeException invalidBoundary) {
+			blockThermal(level, region, "thermal-definition LOCKED：" + invalidBoundary.getMessage(), invalidBoundary);
+		}
 		if (stats.changedCells() > 0 || stats.displacedCellVolume() > 0.0F
 				|| stats.escapedCellVolume() > 0.0F || stats.markerBudgetLimited()) {
 			region.setLastCollisionStats(stats);
 		}
 		region.markCollisionRefreshed();
 		if (stats.changedCells() > 0) region.wakeForActivity();
+		if (thermalBoundaryChanged) region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
 		return stats;
 	}
 

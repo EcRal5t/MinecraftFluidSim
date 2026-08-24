@@ -172,6 +172,8 @@ public final class FlipFluidDomain {
 	private float lastPressureResidual;
 	private boolean variableDensityActive;
 	private FlipThermalState thermalState;
+	/** Runtime world-derived fixed-reservoir temperatures; NaN is the canonical adiabatic face. */
+	private double[] thermalBoundaryTemperatureK;
 	private final SignedDyadic[] pendingPhaseCellVolume;
 
 	public FlipFluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config) {
@@ -1404,11 +1406,28 @@ public final class FlipFluidDomain {
 		return thermalState == null ? 0.0 : thermalState.coherentPhases().totalMass();
 	}
 
+	/** Replaces the bounded world-derived face field; the field is geometry, not persisted thermal inventory. */
+	public boolean replaceThermalBoundaryTemperatures(double[] temperaturesK) {
+		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		if (temperaturesK == null || temperaturesK.length != Math.multiplyExact(cellCount, 6)) {
+			throw new IllegalArgumentException("Thermal boundary field dimensions changed");
+		}
+		for (double temperature : temperaturesK) if (!Double.isNaN(temperature)
+				&& (!(Double.isFinite(temperature)) || temperature < ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)) {
+			throw new IllegalArgumentException("Thermal boundary temperature is invalid");
+		}
+		if (thermalBoundaryTemperatureK != null
+				&& java.util.Arrays.equals(thermalBoundaryTemperatureK, temperaturesK)) return false;
+		thermalBoundaryTemperatureK = temperaturesK.clone();
+		return true;
+	}
+
 	/** Runs the production thermal axis without advancing marker motion. */
 	public ThermalTransport.Stats stepThermalOnly(double dtSeconds) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		ensureGrid();
-		return thermalState.step(thermalMarkerContext(), this::thermalFaceArea, dtSeconds);
+		return thermalState.step(thermalMarkerContext(), this::thermalFaceArea,
+				this::thermalFixedBoundary, dtSeconds);
 	}
 
 	/** Exact-batch condensed melt/freeze; species and same-cell granular heat baths join the conserved LTE plan. */
@@ -2308,6 +2327,29 @@ public final class FlipFluidDomain {
 		return solidFraction + (1.0 - solidFraction) * liquidCoverage;
 	}
 
+	private ThermalTransport.FixedBoundary thermalFixedBoundary(int x, int y, int z, int direction) {
+		if (thermalBoundaryTemperatureK == null) return null;
+		int cell = cellIndex(x, y, z);
+		double temperature = thermalBoundaryTemperatureK[cell * 6 + direction];
+		if (Double.isNaN(temperature)) return null;
+		double blockedFraction = 1.0 - thermalOpenFaceFraction(x, y, z, direction);
+		double contactArea = thermalOccupiedFaceFraction(cell, direction) * blockedFraction
+				* (double) config.cellSize() * config.cellSize();
+		return contactArea > 0.0 ? new ThermalTransport.FixedBoundary(contactArea, temperature) : null;
+	}
+
+	private double thermalOpenFaceFraction(int x, int y, int z, int direction) {
+		return switch (direction) {
+			case 0 -> cutCells.xFaceOpen(x, y, z);
+			case 1 -> cutCells.xFaceOpen(x + 1, y, z);
+			case 2 -> cutCells.yFaceOpen(x, y, z);
+			case 3 -> cutCells.yFaceOpen(x, y + 1, z);
+			case 4 -> cutCells.zFaceOpen(x, y, z);
+			case 5 -> cutCells.zFaceOpen(x, y, z + 1);
+			default -> throw new IllegalArgumentException("Unknown thermal boundary direction");
+		};
+	}
+
 	private FlipThermalState.Truncation planThermalTruncate(
 			int marker, double newMass, ChemicalMixtureRecord keptMixture, double previousTemperatureK
 	) {
@@ -2321,6 +2363,7 @@ public final class FlipFluidDomain {
 
 	private void clearThermalBinding() {
 		thermalState = null;
+		thermalBoundaryTemperatureK = null;
 		Arrays.fill(pendingPhaseCellVolume, SignedDyadic.ZERO);
 		if (granularRegistry == null) {
 			granularCoupling = null; granularNextCoupling = null; pressureGranularCoupling = null;

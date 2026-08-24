@@ -386,3 +386,17 @@ gas available-volume remap 结算 expansion/compression work，不生成第二�
 
 一个现有 `thermal` fixture 扩展覆盖 production logical step 沸腾与直接冷凝：H2O 进入气相，Na+、indicator raw volume/mass 和
 granular SVQ 保持，冷凝后 species/residual 返回且 gas/thermal audit 闭合。最近门：`thermal,chemistry,granular` 通过；尚未请求实机。
+
+## M9.27 production contact geometry and fixed world reservoirs
+
+production conduction 不再把非完整 cut-face 当成绝热墙，也不再用整格面积跨越自由面。每个 canonical face 的液体覆盖率由
+现有 server PLIC 平面截面给出，active/deposit/coherent 的 exact SVQ occupancy 作为同格固相覆盖加入，两个 LTE cell 取共享
+最小覆盖后再乘 cut-face aperture 与物理面积。thermal-only 轴在计算前强制刷新同一 grid geometry，避免消费陈旧 PLIC。
+
+`ThermalBoundaryResolver` 现在把 authoritative registry 的 block/tag target 解析为 bounded runtime face field；unknown target、
+缺失 tag 或 direct/tag/tag 重叠在启动时 LOCKED。方块扫描变化只更新派生面温度并精确唤醒 thermal axis，不进入 region-state。
+domain 仅在实际 blocked cut-face 与有物质覆盖的面积上施加 fixed reservoir，交换量进入 source/sink。bundled
+`minecraft:ice` 使用物理相平衡温度 273.15 K，普通方块继续默认绝热。
+
+`thermal,cut-cell` 与随后 `thermal,shape` 最近门通过；fixture 覆盖 50% 微体素孔口的非零守恒导热，以及 production face
+field 的一次变更检测、温度变化和 source/audit 闭合。尚未请求实机。
