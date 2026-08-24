@@ -23,7 +23,7 @@
 | 区域身份、solver ownership、运行态 | `src/main/java/com/example/simulation/FluidRegion.java` | UNLOADED 不持 solver 但仍占预算；恢复先刷新碰撞 |
 | 调度生命周期 | `src/main/java/com/example/simulation/FluidRegionLifecycle.java`、`src/main/java/com/example/simulation/ThermalActivity.java` | motion 与 thermal 两轴正交；调度状态不得移动、创建、删除或缩放任何库存 |
 | 区域登记、选择、空间与预算 | `src/main/java/com/example/simulation/FluidRegionManager.java` | 拒绝不替换旧域；报告 required/per-region/remaining |
-| 世界配置 | `src/main/java/com/example/simulation/FluidServerConfig.java` | v1–v6 配置 fail-closed；旧 reader 强制未知新门关闭；chemistry/granular/precipitation 与 thermal/phase-change 依赖链严格；预算与各功能门重启后生效；thermal v6 已冻结但在完整 joint inventory 前不由 service 消费 |
+| 世界配置 | `src/main/java/com/example/simulation/FluidServerConfig.java` | v1–v6 配置 fail-closed；旧 reader 强制未知新门关闭；chemistry/granular/precipitation 与 thermal/phase-change 依赖链严格；预算与各功能门重启后生效；service 只按本次启动冻结的门选择 registry、region-state 与 protocol |
 | controller 持久化协调 | `src/main/java/com/example/simulation/FluidRegionPersistence.java` | manifest admission、checkpoint、quarantine 与 takeover journal 分离；thermal off 严格分派 v5/v3/v2/v1，v4 保留并拒绝；thermal on 只发布/恢复完整 v6；旧 v1/v2/v3/v5 仅在暂停、ownership 完整且无 WAL 时由 `/realwater regions thermalinit <K>` 经 inactive-slot 回读后显式初始化 |
 | `region-state v1`/门控 v2/v3/v5 | `src/main/java/com/example/simulation/persistence/`、`docs/architecture/region-state-v1.md`、`docs/architecture/chemistry-state.md`、`docs/architecture/granular-state.md` | 两槽完整代次、CRC、账本和 HEAD 最后发布；discovery 校验完整 committed generation；v1/v2/v3 canonical bytes 不变；v5 是含 required typed granular extension 的完整联合代次，缺 authoritative registry 时锁定；v4 仅为气体评审预留 |
 | M3 跨层迁移边界 | `docs/architecture/m3-material-state-migration.md` | 单一 `materialsEnabled` 门；network v2 与 region-state v2 独立版本；运行时 handle 不上链 |
@@ -82,6 +82,7 @@
 - ownership 状态不明或区域被锁：`/realwater ownership`、`OwnershipStore.scanIssues/recoverUnfinished`、WAL 与 region HEAD 的 base/target 判定。
 - 容器转移锁或物品/区域不一致：`<world>/realwater/container-transfer/` 严格扫描结果、`ContainerTransferRecovery` 的 HEAD 判定、actor 是否在线/已加载；不要手删未知或损坏 WAL。
 - 化学区域锁或颜色/库存不符：先查 registry fingerprint、v3 HEAD 与 `/realwater chemstatus`；颜色、pH 和 Top-4 residual 都是只读展示，不能用于修复库存。
+- 热区域锁、温度或相态异常：先查 gas/thermal registry fingerprint、v6 HEAD、`/realwater status` 的 T/U/source/sink/work/audit 与 thermal failure class；旧区域只走显式 `regions thermalinit`，不得从客户端温度或方块外观回填 U。
 
 ## 可选 GPU probe
 
@@ -110,7 +111,7 @@
 ./gradlew.bat runCpuValidation -PcpuValidation=containers --offline --no-daemon
 ./gradlew.bat runCpuValidation -PcpuValidation=region-state,ownership --offline --no-daemon
 
-# 19 个领域的短里程碑门；长期场景另行隔离
+# 21 个领域的短里程碑门；长期场景另行隔离
 ./gradlew.bat runCpuValidation -PcpuValidation=milestone --offline --no-daemon
 
 # 仅 M5 平衡、5,000 步自由面与两项 5,000 步 reseeding 长跑

@@ -1,8 +1,8 @@
 # Real Water 产品路线
 
-本文是尚未完成里程碑的总表。当前基线已经完成 M0、M1、M2、M2.5、M3、M4、M5、M6、M7 和 M8；完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md)、[`../architecture/region-state-v1.md`](../architecture/region-state-v1.md)、[`../architecture/m3-material-state-migration.md`](../architecture/m3-material-state-migration.md)、[`../architecture/world-ownership-and-containers.md`](../architecture/world-ownership-and-containers.md)、[`../architecture/chemistry-state.md`](../architecture/chemistry-state.md) 与 [`../architecture/granular-state.md`](../architecture/granular-state.md)。
+本文是尚未完成里程碑的总表。当前基线已经完成 M0、M1、M2、M2.5、M3、M4、M5、M6、M7 和 M8；M9 已形成 0.15.0 验收候选并通过自动发布门，尚待一次合并实机 smoke 才关闭。完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md)、[`../architecture/region-state-v1.md`](../architecture/region-state-v1.md)、[`../architecture/m3-material-state-migration.md`](../architecture/m3-material-state-migration.md)、[`../architecture/world-ownership-and-containers.md`](../architecture/world-ownership-and-containers.md)、[`../architecture/chemistry-state.md`](../architecture/chemistry-state.md)、[`../architecture/granular-state.md`](../architecture/granular-state.md) 与 [`../architecture/thermal-state.md`](../architecture/thermal-state.md)。
 
-基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、已验收主 Mod 0.14.0、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
+基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、已验收主 Mod 0.14.0、M9 验收候选 0.15.0、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
 
 ## 技术规格路由
 
@@ -24,7 +24,7 @@
 
 - **1.0 能力线**：M3 多液体/可变密度、M4 表面张力/润湿与 M5 密闭气体网络及气液压力均已完成；范围仍是控制器或开发命令圈定的有界区域。
 - **2.0 集成线**：M6 ownership 评审、真实世界流体桥和容器已完成；后续仍不得跳过显式边界、事务恢复门或开放世界规模评审。
-- M7 化学与 M8 颗粒已在 2.0 集成线上完成；M9 热力学和 M10 原版/其他 Mod API 继续逐项加入。
+- M7 化学与 M8 颗粒已在 2.0 集成线上完成；M9 热力学实现与自动门已闭合，等待实机签收，随后进入 M10 原版/其他 Mod API。
 - 版本号按实际验收门决定，不随开发次数自然表示成熟度。
 
 ## 长期产品目标
@@ -40,7 +40,7 @@
 
 ## 必须长期保持的分层
 
-- **物理真值**：marker 体积，未来再加材料质量、组分、电荷、气体量和能量账本。
+- **物理真值**：marker 体积、逐材料质量、化学组分/电荷、固体 SVQ/质量/组成、气体组分量/质量/组成与各载体内能分别结算。
 - **数值离散**：压力、PLIC、cut-cell、组分输运和曲率；不能反过来结算物理库存。
 - **渲染重建**：客户端从只读快照派生外表面、液液界面和颜色。
 - **调度策略**：活动/降频/休眠/卸载/CPU-GPU 后端不得改变守恒结果。
@@ -79,7 +79,7 @@ M3 已关闭，结果与证据见 [`../progress/m3-multi-fluid.md`](../progress/
 
 - 密闭气腔识别、纳体积量子精确气体账本、等温 EoS、有限速率孔流、拓扑事件库存迁移与 `p_gas` 自由面边界均已进入活动核心；开放水域与 M4 逐位一致，气体状态 runtime-only。证据见 [`../progress/m5-air-network.md`](../progress/m5-air-network.md)。
 - 仍约束后续阶段：
-  - 气体库存不进 wire/存档；M7 已占用 region-state v3，气体进存档需独立 region-state v4 与格式迁移评审。
+  - M9 已先独立冻结并实现 gas `region-state v4` 基态，再由完整 v6 组合 gas + thermal；v4 不携 granular/thermal，不能从版本号猜联合内容。
   - 天然空腔搜索入口与 512 BV 默认预算留待未来阶段；控制器域只消费已知边界。
   - 气体温度/内能（M9）、气相反应（M7）与喷流细网格不在 M5 范围。
 
@@ -106,13 +106,12 @@ M8 已以主 Mod 0.14.0 闭合：守恒 active parcel/deposit、统一排水与�
 v5 audit-only identity、remove/empty 与 runtime collision 边界，并完成最近门复验；world granular registry store v3
 由此取代无法安全重解释的 v2，旧 snapshot 保留并 LOCKED。
 
-## M9：温度、相变和反应热
+## M9：温度、相变和反应热（验收候选）
 
-- 引入内能与热容量，温度作为派生量。
-- 热输运、固体换热、相变、反应热和气体压缩/膨胀。
-- 绝热系统总能量闭合；相变前后质量/组分守恒；热休眠与速度休眠分离。
-- 实现前冻结契约见 [`../architecture/thermal-state.md`](../architecture/thermal-state.md)；M9 不回填 v3/v5，
-  气体 v4 基态保持独立前置评审，旧区域只经 operator 显式初温迁移。
+- 权威内能、分段热容量状态函数与派生温度已经进入液体、颗粒、连续固相和密闭气体库存；温度、热容场与 LTE grid 始终只读派生。
+- 有限体积导热、PLIC/cut-face 接触面积、世界固定温度储层、反应热、固液/气液相变、非等温气体压缩/孔流及能量 source/sink/work 审计已经进入生产 logical step。
+- motion/thermal 两轴休眠、gas v4 前置、完整 region-state v6、protocol v5、`ThermalContents v1`、container WAL v5、旧 v1/v2/v3/v5 显式初温升级和 fail-closed 恢复均已通过自动门。
+- 0.15.0 已通过 21 领域短里程碑门、受影响领域完整门、clean 构建与 thermal-on 专服启动；关闭前只剩真实客户端/controller 中的世界冰面换热、容器交互与跨重启合并 smoke。当前契约见 [`../architecture/thermal-state.md`](../architecture/thermal-state.md)，实现证据持续记录于 [`../progress/m9-thermal-phase-reaction.md`](../progress/m9-thermal-phase-reaction.md)。
 
 ## M10：原版行为与其他 Mod API
 
@@ -137,8 +136,8 @@ v5 audit-only identity、remove/empty 与 runtime collision 边界，并完成�
 
 ## 接下来三项
 
-1. M9 温度、相变和反应热：实现前先冻结内能/热容真值、温度派生、能量 source/sink、相变顺序、休眠和跨层版本边界。
+1. 完成 M9 0.15.0 的单次合并实机 smoke 与签收记录，然后开始 M10 原版行为/其他 Mod API 的范围冻结。
 2. 先做代表性 CPU wall-time profile，分别量化 solver、世界交互与 readback；占比未知前不改 40/200 ms 阈值，再评审生产 GPU backend。
-3. 气体 runtime-only 状态进存档前单独评审 region-state v4；当前重建语义保持不变。
+3. M10 不得借热学入口顺带扩大开放世界 ownership；灭火、湿润、岩浆和外部 Mod API 分别冻结单位、事务与失败语义后再实现。
 
 开放/密闭域的液面黑三角继续作为独立视觉债建立最小 fixture；液液锐化和逐顶点法线平滑分别评估，不得用渲染补丁掩盖 marker 或相输运问题。

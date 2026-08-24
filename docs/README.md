@@ -17,6 +17,7 @@
 - 当前世界 ownership、精确容器与跨持久域事务：[`architecture/world-ownership-and-containers.md`](architecture/world-ownership-and-containers.md)
 - 当前 M7 守恒化学、v3 状态与展示边界：[`architecture/chemistry-state.md`](architecture/chemistry-state.md)
 - 当前 M8 颗粒、沉积、固液相转移与 v5/v4 边界：[`architecture/granular-state.md`](architecture/granular-state.md)
+- 当前 M9 内能、热输运、相变、非等温气体与 v6/v5 边界：[`architecture/thermal-state.md`](architecture/thermal-state.md)
 - 代码在哪里、改完跑什么：[`maintenance/routing.md`](maintenance/routing.md)
 - 已完成到哪里：[`progress/README.md`](progress/README.md)
 - 下一阶段做什么、该读哪份技术规格：[`roadmap/product-roadmap.md`](roadmap/product-roadmap.md)

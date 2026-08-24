@@ -413,3 +413,18 @@ eraser 工具和 dry granular container 不伪造液体热状态。由此 creati
 
 调试 source 增量的 `thermal,containers` 与失败语义增量的 `thermal,gas-liquid` 最近门通过；完整 gas-liquid 门仍保持密闭压缩
 0.91% 液柱误差、负压吸升 6.73% 误差与有限速率孔流账本闭合。尚未请求实机。
+
+## M9.29 product entry and release candidate
+
+补齐 `/realwater thermal [true|false]` 与 `/realwater phasechange [true|false]`，两者只原子修改下次启动配置；依赖链阻止
+materials 仍被 chemistry/granular/thermal 使用时关闭，也阻止 phasechange 仍开启时关闭 thermal。管理员 `status` 现以
+protocol v5 相同的 1/16 K 只读量化报告凝聚相温度范围，同时保留 authoritative U、source/sink/work、coherent SVQ、
+pending work 与 audit；派生温度不参与任何结算。
+
+主 Mod 升为 0.15.0 验收候选。2026-08-25 的 `milestone` 在同一 JVM 内通过当前全部 21 个短领域，runner 10.275 s；
+随后 `thermal,protocol` 完整门再次通过。限定根项目的 EULA=true 专服以 thermal/phasechange 都开启启动，成功发布并读取
+gas registry `41b54b…f777` 与 thermal registry `f402a2…6879`，命令查询确认两个 live gate 均开启并由 `stop` 正常退出。
+`clean assemble compileTestJava --offline --no-daemon` 从零成功（27 s）；限定根项目的专服随后实际加载 realwater 0.15.0，
+重读已发布 registry、确认两个 live gate 开启并由 `stop` 正常退出。候选 JAR SHA-256 为
+`7CE4F7E6AC596695CA54C56EF1840408F8AB5EC2CC947C168493BA707788139A`。真实客户端中的固定冰面换热、WAL v5
+容器交互和 v6 跨重启仍按架构停止门合并为唯一一次人工 smoke，完成前不在进度索引宣告 M9 已验收。

@@ -1,6 +1,6 @@
 # Real Water Prototype
 
-Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。M0–M8 已验收；当前部署主 Mod 0.14.0，仍由 CPU 权威求解。系统支持最多四个独立区域、控制器闭合边界、跨 chunk 完整加载、原子持久化、分数自由面和 cut-cell 碰撞；在默认关闭的材料门后提供多液体、可变密度、液液界面、表面张力和润湿，并对密闭气腔提供等温气压、有限速率孔流与气液压力耦合。M6 加入可恢复的真实世界 ownership、精确容器和跨 region/item WAL；M7 加入守恒液相强电解质、同格反应、指示剂与化学桶；M8 加入守恒 active parcel/deposit、精确排水、浮力/阻力、孔隙水、局部唤醒、固液相转移及 v5/v4 持久化、协议和干颗粒容器事务。
+Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。M0–M8 已验收；M9 的主 Mod 0.15.0 验收候选已通过自动发布门，等待一次合并实机 smoke，仍由 CPU 权威求解。系统支持最多四个独立区域、控制器闭合边界、跨 chunk 完整加载、原子持久化、分数自由面和 cut-cell 碰撞；默认关闭的材料门后提供多液体、化学和低成本颗粒。M9 进一步加入权威内能、派生温度、有限体积导热、世界固定温度边界、反应热、连续固相、固液/气液相变、非等温密闭气体、正交热休眠，以及联合 region-state v6、protocol v5 和 container-transfer WAL v5。
 
 这还不是原版水的全局替代。普通模拟不自动修改世界；控制器功能默认关闭。
 
@@ -13,6 +13,7 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。M0–M8 已
 - 材料功能门默认关闭，且只在服务器启动时读取一次。开启后控制器区域改用 `region-state v2`，连接必须协商 protocol v2；关闭门时磁盘上的 v2 区域会被保留并锁住，不会静默降级或删除。
 - 化学功能门同样默认关闭，要求材料门已配置为开启并在重启后生效。开启后区域使用 `region-state v3`、protocol v3 与 container-transfer WAL v3；关闭门发现 v3、registry snapshot 未知/损坏或 fingerprint 不符时只保留并 `LOCKED`，绝不降级猜测。
 - 颗粒功能门默认关闭并依赖材料门；沉淀门还依赖化学门。开启后联合区域状态使用 `region-state v5`、protocol v4 与 container-transfer WAL v4；world granular registry store v3 冻结 exact extent/SVQ batch 与 chemical dependency。active/deposit、反应性 audit 或 registry 身份未知时同样只保留并 `LOCKED`；旧 v2 registry 不按当前数据包重解释。
+- 热学功能门默认关闭并依赖材料门，相变门又依赖热学门；两者都只在重启后生效。开启后 world gas/thermal registry snapshot 权威，完整联合区域使用 `region-state v6`、只读展示使用 protocol v5、液体容器事务使用 WAL v5 与 `ThermalContents v1`。温度只是由独立总内能和状态函数派生的读数；unknown/corrupt/fingerprint 失配一律保留并 `LOCKED`。旧 v1/v2/v3/v5 区域只允许在暂停、ownership 完整且没有未决容器 WAL 时由管理员显式执行 `regions thermalinit <K>`；v4 气体基态不能猜测升级。
 - 世界桥功能门（`/realwater worldbridge`）默认关闭且重启生效。开启后新激活的控制器区域会通过可恢复的 ownership 事务一次性移除内部纯原版水（WAL 与 WARNING 先行，region HEAD 最后提交）；区域与容器间的转移另有独立 WAL。移除区域前必须先恢复完整状态并确认流体 marker 与固体 SVQ 都恰好为空。
 - 可选 GPU probe 只读、不修改世界或存档；主 Mod 始终以 CPU 为物理规范。
 
@@ -35,6 +36,8 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。M0–M8 已
 | 化学开发域与试剂（需化学门） | `/realwater chemistrydemo`、`reagent <hcl|naoh|nacl|nano3|kcl|kno3|water|indicator|eraser>` |
 | 管理员完整化学库存 | `/realwater chemstatus` |
 | 颗粒/沉淀门（下次重启生效） | `/realwater granular [true|false]`、`precipitation [true|false]` |
+| 热学/相变门（下次重启生效） | `/realwater thermal [true|false]`、`phasechange [true|false]` |
+| 旧区域显式赋予初温并原子升级 v6 | `/realwater regions thermalinit <temperatureK>` |
 | 管理员干颗粒容器调试取得 | `/realwater granularcontainer <empty|fine_sand|light_beads>` |
 | 管理员完整颗粒库存 | `/realwater granstatus` |
 | 世界桥功能门（下次重启生效） | `/realwater worldbridge [true|false]` |
@@ -49,6 +52,8 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。M0–M8 已
 化学玩法：先依次设置 `/realwater materials true`、`/realwater chemistry true` 与容器入口所需的 `/realwater worldbridge true`，再重启。`chemistrydemo` 建立左右 HCl/NaOH 的暂停开发域；`reagent` 提供明确记作外部 source 的试剂桶，以及不消耗的通用指示剂与抹除器 operator 工具。指示剂只标记当前通过开放 cut-face 连通且同 chemical phase 的 marker，最多 100 BV；浅液面瞄准可在开放面内向两格内吸附到实际 marker，后来混入的未标水不会自动染色。空材料桶可完整保存 species、质量 residual 与 indicator，tooltip 按 material/indicator group 列出每个 stable species 的精确 AU/quanta；原版空桶只接受未标记纯 H2O。完整逐 species 真值只由管理员 `chemstatus` 按需查看并写入 transcript。
 
 颗粒玩法：先开启 materials、granular 与容器入口所需的 worldbridge，反应沉淀还需 chemistry+precipitation，随后重启。颗粒只进入显式闭壳 controller；满干颗粒容器对壳面中心放出，空容器从实际目标格附近的 active/exposed inventory 有界装取，玩家和发射器使用同一 v4 WAL 事务。管理员 `granularcontainer` 只生成经 world registry 校验的惰性测试来源，不能伪造反应性组成；`granstatus` 在服务端报告 exact SVQ、mass、solid species、source/sink 与 boundary impulse，客户端只显示量化 deposit 表面和 active samples。需要一键重置时，先选中目标区域再执行 `/realwater empty`；它先联合预检 liquid/chemical 与 granular sink candidate，再同时清除流体、active parcel 和 deposit，并把移除的固体记入 escaped sink 后发布同一 v5 checkpoint。存在未决容器 WAL 时会拒绝清空。
+
+热学玩法：在首次创建 thermal snapshot 前先一次配置好本世界需要的 materials、可选 chemistry/granular，再开启 thermal；需要相变时再开启 phasechange，然后重启。新建区域以 293.15 K 建立权威内能；旧 v1/v2/v3/v5 controller 不从环境或当前数据包猜温度，必须保持暂停后执行 `regions thermalinit <K>` 才会经 inactive slot 原子升级 v6。`status` 报告派生的凝聚相温度范围、总 U、外部 source/sink、机械功、连续固相 SVQ、pending work 与 audit；这些读数不参与结算。普通世界方块绝热，world thermal snapshot 明确声明的冰方块表面固定为 273.15 K。液体容器在热区域内用 WAL v5 同时搬运物质与 `ThermalContents v1` 总能量；tooltip 温度仍只读。
 
 气压玩法：`/realwater airdemo pressure`（或 `vacuum`）在准星方向自动搭一座玻璃 U 型管（左腔密闭、右腔通大气）并下半注水；`/realwater run` 后两侧液面形成并保持由气压支撑的稳定高差（正压约 1.4 m、负压约 2.1 m），`/realwater status` 的 gas 段显示密闭腔压力与库存。玻璃只替换空气方块，`/realwater remove`、创建其他开发域或正常关服时自动恢复原状；异常崩溃后残留的玻璃可自行拆掉。`/realwater debug true` 时密闭气腔以高度透明灰色显示。该域瞬态，不写 `region-state`。
 
