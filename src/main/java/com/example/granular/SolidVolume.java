@@ -26,6 +26,27 @@ public final class SolidVolume {
 		return (long) scaled;
 	}
 
+	/** Whole SVQ that can be removed without quantizing a marker's authoritative float tail. */
+	public static long cellVolumeSvqAtMost(float cellVolume) {
+		double scaled = scaledCellVolume(cellVolume);
+		return (long) Math.floor(scaled);
+	}
+
+	/** Conservative SVQ occupancy bound that retains a marker's authoritative float tail. */
+	public static long cellVolumeSvqAtLeast(float cellVolume) {
+		double scaled = scaledCellVolume(cellVolume);
+		return (long) Math.ceil(scaled);
+	}
+
+	private static double scaledCellVolume(float cellVolume) {
+		if (!(Float.isFinite(cellVolume) && cellVolume >= 0.0F)) {
+			throw new IllegalArgumentException("Cell volume must be finite and non-negative");
+		}
+		double scaled = Math.scalb((double) cellVolume, 24);
+		if (scaled > Long.MAX_VALUE) throw new IllegalArgumentException("Cell volume exceeds the SVQ bound range");
+		return scaled;
+	}
+
 	/** Applies an integer-SVQ delta without quantizing away an existing marker's sub-SVQ dyadic tail. */
 	public static float addCellVolumeSvqExact(float cellVolume, long signedSvq) {
 		if (!(Float.isFinite(cellVolume) && cellVolume > 0.0F)) {

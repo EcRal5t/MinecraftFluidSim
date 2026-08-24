@@ -56,6 +56,8 @@ public final class FluidRegion {
 	private String thermalBlockFailure;
 	private ThermalActivity thermalActivity;
 	private ThermalInitializationRecord thermalInitializationRecord;
+	/** Metadata-only legacy checkpoint waiting for an operator-supplied temperature; zero means not waiting. */
+	private int thermalInitializationSourceVersion;
 
 	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FlipFluidDomain domain, long reservedMarkerCapacity) {
 		this(id, dimension, origin, domain, reservedMarkerCapacity, null);
@@ -169,6 +171,15 @@ public final class FluidRegion {
 	public float checkpointVolume() { return checkpointVolume; }
 	public ThermalInitializationRecord thermalInitializationRecord() { return thermalInitializationRecord; }
 	void setThermalInitializationRecord(ThermalInitializationRecord value) { thermalInitializationRecord = value; }
+	boolean thermalInitializationRequired() { return thermalInitializationSourceVersion != 0; }
+	int thermalInitializationSourceVersion() { return thermalInitializationSourceVersion; }
+	void requireThermalInitialization(int sourceVersion) {
+		if (sourceVersion != 1 && sourceVersion != 2 && sourceVersion != 3 && sourceVersion != 5) {
+			throw new IllegalArgumentException("Only region-state v1/v2/v3/v5 can await thermal initialization");
+		}
+		thermalInitializationSourceVersion = sourceVersion;
+	}
+	void clearThermalInitializationRequirement() { thermalInitializationSourceVersion = 0; }
 	public FluidRegionLifecycle lifecycle() { return lifecycle; }
 	public long reservedCellCapacity() {
 		return Math.multiplyExact(Math.multiplyExact((long) sizeX, sizeY), sizeZ);

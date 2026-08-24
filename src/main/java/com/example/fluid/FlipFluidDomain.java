@@ -1331,10 +1331,6 @@ public final class FlipFluidDomain {
 
 	private void validateCoherentRestoreCapacity(List<CoherentPhaseStore.Group> groups) {
 		long[] occupied = new long[cellCount];
-		for (int marker = 0; marker < particleCount; marker++) {
-			int cell = particleCellIndex(marker);
-			occupied[cell] = Math.addExact(occupied[cell], SolidVolume.fromCellVolumeExact(particleVolume[marker]));
-		}
 		for (CoherentPhaseStore.Group group : groups) {
 			if (group.cell() < 0 || group.cell() >= cellCount) {
 				throw new IllegalArgumentException("Restored coherent phase cell is outside the domain");
@@ -1344,8 +1340,11 @@ public final class FlipFluidDomain {
 		ensureGrid();
 		for (int cell = 0; cell < cellCount; cell++) {
 			long geometric = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
-			if (occupied[cell] > geometric) {
-				throw new IllegalArgumentException("Restored liquid/coherent inventory exceeds exact cell capacity");
+			// FLIP marker clustering may transiently overfill a cell and is resolved by pressure after restore.
+			// Only fixed solid occupancy is required to fit before the solver can safely resume that projection.
+			long fixedSolid = Math.addExact(occupied[cell], phaseGranularSvq(cell));
+			if (fixedSolid > geometric) {
+				throw new IllegalArgumentException("Restored coherent/granular inventory exceeds exact cell capacity");
 			}
 		}
 	}
@@ -1501,15 +1500,23 @@ public final class FlipFluidDomain {
 						&& inventory.freezableUpperSvq() >= transition.lowerVolumeSvqPerBatch()
 						&& inventory.freezableUpperMass() + massTolerance(inventory.freezableUpperMass())
 						>= transition.massMuPerBatch().toDouble()) {
-					commitGasBoil(cell, node, liquidHandle, gasThermalHandle,
-							transition, phase, liquidTemperature);
+					try {
+						commitGasBoil(cell, node, liquidHandle, gasThermalHandle,
+								transition, phase, liquidTemperature);
+					} catch (ThermalStateFunction.EnergyOutsideValidityException | PhaseCandidateUnavailableException unavailable) {
+						continue;
+					}
 					ensureGrid(); refreshGasTopology();
 					operations++; boiled++;
 				} else if (direction == GasLiquidPhaseModel.Direction.CONDENSE) {
 					GasComponentAmount vapor = airNetwork.inventory(node).component(gas.carrierId());
 					GasInventory batch = phase.gasBatch(transition, 1L);
 					if (vapor != null && vapor.standardVolumeNanos() >= batch.standardVolumeNanos()) {
-						commitGasCondense(cell, node, liquidHandle, transition, inventory, phase, batch);
+						try {
+							commitGasCondense(cell, node, liquidHandle, transition, inventory, phase, batch);
+						} catch (ThermalStateFunction.EnergyOutsideValidityException | PhaseCandidateUnavailableException unavailable) {
+							continue;
+						}
 						ensureGrid(); refreshGasTopology();
 						operations++; condensed++;
 					}
@@ -1570,11 +1577,12 @@ public final class FlipFluidDomain {
 			throw new ThermalPhaseBlockedException("Condensation gas batch mass differs from its exact transition");
 		}
 		long addedSvq = transition.lowerVolumeSvqPerBatch();
-		long occupied = Math.addExact(Math.addExact(before.upperVolumeSvq(), before.lowerVolumeSvq()),
-				phaseGranularSvq(cell));
+		long occupied = Math.addExact(Math.addExact(
+				Math.addExact(before.upperVolumeSvq(), before.lowerVolumeSvq()), phaseGranularSvq(cell)),
+				thermalState.coherentPhases().cellOccupiedSvq(cell));
 		long capacity = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
 		if (Math.addExact(occupied, addedSvq) > capacity) {
-			throw new ThermalPhaseBlockedException("Condensation exceeds interface-cell capacity");
+			throw new PhaseCandidateUnavailableException("Condensation exceeds interface-cell capacity");
 		}
 		double gasTemperature = thermalState.gasTemperature(node, airNetwork);
 		double batchEnergy = phase.internalEnergyAtTemperature(transition, take.first(), gasTemperature);
@@ -1606,9 +1614,9 @@ public final class FlipFluidDomain {
 			targetVolume = SolidVolume.addCellVolumeSvqExact(particleVolume[target], addedSvq);
 			targetMass = particleMass[target] + moved.mass();
 		} else {
-			if (particleCount >= maximumParticleCount) throw new ThermalPhaseBlockedException("Condensation exceeds marker budget");
+			if (particleCount >= maximumParticleCount) throw new PhaseCandidateUnavailableException("Condensation exceeds marker budget");
 			slot = firstOpenSlot(cell, 0);
-			if (slot < 0) throw new ThermalPhaseBlockedException("Condensation has no collision-valid marker slot");
+			if (slot < 0) throw new PhaseCandidateUnavailableException("Condensation has no collision-valid marker slot");
 		}
 		thermalState.requirePhaseCandidateState(cell,
 				liquidInventoryAfterCondensation(cell, liquidHandle, target, targetMass,
@@ -1637,17 +1645,14 @@ public final class FlipFluidDomain {
 			if (particleMaterialHandle[marker] != liquidHandle) {
 				throw new ThermalPhaseBlockedException("Gas phase cell contains another liquid carrier");
 			}
-			svq = Math.addExact(svq, SolidVolume.fromCellVolumeExact(particleVolume[marker]));
+			svq = Math.addExact(svq, SolidVolume.cellVolumeSvqAtLeast(particleVolume[marker]));
 			mass += particleMass[marker]; energy += thermalState.liquidInternalEnergy(marker); found = true;
 			if (chemicalParcels != null) composition.add(chemicalParcels.record(marker));
 			if (chemicalParcels == null || !chemicalParcels.indicator(marker)) {
 				freezableSvq = Math.addExact(freezableSvq,
-						SolidVolume.fromCellVolumeExact(particleVolume[marker]));
+						SolidVolume.cellVolumeSvqAtMost(particleVolume[marker]));
 				freezableMass += particleMass[marker];
 			}
-		}
-		if (thermalState.coherentPhases().cellOccupiedSvq(cell) != 0L) {
-			throw new ThermalPhaseBlockedException("Gas phase cell contains coherent solid");
 		}
 		return found ? new PhaseCellInventory(0L, svq, 0.0, mass, energy,
 				PhaseComposition.EMPTY, chemicalParcels == null ? PhaseComposition.EMPTY : composition.build(),
@@ -1681,12 +1686,12 @@ public final class FlipFluidDomain {
 			if (particleMaterialHandle[marker] != upperLiquidHandle) {
 				throw new ThermalPhaseBlockedException("Phase cell contains an unsupported liquid heat-bath carrier");
 			}
-			upperSvq = Math.addExact(upperSvq, SolidVolume.fromCellVolumeExact(particleVolume[marker]));
+			upperSvq = Math.addExact(upperSvq, SolidVolume.cellVolumeSvqAtLeast(particleVolume[marker]));
 			upperMass += particleMass[marker]; energy += thermalState.liquidInternalEnergy(marker); found = true;
 			if (chemicalParcels != null) upperComposition.add(chemicalParcels.record(marker));
 			if (chemicalParcels == null || !chemicalParcels.indicator(marker)) {
 				freezableUpperSvq = Math.addExact(freezableUpperSvq,
-						SolidVolume.fromCellVolumeExact(particleVolume[marker]));
+						SolidVolume.cellVolumeSvqAtMost(particleVolume[marker]));
 				freezableUpperMass += particleMass[marker];
 			}
 		}
@@ -1731,22 +1736,34 @@ public final class FlipFluidDomain {
 		long signedVolumePerBatch = freezing
 				? transition.lowerVolumeSvqPerBatch() - transition.upperVolumeSvqPerBatch()
 				: transition.upperVolumeSvqPerBatch() - transition.lowerVolumeSvqPerBatch();
+		long occupied = Math.addExact(Math.addExact(before.lowerVolumeSvq(), before.upperVolumeSvq()),
+				phaseGranularSvq(cell));
+		long capacity = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
 		if (signedVolumePerBatch > 0L) {
-			long occupied = Math.addExact(Math.addExact(before.lowerVolumeSvq(), before.upperVolumeSvq()),
-					phaseGranularSvq(cell));
-			long capacity = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
 			high = Math.min(high, (capacity - occupied) / signedVolumePerBatch);
 		}
-		if (high <= 0L) return null;
+		long minimumBatches = minimumPhaseBatchesForCapacity(occupied, capacity, signedVolumePerBatch);
+		if (high < minimumBatches) return null;
 
-		JointPhasePlan first = jointPhaseCandidate(cell, liquidHandle, transition, before, freezing, 1L);
+		JointPhasePlan first;
+		try {
+			first = jointPhaseCandidate(cell, liquidHandle, transition, before, freezing, minimumBatches);
+		} catch (ThermalStateFunction.EnergyOutsideValidityException | PhaseCandidateUnavailableException unavailable) {
+			// The exact quantum cannot fit this cell's thermal range or its independent marker mass/volume truth.
+			return null;
+		}
 		if (crossedEquilibrium(first.temperatureAfterK(), equilibrium, freezing)) return first;
 		JointPhasePlan best = first;
-		long low = 2L;
+		long low = minimumBatches + 1L;
 		while (low <= high) {
 			long middle = low + ((high - low) >>> 1);
-			JointPhasePlan candidate = jointPhaseCandidate(
-					cell, liquidHandle, transition, before, freezing, middle);
+			JointPhasePlan candidate;
+			try {
+				candidate = jointPhaseCandidate(cell, liquidHandle, transition, before, freezing, middle);
+			} catch (ThermalStateFunction.EnergyOutsideValidityException | PhaseCandidateUnavailableException unavailable) {
+				high = middle - 1L;
+				continue;
+			}
 			if (crossedEquilibrium(candidate.temperatureAfterK(), equilibrium, freezing)) {
 				high = middle - 1L;
 			} else {
@@ -1755,6 +1772,17 @@ public final class FlipFluidDomain {
 			}
 		}
 		return best;
+	}
+
+	static long minimumPhaseBatchesForCapacity(long occupiedSvq, long capacitySvq, long signedVolumeSvqPerBatch) {
+		if (occupiedSvq < 0L || capacitySvq < 0L) {
+			throw new IllegalArgumentException("Phase capacity inputs are invalid");
+		}
+		if (occupiedSvq <= capacitySvq) return 1L;
+		if (signedVolumeSvqPerBatch >= 0L) return Long.MAX_VALUE;
+		long shrink = Math.negateExact(signedVolumeSvqPerBatch);
+		long excess = occupiedSvq - capacitySvq;
+		return excess / shrink + (excess % shrink == 0L ? 0L : 1L);
 	}
 
 	private static boolean crossedEquilibrium(double candidateK, double equilibriumK, boolean freezing) {
@@ -1869,17 +1897,19 @@ public final class FlipFluidDomain {
 		for (int marker = particleCount - 1; marker >= 0 && remainingSvq > 0L; marker--) {
 			if (particleCellIndex(marker) != cell || particleMaterialHandle[marker] != liquidHandle
 					|| chemicalParcels != null && chemicalParcels.indicator(marker)) continue;
-			long markerSvq = SolidVolume.fromCellVolumeExact(particleVolume[marker]);
+			long markerSvq = SolidVolume.cellVolumeSvqAtMost(particleVolume[marker]);
+			if (markerSvq == 0L) continue;
 			long takeSvq = Math.min(markerSvq, remainingSvq);
 			double takeMass = takeSvq == remainingSvq ? remainingMass
 					: particleMass[marker] * ((double) takeSvq / markerSvq);
-			boolean full = takeSvq == markerSvq;
+			boolean full = takeSvq == markerSvq
+					&& markerSvq == SolidVolume.cellVolumeSvqAtLeast(particleVolume[marker]);
 			float newVolume = full ? 0.0F
 					: SolidVolume.addCellVolumeSvqExact(particleVolume[marker], -takeSvq);
 			double newMass = particleMass[marker] - takeMass;
 			if (!(takeMass > 0.0) || full && Math.abs(newMass) > massTolerance(particleMass[marker])
 					|| !full && !(newMass > 0.0)) {
-				throw new ThermalPhaseBlockedException("Freeze batch mass/volume split is not representable");
+				throw new PhaseCandidateUnavailableException("Freeze batch mass/volume split is not representable");
 			}
 			ChemicalParcelStore.SplitPlan chemicalPlan = chemicalParcels == null ? null
 					: chemicalParcels.planTruncate(marker, newVolume,
@@ -1895,7 +1925,7 @@ public final class FlipFluidDomain {
 			remainingMass -= takeMass;
 		}
 		if (remainingSvq != 0L || Math.abs(remainingMass) > massTolerance(requestedMass)) {
-			throw new ThermalPhaseBlockedException("Freeze exact batch cannot be allocated to liquid markers");
+			throw new PhaseCandidateUnavailableException("Freeze exact batch cannot be allocated to liquid markers");
 		}
 		return new PhaseRemovalPlan(List.copyOf(allocations),
 				chemicalParcels == null ? PhaseComposition.EMPTY : moved.build(), movedEnergy.toDouble());
@@ -1913,7 +1943,8 @@ public final class FlipFluidDomain {
 		for (int marker = particleCount - 1; marker >= 0 && remainingSvq > 0L; marker--) {
 			if (particleCellIndex(marker) != cell || particleMaterialHandle[marker] != liquidHandle
 					|| chemicalParcels != null && chemicalParcels.indicator(marker)) continue;
-			long markerSvq = SolidVolume.fromCellVolumeExact(particleVolume[marker]);
+			long markerSvq = SolidVolume.cellVolumeSvqAtMost(particleVolume[marker]);
+			if (markerSvq == 0L) continue;
 			long takeSvq = Math.min(markerSvq, remainingSvq);
 			java.util.TreeSet<String> movedSpecies = null;
 			if (chemicalParcels != null) {
@@ -1932,13 +1963,14 @@ public final class FlipFluidDomain {
 			}
 			double takeMass = takeSvq == remainingSvq ? remainingMass
 					: particleMass[marker] * ((double) takeSvq / markerSvq);
-			boolean full = takeSvq == markerSvq;
+			boolean full = takeSvq == markerSvq
+					&& markerSvq == SolidVolume.cellVolumeSvqAtLeast(particleVolume[marker]);
 			float newVolume = full ? 0.0F
 					: SolidVolume.addCellVolumeSvqExact(particleVolume[marker], -takeSvq);
 			double newMass = particleMass[marker] - takeMass;
 			if (!(takeMass > 0.0) || full && Math.abs(newMass) > massTolerance(particleMass[marker])
 					|| !full && !(newMass > 0.0)) {
-				throw new ThermalPhaseBlockedException("Boiling batch mass/volume split is not representable");
+				throw new PhaseCandidateUnavailableException("Boiling batch mass/volume split is not representable");
 			}
 			ChemicalParcelStore.SplitPlan chemicalPlan = chemicalParcels == null ? null
 					: chemicalParcels.planSelectivePhaseTruncate(marker, newVolume,
@@ -1954,7 +1986,7 @@ public final class FlipFluidDomain {
 			remainingMass -= takeMass;
 		}
 		if (remainingSvq != 0L || Math.abs(remainingMass) > massTolerance(requestedMass)) {
-			throw new ThermalPhaseBlockedException("Boiling exact batch cannot be allocated to volatile liquid inventory");
+			throw new PhaseCandidateUnavailableException("Boiling exact batch cannot be allocated to volatile liquid inventory");
 		}
 		return new PhaseRemovalPlan(List.copyOf(allocations),
 				chemicalParcels == null ? PhaseComposition.EMPTY : moved.build(), movedEnergy.toDouble());
@@ -2210,6 +2242,9 @@ public final class FlipFluidDomain {
 	public static final class ThermalPhaseBlockedException extends IllegalStateException {
 		public ThermalPhaseBlockedException(String message) { super(message); }
 		private ThermalPhaseBlockedException(String message, Throwable cause) { super(message, cause); }
+	}
+	private static final class PhaseCandidateUnavailableException extends IllegalArgumentException {
+		private PhaseCandidateUnavailableException(String message) { super(message); }
 	}
 	public static final class ThermalTransportBlockedException extends IllegalStateException {
 		private ThermalTransportBlockedException(String message, Throwable cause) { super(message, cause); }

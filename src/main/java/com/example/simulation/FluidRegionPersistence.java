@@ -151,6 +151,9 @@ final class FluidRegionPersistence {
 				if (manifest.formatVersion() == 6 && (!thermalEnabled || thermalRegistry == null || gasRegistry == null)) {
 					throw new IOException("region-state v6 requires the thermal feature gate and authoritative thermal/gas registry snapshots");
 				}
+				if (thermalEnabled && manifest.formatVersion() == 4) {
+					throw new IOException("region-state v4 is a gas-only generation and cannot be loaded or guessed as complete thermal state");
+				}
 				validateControllerGeometry(manifest);
 				Identifier dimensionId = Identifier.tryParse(manifest.dimensionId());
 				if (dimensionId == null) throw new IOException("invalid dimension");
@@ -159,6 +162,9 @@ final class FluidRegionPersistence {
 						manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 						manifest.reservedMarkerCapacity(), manifest.footprint(), manifest.networkGeneration(),
 						manifest.checkpointGeneration(), manifest.totalMarkerCount(), (float) manifest.totalVolume(), manifest.runtime());
+				if (thermalEnabled && manifest.formatVersion() != 6) {
+					region.requireThermalInitialization(manifest.formatVersion());
+				}
 				FluidRegionManager.AdmissionResult admission = manager.add(region);
 				if (!admission.accepted()) issues.add(manifest.regionId() + " 未载入：" + admission.failure());
 			} catch (IOException | IllegalArgumentException exception) {
@@ -649,9 +655,13 @@ final class FluidRegionPersistence {
 			throw new IOException("Authoritative thermal/gas registry is unavailable");
 		}
 		RegionManifest manifest = state.manifest();
+		if (manifest.formatVersion() == 1 || manifest.formatVersion() == 2
+				|| manifest.formatVersion() == 3 || manifest.formatVersion() == 5) {
+			throw new ThermalInitializationRequiredException(manifest.formatVersion());
+		}
 		if (manifest.formatVersion() != 6) {
 			throw new IOException("region-state v" + manifest.formatVersion()
-					+ " has no authoritative internal energy; explicit operator temperature initialization is required");
+					+ " cannot be interpreted as complete thermal state");
 		}
 		long generation = manifest.checkpointGeneration();
 		try {
@@ -685,6 +695,18 @@ final class FluidRegionPersistence {
 			}
 			throw failure;
 		}
+	}
+
+	static final class ThermalInitializationRequiredException extends IOException {
+		private final int sourceVersion;
+
+		ThermalInitializationRequiredException(int sourceVersion) {
+			super("region-state v" + sourceVersion
+					+ " has no authoritative internal energy; explicit operator temperature initialization is required");
+			this.sourceVersion = sourceVersion;
+		}
+
+		int sourceVersion() { return sourceVersion; }
 	}
 
 	private void restoreGranularGeneration(FluidRegion region, RegionState state) throws IOException {

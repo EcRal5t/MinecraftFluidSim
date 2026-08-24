@@ -802,6 +802,55 @@ public final class M9ThermalValidation {
 				&& phaseDomain.exactInternalEnergy().equals(hotEnergy)
 				&& phaseDomain.exactInternalEnergy().equals(phaseDomain.thermalAudit().expectedInventory()),
 				"domain melt commit did not conserve exact mass, volume and energy inventories");
+
+		FluidMaterial roundoffLiquid = FluidMaterial.withSurfaceTension("test:roundoff_liquid", 1_000.0,
+				"test:miscible", 0.0, 90.0);
+		FluidMaterialRegistry roundoffLiquids = new FluidMaterialRegistry(List.of(roundoffLiquid));
+		ThermalMaterialDefinition roundoffWater = new ThermalMaterialDefinition("test:thermal/roundoff_water",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, roundoffLiquid.id(), 293.15, 0.0, 0.598,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4_184.0)));
+		ThermalMaterialDefinition roundoffIce = new ThermalMaterialDefinition("test:thermal/roundoff_ice",
+				ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID, "test:roundoff_ice", 293.15, -375_070.0, 2.22,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 2_108.0)));
+		ThermalPhaseTransition roundoffTransition = new ThermalPhaseTransition("test:phase/roundoff_ice_water",
+				roundoffIce.id(), roundoffWater.id(), 273.15, 146L, 134L, ExactRational.parse("0.001"),
+				ThermalPhaseTransition.InterfaceRequirement.NONE, 10_000.0, 2_000_000.0);
+		ThermalRegistry roundoffRegistry = new ThermalRegistry(
+				List.of(roundoffIce, roundoffWater), List.of(), List.of(roundoffTransition), "", "");
+		FluidSolverConfig roundoffConfig = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FlipFluidDomain roundoffDomain = new FlipFluidDomain(2, 2, 2, roundoffConfig, 128);
+		roundoffDomain.setVolume(0, 0, 0, 0.5F);
+		roundoffDomain.bindThermal(roundoffRegistry, roundoffLiquids, 273.1498);
+		SignedDyadic roundoffEnergy = roundoffDomain.exactInternalEnergy();
+		FlipFluidDomain.ThermalPhaseStats roundoffFreeze = roundoffDomain.stepInertPhaseChangeOnly(16);
+		require(roundoffFreeze.operations() == 1
+				&& Math.abs(roundoffDomain.exactInternalEnergy().subtract(roundoffEnergy).toDouble())
+				<= Math.ulp(roundoffEnergy.toDouble()) * 16.0
+				&& roundoffDomain.exactInternalEnergy().equals(roundoffDomain.thermalAudit().expectedInventory()),
+				"tiny coherent batch amplified the exact cell-energy remainder into a false LTE failure: stats="
+						+ roundoffFreeze + " energy=" + roundoffDomain.exactInternalEnergy() + "/" + roundoffEnergy
+						+ " expected=" + roundoffDomain.thermalAudit().expectedInventory());
+
+		FlipFluidDomain quantizedDomain = new FlipFluidDomain(2, 2, 2, roundoffConfig, 128);
+		quantizedDomain.bindThermal(roundoffRegistry, roundoffLiquids, 273.15);
+		double quantizedIceEnergy = new ThermalStateFunction(roundoffRegistry).internalEnergyAtTemperature(
+				roundoffRegistry.materialHandle(roundoffIce.id()), 0.001, Map.of(), 273.16);
+		quantizedDomain.addCoherentPhaseExternal(0, 0, 0, roundoffIce.id(), 146L,
+				0.001, null, quantizedIceEnergy);
+		SignedDyadic quantizedEnergy = quantizedDomain.exactInternalEnergy();
+		FlipFluidDomain.ThermalPhaseStats unavailableMelt = quantizedDomain.stepInertPhaseChangeOnly(16);
+		require(unavailableMelt.operations() == 0
+				&& quantizedDomain.exactInternalEnergy().equals(quantizedEnergy)
+				&& quantizedDomain.exactInternalEnergy().equals(quantizedDomain.thermalAudit().expectedInventory()),
+				"an unrepresentable exact phase quantum stopped the region instead of leaving inventory unchanged");
+		require(FlipFluidDomain.minimumPhaseBatchesForCapacity(1_025L, 1_000L, -12L) == 3L,
+				"shrinking phase planning did not clear transient joint-cell overfill before evaluating LTE");
+		long markerSvq = SolidVolume.SVQ_PER_CELL / 8L;
+		float tailedMarkerVolume = Math.nextUp(SolidVolume.toCellVolume(markerSvq));
+		require(SolidVolume.cellVolumeSvqAtMost(tailedMarkerVolume) == markerSvq
+				&& SolidVolume.cellVolumeSvqAtLeast(tailedMarkerVolume) == markerSvq + 1L,
+				"phase SVQ bounds quantized away an authoritative float marker-volume tail");
 	}
 
 	private static void compositionAndGranularPhaseChangeConservesJointTruth() {

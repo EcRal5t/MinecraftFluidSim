@@ -8,14 +8,17 @@ import com.example.thermal.ThermalRegistry;
 import com.example.thermal.ThermalTransport;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.network.chat.Component;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
 
@@ -27,6 +30,8 @@ final class FluidRegionOperations {
 	private final List<String> issues = new ArrayList<>();
 	private final Map<UUID, Long> retryAt = new HashMap<>();
 	private final Map<UUID, String> checkpointFailures = new HashMap<>();
+	private final Set<UUID> reportedThermalInitialization = new HashSet<>();
+	private final Map<UUID, Set<UUID>> thermalInitializationNotifiedPlayers = new HashMap<>();
 	private boolean creationLocked;
 	private long serviceTick;
 
@@ -145,8 +150,16 @@ final class FluidRegionOperations {
 			unloadForFailure(level.getServer(), region, failure, removalSender);
 			return false;
 		}
+		if (region.thermalInitializationRequired()) {
+			return awaitThermalInitialization(level, region);
+		}
 
 		if (!region.solverLoaded()) {
+			String lockedFailure = checkpointFailures.get(region.id());
+			if (lockedFailure != null) {
+				region.setAvailabilityFailure(lockedFailure);
+				return false;
+			}
 			if (serviceTick < retryAt.getOrDefault(region.id(), 0L)) return false;
 			try {
 				persistence.restore(region);
@@ -154,14 +167,18 @@ final class FluidRegionOperations {
 				region.markCollisionRefreshed();
 				retryAt.remove(region.id());
 				checkpointFailures.remove(region.id());
+				region.clearThermalInitializationRequirement();
 				RealWaterMod.LOGGER.info("Restored controller region {} from checkpoint {} with {} markers",
 						region.id(), region.checkpointGeneration(), region.domain().particleCount());
 				snapshotSender.send(level, region);
+			} catch (FluidRegionPersistence.ThermalInitializationRequiredException required) {
+				region.requireThermalInitialization(required.sourceVersion());
+				return awaitThermalInitialization(level, region);
 			} catch (IOException | RuntimeException exception) {
 				String message = "checkpoint restore failed: " + exception.getMessage();
 				region.setAvailabilityFailure(message);
 				checkpointFailures.put(region.id(), message);
-				retryAt.put(region.id(), serviceTick + 100L);
+				retryAt.remove(region.id());
 				RealWaterMod.LOGGER.error("Could not restore controller region {}", region.id(), exception);
 				return false;
 			}
@@ -187,6 +204,30 @@ final class FluidRegionOperations {
 		}
 		region.setAvailabilityFailure(null);
 		return true;
+	}
+
+	private boolean awaitThermalInitialization(ServerLevel level, FluidRegion region) {
+		String message = String.format(Locale.ROOT,
+				"awaiting explicit thermal initialization: region-state v%d checkpoint %d still preserves %d markers / %.3f exact cell volume; "
+						+ "the client intentionally receives no thermal snapshot until /realwater regions thermalinit <temperatureK>",
+				region.thermalInitializationSourceVersion(), region.checkpointGeneration(),
+				region.checkpointMarkerCount(), region.checkpointVolume());
+		region.setPaused(true);
+		region.setAvailabilityFailure(message);
+		retryAt.remove(region.id());
+		checkpointFailures.remove(region.id());
+		if (reportedThermalInitialization.add(region.id())) {
+			RealWaterMod.LOGGER.warn("Controller region {} {}", region.id(), message);
+		}
+		Set<UUID> notified = thermalInitializationNotifiedPlayers.computeIfAbsent(region.id(), ignored -> new HashSet<>());
+		for (var player : level.players()) if (notified.add(player.getUUID())) {
+			player.sendSystemMessage(Component.literal("真实水体区域 " + region.id().toString().substring(0, 8)
+					+ " 的水仍安全保存在 checkpoint " + region.checkpointGeneration() + "（"
+					+ region.checkpointMarkerCount() + " markers / " + region.checkpointVolume()
+					+ " cell volume）；旧格式没有内能，因此初始化前有意不渲染。请执行 "
+					+ "/realwater regions thermalinit <温度K>，或关闭 thermal 后重启。"));
+		}
+		return false;
 	}
 
 	void unloadForFailure(MinecraftServer server, FluidRegion region, String failure, RemovalSender removalSender) {
@@ -303,11 +344,14 @@ final class FluidRegionOperations {
 		if (!region.paused()) return "热初始化失败：区域必须先由 operator 暂停";
 		try {
 			long generation = persistence.initializeThermal(region, initialTemperatureK, operatorMetadata);
+			region.clearThermalInitializationRequirement();
 			region.setAvailabilityFailure(null);
 			region.enableThermalActivity();
 			region.wakeThermal(ThermalActivity.WakeReason.ADMIN_SOURCE);
 			checkpointFailures.remove(region.id());
 			retryAt.remove(region.id());
+			reportedThermalInitialization.remove(region.id());
+			thermalInitializationNotifiedPlayers.remove(region.id());
 			return "已按显式初温 " + initialTemperatureK + " K 原子初始化 region-state v6；checkpoint "
 					+ generation + "，区域保持暂停";
 		} catch (IOException | RuntimeException exception) {

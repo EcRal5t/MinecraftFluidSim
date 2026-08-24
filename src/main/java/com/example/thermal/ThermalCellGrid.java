@@ -97,19 +97,29 @@ public final class ThermalCellGrid {
 			}
 			double requested = targetEnergy[cell];
 			solveCell(cell, requested);
-			int last = -1;
+			int remainderCarrier = -1;
+			double largestHeatCapacity = Double.NEGATIVE_INFINITY;
 			double assigned = 0.0;
-			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) last = carrier;
+			// Put the exact floating-point conservation remainder on the best-conditioned carrier. Phase commits
+			// append very small coherent batches after much larger liquid parcels; assigning the remainder to that
+			// list tail amplifies an unavoidable cell-sum roundoff into a measurable temperature mismatch.
 			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-				if (carrier == last) continue;
+				double capacity = carriers.mass(carrier) * carriers.material(carrier).specificHeatAt(temperature[cell]);
+				if (capacity > largestHeatCapacity) {
+					largestHeatCapacity = capacity;
+					remainderCarrier = carrier;
+				}
+			}
+			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+				if (carrier == remainderCarrier) continue;
 				double value = modeledEnergy(carrier, temperature[cell]);
 				carriers.setInternalEnergy(carrier, value);
 				assigned += value;
 			}
 			double remainder = requested - assigned;
 			if (!Double.isFinite(remainder)) throw new IllegalArgumentException("Thermal carrier energy remainder is invalid");
-			carriers.setInternalEnergy(last, remainder);
-			validateCarrierAtCellTemperature(last, temperature[cell]);
+			carriers.setInternalEnergy(remainderCarrier, remainder);
+			validateCarrierAtCellTemperature(remainderCarrier, temperature[cell]);
 			internalEnergy[cell] = requested;
 		}
 	}
@@ -235,7 +245,11 @@ public final class ThermalCellGrid {
 		double restored = material.temperatureForSensibleSpecificEnergy(sensible);
 		double tolerance = Math.max(1.0E-9, Math.max(Math.ulp(restored), Math.ulp(cellTemperature)) * 16.0);
 		if (Math.abs(restored - cellTemperature) > tolerance) {
-			throw new IllegalArgumentException("Thermal carrier remainder left local equilibrium");
+			double residual = carriers.internalEnergy(carrier) - modeledEnergy(carrier, cellTemperature);
+			throw new IllegalArgumentException("Thermal carrier remainder left local equilibrium"
+					+ " (carrier=" + carrier + ", cellTemperature=" + cellTemperature
+					+ ", restoredTemperature=" + restored + ", energyResidual=" + residual
+					+ ", mass=" + carriers.mass(carrier) + ")");
 		}
 	}
 

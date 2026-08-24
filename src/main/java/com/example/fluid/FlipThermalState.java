@@ -630,7 +630,7 @@ final class FlipThermalState {
 		return phaseCandidateState(cell, phaseInventory, cellEnergy, markers).temperatureK();
 	}
 
-	/** Validates a prospective gas/liquid edit against the complete unchanged same-cell granular heat bath. */
+	/** Validates a prospective gas/liquid edit against every unchanged same-cell solid heat-bath carrier. */
 	void requirePhaseCandidateState(
 			int cell, List<ThermalStateFunction.InventoryPortion> liquidInventory,
 			double cellEnergyDelta, MarkerContext markers
@@ -644,7 +644,13 @@ final class FlipThermalState {
 		for (int carrier = 0; carrier < current.carrierCount(); carrier++) if (current.cell(carrier) == cell) {
 			cellEnergy = cellEnergy.add(SignedDyadic.of(current.internalEnergy(carrier)));
 		}
-		phaseCandidateState(cell, liquidInventory, cellEnergy, markers);
+		ArrayList<ThermalStateFunction.InventoryPortion> condensedInventory = new ArrayList<>(liquidInventory);
+		for (CoherentPhaseStore.Group group : coherentPhases.snapshot()) if (group.cell() == cell) {
+			condensedInventory.add(new ThermalStateFunction.InventoryPortion(
+					registry.materialHandle(group.phaseId()), group.mass(),
+					group.composition() == null ? Map.of() : group.composition().stableAmounts()));
+		}
+		phaseCandidateState(cell, condensedInventory, cellEnergy, markers);
 	}
 
 	private ThermalStateFunction.State phaseCandidateState(

@@ -11,6 +11,12 @@ import java.util.List;
 public final class ThermalStateFunction {
 	public enum PhaseState { LOWER, PLATEAU, UPPER }
 	public record State(double temperatureK, double heatCapacityEuPerK) { }
+	/** A prospective inventory is finite and well-formed but cannot represent its energy inside the data-pack range. */
+	public static final class EnergyOutsideValidityException extends IllegalArgumentException {
+		public EnergyOutsideValidityException() {
+			super("Thermal LTE energy is outside the common validity range");
+		}
+	}
 	public record InventoryPortion(int materialHandle, double massMu, Map<String, Long> speciesQuanta) {
 		public InventoryPortion {
 			if (!(Double.isFinite(massMu) && massMu > 0.0) || speciesQuanta == null) {
@@ -83,7 +89,7 @@ public final class ThermalStateFunction {
 		double maximumEnergy = inventoryEnergy(portions, maximum);
 		double tolerance = energyTolerance(internalEnergy, minimumEnergy, maximumEnergy);
 		if (internalEnergy < minimumEnergy - tolerance || internalEnergy > maximumEnergy + tolerance) {
-			throw new IllegalArgumentException("Thermal LTE energy is outside the common validity range");
+			throw new EnergyOutsideValidityException();
 		}
 		if (internalEnergy <= minimumEnergy) return new State(minimum, inventoryHeatCapacity(portions, minimum));
 		if (internalEnergy >= maximumEnergy) return new State(maximum, inventoryHeatCapacity(portions, maximum));
