@@ -23,7 +23,7 @@
 | 区域身份、solver ownership、运行态 | `src/main/java/com/example/simulation/FluidRegion.java` | UNLOADED 不持 solver 但仍占预算；恢复先刷新碰撞 |
 | 调度生命周期 | `src/main/java/com/example/simulation/FluidRegionLifecycle.java` | 调度状态不得移动、创建、删除或缩放 marker |
 | 区域登记、选择、空间与预算 | `src/main/java/com/example/simulation/FluidRegionManager.java` | 拒绝不替换旧域；报告 required/per-region/remaining |
-| 世界配置 | `src/main/java/com/example/simulation/FluidServerConfig.java` | v1–v5 配置 fail-closed；旧 reader 强制未知新门关闭；chemistry/granular/precipitation 依赖链严格；预算与各功能门重启后生效 |
+| 世界配置 | `src/main/java/com/example/simulation/FluidServerConfig.java` | v1–v6 配置 fail-closed；旧 reader 强制未知新门关闭；chemistry/granular/precipitation 与 thermal/phase-change 依赖链严格；预算与各功能门重启后生效；thermal v6 已冻结但在完整 joint inventory 前不由 service 消费 |
 | controller 持久化协调 | `src/main/java/com/example/simulation/FluidRegionPersistence.java` | manifest admission、checkpoint、quarantine 与 takeover journal 分离；按功能门严格分派 v5/v3/v2/v1，v4 保留并拒绝 |
 | `region-state v1`/门控 v2/v3/v5 | `src/main/java/com/example/simulation/persistence/`、`docs/architecture/region-state-v1.md`、`docs/architecture/chemistry-state.md`、`docs/architecture/granular-state.md` | 两槽完整代次、CRC、账本和 HEAD 最后发布；discovery 校验完整 committed generation；v1/v2/v3 canonical bytes 不变；v5 是含 required typed granular extension 的完整联合代次，缺 authoritative registry 时锁定；v4 仅为气体评审预留 |
 | M3 跨层迁移边界 | `docs/architecture/m3-material-state-migration.md` | 单一 `materialsEnabled` 门；network v2 与 region-state v2 独立版本；运行时 handle 不上链 |

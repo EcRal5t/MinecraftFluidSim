@@ -116,3 +116,13 @@ non-empty coherent v6。M8 active/deposit 与 gas energy ordinals 仍显式拒�
 
 扩展既有 `region-state` 场景，用非零 coherent energy 完成 capture、codec、atomic publish、reconstruct、domain restore
 全往返，并单独覆盖 composition payload 的无损 codec。最近门：`thermal,region-state` 通过；未请求实机。
+
+## M9.8 server config v6 boundary
+
+`FluidServerConfig` 升至 v6，新增显式 `thermalEnabled`、`phaseChangeEnabled`、每 logical step 最大 thermal substep
+与 phase operation 预算。thermal 要求 materials，phase-change 要求 thermal；预算不能超过代码硬上限。v1--v5 reader
+一律把两个新门置 false，v6 缺任一门或预算则拒绝，默认新世界也保持关闭。现阶段 simulation service 刻意不消费
+这两个门，避免在 M8/gas/container 联合能量尚未完成时产生“配置已开但库存不完整”的生产状态。
+
+扩展既有 world-config persistence 场景，覆盖 v6 round-trip、v5 安全退化、v6 缺键拒绝和依赖链。最近门：
+`region-state` 通过；未请求实机。

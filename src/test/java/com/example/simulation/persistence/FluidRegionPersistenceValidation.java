@@ -617,10 +617,11 @@ public final class FluidRegionPersistenceValidation {
 		FluidServerConfig defaults = FluidServerConfig.loadOrCreate(root);
 		require(!defaults.controllersEnabled() && !defaults.materialsEnabled() && !defaults.worldBridgeEnabled()
 				&& !defaults.chemistryEnabled() && !defaults.granularEnabled() && !defaults.precipitationEnabled()
+				&& !defaults.thermalEnabled() && !defaults.phaseChangeEnabled()
 				&& defaults.limits().maximumRegions() == 4, "safe default config changed");
 		FluidServerConfig enabled = defaults.withControllersEnabled(true).withMaterialsEnabled(true)
 				.withWorldBridgeEnabled(true).withChemistryEnabled(true).withGranularEnabled(true)
-				.withPrecipitationEnabled(true);
+				.withPrecipitationEnabled(true).withThermalEnabled(true).withPhaseChangeEnabled(true);
 		enabled.save(root);
 		require(FluidServerConfig.loadOrCreate(root).equals(enabled), "world-local config did not round-trip");
 
@@ -637,7 +638,8 @@ public final class FluidRegionPersistenceValidation {
 				""");
 		FluidServerConfig legacy = FluidServerConfig.loadOrCreate(legacyRoot);
 		require(legacy.controllersEnabled() && !legacy.materialsEnabled() && !legacy.worldBridgeEnabled()
-				&& !legacy.chemistryEnabled() && !legacy.granularEnabled() && !legacy.precipitationEnabled(),
+				&& !legacy.chemistryEnabled() && !legacy.granularEnabled() && !legacy.precipitationEnabled()
+				&& !legacy.thermalEnabled() && !legacy.phaseChangeEnabled(),
 				"v1 config did not migrate with materials and world bridge safely disabled");
 
 		Path v2Root = Files.createTempDirectory(Path.of("."), "config-v2-");
@@ -654,7 +656,8 @@ public final class FluidRegionPersistenceValidation {
 				""");
 		FluidServerConfig v2 = FluidServerConfig.loadOrCreate(v2Root);
 		require(v2.materialsEnabled() && !v2.worldBridgeEnabled() && !v2.chemistryEnabled()
-				&& !v2.granularEnabled() && !v2.precipitationEnabled(),
+				&& !v2.granularEnabled() && !v2.precipitationEnabled()
+				&& !v2.thermalEnabled() && !v2.phaseChangeEnabled(),
 				"v2 config did not keep newer features safely disabled");
 		Files.writeString(FluidServerConfig.path(v2Root), Files.readString(FluidServerConfig.path(v2Root))
 				.replace("formatVersion=2", "formatVersion=3"));
@@ -702,6 +705,19 @@ public final class FluidRegionPersistenceValidation {
 				""");
 		expectIOException(() -> FluidServerConfig.loadOrCreate(v5Root),
 				"v5 config without explicit granular gates/budgets was accepted");
+		Files.writeString(FluidServerConfig.path(v5Root), Files.readString(FluidServerConfig.path(v5Root)) + """
+				granularEnabled=false
+				precipitationEnabled=false
+				maximumGranularParcels=65536
+				maximumGranularDepositGroups=262144
+				""");
+		FluidServerConfig v5 = FluidServerConfig.loadOrCreate(v5Root);
+		require(!v5.thermalEnabled() && !v5.phaseChangeEnabled(),
+				"v5 config did not force M9 feature gates disabled");
+		Files.writeString(FluidServerConfig.path(v5Root), Files.readString(FluidServerConfig.path(v5Root))
+				.replace("formatVersion=5", "formatVersion=6"));
+		expectIOException(() -> FluidServerConfig.loadOrCreate(v5Root),
+				"v6 config without explicit thermal gates/budgets was accepted");
 
 		Files.writeString(FluidServerConfig.path(root), "formatVersion=99\ncontrollersEnabled=false\n");
 		expectIOException(() -> FluidServerConfig.loadOrCreate(root), "unknown config version was silently replaced");

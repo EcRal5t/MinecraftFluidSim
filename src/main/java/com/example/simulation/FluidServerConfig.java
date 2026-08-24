@@ -1,6 +1,8 @@
 package com.example.simulation;
 
 import com.example.granular.GranularLimits;
+import com.example.thermal.ThermalLimits;
+import com.example.thermal.ThermalTransport;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -21,11 +23,15 @@ public record FluidServerConfig(
 		boolean chemistryEnabled,
 		boolean granularEnabled,
 		boolean precipitationEnabled,
+		boolean thermalEnabled,
+		boolean phaseChangeEnabled,
 		long maximumGranularParcels,
 		long maximumGranularDepositGroups,
+		int maximumThermalSubstepsPerStep,
+		int maximumPhaseOperationsPerStep,
 		FluidRegionManager.Limits limits
 ) {
-	private static final int FORMAT_VERSION = 5;
+	private static final int FORMAT_VERSION = 6;
 	private static final int DEFAULT_REGIONS = 4;
 	private static final long DEFAULT_CELLS = 9_216L;
 	private static final long DEFAULT_MARKERS = 73_728L;
@@ -41,11 +47,34 @@ public record FluidServerConfig(
 		if (precipitationEnabled && !(granularEnabled && chemistryEnabled)) {
 			throw new IllegalArgumentException("precipitationEnabled=true requires granularEnabled=true and chemistryEnabled=true");
 		}
+		if (thermalEnabled && !materialsEnabled) {
+			throw new IllegalArgumentException("thermalEnabled=true requires materialsEnabled=true");
+		}
+		if (phaseChangeEnabled && !thermalEnabled) {
+			throw new IllegalArgumentException("phaseChangeEnabled=true requires thermalEnabled=true");
+		}
 		if (maximumGranularParcels <= 0L || maximumGranularParcels > GranularLimits.MAX_ACTIVE_PARCELS_PER_SERVER
 				|| maximumGranularDepositGroups <= 0L
 				|| maximumGranularDepositGroups > GranularLimits.MAX_DEPOSIT_GROUPS_PER_SERVER) {
 			throw new IllegalArgumentException("Granular server budgets are outside hard limits");
 		}
+		if (maximumThermalSubstepsPerStep <= 0
+				|| maximumThermalSubstepsPerStep > ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS
+				|| maximumPhaseOperationsPerStep <= 0
+				|| maximumPhaseOperationsPerStep > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
+			throw new IllegalArgumentException("Thermal server budgets are outside hard limits");
+		}
+	}
+
+	public FluidServerConfig(
+			boolean controllersEnabled, boolean materialsEnabled, boolean worldBridgeEnabled,
+			boolean chemistryEnabled, boolean granularEnabled, boolean precipitationEnabled,
+			long maximumGranularParcels, long maximumGranularDepositGroups,
+			FluidRegionManager.Limits limits
+	) {
+		this(controllersEnabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled, granularEnabled,
+				precipitationEnabled, false, false, maximumGranularParcels, maximumGranularDepositGroups,
+				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP, limits);
 	}
 
 	public FluidServerConfig(
@@ -104,17 +133,26 @@ public record FluidServerConfig(
 			if (!granular.equals("true") && !granular.equals("false")) throw new IOException("granularEnabled must be true or false");
 			String precipitation = version >= 5 ? required(properties, "precipitationEnabled") : "false";
 			if (!precipitation.equals("true") && !precipitation.equals("false")) throw new IOException("precipitationEnabled must be true or false");
+			String thermal = version >= 6 ? required(properties, "thermalEnabled") : "false";
+			if (!thermal.equals("true") && !thermal.equals("false")) throw new IOException("thermalEnabled must be true or false");
+			String phaseChange = version >= 6 ? required(properties, "phaseChangeEnabled") : "false";
+			if (!phaseChange.equals("true") && !phaseChange.equals("false")) throw new IOException("phaseChangeEnabled must be true or false");
 			long granularParcels = version >= 5 ? positiveLong(properties, "maximumGranularParcels")
 					: GranularLimits.MAX_ACTIVE_PARCELS_PER_SERVER;
 			long granularDeposits = version >= 5 ? positiveLong(properties, "maximumGranularDepositGroups")
 					: GranularLimits.MAX_DEPOSIT_GROUPS_PER_SERVER;
+			int thermalSubsteps = version >= 6 ? positiveInteger(properties, "maximumThermalSubstepsPerStep")
+					: ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS;
+			int phaseOperations = version >= 6 ? positiveInteger(properties, "maximumPhaseOperationsPerStep")
+					: ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP;
 			FluidRegionManager.Limits limits = new FluidRegionManager.Limits(
 					integer(properties, "maximumRegions"), positiveLong(properties, "maximumCellsPerRegion"),
 					positiveLong(properties, "maximumMarkersPerRegion"), positiveLong(properties, "maximumTotalCells"),
 					positiveLong(properties, "maximumTotalMarkers"));
 			return new FluidServerConfig(Boolean.parseBoolean(controllers), Boolean.parseBoolean(materials),
 					Boolean.parseBoolean(worldBridge), Boolean.parseBoolean(chemistry), Boolean.parseBoolean(granular),
-					Boolean.parseBoolean(precipitation), granularParcels, granularDeposits, limits);
+					Boolean.parseBoolean(precipitation), Boolean.parseBoolean(thermal), Boolean.parseBoolean(phaseChange),
+					granularParcels, granularDeposits, thermalSubsteps, phaseOperations, limits);
 		} catch (IllegalArgumentException exception) {
 			throw new IOException("Invalid Real Water server config: " + exception.getMessage(), exception);
 		}
@@ -131,8 +169,12 @@ public record FluidServerConfig(
 		properties.setProperty("chemistryEnabled", Boolean.toString(chemistryEnabled));
 		properties.setProperty("granularEnabled", Boolean.toString(granularEnabled));
 		properties.setProperty("precipitationEnabled", Boolean.toString(precipitationEnabled));
+		properties.setProperty("thermalEnabled", Boolean.toString(thermalEnabled));
+		properties.setProperty("phaseChangeEnabled", Boolean.toString(phaseChangeEnabled));
 		properties.setProperty("maximumGranularParcels", Long.toString(maximumGranularParcels));
 		properties.setProperty("maximumGranularDepositGroups", Long.toString(maximumGranularDepositGroups));
+		properties.setProperty("maximumThermalSubstepsPerStep", Integer.toString(maximumThermalSubstepsPerStep));
+		properties.setProperty("maximumPhaseOperationsPerStep", Integer.toString(maximumPhaseOperationsPerStep));
 		properties.setProperty("maximumRegions", Integer.toString(limits.maximumRegions()));
 		properties.setProperty("maximumCellsPerRegion", Long.toString(limits.maximumCellsPerRegion()));
 		properties.setProperty("maximumMarkersPerRegion", Long.toString(limits.maximumMarkersPerRegion()));
@@ -152,32 +194,50 @@ public record FluidServerConfig(
 
 	public FluidServerConfig withControllersEnabled(boolean enabled) {
 		return new FluidServerConfig(enabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled, granularEnabled,
-				precipitationEnabled, maximumGranularParcels, maximumGranularDepositGroups, limits);
+				precipitationEnabled, thermalEnabled, phaseChangeEnabled, maximumGranularParcels,
+				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
 	}
 
 	public FluidServerConfig withMaterialsEnabled(boolean enabled) {
 		return new FluidServerConfig(controllersEnabled, enabled, worldBridgeEnabled, chemistryEnabled, granularEnabled,
-				precipitationEnabled, maximumGranularParcels, maximumGranularDepositGroups, limits);
+				precipitationEnabled, thermalEnabled, phaseChangeEnabled, maximumGranularParcels,
+				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
 	}
 
 	public FluidServerConfig withWorldBridgeEnabled(boolean enabled) {
 		return new FluidServerConfig(controllersEnabled, materialsEnabled, enabled, chemistryEnabled, granularEnabled,
-				precipitationEnabled, maximumGranularParcels, maximumGranularDepositGroups, limits);
+				precipitationEnabled, thermalEnabled, phaseChangeEnabled, maximumGranularParcels,
+				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
 	}
 
 	public FluidServerConfig withChemistryEnabled(boolean enabled) {
 		return new FluidServerConfig(controllersEnabled, materialsEnabled, worldBridgeEnabled, enabled, granularEnabled,
-				precipitationEnabled, maximumGranularParcels, maximumGranularDepositGroups, limits);
+				precipitationEnabled, thermalEnabled, phaseChangeEnabled, maximumGranularParcels,
+				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
 	}
 
 	public FluidServerConfig withGranularEnabled(boolean enabled) {
 		return new FluidServerConfig(controllersEnabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled, enabled,
-				precipitationEnabled, maximumGranularParcels, maximumGranularDepositGroups, limits);
+				precipitationEnabled, thermalEnabled, phaseChangeEnabled, maximumGranularParcels,
+				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
 	}
 
 	public FluidServerConfig withPrecipitationEnabled(boolean enabled) {
 		return new FluidServerConfig(controllersEnabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled,
-				granularEnabled, enabled, maximumGranularParcels, maximumGranularDepositGroups, limits);
+				granularEnabled, enabled, thermalEnabled, phaseChangeEnabled, maximumGranularParcels,
+				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
+	}
+
+	public FluidServerConfig withThermalEnabled(boolean enabled) {
+		return new FluidServerConfig(controllersEnabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled,
+				granularEnabled, precipitationEnabled, enabled, phaseChangeEnabled, maximumGranularParcels,
+				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
+	}
+
+	public FluidServerConfig withPhaseChangeEnabled(boolean enabled) {
+		return new FluidServerConfig(controllersEnabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled,
+				granularEnabled, precipitationEnabled, thermalEnabled, enabled, maximumGranularParcels,
+				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
 	}
 
 	private static String required(Properties properties, String key) throws IOException {
@@ -197,5 +257,11 @@ public record FluidServerConfig(
 			if (value <= 0L) throw new IOException(key + " must be positive");
 			return value;
 		} catch (NumberFormatException exception) { throw new IOException("Invalid integer for " + key, exception); }
+	}
+
+	private static int positiveInteger(Properties properties, String key) throws IOException {
+		int value = integer(properties, key);
+		if (value <= 0) throw new IOException(key + " must be positive");
+		return value;
 	}
 }
