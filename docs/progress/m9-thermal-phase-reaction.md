@@ -1,5 +1,14 @@
 # M9 temperature, phase change and reaction heat
 
+## M9.12 gas persistence prerequisite design
+
+- Froze [`../architecture/gas-state-v4.md`](../architecture/gas-state-v4.md). Gas v4 is a complete material + optional
+  chemistry + gas generation and explicitly excludes granular/thermal state.
+- Stable component nanos, raw mass, optional species/residual and source/sink audit are independent truth. Runtime node
+  slots are replaced by canonical minimum-cell keys plus complete section membership; volume/pressure/edges stay derived.
+- v1/v2/v3 require an explicit ambient bootstrap, v5 cannot migrate backward, and complete v6 must reuse the reviewed
+  gas payload before adding per-node energy.
+
 本文记录 M9 的增量、自动门与实机证据。正式契约见
 [`../architecture/thermal-state.md`](../architecture/thermal-state.md)。M9 开始于已验收主 Mod 0.14.0；CPU 仍是规范后端。
 
