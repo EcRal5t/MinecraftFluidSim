@@ -12,8 +12,24 @@ public final class ThermalTransport {
 		double area(int x, int y, int z, int axis);
 	}
 
+	@FunctionalInterface
+	public interface BoundaryFace {
+		/** Returns null for the default adiabatic face; direction is -x,+x,-y,+y,-z,+z in ordinal order. */
+		FixedBoundary boundary(int x, int y, int z, int direction);
+	}
+
+	public record FixedBoundary(double contactAreaSquareMeters, double surfaceTemperatureK) {
+		public FixedBoundary {
+			if (!(Double.isFinite(contactAreaSquareMeters) && contactAreaSquareMeters >= 0.0)
+					|| !(Double.isFinite(surfaceTemperatureK)
+					&& surfaceTemperatureK >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)) {
+				throw new IllegalArgumentException("Fixed thermal boundary is invalid");
+			}
+		}
+	}
+
 	public record Stats(int substeps, int evaluatedFaces, double maximumTemperatureChangeK,
-	                    SignedDyadic roundoffResidual) { }
+	                    SignedDyadic roundoffResidual, SignedDyadic reservoirExchange) { }
 
 	private final int sizeX, sizeY, sizeZ;
 	private final double cellSizeMeters;
@@ -38,12 +54,30 @@ public final class ThermalTransport {
 	}
 
 	public Stats step(ThermalCellGrid grid, FaceArea faceArea, double logicalDtSeconds) {
-		if (grid == null || grid.cellCount() != conductanceSum.length || faceArea == null) {
+		return step(grid, faceArea, (x, y, z, direction) -> null, logicalDtSeconds);
+	}
+
+	public Stats step(
+			ThermalCellGrid grid, FaceArea faceArea, BoundaryFace boundaryFace, double logicalDtSeconds
+	) {
+		if (grid == null || grid.cellCount() != conductanceSum.length || faceArea == null || boundaryFace == null) {
 			throw new IllegalArgumentException("Thermal transport grid/geometry is incompatible");
 		}
 		if (!(Double.isFinite(logicalDtSeconds) && logicalDtSeconds > 0.0)) {
 			throw new IllegalArgumentException("Thermal timestep must be finite and positive");
 		}
+		double[] markerSnapshot = grid.copyMarkerInternalEnergy();
+		try {
+			return stepValidated(grid, faceArea, boundaryFace, logicalDtSeconds);
+		} catch (RuntimeException failure) {
+			grid.restoreMarkerInternalEnergy(markerSnapshot);
+			throw failure;
+		}
+	}
+
+	private Stats stepValidated(
+			ThermalCellGrid grid, FaceArea faceArea, BoundaryFace boundaryFace, double logicalDtSeconds
+	) {
 		SignedDyadic before = inventory(grid);
 		double[] initialTemperature = new double[grid.cellCount()];
 		for (int cell = 0; cell < initialTemperature.length; cell++) initialTemperature[cell] = grid.temperature(cell);
@@ -53,6 +87,8 @@ public final class ThermalTransport {
 			conductanceSum[first] += conductance;
 			conductanceSum[second] += conductance;
 		});
+		evaluatedFaces += forEachBoundary(grid, boundaryFace,
+				(cell, conductance, surfaceTemperature) -> conductanceSum[cell] += conductance);
 		double stableDt = Double.POSITIVE_INFINITY;
 		for (int cell = 0; cell < conductanceSum.length; cell++) if (conductanceSum[cell] > 0.0) {
 			stableDt = Math.min(stableDt, grid.heatCapacity(cell) / conductanceSum[cell]);
@@ -62,6 +98,7 @@ public final class ThermalTransport {
 			throw new IllegalArgumentException("Thermal stability substep budget exceeded: " + substeps);
 		}
 		double substepDt = logicalDtSeconds / substeps;
+		SignedDyadic[] reservoirExchange = {SignedDyadic.ZERO};
 		for (int step = 0; step < substeps; step++) {
 			Arrays.fill(deltaEnergy, 0.0);
 			forEachFace(grid, faceArea, (first, second, conductance) -> {
@@ -69,6 +106,12 @@ public final class ThermalTransport {
 				if (!Double.isFinite(transfer)) throw new IllegalArgumentException("Thermal face transfer is not finite");
 				deltaEnergy[first] += transfer;
 				deltaEnergy[second] -= transfer;
+			});
+			forEachBoundary(grid, boundaryFace, (cell, conductance, surfaceTemperature) -> {
+				double transfer = conductance * (surfaceTemperature - grid.temperature(cell)) * substepDt;
+				if (!Double.isFinite(transfer)) throw new IllegalArgumentException("Thermal reservoir transfer is not finite");
+				deltaEnergy[cell] += transfer;
+				reservoirExchange[0] = reservoirExchange[0].add(SignedDyadic.of(transfer));
 			});
 			double[] target = grid.copyInternalEnergy();
 			for (int cell = 0; cell < target.length; cell++) target[cell] += deltaEnergy[cell];
@@ -78,8 +121,36 @@ public final class ThermalTransport {
 		for (int cell = 0; cell < initialTemperature.length; cell++) if (grid.occupied(cell)) {
 			maximumChange = Math.max(maximumChange, Math.abs(grid.temperature(cell) - initialTemperature[cell]));
 		}
-		SignedDyadic residual = inventory(grid).subtract(before);
-		return new Stats(substeps, evaluatedFaces, maximumChange, residual);
+		SignedDyadic residual = inventory(grid).subtract(before).subtract(reservoirExchange[0]);
+		return new Stats(substeps, evaluatedFaces, maximumChange, residual, reservoirExchange[0]);
+	}
+
+	private int forEachBoundary(ThermalCellGrid grid, BoundaryFace boundaryFace, BoundaryConsumer consumer) {
+		int evaluated = 0;
+		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int cell = cellIndex(x, y, z);
+			if (!grid.occupied(cell)) continue;
+			for (int direction = 0; direction < 6; direction++) {
+				int neighborX = x + (direction == 0 ? -1 : direction == 1 ? 1 : 0);
+				int neighborY = y + (direction == 2 ? -1 : direction == 3 ? 1 : 0);
+				int neighborZ = z + (direction == 4 ? -1 : direction == 5 ? 1 : 0);
+				if (inside(neighborX, neighborY, neighborZ)
+						&& grid.occupied(cellIndex(neighborX, neighborY, neighborZ))) continue;
+				FixedBoundary boundary = boundaryFace.boundary(x, y, z, direction);
+				if (boundary == null || boundary.contactAreaSquareMeters() == 0.0 || grid.conductivity(cell) == 0.0) continue;
+				if (boundary.contactAreaSquareMeters() > cellSizeMeters * cellSizeMeters) {
+					throw new IllegalArgumentException("Thermal boundary contact area exceeds one face");
+				}
+				double conductance = 2.0 * grid.conductivity(cell)
+						* boundary.contactAreaSquareMeters() / cellSizeMeters;
+				if (!(Double.isFinite(conductance) && conductance > 0.0)) {
+					throw new IllegalArgumentException("Thermal boundary conductance is invalid");
+				}
+				consumer.accept(cell, conductance, boundary.surfaceTemperatureK());
+				evaluated++;
+			}
+		}
+		return evaluated;
 	}
 
 	private int forEachFace(ThermalCellGrid grid, FaceArea faceArea, FaceConsumer consumer) {
@@ -127,7 +198,12 @@ public final class ThermalTransport {
 	}
 
 	private int cellIndex(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
+	private boolean inside(int x, int y, int z) {
+		return x >= 0 && x < sizeX && y >= 0 && y < sizeY && z >= 0 && z < sizeZ;
+	}
 
 	@FunctionalInterface
 	private interface FaceConsumer { void accept(int first, int second, double conductance); }
+	@FunctionalInterface
+	private interface BoundaryConsumer { void accept(int cell, double conductance, double surfaceTemperature); }
 }

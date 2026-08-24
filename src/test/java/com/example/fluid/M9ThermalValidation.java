@@ -1,15 +1,24 @@
 package com.example.fluid;
 
 import com.example.chemistry.ChemicalLimits;
+import com.example.chemistry.ChemicalMixtureRecord;
+import com.example.chemistry.ChemicalParcelStore;
+import com.example.chemistry.ChemicalPhaseDefinition;
+import com.example.chemistry.ChemicalReaction;
+import com.example.chemistry.ChemicalRegistry;
+import com.example.chemistry.ChemicalSpecies;
 import com.example.chemistry.ExactRational;
 import com.example.granular.SolidVolume;
 import com.example.thermal.SignedDyadic;
+import com.example.thermal.ThermalBoundaryDefinition;
+import com.example.thermal.ThermalAuditLedger;
 import com.example.thermal.ThermalDefinitionCodec;
 import com.example.thermal.ThermalMaterialDefinition;
 import com.example.thermal.ThermalPhaseTransition;
 import com.example.thermal.ThermalRegistry;
 import com.example.thermal.ThermalSpeciesOffset;
 import com.example.thermal.ThermalStateFunction;
+import com.example.thermal.ThermalTransport;
 
 import java.io.StringReader;
 import java.util.List;
@@ -25,9 +34,11 @@ public final class M9ThermalValidation {
 		definitionAndCanonicalRegistry();
 		piecewiseStateFunctionRoundTrips();
 		reactionHeatIsPathIndependentStateEnergy();
+		reactionCommitValidatesEnergyBeforeMutation();
 		phasePlateauUsesTheStateFunctionGap();
 		exactDyadicAuditDoesNotLoseCancellationRemainders();
 		liquidTransportAndHandoffCloseEnergy();
+		fixedBoundaryAuditsAndFailedStepRollsBack();
 		reseedingMovesEnergyWithMarkerTruth();
 		System.out.println("M9 thermal validation passed");
 	}
@@ -60,6 +71,14 @@ public final class M9ThermalValidation {
 		ThermalMaterialDefinition decoded = ThermalDefinitionCodec.decodeMaterial("realwater:thermal/test",
 				new StringReader(json));
 		require(decoded.equals(first), "thermal material JSON did not round-trip the definition contract");
+		ThermalBoundaryDefinition boundary = ThermalDefinitionCodec.decodeBoundary("realwater:boundary/test",
+				new StringReader("{\"target_kind\":\"BLOCK\",\"target_id\":\"minecraft:magma_block\","
+						+ "\"kind\":\"FIXED_SURFACE_TEMPERATURE\",\"surface_temperature_k\":\"500.0\"}"));
+		ThermalRegistry withBoundary = new ThermalRegistry(List.of(first, second), List.of(), List.of(),
+				List.of(boundary), "", "");
+		require(withBoundary.boundaries().equals(List.of(boundary))
+				&& !withBoundary.fingerprint().equals(forward.fingerprint()),
+				"thermal boundary definition was absent from canonical registry identity");
 		expectFailure(() -> new ThermalMaterialDefinition("realwater:thermal/broken",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, "realwater:broken", 300.0, 0.0, 1.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 299.0, 1.0),
@@ -103,6 +122,62 @@ public final class M9ThermalValidation {
 		double productTemperatureB = state.stateForInternalEnergy(handle, 1.0, productsB, reactantReference).temperatureK();
 		require(productTemperatureA > 300.0 && close(productTemperatureA, productTemperatureB),
 				"formation energy did not produce path-independent exothermic temperature rise");
+	}
+
+	private static void reactionCommitValidatesEnergyBeforeMutation() {
+		String a = "test:reactant", b = "test:product", phaseId = "test:phase", materialId = "test:liquid";
+		ChemicalSpecies reactant = new ChemicalSpecies(a, Map.of("X", 1), 0, ExactRational.ONE, 0xff000000);
+		ChemicalSpecies product = new ChemicalSpecies(b, Map.of("X", 1), 0, ExactRational.ONE, 0xff000000);
+		ChemicalPhaseDefinition phase = new ChemicalPhaseDefinition(
+				phaseId, materialId, List.of(a, b), Map.of(a, ExactRational.ONE), false);
+		ChemicalReaction reaction = new ChemicalReaction("test:reaction", ChemicalReaction.Kind.INSTANTANEOUS,
+				phaseId, Map.of(a, 1), Map.of(b, 1), ExactRational.ZERO);
+		ChemicalRegistry chemistry = new ChemicalRegistry(List.of(reactant, product), List.of(phase), List.of(reaction));
+		ChemicalParcelStore parcels = new ChemicalParcelStore(chemistry, 1, 8);
+		ChemicalMixtureRecord initial = ChemicalMixtureRecord.fromStableAmounts(
+				chemistry, Map.of(a, ChemicalLimits.QUANTA_PER_AU), 0.0);
+		parcels.assign(0, initial, false);
+		parcels.markDirtyCell(0);
+		double[] mass = {1.0};
+		FluidMaterial liquid = FluidMaterial.withSurfaceTension(materialId, 1.0, "test:miscible", 0.0, 90.0);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
+		FlipThermalState.MarkerContext markers = new FlipThermalState.MarkerContext() {
+			@Override public int markerCount() { return 1; }
+			@Override public int cell(int marker) { return 0; }
+			@Override public int fluidMaterialHandle(int marker) { return 0; }
+			@Override public double mass(int marker) { return mass[marker]; }
+			@Override public double volume(int marker) { return 1.0; }
+			@Override public ChemicalMixtureRecord mixture(int marker) { return parcels.record(marker); }
+			@Override public ChemicalRegistry chemicalRegistry() { return chemistry; }
+		};
+		List<ThermalSpeciesOffset> offsets = List.of(
+				new ThermalSpeciesOffset("test:offset/a", a, "test:thermal/liquid", ExactRational.ZERO),
+				new ThermalSpeciesOffset("test:offset/b", b, "test:thermal/liquid", ExactRational.of(-100)));
+		FlipThermalState narrow = new FlipThermalState(new ThermalRegistry(List.of(new ThermalMaterialDefinition(
+				"test:thermal/liquid", ThermalMaterialDefinition.CarrierKind.LIQUID, materialId, 300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 305.0, 10.0)))), offsets, List.of(),
+				chemistry.fingerprint(), ""), liquids, 300.0, 1, 2, 2, 2, 0.5F, markers);
+		expectFailure(() -> parcels.reactDirtyCells(2, 2, 2, 0.5F,
+				new float[]{0.1F}, new float[]{0.1F}, new float[]{0.1F}, mass, new int[]{0},
+				handle -> materialId, 1,
+				(marker, mixture, candidateMass) -> narrow.requireReactionState(
+						marker, mixture, candidateMass, markers)),
+				"out-of-range reaction heat partially committed");
+		require(parcels.record(0).amount(chemistry.speciesHandle(a)) == ChemicalLimits.QUANTA_PER_AU,
+				"failed thermal reaction validation changed chemical truth");
+
+		FlipThermalState thermal = new FlipThermalState(new ThermalRegistry(List.of(new ThermalMaterialDefinition(
+				"test:thermal/liquid", ThermalMaterialDefinition.CarrierKind.LIQUID, materialId, 300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0)))), offsets, List.of(),
+				chemistry.fingerprint(), ""), liquids, 300.0, 1, 2, 2, 2, 0.5F, markers);
+		SignedDyadic before = thermal.exactEnergy(1);
+		parcels.reactDirtyCells(2, 2, 2, 0.5F,
+				new float[]{0.1F}, new float[]{0.1F}, new float[]{0.1F}, mass, new int[]{0},
+				handle -> materialId, 1,
+				(marker, mixture, candidateMass) -> thermal.requireReactionState(
+						marker, mixture, candidateMass, markers));
+		require(thermal.exactEnergy(1).equals(before) && close(thermal.temperature(0, markers), 310.0),
+				"reaction heat was not derived from conserved marker internal energy");
 	}
 
 	private static void phasePlateauUsesTheStateFunctionGap() {
@@ -173,6 +248,41 @@ public final class M9ThermalValidation {
 				&& close(restored.thermalTemperatureInCell(1, 1, 1), hot)
 				&& close(restored.thermalTemperatureInCell(2, 1, 1), cold),
 				"orthogonal thermal handoff did not preserve energy/temperature");
+	}
+
+	private static void fixedBoundaryAuditsAndFailedStepRollsBack() {
+		FluidMaterial liquid = FluidMaterial.withSurfaceTension("test:boundary_liquid", 1.0,
+				"test:miscible", 0.0, 90.0);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
+		ThermalMaterialDefinition definition = new ThermalMaterialDefinition("test:thermal/boundary_liquid",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0)));
+		FlipThermalState.MarkerContext markers = new FlipThermalState.MarkerContext() {
+			@Override public int markerCount() { return 1; }
+			@Override public int cell(int marker) { return 0; }
+			@Override public int fluidMaterialHandle(int marker) { return 0; }
+			@Override public double mass(int marker) { return 1.0; }
+			@Override public double volume(int marker) { return 1.0; }
+			@Override public ChemicalMixtureRecord mixture(int marker) { return null; }
+			@Override public ChemicalRegistry chemicalRegistry() { return null; }
+		};
+		FlipThermalState thermal = new FlipThermalState(new ThermalRegistry(List.of(definition)), liquids,
+				300.0, 1, 2, 2, 2, 0.5F, markers);
+		ThermalTransport.Stats heated = thermal.step(markers, (x, y, z, axis) -> 0.0,
+				(x, y, z, direction) -> direction == 0
+						? new ThermalTransport.FixedBoundary(0.25, 400.0) : null, 1.0);
+		require(close(thermal.temperature(0, markers), 310.0)
+				&& heated.reservoirExchange().equals(SignedDyadic.of(100.0))
+				&& thermal.exactEnergy(1).equals(thermal.audit().expectedInventory()),
+				"fixed-temperature boundary did not close source/audit energy");
+		SignedDyadic beforeFailure = thermal.exactEnergy(1);
+		ThermalAuditLedger auditBeforeFailure = thermal.audit();
+		expectFailure(() -> thermal.step(markers, (x, y, z, axis) -> 0.0,
+				(x, y, z, direction) -> direction == 0
+						? new ThermalTransport.FixedBoundary(0.25, 1_000.0) : null, 10.0),
+				"out-of-range fixed-boundary step was accepted");
+		require(thermal.exactEnergy(1).equals(beforeFailure) && thermal.audit().equals(auditBeforeFailure),
+				"failed thermal transport exposed a partial energy/audit commit");
 	}
 
 	private static void reseedingMovesEnergyWithMarkerTruth() {

@@ -7,6 +7,7 @@ public final class ThermalLimits {
 	public static final int MAX_TOTAL_SEGMENTS = 4_096;
 	public static final int MAX_SPECIES_OFFSETS = 512;
 	public static final int MAX_PHASE_TRANSITIONS = 512;
+	public static final int MAX_BOUNDARIES = 512;
 	public static final int MAX_THERMAL_ID_LENGTH = 128;
 	public static final int MAX_DYADIC_SIGNIFICAND_BITS = 32_768;
 	public static final double MIN_ABSOLUTE_TEMPERATURE_K = 1.0;

@@ -75,13 +75,20 @@ public final class ThermalCellGrid {
 		if (targetEnergy == null || targetEnergy.length != cellCount) {
 			throw new IllegalArgumentException("Thermal cell energy array length changed");
 		}
+		// Validate the entire candidate before changing any authoritative marker energy.
 		for (int cell = 0; cell < cellCount; cell++) {
 			if (markerCount[cell] == 0) {
 				if (targetEnergy[cell] != 0.0) throw new IllegalArgumentException("Empty thermal cell received energy");
+			} else {
+				if (!Double.isFinite(targetEnergy[cell])) throw new IllegalArgumentException("Thermal cell energy is not finite");
+				solveCell(cell, targetEnergy[cell]);
+			}
+		}
+		for (int cell = 0; cell < cellCount; cell++) {
+			if (markerCount[cell] == 0) {
 				continue;
 			}
 			double requested = targetEnergy[cell];
-			if (!Double.isFinite(requested)) throw new IllegalArgumentException("Thermal cell energy is not finite");
 			solveCell(cell, requested);
 			int last = -1;
 			double assigned = 0.0;
@@ -107,6 +114,20 @@ public final class ThermalCellGrid {
 	public double heatCapacity(int cell) { return heatCapacity[cell]; }
 	public double conductivity(int cell) { return conductivity[cell]; }
 	public double[] copyInternalEnergy() { return internalEnergy.clone(); }
+	public double[] copyMarkerInternalEnergy() {
+		if (markers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
+		double[] result = new double[markers.markerCount()];
+		for (int marker = 0; marker < result.length; marker++) result[marker] = markers.internalEnergy(marker);
+		return result;
+	}
+
+	public void restoreMarkerInternalEnergy(double[] snapshot) {
+		if (markers == null || snapshot == null || snapshot.length != markers.markerCount()) {
+			throw new IllegalArgumentException("Thermal marker rollback snapshot is incompatible");
+		}
+		for (int marker = 0; marker < snapshot.length; marker++) markers.setInternalEnergy(marker, snapshot[marker]);
+		rebuild(markers);
+	}
 
 	private void solveCell(int cell, double targetEnergy) {
 		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;

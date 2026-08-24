@@ -40,7 +40,8 @@ final class FlipThermalState {
 	private final double insertionTemperatureK;
 	private double[] internalEnergy;
 	private ThermalAuditLedger audit;
-	private ThermalTransport.Stats lastTransport = new ThermalTransport.Stats(0, 0, 0.0, SignedDyadic.ZERO);
+	private ThermalTransport.Stats lastTransport = new ThermalTransport.Stats(
+			0, 0, 0.0, SignedDyadic.ZERO, SignedDyadic.ZERO);
 
 	FlipThermalState(
 			ThermalRegistry registry, FluidMaterialRegistry liquids, double initialTemperatureK,
@@ -111,6 +112,17 @@ final class FlipThermalState {
 		return material.temperatureForSensibleSpecificEnergy(sensible);
 	}
 
+	void requireReactionState(
+			int marker, ChemicalMixtureRecord candidateMixture, double candidateMass, MarkerContext markers
+	) {
+		ThermalMaterialDefinition material = material(marker, markers);
+		int thermalHandle = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
+		double base = stateFunction.baseEnergy(
+				thermalHandle, candidateMass, candidateMixture, markers.chemicalRegistry());
+		double sensible = (internalEnergy[marker] - base) / candidateMass;
+		material.temperatureForSensibleSpecificEnergy(sensible);
+	}
+
 	double temperatureInCell(int cell, MarkerContext markers) {
 		cellGrid.rebuild(markerAccess(markers));
 		return cellGrid.occupied(cell) ? cellGrid.temperature(cell) : Double.NaN;
@@ -135,10 +147,19 @@ final class FlipThermalState {
 	ThermalTransport.Stats step(
 			MarkerContext markers, ThermalTransport.FaceArea faceArea, double dtSeconds
 	) {
+		return step(markers, faceArea, (x, y, z, direction) -> null, dtSeconds);
+	}
+
+	ThermalTransport.Stats step(
+			MarkerContext markers, ThermalTransport.FaceArea faceArea,
+			ThermalTransport.BoundaryFace boundaryFace, double dtSeconds
+	) {
 		SignedDyadic before = exactEnergy(markers.markerCount());
 		cellGrid.rebuild(markerAccess(markers));
-		lastTransport = transport.step(cellGrid, faceArea, dtSeconds);
-		audit = audit.withRoundoff(exactEnergy(markers.markerCount()).subtract(before));
+		lastTransport = transport.step(cellGrid, faceArea, boundaryFace, dtSeconds);
+		SignedDyadic physicalDelta = exactEnergy(markers.markerCount()).subtract(before);
+		audit = audit.withHeatExchange(lastTransport.reservoirExchange())
+				.withRoundoff(physicalDelta.subtract(lastTransport.reservoirExchange()));
 		return lastTransport;
 	}
 

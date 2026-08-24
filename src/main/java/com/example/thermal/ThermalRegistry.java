@@ -19,6 +19,7 @@ public final class ThermalRegistry {
 	private final List<ThermalMaterialDefinition> materials;
 	private final List<ThermalSpeciesOffset> speciesOffsets;
 	private final List<ThermalPhaseTransition> transitions;
+	private final List<ThermalBoundaryDefinition> boundaries;
 	private final Map<String, Integer> materialHandles;
 	private final Map<String, Integer> transitionHandles;
 	private final Map<String, Integer> materialByCarrier;
@@ -32,6 +33,7 @@ public final class ThermalRegistry {
 			List<ThermalMaterialDefinition> materials,
 			List<ThermalSpeciesOffset> speciesOffsets,
 			List<ThermalPhaseTransition> transitions,
+			List<ThermalBoundaryDefinition> boundaries,
 			String chemicalRegistryFingerprint,
 			String granularRegistryFingerprint
 	) {
@@ -40,6 +42,8 @@ public final class ThermalRegistry {
 		this.speciesOffsets = canonicalOffsets(speciesOffsets);
 		this.transitions = canonicalUniqueOptional(transitions, ThermalLimits.MAX_PHASE_TRANSITIONS,
 				ThermalPhaseTransition::id, "thermal transition");
+		this.boundaries = canonicalUniqueOptional(boundaries, ThermalLimits.MAX_BOUNDARIES,
+				ThermalBoundaryDefinition::id, "thermal boundary");
 		this.chemicalRegistryFingerprint = requireFingerprint(chemicalRegistryFingerprint, "chemical");
 		this.granularRegistryFingerprint = requireFingerprint(granularRegistryFingerprint, "granular");
 		this.materialHandles = handles(this.materials, ThermalMaterialDefinition::id);
@@ -48,17 +52,30 @@ public final class ThermalRegistry {
 		this.offsetByHostSpecies = validateSpeciesOffsets();
 		validateSegmentBudget();
 		validateTransitions();
+		validateBoundaries();
 		this.canonicalBytes = encodeCanonical();
 		this.fingerprint = sha256(canonicalBytes);
 	}
 
+	public ThermalRegistry(
+			List<ThermalMaterialDefinition> materials,
+			List<ThermalSpeciesOffset> speciesOffsets,
+			List<ThermalPhaseTransition> transitions,
+			String chemicalRegistryFingerprint,
+			String granularRegistryFingerprint
+	) {
+		this(materials, speciesOffsets, transitions, List.of(),
+				chemicalRegistryFingerprint, granularRegistryFingerprint);
+	}
+
 	public ThermalRegistry(List<ThermalMaterialDefinition> materials) {
-		this(materials, List.of(), List.of(), "", "");
+		this(materials, List.of(), List.of(), List.of(), "", "");
 	}
 
 	public List<ThermalMaterialDefinition> materials() { return materials; }
 	public List<ThermalSpeciesOffset> speciesOffsets() { return speciesOffsets; }
 	public List<ThermalPhaseTransition> transitions() { return transitions; }
+	public List<ThermalBoundaryDefinition> boundaries() { return boundaries; }
 	public ThermalMaterialDefinition material(int handle) { return materials.get(requireHandle(handle, materials.size(), "material")); }
 	public ThermalPhaseTransition transition(int handle) { return transitions.get(requireHandle(handle, transitions.size(), "transition")); }
 	public int materialHandle(String id) { return requireStableHandle(materialHandles, id, "thermal material"); }
@@ -142,6 +159,16 @@ public final class ThermalRegistry {
 		}
 	}
 
+	private void validateBoundaries() {
+		Map<String, String> targets = new HashMap<>();
+		for (ThermalBoundaryDefinition boundary : boundaries) {
+			String key = boundary.targetKind() + "\0" + boundary.targetId();
+			String previous = targets.putIfAbsent(key, boundary.id());
+			if (previous != null) throw new IllegalArgumentException(
+					"Competing thermal boundaries for the same target: " + previous + ", " + boundary.id());
+		}
+	}
+
 	private byte[] encodeCanonical() {
 		StringBuilder out = new StringBuilder(4096).append("realwater-thermal-registry-v1\n")
 				.append("units=").append(UNIT_SYSTEM_ID).append('\n')
@@ -175,6 +202,11 @@ public final class ThermalRegistry {
 					.append(transition.interfaceRequirement()).append('|');
 			appendDouble(out, transition.minimumPressurePa()); out.append('|');
 			appendDouble(out, transition.maximumPressurePa()); out.append('\n');
+		}
+		for (ThermalBoundaryDefinition boundary : boundaries) {
+			out.append("B|").append(boundary.id()).append('|').append(boundary.targetKind()).append('|')
+					.append(boundary.targetId()).append('|').append(boundary.kind()).append('|');
+			appendDouble(out, boundary.surfaceTemperatureK()); out.append('\n');
 		}
 		return out.toString().getBytes(StandardCharsets.UTF_8);
 	}

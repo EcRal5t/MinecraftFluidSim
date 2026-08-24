@@ -276,7 +276,7 @@ public final class FlipFluidDomain {
 	public boolean hasThermalState() { return thermalState != null; }
 	public ThermalTransport.Stats lastThermalTransportStats() {
 		return thermalState == null
-				? new ThermalTransport.Stats(0, 0, 0.0, SignedDyadic.ZERO)
+				? new ThermalTransport.Stats(0, 0, 0.0, SignedDyadic.ZERO, SignedDyadic.ZERO)
 				: thermalState.lastTransport();
 	}
 	public ThermalAuditLedger thermalAudit() {
@@ -2467,13 +2467,16 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 		if (precipitationEnabled) markMovedReactiveGranularCells(granularParcelCountBeforeAdvection);
 		int[] phaseTransferCells = precipitationEnabled ? chemicalParcels.dirtyCells() : new int[0];
+		if (thermalState != null) stepThermalOnly(config.timeStep());
 		ChemicalParcelStore.ReactionStats chemistry = chemicalParcels == null
 				? new ChemicalParcelStore.ReactionStats(0, 0, 0)
 				: chemicalParcels.reactDirtyCells(
 						sizeX, sizeY, sizeZ, config.cellSize(), particleX, particleY, particleZ,
 						particleMass, particleMaterialHandle,
-						handle -> materialRegistry.material(handle).id(), particleCount);
-		if (thermalState != null) stepThermalOnly(config.timeStep());
+						handle -> materialRegistry.material(handle).id(), particleCount,
+						thermalState == null ? (marker, mixture, mass) -> { }
+								: (marker, mixture, mass) -> thermalState.requireReactionState(
+										marker, mixture, mass, thermalMarkerContext()));
 		lastPhaseTransferStats = precipitationEnabled
 				? transferGranularPhases(phaseTransferCells) : new PhaseTransferStats(0, 0, 0, 0L);
 		if (granularInventory != null && granularParcels.count() > 1) {

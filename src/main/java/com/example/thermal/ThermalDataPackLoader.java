@@ -27,7 +27,9 @@ public final class ThermalDataPackLoader {
 				ThermalDefinitionCodec::decodeSpecies, false);
 		List<ThermalPhaseTransition> transitions = loadCategory(resources, ThermalDefinitionCodec.TRANSITIONS_PATH,
 				ThermalDefinitionCodec::decodeTransition, false);
-		try { return new ThermalRegistry(materials, offsets, transitions,
+		List<ThermalBoundaryDefinition> boundaries = loadCategory(resources, ThermalDefinitionCodec.BOUNDARIES_PATH,
+				ThermalDefinitionCodec::decodeBoundary, false);
+		try { return new ThermalRegistry(materials, offsets, transitions, boundaries,
 				chemicalRegistryFingerprint, granularRegistryFingerprint); }
 		catch (RuntimeException invalid) {
 			throw new IOException("Thermal datapack registry is invalid: " + invalid.getMessage(), invalid);
@@ -68,6 +70,7 @@ public final class ThermalDataPackLoader {
 			case ThermalMaterialDefinition value -> value.id();
 			case ThermalSpeciesOffset value -> value.id();
 			case ThermalPhaseTransition value -> value.id();
+			case ThermalBoundaryDefinition value -> value.id();
 			default -> throw new IllegalStateException("Unknown thermal definition type");
 		}));
 		return List.copyOf(definitions);

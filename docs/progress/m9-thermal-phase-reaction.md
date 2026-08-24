@@ -48,3 +48,16 @@ finite-volume flux 做显式传导，并按 Fourier stability limit 有界 subst
 partial cut/PLIC contact、M8 固相能量、持久化与 production config 仍被明确拒绝，不能把 transient 状态误当生产格式。
 
 最近门：`thermal,free-surface,reseeding` 通过；未请求实机。
+
+## M9.3 reaction heat and fixed reservoirs
+
+逻辑步顺序改为先导热、后 M7 reaction。`ChemicalParcelStore` 在完整 reaction candidate 闭合后、任何 store mutation
+以前调用 thermal validator；候选组成和质量在保持 marker `U` 不变时必须仍能反演到共同定义温区。失败保留原 species、
+质量、dirty bits 和能量，成功则形成能变化自然表现为温升/降温，不增加 external source。
+
+thermal registry 增加有界 canonical boundary definition；普通 face 仍默认绝热。`ThermalTransport` 支持无限热容的
+fixed-surface-temperature face，半格热阻进入 stability limit，reservoir exchange 进入 external source/sink，浮点残差
+只进 roundoff。每个 logical transport step 保存 marker 能量快照；任一 substep 无法表示时回滚整步，禁止暴露前几个
+substep 的部分提交。
+
+最近门：`thermal,chemistry,free-surface` 通过；未请求实机。世界 block/tag 解析与 production gate 尚未开放。

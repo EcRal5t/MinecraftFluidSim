@@ -15,6 +15,7 @@ public final class ThermalDefinitionCodec {
 	public static final String MATERIALS_PATH = "realwater/thermal_materials";
 	public static final String SPECIES_PATH = "realwater/thermal_species";
 	public static final String TRANSITIONS_PATH = "realwater/phase_transitions";
+	public static final String BOUNDARIES_PATH = "realwater/thermal_boundaries";
 
 	private ThermalDefinitionCodec() { }
 
@@ -66,6 +67,21 @@ public final class ThermalDefinitionCodec {
 				exactLong(root, "lower_volume_svq_per_batch"), exactLong(root, "upper_volume_svq_per_batch"),
 				ExactRational.parse(string(root, "mass_mu_per_batch")), requirement,
 				finiteDouble(root, "minimum_pressure_pa"), finiteDouble(root, "maximum_pressure_pa"));
+	}
+
+	public static ThermalBoundaryDefinition decodeBoundary(String stableId, Reader input) {
+		JsonObject root = object(input);
+		requireOnly(root, "target_kind", "target_id", "kind", "surface_temperature_k");
+		ThermalBoundaryDefinition.TargetKind targetKind;
+		ThermalBoundaryDefinition.Kind kind;
+		try {
+			targetKind = ThermalBoundaryDefinition.TargetKind.valueOf(string(root, "target_kind"));
+			kind = ThermalBoundaryDefinition.Kind.valueOf(string(root, "kind"));
+		} catch (IllegalArgumentException invalid) {
+			throw new IllegalArgumentException("Unknown thermal boundary kind", invalid);
+		}
+		return new ThermalBoundaryDefinition(stableId, targetKind, string(root, "target_id"), kind,
+				finiteDouble(root, "surface_temperature_k"));
 	}
 
 	private static JsonObject object(Reader input) {

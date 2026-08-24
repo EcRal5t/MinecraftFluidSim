@@ -351,6 +351,17 @@ public final class ChemicalParcelStore {
 			float[] x, float[] y, float[] z, double[] markerMass,
 			int[] materialHandle, IntFunction<String> stableMaterialId, int particleCount
 	) {
+		return reactDirtyCells(sizeX, sizeY, sizeZ, cellSize, x, y, z, markerMass,
+				materialHandle, stableMaterialId, particleCount, (marker, mixture, mass) -> { });
+	}
+
+	public ReactionStats reactDirtyCells(
+			int sizeX, int sizeY, int sizeZ, float cellSize,
+			float[] x, float[] y, float[] z, double[] markerMass,
+			int[] materialHandle, IntFunction<String> stableMaterialId, int particleCount,
+			ReactionValidator validator
+	) {
+		if (validator == null) throw new IllegalArgumentException("Reaction validator is missing");
 		if (!hasDirtyCells()) return new ReactionStats(0, 0, 0);
 		if (particleCount < 0 || particleCount > markerHandles.length) throw new IllegalArgumentException("Invalid marker count");
 		@SuppressWarnings("unchecked")
@@ -447,6 +458,9 @@ public final class ChemicalParcelStore {
 		}
 		if (candidateTotal > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
 			throw new ChemicalReactionEngine.BudgetExceededException("Reaction exceeds region inventory budget");
+		}
+		for (int marker = 0; marker < replacements.length; marker++) if (replacements[marker] != null) {
+			validator.validate(marker, replacements[marker], replacementMass[marker]);
 		}
 		for (int marker = 0; marker < replacements.length; marker++) if (replacements[marker] != null) {
 			pool.overwrite(markerHandles[marker], replacements[marker]);
@@ -567,6 +581,11 @@ public final class ChemicalParcelStore {
 	}
 
 	public record ReactionStats(int dirtyCells, int evaluations, int changedMarkers) { }
+	@FunctionalInterface
+	public interface ReactionValidator {
+		/** Called for every candidate after the whole reaction plan closes and before any store mutation. */
+		void validate(int marker, ChemicalMixtureRecord mixture, double markerMass);
+	}
 	public record SplitPlan(ChemicalMixtureRecord kept, ChemicalMixtureRecord removed) {
 		public SplitPlan {
 			if (removed == null) throw new IllegalArgumentException("Removed chemical ledger is missing");
