@@ -2,6 +2,7 @@ package com.example.simulation;
 
 import com.example.chemistry.BuiltinChemicalDefinitions;
 import com.example.chemistry.ChemicalRegistry;
+import com.example.chemistry.ExactRational;
 import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FlipChemicalParticleState;
 import com.example.fluid.FlipFluidDomain;
@@ -15,8 +16,10 @@ import com.example.granular.GranularRegistry;
 import com.example.simulation.controller.FluidRegionFootprint;
 import com.example.simulation.persistence.RegionState;
 import com.example.simulation.persistence.RegionStateFiles;
+import com.example.simulation.persistence.ThermalInitializationRecord;
 import com.example.thermal.ThermalMaterialDefinition;
 import com.example.thermal.ThermalRegistry;
+import com.example.thermal.ThermalSpeciesOffset;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.Identifier;
@@ -93,21 +96,126 @@ public final class M7RegionChemistryPersistenceValidation {
 		} catch (IOException expected) {
 			check(expected.getMessage().contains("explicit operator"), "legacy thermal refusal did not name explicit initialization");
 		}
+
+		validateExplicitThermalInitializationVersions();
+	}
+
+	private static void validateExplicitThermalInitializationVersions() throws Exception {
+		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
+		ThermalRegistry thermal = productionThermalRegistry(chemistry, granular);
+		for (int sourceVersion : List.of(1, 2, 3, 5)) {
+			Path root = Files.createTempDirectory(Path.of("."), "thermal-init-v" + sourceVersion + "-");
+			FluidRegion source = populatedRegion(UUID.randomUUID());
+			RegionState old;
+			if (sourceVersion == 1) old = RegionState.capture(source, 1L);
+			else {
+				bindDefaultMaterials(source);
+				if (sourceVersion >= 3) source.domain().bindChemistry(chemistry);
+				if (sourceVersion == 5) {
+					source.domain().bindGranular(granular, source.domain().materialRegistry());
+					old = RegionState.captureGranular(source, 1L);
+				} else if (sourceVersion == 3) old = RegionState.captureChemical(source, 1L);
+				else old = RegionState.captureMaterial(source, 1L);
+			}
+			new RegionStateFiles(root, chemistry, granular, thermal, gas).publish(old);
+			FluidRegionManager manager = manager();
+			FluidRegionPersistence persistence = new FluidRegionPersistence(root, true, true, chemistry,
+					true, granular, true, true, thermal, gas);
+			check(persistence.loadMetadata(manager).isEmpty(), "v" + sourceVersion + " initialization source was locked");
+			FluidRegion admitted = manager.regions().getFirst();
+			long initialized = persistence.initializeThermal(admitted, 310.0, "test:operator");
+			check(initialized == 2L && admitted.solverLoaded() && admitted.paused()
+					&& admitted.domain().hasChemistryState() && admitted.domain().hasGranularState()
+					&& admitted.domain().hasThermalState(),
+					"v" + sourceVersion + " did not become one complete paused v6 generation");
+			RegionState v6 = new RegionStateFiles(root, chemistry, granular, thermal, gas).read(admitted.id());
+			ThermalInitializationRecord evidence = v6.reconstructThermalInitialization();
+			check(v6.manifest().formatVersion() == 6 && evidence != null
+					&& evidence.sourceFormatVersion() == sourceVersion
+					&& evidence.initialTemperatureBits() == Double.doubleToRawLongBits(310.0)
+					&& evidence.gasBootstrap()
+					== ThermalInitializationRecord.GasBootstrap.CURRENT_GEOMETRY_AMBIENT_V1
+					&& evidence.operatorMetadata().equals("test:operator"),
+					"v" + sourceVersion + " initialization evidence was incomplete");
+			check(persistence.checkpoint(admitted) == 3L, "initialized v6 did not accept a later checkpoint");
+			RegionState next = new RegionStateFiles(root, chemistry, granular, thermal, gas).read(admitted.id());
+			check(evidence.equals(next.reconstructThermalInitialization()),
+					"v" + sourceVersion + " initialization evidence was not inherited by later v6");
+			FluidRegionManager reloadedManager = manager();
+			FluidRegionPersistence reloadedPersistence = new FluidRegionPersistence(root, true, true, chemistry,
+					true, granular, true, true, thermal, gas);
+			check(reloadedPersistence.loadMetadata(reloadedManager).isEmpty(),
+					"v" + sourceVersion + " initialized v6 failed admission after restart");
+			FluidRegion reloaded = reloadedManager.regions().getFirst(); reloadedPersistence.restore(reloaded);
+			check(evidence.equals(reloaded.thermalInitializationRecord()),
+					"v" + sourceVersion + " initialization evidence was lost during restart restore");
+		}
+
+		Path failureRoot = Files.createTempDirectory(Path.of("."), "thermal-init-failure-");
+		FluidRegion failureSource = populatedRegion(UUID.randomUUID()); bindDefaultMaterials(failureSource);
+		new RegionStateFiles(failureRoot, chemistry, granular, thermal, gas)
+				.publish(RegionState.captureMaterial(failureSource, 1L));
+		FluidRegionManager failureManager = manager();
+		FluidRegionPersistence failurePersistence = new FluidRegionPersistence(failureRoot, true, true, chemistry,
+				true, granular, true, true, thermal, gas);
+		check(failurePersistence.loadMetadata(failureManager).isEmpty(), "failed-init source was not admitted");
+		FluidRegion failed = failureManager.regions().getFirst();
+		try {
+			failurePersistence.initializeThermal(failed, 700.0, "test:operator");
+			throw new AssertionError("out-of-range initialization temperature was accepted");
+		} catch (IllegalArgumentException expected) { }
+		RegionState stillOld = new RegionStateFiles(failureRoot, chemistry, granular, thermal, gas).read(failed.id());
+		check(stillOld.manifest().formatVersion() == 2 && stillOld.manifest().checkpointGeneration() == 1L
+				&& !failed.solverLoaded(), "failed initialization changed HEAD or retained guessed thermal truth");
 	}
 
 	private static ThermalRegistry productionThermalRegistry() {
+		return productionThermalRegistry(null, null);
+	}
+
+	private static ThermalRegistry productionThermalRegistry(
+			ChemicalRegistry chemistry, GranularRegistry granular
+	) {
 		List<ThermalMaterialDefinition> definitions = new java.util.ArrayList<>();
-		for (var liquid : BuiltinFluidMaterials.M3_PALETTE) definitions.add(new ThermalMaterialDefinition(
-				"test:thermal/" + liquid.id().substring(liquid.id().indexOf(':') + 1),
+		java.util.Map<String, String> liquidHosts = new java.util.HashMap<>();
+		for (var liquid : BuiltinFluidMaterials.M3_PALETTE) {
+			String id = "test:thermal/" + liquid.id().substring(liquid.id().indexOf(':') + 1);
+			liquidHosts.put(liquid.id(), id);
+			definitions.add(new ThermalMaterialDefinition(id,
 				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 293.15, 0.0, 0.5,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 1000.0))));
+		}
 		definitions.add(new ThermalMaterialDefinition("test:thermal/air", ThermalMaterialDefinition.CarrierKind.GAS,
 				BuiltinGasDefinitions.AIR, 293.15, 0.0, 0.025,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 718.0))));
 		definitions.add(new ThermalMaterialDefinition("test:thermal/vapor", ThermalMaterialDefinition.CarrierKind.GAS,
 				BuiltinGasDefinitions.WATER_VAPOR, 293.15, 2_400_000.0, 0.025,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 1850.0))));
-		return new ThermalRegistry(definitions);
+		java.util.Map<String, String> granularHosts = new java.util.HashMap<>();
+		if (granular != null) for (var material : granular.materials()) {
+			String id = "test:thermal/granular_" + material.id().substring(material.id().indexOf(':') + 1);
+			granularHosts.put(material.id(), id);
+			definitions.add(new ThermalMaterialDefinition(id, ThermalMaterialDefinition.CarrierKind.GRANULAR,
+					material.id(), 293.15, 0.0, 0.5,
+					List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 800.0))));
+		}
+		List<ThermalSpeciesOffset> offsets = new java.util.ArrayList<>();
+		int offsetOrdinal = 0;
+		if (chemistry != null) for (var phase : chemistry.phases()) {
+			String host = liquidHosts.get(phase.materialId());
+			for (String species : phase.allowedSpecies()) offsets.add(new ThermalSpeciesOffset(
+					"test:offset/liquid_" + offsetOrdinal++, species, host, ExactRational.ZERO));
+		}
+		if (granular != null) for (var reaction : granular.reactions()) {
+			String host = granularHosts.get(reaction.solidMaterialId());
+			for (String species : reaction.solidComposition().keySet()) offsets.add(new ThermalSpeciesOffset(
+					"test:offset/granular_" + offsetOrdinal++, species, host, ExactRational.ZERO));
+		}
+		return new ThermalRegistry(definitions, offsets, List.of(),
+				chemistry == null ? "" : chemistry.fingerprint(),
+				granular == null ? "" : granular.fingerprint());
 	}
 
 	private static void validateGranularV5FeatureGateAndMigration() throws Exception {

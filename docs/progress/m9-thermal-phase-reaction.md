@@ -313,3 +313,19 @@ exact insertion 原语恢复；失败才保留 escaped sink。该路径不再扫
 报告部分体积的旧结算边角。
 
 最近门：`thermal,containers,chemistry,shape` 通过；尚未请求实机。
+
+## M9.23 explicit old-region thermal initialization
+
+新增管理员选区入口 `/realwater regions thermalinit <temperatureK>`。它只接受 metadata-only、operator-paused 的
+controller，要求 thermal/gas world registry 可用、ownership 无未决状态，并在 service 层硬拒绝任何未完成或不可识别的
+container WAL。允许的源版本严格为 v1/v2/v3/v5；v4 gas 基态不被猜测升级。旧物质、可选 chemistry/granular 先按各自
+authoritative snapshot 精确重建，再从当前 committed solver 几何扫描 gas topology、一次性记 ambient gas source，最后按
+operator 给出的 raw 温度为所有 liquid/active/deposit/gas carrier 建立首个权威 `U`。
+
+初始化记录使用独立 `realwater:thermal_initialization_v1` manifest extension，保存 source format、raw temperature bits、
+`current_geometry_ambient_v1` gas bootstrap 和稳定 operator metadata；不修改冻结的 thermal payload v1、granular v5 或 gas v4。
+完整 v6 先写 inactive slot、回读并联合重建验证，HEAD 最后切换。失败时若旧 HEAD 仍可确认则卸载临时 solver；HEAD 状态
+不可确认则保留证据并 LOCKED。后续 v6 checkpoint 与重启 restore 都继承同一初始化记录。
+
+扩展既有 `region-state` 门覆盖 v1/v2/v3/v5 四条初始化、记录继承/重启恢复，以及越界温度失败后旧 HEAD 与 unloaded
+状态保持。最近门：`region-state` 通过；尚未请求实机。

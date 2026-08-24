@@ -19,6 +19,7 @@ import com.example.granular.SolidVolume;
 import com.example.simulation.FluidSimulationService;
 import com.example.simulation.FluidRegion;
 import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
@@ -164,7 +165,12 @@ public final class RealWaterCommands {
 								.then(Commands.literal("select")
 										.then(Commands.argument("uuid", StringArgumentType.word())
 												.executes(context -> audit(context, () -> selectRegion(context.getSource(), StringArgumentType.getString(context, "uuid"))))))
-								.then(Commands.literal("checkpoint").executes(context -> audit(context, () -> checkpointRegion(context.getSource())))))
+								.then(Commands.literal("checkpoint").executes(context -> audit(context, () -> checkpointRegion(context.getSource()))))
+								.then(Commands.literal("thermalinit")
+										.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+										.then(Commands.argument("temperatureK", DoubleArgumentType.doubleArg(1.0))
+												.executes(context -> audit(context, () -> initializeThermalRegion(
+														context.getSource(), DoubleArgumentType.getDouble(context, "temperatureK")))))))
 						.then(Commands.literal("debug")
 								.executes(context -> audit(context, () -> debugStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
@@ -594,6 +600,15 @@ public final class RealWaterCommands {
 
 	private static int checkpointRegion(CommandSourceStack source) {
 		String result = FluidSimulationService.get(source.getServer()).checkpointSelected();
+		if (result.contains("失败") || result.startsWith("没有")) return fail(source, result);
+		return succeed(source, result, 1);
+	}
+
+	private static int initializeThermalRegion(CommandSourceStack source, double temperatureK) {
+		String operator = source.getEntity() instanceof ServerPlayer player
+				? "player:" + player.getUUID() : "source:" + source.getTextName();
+		String result = FluidSimulationService.get(source.getServer())
+				.initializeSelectedRegionThermal(temperatureK, operator);
 		if (result.contains("失败") || result.startsWith("没有")) return fail(source, result);
 		return succeed(source, result, 1);
 	}

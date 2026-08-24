@@ -390,6 +390,9 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					thermal.audit(), List.copyOf(ledgers), gasNodeEnergyBits);
 			manifestExtensions.add(new RegionExtension(ThermalRegionStateCodec.MANIFEST_EXTENSION,
 					codec.encodeManifest(data)));
+			ThermalInitializationRecord initialization = region.thermalInitializationRecord();
+			if (initialization != null) manifestExtensions.add(new RegionExtension(
+					ThermalInitializationRecord.MANIFEST_EXTENSION, initialization.encode()));
 		}
 		RegionManifest unsigned = new RegionManifest(particles.formatVersion(), region.id(), region.dimension().identifier().toString(), checkpointGeneration,
 				region.generation(), region.origin(), region.sizeX(), region.sizeY(), region.sizeZ(), region.solverConfig(),
@@ -569,6 +572,17 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		} catch (IllegalArgumentException invalid) {
 			throw new IOException("Invalid region-state v6 thermal inventory: " + invalid.getMessage(), invalid);
 		}
+	}
+
+	/** Optional durable evidence that this v6 generation descended from an explicitly initialized old HEAD. */
+	public ThermalInitializationRecord reconstructThermalInitialization() throws IOException {
+		boolean present = hasExtension(manifest.extensions(), ThermalInitializationRecord.MANIFEST_EXTENSION);
+		if (!present) return null;
+		if (manifest.formatVersion() != 6) {
+			throw new IOException("Thermal initialization evidence is only valid in region-state v6");
+		}
+		return ThermalInitializationRecord.decode(requiredExtension(manifest.extensions(),
+				ThermalInitializationRecord.MANIFEST_EXTENSION).payload());
 	}
 
 	/** Full v6 validation additionally binds every saved node U to its authoritative gas inventory. */
@@ -778,6 +792,19 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		if (manifest.formatVersion() >= 2) validateMaterialLedgers();
 		if (manifest.hasChemicalState()) validateChemicalLedgers();
 		boolean gasPayload = hasExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION);
+		boolean initializationPayload = hasExtension(manifest.extensions(),
+				ThermalInitializationRecord.MANIFEST_EXTENSION);
+		for (RegionSectionState section : sections) if (hasExtension(section.extensions(),
+				ThermalInitializationRecord.MANIFEST_EXTENSION)) {
+			throw new IOException("Thermal initialization evidence is manifest-only");
+		}
+		if (initializationPayload) {
+			if (manifest.formatVersion() != 6) {
+				throw new IOException("Thermal initialization evidence is only valid in region-state v6");
+			}
+			ThermalInitializationRecord.decode(requiredExtension(manifest.extensions(),
+					ThermalInitializationRecord.MANIFEST_EXTENSION).payload());
+		}
 		if (manifest.formatVersion() == 4) {
 			if (!gasPayload || hasExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION)
 					|| hasExtension(manifest.extensions(), ThermalRegionStateCodec.MANIFEST_EXTENSION)) {

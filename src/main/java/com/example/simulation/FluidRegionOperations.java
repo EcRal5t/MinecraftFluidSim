@@ -296,6 +296,28 @@ final class FluidRegionOperations {
 		}
 	}
 
+	String initializeSelectedThermal(double initialTemperatureK, String operatorMetadata) {
+		FluidRegion region = manager.selected();
+		if (region == null) return "没有选中区域";
+		if (!region.controllerManaged()) return "开发命令区域不执行持久热初始化";
+		if (!region.paused()) return "热初始化失败：区域必须先由 operator 暂停";
+		try {
+			long generation = persistence.initializeThermal(region, initialTemperatureK, operatorMetadata);
+			region.setAvailabilityFailure(null);
+			region.enableThermalActivity();
+			region.wakeThermal(ThermalActivity.WakeReason.ADMIN_SOURCE);
+			checkpointFailures.remove(region.id());
+			retryAt.remove(region.id());
+			return "已按显式初温 " + initialTemperatureK + " K 原子初始化 region-state v6；checkpoint "
+					+ generation + "，区域保持暂停";
+		} catch (IOException | RuntimeException exception) {
+			String failure = "热初始化失败或需要恢复确认：" + exception.getMessage();
+			checkpointFailures.put(region.id(), failure);
+			region.setAvailabilityFailure(failure);
+			return failure;
+		}
+	}
+
 	void checkpointForShutdown(Predicate<FluidRegion> shouldCheckpoint) {
 		for (FluidRegion region : manager.regions()) {
 			if (!region.controllerManaged() || !region.solverLoaded()) continue;

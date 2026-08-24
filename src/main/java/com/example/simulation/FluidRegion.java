@@ -13,6 +13,7 @@ import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FluidSolverConfig;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.simulation.controller.FluidRegionFootprint;
+import com.example.simulation.persistence.ThermalInitializationRecord;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
@@ -54,6 +55,7 @@ public final class FluidRegion {
 	private String granularBlockFailure;
 	private String thermalBlockFailure;
 	private ThermalActivity thermalActivity;
+	private ThermalInitializationRecord thermalInitializationRecord;
 
 	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FlipFluidDomain domain, long reservedMarkerCapacity) {
 		this(id, dimension, origin, domain, reservedMarkerCapacity, null);
@@ -165,6 +167,8 @@ public final class FluidRegion {
 	public long checkpointGeneration() { return checkpointGeneration; }
 	public int checkpointMarkerCount() { return checkpointMarkerCount; }
 	public float checkpointVolume() { return checkpointVolume; }
+	public ThermalInitializationRecord thermalInitializationRecord() { return thermalInitializationRecord; }
+	void setThermalInitializationRecord(ThermalInitializationRecord value) { thermalInitializationRecord = value; }
 	public FluidRegionLifecycle lifecycle() { return lifecycle; }
 	public long reservedCellCapacity() {
 		return Math.multiplyExact(Math.multiplyExact((long) sizeX, sizeY), sizeZ);
