@@ -362,19 +362,6 @@ final class FlipThermalState {
 		gasNodeEnergy[nodeId - 1] = energy;
 	}
 
-	void requireInertLiquidState(int fluidHandle, double mass, double energy) {
-		if (fluidHandle < 0 || fluidHandle >= materialByFluidHandle.length) {
-			throw new IllegalArgumentException("Unknown liquid phase carrier");
-		}
-		if (mass == 0.0) {
-			if (Math.abs(energy) > Math.max(1.0E-9, Math.ulp(energy) * 16.0)) {
-				throw new IllegalArgumentException("Empty liquid phase retains internal energy");
-			}
-			return;
-		}
-		stateFunction.stateForInternalEnergy(materialByFluidHandle[fluidHandle], mass, Map.of(), energy);
-	}
-
 	double[] partitionGasNodeEnergy(int nodeId, List<GasInventory> children, AirNetwork network) {
 		requireGasNode(nodeId, network);
 		return gasModel.partitionEnergy(network.inventory(nodeId), gasNodeEnergy[nodeId - 1], children);
@@ -640,6 +627,30 @@ final class FlipThermalState {
 		for (int carrier = 0; carrier < current.carrierCount(); carrier++) if (current.cell(carrier) == cell) {
 			cellEnergy = cellEnergy.add(SignedDyadic.of(current.internalEnergy(carrier)));
 		}
+		return phaseCandidateState(cell, phaseInventory, cellEnergy, markers).temperatureK();
+	}
+
+	/** Validates a prospective gas/liquid edit against the complete unchanged same-cell granular heat bath. */
+	void requirePhaseCandidateState(
+			int cell, List<ThermalStateFunction.InventoryPortion> liquidInventory,
+			double cellEnergyDelta, MarkerContext markers
+	) {
+		if (cell < 0 || cell >= cellGrid.cellCount() || liquidInventory == null
+				|| !Double.isFinite(cellEnergyDelta)) {
+			throw new IllegalArgumentException("Thermal gas/liquid candidate is invalid");
+		}
+		ThermalCellGrid.CarrierAccess current = carrierAccess(markers);
+		SignedDyadic cellEnergy = SignedDyadic.of(cellEnergyDelta);
+		for (int carrier = 0; carrier < current.carrierCount(); carrier++) if (current.cell(carrier) == cell) {
+			cellEnergy = cellEnergy.add(SignedDyadic.of(current.internalEnergy(carrier)));
+		}
+		phaseCandidateState(cell, liquidInventory, cellEnergy, markers);
+	}
+
+	private ThermalStateFunction.State phaseCandidateState(
+			int cell, List<ThermalStateFunction.InventoryPortion> phaseInventory,
+			SignedDyadic cellEnergy, MarkerContext markers
+	) {
 		ArrayList<ThermalStateFunction.InventoryPortion> finalInventory = new ArrayList<>(phaseInventory);
 		for (int active = 0; active < markers.activeParcelCount(); active++) {
 			if (markers.activeParcelCell(active) == cell) addGranularPortion(finalInventory,
@@ -650,7 +661,14 @@ final class FlipThermalState {
 			addGranularPortion(finalInventory, key.materialHandle(), markers.depositMass(key),
 					markers.solidComposition(key.compositionHandle()));
 		}
-		return stateFunction.stateForInventory(finalInventory, cellEnergy.toDouble()).temperatureK();
+		if (finalInventory.isEmpty()) {
+			double energy = cellEnergy.toDouble();
+			if (Math.abs(energy) > Math.max(1.0E-9, Math.ulp(energy) * 16.0)) {
+				throw new IllegalArgumentException("Empty phase cell retains internal energy");
+			}
+			return null;
+		}
+		return stateFunction.stateForInventory(finalInventory, cellEnergy.toDouble());
 	}
 
 	int thermalMaterialHandleForFluid(int fluidHandle) {

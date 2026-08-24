@@ -9,6 +9,7 @@ import com.example.granular.SolidVolume;
 
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 /** Pure ideal-mixture saturation and exact-batch creation functions for liquid/gas transitions. */
 public final class GasLiquidPhaseModel {
@@ -54,8 +55,20 @@ public final class GasLiquidPhaseModel {
 
 	/** Creates a gas-side batch with exact phase mass and stable standard-volume nanos. */
 	public GasInventory gasBatch(ThermalPhaseTransition transition, long batches) {
+		double mass = transition.massMuPerBatch().multiply(batches).toDouble();
+		return gasBatch(transition, batches, Map.of(), mass);
+	}
+
+	/** Creates a phase batch carrying the caller's already-conserved stable species/residual columns. */
+	public GasInventory gasBatch(
+			ThermalPhaseTransition transition, long batches,
+			Map<String, Long> speciesQuanta, double massResidual
+	) {
 		if (batches <= 0L || batches > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
 			throw new IllegalArgumentException("Gas phase batch count is invalid");
+		}
+		if (speciesQuanta == null || !Double.isFinite(massResidual)) {
+			throw new IllegalArgumentException("Gas phase chemical columns are invalid");
 		}
 		PhasePair pair = requirePair(transition);
 		double mass = transition.massMuPerBatch().multiply(batches).toDouble();
@@ -66,7 +79,16 @@ public final class GasLiquidPhaseModel {
 		if (nanos <= 0L || Math.abs(AirNetwork.cubicMeters(nanos) - standardVolume) > 0.5E-9) {
 			throw new IllegalArgumentException("Gas phase batch is not representable in standard-volume nanos");
 		}
-		return new GasInventory(List.of(new GasComponentAmount(component.id(), nanos, mass, List.of(), mass)));
+		TreeMap<String, Long> canonical = new TreeMap<>();
+		for (Map.Entry<String, Long> entry : speciesQuanta.entrySet()) {
+			if (entry.getKey() == null || entry.getValue() == null || entry.getValue() <= 0L) {
+				throw new IllegalArgumentException("Gas phase species amount is invalid");
+			}
+			canonical.merge(entry.getKey(), entry.getValue(), Math::addExact);
+		}
+		return new GasInventory(List.of(new GasComponentAmount(component.id(), nanos, mass,
+				canonical.entrySet().stream().map(entry -> new GasComponentAmount.SpeciesAmount(
+						entry.getKey(), entry.getValue())).toList(), massResidual)));
 	}
 
 	public double internalEnergyAtTemperature(

@@ -367,3 +367,22 @@ gas topology remap 当场结算 available-volume compression work，不生成第
 
 `thermal` fixture 覆盖不等相体积冻结、投影前未记功、投影后 exactly-once 消费与 audit 闭合；`region-state` fixture 覆盖正负
 dyadic record 的 codec/files/domain restore。最近门：`thermal,chemistry,granular,region-state` 通过；尚未请求实机。
+
+## M9.26 composition-bearing gas/liquid phase transfer
+
+production gas/liquid planner 不再调用 inert-only 拒绝器。气相 thermal material 是否具有某 species offset，现同时作为该 host
+能够权威携带该 species 的 registry 声明；选择完全来自 world thermal snapshot，不按 water/H2O runtime ID 特判。bundled
+water-vapor 新增与 liquid water 相同的 H2O formation offset，保持既有 latent gap 只来自 material state-function baseline。
+
+沸腾使用 M7 exact binary-volume allocator 对非 indicator marker 做 selective split：gas-admitted species 与 residual 进入同一个
+water-vapor component，未声明的离子/盐全部留液相；若完整删除会遗留非挥发 species，就保留一个 exact SVQ 的液相 carrier，
+不足一个完整 transition batch 则本次不提交。chemical truncate commit 新增逐 species 闭合复核。冷凝从实际 component portion
+读取 species/residual，只合并到非 indicator marker，否则新建 marker；chemistry 区域遇到 species-less legacy vapor 明确阻塞，
+不按 default inventory 猜测恢复。
+
+气液候选现在以最终 liquid inventory 加同格 unchanged active/deposit 共同反演 LTE，condensation capacity 也包含颗粒 SVQ。
+gas node U、liquid/granular cell U、gas nanos/mass/species/residual、liquid mass/volume/species/residual 先联合验证再提交；随后既有
+gas available-volume remap 结算 expansion/compression work，不生成第二份 condensed pending work。
+
+一个现有 `thermal` fixture 扩展覆盖 production logical step 沸腾与直接冷凝：H2O 进入气相，Na+、indicator raw volume/mass 和
+granular SVQ 保持，冷凝后 species/residual 返回且 gas/thermal audit 闭合。最近门：`thermal,chemistry,granular` 通过；尚未请求实机。

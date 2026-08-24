@@ -6,6 +6,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.IntFunction;
 
@@ -309,11 +310,79 @@ public final class ChemicalParcelStore {
 		return new SplitPlan(keptRecord, removedRecord);
 	}
 
+	/**
+	 * Plans a phase split that moves only species explicitly admitted by the receiving phase.
+	 * Non-volatile species stay in the retained liquid; residual is repartitioned so both raw
+	 * marker masses remain independently authoritative.
+	 */
+	public SplitPlan planSelectivePhaseTruncate(
+			int marker, float keptVolume, float removedVolume, double keptMass, double removedMass,
+			Set<String> movedSpecies
+	) {
+		requireAssigned(marker);
+		if (!(keptVolume >= 0.0F && removedVolume > 0.0F)
+				|| !(keptMass >= 0.0 && removedMass > 0.0)
+				|| movedSpecies == null || movedSpecies.isEmpty()) {
+			throw new IllegalArgumentException("Invalid selective chemical phase split");
+		}
+		ChemicalMixtureRecord original = record(marker);
+		TreeMap<String, Long> kept = new TreeMap<>(), removed = new TreeMap<>();
+		for (Map.Entry<String, Long> entry : original.stableAmounts(registry).entrySet()) {
+			if (!movedSpecies.contains(entry.getKey())) {
+				kept.put(entry.getKey(), entry.getValue());
+				continue;
+			}
+			if (keptVolume == 0.0F) {
+				removed.put(entry.getKey(), entry.getValue());
+				continue;
+			}
+			long[] allocation = BinaryVolumeAllocator.allocate(entry.getValue(),
+					new float[]{keptVolume, removedVolume}, new int[]{marker, Integer.MAX_VALUE});
+			if (allocation[0] > 0L) kept.put(entry.getKey(), allocation[0]);
+			if (allocation[1] > 0L) removed.put(entry.getKey(), allocation[1]);
+		}
+		if (removed.isEmpty()) {
+			throw new ChemicalReactionEngine.BudgetExceededException(
+					"Phase transfer is below the volatile species quantum resolution");
+		}
+		if (keptVolume == 0.0F) {
+			if (!kept.isEmpty()) throw new IllegalArgumentException("Full phase transfer would orphan non-volatile species");
+			return new SplitPlan(null, original);
+		}
+		if (kept.isEmpty()) {
+			throw new ChemicalReactionEngine.BudgetExceededException("Retained liquid would have no chemical carrier");
+		}
+		ChemicalMixtureRecord removedZero = ChemicalMixtureRecord.fromStableAmounts(registry, removed, 0.0);
+		double removedResidual = removedMass - removedZero.exactSpeciesMass(registry).toDouble();
+		ChemicalMixtureRecord removedRecord = ChemicalMixtureRecord.fromStableAmounts(
+				registry, removed, removedResidual);
+		ChemicalMixtureRecord keptRecord = ChemicalMixtureRecord.fromStableAmounts(
+				registry, kept, original.massResidual() - removedResidual);
+		requireMassClose(removedRecord.markerMass(registry), removedMass, "removed");
+		requireMassClose(keptRecord.markerMass(registry), keptMass, "retained");
+		return new SplitPlan(keptRecord, removedRecord);
+	}
+
 	public void commitTruncate(int marker, SplitPlan plan) {
 		requireAssigned(marker);
+		ChemicalMixtureRecord original = record(marker);
+		TreeMap<Integer, Long> closed = new TreeMap<>();
+		copyAmounts(plan.removed(), closed);
+		if (plan.kept() != null) copyAmounts(plan.kept(), closed);
+		if (!recordFromHandles(closed, original.massResidual()).stableAmounts(registry)
+				.equals(original.stableAmounts(registry))) {
+			throw new IllegalArgumentException("Chemical truncation species plan does not close");
+		}
 		if (plan.kept() == null) throw new IllegalArgumentException("Full removals commit through marker removal");
 		pool.overwrite(markerHandles[marker], plan.kept());
 		totalQuanta = Math.subtractExact(totalQuanta, plan.removed().totalQuanta());
+	}
+
+	private static void requireMassClose(double actual, double expected, String label) {
+		double tolerance = Math.max(1.0E-9, Math.max(Math.ulp(actual), Math.ulp(expected)) * 16.0);
+		if (Math.abs(actual - expected) > tolerance) {
+			throw new IllegalArgumentException("Selective phase " + label + " mass does not close");
+		}
 	}
 
 	/** Swap-removes an ordinal without changing the parcel belonging to the moved last marker. */

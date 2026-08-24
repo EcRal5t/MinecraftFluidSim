@@ -142,6 +142,14 @@ window 时 PAUSED，不能继续使用会破坏能量闭合的 pressure clamp。
 plan 联合移动液体与气体的 volume/nanos、质量、species、residual 和 `U`；潜热由两侧状态函数自然体现。
 没有界面、receiver、预算或几何容量时不提交。气体 v4 前置完成前这些路径不开放 production controller。
 
+composition-bearing 气液相变不按 material/species ID 写死挥发性：gas thermal material 上存在对应
+`ThermalSpeciesOffset` 才声明该 species 可由该气相承载。沸腾对每个非 indicator liquid marker 做 exact binary-volume
+species split，只把已声明 species 与其独立 mass residual 移入 gas component；未声明的溶质留在保底正体积液相，indicator
+marker 原始 volume/mass/provenance 不参与分配。同格 active/deposit 只作为 LTE 热浴与 unified occupancy capacity，不是拒绝条件。
+冷凝按实际 gas component species/residual 回写非 indicator marker，没有可合并目标时新建非 indicator marker；chemistry
+开启但旧 vapor 缺 species 真值时保留并 PAUSED，禁止按 liquid default 或当前 data pack 猜测 H2O。bundled water-vapor host
+只声明 `realwater:h2o`，所以现有离子/盐不会被隐式蒸馏到气相。
+
 ## 反应、相变与每步提交顺序
 
 一个完整 logical step 固定为：

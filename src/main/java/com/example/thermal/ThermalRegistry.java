@@ -95,6 +95,10 @@ public final class ThermalRegistry {
 				"Missing thermal species offset for " + speciesId + " in " + material.id());
 		return offset;
 	}
+	/** Presence is the registry declaration that this host can carry the named chemical species. */
+	public boolean hasSpeciesOffset(int materialHandle, String speciesId) {
+		return offsetByHostSpecies.containsKey(offsetKey(material(materialHandle).id(), speciesId));
+	}
 	public String chemicalRegistryFingerprint() { return chemicalRegistryFingerprint; }
 	public String granularRegistryFingerprint() { return granularRegistryFingerprint; }
 	public byte[] canonicalBytes() { return canonicalBytes.clone(); }

@@ -56,6 +56,7 @@ public final class M9ThermalValidation {
 		gasLiquidSaturationAndExactBatch();
 		gasRuntimeTransfersEnergyAndWork();
 		sealedInterfaceBoilingCommitsJointInventory();
+		compositionBearingBoilingMovesOnlyGasAdmittedSpecies();
 		thermalSleepIsOrthogonalToMotion();
 		reactionHeatIsPathIndependentStateEnergy();
 		reactionCommitValidatesEnergyBeforeMutation();
@@ -314,7 +315,7 @@ public final class M9ThermalValidation {
 		SignedDyadic beforeCondensation = domain.exactInternalEnergy();
 		ThermalAuditLedger auditBeforeCondensation = domain.thermalAudit();
 		FlipThermalParticleState beforeCondensationState = domain.exportThermalParticleState();
-		FlipFluidDomain.GasThermalPhaseStats condensed = domain.stepInertGasPhaseChangeOnly(1);
+		FlipFluidDomain.GasThermalPhaseStats condensed = domain.stepGasPhaseChangeOnly(1);
 		require(condensed.operations() == 1 && condensed.boiledCells() == 0 && condensed.condensedCells() == 1
 				&& close(domain.totalMass(), liquidMassBefore)
 				&& domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR) == null
@@ -332,6 +333,103 @@ public final class M9ThermalValidation {
 						+ java.util.Arrays.toString(domain.exportThermalParticleState().copyGasNodeEnergy())
 						+ " liquid=" + SignedDyadic.sum(beforeCondensationState.copyInternalEnergy()) + "->"
 						+ SignedDyadic.sum(domain.exportThermalParticleState().copyInternalEnergy()));
+	}
+
+	private static void compositionBearingBoilingMovesOnlyGasAdmittedSpecies() {
+		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		ThermalMaterialDefinition water = new ThermalMaterialDefinition("test:thermal/species_water",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
+				373.15, 0.0, 0.6,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 4_180.0)));
+		ThermalMaterialDefinition air = new ThermalMaterialDefinition("test:thermal/species_air",
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+				373.15, 0.0, 0.025,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 718.0)));
+		ThermalMaterialDefinition vapor = new ThermalMaterialDefinition("test:thermal/species_vapor",
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.WATER_VAPOR,
+				373.15, 2_256_000.0, 0.025,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 1_410.0)));
+		long liquidSvq = SolidVolume.SVQ_PER_CELL / 200L;
+		ThermalPhaseTransition boiling = new ThermalPhaseTransition("test:phase/species_boiling",
+				water.id(), vapor.id(), 373.15, liquidSvq, liquidSvq * 1_000L,
+				ExactRational.parse("0.01"), ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS,
+				10_000.0, 3_000_000.0);
+		java.util.ArrayList<ThermalMaterialDefinition> materials = new java.util.ArrayList<>(List.of(water, air, vapor));
+		for (int handle = 0; handle < granular.materials().size(); handle++) materials.add(
+				new ThermalMaterialDefinition("test:thermal/species_granular_" + handle,
+						ThermalMaterialDefinition.CarrierKind.GRANULAR, granular.material(handle).id(),
+						373.15, 0.0, 0.2,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 900.0))));
+		ThermalRegistry thermal = new ThermalRegistry(materials, List.of(
+				new ThermalSpeciesOffset("test:offset/species_water_h2o", BuiltinChemicalDefinitions.H2O,
+						water.id(), ExactRational.ZERO),
+				new ThermalSpeciesOffset("test:offset/species_water_na", BuiltinChemicalDefinitions.NA_PLUS,
+						water.id(), ExactRational.ZERO),
+				new ThermalSpeciesOffset("test:offset/species_vapor_h2o", BuiltinChemicalDefinitions.H2O,
+						vapor.id(), ExactRational.ZERO)), List.of(boiling),
+				chemistry.fingerprint(), granular.fingerprint());
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 512);
+		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
+			if (x == 0 || x == 3 || y == 0 || y == 3 || z == 0 || z == 3) domain.setSolid(x, y, z, true);
+		}
+		domain.setVolume(1, 1, 1, 0.75F);
+		domain.bindGranular(granular, liquids);
+		domain.bindChemistry(chemistry);
+		for (int marker = 0; marker < domain.particleCount(); marker++) domain.setMarkerChemical(marker, Map.of(
+				BuiltinChemicalDefinitions.H2O, 20_000_000L,
+				BuiltinChemicalDefinitions.NA_PLUS, 1_000_000L), marker == 0);
+		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long sandSvq = granular.material(sand).maximumActiveParcelSvq();
+		double sandMass = SolidVolume.toCellVolume(sandSvq) * granular.material(sand).referenceDensity();
+		require(domain.tryInsertExactGranular(1, 1, 1, sand, 0, sandSvq, sandMass).inserted(),
+				"gas phase fixture could not insert its granular LTE carrier");
+		domain.bindThermal(thermal, liquids, 500.0);
+		long initialGranularSvq = domain.totalGranularSolidVolumeSvq();
+		FlipChemicalParticleState initial = domain.exportChemicalParticleState();
+		long initialH2o = initial.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O)];
+		long initialSodium = initial.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)];
+		float indicatorVolume = initial.materials().copyPositionVolume()[3];
+		double indicatorMass = initial.materials().copyParticleMass()[0];
+
+		domain.step(true, 1);
+		GasComponentAmount gas = domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
+		FlipChemicalParticleState boiled = domain.exportChemicalParticleState();
+		long gasH2o = gas.species().stream().filter(amount -> amount.speciesId().equals(
+				BuiltinChemicalDefinitions.H2O)).mapToLong(GasComponentAmount.SpeciesAmount::amountQuanta).sum();
+		long gasSodium = gas.species().stream().filter(amount -> amount.speciesId().equals(
+				BuiltinChemicalDefinitions.NA_PLUS)).mapToLong(GasComponentAmount.SpeciesAmount::amountQuanta).sum();
+		require(domain.lastGasThermalPhaseStats().boiledCells() == 1 && gasH2o > 0L && gasSodium == 0L
+				&& boiled.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O)] + gasH2o == initialH2o
+				&& boiled.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)] == initialSodium
+				&& close(boiled.residualLedger() + gas.massResidual(), initial.residualLedger())
+				&& Float.floatToRawIntBits(boiled.materials().copyPositionVolume()[3])
+				== Float.floatToRawIntBits(indicatorVolume)
+				&& Double.doubleToRawLongBits(boiled.materials().copyParticleMass()[0])
+				== Double.doubleToRawLongBits(indicatorMass)
+				&& domain.totalGranularSolidVolumeSvq() == initialGranularSvq
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"species-bearing boiling did not retain solute/indicator and move exact vapor truth");
+
+		domain.setThermalTemperatureInCell(1, 1, 1, 300.0);
+		FlipFluidDomain.GasThermalPhaseStats condensed = domain.stepGasPhaseChangeOnly(1);
+		FlipChemicalParticleState restored = domain.exportChemicalParticleState();
+		require(condensed.condensedCells() == 1
+				&& domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR) == null
+				&& restored.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O)] == initialH2o
+				&& restored.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)] == initialSodium
+				&& close(restored.residualLedger(), initial.residualLedger())
+				&& Float.floatToRawIntBits(restored.materials().copyPositionVolume()[3])
+				== Float.floatToRawIntBits(indicatorVolume)
+				&& Double.doubleToRawLongBits(restored.materials().copyParticleMass()[0])
+				== Double.doubleToRawLongBits(indicatorMass)
+				&& domain.totalGranularSolidVolumeSvq() == initialGranularSvq
+				&& domain.airNetwork().auditClosed()
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"species-bearing condensation did not restore exact liquid/gas chemical truth");
 	}
 
 	private static void definitionAndCanonicalRegistry() {
