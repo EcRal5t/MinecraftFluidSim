@@ -561,6 +561,38 @@ final class FlipThermalState {
 		return cellGrid.occupied(cell) ? cellGrid.temperature(cell) : Double.NaN;
 	}
 
+	/** Solves a prospective liquid/coherent phase edit while retaining every same-cell granular heat-bath carrier. */
+	double phaseCandidateTemperature(
+			int cell, List<ThermalStateFunction.InventoryPortion> phaseInventory, MarkerContext markers
+	) {
+		if (cell < 0 || cell >= cellGrid.cellCount() || phaseInventory == null || phaseInventory.isEmpty()) {
+			throw new IllegalArgumentException("Thermal phase candidate inventory is invalid");
+		}
+		ThermalCellGrid.CarrierAccess current = carrierAccess(markers);
+		SignedDyadic cellEnergy = SignedDyadic.ZERO;
+		for (int carrier = 0; carrier < current.carrierCount(); carrier++) if (current.cell(carrier) == cell) {
+			cellEnergy = cellEnergy.add(SignedDyadic.of(current.internalEnergy(carrier)));
+		}
+		ArrayList<ThermalStateFunction.InventoryPortion> finalInventory = new ArrayList<>(phaseInventory);
+		for (int active = 0; active < markers.activeParcelCount(); active++) {
+			if (markers.activeParcelCell(active) == cell) addGranularPortion(finalInventory,
+					markers.activeParcelMaterial(active), markers.activeParcelMass(active),
+					markers.solidComposition(markers.activeParcelComposition(active)));
+		}
+		for (GranularEnergyColumn.DepositKey key : markers.depositKeys()) if (key.cell() == cell) {
+			addGranularPortion(finalInventory, key.materialHandle(), markers.depositMass(key),
+					markers.solidComposition(key.compositionHandle()));
+		}
+		return stateFunction.stateForInventory(finalInventory, cellEnergy.toDouble()).temperatureK();
+	}
+
+	int thermalMaterialHandleForFluid(int fluidHandle) {
+		if (fluidHandle < 0 || fluidHandle >= materialByFluidHandle.length) {
+			throw new IllegalArgumentException("Unknown liquid phase carrier");
+		}
+		return materialByFluidHandle[fluidHandle];
+	}
+
 	ThermalDisplaySnapshot displaySnapshot(MarkerContext markers, AirNetwork network) {
 		cellGrid.rebuild(carrierAccess(markers));
 		short[] temperatures = new short[cellGrid.cellCount()];
@@ -745,9 +777,8 @@ final class FlipThermalState {
 		if (!Double.isFinite(targetCellEnergy)) {
 			throw new IllegalArgumentException("Conservative thermal cell remainder is not representable");
 		}
-		cellGrid.rebuild(current);
+		cellGrid.rebuildWithCellEnergy(current, cell, targetCellEnergy);
 		double[] target = cellGrid.copyInternalEnergy();
-		target[cell] = targetCellEnergy;
 		cellGrid.setCellInternalEnergies(target);
 		audit = audit.withRoundoff(exactEnergy(markers.markerCount()).subtract(inventoryBefore));
 	}
@@ -858,6 +889,11 @@ final class FlipThermalState {
 		if (plan == null) return;
 		internalEnergy[marker] = plan.newEnergy();
 		audit = audit.withExternalSinkEnergy(SignedDyadic.of(plan.removedEnergy()));
+	}
+
+	void commitInternalTruncate(int marker, Truncation plan) {
+		if (plan == null) return;
+		internalEnergy[marker] = plan.newEnergy();
 	}
 
 	FlipParticleReseeder.ThermalAdapter reseedAdapter(MarkerContext markers) {

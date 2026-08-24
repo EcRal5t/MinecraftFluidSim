@@ -111,6 +111,10 @@ coherent occupancy 与 granular occupancy 合成唯一 `OccupiedVolumeField`，�
 gas available volume、collision、volume drift 和插入容量共同消费，禁止复制局部压力几何。
 
 相变 planner 只按完整 exact batch 转移液体 volume/mass/species/residual/`U` 与 coherent group 库存。
+composition-bearing 液体的 species quanta 与 residual 从 M7 parcel 先完整预演拆分，再原样并入 coherent composition；
+融化时以新建非 indicator parcel 返回，禁止借当前默认化学库存重建。indicator provenance 不进入固相，带 indicator 的
+marker 不参与冻结分配且不得因相变缩放。同格 active parcel/deposit 保持 M8 库存身份不变，但作为热浴加入同一个 LTE
+候选反演；因此相变可以和颗粒交换显热，不能把颗粒存在当作拒绝相变的特异条件。
 相态变化的 `delta V` 是显式 volume event，并在下一 mechanical projection 消费同一 pending volume/work record；
 其 `-p delta V` 进入 mechanical-work ledger。正膨胀在闭域中无可表示容量时 PAUSED，不删体积、不钳相分数。
 pending record 属于 v6 真值，checkpoint 后不得重复或丢失排水。
@@ -223,4 +227,3 @@ M9 只有在下列门全部满足后关闭：
 - thermal registry、v4/v6、item/WAL/protocol identity 不明时保留并 LOCKED；
 - 旧世界只经显式 initialization 进入 v6；
 - 自动门通过；只有真实渲染、世界热边界和跨重启交互无法自动观察时才请求一次合并实机 smoke。
-

@@ -291,8 +291,8 @@ thermal transport 分别消费 config v6 的 operation/substep 硬预算。phase
 PAUSED，不修改既有 40/200 ms wall-time 阈值。status 报告 thermal activity、U、source/sink/work、coherent SVQ、audit，
 gas 压力也改读非等温派生值。
 
-最近门：`thermal,lifecycle,chemistry,granular,gas-liquid,region-state` 通过。composition-bearing liquid 与同格 granular
-heat bath 的相变仍显式 fail-closed，等待 exact species/LTE joint plan，不会静默丢 species 或借 carrier ID 特判。
+最近门：`thermal,lifecycle,chemistry,granular,gas-liquid,region-state` 通过。本增量当时仍对 composition-bearing liquid
+与同格 granular heat bath 显式 fail-closed；该限制随后由 M9.24 的 exact species/LTE joint plan 解除。
 
 ## M9.22 production container and collision energy transfer
 
@@ -329,3 +329,22 @@ operator 给出的 raw 温度为所有 liquid/active/deposit/gas carrier 建立�
 
 扩展既有 `region-state` 门覆盖 v1/v2/v3/v5 四条初始化、记录继承/重启恢复，以及越界温度失败后旧 HEAD 与 unloaded
 状态保持。最近门：`region-state` 通过；尚未请求实机。
+
+## M9.24 composition-bearing condensed phase and granular LTE
+
+凝固/融化 production planner 不再把 composition-bearing water 或同格 granular 当作永久 fail-closed 条件。冻结候选按
+非 indicator marker 的 exact SVQ/mass 进行 deterministic split preview，同时生成 M7 kept/removed mixture、species quanta、
+mass residual 与对应 thermal `U` 搬运计划；提交时 species/residual 从 liquid parcel 移入 coherent composition，属于内部相间
+转移，不写 chemical 或 thermal external sink。融化对 coherent composition 做 exact proportional take，并生成新的非 indicator
+liquid parcel，禁止按当前 datapack default 猜测回填。indicator-bearing marker 完整保留，不参与冻结分配。
+
+候选相态温度现在以同格全部 liquid/coherent phase inventory 加 unchanged active parcel/deposit 共同反演 LTE；相变仍只消耗
+完整 transition batch，并通过单调二分选择不越过平衡温度的最大 extent。容量预检联合 liquid、coherent 与 granular exact SVQ，
+提交后的 cell energy 用全局 exact inventory 余量重分配，末位 double 误差只进入既有 roundoff ledger。删除旧的重复 inert
+freeze/melt commit 路径，气液路径暂保持独立。
+
+bundled thermal definitions 为冰相补齐水相允许的全部 13 个 species offset；相同 formation offset 保证潜热仍只来自 ice/water
+material reference-energy gap，不引入物种特判。唯一 `thermal` fixture 扩展为 chemistry+granular 同格冻结/融化，验证跨液相与
+coherent 的 species/residual、indicator 原始 volume/mass、颗粒 SVQ/mass、凝聚相总质量和 energy/audit 闭合。
+
+最近门：`thermal,chemistry,granular` 通过；尚未请求实机。

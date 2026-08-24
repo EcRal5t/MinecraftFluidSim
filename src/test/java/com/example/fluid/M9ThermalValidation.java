@@ -62,6 +62,7 @@ public final class M9ThermalValidation {
 		granularReactionHeatUsesOneConservedCellEnergy();
 		phasePlateauUsesTheStateFunctionGap();
 		coherentPhaseInventoryAndExactBatchPlanning();
+		compositionAndGranularPhaseChangeConservesJointTruth();
 		granularEnergyColumnTransactions();
 		exactDyadicAuditDoesNotLoseCancellationRemainders();
 		containerTransferCarriesAuthoritativeEnergy();
@@ -701,6 +702,138 @@ public final class M9ThermalValidation {
 				&& phaseDomain.exactInternalEnergy().equals(phaseDomain.thermalAudit().expectedInventory()),
 				"domain melt commit did not conserve exact mass, volume and energy inventories");
 	}
+
+	private static void compositionAndGranularPhaseChangeConservesJointTruth() {
+		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 256);
+		domain.setVolume(1, 1, 1, 0.75F);
+		domain.bindGranular(granular, liquids);
+		domain.bindChemistry(chemistry);
+		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L), true);
+		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long sandSvq = granular.material(sand).maximumActiveParcelSvq();
+		double sandMass = SolidVolume.toCellVolume(sandSvq)
+				* granular.material(sand).referenceDensity();
+		require(domain.tryInsertExactGranular(1, 1, 1, sand, 0, sandSvq, sandMass).inserted(),
+				"joint phase fixture could not insert its granular heat bath");
+		domain.bindThermal(compositionPhaseThermalRegistry(liquids, granular, chemistry), liquids, 295.0);
+
+		CondensedLedger initial = condensedLedger(domain, chemistry);
+		long initialGranularSvq = domain.totalGranularSolidVolumeSvq();
+		double initialGranularMass = domain.totalGranularMass();
+		double initialMass = domain.totalMass() + domain.totalCoherentMass();
+		SignedDyadic coldEnergy = domain.exactInternalEnergy();
+		FlipFluidDomain.ThermalPhaseStats freeze = domain.stepInertPhaseChangeOnly(16);
+		CondensedLedger frozen = condensedLedger(domain, chemistry);
+		require(freeze.operations() > 0 && freeze.signedBatches() > 0L
+				&& domain.totalCoherentSolidVolumeSvq() > 0L
+				&& frozen.species().equals(initial.species())
+				&& close(frozen.massResidual(), initial.massResidual())
+				&& frozen.indicatorCount() == 1
+				&& Float.floatToRawIntBits(frozen.indicatorVolume())
+				== Float.floatToRawIntBits(initial.indicatorVolume())
+				&& Double.doubleToRawLongBits(frozen.indicatorMass())
+				== Double.doubleToRawLongBits(initial.indicatorMass())
+				&& domain.totalGranularSolidVolumeSvq() == initialGranularSvq
+				&& close(domain.totalGranularMass(), initialGranularMass)
+				&& close(domain.totalMass() + domain.totalCoherentMass(), initialMass)
+				&& Math.abs(domain.exactInternalEnergy().subtract(coldEnergy).toDouble()) <= 1.0E-8
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"composition/granular freeze did not conserve joint species, indicator, solid and energy truth: stats="
+						+ freeze + " initial=" + initial + " frozen=" + frozen
+						+ " coherent=" + domain.totalCoherentSolidVolumeSvq()
+						+ " granularSvq=" + domain.totalGranularSolidVolumeSvq() + "/" + initialGranularSvq
+						+ " granularMass=" + domain.totalGranularMass() + "/" + initialGranularMass
+						+ " mass=" + (domain.totalMass() + domain.totalCoherentMass()) + "/" + initialMass
+						+ " energy=" + domain.exactInternalEnergy() + "/" + coldEnergy
+						+ " expected=" + domain.thermalAudit().expectedInventory());
+
+		domain.setThermalTemperatureInCell(1, 1, 1, 305.0);
+		SignedDyadic hotEnergy = domain.exactInternalEnergy();
+		FlipFluidDomain.ThermalPhaseStats melt = domain.stepInertPhaseChangeOnly(16);
+		CondensedLedger melted = condensedLedger(domain, chemistry);
+		require(melt.operations() > 0 && melt.signedBatches() < 0L
+				&& domain.totalCoherentSolidVolumeSvq() == 0L
+				&& melted.species().equals(initial.species())
+				&& close(melted.massResidual(), initial.massResidual())
+				&& melted.indicatorCount() == 1
+				&& domain.totalGranularSolidVolumeSvq() == initialGranularSvq
+				&& close(domain.totalGranularMass(), initialGranularMass)
+				&& close(domain.totalMass() + domain.totalCoherentMass(), initialMass)
+				&& Math.abs(domain.exactInternalEnergy().subtract(hotEnergy).toDouble()) <= 1.0E-8
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"composition/granular melt did not restore joint species, solid and energy truth");
+	}
+
+	private static ThermalRegistry compositionPhaseThermalRegistry(
+			FluidMaterialRegistry liquids, GranularRegistry granular, ChemicalRegistry chemistry
+	) {
+		ThermalMaterialDefinition water = new ThermalMaterialDefinition("test:thermal/composition_water",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
+				300.0, 100.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0)));
+		ThermalMaterialDefinition ice = new ThermalMaterialDefinition("test:thermal/composition_ice",
+				ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID, "test:composition_ice",
+				300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0)));
+		java.util.ArrayList<ThermalMaterialDefinition> materials = new java.util.ArrayList<>();
+		materials.add(water); materials.add(ice);
+		for (int handle = 0; handle < granular.materials().size(); handle++) materials.add(
+				new ThermalMaterialDefinition("test:thermal/composition_granular_" + handle,
+						ThermalMaterialDefinition.CarrierKind.GRANULAR, granular.material(handle).id(),
+						300.0, 0.0, 1.0,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0))));
+		java.util.ArrayList<ThermalSpeciesOffset> offsets = new java.util.ArrayList<>();
+		for (int species = 0; species < chemistry.species().size(); species++) {
+			String speciesId = chemistry.species(species).id();
+			offsets.add(new ThermalSpeciesOffset("test:composition_offset/water_" + species,
+					speciesId, water.id(), ExactRational.ZERO));
+			offsets.add(new ThermalSpeciesOffset("test:composition_offset/ice_" + species,
+					speciesId, ice.id(), ExactRational.ZERO));
+		}
+		long batchSvq = SolidVolume.SVQ_PER_CELL / 8L;
+		ThermalPhaseTransition transition = new ThermalPhaseTransition(
+				"test:phase/composition_ice_water", ice.id(), water.id(), 300.0,
+				batchSvq, batchSvq, ExactRational.of(125),
+				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
+		return new ThermalRegistry(materials, offsets, List.of(transition),
+				chemistry.fingerprint(), granular.fingerprint());
+	}
+
+	private static CondensedLedger condensedLedger(FlipFluidDomain domain, ChemicalRegistry chemistry) {
+		FlipChemicalParticleState liquid = domain.exportChemicalParticleState();
+		java.util.TreeMap<String, Long> species = new java.util.TreeMap<>();
+		long[] liquidTotals = liquid.copySpeciesTotals();
+		for (int handle = 0; handle < liquidTotals.length; handle++) if (liquidTotals[handle] > 0L) {
+			species.put(chemistry.species(handle).id(), liquidTotals[handle]);
+		}
+		double residual = liquid.residualLedger();
+		for (CoherentPhaseStore.Group group : domain.exportThermalParticleState().coherentGroups()) {
+			if (group.composition() == null) continue;
+			for (Map.Entry<String, Long> entry : group.composition().stableAmounts().entrySet()) {
+				species.merge(entry.getKey(), entry.getValue(), Math::addExact);
+			}
+			residual += group.composition().massResidual();
+		}
+		byte[] indicators = liquid.copyIndicator();
+		float[] positionVolume = liquid.materials().copyPositionVolume();
+		double[] mass = liquid.materials().copyParticleMass();
+		int indicatorCount = 0; float indicatorVolume = 0.0F; double indicatorMass = 0.0;
+		for (int marker = 0; marker < indicators.length; marker++) if (indicators[marker] != 0) {
+			indicatorCount++; indicatorVolume += positionVolume[marker * 4 + 3]; indicatorMass += mass[marker];
+		}
+		return new CondensedLedger(Map.copyOf(species), residual,
+				indicatorCount, indicatorVolume, indicatorMass);
+	}
+
+	private record CondensedLedger(
+			Map<String, Long> species, double massResidual,
+			int indicatorCount, float indicatorVolume, double indicatorMass
+	) { }
 
 	private static void exactDyadicAuditDoesNotLoseCancellationRemainders() {
 		SignedDyadic exact = SignedDyadic.sum(new double[]{1.0E16, 1.0, -1.0E16});
