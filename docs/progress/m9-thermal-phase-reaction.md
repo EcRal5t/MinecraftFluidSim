@@ -426,5 +426,6 @@ pending work 与 audit；派生温度不参与任何结算。
 gas registry `41b54b…f777` 与 thermal registry `f402a2…6879`，命令查询确认两个 live gate 均开启并由 `stop` 正常退出。
 `clean assemble compileTestJava --offline --no-daemon` 从零成功（27 s）；限定根项目的专服随后实际加载 realwater 0.15.0，
 重读已发布 registry、确认两个 live gate 开启并由 `stop` 正常退出。候选 JAR SHA-256 为
-`7CE4F7E6AC596695CA54C56EF1840408F8AB5EC2CC947C168493BA707788139A`。真实客户端中的固定冰面换热、WAL v5
+`7CE4F7E6AC596695CA54C56EF1840408F8AB5EC2CC947C168493BA707788139A`；部署副本 hash 相同，原 0.14.0 已可恢复地改为
+`.disabled`，mods 目录中主 `realwater` id 只有 0.15.0 一个启用 JAR（独立只读 `realwater_gpu_probe` id 不冲突）。真实客户端中的固定冰面换热、WAL v5
 容器交互和 v6 跨重启仍按架构停止门合并为唯一一次人工 smoke，完成前不在进度索引宣告 M9 已验收。
