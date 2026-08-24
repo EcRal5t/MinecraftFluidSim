@@ -3,6 +3,7 @@ package com.example.simulation.persistence;
 import com.example.fluid.FlipParticleState;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipChemicalParticleState;
+import com.example.fluid.FlipThermalParticleState;
 import com.example.fluid.FluidMaterial;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.chemistry.ChemicalAuditLedgerCodec;
@@ -12,6 +13,8 @@ import com.example.granular.GranularRegistry;
 import com.example.granular.GranularStateSnapshot;
 import com.example.granular.SolidVolume;
 import com.example.simulation.FluidRegion;
+import com.example.thermal.SignedDyadic;
+import com.example.thermal.ThermalRegistry;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -36,7 +39,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		return capture(region, checkpointGeneration, new CapturedParticles(1, List.of(), particles.copyPositionVolume(),
 				particles.copyParticleVelocities(), particles.copySolidMask(), new double[0], new int[0],
 				"", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L,
-				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY), null);
+				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY), null, null);
 	}
 
 	/** Captures an explicitly material-bound CPU domain without routing it through the pure-water handoff. */
@@ -46,7 +49,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		return capture(region, checkpointGeneration, new CapturedParticles(2, particles.materials(), particles.copyPositionVolume(),
 				particles.copyParticleVelocities(), particles.copySolidMask(), particles.copyParticleMass(),
 				particles.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L,
-				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY), null);
+				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY), null, null);
 	}
 
 	public static RegionState captureChemical(FluidRegion region, long checkpointGeneration) throws IOException {
@@ -58,7 +61,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				materials.copyParticleMass(), materials.copyMaterialPaletteIndex(), particles.registryFingerprint(),
 				particles.speciesPalette(), particles.mixtures(), particles.copyMarkerMixtureIndex(),
 				particles.copyIndicator(), particles.copySpeciesTotals(), particles.residualLedgerBits(),
-				particles.externalSource(), particles.escapedSink()), null);
+				particles.externalSource(), particles.escapedSink()), null, null);
 	}
 
 	public static RegionState captureGranular(FluidRegion region, long checkpointGeneration) throws IOException {
@@ -83,12 +86,40 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					materials.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0],
 					new long[0], 0L, ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY);
 		}
-		return capture(region, checkpointGeneration, particles, granular);
+		return capture(region, checkpointGeneration, particles, granular, null);
+	}
+
+	/** Captures the current material/optional-chemistry generation plus required M9 liquid energy extensions. */
+	public static RegionState captureThermal(FluidRegion region, long checkpointGeneration) throws IOException {
+		requireCaptureable(region, checkpointGeneration);
+		if (!region.domain().hasThermalState() || !region.domain().hasMaterialState()) {
+			throw new IOException("region-state v6 capture requires material and thermal state");
+		}
+		if (region.domain().hasGranularState()) {
+			throw new IOException("region-state v6 capture is blocked until granular energy ordinals are bound");
+		}
+		CapturedParticles particles;
+		if (region.domain().hasChemistryState()) {
+			FlipChemicalParticleState chemical = region.domain().exportChemicalParticleState();
+			FlipMaterialParticleState materials = chemical.materials();
+			particles = new CapturedParticles(6, materials.materials(), materials.copyPositionVolume(),
+					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMass(),
+					materials.copyMaterialPaletteIndex(), chemical.registryFingerprint(), chemical.speciesPalette(),
+					chemical.mixtures(), chemical.copyMarkerMixtureIndex(), chemical.copyIndicator(),
+					chemical.copySpeciesTotals(), chemical.residualLedgerBits(), chemical.externalSource(), chemical.escapedSink());
+		} else {
+			FlipMaterialParticleState materials = region.domain().exportMaterialParticleState();
+			particles = new CapturedParticles(6, materials.materials(), materials.copyPositionVolume(),
+					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMass(),
+					materials.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0],
+					new long[0], 0L, ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY);
+		}
+		return capture(region, checkpointGeneration, particles, null, region.domain().exportThermalParticleState());
 	}
 
 	private static RegionState capture(
 			FluidRegion region, long checkpointGeneration, CapturedParticles particles,
-			GranularStateSnapshot granular
+			GranularStateSnapshot granular, FlipThermalParticleState thermal
 	) throws IOException {
 		requireCaptureable(region, checkpointGeneration);
 		int cellsPerBlock = Math.round(1.0F / region.solverConfig().cellSize());
@@ -182,18 +213,29 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					if (particles.hasChemicalState()) for (int mixture : savedMixtures) {
 						sectionResidual += Double.longBitsToDouble(particles.chemicalMixtures().get(mixture).massResidualBits());
 					}
-					List<RegionExtension> sectionExtensions = List.of();
+					ArrayList<RegionExtension> sectionExtensions = new ArrayList<>();
 					if (granular != null) {
 						GranularRegionStateCodec.SectionData data = new GranularRegionStateCodec.SectionData(
 								List.copyOf(granularActiveBySection.getOrDefault(key, List.of())),
 								List.copyOf(granularDepositsBySection.getOrDefault(key, List.of())));
-						sectionExtensions = List.of(new RegionExtension(GranularRegionStateCodec.SECTION_EXTENSION,
+						sectionExtensions.add(new RegionExtension(GranularRegionStateCodec.SECTION_EXTENSION,
 								new GranularRegionStateCodec().encodeSection(data)));
+					}
+					if (thermal != null) {
+						double[] allEnergy = thermal.copyInternalEnergy();
+						long[] markerEnergyBits = new long[ordinals.size()];
+						for (int index = 0; index < ordinals.size(); index++) markerEnergyBits[index] =
+								Double.doubleToRawLongBits(allEnergy[ordinals.get(index)]);
+						ThermalRegionStateCodec.SectionData data = new ThermalRegionStateCodec.SectionData(
+								markerEnergyBits, new long[0], new long[0], List.of(),
+								SignedDyadic.sum(toDoubles(markerEnergyBits)));
+						sectionExtensions.add(new RegionExtension(ThermalRegionStateCodec.SECTION_EXTENSION,
+								new ThermalRegionStateCodec().encodeSection(data)));
 					}
 					RegionSectionState unsigned = new RegionSectionState(particles.formatVersion(), region.id(), region.dimension().identifier().toString(),
 							checkpointGeneration, sectionX, sectionY, sectionZ, startX, startY, startZ,
 							sliceX, sliceY, sliceZ, savedOrdinals, savedPositions, savedVelocities, savedMass, savedMaterials,
-							solidSlice, sectionExtensions, savedMixtures, savedIndicator, sectionSpecies,
+							solidSlice, List.copyOf(sectionExtensions), savedMixtures, savedIndicator, sectionSpecies,
 							particles.hasChemicalState() ? Double.doubleToRawLongBits(sectionResidual) : 0L, 0L);
 					sectionStates.add(withChecksum(unsigned));
 				}
@@ -214,6 +256,26 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		if (granular != null) manifestExtensions.add(new RegionExtension(GranularRegionStateCodec.MANIFEST_EXTENSION,
 				new GranularRegionStateCodec().encodeManifest(granularManifest(granular, sectionStates,
 						particles.hasChemicalState()))));
+		if (thermal != null) {
+			ThermalRegionStateCodec codec = new ThermalRegionStateCodec();
+			ArrayList<ThermalRegionStateCodec.SectionLedger> ledgers = new ArrayList<>(sectionStates.size());
+			for (RegionSectionState section : sectionStates) {
+				ThermalRegionStateCodec.SectionData data = codec.decodeSection(
+						requiredExtension(section.extensions(), ThermalRegionStateCodec.SECTION_EXTENSION).payload(),
+						section.markerCount(), 0, 0);
+				ledgers.add(new ThermalRegionStateCodec.SectionLedger(section.key(), data.liquidMarkerEnergyBits().length,
+						0, 0, 0, data.energy()));
+			}
+			SignedDyadic liquidEnergy = SignedDyadic.sum(thermal.copyInternalEnergy());
+			int capabilities = ThermalRegionStateCodec.CAP_MATERIALS | ThermalRegionStateCodec.CAP_THERMAL
+					| (particles.hasChemicalState() ? ThermalRegionStateCodec.CAP_CHEMISTRY : 0);
+			ThermalRegionStateCodec.ManifestData data = new ThermalRegionStateCodec.ManifestData(capabilities,
+					thermal.thermalRegistryFingerprint(), particles.particleCount(), 0, 0, 0, 0,
+					liquidEnergy, SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO,
+					liquidEnergy, thermal.audit(), List.copyOf(ledgers), new long[0]);
+			manifestExtensions.add(new RegionExtension(ThermalRegionStateCodec.MANIFEST_EXTENSION,
+					codec.encodeManifest(data)));
+		}
 		RegionManifest unsigned = new RegionManifest(particles.formatVersion(), region.id(), region.dimension().identifier().toString(), checkpointGeneration,
 				region.generation(), region.origin(), region.sizeX(), region.sizeY(), region.sizeZ(), region.solverConfig(),
 				region.reservedMarkerCapacity(), region.persistedRuntime(), region.footprint(), particles.particleCount(),
@@ -299,7 +361,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	}
 
 	public FlipMaterialParticleState reconstructMaterial() throws IOException {
-		if (manifest.formatVersion() != 2 && !(manifest.formatVersion() == 5 && !manifest.hasChemicalState())) {
+		if (manifest.formatVersion() != 2
+				&& !((manifest.formatVersion() == 5 || manifest.formatVersion() == 6) && !manifest.hasChemicalState())) {
 			throw new IOException("This region-state cannot use the material reconstruction path");
 		}
 		ReconstructedParticles particles = reconstructParticles();
@@ -307,6 +370,46 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				manifest.totalMarkerCount(), manifest.totalVolume(), manifest.totalMass(), manifest.materialPalette(),
 				particles.positionVolume(), particles.velocities(), particles.solidMask(), particles.markerMass(),
 				particles.materialPaletteIndex());
+	}
+
+	public FlipThermalParticleState reconstructThermal(ThermalRegistry registry) throws IOException {
+		if (!manifest.hasThermalState()) throw new IOException("This region-state has no thermal state");
+		if (registry == null) throw new IOException("Authoritative thermal registry is unavailable");
+		validate();
+		ThermalRegionStateCodec codec = new ThermalRegionStateCodec();
+		ThermalRegionStateCodec.ManifestData thermal = codec.decodeManifest(
+				requiredExtension(manifest.extensions(), ThermalRegionStateCodec.MANIFEST_EXTENSION).payload());
+		if (!thermal.registryFingerprint().equals(registry.fingerprint())) {
+			throw new IOException("Region-state v6 thermal registry fingerprint mismatch");
+		}
+		if (thermal.activeParcelCount() != 0 || thermal.depositGroupCount() != 0
+				|| thermal.coherentGroupCount() != 0 || thermal.gasNodeCount() != 0) {
+			throw new IOException("Complete non-liquid v6 thermal reconstruction is not yet bound");
+		}
+		double[] energy = new double[manifest.totalMarkerCount()];
+		boolean[] seen = new boolean[energy.length];
+		for (RegionSectionState section : sections) {
+			ThermalRegionStateCodec.SectionData data = codec.decodeSection(
+					requiredExtension(section.extensions(), ThermalRegionStateCodec.SECTION_EXTENSION).payload(),
+					section.markerCount(), 0, 0);
+			long[] bits = data.liquidMarkerEnergyBits(); int[] ordinals = section.markerOrdinals();
+			if (bits.length != ordinals.length) throw new IOException("Thermal marker ordinal cardinality mismatch");
+			for (int index = 0; index < ordinals.length; index++) {
+				int ordinal = ordinals[index];
+				if (ordinal < 0 || ordinal >= energy.length || seen[ordinal]) {
+					throw new IOException("Duplicate or invalid thermal marker ordinal");
+				}
+				seen[ordinal] = true; energy[ordinal] = Double.longBitsToDouble(bits[index]);
+			}
+		}
+		for (boolean value : seen) if (!value) throw new IOException("Missing thermal marker ordinal");
+		try {
+			return new FlipThermalParticleState(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
+					manifest.solverConfig().cellSize(), manifest.totalMarkerCount(), thermal.registryFingerprint(),
+					energy, thermal.audit());
+		} catch (IllegalArgumentException invalid) {
+			throw new IOException("Invalid region-state v6 thermal inventory: " + invalid.getMessage(), invalid);
+		}
 	}
 
 	public FlipChemicalParticleState reconstructChemical(ChemicalRegistry registry) throws IOException {
@@ -486,6 +589,62 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		if (manifest.formatVersion() >= 2) validateMaterialLedgers();
 		if (manifest.hasChemicalState()) validateChemicalLedgers();
 		if (manifest.formatVersion() == 5) validateGranularLedgers();
+		if (manifest.hasThermalState()) validateThermalLedgers();
+	}
+
+	private void validateThermalLedgers() throws IOException {
+		ThermalRegionStateCodec codec = new ThermalRegionStateCodec();
+		ThermalRegionStateCodec.ManifestData expected = codec.decodeManifest(
+				requiredExtension(manifest.extensions(), ThermalRegionStateCodec.MANIFEST_EXTENSION).payload());
+		boolean chemicalCapability = (expected.capabilities() & ThermalRegionStateCodec.CAP_CHEMISTRY) != 0;
+		boolean granularCapability = (expected.capabilities() & ThermalRegionStateCodec.CAP_GRANULAR) != 0;
+		boolean gasCapability = (expected.capabilities() & ThermalRegionStateCodec.CAP_GAS) != 0;
+		boolean granularPayload = hasExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION);
+		if (chemicalCapability != manifest.hasChemicalState() || granularCapability != granularPayload
+				|| gasCapability != (expected.gasNodeCount() > 0)) {
+			throw new IOException("Region-state v6 thermal capabilities disagree with complete payload");
+		}
+		Map<RegionSectionState.SectionKey, ThermalRegionStateCodec.SectionLedger> ledgers = new HashMap<>();
+		for (ThermalRegionStateCodec.SectionLedger ledger : expected.sectionLedgers()) {
+			if (ledgers.put(ledger.key(), ledger) != null) throw new IOException("Duplicate thermal section ledger");
+		}
+		if (ledgers.size() != sections.size()) throw new IOException("Thermal section ledger cardinality mismatch");
+		int liquidCount = 0, activeCount = 0, depositCount = 0, coherentCount = 0;
+		SignedDyadic liquidEnergy = SignedDyadic.ZERO, activeEnergy = SignedDyadic.ZERO;
+		SignedDyadic depositEnergy = SignedDyadic.ZERO, coherentEnergy = SignedDyadic.ZERO;
+		for (RegionSectionState section : sections) {
+			ThermalRegionStateCodec.SectionData data = codec.decodeSection(
+					requiredExtension(section.extensions(), ThermalRegionStateCodec.SECTION_EXTENSION).payload(),
+					section.markerCount(), Integer.MAX_VALUE, Integer.MAX_VALUE);
+			ThermalRegionStateCodec.SectionLedger ledger = ledgers.remove(section.key());
+			if (ledger == null || ledger.liquidMarkerCount() != data.liquidMarkerEnergyBits().length
+					|| ledger.activeParcelCount() != data.activeParcelEnergyBits().length
+					|| ledger.depositGroupCount() != data.depositGroupEnergyBits().length
+					|| ledger.coherentGroupCount() != data.coherentGroups().size() || !ledger.energy().equals(data.energy())
+					|| data.liquidMarkerEnergyBits().length != section.markerCount()) {
+				throw new IOException("Thermal section does not match its v6 ledger");
+			}
+			for (ThermalRegionStateCodec.CoherentEntry group : data.coherentGroups()) {
+				validateGranularDepositSection(section, group.cell());
+			}
+			liquidCount = Math.addExact(liquidCount, data.liquidMarkerEnergyBits().length);
+			activeCount = Math.addExact(activeCount, data.activeParcelEnergyBits().length);
+			depositCount = Math.addExact(depositCount, data.depositGroupEnergyBits().length);
+			coherentCount = Math.addExact(coherentCount, data.coherentGroups().size());
+			liquidEnergy = liquidEnergy.add(SignedDyadic.sum(toDoubles(data.liquidMarkerEnergyBits())));
+			activeEnergy = activeEnergy.add(SignedDyadic.sum(toDoubles(data.activeParcelEnergyBits())));
+			depositEnergy = depositEnergy.add(SignedDyadic.sum(toDoubles(data.depositGroupEnergyBits())));
+			for (ThermalRegionStateCodec.CoherentEntry group : data.coherentGroups()) {
+				coherentEnergy = coherentEnergy.add(SignedDyadic.of(group.internalEnergy()));
+			}
+		}
+		if (!ledgers.isEmpty() || liquidCount != expected.liquidMarkerCount()
+				|| activeCount != expected.activeParcelCount() || depositCount != expected.depositGroupCount()
+				|| coherentCount != expected.coherentGroupCount() || !liquidEnergy.equals(expected.liquidEnergy())
+				|| !activeEnergy.equals(expected.activeEnergy()) || !depositEnergy.equals(expected.depositEnergy())
+				|| !coherentEnergy.equals(expected.coherentEnergy())) {
+			throw new IOException("Thermal v6 carrier ledger does not close");
+		}
 	}
 
 	private void validateChemicalLedgers() throws IOException {
@@ -800,6 +959,14 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		return result;
 	}
 
+	private static double[] toDoubles(long[] bits) {
+		double[] result = new double[bits.length];
+		for (int index = 0; index < bits.length; index++) {
+			result[index] = Double.longBitsToDouble(bits[index]);
+		}
+		return result;
+	}
+
 	private static long[] chemicalTotals(CapturedParticles particles, int[] mixtureIndices) {
 		long[] totals = new long[particles.speciesPalette().size()];
 		Map<String, Integer> handles = new HashMap<>();
@@ -899,6 +1066,11 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		}
 		if (found == null) throw new IOException("Missing required region extension " + type);
 		return found;
+	}
+
+	private static boolean hasExtension(List<RegionExtension> extensions, String type) {
+		for (RegionExtension extension : extensions) if (type.equals(extension.type())) return true;
+		return false;
 	}
 
 	private record CapturedParticles(

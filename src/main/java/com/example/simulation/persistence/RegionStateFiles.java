@@ -2,6 +2,7 @@ package com.example.simulation.persistence;
 
 import com.example.chemistry.ChemicalRegistry;
 import com.example.granular.GranularRegistry;
+import com.example.thermal.ThermalRegistry;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
@@ -36,35 +37,51 @@ public final class RegionStateFiles {
 	private final AtomicMover atomicMover;
 	private final ChemicalRegistry chemicalRegistry;
 	private final GranularRegistry granularRegistry;
+	private final ThermalRegistry thermalRegistry;
 
 	public RegionStateFiles(Path worldRoot) {
-		this(worldRoot, RegionStateFiles::atomicMove, null, null);
+		this(worldRoot, RegionStateFiles::atomicMove, null, null, null);
 	}
 
 	public RegionStateFiles(Path worldRoot, ChemicalRegistry chemicalRegistry) {
-		this(worldRoot, RegionStateFiles::atomicMove, chemicalRegistry, null);
+		this(worldRoot, RegionStateFiles::atomicMove, chemicalRegistry, null, null);
 	}
 
 	public RegionStateFiles(Path worldRoot, ChemicalRegistry chemicalRegistry, GranularRegistry granularRegistry) {
-		this(worldRoot, RegionStateFiles::atomicMove, chemicalRegistry, granularRegistry);
+		this(worldRoot, RegionStateFiles::atomicMove, chemicalRegistry, granularRegistry, null);
+	}
+
+	public RegionStateFiles(
+			Path worldRoot, ChemicalRegistry chemicalRegistry, GranularRegistry granularRegistry,
+			ThermalRegistry thermalRegistry
+	) {
+		this(worldRoot, RegionStateFiles::atomicMove, chemicalRegistry, granularRegistry, thermalRegistry);
 	}
 
 	RegionStateFiles(Path worldRoot, AtomicMover atomicMover) {
-		this(worldRoot, atomicMover, null, null);
+		this(worldRoot, atomicMover, null, null, null);
 	}
 
 	RegionStateFiles(Path worldRoot, AtomicMover atomicMover, ChemicalRegistry chemicalRegistry) {
-		this(worldRoot, atomicMover, chemicalRegistry, null);
+		this(worldRoot, atomicMover, chemicalRegistry, null, null);
 	}
 
 	RegionStateFiles(
 			Path worldRoot, AtomicMover atomicMover, ChemicalRegistry chemicalRegistry, GranularRegistry granularRegistry
+	) {
+		this(worldRoot, atomicMover, chemicalRegistry, granularRegistry, null);
+	}
+
+	RegionStateFiles(
+			Path worldRoot, AtomicMover atomicMover, ChemicalRegistry chemicalRegistry,
+			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry
 	) {
 		this.root = worldRoot.toAbsolutePath().normalize().resolve("realwater").resolve("region-state");
 		this.codec = new RegionStateCodec();
 		this.atomicMover = atomicMover;
 		this.chemicalRegistry = chemicalRegistry;
 		this.granularRegistry = granularRegistry;
+		this.thermalRegistry = thermalRegistry;
 	}
 
 	public long publish(RegionState state) throws IOException {
@@ -367,6 +384,18 @@ public final class RegionStateFiles {
 			catch (IllegalArgumentException invalid) {
 				throw new IOException("Region-state v5 granular inventory/audit validation failed", invalid);
 			}
+		}
+		else if (state.manifest().formatVersion() == 6) {
+			if (thermalRegistry == null) {
+				throw new IOException("region-state v6 verification requires the authoritative thermal registry");
+			}
+			if (state.manifest().hasChemicalState()) {
+				if (chemicalRegistry == null) {
+					throw new IOException("chemical region-state v6 verification requires the authoritative chemical registry");
+				}
+				state.reconstructChemical(chemicalRegistry);
+			} else state.reconstructMaterial();
+			state.reconstructThermal(thermalRegistry);
 		}
 		else throw new IOException("Unsupported region-state version " + state.manifest().formatVersion());
 	}

@@ -70,3 +70,16 @@ granular dependency fingerprint、canonical bytes 或定义重建 identity 任�
 锁定，不能静默忽略。materials、species formation offset、phase transition 和 boundary definition 全部进入同一 v1。
 
 最近门：`thermal` 通过；仍未开放 config/region-state，因此没有旧世界被自动初始化。
+
+## M9.5 complete region-state v6 liquid inventory
+
+新增 required typed thermal manifest/section extension，把逐 liquid marker raw `U`、section/carrier/global canonical dyadic
+账本、world thermal fingerprint 和完整 source/sink/work/roundoff audit 放进同一个 v6 generation。core manifest、section、
+checksum 与 NBT codec 都显式门控 v6；v1/v2/v3/v5 canonical bytes 不变，预留 v4 仍不由版本号猜测读取。
+
+`RegionState.captureThermal` 当前只接受已经绑定 material、可选 chemistry、且没有 M8 库存的 transient liquid 域；遇到
+active/deposit/coherent/gas 库存直接拒绝，防止发布“不完整 v6”。`RegionStateFiles` 在 inactive slot 回读时必须拿到
+fingerprint 相同的 authoritative thermal registry 并重建 liquid + thermal 两侧，之后才允许 HEAD 发布。缺 extension、
+ordinal/count/energy/audit 不闭合、未知 registry 或原始位不一致都保留旧代次并失败关闭。
+
+最近门：`thermal,region-state` 通过；尚未接 production config/旧世界 initialization，也未声称 M8/gas joint v6 完成。

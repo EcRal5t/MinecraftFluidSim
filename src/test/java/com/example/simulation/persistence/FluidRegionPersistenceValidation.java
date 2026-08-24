@@ -4,6 +4,7 @@ import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FlipChemicalParticleState;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipParticleState;
+import com.example.fluid.FlipThermalParticleState;
 import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FluidMaterial;
 import com.example.fluid.FluidMaterialRegistry;
@@ -16,6 +17,8 @@ import com.example.granular.GranularRegistry;
 import com.example.granular.GranularStateSnapshot;
 import com.example.granular.SolidCompositionRecord;
 import com.example.granular.SolidVolume;
+import com.example.thermal.ThermalMaterialDefinition;
+import com.example.thermal.ThermalRegistry;
 import com.example.simulation.FluidRegion;
 import com.example.simulation.FluidRegionLifecycle;
 import com.example.simulation.FluidRegionManager;
@@ -58,12 +61,68 @@ public final class FluidRegionPersistenceValidation {
 		validateMaterialV2Codec();
 		validateChemicalV3Codec();
 		validateGranularV5Codec();
+		validateThermalV6Codec();
 		validateUnknownExtensions();
 		validateFaultMatrix();
 		validateStagedGeneration();
 		validateCorruptionAndAtomicMoveFailure();
 		validateWorldConfig();
 		System.out.println("Fluid region persistence validation passed");
+	}
+
+	private static void validateThermalV6Codec() throws Exception {
+		FluidRegion region = populatedRegion(new UUID(27L, 28L));
+		FlipParticleState pure = region.domain().exportParticleState();
+		float[] positions = pure.copyPositionVolume();
+		double[] mass = new double[pure.particleCount()];
+		double totalMass = 0.0;
+		for (int marker = 0; marker < mass.length; marker++) {
+			mass[marker] = positions[marker * 4 + 3] * BuiltinFluidMaterials.WATER.referenceDensity();
+			totalMass += mass[marker];
+		}
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
+				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(),
+				totalMass, liquids.materials(), positions, pure.copyParticleVelocities(), pure.copySolidMask(),
+				mass, new int[pure.particleCount()]));
+		liquids = region.domain().materialRegistry();
+		ThermalRegistry thermal = thermalRegistry(liquids);
+		region.domain().bindThermal(thermal, liquids, 300.0);
+		region.domain().setThermalTemperatureInCell(2, 1, 2, 325.0);
+		FlipThermalParticleState expected = region.domain().exportThermalParticleState();
+
+		RegionState state = RegionState.captureThermal(region, 1L);
+		state.validate();
+		assertMaterialStateEquals(region.domain().exportMaterialParticleState(), state.reconstructMaterial());
+		assertThermalStateEquals(expected, state.reconstructThermal(thermal));
+
+		RegionStateCodec codec = new RegionStateCodec();
+		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
+		require(decodedManifest.equals(state.manifest()) && decodedManifest.formatVersion() == 6
+				&& decodedManifest.hasThermalState(), "region-state v6 manifest did not round-trip");
+		for (RegionSectionState section : state.sections()) {
+			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
+			require(decoded.formatVersion() == 6 && decoded.extensions().equals(section.extensions())
+					&& Arrays.equals(decoded.markerOrdinals(), section.markerOrdinals()),
+					"region-state v6 thermal section did not round-trip");
+		}
+
+		Path root = Files.createTempDirectory(Path.of("."), "thermal-v6-");
+		RegionStateFiles files = new RegionStateFiles(root, null, null, thermal);
+		files.publish(state);
+		assertThermalStateEquals(expected, files.read(region.id()).reconstructThermal(thermal));
+		expectIOException(() -> state.reconstructThermal(thermalRegistry(new FluidMaterialRegistry(
+				List.of(BuiltinFluidMaterials.WATER)))), "foreign v6 thermal registry was accepted");
+
+		RegionSectionState original = state.sections().stream()
+				.filter(section -> section.markerCount() > 0).findFirst().orElseThrow();
+		CompoundTag missingThermal = codec.encodeSection(original);
+		missingThermal.put("Extensions", new net.minecraft.nbt.ListTag());
+		RegionSectionState unsignedMissing = codec.decodeSection(missingThermal);
+		List<RegionSectionState> brokenSections = new ArrayList<>(state.sections());
+		brokenSections.set(brokenSections.indexOf(original), signedSection(unsignedMissing));
+		expectIOException(() -> new RegionState(state.manifest(), brokenSections).validate(),
+				"v6 section missing its required thermal payload was accepted");
 	}
 
 	private static void validateGranularV5Codec() throws Exception {
@@ -715,6 +774,24 @@ public final class FluidRegionPersistenceValidation {
 				&& Arrays.equals(expected.copyMaterialPaletteIndex(), actual.copyMaterialPaletteIndex()),
 				"material marker mass or palette index changed across persistence");
 		require(Arrays.equals(expected.copySolidMask(), actual.copySolidMask()), "material solid mask changed across persistence");
+	}
+
+	private static void assertThermalStateEquals(FlipThermalParticleState expected, FlipThermalParticleState actual) {
+		require(expected.particleCount() == actual.particleCount()
+				&& expected.thermalRegistryFingerprint().equals(actual.thermalRegistryFingerprint())
+				&& Arrays.equals(expected.copyInternalEnergy(), actual.copyInternalEnergy())
+				&& expected.audit().equals(actual.audit()),
+				"thermal inventory/audit changed across persistence");
+	}
+
+	private static ThermalRegistry thermalRegistry(FluidMaterialRegistry liquids) {
+		List<ThermalMaterialDefinition> definitions = new ArrayList<>(liquids.materials().size());
+		for (int index = 0; index < liquids.materials().size(); index++) {
+			definitions.add(new ThermalMaterialDefinition("realwater:thermal/persistence_" + index,
+					ThermalMaterialDefinition.CarrierKind.LIQUID, liquids.material(index).id(), 300.0, 0.0, 1.0,
+					List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 4_200.0))));
+		}
+		return new ThermalRegistry(definitions);
 	}
 
 	private static void assertGranularStateEquals(GranularStateSnapshot expected, GranularStateSnapshot actual) {

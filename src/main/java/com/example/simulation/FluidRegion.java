@@ -4,6 +4,8 @@ import com.example.fluid.FlipFluidDomain;
 import com.example.fluid.FlipChemicalParticleState;
 import com.example.granular.GranularRegistry;
 import com.example.granular.GranularStateSnapshot;
+import com.example.fluid.FlipThermalParticleState;
+import com.example.thermal.ThermalRegistry;
 import com.example.fluid.FlipParticleState;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FluidSolverConfig;
@@ -319,6 +321,17 @@ public final class FluidRegion {
 			throw new IllegalStateException("Granular restore requires the matching loaded material generation");
 		}
 		domain.restoreGranularState(state, registry, domain.materialRegistry());
+	}
+
+	/** Completes a v6 restore after the matching liquid/material generation has been reconstructed. */
+	public void restoreThermalState(
+			FlipThermalParticleState state, ThermalRegistry registry, long loadedCheckpointGeneration
+	) {
+		Objects.requireNonNull(state, "state"); Objects.requireNonNull(registry, "registry");
+		if (domain == null || loadedCheckpointGeneration != checkpointGeneration || !domain.hasMaterialState()) {
+			throw new IllegalStateException("Thermal restore requires the matching loaded material generation");
+		}
+		domain.restoreThermalParticleState(state, registry);
 	}
 
 	boolean adoptMigratedCheckpoint(long previousGeneration, long migratedGeneration) {
