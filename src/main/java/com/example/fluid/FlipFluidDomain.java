@@ -2214,6 +2214,9 @@ public final class FlipFluidDomain {
 	public static final class ThermalTransportBlockedException extends IllegalStateException {
 		private ThermalTransportBlockedException(String message, Throwable cause) { super(message, cause); }
 	}
+	public static final class GasThermalBlockedException extends IllegalStateException {
+		private GasThermalBlockedException(String message, Throwable cause) { super(message, cause); }
+	}
 
 	private FlipThermalState.MarkerContext thermalMarkerContext() {
 		return new FlipThermalState.MarkerContext() {
@@ -3760,7 +3763,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		int pressureIterations = 0;
 		for (int substep = 0; substep < substeps; substep++) {
 			rebuildGridFromParticles();
-			updateGasNetwork(dt);
+			try {
+				updateGasNetwork(dt);
+			} catch (IllegalArgumentException | IllegalStateException invalidGasThermal) {
+				if (thermalState == null) throw invalidGasThermal;
+				throw new GasThermalBlockedException(invalidGasThermal.getMessage(), invalidGasThermal);
+			}
 			System.arraycopy(velocityX, 0, p2gVelocityX, 0, velocityX.length);
 			System.arraycopy(velocityY, 0, p2gVelocityY, 0, velocityY.length);
 			System.arraycopy(velocityZ, 0, p2gVelocityZ, 0, velocityZ.length);

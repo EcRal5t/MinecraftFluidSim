@@ -400,3 +400,16 @@ domain 仅在实际 blocked cut-face 与有物质覆盖的面积上施加 fixed 
 
 `thermal,cut-cell` 与随后 `thermal,shape` 最近门通过；fixture 覆盖 50% 微体素孔口的非零守恒导热，以及 production face
 field 的一次变更检测、温度变化和 source/audit 闭合。尚未请求实机。
+
+## M9.28 production source and failure-path closure
+
+管理员 `materialbucket` 与 `reagent` 生成非空液体 source 时，如果 thermal 门开启，会从 authoritative thermal registry
+按冻结标准温度 293.15 K 和物品已有的独立 mass/species 真值计算 total `U`，再绑定 `ThermalContents v1`；空桶、indicator/
+eraser 工具和 dry granular container 不伪造液体热状态。由此 creative/debug 放出仍由 production WAL 记 material+energy source，
+不再因缺少 energy truth 被正确但无用地拒绝。
+
+非等温 gas topology remap、压缩或孔流一旦越出状态函数有效域，现在统一转为 `gas-thermal PAUSED`；自动 tick 与管理员
+`/step` 都复用相同的安全暂停/诊断路径。没有修改气体方程、40/200 ms wall-time 门或任何 pacing 阈值。
+
+调试 source 增量的 `thermal,containers` 与失败语义增量的 `thermal,gas-liquid` 最近门通过；完整 gas-liquid 门仍保持密闭压缩
+0.91% 液柱误差、负压吸升 6.73% 误差与有限速率孔流账本闭合。尚未请求实机。

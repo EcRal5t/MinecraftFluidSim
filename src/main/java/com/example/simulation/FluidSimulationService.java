@@ -1504,6 +1504,15 @@ public final class FluidSimulationService {
 		region.wakeForActivity();
 		try {
 			for (int i = 0; i < count; i++) stepOnce(region);
+		} catch (FlipFluidDomain.ThermalTransportBlockedException blocked) {
+			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
+			return -1;
+		} catch (FlipFluidDomain.GasThermalBlockedException blocked) {
+			blockThermal(level, region, "gas-thermal PAUSED：" + blocked.getMessage(), blocked);
+			return -1;
+		} catch (FlipFluidDomain.ThermalPhaseBlockedException blocked) {
+			blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
+			return -1;
 		} catch (GranularMechanics.ValidityExceededException invalid) {
 			region.blockGranular("granular-validity-blocked PAUSED：" + invalid.getMessage());
 			return -1;
@@ -1607,6 +1616,9 @@ public final class FluidSimulationService {
 			return;
 		} catch (FlipFluidDomain.ThermalTransportBlockedException blocked) {
 			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
+			return;
+		} catch (FlipFluidDomain.GasThermalBlockedException blocked) {
+			blockThermal(level, region, "gas-thermal PAUSED：" + blocked.getMessage(), blocked);
 			return;
 		} catch (FlipFluidDomain.ThermalPhaseBlockedException blocked) {
 			blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
