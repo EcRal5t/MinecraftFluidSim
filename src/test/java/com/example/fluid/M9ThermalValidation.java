@@ -69,6 +69,7 @@ public final class M9ThermalValidation {
 		exactDyadicAuditDoesNotLoseCancellationRemainders();
 		containerTransferCarriesAuthoritativeEnergy();
 		liquidTransportAndHandoffCloseEnergy();
+		partialCutFaceUsesPlicThermalContact();
 		fixedBoundaryAuditsAndFailedStepRollsBack();
 		reseedingMovesEnergyWithMarkerTruth();
 		System.out.println("M9 thermal validation passed");
@@ -1187,6 +1188,31 @@ public final class M9ThermalValidation {
 				&& close(restored.thermalTemperatureInCell(1, 1, 1), hot)
 				&& close(restored.thermalTemperatureInCell(2, 1, 1), cold),
 				"orthogonal thermal handoff did not preserve energy/temperature");
+	}
+
+	private static void partialCutFaceUsesPlicThermalContact() {
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		ThermalMaterialDefinition water = new ThermalMaterialDefinition("realwater:thermal/partial_contact_water",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
+				300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 400.0, 4_000.0)));
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = new FlipFluidDomain(4, 3, 3, config, 512);
+		// Two microcells obstruct the shared +x face: the authoritative aperture is exactly one half.
+		domain.setSolidMicroMask(1, 1, 1, 0x22);
+		domain.setVolume(1, 1, 1, 0.5F);
+		domain.setVolume(2, 1, 1, 1.0F);
+		domain.bindThermal(new ThermalRegistry(List.of(water)), liquids, 300.0);
+		domain.setThermalTemperatureInCell(1, 1, 1, 350.0);
+		domain.setThermalTemperatureInCell(2, 1, 1, 250.0);
+		ThermalTransport.Stats transport = domain.stepThermalOnly(1_000.0);
+		require(transport.evaluatedFaces() == 1 && transport.maximumAbsoluteTransferEu() > 0.0
+				&& domain.thermalTemperatureInCell(1, 1, 1) < 350.0
+				&& domain.thermalTemperatureInCell(2, 1, 1) > 250.0,
+				"partial cut/PLIC contact was dropped from production thermal transport");
+		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"partial cut/PLIC thermal contact did not close its energy audit");
 	}
 
 	private static void fixedBoundaryAuditsAndFailedStepRollsBack() {

@@ -1404,9 +1404,10 @@ public final class FlipFluidDomain {
 		return thermalState == null ? 0.0 : thermalState.coherentPhases().totalMass();
 	}
 
-	/** Runs the thermal axis without motion; production lifecycle wiring is a later M9 increment. */
+	/** Runs the production thermal axis without advancing marker motion. */
 	public ThermalTransport.Stats stepThermalOnly(double dtSeconds) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		ensureGrid();
 		return thermalState.step(thermalMarkerContext(), this::thermalFaceArea, dtSeconds);
 	}
 
@@ -2283,8 +2284,28 @@ public final class FlipFluidDomain {
 			case 2 -> cutCells.zFaceOpen(x, y, z + 1);
 			default -> throw new IllegalArgumentException("Unknown thermal face axis");
 		};
-		// M9.2 intentionally admits only exact full cut faces. Partial cut/PLIC contact is added before production binding.
-		return aperture == 1.0F ? (double) config.cellSize() * config.cellSize() : 0.0;
+		if (aperture <= 0.0F) return 0.0;
+		int first = cellIndex(x, y, z);
+		int second = switch (axis) {
+			case 0 -> first + 1;
+			case 1 -> first + sizeX;
+			case 2 -> first + sizeX * sizeY;
+			default -> throw new IllegalStateException("Unreachable thermal face axis");
+		};
+		double firstCoverage = thermalOccupiedFaceFraction(first, axis * 2 + 1);
+		double secondCoverage = thermalOccupiedFaceFraction(second, axis * 2);
+		double contactFraction = Math.min(firstCoverage, secondCoverage);
+		return aperture * contactFraction * (double) config.cellSize() * config.cellSize();
+	}
+
+	private double thermalOccupiedFaceFraction(int cell, int direction) {
+		double geometricOpen = cutCells.openCellVolume(cell);
+		if (!(geometricOpen > 0.0)) return 0.0;
+		double solidVolume = granularCoupling == null ? 0.0
+				: SolidVolume.toCellVolume(granularCoupling.solidSvq(cell));
+		double solidFraction = Math.max(0.0, Math.min(1.0, solidVolume / geometricOpen));
+		double liquidCoverage = freeSurfaceGeometry.liquidFaceFraction(cell, direction);
+		return solidFraction + (1.0 - solidFraction) * liquidCoverage;
 	}
 
 	private FlipThermalState.Truncation planThermalTruncate(

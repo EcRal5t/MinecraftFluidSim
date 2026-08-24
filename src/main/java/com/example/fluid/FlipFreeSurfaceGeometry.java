@@ -120,6 +120,26 @@ final class FlipFreeSurfaceGeometry {
 		return liquidFraction[index];
 	}
 
+	/** PLIC liquid coverage of one cell face; directions are -x,+x,-y,+y,-z,+z. */
+	float liquidFaceFraction(int index, int direction) {
+		if (direction < 0 || direction >= 6) throw new IllegalArgumentException("Unknown PLIC face direction");
+		float fraction = liquidFraction[index];
+		if (fraction <= FRACTION_EPSILON) return 0.0F;
+		if (fraction >= 1.0F - FRACTION_EPSILON) return 1.0F;
+		float nx = normalX[index], ny = normalY[index], nz = normalZ[index];
+		if (nx * nx + ny * ny + nz * nz <= NORMAL_EPSILON_SQUARED) return fraction;
+		float offset = planeOffset[index];
+		return switch (direction) {
+			case 0 -> unitCubeLiquidFraction(0.0F, ny, nz, offset);
+			case 1 -> unitCubeLiquidFraction(0.0F, ny, nz, offset - nx);
+			case 2 -> unitCubeLiquidFraction(nx, 0.0F, nz, offset);
+			case 3 -> unitCubeLiquidFraction(nx, 0.0F, nz, offset - ny);
+			case 4 -> unitCubeLiquidFraction(nx, ny, 0.0F, offset);
+			case 5 -> unitCubeLiquidFraction(nx, ny, 0.0F, offset - nz);
+			default -> throw new IllegalStateException("Unreachable PLIC face direction");
+		};
+	}
+
 	float exactCellVolume(int index) {
 		return exactCellVolume[index];
 	}
