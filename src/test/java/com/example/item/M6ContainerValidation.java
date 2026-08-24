@@ -40,8 +40,32 @@ public final class M6ContainerValidation {
 		run("multi-material container and solver transfer close every component ledger", M6ContainerValidation::testMixtureTransfer);
 		run("malformed mixture mass and sub-float portions are rejected", M6ContainerValidation::testMixtureHardening);
 		run("granular contents are canonical and registry-bound", M6ContainerValidation::testGranularContents);
+		run("thermal contents bind raw energy to exact liquid truth", M6ContainerValidation::testThermalContents);
 		run("full bucket round-trips through the primitives", M6ContainerValidation::testBucketRoundTrip);
 		System.out.println("M6ContainerValidation passed " + passed + " scenarios");
+	}
+
+	private static void testThermalContents() {
+		String fingerprint = "a".repeat(64);
+		FluidMixture mixture = new FluidMixture(List.of(
+				new FluidMixture.Component("realwater:water", 750_000_000L,
+						Double.doubleToRawLongBits(750.0)),
+				new FluidMixture.Component("realwater:oil", 250_000_000L,
+						Double.doubleToRawLongBits(200.0))));
+		ThermalContents contents = ThermalContents.forMixture(fingerprint, mixture, -12_345.25);
+		check(ThermalContents.decode(contents.encode()).equals(contents),
+				"thermal contents canonical round-trip changed identity or raw U");
+		ThermalContents.EnergySplit split = contents.splitEnergy(333_333_333L, BUCKET);
+		check(Double.doubleToRawLongBits(split.selectedEnergy() + split.remainingEnergy())
+				== Double.doubleToRawLongBits(contents.internalEnergy()),
+				"thermal contents split did not return the raw U remainder");
+		FluidMixture changed = new FluidMixture(List.of(
+				new FluidMixture.Component("realwater:water", 750_000_001L,
+						Double.doubleToRawLongBits(750.0)),
+				new FluidMixture.Component("realwater:oil", 249_999_999L,
+						Double.doubleToRawLongBits(200.0))));
+		check(!ThermalContents.forMixture(fingerprint, changed, contents.internalEnergy()).underlyingHash()
+				.equals(contents.underlyingHash()), "thermal contents hash ignored an exact liquid-ledger change");
 	}
 
 	private static void testGranularContents() {

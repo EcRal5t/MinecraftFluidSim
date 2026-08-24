@@ -212,3 +212,12 @@ gas nanos/mass 与 `U`，并以精确全局余量反求 LTE cell energy。液体
 在同一次逻辑操作返回前进入 mechanical-work ledger；无 receiver、容量、组分或状态函数有效解时不提交。
 
 最近门：`thermal` 与完整 `gas-liquid` 通过；未请求实机。
+
+## M9.15 ThermalContents v1 core
+
+新增 canonical `ThermalContents v1` data component：只保存 authoritative thermal registry fingerprint、底层液体内容
+kind/canonical SHA-256 与 raw 总 `U`。pure water、material mixture 和 chemical contents 各自按独立真值生成绑定 hash；
+底层 volume/mass/composition 任一变化都会使旧热组件失配。热能按实际 nanovolume 拆分，剩余侧由原总量减去转移量，
+不把温度或 tooltip 值用于结算；空容器和 dry granular 容器拒绝携带热真值。
+
+最近门：`containers` 通过。WAL v5 与 production transfer 仍在后续联合增量完成。

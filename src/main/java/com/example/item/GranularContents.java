@@ -185,7 +185,8 @@ public record GranularContents(String registryFingerprint, long svqPerBlockVolum
 				|| stack.get(RealWaterComponents.MATERIAL_ID) != null
 				|| stack.get(RealWaterComponents.FLUID_MASS_BITS) != null
 				|| stack.get(RealWaterComponents.MIXTURE_COMPONENTS) != null
-				|| stack.get(RealWaterComponents.CHEMICAL_CONTENTS) != null;
+				|| stack.get(RealWaterComponents.CHEMICAL_CONTENTS) != null
+				|| stack.get(RealWaterComponents.THERMAL_CONTENTS) != null;
 	}
 
 	private static boolean massClose(double left, double right) {

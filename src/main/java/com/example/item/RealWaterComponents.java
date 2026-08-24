@@ -29,6 +29,8 @@ public final class RealWaterComponents {
 	public static final DataComponentType<String> CHEMICAL_CONTENTS = registerString("chemical_contents");
 	/** Canonical dry GranularContents v1; mutually exclusive with every liquid component. */
 	public static final DataComponentType<String> GRANULAR_CONTENTS = registerString("granular_contents");
+	/** Canonical ThermalContents v1; coupled to, but independent from, the exact liquid contents. */
+	public static final DataComponentType<String> THERMAL_CONTENTS = registerString("thermal_contents");
 
 	private RealWaterComponents() { }
 

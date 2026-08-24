@@ -62,7 +62,8 @@ public final class MaterialBucketItem extends Item {
 				&& materialId(stack) == null
 				&& mass(stack) < 0.0
 				&& stack.get(RealWaterComponents.MIXTURE_COMPONENTS) == null
-				&& stack.get(RealWaterComponents.CHEMICAL_CONTENTS) == null;
+				&& stack.get(RealWaterComponents.CHEMICAL_CONTENTS) == null
+				&& stack.get(RealWaterComponents.THERMAL_CONTENTS) == null;
 	}
 
 	@Override
