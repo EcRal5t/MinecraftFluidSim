@@ -2077,8 +2077,19 @@ public final class FluidSimulationService {
 		if (!domain.hasThermalState()) return "thermal missing";
 		ThermalAuditLedger audit = domain.thermalAudit();
 		ThermalActivity activity = region.thermalActivity();
-		return String.format("thermal %s U=%.6g EU source=%.6g sink=%.6g work=%.6g coherent=%d SVQ pending-work=%s audit=%s",
-				activity == null ? "unbound" : activity.state(), domain.totalInternalEnergy(),
+		short[] temperatureQ = domain.copyThermalDisplaySnapshot().cellTemperatureQ();
+		int minimumQ = Integer.MAX_VALUE, maximumQ = Integer.MIN_VALUE;
+		for (short raw : temperatureQ) {
+			int value = Short.toUnsignedInt(raw);
+			if (value == ThermalDisplaySnapshot.EMPTY_TEMPERATURE_Q) continue;
+			minimumQ = Math.min(minimumQ, value);
+			maximumQ = Math.max(maximumQ, value);
+		}
+		String temperature = minimumQ == Integer.MAX_VALUE ? "empty"
+				: minimumQ == maximumQ ? String.format("%.2f K", minimumQ / 16.0)
+				: String.format("%.2f..%.2f K", minimumQ / 16.0, maximumQ / 16.0);
+		return String.format("thermal %s T=%s U=%.6g EU source=%.6g sink=%.6g work=%.6g coherent=%d SVQ pending-work=%s audit=%s",
+				activity == null ? "unbound" : activity.state(), temperature, domain.totalInternalEnergy(),
 				audit.externalSource().toDouble(), audit.externalSink().toDouble(),
 				audit.mechanicalWork().toDouble(), domain.totalCoherentSolidVolumeSvq(),
 				domain.hasPendingPhaseVolumeWork() ? "yes" : "no",

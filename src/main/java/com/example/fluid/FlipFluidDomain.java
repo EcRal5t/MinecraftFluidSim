@@ -1230,8 +1230,8 @@ public final class FlipFluidDomain {
 	}
 
 	/**
-	 * Binds transient M9 liquid energy at an explicit operator-supplied initial temperature.
-	 * This does not enable a production config gate and does not write any region-state bytes.
+	 * Binds authoritative M9 thermal state at an explicit operator-supplied initial temperature.
+	 * Production uses this only for a deliberate legacy-region upgrade before committing region-state v6.
 	 */
 	public void bindThermal(
 			ThermalRegistry registry, FluidMaterialRegistry liquidRegistry, double initialTemperatureK
@@ -1355,7 +1355,7 @@ public final class FlipFluidDomain {
 		return thermalState.capture(sizeX, sizeY, sizeZ, config.cellSize(), particleCount);
 	}
 
-	/** Explicit heat-reservoir edit used by the transient validation and later administrator initialization path. */
+	/** Explicit heat-reservoir edit used by validation and the administrator-controlled legacy initialization path. */
 	public void setThermalTemperatureInCell(int x, int y, int z, double temperatureK) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		thermalState.setTemperatureInCell(cellIndexChecked(x, y, z), temperatureK, thermalMarkerContext());
