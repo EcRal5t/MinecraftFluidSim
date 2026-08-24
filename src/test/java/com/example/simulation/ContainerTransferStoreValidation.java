@@ -13,6 +13,7 @@ import com.example.item.ContainerFluidLedger;
 import com.example.item.ChemicalContents;
 import com.example.item.FluidMixture;
 import com.example.item.GranularContents;
+import com.example.item.ThermalContents;
 import com.example.chemistry.BuiltinChemicalDefinitions;
 import com.example.chemistry.ChemicalLimits;
 import com.example.granular.BuiltinGranularDefinitions;
@@ -46,13 +47,14 @@ public final class ContainerTransferStoreValidation {
 		Path root = Files.createTempDirectory("realwater-container-wal-test");
 		try {
 			run("round-trip and atomic replace", ContainerTransferStoreValidation::testRoundTrip);
+			run("thermal WAL v5 couples item and region energy", ContainerTransferStoreValidation::testThermalWal);
 			run("player and dispenser actor codecs", ContainerTransferStoreValidation::testActorCodecs);
 			run("invalid generations and dimensions are rejected", ContainerTransferStoreValidation::testValidation);
 			run("delete removes the transaction", ContainerTransferStoreValidation::testDelete);
 			run("recovery state machine locks every ambiguous commit boundary", ContainerTransferStoreValidation::testRecoveryStateMachine);
 			run("unknown and staged files lock without deletion", ContainerTransferStoreValidation::testUnknownLayout);
 			run("corrupt named WAL locks without deletion", ContainerTransferStoreValidation::testCorruptWal);
-			run("v1-v3 fluid WALs remain readable while v1 material locks", ContainerTransferStoreValidation::testLegacyMigration);
+			run("v1-v4 fluid WALs remain readable while v1 material locks", ContainerTransferStoreValidation::testLegacyMigration);
 			run("nanovolume and solver cell-volume conversion", ContainerTransferStoreValidation::testNanosCellConversion);
 			run("non-float-friendly transfers settle actual marker volume", ContainerTransferStoreValidation::testActualMarkerSettlement);
 			run("material service settlement preserves component residuals", ContainerTransferStoreValidation::testMaterialSettlement);
@@ -65,6 +67,51 @@ public final class ContainerTransferStoreValidation {
 					Files.deleteIfExists(path);
 				}
 			}
+		}
+	}
+
+	private static void testThermalWal() throws Exception {
+		Path root = Files.createTempDirectory("realwater-wal-v5-thermal");
+		ContainerTransferStore store = new ContainerTransferStore(root);
+		UUID transaction = UUID.randomUUID(), region = UUID.randomUUID();
+		String fingerprint = "b".repeat(64);
+		double energy = -12_345.25;
+		ThermalContents contents = ThermalContents.forPureWater(
+				fingerprint, ContainerFluidLedger.NANOS_PER_BLOCK, energy);
+		ContainerTransferJournal.ItemFingerprint before = new ContainerTransferJournal.ItemFingerprint(
+				ContainerTransferJournal.ItemKind.WATER_BUCKET, -1L, -1L, null, -1L, contents.encode());
+		ContainerTransferJournal.ItemFingerprint after = new ContainerTransferJournal.ItemFingerprint(
+				ContainerTransferJournal.ItemKind.BUCKET, -1L, null);
+		ContainerTransferJournal.ThermalTransfer transfer =
+				new ContainerTransferJournal.ThermalTransfer(fingerprint, energy);
+		ContainerTransferJournal prepared = ContainerTransferJournal.thermalFluid(
+				transaction, region, "minecraft:overworld", 7L, 8L,
+				ContainerTransferJournal.Operation.INSERT, ContainerFluidLedger.NANOS_PER_BLOCK, transfer,
+				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"), before, before, -1L,
+				ContainerTransferJournal.Phase.PREPARED);
+		store.write(prepared);
+		check(store.read(transaction).equals(prepared), "prepared thermal WAL v5 did not round-trip");
+		CompoundTag encoded = NbtIo.readCompressed(store.directoryPath().resolve(transaction + ".nbt"),
+				NbtAccounter.create(4L * 1024L * 1024L));
+		check(encoded.getIntOr("Version", -1) == 5 && encoded.get("ThermalEnergyBits") != null,
+				"thermal transaction was not written as WAL v5");
+
+		ContainerTransferJournal committed = ContainerTransferJournal.thermalFluid(
+				transaction, region, "minecraft:overworld", 7L, 8L,
+				ContainerTransferJournal.Operation.INSERT, ContainerFluidLedger.NANOS_PER_BLOCK, transfer,
+				prepared.actor(), before, after, 0x7711L, ContainerTransferJournal.Phase.REGION_COMMITTED);
+		store.write(committed);
+		check(store.read(transaction).equals(committed), "committed thermal WAL v5 did not round-trip");
+		ContainerTransferJournal wrongEnergy = ContainerTransferJournal.thermalFluid(
+				UUID.randomUUID(), region, "minecraft:overworld", 8L, 9L,
+				ContainerTransferJournal.Operation.INSERT, ContainerFluidLedger.NANOS_PER_BLOCK,
+				new ContainerTransferJournal.ThermalTransfer(fingerprint, energy + 1.0), committed.actor(),
+				before, after, 0x7712L, ContainerTransferJournal.Phase.REGION_COMMITTED);
+		try {
+			store.write(wrongEnergy);
+			throw new AssertionError("Expected mismatched WAL v5 item/energy rejection");
+		} catch (IOException expected) {
+			// expected
 		}
 	}
 
@@ -414,6 +461,12 @@ public final class ContainerTransferStoreValidation {
 		pureNbt.putInt("Version", 3);
 		NbtIo.writeCompressed(pureNbt, purePath);
 		check(pureStore.read(pure.transactionId()).equals(pure), "legacy v3 pure-water WAL was not readable");
+		pureNbt.putInt("Version", 4);
+		pureNbt.putString("ResourceKind", "FLUID_NANOS");
+		pureNbt.putLong("BeforeSolidVolumeSvq", -1L);
+		pureNbt.putLong("AfterSolidVolumeSvq", -1L);
+		NbtIo.writeCompressed(pureNbt, purePath);
+		check(pureStore.read(pure.transactionId()).equals(pure), "legacy v4 pure-water WAL was not readable");
 
 		Path materialRoot = Files.createTempDirectory("realwater-wal-v1-material");
 		ContainerTransferStore materialStore = new ContainerTransferStore(materialRoot);

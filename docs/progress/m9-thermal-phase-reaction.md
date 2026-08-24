@@ -221,3 +221,13 @@ kind/canonical SHA-256 与 raw 总 `U`。pure water、material mixture 和 chemi
 不把温度或 tooltip 值用于结算；空容器和 dry granular 容器拒绝携带热真值。
 
 最近门：`containers` 通过。WAL v5 与 production transfer 仍在后续联合增量完成。
+
+## M9.16 container-transfer WAL v5 codec
+
+container-transfer store 在有热事务时写 v5，否则 thermal-off 仍写 v4。v5 把 `FLUID_NANOS` 与 thermal registry
+fingerprint/raw 转移 `U` 放在同一 WAL record，before/after item fingerprint 同时保存并复核 `ThermalContents v1`；
+committed item 的能量差必须逐 raw bits 等于声明转移量。`GRANULAR_SVQ` 拒绝热列，缺字段、底层内容 hash 失配、
+registry identity 不一致或 item/energy delta 不闭合均保留 WAL 并失败。
+
+既有 v1--v4 fluid reader/recovery 保持，v1 material 缺独立质量仍锁定人工处置。最近门：`containers` 通过；
+production transfer service 和 authoritative registry recovery 接线尚未在本增量开放。

@@ -5,6 +5,7 @@ import com.example.item.FluidMixture;
 import com.example.item.ChemicalContents;
 import com.example.item.GranularContainerItem;
 import com.example.item.GranularContents;
+import com.example.item.ThermalContents;
 import com.example.item.RealWaterComponents;
 import com.example.item.PartialWaterBucketItem;
 import com.example.chemistry.ChemicalRegistry;
@@ -30,6 +31,7 @@ Operation operation,
 ResourceKind resourceKind,
 long volumeNanos,
 long solidVolumeSvq,
+ThermalTransfer thermalTransfer,
 Actor actor,
 ItemFingerprint beforeItem,
 ItemFingerprint afterItem,
@@ -42,7 +44,7 @@ Operation operation, long volumeNanos, Actor actor, ItemFingerprint beforeItem, 
 ) {
 this(transactionId, regionId, dimensionId, baseGeneration, targetGeneration, operation,
 ResourceKind.FLUID_NANOS, volumeNanos, -1L,
-actor, beforeItem, afterItem, -1L, phase);
+null, actor, beforeItem, afterItem, -1L, phase);
 }
 public ContainerTransferJournal(
 UUID transactionId, UUID regionId, String dimensionId, long baseGeneration, long targetGeneration,
@@ -50,7 +52,16 @@ Operation operation, long volumeNanos, Actor actor, ItemFingerprint beforeItem, 
 long targetManifestChecksum, Phase phase
 ) {
 this(transactionId, regionId, dimensionId, baseGeneration, targetGeneration, operation,
-ResourceKind.FLUID_NANOS, volumeNanos, -1L, actor, beforeItem, afterItem, targetManifestChecksum, phase);
+ResourceKind.FLUID_NANOS, volumeNanos, -1L, null, actor, beforeItem, afterItem, targetManifestChecksum, phase);
+}
+public static ContainerTransferJournal thermalFluid(
+UUID transactionId, UUID regionId, String dimensionId, long baseGeneration, long targetGeneration,
+Operation operation, long volumeNanos, ThermalTransfer thermalTransfer, Actor actor,
+ItemFingerprint beforeItem, ItemFingerprint afterItem, long targetManifestChecksum, Phase phase
+) {
+return new ContainerTransferJournal(transactionId, regionId, dimensionId, baseGeneration, targetGeneration,
+operation, ResourceKind.FLUID_NANOS, volumeNanos, -1L, thermalTransfer, actor, beforeItem, afterItem,
+targetManifestChecksum, phase);
 }
 public static ContainerTransferJournal granular(
 UUID transactionId, UUID regionId, String dimensionId, long baseGeneration, long targetGeneration,
@@ -58,7 +69,7 @@ Operation operation, long solidVolumeSvq, Actor actor, ItemFingerprint beforeIte
 long targetManifestChecksum, Phase phase
 ) {
 return new ContainerTransferJournal(transactionId, regionId, dimensionId, baseGeneration, targetGeneration,
-operation, ResourceKind.GRANULAR_SVQ, -1L, solidVolumeSvq, actor, beforeItem, afterItem,
+operation, ResourceKind.GRANULAR_SVQ, -1L, solidVolumeSvq, null, actor, beforeItem, afterItem,
 targetManifestChecksum, phase);
 }
 public enum Operation { INSERT, EXTRACT }
@@ -68,6 +79,19 @@ public enum ResourceKind { FLUID_NANOS, GRANULAR_SVQ }
 public enum Phase { PREPARED, REGION_COMMITTED }
 
 public enum ActorType { PLAYER_HAND, DISPENSER }
+
+public record ThermalTransfer(String registryFingerprint, long internalEnergyBits) {
+public ThermalTransfer {
+if (registryFingerprint == null || !registryFingerprint.matches("[0-9a-f]{64}")
+|| !Double.isFinite(Double.longBitsToDouble(internalEnergyBits))) {
+throw new IllegalArgumentException("Invalid container thermal transfer");
+}
+}
+public ThermalTransfer(String registryFingerprint, double internalEnergy) {
+this(registryFingerprint, Double.doubleToRawLongBits(internalEnergy));
+}
+public double internalEnergy() { return Double.longBitsToDouble(internalEnergyBits); }
+}
 
 public record Actor(ActorType type, UUID playerId, String hand, String actorDimensionId, BlockPos dispenserPos, int dispenserSlot) {
 public static Actor player(UUID playerId, String hand) {
@@ -106,28 +130,47 @@ if (registry == null) throw new IllegalArgumentException("Authoritative granular
 beforeItem.validateGranularRegistry(registry, chemistry); afterItem.validateGranularRegistry(registry, chemistry);
 }
 
-public record ItemFingerprint(ItemKind kind, long nanos, long solidVolumeSvq, String materialId, long massBits) {
+public boolean requiresThermalRegistry() {
+return thermalTransfer != null || beforeItem.requiresThermalRegistry() || afterItem.requiresThermalRegistry();
+}
+
+public void validateThermalRegistry(String fingerprint) {
+if (!requiresThermalRegistry()) return;
+if (thermalTransfer == null || fingerprint == null
+|| !thermalTransfer.registryFingerprint().equals(fingerprint)) {
+throw new IllegalArgumentException("Authoritative thermal registry is unavailable or differs from WAL v5");
+}
+beforeItem.validateThermalRegistry(fingerprint); afterItem.validateThermalRegistry(fingerprint);
+}
+
+public record ItemFingerprint(
+ItemKind kind, long nanos, long solidVolumeSvq, String materialId, long massBits, String thermalContents
+) {
 public ItemFingerprint(ItemKind kind, long nanos, String materialId) {
-this(kind, nanos, -1L, materialId, -1L);
+this(kind, nanos, -1L, materialId, -1L, null);
 }
 public ItemFingerprint(ItemKind kind, long nanos, String materialId, long massBits) {
-this(kind, nanos, -1L, materialId, massBits);
+this(kind, nanos, -1L, materialId, massBits, null);
+}
+public ItemFingerprint(ItemKind kind, long nanos, long solidVolumeSvq, String materialId, long massBits) {
+this(kind, nanos, solidVolumeSvq, materialId, massBits, null);
 }
 
 public static ItemFingerprint of(ItemStack stack) {
 if (stack.getCount() != 1) {
 throw new IllegalArgumentException("控制器容器事务一次只接受 1 个物品；堆叠桶保持不变");
 }
-if (stack.is(Items.BUCKET)) return new ItemFingerprint(ItemKind.BUCKET, -1L, -1L, null, -1L);
-if (stack.is(Items.WATER_BUCKET)) return new ItemFingerprint(ItemKind.WATER_BUCKET, -1L, -1L, null, -1L);
+if (stack.is(Items.BUCKET)) return withThermal(stack, new ItemFingerprint(ItemKind.BUCKET, -1L, -1L, null, -1L));
+if (stack.is(Items.WATER_BUCKET)) return withThermal(stack,
+new ItemFingerprint(ItemKind.WATER_BUCKET, -1L, -1L, null, -1L));
 if (stack.getItem() instanceof PartialWaterBucketItem) {
 long nanos = PartialWaterBucketItem.volume(stack);
 if (nanos <= 0L) throw new IllegalArgumentException("Partial bucket has no valid volume");
-return new ItemFingerprint(ItemKind.PARTIAL, nanos, -1L, null, -1L);
+return withThermal(stack, new ItemFingerprint(ItemKind.PARTIAL, nanos, -1L, null, -1L));
 }
 if (stack.getItem() instanceof MaterialBucketItem) {
 if (MaterialBucketItem.isEmptyMaterialBucket(stack)) {
-return new ItemFingerprint(ItemKind.EMPTY_MATERIAL_BUCKET, -1L, -1L, null, -1L);
+return withThermal(stack, new ItemFingerprint(ItemKind.EMPTY_MATERIAL_BUCKET, -1L, -1L, null, -1L));
 }
 long nanos = MaterialBucketItem.volume(stack);
 String chemicalEncoded = stack.get(RealWaterComponents.CHEMICAL_CONTENTS);
@@ -140,25 +183,34 @@ if (stack.get(RealWaterComponents.MATERIAL_ID) != null
 || persistedMass != Double.doubleToRawLongBits(contents.totalMass())) {
 throw new IllegalArgumentException("Chemical bucket has conflicting or mismatched ledgers");
 }
-return new ItemFingerprint(ItemKind.CHEMICAL_BUCKET, nanos, -1L, chemicalEncoded, persistedMass);
+return withThermal(stack, new ItemFingerprint(
+ItemKind.CHEMICAL_BUCKET, nanos, -1L, chemicalEncoded, persistedMass));
 }
 FluidMixture mixture = MaterialBucketItem.mixture(stack);
 double mass = MaterialBucketItem.mass(stack);
 if (nanos <= 0L || mixture == null || !(mass > 0.0)) {
 throw new IllegalArgumentException("Material bucket has no valid volume/material/mass ledger");
 }
-return new ItemFingerprint(ItemKind.MATERIAL_BUCKET, nanos, -1L, mixture.encode(), Double.doubleToRawLongBits(mass));
+return withThermal(stack, new ItemFingerprint(
+ItemKind.MATERIAL_BUCKET, nanos, -1L, mixture.encode(), Double.doubleToRawLongBits(mass)));
 }
 if (stack.getItem() instanceof GranularContainerItem) {
 if (GranularContainerItem.isEmpty(stack)) {
-return new ItemFingerprint(ItemKind.EMPTY_GRANULAR_CONTAINER, -1L, -1L, null, -1L);
+return withThermal(stack, new ItemFingerprint(ItemKind.EMPTY_GRANULAR_CONTAINER, -1L, -1L, null, -1L));
 }
 GranularContents contents = GranularContainerItem.unvalidatedContents(stack);
 if (contents == null) throw new IllegalArgumentException("Granular container has invalid or conflicting contents");
-return new ItemFingerprint(ItemKind.GRANULAR_CONTAINER, -1L, contents.totalSolidVolumeSvq(),
-contents.encode(), Double.doubleToRawLongBits(contents.totalMass()));
+return withThermal(stack, new ItemFingerprint(ItemKind.GRANULAR_CONTAINER, -1L, contents.totalSolidVolumeSvq(),
+contents.encode(), Double.doubleToRawLongBits(contents.totalMass())));
 }
 throw new IllegalArgumentException("Unsupported container item for transfer WAL: " + stack.getItem());
+}
+
+private static ItemFingerprint withThermal(ItemStack stack, ItemFingerprint base) {
+String encoded = stack.get(RealWaterComponents.THERMAL_CONTENTS);
+if (encoded == null) return base;
+ThermalContents.fromStack(stack);
+return new ItemFingerprint(base.kind, base.nanos, base.solidVolumeSvq, base.materialId, base.massBits, encoded);
 }
 
 public void validateChemicalRegistry(ChemicalRegistry registry) {
@@ -179,8 +231,32 @@ if (kind != ItemKind.GRANULAR_CONTAINER) return;
 GranularContents.decode(materialId).validateAgainst(registry, chemistry);
 }
 
+public boolean requiresThermalRegistry() { return thermalContents != null; }
+
+public void validateThermalRegistry(String fingerprint) {
+if (thermalContents == null) return;
+ThermalContents contents = ThermalContents.decode(thermalContents);
+contents.validateRegistryFingerprint(fingerprint);
+ThermalContents expected = switch (kind) {
+case WATER_BUCKET -> ThermalContents.forPureWater(fingerprint,
+com.example.item.ContainerFluidLedger.NANOS_PER_BLOCK, contents.internalEnergy());
+case PARTIAL -> ThermalContents.forPureWater(fingerprint, nanos, contents.internalEnergy());
+case MATERIAL_BUCKET -> ThermalContents.forMixture(fingerprint,
+materialId.startsWith("v1;") ? FluidMixture.decode(materialId) : new FluidMixture(java.util.List.of(
+new FluidMixture.Component(materialId, nanos, massBits))), contents.internalEnergy());
+case CHEMICAL_BUCKET -> ThermalContents.forChemical(fingerprint,
+ChemicalContents.decode(materialId), contents.internalEnergy());
+case BUCKET, EMPTY_MATERIAL_BUCKET, EMPTY_GRANULAR_CONTAINER, GRANULAR_CONTAINER ->
+throw new IllegalArgumentException("Non-liquid WAL item carries thermal contents");
+};
+if (expected.underlyingKind() != contents.underlyingKind()
+|| !expected.underlyingHash().equals(contents.underlyingHash())) {
+throw new IllegalArgumentException("WAL thermal contents do not match item truth");
+}
+}
+
 public ItemStack toStack() {
-return switch (kind) {
+ItemStack stack = switch (kind) {
 case BUCKET -> new ItemStack(Items.BUCKET);
 case WATER_BUCKET -> new ItemStack(Items.WATER_BUCKET);
 case PARTIAL -> PartialWaterBucketItem.withVolume(nanos);
@@ -217,6 +293,11 @@ throw new IllegalStateException("Granular WAL fingerprint ledgers disagree");
 yield contents.toStack();
 }
 };
+if (thermalContents != null) {
+stack.set(RealWaterComponents.THERMAL_CONTENTS, thermalContents);
+ThermalContents.fromStack(stack);
+}
+return stack;
 }
 }
 }
