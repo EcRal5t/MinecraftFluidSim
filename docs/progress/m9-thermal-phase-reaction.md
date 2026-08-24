@@ -429,3 +429,24 @@ gas registry `41b54b…f777` 与 thermal registry `f402a2…6879`，命令查询
 `7CE4F7E6AC596695CA54C56EF1840408F8AB5EC2CC947C168493BA707788139A`；部署副本 hash 相同，原 0.14.0 已可恢复地改为
 `.disabled`，mods 目录中主 `realwater` id 只有 0.15.0 一个启用 JAR（独立只读 `realwater_gpu_probe` id 不冲突）。真实客户端中的固定冰面换热、WAL v5
 容器交互和 v6 跨重启仍按架构停止门合并为唯一一次人工 smoke，完成前不在进度索引宣告 M9 已验收。
+
+## M9.30 legacy restore feedback and production phase stabilization
+
+首次实机 smoke 在旧 region-state v2 checkpoint 3 上开启 thermal 后，`status` 仍报告 256 markers /
+32.000 cells，但因缺少权威内能而不能发 protocol v5 thermal snapshot，因此客户端视觉上水面消失。
+这不是 inventory loss，但原实现把受控迁移等待误报为可重试的 restore failure，也没有给玩家足够证据。
+现在 v1/v2/v3/v5 先从 metadata 进入稳定 operator-required 暂停态：保留 HEAD 和预算，不周期重试、
+不发布快照，每区域只警告一次，并向每个玩家一次性报告 checkpoint/marker/体积及唯一显式入口。
+其他恢复损坏也在本次启动稳定锁定，不再造成 tick 级日志风暴。
+
+将该真实世界复制到 workspace 后执行显式 272.5 K 初始化，production 相变路径又暴露并修正了五类非经验性错误：
+微小 coherent carrier 吸收 floating conservation remainder 的选择不稳定；prospective exact batch 越出热定义有效域时误停整域；
+恢复与相变把瞬态 liquid marker 聚集错当固定超容；marker raw float 尾数被强制视为 exact SVQ；
+气液相变把同格 coherent solid 错当不兼容库存。修正后用最大热容载体吸收只保存在 double 层的精度余量，
+对 marker 只计算保守 SVQ 上/下界，并把不可表示的局部候选留为未提交 no-op；已提交真值的异常仍按原契约 PAUSED/LOCKED。
+
+世界副本在多次 checkpoint 与跨重启中累计推进超过 300 logical steps；最终路径从 v6 checkpoint 6 连续推进
+240 步后发布 checkpoint 8，重启恢复 441 markers 又推进 20 步，audit 仍 closed，正常停服发布 checkpoint 9。
+原实机世界的 HEAD/slot/registry/config 时间戳保持用户 06:49--06:50 的原值，本次调试没有修改它。
+`thermal,gas-liquid,chemistry,granular,region-state,lifecycle,protocol` 七个直接受影响的完整门同步通过，
+密闭气体平衡仍为既有 0.91% 正压液柱误差和 6.73% 负压吸升误差；没有修改任何 wall-time 或物理停止阈值。

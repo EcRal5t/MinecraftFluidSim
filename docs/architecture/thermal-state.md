@@ -115,6 +115,10 @@ composition-bearing 液体的 species quanta 与 residual 从 M7 parcel 先完�
 融化时以新建非 indicator parcel 返回，禁止借当前默认化学库存重建。indicator provenance 不进入固相，带 indicator 的
 marker 不参与冻结分配且不得因相变缩放。同格 active parcel/deposit 保持 M8 库存身份不变，但作为热浴加入同一个 LTE
 候选反演；因此相变可以和颗粒交换显热，不能把颗粒存在当作拒绝相变的特异条件。
+同格 coherent group 也是气液相变的 unchanged LTE 热浴，不得仅因连续固相存在就拒绝沸腾/冷凝。
+液体 marker 的 raw float 体积仍是权威真值；整数 SVQ 上/下界只用于候选容量和可移除量预检，
+不得反向量化或改写 marker 尾数。已提交库存的 identity/audit/状态函数无效仍 PAUSED；
+但仅 prospective exact batch 无法分配该 marker 尾数、容纳于当前格或在 data-pack 有效域内反演 LTE 时，该候选局部 no-op，不暴露部分修改，也不把整域误停。
 相态变化的 `delta V` 是显式 volume event，并在下一 mechanical projection 消费同一 pending volume/work record；
 其 `-p delta V` 进入 mechanical-work ledger。正膨胀在闭域中无可表示容量时 PAUSED，不删体积、不钳相分数。
 pending record 使用 exact `SignedDyadic` cell-volume（SVQ 事件为 `integer * 2^-24`，marker float 保留其精确二进制值），
@@ -210,6 +214,8 @@ thermal sleep 要求连续 quiet steps 内：所有内部/边界可表示通量�
 
 `region-state v6` 是一个完整联合 generation，不是 v5 HEAD 加 sidecar。manifest/section 必需 typed thermal extension，
 逐 marker/active/deposit/coherent/gas energy ordinal 必须完整且 canonical；HEAD 仍是唯一且最后提交点。
+恢复时可接受由 FLIP advection 留下、尚待下一次压力投影解决的局部 liquid marker 聚集；
+但同格 fixed coherent + granular occupancy 必须独立满足已提交几何容量，禁止为通过恢复而删除或缩放任何库存。
 已提交但尚未投影的凝聚相/固液反应 volume event 只使用上述 optional manifest extension；它与 required thermal payload 同代发布，
 只允许引用存在 thermal carrier 的格。读取未知、非 canonical、越预算、cell 失配或非 v6 携带均锁定，禁止猜测清零。
 reader 精确接受 `{1,2,3,4,5,6}`，但 v4 只按其独立 gas capability 读取，不能由版本号猜联合内容。
@@ -217,6 +223,8 @@ reader 精确接受 `{1,2,3,4,5,6}`，但 v4 只按其独立 gas capability 读�
 v1/v2/v3/v5 没有热真值，禁止自动按环境、biome、当前 registry 或外观猜 `U`。旧 controller 只有在 PAUSED、
 ownership 完整、无 pending WAL 且 operator 显式给定初始温度后，才能在 inactive slot 生成并回读验证完整 v6，
 最后切换 HEAD；初始化 record 保存 source version、raw temperature bits、gas bootstrap 与 operator metadata。
+这种旧代次在启动后是稳定的 operator-required 等待态：保留 HEAD/marker/体积，暂停且不发布 protocol v5 thermal snapshot，
+每区域只记一次警告并向每个玩家提供一次库存证据，不能作为可重试的恢复错误周期性扫描。
 失败仍以旧 HEAD 为权威。旧 WAL 跨初始化代次且缺能量时保留并 LOCKED 人工处置。
 
 `ThermalContents v1` 只保存 registry fingerprint、underlying contents kind/hash 与 total `U`，tooltip 温度只读。
