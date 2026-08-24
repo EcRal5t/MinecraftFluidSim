@@ -1355,7 +1355,11 @@ public final class FluidSimulationService {
 		long tick = region.incrementTick();
 		boolean collisionsChanged = false;
 		if (tick % COLLISION_REFRESH_INTERVAL_TICKS == 0) {
-			collisionsChanged = refreshCollisions(level, region).changedCells() > 0;
+			try { collisionsChanged = refreshCollisions(level, region).changedCells() > 0; }
+			catch (FlipFluidDomain.GranularCollisionBlockedException blocked) {
+				blockGranularCollision(level, region, blocked);
+				return;
+			}
 		}
 		int affectedEntities = region.entityPhysicsEnabled()
 				? FluidRegionWorldInteraction.applyEntityForces(level, region)
@@ -1521,7 +1525,24 @@ public final class FluidSimulationService {
 		FluidRegion region = activeRegion();
 		if (region == null || !level.dimension().equals(region.dimension())) return FluidRegion.CollisionStats.EMPTY;
 		if (!ensureRegionAvailable(level, region)) return region.lastCollisionStats();
-		return refreshCollisions(level, region);
+		try { return refreshCollisions(level, region); }
+		catch (FlipFluidDomain.GranularCollisionBlockedException blocked) {
+			blockGranularCollision(level, region, blocked);
+			throw blocked;
+		}
+	}
+
+	private void blockGranularCollision(
+			ServerLevel level, FluidRegion region, FlipFluidDomain.GranularCollisionBlockedException blocked
+	) {
+		String detail = blocked.getCause() == null ? blocked.getMessage() : blocked.getCause().getMessage();
+		region.blockGranular("granular-collision-blocked PAUSED：" + detail);
+		RealWaterMod.LOGGER.error("Region {} could not reconcile a Minecraft collision edit with granular truth and is paused",
+				region.id(), blocked);
+		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+				"真实水体无法把方块碰撞编辑与颗粒账本联合提交，区域已安全暂停：" + detail
+						+ "；世界方块优先，颗粒代次保持可恢复，请查看 /realwater status"));
+		sendSnapshot(level, region);
 	}
 
 	private FluidRegion.CollisionStats refreshCollisions(ServerLevel level, FluidRegion region) {

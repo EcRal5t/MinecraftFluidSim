@@ -1279,7 +1279,11 @@ public final class FlipFluidDomain {
 		if (newlyOccupied != 0 && granularCoupling != null) {
 			ensureGrid();
 			if (granularCoupling.solidSvq(index) > 0L || granularDeposits.cellSolidVolumeSvq(index) > 0L) {
-				displaceGranularForCollisionCell(index);
+				try { displaceGranularForCollisionCell(index); }
+				catch (RuntimeException failure) {
+					throw new GranularCollisionBlockedException(
+							"Granular collision displacement could not be committed", failure);
+				}
 			}
 		}
 		cutCells.replaceMask(index, mask);
@@ -1760,6 +1764,10 @@ public final class FlipFluidDomain {
 	public record WaterClearPlan(
 			int markerCount, long totalVolumeBits, long totalMassBits, ChemicalTransferLedger drained
 	) { }
+
+	public static final class GranularCollisionBlockedException extends IllegalStateException {
+		public GranularCollisionBlockedException(String message, Throwable cause) { super(message, cause); }
+	}
 
 
 	/**
