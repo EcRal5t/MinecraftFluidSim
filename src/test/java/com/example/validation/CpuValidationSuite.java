@@ -23,7 +23,7 @@ import com.example.simulation.TakeoverJournalValidation;
 import com.example.simulation.controller.FluidBoundaryScannerValidation;
 import com.example.simulation.ownership.M6OwnershipValidation;
 import com.example.simulation.persistence.FluidRegionPersistenceValidation;
-import com.example.thermal.M9ThermalValidation;
+import com.example.fluid.M9ThermalValidation;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;

@@ -61,6 +61,8 @@ public record SignedDyadic(BigInteger significand, int exponent) implements Comp
 		return add(new SignedDyadic(other.significand.negate(), other.exponent));
 	}
 
+	public SignedDyadic negate() { return new SignedDyadic(significand.negate(), exponent); }
+
 	public double toDouble() { return Math.scalb(significand.doubleValue(), exponent); }
 
 	@Override

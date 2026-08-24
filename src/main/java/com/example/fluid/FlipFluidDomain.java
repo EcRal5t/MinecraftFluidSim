@@ -25,6 +25,11 @@ import com.example.granular.SolidCompositionPool;
 import com.example.granular.SolidCompositionRecord;
 import com.example.granular.SolidLiquidReaction;
 import com.example.granular.SolidVolume;
+import com.example.thermal.SignedDyadic;
+import com.example.thermal.ThermalAuditLedger;
+import com.example.thermal.ThermalMaterialDefinition;
+import com.example.thermal.ThermalRegistry;
+import com.example.thermal.ThermalTransport;
 
 import java.util.ArrayList;
 import java.util.ArrayDeque;
@@ -151,6 +156,7 @@ public final class FlipFluidDomain {
 	private int lastPressureIterations;
 	private float lastPressureResidual;
 	private boolean variableDensityActive;
+	private FlipThermalState thermalState;
 
 	public FlipFluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config) {
 		this(sizeX, sizeY, sizeZ, config, DEFAULT_MAX_PARTICLES);
@@ -267,6 +273,22 @@ public final class FlipFluidDomain {
 	public boolean hasMaterialState() { return materialRegistry != null; }
 	public boolean hasChemistryState() { return chemicalParcels != null; }
 	public boolean hasGranularState() { return granularParcels != null; }
+	public boolean hasThermalState() { return thermalState != null; }
+	public ThermalTransport.Stats lastThermalTransportStats() {
+		return thermalState == null
+				? new ThermalTransport.Stats(0, 0, 0.0, SignedDyadic.ZERO)
+				: thermalState.lastTransport();
+	}
+	public ThermalAuditLedger thermalAudit() {
+		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		return thermalState.audit();
+	}
+	public double totalInternalEnergy() {
+		return thermalState == null ? 0.0 : thermalState.totalEnergy(particleCount);
+	}
+	public SignedDyadic exactInternalEnergy() {
+		return thermalState == null ? SignedDyadic.ZERO : thermalState.exactEnergy(particleCount);
+	}
 	public int granularParcelCount() { return granularParcels == null ? 0 : granularParcels.count(); }
 	public int granularDepositCellCount() { return granularDeposits == null ? 0 : granularDeposits.occupiedCellCount(); }
 	public int granularSleepingColumnCount() {
@@ -390,6 +412,9 @@ public final class FlipFluidDomain {
 	/** Binds the runtime granular registry without changing any v1/v2/v3 handoff or persistence bytes. */
 	public void bindGranular(GranularRegistry registry, FluidMaterialRegistry liquidRegistry) {
 		if (registry == null || liquidRegistry == null) throw new IllegalArgumentException("Granular/liquid registry is missing");
+		if (thermalState != null) {
+			throw new IllegalStateException("M8 state must be bound before a later joint thermal inventory");
+		}
 		if (Float.floatToRawIntBits(config.cellSize()) != Float.floatToRawIntBits(0.5F)) {
 			throw new IllegalArgumentException("M8 granular SVQ currently requires a 0.5 m solver cell");
 		}
@@ -1036,6 +1061,9 @@ public final class FlipFluidDomain {
 
 	/** Converts every current material marker to the registry-defined default carrier. */
 	public void bindChemistry(ChemicalRegistry registry) {
+		if (thermalState != null) {
+			throw new IllegalStateException("Chemistry must be bound before transient thermal initialization");
+		}
 		if (materialRegistry == null) throw new IllegalStateException("Chemistry requires a material registry");
 		if (chemicalParcels != null) {
 			if (!chemicalParcels.registry().fingerprint().equals(registry.fingerprint())) {
@@ -1057,6 +1085,124 @@ public final class FlipFluidDomain {
 		chemicalPreviousCells = new int[maximumParticleCount];
 		chemicalMovingMarkers = new int[maximumParticleCount];
 		bindSolidCompositionPoolIfReady();
+	}
+
+	/**
+	 * Binds transient M9 liquid energy at an explicit operator-supplied initial temperature.
+	 * This does not enable a production config gate and does not write any region-state bytes.
+	 */
+	public void bindThermal(
+			ThermalRegistry registry, FluidMaterialRegistry liquidRegistry, double initialTemperatureK
+	) {
+		if (registry == null || liquidRegistry == null) throw new IllegalArgumentException("Thermal/liquid registry is missing");
+		if (!Double.isFinite(initialTemperatureK)) throw new IllegalArgumentException("Initial thermal temperature must be finite");
+		if (Float.floatToRawIntBits(config.cellSize()) != Float.floatToRawIntBits(0.5F)) {
+			throw new IllegalArgumentException("M9 thermal state currently requires a 0.5 m solver cell");
+		}
+		if (granularRegistry != null) {
+			throw new IllegalStateException("Transient liquid thermal binding does not yet own M8 parcel/deposit energy");
+		}
+		bindMaterialRegistry(liquidRegistry);
+		if (thermalState != null) {
+			if (!thermalState.fingerprint().equals(registry.fingerprint())) {
+				throw new IllegalArgumentException("A domain cannot change its thermal registry");
+			}
+			return;
+		}
+		if (chemicalParcels != null && !registry.chemicalRegistryFingerprint()
+				.equals(chemicalParcels.registry().fingerprint())) {
+			throw new IllegalArgumentException("Thermal registry chemical dependency mismatch");
+		}
+		thermalState = new FlipThermalState(registry, materialRegistry, initialTemperatureK,
+				particleX.length, sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext());
+	}
+
+	/** Restores only the orthogonal M9 energy side after material/chemical marker truth is already restored. */
+	public void restoreThermalParticleState(
+			FlipThermalParticleState state, ThermalRegistry registry
+	) {
+		if (state == null || registry == null) throw new IllegalArgumentException("Thermal restore state/registry is missing");
+		if (materialRegistry == null) throw new IllegalStateException("Thermal restore requires restored material state");
+		state.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize(), particleCount);
+		if (!state.thermalRegistryFingerprint().equals(registry.fingerprint())) {
+			throw new IllegalArgumentException("Thermal handoff registry identity mismatch");
+		}
+		bindThermal(registry, materialRegistry, registry.material(
+				registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID,
+						materialRegistry.material(0).id())).referenceTemperatureK());
+		thermalState.restore(state, thermalMarkerContext());
+	}
+
+	public FlipThermalParticleState exportThermalParticleState() {
+		if (thermalState == null) throw new IllegalStateException("Thermal particle handoff requires thermal state");
+		return thermalState.capture(sizeX, sizeY, sizeZ, config.cellSize(), particleCount);
+	}
+
+	/** Explicit heat-reservoir edit used by the transient validation and later administrator initialization path. */
+	public void setThermalTemperatureInCell(int x, int y, int z, double temperatureK) {
+		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		thermalState.setTemperatureInCell(cellIndexChecked(x, y, z), temperatureK, thermalMarkerContext());
+	}
+
+	public double thermalTemperatureInCell(int x, int y, int z) {
+		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		return thermalState.temperatureInCell(cellIndexChecked(x, y, z), thermalMarkerContext());
+	}
+
+	/** Runs the thermal axis without motion; production lifecycle wiring is a later M9 increment. */
+	public ThermalTransport.Stats stepThermalOnly(double dtSeconds) {
+		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		return thermalState.step(thermalMarkerContext(), this::thermalFaceArea, dtSeconds);
+	}
+
+	private FlipThermalState.MarkerContext thermalMarkerContext() {
+		return new FlipThermalState.MarkerContext() {
+			@Override public int markerCount() { return particleCount; }
+			@Override public int cell(int marker) { return particleCellIndex(marker); }
+			@Override public int fluidMaterialHandle(int marker) { return particleMaterialHandle[marker]; }
+			@Override public double mass(int marker) { return particleMass[marker]; }
+			@Override public double volume(int marker) { return particleVolume[marker]; }
+			@Override public ChemicalMixtureRecord mixture(int marker) {
+				return chemicalParcels == null ? null : chemicalParcels.record(marker);
+			}
+			@Override public ChemicalRegistry chemicalRegistry() {
+				return chemicalParcels == null ? null : chemicalParcels.registry();
+			}
+		};
+	}
+
+	private double thermalMarkerTemperature(int marker) {
+		return thermalState.temperature(marker, thermalMarkerContext());
+	}
+
+	private FlipParticleReseeder.ThermalAdapter thermalReseedAdapter() {
+		return thermalState.reseedAdapter(thermalMarkerContext());
+	}
+
+	private double thermalFaceArea(int x, int y, int z, int axis) {
+		float aperture = switch (axis) {
+			case 0 -> cutCells.xFaceOpen(x + 1, y, z);
+			case 1 -> cutCells.yFaceOpen(x, y + 1, z);
+			case 2 -> cutCells.zFaceOpen(x, y, z + 1);
+			default -> throw new IllegalArgumentException("Unknown thermal face axis");
+		};
+		// M9.2 intentionally admits only exact full cut faces. Partial cut/PLIC contact is added before production binding.
+		return aperture == 1.0F ? (double) config.cellSize() * config.cellSize() : 0.0;
+	}
+
+	private FlipThermalState.Truncation planThermalTruncate(
+			int marker, double newMass, ChemicalMixtureRecord keptMixture, double previousTemperatureK
+	) {
+		return thermalState == null ? null : thermalState.planTruncate(
+				marker, newMass, keptMixture, previousTemperatureK, thermalMarkerContext());
+	}
+
+	private void commitThermalTruncate(int marker, FlipThermalState.Truncation plan) {
+		if (thermalState != null) thermalState.commitTruncate(marker, plan);
+	}
+
+	private void clearThermalBinding() {
+		thermalState = null;
 	}
 
 	private void bindSolidCompositionPoolIfReady() {
@@ -1118,6 +1264,7 @@ public final class FlipFluidDomain {
 			setDefaultMaterialState(particle);
 		}
 		particleCount = restoredCount;
+		clearThermalBinding();
 		materialRegistry = null;
 		chemicalParcels = null;
 		chemicalPreviousCells = null;
@@ -1535,12 +1682,16 @@ public final class FlipFluidDomain {
 		if (chemicalParcels != null) {
 			throw new IllegalStateException("Material relabeling requires an exact chemical transfer");
 		}
+		double previousTemperature = thermalState == null ? Double.NaN : thermalMarkerTemperature(particle);
+		SignedDyadic thermalBefore = thermalState == null ? SignedDyadic.ZERO : exactInternalEnergy();
 		FluidMaterial material = registry.material(materialHandle);
 		double mass = (double) particleVolume[particle] * material.referenceDensity();
 		if (!(mass <= Float.MAX_VALUE)) throw new IllegalArgumentException("Material mass exceeds P2G range");
 		particleMass[particle] = mass;
 		particleMaterialHandle[particle] = materialHandle;
 		particlePhaseLabel[particle] = registry.phaseHandle(materialHandle);
+		if (thermalState != null) thermalState.resetMarkerTemperature(
+				particle, previousTemperature, thermalMarkerContext(), thermalBefore);
 	}
 
 	private boolean hasNonDefaultMaterialState() {
@@ -1743,26 +1894,29 @@ public final class FlipFluidDomain {
 			chemicalParcels.requireCanRecordEscapedSink(drained);
 		}
 		return new WaterClearPlan(particleCount, Double.doubleToRawLongBits(totalVolumeExact()),
-				Double.doubleToRawLongBits(totalMass()), drained);
+				Double.doubleToRawLongBits(totalMass()), drained, exactInternalEnergy());
 	}
 
 	/** Commits a previously validated liquid clear; no new ledger candidate is constructed here. */
 	public void commitRemoveAllWaterExact(WaterClearPlan plan) {
 		if (plan == null || particleCount != plan.markerCount()
 				|| Double.doubleToRawLongBits(totalVolumeExact()) != plan.totalVolumeBits()
-				|| Double.doubleToRawLongBits(totalMass()) != plan.totalMassBits()) {
+				|| Double.doubleToRawLongBits(totalMass()) != plan.totalMassBits()
+				|| !exactInternalEnergy().equals(plan.internalEnergy())) {
 			throw new IllegalStateException("Liquid inventory changed after clear planning");
 		}
 		if (chemicalParcels != null) {
 			chemicalParcels.recordEscapedSink(plan.drained());
 			chemicalParcels.clear(particleCount);
 		}
+		if (thermalState != null) thermalState.recordExternalSink(plan.internalEnergy());
 		particleCount = 0;
 		gridDirty = true;
 	}
 
 	public record WaterClearPlan(
-			int markerCount, long totalVolumeBits, long totalMassBits, ChemicalTransferLedger drained
+			int markerCount, long totalVolumeBits, long totalMassBits, ChemicalTransferLedger drained,
+			SignedDyadic internalEnergy
 	) { }
 
 	public static final class GranularCollisionBlockedException extends IllegalStateException {
@@ -2088,7 +2242,9 @@ public final class FlipFluidDomain {
 						marker, newVolume, previousVolume - newVolume, newMass, removedMass);
 				ledger.add(materialRegistry.material(particleMaterialHandle[marker]).id(), chemicalParcels.indicator(marker),
 						actual, removedMass, chemicalPlan.removed());
-				plan.add(new ExtractionAllocation(marker, newVolume, newMass, chemicalPlan));
+				FlipThermalState.Truncation thermalPlan = planThermalTruncate(marker, newMass,
+						chemicalPlan.kept(), thermalState == null ? Double.NaN : thermalMarkerTemperature(marker));
+				plan.add(new ExtractionAllocation(marker, newVolume, newMass, chemicalPlan, thermalPlan));
 				remaining -= actual;
 			}
 		}
@@ -2104,6 +2260,7 @@ public final class FlipFluidDomain {
 			}
 			particleVolume[allocation.particle()] = allocation.newVolume();
 			particleMass[allocation.particle()] = allocation.newMass();
+			commitThermalTruncate(allocation.particle(), allocation.thermalPlan());
 		}
 		for (int marker = particleCount - 1; marker >= 0; marker--) if (particleVolume[marker] == 0.0F) removeParticle(marker);
 		gridDirty = true;
@@ -2196,7 +2353,10 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				ChemicalParcelStore.SplitPlan chemicalPlan = chemicalParcels == null ? null
 						: chemicalParcels.planTruncate(i, newVolume, previousVolume - newVolume,
 						newMass, previousMass - newMass);
-				plan.add(new ExtractionAllocation(i, newVolume, newMass, chemicalPlan));
+				FlipThermalState.Truncation thermalPlan = planThermalTruncate(i, newMass,
+						chemicalPlan == null ? null : chemicalPlan.kept(),
+						thermalState == null ? Double.NaN : thermalMarkerTemperature(i));
+				plan.add(new ExtractionAllocation(i, newVolume, newMass, chemicalPlan, thermalPlan));
 				changedHandles.add(handle);
 				remaining -= actual;
 			}
@@ -2208,6 +2368,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			}
 			particleVolume[allocation.particle()] = allocation.newVolume();
 			particleMass[allocation.particle()] = allocation.newMass();
+			commitThermalTruncate(allocation.particle(), allocation.thermalPlan());
 		}
 		// Do not compact during indexed writes: removeParticle swaps the last marker into the current
 		// index and could invalidate a later planned ordinal. Compact only after every ledger edit.
@@ -2244,7 +2405,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			ChemicalMixtureRecord chemical
 	) { }
 	private record ExtractionAllocation(
-			int particle, float newVolume, double newMass, ChemicalParcelStore.SplitPlan chemicalPlan
+			int particle, float newVolume, double newMass, ChemicalParcelStore.SplitPlan chemicalPlan,
+			FlipThermalState.Truncation thermalPlan
 	) { }
 
 	public record ExactVolumeTransfer(boolean transferred, double volume, double mass) { }
@@ -2311,6 +2473,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						sizeX, sizeY, sizeZ, config.cellSize(), particleX, particleY, particleZ,
 						particleMass, particleMaterialHandle,
 						handle -> materialRegistry.material(handle).id(), particleCount);
+		if (thermalState != null) stepThermalOnly(config.timeStep());
 		lastPhaseTransferStats = precipitationEnabled
 				? transferGranularPhases(phaseTransferCells) : new PhaseTransferStats(0, 0, 0, 0L);
 		if (granularInventory != null && granularParcels.count() > 1) {
@@ -2350,15 +2513,18 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			}
 		}
 		ensureParticleCapacity(particleReseeder.capacityUpperBound(particleCount));
+		SignedDyadic thermalBeforeReseed = thermalState == null ? SignedDyadic.ZERO : exactInternalEnergy();
 		FlipParticleReseeder.Result reseeding = particleReseeder.reseed(
 				solid,
 				particleX, particleY, particleZ,
 				particleVelocityX, particleVelocityY, particleVelocityZ,
 				particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel, chemicalParcels,
+				thermalState == null ? null : thermalReseedAdapter(),
 				particleCount, usesMassWeightedP2G(),
 				this::markerPositionAllowed
 		);
 		particleCount = reseeding.particleCount();
+		if (thermalState != null) thermalState.recordRoundoff(exactInternalEnergy().subtract(thermalBeforeReseed));
 		gridDirty = true;
 		rebuildGridFromParticles();
 		return new StepStats(
@@ -3965,6 +4131,7 @@ chemicalParcels.assign(particleCount, chemicalMixture, indicator);
 }
 chemicalParcels.markDirtyCell(cellIndex(cellX, cellY, cellZ));
 }
+		if (thermalState != null) thermalState.addExternalMarker(particleCount, thermalMarkerContext());
 particleCount++;
 }
 
@@ -3993,25 +4160,30 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			float previousVolume = particleVolume[i];
 			float take = Math.min(previousVolume, maximum - removed);
 			double previousMass = particleMass[i];
+			double previousTemperature = thermalState == null ? Double.NaN : thermalMarkerTemperature(i);
 			float newVolume = previousVolume - take;
 			if (chemicalParcels != null && newVolume <= 1.0E-6F) {
 				take = previousVolume;
 				newVolume = 0.0F;
 			}
 			double newMass = previousMass * newVolume / previousVolume;
+			ChemicalParcelStore.SplitPlan chemicalPlan = null;
 			if (chemicalParcels != null) {
 				chemicalParcels.markDirtyCell(cellIndex(cellX, cellY, cellZ));
-				ChemicalParcelStore.SplitPlan plan = chemicalParcels.planTruncate(
+				chemicalPlan = chemicalParcels.planTruncate(
 						i, newVolume, take, newMass, previousMass - newMass);
 				if (removedChemistry != null) removedChemistry.add(
 						materialRegistry.material(particleMaterialHandle[i]).id(), chemicalParcels.indicator(i),
-						take, previousMass - newMass, plan.removed());
+						take, previousMass - newMass, chemicalPlan.removed());
 				if (newVolume > 0.0F) {
-					chemicalParcels.commitTruncate(i, plan);
+					chemicalParcels.commitTruncate(i, chemicalPlan);
 				}
 			}
+			FlipThermalState.Truncation thermalPlan = planThermalTruncate(i, newMass,
+					chemicalPlan == null ? null : chemicalPlan.kept(), previousTemperature);
 			particleVolume[i] = newVolume;
 			particleMass[i] = newMass;
+			commitThermalTruncate(i, thermalPlan);
 			removed += take;
 			if (particleVolume[i] <= 1.0E-6F) removeParticle(i);
 		}
@@ -4080,6 +4252,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	private void removeParticle(int index) {
 		if (chemicalParcels != null) chemicalParcels.markDirtyCell(particleCellIndex(index));
 		int last = particleCount - 1;
+		if (thermalState != null) thermalState.removeExternalAndSwap(index, last);
 		if (chemicalParcels != null) chemicalParcels.swapRemove(index, last);
 		particleCount = last;
 		if (index == last) return;
@@ -4103,6 +4276,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 		particleMass = Arrays.copyOf(particleMass, capacity);
 		particleMaterialHandle = Arrays.copyOf(particleMaterialHandle, capacity);
 		particlePhaseLabel = Arrays.copyOf(particlePhaseLabel, capacity);
+		if (thermalState != null) thermalState.ensureCapacity(capacity);
 		phaseEntryLabel = Arrays.copyOf(phaseEntryLabel, capacity);
 		phaseEntryNext = Arrays.copyOf(phaseEntryNext, capacity);
 		phaseEntryVolume = Arrays.copyOf(phaseEntryVolume, capacity);

@@ -1,6 +1,8 @@
 package com.example.thermal;
 
 import com.example.chemistry.ChemicalLimits;
+import com.example.chemistry.ChemicalMixtureRecord;
+import com.example.chemistry.ChemicalRegistry;
 
 import java.util.Map;
 
@@ -23,6 +25,17 @@ public final class ThermalStateFunction {
 	) {
 		ThermalMaterialDefinition material = registry.material(materialHandle);
 		double energy = baseEnergy(materialHandle, massMu, speciesQuanta)
+				+ massMu * material.sensibleSpecificEnergyAt(temperatureK);
+		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal internal energy is not finite");
+		return energy;
+	}
+
+	public double internalEnergyAtTemperature(
+			int materialHandle, double massMu, ChemicalMixtureRecord mixture,
+			ChemicalRegistry chemicalRegistry, double temperatureK
+	) {
+		ThermalMaterialDefinition material = registry.material(materialHandle);
+		double energy = baseEnergy(materialHandle, massMu, mixture, chemicalRegistry)
 				+ massMu * material.sensibleSpecificEnergyAt(temperatureK);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal internal energy is not finite");
 		return energy;
@@ -85,6 +98,28 @@ public final class ThermalStateFunction {
 			double contribution = offset.referenceInternalEnergyEuPerAu()
 					.multiply(quanta).divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
 			total += contribution;
+		}
+		if (!Double.isFinite(total)) throw new IllegalArgumentException("Thermal base energy is not finite");
+		return total;
+	}
+
+	public double baseEnergy(
+			int materialHandle, double massMu, ChemicalMixtureRecord mixture, ChemicalRegistry chemicalRegistry
+	) {
+		if (!(Double.isFinite(massMu) && massMu > 0.0)) {
+			throw new IllegalArgumentException("Thermal carrier mass must be finite and positive");
+		}
+		ThermalMaterialDefinition material = registry.material(materialHandle);
+		double total = massMu * material.referenceSpecificEnergyEuPerMu();
+		if (mixture != null) {
+			if (chemicalRegistry == null) throw new IllegalArgumentException("Thermal chemical registry is missing");
+			for (int entry = 0; entry < mixture.entryCount(); entry++) {
+				long quanta = mixture.amountAt(entry);
+				String speciesId = chemicalRegistry.species(mixture.speciesHandle(entry)).id();
+				ThermalSpeciesOffset offset = registry.speciesOffset(materialHandle, speciesId);
+				total += offset.referenceInternalEnergyEuPerAu()
+						.multiply(quanta).divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
+			}
 		}
 		if (!Double.isFinite(total)) throw new IllegalArgumentException("Thermal base energy is not finite");
 		return total;

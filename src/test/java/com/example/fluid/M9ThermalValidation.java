@@ -1,8 +1,15 @@
-package com.example.thermal;
+package com.example.fluid;
 
 import com.example.chemistry.ChemicalLimits;
 import com.example.chemistry.ExactRational;
 import com.example.granular.SolidVolume;
+import com.example.thermal.SignedDyadic;
+import com.example.thermal.ThermalDefinitionCodec;
+import com.example.thermal.ThermalMaterialDefinition;
+import com.example.thermal.ThermalPhaseTransition;
+import com.example.thermal.ThermalRegistry;
+import com.example.thermal.ThermalSpeciesOffset;
+import com.example.thermal.ThermalStateFunction;
 
 import java.io.StringReader;
 import java.util.List;
@@ -20,6 +27,8 @@ public final class M9ThermalValidation {
 		reactionHeatIsPathIndependentStateEnergy();
 		phasePlateauUsesTheStateFunctionGap();
 		exactDyadicAuditDoesNotLoseCancellationRemainders();
+		liquidTransportAndHandoffCloseEnergy();
+		reseedingMovesEnergyWithMarkerTruth();
 		System.out.println("M9 thermal validation passed");
 	}
 
@@ -127,6 +136,86 @@ public final class M9ThermalValidation {
 					== Double.doubleToRawLongBits(value == 0.0 ? 0.0 : value),
 					"dyadic conversion did not round-trip " + value);
 		}
+	}
+
+	private static void liquidTransportAndHandoffCloseEnergy() {
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		ThermalMaterialDefinition water = new ThermalMaterialDefinition("realwater:thermal/water",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
+				300.0, 0.0, 1_000.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 4_000.0)));
+		ThermalRegistry registry = new ThermalRegistry(List.of(water));
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = new FlipFluidDomain(4, 3, 3, config, 512);
+		domain.setVolume(1, 1, 1, 1.0F);
+		domain.setVolume(2, 1, 1, 1.0F);
+		domain.bindThermal(registry, liquids, 300.0);
+		domain.setThermalTemperatureInCell(1, 1, 1, 350.0);
+		domain.setThermalTemperatureInCell(2, 1, 1, 250.0);
+		SignedDyadic before = domain.exactInternalEnergy();
+		domain.stepThermalOnly(1_000.0);
+		double hot = domain.thermalTemperatureInCell(1, 1, 1);
+		double cold = domain.thermalTemperatureInCell(2, 1, 1);
+		require(hot < 350.0 && hot > 300.0 && cold > 250.0 && cold < 300.0,
+				"pairwise thermal transport was not monotone");
+		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"transient thermal transport did not close its audit ledger");
+		require(Math.abs(domain.exactInternalEnergy().subtract(before).toDouble()) <= 1.0E-6,
+				"adiabatic thermal transport changed total internal energy beyond representation residual");
+
+		FlipMaterialParticleState materials = domain.exportMaterialParticleState();
+		FlipThermalParticleState thermal = domain.exportThermalParticleState();
+		FlipFluidDomain restored = new FlipFluidDomain(4, 3, 3, config, 512);
+		restored.restoreMaterialParticleState(materials);
+		restored.restoreThermalParticleState(thermal, registry);
+		require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
+				&& close(restored.thermalTemperatureInCell(1, 1, 1), hot)
+				&& close(restored.thermalTemperatureInCell(2, 1, 1), cold),
+				"orthogonal thermal handoff did not preserve energy/temperature");
+	}
+
+	private static void reseedingMovesEnergyWithMarkerTruth() {
+		int capacity = 64, count = 17;
+		boolean[] solid = new boolean[4 * 4 * 4];
+		float[] x = new float[capacity], y = new float[capacity], z = new float[capacity];
+		float[] vx = new float[capacity], vy = new float[capacity], vz = new float[capacity];
+		float[] volume = new float[capacity];
+		double[] mass = new double[capacity], energy = new double[capacity];
+		int[] material = new int[capacity], phase = new int[capacity];
+		for (int marker = 0; marker < 16; marker++) {
+			x[marker] = 1.1F + (marker & 3) * 0.02F;
+			y[marker] = 1.1F + (marker >> 2 & 3) * 0.02F;
+			z[marker] = 1.1F;
+			volume[marker] = 1.0F / 64.0F;
+			mass[marker] = volume[marker] * 1_000.0;
+			energy[marker] = mass[marker] * 7.0;
+		}
+		x[16] = 2.25F; y[16] = 1.25F; z[16] = 1.25F;
+		volume[16] = 0.5F; mass[16] = 500.0; energy[16] = 3_500.0;
+		SignedDyadic before = SignedDyadic.sum(java.util.Arrays.copyOf(energy, count));
+		FlipParticleReseeder.ThermalAdapter adapter = new FlipParticleReseeder.ThermalAdapter() {
+			@Override public double totalEnergy(int particleCount) {
+				double total = 0.0;
+				for (int marker = 0; marker < particleCount; marker++) total += energy[marker];
+				return total;
+			}
+			@Override public void merge(int target, int source) { energy[target] += energy[source]; }
+			@Override public FlipParticleReseeder.ThermalSplit beforeSplit(int source) {
+				return new FlipParticleReseeder.ThermalSplit(energy[source], energy[source] / mass[source]);
+			}
+			@Override public void afterSplit(FlipParticleReseeder.ThermalSplit split, int source, int destination) {
+				energy[source] = mass[source] * split.temperatureK();
+				energy[destination] = split.parentEnergy() - energy[source];
+			}
+			@Override public void move(int source, int destination) { energy[destination] = energy[source]; }
+		};
+		FlipParticleReseeder.Result result = new FlipParticleReseeder(4, 4, 4, 1.0F, capacity).reseed(
+				solid, x, y, z, vx, vy, vz, volume, mass, material, phase, null, adapter, count, false,
+				(candidateX, candidateY, candidateZ) -> true);
+		SignedDyadic after = SignedDyadic.sum(java.util.Arrays.copyOf(energy, result.particleCount()));
+		require(result.merged() > 0 && result.split() > 0 && before.equals(after),
+				"thermal reseeding did not move energy with merged/split marker truth");
 	}
 
 	private static ThermalMaterialDefinition material(

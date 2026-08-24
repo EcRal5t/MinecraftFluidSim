@@ -47,6 +47,20 @@ final class FlipParticleReseeder {
 
 	Result reseed(
 			boolean[] solid,
+			float[] particleX, float[] particleY, float[] particleZ,
+			float[] velocityX, float[] velocityY, float[] velocityZ,
+			float[] particleVolume, double[] particleMass,
+			int[] particleMaterialHandle, int[] particlePhaseLabel,
+			ChemicalParcelStore chemicalParcels, int particleCount,
+			boolean massWeightedDynamics, PositionValidator positionValidator
+	) {
+		return reseed(solid, particleX, particleY, particleZ, velocityX, velocityY, velocityZ,
+				particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel,
+				chemicalParcels, null, particleCount, massWeightedDynamics, positionValidator);
+	}
+
+	Result reseed(
+			boolean[] solid,
 			float[] particleX,
 			float[] particleY,
 			float[] particleZ,
@@ -58,6 +72,7 @@ final class FlipParticleReseeder {
 			int[] particleMaterialHandle,
 			int[] particlePhaseLabel,
 			ChemicalParcelStore chemicalParcels,
+			ThermalAdapter thermal,
 			int particleCount,
 			boolean massWeightedDynamics,
 			PositionValidator positionValidator
@@ -65,18 +80,19 @@ final class FlipParticleReseeder {
 		ensureScratchCapacity(particleX.length);
 		double volumeBefore = totalVolume(particleVolume, particleCount);
 		double massBefore = totalMass(particleMass, particleCount);
+		double energyBefore = thermal == null ? 0.0 : thermal.totalEnergy(particleCount);
 		buildCellLists(particleX, particleY, particleZ, particleVolume, particleCount);
 		MergeResult mergeResult = mergeOverpopulatedCells(
 				particleX, particleY, particleZ, velocityX, velocityY, velocityZ,
 				particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel,
-				chemicalParcels, particleCount, massWeightedDynamics, positionValidator
+				chemicalParcels, thermal, particleCount, massWeightedDynamics, positionValidator
 		);
 		int merged = mergeResult.merged();
 		if (merged > 0) {
 			particleCount = compactParticles(
 					particleX, particleY, particleZ, velocityX, velocityY, velocityZ,
 					particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel,
-					chemicalParcels, particleCount
+					chemicalParcels, thermal, particleCount
 			);
 		}
 
@@ -97,7 +113,7 @@ final class FlipParticleReseeder {
 						solid, cell, source, particleCount,
 						particleX, particleY, particleZ, velocityX, velocityY, velocityZ,
 						particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel,
-						chemicalParcels, positionValidator
+						chemicalParcels, thermal, positionValidator
 				)) {
 					geometrySkipped += minimum - cellMarkerCount[cell];
 					break;
@@ -112,9 +128,10 @@ final class FlipParticleReseeder {
 
 		double volumeAfter = totalVolume(particleVolume, particleCount);
 		double massAfter = totalMass(particleMass, particleCount);
+		double energyAfter = thermal == null ? 0.0 : thermal.totalEnergy(particleCount);
 		double ledgerError = volumeAfter - volumeBefore;
 		return new Result(particleCount, merged, split, budgetSkipped, geometrySkipped,
-				ledgerError, massAfter - massBefore);
+				ledgerError, massAfter - massBefore, energyAfter - energyBefore);
 	}
 
 	private MergeResult mergeOverpopulatedCells(
@@ -129,6 +146,7 @@ final class FlipParticleReseeder {
 			int[] particleMaterialHandle,
 			int[] particlePhaseLabel,
 			ChemicalParcelStore chemicalParcels,
+			ThermalAdapter thermal,
 			int particleCount,
 			boolean massWeightedDynamics,
 			PositionValidator positionValidator
@@ -163,7 +181,7 @@ final class FlipParticleReseeder {
 				if (!mergeParticleInto(
 						target, source, particleX, particleY, particleZ,
 						velocityX, velocityY, velocityZ, particleVolume, particleMass,
-						chemicalParcels, massWeightedDynamics, positionValidator
+						chemicalParcels, thermal, massWeightedDynamics, positionValidator
 				)) {
 					geometrySkipped++;
 					continue;
@@ -257,6 +275,7 @@ final class FlipParticleReseeder {
 			float[] particleVolume,
 			double[] particleMass,
 			ChemicalParcelStore chemicalParcels,
+			ThermalAdapter thermal,
 			boolean massWeightedDynamics,
 			PositionValidator positionValidator
 	) {
@@ -279,6 +298,7 @@ final class FlipParticleReseeder {
 		particleVolume[target] = (float) mergedVolume;
 		particleMass[target] += particleMass[source];
 		if (chemicalParcels != null) chemicalParcels.merge(target, source, particleMass[target]);
+		if (thermal != null) thermal.merge(target, source);
 		return true;
 	}
 
@@ -298,6 +318,7 @@ final class FlipParticleReseeder {
 			int[] particleMaterialHandle,
 			int[] particlePhaseLabel,
 			ChemicalParcelStore chemicalParcels,
+			ThermalAdapter thermal,
 			PositionValidator positionValidator
 	) {
 		int x = cell % sizeX;
@@ -341,6 +362,7 @@ final class FlipParticleReseeder {
 			}
 		}
 		float originalVolume = particleVolume[source];
+		ThermalSplit thermalSplit = thermal == null ? null : thermal.beforeSplit(source);
 		float firstVolume = originalVolume * 0.5F;
 		float secondVolume = originalVolume - firstVolume;
 		if (chemicalParcels != null && !chemicalParcels.canSplit(
@@ -364,6 +386,7 @@ final class FlipParticleReseeder {
 		if (chemicalParcels != null) chemicalParcels.split(
 				source, destination, firstVolume, secondVolume,
 				particleMass[source], particleMass[destination]);
+		if (thermal != null) thermal.afterSplit(thermalSplit, source, destination);
 		return true;
 	}
 
@@ -428,6 +451,7 @@ final class FlipParticleReseeder {
 			int[] particleMaterialHandle,
 			int[] particlePhaseLabel,
 			ChemicalParcelStore chemicalParcels,
+			ThermalAdapter thermal,
 			int particleCount
 	) {
 		int destination = 0;
@@ -439,6 +463,7 @@ final class FlipParticleReseeder {
 					particleMaterialHandle, particlePhaseLabel
 			);
 			if (chemicalParcels != null && destination != source) chemicalParcels.move(source, destination);
+			if (thermal != null && destination != source) thermal.move(source, destination);
 			destination++;
 		}
 		return destination;
@@ -523,6 +548,16 @@ final class FlipParticleReseeder {
 	@FunctionalInterface
 	interface PositionValidator { boolean allowed(float x, float y, float z); }
 
+	interface ThermalAdapter {
+		double totalEnergy(int particleCount);
+		void merge(int target, int source);
+		ThermalSplit beforeSplit(int source);
+		void afterSplit(ThermalSplit split, int source, int destination);
+		void move(int source, int destination);
+	}
+
+	record ThermalSplit(double parentEnergy, double temperatureK) { }
+
 	private record MergeResult(int merged, int geometrySkipped) { }
 
 	record Result(
@@ -532,6 +567,7 @@ final class FlipParticleReseeder {
 			int budgetSkipped,
 			int geometrySkipped,
 			double ledgerError,
-			double massLedgerError
+			double massLedgerError,
+			double energyLedgerError
 	) { }
 }
