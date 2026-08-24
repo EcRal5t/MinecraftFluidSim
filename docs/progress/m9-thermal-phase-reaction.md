@@ -451,7 +451,9 @@ gas registry `41b54b…f777` 与 thermal registry `f402a2…6879`，命令查询
 原实机世界的 HEAD/slot/registry/config 时间戳保持用户 06:49--06:50 的原值，本次调试没有修改它。
 `thermal,gas-liquid,chemistry,granular,region-state,lifecycle,protocol` 七个直接受影响的完整门同步通过，
 密闭气体平衡仍为既有 0.91% 正压液柱误差和 6.73% 负压吸升误差；没有修改任何 wall-time 或物理停止阈值。
-`clean assemble compileTestJava --offline --no-daemon` 从零成功（19 s）；稳定化候选 JAR SHA-256 为
-`86F2B2EC4E3BCC92AAC0E98B652AAF72E57539C039822D5AD643AA7F97316B21`。它已部署为唯一启用的主
-`realwater` id；上一候选 `7CE4F7…8139A` 可恢复地保存为
-`realwater-0.15.0-pre-legacy-restore-fix.jar.disabled`，独立 `realwater_gpu_probe` id 不冲突。
+第一次 `clean assemble compileTestJava --offline --no-daemon` 从零成功（19 s），生成稳定化候选
+`86F2B2EC…16B21`；补齐初始化后立即发帧后再次从零成功（17 s）。最终部署 JAR SHA-256 为
+`641DAC2F8D2F4056C79F9771A87F4E1C00B6D2911DA015026C1DF896CD77D75D`，且是 mods 目录唯一启用的主
+`realwater` id。两版前置候选分别可恢复地保存为
+`realwater-0.15.0-pre-legacy-restore-fix.jar.disabled` 与
+`realwater-0.15.0-pre-immediate-thermal-snapshot.jar.disabled`；独立 `realwater_gpu_probe` id 不冲突。
