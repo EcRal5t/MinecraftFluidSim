@@ -271,7 +271,8 @@ final class FlipThermalState {
 				|| restoredGas.length > 0 && gasModel == null) {
 			throw new IllegalArgumentException("Restored gas thermal ordinals differ from gas v4 inventory");
 		}
-		for (int node = 0; node < restoredGas.length; node++) gasModel.state(airNetwork.inventory(node + 1), restoredGas[node]);
+		for (int node = 0; node < restoredGas.length; node++) gasModel.absolutePressure(
+				airNetwork.inventory(node + 1), airNetwork.availableVolume(node + 1), restoredGas[node]);
 		gasNodeEnergy = restoredGas;
 		for (int marker = 0; marker < markers.markerCount(); marker++) temperature(marker, markers);
 		cellGrid.rebuild(carrierAccess(markers));

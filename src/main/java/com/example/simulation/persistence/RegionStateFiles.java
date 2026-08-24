@@ -414,6 +414,9 @@ public final class RegionStateFiles {
 			if (thermalRegistry == null) {
 				throw new IOException("region-state v6 verification requires the authoritative thermal registry");
 			}
+			if (gasRegistry == null) {
+				throw new IOException("region-state v6 verification requires the authoritative gas registry");
+			}
 			if (state.manifest().hasChemicalState()) {
 				if (chemicalRegistry == null) {
 					throw new IOException("chemical region-state v6 verification requires the authoritative chemical registry");
@@ -435,7 +438,7 @@ public final class RegionStateFiles {
 					throw new IOException("Region-state v6 granular inventory/audit validation failed", invalid);
 				}
 			}
-			state.reconstructThermal(thermalRegistry);
+			state.reconstructThermal(thermalRegistry, gasRegistry, chemicalRegistry);
 		}
 		else throw new IOException("Unsupported region-state version " + state.manifest().formatVersion());
 	}
