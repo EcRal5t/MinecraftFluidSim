@@ -134,6 +134,16 @@ public final class RealWaterCommands {
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
 										.executes(context -> audit(context, () -> setPrecipitationFeature(
 												context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+						.then(Commands.literal("thermal")
+								.executes(context -> audit(context, () -> thermalFeatureStatus(context.getSource())))
+								.then(Commands.argument("enabled", BoolArgumentType.bool())
+										.executes(context -> audit(context, () -> setThermalFeature(
+												context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+						.then(Commands.literal("phasechange")
+								.executes(context -> audit(context, () -> phaseChangeFeatureStatus(context.getSource())))
+								.then(Commands.argument("enabled", BoolArgumentType.bool())
+										.executes(context -> audit(context, () -> setPhaseChangeFeature(
+												context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
 						.then(Commands.literal("granstatus")
 								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.executes(context -> audit(context, () -> granularInventoryStatus(context.getSource()))))
@@ -535,6 +545,41 @@ public final class RealWaterCommands {
 		if (failure != null) return fail(source, "沉淀功能门未改变：" + failure);
 		return succeed(source, "沉淀功能门配置已" + (enabled ? "开启" : "关闭")
 				+ "；本次启动仍为" + (service.precipitationFeatureEnabled() ? "开启" : "关闭")
+				+ "，重启服务器后生效", 1);
+	}
+
+	private static int thermalFeatureStatus(CommandSourceStack source) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		boolean live = service.thermalFeatureEnabled(), configured = service.configuredThermalFeatureEnabled();
+		String message = "热学功能门：本次启动" + (live ? "开启" : "关闭")
+				+ "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
+		return succeed(source, live == configured ? message : message + "；重启服务器后才会切换存档与协议",
+				live ? 1 : 0);
+	}
+
+	private static int setThermalFeature(CommandSourceStack source, boolean enabled) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		String failure = service.setThermalFeatureForRestart(enabled);
+		if (failure != null) return fail(source, "热学功能门未改变：" + failure);
+		return succeed(source, "热学功能门配置已" + (enabled ? "开启" : "关闭")
+				+ "；本次启动仍为" + (service.thermalFeatureEnabled() ? "开启" : "关闭")
+				+ "，重启服务器后生效", 1);
+	}
+
+	private static int phaseChangeFeatureStatus(CommandSourceStack source) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		boolean live = service.phaseChangeFeatureEnabled(), configured = service.configuredPhaseChangeFeatureEnabled();
+		String message = "相变功能门：本次启动" + (live ? "开启" : "关闭")
+				+ "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
+		return succeed(source, live == configured ? message : message + "；重启服务器后生效", live ? 1 : 0);
+	}
+
+	private static int setPhaseChangeFeature(CommandSourceStack source, boolean enabled) {
+		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		String failure = service.setPhaseChangeFeatureForRestart(enabled);
+		if (failure != null) return fail(source, "相变功能门未改变：" + failure);
+		return succeed(source, "相变功能门配置已" + (enabled ? "开启" : "关闭")
+				+ "；本次启动仍为" + (service.phaseChangeFeatureEnabled() ? "开启" : "关闭")
 				+ "，重启服务器后生效", 1);
 	}
 

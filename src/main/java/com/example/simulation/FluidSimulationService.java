@@ -817,8 +817,9 @@ public final class FluidSimulationService {
 	/** Persists the next-startup material gate; live sessions keep their negotiated protocol until restart. */
 	public String setMaterialFeatureForRestart(boolean enabled) {
 		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
-		if (!enabled && (serverConfig.chemistryEnabled() || serverConfig.granularEnabled())) {
-			return "请先关闭 chemistry 与 granular；两者都要求 materials=true";
+		if (!enabled && (serverConfig.chemistryEnabled() || serverConfig.granularEnabled()
+				|| serverConfig.thermalEnabled())) {
+			return "请先关闭 chemistry、granular 与 thermal；三者都要求 materials=true";
 		}
 		FluidServerConfig replacement = serverConfig.withMaterialsEnabled(enabled);
 		try {
@@ -2194,6 +2195,8 @@ public final class FluidSimulationService {
 
 	public boolean configuredGranularFeatureEnabled() { return serverConfig.granularEnabled(); }
 	public boolean configuredPrecipitationFeatureEnabled() { return serverConfig.precipitationEnabled(); }
+	public boolean configuredThermalFeatureEnabled() { return serverConfig.thermalEnabled(); }
+	public boolean configuredPhaseChangeFeatureEnabled() { return serverConfig.phaseChangeEnabled(); }
 
 	public String setGranularFeatureForRestart(boolean enabled) {
 		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
@@ -2218,6 +2221,35 @@ public final class FluidSimulationService {
 		try { replacement.save(worldRoot); }
 		catch (IOException exception) {
 			RealWaterMod.LOGGER.error("Could not persist Real Water precipitation feature flag", exception);
+			return exception.getMessage();
+		}
+		serverConfig = replacement;
+		return null;
+	}
+
+	public String setThermalFeatureForRestart(boolean enabled) {
+		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
+		if (enabled && !serverConfig.materialsEnabled()) return "thermal=true 要求先启用 materials";
+		if (!enabled && serverConfig.phaseChangeEnabled()) {
+			return "请先关闭 phasechange；phaseChangeEnabled=true 要求 thermal=true";
+		}
+		FluidServerConfig replacement = serverConfig.withThermalEnabled(enabled);
+		try { replacement.save(worldRoot); }
+		catch (IOException exception) {
+			RealWaterMod.LOGGER.error("Could not persist Real Water thermal feature flag", exception);
+			return exception.getMessage();
+		}
+		serverConfig = replacement;
+		return null;
+	}
+
+	public String setPhaseChangeFeatureForRestart(boolean enabled) {
+		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
+		if (enabled && !serverConfig.thermalEnabled()) return "phasechange=true 要求先启用 thermal";
+		FluidServerConfig replacement = serverConfig.withPhaseChangeEnabled(enabled);
+		try { replacement.save(worldRoot); }
+		catch (IOException exception) {
+			RealWaterMod.LOGGER.error("Could not persist Real Water phase-change feature flag", exception);
 			return exception.getMessage();
 		}
 		serverConfig = replacement;
