@@ -64,7 +64,7 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 
 代码职责、最小测试选择和专项 Gradle 命令不在这里重复，统一从 [文档索引](docs/README.md) 进入：
 
-- [当前架构契约](docs/architecture/fluid-solver.md)、[M6 世界 ownership/容器契约](docs/architecture/world-ownership-and-containers.md)、[M7 化学状态契约](docs/architecture/chemistry-state.md)与[M8 颗粒状态契约](docs/architecture/granular-state.md)
+- [当前架构契约](docs/architecture/fluid-solver.md)、[M6 世界 ownership/容器契约](docs/architecture/world-ownership-and-containers.md)、[M7 化学状态契约](docs/architecture/chemistry-state.md)、[M8 颗粒状态契约](docs/architecture/granular-state.md)与[M9 热学设计冻结](docs/architecture/thermal-state.md)
 - [完成进度与验收证据](docs/progress/README.md)
 - [未来里程碑与技术规格](docs/roadmap/product-roadmap.md)
 - [代码与测试维护路由](docs/maintenance/routing.md)

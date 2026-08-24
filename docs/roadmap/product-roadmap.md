@@ -111,6 +111,8 @@ v5 audit-only identity、remove/empty 与 runtime collision 边界，并完成�
 - 引入内能与热容量，温度作为派生量。
 - 热输运、固体换热、相变、反应热和气体压缩/膨胀。
 - 绝热系统总能量闭合；相变前后质量/组分守恒；热休眠与速度休眠分离。
+- 实现前冻结契约见 [`../architecture/thermal-state.md`](../architecture/thermal-state.md)；M9 不回填 v3/v5，
+  气体 v4 基态保持独立前置评审，旧区域只经 operator 显式初温迁移。
 
 ## M10：原版行为与其他 Mod API
 
