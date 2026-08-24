@@ -61,3 +61,12 @@ fixed-surface-temperature face，半格热阻进入 stability limit，reservoir 
 substep 的部分提交。
 
 最近门：`thermal,chemistry,free-surface` 通过；未请求实机。世界 block/tag 解析与 production gate 尚未开放。
+
+## M9.4 world thermal registry v1
+
+新增 `<world>/realwater/thermal/registry.nbt` 的严格有界 snapshot。首次启用以 temporary file 写入、force、回读校验后
+原子发布；已有 snapshot 永远是 authoritative，当前 datapack fingerprint 变化只报告 mismatch。unit system、chemical/
+granular dependency fingerprint、canonical bytes 或定义重建 identity 任一失配都拒绝读取；目录中未知文件原地保留并
+锁定，不能静默忽略。materials、species formation offset、phase transition 和 boundary definition 全部进入同一 v1。
+
+最近门：`thermal` 通过；仍未开放 config/region-state，因此没有旧世界被自动初始化。

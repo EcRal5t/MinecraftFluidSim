@@ -16,6 +16,7 @@ import com.example.thermal.ThermalDefinitionCodec;
 import com.example.thermal.ThermalMaterialDefinition;
 import com.example.thermal.ThermalPhaseTransition;
 import com.example.thermal.ThermalRegistry;
+import com.example.thermal.ThermalRegistryStore;
 import com.example.thermal.ThermalSpeciesOffset;
 import com.example.thermal.ThermalStateFunction;
 import com.example.thermal.ThermalTransport;
@@ -32,6 +33,7 @@ public final class M9ThermalValidation {
 
 	public static void main(String[] args) {
 		definitionAndCanonicalRegistry();
+		worldRegistrySnapshotIsAuthoritative();
 		piecewiseStateFunctionRoundTrips();
 		reactionHeatIsPathIndependentStateEnergy();
 		reactionCommitValidatesEnergyBeforeMutation();
@@ -83,6 +85,42 @@ public final class M9ThermalValidation {
 				ThermalMaterialDefinition.CarrierKind.LIQUID, "realwater:broken", 300.0, 0.0, 1.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 299.0, 1.0),
 						new ThermalMaterialDefinition.CaloricSegment(300.0, 500.0, 1.0))), "non-contiguous segments accepted");
+	}
+
+	private static void worldRegistrySnapshotIsAuthoritative() {
+		java.nio.file.Path root = null;
+		try {
+			root = java.nio.file.Files.createTempDirectory("realwater-thermal-registry-");
+			ThermalMaterialDefinition original = material("test:thermal/store", "test:store", 0.0,
+					List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0)));
+			ThermalRegistry authoritative = new ThermalRegistry(List.of(original));
+			ThermalRegistryStore store = new ThermalRegistryStore(root, "", "");
+			ThermalRegistryStore.LoadResult first = store.loadOrCreate(authoritative);
+			require(first.created() && !first.definitionMismatch()
+					&& first.registry().fingerprint().equals(authoritative.fingerprint()),
+					"first thermal registry snapshot was not atomically published");
+			ThermalMaterialDefinition changed = material("test:thermal/store", "test:store", 1.0,
+					List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0)));
+			ThermalRegistryStore.LoadResult mismatch = store.loadOrCreate(new ThermalRegistry(List.of(changed)));
+			require(mismatch.definitionMismatch()
+					&& mismatch.registry().fingerprint().equals(authoritative.fingerprint()),
+					"changed thermal datapack reinterpreted the world snapshot");
+			java.nio.file.Files.writeString(root.resolve("realwater").resolve("thermal").resolve("foreign.bin"), "foreign");
+			try {
+				store.read();
+				throw new AssertionError("unknown thermal registry content was ignored");
+			} catch (java.io.IOException expected) { }
+		} catch (java.io.IOException failure) {
+			throw new AssertionError("thermal registry store validation failed", failure);
+		} finally {
+			if (root != null) try (var paths = java.nio.file.Files.walk(root)) {
+				for (java.nio.file.Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+					java.nio.file.Files.deleteIfExists(path);
+				}
+			} catch (java.io.IOException cleanup) {
+				throw new AssertionError("thermal registry store cleanup failed", cleanup);
+			}
+		}
 	}
 
 	private static void piecewiseStateFunctionRoundTrips() {
