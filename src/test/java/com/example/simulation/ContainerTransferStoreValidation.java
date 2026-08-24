@@ -102,11 +102,22 @@ public final class ContainerTransferStoreValidation {
 				prepared.actor(), before, after, 0x7711L, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(committed);
 		check(store.read(transaction).equals(committed), "committed thermal WAL v5 did not round-trip");
-		ContainerTransferJournal wrongEnergy = ContainerTransferJournal.thermalFluid(
+		ThermalContents.EnergySplit creativeSplit = contents.splitEnergy(500_000_000L,
+				ContainerFluidLedger.NANOS_PER_BLOCK);
+		double creativeEnergy = contents.internalEnergy() - creativeSplit.remainingEnergy();
+		ContainerTransferJournal creative = ContainerTransferJournal.thermalFluid(
 				UUID.randomUUID(), region, "minecraft:overworld", 8L, 9L,
+				ContainerTransferJournal.Operation.INSERT, 500_000_000L,
+				new ContainerTransferJournal.ThermalTransfer(fingerprint, creativeEnergy), committed.actor(),
+				before, before, 0x7712L, ContainerTransferJournal.Phase.REGION_COMMITTED);
+		store.write(creative);
+		check(store.read(creative.transactionId()).equals(creative),
+				"creative unchanged-item WAL did not preserve explicit external source energy");
+		ContainerTransferJournal wrongEnergy = ContainerTransferJournal.thermalFluid(
+				UUID.randomUUID(), region, "minecraft:overworld", 9L, 10L,
 				ContainerTransferJournal.Operation.INSERT, ContainerFluidLedger.NANOS_PER_BLOCK,
 				new ContainerTransferJournal.ThermalTransfer(fingerprint, energy + 1.0), committed.actor(),
-				before, after, 0x7712L, ContainerTransferJournal.Phase.REGION_COMMITTED);
+				before, after, 0x7713L, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		try {
 			store.write(wrongEnergy);
 			throw new AssertionError("Expected mismatched WAL v5 item/energy rejection");

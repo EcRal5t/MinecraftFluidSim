@@ -64,6 +64,7 @@ public final class M9ThermalValidation {
 		coherentPhaseInventoryAndExactBatchPlanning();
 		granularEnergyColumnTransactions();
 		exactDyadicAuditDoesNotLoseCancellationRemainders();
+		containerTransferCarriesAuthoritativeEnergy();
 		liquidTransportAndHandoffCloseEnergy();
 		fixedBoundaryAuditsAndFailedStepRollsBack();
 		reseedingMovesEnergyWithMarkerTruth();
@@ -709,6 +710,50 @@ public final class M9ThermalValidation {
 					== Double.doubleToRawLongBits(value == 0.0 ? 0.0 : value),
 					"dyadic conversion did not round-trip " + value);
 		}
+	}
+
+	private static void containerTransferCarriesAuthoritativeEnergy() {
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		ThermalMaterialDefinition water = new ThermalMaterialDefinition("realwater:thermal/container_water",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
+				300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 400.0, 4_000.0)));
+		ThermalRegistry registry = new ThermalRegistry(List.of(water));
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = new FlipFluidDomain(4, 3, 3, config, 512);
+		domain.setVolume(1, 1, 1, 0.125F);
+		domain.bindThermal(registry, liquids, 300.0);
+		domain.removeAllWaterExact();
+
+		double importedEnergy = 1_000.0 * 4_000.0 * 20.0;
+		FlipFluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(
+				1, 1, 1, 1.0F, 1, 0, false, importedEnergy);
+		require(inserted.transferred() && close(inserted.internalEnergy(), importedEnergy)
+				&& close(domain.thermalTemperatureInCell(1, 1, 1), 320.0)
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"explicit container insertion did not assign item U through the state function");
+
+		FlipFluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(1, 1, 1, 1.0F, 1, 0);
+		require(extracted.transferred() && close(extracted.internalEnergy(), importedEnergy)
+				&& domain.particleCount() == 0 && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"container extraction did not return the exact removed marker energy");
+		FlipFluidDomain.ExactVolumeTransfer restored = domain.tryInsertExactVolume(
+				1, 1, 1, 1.0F, 1, 0, false, extracted.internalEnergy());
+		require(restored.transferred() && close(domain.thermalTemperatureInCell(1, 1, 1), 320.0)
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"container energy did not survive an extract/reinsert round trip");
+
+		FlipFluidDomain.MaterialDisplacement collision = domain.setSolidMicroMaskMaterial(1, 1, 1, 0xff);
+		require(close(collision.internalEnergy(), importedEnergy) && collision.portions().size() == 1
+				&& domain.particleCount() == 0,
+				"collision displacement did not carry the removed material energy ledger");
+		domain.setSolidMicroMaskMaterial(1, 1, 1, 0);
+		FlipFluidDomain.ExactMixtureTransfer relocated = domain.tryInsertExactMixture(
+				1, 1, 1, collision.portions(), 1, false, collision.internalEnergy());
+		require(relocated.transferred() && close(domain.thermalTemperatureInCell(1, 1, 1), 320.0)
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"collision relocation did not restore material U without a guessed temperature");
 	}
 
 	private static void granularEnergyColumnTransactions() {

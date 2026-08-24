@@ -3,6 +3,7 @@ package com.example.simulation;
 import com.example.chemistry.ChemicalTransferLedger;
 import com.example.fluid.FlipFluidDomain;
 import com.example.simulation.controller.FluidRegionFootprint;
+import com.example.thermal.SignedDyadic;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
@@ -131,6 +132,11 @@ final class FluidRegionWorldInteraction {
 					VoxelShape shape = fullBlock ? Shapes.block() : state.getCollisionShape(level, pos);
 					float displacedInBlock = 0.0F;
 					ChemicalTransferLedger displacedChemistry = ChemicalTransferLedger.EMPTY;
+					double[] displacedMaterialVolume = domain.hasMaterialState() && !domain.hasChemistryState()
+							? new double[domain.materialRegistry().size()] : null;
+					double[] displacedMaterialMass = displacedMaterialVolume == null ? null
+							: new double[displacedMaterialVolume.length];
+					SignedDyadic displacedEnergy = SignedDyadic.ZERO;
 
 					for (int localZ = 0; localZ < cellsPerBlock; localZ++) {
 						for (int localY = 0; localY < cellsPerBlock; localY++) {
@@ -147,6 +153,16 @@ final class FluidRegionWorldInteraction {
 											cellX, cellY, cellZ, desired);
 									displacedInBlock += chemical.volume();
 									displacedChemistry = displacedChemistry.plus(chemical.ledger());
+									displacedEnergy = displacedEnergy.add(SignedDyadic.of(chemical.internalEnergy()));
+								} else if (displacedMaterialVolume != null) {
+									FlipFluidDomain.MaterialDisplacement material = domain.setSolidMicroMaskMaterial(
+											cellX, cellY, cellZ, desired);
+									displacedInBlock += material.volume();
+									for (FlipFluidDomain.MaterialPortion portion : material.portions()) {
+										displacedMaterialVolume[portion.materialHandle()] += portion.volume();
+										displacedMaterialMass[portion.materialHandle()] += portion.mass();
+									}
+									displacedEnergy = displacedEnergy.add(SignedDyadic.of(material.internalEnergy()));
 								} else {
 									displacedInBlock += domain.setSolidMicroMask(cellX, cellY, cellZ, desired);
 								}
@@ -160,19 +176,40 @@ final class FluidRegionWorldInteraction {
 						int centerX = blockX * cellsPerBlock + cellsPerBlock / 2;
 						int centerY = blockY * cellsPerBlock + cellsPerBlock / 2;
 						int centerZ = blockZ * cellsPerBlock + cellsPerBlock / 2;
-						restorations.add(new Displacement(
-								centerX, centerY, centerZ, displacedInBlock, displacedChemistry));
+						List<FlipFluidDomain.MaterialPortion> displacedMaterials = new ArrayList<>();
+						if (displacedMaterialVolume != null) for (int material = 0;
+								material < displacedMaterialVolume.length; material++) {
+							if (displacedMaterialVolume[material] > 0.0 && displacedMaterialMass[material] > 0.0) {
+								displacedMaterials.add(new FlipFluidDomain.MaterialPortion(material,
+										displacedMaterialVolume[material], displacedMaterialMass[material]));
+							}
+						}
+						restorations.add(new Displacement(centerX, centerY, centerZ, displacedInBlock,
+								displacedChemistry, List.copyOf(displacedMaterials), displacedEnergy.toDouble()));
 					}
 				}
 			}
 		}
 		for (Displacement request : restorations) {
 			if (domain.hasChemistryState()) {
-				FlipFluidDomain.ExactChemicalTransfer restoration = domain.tryInsertExactChemical(
-						request.centerX(), request.centerY(), request.centerZ(), request.chemistry(), 8);
+				FlipFluidDomain.ExactChemicalTransfer restoration = domain.hasThermalState()
+						? domain.tryInsertExactChemical(request.centerX(), request.centerY(), request.centerZ(),
+								request.chemistry(), 8, false, request.internalEnergy())
+						: domain.tryInsertExactChemical(request.centerX(), request.centerY(), request.centerZ(),
+								request.chemistry(), 8);
 				if (!restoration.transferred()) {
 					escaped += request.volume();
 					domain.chemicalParcels().recordEscapedSink(request.chemistry());
+					markerBudgetLimited |= domain.particleCount() >= domain.maximumParticleCount();
+				}
+			} else if (domain.hasMaterialState()) {
+				FlipFluidDomain.ExactMixtureTransfer restoration = domain.hasThermalState()
+						? domain.tryInsertExactMixture(request.centerX(), request.centerY(), request.centerZ(),
+								request.materials(), 8, false, request.internalEnergy())
+						: domain.tryInsertExactMixture(request.centerX(), request.centerY(), request.centerZ(),
+								request.materials(), 8);
+				if (!restoration.transferred()) {
+					escaped += request.volume();
 					markerBudgetLimited |= domain.particleCount() >= domain.maximumParticleCount();
 				}
 			} else {
@@ -219,6 +256,7 @@ final class FluidRegionWorldInteraction {
 	}
 
 	private record Displacement(
-			int centerX, int centerY, int centerZ, float volume, ChemicalTransferLedger chemistry
+			int centerX, int centerY, int centerZ, float volume, ChemicalTransferLedger chemistry,
+			List<FlipFluidDomain.MaterialPortion> materials, double internalEnergy
 	) { }
 }

@@ -485,6 +485,23 @@ public final class FluidSimulationService {
 	private void processContainerTransfer(MinecraftServer server, UUID transactionId) {
 		try {
 			ContainerTransferJournal journal = containerTransfers.read(transactionId);
+			if (journal.requiresThermalRegistry()) {
+				if (!thermalFeatureEnabled || thermalRegistry == null) {
+					logContainerTransferLockOnce(transactionId,
+							"Container transfer WAL " + transactionId
+									+ " remains locked: thermal recovery requires the enabled authoritative world registry");
+					return;
+				}
+				try {
+					journal.validateThermalRegistry(thermalRegistry.fingerprint());
+				} catch (RuntimeException foreignRegistry) {
+					logContainerTransferLockOnce(transactionId,
+							"Container transfer WAL " + transactionId
+									+ " remains locked: thermal item registry identity is foreign or invalid ("
+									+ foreignRegistry.getMessage() + ")");
+					return;
+				}
+			}
 			if (journal.requiresGranularRegistry()) {
 				if (!granularFeatureEnabled || granularRegistry == null) {
 					logContainerTransferLockOnce(transactionId,
@@ -727,6 +744,10 @@ public final class FluidSimulationService {
 	public boolean precipitationFeatureEnabled() { return precipitationFeatureEnabled; }
 	public boolean thermalFeatureEnabled() { return thermalFeatureEnabled; }
 	public boolean phaseChangeFeatureEnabled() { return phaseChangeFeatureEnabled; }
+	String thermalRegistryFingerprint() {
+		if (thermalRegistry == null) throw new IllegalStateException("Authoritative thermal registry is unavailable");
+		return thermalRegistry.fingerprint();
+	}
 	public GranularRegistry granularRegistry() {
 		if (granularRegistry == null) throw new IllegalStateException("Authoritative granular registry is unavailable");
 		return granularRegistry;

@@ -536,7 +536,18 @@ double before = beforeThermal
 ? com.example.item.ThermalContents.decode(journal.beforeItem().thermalContents()).internalEnergy() : 0.0;
 double after = afterThermal
 ? com.example.item.ThermalContents.decode(journal.afterItem().thermalContents()).internalEnergy() : 0.0;
-double moved = journal.operation() == ContainerTransferJournal.Operation.INSERT ? before - after : after - before;
+double moved;
+if (journal.operation() == ContainerTransferJournal.Operation.INSERT
+&& journal.beforeItem().equals(journal.afterItem())) {
+long total = Math.max(pureVolume(journal.beforeItem()), materialVolume(journal.beforeItem()));
+if (total <= 0L) throw new IOException("Unchanged thermal source item has no liquid volume");
+com.example.item.ThermalContents source = com.example.item.ThermalContents.decode(
+journal.beforeItem().thermalContents());
+com.example.item.ThermalContents.EnergySplit split = source.splitEnergy(journal.volumeNanos(), total);
+moved = source.internalEnergy() - split.remainingEnergy();
+} else {
+moved = journal.operation() == ContainerTransferJournal.Operation.INSERT ? before - after : after - before;
+}
 if (Double.doubleToRawLongBits(moved) != transfer.internalEnergyBits()) {
 throw new IOException("Container transfer item energy delta does not match WAL coupled energy");
 }

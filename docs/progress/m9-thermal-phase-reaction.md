@@ -293,3 +293,23 @@ gas 压力也改读非等温派生值。
 
 最近门：`thermal,lifecycle,chemistry,granular,gas-liquid,region-state` 通过。composition-bearing liquid 与同格 granular
 heat bath 的相变仍显式 fail-closed，等待 exact species/LTE joint plan，不会静默丢 species 或借 carrier ID 特判。
+
+## M9.22 production container and collision energy transfer
+
+液体 exact transfer 现在把总 `U` 作为体积、质量/组成之外的独立返回账本。注入可显式接收 item/collision 携带的
+raw `U`，并在任何 marker 落地前用 prospective 完整库存求解 LTE 与状态函数有效域；提交时一次写入 energy ordinals，
+不可表示的温度或预算拒绝保持零残留。舀取按实际 marker truncation 返回被移出的能量，不从 tooltip 或环境温度反算。
+
+玩家和发射器的 production 路径严格验证 `ThermalContents v1` 与 world fingerprint。部分纯水、材料混合物和化学桶都按
+实际 nanovolume 同时结算 underlying inventory 与 `U`；热区域拒绝缺失、损坏或 foreign thermal identity，非热区域也拒绝
+吞掉带热真值的物品。controller 事务实际发布 WAL v5：PREPARED 保存注入请求上限能量或舀取占位，solver 后的
+REGION_COMMITTED 保存实际 coupled energy、after item 与 v6 checkpoint checksum，HEAD 和 actor durable save 顺序不变。
+恢复在 HEAD 判定前验证 authoritative thermal registry；创造放出沿用 unchanged after-item 表达并由 WAL 明确认作外部 source。
+
+物品总能量只有一个 IEEE-754 raw double；部分桶与 carrier dyadic 和之间出现不可避免的 1 ulp 时，WAL 采用物品侧真实
+`after-before`，区域 audit 把差值单独记为 roundoff，禁止伪装 source/sink。容器事件精确唤醒 thermal activity。
+Minecraft collision relocation 也在既有删除循环中同步累计逐材料体积/质量、完整 chemical ledger 与液体 `U`，再用同一
+exact insertion 原语恢复；失败才保留 escaped sink。该路径不再扫描全域 marker，也修正了非化学尾 marker 被整颗删除却只
+报告部分体积的旧结算边角。
+
+最近门：`thermal,containers,chemistry,shape` 通过；尚未请求实机。

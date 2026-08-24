@@ -368,6 +368,10 @@ public final class FlipFluidDomain {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		return thermalState.audit();
 	}
+	public void settleExternalContainerExtraction(double removedCarrierEnergy, double coupledItemEnergy) {
+		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		thermalState.settleExternalExtraction(removedCarrierEnergy, coupledItemEnergy);
+	}
 	public double totalInternalEnergy() {
 		return thermalState == null ? 0.0 : thermalState.totalEnergy(particleCount);
 	}
@@ -2091,7 +2095,7 @@ public final class FlipFluidDomain {
 	public float setSolidMicroMask(int x, int y, int z, int mask) {
 		ChemicalTransferLedger.Builder displaced = chemicalParcels == null ? null
 				: ChemicalTransferLedger.builder(chemicalParcels.registry());
-		float volume = setSolidMicroMaskInternal(x, y, z, mask, displaced);
+		float volume = setSolidMicroMaskInternal(x, y, z, mask, displaced, null, null);
 		if (displaced != null) chemicalParcels.recordEscapedSink(displaced.build());
 		return volume;
 	}
@@ -2114,12 +2118,25 @@ public final class FlipFluidDomain {
 	public ChemicalDisplacement setSolidMicroMaskChemical(int x, int y, int z, int mask) {
 		if (chemicalParcels == null) throw new IllegalStateException("Chemical collision transfer requires chemistry");
 		ChemicalTransferLedger.Builder displaced = ChemicalTransferLedger.builder(chemicalParcels.registry());
-		float volume = setSolidMicroMaskInternal(x, y, z, mask, displaced);
-		return new ChemicalDisplacement(volume, displaced.build());
+		RemovedThermalEnergy energy = new RemovedThermalEnergy();
+		float volume = setSolidMicroMaskInternal(x, y, z, mask, displaced, null, energy);
+		return new ChemicalDisplacement(volume, displaced.build(), energy.value().toDouble());
+	}
+
+	/** Collision edit that returns every displaced material ledger plus its independently carried U. */
+	public MaterialDisplacement setSolidMicroMaskMaterial(int x, int y, int z, int mask) {
+		if (materialRegistry == null || chemicalParcels != null) {
+			throw new IllegalStateException("Material collision transfer requires non-chemical material state");
+		}
+		RemovedMaterialLedger material = new RemovedMaterialLedger(materialRegistry.size());
+		RemovedThermalEnergy energy = new RemovedThermalEnergy();
+		float volume = setSolidMicroMaskInternal(x, y, z, mask, null, material, energy);
+		return new MaterialDisplacement(volume, material.build(), energy.value().toDouble());
 	}
 
 	private float setSolidMicroMaskInternal(
-			int x, int y, int z, int mask, ChemicalTransferLedger.Builder chemicalDisplacement
+			int x, int y, int z, int mask, ChemicalTransferLedger.Builder chemicalDisplacement,
+			RemovedMaterialLedger materialDisplacement, RemovedThermalEnergy thermalDisplacement
 	) {
 		int index = cellIndexChecked(x, y, z);
 		int previous = cutCells.mask(index);
@@ -2143,9 +2160,11 @@ public final class FlipFluidDomain {
 		solid[index] = mask == FlipCutCellGeometry.FULL_MASK;
 		pressure[index] = 0.0F;
 		float displaced = newlyOccupied == 0 ? 0.0F
-				: removeParticlesInMicroMask(x, y, z, newlyOccupied, chemicalDisplacement);
+				: removeParticlesInMicroMask(x, y, z, newlyOccupied, chemicalDisplacement,
+						materialDisplacement, thermalDisplacement);
 		float excess = Math.max(0.0F, exactVolumeInCell(x, y, z) - effectiveOpenCellVolume(index));
-		if (excess > 1.0E-6F) displaced += removeParticlesInCell(x, y, z, excess, chemicalDisplacement);
+		if (excess > 1.0E-6F) displaced += removeParticlesInCell(x, y, z, excess, chemicalDisplacement,
+				materialDisplacement, thermalDisplacement);
 		volume[index] = 0.0F;
 		if (granularDepositDynamics != null) granularDepositDynamics.disturbCell(index);
 		gridDirty = true;
@@ -2662,12 +2681,29 @@ public final class FlipFluidDomain {
 			int centerX, int centerY, int centerZ, float volume, int maxRadius, int materialHandle,
 			boolean externalSource
 	) {
+		return tryInsertExactVolume(centerX, centerY, centerZ, volume, maxRadius, materialHandle,
+				externalSource, null);
+	}
+
+	public ExactVolumeTransfer tryInsertExactVolume(
+			int centerX, int centerY, int centerZ, float volume, int maxRadius, int materialHandle,
+			boolean externalSource, double internalEnergy
+	) {
+		return tryInsertExactVolume(centerX, centerY, centerZ, volume, maxRadius, materialHandle,
+				externalSource, Double.valueOf(internalEnergy));
+	}
+
+	private ExactVolumeTransfer tryInsertExactVolume(
+			int centerX, int centerY, int centerZ, float volume, int maxRadius, int materialHandle,
+			boolean externalSource, Double internalEnergy
+	) {
 		validateVolumeEdit(volume, maxRadius);
 		if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0, 0.0);
 		double mass = materialRegistry == null
 				? (double) volume * config.density()
 				: (double) volume * materialRegistry.material(materialHandle).referenceDensity();
-		return tryInsertExactMaterial(centerX, centerY, centerZ, volume, mass, maxRadius, materialHandle, externalSource);
+		return tryInsertExactMaterial(centerX, centerY, centerZ, volume, mass, maxRadius, materialHandle,
+				externalSource, internalEnergy);
 	}
 
 	/** Inserts independent material volume and mass ledgers without deriving either from the other. */
@@ -2681,12 +2717,20 @@ public final class FlipFluidDomain {
 			int centerX, int centerY, int centerZ, float volume, double mass, int maxRadius, int materialHandle,
 			boolean externalSource
 	) {
+		return tryInsertExactMaterial(centerX, centerY, centerZ, volume, mass, maxRadius, materialHandle,
+				externalSource, null);
+	}
+
+	private ExactVolumeTransfer tryInsertExactMaterial(
+			int centerX, int centerY, int centerZ, float volume, double mass, int maxRadius, int materialHandle,
+			boolean externalSource, Double internalEnergy
+	) {
 		if (volume == 0.0F && mass == 0.0) return new ExactVolumeTransfer(true, 0.0, 0.0);
 		ExactMixtureTransfer transfer = tryInsertExactMixture(centerX, centerY, centerZ,
-				List.of(new MaterialPortion(materialHandle, volume, mass)), maxRadius, externalSource);
+				List.of(new MaterialPortion(materialHandle, volume, mass)), maxRadius, externalSource, internalEnergy);
 		return transfer.transferred()
 				? new ExactVolumeTransfer(true, transfer.portions().getFirst().volume(),
-						transfer.portions().getFirst().mass())
+						transfer.portions().getFirst().mass(), transfer.internalEnergy())
 				: new ExactVolumeTransfer(false, 0.0, 0.0);
 	}
 
@@ -2700,6 +2744,21 @@ public final class FlipFluidDomain {
 	public ExactMixtureTransfer tryInsertExactMixture(
 			int centerX, int centerY, int centerZ, List<MaterialPortion> portions, int maxRadius,
 			boolean externalSource
+	) {
+		return tryInsertExactMixture(centerX, centerY, centerZ, portions, maxRadius, externalSource, null);
+	}
+
+	public ExactMixtureTransfer tryInsertExactMixture(
+			int centerX, int centerY, int centerZ, List<MaterialPortion> portions, int maxRadius,
+			boolean externalSource, double internalEnergy
+	) {
+		return tryInsertExactMixture(centerX, centerY, centerZ, portions, maxRadius, externalSource,
+				Double.valueOf(internalEnergy));
+	}
+
+	private ExactMixtureTransfer tryInsertExactMixture(
+			int centerX, int centerY, int centerZ, List<MaterialPortion> portions, int maxRadius,
+			boolean externalSource, Double internalEnergy
 	) {
 		if (portions == null || portions.isEmpty()) throw new IllegalArgumentException("Mixture insertion is empty");
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
@@ -2793,19 +2852,27 @@ public final class FlipFluidDomain {
 				return new ExactMixtureTransfer(false, List.of());
 			}
 		}
-		for (MaterialInsertPiece piece : insertPieces) {
-			if (piece.chemical() == null) spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), piece.slot(),
-					piece.volume(), piece.materialHandle(), piece.mass());
-			else spawnChemicalParticle(piece.cellX(), piece.cellY(), piece.cellZ(), piece.slot(), piece.volume(),
-					piece.materialHandle(), piece.mass(), piece.chemical(), false);
+		FlipThermalState.ExternalLiquidInsertionPlan thermalPlan = null;
+		if (thermalState != null && internalEnergy != null) {
+			List<FlipThermalState.LiquidInsertion> thermalInsertions = new ArrayList<>(insertPieces.size());
+			for (MaterialInsertPiece piece : insertPieces) thermalInsertions.add(new FlipThermalState.LiquidInsertion(
+					piece.materialHandle(), piece.mass(), piece.chemical()));
+			thermalPlan = thermalState.planExternalLiquidInsertions(thermalInsertions, internalEnergy,
+					thermalMarkerContext());
 		}
+		int firstInsertedOrdinal = particleCount;
+		for (MaterialInsertPiece piece : insertPieces) {
+			spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), piece.slot(), piece.volume(),
+					piece.materialHandle(), piece.mass(), piece.chemical(), false, thermalPlan == null);
+		}
+		if (thermalPlan != null) thermalState.commitExternalLiquidInsertions(firstInsertedOrdinal, thermalPlan);
 		if (!externalAddition.isEmpty()) chemicalParcels.recordExternalSource(externalAddition);
 		gridDirty = true;
 		List<MaterialPortion> result = new java.util.ArrayList<>(portions.size());
 		for (int i = 0; i < portions.size(); i++) {
 			result.add(new MaterialPortion(portions.get(i).materialHandle(), inserted[i], insertedMass[i]));
 		}
-		return new ExactMixtureTransfer(true, List.copyOf(result));
+		return new ExactMixtureTransfer(true, List.copyOf(result), internalEnergy == null ? 0.0 : internalEnergy);
 	}
 
 	/** Plans and restores an exact chemical ledger without substituting a default carrier. */
@@ -2818,6 +2885,21 @@ public final class FlipFluidDomain {
 	public ExactChemicalTransfer tryInsertExactChemical(
 			int centerX, int centerY, int centerZ, ChemicalTransferLedger ledger, int maxRadius,
 			boolean externalSource
+	) {
+		return tryInsertExactChemical(centerX, centerY, centerZ, ledger, maxRadius, externalSource, null);
+	}
+
+	public ExactChemicalTransfer tryInsertExactChemical(
+			int centerX, int centerY, int centerZ, ChemicalTransferLedger ledger, int maxRadius,
+			boolean externalSource, double internalEnergy
+	) {
+		return tryInsertExactChemical(centerX, centerY, centerZ, ledger, maxRadius, externalSource,
+				Double.valueOf(internalEnergy));
+	}
+
+	private ExactChemicalTransfer tryInsertExactChemical(
+			int centerX, int centerY, int centerZ, ChemicalTransferLedger ledger, int maxRadius,
+			boolean externalSource, Double internalEnergy
 	) {
 		if (chemicalParcels == null) throw new IllegalStateException("Chemical insertion requires chemistry");
 		if (ledger == null || ledger.isEmpty()) return new ExactChemicalTransfer(ledger != null, ChemicalTransferLedger.EMPTY);
@@ -2904,15 +2986,25 @@ public final class FlipFluidDomain {
 		} catch (IllegalArgumentException | ArithmeticException refusedAudit) {
 			return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		}
+		FlipThermalState.ExternalLiquidInsertionPlan thermalPlan = null;
+		if (thermalState != null && internalEnergy != null) {
+			List<FlipThermalState.LiquidInsertion> thermalInsertions = new ArrayList<>(pieces.size());
+			for (ChemicalInsertPiece piece : pieces) thermalInsertions.add(new FlipThermalState.LiquidInsertion(
+					piece.materialHandle(), piece.mass(), piece.mixture()));
+			thermalPlan = thermalState.planExternalLiquidInsertions(thermalInsertions, internalEnergy,
+					thermalMarkerContext());
+		}
+		int firstInsertedOrdinal = particleCount;
 		for (ChemicalInsertPiece piece : pieces) {
 			int slot = firstOpenSlot(cellIndex(piece.cellX(), piece.cellY(), piece.cellZ()), 0);
 			if (slot < 0) throw new IllegalStateException("Chemical insertion lost its planned open slot");
-			spawnChemicalParticle(piece.cellX(), piece.cellY(), piece.cellZ(), slot, piece.volume(),
-					piece.materialHandle(), piece.mass(), piece.mixture(), piece.indicator());
+			spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), slot, piece.volume(),
+					piece.materialHandle(), piece.mass(), piece.mixture(), piece.indicator(), thermalPlan == null);
 		}
+		if (thermalPlan != null) thermalState.commitExternalLiquidInsertions(firstInsertedOrdinal, thermalPlan);
 		if (externalSource) chemicalParcels.recordExternalSource(ledger);
 		gridDirty = true;
-		return new ExactChemicalTransfer(true, ledger);
+		return new ExactChemicalTransfer(true, ledger, internalEnergy == null ? 0.0 : internalEnergy);
 	}
 
 	/** All-or-nothing extraction of full species/residual/indicator truth for a chemical container. */
@@ -2984,7 +3076,9 @@ public final class FlipFluidDomain {
 		}
 		for (int marker = particleCount - 1; marker >= 0; marker--) if (particleVolume[marker] == 0.0F) removeParticle(marker);
 		gridDirty = true;
-		return new ExactChemicalTransfer(true, removed);
+		double removedEnergy = thermalState == null ? 0.0 : SignedDyadic.sum(plan.stream()
+				.mapToDouble(allocation -> allocation.thermalPlan().removedEnergy()).toArray()).toDouble();
+		return new ExactChemicalTransfer(true, removed, removedEnergy);
 	}
 
 	/**
@@ -3004,7 +3098,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			centerX, centerY, centerZ, volume, maxRadius, materialHandle);
 	if (!transfer.transferred()) return new ExactVolumeTransfer(false, 0.0, 0.0);
 	MaterialPortion portion = transfer.portions().getFirst();
-	return new ExactVolumeTransfer(true, portion.volume(), portion.mass());
+	return new ExactVolumeTransfer(true, portion.volume(), portion.mass(), transfer.internalEnergy());
 }
 
 	/** Extracts nearby materials in deterministic cell/marker order and returns every component. */
@@ -3110,7 +3204,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				result.add(new MaterialPortion(handle, removedVolume, removedMass));
 			}
 		}
-		return new ExactMixtureTransfer(true, List.copyOf(result));
+		double removedEnergy = thermalState == null ? 0.0 : SignedDyadic.sum(plan.stream()
+				.mapToDouble(allocation -> allocation.thermalPlan().removedEnergy()).toArray()).toDouble();
+		return new ExactMixtureTransfer(true, List.copyOf(result), removedEnergy);
 }
 	private record InsertAllocation(
 			int x, int y, int z, double amount, int materialHandle, int portionIndex
@@ -3128,11 +3224,51 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			int particle, float newVolume, double newMass, ChemicalParcelStore.SplitPlan chemicalPlan,
 			FlipThermalState.Truncation thermalPlan
 	) { }
+	private static final class RemovedMaterialLedger {
+		private final double[] volume;
+		private final double[] mass;
+		private RemovedMaterialLedger(int materialCount) {
+			volume = new double[materialCount]; mass = new double[materialCount];
+		}
+		private void add(int material, double addedVolume, double addedMass) {
+			volume[material] += addedVolume; mass[material] += addedMass;
+		}
+		private List<MaterialPortion> build() {
+			ArrayList<MaterialPortion> result = new ArrayList<>();
+			for (int material = 0; material < volume.length; material++) if (volume[material] > 0.0) {
+				if (!(Double.isFinite(mass[material]) && mass[material] > 0.0)) {
+					throw new IllegalStateException("Displaced material has no positive finite mass");
+				}
+				result.add(new MaterialPortion(material, volume[material], mass[material]));
+			}
+			return List.copyOf(result);
+		}
+	}
+	private static final class RemovedThermalEnergy {
+		private SignedDyadic value = SignedDyadic.ZERO;
+		private void add(double energy) { value = value.add(SignedDyadic.of(energy)); }
+		private SignedDyadic value() { return value; }
+	}
 
-	public record ExactVolumeTransfer(boolean transferred, double volume, double mass) { }
-	public record ExactMixtureTransfer(boolean transferred, List<MaterialPortion> portions) { }
-	public record ExactChemicalTransfer(boolean transferred, ChemicalTransferLedger ledger) { }
-	public record ChemicalDisplacement(float volume, ChemicalTransferLedger ledger) { }
+	public record ExactVolumeTransfer(boolean transferred, double volume, double mass, double internalEnergy) {
+		public ExactVolumeTransfer(boolean transferred, double volume, double mass) {
+			this(transferred, volume, mass, 0.0);
+		}
+	}
+	public record ExactMixtureTransfer(boolean transferred, List<MaterialPortion> portions, double internalEnergy) {
+		public ExactMixtureTransfer(boolean transferred, List<MaterialPortion> portions) {
+			this(transferred, portions, 0.0);
+		}
+	}
+	public record ExactChemicalTransfer(boolean transferred, ChemicalTransferLedger ledger, double internalEnergy) {
+		public ExactChemicalTransfer(boolean transferred, ChemicalTransferLedger ledger) {
+			this(transferred, ledger, 0.0);
+		}
+	}
+	public record ChemicalDisplacement(float volume, ChemicalTransferLedger ledger, double internalEnergy) {
+		public ChemicalDisplacement(float volume, ChemicalTransferLedger ledger) { this(volume, ledger, 0.0); }
+	}
+	public record MaterialDisplacement(float volume, List<MaterialPortion> portions, double internalEnergy) { }
 	public record MaterialPortion(int materialHandle, double volume, double mass) { }
 
 	public StepStats step() { return step(false, 0); }
@@ -5089,6 +5225,14 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			int cellX, int cellY, int cellZ, float maximum,
 			ChemicalTransferLedger.Builder removedChemistry
 	) {
+		return removeParticlesInCell(cellX, cellY, cellZ, maximum, removedChemistry, null, null);
+	}
+
+	private float removeParticlesInCell(
+			int cellX, int cellY, int cellZ, float maximum,
+			ChemicalTransferLedger.Builder removedChemistry,
+			RemovedMaterialLedger removedMaterials, RemovedThermalEnergy removedThermal
+	) {
 		float h = config.cellSize(), removed = 0.0F;
 		for (int i = particleCount - 1; i >= 0 && removed < maximum; i--) {
 			if ((int) Math.floor(particleX[i] / h) != cellX || (int) Math.floor(particleY[i] / h) != cellY || (int) Math.floor(particleZ[i] / h) != cellZ) continue;
@@ -5097,7 +5241,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			double previousMass = particleMass[i];
 			double previousTemperature = thermalState == null ? Double.NaN : thermalMarkerTemperature(i);
 			float newVolume = previousVolume - take;
-			if (chemicalParcels != null && newVolume <= 1.0E-6F) {
+			if (newVolume <= 1.0E-6F) {
 				take = previousVolume;
 				newVolume = 0.0F;
 			}
@@ -5116,6 +5260,9 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			}
 			FlipThermalState.Truncation thermalPlan = planThermalTruncate(i, newMass,
 					chemicalPlan == null ? null : chemicalPlan.kept(), previousTemperature);
+			if (removedMaterials != null) removedMaterials.add(
+					particleMaterialHandle[i], take, previousMass - newMass);
+			if (removedThermal != null && thermalPlan != null) removedThermal.add(thermalPlan.removedEnergy());
 			particleVolume[i] = newVolume;
 			particleMass[i] = newMass;
 			commitThermalTruncate(i, thermalPlan);
@@ -5127,7 +5274,8 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 
 	private float removeParticlesInMicroMask(
 			int cellX, int cellY, int cellZ, int microMask,
-			ChemicalTransferLedger.Builder removedChemistry
+			ChemicalTransferLedger.Builder removedChemistry,
+			RemovedMaterialLedger removedMaterials, RemovedThermalEnergy removedThermal
 	) {
 		float h = config.cellSize(), removed = 0.0F;
 		for (int particle = particleCount - 1; particle >= 0; particle--) {
@@ -5145,6 +5293,11 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			if (chemicalParcels != null && removedChemistry != null) removedChemistry.add(
 					materialRegistry.material(particleMaterialHandle[particle]).id(), chemicalParcels.indicator(particle),
 					particleVolume[particle], particleMass[particle], chemicalParcels.record(particle));
+			if (removedMaterials != null) removedMaterials.add(particleMaterialHandle[particle],
+					particleVolume[particle], particleMass[particle]);
+			if (removedThermal != null && thermalState != null) {
+				removedThermal.add(thermalState.liquidInternalEnergy(particle));
+			}
 			removed += particleVolume[particle];
 			removeParticle(particle);
 		}

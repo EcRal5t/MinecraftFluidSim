@@ -63,6 +63,22 @@ final class FlipThermalState {
 			}
 		}
 	}
+	record LiquidInsertion(int fluidMaterialHandle, double mass, ChemicalMixtureRecord mixture) {
+		LiquidInsertion {
+			if (fluidMaterialHandle < 0 || !(Double.isFinite(mass) && mass > 0.0)) {
+				throw new IllegalArgumentException("Thermal liquid insertion inventory is invalid");
+			}
+		}
+	}
+	record ExternalLiquidInsertionPlan(double[] energies, SignedDyadic source, SignedDyadic roundoff) {
+		ExternalLiquidInsertionPlan {
+			if (energies == null || energies.length == 0 || source == null || roundoff == null) {
+				throw new IllegalArgumentException("Thermal liquid insertion plan is incomplete");
+			}
+			energies = energies.clone();
+		}
+		@Override public double[] energies() { return energies.clone(); }
+	}
 	enum GranularReactionKind { ADD_ACTIVE, REPLACE_ACTIVE, REMOVE_ACTIVE, REPLACE_DEPOSIT, REMOVE_DEPOSIT }
 
 	record ReactionMarker(int marker, double mass, ChemicalMixtureRecord mixture) {
@@ -248,6 +264,9 @@ final class FlipThermalState {
 	SignedDyadic exactEnergy(int count) {
 		return SignedDyadic.sum(Arrays.copyOf(internalEnergy, count)).add(coherentPhases.exactEnergy())
 				.add(granularEnergy.exactEnergy()).add(SignedDyadic.sum(gasNodeEnergy));
+	}
+	SignedDyadic exactLiquidEnergy(int count) {
+		return SignedDyadic.sum(Arrays.copyOf(internalEnergy, count));
 	}
 
 	void ensureCapacity(int capacity) {
@@ -617,12 +636,59 @@ final class FlipThermalState {
 		audit = audit.withExternalSourceEnergy(SignedDyadic.of(internalEnergy[marker]));
 	}
 
+	ExternalLiquidInsertionPlan planExternalLiquidInsertions(
+			List<LiquidInsertion> insertions, double totalEnergy, MarkerContext markers
+	) {
+		if (insertions == null || insertions.isEmpty() || !Double.isFinite(totalEnergy)) {
+			throw new IllegalArgumentException("Explicit thermal liquid insertion is invalid");
+		}
+		ArrayList<ThermalStateFunction.InventoryPortion> inventory = new ArrayList<>(insertions.size());
+		for (LiquidInsertion insertion : insertions) {
+			if (insertion.fluidMaterialHandle() >= materialByFluidHandle.length) {
+				throw new IllegalArgumentException("Unknown fluid material in thermal insertion");
+			}
+			inventory.add(new ThermalStateFunction.InventoryPortion(
+					materialByFluidHandle[insertion.fluidMaterialHandle()], insertion.mass(),
+					stableAmounts(insertion.mixture(), markers.chemicalRegistry())));
+		}
+		double temperatureK = stateFunction.stateForInventory(inventory, totalEnergy).temperatureK();
+		double[] energies = new double[insertions.size()];
+		for (int index = 0; index < energies.length; index++) {
+			LiquidInsertion insertion = insertions.get(index);
+			energies[index] = modeledEnergy(insertion.fluidMaterialHandle(), insertion.mass(),
+					insertion.mixture(), temperatureK, markers.chemicalRegistry());
+		}
+		SignedDyadic source = SignedDyadic.of(totalEnergy);
+		return new ExternalLiquidInsertionPlan(energies, source, SignedDyadic.sum(energies).subtract(source));
+	}
+
+	void commitExternalLiquidInsertions(int firstOrdinal, ExternalLiquidInsertionPlan plan) {
+		if (plan == null || firstOrdinal < 0 || firstOrdinal + plan.energies.length > internalEnergy.length) {
+			throw new IllegalArgumentException("Thermal liquid insertion ordinals are incompatible");
+		}
+		for (int index = 0; index < plan.energies.length; index++) {
+			int ordinal = firstOrdinal + index;
+			if (Double.doubleToRawLongBits(internalEnergy[ordinal]) != Double.doubleToRawLongBits(0.0)) {
+				throw new IllegalStateException("Explicit thermal insertion did not reserve an empty energy ordinal");
+			}
+			internalEnergy[ordinal] = plan.energies[index];
+		}
+		audit = audit.withExternalSourceEnergy(plan.source()).withRoundoff(plan.roundoff());
+	}
+
 	void removeExternalAndSwap(int index, int last) {
 		audit = audit.withExternalSinkEnergy(SignedDyadic.of(internalEnergy[index]));
 		if (index != last) internalEnergy[index] = internalEnergy[last];
 	}
 
 	void recordExternalSink(SignedDyadic energy) { audit = audit.withExternalSinkEnergy(energy); }
+	void settleExternalExtraction(double removedCarrierEnergy, double coupledItemEnergy) {
+		if (!Double.isFinite(removedCarrierEnergy) || !Double.isFinite(coupledItemEnergy)) {
+			throw new IllegalArgumentException("Container thermal settlement is not finite");
+		}
+		SignedDyadic delta = SignedDyadic.of(coupledItemEnergy).subtract(SignedDyadic.of(removedCarrierEnergy));
+		audit = audit.withExternalSinkEnergy(delta).withRoundoff(delta);
+	}
 	void recordRoundoff(SignedDyadic delta) { audit = audit.withRoundoff(delta); }
 
 	void addCoherentExternal(CoherentPhaseStore.Group group) {
@@ -927,9 +993,17 @@ final class FlipThermalState {
 	private double modeledEnergy(
 			int marker, double mass, ChemicalMixtureRecord mixture, double temperatureK, MarkerContext markers
 	) {
-		int thermalHandle = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
+		return modeledEnergy(markers.fluidMaterialHandle(marker), mass, mixture, temperatureK,
+				markers.chemicalRegistry());
+	}
+
+	private double modeledEnergy(
+			int fluidMaterialHandle, double mass, ChemicalMixtureRecord mixture, double temperatureK,
+			ChemicalRegistry chemicalRegistry
+	) {
+		int thermalHandle = materialByFluidHandle[fluidMaterialHandle];
 		ThermalMaterialDefinition material = registry.material(thermalHandle);
-		double base = stateFunction.baseEnergy(thermalHandle, mass, mixture, markers.chemicalRegistry());
+		double base = stateFunction.baseEnergy(thermalHandle, mass, mixture, chemicalRegistry);
 		double energy = base + mass * material.sensibleSpecificEnergyAt(temperatureK);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal marker modeled energy is invalid");
 		return energy;
