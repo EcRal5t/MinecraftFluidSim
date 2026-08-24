@@ -29,3 +29,10 @@
 7. ThermalContents/WAL v5、protocol v5、diagnostics、dual sleep；
 8. milestone/release 自动门与单一合并实机场景。
 
+## M9.1 pure thermal state core
+
+新增 `com.example.thermal` 的有界 definition/strict JSON codec/datapack loader、canonical `ThermalRegistry`、
+分段常热容 `ThermalStateFunction`、exact-batch phase definition 与 `SignedDyadic` audit。registry fingerprint 对定义输入顺序
+不敏感，runtime handle 不跨层；species formation offset 与 phase reference-energy gap 共同保证 reaction heat/latent heat
+来自同一状态函数。新增唯一 `thermal` selector，不创建 Gradle task；覆盖 definition 拒绝、canonical fingerprint、
+负内能/分段往返、路径无关反应温升、相变平台与大数抵消审计。
