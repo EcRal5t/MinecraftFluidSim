@@ -75,7 +75,7 @@ public final class M9ThermalValidation {
 		ThermalTransport.Stats quiet = new ThermalTransport.Stats(
 				1, 0, 0.0, 0.0, SignedDyadic.ZERO, SignedDyadic.ZERO);
 		ThermalActivity.Observation observation = new ThermalActivity.Observation(
-				quiet, false, false, false, false, false, true);
+				quiet, false, false, false, false, false, false, true);
 		require(!activity.observe(observation, 3) && activity.state() == ThermalActivity.State.REDUCED,
 				"first quiet thermal step did not enter reduced activity");
 		require(!activity.observe(observation, 3) && activity.canStep(),
@@ -88,7 +88,7 @@ public final class M9ThermalValidation {
 		ThermalTransport.Stats flux = new ThermalTransport.Stats(
 				1, 1, 0.0, Math.ulp(1.0), SignedDyadic.ZERO, SignedDyadic.ZERO);
 		activity.observe(new ThermalActivity.Observation(
-				flux, false, false, false, false, false, true), 3);
+				flux, false, false, false, false, false, false, true), 3);
 		require(activity.state() == ThermalActivity.State.ACTIVE && activity.quietSteps() == 0,
 				"representable heat transfer was treated as quiet");
 
@@ -292,7 +292,8 @@ public final class M9ThermalValidation {
 		long gasNanosBefore = domain.airNetwork().standardVolumeNanos(1);
 		SignedDyadic energyBefore = domain.exactInternalEnergy();
 		ThermalAuditLedger auditBefore = domain.thermalAudit();
-		FlipFluidDomain.GasThermalPhaseStats stats = domain.stepInertGasPhaseChangeOnly(1);
+		domain.step(true, 1);
+		FlipFluidDomain.GasThermalPhaseStats stats = domain.lastGasThermalPhaseStats();
 		GasComponentAmount vaporAmount = domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
 		require(stats.operations() == 1 && stats.boiledCells() == 1 && stats.condensedCells() == 0
 				&& close(domain.totalMass(), liquidMassBefore - 0.01)

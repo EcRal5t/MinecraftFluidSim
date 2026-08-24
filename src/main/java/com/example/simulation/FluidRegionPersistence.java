@@ -16,6 +16,7 @@ import com.example.simulation.persistence.RegionManifest;
 import com.example.simulation.persistence.RegionState;
 import com.example.simulation.persistence.RegionStateFiles;
 import com.example.thermal.ThermalRegistry;
+import com.example.thermal.ThermalTransport;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.NbtUtils;
@@ -47,6 +48,7 @@ final class FluidRegionPersistence {
 	private final boolean thermalEnabled;
 	private final ThermalRegistry thermalRegistry;
 	private final GasRegistry gasRegistry;
+	private final int maximumThermalSubsteps;
 
 	FluidRegionPersistence(Path worldRoot, boolean materialsEnabled) {
 		this(worldRoot, materialsEnabled, false, null);
@@ -78,6 +80,17 @@ final class FluidRegionPersistence {
 			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled,
 			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry
 	) {
+		this(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry, granularEnabled, granularRegistry,
+				precipitationEnabled, thermalEnabled, thermalRegistry, gasRegistry,
+				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+	}
+
+	FluidRegionPersistence(
+			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
+			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled,
+			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
+			int maximumThermalSubsteps
+	) {
 		files = thermalEnabled
 				? new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry)
 				: granularRegistry == null
@@ -93,6 +106,11 @@ final class FluidRegionPersistence {
 		this.thermalEnabled = thermalEnabled;
 		this.thermalRegistry = thermalRegistry;
 		this.gasRegistry = gasRegistry;
+		if (maximumThermalSubsteps <= 0
+				|| maximumThermalSubsteps > ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS) {
+			throw new IllegalArgumentException("Thermal transport substep budget is invalid");
+		}
+		this.maximumThermalSubsteps = maximumThermalSubsteps;
 	}
 
 	List<String> scanOwnershipIssues() {
@@ -535,7 +553,7 @@ final class FluidRegionPersistence {
 			}
 			region.restoreGasState(state.reconstructGas(gasRegistry, chemicalRegistry), gasRegistry, generation);
 			region.restoreThermalState(state.reconstructThermal(thermalRegistry, gasRegistry, chemicalRegistry),
-					thermalRegistry, generation);
+					thermalRegistry, generation, maximumThermalSubsteps);
 			enablePrecipitationIfConfigured(region);
 		} catch (IOException | RuntimeException failure) {
 			if (region.solverLoaded() && region.checkpointGeneration() == generation) {

@@ -35,6 +35,7 @@ import com.example.simulation.controller.FluidControllerRegions;
 import com.example.simulation.controller.FluidRegionFootprint;
 import com.example.simulation.persistence.RegionStateFiles;
 import com.example.thermal.ThermalDataPackLoader;
+import com.example.thermal.ThermalAuditLedger;
 import com.example.thermal.ThermalMaterialDefinition;
 import com.example.thermal.ThermalRegistry;
 import com.example.thermal.ThermalRegistryStore;
@@ -86,6 +87,7 @@ public final class FluidSimulationService {
 	private static final int MAX_STEP_INTERVAL_TICKS = 4;
 	private static final int RECOVERY_STEPS = 8;
 	private static final int HYDROSTATIC_QUIET_STEPS = 200;
+	private static final int THERMAL_QUIET_STEPS = 200;
 	private static final float HYDROSTATIC_MAX_MARKER_SPEED = 2.5E-3F;
 	private static final double AIM_DISTANCE = 16.0;
 	private static final long COMPATIBILITY_REGION_CELLS = (long) BLOCK_SIZE_X * BLOCK_SIZE_Y * BLOCK_SIZE_Z
@@ -306,7 +308,8 @@ public final class FluidSimulationService {
 		regionManager = new FluidRegionManager(serverConfig.limits());
 		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, materialFeatureEnabled,
 				chemistryFeatureEnabled, chemicalRegistry, granularFeatureEnabled, granularRegistry,
-				precipitationFeatureEnabled, thermalFeatureEnabled, thermalRegistry, gasRegistry);
+				precipitationFeatureEnabled, thermalFeatureEnabled, thermalRegistry, gasRegistry,
+				serverConfig.maximumThermalSubstepsPerStep());
 		containerTransfers = new ContainerTransferStore(worldRoot);
 		if (configurationLocked) regionOperations.recordIssue(
 				"server.properties 不可用，已安全使用默认预算并关闭控制器；原文件未覆盖");
@@ -1478,8 +1481,13 @@ public final class FluidSimulationService {
 				? FluidRegionWorldInteraction.applyEntityForces(level, region)
 				: 0;
 		region.setLastAffectedEntities(affectedEntities);
-		if (collisionsChanged || affectedEntities > 0) region.wakeForActivity();
-		if (!region.canStep()) {
+		if (collisionsChanged || affectedEntities > 0) {
+			region.wakeForActivity();
+			region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
+		}
+		boolean motionStep = region.canStep();
+		boolean thermalStep = thermalFeatureEnabled && region.canStepThermal();
+		if (!motionStep && !thermalStep) {
 			if (collisionsChanged) sendSnapshot(level, region);
 			return;
 		}
@@ -1487,8 +1495,14 @@ public final class FluidSimulationService {
 			if (collisionsChanged) sendSnapshot(level, region);
 			return;
 		}
+		ThermalAuditLedger thermalBefore = thermalFeatureEnabled ? region.domain().thermalAudit() : null;
 		try {
-			stepOnce(region);
+			if (motionStep) {
+				region.wakeThermal(ThermalActivity.WakeReason.CARRIER_MOTION);
+				stepOnce(region);
+			} else {
+				stepThermalOnce(region);
+			}
 		} catch (ChemicalReactionEngine.BudgetExceededException budget) {
 			String failure = "chemistry-blocked PAUSED：" + budget.getMessage();
 			region.blockChemistry(failure);
@@ -1523,15 +1537,22 @@ public final class FluidSimulationService {
 							+ "；本次速度提交未开始，请查看 /realwater status"));
 			sendSnapshot(level, region);
 			return;
+		} catch (FlipFluidDomain.ThermalTransportBlockedException blocked) {
+			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
+			return;
+		} catch (FlipFluidDomain.ThermalPhaseBlockedException blocked) {
+			blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
+			return;
 		}
 		updateStepPacing(region);
+		if (thermalFeatureEnabled) observeThermalStep(region, thermalBefore, motionStep);
 		FlipFluidDomain.StepStats stats = region.lastStats();
 		float residualLimit = Math.max(1.0E-5F, region.domain().config().pressureTolerance() * 4.0F);
 		boolean hydrostaticCandidate = !collisionsChanged && affectedEntities == 0
 				&& region.domain().maximumParticleSpeed() <= HYDROSTATIC_MAX_MARKER_SPEED
 				&& region.domain().granularReadyForHydrostaticSleep()
 				&& stats != null && stats.pressureResidual() <= residualLimit;
-		if (region.lifecycle().observeCompletedStep(hydrostaticCandidate, HYDROSTATIC_QUIET_STEPS)) {
+		if (motionStep && region.lifecycle().observeCompletedStep(hydrostaticCandidate, HYDROSTATIC_QUIET_STEPS)) {
 			float exactVolume = region.domain().totalVolume();
 			int markerCount = region.domain().particleCount();
 			region.domain().commitHydrostaticSleep();
@@ -1567,16 +1588,61 @@ public final class FluidSimulationService {
 			return false;
 		}
 
-		return regionOperations.ensureAvailable(
+		boolean available = regionOperations.ensureAvailable(
 				level, region, controllerFeatureEnabled, this::refreshCollisions, this::sendSnapshot,
 				FluidSimulationService::sendRegionRemoval
 		);
+		if (available && thermalFeatureEnabled && region.solverLoaded() && region.domain().hasThermalState()) {
+			region.enableThermalActivity();
+		}
+		return available;
 	}
 
-	private static void stepOnce(FluidRegion region) {
+	private void stepOnce(FluidRegion region) {
 		long start = System.nanoTime();
-		FlipFluidDomain.StepStats stats = region.domain().step();
+		FlipFluidDomain.StepStats stats = region.domain().step(
+				phaseChangeFeatureEnabled, serverConfig.maximumPhaseOperationsPerStep());
 		region.recordStep(stats, (System.nanoTime() - start) / 1_000_000.0);
+	}
+
+	private void stepThermalOnce(FluidRegion region) {
+		long start = System.nanoTime();
+		region.domain().stepThermalAxis(phaseChangeFeatureEnabled, serverConfig.maximumPhaseOperationsPerStep());
+		region.recordThermalStep((System.nanoTime() - start) / 1_000_000.0);
+	}
+
+	private void observeThermalStep(
+			FluidRegion region, ThermalAuditLedger before, boolean carrierMotion
+	) {
+		FlipFluidDomain domain = region.domain();
+		ThermalAuditLedger after = domain.thermalAudit();
+		boolean gasActivity = !after.externalSource().equals(before.externalSource())
+				|| !after.externalSink().equals(before.externalSink())
+				|| !after.mechanicalWork().equals(before.mechanicalWork());
+		boolean chemistryDirty = domain.lastChemicalReactionStats().changedMarkers() != 0;
+		boolean granularDirty = domain.lastPhaseTransferStats().transfers() != 0
+				|| carrierMotion && (domain.lastGranularDepositStats().settledParcels() != 0
+				|| domain.lastGranularDepositStats().relaxedMoves() != 0
+				|| domain.lastGranularDepositStats().wokenParcels() != 0
+				|| domain.lastGranularDepositStats().dirtyColumns() != 0);
+		boolean phaseDirty = domain.lastThermalPhaseStats().operations() != 0
+				|| domain.lastGasThermalPhaseStats().operations() != 0;
+		boolean auditClosed = domain.exactInternalEnergy().equals(after.expectedInventory());
+		region.observeThermal(new ThermalActivity.Observation(domain.lastThermalTransportStats(),
+				chemistryDirty, granularDirty, phaseDirty, gasActivity, carrierMotion, false, auditClosed),
+				THERMAL_QUIET_STEPS);
+		if (!carrierMotion && (chemistryDirty || granularDirty || phaseDirty || gasActivity)) {
+			region.wakeForActivity();
+		}
+	}
+
+	private void blockThermal(ServerLevel level, FluidRegion region, String failure, RuntimeException blocked) {
+		region.blockThermal(failure);
+		RealWaterMod.LOGGER.error("Region {} rejected a thermal logical step and is paused: {}",
+				region.id(), failure, blocked);
+		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+				"真实水体热学步骤被安全拒绝，区域已暂停：" + failure + "；请查看 /realwater status"));
+		sendSnapshot(level, region);
 	}
 
 	private static void updateStepPacing(FluidRegion region) {
@@ -1877,6 +1943,7 @@ public final class FluidSimulationService {
 						+ footprint.boundaryBlocks().size() + ", chunks " + footprint.requiredChunks().size();
 		String availability = region.availabilityFailure() == null ? "ready" : "blocked: " + region.availabilityFailure();
 		String gas = gasSummary(domain);
+		String thermal = thermalFeatureEnabled ? thermalSummary(region, domain) : "";
 		return String.format(
 				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s%s",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",
@@ -1896,8 +1963,19 @@ public final class FluidSimulationService {
 				solids.partialCells(), solids.fullCells(),
 				collision.changedCells(), collision.escapedCellVolume() / CELL_VOLUMES_PER_BLOCK,
 				collision.markerBudgetLimited() ? " (marker budget)" : "", stats,
-				gas.isEmpty() ? "" : " | " + gas
+				(gas.isEmpty() ? "" : " | " + gas) + (thermal.isEmpty() ? "" : " | " + thermal)
 		);
+	}
+
+	private static String thermalSummary(FluidRegion region, FlipFluidDomain domain) {
+		if (!domain.hasThermalState()) return "thermal missing";
+		ThermalAuditLedger audit = domain.thermalAudit();
+		ThermalActivity activity = region.thermalActivity();
+		return String.format("thermal %s U=%.6g EU source=%.6g sink=%.6g work=%.6g coherent=%d SVQ audit=%s",
+				activity == null ? "unbound" : activity.state(), domain.totalInternalEnergy(),
+				audit.externalSource().toDouble(), audit.externalSink().toDouble(),
+				audit.mechanicalWork().toDouble(), domain.totalCoherentSolidVolumeSvq(),
+				domain.exactInternalEnergy().equals(audit.expectedInventory()) ? "closed" : "FAILED");
 	}
 
 	/** Read-only gas-network summary for status output; empty when no sealed cavity exists. */
@@ -1909,8 +1987,9 @@ public final class FluidSimulationService {
 		for (int i = 0; i < ids.size() && i < 4; i++) {
 			int id = ids.get(i);
 			if (i > 0) builder.append("; ");
-			builder.append(String.format("node %d p=%+.0f Pa V0=%.2f m³",
-					id, network.gaugePressure(id), network.standardVolume(id)));
+			builder.append(String.format("node %d p=%+.0f Pa T=%.2f K V0=%.2f m³",
+					id, domain.gasNodeGaugePressurePa(id), domain.gasNodeTemperatureK(id),
+					network.standardVolume(id)));
 		}
 		if (ids.size() > 4) builder.append("; +").append(ids.size() - 4).append(" more");
 		builder.append(String.format(", vented %.2f m³ drawn %.2f m³",
@@ -2454,7 +2533,8 @@ public final class FluidSimulationService {
 		if (precipitationFeatureEnabled) domain.setPrecipitationEnabled(true);
 		if (thermalFeatureEnabled && !domain.hasThermalState()) {
 			domain.bindGasRegistry(gasRegistry);
-			domain.bindThermal(thermalRegistry, domain.materialRegistry(), GasRegistry.STANDARD_TEMPERATURE_K);
+			domain.bindThermal(thermalRegistry, domain.materialRegistry(), GasRegistry.STANDARD_TEMPERATURE_K,
+					serverConfig.maximumThermalSubstepsPerStep());
 		}
 	}
 

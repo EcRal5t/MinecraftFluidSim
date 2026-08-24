@@ -52,6 +52,8 @@ public final class FluidRegion {
 	private int recoveryStreak;
 	private String chemistryBlockFailure;
 	private String granularBlockFailure;
+	private String thermalBlockFailure;
+	private ThermalActivity thermalActivity;
 
 	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FlipFluidDomain domain, long reservedMarkerCapacity) {
 		this(id, dimension, origin, domain, reservedMarkerCapacity, null);
@@ -185,7 +187,32 @@ public final class FluidRegion {
 	boolean paused() { return lifecycle.operatorPaused(); }
 	void setPaused(boolean value) { lifecycle.setOperatorPaused(value, stepIntervalTicks); }
 	boolean canStep() { return domain != null && lifecycle.canStep(); }
-	void wakeForActivity() { lifecycle.wakeForActivity(stepIntervalTicks); }
+	void wakeForActivity() {
+		lifecycle.wakeForActivity(stepIntervalTicks);
+		wakeThermal(ThermalActivity.WakeReason.CARRIER_MOTION);
+	}
+	void enableThermalActivity() {
+		if (thermalActivity == null) thermalActivity = new ThermalActivity();
+	}
+	boolean canStepThermal() {
+		return domain != null && domain.hasThermalState() && thermalActivity != null && !lifecycle.operatorPaused()
+				&& lifecycle.availabilityFailure() == null
+				&& lifecycle.state() != FluidRegionLifecycle.State.UNLOADED && thermalActivity.canStep();
+	}
+	ThermalActivity thermalActivity() { return thermalActivity; }
+	void wakeThermal(ThermalActivity.WakeReason reason) {
+		if (thermalActivity != null) thermalActivity.wake(reason);
+	}
+	boolean observeThermal(ThermalActivity.Observation observation, int quietSteps) {
+		return thermalActivity != null && thermalActivity.observe(observation, quietSteps);
+	}
+	void blockThermal(String failure) {
+		enableThermalActivity();
+		thermalBlockFailure = Objects.requireNonNull(failure, "failure");
+		thermalActivity.pause(thermalBlockFailure);
+		setPaused(true);
+		setAvailabilityFailure(thermalBlockFailure);
+	}
 	long nextSnapshotSequence() {
 		if (snapshotSequence == Long.MAX_VALUE) throw new IllegalStateException("Snapshot sequence exhausted");
 		return ++snapshotSequence;
@@ -196,6 +223,12 @@ public final class FluidRegion {
 	FlipFluidDomain.StepStats lastStats() { return lastStats; }
 	void recordStep(FlipFluidDomain.StepStats stats, double milliseconds) {
 		lastStats = Objects.requireNonNull(stats, "stats");
+		lastStepMilliseconds = milliseconds;
+	}
+	void recordThermalStep(double milliseconds) {
+		if (!(Double.isFinite(milliseconds) && milliseconds >= 0.0)) {
+			throw new IllegalArgumentException("Thermal step duration is invalid");
+		}
 		lastStepMilliseconds = milliseconds;
 	}
 	CollisionStats lastCollisionStats() { return lastCollisionStats; }
@@ -238,6 +271,7 @@ public final class FluidRegion {
 		setPaused(true);
 		setAvailabilityFailure(failure);
 	}
+	String thermalBlockFailure() { return thermalBlockFailure; }
 
 	public PersistedRuntime persistedRuntime() {
 		FluidRegionLifecycle.State resumeState = lifecycle.state() == FluidRegionLifecycle.State.UNLOADED
@@ -338,11 +372,19 @@ public final class FluidRegion {
 	public void restoreThermalState(
 			FlipThermalParticleState state, ThermalRegistry registry, long loadedCheckpointGeneration
 	) {
+		restoreThermalState(state, registry, loadedCheckpointGeneration,
+				com.example.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+	}
+
+	public void restoreThermalState(
+			FlipThermalParticleState state, ThermalRegistry registry, long loadedCheckpointGeneration,
+			int maximumTransportSubsteps
+	) {
 		Objects.requireNonNull(state, "state"); Objects.requireNonNull(registry, "registry");
 		if (domain == null || loadedCheckpointGeneration != checkpointGeneration || !domain.hasMaterialState()) {
 			throw new IllegalStateException("Thermal restore requires the matching loaded material generation");
 		}
-		domain.restoreThermalParticleState(state, registry);
+		domain.restoreThermalParticleState(state, registry, maximumTransportSubsteps);
 	}
 
 	boolean adoptMigratedCheckpoint(long previousGeneration, long migratedGeneration) {

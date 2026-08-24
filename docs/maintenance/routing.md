@@ -21,7 +21,7 @@
 | 世界碰撞与实体采样 | `src/main/java/com/example/simulation/FluidRegionWorldInteraction.java` | `VoxelShape` 保守采样；挤水只按 marker 账本；实体单向耦合 |
 | 域构造与只读原版水采样 | `src/main/java/com/example/simulation/FluidRegionFactory.java` | marker 上限等于 manager 预留；不从 density 结算 |
 | 区域身份、solver ownership、运行态 | `src/main/java/com/example/simulation/FluidRegion.java` | UNLOADED 不持 solver 但仍占预算；恢复先刷新碰撞 |
-| 调度生命周期 | `src/main/java/com/example/simulation/FluidRegionLifecycle.java` | 调度状态不得移动、创建、删除或缩放 marker |
+| 调度生命周期 | `src/main/java/com/example/simulation/FluidRegionLifecycle.java`、`src/main/java/com/example/simulation/ThermalActivity.java` | motion 与 thermal 两轴正交；调度状态不得移动、创建、删除或缩放任何库存 |
 | 区域登记、选择、空间与预算 | `src/main/java/com/example/simulation/FluidRegionManager.java` | 拒绝不替换旧域；报告 required/per-region/remaining |
 | 世界配置 | `src/main/java/com/example/simulation/FluidServerConfig.java` | v1–v6 配置 fail-closed；旧 reader 强制未知新门关闭；chemistry/granular/precipitation 与 thermal/phase-change 依赖链严格；预算与各功能门重启后生效；thermal v6 已冻结但在完整 joint inventory 前不由 service 消费 |
 | controller 持久化协调 | `src/main/java/com/example/simulation/FluidRegionPersistence.java` | manifest admission、checkpoint、quarantine 与 takeover journal 分离；thermal off 严格分派 v5/v3/v2/v1，v4 保留并拒绝；thermal on 只发布/恢复完整 v6，旧代次等待显式初始化 |
@@ -29,7 +29,7 @@
 | M3 跨层迁移边界 | `docs/architecture/m3-material-state-migration.md` | 单一 `materialsEnabled` 门；network v2 与 region-state v2 独立版本；运行时 handle 不上链 |
 | 控制器与边界块 | `src/main/java/com/example/block/RealWaterBlocks.java`、`src/main/java/com/example/block/FluidControllerBlock.java` | feature flag 默认关闭；只读激活；资源同步 |
 | 闭合边界扫描 | `src/main/java/com/example/simulation/controller/` | 非加载读取；缺 chunk/破口/多内腔/超预算拒绝或整域暂停 |
-| 活动 PIC/FLIP 编排 | `src/main/java/com/example/fluid/FlipFluidDomain.java` | 唯一活动核心；旧 `FluidDomain` 不接回 Minecraft |
+| 活动 PIC/FLIP 编排 | `src/main/java/com/example/fluid/FlipFluidDomain.java` | 唯一活动核心；logical step 固定为 mechanics/advection → conduction → M7/M8 reaction → M9 phase → granular transitions → reseed；旧 `FluidDomain` 不接回 Minecraft |
 | 自由面几何 | `src/main/java/com/example/fluid/FlipFreeSurfaceGeometry.java` | exact per-cell marker 和构造分数；`markerCount` 仍定压力相 |
 | MAC 空气外推 | `src/main/java/com/example/fluid/FlipVelocityExtrapolator.java` | 开放压力面播种；G2P 不采未定义空气零值 |
 | marker 分布压力约束 | `src/main/java/com/example/fluid/FlipVolumeDriftCorrection.java` | P2G 只生成目标散度，不结算或找平精确水量 |

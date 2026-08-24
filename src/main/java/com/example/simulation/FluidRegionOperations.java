@@ -5,6 +5,7 @@ import com.example.chemistry.ChemicalRegistry;
 import com.example.fluid.air.GasRegistry;
 import com.example.granular.GranularRegistry;
 import com.example.thermal.ThermalRegistry;
+import com.example.thermal.ThermalTransport;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 
@@ -60,9 +61,22 @@ final class FluidRegionOperations {
 			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled,
 			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry
 	) {
+		this(worldRoot, manager, configurationLocked, materialsEnabled, chemistryEnabled, chemicalRegistry,
+				granularEnabled, granularRegistry, precipitationEnabled, thermalEnabled, thermalRegistry, gasRegistry,
+				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+	}
+
+	FluidRegionOperations(
+			Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean materialsEnabled,
+			boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
+			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled,
+			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
+			int maximumThermalSubsteps
+	) {
 		this.manager = manager;
 		this.persistence = new FluidRegionPersistence(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry,
-				granularEnabled, granularRegistry, precipitationEnabled, thermalEnabled, thermalRegistry, gasRegistry);
+				granularEnabled, granularRegistry, precipitationEnabled, thermalEnabled, thermalRegistry, gasRegistry,
+				maximumThermalSubsteps);
 		creationLocked = configurationLocked;
 		List<String> metadataIssues = persistence.loadMetadata(manager);
 		issues.addAll(metadataIssues);
@@ -108,6 +122,10 @@ final class FluidRegionOperations {
 		}
 		if (region.granularBlockFailure() != null) {
 			region.setAvailabilityFailure(region.granularBlockFailure());
+			return false;
+		}
+		if (region.thermalBlockFailure() != null) {
+			region.setAvailabilityFailure(region.thermalBlockFailure());
 			return false;
 		}
 		if (!region.controllerManaged()) {

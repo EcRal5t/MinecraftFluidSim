@@ -10,7 +10,7 @@ public final class ThermalActivity {
 	public enum State { ACTIVE, REDUCED, SLEEP, PAUSED }
 	public enum WakeReason {
 		BOUNDARY_CHANGE, CONTAINER_TRANSFER, ADMIN_SOURCE, CHEMISTRY_DIRTY,
-		GRANULAR_DIRTY, GAS_ACTIVITY, PHASE_DIRTY, AUDIT_RECOVERY
+		GRANULAR_DIRTY, GAS_ACTIVITY, PHASE_DIRTY, CARRIER_MOTION, AUDIT_RECOVERY
 	}
 
 	public record Observation(
@@ -19,6 +19,7 @@ public final class ThermalActivity {
 			boolean granularDirty,
 			boolean phaseDirty,
 			boolean gasActivity,
+			boolean carrierMotion,
 			boolean pendingVolumeOrWork,
 			boolean auditClosed
 	) {
@@ -29,7 +30,7 @@ public final class ThermalActivity {
 		boolean quiet() {
 			return transport.maximumAbsoluteTransferEu() == 0.0
 					&& transport.reservoirExchange().equals(SignedDyadic.ZERO)
-					&& !chemistryDirty && !granularDirty && !phaseDirty && !gasActivity
+					&& !chemistryDirty && !granularDirty && !phaseDirty && !gasActivity && !carrierMotion
 					&& !pendingVolumeOrWork && auditClosed;
 		}
 	}

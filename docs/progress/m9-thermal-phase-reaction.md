@@ -277,3 +277,19 @@ canonical sealed gas node 的 1/16 K 温度和 10 Pa gauge pressure；empty cell
 phase inventory 和 gas component truth 均未进入协议。
 
 最近门：`thermal,protocol` 通过；默认材质仍不按温度改色，accepted thermal frame 只为 debug/后续展示服务。
+
+## M9.21 production logical step and dual scheduling
+
+production `FlipFluidDomain.step(phase,budget)` 现在按冻结顺序执行 mechanics/advection、conduction、M7 reaction、M8
+solid-liquid reaction、M9 melt/freeze、M9 boil/condense、granular transitions 与 joint thermal reseed；phase-change 与
+thermal transport 分别消费 config v6 的 operation/substep 硬预算。phase operation 由同一个总预算先分给 condensed，余量
+再给 gas，不能各自重复消费上限。已有 `step()` overload 保持 thermal-off/测试调用不启 phase 的旧行为。
+
+`FluidRegion` 持有正交 `ThermalActivity`。motion 进入 `HYDROSTATIC_SLEEP` 后，service 仍调用 thermal-only logical axis；
+连续 200 个无可表示通量、reaction/phase/granular/gas/work/载体移动且 audit 闭合的 quiet step 才 thermal sleep。碰撞、
+管理员/容器物质移动、reaction、granular、gas 与 phase activity 唤醒相应轴；thermal transport/phase 失败记录独立可读原因并
+PAUSED，不修改既有 40/200 ms wall-time 阈值。status 报告 thermal activity、U、source/sink/work、coherent SVQ、audit，
+gas 压力也改读非等温派生值。
+
+最近门：`thermal,lifecycle,chemistry,granular,gas-liquid,region-state` 通过。composition-bearing liquid 与同格 granular
+heat bath 的相变仍显式 fail-closed，等待 exact species/LTE joint plan，不会静默丢 species 或借 carrier ID 特判。

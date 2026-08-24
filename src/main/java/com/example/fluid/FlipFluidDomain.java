@@ -151,6 +151,10 @@ public final class FlipFluidDomain {
 	private GranularPhaseTransferEngine granularPhaseTransfer;
 	private boolean precipitationEnabled;
 	private PhaseTransferStats lastPhaseTransferStats = new PhaseTransferStats(0, 0, 0, 0L);
+	private ThermalPhaseStats lastThermalPhaseStats = new ThermalPhaseStats(0, 0, 0, 0L);
+	private GasThermalPhaseStats lastGasThermalPhaseStats = new GasThermalPhaseStats(0, 0, 0);
+	private ChemicalParcelStore.ReactionStats lastChemicalReactionStats =
+			new ChemicalParcelStore.ReactionStats(0, 0, 0);
 	private GranularDepositDynamics granularDepositDynamics;
 	private GranularDepositDynamics.Stats lastGranularDepositStats =
 			new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
@@ -311,6 +315,14 @@ public final class FlipFluidDomain {
 
 	/** True when the current grid contains at least one sealed gas cavity with finite inventory. */
 	public boolean gasPressureActive() { return gasPressureActive; }
+	public double gasNodeTemperatureK(int nodeId) {
+		return thermalState == null || !thermalState.gasModelBound()
+				? GasRegistry.STANDARD_TEMPERATURE_K : thermalState.gasTemperature(nodeId, airNetwork);
+	}
+	public double gasNodeGaugePressurePa(int nodeId) {
+		return thermalState == null || !thermalState.gasModelBound()
+				? airNetwork.gaugePressure(nodeId) : thermalState.gasGaugePressure(nodeId, airNetwork);
+	}
 
 	/**
 	 * Gas node owning the air cell at a grid position: 0 ambient, at least 1 sealed, -1 when the
@@ -474,6 +486,9 @@ public final class FlipFluidDomain {
 	}
 	public boolean precipitationEnabled() { return precipitationEnabled; }
 	public PhaseTransferStats lastPhaseTransferStats() { return lastPhaseTransferStats; }
+	public ThermalPhaseStats lastThermalPhaseStats() { return lastThermalPhaseStats; }
+	public GasThermalPhaseStats lastGasThermalPhaseStats() { return lastGasThermalPhaseStats; }
+	public ChemicalParcelStore.ReactionStats lastChemicalReactionStats() { return lastChemicalReactionStats; }
 	public void setPrecipitationEnabled(boolean enabled) {
 		if (enabled && (chemicalParcels == null || granularParcels == null || solidCompositions == null
 				|| !granularRegistry.hasReactiveRules())) {
@@ -1195,6 +1210,13 @@ public final class FlipFluidDomain {
 	public void bindThermal(
 			ThermalRegistry registry, FluidMaterialRegistry liquidRegistry, double initialTemperatureK
 	) {
+		bindThermal(registry, liquidRegistry, initialTemperatureK, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+	}
+
+	public void bindThermal(
+			ThermalRegistry registry, FluidMaterialRegistry liquidRegistry, double initialTemperatureK,
+			int maximumTransportSubsteps
+	) {
 		if (registry == null || liquidRegistry == null) throw new IllegalArgumentException("Thermal/liquid registry is missing");
 		if (!Double.isFinite(initialTemperatureK)) throw new IllegalArgumentException("Initial thermal temperature must be finite");
 		if (Float.floatToRawIntBits(config.cellSize()) != Float.floatToRawIntBits(0.5F)) {
@@ -1214,7 +1236,8 @@ public final class FlipFluidDomain {
 		ensureGrid();
 		refreshGasTopology();
 		thermalState = new FlipThermalState(registry, materialRegistry, initialTemperatureK,
-				particleX.length, sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), airNetwork);
+				particleX.length, sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), airNetwork,
+				maximumTransportSubsteps);
 		if (granularInventory != null) granularInventory.bindThermalEnergy(thermalGranularAdapter());
 		if (granularCoupling == null) {
 			granularCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
@@ -1259,6 +1282,12 @@ public final class FlipFluidDomain {
 	public void restoreThermalParticleState(
 			FlipThermalParticleState state, ThermalRegistry registry
 	) {
+		restoreThermalParticleState(state, registry, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+	}
+
+	public void restoreThermalParticleState(
+			FlipThermalParticleState state, ThermalRegistry registry, int maximumTransportSubsteps
+	) {
 		if (state == null || registry == null) throw new IllegalArgumentException("Thermal restore state/registry is missing");
 		if (materialRegistry == null) throw new IllegalStateException("Thermal restore requires restored material state");
 		state.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize(), particleCount);
@@ -1268,7 +1297,7 @@ public final class FlipFluidDomain {
 		validateCoherentRestoreCapacity(state.coherentGroups());
 		bindThermal(registry, materialRegistry, registry.material(
 				registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID,
-						materialRegistry.material(0).id())).referenceTemperatureK());
+						materialRegistry.material(0).id())).referenceTemperatureK(), maximumTransportSubsteps);
 		thermalState.restore(state, thermalMarkerContext(), airNetwork);
 		refreshCoherentOccupancy();
 		gridDirty = true;
@@ -1360,9 +1389,6 @@ public final class FlipFluidDomain {
 	/** Inert melt/freeze increment. Chemistry, granular energy and liquid-gas transitions remain fail-closed. */
 	public ThermalPhaseStats stepInertPhaseChangeOnly(int maximumOperations) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
-		if (chemicalParcels != null || granularRegistry != null) {
-			throw new IllegalStateException("Inert phase increment cannot omit chemistry or granular energy");
-		}
 		if (maximumOperations < 0 || maximumOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
 			throw new IllegalArgumentException("Thermal phase operation budget is invalid");
 		}
@@ -1406,9 +1432,6 @@ public final class FlipFluidDomain {
 		if (thermalState == null || !thermalState.gasModelBound()) {
 			throw new IllegalStateException("Gas phase change requires bound gas thermal state");
 		}
-		if (chemicalParcels != null || granularRegistry != null) {
-			throw new IllegalStateException("Inert gas phase increment cannot omit chemistry or granular energy");
-		}
 		if (maximumOperations < 0 || maximumOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
 			throw new IllegalArgumentException("Gas phase operation budget is invalid");
 		}
@@ -1438,6 +1461,7 @@ public final class FlipFluidDomain {
 						&& inventory.upperVolumeSvq() >= transition.lowerVolumeSvqPerBatch()
 						&& inventory.upperMass() + massTolerance(inventory.upperMass())
 						>= transition.massMuPerBatch().toDouble()) {
+					requireInertPhaseCell(cell, liquidHandle, "Boiling");
 					commitInertBoil(cell, node, liquidHandle, transition, inventory, phase, liquidTemperature);
 					ensureGrid(); refreshGasTopology();
 					operations++; boiled++;
@@ -1445,6 +1469,7 @@ public final class FlipFluidDomain {
 					GasComponentAmount vapor = airNetwork.inventory(node).component(gas.carrierId());
 					GasInventory batch = phase.gasBatch(transition, 1L);
 					if (vapor != null && vapor.standardVolumeNanos() >= batch.standardVolumeNanos()) {
+						requireInertPhaseCell(cell, liquidHandle, "Condensation");
 						commitInertCondense(cell, node, liquidHandle, transition, inventory, phase, batch);
 						ensureGrid(); refreshGasTopology();
 						operations++; condensed++;
@@ -1592,6 +1617,7 @@ public final class FlipFluidDomain {
 			int cell, int liquidHandle, ThermalPhaseTransition transition, long batches,
 			PhaseCellInventory before
 	) {
+		requireInertPhaseCell(cell, liquidHandle, "Freezing");
 		long removedSvq = Math.multiplyExact(batches, transition.upperVolumeSvqPerBatch());
 		long addedSvq = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
 		double batchMass = transition.massMuPerBatch().toDouble();
@@ -1631,6 +1657,7 @@ public final class FlipFluidDomain {
 			int cell, int liquidHandle, ThermalPhaseTransition transition, long batches,
 			PhaseCellInventory before
 	) {
+		requireInertPhaseCell(cell, liquidHandle, "Melting");
 		long removedSvq = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
 		long addedSvq = Math.multiplyExact(batches, transition.upperVolumeSvqPerBatch());
 		double requestedMass = transition.massMuPerBatch().toDouble() * batches;
@@ -1724,6 +1751,26 @@ public final class FlipFluidDomain {
 		return Math.max(1.0E-12, Math.ulp(mass) * 32.0);
 	}
 
+	private void requireInertPhaseCell(int cell, int liquidHandle, String operation) {
+		if (chemicalParcels != null) for (int marker = 0; marker < particleCount; marker++) {
+			if (particleCellIndex(marker) == cell && particleMaterialHandle[marker] == liquidHandle
+					&& chemicalParcels.record(marker).entryCount() != 0) {
+				throw new ThermalPhaseBlockedException(operation
+						+ " of composition-bearing liquid requires an exact species transfer plan");
+			}
+		}
+		if (granularParcels != null) for (int parcel = 0; parcel < granularParcels.count(); parcel++) {
+			if (granularParcelCell(granularParcels.parcel(parcel)) == cell) {
+				throw new ThermalPhaseBlockedException(operation
+						+ " in a granular heat-bath cell requires a joint LTE phase plan");
+			}
+		}
+		if (granularDeposits != null && granularDeposits.cellSolidVolumeSvq(cell) != 0L) {
+			throw new ThermalPhaseBlockedException(operation
+					+ " in a granular heat-bath cell requires a joint LTE phase plan");
+		}
+	}
+
 	public record ThermalPhaseStats(int operations, int frozenCells, int meltedCells, long signedBatches) { }
 	public record GasThermalPhaseStats(int operations, int boiledCells, int condensedCells) { }
 	private record PhaseCellInventory(
@@ -1732,6 +1779,10 @@ public final class FlipFluidDomain {
 	private record PhaseMarkerAllocation(int marker, float newVolume, double newMass, boolean fullRemoval) { }
 	public static final class ThermalPhaseBlockedException extends IllegalStateException {
 		public ThermalPhaseBlockedException(String message) { super(message); }
+		private ThermalPhaseBlockedException(String message, Throwable cause) { super(message, cause); }
+	}
+	public static final class ThermalTransportBlockedException extends IllegalStateException {
+		private ThermalTransportBlockedException(String message, Throwable cause) { super(message, cause); }
 	}
 
 	private FlipThermalState.MarkerContext thermalMarkerContext() {
@@ -3084,7 +3135,13 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	public record ChemicalDisplacement(float volume, ChemicalTransferLedger ledger) { }
 	public record MaterialPortion(int materialHandle, double volume, double mass) { }
 
-	public StepStats step() {
+	public StepStats step() { return step(false, 0); }
+
+	public StepStats step(boolean phaseChangeEnabled, int maximumPhaseOperations) {
+		if (phaseChangeEnabled && (maximumPhaseOperations <= 0
+				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
+			throw new IllegalArgumentException("Production phase operation budget is invalid");
+		}
 		float before = totalVolume();
 		double massBefore = totalMass();
 		lastGranularBoundaryImpulseX = 0.0;
@@ -3135,19 +3192,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			if (hasGranularInventory()) granularCollision.commit(granularParcels);
 		}
 		if (precipitationEnabled) markMovedReactiveGranularCells(granularParcelCountBeforeAdvection);
-		int[] phaseTransferCells = precipitationEnabled ? chemicalParcels.dirtyCells() : new int[0];
-		if (thermalState != null) stepThermalOnly(config.timeStep());
-		ChemicalParcelStore.ReactionStats chemistry = chemicalParcels == null
-				? new ChemicalParcelStore.ReactionStats(0, 0, 0)
-				: chemicalParcels.reactDirtyCells(
-						sizeX, sizeY, sizeZ, config.cellSize(), particleX, particleY, particleZ,
-						particleMass, particleMaterialHandle,
-						handle -> materialRegistry.material(handle).id(), particleCount,
-						thermalState == null ? (marker, mixture, mass) -> { }
-								: (marker, mixture, mass) -> thermalState.requireReactionState(
-										marker, mixture, mass, thermalMarkerContext()));
-		lastPhaseTransferStats = precipitationEnabled
-				? transferGranularPhases(phaseTransferCells) : new PhaseTransferStats(0, 0, 0, 0L);
+		ThermalAxisStats thermalAxis = runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations);
+		ChemicalParcelStore.ReactionStats chemistry = thermalAxis.chemistry();
 		if (granularInventory != null && granularParcels.count() > 1) {
 			granularCoupling.rebuild(granularParcels, granularDeposits);
 			long[] compactedSolid = granularCoupling.copySolidSvq();
@@ -3324,6 +3370,66 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}, (source, target, moved, sourceAfter, targetAfter) -> thermalState.planGasTransfer(
 				source, target, moved, sourceAfter, targetAfter, airNetwork));
 	}
+
+	/** Runs the non-motion logical axis while a region is hydrostatically asleep. */
+	public ThermalAxisStats stepThermalAxis(boolean phaseChangeEnabled, int maximumPhaseOperations) {
+		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		if (phaseChangeEnabled && (maximumPhaseOperations <= 0
+				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
+			throw new IllegalArgumentException("Production phase operation budget is invalid");
+		}
+		ThermalAxisStats result = runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations);
+		gridDirty = true;
+		rebuildGridFromParticles();
+		return result;
+	}
+
+	private ThermalAxisStats runThermalReactionPhaseAxis(boolean phaseChangeEnabled, int maximumPhaseOperations) {
+		int[] phaseTransferCells = precipitationEnabled ? chemicalParcels.dirtyCells() : new int[0];
+		ThermalTransport.Stats transport;
+		try {
+			transport = thermalState == null
+					? new ThermalTransport.Stats(0, 0, 0.0, SignedDyadic.ZERO, SignedDyadic.ZERO)
+					: stepThermalOnly(config.timeStep());
+		} catch (IllegalArgumentException invalid) {
+			throw new ThermalTransportBlockedException(invalid.getMessage(), invalid);
+		}
+		ChemicalParcelStore.ReactionStats chemistry = chemicalParcels == null
+				? new ChemicalParcelStore.ReactionStats(0, 0, 0)
+				: chemicalParcels.reactDirtyCells(
+						sizeX, sizeY, sizeZ, config.cellSize(), particleX, particleY, particleZ,
+						particleMass, particleMaterialHandle,
+						handle -> materialRegistry.material(handle).id(), particleCount,
+						thermalState == null ? (marker, mixture, mass) -> { }
+								: (marker, mixture, mass) -> thermalState.requireReactionState(
+										marker, mixture, mass, thermalMarkerContext()));
+		lastChemicalReactionStats = chemistry;
+		lastPhaseTransferStats = precipitationEnabled
+				? transferGranularPhases(phaseTransferCells) : new PhaseTransferStats(0, 0, 0, 0L);
+		lastThermalPhaseStats = new ThermalPhaseStats(0, 0, 0, 0L);
+		lastGasThermalPhaseStats = new GasThermalPhaseStats(0, 0, 0);
+		if (phaseChangeEnabled) {
+			try {
+				lastThermalPhaseStats = stepInertPhaseChangeOnly(maximumPhaseOperations);
+				int remaining = maximumPhaseOperations - lastThermalPhaseStats.operations();
+				lastGasThermalPhaseStats = stepInertGasPhaseChangeOnly(remaining);
+			} catch (ThermalPhaseBlockedException blocked) {
+				throw blocked;
+			} catch (IllegalArgumentException invalid) {
+				throw new ThermalPhaseBlockedException(invalid.getMessage(), invalid);
+			}
+		}
+		return new ThermalAxisStats(transport, chemistry, lastPhaseTransferStats,
+				lastThermalPhaseStats, lastGasThermalPhaseStats);
+	}
+
+	public record ThermalAxisStats(
+			ThermalTransport.Stats transport,
+			ChemicalParcelStore.ReactionStats chemistry,
+			PhaseTransferStats granularPhase,
+			ThermalPhaseStats condensedPhase,
+			GasThermalPhaseStats gasPhase
+	) { }
 
 	private void refreshGasTopology() {
 		AirCavityScanner.Result result = pressureGranularCoupling == null

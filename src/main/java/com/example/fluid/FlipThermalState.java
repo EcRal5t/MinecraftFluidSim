@@ -134,6 +134,15 @@ final class FlipThermalState {
 			int initialCapacity, int sizeX, int sizeY, int sizeZ, float cellSize,
 			MarkerContext markers, AirNetwork airNetwork
 	) {
+		this(registry, liquids, initialTemperatureK, initialCapacity, sizeX, sizeY, sizeZ, cellSize,
+				markers, airNetwork, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+	}
+
+	FlipThermalState(
+			ThermalRegistry registry, FluidMaterialRegistry liquids, double initialTemperatureK,
+			int initialCapacity, int sizeX, int sizeY, int sizeZ, float cellSize,
+			MarkerContext markers, AirNetwork airNetwork, int maximumTransportSubsteps
+	) {
 		if (registry == null || liquids == null || markers == null) {
 			throw new IllegalArgumentException("Thermal binding input is missing");
 		}
@@ -167,7 +176,7 @@ final class FlipThermalState {
 			materialByGranularHandle[handle] = thermalHandle;
 		}
 		this.cellGrid = new ThermalCellGrid(Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ));
-		this.transport = new ThermalTransport(sizeX, sizeY, sizeZ, cellSize, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		this.transport = new ThermalTransport(sizeX, sizeY, sizeZ, cellSize, maximumTransportSubsteps);
 		this.coherentPhases = new CoherentPhaseStore(
 				Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ),
 				Math.min(ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION,
