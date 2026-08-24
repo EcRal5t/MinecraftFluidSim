@@ -348,3 +348,22 @@ material reference-energy gap，不引入物种特判。唯一 `thermal` fixture
 coherent 的 species/residual、indicator 原始 volume/mass、颗粒 SVQ/mass、凝聚相总质量和 energy/audit 闭合。
 
 最近门：`thermal,chemistry,granular` 通过；尚未请求实机。
+
+## M9.25 checkpointable phase-volume work
+
+凝聚相 freeze/melt 与 M8 precipitation/dissolution 的每次已提交体积变化现在同时生成 exact signed cell-volume event。SVQ
+部分直接保存为 `integer * 2^-24`，液体 marker 的任意 float volume 则保存其精确 IEEE-754 dyadic 值；没有把后者反算或
+取整成固体 SVQ。正膨胀的 planner 仍先以 unified occupied-volume capacity 限制 extent，避免用后续压力步骤掩盖越界。
+
+pending event 使用独立 manifest-only `realwater:pending_phase_volume_v1`，只随完整 region-state v6 generation 发布；缺少
+extension 是 canonical empty。codec 对 cell 顺序、cell count、dyadic canonical bytes、significand/serialized budget 和尾随字节
+严格 fail-closed，region-state 还验证每个目标格在同代 liquid/coherent/active/deposit 中确有 thermal carrier。restore 不把记录
+当作已完成，而是唤醒 motion 并保留到下一次真实 pressure projection。
+
+mechanical step 先让已有 occupancy/volume-drift 进入共享 pressure solve；projection 成功后才以目标格 absolute pressure 计划并
+提交 `-p delta V`，写 thermal mechanical-work/roundoff ledger，再清空 pending。它不额外注入第二份 divergence source，因而同一
+相变既不会重复排水，也不会重复做功。pending 阻止 thermal sleep，checkpoint 允许保存，`empty` 明确拒绝。气液相变继续由
+gas topology remap 当场结算 available-volume compression work，不生成第二份 condensed pending record。
+
+`thermal` fixture 覆盖不等相体积冻结、投影前未记功、投影后 exactly-once 消费与 audit 闭合；`region-state` fixture 覆盖正负
+dyadic record 的 codec/files/domain restore。最近门：`thermal,chemistry,granular,region-state` 通过；尚未请求实机。

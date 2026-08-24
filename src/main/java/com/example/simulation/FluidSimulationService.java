@@ -1615,6 +1615,7 @@ public final class FluidSimulationService {
 		);
 		if (available && thermalFeatureEnabled && region.solverLoaded() && region.domain().hasThermalState()) {
 			region.enableThermalActivity();
+			if (region.domain().hasPendingPhaseVolumeWork()) region.wakeForActivity();
 		}
 		return available;
 	}
@@ -1649,10 +1650,13 @@ public final class FluidSimulationService {
 		boolean phaseDirty = domain.lastThermalPhaseStats().operations() != 0
 				|| domain.lastGasThermalPhaseStats().operations() != 0;
 		boolean auditClosed = domain.exactInternalEnergy().equals(after.expectedInventory());
+		boolean pendingVolumeOrWork = domain.hasPendingPhaseVolumeWork();
 		region.observeThermal(new ThermalActivity.Observation(domain.lastThermalTransportStats(),
-				chemistryDirty, granularDirty, phaseDirty, gasActivity, carrierMotion, false, auditClosed),
+				chemistryDirty, granularDirty, phaseDirty, gasActivity, carrierMotion,
+				pendingVolumeOrWork, auditClosed),
 				THERMAL_QUIET_STEPS);
-		if (!carrierMotion && (chemistryDirty || granularDirty || phaseDirty || gasActivity)) {
+		if (!carrierMotion && (chemistryDirty || granularDirty || phaseDirty || gasActivity
+				|| pendingVolumeOrWork)) {
 			region.wakeForActivity();
 		}
 	}
@@ -1870,6 +1874,9 @@ public final class FluidSimulationService {
 			return "清空失败：区域存在未完成或不可识别的容器转移 WAL；拒绝清空";
 		}
 		FlipFluidDomain domain = region.domain();
+		if (domain.hasPendingPhaseVolumeWork()) {
+			return "清空失败：区域存在尚未由下一次 pressure projection 消费的相变体积/功记录";
+		}
 		float beforeBlocks = domain.totalVolume() / CELL_VOLUMES_PER_BLOCK;
 		int beforeParticles = domain.particleCount();
 		FlipFluidDomain.WaterClearPlan waterPlan;
@@ -2003,10 +2010,11 @@ public final class FluidSimulationService {
 		if (!domain.hasThermalState()) return "thermal missing";
 		ThermalAuditLedger audit = domain.thermalAudit();
 		ThermalActivity activity = region.thermalActivity();
-		return String.format("thermal %s U=%.6g EU source=%.6g sink=%.6g work=%.6g coherent=%d SVQ audit=%s",
+		return String.format("thermal %s U=%.6g EU source=%.6g sink=%.6g work=%.6g coherent=%d SVQ pending-work=%s audit=%s",
 				activity == null ? "unbound" : activity.state(), domain.totalInternalEnergy(),
 				audit.externalSource().toDouble(), audit.externalSink().toDouble(),
 				audit.mechanicalWork().toDouble(), domain.totalCoherentSolidVolumeSvq(),
+				domain.hasPendingPhaseVolumeWork() ? "yes" : "no",
 				domain.exactInternalEnergy().equals(audit.expectedInventory()) ? "closed" : "FAILED");
 	}
 

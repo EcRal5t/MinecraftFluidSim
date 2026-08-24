@@ -675,6 +675,7 @@ final class FluidRegionPersistence {
 			region.restoreGasState(state.reconstructGas(gasRegistry, chemicalRegistry), gasRegistry, generation);
 			region.restoreThermalState(state.reconstructThermal(thermalRegistry, gasRegistry, chemicalRegistry),
 					thermalRegistry, generation, maximumThermalSubsteps);
+			region.domain().restorePendingPhaseVolumeState(state.reconstructPendingPhaseVolume());
 			region.setThermalInitializationRecord(state.reconstructThermalInitialization());
 			enablePrecipitationIfConfigured(region);
 		} catch (IOException | RuntimeException failure) {

@@ -112,6 +112,14 @@ final class FlipThermalState {
 	}
 
 	record ReactionPlan(int cell, SignedDyadic cellEnergy, SignedDyadic inventoryBefore, double equilibriumTemperatureK) { }
+	record PhaseMechanicalWorkPlan(
+			double[] targetCellEnergy, SignedDyadic inventoryBefore, SignedDyadic mechanicalWork
+	) {
+		PhaseMechanicalWorkPlan {
+			targetCellEnergy = targetCellEnergy.clone();
+		}
+		@Override public double[] targetCellEnergy() { return targetCellEnergy.clone(); }
+	}
 	record GasRemapPlan(
 			double[] nodeEnergy, SignedDyadic sourceEnergy, SignedDyadic sinkEnergy,
 			SignedDyadic mechanicalWork, SignedDyadic roundoff
@@ -554,6 +562,65 @@ final class FlipThermalState {
 		double[] target = cellGrid.copyInternalEnergy();
 		cellGrid.setCellInternalEnergies(target);
 		audit = audit.withRoundoff(exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore()));
+	}
+
+	PhaseMechanicalWorkPlan planPhaseMechanicalWork(
+			SignedDyadic[] pendingCellVolume, float[] gaugePressurePa, float cellSize, MarkerContext markers
+	) {
+		if (pendingCellVolume == null || gaugePressurePa == null
+				|| pendingCellVolume.length != cellGrid.cellCount()
+				|| gaugePressurePa.length != cellGrid.cellCount()
+				|| !(Float.isFinite(cellSize) && cellSize > 0.0F)) {
+			throw new IllegalArgumentException("Pending phase mechanical-work input is invalid");
+		}
+		SignedDyadic before = exactEnergy(markers.markerCount());
+		cellGrid.rebuild(carrierAccess(markers));
+		double[] target = cellGrid.copyInternalEnergy();
+		SignedDyadic work = SignedDyadic.ZERO;
+		double cellVolumeM3 = (double) cellSize * cellSize * cellSize;
+		for (int cell = 0; cell < pendingCellVolume.length; cell++) {
+			SignedDyadic signedCellVolume = pendingCellVolume[cell];
+			if (signedCellVolume == null) throw new IllegalArgumentException("Pending phase volume is missing");
+			if (signedCellVolume.equals(SignedDyadic.ZERO)) continue;
+			if (!cellGrid.occupied(cell)) {
+				throw new IllegalArgumentException("Pending phase volume names an empty thermal cell");
+			}
+			double absolutePressure = com.example.fluid.air.AirNetwork.REFERENCE_PRESSURE
+					+ gaugePressurePa[cell];
+			if (!(Double.isFinite(absolutePressure) && absolutePressure >= 0.0)) {
+				throw new IllegalArgumentException("Phase mechanical-work pressure is invalid");
+			}
+			double deltaVolumeM3 = signedCellVolume.toDouble() * cellVolumeM3;
+			double cellWork = -absolutePressure * deltaVolumeM3;
+			if (!Double.isFinite(cellWork) || !Double.isFinite(target[cell] + cellWork)) {
+				throw new IllegalArgumentException("Phase mechanical work is not representable");
+			}
+			target[cell] += cellWork;
+			work = work.add(SignedDyadic.of(cellWork));
+		}
+		cellGrid.validateCellInternalEnergies(target);
+		return new PhaseMechanicalWorkPlan(target, before, work);
+	}
+
+	void requirePendingPhaseCells(SignedDyadic[] pendingCellVolume, MarkerContext markers) {
+		if (pendingCellVolume == null || pendingCellVolume.length != cellGrid.cellCount()) {
+			throw new IllegalArgumentException("Pending phase-volume cells are incompatible");
+		}
+		cellGrid.rebuild(carrierAccess(markers));
+		for (int cell = 0; cell < pendingCellVolume.length; cell++) {
+			if (pendingCellVolume[cell] == null) throw new IllegalArgumentException("Pending phase volume is missing");
+			if (!pendingCellVolume[cell].equals(SignedDyadic.ZERO) && !cellGrid.occupied(cell)) {
+				throw new IllegalArgumentException("Pending phase volume names an empty thermal cell");
+			}
+		}
+	}
+
+	void commitPhaseMechanicalWork(PhaseMechanicalWorkPlan plan, MarkerContext markers) {
+		if (plan == null) throw new IllegalArgumentException("Phase mechanical-work plan is missing");
+		cellGrid.setCellInternalEnergies(plan.targetCellEnergy());
+		SignedDyadic actualDelta = exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore());
+		audit = audit.withMechanicalWork(plan.mechanicalWork())
+				.withRoundoff(actualDelta.subtract(plan.mechanicalWork()));
 	}
 
 	double temperatureInCell(int cell, MarkerContext markers) {

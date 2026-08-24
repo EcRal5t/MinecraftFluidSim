@@ -63,6 +63,7 @@ public final class M9ThermalValidation {
 		phasePlateauUsesTheStateFunctionGap();
 		coherentPhaseInventoryAndExactBatchPlanning();
 		compositionAndGranularPhaseChangeConservesJointTruth();
+		phaseVolumeWorkWaitsForMechanicalProjection();
 		granularEnergyColumnTransactions();
 		exactDyadicAuditDoesNotLoseCancellationRemainders();
 		containerTransferCarriesAuthoritativeEnergy();
@@ -834,6 +835,52 @@ public final class M9ThermalValidation {
 			Map<String, Long> species, double massResidual,
 			int indicatorCount, float indicatorVolume, double indicatorMass
 	) { }
+
+	private static void phaseVolumeWorkWaitsForMechanicalProjection() {
+		FluidMaterial liquid = FluidMaterial.withSurfaceTension("test:pending_liquid", 1.0,
+				"test:miscible", 0.0, 90.0);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
+		ThermalMaterialDefinition lower = new ThermalMaterialDefinition("test:thermal/pending_solid",
+				ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID, "test:pending_solid",
+				300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 1.0E9)));
+		ThermalMaterialDefinition upper = new ThermalMaterialDefinition("test:thermal/pending_liquid",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(),
+				300.0, 100.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 1.0E9)));
+		long batchSvq = SolidVolume.SVQ_PER_CELL / 8L;
+		ThermalPhaseTransition transition = new ThermalPhaseTransition("test:phase/pending_volume",
+				lower.id(), upper.id(), 300.0, batchSvq * 2L, batchSvq,
+				ExactRational.parse("0.125"), ThermalPhaseTransition.InterfaceRequirement.NONE,
+				0.0, 10_000_000.0);
+		ThermalRegistry registry = new ThermalRegistry(List.of(lower, upper), List.of(), List.of(transition), "", "");
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = new FlipFluidDomain(2, 2, 2, config, 128);
+		domain.setVolume(0, 0, 0, 0.5F);
+		domain.bindThermal(registry, liquids, 295.0);
+		ThermalAuditLedger before = domain.thermalAudit();
+		FlipFluidDomain.ThermalPhaseStats phase = domain.stepInertPhaseChangeOnly(16);
+		PendingPhaseVolumeState pending = domain.exportPendingPhaseVolumeState();
+		SignedDyadic signedCellVolume = pending.entries().stream()
+				.map(PendingPhaseVolumeState.Entry::signedCellVolume)
+				.reduce(SignedDyadic.ZERO, SignedDyadic::add);
+		require(phase.operations() == 4 && signedCellVolume.equals(SignedDyadic.of(0.5))
+				&& domain.hasPendingPhaseVolumeWork()
+				&& domain.thermalAudit().mechanicalWork().equals(before.mechanicalWork()),
+				"phase volume was not retained without prematurely booking projection work");
+
+		domain.step();
+		ThermalAuditLedger after = domain.thermalAudit();
+		require(!domain.hasPendingPhaseVolumeWork()
+				&& after.mechanicalWork().compareTo(before.mechanicalWork()) < 0
+				&& domain.exactInternalEnergy().equals(after.expectedInventory()),
+				"next mechanical projection did not consume expansion exactly once");
+		domain.step();
+		require(!domain.hasPendingPhaseVolumeWork()
+				&& domain.thermalAudit().mechanicalWork().equals(after.mechanicalWork()),
+				"cleared phase volume repeated its mechanical work on a later projection");
+	}
 
 	private static void exactDyadicAuditDoesNotLoseCancellationRemainders() {
 		SignedDyadic exact = SignedDyadic.sum(new double[]{1.0E16, 1.0, -1.0E16});

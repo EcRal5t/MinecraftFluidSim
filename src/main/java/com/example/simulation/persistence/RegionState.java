@@ -4,6 +4,7 @@ import com.example.fluid.FlipParticleState;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipChemicalParticleState;
 import com.example.fluid.FlipThermalParticleState;
+import com.example.fluid.PendingPhaseVolumeState;
 import com.example.fluid.FluidMaterial;
 import com.example.fluid.air.AirNetwork;
 import com.example.fluid.air.GasComponentAmount;
@@ -390,6 +391,10 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					thermal.audit(), List.copyOf(ledgers), gasNodeEnergyBits);
 			manifestExtensions.add(new RegionExtension(ThermalRegionStateCodec.MANIFEST_EXTENSION,
 					codec.encodeManifest(data)));
+			PendingPhaseVolumeState pendingPhaseVolume = region.domain().exportPendingPhaseVolumeState();
+			if (!pendingPhaseVolume.isEmpty()) manifestExtensions.add(new RegionExtension(
+					PendingPhaseVolumeCodec.MANIFEST_EXTENSION,
+					new PendingPhaseVolumeCodec().encode(pendingPhaseVolume)));
 			ThermalInitializationRecord initialization = region.thermalInitializationRecord();
 			if (initialization != null) manifestExtensions.add(new RegionExtension(
 					ThermalInitializationRecord.MANIFEST_EXTENSION, initialization.encode()));
@@ -583,6 +588,19 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		}
 		return ThermalInitializationRecord.decode(requiredExtension(manifest.extensions(),
 				ThermalInitializationRecord.MANIFEST_EXTENSION).payload());
+	}
+
+	/** Sparse absence is the canonical empty record; presence is valid only in a complete v6 generation. */
+	public PendingPhaseVolumeState reconstructPendingPhaseVolume() throws IOException {
+		int cellCount = Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ());
+		if (!hasExtension(manifest.extensions(), PendingPhaseVolumeCodec.MANIFEST_EXTENSION)) {
+			return new PendingPhaseVolumeState(cellCount, List.of());
+		}
+		if (manifest.formatVersion() != 6) {
+			throw new IOException("Pending phase volume is only valid in region-state v6");
+		}
+		return new PendingPhaseVolumeCodec().decode(requiredExtension(
+				manifest.extensions(), PendingPhaseVolumeCodec.MANIFEST_EXTENSION).payload(), cellCount);
 	}
 
 	/** Full v6 validation additionally binds every saved node U to its authoritative gas inventory. */
@@ -794,9 +812,12 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		boolean gasPayload = hasExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION);
 		boolean initializationPayload = hasExtension(manifest.extensions(),
 				ThermalInitializationRecord.MANIFEST_EXTENSION);
+		boolean pendingPhaseVolumePayload = hasExtension(manifest.extensions(),
+				PendingPhaseVolumeCodec.MANIFEST_EXTENSION);
 		for (RegionSectionState section : sections) if (hasExtension(section.extensions(),
-				ThermalInitializationRecord.MANIFEST_EXTENSION)) {
-			throw new IOException("Thermal initialization evidence is manifest-only");
+				ThermalInitializationRecord.MANIFEST_EXTENSION)
+				|| hasExtension(section.extensions(), PendingPhaseVolumeCodec.MANIFEST_EXTENSION)) {
+			throw new IOException("Thermal initialization/pending-volume evidence is manifest-only");
 		}
 		if (initializationPayload) {
 			if (manifest.formatVersion() != 6) {
@@ -805,6 +826,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			ThermalInitializationRecord.decode(requiredExtension(manifest.extensions(),
 					ThermalInitializationRecord.MANIFEST_EXTENSION).payload());
 		}
+		if (pendingPhaseVolumePayload) validatePendingPhaseVolumeCells();
 		if (manifest.formatVersion() == 4) {
 			if (!gasPayload || hasExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION)
 					|| hasExtension(manifest.extensions(), ThermalRegionStateCodec.MANIFEST_EXTENSION)) {
@@ -819,6 +841,51 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		if (gasPayload) validateGasLedgers();
 		if (hasExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION)) validateGranularLedgers();
 		if (manifest.hasThermalState()) validateThermalLedgers();
+	}
+
+	private void validatePendingPhaseVolumeCells() throws IOException {
+		PendingPhaseVolumeState pending = reconstructPendingPhaseVolume();
+		boolean[] carrier = new boolean[pending.cellCount()];
+		float cellSize = manifest.solverConfig().cellSize();
+		for (RegionSectionState section : sections) {
+			float[] positionVolume = section.positionVolume();
+			for (int marker = 0; marker < section.markerCount(); marker++) {
+				int base = marker * 4;
+				int x = (int) Math.floor(positionVolume[base] / cellSize);
+				int y = (int) Math.floor(positionVolume[base + 1] / cellSize);
+				int z = (int) Math.floor(positionVolume[base + 2] / cellSize);
+				if (x < 0 || x >= manifest.sizeX() || y < 0 || y >= manifest.sizeY()
+						|| z < 0 || z >= manifest.sizeZ()) {
+					throw new IOException("Pending phase-volume validation found an out-of-domain marker");
+				}
+				carrier[x + manifest.sizeX() * (y + manifest.sizeY() * z)] = true;
+			}
+			ThermalRegionStateCodec.SectionData thermal = new ThermalRegionStateCodec().decodeSection(
+					requiredExtension(section.extensions(), ThermalRegionStateCodec.SECTION_EXTENSION).payload(),
+					section.markerCount(), GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION,
+					GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
+			for (ThermalRegionStateCodec.CoherentEntry group : thermal.coherentGroups()) carrier[group.cell()] = true;
+			if (hasExtension(section.extensions(), GranularRegionStateCodec.SECTION_EXTENSION)) {
+				GranularRegionStateCodec.SectionData granular = new GranularRegionStateCodec().decodeSection(
+						requiredExtension(section.extensions(), GranularRegionStateCodec.SECTION_EXTENSION).payload(),
+						GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
+				for (GranularRegionStateCodec.ActiveEntry entry : granular.active()) {
+					GranularStateSnapshot.ActiveParcel parcel = entry.parcel();
+					int x = (int) Math.floor(parcel.x() / cellSize);
+					int y = (int) Math.floor(parcel.y() / cellSize);
+					int z = (int) Math.floor(parcel.z() / cellSize);
+					if (x < 0 || x >= manifest.sizeX() || y < 0 || y >= manifest.sizeY()
+							|| z < 0 || z >= manifest.sizeZ()) {
+						throw new IOException("Pending phase-volume validation found an out-of-domain granular parcel");
+					}
+					carrier[x + manifest.sizeX() * (y + manifest.sizeY() * z)] = true;
+				}
+				for (GranularStateSnapshot.DepositGroup group : granular.deposits()) carrier[group.cell()] = true;
+			}
+		}
+		for (PendingPhaseVolumeState.Entry entry : pending.entries()) if (!carrier[entry.cell()]) {
+			throw new IOException("Pending phase volume names a cell without a thermal carrier");
+		}
 	}
 
 	private void validateGasLedgers() throws IOException { reconstructGasPayload(null, null); }

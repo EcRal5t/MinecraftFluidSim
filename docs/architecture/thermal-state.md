@@ -117,7 +117,12 @@ marker 不参与冻结分配且不得因相变缩放。同格 active parcel/depo
 候选反演；因此相变可以和颗粒交换显热，不能把颗粒存在当作拒绝相变的特异条件。
 相态变化的 `delta V` 是显式 volume event，并在下一 mechanical projection 消费同一 pending volume/work record；
 其 `-p delta V` 进入 mechanical-work ledger。正膨胀在闭域中无可表示容量时 PAUSED，不删体积、不钳相分数。
-pending record 属于 v6 真值，checkpoint 后不得重复或丢失排水。
+pending record 使用 exact `SignedDyadic` cell-volume（SVQ 事件为 `integer * 2^-24`，marker float 保留其精确二进制值），
+属于独立的 manifest-only v6 extension `realwater:pending_phase_volume_v1`；extension 缺失是唯一 canonical empty 表示。
+checkpoint/restart 后必须唤醒 motion，在下一次真实 pressure projection 已消费新 occupancy/volume drift 后按该格 absolute
+pressure 记一次 `-p delta V`，联合验证 carrier 能量后清除记录。不得同时再注入 divergence source 而重复排水，也不得提前
+清除、在 `empty` 中吞掉或因 thermal sleep 丢失。气液相变已由 gas available-volume remap 当场结算 gas compression work，
+不再生成同一 pending condensed-volume work。
 
 ## 非等温气体与沸腾/冷凝
 
@@ -197,6 +202,8 @@ thermal sleep 要求连续 quiet steps 内：所有内部/边界可表示通量�
 
 `region-state v6` 是一个完整联合 generation，不是 v5 HEAD 加 sidecar。manifest/section 必需 typed thermal extension，
 逐 marker/active/deposit/coherent/gas energy ordinal 必须完整且 canonical；HEAD 仍是唯一且最后提交点。
+已提交但尚未投影的凝聚相/固液反应 volume event 只使用上述 optional manifest extension；它与 required thermal payload 同代发布，
+只允许引用存在 thermal carrier 的格。读取未知、非 canonical、越预算、cell 失配或非 v6 携带均锁定，禁止猜测清零。
 reader 精确接受 `{1,2,3,4,5,6}`，但 v4 只按其独立 gas capability 读取，不能由版本号猜联合内容。
 
 v1/v2/v3/v5 没有热真值，禁止自动按环境、biome、当前 registry 或外观猜 `U`。旧 controller 只有在 PAUSED、

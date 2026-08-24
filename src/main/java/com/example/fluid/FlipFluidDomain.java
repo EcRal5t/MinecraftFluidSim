@@ -172,6 +172,7 @@ public final class FlipFluidDomain {
 	private float lastPressureResidual;
 	private boolean variableDensityActive;
 	private FlipThermalState thermalState;
+	private final SignedDyadic[] pendingPhaseCellVolume;
 
 	public FlipFluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config) {
 		this(sizeX, sizeY, sizeZ, config, DEFAULT_MAX_PARTICLES);
@@ -238,6 +239,8 @@ public final class FlipFluidDomain {
 		this.preconditioned = new float[cellCount];
 		this.direction = new float[cellCount];
 		this.matrixDirection = new float[cellCount];
+		this.pendingPhaseCellVolume = new SignedDyadic[cellCount];
+		Arrays.fill(this.pendingPhaseCellVolume, SignedDyadic.ZERO);
 		this.airNetwork = new AirNetwork();
 		this.airScanner = new AirCavityScanner(sizeX, sizeY, sizeZ, config.cellSize(), cellCount);
 		this.airCellNodeId = null;
@@ -359,6 +362,23 @@ public final class FlipFluidDomain {
 	public boolean hasChemistryState() { return chemicalParcels != null; }
 	public boolean hasGranularState() { return granularParcels != null; }
 	public boolean hasThermalState() { return thermalState != null; }
+	public boolean hasPendingPhaseVolumeWork() {
+		for (SignedDyadic value : pendingPhaseCellVolume) if (!value.equals(SignedDyadic.ZERO)) return true;
+		return false;
+	}
+	public PendingPhaseVolumeState exportPendingPhaseVolumeState() {
+		if (thermalState == null) throw new IllegalStateException("Pending phase volume requires thermal state");
+		return PendingPhaseVolumeState.capture(pendingPhaseCellVolume);
+	}
+	public void restorePendingPhaseVolumeState(PendingPhaseVolumeState state) {
+		if (thermalState == null || state == null || state.cellCount() != cellCount
+				|| hasPendingPhaseVolumeWork()) {
+			throw new IllegalArgumentException("Pending phase-volume restore is incompatible");
+		}
+		SignedDyadic[] restored = state.toDense();
+		thermalState.requirePendingPhaseCells(restored, thermalMarkerContext());
+		System.arraycopy(restored, 0, pendingPhaseCellVolume, 0, cellCount);
+	}
 	public ThermalTransport.Stats lastThermalTransportStats() {
 		return thermalState == null
 				? new ThermalTransport.Stats(0, 0, 0.0, SignedDyadic.ZERO, SignedDyadic.ZERO)
@@ -1646,6 +1666,15 @@ public final class FlipFluidDomain {
 		long byVolume = volumeInventory / volumeBatch;
 		long byMass = (long) Math.floor((massInventory + massTolerance(massInventory)) / batchMass);
 		long high = Math.min(maximumBatches, Math.min(byVolume, byMass));
+		long signedVolumePerBatch = freezing
+				? transition.lowerVolumeSvqPerBatch() - transition.upperVolumeSvqPerBatch()
+				: transition.upperVolumeSvqPerBatch() - transition.lowerVolumeSvqPerBatch();
+		if (signedVolumePerBatch > 0L) {
+			long occupied = Math.addExact(Math.addExact(before.lowerVolumeSvq(), before.upperVolumeSvq()),
+					phaseGranularSvq(cell));
+			long capacity = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+			high = Math.min(high, (capacity - occupied) / signedVolumePerBatch);
+		}
 		if (high <= 0L) return null;
 
 		JointPhasePlan first = jointPhaseCandidate(cell, liquidHandle, transition, before, freezing, 1L);
@@ -1750,8 +1779,10 @@ public final class FlipFluidDomain {
 				finalUpperComposition.amounts()));
 		double candidateTemperature = thermalState.phaseCandidateTemperature(
 				cell, phaseInventory, thermalMarkerContext());
+		long signedVolumeSvq = freezing ? lowerDelta - upperDelta : upperDelta - lowerDelta;
+		pendingPhaseCellVolume[cell].add(cellVolumeDyadic(signedVolumeSvq));
 		return new JointPhasePlan(batches, freezing, removal, coherentTransfer,
-				meltedMixture, meltSlot, candidateTemperature);
+				meltedMixture, meltSlot, candidateTemperature, signedVolumeSvq);
 	}
 
 	private long phaseGranularSvq(int cell) {
@@ -1824,6 +1855,7 @@ public final class FlipFluidDomain {
 			}
 		}
 		thermalState.addCoherentInternal(plan.coherentTransfer());
+		commitPendingPhaseVolume(cell, plan.signedVolumeSvq());
 		refreshCoherentOccupancy();
 		gridDirty = true;
 		thermalState.repartitionCellEnergyConserving(cell, thermalMarkerContext(), inventoryBefore);
@@ -1842,6 +1874,7 @@ public final class FlipFluidDomain {
 		spawnParticle(x, y, z, plan.meltSlot(), SolidVolume.toCellVolume(addedSvq), liquidHandle,
 				removed.mass(), plan.meltedMixture(), false, false);
 		thermalState.addLiquidEnergy(marker, removed.internalEnergy());
+		commitPendingPhaseVolume(cell, plan.signedVolumeSvq());
 		refreshCoherentOccupancy();
 		gridDirty = true;
 		thermalState.repartitionCellEnergyConserving(cell, thermalMarkerContext(), inventoryBefore);
@@ -1934,7 +1967,7 @@ public final class FlipFluidDomain {
 	private record JointPhasePlan(
 			long batches, boolean freezing, PhaseRemovalPlan removal,
 			CoherentPhaseStore.Group coherentTransfer, ChemicalMixtureRecord meltedMixture,
-			int meltSlot, double temperatureAfterK
+			int meltSlot, double temperatureAfterK, long signedVolumeSvq
 	) { }
 
 	/** Exact species quanta plus the independently carried mass residual across a condensed phase boundary. */
@@ -2149,6 +2182,7 @@ public final class FlipFluidDomain {
 
 	private void clearThermalBinding() {
 		thermalState = null;
+		Arrays.fill(pendingPhaseCellVolume, SignedDyadic.ZERO);
 		if (granularRegistry == null) {
 			granularCoupling = null; granularNextCoupling = null; pressureGranularCoupling = null;
 		}
@@ -3575,7 +3609,16 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			enforceSolidFaceVelocities();
 			solvePressure(dt);
 			pressureIterations += lastPressureIterations;
+			FlipThermalState.PhaseMechanicalWorkPlan phaseWork = substep == 0
+					&& thermalState != null && hasPendingPhaseVolumeWork()
+					? thermalState.planPhaseMechanicalWork(
+							pendingPhaseCellVolume, pressure, config.cellSize(), thermalMarkerContext())
+					: null;
 			projectVelocity(dt);
+			if (phaseWork != null) {
+				thermalState.commitPhaseMechanicalWork(phaseWork, thermalMarkerContext());
+				Arrays.fill(pendingPhaseCellVolume, SignedDyadic.ZERO);
+			}
 			enforceSolidFaceVelocities();
 			extrapolateVelocityIntoAir();
 			gridToParticles();
@@ -4484,6 +4527,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	private void commitPrecipitation(
 			int cell, SolidLiquidReaction rule, GranularPhaseTransferEngine.Plan plan
 	) {
+		SignedDyadic pendingVolume = planGranularPhaseVolumeEvent(cell, plan);
 		int[] markers = updateMarkers(plan); ChemicalMixtureRecord[] mixtures = updateMixtures(plan);
 		chemicalParcels.requireCanCommitPlannedReplacements(markers, mixtures);
 		int carrierMarker = precipitationCarrierMarker(cell, plan);
@@ -4509,6 +4553,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			solidCompositions.overwrite(merge.compositionHandle(), merge.composition());
 			granularParcels.overwrite(merge.parcelIndex(), merge.parcel());
 			if (thermalPlan != null) thermalState.commitGranularReaction(thermalPlan, thermalMarkerContext());
+			commitPendingPhaseVolume(cell, pendingVolume);
 			markPhaseTransferDirty(cell);
 			return;
 		}
@@ -4539,6 +4584,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			thermalState.addGranularReactionActive();
 			thermalState.commitGranularReaction(thermalPlan, thermalMarkerContext());
 		}
+		commitPendingPhaseVolume(cell, pendingVolume);
 		markPhaseTransferDirty(cell);
 	}
 
@@ -4602,6 +4648,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	private void commitDissolution(
 			int cell, SolidLiquidReaction rule, GranularPhaseTransferEngine.Plan plan, SolidEntity solid
 	) {
+		SignedDyadic pendingVolume = planGranularPhaseVolumeEvent(cell, plan);
 		if (!rule.reversible()) throw new GranularPhaseTransferEngine.BlockedException("Solid-liquid rule is not reversible");
 		long removedSvq = -plan.signedSolidSvq(); double removedMass = -plan.signedSolidMass();
 		if (removedSvq <= 0L || removedSvq > solid.solidSvq()) {
@@ -4658,7 +4705,34 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		if (full) solidCompositions.release(solid.compositionHandle()); else solidCompositions.overwrite(
 				solid.compositionHandle(), remaining);
 		if (thermalPlan != null) thermalState.commitGranularReaction(thermalPlan, thermalMarkerContext());
+		commitPendingPhaseVolume(cell, pendingVolume);
 		markPhaseTransferDirty(cell);
+	}
+
+	private SignedDyadic planGranularPhaseVolumeEvent(int cell, GranularPhaseTransferEngine.Plan plan) {
+		if (thermalState == null) return SignedDyadic.ZERO;
+		SignedDyadic delta = cellVolumeDyadic(plan.signedSolidSvq());
+		for (GranularPhaseTransferEngine.MarkerUpdate update : plan.markerUpdates()) {
+			delta = delta.add(SignedDyadic.of(update.cellVolume()))
+					.subtract(SignedDyadic.of(particleVolume[update.marker()]));
+		}
+		pendingPhaseCellVolume[cell].add(delta);
+		return delta;
+	}
+
+	private void commitPendingPhaseVolume(int cell, long signedSvq) {
+		commitPendingPhaseVolume(cell, cellVolumeDyadic(signedSvq));
+	}
+
+	private void commitPendingPhaseVolume(int cell, SignedDyadic signedCellVolume) {
+		if (thermalState != null && !signedCellVolume.equals(SignedDyadic.ZERO)) {
+			pendingPhaseCellVolume[cell] = pendingPhaseCellVolume[cell].add(signedCellVolume);
+		}
+	}
+
+	private static SignedDyadic cellVolumeDyadic(long signedSvq) {
+		return signedSvq == 0L ? SignedDyadic.ZERO
+				: new SignedDyadic(java.math.BigInteger.valueOf(signedSvq), -24);
 	}
 
 	private SolidCompositionRecord subtractComposition(

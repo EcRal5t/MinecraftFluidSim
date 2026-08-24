@@ -90,18 +90,7 @@ public final class ThermalCellGrid {
 
 	public void setCellInternalEnergies(double[] targetEnergy) {
 		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
-		if (targetEnergy == null || targetEnergy.length != cellCount) {
-			throw new IllegalArgumentException("Thermal cell energy array length changed");
-		}
-		// Validate the entire candidate before changing any authoritative marker energy.
-		for (int cell = 0; cell < cellCount; cell++) {
-			if (carrierCount[cell] == 0) {
-				if (targetEnergy[cell] != 0.0) throw new IllegalArgumentException("Empty thermal cell received energy");
-			} else {
-				if (!Double.isFinite(targetEnergy[cell])) throw new IllegalArgumentException("Thermal cell energy is not finite");
-				solveCell(cell, targetEnergy[cell]);
-			}
-		}
+		validateCellInternalEnergies(targetEnergy);
 		for (int cell = 0; cell < cellCount; cell++) {
 			if (carrierCount[cell] == 0) {
 				continue;
@@ -122,6 +111,23 @@ public final class ThermalCellGrid {
 			carriers.setInternalEnergy(last, remainder);
 			validateCarrierAtCellTemperature(last, temperature[cell]);
 			internalEnergy[cell] = requested;
+		}
+	}
+
+	/** Validates a complete prospective LTE energy assignment without changing any authoritative carrier. */
+	public void validateCellInternalEnergies(double[] targetEnergy) {
+		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
+		if (targetEnergy == null || targetEnergy.length != cellCount) {
+			throw new IllegalArgumentException("Thermal cell energy array length changed");
+		}
+		// Validate the entire candidate before changing any authoritative marker energy.
+		for (int cell = 0; cell < cellCount; cell++) {
+			if (carrierCount[cell] == 0) {
+				if (targetEnergy[cell] != 0.0) throw new IllegalArgumentException("Empty thermal cell received energy");
+			} else {
+				if (!Double.isFinite(targetEnergy[cell])) throw new IllegalArgumentException("Thermal cell energy is not finite");
+				solveCell(cell, targetEnergy[cell]);
+			}
 		}
 	}
 

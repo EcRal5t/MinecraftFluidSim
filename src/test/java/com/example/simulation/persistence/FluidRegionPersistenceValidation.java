@@ -5,6 +5,7 @@ import com.example.fluid.FlipChemicalParticleState;
 import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FlipParticleState;
 import com.example.fluid.FlipThermalParticleState;
+import com.example.fluid.PendingPhaseVolumeState;
 import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FluidMaterial;
 import com.example.fluid.FluidMaterialRegistry;
@@ -114,6 +115,13 @@ public final class FluidRegionPersistenceValidation {
 		region.domain().setThermalTemperatureInCell(5, 3, 5, 280.0);
 		region.domain().addCoherentPhaseExternal(3, 2, 3, "realwater:thermal/persistence_solid",
 				SolidVolume.SVQ_PER_CELL / 8L, 0.125, null, 6.25);
+		PendingPhaseVolumeState expectedPending = new PendingPhaseVolumeState(
+				region.sizeX() * region.sizeY() * region.sizeZ(), List.of(
+				new PendingPhaseVolumeState.Entry((1 * region.sizeY() + 1) * region.sizeX() + 1,
+						SignedDyadic.of(Math.scalb(17.0, -24))),
+				new PendingPhaseVolumeState.Entry((3 * region.sizeY() + 2) * region.sizeX() + 3,
+						SignedDyadic.of(Math.scalb(-9.0, -24)))));
+		region.domain().restorePendingPhaseVolumeState(expectedPending);
 		FlipThermalParticleState expected = region.domain().exportThermalParticleState();
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
 		GasStateSnapshot expectedGas = region.domain().exportGasState("");
@@ -125,14 +133,19 @@ public final class FluidRegionPersistenceValidation {
 		assertGranularStateEquals(expectedGranular, state.reconstructGranular(granular));
 		assertGasStateEquals(expectedGas, state.reconstructGas(gas, null));
 		assertThermalStateEquals(expected, state.reconstructThermal(thermal));
+		require(state.reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
+				"pending phase-volume v6 record did not round-trip");
 		FlipFluidDomain restoredDomain = new FlipFluidDomain(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG, 512);
 		restoredDomain.restoreMaterialParticleState(state.reconstructMaterial());
 		restoredDomain.restoreGranularState(state.reconstructGranular(granular), granular,
 				restoredDomain.materialRegistry());
 		restoredDomain.restoreGasState(state.reconstructGas(gas, null), gas);
 		restoredDomain.restoreThermalParticleState(state.reconstructThermal(thermal), thermal);
+		restoredDomain.restorePendingPhaseVolumeState(state.reconstructPendingPhaseVolume());
 		assertGranularStateEquals(expectedGranular, restoredDomain.exportGranularState());
 		assertThermalStateEquals(expected, restoredDomain.exportThermalParticleState());
+		require(restoredDomain.exportPendingPhaseVolumeState().entries().equals(expectedPending.entries()),
+				"pending phase volume was not restored beside thermal inventory");
 
 		RegionStateCodec codec = new RegionStateCodec();
 		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
@@ -162,6 +175,8 @@ public final class FluidRegionPersistenceValidation {
 		RegionStateFiles files = new RegionStateFiles(root, null, granular, thermal, gas);
 		files.publish(state);
 		assertThermalStateEquals(expected, files.read(region.id()).reconstructThermal(thermal));
+		require(files.read(region.id()).reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
+				"published pending phase volume did not survive committed readback");
 		expectIOException(() -> state.reconstructThermal(thermalRegistry(new FluidMaterialRegistry(
 				List.of(BuiltinFluidMaterials.WATER)))), "foreign v6 thermal registry was accepted");
 
