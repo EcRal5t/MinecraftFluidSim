@@ -3142,7 +3142,8 @@ public final class FlipFluidDomain {
 			chemicalParcels.requireCanRecordEscapedSink(drained);
 		}
 		return new WaterClearPlan(particleCount, Double.doubleToRawLongBits(totalVolumeExact()),
-				Double.doubleToRawLongBits(totalMass()), drained, exactInternalEnergy());
+				Double.doubleToRawLongBits(totalMass()), drained,
+				thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particleCount));
 	}
 
 	/** Commits a previously validated liquid clear; no new ledger candidate is constructed here. */
@@ -3150,7 +3151,8 @@ public final class FlipFluidDomain {
 		if (plan == null || particleCount != plan.markerCount()
 				|| Double.doubleToRawLongBits(totalVolumeExact()) != plan.totalVolumeBits()
 				|| Double.doubleToRawLongBits(totalMass()) != plan.totalMassBits()
-				|| !exactInternalEnergy().equals(plan.internalEnergy())) {
+				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particleCount))
+				.equals(plan.internalEnergy())) {
 			throw new IllegalStateException("Liquid inventory changed after clear planning");
 		}
 		if (chemicalParcels != null) {
@@ -3162,10 +3164,125 @@ public final class FlipFluidDomain {
 		gridDirty = true;
 	}
 
+	/** Plans one operator clear across liquid markers and every M9 coherent condensed phase. */
+	public CondensedClearPlan planRemoveAllCondensedExact() {
+		WaterClearPlan liquid = planRemoveAllWaterExact();
+		List<CoherentPhaseStore.Group> groups = thermalState == null
+				? List.of() : thermalState.coherentPhases().snapshot();
+		ChemicalTransferLedger coherentChemistry = ChemicalTransferLedger.EMPTY;
+		if (!groups.isEmpty()) {
+			ChemicalTransferLedger.Builder builder = chemicalParcels == null ? null
+					: ChemicalTransferLedger.builder(chemicalParcels.registry());
+			for (CoherentPhaseStore.Group group : groups) {
+				if (group.composition() == null) continue;
+				if (builder == null) {
+					throw new IllegalStateException("Chemical coherent phase exists without chemistry state");
+				}
+				builder.add(new ChemicalTransferLedger.Group(
+						coherentLiquidMaterialId(group.phaseId()), false,
+						SolidVolume.toCellVolume(group.occupiedVolumeSvq()), group.mass(),
+						group.composition().massResidualBits(), group.composition().stableAmounts()));
+			}
+			if (builder != null) coherentChemistry = builder.build();
+		}
+		ChemicalTransferLedger drained = liquid.drained().plus(coherentChemistry);
+		if (chemicalParcels != null) chemicalParcels.requireCanRecordEscapedSink(drained);
+		SignedDyadic coherentEnergy = thermalState == null
+				? SignedDyadic.ZERO : thermalState.coherentPhases().exactEnergy();
+		long coherentSvq = thermalState == null ? 0L : thermalState.coherentPhases().totalOccupiedSvq();
+		double coherentMass = thermalState == null ? 0.0 : thermalState.coherentPhases().totalMass();
+		return new CondensedClearPlan(liquid, groups, drained, coherentEnergy, coherentSvq,
+				Double.doubleToRawLongBits(coherentMass));
+	}
+
+	/** Commits a jointly prevalidated liquid/coherent clear and records only the energy actually removed. */
+	public CondensedClear commitRemoveAllCondensedExact(CondensedClearPlan plan) {
+		if (plan == null) throw new IllegalArgumentException("Condensed clear plan is missing");
+		WaterClearPlan liquid = plan.liquid();
+		if (particleCount != liquid.markerCount()
+				|| Double.doubleToRawLongBits(totalVolumeExact()) != liquid.totalVolumeBits()
+				|| Double.doubleToRawLongBits(totalMass()) != liquid.totalMassBits()
+				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particleCount))
+				.equals(liquid.internalEnergy())) {
+			throw new IllegalStateException("Liquid inventory changed after condensed clear planning");
+		}
+		List<CoherentPhaseStore.Group> currentGroups = thermalState == null
+				? List.of() : thermalState.coherentPhases().snapshot();
+		if (!currentGroups.equals(plan.coherentGroups())
+				|| (thermalState == null ? SignedDyadic.ZERO : thermalState.coherentPhases().exactEnergy())
+				.compareTo(plan.coherentEnergy()) != 0
+				|| (thermalState == null ? 0L : thermalState.coherentPhases().totalOccupiedSvq())
+				!= plan.coherentVolumeSvq()
+				|| Double.doubleToRawLongBits(thermalState == null ? 0.0
+				: thermalState.coherentPhases().totalMass()) != plan.coherentMassBits()) {
+			throw new IllegalStateException("Coherent phase inventory changed after condensed clear planning");
+		}
+		if (chemicalParcels != null) {
+			chemicalParcels.recordEscapedSink(plan.drained());
+			chemicalParcels.clear(particleCount);
+		}
+		if (thermalState != null) {
+			thermalState.recordExternalSink(liquid.internalEnergy());
+			thermalState.clearCoherentExternal(plan.coherentGroups(), plan.coherentEnergy());
+		}
+		particleCount = 0;
+		refreshCoherentOccupancy();
+		gridDirty = true;
+		return new CondensedClear(plan.coherentVolumeSvq(),
+				Double.longBitsToDouble(plan.coherentMassBits()), plan.coherentGroups().size());
+	}
+
+	/** Prevalidates every truth removed by the operator-level condensed inventory reset. */
+	public OperatorClearPlan planOperatorClear() {
+		if (hasPendingPhaseVolumeWork()) {
+			throw new IllegalStateException("Pending phase volume/work must be projected before operator clear");
+		}
+		return new OperatorClearPlan(planRemoveAllCondensedExact(), planRemoveAllGranularExact());
+	}
+
+	/** Clears condensed inventories, then remaps retained gas truth against the newly empty geometry. */
+	public OperatorClear commitOperatorClear(OperatorClearPlan plan) {
+		if (plan == null) throw new IllegalArgumentException("Operator clear plan is missing");
+		CondensedClear condensed = commitRemoveAllCondensedExact(plan.condensed());
+		GranularClear granular = commitRemoveAllGranularExact(plan.granular());
+		ensureGrid();
+		if (airCellNodeId != null) refreshGasTopology();
+		return new OperatorClear(condensed, granular);
+	}
+
+	private String coherentLiquidMaterialId(String coherentPhaseId) {
+		String found = null;
+		for (ThermalPhaseTransition transition : thermalState.registry().transitions()) {
+			if (!transition.lowerEnergyMaterialId().equals(coherentPhaseId)) continue;
+			ThermalMaterialDefinition upper = thermalState.registry().material(
+					thermalState.registry().materialHandle(transition.upperEnergyMaterialId()));
+			if (upper.carrierKind() != ThermalMaterialDefinition.CarrierKind.LIQUID) continue;
+			materialRegistry.handle(upper.carrierId());
+			if (found != null && !found.equals(upper.carrierId())) {
+				throw new IllegalStateException("Coherent phase has ambiguous liquid chemical ownership");
+			}
+			found = upper.carrierId();
+		}
+		if (found == null) {
+			throw new IllegalStateException("Chemical coherent phase has no unique liquid ownership");
+		}
+		return found;
+	}
+
 	public record WaterClearPlan(
 			int markerCount, long totalVolumeBits, long totalMassBits, ChemicalTransferLedger drained,
 			SignedDyadic internalEnergy
 	) { }
+	public record CondensedClear(long coherentVolumeSvq, double coherentMass, int coherentGroups) { }
+	public record CondensedClearPlan(
+			WaterClearPlan liquid, List<CoherentPhaseStore.Group> coherentGroups,
+			ChemicalTransferLedger drained, SignedDyadic coherentEnergy,
+			long coherentVolumeSvq, long coherentMassBits
+	) {
+		public CondensedClearPlan { coherentGroups = List.copyOf(coherentGroups); }
+	}
+	public record OperatorClear(CondensedClear condensed, GranularClear granular) { }
+	public record OperatorClearPlan(CondensedClearPlan condensed, GranularClearPlan granular) { }
 
 	public static final class GranularCollisionBlockedException extends IllegalStateException {
 		public GranularCollisionBlockedException(String message, Throwable cause) { super(message, cause); }

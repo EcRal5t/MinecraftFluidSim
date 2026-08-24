@@ -1946,40 +1946,40 @@ public final class FluidSimulationService {
 		}
 		float beforeBlocks = domain.totalVolume() / CELL_VOLUMES_PER_BLOCK;
 		int beforeParticles = domain.particleCount();
-		FlipFluidDomain.WaterClearPlan waterPlan;
-		FlipFluidDomain.GranularClearPlan granularPlan;
+		FlipFluidDomain.OperatorClearPlan clearPlan;
 		try {
-			waterPlan = domain.planRemoveAllWaterExact();
-			granularPlan = domain.planRemoveAllGranularExact();
+			clearPlan = domain.planOperatorClear();
 		} catch (RuntimeException failure) {
-			return "清空失败：联合流体/颗粒预检未通过，活动库存未改变：" + failure.getMessage();
+			return "清空失败：联合液体/coherent/颗粒预检未通过，活动库存未改变：" + failure.getMessage();
 		}
-		FlipFluidDomain.GranularClear granular;
+		FlipFluidDomain.OperatorClear cleared;
 		try {
-			domain.commitRemoveAllWaterExact(waterPlan);
-			granular = domain.commitRemoveAllGranularExact(granularPlan);
+			cleared = domain.commitOperatorClear(clearPlan);
 		} catch (RuntimeException failure) {
 			region.setPaused(true);
 			region.setAvailabilityFailure("empty 联合提交违反已预检不变量：" + failure.getMessage());
 			return "清空联合提交失败；区域已暂停：" + failure.getMessage();
 		}
 		region.wakeForActivity();
+		FlipFluidDomain.CondensedClear condensed = cleared.condensed();
+		FlipFluidDomain.GranularClear granular = cleared.granular();
 		if (region.controllerManaged()) {
 			try {
 				long generation = regionOperations.checkpoint(region);
 				sendSnapshot(level, region);
-				return String.format("已清空区域：%.3f 方块流体（%d 个 marker），%d SVQ 颗粒（active %d，deposit groups %d），checkpoint %d 已发布",
-						beforeBlocks, beforeParticles, granular.solidVolumeSvq(), granular.activeParcels(),
-						granular.depositGroups(), generation);
+				return String.format("已清空区域：%.3f 方块液体（%d 个 marker），%d SVQ coherent（%d groups），%d SVQ 颗粒（active %d，deposit groups %d），checkpoint %d 已发布",
+						beforeBlocks, beforeParticles, condensed.coherentVolumeSvq(), condensed.coherentGroups(),
+						granular.solidVolumeSvq(), granular.activeParcels(), granular.depositGroups(), generation);
 			} catch (IOException | RuntimeException exception) {
 				region.setPaused(true);
-				region.setAvailabilityFailure("empty 后 checkpoint 失败，活动 solver 已清空；重启后可能恢复旧库存：" + exception.getMessage());
-				return "已从活动 solver 清空流体与颗粒，但 checkpoint 失败；区域已暂停：" + exception.getMessage();
+				region.setAvailabilityFailure("empty 后 checkpoint 失败，活动 solver 已清空凝聚相；重启后可能恢复旧库存：" + exception.getMessage());
+				return "已从活动 solver 清空液体、coherent 与颗粒，但 checkpoint 失败；区域已暂停：" + exception.getMessage();
 			}
 		}
 		sendSnapshot(level, region);
-		return String.format("已清空区域：%.3f 方块流体（%d 个 marker），%d SVQ 颗粒（active %d，deposit groups %d）",
-				beforeBlocks, beforeParticles, granular.solidVolumeSvq(), granular.activeParcels(), granular.depositGroups());
+		return String.format("已清空区域：%.3f 方块液体（%d 个 marker），%d SVQ coherent（%d groups），%d SVQ 颗粒（active %d，deposit groups %d）",
+				beforeBlocks, beforeParticles, condensed.coherentVolumeSvq(), condensed.coherentGroups(),
+				granular.solidVolumeSvq(), granular.activeParcels(), granular.depositGroups());
 	}
 
 	/** Explicit old-controller temperature initialization; pending item WAL is a hard generation barrier. */

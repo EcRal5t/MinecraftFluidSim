@@ -229,7 +229,8 @@ ownership 完整、无 pending WAL 且 operator 显式给定初始温度后，�
 
 `ThermalContents v1` 只保存 registry fingerprint、underlying contents kind/hash 与 total `U`，tooltip 温度只读。
 容器物质与能量必须由同一 WAL v5 跨 item/region 提交；单次 count 仍为 1，目标仍只按实际命中区域路由。
-创造放出记 material+energy source，创造装取不制造 sink；`empty` 把被删库存的 `U` 记 escaped sink。
+创造放出记 material+energy source，创造装取不制造 sink；`empty` 联合预检并清除 liquid marker、coherent phase
+与 M8 active/deposit，只把这些实际删除载体的 `U` 记 escaped sink；gas inventory 不属于该凝聚相清空。
 
 protocol v5 严格协商 thermal capability，只发有界量化温度、coherent phase fraction、gas display 和 debug flags。
 客户端不得收到 exact energy/source/sink，也不得回写 server state。

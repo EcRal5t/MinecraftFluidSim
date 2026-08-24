@@ -427,10 +427,9 @@ public final class RealWaterCommands {
 		), commandResult);
 	}
 
-	private static int emptyRegion(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-		ServerPlayer player = source.getPlayerOrException();
+	private static int emptyRegion(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		String result = service.emptySelectedRegion(player.level());
+		String result = service.emptySelectedRegion(source.getLevel());
 		if (result.contains("失败") || result.startsWith("没有")) return fail(source, result);
 		return succeed(source, result, 1);
 	}

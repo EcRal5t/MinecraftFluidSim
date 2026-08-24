@@ -28,7 +28,7 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。M0–M9 已
 | 表面张力液滴开发域（需材料门） | `/realwater tensiondemo [角度1-179]` |
 | 气压 U 型管开发域 | `/realwater airdemo [pressure\|vacuum]` |
 | 操作水量与碰撞 | `/realwater pour [1-16]`、`drain [1-16]`、`refresh` |
-| 清空所选区域的流体与全部颗粒/沉积 | `/realwater empty` |
+| 清空所选区域的液体、coherent 相与全部颗粒/沉积 | `/realwater empty` |
 | 运行控制 | `/realwater run`、`pause`、`step [1-20]`、`status` |
 | 区域与控制器 | `/realwater controllers [true|false]`、`controllerdemo`、`regions list`、`regions select <uuid>`、`regions checkpoint` |
 | 材料功能门（下次重启生效） | `/realwater materials [true|false]` |
@@ -51,7 +51,7 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。M0–M9 已
 
 化学玩法：先依次设置 `/realwater materials true`、`/realwater chemistry true` 与容器入口所需的 `/realwater worldbridge true`，再重启。`chemistrydemo` 建立左右 HCl/NaOH 的暂停开发域；`reagent` 提供明确记作外部 source 的试剂桶，以及不消耗的通用指示剂与抹除器 operator 工具。指示剂只标记当前通过开放 cut-face 连通且同 chemical phase 的 marker，最多 100 BV；浅液面瞄准可在开放面内向两格内吸附到实际 marker，后来混入的未标水不会自动染色。空材料桶可完整保存 species、质量 residual 与 indicator，tooltip 按 material/indicator group 列出每个 stable species 的精确 AU/quanta；原版空桶只接受未标记纯 H2O。完整逐 species 真值只由管理员 `chemstatus` 按需查看并写入 transcript。
 
-颗粒玩法：先开启 materials、granular 与容器入口所需的 worldbridge，反应沉淀还需 chemistry+precipitation，随后重启。颗粒只进入显式闭壳 controller；满干颗粒容器对壳面中心放出，空容器从实际目标格附近的 active/exposed inventory 有界装取，玩家和发射器使用同一 v4 WAL 事务。管理员 `granularcontainer` 只生成经 world registry 校验的惰性测试来源，不能伪造反应性组成；`granstatus` 在服务端报告 exact SVQ、mass、solid species、source/sink 与 boundary impulse，客户端只显示量化 deposit 表面和 active samples。需要一键重置时，先选中目标区域再执行 `/realwater empty`；它先联合预检 liquid/chemical 与 granular sink candidate，再同时清除流体、active parcel 和 deposit，并把移除的固体记入 escaped sink 后发布同一 v5 checkpoint。存在未决容器 WAL 时会拒绝清空。
+颗粒玩法：先开启 materials、granular 与容器入口所需的 worldbridge，反应沉淀还需 chemistry+precipitation，随后重启。颗粒只进入显式闭壳 controller；满干颗粒容器对壳面中心放出，空容器从实际目标格附近的 active/exposed inventory 有界装取，玩家和发射器使用同一 v4 WAL 事务。管理员 `granularcontainer` 只生成经 world registry 校验的惰性测试来源，不能伪造反应性组成；`granstatus` 在服务端报告 exact SVQ、mass、solid species、source/sink 与 boundary impulse，客户端只显示量化 deposit 表面和 active samples。需要一键重置时，先选中目标区域再执行 `/realwater empty`；它先联合预检 liquid/chemical、M9 coherent phase 与 granular sink candidate，再同时清除液体、coherent 相、active parcel 和 deposit，并把实际移除的物质与内能记入 escaped sink 后发布同一 checkpoint。气体库存不属于这次凝聚相清空。存在未决容器 WAL 时会拒绝清空。
 
 热学玩法：在首次创建 thermal snapshot 前先一次配置好本世界需要的 materials、可选 chemistry/granular，再开启 thermal；需要相变时再开启 phasechange，然后重启。新建区域以 293.15 K 建立权威内能；旧 v1/v2/v3/v5 controller 不从环境或当前数据包猜温度，必须保持暂停后执行 `regions thermalinit <K>` 才会经 inactive slot 原子升级 v6。启动时这种旧代次会稳定等待 operator，`status` 和入服消息会明确报告仍保留的 checkpoint/marker/体积；由于 protocol v5 不能伪造内能，初始化前有意不发送该区域的热快照，客户端会看不到水，但这不是库存丢失。`status` 报告派生的凝聚相温度范围、总 U、外部 source/sink、机械功、连续固相 SVQ、pending work 与 audit；这些读数不参与结算。普通世界方块绝热，world thermal snapshot 明确声明的冰方块表面固定为 273.15 K。液体容器在热区域内用 WAL v5 同时搬运物质与 `ThermalContents v1` 总能量；tooltip 温度仍只读。
 

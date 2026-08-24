@@ -65,6 +65,7 @@ public final class M9ThermalValidation {
 		coherentPhaseInventoryAndExactBatchPlanning();
 		compositionAndGranularPhaseChangeConservesJointTruth();
 		phaseVolumeWorkWaitsForMechanicalProjection();
+		operatorEmptyClearsAuditedCondensedCarriers();
 		granularEnergyColumnTransactions();
 		exactDyadicAuditDoesNotLoseCancellationRemainders();
 		containerTransferCarriesAuthoritativeEnergy();
@@ -932,6 +933,10 @@ public final class M9ThermalValidation {
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0)));
 		java.util.ArrayList<ThermalMaterialDefinition> materials = new java.util.ArrayList<>();
 		materials.add(water); materials.add(ice);
+		materials.add(new ThermalMaterialDefinition("test:thermal/composition_air",
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+				300.0, 0.0, 0.025,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 718.0))));
 		for (int handle = 0; handle < granular.materials().size(); handle++) materials.add(
 				new ThermalMaterialDefinition("test:thermal/composition_granular_" + handle,
 						ThermalMaterialDefinition.CarrierKind.GRANULAR, granular.material(handle).id(),
@@ -1039,6 +1044,38 @@ public final class M9ThermalValidation {
 					== Double.doubleToRawLongBits(value == 0.0 ? 0.0 : value),
 					"dyadic conversion did not round-trip " + value);
 		}
+	}
+
+	private static void operatorEmptyClearsAuditedCondensedCarriers() {
+		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 256);
+		domain.setVolume(1, 1, 1, 0.75F);
+		domain.bindGranular(granular, liquids);
+		domain.bindChemistry(chemistry);
+		domain.bindThermal(compositionPhaseThermalRegistry(liquids, granular, chemistry), liquids, 295.0);
+		CondensedLedger before = condensedLedger(domain, chemistry);
+		require(domain.stepInertPhaseChangeOnly(16).operations() > 0
+				&& domain.totalCoherentSolidVolumeSvq() > 0L,
+				"operator-empty fixture did not create coherent condensed inventory");
+		// The operator command rejects this phase event until a real mechanical projection consumes it.
+		domain.step(false, 0);
+		require(!domain.hasPendingPhaseVolumeWork(),
+				"operator-empty fixture did not consume pending phase work");
+		long coherentSvq = domain.totalCoherentSolidVolumeSvq();
+		FlipFluidDomain.OperatorClear cleared = domain.commitOperatorClear(domain.planOperatorClear());
+		long initialQuanta = before.species().values().stream().mapToLong(Long::longValue).sum();
+		require(domain.particleCount() == 0 && domain.totalCoherentSolidVolumeSvq() == 0L
+				&& cleared.condensed().coherentVolumeSvq() == coherentSvq
+				&& cleared.condensed().coherentGroups() > 0
+				&& domain.chemicalParcels().escapedSink().totalQuanta() == initialQuanta
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"operator empty did not jointly clear/audit liquid and coherent carriers: cleared=" + cleared
+						+ " U=" + domain.exactInternalEnergy()
+						+ " expected=" + domain.thermalAudit().expectedInventory());
 	}
 
 	private static void containerTransferCarriesAuthoritativeEnergy() {

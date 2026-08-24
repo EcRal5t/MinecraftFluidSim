@@ -482,3 +482,29 @@ v6 checkpoint 4，区域保持暂停且水体立即重新出现。随后 `status
 最终树的 `milestone` 再次通过全部 21 个短领域，runner 9.622 s；此前直接受影响的
 `thermal,gas-liquid,chemistry,granular,region-state,lifecycle,protocol` 完整门也已通过。未运行与本次关闭风险无关的
 soak、GPU 或额外实机场景。M9 以主 Mod 0.15.0 正式关闭；下一产品里程碑为 M10。
+
+## M9.32 operator clear audit hotfix
+
+真实 controller 在凝固后暴露了关闭验收未覆盖的 `empty` 组合：固定冰方块被挖除只会移除 world-derived
+temperature boundary，不会删除已提交的 coherent solid；这部分库存继续存在是预期语义。凝固生成的 pending
+volume/work 也必须先由下一次真实 pressure projection 消费，所以 `pending-work=yes` 时拒绝 `empty` 仍是正确停止门。
+用户关闭 phasechange、重启并执行一个机械步后，状态正确变为 `pending-work=no`，但旧实现随后在 checkpoint capture
+报 `Thermal carrier handoff does not close its audit ledger`。
+
+根因不是存档损坏：`WaterClearPlan` 错把包含 liquid、coherent、granular 与 gas 的 whole-domain `exactInternalEnergy()`
+全部记为 liquid sink，却只删除 marker；coherent 与 gas 能量仍在库存，因此 handoff 必然不闭合。同时 M8 的 operator
+clear 从未扩展到 M9 coherent phase，若只把能量选择改成 liquid-only，命令虽可发布却会留下连续冰相。
+
+修复保持普通 liquid primitive 的职责不变：`removeAllWaterExact` 只计划/结算 marker U；管理员 `empty` 改为一个
+domain-owned operator plan，联合预检 liquid/chemical、coherent composition/U 与 M8 granular sink，提交后立即按新
+occupancy remap 保留的 gas truth，再发布同一完整 checkpoint。composition-bearing coherent group 只通过 world thermal
+registry 中唯一的 solid→liquid transition 解析化学 material ownership；缺失或歧义时预检拒绝，不猜测。gas inventory
+本身不被 `empty` 删除。命令同时允许 dedicated-server console 使用其明确 dimension，不再无意义要求 player entity。
+
+保留的 `thermal` selector 新增一个凝固→消费 pending work→operator clear 夹具，并携 sealed thermal gas 验证最终
+`exactInternalEnergy == audit.expectedInventory`。`thermal`、`chemistry`、`region-state` 与命令 `audit` 最近门全部通过。
+随后从用户原世界只读复制 checkpoint 7：恢复得到 469 markers、29.92 cells、38096656 coherent SVQ、
+`pending-work=yes`、audit closed；一个 phase-disabled mechanical step 后 pending 变为 no。修复后的 console `empty`
+清除 3.739 BV liquid、109 coherent groups 和零 granular，原子发布 checkpoint 8；状态为 marker/coherent/U 全零且
+audit closed。正常停服发布 checkpoint 9，第二次启动恢复 0 markers，仍为 `pending-work=no`、audit closed，并正常
+发布 checkpoint 10。整个复现只修改 workspace 世界副本，用户原世界保持 checkpoint 7 不变。

@@ -829,6 +829,14 @@ final class FlipThermalState {
 	CoherentPhaseStore.Group takeCoherentInternal(int cell, String phaseId, long occupiedSvq) {
 		return coherentPhases.take(cell, phaseId, occupiedSvq);
 	}
+	void clearCoherentExternal(List<CoherentPhaseStore.Group> expected, SignedDyadic expectedEnergy) {
+		if (expected == null || expectedEnergy == null || !coherentPhases.snapshot().equals(expected)
+				|| !coherentPhases.exactEnergy().equals(expectedEnergy)) {
+			throw new IllegalStateException("Coherent phase inventory changed after clear planning");
+		}
+		coherentPhases.clear();
+		audit = audit.withExternalSinkEnergy(expectedEnergy);
+	}
 	void addInternalMarker(int marker, double energy) {
 		ensureCapacity(marker + 1);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Internal phase marker energy is not finite");

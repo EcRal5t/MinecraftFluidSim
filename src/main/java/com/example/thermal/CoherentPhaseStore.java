@@ -202,6 +202,9 @@ public final class CoherentPhaseStore {
 		return total;
 	}
 
+	/** Clears a previously validated whole-store removal without inventing source/sink semantics. */
+	public void clear() { groups.clear(); }
+
 	public void restore(List<Group> snapshot) {
 		if (!groups.isEmpty()) throw new IllegalStateException("Coherent phase restore target is not empty");
 		if (snapshot == null || snapshot.size() > maximumGroups) {
