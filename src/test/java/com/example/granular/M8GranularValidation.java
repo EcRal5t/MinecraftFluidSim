@@ -488,6 +488,27 @@ public final class M8GranularValidation {
 			throw new AssertionError("carrier Reynolds validity overflow was accepted");
 		} catch (GranularMechanics.ValidityExceededException expected) { }
 		require(invalid.parcel(0).equals(before), "carrier validity failure partially changed parcel velocity");
+
+		GranularParcelStore coupled = new GranularParcelStore(registry, 2);
+		coupled.add(new GranularParcelStore.Parcel(0.5F, 0.5F, 0.5F, 0.5F, 0.0F, 0.0F,
+				1_024L, 1.0, sand, 0, 0, (byte) 0));
+		coupled.add(new GranularParcelStore.Parcel(0.6F, 0.5F, 0.5F, 0.5F, 0.0F, 0.0F,
+				1_024L, 1.0, sand, 0, 0, (byte) 0));
+		boolean[] impulseStarted = {false}; int[] samples = {0};
+		GranularMechanics.Environment coupledCarrier = new GranularMechanics.Environment() {
+			@Override public GranularMechanics.FluidSample sample(float x, float y, float z) {
+				samples[0]++;
+				return new GranularMechanics.FluidSample(true, impulseStarted[0] ? -10.0 : 0.0, 0.0, 0.0,
+						1_000.0, 1.002e-3, 300.0, 1.0);
+			}
+			@Override public GranularMechanics.FluidImpulseApplication addFluidImpulse(
+					float x, float y, float z, double ix, double iy, double iz) {
+				impulseStarted[0] = true;
+				return new GranularMechanics.FluidImpulseApplication(ix, iy, iz, 0.0, 0.0, 0.0);
+			}
+		};
+		GranularMechanics.stepVelocities(coupled, registry, coupledCarrier, 0.5, 0.0, 1.0 / 20.0);
+		require(samples[0] == coupled.count(), "carrier samples were not frozen before reaction impulses");
 	}
 
 	private static void twoWayDragPreservesMomentum() {

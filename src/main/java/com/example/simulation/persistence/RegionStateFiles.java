@@ -362,10 +362,10 @@ public final class RegionStateFiles {
 			var granular = state.reconstructGranular(granularRegistry);
 			if (granular.requiresChemistry()) {
 				if (chemicalRegistry == null) throw new IOException("Reactive region-state v5 verification requires the authoritative chemical registry");
-				try { granular.validateAgainst(granularRegistry, chemicalRegistry); }
-				catch (IllegalArgumentException invalid) {
-					throw new IOException("Reactive region-state v5 solid composition validation failed", invalid);
-				}
+			}
+			try { granular.validateAgainst(granularRegistry, chemicalRegistry); }
+			catch (IllegalArgumentException invalid) {
+				throw new IOException("Region-state v5 granular inventory/audit validation failed", invalid);
 			}
 		}
 		else throw new IOException("Unsupported region-state version " + state.manifest().formatVersion());

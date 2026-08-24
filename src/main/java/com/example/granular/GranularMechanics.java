@@ -25,15 +25,14 @@ public final class GranularMechanics {
 				&& Double.isFinite(dt) && dt > 0.0)) {
 			throw new IllegalArgumentException("Granular mechanics scale and dt must be finite and positive");
 		}
-		validateCarrierRange(parcels, registry, environment);
+		FluidSample[] fluidSamples = sampleAndValidateCarrierRange(parcels, registry, environment);
 		double maximumSpeed = 0.0, totalFluidImpulseX = 0.0, totalFluidImpulseY = 0.0, totalFluidImpulseZ = 0.0;
 		double boundaryImpulseX = 0.0, boundaryImpulseY = 0.0, boundaryImpulseZ = 0.0;
 		int submerged = 0;
 		for (int index = 0; index < parcels.count(); index++) {
 			GranularParcelStore.Parcel parcel = parcels.parcel(index);
 			ParticulateMaterial material = registry.material(parcel.materialHandle());
-			FluidSample fluid = environment.sample(parcel.x(), parcel.y(), parcel.z());
-			if (fluid == null) throw new IllegalStateException("Granular environment returned no fluid sample");
+			FluidSample fluid = fluidSamples[index];
 			double fraction = clamp(fluid.submergedFraction(), 0.0, 1.0);
 			double oldX = parcel.velocityX(), oldY = parcel.velocityY(), oldZ = parcel.velocityZ();
 			double newX = oldX, newY = oldY, newZ = oldZ;
@@ -50,9 +49,6 @@ public final class GranularMechanics {
 				double slip = Math.sqrt(slipX * slipX + slipY * slipY + slipZ * slipZ);
 				double diameter = material.primaryGrainDiameterMeters();
 				double reynolds = fluid.density() * diameter * slip / fluid.dynamicViscosity();
-				if (reynolds > fluid.maximumReynolds()) {
-					throw new IllegalStateException("Granular carrier Reynolds validity range exceeded");
-				}
 				double primaryVolume = Math.PI * diameter * diameter * diameter / 6.0;
 				double representedGrains = solidVolumeM3 / primaryVolume;
 				double area = representedGrains * Math.PI * diameter * diameter / 4.0;
@@ -96,13 +92,15 @@ public final class GranularMechanics {
 				boundaryImpulseX, boundaryImpulseY, boundaryImpulseZ);
 	}
 
-	private static void validateCarrierRange(
+	private static FluidSample[] sampleAndValidateCarrierRange(
 			GranularParcelStore parcels, GranularRegistry registry, Environment environment
 	) {
+		FluidSample[] samples = new FluidSample[parcels.count()];
 		for (int index = 0; index < parcels.count(); index++) {
 			GranularParcelStore.Parcel parcel = parcels.parcel(index);
 			FluidSample fluid = environment.sample(parcel.x(), parcel.y(), parcel.z());
 			if (fluid == null) throw new ValidityExceededException("Granular environment returned no fluid sample");
+			samples[index] = fluid;
 			if (!fluid.hasLiquid() || clamp(fluid.submergedFraction(), 0.0, 1.0) <= 0.0) continue;
 			double slipX = parcel.velocityX() - fluid.velocityX();
 			double slipY = parcel.velocityY() - fluid.velocityY();
@@ -114,6 +112,7 @@ public final class GranularMechanics {
 				throw new ValidityExceededException("Granular carrier Reynolds validity range exceeded");
 			}
 		}
+		return samples;
 	}
 
 	public static double dragCoefficient(double reynolds) {
