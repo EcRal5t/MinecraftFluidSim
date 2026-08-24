@@ -23,6 +23,10 @@ import com.example.granular.GranularMechanics;
 import com.example.granular.GranularPhaseTransferEngine;
 import com.example.granular.GranularRegistry;
 import com.example.granular.GranularRegistryStore;
+import com.example.item.ChemicalContents;
+import com.example.item.FluidMixture;
+import com.example.item.RealWaterComponents;
+import com.example.item.ThermalContents;
 import com.example.network.FluidMaterialSnapshotPayload;
 import com.example.network.FluidProtocol;
 import com.example.network.FluidChemicalSnapshotPayload;
@@ -40,6 +44,7 @@ import com.example.thermal.ThermalMaterialDefinition;
 import com.example.thermal.ThermalRegistry;
 import com.example.thermal.ThermalRegistryStore;
 import com.example.thermal.ThermalDisplaySnapshot;
+import com.example.thermal.ThermalStateFunction;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.Registries;
@@ -744,6 +749,41 @@ public final class FluidSimulationService {
 	public boolean precipitationFeatureEnabled() { return precipitationFeatureEnabled; }
 	public boolean thermalFeatureEnabled() { return thermalFeatureEnabled; }
 	public boolean phaseChangeFeatureEnabled() { return phaseChangeFeatureEnabled; }
+
+	/** Adds authoritative U to an administrator-created mass-bearing liquid source at standard temperature. */
+	public void attachDebugLiquidThermalContents(ItemStack stack) {
+		if (!thermalFeatureEnabled) return;
+		if (thermalRegistry == null) throw new IllegalStateException("Authoritative thermal registry is unavailable");
+		ThermalStateFunction stateFunction = new ThermalStateFunction(thermalRegistry);
+		double energy = 0.0;
+		if (stack.get(RealWaterComponents.CHEMICAL_CONTENTS) != null) {
+			if (chemicalRegistry == null) throw new IllegalStateException("Authoritative chemical registry is unavailable");
+			ChemicalContents contents = ChemicalContents.fromStack(stack, chemicalRegistry);
+			if (contents == null) throw new IllegalArgumentException("Debug chemical liquid inventory is malformed");
+			for (ChemicalContents.Group group : contents.groups()) {
+				java.util.TreeMap<String, Long> species = new java.util.TreeMap<>();
+				for (ChemicalContents.SpeciesAmount amount : group.species()) {
+					species.put(amount.speciesId(), amount.amountQuanta());
+				}
+				int handle = thermalRegistry.materialHandle(
+						ThermalMaterialDefinition.CarrierKind.LIQUID, group.materialId());
+				energy += stateFunction.internalEnergyAtTemperature(handle, group.mass(), species,
+						GasRegistry.STANDARD_TEMPERATURE_K);
+			}
+		} else {
+			FluidMixture mixture = FluidMixture.fromStack(stack);
+			if (mixture == null) throw new IllegalArgumentException("Debug material liquid inventory is malformed");
+			for (FluidMixture.Component component : mixture.components()) {
+				int handle = thermalRegistry.materialHandle(
+						ThermalMaterialDefinition.CarrierKind.LIQUID, component.materialId());
+				energy += stateFunction.internalEnergyAtTemperature(handle, component.mass(), Map.of(),
+						GasRegistry.STANDARD_TEMPERATURE_K);
+			}
+		}
+		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Debug liquid internal energy overflow");
+		ThermalContents.attach(stack, thermalRegistry.fingerprint(), energy);
+	}
+
 	String thermalRegistryFingerprint() {
 		if (thermalRegistry == null) throw new IllegalStateException("Authoritative thermal registry is unavailable");
 		return thermalRegistry.fingerprint();

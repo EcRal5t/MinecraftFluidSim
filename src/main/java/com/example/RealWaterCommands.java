@@ -259,6 +259,7 @@ public final class RealWaterCommands {
 					ContainerFluidLedger.NANOS_PER_BLOCK, 8.0 * material.referenceDensity()))).toStack();
 			description = material.id() + " 满材料桶";
 		}
+		if (!"empty".equals(requested)) service.attachDebugLiquidThermalContents(stack);
 		if (!player.getInventory().add(stack)) player.drop(stack, false);
 		player.getInventory().setChanged();
 		return succeed(source, "已生成 " + description + "（显式 creative/debug 外部源）", 1);
@@ -332,6 +333,7 @@ public final class RealWaterCommands {
 					BuiltinFluidMaterials.WATER.id(), false, 1.0, mass, mixture.massResidualBits(),
 					mixture.stableAmounts(registry))));
 			stack = ChemicalContents.fromLedger(ledger, registry, ContainerFluidLedger.NANOS_PER_BLOCK).toStack();
+			service.attachDebugLiquidThermalContents(stack);
 		}
 		if (!player.getInventory().add(stack)) player.drop(stack, false);
 		player.getInventory().setChanged();
