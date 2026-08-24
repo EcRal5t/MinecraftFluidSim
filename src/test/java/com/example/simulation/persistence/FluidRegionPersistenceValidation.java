@@ -13,6 +13,7 @@ import com.example.chemistry.BuiltinChemicalDefinitions;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.fluid.air.BuiltinGasDefinitions;
 import com.example.fluid.air.GasRegistry;
+import com.example.fluid.air.GasRegistryStore;
 import com.example.fluid.air.GasStateSnapshot;
 import com.example.granular.BuiltinGranularDefinitions;
 import com.example.granular.GranularLimits;
@@ -308,6 +309,12 @@ public final class FluidRegionPersistenceValidation {
 				totalMass, BuiltinFluidMaterials.M3_PALETTE, positions, pure.copyParticleVelocities(), pure.copySolidMask(),
 				mass, new int[pure.particleCount()]));
 		GasRegistry gasRegistry = BuiltinGasDefinitions.createRegistry();
+		Path registryRoot = Files.createTempDirectory(Path.of("."), "gas-registry-v1-");
+		GasRegistryStore registryStore = new GasRegistryStore(registryRoot);
+		GasRegistryStore.LoadResult createdRegistry = registryStore.loadOrCreate(gasRegistry);
+		require(createdRegistry.created() && !createdRegistry.definitionMismatch()
+				&& createdRegistry.registry().fingerprint().equals(gasRegistry.fingerprint()),
+				"gas world registry first publication did not round-trip");
 		GasStateSnapshot expected = region.domain().bootstrapGasState("");
 		require(!expected.nodes().isEmpty(), "gas v4 fixture did not create a sealed node");
 		RegionState state = RegionState.captureGas(region, 1L);
@@ -325,9 +332,12 @@ public final class FluidRegionPersistenceValidation {
 		RegionStateFiles files = new RegionStateFiles(root, null, null, null, gasRegistry);
 		files.publish(state);
 		assertGasStateEquals(expected, files.read(region.id()).reconstructGas(gasRegistry, null));
-		expectIOException(() -> state.reconstructGas(new GasRegistry(List.of(
+		GasRegistry foreign = new GasRegistry(List.of(
 				new com.example.fluid.air.GasComponentDefinition("test:foreign", 1.0, 1.0, List.of())),
-				List.of(new GasRegistry.AmbientFraction("test:foreign", com.example.chemistry.ExactRational.ONE))), null),
+				List.of(new GasRegistry.AmbientFraction("test:foreign", com.example.chemistry.ExactRational.ONE)));
+		require(registryStore.loadOrCreate(foreign).definitionMismatch(),
+				"gas world registry did not retain authoritative snapshot on definition mismatch");
+		expectIOException(() -> state.reconstructGas(foreign, null),
 				"foreign gas registry was accepted");
 
 		RegionStateCodec outer = new RegionStateCodec();

@@ -29,6 +29,13 @@
 - The existing `region-state` selector now covers v4 codec, atomic publish/read, registry mismatch, missing section payload
   and live-domain restore; it passed with all v1/v2/v3/v5/v6 compatibility fixtures unchanged.
 
+## M9.15 authoritative gas registry store
+
+- Added atomic `gas/registry.nbt` v1 publication/readback for standard state, component mass/residual creation relations,
+  optional default species, ambient fractions, canonical bytes and fingerprint.
+- Existing valid snapshots remain authoritative when current candidates differ; unknown layout/corruption is preserved and
+  fails closed. The v4 persistence fixture now verifies first publication plus mismatch retention under `region-state`.
+
 本文记录 M9 的增量、自动门与实机证据。正式契约见
 [`../architecture/thermal-state.md`](../architecture/thermal-state.md)。M9 开始于已验收主 Mod 0.14.0；CPU 仍是规范后端。
 
