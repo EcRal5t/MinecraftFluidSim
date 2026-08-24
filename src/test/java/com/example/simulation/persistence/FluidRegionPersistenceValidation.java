@@ -88,20 +88,41 @@ public final class FluidRegionPersistenceValidation {
 				totalMass, liquids.materials(), positions, pure.copyParticleVelocities(), pure.copySolidMask(),
 				mass, new int[pure.particleCount()]));
 		liquids = region.domain().materialRegistry();
-		ThermalRegistry thermal = thermalRegistry(liquids);
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long activeSvq = GranularLimits.MAX_PARCEL_VOLUME_SVQ, depositSvq = activeSvq - 17L;
+		double activeMass = 3.25, depositMass = 4.75;
+		int depositCell = (5 * region.sizeY() + 3) * region.sizeX() + 5;
+		GranularStateSnapshot granularFixture = new GranularStateSnapshot(
+				region.sizeX(), region.sizeY(), region.sizeZ(), granular.fingerprint(),
+				granular.materials().stream().map(com.example.granular.ParticulateMaterial::id).toList(),
+				List.of(new GranularStateSnapshot.ActiveParcel(0.75F, 0.75F, 0.75F,
+						0.125F, -0.25F, 0.0625F, activeSvq, activeMass, sand, 0)),
+				List.of(new GranularStateSnapshot.DepositGroup(depositCell, granular.material(sand).restPorosityQ(),
+						sand, 0, depositSvq, depositMass)), Math.addExact(activeSvq, depositSvq),
+				Double.doubleToRawLongBits(activeMass + depositMass));
+		region.domain().restoreGranularState(granularFixture, granular, liquids);
+		ThermalRegistry thermal = thermalRegistry(liquids, granular);
 		region.domain().bindThermal(thermal, liquids, 300.0);
 		region.domain().setThermalTemperatureInCell(2, 1, 2, 325.0);
+		region.domain().setThermalTemperatureInCell(1, 1, 1, 340.0);
+		region.domain().setThermalTemperatureInCell(5, 3, 5, 280.0);
 		region.domain().addCoherentPhaseExternal(3, 2, 3, "realwater:thermal/persistence_solid",
 				SolidVolume.SVQ_PER_CELL / 8L, 0.125, null, 6.25);
 		FlipThermalParticleState expected = region.domain().exportThermalParticleState();
+		GranularStateSnapshot expectedGranular = region.domain().exportGranularState();
 
 		RegionState state = RegionState.captureThermal(region, 1L);
 		state.validate();
 		assertMaterialStateEquals(region.domain().exportMaterialParticleState(), state.reconstructMaterial());
+		assertGranularStateEquals(expectedGranular, state.reconstructGranular(granular));
 		assertThermalStateEquals(expected, state.reconstructThermal(thermal));
 		FlipFluidDomain restoredDomain = new FlipFluidDomain(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG, 512);
 		restoredDomain.restoreMaterialParticleState(state.reconstructMaterial());
+		restoredDomain.restoreGranularState(state.reconstructGranular(granular), granular,
+				restoredDomain.materialRegistry());
 		restoredDomain.restoreThermalParticleState(state.reconstructThermal(thermal), thermal);
+		assertGranularStateEquals(expectedGranular, restoredDomain.exportGranularState());
 		assertThermalStateEquals(expected, restoredDomain.exportThermalParticleState());
 
 		RegionStateCodec codec = new RegionStateCodec();
@@ -129,7 +150,7 @@ public final class FluidRegionPersistenceValidation {
 				"coherent composition did not round-trip the v6 thermal section payload");
 
 		Path root = Files.createTempDirectory(Path.of("."), "thermal-v6-");
-		RegionStateFiles files = new RegionStateFiles(root, null, null, thermal);
+		RegionStateFiles files = new RegionStateFiles(root, null, granular, thermal);
 		files.publish(state);
 		assertThermalStateEquals(expected, files.read(region.id()).reconstructThermal(thermal));
 		expectIOException(() -> state.reconstructThermal(thermalRegistry(new FluidMaterialRegistry(
@@ -817,12 +838,18 @@ public final class FluidRegionPersistenceValidation {
 		require(expected.particleCount() == actual.particleCount()
 				&& expected.thermalRegistryFingerprint().equals(actual.thermalRegistryFingerprint())
 				&& Arrays.equals(expected.copyInternalEnergy(), actual.copyInternalEnergy())
+				&& Arrays.equals(expected.copyActiveParcelEnergy(), actual.copyActiveParcelEnergy())
+				&& Arrays.equals(expected.copyDepositEnergy(), actual.copyDepositEnergy())
 				&& expected.coherentGroups().equals(actual.coherentGroups())
 				&& expected.audit().equals(actual.audit()),
 				"thermal inventory/audit changed across persistence");
 	}
 
 	private static ThermalRegistry thermalRegistry(FluidMaterialRegistry liquids) {
+		return thermalRegistry(liquids, null);
+	}
+
+	private static ThermalRegistry thermalRegistry(FluidMaterialRegistry liquids, GranularRegistry granular) {
 		List<ThermalMaterialDefinition> definitions = new ArrayList<>(liquids.materials().size());
 		for (int index = 0; index < liquids.materials().size(); index++) {
 			definitions.add(new ThermalMaterialDefinition("realwater:thermal/persistence_" + index,
@@ -833,7 +860,14 @@ public final class FluidRegionPersistenceValidation {
 				ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID, "realwater:solid/persistence",
 				300.0, 50.0, 1.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 4_200.0))));
-		return new ThermalRegistry(definitions);
+		if (granular != null) for (int index = 0; index < granular.materials().size(); index++) {
+			definitions.add(new ThermalMaterialDefinition("realwater:thermal/persistence_granular_" + index,
+					ThermalMaterialDefinition.CarrierKind.GRANULAR, granular.material(index).id(),
+					300.0, 20.0, 1.0,
+					List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0))));
+		}
+		return granular == null ? new ThermalRegistry(definitions)
+				: new ThermalRegistry(definitions, List.of(), List.of(), "", granular.fingerprint());
 	}
 
 	private static void assertGranularStateEquals(GranularStateSnapshot expected, GranularStateSnapshot actual) {

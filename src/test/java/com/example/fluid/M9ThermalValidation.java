@@ -9,6 +9,9 @@ import com.example.chemistry.ChemicalRegistry;
 import com.example.chemistry.ChemicalSpecies;
 import com.example.chemistry.ExactRational;
 import com.example.granular.SolidVolume;
+import com.example.granular.BuiltinGranularDefinitions;
+import com.example.granular.GranularRegistry;
+import com.example.granular.GranularTransferLedger;
 import com.example.thermal.SignedDyadic;
 import com.example.thermal.GranularEnergyColumn;
 import com.example.thermal.CoherentPhaseStore;
@@ -381,6 +384,99 @@ public final class M9ThermalValidation {
 		require(restored.exactEnergy().equals(column.exactEnergy())
 				&& restored.clear().equals(column.exactEnergy()),
 				"granular thermal column handoff/clear did not preserve exact energy");
+
+		String granularFingerprint = "2".repeat(64);
+		ThermalMaterialDefinition liquid = material("test:thermal/granular_host", "test:liquid", 0.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0)));
+		ThermalMaterialDefinition solid = new ThermalMaterialDefinition("test:thermal/granular",
+				ThermalMaterialDefinition.CarrierKind.GRANULAR, "test:sand", 300.0, 20.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0)));
+		ThermalRegistry registry = new ThermalRegistry(List.of(liquid, solid), List.of(), List.of(), "", granularFingerprint);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(
+				FluidMaterial.withSurfaceTension("test:liquid", 1.0, "test:miscible", 0.0, 90.0)));
+		GranularEnergyColumn.DepositKey deposit = new GranularEnergyColumn.DepositKey(0, 0, 0);
+		FlipThermalState.MarkerContext carriers = new FlipThermalState.MarkerContext() {
+			@Override public int markerCount() { return 0; }
+			@Override public int cell(int marker) { throw new IllegalArgumentException(); }
+			@Override public int fluidMaterialHandle(int marker) { throw new IllegalArgumentException(); }
+			@Override public double mass(int marker) { throw new IllegalArgumentException(); }
+			@Override public double volume(int marker) { throw new IllegalArgumentException(); }
+			@Override public ChemicalMixtureRecord mixture(int marker) { throw new IllegalArgumentException(); }
+			@Override public ChemicalRegistry chemicalRegistry() { return null; }
+			@Override public int granularMaterialCount() { return 1; }
+			@Override public String granularRegistryFingerprint() { return granularFingerprint; }
+			@Override public String granularMaterialId(int materialHandle) { return "test:sand"; }
+			@Override public int activeParcelCount() { return 1; }
+			@Override public int activeParcelCell(int ordinal) { return 0; }
+			@Override public int activeParcelMaterial(int ordinal) { return 0; }
+			@Override public int activeParcelComposition(int ordinal) { return 0; }
+			@Override public long activeParcelSvq(int ordinal) { return SolidVolume.SVQ_PER_CELL / 2L; }
+			@Override public double activeParcelMass(int ordinal) { return 0.5; }
+			@Override public List<GranularEnergyColumn.DepositKey> depositKeys() { return List.of(deposit); }
+			@Override public long depositSvq(GranularEnergyColumn.DepositKey key) { return SolidVolume.SVQ_PER_CELL / 4L; }
+			@Override public double depositMass(GranularEnergyColumn.DepositKey key) { return 0.25; }
+		};
+		FlipThermalState granularThermal = new FlipThermalState(registry, liquids, 300.0,
+				1, 2, 2, 2, 0.5F, carriers);
+		require(granularThermal.exactEnergy(0).equals(SignedDyadic.of(15.0))
+				&& close(granularThermal.temperatureInCell(0, carriers), 300.0),
+				"M8 active/deposit energy did not join the LTE state function");
+		granularThermal.setTemperatureInCell(0, 310.0, carriers);
+		require(close(granularThermal.temperatureInCell(0, carriers), 310.0)
+				&& granularThermal.exactEnergy(0).equals(granularThermal.audit().expectedInventory()),
+				"M8 active/deposit cell heat exchange did not close the thermal audit");
+
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		FluidMaterialRegistry productionLiquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.8F);
+		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
+		domain.bindGranular(granular, productionLiquids);
+		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long parcelSvq = SolidVolume.SVQ_PER_BV;
+		double parcelMass = SolidVolume.toCellVolume(parcelSvq) * granular.material(sand).referenceDensity();
+		GranularTransferLedger bucket = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
+				BuiltinGranularDefinitions.FINE_SAND, parcelSvq, parcelMass, null)));
+		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted(),
+				"granular thermal domain fixture could not insert its parcel");
+		ThermalRegistry productionThermal = granularThermalRegistry(productionLiquids, granular);
+		domain.bindThermal(productionThermal, productionLiquids, 300.0);
+		SignedDyadic insertedEnergy = domain.exactInternalEnergy();
+		FlipFluidDomain.GranularExtraction extracted = domain.tryExtractExactGranular(
+				4, 6, 4, parcelSvq, 3, false);
+		require(extracted.transferred() && close(extracted.internalEnergy(), insertedEnergy.toDouble())
+				&& domain.exactInternalEnergy().equals(SignedDyadic.ZERO)
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"granular extraction did not move its raw energy to the external sink");
+		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted()
+				&& domain.exactInternalEnergy().equals(insertedEnergy),
+				"granular insertion did not restore its explicit-temperature source energy");
+		for (int step = 0; step < 180 && domain.granularDepositCellCount() == 0; step++) domain.step();
+		require(domain.granularDepositCellCount() > 0
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"active-to-deposit settlement failed: deposits=" + domain.granularDepositCellCount()
+						+ " energy=" + domain.exactInternalEnergy()
+						+ " expected=" + domain.thermalAudit().expectedInventory());
+		domain.removeAllGranularExact();
+		require(domain.exactInternalEnergy().equals(SignedDyadic.ZERO)
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"granular clear did not move all active/deposit energy to the escaped sink");
+	}
+
+	private static ThermalRegistry granularThermalRegistry(
+			FluidMaterialRegistry liquids, GranularRegistry granular
+	) {
+		java.util.ArrayList<ThermalMaterialDefinition> definitions = new java.util.ArrayList<>();
+		for (int material = 0; material < liquids.size(); material++) definitions.add(new ThermalMaterialDefinition(
+				"test:thermal/liquid_" + material, ThermalMaterialDefinition.CarrierKind.LIQUID,
+				liquids.material(material).id(), 300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0))));
+		for (int material = 0; material < granular.materials().size(); material++) definitions.add(
+				new ThermalMaterialDefinition("test:thermal/granular_" + material,
+						ThermalMaterialDefinition.CarrierKind.GRANULAR, granular.material(material).id(),
+						300.0, 20.0, 1.0,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0))));
+		return new ThermalRegistry(definitions, List.of(), List.of(), "", granular.fingerprint());
 	}
 
 	private static void liquidTransportAndHandoffCloseEnergy() {

@@ -90,15 +90,14 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		return capture(region, checkpointGeneration, particles, granular, null);
 	}
 
-	/** Captures the current material/optional-chemistry generation plus required M9 liquid energy extensions. */
+	/** Captures one complete material/optional-chemistry/optional-granular M9 generation. */
 	public static RegionState captureThermal(FluidRegion region, long checkpointGeneration) throws IOException {
 		requireCaptureable(region, checkpointGeneration);
 		if (!region.domain().hasThermalState() || !region.domain().hasMaterialState()) {
 			throw new IOException("region-state v6 capture requires material and thermal state");
 		}
-		if (region.domain().hasGranularState()) {
-			throw new IOException("region-state v6 capture is blocked until granular energy ordinals are bound");
-		}
+		GranularStateSnapshot granular = region.domain().hasGranularState()
+				? region.domain().exportGranularState() : null;
 		CapturedParticles particles;
 		if (region.domain().hasChemistryState()) {
 			FlipChemicalParticleState chemical = region.domain().exportChemicalParticleState();
@@ -115,7 +114,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					materials.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0],
 					new long[0], 0L, ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY);
 		}
-		return capture(region, checkpointGeneration, particles, null, region.domain().exportThermalParticleState());
+		return capture(region, checkpointGeneration, particles, granular, region.domain().exportThermalParticleState());
 	}
 
 	private static RegionState capture(
@@ -143,7 +142,15 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		}
 		Map<RegionSectionState.SectionKey, List<GranularRegionStateCodec.ActiveEntry>> granularActiveBySection = new HashMap<>();
 		Map<RegionSectionState.SectionKey, List<GranularStateSnapshot.DepositGroup>> granularDepositsBySection = new HashMap<>();
+		Map<RegionSectionState.SectionKey, List<Double>> granularDepositEnergyBySection = new HashMap<>();
 		Map<RegionSectionState.SectionKey, List<ThermalRegionStateCodec.CoherentEntry>> coherentBySection = new HashMap<>();
+		double[] allActiveEnergy = thermal == null ? new double[0] : thermal.copyActiveParcelEnergy();
+		double[] allDepositEnergy = thermal == null ? new double[0] : thermal.copyDepositEnergy();
+		if (thermal != null && (granular == null && (allActiveEnergy.length != 0 || allDepositEnergy.length != 0)
+				|| granular != null && (allActiveEnergy.length != granular.activeParcels().size()
+				|| allDepositEnergy.length != granular.depositGroups().size()))) {
+			throw new IOException("Thermal granular carrier ordinals do not match the complete M8 inventory");
+		}
 		if (granular != null) {
 			for (int ordinal = 0; ordinal < granular.activeParcels().size(); ordinal++) {
 				GranularStateSnapshot.ActiveParcel parcel = granular.activeParcels().get(ordinal);
@@ -151,7 +158,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				granularActiveBySection.computeIfAbsent(key, ignored -> new ArrayList<>())
 						.add(new GranularRegionStateCodec.ActiveEntry(ordinal, parcel));
 			}
-			for (GranularStateSnapshot.DepositGroup group : granular.depositGroups()) {
+			for (int ordinal = 0; ordinal < granular.depositGroups().size(); ordinal++) {
+				GranularStateSnapshot.DepositGroup group = granular.depositGroups().get(ordinal);
 				int cellX = group.cell() % region.sizeX(), yz = group.cell() / region.sizeX();
 				int cellY = yz % region.sizeY(), cellZ = yz / region.sizeY();
 				RegionSectionState.SectionKey key = sectionKey(region,
@@ -159,6 +167,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 						(cellY + 0.5F) * region.solverConfig().cellSize(),
 						(cellZ + 0.5F) * region.solverConfig().cellSize());
 				granularDepositsBySection.computeIfAbsent(key, ignored -> new ArrayList<>()).add(group);
+				if (thermal != null) granularDepositEnergyBySection.computeIfAbsent(key, ignored -> new ArrayList<>())
+						.add(allDepositEnergy[ordinal]);
 			}
 		}
 		if (thermal != null) for (CoherentPhaseStore.Group group : thermal.coherentGroups()) {
@@ -242,12 +252,23 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 								Double.doubleToRawLongBits(allEnergy[ordinals.get(index)]);
 						List<ThermalRegionStateCodec.CoherentEntry> coherent = List.copyOf(
 								coherentBySection.getOrDefault(key, List.of()));
+						List<GranularRegionStateCodec.ActiveEntry> activeEntries =
+								granularActiveBySection.getOrDefault(key, List.of());
+						long[] activeEnergyBits = new long[activeEntries.size()];
+						for (int index = 0; index < activeEntries.size(); index++) activeEnergyBits[index] =
+								Double.doubleToRawLongBits(allActiveEnergy[activeEntries.get(index).ordinal()]);
+						List<Double> sectionDepositEnergy = granularDepositEnergyBySection.getOrDefault(key, List.of());
+						long[] depositEnergyBits = new long[sectionDepositEnergy.size()];
+						for (int index = 0; index < sectionDepositEnergy.size(); index++) depositEnergyBits[index] =
+								Double.doubleToRawLongBits(sectionDepositEnergy.get(index));
 						SignedDyadic sectionEnergy = SignedDyadic.sum(toDoubles(markerEnergyBits));
+						sectionEnergy = sectionEnergy.add(SignedDyadic.sum(toDoubles(activeEnergyBits)))
+								.add(SignedDyadic.sum(toDoubles(depositEnergyBits)));
 						for (ThermalRegionStateCodec.CoherentEntry group : coherent) {
 							sectionEnergy = sectionEnergy.add(SignedDyadic.of(group.internalEnergy()));
 						}
 						ThermalRegionStateCodec.SectionData data = new ThermalRegionStateCodec.SectionData(
-								markerEnergyBits, new long[0], new long[0], coherent, sectionEnergy);
+								markerEnergyBits, activeEnergyBits, depositEnergyBits, coherent, sectionEnergy);
 						sectionExtensions.add(new RegionExtension(ThermalRegionStateCodec.SECTION_EXTENSION,
 								new ThermalRegionStateCodec().encodeSection(data)));
 					}
@@ -281,22 +302,28 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			for (RegionSectionState section : sectionStates) {
 				ThermalRegionStateCodec.SectionData data = codec.decodeSection(
 						requiredExtension(section.extensions(), ThermalRegionStateCodec.SECTION_EXTENSION).payload(),
-						section.markerCount(), 0, 0);
+						section.markerCount(), GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION,
+						GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
 				ledgers.add(new ThermalRegionStateCodec.SectionLedger(section.key(), data.liquidMarkerEnergyBits().length,
-						0, 0, data.coherentGroups().size(), data.energy()));
+						data.activeParcelEnergyBits().length, data.depositGroupEnergyBits().length,
+						data.coherentGroups().size(), data.energy()));
 			}
 			SignedDyadic liquidEnergy = SignedDyadic.sum(thermal.copyInternalEnergy());
+			SignedDyadic activeEnergy = SignedDyadic.sum(allActiveEnergy);
+			SignedDyadic depositEnergy = SignedDyadic.sum(allDepositEnergy);
 			SignedDyadic coherentEnergy = SignedDyadic.ZERO;
 			for (CoherentPhaseStore.Group group : thermal.coherentGroups()) {
 				coherentEnergy = coherentEnergy.add(SignedDyadic.of(group.internalEnergy()));
 			}
 			int capabilities = ThermalRegionStateCodec.CAP_MATERIALS | ThermalRegionStateCodec.CAP_THERMAL
-					| (particles.hasChemicalState() ? ThermalRegionStateCodec.CAP_CHEMISTRY : 0);
+					| (particles.hasChemicalState() ? ThermalRegionStateCodec.CAP_CHEMISTRY : 0)
+					| (granular != null ? ThermalRegionStateCodec.CAP_GRANULAR : 0);
 			ThermalRegionStateCodec.ManifestData data = new ThermalRegionStateCodec.ManifestData(capabilities,
-					thermal.thermalRegistryFingerprint(), particles.particleCount(), 0, 0,
+					thermal.thermalRegistryFingerprint(), particles.particleCount(), allActiveEnergy.length, allDepositEnergy.length,
 					thermal.coherentGroups().size(), 0,
-					liquidEnergy, SignedDyadic.ZERO, SignedDyadic.ZERO, coherentEnergy, SignedDyadic.ZERO,
-					liquidEnergy.add(coherentEnergy), thermal.audit(), List.copyOf(ledgers), new long[0]);
+					liquidEnergy, activeEnergy, depositEnergy, coherentEnergy, SignedDyadic.ZERO,
+					liquidEnergy.add(activeEnergy).add(depositEnergy).add(coherentEnergy),
+					thermal.audit(), List.copyOf(ledgers), new long[0]);
 			manifestExtensions.add(new RegionExtension(ThermalRegionStateCodec.MANIFEST_EXTENSION,
 					codec.encodeManifest(data)));
 		}
@@ -406,18 +433,33 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		if (!thermal.registryFingerprint().equals(registry.fingerprint())) {
 			throw new IOException("Region-state v6 thermal registry fingerprint mismatch");
 		}
-		if (thermal.activeParcelCount() != 0 || thermal.depositGroupCount() != 0 || thermal.gasNodeCount() != 0) {
-			throw new IOException("Complete granular/gas v6 thermal reconstruction is not yet bound");
-		}
+		if (thermal.gasNodeCount() != 0) throw new IOException("Complete gas v6 thermal reconstruction is not yet bound");
+		boolean granularCapability = (thermal.capabilities() & ThermalRegionStateCodec.CAP_GRANULAR) != 0;
+		GranularRegionStateCodec granularCodec = new GranularRegionStateCodec();
+		GranularRegionStateCodec.ManifestData granular = granularCapability
+				? granularCodec.decodeManifest(requiredExtension(manifest.extensions(),
+				GranularRegionStateCodec.MANIFEST_EXTENSION).payload()) : null;
 		double[] energy = new double[manifest.totalMarkerCount()];
 		boolean[] seen = new boolean[energy.length];
+		double[] activeEnergy = new double[thermal.activeParcelCount()];
+		boolean[] seenActive = new boolean[activeEnergy.length];
+		ArrayList<ThermalDepositEnergy> deposits = new ArrayList<>(thermal.depositGroupCount());
 		ArrayList<CoherentPhaseStore.Group> coherent = new ArrayList<>(thermal.coherentGroupCount());
 		for (RegionSectionState section : sections) {
+			GranularRegionStateCodec.SectionData granularSection = granularCapability
+					? granularCodec.decodeSection(requiredExtension(section.extensions(),
+					GranularRegionStateCodec.SECTION_EXTENSION).payload(), granular.activeBudget(),
+					granular.depositGroupBudget())
+					: new GranularRegionStateCodec.SectionData(List.of(), List.of());
 			ThermalRegionStateCodec.SectionData data = codec.decodeSection(
 					requiredExtension(section.extensions(), ThermalRegionStateCodec.SECTION_EXTENSION).payload(),
-					section.markerCount(), 0, 0);
+					section.markerCount(), granularSection.active().size(), granularSection.deposits().size());
 			long[] bits = data.liquidMarkerEnergyBits(); int[] ordinals = section.markerOrdinals();
-			if (bits.length != ordinals.length) throw new IOException("Thermal marker ordinal cardinality mismatch");
+			if (bits.length != ordinals.length
+					|| data.activeParcelEnergyBits().length != granularSection.active().size()
+					|| data.depositGroupEnergyBits().length != granularSection.deposits().size()) {
+				throw new IOException("Thermal carrier ordinal cardinality mismatch");
+			}
 			for (int index = 0; index < ordinals.length; index++) {
 				int ordinal = ordinals[index];
 				if (ordinal < 0 || ordinal >= energy.length || seen[ordinal]) {
@@ -425,18 +467,33 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				}
 				seen[ordinal] = true; energy[ordinal] = Double.longBitsToDouble(bits[index]);
 			}
+			long[] activeBits = data.activeParcelEnergyBits();
+			for (int index = 0; index < activeBits.length; index++) {
+				int ordinal = granularSection.active().get(index).ordinal();
+				if (ordinal < 0 || ordinal >= activeEnergy.length || seenActive[ordinal]) {
+					throw new IOException("Duplicate or invalid granular thermal active ordinal");
+				}
+				seenActive[ordinal] = true; activeEnergy[ordinal] = Double.longBitsToDouble(activeBits[index]);
+			}
+			long[] depositBits = data.depositGroupEnergyBits();
+			for (int index = 0; index < depositBits.length; index++) deposits.add(new ThermalDepositEnergy(
+					granularSection.deposits().get(index), Double.longBitsToDouble(depositBits[index])));
 			for (ThermalRegionStateCodec.CoherentEntry group : data.coherentGroups()) {
 				coherent.add(new CoherentPhaseStore.Group(group.cell(), group.phaseId(),
 						group.occupiedVolumeSvq(), group.mass(), group.composition(), group.internalEnergy()));
 			}
 		}
 		for (boolean value : seen) if (!value) throw new IOException("Missing thermal marker ordinal");
+		for (boolean value : seenActive) if (!value) throw new IOException("Missing granular thermal active ordinal");
+		deposits.sort(ThermalDepositEnergy.ORDER);
+		double[] depositEnergy = new double[deposits.size()];
+		for (int index = 0; index < depositEnergy.length; index++) depositEnergy[index] = deposits.get(index).energy();
 		coherent.sort(Comparator.comparingInt(CoherentPhaseStore.Group::cell)
 				.thenComparing(CoherentPhaseStore.Group::phaseId));
 		try {
 			return new FlipThermalParticleState(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
 					manifest.solverConfig().cellSize(), manifest.totalMarkerCount(), thermal.registryFingerprint(),
-					energy, coherent, thermal.audit());
+					energy, activeEnergy, depositEnergy, coherent, thermal.audit());
 		} catch (IllegalArgumentException invalid) {
 			throw new IOException("Invalid region-state v6 thermal inventory: " + invalid.getMessage(), invalid);
 		}
@@ -462,7 +519,9 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	}
 
 	public GranularStateSnapshot reconstructGranular(GranularRegistry registry) throws IOException {
-		if (manifest.formatVersion() != 5) throw new IOException("Only region-state v5 has granular state");
+		if (!hasExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION)) {
+			throw new IOException("This region-state has no granular state");
+		}
 		if (registry == null) throw new IOException("Authoritative granular registry is unavailable");
 		validate();
 		GranularRegionStateCodec codec = new GranularRegionStateCodec();
@@ -471,13 +530,13 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		if (!granular.registryFingerprint().equals(registry.fingerprint())
 				|| !granular.materialPalette().equals(registry.materials().stream()
 				.map(com.example.granular.ParticulateMaterial::id).toList())) {
-			throw new IOException("Region-state v5 granular registry fingerprint/palette mismatch");
+			throw new IOException("Region-state granular registry fingerprint/palette mismatch");
 		}
 		boolean reactivePayload = !granular.solidCompositions().isEmpty()
 				|| granular.externalSource().requiresChemistry() || granular.escapedSink().requiresChemistry();
 		if (reactivePayload
 				&& !granular.chemicalRegistryFingerprint().equals(registry.chemicalRegistryFingerprint())) {
-			throw new IOException("Region-state v5 reactive granular registry dependency mismatch");
+			throw new IOException("Region-state reactive granular registry dependency mismatch");
 		}
 		GranularStateSnapshot.ActiveParcel[] active = new GranularStateSnapshot.ActiveParcel[granular.activeCount()];
 		boolean[] seenActive = new boolean[active.length];
@@ -514,8 +573,15 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					granular.solidCompositions(), granular.solidSpeciesTotals(), Arrays.asList(active), deposits,
 					totalSvq, Double.doubleToRawLongBits(totalMass), granular.externalSource(), granular.escapedSink());
 		} catch (IllegalArgumentException invalid) {
-			throw new IOException("Invalid region-state v5 granular inventory: " + invalid.getMessage(), invalid);
+			throw new IOException("Invalid region-state granular inventory: " + invalid.getMessage(), invalid);
 		}
+	}
+
+	private record ThermalDepositEnergy(GranularStateSnapshot.DepositGroup group, double energy) {
+		private static final Comparator<ThermalDepositEnergy> ORDER = Comparator
+				.comparingInt((ThermalDepositEnergy value) -> value.group().cell())
+				.thenComparingInt(value -> value.group().materialPaletteIndex())
+				.thenComparingInt(value -> value.group().solidCompositionIndex());
 	}
 
 	private ChemicalAuditLedgerCodec.AuditLedgers decodeChemicalAuditExtension() throws IOException {
@@ -618,7 +684,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		}
 		if (manifest.formatVersion() >= 2) validateMaterialLedgers();
 		if (manifest.hasChemicalState()) validateChemicalLedgers();
-		if (manifest.formatVersion() == 5) validateGranularLedgers();
+		if (hasExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION)) validateGranularLedgers();
 		if (manifest.hasThermalState()) validateThermalLedgers();
 	}
 
@@ -646,6 +712,15 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			ThermalRegionStateCodec.SectionData data = codec.decodeSection(
 					requiredExtension(section.extensions(), ThermalRegionStateCodec.SECTION_EXTENSION).payload(),
 					section.markerCount(), Integer.MAX_VALUE, Integer.MAX_VALUE);
+			if (granularPayload) {
+				GranularRegionStateCodec.SectionData granular = new GranularRegionStateCodec().decodeSection(
+						requiredExtension(section.extensions(), GranularRegionStateCodec.SECTION_EXTENSION).payload(),
+						GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
+				if (data.activeParcelEnergyBits().length != granular.active().size()
+						|| data.depositGroupEnergyBits().length != granular.deposits().size()) {
+					throw new IOException("Thermal section does not bind one energy to each M8 carrier");
+				}
+			}
 			ThermalRegionStateCodec.SectionLedger ledger = ledgers.remove(section.key());
 			if (ledger == null || ledger.liquidMarkerCount() != data.liquidMarkerEnergyBits().length
 					|| ledger.activeParcelCount() != data.activeParcelEnergyBits().length

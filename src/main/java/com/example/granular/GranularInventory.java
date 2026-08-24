@@ -13,6 +13,7 @@ public final class GranularInventory {
 	private final boolean[] mergePaired;
 	private final ActiveMerge[] plannedMerge;
 	private SolidCompositionPool compositions;
+	private EnergyAdapter thermalEnergy;
 
 	public GranularInventory(GranularParcelStore parcels, GranularDepositStore deposits) {
 		if (parcels == null || deposits == null) throw new IllegalArgumentException("Granular stores are missing");
@@ -34,6 +35,14 @@ public final class GranularInventory {
 		compositions = pool;
 	}
 
+	public void bindThermalEnergy(EnergyAdapter adapter) {
+		if (adapter == null) throw new IllegalArgumentException("Granular thermal adapter is missing");
+		if (thermalEnergy != null && thermalEnergy != adapter) {
+			throw new IllegalStateException("Granular inventory cannot change its thermal adapter");
+		}
+		thermalEnergy = adapter;
+	}
+
 	public boolean depositParcel(int parcelIndex, int cell, long geometricOpenSvq) {
 		GranularParcelStore.Parcel parcel = parcels.parcel(parcelIndex);
 		if (parcel.solidCompositionHandle() != 0) {
@@ -47,7 +56,11 @@ public final class GranularInventory {
 				GranularDepositStore.SolidPortion merged = new GranularDepositStore.SolidPortion(
 						parcel.materialHandle(), compatible.solidCompositionHandle(),
 						parcel.solidVolumeSvq(), parcel.mass());
+				if (thermalEnergy != null) thermalEnergy.requireActiveToDeposit(parcelIndex, cell,
+						parcel.materialHandle(), compatible.solidCompositionHandle());
 				if (!deposits.tryAdd(cell, merged, geometricOpenSvq)) return false;
+				if (thermalEnergy != null) thermalEnergy.commitActiveToDeposit(parcelIndex, cell,
+						parcel.materialHandle(), compatible.solidCompositionHandle());
 				compositions.overwrite(compatible.solidCompositionHandle(), combined);
 				compositions.release(parcel.solidCompositionHandle());
 				parcels.removeSwap(parcelIndex);
@@ -56,7 +69,11 @@ public final class GranularInventory {
 		}
 		GranularDepositStore.SolidPortion portion = new GranularDepositStore.SolidPortion(
 				parcel.materialHandle(), parcel.solidCompositionHandle(), parcel.solidVolumeSvq(), parcel.mass());
+		if (thermalEnergy != null) thermalEnergy.requireActiveToDeposit(parcelIndex, cell,
+				parcel.materialHandle(), parcel.solidCompositionHandle());
 		if (!deposits.tryAdd(cell, portion, geometricOpenSvq)) return false;
+		if (thermalEnergy != null) thermalEnergy.commitActiveToDeposit(parcelIndex, cell,
+				parcel.materialHandle(), parcel.solidCompositionHandle());
 		parcels.removeSwap(parcelIndex);
 		return true;
 	}
@@ -106,12 +123,14 @@ public final class GranularInventory {
 			if (merge == null || !merge.equals(plannedMerge[pair])) {
 				throw new IllegalStateException("Active granular merge plan changed before commit");
 			}
+			if (thermalEnergy != null) thermalEnergy.requireActiveMerge(mergeFirst[pair], mergeSecond[pair]);
 			if (merge.composition() != null) {
 				compositions.overwrite(merge.parcel().solidCompositionHandle(), merge.composition());
 				compositions.release(parcels.parcel(mergeSecond[pair]).solidCompositionHandle());
 			}
 			parcels.overwrite(mergeFirst[pair], merge.parcel());
 			parcels.removeSwap(mergeSecond[pair]);
+			if (thermalEnergy != null) thermalEnergy.commitActiveMerge(mergeFirst[pair], mergeSecond[pair]);
 			plannedMerge[pair] = null;
 		}
 		return new CompactionStats(pairs, evaluations);
@@ -166,9 +185,16 @@ public final class GranularInventory {
 				velocityX, velocityY, velocityZ, planned.solidVolumeSvq(), planned.mass(),
 				planned.materialHandle(), planned.solidCompositionHandle(), 0, (byte) 0);
 		if (!parcels.canAdd(parcel)) return false;
+		GranularDepositStore.Group source = deposits.matchingGroup(cell, materialHandle,
+				group -> group.solidCompositionHandle() == compositionHandle);
+		if (source == null) throw new IllegalStateException("Granular wake source changed before commit");
+		if (thermalEnergy != null) thermalEnergy.requireDepositWake(cell, materialHandle, compositionHandle,
+				planned.solidVolumeSvq(), source.solidVolumeSvq());
 		GranularDepositStore.SolidPortion committed = deposits.take(
 				cell, materialHandle, compositionHandle, requestedSvq);
 		parcels.add(parcel);
+		if (thermalEnergy != null) thermalEnergy.commitDepositWake(cell, materialHandle, compositionHandle,
+				planned.solidVolumeSvq(), source.solidVolumeSvq());
 		if (!committed.equals(planned)) throw new IllegalStateException("Granular wake plan changed before commit");
 		return true;
 	}
@@ -210,6 +236,7 @@ public final class GranularInventory {
 		if (compositions != null && compositions.liveCount() != 0) {
 			throw new IllegalStateException("Granular composition pool did not clear");
 		}
+		if (thermalEnergy != null) thermalEnergy.clearExternal();
 		return new ClearStats(solidVolumeSvq, mass, activeParcels, depositGroups);
 	}
 
@@ -220,6 +247,15 @@ public final class GranularInventory {
 	public interface ActiveMergeAcceptance {
 		boolean test(GranularParcelStore.Parcel first, GranularParcelStore.Parcel second,
 		             GranularParcelStore.Parcel merged);
+	}
+	public interface EnergyAdapter {
+		void requireActiveToDeposit(int active, int cell, int material, int composition);
+		void commitActiveToDeposit(int active, int cell, int material, int composition);
+		void requireActiveMerge(int first, int second);
+		void commitActiveMerge(int first, int second);
+		void requireDepositWake(int cell, int material, int composition, long takenSvq, long totalSvq);
+		void commitDepositWake(int cell, int material, int composition, long takenSvq, long totalSvq);
+		void clearExternal();
 	}
 	private record ActiveMerge(GranularParcelStore.Parcel parcel, SolidCompositionRecord composition) { }
 }

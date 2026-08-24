@@ -395,6 +395,21 @@ public final class RegionStateFiles {
 				}
 				state.reconstructChemical(chemicalRegistry);
 			} else state.reconstructMaterial();
+			boolean hasGranular = state.manifest().extensions().stream()
+					.anyMatch(extension -> GranularRegionStateCodec.MANIFEST_EXTENSION.equals(extension.type()));
+			if (hasGranular) {
+				if (granularRegistry == null) {
+					throw new IOException("granular region-state v6 verification requires the authoritative granular registry");
+				}
+				var granular = state.reconstructGranular(granularRegistry);
+				if (granular.requiresChemistry() && chemicalRegistry == null) {
+					throw new IOException("Reactive region-state v6 verification requires the authoritative chemical registry");
+				}
+				try { granular.validateAgainst(granularRegistry, chemicalRegistry); }
+				catch (IllegalArgumentException invalid) {
+					throw new IOException("Region-state v6 granular inventory/audit validation failed", invalid);
+				}
+			}
 			state.reconstructThermal(thermalRegistry);
 		}
 		else throw new IOException("Unsupported region-state version " + state.manifest().formatVersion());

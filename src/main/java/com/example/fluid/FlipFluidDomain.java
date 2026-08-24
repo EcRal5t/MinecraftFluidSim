@@ -27,6 +27,7 @@ import com.example.granular.SolidLiquidReaction;
 import com.example.granular.SolidVolume;
 import com.example.thermal.SignedDyadic;
 import com.example.thermal.CoherentPhaseStore;
+import com.example.thermal.GranularEnergyColumn;
 import com.example.thermal.ThermalAuditLedger;
 import com.example.thermal.ThermalMaterialDefinition;
 import com.example.thermal.ThermalLimits;
@@ -516,7 +517,10 @@ public final class FlipFluidDomain {
 				position.x(), position.y(), position.z(), 0.0F, 0.0F, 0.0F,
 				solidVolumeSvq, mass, materialHandle, compositionHandle, 0, (byte) 0);
 		if (!granularParcels.canAdd(parcel)) return GranularInsertion.rejected("Active granular parcel budget exceeded");
+		double thermalEnergy = thermalState == null ? 0.0 : thermalState.planExternalGranularEnergy(
+				materialHandle, compositionHandle, mass, thermalMarkerContext());
 		granularParcels.add(parcel);
+		if (thermalState != null) thermalState.commitExternalActiveInsertions(new double[]{thermalEnergy});
 		gridDirty = true;
 		return new GranularInsertion(true, solidVolumeSvq, mass, null);
 	}
@@ -634,6 +638,7 @@ public final class FlipFluidDomain {
 		GranularAuditLedger sourceAfter = externalSource ? granularExternalSource.plus(
 				ledger, granularRegistry, solidCompositions == null ? null : solidCompositions.registry()) : granularExternalSource;
 		int originalCount = granularParcels.count(); ArrayList<Integer> createdCompositions = new ArrayList<>(reactiveDrafts);
+		double[] thermalInsertions = null;
 		try {
 			for (GranularParcelDraft draft : drafts) {
 				int compositionHandle = draft.composition() == null ? 0 : solidCompositions.create(draft.composition());
@@ -642,11 +647,14 @@ public final class FlipFluidDomain {
 						draft.x(), draft.y(), draft.z(), 0.0F, 0.0F, 0.0F,
 						draft.solidVolumeSvq(), draft.mass(), draft.materialHandle(), compositionHandle, 0, (byte) 0));
 			}
+			if (thermalState != null) thermalInsertions = thermalState.planExternalActiveInsertions(originalCount,
+					granularParcels.count() - originalCount, thermalMarkerContext());
 		} catch (RuntimeException failure) {
 			while (granularParcels.count() > originalCount) granularParcels.removeSwap(granularParcels.count() - 1);
 			for (int handle : createdCompositions) if (solidCompositions.isLive(handle)) solidCompositions.release(handle);
 			throw failure;
 		}
+		if (thermalState != null) thermalState.commitExternalActiveInsertions(thermalInsertions);
 		boolean[] changedCells = new boolean[cellCount];
 		for (GranularParcelDraft draft : drafts) {
 			int changed = draft.cell();
@@ -734,7 +742,9 @@ public final class FlipFluidDomain {
 			SolidCompositionRecord composition = parcel.solidCompositionHandle() == 0 ? null
 					: solidCompositions.record(parcel.solidCompositionHandle());
 			ledger.add(granularRegistry.material(parcel.materialHandle()).id(), taken, mass, composition);
-			removals.add(GranularRemoval.parcel(parcelIndex, parcelCell, parcel, taken, mass)); remaining -= taken;
+			double energy = thermalState == null ? 0.0
+					: thermalState.previewActiveTake(parcelIndex, taken, parcel.solidVolumeSvq());
+			removals.add(GranularRemoval.parcel(parcelIndex, parcelCell, parcel, taken, mass, energy)); remaining -= taken;
 		}
 		for (CellCandidate candidate : extractionCells) if (remaining > 0L) {
 			int cell = candidate.index(); GranularDepositStore.Group exposed = granularDeposits.dominantGroup(cell);
@@ -746,7 +756,10 @@ public final class FlipFluidDomain {
 					SolidCompositionRecord composition = exposed.solidCompositionHandle() == 0 ? null
 							: solidCompositions.record(exposed.solidCompositionHandle());
 					ledger.add(granularRegistry.material(exposed.materialHandle()).id(), taken, preview.mass(), composition);
-					removals.add(GranularRemoval.deposit(cell, exposed, taken, preview.mass()));
+					double energy = thermalState == null ? 0.0 : thermalState.previewDepositTake(
+							new GranularEnergyColumn.DepositKey(cell, exposed.materialHandle(),
+									exposed.solidCompositionHandle()), taken, exposed.solidVolumeSvq());
+					removals.add(GranularRemoval.deposit(cell, exposed, taken, preview.mass(), energy));
 					remaining -= taken;
 				}
 			}
@@ -760,6 +773,9 @@ public final class FlipFluidDomain {
 				transfer, granularRegistry, solidCompositions == null ? null : solidCompositions.registry()) : granularEscapedSink;
 		for (GranularRemoval removal : removals) if (removal.deposit()) {
 			granularDeposits.take(removal.cell(), removal.materialHandle(), removal.compositionHandle(), removal.solidVolumeSvq());
+			if (thermalState != null) thermalState.commitExternalDepositTake(new GranularEnergyColumn.DepositKey(
+					removal.cell(), removal.materialHandle(), removal.compositionHandle()),
+					removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
 			if (removal.compositionHandle() != 0) solidCompositions.release(removal.compositionHandle());
 		}
 		for (GranularRemoval removal : removals) if (!removal.deposit()
@@ -769,11 +785,15 @@ public final class FlipFluidDomain {
 					parcel.velocityX(), parcel.velocityY(), parcel.velocityZ(),
 					parcel.solidVolumeSvq() - removal.solidVolumeSvq(), parcel.mass() - removal.mass(),
 					parcel.materialHandle(), 0, parcel.contactAge(), parcel.flags()));
+			if (thermalState != null) thermalState.commitExternalActiveTake(
+					removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
 		}
 		removals.stream().filter(removal -> !removal.deposit()
 				&& removal.solidVolumeSvq() == removal.originalSolidVolumeSvq())
 				.sorted(Comparator.comparingInt(GranularRemoval::index).reversed()).forEach(removal -> {
 					GranularParcelStore.Parcel removed = granularParcels.removeSwap(removal.index());
+					if (thermalState != null) thermalState.commitExternalActiveTake(
+							removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
 					if (removed.solidCompositionHandle() != 0) solidCompositions.release(removed.solidCompositionHandle());
 				});
 		boolean[] changedCells = new boolean[cellCount];
@@ -781,7 +801,10 @@ public final class FlipFluidDomain {
 			markGranularExternalChange(removal.cell()); changedCells[removal.cell()] = true;
 		}
 		granularEscapedSink = sinkAfter;
-		return new GranularExtraction(true, transfer, null);
+		double removedEnergy = 0.0;
+		for (GranularRemoval removal : removals) removedEnergy += removal.internalEnergy();
+		if (!Double.isFinite(removedEnergy)) throw new ArithmeticException("Granular extraction thermal energy overflow");
+		return new GranularExtraction(true, transfer, removedEnergy, null);
 	}
 
 	private SolidCompositionRecord splitSolidComposition(
@@ -864,23 +887,29 @@ public final class FlipFluidDomain {
 
 	private record GranularRemoval(
 			boolean deposit, int index, int cell, int materialHandle, int compositionHandle,
-			long solidVolumeSvq, long originalSolidVolumeSvq, double mass
+			long solidVolumeSvq, long originalSolidVolumeSvq, double mass, double internalEnergy
 	) {
-		static GranularRemoval parcel(int index, int cell, GranularParcelStore.Parcel parcel, long svq, double mass) {
+		static GranularRemoval parcel(
+				int index, int cell, GranularParcelStore.Parcel parcel, long svq, double mass, double energy
+		) {
 			return new GranularRemoval(false, index, cell, parcel.materialHandle(), parcel.solidCompositionHandle(),
-					svq, parcel.solidVolumeSvq(), mass);
+					svq, parcel.solidVolumeSvq(), mass, energy);
 		}
-		static GranularRemoval deposit(int cell, GranularDepositStore.Group group, long svq, double mass) {
+		static GranularRemoval deposit(
+				int cell, GranularDepositStore.Group group, long svq, double mass, double energy
+		) {
 			return new GranularRemoval(true, -1, cell, group.materialHandle(), group.solidCompositionHandle(),
-					svq, group.solidVolumeSvq(), mass);
+					svq, group.solidVolumeSvq(), mass, energy);
 		}
 	}
 
 	public record GranularInsertion(boolean inserted, long solidVolumeSvq, double mass, String failure) {
 		private static GranularInsertion rejected(String reason) { return new GranularInsertion(false, 0L, 0.0, reason); }
 	}
-	public record GranularExtraction(boolean transferred, GranularTransferLedger ledger, String failure) {
-		private static GranularExtraction rejected(String reason) { return new GranularExtraction(false, null, reason); }
+	public record GranularExtraction(
+			boolean transferred, GranularTransferLedger ledger, double internalEnergy, String failure
+	) {
+		private static GranularExtraction rejected(String reason) { return new GranularExtraction(false, null, 0.0, reason); }
 	}
 
 	/** Returns the bound material registry, or null for a pure-water domain. */
@@ -1103,8 +1132,8 @@ public final class FlipFluidDomain {
 		if (Float.floatToRawIntBits(config.cellSize()) != Float.floatToRawIntBits(0.5F)) {
 			throw new IllegalArgumentException("M9 thermal state currently requires a 0.5 m solver cell");
 		}
-		if (granularRegistry != null) {
-			throw new IllegalStateException("Transient liquid thermal binding does not yet own M8 parcel/deposit energy");
+		if (precipitationEnabled) {
+			throw new IllegalStateException("Thermal binding is blocked until solid-liquid reaction energy joins its commit");
 		}
 		bindMaterialRegistry(liquidRegistry);
 		if (thermalState != null) {
@@ -1119,12 +1148,44 @@ public final class FlipFluidDomain {
 		}
 		thermalState = new FlipThermalState(registry, materialRegistry, initialTemperatureK,
 				particleX.length, sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext());
+		if (granularInventory != null) granularInventory.bindThermalEnergy(thermalGranularAdapter());
 		if (granularCoupling == null) {
 			granularCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
 			granularNextCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
 		}
 		refreshCoherentOccupancy();
 		gridDirty = true;
+	}
+
+	private GranularInventory.EnergyAdapter thermalGranularAdapter() {
+		return new GranularInventory.EnergyAdapter() {
+			private GranularEnergyColumn.DepositKey key(int cell, int material, int composition) {
+				return new GranularEnergyColumn.DepositKey(cell, material, composition);
+			}
+			@Override public void requireActiveToDeposit(int active, int cell, int material, int composition) {
+				thermalState.requireActiveToDeposit(active, key(cell, material, composition));
+			}
+			@Override public void commitActiveToDeposit(int active, int cell, int material, int composition) {
+				thermalState.commitActiveToDeposit(active, key(cell, material, composition));
+			}
+			@Override public void requireActiveMerge(int first, int second) {
+				thermalState.requireActiveMerge(first, second);
+			}
+			@Override public void commitActiveMerge(int first, int second) {
+				thermalState.commitActiveMerge(first, second);
+			}
+			@Override public void requireDepositWake(
+					int cell, int material, int composition, long takenSvq, long totalSvq
+			) {
+				thermalState.requireDepositWake(key(cell, material, composition), takenSvq, totalSvq);
+			}
+			@Override public void commitDepositWake(
+					int cell, int material, int composition, long takenSvq, long totalSvq
+			) {
+				thermalState.commitDepositWake(key(cell, material, composition), takenSvq, totalSvq);
+			}
+			@Override public void clearExternal() { thermalState.clearGranularExternal(); }
+		};
 	}
 
 	/** Restores only the orthogonal M9 energy side after material/chemical marker truth is already restored. */
@@ -1450,7 +1511,64 @@ public final class FlipFluidDomain {
 			@Override public ChemicalRegistry chemicalRegistry() {
 				return chemicalParcels == null ? null : chemicalParcels.registry();
 			}
+			@Override public int granularMaterialCount() {
+				return granularRegistry == null ? 0 : granularRegistry.materials().size();
+			}
+			@Override public String granularRegistryFingerprint() {
+				return granularRegistry == null ? "" : granularRegistry.fingerprint();
+			}
+			@Override public String granularMaterialId(int materialHandle) {
+				if (granularRegistry == null) throw new IllegalArgumentException("Granular state is not bound");
+				return granularRegistry.material(materialHandle).id();
+			}
+			@Override public int activeParcelCount() {
+				return granularParcels == null ? 0 : granularParcels.count();
+			}
+			@Override public int activeParcelCell(int ordinal) {
+				return granularParcelCell(granularParcels.parcel(ordinal));
+			}
+			@Override public int activeParcelMaterial(int ordinal) {
+				return granularParcels.parcel(ordinal).materialHandle();
+			}
+			@Override public int activeParcelComposition(int ordinal) {
+				return granularParcels.parcel(ordinal).solidCompositionHandle();
+			}
+			@Override public long activeParcelSvq(int ordinal) {
+				return granularParcels.parcel(ordinal).solidVolumeSvq();
+			}
+			@Override public double activeParcelMass(int ordinal) {
+				return granularParcels.parcel(ordinal).mass();
+			}
+			@Override public List<GranularEnergyColumn.DepositKey> depositKeys() {
+				if (granularDeposits == null) return List.of();
+				ArrayList<GranularEnergyColumn.DepositKey> keys = new ArrayList<>(granularDeposits.groupCount());
+				granularDeposits.forEachGroup((cell, porosity, material, composition, volume, mass) ->
+						keys.add(new GranularEnergyColumn.DepositKey(cell, material, composition)));
+				keys.sort(Comparator.naturalOrder());
+				return List.copyOf(keys);
+			}
+			@Override public long depositSvq(GranularEnergyColumn.DepositKey key) {
+				return thermalDepositGroup(key).solidVolumeSvq();
+			}
+			@Override public double depositMass(GranularEnergyColumn.DepositKey key) {
+				return thermalDepositGroup(key).mass();
+			}
+			@Override public Map<String, Long> solidComposition(int compositionHandle) {
+				if (compositionHandle == 0) return Map.of();
+				if (solidCompositions == null || chemicalParcels == null) {
+					throw new IllegalArgumentException("Solid thermal composition state is unavailable");
+				}
+				return solidCompositions.record(compositionHandle).stableAmounts(chemicalParcels.registry());
+			}
 		};
+	}
+
+	private GranularDepositStore.Group thermalDepositGroup(GranularEnergyColumn.DepositKey key) {
+		if (granularDeposits == null || key == null) throw new IllegalArgumentException("Granular deposit state is unavailable");
+		GranularDepositStore.Group group = granularDeposits.matchingGroup(key.cell(), key.materialHandle(),
+				candidate -> candidate.solidCompositionHandle() == key.compositionHandle());
+		if (group == null) throw new IllegalArgumentException("Unknown granular thermal deposit identity");
+		return group;
 	}
 
 	private double thermalMarkerTemperature(int marker) {
@@ -1773,11 +1891,22 @@ public final class FlipFluidDomain {
 		if (selectedDepositCell) granularDeposits.forEachGroup((groupCell, porosity, material, composition, svq, mass) -> {
 			if (groupCell == cell) depositGroups.add(new GranularDepositStore.Group(material, composition, svq, mass));
 		});
+		if (thermalState != null) {
+			for (int parcel = 0; parcel < selectedParcels.length; parcel++) if (selectedParcels[parcel]) {
+				GranularParcelStore.Parcel state = granularParcels.parcel(parcel);
+				thermalState.previewActiveTake(parcel, state.solidVolumeSvq(), state.solidVolumeSvq());
+			}
+			for (GranularDepositStore.Group group : depositGroups) thermalState.previewDepositTake(
+					new GranularEnergyColumn.DepositKey(cell, group.materialHandle(), group.solidCompositionHandle()),
+					group.solidVolumeSvq(), group.solidVolumeSvq());
+		}
 
 		long removedSvq = 0L;
 		double removedMass = 0.0;
 		for (int parcel = selectedParcels.length - 1; parcel >= 0; parcel--) if (selectedParcels[parcel]) {
 			GranularParcelStore.Parcel state = granularParcels.removeSwap(parcel);
+			if (thermalState != null) thermalState.commitExternalActiveTake(
+					parcel, state.solidVolumeSvq(), state.solidVolumeSvq());
 			removedSvq = Math.addExact(removedSvq, state.solidVolumeSvq());
 			removedMass += state.mass();
 			if (state.solidCompositionHandle() != 0) solidCompositions.release(state.solidCompositionHandle());
@@ -1785,6 +1914,9 @@ public final class FlipFluidDomain {
 		for (GranularDepositStore.Group group : depositGroups) {
 			GranularDepositStore.SolidPortion taken = granularDeposits.take(
 					cell, group.materialHandle(), group.solidCompositionHandle(), group.solidVolumeSvq());
+			if (thermalState != null) thermalState.commitExternalDepositTake(new GranularEnergyColumn.DepositKey(
+					cell, group.materialHandle(), group.solidCompositionHandle()),
+					group.solidVolumeSvq(), group.solidVolumeSvq());
 			removedSvq = Math.addExact(removedSvq, taken.solidVolumeSvq());
 			removedMass += taken.mass();
 			if (taken.solidCompositionHandle() != 0) solidCompositions.release(taken.solidCompositionHandle());
@@ -3135,6 +3267,24 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			@Override public void cancelRelaxation(int fromCell, int toCell, long solidSvq) {
 				granularCoupling.removePlannedCell(plannedSolid, toCell, solidSvq);
 				restorePlannedCell(plannedSolid, fromCell, solidSvq, "relaxation rollback");
+			}
+
+			@Override public void requireThermalRelaxation(
+					int fromCell, int toCell, int material, int composition, long movedSvq, long sourceTotalSvq
+			) {
+				if (thermalState == null) return;
+				thermalState.requireDepositMove(
+						new GranularEnergyColumn.DepositKey(fromCell, material, composition),
+						new GranularEnergyColumn.DepositKey(toCell, material, composition), movedSvq, sourceTotalSvq);
+			}
+
+			@Override public void commitThermalRelaxation(
+					int fromCell, int toCell, int material, int composition, long movedSvq, long sourceTotalSvq
+			) {
+				if (thermalState == null) return;
+				thermalState.commitDepositMove(
+						new GranularEnergyColumn.DepositKey(fromCell, material, composition),
+						new GranularEnergyColumn.DepositKey(toCell, material, composition), movedSvq, sourceTotalSvq);
 			}
 
 			@Override public boolean planWake(int cell, long solidSvq, float x, float y, float z) {

@@ -31,6 +31,12 @@ public final class GranularDepositDynamics {
 		default void cancelSettlement(GranularParcelStore.Parcel parcel, int cell) { }
 		default boolean planRelaxation(int fromCell, int toCell, long solidSvq) { return true; }
 		default void cancelRelaxation(int fromCell, int toCell, long solidSvq) { }
+		default void requireThermalRelaxation(
+				int fromCell, int toCell, int material, int composition, long movedSvq, long sourceTotalSvq
+		) { }
+		default void commitThermalRelaxation(
+				int fromCell, int toCell, int material, int composition, long movedSvq, long sourceTotalSvq
+		) { }
 		default boolean planWake(int cell, long solidSvq, float x, float y, float z) { return true; }
 		default void cancelWake(int cell, long solidSvq, float x, float y, float z) { }
 		default void onSolidChanged(int cell) { }
@@ -238,8 +244,12 @@ public final class GranularDepositDynamics {
 			if (deposits.previewCellBulkVolumeAfterAdd(receiver, moved) > open) continue;
 			if (!additionSlopeAllowed(receiver, moved, material, environment)) return false;
 			if (!environment.planRelaxation(surfaceCell, receiver, requestedSkeleton)) return false;
+			environment.requireThermalRelaxation(surfaceCell, receiver, exposed.materialHandle(),
+					exposed.solidCompositionHandle(), requestedSkeleton, exposed.solidVolumeSvq());
 			if (deposits.tryMove(surfaceCell, receiver, exposed.materialHandle(),
 					exposed.solidCompositionHandle(), requestedSkeleton, open)) {
+				environment.commitThermalRelaxation(surfaceCell, receiver, exposed.materialHandle(),
+						exposed.solidCompositionHandle(), requestedSkeleton, exposed.solidVolumeSvq());
 				environment.onSolidChanged(surfaceCell);
 				environment.onSolidChanged(receiver);
 				disturbColumn(receiverX, receiverZ);
