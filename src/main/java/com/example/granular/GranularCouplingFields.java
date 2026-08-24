@@ -8,6 +8,7 @@ public final class GranularCouplingFields {
 	private final int sizeX, sizeY, sizeZ, cellCount;
 	private final double cellSize;
 	private final long[] solidSvq;
+	private final long[] fixedCellSvq;
 	private final int[] candidateCell = new int[8];
 	private final double[] candidateWeight = new double[8];
 	private final long[] candidateShare = new long[8];
@@ -21,6 +22,28 @@ public final class GranularCouplingFields {
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.cellSize = cellSize;
 		this.cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
 		this.solidSvq = new long[cellCount];
+		this.fixedCellSvq = new long[cellCount];
+	}
+
+	/** Replaces fixed cell-local occupancy (for example M9 coherent solid) without touching M8 truth. */
+	public void setFixedCellSvq(long[] fixed) {
+		if (fixed == null || fixed.length != cellCount) {
+			throw new IllegalArgumentException("Fixed solid occupancy dimensions differ");
+		}
+		long total = 0L;
+		for (long value : fixed) {
+			if (value < 0L) throw new IllegalArgumentException("Fixed solid occupancy cannot be negative");
+			total = Math.addExact(total, value);
+		}
+		System.arraycopy(fixed, 0, fixedCellSvq, 0, cellCount);
+		System.arraycopy(fixed, 0, solidSvq, 0, cellCount);
+		totalSolidSvq = total;
+	}
+
+	/** Rebuilds a fixed-only field when no M8 stores are bound. */
+	public void rebuildFixed() {
+		System.arraycopy(fixedCellSvq, 0, solidSvq, 0, cellCount);
+		totalSolidSvq = sumSolidSvq();
 	}
 
 	public void rebuild(GranularParcelStore parcels, GranularDepositStore deposits) {
@@ -32,7 +55,7 @@ public final class GranularCouplingFields {
 			throw new IllegalArgumentException("Granular coupling inventory dimensions differ");
 		}
 		if (positions == null) throw new IllegalArgumentException("Granular position source is missing");
-		Arrays.fill(solidSvq, 0L);
+		System.arraycopy(fixedCellSvq, 0, solidSvq, 0, cellCount);
 		totalSolidSvq = 0L;
 		deposits.forEachCell((cell, volume, porosity) -> solidSvq[cell] = Math.addExact(solidSvq[cell], volume));
 		for (int parcel = 0; parcel < parcels.count(); parcel++) {
@@ -41,7 +64,10 @@ public final class GranularCouplingFields {
 			if (position == null) throw new IllegalStateException("Granular position source returned null");
 			distribute(position.x(), position.y(), position.z(), inventory.solidVolumeSvq());
 		}
-		long expected = Math.addExact(parcels.totalSolidVolumeSvq(), deposits.totalSolidVolumeSvq());
+		long fixed = 0L;
+		for (long value : fixedCellSvq) fixed = Math.addExact(fixed, value);
+		long expected = Math.addExact(fixed,
+				Math.addExact(parcels.totalSolidVolumeSvq(), deposits.totalSolidVolumeSvq()));
 		long actual = sumSolidSvq();
 		if (actual != expected) throw new IllegalStateException("Granular occupancy does not re-sum to exact inventory");
 		totalSolidSvq = actual;
@@ -54,8 +80,7 @@ public final class GranularCouplingFields {
 	}
 	public long totalSolidSvq() { return totalSolidSvq; }
 	public void clear() {
-		if (totalSolidSvq == 0L) return;
-		Arrays.fill(solidSvq, 0L); totalSolidSvq = 0L;
+		rebuildFixed();
 	}
 	private long sumSolidSvq() {
 		long total = 0L;

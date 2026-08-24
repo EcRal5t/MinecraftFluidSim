@@ -2,15 +2,20 @@ package com.example.fluid;
 
 import com.example.chemistry.ChemicalMixtureRecord;
 import com.example.chemistry.ChemicalRegistry;
+import com.example.granular.SolidVolume;
+import com.example.thermal.CoherentPhaseStore;
 import com.example.thermal.SignedDyadic;
 import com.example.thermal.ThermalAuditLedger;
 import com.example.thermal.ThermalCellGrid;
+import com.example.thermal.ThermalLimits;
 import com.example.thermal.ThermalMaterialDefinition;
+import com.example.thermal.ThermalPhaseChangeEngine;
 import com.example.thermal.ThermalRegistry;
 import com.example.thermal.ThermalStateFunction;
 import com.example.thermal.ThermalTransport;
 
 import java.util.Arrays;
+import java.util.Map;
 
 /** Owns the optional liquid-marker M9 energy column; FlipFluidDomain only supplies carrier/cell orchestration. */
 final class FlipThermalState {
@@ -37,6 +42,8 @@ final class FlipThermalState {
 	private final int[] materialByFluidHandle;
 	private final ThermalCellGrid cellGrid;
 	private final ThermalTransport transport;
+	private final CoherentPhaseStore coherentPhases;
+	private final ThermalPhaseChangeEngine phaseChange;
 	private final double insertionTemperatureK;
 	private double[] internalEnergy;
 	private ThermalAuditLedger audit;
@@ -67,6 +74,11 @@ final class FlipThermalState {
 		}
 		this.cellGrid = new ThermalCellGrid(Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ));
 		this.transport = new ThermalTransport(sizeX, sizeY, sizeZ, cellSize, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		this.coherentPhases = new CoherentPhaseStore(
+				Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ),
+				Math.min(ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION,
+						Math.multiplyExact(Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ), 8)));
+		this.phaseChange = new ThermalPhaseChangeEngine(registry);
 		this.insertionTemperatureK = initialTemperatureK;
 		this.internalEnergy = new double[initialCapacity];
 		for (int marker = 0; marker < markers.markerCount(); marker++) {
@@ -78,24 +90,35 @@ final class FlipThermalState {
 
 	String fingerprint() { return registry.fingerprint(); }
 	ThermalAuditLedger audit() { return audit; }
+	CoherentPhaseStore coherentPhases() { return coherentPhases; }
+	ThermalRegistry registry() { return registry; }
+	ThermalPhaseChangeEngine phaseChange() { return phaseChange; }
+	double liquidInternalEnergy(int marker) { return internalEnergy[marker]; }
 	ThermalTransport.Stats lastTransport() { return lastTransport; }
 	double totalEnergy(int count) {
 		double total = 0.0;
 		for (int marker = 0; marker < count; marker++) total += internalEnergy[marker];
+		for (CoherentPhaseStore.Group group : coherentPhases.snapshot()) total += group.internalEnergy();
 		return total;
 	}
-	SignedDyadic exactEnergy(int count) { return SignedDyadic.sum(Arrays.copyOf(internalEnergy, count)); }
+	SignedDyadic exactEnergy(int count) {
+		return SignedDyadic.sum(Arrays.copyOf(internalEnergy, count)).add(coherentPhases.exactEnergy());
+	}
 
 	void ensureCapacity(int capacity) {
 		if (capacity > internalEnergy.length) internalEnergy = Arrays.copyOf(internalEnergy, capacity);
 	}
 
 	FlipThermalParticleState capture(int sizeX, int sizeY, int sizeZ, float cellSize, int count) {
+		if (coherentPhases.groupCount() != 0) {
+			throw new IllegalStateException("Liquid-only thermal handoff cannot omit coherent phase energy");
+		}
 		return new FlipThermalParticleState(sizeX, sizeY, sizeZ, cellSize, count, registry.fingerprint(),
 				Arrays.copyOf(internalEnergy, count), audit);
 	}
 
 	void restore(FlipThermalParticleState snapshot, MarkerContext markers) {
+		if (coherentPhases.groupCount() != 0) throw new IllegalStateException("Thermal restore target is not empty");
 		double[] restored = snapshot.copyInternalEnergy();
 		ensureCapacity(restored.length);
 		System.arraycopy(restored, 0, internalEnergy, 0, restored.length);
@@ -124,18 +147,17 @@ final class FlipThermalState {
 	}
 
 	double temperatureInCell(int cell, MarkerContext markers) {
-		cellGrid.rebuild(markerAccess(markers));
+		cellGrid.rebuild(carrierAccess(markers));
 		return cellGrid.occupied(cell) ? cellGrid.temperature(cell) : Double.NaN;
 	}
 
 	void setTemperatureInCell(int cell, double temperatureK, MarkerContext markers) {
 		SignedDyadic before = exactEnergy(markers.markerCount());
-		boolean found = false;
-		for (int marker = 0; marker < markers.markerCount(); marker++) if (markers.cell(marker) == cell) {
-			internalEnergy[marker] = modeledEnergy(marker, markers.mass(marker), markers.mixture(marker), temperatureK, markers);
-			found = true;
-		}
-		if (!found) throw new IllegalArgumentException("Cannot set temperature in an empty cell");
+		cellGrid.rebuild(carrierAccess(markers));
+		if (!cellGrid.occupied(cell)) throw new IllegalArgumentException("Cannot set temperature in an empty cell");
+		double[] target = cellGrid.copyInternalEnergy();
+		target[cell] = modeledCellEnergy(cell, temperatureK, markers);
+		cellGrid.setCellInternalEnergies(target);
 		audit = audit.withHeatExchange(exactEnergy(markers.markerCount()).subtract(before));
 	}
 
@@ -155,7 +177,7 @@ final class FlipThermalState {
 			ThermalTransport.BoundaryFace boundaryFace, double dtSeconds
 	) {
 		SignedDyadic before = exactEnergy(markers.markerCount());
-		cellGrid.rebuild(markerAccess(markers));
+		cellGrid.rebuild(carrierAccess(markers));
 		lastTransport = transport.step(cellGrid, faceArea, boundaryFace, dtSeconds);
 		SignedDyadic physicalDelta = exactEnergy(markers.markerCount()).subtract(before);
 		audit = audit.withHeatExchange(lastTransport.reservoirExchange())
@@ -177,6 +199,44 @@ final class FlipThermalState {
 
 	void recordExternalSink(SignedDyadic energy) { audit = audit.withExternalSinkEnergy(energy); }
 	void recordRoundoff(SignedDyadic delta) { audit = audit.withRoundoff(delta); }
+
+	void addCoherentExternal(CoherentPhaseStore.Group group) {
+		int material = registry.materialHandle(group.phaseId());
+		if (registry.material(material).carrierKind() != ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID) {
+			throw new IllegalArgumentException("Coherent group phase is not a coherent-solid thermal material");
+		}
+		Map<String, Long> composition = group.composition() == null ? Map.of() : group.composition().stableAmounts();
+		stateFunction.stateForInternalEnergy(material, group.mass(), composition, group.internalEnergy());
+		coherentPhases.add(group);
+		audit = audit.withExternalSourceEnergy(SignedDyadic.of(group.internalEnergy()));
+	}
+
+	void addCoherentInternal(CoherentPhaseStore.Group group) { coherentPhases.add(group); }
+	CoherentPhaseStore.Group takeCoherentInternal(int cell, String phaseId, long occupiedSvq) {
+		return coherentPhases.take(cell, phaseId, occupiedSvq);
+	}
+	void addInternalMarker(int marker, double energy) {
+		ensureCapacity(marker + 1);
+		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Internal phase marker energy is not finite");
+		internalEnergy[marker] = energy;
+	}
+	double removeInternalAndSwap(int index, int last) {
+		double removed = internalEnergy[index];
+		if (index != last) internalEnergy[index] = internalEnergy[last];
+		return removed;
+	}
+	void addLiquidEnergy(int marker, double energy) {
+		double result = internalEnergy[marker] + energy;
+		if (!Double.isFinite(result)) throw new IllegalArgumentException("Internal phase energy transfer overflow");
+		internalEnergy[marker] = result;
+	}
+	void repartitionCellEnergy(int cell, double targetEnergy, MarkerContext markers, SignedDyadic inventoryBefore) {
+		cellGrid.rebuild(carrierAccess(markers));
+		double[] target = cellGrid.copyInternalEnergy();
+		target[cell] = targetEnergy;
+		cellGrid.setCellInternalEnergies(target);
+		audit = audit.withRoundoff(exactEnergy(markers.markerCount()).subtract(inventoryBefore));
+	}
 
 	Truncation planTruncate(
 			int marker, double newMass, ChemicalMixtureRecord keptMixture,
@@ -216,22 +276,54 @@ final class FlipThermalState {
 		};
 	}
 
-	private ThermalCellGrid.MarkerAccess markerAccess(MarkerContext markers) {
-		return new ThermalCellGrid.MarkerAccess() {
-			@Override public int markerCount() { return markers.markerCount(); }
-			@Override public int cell(int marker) { return markers.cell(marker); }
-			@Override public ThermalMaterialDefinition material(int marker) {
-				return FlipThermalState.this.material(marker, markers);
+	private ThermalCellGrid.CarrierAccess carrierAccess(MarkerContext markers) {
+		int liquidCount = markers.markerCount();
+		return new ThermalCellGrid.CarrierAccess() {
+			@Override public int carrierCount() { return Math.addExact(liquidCount, coherentPhases.groupCount()); }
+			@Override public int cell(int carrier) {
+				return carrier < liquidCount ? markers.cell(carrier) : coherentPhases.group(carrier - liquidCount).cell();
 			}
-			@Override public double mass(int marker) { return markers.mass(marker); }
-			@Override public double volume(int marker) { return markers.volume(marker); }
-			@Override public double baseEnergy(int marker) { return FlipThermalState.this.baseEnergy(marker, markers); }
-			@Override public double internalEnergy(int marker) { return internalEnergy[marker]; }
-			@Override public void setInternalEnergy(int marker, double energy) {
-				if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal marker energy is not finite");
-				internalEnergy[marker] = energy;
+			@Override public ThermalMaterialDefinition material(int carrier) {
+				return carrier < liquidCount ? FlipThermalState.this.material(carrier, markers)
+						: registry.material(registry.materialHandle(coherentPhases.group(carrier - liquidCount).phaseId()));
+			}
+			@Override public double mass(int carrier) {
+				return carrier < liquidCount ? markers.mass(carrier) : coherentPhases.group(carrier - liquidCount).mass();
+			}
+			@Override public double volume(int carrier) {
+				return carrier < liquidCount ? markers.volume(carrier)
+						: SolidVolume.toCellVolume(coherentPhases.group(carrier - liquidCount).occupiedVolumeSvq());
+			}
+			@Override public double baseEnergy(int carrier) {
+				if (carrier < liquidCount) return FlipThermalState.this.baseEnergy(carrier, markers);
+				CoherentPhaseStore.Group group = coherentPhases.group(carrier - liquidCount);
+				return stateFunction.baseEnergy(registry.materialHandle(group.phaseId()), group.mass(),
+						group.composition() == null ? Map.of() : group.composition().stableAmounts());
+			}
+			@Override public double internalEnergy(int carrier) {
+				return carrier < liquidCount ? internalEnergy[carrier]
+						: coherentPhases.group(carrier - liquidCount).internalEnergy();
+			}
+			@Override public void setInternalEnergy(int carrier, double energy) {
+				if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal carrier energy is not finite");
+				if (carrier < liquidCount) internalEnergy[carrier] = energy;
+				else coherentPhases.setInternalEnergy(carrier - liquidCount, energy);
 			}
 		};
+	}
+
+	private double modeledCellEnergy(int cell, double temperatureK, MarkerContext markers) {
+		double total = 0.0;
+		for (int marker = 0; marker < markers.markerCount(); marker++) if (markers.cell(marker) == cell) {
+			total += modeledEnergy(marker, markers.mass(marker), markers.mixture(marker), temperatureK, markers);
+		}
+		for (CoherentPhaseStore.Group group : coherentPhases.snapshot()) if (group.cell() == cell) {
+			int material = registry.materialHandle(group.phaseId());
+			total += stateFunction.internalEnergyAtTemperature(material, group.mass(),
+					group.composition() == null ? Map.of() : group.composition().stableAmounts(), temperatureK);
+		}
+		if (!Double.isFinite(total)) throw new IllegalArgumentException("Thermal cell modeled energy is invalid");
+		return total;
 	}
 
 	private ThermalMaterialDefinition material(int marker, MarkerContext markers) {

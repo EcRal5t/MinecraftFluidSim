@@ -83,3 +83,21 @@ fingerprint 相同的 authoritative thermal registry 并重建 liquid + thermal 
 ordinal/count/energy/audit 不闭合、未知 registry 或原始位不一致都保留旧代次并失败关闭。
 
 最近门：`thermal,region-state` 通过；尚未接 production config/旧世界 initialization，也未声称 M8/gas joint v6 完成。
+
+## M9.6 coherent phase inventory and inert melt/freeze core
+
+新增独立于 M8 granular 的 `CoherentPhaseStore`：每个 cell+phase group 持有 exact occupied SVQ、质量、可选
+species 组成和总内能；canonical merge、按 SVQ 比例 split 以及无副作用的 add/take 预检均有硬预算。thermal LTE grid
+现在统一从 liquid marker 与 coherent group 的权威库存派生温度、热容和导热率，二者间的 cell-local 固液换热不制造
+外部 source/sink。coherent exact SVQ 通过 `GranularCouplingFields` 的 fixed occupancy 与既有压力、排水和碰撞场共享，
+但没有冒充 M8 deposit/parcel。
+
+新增 exact-batch `ThermalPhaseChangeEngine` 与显式 `stepInertPhaseChangeOnly` 提交路径。首个隔离增量只接受
+`COHERENT_SOLID <-> LIQUID`、无组成、无 chemistry/granular 的同格转移；计划由总内能状态函数和平衡温度决定，
+提交前验证压力域、联合 exact 容量、marker/group/operation 预算、质量与 SVQ 可表示性。冻结与熔化都保持 cell 总内能，
+潜热仅来自两相 reference energy 差，不记 external source/sink；失败检查在权威库存变更前完成。production tick、机械功、
+有组成相变、气液相变以及 coherent v6 persistence 仍保持关闭。
+
+在唯一 `thermal` selector 中扩展现有相变场景，覆盖 coherent merge/split、exact-batch planner、固液 LTE，以及
+一格液体从 295 K 冻结到 50% 固相、再由 305 K 熔回液体的往返；逐次核对 liquid volume、solid SVQ、总质量、
+总内能与 audit identity。最近门：`thermal,free-surface,granular` 通过；未请求实机。

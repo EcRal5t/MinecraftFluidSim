@@ -4,33 +4,33 @@ import java.util.Arrays;
 
 /** Rebuildable LTE grid derived from authoritative carrier energy; it never owns persistent inventory. */
 public final class ThermalCellGrid {
-	public interface MarkerAccess {
-		int markerCount();
-		int cell(int marker);
-		ThermalMaterialDefinition material(int marker);
-		double mass(int marker);
-		double volume(int marker);
-		double baseEnergy(int marker);
-		double internalEnergy(int marker);
-		void setInternalEnergy(int marker, double energy);
+	public interface CarrierAccess {
+		int carrierCount();
+		int cell(int carrier);
+		ThermalMaterialDefinition material(int carrier);
+		double mass(int carrier);
+		double volume(int carrier);
+		double baseEnergy(int carrier);
+		double internalEnergy(int carrier);
+		void setInternalEnergy(int carrier, double energy);
 	}
 
 	private final int cellCount;
 	private final int[] cellHead;
-	private int[] markerNext = new int[0];
-	private final int[] markerCount;
+	private int[] carrierNext = new int[0];
+	private final int[] carrierCount;
 	private final double[] internalEnergy;
 	private final double[] temperature;
 	private final double[] heatCapacity;
 	private final double[] conductivity;
 	private final double[] totalVolume;
-	private MarkerAccess markers;
+	private CarrierAccess carriers;
 
 	public ThermalCellGrid(int cellCount) {
 		if (cellCount <= 0) throw new IllegalArgumentException("Thermal cell count must be positive");
 		this.cellCount = cellCount;
 		this.cellHead = new int[cellCount];
-		this.markerCount = new int[cellCount];
+		this.carrierCount = new int[cellCount];
 		this.internalEnergy = new double[cellCount];
 		this.temperature = new double[cellCount];
 		this.heatCapacity = new double[cellCount];
@@ -38,46 +38,46 @@ public final class ThermalCellGrid {
 		this.totalVolume = new double[cellCount];
 	}
 
-	public void rebuild(MarkerAccess markerAccess) {
-		if (markerAccess == null) throw new IllegalArgumentException("Thermal marker access is missing");
-		this.markers = markerAccess;
-		if (markerAccess.markerCount() > markerNext.length) markerNext = new int[markerAccess.markerCount()];
+	public void rebuild(CarrierAccess carrierAccess) {
+		if (carrierAccess == null) throw new IllegalArgumentException("Thermal carrier access is missing");
+		this.carriers = carrierAccess;
+		if (carrierAccess.carrierCount() > carrierNext.length) carrierNext = new int[carrierAccess.carrierCount()];
 		Arrays.fill(cellHead, -1);
-		Arrays.fill(markerCount, 0);
+		Arrays.fill(carrierCount, 0);
 		Arrays.fill(internalEnergy, 0.0);
 		Arrays.fill(temperature, Double.NaN);
 		Arrays.fill(heatCapacity, 0.0);
 		Arrays.fill(conductivity, 0.0);
 		Arrays.fill(totalVolume, 0.0);
-		for (int marker = markerAccess.markerCount() - 1; marker >= 0; marker--) {
-			int cell = markerAccess.cell(marker);
-			if (cell < 0 || cell >= cellCount) throw new IllegalArgumentException("Thermal marker cell is outside the grid");
-			markerNext[marker] = cellHead[cell];
-			cellHead[cell] = marker;
-			markerCount[cell]++;
-			double energy = markerAccess.internalEnergy(marker);
-			double volume = markerAccess.volume(marker);
+		for (int carrier = carrierAccess.carrierCount() - 1; carrier >= 0; carrier--) {
+			int cell = carrierAccess.cell(carrier);
+			if (cell < 0 || cell >= cellCount) throw new IllegalArgumentException("Thermal carrier cell is outside the grid");
+			carrierNext[carrier] = cellHead[cell];
+			cellHead[cell] = carrier;
+			carrierCount[cell]++;
+			double energy = carrierAccess.internalEnergy(carrier);
+			double volume = carrierAccess.volume(carrier);
 			if (!Double.isFinite(energy) || !(Double.isFinite(volume) && volume > 0.0)) {
-				throw new IllegalArgumentException("Thermal marker inventory is invalid");
+				throw new IllegalArgumentException("Thermal carrier inventory is invalid");
 			}
 			internalEnergy[cell] += energy;
 			totalVolume[cell] += volume;
-			conductivity[cell] += volume * markerAccess.material(marker).conductivityEuPerSecondMeterK();
+			conductivity[cell] += volume * carrierAccess.material(carrier).conductivityEuPerSecondMeterK();
 		}
-		for (int cell = 0; cell < cellCount; cell++) if (markerCount[cell] > 0) {
+		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
 			conductivity[cell] /= totalVolume[cell];
 			solveCell(cell, internalEnergy[cell]);
 		}
 	}
 
 	public void setCellInternalEnergies(double[] targetEnergy) {
-		if (markers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
+		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
 		if (targetEnergy == null || targetEnergy.length != cellCount) {
 			throw new IllegalArgumentException("Thermal cell energy array length changed");
 		}
 		// Validate the entire candidate before changing any authoritative marker energy.
 		for (int cell = 0; cell < cellCount; cell++) {
-			if (markerCount[cell] == 0) {
+			if (carrierCount[cell] == 0) {
 				if (targetEnergy[cell] != 0.0) throw new IllegalArgumentException("Empty thermal cell received energy");
 			} else {
 				if (!Double.isFinite(targetEnergy[cell])) throw new IllegalArgumentException("Thermal cell energy is not finite");
@@ -85,55 +85,55 @@ public final class ThermalCellGrid {
 			}
 		}
 		for (int cell = 0; cell < cellCount; cell++) {
-			if (markerCount[cell] == 0) {
+			if (carrierCount[cell] == 0) {
 				continue;
 			}
 			double requested = targetEnergy[cell];
 			solveCell(cell, requested);
 			int last = -1;
 			double assigned = 0.0;
-			for (int marker = cellHead[cell]; marker >= 0; marker = markerNext[marker]) last = marker;
-			for (int marker = cellHead[cell]; marker >= 0; marker = markerNext[marker]) {
-				if (marker == last) continue;
-				double value = modeledEnergy(marker, temperature[cell]);
-				markers.setInternalEnergy(marker, value);
+			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) last = carrier;
+			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+				if (carrier == last) continue;
+				double value = modeledEnergy(carrier, temperature[cell]);
+				carriers.setInternalEnergy(carrier, value);
 				assigned += value;
 			}
 			double remainder = requested - assigned;
-			if (!Double.isFinite(remainder)) throw new IllegalArgumentException("Thermal marker energy remainder is invalid");
-			markers.setInternalEnergy(last, remainder);
-			validateMarkerAtCellTemperature(last, temperature[cell]);
+			if (!Double.isFinite(remainder)) throw new IllegalArgumentException("Thermal carrier energy remainder is invalid");
+			carriers.setInternalEnergy(last, remainder);
+			validateCarrierAtCellTemperature(last, temperature[cell]);
 			internalEnergy[cell] = requested;
 		}
 	}
 
 	public int cellCount() { return cellCount; }
-	public boolean occupied(int cell) { return markerCount[cell] > 0; }
+	public boolean occupied(int cell) { return carrierCount[cell] > 0; }
 	public double internalEnergy(int cell) { return internalEnergy[cell]; }
 	public double temperature(int cell) { return temperature[cell]; }
 	public double heatCapacity(int cell) { return heatCapacity[cell]; }
 	public double conductivity(int cell) { return conductivity[cell]; }
 	public double[] copyInternalEnergy() { return internalEnergy.clone(); }
-	public double[] copyMarkerInternalEnergy() {
-		if (markers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
-		double[] result = new double[markers.markerCount()];
-		for (int marker = 0; marker < result.length; marker++) result[marker] = markers.internalEnergy(marker);
+	public double[] copyCarrierInternalEnergy() {
+		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
+		double[] result = new double[carriers.carrierCount()];
+		for (int carrier = 0; carrier < result.length; carrier++) result[carrier] = carriers.internalEnergy(carrier);
 		return result;
 	}
 
-	public void restoreMarkerInternalEnergy(double[] snapshot) {
-		if (markers == null || snapshot == null || snapshot.length != markers.markerCount()) {
-			throw new IllegalArgumentException("Thermal marker rollback snapshot is incompatible");
+	public void restoreCarrierInternalEnergy(double[] snapshot) {
+		if (carriers == null || snapshot == null || snapshot.length != carriers.carrierCount()) {
+			throw new IllegalArgumentException("Thermal carrier rollback snapshot is incompatible");
 		}
-		for (int marker = 0; marker < snapshot.length; marker++) markers.setInternalEnergy(marker, snapshot[marker]);
-		rebuild(markers);
+		for (int carrier = 0; carrier < snapshot.length; carrier++) carriers.setInternalEnergy(carrier, snapshot[carrier]);
+		rebuild(carriers);
 	}
 
 	private void solveCell(int cell, double targetEnergy) {
 		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
 		double maximum = Double.POSITIVE_INFINITY;
-		for (int marker = cellHead[cell]; marker >= 0; marker = markerNext[marker]) {
-			ThermalMaterialDefinition material = markers.material(marker);
+		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+			ThermalMaterialDefinition material = carriers.material(carrier);
 			minimum = Math.max(minimum, material.minimumTemperatureK());
 			maximum = Math.min(maximum, material.maximumTemperatureK());
 		}
@@ -159,8 +159,8 @@ public final class ThermalCellGrid {
 		double cursorEnergy = energyAtMinimum;
 		while (cursor < maximum) {
 			double next = maximum;
-			for (int marker = cellHead[cell]; marker >= 0; marker = markerNext[marker]) {
-				for (ThermalMaterialDefinition.CaloricSegment segment : markers.material(marker).caloricSegments()) {
+			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+				for (ThermalMaterialDefinition.CaloricSegment segment : carriers.material(carrier).caloricSegments()) {
 					if (segment.maximumTemperatureK() > cursor && segment.maximumTemperatureK() < next) {
 						next = segment.maximumTemperatureK();
 					}
@@ -183,35 +183,35 @@ public final class ThermalCellGrid {
 
 	private double modeledCellEnergy(int cell, double temperatureK) {
 		double total = 0.0;
-		for (int marker = cellHead[cell]; marker >= 0; marker = markerNext[marker]) {
-			total += modeledEnergy(marker, temperatureK);
+		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+			total += modeledEnergy(carrier, temperatureK);
 		}
 		return total;
 	}
 
 	private double modeledCellHeatCapacity(int cell, double temperatureK) {
 		double total = 0.0;
-		for (int marker = cellHead[cell]; marker >= 0; marker = markerNext[marker]) {
-			total += markers.mass(marker) * markers.material(marker).specificHeatAt(temperatureK);
+		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+			total += carriers.mass(carrier) * carriers.material(carrier).specificHeatAt(temperatureK);
 		}
 		if (!(Double.isFinite(total) && total > 0.0)) throw new IllegalArgumentException("Thermal cell heat capacity is invalid");
 		return total;
 	}
 
-	private double modeledEnergy(int marker, double temperatureK) {
-		ThermalMaterialDefinition material = markers.material(marker);
-		double value = markers.baseEnergy(marker) + markers.mass(marker) * material.sensibleSpecificEnergyAt(temperatureK);
-		if (!Double.isFinite(value)) throw new IllegalArgumentException("Thermal marker modeled energy is invalid");
+	private double modeledEnergy(int carrier, double temperatureK) {
+		ThermalMaterialDefinition material = carriers.material(carrier);
+		double value = carriers.baseEnergy(carrier) + carriers.mass(carrier) * material.sensibleSpecificEnergyAt(temperatureK);
+		if (!Double.isFinite(value)) throw new IllegalArgumentException("Thermal carrier modeled energy is invalid");
 		return value;
 	}
 
-	private void validateMarkerAtCellTemperature(int marker, double cellTemperature) {
-		ThermalMaterialDefinition material = markers.material(marker);
-		double sensible = (markers.internalEnergy(marker) - markers.baseEnergy(marker)) / markers.mass(marker);
+	private void validateCarrierAtCellTemperature(int carrier, double cellTemperature) {
+		ThermalMaterialDefinition material = carriers.material(carrier);
+		double sensible = (carriers.internalEnergy(carrier) - carriers.baseEnergy(carrier)) / carriers.mass(carrier);
 		double restored = material.temperatureForSensibleSpecificEnergy(sensible);
 		double tolerance = Math.max(1.0E-9, Math.max(Math.ulp(restored), Math.ulp(cellTemperature)) * 16.0);
 		if (Math.abs(restored - cellTemperature) > tolerance) {
-			throw new IllegalArgumentException("Thermal marker remainder left local equilibrium");
+			throw new IllegalArgumentException("Thermal carrier remainder left local equilibrium");
 		}
 	}
 

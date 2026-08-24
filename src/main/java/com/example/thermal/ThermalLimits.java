@@ -9,6 +9,8 @@ public final class ThermalLimits {
 	public static final int MAX_PHASE_TRANSITIONS = 512;
 	public static final int MAX_BOUNDARIES = 512;
 	public static final int MAX_COHERENT_GROUPS_PER_REGION = 262_144;
+	public static final int MAX_THERMAL_CARRIERS_PER_CELL = 256;
+	public static final int MAX_PHASE_OPERATIONS_PER_STEP = 4_096;
 	public static final int MAX_GAS_NODES_PER_REGION = 65_536;
 	public static final int MAX_SERIALIZED_EXTENSION_BYTES = 16 * 1_048_576;
 	public static final int MAX_THERMAL_ID_LENGTH = 128;

@@ -5,11 +5,20 @@ import com.example.chemistry.ChemicalMixtureRecord;
 import com.example.chemistry.ChemicalRegistry;
 
 import java.util.Map;
+import java.util.List;
 
 /** Pure M9 state function: total internal energy is authoritative and temperature is an inversion result. */
 public final class ThermalStateFunction {
 	public enum PhaseState { LOWER, PLATEAU, UPPER }
 	public record State(double temperatureK, double heatCapacityEuPerK) { }
+	public record InventoryPortion(int materialHandle, double massMu, Map<String, Long> speciesQuanta) {
+		public InventoryPortion {
+			if (!(Double.isFinite(massMu) && massMu > 0.0) || speciesQuanta == null) {
+				throw new IllegalArgumentException("Thermal inventory portion is invalid");
+			}
+			speciesQuanta = Map.copyOf(speciesQuanta);
+		}
+	}
 	public record EquilibriumState(double temperatureK, PhaseState phaseState, double upperPhaseFraction,
 	                               double lowerBoundaryEnergy, double upperBoundaryEnergy) { }
 
@@ -53,6 +62,54 @@ public final class ThermalStateFunction {
 			throw new IllegalArgumentException("Thermal heat capacity is invalid");
 		}
 		return new State(temperature, heatCapacity);
+	}
+
+	/** Closed-form common-temperature inversion for a bounded heterogeneous LTE inventory. */
+	public State stateForInventory(List<InventoryPortion> portions, double internalEnergy) {
+		if (portions == null || portions.isEmpty()
+				|| portions.size() > ThermalLimits.MAX_THERMAL_CARRIERS_PER_CELL
+				|| !Double.isFinite(internalEnergy)) {
+			throw new IllegalArgumentException("Thermal LTE inventory is missing, over budget or non-finite");
+		}
+		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
+		double maximum = Double.POSITIVE_INFINITY;
+		for (InventoryPortion portion : portions) {
+			ThermalMaterialDefinition material = registry.material(portion.materialHandle());
+			minimum = Math.max(minimum, material.minimumTemperatureK());
+			maximum = Math.min(maximum, material.maximumTemperatureK());
+		}
+		if (!(maximum >= minimum)) throw new IllegalArgumentException("Thermal LTE carriers have no common validity range");
+		double minimumEnergy = inventoryEnergy(portions, minimum);
+		double maximumEnergy = inventoryEnergy(portions, maximum);
+		double tolerance = energyTolerance(internalEnergy, minimumEnergy, maximumEnergy);
+		if (internalEnergy < minimumEnergy - tolerance || internalEnergy > maximumEnergy + tolerance) {
+			throw new IllegalArgumentException("Thermal LTE energy is outside the common validity range");
+		}
+		if (internalEnergy <= minimumEnergy) return new State(minimum, inventoryHeatCapacity(portions, minimum));
+		if (internalEnergy >= maximumEnergy) return new State(maximum, inventoryHeatCapacity(portions, maximum));
+
+		double cursor = minimum, cursorEnergy = minimumEnergy;
+		while (cursor < maximum) {
+			double next = maximum;
+			for (InventoryPortion portion : portions) {
+				for (ThermalMaterialDefinition.CaloricSegment segment
+						: registry.material(portion.materialHandle()).caloricSegments()) {
+					if (segment.maximumTemperatureK() > cursor && segment.maximumTemperatureK() < next) {
+						next = segment.maximumTemperatureK();
+					}
+				}
+			}
+			double capacity = inventoryHeatCapacity(portions, cursor + (next - cursor) * 0.5);
+			double intervalEnergy = capacity * (next - cursor);
+			if (internalEnergy <= cursorEnergy + intervalEnergy + tolerance) {
+				double temperature = cursor + (internalEnergy - cursorEnergy) / capacity;
+				temperature = Math.max(cursor, Math.min(next, temperature));
+				return new State(temperature, inventoryHeatCapacity(portions, temperature));
+			}
+			cursorEnergy += intervalEnergy;
+			cursor = next;
+		}
+		throw new IllegalArgumentException("Thermal LTE state inversion failed");
 	}
 
 	public EquilibriumState equilibriumState(
@@ -130,5 +187,29 @@ public final class ThermalStateFunction {
 			throw new IllegalArgumentException("Thermal carrier mass must be finite and positive");
 		}
 		if (!Double.isFinite(internalEnergy)) throw new IllegalArgumentException("Thermal internal energy must be finite");
+	}
+
+	private double inventoryEnergy(List<InventoryPortion> portions, double temperatureK) {
+		double total = 0.0;
+		for (InventoryPortion portion : portions) total += internalEnergyAtTemperature(
+				portion.materialHandle(), portion.massMu(), portion.speciesQuanta(), temperatureK);
+		if (!Double.isFinite(total)) throw new IllegalArgumentException("Thermal LTE energy overflow");
+		return total;
+	}
+
+	private double inventoryHeatCapacity(List<InventoryPortion> portions, double temperatureK) {
+		double total = 0.0;
+		for (InventoryPortion portion : portions) total += portion.massMu()
+				* registry.material(portion.materialHandle()).specificHeatAt(temperatureK);
+		if (!(Double.isFinite(total) && total > 0.0)) {
+			throw new IllegalArgumentException("Thermal LTE heat capacity is invalid");
+		}
+		return total;
+	}
+
+	private static double energyTolerance(double... values) {
+		double tolerance = 1.0E-9;
+		for (double value : values) tolerance = Math.max(tolerance, Math.ulp(value) * 16.0);
+		return tolerance;
 	}
 }

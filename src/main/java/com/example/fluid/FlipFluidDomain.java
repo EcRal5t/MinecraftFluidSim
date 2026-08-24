@@ -26,8 +26,12 @@ import com.example.granular.SolidCompositionRecord;
 import com.example.granular.SolidLiquidReaction;
 import com.example.granular.SolidVolume;
 import com.example.thermal.SignedDyadic;
+import com.example.thermal.CoherentPhaseStore;
 import com.example.thermal.ThermalAuditLedger;
 import com.example.thermal.ThermalMaterialDefinition;
+import com.example.thermal.ThermalLimits;
+import com.example.thermal.ThermalPhaseChangeEngine;
+import com.example.thermal.ThermalPhaseTransition;
 import com.example.thermal.ThermalRegistry;
 import com.example.thermal.ThermalTransport;
 
@@ -1115,6 +1119,12 @@ public final class FlipFluidDomain {
 		}
 		thermalState = new FlipThermalState(registry, materialRegistry, initialTemperatureK,
 				particleX.length, sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext());
+		if (granularCoupling == null) {
+			granularCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
+			granularNextCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
+		}
+		refreshCoherentOccupancy();
+		gridDirty = true;
 	}
 
 	/** Restores only the orthogonal M9 energy side after material/chemical marker truth is already restored. */
@@ -1149,10 +1159,258 @@ public final class FlipFluidDomain {
 		return thermalState.temperatureInCell(cellIndexChecked(x, y, z), thermalMarkerContext());
 	}
 
+	/** Explicit external coherent inventory insertion used before the phase planner owns liquid/solid conversion. */
+	public void addCoherentPhaseExternal(
+			int cellX, int cellY, int cellZ, String phaseId, long occupiedVolumeSvq,
+			double mass, CoherentPhaseStore.Composition composition, double internalEnergy
+	) {
+		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		int cell = cellIndexChecked(cellX, cellY, cellZ);
+		if (occupiedVolumeSvq <= 0L) throw new IllegalArgumentException("Coherent phase volume is invalid");
+		ensureGrid();
+		long geometric = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+		long previousCoherent = thermalState.coherentPhases().cellOccupiedSvq(cell);
+		long occupied = granularCoupling.solidSvq(cell);
+		long granular = occupied - previousCoherent;
+		if (granular < 0L || Math.addExact(occupied, occupiedVolumeSvq) > geometric) {
+			throw new IllegalStateException("Coherent phase exceeds exact joint cell occupancy");
+		}
+		if (totalVolumeExact() + SolidVolume.toCellVolume(totalGranularSolidVolumeSvq())
+				+ SolidVolume.toCellVolume(Math.addExact(thermalState.coherentPhases().totalOccupiedSvq(), occupiedVolumeSvq))
+				> totalGeometricOpenVolumeExact() + 1.0E-9) {
+			throw new IllegalStateException("Sealed region has no combined liquid/solid capacity");
+		}
+		thermalState.addCoherentExternal(new CoherentPhaseStore.Group(
+				cell, phaseId, occupiedVolumeSvq, mass, composition, internalEnergy));
+		refreshCoherentOccupancy();
+		gridDirty = true;
+	}
+
+	public long totalCoherentSolidVolumeSvq() {
+		return thermalState == null ? 0L : thermalState.coherentPhases().totalOccupiedSvq();
+	}
+
+	public double totalCoherentMass() {
+		return thermalState == null ? 0.0 : thermalState.coherentPhases().totalMass();
+	}
+
 	/** Runs the thermal axis without motion; production lifecycle wiring is a later M9 increment. */
 	public ThermalTransport.Stats stepThermalOnly(double dtSeconds) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		return thermalState.step(thermalMarkerContext(), this::thermalFaceArea, dtSeconds);
+	}
+
+	/** Inert melt/freeze increment. Chemistry, granular energy and liquid-gas transitions remain fail-closed. */
+	public ThermalPhaseStats stepInertPhaseChangeOnly(int maximumOperations) {
+		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		if (chemicalParcels != null || granularRegistry != null) {
+			throw new IllegalStateException("Inert phase increment cannot omit chemistry or granular energy");
+		}
+		if (maximumOperations < 0 || maximumOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
+			throw new IllegalArgumentException("Thermal phase operation budget is invalid");
+		}
+		int operations = 0, frozen = 0, melted = 0; long signedBatches = 0L;
+		for (ThermalPhaseTransition transition : thermalState.registry().transitions()) {
+			if (transition.interfaceRequirement() != ThermalPhaseTransition.InterfaceRequirement.NONE) continue;
+			ThermalMaterialDefinition lower = thermalState.registry().material(
+					thermalState.registry().materialHandle(transition.lowerEnergyMaterialId()));
+			ThermalMaterialDefinition upper = thermalState.registry().material(
+					thermalState.registry().materialHandle(transition.upperEnergyMaterialId()));
+			if (lower.carrierKind() != ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID
+					|| upper.carrierKind() != ThermalMaterialDefinition.CarrierKind.LIQUID) continue;
+			int liquidHandle = fluidMaterialHandle(upper.carrierId());
+			for (int cell = 0; cell < cellCount && operations < maximumOperations; cell++) {
+				double absolutePressure = AirNetwork.REFERENCE_PRESSURE + pressure[cell];
+				if (absolutePressure < transition.minimumPressurePa()
+						|| absolutePressure > transition.maximumPressurePa()) continue;
+				PhaseCellInventory inventory = phaseCellInventory(cell, liquidHandle, lower.id());
+				if (inventory == null) continue;
+				long remainingBudget = maximumOperations - operations;
+				long freezeByVolume = inventory.upperVolumeSvq() / transition.upperVolumeSvqPerBatch();
+				long meltByVolume = inventory.lowerVolumeSvq() / transition.lowerVolumeSvqPerBatch();
+				long maximum = Math.min(remainingBudget, Math.max(freezeByVolume, meltByVolume));
+				if (maximum == 0L) continue;
+				ThermalPhaseChangeEngine.Plan plan = thermalState.phaseChange().planInert(transition,
+						inventory.lowerMass(), inventory.upperMass(), inventory.internalEnergy(), maximum);
+				if (!plan.changed()) continue;
+				long magnitude = Math.abs(plan.signedBatches());
+				if (plan.freezing()) commitInertFreeze(cell, liquidHandle, transition, magnitude, inventory);
+				else commitInertMelt(cell, liquidHandle, transition, magnitude, inventory);
+				operations = Math.addExact(operations, Math.toIntExact(magnitude));
+				signedBatches = Math.addExact(signedBatches, plan.signedBatches());
+				if (plan.freezing()) frozen++; else melted++;
+			}
+		}
+		return new ThermalPhaseStats(operations, frozen, melted, signedBatches);
+	}
+
+	private PhaseCellInventory phaseCellInventory(int cell, int upperLiquidHandle, String lowerPhaseId) {
+		double upperMass = 0.0, lowerMass = 0.0, energy = 0.0;
+		long upperSvq = 0L, lowerSvq = 0L;
+		boolean found = false;
+		for (int marker = 0; marker < particleCount; marker++) if (particleCellIndex(marker) == cell) {
+			if (particleMaterialHandle[marker] != upperLiquidHandle) {
+				throw new ThermalPhaseBlockedException("Phase cell contains an unsupported liquid heat-bath carrier");
+			}
+			upperSvq = Math.addExact(upperSvq, SolidVolume.fromCellVolumeExact(particleVolume[marker]));
+			upperMass += particleMass[marker]; energy += thermalState.liquidInternalEnergy(marker); found = true;
+		}
+		for (CoherentPhaseStore.Group group : thermalState.coherentPhases().snapshot()) if (group.cell() == cell) {
+			if (!group.phaseId().equals(lowerPhaseId)) {
+				throw new ThermalPhaseBlockedException("Phase cell contains an unsupported coherent heat-bath carrier");
+			}
+			if (group.composition() != null) {
+				throw new ThermalPhaseBlockedException("Composition-bearing coherent phase needs an exact species plan");
+			}
+			lowerSvq = Math.addExact(lowerSvq, group.occupiedVolumeSvq());
+			lowerMass += group.mass(); energy += group.internalEnergy(); found = true;
+		}
+		return found ? new PhaseCellInventory(lowerSvq, upperSvq, lowerMass, upperMass, energy) : null;
+	}
+
+	private void commitInertFreeze(
+			int cell, int liquidHandle, ThermalPhaseTransition transition, long batches,
+			PhaseCellInventory before
+	) {
+		long removedSvq = Math.multiplyExact(batches, transition.upperVolumeSvqPerBatch());
+		long addedSvq = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
+		double batchMass = transition.massMuPerBatch().toDouble();
+		double removedMass = batchMass * batches;
+		if (!(Double.isFinite(removedMass) && removedMass > 0.0)
+				|| removedSvq > before.upperVolumeSvq() || removedMass > before.upperMass() + massTolerance(before.upperMass())) {
+			throw new ThermalPhaseBlockedException("Freeze extent exceeds liquid inventory");
+		}
+		long finalLiquidSvq = before.upperVolumeSvq() - removedSvq;
+		long finalSolidSvq = Math.addExact(before.lowerVolumeSvq(), addedSvq);
+		long geometric = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+		if (Math.addExact(finalLiquidSvq, finalSolidSvq) > geometric) {
+			throw new ThermalPhaseBlockedException("Freeze expansion exceeds cell capacity");
+		}
+		List<PhaseMarkerAllocation> allocations = planPhaseRemoval(cell, liquidHandle, removedSvq, removedMass);
+		double carriedEnergy = 0.0;
+		for (PhaseMarkerAllocation allocation : allocations) if (allocation.fullRemoval()) {
+			carriedEnergy += thermalState.liquidInternalEnergy(allocation.marker());
+		}
+		CoherentPhaseStore.Group addition = new CoherentPhaseStore.Group(cell,
+				transition.lowerEnergyMaterialId(), addedSvq, removedMass, null, carriedEnergy);
+		thermalState.coherentPhases().previewAdd(addition);
+		SignedDyadic inventoryBefore = exactInternalEnergy();
+		for (PhaseMarkerAllocation allocation : allocations) {
+			if (allocation.fullRemoval()) removeParticleInternalPhase(allocation.marker());
+			else {
+				particleVolume[allocation.marker()] = allocation.newVolume();
+				particleMass[allocation.marker()] = allocation.newMass();
+			}
+		}
+		thermalState.addCoherentInternal(addition);
+		refreshCoherentOccupancy(); gridDirty = true;
+		thermalState.repartitionCellEnergy(cell, before.internalEnergy(), thermalMarkerContext(), inventoryBefore);
+	}
+
+	private void commitInertMelt(
+			int cell, int liquidHandle, ThermalPhaseTransition transition, long batches,
+			PhaseCellInventory before
+	) {
+		long removedSvq = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
+		long addedSvq = Math.multiplyExact(batches, transition.upperVolumeSvqPerBatch());
+		double requestedMass = transition.massMuPerBatch().toDouble() * batches;
+		if (removedSvq > before.lowerVolumeSvq() || requestedMass > before.lowerMass() + massTolerance(before.lowerMass())) {
+			throw new ThermalPhaseBlockedException("Melt extent exceeds coherent inventory");
+		}
+		long finalLiquidSvq = Math.addExact(before.upperVolumeSvq(), addedSvq);
+		long finalSolidSvq = before.lowerVolumeSvq() - removedSvq;
+		long geometric = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+		if (Math.addExact(finalLiquidSvq, finalSolidSvq) > geometric) {
+			throw new ThermalPhaseBlockedException("Melt expansion exceeds cell capacity");
+		}
+		CoherentPhaseStore.Group preview = thermalState.coherentPhases().previewTake(
+				cell, transition.lowerEnergyMaterialId(), removedSvq);
+		if (!massClose(preview.mass(), requestedMass)) {
+			throw new ThermalPhaseBlockedException("Melt exact batch mass differs from coherent inventory");
+		}
+		int target = -1;
+		for (int marker = 0; marker < particleCount; marker++) if (particleCellIndex(marker) == cell
+				&& particleMaterialHandle[marker] == liquidHandle) { target = marker; break; }
+		float targetVolume = 0.0F;
+		double targetMass = 0.0;
+		int slot = -1;
+		if (target >= 0) {
+			targetVolume = SolidVolume.addCellVolumeSvqExact(particleVolume[target], addedSvq);
+			targetMass = particleMass[target] + preview.mass();
+			if (!(Double.isFinite(targetMass) && targetMass > 0.0)
+					|| !Double.isFinite(thermalState.liquidInternalEnergy(target) + preview.internalEnergy())) {
+				throw new ThermalPhaseBlockedException("Melt liquid carrier result is not representable");
+			}
+		} else {
+			if (particleCount >= maximumParticleCount) {
+				throw new ThermalPhaseBlockedException("Melt exceeds the liquid marker budget");
+			}
+			slot = firstOpenSlot(cell, 0);
+			if (slot < 0) throw new ThermalPhaseBlockedException("Melt has no collision-valid liquid marker slot");
+		}
+		SignedDyadic inventoryBefore = exactInternalEnergy();
+		CoherentPhaseStore.Group removed = thermalState.takeCoherentInternal(
+				cell, transition.lowerEnergyMaterialId(), removedSvq);
+		if (target >= 0) {
+			particleVolume[target] = targetVolume;
+			particleMass[target] = targetMass;
+			thermalState.addLiquidEnergy(target, removed.internalEnergy());
+		} else {
+			int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
+			int marker = particleCount;
+			spawnParticle(x, y, z, slot, SolidVolume.toCellVolume(addedSvq), liquidHandle,
+					removed.mass(), null, false, false);
+			thermalState.addLiquidEnergy(marker, removed.internalEnergy());
+		}
+		refreshCoherentOccupancy(); gridDirty = true;
+		thermalState.repartitionCellEnergy(cell, before.internalEnergy(), thermalMarkerContext(), inventoryBefore);
+	}
+
+	private List<PhaseMarkerAllocation> planPhaseRemoval(
+			int cell, int liquidHandle, long requestedSvq, double requestedMass
+	) {
+		ArrayList<PhaseMarkerAllocation> allocations = new ArrayList<>();
+		long remainingSvq = requestedSvq; double remainingMass = requestedMass;
+		for (int marker = particleCount - 1; marker >= 0 && remainingSvq > 0L; marker--) {
+			if (particleCellIndex(marker) != cell || particleMaterialHandle[marker] != liquidHandle) continue;
+			long markerSvq = SolidVolume.fromCellVolumeExact(particleVolume[marker]);
+			long takeSvq = Math.min(markerSvq, remainingSvq);
+			double takeMass = takeSvq == remainingSvq ? remainingMass
+					: particleMass[marker] * ((double) takeSvq / markerSvq);
+			boolean full = takeSvq == markerSvq;
+			float newVolume = full ? 0.0F : SolidVolume.addCellVolumeSvqExact(particleVolume[marker], -takeSvq);
+			double newMass = particleMass[marker] - takeMass;
+			if (!(takeMass > 0.0) || full && Math.abs(newMass) > massTolerance(particleMass[marker])
+					|| !full && !(newMass > 0.0)) {
+				throw new ThermalPhaseBlockedException("Freeze batch mass/volume split is not representable");
+			}
+			allocations.add(new PhaseMarkerAllocation(marker, newVolume, full ? 0.0 : newMass, full));
+			remainingSvq -= takeSvq; remainingMass -= takeMass;
+		}
+		if (remainingSvq != 0L || Math.abs(remainingMass) > massTolerance(requestedMass)) {
+			throw new ThermalPhaseBlockedException("Freeze exact batch cannot be allocated to liquid markers");
+		}
+		return List.copyOf(allocations);
+	}
+
+	private int fluidMaterialHandle(String stableId) {
+		for (int handle = 0; handle < materialRegistry.size(); handle++) {
+			if (materialRegistry.material(handle).id().equals(stableId)) return handle;
+		}
+		throw new ThermalPhaseBlockedException("Thermal transition liquid carrier is not bound");
+	}
+
+	private static double massTolerance(double mass) {
+		return Math.max(1.0E-12, Math.ulp(mass) * 32.0);
+	}
+
+	public record ThermalPhaseStats(int operations, int frozenCells, int meltedCells, long signedBatches) { }
+	private record PhaseCellInventory(
+			long lowerVolumeSvq, long upperVolumeSvq, double lowerMass, double upperMass, double internalEnergy
+	) { }
+	private record PhaseMarkerAllocation(int marker, float newVolume, double newMass, boolean fullRemoval) { }
+	public static final class ThermalPhaseBlockedException extends IllegalStateException {
+		public ThermalPhaseBlockedException(String message) { super(message); }
 	}
 
 	private FlipThermalState.MarkerContext thermalMarkerContext() {
@@ -1203,6 +1461,19 @@ public final class FlipFluidDomain {
 
 	private void clearThermalBinding() {
 		thermalState = null;
+		if (granularRegistry == null) {
+			granularCoupling = null; granularNextCoupling = null; pressureGranularCoupling = null;
+		}
+	}
+
+	private void refreshCoherentOccupancy() {
+		if (granularCoupling == null || granularNextCoupling == null) return;
+		long[] fixed = new long[cellCount];
+		if (thermalState != null) for (CoherentPhaseStore.Group group : thermalState.coherentPhases().snapshot()) {
+			fixed[group.cell()] = Math.addExact(fixed[group.cell()], group.occupiedVolumeSvq());
+		}
+		granularCoupling.setFixedCellSvq(fixed);
+		granularNextCoupling.setFixedCellSvq(fixed);
 	}
 
 	private void bindSolidCompositionPoolIfReady() {
@@ -1425,7 +1696,11 @@ public final class FlipFluidDomain {
 		int newlyOccupied = mask & ~previous;
 		if (newlyOccupied != 0 && granularCoupling != null) {
 			ensureGrid();
-			if (granularCoupling.solidSvq(index) > 0L || granularDeposits.cellSolidVolumeSvq(index) > 0L) {
+			if (thermalState != null && thermalState.coherentPhases().cellOccupiedSvq(index) > 0L) {
+				throw new IllegalStateException("Collision edit intersects authoritative coherent phase inventory");
+			}
+			if (granularRegistry != null
+					&& (granularCoupling.solidSvq(index) > 0L || granularDeposits.cellSolidVolumeSvq(index) > 0L)) {
 				try { displaceGranularForCollisionCell(index); }
 				catch (RuntimeException failure) {
 					throw new GranularCollisionBlockedException(
@@ -2557,6 +2832,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		surfaceTensionActive = hasAnySurfaceTension();
 		liquidPairTensionActive = hasAnyLiquidPairTension();
 		boolean granularInventoryPresent = hasGranularInventory();
+		boolean coherentInventoryPresent = thermalState != null
+				&& thermalState.coherentPhases().groupCount() != 0;
 		if (granularCarrierMaterialByCell != null && granularInventoryPresent) {
 			Arrays.fill(granularCarrierMaterialByCell, -1);
 			Arrays.fill(granularCarrierVolumeByCell, -1.0);
@@ -2590,12 +2867,13 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		normalize(velocityX, velocityWeightX);
 		normalize(velocityY, velocityWeightY);
 		normalize(velocityZ, velocityWeightZ);
-		if (granularCoupling == null || !granularInventoryPresent) {
+		if (granularCoupling == null || !granularInventoryPresent && !coherentInventoryPresent) {
 			if (granularCoupling != null) granularCoupling.clear();
 			freeSurfaceGeometry.rebuild(solid, markerCount, cutCells);
 			pressureGranularCoupling = null;
 		} else {
-			granularCoupling.rebuild(granularParcels, granularDeposits);
+			if (granularInventoryPresent) granularCoupling.rebuild(granularParcels, granularDeposits);
+			else granularCoupling.rebuildFixed();
 			pressureGranularCoupling = granularCoupling;
 			freeSurfaceGeometry.rebuild(solid, markerCount, cutCells, granularCoupling);
 		}
@@ -4095,9 +4373,16 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, null, fal
 }
 
 private void spawnParticle(
-int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
-ChemicalMixtureRecord chemicalMixture, boolean indicator
-) {
+ int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
+ ChemicalMixtureRecord chemicalMixture, boolean indicator
+ ) {
+	spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, chemicalMixture, indicator, true);
+}
+
+private void spawnParticle(
+ int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
+ ChemicalMixtureRecord chemicalMixture, boolean indicator, boolean thermalExternal
+ ) {
 if (particleCount >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
 if (!(Float.isFinite(amount) && amount > 0.0F)) throw new IllegalArgumentException("Marker volume must be finite and positive");
 if (!(Double.isFinite(mass) && mass > 0.0)) throw new IllegalArgumentException("Marker mass must be finite and positive");
@@ -4134,9 +4419,12 @@ chemicalParcels.assign(particleCount, chemicalMixture, indicator);
 }
 chemicalParcels.markDirtyCell(cellIndex(cellX, cellY, cellZ));
 }
-		if (thermalState != null) thermalState.addExternalMarker(particleCount, thermalMarkerContext());
-particleCount++;
-}
+		if (thermalState != null) {
+			if (thermalExternal) thermalState.addExternalMarker(particleCount, thermalMarkerContext());
+			else thermalState.addInternalMarker(particleCount, 0.0);
+		}
+ particleCount++;
+ }
 
 private void spawnChemicalParticle(
 int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
@@ -4265,6 +4553,21 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 		particleMass[index] = particleMass[last];
 		particleMaterialHandle[index] = particleMaterialHandle[last];
 		particlePhaseLabel[index] = particlePhaseLabel[last];
+	}
+
+	private double removeParticleInternalPhase(int index) {
+		if (chemicalParcels != null) throw new IllegalStateException("Inert phase removal cannot own chemistry");
+		int last = particleCount - 1;
+		double removedEnergy = thermalState.removeInternalAndSwap(index, last);
+		particleCount = last;
+		if (index != last) {
+			particleX[index] = particleX[last]; particleY[index] = particleY[last]; particleZ[index] = particleZ[last];
+			particleVelocityX[index] = particleVelocityX[last]; particleVelocityY[index] = particleVelocityY[last];
+			particleVelocityZ[index] = particleVelocityZ[last]; particleVolume[index] = particleVolume[last];
+			particleMass[index] = particleMass[last]; particleMaterialHandle[index] = particleMaterialHandle[last];
+			particlePhaseLabel[index] = particlePhaseLabel[last];
+		}
+		return removedEnergy;
 	}
 
 	private void ensureParticleCapacity(int required) {

@@ -66,11 +66,11 @@ public final class ThermalTransport {
 		if (!(Double.isFinite(logicalDtSeconds) && logicalDtSeconds > 0.0)) {
 			throw new IllegalArgumentException("Thermal timestep must be finite and positive");
 		}
-		double[] markerSnapshot = grid.copyMarkerInternalEnergy();
+		double[] markerSnapshot = grid.copyCarrierInternalEnergy();
 		try {
 			return stepValidated(grid, faceArea, boundaryFace, logicalDtSeconds);
 		} catch (RuntimeException failure) {
-			grid.restoreMarkerInternalEnergy(markerSnapshot);
+			grid.restoreCarrierInternalEnergy(markerSnapshot);
 			throw failure;
 		}
 	}

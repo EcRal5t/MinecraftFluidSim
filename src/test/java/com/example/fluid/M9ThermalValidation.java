@@ -10,11 +10,13 @@ import com.example.chemistry.ChemicalSpecies;
 import com.example.chemistry.ExactRational;
 import com.example.granular.SolidVolume;
 import com.example.thermal.SignedDyadic;
+import com.example.thermal.CoherentPhaseStore;
 import com.example.thermal.ThermalBoundaryDefinition;
 import com.example.thermal.ThermalAuditLedger;
 import com.example.thermal.ThermalDefinitionCodec;
 import com.example.thermal.ThermalMaterialDefinition;
 import com.example.thermal.ThermalPhaseTransition;
+import com.example.thermal.ThermalPhaseChangeEngine;
 import com.example.thermal.ThermalRegistry;
 import com.example.thermal.ThermalRegistryStore;
 import com.example.thermal.ThermalSpeciesOffset;
@@ -38,6 +40,7 @@ public final class M9ThermalValidation {
 		reactionHeatIsPathIndependentStateEnergy();
 		reactionCommitValidatesEnergyBeforeMutation();
 		phasePlateauUsesTheStateFunctionGap();
+		coherentPhaseInventoryAndExactBatchPlanning();
 		exactDyadicAuditDoesNotLoseCancellationRemainders();
 		liquidTransportAndHandoffCloseEnergy();
 		fixedBoundaryAuditsAndFailedStepRollsBack();
@@ -239,6 +242,108 @@ public final class M9ThermalValidation {
 		require(plateau.phaseState() == ThermalStateFunction.PhaseState.PLATEAU
 				&& close(plateau.temperatureK(), 273.15) && close(plateau.upperPhaseFraction(), 0.25),
 				"phase plateau did not derive its fraction from the state-function energy gap");
+	}
+
+	private static void coherentPhaseInventoryAndExactBatchPlanning() {
+		CoherentPhaseStore store = new CoherentPhaseStore(8, 8);
+		CoherentPhaseStore.Composition first = new CoherentPhaseStore.Composition(List.of(
+				new CoherentPhaseStore.Component("test:a", 8L),
+				new CoherentPhaseStore.Component("test:b", 4L)), Double.doubleToRawLongBits(0.25));
+		CoherentPhaseStore.Composition second = new CoherentPhaseStore.Composition(List.of(
+				new CoherentPhaseStore.Component("test:a", 8L),
+				new CoherentPhaseStore.Component("test:b", 4L)), Double.doubleToRawLongBits(0.25));
+		store.add(new CoherentPhaseStore.Group(3, "test:thermal/solid", 8L, 4.0, first, 32.0));
+		store.add(new CoherentPhaseStore.Group(3, "test:thermal/solid", 8L, 4.0, second, 32.0));
+		CoherentPhaseStore.Group removed = store.take(3, "test:thermal/solid", 8L);
+		require(store.groupCount() == 1 && store.group(0).occupiedVolumeSvq() == 8L
+				&& removed.occupiedVolumeSvq() == 8L && close(store.totalMass() + removed.mass(), 8.0)
+				&& store.exactEnergy().add(SignedDyadic.of(removed.internalEnergy())).equals(SignedDyadic.of(64.0))
+				&& removed.composition().stableAmounts().equals(Map.of("test:a", 8L, "test:b", 4L)),
+				"coherent phase merge/split did not conserve its independent inventories");
+
+		ThermalMaterialDefinition lower = new ThermalMaterialDefinition("test:thermal/lower",
+				ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID, "test:solid", 300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0)));
+		ThermalMaterialDefinition upper = new ThermalMaterialDefinition("test:thermal/upper",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, "test:liquid", 300.0, 100.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0)));
+		ThermalPhaseTransition transition = new ThermalPhaseTransition("test:phase/lower_upper",
+				lower.id(), upper.id(), 300.0, 1L, 1L, ExactRational.parse("0.1"),
+				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
+		ThermalRegistry registry = new ThermalRegistry(List.of(lower, upper), List.of(), List.of(transition), "", "");
+		ThermalPhaseChangeEngine engine = new ThermalPhaseChangeEngine(registry);
+		ThermalPhaseChangeEngine.Plan freeze = engine.planInert(transition, 0.0, 1.0, 50.0, 16L);
+		ThermalPhaseChangeEngine.Plan melt = engine.planInert(transition, 1.0, 0.0, 50.0, 16L);
+		require(freeze.signedBatches() == 5L && melt.signedBatches() == -5L
+				&& close(freeze.temperatureAfterK(), 300.0) && close(melt.temperatureAfterK(), 300.0),
+				"exact-batch phase planner did not derive equilibrium extent from conserved energy");
+
+		FluidMaterial liquid = FluidMaterial.withSurfaceTension("test:liquid", 1.0,
+				"test:miscible", 0.0, 90.0);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
+		FlipThermalState.MarkerContext carriers = new FlipThermalState.MarkerContext() {
+			@Override public int markerCount() { return 1; }
+			@Override public int cell(int marker) { return 0; }
+			@Override public int fluidMaterialHandle(int marker) { return 0; }
+			@Override public double mass(int marker) { return 0.5; }
+			@Override public double volume(int marker) { return 0.5; }
+			@Override public ChemicalMixtureRecord mixture(int marker) { return null; }
+			@Override public ChemicalRegistry chemicalRegistry() { return null; }
+		};
+		FlipThermalState coupled = new FlipThermalState(registry, liquids, 300.0,
+				1, 2, 2, 2, 0.5F, carriers);
+		coupled.addCoherentExternal(new CoherentPhaseStore.Group(
+				0, lower.id(), 1L, 0.5, null, 0.0));
+		require(close(coupled.temperatureInCell(0, carriers), 300.0),
+				"liquid/coherent LTE did not derive a shared temperature");
+		coupled.setTemperatureInCell(0, 310.0, carriers);
+		require(close(coupled.temperatureInCell(0, carriers), 310.0)
+				&& coupled.exactEnergy(1).equals(coupled.audit().expectedInventory()),
+				"liquid/coherent heat exchange did not close the shared energy audit");
+
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = new FlipFluidDomain(2, 2, 2, config, 128);
+		domain.setVolume(0, 0, 0, 0.5F);
+		domain.bindThermal(registry, liquids, 300.0);
+		domain.addCoherentPhaseExternal(0, 0, 0, lower.id(),
+				SolidVolume.SVQ_PER_CELL / 2L, 0.5, null, 0.0);
+		domain.setVolume(0, 0, 0, 1.0F);
+		require(close(domain.totalVolumeExact(), 0.5)
+				&& domain.totalCoherentSolidVolumeSvq() == SolidVolume.SVQ_PER_CELL / 2L,
+				"coherent phase did not share the exact pressure/free-surface occupancy field");
+
+		long batchSvq = SolidVolume.SVQ_PER_CELL / 8L;
+		ThermalPhaseTransition cellTransition = new ThermalPhaseTransition("test:phase/cell_lower_upper",
+				lower.id(), upper.id(), 300.0, batchSvq, batchSvq, ExactRational.parse("0.125"),
+				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
+		ThermalRegistry cellRegistry = new ThermalRegistry(
+				List.of(lower, upper), List.of(), List.of(cellTransition), "", "");
+		FlipFluidDomain phaseDomain = new FlipFluidDomain(2, 2, 2, config, 128);
+		phaseDomain.setVolume(0, 0, 0, 1.0F);
+		phaseDomain.bindThermal(cellRegistry, liquids, 295.0);
+		SignedDyadic coldEnergy = phaseDomain.exactInternalEnergy();
+		FlipFluidDomain.ThermalPhaseStats freezeStats = phaseDomain.stepInertPhaseChangeOnly(16);
+		require(freezeStats.operations() == 4 && freezeStats.signedBatches() == 4L
+				&& close(phaseDomain.totalVolumeExact(), 0.5)
+				&& phaseDomain.totalCoherentSolidVolumeSvq() == SolidVolume.SVQ_PER_CELL / 2L
+				&& close(phaseDomain.totalMass() + phaseDomain.totalCoherentMass(), 1.0)
+				&& close(phaseDomain.thermalTemperatureInCell(0, 0, 0), 300.0)
+				&& phaseDomain.exactInternalEnergy().equals(coldEnergy)
+				&& phaseDomain.exactInternalEnergy().equals(phaseDomain.thermalAudit().expectedInventory()),
+				"domain freeze commit did not conserve exact mass, volume and energy inventories");
+
+		phaseDomain.setThermalTemperatureInCell(0, 0, 0, 305.0);
+		SignedDyadic hotEnergy = phaseDomain.exactInternalEnergy();
+		FlipFluidDomain.ThermalPhaseStats meltStats = phaseDomain.stepInertPhaseChangeOnly(16);
+		require(meltStats.operations() == 4 && meltStats.signedBatches() == -4L
+				&& close(phaseDomain.totalVolumeExact(), 1.0)
+				&& phaseDomain.totalCoherentSolidVolumeSvq() == 0L
+				&& close(phaseDomain.totalMass() + phaseDomain.totalCoherentMass(), 1.0)
+				&& close(phaseDomain.thermalTemperatureInCell(0, 0, 0), 300.0)
+				&& phaseDomain.exactInternalEnergy().equals(hotEnergy)
+				&& phaseDomain.exactInternalEnergy().equals(phaseDomain.thermalAudit().expectedInventory()),
+				"domain melt commit did not conserve exact mass, volume and energy inventories");
 	}
 
 	private static void exactDyadicAuditDoesNotLoseCancellationRemainders() {
