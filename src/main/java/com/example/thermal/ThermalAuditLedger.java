@@ -28,6 +28,12 @@ public record ThermalAuditLedger(
 				roundoffResidual.add(delta));
 	}
 
+	public ThermalAuditLedger withMechanicalWork(SignedDyadic workIntoInventory) {
+		Objects.requireNonNull(workIntoInventory, "workIntoInventory");
+		return new ThermalAuditLedger(initialInventory, externalSource, externalSink,
+				mechanicalWork.add(workIntoInventory), roundoffResidual);
+	}
+
 	public ThermalAuditLedger withHeatExchange(double deltaEnergy) {
 		if (!Double.isFinite(deltaEnergy)) throw new IllegalArgumentException("Thermal exchange must be finite");
 		if (deltaEnergy >= 0.0) return new ThermalAuditLedger(initialInventory,

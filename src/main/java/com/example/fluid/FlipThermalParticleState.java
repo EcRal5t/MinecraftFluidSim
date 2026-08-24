@@ -16,6 +16,7 @@ public final class FlipThermalParticleState {
 	private final double[] internalEnergy;
 	private final double[] activeParcelEnergy;
 	private final double[] depositEnergy;
+	private final double[] gasNodeEnergy;
 	private final List<CoherentPhaseStore.Group> coherentGroups;
 	private final ThermalAuditLedger audit;
 
@@ -24,7 +25,7 @@ public final class FlipThermalParticleState {
 			String thermalRegistryFingerprint, double[] internalEnergy, ThermalAuditLedger audit
 	) {
 		this(sizeX, sizeY, sizeZ, cellSize, particleCount, thermalRegistryFingerprint,
-				internalEnergy, new double[0], new double[0], List.of(), audit);
+				internalEnergy, new double[0], new double[0], List.of(), new double[0], audit);
 	}
 
 	public FlipThermalParticleState(
@@ -33,7 +34,7 @@ public final class FlipThermalParticleState {
 			List<CoherentPhaseStore.Group> coherentGroups, ThermalAuditLedger audit
 	) {
 		this(sizeX, sizeY, sizeZ, cellSize, particleCount, thermalRegistryFingerprint,
-				internalEnergy, new double[0], new double[0], coherentGroups, audit);
+				internalEnergy, new double[0], new double[0], coherentGroups, new double[0], audit);
 	}
 
 	public FlipThermalParticleState(
@@ -42,9 +43,19 @@ public final class FlipThermalParticleState {
 			double[] depositEnergy,
 			List<CoherentPhaseStore.Group> coherentGroups, ThermalAuditLedger audit
 	) {
+		this(sizeX, sizeY, sizeZ, cellSize, particleCount, thermalRegistryFingerprint, internalEnergy,
+				activeParcelEnergy, depositEnergy, coherentGroups, new double[0], audit);
+	}
+
+	public FlipThermalParticleState(
+			int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
+			String thermalRegistryFingerprint, double[] internalEnergy, double[] activeParcelEnergy,
+			double[] depositEnergy, List<CoherentPhaseStore.Group> coherentGroups,
+			double[] gasNodeEnergy, ThermalAuditLedger audit
+	) {
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || !(Float.isFinite(cellSize) && cellSize > 0.0F)
 				|| particleCount < 0 || internalEnergy == null || internalEnergy.length != particleCount
-				|| activeParcelEnergy == null || depositEnergy == null || coherentGroups == null) {
+				|| activeParcelEnergy == null || depositEnergy == null || coherentGroups == null || gasNodeEnergy == null) {
 			throw new IllegalArgumentException("Invalid thermal particle handoff shape");
 		}
 		if (thermalRegistryFingerprint == null || !thermalRegistryFingerprint.matches("[0-9a-f]{64}")) {
@@ -68,8 +79,15 @@ public final class FlipThermalParticleState {
 		for (double energy : depositEnergy) if (!Double.isFinite(energy)) {
 			throw new IllegalArgumentException("Deposit granular energy is not finite");
 		}
+		if (gasNodeEnergy.length > ThermalLimits.MAX_GAS_NODES_PER_REGION) {
+			throw new IllegalArgumentException("Gas thermal handoff exceeds node budget");
+		}
+		for (double energy : gasNodeEnergy) if (!Double.isFinite(energy)) {
+			throw new IllegalArgumentException("Gas node energy is not finite");
+		}
 		SignedDyadic inventory = SignedDyadic.sum(internalEnergy).add(canonical.exactEnergy())
-				.add(SignedDyadic.sum(activeParcelEnergy)).add(SignedDyadic.sum(depositEnergy));
+				.add(SignedDyadic.sum(activeParcelEnergy)).add(SignedDyadic.sum(depositEnergy))
+				.add(SignedDyadic.sum(gasNodeEnergy));
 		if (!inventory.equals(audit.expectedInventory())) {
 			throw new IllegalArgumentException("Thermal carrier handoff does not close its audit ledger");
 		}
@@ -79,6 +97,7 @@ public final class FlipThermalParticleState {
 		this.internalEnergy = internalEnergy.clone();
 		this.activeParcelEnergy = activeParcelEnergy.clone();
 		this.depositEnergy = depositEnergy.clone();
+		this.gasNodeEnergy = gasNodeEnergy.clone();
 		this.coherentGroups = List.copyOf(coherentGroups);
 		this.audit = audit;
 	}
@@ -96,6 +115,7 @@ public final class FlipThermalParticleState {
 	public double[] copyInternalEnergy() { return internalEnergy.clone(); }
 	public double[] copyActiveParcelEnergy() { return activeParcelEnergy.clone(); }
 	public double[] copyDepositEnergy() { return depositEnergy.clone(); }
+	public double[] copyGasNodeEnergy() { return gasNodeEnergy.clone(); }
 	public List<CoherentPhaseStore.Group> coherentGroups() { return coherentGroups; }
 	public ThermalAuditLedger audit() { return audit; }
 }

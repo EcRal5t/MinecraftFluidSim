@@ -13,6 +13,11 @@ import com.example.granular.SolidVolume;
 import com.example.granular.BuiltinGranularDefinitions;
 import com.example.granular.GranularRegistry;
 import com.example.granular.GranularTransferLedger;
+import com.example.fluid.air.AirNetwork;
+import com.example.fluid.air.BuiltinGasDefinitions;
+import com.example.fluid.air.GasInventory;
+import com.example.fluid.air.GasRegistry;
+import com.example.thermal.GasThermalModel;
 import com.example.thermal.SignedDyadic;
 import com.example.thermal.GranularEnergyColumn;
 import com.example.thermal.CoherentPhaseStore;
@@ -42,6 +47,8 @@ public final class M9ThermalValidation {
 		definitionAndCanonicalRegistry();
 		worldRegistrySnapshotIsAuthoritative();
 		piecewiseStateFunctionRoundTrips();
+		gasStateCompressionAndCarrierEnergy();
+		gasRuntimeTransfersEnergyAndWork();
 		reactionHeatIsPathIndependentStateEnergy();
 		reactionCommitValidatesEnergyBeforeMutation();
 		granularReactionHeatUsesOneConservedCellEnergy();
@@ -53,6 +60,122 @@ public final class M9ThermalValidation {
 		fixedBoundaryAuditsAndFailedStepRollsBack();
 		reseedingMovesEnergyWithMarkerTruth();
 		System.out.println("M9 thermal validation passed");
+	}
+
+	private static void gasStateCompressionAndCarrierEnergy() {
+		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
+		ThermalMaterialDefinition air = new ThermalMaterialDefinition("realwater:thermal/air",
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+				GasRegistry.STANDARD_TEMPERATURE_K, 10.0, 0.025,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)));
+		GasThermalModel model = new GasThermalModel(new ThermalRegistry(List.of(air)), gas);
+		GasInventory inventory = gas.createAmbient(1_000_000_000L);
+		double initial = model.internalEnergyAtTemperature(inventory, GasRegistry.STANDARD_TEMPERATURE_K);
+		require(close(model.state(inventory, initial).temperatureK(), GasRegistry.STANDARD_TEMPERATURE_K),
+				"gas temperature was not derived from authoritative U");
+		GasThermalModel.Compression compressed = model.compressAdiabatically(inventory, initial, 1.0, 0.5);
+		double exponent = GasRegistry.STANDARD_PRESSURE_PA
+				/ GasRegistry.STANDARD_TEMPERATURE_K / (1.2 * 718.0);
+		double expectedTemperature = GasRegistry.STANDARD_TEMPERATURE_K * Math.pow(2.0, exponent);
+		require(Math.abs(compressed.finalTemperatureK() - expectedTemperature) < 1.0E-10
+				&& compressed.workIntoGas() > 0.0
+				&& model.absolutePressure(inventory, 0.5, compressed.finalInternalEnergy())
+				> 2.0 * GasRegistry.STANDARD_PRESSURE_PA,
+				"analytic gas compression did not close state/work/EoS");
+		GasThermalModel.Compression expanded = model.compressAdiabatically(
+				inventory, compressed.finalInternalEnergy(), 0.5, 1.0);
+		require(Math.abs(expanded.finalInternalEnergy() - initial) < 1.0E-9,
+				"reversible analytic gas expansion did not return initial U");
+		List<GasInventory> children = inventory.partition(new long[] { 1L, 2L, 3L });
+		double[] energies = model.partitionEnergy(inventory, initial, children);
+		double partitioned = 0.0;
+		for (int index = 0; index < children.size(); index++) {
+			partitioned += energies[index];
+			if (!children.get(index).isEmpty()) require(close(model.state(children.get(index), energies[index]).temperatureK(),
+					GasRegistry.STANDARD_TEMPERATURE_K), "gas topology split did not retain parent temperature");
+		}
+		require(Math.abs(partitioned - initial) <= Math.ulp(initial) * 4.0
+				&& model.enthalpy(children.getFirst(), GasRegistry.STANDARD_TEMPERATURE_K) > energies[0],
+				"gas topology/orifice carrier energy did not close");
+	}
+
+	private static void gasRuntimeTransfersEnergyAndWork() {
+		GasRegistry gasRegistry = BuiltinGasDefinitions.createRegistry();
+		FluidMaterial liquid = FluidMaterial.withSurfaceTension(
+				"test:gas_host", 1_000.0, "test:miscible", 0.0, 90.0);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
+		ThermalRegistry registry = new ThermalRegistry(List.of(
+				new ThermalMaterialDefinition("test:thermal/gas_host",
+						ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 300.0, 0.0, 0.5,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 4_000.0))),
+				new ThermalMaterialDefinition("realwater:thermal/air",
+						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+						GasRegistry.STANDARD_TEMPERATURE_K, 10.0, 0.025,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)))));
+		FlipThermalState.MarkerContext empty = emptyMarkers();
+
+		AirNetwork compressedNetwork = new AirNetwork(gasRegistry);
+		compressedNetwork.addNode(1.0, 1.0);
+		FlipThermalState compressed = new FlipThermalState(registry, liquids,
+				GasRegistry.STANDARD_TEMPERATURE_K, 1, 2, 2, 2, 0.5F, empty, compressedNetwork);
+		double initialEnergy = compressed.gasNodeEnergy(1, compressedNetwork);
+		FlipThermalState.GasRemapPlan compression = compressed.planGasRemap(compressedNetwork,
+				List.of(compressedNetwork.inventory(1)), new double[] {0.8}, new double[] {initialEnergy},
+				new double[] {1.0}, 0.0, 0.0);
+		compressedNetwork.remapNodes(new double[] {0.8}, List.of(compressedNetwork.inventory(1)),
+				GasInventory.EMPTY, GasInventory.EMPTY);
+		compressed.commitGasRemap(compression);
+		require(compressed.gasTemperature(1, compressedNetwork) > GasRegistry.STANDARD_TEMPERATURE_K
+				&& compressed.audit().mechanicalWork().compareTo(SignedDyadic.ZERO) > 0
+				&& compressed.exactEnergy(0).equals(compressed.audit().expectedInventory()),
+				"gas topology compression did not jointly commit U and mechanical work");
+
+		AirNetwork flowingNetwork = new AirNetwork(gasRegistry);
+		int high = flowingNetwork.addNode(1.0, 1.1), low = flowingNetwork.addNode(1.0, 0.9);
+		flowingNetwork.addOrMergeEdge(high, low, 0.1, 0.65);
+		FlipThermalState flowing = new FlipThermalState(registry, liquids,
+				GasRegistry.STANDARD_TEMPERATURE_K, 1, 2, 2, 2, 0.5F, empty, flowingNetwork);
+		flowingNetwork.stepEdges(0.01, thermodynamics(flowing, flowingNetwork),
+				(source, target, moved, sourceAfter, targetAfter) -> flowing.planGasTransfer(
+						source, target, moved, sourceAfter, targetAfter, flowingNetwork));
+		require(flowing.gasTemperature(high, flowingNetwork) < GasRegistry.STANDARD_TEMPERATURE_K
+				&& flowing.gasTemperature(low, flowingNetwork) > GasRegistry.STANDARD_TEMPERATURE_K
+				&& flowing.exactEnergy(0).equals(flowing.audit().expectedInventory()),
+				"internal gas orifice did not carry source-state enthalpy with exact audit closure");
+
+		flowingNetwork.addOrMergeEdge(high, AirNetwork.AMBIENT_NODE, 0.1, 0.65);
+		flowingNetwork.stepEdges(0.01, thermodynamics(flowing, flowingNetwork),
+				(source, target, moved, sourceAfter, targetAfter) -> flowing.planGasTransfer(
+						source, target, moved, sourceAfter, targetAfter, flowingNetwork));
+		require(flowing.audit().externalSink().compareTo(SignedDyadic.ZERO) > 0
+				&& flowing.exactEnergy(0).equals(flowing.audit().expectedInventory()),
+				"ambient gas outflow did not book carried enthalpy as an external sink");
+	}
+
+	private static AirNetwork.NodeThermodynamics thermodynamics(
+			FlipThermalState thermal, AirNetwork network
+	) {
+		return new AirNetwork.NodeThermodynamics() {
+			@Override public double gaugePressure(int nodeId) {
+				return nodeId == AirNetwork.AMBIENT_NODE ? 0.0 : thermal.gasGaugePressure(nodeId, network);
+			}
+			@Override public double density(int nodeId) {
+				return nodeId == AirNetwork.AMBIENT_NODE ? AirNetwork.AIR_DENSITY
+						: thermal.gasDensity(nodeId, network);
+			}
+		};
+	}
+
+	private static FlipThermalState.MarkerContext emptyMarkers() {
+		return new FlipThermalState.MarkerContext() {
+			@Override public int markerCount() { return 0; }
+			@Override public int cell(int marker) { throw new IllegalArgumentException(); }
+			@Override public int fluidMaterialHandle(int marker) { throw new IllegalArgumentException(); }
+			@Override public double mass(int marker) { throw new IllegalArgumentException(); }
+			@Override public double volume(int marker) { throw new IllegalArgumentException(); }
+			@Override public ChemicalMixtureRecord mixture(int marker) { throw new IllegalArgumentException(); }
+			@Override public ChemicalRegistry chemicalRegistry() { return null; }
+		};
 	}
 
 	private static void definitionAndCanonicalRegistry() {

@@ -1208,8 +1208,10 @@ public final class FlipFluidDomain {
 				.equals(chemicalParcels.registry().fingerprint())) {
 			throw new IllegalArgumentException("Thermal registry chemical dependency mismatch");
 		}
+		ensureGrid();
+		refreshGasTopology();
 		thermalState = new FlipThermalState(registry, materialRegistry, initialTemperatureK,
-				particleX.length, sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext());
+				particleX.length, sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), airNetwork);
 		if (granularInventory != null) granularInventory.bindThermalEnergy(thermalGranularAdapter());
 		if (granularCoupling == null) {
 			granularCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
@@ -1264,7 +1266,7 @@ public final class FlipFluidDomain {
 		bindThermal(registry, materialRegistry, registry.material(
 				registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID,
 						materialRegistry.material(0).id())).referenceTemperatureK());
-		thermalState.restore(state, thermalMarkerContext());
+		thermalState.restore(state, thermalMarkerContext(), airNetwork);
 		refreshCoherentOccupancy();
 		gridDirty = true;
 	}
@@ -3137,7 +3139,18 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	 */
 	private void updateGasNetwork(float dt) {
 		refreshGasTopology();
-		if (gasPressureActive) airNetwork.stepEdges(dt);
+		if (!gasPressureActive) return;
+		if (thermalState == null || !thermalState.gasModelBound()) airNetwork.stepEdges(dt);
+		else airNetwork.stepEdges(dt, new AirNetwork.NodeThermodynamics() {
+			@Override public double gaugePressure(int nodeId) {
+				return nodeId == AirNetwork.AMBIENT_NODE ? 0.0 : thermalState.gasGaugePressure(nodeId, airNetwork);
+			}
+			@Override public double density(int nodeId) {
+				return nodeId == AirNetwork.AMBIENT_NODE ? AirNetwork.AIR_DENSITY
+						: thermalState.gasDensity(nodeId, airNetwork);
+			}
+		}, (source, target, moved, sourceAfter, targetAfter) -> thermalState.planGasTransfer(
+				source, target, moved, sourceAfter, targetAfter, airNetwork));
 	}
 
 	private void refreshGasTopology() {
@@ -3145,11 +3158,15 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				? airScanner.scan(solid, markerCount, volume, cutCells)
 				: airScanner.scan(solid, markerCount, volume, cutCells, pressureGranularCoupling);
 		int sealed = result.sealedNodeCount();
+		boolean thermalGas = thermalState != null && thermalState.gasModelBound();
 		double[] availableVolumes = result.sealedAvailableVolume();
 		ArrayList<GasInventory> inventories = new ArrayList<>(sealed);
 		for (int node = 0; node < sealed; node++) inventories.add(GasInventory.EMPTY);
 		GasInventory sourceDelta = GasInventory.EMPTY;
 		GasInventory sinkDelta = GasInventory.EMPTY;
+		double[] mixedEnergy = thermalGas ? new double[sealed] : null;
+		double[] inheritedAvailable = thermalGas ? new double[sealed] : null;
+		double sourceEnergy = 0.0, sinkEnergy = 0.0;
 		if (previousSealedNodeCount > 0 && sealed > 0) {
 			int previous = previousSealedNodeCount;
 			int[] ambientOverlap = new int[previous + 1];
@@ -3172,6 +3189,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				if (inventory.isEmpty()) continue;
 				if (ambientOverlap[old] > 0) {
 					sinkDelta = sinkDelta.merge(inventory);
+					if (thermalGas) sinkEnergy += thermalState.gasNodeEnergy(old, airNetwork);
 					continue;
 				}
 				Map<Long, Integer> oldOverlap = overlap.subMap(
@@ -3182,16 +3200,26 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				}
 				if (destinations == 0) {
 					sinkDelta = sinkDelta.merge(inventory);
+					if (thermalGas) sinkEnergy += thermalState.gasNodeEnergy(old, airNetwork);
 					continue;
 				}
 				long[] weights = new long[destinations];
 				int weight = 0;
 				for (int count : oldOverlap.values()) weights[weight++] = count;
 				List<GasInventory> parts = inventory.partition(weights);
+				double[] partEnergy = !thermalGas ? null
+						: thermalState.partitionGasNodeEnergy(old, parts, airNetwork);
+				double[] partAvailable = !thermalGas ? null
+						: partitionTopologyVolume(airNetwork.availableVolume(old), weights);
 				int part = 0;
 				for (Map.Entry<Long, Integer> entry : oldOverlap.entrySet()) {
 					int node = (int) (entry.getKey() & 0xffffffffL);
-					inventories.set(node - 1, inventories.get(node - 1).merge(parts.get(part++)));
+					inventories.set(node - 1, inventories.get(node - 1).merge(parts.get(part)));
+					if (thermalGas) {
+						mixedEnergy[node - 1] += partEnergy[part];
+						inheritedAvailable[node - 1] += partAvailable[part];
+					}
+					part++;
 					contributed[node] = true;
 				}
 			}
@@ -3201,12 +3229,18 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 							Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1])));
 					inventories.set(node - 1, created);
 					sourceDelta = sourceDelta.merge(created);
+					if (thermalGas) {
+						mixedEnergy[node - 1] = thermalState.ambientGasEnergy(created);
+						inheritedAvailable[node - 1] = availableVolumes[node - 1];
+						sourceEnergy += mixedEnergy[node - 1];
+					}
 				}
 			}
 		} else {
 			if (previousSealedNodeCount > 0) {
 				for (int node = 1; node <= previousSealedNodeCount; node++) {
 					sinkDelta = sinkDelta.merge(airNetwork.inventory(node));
+					if (thermalGas) sinkEnergy += thermalState.gasNodeEnergy(node, airNetwork);
 				}
 			}
 			for (int node = 1; node <= sealed; node++) {
@@ -3214,9 +3248,17 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1])));
 				inventories.set(node - 1, created);
 				sourceDelta = sourceDelta.merge(created);
+				if (thermalGas) {
+					mixedEnergy[node - 1] = thermalState.ambientGasEnergy(created);
+					inheritedAvailable[node - 1] = availableVolumes[node - 1];
+					sourceEnergy += mixedEnergy[node - 1];
+				}
 			}
 		}
+		FlipThermalState.GasRemapPlan thermalPlan = !thermalGas ? null : thermalState.planGasRemap(
+				airNetwork, inventories, availableVolumes, mixedEnergy, inheritedAvailable, sourceEnergy, sinkEnergy);
 		airNetwork.remapNodes(availableVolumes, inventories, sourceDelta, sinkDelta);
+		if (thermalPlan != null) thermalState.commitGasRemap(thermalPlan);
 		for (AirCavityScanner.GeometricEdge edge : result.geometricEdges()) {
 			airNetwork.addOrMergeEdge(edge.firstNode(), edge.secondNode(), edge.areaSquareMeters(), 0.65);
 		}
@@ -3230,7 +3272,24 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		if (!gasPressureActive) return 0.0F;
 		int node = airCellNodeId[airCell];
 		if (node <= 0) return 0.0F;
-		return (float) airNetwork.gaugePressure(node);
+		return (float) (thermalState == null || !thermalState.gasModelBound() ? airNetwork.gaugePressure(node)
+				: thermalState.gasGaugePressure(node, airNetwork));
+	}
+
+	private static double[] partitionTopologyVolume(double total, long[] weights) {
+		long weightSum = 0L;
+		for (long weight : weights) weightSum = Math.addExact(weightSum, weight);
+		if (!(Double.isFinite(total) && total > 0.0) || weightSum <= 0L) {
+			throw new IllegalArgumentException("Gas topology volume partition is invalid");
+		}
+		double[] result = new double[weights.length];
+		double assigned = 0.0;
+		for (int index = 0; index < weights.length; index++) {
+			result[index] = index == weights.length - 1 ? total - assigned
+					: total * ((double) weights[index] / weightSum);
+			assigned += result[index];
+		}
+		return result;
 	}
 
 	private int particleCellIndex(int particle) {

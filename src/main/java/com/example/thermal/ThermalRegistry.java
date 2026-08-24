@@ -85,6 +85,9 @@ public final class ThermalRegistry {
 		if (handle == null) throw new IllegalArgumentException("No thermal material for " + kind + " carrier " + carrierId);
 		return handle;
 	}
+	public boolean hasMaterial(ThermalMaterialDefinition.CarrierKind kind, String carrierId) {
+		return materialByCarrier.containsKey(carrierKey(kind, carrierId));
+	}
 	public ThermalSpeciesOffset speciesOffset(int materialHandle, String speciesId) {
 		ThermalMaterialDefinition material = material(materialHandle);
 		ThermalSpeciesOffset offset = offsetByHostSpecies.get(offsetKey(material.id(), speciesId));

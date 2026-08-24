@@ -3,6 +3,10 @@ package com.example.fluid;
 import com.example.chemistry.ChemicalMixtureRecord;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.granular.SolidVolume;
+import com.example.fluid.air.AirNetwork;
+import com.example.fluid.air.GasInventory;
+import com.example.fluid.air.GasRegistry;
+import com.example.thermal.GasThermalModel;
 import com.example.thermal.CoherentPhaseStore;
 import com.example.thermal.GranularEnergyColumn;
 import com.example.thermal.SignedDyadic;
@@ -90,6 +94,13 @@ final class FlipThermalState {
 	}
 
 	record ReactionPlan(int cell, SignedDyadic cellEnergy, SignedDyadic inventoryBefore, double equilibriumTemperatureK) { }
+	record GasRemapPlan(
+			double[] nodeEnergy, SignedDyadic sourceEnergy, SignedDyadic sinkEnergy,
+			SignedDyadic mechanicalWork, SignedDyadic roundoff
+	) {
+		GasRemapPlan { nodeEnergy = nodeEnergy.clone(); }
+		@Override public double[] nodeEnergy() { return nodeEnergy.clone(); }
+	}
 
 	private final ThermalRegistry registry;
 	private final ThermalStateFunction stateFunction;
@@ -100,8 +111,10 @@ final class FlipThermalState {
 	private final CoherentPhaseStore coherentPhases;
 	private final ThermalPhaseChangeEngine phaseChange;
 	private final GranularEnergyColumn granularEnergy;
+	private final GasThermalModel gasModel;
 	private final double insertionTemperatureK;
 	private double[] internalEnergy;
+	private double[] gasNodeEnergy;
 	private ThermalAuditLedger audit;
 	private ThermalTransport.Stats lastTransport = new ThermalTransport.Stats(
 			0, 0, 0.0, SignedDyadic.ZERO, SignedDyadic.ZERO);
@@ -110,6 +123,14 @@ final class FlipThermalState {
 			ThermalRegistry registry, FluidMaterialRegistry liquids, double initialTemperatureK,
 			int initialCapacity, int sizeX, int sizeY, int sizeZ, float cellSize,
 			MarkerContext markers
+	) {
+		this(registry, liquids, initialTemperatureK, initialCapacity, sizeX, sizeY, sizeZ, cellSize, markers, null);
+	}
+
+	FlipThermalState(
+			ThermalRegistry registry, FluidMaterialRegistry liquids, double initialTemperatureK,
+			int initialCapacity, int sizeX, int sizeY, int sizeZ, float cellSize,
+			MarkerContext markers, AirNetwork airNetwork
 	) {
 		if (registry == null || liquids == null || markers == null) {
 			throw new IllegalArgumentException("Thermal binding input is missing");
@@ -168,6 +189,22 @@ final class FlipThermalState {
 			granularEnergy.addDeposit(key, modeledGranularEnergy(key.materialHandle(), key.compositionHandle(),
 					markers.depositMass(key), initialTemperatureK, markers));
 		}
+		boolean supportsGas = airNetwork != null && airNetwork.registry().components().stream().allMatch(
+				component -> registry.hasMaterial(ThermalMaterialDefinition.CarrierKind.GAS, component.id()));
+		if (supportsGas) {
+			this.gasModel = new GasThermalModel(registry, airNetwork.registry());
+			this.gasNodeEnergy = new double[airNetwork.nodeCount()];
+			for (int node = 1; node <= airNetwork.nodeCount(); node++) {
+				gasNodeEnergy[node - 1] = gasModel.internalEnergyAtTemperature(
+						airNetwork.inventory(node), initialTemperatureK);
+			}
+		} else {
+			if (airNetwork != null && airNetwork.nodeCount() > 0) {
+				throw new IllegalArgumentException("Sealed gas inventory requires complete gas thermal definitions");
+			}
+			this.gasModel = null;
+			this.gasNodeEnergy = new double[0];
+		}
 		this.audit = ThermalAuditLedger.initialized(exactEnergy(markers.markerCount()));
 	}
 
@@ -184,11 +221,12 @@ final class FlipThermalState {
 		for (int marker = 0; marker < count; marker++) total += internalEnergy[marker];
 		for (CoherentPhaseStore.Group group : coherentPhases.snapshot()) total += group.internalEnergy();
 		total += granularEnergy.exactEnergy().toDouble();
+		for (double energy : gasNodeEnergy) total += energy;
 		return total;
 	}
 	SignedDyadic exactEnergy(int count) {
 		return SignedDyadic.sum(Arrays.copyOf(internalEnergy, count)).add(coherentPhases.exactEnergy())
-				.add(granularEnergy.exactEnergy());
+				.add(granularEnergy.exactEnergy()).add(SignedDyadic.sum(gasNodeEnergy));
 	}
 
 	void ensureCapacity(int capacity) {
@@ -200,10 +238,10 @@ final class FlipThermalState {
 				Arrays.copyOf(internalEnergy, count), granularEnergy.copyActiveEnergy(),
 				granularEnergy.depositSnapshot().stream()
 						.mapToDouble(GranularEnergyColumn.DepositEnergy::internalEnergy).toArray(),
-				coherentPhases.snapshot(), audit);
+				coherentPhases.snapshot(), gasNodeEnergy, audit);
 	}
 
-	void restore(FlipThermalParticleState snapshot, MarkerContext markers) {
+	void restore(FlipThermalParticleState snapshot, MarkerContext markers, AirNetwork airNetwork) {
 		if (coherentPhases.groupCount() != 0) throw new IllegalStateException("Thermal restore target is not empty");
 		double[] restored = snapshot.copyInternalEnergy();
 		ensureCapacity(restored.length);
@@ -228,11 +266,132 @@ final class FlipThermalState {
 			deposits.add(new GranularEnergyColumn.DepositEnergy(depositKeys.get(index), depositEnergy[index]));
 		}
 		granularEnergy.replace(activeEnergy, deposits);
+		double[] restoredGas = snapshot.copyGasNodeEnergy();
+		if (restoredGas.length != (airNetwork == null ? 0 : airNetwork.nodeCount())
+				|| restoredGas.length > 0 && gasModel == null) {
+			throw new IllegalArgumentException("Restored gas thermal ordinals differ from gas v4 inventory");
+		}
+		for (int node = 0; node < restoredGas.length; node++) gasModel.state(airNetwork.inventory(node + 1), restoredGas[node]);
+		gasNodeEnergy = restoredGas;
 		for (int marker = 0; marker < markers.markerCount(); marker++) temperature(marker, markers);
 		cellGrid.rebuild(carrierAccess(markers));
 		audit = snapshot.audit();
 		if (!exactEnergy(markers.markerCount()).equals(audit.expectedInventory())) {
 			throw new IllegalArgumentException("Restored thermal audit does not close");
+		}
+	}
+
+	boolean hasGasEnergy(int nodeCount) { return gasModel != null && gasNodeEnergy.length == nodeCount; }
+	boolean gasModelBound() { return gasModel != null; }
+	double gasNodeEnergy(int nodeId, AirNetwork network) {
+		requireGasNode(nodeId, network);
+		return gasNodeEnergy[nodeId - 1];
+	}
+	double gasTemperature(int nodeId, AirNetwork network) {
+		requireGasNode(nodeId, network);
+		return gasModel.state(network.inventory(nodeId), gasNodeEnergy[nodeId - 1]).temperatureK();
+	}
+	double gasGaugePressure(int nodeId, AirNetwork network) {
+		requireGasNode(nodeId, network);
+		return gasModel.absolutePressure(network.inventory(nodeId), network.availableVolume(nodeId),
+				gasNodeEnergy[nodeId - 1]) - GasRegistry.STANDARD_PRESSURE_PA;
+	}
+	double gasDensity(int nodeId, AirNetwork network) {
+		requireGasNode(nodeId, network);
+		return gasModel.density(network.inventory(nodeId), network.availableVolume(nodeId));
+	}
+
+	double[] partitionGasNodeEnergy(int nodeId, List<GasInventory> children, AirNetwork network) {
+		requireGasNode(nodeId, network);
+		return gasModel.partitionEnergy(network.inventory(nodeId), gasNodeEnergy[nodeId - 1], children);
+	}
+
+	double ambientGasEnergy(GasInventory inventory) {
+		if (gasModel == null) throw new IllegalStateException("Gas thermal model is not bound");
+		return gasModel.internalEnergyAtTemperature(inventory, insertionTemperatureK);
+	}
+
+	GasRemapPlan planGasRemap(
+			AirNetwork oldNetwork, List<GasInventory> inventories, double[] availableVolumes,
+			double[] mixedEnergy, double[] inheritedAvailableVolumes,
+			double sourceEnergy, double sinkEnergy
+	) {
+		if (!hasGasEnergy(oldNetwork.nodeCount()) || inventories == null
+				|| inventories.size() != availableVolumes.length || inventories.size() != mixedEnergy.length
+				|| inventories.size() != inheritedAvailableVolumes.length
+				|| !Double.isFinite(sourceEnergy) || !Double.isFinite(sinkEnergy)) {
+			throw new IllegalArgumentException("Gas thermal remap plan is incompatible");
+		}
+		double[] result = mixedEnergy.clone();
+		for (int node = 0; node < result.length; node++) {
+			if (inventories.get(node).isEmpty() || !(Double.isFinite(availableVolumes[node]) && availableVolumes[node] > 0.0)
+					|| !(Double.isFinite(inheritedAvailableVolumes[node]) && inheritedAvailableVolumes[node] > 0.0)
+					|| !Double.isFinite(result[node])) {
+				throw new IllegalArgumentException("Gas thermal remap produced an invalid node");
+			}
+			if (Double.doubleToRawLongBits(inheritedAvailableVolumes[node])
+					== Double.doubleToRawLongBits(availableVolumes[node])) {
+				gasModel.absolutePressure(inventories.get(node), availableVolumes[node], result[node]);
+			} else {
+				result[node] = gasModel.compressAdiabatically(inventories.get(node), result[node],
+						inheritedAvailableVolumes[node], availableVolumes[node]).finalInternalEnergy();
+			}
+		}
+		SignedDyadic oldGas = SignedDyadic.sum(gasNodeEnergy);
+		SignedDyadic mixed = SignedDyadic.sum(mixedEnergy);
+		SignedDyadic finalGas = SignedDyadic.sum(result);
+		SignedDyadic source = SignedDyadic.of(sourceEnergy), sink = SignedDyadic.of(sinkEnergy);
+		SignedDyadic work = finalGas.subtract(mixed);
+		SignedDyadic roundoff = finalGas.subtract(oldGas).subtract(source).add(sink).subtract(work);
+		return new GasRemapPlan(result, source, sink, work, roundoff);
+	}
+
+	void commitGasRemap(GasRemapPlan plan) {
+		if (plan == null) throw new IllegalArgumentException("Gas thermal remap plan is missing");
+		gasNodeEnergy = plan.nodeEnergy();
+		audit = audit.withExternalSourceEnergy(plan.sourceEnergy()).withExternalSinkEnergy(plan.sinkEnergy())
+				.withMechanicalWork(plan.mechanicalWork()).withRoundoff(plan.roundoff());
+	}
+
+	Runnable planGasTransfer(
+			int sourceNode, int targetNode, GasInventory moved,
+			GasInventory sourceAfter, GasInventory targetAfter, AirNetwork network
+	) {
+		if (!hasGasEnergy(network.nodeCount()) || moved == null || moved.isEmpty()) {
+			throw new IllegalArgumentException("Gas thermal transfer plan is incompatible");
+		}
+		double[] result = gasNodeEnergy.clone();
+		double sourceTemperature = sourceNode == AirNetwork.AMBIENT_NODE
+				? insertionTemperatureK : gasTemperature(sourceNode, network);
+		double carried = gasModel.enthalpy(moved, sourceTemperature);
+		SignedDyadic before = SignedDyadic.sum(gasNodeEnergy);
+		SignedDyadic imported = SignedDyadic.ZERO, exported = SignedDyadic.ZERO;
+		if (sourceNode == AirNetwork.AMBIENT_NODE) {
+			result[targetNode - 1] += carried;
+			gasModel.absolutePressure(targetAfter, network.availableVolume(targetNode), result[targetNode - 1]);
+			imported = SignedDyadic.of(carried);
+		} else {
+			result[sourceNode - 1] -= carried;
+			gasModel.absolutePressure(sourceAfter, network.availableVolume(sourceNode), result[sourceNode - 1]);
+			if (targetNode == AirNetwork.AMBIENT_NODE) exported = SignedDyadic.of(carried);
+			else {
+				result[targetNode - 1] += carried;
+				gasModel.absolutePressure(targetAfter, network.availableVolume(targetNode), result[targetNode - 1]);
+			}
+		}
+		SignedDyadic after = SignedDyadic.sum(result);
+		SignedDyadic roundoff = after.subtract(before).subtract(imported).add(exported);
+		SignedDyadic finalImported = imported, finalExported = exported;
+		return () -> {
+			gasNodeEnergy = result;
+			audit = audit.withExternalSourceEnergy(finalImported).withExternalSinkEnergy(finalExported)
+					.withRoundoff(roundoff);
+		};
+	}
+
+	private void requireGasNode(int nodeId, AirNetwork network) {
+		if (!hasGasEnergy(network.nodeCount()) || nodeId <= 0 || nodeId > gasNodeEnergy.length) {
+			throw new IllegalStateException("Gas thermal state is not bound to the current topology");
 		}
 	}
 
