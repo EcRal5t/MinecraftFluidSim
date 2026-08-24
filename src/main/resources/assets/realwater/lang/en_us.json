@@ -1,6 +1,7 @@
 {
   "block.realwater.fluid_boundary": "Real Water Boundary",
   "block.realwater.fluid_controller": "Real Water Controller",
+  "block.realwater.thermal_reservoir": "Real Water Thermal Reservoir",
   "item.realwater.partial_water_bucket": "Partial Water Bucket",
   "item.realwater.partial_water_bucket.volume": "Water: %s",
   "item.realwater.material_bucket": "Real Water Material Bucket",

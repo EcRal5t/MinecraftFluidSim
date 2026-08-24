@@ -1,5 +1,7 @@
 package com.example;
 
+import com.example.block.RealWaterBlocks;
+import com.example.block.ThermalReservoirBlockEntity;
 import com.example.logging.RealWaterCommandLog;
 import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FluidMaterial;
@@ -30,6 +32,8 @@ import net.minecraft.commands.Commands;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.permissions.Permissions;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 
 import java.util.List;
 
@@ -144,6 +148,12 @@ public final class RealWaterCommands {
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
 										.executes(context -> audit(context, () -> setPhaseChangeFeature(
 												context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+						.then(Commands.literal("thermalsource")
+								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+								.executes(context -> audit(context, () -> thermalSourceStatus(context.getSource())))
+								.then(Commands.argument("temperatureK", DoubleArgumentType.doubleArg(1.0))
+										.executes(context -> audit(context, () -> setThermalSource(
+												context.getSource(), DoubleArgumentType.getDouble(context, "temperatureK"))))))
 						.then(Commands.literal("granstatus")
 								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.executes(context -> audit(context, () -> granularInventoryStatus(context.getSource()))))
@@ -657,6 +667,34 @@ public final class RealWaterCommands {
 				.initializeSelectedRegionThermal(source.getServer(), temperatureK, operator);
 		if (result.contains("失败") || result.startsWith("没有")) return fail(source, result);
 		return succeed(source, result, 1);
+	}
+
+	private static int thermalSourceStatus(CommandSourceStack source) throws CommandSyntaxException {
+		ThermalReservoirBlockEntity reservoir = aimedThermalReservoir(source);
+		if (reservoir == null) return fail(source, "请让准星对准 8 格内的温度源方块");
+		if (!reservoir.hasValidTemperature()) return fail(source, "温度源保存的设定值无效；请显式设置新温度");
+		return succeed(source, String.format(java.util.Locale.ROOT,
+				"温度源 %s 的恒温设定为 %.6f K", reservoir.getBlockPos().toShortString(), reservoir.temperatureK()), 1);
+	}
+
+	private static int setThermalSource(CommandSourceStack source, double temperatureK) throws CommandSyntaxException {
+		if (!Double.isFinite(temperatureK)) return fail(source, "温度必须是有限数值");
+		ThermalReservoirBlockEntity reservoir = aimedThermalReservoir(source);
+		if (reservoir == null) return fail(source, "请让准星对准 8 格内的温度源方块");
+		reservoir.setTemperatureK(temperatureK);
+		return succeed(source, String.format(java.util.Locale.ROOT,
+				"已将温度源 %s 设为 %.6f K；相邻热区域会在下一次边界扫描时精确唤醒",
+				reservoir.getBlockPos().toShortString(), temperatureK), 1);
+	}
+
+	private static ThermalReservoirBlockEntity aimedThermalReservoir(CommandSourceStack source)
+			throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		HitResult hit = player.pick(8.0, 1.0F, false);
+		if (!(hit instanceof BlockHitResult blockHit) || hit.getType() != HitResult.Type.BLOCK) return null;
+		if (!player.level().getBlockState(blockHit.getBlockPos()).is(RealWaterBlocks.THERMAL_RESERVOIR)) return null;
+		return player.level().getBlockEntity(blockHit.getBlockPos()) instanceof ThermalReservoirBlockEntity reservoir
+				? reservoir : null;
 	}
 
 	private static int debugStatus(CommandSourceStack source) {

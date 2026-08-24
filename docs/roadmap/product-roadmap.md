@@ -117,6 +117,7 @@ v5 audit-only identity、remove/empty 与 runtime collision 边界，并完成�
 
 - 灭火、湿润、岩浆反应、红石、生物和寻路逐项适配。
 - 提供材料注册、容器传输、区域端口、查询和事件 API。
+- 局部派生温度查询在外部 API 中按 dimension/region/cell 明确返回有效性与单位，供 Jade/WAILA/HWYLA 等观察层适配；主 Mod 不另建准星 HUD，观察不得唤醒或回写热状态。
 - 外部 API 必须声明单位/映射，不得直接修改平滑 density 或客户端 mesh。
 
 ## 性能与停止条件

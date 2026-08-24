@@ -1,5 +1,7 @@
 package com.example.simulation;
 
+import com.example.block.RealWaterBlocks;
+import com.example.block.ThermalReservoirBlockEntity;
 import com.example.thermal.ThermalBoundaryDefinition;
 import com.example.thermal.ThermalRegistry;
 import net.minecraft.core.BlockPos;
@@ -22,13 +24,11 @@ import java.util.Map;
 final class ThermalBoundaryResolver {
 	private final Map<Identifier, ThermalBoundaryDefinition> blocks;
 	private final List<TagTarget> tags;
-	private final boolean hasFixedSurface;
 
 	ThermalBoundaryResolver(ThermalRegistry registry) {
 		if (registry == null) throw new IllegalArgumentException("Thermal boundary registry is missing");
 		LinkedHashMap<Identifier, ThermalBoundaryDefinition> direct = new LinkedHashMap<>();
 		ArrayList<TagTarget> tagTargets = new ArrayList<>();
-		boolean fixed = false;
 		for (ThermalBoundaryDefinition definition : registry.boundaries()) {
 			Identifier target = Identifier.parse(definition.targetId());
 			if (definition.targetKind() == ThermalBoundaryDefinition.TargetKind.BLOCK) {
@@ -43,17 +43,15 @@ final class ThermalBoundaryResolver {
 				}
 				tagTargets.add(new TagTarget(tag, definition));
 			}
-			fixed |= definition.kind() == ThermalBoundaryDefinition.Kind.FIXED_SURFACE_TEMPERATURE;
 		}
 		blocks = Map.copyOf(direct);
 		tags = List.copyOf(tagTargets);
-		hasFixedSurface = fixed;
 		// A direct target and any number of tags may overlap after tag reload; such a mapping is not deterministic.
 		BuiltInRegistries.BLOCK.stream().forEach(block -> matchingDefinition(block.defaultBlockState()));
 	}
 
 	boolean refresh(ServerLevel level, FluidRegion region, int cellsPerBlock) {
-		if (!hasFixedSurface || level == null || region == null || cellsPerBlock <= 0
+		if (level == null || region == null || cellsPerBlock <= 0
 				|| !region.solverLoaded() || !region.domain().hasThermalState()) return false;
 		int sizeX = region.domain().sizeX(), sizeY = region.domain().sizeY(), sizeZ = region.domain().sizeZ();
 		double[] temperatures = new double[Math.multiplyExact(Math.multiplyExact(
@@ -64,14 +62,26 @@ final class ThermalBoundaryResolver {
 			int cell = (z * sizeY + y) * sizeX + x;
 			for (int direction = 0; direction < 6; direction++) {
 				BlockPos target = targetBlock(region.origin(), x, y, z, direction, cellsPerBlock);
-				double temperature = cache.computeIfAbsent(target, pos -> surfaceTemperature(level.getBlockState(pos)));
+				double temperature = cache.computeIfAbsent(target, pos -> surfaceTemperature(level, pos));
 				if (!Double.isNaN(temperature)) temperatures[cell * 6 + direction] = temperature;
 			}
 		}
 		return region.domain().replaceThermalBoundaryTemperatures(temperatures);
 	}
 
-	private double surfaceTemperature(BlockState state) {
+	private double surfaceTemperature(ServerLevel level, BlockPos position) {
+		BlockState state = level.getBlockState(position);
+		if (state.is(RealWaterBlocks.THERMAL_RESERVOIR)) {
+			if (!(level.getBlockEntity(position) instanceof ThermalReservoirBlockEntity reservoir)) {
+				throw new IllegalArgumentException("Thermal reservoir at " + position.toShortString()
+						+ " has no authoritative block entity");
+			}
+			if (!reservoir.hasValidTemperature()) {
+				throw new IllegalArgumentException("Thermal reservoir at " + position.toShortString()
+						+ " has an invalid persisted setpoint");
+			}
+			return reservoir.temperatureK();
+		}
 		ThermalBoundaryDefinition definition = matchingDefinition(state);
 		return definition == null || definition.kind() == ThermalBoundaryDefinition.Kind.ADIABATIC
 				? Double.NaN : definition.surfaceTemperatureK();

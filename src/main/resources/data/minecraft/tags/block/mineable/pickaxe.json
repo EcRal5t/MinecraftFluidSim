@@ -2,6 +2,7 @@
   "replace": false,
   "values": [
     "realwater:fluid_boundary",
-    "realwater:fluid_controller"
+    "realwater:fluid_controller",
+    "realwater:thermal_reservoir"
   ]
 }

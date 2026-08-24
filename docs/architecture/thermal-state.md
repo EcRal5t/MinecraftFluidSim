@@ -51,6 +51,12 @@ unknown/corrupt/missing、依赖 registry fingerprint 失配或已有 M9 state �
 - `ThermalGasComponent`：standard state、质量创建/校验关系、`c_v` 与参考内能；
 - `ThermalBoundaryDefinition`：Minecraft block/tag 的 `ADIABATIC` 或 `FIXED_SURFACE_TEMPERATURE` 边界。
 
+`realwater:thermal_reservoir` 是唯一 code-owned 的可调边界入口：方块 ID 声明无限热浴语义，vanilla chunk 内的
+block entity 以 raw IEEE-754 bits 保存 operator 设定温度，默认新放置为 293.15 K。它不加入或改写既有
+`ThermalRegistryStore` fingerprint，因为旧代码不可能创建该新方块，只有显式放置才引入该边界；data pack 的静态
+block/tag 映射仍只由 world snapshot 解释。缺失 block entity、非 finite 或小于 1 K 的持久设定值不得猜测默认值，
+接触该面的区域按 thermal-definition failure 保留并暂停，operator 可显式重设并重启后恢复。
+
 每个活动 carrier 必须恰有一个 thermal model，不允许运行时 fallback。loader 在发布前拒绝未知引用、重复定义、
 非正温度/热容、负导热率、断裂或重叠的温区、非单调 `U(T)`、相变循环、不可逆 batch、潜热与状态函数不一致、
 依赖 fingerprint 失配及全部预算/算术越界。零导热率明确表示绝热，不表示缺数据。
@@ -98,7 +104,10 @@ Q_ij = G_ij * (T_j - T_i) * dt_thermal
 掩盖不稳定。
 
 普通 Minecraft 方块默认 `ADIABATIC`，避免凭空假定无限热容。只有 world registry 显式声明的
-`FIXED_SURFACE_TEMPERATURE` face 是外部储层，反向能量进入 source/sink 审计。有限热容 world block 需要独立
+`FIXED_SURFACE_TEMPERATURE` face 和显式放置的 `realwater:thermal_reservoir` 是外部储层，反向能量进入
+source/sink 审计。reservoir 设定值只改变下一次边界解析，不直接写任一 carrier `U`；低于相邻 LTE 温度时是冷源，
+高于时是热源。它同时是合法 controller 闭壳块，只在实际 blocked cut-face 的物质覆盖面积上交换热量。
+有限热容 world block 需要独立
 ownership/persistence 评审，不在 M9 v1。
 
 ## 连续固相与熔化/凝固
@@ -198,6 +207,7 @@ M8 solid SVQ/mass/composition 和 gas nanos/mass/species 均按该事务声明�
 thermal sleep 要求连续 quiet steps 内：所有内部/边界可表示通量为零，无 dirty chemistry/precipitation/phase，
 无 pending volume/work，无 gas topology/flow/work，且 audit 正常。处于平衡的 partial latent plateau 可以休眠。
 方块边界变化、容器转移、管理员 source、chemical/granular dirty、gas topology 或可表示热通量精确唤醒；
+调整 thermal reservoir 设定值属于方块边界变化；
 客户端观察永不唤醒。不得修改现有 40/200 ms wall-time 阈值。
 
 ## 跨层格式与迁移

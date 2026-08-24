@@ -1,6 +1,7 @@
 {
   "block.realwater.fluid_boundary": "真实水体边界",
   "block.realwater.fluid_controller": "真实水体控制器",
+  "block.realwater.thermal_reservoir": "真实水体温度源",
   "item.realwater.partial_water_bucket": "部分水桶",
   "item.realwater.partial_water_bucket.volume": "水量 %s",
   "item.realwater.material_bucket": "真实水体材料桶",
