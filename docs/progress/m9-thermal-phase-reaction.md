@@ -513,3 +513,19 @@ audit closed。正常停服发布 checkpoint 9，第二次启动恢复 0 markers
 `E61739D14AD34E26638B75AAB76F4A4348726743E83AF23B23FA1DB63D4AABE0`；部署后 mods 目录只有这一份启用的
 `realwater` 0.15.0。上一候选 `641DAC2F…7D75D` 已可恢复地保存为
 `realwater-0.15.0-pre-operator-clear-audit-fix.jar.disabled`；只读 GPU probe 仍是独立 `realwater_gpu_probe` id。
+
+## M9.33 adjustable thermal reservoir test entry
+
+新增 `realwater:thermal_reservoir` 作为显式 operator 放置的可调无限热浴。它以 vanilla block entity 的 raw
+IEEE-754 bits 保存设定值，默认 293.15 K，同时属于合法 controller 闭壳；`ThermalBoundaryResolver` 在既有
+world-registry 静态 block/tag 定义之前识别该唯一 code-owned 方块，并仍只把设定值转换为 runtime cut-face field。
+修改设定值不直接修改 carrier U，实际交换继续由有限体积导热提交并进入 external source/sink audit。缺失、非 finite
+或低于 1 K 的持久值不回退默认温度。管理员准星对准八格内方块后使用 `/realwater thermalsource [K]` 查询或设置；
+没有增加准星流体温度查询或 HUD，Jade/WAILA/HWYLA 所需的局部派生温度 API 明确留给 M10。
+
+最近 `thermal,boundary` 两门通过（runner 1.297 s）。限定根项目的 EULA=true 专服成功注册该 block/item/entity
+和命令；隔离世界放置后读得默认 `temperature_bits=4643864765530531430`，保存、停服、重启后逐位一致，随后已删除
+测试块并取消 force-load。`clean assemble compileTestJava --offline --no-daemon` 从零成功（16 s）。部署 JAR
+SHA-256 为 `84BCA0555598D2DB0ABE78D558FE0893A1EDE63DC56A8D7199B25FE1946CB8F9`，mods 目录只有这一份启用的主
+`realwater` id；上一版已可恢复地保存为 `realwater-0.15.0-pre-thermal-reservoir.jar.disabled`。真实 controller
+上 source/sink 增长、温度变化和资源外观仍合并为一次人工 smoke，不在执行前记作通过。
