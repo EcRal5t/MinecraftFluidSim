@@ -101,3 +101,18 @@ species 组成和总内能；canonical merge、按 SVQ 比例 split 以及无副
 在唯一 `thermal` selector 中扩展现有相变场景，覆盖 coherent merge/split、exact-batch planner、固液 LTE，以及
 一格液体从 295 K 冻结到 50% 固相、再由 305 K 熔回液体的往返；逐次核对 liquid volume、solid SVQ、总质量、
 总内能与 audit identity。最近门：`thermal,free-surface,granular` 通过；未请求实机。
+
+## M9.7 coherent phase region-state v6
+
+把 M9.6 coherent group 纳入既有 v6 handoff 与同代 section/manifest extension。每个 group 按所属 world section 保存
+global cell、stable phase ID、exact occupied SVQ、raw mass、可选 canonical species composition/residual 和 raw `U`；
+section ledger 与 manifest 的 liquid/coherent carrier ledger 分别以 canonical dyadic sum 复核，最后再与完整 thermal audit
+对消。composition 直接自包含于 typed thermal payload，不再保留没有真实 pool 可指向的占位 index。
+
+`FlipThermalParticleState` 现在是 liquid+coherent 正交 handoff；构造、restore 与 region reader 均验证 canonical group、
+thermal carrier kind、状态函数有效域、registry fingerprint、cell ownership 以及 liquid+coherent exact geometric capacity。
+旧 liquid-only v6 bytes 保持不变，因为此前 capture 明确拒绝任何 coherent group；因此不存在需猜测迁移的已发布
+non-empty coherent v6。M8 active/deposit 与 gas energy ordinals 仍显式拒绝。
+
+扩展既有 `region-state` 场景，用非零 coherent energy 完成 capture、codec、atomic publish、reconstruct、domain restore
+全往返，并单独覆盖 composition payload 的无损 codec。最近门：`thermal,region-state` 通过；未请求实机。

@@ -110,11 +110,8 @@ final class FlipThermalState {
 	}
 
 	FlipThermalParticleState capture(int sizeX, int sizeY, int sizeZ, float cellSize, int count) {
-		if (coherentPhases.groupCount() != 0) {
-			throw new IllegalStateException("Liquid-only thermal handoff cannot omit coherent phase energy");
-		}
 		return new FlipThermalParticleState(sizeX, sizeY, sizeZ, cellSize, count, registry.fingerprint(),
-				Arrays.copyOf(internalEnergy, count), audit);
+				Arrays.copyOf(internalEnergy, count), coherentPhases.snapshot(), audit);
 	}
 
 	void restore(FlipThermalParticleState snapshot, MarkerContext markers) {
@@ -122,6 +119,16 @@ final class FlipThermalState {
 		double[] restored = snapshot.copyInternalEnergy();
 		ensureCapacity(restored.length);
 		System.arraycopy(restored, 0, internalEnergy, 0, restored.length);
+		for (CoherentPhaseStore.Group group : snapshot.coherentGroups()) {
+			int material = registry.materialHandle(group.phaseId());
+			if (registry.material(material).carrierKind() != ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID) {
+				throw new IllegalArgumentException("Restored coherent phase has the wrong thermal carrier kind");
+			}
+			stateFunction.stateForInternalEnergy(material, group.mass(),
+					group.composition() == null ? Map.of() : group.composition().stableAmounts(),
+					group.internalEnergy());
+		}
+		coherentPhases.restore(snapshot.coherentGroups());
 		for (int marker = 0; marker < markers.markerCount(); marker++) temperature(marker, markers);
 		audit = snapshot.audit();
 		if (!exactEnergy(markers.markerCount()).equals(audit.expectedInventory())) {

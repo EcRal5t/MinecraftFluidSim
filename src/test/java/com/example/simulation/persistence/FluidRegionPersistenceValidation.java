@@ -18,6 +18,8 @@ import com.example.granular.GranularStateSnapshot;
 import com.example.granular.SolidCompositionRecord;
 import com.example.granular.SolidVolume;
 import com.example.thermal.ThermalMaterialDefinition;
+import com.example.thermal.CoherentPhaseStore;
+import com.example.thermal.SignedDyadic;
 import com.example.thermal.ThermalRegistry;
 import com.example.simulation.FluidRegion;
 import com.example.simulation.FluidRegionLifecycle;
@@ -89,12 +91,18 @@ public final class FluidRegionPersistenceValidation {
 		ThermalRegistry thermal = thermalRegistry(liquids);
 		region.domain().bindThermal(thermal, liquids, 300.0);
 		region.domain().setThermalTemperatureInCell(2, 1, 2, 325.0);
+		region.domain().addCoherentPhaseExternal(3, 2, 3, "realwater:thermal/persistence_solid",
+				SolidVolume.SVQ_PER_CELL / 8L, 0.125, null, 6.25);
 		FlipThermalParticleState expected = region.domain().exportThermalParticleState();
 
 		RegionState state = RegionState.captureThermal(region, 1L);
 		state.validate();
 		assertMaterialStateEquals(region.domain().exportMaterialParticleState(), state.reconstructMaterial());
 		assertThermalStateEquals(expected, state.reconstructThermal(thermal));
+		FlipFluidDomain restoredDomain = new FlipFluidDomain(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG, 512);
+		restoredDomain.restoreMaterialParticleState(state.reconstructMaterial());
+		restoredDomain.restoreThermalParticleState(state.reconstructThermal(thermal), thermal);
+		assertThermalStateEquals(expected, restoredDomain.exportThermalParticleState());
 
 		RegionStateCodec codec = new RegionStateCodec();
 		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
@@ -106,6 +114,19 @@ public final class FluidRegionPersistenceValidation {
 					&& Arrays.equals(decoded.markerOrdinals(), section.markerOrdinals()),
 					"region-state v6 thermal section did not round-trip");
 		}
+		CoherentPhaseStore.Composition composition = new CoherentPhaseStore.Composition(List.of(
+				new CoherentPhaseStore.Component("test:a", 7L),
+				new CoherentPhaseStore.Component("test:b", 11L)), Double.doubleToRawLongBits(0.25));
+		ThermalRegionStateCodec thermalCodec = new ThermalRegionStateCodec();
+		ThermalRegionStateCodec.SectionData composed = new ThermalRegionStateCodec.SectionData(
+				new long[0], new long[0], new long[0], List.of(new ThermalRegionStateCodec.CoherentEntry(
+				3, "test:solid", 8L, Double.doubleToRawLongBits(2.0), composition,
+				Double.doubleToRawLongBits(5.0))), SignedDyadic.of(5.0));
+		ThermalRegionStateCodec.SectionData decodedComposed = thermalCodec.decodeSection(
+				thermalCodec.encodeSection(composed), 0, 0, 0);
+		require(decodedComposed.coherentGroups().equals(composed.coherentGroups())
+				&& decodedComposed.energy().equals(composed.energy()),
+				"coherent composition did not round-trip the v6 thermal section payload");
 
 		Path root = Files.createTempDirectory(Path.of("."), "thermal-v6-");
 		RegionStateFiles files = new RegionStateFiles(root, null, null, thermal);
@@ -780,6 +801,7 @@ public final class FluidRegionPersistenceValidation {
 		require(expected.particleCount() == actual.particleCount()
 				&& expected.thermalRegistryFingerprint().equals(actual.thermalRegistryFingerprint())
 				&& Arrays.equals(expected.copyInternalEnergy(), actual.copyInternalEnergy())
+				&& expected.coherentGroups().equals(actual.coherentGroups())
 				&& expected.audit().equals(actual.audit()),
 				"thermal inventory/audit changed across persistence");
 	}
@@ -791,6 +813,10 @@ public final class FluidRegionPersistenceValidation {
 					ThermalMaterialDefinition.CarrierKind.LIQUID, liquids.material(index).id(), 300.0, 0.0, 1.0,
 					List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 4_200.0))));
 		}
+		definitions.add(new ThermalMaterialDefinition("realwater:thermal/persistence_solid",
+				ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID, "realwater:solid/persistence",
+				300.0, 50.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 4_200.0))));
 		return new ThermalRegistry(definitions);
 	}
 

@@ -1137,10 +1137,34 @@ public final class FlipFluidDomain {
 		if (!state.thermalRegistryFingerprint().equals(registry.fingerprint())) {
 			throw new IllegalArgumentException("Thermal handoff registry identity mismatch");
 		}
+		validateCoherentRestoreCapacity(state.coherentGroups());
 		bindThermal(registry, materialRegistry, registry.material(
 				registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID,
 						materialRegistry.material(0).id())).referenceTemperatureK());
 		thermalState.restore(state, thermalMarkerContext());
+		refreshCoherentOccupancy();
+		gridDirty = true;
+	}
+
+	private void validateCoherentRestoreCapacity(List<CoherentPhaseStore.Group> groups) {
+		long[] occupied = new long[cellCount];
+		for (int marker = 0; marker < particleCount; marker++) {
+			int cell = particleCellIndex(marker);
+			occupied[cell] = Math.addExact(occupied[cell], SolidVolume.fromCellVolumeExact(particleVolume[marker]));
+		}
+		for (CoherentPhaseStore.Group group : groups) {
+			if (group.cell() < 0 || group.cell() >= cellCount) {
+				throw new IllegalArgumentException("Restored coherent phase cell is outside the domain");
+			}
+			occupied[group.cell()] = Math.addExact(occupied[group.cell()], group.occupiedVolumeSvq());
+		}
+		ensureGrid();
+		for (int cell = 0; cell < cellCount; cell++) {
+			long geometric = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+			if (occupied[cell] > geometric) {
+				throw new IllegalArgumentException("Restored liquid/coherent inventory exceeds exact cell capacity");
+			}
+		}
 	}
 
 	public FlipThermalParticleState exportThermalParticleState() {
