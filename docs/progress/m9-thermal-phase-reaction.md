@@ -1,4 +1,4 @@
-# M9 temperature, phase change and reaction heat
+# M9 温度、相变和反应热（已完成）
 
 ## M9.12 gas persistence prerequisite design
 
@@ -37,7 +37,8 @@
   fails closed. The v4 persistence fixture now verifies first publication plus mismatch retention under `region-state`.
 
 本文记录 M9 的增量、自动门与实机证据。正式契约见
-[`../architecture/thermal-state.md`](../architecture/thermal-state.md)。M9 开始于已验收主 Mod 0.14.0；CPU 仍是规范后端。
+[`../architecture/thermal-state.md`](../architecture/thermal-state.md)。M9 从已验收主 Mod 0.14.0 开始，于
+2026-08-25 以主 Mod 0.15.0 关闭；CPU 仍是规范后端。
 
 ## M9.0 architecture freeze
 
@@ -457,3 +458,27 @@ gas registry `41b54b…f777` 与 thermal registry `f402a2…6879`，命令查询
 `realwater` id。两版前置候选分别可恢复地保存为
 `realwater-0.15.0-pre-legacy-restore-fix.jar.disabled` 与
 `realwater-0.15.0-pre-immediate-thermal-snapshot.jar.disabled`；独立 `realwater_gpu_probe` id 不冲突。
+
+## M9.31 real-controller sign-off and milestone closure
+
+用户在真实 Minecraft 26.2 / Fabric 0.19.3 controller 世界确认最终候选的迁移与显示路径：原 v2 checkpoint 3
+保存 4.00 BV / 32.00 cells / 256 markers；执行 `/realwater regions thermalinit 272.5` 后原子发布
+v6 checkpoint 4，区域保持暂停且水体立即重新出现。随后 `status` 报告 272.50 K、
+`U=-2.76479e+09 EU`、source/sink/work 全零、coherent 0、pending-work=no、audit=closed。
+这同时证明无热真值时的视觉缺席没有删除库存，以及成功迁移后的首帧 protocol v5 快照无需额外 step。
+
+按里程碑验收层汇总：
+
+- 物理真值：thermal 与跨 M7/M8/gas 联合门保持体积、质量、组成、SVQ、gas nanos 和内能账本闭合；真实迁移前后 4.00 BV 不变。
+- 数值离散：相变 exact batch、有限体积导热、压力/PLIC/cut-face 和气液平衡门无 NaN；完整气体门保持 0.91%/6.73% 既有误差。
+- 渲染重建：用户确认 protocol v5 首帧恢复同一水体；温度/相分数仍只读，不反写物理。
+- 调度性能：motion/thermal 双轴 lifecycle、休眠与唤醒自动门通过；40/200 ms pacing 阈值未改，代表性 profile 仍是独立技术债。
+- 存档事务：v1/v2/v3/v5 显式初始化、v4/v6 严格分派、故障矩阵、世界副本 checkpoint 6→8→restart→9 与真实 v2→v6 HEAD 切换通过。
+- 网络协议：protocol v5 capability、组合层、重连/清理和初始化后立即发帧通过；exact U 不上链。
+- 游戏交互：真实 controller 跨重启与可见性通过；固定冰面 adapter 和 WAL v5 容器事务由 production fixture 覆盖，未把未执行的人工作业记为实机证据。
+- 发布资源：thermal/phase 门、registry、命令反馈、既有中英资源打包、thermal-on 专服启动、两次 clean 构建与唯一启用 Mod id 均通过；最终 JAR SHA-256 为
+  `641DAC2F8D2F4056C79F9771A87F4E1C00B6D2911DA015026C1DF896CD77D75D`。
+
+最终树的 `milestone` 再次通过全部 21 个短领域，runner 9.622 s；此前直接受影响的
+`thermal,gas-liquid,chemistry,granular,region-state,lifecycle,protocol` 完整门也已通过。未运行与本次关闭风险无关的
+soak、GPU 或额外实机场景。M9 以主 Mod 0.15.0 正式关闭；下一产品里程碑为 M10。

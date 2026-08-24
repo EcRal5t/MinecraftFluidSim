@@ -17,6 +17,7 @@
 | M7.0 守恒化学状态设计评审 | 2026-08-23 | 冻结 absolute parcel record、exact codec/fingerprint、硬预算、v3 边界和守恒验收；纯 Java core 门通过，未打开 gameplay | [`m7.0-chemistry-state-review.md`](m7.0-chemistry-state-review.md) |
 | M7 守恒化学 | 2026-08-23 | marker parcel、强电解质/中和、v3 region/protocol/WAL、化学桶、指示剂与 source/sink 审计完成；自动发布门与合并实机场景通过，主 Mod 0.13.0 | [`m7-conservative-chemistry.md`](m7-conservative-chemistry.md) |
 | M8 颗粒沉淀与低成本沉积 | 2026-08-24 | 守恒 active parcel/deposit、排水/浮力/阻力/孔隙、安息角沉积、休眠/局部唤醒、固液相转移、v5 region/protocol v4/container WAL v4 与干颗粒容器完成；双 AI 关闭审阅 finding 已修复，自动发布门和合并实机场景通过，主 Mod 0.14.0 | [`m8-granular-deposition.md`](m8-granular-deposition.md) |
+| M9 温度、相变和反应热 | 2026-08-25 | 权威内能与派生温度、有限体积导热、固定温度边界、反应热、连续固相、固液/气液相变、非等温气体、正交热休眠、gas v4/联合 v6/protocol v5/WAL v5 完成；自动发布门、世界副本跨重启和真实 controller 显式初始化/客户端恢复显示通过，主 Mod 0.15.0 | [`m9-thermal-phase-reaction.md`](m9-thermal-phase-reaction.md) |
 
 补充记录：
 

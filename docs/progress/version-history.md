@@ -52,3 +52,7 @@
 ## 0.14.0：M8 颗粒沉淀与低成本沉积
 
 - **0.14.0**：新增数据驱动颗粒 registry、守恒 active parcel/deposit inventory、浮力/阻力、moving-solid pressure source、精确排水、孔隙水、安息角沉积、休眠与局部唤醒；化学相转移保存固相 species composition。联合区域状态使用严格门控 `region-state v5`，只读颗粒展示使用 protocol v4，干颗粒玩家/发射器转移使用 container-transfer WAL v4；`/realwater empty` 可把流体、active parcel 和 deposit 作为可审计 sink 一次清空。旧 reader 与门关闭语义保持，自动发布门、专用服务器启动和客户端/controller/发射器/沉淀/重启合并实机场景均已通过。详见 [`m8-granular-deposition.md`](m8-granular-deposition.md)。
+
+## 0.15.0：M9 温度、相变和反应热
+
+- **0.15.0**：每个液体、颗粒、连续固相和密闭气体载体保存独立权威内能，温度与热容量只由 world-authoritative 分段状态函数派生；有限体积导热、固定温度世界储层、反应热、固液/气液 exact-batch 相变、非等温气体传质/压缩功及 source/sink/work 审计进入生产 logical step。新增独立 gas `region-state v4` 前置、完整联合 `region-state v6`、只读 protocol v5、`ThermalContents v1` 和 container-transfer WAL v5；旧 v1/v2/v3/v5 只经 operator 显式初温原子升级且无内能时稳定暂停。自动发布门、专服启动、真实世界副本跨 checkpoint/restart，以及真实 controller 的 v2→v6 初始化和客户端立即恢复显示均通过。详见 [`m9-thermal-phase-reaction.md`](m9-thermal-phase-reaction.md)。
