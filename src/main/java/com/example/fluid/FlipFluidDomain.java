@@ -8,6 +8,8 @@ import com.example.chemistry.ChemicalTransferLedger;
 import com.example.chemistry.ChemicalLimits;
 import com.example.fluid.air.AirNetwork;
 import com.example.fluid.air.GasInventory;
+import com.example.fluid.air.GasRegistry;
+import com.example.fluid.air.GasStateSnapshot;
 import com.example.granular.GranularCarrier;
 import com.example.granular.GranularAuditLedger;
 import com.example.granular.GranularCouplingFields;
@@ -131,7 +133,7 @@ public final class FlipFluidDomain {
 	private ChemicalParcelStore chemicalParcels;
 	private int[] chemicalPreviousCells;
 	private int[] chemicalMovingMarkers;
-	private final AirNetwork airNetwork;
+	private AirNetwork airNetwork;
 	private final AirCavityScanner airScanner;
 	private int[] airCellNodeId;
 	private int previousSealedNodeCount;
@@ -241,6 +243,68 @@ public final class FlipFluidDomain {
 
 	/** Runtime-only gas network of this domain; it is not a wire or save format. */
 	public AirNetwork airNetwork() { return airNetwork; }
+
+	/** Explicitly selects the authoritative gas registry before a first topology bootstrap. */
+	public void bindGasRegistry(GasRegistry registry) {
+		if (registry == null) throw new IllegalArgumentException("Gas registry is missing");
+		if (airCellNodeId != null || airNetwork.nodeCount() != 0 || airNetwork.drawnFromAmbientNanos() != 0L) {
+			throw new IllegalStateException("Gas registry cannot change after topology initialization");
+		}
+		airNetwork = new AirNetwork(registry);
+	}
+
+	/** Explicit v1/v2/v3-to-v4 bootstrap: scans current truth and books sealed ambient source once. */
+	public GasStateSnapshot bootstrapGasState(String chemicalRegistryFingerprint) {
+		ensureGrid();
+		refreshGasTopology();
+		return exportGasState(chemicalRegistryFingerprint);
+	}
+
+	public GasStateSnapshot exportGasState(String chemicalRegistryFingerprint) {
+		if (airCellNodeId == null) throw new IllegalStateException("Gas topology has not been explicitly initialized");
+		if (!airNetwork.auditClosed()) throw new IllegalStateException("Gas component audit does not close");
+		return GasStateSnapshot.capture(sizeX, sizeY, sizeZ, airCellNodeId, airNetwork,
+				chemicalRegistryFingerprint == null ? "" : chemicalRegistryFingerprint);
+	}
+
+	/** Restores a complete v4 gas generation after its matching liquid/material state. */
+	public void restoreGasState(GasStateSnapshot state, GasRegistry registry) {
+		if (state == null || registry == null || state.sizeX() != sizeX || state.sizeY() != sizeY || state.sizeZ() != sizeZ
+				|| !state.registryFingerprint().equals(registry.fingerprint())) {
+			throw new IllegalArgumentException("Gas restore identity/dimensions mismatch");
+		}
+		if (airCellNodeId != null || airNetwork.nodeCount() != 0) {
+			throw new IllegalStateException("Gas restore requires an uninitialized topology");
+		}
+		ensureGrid();
+		AirCavityScanner.Result result = pressureGranularCoupling == null
+				? airScanner.scan(solid, markerCount, volume, cutCells)
+				: airScanner.scan(solid, markerCount, volume, cutCells, pressureGranularCoupling);
+		int[] expected = state.cellNodeOrdinal(), actual = result.cellNodeId();
+		if (result.sealedNodeCount() != state.nodes().size()) {
+			throw new IllegalArgumentException("Restored gas sealed-node count does not match derived topology");
+		}
+		for (int cell = 0; cell < cellCount; cell++) {
+			int derived = actual[cell] > 0 ? actual[cell] : 0;
+			if (expected[cell] != derived) throw new IllegalArgumentException(
+					"Restored gas topology differs from committed membership at cell " + cell);
+		}
+		for (int node = 0; node < state.nodes().size(); node++) {
+			int minimum = Integer.MAX_VALUE;
+			for (int cell = 0; cell < expected.length; cell++) if (expected[cell] == node + 1) minimum = Math.min(minimum, cell);
+			if (minimum != state.nodes().get(node).topologyKey()) {
+				throw new IllegalArgumentException("Restored gas topology key mismatch");
+			}
+		}
+		AirNetwork restored = new AirNetwork(registry);
+		restored.restoreNodes(result.sealedAvailableVolume(), state.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
+				state.externalSource(), state.escapedSink(), state.massRoundoff(), state.residualRoundoff());
+		for (AirCavityScanner.GeometricEdge edge : result.geometricEdges()) {
+			restored.addOrMergeEdge(edge.firstNode(), edge.secondNode(), edge.areaSquareMeters(), 0.65);
+		}
+		airNetwork = restored; airCellNodeId = actual; previousSealedNodeCount = result.sealedNodeCount();
+		gasPressureActive = previousSealedNodeCount > 0;
+	}
 
 	/** True when the current grid contains at least one sealed gas cavity with finite inventory. */
 	public boolean gasPressureActive() { return gasPressureActive; }
@@ -3072,6 +3136,11 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	 * a cavity that opens to ambient or vanishes under liquid vents through the remap ledger.
 	 */
 	private void updateGasNetwork(float dt) {
+		refreshGasTopology();
+		if (gasPressureActive) airNetwork.stepEdges(dt);
+	}
+
+	private void refreshGasTopology() {
 		AirCavityScanner.Result result = pressureGranularCoupling == null
 				? airScanner.scan(solid, markerCount, volume, cutCells)
 				: airScanner.scan(solid, markerCount, volume, cutCells, pressureGranularCoupling);
@@ -3154,7 +3223,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		airCellNodeId = result.cellNodeId();
 		previousSealedNodeCount = sealed;
 		gasPressureActive = sealed > 0;
-		if (gasPressureActive) airNetwork.stepEdges(dt);
 	}
 
 	/** Gauge pressure of the sealed cavity owning an air cell; zero for ambient and inactive gas. */

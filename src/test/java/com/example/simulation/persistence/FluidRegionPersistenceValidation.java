@@ -11,6 +11,9 @@ import com.example.fluid.FluidMaterialRegistry;
 import com.example.fluid.FluidSolverConfig;
 import com.example.chemistry.BuiltinChemicalDefinitions;
 import com.example.chemistry.ChemicalRegistry;
+import com.example.fluid.air.BuiltinGasDefinitions;
+import com.example.fluid.air.GasRegistry;
+import com.example.fluid.air.GasStateSnapshot;
 import com.example.granular.BuiltinGranularDefinitions;
 import com.example.granular.GranularLimits;
 import com.example.granular.GranularRegistry;
@@ -62,6 +65,7 @@ public final class FluidRegionPersistenceValidation {
 		validateExactRoundTripAndMetadataUnload();
 		validateMaterialV2Codec();
 		validateChemicalV3Codec();
+		validateGasV4Codec();
 		validateGranularV5Codec();
 		validateThermalV6Codec();
 		validateUnknownExtensions();
@@ -274,9 +278,9 @@ public final class FluidRegionPersistenceValidation {
 		assertGranularStateEquals(auditOnlyExpected, auditOnlyRoundTrip);
 		reactiveFiles.publish(auditOnlyState);
 
-		CompoundTag reservedV4 = codec.encodeManifest(state.manifest());
-		reservedV4.putInt("Version", 4); reservedV4.putInt("Palette", 4);
-		expectIOException(() -> codec.decodeManifest(reservedV4), "reserved region-state v4 was treated as a known format");
+		CompoundTag unknownV7 = codec.encodeManifest(state.manifest());
+		unknownV7.putInt("Version", 7); unknownV7.putInt("Palette", 7);
+		expectIOException(() -> codec.decodeManifest(unknownV7), "unknown region-state v7 was treated as a known format");
 		CompoundTag missingGranular = codec.encodeSection(state.sections().getFirst());
 		missingGranular.put("Extensions", new net.minecraft.nbt.ListTag());
 		RegionSectionState unsignedMissing = codec.decodeSection(missingGranular);
@@ -285,6 +289,54 @@ public final class FluidRegionPersistenceValidation {
 		brokenSections.set(0, signedMissing);
 		expectIOException(() -> new RegionState(state.manifest(), brokenSections).validate(),
 				"v5 section missing its required granular payload was accepted");
+	}
+
+	private static void validateGasV4Codec() throws Exception {
+		FluidRegion region = populatedRegion(new UUID(33L, 34L));
+		for (int z = 0; z < region.sizeZ(); z++) for (int y = 0; y < region.sizeY(); y++) for (int x = 0; x < region.sizeX(); x++) {
+			if (x == 0 || x + 1 == region.sizeX() || y == 0 || y + 1 == region.sizeY()
+					|| z == 0 || z + 1 == region.sizeZ()) region.domain().setSolid(x, y, z, true);
+		}
+		FlipParticleState pure = region.domain().exportParticleState();
+		float[] positions = pure.copyPositionVolume();
+		double[] mass = new double[pure.particleCount()]; double totalMass = 0.0;
+		for (int marker = 0; marker < mass.length; marker++) {
+			mass[marker] = positions[marker * 4 + 3] * BuiltinFluidMaterials.WATER.referenceDensity(); totalMass += mass[marker];
+		}
+		region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
+				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(),
+				totalMass, BuiltinFluidMaterials.M3_PALETTE, positions, pure.copyParticleVelocities(), pure.copySolidMask(),
+				mass, new int[pure.particleCount()]));
+		GasRegistry gasRegistry = BuiltinGasDefinitions.createRegistry();
+		GasStateSnapshot expected = region.domain().bootstrapGasState("");
+		require(!expected.nodes().isEmpty(), "gas v4 fixture did not create a sealed node");
+		RegionState state = RegionState.captureGas(region, 1L);
+		state.validate();
+		assertMaterialStateEquals(region.domain().exportMaterialParticleState(), state.reconstructMaterial());
+		GasStateSnapshot decoded = state.reconstructGas(gasRegistry, null);
+		assertGasStateEquals(expected, decoded);
+
+		FlipFluidDomain restored = new FlipFluidDomain(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG, 512);
+		restored.restoreMaterialParticleState(state.reconstructMaterial());
+		restored.restoreGasState(decoded, gasRegistry);
+		assertGasStateEquals(expected, restored.exportGasState(""));
+
+		Path root = Files.createTempDirectory(Path.of("."), "gas-v4-");
+		RegionStateFiles files = new RegionStateFiles(root, null, null, null, gasRegistry);
+		files.publish(state);
+		assertGasStateEquals(expected, files.read(region.id()).reconstructGas(gasRegistry, null));
+		expectIOException(() -> state.reconstructGas(new GasRegistry(List.of(
+				new com.example.fluid.air.GasComponentDefinition("test:foreign", 1.0, 1.0, List.of())),
+				List.of(new GasRegistry.AmbientFraction("test:foreign", com.example.chemistry.ExactRational.ONE))), null),
+				"foreign gas registry was accepted");
+
+		RegionStateCodec outer = new RegionStateCodec();
+		CompoundTag missingGas = outer.encodeSection(state.sections().getFirst());
+		missingGas.put("Extensions", new net.minecraft.nbt.ListTag());
+		RegionSectionState signedMissing = signedSection(outer.decodeSection(missingGas));
+		List<RegionSectionState> broken = new ArrayList<>(state.sections()); broken.set(0, signedMissing);
+		expectIOException(() -> new RegionState(state.manifest(), broken).validate(),
+				"v4 section missing its required gas topology was accepted");
 	}
 
 
@@ -817,6 +869,19 @@ public final class FluidRegionPersistenceValidation {
 		require(Arrays.equals(floatBits(expected.copyParticleVelocities()), floatBits(actual.copyParticleVelocities())),
 				"marker velocity changed across persistence");
 		require(Arrays.equals(expected.copySolidMask(), actual.copySolidMask()), "solid mask changed across persistence");
+	}
+
+	private static void assertGasStateEquals(GasStateSnapshot expected, GasStateSnapshot actual) {
+		require(expected.sizeX() == actual.sizeX() && expected.sizeY() == actual.sizeY() && expected.sizeZ() == actual.sizeZ()
+				&& expected.registryFingerprint().equals(actual.registryFingerprint())
+				&& expected.chemicalRegistryFingerprint().equals(actual.chemicalRegistryFingerprint())
+				&& expected.nodes().equals(actual.nodes())
+				&& Arrays.equals(expected.cellNodeOrdinal(), actual.cellNodeOrdinal())
+				&& expected.externalSource().equals(actual.externalSource())
+				&& expected.escapedSink().equals(actual.escapedSink())
+				&& expected.massRoundoff().equals(actual.massRoundoff())
+				&& expected.residualRoundoff().equals(actual.residualRoundoff()),
+				"gas component/topology/audit changed across persistence");
 	}
 
 	private static void assertMaterialStateEquals(FlipMaterialParticleState expected, FlipMaterialParticleState actual) {

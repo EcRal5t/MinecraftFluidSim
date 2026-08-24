@@ -1,6 +1,7 @@
 package com.example.simulation.persistence;
 
 import com.example.chemistry.ChemicalRegistry;
+import com.example.fluid.air.GasRegistry;
 import com.example.granular.GranularRegistry;
 import com.example.thermal.ThermalRegistry;
 import net.minecraft.nbt.CompoundTag;
@@ -38,43 +39,58 @@ public final class RegionStateFiles {
 	private final ChemicalRegistry chemicalRegistry;
 	private final GranularRegistry granularRegistry;
 	private final ThermalRegistry thermalRegistry;
+	private final GasRegistry gasRegistry;
 
 	public RegionStateFiles(Path worldRoot) {
-		this(worldRoot, RegionStateFiles::atomicMove, null, null, null);
+		this(worldRoot, RegionStateFiles::atomicMove, null, null, null, null);
 	}
 
 	public RegionStateFiles(Path worldRoot, ChemicalRegistry chemicalRegistry) {
-		this(worldRoot, RegionStateFiles::atomicMove, chemicalRegistry, null, null);
+		this(worldRoot, RegionStateFiles::atomicMove, chemicalRegistry, null, null, null);
 	}
 
 	public RegionStateFiles(Path worldRoot, ChemicalRegistry chemicalRegistry, GranularRegistry granularRegistry) {
-		this(worldRoot, RegionStateFiles::atomicMove, chemicalRegistry, granularRegistry, null);
+		this(worldRoot, RegionStateFiles::atomicMove, chemicalRegistry, granularRegistry, null, null);
 	}
 
 	public RegionStateFiles(
 			Path worldRoot, ChemicalRegistry chemicalRegistry, GranularRegistry granularRegistry,
 			ThermalRegistry thermalRegistry
 	) {
-		this(worldRoot, RegionStateFiles::atomicMove, chemicalRegistry, granularRegistry, thermalRegistry);
+		this(worldRoot, RegionStateFiles::atomicMove, chemicalRegistry, granularRegistry, thermalRegistry, null);
+	}
+
+	public RegionStateFiles(
+			Path worldRoot, ChemicalRegistry chemicalRegistry, GranularRegistry granularRegistry,
+			ThermalRegistry thermalRegistry, GasRegistry gasRegistry
+	) {
+		this(worldRoot, RegionStateFiles::atomicMove, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry);
 	}
 
 	RegionStateFiles(Path worldRoot, AtomicMover atomicMover) {
-		this(worldRoot, atomicMover, null, null, null);
+		this(worldRoot, atomicMover, null, null, null, null);
 	}
 
 	RegionStateFiles(Path worldRoot, AtomicMover atomicMover, ChemicalRegistry chemicalRegistry) {
-		this(worldRoot, atomicMover, chemicalRegistry, null, null);
+		this(worldRoot, atomicMover, chemicalRegistry, null, null, null);
 	}
 
 	RegionStateFiles(
 			Path worldRoot, AtomicMover atomicMover, ChemicalRegistry chemicalRegistry, GranularRegistry granularRegistry
 	) {
-		this(worldRoot, atomicMover, chemicalRegistry, granularRegistry, null);
+		this(worldRoot, atomicMover, chemicalRegistry, granularRegistry, null, null);
 	}
 
 	RegionStateFiles(
 			Path worldRoot, AtomicMover atomicMover, ChemicalRegistry chemicalRegistry,
 			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry
+	) {
+		this(worldRoot, atomicMover, chemicalRegistry, granularRegistry, thermalRegistry, null);
+	}
+
+	RegionStateFiles(
+			Path worldRoot, AtomicMover atomicMover, ChemicalRegistry chemicalRegistry,
+			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry, GasRegistry gasRegistry
 	) {
 		this.root = worldRoot.toAbsolutePath().normalize().resolve("realwater").resolve("region-state");
 		this.codec = new RegionStateCodec();
@@ -82,6 +98,7 @@ public final class RegionStateFiles {
 		this.chemicalRegistry = chemicalRegistry;
 		this.granularRegistry = granularRegistry;
 		this.thermalRegistry = thermalRegistry;
+		this.gasRegistry = gasRegistry;
 	}
 
 	public long publish(RegionState state) throws IOException {
@@ -369,6 +386,14 @@ public final class RegionStateFiles {
 		else if (state.manifest().formatVersion() == 3) {
 			if (chemicalRegistry == null) throw new IOException("region-state v3 verification requires the authoritative chemical registry");
 			state.reconstructChemical(chemicalRegistry);
+		}
+		else if (state.manifest().formatVersion() == 4) {
+			if (gasRegistry == null) throw new IOException("region-state v4 verification requires the authoritative gas registry");
+			if (state.manifest().hasChemicalState()) {
+				if (chemicalRegistry == null) throw new IOException("chemical gas v4 verification requires the authoritative chemical registry");
+				state.reconstructChemical(chemicalRegistry);
+			} else state.reconstructMaterial();
+			state.reconstructGas(gasRegistry, chemicalRegistry);
 		}
 		else if (state.manifest().formatVersion() == 5) {
 			if (granularRegistry == null) throw new IOException("region-state v5 verification requires the authoritative granular registry");

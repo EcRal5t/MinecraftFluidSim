@@ -417,6 +417,38 @@ public final class AirNetwork {
 		finishMutation(before, sourceDelta, sinkDelta);
 	}
 
+	/** Restores a previously validated complete gas generation into a fresh runtime network. */
+	public void restoreNodes(
+			double[] availableVolumes, List<GasInventory> inventories,
+			GasAuditLedger source, GasAuditLedger sink,
+			SignedDyadic savedMassRoundoff, SignedDyadic savedResidualRoundoff
+	) {
+		if (!nodes.isEmpty() || !externalSource.entries().isEmpty() || !escapedSink.entries().isEmpty()) {
+			throw new IllegalStateException("Gas restore requires a fresh network");
+		}
+		if (availableVolumes.length != inventories.size() || source == null || sink == null
+				|| savedMassRoundoff == null || savedResidualRoundoff == null) {
+			throw new IllegalArgumentException("Gas restore state is incomplete");
+		}
+		for (int slot = 0; slot < availableVolumes.length; slot++) {
+			if (!(Double.isFinite(availableVolumes[slot]) && availableVolumes[slot] >= 0.0) || inventories.get(slot) == null) {
+				throw new IllegalArgumentException("Invalid restored gas node");
+			}
+		}
+		nodes.clear(); edges.clear();
+		for (int slot = 0; slot < inventories.size(); slot++) {
+			nodes.put(slot + 1, new AirNode(availableVolumes[slot], inventories.get(slot)));
+		}
+		nextNodeId = inventories.size() + 1;
+		externalSource = source; escapedSink = sink;
+		massRoundoff = savedMassRoundoff; residualRoundoff = savedResidualRoundoff;
+		if (!auditClosed()) {
+			nodes.clear(); externalSource = GasAuditLedger.EMPTY; escapedSink = GasAuditLedger.EMPTY;
+			massRoundoff = SignedDyadic.ZERO; residualRoundoff = SignedDyadic.ZERO; nextNodeId = 1;
+			throw new IllegalArgumentException("Restored gas audit does not close");
+		}
+	}
+
 	public long sealedInventoryNanos() {
 		long sum = 0L;
 		for (Map.Entry<Integer, AirNode> entry : nodes.entrySet()) sum += entry.getValue().standardVolumeNanos();

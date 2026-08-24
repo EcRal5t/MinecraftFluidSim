@@ -61,7 +61,7 @@ public record RegionSectionState(
 					|| chemicalSpeciesTotals.length != 0 || chemicalResidualLedgerBits != 0L) {
 				throw new IllegalArgumentException("region-state v1 cannot contain material state");
 			}
-		} else if (formatVersion == 2 || formatVersion == 3 || formatVersion == 5 || formatVersion == 6) {
+		} else if (formatVersion == 2 || formatVersion == 3 || formatVersion == 4 || formatVersion == 5 || formatVersion == 6) {
 			if (markerMass.length != markerOrdinals.length || materialPaletteIndex.length != markerOrdinals.length) {
 				throw new IllegalArgumentException("Section material arrays disagree");
 			}
@@ -72,7 +72,7 @@ public record RegionSectionState(
 				}
 			}
 			boolean chemicalState = formatVersion == 3
-					|| (formatVersion == 5 || formatVersion == 6) && chemicalSpeciesTotals.length > 0;
+					|| (formatVersion == 4 || formatVersion == 5 || formatVersion == 6) && chemicalSpeciesTotals.length > 0;
 			if (!chemicalState) {
 				if (chemicalMixtureIndex.length != 0 || indicator.length != 0
 						|| chemicalSpeciesTotals.length != 0 || chemicalResidualLedgerBits != 0L) {
@@ -141,7 +141,7 @@ public record RegionSectionState(
 
 	public int markerCount() { return markerOrdinals.length; }
 	public boolean hasChemicalState() {
-		return formatVersion == 3 || (formatVersion == 5 || formatVersion == 6) && chemicalSpeciesTotals.length > 0;
+		return formatVersion == 3 || (formatVersion == 4 || formatVersion == 5 || formatVersion == 6) && chemicalSpeciesTotals.length > 0;
 	}
 
 	public SectionKey key() { return new SectionKey(sectionX, sectionY, sectionZ); }

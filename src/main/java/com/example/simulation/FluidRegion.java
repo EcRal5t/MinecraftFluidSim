@@ -5,6 +5,8 @@ import com.example.fluid.FlipChemicalParticleState;
 import com.example.granular.GranularRegistry;
 import com.example.granular.GranularStateSnapshot;
 import com.example.fluid.FlipThermalParticleState;
+import com.example.fluid.air.GasRegistry;
+import com.example.fluid.air.GasStateSnapshot;
 import com.example.thermal.ThermalRegistry;
 import com.example.fluid.FlipParticleState;
 import com.example.fluid.FlipMaterialParticleState;
@@ -321,6 +323,15 @@ public final class FluidRegion {
 			throw new IllegalStateException("Granular restore requires the matching loaded material generation");
 		}
 		domain.restoreGranularState(state, registry, domain.materialRegistry());
+	}
+
+	/** Completes a v4/v6 gas restore after the matching liquid/material generation. */
+	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, long loadedCheckpointGeneration) {
+		Objects.requireNonNull(state, "state"); Objects.requireNonNull(registry, "registry");
+		if (domain == null || loadedCheckpointGeneration != checkpointGeneration || !domain.hasMaterialState()) {
+			throw new IllegalStateException("Gas restore requires the matching loaded material generation");
+		}
+		domain.restoreGasState(state, registry);
 	}
 
 	/** Completes a v6 restore after the matching liquid/material generation has been reconstructed. */

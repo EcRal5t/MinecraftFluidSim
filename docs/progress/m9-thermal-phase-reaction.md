@@ -19,6 +19,16 @@
 - Added a two-component/species fixture to the existing `air-network` gate. `air-network`, `air-cavity`, and the full
   53-second `gas-liquid` fixture passed; the latter retained 0.91% compression-head and 6.73% suction-head error.
 
+## M9.14 complete gas `region-state v4`
+
+- Added strict outer v4 dispatch and required typed gas manifest/section payloads. The manifest saves canonical node keys,
+  complete component inventories, source/sink and dyadic roundoff audit; every section saves full sealed-membership cells.
+- Capture/reconstruction recomputes section cardinalities, minimum-cell topology keys and the four-column audit. Fresh-domain
+  restore rebuilds cavity geometry, requires exact per-cell topology equality, then derives available volume/edges before
+  binding inventory. Foreign gas identity, missing payload or topology disagreement fails closed.
+- The existing `region-state` selector now covers v4 codec, atomic publish/read, registry mismatch, missing section payload
+  and live-domain restore; it passed with all v1/v2/v3/v5/v6 compatibility fixtures unchanged.
+
 本文记录 M9 的增量、自动门与实机证据。正式契约见
 [`../architecture/thermal-state.md`](../architecture/thermal-state.md)。M9 开始于已验收主 Mod 0.14.0；CPU 仍是规范后端。
 
