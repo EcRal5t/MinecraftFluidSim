@@ -171,3 +171,44 @@ non-empty coherent v6。M8 active/deposit 与 gas energy ordinals 仍显式拒�
 所有算术在修改前检查 finite/预算。扩展唯一 `thermal` 场景验证跨 active/deposit 的 split/merge/move 后，剩余库存与
 移出能量用 `SignedDyadic` 精确回和。最近门：`thermal` 通过。此提交只建立正交 owner，尚未解除 domain 对
 granular+thermal 同时绑定的拒绝。
+
+## M9.10 granular joint energy integration
+
+`FlipThermalState` 把 M8 active parcel 与 deposit 作为 LTE carrier 接入同一 cell grid；domain 的 insert、碰撞、
+deposit/wake/move/merge、clear 和固液 reaction 路径都同步预检并提交正交 `U`。沉淀/溶解保持参与库存总能量，
+formation offset 由状态函数自然产生反应温升，失败时 M7/M8/thermal 三侧均不暴露部分修改。
+
+最近门：`thermal,granular,chemistry` 通过；未请求实机。
+
+## M9.11 authoritative gas v4 prerequisite
+
+冻结并实现独立 `region-state v4` 气体基态：canonical cavity topology、逐稳定组分 nanos/mass/species/residual、
+source/sink audit 与 world-authoritative `GasRegistryStore v1`。恢复必须先从已提交几何重扫并逐格匹配，未知、损坏、
+registry identity 或 section membership 失配均保留并 LOCKED；v4 不含 M8/M9 字段，也不占用 v5/v6 语义。
+
+最近门：`region-state,gas-liquid` 通过。
+
+## M9.12 non-isothermal gas energy
+
+气体节点增加正交总 `U`，温度、压力与密度由组分、可用体积和状态函数派生。拓扑 split/merge 同步分配能量；
+有限孔流携带源侧焓；无传质体积变化使用常 `cv` 理想混合物解析绝热功并写 mechanical-work ledger。
+旧 M5 等温路径在 thermal 未绑定时保持不变。
+
+最近门：`thermal,air-network,gas-liquid` 通过。
+
+## M9.13 complete gas + thermal region-state v6
+
+v6 现在要求同代完整 gas v4 topology/inventory 与每个 sealed node 的 raw `U` ordinal；即使零节点也必须存在 typed
+gas/thermal payload。capture、codec、inactive-slot 回读和 domain restore 都联合验证 material、可选 chemistry/granular、
+gas registry、thermal registry、拓扑 ordinal、可用体积派生状态及 exact audit，之后才允许发布 HEAD。
+
+最近门：`thermal,region-state` 通过。
+
+## M9.14 sealed liquid/gas phase transfer
+
+新增液气界面相变模型：Clausius--Clapeyron 饱和压由两侧 state-function latent enthalpy 与 exact gas batch 体积推导；
+water vapor 作为非 ambient 稳定气体组分。沸腾/冷凝每次只提交完整 transition batch，联合移动液体 SVQ/mass、
+gas nanos/mass 与 `U`，并以精确全局余量反求 LTE cell energy。液体体积改变后立即重建空腔可用体积，膨胀/压缩功
+在同一次逻辑操作返回前进入 mechanical-work ledger；无 receiver、容量、组分或状态函数有效解时不提交。
+
+最近门：`thermal` 与完整 `gas-liquid` 通过；未请求实机。

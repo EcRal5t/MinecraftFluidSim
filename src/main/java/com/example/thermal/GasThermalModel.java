@@ -23,12 +23,6 @@ public final class GasThermalModel {
 		if (thermalRegistry == null || gasRegistry == null) throw new IllegalArgumentException("Gas thermal registries are missing");
 		this.thermalRegistry = thermalRegistry; this.gasRegistry = gasRegistry;
 		this.stateFunction = new ThermalStateFunction(thermalRegistry);
-		for (var component : gasRegistry.components()) {
-			int handle = thermalRegistry.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS, component.id());
-			if (thermalRegistry.material(handle).carrierKind() != ThermalMaterialDefinition.CarrierKind.GAS) {
-				throw new IllegalArgumentException("Gas component has a non-gas thermal carrier " + component.id());
-			}
-		}
 	}
 
 	public double internalEnergyAtTemperature(GasInventory inventory, double temperatureK) {

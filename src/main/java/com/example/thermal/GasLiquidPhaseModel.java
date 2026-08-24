@@ -1,0 +1,124 @@
+package com.example.thermal;
+
+import com.example.fluid.air.AirNetwork;
+import com.example.fluid.air.GasComponentAmount;
+import com.example.fluid.air.GasComponentDefinition;
+import com.example.fluid.air.GasInventory;
+import com.example.fluid.air.GasRegistry;
+import com.example.granular.SolidVolume;
+
+import java.util.List;
+import java.util.Map;
+
+/** Pure ideal-mixture saturation and exact-batch creation functions for liquid/gas transitions. */
+public final class GasLiquidPhaseModel {
+	public enum Direction { BOIL, CONDENSE, EQUILIBRIUM }
+	public record Saturation(double saturationPressurePa, double componentPartialPressurePa, Direction direction) { }
+
+	private final ThermalRegistry thermalRegistry;
+	private final GasRegistry gasRegistry;
+	private final ThermalStateFunction stateFunction;
+
+	public GasLiquidPhaseModel(ThermalRegistry thermalRegistry, GasRegistry gasRegistry) {
+		if (thermalRegistry == null || gasRegistry == null) {
+			throw new IllegalArgumentException("Liquid/gas phase registries are missing");
+		}
+		this.thermalRegistry = thermalRegistry; this.gasRegistry = gasRegistry;
+		this.stateFunction = new ThermalStateFunction(thermalRegistry);
+	}
+
+	public Saturation saturation(
+			ThermalPhaseTransition transition, double liquidTemperatureK,
+			GasInventory gasInventory, double absolutePressurePa
+	) {
+		PhasePair pair = requirePair(transition);
+		if (!(Double.isFinite(absolutePressurePa) && absolutePressurePa > 0.0)
+				|| absolutePressurePa < transition.minimumPressurePa()
+				|| absolutePressurePa > transition.maximumPressurePa()) {
+			throw new IllegalArgumentException("Gas/liquid phase pressure is outside the transition model");
+		}
+		pair.liquid().specificHeatAt(liquidTemperatureK);
+		double exponent = -pair.latentEnthalpyPerMass() / pair.gasConstantPerMass()
+				* (1.0 / liquidTemperatureK - 1.0 / transition.equilibriumTemperatureK());
+		double saturation = GasRegistry.STANDARD_PRESSURE_PA * Math.exp(exponent);
+		if (!(Double.isFinite(saturation) && saturation > 0.0)) {
+			throw new IllegalArgumentException("Saturation pressure is outside the phase model");
+		}
+		GasComponentAmount component = gasInventory.component(pair.gas().carrierId());
+		double partial = component == null ? 0.0
+				: absolutePressurePa * ((double) component.standardVolumeNanos() / gasInventory.standardVolumeNanos());
+		Direction direction = saturation > partial ? Direction.BOIL
+				: saturation < partial ? Direction.CONDENSE : Direction.EQUILIBRIUM;
+		return new Saturation(saturation, partial, direction);
+	}
+
+	/** Creates a gas-side batch with exact phase mass and stable standard-volume nanos. */
+	public GasInventory gasBatch(ThermalPhaseTransition transition, long batches) {
+		if (batches <= 0L || batches > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
+			throw new IllegalArgumentException("Gas phase batch count is invalid");
+		}
+		PhasePair pair = requirePair(transition);
+		double mass = transition.massMuPerBatch().multiply(batches).toDouble();
+		GasComponentDefinition component = gasRegistry.component(pair.gas().carrierId());
+		double standardVolume = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV
+				* GasRegistry.STANDARD_TEMPERATURE_K / transition.equilibriumTemperatureK() * batches;
+		long nanos = AirNetwork.nanos(standardVolume);
+		if (nanos <= 0L || Math.abs(AirNetwork.cubicMeters(nanos) - standardVolume) > 0.5E-9) {
+			throw new IllegalArgumentException("Gas phase batch is not representable in standard-volume nanos");
+		}
+		return new GasInventory(List.of(new GasComponentAmount(component.id(), nanos, mass, List.of(), mass)));
+	}
+
+	public double internalEnergyAtTemperature(
+			ThermalPhaseTransition transition, GasInventory gasBatch, double temperatureK
+	) {
+		PhasePair pair = requirePair(transition);
+		GasComponentAmount component = gasBatch.component(pair.gas().carrierId());
+		if (component == null || gasBatch.components().size() != 1) {
+			throw new IllegalArgumentException("Gas phase energy batch has the wrong component");
+		}
+		int handle = thermalRegistry.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS, component.componentId());
+		return stateFunction.internalEnergyAtTemperature(handle, component.mass(), Map.of(), temperatureK);
+	}
+
+	private PhasePair requirePair(ThermalPhaseTransition transition) {
+		if (transition == null || transition.interfaceRequirement()
+				!= ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS) {
+			throw new IllegalArgumentException("Transition is not a liquid/gas interface transition");
+		}
+		ThermalMaterialDefinition liquid = thermalRegistry.material(
+				thermalRegistry.materialHandle(transition.lowerEnergyMaterialId()));
+		ThermalMaterialDefinition gas = thermalRegistry.material(
+				thermalRegistry.materialHandle(transition.upperEnergyMaterialId()));
+		if (liquid.carrierKind() != ThermalMaterialDefinition.CarrierKind.LIQUID
+				|| gas.carrierKind() != ThermalMaterialDefinition.CarrierKind.GAS
+				|| !gasRegistry.hasComponent(gas.carrierId())) {
+			throw new IllegalArgumentException("Liquid/gas transition carrier kinds are invalid");
+		}
+		double mass = transition.massMuPerBatch().toDouble();
+		gasRegistry.component(gas.carrierId());
+		double gasVolume = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV
+				* GasRegistry.STANDARD_TEMPERATURE_K / transition.equilibriumTemperatureK();
+		double liquidVolume = (double) transition.lowerVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV;
+		int liquidHandle = thermalRegistry.materialHandle(transition.lowerEnergyMaterialId());
+		int gasHandle = thermalRegistry.materialHandle(transition.upperEnergyMaterialId());
+		double liquidU = stateFunction.internalEnergyAtTemperature(
+				liquidHandle, mass, Map.of(), transition.equilibriumTemperatureK());
+		double gasU = stateFunction.internalEnergyAtTemperature(
+				gasHandle, mass, Map.of(), transition.equilibriumTemperatureK());
+		double latentEnthalpy = (gasU - liquidU + GasRegistry.STANDARD_PRESSURE_PA
+				* (gasVolume - liquidVolume)) / mass;
+		double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * gasVolume
+				/ (mass * GasRegistry.STANDARD_TEMPERATURE_K);
+		if (!(Double.isFinite(latentEnthalpy) && latentEnthalpy > 0.0
+				&& Double.isFinite(gasConstant) && gasConstant > 0.0)) {
+			throw new IllegalArgumentException("Liquid/gas transition has an invalid latent state function");
+		}
+		return new PhasePair(liquid, gas, latentEnthalpy, gasConstant);
+	}
+
+	private record PhasePair(
+			ThermalMaterialDefinition liquid, ThermalMaterialDefinition gas,
+			double latentEnthalpyPerMass, double gasConstantPerMass
+	) { }
+}

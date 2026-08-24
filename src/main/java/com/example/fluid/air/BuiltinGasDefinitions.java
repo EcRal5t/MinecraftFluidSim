@@ -7,12 +7,19 @@ import java.util.List;
 /** Built-in M5-compatible gas registry. */
 public final class BuiltinGasDefinitions {
 	public static final String AIR = "realwater:air";
+	public static final String WATER_VAPOR = "realwater:water_vapor";
+	/** Ideal water-vapor density at the frozen gas standard state, derived from p=rho*R*T. */
+	public static final double WATER_VAPOR_STANDARD_DENSITY = GasRegistry.STANDARD_PRESSURE_PA
+			/ (461.52 * GasRegistry.STANDARD_TEMPERATURE_K);
 
 	private BuiltinGasDefinitions() { }
 
 	public static GasRegistry createRegistry() {
 		return new GasRegistry(
-				List.of(new GasComponentDefinition(AIR, AirNetwork.AIR_DENSITY, AirNetwork.AIR_DENSITY, List.of())),
+				List.of(
+						new GasComponentDefinition(AIR, AirNetwork.AIR_DENSITY, AirNetwork.AIR_DENSITY, List.of()),
+						new GasComponentDefinition(WATER_VAPOR, WATER_VAPOR_STANDARD_DENSITY,
+								WATER_VAPOR_STANDARD_DENSITY, List.of())),
 				List.of(new GasRegistry.AmbientFraction(AIR, ExactRational.ONE)));
 	}
 }

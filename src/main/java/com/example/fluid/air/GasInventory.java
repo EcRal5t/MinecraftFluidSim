@@ -34,6 +34,10 @@ public final class GasInventory {
 	public List<GasComponentAmount> components() { return components; }
 	public long standardVolumeNanos() { return standardVolumeNanos; }
 	public boolean isEmpty() { return components.isEmpty(); }
+	public GasComponentAmount component(String componentId) {
+		for (GasComponentAmount component : components) if (component.componentId().equals(componentId)) return component;
+		return null;
+	}
 
 	public GasInventory merge(GasInventory other) {
 		if (other.isEmpty()) return this;
@@ -65,6 +69,23 @@ public final class GasInventory {
 			if (parts[1] != null) second.add(parts[1]);
 		}
 		return new Split(new GasInventory(first), new GasInventory(second));
+	}
+
+	/** Selects an exact nanos portion of one stable component, leaving every other component untouched. */
+	public Split splitComponent(String componentId, long selectedNanos) {
+		GasComponentAmount selected = component(componentId);
+		if (selected == null || selectedNanos < 0L || selectedNanos > selected.standardVolumeNanos()) {
+			throw new IllegalArgumentException("Gas component split is outside the inventory");
+		}
+		if (selectedNanos == 0L) return new Split(EMPTY, this);
+		GasComponentAmount[] portions = splitComponent(selected,
+				new long[] {selectedNanos, selected.standardVolumeNanos() - selectedNanos});
+		ArrayList<GasComponentAmount> remainder = new ArrayList<>(components.size());
+		for (GasComponentAmount component : components) {
+			if (!component.componentId().equals(componentId)) remainder.add(component);
+			else if (portions[1] != null) remainder.add(portions[1]);
+		}
+		return new Split(new GasInventory(List.of(portions[0])), new GasInventory(remainder));
 	}
 
 	/** Partitions every component by non-negative topology weights. */

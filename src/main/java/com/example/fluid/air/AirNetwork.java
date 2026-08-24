@@ -103,6 +103,33 @@ public final class AirNetwork {
 	/** Creates an ambient inventory without mutating this network; used by topology planning. */
 	public GasInventory ambientInventory(long standardVolumeNanos) { return registry.createAmbient(standardVolumeNanos); }
 
+	/** Preview for an exact phase-boundary take; no gas or ledger state is changed. */
+	public GasInventory.Split previewComponentTake(int nodeId, String componentId, long standardVolumeNanos) {
+		return sealed(nodeId).inventory().splitComponent(componentId, standardVolumeNanos);
+	}
+
+	/** Books material entering the gas owner from another phase and merges all independent columns. */
+	public void commitPhaseSource(int nodeId, GasInventory addition) {
+		if (addition == null || addition.isEmpty()) throw new IllegalArgumentException("Gas phase source is empty");
+		AirNode node = sealed(nodeId); MassColumns before = liveMassColumns();
+		node.setInventory(node.inventory().merge(addition));
+		finishMutation(before, addition, GasInventory.EMPTY);
+	}
+
+	/** Books material leaving the gas owner into another phase after an exact preview. */
+	public void commitPhaseSink(int nodeId, GasInventory expectedRemoval) {
+		if (expectedRemoval == null || expectedRemoval.components().size() != 1) {
+			throw new IllegalArgumentException("Gas phase sink must name one component portion");
+		}
+		GasComponentAmount component = expectedRemoval.components().getFirst();
+		AirNode node = sealed(nodeId);
+		GasInventory.Split split = node.inventory().splitComponent(
+				component.componentId(), component.standardVolumeNanos());
+		if (!split.first().equals(expectedRemoval)) throw new IllegalStateException("Gas phase sink preview changed");
+		MassColumns before = liveMassColumns(); node.setInventory(split.second());
+		finishMutation(before, GasInventory.EMPTY, split.first());
+	}
+
 	/**
 	 * Explicitly injects or removes inventory (developer presets and tests). Increases are
 	 * booked as drawn from ambient and decreases as vented, keeping the ledger identity exact.

@@ -7,6 +7,7 @@ import com.example.fluid.air.AirNetwork;
 import com.example.fluid.air.GasInventory;
 import com.example.fluid.air.GasRegistry;
 import com.example.thermal.GasThermalModel;
+import com.example.thermal.GasLiquidPhaseModel;
 import com.example.thermal.CoherentPhaseStore;
 import com.example.thermal.GranularEnergyColumn;
 import com.example.thermal.SignedDyadic;
@@ -189,8 +190,14 @@ final class FlipThermalState {
 			granularEnergy.addDeposit(key, modeledGranularEnergy(key.materialHandle(), key.compositionHandle(),
 					markers.depositMass(key), initialTemperatureK, markers));
 		}
-		boolean supportsGas = airNetwork != null && airNetwork.registry().components().stream().allMatch(
-				component -> registry.hasMaterial(ThermalMaterialDefinition.CarrierKind.GAS, component.id()));
+		boolean supportsGas = airNetwork != null;
+		if (supportsGas) for (GasRegistry.AmbientFraction fraction : airNetwork.registry().ambient()) {
+			if (!registry.hasMaterial(ThermalMaterialDefinition.CarrierKind.GAS, fraction.componentId())) supportsGas = false;
+		}
+		if (supportsGas) for (int node = 1; node <= airNetwork.nodeCount(); node++) {
+			for (var component : airNetwork.inventory(node).components()) if (!registry.hasMaterial(
+					ThermalMaterialDefinition.CarrierKind.GAS, component.componentId())) supportsGas = false;
+		}
 		if (supportsGas) {
 			this.gasModel = new GasThermalModel(registry, airNetwork.registry());
 			this.gasNodeEnergy = new double[airNetwork.nodeCount()];
@@ -214,6 +221,10 @@ final class FlipThermalState {
 	GranularEnergyColumn granularEnergy() { return granularEnergy; }
 	ThermalRegistry registry() { return registry; }
 	ThermalPhaseChangeEngine phaseChange() { return phaseChange; }
+	GasLiquidPhaseModel gasLiquidPhase(AirNetwork network) {
+		if (gasModel == null) throw new IllegalStateException("Gas thermal model is not bound");
+		return new GasLiquidPhaseModel(registry, network.registry());
+	}
 	double liquidInternalEnergy(int marker) { return internalEnergy[marker]; }
 	ThermalTransport.Stats lastTransport() { return lastTransport; }
 	double totalEnergy(int count) {
@@ -300,6 +311,31 @@ final class FlipThermalState {
 	double gasDensity(int nodeId, AirNetwork network) {
 		requireGasNode(nodeId, network);
 		return gasModel.density(network.inventory(nodeId), network.availableVolume(nodeId));
+	}
+
+	void requireGasNodeState(int nodeId, GasInventory inventory, double energy, AirNetwork network) {
+		requireGasNode(nodeId, network);
+		gasModel.absolutePressure(inventory, network.availableVolume(nodeId), energy);
+	}
+
+	void commitGasNodeEnergy(int nodeId, double energy) {
+		if (nodeId <= 0 || nodeId > gasNodeEnergy.length || !Double.isFinite(energy)) {
+			throw new IllegalArgumentException("Gas phase energy commit is invalid");
+		}
+		gasNodeEnergy[nodeId - 1] = energy;
+	}
+
+	void requireInertLiquidState(int fluidHandle, double mass, double energy) {
+		if (fluidHandle < 0 || fluidHandle >= materialByFluidHandle.length) {
+			throw new IllegalArgumentException("Unknown liquid phase carrier");
+		}
+		if (mass == 0.0) {
+			if (Math.abs(energy) > Math.max(1.0E-9, Math.ulp(energy) * 16.0)) {
+				throw new IllegalArgumentException("Empty liquid phase retains internal energy");
+			}
+			return;
+		}
+		stateFunction.stateForInternalEnergy(materialByFluidHandle[fluidHandle], mass, Map.of(), energy);
 	}
 
 	double[] partitionGasNodeEnergy(int nodeId, List<GasInventory> children, AirNetwork network) {
@@ -579,6 +615,29 @@ final class FlipThermalState {
 		cellGrid.rebuild(carrierAccess(markers));
 		double[] target = cellGrid.copyInternalEnergy();
 		target[cell] = targetEnergy;
+		cellGrid.setCellInternalEnergies(target);
+		audit = audit.withRoundoff(exactEnergy(markers.markerCount()).subtract(inventoryBefore));
+	}
+
+	/**
+	 * Closes an inventory-preserving structural commit by assigning the exact pre-commit remainder to one cell.
+	 * Gas and non-target carrier energy are already authoritative when this is called; the cell remains the LTE
+	 * degree of freedom. This avoids losing a physically meaningful amount through rounded local-energy arithmetic.
+	 */
+	void repartitionCellEnergyConserving(int cell, MarkerContext markers, SignedDyadic inventoryBefore) {
+		ThermalCellGrid.CarrierAccess current = carrierAccess(markers);
+		SignedDyadic currentCellEnergy = SignedDyadic.ZERO;
+		for (int carrier = 0; carrier < current.carrierCount(); carrier++) if (current.cell(carrier) == cell) {
+			currentCellEnergy = currentCellEnergy.add(SignedDyadic.of(current.internalEnergy(carrier)));
+		}
+		SignedDyadic energyOutsideCell = exactEnergy(markers.markerCount()).subtract(currentCellEnergy);
+		double targetCellEnergy = inventoryBefore.subtract(energyOutsideCell).toDouble();
+		if (!Double.isFinite(targetCellEnergy)) {
+			throw new IllegalArgumentException("Conservative thermal cell remainder is not representable");
+		}
+		cellGrid.rebuild(current);
+		double[] target = cellGrid.copyInternalEnergy();
+		target[cell] = targetCellEnergy;
 		cellGrid.setCellInternalEnergies(target);
 		audit = audit.withRoundoff(exactEnergy(markers.markerCount()).subtract(inventoryBefore));
 	}

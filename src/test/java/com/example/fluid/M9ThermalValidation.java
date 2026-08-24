@@ -15,9 +15,11 @@ import com.example.granular.GranularRegistry;
 import com.example.granular.GranularTransferLedger;
 import com.example.fluid.air.AirNetwork;
 import com.example.fluid.air.BuiltinGasDefinitions;
+import com.example.fluid.air.GasComponentAmount;
 import com.example.fluid.air.GasInventory;
 import com.example.fluid.air.GasRegistry;
 import com.example.thermal.GasThermalModel;
+import com.example.thermal.GasLiquidPhaseModel;
 import com.example.thermal.SignedDyadic;
 import com.example.thermal.GranularEnergyColumn;
 import com.example.thermal.CoherentPhaseStore;
@@ -48,7 +50,9 @@ public final class M9ThermalValidation {
 		worldRegistrySnapshotIsAuthoritative();
 		piecewiseStateFunctionRoundTrips();
 		gasStateCompressionAndCarrierEnergy();
+		gasLiquidSaturationAndExactBatch();
 		gasRuntimeTransfersEnergyAndWork();
+		sealedInterfaceBoilingCommitsJointInventory();
 		reactionHeatIsPathIndependentStateEnergy();
 		reactionCommitValidatesEnergyBeforeMutation();
 		granularReactionHeatUsesOneConservedCellEnergy();
@@ -152,6 +156,41 @@ public final class M9ThermalValidation {
 				"ambient gas outflow did not book carried enthalpy as an external sink");
 	}
 
+	private static void gasLiquidSaturationAndExactBatch() {
+		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
+		ThermalMaterialDefinition liquid = new ThermalMaterialDefinition("test:thermal/liquid_water",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, "test:water", 373.15, 0.0, 0.6,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4_180.0)));
+		ThermalMaterialDefinition vapor = new ThermalMaterialDefinition("test:thermal/water_vapor",
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.WATER_VAPOR,
+				373.15, 2_256_000.0, 0.025,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 1_410.0)));
+		long gasSvq = Math.round((0.001 / BuiltinGasDefinitions.WATER_VAPOR_STANDARD_DENSITY)
+				* 373.15 / GasRegistry.STANDARD_TEMPERATURE_K * SolidVolume.SVQ_PER_BV);
+		ThermalPhaseTransition transition = new ThermalPhaseTransition("test:boil",
+				liquid.id(), vapor.id(), 373.15, 134L, gasSvq, ExactRational.parse("1/1000"),
+				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 10_000.0, 2_000_000.0);
+		GasLiquidPhaseModel model = new GasLiquidPhaseModel(
+				new ThermalRegistry(List.of(liquid, vapor), List.of(), List.of(transition), "", ""), gas);
+		GasInventory batch = model.gasBatch(transition, 1L);
+		GasLiquidPhaseModel.Saturation equilibrium = model.saturation(
+				transition, 373.15, batch, GasRegistry.STANDARD_PRESSURE_PA);
+		require(close(equilibrium.saturationPressurePa(), GasRegistry.STANDARD_PRESSURE_PA)
+				&& equilibrium.direction() == GasLiquidPhaseModel.Direction.EQUILIBRIUM
+				&& model.saturation(transition, 383.15, batch,
+				GasRegistry.STANDARD_PRESSURE_PA).direction() == GasLiquidPhaseModel.Direction.BOIL
+				&& model.saturation(transition, 363.15, batch,
+				GasRegistry.STANDARD_PRESSURE_PA).direction() == GasLiquidPhaseModel.Direction.CONDENSE,
+				"Clausius-Clapeyron saturation did not select the physical phase direction");
+		AirNetwork network = new AirNetwork(gas); int node = network.addNode(1.0, 1.0);
+		network.commitPhaseSource(node, batch);
+		GasInventory.Split take = network.previewComponentTake(node,
+				BuiltinGasDefinitions.WATER_VAPOR, batch.standardVolumeNanos());
+		network.commitPhaseSink(node, take.first());
+		require(take.first().equals(batch) && network.auditClosed(),
+				"gas phase batch did not preserve component/mass/residual ledgers");
+	}
+
 	private static AirNetwork.NodeThermodynamics thermodynamics(
 			FlipThermalState thermal, AirNetwork network
 	) {
@@ -176,6 +215,78 @@ public final class M9ThermalValidation {
 			@Override public ChemicalMixtureRecord mixture(int marker) { throw new IllegalArgumentException(); }
 			@Override public ChemicalRegistry chemicalRegistry() { return null; }
 		};
+	}
+
+	private static void sealedInterfaceBoilingCommitsJointInventory() {
+		FluidMaterial waterCarrier = FluidMaterial.withSurfaceTension(
+				"test:boiling_water", 1.0, "test:miscible", 0.0, 90.0);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(waterCarrier));
+		ThermalMaterialDefinition water = new ThermalMaterialDefinition("test:thermal/boiling_water",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, waterCarrier.id(), 373.15, 0.0, 0.6,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 4_180.0)));
+		ThermalMaterialDefinition air = new ThermalMaterialDefinition("test:thermal/boiling_air",
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR, 373.15, 0.0, 0.025,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 718.0)));
+		ThermalMaterialDefinition vapor = new ThermalMaterialDefinition("test:thermal/boiling_vapor",
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.WATER_VAPOR,
+				373.15, 2_256_000.0, 0.025,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 1_410.0)));
+		long liquidSvq = SolidVolume.SVQ_PER_CELL / 200L;
+		long vaporSvq = liquidSvq * 1_000L;
+		ThermalPhaseTransition boiling = new ThermalPhaseTransition("test:phase/boiling_water",
+				water.id(), vapor.id(), 373.15, liquidSvq, vaporSvq, ExactRational.parse("0.01"),
+				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 10_000.0, 3_000_000.0);
+		ThermalRegistry thermal = new ThermalRegistry(
+				List.of(water, air, vapor), List.of(), List.of(boiling), "", "");
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 512);
+		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
+			if (x == 0 || x == 3 || y == 0 || y == 3 || z == 0 || z == 3) domain.setSolid(x, y, z, true);
+		}
+		domain.setVolume(1, 1, 1, 1.0F);
+		domain.bindThermal(thermal, liquids, 500.0);
+		require(domain.airNetwork().nodeCount() == 1, "boiling fixture did not form one sealed receiver");
+		double liquidMassBefore = domain.totalMass();
+		long gasNanosBefore = domain.airNetwork().standardVolumeNanos(1);
+		SignedDyadic energyBefore = domain.exactInternalEnergy();
+		ThermalAuditLedger auditBefore = domain.thermalAudit();
+		FlipFluidDomain.GasThermalPhaseStats stats = domain.stepInertGasPhaseChangeOnly(1);
+		GasComponentAmount vaporAmount = domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
+		require(stats.operations() == 1 && stats.boiledCells() == 1 && stats.condensedCells() == 0
+				&& close(domain.totalMass(), liquidMassBefore - 0.01)
+				&& vaporAmount != null && close(vaporAmount.mass(), 0.01)
+				&& domain.airNetwork().standardVolumeNanos(1) > gasNanosBefore
+				&& domain.airNetwork().auditClosed()
+				&& domain.thermalAudit().mechanicalWork().compareTo(auditBefore.mechanicalWork()) < 0
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"sealed boiling did not jointly conserve liquid/gas mass, volume and energy truth: stats=" + stats
+						+ " liquidMass=" + domain.totalMass() + "/" + liquidMassBefore
+						+ " vapor=" + vaporAmount + " nanos=" + domain.airNetwork().standardVolumeNanos(1)
+						+ "/" + gasNanosBefore + " deltaU="
+						+ domain.exactInternalEnergy().subtract(energyBefore));
+		domain.setThermalTemperatureInCell(1, 1, 1, 300.0);
+		SignedDyadic beforeCondensation = domain.exactInternalEnergy();
+		ThermalAuditLedger auditBeforeCondensation = domain.thermalAudit();
+		FlipThermalParticleState beforeCondensationState = domain.exportThermalParticleState();
+		FlipFluidDomain.GasThermalPhaseStats condensed = domain.stepInertGasPhaseChangeOnly(1);
+		require(condensed.operations() == 1 && condensed.boiledCells() == 0 && condensed.condensedCells() == 1
+				&& close(domain.totalMass(), liquidMassBefore)
+				&& domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR) == null
+				&& domain.airNetwork().standardVolumeNanos(1) == gasNanosBefore
+				&& domain.airNetwork().auditClosed()
+				&& domain.thermalAudit().mechanicalWork().compareTo(
+						auditBeforeCondensation.mechanicalWork()) > 0
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"sealed condensation did not reverse the exact gas batch with conserved energy: stats=" + condensed
+						+ " mass=" + domain.totalMass() + " vapor="
+						+ domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR)
+						+ " nanos=" + domain.airNetwork().standardVolumeNanos(1) + "/" + gasNanosBefore
+						+ " deltaU=" + domain.exactInternalEnergy().subtract(beforeCondensation)
+						+ " gas=" + java.util.Arrays.toString(beforeCondensationState.copyGasNodeEnergy()) + "->"
+						+ java.util.Arrays.toString(domain.exportThermalParticleState().copyGasNodeEnergy())
+						+ " liquid=" + SignedDyadic.sum(beforeCondensationState.copyInternalEnergy()) + "->"
+						+ SignedDyadic.sum(domain.exportThermalParticleState().copyInternalEnergy()));
 	}
 
 	private static void definitionAndCanonicalRegistry() {
