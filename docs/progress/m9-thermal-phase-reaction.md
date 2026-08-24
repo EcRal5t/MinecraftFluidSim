@@ -241,3 +241,13 @@ fraction/debug flags 与有界 gas node 温压，不发送 raw `U`、source/sink
 只读 frame，不改变服务端状态或默认材质颜色。
 
 最近门：`protocol` 通过；默认 9,216-cell、含 v4+v3 组合层的 v5 payload 保持在 512 KiB 硬门内。
+
+## M9.18 orthogonal thermal activity core
+
+新增独立 `ThermalActivity`，不扩张 `FluidRegionLifecycle` 的 motion enum，也不修改 40/200 ms wall-time 阈值。
+transport 现在报告实际 substep 中最大可表示能量传递；只有连续 quiet steps 内该值与 reservoir exchange 均为零，
+且 chemistry/granular/phase/gas/pending work 全部 clean、audit 正常，才从 ACTIVE 经 REDUCED 进入 SLEEP。
+boundary、container、admin、chemistry、granular、gas 或 phase 事件显式唤醒；PAUSED 保留可读失败原因。
+
+最近门：`thermal` 通过，并证明 motion 已处于 `HYDROSTATIC_SLEEP` 时 thermal 轴仍可 step。production region/service
+持有与事件接线在后续增量完成。

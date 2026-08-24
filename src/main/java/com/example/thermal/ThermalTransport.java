@@ -29,7 +29,13 @@ public final class ThermalTransport {
 	}
 
 	public record Stats(int substeps, int evaluatedFaces, double maximumTemperatureChangeK,
-	                    SignedDyadic roundoffResidual, SignedDyadic reservoirExchange) { }
+	                    double maximumAbsoluteTransferEu,
+	                    SignedDyadic roundoffResidual, SignedDyadic reservoirExchange) {
+		public Stats(int substeps, int evaluatedFaces, double maximumTemperatureChangeK,
+		             SignedDyadic roundoffResidual, SignedDyadic reservoirExchange) {
+			this(substeps, evaluatedFaces, maximumTemperatureChangeK, 0.0, roundoffResidual, reservoirExchange);
+		}
+	}
 
 	private final int sizeX, sizeY, sizeZ;
 	private final double cellSizeMeters;
@@ -99,17 +105,20 @@ public final class ThermalTransport {
 		}
 		double substepDt = logicalDtSeconds / substeps;
 		SignedDyadic[] reservoirExchange = {SignedDyadic.ZERO};
+		double[] maximumAbsoluteTransfer = {0.0};
 		for (int step = 0; step < substeps; step++) {
 			Arrays.fill(deltaEnergy, 0.0);
 			forEachFace(grid, faceArea, (first, second, conductance) -> {
 				double transfer = conductance * (grid.temperature(second) - grid.temperature(first)) * substepDt;
 				if (!Double.isFinite(transfer)) throw new IllegalArgumentException("Thermal face transfer is not finite");
+				maximumAbsoluteTransfer[0] = Math.max(maximumAbsoluteTransfer[0], Math.abs(transfer));
 				deltaEnergy[first] += transfer;
 				deltaEnergy[second] -= transfer;
 			});
 			forEachBoundary(grid, boundaryFace, (cell, conductance, surfaceTemperature) -> {
 				double transfer = conductance * (surfaceTemperature - grid.temperature(cell)) * substepDt;
 				if (!Double.isFinite(transfer)) throw new IllegalArgumentException("Thermal reservoir transfer is not finite");
+				maximumAbsoluteTransfer[0] = Math.max(maximumAbsoluteTransfer[0], Math.abs(transfer));
 				deltaEnergy[cell] += transfer;
 				reservoirExchange[0] = reservoirExchange[0].add(SignedDyadic.of(transfer));
 			});
@@ -122,7 +131,8 @@ public final class ThermalTransport {
 			maximumChange = Math.max(maximumChange, Math.abs(grid.temperature(cell) - initialTemperature[cell]));
 		}
 		SignedDyadic residual = inventory(grid).subtract(before).subtract(reservoirExchange[0]);
-		return new Stats(substeps, evaluatedFaces, maximumChange, residual, reservoirExchange[0]);
+		return new Stats(substeps, evaluatedFaces, maximumChange, maximumAbsoluteTransfer[0],
+				residual, reservoirExchange[0]);
 	}
 
 	private int forEachBoundary(ThermalCellGrid grid, BoundaryFace boundaryFace, BoundaryConsumer consumer) {

@@ -34,6 +34,8 @@ import com.example.thermal.ThermalRegistryStore;
 import com.example.thermal.ThermalSpeciesOffset;
 import com.example.thermal.ThermalStateFunction;
 import com.example.thermal.ThermalTransport;
+import com.example.simulation.ThermalActivity;
+import com.example.simulation.FluidRegionLifecycle;
 
 import java.io.StringReader;
 import java.util.List;
@@ -53,6 +55,7 @@ public final class M9ThermalValidation {
 		gasLiquidSaturationAndExactBatch();
 		gasRuntimeTransfersEnergyAndWork();
 		sealedInterfaceBoilingCommitsJointInventory();
+		thermalSleepIsOrthogonalToMotion();
 		reactionHeatIsPathIndependentStateEnergy();
 		reactionCommitValidatesEnergyBeforeMutation();
 		granularReactionHeatUsesOneConservedCellEnergy();
@@ -64,6 +67,35 @@ public final class M9ThermalValidation {
 		fixedBoundaryAuditsAndFailedStepRollsBack();
 		reseedingMovesEnergyWithMarkerTruth();
 		System.out.println("M9 thermal validation passed");
+	}
+
+	private static void thermalSleepIsOrthogonalToMotion() {
+		ThermalActivity activity = new ThermalActivity();
+		ThermalTransport.Stats quiet = new ThermalTransport.Stats(
+				1, 0, 0.0, 0.0, SignedDyadic.ZERO, SignedDyadic.ZERO);
+		ThermalActivity.Observation observation = new ThermalActivity.Observation(
+				quiet, false, false, false, false, false, true);
+		require(!activity.observe(observation, 3) && activity.state() == ThermalActivity.State.REDUCED,
+				"first quiet thermal step did not enter reduced activity");
+		require(!activity.observe(observation, 3) && activity.canStep(),
+				"thermal activity slept before its quiet-step budget");
+		require(activity.observe(observation, 3) && activity.state() == ThermalActivity.State.SLEEP
+				&& !activity.canStep(), "thermal activity did not enter conservative sleep");
+		activity.wake(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
+		require(activity.state() == ThermalActivity.State.ACTIVE && activity.canStep(),
+				"thermal boundary event did not wake thermal scheduling");
+		ThermalTransport.Stats flux = new ThermalTransport.Stats(
+				1, 1, 0.0, Math.ulp(1.0), SignedDyadic.ZERO, SignedDyadic.ZERO);
+		activity.observe(new ThermalActivity.Observation(
+				flux, false, false, false, false, false, true), 3);
+		require(activity.state() == ThermalActivity.State.ACTIVE && activity.quietSteps() == 0,
+				"representable heat transfer was treated as quiet");
+
+		FluidRegionLifecycle motion = new FluidRegionLifecycle();
+		motion.setOperatorPaused(false, 1);
+		for (int step = 0; step < 3; step++) motion.observeCompletedStep(true, 3);
+		require(motion.state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP && !motion.canStep()
+				&& activity.canStep(), "motion sleep incorrectly disabled the independent thermal axis");
 	}
 
 	private static void gasStateCompressionAndCarrierEnergy() {
