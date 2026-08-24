@@ -242,6 +242,12 @@ ledger rebuild。`FlipFluidDomain` 只编排；registry、库存、mechanics、d
 任何 gate、registry、identity、checksum、generation 或 actor durable-save 歧义都保留状态/WAL 并 LOCKED；不能按
 当前数据包、reference density、tooltip 或显示字段修复。
 
+区域级 operator 清空复用 `/realwater empty`：先拒绝任何未完成或不可识别的 container-transfer WAL，再清除液体、
+active granular parcel 和 deposit group。被移除的全部固体按 stable material/composition 聚合进 `escapedSink`，exact SVQ、
+raw mass 和 solid species 分账不变；每个 runtime composition handle 恰好释放一次，显示/耦合/dirty queue 同步清空。
+controller 区域必须在反馈成功前以同一完整 `region-state v5` generation 发布 HEAD；checkpoint 失败则暂停区域并保留
+上一权威代次。该操作不删除 region/controller，也不把一键清空伪装成容器转移。
+
 ## 硬预算
 
 | 项目 | 上限 |

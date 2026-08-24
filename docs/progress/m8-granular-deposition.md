@@ -224,8 +224,8 @@ skeleton，并在命令反馈中明确标作 creative/debug 外部源；反应�
   `3B5ADB61833DC210D7B437A4119CB4B79E0181B7A67FCDA3C2C588E6CDF26EE2`；同一 Mod id 只有这一份启用，
   旧 `realwater-0.13.0.jar` 已可恢复地改名为 `.disabled`。独立只读 GPU probe 保持 0.1.16。
 
-M8 尚不在完成索引中：最后只等待一个真实 controller 合并场景确认客户端颗粒可见性、玩家/发射器干容器事务、
-反应沉淀和正常重启后的 v5 恢复。通过后再关闭路线图 M8 并将 0.14.0 从实机候选记为已验收基线。
+M8.10 发布时尚不在完成索引中：当时只等待一个真实 controller 合并场景确认客户端颗粒可见性、玩家/发射器干容器
+事务、反应沉淀和正常重启后的 v5 恢复；最终关闭结果见 M8.15。
 
 ## M8.11 实机候选沉淀崩溃修正（2026-08-24）
 
@@ -319,3 +319,27 @@ M8 尚不在完成索引中：最后只等待一个真实 controller 合并场�
   `Done` 并经 `stop` 正常保存。新实机候选 SHA-256 为
   `79F517F4697559BA24D7A176AEBDA01F2F605D6F5CE6CED5E19837F9FA179E56`；上一局部拥塞候选以
   `realwater-0.14.0-pre-settlement-morphology-fix.jar.disabled` 可恢复保留，同一主 Mod id 只有一个启用 JAR。
+
+## M8.15 实机验收、区域清空与里程碑关闭（2026-08-24）
+
+- 用户复验 M8.14 后确认一桶细沙的投放、沉降与最终沉积形态符合预期。此前同一真实 controller 场景已确认客户端
+  active/deposit 可见性、玩家与发射器 v4 容器事务及逐物质数量、反应沉淀和正常重启后的 v5 恢复；M8 唯一剩余
+  人工观察门至此关闭。
+- `/realwater empty` 现在清除所选区域的全部液体、active granular parcel 与 deposit group。固体删除前按 stable
+  material/composition 捕获完整 exact SVQ、raw mass 和 species，追加到 escaped sink；所有 composition ownership
+  恰好释放一次，deposit dirty/local-wake 与客户端 display 状态同步归零。controller 区域在同一 v5 checkpoint 发布
+  HEAD 后才报告成功；存在未完成或不可识别的 container-transfer WAL 时在任何库存修改前拒绝。
+- 颗粒完整门通过（2.897 秒），覆盖单桶完全沉积、两桶 active/deposit 混合清空、source/sink 闭合、reactive solid
+  composition 释放与清空后 v5 snapshot；`containers,region-state` 完整门分别通过（1.385/2.178 秒）。提交为
+  `f3359ca`，没有新增 selector、Gradle task 或常态化测试进程。
+- 关闭用 `milestone` 的 20 个短域全部通过，runner 合计 10.624 秒。JDK 26.0.2 下执行
+  `clean assemble compileTestJava --offline --no-daemon` 成功（20 秒）；根 `:runServer` 以 Java 25 target 加载
+  Minecraft 26.2、Fabric Loader 0.19.3 与 realwater 0.14.0 到 `Done`，再经 `stop` 正常保存。
+- 最终 JAR 已部署为 `realwater-0.14.0.jar`，SHA-256 为
+  `0AAF771EFFECDA363441D8D7FB0A62B58120178C04A2E3913318D97472A01314`；实机验收版保留为
+  `realwater-0.14.0-pre-region-empty.jar.disabled`。mods 目录同一主 Mod id 只有一个启用 JAR，独立只读 GPU probe
+  仍为 0.1.16。
+
+M8 以主 Mod 0.14.0 完成：低成本模型同时满足守恒、形态、持久化、协议、容器事务、调度和实机可读性门，未触发
+MPM 停止门。下一产品阶段为 M9；CPU profile/GPU backend、气体 region-state v4 与黑三角视觉 fixture 仍按独立
+技术债推进，不混回 M8。

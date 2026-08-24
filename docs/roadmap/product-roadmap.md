@@ -1,8 +1,8 @@
 # Real Water 产品路线
 
-本文是尚未完成里程碑的总表。当前基线已经完成 M0、M1、M2、M2.5、M3、M4、M5、M6 和 M7；完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md)、[`../architecture/region-state-v1.md`](../architecture/region-state-v1.md)、[`../architecture/m3-material-state-migration.md`](../architecture/m3-material-state-migration.md)、[`../architecture/world-ownership-and-containers.md`](../architecture/world-ownership-and-containers.md) 与 [`../architecture/chemistry-state.md`](../architecture/chemistry-state.md)。
+本文是尚未完成里程碑的总表。当前基线已经完成 M0、M1、M2、M2.5、M3、M4、M5、M6、M7 和 M8；完成证据见 [`../progress/README.md`](../progress/README.md)，当前系统契约见 [`../architecture/fluid-solver.md`](../architecture/fluid-solver.md)、[`../architecture/region-state-v1.md`](../architecture/region-state-v1.md)、[`../architecture/m3-material-state-migration.md`](../architecture/m3-material-state-migration.md)、[`../architecture/world-ownership-and-containers.md`](../architecture/world-ownership-and-containers.md)、[`../architecture/chemistry-state.md`](../architecture/chemistry-state.md) 与 [`../architecture/granular-state.md`](../architecture/granular-state.md)。
 
-基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、已验收主 Mod 0.13.0、当前 M8 实机候选 0.14.0、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
+基线：Minecraft Java 26.2、Fabric Loader 0.19.3、Fabric API 0.157.0+26.2、已验收主 Mod 0.14.0、Java 25。活动求解器仍是 `FlipFluidDomain`，CPU 是规范后端。
 
 ## 技术规格路由
 
@@ -24,7 +24,7 @@
 
 - **1.0 能力线**：M3 多液体/可变密度、M4 表面张力/润湿与 M5 密闭气体网络及气液压力均已完成；范围仍是控制器或开发命令圈定的有界区域。
 - **2.0 集成线**：M6 ownership 评审、真实世界流体桥和容器已完成；后续仍不得跳过显式边界、事务恢复门或开放世界规模评审。
-- M7 化学已在 2.0 集成线上完成；M8 颗粒、M9 热力学和 M10 原版/其他 Mod API 继续逐项加入。
+- M7 化学与 M8 颗粒已在 2.0 集成线上完成；M9 热力学和 M10 原版/其他 Mod API 继续逐项加入。
 - 版本号按实际验收门决定，不随开发次数自然表示成熟度。
 
 ## 长期产品目标
@@ -95,15 +95,14 @@ M7 已以主 Mod 0.13.0 闭合：marker parcel、strong-electrolyte reaction、v
 [`../progress/m7-conservative-chemistry.md`](../progress/m7-conservative-chemistry.md)。后续阶段不得把气相化学、沉淀或热状态
 回填进 M7 v3。
 
-## M8：颗粒沉淀与低成本沉积
+## M8：颗粒沉淀与低成本沉积（已完成）
 
-- 数据驱动颗粒材料、浮力/阻力、孔隙和精确排水。
-- 安息角、沉积休眠、反应沉淀与局部唤醒。
-- 低成本模型不能满足守恒/形态门时才评审 MPM，不预建完整框架。
-- M8.0 已冻结活动 parcel + 守恒 deposit cell、二进制 SVQ、moving-solid pressure source、孔隙水与局部唤醒
-  边界；现行设计见 [`../architecture/granular-state.md`](../architecture/granular-state.md)，推进证据见
-  [`../progress/m8-granular-deposition.md`](../progress/m8-granular-deposition.md)。颗粒联合持久化使用
-  `region-state v5`，不占用气体状态的独立 v4 评审，也不回填 v3。
+M8 已以主 Mod 0.14.0 闭合：守恒 active parcel/deposit、统一排水与压力、浮力/阻力、孔隙水、安息角、休眠与
+局部唤醒、固液相转移、v5 region-state、protocol v4 和 container-transfer WAL v4 均进入生产路径；低成本模型
+通过自动守恒/形态门与合并实机场景，无需启动 MPM 评审。现行契约见
+[`../architecture/granular-state.md`](../architecture/granular-state.md)，验收记录见
+[`../progress/m8-granular-deposition.md`](../progress/m8-granular-deposition.md)。后续不得把 M9 热状态或 runtime-only
+气体状态回填进 v5。
 
 ## M9：温度、相变和反应热
 
@@ -134,6 +133,8 @@ M7 已以主 Mod 0.13.0 闭合：marker parcel、strong-electrolyte reaction、v
 
 ## 接下来三项
 
-1. M8 颗粒沉淀：先冻结颗粒库存、排水与沉积休眠边界，再选择低成本模型；不预建完整 MPM。
-2. 气体状态进存档前先做 region-state v4 格式迁移评审；当前 runtime-only 重建语义保持不变。
-3. 液液界面锐化/逐顶点平滑与 CPU/GPU 后端切换分别进入专项量化；不得用渲染修补或调度放宽掩盖物理/性能问题。
+1. M9 温度、相变和反应热：实现前先冻结内能/热容真值、温度派生、能量 source/sink、相变顺序、休眠和跨层版本边界。
+2. 先做代表性 CPU wall-time profile，分别量化 solver、世界交互与 readback；占比未知前不改 40/200 ms 阈值，再评审生产 GPU backend。
+3. 气体 runtime-only 状态进存档前单独评审 region-state v4；当前重建语义保持不变。
+
+开放/密闭域的液面黑三角继续作为独立视觉债建立最小 fixture；液液锐化和逐顶点法线平滑分别评估，不得用渲染补丁掩盖 marker 或相输运问题。
