@@ -267,3 +267,13 @@ ownership recovery 也使用相同 registries 验证 HEAD。v1/v2/v3/v5 在 ther
 扩展既有 `region-state` 场景，覆盖 production coordinator 的 v6 checkpoint/reload、thermal-off 锁定以及旧 v2 不自动赋温。
 最近门：`thermal,region-state,ownership,protocol` 通过；尚未完成显式旧世界初始化命令、production v5 snapshot body、
 container transfer service、phase/dual-sleep tick 编排。
+
+## M9.20 production protocol v5 snapshots
+
+thermal-enabled service 现在在握手选择 v5 后实际发送 `FluidThermalSnapshotPayload`，不再回落到 v4/v3/v2 body。
+solver 通过一次 LTE rebuild 生成只读量化 frame：每格 1/16 K 温度、coherent occupied fraction/debug flags，以及每个
+canonical sealed gas node 的 1/16 K 温度和 10 Pa gauge pressure；empty cell 使用保留码。service 让内嵌 v3 或 v4 层
+复用同一个 v2 material identity/sequence，并补齐 per-region removal 与 clear-all v5 tombstone。raw `U`、audit、exact
+phase inventory 和 gas component truth 均未进入协议。
+
+最近门：`thermal,protocol` 通过；默认材质仍不按温度改色，accepted thermal frame 只为 debug/后续展示服务。

@@ -60,8 +60,8 @@
 | takeover codec/files | `src/main/java/com/example/simulation/TakeoverJournalCodec.java`、`src/main/java/com/example/simulation/TakeoverJournalFiles.java` | v1 可读；未知/损坏/恢复失败锁住新 takeover |
 | 指令 transcript | `src/main/java/com/example/logging/RealWaterCommandLog.java`、`src/main/java/com/example/logging/CommandAuditFile.java` | 只做 UTF-8 观测；失败不得改变命令结果 |
 | protocol/session | `src/main/java/com/example/network/FluidProtocol.java`、`src/main/java/com/example/network/FluidProtocolServer.java` | live offer 由 thermal/granular/chemistry/materials 门决定严格 v5/v4/v3/v2/v1 及必需 capability；不做降级伪装 |
-| 多区域快照 | `FluidSnapshotPayload`/`Ledger`、`FluidMaterialSnapshotPayload`/`Ledger`、`FluidChemicalSnapshotPayload`/`Ledger`、`FluidGranularSnapshotPayload`/`Ledger` | v1/v2/v3/v4 type 独立；dimension/id/generation/sequence/palette/fingerprint/tombstone 一致；v3/v4 exact inventory 不上链 |
-| 客户端水面与颗粒展示 | `src/client/java/com/example/client/ClientFluidVolumeRenderer.java` | 每域按当前维度合并；各协议状态/ledger/清理互相独立；v4 deposit surface 与 active sample 只读，不得反写物理 |
+| 多区域快照 | `FluidSnapshotPayload`/`Ledger`、`FluidMaterialSnapshotPayload`/`Ledger`、`FluidChemicalSnapshotPayload`/`Ledger`、`FluidGranularSnapshotPayload`/`Ledger`、`FluidThermalSnapshotPayload`/`Ledger` | v1/v2/v3/v4/v5 type 独立；dimension/id/generation/sequence/palette/fingerprint/tombstone 一致；v3/v4/v5 exact inventory 不上链 |
+| 客户端水面、颗粒与热展示 | `src/client/java/com/example/client/ClientFluidVolumeRenderer.java` | 每域按当前维度合并；各协议状态/ledger/清理互相独立；v4 deposit/active 与 v5 temperature/coherent/gas frame 只读，不得反写物理 |
 | 客户端握手与绑定 | `src/client/java/com/example/client/RealWaterModClient.java` | configuration/play 注册、断线与重配置清理成套 |
 
 详细的 M2.5 数值定义只在 [`../progress/m2.5-fluid-foundation.md`](../progress/m2.5-fluid-foundation.md) 保存；M3 材料/界面的验收结果与已量化限制只在 [`../progress/m3-multi-fluid.md`](../progress/m3-multi-fluid.md) 保存。

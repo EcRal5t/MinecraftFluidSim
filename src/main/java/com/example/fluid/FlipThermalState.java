@@ -18,6 +18,7 @@ import com.example.thermal.ThermalMaterialDefinition;
 import com.example.thermal.ThermalPhaseChangeEngine;
 import com.example.thermal.ThermalRegistry;
 import com.example.thermal.ThermalStateFunction;
+import com.example.thermal.ThermalDisplaySnapshot;
 import com.example.thermal.ThermalTransport;
 
 import java.util.Arrays;
@@ -530,6 +531,40 @@ final class FlipThermalState {
 	double temperatureInCell(int cell, MarkerContext markers) {
 		cellGrid.rebuild(carrierAccess(markers));
 		return cellGrid.occupied(cell) ? cellGrid.temperature(cell) : Double.NaN;
+	}
+
+	ThermalDisplaySnapshot displaySnapshot(MarkerContext markers, AirNetwork network) {
+		cellGrid.rebuild(carrierAccess(markers));
+		short[] temperatures = new short[cellGrid.cellCount()];
+		byte[] coherent = new byte[cellGrid.cellCount()];
+		byte[] flags = new byte[cellGrid.cellCount()];
+		java.util.Arrays.fill(temperatures, (short) ThermalDisplaySnapshot.EMPTY_TEMPERATURE_Q);
+		for (int cell = 0; cell < cellGrid.cellCount(); cell++) {
+			if (cellGrid.occupied(cell)) {
+				temperatures[cell] = (short) quantizedTemperature(cellGrid.temperature(cell));
+				flags[cell] |= ThermalDisplaySnapshot.FLAG_CONDENSED;
+			}
+			long solid = coherentPhases.cellOccupiedSvq(cell);
+			if (solid > 0L) {
+				coherent[cell] = (byte) Math.min(255L,
+						(solid * 255L + com.example.granular.SolidVolume.SVQ_PER_CELL / 2L)
+								/ com.example.granular.SolidVolume.SVQ_PER_CELL);
+				flags[cell] |= ThermalDisplaySnapshot.FLAG_COHERENT;
+			}
+		}
+		java.util.ArrayList<ThermalDisplaySnapshot.GasNode> gas = new java.util.ArrayList<>(network.nodeCount());
+		for (int node : network.nodeIds()) gas.add(new ThermalDisplaySnapshot.GasNode(node,
+				quantizedTemperature(gasTemperature(node, network)),
+				Math.toIntExact(Math.round(gasGaugePressure(node, network) / 10.0))));
+		return new ThermalDisplaySnapshot(temperatures, coherent, flags, gas);
+	}
+
+	private static int quantizedTemperature(double temperatureK) {
+		long quantized = Math.round(temperatureK * 16.0);
+		if (quantized <= 0L || quantized >= ThermalDisplaySnapshot.EMPTY_TEMPERATURE_Q) {
+			throw new IllegalArgumentException("Thermal display temperature is outside the v5 palette");
+		}
+		return Math.toIntExact(quantized);
 	}
 
 	void setTemperatureInCell(int cell, double temperatureK, MarkerContext markers) {

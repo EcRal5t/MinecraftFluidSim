@@ -26,6 +26,7 @@ import com.example.thermal.CoherentPhaseStore;
 import com.example.thermal.ThermalBoundaryDefinition;
 import com.example.thermal.ThermalAuditLedger;
 import com.example.thermal.ThermalDefinitionCodec;
+import com.example.thermal.ThermalDisplaySnapshot;
 import com.example.thermal.ThermalMaterialDefinition;
 import com.example.thermal.ThermalPhaseTransition;
 import com.example.thermal.ThermalPhaseChangeEngine;
@@ -279,6 +280,14 @@ public final class M9ThermalValidation {
 		domain.setVolume(1, 1, 1, 1.0F);
 		domain.bindThermal(thermal, liquids, 500.0);
 		require(domain.airNetwork().nodeCount() == 1, "boiling fixture did not form one sealed receiver");
+		ThermalDisplaySnapshot display = domain.copyThermalDisplaySnapshot();
+		int liquidCell = (1 * 4 + 1) * 4 + 1;
+		require(display.cellTemperatureQ().length == 64
+				&& Short.toUnsignedInt(display.cellTemperatureQ()[liquidCell]) == 500 * 16
+				&& (display.debugFlags()[liquidCell] & ThermalDisplaySnapshot.FLAG_CONDENSED) != 0
+				&& Byte.toUnsignedInt(display.coherentFraction()[liquidCell]) == 0
+				&& display.gasNodes().size() == 1 && display.gasNodes().getFirst().nodeId() == 1,
+				"thermal v5 display did not derive quantized condensed/gas state in one rebuild");
 		double liquidMassBefore = domain.totalMass();
 		long gasNanosBefore = domain.airNetwork().standardVolumeNanos(1);
 		SignedDyadic energyBefore = domain.exactInternalEnergy();

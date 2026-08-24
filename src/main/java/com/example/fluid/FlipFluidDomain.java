@@ -40,6 +40,7 @@ import com.example.thermal.ThermalPhaseChangeEngine;
 import com.example.thermal.ThermalPhaseTransition;
 import com.example.thermal.ThermalRegistry;
 import com.example.thermal.ThermalTransport;
+import com.example.thermal.ThermalDisplaySnapshot;
 
 import java.util.ArrayList;
 import java.util.ArrayDeque;
@@ -1308,6 +1309,11 @@ public final class FlipFluidDomain {
 	public double thermalTemperatureInCell(int x, int y, int z) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		return thermalState.temperatureInCell(cellIndexChecked(x, y, z), thermalMarkerContext());
+	}
+
+	public ThermalDisplaySnapshot copyThermalDisplaySnapshot() {
+		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		return thermalState.displaySnapshot(thermalMarkerContext(), airNetwork);
 	}
 
 	/** Explicit external coherent inventory insertion used before the phase planner owns liquid/solid conversion. */
