@@ -60,7 +60,7 @@ public final class GasLiquidPhaseModel {
 		return gasBatch(transition, batches, Map.of(), mass);
 	}
 
-	/** Creates a phase batch carrying the caller's already-conserved stable species/residual columns. */
+	/** Creates a phase batch carrying already-conserved species and a physical-kilogram mass residual. */
 	public GasInventory gasBatch(
 			ThermalPhaseTransition transition, long batches,
 			Map<String, Long> speciesQuanta, double massResidual
@@ -88,6 +88,10 @@ public final class GasLiquidPhaseModel {
 			if (entry.getKey() == null || entry.getValue() == null || entry.getValue() <= 0L) {
 				throw new IllegalArgumentException("Gas phase species amount is invalid");
 			}
+			if (!component.allowsSpecies(entry.getKey())) {
+				throw new IllegalArgumentException("Gas phase component " + component.id()
+						+ " does not allow species " + entry.getKey());
+			}
 			canonical.merge(entry.getKey(), entry.getValue(), Math::addExact);
 		}
 		return new GasInventory(List.of(new GasComponentAmount(component.id(), nanos, mass,
@@ -104,7 +108,11 @@ public final class GasLiquidPhaseModel {
 			throw new IllegalArgumentException("Gas phase energy batch has the wrong component");
 		}
 		int handle = thermalRegistry.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS, component.componentId());
-		return stateFunction.internalEnergyAtTemperature(handle, component.mass(), Map.of(), temperatureK);
+		TreeMap<String, Long> species = new TreeMap<>();
+		for (GasComponentAmount.SpeciesAmount amount : component.species()) {
+			species.put(amount.speciesId(), amount.amountQuanta());
+		}
+		return stateFunction.internalEnergyAtTemperature(handle, component.mass(), species, temperatureK);
 	}
 
 	private PhasePair requirePair(ThermalPhaseTransition transition) {

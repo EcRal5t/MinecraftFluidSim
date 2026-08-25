@@ -1704,7 +1704,7 @@ public final class FlipFluidDomain {
 					cell, liquidHandle, gasThermalHandle, removedSvq, removedMass);
 			GasInventory batch = chemicalParcels == null ? phase.gasBatch(transition, batches)
 					: phase.gasBatch(transition, batches, removal.movedComposition().amounts(),
-							removal.movedComposition().massResidual());
+							condensedMassScale.signedKilograms(removal.movedComposition().massResidual()));
 			double batchEnergy = phase.internalEnergyAtTemperature(transition, batch, liquidTemperature);
 			double candidateLiquidTemperature = thermalState.requirePhaseCandidateState(cell,
 					liquidInventoryAfterRemoval(cell, liquidHandle, removal.allocations()),
@@ -1788,9 +1788,9 @@ public final class FlipFluidDomain {
 			GasComponentAmount proportionalMoved = proportionalTake.first().components().getFirst();
 			double requestedResidual = requestedBatch.components().getFirst().massResidual();
 			if (chemicalParcels != null) {
-				requestedResidual = condensedMassScale.solverMassWeight(requestedMass)
-						- PhaseComposition.fromGas(proportionalMoved)
-								.exactSpeciesMass(chemicalParcels.registry()).toDouble();
+				requestedResidual = requestedMass - condensedMassScale.kilograms(
+						PhaseComposition.fromGas(proportionalMoved, condensedMassScale)
+								.exactSpeciesMass(chemicalParcels.registry()).toDouble());
 			}
 			GasInventory.Split take;
 			try {
@@ -1819,7 +1819,7 @@ public final class FlipFluidDomain {
 			for (int marker = 0; marker < particleCount; marker++) if (particleCellIndex(marker) == cell
 					&& particleMaterialHandle[marker] == liquidHandle
 					&& (chemicalParcels == null || !chemicalParcels.indicator(marker))) { target = marker; break; }
-			PhaseComposition movedComposition = PhaseComposition.fromGas(moved);
+			PhaseComposition movedComposition = PhaseComposition.fromGas(moved, condensedMassScale);
 			ChemicalMixtureRecord condensedMixture = null;
 			if (chemicalParcels != null) {
 				if (movedComposition.isEmpty()) {
@@ -2212,6 +2212,8 @@ public final class FlipFluidDomain {
 		ArrayList<PhaseMarkerAllocation> allocations = new ArrayList<>();
 		PhaseCompositionBuilder moved = new PhaseCompositionBuilder();
 		SignedDyadic movedEnergy = SignedDyadic.ZERO;
+		var gasComponent = airNetwork.registry().component(
+				thermalState.registry().material(gasThermalHandle).carrierId());
 		long remainingSvq = requestedSvq;
 		double remainingMass = requestedMass;
 		double cellTemperature = thermalState.temperatureInCell(cell, thermalMarkerContext());
@@ -2227,7 +2229,10 @@ public final class FlipFluidDomain {
 				boolean nonVolatile = false;
 				for (String species : chemicalParcels.record(marker).stableAmounts(
 						chemicalParcels.registry()).keySet()) {
-					if (thermalState.registry().hasSpeciesOffset(gasThermalHandle, species)) movedSpecies.add(species);
+					if (gasComponent.allowsSpecies(species)
+							&& thermalState.registry().hasSpeciesOffset(gasThermalHandle, species)) {
+						movedSpecies.add(species);
+					}
 					else nonVolatile = true;
 				}
 				if (movedSpecies.isEmpty()) continue;
@@ -2504,14 +2509,18 @@ public final class FlipFluidDomain {
 			return new PhaseComposition(mixture.stableAmounts(registry), mixture.massResidual());
 		}
 
-		private static PhaseComposition fromGas(GasComponentAmount component) {
-			if (component == null) throw new IllegalArgumentException("Gas phase composition is missing");
+		private static PhaseComposition fromGas(
+				GasComponentAmount component, CondensedMassScale condensedMassScale
+		) {
+			if (component == null || condensedMassScale == null) {
+				throw new IllegalArgumentException("Gas phase composition or mass scale is missing");
+			}
 			TreeMap<String, Long> amounts = new TreeMap<>();
 			for (GasComponentAmount.SpeciesAmount amount : component.species()) {
 				amounts.put(amount.speciesId(), amount.amountQuanta());
 			}
-			return amounts.isEmpty() && component.massResidual() == 0.0 ? EMPTY
-					: new PhaseComposition(amounts, component.massResidual());
+			double residual = condensedMassScale.signedSolverMassWeight(component.massResidual());
+			return amounts.isEmpty() && residual == 0.0 ? EMPTY : new PhaseComposition(amounts, residual);
 		}
 
 		private ExactRational exactSpeciesMass(ChemicalRegistry registry) {

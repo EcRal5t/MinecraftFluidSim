@@ -358,12 +358,22 @@ public final class M9ThermalValidation {
 		ThermalPhaseTransition transition = new ThermalPhaseTransition("test:boil",
 				liquid.id(), vapor.id(), 373.15, 134L, gasSvq, ExactRational.parse("1/1000"),
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 10_000.0, 2_000_000.0);
-		GasLiquidPhaseModel model = new GasLiquidPhaseModel(
-				new ThermalRegistry(List.of(liquid, vapor), List.of(), List.of(transition), "", ""), gas);
+		ThermalSpeciesOffset vaporSpecies = new ThermalSpeciesOffset("test:offset/vapor_h2o",
+				BuiltinChemicalDefinitions.H2O, vapor.id(), ExactRational.parse("-250"));
+		ThermalRegistry thermal = new ThermalRegistry(List.of(liquid, vapor), List.of(vaporSpecies),
+				List.of(transition), BuiltinChemicalDefinitions.REGISTRY.fingerprint(), "");
+		GasLiquidPhaseModel model = new GasLiquidPhaseModel(thermal, gas);
 		GasInventory batch = model.gasBatch(transition, 1L);
 		require(model.gasBatch(transition, 3L).standardVolumeNanos()
 				== Math.multiplyExact(3L, batch.standardVolumeNanos()),
 				"multi-batch gas nanos did not compose from the canonical minimum quantum");
+		GasInventory speciesBatch = model.gasBatch(transition, 1L,
+				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU), 0.0005);
+		double expectedSpeciesEnergy = new ThermalStateFunction(thermal).internalEnergyAtTemperature(
+				thermal.materialHandle(vapor.id()), 0.001,
+				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU), 373.15);
+		require(close(model.internalEnergyAtTemperature(transition, speciesBatch, 373.15), expectedSpeciesEnergy),
+				"gas phase energy omitted component-local species state energy");
 		GasLiquidPhaseModel.Saturation equilibrium = model.saturation(
 				transition, 373.15, batch, GasRegistry.STANDARD_PRESSURE_PA);
 		require(close(equilibrium.saturationPressurePa(), GasRegistry.STANDARD_PRESSURE_PA)
@@ -572,6 +582,7 @@ public final class M9ThermalValidation {
 		domain.step(true, 2);
 		GasComponentAmount gas = domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
 		FlipChemicalParticleState boiled = domain.exportChemicalParticleState();
+		CondensedMassScale massScale = CondensedMassScale.forCellSize(config.cellSize());
 		long gasH2o = gas.species().stream().filter(amount -> amount.speciesId().equals(
 				BuiltinChemicalDefinitions.H2O)).mapToLong(GasComponentAmount.SpeciesAmount::amountQuanta).sum();
 		long gasSodium = gas.species().stream().filter(amount -> amount.speciesId().equals(
@@ -579,7 +590,9 @@ public final class M9ThermalValidation {
 		require(domain.lastGasThermalPhaseStats().boiledCells() == 1 && gasH2o > 0L && gasSodium == 0L
 				&& boiled.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O)] + gasH2o == initialH2o
 				&& boiled.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)] == initialSodium
-				&& close(boiled.residualLedger() + gas.massResidual(), initial.residualLedger())
+				&& close(boiled.residualLedger() + massScale.signedSolverMassWeight(gas.massResidual()),
+						initial.residualLedger())
+				&& close(gasSpeciesMassKilograms(chemistry, gas, massScale) + gas.massResidual(), gas.mass())
 				&& Float.floatToRawIntBits(boiled.materials().copyPositionVolume()[3])
 				== Float.floatToRawIntBits(indicatorVolume)
 				&& Double.doubleToRawLongBits(boiled.materials().copyParticleMass()[0])
@@ -603,12 +616,14 @@ public final class M9ThermalValidation {
 		FlipChemicalParticleState partiallyRestored = domain.exportChemicalParticleState();
 		long remainingGasH2o = vaporRemainder.species().stream().filter(amount -> amount.speciesId().equals(
 				BuiltinChemicalDefinitions.H2O)).mapToLong(GasComponentAmount.SpeciesAmount::amountQuanta).sum();
-		double remainingSolverMass = CondensedMassScale.forCellSize(config.cellSize())
-				.solverMassWeight(vaporRemainder.mass());
+		double remainingSolverMass = massScale.solverMassWeight(vaporRemainder.mass());
 		require(partiallyRestored.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O)]
 						+ remainingGasH2o == initialH2o
 				&& partiallyRestored.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)] == initialSodium
-				&& close(partiallyRestored.residualLedger() + vaporRemainder.massResidual(), initial.residualLedger())
+				&& close(partiallyRestored.residualLedger()
+						+ massScale.signedSolverMassWeight(vaporRemainder.massResidual()), initial.residualLedger())
+				&& close(gasSpeciesMassKilograms(chemistry, vaporRemainder, massScale)
+						+ vaporRemainder.massResidual(), vaporRemainder.mass())
 				&& close(partiallyRestored.materials().totalMass() + remainingSolverMass,
 						initial.materials().totalMass())
 				&& Float.floatToRawIntBits(partiallyRestored.materials().copyPositionVolume()[3])
@@ -625,6 +640,17 @@ public final class M9ThermalValidation {
 						+ partiallyRestored.residualLedger() + "+" + vaporRemainder.massResidual()
 						+ "/" + initial.residualLedger() + " audit="
 						+ domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
+	}
+
+	private static double gasSpeciesMassKilograms(
+			ChemicalRegistry registry, GasComponentAmount component, CondensedMassScale massScale
+	) {
+		ExactRational solverMass = ExactRational.ZERO;
+		for (GasComponentAmount.SpeciesAmount amount : component.species()) {
+			solverMass = solverMass.add(registry.species(registry.speciesHandle(amount.speciesId())).massPerAu()
+					.multiply(amount.amountQuanta()).divide(ChemicalLimits.QUANTA_PER_AU));
+		}
+		return massScale.kilograms(solverMass.toDouble());
 	}
 
 	private static void setAllCondensedCellTemperatures(FlipFluidDomain domain, double temperatureK) {

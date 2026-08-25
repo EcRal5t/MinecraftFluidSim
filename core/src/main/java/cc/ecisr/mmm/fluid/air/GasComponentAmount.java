@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-/** Immutable independent state columns for one component portion. */
+/** Immutable independent state columns for one component portion; both mass columns use kilograms. */
 public record GasComponentAmount(
 		String componentId,
 		long standardVolumeNanos,

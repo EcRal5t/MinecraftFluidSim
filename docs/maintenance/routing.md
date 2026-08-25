@@ -35,7 +35,7 @@
 | cut-cell/CCD | `FlipCutCellGeometry.java`、`FlipParticleCollision.java` | pressure 与碰撞共享 aperture；checkpoint/handoff 保留 raw micro mask；只截断命中法向 |
 | reseed | `FlipParticleReseeder.java` | 保持体积、质量、动量、质心和相身份 |
 | 材料 | `FluidMaterial*.java`、`BuiltinFluidMaterials.java` | marker 体积与质量独立；stable ID 上链，runtime handle 不上链 |
-| 气体 | `fluid/air/`、`GasRegistryStore.java`、`AirCavityScanner.java` | component nanos/kg/species/source/sink 闭合；component-local allowed species 由 world registry 冻结并在所有发布入口验证；热区域持久拓扑同代 |
+| 气体 | `fluid/air/`、`GasRegistryStore.java`、`AirCavityScanner.java`、`GasLiquidPhaseModel.java` | component nanos/kg/species/source/sink 闭合；gas mass/residual 均为 kg；component-local allowed species 由 world registry 冻结并在所有发布入口验证；热区域持久拓扑同代 |
 | 化学 | `chemistry/`、`FlipChemicalParticleState.java` | exact species/组成/电荷/残差；indicator provenance 不隔离反应 |
 | 颗粒 | `granular/`、`GranularCouplingFields.java` | SVQ、质量、组成独立；active/deposit/coherent 不混用 |
 | 热学 | `thermal/`、`FlipThermalState.java`、`FlipThermalParticleState.java` | 总 U 权威；温度派生；`T_eq(p)` curve 是唯一压力域/平衡真值；超域暂停；exact phase batch 选择最近可表示平衡；通量、反应热、相变、功联合审计 |

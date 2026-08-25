@@ -13,7 +13,7 @@
 - external energy source、sink、mechanical work 与 reaction/phase transfer 都有独立审计列。
 - 温度、热容、焓、密度修正、颜色和 tooltip 由状态函数派生，不持有或修复库存。
 
-凝聚相 solver mass weight 与物理 kg 只通过 `CondensedMassScale` 的 `cellSize³` 边界换算。气体质量已经是 kg，不再缩放。
+凝聚相 solver mass weight 与物理 kg 只通过 `CondensedMassScale` 的 `cellSize³` 边界换算。气体总质量和 chemical mass residual 已经是 kg，不再缩放；signed residual 只在气液相边界换回凝聚相质量基底。
 
 同一载体的 identity、质量/体积、组成和 `U` 必须同 ordinal、同 generation。空载体不能残留内能；非空载体不能缺内能。cell 温度是把其中所有载体带入 LTE 反演后的临时结果，不是另一份可独立恢复的真值。
 
@@ -58,7 +58,7 @@ caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线�
 - 流液接触面积来自 PLIC/cut-face；solid、deposit、coherent 和 gas 使用各自实际 occupancy/available volume。
 - 普通世界边界默认绝热。registry 声明的 fixed-temperature 方块和 `thermal_reservoir` 是无限热浴，但只经相邻 face flux 进入 source/sink。
 - 液体热膨胀使用 registry-bound Boussinesq 定义，只向现有 y-face 动量路径提供派生体力，不改变质量或体积真值。
-- 气体孔流同时搬运组分与能量；压缩/膨胀功进入 mechanical work。
+- 气体孔流同时搬运组分与能量；species 的 host-gas 状态能进入气体温度反演与相变批能量，压缩/膨胀功进入 mechanical work。
 
 ### 有限体积离散
 

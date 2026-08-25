@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-/** Stable standard-state creation relation for one gas component. */
+/** Stable standard-state creation relation for one gas component; mass and residual densities use kg/m³. */
 public record GasComponentDefinition(
 		String id,
 		double standardMassPerCubicMeter,

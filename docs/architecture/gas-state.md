@@ -19,17 +19,17 @@ air cell 必须同时满足：非 solid、`markerCount == 0`，且扣除 cut-cel
 ## 权威真值
 
 - 每个密闭节点以 canonical minimum-cell key 和完整 cell membership 标识。
-- 每个气体组分保存稳定 component ID、标准体积 nanos、独立质量、可选 species/残差。
+- 每个气体组分保存稳定 component ID、标准体积 nanos、独立质量 kg、可选 species 和 chemical mass residual kg；气体的两个质量列都不使用凝聚相 solver mass weight。
 - source、sink、质量 roundoff 和 residual roundoff 是独立审计列。
 - ambient 节点不持有有限库存；新密闭腔从环境建立时明确记 external source。
 
 `GasRegistry` 规范化 component 定义和 ambient fraction；ambient fraction 必须按 exact rational 精确和为 1。标准态固定为 `101325 Pa`、`293.15 K`。每个 component 分别定义标准态 kg/m³、允许承载的 species、默认 species quanta/m³ 和质量 residual/m³；默认 species 必须属于该 component 的允许集合。创建 ambient inventory 时用 largest-remainder 对整数 nanos 确定分配。
 
-component 与 species 的隶属关系是 world-local registry 真值，不由运行时库存临时推断。相变 source、拓扑 remap、恢复和 source/sink audit 都必须在发布前验证该关系；一个已知 chemical species 也不能挂到未声明它的 gas component。允许集合非空只声明能力，当前功能布局中实际出现 species 时仍必须同时存在匹配的 chemical registry 和 host gas thermal species offset。
+component 与 species 的隶属关系是 world-local registry 真值，不由运行时库存临时推断。相变 source、拓扑 remap、恢复和 source/sink audit 都必须在发布前验证该关系；一个已知 chemical species 也不能挂到未声明它的 gas component。气液相变只把同时被 component 允许且具有 host gas thermal offset 的 species 视为可挥发，其他 species 留在凝聚相。允许集合非空只声明能力，当前功能布局中实际出现 species 时仍必须同时存在匹配的 chemical registry 和 host gas thermal species offset。
 
 表示硬上限为：registry 64 个 component、单 node 32 个 component、单 component 16 个 species、单 region 65536 个 sealed node、stable ID 128 字符、单 extension 16 MiB。到达上限时拒绝候选或 fail-open 到 ambient；不能丢掉最小 component 继续运行。
 
-node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membership 和 minimum-cell key 决定。component stable ID、standard-volume nanos、kg 和 species/residual 独立保存，不能从理想气体状态方程反算库存。
+node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membership 和 minimum-cell key 决定。component stable ID、standard-volume nanos、kg 和 species/residual 独立保存，不能从理想气体状态方程反算库存。凝聚相与气相搬运 chemical residual 时，只在相边界用该区域冻结的 `cellSize³` 做 signed solver-weight/kg 换算；气相内部输运、分裂、合并和持久化始终保持 kg。
 
 ## 拓扑变化
 

@@ -28,11 +28,25 @@ public record CondensedMassScale(double cubicMetersPerNormalizedCellVolume) {
 		return result;
 	}
 
+	/** Converts a signed mass correction such as a chemical residual without treating it as inventory. */
+	public double signedKilograms(double solverMassWeight) {
+		double result = solverMassWeight * cubicMetersPerNormalizedCellVolume;
+		if (!Double.isFinite(result)) throw new IllegalArgumentException("Signed condensed mass is invalid");
+		return result;
+	}
+
 	public double solverMassWeight(double kilograms) {
 		double result = kilograms / cubicMetersPerNormalizedCellVolume;
 		if (!(Double.isFinite(result) && result >= 0.0)) {
 			throw new IllegalArgumentException("Condensed solver mass weight is invalid");
 		}
+		return result;
+	}
+
+	/** Converts a signed physical mass correction into the normalized condensed-mass basis. */
+	public double signedSolverMassWeight(double kilograms) {
+		double result = kilograms / cubicMetersPerNormalizedCellVolume;
+		if (!Double.isFinite(result)) throw new IllegalArgumentException("Signed condensed mass weight is invalid");
 		return result;
 	}
 
