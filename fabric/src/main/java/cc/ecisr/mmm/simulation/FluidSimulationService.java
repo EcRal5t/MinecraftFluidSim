@@ -1645,10 +1645,11 @@ public final class FluidSimulationService {
 				return;
 			}
 		}
-		int affectedEntities = region.entityPhysicsEnabled()
+		FluidRegion.EntityCouplingStats entityCoupling = region.entityPhysicsEnabled()
 				? MinecraftEntityFluidInteraction.applyForces(level, region)
-				: 0;
-		region.setLastAffectedEntities(affectedEntities);
+				: FluidRegion.EntityCouplingStats.EMPTY;
+		region.setLastEntityCoupling(entityCoupling);
+		int affectedEntities = entityCoupling.affectedEntities();
 		if (collisionsChanged || affectedEntities > 0) {
 			region.wakeForActivity();
 			region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
@@ -2084,6 +2085,7 @@ public final class FluidSimulationService {
 		FlipFluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
 		FlipFluidDomain.SolidDistribution solids = domain.solidDistribution();
 		FluidRegion.CollisionStats collision = region.lastCollisionStats();
+		FluidRegion.EntityCouplingStats entityCoupling = region.lastEntityCoupling();
 		FluidRegionFootprint footprint = region.footprint();
 		String regionSource = footprint == null
 				? "command"
@@ -2093,7 +2095,7 @@ public final class FluidSimulationService {
 		String gas = gasSummary(domain);
 		String thermal = thermalFeatureEnabled ? thermalSummary(region, domain) : "";
 		return String.format(
-				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s%s",
+				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d, liquid impulse [%.3g,%.3g,%.3g] kg·m/s | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s%s",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",
 				region.id().toString().substring(0, 8),
 				usage.regionCount(), regionManager.limits().maximumRegions(),
@@ -2107,6 +2109,9 @@ public final class FluidSimulationService {
 				distribution.visibleCells(), distribution.denseCells(), takeoverOriginalBlocks.size(), takeoverLock,
 				worldBridgeFeatureEnabled ? "on" : "off",
 				region.entityPhysicsEnabled() ? "on" : "off", region.lastAffectedEntities(),
+				entityCoupling.impulseXKilogramMetresPerSecond(),
+				entityCoupling.impulseYKilogramMetresPerSecond(),
+				entityCoupling.impulseZKilogramMetresPerSecond(),
 				domain.maximumPressure(),
 				solids.partialCells(), solids.fullCells(),
 				collision.changedCells(), collision.escapedCellVolume() / CELL_VOLUMES_PER_BLOCK,

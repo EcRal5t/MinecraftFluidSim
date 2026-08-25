@@ -1,12 +1,16 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /** Minecraft entity discovery and response over loader-neutral fluid observations. */
 final class MinecraftEntityFluidInteraction {
@@ -18,7 +22,7 @@ final class MinecraftEntityFluidInteraction {
 
 	private MinecraftEntityFluidInteraction() { }
 
-	static int applyForces(ServerLevel level, FluidRegion region) {
+	static FluidRegion.EntityCouplingStats applyForces(ServerLevel level, FluidRegion region) {
 		BlockPos origin = region.origin();
 		FlipFluidDomain domain = region.domain();
 		float cellSize = domain.config().cellSize();
@@ -28,14 +32,26 @@ final class MinecraftEntityFluidInteraction {
 				origin.getY() + domain.sizeY() * cellSize,
 				origin.getZ() + domain.sizeZ() * cellSize
 		);
-		int affected = 0;
+		List<Interaction> interactions = new ArrayList<>();
 		for (Entity entity : level.getEntities((Entity) null, bounds, MinecraftEntityFluidInteraction::canAffect)) {
 			Contact contact = sampleContact(region, entity);
 			if (contact.submergedFraction() <= 0.0) continue;
-			applyForce(entity, contact);
-			affected++;
+			interactions.add(new Interaction(entity, contact, entity.getDeltaMovement()));
 		}
-		return affected;
+		double impulseX = 0.0, impulseY = 0.0, impulseZ = 0.0;
+		for (Interaction interaction : interactions) {
+			Vec3 bodyVelocity = interaction.velocityBlocksPerTick().scale(TICKS_PER_SECOND);
+			Contact contact = interaction.contact();
+			MovingBodyFluidCoupling.Result coupling = domain.applyMovingBodyCoupling(
+					new MovingBodyFluidCoupling.Request(contact.localX(), contact.localY(), contact.localZ(),
+							bodyVelocity.x, bodyVelocity.y, bodyVelocity.z, contact.displacedVolumeCubicMetres()));
+			impulseX += coupling.impulseXKilogramMetresPerSecond();
+			impulseY += coupling.impulseYKilogramMetresPerSecond();
+			impulseZ += coupling.impulseZKilogramMetresPerSecond();
+			Entity entity = interaction.entity();
+			applyForce(entity, contact);
+		}
+		return new FluidRegion.EntityCouplingStats(interactions.size(), impulseX, impulseY, impulseZ);
 	}
 
 	private static boolean canAffect(Entity entity) {
@@ -52,6 +68,7 @@ final class MinecraftEntityFluidInteraction {
 		int totalSamples = SAMPLES_XZ * SAMPLES_Y * SAMPLES_XZ;
 		int submergedSamples = 0;
 		double velocityX = 0.0, velocityY = 0.0, velocityZ = 0.0;
+		double localXSum = 0.0, localYSum = 0.0, localZSum = 0.0;
 		for (int sampleZ = 0; sampleZ < SAMPLES_XZ; sampleZ++) {
 			for (int sampleY = 0; sampleY < SAMPLES_Y; sampleY++) {
 				for (int sampleX = 0; sampleX < SAMPLES_XZ; sampleX++) {
@@ -66,15 +83,21 @@ final class MinecraftEntityFluidInteraction {
 					velocityX += velocity.x();
 					velocityY += velocity.y();
 					velocityZ += velocity.z();
+					localXSum += localX; localYSum += localY; localZSum += localZ;
 					submergedSamples++;
 				}
 			}
 		}
 		if (submergedSamples == 0) return Contact.DRY;
 		double inverseWetSamples = 1.0 / submergedSamples;
-		return new Contact((double) submergedSamples / totalSamples,
+		double submergedFraction = (double) submergedSamples / totalSamples;
+		double displacedVolume = box.getXsize() * box.getYsize() * box.getZsize() * submergedFraction;
+		if (!(Double.isFinite(displacedVolume) && displacedVolume > 0.0)) return Contact.DRY;
+		return new Contact(submergedFraction,
 				new Vec3(velocityX * inverseWetSamples, velocityY * inverseWetSamples,
-						velocityZ * inverseWetSamples));
+						velocityZ * inverseWetSamples),
+				(float) (localXSum * inverseWetSamples), (float) (localYSum * inverseWetSamples),
+				(float) (localZSum * inverseWetSamples), displacedVolume);
 	}
 
 	private static double sampleCoordinate(double minimum, double maximum, int sample, int count) {
@@ -96,7 +119,12 @@ final class MinecraftEntityFluidInteraction {
 		if (submerged > 0.15) entity.resetFallDistance();
 	}
 
-	private record Contact(double submergedFraction, Vec3 fluidVelocity) {
-		private static final Contact DRY = new Contact(0.0, Vec3.ZERO);
+	private record Interaction(Entity entity, Contact contact, Vec3 velocityBlocksPerTick) { }
+
+	private record Contact(
+			double submergedFraction, Vec3 fluidVelocity, float localX, float localY, float localZ,
+			double displacedVolumeCubicMetres
+	) {
+		private static final Contact DRY = new Contact(0.0, Vec3.ZERO, 0.0F, 0.0F, 0.0F, 0.0);
 	}
 }

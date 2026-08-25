@@ -116,6 +116,8 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 目标不是立即引入通用刚体求解器，而是把当前单向效果逐步变成可审计的双向边界：
 
+当前已有 loader-neutral moving-body request：Fabric 的有界湿样本会把实体运动写入附近 marker 动量，并报告实际液体冲量，所以实体运动可扰动自由面。它仍是 kinematic AABB 近似，不替代以下压力、占位和严格动量闭合工作。
+
 1. 在实体离散表面采样流体压力，验证静水浮力与姿态无关性。
 2. 将黏性和形状阻力与压力力分开，并给出适用 Reynolds 范围。
 3. 把实体表面速度作为移动 solid boundary 接入压力 projection。

@@ -46,7 +46,7 @@ public final class FluidRegion {
 	private boolean collisionRefreshRequired;
 	private boolean entityPhysicsEnabled = true;
 	private boolean debugOverlays;
-	private int lastAffectedEntities;
+	private EntityCouplingStats lastEntityCoupling = EntityCouplingStats.EMPTY;
 	private int stepIntervalTicks = 1;
 	private int hardOverrunStreak;
 	private int recoveryStreak;
@@ -239,12 +239,15 @@ public final class FluidRegion {
 	boolean entityPhysicsEnabled() { return entityPhysicsEnabled; }
 	void setEntityPhysicsEnabled(boolean enabled) {
 		entityPhysicsEnabled = enabled;
-		if (!enabled) lastAffectedEntities = 0;
+		if (!enabled) lastEntityCoupling = EntityCouplingStats.EMPTY;
 	}
 	boolean debugOverlays() { return debugOverlays; }
 	void setDebugOverlays(boolean enabled) { debugOverlays = enabled; }
-	int lastAffectedEntities() { return lastAffectedEntities; }
-	void setLastAffectedEntities(int value) { lastAffectedEntities = value; }
+	int lastAffectedEntities() { return lastEntityCoupling.affectedEntities(); }
+	EntityCouplingStats lastEntityCoupling() { return lastEntityCoupling; }
+	void setLastEntityCoupling(EntityCouplingStats value) {
+		lastEntityCoupling = Objects.requireNonNull(value, "value");
+	}
 	int stepIntervalTicks() { return stepIntervalTicks; }
 	void setStepIntervalTicks(int value) {
 		if (value <= 0) throw new IllegalArgumentException("step interval must be positive");
@@ -419,5 +422,22 @@ public final class FluidRegion {
 
 	public record CollisionStats(int changedCells, float displacedCellVolume, float escapedCellVolume, boolean markerBudgetLimited) {
 		static final CollisionStats EMPTY = new CollisionStats(0, 0.0F, 0.0F, false);
+	}
+
+	record EntityCouplingStats(
+			int affectedEntities,
+			double impulseXKilogramMetresPerSecond,
+			double impulseYKilogramMetresPerSecond,
+			double impulseZKilogramMetresPerSecond
+	) {
+		static final EntityCouplingStats EMPTY = new EntityCouplingStats(0, 0.0, 0.0, 0.0);
+
+		EntityCouplingStats {
+			if (affectedEntities < 0 || !(Double.isFinite(impulseXKilogramMetresPerSecond)
+					&& Double.isFinite(impulseYKilogramMetresPerSecond)
+					&& Double.isFinite(impulseZKilogramMetresPerSecond))) {
+				throw new IllegalArgumentException("Entity coupling stats are invalid");
+			}
+		}
 	}
 }

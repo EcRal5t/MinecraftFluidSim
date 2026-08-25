@@ -1,5 +1,8 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
+
+import java.util.Arrays;
 import java.util.List;
 
 /** Active-core M3 dynamics gates for unequal-area connected vessels and density inversion. */
@@ -9,7 +12,50 @@ final class M3MaterialDynamicsValidation {
 	static Summary validate() {
 		ConnectedVesselResult vessel = unequalAreaConnectedVesselBalances();
 		LayeringResult layering = densityInversionLayersConservatively();
+		movingBodyCommitsOnlyMarkerMomentum();
 		return new Summary(vessel.finalHeadDifference(), layering.heavyCenterY(), layering.lightCenterY());
+	}
+
+	private static void movingBodyCommitsOnlyMarkerMomentum() {
+		FluidSolverConfig config = new FluidSolverConfig(
+				0.5F, 1_000.0F, 0.0F, 1.0F / 40.0F,
+				200, 1.0E-5F, 0.40F, 2.0E-3F, 0.80F);
+		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 128);
+		domain.setVolume(1, 1, 1, 1.0F);
+		FlipParticleState before = domain.exportParticleState();
+		double massBefore = domain.totalMass();
+		MovingBodyFluidCoupling.Result result = domain.applyMovingBodyCoupling(
+				new MovingBodyFluidCoupling.Request(0.75F, 0.75F, 0.75F, 2.0, -0.5, 0.25, 0.025));
+		FlipParticleState after = domain.exportParticleState();
+		check(result.coupledMarkers() > 0 && result.coupledVolumeCubicMetres() > 0.0
+				&& result.impulseXKilogramMetresPerSecond() > 0.0
+				&& result.impulseYKilogramMetresPerSecond() < 0.0
+				&& result.impulseZKilogramMetresPerSecond() > 0.0,
+				"moving body did not commit a three-axis marker impulse");
+		check(Arrays.equals(before.copyPositionVolume(), after.copyPositionVolume())
+				&& Double.doubleToRawLongBits(massBefore) == Double.doubleToRawLongBits(domain.totalMass()),
+				"moving-body coupling changed authoritative volume or mass");
+		float[] velocityBefore = before.copyParticleVelocities();
+		float[] velocityAfter = after.copyParticleVelocities();
+		double momentumX = 0.0, momentumY = 0.0, momentumZ = 0.0;
+		double cellVolumeCubicMetres = (double) config.cellSize() * config.cellSize() * config.cellSize();
+		float[] positionVolume = after.copyPositionVolume();
+		for (int marker = 0; marker < after.particleCount(); marker++) {
+			double markerMass = config.density() * positionVolume[marker * 4 + 3];
+			momentumX += markerMass * (velocityAfter[marker * 3] - velocityBefore[marker * 3])
+					* cellVolumeCubicMetres;
+			momentumY += markerMass * (velocityAfter[marker * 3 + 1] - velocityBefore[marker * 3 + 1])
+					* cellVolumeCubicMetres;
+			momentumZ += markerMass * (velocityAfter[marker * 3 + 2] - velocityBefore[marker * 3 + 2])
+					* cellVolumeCubicMetres;
+		}
+		check(Double.doubleToRawLongBits(momentumX)
+				== Double.doubleToRawLongBits(result.impulseXKilogramMetresPerSecond())
+				&& Double.doubleToRawLongBits(momentumY)
+				== Double.doubleToRawLongBits(result.impulseYKilogramMetresPerSecond())
+				&& Double.doubleToRawLongBits(momentumZ)
+				== Double.doubleToRawLongBits(result.impulseZKilogramMetresPerSecond()),
+				"moving-body impulse report differs from committed marker momentum");
 	}
 
 	private static ConnectedVesselResult unequalAreaConnectedVesselBalances() {

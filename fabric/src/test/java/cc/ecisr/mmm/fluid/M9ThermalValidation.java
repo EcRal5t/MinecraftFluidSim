@@ -1561,7 +1561,7 @@ public final class M9ThermalValidation {
 						+ " gas=" + gasEqual + " pending=" + pendingEqual);
 		SignedDyadic committedEnergy = domain.exactInternalEnergy();
 		FluidStepCandidate candidate = new CpuFluidSolverBackend().evaluate(
-				new FluidStepRequest(7L, authoritative, false, 0));
+				new FluidStepRequest(7L, authoritative, List.of(), false, 0));
 		require(candidate.baseGeneration() == 7L && candidate.candidateGeneration() == 8L
 				&& candidate.backendId().equals(CpuFluidSolverBackend.ID)
 				&& domain.exactInternalEnergy().equals(committedEnergy),

@@ -44,8 +44,9 @@ import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalPhaseTransition;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
-import cc.ecisr.mmm.thermal.ThermalTransport;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
+import cc.ecisr.mmm.thermal.ThermalTransport;
+import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 
 import java.util.ArrayList;
 import java.util.ArrayDeque;
@@ -5282,6 +5283,66 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				volume[index], freeSurfaceGeometry.exactCellVolume(index), openVolume,
 				hasAirNeighbor(x, y, z), dt
 		);
+	}
+
+	/**
+	 * Applies a bounded immersed moving-body constraint to authoritative marker momentum.
+	 * Volume, mass, composition and energy are unchanged; the returned SI impulse is calculated from
+	 * the actual float velocity writes, including their representational roundoff.
+	 */
+	public MovingBodyFluidCoupling.Result applyMovingBodyCoupling(MovingBodyFluidCoupling.Request request) {
+		if (request == null) throw new IllegalArgumentException("Moving-body coupling request is missing");
+		requireFiniteMarkerVelocity(request.velocityXMetresPerSecond());
+		requireFiniteMarkerVelocity(request.velocityYMetresPerSecond());
+		requireFiniteMarkerVelocity(request.velocityZMetresPerSecond());
+		double cellVolumeM3 = (double) config.cellSize() * config.cellSize() * config.cellSize();
+		double requestedCellVolume = request.displacedVolumeCubicMetres() / cellVolumeM3;
+		if (!(Double.isFinite(requestedCellVolume) && requestedCellVolume > 0.0)) {
+			throw new IllegalArgumentException("Moving-body displaced volume is outside the solver scale");
+		}
+		double weightedVolume = 0.0;
+		int coupledMarkers = 0;
+		for (int marker = 0; marker < particleCount; marker++) {
+			double weight = movingBodyWeight(request, marker);
+			if (weight <= 0.0) continue;
+			weightedVolume += weight * particleVolume[marker];
+			coupledMarkers++;
+		}
+		if (!(weightedVolume > 0.0)) return MovingBodyFluidCoupling.Result.NONE;
+		double volumeScale = Math.min(1.0, requestedCellVolume / weightedVolume);
+		double impulseX = 0.0, impulseY = 0.0, impulseZ = 0.0, coupledVolume = 0.0;
+		boolean changed = false;
+		for (int marker = 0; marker < particleCount; marker++) {
+			double weight = movingBodyWeight(request, marker);
+			double blend = volumeScale * weight;
+			if (blend <= 0.0) continue;
+			float oldX = particleVelocityX[marker], oldY = particleVelocityY[marker], oldZ = particleVelocityZ[marker];
+			float newX = (float) (oldX + blend * (request.velocityXMetresPerSecond() - oldX));
+			float newY = (float) (oldY + blend * (request.velocityYMetresPerSecond() - oldY));
+			float newZ = (float) (oldZ + blend * (request.velocityZMetresPerSecond() - oldZ));
+			particleVelocityX[marker] = newX; particleVelocityY[marker] = newY; particleVelocityZ[marker] = newZ;
+			impulseX += particleMass[marker] * (newX - oldX);
+			impulseY += particleMass[marker] * (newY - oldY);
+			impulseZ += particleMass[marker] * (newZ - oldZ);
+			coupledVolume += blend * particleVolume[marker];
+			changed |= newX != oldX || newY != oldY || newZ != oldZ;
+		}
+		if (changed) gridDirty = true;
+		return new MovingBodyFluidCoupling.Result(coupledMarkers, coupledVolume * cellVolumeM3,
+				impulseX * cellVolumeM3, impulseY * cellVolumeM3, impulseZ * cellVolumeM3);
+	}
+
+	private double movingBodyWeight(MovingBodyFluidCoupling.Request request, int marker) {
+		return MovingBodyFluidCoupling.kernelWeight(
+				particleX[marker] - request.localXMetres(),
+				particleY[marker] - request.localYMetres(),
+				particleZ[marker] - request.localZMetres(), config.cellSize());
+	}
+
+	private static void requireFiniteMarkerVelocity(double velocity) {
+		if (!Double.isFinite(velocity) || !Float.isFinite((float) velocity)) {
+			throw new IllegalArgumentException("Moving-body coupling velocity exceeds marker representation");
+		}
 	}
 
 	/** Adds the standard Boussinesq density correction to the existing gravity face impulse. */

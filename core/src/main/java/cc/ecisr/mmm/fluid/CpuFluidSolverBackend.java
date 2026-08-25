@@ -9,6 +9,7 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 	@Override public FluidStepCandidate evaluate(FluidStepRequest request) {
 		if (request == null) throw new IllegalArgumentException("Step request is missing");
 		FlipFluidDomain candidate = FlipFluidDomain.restoreAuthoritativeState(request.state());
+		for (var movingBody : request.movingBodies()) candidate.applyMovingBodyCoupling(movingBody);
 		FlipFluidDomain.StepStats stats = candidate.step(
 				request.phaseChangeEnabled(), request.maximumPhaseOperations());
 		return new FluidStepCandidate(id(), request.baseGeneration(),
