@@ -19,7 +19,7 @@
 
 热学 registry 是 world snapshot：
 
-- material 定义 carrier kind/id、参考温度、参考比内能、导热率和最多 16 个 caloric segment；`DEVICE` 专用于独立有限热容量 owner，不混入区域 carrier ordinal；
+- material 定义 carrier kind/id、参考温度、参考比内能、导热率和最多 16 个 caloric segment；`DEVICE` 专用于 region-owned 有限热容量设备，不混入 solver carrier ordinal；
 - species offset 定义某 host material 中每 AU 的参考内能偏移；
 - gas component 允许的 species 在 chemistry 启用时必须全部具有对应 host gas species offset，避免库存先提交、温度反演后失败；
 - transition 定义上下相、有界 `T_eq(p)` 曲线、exact 两侧体积量子、exact 质量批和接口要求；曲线端点是压力有效域的唯一真值，不重复保存参考温度或上下限；
@@ -62,11 +62,11 @@ caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线�
 
 ### 有限热容量设备
 
-`FiniteThermalBodyState` 是 loader-neutral 设备真值：绑定 world thermal registry fingerprint、稳定 `DEVICE` material ID、generation、kg 和总 `U`。温度与热容仍由同一个 `ThermalStateFunction` 派生，设备方块不能另存一份可反向覆盖 `U` 的 setpoint。
+`FiniteThermalBodyState` 是 loader-neutral 设备 body 真值：绑定 world thermal registry fingerprint、稳定 `DEVICE` material ID、generation、kg 和总 `U`。`FiniteThermalDeviceState` 另存 provider ID、provider 内稳定 object ID 和 device type；这些字段只定位世界对象或外部 Mod 端口，不拥有能量。规范排序后的 `FiniteThermalDeviceInventory` 作为 manifest-only extension 随同 region HEAD 提交，空集合用 extension 缺席表示。codec 回读时重新验证 registry fingerprint、`DEVICE` material、material carrier ID 与 device type；BlockEntity 不能另存一份可反向覆盖 `U` 的 setpoint。
 
 `FiniteThermalExchange` 对一个设备 body 和最多 16 个独立流体能量端口做有界显式规划。每个端口提供当前温度、当前 caloric interval 内的热容、包含流体/壁面/接触面积热阻的总 conductance，以及该线性化的温度有效域。每个 substep 使用同一 body 温度计算镜像通量，设备 `U` 的变化与各端口增量加总，并把 IEEE-754 总和差记为 exact dyadic roundoff。稳定步长同时受设备完整物性域内最小 `0.5*C_body/sum(G)` 与每个 `0.5*C_port/G_port` 限制；不能只取设备初始温度的热容，否则跨入低热容 caloric segment 后会失稳。超过冻结 substep 预算或任一方越出物性域时整体拒绝计划。
 
-这个 planner 不搬运任何物质，也没有世界、region HEAD 或 block entity 提交权。调用方必须先验证每个 region candidate 能接受对应 `delta U`，再按 body generation 与各 region generation 联合持久提交；在 durable coordinator 接入前，固定温度 boundary 仍是唯一生产世界热边界，不能把有限设备降级成每 tick 改 setpoint。
+这个 planner 不搬运任何物质，也没有世界、region HEAD 或 block entity 提交权。同一区域内的 body 与流体候选必须进入同一个 checkpoint 后再由 HEAD 一次发布；接触多个区域时必须先验证全部 candidate，再通过跨 region HEAD 协调提交。当前尚未接入世界对象 enrollment、接触端口生成和 candidate 应用，因此固定温度 boundary 仍是唯一生产世界热边界，不能把有限设备降级成每 tick 改 setpoint。
 
 ### 有限体积离散
 

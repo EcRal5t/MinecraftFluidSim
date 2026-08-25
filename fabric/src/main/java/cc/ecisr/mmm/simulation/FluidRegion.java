@@ -8,6 +8,7 @@ import cc.ecisr.mmm.fluid.FlipThermalParticleState;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.fluid.air.GasStateSnapshot;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
+import cc.ecisr.mmm.thermal.FiniteThermalDeviceInventory;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
@@ -54,6 +55,7 @@ public final class FluidRegion {
 	private String granularBlockFailure;
 	private String thermalBlockFailure;
 	private ThermalActivity thermalActivity;
+	private FiniteThermalDeviceInventory finiteThermalDevices;
 
 	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FlipFluidDomain domain, long reservedMarkerCapacity) {
 		this(id, dimension, origin, domain, reservedMarkerCapacity, null);
@@ -280,6 +282,31 @@ public final class FluidRegion {
 		setAvailabilityFailure(Objects.requireNonNull(failure, "failure"));
 	}
 	String thermalBlockFailure() { return thermalBlockFailure; }
+
+	/** Returns immutable region-owned device truth, binding a new empty inventory to this layout. */
+	public FiniteThermalDeviceInventory finiteThermalDevices(String thermalRegistryFingerprint) {
+		FiniteThermalDeviceInventory current = finiteThermalDevices;
+		if (current == null) return FiniteThermalDeviceInventory.empty(thermalRegistryFingerprint);
+		if (!current.thermalRegistryFingerprint().equals(thermalRegistryFingerprint)) {
+			throw new IllegalStateException("Finite thermal device registry fingerprint changed");
+		}
+		return current;
+	}
+
+	/** Restores device truth only alongside the matching thermal region generation. */
+	public void restoreFiniteThermalDevices(
+			FiniteThermalDeviceInventory inventory, ThermalRegistry registry, long loadedCheckpointGeneration
+	) {
+		Objects.requireNonNull(inventory, "inventory");
+		inventory.requireCompatible(Objects.requireNonNull(registry, "registry"));
+		if (domain == null || !domain.hasThermalState() || loadedCheckpointGeneration != checkpointGeneration) {
+			throw new IllegalStateException("Finite thermal devices require the matching loaded thermal generation");
+		}
+		if (finiteThermalDevices != null && !finiteThermalDevices.equals(inventory)) {
+			throw new IllegalStateException("Finite thermal device truth changed while restoring a checkpoint");
+		}
+		finiteThermalDevices = inventory;
+	}
 
 	public PersistedRuntime persistedRuntime() {
 		FluidRegionLifecycle.State resumeState = lifecycle.state() == FluidRegionLifecycle.State.UNLOADED

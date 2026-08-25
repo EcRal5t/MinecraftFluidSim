@@ -23,8 +23,12 @@ import cc.ecisr.mmm.granular.SolidCompositionRecord;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
+import cc.ecisr.mmm.thermal.FiniteThermalBodyState;
+import cc.ecisr.mmm.thermal.FiniteThermalDeviceInventory;
+import cc.ecisr.mmm.thermal.FiniteThermalDeviceState;
 import cc.ecisr.mmm.thermal.SignedDyadic;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
+import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.simulation.FluidRegion;
 import cc.ecisr.mmm.simulation.FluidRegionLifecycle;
 import cc.ecisr.mmm.simulation.FluidRegionManager;
@@ -109,6 +113,17 @@ public final class FluidRegionPersistenceValidation {
 		region.domain().restoreGranularState(granularFixture, granular, liquids);
 		ThermalRegistry thermal = thermalRegistry(liquids, granular);
 		region.domain().bindThermal(thermal, liquids, 300.0);
+		ThermalStateFunction thermalState = new ThermalStateFunction(thermal);
+		FiniteThermalDeviceInventory expectedDevices = new FiniteThermalDeviceInventory(
+				thermal.fingerprint(), List.of(new FiniteThermalDeviceState(
+						"mmm:fabric_block", "mmm:persistence/4/5/6", "mmm:device/persistence",
+						new FiniteThermalBodyState(7L, thermal.fingerprint(),
+								"mmm:thermal/persistence_device", 2.0,
+								thermalState.internalEnergyAtTemperature(
+										thermal.materialHandle("mmm:thermal/persistence_device"),
+										2.0, java.util.Map.of(), 350.0)))));
+		expectedDevices.requireCompatible(thermal);
+		region.restoreFiniteThermalDevices(expectedDevices, thermal, region.checkpointGeneration());
 		region.domain().setThermalTemperatureInCell(2, 1, 2, 325.0);
 		region.domain().setThermalTemperatureInCell(1, 1, 1, 340.0);
 		region.domain().setThermalTemperatureInCell(5, 3, 5, 280.0);
@@ -132,6 +147,8 @@ public final class FluidRegionPersistenceValidation {
 		assertGranularStateEquals(expectedGranular, state.reconstructGranular(granular));
 		assertGasStateEquals(expectedGas, state.reconstructGas(gas, null));
 		assertThermalStateEquals(expected, state.reconstructThermal(thermal));
+		require(state.reconstructFiniteThermalDevices(thermal).equals(expectedDevices),
+				"finite thermal device truth did not round-trip");
 		require(state.reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
 				"pending phase-volume record did not round-trip");
 		FlipFluidDomain restoredDomain = new FlipFluidDomain(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG, 512);
@@ -175,6 +192,8 @@ public final class FluidRegionPersistenceValidation {
 		RegionStateFiles files = new RegionStateFiles(root, null, granular, thermal, gas);
 		files.publish(state);
 		assertThermalStateEquals(expected, files.read(region.id()).reconstructThermal(thermal));
+		require(files.read(region.id()).reconstructFiniteThermalDevices(thermal).equals(expectedDevices),
+				"published finite thermal device truth did not survive committed readback");
 		require(files.read(region.id()).reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
 				"published pending phase volume did not survive committed readback");
 		expectIOException(() -> state.reconstructThermal(thermalRegistry(new FluidMaterialRegistry(
@@ -854,6 +873,10 @@ public final class FluidRegionPersistenceValidation {
 				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
 				GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.025,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0))));
+		definitions.add(new ThermalMaterialDefinition("mmm:thermal/persistence_device",
+				ThermalMaterialDefinition.CarrierKind.DEVICE, "mmm:device/persistence",
+				300.0, 10.0, 4.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 500.0))));
 		if (granular != null) for (int index = 0; index < granular.materials().size(); index++) {
 			definitions.add(new ThermalMaterialDefinition("mmm:thermal/persistence_granular_" + index,
 					ThermalMaterialDefinition.CarrierKind.GRANULAR, granular.material(index).id(),

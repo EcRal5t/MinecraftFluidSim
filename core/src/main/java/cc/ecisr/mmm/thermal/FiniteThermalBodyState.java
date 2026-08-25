@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.thermal;
 
-/** Immutable loader-neutral truth for a finite-capacity thermal device owner. */
+/** Immutable loader-neutral body truth stored by a finite thermal device owner. */
 public record FiniteThermalBodyState(
 		long generation,
 		String thermalRegistryFingerprint,

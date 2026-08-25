@@ -511,6 +511,7 @@ public final class RegionStateFiles {
 				}
 			}
 			state.reconstructThermal(thermalRegistry, gasRegistry, chemicalRegistry);
+			state.reconstructFiniteThermalDevices(thermalRegistry);
 		}
 		else throw new IOException("Unsupported region-state layout " + state.manifest().layout());
 	}

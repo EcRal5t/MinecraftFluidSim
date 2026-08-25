@@ -22,6 +22,7 @@ import cc.ecisr.mmm.simulation.FluidRegion;
 import cc.ecisr.mmm.thermal.SignedDyadic;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
 import cc.ecisr.mmm.thermal.GasThermalModel;
+import cc.ecisr.mmm.thermal.FiniteThermalDeviceInventory;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 
 import java.io.IOException;
@@ -364,6 +365,11 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					thermal.audit(), List.copyOf(ledgers), gasNodeEnergyBits);
 			manifestExtensions.add(new RegionExtension(ThermalRegionStateCodec.MANIFEST_EXTENSION,
 					codec.encodeManifest(data)));
+			FiniteThermalDeviceInventory finiteDevices = region.finiteThermalDevices(
+					thermal.thermalRegistryFingerprint());
+			if (!finiteDevices.devices().isEmpty()) manifestExtensions.add(new RegionExtension(
+					FiniteThermalDeviceCodec.MANIFEST_EXTENSION,
+					new FiniteThermalDeviceCodec().encode(finiteDevices)));
 			if (particles.layout().requiresThermal()) manifestExtensions.add(new RegionExtension(
 					ThermalBuoyancyCodec.MANIFEST_EXTENSION, new ThermalBuoyancyCodec().encodeCurrent()));
 			PendingPhaseVolumeState pendingPhaseVolume = region.domain().exportPendingPhaseVolumeState();
@@ -509,6 +515,19 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		}
 		return new PendingPhaseVolumeCodec().decode(requiredExtension(
 				manifest.extensions(), PendingPhaseVolumeCodec.MANIFEST_EXTENSION).payload(), cellCount);
+	}
+
+	/** Sparse absence is the canonical empty inventory; device energy exists only in thermal state. */
+	public FiniteThermalDeviceInventory reconstructFiniteThermalDevices(ThermalRegistry registry) throws IOException {
+		if (registry == null) throw new IOException("Authoritative thermal registry is unavailable");
+		if (!hasExtension(manifest.extensions(), FiniteThermalDeviceCodec.MANIFEST_EXTENSION)) {
+			return FiniteThermalDeviceInventory.empty(registry.fingerprint());
+		}
+		if (manifest.layout() != RegionStateLayout.THERMAL) {
+			throw new IOException("Finite thermal devices are only valid in thermal region-state");
+		}
+		return new FiniteThermalDeviceCodec().decode(requiredExtension(
+				manifest.extensions(), FiniteThermalDeviceCodec.MANIFEST_EXTENSION).payload(), registry);
 	}
 
 	/** Full thermal validation additionally binds every saved node U to its authoritative gas inventory. */
@@ -722,11 +741,20 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				PendingPhaseVolumeCodec.MANIFEST_EXTENSION);
 		boolean thermalBuoyancyPayload = hasExtension(manifest.extensions(),
 				ThermalBuoyancyCodec.MANIFEST_EXTENSION);
+		boolean finiteDevicePayload = hasExtension(manifest.extensions(),
+				FiniteThermalDeviceCodec.MANIFEST_EXTENSION);
 		for (RegionSectionState section : sections) if (hasExtension(section.extensions(),
 				PendingPhaseVolumeCodec.MANIFEST_EXTENSION)) {
 			throw new IOException("Pending-volume evidence is manifest-only");
 		}
 		if (pendingPhaseVolumePayload) validatePendingPhaseVolumeCells();
+		if (finiteDevicePayload) {
+			if (manifest.layout() != RegionStateLayout.THERMAL) {
+				throw new IOException("Finite thermal devices are only valid in thermal region-state");
+			}
+			new FiniteThermalDeviceCodec().decode(requiredExtension(manifest.extensions(),
+					FiniteThermalDeviceCodec.MANIFEST_EXTENSION).payload(), null);
+		}
 		if (manifest.layout() == RegionStateLayout.THERMAL) {
 			if (!thermalBuoyancyPayload) throw new IOException("Thermal region state requires buoyancy identity");
 			new ThermalBuoyancyCodec().requireCurrent(requiredExtension(manifest.extensions(),
