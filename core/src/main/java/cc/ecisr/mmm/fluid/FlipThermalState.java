@@ -264,6 +264,7 @@ final class FlipThermalState {
 	}
 	double liquidInternalEnergy(int marker) { return internalEnergy[marker]; }
 	ThermalTransport.Stats lastTransport() { return lastTransport; }
+	int maximumTransportSubsteps() { return transport.maximumSubsteps(); }
 	double totalEnergy(int count) {
 		double total = 0.0;
 		for (int marker = 0; marker < count; marker++) total += internalEnergy[marker];

@@ -403,6 +403,59 @@ public final class FlipFluidDomain {
 		if (thermalState == null) throw new IllegalStateException("Pending phase volume requires thermal state");
 		return PendingPhaseVolumeState.capture(pendingPhaseCellVolume);
 	}
+
+	/** Captures every authoritative inventory needed to evaluate a generation off-owner. */
+	public FluidDomainState captureAuthoritativeState() {
+		if (activeCollisionPlan != null) {
+			throw new IllegalStateException("Cannot capture while a collision transaction is active");
+		}
+		FlipParticleState pure = null;
+		FlipMaterialParticleState materials = null;
+		FlipChemicalParticleState chemicals = null;
+		ChemicalRegistry chemistry = null;
+		if (chemicalParcels != null) {
+			chemicals = exportChemicalParticleState();
+			chemistry = chemicalParcels.registry();
+		} else if (materialRegistry != null) {
+			materials = exportMaterialParticleState();
+		} else {
+			pure = exportParticleState();
+		}
+		GranularStateSnapshot granular = granularRegistry == null ? null : exportGranularState();
+		String chemicalFingerprint = chemistry == null ? "" : chemistry.fingerprint();
+		GasStateSnapshot gas = airCellNodeId == null ? null : exportGasState(chemicalFingerprint);
+		FlipThermalParticleState thermal = thermalState == null ? null : exportThermalParticleState();
+		return new FluidDomainState(config, maximumParticleCount, sealedDomainBoundary,
+				pure, materials, chemicals, chemistry, granularRegistry, granular, precipitationEnabled,
+				airNetwork.registry(), gas, thermalState == null ? null : thermalState.registry(), thermal,
+				thermalState == null ? 0 : thermalState.maximumTransportSubsteps(),
+				thermalState == null ? null : exportPendingPhaseVolumeState());
+	}
+
+	/** Restores a private solver instance without consulting Minecraft/Fabric state. */
+	public static FlipFluidDomain restoreAuthoritativeState(FluidDomainState state) {
+		if (state == null) throw new IllegalArgumentException("Authoritative state is missing");
+		FlipFluidDomain domain = new FlipFluidDomain(state.sizeX(), state.sizeY(), state.sizeZ(),
+				state.config(), state.maximumParticleCount());
+		if (state.sealedDomainBoundary()) domain.sealDomainBoundary();
+		switch (state.carrierKind()) {
+			case PURE -> domain.restoreParticleState(state.particles());
+			case MATERIAL -> domain.restoreMaterialParticleState(state.materials());
+			case CHEMICAL -> domain.restoreChemicalParticleState(state.chemicals(), state.chemicalRegistry());
+		}
+		if (state.granular() != null) {
+			domain.restoreGranularState(state.granular(), state.granularRegistry(), domain.materialRegistry());
+		}
+		if (state.gas() == null) domain.bindGasRegistry(state.gasRegistry());
+		else domain.restoreGasState(state.gas(), state.gasRegistry());
+		if (state.thermal() != null) {
+			domain.restoreThermalParticleState(state.thermal(), state.thermalRegistry(),
+					state.maximumThermalTransportSubsteps());
+			domain.restorePendingPhaseVolumeState(state.pendingPhaseVolume());
+		}
+		if (state.precipitationEnabled()) domain.setPrecipitationEnabled(true);
+		return domain;
+	}
 	public void restorePendingPhaseVolumeState(PendingPhaseVolumeState state) {
 		if (thermalState == null || state == null || state.cellCount() != cellCount
 				|| hasPendingPhaseVolumeWork()) {

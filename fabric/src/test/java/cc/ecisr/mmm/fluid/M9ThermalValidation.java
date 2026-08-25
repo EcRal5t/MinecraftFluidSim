@@ -45,6 +45,7 @@ import java.io.StringReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -1496,6 +1497,28 @@ public final class M9ThermalValidation {
 				&& close(restored.thermalTemperatureInCell(1, 1, 1), hot)
 				&& close(restored.thermalTemperatureInCell(2, 1, 1), cold),
 				"orthogonal thermal handoff did not preserve energy/temperature");
+
+		FluidDomainState authoritative = domain.captureAuthoritativeState();
+		FlipFluidDomain fullRestore = FlipFluidDomain.restoreAuthoritativeState(authoritative);
+		var expectedGas = domain.exportGasState("");
+		var restoredGas = fullRestore.exportGasState("");
+		boolean energyEqual = fullRestore.exactInternalEnergy().equals(domain.exactInternalEnergy());
+		boolean gasEqual = restoredGas.nodes().equals(expectedGas.nodes())
+				&& Arrays.equals(restoredGas.cellNodeOrdinal(), expectedGas.cellNodeOrdinal());
+		PendingPhaseVolumeState expectedPending = domain.exportPendingPhaseVolumeState();
+		PendingPhaseVolumeState restoredPending = fullRestore.exportPendingPhaseVolumeState();
+		boolean pendingEqual = restoredPending.cellCount() == expectedPending.cellCount()
+				&& restoredPending.entries().equals(expectedPending.entries());
+		require(energyEqual && gasEqual && pendingEqual,
+				"complete loader-neutral handoff changed truth: energy=" + energyEqual
+						+ " gas=" + gasEqual + " pending=" + pendingEqual);
+		SignedDyadic committedEnergy = domain.exactInternalEnergy();
+		FluidStepCandidate candidate = new CpuFluidSolverBackend().evaluate(
+				new FluidStepRequest(7L, authoritative, false, 0));
+		require(candidate.baseGeneration() == 7L && candidate.candidateGeneration() == 8L
+				&& candidate.backendId().equals(CpuFluidSolverBackend.ID)
+				&& domain.exactInternalEnergy().equals(committedEnergy),
+				"CPU candidate boundary changed generation identity or mutated the owner");
 	}
 
 	private static void localizedHeatingDrivesBoussinesqCirculation() {

@@ -59,6 +59,8 @@ public final class ThermalTransport {
 		this.deltaEnergy = new double[cells];
 	}
 
+	public int maximumSubsteps() { return maximumSubsteps; }
+
 	public Stats step(ThermalCellGrid grid, FaceArea faceArea, double logicalDtSeconds) {
 		return step(grid, faceArea, (x, y, z, direction) -> null, logicalDtSeconds);
 	}
