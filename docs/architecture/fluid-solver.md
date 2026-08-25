@@ -11,6 +11,10 @@
 
 后三层不能创建、删除、缩放或修复第一层库存。
 
+### 后端候选边界
+
+`FluidDomainState` 捕获恰好一种 liquid carrier 布局（pure/material/chemical）及其 registry、颗粒、气体、热学、相变 pending work、求解配置和硬预算。pressure、平滑 density、mesh、调度与 Minecraft 对象不在其中。`FluidSolverBackend.evaluate(FluidStepRequest)` 必须在私有状态上计算，并返回 base generation 的紧邻完整后继；调用者在 tick boundary 验证后才可发布。当前 `CpuFluidSolverBackend` 是规范实现，GPU probe 尚不满足这份完整状态契约，不能作为生产后端注册。
+
 ## 网格与 marker
 
 - 默认 cell size 为 0.5 m；每个 Minecraft block 对应 2×2×2 cells。
@@ -76,12 +80,12 @@ div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 
 ## 固体与碰撞
 
-- Minecraft `VoxelShape` 被保守采样成 cut-cell face aperture；pressure、预条件器、投影和 marker CCD 使用同一几何。
+- Fabric 侧 `MinecraftCollisionWorldPort` 将 Minecraft `VoxelShape` 保守采样成不可变 `CollisionField`；core 再把 micro mask 转成 cut-cell face aperture。pressure、预条件器、投影和 marker CCD 使用同一几何。
 - CCD 只截断命中法向，切向保持自由。
 - 世界碰撞变化挤出的液体必须从 marker 账本得到实际量；不能用格密度推断 escaped volume。
 - granular、deposit 和 coherent solid occupancy 与 liquid 共享容量和压力排水路径。
 
-`FlipCutCellGeometry` 从保守 `VoxelShape` sample 得到 cell solid volume 和三轴 face aperture。`FlipParticleCollision` 对 marker 轨迹做连续碰撞检测，避免只在步末投影位置造成穿薄墙；碰撞只去除命中法向速度，切向分量保持。
+`FlipCutCellGeometry` 从每格 `2×2×2` unsigned micro mask 得到 cell solid volume 和三轴 face aperture。checkpoint 与后端 handoff 保存 raw mask，不能退化为“整格固体/整格空气”；恢复后必须得到相同 aperture。`FlipParticleCollision` 对 marker 轨迹做连续碰撞检测，避免只在步末投影位置造成穿薄墙；碰撞只去除命中法向速度，切向分量保持。
 
 实体交互目前是服务器权威的单向模型：按采样浸没比例给实体施加浮力/阻力，但不把等量反作用动量写回流体，也不把实体作为移动 cut-cell 进入 projection。未来若实现双向耦合，必须同时处理压力面积分、移动固体边界、反作用量和排开体积，不能在当前单向力上叠加经验水流推力。
 

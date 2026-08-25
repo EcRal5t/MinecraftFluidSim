@@ -21,7 +21,7 @@
 
 - material 定义 carrier kind/id、参考温度、参考比内能、导热率和最多 16 个 caloric segment；
 - species offset 定义某 host material 中每 AU 的参考内能偏移；
-- transition 定义上下相、平衡温度、exact 两侧体积量子、exact 质量批、接口要求和压力有效域；
+- transition 定义上下相、参考平衡温度、可选的有界 `T_eq(p)` 曲线、exact 两侧体积量子、exact 质量批、接口要求和压力有效域；
 - boundary 定义哪些世界方块提供固定温度面。
 
 总材料数、segment、species offset、transition、boundary、cell carrier 和 phase operation 均有硬上限。world fingerprint 或引用不一致时保留存档并 LOCKED，不按当前数据包重解释。
@@ -111,9 +111,9 @@ p = P0 * (Vstd / Vavailable) * (T / T0)
 
 - 联合搬运物理 kg、condensed weight、液体 marker、coherent SVQ、材料身份、可选 chemical composition/species 和 `U`。
 - 体积变化与机械功写入 pending phase-work，由下一次 pressure projection exactly-once 消费。
-- 当前固液平衡温度使用绝对压力有效域作为安全门；压力曲线尚未数据化，见产品路线。
+- 固液规划从同一 logical state 的绝对压力取 `T_eq(p)`。曲线使用 registry-bound 单调分段线性点，只在声明的闭区间内插值；无曲线的 transition 使用常量参考平衡温度，任何曲线都禁止外推或钳制。
 
-内置冰/水 transition 每批为 `0.001 kg`，两侧分别为 `146 SVQ` 与 `134 SVQ`，在 `273.15 K` 平衡。规划器在共享 phase-operation 预算内逐 exact batch 寻找最大可提交 extent；若下一批会跨过平衡平台、耗尽可转库存或超出目标容量，就停在上一完整批。
+内置冰/水 transition 每批为 `0.001 kg`，两侧分别为 `146 SVQ` 与 `134 SVQ`。其 `10 kPa–2 MPa` 平衡曲线取自 [IAPWS R14-08(2011) Ice Ih 熔化压力关系](https://iapws.org/documents/release/MeltSub)的反演采样，包含 1 atm 参考点，在当前分段上相对原关系的最大温度插值误差低于 `4e-5 K`；曲线外拒绝候选。规划器在共享 phase-operation 预算内逐 exact batch 寻找最大可提交 extent；若下一批会跨过压力对应的平台、耗尽可转库存或超出目标容量，就停在上一完整批。
 
 ### 气液
 
@@ -179,7 +179,7 @@ section payload 逐 ordinal 保存 liquid/active/deposit energy raw bits 和 coh
 
 motion 和 thermal activity 是正交轴。只有温度残差、边界通量、反应/相变或局部几何变化达到唤醒条件时才推进热学；休眠不得改变任何库存。
 
-`status` 可读取全域温度范围、总 `U`、source/sink/work、phase batch 和气体节点摘要。局部温度由未来外部观察 API 提供，查询不得唤醒或回写热状态。
+`status` 可读取全域温度范围、总 `U`、source/sink/work、phase batch 和气体节点摘要。Query API v1 可返回单格权威载体反演出的可选温度；查询只读 marker/side columns，不唤醒、不建网格，也不回写热状态。
 
 thermal activity 与 motion pacing 相互独立：有 face transfer、reservoir exchange、chemistry/granular/phase dirty、gas activity、carrier motion、pending work 或未闭合 audit 时保持 ACTIVE；连续安静观察先进入 REDUCED，再进入 SLEEP。boundary、容器、管理员 source、化学、颗粒、气体、相变或 carrier movement 都是精确唤醒原因。
 

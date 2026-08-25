@@ -6,18 +6,18 @@
 
 当前系统只在显式、闭合、预算受限且 chunk 完整加载的 controller 区域内提供连续流体。开发命令可建立瞬态 fixture，但不会扩大持久 ownership。天然河流、海洋、无界洞穴空气和永久 chunk ticket 不属于当前运行模型。
 
-CPU `FlipFluidDomain` 是规范求解器。GPU probe、客户端 renderer、tooltip、命令 status 和未来外部 Mod 查询都只能读取已提交状态。
+CPU `FlipFluidDomain` 是规范求解器。GPU probe、客户端 renderer、tooltip、命令 status 和外部 Mod Query API 都只能读取已提交状态。
 
 ## 模块边界
 
 | 模块 | 职责 | 依赖边界 |
 |---|---|---|
-| `api` | stable ID、单位化查询/转移契约和外部观察 ABI | 只依赖 JDK，不暴露 solver 数组或 Minecraft 类型 |
+| `api` | stable ID、单位化外部契约；当前稳定入口为 Query API v1 | 只依赖 JDK，不暴露 solver 数组或 Minecraft 类型 |
 | `core` | PIC/FLIP、材料、气体、化学、颗粒、热学与候选状态 | 依赖 `api` 和纯 Java 库，不引用 Fabric/Minecraft |
 | `fabric` | Mod 生命周期、世界读取/写入、NBT、数据包、网络、物品与命令 | 依赖并内嵌 `api`、`core`；服务器主线程拥有提交权 |
 | `gpu-probe` | Vulkan 能力验证、只读对照和未来后端实验 | 数值部分依赖 `core`；Fabric 集成只以 compile-only 接入主 Mod |
 
-未来 CPU/GPU 后端都必须接收不可变 step input，并在 tick boundary 返回完整 candidate。世界事务、ownership、actor 和 HEAD 发布不进入数值后端。
+`FluidDomainState` 是完整、不可变的数值后端交接状态；`FluidStepRequest` 绑定 base generation，`FluidStepCandidate` 只能返回其紧邻后继。`CpuFluidSolverBackend` 已通过私有恢复副本实现这一边界。未来 GPU 后端必须消费同一完整输入并返回同一完整 candidate；世界事务、ownership、actor、调度和 HEAD 发布不进入数值后端。
 
 ## 组件与数据流
 
@@ -29,6 +29,7 @@ CPU `FlipFluidDomain` 是规范求解器。GPU probe、客户端 renderer、tool
 Minecraft 命令、方块、容器、实体与 chunk 事件
   -> FluidSimulationService                 世界主线程编排
   -> FluidRegionManager / FluidRegion       身份、预算、生命周期
+  -> CollisionWorldPort                     捕获不可变碰撞场
   -> FlipFluidDomain                        CPU mechanics 与载体库存
        -> AirNetwork                        密闭气体节点与孔流
        -> ChemicalParcelStore               marker 化学 parcel
@@ -42,9 +43,11 @@ ContainerTransferStore                      region/item 跨域事务
 已提交区域状态
   -> SnapshotBuilder / protocol payload
   -> 客户端 surface、material、chemical、granular、thermal 重建
+  -> MmmQueryApiV1 / FabricFluidQueryApi
+  -> 外部 Mod 的同步只读单格观察
 ```
 
-Minecraft adapter 负责读取世界、选择区域和提交世界修改；数值核心不持有 `ServerLevel`、ItemStack durable save 或磁盘所有权。持久层保存稳定 ID 和完整库存，不序列化 Java 对象图、GPU buffer 或客户端 mesh。
+Minecraft adapter 负责读取世界、选择区域和提交世界修改。`MinecraftCollisionWorldPort` 把 `VoxelShape` 保守采样成纯 Java `CollisionField` 后再交给世界交互服务；数值核心不持有 `ServerLevel`、ItemStack durable save 或磁盘所有权。持久层保存稳定 ID 和完整库存，不序列化 Java 对象图、GPU buffer 或客户端 mesh。
 
 ## 权威真值表
 
@@ -115,7 +118,9 @@ region HEAD 是区域物理状态唯一提交点。ownership 与 container WAL �
 - 数值代码只消费已冻结的 region arrays、registry 和 boundary sample。
 - checkpoint 捕获的是一个完整 logical state；不发布半步或半个 gas remap。
 - 客户端只接受当前 region generation 的递增 snapshot sequence；迟到包、移除 tombstone 前的包和其他 dimension 的包不能复活状态。
-- renderer、Jade/HWYLA 查询、status 和 GPU probe 都不能唤醒、加载、checkpoint 或回写区域。
+- Query API v1 只允许服务器主线程同步调用，只扫描已加载 owner 的权威 marker/side columns；它不建网格、不加载 chunk、不分配 solver、不唤醒、不 checkpoint、不推进 logical step，也不返回 live domain 引用。
+- Query 的 `regionGeneration` 标识 ownership/checkpoint generation，不是逐 tick revision。观察者需要新鲜值时必须重新查询，不能把 generation 当作缓存时钟。
+- renderer、Jade/HWYLA 适配、status 和 GPU probe 都不能唤醒、加载、checkpoint 或回写区域。
 
 ## 主题文档
 
@@ -127,3 +132,4 @@ region HEAD 是区域物理状态唯一提交点。ownership 与 container WAL �
 - 热输运、相变和反应热：[`thermal-state.md`](thermal-state.md)
 - checkpoint：[`region-state.md`](region-state.md)
 - ownership、容器与世界事务：[`world-ownership-and-containers.md`](world-ownership-and-containers.md)
+- 外部只读查询：[`external-api.md`](external-api.md)

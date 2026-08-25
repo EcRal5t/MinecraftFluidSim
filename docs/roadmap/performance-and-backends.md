@@ -28,8 +28,8 @@
 
 Minecraft 世界读取、方块修改和实体快照留在服务器主线程：
 
-1. 主线程冻结本步不可变输入；
-2. CPU worker 或 GPU 只计算下一完整 logical state；
+1. 主线程以 `FluidDomainState` 冻结本步完整权威输入，并用 `FluidStepRequest` 绑定 base generation；
+2. CPU worker 或 GPU 只在私有状态上计算一个 `FluidStepCandidate`；
 3. tick 边界原子提交完整结果；
 4. 超时保留上一完整状态，不展示半步；
 5. 世界和物品修改仍由主线程事务执行。
@@ -42,6 +42,7 @@ Minecraft 世界读取、方块修改和实体快照留在服务器主线程：
 - 完整状态只在 checkpoint、卸载、后端切换或诊断时按 generation 分片回读。
 - 设备丢失时暂停区域，从最近 CPU 可读 checkpoint 恢复。
 - GPU 不要求逐 bit 等于 CPU，但必须满足相同库存账本和数值误差上限。
+- GPU 实现必须覆盖完整 `FluidDomainState`；当前只读纯水 probe 不实现 `FluidSolverBackend`，也不能作为生产后端选择。
 
 评审必须回答 CPU/GPU break-even、pressure 质量、常规/完整 readback 成本、`64³` 容量、20 Hz 可行性和 Minecraft 同时渲染稳定性。只读 probe 的能力结果不能替代生产 profile。
 

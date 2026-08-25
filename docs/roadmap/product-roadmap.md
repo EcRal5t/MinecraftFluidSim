@@ -22,8 +22,8 @@
 
 - 不可互溶相目前共享局部速度场，不声称解析切向滑移、乳化和液滴破碎。
 - 实体耦合目前主要是流体对实体的单向采样，不是完整双向动量/排水求解。
-- 固液平衡温度还没有数据化压力曲线；气液已经使用绝对压力和 component 分压。
-- 客户端只显示服务端快照的重建结果；尚无稳定的外部局部查询/转移 API。
+- 固液已支持有界、数据化的压力平衡曲线，气液使用绝对压力和 component 分压；更高压力、更多材料和跨相溶解仍需分别验证物性域。
+- Query API v1 已冻结同步只读单格观察；尚无 Jade/WAILA/HWYLA 适配、稳定 transfer/event API 或其他 loader 发现桥。
 - section 是一个 region 原子 generation 内的存储分片，不具有独立提交、卸载或 ownership 生命周期。
 - controller 外天然洞穴、河流、海洋和世界生成水不在当前 ownership 范围。
 
@@ -46,7 +46,7 @@
 
 | 顺序 | 产品阶段 | 前置依赖 | 完成时必须证明 |
 |---|---|---|---|
-| 1 | 只读观察与外部 Mod API | 当前 controller/registry/checkpoint | 查询不加载、不唤醒、不回写；stable ID/单位/线程/失败语义冻结 |
+| 1 | 只读观察适配与外部 Mod API | Query API v1、当前 controller/registry/checkpoint | 外部适配查询不加载、不唤醒、不回写；扩展保持 stable ID/单位/线程/失败语义 |
 | 2 | 原版行为与受控转移 API | 查询 API、现有 WAL | 灭火/湿润/岩浆等逐项守恒，外部 actor 可 crash-safe 收敛 |
 | 3 | 物理完整性增量 | 可观察 fixture | 压力相关固液、双向实体等分别有数据域与守恒门，不互相绑架发布 |
 | 4 | section 生命周期与显式端口 | profile、事务与网络 API | 跨 section/region 仍只有完整代次，不依赖永久 chunk ticket |
@@ -58,19 +58,18 @@
 
 ## 下一阶段：原版行为与外部 Mod API
 
-先冻结 API 的单位、事务、线程和失败语义，再按小增量实现：
+Query API v1 的单位、线程、无加载/唤醒和结构化失败语义已经冻结在 [`../architecture/external-api.md`](../architecture/external-api.md)。下一步按小增量实现：
 
-1. 只读查询：dimension + region + world/cell position → 有效性、材料、体积分数、派生温度和相态。
-2. 观察适配：为 Jade/WAILA/HWYLA 提供接口；查询不得唤醒、加载或回写区域，主 Mod 不增加准星 HUD。
-3. 受控转移 API：stable material/species ID、纳体积/SVQ、质量和总内能必须显式，复用现有区域/容器事务。
-4. 事件 API：checkpoint、ownership、phase transition 和安全暂停只发布已提交事件，不暴露半代次。
-5. 原版交互：灭火、湿润、岩浆反应、红石、生物和寻路逐项定义并验收，不以“一格水”假设直接映射连续库存。
+1. 观察适配：为 Jade/WAILA/HWYLA 接入 v1；查询不得唤醒、加载或回写区域，主 Mod 不增加准星 HUD。
+2. 受控转移 API：stable material/species ID、纳体积/SVQ、质量和总内能必须显式，复用现有区域/容器事务。
+3. 事件 API：checkpoint、ownership、phase transition 和安全暂停只发布已提交事件，不暴露半代次。
+4. 原版交互：灭火、湿润、岩浆反应、红石、生物和寻路逐项定义并验收，不以“一格水”假设直接映射连续库存。
 
 该阶段不扩大开放世界 ownership，也不允许外部 Mod 直接修改平滑 density、pressure、runtime handle 或客户端 mesh。
 
 ### API 形状
 
-只读查询的最小结果应包含：region identity、state generation、world/cell 位置是否有效、总液相体积、规范材料/phase 分数、可选 species 摘要、派生温度/相态以及“为什么不可查询”的结构化状态。pressure 与内部调试字段不默认承诺为稳定 API。
+后续若有明确适配用例，可向只读 API 增加相态、gas、颗粒或 coherent solid 观察；pressure 与内部调试字段不默认承诺为稳定 API。扩展不能改变 v1 已冻结的单位、状态分类或“非 OK 不返回部分 observation”规则。
 
 受控转移采用显式 request/plan/commit：调用者给出 dimension、实际 world target、stable resource identity、typed amount、可选质量/组成/能量和 actor transaction identity；主 Mod 返回实际可转量或完整拒绝。API 不能让调用者持有 live domain 引用，也不能跨 tick 重用未绑定 generation 的 plan。
 
@@ -87,34 +86,31 @@
 
 ### 阶段关闭条件
 
-- API 文档与 codec/ABI fixture 覆盖 stable ID、单位、线程、generation 和错误分类。
 - Jade/WAILA/HWYLA 适配可在不唤醒区域的情况下显示局部派生温度；主 Mod 不增加准星 HUD。
 - 至少一个只读外部适配和一个 crash-safe 外部转移适配通过重启恢复。
 - 原版行为逐项有库存/能量账本和实际 world fixture，不以视觉结果代替守恒。
 
 ## 热力学后续
 
-### 压力相关固液平衡
-
-当前气液相变已经使用绝对压力和 water-vapor 分压；固液相变只把绝对压力作为有效域安全门，平衡温度仍为常量。
-
-后续可将 solid-liquid transition 扩展为 registry 数据化的 `T_eq(p)`：
-
-- 先支持单调分段曲线或经过验证的 Clapeyron 关系；
-- pressure 来自同一 logical step 的绝对压力场；
-- transition fingerprint 进入 world registry identity；
-- 相变规划同时闭合 latent heat、质量、SVQ、体积功和组成；
-- 无曲线的定义保持常温常压模型，不引入材料特判。
-
-这项扩展不需要重构权威内能或相变提交顺序，但必须新增物性有效域和压力曲线量化 fixture。
-
-pressure 必须取同一 logical state 的绝对压力：液体机械 pressure 加对应 gas/ambient 基准。相变候选发布前绑定该 pressure generation；不能从 `status` 文本或上一 tick 网格读取。第一增量只接受单调分段数据或经物性来源验证的 Clapeyron 参数，并在三相点/曲线外明确拒绝，而不是外推到所有压力。
-
 ### 更完整的化学热力学
 
 弱酸、缓冲液、活度、有限速率动力学、可逆平衡和气相化学暂不承诺。若进入实现，先冻结 solver 规模、exact inventory 与近似的适用范围，不能逐分子粒子化。
 
 优先顺序应是：先扩展数据定义与单 cell 离线平衡器，再接入同 chemical phase 的 bounded dirty-cell solver，最后才考虑跨相质量传递。任何 activity/kinetics 近似都需要声明浓度、温度、压力有效域和 stiffness 处理；预算耗尽应延期或暂停，不能截断 species。
+
+### 气液 species 交换
+
+sealed gas component 已独立保存 standard volume、kg、species/residual 和总内能，但当前尚不与液相 species 做溶解/脱气事务。CO2 溶解、气体吸收、洗涤塔和曝气的第一增量必须先冻结：
+
+- gas/liquid 两侧的 stable species 映射与 exact mass/residual 搬运；
+- Henry/逸度或其他物性关系的温度、压力、浓度有效域；
+- 有限界面面积和传质速率，不以每 tick 比例或瞬间全平衡替代；
+- 同一候选内联合提交两相 inventory、组成、U 和 gas topology lineage；
+- 预算耗尽时延期或暂停，不能只更新 pressure 或删除小组分。
+
+### 有限热容量换热器
+
+固定温度 boundary 仍是无限热浴。两股不混合流体之间的换热器需要独立的有限能量载体/设备状态：设备保存总 `U` 和材料状态函数，两侧只通过各自 cut-face conductance 交换镜像热通量；任何一步都不能直接平均温度或跨墙搬运物质。先实现单个有界 wall/device cell 的三方能量审计，再扩展多方块网络、流向和其他工业 Mod 端口。
 
 ## 实体双向耦合
 
@@ -137,7 +133,7 @@ pressure 必须取同一 logical state 的绝对压力：液体机械 pressure �
 
 详细停止门见 [`performance-and-backends.md`](performance-and-backends.md)。
 
-后端抽象只有在 profile 确认边界后才提取。数值 worker/GPU 只消费 immutable step input，在 tick boundary 返回完整 candidate；世界读写、ownership、actor 和 HEAD 发布留在 server thread。超时保留上一完整 state，不能展示或持久化半步。
+完整 `FluidDomainState` / `FluidStepRequest` / `FluidStepCandidate` 边界已经提取，CPU 规范实现可在私有副本上生成候选。profile 决定何时实现和启用生产 GPU backend；数值 worker/GPU 只能消费该 immutable step input，在 tick boundary 返回完整 candidate。世界读写、ownership、actor 和 HEAD 发布留在 server thread；超时保留上一完整 state，不能展示或持久化半步。
 
 若阶段性能不达标，依次采用：缩小 active neighborhood、降低更新频率、增加守恒休眠/宏观 node、限制产品范围，最后才降低空间分辨率。不得先放松 ledger 或使用材料特判跳过昂贵物理。
 

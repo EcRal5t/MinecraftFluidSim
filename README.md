@@ -48,7 +48,7 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 - 固液和气液相变受能量、库存、容量、饱和压力、绝对压力有效域与每步预算约束。气体 pressure/temperature/volume 由密闭节点库存派生。
 - `thermal_reservoir` 是无限热浴，但实际交换仍只通过相邻 cut-face 通量；越出材料有效温区会安全暂停。
 
-局部温度查询和 Jade/WAILA/HWYLA 适配属于下一阶段的外部观察 API；主 Mod 不提供准星温度 HUD。
+外部 Mod 可通过 JDK-only Query API v1 同步读取已加载区域的单格材料、体积、质量、密度、species 和可选温度；Fabric 发现入口为 `MmmFabricApi.queryV1(server)`。查询不加载、不唤醒、不回写。Jade/WAILA/HWYLA 适配仍待实现，主 Mod 不提供准星温度 HUD。
 
 ## 构建
 
@@ -64,6 +64,7 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 
 - [系统组件与数据流](docs/architecture/system-overview.md)
 - [当前架构契约](docs/README.md)
+- [外部只读 Query API](docs/architecture/external-api.md)
 - [代码职责与最小验证路由](docs/maintenance/routing.md)
 - [未来产品路线](docs/roadmap/product-roadmap.md)
 - [发布验收策略](docs/roadmap/acceptance-and-release.md)

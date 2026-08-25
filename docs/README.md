@@ -13,6 +13,7 @@
 - [守恒化学](architecture/chemistry-state.md)
 - [颗粒与沉积](architecture/granular-state.md)
 - [内能、热输运与相变](architecture/thermal-state.md)
+- [外部只读 Query API](architecture/external-api.md)
 
 ## 维护与未来
 

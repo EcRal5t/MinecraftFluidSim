@@ -27,10 +27,13 @@ handle 只为了数组索引。checkpoint 保存 canonical material palette，�
 格内机械密度只从实际 marker 重建：
 
 ```text
-rho_cell = sum(marker_mass) / (sum(marker_cell_volume) * cellSize^3)
+rho_cell = sum(marker_solver_mass) / sum(marker_normalized_volume)
+
+mass_kg   = marker_solver_mass * cellSize^3
+volume_m3 = marker_normalized_volume * cellSize^3
 ```
 
-实现内部可把 `particleMass / particleVolume` 保持为 solver density 权重，但跨 SI 热学边界时必须统一乘 `cellSize³`。pressure face 的 `1/rho` 系数按界面距离加权；不得从 material reference density、客户端颜色或平滑 fraction 反推存量质量。
+质量和体积跨 SI 边界时都乘同一个 `cellSize³`，所以密度比值中的尺度严格约去。chemical marker 的 `particleMass = exact_species_mass + massResidual`；溶质增加实际质量而体积不变时，机械密度自然上升，因此盐水下沉来自同一权威质量账本，不需要盐材料特判。pressure face 的 `1/rho` 系数按界面距离加权；不得从 material reference density、客户端颜色或平滑 fraction 反推存量质量。热学 Boussinesq 项是参考态附近的温差浮力近似，与这份组成质量密度正交，不能覆盖它。
 
 同一 miscibility group 的材料共享 phase 和速度，但当前没有分子扩散或每 marker 连续浓度场：marker 仍各自保存一种机械材料库存，局部格聚合给出混合比例。不同材料不在 reseed 中互相吞并，因此未解析扩散不会丢失组分。不可互溶材料也共享一个压力/速度框架，不承诺双速度界面动力学。
 

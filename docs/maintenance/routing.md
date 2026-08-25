@@ -19,15 +19,16 @@
 | 区域身份与生命周期 | `FluidRegion.java`、`FluidRegionLifecycle.java`、`ThermalActivity.java` | UNLOADED 仍占预算；motion/thermal 调度不改变库存 |
 | 区域登记与预算 | `FluidRegionManager.java` | 拒绝不替换现有域；报告 per-region 和 total 预算 |
 | 世界配置 | `FluidServerConfig.java` | 只接受当前完整配置；功能门与预算在启动时冻结；依赖链严格 |
-| 世界碰撞/实体采样 | `FluidRegionWorldInteraction.java` | `VoxelShape` 保守采样；挤水只按 marker 账本 |
+| 世界碰撞/实体采样 | `MinecraftCollisionWorldPort.java`、`FluidRegionWorldInteraction.java`、`core/.../world/` | Minecraft shape 先冻结为纯 Java `CollisionField`；挤水只按 marker 账本 |
 | controller footprint | `simulation/controller/` | 非加载读取；破口、缺 chunk、多内腔、重叠或超预算拒绝 |
 | 区域 checkpoint | `simulation/persistence/` | 双槽完整 generation、CRC、HEAD 最后发布；required payload 同代 |
 | takeover | `TakeoverTransaction.java`、`TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
 | ownership | `simulation/ownership/`、`FluidRegionPersistence.java` | WAL→WARNING→世界→region HEAD→committed；未知状态保留并锁定 |
 | 容器事务 | `ContainerTransferJournal.java`、`ContainerTransferStore.java`、`ContainerTransferRecovery.java`、`FluidTransferService.java` | 只读当前 writer 布局；actor durable save 前不得删 WAL |
 | 活动求解器 | `core/.../fluid/FlipFluidDomain.java` | CPU 规范实现；mechanics→conduction→reaction→phase→granular→reseed |
+| 后端完整候选 | `FluidDomainState.java`、`FluidStepRequest.java`、`FluidStepCandidate.java`、`FluidSolverBackend.java` | 后端只计算私有完整后继；不持有世界、actor、HEAD 或提交权 |
 | 自由面/压力 | `FlipFreeSurfaceGeometry.java`、`FlipVolumeDriftCorrection.java`、`FlipVelocityExtrapolator.java` | marker count 决定压力相；平滑 volume 不结算库存 |
-| cut-cell/CCD | `FlipCutCellGeometry.java`、`FlipParticleCollision.java` | pressure 与碰撞共享 aperture；只截断命中法向 |
+| cut-cell/CCD | `FlipCutCellGeometry.java`、`FlipParticleCollision.java` | pressure 与碰撞共享 aperture；checkpoint/handoff 保留 raw micro mask；只截断命中法向 |
 | reseed | `FlipParticleReseeder.java` | 保持体积、质量、动量、质心和相身份 |
 | 材料 | `FluidMaterial*.java`、`BuiltinFluidMaterials.java` | marker 体积与质量独立；stable ID 上链，runtime handle 不上链 |
 | 气体 | `fluid/air/`、`AirCavityScanner.java` | component nanos/kg/species/source/sink 闭合；热区域持久拓扑同代 |
@@ -35,6 +36,7 @@
 | 颗粒 | `granular/`、`GranularCouplingFields.java` | SVQ、质量、组成独立；active/deposit/coherent 不混用 |
 | 热学 | `thermal/`、`FlipThermalState.java`、`FlipThermalParticleState.java` | 总 U 权威；温度派生；通量、反应热、相变、功联合审计 |
 | 客户端快照 | `fabric/.../network/`、`fabric/src/client/java/cc/ecisr/mmm/client/` | 只读量化展示；不得反写物理或恢复库存 |
+| 外部 Query API v1 | `api/.../query/`、`FluidCellInventoryView.java`、`FabricFluidQueryApi.java`、`api/fabric/MmmFabricApi.java` | server-thread only；不加载、不唤醒、不建网格、不返回 live domain |
 | 命令审计 | `logging/` | UTF-8 观测；记录失败不能改变命令结果 |
 
 ## 高频定位
@@ -86,6 +88,8 @@
 | 化学 | `chemistry` | 只追加直接跨层的最近门 |
 | 颗粒 | `granular` | 共享 pressure/air/存档改动追加对应门 |
 | 热学/相变 | `thermal` | 共享 solver/air/chemistry/granular/存档/容器按需追加 |
+| 后端 state/candidate | `thermal` | 只追加实际跨过的 carrier 门；改变 checkpoint 形状才追加 `region-state` |
+| 外部 Query API/ABI | `protocol` | 改 marker/species/thermal 映射时追加对应最近门 |
 
 新增覆盖优先替换同一不变量的已有测试。只有新失败模式无法归属现有领域时才新增 selector；长期场景进入 `soak`。
 
