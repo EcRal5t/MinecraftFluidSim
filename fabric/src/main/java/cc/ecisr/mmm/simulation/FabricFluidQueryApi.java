@@ -69,7 +69,7 @@ final class FabricFluidQueryApi implements MmmQueryApi {
 					+ unavailable.getMessage());
 		}
 		if (view == null) return absent(FluidQueryStatus.EMPTY, "cell contains no liquid marker inventory");
-		return FluidQueryResult.ok(new FluidCellObservation(request.dimensionId(), owner.id(), owner.generation(),
+		return FluidQueryResult.ok(new FluidCellObservation(request.dimensionId(), owner.id(), owner.networkGeneration(),
 				cellX, cellY, cellZ, h, view.liquidVolumeCubicMetres(), view.liquidMassKilograms(),
 				view.densityKilogramsPerCubicMetre(), copy(view.temperatureKelvin()),
 				view.materials().stream().map(value -> new FluidCellObservation.MaterialAmount(

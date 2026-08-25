@@ -121,7 +121,7 @@ region HEAD 是区域物理状态唯一提交点。ownership 与 container WAL �
 - checkpoint 捕获的是一个完整 logical state；不发布半步或半个 gas remap。
 - 客户端只接受当前 region generation 的递增 snapshot sequence；迟到包、移除 tombstone 前的包和其他 dimension 的包不能复活状态。
 - Query API 只允许服务器主线程同步调用，只扫描已加载 owner 的权威 marker/side columns；它不建网格、不加载 chunk、不分配 solver、不唤醒、不 checkpoint、不推进 logical step，也不返回 live domain 引用。
-- Query 的 `regionGeneration` 标识 ownership/checkpoint generation，不是逐 tick revision。观察者需要新鲜值时必须重新查询，不能把 generation 当作缓存时钟。
+- Query 的 `regionNetworkGeneration` 标识网络中的区域 incarnation，不是 checkpoint generation 或逐 tick revision。观察者需要新鲜值时必须重新查询，不能把它当作缓存时钟。
 - renderer、Jade/HWYLA 适配、status 和 GPU probe 都不能唤醒、加载、checkpoint 或回写区域。
 
 ## 主题文档

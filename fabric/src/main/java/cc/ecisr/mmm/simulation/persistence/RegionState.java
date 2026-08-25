@@ -372,7 +372,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					new PendingPhaseVolumeCodec().encode(pendingPhaseVolume)));
 		}
 		RegionManifest unsigned = new RegionManifest(particles.layout(), region.id(), region.dimension().identifier().toString(), checkpointGeneration,
-				region.generation(), region.origin(), region.sizeX(), region.sizeY(), region.sizeZ(), region.solverConfig(),
+				region.networkGeneration(), region.origin(), region.sizeX(), region.sizeY(), region.sizeZ(), region.solverConfig(),
 				region.reservedMarkerCapacity(), region.persistedRuntime(), region.footprint(), particles.particleCount(),
 				Double.doubleToRawLongBits(sumVolumes(positionVolume)), particles.materialPalette(),
 				particles.layout().hasMaterials() ? Double.doubleToRawLongBits(sum(particles.markerMass())) : 0L,

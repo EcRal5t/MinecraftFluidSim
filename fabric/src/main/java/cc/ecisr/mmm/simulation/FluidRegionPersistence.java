@@ -414,7 +414,7 @@ final class FluidRegionPersistence {
 		RegionState state = files.read(region.id());
 		RegionManifest manifest = state.manifest();
 		validateFeatureShape(manifest);
-		if (manifest.checkpointGeneration() != region.checkpointGeneration() || manifest.networkGeneration() != region.generation()
+		if (manifest.checkpointGeneration() != region.checkpointGeneration() || manifest.networkGeneration() != region.networkGeneration()
 				|| !manifest.dimensionId().equals(region.dimension().identifier().toString())
 				|| !manifest.origin().equals(region.origin()) || manifest.sizeX() != region.sizeX()
 				|| manifest.sizeY() != region.sizeY() || manifest.sizeZ() != region.sizeZ()
@@ -506,7 +506,7 @@ final class FluidRegionPersistence {
 	}
 
 	private static void validateRecoveryIdentity(FluidRegion region, RegionManifest manifest) throws IOException {
-		if (manifest.networkGeneration() != region.generation()
+		if (manifest.networkGeneration() != region.networkGeneration()
 				|| !manifest.dimensionId().equals(region.dimension().identifier().toString())
 				|| !manifest.origin().equals(region.origin()) || manifest.sizeX() != region.sizeX()
 				|| manifest.sizeY() != region.sizeY() || manifest.sizeZ() != region.sizeZ()

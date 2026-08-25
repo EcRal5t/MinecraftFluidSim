@@ -31,7 +31,7 @@ public final class FluidRegion {
 	private final FluidSolverConfig solverConfig;
 	private final long reservedMarkerCapacity;
 	private final FluidRegionFootprint footprint;
-	private final long generation;
+	private final long networkGeneration;
 	private final FluidRegionLifecycle lifecycle = new FluidRegionLifecycle();
 	private FlipFluidDomain domain;
 	private long checkpointGeneration;
@@ -81,7 +81,7 @@ public final class FluidRegion {
 			FluidSolverConfig solverConfig,
 			long reservedMarkerCapacity,
 			FluidRegionFootprint footprint,
-			long generation,
+			long networkGeneration,
 			FlipFluidDomain domain
 	) {
 		this.id = Objects.requireNonNull(id, "id");
@@ -98,10 +98,10 @@ public final class FluidRegion {
 		if (domain != null && reservedMarkerCapacity != domain.maximumParticleCount()) {
 			throw new IllegalArgumentException("Reserved marker capacity must equal the domain hard marker budget");
 		}
-		if (generation <= 0L) throw new IllegalArgumentException("Region generation must be positive");
+		if (networkGeneration <= 0L) throw new IllegalArgumentException("Region network generation must be positive");
 		this.reservedMarkerCapacity = reservedMarkerCapacity;
 		this.footprint = footprint;
-		this.generation = generation;
+		this.networkGeneration = networkGeneration;
 		this.domain = domain;
 		if (domain != null && footprint != null) domain.sealDomainBoundary();
 		if (footprint != null && !origin.equals(footprint.minimumInterior())) {
@@ -162,7 +162,7 @@ public final class FluidRegion {
 	public long reservedMarkerCapacity() { return reservedMarkerCapacity; }
 	public FluidRegionFootprint footprint() { return footprint; }
 	public boolean controllerManaged() { return footprint != null; }
-	public long generation() { return generation; }
+	public long networkGeneration() { return networkGeneration; }
 	public long checkpointGeneration() { return checkpointGeneration; }
 	public int checkpointMarkerCount() { return checkpointMarkerCount; }
 	public float checkpointVolume() { return checkpointVolume; }

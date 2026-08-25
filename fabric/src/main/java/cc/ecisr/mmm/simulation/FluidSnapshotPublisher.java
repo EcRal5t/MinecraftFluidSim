@@ -67,9 +67,9 @@ final class FluidSnapshotPublisher {
 		Objects.requireNonNull(region, "region");
 		long sequence = region.nextSnapshotSequence();
 		FluidSnapshotPayload purePayload = FluidSnapshotPayload.removeRegion(
-				region.dimension().identifier(), region.id(), region.generation(), sequence);
+				region.dimension().identifier(), region.id(), region.networkGeneration(), sequence);
 		FluidMaterialSnapshotPayload materialPayload = FluidMaterialSnapshotPayload.removeRegion(
-				region.dimension().identifier(), region.id(), region.generation(), sequence);
+				region.dimension().identifier(), region.id(), region.networkGeneration(), sequence);
 		FluidChemicalSnapshotPayload chemicalPayload = FluidChemicalSnapshotPayload.removeRegion(materialPayload);
 		FluidGranularSnapshotPayload granularPayload = FluidGranularSnapshotPayload.removeRegion(materialPayload);
 		FluidThermalSnapshotPayload thermalPayload = FluidThermalSnapshotPayload.removeRegion(materialPayload);
@@ -122,7 +122,7 @@ final class FluidSnapshotPublisher {
 					FluidSnapshotPayload.EXTENSION_GAS_NODES, domain.copyGasNodeMask()));
 		}
 		return FluidSnapshotPayload.snapshot(
-				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence(),
+				region.dimension().identifier(), region.id(), region.networkGeneration(), region.nextSnapshotSequence(),
 				region.origin(), domain.config().cellSize(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
 				domain.copyQuantizedVolume(), domain.copyMarkerMask(), domain.copySolidMask(), region.debugOverlays(),
 				extensions);
@@ -136,7 +136,7 @@ final class FluidSnapshotPublisher {
 			FluidRegion region, FluidMaterialRenderSnapshot snapshot
 	) {
 		return FluidMaterialSnapshotPayload.snapshot(
-				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence(),
+				region.dimension().identifier(), region.id(), region.networkGeneration(), region.nextSnapshotSequence(),
 				region.origin(), snapshot, region.debugOverlays());
 	}
 

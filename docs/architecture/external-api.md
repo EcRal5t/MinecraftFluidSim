@@ -36,9 +36,9 @@
 
 ## Observation
 
-`FluidCellObservation` 返回 dimension ID、region UUID、region generation、cell 坐标、cell edge、总液体体积 `m³`、质量 `kg`、密度 `kg/m³`、可选温度 `K`、按 stable ID 排序的材料体积/质量以及 species integer quanta。
+`FluidCellObservation` 返回 dimension ID、region UUID、region network generation、cell 坐标、cell edge、总液体体积 `m³`、质量 `kg`、密度 `kg/m³`、可选温度 `K`、按 stable ID 排序的材料体积/质量以及 species integer quanta。
 
-数据直接扫描权威 marker、chemical parcel 和 thermal side column：不依赖平滑 volume、pressure、客户端 mesh 或 grid rebuild。`regionGeneration` 是 ownership/checkpoint 身份代次，不是每 tick state revision；调用方需要新鲜值时重新查询，不能用它判断两个 observation 之间没有发生物理步。
+数据直接扫描权威 marker、chemical parcel 和 thermal side column：不依赖平滑 volume、pressure、客户端 mesh 或 grid rebuild。`regionNetworkGeneration` 标识网络中的区域 incarnation，不是 checkpoint generation 或逐 tick state revision；调用方需要新鲜值时重新查询，不能用它判断两个 observation 之间没有发生物理步。
 
 Query API 不承诺 pressure、速度、相分数、gas/颗粒/coherent solid 摘要或内部调度字段。新增字段或其他库存类型必须保持调用方可判定的单位与失败语义，不能悄悄复用 `detail` 文本扩展协议。
 

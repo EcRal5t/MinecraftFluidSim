@@ -10,7 +10,7 @@ import java.util.UUID;
 public record FluidCellObservation(
 		String dimensionId,
 		UUID regionId,
-		long regionGeneration,
+		long regionNetworkGeneration,
 		int cellX,
 		int cellY,
 		int cellZ,
@@ -24,7 +24,7 @@ public record FluidCellObservation(
 ) {
 	public FluidCellObservation {
 		StableId.require(dimensionId, 128, "dimension id");
-		if (regionId == null || regionGeneration <= 0L || cellX < 0 || cellY < 0 || cellZ < 0
+		if (regionId == null || regionNetworkGeneration <= 0L || cellX < 0 || cellY < 0 || cellZ < 0
 				|| !(Double.isFinite(cellSizeMetres) && cellSizeMetres > 0.0)
 				|| !(Double.isFinite(liquidVolumeCubicMetres) && liquidVolumeCubicMetres > 0.0)
 				|| !(Double.isFinite(liquidMassKilograms) && liquidMassKilograms > 0.0)
