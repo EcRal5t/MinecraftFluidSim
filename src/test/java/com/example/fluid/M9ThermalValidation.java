@@ -23,6 +23,7 @@ import com.example.thermal.GasLiquidPhaseModel;
 import com.example.thermal.SignedDyadic;
 import com.example.thermal.GranularEnergyColumn;
 import com.example.thermal.CoherentPhaseStore;
+import com.example.thermal.CondensedMassScale;
 import com.example.thermal.ThermalBoundaryDefinition;
 import com.example.thermal.ThermalAuditLedger;
 import com.example.thermal.ThermalDefinitionCodec;
@@ -296,6 +297,7 @@ public final class M9ThermalValidation {
 				&& display.gasNodes().size() == 1 && display.gasNodes().getFirst().nodeId() == 1,
 				"thermal v5 display did not derive quantized condensed/gas state in one rebuild");
 		double liquidMassBefore = domain.totalMass();
+		double boiledSolverMass = CondensedMassScale.forCellSize(config.cellSize()).solverMassWeight(0.01);
 		long gasNanosBefore = domain.airNetwork().standardVolumeNanos(1);
 		SignedDyadic energyBefore = domain.exactInternalEnergy();
 		ThermalAuditLedger auditBefore = domain.thermalAudit();
@@ -303,7 +305,7 @@ public final class M9ThermalValidation {
 		FlipFluidDomain.GasThermalPhaseStats stats = domain.lastGasThermalPhaseStats();
 		GasComponentAmount vaporAmount = domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
 		require(stats.operations() == 1 && stats.boiledCells() == 1 && stats.condensedCells() == 0
-				&& close(domain.totalMass(), liquidMassBefore - 0.01)
+				&& close(domain.totalMass(), liquidMassBefore - boiledSolverMass)
 				&& vaporAmount != null && close(vaporAmount.mass(), 0.01)
 				&& domain.airNetwork().standardVolumeNanos(1) > gasNanosBefore
 				&& domain.airNetwork().auditClosed()
@@ -604,7 +606,7 @@ public final class M9ThermalValidation {
 				handle -> materialId, 1,
 				(marker, mixture, candidateMass) -> thermal.requireReactionState(
 						marker, mixture, candidateMass, markers));
-		require(thermal.exactEnergy(1).equals(before) && close(thermal.temperature(0, markers), 310.0),
+		require(thermal.exactEnergy(1).equals(before) && close(thermal.temperature(0, markers), 380.0),
 				"reaction heat was not derived from conserved marker internal energy");
 	}
 
@@ -774,7 +776,7 @@ public final class M9ThermalValidation {
 
 		long batchSvq = SolidVolume.SVQ_PER_CELL / 8L;
 		ThermalPhaseTransition cellTransition = new ThermalPhaseTransition("test:phase/cell_lower_upper",
-				lower.id(), upper.id(), 300.0, batchSvq, batchSvq, ExactRational.parse("0.125"),
+				lower.id(), upper.id(), 300.0, batchSvq, batchSvq, ExactRational.parse("0.015625"),
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
 		ThermalRegistry cellRegistry = new ThermalRegistry(
 				List.of(lower, upper), List.of(), List.of(cellTransition), "", "");
@@ -786,7 +788,8 @@ public final class M9ThermalValidation {
 		require(freezeStats.operations() == 4 && freezeStats.signedBatches() == 4L
 				&& close(phaseDomain.totalVolumeExact(), 0.5)
 				&& phaseDomain.totalCoherentSolidVolumeSvq() == SolidVolume.SVQ_PER_CELL / 2L
-				&& close(phaseDomain.totalMass() + phaseDomain.totalCoherentMass(), 1.0)
+				&& close(CondensedMassScale.forCellSize(config.cellSize()).kilograms(phaseDomain.totalMass())
+						+ phaseDomain.totalCoherentMass(), 0.125)
 				&& close(phaseDomain.thermalTemperatureInCell(0, 0, 0), 300.0)
 				&& phaseDomain.exactInternalEnergy().equals(coldEnergy)
 				&& phaseDomain.exactInternalEnergy().equals(phaseDomain.thermalAudit().expectedInventory()),
@@ -798,7 +801,8 @@ public final class M9ThermalValidation {
 		require(meltStats.operations() == 4 && meltStats.signedBatches() == -4L
 				&& close(phaseDomain.totalVolumeExact(), 1.0)
 				&& phaseDomain.totalCoherentSolidVolumeSvq() == 0L
-				&& close(phaseDomain.totalMass() + phaseDomain.totalCoherentMass(), 1.0)
+				&& close(CondensedMassScale.forCellSize(config.cellSize()).kilograms(phaseDomain.totalMass())
+						+ phaseDomain.totalCoherentMass(), 0.125)
 				&& close(phaseDomain.thermalTemperatureInCell(0, 0, 0), 300.0)
 				&& phaseDomain.exactInternalEnergy().equals(hotEnergy)
 				&& phaseDomain.exactInternalEnergy().equals(phaseDomain.thermalAudit().expectedInventory()),
@@ -876,7 +880,8 @@ public final class M9ThermalValidation {
 		CondensedLedger initial = condensedLedger(domain, chemistry);
 		long initialGranularSvq = domain.totalGranularSolidVolumeSvq();
 		double initialGranularMass = domain.totalGranularMass();
-		double initialMass = domain.totalMass() + domain.totalCoherentMass();
+		CondensedMassScale massScale = CondensedMassScale.forCellSize(config.cellSize());
+		double initialMass = massScale.kilograms(domain.totalMass()) + domain.totalCoherentMass();
 		SignedDyadic coldEnergy = domain.exactInternalEnergy();
 		FlipFluidDomain.ThermalPhaseStats freeze = domain.stepInertPhaseChangeOnly(16);
 		CondensedLedger frozen = condensedLedger(domain, chemistry);
@@ -891,7 +896,7 @@ public final class M9ThermalValidation {
 				== Double.doubleToRawLongBits(initial.indicatorMass())
 				&& domain.totalGranularSolidVolumeSvq() == initialGranularSvq
 				&& close(domain.totalGranularMass(), initialGranularMass)
-				&& close(domain.totalMass() + domain.totalCoherentMass(), initialMass)
+				&& close(massScale.kilograms(domain.totalMass()) + domain.totalCoherentMass(), initialMass)
 				&& Math.abs(domain.exactInternalEnergy().subtract(coldEnergy).toDouble()) <= 1.0E-8
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"composition/granular freeze did not conserve joint species, indicator, solid and energy truth: stats="
@@ -899,7 +904,7 @@ public final class M9ThermalValidation {
 						+ " coherent=" + domain.totalCoherentSolidVolumeSvq()
 						+ " granularSvq=" + domain.totalGranularSolidVolumeSvq() + "/" + initialGranularSvq
 						+ " granularMass=" + domain.totalGranularMass() + "/" + initialGranularMass
-						+ " mass=" + (domain.totalMass() + domain.totalCoherentMass()) + "/" + initialMass
+						+ " massKg=" + (massScale.kilograms(domain.totalMass()) + domain.totalCoherentMass()) + "/" + initialMass
 						+ " energy=" + domain.exactInternalEnergy() + "/" + coldEnergy
 						+ " expected=" + domain.thermalAudit().expectedInventory());
 
@@ -914,7 +919,7 @@ public final class M9ThermalValidation {
 				&& melted.indicatorCount() == 1
 				&& domain.totalGranularSolidVolumeSvq() == initialGranularSvq
 				&& close(domain.totalGranularMass(), initialGranularMass)
-				&& close(domain.totalMass() + domain.totalCoherentMass(), initialMass)
+				&& close(massScale.kilograms(domain.totalMass()) + domain.totalCoherentMass(), initialMass)
 				&& Math.abs(domain.exactInternalEnergy().subtract(hotEnergy).toDouble()) <= 1.0E-8
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"composition/granular melt did not restore joint species, solid and energy truth");
@@ -953,7 +958,7 @@ public final class M9ThermalValidation {
 		long batchSvq = SolidVolume.SVQ_PER_CELL / 8L;
 		ThermalPhaseTransition transition = new ThermalPhaseTransition(
 				"test:phase/composition_ice_water", ice.id(), water.id(), 300.0,
-				batchSvq, batchSvq, ExactRational.of(125),
+				batchSvq, batchSvq, ExactRational.parse("15.625"),
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
 		return new ThermalRegistry(materials, offsets, List.of(transition),
 				chemistry.fingerprint(), granular.fingerprint());
@@ -1005,7 +1010,7 @@ public final class M9ThermalValidation {
 		long batchSvq = SolidVolume.SVQ_PER_CELL / 8L;
 		ThermalPhaseTransition transition = new ThermalPhaseTransition("test:phase/pending_volume",
 				lower.id(), upper.id(), 300.0, batchSvq * 2L, batchSvq,
-				ExactRational.parse("0.125"), ThermalPhaseTransition.InterfaceRequirement.NONE,
+				ExactRational.parse("0.015625"), ThermalPhaseTransition.InterfaceRequirement.NONE,
 				0.0, 10_000_000.0);
 		ThermalRegistry registry = new ThermalRegistry(List.of(lower, upper), List.of(), List.of(transition), "", "");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
@@ -1092,7 +1097,8 @@ public final class M9ThermalValidation {
 		domain.bindThermal(registry, liquids, 300.0);
 		domain.removeAllWaterExact();
 
-		double importedEnergy = 1_000.0 * 4_000.0 * 20.0;
+		double importedEnergy = CondensedMassScale.forCellSize(config.cellSize()).kilograms(1_000.0)
+				* 4_000.0 * 20.0;
 		FlipFluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(
 				1, 1, 1, 1.0F, 1, 0, false, importedEnergy);
 		require(inserted.transferred() && close(inserted.internalEnergy(), importedEnergy)
@@ -1179,7 +1185,7 @@ public final class M9ThermalValidation {
 		};
 		FlipThermalState granularThermal = new FlipThermalState(registry, liquids, 300.0,
 				1, 2, 2, 2, 0.5F, carriers);
-		require(granularThermal.exactEnergy(0).equals(SignedDyadic.of(15.0))
+		require(granularThermal.exactEnergy(0).equals(SignedDyadic.of(1.875))
 				&& close(granularThermal.temperatureInCell(0, carriers), 300.0),
 				"M8 active/deposit energy did not join the LTE state function");
 		granularThermal.setTemperatureInCell(0, 310.0, carriers);
@@ -1259,8 +1265,8 @@ public final class M9ThermalValidation {
 		domain.stepThermalOnly(1_000.0);
 		double hot = domain.thermalTemperatureInCell(1, 1, 1);
 		double cold = domain.thermalTemperatureInCell(2, 1, 1);
-		require(hot < 350.0 && hot > 300.0 && cold > 250.0 && cold < 300.0,
-				"pairwise thermal transport was not monotone");
+		require(hot < 350.0 && hot >= 300.0 && cold > 250.0 && cold <= 300.0 && hot >= cold,
+				"pairwise thermal transport was not monotone: hot=" + hot + " cold=" + cold);
 		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"transient thermal transport did not close its audit ledger");
 		require(Math.abs(domain.exactInternalEnergy().subtract(before).toDouble()) <= 1.0E-6,
@@ -1331,7 +1337,7 @@ public final class M9ThermalValidation {
 				"test:miscible", 0.0, 90.0);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
 		ThermalMaterialDefinition definition = new ThermalMaterialDefinition("test:thermal/boundary_liquid",
-				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 300.0, 0.0, 1.0,
+				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 300.0, 0.0, 0.125,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0)));
 		FlipThermalState.MarkerContext markers = new FlipThermalState.MarkerContext() {
 			@Override public int markerCount() { return 1; }
@@ -1348,14 +1354,14 @@ public final class M9ThermalValidation {
 				(x, y, z, direction) -> direction == 0
 						? new ThermalTransport.FixedBoundary(0.25, 400.0) : null, 1.0);
 		require(close(thermal.temperature(0, markers), 310.0)
-				&& heated.reservoirExchange().equals(SignedDyadic.of(100.0))
+				&& heated.reservoirExchange().equals(SignedDyadic.of(12.5))
 				&& thermal.exactEnergy(1).equals(thermal.audit().expectedInventory()),
 				"fixed-temperature boundary did not close source/audit energy");
 		SignedDyadic beforeFailure = thermal.exactEnergy(1);
 		ThermalAuditLedger auditBeforeFailure = thermal.audit();
 		expectFailure(() -> thermal.step(markers, (x, y, z, axis) -> 0.0,
 				(x, y, z, direction) -> direction == 0
-						? new ThermalTransport.FixedBoundary(0.25, 1_000.0) : null, 10.0),
+						? new ThermalTransport.FixedBoundary(0.25, 10_000.0) : null, 10.0),
 				"out-of-range fixed-boundary step was accepted");
 		require(thermal.exactEnergy(1).equals(beforeFailure) && thermal.audit().equals(auditBeforeFailure),
 				"failed thermal transport exposed a partial energy/audit commit");

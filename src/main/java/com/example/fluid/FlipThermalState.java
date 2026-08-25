@@ -9,6 +9,7 @@ import com.example.fluid.air.GasRegistry;
 import com.example.thermal.GasThermalModel;
 import com.example.thermal.GasLiquidPhaseModel;
 import com.example.thermal.CoherentPhaseStore;
+import com.example.thermal.CondensedMassScale;
 import com.example.thermal.GranularEnergyColumn;
 import com.example.thermal.SignedDyadic;
 import com.example.thermal.ThermalAuditLedger;
@@ -130,6 +131,7 @@ final class FlipThermalState {
 
 	private final ThermalRegistry registry;
 	private final ThermalStateFunction stateFunction;
+	private final CondensedMassScale condensedMassScale;
 	private final int[] materialByFluidHandle;
 	private final int[] materialByGranularHandle;
 	private final ThermalCellGrid cellGrid;
@@ -173,6 +175,7 @@ final class FlipThermalState {
 		if (!Double.isFinite(initialTemperatureK)) throw new IllegalArgumentException("Initial temperature must be finite");
 		this.registry = registry;
 		this.stateFunction = new ThermalStateFunction(registry);
+		this.condensedMassScale = CondensedMassScale.forCellSize(cellSize);
 		this.materialByFluidHandle = new int[liquids.size()];
 		for (int handle = 0; handle < liquids.size(); handle++) {
 			int thermalHandle = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID,
@@ -458,7 +461,8 @@ final class FlipThermalState {
 
 	double temperature(int marker, MarkerContext markers) {
 		ThermalMaterialDefinition material = material(marker, markers);
-		double sensible = (internalEnergy[marker] - baseEnergy(marker, markers)) / markers.mass(marker);
+		double sensible = (internalEnergy[marker] - baseEnergy(marker, markers))
+				/ condensedMassScale.kilograms(markers.mass(marker));
 		return material.temperatureForSensibleSpecificEnergy(sensible);
 	}
 
@@ -467,9 +471,10 @@ final class FlipThermalState {
 	) {
 		ThermalMaterialDefinition material = material(marker, markers);
 		int thermalHandle = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
+		double physicalMass = condensedMassScale.kilograms(candidateMass);
 		double base = stateFunction.baseEnergy(
-				thermalHandle, candidateMass, candidateMixture, markers.chemicalRegistry());
-		double sensible = (internalEnergy[marker] - base) / candidateMass;
+				thermalHandle, physicalMass, candidateMixture, markers.chemicalRegistry());
+		double sensible = (internalEnergy[marker] - base) / physicalMass;
 		material.temperatureForSensibleSpecificEnergy(sensible);
 	}
 
@@ -498,7 +503,7 @@ final class FlipThermalState {
 			double mass = replacement == null ? markers.mass(marker) : replacement.mass();
 			ChemicalMixtureRecord mixture = replacement == null ? markers.mixture(marker) : replacement.mixture();
 			finalInventory.add(new ThermalStateFunction.InventoryPortion(
-					materialByFluidHandle[markers.fluidMaterialHandle(marker)], mass,
+					materialByFluidHandle[markers.fluidMaterialHandle(marker)], condensedMassScale.kilograms(mass),
 					stableAmounts(mixture, markers.chemicalRegistry())));
 		}
 		if (!replacements.isEmpty()) throw new IllegalArgumentException("Thermal reaction names a missing liquid marker");
@@ -771,7 +776,8 @@ final class FlipThermalState {
 				throw new IllegalArgumentException("Unknown fluid material in thermal insertion");
 			}
 			inventory.add(new ThermalStateFunction.InventoryPortion(
-					materialByFluidHandle[insertion.fluidMaterialHandle()], insertion.mass(),
+					materialByFluidHandle[insertion.fluidMaterialHandle()],
+					condensedMassScale.kilograms(insertion.mass()),
 					stableAmounts(insertion.mixture(), markers.chemicalRegistry())));
 		}
 		double temperatureK = stateFunction.stateForInventory(inventory, totalEnergy).temperatureK();
@@ -1045,10 +1051,11 @@ final class FlipThermalState {
 				return registry.material(materialByGranularHandle[material]);
 			}
 			@Override public double mass(int carrier) {
-				if (carrier < liquidCount) return markers.mass(carrier);
+				if (carrier < liquidCount) return condensedMassScale.kilograms(markers.mass(carrier));
 				if (carrier < activeStart) return coherentPhases.group(carrier - coherentStart).mass();
-				return carrier < depositStart ? markers.activeParcelMass(carrier - activeStart)
-						: markers.depositMass(depositKeys.get(carrier - depositStart));
+				return condensedMassScale.kilograms(carrier < depositStart
+						? markers.activeParcelMass(carrier - activeStart)
+						: markers.depositMass(depositKeys.get(carrier - depositStart)));
 			}
 			@Override public double volume(int carrier) {
 				if (carrier < liquidCount) return markers.volume(carrier);
@@ -1074,7 +1081,8 @@ final class FlipThermalState {
 					GranularEnergyColumn.DepositKey key = depositKeys.get(carrier - depositStart);
 					material = key.materialHandle(); composition = key.compositionHandle(); mass = markers.depositMass(key);
 				}
-				return stateFunction.baseEnergy(materialByGranularHandle[material], mass,
+				return stateFunction.baseEnergy(materialByGranularHandle[material],
+						condensedMassScale.kilograms(mass),
 						markers.solidComposition(composition));
 			}
 			@Override public double internalEnergy(int carrier) {
@@ -1121,7 +1129,8 @@ final class FlipThermalState {
 	}
 
 	private double baseEnergy(int marker, MarkerContext markers) {
-		return stateFunction.baseEnergy(materialByFluidHandle[markers.fluidMaterialHandle(marker)], markers.mass(marker),
+		return stateFunction.baseEnergy(materialByFluidHandle[markers.fluidMaterialHandle(marker)],
+				condensedMassScale.kilograms(markers.mass(marker)),
 				markers.mixture(marker), markers.chemicalRegistry());
 	}
 
@@ -1138,8 +1147,9 @@ final class FlipThermalState {
 	) {
 		int thermalHandle = materialByFluidHandle[fluidMaterialHandle];
 		ThermalMaterialDefinition material = registry.material(thermalHandle);
-		double base = stateFunction.baseEnergy(thermalHandle, mass, mixture, chemicalRegistry);
-		double energy = base + mass * material.sensibleSpecificEnergyAt(temperatureK);
+		double physicalMass = condensedMassScale.kilograms(mass);
+		double base = stateFunction.baseEnergy(thermalHandle, physicalMass, mixture, chemicalRegistry);
+		double energy = base + physicalMass * material.sensibleSpecificEnergyAt(temperatureK);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal marker modeled energy is invalid");
 		return energy;
 	}
@@ -1152,8 +1162,9 @@ final class FlipThermalState {
 		}
 		int thermalHandle = materialByGranularHandle[granularMaterial];
 		ThermalMaterialDefinition material = registry.material(thermalHandle);
-		double energy = stateFunction.baseEnergy(thermalHandle, mass, markers.solidComposition(composition))
-				+ mass * material.sensibleSpecificEnergyAt(temperatureK);
+		double physicalMass = condensedMassScale.kilograms(mass);
+		double energy = stateFunction.baseEnergy(thermalHandle, physicalMass, markers.solidComposition(composition))
+				+ physicalMass * material.sensibleSpecificEnergyAt(temperatureK);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Granular modeled energy is invalid");
 		return energy;
 	}
@@ -1166,7 +1177,7 @@ final class FlipThermalState {
 			throw new IllegalArgumentException("Unknown granular reaction thermal material");
 		}
 		inventory.add(new ThermalStateFunction.InventoryPortion(
-				materialByGranularHandle[granularMaterial], mass, composition));
+				materialByGranularHandle[granularMaterial], condensedMassScale.kilograms(mass), composition));
 	}
 
 	private static Map<String, Long> stableAmounts(

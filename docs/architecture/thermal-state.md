@@ -113,8 +113,9 @@ Q_ij = G_ij * (T_j - T_i) * dt_thermal
 ```
 
 `A_contact` 只从共享 cut-face、总 occupied-volume 和服务端 PLIC 接触几何派生；不得使用 marker count、渲染 mesh
-或材料 ID 特判。每个 canonical x/y/z face 只计划一次，对两侧施加等量反向 `U` 变化。显式子循环由
-`dt_limit = C/sum(G)` 推导；超过 hard substep/face budget 时整步拒绝并 PAUSED，禁止钳通量或借 wall-time pacing
+或材料 ID 特判。每个 canonical x/y/z face 只计划一次，对两侧施加等量反向 `U` 变化。显式 Jacobi 子循环采用
+`dt_limit = 0.5 C/sum(G)` 的单调界；`C/sum(G)` 的 positivity 极限会允许等容量两格在一步中交换温度，不作为生产上限。
+超过 hard substep/face budget 时整步拒绝并 PAUSED，禁止钳通量或借 wall-time pacing
 掩盖不稳定。
 
 普通 Minecraft 方块默认 `ADIABATIC`，避免凭空假定无限热容。只有 world registry 显式声明的

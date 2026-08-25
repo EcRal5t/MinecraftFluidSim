@@ -97,7 +97,10 @@ public final class ThermalTransport {
 				(cell, conductance, surfaceTemperature) -> conductanceSum[cell] += conductance);
 		double stableDt = Double.POSITIVE_INFINITY;
 		for (int cell = 0; cell < conductanceSum.length; cell++) if (conductanceSum[cell] > 0.0) {
-			stableDt = Math.min(stableDt, grid.heatCapacity(cell) / conductanceSum[cell]);
+			// A pair of equal cells both move during one Jacobi update. The usual positivity bound C/sum(G)
+			// permits an exact temperature swap at equality; half that bound preserves pair ordering and
+			// gives monotone approach to LTE without a mesh- or material-specific damping heuristic.
+			stableDt = Math.min(stableDt, 0.5 * grid.heatCapacity(cell) / conductanceSum[cell]);
 		}
 		int substeps = stableDt == Double.POSITIVE_INFINITY ? 1 : (int) Math.ceil(logicalDtSeconds / stableDt);
 		if (substeps > maximumSubsteps) {
