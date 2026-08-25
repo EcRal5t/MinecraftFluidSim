@@ -487,6 +487,56 @@ final class FluidRegionPersistence {
 	}
 
 	/**
+	 * Operator-only recovery for a HEAD that is locally valid but cannot bind its persisted gas
+	 * topology to its own marker geometry. The inactive generation is fully reconstructed into a
+	 * throwaway solver before HEAD moves. Startup never calls this path and never guesses a fallback.
+	 */
+	long recoverPreviousGeneration(FluidRegion region, long expectedCurrentGeneration) throws IOException {
+		if (!thermalEnabled || thermalRegistry == null || gasRegistry == null) {
+			throw new IOException("Previous-generation recovery requires the active thermal/gas registries");
+		}
+		if (!region.controllerManaged() || region.solverLoaded()
+				|| region.lifecycle().state() != FluidRegionLifecycle.State.UNLOADED) {
+			throw new IOException("Previous-generation recovery requires a metadata-only unloaded controller region");
+		}
+		if (!region.paused()) throw new IOException("Previous-generation recovery requires an operator-paused region");
+		if (region.checkpointGeneration() != expectedCurrentGeneration) {
+			throw new IOException("Selected region metadata is not at expected checkpoint " + expectedCurrentGeneration);
+		}
+		String ownershipLock = ownershipLockDescription(region);
+		if (ownershipLock != null) {
+			throw new IOException("Unresolved world ownership state blocks previous-generation recovery: " + ownershipLock);
+		}
+
+		RegionStateFiles.PreviousGeneration previous = files.readPrevious(region.id(), expectedCurrentGeneration);
+		RegionManifest manifest = previous.state().manifest();
+		if (manifest.formatVersion() != CURRENT_THERMAL_FORMAT) {
+			throw new IOException("Previous slot is not a complete thermal/gas region-state v7 generation");
+		}
+		validateRecoveryIdentity(region, manifest);
+		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
+		if (ownershipFiles.hasCommitted()) {
+			OwnershipCommitted committed = ownershipFiles.readCommitted();
+			if (!committed.regionId().equals(region.id())
+					|| !committed.dimensionId().equals(region.dimension().identifier().toString())
+					|| committed.generation() > manifest.checkpointGeneration()) {
+				throw new IOException("Previous checkpoint predates committed world ownership truth");
+			}
+		}
+
+		FluidRegion probe = unloadedRegion(manifest);
+		restoreThermalGeneration(probe, previous.state());
+		if (!probe.solverLoaded()
+				|| !probe.domain().exactInternalEnergy().equals(probe.domain().thermalAudit().expectedInventory())) {
+			throw new IOException("Previous checkpoint probe did not restore a closed thermal inventory");
+		}
+		if (!probe.releaseSolverAfterCheckpoint(manifest.checkpointGeneration())) {
+			throw new IOException("Previous checkpoint probe could not release its temporary solver");
+		}
+		return files.activatePrevious(previous);
+	}
+
+	/**
 	 * Explicitly assigns the first authoritative U to an old committed controller generation.
 	 * The inactive slot is fully reconstructed and verified before HEAD moves; no old HEAD is
 	 * rewritten and no ambient/biome temperature is consulted.
@@ -639,6 +689,30 @@ final class FluidRegionPersistence {
 		}
 	}
 
+	private static void validateRecoveryIdentity(FluidRegion region, RegionManifest manifest) throws IOException {
+		if (manifest.networkGeneration() != region.generation()
+				|| !manifest.dimensionId().equals(region.dimension().identifier().toString())
+				|| !manifest.origin().equals(region.origin()) || manifest.sizeX() != region.sizeX()
+				|| manifest.sizeY() != region.sizeY() || manifest.sizeZ() != region.sizeZ()
+				|| !manifest.solverConfig().equals(region.solverConfig())
+				|| manifest.reservedMarkerCapacity() != region.reservedMarkerCapacity()
+				|| !manifest.footprint().equals(region.footprint())) {
+			throw new IOException("Previous checkpoint does not match the admitted controller identity");
+		}
+	}
+
+	private static FluidRegion unloadedRegion(RegionManifest manifest) throws IOException {
+		validateControllerGeometry(manifest);
+		Identifier dimensionId = Identifier.tryParse(manifest.dimensionId());
+		if (dimensionId == null) throw new IOException("Previous checkpoint has an invalid dimension");
+		return FluidRegion.unloaded(manifest.regionId(),
+				ResourceKey.create(Registries.DIMENSION, dimensionId), manifest.origin(),
+				manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
+				manifest.reservedMarkerCapacity(), manifest.footprint(), manifest.networkGeneration(),
+				manifest.checkpointGeneration(), manifest.totalMarkerCount(),
+				(float) manifest.totalVolume(), manifest.runtime());
+	}
+
 	private RegionState captureForFeatureGate(FluidRegion region, long generation) throws IOException {
 		if (thermalEnabled) {
 			if (thermalRegistry == null || gasRegistry == null) {
@@ -658,6 +732,13 @@ final class FluidRegionPersistence {
 			}
 			if (!region.domain().hasThermalState()) {
 				throw new IOException("Thermal state is not initialized; an old controller requires explicit operator temperature migration");
+			}
+			try {
+				region.domain().synchronizeGasTopologyForPersistence();
+			} catch (RuntimeException invalidTopology) {
+				throw new IOException("Current carrier geometry cannot be joined to gas/thermal truth: "
+						+ invalidTopology.getMessage() + "; previous HEAD remains authoritative",
+						invalidTopology);
 			}
 			return RegionState.captureThermal(region, generation);
 		}

@@ -262,6 +262,67 @@ public final class RegionStateFiles {
 	}
 
 	/**
+	 * Reads the inactive slot only when it is the immediately preceding complete generation.
+	 * This is an operator-recovery probe; ordinary discovery and restore continue to follow HEAD
+	 * exclusively and never fall back automatically.
+	 */
+	public PreviousGeneration readPrevious(UUID id, long expectedCurrentGeneration) throws IOException {
+		Path region = regionPath(id);
+		Head current = readHead(region, id);
+		if (current.generation() != expectedCurrentGeneration) {
+			throw new IOException("Region HEAD moved; expected generation " + expectedCurrentGeneration
+					+ " but found " + current.generation());
+		}
+		String previousSlot = current.slot().equals(SLOT_A) ? SLOT_B : SLOT_A;
+		RegionState previous = readSlot(region.resolve(previousSlot));
+		previous.validate();
+		validateReconstruction(previous);
+		RegionManifest manifest = previous.manifest();
+		if (!manifest.regionId().equals(id)
+				|| manifest.checkpointGeneration() != expectedCurrentGeneration - 1L) {
+			throw new IOException("Inactive slot is not the immediately preceding generation");
+		}
+		return new PreviousGeneration(id, current.generation(), current.manifestChecksum(), previousSlot, previous);
+	}
+
+	/**
+	 * Atomically moves only HEAD to a caller-probed previous generation. The rejected current slot
+	 * remains byte-for-byte available until the next successful publication overwrites it. This
+	 * exceptional operation requires an explicit expected generation and is never called by startup.
+	 */
+	public long activatePrevious(PreviousGeneration previous) throws IOException {
+		if (previous == null) throw new IOException("Previous-generation recovery plan is missing");
+		Path region = regionPath(previous.id());
+		Head current = readHead(region, previous.id());
+		if (current.generation() != previous.currentGeneration()
+				|| current.manifestChecksum() != previous.currentManifestChecksum()) {
+			throw new IOException("Region HEAD moved after previous-generation validation");
+		}
+		String expectedPreviousSlot = current.slot().equals(SLOT_A) ? SLOT_B : SLOT_A;
+		if (!expectedPreviousSlot.equals(previous.slot())) {
+			throw new IOException("Previous-generation slot changed after validation");
+		}
+		RegionState verified = readSlot(region.resolve(previous.slot()));
+		verified.validate();
+		validateReconstruction(verified);
+		if (verified.manifest().checkpointGeneration() != current.generation() - 1L
+				|| verified.manifest().checksum() != previous.state().manifest().checksum()
+				|| !verified.manifest().regionId().equals(previous.id())) {
+			throw new IOException("Previous generation changed after validation");
+		}
+		Head restored = new Head(previous.id(), verified.manifest().checkpointGeneration(),
+				previous.slot(), verified.manifest().checksum());
+		Path headTemporary = region.resolve(HEAD + ".tmp");
+		Files.deleteIfExists(headTemporary);
+		NbtIo.writeCompressed(encodeHead(restored), headTemporary);
+		forceFile(headTemporary);
+		decodeHead(NbtIo.readCompressed(headTemporary, NbtAccounter.create(MAX_NBT_BYTES)), previous.id());
+		atomicMover.move(headTemporary, region.resolve(HEAD), true);
+		readGeneration(region, readHead(region, previous.id()));
+		return restored.generation();
+	}
+
+	/**
 	 * HEAD generation of a committed region, or 0 when no generation was ever committed. A present
 	 * but corrupt HEAD still throws; whether staged leftovers may be retried is decided by prepare.
 	 */
@@ -580,6 +641,19 @@ public final class RegionStateFiles {
 
 	public record Discovery(List<RegionManifest> manifests, Map<Path, String> issues) {
 		public Discovery { manifests = List.copyOf(manifests); issues = Map.copyOf(issues); }
+	}
+	public record PreviousGeneration(
+			UUID id,
+			long currentGeneration,
+			long currentManifestChecksum,
+			String slot,
+			RegionState state
+	) {
+		public PreviousGeneration {
+			java.util.Objects.requireNonNull(id, "id");
+			java.util.Objects.requireNonNull(slot, "slot");
+			java.util.Objects.requireNonNull(state, "state");
+		}
 	}
 	private record Head(UUID id, long generation, String slot, long manifestChecksum) { }
 }

@@ -133,6 +133,11 @@ public final class AirCavityScannerValidation {
 		check(result.sealedNodeCount() == 1, "partially filled sealed tank must stay one cavity");
 		checkRelative(result.sealedAvailableVolume()[0], 6 * 6 * 3 + 6 * 6 * 0.5,
 				"interface residual must join the sealed cavity volume");
+		for (int z = 1; z < n - 1; z++) for (int x = 1; x < n - 1; x++) {
+			int cell = (z * n + 3) * n + x;
+			check(result.cellNodeId()[cell] == -1 && result.cellLineageNodeId()[cell] == 1,
+					"partial interface gas must retain runtime cavity lineage without entering persisted membership");
+		}
 
 		Grid openGrid = tank(n, false, 1.0F);
 		for (int z = 1; z < n - 1; z++) for (int x = 1; x < n - 1; x++) {

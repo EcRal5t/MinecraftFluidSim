@@ -362,6 +362,28 @@ final class FluidRegionOperations {
 		}
 	}
 
+	String recoverPreviousSelected(long expectedCurrentGeneration) {
+		FluidRegion region = manager.selected();
+		if (region == null) return "没有选中区域";
+		if (!region.controllerManaged()) return "开发命令区域没有持久 checkpoint 可恢复";
+		String restoreFailure = checkpointFailures.get(region.id());
+		if (restoreFailure == null || !restoreFailure.startsWith("checkpoint restore failed:")) {
+			return "拒绝恢复上一代：当前区域尚未出现可复核的 checkpoint restore failure";
+		}
+		try {
+			long restored = persistence.recoverPreviousGeneration(region, expectedCurrentGeneration);
+			String restart = "已按 operator 明确指定将 HEAD 从 checkpoint " + expectedCurrentGeneration
+					+ " 原子切回完整 checkpoint " + restored
+					+ "；被拒绝的当前 slot 仍保留，必须退出并重启世界后才能载入上一代";
+			checkpointFailures.put(region.id(), restart);
+			region.setAvailabilityFailure(restart);
+			retryAt.remove(region.id());
+			return restart;
+		} catch (IOException | RuntimeException exception) {
+			return "上一代恢复失败，HEAD 未改变：" + exception.getMessage();
+		}
+	}
+
 	void checkpointForShutdown(Predicate<FluidRegion> shouldCheckpoint) {
 		for (FluidRegion region : manager.regions()) {
 			if (!region.controllerManaged() || !region.solverLoaded()) continue;

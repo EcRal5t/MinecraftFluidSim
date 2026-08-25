@@ -16,6 +16,7 @@ import com.example.fluid.FluidMaterialRenderSnapshot;
 import com.example.fluid.FluidSolverConfig;
 import com.example.fluid.air.AirNetwork;
 import com.example.fluid.air.BuiltinGasDefinitions;
+import com.example.fluid.air.GasAuditLedger;
 import com.example.fluid.air.GasRegistry;
 import com.example.fluid.air.GasRegistryStore;
 import com.example.granular.GranularDataPackLoader;
@@ -2004,6 +2005,16 @@ public final class FluidSimulationService {
 		return result;
 	}
 
+	/** Explicit HEAD rollback is available only after a failed restore and never crosses an item WAL. */
+	public String recoverSelectedPreviousCheckpoint(long expectedCurrentGeneration) {
+		FluidRegion selected = activeRegion();
+		if (selected == null) return "没有选中区域";
+		if (hasPendingContainerTransfer(selected.id())) {
+			return "上一代恢复失败：区域存在未完成或不可识别的容器转移 WAL；禁止跨代回退";
+		}
+		return regionOperations.recoverPreviousSelected(expectedCurrentGeneration);
+	}
+
 
 	private void checkpointForShutdown() {
 		regionOperations.checkpointForShutdown(region -> !hasPendingContainerTransfer(region.id()));
@@ -2084,7 +2095,7 @@ public final class FluidSimulationService {
 		);
 	}
 
-	private static String thermalSummary(FluidRegion region, FlipFluidDomain domain) {
+	private String thermalSummary(FluidRegion region, FlipFluidDomain domain) {
 		if (!domain.hasThermalState()) return "thermal missing";
 		ThermalAuditLedger audit = domain.thermalAudit();
 		ThermalActivity activity = region.thermalActivity();
@@ -2101,9 +2112,12 @@ public final class FluidSimulationService {
 				: String.format("%.2f..%.2f K", minimumQ / 16.0, maximumQ / 16.0);
 		FlipFluidDomain.ThermalPhaseStats condensed = domain.lastThermalPhaseStats();
 		FlipFluidDomain.GasThermalPhaseStats gas = domain.lastGasThermalPhaseStats();
+		int phaseBudget = serverConfig.maximumPhaseOperationsPerStep();
 		String phase = condensed.operations() == 0 && gas.operations() == 0 ? "idle"
-				: String.format("solid=%d gas=%d (boil %d/condense %d cells)",
-						condensed.operations(), gas.operations(), gas.boiledCells(), gas.condensedCells());
+				: String.format("solid=%d gas=%d%s (boil %d/condense %d cells)",
+						condensed.operations(), gas.operations(),
+						condensed.operations() + gas.operations() == phaseBudget ? "/" + phaseBudget + " budget-hit" : "",
+						gas.boiledCells(), gas.condensedCells());
 		return String.format("thermal %s T=%s U=%.6g EU source=%.6g sink=%.6g work=%.6g coherent=%d SVQ phase=%s pending-work=%s audit=%s",
 				activity == null ? "unbound" : activity.state(), temperature, domain.totalInternalEnergy(),
 				audit.externalSource().toDouble(), audit.externalSink().toDouble(),
@@ -2129,9 +2143,21 @@ public final class FluidSimulationService {
 					vapor.mass(), AirNetwork.cubicMeters(vapor.standardVolumeNanos())));
 		}
 		if (ids.size() > 4) builder.append("; +").append(ids.size() - 4).append(" more");
-		builder.append(String.format(", vented %.2f m³ drawn %.2f m³",
-				AirNetwork.cubicMeters(network.ventedNanos()), AirNetwork.cubicMeters(network.drawnFromAmbientNanos())));
+		long airSource = componentNanos(network.externalSource(), BuiltinGasDefinitions.AIR);
+		long airSink = componentNanos(network.escapedSink(), BuiltinGasDefinitions.AIR);
+		long vaporSource = componentNanos(network.externalSource(), BuiltinGasDefinitions.WATER_VAPOR);
+		long vaporSink = componentNanos(network.escapedSink(), BuiltinGasDefinitions.WATER_VAPOR);
+		builder.append(String.format(", turnover air=%.2f/%.2f vapor=%.2f/%.2f m³std (source/sink)",
+				AirNetwork.cubicMeters(airSource), AirNetwork.cubicMeters(airSink),
+				AirNetwork.cubicMeters(vaporSource), AirNetwork.cubicMeters(vaporSink)));
 		return builder.toString();
+	}
+
+	private static long componentNanos(GasAuditLedger ledger, String componentId) {
+		for (GasAuditLedger.Entry entry : ledger.entries()) {
+			if (entry.componentId().equals(componentId)) return entry.standardVolumeNanos();
+		}
+		return 0L;
 	}
 
 	public void sendSnapshot(ServerLevel level) {

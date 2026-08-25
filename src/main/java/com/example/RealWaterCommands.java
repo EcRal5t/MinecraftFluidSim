@@ -23,6 +23,7 @@ import com.example.simulation.FluidRegion;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.LongArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -190,7 +191,12 @@ public final class RealWaterCommands {
 										.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 										.then(Commands.argument("temperatureK", DoubleArgumentType.doubleArg(1.0))
 												.executes(context -> audit(context, () -> initializeThermalRegion(
-														context.getSource(), DoubleArgumentType.getDouble(context, "temperatureK")))))))
+														context.getSource(), DoubleArgumentType.getDouble(context, "temperatureK"))))))
+								.then(Commands.literal("recoverprevious")
+										.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+										.then(Commands.argument("expectedCheckpoint", LongArgumentType.longArg(1L))
+												.executes(context -> audit(context, () -> recoverPreviousRegion(
+														context.getSource(), LongArgumentType.getLong(context, "expectedCheckpoint")))))))
 						.then(Commands.literal("debug")
 								.executes(context -> audit(context, () -> debugStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
@@ -669,6 +675,15 @@ public final class RealWaterCommands {
 		return succeed(source, result, 1);
 	}
 
+	private static int recoverPreviousRegion(CommandSourceStack source, long expectedCheckpoint) {
+		String result = FluidSimulationService.get(source.getServer())
+				.recoverSelectedPreviousCheckpoint(expectedCheckpoint);
+		if (result.contains("失败") || result.startsWith("没有") || result.startsWith("拒绝")) {
+			return fail(source, result);
+		}
+		return succeed(source, result, 1);
+	}
+
 	private static int thermalSourceStatus(CommandSourceStack source) throws CommandSyntaxException {
 		ThermalReservoirBlockEntity reservoir = aimedThermalReservoir(source);
 		if (reservoir == null) return fail(source, "请让准星对准 8 格内的温度源方块");
@@ -683,7 +698,8 @@ public final class RealWaterCommands {
 		if (reservoir == null) return fail(source, "请让准星对准 8 格内的温度源方块");
 		reservoir.setTemperatureK(temperatureK);
 		return succeed(source, String.format(java.util.Locale.ROOT,
-				"已将温度源 %s 设为 %.6f K；相邻热区域会在下一次边界扫描时精确唤醒",
+				"已将温度源 %s 设为 %.6f K；相邻热区域会在下一次边界扫描时精确唤醒；"
+						+ "设定值不钳制，若载体候选状态越出 world thermal registry 有效域将安全暂停",
 				reservoir.getBlockPos().toShortString(), temperatureK), 1);
 	}
 

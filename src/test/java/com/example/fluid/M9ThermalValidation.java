@@ -30,6 +30,7 @@ import com.example.thermal.ThermalAuditLedger;
 import com.example.thermal.ThermalDefinitionCodec;
 import com.example.thermal.ThermalDisplaySnapshot;
 import com.example.thermal.ThermalMaterialDefinition;
+import com.example.thermal.ThermalLimits;
 import com.example.thermal.ThermalPhaseTransition;
 import com.example.thermal.ThermalPhaseChangeEngine;
 import com.example.thermal.ThermalRegistry;
@@ -41,6 +42,9 @@ import com.example.simulation.ThermalActivity;
 import com.example.simulation.FluidRegionLifecycle;
 
 import java.io.StringReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
@@ -55,8 +59,10 @@ public final class M9ThermalValidation {
 		worldRegistrySnapshotIsAuthoritative();
 		piecewiseStateFunctionRoundTrips();
 		gasStateCompressionAndCarrierEnergy();
+		builtinWaterAndVaporPhysicsIsCalibrated();
 		gasLiquidSaturationAndExactBatch();
 		gasRuntimeTransfersEnergyAndWork();
+		persistenceBarrierSynchronizesGasTopology();
 		sealedInterfaceBoilingCommitsJointInventory();
 		compositionBearingBoilingMovesOnlyGasAdmittedSpecies();
 		thermalSleepIsOrthogonalToMotion();
@@ -146,6 +152,67 @@ public final class M9ThermalValidation {
 				"gas topology/orifice carrier energy did not close");
 	}
 
+	private static void builtinWaterAndVaporPhysicsIsCalibrated() {
+		try (InputStreamReader waterReader = resourceReader(
+				"/data/realwater/realwater/thermal_materials/water.json");
+		     InputStreamReader vaporReader = resourceReader(
+				     "/data/realwater/realwater/thermal_materials/water_vapor.json");
+		     InputStreamReader transitionReader = resourceReader(
+				     "/data/realwater/realwater/phase_transitions/water_vapor.json")) {
+			ThermalMaterialDefinition water = ThermalDefinitionCodec.decodeMaterial("realwater:water", waterReader);
+			ThermalMaterialDefinition vapor = ThermalDefinitionCodec.decodeMaterial("realwater:water_vapor", vaporReader);
+			ThermalPhaseTransition transition = ThermalDefinitionCodec.decodeTransition(
+					"realwater:water_vapor", transitionReader);
+			double batchMassKg = transition.massMuPerBatch().toDouble();
+			double liquidVolume = (double) transition.lowerVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV;
+			double vaporVolume = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV;
+			double standardVaporVolume = vaporVolume * GasRegistry.STANDARD_TEMPERATURE_K
+					/ transition.equilibriumTemperatureK();
+			double liquidDensity = batchMassKg / liquidVolume;
+			double vaporDensityAtBoiling = batchMassKg / vaporVolume;
+			double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * standardVaporVolume
+					/ (batchMassKg * GasRegistry.STANDARD_TEMPERATURE_K);
+			ThermalRegistry registry = new ThermalRegistry(List.of(water, vapor), List.of(),
+					List.of(transition), "", "");
+			ThermalStateFunction state = new ThermalStateFunction(registry);
+			double liquidU = state.internalEnergyAtTemperature(
+					registry.materialHandle(water.id()), batchMassKg, Map.of(), transition.equilibriumTemperatureK());
+			double vaporU = state.internalEnergyAtTemperature(
+					registry.materialHandle(vapor.id()), batchMassKg, Map.of(), transition.equilibriumTemperatureK());
+			double latentEnthalpy = (vaporU - liquidU + GasRegistry.STANDARD_PRESSURE_PA
+					* (vaporVolume - liquidVolume)) / batchMassKg;
+			double fourCellReservoirConductance = 4.0 * 2.0 * water.conductivityEuPerSecondMeterK()
+					* 0.25 / 0.5;
+			double extremeReservoirPower = fourCellReservoirConductance * (10_000_000.0 - 293.15);
+			double maximumPhaseMassPerSimulatedSecond = ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP
+					* batchMassKg / 0.05;
+
+			require(relativeError(liquidDensity, 1_000.0) < 0.002
+					&& relativeError(vaporDensityAtBoiling, 0.588) < 0.001
+					&& relativeError(gasConstant, 461.52) < 1.0E-5,
+					"built-in phase volumes do not reproduce water/vapor SI density and gas constant");
+			require(water.specificHeatAt(293.15) == 4_184.0
+					&& water.conductivityEuPerSecondMeterK() == 0.598
+					&& vapor.specificHeatAt(373.15) == 1_410.0
+					&& vapor.conductivityEuPerSecondMeterK() == 0.025,
+					"built-in water/vapor caloric or conductivity values drifted");
+			require(Math.abs(latentEnthalpy - 2_256_700.0) < 0.01,
+					"water/vapor state-function gap does not reproduce the 1-atm latent enthalpy: " + latentEnthalpy);
+			require(Math.abs(fourCellReservoirConductance - 2.392) < 1.0E-12
+					&& Math.abs(extremeReservoirPower - 23_919_298.7852) < 1.0E-6
+					&& Math.abs(maximumPhaseMassPerSimulatedSecond - 81.92) < 1.0E-12,
+					"production boundary flux or exact phase throughput scale drifted");
+		} catch (IOException failure) {
+			throw new AssertionError("Could not read built-in thermal definitions", failure);
+		}
+	}
+
+	private static InputStreamReader resourceReader(String path) {
+		var stream = M9ThermalValidation.class.getResourceAsStream(path);
+		if (stream == null) throw new AssertionError("Missing validation resource " + path);
+		return new InputStreamReader(stream, StandardCharsets.UTF_8);
+	}
+
 	private static void gasRuntimeTransfersEnergyAndWork() {
 		GasRegistry gasRegistry = BuiltinGasDefinitions.createRegistry();
 		FluidMaterial liquid = FluidMaterial.withSurfaceTension(
@@ -197,6 +264,70 @@ public final class M9ThermalValidation {
 		require(flowing.audit().externalSink().compareTo(SignedDyadic.ZERO) > 0
 				&& flowing.exactEnergy(0).equals(flowing.audit().expectedInventory()),
 				"ambient gas outflow did not book carried enthalpy as an external sink");
+	}
+
+	private static void persistenceBarrierSynchronizesGasTopology() {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
+		ThermalRegistry thermal = new ThermalRegistry(List.of(
+				new ThermalMaterialDefinition("test:thermal/persistence_water",
+						ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
+						300.0, 0.0, 0.598,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 4_184.0))),
+				new ThermalMaterialDefinition("test:thermal/persistence_air",
+						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+						GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.026,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)))));
+
+		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 1_024);
+		domain.sealDomainBoundary();
+		domain.setVolume(0, 0, 0, 0.5F);
+		domain.setMarkerMaterial(0, liquids, 0);
+		domain.bindGasRegistry(gas);
+		domain.bootstrapGasState("");
+		domain.bindThermal(thermal, liquids, 300.0);
+		require(domain.airNetwork().nodeCount() == 1, "persistence topology fixture did not start as one cavity");
+
+		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) domain.setVolume(2, y, z, 1.0F);
+		FlipMaterialParticleState carriers = domain.exportMaterialParticleState();
+		GasInventory beforeGas = domain.airNetwork().inventory(1);
+		var stale = domain.exportGasState("");
+		FlipFluidDomain rejected = new FlipFluidDomain(4, 4, 4, config, 1_024);
+		rejected.sealDomainBoundary();
+		rejected.restoreMaterialParticleState(carriers);
+		expectFailure(() -> rejected.restoreGasState(stale, gas),
+				"stale gas topology unexpectedly matched the post-carrier checkpoint geometry");
+
+		domain.synchronizeGasTopologyForPersistence();
+		var synchronizedGas = domain.exportGasState("");
+		FlipFluidDomain restored = new FlipFluidDomain(4, 4, 4, config, 1_024);
+		restored.sealDomainBoundary();
+		restored.restoreMaterialParticleState(carriers);
+		restored.restoreGasState(synchronizedGas, gas);
+		require(restored.airNetwork().nodeCount() == 2
+				&& restored.airNetwork().inventory(1).merge(restored.airNetwork().inventory(2)).equals(beforeGas)
+				&& restored.airNetwork().auditClosed(),
+				"checkpoint gas-topology barrier did not preserve and restore the split inventory");
+
+		FlipFluidDomain movingInterface = new FlipFluidDomain(3, 2, 2, config, 128);
+		movingInterface.sealDomainBoundary();
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 3; x++) {
+			if (!(y == 0 && z == 0 && (x == 0 || x == 1))) movingInterface.setSolid(x, y, z, true);
+		}
+		movingInterface.setVolume(1, 0, 0, 0.5F);
+		movingInterface.bindGasRegistry(gas);
+		movingInterface.bootstrapGasState("");
+		var sourceBeforeMove = movingInterface.airNetwork().externalSource();
+		var sinkBeforeMove = movingInterface.airNetwork().escapedSink();
+		movingInterface.setVolume(1, 0, 0, 0.0F);
+		movingInterface.setVolume(0, 0, 0, 0.5F);
+		movingInterface.synchronizeGasTopologyForPersistence();
+		require(movingInterface.airNetwork().externalSource().equals(sourceBeforeMove)
+				&& movingInterface.airNetwork().escapedSink().equals(sinkBeforeMove)
+				&& movingInterface.airNetwork().auditClosed(),
+				"moving a partial interface created false sealed-gas source/sink turnover");
 	}
 
 	private static void gasLiquidSaturationAndExactBatch() {
@@ -1394,24 +1525,26 @@ public final class M9ThermalValidation {
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		ThermalMaterialDefinition water = new ThermalMaterialDefinition("realwater:thermal/production_boundary_water",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
-				300.0, 0.0, 1.0,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 400.0, 4_000.0)));
+				293.15, 0.0, 0.598,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4_184.0)));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
 		FlipFluidDomain domain = new FlipFluidDomain(4, 3, 3, config, 512);
 		domain.setVolume(0, 1, 1, 1.0F);
-		domain.bindThermal(new ThermalRegistry(List.of(water)), liquids, 300.0);
+		domain.bindThermal(new ThermalRegistry(List.of(water)), liquids, 293.15);
 		double[] boundaries = new double[4 * 3 * 3 * 6];
 		java.util.Arrays.fill(boundaries, Double.NaN);
-		boundaries[((1 * 3 + 1) * 4) * 6] = 350.0; // -x domain wall of cell (0,1,1)
+		boundaries[((1 * 3 + 1) * 4) * 6] = 10_000_000.0; // -x domain wall of cell (0,1,1)
 		require(domain.replaceThermalBoundaryTemperatures(boundaries)
 				&& !domain.replaceThermalBoundaryTemperatures(boundaries),
 				"production thermal boundary field did not detect an actual world edit exactly once");
 		ThermalTransport.Stats transport = domain.stepThermalOnly(1.0);
+		double expectedOneCellFlux = 0.598 * (10_000_000.0 - 293.15);
 		require(transport.reservoirExchange().compareTo(SignedDyadic.ZERO) > 0
-				&& domain.thermalTemperatureInCell(0, 1, 1) > 300.0
+				&& Math.abs(transport.reservoirExchange().toDouble() - expectedOneCellFlux) < 1.0E-6
+				&& domain.thermalTemperatureInCell(0, 1, 1) > 293.15
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
-				"production fixed boundary did not heat and audit the authoritative carrier");
+				"production fixed boundary did not reproduce and audit its finite-volume SI flux");
 	}
 
 	private static void fixedBoundaryAuditsAndFailedStepRollsBack() {
@@ -1503,6 +1636,10 @@ public final class M9ThermalValidation {
 	private static boolean close(double first, double second) {
 		return Math.abs(first - second) <= Math.max(1.0E-10,
 				Math.max(Math.ulp(first), Math.ulp(second)) * 8.0);
+	}
+
+	private static double relativeError(double actual, double expected) {
+		return Math.abs(actual - expected) / Math.abs(expected);
 	}
 
 	private static void expectFailure(Runnable action, String message) {

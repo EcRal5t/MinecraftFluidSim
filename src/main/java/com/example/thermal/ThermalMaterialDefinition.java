@@ -131,7 +131,8 @@ public record ThermalMaterialDefinition(
 	private void requireTemperature(double temperatureK) {
 		if (!(Double.isFinite(temperatureK) && temperatureK >= minimumTemperatureK()
 				&& temperatureK <= maximumTemperatureK())) {
-			throw new IllegalArgumentException("Temperature is outside the thermal material validity range");
+			throw new IllegalArgumentException("Temperature " + temperatureK + " K is outside thermal material "
+					+ id + " validity [" + minimumTemperatureK() + ", " + maximumTemperatureK() + "] K");
 		}
 	}
 }

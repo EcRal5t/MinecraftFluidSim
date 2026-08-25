@@ -145,6 +145,8 @@ public final class FlipFluidDomain {
 	private final AirCavityScanner airScanner;
 	private boolean sealedDomainBoundary;
 	private int[] airCellNodeId;
+	/** Runtime-only cavity lineage including attributed gas volume inside partial liquid cells. */
+	private int[] airCellLineageNodeId;
 	private int previousSealedNodeCount;
 	private boolean gasPressureActive;
 	private GranularRegistry granularRegistry;
@@ -255,6 +257,7 @@ public final class FlipFluidDomain {
 		this.airNetwork = new AirNetwork();
 		this.airScanner = new AirCavityScanner(sizeX, sizeY, sizeZ, config.cellSize(), cellCount);
 		this.airCellNodeId = null;
+		this.airCellLineageNodeId = null;
 	}
 
 	public int sizeX() { return sizeX; }
@@ -340,7 +343,10 @@ public final class FlipFluidDomain {
 		for (AirCavityScanner.GeometricEdge edge : result.geometricEdges()) {
 			restored.addOrMergeEdge(edge.firstNode(), edge.secondNode(), edge.areaSquareMeters(), 0.65);
 		}
-		airNetwork = restored; airCellNodeId = actual; previousSealedNodeCount = result.sealedNodeCount();
+		airNetwork = restored;
+		airCellNodeId = actual;
+		airCellLineageNodeId = result.cellLineageNodeId();
+		previousSealedNodeCount = result.sealedNodeCount();
 		gasPressureActive = previousSealedNodeCount > 0;
 	}
 
@@ -4405,9 +4411,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			int previous = previousSealedNodeCount;
 			int[] ambientOverlap = new int[previous + 1];
 			TreeMap<Long, Integer> overlap = new TreeMap<>();
-			int[] newLabels = result.cellNodeId();
+			int[] newLabels = result.cellLineageNodeId();
 			for (int cell = 0; cell < cellCount; cell++) {
-				int old = airCellNodeId[cell];
+				int old = airCellLineageNodeId[cell];
 				if (old < 1) continue;
 				int now = newLabels[cell];
 				if (now >= 1) {
@@ -4497,8 +4503,20 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			airNetwork.addOrMergeEdge(edge.firstNode(), edge.secondNode(), edge.areaSquareMeters(), 0.65);
 		}
 		airCellNodeId = result.cellNodeId();
+		airCellLineageNodeId = result.cellLineageNodeId();
 		previousSealedNodeCount = sealed;
 		gasPressureActive = sealed > 0;
+	}
+
+	/**
+	 * Brings the derived gas topology to the same carrier geometry that a checkpoint will encode.
+	 * Marker advection and end-of-step reseeding may change the scanner topology after the last
+	 * mechanical gas update. Persistence must either commit this jointly planned remap or keep the
+	 * previous HEAD; it may never publish current markers beside a stale gas-node membership table.
+	 */
+	public void synchronizeGasTopologyForPersistence() {
+		ensureGrid();
+		refreshGasTopology();
 	}
 
 	/** Gauge pressure of the sealed cavity owning an air cell; zero for ambient and inactive gas. */

@@ -37,6 +37,7 @@ import java.util.TreeMap;
 
 	public record Result(
 			int[] cellNodeId,
+			int[] cellLineageNodeId,
 			int sealedNodeCount,
 			double[] sealedAvailableVolume,
 			List<GeometricEdge> geometricEdges,
@@ -121,9 +122,11 @@ import java.util.TreeMap;
 				sealedAvailableVolume[nodeId - 1] += cellAirVolume(cell, cellLiquidVolume, cutCells, granular);
 			}
 		}
-		addInterfaceResiduals(cellNodeId, solid, markerCount, cellLiquidVolume, cutCells, granular, sealedAvailableVolume);
+		int[] cellLineageNodeId = cellNodeId.clone();
+		addInterfaceResiduals(cellNodeId, cellLineageNodeId, solid, markerCount, cellLiquidVolume,
+				cutCells, granular, sealedAvailableVolume);
 		List<GeometricEdge> edges = collectGeometricEdges(cellNodeId, cutCells);
-		return new Result(cellNodeId, sealedNodes, sealedAvailableVolume, edges, visitedAirCells,
+		return new Result(cellNodeId, cellLineageNodeId, sealedNodes, sealedAvailableVolume, edges, visitedAirCells,
 				budgetExhausted ? StopReason.BUDGET_EXHAUSTED : StopReason.COMPLETED);
 	}
 
@@ -176,12 +179,15 @@ import java.util.TreeMap;
 		return (openVolume - liquid) * cellVolumeCubicMeters;
 	}
 
-	private void addInterfaceResiduals(int[] cellNodeId, boolean[] solid, int[] markerCount,
+	private void addInterfaceResiduals(int[] cellNodeId, int[] cellLineageNodeId,
+	                                   boolean[] solid, int[] markerCount,
 	                                   float[] cellLiquidVolume, FlipCutCellGeometry cutCells,
 	                                   GranularCouplingFields granular,
 	                                   double[] sealedAvailableVolume) {
 		for (int cell = 0; cell < cellNodeId.length; cell++) {
 			if (solid[cell] || markerCount[cell] == 0) continue;
+			double residualVolume = cellAirVolume(cell, cellLiquidVolume, cutCells, granular);
+			if (!(residualVolume > 0.0)) continue;
 			int attributed = -1;
 			int x = cell % sizeX;
 			int yz = cell / sizeX;
@@ -198,8 +204,8 @@ import java.util.TreeMap;
 				attributed = attributed < 0 ? cellNodeId[neighbor] : Math.min(attributed, cellNodeId[neighbor]);
 				if (attributed == 0) break;
 			}
-			if (attributed >= 1) sealedAvailableVolume[attributed - 1] += cellAirVolume(
-					cell, cellLiquidVolume, cutCells, granular);
+			if (attributed >= 0) cellLineageNodeId[cell] = attributed;
+			if (attributed >= 1) sealedAvailableVolume[attributed - 1] += residualVolume;
 		}
 	}
 

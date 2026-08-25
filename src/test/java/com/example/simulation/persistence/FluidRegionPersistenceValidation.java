@@ -73,6 +73,7 @@ public final class FluidRegionPersistenceValidation {
 		validateUnknownExtensions();
 		validateFaultMatrix();
 		validateStagedGeneration();
+		validateExplicitPreviousGenerationActivation();
 		validateCorruptionAndAtomicMoveFailure();
 		validateWorldConfig();
 		System.out.println("Fluid region persistence validation passed");
@@ -885,6 +886,34 @@ public final class FluidRegionPersistenceValidation {
 		RegionStateFiles.PreparedGeneration repeat = files.prepare(RegionState.capture(populatedRegion(id), 4L), (point, path) -> { });
 		require(repeat.alreadyCommitted() && files.commit(repeat, (point, path) -> { }) == 4L,
 				"idempotent re-staging was not recognized");
+	}
+
+	private static void validateExplicitPreviousGenerationActivation() throws Exception {
+		Path root = Files.createTempDirectory(Path.of("."), "previous-generation-");
+		RegionStateFiles files = new RegionStateFiles(root);
+		UUID id = UUID.randomUUID();
+		FluidRegion region = populatedRegion(id);
+		RegionState first = RegionState.capture(region, 1L);
+		files.publish(first);
+		region.domain().setVolume(3, 2, 3, 0.5F);
+		RegionState second = RegionState.capture(region, 2L);
+		files.publish(second);
+
+		RegionStateFiles.PreviousGeneration previous = files.readPrevious(id, 2L);
+		require(previous.state().manifest().checkpointGeneration() == 1L
+				&& previous.state().manifest().checksum() == first.manifest().checksum(),
+				"explicit previous-generation probe did not bind the inactive complete slot");
+		expectIOException(() -> files.readPrevious(id, 3L),
+				"previous-generation probe ignored its explicit current-generation guard");
+		require(files.activatePrevious(previous) == 1L
+				&& files.read(id).manifest().checkpointGeneration() == 1L
+				&& files.read(id).manifest().checksum() == first.manifest().checksum(),
+				"explicit previous-generation activation did not atomically move HEAD");
+
+		files.publish(second);
+		require(files.read(id).manifest().checkpointGeneration() == 2L
+				&& files.read(id).manifest().checksum() == second.manifest().checksum(),
+				"publication after explicit rollback did not replace the retained rejected slot");
 	}
 
 	private static FluidRegion populatedRegion(UUID id) {
