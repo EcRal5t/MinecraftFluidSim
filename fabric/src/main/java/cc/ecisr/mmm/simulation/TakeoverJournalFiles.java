@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.simulation.persistence.DurableFileOperations;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
@@ -74,6 +75,7 @@ final class TakeoverJournalFiles {
 		deleteOperation.deleteIfExists(warningPath());
 		deleteOperation.deleteIfExists(journalPath());
 		deleteStaleTemporaryFiles();
+		DurableFileOperations.forceDirectory(worldRoot);
 	}
 
 	void deleteStaleTemporaryFiles() throws IOException {
@@ -125,6 +127,7 @@ final class TakeoverJournalFiles {
 			if (Files.exists(target)) throw new IOException("Refusing to replace existing recovery file " + target);
 			atomicMover.move(temporary, target);
 			if (!Files.exists(target)) throw new IOException("Atomic publisher did not create " + target);
+			DurableFileOperations.forceDirectory(worldRoot);
 		} catch (IOException exception) {
 			try {
 				deleteOperation.deleteIfExists(temporary);

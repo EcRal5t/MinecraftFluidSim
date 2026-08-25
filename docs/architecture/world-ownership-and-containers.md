@@ -101,6 +101,8 @@ insert/extract 返回“实际转移量”，WAL 和 after item 必须使用这�
 7. 把 actor item 收敛为 after；玩家调用 player save，dispenser 调用 owning level/chunk save。
 8. durable save 成功后才删除 WAL；删除失败只留下可幂等收敛的 WAL，不重复资源转移。
 
+WAL/WARNING/committed/HEAD 的文件内容在 rename 前 `force`，rename 与事务完成后的 delete 还要同步父目录 entry；支持目录 channel 的文件系统执行 directory fsync。Windows JDK 不暴露目录 channel，因此仍依赖同卷原子 rename 与已强制写入的文件内容，但不会把一次普通进程崩溃误当成已提交。
+
 `REGION_COMMITTED` 是“WAL 已经拥有权威 after item”的含义，不表示 HEAD 必然已经移动；实际 commit 仍由 HEAD 判断。
 
 ### 恢复决策表

@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.simulation.persistence.DurableFileOperations;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
@@ -96,7 +97,9 @@ return decode(root);
 
 public void write(ContainerTransferJournal journal) throws IOException {
 assertHealthyLayout();
+boolean directoryCreated = !Files.exists(directory);
 Files.createDirectories(directory);
+if (directoryCreated) DurableFileOperations.forceParent(directory);
 Path path = path(journal.transactionId());
 Path temporary = path.resolveSibling(path.getFileName() + TEMP_SUFFIX);
 deleteIfExists(temporary);
@@ -109,9 +112,11 @@ throw new IOException("Staged container transfer WAL did not read back identical
 }
 moveWithRetry(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
 if (!Files.exists(path)) throw new IOException("Atomic publisher did not create " + path);
+DurableFileOperations.forceDirectory(directory);
 } catch (IOException exception) {
 try {
 deleteIfExists(temporary);
+DurableFileOperations.forceDirectory(directory);
 } catch (IOException cleanupFailure) {
 exception.addSuppressed(cleanupFailure);
 }
@@ -121,9 +126,10 @@ throw exception;
 
 public void delete(UUID transactionId) throws IOException {
 assertHealthyLayout();
-deleteIfExists(path(transactionId));
+boolean changed = deleteIfExists(path(transactionId));
 Path temporary = path(transactionId).resolveSibling(path(transactionId).getFileName() + TEMP_SUFFIX);
-deleteIfExists(temporary);
+changed |= deleteIfExists(temporary);
+if (changed) DurableFileOperations.forceDirectory(directory);
 }
 
 private void assertHealthyLayout() throws IOException {
@@ -147,8 +153,8 @@ private Path path(UUID transactionId) {
 return directory.resolve(transactionId + ".nbt");
 }
 
-private static void deleteIfExists(Path path) throws IOException {
-Files.deleteIfExists(path);
+private static boolean deleteIfExists(Path path) throws IOException {
+return Files.deleteIfExists(path);
 }
 
 private static void forceFile(Path path) throws IOException {

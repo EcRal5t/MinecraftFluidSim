@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.simulation.ownership;
 
+import cc.ecisr.mmm.simulation.persistence.DurableFileOperations;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
@@ -109,6 +110,7 @@ public final class OwnershipFiles {
 			if (!Files.exists(committedPath())) {
 				throw new IOException("Atomic publisher did not create " + committedPath());
 			}
+			DurableFileOperations.forceDirectory(directory);
 		} catch (IOException exception) {
 			try {
 				deleteOperation.deleteIfExists(temporary);
@@ -129,6 +131,7 @@ public final class OwnershipFiles {
 		deleteOperation.deleteIfExists(warningPath());
 		deleteOperation.deleteIfExists(walPath());
 		deleteStaleTemporaryFiles();
+		DurableFileOperations.forceDirectory(directory);
 	}
 
 	void deleteStaleTemporaryFiles() throws IOException {
@@ -146,6 +149,7 @@ public final class OwnershipFiles {
 				deleteOperation.deleteIfExists(entry);
 			}
 		}
+		DurableFileOperations.forceParent(directory);
 	}
 
 	public boolean hasWAL() {
@@ -235,7 +239,9 @@ public final class OwnershipFiles {
 	}
 
 	private void writeAtomically(Path temporary, Path target, TemporaryWriter writer) throws IOException {
+		boolean directoryCreated = !Files.exists(directory);
 		Files.createDirectories(directory);
+		if (directoryCreated) DurableFileOperations.forceParent(directory);
 		deleteOperation.deleteIfExists(temporary);
 		try {
 			writer.write(temporary);
@@ -243,6 +249,7 @@ public final class OwnershipFiles {
 			if (Files.exists(target)) throw new IOException("Refusing to replace existing recovery file " + target);
 			atomicMover.move(temporary, target);
 			if (!Files.exists(target)) throw new IOException("Atomic publisher did not create " + target);
+			DurableFileOperations.forceDirectory(directory);
 		} catch (IOException exception) {
 			try {
 				deleteOperation.deleteIfExists(temporary);
