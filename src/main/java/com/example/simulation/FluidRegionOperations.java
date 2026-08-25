@@ -352,7 +352,7 @@ final class FluidRegionOperations {
 			retryAt.remove(region.id());
 			reportedThermalInitialization.remove(region.id());
 			thermalInitializationNotifiedPlayers.remove(region.id());
-			return "已按显式初温 " + initialTemperatureK + " K 原子初始化 region-state v6；checkpoint "
+			return "已按显式初温 " + initialTemperatureK + " K 原子初始化 region-state v7；checkpoint "
 					+ generation + "，区域保持暂停";
 		} catch (IOException | RuntimeException exception) {
 			String failure = "热初始化失败或需要恢复确认：" + exception.getMessage();

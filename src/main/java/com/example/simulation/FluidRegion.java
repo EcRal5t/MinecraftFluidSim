@@ -175,8 +175,9 @@ public final class FluidRegion {
 	boolean thermalInitializationRequired() { return thermalInitializationSourceVersion != 0; }
 	int thermalInitializationSourceVersion() { return thermalInitializationSourceVersion; }
 	void requireThermalInitialization(int sourceVersion) {
-		if (sourceVersion != 1 && sourceVersion != 2 && sourceVersion != 3 && sourceVersion != 5) {
-			throw new IllegalArgumentException("Only region-state v1/v2/v3/v5 can await thermal initialization");
+		if (sourceVersion != 1 && sourceVersion != 2 && sourceVersion != 3
+				&& sourceVersion != 5 && sourceVersion != 6) {
+			throw new IllegalArgumentException("Only region-state v1/v2/v3/v5/v6 can await thermal initialization");
 		}
 		thermalInitializationSourceVersion = sourceVersion;
 	}
@@ -375,7 +376,7 @@ public final class FluidRegion {
 		domain.restoreGranularState(state, registry, domain.materialRegistry());
 	}
 
-	/** Completes a v4/v6 gas restore after the matching liquid/material generation. */
+	/** Completes a v4/v6/v7 gas restore after the matching liquid/material generation. */
 	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, long loadedCheckpointGeneration) {
 		Objects.requireNonNull(state, "state"); Objects.requireNonNull(registry, "registry");
 		if (domain == null || loadedCheckpointGeneration != checkpointGeneration || !domain.hasMaterialState()) {
@@ -384,7 +385,7 @@ public final class FluidRegion {
 		domain.restoreGasState(state, registry);
 	}
 
-	/** Completes a v6 restore after the matching liquid/material generation has been reconstructed. */
+	/** Completes a current thermal restore after the matching liquid/material generation has been reconstructed. */
 	public void restoreThermalState(
 			FlipThermalParticleState state, ThermalRegistry registry, long loadedCheckpointGeneration
 	) {

@@ -37,6 +37,7 @@ import com.example.network.FluidProtocolServer;
 import com.example.simulation.controller.FluidBoundaryScanner;
 import com.example.simulation.controller.FluidControllerRegions;
 import com.example.simulation.controller.FluidRegionFootprint;
+import com.example.simulation.persistence.RegionManifest;
 import com.example.simulation.persistence.RegionStateFiles;
 import com.example.thermal.ThermalDataPackLoader;
 import com.example.thermal.ThermalAuditLedger;
@@ -163,8 +164,7 @@ public final class FluidSimulationService {
 				} else {
 					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discoverCommittedStructure();
 					if (!regions.issues().isEmpty() || regions.manifests().stream()
-							.anyMatch(manifest -> manifest.formatVersion() == 3
-									|| manifest.formatVersion() == 5 && manifest.hasChemicalState())) {
+							.anyMatch(RegionManifest::hasChemicalState)) {
 						throw new IOException("chemical region-state or unreadable region data exists but chemistry/registry.nbt is missing");
 					}
 					ChemicalRegistry datapackDefinitions = ChemicalDataPackLoader.load(server.getResourceManager());
@@ -206,8 +206,8 @@ public final class FluidSimulationService {
 				} else {
 					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discoverCommittedStructure();
 					if (!regions.issues().isEmpty() || regions.manifests().stream()
-							.anyMatch(manifest -> manifest.formatVersion() == 5)) {
-						throw new IOException("region-state v5 or unreadable region data exists but granular/registry.nbt is missing");
+							.anyMatch(RegionManifest::hasGranularState)) {
+						throw new IOException("granular region-state or unreadable region data exists but granular/registry.nbt is missing");
 					}
 					GranularRegistry datapackDefinitions = GranularDataPackLoader.load(
 							server.getResourceManager(), bootChemicalRegistry);
@@ -238,7 +238,7 @@ public final class FluidSimulationService {
 				if (!gasStore.exists()) {
 					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discoverCommittedStructure();
 					if (!regions.issues().isEmpty() || regions.manifests().stream()
-							.anyMatch(manifest -> manifest.formatVersion() == 4 || manifest.formatVersion() == 6)) {
+							.anyMatch(RegionManifest::hasGasState)) {
 						throw new IOException("gas-bearing region-state or unreadable region data exists but gas/registry.nbt is missing");
 					}
 				}
@@ -274,8 +274,8 @@ public final class FluidSimulationService {
 				} else {
 					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discoverCommittedStructure();
 					if (!regions.issues().isEmpty() || regions.manifests().stream()
-							.anyMatch(manifest -> manifest.formatVersion() == 6)) {
-						throw new IOException("region-state v6 or unreadable region data exists but thermal/registry.nbt is missing");
+							.anyMatch(RegionManifest::hasThermalState)) {
+						throw new IOException("thermal region-state or unreadable region data exists but thermal/registry.nbt is missing");
 					}
 					ThermalRegistry definitionsFromPacks = ThermalDataPackLoader.load(server.getResourceManager(),
 							chemicalFingerprint, granularFingerprint);

@@ -1246,7 +1246,7 @@ public final class FlipFluidDomain {
 
 	/**
 	 * Binds authoritative M9 thermal state at an explicit operator-supplied initial temperature.
-	 * Production uses this only for a deliberate legacy-region upgrade before committing region-state v6.
+	 * Production uses this only for a deliberate legacy-region upgrade before committing current thermal state.
 	 */
 	public void bindThermal(
 			ThermalRegistry registry, FluidMaterialRegistry liquidRegistry, double initialTemperatureK

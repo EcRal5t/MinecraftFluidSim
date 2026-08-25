@@ -410,16 +410,17 @@ public final class RegionStateFiles {
 				throw new IOException("Region-state v5 granular inventory/audit validation failed", invalid);
 			}
 		}
-		else if (state.manifest().formatVersion() == 6) {
+		else if (state.manifest().formatVersion() == 6 || state.manifest().formatVersion() == 7) {
+			String version = "v" + state.manifest().formatVersion();
 			if (thermalRegistry == null) {
-				throw new IOException("region-state v6 verification requires the authoritative thermal registry");
+				throw new IOException("region-state " + version + " verification requires the authoritative thermal registry");
 			}
 			if (gasRegistry == null) {
-				throw new IOException("region-state v6 verification requires the authoritative gas registry");
+				throw new IOException("region-state " + version + " verification requires the authoritative gas registry");
 			}
 			if (state.manifest().hasChemicalState()) {
 				if (chemicalRegistry == null) {
-					throw new IOException("chemical region-state v6 verification requires the authoritative chemical registry");
+					throw new IOException("chemical region-state " + version + " verification requires the authoritative chemical registry");
 				}
 				state.reconstructChemical(chemicalRegistry);
 			} else state.reconstructMaterial();
@@ -427,15 +428,15 @@ public final class RegionStateFiles {
 					.anyMatch(extension -> GranularRegionStateCodec.MANIFEST_EXTENSION.equals(extension.type()));
 			if (hasGranular) {
 				if (granularRegistry == null) {
-					throw new IOException("granular region-state v6 verification requires the authoritative granular registry");
+					throw new IOException("granular region-state " + version + " verification requires the authoritative granular registry");
 				}
 				var granular = state.reconstructGranular(granularRegistry);
 				if (granular.requiresChemistry() && chemicalRegistry == null) {
-					throw new IOException("Reactive region-state v6 verification requires the authoritative chemical registry");
+					throw new IOException("Reactive region-state " + version + " verification requires the authoritative chemical registry");
 				}
 				try { granular.validateAgainst(granularRegistry, chemicalRegistry); }
 				catch (IllegalArgumentException invalid) {
-					throw new IOException("Region-state v6 granular inventory/audit validation failed", invalid);
+					throw new IOException("Region-state " + version + " granular inventory/audit validation failed", invalid);
 				}
 			}
 			state.reconstructThermal(thermalRegistry, gasRegistry, chemicalRegistry);

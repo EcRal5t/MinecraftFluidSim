@@ -38,6 +38,7 @@ import java.util.UUID;
 
 /** Coordinates persistent controller state and its joint world-ownership transactions. */
 final class FluidRegionPersistence {
+	private static final int CURRENT_THERMAL_FORMAT = 7;
 	private final RegionStateFiles files;
 	private final OwnershipStore ownershipStore;
 	private final boolean materialsEnabled;
@@ -137,7 +138,7 @@ final class FluidRegionPersistence {
 				if (manifest.formatVersion() >= 2 && !materialsEnabled) {
 					throw new IOException("region-state v" + manifest.formatVersion() + " requires the materials feature gate");
 				}
-				if (manifest.formatVersion() == 3 || manifest.formatVersion() == 5 && manifest.hasChemicalState()) {
+				if (manifest.hasChemicalState()) {
 					if (!chemistryEnabled || chemicalRegistry == null) {
 						throw new IOException("chemical region-state requires the chemistry feature gate and authoritative registry snapshot");
 					}
@@ -145,11 +146,11 @@ final class FluidRegionPersistence {
 						throw new IOException("region-state chemical registry fingerprint does not match the world snapshot");
 					}
 				}
-				if (manifest.formatVersion() == 5 && (!granularEnabled || granularRegistry == null)) {
-					throw new IOException("region-state v5 requires the granular feature gate and authoritative registry snapshot");
+				if (manifest.hasGranularState() && (!granularEnabled || granularRegistry == null)) {
+					throw new IOException("granular region-state requires the granular feature gate and authoritative registry snapshot");
 				}
-				if (manifest.formatVersion() == 6 && (!thermalEnabled || thermalRegistry == null || gasRegistry == null)) {
-					throw new IOException("region-state v6 requires the thermal feature gate and authoritative thermal/gas registry snapshots");
+				if (manifest.hasThermalState() && (!thermalEnabled || thermalRegistry == null || gasRegistry == null)) {
+					throw new IOException("thermal region-state requires the thermal feature gate and authoritative thermal/gas registry snapshots");
 				}
 				if (thermalEnabled && manifest.formatVersion() == 4) {
 					throw new IOException("region-state v4 is a gas-only generation and cannot be loaded or guessed as complete thermal state");
@@ -162,7 +163,7 @@ final class FluidRegionPersistence {
 						manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 						manifest.reservedMarkerCapacity(), manifest.footprint(), manifest.networkGeneration(),
 						manifest.checkpointGeneration(), manifest.totalMarkerCount(), (float) manifest.totalVolume(), manifest.runtime());
-				if (thermalEnabled && manifest.formatVersion() != 6) {
+				if (thermalEnabled && manifest.formatVersion() != CURRENT_THERMAL_FORMAT) {
 					region.requireThermalInitialization(manifest.formatVersion());
 				}
 				FluidRegionManager.AdmissionResult admission = manager.add(region);
@@ -424,7 +425,7 @@ final class FluidRegionPersistence {
 			restoreThermalGeneration(region, state);
 			return;
 		}
-		if (manifest.formatVersion() == 6) {
+		if (manifest.hasThermalState()) {
 			throw new IOException("Thermal checkpoint cannot restore while the feature gate is disabled");
 		}
 		if (granularEnabled) {
@@ -505,8 +506,9 @@ final class FluidRegionPersistence {
 		RegionManifest manifest = source.manifest();
 		validateAdmittedIdentity(region, manifest);
 		int sourceVersion = manifest.formatVersion();
-		if (sourceVersion != 1 && sourceVersion != 2 && sourceVersion != 3 && sourceVersion != 5) {
-			throw new IOException("Only region-state v1/v2/v3/v5 can receive explicit thermal initialization");
+		if (sourceVersion != 1 && sourceVersion != 2 && sourceVersion != 3
+				&& sourceVersion != 5 && sourceVersion != 6) {
+			throw new IOException("Only region-state v1/v2/v3/v5/v6 can receive explicit thermal initialization");
 		}
 		long previousGeneration = manifest.checkpointGeneration();
 		long initializedGeneration = Math.addExact(previousGeneration, 1L);
@@ -532,10 +534,10 @@ final class FluidRegionPersistence {
 			region.setThermalInitializationRecord(record);
 			long published = files.publish(RegionState.captureThermal(region, initializedGeneration));
 			if (!region.recordPublishedCheckpoint(published)) {
-				throw new IOException("Published v6 initialization was not accepted by live region metadata");
+				throw new IOException("Published v7 initialization was not accepted by live region metadata");
 			}
 			RealWaterMod.LOGGER.info(
-					"Explicitly initialized controller region {} from region-state v{} at raw temperature {} into v6 generation {}",
+					"Explicitly initialized controller region {} from region-state v{} at raw temperature {} into v7 generation {}",
 					region.id(), sourceVersion, Long.toUnsignedString(record.initialTemperatureBits()), published);
 			return published;
 		} catch (IOException | RuntimeException failure) {
@@ -549,7 +551,7 @@ final class FluidRegionPersistence {
 			if (committed == initializedGeneration) {
 				region.setThermalInitializationRecord(record);
 				if (region.recordPublishedCheckpoint(initializedGeneration)) return initializedGeneration;
-				throw new IOException("v6 initialization HEAD committed but live metadata could not advance; restart recovery is required", failure);
+				throw new IOException("v7 initialization HEAD committed but live metadata could not advance; restart recovery is required", failure);
 			}
 			region.setThermalInitializationRecord(null);
 			if (region.solverLoaded() && region.checkpointGeneration() == previousGeneration
@@ -589,7 +591,38 @@ final class FluidRegionPersistence {
 				}
 				region.restoreGranularState(state.reconstructGranular(granularRegistry), granularRegistry, generation);
 			}
+			case 6 -> restoreLegacyV6ForThermalInitialization(region, state, generation);
 			default -> throw new IOException("Unsupported thermal initialization source");
+		}
+	}
+
+	private void restoreLegacyV6ForThermalInitialization(
+			FluidRegion region, RegionState state, long generation
+	) throws IOException {
+		var pending = state.reconstructPendingPhaseVolume();
+		if (!pending.isEmpty()) {
+			throw new IOException("region-state v6 has unconsumed phase volume/work and cannot be reinitialized");
+		}
+		var gas = state.reconstructGas(gasRegistry, chemicalRegistry);
+		if (!gas.nodes().isEmpty() || !gas.externalSource().entries().isEmpty()
+				|| !gas.escapedSink().entries().isEmpty()
+				|| !gas.massRoundoff().equals(com.example.thermal.SignedDyadic.ZERO)
+				|| !gas.residualRoundoff().equals(com.example.thermal.SignedDyadic.ZERO)) {
+			throw new IOException("region-state v6 contains gas truth tied to the legacy topology; automatic remapping is forbidden");
+		}
+		if (state.manifest().hasChemicalState()) {
+			if (!chemistryEnabled || chemicalRegistry == null) {
+				throw new IOException("Chemical v6 initialization requires its authoritative chemistry registry");
+			}
+			region.restoreChemicalSolver(state.reconstructChemical(chemicalRegistry), chemicalRegistry, generation);
+		} else {
+			region.restoreMaterialSolver(state.reconstructMaterial(), generation);
+		}
+		if (state.manifest().hasGranularState()) {
+			if (!granularEnabled || granularRegistry == null) {
+				throw new IOException("Granular v6 initialization requires its authoritative granular registry");
+			}
+			region.restoreGranularState(state.reconstructGranular(granularRegistry), granularRegistry, generation);
 		}
 	}
 
@@ -656,10 +689,11 @@ final class FluidRegionPersistence {
 		}
 		RegionManifest manifest = state.manifest();
 		if (manifest.formatVersion() == 1 || manifest.formatVersion() == 2
-				|| manifest.formatVersion() == 3 || manifest.formatVersion() == 5) {
+				|| manifest.formatVersion() == 3 || manifest.formatVersion() == 5
+				|| manifest.formatVersion() == 6) {
 			throw new ThermalInitializationRequiredException(manifest.formatVersion());
 		}
-		if (manifest.formatVersion() != 6) {
+		if (manifest.formatVersion() != CURRENT_THERMAL_FORMAT) {
 			throw new IOException("region-state v" + manifest.formatVersion()
 					+ " cannot be interpreted as complete thermal state");
 		}
@@ -701,8 +735,10 @@ final class FluidRegionPersistence {
 		private final int sourceVersion;
 
 		ThermalInitializationRequiredException(int sourceVersion) {
-			super("region-state v" + sourceVersion
-					+ " has no authoritative internal energy; explicit operator temperature initialization is required");
+			super(sourceVersion == 6
+					? "region-state v6 uses the legacy condensed-mass energy scale; explicit operator temperature reinitialization is required"
+					: "region-state v" + sourceVersion
+							+ " has no authoritative internal energy; explicit operator temperature initialization is required");
 			this.sourceVersion = sourceVersion;
 		}
 

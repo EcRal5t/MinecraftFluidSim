@@ -124,11 +124,11 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		return capture(region, checkpointGeneration, particles, null, null, gas);
 	}
 
-	/** Captures one complete material/optional-chemistry/optional-granular M9 generation. */
+	/** Captures one complete corrected-SI material/optional-chemistry/optional-granular M9 generation. */
 	public static RegionState captureThermal(FluidRegion region, long checkpointGeneration) throws IOException {
 		requireCaptureable(region, checkpointGeneration);
 		if (!region.domain().hasThermalState() || !region.domain().hasMaterialState()) {
-			throw new IOException("region-state v6 capture requires material and thermal state");
+			throw new IOException("region-state v7 capture requires material and thermal state");
 		}
 		GranularStateSnapshot granular = region.domain().hasGranularState()
 				? region.domain().exportGranularState() : null;
@@ -138,7 +138,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			FlipChemicalParticleState chemical = region.domain().exportChemicalParticleState();
 			chemicalFingerprint = chemical.registryFingerprint();
 			FlipMaterialParticleState materials = chemical.materials();
-			particles = new CapturedParticles(6, materials.materials(), materials.copyPositionVolume(),
+			particles = new CapturedParticles(7, materials.materials(), materials.copyPositionVolume(),
 					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMass(),
 					materials.copyMaterialPaletteIndex(), chemical.registryFingerprint(), chemical.speciesPalette(),
 					chemical.mixtures(), chemical.copyMarkerMixtureIndex(), chemical.copyIndicator(),
@@ -146,7 +146,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		} else {
 			chemicalFingerprint = "";
 			FlipMaterialParticleState materials = region.domain().exportMaterialParticleState();
-			particles = new CapturedParticles(6, materials.materials(), materials.copyPositionVolume(),
+			particles = new CapturedParticles(7, materials.materials(), materials.copyPositionVolume(),
 					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMass(),
 					materials.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0],
 					new long[0], 0L, ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY);
@@ -154,11 +154,11 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		GasStateSnapshot gas;
 		try { gas = region.domain().exportGasState(chemicalFingerprint); }
 		catch (IllegalStateException invalid) {
-			throw new IOException("Region-state v6 requires complete gas topology/inventory", invalid);
+			throw new IOException("Region-state v7 requires complete gas topology/inventory", invalid);
 		}
 		FlipThermalParticleState thermal = region.domain().exportThermalParticleState();
 		if (thermal.copyGasNodeEnergy().length != gas.nodes().size()) {
-			throw new IOException("Region-state v6 gas inventory and thermal energy ordinals disagree");
+			throw new IOException("Region-state v7 gas inventory and thermal energy ordinals disagree");
 		}
 		return capture(region, checkpointGeneration, particles, granular, thermal, gas);
 	}
@@ -485,7 +485,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 
 	public FlipMaterialParticleState reconstructMaterial() throws IOException {
 		if (manifest.formatVersion() != 2
-				&& !((manifest.formatVersion() == 4 || manifest.formatVersion() == 5 || manifest.formatVersion() == 6)
+				&& !((manifest.formatVersion() == 4 || manifest.formatVersion() == 5 || manifest.formatVersion() == 6
+						|| manifest.formatVersion() == 7)
 				&& !manifest.hasChemicalState())) {
 			throw new IOException("This region-state cannot use the material reconstruction path");
 		}
@@ -511,7 +512,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		ThermalRegionStateCodec.ManifestData thermal = codec.decodeManifest(
 				requiredExtension(manifest.extensions(), ThermalRegionStateCodec.MANIFEST_EXTENSION).payload());
 		if (!thermal.registryFingerprint().equals(registry.fingerprint())) {
-			throw new IOException("Region-state v6 thermal registry fingerprint mismatch");
+			throw new IOException("Region-state thermal registry fingerprint mismatch");
 		}
 		boolean granularCapability = (thermal.capabilities() & ThermalRegionStateCodec.CAP_GRANULAR) != 0;
 		GranularRegionStateCodec granularCodec = new GranularRegionStateCodec();
@@ -575,35 +576,35 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					manifest.solverConfig().cellSize(), manifest.totalMarkerCount(), thermal.registryFingerprint(),
 					energy, activeEnergy, depositEnergy, coherent, gasEnergy, thermal.audit());
 		} catch (IllegalArgumentException invalid) {
-			throw new IOException("Invalid region-state v6 thermal inventory: " + invalid.getMessage(), invalid);
+			throw new IOException("Invalid region-state thermal inventory: " + invalid.getMessage(), invalid);
 		}
 	}
 
-	/** Optional durable evidence that this v6 generation descended from an explicitly initialized old HEAD. */
+	/** Optional durable evidence that this thermal generation descended from an explicitly initialized old HEAD. */
 	public ThermalInitializationRecord reconstructThermalInitialization() throws IOException {
 		boolean present = hasExtension(manifest.extensions(), ThermalInitializationRecord.MANIFEST_EXTENSION);
 		if (!present) return null;
-		if (manifest.formatVersion() != 6) {
-			throw new IOException("Thermal initialization evidence is only valid in region-state v6");
+		if (manifest.formatVersion() != 6 && manifest.formatVersion() != 7) {
+			throw new IOException("Thermal initialization evidence is only valid in a thermal region-state");
 		}
 		return ThermalInitializationRecord.decode(requiredExtension(manifest.extensions(),
 				ThermalInitializationRecord.MANIFEST_EXTENSION).payload());
 	}
 
-	/** Sparse absence is the canonical empty record; presence is valid only in a complete v6 generation. */
+	/** Sparse absence is the canonical empty record; presence is valid only in a complete thermal generation. */
 	public PendingPhaseVolumeState reconstructPendingPhaseVolume() throws IOException {
 		int cellCount = Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ());
 		if (!hasExtension(manifest.extensions(), PendingPhaseVolumeCodec.MANIFEST_EXTENSION)) {
 			return new PendingPhaseVolumeState(cellCount, List.of());
 		}
-		if (manifest.formatVersion() != 6) {
-			throw new IOException("Pending phase volume is only valid in region-state v6");
+		if (manifest.formatVersion() != 6 && manifest.formatVersion() != 7) {
+			throw new IOException("Pending phase volume is only valid in a thermal region-state");
 		}
 		return new PendingPhaseVolumeCodec().decode(requiredExtension(
 				manifest.extensions(), PendingPhaseVolumeCodec.MANIFEST_EXTENSION).payload(), cellCount);
 	}
 
-	/** Full v6 validation additionally binds every saved node U to its authoritative gas inventory. */
+	/** Full thermal validation additionally binds every saved node U to its authoritative gas inventory. */
 	public FlipThermalParticleState reconstructThermal(
 			ThermalRegistry thermalRegistry, GasRegistry gasRegistry, ChemicalRegistry chemicalRegistry
 	) throws IOException {
@@ -611,7 +612,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		GasStateSnapshot gas = reconstructGas(gasRegistry, chemicalRegistry);
 		double[] energy = thermal.copyGasNodeEnergy();
 		if (energy.length != gas.nodes().size()) {
-			throw new IOException("Region-state v6 gas energy/inventory cardinality mismatch");
+			throw new IOException("Region-state gas energy/inventory cardinality mismatch");
 		}
 		try {
 			GasThermalModel model = new GasThermalModel(thermalRegistry, gasRegistry);
@@ -619,7 +620,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				model.state(gas.nodes().get(node).inventory(), energy[node]);
 			}
 		} catch (IllegalArgumentException invalid) {
-			throw new IOException("Invalid region-state v6 gas thermal inventory: " + invalid.getMessage(), invalid);
+			throw new IOException("Invalid region-state gas thermal inventory: " + invalid.getMessage(), invalid);
 		}
 		return thermal;
 	}
@@ -820,8 +821,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			throw new IOException("Thermal initialization/pending-volume evidence is manifest-only");
 		}
 		if (initializationPayload) {
-			if (manifest.formatVersion() != 6) {
-				throw new IOException("Thermal initialization evidence is only valid in region-state v6");
+			if (manifest.formatVersion() != 6 && manifest.formatVersion() != 7) {
+				throw new IOException("Thermal initialization evidence is only valid in a thermal region-state");
 			}
 			ThermalInitializationRecord.decode(requiredExtension(manifest.extensions(),
 					ThermalInitializationRecord.MANIFEST_EXTENSION).payload());
@@ -832,11 +833,11 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					|| hasExtension(manifest.extensions(), ThermalRegionStateCodec.MANIFEST_EXTENSION)) {
 				throw new IOException("Region-state v4 requires gas and forbids granular/thermal payloads");
 			}
-		} else if (gasPayload && manifest.formatVersion() != 6) {
-			throw new IOException("Gas payload is only valid in region-state v4/v6");
-		} else if (manifest.formatVersion() == 6 && (!gasPayload
+		} else if (gasPayload && manifest.formatVersion() != 6 && manifest.formatVersion() != 7) {
+			throw new IOException("Gas payload is only valid in region-state v4/v6/v7");
+		} else if ((manifest.formatVersion() == 6 || manifest.formatVersion() == 7) && (!gasPayload
 				|| !hasExtension(manifest.extensions(), ThermalRegionStateCodec.MANIFEST_EXTENSION))) {
-			throw new IOException("Region-state v6 requires complete gas and thermal payloads");
+			throw new IOException("Complete thermal region-state requires gas and thermal payloads");
 		}
 		if (gasPayload) validateGasLedgers();
 		if (hasExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION)) validateGranularLedgers();
@@ -996,7 +997,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		boolean gasPayload = hasExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION);
 		if (chemicalCapability != manifest.hasChemicalState() || granularCapability != granularPayload
 				|| gasCapability != gasPayload) {
-			throw new IOException("Region-state v6 thermal capabilities disagree with complete payload");
+			throw new IOException("Thermal region-state capabilities disagree with complete payload");
 		}
 		GasRegionStateCodec.ManifestData gas = new GasRegionStateCodec().decodeManifest(
 				requiredExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION).payload());
@@ -1030,7 +1031,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					|| ledger.depositGroupCount() != data.depositGroupEnergyBits().length
 					|| ledger.coherentGroupCount() != data.coherentGroups().size() || !ledger.energy().equals(data.energy())
 					|| data.liquidMarkerEnergyBits().length != section.markerCount()) {
-				throw new IOException("Thermal section does not match its v6 ledger");
+				throw new IOException("Thermal section does not match its manifest ledger");
 			}
 			for (ThermalRegionStateCodec.CoherentEntry group : data.coherentGroups()) {
 				validateGranularDepositSection(section, group.cell());
@@ -1059,7 +1060,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				|| coherentCount != expected.coherentGroupCount() || !liquidEnergy.equals(expected.liquidEnergy())
 				|| !activeEnergy.equals(expected.activeEnergy()) || !depositEnergy.equals(expected.depositEnergy())
 				|| !coherentEnergy.equals(expected.coherentEnergy())) {
-			throw new IOException("Thermal v6 carrier ledger does not close");
+			throw new IOException("Thermal carrier ledger does not close");
 		}
 	}
 

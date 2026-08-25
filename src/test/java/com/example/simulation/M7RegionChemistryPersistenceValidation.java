@@ -51,12 +51,12 @@ public final class M7RegionChemistryPersistenceValidation {
 		validateFeatureGateAndMigration();
 		validateAtomicFaultBoundary();
 		validateGranularV5FeatureGateAndMigration();
-		validateThermalV6ProductionGate();
-		System.out.println("Region persistence passed: v1/v2/v3 migration, v3/v5/v6 gates and fault matrix");
+		validateThermalV7ProductionGate();
+		System.out.println("Region persistence passed: v1/v2/v3 migration, v3/v5/v6/v7 gates and fault matrix");
 	}
 
-	private static void validateThermalV6ProductionGate() throws Exception {
-		Path root = Files.createTempDirectory(Path.of("."), "thermal-production-v6-");
+	private static void validateThermalV7ProductionGate() throws Exception {
+		Path root = Files.createTempDirectory(Path.of("."), "thermal-production-v7-");
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
 		ThermalRegistry thermal = productionThermalRegistry();
 		FluidRegion source = populatedRegion(UUID.randomUUID());
@@ -66,22 +66,22 @@ public final class M7RegionChemistryPersistenceValidation {
 		source.domain().setThermalTemperatureInCell(2, 1, 2, 325.0);
 		FluidRegionPersistence persistence = new FluidRegionPersistence(root, true, false, null,
 				false, null, false, true, thermal, gas);
-		check(persistence.checkpoint(source) == 1L, "production thermal checkpoint did not publish v6");
+		check(persistence.checkpoint(source) == 1L, "production thermal checkpoint did not publish v7");
 
 		FluidRegionManager manager = manager();
 		FluidRegionPersistence restoring = new FluidRegionPersistence(root, true, false, null,
 				false, null, false, true, thermal, gas);
-		check(restoring.loadMetadata(manager).isEmpty(), "valid v6 metadata was locked");
+		check(restoring.loadMetadata(manager).isEmpty(), "valid v7 metadata was locked");
 		FluidRegion admitted = manager.regions().getFirst(); restoring.restore(admitted);
 		check(admitted.solverLoaded() && admitted.domain().hasThermalState()
 				&& admitted.domain().exportGasState("").registryFingerprint().equals(gas.fingerprint())
 				&& admitted.domain().thermalAudit().equals(source.domain().thermalAudit()),
-				"production v6 restore did not reconstruct gas plus thermal truth");
+				"production v7 restore did not reconstruct gas plus thermal truth");
 
 		FluidRegionManager gateOff = manager();
 		List<String> gateIssues = new FluidRegionPersistence(root, true).loadMetadata(gateOff);
-		check(gateOff.regions().isEmpty() && gateIssues.stream().anyMatch(issue -> issue.contains("v6")),
-				"thermal-off discovery did not preserve and lock region-state v6");
+		check(gateOff.regions().isEmpty() && gateIssues.stream().anyMatch(issue -> issue.contains("thermal")),
+				"thermal-off discovery did not preserve and lock region-state v7");
 
 		Path legacyRoot = Files.createTempDirectory(Path.of("."), "thermal-explicit-init-");
 		FluidRegion legacy = populatedRegion(UUID.randomUUID()); bindDefaultMaterials(legacy);
@@ -129,25 +129,25 @@ public final class M7RegionChemistryPersistenceValidation {
 			check(initialized == 2L && admitted.solverLoaded() && admitted.paused()
 					&& admitted.domain().hasChemistryState() && admitted.domain().hasGranularState()
 					&& admitted.domain().hasThermalState(),
-					"v" + sourceVersion + " did not become one complete paused v6 generation");
-			RegionState v6 = new RegionStateFiles(root, chemistry, granular, thermal, gas).read(admitted.id());
-			ThermalInitializationRecord evidence = v6.reconstructThermalInitialization();
-			check(v6.manifest().formatVersion() == 6 && evidence != null
+					"v" + sourceVersion + " did not become one complete paused v7 generation");
+			RegionState v7 = new RegionStateFiles(root, chemistry, granular, thermal, gas).read(admitted.id());
+			ThermalInitializationRecord evidence = v7.reconstructThermalInitialization();
+			check(v7.manifest().formatVersion() == 7 && evidence != null
 					&& evidence.sourceFormatVersion() == sourceVersion
 					&& evidence.initialTemperatureBits() == Double.doubleToRawLongBits(310.0)
 					&& evidence.gasBootstrap()
 					== ThermalInitializationRecord.GasBootstrap.CURRENT_GEOMETRY_AMBIENT_V1
 					&& evidence.operatorMetadata().equals("test:operator"),
 					"v" + sourceVersion + " initialization evidence was incomplete");
-			check(persistence.checkpoint(admitted) == 3L, "initialized v6 did not accept a later checkpoint");
+			check(persistence.checkpoint(admitted) == 3L, "initialized v7 did not accept a later checkpoint");
 			RegionState next = new RegionStateFiles(root, chemistry, granular, thermal, gas).read(admitted.id());
 			check(evidence.equals(next.reconstructThermalInitialization()),
-					"v" + sourceVersion + " initialization evidence was not inherited by later v6");
+					"v" + sourceVersion + " initialization evidence was not inherited by later v7");
 			FluidRegionManager reloadedManager = manager();
 			FluidRegionPersistence reloadedPersistence = new FluidRegionPersistence(root, true, true, chemistry,
 					true, granular, true, true, thermal, gas);
 			check(reloadedPersistence.loadMetadata(reloadedManager).isEmpty(),
-					"v" + sourceVersion + " initialized v6 failed admission after restart");
+					"v" + sourceVersion + " initialized v7 failed admission after restart");
 			FluidRegion reloaded = reloadedManager.regions().getFirst(); reloadedPersistence.restore(reloaded);
 			check(evidence.equals(reloaded.thermalInitializationRecord()),
 					"v" + sourceVersion + " initialization evidence was lost during restart restore");

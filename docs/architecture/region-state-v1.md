@@ -31,6 +31,11 @@ This document defines the implemented first persistent Real Water region format.
 - Enabling granular persistence atomically migrates accepted v1/v2/v3 generations to a new complete v5 generation in the
   inactive slot and publishes HEAD last. Missing world granular registry identity, absent required v5 extensions, unknown
   capability/unit bits, non-canonical records or ledger disagreement preserve the data and lock the region.
+- Legacy thermal `region-state v6` remains readable but used condensed solver mass weight as kilograms. It is never restored
+  into the corrected runtime. `region-state v7` is the complete corrected-SI material + optional chemistry/granular + gas +
+  thermal generation. An operator may explicitly replace a v6 temperature baseline only when no legacy-topology gas truth or
+  unconsumed phase-volume work would be discarded; otherwise the old HEAD is retained and locked. See
+  [`thermal-state.md`](thermal-state.md).
 - Experimental files created by another branch are not compatible and are never auto-migrated or deleted.
 
 ## Layout and atomic commit
@@ -99,3 +104,4 @@ missing/extra slices, marker-budget rejection, startup metadata admission, unloa
 deletion and v1 optional-section skipping. The gas extension covers strict v4 capability/registry/topology reconstruction;
 the M8 extension additionally covers exact v1/v2/v3-to-v5 publication, authoritative granular-registry matching, required
 v5 extension presence and granular inventory ledger reconstruction without changing the v1/v2/v3 canonical byte paths.
+The thermal extension covers v7 publication/restore, frozen v6 decode, and fail-closed explicit initialization boundaries.

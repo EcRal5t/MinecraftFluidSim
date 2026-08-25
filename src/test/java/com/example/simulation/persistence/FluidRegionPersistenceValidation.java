@@ -69,7 +69,7 @@ public final class FluidRegionPersistenceValidation {
 		validateChemicalV3Codec();
 		validateGasV4Codec();
 		validateGranularV5Codec();
-		validateThermalV6Codec();
+		validateThermalV7Codec();
 		validateUnknownExtensions();
 		validateFaultMatrix();
 		validateStagedGeneration();
@@ -78,7 +78,7 @@ public final class FluidRegionPersistenceValidation {
 		System.out.println("Fluid region persistence validation passed");
 	}
 
-	private static void validateThermalV6Codec() throws Exception {
+	private static void validateThermalV7Codec() throws Exception {
 		FluidRegion region = populatedRegion(new UUID(27L, 28L));
 		FlipParticleState pure = region.domain().exportParticleState();
 		float[] positions = pure.copyPositionVolume();
@@ -134,8 +134,9 @@ public final class FluidRegionPersistenceValidation {
 		assertGasStateEquals(expectedGas, state.reconstructGas(gas, null));
 		assertThermalStateEquals(expected, state.reconstructThermal(thermal));
 		require(state.reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
-				"pending phase-volume v6 record did not round-trip");
+				"pending phase-volume v7 record did not round-trip");
 		FlipFluidDomain restoredDomain = new FlipFluidDomain(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG, 512);
+		restoredDomain.sealDomainBoundary();
 		restoredDomain.restoreMaterialParticleState(state.reconstructMaterial());
 		restoredDomain.restoreGranularState(state.reconstructGranular(granular), granular,
 				restoredDomain.materialRegistry());
@@ -149,13 +150,13 @@ public final class FluidRegionPersistenceValidation {
 
 		RegionStateCodec codec = new RegionStateCodec();
 		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
-		require(decodedManifest.equals(state.manifest()) && decodedManifest.formatVersion() == 6
-				&& decodedManifest.hasThermalState(), "region-state v6 manifest did not round-trip");
+		require(decodedManifest.equals(state.manifest()) && decodedManifest.formatVersion() == 7
+				&& decodedManifest.hasThermalState(), "region-state v7 manifest did not round-trip");
 		for (RegionSectionState section : state.sections()) {
 			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
-			require(decoded.formatVersion() == 6 && decoded.extensions().equals(section.extensions())
+			require(decoded.formatVersion() == 7 && decoded.extensions().equals(section.extensions())
 					&& Arrays.equals(decoded.markerOrdinals(), section.markerOrdinals()),
-					"region-state v6 thermal section did not round-trip");
+					"region-state v7 thermal section did not round-trip");
 		}
 		CoherentPhaseStore.Composition composition = new CoherentPhaseStore.Composition(List.of(
 				new CoherentPhaseStore.Component("test:a", 7L),
@@ -169,16 +170,16 @@ public final class FluidRegionPersistenceValidation {
 				thermalCodec.encodeSection(composed), 0, 0, 0);
 		require(decodedComposed.coherentGroups().equals(composed.coherentGroups())
 				&& decodedComposed.energy().equals(composed.energy()),
-				"coherent composition did not round-trip the v6 thermal section payload");
+				"coherent composition did not round-trip the thermal section payload");
 
-		Path root = Files.createTempDirectory(Path.of("."), "thermal-v6-");
+		Path root = Files.createTempDirectory(Path.of("."), "thermal-v7-");
 		RegionStateFiles files = new RegionStateFiles(root, null, granular, thermal, gas);
 		files.publish(state);
 		assertThermalStateEquals(expected, files.read(region.id()).reconstructThermal(thermal));
 		require(files.read(region.id()).reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
 				"published pending phase volume did not survive committed readback");
 		expectIOException(() -> state.reconstructThermal(thermalRegistry(new FluidMaterialRegistry(
-				List.of(BuiltinFluidMaterials.WATER)))), "foreign v6 thermal registry was accepted");
+				List.of(BuiltinFluidMaterials.WATER)))), "foreign v7 thermal registry was accepted");
 
 		RegionSectionState original = state.sections().stream()
 				.filter(section -> section.markerCount() > 0).findFirst().orElseThrow();
@@ -188,7 +189,20 @@ public final class FluidRegionPersistenceValidation {
 		List<RegionSectionState> brokenSections = new ArrayList<>(state.sections());
 		brokenSections.set(brokenSections.indexOf(original), signedSection(unsignedMissing));
 		expectIOException(() -> new RegionState(state.manifest(), brokenSections).validate(),
-				"v6 section missing its required thermal payload was accepted");
+				"v7 section missing its required thermal payload was accepted");
+
+		RegionState legacyV6 = withFormatVersion(state, 6);
+		legacyV6.validate();
+		RegionManifest decodedV6Manifest = codec.decodeManifest(codec.encodeManifest(legacyV6.manifest()));
+		require(decodedV6Manifest.equals(legacyV6.manifest()) && decodedV6Manifest.formatVersion() == 6,
+				"frozen region-state v6 reader changed");
+		for (RegionSectionState section : legacyV6.sections()) {
+			RegionSectionState decodedV6 = codec.decodeSection(codec.encodeSection(section));
+			require(decodedV6.formatVersion() == 6 && decodedV6.checksum() == section.checksum()
+					&& decodedV6.extensions().equals(section.extensions())
+					&& Arrays.equals(decodedV6.positionVolume(), section.positionVolume()),
+					"frozen region-state v6 section reader changed");
+		}
 	}
 
 	private static void validateGranularV5Codec() throws Exception {
@@ -298,9 +312,9 @@ public final class FluidRegionPersistenceValidation {
 		assertGranularStateEquals(auditOnlyExpected, auditOnlyRoundTrip);
 		reactiveFiles.publish(auditOnlyState);
 
-		CompoundTag unknownV7 = codec.encodeManifest(state.manifest());
-		unknownV7.putInt("Version", 7); unknownV7.putInt("Palette", 7);
-		expectIOException(() -> codec.decodeManifest(unknownV7), "unknown region-state v7 was treated as a known format");
+		CompoundTag unknownV8 = codec.encodeManifest(state.manifest());
+		unknownV8.putInt("Version", 8); unknownV8.putInt("Palette", 8);
+		expectIOException(() -> codec.decodeManifest(unknownV8), "unknown region-state v8 was treated as a known format");
 		CompoundTag missingGranular = codec.encodeSection(state.sections().getFirst());
 		missingGranular.put("Extensions", new net.minecraft.nbt.ListTag());
 		RegionSectionState unsignedMissing = codec.decodeSection(missingGranular);
@@ -1024,6 +1038,38 @@ public final class FluidRegionPersistenceValidation {
 		int[] result = new int[values.length];
 		for (int i = 0; i < values.length; i++) result[i] = Float.floatToRawIntBits(values[i]);
 		return result;
+	}
+
+	/** Re-labels an otherwise byte-identical thermal fixture to exercise the frozen v6 reader. */
+	private static RegionState withFormatVersion(RegionState state, int formatVersion) throws IOException {
+		List<RegionSectionState> sections = new ArrayList<>(state.sections().size());
+		List<RegionManifest.SectionDescriptor> descriptors = new ArrayList<>(state.sections().size());
+		for (RegionSectionState original : state.sections()) {
+			RegionSectionState unsigned = new RegionSectionState(formatVersion, original.regionId(),
+					original.dimensionId(), original.checkpointGeneration(), original.sectionX(), original.sectionY(),
+					original.sectionZ(), original.localStartX(), original.localStartY(), original.localStartZ(),
+					original.sizeX(), original.sizeY(), original.sizeZ(), original.markerOrdinals(),
+					original.positionVolume(), original.velocities(), original.markerMass(),
+					original.materialPaletteIndex(), original.solidMask(), original.extensions(),
+					original.chemicalMixtureIndex(), original.indicator(), original.chemicalSpeciesTotals(),
+					original.chemicalResidualLedgerBits(), 0L);
+			RegionSectionState signed = signedSection(unsigned);
+			sections.add(signed);
+			RegionManifest.SectionDescriptor previous = state.manifest().sections().stream()
+					.filter(descriptor -> descriptor.key().equals(original.key())).findFirst().orElseThrow();
+			descriptors.add(new RegionManifest.SectionDescriptor(previous.sectionX(), previous.sectionY(),
+					previous.sectionZ(), previous.markerCount(), previous.volumeBits(), previous.massBits(),
+					signed.checksum()));
+		}
+		RegionManifest original = state.manifest();
+		RegionManifest unsigned = new RegionManifest(formatVersion, original.regionId(), original.dimensionId(),
+				original.checkpointGeneration(), original.networkGeneration(), original.origin(), original.sizeX(),
+				original.sizeY(), original.sizeZ(), original.solverConfig(), original.reservedMarkerCapacity(),
+				original.runtime(), original.footprint(), original.totalMarkerCount(), original.totalVolumeBits(),
+				original.materialPalette(), original.totalMassBits(), original.materialLedgers(), descriptors,
+				original.extensions(), original.registryFingerprint(), original.auScale(), original.speciesPalette(),
+				original.chemicalMixtures(), original.chemicalSpeciesTotals(), original.chemicalResidualLedgerBits(), 0L);
+		return new RegionState(signedManifest(unsigned), sections);
 	}
 
 	private static RegionSectionState signedSection(RegionSectionState section) {

@@ -13,7 +13,7 @@ import java.io.IOException;
 import java.math.BigInteger;
 import java.util.ArrayList;
 
-/** Sparse manifest-only v6 record for phase volume awaiting exactly one mechanical projection. */
+/** Sparse manifest-only thermal record for phase volume awaiting exactly one mechanical projection. */
 final class PendingPhaseVolumeCodec {
 	static final String MANIFEST_EXTENSION = "realwater:pending_phase_volume_v1";
 	private static final int MAGIC = 0x52575056; // RWPV

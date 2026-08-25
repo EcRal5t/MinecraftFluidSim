@@ -9,7 +9,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
-/** Canonical evidence for the one explicit old-region to v6 temperature initialization. */
+/** Canonical evidence for one explicit old-region to current-thermal temperature initialization. */
 public record ThermalInitializationRecord(
 		int sourceFormatVersion,
 		long initialTemperatureBits,
@@ -23,8 +23,8 @@ public record ThermalInitializationRecord(
 
 	public ThermalInitializationRecord {
 		if (sourceFormatVersion != 1 && sourceFormatVersion != 2
-				&& sourceFormatVersion != 3 && sourceFormatVersion != 5) {
-			throw new IllegalArgumentException("Thermal initialization source must be region-state v1/v2/v3/v5");
+				&& sourceFormatVersion != 3 && sourceFormatVersion != 5 && sourceFormatVersion != 6) {
+			throw new IllegalArgumentException("Thermal initialization source must be region-state v1/v2/v3/v5/v6");
 		}
 		double temperature = Double.longBitsToDouble(initialTemperatureBits);
 		if (!(Double.isFinite(temperature) && temperature > 0.0)) {
