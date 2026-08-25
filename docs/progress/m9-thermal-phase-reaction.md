@@ -529,3 +529,11 @@ world-registry 静态 block/tag 定义之前识别该唯一 code-owned 方块，
 SHA-256 为 `84BCA0555598D2DB0ABE78D558FE0893A1EDE63DC56A8D7199B25FE1946CB8F9`，mods 目录只有这一份启用的主
 `realwater` id；上一版已可恢复地保存为 `realwater-0.15.0-pre-thermal-reservoir.jar.disabled`。真实 controller
 上 source/sink 增长、温度变化和资源外观仍合并为一次人工 smoke，不在执行前记作通过。
+
+用户随后在原 controller `7705a5f8` 的底部闭壳 `-4,-60,0` 完成该唯一实机 smoke。4.000 BV、256 markers
+以 293.13 K / U=0 注入；100000 K reservoir 推进 20 步后仍保持 4.000 BV，U 增至 222578 EU、external source
+由 2.56934 增至 222581 EU，派生范围升为 293.13..293.19 K 且 audit closed。将同一方块改为 1 K 再推进 20 步，
+U 降至 221947 EU、source 不再增长、audit 仍 closed；约 631 EU 的冷源 sink 增量因既有约 -2.76479e9 EU 的
+signed-reference 历史项和 status 六位有效数字而未在摘要中显出尾数，但由 U/source/work 不变量与 exact closed audit
+共同闭合。最后 `empty` 成功清除 4.000 BV / 330 markers 并发布 checkpoint 14。可调热源、冷源、cut-face 输运、
+source/sink 审计及带非零换热历史的 operator clear 因此通过真实世界验收；没有借本次验收新增局部温度 HUD。
