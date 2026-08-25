@@ -2,7 +2,7 @@
 
 ## 当前稳定范围
 
-当前只冻结同步只读的 Query API。loader-neutral 契约位于 `api` 模块的 `cc.ecisr.mmm.api.query`；Fabric 调用方通过 `cc.ecisr.mmm.api.fabric.MmmFabricApi.query(MinecraftServer)` 发现实现。受控 transfer、commit event、Jade/WAILA/HWYLA 展示适配和其他 loader 的发现桥仍属于产品路线，不能从只读查询推断其写入语义。
+当前只冻结同步只读的 Query API。loader-neutral 契约位于 `api` 模块的 `cc.ecisr.mmm.api.query`；Fabric 调用方通过 `cc.ecisr.mmm.api.fabric.MmmFabricApi.query(MinecraftServer)` 发现实现。Fabric 已提供可选 Jade 观察适配，但它只是 Query API 的展示消费者，不扩展稳定契约。受控 transfer、commit event、WAILA/HWYLA 展示适配和其他 loader 的发现桥仍属于产品路线，不能从只读查询推断其写入语义。
 
 `MmmQueryApi.UNIT_SYSTEM = "SI+mmm-quanta"`。接口只依赖 JDK 类型，不返回 Minecraft 对象、runtime handle、solver array 或 live region/domain 引用。产品功能和 Java 类型使用语义名称；格式变化直接替换当前契约，不保留按数字区分的公开入口。
 
@@ -41,3 +41,9 @@
 数据直接扫描权威 marker、chemical parcel 和 thermal side column：不依赖平滑 volume、pressure、客户端 mesh 或 grid rebuild。`regionGeneration` 是 ownership/checkpoint 身份代次，不是每 tick state revision；调用方需要新鲜值时重新查询，不能用它判断两个 observation 之间没有发生物理步。
 
 Query API 不承诺 pressure、速度、相分数、gas/颗粒/coherent solid 摘要或内部调度字段。新增字段或其他库存类型必须保持调用方可判定的单位与失败语义，不能悄悄复用 `detail` 文本扩展协议。
+
+## Jade 观察适配
+
+Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会解析任何 Jade 类，也不影响主 Mod 启动。服务端 provider 只对 `fluid_boundary`、`fluid_controller` 和 `thermal_reservoir` 请求数据，并通过上述 Query API 观察命中面近侧或跨过一格壳体的反侧位置。非 `OK` 结果不产生 tooltip，不从方块外观猜测流体。
+
+发送给客户端的是有界展示摘要：体积、质量、密度、可选温度，以及按量排序的至多四项材料和 species；若项目更多会明确显示隐藏项数。该摘要不是库存协议，不能用于转移或回写。当前适配依赖玩家命中闭壳方块，不声称直接 ray trace 空气格内的自由面；扩展自由面目标前必须继续保持不加载、不唤醒和服务端权威查询。

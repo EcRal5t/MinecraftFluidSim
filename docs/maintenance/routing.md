@@ -7,7 +7,7 @@
 - `api/src/main/java/cc/ecisr/mmm/api/`：只放 JDK-only 的稳定外部契约；禁止 Fabric、Minecraft、NBT、live domain 引用。
 - `core/src/main/java/cc/ecisr/mmm/`：物理算法、registry 值对象和权威内存状态；禁止 `net.minecraft`、`net.fabricmc`。
 - `fabric/src/main/java/cc/ecisr/mmm/`：Fabric/Minecraft 编排、数据包/持久化适配和世界事务。
-- `fabric/src/client/java/cc/ecisr/mmm/client/`：只读客户端重建。
+- `fabric/src/client/java/cc/ecisr/mmm/`：只读客户端重建与可选观察层格式化。
 - `gpu-probe/`：Vulkan probe 与后端实验；数值代码依赖 `core`，世界集成 compile-only 依赖 `fabric`。
 
 | 职责 | 首要入口 | 必须保持 |
@@ -38,6 +38,7 @@
 | 热学 | `thermal/`、`FlipThermalState.java`、`FlipThermalParticleState.java` | 总 U 权威；温度派生；通量、反应热、相变、功联合审计 |
 | 客户端快照 | `fabric/.../network/FluidProtocol.java`、`fabric/src/client/java/cc/ecisr/mmm/client/` | 语义 layout 精确协商；只读量化展示；不得反写物理或恢复库存 |
 | 外部 Query API | `api/.../query/`、`FluidCellInventoryView.java`、`FabricFluidQueryApi.java`、`api/fabric/MmmFabricApi.java` | server-thread only；不加载、不唤醒、不建网格、不返回 live domain |
+| Jade 观察适配 | `fabric/src/main/java/cc/ecisr/mmm/compat/jade/`、`fabric/src/client/java/cc/ecisr/mmm/compat/jade/` | Jade 保持可选；服务端只调 Query API；展示摘要有界且不可回写；改依赖/API 后编译 main 与 client |
 | 命令审计 | `logging/` | UTF-8 观测；记录失败不能改变命令结果 |
 
 ## 高频定位

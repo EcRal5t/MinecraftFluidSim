@@ -23,5 +23,10 @@
   "message.mmm.controller.paused": "Controller region paused: %s interior blocks, %sx%sx%s dense bounds, %s required chunks.",
   "message.mmm.controller.resumed": "Controller region resumed: %s interior blocks, %sx%sx%s dense bounds, %s required chunks.",
   "message.mmm.controller.disabled": "Matter, Motion & Mechanics controllers are disabled. An administrator must run /mmm controllers true.",
-  "message.mmm.controller.failed": "Controller activation refused: %s"
+  "message.mmm.controller.failed": "Controller activation refused: %s",
+  "jade.mmm.inventory": "Sampled cell fluid: %s L, %s kg",
+  "jade.mmm.density": "Density: %s kg/m³",
+  "jade.mmm.temperature": "Temperature: %s K",
+  "jade.mmm.materials": "Materials: %s",
+  "jade.mmm.species": "Species: %s"
 }

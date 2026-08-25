@@ -23,5 +23,10 @@
   "message.mmm.controller.paused": "控制器区域已暂停：%s 个内部方块，致密范围 %sx%sx%s，关联 %s 个区块。",
   "message.mmm.controller.resumed": "控制器区域已继续运行：%s 个内部方块，致密范围 %sx%sx%s，关联 %s 个区块。",
   "message.mmm.controller.disabled": "物质、运动与力学控制器功能门尚未开启；管理员需先执行 /mmm controllers true。",
-  "message.mmm.controller.failed": "控制器激活被拒绝：%s"
+  "message.mmm.controller.failed": "控制器激活被拒绝：%s",
+  "jade.mmm.inventory": "采样格流体：%s L，%s kg",
+  "jade.mmm.density": "密度：%s kg/m³",
+  "jade.mmm.temperature": "温度：%s K",
+  "jade.mmm.materials": "材料：%s",
+  "jade.mmm.species": "Species：%s"
 }

@@ -9,6 +9,14 @@ base {
 
 version = project.mod_version
 
+repositories {
+	maven {
+		name = 'Modrinth'
+		url = 'https://api.modrinth.com/maven'
+		content { includeGroup 'maven.modrinth' }
+	}
+}
+
 loom {
 	splitEnvironmentSourceSets()
 
@@ -24,6 +32,7 @@ dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	compileOnly "maven.modrinth:jade:${project.jade_version}"
 
 	implementation project(':api')
 	implementation project(':core')
