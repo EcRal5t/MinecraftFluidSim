@@ -578,3 +578,9 @@ operator 授权的 current-geometry ambient bootstrap 建立；旧周转随后�
 主 Mod 补丁版本为 0.15.2，部署 JAR SHA-256
 `28B79A27C08DA36648F79552CDEDA0C82B611521FDB2B5A3811D8B8BCB1C8421`；mods 目录只有该主 Mod JAR 启用，
 0.15.1 已可恢复地改名为 `realwater-0.15.1-pre-v6-closed-gas-history.jar.disabled`，GPU probe 仍为独立 Mod id。
+
+同一 0.15.2 随后在用户原 controller 上完成迁移确认：`thermalinit 293.15` 原子发布 checkpoint 19，水体立即可见；
+status 保持 32.00 cells / 4.00 BV / 432 markers，建立 `V0=60.00 m³` sealed gas node，并精确携带历史
+`drawn=60.18 m³ / vented=0.18 m³`。区域为 ACTIVE/PAUSED、lock 无、thermal 293.13 K、U/source/sink/work
+全零、coherent 0、pending-work=no、audit=closed。修订版 M9 的 v7 初始化与首帧实机边界由此通过；仍只剩同一 v7
+区域上的 reservoir→自然对流→气液相变短 smoke，不把迁移确认重复算作相变证据。
