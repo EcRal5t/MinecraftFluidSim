@@ -19,7 +19,7 @@
 
 热学 registry 是 world snapshot：
 
-- material 定义 carrier kind/id、参考温度、参考比内能、导热率和最多 16 个 caloric segment；
+- material 定义 carrier kind/id、参考温度、参考比内能、导热率和最多 16 个 caloric segment；`DEVICE` 专用于独立有限热容量 owner，不混入区域 carrier ordinal；
 - species offset 定义某 host material 中每 AU 的参考内能偏移；
 - gas component 允许的 species 在 chemistry 启用时必须全部具有对应 host gas species offset，避免库存先提交、温度反演后失败；
 - transition 定义上下相、有界 `T_eq(p)` 曲线、exact 两侧体积量子、exact 质量批和接口要求；曲线端点是压力有效域的唯一真值，不重复保存参考温度或上下限；
@@ -59,6 +59,14 @@ caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线�
 - 普通世界边界默认绝热。registry 声明的 fixed-temperature 方块和 `thermal_reservoir` 是无限热浴，但只经相邻 face flux 进入 source/sink。
 - 液体热膨胀使用 registry-bound Boussinesq 定义，只向现有 y-face 动量路径提供派生体力，不改变质量或体积真值。
 - 气体孔流同时搬运组分与能量；species 的 host-gas 状态能进入气体温度反演与相变批能量，压缩/膨胀功进入 mechanical work。
+
+### 有限热容量设备
+
+`FiniteThermalBodyState` 是 loader-neutral 设备真值：绑定 world thermal registry fingerprint、稳定 `DEVICE` material ID、generation、kg 和总 `U`。温度与热容仍由同一个 `ThermalStateFunction` 派生，设备方块不能另存一份可反向覆盖 `U` 的 setpoint。
+
+`FiniteThermalExchange` 对一个设备 body 和最多 16 个独立流体能量端口做有界显式规划。每个端口提供当前温度、当前 caloric interval 内的热容、包含流体/壁面/接触面积热阻的总 conductance，以及该线性化的温度有效域。每个 substep 使用同一 body 温度计算镜像通量，设备 `U` 的变化与各端口增量加总，并把 IEEE-754 总和差记为 exact dyadic roundoff。稳定步长同时受 `0.5*C_body/sum(G)` 与每个 `0.5*C_port/G_port` 限制；超过冻结 substep 预算或任一方越出物性域时整体拒绝计划。
+
+这个 planner 不搬运任何物质，也没有世界、region HEAD 或 block entity 提交权。调用方必须先验证每个 region candidate 能接受对应 `delta U`，再按 body generation 与各 region generation 联合持久提交；在 durable coordinator 接入前，固定温度 boundary 仍是唯一生产世界热边界，不能把有限设备降级成每 tick 改 setpoint。
 
 ### 有限体积离散
 

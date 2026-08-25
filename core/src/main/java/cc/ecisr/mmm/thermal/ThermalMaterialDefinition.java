@@ -14,7 +14,7 @@ public record ThermalMaterialDefinition(
 		double conductivityEuPerSecondMeterK,
 		List<CaloricSegment> caloricSegments
 ) {
-	public enum CarrierKind { LIQUID, GRANULAR, COHERENT_SOLID, GAS }
+	public enum CarrierKind { LIQUID, GRANULAR, COHERENT_SOLID, GAS, DEVICE }
 
 	public record CaloricSegment(double minimumTemperatureK, double maximumTemperatureK,
 	                              double specificHeatEuPerMuK) {

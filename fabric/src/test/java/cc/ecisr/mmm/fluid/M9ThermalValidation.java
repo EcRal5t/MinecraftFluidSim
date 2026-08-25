@@ -25,6 +25,8 @@ import cc.ecisr.mmm.thermal.GranularEnergyColumn;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
 import cc.ecisr.mmm.thermal.CondensedMassScale;
+import cc.ecisr.mmm.thermal.FiniteThermalBodyState;
+import cc.ecisr.mmm.thermal.FiniteThermalExchange;
 import cc.ecisr.mmm.thermal.ThermalBoundaryDefinition;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalDefinitionCodec;
@@ -81,6 +83,7 @@ public final class M9ThermalValidation {
 		liquidTransportAndHandoffCloseEnergy();
 		localizedHeatingDrivesBoussinesqCirculation();
 		partialCutFaceUsesPlicThermalContact();
+		finiteThermalBodyExchangesWithoutMixing();
 		productionFixedBoundaryFieldAuditsExchange();
 		fixedBoundaryAuditsAndFailedStepRollsBack();
 		reseedingMovesEnergyWithMarkerTruth();
@@ -1643,6 +1646,51 @@ public final class M9ThermalValidation {
 				"partial cut/PLIC contact was dropped from production thermal transport");
 		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"partial cut/PLIC thermal contact did not close its energy audit");
+	}
+
+	private static void finiteThermalBodyExchangesWithoutMixing() {
+		ThermalMaterialDefinition wall = new ThermalMaterialDefinition("test:thermal/exchanger_wall",
+				ThermalMaterialDefinition.CarrierKind.DEVICE, "test:exchanger_wall",
+				300.0, 0.0, 20.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 500.0, 500.0)));
+		ThermalRegistry registry = new ThermalRegistry(List.of(wall));
+		ThermalStateFunction stateFunction = new ThermalStateFunction(registry);
+		double initialEnergy = stateFunction.internalEnergyAtTemperature(
+				registry.materialHandle(wall.id()), 10.0, Map.of(), 400.0);
+		FiniteThermalBodyState body = new FiniteThermalBodyState(
+				7L, registry.fingerprint(), wall.id(), 10.0, initialEnergy);
+		FiniteThermalExchange.Plan plan = FiniteThermalExchange.plan(registry, body, List.of(
+				new FiniteThermalExchange.Contact(0, 300.0, 2_000.0, 100.0, 250.0, 500.0),
+				new FiniteThermalExchange.Contact(1, 350.0, 1_000.0, 50.0, 250.0, 500.0)
+		), 1.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		FiniteThermalExchange.ContactDelta cold = plan.contacts().get(0);
+		FiniteThermalExchange.ContactDelta warm = plan.contacts().get(1);
+		SignedDyadic jointChange = SignedDyadic.of(plan.after().internalEnergyEu())
+				.subtract(SignedDyadic.of(plan.before().internalEnergyEu()))
+				.add(SignedDyadic.of(cold.internalEnergyDeltaEu()))
+				.add(SignedDyadic.of(warm.internalEnergyDeltaEu()));
+		require(plan.changed() && plan.before().generation() == 7L && plan.after().generation() == 8L
+				&& cold.ordinal() == 0 && warm.ordinal() == 1
+				&& close(cold.internalEnergyDeltaEu(), 10_000.0)
+				&& close(warm.internalEnergyDeltaEu(), 2_500.0)
+				&& close(cold.finalTemperatureK(), 305.0)
+				&& close(warm.finalTemperatureK(), 352.5)
+				&& close(stateFunction.stateForInternalEnergy(registry.materialHandle(wall.id()), 10.0,
+						Map.of(), plan.after().internalEnergyEu()).temperatureK(), 397.5)
+				&& jointChange.equals(plan.roundoffResidual()),
+				"finite thermal body did not produce a closed three-owner energy plan");
+
+		double equilibriumEnergy = stateFunction.internalEnergyAtTemperature(
+				registry.materialHandle(wall.id()), 10.0, Map.of(), 350.0);
+		FiniteThermalBodyState equilibrium = new FiniteThermalBodyState(
+				9L, registry.fingerprint(), wall.id(), 10.0, equilibriumEnergy);
+		FiniteThermalExchange.Plan noOp = FiniteThermalExchange.plan(registry, equilibrium, List.of(
+				new FiniteThermalExchange.Contact(0, 350.0, 2_000.0, 100.0, 250.0, 500.0),
+				new FiniteThermalExchange.Contact(1, 350.0, 1_000.0, 50.0, 250.0, 500.0)
+		), 1.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		require(!noOp.changed() && noOp.after().equals(equilibrium)
+				&& noOp.contacts().stream().allMatch(contact -> contact.internalEnergyDeltaEu() == 0.0),
+				"equilibrated finite thermal body produced a false durable mutation");
 	}
 
 	private static void productionFixedBoundaryFieldAuditsExchange() {

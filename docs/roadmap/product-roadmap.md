@@ -110,7 +110,7 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 ### 有限热容量换热器
 
-固定温度 boundary 仍是无限热浴。两股不混合流体之间的换热器需要独立的有限能量载体/设备状态：设备保存总 `U` 和材料状态函数，两侧只通过各自 cut-face conductance 交换镜像热通量；任何一步都不能直接平均温度或跨墙搬运物质。先实现单个有界 wall/device cell 的三方能量审计，再扩展多方块网络、流向和其他工业 Mod 端口。
+固定温度 boundary 仍是无限热浴。纯 core 已有独立有限设备状态与多端口交换 planner：设备保存 registry-bound material、kg、总 `U` 和 generation，两侧只通过各自总 conductance 交换镜像热通量，且有三方能量/roundoff 审计；该路径不平均温度，也没有物质字段。尚缺 region candidate 与设备 durable state 的联合 WAL/提交，所以目前不把 planner 伪装成可放置的生产换热器。完成单设备原子提交后，再扩展多方块网络、流向和其他工业 Mod 端口。
 
 ## 实体双向耦合
 
