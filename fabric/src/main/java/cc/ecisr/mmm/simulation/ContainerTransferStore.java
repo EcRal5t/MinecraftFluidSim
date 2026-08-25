@@ -211,25 +211,21 @@ root.putString("ThermalRegistryFingerprint", journal.thermalTransfer().registryF
 root.putLong("ThermalEnergyBits", journal.thermalTransfer().internalEnergyBits());
 }
 
-ContainerTransferJournal.Actor actor = journal.actor();
-root.putString("ActorType", actorTypeName(actor.type()));
-switch (actor.type()) {
-case PLAYER_HAND -> {
-if (actor.playerId() == null || actor.hand() == null) throw new IOException("Player actor is incomplete");
-root.putLong("PlayerUuidMost", actor.playerId().getMostSignificantBits());
-root.putLong("PlayerUuidLeast", actor.playerId().getLeastSignificantBits());
-root.putString("Hand", actor.hand());
+ContainerTransferActor actor = journal.actor();
+root.putString("ActorType", actorTypeName(actor.kind()));
+switch (actor) {
+case ContainerTransferActor.PlayerHand player -> {
+root.putLong("PlayerUuidMost", player.playerId().getMostSignificantBits());
+root.putLong("PlayerUuidLeast", player.playerId().getLeastSignificantBits());
+root.putString("Hand", player.hand());
 }
-case DISPENSER -> {
-if (actor.actorDimensionId() == null || actor.dispenserPos() == null || actor.dispenserSlot() < 0) {
-throw new IOException("Dispenser actor is incomplete");
-}
-validateDimension(actor.actorDimensionId());
-root.putString("ActorDimension", actor.actorDimensionId());
-root.putInt("DispenserX", actor.dispenserPos().getX());
-root.putInt("DispenserY", actor.dispenserPos().getY());
-root.putInt("DispenserZ", actor.dispenserPos().getZ());
-root.putInt("DispenserSlot", actor.dispenserSlot());
+case ContainerTransferActor.Dispenser dispenser -> {
+validateDimension(dispenser.dimensionId());
+root.putString("ActorDimension", dispenser.dimensionId());
+root.putInt("DispenserX", dispenser.position().getX());
+root.putInt("DispenserY", dispenser.position().getY());
+root.putInt("DispenserZ", dispenser.position().getZ());
+root.putInt("DispenserSlot", dispenser.slot());
 }
 }
 
@@ -295,14 +291,14 @@ throw new IOException("Material-only container transfer WAL carries thermal fiel
 }
 
 requireType(root, "ActorType", Tag.TAG_STRING);
-ContainerTransferJournal.ActorType actorType = parseActorType(root.getStringOr("ActorType", ""));
-ContainerTransferJournal.Actor actor;
+ContainerTransferActor.Kind actorType = parseActorType(root.getStringOr("ActorType", ""));
+ContainerTransferActor actor;
 switch (actorType) {
 case PLAYER_HAND -> {
 requireType(root, "PlayerUuidMost", Tag.TAG_LONG);
 requireType(root, "PlayerUuidLeast", Tag.TAG_LONG);
 requireType(root, "Hand", Tag.TAG_STRING);
-actor = ContainerTransferJournal.Actor.player(
+actor = ContainerTransferActor.player(
 new UUID(root.getLongOr("PlayerUuidMost", 0L), root.getLongOr("PlayerUuidLeast", 0L)),
 root.getStringOr("Hand", "")
 );
@@ -313,7 +309,7 @@ requireType(root, "DispenserX", Tag.TAG_INT);
 requireType(root, "DispenserY", Tag.TAG_INT);
 requireType(root, "DispenserZ", Tag.TAG_INT);
 requireType(root, "DispenserSlot", Tag.TAG_INT);
-actor = ContainerTransferJournal.Actor.dispenser(
+actor = ContainerTransferActor.dispenser(
 root.getStringOr("ActorDimension", ""),
 new BlockPos(root.getIntOr("DispenserX", 0), root.getIntOr("DispenserY", 0), root.getIntOr("DispenserZ", 0)),
 root.getIntOr("DispenserSlot", -1)
@@ -448,7 +444,7 @@ if (layout == Layout.THERMAL) {
 allowed.add("ThermalRegistryFingerprint");
 allowed.add("ThermalEnergyBits");
 }
-switch (journal.actor().type()) {
+switch (journal.actor().kind()) {
 case PLAYER_HAND -> {
 allowed.add("PlayerUuidMost");
 allowed.add("PlayerUuidLeast");
@@ -486,8 +482,8 @@ if (journal.operation() == null || journal.phase() == null
 || journal.actor() == null || journal.beforeItem() == null || journal.afterItem() == null) {
 throw new IOException("Container transfer WAL is incomplete");
 }
-if (journal.actor().type() == ContainerTransferJournal.ActorType.DISPENSER
-&& !journal.dimensionId().equals(journal.actor().actorDimensionId())) {
+if (journal.actor() instanceof ContainerTransferActor.Dispenser dispenser
+&& !journal.dimensionId().equals(dispenser.dimensionId())) {
 throw new IOException("Dispenser actor dimension differs from the target region dimension");
 }
 if (journal.resourceKind() == null) throw new IOException("Container transfer WAL resource kind is missing");
@@ -659,14 +655,14 @@ default -> throw new IOException("Unknown container transfer resource kind: " + 
 };
 }
 
-private static String actorTypeName(ContainerTransferJournal.ActorType type) {
-return type == ContainerTransferJournal.ActorType.PLAYER_HAND ? "PLAYER_HAND" : "DISPENSER";
+private static String actorTypeName(ContainerTransferActor.Kind type) {
+return type == ContainerTransferActor.Kind.PLAYER_HAND ? "PLAYER_HAND" : "DISPENSER";
 }
 
-private static ContainerTransferJournal.ActorType parseActorType(String name) throws IOException {
+private static ContainerTransferActor.Kind parseActorType(String name) throws IOException {
 return switch (name) {
-case "PLAYER_HAND" -> ContainerTransferJournal.ActorType.PLAYER_HAND;
-case "DISPENSER" -> ContainerTransferJournal.ActorType.DISPENSER;
+case "PLAYER_HAND" -> ContainerTransferActor.Kind.PLAYER_HAND;
+case "DISPENSER" -> ContainerTransferActor.Kind.DISPENSER;
 default -> throw new IOException("Unknown container transfer actor type: " + name);
 };
 }

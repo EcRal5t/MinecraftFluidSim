@@ -20,7 +20,7 @@ final class ControllerItemTransferCoordinator {
 
 	static Result execute(
 			FluidSimulationService service, FluidRegion region, ServerLevel level,
-			ContainerTransferJournal.Actor actor, ItemStack beforeStack,
+			ContainerTransferActor actor, ItemStack beforeStack,
 			ContainerTransferJournal.Operation operation, long requestedNanos, long baseVolumeNanos,
 			TransferExecutor executor, FinalItemResolver finalItemResolver
 	) {
@@ -31,7 +31,7 @@ final class ControllerItemTransferCoordinator {
 
 	static Result execute(
 			FluidSimulationService service, FluidRegion region, ServerLevel level,
-			ContainerTransferJournal.Actor actor, ItemStack beforeStack,
+			ContainerTransferActor actor, ItemStack beforeStack,
 			ContainerTransferJournal.Operation operation, ContainerTransferJournal.ResourceKind resourceKind,
 			long requestedAmount, long baseAmount,
 			TransferExecutor executor, FinalItemResolver finalItemResolver
@@ -220,7 +220,7 @@ final class ControllerItemTransferCoordinator {
 			UUID transactionId, FluidRegion region, ServerLevel level,
 			long baseGeneration, long targetGeneration,
 			ContainerTransferJournal.Operation operation, ContainerTransferJournal.ResourceKind resourceKind,
-			long amount, ContainerTransferJournal.Actor actor,
+			long amount, ContainerTransferActor actor,
 			ContainerTransferJournal.ItemFingerprint before, ContainerTransferJournal.ItemFingerprint after,
 			Double thermalEnergy, String thermalFingerprint, long checksum,
 			ContainerTransferJournal.Phase phase

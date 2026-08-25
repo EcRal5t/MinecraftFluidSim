@@ -86,7 +86,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal prepared = ContainerTransferJournal.thermalFluid(
 				transaction, region, "minecraft:overworld", 7L, 8L,
 				ContainerTransferJournal.Operation.INSERT, ContainerFluidLedger.NANOS_PER_BLOCK, transfer,
-				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"), before, before, -1L,
+				ContainerTransferActor.player(UUID.randomUUID(), "MAIN_HAND"), before, before, -1L,
 				ContainerTransferJournal.Phase.PREPARED);
 		store.write(prepared);
 		check(store.read(transaction).equals(prepared), "prepared thermal WAL did not round-trip");
@@ -130,7 +130,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferStore store = new ContainerTransferStore(root);
 		UUID tx = UUID.randomUUID();
 		UUID region = UUID.randomUUID();
-		ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND");
+		ContainerTransferActor actor = ContainerTransferActor.player(UUID.randomUUID(), "MAIN_HAND");
 		ContainerTransferJournal.ItemFingerprint before = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.WATER_BUCKET, -1L, null);
 		ContainerTransferJournal.ItemFingerprint after = new ContainerTransferJournal.ItemFingerprint(
@@ -188,7 +188,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal player = new ContainerTransferJournal(
 				tx, region, "minecraft:overworld", 0L, 1L,
 				ContainerTransferJournal.Operation.EXTRACT, 500_000_000L,
-				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "OFF_HAND"), before, after,
+				ContainerTransferActor.player(UUID.randomUUID(), "OFF_HAND"), before, after,
 				0x3456L,
 				ContainerTransferJournal.Phase.REGION_COMMITTED
 		);
@@ -199,22 +199,22 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal dispenser = new ContainerTransferJournal(
 				tx2, region, "minecraft:the_nether", 1L, 2L,
 				ContainerTransferJournal.Operation.EXTRACT, 250_000_000L,
-				ContainerTransferJournal.Actor.dispenser("minecraft:the_nether", new BlockPos(3, 4, 5), 2),
+				ContainerTransferActor.dispenser("minecraft:the_nether", new BlockPos(3, 4, 5), 2),
 				before, before, ContainerTransferJournal.Phase.PREPARED
 		);
 		store.write(dispenser);
 		check(dispenser.equals(store.read(tx2)), "dispenser actor WAL did not round-trip");
 		checkThrows(IllegalArgumentException.class,
-				() -> ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAYBE_HAND"),
+				() -> ContainerTransferActor.player(UUID.randomUUID(), "MAYBE_HAND"),
 				"unknown player hand was accepted and would fall back to main hand");
 		checkThrows(IllegalArgumentException.class,
-				() -> ContainerTransferJournal.Actor.dispenser(
+				() -> ContainerTransferActor.dispenser(
 						"minecraft:the_nether", new BlockPos(3, 4, 5), 9),
 				"out-of-range dispenser slot was accepted");
 		ContainerTransferJournal crossDimensionDispenser = new ContainerTransferJournal(
 				UUID.randomUUID(), region, "minecraft:overworld", 1L, 2L,
 				ContainerTransferJournal.Operation.EXTRACT, 250_000_000L,
-				ContainerTransferJournal.Actor.dispenser(
+				ContainerTransferActor.dispenser(
 						"minecraft:the_nether", new BlockPos(3, 4, 5), 2),
 				before, before, ContainerTransferJournal.Phase.PREPARED);
 		checkThrows(IOException.class, () -> store.write(crossDimensionDispenser),
@@ -232,7 +232,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal material = new ContainerTransferJournal(
 				tx3, region, "minecraft:overworld", 2L, 3L,
 				ContainerTransferJournal.Operation.INSERT, 1_000_000_000L,
-				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
+				ContainerTransferActor.player(UUID.randomUUID(), "MAIN_HAND"),
 				materialBefore, materialAfter, 0x4567L, ContainerTransferJournal.Phase.REGION_COMMITTED
 		);
 		store.write(material);
@@ -243,7 +243,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal incompleteMaterialJournal = new ContainerTransferJournal(
 				UUID.randomUUID(), region, "minecraft:overworld", 3L, 4L,
 				ContainerTransferJournal.Operation.INSERT, 1_000_000_000L,
-				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
+				ContainerTransferActor.player(UUID.randomUUID(), "MAIN_HAND"),
 				incompleteMaterial, materialAfter, 0x4568L, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		checkThrows(IOException.class, () -> store.write(incompleteMaterialJournal),
 				"material WAL without complete mixture truth was accepted");
@@ -252,7 +252,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal emptyMaterial = new ContainerTransferJournal(
 				tx4, region, "minecraft:overworld", 3L, 4L,
 				ContainerTransferJournal.Operation.EXTRACT, 1_000_000_000L,
-				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
+				ContainerTransferActor.player(UUID.randomUUID(), "MAIN_HAND"),
 				new ContainerTransferJournal.ItemFingerprint(
 						ContainerTransferJournal.ItemKind.EMPTY_MATERIAL_BUCKET, -1L, null),
 				materialBefore, 0x5678L, ContainerTransferJournal.Phase.REGION_COMMITTED);
@@ -272,7 +272,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal chemical = new ContainerTransferJournal(
 				tx5, region, "minecraft:overworld", 4L, 5L,
 				ContainerTransferJournal.Operation.INSERT, ContainerFluidLedger.NANOS_PER_BLOCK,
-				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
+				ContainerTransferActor.player(UUID.randomUUID(), "MAIN_HAND"),
 				chemicalBefore, materialAfter, 0x5abcL, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(chemical);
 		check(chemical.equals(store.read(tx5)), "chemical bucket WAL fingerprint did not round-trip");
@@ -286,7 +286,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal foreignJournal = new ContainerTransferJournal(
 				UUID.randomUUID(), region, "minecraft:overworld", 4L, 5L,
 				ContainerTransferJournal.Operation.INSERT, ContainerFluidLedger.NANOS_PER_BLOCK,
-				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
+				ContainerTransferActor.player(UUID.randomUUID(), "MAIN_HAND"),
 				foreignChemical, materialAfter, ContainerTransferJournal.Phase.PREPARED);
 		checkThrows(IllegalArgumentException.class,
 				() -> foreignJournal.validateChemicalRegistry(BuiltinChemicalDefinitions.REGISTRY),
@@ -300,7 +300,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal chemicalPartialJournal = new ContainerTransferJournal(
 				tx6, region, "minecraft:overworld", 5L, 6L,
 				ContainerTransferJournal.Operation.INSERT, chemicalPartial.inserted().totalVolumeNanos(),
-				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
+				ContainerTransferActor.player(UUID.randomUUID(), "MAIN_HAND"),
 				chemicalBefore, chemicalAfter, 0x6abcL, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(chemicalPartialJournal);
 		check(chemicalPartialJournal.equals(store.read(tx6)), "partial chemical WAL settlement did not round-trip");
@@ -308,7 +308,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal wrongFamily = new ContainerTransferJournal(
 				UUID.randomUUID(), region, "minecraft:overworld", 4L, 5L,
 				ContainerTransferJournal.Operation.INSERT, 1_000_000_000L,
-				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
+				ContainerTransferActor.player(UUID.randomUUID(), "MAIN_HAND"),
 				materialBefore, before, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		checkThrows(IOException.class, () -> store.write(wrongFamily),
 				"material insertion must not converge to a vanilla empty bucket");
@@ -339,7 +339,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal granular = ContainerTransferJournal.granular(
 				tx7, region, "minecraft:overworld", 6L, 7L,
 				ContainerTransferJournal.Operation.INSERT, granularContents.totalSolidVolumeSvq(),
-				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
+				ContainerTransferActor.player(UUID.randomUUID(), "MAIN_HAND"),
 				granularBefore, granularAfter, 0x7abcL,
 				ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(granular);
@@ -354,7 +354,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal wrongGranularFamily = ContainerTransferJournal.granular(
 				UUID.randomUUID(), region, "minecraft:overworld", 7L, 8L,
 				ContainerTransferJournal.Operation.INSERT, granularContents.totalSolidVolumeSvq(),
-				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"), granularBefore,
+				ContainerTransferActor.player(UUID.randomUUID(), "MAIN_HAND"), granularBefore,
 				materialAfter, -1L, ContainerTransferJournal.Phase.PREPARED);
 		checkThrows(IOException.class, () -> store.write(wrongGranularFamily),
 				"granular insertion must not converge to a liquid container family");
@@ -366,7 +366,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferStore store = new ContainerTransferStore(root);
 		ContainerTransferJournal.ItemFingerprint item = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.BUCKET, -1L, null);
-		ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND");
+		ContainerTransferActor actor = ContainerTransferActor.player(UUID.randomUUID(), "MAIN_HAND");
 
 		ContainerTransferJournal badGeneration = new ContainerTransferJournal(
 				UUID.randomUUID(), UUID.randomUUID(), "minecraft:overworld", 0L, 2L,
@@ -416,7 +416,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal journal = new ContainerTransferJournal(
 				tx, UUID.randomUUID(), "minecraft:overworld", 0L, 1L,
 				ContainerTransferJournal.Operation.EXTRACT, 1L,
-				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"), item, item,
+				ContainerTransferActor.player(UUID.randomUUID(), "MAIN_HAND"), item, item,
 				ContainerTransferJournal.Phase.PREPARED
 		);
 		store.write(journal);
@@ -494,7 +494,7 @@ public final class ContainerTransferStoreValidation {
 		return new ContainerTransferJournal(
 				UUID.randomUUID(), UUID.randomUUID(), "minecraft:overworld", 4L, 5L,
 				ContainerTransferJournal.Operation.EXTRACT, 1_000_000_000L,
-				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"), item, item, phase);
+				ContainerTransferActor.player(UUID.randomUUID(), "MAIN_HAND"), item, item, phase);
 	}
 
 	private static void testNanosCellConversion() {

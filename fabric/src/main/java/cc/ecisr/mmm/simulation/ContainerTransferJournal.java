@@ -7,8 +7,6 @@ import cc.ecisr.mmm.transfer.ContainerFluidLedger;
 import cc.ecisr.mmm.transfer.FluidMixture;
 import cc.ecisr.mmm.transfer.GranularContents;
 import cc.ecisr.mmm.transfer.ThermalContents;
-import net.minecraft.core.BlockPos;
-
 import java.util.UUID;
 
 /**
@@ -27,7 +25,7 @@ public record ContainerTransferJournal(
 		long volumeNanos,
 		long solidVolumeSvq,
 		ThermalTransfer thermalTransfer,
-		Actor actor,
+		ContainerTransferActor actor,
 		ItemFingerprint beforeItem,
 		ItemFingerprint afterItem,
 		long targetManifestChecksum,
@@ -35,7 +33,7 @@ public record ContainerTransferJournal(
 ) {
 	public ContainerTransferJournal(
 			UUID transactionId, UUID regionId, String dimensionId, long baseGeneration, long targetGeneration,
-			Operation operation, long volumeNanos, Actor actor,
+			Operation operation, long volumeNanos, ContainerTransferActor actor,
 			ItemFingerprint beforeItem, ItemFingerprint afterItem, Phase phase
 	) {
 		this(transactionId, regionId, dimensionId, baseGeneration, targetGeneration, operation,
@@ -44,7 +42,7 @@ public record ContainerTransferJournal(
 
 	public ContainerTransferJournal(
 			UUID transactionId, UUID regionId, String dimensionId, long baseGeneration, long targetGeneration,
-			Operation operation, long volumeNanos, Actor actor, ItemFingerprint beforeItem,
+			Operation operation, long volumeNanos, ContainerTransferActor actor, ItemFingerprint beforeItem,
 			ItemFingerprint afterItem, long targetManifestChecksum, Phase phase
 	) {
 		this(transactionId, regionId, dimensionId, baseGeneration, targetGeneration, operation,
@@ -54,7 +52,7 @@ public record ContainerTransferJournal(
 
 	public static ContainerTransferJournal thermalFluid(
 			UUID transactionId, UUID regionId, String dimensionId, long baseGeneration, long targetGeneration,
-			Operation operation, long volumeNanos, ThermalTransfer thermalTransfer, Actor actor,
+			Operation operation, long volumeNanos, ThermalTransfer thermalTransfer, ContainerTransferActor actor,
 			ItemFingerprint beforeItem, ItemFingerprint afterItem, long targetManifestChecksum, Phase phase
 	) {
 		return new ContainerTransferJournal(transactionId, regionId, dimensionId, baseGeneration, targetGeneration,
@@ -64,7 +62,7 @@ public record ContainerTransferJournal(
 
 	public static ContainerTransferJournal granular(
 			UUID transactionId, UUID regionId, String dimensionId, long baseGeneration, long targetGeneration,
-			Operation operation, long solidVolumeSvq, Actor actor,
+			Operation operation, long solidVolumeSvq, ContainerTransferActor actor,
 			ItemFingerprint beforeItem, ItemFingerprint afterItem, long targetManifestChecksum, Phase phase
 	) {
 		return new ContainerTransferJournal(transactionId, regionId, dimensionId, baseGeneration, targetGeneration,
@@ -116,8 +114,6 @@ public record ContainerTransferJournal(
 
 	public enum Phase { PREPARED, REGION_COMMITTED }
 
-	public enum ActorType { PLAYER_HAND, DISPENSER }
-
 	public record ThermalTransfer(String registryFingerprint, long internalEnergyBits) {
 		public ThermalTransfer {
 			if (registryFingerprint == null || !registryFingerprint.matches("[0-9a-f]{64}")
@@ -131,43 +127,6 @@ public record ContainerTransferJournal(
 		}
 
 		public double internalEnergy() { return Double.longBitsToDouble(internalEnergyBits); }
-	}
-
-	public record Actor(
-			ActorType type,
-			UUID playerId,
-			String hand,
-			String actorDimensionId,
-			BlockPos dispenserPos,
-			int dispenserSlot
-	) {
-		public Actor {
-			if (type == null) throw new IllegalArgumentException("Container transfer actor type is missing");
-			switch (type) {
-				case PLAYER_HAND -> {
-					if (playerId == null || playerId.equals(new UUID(0L, 0L))
-							|| !("MAIN_HAND".equals(hand) || "OFF_HAND".equals(hand))
-							|| actorDimensionId != null || dispenserPos != null || dispenserSlot != -1) {
-						throw new IllegalArgumentException("Player container transfer actor is invalid");
-					}
-				}
-				case DISPENSER -> {
-					if (playerId != null || hand != null || actorDimensionId == null || dispenserPos == null
-							|| dispenserSlot < 0 || dispenserSlot >= 9) {
-						throw new IllegalArgumentException("Dispenser container transfer actor is invalid");
-					}
-					dispenserPos = dispenserPos.immutable();
-				}
-			}
-		}
-
-		public static Actor player(UUID playerId, String hand) {
-			return new Actor(ActorType.PLAYER_HAND, playerId, hand, null, null, -1);
-		}
-
-		public static Actor dispenser(String dimensionId, BlockPos pos, int slot) {
-			return new Actor(ActorType.DISPENSER, null, null, dimensionId, pos, slot);
-		}
 	}
 
 	public enum ItemKind {

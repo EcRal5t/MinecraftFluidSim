@@ -178,7 +178,7 @@ public final class FluidTransferService {
 		if (region.controllerManaged()) {
 			int slot = findDispenserSlot(source, stack);
 			if (slot < 0) return stack;
-			ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.dispenser(
+			ContainerTransferActor actor = ContainerTransferActor.dispenser(
 					level.dimension().identifier().toString(), source.pos(), slot);
 			ControllerItemTransferCoordinator.Result transaction = switch (kind) {
 				case POUR -> ControllerItemTransferCoordinator.execute(service, region, level, actor, stack,
@@ -289,7 +289,7 @@ public final class FluidTransferService {
 		boolean externalSource = player.hasInfiniteMaterials();
 		ThermalContents thermal = thermalContents(held);
 		if (region.controllerManaged()) {
-			ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
+			ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), hand.name());
 			ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 					service, region, player.level(), actor, held,
 					ContainerTransferJournal.Operation.INSERT, volumeNanos, 0L,
@@ -352,7 +352,7 @@ public final class FluidTransferService {
 			return new TransferOutcome(false, false, held, "准星处没有可装入的材料流体");
 		}
 		if (region.controllerManaged()) {
-			ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(
+			ContainerTransferActor actor = ContainerTransferActor.player(
 					player.getUUID(), hand.name());
 			ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 					service, region, player.level(), actor, held,
@@ -399,7 +399,7 @@ public final class FluidTransferService {
 			return new TransferOutcome(false, true, held, "颗粒容器内容损坏、双重表示或 registry 不匹配");
 		}
 		if (contents == null) return new TransferOutcome(false, true, held, "颗粒容器没有有效库存");
-		ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
+		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), hand.name());
 		ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 				service, region, player.level(), actor, held,
 				ContainerTransferJournal.Operation.INSERT, ContainerTransferJournal.ResourceKind.GRANULAR_SVQ,
@@ -427,7 +427,7 @@ public final class FluidTransferService {
 		if (!region.domain().hasGranularState() || !GranularContainerItem.isEmpty(held)) {
 			return new TransferOutcome(false, false, held, "干式容器不为空或该区域不是颗粒区域");
 		}
-		ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
+		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), hand.name());
 		ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 				service, region, player.level(), actor, held,
 				ContainerTransferJournal.Operation.EXTRACT, ContainerTransferJournal.ResourceKind.GRANULAR_SVQ,
@@ -445,7 +445,7 @@ public final class FluidTransferService {
 			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held,
 			long volumeNanos, int[] cell
 	) {
-		ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
+		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), hand.name());
 		ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 				service, region, player.level(), actor, held,
 				ContainerTransferJournal.Operation.INSERT, volumeNanos, 0L,
@@ -464,7 +464,7 @@ public final class FluidTransferService {
 			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held,
 			long capacityNanos, int[] cell
 	) {
-		ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
+		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), hand.name());
 		ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 				service, region, player.level(), actor, held,
 				ContainerTransferJournal.Operation.EXTRACT, capacityNanos, heldBaseVolumeNanos(held),

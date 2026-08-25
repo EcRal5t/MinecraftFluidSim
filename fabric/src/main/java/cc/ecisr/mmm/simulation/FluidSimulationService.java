@@ -699,10 +699,10 @@ public final class FluidSimulationService {
 
 	/** The WAL is deleted only after the actor's owning save file has been forced through Minecraft. */
 	private void persistAfterItem(MinecraftServer server, ContainerTransferJournal journal) throws IOException {
-		switch (journal.actor().type()) {
-			case PLAYER_HAND -> server.getPlayerList().saveAll();
-			case DISPENSER -> {
-				Identifier dimensionId = Identifier.tryParse(journal.actor().actorDimensionId());
+		switch (journal.actor()) {
+			case ContainerTransferActor.PlayerHand ignored -> server.getPlayerList().saveAll();
+			case ContainerTransferActor.Dispenser dispenser -> {
+				Identifier dimensionId = Identifier.tryParse(dispenser.dimensionId());
 				if (dimensionId == null) throw new IOException("Container transfer actor dimension is invalid");
 				ServerLevel level = server.getLevel(ResourceKey.create(Registries.DIMENSION, dimensionId));
 				if (level == null) throw new IOException("Container transfer actor dimension is not loaded");
@@ -712,16 +712,15 @@ public final class FluidSimulationService {
 	}
 
 	private boolean applyAfterItem(MinecraftServer server, ContainerTransferJournal journal) {
-		ContainerTransferJournal.Actor actor = journal.actor();
-		return switch (actor.type()) {
-			case PLAYER_HAND -> applyAfterItemToPlayer(server, actor, journal);
-			case DISPENSER -> applyAfterItemToDispenser(server, actor, journal);
+		return switch (journal.actor()) {
+			case ContainerTransferActor.PlayerHand player -> applyAfterItemToPlayer(server, player, journal);
+			case ContainerTransferActor.Dispenser dispenser -> applyAfterItemToDispenser(server, dispenser, journal);
 		};
 	}
 
 	private boolean applyAfterItemToPlayer(
 			MinecraftServer server,
-			ContainerTransferJournal.Actor actor,
+			ContainerTransferActor.PlayerHand actor,
 			ContainerTransferJournal journal
 	) {
 		ServerPlayer player = server.getPlayerList().getPlayer(actor.playerId());
@@ -741,17 +740,17 @@ public final class FluidSimulationService {
 
 	private boolean applyAfterItemToDispenser(
 			MinecraftServer server,
-			ContainerTransferJournal.Actor actor,
+			ContainerTransferActor.Dispenser actor,
 			ContainerTransferJournal journal
 	) {
-		Identifier dimensionId = Identifier.tryParse(actor.actorDimensionId());
+		Identifier dimensionId = Identifier.tryParse(actor.dimensionId());
 		if (dimensionId == null) return false;
 		ServerLevel level = server.getLevel(ResourceKey.create(Registries.DIMENSION, dimensionId));
-		if (level == null || !(level.getBlockEntity(actor.dispenserPos()) instanceof DispenserBlockEntity dispenser)) return false;
-		if (actor.dispenserSlot() < 0 || actor.dispenserSlot() >= dispenser.getContainerSize()) return false;
-		ItemStack current = dispenser.getItem(actor.dispenserSlot());
+		if (level == null || !(level.getBlockEntity(actor.position()) instanceof DispenserBlockEntity dispenser)) return false;
+		if (actor.slot() < 0 || actor.slot() >= dispenser.getContainerSize()) return false;
+		ItemStack current = dispenser.getItem(actor.slot());
 		if (!fingerprintMatches(current, journal.beforeItem()) && !fingerprintMatches(current, journal.afterItem())) return false;
-		dispenser.setItem(actor.dispenserSlot(), ContainerTransferItems.toStack(journal.afterItem()));
+		dispenser.setItem(actor.slot(), ContainerTransferItems.toStack(journal.afterItem()));
 		dispenser.setChanged();
 		return true;
 	}
