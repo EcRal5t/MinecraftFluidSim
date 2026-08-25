@@ -8,6 +8,7 @@ public final class AirCavityScannerValidation {
 
 	public static void main(String[] args) {
 		validateOpenTankIsAmbient();
+		validateControllerExtentIsSealed();
 		validateSealedTankVolume();
 		validateOpenUTubeIsAmbient();
 		validateMultipleSealedCavities();
@@ -16,6 +17,17 @@ public final class AirCavityScannerValidation {
 		validateScanBudget();
 		System.out.println("M5 cavity scanner gate passed: ambient/sealed classification, available volume, "
 				+ "geometric edges and budget stop");
+	}
+
+	private static void validateControllerExtentIsSealed() {
+		int n = 8;
+		Grid grid = new Grid(n);
+		AirCavityScanner.Result result = new AirCavityScanner(n, n, n, 0.5F, n * n * n)
+				.scan(grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null, true);
+		check(result.sealedNodeCount() == 1,
+				"a validated controller interior must keep boundary-layer headspace sealed");
+		checkRelative(result.sealedAvailableVolume()[0], 64.0,
+				"controller interior gas volume");
 	}
 
 	private static void validateOpenTankIsAmbient() {

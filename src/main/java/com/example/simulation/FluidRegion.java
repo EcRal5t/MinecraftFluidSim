@@ -107,6 +107,7 @@ public final class FluidRegion {
 		this.footprint = footprint;
 		this.generation = generation;
 		this.domain = domain;
+		if (domain != null && footprint != null) domain.sealDomainBoundary();
 		if (footprint != null && !origin.equals(footprint.minimumInterior())) {
 			throw new IllegalArgumentException("A controller region origin must equal its minimum interior block");
 		}
@@ -321,7 +322,7 @@ public final class FluidRegion {
 		if (loadedCheckpointGeneration != checkpointGeneration) {
 			throw new IllegalArgumentException("Checkpoint generation changed while restoring");
 		}
-		FlipFluidDomain restored = new FlipFluidDomain(sizeX, sizeY, sizeZ, solverConfig, (int) reservedMarkerCapacity);
+		FlipFluidDomain restored = freshDomain();
 		restored.restoreParticleState(state);
 		domain = restored;
 		collisionRefreshRequired = true;
@@ -337,7 +338,7 @@ public final class FluidRegion {
 		if (loadedCheckpointGeneration != checkpointGeneration) {
 			throw new IllegalArgumentException("Checkpoint generation changed while restoring");
 		}
-		FlipFluidDomain restored = new FlipFluidDomain(sizeX, sizeY, sizeZ, solverConfig, (int) reservedMarkerCapacity);
+		FlipFluidDomain restored = freshDomain();
 		restored.restoreMaterialParticleState(state);
 		domain = restored;
 		collisionRefreshRequired = true;
@@ -356,7 +357,7 @@ public final class FluidRegion {
 		if (loadedCheckpointGeneration != checkpointGeneration) {
 			throw new IllegalArgumentException("Checkpoint generation changed while restoring");
 		}
-		FlipFluidDomain restored = new FlipFluidDomain(sizeX, sizeY, sizeZ, solverConfig, (int) reservedMarkerCapacity);
+		FlipFluidDomain restored = freshDomain();
 		restored.restoreChemicalParticleState(state, registry);
 		domain = restored;
 		collisionRefreshRequired = true;
@@ -400,6 +401,13 @@ public final class FluidRegion {
 			throw new IllegalStateException("Thermal restore requires the matching loaded material generation");
 		}
 		domain.restoreThermalParticleState(state, registry, maximumTransportSubsteps);
+	}
+
+	private FlipFluidDomain freshDomain() {
+		FlipFluidDomain restored = new FlipFluidDomain(
+				sizeX, sizeY, sizeZ, solverConfig, (int) reservedMarkerCapacity);
+		if (footprint != null) restored.sealDomainBoundary();
+		return restored;
 	}
 
 	boolean adoptMigratedCheckpoint(long previousGeneration, long migratedGeneration) {

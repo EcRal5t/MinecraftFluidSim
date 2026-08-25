@@ -138,6 +138,7 @@ public final class FlipFluidDomain {
 	private int[] chemicalMovingMarkers;
 	private AirNetwork airNetwork;
 	private final AirCavityScanner airScanner;
+	private boolean sealedDomainBoundary;
 	private int[] airCellNodeId;
 	private int previousSealedNodeCount;
 	private boolean gasPressureActive;
@@ -256,6 +257,18 @@ public final class FlipFluidDomain {
 	/** Runtime-only gas network of this domain; it is not a wire or save format. */
 	public AirNetwork airNetwork() { return airNetwork; }
 
+	/**
+	 * Marks the solver extent as the interior of an independently validated closed controller shell.
+	 * Command/developer domains retain an ambient external boundary. The mode is immutable after gas
+	 * topology exists because changing it would reinterpret authoritative gas inventory.
+	 */
+	public void sealDomainBoundary() {
+		if (airCellNodeId != null || airNetwork.nodeCount() != 0 || airNetwork.drawnFromAmbientNanos() != 0L) {
+			throw new IllegalStateException("Gas domain boundary cannot change after topology initialization");
+		}
+		sealedDomainBoundary = true;
+	}
+
 	/** Explicitly selects the authoritative gas registry before a first topology bootstrap. */
 	public void bindGasRegistry(GasRegistry registry) {
 		if (registry == null) throw new IllegalArgumentException("Gas registry is missing");
@@ -289,9 +302,8 @@ public final class FlipFluidDomain {
 			throw new IllegalStateException("Gas restore requires an uninitialized topology");
 		}
 		ensureGrid();
-		AirCavityScanner.Result result = pressureGranularCoupling == null
-				? airScanner.scan(solid, markerCount, volume, cutCells)
-				: airScanner.scan(solid, markerCount, volume, cutCells, pressureGranularCoupling);
+		AirCavityScanner.Result result = airScanner.scan(solid, markerCount, volume, cutCells,
+				pressureGranularCoupling, sealedDomainBoundary);
 		int[] expected = state.cellNodeOrdinal(), actual = result.cellNodeId();
 		if (result.sealedNodeCount() != state.nodes().size()) {
 			throw new IllegalArgumentException("Restored gas sealed-node count does not match derived topology");
@@ -4208,9 +4220,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	) { }
 
 	private void refreshGasTopology() {
-		AirCavityScanner.Result result = pressureGranularCoupling == null
-				? airScanner.scan(solid, markerCount, volume, cutCells)
-				: airScanner.scan(solid, markerCount, volume, cutCells, pressureGranularCoupling);
+		AirCavityScanner.Result result = airScanner.scan(solid, markerCount, volume, cutCells,
+				pressureGranularCoupling, sealedDomainBoundary);
 		int sealed = result.sealedNodeCount();
 		boolean thermalGas = thermalState != null && thermalState.gasModelBound();
 		double[] availableVolumes = result.sealedAvailableVolume();

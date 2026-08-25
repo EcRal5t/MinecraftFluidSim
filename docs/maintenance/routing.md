@@ -34,7 +34,7 @@
 | MAC 空气外推 | `src/main/java/com/example/fluid/FlipVelocityExtrapolator.java` | 开放压力面播种；G2P 不采未定义空气零值 |
 | marker 分布压力约束 | `src/main/java/com/example/fluid/FlipVolumeDriftCorrection.java` | P2G 只生成目标散度，不结算或找平精确水量 |
 | M5/M9 气体网络与 registry | `src/main/java/com/example/fluid/air/` | stable-component 纳体积、独立质量、optional species/residual 与 source/sink 联合迁移；逐组分与总量审计闭合；`GasRegistryStore` 的 world snapshot 权威且 mismatch 不重解释；EoS/孔流只是派生；持久化只能走独立 gas v4 门，不得直接序列化 runtime handle |
-| M5 空腔拓扑扫描 | `src/main/java/com/example/fluid/AirCavityScanner.java` | 预算内 flood fill；触达边界层或超预算即 ambient，绝不保存为有限密闭库存；部分开口面成为几何孔流边 |
+| M5 空腔拓扑扫描 | `src/main/java/com/example/fluid/AirCavityScanner.java` | 预算内 flood fill；命令域触达外边界即 ambient，controller 域只在已验证闭壳模式下把边界层保留为 sealed；超预算始终退化 ambient；部分开口面成为几何孔流边 |
 | runtime cut-cell | `src/main/java/com/example/fluid/FlipCutCellGeometry.java` | 散度、矩阵、预条件器和投影共享 face aperture |
 | marker CCD | `src/main/java/com/example/fluid/FlipParticleCollision.java` | 只截断命中法向，切向自由 |
 | 守恒 reseeding | `src/main/java/com/example/fluid/FlipParticleReseeder.java` | merge/split 保持体积、质量、动量、质心和硬预算；不跨 material/phase |

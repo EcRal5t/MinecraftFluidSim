@@ -14,8 +14,8 @@ import java.util.TreeMap;
 	 * <p>An air cell is non-solid with no markers and positive open volume. Six-neighbour
 	 * flood fill passes only through fully open faces; a partially open face between two
 	 * different components becomes a finite-rate geometric edge instead of a connection.
-	 * A component is ambient (node 0, gauge zero) when it touches the domain boundary
-	 * layer or when the scan budget is exhausted — never a sealed cavity with finite
+	 * A component is ambient (node 0, gauge zero) when it touches an explicitly ambient
+	 * domain boundary or when the scan budget is exhausted — never a sealed cavity with finite
 	 * inventory. Cavity volume is measured continuously from the smoothed liquid-volume
 	 * field: every attributed cell contributes its open volume minus the clamped liquid
 	 * fraction, so available volume follows the liquid surface without marker-quantisation
@@ -68,11 +68,17 @@ import java.util.TreeMap;
 	}
 
 	Result scan(boolean[] solid, int[] markerCount, float[] cellLiquidVolume, FlipCutCellGeometry cutCells) {
-		return scan(solid, markerCount, cellLiquidVolume, cutCells, null);
+		return scan(solid, markerCount, cellLiquidVolume, cutCells, null, false);
 	}
 
 	Result scan(boolean[] solid, int[] markerCount, float[] cellLiquidVolume,
 	            FlipCutCellGeometry cutCells, GranularCouplingFields granular) {
+		return scan(solid, markerCount, cellLiquidVolume, cutCells, granular, false);
+	}
+
+	Result scan(boolean[] solid, int[] markerCount, float[] cellLiquidVolume,
+	            FlipCutCellGeometry cutCells, GranularCouplingFields granular,
+	            boolean sealedDomainBoundary) {
 		boolean budgetExhausted = false;
 		int visitedAirCells = 0;
 		int sealedNodes = 0;
@@ -96,7 +102,8 @@ import java.util.TreeMap;
 				int yz = cell / sizeX;
 				int y = yz % sizeY;
 				int z = yz / sizeY;
-				if (x == 0 || x + 1 == sizeX || y == 0 || y + 1 == sizeY || z == 0 || z + 1 == sizeZ) touchesBoundary = true;
+				if (!sealedDomainBoundary && (x == 0 || x + 1 == sizeX || y == 0 || y + 1 == sizeY
+						|| z == 0 || z + 1 == sizeZ)) touchesBoundary = true;
 				stackSize = floodNeighbors(cellNodeId, solid, markerCount, cutCells, granular, x, y, z, cell, stackSize);
 			}
 			visitedAirCells += componentSize;
