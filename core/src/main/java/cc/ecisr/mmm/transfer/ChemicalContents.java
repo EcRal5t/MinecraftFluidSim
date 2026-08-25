@@ -1,11 +1,10 @@
-package cc.ecisr.mmm.item;
+package cc.ecisr.mmm.transfer;
 
+import cc.ecisr.mmm.api.StableId;
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
-import net.minecraft.resources.Identifier;
-import net.minecraft.world.item.ItemStack;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -268,32 +267,13 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 		return contents;
 	}
 
-	public static ChemicalContents fromStack(ItemStack stack, ChemicalRegistry registry) {
-		if (!(stack.getItem() instanceof MaterialBucketItem)) return null;
-		String encoded = stack.get(MmmComponents.CHEMICAL_CONTENTS);
-		if (encoded == null || stack.get(MmmComponents.MATERIAL_ID) != null
-				|| stack.get(MmmComponents.MIXTURE_COMPONENTS) != null) return null;
-		ChemicalContents contents = decode(encoded); contents.validateAgainst(registry);
-		Long massBits = stack.get(MmmComponents.FLUID_MASS_BITS);
-		return MaterialBucketItem.volume(stack) == contents.totalVolumeNanos() && massBits != null
-				&& massBits == Double.doubleToRawLongBits(contents.totalMass()) ? contents : null;
-	}
-
-	public ItemStack toStack() {
-		ItemStack stack = new ItemStack(MmmItems.MATERIAL_BUCKET);
-		stack.set(MmmComponents.FLUID_VOLUME, totalVolumeNanos());
-		stack.set(MmmComponents.FLUID_MASS_BITS, Double.doubleToRawLongBits(totalMass()));
-		stack.set(MmmComponents.CHEMICAL_CONTENTS, encode());
-		return stack;
-	}
-
 	public record Group(
 			String materialId, boolean indicator, long volumeNanos, long massBits,
 			long massResidualBits, List<SpeciesAmount> species
 	) {
 		private static final Comparator<Group> ORDER = Comparator.comparing(Group::materialId).thenComparing(Group::indicator);
 		public Group {
-			if (Identifier.tryParse(materialId) == null || volumeNanos <= 0L
+			if (!StableId.isValid(materialId, 128) || volumeNanos <= 0L
 					|| volumeNanos > ContainerFluidLedger.NANOS_PER_BLOCK || species == null || species.isEmpty()
 					|| species.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL
 					|| !(Double.isFinite(Double.longBitsToDouble(massBits)) && Double.longBitsToDouble(massBits) > 0.0)
@@ -313,7 +293,7 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 
 	public record SpeciesAmount(String speciesId, long amountQuanta) {
 		public SpeciesAmount {
-			if (Identifier.tryParse(speciesId) == null || amountQuanta <= 0L) throw new IllegalArgumentException("Invalid chemical species amount");
+			if (!StableId.isValid(speciesId, 128) || amountQuanta <= 0L) throw new IllegalArgumentException("Invalid chemical species amount");
 		}
 	}
 }

@@ -12,9 +12,9 @@ CPU `FlipFluidDomain` 是规范求解器。GPU probe、客户端 renderer、tool
 
 | 模块 | 职责 | 依赖边界 |
 |---|---|---|
-| `api` | stable ID、单位化外部契约；当前稳定入口为 Query API | 只依赖 JDK，不暴露 solver 数组或 Minecraft 类型 |
-| `core` | PIC/FLIP、材料、气体、化学、颗粒、热学与候选状态 | 依赖 `api` 和纯 Java 库，不引用 Fabric/Minecraft |
-| `fabric` | Mod 生命周期、世界读取/写入、NBT、数据包、网络、物品与命令 | 依赖并内嵌 `api`、`core`；服务器主线程拥有提交权 |
+| `api` | stable ID、单位化 Query、committed event 与 typed quantity 契约 | 只依赖 JDK，不暴露 solver 数组或 Minecraft 类型 |
+| `core` | PIC/FLIP、材料、气体、化学、颗粒、热学、typed container truth 与候选状态 | 依赖 `api` 和纯 Java 库，不引用 Fabric/Minecraft |
+| `fabric` | Mod 生命周期、世界读取/写入、NBT、数据包、网络、物品适配与命令 | 依赖并内嵌 `api`、`core`；服务器主线程拥有提交权；`ContainerItemStacks` 独占纯 Java 容器真值与 `ItemStack` component 的映射 |
 | `gpu-probe` | Vulkan 能力验证、只读对照和未来后端实验 | 数值部分依赖 `core`；Fabric 集成只以 compile-only 接入主 Mod |
 
 `FluidDomainState` 是完整、不可变的数值后端交接状态；`FluidStepRequest` 绑定 base generation，`FluidStepCandidate` 只能返回其紧邻后继。`CpuFluidSolverBackend` 已通过私有恢复副本实现这一边界。未来 GPU 后端必须消费同一完整输入并返回同一完整 candidate；世界事务、ownership、actor、调度和 HEAD 发布不进入数值后端。

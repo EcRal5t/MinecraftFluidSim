@@ -363,20 +363,20 @@ else if (root.get(prefix + "ThermalContents") != null) {
 throw new IOException("Material-only item fingerprint carries thermal contents");
 }
 if (kind == ContainerTransferJournal.ItemKind.PARTIAL) {
-if (!cc.ecisr.mmm.item.ContainerFluidLedger.isPartialBucket(nanos)
+if (!cc.ecisr.mmm.transfer.ContainerFluidLedger.isPartialBucket(nanos)
 || materialId != null || solidVolumeSvq != -1L || massBits != -1L) {
 throw new IOException(prefix + " partial bucket nanovolume is invalid: " + nanos);
 }
 } else if (kind == ContainerTransferJournal.ItemKind.MATERIAL_BUCKET) {
 double mass = Double.longBitsToDouble(massBits);
 if (materialId == null || nanos <= 0L
-|| nanos > cc.ecisr.mmm.item.ContainerFluidLedger.NANOS_PER_BLOCK
+|| nanos > cc.ecisr.mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK
 || solidVolumeSvq != -1L
 || !(Double.isFinite(mass) && mass > 0.0)) {
 throw new IOException(prefix + " material bucket fingerprint is invalid");
 }
 try {
-cc.ecisr.mmm.item.FluidMixture mixture = cc.ecisr.mmm.item.FluidMixture.decode(materialId);
+cc.ecisr.mmm.transfer.FluidMixture mixture = cc.ecisr.mmm.transfer.FluidMixture.decode(materialId);
 if (mixture.totalVolumeNanos() != nanos
 || Double.doubleToRawLongBits(mixture.totalMass()) != massBits) {
 throw new IllegalArgumentException("mixture totals disagree with fingerprint");
@@ -386,7 +386,7 @@ throw new IOException(prefix + " material bucket mixture is invalid", invalidMix
 }
 } else if (kind == ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET) {
 try {
-cc.ecisr.mmm.item.ChemicalContents contents = cc.ecisr.mmm.item.ChemicalContents.decode(materialId);
+cc.ecisr.mmm.transfer.ChemicalContents contents = cc.ecisr.mmm.transfer.ChemicalContents.decode(materialId);
 if (contents.totalVolumeNanos() != nanos || Double.doubleToRawLongBits(contents.totalMass()) != massBits
 || solidVolumeSvq != -1L) {
 throw new IllegalArgumentException("chemical totals disagree with fingerprint");
@@ -396,7 +396,7 @@ throw new IOException(prefix + " chemical bucket fingerprint is invalid", invali
 }
 } else if (kind == ContainerTransferJournal.ItemKind.GRANULAR_CONTAINER) {
 try {
-cc.ecisr.mmm.item.GranularContents contents = cc.ecisr.mmm.item.GranularContents.decode(materialId);
+cc.ecisr.mmm.transfer.GranularContents contents = cc.ecisr.mmm.transfer.GranularContents.decode(materialId);
 if (contents.totalSolidVolumeSvq() != solidVolumeSvq
 || Double.doubleToRawLongBits(contents.totalMass()) != massBits || nanos != -1L) {
 throw new IllegalArgumentException("granular totals disagree with fingerprint");
@@ -411,7 +411,7 @@ ContainerTransferJournal.ItemFingerprint result = new ContainerTransferJournal.I
 kind, nanos, solidVolumeSvq, materialId, massBits, thermalContents);
 if (thermalContents != null) {
 try {
-result.validateThermalRegistry(cc.ecisr.mmm.item.ThermalContents.decode(thermalContents).registryFingerprint());
+result.validateThermalRegistry(cc.ecisr.mmm.transfer.ThermalContents.decode(thermalContents).registryFingerprint());
 } catch (RuntimeException invalidThermal) {
 throw new IOException(prefix + " item thermal contents are invalid", invalidThermal);
 }
@@ -459,7 +459,7 @@ return;
 }
 if (journal.solidVolumeSvq() != -1L) throw new IOException("Fluid WAL carries a solid-volume ledger");
 validateThermalTransferShape(journal);
-long bucket = cc.ecisr.mmm.item.ContainerFluidLedger.NANOS_PER_BLOCK;
+long bucket = cc.ecisr.mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK;
 long amount = journal.volumeNanos();
 if (amount <= 0L || amount > bucket) {
 throw new IOException("Container transfer WAL volume is outside one bucket: " + amount);
@@ -513,17 +513,17 @@ if (journal.operation() == ContainerTransferJournal.Operation.INSERT && !beforeT
 throw new IOException("Committed thermal transfer is missing the item-side energy owner");
 }
 double before = beforeThermal
-? cc.ecisr.mmm.item.ThermalContents.decode(journal.beforeItem().thermalContents()).internalEnergy() : 0.0;
+? cc.ecisr.mmm.transfer.ThermalContents.decode(journal.beforeItem().thermalContents()).internalEnergy() : 0.0;
 double after = afterThermal
-? cc.ecisr.mmm.item.ThermalContents.decode(journal.afterItem().thermalContents()).internalEnergy() : 0.0;
+? cc.ecisr.mmm.transfer.ThermalContents.decode(journal.afterItem().thermalContents()).internalEnergy() : 0.0;
 double moved;
 if (journal.operation() == ContainerTransferJournal.Operation.INSERT
 && journal.beforeItem().equals(journal.afterItem())) {
 long total = Math.max(pureVolume(journal.beforeItem()), materialVolume(journal.beforeItem()));
 if (total <= 0L) throw new IOException("Unchanged thermal source item has no liquid volume");
-cc.ecisr.mmm.item.ThermalContents source = cc.ecisr.mmm.item.ThermalContents.decode(
+cc.ecisr.mmm.transfer.ThermalContents source = cc.ecisr.mmm.transfer.ThermalContents.decode(
 journal.beforeItem().thermalContents());
-cc.ecisr.mmm.item.ThermalContents.EnergySplit split = source.splitEnergy(journal.volumeNanos(), total);
+cc.ecisr.mmm.transfer.ThermalContents.EnergySplit split = source.splitEnergy(journal.volumeNanos(), total);
 moved = source.internalEnergy() - split.remainingEnergy();
 } else {
 moved = journal.operation() == ContainerTransferJournal.Operation.INSERT ? before - after : after - before;
@@ -557,7 +557,7 @@ throw new IOException("Container transfer item delta does not match " + journal.
 private static long pureVolume(ContainerTransferJournal.ItemFingerprint item) {
 return switch (item.kind()) {
 case BUCKET -> 0L;
-case WATER_BUCKET -> cc.ecisr.mmm.item.ContainerFluidLedger.NANOS_PER_BLOCK;
+case WATER_BUCKET -> cc.ecisr.mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK;
 case PARTIAL -> item.nanos();
 case EMPTY_MATERIAL_BUCKET, MATERIAL_BUCKET, CHEMICAL_BUCKET,
 EMPTY_GRANULAR_CONTAINER, GRANULAR_CONTAINER -> -1L;

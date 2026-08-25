@@ -10,6 +10,11 @@ import cc.ecisr.mmm.granular.BuiltinGranularDefinitions;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.granular.SolidCompositionRecord;
 import cc.ecisr.mmm.granular.SolidVolume;
+import cc.ecisr.mmm.transfer.ChemicalContents;
+import cc.ecisr.mmm.transfer.ContainerFluidLedger;
+import cc.ecisr.mmm.transfer.FluidMixture;
+import cc.ecisr.mmm.transfer.GranularContents;
+import cc.ecisr.mmm.transfer.ThermalContents;
 
 import java.util.ArrayList;
 import java.util.List;

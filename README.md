@@ -54,7 +54,7 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 - 固液和气液相变受能量、库存、容量、饱和压力、绝对压力有效域与每步预算约束。气体 pressure/temperature/volume 由密闭节点库存派生。
 - `thermal_reservoir` 是无限热浴，但实际交换仍只通过相邻 cut-face 通量；越出材料有效温区会安全暂停。
 
-外部 Mod 可通过 JDK-only Query API 同步读取已加载区域的单格材料、体积、质量、密度、species 和可选温度；Fabric 发现入口为 `MmmFabricApi.query(server)`。查询不加载、不唤醒、不回写。安装 Jade 时，观察本 Mod 的闭壳方块可显示相邻液体的体积、质量、密度、材料、species 和可选温度；Jade 仍是可选依赖，主 Mod 不提供独立准星 HUD。WAILA/HWYLA 与直接命中自由面的适配仍待实现。
+外部 Mod 可通过 JDK-only Query API 同步读取已加载区域的单格材料、体积、质量、密度、species 和可选温度；Fabric 发现入口为 `MmmFabricApi.query(server)`。查询不加载、不唤醒、不回写。`MmmFabricApi.events(server)` 只在容器 actor 已强制保存、WAL 已删除后发布 committed event，并以封闭 typed quantity 区分液体 nanovolume/raw `U` 与颗粒 SVQ。安装 Jade 时，观察本 Mod 的闭壳方块可显示相邻液体摘要；Jade 仍是可选依赖，主 Mod 不提供独立准星 HUD。受控写入、WAILA/HWYLA 与直接命中自由面的适配仍待实现。
 
 ## 构建
 
@@ -70,7 +70,7 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 
 - [系统组件与数据流](docs/architecture/system-overview.md)
 - [当前架构契约](docs/README.md)
-- [外部只读 Query API](docs/architecture/external-api.md)
+- [外部 Query、committed event 与 typed quantity](docs/architecture/external-api.md)
 - [代码职责与最小验证路由](docs/maintenance/routing.md)
 - [未来产品路线](docs/roadmap/product-roadmap.md)
 - [发布验收策略](docs/roadmap/acceptance-and-release.md)

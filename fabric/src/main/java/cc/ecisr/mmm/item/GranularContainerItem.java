@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.item;
 
 import cc.ecisr.mmm.granular.SolidVolume;
+import cc.ecisr.mmm.transfer.GranularContents;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
@@ -16,11 +17,11 @@ public final class GranularContainerItem extends Item {
 	public static boolean isEmpty(ItemStack stack) {
 		return stack.getItem() instanceof GranularContainerItem
 				&& stack.get(MmmComponents.GRANULAR_CONTENTS) == null
-				&& !GranularContents.hasLiquidComponents(stack);
+				&& !ContainerItemStacks.hasLiquidComponents(stack);
 	}
 
 	public static GranularContents unvalidatedContents(ItemStack stack) {
-		if (!(stack.getItem() instanceof GranularContainerItem) || GranularContents.hasLiquidComponents(stack)) return null;
+		if (!(stack.getItem() instanceof GranularContainerItem) || ContainerItemStacks.hasLiquidComponents(stack)) return null;
 		String encoded = stack.get(MmmComponents.GRANULAR_CONTENTS);
 		if (encoded == null) return null;
 		try { return GranularContents.decode(encoded); }

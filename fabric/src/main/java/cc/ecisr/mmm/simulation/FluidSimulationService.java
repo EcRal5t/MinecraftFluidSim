@@ -4,6 +4,7 @@ import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.api.query.MmmQueryApi;
 import cc.ecisr.mmm.api.event.ContainerTransferCommittedEvent;
 import cc.ecisr.mmm.api.event.MmmEventApi;
+import cc.ecisr.mmm.api.transfer.TransferQuantity;
 import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.chemistry.ChemicalDataPackLoader;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
@@ -26,10 +27,11 @@ import cc.ecisr.mmm.granular.GranularMechanics;
 import cc.ecisr.mmm.granular.GranularPhaseTransferEngine;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.granular.GranularRegistryStore;
-import cc.ecisr.mmm.item.ChemicalContents;
-import cc.ecisr.mmm.item.FluidMixture;
+import cc.ecisr.mmm.transfer.ChemicalContents;
+import cc.ecisr.mmm.transfer.FluidMixture;
+import cc.ecisr.mmm.item.ContainerItemStacks;
 import cc.ecisr.mmm.item.MmmComponents;
-import cc.ecisr.mmm.item.ThermalContents;
+import cc.ecisr.mmm.transfer.ThermalContents;
 import cc.ecisr.mmm.simulation.controller.FluidBoundaryScanner;
 import cc.ecisr.mmm.simulation.controller.FluidControllerRegions;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
@@ -680,23 +682,19 @@ public final class FluidSimulationService {
 	private static ContainerTransferCommittedEvent committedTransferEvent(
 			ContainerTransferJournal journal
 	) {
-		ContainerTransferCommittedEvent.ResourceKind resourceKind = switch (journal.resourceKind()) {
-			case FLUID_NANOS -> ContainerTransferCommittedEvent.ResourceKind.LIQUID_NANOVOLUME;
-			case GRANULAR_SVQ -> ContainerTransferCommittedEvent.ResourceKind.GRANULAR_SOLID_VOLUME_QUANTA;
-		};
-		long amount = switch (journal.resourceKind()) {
-			case FLUID_NANOS -> journal.volumeNanos();
-			case GRANULAR_SVQ -> journal.solidVolumeSvq();
-		};
 		OptionalDouble energy = journal.thermalTransfer() == null
 				? OptionalDouble.empty()
 				: OptionalDouble.of(journal.thermalTransfer().internalEnergy());
+		TransferQuantity quantity = switch (journal.resourceKind()) {
+			case FLUID_NANOS -> new TransferQuantity.Liquid(journal.volumeNanos(), energy);
+			case GRANULAR_SVQ -> new TransferQuantity.Granular(journal.solidVolumeSvq());
+		};
 		return new ContainerTransferCommittedEvent(
 				journal.transactionId(), journal.dimensionId(), journal.regionId(), journal.targetGeneration(),
 				journal.operation() == ContainerTransferJournal.Operation.INSERT
 						? ContainerTransferCommittedEvent.Operation.INSERT
 						: ContainerTransferCommittedEvent.Operation.EXTRACT,
-				resourceKind, amount, energy);
+				quantity);
 	}
 
 	/** The WAL is deleted only after the actor's owning save file has been forced through Minecraft. */
@@ -882,7 +880,7 @@ public final class FluidSimulationService {
 		double energy = 0.0;
 		if (stack.get(MmmComponents.CHEMICAL_CONTENTS) != null) {
 			if (chemicalRegistry == null) throw new IllegalStateException("Authoritative chemical registry is unavailable");
-			ChemicalContents contents = ChemicalContents.fromStack(stack, chemicalRegistry);
+			ChemicalContents contents = ContainerItemStacks.chemicalContents(stack, chemicalRegistry);
 			if (contents == null) throw new IllegalArgumentException("Debug chemical liquid inventory is malformed");
 			for (ChemicalContents.Group group : contents.groups()) {
 				java.util.TreeMap<String, Long> species = new java.util.TreeMap<>();
@@ -895,7 +893,7 @@ public final class FluidSimulationService {
 						GasRegistry.STANDARD_TEMPERATURE_K);
 			}
 		} else {
-			FluidMixture mixture = FluidMixture.fromStack(stack);
+			FluidMixture mixture = ContainerItemStacks.fluidMixture(stack);
 			if (mixture == null) throw new IllegalArgumentException("Debug material liquid inventory is malformed");
 			for (FluidMixture.Component component : mixture.components()) {
 				int handle = thermalRegistry.materialHandle(
@@ -905,7 +903,7 @@ public final class FluidSimulationService {
 			}
 		}
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Debug liquid internal energy overflow");
-		ThermalContents.attach(stack, thermalRegistry.fingerprint(), energy);
+		ContainerItemStacks.attachThermal(stack, thermalRegistry.fingerprint(), energy);
 	}
 
 	String thermalRegistryFingerprint() {

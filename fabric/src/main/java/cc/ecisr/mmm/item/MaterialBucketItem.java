@@ -1,6 +1,9 @@
 package cc.ecisr.mmm.item;
 
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
+import cc.ecisr.mmm.transfer.ChemicalContents;
+import cc.ecisr.mmm.transfer.ContainerFluidLedger;
+import cc.ecisr.mmm.transfer.FluidMixture;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
@@ -44,14 +47,14 @@ public final class MaterialBucketItem extends Item {
 
 	public static FluidMixture mixture(ItemStack stack) {
 		try {
-			return FluidMixture.fromStack(stack);
+			return ContainerItemStacks.fluidMixture(stack);
 		} catch (IllegalArgumentException invalid) {
 			return null;
 		}
 	}
 
 	public static ChemicalContents chemicalContents(ItemStack stack, ChemicalRegistry registry) {
-		try { return ChemicalContents.fromStack(stack, registry); }
+		try { return ContainerItemStacks.chemicalContents(stack, registry); }
 		catch (IllegalArgumentException invalid) { return null; }
 	}
 

@@ -5,7 +5,7 @@
 ## 模块与主 Mod 职责
 
 - `api/src/main/java/cc/ecisr/mmm/api/`：只放 JDK-only 的稳定外部契约；禁止 Fabric、Minecraft、NBT、live domain 引用。
-- `core/src/main/java/cc/ecisr/mmm/`：物理算法、registry 值对象和权威内存状态；禁止 `net.minecraft`、`net.fabricmc`。
+- `core/src/main/java/cc/ecisr/mmm/`：物理算法、registry 值对象、typed container truth 和权威内存状态；禁止 `net.minecraft`、`net.fabricmc`。
 - `fabric/src/main/java/cc/ecisr/mmm/`：Fabric/Minecraft 编排、数据包/持久化适配和世界事务。
 - `fabric/src/client/java/cc/ecisr/mmm/`：只读客户端重建与可选观察层格式化。
 - `gpu-probe/`：Vulkan probe 与后端实验；数值代码依赖 `core`，世界集成 compile-only 依赖 `fabric`。
@@ -26,6 +26,7 @@
 | takeover | `TakeoverTransaction.java`、`TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
 | ownership | `simulation/ownership/`、`FluidRegionPersistence.java` | WAL→WARNING→世界→region HEAD→committed；未知状态保留并锁定 |
 | 容器事务 | `ControllerItemTransferCoordinator.java`、`ContainerTransferJournal.java`、`ContainerTransferStore.java`、`ContainerTransferRecovery.java`、`FluidTransferService.java` | coordinator 独占 WAL→staged HEAD→actor 收敛顺序；只读当前 writer 布局；actor durable save 前不得删 WAL |
+| typed 容器真值 | `core/.../transfer/`、`fabric/.../item/ContainerItemStacks.java` | 体积/质量/species/SVQ/U 的纯 Java 账本不引用 Minecraft；`ItemStack` component 编解码只留在 Fabric adapter；持久编码不携带 runtime handle |
 | 活动求解器 | `core/.../fluid/FlipFluidDomain.java` | CPU 规范实现；mechanics→conduction→reaction→phase→granular→reseed |
 | 后端完整候选 | `FluidDomainState.java`、`FluidStepRequest.java`、`FluidStepCandidate.java`、`FluidSolverBackend.java` | 后端只计算私有完整后继；不持有世界、actor、HEAD 或提交权 |
 | 自由面/压力 | `FlipFreeSurfaceGeometry.java`、`FlipVolumeDriftCorrection.java`、`FlipVelocityExtrapolator.java` | marker count 决定压力相；平滑 volume 不结算库存 |
@@ -93,7 +94,7 @@
 | 热学/相变 | `thermal` | 共享 solver/air/chemistry/granular/存档/容器按需追加 |
 | 后端 state/candidate | `thermal` | 只追加实际跨过的 carrier 门；改变 checkpoint 形状才追加 `region-state` |
 | 外部 Query API/ABI | `protocol` | 改 marker/species/thermal 映射时追加对应最近门 |
-| 外部 committed event API/ABI | `protocol` | 改 container commit 边界追加 `containers` |
+| 外部 committed event/typed quantity API/ABI | `protocol` | 改 container commit 边界或 ItemStack 映射追加 `containers` |
 
 新增覆盖优先替换同一不变量的已有测试。只有新失败模式无法归属现有领域时才新增 selector；长期场景进入 `soak`。
 

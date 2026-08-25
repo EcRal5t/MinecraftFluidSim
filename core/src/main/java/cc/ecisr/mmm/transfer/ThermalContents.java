@@ -1,7 +1,4 @@
-package cc.ecisr.mmm.item;
-
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
+package cc.ecisr.mmm.transfer;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -59,27 +56,6 @@ public record ThermalContents(
 		return create(registryFingerprint, encoded(UnderlyingKind.CHEMICAL, contents.encode()), internalEnergy);
 	}
 
-	/** Creates and attaches thermal truth after validating the exact underlying liquid contents. */
-	public static ThermalContents attach(ItemStack stack, String registryFingerprint, double internalEnergy) {
-		Underlying underlying = underlying(stack);
-		ThermalContents result = create(registryFingerprint, underlying, internalEnergy);
-		stack.set(MmmComponents.THERMAL_CONTENTS, result.encode());
-		return result;
-	}
-
-	/** Returns null only when no thermal component exists; malformed or foreign underlying truth is rejected. */
-	public static ThermalContents fromStack(ItemStack stack) {
-		String encoded = stack.get(MmmComponents.THERMAL_CONTENTS);
-		if (encoded == null) return null;
-		ThermalContents result = decode(encoded);
-		Underlying underlying = underlying(stack);
-		if (result.underlyingKind() != underlying.kind()
-				|| !result.underlyingHash().equals(hash(underlying.canonicalBytes()))) {
-			throw new IllegalArgumentException("Thermal contents do not match the underlying liquid inventory");
-		}
-		return result;
-	}
-
 	public void validateRegistryFingerprint(String authoritativeFingerprint) {
 		if (!registryFingerprint.equals(authoritativeFingerprint)) {
 			throw new IllegalArgumentException("Foreign thermal registry fingerprint");
@@ -123,40 +99,6 @@ public record ThermalContents(
 		}
 	}
 
-	private static Underlying underlying(ItemStack stack) {
-		if (stack == null || stack.getCount() != 1 || stack.get(MmmComponents.GRANULAR_CONTENTS) != null) {
-			throw new IllegalArgumentException("Thermal contents require one non-granular liquid container");
-		}
-		if (stack.is(Items.WATER_BUCKET)) {
-			requireNoMaterialLedger(stack);
-			return pureWater(ContainerFluidLedger.NANOS_PER_BLOCK);
-		}
-		if (stack.getItem() instanceof PartialWaterBucketItem) {
-			requireNoMaterialLedger(stack);
-			long nanos = PartialWaterBucketItem.volume(stack);
-			if (nanos <= 0L) throw new IllegalArgumentException("Partial water container is invalid");
-			return pureWater(nanos);
-		}
-		if (stack.getItem() instanceof MaterialBucketItem) {
-			String chemical = stack.get(MmmComponents.CHEMICAL_CONTENTS);
-			if (chemical != null) {
-				ChemicalContents contents = ChemicalContents.decode(chemical);
-				Long mass = stack.get(MmmComponents.FLUID_MASS_BITS);
-				if (MaterialBucketItem.volume(stack) != contents.totalVolumeNanos() || mass == null
-						|| mass != Double.doubleToRawLongBits(contents.totalMass())
-						|| stack.get(MmmComponents.MATERIAL_ID) != null
-						|| stack.get(MmmComponents.MIXTURE_COMPONENTS) != null) {
-					throw new IllegalArgumentException("Chemical container ledgers disagree");
-				}
-				return encoded(UnderlyingKind.CHEMICAL, contents.encode());
-			}
-			FluidMixture mixture = FluidMixture.fromStack(stack);
-			if (mixture == null) throw new IllegalArgumentException("Material container is empty or malformed");
-			return encoded(UnderlyingKind.MATERIAL, mixture.encode());
-		}
-		throw new IllegalArgumentException("Unsupported thermal liquid container");
-	}
-
 	private static ThermalContents create(String registryFingerprint, Underlying underlying, double internalEnergy) {
 		return new ThermalContents(registryFingerprint, underlying.kind(), hash(underlying.canonicalBytes()), internalEnergy);
 	}
@@ -178,16 +120,6 @@ public record ThermalContents(
 			return new Underlying(kind, bytes.toByteArray());
 		} catch (IOException impossible) {
 			throw new IllegalStateException("In-memory thermal contents encoding failed", impossible);
-		}
-	}
-
-	private static void requireNoMaterialLedger(ItemStack stack) {
-		if (stack.get(MmmComponents.FLUID_VOLUME) != null
-				|| stack.get(MmmComponents.MATERIAL_ID) != null
-				|| stack.get(MmmComponents.FLUID_MASS_BITS) != null
-				|| stack.get(MmmComponents.MIXTURE_COMPONENTS) != null
-				|| stack.get(MmmComponents.CHEMICAL_CONTENTS) != null) {
-			throw new IllegalArgumentException("Pure-water container has conflicting material ledgers");
 		}
 	}
 

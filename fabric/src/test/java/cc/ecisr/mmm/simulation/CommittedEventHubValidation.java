@@ -3,6 +3,7 @@ package cc.ecisr.mmm.simulation;
 import cc.ecisr.mmm.api.event.ContainerTransferCommittedEvent;
 import cc.ecisr.mmm.api.event.MmmCommittedEvent;
 import cc.ecisr.mmm.api.event.MmmEventApi;
+import cc.ecisr.mmm.api.transfer.TransferQuantity;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -37,7 +38,7 @@ public final class CommittedEventHubValidation {
 	private static ContainerTransferCommittedEvent event(long generation, OptionalDouble energy) {
 		return new ContainerTransferCommittedEvent(new UUID(1L, generation), "mmm:event_test",
 				new UUID(2L, 3L), generation, ContainerTransferCommittedEvent.Operation.INSERT,
-				ContainerTransferCommittedEvent.ResourceKind.LIQUID_NANOVOLUME, 17L, energy);
+				new TransferQuantity.Liquid(17L, energy));
 	}
 
 	private static void require(boolean condition, String failure) {

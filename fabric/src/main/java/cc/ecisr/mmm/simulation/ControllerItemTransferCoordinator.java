@@ -1,7 +1,8 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
-import cc.ecisr.mmm.item.ThermalContents;
+import cc.ecisr.mmm.item.ContainerItemStacks;
+import cc.ecisr.mmm.transfer.ThermalContents;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 
@@ -61,7 +62,7 @@ final class ControllerItemTransferCoordinator {
 				&& region.domain().hasThermalState()) {
 			preparedThermalEnergy = 0.0;
 			if (operation == ContainerTransferJournal.Operation.INSERT) {
-				ThermalContents source = ThermalContents.fromStack(beforeStack);
+				ThermalContents source = ContainerItemStacks.thermalContents(beforeStack);
 				if (source == null) return failed(operation, beforeStack,
 						"热区域注入缺少 ThermalContents；拒绝发布不完整 WAL", null);
 				preparedThermalEnergy = FluidTransferService.coupledSplitEnergy(source, requestedAmount,

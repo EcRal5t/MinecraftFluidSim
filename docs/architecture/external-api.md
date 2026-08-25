@@ -2,7 +2,7 @@
 
 ## 当前稳定范围
 
-当前冻结同步只读 Query API，以及只发布 durable container completion 的 committed-event API。loader-neutral 契约位于 `api` 模块的 `cc.ecisr.mmm.api.query` 与 `cc.ecisr.mmm.api.event`；Fabric 调用方分别通过 `MmmFabricApi.query(MinecraftServer)` 和 `MmmFabricApi.events(MinecraftServer)` 发现实现。Fabric 已提供可选 Jade 观察适配，但它只是 Query API 的展示消费者，不扩展稳定契约。受控 transfer、其他 commit event、WAILA/HWYLA 展示适配和其他 loader 的发现桥仍属于产品路线，不能从只读查询或事件通知推断写入权限。
+当前冻结同步只读 Query API，以及只发布 durable container completion 的 committed-event API。loader-neutral 契约位于 `api` 模块的 `cc.ecisr.mmm.api.query`、`cc.ecisr.mmm.api.event` 与共享 typed quantity 所在的 `cc.ecisr.mmm.api.transfer`；Fabric 调用方分别通过 `MmmFabricApi.query(MinecraftServer)` 和 `MmmFabricApi.events(MinecraftServer)` 发现实现。Fabric 已提供可选 Jade 观察适配，但它只是 Query API 的展示消费者，不扩展稳定契约。受控 transfer、其他 commit event、WAILA/HWYLA 展示适配和其他 loader 的发现桥仍属于产品路线，不能从只读查询或事件通知推断写入权限。
 
 `MmmQueryApi.UNIT_SYSTEM = "SI+mmm-quanta"`。接口只依赖 JDK 类型，不返回 Minecraft 对象、runtime handle、solver array 或 live region/domain 引用。产品功能和 Java 类型使用语义名称；格式变化直接替换当前契约，不保留按数字区分的公开入口。
 
@@ -52,6 +52,8 @@ Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会�
 
 `MmmEventApi` 可在不初始化 world service 的情况下注册监听器。回调只在服务器主线程执行；单个监听器异常会被隔离，不能改变提交结果或阻断其他监听器。服务器关闭会清空该服务器的订阅。
 
-`ContainerTransferCommittedEvent` 只在 region HEAD 已指向 target、player/dispenser after-item 已完成强制保存且 WAL 已删除后发布。它携带 transaction UUID、dimension、region UUID、checkpoint generation、相对区域的 insert/extract 方向、液体 nanovolume 或颗粒 SVQ，以及含热液体实际搬运的 raw `U`。事件不声称包含材料/species 明细；监听者需要当前库存时重新查询。
+`ContainerTransferCommittedEvent` 只在 region HEAD 已指向 target、player/dispenser after-item 已完成强制保存且 WAL 已删除后发布。它携带 transaction UUID、dimension、region UUID、checkpoint generation、相对区域的 insert/extract 方向，以及封闭的 `TransferQuantity`：液体记录 `10^-9 m³` nanovolume 和可选 raw `U`，颗粒记录 `2^-40 BV` 的 SVQ，调用方不需要用枚举与无类型 long 自行配对。事件不声称包含材料/species 明细；监听者需要当前库存时重新查询。
+
+`core/.../transfer/` 已保存与 loader 无关的容器体积、逐材料质量、species/residual、颗粒组成和 raw `U` 值对象；Fabric 的 `ContainerItemStacks` 只负责把这些真值映射到 `ItemStack` component。它们是内部事务与未来 transfer adapter 的共享模型，不等同于已经开放写权限；公开 request/plan/commit 仍须先完成可跨重启解析并强制保存的外部 actor 协议。
 
 事件是易失通知，不是库存日志：服务器可能在删除 WAL 后、发布事件前退出，监听者也可能晚注册。漏失不能重放或反向驱动物理，消费者必须能从 Query API 恢复当前观察。checkpoint、ownership、phase transition 与安全暂停事件尚未冻结，不能用 container event 猜测这些提交。

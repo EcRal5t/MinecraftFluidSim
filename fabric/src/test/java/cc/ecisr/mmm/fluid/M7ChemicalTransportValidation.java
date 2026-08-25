@@ -12,8 +12,8 @@ import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ChemicalSpecies;
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
 import cc.ecisr.mmm.chemistry.ExactRational;
-import cc.ecisr.mmm.item.ChemicalContents;
-import cc.ecisr.mmm.item.ContainerFluidLedger;
+import cc.ecisr.mmm.transfer.ChemicalContents;
+import cc.ecisr.mmm.transfer.ContainerFluidLedger;
 
 import java.util.Arrays;
 import java.util.List;

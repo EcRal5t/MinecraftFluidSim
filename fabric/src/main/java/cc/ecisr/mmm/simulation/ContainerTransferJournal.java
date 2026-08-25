@@ -1,11 +1,12 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.item.MaterialBucketItem;
-import cc.ecisr.mmm.item.FluidMixture;
-import cc.ecisr.mmm.item.ChemicalContents;
+import cc.ecisr.mmm.item.ContainerItemStacks;
+import cc.ecisr.mmm.transfer.FluidMixture;
+import cc.ecisr.mmm.transfer.ChemicalContents;
 import cc.ecisr.mmm.item.GranularContainerItem;
-import cc.ecisr.mmm.item.GranularContents;
-import cc.ecisr.mmm.item.ThermalContents;
+import cc.ecisr.mmm.transfer.GranularContents;
+import cc.ecisr.mmm.transfer.ThermalContents;
 import cc.ecisr.mmm.item.MmmComponents;
 import cc.ecisr.mmm.item.PartialWaterBucketItem;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
@@ -229,7 +230,7 @@ throw new IllegalArgumentException("Unsupported container item for transfer WAL:
 private static ItemFingerprint withThermal(ItemStack stack, ItemFingerprint base) {
 String encoded = stack.get(MmmComponents.THERMAL_CONTENTS);
 if (encoded == null) return base;
-ThermalContents.fromStack(stack);
+ContainerItemStacks.thermalContents(stack);
 return new ItemFingerprint(base.kind, base.nanos, base.solidVolumeSvq, base.materialId, base.massBits, encoded);
 }
 
@@ -259,7 +260,7 @@ ThermalContents contents = ThermalContents.decode(thermalContents);
 contents.validateRegistryFingerprint(fingerprint);
 ThermalContents expected = switch (kind) {
 case WATER_BUCKET -> ThermalContents.forPureWater(fingerprint,
-cc.ecisr.mmm.item.ContainerFluidLedger.NANOS_PER_BLOCK, contents.internalEnergy());
+cc.ecisr.mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK, contents.internalEnergy());
 case PARTIAL -> ThermalContents.forPureWater(fingerprint, nanos, contents.internalEnergy());
 case MATERIAL_BUCKET -> ThermalContents.forMixture(fingerprint,
 FluidMixture.decode(materialId), contents.internalEnergy());
@@ -286,7 +287,7 @@ if (mixture.totalVolumeNanos() != nanos
 || Double.doubleToRawLongBits(mixture.totalMass()) != massBits) {
 throw new IllegalStateException("Material WAL fingerprint ledgers disagree");
 }
-yield mixture.toStack();
+yield ContainerItemStacks.toStack(mixture);
 }
 case CHEMICAL_BUCKET -> {
 ChemicalContents contents = ChemicalContents.decode(materialId);
@@ -294,7 +295,7 @@ if (contents.totalVolumeNanos() != nanos
 || Double.doubleToRawLongBits(contents.totalMass()) != massBits) {
 throw new IllegalStateException("Chemical WAL fingerprint ledgers disagree");
 }
-yield contents.toStack();
+yield ContainerItemStacks.toStack(contents);
 }
 case EMPTY_GRANULAR_CONTAINER -> new ItemStack(cc.ecisr.mmm.item.MmmItems.GRANULAR_CONTAINER);
 case GRANULAR_CONTAINER -> {
@@ -303,12 +304,12 @@ if (contents.totalSolidVolumeSvq() != solidVolumeSvq
 || Double.doubleToRawLongBits(contents.totalMass()) != massBits) {
 throw new IllegalStateException("Granular WAL fingerprint ledgers disagree");
 }
-yield contents.toStack();
+yield ContainerItemStacks.toStack(contents);
 }
 };
 if (thermalContents != null) {
 stack.set(MmmComponents.THERMAL_CONTENTS, thermalContents);
-ThermalContents.fromStack(stack);
+ContainerItemStacks.thermalContents(stack);
 }
 return stack;
 }

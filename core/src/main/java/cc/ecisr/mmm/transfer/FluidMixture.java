@@ -1,7 +1,6 @@
-package cc.ecisr.mmm.item;
+package cc.ecisr.mmm.transfer;
 
-import net.minecraft.resources.Identifier;
-import net.minecraft.world.item.ItemStack;
+import cc.ecisr.mmm.api.StableId;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -92,51 +91,13 @@ public record FluidMixture(List<Component> components) {
 		return new FluidMixture(components);
 	}
 
-	public static FluidMixture fromStack(ItemStack stack) {
-		if (!(stack.getItem() instanceof MaterialBucketItem)) return null;
-		if (stack.get(MmmComponents.CHEMICAL_CONTENTS) != null) return null;
-		long volume = MaterialBucketItem.volume(stack);
-		if (volume <= 0L) return null;
-		String encoded = stack.get(MmmComponents.MIXTURE_COMPONENTS);
-		String materialId = stack.get(MmmComponents.MATERIAL_ID);
-		FluidMixture mixture;
-		if (encoded != null) {
-			if (materialId != null) return null;
-			mixture = decode(encoded);
-			if (mixture.components().size() < 2 || !mixture.encode().equals(encoded)) return null;
-		} else {
-			Long massBits = stack.get(MmmComponents.FLUID_MASS_BITS);
-			if (materialId == null || massBits == null) return null;
-			mixture = new FluidMixture(List.of(new Component(materialId, volume, massBits)));
-		}
-		Long persistedMassBits = stack.get(MmmComponents.FLUID_MASS_BITS);
-		return mixture.totalVolumeNanos() == volume
-				&& persistedMassBits != null
-				&& Double.doubleToRawLongBits(mixture.totalMass()) == persistedMassBits
-				? mixture : null;
-	}
-
-	public ItemStack toStack() {
-		ItemStack stack = new ItemStack(MmmItems.MATERIAL_BUCKET);
-		stack.set(MmmComponents.FLUID_VOLUME, totalVolumeNanos());
-		stack.set(MmmComponents.FLUID_MASS_BITS, Double.doubleToRawLongBits(totalMass()));
-		if (components.size() == 1) {
-			stack.set(MmmComponents.MATERIAL_ID, components.getFirst().materialId());
-		} else {
-			stack.set(MmmComponents.MIXTURE_COMPONENTS, encode());
-		}
-		return stack;
-	}
-
 	public record Component(String materialId, long volumeNanos, long massBits) {
 		public Component(String materialId, long volumeNanos, double mass) {
 			this(materialId, volumeNanos, Double.doubleToRawLongBits(mass));
 		}
 
 		public Component {
-			if (Identifier.tryParse(materialId) == null) {
-				throw new IllegalArgumentException("Invalid fluid-mixture material id: " + materialId);
-			}
+			StableId.require(materialId, 128, "fluid-mixture material id");
 			if (volumeNanos <= 0L || volumeNanos > ContainerFluidLedger.NANOS_PER_BLOCK) {
 				throw new IllegalArgumentException("Invalid fluid-mixture component volume: " + volumeNanos);
 			}

@@ -5,11 +5,12 @@ import cc.ecisr.mmm.block.ThermalReservoirBlockEntity;
 import cc.ecisr.mmm.logging.MmmCommandLog;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.FluidMaterial;
-import cc.ecisr.mmm.item.ContainerFluidLedger;
-import cc.ecisr.mmm.item.ChemicalContents;
-import cc.ecisr.mmm.item.FluidMixture;
-import cc.ecisr.mmm.item.GranularContents;
+import cc.ecisr.mmm.transfer.ContainerFluidLedger;
+import cc.ecisr.mmm.transfer.ChemicalContents;
+import cc.ecisr.mmm.transfer.FluidMixture;
+import cc.ecisr.mmm.transfer.GranularContents;
 import cc.ecisr.mmm.item.MmmItems;
+import cc.ecisr.mmm.item.ContainerItemStacks;
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
@@ -261,12 +262,12 @@ public final class MmmCommands {
 			stack = new ItemStack(MmmItems.MATERIAL_BUCKET);
 			description = "空材料桶";
 		} else if ("water_oil_mix".equals(requested)) {
-			stack = new FluidMixture(List.of(
+			stack = ContainerItemStacks.toStack(new FluidMixture(List.of(
 					new FluidMixture.Component(BuiltinFluidMaterials.WATER.id(),
 							ContainerFluidLedger.NANOS_PER_BLOCK / 2L, 4.0 * BuiltinFluidMaterials.WATER.referenceDensity()),
 					new FluidMixture.Component(BuiltinFluidMaterials.OIL.id(),
 							ContainerFluidLedger.NANOS_PER_BLOCK / 2L, 4.0 * BuiltinFluidMaterials.OIL.referenceDensity())
-			)).toStack();
+			)));
 			description = "半水半油混合材料桶";
 		} else {
 			FluidMaterial material = switch (requested) {
@@ -276,8 +277,8 @@ public final class MmmCommands {
 				default -> null;
 			};
 			if (material == null) return fail(source, "未知材料：" + requested);
-			stack = new FluidMixture(List.of(new FluidMixture.Component(material.id(),
-					ContainerFluidLedger.NANOS_PER_BLOCK, 8.0 * material.referenceDensity()))).toStack();
+			stack = ContainerItemStacks.toStack(new FluidMixture(List.of(new FluidMixture.Component(material.id(),
+					ContainerFluidLedger.NANOS_PER_BLOCK, 8.0 * material.referenceDensity()))));
 			description = material.id() + " 满材料桶";
 		}
 		if (!"empty".equals(requested)) service.attachDebugLiquidThermalContents(stack);
@@ -308,7 +309,7 @@ public final class MmmCommands {
 			double mass = SolidVolume.toCellVolume(svq) * material.referenceDensity();
 			GranularTransferLedger ledger = new GranularTransferLedger(List.of(
 					new GranularTransferLedger.Group(material.id(), svq, mass, null)));
-			stack = GranularContents.fromLedger(ledger, registry, null).toStack();
+			stack = ContainerItemStacks.toStack(GranularContents.fromLedger(ledger, registry, null));
 			description = material.id() + " 满干颗粒容器";
 		}
 		if (!player.getInventory().add(stack)) player.drop(stack, false);
@@ -353,7 +354,8 @@ public final class MmmCommands {
 			ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
 					BuiltinFluidMaterials.WATER.id(), false, 1.0, mass, mixture.massResidualBits(),
 					mixture.stableAmounts(registry))));
-			stack = ChemicalContents.fromLedger(ledger, registry, ContainerFluidLedger.NANOS_PER_BLOCK).toStack();
+			stack = ContainerItemStacks.toStack(
+					ChemicalContents.fromLedger(ledger, registry, ContainerFluidLedger.NANOS_PER_BLOCK));
 			service.attachDebugLiquidThermalContents(stack);
 		}
 		if (!player.getInventory().add(stack)) player.drop(stack, false);

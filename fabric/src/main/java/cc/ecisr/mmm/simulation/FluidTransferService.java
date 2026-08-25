@@ -2,16 +2,17 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
-import cc.ecisr.mmm.item.ContainerFluidLedger;
-import cc.ecisr.mmm.item.ChemicalContents;
-import cc.ecisr.mmm.item.FluidMixture;
+import cc.ecisr.mmm.transfer.ContainerFluidLedger;
+import cc.ecisr.mmm.transfer.ChemicalContents;
+import cc.ecisr.mmm.transfer.FluidMixture;
 import cc.ecisr.mmm.item.GranularContainerItem;
-import cc.ecisr.mmm.item.GranularContents;
+import cc.ecisr.mmm.transfer.GranularContents;
 import cc.ecisr.mmm.item.MaterialBucketItem;
 import cc.ecisr.mmm.item.PartialWaterBucketItem;
 import cc.ecisr.mmm.item.MmmItems;
 import cc.ecisr.mmm.item.MmmComponents;
-import cc.ecisr.mmm.item.ThermalContents;
+import cc.ecisr.mmm.item.ContainerItemStacks;
+import cc.ecisr.mmm.transfer.ThermalContents;
 import cc.ecisr.mmm.granular.GranularTransferLedger;
 import cc.ecisr.mmm.granular.SolidVolume;
 import net.minecraft.core.BlockPos;
@@ -147,7 +148,7 @@ public final class FluidTransferService {
 			if (!service.granularFeatureEnabled() || !region.domain().hasGranularState()
 					|| !region.controllerManaged()) return stack;
 			try {
-				heldGranular = GranularContents.fromStack(stack, service.granularRegistry(),
+				heldGranular = ContainerItemStacks.granularContents(stack, service.granularRegistry(),
 						service.chemistryFeatureEnabled() ? service.chemicalRegistry() : null);
 			} catch (RuntimeException invalid) {
 				return stack;
@@ -392,7 +393,7 @@ public final class FluidTransferService {
 		}
 		GranularContents contents;
 		try {
-			contents = GranularContents.fromStack(held, service.granularRegistry(),
+			contents = ContainerItemStacks.granularContents(held, service.granularRegistry(),
 					service.chemistryFeatureEnabled() ? service.chemicalRegistry() : null);
 		} catch (RuntimeException invalid) {
 			return new TransferOutcome(false, true, held, "颗粒容器内容损坏、双重表示或 registry 不匹配");
@@ -522,7 +523,7 @@ public final class FluidTransferService {
 		long poured = settledNanos(inserted.volume(), volumeNanos);
 		if (poured != plannedNanos) throw new IllegalStateException("Thermal insertion settlement changed after planning");
 		ItemStack after = withVolume(volumeNanos - poured);
-		if (thermalSplit != null && volumeNanos > poured) ThermalContents.attach(
+		if (thermalSplit != null && volumeNanos > poured) ContainerItemStacks.attachThermal(
 				after, service.thermalRegistryFingerprint(), thermalSplit.remainingEnergy());
 		region.wakeForActivity();
 		if (thermalSplit != null) region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
@@ -551,7 +552,7 @@ public final class FluidTransferService {
 		if (region.domain().hasThermalState()) {
 			double baseEnergy = baseThermal == null ? 0.0 : baseThermal.internalEnergy();
 			double finalEnergy = baseEnergy + extracted.internalEnergy();
-			ThermalContents.attach(after, service.thermalRegistryFingerprint(), finalEnergy);
+			ContainerItemStacks.attachThermal(after, service.thermalRegistryFingerprint(), finalEnergy);
 			thermalEnergy = finalEnergy - baseEnergy;
 			region.domain().settleExternalContainerExtraction(extracted.internalEnergy(), thermalEnergy);
 		}
@@ -573,7 +574,7 @@ public final class FluidTransferService {
 		try {
 			portions = planMaterialInsertion(domain, mixture);
 		} catch (IllegalArgumentException unknownMaterial) {
-			return new TransferOutcome(false, true, mixture.toStack(),
+			return new TransferOutcome(false, true, ContainerItemStacks.toStack(mixture),
 					"区域材料 registry 不接受该混合物：" + unknownMaterial.getMessage());
 		}
 		long plannedNanos = 0L;
@@ -588,7 +589,7 @@ public final class FluidTransferService {
 				: domain.tryInsertExactMixture(cell[0], cell[1], cell[2], portions, maxRadius, externalSource,
 						coupledEnergy);
 		if (!inserted.transferred()) {
-			return new TransferOutcome(false, true, mixture.toStack(), "空间或 marker 预算不足，未能注入混合物");
+			return new TransferOutcome(false, true, ContainerItemStacks.toStack(mixture), "空间或 marker 预算不足，未能注入混合物");
 		}
 		MaterialInsertionSettlement settlement = settleMaterialInsertion(mixture, inserted.portions());
 		if (settlement.insertedNanos() != plannedNanos) {
@@ -596,8 +597,8 @@ public final class FluidTransferService {
 		}
 		ItemStack after = settlement.remaining() == null
 				? new ItemStack(MmmItems.MATERIAL_BUCKET)
-				: settlement.remaining().toStack();
-		if (thermalSplit != null && settlement.remaining() != null) ThermalContents.attach(
+				: ContainerItemStacks.toStack(settlement.remaining());
+		if (thermalSplit != null && settlement.remaining() != null) ContainerItemStacks.attachThermal(
 				after, service.thermalRegistryFingerprint(), thermalSplit.remainingEnergy());
 		region.wakeForActivity();
 		if (thermalSplit != null) region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
@@ -613,11 +614,11 @@ public final class FluidTransferService {
 			boolean externalSource, ThermalContents thermalContents
 	) {
 		FlipFluidDomain domain = region.domain();
-		if (!domain.hasChemistryState()) return new TransferOutcome(false, true, contents.toStack(), "该区域不是化学区域");
+		if (!domain.hasChemistryState()) return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents), "该区域不是化学区域");
 		try {
 			contents.validateAgainst(domain.chemicalParcels().registry());
 		} catch (IllegalArgumentException invalid) {
-			return new TransferOutcome(false, true, contents.toStack(), "化学桶 registry 或账本不合法：" + invalid.getMessage());
+			return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents), "化学桶 registry 或账本不合法：" + invalid.getMessage());
 		}
 		double spatialCellVolume = Math.max(0.0, domain.totalOpenVolumeExact() - domain.totalVolumeExact());
 		double markerCellVolume = Math.max(0, domain.maximumParticleCount() - domain.particleCount()) * 0.125;
@@ -647,8 +648,8 @@ public final class FluidTransferService {
 			}
 			region.wakeForActivity();
 			ItemStack after = split.remaining() == null
-					? new ItemStack(MmmItems.MATERIAL_BUCKET) : split.remaining().toStack();
-			if (thermalSplit != null && split.remaining() != null) ThermalContents.attach(
+					? new ItemStack(MmmItems.MATERIAL_BUCKET) : ContainerItemStacks.toStack(split.remaining());
+			if (thermalSplit != null && split.remaining() != null) ContainerItemStacks.attachThermal(
 					after, service.thermalRegistryFingerprint(), thermalSplit.remainingEnergy());
 			if (thermalSplit != null) region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
 			return new TransferOutcome(true, true, after,
@@ -656,7 +657,7 @@ public final class FluidTransferService {
 							/ ContainerFluidLedger.NANOS_PER_BLOCK), candidate,
 					coupledEnergy);
 		}
-		return new TransferOutcome(false, true, contents.toStack(), "空间、marker 或化学预算不足，未能注入");
+		return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents), "空间、marker 或化学预算不足，未能注入");
 	}
 
 	private static TransferOutcome scoopChemicalIntoCell(
@@ -684,8 +685,8 @@ public final class FluidTransferService {
 		long taken = plannedNanos[0];
 		ChemicalContents contents = plannedContents[0];
 		Double thermalEnergy = region.domain().hasThermalState() ? extracted.internalEnergy() : null;
-		ItemStack after = contents.toStack();
-		if (thermalEnergy != null) ThermalContents.attach(after, service.thermalRegistryFingerprint(), thermalEnergy);
+		ItemStack after = ContainerItemStacks.toStack(contents);
+		if (thermalEnergy != null) ContainerItemStacks.attachThermal(after, service.thermalRegistryFingerprint(), thermalEnergy);
 		region.wakeForActivity();
 		if (thermalEnergy != null) region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
 		return new TransferOutcome(true, false, after,
@@ -713,9 +714,9 @@ public final class FluidTransferService {
 		FluidMixture mixture = mixtureFromExtraction(domain, extracted.portions(), capacityNanos);
 		long taken = mixture.totalVolumeNanos();
 		Double thermalEnergy = domain.hasThermalState() ? extracted.internalEnergy() : null;
-		ItemStack after = mixture.toStack();
+		ItemStack after = ContainerItemStacks.toStack(mixture);
 		if (thermalEnergy != null) {
-			ThermalContents.attach(after, service.thermalRegistryFingerprint(), thermalEnergy);
+			ContainerItemStacks.attachThermal(after, service.thermalRegistryFingerprint(), thermalEnergy);
 		}
 		region.wakeForActivity();
 		if (thermalEnergy != null) {
@@ -736,13 +737,13 @@ public final class FluidTransferService {
 			ledger = contents.toLedger(service.granularRegistry(),
 					service.chemistryFeatureEnabled() ? service.chemicalRegistry() : null);
 		} catch (RuntimeException invalid) {
-			return new TransferOutcome(false, true, contents.toStack(),
+			return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents),
 					"颗粒容器 registry 或账本不合法：" + invalid.getMessage());
 		}
 		FlipFluidDomain.GranularInsertion inserted = region.domain().tryInsertExactGranular(
 				cell[0], cell[1], cell[2], ledger, maxRadius, externalSource);
 		if (!inserted.inserted()) {
-			return new TransferOutcome(false, true, contents.toStack(),
+			return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents),
 					"空间、颗粒 parcel 或组成预算不足，未能注入：" + inserted.failure());
 		}
 		if (inserted.solidVolumeSvq() != contents.totalSolidVolumeSvq()
@@ -777,7 +778,7 @@ public final class FluidTransferService {
 		long taken = extracted.ledger().totalSolidVolumeSvq();
 		if (taken != planned[0].totalSolidVolumeSvq()) throw new IllegalStateException("颗粒舀取 SVQ 账本不一致");
 		region.wakeForActivity();
-		return new TransferOutcome(true, false, planned[0].toStack(),
+		return new TransferOutcome(true, false, ContainerItemStacks.toStack(planned[0]),
 				String.format("已舀取 %.2f%% 干式容器（%d 种材料）",
 						100.0 * taken / SolidVolume.SVQ_PER_BV, planned[0].groups().size()), taken);
 	}
@@ -872,7 +873,7 @@ public final class FluidTransferService {
 				|| kind == TransferKind.GRANULAR_SCOOP) return null;
 		ThermalContents contents;
 		try {
-			contents = ThermalContents.fromStack(stack);
+			contents = ContainerItemStacks.thermalContents(stack);
 		} catch (RuntimeException invalid) {
 			return "容器热状态损坏或与物质库存不一致；转移保持不变";
 		}
@@ -893,7 +894,7 @@ public final class FluidTransferService {
 	}
 
 	private static ThermalContents thermalContents(ItemStack stack) {
-		return ThermalContents.fromStack(stack);
+		return ContainerItemStacks.thermalContents(stack);
 	}
 
 	static double coupledSplitEnergy(ThermalContents contents, long selectedNanos, long totalNanos) {

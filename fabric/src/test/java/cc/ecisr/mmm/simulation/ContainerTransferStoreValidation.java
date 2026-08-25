@@ -9,11 +9,11 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
-import cc.ecisr.mmm.item.ContainerFluidLedger;
-import cc.ecisr.mmm.item.ChemicalContents;
-import cc.ecisr.mmm.item.FluidMixture;
-import cc.ecisr.mmm.item.GranularContents;
-import cc.ecisr.mmm.item.ThermalContents;
+import cc.ecisr.mmm.transfer.ContainerFluidLedger;
+import cc.ecisr.mmm.transfer.ChemicalContents;
+import cc.ecisr.mmm.transfer.FluidMixture;
+import cc.ecisr.mmm.transfer.GranularContents;
+import cc.ecisr.mmm.transfer.ThermalContents;
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.granular.BuiltinGranularDefinitions;
@@ -568,7 +568,7 @@ public final class ContainerTransferStoreValidation {
 		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 64);
 		domain.tryInsertExactVolume(2, 2, 2, 0.5F, 1);
 		long requested = FluidTransferService.extractableNanos(domain, new int[] {2, 2, 2},
-				cc.ecisr.mmm.item.ContainerFluidLedger.NANOS_PER_BLOCK, 1, 0);
+				cc.ecisr.mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK, 1, 0);
 		check(requested == 62_500_000L, "partial outlet did not quantize the available half-cell volume");
 		FlipFluidDomain.ExactVolumeTransfer transfer = domain.tryExtractExactVolume(
 				2, 2, 2, FluidTransferService.nanosToCellVolume(requested), 1, 0);

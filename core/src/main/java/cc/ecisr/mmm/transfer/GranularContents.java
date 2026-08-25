@@ -1,13 +1,12 @@
-package cc.ecisr.mmm.item;
+package cc.ecisr.mmm.transfer;
 
+import cc.ecisr.mmm.api.StableId;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.granular.GranularLimits;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.granular.GranularTransferLedger;
 import cc.ecisr.mmm.granular.SolidCompositionRecord;
 import cc.ecisr.mmm.granular.SolidVolume;
-import net.minecraft.resources.Identifier;
-import net.minecraft.world.item.ItemStack;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -165,31 +164,6 @@ public record GranularContents(String registryFingerprint, long svqPerBlockVolum
 		return contents;
 	}
 
-	public static GranularContents fromStack(
-			ItemStack stack, GranularRegistry registry, ChemicalRegistry chemistry
-	) {
-		if (!(stack.getItem() instanceof GranularContainerItem) || hasLiquidComponents(stack)) return null;
-		String encoded = stack.get(MmmComponents.GRANULAR_CONTENTS);
-		if (encoded == null) return null;
-		GranularContents contents = decode(encoded); contents.validateAgainst(registry, chemistry); return contents;
-	}
-
-	public ItemStack toStack() {
-		ItemStack stack = new ItemStack(MmmItems.GRANULAR_CONTAINER);
-		stack.set(MmmComponents.GRANULAR_CONTENTS, encode());
-		return stack;
-	}
-
-	static boolean hasLiquidComponents(ItemStack stack) {
-		return stack.get(MmmComponents.WATER_VOLUME) != null
-				|| stack.get(MmmComponents.FLUID_VOLUME) != null
-				|| stack.get(MmmComponents.MATERIAL_ID) != null
-				|| stack.get(MmmComponents.FLUID_MASS_BITS) != null
-				|| stack.get(MmmComponents.MIXTURE_COMPONENTS) != null
-				|| stack.get(MmmComponents.CHEMICAL_CONTENTS) != null
-				|| stack.get(MmmComponents.THERMAL_CONTENTS) != null;
-	}
-
 	private static boolean massClose(double left, double right) {
 		return Math.abs(left - right) <= Math.max(1.0E-9, Math.max(Math.ulp(left), Math.ulp(right)) * 8.0);
 	}
@@ -201,7 +175,7 @@ public record GranularContents(String registryFingerprint, long svqPerBlockVolum
 		private static final Comparator<Group> ORDER = Comparator.comparing(Group::materialId);
 
 		public Group {
-			if (Identifier.tryParse(materialId) == null || solidVolumeSvq <= 0L
+			if (!StableId.isValid(materialId, 128) || solidVolumeSvq <= 0L
 					|| solidVolumeSvq > SolidVolume.SVQ_PER_BV
 					|| !(Double.isFinite(Double.longBitsToDouble(massBits)) && Double.longBitsToDouble(massBits) > 0.0)
 					|| composition == null || composition.size() > GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES) {
@@ -243,7 +217,7 @@ public record GranularContents(String registryFingerprint, long svqPerBlockVolum
 
 	public record SpeciesAmount(String speciesId, long amountQuanta) {
 		public SpeciesAmount {
-			if (Identifier.tryParse(speciesId) == null || amountQuanta <= 0L) {
+			if (!StableId.isValid(speciesId, 128) || amountQuanta <= 0L) {
 				throw new IllegalArgumentException("Invalid granular composition amount");
 			}
 		}

@@ -1,4 +1,4 @@
-package cc.ecisr.mmm.item;
+package cc.ecisr.mmm.transfer;
 
 /**
  * Pure-Java container volume arithmetic on nanovolume quanta (1e-9 m³). The container-side truth
