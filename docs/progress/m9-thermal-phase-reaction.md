@@ -657,4 +657,12 @@ checkpoint 21→22 的 exact gas ledger 分解进一步确认：dry-air source/s
 `clean assemble compileTestJava --offline --no-daemon` 从零成功（23 s）。0.15.4 部署 JAR SHA-256 为
 `E42EED93A1EFD09FFB7ECAAF9927602EC0A0D91EACDD4BD29252BBA0D63423DE`；mods 目录仅启用主 Mod
 `realwater-0.15.4.jar` 与不同 ID 的只读 `realwater_gpu_probe` 0.1.16，0.15.3 已可恢复地改名为
-`realwater-0.15.3-pre-gas-topology-persistence.jar.disabled`。原世界单一恢复/重启实机结果待用户确认后补记。
+`realwater-0.15.3-pre-gas-topology-persistence.jar.disabled`。
+
+同日用户在原世界完成唯一最终场景：先把 `-4,-60,0` reservoir 中和为 293.15 K；checkpoint 22 稳定报告
+`Restored gas sealed-node count does not match derived topology`，保留 384 markers / 31.909 cells；显式执行
+`regions recoverprevious 22` 后 HEAD 原子切回 21。退出并重新进入后，区域恢复为 ready：4.00 BV / 31.99 cells /
+432 markers、gas node `p=+2292 Pa`、water vapor 1.016 kg / 1.35662 m3std、thermal `U=2.39183e6 J`、
+`pending-work=no`、audit closed；随后原子发布新的 checkpoint 22。再次退出并进入，完全相同的 marker、gas、thermal
+与 audit 状态继续恢复，用户确认流程符合预期。由此 checkpoint 故障恢复、可视快照、新代发布和真实跨重启边界全部通过，
+M9 以主 Mod 0.15.4 正式关闭；下一产品阶段为 M10。

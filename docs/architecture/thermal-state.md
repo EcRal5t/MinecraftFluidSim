@@ -168,6 +168,13 @@ pressure 记一次 `-p delta V`，联合验证 carrier 能量后清除记录。�
 清除、在 `empty` 中吞掉或因 thermal sleep 丢失。气液相变已由 gas available-volume remap 当场结算 gas compression work，
 不再生成同一 pending condensed-volume work。
 
+首版固液 transition 会读取 cell 的 `P_abs=P_atm+p_projection`，但该压力只用于 definition 的
+`minimumPressurePa..maximumPressurePa` 有效域门；域内熔点仍是 definition 的单一 `equilibriumTemperatureK`，没有实现
+Clapeyron melting curve、压力相关 latent state 或高压冰多晶型。液气 transition 不同：它已经使用 sealed node 的绝对压力
+与目标蒸气组分分压计算 saturation direction。未来若只增加无迟滞的 `T_eq(p)`，可通过带 stable model ID/参数的新
+world thermal registry schema 扩展而不增加逐 carrier 真值；旧 snapshot 必须继续解释为 constant-temperature model。
+若加入过冷/过热成核、迟滞或高压晶型历史，则会新增路径相关状态，必须另升完整 region-state 边界，不能伪装成定义修订。
+
 ## 非等温气体与沸腾/冷凝
 
 完成独立 gas v4 基态后，v6 联合状态复用其 gas component/nanos/mass/species 语义并增加节点总 `U`。节点温度与压力：
