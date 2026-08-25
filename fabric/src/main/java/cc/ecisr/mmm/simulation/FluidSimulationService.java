@@ -2586,49 +2586,47 @@ public final class FluidSimulationService {
 
 	public void sendSnapshotFor(ServerPlayer player, FluidRegion region) {
 		if (region != null && region.solverLoaded() && player.level().dimension().equals(region.dimension())) {
-			if (thermalFeatureEnabled) {
-				FluidProtocolServer.send(player, createThermalSnapshot(region));
-			} else if (granularFeatureEnabled) {
-				FluidProtocolServer.send(player, createGranularSnapshot(region));
-			} else if (chemistryFeatureEnabled) {
-				FluidProtocolServer.send(player, createChemicalSnapshot(region));
-			} else if (materialFeatureEnabled) {
-				FluidProtocolServer.send(player, createMaterialSnapshot(region));
-			} else {
-				FluidProtocolServer.send(player, createSnapshot(region));
-			}
+			createSnapshotDispatch(region).sendTo(player);
 		}
 	}
 
 	public void sendSnapshots(ServerPlayer player) {
 		for (FluidRegion region : regionManager.regions()) {
 			if (!region.solverLoaded() || !player.level().dimension().equals(region.dimension())) continue;
-			if (thermalFeatureEnabled) FluidProtocolServer.send(player, createThermalSnapshot(region));
-			else if (granularFeatureEnabled) FluidProtocolServer.send(player, createGranularSnapshot(region));
-			else if (chemistryFeatureEnabled) FluidProtocolServer.send(player, createChemicalSnapshot(region));
-			else if (materialFeatureEnabled) FluidProtocolServer.send(player, createMaterialSnapshot(region));
-			else FluidProtocolServer.send(player, createSnapshot(region));
+			createSnapshotDispatch(region).sendTo(player);
 		}
 	}
 
 	public void sendSnapshot(ServerLevel level, FluidRegion region) {
 		if (!region.solverLoaded() || !level.dimension().equals(region.dimension())) return;
+		SnapshotDispatch dispatch = createSnapshotDispatch(region);
+		for (ServerPlayer player : level.players()) dispatch.sendTo(player);
+	}
+
+	private SnapshotDispatch createSnapshotDispatch(FluidRegion region) {
 		if (thermalFeatureEnabled) {
 			FluidThermalSnapshotPayload payload = createThermalSnapshot(region);
-			for (ServerPlayer player : level.players()) FluidProtocolServer.send(player, payload);
-		} else if (granularFeatureEnabled) {
-			FluidGranularSnapshotPayload payload = createGranularSnapshot(region);
-			for (ServerPlayer player : level.players()) FluidProtocolServer.send(player, payload);
-		} else if (chemistryFeatureEnabled) {
-			FluidChemicalSnapshotPayload payload = createChemicalSnapshot(region);
-			for (ServerPlayer player : level.players()) FluidProtocolServer.send(player, payload);
-		} else if (materialFeatureEnabled) {
-			FluidMaterialSnapshotPayload payload = createMaterialSnapshot(region);
-			for (ServerPlayer player : level.players()) FluidProtocolServer.send(player, payload);
-		} else {
-			FluidSnapshotPayload payload = createSnapshot(region);
-			for (ServerPlayer player : level.players()) FluidProtocolServer.send(player, payload);
+			return player -> FluidProtocolServer.send(player, payload);
 		}
+		if (granularFeatureEnabled) {
+			FluidGranularSnapshotPayload payload = createGranularSnapshot(region);
+			return player -> FluidProtocolServer.send(player, payload);
+		}
+		if (chemistryFeatureEnabled) {
+			FluidChemicalSnapshotPayload payload = createChemicalSnapshot(region);
+			return player -> FluidProtocolServer.send(player, payload);
+		}
+		if (materialFeatureEnabled) {
+			FluidMaterialSnapshotPayload payload = createMaterialSnapshot(region);
+			return player -> FluidProtocolServer.send(player, payload);
+		}
+		FluidSnapshotPayload payload = createSnapshot(region);
+		return player -> FluidProtocolServer.send(player, payload);
+	}
+
+	@FunctionalInterface
+	private interface SnapshotDispatch {
+		void sendTo(ServerPlayer player);
 	}
 
 	private static FluidSnapshotPayload createSnapshot(FluidRegion region) {

@@ -417,7 +417,7 @@ final class FlipThermalState {
 				.withMechanicalWork(plan.mechanicalWork()).withRoundoff(plan.roundoff());
 	}
 
-	Runnable planGasTransfer(
+	AirNetwork.TransferCommit planGasTransfer(
 			int sourceNode, int targetNode, GasInventory moved,
 			GasInventory sourceAfter, GasInventory targetAfter, AirNetwork network
 	) {
@@ -445,11 +445,11 @@ final class FlipThermalState {
 		}
 		SignedDyadic after = SignedDyadic.sum(result);
 		SignedDyadic roundoff = after.subtract(before).subtract(imported).add(exported);
-		SignedDyadic finalImported = imported, finalExported = exported;
+		ThermalAuditLedger auditAfter = audit.withExternalSourceEnergy(imported)
+				.withExternalSinkEnergy(exported).withRoundoff(roundoff);
 		return () -> {
 			gasNodeEnergy = result;
-			audit = audit.withExternalSourceEnergy(finalImported).withExternalSinkEnergy(finalExported)
-					.withRoundoff(roundoff);
+			audit = auditAfter;
 		};
 	}
 

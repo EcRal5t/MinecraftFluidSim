@@ -7,6 +7,7 @@ import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ExactRational;
+import cc.ecisr.mmm.fluid.air.AirEdge;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.GasAuditLedger;
 import cc.ecisr.mmm.fluid.air.GasComponentAmount;
@@ -3538,16 +3539,23 @@ public final class FlipFluidDomain {
 		if (hasPendingPhaseVolumeWork()) {
 			throw new IllegalStateException("Pending phase volume/work must be projected before operator clear");
 		}
-		return new OperatorClearPlan(planRemoveAllCondensedExact(), planRemoveAllGranularExact());
+		CondensedClearPlan condensed = planRemoveAllCondensedExact();
+		GranularClearPlan granular = planRemoveAllGranularExact();
+		GasTopologyPlan gasTopology = null;
+		if (airCellNodeId != null) {
+			ensureGrid();
+			gasTopology = planGasTopology(airScanner.scan(
+					solid, new int[cellCount], new float[cellCount], cutCells, null, sealedDomainBoundary));
+		}
+		return new OperatorClearPlan(condensed, granular, gasTopology);
 	}
 
-	/** Clears condensed inventories, then remaps retained gas truth against the newly empty geometry. */
+	/** Clears all condensed owners and publishes the already-planned retained-gas topology. */
 	public OperatorClear commitOperatorClear(OperatorClearPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Operator clear plan is missing");
 		CondensedClear condensed = commitRemoveAllCondensedExact(plan.condensed());
 		GranularClear granular = commitRemoveAllGranularExact(plan.granular());
-		ensureGrid();
-		if (airCellNodeId != null) refreshGasTopology();
+		if (plan.gasTopology != null) commitGasTopology(plan.gasTopology);
 		return new OperatorClear(condensed, granular);
 	}
 
@@ -3583,7 +3591,22 @@ public final class FlipFluidDomain {
 		public CondensedClearPlan { coherentGroups = List.copyOf(coherentGroups); }
 	}
 	public record OperatorClear(CondensedClear condensed, GranularClear granular) { }
-	public record OperatorClearPlan(CondensedClearPlan condensed, GranularClearPlan granular) { }
+	public static final class OperatorClearPlan {
+		private final CondensedClearPlan condensed;
+		private final GranularClearPlan granular;
+		private final GasTopologyPlan gasTopology;
+
+		private OperatorClearPlan(
+				CondensedClearPlan condensed, GranularClearPlan granular, GasTopologyPlan gasTopology
+		) {
+			this.condensed = condensed;
+			this.granular = granular;
+			this.gasTopology = gasTopology;
+		}
+
+		public CondensedClearPlan condensed() { return condensed; }
+		public GranularClearPlan granular() { return granular; }
+	}
 	public record CollisionEdit(int x, int y, int z, int mask) { }
 
 	/** Opaque, single-use permit returned only after every collision owner accepts the batch. */
@@ -4551,6 +4574,11 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	private void refreshGasTopology() {
 		AirCavityScanner.Result result = airScanner.scan(solid, markerCount, volume, cutCells,
 				pressureGranularCoupling, sealedDomainBoundary);
+		commitGasTopology(planGasTopology(result));
+	}
+
+	/** Builds the complete gas/energy topology candidate before any owner is mutated. */
+	private GasTopologyPlan planGasTopology(AirCavityScanner.Result result) {
 		int sealed = result.sealedNodeCount();
 		boolean thermalGas = thermalState != null && thermalState.gasModelBound();
 		double[] availableVolumes = result.sealedAvailableVolume();
@@ -4646,16 +4674,32 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 		FlipThermalState.GasRemapPlan thermalPlan = !thermalGas ? null : thermalState.planGasRemap(
 				airNetwork, inventories, availableVolumes, mixedEnergy, inheritedAvailable, sourceEnergy, sinkEnergy);
-		airNetwork.remapNodes(availableVolumes, inventories, sourceDelta, sinkDelta);
-		if (thermalPlan != null) thermalState.commitGasRemap(thermalPlan);
+		ArrayList<AirEdge> edges = new ArrayList<>(result.geometricEdges().size());
 		for (AirCavityScanner.GeometricEdge edge : result.geometricEdges()) {
-			airNetwork.addOrMergeEdge(edge.firstNode(), edge.secondNode(), edge.areaSquareMeters(), 0.65);
+			edges.add(new AirEdge(edge.firstNode(), edge.secondNode(), edge.areaSquareMeters(), 0.65));
 		}
+		AirNetwork.RemapPlan gasPlan = airNetwork.planRemapNodes(
+				availableVolumes, inventories, sourceDelta, sinkDelta, edges);
+		return new GasTopologyPlan(result, gasPlan, thermalPlan);
+	}
+
+	/** Publishes a fully planned topology; all fallible physics and ledger work happened above. */
+	private void commitGasTopology(GasTopologyPlan plan) {
+		if (plan.thermalPlan() != null) thermalState.commitGasRemap(plan.thermalPlan());
+		airNetwork.commitRemapNodes(plan.gasPlan());
+		AirCavityScanner.Result result = plan.scan();
+		int sealed = result.sealedNodeCount();
 		airCellNodeId = result.cellNodeId();
 		airCellLineageNodeId = result.cellLineageNodeId();
 		previousSealedNodeCount = sealed;
 		gasPressureActive = sealed > 0;
 	}
+
+	private record GasTopologyPlan(
+			AirCavityScanner.Result scan,
+			AirNetwork.RemapPlan gasPlan,
+			FlipThermalState.GasRemapPlan thermalPlan
+	) { }
 
 	/**
 	 * Brings the derived gas topology to the same carrier geometry that a checkpoint will encode.

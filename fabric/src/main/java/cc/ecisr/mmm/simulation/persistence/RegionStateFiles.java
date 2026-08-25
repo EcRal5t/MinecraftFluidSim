@@ -145,6 +145,7 @@ public final class RegionStateFiles {
 		}
 		if (current == null) {
 			Files.createDirectories(region);
+			forceDirectory(root);
 		}
 
 		String inactive = current == null || current.slot().equals(SLOT_B) ? SLOT_A : SLOT_B;
@@ -165,6 +166,7 @@ public final class RegionStateFiles {
 		Path manifestPath = temporary.resolve(MANIFEST);
 		NbtIo.writeCompressed(codec.encodeManifest(state.manifest()), manifestPath);
 		forceFile(manifestPath);
+		forceDirectory(temporary);
 		injector.check(FaultPoint.AFTER_MANIFEST_WRITE, manifestPath);
 		RegionState verified = readSlot(temporary);
 		verified.validate();
@@ -172,6 +174,7 @@ public final class RegionStateFiles {
 		injector.check(FaultPoint.AFTER_TEMP_VALIDATION, temporary);
 		atomicMover.move(temporary, inactivePath, false);
 		if (!Files.isDirectory(inactivePath) || Files.exists(temporary)) throw new IOException("Atomic slot publisher did not publish " + inactivePath);
+		forceDirectory(region);
 		injector.check(FaultPoint.AFTER_SLOT_PUBLISH, inactivePath);
 		return new PreparedGeneration(id, state.manifest().checkpointGeneration(), inactive, state.manifest().checksum(),
 				current == null ? null : current.generation(), current == null ? null : current.manifestChecksum());
@@ -190,6 +193,7 @@ public final class RegionStateFiles {
 		decodeHead(NbtIo.readCompressed(headTemporary, NbtAccounter.create(MAX_NBT_BYTES)), id);
 		injector.check(FaultPoint.BEFORE_HEAD_PUBLISH, headTemporary);
 		atomicMover.move(headTemporary, region.resolve(HEAD), true);
+		forceDirectory(region);
 		readGeneration(region, readHead(region, id));
 		injector.check(FaultPoint.AFTER_HEAD_PUBLISH, region.resolve(HEAD));
 		return next.generation();
@@ -318,6 +322,7 @@ public final class RegionStateFiles {
 		forceFile(headTemporary);
 		decodeHead(NbtIo.readCompressed(headTemporary, NbtAccounter.create(MAX_NBT_BYTES)), previous.id());
 		atomicMover.move(headTemporary, region.resolve(HEAD), true);
+		forceDirectory(region);
 		readGeneration(region, readHead(region, previous.id()));
 		return restored.generation();
 	}
@@ -412,6 +417,7 @@ public final class RegionStateFiles {
 		readHead(region, id);
 		Path quarantine = root.resolve(".quarantine-" + id + "-" + UUID.randomUUID());
 		atomicMover.move(region, quarantine, false);
+		forceDirectory(root);
 		try { deleteTree(quarantine); } catch (IOException ignored) { }
 		return quarantine;
 	}
@@ -583,6 +589,16 @@ public final class RegionStateFiles {
 
 	private static void forceFile(Path path) throws IOException {
 		try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) { channel.force(true); }
+	}
+
+	/** Publishes directory entries on file systems that expose directory channels (not Windows). */
+	private static void forceDirectory(Path path) throws IOException {
+		if (System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win")) return;
+		try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
+			channel.force(true);
+		} catch (UnsupportedOperationException unsupported) {
+			// The JDK has no portable directory-fsync API; file content is still forced above.
+		}
 	}
 
 	private static void deleteTree(Path path) throws IOException {

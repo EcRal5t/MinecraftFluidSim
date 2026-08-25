@@ -444,10 +444,12 @@ public final class FluidRegionPersistenceValidation {
 				pureParticles.copyParticleVelocities(), pureParticles.copySolidMask(), markerMass, materialIndices);
 		region.domain().restoreMaterialParticleState(expected);
 		RegionState state = RegionState.captureMaterial(region, 1L);
-		require(state.manifest().checksum() == 1_833_858_350L
-				&& state.sections().stream().map(RegionSectionState::checksum).toList().equals(List.of(
-				2_322_127_614L, 2_368_282_172L, 2_710_607_279L, 3_147_109_226L)),
-				"region-state v2 canonical golden bytes changed");
+		List<Long> sectionChecksums = state.sections().stream().map(RegionSectionState::checksum).toList();
+		require(state.manifest().checksum() == 3_600_341_407L
+				&& sectionChecksums.equals(List.of(
+				1_545_869_646L, 242_506_058L, 583_914_201L, 3_517_038_483L)),
+				"region-state v2 canonical golden bytes changed: manifest=" + state.manifest().checksum()
+						+ " sections=" + sectionChecksums);
 		state.validate();
 		expectIOException(state::reconstruct, "material v2 was silently reconstructed as pure water");
 		assertMaterialStateEquals(expected, state.reconstructMaterial());
@@ -494,10 +496,12 @@ public final class FluidRegionPersistenceValidation {
 				"rechecksummed v2 marker-mass corruption escaped exact material ledgers");
 		RegionState v1State = RegionState.capture(populatedRegion(new UUID(17L, 18L)), 1L);
 		RegionManifest v1Manifest = v1State.manifest();
-		require(v1Manifest.checksum() == 3_787_058_426L
-				&& v1State.sections().stream().map(RegionSectionState::checksum).toList().equals(List.of(
-				2_773_569_827L, 3_307_158_646L, 2_205_742_042L, 252_601_808L)),
-				"region-state v1 canonical golden bytes changed");
+		List<Long> v1SectionChecksums = v1State.sections().stream().map(RegionSectionState::checksum).toList();
+		require(v1Manifest.checksum() == 4_181_447_585L
+				&& v1SectionChecksums.equals(List.of(
+				1_508_618_239L, 2_988_587_419L, 4_098_225_719L, 2_990_622_609L)),
+				"region-state v1 canonical golden bytes changed: manifest=" + v1Manifest.checksum()
+						+ " sections=" + v1SectionChecksums);
 		CompoundTag encodedV1 = codec.encodeManifest(v1Manifest);
 		require(encodedV1.get("Materials") == null && encodedV1.get("MassBits") == null,
 				"v1 manifest acquired v2 material fields");

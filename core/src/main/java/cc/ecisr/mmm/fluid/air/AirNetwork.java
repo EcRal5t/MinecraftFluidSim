@@ -31,8 +31,14 @@ public final class AirNetwork {
 
 	@FunctionalInterface
 	public interface TransferPlanner {
-		Runnable plan(int sourceNode, int targetNode, GasInventory moved,
+		TransferCommit plan(int sourceNode, int targetNode, GasInventory moved,
 		              GasInventory sourceAfter, GasInventory targetAfter);
+	}
+
+	/** A fully validated cross-owner commit. Implementations must only publish prepared values. */
+	@FunctionalInterface
+	public interface TransferCommit {
+		void commitPrepared();
 	}
 	/** Reference (ambient) absolute pressure in Pa; gauge zero matches the solver convention. */
 	public static final double REFERENCE_PRESSURE = 101_325.0;
@@ -53,8 +59,8 @@ public final class AirNetwork {
 	/** Converts nanovolume quanta to cubic metres. */
 	public static double cubicMeters(long nanos) { return nanos * AirNode.NANO_VOLUME; }
 
-	private final TreeMap<Integer, AirNode> nodes = new TreeMap<>();
-	private final List<AirEdge> edges = new ArrayList<>();
+	private TreeMap<Integer, AirNode> nodes = new TreeMap<>();
+	private List<AirEdge> edges = new ArrayList<>();
 	private final GasRegistry registry;
 	private int nextNodeId = 1;
 	private GasAuditLedger escapedSink = GasAuditLedger.EMPTY;
@@ -288,11 +294,12 @@ public final class AirNetwork {
 			AirNode targetNode = sealed(target);
 			GasInventory created = registry.createAmbient(nanos);
 			GasInventory targetAfter = targetNode.inventory().merge(created);
-			Runnable thermalCommit = Objects.requireNonNull(
+			TransferCommit thermalCommit = Objects.requireNonNull(
 					transferPlanner.plan(source, target, created, GasInventory.EMPTY, targetAfter), "transfer commit");
-			targetNode.setInventory(targetAfter);
-			finishMutation(before, created, GasInventory.EMPTY);
-			thermalCommit.run();
+			TransferMutation gasCommit = planTransferMutation(before, null, GasInventory.EMPTY,
+					targetNode, targetAfter, created, GasInventory.EMPTY);
+			thermalCommit.commitPrepared();
+			commitTransferMutation(gasCommit);
 			return;
 		}
 		AirNode sourceNode = sealed(source);
@@ -301,20 +308,22 @@ public final class AirNetwork {
 		GasInventory.Split split = sourceNode.inventory().splitTotal(actual);
 		GasInventory moved = split.first();
 		if (target == AMBIENT_NODE) {
-			Runnable thermalCommit = Objects.requireNonNull(
+			TransferCommit thermalCommit = Objects.requireNonNull(
 					transferPlanner.plan(source, target, moved, split.second(), GasInventory.EMPTY), "transfer commit");
-			sourceNode.setInventory(split.second());
-			finishMutation(before, GasInventory.EMPTY, moved);
-			thermalCommit.run();
+			TransferMutation gasCommit = planTransferMutation(before, sourceNode, split.second(),
+					null, GasInventory.EMPTY, GasInventory.EMPTY, moved);
+			thermalCommit.commitPrepared();
+			commitTransferMutation(gasCommit);
 			return;
 		}
 		AirNode targetNode = sealed(target);
 		GasInventory targetInventory = targetNode.inventory().merge(moved);
-		Runnable thermalCommit = Objects.requireNonNull(
+		TransferCommit thermalCommit = Objects.requireNonNull(
 				transferPlanner.plan(source, target, moved, split.second(), targetInventory), "transfer commit");
-		sourceNode.setInventory(split.second()); targetNode.setInventory(targetInventory);
-		finishMutation(before, GasInventory.EMPTY, GasInventory.EMPTY);
-		thermalCommit.run();
+		TransferMutation gasCommit = planTransferMutation(before, sourceNode, split.second(),
+				targetNode, targetInventory, GasInventory.EMPTY, GasInventory.EMPTY);
+		thermalCommit.commitPrepared();
+		commitTransferMutation(gasCommit);
 	}
 
 	/**
@@ -466,20 +475,54 @@ public final class AirNetwork {
 			double[] availableVolumes, List<GasInventory> inventories,
 			GasInventory sourceDelta, GasInventory sinkDelta
 	) {
+		commitRemapNodes(planRemapNodes(availableVolumes, inventories, sourceDelta, sinkDelta, List.of()));
+	}
+
+	/** Completes all topology, closure and ledger calculations without changing the live network. */
+	public RemapPlan planRemapNodes(
+			double[] availableVolumes, List<GasInventory> inventories,
+			GasInventory sourceDelta, GasInventory sinkDelta, List<AirEdge> replacementEdges
+	) {
 		if (availableVolumes.length != inventories.size()) throw new IllegalArgumentException("Gas remap slots disagree");
+		if (sourceDelta == null || sinkDelta == null || replacementEdges == null) {
+			throw new IllegalArgumentException("Gas remap plan is incomplete");
+		}
+		TreeMap<Integer, AirNode> replacementNodes = new TreeMap<>();
 		for (int slot = 0; slot < availableVolumes.length; slot++) {
 			if (!(Double.isFinite(availableVolumes[slot]) && availableVolumes[slot] >= 0.0) || inventories.get(slot) == null) {
 				throw new IllegalArgumentException("Invalid gas remap slot");
 			}
+			replacementNodes.put(slot + 1, new AirNode(availableVolumes[slot], inventories.get(slot)));
+		}
+		ArrayList<AirEdge> plannedEdges = new ArrayList<>(replacementEdges.size());
+		for (AirEdge edge : replacementEdges) {
+			if (edge == null || edge.firstNode() < AMBIENT_NODE || edge.secondNode() < AMBIENT_NODE
+					|| edge.firstNode() > inventories.size() || edge.secondNode() > inventories.size()) {
+				throw new IllegalArgumentException("Gas remap edge names an unknown node");
+			}
+			plannedEdges.add(edge);
 		}
 		MassColumns before = liveMassColumns();
 		requireExactRemapClosure(aggregateNodes(), aggregate(inventories), sourceDelta, sinkDelta);
-		nodes.clear(); edges.clear();
-		for (int slot = 0; slot < inventories.size(); slot++) {
-			nodes.put(slot + 1, new AirNode(availableVolumes[slot], inventories.get(slot)));
-		}
-		nextNodeId = inventories.size() + 1;
-		finishMutation(before, sourceDelta, sinkDelta);
+		MassColumns after = massColumns(aggregate(inventories));
+		MassColumns source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
+		return new RemapPlan(this, replacementNodes, plannedEdges, inventories.size() + 1,
+				massRoundoff.add(after.mass()).add(sink.mass()).subtract(before.mass()).subtract(source.mass()),
+				residualRoundoff.add(after.residual()).add(sink.residual())
+						.subtract(before.residual()).subtract(source.residual()),
+				externalSource.add(sourceDelta), escapedSink.add(sinkDelta));
+	}
+
+	/** Publishes a previously validated remap using assignments only. */
+	public void commitRemapNodes(RemapPlan plan) {
+		if (plan == null || plan.owner != this) throw new IllegalArgumentException("Gas remap plan belongs to another network");
+		nodes = plan.replacementNodes;
+		edges = plan.replacementEdges;
+		nextNodeId = plan.nextNodeId;
+		massRoundoff = plan.massRoundoffAfter;
+		residualRoundoff = plan.residualRoundoffAfter;
+		externalSource = plan.externalSourceAfter;
+		escapedSink = plan.escapedSinkAfter;
 	}
 
 	/** Restores a previously validated complete gas generation into a fresh runtime network. */
@@ -578,10 +621,50 @@ public final class AirNetwork {
 		externalSource = externalSource.add(sourceDelta); escapedSink = escapedSink.add(sinkDelta);
 	}
 
+	/** Performs every fallible ledger calculation before either gas or thermal state is published. */
+	private TransferMutation planTransferMutation(
+			MassColumns before,
+			AirNode sourceNode, GasInventory sourceAfter,
+			AirNode targetNode, GasInventory targetAfter,
+			GasInventory sourceDelta, GasInventory sinkDelta
+	) {
+		MassColumns after = liveMassColumnsReplacing(sourceNode, sourceAfter, targetNode, targetAfter);
+		MassColumns source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
+		return new TransferMutation(sourceNode, sourceAfter, targetNode, targetAfter,
+				massRoundoff.add(after.mass()).add(sink.mass()).subtract(before.mass()).subtract(source.mass()),
+				residualRoundoff.add(after.residual()).add(sink.residual())
+						.subtract(before.residual()).subtract(source.residual()),
+				externalSource.add(sourceDelta), escapedSink.add(sinkDelta));
+	}
+
+	private void commitTransferMutation(TransferMutation mutation) {
+		if (mutation.sourceNode() != null) mutation.sourceNode().setInventory(mutation.sourceAfter());
+		if (mutation.targetNode() != null) mutation.targetNode().setInventory(mutation.targetAfter());
+		massRoundoff = mutation.massRoundoffAfter();
+		residualRoundoff = mutation.residualRoundoffAfter();
+		externalSource = mutation.externalSourceAfter();
+		escapedSink = mutation.escapedSinkAfter();
+	}
+
 	private MassColumns liveMassColumns() {
 		SignedDyadic mass = SignedDyadic.ZERO, residual = SignedDyadic.ZERO;
 		for (AirNode node : nodes.values()) for (GasComponentAmount amount : node.inventory().components()) {
 			mass = mass.add(SignedDyadic.of(amount.mass())); residual = residual.add(SignedDyadic.of(amount.massResidual()));
+		}
+		return new MassColumns(mass, residual);
+	}
+
+	private MassColumns liveMassColumnsReplacing(
+			AirNode sourceNode, GasInventory sourceAfter,
+			AirNode targetNode, GasInventory targetAfter
+	) {
+		SignedDyadic mass = SignedDyadic.ZERO, residual = SignedDyadic.ZERO;
+		for (AirNode node : nodes.values()) {
+			GasInventory inventory = node == sourceNode ? sourceAfter : node == targetNode ? targetAfter : node.inventory();
+			for (GasComponentAmount amount : inventory.components()) {
+				mass = mass.add(SignedDyadic.of(amount.mass()));
+				residual = residual.add(SignedDyadic.of(amount.massResidual()));
+			}
 		}
 		return new MassColumns(mass, residual);
 	}
@@ -635,6 +718,38 @@ public final class AirNetwork {
 	}
 
 	private record MassColumns(SignedDyadic mass, SignedDyadic residual) { }
+	public static final class RemapPlan {
+		private final AirNetwork owner;
+		private final TreeMap<Integer, AirNode> replacementNodes;
+		private final ArrayList<AirEdge> replacementEdges;
+		private final int nextNodeId;
+		private final SignedDyadic massRoundoffAfter;
+		private final SignedDyadic residualRoundoffAfter;
+		private final GasAuditLedger externalSourceAfter;
+		private final GasAuditLedger escapedSinkAfter;
+
+		private RemapPlan(
+				AirNetwork owner, TreeMap<Integer, AirNode> replacementNodes,
+				ArrayList<AirEdge> replacementEdges, int nextNodeId,
+				SignedDyadic massRoundoffAfter, SignedDyadic residualRoundoffAfter,
+				GasAuditLedger externalSourceAfter, GasAuditLedger escapedSinkAfter
+		) {
+			this.owner = owner;
+			this.replacementNodes = replacementNodes;
+			this.replacementEdges = replacementEdges;
+			this.nextNodeId = nextNodeId;
+			this.massRoundoffAfter = massRoundoffAfter;
+			this.residualRoundoffAfter = residualRoundoffAfter;
+			this.externalSourceAfter = externalSourceAfter;
+			this.escapedSinkAfter = escapedSinkAfter;
+		}
+	}
+	private record TransferMutation(
+			AirNode sourceNode, GasInventory sourceAfter,
+			AirNode targetNode, GasInventory targetAfter,
+			SignedDyadic massRoundoffAfter, SignedDyadic residualRoundoffAfter,
+			GasAuditLedger externalSourceAfter, GasAuditLedger escapedSinkAfter
+	) { }
 	private record ExactColumns(long nanos, Map<String, Long> species) {
 		private static final ExactColumns EMPTY = new ExactColumns(0L, Map.of());
 		private ExactColumns { species = Map.copyOf(species); }
