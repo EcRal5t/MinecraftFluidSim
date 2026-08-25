@@ -121,6 +121,11 @@ gas node，沸腾路径不可达；仅导热又使底部储层缺少宏观自然
 - 使用有 world-authoritative 有效域的 Boussinesq 近似提供自然对流；不修改质量/体积真值，不用经验 tick 百分比加速导热。
 - 气液 transition batch 只定义最小守恒量子；运行时按能量、饱和压力、库存、容量和统一 4096-batch 预算求最大完整 extent，
   不再把 1 g 量子误作每界面格每步吞吐上限；服务端 status 直接报告 vapor 真值与最近相变批数。
+- 每次 v7 publish 前把 marker/occupancy 与 gas topology/U remap 同代同步；部分充液界面用 runtime cavity lineage 减少
+  假 dry-air turnover，不改变冻结的 gas membership 格式。损坏但文件自洽的 HEAD 不自动 fallback，只允许 operator 对明确
+  generation 执行紧邻上一完整代的全量验证与原子恢复。
+- 新 world registry 的 water/vapor 热容、导热、潜热与 transition volume 由 SI fixture 量化；已有 world snapshot 继续权威，
+  不因 bundled definition 修订静默重解释。
 - 自动门量化现实热容量、边界通量、对流方向、freeze/melt、boil/condense、gas topology、restart 与 audit；最后只请求一次
   闭壳 reservoir 合并实机 smoke。
 

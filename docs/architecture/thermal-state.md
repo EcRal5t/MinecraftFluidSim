@@ -206,6 +206,29 @@ marker 原始 volume/mass/provenance 不参与分配。同格 active/deposit 只
 开启但旧 vapor 缺 species 真值时保留并 PAUSED，禁止按 liquid default 或当前 data pack 猜测 H2O。bundled water-vapor host
 只声明 `realwater:h2o`，所以现有离子/盐不会被隐式蒸馏到气相。
 
+### 水/蒸气基准与吞吐解释
+
+bundled 新世界定义把液水冻结为 `rho=1000 kg/m3`、`c_v=4184 J/(kg K)`、`k=0.598 W/(m K)`；
+水蒸气使用 `c_v=1410 J/(kg K)`、`k=0.025 W/(m K)`，并令 373.15 K、1 atm 的状态函数焓差为
+`2256.7 kJ/kg`。1 g canonical transition batch 对应 `998.3778e-9 m3` 液体、`0.0016996413 m3`
+沸点蒸气和舍入后的 `0.001335254 m3std`。这些数值随首次 world thermal registry snapshot 冻结；已有世界
+继续按其 snapshot 解释既有 `U`，即使当前 bundled data pack 已修订也只报告 mismatch，不能自动重算。
+基准来源为 [IAPWS-95 水/蒸气状态方程](https://iapws.org/relguide/IAPWS95-2018.pdf)、
+[IAPWS 饱和态补充表](https://www.iapws.org/relguide/Supp-sat.html)、
+[IAPWS 热导率公式](https://www.iapws.org/relguide/ThCond.html) 与
+[NIST 水蒸气理想气体热容量表](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7732185&Mask=1&Table=on&Type=JANAFG)；
+production 仍使用上述分段常数近似，而不是在热循环中直接求完整物性方程。
+
+0.5 m 网格中一个完整 Minecraft 方块边界含四个 solver face，液水接触固定温度储层时总导热系数为
+`2.392 W/K`。因此 10,000,000 K 对 293.15 K 的首步理论输入为 `23.9192987852 MJ/s`；这是同一有限体积
+通量的极端加速/停止门测试，不代表现实热源。4 BV 水约 4000 kg、总热容 `16.736 MJ/K`，温和储层仅靠粗网格
+导热需要很长模拟时间才到沸点，自然对流只搬运已有显热，不创造能量。
+
+默认 4096 operation/logical-step 预算与 0.05 s logical dt 对 1 g batch 给出 `81.92 kg/s` 的纯数值硬上限；
+它不是经验汽化速率或动力学关联式。status 在相变合计恰好耗尽预算时标记 `budget-hit`；未命中只说明由
+饱和、能量、库存或几何更早限制。密闭气体诊断分别累计 dry-air 与 water-vapor 的 source/sink m3std，避免把
+拓扑周转和可逆 boil/condense gross turnover 混成一个 `drawn/vented` 数字。
+
 ## 反应、相变与每步提交顺序
 
 一个完整 logical step 固定为：
@@ -274,6 +297,19 @@ manifest 还必须携带精确匹配当前冻结定义表的 `realwater:thermal_
 已提交但尚未投影的凝聚相/固液反应 volume event 只使用上述 optional manifest extension；它与 required thermal payload 同代发布，
 只允许引用存在 thermal carrier 的格。读取未知、非 canonical、越预算、cell 失配或非 v7 携带均锁定，禁止猜测清零。
 reader 精确接受 `{1,2,3,4,5,6,7}`，但 v4 只按其独立 gas capability 读取，不能由版本号猜联合内容。
+
+每个 v7 publish 在 capture 前必须从同一批 current markers/occupancy 重建 gas topology，并联合提交可能发生的
+gas inventory/U remap；该同步失败时不写 slot、不移动 HEAD。持久 membership 继续只编码纯空气格，维持 gas v4/v7
+canonical bytes；runtime scanner 另为有正 residual gas volume 的部分充液界面格记录所属 cavity lineage，拓扑 overlap
+用该 lineage 追踪移动液面，避免把同一密闭气体误记为 ambient source/sink。runtime lineage 不持久化，恢复时总能由
+同代 marker/occupancy 重建。
+
+正常启动仍只认 HEAD，绝不自动 fallback。仅当当前 v7 已产生可复核的 `checkpoint restore failed` 时，operator 可用
+`/realwater regions recoverprevious <expectedCheckpoint>` 请求紧邻上一代：区域必须是 metadata-only、UNLOADED、PAUSED，
+expected generation 必须精确匹配，ownership 与 container WAL 必须无歧义，上一 slot 必须完整通过 checksum、identity、
+world registry、material/chemistry/granular/gas/thermal 及 audit 恢复验证。实现先在临时 solver 中完整重建并释放，再原子
+只切换 HEAD；被拒绝 slot 保留到下一次成功发布，命令成功后必须重启世界。该入口不是任意历史浏览、跨 WAL 回滚或
+自动修复。
 
 v1/v2/v3/v5 没有热真值；v6 有旧质量基准下的热真值。两者都禁止自动按环境、biome、当前 registry 或外观猜或重解释
 `U`。旧 controller 只有在 PAUSED、

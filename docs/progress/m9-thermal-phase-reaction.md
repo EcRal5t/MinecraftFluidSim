@@ -610,3 +610,51 @@ chemistry-on 路径明确经过 `CondensedMassScale` 把 exact gas kg 转回 M7 
 `clean assemble compileTestJava --offline --no-daemon` 从零成功（18 s）。0.15.3 部署 JAR SHA-256 为
 `66EFA2BFD3E8C017971E3CE0C43EE20C42966808C80E2DCD97F46AA90C400820`；mods 目录只有该主 Mod JAR 启用，
 0.15.2 已可恢复地改名为 `realwater-0.15.2-pre-reversible-gas-phase.jar.disabled`，GPU probe 保持独立 Mod id。
+
+## M9.36 same-generation gas checkpoint and calibrated turnover
+
+用户原世界在 10,000,000 K reservoir stress 后从 checkpoint 21 继续运行并安全停于 material validity；随后正常退出发布的
+checkpoint 22 文件/CRC/thermal audit 自身有效，但重启时 `Restored gas sealed-node count does not match derived topology`。
+只读冻结原世界后，在两个独立 workspace 副本稳定复现：logical step 末尾 marker advection/reseed 已改变 carrier geometry，
+最后一次 gas scan 却早于该位置变化；关服 capture 因而把 current markers 与 stale gas membership 组合进同一代。原世界
+`HEAD.nbt` 仍保持 2026-08-25 11:53:21 的 checkpoint 22，slot-a checkpoint 21 未被开发流程改写。
+
+修复在每次 thermal v7 capture 前强制由 current marker/occupancy 重建 gas topology，并把 inventory、gas `U` 与压缩功 remap
+作为同一个可失败计划提交；同步失败不写 slot，原 HEAD 继续权威。`AirCavityScanner` 同时增加 runtime-only interface lineage：
+有正 residual gas volume 的部分充液格继承相邻 cavity 身份，topology overlap 消费 lineage，持久 membership 仍只写纯空气格，
+所以 gas v4/v7 格式、fingerprint 和旧 checkpoint reader 均不变。两格密闭夹具把 0.5 格液面平移后 source/sink 保持逐位不变。
+
+新增 `/realwater regions recoverprevious <expectedCheckpoint>` 作为异常 operator 路径，普通启动仍严格只认 HEAD。命令只在已记录
+checkpoint restore failure、metadata-only UNLOADED/PAUSED controller、无 ownership lock/容器 WAL 且 expected generation 精确
+匹配时读取紧邻 inactive slot；它在临时 solver 中完整验证 v7 identity、world registries、material/chemistry/granular、gas topology、
+thermal inventory/audit 和 ownership generation，成功后才原子切换 HEAD。失败不改 HEAD；成功后当前 session 仍 blocked 并要求
+重启，被拒绝 slot 保留至下一次成功发布，不提供任意代次回退。
+
+第二份未修改副本的事务回归为：checkpoint 22 稳定拒绝（384 markers / 31.909 cells）→显式 `recoverprevious 22` 切到 21→
+重启恢复 432 markers / 31.99 cells / vapor 1.016 kg→手动发布 22→关服发布 23→再次启动从 23 恢复同一库存、`pending-work=no`、
+gas/thermal audit closed→关服发布 24。说明旧完整代可恢复，且修复后新 publish 可连续前进。
+
+物性 fixture 直接解码 production resources。新 world snapshot 的液水为 `rho=1000 kg/m3`、`c_v=4184 J/(kg K)`、
+`k=0.598 W/(m K)`；water vapor 修正为 `c_v=1410 J/(kg K)`、`k=0.025 W/(m K)` 与 293.15 K reference specific
+energy `2,306,505 J/kg`，使 373.15 K、1 atm 的导出汽化焓为 `2256.7 kJ/kg`。1 g batch 精确对应
+`998.3778e-9 m3` liquid、`0.0016996413 m3` boiling vapor 和 canonical `0.001335254 m3std`。已有 world thermal
+registry snapshot 仍权威；启动只报告 bundled mismatch，不把旧 `U` 静默按新定义重解释。
+
+0.5 m 网格中一块完整 reservoir 面包含四个 solver face，production liquid-water conductance 为 `2.392 W/K`；
+10,000,000 K 对 293.15 K 的理论首秒输入 `23.9192987852 MJ`，与用户首个 20-step source 增量一致。4 BV 水约 4000 kg、
+热容 `16.736 MJ/K`，所以温和热源在该粗网格上确实需要很长 simulated time；极端 reservoir 只适合加速/停止门，不证明现实
+加热器的 boiling rate。4096 个 1 g batch / 0.05 s 给出 `81.92 kg/s` 数值硬上限，status 现在明确标记 `budget-hit`，不把它
+描述为动力学定律；thermal definition failure 会报告实际候选温度、material 和有效区间。
+
+checkpoint 21→22 的 exact gas ledger 分解进一步确认：dry-air source/sink 各只增加 `0.341469601 m3std`，约占 60 m3
+库存 0.569%；water-vapor source 增 `622.169612824 m3std`（465,956 boil batches），sink 增
+`608.242913604 m3std`（455,526 condense batches），净增 10,430 batches / 10.430 kg，与 live vapor 1.016→11.446 kg
+精确一致。大约 600 m3 的旧 `drawn/vented` 主要是共享密闭节点中不同界面格的可逆 boil/condense gross turnover，不是空气
+漏失；能量/质量闭合但频繁命中 operation budget，仍不能当作已验证的现实相变动力学。status 因此改为分别报告
+`turnover air=source/sink vapor=source/sink m3std`。
+
+最近门 `thermal,air-cavity,region-state` 通过（1.616 s / 0.009 s / 4.336 s）；旧 checkpoint 世界副本回归通过。
+`clean assemble compileTestJava --offline --no-daemon` 从零成功（23 s）。0.15.4 部署 JAR SHA-256 为
+`E42EED93A1EFD09FFB7ECAAF9927602EC0A0D91EACDD4BD29252BBA0D63423DE`；mods 目录仅启用主 Mod
+`realwater-0.15.4.jar` 与不同 ID 的只读 `realwater_gpu_probe` 0.1.16，0.15.3 已可恢复地改名为
+`realwater-0.15.3-pre-gas-topology-persistence.jar.disabled`。原世界单一恢复/重启实机结果待用户确认后补记。
