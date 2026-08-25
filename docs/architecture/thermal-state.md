@@ -11,7 +11,7 @@
 - 门关闭时不分配热数组、连续固相或热 dirty queue，M0--M8 活动路径和既有格式必须逐位退化。
 - M9 包含凝聚相内能、随物质平流、有限体积导热、显式固定温度边界、M7/M8 反应热、熔化/凝固、
   非等温密闭气体和沸腾/冷凝，以及与运动休眠正交的热休眠。
-- 首版不做辐射、燃烧、气相化学、温变黏度/表面张力、Boussinesq 补丁、凝固点降低、自由冰刚体、
+- 首版不做辐射、燃烧、气相化学、温变黏度/表面张力、凝固点降低、自由冰刚体、
   固相应力、热致颗粒侵蚀或 GPU 热后端。
 - 气体生产持久化必须先由独立的 `region-state v4` 基态评审冻结库存、拓扑与恢复语义。该 v4 不携热状态、
   不携 granular；完成前 M9 的气体热学只能处于不开放生产存档的隔离增量。
@@ -20,6 +20,20 @@
 
 world thermal registry 冻结 `unitSystemId=realwater:si_block_v1`：`1 BV=1 m³`、`1 MU=1 kg`、
 `1 TU=1 K`、`1 EU=1 J`，solver 时间单位为秒。同一 world snapshot 的单位不得无迁移改变。
+
+M0--M8 已冻结的 condensed raw mass 并不是 MU：它由 `normalized cell volume * referenceDensity`
+生成，是压力、化学 residual、颗粒和容器共同持久化的 **solver mass weight**。在固定网格上，M9 只能经一个集中换算进入
+SI 状态函数：
+
+```text
+physical volume [m3] = normalized cell volume * h^3
+physical mass [kg]    = condensed solver mass weight * h^3
+condensed weight      = physical mass [kg] / h^3
+```
+
+气体 component mass 已直接使用 kg，禁止再次乘 `h^3`。phase definition 的 `mass_mu_per_batch` 也始终是 kg；
+固液相变在两个 condensed owner 间搬运对应 solver weight，气液相变则必须在 condensed weight 与 gas kg 的边界显式换算。
+不得把换算散落在热容、相变或容器调用点，也不得借修复 M9 静默改写 M3/M7/M8 的独立 raw mass。
 
 M9 新增以下互相独立的权威真值：
 
@@ -110,6 +124,21 @@ source/sink 审计。reservoir 设定值只改变下一次边界解析，不直�
 有限热容 world block 需要独立
 ownership/persistence 评审，不在 M9 v1。
 
+### 自然对流
+
+只有导热不能使下方有限接触热源成为可用的宏观加热入口。M9 使用低马赫不可压流中标准的 Boussinesq
+近似，把温度造成的密度差作为派生体力加入 mechanical substep；它不修改 marker mass、volume 或能量库存：
+
+```text
+a_b = -g * beta(T) * (T - T_ref) e_g
+```
+
+`beta(T)`、共同参考温度和有效温差必须来自 world-authoritative thermal material definition，允许分段常数并要求
+finite、非负和连续有效域。face 加速度只从相邻同 carrier 的服务端 LTE 温度、cut-face aperture 与已有 P2G 支撑派生；
+压力投影随后消去不可压缩部分。无热状态或定义 `beta=0` 时精确退化；超出 Boussinesq 有效温差时进入可读
+thermal-validity PAUSED，异 carrier face 则不猜混合系数。该项是物理模型的一部分，不记 thermal external source/sink，
+也不伪装成热膨胀体积或完整机械总能量守恒。
+
 ## 连续固相与熔化/凝固
 
 凝固生成独立 `CoherentPhaseStore`，不是 M8 granular/deposit，也不是继续参加压力解的静止液体 marker。
@@ -131,7 +160,7 @@ marker 不参与冻结分配且不得因相变缩放。同格 active parcel/depo
 相态变化的 `delta V` 是显式 volume event，并在下一 mechanical projection 消费同一 pending volume/work record；
 其 `-p delta V` 进入 mechanical-work ledger。正膨胀在闭域中无可表示容量时 PAUSED，不删体积、不钳相分数。
 pending record 使用 exact `SignedDyadic` cell-volume（SVQ 事件为 `integer * 2^-24`，marker float 保留其精确二进制值），
-属于独立的 manifest-only v6 extension `realwater:pending_phase_volume_v1`；extension 缺失是唯一 canonical empty 表示。
+属于独立的 manifest-only v7 extension `realwater:pending_phase_volume_v1`；extension 缺失是唯一 canonical empty 表示。
 checkpoint/restart 后必须唤醒 motion，在下一次真实 pressure projection 已消费新 occupancy/volume drift 后按该格 absolute
 pressure 记一次 `-p delta V`，联合验证 carrier 能量后清除记录。不得同时再注入 divergence source 而重复排水，也不得提前
 清除、在 `empty` 中吞掉或因 thermal sleep 丢失。气液相变已由 gas available-volume remap 当场结算 gas compression work，
@@ -217,22 +246,26 @@ thermal sleep 要求连续 quiet steps 内：所有内部/边界可表示通量�
 | server config | v6 | `thermalEnabled`、`phaseChangeEnabled` 与硬预算；旧 reader 强制关闭 |
 | world thermal registry | v1 | definitions、单位、依赖 fingerprints 与 canonical SHA-256 |
 | gas prerequisite | region-state v4 | 单独评审的 gas 基态；不携 thermal/granular |
-| complete region | region-state v6 | material + optional chemistry/granular + reviewed gas + required thermal |
+| legacy complete thermal region | region-state v6 | 旧实现把 condensed solver mass weight 错当 kg；只读保留，不能进入修订 runtime |
+| complete region | region-state v7 | material + optional chemistry/granular + reviewed gas + corrected SI thermal |
 | protocol | v5 | temperature/phase/gas display only，不发 exact `U` |
 | item | `ThermalContents v1` | 与 underlying canonical contents hash 绑定的总 `U` |
 | container WAL | v5 | 物质 primary resource 与 coupled energy 同一事务；v1--v4 reader 保持 |
 
-`region-state v6` 是一个完整联合 generation，不是 v5 HEAD 加 sidecar。manifest/section 必需 typed thermal extension，
+`region-state v7` 是一个完整联合 generation，不是 v5/v6 HEAD 加 sidecar。manifest/section 必需 typed thermal extension，
 逐 marker/active/deposit/coherent/gas energy ordinal 必须完整且 canonical；HEAD 仍是唯一且最后提交点。
 恢复时可接受由 FLIP advection 留下、尚待下一次压力投影解决的局部 liquid marker 聚集；
 但同格 fixed coherent + granular occupancy 必须独立满足已提交几何容量，禁止为通过恢复而删除或缩放任何库存。
 已提交但尚未投影的凝聚相/固液反应 volume event 只使用上述 optional manifest extension；它与 required thermal payload 同代发布，
-只允许引用存在 thermal carrier 的格。读取未知、非 canonical、越预算、cell 失配或非 v6 携带均锁定，禁止猜测清零。
-reader 精确接受 `{1,2,3,4,5,6}`，但 v4 只按其独立 gas capability 读取，不能由版本号猜联合内容。
+只允许引用存在 thermal carrier 的格。读取未知、非 canonical、越预算、cell 失配或非 v7 携带均锁定，禁止猜测清零。
+reader 精确接受 `{1,2,3,4,5,6,7}`，但 v4 只按其独立 gas capability 读取，不能由版本号猜联合内容。
 
-v1/v2/v3/v5 没有热真值，禁止自动按环境、biome、当前 registry 或外观猜 `U`。旧 controller 只有在 PAUSED、
-ownership 完整、无 pending WAL 且 operator 显式给定初始温度后，才能在 inactive slot 生成并回读验证完整 v6，
-最后切换 HEAD；初始化 record 保存 source version、raw temperature bits、gas bootstrap 与 operator metadata。
+v1/v2/v3/v5 没有热真值；v6 有旧质量基准下的热真值。两者都禁止自动按环境、biome、当前 registry 或外观猜或重解释
+`U`。旧 controller 只有在 PAUSED、
+ownership 完整、无 pending WAL 且 operator 显式给定初始温度后，才能在 inactive slot 生成并回读验证完整 v7，
+最后切换 HEAD；修订实现统一生成 v7，初始化 record 保存 source version、raw temperature bits、gas bootstrap 与 operator metadata。
+v6→v7 时旧 `U` 明确作为被 operator 替代的旧基准证据保留在上一槽；material、chemistry、granular 与 gas 库存从同一旧 HEAD
+回读，禁止缩放或按 reference density 重建。初始化温度为全部现存 carrier 建立新的 SI `U` 与 audit baseline。
 这种旧代次在启动后是稳定的 operator-required 等待态：保留 HEAD/marker/体积，暂停且不发布 protocol v5 thermal snapshot，
 每区域只记一次警告并向每个玩家提供一次库存证据，不能作为可重试的恢复错误周期性扫描。
 失败仍以旧 HEAD 为权威。旧 WAL 跨初始化代次且缺能量时保留并 LOCKED 人工处置。
@@ -258,6 +291,6 @@ M9 只有在下列门全部满足后关闭：
 - M7/M8 reaction、melt/freeze、boil/condense 与 gas work 不依赖经验温升或额外内部 source；
 - 质量、组成、体积/SVQ/gas nanos 和能量同时闭合；
 - motion/thermal sleep 独立，所有规定事件能唤醒；
-- thermal registry、v4/v6、item/WAL/protocol identity 不明时保留并 LOCKED；
-- 旧世界只经显式 initialization 进入 v6；
+- thermal registry、v4/v6/v7、item/WAL/protocol identity 不明时保留并 LOCKED；
+- 旧世界和旧 v6 只经显式 initialization 进入 v7；
 - 自动门通过；只有真实渲染、世界热边界和跨重启交互无法自动观察时才请求一次合并实机 smoke。

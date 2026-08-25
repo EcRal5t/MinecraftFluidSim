@@ -1,5 +1,9 @@
 # M9 温度、相变和反应热（已完成）
 
+> 2026-08-25 修订状态：真实可调热源 smoke 随后发现 condensed mass 的 `h^3` 单位遗漏、controller headspace
+> 被误判 ambient，以及底部热源没有自然对流；因此本页此前的“完成”仅保留为 0.15.0 历史证据，M9 已重新开放。
+> 修订契约以 [`../architecture/thermal-state.md`](../architecture/thermal-state.md) 为准。
+
 ## M9.12 gas persistence prerequisite design
 
 - Froze [`../architecture/gas-state-v4.md`](../architecture/gas-state-v4.md). Gas v4 is a complete material + optional
