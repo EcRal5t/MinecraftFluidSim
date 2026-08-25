@@ -556,3 +556,25 @@ U 降至 221947 EU、source 不再增长、audit 仍 closed；约 631 EU 的冷�
 signed-reference 历史项和 status 六位有效数字而未在摘要中显出尾数，但由 U/source/work 不变量与 exact closed audit
 共同闭合。最后 `empty` 成功清除 4.000 BV / 330 markers 并发布 checkpoint 14。可调热源、冷源、cut-face 输运、
 source/sink 审计及带非零换热历史的 operator clear 因此通过真实世界验收；没有借本次验收新增局部温度 HUD。
+
+## M9.34 closed v6 gas-history initialization hotfix
+
+用户继续热学场景后，legacy v6 checkpoint 18 的显式初温被“gas truth tied to the legacy topology”拒绝。对原世界
+只读解码确认该代仍保存 32.0 cells / 432 markers，但 gas 没有 node 或 section membership，mass/residual roundoff
+均为零；仅有已经精确抵消的历史周转：air source=sink 180266917 standard-volume nanos，water-vapor source=sink
+4005762 nanos。旧判定把任何非空累计账本都误当成 live topology truth，因而比冻结契约更严格。
+
+修复没有放宽活气体迁移：只有 node 为空、全部 membership 因结构约束为零、两个 roundoff 为零且 source 与 sink
+逐 component/mass/species/residual 完全相等时，才承认它是没有剩余库存的 closed historical turnover。新几何仍只由
+operator 授权的 current-geometry ambient bootstrap 建立；旧周转随后同时加到新 source/sink，既不丢独立审计真值，
+也不根据旧记录猜节点。任何 live node、不相等账本、roundoff 或 pending phase work 继续保留旧 HEAD 并拒绝初始化。
+
+`air-network,region-state,thermal` 三个 routing 最近门通过；`clean assemble compileTestJava --offline --no-daemon`
+从零成功（20 s）。从原世界只读复制 checkpoint 18 后，开发专服执行 `thermalinit 293.15` 原子发布 v7 generation 19；
+自动卸载发布 checkpoint 20，重启并加载边界 chunks 后恢复 432 markers / 4.00 BV，status 报新 sealed gas node
+`V0=60.00 m³`、累计 `drawn=60.18 m³ / vented=0.18 m³`、thermal ACTIVE、pending-work=no、audit=closed。
+再执行一个 production step 后物质/能量审计仍 closed。原世界 HEAD 仍为 checkpoint 18，未被开发服启动或写入。
+
+主 Mod 补丁版本为 0.15.2，部署 JAR SHA-256
+`28B79A27C08DA36648F79552CDEDA0C82B611521FDB2B5A3811D8B8BCB1C8421`；mods 目录只有该主 Mod JAR 启用，
+0.15.1 已可恢复地改名为 `realwater-0.15.1-pre-v6-closed-gas-history.jar.disabled`，GPU probe 仍为独立 Mod id。

@@ -1,6 +1,6 @@
 # Real Water Prototype
 
-Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。M0–M8 已验收；当前主 Mod 0.15.1 是 M9 修订候选，仍由 CPU 权威求解。系统支持最多四个独立区域、控制器闭合边界、跨 chunk 完整加载、原子持久化、分数自由面和 cut-cell 碰撞；默认关闭的材料门后提供多液体、化学和低成本颗粒。M9 加入权威内能、派生温度、有限体积导热、世界固定温度边界、Boussinesq 自然对流、反应热、连续固相、固液/气液相变、非等温密闭气体、正交热休眠，以及 corrected-SI region-state v7、protocol v5 和 container-transfer WAL v5。
+Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。M0–M8 已验收；当前主 Mod 0.15.2 是 M9 修订候选，仍由 CPU 权威求解。系统支持最多四个独立区域、控制器闭合边界、跨 chunk 完整加载、原子持久化、分数自由面和 cut-cell 碰撞；默认关闭的材料门后提供多液体、化学和低成本颗粒。M9 加入权威内能、派生温度、有限体积导热、世界固定温度边界、Boussinesq 自然对流、反应热、连续固相、固液/气液相变、非等温密闭气体、正交热休眠，以及 corrected-SI region-state v7、protocol v5 和 container-transfer WAL v5。
 
 这还不是原版水的全局替代。普通模拟不自动修改世界；控制器功能默认关闭。
 
