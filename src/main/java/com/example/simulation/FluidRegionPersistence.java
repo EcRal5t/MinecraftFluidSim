@@ -288,15 +288,17 @@ final class FluidRegionPersistence {
 
 	/**
 	 * Conservative release before persistent deletion: restores the authoritative solver first,
-	 * refuses while either marker or granular inventory remains, restores the vanilla preimage with player blocks winning, and never runs unless the
+	 * refuses while any condensed inventory remains, restores the vanilla preimage with player blocks winning, and never runs unless the
 	 * final region checkpoint can be staged and committed.
 	 */
 	ReleaseAttempt releaseOwnership(MinecraftServer server, FluidRegion region) {
 		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
+		long targetGeneration = -1L;
 		try {
 			if (!region.solverLoaded()) restore(region);
-			if (region.domain().particleCount() != 0 || region.domain().totalGranularSolidVolumeSvq() > 0L) {
-				return ReleaseAttempt.refused("区域 " + region.id() + " 仍持有流体或颗粒库存；请先 empty 后再移除");
+			if (region.domain().particleCount() != 0 || region.domain().totalGranularSolidVolumeSvq() > 0L
+					|| region.domain().totalCoherentSolidVolumeSvq() > 0L) {
+				return ReleaseAttempt.refused("区域 " + region.id() + " 仍持有流体、颗粒或连续固相库存；请先 empty 后再移除");
 			}
 			if (!ownershipFiles.exists()) return ReleaseAttempt.NOT_OWNED;
 			ownershipFiles.assertUnlockedForTransition();
@@ -310,11 +312,11 @@ final class FluidRegionPersistence {
 				return ReleaseAttempt.NOT_OWNED;
 			}
 			long baseGeneration = files.committedGeneration(region.id());
-			long generation = baseGeneration + 1L;
-			RegionState staged = captureForFeatureGate(region, generation);
+			targetGeneration = baseGeneration + 1L;
+			RegionState staged = captureForFeatureGate(region, targetGeneration);
 			String warning = OwnershipStore.warningText(ownershipStore.worldRoot(),
 					region.id(), committed.dimensionId(), OwnershipJournal.Operation.RELEASE,
-					baseGeneration, generation, committed.ownedBlocks().size());
+					baseGeneration, targetGeneration, committed.ownedBlocks().size());
 			OwnershipCoordinator.ReleaseResult result = OwnershipCoordinator.release(files, ownershipFiles,
 					staged, warning, OwnershipStore.worldAccess(server), OwnershipCoordinator.FailureInjector.NONE);
 			if (!region.recordPublishedCheckpoint(result.generation())) {
@@ -323,11 +325,30 @@ final class FluidRegionPersistence {
 			ownershipFiles.deleteStore();
 			return new ReleaseAttempt(null, result.restoredBlocks(), result.skippedBlocks());
 		} catch (IOException | RuntimeException failure) {
+			OwnershipCoordinator.RecoveryResult recovery;
 			try {
-				OwnershipCoordinator.recover(files, ownershipFiles,
+				recovery = OwnershipCoordinator.recover(files, ownershipFiles,
 						OwnershipStore.worldAccess(server), OwnershipCoordinator.FailureInjector.NONE);
 			} catch (IOException recoveryFailure) {
 				failure.addSuppressed(recoveryFailure);
+				RealWaterMod.LOGGER.error("World ownership release failed for region {}", region.id(), failure);
+				return ReleaseAttempt.refused("区域 " + region.id() + " ownership 解除失败：" + failure.getMessage());
+			}
+			try {
+				if (recovery.kind() == OwnershipCoordinator.RecoveryResult.Kind.COMPLETED
+						&& targetGeneration > 0L && files.committedGeneration(region.id()) == targetGeneration) {
+					if (!region.recordPublishedCheckpoint(targetGeneration)) {
+						throw new IOException("Recovered release checkpoint " + targetGeneration
+								+ " was not accepted by the live region");
+					}
+					ownershipFiles.deleteStore();
+					RealWaterMod.LOGGER.warn(
+							"Controller ownership release for {} completed through in-process post-commit recovery",
+							region.id());
+					return new ReleaseAttempt(null, recovery.restored(), recovery.skipped());
+				}
+			} catch (IOException recoveryValidationFailure) {
+				failure.addSuppressed(recoveryValidationFailure);
 			}
 			RealWaterMod.LOGGER.error("World ownership release failed for region {}", region.id(), failure);
 			return ReleaseAttempt.refused("区域 " + region.id() + " ownership 解除失败：" + failure.getMessage());

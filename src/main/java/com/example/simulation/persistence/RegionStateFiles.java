@@ -416,11 +416,24 @@ public final class RegionStateFiles {
 		return quarantine;
 	}
 
-	private static void discardKnownStagedLeftovers(Path region) throws IOException {
+	private void discardKnownStagedLeftovers(Path region) throws IOException {
 		Set<String> known = Set.of(SLOT_A, SLOT_B, SLOT_A + ".tmp", SLOT_B + ".tmp", HEAD + ".tmp");
 		try (DirectoryStream<Path> entries = Files.newDirectoryStream(region)) {
 			for (Path entry : entries) {
 				if (!known.contains(entry.getFileName().toString())) return;
+				String name = entry.getFileName().toString();
+				try {
+					if (name.equals(HEAD + ".tmp")) {
+						UUID expectedId = UUID.fromString(region.getFileName().toString());
+						decodeHead(readNbt(entry), expectedId);
+					} else {
+						readSlot(entry);
+					}
+				} catch (IllegalArgumentException | IOException invalid) {
+					// A wrong node type, corrupt partial write or foreign nested file is ambiguous.
+					// Preserve the whole tree so discovery can report it as LOCKED.
+					return;
+				}
 			}
 		}
 		try (DirectoryStream<Path> entries = Files.newDirectoryStream(region)) {
@@ -507,9 +520,11 @@ public final class RegionStateFiles {
 			RegionSectionState section = codec.decodeSection(readNbt(slot.resolve(file)));
 			if (sections.put(section.key(), section) != null) throw new IOException("Duplicate section coordinate");
 		}
-		try (DirectoryStream<Path> files = Files.newDirectoryStream(slot, "*.nbt")) {
+		try (DirectoryStream<Path> files = Files.newDirectoryStream(slot)) {
 			int actual = 0;
-			for (Path file : files) if (!file.getFileName().toString().equals(MANIFEST)) {
+			for (Path file : files) {
+				if (!Files.isRegularFile(file)) throw new IOException("Unexpected non-file content " + file);
+				if (file.getFileName().toString().equals(MANIFEST)) continue;
 				actual++;
 				if (!expectedFiles.contains(file.getFileName().toString())) throw new IOException("Unexpected section file " + file);
 			}

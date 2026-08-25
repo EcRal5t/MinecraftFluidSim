@@ -856,6 +856,9 @@ public final class FlipFluidDomain {
 			java.util.function.Predicate<GranularTransferLedger> itemAcceptance
 	) {
 		if (granularParcels == null) return GranularExtraction.rejected("Granular state is not bound");
+		if (hasPendingPhaseVolumeWork()) {
+			return GranularExtraction.rejected("Pending phase mechanical work must be projected before extraction");
+		}
 		if (itemAcceptance == null) throw new IllegalArgumentException("Granular item acceptance is missing");
 		if (maximumSolidVolumeSvq <= 0L || maximumSolidVolumeSvq > SolidVolume.SVQ_PER_BV) {
 			throw new IllegalArgumentException("Granular extraction capacity is invalid");
@@ -1512,6 +1515,7 @@ public final class FlipFluidDomain {
 			int liquidHandle = fluidMaterialHandle(liquid.carrierId());
 			int gasThermalHandle = thermalState.registry().materialHandle(gas.id());
 			for (int cell = 0; cell < cellCount && operations < maximumOperations; cell++) {
+				if (!pendingPhaseCellVolume[cell].equals(SignedDyadic.ZERO)) continue;
 				int node = sealedInterfaceNode(cell);
 				if (node <= 0) continue;
 				PhaseCellInventory inventory = gasLiquidCellInventory(cell, liquidHandle);
@@ -2012,7 +2016,6 @@ public final class FlipFluidDomain {
 		double candidateTemperature = thermalState.phaseCandidateTemperature(
 				cell, phaseInventory, thermalMarkerContext());
 		long signedVolumeSvq = freezing ? lowerDelta - upperDelta : upperDelta - lowerDelta;
-		pendingPhaseCellVolume[cell].add(cellVolumeDyadic(signedVolumeSvq));
 		return new JointPhasePlan(batches, freezing, removal, coherentTransfer,
 				meltedMixture, meltSlot, candidateTemperature, signedVolumeSvq);
 	}
@@ -3826,6 +3829,7 @@ public final class FlipFluidDomain {
 		if (acceptsLedger == null) throw new IllegalArgumentException("Chemical extraction validator is missing");
 		validateVolumeEdit(volume, maxRadius);
 		if (volume <= 0.0F) return new ExactChemicalTransfer(volume == 0.0F, ChemicalTransferLedger.EMPTY);
+		if (hasPendingPhaseVolumeWork()) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		List<CellCandidate> cells = nearbyCells(centerX, centerY, centerZ, maxRadius);
 		boolean[] near = new boolean[cellCount]; for (CellCandidate candidate : cells) near[candidate.index()] = true;
 		double available = 0.0;
@@ -3916,6 +3920,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	private ExactMixtureTransfer tryExtractExactMixtureInternal(
 			int centerX, int centerY, int centerZ, float volume, int maxRadius, int requiredMaterialHandle
 	) {
+		if (hasPendingPhaseVolumeWork()) return new ExactMixtureTransfer(false, List.of());
 		java.util.List<CellCandidate> cells = nearbyCells(centerX, centerY, centerZ, maxRadius);
 		boolean[] near = new boolean[sizeX * sizeY * sizeZ];
 		for (CellCandidate candidate : cells) near[candidate.index()] = true;
@@ -4129,11 +4134,15 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			enforceSolidFaceVelocities();
 			solvePressure(dt);
 			pressureIterations += lastPressureIterations;
-			FlipThermalState.PhaseMechanicalWorkPlan phaseWork = substep == 0
-					&& thermalState != null && hasPendingPhaseVolumeWork()
-					? thermalState.planPhaseMechanicalWork(
-							pendingPhaseCellVolume, pressure, config.cellSize(), thermalMarkerContext())
-					: null;
+			FlipThermalState.PhaseMechanicalWorkPlan phaseWork = null;
+			if (substep == 0 && thermalState != null && hasPendingPhaseVolumeWork()) try {
+				phaseWork = thermalState.planPhaseMechanicalWork(
+						pendingPhaseCellVolume, pressure, config.cellSize(), thermalMarkerContext());
+			} catch (IllegalArgumentException invalidPendingWork) {
+				throw new ThermalPhaseBlockedException(
+						"Pending phase mechanical work cannot be consumed: " + invalidPendingWork.getMessage(),
+						invalidPendingWork);
+			}
 			projectVelocity(dt);
 			if (phaseWork != null) {
 				thermalState.commitPhaseMechanicalWork(phaseWork, thermalMarkerContext());
@@ -5273,7 +5282,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			delta = delta.add(SignedDyadic.of(update.cellVolume()))
 					.subtract(SignedDyadic.of(particleVolume[update.marker()]));
 		}
-		pendingPhaseCellVolume[cell].add(delta);
 		return delta;
 	}
 

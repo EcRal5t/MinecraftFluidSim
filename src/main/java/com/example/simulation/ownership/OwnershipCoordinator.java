@@ -10,8 +10,10 @@ import java.util.UUID;
 
 /**
  * Joint world-ownership transaction across the two stores. Ordering contract: the region state is
- * staged and verified first, then the ownership WAL and WARNING are published, then the world is
- * mutated, and the region-state HEAD is published last as the sole commit point; the committed
+ * staged and verified first, then the ownership WAL and WARNING are published. Acquire mutates
+ * the world before publishing HEAD; release publishes HEAD before restoring the world so a
+ * pre-commit crash never has an indistinguishable water preimage to undo. HEAD remains the sole
+ * commit decision point; the committed
  * ownership registry is written after it and is rebuilt from the WAL by post-commit recovery.
  * Recovery compares the region HEAD generation with the WAL base/target, so a crash always yields
  * the complete previous state or the complete new state and never restores the preimage of
@@ -117,6 +119,10 @@ public final class OwnershipCoordinator {
 			ownershipFiles.publishWarning(warning);
 			failures.hit(FailurePoint.AFTER_WARNING_PUBLISH, 0);
 
+			failures.hit(FailurePoint.BEFORE_HEAD_PUBLISH, 0);
+			long published = regionFiles.commit(prepared, (point, path) -> { });
+			failures.hit(FailurePoint.AFTER_HEAD_PUBLISH, 0);
+
 			int restored = 0;
 			int alreadyRestored = 0;
 			int skipped = 0;
@@ -131,9 +137,6 @@ public final class OwnershipCoordinator {
 				failures.hit(FailurePoint.AFTER_RESTORE_BLOCK, processed);
 			}
 
-			failures.hit(FailurePoint.BEFORE_HEAD_PUBLISH, 0);
-			long published = regionFiles.commit(prepared, (point, path) -> { });
-			failures.hit(FailurePoint.AFTER_HEAD_PUBLISH, 0);
 			ownershipFiles.publishCommitted(new OwnershipCommitted(regionId, committed.dimensionId(), published, List.of()));
 			failures.hit(FailurePoint.AFTER_COMMITTED_WRITE, 0);
 			failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
@@ -218,11 +221,10 @@ public final class OwnershipCoordinator {
 					case SKIPPED_OCCUPIED -> skipped++;
 				}
 			} else {
-				switch (world.removeWater(wal.dimensionId(), entry)) {
-					case REMOVED -> applied++;
-					case ALREADY_CLEAR -> alreadyApplied++;
-					case SKIPPED_OCCUPIED -> skipped++;
-				}
+				// Release publishes HEAD before its first world write. At the base generation
+				// there is therefore nothing to undo, and touching matching water would risk
+				// deleting a pre-existing player/world block.
+				alreadyApplied++;
 			}
 			processed++;
 			failures.hit(FailurePoint.AFTER_RESTORE_BLOCK, processed);
@@ -262,6 +264,20 @@ public final class OwnershipCoordinator {
 			throw new IOException("Ownership is LOCKED: committed registry generation "
 					+ current.generation() + " is ahead of the WAL target " + wal.targetGeneration());
 		}
+		int releaseRestored = 0;
+		int releaseAlreadyRestored = 0;
+		int releaseSkipped = 0;
+		if (wal.operation() == OwnershipJournal.Operation.RELEASE) {
+			int processed = 0;
+			for (OwnershipJournal.BlockEntry entry : wal.blocks()) {
+				switch (world.restore(wal.dimensionId(), entry)) {
+					case RESTORED -> releaseRestored++;
+					case ALREADY_RESTORED -> releaseAlreadyRestored++;
+					case SKIPPED_OCCUPIED -> releaseSkipped++;
+				}
+				failures.hit(FailurePoint.AFTER_RESTORE_BLOCK, ++processed);
+			}
+		}
 		if (current == null || current.generation() != wal.targetGeneration()) {
 			ownershipFiles.publishCommitted(new OwnershipCommitted(
 					wal.regionId(), wal.dimensionId(), wal.targetGeneration(), expected));
@@ -283,6 +299,9 @@ public final class OwnershipCoordinator {
 		}
 		failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
 		ownershipFiles.deleteTransaction();
+		if (wal.operation() == OwnershipJournal.Operation.RELEASE) {
+			return RecoveryResult.completed(releaseRestored, releaseAlreadyRestored, releaseSkipped);
+		}
 		return RecoveryResult.completed(ownedAir, playerConflicts, waterConflicts);
 	}
 

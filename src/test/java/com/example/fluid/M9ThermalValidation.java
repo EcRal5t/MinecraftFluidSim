@@ -1215,6 +1215,22 @@ public final class M9ThermalValidation {
 				&& domain.hasPendingPhaseVolumeWork()
 				&& domain.thermalAudit().mechanicalWork().equals(before.mechanicalWork()),
 				"phase volume was not retained without prematurely booking projection work");
+		FlipFluidDomain lienDomain = new FlipFluidDomain(2, 2, 2, config, 128);
+		lienDomain.setVolume(0, 0, 0, 0.125F);
+		lienDomain.bindThermal(registry, liquids, 295.0);
+		PendingPhaseVolumeState restoredLien = new PendingPhaseVolumeState(8,
+				List.of(new PendingPhaseVolumeState.Entry(0, SignedDyadic.of(0.125))));
+		lienDomain.restorePendingPhaseVolumeState(restoredLien);
+		double volumeBeforeBlockedExtraction = lienDomain.totalVolumeExact();
+		FlipFluidDomain.ExactVolumeTransfer blockedExtraction = lienDomain.tryExtractExactVolume(
+				0, 0, 0, 0.125F, 0, 0);
+		require(!blockedExtraction.transferred()
+				&& lienDomain.totalVolumeExact() == volumeBeforeBlockedExtraction
+				&& lienDomain.exportPendingPhaseVolumeState().entries().equals(restoredLien.entries()),
+				"external extraction stranded pending phase mechanical work: transferred="
+						+ blockedExtraction.transferred() + " volume=" + lienDomain.totalVolumeExact()
+						+ "/" + volumeBeforeBlockedExtraction + " pending="
+						+ lienDomain.exportPendingPhaseVolumeState().entries() + "/" + restoredLien.entries());
 
 		domain.step();
 		ThermalAuditLedger after = domain.thermalAudit();

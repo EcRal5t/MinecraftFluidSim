@@ -204,6 +204,21 @@ public final class ContainerTransferStoreValidation {
 		);
 		store.write(dispenser);
 		check(dispenser.equals(store.read(tx2)), "dispenser actor WAL did not round-trip");
+		checkThrows(IllegalArgumentException.class,
+				() -> ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAYBE_HAND"),
+				"unknown player hand was accepted and would fall back to main hand");
+		checkThrows(IllegalArgumentException.class,
+				() -> ContainerTransferJournal.Actor.dispenser(
+						"minecraft:the_nether", new BlockPos(3, 4, 5), 9),
+				"out-of-range dispenser slot was accepted");
+		ContainerTransferJournal crossDimensionDispenser = new ContainerTransferJournal(
+				UUID.randomUUID(), region, "minecraft:overworld", 1L, 2L,
+				ContainerTransferJournal.Operation.EXTRACT, 250_000_000L,
+				ContainerTransferJournal.Actor.dispenser(
+						"minecraft:the_nether", new BlockPos(3, 4, 5), 2),
+				before, before, ContainerTransferJournal.Phase.PREPARED);
+		checkThrows(IOException.class, () -> store.write(crossDimensionDispenser),
+				"cross-dimension dispenser actor was accepted");
 
 		UUID tx3 = UUID.randomUUID();
 		ContainerTransferJournal.ItemFingerprint materialBefore = new ContainerTransferJournal.ItemFingerprint(

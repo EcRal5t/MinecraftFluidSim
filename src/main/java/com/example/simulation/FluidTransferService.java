@@ -540,7 +540,7 @@ return outcome;
 				preparedThermalEnergy == null ? null : service.thermalRegistryFingerprint(), -1L,
 				ContainerTransferJournal.Phase.PREPARED);
 		try {
-			service.containerTransfers().write(prepared);
+			service.writeContainerTransfer(prepared);
 		} catch (IOException exception) {
 			return new ControllerTransfer(
 					new TransferOutcome(false, operation == ContainerTransferJournal.Operation.INSERT, beforeStack,
@@ -619,7 +619,7 @@ return outcome;
 				rawOutcome.thermalEnergy() == null ? null : service.thermalRegistryFingerprint(), staged.manifestChecksum(),
 				ContainerTransferJournal.Phase.REGION_COMMITTED);
 		try {
-			service.containerTransfers().write(committed);
+			service.writeContainerTransfer(committed);
 		} catch (IOException exception) {
 			try { service.abortControllerRegionCheckpoint(staged); }
 			catch (IOException abortFailure) { exception.addSuppressed(abortFailure); }
@@ -722,7 +722,7 @@ return outcome;
 
 	private static void deleteQuietly(FluidSimulationService service, UUID transactionId) {
 		try {
-			service.containerTransfers().delete(transactionId);
+			service.deleteContainerTransfer(transactionId);
 		} catch (IOException exception) {
 			RealWaterMod.LOGGER.warn("Could not delete container transfer WAL {}", transactionId, exception);
 		}

@@ -94,6 +94,26 @@ public double internalEnergy() { return Double.longBitsToDouble(internalEnergyBi
 }
 
 public record Actor(ActorType type, UUID playerId, String hand, String actorDimensionId, BlockPos dispenserPos, int dispenserSlot) {
+public Actor {
+if (type == null) throw new IllegalArgumentException("Container transfer actor type is missing");
+switch (type) {
+case PLAYER_HAND -> {
+if (playerId == null || playerId.equals(new UUID(0L, 0L))
+|| !("MAIN_HAND".equals(hand) || "OFF_HAND".equals(hand))
+|| actorDimensionId != null || dispenserPos != null || dispenserSlot != -1) {
+throw new IllegalArgumentException("Player container transfer actor is invalid");
+}
+}
+case DISPENSER -> {
+if (playerId != null || hand != null || actorDimensionId == null || dispenserPos == null
+|| dispenserSlot < 0 || dispenserSlot >= 9) {
+throw new IllegalArgumentException("Dispenser container transfer actor is invalid");
+}
+dispenserPos = dispenserPos.immutable();
+}
+}
+}
+
 public static Actor player(UUID playerId, String hand) {
 return new Actor(ActorType.PLAYER_HAND, playerId, hand, null, null, -1);
 }

@@ -53,7 +53,7 @@ public final class M6OwnershipValidation {
 		run("normal acquire commits the joint state", M6OwnershipValidation::testNormalAcquire);
 		run("acquire rejects a non-adjacent target generation", M6OwnershipValidation::testGenerationGuard);
 		run("crash after region prepare aborts private staging", M6OwnershipValidation::testCrashAfterPrepare);
-		run("boot removes known first-publication staging", M6OwnershipValidation::testBootCleansFirstPublicationStaging);
+		run("boot removes only fully known first-publication staging", M6OwnershipValidation::testBootCleansFirstPublicationStaging);
 		run("crash after WAL publish rolls forward to recovery", M6OwnershipValidation::testCrashAfterWalPublish);
 		run("mid-mutation crash rolls back every removed block", M6OwnershipValidation::testCrashMidMutation);
 		run("player block wins in pre-commit rollback", M6OwnershipValidation::testPlayerWinsInRollback);
@@ -61,7 +61,8 @@ public final class M6OwnershipValidation {
 		run("crash after HEAD completes ownership and never restores", M6OwnershipValidation::testCrashAfterHead);
 		run("crash before cleanup completes idempotently", M6OwnershipValidation::testCrashBeforeCleanup);
 		run("normal release restores water and clears ownership", M6OwnershipValidation::testNormalRelease);
-		run("release crash before HEAD undoes the restoration", M6OwnershipValidation::testReleaseCrash);
+		run("release crash before HEAD never touches matching water", M6OwnershipValidation::testReleaseCrashBeforeHead);
+		run("release crash after HEAD completes restoration", M6OwnershipValidation::testReleaseCrash);
 		run("corrupt WAL locks and is never overwritten", M6OwnershipValidation::testCorruptWalLock);
 		run("WAL generation mismatch locks", M6OwnershipValidation::testWalGenerationMismatch);
 		run("committed registry ahead of the WAL target locks", M6OwnershipValidation::testCommittedAheadLocks);
@@ -179,6 +180,26 @@ public final class M6OwnershipValidation {
 			check(!Files.exists(regionDirectory), "boot retained known headless first-publication staging");
 			check(reopened.discover().issues().isEmpty() && reopened.discover().manifests().isEmpty(),
 					"cleaned first publication remained globally locked");
+
+			UUID nestedForeignId = UUID.randomUUID();
+			RegionStateFiles nestedFiles = new RegionStateFiles(root);
+			nestedFiles.prepare(RegionState.capture(populatedRegion(nestedForeignId), 1L), (point, path) -> { });
+			Path nestedForeign = root.resolve("realwater").resolve("region-state")
+					.resolve(nestedForeignId.toString()).resolve("slot-a").resolve("foreign").resolve("payload.bin");
+			Files.createDirectories(nestedForeign.getParent());
+			Files.writeString(nestedForeign, "foreign data");
+			nestedFiles.recoverKnownFirstPublicationStaging();
+			check(Files.exists(nestedForeign), "boot deleted nested foreign staged content");
+			check(nestedFiles.discover().issues().containsKey(nestedForeign.getParent().getParent().getParent()),
+					"nested foreign staged content did not lock discovery");
+
+			UUID wrongTypeId = UUID.randomUUID();
+			Path wrongTypeRegion = root.resolve("realwater").resolve("region-state").resolve(wrongTypeId.toString());
+			Files.createDirectories(wrongTypeRegion);
+			Files.writeString(wrongTypeRegion.resolve("slot-a"), "not a directory");
+			nestedFiles.recoverKnownFirstPublicationStaging();
+			check(Files.isRegularFile(wrongTypeRegion.resolve("slot-a")),
+					"boot deleted a staged slot with the wrong node type");
 		});
 	}
 
@@ -297,7 +318,25 @@ public final class M6OwnershipValidation {
 		});
 	}
 
-	/** Release crash before the HEAD publish must undo the partial restoration back to owned air. */
+	/** Release crash before HEAD has not touched the world, even if matching water later appears. */
+	private static void testReleaseCrashBeforeHead() throws Exception {
+		withTemporaryWorld(root -> {
+			Fixture fixture = new Fixture(root, 3);
+			acquire(fixture, FailureInjector.NONE);
+			expectIOException(() -> release(fixture, failAt(FailurePoint.BEFORE_HEAD_PUBLISH, 0)));
+			OwnershipJournal.BlockEntry first = fixture.world().originalEntries().getFirst();
+			fixture.world().current.put(first.packedPosition(), "water");
+			OwnershipCoordinator.RecoveryResult recovery = recover(fixture, FailureInjector.NONE);
+			check(recovery.kind() == OwnershipCoordinator.RecoveryResult.Kind.RELEASE_ROLLED_BACK,
+					"pre-HEAD release recovery did not retain the base generation");
+			check(fixture.world().waterCount() == 1 && fixture.world().airCount() == 2,
+					"pre-HEAD release recovery deleted matching pre-existing water");
+			check(fixture.regionFiles().committedGeneration(fixture.regionId()) == 1L,
+					"pre-HEAD release recovery advanced the region HEAD");
+		});
+	}
+
+	/** Release crash after HEAD must finish restoration instead of rolling committed state back. */
 	private static void testReleaseCrash() throws Exception {
 		withTemporaryWorld(root -> {
 			Fixture fixture = new Fixture(root, 3);
@@ -306,15 +345,15 @@ public final class M6OwnershipValidation {
 			check(fixture.world().waterCount() == 2 && fixture.world().airCount() == 1,
 					"release interruption state is wrong");
 			OwnershipCoordinator.RecoveryResult recovery = recover(fixture, FailureInjector.NONE);
-			check(recovery.kind() == OwnershipCoordinator.RecoveryResult.Kind.RELEASE_ROLLED_BACK
-					&& recovery.restored() == 2 && recovery.alreadyRestored() == 1,
-					"release rollback counts are wrong");
-			check(fixture.world().airCount() == 3, "release rollback did not undo the restoration");
+			check(recovery.kind() == OwnershipCoordinator.RecoveryResult.Kind.COMPLETED
+					&& recovery.restored() == 1 && recovery.alreadyRestored() == 2,
+					"release completion counts are wrong");
+			check(fixture.world().allOriginal(), "release completion did not restore the remaining preimage");
 			OwnershipCommitted committed = fixture.ownershipFiles().readCommitted();
-			check(committed.generation() == 1L && committed.ownedBlocks().size() == 3,
-					"release rollback changed the committed registry");
-			check(fixture.regionFiles().committedGeneration(fixture.regionId()) == 1L,
-					"release rollback advanced the region HEAD");
+			check(committed.generation() == 2L && committed.ownedBlocks().isEmpty(),
+					"release completion did not clear the committed registry");
+			check(fixture.regionFiles().committedGeneration(fixture.regionId()) == 2L,
+					"release completion did not retain the committed region HEAD");
 		});
 	}
 

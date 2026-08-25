@@ -430,8 +430,12 @@ throw new IOException("Container transfer WAL generations are inconsistent: base
 /** Rejects syntactically valid WALs whose item delta cannot settle the declared solver delta. */
 private static void validateTransferShape(ContainerTransferJournal journal, boolean requireTargetChecksum) throws IOException {
 if (journal.operation() == null || journal.phase() == null
-|| journal.beforeItem() == null || journal.afterItem() == null) {
+|| journal.actor() == null || journal.beforeItem() == null || journal.afterItem() == null) {
 throw new IOException("Container transfer WAL is incomplete");
+}
+if (journal.actor().type() == ContainerTransferJournal.ActorType.DISPENSER
+&& !journal.dimensionId().equals(journal.actor().actorDimensionId())) {
+throw new IOException("Dispenser actor dimension differs from the target region dimension");
 }
 if (journal.resourceKind() == null) throw new IOException("Container transfer WAL resource kind is missing");
 if (journal.phase() == ContainerTransferJournal.Phase.PREPARED

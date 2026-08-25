@@ -110,6 +110,11 @@ public final class FluidSimulationService {
 	private final FluidRegionManager regionManager;
 	private final FluidRegionOperations regionOperations;
 	private final ContainerTransferStore containerTransfers;
+	/** Boot-decoded WAL truth; normal ticks never rescan or reread the transfer directory. */
+	private final Map<UUID, ContainerTransferJournal> indexedContainerTransfers = new HashMap<>();
+	private final Set<UUID> auditedContainerTransfers = new HashSet<>();
+	private final Set<UUID> awaitingContainerActors = new HashSet<>();
+	private Set<String> indexedContainerTransferIssues = Set.of();
 	/** Transactions which changed the live solver but have not yet proved a committed region HEAD. */
 	private final Set<UUID> runtimeDirtyContainerTransfers = new HashSet<>();
 	/** Prevents an unresolved WAL from emitting the same ERROR every server tick. */
@@ -325,6 +330,7 @@ public final class FluidSimulationService {
 				precipitationFeatureEnabled, thermalFeatureEnabled, thermalRegistry, gasRegistry,
 				serverConfig.maximumThermalSubstepsPerStep());
 		containerTransfers = new ContainerTransferStore(worldRoot);
+		loadContainerTransferIndex();
 		if (configurationLocked) regionOperations.recordIssue(
 				"server.properties 不可用，已安全使用默认预算并关闭控制器；原文件未覆盖");
 		ownershipIssues = regionOperations.scanOwnershipIssues();
@@ -372,8 +378,39 @@ public final class FluidSimulationService {
 		}
 	}
 
-	ContainerTransferStore containerTransfers() {
-		return containerTransfers;
+	void writeContainerTransfer(ContainerTransferJournal journal) throws IOException {
+		containerTransfers.write(journal);
+		indexedContainerTransfers.put(journal.transactionId(), journal);
+		auditedContainerTransfers.remove(journal.transactionId());
+		awaitingContainerActors.remove(journal.transactionId());
+	}
+
+	void deleteContainerTransfer(UUID transactionId) throws IOException {
+		containerTransfers.delete(transactionId);
+		indexedContainerTransfers.remove(transactionId);
+		auditedContainerTransfers.remove(transactionId);
+		awaitingContainerActors.remove(transactionId);
+	}
+
+	private void loadContainerTransferIndex() {
+		indexedContainerTransfers.clear();
+		auditedContainerTransfers.clear();
+		awaitingContainerActors.clear();
+		try {
+			ContainerTransferStore.Scan scan = containerTransfers.scan();
+			HashSet<String> issues = new HashSet<>(scan.issues());
+			for (UUID transactionId : scan.transactions()) try {
+				ContainerTransferJournal journal = containerTransfers.read(transactionId);
+				indexedContainerTransfers.put(transactionId, journal);
+			} catch (IOException | RuntimeException unreadable) {
+				issues.add("unreadable indexed container-transfer WAL is preserved: "
+						+ transactionId + " (" + unreadable.getMessage() + ")");
+			}
+			indexedContainerTransferIssues = Set.copyOf(issues);
+		} catch (IOException | RuntimeException scanFailure) {
+			indexedContainerTransferIssues = Set.of(
+					"container-transfer boot scan failed: " + scanFailure.getMessage());
+		}
 	}
 
 	long committedRegionGeneration(UUID regionId) throws IOException {
@@ -426,32 +463,16 @@ public final class FluidSimulationService {
 
 
 	boolean hasPendingContainerTransfer(UUID regionId) {
-		try {
-			ContainerTransferStore.Scan scan = containerTransfers.scan();
-			if (!scan.issues().isEmpty()) return true;
-			for (UUID transactionId : scan.transactions()) {
-				if (containerTransfers.read(transactionId).regionId().equals(regionId)) return true;
-			}
-			return false;
-		} catch (IOException | RuntimeException listingFailure) {
-			return true;
-		}
+		if (!indexedContainerTransferIssues.isEmpty()) return true;
+		return indexedContainerTransfers.values().stream().anyMatch(journal -> journal.regionId().equals(regionId));
 	}
 
 	boolean hasAnyContainerTransferLock() {
-		try {
-			return containerTransfers.scan().hasAny();
-		} catch (IOException | RuntimeException scanFailure) {
-			return true;
-		}
+		return !indexedContainerTransferIssues.isEmpty() || !indexedContainerTransfers.isEmpty();
 	}
 
 	boolean hasContainerTransferStoreIssues() {
-		try {
-			return !containerTransfers.scan().issues().isEmpty();
-		} catch (IOException | RuntimeException scanFailure) {
-			return true;
-		}
+		return !indexedContainerTransferIssues.isEmpty();
 	}
 
 	void markContainerTransferSolverDirty(UUID transactionId) {
@@ -471,25 +492,24 @@ public final class FluidSimulationService {
 	}
 
 	public void recoverContainerTransfers(MinecraftServer server) {
-		try {
-			ContainerTransferStore.Scan scan = containerTransfers.scan();
-			if (!scan.issues().isEmpty()) {
-				Set<String> currentIssues = Set.copyOf(scan.issues());
-				for (String issue : scan.issues()) {
-					if (!reportedContainerTransferStoreIssues.contains(issue)) {
-						RealWaterMod.LOGGER.error("Container-transfer recovery store is globally LOCKED: {}", issue);
-					}
+		if (!indexedContainerTransferIssues.isEmpty()) {
+			Set<String> currentIssues = indexedContainerTransferIssues;
+			for (String issue : currentIssues) {
+				if (!reportedContainerTransferStoreIssues.contains(issue)) {
+					RealWaterMod.LOGGER.error("Container-transfer recovery store is globally LOCKED: {}", issue);
 				}
-				reportedContainerTransferStoreIssues = currentIssues;
-				return;
 			}
-			reportedContainerTransferStoreIssues = Set.of();
-			reportedContainerTransferLocks.keySet().retainAll(new HashSet<>(scan.transactions()));
-			for (UUID transactionId : scan.transactions()) {
+			reportedContainerTransferStoreIssues = currentIssues;
+			return;
+		}
+		reportedContainerTransferStoreIssues = Set.of();
+		reportedContainerTransferLocks.keySet().retainAll(indexedContainerTransfers.keySet());
+		for (UUID transactionId : List.copyOf(indexedContainerTransfers.keySet())) {
+			if (awaitingContainerActors.contains(transactionId)) {
+				convergeAwaitingContainerActor(server, transactionId);
+			} else if (!auditedContainerTransfers.contains(transactionId)) {
 				processContainerTransfer(server, transactionId);
 			}
-		} catch (IOException exception) {
-			RealWaterMod.LOGGER.error("Could not scan container transfer WALs", exception);
 		}
 	}
 
@@ -499,9 +519,11 @@ public final class FluidSimulationService {
 
 	private void processContainerTransfer(MinecraftServer server, UUID transactionId) {
 		try {
-			ContainerTransferJournal journal = containerTransfers.read(transactionId);
+			ContainerTransferJournal journal = indexedContainerTransfers.get(transactionId);
+			if (journal == null) return;
 			if (journal.requiresThermalRegistry()) {
 				if (!thermalFeatureEnabled || thermalRegistry == null) {
+					auditedContainerTransfers.add(transactionId);
 					logContainerTransferLockOnce(transactionId,
 							"Container transfer WAL " + transactionId
 									+ " remains locked: thermal recovery requires the enabled authoritative world registry");
@@ -510,6 +532,7 @@ public final class FluidSimulationService {
 				try {
 					journal.validateThermalRegistry(thermalRegistry.fingerprint());
 				} catch (RuntimeException foreignRegistry) {
+					auditedContainerTransfers.add(transactionId);
 					logContainerTransferLockOnce(transactionId,
 							"Container transfer WAL " + transactionId
 									+ " remains locked: thermal item registry identity is foreign or invalid ("
@@ -519,6 +542,7 @@ public final class FluidSimulationService {
 			}
 			if (journal.requiresGranularRegistry()) {
 				if (!granularFeatureEnabled || granularRegistry == null) {
+					auditedContainerTransfers.add(transactionId);
 					logContainerTransferLockOnce(transactionId,
 							"Container transfer WAL " + transactionId
 									+ " remains locked: granular recovery requires the enabled authoritative world registry");
@@ -528,6 +552,7 @@ public final class FluidSimulationService {
 					journal.validateGranularRegistry(granularRegistry,
 							chemistryFeatureEnabled ? chemicalRegistry : null);
 				} catch (RuntimeException foreignRegistry) {
+					auditedContainerTransfers.add(transactionId);
 					logContainerTransferLockOnce(transactionId,
 							"Container transfer WAL " + transactionId
 									+ " remains locked: granular item registry identity is foreign or invalid ("
@@ -537,6 +562,7 @@ public final class FluidSimulationService {
 			}
 			if (journal.requiresChemicalRegistry()) {
 				if (!chemistryFeatureEnabled || chemicalRegistry == null) {
+					auditedContainerTransfers.add(transactionId);
 					logContainerTransferLockOnce(transactionId,
 							"Container transfer WAL " + transactionId
 									+ " remains locked: chemical recovery requires the enabled authoritative world registry");
@@ -545,6 +571,7 @@ public final class FluidSimulationService {
 				try {
 					journal.validateChemicalRegistry(chemicalRegistry);
 				} catch (RuntimeException foreignRegistry) {
+					auditedContainerTransfers.add(transactionId);
 					logContainerTransferLockOnce(transactionId,
 							"Container transfer WAL " + transactionId
 									+ " remains locked: chemical item registry identity is foreign or invalid ("
@@ -558,39 +585,67 @@ public final class FluidSimulationService {
 					head, headChecksum, journal, runtimeDirtyContainerTransfers.contains(transactionId));
 			switch (decision) {
 				case LOCK_LIVE_SOLVER_DIRTY -> {
+					auditedContainerTransfers.add(transactionId);
 					logContainerTransferLockOnce(transactionId,
 							"Container transfer WAL " + transactionId + " remains locked: its live solver changed but region "
 									+ journal.regionId() + " HEAD is still " + head
 									+ "; restart is required to restore the base checkpoint");
 				}
 				case DISCARD_UNCOMMITTED -> {
-					containerTransfers.delete(transactionId);
+					deleteContainerTransfer(transactionId);
 					reportedContainerTransferLocks.remove(transactionId);
 					RealWaterMod.LOGGER.warn("Discarded uncommitted container transfer WAL {} for region {}", transactionId, journal.regionId());
 				}
 				case CONVERGE_AFTER_ITEM -> {
-				if (applyAfterItem(server, journal)) {
-					persistAfterItem(server, journal);
+					if (applyAfterItem(server, journal)) {
+						persistAfterItem(server, journal);
 						adoptRecoveredContainerCheckpoint(journal);
-						containerTransfers.delete(transactionId);
+						deleteContainerTransfer(transactionId);
 						reportedContainerTransferLocks.remove(transactionId);
 						RealWaterMod.LOGGER.warn("Converged container transfer WAL {} to a durably saved after item", transactionId);
-					}
+					} else awaitingContainerActors.add(transactionId);
 				}
-				case LOCK_TARGET_WITHOUT_AFTER_ITEM -> logContainerTransferLockOnce(transactionId,
-						"Container transfer WAL " + transactionId + " is locked: region " + journal.regionId()
+				case LOCK_TARGET_WITHOUT_AFTER_ITEM -> {
+					auditedContainerTransfers.add(transactionId);
+					logContainerTransferLockOnce(transactionId,
+							"Container transfer WAL " + transactionId + " is locked: region " + journal.regionId()
 								+ " HEAD committed target " + head + ", but WAL phase " + journal.phase()
 								+ " contains no authoritative after-item");
-				case LOCK_CHECKSUM_MISMATCH -> logContainerTransferLockOnce(transactionId,
-						"Container transfer WAL " + transactionId + " is locked: target generation checksum "
+				}
+				case LOCK_CHECKSUM_MISMATCH -> {
+					auditedContainerTransfers.add(transactionId);
+					logContainerTransferLockOnce(transactionId,
+							"Container transfer WAL " + transactionId + " is locked: target generation checksum "
 								+ journal.targetManifestChecksum() + " does not match HEAD " + headChecksum);
-				case LOCK_GENERATION_MISMATCH -> logContainerTransferLockOnce(transactionId,
-						"Container transfer WAL " + transactionId + " is locked: region " + journal.regionId()
+				}
+				case LOCK_GENERATION_MISMATCH -> {
+					auditedContainerTransfers.add(transactionId);
+					logContainerTransferLockOnce(transactionId,
+							"Container transfer WAL " + transactionId + " is locked: region " + journal.regionId()
 								+ " HEAD " + head + " is neither base " + journal.baseGeneration()
 								+ " nor target " + journal.targetGeneration());
+				}
 			}
 		} catch (IOException | RuntimeException exception) {
+			auditedContainerTransfers.add(transactionId);
 			RealWaterMod.LOGGER.error("Could not recover container transfer WAL {}", transactionId, exception);
+		}
+	}
+
+	private void convergeAwaitingContainerActor(MinecraftServer server, UUID transactionId) {
+		ContainerTransferJournal journal = indexedContainerTransfers.get(transactionId);
+		if (journal == null) return;
+		try {
+			if (!applyAfterItem(server, journal)) return;
+			persistAfterItem(server, journal);
+			adoptRecoveredContainerCheckpoint(journal);
+			deleteContainerTransfer(transactionId);
+			reportedContainerTransferLocks.remove(transactionId);
+			RealWaterMod.LOGGER.warn("Converged container transfer WAL {} after its actor became available", transactionId);
+		} catch (IOException | RuntimeException exception) {
+			awaitingContainerActors.remove(transactionId);
+			auditedContainerTransfers.add(transactionId);
+			RealWaterMod.LOGGER.error("Could not converge container transfer WAL {} after actor availability", transactionId, exception);
 		}
 	}
 
@@ -642,7 +697,12 @@ public final class FluidSimulationService {
 	) {
 		ServerPlayer player = server.getPlayerList().getPlayer(actor.playerId());
 		if (player == null) return false;
-		InteractionHand hand = "OFF_HAND".equals(actor.hand()) ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+		if (!player.level().dimension().identifier().toString().equals(journal.dimensionId())) return false;
+		InteractionHand hand = switch (actor.hand()) {
+			case "MAIN_HAND" -> InteractionHand.MAIN_HAND;
+			case "OFF_HAND" -> InteractionHand.OFF_HAND;
+			default -> throw new IllegalStateException("Validated player actor has an unknown hand");
+		};
 		ItemStack current = player.getItemInHand(hand);
 		if (!fingerprintMatches(current, journal.beforeItem()) && !fingerprintMatches(current, journal.afterItem())) return false;
 		player.setItemInHand(hand, journal.afterItem().toStack());
@@ -659,6 +719,7 @@ public final class FluidSimulationService {
 		if (dimensionId == null) return false;
 		ServerLevel level = server.getLevel(ResourceKey.create(Registries.DIMENSION, dimensionId));
 		if (level == null || !(level.getBlockEntity(actor.dispenserPos()) instanceof DispenserBlockEntity dispenser)) return false;
+		if (actor.dispenserSlot() < 0 || actor.dispenserSlot() >= dispenser.getContainerSize()) return false;
 		ItemStack current = dispenser.getItem(actor.dispenserSlot());
 		if (!fingerprintMatches(current, journal.beforeItem()) && !fingerprintMatches(current, journal.afterItem())) return false;
 		dispenser.setItem(actor.dispenserSlot(), journal.afterItem().toStack());
