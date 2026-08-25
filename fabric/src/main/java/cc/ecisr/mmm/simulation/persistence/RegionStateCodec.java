@@ -29,7 +29,7 @@ final class RegionStateCodec {
 	static final int MAX_SECTIONS = 4_096;
 
 	CompoundTag encodeManifest(RegionManifest manifest) {
-		CompoundTag root = identity(manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(), manifest.formatVersion());
+		CompoundTag root = identity(manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(), manifest.layout());
 		root.putLong("NetworkGeneration", manifest.networkGeneration());
 		root.putLong("Origin", manifest.origin().asLong());
 		root.putInt("SizeX", manifest.sizeX()); root.putInt("SizeY", manifest.sizeY()); root.putInt("SizeZ", manifest.sizeZ());
@@ -39,12 +39,12 @@ final class RegionStateCodec {
 		root.put("Footprint", encodeFootprint(manifest.footprint()));
 		root.putInt("MarkerCount", manifest.totalMarkerCount());
 		root.putLong("VolumeBits", manifest.totalVolumeBits());
-		if (manifest.formatVersion() >= 2) {
+		if (manifest.layout().hasMaterials()) {
 			root.put("Materials", encodeMaterials(manifest.materialPalette()));
 			root.putLong("MassBits", manifest.totalMassBits());
 			root.put("MaterialLedgers", encodeMaterialLedgers(manifest.materialLedgers()));
 		}
-		if (manifest.formatVersion() == 5 || manifest.formatVersion() == 7) {
+		if (manifest.layout().permitsOptionalChemistry()) {
 			root.putBoolean("ChemistryPresent", manifest.hasChemicalState());
 		}
 		if (manifest.hasChemicalState()) {
@@ -60,7 +60,7 @@ final class RegionStateCodec {
 			CompoundTag section = new CompoundTag();
 			section.putInt("X", descriptor.sectionX()); section.putInt("Y", descriptor.sectionY()); section.putInt("Z", descriptor.sectionZ());
 			section.putInt("MarkerCount", descriptor.markerCount()); section.putLong("VolumeBits", descriptor.volumeBits());
-			if (manifest.formatVersion() >= 2) section.putLong("MassBits", descriptor.massBits());
+			if (manifest.layout().hasMaterials()) section.putLong("MassBits", descriptor.massBits());
 			section.putLong("Checksum", descriptor.checksum()); sections.add(section);
 		}
 		root.put("Sections", sections);
@@ -85,7 +85,7 @@ final class RegionStateCodec {
 			require(section, "X", Tag.TAG_INT); require(section, "Y", Tag.TAG_INT); require(section, "Z", Tag.TAG_INT);
 			require(section, "MarkerCount", Tag.TAG_INT); require(section, "VolumeBits", Tag.TAG_LONG); require(section, "Checksum", Tag.TAG_LONG);
 			long massBits = 0L;
-			if (identity.version() >= 2) {
+			if (identity.layout().hasMaterials()) {
 				require(section, "MassBits", Tag.TAG_LONG);
 				massBits = section.getLongOr("MassBits", 0L);
 			}
@@ -96,7 +96,7 @@ final class RegionStateCodec {
 		List<FluidMaterial> materials = List.of();
 		long totalMassBits = 0L;
 		List<RegionManifest.MaterialLedger> materialLedgers = List.of();
-		if (identity.version() >= 2) {
+		if (identity.layout().hasMaterials()) {
 			require(root, "Materials", Tag.TAG_LIST); require(root, "MassBits", Tag.TAG_LONG);
 			require(root, "MaterialLedgers", Tag.TAG_LIST);
 			materials = decodeMaterials(root.getListOrEmpty("Materials"));
@@ -109,8 +109,8 @@ final class RegionStateCodec {
 		List<FlipChemicalParticleState.StableMixture> chemicalMixtures = List.of();
 		long[] chemicalSpeciesTotals = new long[0];
 		long chemicalResidualBits = 0L;
-		boolean chemicalState = identity.version() == 3;
-		if (identity.version() == 5 || identity.version() == 7) {
+		boolean chemicalState = identity.layout().requiresChemistry();
+		if (identity.layout().permitsOptionalChemistry()) {
 			require(root, "ChemistryPresent", Tag.TAG_BYTE);
 			chemicalState = root.getBooleanOr("ChemistryPresent", false);
 		}
@@ -126,7 +126,7 @@ final class RegionStateCodec {
 			chemicalResidualBits = root.getLongOr("ChemicalResidualBits", 0L);
 		}
 		try {
-			return new RegionManifest(identity.version(), identity.id(), identity.dimension(), identity.generation(), root.getLongOr("NetworkGeneration", -1L),
+			return new RegionManifest(identity.layout(), identity.id(), identity.dimension(), identity.generation(), root.getLongOr("NetworkGeneration", -1L),
 					BlockPos.of(root.getLongOr("Origin", 0L)), root.getIntOr("SizeX", -1), root.getIntOr("SizeY", -1), root.getIntOr("SizeZ", -1),
 					decodeConfig(root.getCompoundOrEmpty("Solver")), root.getLongOr("MarkerBudget", -1L),
 					decodeRuntime(root.getCompoundOrEmpty("Runtime")), decodeFootprint(root.getCompoundOrEmpty("Footprint")),
@@ -139,18 +139,18 @@ final class RegionStateCodec {
 	}
 
 	CompoundTag encodeSection(RegionSectionState section) {
-		CompoundTag root = identity(section.regionId(), section.dimensionId(), section.checkpointGeneration(), section.formatVersion());
+		CompoundTag root = identity(section.regionId(), section.dimensionId(), section.checkpointGeneration(), section.layout());
 		root.putInt("SectionX", section.sectionX()); root.putInt("SectionY", section.sectionY()); root.putInt("SectionZ", section.sectionZ());
 		root.putInt("StartX", section.localStartX()); root.putInt("StartY", section.localStartY()); root.putInt("StartZ", section.localStartZ());
 		root.putInt("SizeX", section.sizeX()); root.putInt("SizeY", section.sizeY()); root.putInt("SizeZ", section.sizeZ());
 		root.putIntArray("Ordinals", section.markerOrdinals());
 		root.putIntArray("PositionVolumeBits", floatBits(section.positionVolume()));
 		root.putIntArray("VelocityBits", floatBits(section.velocities()));
-		if (section.formatVersion() >= 2) {
+		if (section.layout().hasMaterials()) {
 			root.putLongArray("MassBits", doubleBits(section.markerMass()));
 			root.putIntArray("MaterialPaletteIndices", section.materialPaletteIndex());
 		}
-		if (section.formatVersion() == 5 || section.formatVersion() == 7) {
+		if (section.layout().permitsOptionalChemistry()) {
 			root.putBoolean("ChemistryPresent", section.hasChemicalState());
 		}
 		if (section.hasChemicalState()) {
@@ -175,15 +175,15 @@ final class RegionStateCodec {
 		require(root, "Extensions", Tag.TAG_LIST); require(root, "Checksum", Tag.TAG_LONG);
 		double[] markerMass = new double[0];
 		int[] materialPaletteIndex = new int[0];
-		if (identity.version() >= 2) {
+		if (identity.layout().hasMaterials()) {
 			require(root, "MassBits", Tag.TAG_LONG_ARRAY); require(root, "MaterialPaletteIndices", Tag.TAG_INT_ARRAY);
 			markerMass = doubles(root.getLongArray("MassBits").orElseThrow());
 			materialPaletteIndex = root.getIntArray("MaterialPaletteIndices").orElseThrow();
 		}
 		int[] chemicalMixtureIndex = new int[0]; byte[] indicator = new byte[0];
 		long[] chemicalSpeciesTotals = new long[0]; long chemicalResidualBits = 0L;
-		boolean chemicalState = identity.version() == 3;
-		if (identity.version() == 5 || identity.version() == 7) {
+		boolean chemicalState = identity.layout().requiresChemistry();
+		if (identity.layout().permitsOptionalChemistry()) {
 			require(root, "ChemistryPresent", Tag.TAG_BYTE);
 			chemicalState = root.getBooleanOr("ChemistryPresent", false);
 		}
@@ -196,7 +196,7 @@ final class RegionStateCodec {
 			chemicalResidualBits = root.getLongOr("ChemicalResidualBits", 0L);
 		}
 		try {
-			return new RegionSectionState(identity.version(), identity.id(), identity.dimension(), identity.generation(),
+			return new RegionSectionState(identity.layout(), identity.id(), identity.dimension(), identity.generation(),
 					root.getIntOr("SectionX", 0), root.getIntOr("SectionY", 0), root.getIntOr("SectionZ", 0),
 					root.getIntOr("StartX", -1), root.getIntOr("StartY", -1), root.getIntOr("StartZ", -1),
 					root.getIntOr("SizeX", -1), root.getIntOr("SizeY", -1), root.getIntOr("SizeZ", -1),
@@ -210,28 +210,24 @@ final class RegionStateCodec {
 		}
 	}
 
-	private static CompoundTag identity(UUID id, String dimension, long generation, int formatVersion) {
+	private static CompoundTag identity(UUID id, String dimension, long generation, RegionStateLayout layout) {
 		CompoundTag tag = new CompoundTag();
-		tag.putInt("Version", formatVersion); tag.putInt("Palette", formatVersion);
+		tag.putString("Layout", layout.persistedId());
 		tag.putLong("UuidMost", id.getMostSignificantBits()); tag.putLong("UuidLeast", id.getLeastSignificantBits());
 		tag.putString("Dimension", dimension); tag.putLong("Generation", generation);
 		return tag;
 	}
 
 	private static Identity decodeIdentity(CompoundTag tag, String context) throws IOException {
-		require(tag, "Version", Tag.TAG_INT); require(tag, "Palette", Tag.TAG_INT);
-		int version = tag.getIntOr("Version", -1), palette = tag.getIntOr("Palette", -1);
-		if (version != 1 && version != 2 && version != 3 && version != 5 && version != 7) {
-			throw new IOException("Unsupported region-state " + context + " version " + version);
-		}
-		if (palette != version) throw new IOException("Unsupported region-state palette " + palette + " for version " + version);
+		require(tag, "Layout", Tag.TAG_STRING);
+		RegionStateLayout layout = RegionStateLayout.decode(tag.getStringOr("Layout", ""));
 		require(tag, "UuidMost", Tag.TAG_LONG); require(tag, "UuidLeast", Tag.TAG_LONG);
 		require(tag, "Dimension", Tag.TAG_STRING); require(tag, "Generation", Tag.TAG_LONG);
 		String dimension = tag.getStringOr("Dimension", "");
 		if (Identifier.tryParse(dimension) == null) throw new IOException("Invalid persisted dimension " + dimension);
 		long generation = tag.getLongOr("Generation", -1L);
 		if (generation <= 0L) throw new IOException("Invalid checkpoint generation");
-		return new Identity(version, new UUID(tag.getLongOr("UuidMost", 0L), tag.getLongOr("UuidLeast", 0L)), dimension, generation);
+		return new Identity(layout, new UUID(tag.getLongOr("UuidMost", 0L), tag.getLongOr("UuidLeast", 0L)), dimension, generation);
 	}
 
 	private static ListTag encodeMaterials(List<FluidMaterial> materials) {
@@ -446,5 +442,5 @@ final class RegionStateCodec {
 	private static long[] longs(Set<Long> values) { return values.stream().mapToLong(Long::longValue).sorted().toArray(); }
 	private static Set<Long> set(long[] values) { Set<Long> result = new HashSet<>(); Arrays.stream(values).forEach(result::add); return result; }
 
-	private record Identity(int version, UUID id, String dimension, long generation) { }
+	private record Identity(RegionStateLayout layout, UUID id, String dimension, long generation) { }
 }

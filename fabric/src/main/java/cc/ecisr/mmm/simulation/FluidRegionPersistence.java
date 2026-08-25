@@ -14,6 +14,7 @@ import cc.ecisr.mmm.simulation.ownership.OwnershipStore;
 import cc.ecisr.mmm.simulation.persistence.RegionManifest;
 import cc.ecisr.mmm.simulation.persistence.RegionState;
 import cc.ecisr.mmm.simulation.persistence.RegionStateFiles;
+import cc.ecisr.mmm.simulation.persistence.RegionStateLayout;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
 import net.minecraft.core.BlockPos;
@@ -36,7 +37,6 @@ import java.util.UUID;
 
 /** Coordinates persistent controller state and its joint world-ownership transactions. */
 final class FluidRegionPersistence {
-	private static final int CURRENT_THERMAL_FORMAT = 7;
 	private final RegionStateFiles files;
 	private final OwnershipStore ownershipStore;
 	private final boolean materialsEnabled;
@@ -478,7 +478,7 @@ final class FluidRegionPersistence {
 
 		RegionStateFiles.PreviousGeneration previous = files.readPrevious(region.id(), expectedCurrentGeneration);
 		RegionManifest manifest = previous.state().manifest();
-		if (manifest.formatVersion() != CURRENT_THERMAL_FORMAT) {
+		if (manifest.layout() != RegionStateLayout.THERMAL) {
 			throw new IOException("Previous slot does not use the current thermal/gas region layout");
 		}
 		validateFeatureShape(manifest);
@@ -587,7 +587,7 @@ final class FluidRegionPersistence {
 			throw new IOException("Authoritative thermal/gas registry is unavailable");
 		}
 		RegionManifest manifest = state.manifest();
-		if (manifest.formatVersion() != CURRENT_THERMAL_FORMAT) {
+		if (manifest.layout() != RegionStateLayout.THERMAL) {
 			throw new IOException("Checkpoint does not use the current thermal region layout");
 		}
 		long generation = manifest.checkpointGeneration();
@@ -641,8 +641,11 @@ final class FluidRegionPersistence {
 	}
 
 	private void validateFeatureShape(RegionManifest manifest) throws IOException {
-		int expectedFormat = thermalEnabled ? 7 : granularEnabled ? 5 : chemistryEnabled ? 3 : materialsEnabled ? 2 : 1;
-		if (manifest.formatVersion() != expectedFormat
+		RegionStateLayout expectedLayout = thermalEnabled ? RegionStateLayout.THERMAL
+				: granularEnabled ? RegionStateLayout.GRANULAR
+				: chemistryEnabled ? RegionStateLayout.CHEMICAL
+				: materialsEnabled ? RegionStateLayout.MATERIAL : RegionStateLayout.PURE;
+		if (manifest.layout() != expectedLayout
 				|| manifest.hasChemicalState() != chemistryEnabled
 				|| manifest.hasGranularState() != granularEnabled
 				|| manifest.hasThermalState() != thermalEnabled

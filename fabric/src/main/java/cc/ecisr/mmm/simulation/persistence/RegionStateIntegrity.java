@@ -22,18 +22,18 @@ final class RegionStateIntegrity {
 	static long sectionChecksum(RegionSectionState section) {
 		return checksum(out -> {
 			writeIdentity(out, section.regionId().getMostSignificantBits(), section.regionId().getLeastSignificantBits(),
-					section.dimensionId(), section.checkpointGeneration(), section.formatVersion());
+					section.dimensionId(), section.checkpointGeneration(), section.layout());
 			out.writeInt(section.sectionX()); out.writeInt(section.sectionY()); out.writeInt(section.sectionZ());
 			out.writeInt(section.localStartX()); out.writeInt(section.localStartY()); out.writeInt(section.localStartZ());
 			out.writeInt(section.sizeX()); out.writeInt(section.sizeY()); out.writeInt(section.sizeZ());
 			writeInts(out, section.markerOrdinals());
 			writeFloats(out, section.positionVolume());
 			writeFloats(out, section.velocities());
-			if (section.formatVersion() >= 2) {
+			if (section.layout().hasMaterials()) {
 				writeDoubles(out, section.markerMass());
 				writeInts(out, section.materialPaletteIndex());
 			}
-			if (section.formatVersion() == 5 || section.formatVersion() == 7) {
+			if (section.layout().permitsOptionalChemistry()) {
 				out.writeBoolean(section.hasChemicalState());
 			}
 			if (section.hasChemicalState()) {
@@ -50,7 +50,7 @@ final class RegionStateIntegrity {
 	static long manifestChecksum(RegionManifest manifest) {
 		return checksum(out -> {
 			writeIdentity(out, manifest.regionId().getMostSignificantBits(), manifest.regionId().getLeastSignificantBits(),
-					manifest.dimensionId(), manifest.checkpointGeneration(), manifest.formatVersion());
+					manifest.dimensionId(), manifest.checkpointGeneration(), manifest.layout());
 			out.writeLong(manifest.networkGeneration());
 			writeBlockPos(out, manifest.origin());
 			out.writeInt(manifest.sizeX()); out.writeInt(manifest.sizeY()); out.writeInt(manifest.sizeZ());
@@ -60,7 +60,7 @@ final class RegionStateIntegrity {
 			writeFootprint(out, manifest.footprint());
 			out.writeInt(manifest.totalMarkerCount());
 			out.writeLong(manifest.totalVolumeBits());
-			if (manifest.formatVersion() >= 2) {
+			if (manifest.layout().hasMaterials()) {
 				writeMaterials(out, manifest.materialPalette());
 				out.writeLong(manifest.totalMassBits());
 				out.writeInt(manifest.materialLedgers().size());
@@ -68,7 +68,7 @@ final class RegionStateIntegrity {
 					out.writeInt(ledger.markerCount()); out.writeLong(ledger.volumeBits()); out.writeLong(ledger.massBits());
 				}
 			}
-			if (manifest.formatVersion() == 5 || manifest.formatVersion() == 7) {
+			if (manifest.layout().permitsOptionalChemistry()) {
 				out.writeBoolean(manifest.hasChemicalState());
 			}
 			if (manifest.hasChemicalState()) {
@@ -93,7 +93,7 @@ final class RegionStateIntegrity {
 			for (RegionManifest.SectionDescriptor descriptor : descriptors) {
 				out.writeInt(descriptor.sectionX()); out.writeInt(descriptor.sectionY()); out.writeInt(descriptor.sectionZ());
 				out.writeInt(descriptor.markerCount()); out.writeLong(descriptor.volumeBits());
-				if (manifest.formatVersion() >= 2) out.writeLong(descriptor.massBits());
+				if (manifest.layout().hasMaterials()) out.writeLong(descriptor.massBits());
 				out.writeLong(descriptor.checksum());
 			}
 			writeExtensions(out, manifest.extensions());
@@ -113,9 +113,9 @@ final class RegionStateIntegrity {
 	}
 
 	private static void writeIdentity(
-			DataOutputStream out, long most, long least, String dimension, long generation, int formatVersion
+			DataOutputStream out, long most, long least, String dimension, long generation, RegionStateLayout layout
 	) throws IOException {
-		out.writeInt(formatVersion); out.writeInt(formatVersion);
+		out.writeUTF(layout.persistedId());
 		out.writeLong(most); out.writeLong(least); out.writeUTF(dimension); out.writeLong(generation);
 	}
 

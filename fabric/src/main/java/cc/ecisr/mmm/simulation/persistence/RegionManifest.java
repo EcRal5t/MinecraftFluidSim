@@ -16,7 +16,7 @@ import java.util.UUID;
 
 /** Metadata admitted at startup without allocating a solver. */
 public record RegionManifest(
-		int formatVersion,
+		RegionStateLayout layout,
 		UUID regionId,
 		String dimensionId,
 		long checkpointGeneration,
@@ -45,6 +45,7 @@ public record RegionManifest(
 		long checksum
 ) {
 	public RegionManifest {
+		Objects.requireNonNull(layout, "layout");
 		Objects.requireNonNull(regionId, "regionId");
 		Objects.requireNonNull(dimensionId, "dimensionId");
 		origin = Objects.requireNonNull(origin, "origin").immutable();
@@ -66,15 +67,15 @@ public record RegionManifest(
 		}
 		double totalVolume = Double.longBitsToDouble(totalVolumeBits);
 		if (!Double.isFinite(totalVolume) || totalVolume < 0.0) throw new IllegalArgumentException("Invalid total marker volume");
-		if (formatVersion == 1) {
+		if (!layout.hasMaterials()) {
 			if (!materialPalette.isEmpty() || !materialLedgers.isEmpty() || totalMassBits != 0L
 					|| sections.stream().anyMatch(section -> section.massBits() != 0L)
 					|| !registryFingerprint.isEmpty() || auScale != 0L || !speciesPalette.isEmpty()
 					|| !chemicalMixtures.isEmpty() || chemicalSpeciesTotals.length != 0
 					|| chemicalResidualLedgerBits != 0L) {
-				throw new IllegalArgumentException("region-state v1 cannot contain material state");
+				throw new IllegalArgumentException("Pure region state cannot contain material state");
 			}
-		} else if (formatVersion == 2 || formatVersion == 3 || formatVersion == 5 || formatVersion == 7) {
+		} else {
 			FluidMaterialRegistry registry = new FluidMaterialRegistry(materialPalette);
 			double densityTolerance = Math.max(1.0E-9, Math.abs(solverConfig.density()) * 1.0E-12);
 			if (Math.abs(registry.material(0).referenceDensity() - solverConfig.density()) > densityTolerance) {
@@ -92,11 +93,13 @@ public record RegionManifest(
 			if (ledgerMarkers != totalMarkerCount) {
 				throw new IllegalArgumentException("Material marker counts do not match manifest total");
 			}
-			if (formatVersion == 2 || (formatVersion == 5 || formatVersion == 7) && registryFingerprint.isEmpty()) {
+			boolean chemicalState = layout.requiresChemistry()
+					|| layout.permitsOptionalChemistry() && !registryFingerprint.isEmpty();
+			if (!chemicalState) {
 				if (!registryFingerprint.isEmpty() || auScale != 0L || !speciesPalette.isEmpty()
 						|| !chemicalMixtures.isEmpty() || chemicalSpeciesTotals.length != 0
 						|| chemicalResidualLedgerBits != 0L) {
-					throw new IllegalArgumentException("region-state v2 cannot contain chemical state");
+					throw new IllegalArgumentException("Non-chemical region state cannot contain chemical state");
 				}
 			} else {
 				if (!registryFingerprint.matches("[0-9a-f]{64}") || auScale != ChemicalLimits.QUANTA_PER_AU
@@ -105,7 +108,7 @@ public record RegionManifest(
 						|| chemicalMixtures.size() > totalMarkerCount
 						|| (totalMarkerCount > 0 && chemicalMixtures.isEmpty())
 						|| !Double.isFinite(Double.longBitsToDouble(chemicalResidualLedgerBits))) {
-					throw new IllegalArgumentException("Invalid region-state v3 chemical manifest");
+					throw new IllegalArgumentException("Invalid chemical region manifest");
 				}
 				long quanta = 0L;
 				for (long amount : chemicalSpeciesTotals) {
@@ -116,8 +119,6 @@ public record RegionManifest(
 					throw new IllegalArgumentException("Region chemical ledger is over budget");
 				}
 			}
-		} else {
-			throw new IllegalArgumentException("Unsupported region-state version " + formatVersion);
 		}
 	}
 
@@ -128,21 +129,21 @@ public record RegionManifest(
 			FluidRegion.PersistedRuntime runtime, FluidRegionFootprint footprint, int totalMarkerCount,
 			long totalVolumeBits, List<SectionDescriptor> sections, List<RegionExtension> extensions, long checksum
 	) {
-		this(1, regionId, dimensionId, checkpointGeneration, networkGeneration, origin, sizeX, sizeY, sizeZ,
+		this(RegionStateLayout.PURE, regionId, dimensionId, checkpointGeneration, networkGeneration, origin, sizeX, sizeY, sizeZ,
 				solverConfig, reservedMarkerCapacity, runtime, footprint, totalMarkerCount, totalVolumeBits,
 				List.of(), 0L, List.of(), sections, extensions, "", 0L, List.of(), List.of(), new long[0], 0L, checksum);
 	}
 
 	/** Convenience constructor for non-chemical feature layouts. */
 	public RegionManifest(
-			int formatVersion, UUID regionId, String dimensionId, long checkpointGeneration, long networkGeneration,
+			RegionStateLayout layout, UUID regionId, String dimensionId, long checkpointGeneration, long networkGeneration,
 			BlockPos origin, int sizeX, int sizeY, int sizeZ, FluidSolverConfig solverConfig,
 			long reservedMarkerCapacity, FluidRegion.PersistedRuntime runtime, FluidRegionFootprint footprint,
 			int totalMarkerCount, long totalVolumeBits, List<FluidMaterial> materialPalette, long totalMassBits,
 			List<MaterialLedger> materialLedgers, List<SectionDescriptor> sections,
 			List<RegionExtension> extensions, long checksum
 	) {
-		this(formatVersion, regionId, dimensionId, checkpointGeneration, networkGeneration, origin, sizeX, sizeY, sizeZ,
+		this(layout, regionId, dimensionId, checkpointGeneration, networkGeneration, origin, sizeX, sizeY, sizeZ,
 				solverConfig, reservedMarkerCapacity, runtime, footprint, totalMarkerCount, totalVolumeBits,
 				materialPalette, totalMassBits, materialLedgers, sections, extensions,
 				"", 0L, List.of(), List.of(), new long[0], 0L, checksum);
@@ -154,7 +155,7 @@ public record RegionManifest(
 	public boolean equals(Object other) {
 		if (this == other) return true;
 		if (!(other instanceof RegionManifest that)) return false;
-		return formatVersion == that.formatVersion
+		return layout == that.layout
 				&& checkpointGeneration == that.checkpointGeneration && networkGeneration == that.networkGeneration
 				&& sizeX == that.sizeX && sizeY == that.sizeY && sizeZ == that.sizeZ
 				&& reservedMarkerCapacity == that.reservedMarkerCapacity && totalMarkerCount == that.totalMarkerCount
@@ -171,7 +172,7 @@ public record RegionManifest(
 
 	@Override
 	public int hashCode() {
-		int result = Objects.hash(formatVersion, regionId, dimensionId, checkpointGeneration, networkGeneration,
+		int result = Objects.hash(layout, regionId, dimensionId, checkpointGeneration, networkGeneration,
 				origin, sizeX, sizeY, sizeZ, solverConfig, reservedMarkerCapacity, runtime, footprint,
 				totalMarkerCount, totalVolumeBits, materialPalette, totalMassBits, materialLedgers, sections,
 				extensions, registryFingerprint, auScale, speciesPalette, chemicalMixtures,
@@ -182,17 +183,17 @@ public record RegionManifest(
 	public double totalVolume() { return Double.longBitsToDouble(totalVolumeBits); }
 	public double totalMass() { return Double.longBitsToDouble(totalMassBits); }
 	public boolean hasChemicalState() {
-		return formatVersion == 3 || (formatVersion == 5 || formatVersion == 7) && !registryFingerprint.isEmpty();
+		return layout.requiresChemistry() || layout.permitsOptionalChemistry() && !registryFingerprint.isEmpty();
 	}
 	public boolean hasGasState() {
-		return formatVersion == 7 && extensions.stream()
+		return layout.requiresThermal() && extensions.stream()
 				.anyMatch(extension -> GasRegionStateCodec.MANIFEST_EXTENSION.equals(extension.type()));
 	}
 	public boolean hasGranularState() {
-		return formatVersion == 5 || formatVersion == 7 && extensions.stream()
+		return layout.requiresGranular() || layout.requiresThermal() && extensions.stream()
 				.anyMatch(extension -> GranularRegionStateCodec.MANIFEST_EXTENSION.equals(extension.type()));
 	}
-	public boolean hasThermalState() { return formatVersion == 7; }
+	public boolean hasThermalState() { return layout.requiresThermal(); }
 
 	public record MaterialLedger(int markerCount, long volumeBits, long massBits) {
 		public MaterialLedger {

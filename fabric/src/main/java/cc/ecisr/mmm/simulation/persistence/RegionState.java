@@ -36,7 +36,7 @@ import java.util.Set;
 
 /** Complete, validated checkpoint generation. */
 public record RegionState(RegionManifest manifest, List<RegionSectionState> sections) {
-	private static final String CHEMICAL_AUDIT_EXTENSION = "mmm:chemical_audit_v1";
+	private static final String CHEMICAL_AUDIT_EXTENSION = "mmm:chemical_audit";
 	public RegionState {
 		sections = List.copyOf(sections);
 	}
@@ -44,7 +44,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	public static RegionState capture(FluidRegion region, long checkpointGeneration) throws IOException {
 		requireCaptureable(region, checkpointGeneration);
 		FlipParticleState particles = region.domain().exportParticleState();
-		return capture(region, checkpointGeneration, new CapturedParticles(1, List.of(), particles.copyPositionVolume(),
+		return capture(region, checkpointGeneration, new CapturedParticles(RegionStateLayout.PURE, List.of(), particles.copyPositionVolume(),
 				particles.copyParticleVelocities(), particles.copySolidMask(), new double[0], new int[0],
 				"", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L,
 				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY), null, null, null);
@@ -54,7 +54,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	public static RegionState captureMaterial(FluidRegion region, long checkpointGeneration) throws IOException {
 		requireCaptureable(region, checkpointGeneration);
 		FlipMaterialParticleState particles = region.domain().exportMaterialParticleState();
-		return capture(region, checkpointGeneration, new CapturedParticles(2, particles.materials(), particles.copyPositionVolume(),
+		return capture(region, checkpointGeneration, new CapturedParticles(RegionStateLayout.MATERIAL, particles.materials(), particles.copyPositionVolume(),
 				particles.copyParticleVelocities(), particles.copySolidMask(), particles.copyParticleMass(),
 				particles.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L,
 				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY), null, null, null);
@@ -64,7 +64,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		requireCaptureable(region, checkpointGeneration);
 		FlipChemicalParticleState particles = region.domain().exportChemicalParticleState();
 		FlipMaterialParticleState materials = particles.materials();
-		return capture(region, checkpointGeneration, new CapturedParticles(3, materials.materials(),
+		return capture(region, checkpointGeneration, new CapturedParticles(RegionStateLayout.CHEMICAL, materials.materials(),
 				materials.copyPositionVolume(), materials.copyParticleVelocities(), materials.copySolidMask(),
 				materials.copyParticleMass(), materials.copyMaterialPaletteIndex(), particles.registryFingerprint(),
 				particles.speciesPalette(), particles.mixtures(), particles.copyMarkerMixtureIndex(),
@@ -75,21 +75,21 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	public static RegionState captureGranular(FluidRegion region, long checkpointGeneration) throws IOException {
 		requireCaptureable(region, checkpointGeneration);
 		if (!region.domain().hasGranularState() || !region.domain().hasMaterialState()) {
-			throw new IOException("region-state v5 capture requires material and granular state");
+			throw new IOException("Granular region capture requires material and granular state");
 		}
 		GranularStateSnapshot granular = region.domain().exportGranularState();
 		CapturedParticles particles;
 		if (region.domain().hasChemistryState()) {
 			FlipChemicalParticleState chemical = region.domain().exportChemicalParticleState();
 			FlipMaterialParticleState materials = chemical.materials();
-			particles = new CapturedParticles(5, materials.materials(), materials.copyPositionVolume(),
+			particles = new CapturedParticles(RegionStateLayout.GRANULAR, materials.materials(), materials.copyPositionVolume(),
 					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMass(),
 					materials.copyMaterialPaletteIndex(), chemical.registryFingerprint(), chemical.speciesPalette(),
 					chemical.mixtures(), chemical.copyMarkerMixtureIndex(), chemical.copyIndicator(),
 					chemical.copySpeciesTotals(), chemical.residualLedgerBits(), chemical.externalSource(), chemical.escapedSink());
 		} else {
 			FlipMaterialParticleState materials = region.domain().exportMaterialParticleState();
-			particles = new CapturedParticles(5, materials.materials(), materials.copyPositionVolume(),
+			particles = new CapturedParticles(RegionStateLayout.GRANULAR, materials.materials(), materials.copyPositionVolume(),
 					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMass(),
 					materials.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0],
 					new long[0], 0L, ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY);
@@ -101,7 +101,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	public static RegionState captureThermal(FluidRegion region, long checkpointGeneration) throws IOException {
 		requireCaptureable(region, checkpointGeneration);
 		if (!region.domain().hasThermalState() || !region.domain().hasMaterialState()) {
-			throw new IOException("region-state v7 capture requires material and thermal state");
+			throw new IOException("Thermal region capture requires material and thermal state");
 		}
 		GranularStateSnapshot granular = region.domain().hasGranularState()
 				? region.domain().exportGranularState() : null;
@@ -111,7 +111,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			FlipChemicalParticleState chemical = region.domain().exportChemicalParticleState();
 			chemicalFingerprint = chemical.registryFingerprint();
 			FlipMaterialParticleState materials = chemical.materials();
-			particles = new CapturedParticles(7, materials.materials(), materials.copyPositionVolume(),
+			particles = new CapturedParticles(RegionStateLayout.THERMAL, materials.materials(), materials.copyPositionVolume(),
 					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMass(),
 					materials.copyMaterialPaletteIndex(), chemical.registryFingerprint(), chemical.speciesPalette(),
 					chemical.mixtures(), chemical.copyMarkerMixtureIndex(), chemical.copyIndicator(),
@@ -119,7 +119,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		} else {
 			chemicalFingerprint = "";
 			FlipMaterialParticleState materials = region.domain().exportMaterialParticleState();
-			particles = new CapturedParticles(7, materials.materials(), materials.copyPositionVolume(),
+			particles = new CapturedParticles(RegionStateLayout.THERMAL, materials.materials(), materials.copyPositionVolume(),
 					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMass(),
 					materials.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0],
 					new long[0], 0L, ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY);
@@ -127,11 +127,11 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		GasStateSnapshot gas;
 		try { gas = region.domain().exportGasState(chemicalFingerprint); }
 		catch (IllegalStateException invalid) {
-			throw new IOException("Region-state v7 requires complete gas topology/inventory", invalid);
+			throw new IOException("Thermal region state requires complete gas topology/inventory", invalid);
 		}
 		FlipThermalParticleState thermal = region.domain().exportThermalParticleState();
 		if (thermal.copyGasNodeEnergy().length != gas.nodes().size()) {
-			throw new IOException("Region-state v7 gas inventory and thermal energy ordinals disagree");
+			throw new IOException("Thermal region gas inventory and energy ordinals disagree");
 		}
 		return capture(region, checkpointGeneration, particles, granular, thermal, gas);
 	}
@@ -144,7 +144,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		int cellsPerBlock = Math.round(1.0F / region.solverConfig().cellSize());
 		if (cellsPerBlock <= 0 || Math.abs(cellsPerBlock * region.solverConfig().cellSize() - 1.0F) > 1.0E-6F
 				|| region.sizeX() % cellsPerBlock != 0 || region.sizeY() % cellsPerBlock != 0 || region.sizeZ() % cellsPerBlock != 0) {
-			throw new IOException("region-state v1 requires an integer number of solver cells per Minecraft block");
+			throw new IOException("Region state requires an integer number of solver cells per Minecraft block");
 		}
 
 		float[] positionVolume = particles.positionVolume();
@@ -240,8 +240,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					int[] savedOrdinals = new int[ordinals.size()];
 					float[] savedPositions = new float[ordinals.size() * 4];
 					float[] savedVelocities = new float[ordinals.size() * 3];
-					double[] savedMass = particles.formatVersion() >= 2 ? new double[ordinals.size()] : new double[0];
-					int[] savedMaterials = particles.formatVersion() >= 2 ? new int[ordinals.size()] : new int[0];
+					double[] savedMass = particles.layout().hasMaterials() ? new double[ordinals.size()] : new double[0];
+					int[] savedMaterials = particles.layout().hasMaterials() ? new int[ordinals.size()] : new int[0];
 					int[] savedMixtures = particles.hasChemicalState() ? new int[ordinals.size()] : new int[0];
 					byte[] savedIndicator = particles.hasChemicalState() ? new byte[ordinals.size()] : new byte[0];
 					for (int i = 0; i < ordinals.size(); i++) {
@@ -249,7 +249,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 						savedOrdinals[i] = ordinal;
 						System.arraycopy(positionVolume, ordinal * 4, savedPositions, i * 4, 4);
 						System.arraycopy(velocities, ordinal * 3, savedVelocities, i * 3, 3);
-						if (particles.formatVersion() >= 2) {
+						if (particles.layout().hasMaterials()) {
 							savedMass[i] = particles.markerMass()[ordinal];
 							savedMaterials[i] = particles.materialPaletteIndex()[ordinal];
 						}
@@ -301,7 +301,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 						sectionExtensions.add(new RegionExtension(ThermalRegionStateCodec.SECTION_EXTENSION,
 								new ThermalRegionStateCodec().encodeSection(data)));
 					}
-					RegionSectionState unsigned = new RegionSectionState(particles.formatVersion(), region.id(), region.dimension().identifier().toString(),
+					RegionSectionState unsigned = new RegionSectionState(particles.layout(), region.id(), region.dimension().identifier().toString(),
 							checkpointGeneration, sectionX, sectionY, sectionZ, startX, startY, startZ,
 							sliceX, sliceY, sliceZ, savedOrdinals, savedPositions, savedVelocities, savedMass, savedMaterials,
 							solidSlice, List.copyOf(sectionExtensions), savedMixtures, savedIndicator, sectionSpecies,
@@ -316,7 +316,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		for (RegionSectionState section : sectionStates) {
 			descriptors.add(new RegionManifest.SectionDescriptor(section.sectionX(), section.sectionY(), section.sectionZ(),
 					section.markerCount(), Double.doubleToRawLongBits(sumVolumes(section.positionVolume())),
-					section.formatVersion() >= 2 ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L, section.checksum()));
+					section.layout().hasMaterials() ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L, section.checksum()));
 		}
 		List<RegionManifest.MaterialLedger> materialLedgers = materialLedgers(particles);
 		List<RegionExtension> manifestExtensions = new ArrayList<>();
@@ -364,18 +364,18 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					thermal.audit(), List.copyOf(ledgers), gasNodeEnergyBits);
 			manifestExtensions.add(new RegionExtension(ThermalRegionStateCodec.MANIFEST_EXTENSION,
 					codec.encodeManifest(data)));
-			if (particles.formatVersion() == 7) manifestExtensions.add(new RegionExtension(
+			if (particles.layout().requiresThermal()) manifestExtensions.add(new RegionExtension(
 					ThermalBuoyancyCodec.MANIFEST_EXTENSION, new ThermalBuoyancyCodec().encodeCurrent()));
 			PendingPhaseVolumeState pendingPhaseVolume = region.domain().exportPendingPhaseVolumeState();
 			if (!pendingPhaseVolume.isEmpty()) manifestExtensions.add(new RegionExtension(
 					PendingPhaseVolumeCodec.MANIFEST_EXTENSION,
 					new PendingPhaseVolumeCodec().encode(pendingPhaseVolume)));
 		}
-		RegionManifest unsigned = new RegionManifest(particles.formatVersion(), region.id(), region.dimension().identifier().toString(), checkpointGeneration,
+		RegionManifest unsigned = new RegionManifest(particles.layout(), region.id(), region.dimension().identifier().toString(), checkpointGeneration,
 				region.generation(), region.origin(), region.sizeX(), region.sizeY(), region.sizeZ(), region.solverConfig(),
 				region.reservedMarkerCapacity(), region.persistedRuntime(), region.footprint(), particles.particleCount(),
 				Double.doubleToRawLongBits(sumVolumes(positionVolume)), particles.materialPalette(),
-				particles.formatVersion() >= 2 ? Double.doubleToRawLongBits(sum(particles.markerMass())) : 0L,
+				particles.layout().hasMaterials() ? Double.doubleToRawLongBits(sum(particles.markerMass())) : 0L,
 				materialLedgers, descriptors, List.copyOf(manifestExtensions), particles.registryFingerprint(),
 				particles.hasChemicalState() ? cc.ecisr.mmm.chemistry.ChemicalLimits.QUANTA_PER_AU : 0L,
 				particles.speciesPalette(), particles.chemicalMixtures(), particles.chemicalSpeciesTotals(),
@@ -393,8 +393,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	}
 
 	public FlipParticleState reconstruct() throws IOException {
-		if (manifest.formatVersion() != 1) {
-			throw new IOException("Material region-state v2 cannot use the pure-water reconstruction path");
+		if (manifest.layout() != RegionStateLayout.PURE) {
+			throw new IOException("Material region state cannot use the pure-water reconstruction path");
 		}
 		ReconstructedParticles particles = reconstructParticles();
 		double volume = sumVolumes(particles.positionVolume());
@@ -403,8 +403,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	}
 
 	public FlipMaterialParticleState reconstructMaterial() throws IOException {
-		if (manifest.formatVersion() != 2
-				&& !((manifest.formatVersion() == 5 || manifest.formatVersion() == 7)
+		if (manifest.layout() != RegionStateLayout.MATERIAL
+				&& !((manifest.layout() == RegionStateLayout.GRANULAR || manifest.layout() == RegionStateLayout.THERMAL)
 				&& !manifest.hasChemicalState())) {
 			throw new IOException("This region-state cannot use the material reconstruction path");
 		}
@@ -504,7 +504,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		if (!hasExtension(manifest.extensions(), PendingPhaseVolumeCodec.MANIFEST_EXTENSION)) {
 			return new PendingPhaseVolumeState(cellCount, List.of());
 		}
-		if (manifest.formatVersion() != 7) {
+		if (manifest.layout() != RegionStateLayout.THERMAL) {
 			throw new IOException("Pending phase volume is only valid in a thermal region-state");
 		}
 		return new PendingPhaseVolumeCodec().decode(requiredExtension(
@@ -537,7 +537,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		if (registry == null || !manifest.registryFingerprint().equals(registry.fingerprint())
 				|| !manifest.speciesPalette().equals(registry.species().stream()
 				.map(cc.ecisr.mmm.chemistry.ChemicalSpecies::id).toList())) {
-			throw new IOException("Region-state v3 registry fingerprint/palette mismatch");
+			throw new IOException("Chemical region registry fingerprint/palette mismatch");
 		}
 		ReconstructedParticles particles = reconstructParticles();
 		FlipMaterialParticleState materials = new FlipMaterialParticleState(
@@ -621,10 +621,10 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		RegionExtension found = null;
 		for (RegionExtension extension : manifest.extensions()) {
 			if (!CHEMICAL_AUDIT_EXTENSION.equals(extension.type())) continue;
-			if (found != null) throw new IOException("Duplicate region-state v3 chemical audit ledger");
+			if (found != null) throw new IOException("Duplicate chemical audit ledger");
 			found = extension;
 		}
-		if (found == null) throw new IOException("Region-state v3 chemical audit ledger is missing");
+		if (found == null) throw new IOException("Chemical audit ledger is missing");
 		return ChemicalAuditLedgerCodec.decode(found.payload());
 	}
 
@@ -633,8 +633,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		int count = manifest.totalMarkerCount();
 		float[] positions = new float[Math.multiplyExact(count, 4)];
 		float[] velocities = new float[Math.multiplyExact(count, 3)];
-		double[] markerMass = manifest.formatVersion() >= 2 ? new double[count] : new double[0];
-		int[] materialPaletteIndex = manifest.formatVersion() >= 2 ? new int[count] : new int[0];
+		double[] markerMass = manifest.layout().hasMaterials() ? new double[count] : new double[0];
+		int[] materialPaletteIndex = manifest.layout().hasMaterials() ? new int[count] : new int[0];
 		int[] chemicalMixtureIndex = manifest.hasChemicalState() ? new int[count] : new int[0];
 		byte[] indicator = manifest.hasChemicalState() ? new byte[count] : new byte[0];
 		byte[] solids = new byte[Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ())];
@@ -654,7 +654,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				seenMarkers[ordinal] = true;
 				System.arraycopy(sectionPositions, i * 4, positions, ordinal * 4, 4);
 				System.arraycopy(sectionVelocities, i * 3, velocities, ordinal * 3, 3);
-				if (manifest.formatVersion() >= 2) {
+				if (manifest.layout().hasMaterials()) {
 					markerMass[ordinal] = sectionMass[i];
 					materialPaletteIndex[ordinal] = sectionMaterials[i];
 				}
@@ -699,12 +699,12 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			if (!actual.add(section.key())) throw new IOException("Duplicate section payload");
 			if (!section.regionId().equals(manifest.regionId()) || !section.dimensionId().equals(manifest.dimensionId())
 					|| section.checkpointGeneration() != manifest.checkpointGeneration()
-					|| section.formatVersion() != manifest.formatVersion()) throw new IOException("Mixed section ownership or format");
+					|| section.layout() != manifest.layout()) throw new IOException("Mixed section ownership or layout");
 			if (RegionStateIntegrity.sectionChecksum(section) != section.checksum()) throw new IOException("Section checksum mismatch");
 			validateSectionOwnership(section);
 			RegionManifest.SectionDescriptor descriptor = expected.get(section.key());
 			long volumeBits = Double.doubleToRawLongBits(sumVolumes(section.positionVolume()));
-			long massBits = manifest.formatVersion() >= 2 ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L;
+			long massBits = manifest.layout().hasMaterials() ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L;
 			if (descriptor == null || descriptor.markerCount() != section.markerCount()
 					|| descriptor.volumeBits() != volumeBits || descriptor.massBits() != massBits
 					|| descriptor.checksum() != section.checksum()) {
@@ -715,7 +715,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		if (markerCount != manifest.totalMarkerCount() || markerCount > manifest.reservedMarkerCapacity()) {
 			throw new IOException("Manifest marker count/budget mismatch");
 		}
-		if (manifest.formatVersion() >= 2) validateMaterialLedgers();
+		if (manifest.layout().hasMaterials()) validateMaterialLedgers();
 		if (manifest.hasChemicalState()) validateChemicalLedgers();
 		boolean gasPayload = hasExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION);
 		boolean pendingPhaseVolumePayload = hasExtension(manifest.extensions(),
@@ -727,16 +727,16 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 			throw new IOException("Pending-volume evidence is manifest-only");
 		}
 		if (pendingPhaseVolumePayload) validatePendingPhaseVolumeCells();
-		if (manifest.formatVersion() == 7) {
-			if (!thermalBuoyancyPayload) throw new IOException("Region-state v7 requires thermal buoyancy identity");
+		if (manifest.layout() == RegionStateLayout.THERMAL) {
+			if (!thermalBuoyancyPayload) throw new IOException("Thermal region state requires buoyancy identity");
 			new ThermalBuoyancyCodec().requireCurrent(requiredExtension(manifest.extensions(),
 					ThermalBuoyancyCodec.MANIFEST_EXTENSION).payload());
 		} else if (thermalBuoyancyPayload) {
-			throw new IOException("Thermal buoyancy identity is only valid in region-state v7");
+			throw new IOException("Thermal buoyancy identity is only valid in thermal region state");
 		}
-		if (gasPayload && manifest.formatVersion() != 7) {
+		if (gasPayload && manifest.layout() != RegionStateLayout.THERMAL) {
 			throw new IOException("Gas payload is only valid in a thermal region-state");
-		} else if (manifest.formatVersion() == 7 && (!gasPayload
+		} else if (manifest.layout() == RegionStateLayout.THERMAL && (!gasPayload
 				|| !hasExtension(manifest.extensions(), ThermalRegionStateCodec.MANIFEST_EXTENSION))) {
 			throw new IOException("Complete thermal region-state requires gas and thermal payloads");
 		}
@@ -984,7 +984,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				int ordinal = ordinals[marker], mixtureIndex = mixtures[marker];
 				if (ordinal < 0 || ordinal >= count || seen[ordinal]
 						|| mixtureIndex < 0 || mixtureIndex >= manifest.chemicalMixtures().size()) {
-					throw new IOException("Invalid v3 marker ordinal/mixture index");
+					throw new IOException("Invalid chemical marker ordinal/mixture index");
 				}
 				seen[ordinal] = true; mixtureByOrdinal[ordinal] = mixtureIndex;
 				FlipChemicalParticleState.StableMixture mixture = manifest.chemicalMixtures().get(mixtureIndex);
@@ -1003,7 +1003,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		long[] totals = new long[manifest.speciesPalette().size()];
 		double residual = 0.0;
 		for (int ordinal = 0; ordinal < count; ordinal++) {
-			if (!seen[ordinal]) throw new IOException("Missing v3 marker ordinal");
+			if (!seen[ordinal]) throw new IOException("Missing chemical marker ordinal");
 			FlipChemicalParticleState.StableMixture mixture = manifest.chemicalMixtures().get(mixtureByOrdinal[ordinal]);
 			residual += Double.longBitsToDouble(mixture.massResidualBits());
 			for (FlipChemicalParticleState.Component component : mixture.components()) {
@@ -1029,11 +1029,11 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				|| capabilityPrecipitation != reactivePayload
 				|| reactivePayload && (!capabilityChemistry
 				|| !expected.chemicalRegistryFingerprint().equals(manifest.registryFingerprint()))) {
-			throw new IOException("Region-state v5 capability set does not match its complete payload");
+			throw new IOException("Granular region capabilities do not match the complete payload");
 		}
 		if (expected.materialLedgers().size() != expected.materialPalette().size()
 				|| expected.sectionLedgers().size() != sections.size()) {
-			throw new IOException("Region-state v5 granular ledger cardinality mismatch");
+			throw new IOException("Granular region ledger cardinality mismatch");
 		}
 		Map<RegionSectionState.SectionKey, GranularRegionStateCodec.SectionLedger> sectionLedgers = new HashMap<>();
 		for (GranularRegionStateCodec.SectionLedger ledger : expected.sectionLedgers()) {
@@ -1086,7 +1086,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					|| ledger.activeSvq() != sectionActiveSvq || ledger.depositSvq() != sectionDepositSvq
 					|| ledger.activeMassBits() != Double.doubleToRawLongBits(sectionActiveMass)
 					|| ledger.depositMassBits() != Double.doubleToRawLongBits(sectionDepositMass)) {
-				throw new IOException("Granular section does not match its v5 ledger");
+				throw new IOException("Granular section does not match its ledger");
 			}
 		}
 		if (!sectionLedgers.isEmpty()) throw new IOException("Granular manifest names missing sections");
@@ -1132,7 +1132,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					Double.doubleToRawLongBits(totalActiveMass + totalDepositMass),
 					expected.externalSource(), expected.escapedSink());
 		} catch (IllegalArgumentException invalid) {
-			throw new IOException("Invalid v5 granular state: " + invalid.getMessage(), invalid);
+			throw new IOException("Invalid granular region state: " + invalid.getMessage(), invalid);
 		}
 	}
 
@@ -1227,7 +1227,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 
 	private static RegionSectionState withChecksum(RegionSectionState section) {
 		long checksum = RegionStateIntegrity.sectionChecksum(section);
-		return new RegionSectionState(section.formatVersion(), section.regionId(), section.dimensionId(), section.checkpointGeneration(),
+		return new RegionSectionState(section.layout(), section.regionId(), section.dimensionId(), section.checkpointGeneration(),
 				section.sectionX(), section.sectionY(), section.sectionZ(), section.localStartX(), section.localStartY(), section.localStartZ(),
 				section.sizeX(), section.sizeY(), section.sizeZ(), section.markerOrdinals(), section.positionVolume(),
 				section.velocities(), section.markerMass(), section.materialPaletteIndex(), section.solidMask(), section.extensions(),
@@ -1237,7 +1237,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 
 	private static RegionManifest withChecksum(RegionManifest manifest) {
 		long checksum = RegionStateIntegrity.manifestChecksum(manifest);
-		return new RegionManifest(manifest.formatVersion(), manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(), manifest.networkGeneration(),
+		return new RegionManifest(manifest.layout(), manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(), manifest.networkGeneration(),
 				manifest.origin(), manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 				manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(),
 				manifest.totalVolumeBits(), manifest.materialPalette(), manifest.totalMassBits(), manifest.materialLedgers(),
@@ -1247,7 +1247,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	}
 
 	private static List<RegionManifest.MaterialLedger> materialLedgers(CapturedParticles particles) {
-		if (particles.formatVersion() == 1) return List.of();
+		if (!particles.layout().hasMaterials()) return List.of();
 		int paletteSize = particles.materialPalette().size();
 		int[] markerCounts = new int[paletteSize];
 		double[] volumes = new double[paletteSize], masses = new double[paletteSize];
@@ -1418,7 +1418,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	}
 
 	private record CapturedParticles(
-			int formatVersion,
+			RegionStateLayout layout,
 			List<FluidMaterial> materialPalette,
 			float[] positionVolume,
 			float[] velocities,

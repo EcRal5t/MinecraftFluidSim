@@ -6,7 +6,7 @@ import java.util.UUID;
 
 /** One complete Minecraft-aligned solver slice plus the markers owned by that slice. */
 public record RegionSectionState(
-		int formatVersion,
+		RegionStateLayout layout,
 		UUID regionId,
 		String dimensionId,
 		long checkpointGeneration,
@@ -33,6 +33,7 @@ public record RegionSectionState(
 		long checksum
 ) {
 	public RegionSectionState {
+		Objects.requireNonNull(layout, "layout");
 		Objects.requireNonNull(regionId, "regionId");
 		Objects.requireNonNull(dimensionId, "dimensionId");
 		Objects.requireNonNull(markerOrdinals, "markerOrdinals");
@@ -55,13 +56,13 @@ public record RegionSectionState(
 		if (solidMask.length != Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ)) {
 			throw new IllegalArgumentException("Section solid slice has the wrong size");
 		}
-		if (formatVersion == 1) {
+		if (!layout.hasMaterials()) {
 			if (markerMass.length != 0 || materialPaletteIndex.length != 0
 					|| chemicalMixtureIndex.length != 0 || indicator.length != 0
 					|| chemicalSpeciesTotals.length != 0 || chemicalResidualLedgerBits != 0L) {
-				throw new IllegalArgumentException("region-state v1 cannot contain material state");
+				throw new IllegalArgumentException("Pure region state cannot contain material state");
 			}
-		} else if (formatVersion == 2 || formatVersion == 3 || formatVersion == 5 || formatVersion == 7) {
+		} else {
 			if (markerMass.length != markerOrdinals.length || materialPaletteIndex.length != markerOrdinals.length) {
 				throw new IllegalArgumentException("Section material arrays disagree");
 			}
@@ -71,13 +72,12 @@ public record RegionSectionState(
 					throw new IllegalArgumentException("Invalid section marker material state");
 				}
 			}
-			boolean chemicalState = formatVersion == 3
-					|| (formatVersion == 5 || formatVersion == 7)
-					&& chemicalSpeciesTotals.length > 0;
+			boolean chemicalState = layout.requiresChemistry()
+					|| layout.permitsOptionalChemistry() && chemicalSpeciesTotals.length > 0;
 			if (!chemicalState) {
 				if (chemicalMixtureIndex.length != 0 || indicator.length != 0
 						|| chemicalSpeciesTotals.length != 0 || chemicalResidualLedgerBits != 0L) {
-					throw new IllegalArgumentException("region-state v2 cannot contain chemical state");
+					throw new IllegalArgumentException("Non-chemical region state cannot contain chemical state");
 				}
 			} else {
 				if (chemicalMixtureIndex.length != markerOrdinals.length || indicator.length != markerOrdinals.length
@@ -91,8 +91,6 @@ public record RegionSectionState(
 					}
 				}
 			}
-		} else {
-			throw new IllegalArgumentException("Unsupported region-state version " + formatVersion);
 		}
 		markerOrdinals = markerOrdinals.clone();
 		positionVolume = positionVolume.clone();
@@ -112,20 +110,20 @@ public record RegionSectionState(
 			int[] markerOrdinals, float[] positionVolume, float[] velocities, byte[] solidMask,
 			List<RegionExtension> extensions, long checksum
 	) {
-		this(1, regionId, dimensionId, checkpointGeneration, sectionX, sectionY, sectionZ,
+		this(RegionStateLayout.PURE, regionId, dimensionId, checkpointGeneration, sectionX, sectionY, sectionZ,
 				localStartX, localStartY, localStartZ, sizeX, sizeY, sizeZ, markerOrdinals, positionVolume, velocities,
 				new double[0], new int[0], solidMask, extensions, new int[0], new byte[0], new long[0], 0L, checksum);
 	}
 
 	/** Convenience constructor for non-chemical feature layouts. */
 	public RegionSectionState(
-			int formatVersion, UUID regionId, String dimensionId, long checkpointGeneration,
+			RegionStateLayout layout, UUID regionId, String dimensionId, long checkpointGeneration,
 			int sectionX, int sectionY, int sectionZ, int localStartX, int localStartY, int localStartZ,
 			int sizeX, int sizeY, int sizeZ, int[] markerOrdinals, float[] positionVolume, float[] velocities,
 			double[] markerMass, int[] materialPaletteIndex, byte[] solidMask,
 			List<RegionExtension> extensions, long checksum
 	) {
-		this(formatVersion, regionId, dimensionId, checkpointGeneration, sectionX, sectionY, sectionZ,
+		this(layout, regionId, dimensionId, checkpointGeneration, sectionX, sectionY, sectionZ,
 				localStartX, localStartY, localStartZ, sizeX, sizeY, sizeZ, markerOrdinals, positionVolume, velocities,
 				markerMass, materialPaletteIndex, solidMask, extensions, new int[0], new byte[0], new long[0], 0L, checksum);
 	}
@@ -142,7 +140,7 @@ public record RegionSectionState(
 
 	public int markerCount() { return markerOrdinals.length; }
 	public boolean hasChemicalState() {
-		return formatVersion == 3 || (formatVersion == 5 || formatVersion == 7) && chemicalSpeciesTotals.length > 0;
+		return layout.requiresChemistry() || layout.permitsOptionalChemistry() && chemicalSpeciesTotals.length > 0;
 	}
 
 	public SectionKey key() { return new SectionKey(sectionX, sectionY, sectionZ); }

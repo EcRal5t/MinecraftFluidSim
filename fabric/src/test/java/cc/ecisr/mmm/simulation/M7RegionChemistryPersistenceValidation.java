@@ -48,12 +48,12 @@ public final class M7RegionChemistryPersistenceValidation {
 	public static void main(String[] args) throws Exception {
 		validateChemicalFeatureLayout();
 		validateGranularFeatureLayout();
-		validateThermalV7ProductionGate();
+		validateThermalProductionGate();
 		System.out.println("Region persistence passed: current chemistry, granular and thermal feature layouts");
 	}
 
-	private static void validateThermalV7ProductionGate() throws Exception {
-		Path root = Files.createTempDirectory(Path.of("."), "thermal-production-v7-");
+	private static void validateThermalProductionGate() throws Exception {
+		Path root = Files.createTempDirectory(Path.of("."), "thermal-production-");
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
 		ThermalRegistry thermal = productionThermalRegistry();
 		FluidRegion source = populatedRegion(UUID.randomUUID());
@@ -63,22 +63,22 @@ public final class M7RegionChemistryPersistenceValidation {
 		source.domain().setThermalTemperatureInCell(2, 1, 2, 325.0);
 		FluidRegionPersistence persistence = new FluidRegionPersistence(root, true, false, null,
 				false, null, false, true, thermal, gas);
-		check(persistence.checkpoint(source) == 1L, "production thermal checkpoint did not publish v7");
+		check(persistence.checkpoint(source) == 1L, "production thermal checkpoint was not published");
 
 		FluidRegionManager manager = manager();
 		FluidRegionPersistence restoring = new FluidRegionPersistence(root, true, false, null,
 				false, null, false, true, thermal, gas);
-		check(restoring.loadMetadata(manager).isEmpty(), "valid v7 metadata was locked");
+		check(restoring.loadMetadata(manager).isEmpty(), "valid thermal metadata was locked");
 		FluidRegion admitted = manager.regions().getFirst(); restoring.restore(admitted);
 		check(admitted.solverLoaded() && admitted.domain().hasThermalState()
 				&& admitted.domain().exportGasState("").registryFingerprint().equals(gas.fingerprint())
 				&& admitted.domain().thermalAudit().equals(source.domain().thermalAudit()),
-				"production v7 restore did not reconstruct gas plus thermal truth");
+				"production restore did not reconstruct gas plus thermal truth");
 
 		FluidRegionManager gateOff = manager();
 		List<String> gateIssues = new FluidRegionPersistence(root, true).loadMetadata(gateOff);
 		check(gateOff.regions().isEmpty() && gateIssues.stream().anyMatch(issue -> issue.contains("thermal")),
-				"thermal-off discovery did not preserve and lock region-state v7");
+				"thermal-off discovery did not preserve and lock thermal region state");
 
 	}
 
@@ -133,10 +133,10 @@ public final class M7RegionChemistryPersistenceValidation {
 		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		Path gateRoot = Files.createTempDirectory(Path.of("."), "granular-gate-off-");
-		FluidRegion v5 = populatedRegion(UUID.randomUUID()); bindDefaultMaterials(v5);
-		v5.domain().bindChemistry(chemistry);
-		v5.domain().bindGranular(granular, v5.domain().materialRegistry());
-		new RegionStateFiles(gateRoot, chemistry, granular).publish(RegionState.captureGranular(v5, 1L));
+		FluidRegion source = populatedRegion(UUID.randomUUID()); bindDefaultMaterials(source);
+		source.domain().bindChemistry(chemistry);
+		source.domain().bindGranular(granular, source.domain().materialRegistry());
+		new RegionStateFiles(gateRoot, chemistry, granular).publish(RegionState.captureGranular(source, 1L));
 		FluidRegionManager currentManager = manager();
 		FluidRegionPersistence current = new FluidRegionPersistence(gateRoot, true, true, chemistry, true, granular, true);
 		check(current.loadMetadata(currentManager).isEmpty(), "current granular layout was locked");
@@ -146,7 +146,7 @@ public final class M7RegionChemistryPersistenceValidation {
 		FluidRegionManager gateManager = manager();
 		List<String> issues = new FluidRegionPersistence(gateRoot, true, false, null, false, null).loadMetadata(gateManager);
 		check(gateManager.regions().isEmpty() && !issues.isEmpty(),
-				"granular-off discovery did not preserve and lock region-state v5");
+				"granular-off discovery did not preserve and lock granular region state");
 	}
 
 	private static void validateChemicalFeatureLayout() throws Exception {
@@ -163,8 +163,8 @@ public final class M7RegionChemistryPersistenceValidation {
 		assertChemicalStateEquals(chemical.domain().exportChemicalParticleState(), restored.domain().exportChemicalParticleState());
 		FluidRegionManager gateManager = manager();
 		List<String> issues = new FluidRegionPersistence(gateRoot, true, false, null).loadMetadata(gateManager);
-		check(gateManager.regions().isEmpty() && issues.stream().anyMatch(issue -> issue.contains("v3")),
-				"chemistry-off discovery did not preserve and lock region-state v3");
+		check(gateManager.regions().isEmpty() && !issues.isEmpty(),
+				"chemistry-off discovery did not preserve and lock chemical region state");
 	}
 
 	private static FluidRegionManager manager() {

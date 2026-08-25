@@ -461,28 +461,28 @@ public final class RegionStateFiles {
 	}
 
 	private void validateReconstruction(RegionState state) throws IOException {
-		if (state.manifest().formatVersion() == 1) state.reconstruct();
-		else if (state.manifest().formatVersion() == 2) state.reconstructMaterial();
-		else if (state.manifest().formatVersion() == 3) {
-			if (chemicalRegistry == null) throw new IOException("region-state v3 verification requires the authoritative chemical registry");
+		if (state.manifest().layout() == RegionStateLayout.PURE) state.reconstruct();
+		else if (state.manifest().layout() == RegionStateLayout.MATERIAL) state.reconstructMaterial();
+		else if (state.manifest().layout() == RegionStateLayout.CHEMICAL) {
+			if (chemicalRegistry == null) throw new IOException("Chemical region verification requires the authoritative registry");
 			state.reconstructChemical(chemicalRegistry);
 		}
-		else if (state.manifest().formatVersion() == 5) {
-			if (granularRegistry == null) throw new IOException("region-state v5 verification requires the authoritative granular registry");
+		else if (state.manifest().layout() == RegionStateLayout.GRANULAR) {
+			if (granularRegistry == null) throw new IOException("Granular region verification requires the authoritative registry");
 			if (state.manifest().hasChemicalState()) {
-				if (chemicalRegistry == null) throw new IOException("chemical region-state v5 verification requires the authoritative chemical registry");
+				if (chemicalRegistry == null) throw new IOException("Chemical granular-region verification requires the authoritative registry");
 				state.reconstructChemical(chemicalRegistry);
 			} else state.reconstructMaterial();
 			var granular = state.reconstructGranular(granularRegistry);
 			if (granular.requiresChemistry()) {
-				if (chemicalRegistry == null) throw new IOException("Reactive region-state v5 verification requires the authoritative chemical registry");
+				if (chemicalRegistry == null) throw new IOException("Reactive granular-region verification requires the authoritative chemical registry");
 			}
 			try { granular.validateAgainst(granularRegistry, chemicalRegistry); }
 			catch (IllegalArgumentException invalid) {
-				throw new IOException("Region-state v5 granular inventory/audit validation failed", invalid);
+				throw new IOException("Granular region inventory/audit validation failed", invalid);
 			}
 		}
-		else if (state.manifest().formatVersion() == 7) {
+		else if (state.manifest().layout() == RegionStateLayout.THERMAL) {
 			if (thermalRegistry == null) {
 				throw new IOException("Thermal region verification requires the authoritative thermal registry");
 			}
@@ -512,7 +512,7 @@ public final class RegionStateFiles {
 			}
 			state.reconstructThermal(thermalRegistry, gasRegistry, chemicalRegistry);
 		}
-		else throw new IOException("Unsupported region-state version " + state.manifest().formatVersion());
+		else throw new IOException("Unsupported region-state layout " + state.manifest().layout());
 	}
 
 	private RegionState readSlot(Path slot) throws IOException {

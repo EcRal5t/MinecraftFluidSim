@@ -65,7 +65,7 @@ public final class FluidRegionPersistenceValidation {
 	public static void main(String[] args) throws Exception {
 		validateExactRoundTripAndMetadataUnload();
 		validateMaterialV2Codec();
-		validateChemicalV3Codec();
+		validateChemicalCodec();
 		validateGranularV5Codec();
 		validateThermalV7Codec();
 		validateUnknownExtensions();
@@ -133,7 +133,7 @@ public final class FluidRegionPersistenceValidation {
 		assertGasStateEquals(expectedGas, state.reconstructGas(gas, null));
 		assertThermalStateEquals(expected, state.reconstructThermal(thermal));
 		require(state.reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
-				"pending phase-volume v7 record did not round-trip");
+				"pending phase-volume record did not round-trip");
 		FlipFluidDomain restoredDomain = new FlipFluidDomain(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG, 512);
 		restoredDomain.sealDomainBoundary();
 		restoredDomain.restoreMaterialParticleState(state.reconstructMaterial());
@@ -149,13 +149,13 @@ public final class FluidRegionPersistenceValidation {
 
 		RegionStateCodec codec = new RegionStateCodec();
 		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
-		require(decodedManifest.equals(state.manifest()) && decodedManifest.formatVersion() == 7
-				&& decodedManifest.hasThermalState(), "region-state v7 manifest did not round-trip");
+		require(decodedManifest.equals(state.manifest()) && decodedManifest.layout() == RegionStateLayout.THERMAL
+				&& decodedManifest.hasThermalState(), "thermal region manifest did not round-trip");
 		for (RegionSectionState section : state.sections()) {
 			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
-			require(decoded.formatVersion() == 7 && decoded.extensions().equals(section.extensions())
+			require(decoded.layout() == RegionStateLayout.THERMAL && decoded.extensions().equals(section.extensions())
 					&& Arrays.equals(decoded.markerOrdinals(), section.markerOrdinals()),
-					"region-state v7 thermal section did not round-trip");
+					"thermal region section did not round-trip");
 		}
 		CoherentPhaseStore.Composition composition = new CoherentPhaseStore.Composition(List.of(
 				new CoherentPhaseStore.Component("test:a", 7L),
@@ -171,14 +171,14 @@ public final class FluidRegionPersistenceValidation {
 				&& decodedComposed.energy().equals(composed.energy()),
 				"coherent composition did not round-trip the thermal section payload");
 
-		Path root = Files.createTempDirectory(Path.of("."), "thermal-v7-");
+		Path root = Files.createTempDirectory(Path.of("."), "thermal-region-");
 		RegionStateFiles files = new RegionStateFiles(root, null, granular, thermal, gas);
 		files.publish(state);
 		assertThermalStateEquals(expected, files.read(region.id()).reconstructThermal(thermal));
 		require(files.read(region.id()).reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
 				"published pending phase volume did not survive committed readback");
 		expectIOException(() -> state.reconstructThermal(thermalRegistry(new FluidMaterialRegistry(
-				List.of(BuiltinFluidMaterials.WATER)))), "foreign v7 thermal registry was accepted");
+				List.of(BuiltinFluidMaterials.WATER)))), "foreign thermal registry was accepted");
 
 		RegionSectionState original = state.sections().stream()
 				.filter(section -> section.markerCount() > 0).findFirst().orElseThrow();
@@ -188,12 +188,12 @@ public final class FluidRegionPersistenceValidation {
 		List<RegionSectionState> brokenSections = new ArrayList<>(state.sections());
 		brokenSections.set(brokenSections.indexOf(original), signedSection(unsignedMissing));
 		expectIOException(() -> new RegionState(state.manifest(), brokenSections).validate(),
-				"v7 section missing its required thermal payload was accepted");
+				"section missing its required thermal payload was accepted");
 
 		List<RegionExtension> withoutBuoyancy = state.manifest().extensions().stream()
 				.filter(extension -> !ThermalBuoyancyCodec.MANIFEST_EXTENSION.equals(extension.type())).toList();
 		expectIOException(() -> new RegionState(manifestWithExtensions(state.manifest(), withoutBuoyancy),
-				state.sections()).validate(), "region-state v7 without buoyancy identity was accepted");
+				state.sections()).validate(), "thermal region without buoyancy identity was accepted");
 	}
 
 	private static void validateGranularV5Codec() throws Exception {
@@ -231,16 +231,16 @@ public final class FluidRegionPersistenceValidation {
 
 		RegionStateCodec codec = new RegionStateCodec();
 		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
-		require(decodedManifest.equals(state.manifest()) && decodedManifest.formatVersion() == 5
-				&& !decodedManifest.hasChemicalState(), "region-state v5 manifest did not round-trip");
+		require(decodedManifest.equals(state.manifest()) && decodedManifest.layout() == RegionStateLayout.GRANULAR
+				&& !decodedManifest.hasChemicalState(), "granular region manifest did not round-trip");
 		for (RegionSectionState section : state.sections()) {
 			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
-			require(decoded.formatVersion() == 5 && decoded.key().equals(section.key())
+			require(decoded.layout() == RegionStateLayout.GRANULAR && decoded.key().equals(section.key())
 					&& decoded.extensions().equals(section.extensions())
 					&& Arrays.equals(decoded.markerOrdinals(), section.markerOrdinals())
 					&& Arrays.equals(decoded.solidMask(), section.solidMask())
 					&& decoded.checksum() == section.checksum(),
-					"region-state v5 granular section did not round-trip");
+					"granular region section did not round-trip");
 		}
 		GranularRegionStateCodec granularCodec = new GranularRegionStateCodec();
 		byte[] unsupportedManifestPayload = state.manifest().extensions().stream()
@@ -257,7 +257,7 @@ public final class FluidRegionPersistenceValidation {
 				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION),
 				"non-current granular section payload was accepted");
 
-		Path root = Files.createTempDirectory(Path.of("."), "granular-v5-");
+		Path root = Files.createTempDirectory(Path.of("."), "granular-region-");
 		RegionStateFiles files = new RegionStateFiles(root, null, granular);
 		files.publish(state);
 		RegionState restored = files.read(region.id());
@@ -302,7 +302,7 @@ public final class FluidRegionPersistenceValidation {
 		GranularStateSnapshot reactiveRoundTrip = reactiveState.reconstructGranular(granular);
 		reactiveRoundTrip.validateSolidCompositionMasses(BuiltinChemicalDefinitions.REGISTRY);
 		assertGranularStateEquals(reactiveExpected, reactiveRoundTrip);
-		Path reactiveRoot = Files.createTempDirectory(Path.of("."), "reactive-granular-v5-");
+		Path reactiveRoot = Files.createTempDirectory(Path.of("."), "reactive-granular-region-");
 		RegionStateFiles reactiveFiles = new RegionStateFiles(
 				reactiveRoot, BuiltinChemicalDefinitions.REGISTRY, granular);
 		reactiveFiles.publish(reactiveState);
@@ -317,9 +317,9 @@ public final class FluidRegionPersistenceValidation {
 		assertGranularStateEquals(auditOnlyExpected, auditOnlyRoundTrip);
 		reactiveFiles.publish(auditOnlyState);
 
-		CompoundTag unknownV8 = codec.encodeManifest(state.manifest());
-		unknownV8.putInt("Version", 8); unknownV8.putInt("Palette", 8);
-		expectIOException(() -> codec.decodeManifest(unknownV8), "unknown region-state v8 was treated as a known format");
+		CompoundTag unknownLayout = codec.encodeManifest(state.manifest());
+		unknownLayout.putString("Layout", "unknown");
+		expectIOException(() -> codec.decodeManifest(unknownLayout), "unknown region-state layout was accepted");
 		CompoundTag missingGranular = codec.encodeSection(state.sections().getFirst());
 		missingGranular.put("Extensions", new net.minecraft.nbt.ListTag());
 		RegionSectionState unsignedMissing = codec.decodeSection(missingGranular);
@@ -327,10 +327,10 @@ public final class FluidRegionPersistenceValidation {
 		List<RegionSectionState> brokenSections = new ArrayList<>(state.sections());
 		brokenSections.set(0, signedMissing);
 		expectIOException(() -> new RegionState(state.manifest(), brokenSections).validate(),
-				"v5 section missing its required granular payload was accepted");
+				"section missing its required granular payload was accepted");
 	}
 
-	private static void validateChemicalV3Codec() throws Exception {
+	private static void validateChemicalCodec() throws Exception {
 		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		FluidRegion region = populatedRegion(new UUID(19L, 20L));
 		FlipParticleState pure = region.domain().exportParticleState();
@@ -356,26 +356,26 @@ public final class FluidRegionPersistenceValidation {
 		FlipChemicalParticleState expected = region.domain().exportChemicalParticleState();
 		RegionState state = RegionState.captureChemical(region, 1L);
 		state.validate();
-		expectIOException(state::reconstruct, "chemical v3 was silently reconstructed as pure water");
-		expectIOException(state::reconstructMaterial, "chemical v3 was silently reconstructed as material v2");
+		expectIOException(state::reconstruct, "chemical state was silently reconstructed as pure water");
+		expectIOException(state::reconstructMaterial, "chemical state was silently reconstructed as material-only state");
 		assertChemicalStateEquals(expected, state.reconstructChemical(chemistry));
 
 		RegionStateCodec codec = new RegionStateCodec();
 		RegionManifest manifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
 		require(manifest.equals(state.manifest())
 				&& Arrays.equals(manifest.chemicalSpeciesTotals(), state.manifest().chemicalSpeciesTotals()),
-				"region-state v3 manifest did not round-trip");
+				"chemical region manifest did not round-trip");
 		for (RegionSectionState section : state.sections()) {
 			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
-			require(decoded.formatVersion() == 3
+			require(decoded.layout() == RegionStateLayout.CHEMICAL
 					&& Arrays.equals(decoded.chemicalMixtureIndex(), section.chemicalMixtureIndex())
 					&& Arrays.equals(decoded.indicator(), section.indicator())
 					&& Arrays.equals(decoded.chemicalSpeciesTotals(), section.chemicalSpeciesTotals())
 					&& decoded.chemicalResidualLedgerBits() == section.chemicalResidualLedgerBits(),
-					"region-state v3 section did not round-trip");
+					"chemical region section did not round-trip");
 		}
 
-		Path root = Files.createTempDirectory(Path.of("."), "chemical-v3-");
+		Path root = Files.createTempDirectory(Path.of("."), "chemical-region-");
 		RegionStateFiles files = new RegionStateFiles(root, chemistry);
 		files.publish(state);
 		assertChemicalStateEquals(expected, files.read(region.id()).reconstructChemical(chemistry));
@@ -393,7 +393,7 @@ public final class FluidRegionPersistenceValidation {
 		RegionState emptyState = RegionState.captureChemical(emptyRegion, 1L);
 		emptyState.validate();
 		RegionManifest emptyManifest = codec.decodeManifest(codec.encodeManifest(emptyState.manifest()));
-		require(emptyManifest.chemicalMixtures().isEmpty(), "empty v3 manifest invented a chemical mixture");
+		require(emptyManifest.chemicalMixtures().isEmpty(), "empty chemical manifest invented a mixture");
 		assertChemicalStateEquals(emptyExpected, emptyState.reconstructChemical(chemistry));
 		files.publish(emptyState);
 		assertChemicalStateEquals(emptyExpected, files.read(emptyRegion.id()).reconstructChemical(chemistry));
@@ -401,12 +401,12 @@ public final class FluidRegionPersistenceValidation {
 		CompoundTag missingIndicator = codec.encodeSection(state.sections().stream()
 				.filter(section -> section.markerCount() > 0).findFirst().orElseThrow());
 		missingIndicator.remove("Indicator");
-		expectIOException(() -> codec.decodeSection(missingIndicator), "v3 section missing indicator bits was accepted");
+		expectIOException(() -> codec.decodeSection(missingIndicator), "chemical section missing indicator bits was accepted");
 		CompoundTag foreignFingerprint = codec.encodeManifest(state.manifest());
 		foreignFingerprint.putString("RegistryFingerprint", "0".repeat(64));
 		RegionManifest foreign = signedManifest(codec.decodeManifest(foreignFingerprint));
 		expectIOException(() -> new RegionState(foreign, state.sections()).reconstructChemical(chemistry),
-				"foreign v3 registry was accepted without authoritative reconstruction");
+				"foreign chemical registry was accepted without authoritative reconstruction");
 
 		Path regionDir = root.toAbsolutePath().normalize().resolve("mmm").resolve("region-state")
 				.resolve(region.id().toString());
@@ -419,7 +419,7 @@ public final class FluidRegionPersistenceValidation {
 		RegionStateFiles.Discovery discovery = files.discover();
 		require(discovery.manifests().stream().noneMatch(value -> value.regionId().equals(region.id()))
 				&& discovery.issues().containsKey(regionDir),
-				"discovery admitted a v3 manifest whose committed section was missing");
+				"discovery admitted a chemical manifest whose committed section was missing");
 	}
 
 	private static void validateMaterialV2Codec() throws Exception {
@@ -445,33 +445,33 @@ public final class FluidRegionPersistenceValidation {
 		region.domain().restoreMaterialParticleState(expected);
 		RegionState state = RegionState.captureMaterial(region, 1L);
 		List<Long> sectionChecksums = state.sections().stream().map(RegionSectionState::checksum).toList();
-		require(state.manifest().checksum() == 928_090_518L
+		require(state.manifest().checksum() == 155_326_703L
 				&& sectionChecksums.equals(List.of(
-				3_991_644_778L, 242_506_058L, 583_914_201L, 3_517_038_483L)),
-				"region-state v2 canonical golden bytes changed: manifest=" + state.manifest().checksum()
+				1_197_279_484L, 3_443_687_331L, 3_791_385_648L, 3_117_281_787L)),
+				"material region canonical bytes changed: manifest=" + state.manifest().checksum()
 						+ " sections=" + sectionChecksums);
 		state.validate();
-		expectIOException(state::reconstruct, "material v2 was silently reconstructed as pure water");
+		expectIOException(state::reconstruct, "material state was silently reconstructed as pure water");
 		assertMaterialStateEquals(expected, state.reconstructMaterial());
 
 		RegionStateCodec codec = new RegionStateCodec();
 		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
-		require(decodedManifest.equals(state.manifest()), "region-state v2 manifest did not round-trip");
+		require(decodedManifest.equals(state.manifest()), "material region manifest did not round-trip");
 		for (RegionSectionState section : state.sections()) {
 			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
-			require(decoded.formatVersion() == 2 && Arrays.equals(decoded.markerMass(), section.markerMass())
+			require(decoded.layout() == RegionStateLayout.MATERIAL && Arrays.equals(decoded.markerMass(), section.markerMass())
 					&& Arrays.equals(decoded.materialPaletteIndex(), section.materialPaletteIndex())
-					&& decoded.checksum() == section.checksum(), "region-state v2 section did not round-trip");
+					&& decoded.checksum() == section.checksum(), "material region section did not round-trip");
 		}
 		CompoundTag missingMass = codec.encodeSection(state.sections().getFirst());
 		missingMass.remove("MassBits");
-		expectIOException(() -> codec.decodeSection(missingMass), "v2 section missing marker mass was accepted");
+		expectIOException(() -> codec.decodeSection(missingMass), "material section missing marker mass was accepted");
 		int changedIndex = 0;
 		while (state.sections().get(changedIndex).markerCount() == 0) changedIndex++;
 		RegionSectionState originalSection = state.sections().get(changedIndex);
 		double[] changedMass = originalSection.markerMass();
 		changedMass[0] += 1.0;
-		RegionSectionState changedSection = signedSection(new RegionSectionState(2, originalSection.regionId(),
+		RegionSectionState changedSection = signedSection(new RegionSectionState(RegionStateLayout.MATERIAL, originalSection.regionId(),
 				originalSection.dimensionId(), originalSection.checkpointGeneration(), originalSection.sectionX(), originalSection.sectionY(),
 				originalSection.sectionZ(), originalSection.localStartX(), originalSection.localStartY(), originalSection.localStartZ(),
 				originalSection.sizeX(), originalSection.sizeY(), originalSection.sizeZ(), originalSection.markerOrdinals(),
@@ -488,25 +488,25 @@ public final class FluidRegionPersistenceValidation {
 			}
 		}
 		RegionManifest base = state.manifest();
-		RegionManifest changedManifest = signedManifest(new RegionManifest(2, base.regionId(), base.dimensionId(), base.checkpointGeneration(),
+		RegionManifest changedManifest = signedManifest(new RegionManifest(RegionStateLayout.MATERIAL, base.regionId(), base.dimensionId(), base.checkpointGeneration(),
 				base.networkGeneration(), base.origin(), base.sizeX(), base.sizeY(), base.sizeZ(), base.solverConfig(),
 				base.reservedMarkerCapacity(), base.runtime(), base.footprint(), base.totalMarkerCount(), base.totalVolumeBits(),
 				base.materialPalette(), base.totalMassBits(), base.materialLedgers(), changedDescriptors, base.extensions(), 0L));
 		expectIOException(() -> new RegionState(changedManifest, changedSections).validate(),
-				"rechecksummed v2 marker-mass corruption escaped exact material ledgers");
-		RegionState v1State = RegionState.capture(populatedRegion(new UUID(17L, 18L)), 1L);
-		RegionManifest v1Manifest = v1State.manifest();
-		List<Long> v1SectionChecksums = v1State.sections().stream().map(RegionSectionState::checksum).toList();
-		require(v1Manifest.checksum() == 3_602_817_324L
-				&& v1SectionChecksums.equals(List.of(
-				3_894_680_795L, 2_988_587_419L, 4_098_225_719L, 2_990_622_609L)),
-				"region-state v1 canonical golden bytes changed: manifest=" + v1Manifest.checksum()
-						+ " sections=" + v1SectionChecksums);
-		CompoundTag encodedV1 = codec.encodeManifest(v1Manifest);
-		require(encodedV1.get("Materials") == null && encodedV1.get("MassBits") == null,
-				"v1 manifest acquired v2 material fields");
+				"rechecksummed marker-mass corruption escaped exact material ledgers");
+		RegionState pureState = RegionState.capture(populatedRegion(new UUID(17L, 18L)), 1L);
+		RegionManifest pureManifest = pureState.manifest();
+		List<Long> pureSectionChecksums = pureState.sections().stream().map(RegionSectionState::checksum).toList();
+		require(pureManifest.checksum() == 2_593_377_550L
+				&& pureSectionChecksums.equals(List.of(
+				857_091_072L, 3_709_730_368L, 2_608_476_652L, 3_235_751_298L)),
+				"pure region canonical bytes changed: manifest=" + pureManifest.checksum()
+						+ " sections=" + pureSectionChecksums);
+		CompoundTag encodedPure = codec.encodeManifest(pureManifest);
+		require(encodedPure.get("Materials") == null && encodedPure.get("MassBits") == null,
+				"pure manifest acquired material fields");
 
-		Path root = Files.createTempDirectory(Path.of("."), "material-v2-");
+		Path root = Files.createTempDirectory(Path.of("."), "material-region-");
 		RegionStateFiles files = new RegionStateFiles(root);
 		files.publish(state);
 		FlipMaterialParticleState restored = files.read(region.id()).reconstructMaterial();
@@ -587,8 +587,8 @@ public final class FluidRegionPersistenceValidation {
 		require(codec.decodeSection(codec.encodeSection(signedSection)).extensions().equals(List.of(extension)),
 				"unknown length-delimited section extension was not retained");
 		CompoundTag future = codec.encodeManifest(signed);
-		future.putInt("Version", 4); future.putInt("Palette", 4);
-		expectIOException(() -> codec.decodeManifest(future), "unknown region-state version was accepted");
+		future.putString("Layout", "future");
+		expectIOException(() -> codec.decodeManifest(future), "unknown region-state layout was accepted");
 	}
 
 	private static void validateFaultMatrix() throws Exception {
@@ -611,7 +611,7 @@ public final class FluidRegionPersistenceValidation {
 			long expectedGeneration = point == RegionStateFiles.FaultPoint.AFTER_HEAD_PUBLISH ? 2L : 1L;
 			require(reopened.manifest().checkpointGeneration() == expectedGeneration,
 					"fault exposed a mixed or unexpected generation at " + point);
-			require(reopened.manifest().formatVersion() == 1, "fault changed the current pure-water layout");
+			require(reopened.manifest().layout() == RegionStateLayout.PURE, "fault changed the current pure-water layout");
 			assertParticleStateEquals(expectedGeneration == 1L ? firstParticles : secondParticles, reopened.reconstruct());
 		}
 	}
@@ -900,7 +900,7 @@ public final class FluidRegionPersistenceValidation {
 	}
 
 	private static RegionSectionState signedSection(RegionSectionState section) {
-		return new RegionSectionState(section.formatVersion(), section.regionId(), section.dimensionId(), section.checkpointGeneration(), section.sectionX(),
+		return new RegionSectionState(section.layout(), section.regionId(), section.dimensionId(), section.checkpointGeneration(), section.sectionX(),
 				section.sectionY(), section.sectionZ(), section.localStartX(), section.localStartY(), section.localStartZ(),
 				section.sizeX(), section.sizeY(), section.sizeZ(), section.markerOrdinals(), section.positionVolume(),
 				section.velocities(), section.markerMass(), section.materialPaletteIndex(), section.solidMask(), section.extensions(),
@@ -909,7 +909,7 @@ public final class FluidRegionPersistenceValidation {
 	}
 
 	private static RegionManifest signedManifest(RegionManifest manifest) {
-		return new RegionManifest(manifest.formatVersion(), manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(),
+		return new RegionManifest(manifest.layout(), manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(),
 				manifest.networkGeneration(), manifest.origin(), manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 				manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(), manifest.totalVolumeBits(),
 				manifest.materialPalette(), manifest.totalMassBits(), manifest.materialLedgers(), manifest.sections(), manifest.extensions(),
@@ -920,7 +920,7 @@ public final class FluidRegionPersistenceValidation {
 	private static RegionManifest manifestWithExtensions(
 			RegionManifest manifest, List<RegionExtension> extensions
 	) {
-		RegionManifest unsigned = new RegionManifest(manifest.formatVersion(), manifest.regionId(), manifest.dimensionId(),
+		RegionManifest unsigned = new RegionManifest(manifest.layout(), manifest.regionId(), manifest.dimensionId(),
 				manifest.checkpointGeneration(), manifest.networkGeneration(), manifest.origin(), manifest.sizeX(), manifest.sizeY(),
 				manifest.sizeZ(), manifest.solverConfig(), manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(),
 				manifest.totalMarkerCount(), manifest.totalVolumeBits(), manifest.materialPalette(), manifest.totalMassBits(),

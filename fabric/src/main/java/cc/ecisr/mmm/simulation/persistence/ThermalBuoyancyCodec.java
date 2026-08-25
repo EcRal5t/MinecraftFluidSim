@@ -9,7 +9,7 @@ import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
 
-/** Manifest-only identity binding for the region-state v7 Boussinesq definition set. */
+/** Manifest-only identity binding for the thermal-region Boussinesq definition set. */
 final class ThermalBuoyancyCodec {
 	static final String MANIFEST_EXTENSION = "mmm:thermal_buoyancy_v1";
 	private static final int MAGIC = 0x52574259; // RWBY
