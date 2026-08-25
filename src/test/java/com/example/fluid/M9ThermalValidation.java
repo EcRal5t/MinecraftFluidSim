@@ -216,6 +216,9 @@ public final class M9ThermalValidation {
 		GasLiquidPhaseModel model = new GasLiquidPhaseModel(
 				new ThermalRegistry(List.of(liquid, vapor), List.of(), List.of(transition), "", ""), gas);
 		GasInventory batch = model.gasBatch(transition, 1L);
+		require(model.gasBatch(transition, 3L).standardVolumeNanos()
+				== Math.multiplyExact(3L, batch.standardVolumeNanos()),
+				"multi-batch gas nanos did not compose from the canonical minimum quantum");
 		GasLiquidPhaseModel.Saturation equilibrium = model.saturation(
 				transition, 373.15, batch, GasRegistry.STANDARD_PRESSURE_PA);
 		require(close(equilibrium.saturationPressurePa(), GasRegistry.STANDARD_PRESSURE_PA)
@@ -379,7 +382,7 @@ public final class M9ThermalValidation {
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 1_410.0)));
 		long liquidSvq = SolidVolume.SVQ_PER_CELL / 200L;
 		ThermalPhaseTransition boiling = new ThermalPhaseTransition("test:phase/species_boiling",
-				water.id(), vapor.id(), 373.15, liquidSvq, liquidSvq * 1_000L,
+				water.id(), vapor.id(), 373.15, liquidSvq, liquidSvq * 500L,
 				ExactRational.parse("0.01"), ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS,
 				10_000.0, 3_000_000.0);
 		java.util.ArrayList<ThermalMaterialDefinition> materials = new java.util.ArrayList<>(List.of(water, air, vapor));
@@ -421,7 +424,7 @@ public final class M9ThermalValidation {
 		float indicatorVolume = initial.materials().copyPositionVolume()[3];
 		double indicatorMass = initial.materials().copyParticleMass()[0];
 
-		domain.step(true, 1);
+		domain.step(true, 2);
 		GasComponentAmount gas = domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
 		FlipChemicalParticleState boiled = domain.exportChemicalParticleState();
 		long gasH2o = gas.species().stream().filter(amount -> amount.speciesId().equals(
@@ -440,22 +443,54 @@ public final class M9ThermalValidation {
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"species-bearing boiling did not retain solute/indicator and move exact vapor truth");
 
-		domain.setThermalTemperatureInCell(1, 1, 1, 300.0);
-		FlipFluidDomain.GasThermalPhaseStats condensed = domain.stepGasPhaseChangeOnly(1);
-		FlipChemicalParticleState restored = domain.exportChemicalParticleState();
-		require(condensed.condensedCells() == 1
-				&& domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR) == null
-				&& restored.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O)] == initialH2o
-				&& restored.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)] == initialSodium
-				&& close(restored.residualLedger(), initial.residualLedger())
-				&& Float.floatToRawIntBits(restored.materials().copyPositionVolume()[3])
+		setAllCondensedCellTemperatures(domain, 300.0);
+		FlipFluidDomain.GasThermalPhaseStats firstCondensed = domain.stepGasPhaseChangeOnly(1);
+		GasComponentAmount vaporRemainder = domain.airNetwork().inventory(1)
+				.component(BuiltinGasDefinitions.WATER_VAPOR);
+		require(firstCondensed.operations() == 1 && firstCondensed.condensedCells() == 1
+				&& firstCondensed.boiledCells() == 0 && vaporRemainder != null
+				&& domain.airNetwork().auditClosed()
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"species-bearing partial condensation did not retain its exact gas remainder: stats="
+						+ firstCondensed + " vapor=" + vaporRemainder + " gasAudit="
+						+ domain.airNetwork().auditClosed() + " thermalAudit="
+						+ domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
+		FlipChemicalParticleState partiallyRestored = domain.exportChemicalParticleState();
+		long remainingGasH2o = vaporRemainder.species().stream().filter(amount -> amount.speciesId().equals(
+				BuiltinChemicalDefinitions.H2O)).mapToLong(GasComponentAmount.SpeciesAmount::amountQuanta).sum();
+		double remainingSolverMass = CondensedMassScale.forCellSize(config.cellSize())
+				.solverMassWeight(vaporRemainder.mass());
+		require(partiallyRestored.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O)]
+						+ remainingGasH2o == initialH2o
+				&& partiallyRestored.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)] == initialSodium
+				&& close(partiallyRestored.residualLedger() + vaporRemainder.massResidual(), initial.residualLedger())
+				&& close(partiallyRestored.materials().totalMass() + remainingSolverMass,
+						initial.materials().totalMass())
+				&& Float.floatToRawIntBits(partiallyRestored.materials().copyPositionVolume()[3])
 				== Float.floatToRawIntBits(indicatorVolume)
-				&& Double.doubleToRawLongBits(restored.materials().copyParticleMass()[0])
+				&& Double.doubleToRawLongBits(partiallyRestored.materials().copyParticleMass()[0])
 				== Double.doubleToRawLongBits(indicatorMass)
 				&& domain.totalGranularSolidVolumeSvq() == initialGranularSvq
 				&& domain.airNetwork().auditClosed()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
-				"species-bearing condensation did not restore exact liquid/gas chemical truth");
+				"species-bearing partial condensation did not conserve liquid/gas truth: first="
+						+ firstCondensed + " boiledGas=" + gas + " remainder=" + vaporRemainder
+						+ " h2o=" + partiallyRestored.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O)]
+						+ "+" + remainingGasH2o + "/" + initialH2o + " residual="
+						+ partiallyRestored.residualLedger() + "+" + vaporRemainder.massResidual()
+						+ "/" + initial.residualLedger() + " audit="
+						+ domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
+	}
+
+	private static void setAllCondensedCellTemperatures(FlipFluidDomain domain, double temperatureK) {
+		FlipMaterialParticleState state = domain.exportMaterialParticleState();
+		byte[] flags = domain.copyThermalDisplaySnapshot().debugFlags();
+		for (int cell = 0; cell < flags.length; cell++) {
+			if ((flags[cell] & ThermalDisplaySnapshot.FLAG_CONDENSED) == 0) continue;
+			int x = cell % state.sizeX();
+			int yz = cell / state.sizeX();
+			domain.setThermalTemperatureInCell(x, yz % state.sizeY(), yz / state.sizeY(), temperatureK);
+		}
 	}
 
 	private static void definitionAndCanonicalRegistry() {

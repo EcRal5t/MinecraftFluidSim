@@ -191,6 +191,13 @@ condensed 容量、两侧状态函数有效域与候选饱和方向内可提交�
 跳过潜热来放大吞吐。diagnostic 必须至少能从服务端 status 看到 gas node 的 water-vapor kg/standard volume 以及最近相变批数，
 因为气体本身没有液面 mesh，不能用“看不见蒸气”判断没有汽化。
 
+gas-side standard-volume nanos 的 canonical batch 必须先舍入一个最小批次，再只用整数乘法组成 multi-batch，禁止把整组
+physical volume 重新舍入；否则不同格生成的合法批组在合并后无法按相同 quantum 反向凝结。已经持久化的 grouped-rounding
+库存仍是独立真值，不能改写：condensation 从 component 中精确取 transition mass 与 canonical nanos/species，所有历史
+nanovolume 尾数以及 double subtraction 余量留在 gas remainder，并由既有 mass/residual roundoff ledger 闭合。
+chemistry-on 时 gas mass 是 kg，而 species/residual 仍对应 M7 frozen solver weight；重建 selected residual 必须经过唯一
+`CondensedMassScale` 边界，不能直接拿 kg 减 species mass。
+
 composition-bearing 气液相变不按 material/species ID 写死挥发性：gas thermal material 上存在对应
 `ThermalSpeciesOffset` 才声明该 species 可由该气相承载。沸腾对每个非 indicator liquid marker 做 exact binary-volume
 species split，只把已声明 species 与其独立 mass residual 移入 gas component；未声明的溶质留在保底正体积液相，indicator

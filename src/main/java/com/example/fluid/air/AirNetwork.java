@@ -108,6 +108,15 @@ public final class AirNetwork {
 		return sealed(nodeId).inventory().splitComponent(componentId, standardVolumeNanos);
 	}
 
+	/** Preview for a phase take whose mass/residual quantum is independent of gas nanos rounding. */
+	public GasInventory.Split previewComponentTake(
+			int nodeId, String componentId, long standardVolumeNanos,
+			double mass, double massResidual
+	) {
+		return sealed(nodeId).inventory().splitComponent(
+				componentId, standardVolumeNanos, mass, massResidual);
+	}
+
 	/** Books material entering the gas owner from another phase and merges all independent columns. */
 	public void commitPhaseSource(int nodeId, GasInventory addition) {
 		if (addition == null || addition.isEmpty()) throw new IllegalArgumentException("Gas phase source is empty");
@@ -123,8 +132,8 @@ public final class AirNetwork {
 		}
 		GasComponentAmount component = expectedRemoval.components().getFirst();
 		AirNode node = sealed(nodeId);
-		GasInventory.Split split = node.inventory().splitComponent(
-				component.componentId(), component.standardVolumeNanos());
+		GasInventory.Split split = node.inventory().splitComponent(component.componentId(),
+				component.standardVolumeNanos(), component.mass(), component.massResidual());
 		if (!split.first().equals(expectedRemoval)) throw new IllegalStateException("Gas phase sink preview changed");
 		MassColumns before = liveMassColumns(); node.setInventory(split.second());
 		finishMutation(before, GasInventory.EMPTY, split.first());

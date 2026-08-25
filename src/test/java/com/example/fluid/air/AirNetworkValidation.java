@@ -15,6 +15,7 @@ public final class AirNetworkValidation {
 		validateSplitMergeVentLedger();
 		validateAmbientInteraction();
 		validateComponentTransport();
+		validatePhaseColumnTake();
 		validateClosedAuditHistoryCarry();
 		validateGuards();
 		System.out.println("M5 air network gate passed: isothermal EoS, finite-rate orifice equalization, "
@@ -231,6 +232,26 @@ public final class AirNetworkValidation {
 		checkLedger(network, "closed audit history carry");
 	}
 
+	private static void validatePhaseColumnTake() {
+		AirNetwork network = new AirNetwork();
+		int node = network.addNode(2.0, 2.0);
+		GasInventory legacyGroupedVapor = new GasInventory(List.of(new GasComponentAmount(
+				BuiltinGasDefinitions.WATER_VAPOR, 4_005_761L, 0.003, List.of(), 0.003)));
+		network.commitPhaseSource(node, legacyGroupedVapor);
+		GasInventory.Split take = network.previewComponentTake(node, BuiltinGasDefinitions.WATER_VAPOR,
+				2_670_508L, 0.002, 0.002);
+		GasComponentAmount moved = take.first().components().getFirst();
+		GasComponentAmount remainder = take.second().component(BuiltinGasDefinitions.WATER_VAPOR);
+		check(moved.standardVolumeNanos() == 2_670_508L && moved.mass() == 0.002
+				&& moved.massResidual() == 0.002,
+				"phase take did not preserve its explicit nanos/mass/residual quantum");
+		check(remainder.standardVolumeNanos() == 1_335_253L
+				&& close(remainder.mass(), 0.001) && close(remainder.massResidual(), 0.001),
+				"phase take did not retain grouped-rounding remainder columns");
+		network.commitPhaseSink(node, take.first());
+		checkLedger(network, "phase column take");
+	}
+
 	private static void checkLedger(AirNetwork network, String context) {
 		long sealed = network.sealedInventoryNanos();
 		if (sealed + network.ventedNanos() != network.drawnFromAmbientNanos()) {
@@ -243,6 +264,10 @@ public final class AirNetworkValidation {
 	private static void checkRelative(double actual, double expected, String what) {
 		double error = Math.abs(actual - expected) / Math.abs(expected);
 		if (error > 1.0E-9) throw new AssertionError(what + ": actual=" + actual + " expected=" + expected);
+	}
+
+	private static boolean close(double actual, double expected) {
+		return Math.abs(actual - expected) <= 1.0E-12;
 	}
 
 	private static void check(boolean condition, String message) {

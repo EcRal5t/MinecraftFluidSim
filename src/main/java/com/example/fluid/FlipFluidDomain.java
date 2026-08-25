@@ -6,6 +6,7 @@ import com.example.chemistry.ChemicalDisplaySnapshot;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.chemistry.ChemicalTransferLedger;
 import com.example.chemistry.ChemicalLimits;
+import com.example.chemistry.ExactRational;
 import com.example.fluid.air.AirNetwork;
 import com.example.fluid.air.GasAuditLedger;
 import com.example.fluid.air.GasComponentAmount;
@@ -1663,10 +1664,26 @@ public final class FlipFluidDomain {
 	) {
 		try {
 			GasInventory requestedBatch = phase.gasBatch(transition, batches);
-			GasInventory.Split take = airNetwork.previewComponentTake(node,
-					requestedBatch.components().getFirst().componentId(), requestedBatch.standardVolumeNanos());
-			GasComponentAmount moved = take.first().components().getFirst();
+			String componentId = requestedBatch.components().getFirst().componentId();
+			GasInventory.Split proportionalTake = airNetwork.previewComponentTake(
+					node, componentId, requestedBatch.standardVolumeNanos());
 			double requestedMass = transition.massMuPerBatch().multiply(batches).toDouble();
+			GasComponentAmount proportionalMoved = proportionalTake.first().components().getFirst();
+			double requestedResidual = requestedBatch.components().getFirst().massResidual();
+			if (chemicalParcels != null) {
+				requestedResidual = condensedMassScale.solverMassWeight(requestedMass)
+						- PhaseComposition.fromGas(proportionalMoved)
+								.exactSpeciesMass(chemicalParcels.registry()).toDouble();
+			}
+			GasInventory.Split take;
+			try {
+				take = airNetwork.previewComponentTake(node, componentId,
+						requestedBatch.standardVolumeNanos(), requestedMass, requestedResidual);
+			} catch (IllegalArgumentException unrepresentableColumns) {
+				throw new PhaseCandidateUnavailableException(
+						"Condensation has no complete representable gas column quantum", unrepresentableColumns);
+			}
+			GasComponentAmount moved = take.first().components().getFirst();
 			if (!massClose(moved.mass(), requestedMass)) {
 				throw new ThermalPhaseBlockedException("Condensation gas batch mass differs from its exact transition");
 			}
@@ -2366,6 +2383,15 @@ public final class FlipFluidDomain {
 			}
 			return amounts.isEmpty() && component.massResidual() == 0.0 ? EMPTY
 					: new PhaseComposition(amounts, component.massResidual());
+		}
+
+		private ExactRational exactSpeciesMass(ChemicalRegistry registry) {
+			ExactRational result = ExactRational.ZERO;
+			for (Map.Entry<String, Long> entry : amounts.entrySet()) {
+				result = result.add(registry.species(registry.speciesHandle(entry.getKey())).massPerAu()
+						.multiply(entry.getValue()).divide(ChemicalLimits.QUANTA_PER_AU));
+			}
+			return result;
 		}
 	}
 

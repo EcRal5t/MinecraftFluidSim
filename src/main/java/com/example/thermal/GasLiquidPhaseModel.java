@@ -73,12 +73,14 @@ public final class GasLiquidPhaseModel {
 		PhasePair pair = requirePair(transition);
 		double mass = transition.massMuPerBatch().multiply(batches).toDouble();
 		GasComponentDefinition component = gasRegistry.component(pair.gas().carrierId());
-		double standardVolume = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV
-				* GasRegistry.STANDARD_TEMPERATURE_K / transition.equilibriumTemperatureK() * batches;
-		long nanos = AirNetwork.nanos(standardVolume);
-		if (nanos <= 0L || Math.abs(AirNetwork.cubicMeters(nanos) - standardVolume) > 0.5E-9) {
+		double standardVolumePerBatch = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV
+				* GasRegistry.STANDARD_TEMPERATURE_K / transition.equilibriumTemperatureK();
+		long nanosPerBatch = AirNetwork.nanos(standardVolumePerBatch);
+		if (nanosPerBatch <= 0L
+				|| Math.abs(AirNetwork.cubicMeters(nanosPerBatch) - standardVolumePerBatch) > 0.5E-9) {
 			throw new IllegalArgumentException("Gas phase batch is not representable in standard-volume nanos");
 		}
+		long nanos = Math.multiplyExact(nanosPerBatch, batches);
 		TreeMap<String, Long> canonical = new TreeMap<>();
 		for (Map.Entry<String, Long> entry : speciesQuanta.entrySet()) {
 			if (entry.getKey() == null || entry.getValue() == null || entry.getValue() <= 0L) {

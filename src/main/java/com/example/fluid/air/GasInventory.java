@@ -88,6 +88,47 @@ public final class GasInventory {
 		return new Split(new GasInventory(List.of(portions[0])), new GasInventory(remainder));
 	}
 
+	/**
+	 * Selects one component with explicitly planned mass and residual columns. Nanos and species
+	 * remain integer-conservative; any floating subtraction remainder stays in the gas remainder.
+	 * This is the phase-boundary form used when a historical grouped nanos rounding is not exactly
+	 * proportional to the transition's mass quantum.
+	 */
+	public Split splitComponent(
+			String componentId, long selectedNanos, double selectedMass, double selectedMassResidual
+	) {
+		GasComponentAmount selected = component(componentId);
+		if (selected == null || selectedNanos <= 0L || !Double.isFinite(selectedMass) || selectedMass <= 0.0
+				|| !Double.isFinite(selectedMassResidual)) {
+			throw new IllegalArgumentException("Gas component phase columns are invalid");
+		}
+		Split proportional = splitComponent(componentId, selectedNanos);
+		GasComponentAmount first = proportional.first().components().getFirst();
+		if (selectedNanos == selected.standardVolumeNanos()) {
+			if (!closeColumn(selectedMass, selected.mass())
+					|| !closeColumn(selectedMassResidual, selected.massResidual())) {
+				throw new IllegalArgumentException("A complete gas component take must preserve all columns");
+			}
+			return proportional;
+		}
+		double remainingMass = selected.mass() - selectedMass;
+		double remainingResidual = selected.massResidual() - selectedMassResidual;
+		if (!(remainingMass > 0.0) || !Double.isFinite(remainingResidual)) {
+			throw new IllegalArgumentException("Gas component phase remainder is invalid");
+		}
+		GasComponentAmount exactFirst = new GasComponentAmount(componentId, first.standardVolumeNanos(),
+				selectedMass, first.species(), selectedMassResidual);
+		GasComponentAmount proportionalRemainder = proportional.second().component(componentId);
+		GasComponentAmount exactRemainder = new GasComponentAmount(componentId,
+				proportionalRemainder.standardVolumeNanos(), remainingMass,
+				proportionalRemainder.species(), remainingResidual);
+		ArrayList<GasComponentAmount> remainder = new ArrayList<>(proportional.second().components().size());
+		for (GasComponentAmount component : proportional.second().components()) {
+			remainder.add(component.componentId().equals(componentId) ? exactRemainder : component);
+		}
+		return new Split(new GasInventory(List.of(exactFirst)), new GasInventory(remainder));
+	}
+
 	/** Partitions every component by non-negative topology weights. */
 	public List<GasInventory> partition(long[] weights) {
 		if (weights == null || weights.length == 0) throw new IllegalArgumentException("Gas partition needs children");
@@ -181,6 +222,10 @@ public final class GasInventory {
 
 	public record Split(GasInventory first, GasInventory second) { }
 	private record Remainder(int index, BigInteger value) { }
+	private static boolean closeColumn(double first, double second) {
+		return Math.abs(first - second) <= Math.max(1.0E-12,
+				Math.max(Math.ulp(first), Math.ulp(second)) * 16.0);
+	}
 
 	@Override public boolean equals(Object other) {
 		return other instanceof GasInventory inventory && components.equals(inventory.components);
