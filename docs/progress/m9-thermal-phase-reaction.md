@@ -584,3 +584,29 @@ status 保持 32.00 cells / 4.00 BV / 432 markers，建立 `V0=60.00 m³` sealed
 `drawn=60.18 m³ / vented=0.18 m³`。区域为 ACTIVE/PAUSED、lock 无、thermal 293.13 K、U/source/sink/work
 全零、coherent 0、pending-work=no、audit=closed。修订版 M9 的 v7 初始化与首帧实机边界由此通过；仍只剩同一 v7
 区域上的 reservoir→自然对流→气液相变短 smoke，不把迁移确认重复算作相变证据。
+
+## M9.35 reversibly composable gas phase batches
+
+同一实机 smoke 的第一步随后被 `Condensation gas batch mass differs from its exact transition` 安全暂停。停止时已经提交的
+气体/液体状态本身仍闭合：31.99 cells / 432 markers、water vapor 1.016 kg / 1.35662 m³std、pending-work=no、
+gas/thermal audit closed；问题是后续 condensation candidate 无法从合并 inventory 表示同一 exact batch，而不是边界打开。
+
+根因是 multi-batch boiling 过去把整组 physical standard volume 舍入一次，而 condensation capacity 使用
+`round(one batch) × batches`。production water batch 的 exact 值为 1335253.546... nanos；例如 1016 批整组舍入为
+1356617603 nanos，单批整数相乘则是 1356618064，相差 461 nanos。按旧 component nanos 比例切出的 kg 因而必然偏离
+transition mass，严格停止门正确暴露了不可逆的量化组合。
+
+修复把 gas batch 的 canonical nanos 冻结为单个最小量子的舍入值，multi-batch 只做 checked integer multiplication。
+凝结通过既有 `GasInventory/AirNetwork` owner 同时规划 nanos、kg mass、species 与 mass residual；旧 grouped-rounding
+库存的尾数及 double subtraction remainder 原样留在 gas remainder，由既有 roundoff ledger 闭合，不清零或伪造 source/sink。
+chemistry-on 路径明确经过 `CondensedMassScale` 把 exact gas kg 转回 M7 frozen solver weight 后再求 species residual，
+避免再次混淆 `h³` 边界。region-state v7、protocol 与 registry fingerprint 均不变。
+
+最近 `thermal,air-network,chemistry` 门通过；既有 chemistry fixture 扩为两批 species vapor 后只凝结一批，证明液体与
+剩余气体的 species、solver residual、kg/nanos 和总 U 同时闭合。另从实机旧算法状态复制的 checkpoint 21 以
+`vapor=1.016 kg` 恢复，在补丁上连续推进 20 步成功：934 gas batches（17 boil / 47 condense cells），水仍显示
+4.00 BV，`pending-work=no`、audit=closed，并正常发布 checkpoint 22。
+
+`clean assemble compileTestJava --offline --no-daemon` 从零成功（18 s）。0.15.3 部署 JAR SHA-256 为
+`66EFA2BFD3E8C017971E3CE0C43EE20C42966808C80E2DCD97F46AA90C400820`；mods 目录只有该主 Mod JAR 启用，
+0.15.2 已可恢复地改名为 `realwater-0.15.2-pre-reversible-gas-phase.jar.disabled`，GPU probe 保持独立 Mod id。
