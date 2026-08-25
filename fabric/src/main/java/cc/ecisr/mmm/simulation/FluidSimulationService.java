@@ -13,7 +13,6 @@ import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterial;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
-import cc.ecisr.mmm.fluid.FluidMaterialRenderSnapshot;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
@@ -29,13 +28,6 @@ import cc.ecisr.mmm.item.ChemicalContents;
 import cc.ecisr.mmm.item.FluidMixture;
 import cc.ecisr.mmm.item.MmmComponents;
 import cc.ecisr.mmm.item.ThermalContents;
-import cc.ecisr.mmm.network.FluidMaterialSnapshotPayload;
-import cc.ecisr.mmm.network.FluidProtocol;
-import cc.ecisr.mmm.network.FluidChemicalSnapshotPayload;
-import cc.ecisr.mmm.network.FluidGranularSnapshotPayload;
-import cc.ecisr.mmm.network.FluidSnapshotPayload;
-import cc.ecisr.mmm.network.FluidThermalSnapshotPayload;
-import cc.ecisr.mmm.network.FluidProtocolServer;
 import cc.ecisr.mmm.simulation.controller.FluidBoundaryScanner;
 import cc.ecisr.mmm.simulation.controller.FluidControllerRegions;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
@@ -110,6 +102,7 @@ public final class FluidSimulationService {
 	private FluidServerConfig serverConfig;
 	private final FluidRegionManager regionManager;
 	private final FluidRegionOperations regionOperations;
+	private final FluidSnapshotPublisher snapshots;
 	private final ContainerTransferStore containerTransfers;
 	/** Boot-decoded WAL truth; normal ticks never rescan or reread the transfer directory. */
 	private final Map<UUID, ContainerTransferJournal> indexedContainerTransfers = new HashMap<>();
@@ -330,6 +323,8 @@ public final class FluidSimulationService {
 				chemistryFeatureEnabled, chemicalRegistry, granularFeatureEnabled, granularRegistry,
 				precipitationFeatureEnabled, thermalFeatureEnabled, thermalRegistry, gasRegistry,
 				serverConfig.maximumThermalSubstepsPerStep());
+		snapshots = new FluidSnapshotPublisher(materialFeatureEnabled, chemistryFeatureEnabled, chemicalRegistry,
+				granularFeatureEnabled, thermalFeatureEnabled, thermalRegistry);
 		containerTransfers = new ContainerTransferStore(worldRoot);
 		loadContainerTransferIndex();
 		if (configurationLocked) regionOperations.recordIssue(
@@ -1231,7 +1226,7 @@ public final class FluidSimulationService {
 				FluidRegion failedRegion = activeRegion();
 				if (failedRegion != null && !failedRegion.controllerManaged()) {
 					regionManager.remove(failedRegion.id());
-					sendRegionRemoval(level.getServer(), failedRegion);
+					snapshots.sendRemoval(level.getServer(), failedRegion);
 				}
 				return false;
 			}
@@ -1349,7 +1344,7 @@ public final class FluidSimulationService {
 		candidate.setDebugOverlays(defaultDebugOverlays);
 		FluidRegionManager.AdmissionResult admission = regionManager.replaceSelected(candidate);
 		if (!admission.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + admission.failure());
-		if (replaced != null) sendRegionRemoval(level.getServer(), replaced);
+		if (replaced != null) snapshots.sendRemoval(level.getServer(), replaced);
 	}
 
 	private static void restoreTensionCap(FlipFluidDomain domain, int angleDegrees) {
@@ -1561,7 +1556,7 @@ public final class FluidSimulationService {
 		candidate.setDebugOverlays(defaultDebugOverlays);
 		FluidRegionManager.AdmissionResult admission = regionManager.replaceSelected(candidate);
 		if (!admission.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + admission.failure());
-		if (replaced != null) sendRegionRemoval(level.getServer(), replaced);
+		if (replaced != null) snapshots.sendRemoval(level.getServer(), replaced);
 	}
 
 	public boolean setPaused(boolean value, ServerLevel level) {
@@ -1634,7 +1629,7 @@ public final class FluidSimulationService {
 					region.setAvailabilityFailure("dimension is not loaded; unresolved container transfer WAL prevents unload checkpoint");
 					continue;
 				}
-				regionOperations.unloadForFailure(server, region, "dimension is not loaded", FluidSimulationService::sendRegionRemoval);
+				regionOperations.unloadForFailure(server, region, "dimension is not loaded", snapshots::sendRemoval);
 				continue;
 			}
 			tickRegion(level, region);
@@ -1768,7 +1763,7 @@ public final class FluidSimulationService {
 
 		boolean available = regionOperations.ensureAvailable(
 				level, region, controllerFeatureEnabled, this::refreshCollisions, this::sendSnapshot,
-				FluidSimulationService::sendRegionRemoval
+				snapshots::sendRemoval
 		);
 		if (available && thermalFeatureEnabled && region.solverLoaded() && region.domain().hasThermalState()) {
 			region.enableThermalActivity();
@@ -1978,13 +1973,7 @@ public final class FluidSimulationService {
 		FluidRegionOperations.RegionRemoval removal = regionOperations.deletePersistentRegions(server);
 		if (removal.failure() != null) return RestorationStats.failed(false, 0, 0, 0, removal.failure());
 		regionManager.clear();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-			FluidProtocolServer.send(player, FluidSnapshotPayload.clearAll());
-			FluidProtocolServer.send(player, FluidMaterialSnapshotPayload.clearAll());
-			FluidProtocolServer.send(player, FluidChemicalSnapshotPayload.clearAll());
-			FluidProtocolServer.send(player, FluidGranularSnapshotPayload.clearAll());
-			FluidProtocolServer.send(player, FluidThermalSnapshotPayload.clearAll());
-		}
+		snapshots.clearAll(server);
 		return new RestorationStats(restoration.journalFound(), restoration.restoredBlocks(),
 				restoration.alreadyRestoredBlocks(), restoration.skippedBlocks(),
 				removal.releasedBlocks(), removal.releasedSkipped(), true, null);
@@ -2618,84 +2607,17 @@ public final class FluidSimulationService {
 	}
 
 	public void sendSnapshotFor(ServerPlayer player, FluidRegion region) {
-		if (region != null && region.solverLoaded() && player.level().dimension().equals(region.dimension())) {
-			createSnapshotDispatch(region).sendTo(player);
-		}
+		snapshots.sendTo(player, region);
 	}
 
 	public void sendSnapshots(ServerPlayer player) {
 		for (FluidRegion region : regionManager.regions()) {
-			if (!region.solverLoaded() || !player.level().dimension().equals(region.dimension())) continue;
-			createSnapshotDispatch(region).sendTo(player);
+			snapshots.sendTo(player, region);
 		}
 	}
 
 	public void sendSnapshot(ServerLevel level, FluidRegion region) {
-		if (!region.solverLoaded() || !level.dimension().equals(region.dimension())) return;
-		SnapshotDispatch dispatch = createSnapshotDispatch(region);
-		for (ServerPlayer player : level.players()) dispatch.sendTo(player);
-	}
-
-	private SnapshotDispatch createSnapshotDispatch(FluidRegion region) {
-		if (thermalFeatureEnabled) {
-			FluidThermalSnapshotPayload payload = createThermalSnapshot(region);
-			return player -> FluidProtocolServer.send(player, payload);
-		}
-		if (granularFeatureEnabled) {
-			FluidGranularSnapshotPayload payload = createGranularSnapshot(region);
-			return player -> FluidProtocolServer.send(player, payload);
-		}
-		if (chemistryFeatureEnabled) {
-			FluidChemicalSnapshotPayload payload = createChemicalSnapshot(region);
-			return player -> FluidProtocolServer.send(player, payload);
-		}
-		if (materialFeatureEnabled) {
-			FluidMaterialSnapshotPayload payload = createMaterialSnapshot(region);
-			return player -> FluidProtocolServer.send(player, payload);
-		}
-		FluidSnapshotPayload payload = createSnapshot(region);
-		return player -> FluidProtocolServer.send(player, payload);
-	}
-
-	@FunctionalInterface
-	private interface SnapshotDispatch {
-		void sendTo(ServerPlayer player);
-	}
-
-	private static FluidSnapshotPayload createSnapshot(FluidRegion region) {
-		FlipFluidDomain domain = region.domain();
-		List<FluidSnapshotPayload.Extension> extensions = List.of();
-		long cellCount = (long) domain.sizeX() * domain.sizeY() * domain.sizeZ();
-		if (domain.gasPressureActive() && cellCount <= FluidSnapshotPayload.MAX_EXTENSION_BYTES) {
-			extensions = List.of(new FluidSnapshotPayload.Extension(
-					FluidSnapshotPayload.EXTENSION_GAS_NODES, domain.copyGasNodeMask()));
-		}
-		return FluidSnapshotPayload.snapshot(
-				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence(),
-				region.origin(), domain.config().cellSize(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
-				domain.copyQuantizedVolume(), domain.copyMarkerMask(), domain.copySolidMask(), region.debugOverlays(),
-				extensions
-		);
-	}
-
-	private static void sendRegionRemoval(MinecraftServer server, FluidRegion region) {
-		long sequence = region.nextSnapshotSequence();
-		FluidSnapshotPayload purePayload = FluidSnapshotPayload.removeRegion(
-				region.dimension().identifier(), region.id(), region.generation(), sequence
-		);
-		FluidMaterialSnapshotPayload materialPayload = FluidMaterialSnapshotPayload.removeRegion(
-				region.dimension().identifier(), region.id(), region.generation(), sequence
-		);
-		FluidChemicalSnapshotPayload chemicalPayload = FluidChemicalSnapshotPayload.removeRegion(materialPayload);
-		FluidGranularSnapshotPayload granularPayload = FluidGranularSnapshotPayload.removeRegion(materialPayload);
-		FluidThermalSnapshotPayload thermalPayload = FluidThermalSnapshotPayload.removeRegion(materialPayload);
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-			FluidProtocolServer.send(player, purePayload);
-			FluidProtocolServer.send(player, materialPayload);
-			FluidProtocolServer.send(player, chemicalPayload);
-			FluidProtocolServer.send(player, granularPayload);
-			FluidProtocolServer.send(player, thermalPayload);
-		}
+		snapshots.sendToLevel(level, region);
 	}
 
 	private FluidRegion activeRegion() {
@@ -2725,65 +2647,6 @@ public final class FluidSimulationService {
 
 	public record SelectionResult(boolean succeeded, UUID regionId, String failure) {
 		static SelectionResult failed(String failure) { return new SelectionResult(false, null, failure); }
-	}
-
-	private static FluidMaterialSnapshotPayload createMaterialSnapshot(FluidRegion region) {
-		FluidMaterialRenderSnapshot snapshot = region.domain().copyMaterialRenderSnapshot();
-		return FluidMaterialSnapshotPayload.snapshot(
-				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence(), region.origin(),
-				snapshot, region.debugOverlays()
-		);
-	}
-
-	private static FluidChemicalSnapshotPayload createChemicalSnapshot(FluidRegion region) {
-		if (!region.domain().hasChemistryState()) throw new IllegalStateException("Chemical region is missing parcel state");
-		FluidMaterialRenderSnapshot material = region.domain().copyMaterialRenderSnapshot();
-		FluidMaterialSnapshotPayload base = FluidMaterialSnapshotPayload.snapshot(
-				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence(), region.origin(),
-				material, region.debugOverlays());
-		return createChemicalLayer(region, base);
-	}
-
-	private static FluidChemicalSnapshotPayload createChemicalLayer(
-			FluidRegion region, FluidMaterialSnapshotPayload base
-	) {
-		return FluidChemicalSnapshotPayload.snapshot(base,
-				region.domain().chemicalParcels().registry().fingerprint(), region.domain().copyChemicalDisplaySnapshot());
-	}
-
-	private FluidGranularSnapshotPayload createGranularSnapshot(FluidRegion region) {
-		if (!region.domain().hasGranularState()) throw new IllegalStateException("Granular region is missing parcel state");
-		FluidMaterialRenderSnapshot material = region.domain().copyMaterialRenderSnapshot();
-		FluidMaterialSnapshotPayload base = FluidMaterialSnapshotPayload.snapshot(
-				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence(), region.origin(),
-				material, region.debugOverlays());
-		return createGranularLayer(region, base);
-	}
-
-	private FluidGranularSnapshotPayload createGranularLayer(
-			FluidRegion region, FluidMaterialSnapshotPayload base
-	) {
-		return FluidGranularSnapshotPayload.snapshot(base, region.domain().copyGranularDisplaySnapshot(),
-				chemistryFeatureEnabled ? chemicalRegistry.fingerprint() : null,
-				chemistryFeatureEnabled ? region.domain().copyChemicalDisplaySnapshot() : null);
-	}
-
-	private FluidThermalSnapshotPayload createThermalSnapshot(FluidRegion region) {
-		if (!region.domain().hasThermalState()) throw new IllegalStateException("Thermal region is missing energy state");
-		FluidMaterialRenderSnapshot material = region.domain().copyMaterialRenderSnapshot();
-		FluidMaterialSnapshotPayload base = FluidMaterialSnapshotPayload.snapshot(
-				region.dimension().identifier(), region.id(), region.generation(), region.nextSnapshotSequence(), region.origin(),
-				material, region.debugOverlays());
-		FluidChemicalSnapshotPayload chemical = chemistryFeatureEnabled && !granularFeatureEnabled
-				? createChemicalLayer(region, base) : null;
-		FluidGranularSnapshotPayload granular = granularFeatureEnabled ? createGranularLayer(region, base) : null;
-		ThermalDisplaySnapshot display = region.domain().copyThermalDisplaySnapshot();
-		return new FluidThermalSnapshotPayload(FluidProtocol.Layout.THERMAL, base,
-				thermalRegistry.fingerprint(),
-				display.cellTemperatureQ(), display.coherentFraction(), display.debugFlags(),
-				display.gasNodes().stream().map(node -> new FluidThermalSnapshotPayload.GasNodeDisplay(
-						node.nodeId(), node.temperatureQ(), node.gaugePressureDecaPa())).toList(),
-				chemical, granular);
 	}
 
 	private static void bindDefaultMaterialState(FlipFluidDomain domain) {

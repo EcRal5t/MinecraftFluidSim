@@ -41,7 +41,7 @@ OwnershipTransaction                        原版方块 ownership
 ContainerTransferStore                      region/item 跨域事务
 
 已提交区域状态
-  -> SnapshotBuilder / protocol payload
+  -> FluidSnapshotPublisher / protocol payload
   -> 客户端 surface、material、chemical、granular、thermal 重建
   -> MmmQueryApi / FabricFluidQueryApi
   -> 外部 Mod 的同步只读单格观察
