@@ -2099,10 +2099,15 @@ public final class FluidSimulationService {
 		String temperature = minimumQ == Integer.MAX_VALUE ? "empty"
 				: minimumQ == maximumQ ? String.format("%.2f K", minimumQ / 16.0)
 				: String.format("%.2f..%.2f K", minimumQ / 16.0, maximumQ / 16.0);
-		return String.format("thermal %s T=%s U=%.6g EU source=%.6g sink=%.6g work=%.6g coherent=%d SVQ pending-work=%s audit=%s",
+		FlipFluidDomain.ThermalPhaseStats condensed = domain.lastThermalPhaseStats();
+		FlipFluidDomain.GasThermalPhaseStats gas = domain.lastGasThermalPhaseStats();
+		String phase = condensed.operations() == 0 && gas.operations() == 0 ? "idle"
+				: String.format("solid=%d gas=%d (boil %d/condense %d cells)",
+						condensed.operations(), gas.operations(), gas.boiledCells(), gas.condensedCells());
+		return String.format("thermal %s T=%s U=%.6g EU source=%.6g sink=%.6g work=%.6g coherent=%d SVQ phase=%s pending-work=%s audit=%s",
 				activity == null ? "unbound" : activity.state(), temperature, domain.totalInternalEnergy(),
 				audit.externalSource().toDouble(), audit.externalSink().toDouble(),
-				audit.mechanicalWork().toDouble(), domain.totalCoherentSolidVolumeSvq(),
+				audit.mechanicalWork().toDouble(), domain.totalCoherentSolidVolumeSvq(), phase,
 				domain.hasPendingPhaseVolumeWork() ? "yes" : "no",
 				domain.exactInternalEnergy().equals(audit.expectedInventory()) ? "closed" : "FAILED");
 	}
@@ -2119,6 +2124,9 @@ public final class FluidSimulationService {
 			builder.append(String.format("node %d p=%+.0f Pa T=%.2f K V0=%.2f m³",
 					id, domain.gasNodeGaugePressurePa(id), domain.gasNodeTemperatureK(id),
 					network.standardVolume(id)));
+			var vapor = network.inventory(id).component(BuiltinGasDefinitions.WATER_VAPOR);
+			if (vapor != null) builder.append(String.format(" vapor=%.6g kg/%.6g m³std",
+					vapor.mass(), AirNetwork.cubicMeters(vapor.standardVolumeNanos())));
 		}
 		if (ids.size() > 4) builder.append("; +").append(ids.size() - 4).append(" more");
 		builder.append(String.format(", vented %.2f m³ drawn %.2f m³",

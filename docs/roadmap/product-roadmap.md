@@ -119,6 +119,8 @@ gas node，沸腾路径不可达；仅导热又使底部储层缺少宏观自然
 - `region-state v7` 独占修正后的 SI 热能语义；旧 v6 保留并稳定等待 operator 显式初温重建，不静默重解释。
 - controller 闭壳由 ownership/footprint 明确选择 sealed domain boundary；命令临时域仍保持 ambient，缺口仍按真实几何 vent。
 - 使用有 world-authoritative 有效域的 Boussinesq 近似提供自然对流；不修改质量/体积真值，不用经验 tick 百分比加速导热。
+- 气液 transition batch 只定义最小守恒量子；运行时按能量、饱和压力、库存、容量和统一 4096-batch 预算求最大完整 extent，
+  不再把 1 g 量子误作每界面格每步吞吐上限；服务端 status 直接报告 vapor 真值与最近相变批数。
 - 自动门量化现实热容量、边界通量、对流方向、freeze/melt、boil/condense、gas topology、restart 与 audit；最后只请求一次
   闭壳 reservoir 合并实机 smoke。
 

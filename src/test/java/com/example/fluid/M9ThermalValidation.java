@@ -262,7 +262,7 @@ public final class M9ThermalValidation {
 
 	private static void sealedInterfaceBoilingCommitsJointInventory() {
 		FluidMaterial waterCarrier = FluidMaterial.withSurfaceTension(
-				"test:boiling_water", 1.0, "test:miscible", 0.0, 90.0);
+				"test:boiling_water", 1_000.0, "test:miscible", 0.0, 90.0);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(waterCarrier));
 		ThermalMaterialDefinition water = new ThermalMaterialDefinition("test:thermal/boiling_water",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, waterCarrier.id(), 373.15, 0.0, 0.6,
@@ -274,14 +274,15 @@ public final class M9ThermalValidation {
 				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.WATER_VAPOR,
 				373.15, 2_256_000.0, 0.025,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 1_410.0)));
-		long liquidSvq = SolidVolume.SVQ_PER_CELL / 200L;
-		long vaporSvq = liquidSvq * 1_000L;
+		long liquidSvq = SolidVolume.SVQ_PER_CELL / 20_000L;
+		long vaporSvq = liquidSvq * 1_700L;
+		ExactRational batchMass = ExactRational.parse("52375/8388608");
 		ThermalPhaseTransition boiling = new ThermalPhaseTransition("test:phase/boiling_water",
-				water.id(), vapor.id(), 373.15, liquidSvq, vaporSvq, ExactRational.parse("0.01"),
+				water.id(), vapor.id(), 373.15, liquidSvq, vaporSvq, batchMass,
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 10_000.0, 3_000_000.0);
 		ThermalRegistry thermal = new ThermalRegistry(
 				List.of(water, air, vapor), List.of(), List.of(boiling), "", "");
-		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
 		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 512);
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
@@ -299,16 +300,18 @@ public final class M9ThermalValidation {
 				&& display.gasNodes().size() == 1 && display.gasNodes().getFirst().nodeId() == 1,
 				"thermal v5 display did not derive quantized condensed/gas state in one rebuild");
 		double liquidMassBefore = domain.totalMass();
-		double boiledSolverMass = CondensedMassScale.forCellSize(config.cellSize()).solverMassWeight(0.01);
+		double boiledSolverMass = CondensedMassScale.forCellSize(config.cellSize())
+				.solverMassWeight(batchMass.toDouble());
 		long gasNanosBefore = domain.airNetwork().standardVolumeNanos(1);
 		SignedDyadic energyBefore = domain.exactInternalEnergy();
 		ThermalAuditLedger auditBefore = domain.thermalAudit();
-		domain.step(true, 1);
+		domain.step(true, 128);
 		FlipFluidDomain.GasThermalPhaseStats stats = domain.lastGasThermalPhaseStats();
 		GasComponentAmount vaporAmount = domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
-		require(stats.operations() == 1 && stats.boiledCells() == 1 && stats.condensedCells() == 0
-				&& close(domain.totalMass(), liquidMassBefore - boiledSolverMass)
-				&& vaporAmount != null && close(vaporAmount.mass(), 0.01)
+		require(stats.operations() > 1 && stats.operations() <= 128
+				&& stats.boiledCells() == 1 && stats.condensedCells() == 0
+				&& close(domain.totalMass(), liquidMassBefore - boiledSolverMass * stats.operations())
+				&& vaporAmount != null && close(vaporAmount.mass(), batchMass.toDouble() * stats.operations())
 				&& domain.airNetwork().standardVolumeNanos(1) > gasNanosBefore
 				&& domain.airNetwork().auditClosed()
 				&& domain.thermalAudit().mechanicalWork().compareTo(auditBefore.mechanicalWork()) < 0
@@ -319,22 +322,38 @@ public final class M9ThermalValidation {
 						+ "/" + gasNanosBefore + " deltaU="
 						+ domain.exactInternalEnergy().subtract(energyBefore));
 		domain.setThermalTemperatureInCell(1, 1, 1, 300.0);
+		double liquidMassAfterBoiling = domain.totalMass();
 		SignedDyadic beforeCondensation = domain.exactInternalEnergy();
 		ThermalAuditLedger auditBeforeCondensation = domain.thermalAudit();
 		FlipThermalParticleState beforeCondensationState = domain.exportThermalParticleState();
-		FlipFluidDomain.GasThermalPhaseStats condensed = domain.stepGasPhaseChangeOnly(1);
-		require(condensed.operations() == 1 && condensed.boiledCells() == 0 && condensed.condensedCells() == 1
-				&& close(domain.totalMass(), liquidMassBefore)
-				&& domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR) == null
-				&& domain.airNetwork().standardVolumeNanos(1) == gasNanosBefore
+		FlipFluidDomain.GasThermalPhaseStats condensed = domain.stepGasPhaseChangeOnly(stats.operations());
+		GasComponentAmount vaporAfterCondensation = domain.airNetwork().inventory(1)
+				.component(BuiltinGasDefinitions.WATER_VAPOR);
+		long remainingBatches = stats.operations() - condensed.operations();
+		double condensedPhysicalMass = (domain.totalMass() - liquidMassAfterBoiling)
+				* CondensedMassScale.forCellSize(config.cellSize()).cubicMetersPerNormalizedCellVolume();
+		double removedVaporMass = vaporAmount.mass()
+				- (vaporAfterCondensation == null ? 0.0 : vaporAfterCondensation.mass());
+		require(condensed.operations() > 1 && condensed.operations() <= stats.operations()
+				&& condensed.boiledCells() == 0 && condensed.condensedCells() == 1
+				&& Math.abs(condensedPhysicalMass - removedVaporMass) <= 1.0E-9
+				&& vaporAfterCondensation != null
+				&& Math.abs(vaporAfterCondensation.mass()
+						- batchMass.toDouble() * remainingBatches) <= 1.0E-9
+				&& domain.airNetwork().standardVolumeNanos(1)
+						== gasNanosBefore + vaporAfterCondensation.standardVolumeNanos()
 				&& domain.airNetwork().auditClosed()
 				&& domain.thermalAudit().mechanicalWork().compareTo(
 						auditBeforeCondensation.mechanicalWork()) > 0
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"sealed condensation did not reverse the exact gas batch with conserved energy: stats=" + condensed
-						+ " mass=" + domain.totalMass() + " vapor="
-						+ domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR)
+						+ " mass=" + domain.totalMass() + " vapor=" + vaporAfterCondensation
+						+ " condensedKg=" + condensedPhysicalMass + "/" + removedVaporMass
+						+ " expectedVapor=" + (batchMass.toDouble() * remainingBatches)
 						+ " nanos=" + domain.airNetwork().standardVolumeNanos(1) + "/" + gasNanosBefore
+						+ " workCmp=" + domain.thermalAudit().mechanicalWork().compareTo(
+						auditBeforeCondensation.mechanicalWork())
+						+ " audit=" + domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
 						+ " deltaU=" + domain.exactInternalEnergy().subtract(beforeCondensation)
 						+ " gas=" + java.util.Arrays.toString(beforeCondensationState.copyGasNodeEnergy()) + "->"
 						+ java.util.Arrays.toString(domain.exportThermalParticleState().copyGasNodeEnergy())

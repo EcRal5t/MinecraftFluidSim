@@ -1,8 +1,23 @@
-# M9 温度、相变和反应热（已完成）
+# M9 温度、相变和反应热（修订中）
 
 > 2026-08-25 修订状态：真实可调热源 smoke 随后发现 condensed mass 的 `h^3` 单位遗漏、controller headspace
 > 被误判 ambient，以及底部热源没有自然对流；因此本页此前的“完成”仅保留为 0.15.0 历史证据，M9 已重新开放。
 > 修订契约以 [`../architecture/thermal-state.md`](../architecture/thermal-state.md) 为准。
+
+## 2026-08-25 production revision
+
+- 新增唯一 `CondensedMassScale`，把 M3/M8 frozen solver mass weight 经 `h³` 转成状态函数使用的 kg；旧 v6 因错误
+  能量尺度只读保留，修订 runtime 与 checkpoint 独占 region-state v7，旧代次只能由 operator 显式初温重建。
+- controller footprint 明确选择 sealed solver boundary，闭壳 headspace 现在生成真实 gas node；命令域及有缺口几何仍 vent。
+- water/oil/mercury 使用 world-bound model identity 的 Boussinesq 派生体力接入既有 y-face/projection，底部储层能够驱动
+  自然对流而不修改质量、体积或能量真值。
+- boil/condense 从“每界面格每步固定 1 个最小量子”改为纯 plan + 单次 commit 的多批 extent；二分搜索受统一预算、
+  liquid/gas inventory、cell capacity、候选 LTE/气体有效域与 saturation direction 同时约束。自动 fixture 已证明一次提交和
+  一次反向凝结都可超过 1 批，并闭合 condensed kg、gas mass/nanos、可选 species/residual 与总 `U`。
+- `/realwater status` 保留只读派生温度，并新增最近 solid/gas phase 批数以及每个 gas node 的 water-vapor kg/standard volume；
+  不增加准星温度 HUD，Jade/WAILA/HWYLA 查询边界仍留在 M10。
+
+最近门：`thermal`、完整 `gas-liquid`、`chemistry` 通过；等待一次 v7 controller + reservoir 合并实机 smoke 后关闭修订版 M9。
 
 ## M9.12 gas persistence prerequisite design
 

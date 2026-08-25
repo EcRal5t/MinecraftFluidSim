@@ -185,6 +185,11 @@ window 时 PAUSED，不能继续使用会破坏能量闭合的 pressure clamp。
 沸腾/冷凝只在服务端解析的 liquid-gas interface 上按 saturation relation 计划，不用固定 100 C 或每 tick 百分比。
 plan 联合移动液体与气体的 volume/nanos、质量、species、residual 和 `U`；潜热由两侧状态函数自然体现。
 没有界面、receiver、预算或几何容量时不提交。气体 v4 前置完成前这些路径不开放 production controller。
+transition batch 是最小可表示量子，不是每格每步吞吐上限。每个界面格先纯规划在统一 operation budget、液/气库存、
+condensed 容量、两侧状态函数有效域与候选饱和方向内可提交的最大完整批数，再一次性提交；搜索只在候选仍指向原相变方向时
+扩大 extent，越过平衡点后收缩。若单个最小量子已经跨过平衡，允许提交该一个离散量子；不得用固定百分比、温差倍率或
+跳过潜热来放大吞吐。diagnostic 必须至少能从服务端 status 看到 gas node 的 water-vapor kg/standard volume 以及最近相变批数，
+因为气体本身没有液面 mesh，不能用“看不见蒸气”判断没有汽化。
 
 composition-bearing 气液相变不按 material/species ID 写死挥发性：gas thermal material 上存在对应
 `ThermalSpeciesOffset` 才声明该 species 可由该气相承载。沸腾对每个非 indicator liquid marker 做 exact binary-volume

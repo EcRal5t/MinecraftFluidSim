@@ -1485,7 +1485,7 @@ public final class FlipFluidDomain {
 		return new ThermalPhaseStats(operations, frozen, melted, signedBatches);
 	}
 
-	/** Sealed-interface liquid/gas phase transfer; one exact species-bearing batch per interface cell and call. */
+	/** Sealed-interface liquid/gas phase transfer, bounded by saturation, energy, inventory and one shared batch budget. */
 	public GasThermalPhaseStats stepGasPhaseChangeOnly(int maximumOperations) {
 		if (thermalState == null || !thermalState.gasModelBound()) {
 			throw new IllegalStateException("Gas phase change requires bound gas thermal state");
@@ -1511,61 +1511,92 @@ public final class FlipFluidDomain {
 				if (node <= 0) continue;
 				PhaseCellInventory inventory = gasLiquidCellInventory(cell, liquidHandle);
 				if (inventory == null) continue;
+				long remainingBudget = maximumOperations - operations;
 				double absolutePressure = GasRegistry.STANDARD_PRESSURE_PA
 						+ thermalState.gasGaugePressure(node, airNetwork);
 				double liquidTemperature = thermalState.temperatureInCell(cell, thermalMarkerContext());
 				GasLiquidPhaseModel.Direction direction = phase.saturation(
 						transition, liquidTemperature, airNetwork.inventory(node), absolutePressure).direction();
-				if (direction == GasLiquidPhaseModel.Direction.BOIL
-						&& inventory.freezableUpperSvq() >= transition.lowerVolumeSvqPerBatch()
-						&& inventory.freezableUpperMass() + massTolerance(inventory.freezableUpperMass())
-						>= transition.massMuPerBatch().toDouble()) {
-					try {
-						commitGasBoil(cell, node, liquidHandle, gasThermalHandle,
-								transition, phase, liquidTemperature);
-					} catch (ThermalStateFunction.EnergyOutsideValidityException | PhaseCandidateUnavailableException unavailable) {
-						continue;
-					}
+				if (direction == GasLiquidPhaseModel.Direction.BOIL) {
+					GasBoilPlan plan = planGasBoil(cell, node, liquidHandle, gasThermalHandle,
+							transition, inventory, phase, liquidTemperature, remainingBudget);
+					if (plan == null) continue;
+					commitGasBoil(cell, node, plan);
 					ensureGrid(); refreshGasTopology();
-					operations++; boiled++;
+					operations = Math.addExact(operations, Math.toIntExact(plan.batches())); boiled++;
 				} else if (direction == GasLiquidPhaseModel.Direction.CONDENSE) {
-					GasComponentAmount vapor = airNetwork.inventory(node).component(gas.carrierId());
-					GasInventory batch = phase.gasBatch(transition, 1L);
-					if (vapor != null && vapor.standardVolumeNanos() >= batch.standardVolumeNanos()) {
-						try {
-							commitGasCondense(cell, node, liquidHandle, transition, inventory, phase, batch);
-						} catch (ThermalStateFunction.EnergyOutsideValidityException | PhaseCandidateUnavailableException unavailable) {
-							continue;
-						}
-						ensureGrid(); refreshGasTopology();
-						operations++; condensed++;
-					}
+					GasCondensePlan plan = planGasCondense(cell, node, liquidHandle, transition,
+							inventory, phase, gas.carrierId(), remainingBudget);
+					if (plan == null) continue;
+					commitGasCondense(cell, node, liquidHandle, plan);
+					ensureGrid(); refreshGasTopology();
+					operations = Math.addExact(operations, Math.toIntExact(plan.batches())); condensed++;
 				}
 			}
 		}
 		return new GasThermalPhaseStats(operations, boiled, condensed);
 	}
 
-	private void commitGasBoil(
+	private GasBoilPlan planGasBoil(
 			int cell, int node, int liquidHandle, int gasThermalHandle,
-			ThermalPhaseTransition transition, GasLiquidPhaseModel phase, double liquidTemperature
+			ThermalPhaseTransition transition, PhaseCellInventory inventory,
+			GasLiquidPhaseModel phase, double liquidTemperature, long maximumBatches
 	) {
-		long removedSvq = transition.lowerVolumeSvqPerBatch();
-		double removedMass = transition.massMuPerBatch().toDouble();
-		PhaseRemovalPlan removal = planGasPhaseRemoval(
-				cell, liquidHandle, gasThermalHandle, removedSvq, removedMass);
-		GasInventory batch = chemicalParcels == null ? phase.gasBatch(transition, 1L)
-				: phase.gasBatch(transition, 1L, removal.movedComposition().amounts(),
-						removal.movedComposition().massResidual());
-		double batchEnergy = phase.internalEnergyAtTemperature(transition, batch, liquidTemperature);
-		thermalState.requirePhaseCandidateState(cell,
-				liquidInventoryAfterRemoval(cell, liquidHandle, removal.allocations()),
-				-batchEnergy, thermalMarkerContext());
-		GasInventory candidateGas = airNetwork.inventory(node).merge(batch);
-		double candidateGasEnergy = thermalState.gasNodeEnergy(node, airNetwork) + batchEnergy;
-		thermalState.requireGasNodeState(node, candidateGas, candidateGasEnergy, airNetwork);
+		double batchMass = transition.massMuPerBatch().toDouble();
+		long byVolume = inventory.freezableUpperSvq() / transition.lowerVolumeSvqPerBatch();
+		long byMass = (long) Math.floor((inventory.freezableUpperMass()
+				+ massTolerance(inventory.freezableUpperMass())) / batchMass);
+		long high = Math.min(maximumBatches, Math.min(byVolume, byMass));
+		if (high <= 0L) return null;
+		GasBoilPlan first = gasBoilCandidate(cell, node, liquidHandle, gasThermalHandle,
+				transition, phase, liquidTemperature, 1L);
+		if (first == null || first.directionAfter() != GasLiquidPhaseModel.Direction.BOIL) return first;
+		GasBoilPlan best = first;
+		long low = 2L;
+		while (low <= high) {
+			long middle = low + ((high - low) >>> 1);
+			GasBoilPlan candidate = gasBoilCandidate(cell, node, liquidHandle, gasThermalHandle,
+					transition, phase, liquidTemperature, middle);
+			if (candidate == null || candidate.directionAfter() != GasLiquidPhaseModel.Direction.BOIL) {
+				high = middle - 1L;
+			} else {
+				best = candidate;
+				low = middle + 1L;
+			}
+		}
+		return best;
+	}
+
+	private GasBoilPlan gasBoilCandidate(
+			int cell, int node, int liquidHandle, int gasThermalHandle,
+			ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
+			double liquidTemperature, long batches
+	) {
+		try {
+			long removedSvq = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
+			double removedMass = transition.massMuPerBatch().multiply(batches).toDouble();
+			PhaseRemovalPlan removal = planGasPhaseRemoval(
+					cell, liquidHandle, gasThermalHandle, removedSvq, removedMass);
+			GasInventory batch = chemicalParcels == null ? phase.gasBatch(transition, batches)
+					: phase.gasBatch(transition, batches, removal.movedComposition().amounts(),
+							removal.movedComposition().massResidual());
+			double batchEnergy = phase.internalEnergyAtTemperature(transition, batch, liquidTemperature);
+			double candidateLiquidTemperature = thermalState.requirePhaseCandidateState(cell,
+					liquidInventoryAfterRemoval(cell, liquidHandle, removal.allocations()),
+					-batchEnergy, thermalMarkerContext());
+			GasInventory candidateGas = airNetwork.inventory(node).merge(batch);
+			double candidateGasEnergy = thermalState.gasNodeEnergy(node, airNetwork) + batchEnergy;
+			GasLiquidPhaseModel.Direction directionAfter = prospectiveGasPhaseDirection(
+					node, transition, phase, candidateLiquidTemperature, candidateGas, candidateGasEnergy);
+			return new GasBoilPlan(batches, removal, batch, candidateGasEnergy, directionAfter);
+		} catch (ThermalStateFunction.EnergyOutsideValidityException | PhaseCandidateUnavailableException unavailable) {
+			return null;
+		}
+	}
+
+	private void commitGasBoil(int cell, int node, GasBoilPlan plan) {
 		SignedDyadic inventoryBefore = exactInternalEnergy();
-		for (PhaseMarkerAllocation allocation : removal.allocations()) {
+		for (PhaseMarkerAllocation allocation : plan.removal().allocations()) {
 			if (allocation.fullRemoval()) {
 				removeParticleInternalPhase(allocation.marker());
 			}
@@ -1579,79 +1610,147 @@ public final class FlipFluidDomain {
 				thermalState.commitInternalTruncate(allocation.marker(), allocation.thermalPlan());
 			}
 		}
-		airNetwork.commitPhaseSource(node, batch);
-		thermalState.commitGasNodeEnergy(node, candidateGasEnergy);
+		airNetwork.commitPhaseSource(node, plan.batch());
+		thermalState.commitGasNodeEnergy(node, plan.candidateGasEnergy());
 		gridDirty = true;
 		thermalState.repartitionCellEnergyConserving(cell, thermalMarkerContext(), inventoryBefore);
 	}
 
-	private void commitGasCondense(
+	private GasCondensePlan planGasCondense(
 			int cell, int node, int liquidHandle, ThermalPhaseTransition transition,
-			PhaseCellInventory before, GasLiquidPhaseModel phase, GasInventory requestedBatch
+			PhaseCellInventory before, GasLiquidPhaseModel phase, String gasCarrierId, long maximumBatches
 	) {
-		GasInventory.Split take = airNetwork.previewComponentTake(node,
-				requestedBatch.components().getFirst().componentId(), requestedBatch.standardVolumeNanos());
-		GasComponentAmount moved = take.first().components().getFirst();
-		double requestedMass = transition.massMuPerBatch().toDouble();
-		if (!massClose(moved.mass(), requestedMass)) {
-			throw new ThermalPhaseBlockedException("Condensation gas batch mass differs from its exact transition");
-		}
-		long addedSvq = transition.lowerVolumeSvqPerBatch();
+		GasComponentAmount vapor = airNetwork.inventory(node).component(gasCarrierId);
+		if (vapor == null) return null;
+		long nanosPerBatch = phase.gasBatch(transition, 1L).standardVolumeNanos();
+		long byGas = vapor.standardVolumeNanos() / nanosPerBatch;
 		long occupied = Math.addExact(Math.addExact(
 				Math.addExact(before.upperVolumeSvq(), before.lowerVolumeSvq()), phaseGranularSvq(cell)),
 				thermalState.coherentPhases().cellOccupiedSvq(cell));
 		long capacity = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
-		if (Math.addExact(occupied, addedSvq) > capacity) {
-			throw new PhaseCandidateUnavailableException("Condensation exceeds interface-cell capacity");
-		}
-		double gasTemperature = thermalState.gasTemperature(node, airNetwork);
-		double batchEnergy = phase.internalEnergyAtTemperature(transition, take.first(), gasTemperature);
-		double candidateGasEnergy = thermalState.gasNodeEnergy(node, airNetwork) - batchEnergy;
-		thermalState.requireGasNodeState(node, take.second(), candidateGasEnergy, airNetwork);
-		int target = -1;
-		for (int marker = 0; marker < particleCount; marker++) if (particleCellIndex(marker) == cell
-				&& particleMaterialHandle[marker] == liquidHandle
-				&& (chemicalParcels == null || !chemicalParcels.indicator(marker))) { target = marker; break; }
-		PhaseComposition movedComposition = PhaseComposition.fromGas(moved);
-		ChemicalMixtureRecord condensedMixture = null;
-		if (chemicalParcels != null) {
-			if (movedComposition.isEmpty()) {
-				throw new ThermalPhaseBlockedException("Composition-bearing condensation has no gas species truth");
+		long byCapacity = (capacity - occupied) / transition.lowerVolumeSvqPerBatch();
+		long high = Math.min(maximumBatches, Math.min(byGas, byCapacity));
+		if (high <= 0L) return null;
+		GasCondensePlan first = gasCondenseCandidate(
+				cell, node, liquidHandle, transition, before, phase, 1L);
+		if (first == null || first.directionAfter() != GasLiquidPhaseModel.Direction.CONDENSE) return first;
+		GasCondensePlan best = first;
+		long low = 2L;
+		while (low <= high) {
+			long middle = low + ((high - low) >>> 1);
+			GasCondensePlan candidate = gasCondenseCandidate(
+					cell, node, liquidHandle, transition, before, phase, middle);
+			if (candidate == null || candidate.directionAfter() != GasLiquidPhaseModel.Direction.CONDENSE) {
+				high = middle - 1L;
+			} else {
+				best = candidate;
+				low = middle + 1L;
 			}
-			condensedMixture = target >= 0
-					? PhaseComposition.fromMixture(chemicalParcels.record(target), chemicalParcels.registry())
-						.plus(movedComposition).toMixture(chemicalParcels.registry())
-					: movedComposition.toMixture(chemicalParcels.registry());
-			chemicalParcels.requireCompatible(condensedMixture,
-					materialRegistry.material(liquidHandle).id(), false);
-			if (target >= 0) chemicalParcels.requireCanCommitPlannedReplacements(
-					new int[]{target}, new ChemicalMixtureRecord[]{condensedMixture});
-		} else if (!moved.species().isEmpty()) {
-			throw new ThermalPhaseBlockedException("Gas species require liquid chemistry during condensation");
 		}
-		float targetVolume = 0.0F; double targetMass = 0.0; int slot = -1;
-		if (target >= 0) {
-			targetVolume = SolidVolume.addCellVolumeSvqExact(particleVolume[target], addedSvq);
-			targetMass = particleMass[target] + condensedMassScale.solverMassWeight(moved.mass());
-		} else {
-			if (particleCount >= maximumParticleCount) throw new PhaseCandidateUnavailableException("Condensation exceeds marker budget");
-			slot = firstOpenSlot(cell, 0);
-			if (slot < 0) throw new PhaseCandidateUnavailableException("Condensation has no collision-valid marker slot");
+		return best;
+	}
+
+	private GasCondensePlan gasCondenseCandidate(
+			int cell, int node, int liquidHandle, ThermalPhaseTransition transition,
+			PhaseCellInventory before, GasLiquidPhaseModel phase, long batches
+	) {
+		try {
+			GasInventory requestedBatch = phase.gasBatch(transition, batches);
+			GasInventory.Split take = airNetwork.previewComponentTake(node,
+					requestedBatch.components().getFirst().componentId(), requestedBatch.standardVolumeNanos());
+			GasComponentAmount moved = take.first().components().getFirst();
+			double requestedMass = transition.massMuPerBatch().multiply(batches).toDouble();
+			if (!massClose(moved.mass(), requestedMass)) {
+				throw new ThermalPhaseBlockedException("Condensation gas batch mass differs from its exact transition");
+			}
+			long addedSvq = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
+			long occupied = Math.addExact(Math.addExact(
+					Math.addExact(before.upperVolumeSvq(), before.lowerVolumeSvq()), phaseGranularSvq(cell)),
+					thermalState.coherentPhases().cellOccupiedSvq(cell));
+			long capacity = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+			if (Math.addExact(occupied, addedSvq) > capacity) {
+				throw new PhaseCandidateUnavailableException("Condensation exceeds interface-cell capacity");
+			}
+			double gasTemperature = thermalState.gasTemperature(node, airNetwork);
+			double batchEnergy = phase.internalEnergyAtTemperature(transition, take.first(), gasTemperature);
+			double candidateGasEnergy = thermalState.gasNodeEnergy(node, airNetwork) - batchEnergy;
+			int target = -1;
+			for (int marker = 0; marker < particleCount; marker++) if (particleCellIndex(marker) == cell
+					&& particleMaterialHandle[marker] == liquidHandle
+					&& (chemicalParcels == null || !chemicalParcels.indicator(marker))) { target = marker; break; }
+			PhaseComposition movedComposition = PhaseComposition.fromGas(moved);
+			ChemicalMixtureRecord condensedMixture = null;
+			if (chemicalParcels != null) {
+				if (movedComposition.isEmpty()) {
+					throw new ThermalPhaseBlockedException("Composition-bearing condensation has no gas species truth");
+				}
+				condensedMixture = target >= 0
+						? PhaseComposition.fromMixture(chemicalParcels.record(target), chemicalParcels.registry())
+							.plus(movedComposition).toMixture(chemicalParcels.registry())
+						: movedComposition.toMixture(chemicalParcels.registry());
+				chemicalParcels.requireCompatible(condensedMixture,
+						materialRegistry.material(liquidHandle).id(), false);
+				if (target >= 0) chemicalParcels.requireCanCommitPlannedReplacements(
+						new int[]{target}, new ChemicalMixtureRecord[]{condensedMixture});
+			} else if (!moved.species().isEmpty()) {
+				throw new ThermalPhaseBlockedException("Gas species require liquid chemistry during condensation");
+			}
+			float targetVolume = 0.0F; double targetMass = 0.0; int slot = -1;
+			if (target >= 0) {
+				targetVolume = phaseAdjustedMarkerVolume(particleVolume[target], addedSvq, "Condensation");
+				targetMass = particleMass[target] + condensedMassScale.solverMassWeight(moved.mass());
+			} else {
+				if (particleCount >= maximumParticleCount) {
+					throw new PhaseCandidateUnavailableException("Condensation exceeds marker budget");
+				}
+				slot = firstOpenSlot(cell, 0);
+				if (slot < 0) {
+					throw new PhaseCandidateUnavailableException("Condensation has no collision-valid marker slot");
+				}
+			}
+			double candidateLiquidTemperature = thermalState.requirePhaseCandidateState(cell,
+					liquidInventoryAfterCondensation(cell, liquidHandle, target, targetMass,
+							condensedMixture, moved.mass()), batchEnergy, thermalMarkerContext());
+			GasLiquidPhaseModel.Direction directionAfter = prospectiveGasPhaseDirection(
+					node, transition, phase, candidateLiquidTemperature, take.second(), candidateGasEnergy);
+			return new GasCondensePlan(batches, take.first(), candidateGasEnergy, target,
+					condensedMixture, targetVolume, targetMass, slot, addedSvq, moved.mass(), directionAfter);
+		} catch (ThermalStateFunction.EnergyOutsideValidityException | PhaseCandidateUnavailableException unavailable) {
+			return null;
 		}
-		thermalState.requirePhaseCandidateState(cell,
-				liquidInventoryAfterCondensation(cell, liquidHandle, target, targetMass,
-						condensedMixture, moved.mass()), batchEnergy, thermalMarkerContext());
+	}
+
+	/** Converts only prospective gas EoS/saturation validity failures into a shrinkable phase extent. */
+	private GasLiquidPhaseModel.Direction prospectiveGasPhaseDirection(
+			int node, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
+			double liquidTemperature, GasInventory gasInventory, double gasEnergy
+	) {
+		try {
+			double pressure = thermalState.requireGasNodeState(node, gasInventory, gasEnergy, airNetwork);
+			return phase.saturation(transition, liquidTemperature, gasInventory, pressure).direction();
+		} catch (ThermalStateFunction.EnergyOutsideValidityException outsideThermalRange) {
+			throw outsideThermalRange;
+		} catch (IllegalArgumentException outsideGasPhaseRange) {
+			throw new PhaseCandidateUnavailableException(
+					"Gas phase candidate is outside its pressure or saturation validity range",
+					outsideGasPhaseRange);
+		}
+	}
+
+	private void commitGasCondense(int cell, int node, int liquidHandle, GasCondensePlan plan) {
 		SignedDyadic inventoryBefore = exactInternalEnergy();
-		airNetwork.commitPhaseSink(node, take.first());
-		thermalState.commitGasNodeEnergy(node, candidateGasEnergy);
-		if (target >= 0) {
+		airNetwork.commitPhaseSink(node, plan.removedGas());
+		thermalState.commitGasNodeEnergy(node, plan.candidateGasEnergy());
+		if (plan.target() >= 0) {
 			if (chemicalParcels != null) chemicalParcels.commitPlannedReplacements(
-					new int[]{target}, new ChemicalMixtureRecord[]{condensedMixture});
-			particleVolume[target] = targetVolume; particleMass[target] = targetMass;
+					new int[]{plan.target()}, new ChemicalMixtureRecord[]{plan.condensedMixture()});
+			particleVolume[plan.target()] = plan.targetVolume();
+			particleMass[plan.target()] = plan.targetMass();
 		} else {
 			int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
-			spawnParticle(x, y, z, slot, SolidVolume.toCellVolume(addedSvq), liquidHandle,
-					condensedMassScale.solverMassWeight(moved.mass()), condensedMixture, false, false);
+			spawnParticle(x, y, z, plan.slot(), SolidVolume.toCellVolume(plan.addedSvq()), liquidHandle,
+					condensedMassScale.solverMassWeight(plan.movedMass()),
+					plan.condensedMixture(), false, false);
 		}
 		gridDirty = true;
 		thermalState.repartitionCellEnergyConserving(cell, thermalMarkerContext(), inventoryBefore);
@@ -1928,7 +2027,7 @@ public final class FlipFluidDomain {
 			boolean full = takeSvq == markerSvq
 					&& markerSvq == SolidVolume.cellVolumeSvqAtLeast(particleVolume[marker]);
 			float newVolume = full ? 0.0F
-					: SolidVolume.addCellVolumeSvqExact(particleVolume[marker], -takeSvq);
+					: phaseAdjustedMarkerVolume(particleVolume[marker], -takeSvq, "Freeze");
 			double newMass = particleMass[marker] - takeSolverMass;
 			if (!(takeMass > 0.0) || full && Math.abs(newMass) > massTolerance(particleMass[marker])
 					|| !full && !(newMass > 0.0)) {
@@ -1990,7 +2089,7 @@ public final class FlipFluidDomain {
 			boolean full = takeSvq == markerSvq
 					&& markerSvq == SolidVolume.cellVolumeSvqAtLeast(particleVolume[marker]);
 			float newVolume = full ? 0.0F
-					: SolidVolume.addCellVolumeSvqExact(particleVolume[marker], -takeSvq);
+					: phaseAdjustedMarkerVolume(particleVolume[marker], -takeSvq, "Boiling");
 			double newMass = particleMass[marker] - takeSolverMass;
 			if (!(takeMass > 0.0) || full && Math.abs(newMass) > massTolerance(particleMass[marker])
 					|| !full && !(newMass > 0.0)) {
@@ -2117,6 +2216,15 @@ public final class FlipFluidDomain {
 		return Math.max(1.0E-12, Math.ulp(mass) * 32.0);
 	}
 
+	private static float phaseAdjustedMarkerVolume(float volume, long signedSvq, String operation) {
+		try {
+			return SolidVolume.addCellVolumeSvqExact(volume, signedSvq);
+		} catch (IllegalArgumentException unrepresentableTail) {
+			throw new PhaseCandidateUnavailableException(
+					operation + " SVQ is not exactly representable in the marker volume", unrepresentableTail);
+		}
+	}
+
 	public record ThermalPhaseStats(int operations, int frozenCells, int meltedCells, long signedBatches) { }
 	public record GasThermalPhaseStats(int operations, int boiledCells, int condensedCells) { }
 	private record PhaseCellInventory(
@@ -2142,6 +2250,15 @@ public final class FlipFluidDomain {
 	}
 	private record PhaseRemovalPlan(
 			List<PhaseMarkerAllocation> allocations, PhaseComposition movedComposition, double movedEnergy
+	) { }
+	private record GasBoilPlan(
+			long batches, PhaseRemovalPlan removal, GasInventory batch, double candidateGasEnergy,
+			GasLiquidPhaseModel.Direction directionAfter
+	) { }
+	private record GasCondensePlan(
+			long batches, GasInventory removedGas, double candidateGasEnergy, int target,
+			ChemicalMixtureRecord condensedMixture, float targetVolume, double targetMass, int slot,
+			long addedSvq, double movedMass, GasLiquidPhaseModel.Direction directionAfter
 	) { }
 	private record JointPhasePlan(
 			long batches, boolean freezing, PhaseRemovalPlan removal,
@@ -2271,6 +2388,7 @@ public final class FlipFluidDomain {
 	}
 	private static final class PhaseCandidateUnavailableException extends IllegalArgumentException {
 		private PhaseCandidateUnavailableException(String message) { super(message); }
+		private PhaseCandidateUnavailableException(String message, Throwable cause) { super(message, cause); }
 	}
 	public static final class ThermalTransportBlockedException extends IllegalStateException {
 		private ThermalTransportBlockedException(String message, Throwable cause) { super(message, cause); }

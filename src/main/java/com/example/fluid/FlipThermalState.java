@@ -353,9 +353,9 @@ final class FlipThermalState {
 		return gasModel.density(network.inventory(nodeId), network.availableVolume(nodeId));
 	}
 
-	void requireGasNodeState(int nodeId, GasInventory inventory, double energy, AirNetwork network) {
+	double requireGasNodeState(int nodeId, GasInventory inventory, double energy, AirNetwork network) {
 		requireGasNode(nodeId, network);
-		gasModel.absolutePressure(inventory, network.availableVolume(nodeId), energy);
+		return gasModel.absolutePressure(inventory, network.availableVolume(nodeId), energy);
 	}
 
 	void commitGasNodeEnergy(int nodeId, double energy) {
@@ -636,7 +636,7 @@ final class FlipThermalState {
 	}
 
 	/** Validates a prospective gas/liquid edit against every unchanged same-cell solid heat-bath carrier. */
-	void requirePhaseCandidateState(
+	double requirePhaseCandidateState(
 			int cell, List<ThermalStateFunction.InventoryPortion> liquidInventory,
 			double cellEnergyDelta, MarkerContext markers
 	) {
@@ -655,7 +655,7 @@ final class FlipThermalState {
 					registry.materialHandle(group.phaseId()), group.mass(),
 					group.composition() == null ? Map.of() : group.composition().stableAmounts()));
 		}
-		phaseCandidateState(cell, condensedInventory, cellEnergy, markers);
+		return phaseCandidateState(cell, condensedInventory, cellEnergy, markers).temperatureK();
 	}
 
 	private ThermalStateFunction.State phaseCandidateState(
