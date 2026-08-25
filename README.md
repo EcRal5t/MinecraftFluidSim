@@ -2,7 +2,7 @@
 
 Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CPU 权威 PIC/FLIP 求解器，支持最多四个独立区域、控制器闭壳、跨 chunk 完整加载、原子 checkpoint、分数自由面、cut-cell 碰撞、多液体、守恒化学、低成本颗粒沉积以及热学与相变。
 
-这不是原版水的全局替代。当前稳定基线仍以显式 controller 和开发命令为入口；产品化阶段必须补齐可取得的方块/物品、自动生命周期和原版交互，使正常游玩不依赖 `/mmm`。CPU 目前是规范后端，生产 GPU 后端是后续确定目标，但不会取得世界事务提交权。
+这不是原版水的全局替代。当前稳定基线以可制作的边界方块和控制器建立显式闭壳：普通空手右击控制器会创建或选择区域并立即运行，空手潜行右击会持久切换暂停意图；正常生命周期不依赖 `/mmm`。原版世界交互仍按产品路线逐项接入。CPU 目前是规范后端，生产 GPU 后端是后续确定目标，但不会取得世界事务提交权。
 
 代码按边界拆为 `api`（loader-neutral 外部契约）、`core`（纯 Java 物理与状态）、`fabric`（Minecraft/Fabric 适配）和 `gpu-probe`（Vulkan 验证与后端实验）。
 
@@ -18,12 +18,18 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 
 功能门只在服务器启动时读取。请在创建持久控制器区域前一次配置好需要的 `materials`、`chemistry`、`granular`、`precipitation`、`thermal` 和 `phasechange` 组合；之后改变组合不会改写现有区域。
 
-## 常用命令
+## 正常入口
+
+`fluid_boundary` 以玻璃和铁锭制作，`fluid_controller` 以比较器、红石和铁锭制作；两者也分别出现在建筑方块和功能方块创造栏。用边界与一个控制器围成唯一闭合内腔，保持所需 chunk 已加载，然后空手右击控制器激活。再次普通右击只选择该区域；空手潜行右击切换运行/暂停。运行意图随 checkpoint 保存，边界或 chunk 暂时不可用只会安全阻止 stepping，不会覆写玩家意图。
+
+## 管理与诊断命令
+
+`/mmm` 用于 fixture、诊断、恢复和管理员操作，不是正常游玩的启动条件。
 
 | 用途 | 命令 |
 |---|---|
 | 创建开发域 | `/mmm demo`、`capture`、`takeover` |
-| 创建持久闭壳 | `/mmm controllers true`，重启后执行 `/mmm controllerdemo`；或手建边界并空手右击控制器 |
+| 创建持久闭壳 fixture | `/mmm controllerdemo`；正常游玩请制作并放置边界与控制器 |
 | 选择与保存区域 | `/mmm regions list`、`regions select <uuid>`、`regions checkpoint` |
 | 恢复上一完整 checkpoint | `/mmm regions recoverprevious <expectedCheckpoint>`；成功后退出并重新进入世界 |
 | 操作库存与碰撞 | `/mmm pour [1-16]`、`drain [1-16]`、`empty`、`refresh` |

@@ -13,6 +13,7 @@
 | 职责 | 首要入口 | 必须保持 |
 |---|---|---|
 | 初始化、tick、payload 注册 | `fabric/src/main/java/cc/ecisr/mmm/MmmMod.java` | 生命周期、registry 和网络注册成套 |
+| 正常游玩入口 | `block/FluidControllerBlock.java`、`block/MmmBlocks.java`、`item/MmmCreativeEntries.java`、`resources/data/mmm/recipe/` | 激活即运行；潜行交互只切换持久暂停意图；配方、创造栏和注册同步 |
 | `/mmm` 命令 | `MmmCommands.java` | 状态操作留在服务层；完整输出写 transcript |
 | Minecraft 编排 | `fabric/.../simulation/FluidSimulationService.java` | 每域先过 availability；不把世界事务下沉到 solver |
 | 持久区域管理 | `FluidRegionOperations.java`、`FluidRegionPersistence.java` | checkpoint 成功后才释放；当前功能布局必须精确匹配；不改写不匹配载荷 |
@@ -21,7 +22,7 @@
 | 世界配置 | `FluidServerConfig.java` | 只接受当前完整配置；功能门与预算在启动时冻结；依赖链严格 |
 | 世界碰撞/实体采样 | `MinecraftCollisionWorldPort.java`、`FluidRegionWorldInteraction.java`、`core/.../world/` | Minecraft shape 先冻结为纯 Java `CollisionField`；挤水只按 marker 账本 |
 | controller footprint | `simulation/controller/` | 非加载读取；破口、缺 chunk、多内腔、重叠或超预算拒绝 |
-| 区域 checkpoint | `simulation/persistence/` | 双槽完整 generation、CRC、HEAD 最后发布；required payload 同代 |
+| 区域 checkpoint | `simulation/persistence/`、`RegionStateLayout.java` | 双槽完整 generation、语义 layout、CRC、HEAD 最后发布；required payload 同代 |
 | takeover | `TakeoverTransaction.java`、`TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
 | ownership | `simulation/ownership/`、`FluidRegionPersistence.java` | WAL→WARNING→世界→region HEAD→committed；未知状态保留并锁定 |
 | 容器事务 | `ContainerTransferJournal.java`、`ContainerTransferStore.java`、`ContainerTransferRecovery.java`、`FluidTransferService.java` | 只读当前 writer 布局；actor durable save 前不得删 WAL |
@@ -35,7 +36,7 @@
 | 化学 | `chemistry/`、`FlipChemicalParticleState.java` | exact species/组成/电荷/残差；indicator provenance 不隔离反应 |
 | 颗粒 | `granular/`、`GranularCouplingFields.java` | SVQ、质量、组成独立；active/deposit/coherent 不混用 |
 | 热学 | `thermal/`、`FlipThermalState.java`、`FlipThermalParticleState.java` | 总 U 权威；温度派生；通量、反应热、相变、功联合审计 |
-| 客户端快照 | `fabric/.../network/`、`fabric/src/client/java/cc/ecisr/mmm/client/` | 只读量化展示；不得反写物理或恢复库存 |
+| 客户端快照 | `fabric/.../network/FluidProtocol.java`、`fabric/src/client/java/cc/ecisr/mmm/client/` | 语义 layout 精确协商；只读量化展示；不得反写物理或恢复库存 |
 | 外部 Query API | `api/.../query/`、`FluidCellInventoryView.java`、`FabricFluidQueryApi.java`、`api/fabric/MmmFabricApi.java` | server-thread only；不加载、不唤醒、不建网格、不返回 live domain |
 | 命令审计 | `logging/` | UTF-8 观测；记录失败不能改变命令结果 |
 

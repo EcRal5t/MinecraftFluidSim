@@ -2,7 +2,7 @@
 
 ## 文件与职责边界
 
-world save 下的 `realwater/region-state/<region UUID>/` 是区域物理状态的唯一持久根。目录内只有：
+world save 下的 `mmm/region-state/<region UUID>/` 是区域物理状态的唯一持久根。目录内只有：
 
 ```text
 HEAD.nbt
@@ -11,6 +11,8 @@ slot-b/manifest.nbt + section-*.nbt
 ```
 
 `RegionState` 在 server thread 上捕获/重建完整逻辑状态；`RegionStateCodec` 只编解码 NBT；`RegionStateIntegrity` 生成与 NBT 字段顺序无关的规范 CRC32C；`RegionStateFiles` 只管理双槽、回读验证与原子 HEAD。任何业务层都不能直接写 slot 或把目录存在当成已提交。
+
+HEAD 使用固定 `region-head` schema；manifest 与每个 section 使用语义 `Layout`：`pure`、`material`、`chemical`、`granular` 或 `thermal`。其中 `granular`、`thermal` 的附加 capability 精确声明是否同时携带 chemistry/granular 状态。启动时由冻结的功能门得到唯一预期 layout 和 registry fingerprint，存档必须精确匹配；未知 layout、未知必需 extension、缺字段或额外能力都不能按数字顺序猜测兼容性，也没有自动迁移或默认补全。
 
 ## 提交模型
 

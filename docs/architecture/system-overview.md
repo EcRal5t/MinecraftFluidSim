@@ -4,7 +4,7 @@
 
 ## 产品边界
 
-当前系统只在显式、闭合、预算受限且 chunk 完整加载的 controller 区域内提供连续流体。开发命令可建立瞬态 fixture，但不会扩大持久 ownership。天然河流、海洋、无界洞穴空气和永久 chunk ticket 不属于当前运行模型。
+当前系统只在显式、闭合、预算受限且 chunk 完整加载的 controller 区域内提供连续流体。边界和控制器可制作并从创造栏取得；普通空手右击控制器会创建或选择区域并立即运行，空手潜行右击切换持久的运行意图。`/mmm` 只承担 fixture、诊断、恢复和管理员操作。天然河流、海洋、无界洞穴空气和永久 chunk ticket 不属于当前运行模型。
 
 CPU `FlipFluidDomain` 是规范求解器。GPU probe、客户端 renderer、tooltip、命令 status 和外部 Mod Query API 都只能读取已提交状态。
 
@@ -100,6 +100,8 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 - `PAUSED`：operator 暂停、边界/身份失败或连续三步超过 200 ms；库存仍保留。
 - `UNLOADED`：solver arrays 已释放，但 metadata 和 manager 预算仍保留。
 - motion sleep 与 thermal sleep 独立；静水仍可能导热或相变，静温也可能继续运动。
+
+新控制器在首次成功提交后直接进入运行态。玩家的暂停意图随 checkpoint 持久化；边界损坏、chunk 缺失或候选失败造成的 availability pause 不得覆盖该意图，条件恢复后按原意图继续。
 
 调度和后端选择不得改变守恒结果。缺 chunk 或 controller 破损时不能把缺失区域当墙继续半步。
 
