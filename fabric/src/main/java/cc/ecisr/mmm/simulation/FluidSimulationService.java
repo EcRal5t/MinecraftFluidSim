@@ -47,15 +47,11 @@ import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.block.entity.DispenserBlockEntity;
 
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
@@ -111,6 +107,7 @@ public final class FluidSimulationService {
 	private final FluidRegionOperations regionOperations;
 	private final FluidSnapshotPublisher snapshots;
 	private final ContainerTransferStore containerTransfers;
+	private final MinecraftContainerActorAccess containerActors = new MinecraftContainerActorAccess();
 	/** Boot-decoded WAL truth; normal ticks never rescan or reread the transfer directory. */
 	private final Map<UUID, ContainerTransferJournal> indexedContainerTransfers = new HashMap<>();
 	private final Set<UUID> auditedContainerTransfers = new HashSet<>();
@@ -472,6 +469,12 @@ public final class FluidSimulationService {
 		return indexedContainerTransfers.values().stream().anyMatch(journal -> journal.regionId().equals(regionId));
 	}
 
+	boolean hasPendingContainerTransfer(UUID regionId, ContainerTransferActor actor) {
+		if (!indexedContainerTransferIssues.isEmpty()) return true;
+		return indexedContainerTransfers.values().stream().anyMatch(journal ->
+				journal.regionId().equals(regionId) || journal.actor().equals(actor));
+	}
+
 	boolean hasAnyContainerTransferLock() {
 		return !indexedContainerTransferIssues.isEmpty() || !indexedContainerTransfers.isEmpty();
 	}
@@ -602,10 +605,14 @@ public final class FluidSimulationService {
 					MmmMod.LOGGER.warn("Discarded uncommitted container transfer WAL {} for region {}", transactionId, journal.regionId());
 				}
 				case CONVERGE_AFTER_ITEM -> {
-					if (applyAfterItem(server, journal)) {
-						completeContainerTransferCommit(server, journal);
-						MmmMod.LOGGER.warn("Converged container transfer WAL {} to a durably saved after item", transactionId);
-					} else awaitingContainerActors.add(transactionId);
+					switch (containerActors.convergeAfterItem(server, journal)) {
+						case APPLIED -> {
+							completeContainerTransferCommit(server, journal);
+							MmmMod.LOGGER.warn("Converged container transfer WAL {} to a durably saved after item", transactionId);
+						}
+						case UNAVAILABLE -> awaitingContainerActors.add(transactionId);
+						case CONFLICT -> lockContainerActorConflict(transactionId, journal);
+					}
 				}
 				case LOCK_TARGET_WITHOUT_AFTER_ITEM -> {
 					auditedContainerTransfers.add(transactionId);
@@ -638,14 +645,27 @@ public final class FluidSimulationService {
 		ContainerTransferJournal journal = indexedContainerTransfers.get(transactionId);
 		if (journal == null) return;
 		try {
-			if (!applyAfterItem(server, journal)) return;
-			completeContainerTransferCommit(server, journal);
-			MmmMod.LOGGER.warn("Converged container transfer WAL {} after its actor became available", transactionId);
+			switch (containerActors.convergeAfterItem(server, journal)) {
+				case UNAVAILABLE -> { return; }
+				case CONFLICT -> lockContainerActorConflict(transactionId, journal);
+				case APPLIED -> {
+					completeContainerTransferCommit(server, journal);
+					MmmMod.LOGGER.warn("Converged container transfer WAL {} after its actor became available", transactionId);
+				}
+			}
 		} catch (IOException | RuntimeException exception) {
 			awaitingContainerActors.remove(transactionId);
 			auditedContainerTransfers.add(transactionId);
 			MmmMod.LOGGER.error("Could not converge container transfer WAL {} after actor availability", transactionId, exception);
 		}
+	}
+
+	private void lockContainerActorConflict(UUID transactionId, ContainerTransferJournal journal) {
+		awaitingContainerActors.remove(transactionId);
+		auditedContainerTransfers.add(transactionId);
+		logContainerTransferLockOnce(transactionId,
+				"Container transfer WAL " + transactionId + " is locked: actor " + journal.actor()
+						+ " contains neither the authoritative before item nor after item");
 	}
 
 	private void logContainerTransferLockOnce(UUID transactionId, String message) {
@@ -672,7 +692,7 @@ public final class FluidSimulationService {
 			MinecraftServer server, ContainerTransferJournal journal
 	) throws IOException {
 		ContainerTransferCommittedEvent event = committedTransferEvent(journal);
-		persistAfterItem(server, journal);
+		containerActors.persistAfterItem(server, journal.actor());
 		adoptRecoveredContainerCheckpoint(journal);
 		deleteContainerTransfer(journal.transactionId());
 		reportedContainerTransferLocks.remove(journal.transactionId());
@@ -696,74 +716,6 @@ public final class FluidSimulationService {
 						: ContainerTransferCommittedEvent.Operation.EXTRACT,
 				quantity);
 	}
-
-	/** The WAL is deleted only after the actor's owning save file has been forced through Minecraft. */
-	private void persistAfterItem(MinecraftServer server, ContainerTransferJournal journal) throws IOException {
-		switch (journal.actor()) {
-			case ContainerTransferActor.PlayerHand ignored -> server.getPlayerList().saveAll();
-			case ContainerTransferActor.Dispenser dispenser -> {
-				Identifier dimensionId = Identifier.tryParse(dispenser.dimensionId());
-				if (dimensionId == null) throw new IOException("Container transfer actor dimension is invalid");
-				ServerLevel level = server.getLevel(ResourceKey.create(Registries.DIMENSION, dimensionId));
-				if (level == null) throw new IOException("Container transfer actor dimension is not loaded");
-				level.save(null, false, false);
-			}
-		}
-	}
-
-	private boolean applyAfterItem(MinecraftServer server, ContainerTransferJournal journal) {
-		return switch (journal.actor()) {
-			case ContainerTransferActor.PlayerHand player -> applyAfterItemToPlayer(server, player, journal);
-			case ContainerTransferActor.Dispenser dispenser -> applyAfterItemToDispenser(server, dispenser, journal);
-		};
-	}
-
-	private boolean applyAfterItemToPlayer(
-			MinecraftServer server,
-			ContainerTransferActor.PlayerHand actor,
-			ContainerTransferJournal journal
-	) {
-		ServerPlayer player = server.getPlayerList().getPlayer(actor.playerId());
-		if (player == null) return false;
-		if (!player.level().dimension().identifier().toString().equals(journal.dimensionId())) return false;
-		InteractionHand hand = switch (actor.hand()) {
-			case "MAIN_HAND" -> InteractionHand.MAIN_HAND;
-			case "OFF_HAND" -> InteractionHand.OFF_HAND;
-			default -> throw new IllegalStateException("Validated player actor has an unknown hand");
-		};
-		ItemStack current = player.getItemInHand(hand);
-		if (!fingerprintMatches(current, journal.beforeItem()) && !fingerprintMatches(current, journal.afterItem())) return false;
-		player.setItemInHand(hand, ContainerTransferItems.toStack(journal.afterItem()));
-		player.getInventory().setChanged();
-		return true;
-	}
-
-	private boolean applyAfterItemToDispenser(
-			MinecraftServer server,
-			ContainerTransferActor.Dispenser actor,
-			ContainerTransferJournal journal
-	) {
-		Identifier dimensionId = Identifier.tryParse(actor.dimensionId());
-		if (dimensionId == null) return false;
-		ServerLevel level = server.getLevel(ResourceKey.create(Registries.DIMENSION, dimensionId));
-		if (level == null || !(level.getBlockEntity(actor.position()) instanceof DispenserBlockEntity dispenser)) return false;
-		if (actor.slot() < 0 || actor.slot() >= dispenser.getContainerSize()) return false;
-		ItemStack current = dispenser.getItem(actor.slot());
-		if (!fingerprintMatches(current, journal.beforeItem()) && !fingerprintMatches(current, journal.afterItem())) return false;
-		dispenser.setItem(actor.slot(), ContainerTransferItems.toStack(journal.afterItem()));
-		dispenser.setChanged();
-		return true;
-	}
-
-	private static boolean fingerprintMatches(ItemStack stack, ContainerTransferJournal.ItemFingerprint fingerprint) {
-		try {
-			return ContainerTransferItems.fingerprint(stack).equals(fingerprint);
-		} catch (IllegalArgumentException invalid) {
-			return false;
-		}
-	}
-
-
 
 	public static synchronized FluidSimulationService get(MinecraftServer server) {
 		return SERVICES.computeIfAbsent(server, FluidSimulationService::new);

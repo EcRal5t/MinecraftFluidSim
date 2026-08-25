@@ -36,10 +36,10 @@ final class ControllerItemTransferCoordinator {
 			long requestedAmount, long baseAmount,
 			TransferExecutor executor, FinalItemResolver finalItemResolver
 	) {
-		if (service.hasPendingContainerTransfer(region.id())) {
+		if (service.hasPendingContainerTransfer(region.id(), actor)) {
 			return new Result(new FluidTransferService.TransferOutcome(false,
 					operation == ContainerTransferJournal.Operation.INSERT, beforeStack,
-					"区域存在未完成容器转移 WAL，已锁定"), null);
+					"区域或目标 inventory 存在未完成容器转移 WAL，已锁定"), null);
 		}
 		if (requestedAmount <= 0L) return new Result(null, null);
 		try {
