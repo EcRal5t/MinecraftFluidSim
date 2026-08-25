@@ -18,7 +18,7 @@ import net.minecraft.world.level.material.MapColor;
 import java.util.Set;
 import java.util.function.Function;
 
-/** Visible M2 controller shell blocks. Registration does not enable controller activation. */
+/** Visible controller shell blocks. Registration does not enable controller activation. */
 public final class RealWaterBlocks {
 	public static final Block FLUID_BOUNDARY = register("fluid_boundary", Block::new);
 	public static final Block FLUID_CONTROLLER = register("fluid_controller", FluidControllerBlock::new);

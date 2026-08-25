@@ -13,7 +13,6 @@ import com.example.fluid.FlipMaterialParticleState;
 import com.example.fluid.FluidSolverConfig;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.simulation.controller.FluidRegionFootprint;
-import com.example.simulation.persistence.ThermalInitializationRecord;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
@@ -55,9 +54,6 @@ public final class FluidRegion {
 	private String granularBlockFailure;
 	private String thermalBlockFailure;
 	private ThermalActivity thermalActivity;
-	private ThermalInitializationRecord thermalInitializationRecord;
-	/** Metadata-only legacy checkpoint waiting for an operator-supplied temperature; zero means not waiting. */
-	private int thermalInitializationSourceVersion;
 
 	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FlipFluidDomain domain, long reservedMarkerCapacity) {
 		this(id, dimension, origin, domain, reservedMarkerCapacity, null);
@@ -170,18 +166,6 @@ public final class FluidRegion {
 	public long checkpointGeneration() { return checkpointGeneration; }
 	public int checkpointMarkerCount() { return checkpointMarkerCount; }
 	public float checkpointVolume() { return checkpointVolume; }
-	public ThermalInitializationRecord thermalInitializationRecord() { return thermalInitializationRecord; }
-	void setThermalInitializationRecord(ThermalInitializationRecord value) { thermalInitializationRecord = value; }
-	boolean thermalInitializationRequired() { return thermalInitializationSourceVersion != 0; }
-	int thermalInitializationSourceVersion() { return thermalInitializationSourceVersion; }
-	void requireThermalInitialization(int sourceVersion) {
-		if (sourceVersion != 1 && sourceVersion != 2 && sourceVersion != 3
-				&& sourceVersion != 5 && sourceVersion != 6) {
-			throw new IllegalArgumentException("Only region-state v1/v2/v3/v5/v6 can await thermal initialization");
-		}
-		thermalInitializationSourceVersion = sourceVersion;
-	}
-	void clearThermalInitializationRequirement() { thermalInitializationSourceVersion = 0; }
 	public FluidRegionLifecycle lifecycle() { return lifecycle; }
 	public long reservedCellCapacity() {
 		return Math.multiplyExact(Math.multiplyExact((long) sizeX, sizeY), sizeZ);
@@ -409,13 +393,6 @@ public final class FluidRegion {
 				sizeX, sizeY, sizeZ, solverConfig, (int) reservedMarkerCapacity);
 		if (footprint != null) restored.sealDomainBoundary();
 		return restored;
-	}
-
-	boolean adoptMigratedCheckpoint(long previousGeneration, long migratedGeneration) {
-		if (domain != null || lifecycle.state() != FluidRegionLifecycle.State.UNLOADED
-				|| checkpointGeneration != previousGeneration || migratedGeneration <= previousGeneration) return false;
-		checkpointGeneration = migratedGeneration;
-		return true;
 	}
 
 	public record PersistedRuntime(

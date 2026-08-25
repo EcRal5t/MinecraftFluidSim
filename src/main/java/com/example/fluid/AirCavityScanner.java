@@ -9,7 +9,7 @@ import java.util.Map;
 import java.util.TreeMap;
 
 	/**
-	 * Grid topology scan that labels air cells into gas-network nodes (M5).
+	 * Grid topology scan that labels air cells into gas-network nodes.
 	 *
 	 * <p>An air cell is non-solid with no markers and positive open volume. Six-neighbour
 	 * flood fill passes only through fully open faces; a partially open face between two

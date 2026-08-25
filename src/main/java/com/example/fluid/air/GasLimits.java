@@ -1,6 +1,6 @@
 package com.example.fluid.air;
 
-/** Hard representation budgets shared by runtime gas state and region-state v4. */
+/** Hard representation budgets shared by runtime and persisted gas state. */
 public final class GasLimits {
 	public static final int MAX_COMPONENTS = 64;
 	public static final int MAX_COMPONENTS_PER_NODE = 32;

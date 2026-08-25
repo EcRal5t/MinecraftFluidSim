@@ -1,111 +1,37 @@
-# M7 conservative chemistry state
+# 守恒化学状态契约
 
-本文冻结 M7 液相守恒化学的物理真值、定义顺序、预算和跨层版本边界。M7 不改变
-[`fluid-solver.md`](fluid-solver.md) 的 CPU 权威关系；marker 体积、材料质量与化学库存是三套必须分别闭合的真值。
+## Registry
 
-## 范围与功能门
+化学门默认关闭并依赖材料门。首次启用时，数据包定义被规范化为 world-local registry snapshot；此后该 snapshot 的 stable ID、exact rational 定义、预算和 fingerprint 是世界权威。
 
-- M7 只包含液相强电解质、同格且同 chemical phase 的完整解离/瞬时计量反应、只读游戏化 pH 与指示剂。
-- `chemistryEnabled` 是独立启动门且要求 `materialsEnabled=true`。门关闭时不分配化学数组，M0--M6 的
-  `region-state v1/v2`、protocol v1/v2、`FluidMixture v1` 与 container-transfer WAL v1/v2 字节和行为不变。
-- M7 使用独立 `region-state v3`、protocol v3、container-transfer WAL v3。气体持久化如需实现必须另评
-  `region-state v4`，不能借 M7 v3 携带。
-- 气相化学、沉淀、热力学、GPU、wall-time 阈值、液液锐化与逐顶点法线均不在 M7。
+当前数据包与 snapshot 不一致只报告 definition mismatch，不重解释已有库存。snapshot 未知、损坏或身份不符时区域和容器状态保留并 LOCKED。
 
-## 化学真值
+## 独立真值
 
-- `1 AU = 1,000,000,000 quanta`。每个 species 的绝对库存是非负 `long`；所有加、减、乘、汇总用 checked arithmetic。
-- marker 保存 packed mixture handle 与 indicator bit。handle 0 表示没有化学状态，任何 v3 marker 必须引用有效非零 handle。
-- handle 指向按 runtime species handle 排序的最多 16 个 `(species, amountQuanta)` primitive entry，以及
-  `massResidual` 的 raw-double bits。marker 不持有 `Map`、list 或对象链。
-- `particleMass = exact-rational species mass + massResidual`。reaction 只改变 species，不改 residual、体积、速度、
-  material 或 phase；checkpoint 必须逐 raw bit 往返 residual。
-- 无外部源汇时 species、组成基元和电荷按 `long` 精确闭合；reaction 前后 exact species mass 相等。重分配保持格内
-  marker 总质量，误差不超过 `max(1e-9 MU, 8 ulp)`。
-- insert、extract、empty、collision displacement/escape 都返回完整 chemical transfer ledger。不存在“删除后按默认水补回”。
+- marker 的材料质量/体积与 chemical parcel 分开保存。
+- parcel 保存 stable species quanta、组成、净电荷、marker mass residual 和 indicator provenance。
+- 区域保存逐 species 总量、组成/电荷审计、external source、escaped sink 与 residual ledger。
+- `FluidMixture` 只保存机械材料库存；`ChemicalContents` 保存完整化学容器库存。两者不能同时作为同一物品的真值。
 
-## 定义与确定性
+## 反应模型
 
-数据路径固定为 `data/<namespace>/realwater/species`、`chemical_phases`、`reactions` 下的 JSON；stable ID
-由资源 namespace/path 得到。数值用 exact rational 字符串：整数、有限小数或 `numerator/denominator`，解析和守恒校验
-不得经过 `double`。stable ID、rational 文本、十进制 scale 与 canonical numerator/denominator 位宽都有先于
-`BigInteger.pow/gcd` 的硬上限，越界按普通定义错误 fail-closed，不允许用短科学计数文本制造无界启动工作量。
+- 当前只支持强电解质完整解离和同格、同 chemical phase 的瞬时计量反应。
+- 定义使用 exact rational 化学计量；提交必须同时闭合 species、组成、电荷、质量和残差。
+- 不实现弱酸、缓冲液、活度、有限速率动力学或通用平衡求解。
+- 指示剂是 parcel provenance：随 marker/reseed/容器输运，不隔离反应，也不自动传播到后来混入的 marker。
 
-registry 对 stable ID 排序后分配 runtime handle，以 canonical UTF-8 bytes 计算 SHA-256 fingerprint。首次启用化学时
-原子发布 `<world>/realwater/chemistry/registry.nbt`；之后 snapshot 是已有库存的唯一解释。数据包定义变化只产生 mismatch 报告，不重解释
-存量；已有合法 snapshot 时，当前数据包即使损坏也只报告“无法比较”，不能使权威 snapshot 失效。未知/损坏 snapshot、v3
-存在而 snapshot 缺失、fingerprint/identity/generation 失配一律保留并全局 `LOCKED`。
+## 求解顺序
 
-loader 在发布前拒绝未知引用、重复 ID、负库存/系数、组成/电荷/exact mass 不守恒、非零体积变化、完整解离环、
-竞争消费者、instantaneous 回馈 complete-dissociation 层和非终止图；同时要求受支持机械 material palette 全部且唯一绑定
-可生成 default carrier 的 chemical phase。complete dissociation 按确定性拓扑序全部先运行，之后才运行无竞争
-instantaneous reaction；M7 首批瞬时反应是 `H+ + OH- -> H2O`。
+每个 logical step 中，机械 advection 完成后按当前 cell 和 chemical phase 分组反应；反应热随后通过热状态的同 cell source/sink 提交。化学反应不得直接修改平滑 density、pressure 或客户端颜色场。
 
-每个外部 solver step 仅在最终 advection 后、reseeding 前执行一次 chemistry step。marker 按 `(cell, chemical phase)`
-聚合；不同 chemical phase、相邻格和墙后库存不得反应。indicator 不隔离反应，重分配后仍附着原 marker。逐 species
-使用 marker 反应前 exact-species-mass 的有限 float 权重做 deterministic largest-remainder，余数按 marker ordinal 决胜，
-不依赖 hash、文件或遍历顺序。reaction 保留每个 marker 原 `massResidualBits`，只以新 exact species mass 更新 marker mass；
-权重或离散结果不能保持每 marker 正质量及格内总质量容差时，整格计划拒绝而不重写 residual。
-若逐 species 独立分配使极小 marker 的所有项同时舍入为零，则按 marker ordinal 对空 parcel 排序，从当前总量最大的
-非空 parcel（再按 ordinal）搬运其最大 species 项的一枚既有 quantum；该最小确定性修复不改变任何 species 总账，且只在
-维持“每个 live marker 必须有非空 parcel”所必需时执行。反应后总 quanta 少于 live marker 数时仍整体拒绝。
+## 跨层边界
 
-pH 是只读展示：`C=|H+-OH-|/BV`、`C0=10^-6 AU/BV`、`strength=min(7,log10(1+C/C0))`；酸为
-`7-strength`，碱为 `7+strength`，相等为 7。indicator=0 时 pH 不参与颜色。
+- region checkpoint 保存完整 parcel、registry identity 和审计账本。
+- 容器转移先验证目标物品可完整表示 species、indicator、质量和 residual，再进入 WAL 事务。
+- 创造模式放出是 external source；创造模式装取不能制造隐藏 sink。
+- 客户端只接收 Top-N species、pH 和 indicator 等量化展示；这些字段不能恢复或结算库存。
+- `chemstatus` 是管理员只读诊断并写 command transcript。
 
-## 硬预算
+## 功能布局
 
-| 项目 | 上限 |
-|---|---:|
-| species / composition bases / chemical phases / reactions | 256 / 64 / 64 / 512 |
-| composition / charge / stoichiometric coefficient 绝对值 | 64 / 16 / 64 |
-| parcel species entries | 16 |
-| region live handles / packed entries | `reservedMarkerCapacity + 1` / `16 * handle cap` |
-| logical-step reaction evaluations | 131,072 |
-| region / bucket total quanta | 2,000,000,000,000,000 / 1,024,000,000,000 |
-| bucket groups / species entries / per-group entries / component bytes | 16 / 64 / 16 / 64 KiB |
-| complete transfer groups / per-group species / total entries | 128 / 256 / 32,768 |
-| source+sink audit extension bytes | 16 MiB |
-| stable chemical ID / rational text / decimal scale / rational bits | 128 chars / 4,096 chars / 4,096 / 16,384 |
-| indicator 添加 / 扫描 | 100 BV / region 完整 cell budget |
-| protocol v3 visible species | 每格 Top 4，其余只形成展示 residual |
-
-任一 plan 的 pool、entry、operation、scan 或算术预算失败时不得提交部分 parcel 修改；区域进入带可读原因的
-`chemistry-blocked PAUSED`。预算失败不是调度超时，不能改现有 40/200 ms pacing。
-
-## 跨层格式
-
-- 内存 handoff `FlipChemicalParticleState` 组合 material handoff、registry fingerprint、canonical mixture table、
-  per-marker table index 和 indicator bits；它不是 wire/save codec。
-- v3 manifest 保存 fingerprint、AU scale、stable species palette、canonical mixture table 与 region species/residual ledgers；
-  section 保存 per-marker mixture index、indicator bit和 section ledgers。累计 external-source/escaped-sink 通过有界 canonical
-  manifest extension 持久化并在恢复时复核。零 marker 化学域的 canonical mixture table 必须为空；非空域必须至少一项，且
-  每个 marker 仍须引用有效 table index。内部 displacement/source/sink ledger 使用 registry/phase 预算，不复用 parcel 或 bucket
-  小预算；只有转换为 `ChemicalContents v1` 时才施加 bucket 上限，且转换必须在 marker 抽取提交前完整验证。HEAD 仍是最后且唯一提交点。
-- material bucket 的 legacy 表示（`material_id`/`mixture_components`）与 chemical 表示（总 volume/mass +
-  `ChemicalContents v1`）互斥。双表示、foreign fingerprint、超预算或账本失配保持物品不变并拒绝。
-- protocol v3 只发 bounded display palette、Top-4 权重、量化 pH/indicator fraction；不发 exact AU、residual 或权威 ledger。
-- WAL v3 固定为 `PREPARED(before)` → solver 修改 → stage v3 checkpoint → `REGION_COMMITTED(after/checksum)` → 发布 HEAD
-  → actor after → durable save → 删除 WAL。gate 关闭、actor 未加载、registry/checksum/generation 歧义都保留并锁定；
-  v1/v2 reader/recovery 不变。
-
-## 玩法与只读展示
-
-legacy 材料桶倒入化学域时，新增 marker 明确绑定该 material 的 registry default carrier；空材料桶从化学域抽取时生成
-`ChemicalContents v1`。原版空桶只允许抽取未标记且只含规范 H2O carrier 的 parcel。创造放出累计 external source，创造装取
-仍替换手中容器，不产生隐藏 sink；生存玩家和会消耗物品的发射器放出是守恒转移，不记 external source。
-
-通用指示剂与抹除器都是不消耗、不可堆叠的外部 operator 工具，不跨 item/region 持久域结算；它们按正面积 cut-face 和
-compatible chemical phase flood fill；扫描上限为 region 完整 cell
-预算，添加上限为 100 BV，任何超限都在修改前整体拒绝。浅液面的第一条显示密度射线可在不穿 solid cut-face 的前提下
-向两格内吸附到最近的实际 chemical marker cell，phase flood 始终从该真值格开始。后来混入的 marker 保持自身 indicator provenance。
-
-客户端只从 material、bounded species palette、pH 与 indicator fraction 派生颜色；indicator 为零时 pH 不改变颜色。
-`/realwater chemstatus` 是管理员按需的完整逐 species 观测并进入 transcript，display snapshot 和 tooltip 都不参与结算。
-
-## 兼容与提交
-
-v1/v2 到 v3 只在非活动槽生成完整新代，回读验证后发布 HEAD；崩溃后只能看到旧完整代或新完整 v3。化学门关闭发现
-v3 时保留并锁定，不降级。启动 discovery 必须读取并重建校验 HEAD 指向的完整 committed generation；缺失/损坏 section
-不得先作为正常 UNLOADED manifest admission。unknown/corrupt/over-budget 永不通过“合理默认”修复。ownership sidecar
-与 HEAD 语义不变。
+区域载荷中的 chemistry presence 必须与本次启动的 chemistry 门完全一致。门变化不会向既有 checkpoint 添加或删除化学真值。

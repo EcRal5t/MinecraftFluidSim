@@ -120,31 +120,27 @@ public record FluidServerConfig(
 		try (InputStream input = Files.newInputStream(path)) { properties.load(input); }
 		try {
 			int version = integer(properties, "formatVersion");
-			if (version < 1 || version > FORMAT_VERSION) throw new IOException("Unsupported Real Water server config version " + version);
+			if (version != FORMAT_VERSION) throw new IOException("Unsupported Real Water server config version " + version);
 			String controllers = required(properties, "controllersEnabled");
 			if (!controllers.equals("true") && !controllers.equals("false")) throw new IOException("controllersEnabled must be true or false");
-			String materials = version == 1 ? "false" : required(properties, "materialsEnabled");
+			String materials = required(properties, "materialsEnabled");
 			if (!materials.equals("true") && !materials.equals("false")) throw new IOException("materialsEnabled must be true or false");
-			String worldBridge = version >= 3 ? required(properties, "worldBridgeEnabled") : "false";
+			String worldBridge = required(properties, "worldBridgeEnabled");
 			if (!worldBridge.equals("true") && !worldBridge.equals("false")) throw new IOException("worldBridgeEnabled must be true or false");
-			String chemistry = version >= 4 ? required(properties, "chemistryEnabled") : "false";
+			String chemistry = required(properties, "chemistryEnabled");
 			if (!chemistry.equals("true") && !chemistry.equals("false")) throw new IOException("chemistryEnabled must be true or false");
-			String granular = version >= 5 ? required(properties, "granularEnabled") : "false";
+			String granular = required(properties, "granularEnabled");
 			if (!granular.equals("true") && !granular.equals("false")) throw new IOException("granularEnabled must be true or false");
-			String precipitation = version >= 5 ? required(properties, "precipitationEnabled") : "false";
+			String precipitation = required(properties, "precipitationEnabled");
 			if (!precipitation.equals("true") && !precipitation.equals("false")) throw new IOException("precipitationEnabled must be true or false");
-			String thermal = version >= 6 ? required(properties, "thermalEnabled") : "false";
+			String thermal = required(properties, "thermalEnabled");
 			if (!thermal.equals("true") && !thermal.equals("false")) throw new IOException("thermalEnabled must be true or false");
-			String phaseChange = version >= 6 ? required(properties, "phaseChangeEnabled") : "false";
+			String phaseChange = required(properties, "phaseChangeEnabled");
 			if (!phaseChange.equals("true") && !phaseChange.equals("false")) throw new IOException("phaseChangeEnabled must be true or false");
-			long granularParcels = version >= 5 ? positiveLong(properties, "maximumGranularParcels")
-					: GranularLimits.MAX_ACTIVE_PARCELS_PER_SERVER;
-			long granularDeposits = version >= 5 ? positiveLong(properties, "maximumGranularDepositGroups")
-					: GranularLimits.MAX_DEPOSIT_GROUPS_PER_SERVER;
-			int thermalSubsteps = version >= 6 ? positiveInteger(properties, "maximumThermalSubstepsPerStep")
-					: ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS;
-			int phaseOperations = version >= 6 ? positiveInteger(properties, "maximumPhaseOperationsPerStep")
-					: ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP;
+			long granularParcels = positiveLong(properties, "maximumGranularParcels");
+			long granularDeposits = positiveLong(properties, "maximumGranularDepositGroups");
+			int thermalSubsteps = positiveInteger(properties, "maximumThermalSubstepsPerStep");
+			int phaseOperations = positiveInteger(properties, "maximumPhaseOperationsPerStep");
 			FluidRegionManager.Limits limits = new FluidRegionManager.Limits(
 					integer(properties, "maximumRegions"), positiveLong(properties, "maximumCellsPerRegion"),
 					positiveLong(properties, "maximumMarkersPerRegion"), positiveLong(properties, "maximumTotalCells"),

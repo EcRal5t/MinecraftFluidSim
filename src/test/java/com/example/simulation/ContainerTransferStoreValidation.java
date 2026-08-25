@@ -54,7 +54,6 @@ public final class ContainerTransferStoreValidation {
 			run("recovery state machine locks every ambiguous commit boundary", ContainerTransferStoreValidation::testRecoveryStateMachine);
 			run("unknown and staged files lock without deletion", ContainerTransferStoreValidation::testUnknownLayout);
 			run("corrupt named WAL locks without deletion", ContainerTransferStoreValidation::testCorruptWal);
-			run("v1-v4 fluid WALs remain readable while v1 material locks", ContainerTransferStoreValidation::testLegacyMigration);
 			run("nanovolume and solver cell-volume conversion", ContainerTransferStoreValidation::testNanosCellConversion);
 			run("non-float-friendly transfers settle actual marker volume", ContainerTransferStoreValidation::testActualMarkerSettlement);
 			run("material service settlement preserves component residuals", ContainerTransferStoreValidation::testMaterialSettlement);
@@ -223,6 +222,16 @@ public final class ContainerTransferStoreValidation {
 		);
 		store.write(material);
 		check(material.equals(store.read(tx3)), "material bucket fingerprint did not round-trip");
+		ContainerTransferJournal.ItemFingerprint incompleteMaterial = new ContainerTransferJournal.ItemFingerprint(
+				ContainerTransferJournal.ItemKind.MATERIAL_BUCKET, 1_000_000_000L,
+				"realwater:water", Double.doubleToRawLongBits(1_000.0));
+		ContainerTransferJournal incompleteMaterialJournal = new ContainerTransferJournal(
+				UUID.randomUUID(), region, "minecraft:overworld", 3L, 4L,
+				ContainerTransferJournal.Operation.INSERT, 1_000_000_000L,
+				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
+				incompleteMaterial, materialAfter, 0x4568L, ContainerTransferJournal.Phase.REGION_COMMITTED);
+		checkThrows(IOException.class, () -> store.write(incompleteMaterialJournal),
+				"material WAL without complete mixture truth was accepted");
 
 		UUID tx4 = UUID.randomUUID();
 		ContainerTransferJournal emptyMaterial = new ContainerTransferJournal(
@@ -446,61 +455,6 @@ public final class ContainerTransferStoreValidation {
 		check(scan.transactions().isEmpty() && !scan.issues().isEmpty() && scan.hasAny(),
 				"corrupt named WAL did not become a global lock");
 		check(java.util.Arrays.equals(bytes, Files.readAllBytes(corrupt)), "corrupt WAL was rewritten");
-	}
-
-	private static void testLegacyMigration() throws Exception {
-		Path pureRoot = Files.createTempDirectory("realwater-wal-v1-pure");
-		ContainerTransferStore pureStore = new ContainerTransferStore(pureRoot);
-		ContainerTransferJournal pure = journal(ContainerTransferJournal.Phase.PREPARED);
-		pureStore.write(pure);
-		Path purePath = pureStore.directoryPath().resolve(pure.transactionId() + ".nbt");
-		CompoundTag pureNbt = NbtIo.readCompressed(purePath, NbtAccounter.create(4L * 1024L * 1024L));
-		pureNbt.putInt("Version", 1);
-		pureNbt.remove("ResourceKind");
-		pureNbt.remove("BeforeSolidVolumeSvq");
-		pureNbt.remove("AfterSolidVolumeSvq");
-		pureNbt.remove("BeforeMassBits");
-		pureNbt.remove("AfterMassBits");
-		NbtIo.writeCompressed(pureNbt, purePath);
-		check(pureStore.read(pure.transactionId()).equals(pure) && pureStore.scan().issues().isEmpty(),
-				"legacy v1 pure-water WAL did not migrate in memory");
-		pureNbt.putInt("Version", 2);
-		pureNbt.putLong("BeforeMassBits", -1L);
-		pureNbt.putLong("AfterMassBits", -1L);
-		NbtIo.writeCompressed(pureNbt, purePath);
-		check(pureStore.read(pure.transactionId()).equals(pure), "legacy v2 pure-water WAL was not readable");
-		pureNbt.putInt("Version", 3);
-		NbtIo.writeCompressed(pureNbt, purePath);
-		check(pureStore.read(pure.transactionId()).equals(pure), "legacy v3 pure-water WAL was not readable");
-		pureNbt.putInt("Version", 4);
-		pureNbt.putString("ResourceKind", "FLUID_NANOS");
-		pureNbt.putLong("BeforeSolidVolumeSvq", -1L);
-		pureNbt.putLong("AfterSolidVolumeSvq", -1L);
-		NbtIo.writeCompressed(pureNbt, purePath);
-		check(pureStore.read(pure.transactionId()).equals(pure), "legacy v4 pure-water WAL was not readable");
-
-		Path materialRoot = Files.createTempDirectory("realwater-wal-v1-material");
-		ContainerTransferStore materialStore = new ContainerTransferStore(materialRoot);
-		ContainerTransferJournal.ItemFingerprint material = new ContainerTransferJournal.ItemFingerprint(
-				ContainerTransferJournal.ItemKind.MATERIAL_BUCKET, 1_000_000_000L, "realwater:oil",
-				Double.doubleToRawLongBits(800.0));
-		ContainerTransferJournal legacyMaterial = new ContainerTransferJournal(
-				UUID.randomUUID(), UUID.randomUUID(), "minecraft:overworld", 0L, 1L,
-				ContainerTransferJournal.Operation.INSERT, 1_000_000_000L,
-				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"), material, material,
-				ContainerTransferJournal.Phase.PREPARED);
-		materialStore.write(legacyMaterial);
-		Path materialPath = materialStore.directoryPath().resolve(legacyMaterial.transactionId() + ".nbt");
-		CompoundTag materialNbt = NbtIo.readCompressed(materialPath, NbtAccounter.create(4L * 1024L * 1024L));
-		materialNbt.putInt("Version", 1);
-		materialNbt.remove("ResourceKind");
-		materialNbt.remove("BeforeSolidVolumeSvq");
-		materialNbt.remove("AfterSolidVolumeSvq");
-		materialNbt.remove("BeforeMassBits");
-		materialNbt.remove("AfterMassBits");
-		NbtIo.writeCompressed(materialNbt, materialPath);
-		check(!materialStore.scan().issues().isEmpty() && Files.exists(materialPath),
-				"legacy v1 material WAL was guessed or deleted instead of locking");
 	}
 
 	private static ContainerTransferJournal journal(ContainerTransferJournal.Phase phase) {

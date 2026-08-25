@@ -18,7 +18,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
-/** Immutable, canonically ordered M7 definition registry. */
+/** Immutable, canonically ordered chemical definition registry. */
 public final class ChemicalRegistry {
 	private final List<ChemicalSpecies> species;
 	private final List<ChemicalPhaseDefinition> phases;

@@ -15,7 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Immutable, canonically ordered M8 material and carrier registry. */
+/** Immutable, canonically ordered granular material and carrier registry. */
 public final class GranularRegistry {
 	private final List<ParticulateMaterial> materials;
 	private final List<GranularCarrier> carriers;
@@ -113,7 +113,7 @@ public final class GranularRegistry {
 			if (!solid.reactive()) throw new IllegalArgumentException(
 					"Solid-liquid reaction targets inert material " + reaction.solidMaterialId());
 			if (!reaction.aqueousStoichiometry().equals(reaction.solidComposition())) {
-				throw new IllegalArgumentException("First M8 solid-liquid rules must preserve exact species identities: " + reaction.id());
+				throw new IllegalArgumentException("Solid-liquid rules must preserve exact species identities: " + reaction.id());
 			}
 			validateDeclaredSolidVolume(reaction, solid, chemicalRegistry);
 			for (String species : reaction.aqueousStoichiometry().keySet()) {

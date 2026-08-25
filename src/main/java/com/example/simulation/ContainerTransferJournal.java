@@ -242,8 +242,7 @@ case WATER_BUCKET -> ThermalContents.forPureWater(fingerprint,
 com.example.item.ContainerFluidLedger.NANOS_PER_BLOCK, contents.internalEnergy());
 case PARTIAL -> ThermalContents.forPureWater(fingerprint, nanos, contents.internalEnergy());
 case MATERIAL_BUCKET -> ThermalContents.forMixture(fingerprint,
-materialId.startsWith("v1;") ? FluidMixture.decode(materialId) : new FluidMixture(java.util.List.of(
-new FluidMixture.Component(materialId, nanos, massBits))), contents.internalEnergy());
+FluidMixture.decode(materialId), contents.internalEnergy());
 case CHEMICAL_BUCKET -> ThermalContents.forChemical(fingerprint,
 ChemicalContents.decode(materialId), contents.internalEnergy());
 case BUCKET, EMPTY_MATERIAL_BUCKET, EMPTY_GRANULAR_CONTAINER, GRANULAR_CONTAINER ->
@@ -262,13 +261,7 @@ case WATER_BUCKET -> new ItemStack(Items.WATER_BUCKET);
 case PARTIAL -> PartialWaterBucketItem.withVolume(nanos);
 case EMPTY_MATERIAL_BUCKET -> new ItemStack(com.example.item.RealWaterItems.MATERIAL_BUCKET);
 case MATERIAL_BUCKET -> {
-FluidMixture mixture;
-if (materialId != null && materialId.startsWith("v1;")) {
-mixture = FluidMixture.decode(materialId);
-} else {
-mixture = new FluidMixture(java.util.List.of(
-new FluidMixture.Component(materialId, nanos, massBits)));
-}
+FluidMixture mixture = FluidMixture.decode(materialId);
 if (mixture.totalVolumeNanos() != nanos
 || Double.doubleToRawLongBits(mixture.totalMass()) != massBits) {
 throw new IllegalStateException("Material WAL fingerprint ledgers disagree");

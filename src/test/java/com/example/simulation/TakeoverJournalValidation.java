@@ -26,7 +26,7 @@ public final class TakeoverJournalValidation {
 	private TakeoverJournalValidation() { }
 
 	public static void main(String[] args) throws Exception {
-		run("takeover-journal v1 codec compatibility", TakeoverJournalValidation::testCodecCompatibility);
+		run("takeover-journal current codec layout", TakeoverJournalValidation::testCodecLayout);
 		run("normal create and delete", TakeoverJournalValidation::testNormalCreateAndDelete);
 		run("failure before journal write", TakeoverJournalValidation::testFailureBeforeWrite);
 		run("failure after atomic journal publish", TakeoverJournalValidation::testFailureAfterPublish);
@@ -45,7 +45,7 @@ public final class TakeoverJournalValidation {
 		System.out.println("TakeoverJournalValidation passed " + passed + " scenarios");
 	}
 
-	private static void testCodecCompatibility() throws Exception {
+	private static void testCodecLayout() throws Exception {
 		TakeoverJournalCodec codec = new TakeoverJournalCodec();
 		TakeoverJournal expected = journal(3);
 		CompoundTag encoded = codec.encode(expected);
@@ -53,20 +53,20 @@ public final class TakeoverJournalValidation {
 		check(encoded.contains("Dimension") && encoded.contains("Blocks"), "codec changed v1 field names");
 		assertJournalEquals(expected, codec.decode(encoded));
 
-		CompoundTag legacyRoot = new CompoundTag();
-		legacyRoot.putInt("Version", 1);
-		legacyRoot.putString("Dimension", DIMENSION);
-		ListTag legacyBlocks = new ListTag();
-		CompoundTag legacyBlock = new CompoundTag();
-		legacyBlock.putLong("Pos", 42L);
-		legacyBlock.put("State", state("legacy-water"));
-		legacyBlocks.add(legacyBlock);
-		legacyRoot.put("Blocks", legacyBlocks);
-		TakeoverJournal legacy = codec.decode(legacyRoot);
-		check(legacy.blocks().size() == 1, "existing v1 entry was not decoded");
-		check("legacy-water".equals(stateName(legacy.blocks().getFirst())), "existing v1 state changed");
+		CompoundTag currentRoot = new CompoundTag();
+		currentRoot.putInt("Version", 1);
+		currentRoot.putString("Dimension", DIMENSION);
+		ListTag blocks = new ListTag();
+		CompoundTag block = new CompoundTag();
+		block.putLong("Pos", 42L);
+		block.put("State", state("sample-water"));
+		blocks.add(block);
+		currentRoot.put("Blocks", blocks);
+		TakeoverJournal decoded = codec.decode(currentRoot);
+		check(decoded.blocks().size() == 1, "current entry was not decoded");
+		check("sample-water".equals(stateName(decoded.blocks().getFirst())), "current state changed");
 
-		CompoundTag missingState = legacyRoot.copy();
+		CompoundTag missingState = currentRoot.copy();
 		missingState.getListOrEmpty("Blocks").getCompoundOrEmpty(0).remove("State");
 		expectIOException(() -> codec.decode(missingState));
 	}

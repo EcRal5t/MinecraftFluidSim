@@ -16,7 +16,7 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Required bounded gas payload for complete region-state v4 and thermal generations v6/v7. */
+/** Required bounded gas payload for complete thermal region generations. */
 final class GasRegionStateCodec {
 	static final String MANIFEST_EXTENSION = "realwater:gas_manifest_v1";
 	static final String SECTION_EXTENSION = "realwater:gas_section_v1";

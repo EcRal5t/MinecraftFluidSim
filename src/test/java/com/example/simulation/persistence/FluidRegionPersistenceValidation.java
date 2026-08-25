@@ -14,7 +14,6 @@ import com.example.chemistry.BuiltinChemicalDefinitions;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.fluid.air.BuiltinGasDefinitions;
 import com.example.fluid.air.GasRegistry;
-import com.example.fluid.air.GasRegistryStore;
 import com.example.fluid.air.GasStateSnapshot;
 import com.example.granular.BuiltinGranularDefinitions;
 import com.example.granular.GranularLimits;
@@ -67,7 +66,6 @@ public final class FluidRegionPersistenceValidation {
 		validateExactRoundTripAndMetadataUnload();
 		validateMaterialV2Codec();
 		validateChemicalV3Codec();
-		validateGasV4Codec();
 		validateGranularV5Codec();
 		validateThermalV7Codec();
 		validateUnknownExtensions();
@@ -89,7 +87,7 @@ public final class FluidRegionPersistenceValidation {
 			mass[marker] = positions[marker * 4 + 3] * BuiltinFluidMaterials.WATER.referenceDensity();
 			totalMass += mass[marker];
 		}
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(),
 				totalMass, liquids.materials(), positions, pure.copyParticleVelocities(), pure.copySolidMask(),
@@ -192,18 +190,6 @@ public final class FluidRegionPersistenceValidation {
 		expectIOException(() -> new RegionState(state.manifest(), brokenSections).validate(),
 				"v7 section missing its required thermal payload was accepted");
 
-		RegionState legacyV6 = withFormatVersion(state, 6);
-		legacyV6.validate();
-		RegionManifest decodedV6Manifest = codec.decodeManifest(codec.encodeManifest(legacyV6.manifest()));
-		require(decodedV6Manifest.equals(legacyV6.manifest()) && decodedV6Manifest.formatVersion() == 6,
-				"frozen region-state v6 reader changed");
-		for (RegionSectionState section : legacyV6.sections()) {
-			RegionSectionState decodedV6 = codec.decodeSection(codec.encodeSection(section));
-			require(decodedV6.formatVersion() == 6 && decodedV6.checksum() == section.checksum()
-					&& decodedV6.extensions().equals(section.extensions())
-					&& Arrays.equals(decodedV6.positionVolume(), section.positionVolume()),
-					"frozen region-state v6 section reader changed");
-		}
 		List<RegionExtension> withoutBuoyancy = state.manifest().extensions().stream()
 				.filter(extension -> !ThermalBuoyancyCodec.MANIFEST_EXTENSION.equals(extension.type())).toList();
 		expectIOException(() -> new RegionState(manifestWithExtensions(state.manifest(), withoutBuoyancy),
@@ -212,7 +198,7 @@ public final class FluidRegionPersistenceValidation {
 
 	private static void validateGranularV5Codec() throws Exception {
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		FluidRegion region = populatedRegion(new UUID(23L, 24L));
 		FlipParticleState pure = region.domain().exportParticleState();
 		float[] positions = pure.copyPositionVolume();
@@ -223,7 +209,7 @@ public final class FluidRegionPersistenceValidation {
 			totalLiquidMass += liquidMass[marker];
 		}
 		region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(pure.sizeX(), pure.sizeY(), pure.sizeZ(),
-				pure.cellSize(), pure.particleCount(), pure.totalVolume(), totalLiquidMass, BuiltinFluidMaterials.M3_PALETTE,
+				pure.cellSize(), pure.particleCount(), pure.totalVolume(), totalLiquidMass, BuiltinFluidMaterials.DEFAULT_PALETTE,
 				positions, pure.copyParticleVelocities(), pure.copySolidMask(), liquidMass, new int[pure.particleCount()]));
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long activeSvq = GranularLimits.MAX_PARCEL_VOLUME_SVQ, depositSvq = activeSvq - 17L;
@@ -256,6 +242,20 @@ public final class FluidRegionPersistenceValidation {
 					&& decoded.checksum() == section.checksum(),
 					"region-state v5 granular section did not round-trip");
 		}
+		GranularRegionStateCodec granularCodec = new GranularRegionStateCodec();
+		byte[] unsupportedManifestPayload = state.manifest().extensions().stream()
+				.filter(extension -> extension.type().equals(GranularRegionStateCodec.MANIFEST_EXTENSION))
+				.findFirst().orElseThrow().payload();
+		java.nio.ByteBuffer.wrap(unsupportedManifestPayload).putInt(Integer.BYTES, 1);
+		expectIOException(() -> granularCodec.decodeManifest(unsupportedManifestPayload),
+				"non-current granular manifest payload was accepted");
+		byte[] unsupportedSectionPayload = state.sections().stream().flatMap(section -> section.extensions().stream())
+				.filter(extension -> extension.type().equals(GranularRegionStateCodec.SECTION_EXTENSION))
+				.findFirst().orElseThrow().payload();
+		java.nio.ByteBuffer.wrap(unsupportedSectionPayload).putInt(Integer.BYTES, 1);
+		expectIOException(() -> granularCodec.decodeSection(unsupportedSectionPayload,
+				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION),
+				"non-current granular section payload was accepted");
 
 		Path root = Files.createTempDirectory(Path.of("."), "granular-v5-");
 		RegionStateFiles files = new RegionStateFiles(root, null, granular);
@@ -273,7 +273,7 @@ public final class FluidRegionPersistenceValidation {
 		}
 		reactiveRegion.domain().restoreMaterialParticleState(new FlipMaterialParticleState(reactivePure.sizeX(),
 				reactivePure.sizeY(), reactivePure.sizeZ(), reactivePure.cellSize(), reactivePure.particleCount(),
-				reactivePure.totalVolume(), reactiveTotalMass, BuiltinFluidMaterials.M3_PALETTE, reactivePositions,
+				reactivePure.totalVolume(), reactiveTotalMass, BuiltinFluidMaterials.DEFAULT_PALETTE, reactivePositions,
 				reactivePure.copyParticleVelocities(), reactivePure.copySolidMask(), reactiveLiquidMass,
 				new int[reactivePure.particleCount()]));
 		reactiveRegion.domain().bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
@@ -330,77 +330,6 @@ public final class FluidRegionPersistenceValidation {
 				"v5 section missing its required granular payload was accepted");
 	}
 
-	private static void validateGasV4Codec() throws Exception {
-		FluidRegion region = populatedRegion(new UUID(33L, 34L));
-		for (int z = 0; z < region.sizeZ(); z++) for (int y = 0; y < region.sizeY(); y++) for (int x = 0; x < region.sizeX(); x++) {
-			if (x == 0 || x + 1 == region.sizeX() || y == 0 || y + 1 == region.sizeY()
-					|| z == 0 || z + 1 == region.sizeZ()) region.domain().setSolid(x, y, z, true);
-		}
-		FlipParticleState pure = region.domain().exportParticleState();
-		float[] positions = pure.copyPositionVolume();
-		double[] mass = new double[pure.particleCount()]; double totalMass = 0.0;
-		for (int marker = 0; marker < mass.length; marker++) {
-			mass[marker] = positions[marker * 4 + 3] * BuiltinFluidMaterials.WATER.referenceDensity(); totalMass += mass[marker];
-		}
-		region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
-				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(),
-				totalMass, BuiltinFluidMaterials.M3_PALETTE, positions, pure.copyParticleVelocities(), pure.copySolidMask(),
-				mass, new int[pure.particleCount()]));
-		GasRegistry gasRegistry = BuiltinGasDefinitions.createRegistry();
-		Path registryRoot = Files.createTempDirectory(Path.of("."), "gas-registry-v1-");
-		GasRegistryStore registryStore = new GasRegistryStore(registryRoot);
-		GasRegistryStore.LoadResult createdRegistry = registryStore.loadOrCreate(gasRegistry);
-		require(createdRegistry.created() && !createdRegistry.definitionMismatch()
-				&& createdRegistry.registry().fingerprint().equals(gasRegistry.fingerprint()),
-				"gas world registry first publication did not round-trip");
-		GasStateSnapshot expected = region.domain().bootstrapGasState("");
-		require(!expected.nodes().isEmpty(), "gas v4 fixture did not create a sealed node");
-		RegionState state = RegionState.captureGas(region, 1L);
-		state.validate();
-		assertMaterialStateEquals(region.domain().exportMaterialParticleState(), state.reconstructMaterial());
-		GasStateSnapshot decoded = state.reconstructGas(gasRegistry, null);
-		assertGasStateEquals(expected, decoded);
-		var closedTurnover = com.example.fluid.air.GasAuditLedger.of(gasRegistry.createAmbient(17L));
-		GasStateSnapshot historicalOnly = new GasStateSnapshot(1, 1, 1, gasRegistry.fingerprint(), "",
-				List.of(), new int[1], closedTurnover, closedTurnover,
-				com.example.thermal.SignedDyadic.ZERO, com.example.thermal.SignedDyadic.ZERO);
-		require(historicalOnly.hasNoLiveInventoryAndClosedTurnover(),
-				"inventory-free exact gas turnover was not admitted for explicit bootstrap");
-		GasStateSnapshot unclosedHistory = new GasStateSnapshot(1, 1, 1, gasRegistry.fingerprint(), "",
-				List.of(), new int[1], closedTurnover, com.example.fluid.air.GasAuditLedger.EMPTY,
-				com.example.thermal.SignedDyadic.ZERO, com.example.thermal.SignedDyadic.ZERO);
-		require(!unclosedHistory.hasNoLiveInventoryAndClosedTurnover(),
-				"unclosed gas audit was admitted for explicit bootstrap");
-		require(!expected.hasNoLiveInventoryAndClosedTurnover(),
-				"live legacy gas inventory was admitted for topology replacement");
-
-		FlipFluidDomain restored = new FlipFluidDomain(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG, 512);
-		restored.restoreMaterialParticleState(state.reconstructMaterial());
-		restored.restoreGasState(decoded, gasRegistry);
-		assertGasStateEquals(expected, restored.exportGasState(""));
-
-		Path root = Files.createTempDirectory(Path.of("."), "gas-v4-");
-		RegionStateFiles files = new RegionStateFiles(root, null, null, null, gasRegistry);
-		files.publish(state);
-		assertGasStateEquals(expected, files.read(region.id()).reconstructGas(gasRegistry, null));
-		GasRegistry foreign = new GasRegistry(List.of(
-				new com.example.fluid.air.GasComponentDefinition("test:foreign", 1.0, 1.0, List.of())),
-				List.of(new GasRegistry.AmbientFraction("test:foreign", com.example.chemistry.ExactRational.ONE)));
-		require(registryStore.loadOrCreate(foreign).definitionMismatch(),
-				"gas world registry did not retain authoritative snapshot on definition mismatch");
-		expectIOException(() -> state.reconstructGas(foreign, null),
-				"foreign gas registry was accepted");
-
-		RegionStateCodec outer = new RegionStateCodec();
-		CompoundTag missingGas = outer.encodeSection(state.sections().getFirst());
-		missingGas.put("Extensions", new net.minecraft.nbt.ListTag());
-		RegionSectionState signedMissing = signedSection(outer.decodeSection(missingGas));
-		List<RegionSectionState> broken = new ArrayList<>(state.sections()); broken.set(0, signedMissing);
-		expectIOException(() -> new RegionState(state.manifest(), broken).validate(),
-				"v4 section missing its required gas topology was accepted");
-	}
-
-
 	private static void validateChemicalV3Codec() throws Exception {
 		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		FluidRegion region = populatedRegion(new UUID(19L, 20L));
@@ -415,7 +344,7 @@ public final class FluidRegionPersistenceValidation {
 		}
 		region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(),
-				totalMass, BuiltinFluidMaterials.M3_PALETTE, positionVolume, pure.copyParticleVelocities(),
+				totalMass, BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, pure.copyParticleVelocities(),
 				pure.copySolidMask(), mass, material));
 		region.domain().bindChemistry(chemistry);
 		region.domain().setMarkerChemical(0, java.util.Map.of(
@@ -455,7 +384,7 @@ public final class FluidRegionPersistenceValidation {
 		FlipParticleState emptyPure = emptyRegion.domain().exportParticleState();
 		emptyRegion.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
 				emptyPure.sizeX(), emptyPure.sizeY(), emptyPure.sizeZ(), emptyPure.cellSize(), 0, 0.0, 0.0,
-				BuiltinFluidMaterials.M3_PALETTE, new float[0], new float[0], emptyPure.copySolidMask(),
+				BuiltinFluidMaterials.DEFAULT_PALETTE, new float[0], new float[0], emptyPure.copySolidMask(),
 				new double[0], new int[0]));
 		emptyRegion.domain().bindChemistry(chemistry);
 		FlipChemicalParticleState emptyExpected = emptyRegion.domain().exportChemicalParticleState();
@@ -659,15 +588,17 @@ public final class FluidRegionPersistenceValidation {
 	}
 
 	private static void validateFaultMatrix() throws Exception {
-		FluidMaterial water = BuiltinFluidMaterials.WATER;
 		for (RegionStateFiles.FaultPoint point : RegionStateFiles.FaultPoint.values()) {
 			Path root = Files.createTempDirectory(Path.of("."), "fault-" + point.name().toLowerCase() + "-");
 			FluidRegion region = populatedRegion(UUID.randomUUID());
 			RegionStateFiles files = new RegionStateFiles(root);
 			RegionState first = RegionState.capture(region, 1L);
 			files.publish(first);
-			FlipParticleState pure = first.reconstruct();
-			RegionState second = RegionState.migrateV1(first, 2L, BuiltinFluidMaterials.M3_PALETTE);
+			FlipParticleState firstParticles = first.reconstruct();
+			FluidRegion nextRegion = populatedRegion(region.id());
+			nextRegion.domain().setVolume(1, 1, 1, 0.5F);
+			RegionState second = RegionState.capture(nextRegion, 2L);
+			FlipParticleState secondParticles = second.reconstruct();
 			try {
 				files.publish(second, (observed, path) -> { if (observed == point) throw new IOException("injected " + point); });
 				throw new AssertionError("Fault point did not interrupt publication: " + point);
@@ -676,19 +607,8 @@ public final class FluidRegionPersistenceValidation {
 			long expectedGeneration = point == RegionStateFiles.FaultPoint.AFTER_HEAD_PUBLISH ? 2L : 1L;
 			require(reopened.manifest().checkpointGeneration() == expectedGeneration,
 					"fault exposed a mixed or unexpected generation at " + point);
-			if (expectedGeneration == 1L) {
-				require(reopened.manifest().formatVersion() == 1, "pre-HEAD migration fault exposed v2");
-				assertParticleStateEquals(pure, reopened.reconstruct());
-			} else {
-				require(reopened.manifest().formatVersion() == 2, "post-HEAD migration did not expose v2");
-				for (int material = 1; material < reopened.manifest().materialLedgers().size(); material++) {
-					RegionManifest.MaterialLedger empty = reopened.manifest().materialLedgers().get(material);
-					require(empty.markerCount() == 0 && empty.volumeBits() == Double.doubleToRawLongBits(0.0)
-							&& empty.massBits() == Double.doubleToRawLongBits(0.0),
-							"v1 migration did not preserve exact zero ledger for an unused material");
-				}
-				assertMigratedWaterState(pure, reopened.reconstructMaterial(), BuiltinFluidMaterials.M3_PALETTE);
-			}
+			require(reopened.manifest().formatVersion() == 1, "fault changed the current pure-water layout");
+			assertParticleStateEquals(expectedGeneration == 1L ? firstParticles : secondParticles, reopened.reconstruct());
 		}
 	}
 
@@ -759,101 +679,12 @@ public final class FluidRegionPersistenceValidation {
 		enabled.save(root);
 		require(FluidServerConfig.loadOrCreate(root).equals(enabled), "world-local config did not round-trip");
 
-		Path legacyRoot = Files.createTempDirectory(Path.of("."), "config-v1-");
-		Files.createDirectories(FluidServerConfig.path(legacyRoot).getParent());
-		Files.writeString(FluidServerConfig.path(legacyRoot), """
-				formatVersion=1
-				controllersEnabled=true
-				maximumRegions=4
-				maximumCellsPerRegion=9216
-				maximumMarkersPerRegion=73728
-				maximumTotalCells=36864
-				maximumTotalMarkers=294912
-				""");
-		FluidServerConfig legacy = FluidServerConfig.loadOrCreate(legacyRoot);
-		require(legacy.controllersEnabled() && !legacy.materialsEnabled() && !legacy.worldBridgeEnabled()
-				&& !legacy.chemistryEnabled() && !legacy.granularEnabled() && !legacy.precipitationEnabled()
-				&& !legacy.thermalEnabled() && !legacy.phaseChangeEnabled(),
-				"v1 config did not migrate with materials and world bridge safely disabled");
+		String valid = Files.readString(FluidServerConfig.path(root));
+		Files.writeString(FluidServerConfig.path(root), valid.replace("materialsEnabled=true", "materialsEnabled=false"));
+		expectIOException(() -> FluidServerConfig.loadOrCreate(root),
+				"invalid current feature dependency was accepted");
 
-		Path v2Root = Files.createTempDirectory(Path.of("."), "config-v2-");
-		Files.createDirectories(FluidServerConfig.path(v2Root).getParent());
-		Files.writeString(FluidServerConfig.path(v2Root), """
-				formatVersion=2
-				controllersEnabled=false
-				materialsEnabled=true
-				maximumRegions=4
-				maximumCellsPerRegion=9216
-				maximumMarkersPerRegion=73728
-				maximumTotalCells=36864
-				maximumTotalMarkers=294912
-				""");
-		FluidServerConfig v2 = FluidServerConfig.loadOrCreate(v2Root);
-		require(v2.materialsEnabled() && !v2.worldBridgeEnabled() && !v2.chemistryEnabled()
-				&& !v2.granularEnabled() && !v2.precipitationEnabled()
-				&& !v2.thermalEnabled() && !v2.phaseChangeEnabled(),
-				"v2 config did not keep newer features safely disabled");
-		Files.writeString(FluidServerConfig.path(v2Root), Files.readString(FluidServerConfig.path(v2Root))
-				.replace("formatVersion=2", "formatVersion=3"));
-		expectIOException(() -> FluidServerConfig.loadOrCreate(v2Root), "v3 config without the worldBridgeEnabled key was accepted");
-
-		Path v3Root = Files.createTempDirectory(Path.of("."), "config-v3-");
-		Files.createDirectories(FluidServerConfig.path(v3Root).getParent());
-		Files.writeString(FluidServerConfig.path(v3Root), """
-				formatVersion=3
-				controllersEnabled=true
-				materialsEnabled=true
-				worldBridgeEnabled=true
-				maximumRegions=4
-				maximumCellsPerRegion=9216
-				maximumMarkersPerRegion=73728
-				maximumTotalCells=36864
-				maximumTotalMarkers=294912
-				""");
-		require(!FluidServerConfig.loadOrCreate(v3Root).chemistryEnabled(),
-				"v3 config did not keep chemistry safely disabled");
-		Files.writeString(FluidServerConfig.path(v3Root), Files.readString(FluidServerConfig.path(v3Root))
-				.replace("formatVersion=3", "formatVersion=4"));
-		expectIOException(() -> FluidServerConfig.loadOrCreate(v3Root),
-				"v4 config without chemistryEnabled was accepted");
-		Files.writeString(FluidServerConfig.path(v3Root), Files.readString(FluidServerConfig.path(v3Root))
-				+ "chemistryEnabled=true\n");
-		Files.writeString(FluidServerConfig.path(v3Root), Files.readString(FluidServerConfig.path(v3Root))
-				.replace("materialsEnabled=true", "materialsEnabled=false"));
-		expectIOException(() -> FluidServerConfig.loadOrCreate(v3Root),
-				"chemistry=true/materials=false config was accepted");
-
-		Path v5Root = Files.createTempDirectory(Path.of("."), "config-v5-");
-		Files.createDirectories(FluidServerConfig.path(v5Root).getParent());
-		Files.writeString(FluidServerConfig.path(v5Root), """
-				formatVersion=5
-				controllersEnabled=true
-				materialsEnabled=true
-				worldBridgeEnabled=true
-				chemistryEnabled=true
-				maximumRegions=4
-				maximumCellsPerRegion=9216
-				maximumMarkersPerRegion=73728
-				maximumTotalCells=36864
-				maximumTotalMarkers=294912
-				""");
-		expectIOException(() -> FluidServerConfig.loadOrCreate(v5Root),
-				"v5 config without explicit granular gates/budgets was accepted");
-		Files.writeString(FluidServerConfig.path(v5Root), Files.readString(FluidServerConfig.path(v5Root)) + """
-				granularEnabled=false
-				precipitationEnabled=false
-				maximumGranularParcels=65536
-				maximumGranularDepositGroups=262144
-				""");
-		FluidServerConfig v5 = FluidServerConfig.loadOrCreate(v5Root);
-		require(!v5.thermalEnabled() && !v5.phaseChangeEnabled(),
-				"v5 config did not force M9 feature gates disabled");
-		Files.writeString(FluidServerConfig.path(v5Root), Files.readString(FluidServerConfig.path(v5Root))
-				.replace("formatVersion=5", "formatVersion=6"));
-		expectIOException(() -> FluidServerConfig.loadOrCreate(v5Root),
-				"v6 config without explicit thermal gates/budgets was accepted");
-
-		Files.writeString(FluidServerConfig.path(root), "formatVersion=99\ncontrollersEnabled=false\n");
+		Files.writeString(FluidServerConfig.path(root), valid.replace("formatVersion=6", "formatVersion=99"));
 		expectIOException(() -> FluidServerConfig.loadOrCreate(root), "unknown config version was silently replaced");
 	}
 
@@ -1058,67 +889,10 @@ public final class FluidRegionPersistenceValidation {
 				"chemical handoff changed across persistence");
 	}
 
-	private static void assertMigratedWaterState(
-			FlipParticleState pure, FlipMaterialParticleState migrated, List<FluidMaterial> palette
-	) {
-		FluidMaterial water = palette.getFirst();
-		require(migrated.materials().equals(palette), "v1 migration did not create the frozen M3 palette");
-		require(Arrays.equals(floatBits(pure.copyPositionVolume()), floatBits(migrated.copyPositionVolume()))
-				&& Arrays.equals(floatBits(pure.copyParticleVelocities()), floatBits(migrated.copyParticleVelocities()))
-				&& Arrays.equals(pure.copySolidMask(), migrated.copySolidMask()), "v1 migration changed pure-water physical state");
-		float[] positions = pure.copyPositionVolume();
-		double[] mass = migrated.copyParticleMass();
-		int[] materials = migrated.copyMaterialPaletteIndex();
-		double totalMass = 0.0;
-		for (int marker = 0; marker < pure.particleCount(); marker++) {
-			double expectedMass = positions[marker * 4 + 3] * water.referenceDensity();
-			require(Double.doubleToRawLongBits(mass[marker]) == Double.doubleToRawLongBits(expectedMass) && materials[marker] == 0,
-					"v1 migration changed marker mass or default material assignment");
-			totalMass += expectedMass;
-		}
-		require(Double.doubleToRawLongBits(totalMass) == Double.doubleToRawLongBits(migrated.totalMass()),
-				"v1 migration total mass ledger changed");
-	}
-
 	private static int[] floatBits(float[] values) {
 		int[] result = new int[values.length];
 		for (int i = 0; i < values.length; i++) result[i] = Float.floatToRawIntBits(values[i]);
 		return result;
-	}
-
-	/** Re-labels an otherwise byte-identical thermal fixture to exercise the frozen v6 reader. */
-	private static RegionState withFormatVersion(RegionState state, int formatVersion) throws IOException {
-		List<RegionSectionState> sections = new ArrayList<>(state.sections().size());
-		List<RegionManifest.SectionDescriptor> descriptors = new ArrayList<>(state.sections().size());
-		for (RegionSectionState original : state.sections()) {
-			RegionSectionState unsigned = new RegionSectionState(formatVersion, original.regionId(),
-					original.dimensionId(), original.checkpointGeneration(), original.sectionX(), original.sectionY(),
-					original.sectionZ(), original.localStartX(), original.localStartY(), original.localStartZ(),
-					original.sizeX(), original.sizeY(), original.sizeZ(), original.markerOrdinals(),
-					original.positionVolume(), original.velocities(), original.markerMass(),
-					original.materialPaletteIndex(), original.solidMask(), original.extensions(),
-					original.chemicalMixtureIndex(), original.indicator(), original.chemicalSpeciesTotals(),
-					original.chemicalResidualLedgerBits(), 0L);
-			RegionSectionState signed = signedSection(unsigned);
-			sections.add(signed);
-			RegionManifest.SectionDescriptor previous = state.manifest().sections().stream()
-					.filter(descriptor -> descriptor.key().equals(original.key())).findFirst().orElseThrow();
-			descriptors.add(new RegionManifest.SectionDescriptor(previous.sectionX(), previous.sectionY(),
-					previous.sectionZ(), previous.markerCount(), previous.volumeBits(), previous.massBits(),
-					signed.checksum()));
-		}
-		RegionManifest original = state.manifest();
-		List<RegionExtension> extensions = original.extensions().stream()
-				.filter(extension -> formatVersion == 7
-						|| !ThermalBuoyancyCodec.MANIFEST_EXTENSION.equals(extension.type())).toList();
-		RegionManifest unsigned = new RegionManifest(formatVersion, original.regionId(), original.dimensionId(),
-				original.checkpointGeneration(), original.networkGeneration(), original.origin(), original.sizeX(),
-				original.sizeY(), original.sizeZ(), original.solverConfig(), original.reservedMarkerCapacity(),
-				original.runtime(), original.footprint(), original.totalMarkerCount(), original.totalVolumeBits(),
-				original.materialPalette(), original.totalMassBits(), original.materialLedgers(), descriptors,
-				extensions, original.registryFingerprint(), original.auScale(), original.speciesPalette(),
-				original.chemicalMixtures(), original.chemicalSpeciesTotals(), original.chemicalResidualLedgerBits(), 0L);
-		return new RegionState(signedManifest(unsigned), sections);
 	}
 
 	private static RegionSectionState signedSection(RegionSectionState section) {

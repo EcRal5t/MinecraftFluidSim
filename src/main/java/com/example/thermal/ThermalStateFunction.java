@@ -7,7 +7,7 @@ import com.example.chemistry.ChemicalRegistry;
 import java.util.Map;
 import java.util.List;
 
-/** Pure M9 state function: total internal energy is authoritative and temperature is an inversion result. */
+/** Pure thermal state function: total internal energy is authoritative and temperature is an inversion result. */
 public final class ThermalStateFunction {
 	public enum PhaseState { LOWER, PLATEAU, UPPER }
 	public record State(double temperatureK, double heatCapacityEuPerK) { }

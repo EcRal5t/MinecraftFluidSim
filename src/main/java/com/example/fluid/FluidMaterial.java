@@ -3,8 +3,8 @@ package com.example.fluid;
 import java.util.regex.Pattern;
 
 /**
- * Immutable material definition. It is not a network or persistence format: the M3 wire and {@code region-state}
- * bytes stay unchanged, and decode paths reconstruct these M4 fields from defaults until a format bump is reviewed.
+ * Immutable material definition. It is not a network or persistence format; surface fields come from the
+ * authoritative runtime definition set.
  */
 public record FluidMaterial(
 		String id,
@@ -32,7 +32,7 @@ public record FluidMaterial(
 
 	/**
 	 * Data-contract constructor with surface tension and contact angle. {@code contactAngleDegrees} is the Young
-	 * equilibrium angle against a solid, in degrees; it is stored in radians. Zero surface tension is the M3
+	 * equilibrium angle against a solid, in degrees; it is stored in radians. Zero surface tension is the
 	 * degeneration, and a 90-degree angle is the neutral no-curvature contact condition.
 	 */
 	public static FluidMaterial withSurfaceTension(String id, double referenceDensity, String miscibilityGroup,

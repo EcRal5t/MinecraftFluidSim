@@ -1,6 +1,6 @@
 package com.example.granular;
 
-/** Hard allocation, definition and operation limits for M8 granular state. */
+/** Hard allocation, definition and operation limits for granular state. */
 public final class GranularLimits {
 	public static final int MAX_MATERIALS = 256;
 	public static final int MAX_CARRIERS = 512;

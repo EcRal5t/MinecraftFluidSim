@@ -3,7 +3,7 @@ package com.example.chemistry;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Exact, zero-volume M7 reaction definition. */
+/** Exact, zero-volume reaction definition. */
 public record ChemicalReaction(
 		String id,
 		Kind kind,
@@ -21,7 +21,7 @@ public record ChemicalReaction(
 		reactants = canonicalSide(reactants, id, "reactant");
 		products = canonicalSide(products, id, "product");
 		if (volumeDeltaBvPerExtent == null || !volumeDeltaBvPerExtent.isZero()) {
-			throw new IllegalArgumentException("M7 reaction volume delta must be exactly zero: " + id);
+			throw new IllegalArgumentException("Reaction volume delta must be exactly zero: " + id);
 		}
 		if (kind == Kind.COMPLETE_DISSOCIATION && reactants.size() != 1) {
 			throw new IllegalArgumentException("Complete dissociation requires exactly one reactant: " + id);

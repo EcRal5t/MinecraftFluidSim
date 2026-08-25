@@ -6,7 +6,7 @@ import com.example.chemistry.ExactRational;
 import java.util.List;
 import java.util.Map;
 
-/** Deterministic built-in definitions used by the first M8 datapack and validation fixtures. */
+/** Deterministic built-in definitions used by the datapack and validation fixtures. */
 public final class BuiltinGranularDefinitions {
 	public static final String FINE_SAND = "realwater:fine_sand";
 	public static final String LIGHT_BEADS = "realwater:light_beads";

@@ -332,11 +332,11 @@ public final class FluidSimulationService {
 	}
 
 	private static void validateSupportedChemicalMaterials(ChemicalRegistry registry) {
-		for (var material : BuiltinFluidMaterials.M3_PALETTE) registry.phaseHandleForMaterial(material.id());
+		for (var material : BuiltinFluidMaterials.DEFAULT_PALETTE) registry.phaseHandleForMaterial(material.id());
 	}
 
 	private static void validateSupportedGranularCarriers(GranularRegistry registry) {
-		for (var material : BuiltinFluidMaterials.M3_PALETTE) {
+		for (var material : BuiltinFluidMaterials.DEFAULT_PALETTE) {
 			if (!registry.hasCarrier(material.id())) throw new IllegalArgumentException(
 					"Granular registry has no carrier for " + material.id());
 		}
@@ -351,7 +351,7 @@ public final class FluidSimulationService {
 			ThermalRegistry registry, ChemicalRegistry chemicalRegistry,
 			GranularRegistry granularRegistry, GasRegistry gasRegistry
 	) {
-		for (var material : BuiltinFluidMaterials.M3_PALETTE) {
+		for (var material : BuiltinFluidMaterials.DEFAULT_PALETTE) {
 			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, material.id());
 			LiquidThermalExpansion.require(material.id());
 		}
@@ -1066,7 +1066,7 @@ public final class FluidSimulationService {
 			return false;
 		}
 		if (chemistryFeatureEnabled) {
-			lastTakeoverFailure = "表面张力测试材料没有 M7 chemical phase；chemistry 开启时拒绝混用测试域";
+			lastTakeoverFailure = "表面张力测试材料没有 chemical phase；chemistry 开启时拒绝混用测试域";
 			return false;
 		}
 		Vec3 look = player.getLookAngle();
@@ -1985,26 +1985,6 @@ public final class FluidSimulationService {
 				granular.solidVolumeSvq(), granular.activeParcels(), granular.depositGroups());
 	}
 
-	/** Explicit old-controller temperature initialization; pending item WAL is a hard generation barrier. */
-	public String initializeSelectedRegionThermal(
-			MinecraftServer server, double initialTemperatureK, String operatorMetadata
-	) {
-		FluidRegion selected = activeRegion();
-		if (!thermalFeatureEnabled) return "热初始化失败：thermal 功能门或权威 registry 本次启动不可用";
-		if (selected == null) return "没有选中区域";
-		if (hasPendingContainerTransfer(selected.id())) {
-			return "热初始化失败：区域存在未完成或不可识别的容器转移 WAL；旧 WAL 不跨初始化代次重解释";
-		}
-		long previousGeneration = selected.checkpointGeneration();
-		String result = regionOperations.initializeSelectedThermal(initialTemperatureK, operatorMetadata);
-		if (selected.solverLoaded() && selected.domain().hasThermalState()
-				&& selected.checkpointGeneration() > previousGeneration) {
-			ServerLevel level = server.getLevel(selected.dimension());
-			if (level != null) sendSnapshot(level, selected);
-		}
-		return result;
-	}
-
 	/** Explicit HEAD rollback is available only after a failed restore and never crosses an item WAL. */
 	public String recoverSelectedPreviousCheckpoint(long expectedCurrentGeneration) {
 		FluidRegion selected = activeRegion();
@@ -2714,7 +2694,7 @@ public final class FluidSimulationService {
 		}
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), totalVolume, totalMass,
-				BuiltinFluidMaterials.M3_PALETTE, positionVolume, pure.copyParticleVelocities(), pure.copySolidMask(), markerMass, material
+				BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, pure.copyParticleVelocities(), pure.copySolidMask(), markerMass, material
 		));
 	}
 
@@ -2742,7 +2722,7 @@ public final class FluidSimulationService {
 			int material = positionVolume[marker * 4 + 1] >= interfaceY ? 1 : 0;
 			materials[marker] = material;
 			markerMass[marker] = positionVolume[marker * 4 + 3]
-					* BuiltinFluidMaterials.M3_PALETTE.get(material).referenceDensity();
+					* BuiltinFluidMaterials.DEFAULT_PALETTE.get(material).referenceDensity();
 			totalMass += markerMass[marker];
 		}
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(

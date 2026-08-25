@@ -4,7 +4,7 @@ import com.example.chemistry.ExactRational;
 
 import java.util.List;
 
-/** Built-in M5-compatible gas registry. */
+/** Built-in gas registry. */
 public final class BuiltinGasDefinitions {
 	public static final String AIR = "realwater:air";
 	public static final String WATER_VAPOR = "realwater:water_vapor";

@@ -25,7 +25,7 @@ public final class GranularCouplingFields {
 		this.fixedCellSvq = new long[cellCount];
 	}
 
-	/** Replaces fixed cell-local occupancy (for example M9 coherent solid) without touching M8 truth. */
+	/** Replaces fixed cell-local occupancy (for example coherent solid) without touching granular truth. */
 	public void setFixedCellSvq(long[] fixed) {
 		if (fixed == null || fixed.length != cellCount) {
 			throw new IllegalArgumentException("Fixed solid occupancy dimensions differ");
@@ -40,7 +40,7 @@ public final class GranularCouplingFields {
 		totalSolidSvq = total;
 	}
 
-	/** Rebuilds a fixed-only field when no M8 stores are bound. */
+	/** Rebuilds a fixed-only field when no granular stores are bound. */
 	public void rebuildFixed() {
 		System.arraycopy(fixedCellSvq, 0, solidSvq, 0, cellCount);
 		totalSolidSvq = sumSolidSvq();

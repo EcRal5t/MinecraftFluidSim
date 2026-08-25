@@ -78,8 +78,8 @@ final class TakeoverBackupStore {
 		return """
 				REAL WATER TAKEOVER RECOVERY WARNING / 真实水体接管恢复警告
 
-				Do not remove or downgrade the Real Water mod while this file exists.
-				此文件存在时，请勿卸载或降级 Real Water Mod。
+				Do not remove or replace the Real Water mod while this file exists.
+				此文件存在时，请勿卸载或替换 Real Water Mod。
 
 				World directory / 世界目录: %s
 				Dimension / 维度: %s
@@ -88,12 +88,12 @@ final class TakeoverBackupStore {
 
 				Recovery / 恢复步骤:
 				1. Keep a full backup of this world. / 保留完整世界备份。
-				2. Start this world with the same or a newer compatible Real Water mod.
-				   使用相同或更新且兼容的 Real Water Mod 启动世界。
+				2. Restart this world with the same Real Water build.
+				   使用相同的 Real Water 构建重新启动世界。
 				3. Wait for startup recovery, or run /realwater remove for the active domain.
 				   等待启动恢复；若接管域仍活动，执行 /realwater remove。
-				4. Confirm both this warning and realwater-takeover-backup.nbt are gone before removing or downgrading the mod.
-				   确认本警告与 realwater-takeover-backup.nbt 均已消失后，才能卸载或降级 Mod。
+				4. Confirm both this warning and realwater-takeover-backup.nbt are gone before removing or replacing the mod.
+				   确认本警告与 realwater-takeover-backup.nbt 均已消失后，才能卸载或替换 Mod。
 				""".formatted(root, journal.dimensionId(), journal.blocks().size());
 	}
 

@@ -17,7 +17,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-/** Required typed thermal payload nested inside complete region-state v6/v7 generations. */
+/** Required typed thermal payload nested inside complete thermal region generations. */
 final class ThermalRegionStateCodec {
 	static final String MANIFEST_EXTENSION = "realwater:thermal_manifest_v1";
 	static final String SECTION_EXTENSION = "realwater:thermal_section_v1";

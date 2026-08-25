@@ -8,7 +8,7 @@ import com.example.thermal.ThermalLimits;
 
 import java.util.List;
 
-/** Orthogonal in-memory M9 handoff; it is not a region-state or wire codec. */
+/** Orthogonal in-memory thermal handoff; it is not a region-state or wire codec. */
 public final class FlipThermalParticleState {
 	private final int sizeX, sizeY, sizeZ, particleCount;
 	private final float cellSize;

@@ -3,7 +3,7 @@ package com.example.simulation.persistence;
 import java.util.Arrays;
 import java.util.Objects;
 
-/** Length-delimited optional v1 payload. Unknown types are retained without interpretation. */
+/** Length-delimited optional payload. Unknown types are retained without interpretation. */
 public record RegionExtension(String type, byte[] payload) {
 	public RegionExtension {
 		Objects.requireNonNull(type, "type");

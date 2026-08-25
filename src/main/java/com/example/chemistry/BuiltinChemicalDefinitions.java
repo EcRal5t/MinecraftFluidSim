@@ -3,7 +3,7 @@ package com.example.chemistry;
 import java.util.List;
 import java.util.Map;
 
-/** Frozen built-in M7 strong-electrolyte definition set. */
+/** Frozen built-in strong-electrolyte definition set. */
 public final class BuiltinChemicalDefinitions {
 	public static final String AQUEOUS = "realwater:aqueous";
 	public static final String H2O = "realwater:h2o";

@@ -1,6 +1,6 @@
 package com.example.chemistry;
 
-/** Frozen M7 definition, runtime and bounded-container budgets. */
+/** Frozen chemistry definition, runtime and bounded-container budgets. */
 public final class ChemicalLimits {
 	public static final long QUANTA_PER_AU = 1_000_000_000L;
 	public static final int MAX_SPECIES = 256;

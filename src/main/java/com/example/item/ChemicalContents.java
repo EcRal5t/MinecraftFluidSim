@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Set;
 import java.math.BigInteger;
 
-/** Canonical v1 material/indicator/species bucket inventory, independent from legacy FluidMixture v1. */
+/** Canonical material/indicator/species bucket inventory, independent from {@link FluidMixture}. */
 public record ChemicalContents(String registryFingerprint, long auScale, List<Group> groups) {
 	public static final int MAX_GROUPS = 16;
 	public static final int MAX_TOTAL_ENTRIES = 64;

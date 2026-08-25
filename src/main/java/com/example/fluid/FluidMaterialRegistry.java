@@ -7,8 +7,7 @@ import java.util.Map;
 
 /**
  * Immutable material definitions with compact runtime handles assigned in declaration order.
- * Liquid-liquid pair tensions are runtime-only M4.1 data; they are not part of material snapshots,
- * wire payloads or region-state bytes yet, so decode paths still rebuild the default empty pair table.
+ * Liquid-liquid pair tensions are runtime definitions; display snapshots and region payloads do not carry them.
  */
 public final class FluidMaterialRegistry {
 	public record LiquidPairTension(int firstPhase, int secondPhase, double tension) {

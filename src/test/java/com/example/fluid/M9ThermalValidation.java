@@ -800,7 +800,7 @@ public final class M9ThermalValidation {
 	private static void granularReactionHeatUsesOneConservedCellEnergy() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 1.0F / 20.0F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
 		domain.setVolume(1, 1, 1, 0.1F);
@@ -1381,7 +1381,7 @@ public final class M9ThermalValidation {
 				"M8 active/deposit cell heat exchange did not close the thermal audit");
 
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FluidMaterialRegistry productionLiquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		FluidMaterialRegistry productionLiquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.8F);
 		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);

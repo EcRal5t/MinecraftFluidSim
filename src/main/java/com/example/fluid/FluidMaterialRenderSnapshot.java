@@ -4,7 +4,7 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * Immutable, read-only M3 reconstruction fields. Quantized fractions and marker seeds are display data;
+ * Immutable, read-only material reconstruction fields. Quantized fractions and marker seeds are display data;
  * exact volume and mass remain on the domain markers and are deliberately absent here.
  */
 public final class FluidMaterialRenderSnapshot {

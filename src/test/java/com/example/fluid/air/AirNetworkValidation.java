@@ -16,7 +16,6 @@ public final class AirNetworkValidation {
 		validateAmbientInteraction();
 		validateComponentTransport();
 		validatePhaseColumnTake();
-		validateClosedAuditHistoryCarry();
 		validateGuards();
 		System.out.println("M5 air network gate passed: isothermal EoS, finite-rate orifice equalization, "
 				+ "hole open/close freeze and exact nanovolume ledger");
@@ -218,26 +217,12 @@ public final class AirNetworkValidation {
 		check(network.auditClosed(), "component transport did not close mass/species audit");
 	}
 
-	private static void validateClosedAuditHistoryCarry() {
-		AirNetwork network = new AirNetwork();
-		network.addNode(2.0, 2.0);
-		GasAuditLedger sourceBefore = network.externalSource();
-		GasAuditLedger sinkBefore = network.escapedSink();
-		GasAuditLedger turnover = GasAuditLedger.of(network.registry().createAmbient(4_005_762L));
-		network.carryClosedAuditHistory(turnover);
-		check(network.externalSource().equals(sourceBefore.add(turnover)),
-				"carried closed history was not retained in the gas source ledger");
-		check(network.escapedSink().equals(sinkBefore.add(turnover)),
-				"carried closed history was not retained in the gas sink ledger");
-		checkLedger(network, "closed audit history carry");
-	}
-
 	private static void validatePhaseColumnTake() {
 		AirNetwork network = new AirNetwork();
 		int node = network.addNode(2.0, 2.0);
-		GasInventory legacyGroupedVapor = new GasInventory(List.of(new GasComponentAmount(
+		GasInventory groupedVapor = new GasInventory(List.of(new GasComponentAmount(
 				BuiltinGasDefinitions.WATER_VAPOR, 4_005_761L, 0.003, List.of(), 0.003)));
-		network.commitPhaseSource(node, legacyGroupedVapor);
+		network.commitPhaseSource(node, groupedVapor);
 		GasInventory.Split take = network.previewComponentTake(node, BuiltinGasDefinitions.WATER_VAPOR,
 				2_670_508L, 0.002, 0.002);
 		GasComponentAmount moved = take.first().components().getFirst();

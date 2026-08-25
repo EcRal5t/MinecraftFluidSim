@@ -29,7 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Owns the optional liquid-marker M9 energy column; FlipFluidDomain only supplies carrier/cell orchestration. */
+/** Owns the optional liquid-marker energy column; FlipFluidDomain only supplies carrier/cell orchestration. */
 final class FlipThermalState {
 	interface MarkerContext {
 		int markerCount();
@@ -310,7 +310,7 @@ final class FlipThermalState {
 		double[] activeEnergy = snapshot.copyActiveParcelEnergy(), depositEnergy = snapshot.copyDepositEnergy();
 		List<GranularEnergyColumn.DepositKey> depositKeys = markers.depositKeys();
 		if (activeEnergy.length != markers.activeParcelCount() || depositEnergy.length != depositKeys.size()) {
-			throw new IllegalArgumentException("Restored granular thermal ordinals differ from M8 inventory");
+			throw new IllegalArgumentException("Restored granular thermal ordinals differ from granular inventory");
 		}
 		java.util.ArrayList<GranularEnergyColumn.DepositEnergy> deposits = new java.util.ArrayList<>(depositEnergy.length);
 		for (int index = 0; index < depositEnergy.length; index++) {
@@ -1030,7 +1030,7 @@ final class FlipThermalState {
 		if (activeCount != granularEnergy.activeCount()
 				|| !depositKeys.equals(granularEnergy.depositSnapshot().stream()
 				.map(GranularEnergyColumn.DepositEnergy::key).toList())) {
-			throw new IllegalStateException("Granular thermal ordinals differ from M8 inventory");
+			throw new IllegalStateException("Granular thermal ordinals differ from granular inventory");
 		}
 		int coherentStart = liquidCount, activeStart = Math.addExact(coherentStart, coherentCount);
 		int depositStart = Math.addExact(activeStart, activeCount);

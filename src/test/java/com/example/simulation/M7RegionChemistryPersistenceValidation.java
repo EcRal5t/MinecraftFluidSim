@@ -16,7 +16,6 @@ import com.example.granular.GranularRegistry;
 import com.example.simulation.controller.FluidRegionFootprint;
 import com.example.simulation.persistence.RegionState;
 import com.example.simulation.persistence.RegionStateFiles;
-import com.example.simulation.persistence.ThermalInitializationRecord;
 import com.example.thermal.ThermalMaterialDefinition;
 import com.example.thermal.ThermalRegistry;
 import com.example.thermal.ThermalSpeciesOffset;
@@ -27,7 +26,6 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -36,7 +34,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
-/** Feature-gate, service migration and two-slot fault boundary for region-state v3. */
+	/** Current feature-layout admission and restore checks for chemistry, granular and thermal regions. */
 public final class M7RegionChemistryPersistenceValidation {
 	private static final FluidSolverConfig CONFIG = new FluidSolverConfig(
 			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
@@ -48,11 +46,10 @@ public final class M7RegionChemistryPersistenceValidation {
 	private M7RegionChemistryPersistenceValidation() { }
 
 	public static void main(String[] args) throws Exception {
-		validateFeatureGateAndMigration();
-		validateAtomicFaultBoundary();
-		validateGranularV5FeatureGateAndMigration();
+		validateChemicalFeatureLayout();
+		validateGranularFeatureLayout();
 		validateThermalV7ProductionGate();
-		System.out.println("Region persistence passed: v1/v2/v3 migration, v3/v5/v6/v7 gates and fault matrix");
+		System.out.println("Region persistence passed: current chemistry, granular and thermal feature layouts");
 	}
 
 	private static void validateThermalV7ProductionGate() throws Exception {
@@ -83,92 +80,6 @@ public final class M7RegionChemistryPersistenceValidation {
 		check(gateOff.regions().isEmpty() && gateIssues.stream().anyMatch(issue -> issue.contains("thermal")),
 				"thermal-off discovery did not preserve and lock region-state v7");
 
-		Path legacyRoot = Files.createTempDirectory(Path.of("."), "thermal-explicit-init-");
-		FluidRegion legacy = populatedRegion(UUID.randomUUID()); bindDefaultMaterials(legacy);
-		new RegionStateFiles(legacyRoot).publish(RegionState.captureMaterial(legacy, 1L));
-		FluidRegionManager legacyManager = manager();
-		FluidRegionPersistence legacyPersistence = new FluidRegionPersistence(legacyRoot, true, false, null,
-				false, null, false, true, thermal, gas);
-		check(legacyPersistence.loadMetadata(legacyManager).isEmpty(), "legacy metadata should remain selectable for explicit initialization");
-		try {
-			legacyPersistence.restore(legacyManager.regions().getFirst());
-			throw new AssertionError("legacy checkpoint was assigned an implicit temperature");
-		} catch (IOException expected) {
-			check(expected.getMessage().contains("explicit operator"), "legacy thermal refusal did not name explicit initialization");
-		}
-
-		validateExplicitThermalInitializationVersions();
-	}
-
-	private static void validateExplicitThermalInitializationVersions() throws Exception {
-		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
-		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
-		ThermalRegistry thermal = productionThermalRegistry(chemistry, granular);
-		for (int sourceVersion : List.of(1, 2, 3, 5)) {
-			Path root = Files.createTempDirectory(Path.of("."), "thermal-init-v" + sourceVersion + "-");
-			FluidRegion source = populatedRegion(UUID.randomUUID());
-			RegionState old;
-			if (sourceVersion == 1) old = RegionState.capture(source, 1L);
-			else {
-				bindDefaultMaterials(source);
-				if (sourceVersion >= 3) source.domain().bindChemistry(chemistry);
-				if (sourceVersion == 5) {
-					source.domain().bindGranular(granular, source.domain().materialRegistry());
-					old = RegionState.captureGranular(source, 1L);
-				} else if (sourceVersion == 3) old = RegionState.captureChemical(source, 1L);
-				else old = RegionState.captureMaterial(source, 1L);
-			}
-			new RegionStateFiles(root, chemistry, granular, thermal, gas).publish(old);
-			FluidRegionManager manager = manager();
-			FluidRegionPersistence persistence = new FluidRegionPersistence(root, true, true, chemistry,
-					true, granular, true, true, thermal, gas);
-			check(persistence.loadMetadata(manager).isEmpty(), "v" + sourceVersion + " initialization source was locked");
-			FluidRegion admitted = manager.regions().getFirst();
-			long initialized = persistence.initializeThermal(admitted, 310.0, "test:operator");
-			check(initialized == 2L && admitted.solverLoaded() && admitted.paused()
-					&& admitted.domain().hasChemistryState() && admitted.domain().hasGranularState()
-					&& admitted.domain().hasThermalState(),
-					"v" + sourceVersion + " did not become one complete paused v7 generation");
-			RegionState v7 = new RegionStateFiles(root, chemistry, granular, thermal, gas).read(admitted.id());
-			ThermalInitializationRecord evidence = v7.reconstructThermalInitialization();
-			check(v7.manifest().formatVersion() == 7 && evidence != null
-					&& evidence.sourceFormatVersion() == sourceVersion
-					&& evidence.initialTemperatureBits() == Double.doubleToRawLongBits(310.0)
-					&& evidence.gasBootstrap()
-					== ThermalInitializationRecord.GasBootstrap.CURRENT_GEOMETRY_AMBIENT_V1
-					&& evidence.operatorMetadata().equals("test:operator"),
-					"v" + sourceVersion + " initialization evidence was incomplete");
-			check(persistence.checkpoint(admitted) == 3L, "initialized v7 did not accept a later checkpoint");
-			RegionState next = new RegionStateFiles(root, chemistry, granular, thermal, gas).read(admitted.id());
-			check(evidence.equals(next.reconstructThermalInitialization()),
-					"v" + sourceVersion + " initialization evidence was not inherited by later v7");
-			FluidRegionManager reloadedManager = manager();
-			FluidRegionPersistence reloadedPersistence = new FluidRegionPersistence(root, true, true, chemistry,
-					true, granular, true, true, thermal, gas);
-			check(reloadedPersistence.loadMetadata(reloadedManager).isEmpty(),
-					"v" + sourceVersion + " initialized v7 failed admission after restart");
-			FluidRegion reloaded = reloadedManager.regions().getFirst(); reloadedPersistence.restore(reloaded);
-			check(evidence.equals(reloaded.thermalInitializationRecord()),
-					"v" + sourceVersion + " initialization evidence was lost during restart restore");
-		}
-
-		Path failureRoot = Files.createTempDirectory(Path.of("."), "thermal-init-failure-");
-		FluidRegion failureSource = populatedRegion(UUID.randomUUID()); bindDefaultMaterials(failureSource);
-		new RegionStateFiles(failureRoot, chemistry, granular, thermal, gas)
-				.publish(RegionState.captureMaterial(failureSource, 1L));
-		FluidRegionManager failureManager = manager();
-		FluidRegionPersistence failurePersistence = new FluidRegionPersistence(failureRoot, true, true, chemistry,
-				true, granular, true, true, thermal, gas);
-		check(failurePersistence.loadMetadata(failureManager).isEmpty(), "failed-init source was not admitted");
-		FluidRegion failed = failureManager.regions().getFirst();
-		try {
-			failurePersistence.initializeThermal(failed, 700.0, "test:operator");
-			throw new AssertionError("out-of-range initialization temperature was accepted");
-		} catch (IllegalArgumentException expected) { }
-		RegionState stillOld = new RegionStateFiles(failureRoot, chemistry, granular, thermal, gas).read(failed.id());
-		check(stillOld.manifest().formatVersion() == 2 && stillOld.manifest().checkpointGeneration() == 1L
-				&& !failed.solverLoaded(), "failed initialization changed HEAD or retained guessed thermal truth");
 	}
 
 	private static ThermalRegistry productionThermalRegistry() {
@@ -180,7 +91,7 @@ public final class M7RegionChemistryPersistenceValidation {
 	) {
 		List<ThermalMaterialDefinition> definitions = new java.util.ArrayList<>();
 		java.util.Map<String, String> liquidHosts = new java.util.HashMap<>();
-		for (var liquid : BuiltinFluidMaterials.M3_PALETTE) {
+		for (var liquid : BuiltinFluidMaterials.DEFAULT_PALETTE) {
 			String id = "test:thermal/" + liquid.id().substring(liquid.id().indexOf(':') + 1);
 			liquidHosts.put(liquid.id(), id);
 			definitions.add(new ThermalMaterialDefinition(id,
@@ -218,106 +129,42 @@ public final class M7RegionChemistryPersistenceValidation {
 				granular == null ? "" : granular.fingerprint());
 	}
 
-	private static void validateGranularV5FeatureGateAndMigration() throws Exception {
+	private static void validateGranularFeatureLayout() throws Exception {
 		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		for (int sourceVersion = 1; sourceVersion <= 3; sourceVersion++) {
-			Path root = Files.createTempDirectory(Path.of("."), "granular-migration-v" + sourceVersion + "-");
-			UUID id = UUID.randomUUID(); FluidRegion source = populatedRegion(id);
-			RegionState old;
-			if (sourceVersion == 1) old = RegionState.capture(source, 1L);
-			else {
-				bindDefaultMaterials(source);
-				if (sourceVersion == 3) { source.domain().bindChemistry(chemistry); old = RegionState.captureChemical(source, 1L); }
-				else old = RegionState.captureMaterial(source, 1L);
-			}
-			RegionStateFiles initialFiles = sourceVersion == 3 ? new RegionStateFiles(root, chemistry) : new RegionStateFiles(root);
-			initialFiles.publish(old);
-			FluidRegionManager manager = manager();
-			FluidRegionPersistence persistence = new FluidRegionPersistence(root, true, true, chemistry, true, granular, true);
-			check(persistence.loadMetadata(manager).isEmpty(), "legacy checkpoint was locked before v5 migration");
-			FluidRegion admitted = manager.regions().getFirst(); persistence.restore(admitted);
-			check(admitted.solverLoaded() && admitted.domain().hasChemistryState()
-					&& admitted.domain().hasGranularState() && admitted.domain().precipitationEnabled()
-					&& admitted.checkpointGeneration() == 2L,
-					"v" + sourceVersion + " checkpoint did not migrate atomically to granular v5");
-			RegionState migrated = new RegionStateFiles(root, chemistry, granular).read(id);
-			check(migrated.manifest().formatVersion() == 5 && migrated.manifest().hasChemicalState()
-					&& migrated.reconstructGranular(granular).totalSolidVolumeSvq() == 0L,
-					"v" + sourceVersion + " migration did not publish complete empty-granular v5");
-		}
-
 		Path gateRoot = Files.createTempDirectory(Path.of("."), "granular-gate-off-");
 		FluidRegion v5 = populatedRegion(UUID.randomUUID()); bindDefaultMaterials(v5);
+		v5.domain().bindChemistry(chemistry);
 		v5.domain().bindGranular(granular, v5.domain().materialRegistry());
-		new RegionStateFiles(gateRoot, null, granular).publish(RegionState.captureGranular(v5, 1L));
+		new RegionStateFiles(gateRoot, chemistry, granular).publish(RegionState.captureGranular(v5, 1L));
+		FluidRegionManager currentManager = manager();
+		FluidRegionPersistence current = new FluidRegionPersistence(gateRoot, true, true, chemistry, true, granular, true);
+		check(current.loadMetadata(currentManager).isEmpty(), "current granular layout was locked");
+		FluidRegion restored = currentManager.regions().getFirst(); current.restore(restored);
+		check(restored.domain().hasChemistryState() && restored.domain().hasGranularState()
+				&& restored.domain().precipitationEnabled(), "current granular layout did not restore");
 		FluidRegionManager gateManager = manager();
 		List<String> issues = new FluidRegionPersistence(gateRoot, true, false, null, false, null).loadMetadata(gateManager);
 		check(gateManager.regions().isEmpty() && !issues.isEmpty(),
 				"granular-off discovery did not preserve and lock region-state v5");
 	}
 
-	private static void validateFeatureGateAndMigration() throws Exception {
+	private static void validateChemicalFeatureLayout() throws Exception {
 		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
-		for (int sourceVersion = 1; sourceVersion <= 2; sourceVersion++) {
-			Path root = Files.createTempDirectory(Path.of("."), "chemical-migration-v" + sourceVersion + "-");
-			UUID id = UUID.randomUUID();
-			FluidRegion source = populatedRegion(id);
-			RegionState old;
-			if (sourceVersion == 1) old = RegionState.capture(source, 1L);
-			else {
-				bindDefaultMaterials(source);
-				old = RegionState.captureMaterial(source, 1L);
-			}
-			new RegionStateFiles(root).publish(old);
-			FluidRegionManager manager = manager();
-			FluidRegionPersistence persistence = new FluidRegionPersistence(root, true, true, chemistry);
-			check(persistence.loadMetadata(manager).isEmpty(), "legacy checkpoint was locked before v3 migration");
-			FluidRegion admitted = manager.regions().getFirst();
-			persistence.restore(admitted);
-			check(admitted.solverLoaded() && admitted.domain().hasChemistryState()
-					&& admitted.checkpointGeneration() == 2L,
-					"v" + sourceVersion + " checkpoint did not migrate atomically to live chemistry v3");
-			RegionState migrated = new RegionStateFiles(root, chemistry).read(id);
-			check(migrated.manifest().formatVersion() == 3 && migrated.manifest().checkpointGeneration() == 2L,
-					"v" + sourceVersion + " migration did not publish a complete v3 generation");
-			assertChemicalStateEquals(admitted.domain().exportChemicalParticleState(), migrated.reconstructChemical(chemistry));
-		}
-
 		Path gateRoot = Files.createTempDirectory(Path.of("."), "chemical-gate-off-");
 		FluidRegion chemical = populatedRegion(UUID.randomUUID());
 		bindDefaultMaterials(chemical);
 		chemical.domain().bindChemistry(chemistry);
 		new RegionStateFiles(gateRoot, chemistry).publish(RegionState.captureChemical(chemical, 1L));
+		FluidRegionManager currentManager = manager();
+		FluidRegionPersistence current = new FluidRegionPersistence(gateRoot, true, true, chemistry);
+		check(current.loadMetadata(currentManager).isEmpty(), "current chemical layout was locked");
+		FluidRegion restored = currentManager.regions().getFirst(); current.restore(restored);
+		assertChemicalStateEquals(chemical.domain().exportChemicalParticleState(), restored.domain().exportChemicalParticleState());
 		FluidRegionManager gateManager = manager();
 		List<String> issues = new FluidRegionPersistence(gateRoot, true, false, null).loadMetadata(gateManager);
 		check(gateManager.regions().isEmpty() && issues.stream().anyMatch(issue -> issue.contains("v3")),
 				"chemistry-off discovery did not preserve and lock region-state v3");
-	}
-
-	private static void validateAtomicFaultBoundary() throws Exception {
-		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
-		for (RegionStateFiles.FaultPoint point : RegionStateFiles.FaultPoint.values()) {
-			Path root = Files.createTempDirectory(Path.of("."), "v3-fault-" + point.name().toLowerCase() + "-");
-			FluidRegion fixture = populatedRegion(UUID.randomUUID());
-			bindDefaultMaterials(fixture);
-			RegionState v2 = RegionState.captureMaterial(fixture, 1L);
-			RegionStateFiles files = new RegionStateFiles(root, chemistry);
-			files.publish(v2);
-			fixture.domain().bindChemistry(chemistry);
-			RegionState v3 = RegionState.captureChemical(fixture, 2L);
-			try {
-				files.publish(v3, (observed, path) -> {
-					if (observed == point) throw new IOException("injected " + point);
-				});
-				throw new AssertionError("v3 migration fault point did not interrupt publication: " + point);
-			} catch (IOException expected) { }
-			RegionState visible = new RegionStateFiles(root, chemistry).read(fixture.id());
-			long expectedGeneration = point == RegionStateFiles.FaultPoint.AFTER_HEAD_PUBLISH ? 2L : 1L;
-			check(visible.manifest().checkpointGeneration() == expectedGeneration
-					&& visible.manifest().formatVersion() == (expectedGeneration == 2L ? 3 : 2),
-					"v3 migration fault exposed a mixed generation at " + point);
-		}
 	}
 
 	private static FluidRegionManager manager() {
@@ -353,7 +200,7 @@ public final class M7RegionChemistryPersistenceValidation {
 		}
 		region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(),
-				totalMass, BuiltinFluidMaterials.M3_PALETTE, positions, pure.copyParticleVelocities(), pure.copySolidMask(),
+				totalMass, BuiltinFluidMaterials.DEFAULT_PALETTE, positions, pure.copyParticleVelocities(), pure.copySolidMask(),
 				mass, new int[pure.particleCount()]));
 	}
 
@@ -368,7 +215,7 @@ public final class M7RegionChemistryPersistenceValidation {
 				&& expected.residualLedgerBits() == actual.residualLedgerBits()
 				&& expected.externalSource().groups().equals(actual.externalSource().groups())
 				&& expected.escapedSink().groups().equals(actual.escapedSink().groups()),
-				"chemical state changed across migration persistence");
+				"chemical state changed across persistence");
 	}
 
 	private static void check(boolean condition, String message) {

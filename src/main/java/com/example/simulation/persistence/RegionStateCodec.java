@@ -23,10 +23,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
-/** Strict, exact-version-dispatched NBT codec for region-state v1 through v7. */
+/** Strict NBT codec for the feature layouts written by the current runtime. */
 final class RegionStateCodec {
-	static final int MIN_FORMAT_VERSION = 1;
-	static final int MAX_FORMAT_VERSION = 7;
 	static final int MAX_MATERIALS = 256;
 	static final int MAX_SECTIONS = 4_096;
 
@@ -46,8 +44,7 @@ final class RegionStateCodec {
 			root.putLong("MassBits", manifest.totalMassBits());
 			root.put("MaterialLedgers", encodeMaterialLedgers(manifest.materialLedgers()));
 		}
-		if (manifest.formatVersion() == 4 || manifest.formatVersion() == 5
-				|| manifest.formatVersion() == 6 || manifest.formatVersion() == 7) {
+		if (manifest.formatVersion() == 5 || manifest.formatVersion() == 7) {
 			root.putBoolean("ChemistryPresent", manifest.hasChemicalState());
 		}
 		if (manifest.hasChemicalState()) {
@@ -113,8 +110,7 @@ final class RegionStateCodec {
 		long[] chemicalSpeciesTotals = new long[0];
 		long chemicalResidualBits = 0L;
 		boolean chemicalState = identity.version() == 3;
-		if (identity.version() == 4 || identity.version() == 5
-				|| identity.version() == 6 || identity.version() == 7) {
+		if (identity.version() == 5 || identity.version() == 7) {
 			require(root, "ChemistryPresent", Tag.TAG_BYTE);
 			chemicalState = root.getBooleanOr("ChemistryPresent", false);
 		}
@@ -154,8 +150,7 @@ final class RegionStateCodec {
 			root.putLongArray("MassBits", doubleBits(section.markerMass()));
 			root.putIntArray("MaterialPaletteIndices", section.materialPaletteIndex());
 		}
-		if (section.formatVersion() == 4 || section.formatVersion() == 5
-				|| section.formatVersion() == 6 || section.formatVersion() == 7) {
+		if (section.formatVersion() == 5 || section.formatVersion() == 7) {
 			root.putBoolean("ChemistryPresent", section.hasChemicalState());
 		}
 		if (section.hasChemicalState()) {
@@ -188,8 +183,7 @@ final class RegionStateCodec {
 		int[] chemicalMixtureIndex = new int[0]; byte[] indicator = new byte[0];
 		long[] chemicalSpeciesTotals = new long[0]; long chemicalResidualBits = 0L;
 		boolean chemicalState = identity.version() == 3;
-		if (identity.version() == 4 || identity.version() == 5
-				|| identity.version() == 6 || identity.version() == 7) {
+		if (identity.version() == 5 || identity.version() == 7) {
 			require(root, "ChemistryPresent", Tag.TAG_BYTE);
 			chemicalState = root.getBooleanOr("ChemistryPresent", false);
 		}
@@ -227,7 +221,7 @@ final class RegionStateCodec {
 	private static Identity decodeIdentity(CompoundTag tag, String context) throws IOException {
 		require(tag, "Version", Tag.TAG_INT); require(tag, "Palette", Tag.TAG_INT);
 		int version = tag.getIntOr("Version", -1), palette = tag.getIntOr("Palette", -1);
-		if (version < MIN_FORMAT_VERSION || version > MAX_FORMAT_VERSION) {
+		if (version != 1 && version != 2 && version != 3 && version != 5 && version != 7) {
 			throw new IOException("Unsupported region-state " + context + " version " + version);
 		}
 		if (palette != version) throw new IOException("Unsupported region-state palette " + palette + " for version " + version);

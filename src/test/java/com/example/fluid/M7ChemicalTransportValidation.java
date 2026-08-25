@@ -22,7 +22,7 @@ import java.util.Map;
 public final class M7ChemicalTransportValidation {
 	private static final FluidSolverConfig STATIC_CONFIG = new FluidSolverConfig(
 			1.0F, 1_000.0F, 0.0F, 0.01F, 64, 1.0E-6F, 0.45F, 0.002F, 0.0F);
-	private static final FluidMaterialRegistry MATERIALS = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+	private static final FluidMaterialRegistry MATERIALS = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 	private static final ChemicalRegistry CHEMISTRY = BuiltinChemicalDefinitions.REGISTRY;
 
 	private M7ChemicalTransportValidation() { }
@@ -78,7 +78,7 @@ public final class M7ChemicalTransportValidation {
 
 	private static void validateMissingPhaseRejectedBeforeBinding() {
 		FluidMaterialRegistry materials = new FluidMaterialRegistry(List.of(
-				BuiltinFluidMaterials.M3_PALETTE.getFirst(),
+				BuiltinFluidMaterials.DEFAULT_PALETTE.getFirst(),
 				new FluidMaterial("test:missing_phase", 1_000.0, "test:missing_phase", 0.0, Math.PI / 2.0)));
 		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 64);
 		domain.setVolume(1, 1, 1, 0.125F);

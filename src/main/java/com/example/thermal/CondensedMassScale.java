@@ -1,7 +1,7 @@
 package com.example.thermal;
 
 /**
- * The single M9 boundary between frozen M3/M8 solver mass weights and SI kilograms.
+ * The single boundary between solver mass weights and SI kilograms.
  * Gas inventories are already kilograms and must never pass through this scale.
  */
 public record CondensedMassScale(double cubicMetersPerNormalizedCellVolume) {

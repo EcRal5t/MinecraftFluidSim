@@ -9,19 +9,19 @@ import java.util.Objects;
 import java.util.TreeMap;
 
 /**
- * Conservative gas region network with a legacy isothermal equation of state and
- * finite-rate orifice transport. M9 may supply non-isothermal pressure, density and
+ * Conservative gas region network with an isothermal equation of state and
+ * finite-rate orifice transport. Thermal state may supply non-isothermal pressure, density and
  * a jointly validated energy-transfer commit without moving thermal truth into this owner.
  *
  * <p>Inventories are stable component groups with independent standard-state volume,
  * mass and optional species columns. Every quantum originates from the ambient reservoir,
- * so the legacy total identity {@code sealed + vented == drawnFromAmbient} and the
+ * so the total identity {@code sealed + vented == drawnFromAmbient} and the
  * per-component volume/species identities hold exactly
  * across node creation, injection, orifice transport, merging, splitting and
  * venting. Pressures are derived gauge pressures in solver units (pascal) with
  * ambient at exactly zero; ambient is id {@link #AMBIENT_NODE} with unbounded
  * inventory and never stores state. Persistence captures this runtime owner through the
- * separately gated region-state v4 codec; this type itself is not a wire format.</p>
+ * thermal region payload; this type itself is not a wire format.</p>
  */
 public final class AirNetwork {
 	public interface NodeThermodynamics {
@@ -42,7 +42,7 @@ public final class AirNetwork {
 	public static final double MIN_GAUGE_PRESSURE = -0.99 * REFERENCE_PRESSURE;
 	/** Available-volume regularisation (m³) for the isothermal state equation; equal to one nanovolume quantum so a newly discovered cavity always starts at gauge zero. */
 	public static final double MIN_AVAILABLE_VOLUME = 1.0E-9;
-	/** Constant air density (kg/m³) used by orifice flow; refined in M9. */
+	/** Constant air density (kg/m³) used by isothermal orifice flow. */
 	public static final double AIR_DENSITY = 1.2;
 	/** The ambient reservoir: gauge pressure zero, unbounded inventory, never stored as a node. */
 	public static final int AMBIENT_NODE = 0;
@@ -512,21 +512,6 @@ public final class AirNetwork {
 			massRoundoff = SignedDyadic.ZERO; residualRoundoff = SignedDyadic.ZERO; nextNodeId = 1;
 			throw new IllegalArgumentException("Restored gas audit does not close");
 		}
-	}
-
-	/**
-	 * Carries an exact source/sink turnover that has no remaining live inventory. This changes only
-	 * cumulative audit history; topology, inventories and roundoff columns remain untouched.
-	 */
-	public void carryClosedAuditHistory(GasAuditLedger history) {
-		Objects.requireNonNull(history, "history");
-		if (history.entries().isEmpty()) return;
-		if (!auditClosed()) throw new IllegalStateException("Gas audit must close before carrying history");
-		GasAuditLedger combinedSource = externalSource.add(history);
-		GasAuditLedger combinedSink = escapedSink.add(history);
-		externalSource = combinedSource;
-		escapedSink = combinedSink;
-		if (!auditClosed()) throw new IllegalStateException("Carried gas audit history does not close");
 	}
 
 	public long sealedInventoryNanos() {

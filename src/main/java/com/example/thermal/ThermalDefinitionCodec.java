@@ -10,7 +10,7 @@ import java.io.Reader;
 import java.util.ArrayList;
 import java.util.Set;
 
-/** Strict JSON codecs for world-snapshotted M9 thermal definitions. All floating values are JSON strings. */
+/** Strict JSON codecs for world-snapshotted thermal definitions. All floating values are JSON strings. */
 public final class ThermalDefinitionCodec {
 	public static final String MATERIALS_PATH = "realwater/thermal_materials";
 	public static final String SPECIES_PATH = "realwater/thermal_species";

@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Orthogonal raw-U column aligned with M8 active ordinals and canonical deposit identities. */
+/** Orthogonal raw-U column aligned with active granular ordinals and canonical deposit identities. */
 public final class GranularEnergyColumn {
 	public record DepositKey(int cell, int materialHandle, int compositionHandle)
 			implements Comparable<DepositKey> {
@@ -74,7 +74,7 @@ public final class GranularEnergyColumn {
 		if (activeCount == maximumActive) throw new IllegalStateException("Granular thermal active budget exceeded");
 	}
 
-	/** Mirrors M8 swap removal and returns the removed carrier energy. */
+	/** Mirrors granular swap removal and returns the removed carrier energy. */
 	public double removeActiveSwap(int index) {
 		requireActive(index);
 		double removed = activeEnergy[index]; int last = --activeCount;
@@ -83,7 +83,7 @@ public final class GranularEnergyColumn {
 		return removed;
 	}
 
-	/** Adds the second energy into the first, then mirrors the M8 second-index swap removal. */
+	/** Adds the second energy into the first, then mirrors the granular second-index swap removal. */
 	public void mergeActive(int first, int second) {
 		double merged = requireMergeActive(first, second);
 		int last = activeCount - 1;
@@ -130,7 +130,7 @@ public final class GranularEnergyColumn {
 		if (current != null) finiteAdd(current, energy);
 	}
 
-	/** Proportional exact-SVQ take; caller supplies the M8 group's pre-commit SVQ truth. */
+	/** Proportional exact-SVQ take; caller supplies the group's pre-commit SVQ truth. */
 	public double takeDeposit(DepositKey key, long takenSvq, long totalSvq) {
 		double current = depositEnergy(key);
 		double removed = previewDepositTake(key, takenSvq, totalSvq);

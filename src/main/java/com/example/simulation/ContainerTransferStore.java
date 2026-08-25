@@ -25,7 +25,8 @@ import java.util.UUID;
  */
 public final class ContainerTransferStore {
 private static final String ROOT_DIRECTORY_NAME = "container-transfer";
-private static final int FORMAT_VERSION = 5;
+private static final int MATERIAL_LAYOUT = 4;
+private static final int THERMAL_LAYOUT = 5;
 private static final long MAX_COMPRESSED_NBT_BYTES = 4L * 1024L * 1024L;
 private static final String TEMP_SUFFIX = ".tmp";
 
@@ -180,7 +181,7 @@ throw denied;
 private static CompoundTag encode(ContainerTransferJournal journal) throws IOException {
 validateTransferShape(journal, true);
 CompoundTag root = new CompoundTag();
-int version = journal.requiresThermalRegistry() ? 5 : 4;
+int version = journal.requiresThermalRegistry() ? THERMAL_LAYOUT : MATERIAL_LAYOUT;
 root.putInt("Version", version);
 root.putLong("TxUuidMost", journal.transactionId().getMostSignificantBits());
 root.putLong("TxUuidLeast", journal.transactionId().getLeastSignificantBits());
@@ -197,7 +198,7 @@ switch (journal.resourceKind()) {
 case FLUID_NANOS -> root.putLong("VolumeNanos", journal.volumeNanos());
 case GRANULAR_SVQ -> root.putLong("SolidVolumeSvq", journal.solidVolumeSvq());
 }
-if (version == 5) {
+if (version == THERMAL_LAYOUT) {
 root.putString("ThermalRegistryFingerprint", journal.thermalTransfer().registryFingerprint());
 root.putLong("ThermalEnergyBits", journal.thermalTransfer().internalEnergyBits());
 }
@@ -234,7 +235,7 @@ return root;
 private static ContainerTransferJournal decode(CompoundTag root) throws IOException {
 requireType(root, "Version", Tag.TAG_INT);
 int version = root.getIntOr("Version", -1);
-if (version < 1 || version > FORMAT_VERSION) {
+if (version != MATERIAL_LAYOUT && version != THERMAL_LAYOUT) {
 throw new IOException("Unsupported container transfer WAL version " + version);
 }
 
@@ -263,12 +264,6 @@ ContainerTransferJournal.ResourceKind resourceKind;
 long volumeNanos = -1L;
 long solidVolumeSvq = -1L;
 ContainerTransferJournal.ThermalTransfer thermalTransfer = null;
-if (version < 4) {
-resourceKind = ContainerTransferJournal.ResourceKind.FLUID_NANOS;
-requireType(root, "VolumeNanos", Tag.TAG_LONG);
-volumeNanos = root.getLongOr("VolumeNanos", -1L);
-if (volumeNanos <= 0L) throw new IOException("Container transfer WAL volume is missing or invalid");
-} else {
 requireType(root, "ResourceKind", Tag.TAG_STRING);
 resourceKind = parseResourceKind(root.getStringOr("ResourceKind", ""));
 if (resourceKind == ContainerTransferJournal.ResourceKind.FLUID_NANOS) {
@@ -280,9 +275,8 @@ requireType(root, "SolidVolumeSvq", Tag.TAG_LONG);
 if (root.get("VolumeNanos") != null) throw new IOException("Granular WAL must not carry liquid-volume truth");
 solidVolumeSvq = root.getLongOr("SolidVolumeSvq", -1L);
 }
-}
 
-if (version >= 5) {
+if (version == THERMAL_LAYOUT) {
 requireType(root, "ThermalRegistryFingerprint", Tag.TAG_STRING);
 requireType(root, "ThermalEnergyBits", Tag.TAG_LONG);
 try {
@@ -292,7 +286,7 @@ root.getStringOr("ThermalRegistryFingerprint", ""), root.getLongOr("ThermalEnerg
 throw new IOException("Container transfer WAL thermal transfer is invalid", invalidThermal);
 }
 } else if (root.get("ThermalRegistryFingerprint") != null || root.get("ThermalEnergyBits") != null) {
-throw new IOException("Legacy container transfer WAL carries v5 thermal fields");
+throw new IOException("Material-only container transfer WAL carries thermal fields");
 }
 
 requireType(root, "ActorType", Tag.TAG_STRING);
@@ -328,17 +322,14 @@ ContainerTransferJournal.ItemFingerprint afterItem = getFingerprint(root, "After
 
 requireType(root, "Phase", Tag.TAG_STRING);
 ContainerTransferJournal.Phase phase = parsePhase(root.getStringOr("Phase", ""));
-long targetManifestChecksum = -1L;
-if (version >= 3) {
 requireType(root, "TargetManifestChecksum", Tag.TAG_LONG);
-targetManifestChecksum = root.getLongOr("TargetManifestChecksum", -1L);
-}
+long targetManifestChecksum = root.getLongOr("TargetManifestChecksum", -1L);
 
 ContainerTransferJournal journal = new ContainerTransferJournal(
 transactionId, regionId, dimensionId, baseGeneration, targetGeneration,
 operation, resourceKind, volumeNanos, solidVolumeSvq, thermalTransfer,
 actor, beforeItem, afterItem, targetManifestChecksum, phase);
-validateTransferShape(journal, version >= 3);
+validateTransferShape(journal, true);
 return journal;
 }
 
@@ -350,7 +341,7 @@ root.putLong(prefix + "Nanos", item.nanos());
 root.putLong(prefix + "SolidVolumeSvq", item.solidVolumeSvq());
 if (item.materialId() != null) root.putString(prefix + "MaterialId", item.materialId());
 root.putLong(prefix + "MassBits", item.massBits());
-if (version >= 5 && item.thermalContents() != null) {
+if (version == THERMAL_LAYOUT && item.thermalContents() != null) {
 root.putString(prefix + "ThermalContents", item.thermalContents());
 }
 }
@@ -360,26 +351,15 @@ requireType(root, prefix + "Kind", Tag.TAG_STRING);
 requireType(root, prefix + "Nanos", Tag.TAG_LONG);
 ContainerTransferJournal.ItemKind kind = parseItemKind(root.getStringOr(prefix + "Kind", ""));
 long nanos = root.getLongOr(prefix + "Nanos", 0L);
-long solidVolumeSvq = -1L;
-if (version >= 4) {
 requireType(root, prefix + "SolidVolumeSvq", Tag.TAG_LONG);
-solidVolumeSvq = root.getLongOr(prefix + "SolidVolumeSvq", -1L);
-}
+long solidVolumeSvq = root.getLongOr(prefix + "SolidVolumeSvq", -1L);
 String materialId = root.getStringOr(prefix + "MaterialId", null);
-long massBits;
-if (version >= 2) {
 requireType(root, prefix + "MassBits", Tag.TAG_LONG);
-massBits = root.getLongOr(prefix + "MassBits", -1L);
-} else {
-if (kind == ContainerTransferJournal.ItemKind.MATERIAL_BUCKET) {
-throw new IOException("Legacy v1 material-bucket WAL has no independent mass ledger; manual recovery is required");
-}
-massBits = -1L;
-}
+long massBits = root.getLongOr(prefix + "MassBits", -1L);
 String thermalContents = null;
-if (version >= 5) thermalContents = root.getStringOr(prefix + "ThermalContents", null);
+if (version == THERMAL_LAYOUT) thermalContents = root.getStringOr(prefix + "ThermalContents", null);
 else if (root.get(prefix + "ThermalContents") != null) {
-throw new IOException("Legacy item fingerprint carries v5 thermal contents");
+throw new IOException("Material-only item fingerprint carries thermal contents");
 }
 if (kind == ContainerTransferJournal.ItemKind.PARTIAL) {
 if (!com.example.item.ContainerFluidLedger.isPartialBucket(nanos)
@@ -395,10 +375,7 @@ if (materialId == null || nanos <= 0L
 throw new IOException(prefix + " material bucket fingerprint is invalid");
 }
 try {
-com.example.item.FluidMixture mixture = materialId.startsWith("v1;")
-? com.example.item.FluidMixture.decode(materialId)
-: new com.example.item.FluidMixture(java.util.List.of(
-new com.example.item.FluidMixture.Component(materialId, nanos, massBits)));
+com.example.item.FluidMixture mixture = com.example.item.FluidMixture.decode(materialId);
 if (mixture.totalVolumeNanos() != nanos
 || Double.doubleToRawLongBits(mixture.totalMass()) != massBits) {
 throw new IllegalArgumentException("mixture totals disagree with fingerprint");
@@ -407,7 +384,6 @@ throw new IllegalArgumentException("mixture totals disagree with fingerprint");
 throw new IOException(prefix + " material bucket mixture is invalid", invalidMixture);
 }
 } else if (kind == ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET) {
-if (version < 3) throw new IOException("Chemical bucket fingerprint requires container-transfer WAL v3");
 try {
 com.example.item.ChemicalContents contents = com.example.item.ChemicalContents.decode(materialId);
 if (contents.totalVolumeNanos() != nanos || Double.doubleToRawLongBits(contents.totalMass()) != massBits
@@ -418,7 +394,6 @@ throw new IllegalArgumentException("chemical totals disagree with fingerprint");
 throw new IOException(prefix + " chemical bucket fingerprint is invalid", invalidChemical);
 }
 } else if (kind == ContainerTransferJournal.ItemKind.GRANULAR_CONTAINER) {
-if (version < 4) throw new IOException("Granular container fingerprint requires container-transfer WAL v4");
 try {
 com.example.item.GranularContents contents = com.example.item.GranularContents.decode(materialId);
 if (contents.totalSolidVolumeSvq() != solidVolumeSvq
@@ -466,7 +441,7 @@ throw new IOException("Prepared container transfer must not claim an after-item 
 if (journal.phase() == ContainerTransferJournal.Phase.PREPARED) {
 if (journal.targetManifestChecksum() != -1L) throw new IOException("Prepared container transfer cannot bind a target checksum");
 } else if (requireTargetChecksum && journal.targetManifestChecksum() < 0L) {
-throw new IOException("Committed container-transfer WAL v3 must bind the staged manifest checksum");
+throw new IOException("Committed container-transfer WAL must bind the staged manifest checksum");
 }
 
 if (journal.resourceKind() == ContainerTransferJournal.ResourceKind.GRANULAR_SVQ) {
@@ -514,7 +489,7 @@ ContainerTransferJournal.ThermalTransfer transfer = journal.thermalTransfer();
 boolean beforeThermal = journal.beforeItem().thermalContents() != null;
 boolean afterThermal = journal.afterItem().thermalContents() != null;
 if (transfer == null) {
-if (beforeThermal || afterThermal) throw new IOException("v4 WAL item cannot carry ThermalContents v1");
+if (beforeThermal || afterThermal) throw new IOException("Material-only WAL item cannot carry thermal contents");
 return;
 }
 try {

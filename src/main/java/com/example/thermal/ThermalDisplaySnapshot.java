@@ -2,7 +2,7 @@ package com.example.thermal;
 
 import java.util.List;
 
-/** Read-only quantized M9 display state; it is never accepted as inventory or persistence truth. */
+/** Read-only quantized thermal display state; it is never accepted as inventory or persistence truth. */
 public record ThermalDisplaySnapshot(
 		short[] cellTemperatureQ,
 		byte[] coherentFraction,

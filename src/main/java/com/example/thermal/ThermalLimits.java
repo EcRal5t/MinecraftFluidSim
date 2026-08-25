@@ -1,6 +1,6 @@
 package com.example.thermal;
 
-/** Hard allocation and definition budgets for the M9 thermal subsystem. */
+/** Hard allocation and definition budgets for the thermal subsystem. */
 public final class ThermalLimits {
 	public static final int MAX_MATERIALS = 256;
 	public static final int MAX_SEGMENTS_PER_MATERIAL = 16;

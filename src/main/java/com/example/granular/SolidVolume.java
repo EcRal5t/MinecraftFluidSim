@@ -1,6 +1,6 @@
 package com.example.granular;
 
-/** Exact M8 solid-volume units. These constants are valid only for the frozen 0.5 m solver cell. */
+/** Exact solid-volume units. These constants are valid only for the frozen 0.5 m solver cell. */
 public final class SolidVolume {
 	public static final long SVQ_PER_BV = 1L << 27;
 	public static final long SVQ_PER_CELL = 1L << 24;

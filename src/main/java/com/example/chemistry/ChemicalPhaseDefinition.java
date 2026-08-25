@@ -5,7 +5,7 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
-/** M7 liquid chemical overlay bound to one stable mechanical material id. */
+/** Liquid chemical overlay bound to one stable mechanical material id. */
 public record ChemicalPhaseDefinition(
 		String id,
 		String materialId,

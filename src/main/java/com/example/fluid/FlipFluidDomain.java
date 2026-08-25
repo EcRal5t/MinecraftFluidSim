@@ -289,17 +289,11 @@ public final class FlipFluidDomain {
 		airNetwork = new AirNetwork(registry);
 	}
 
-	/** Explicit v1/v2/v3-to-v4 bootstrap: scans current truth and books sealed ambient source once. */
+	/** Initializes gas topology from current carrier geometry and books sealed ambient source once. */
 	public GasStateSnapshot bootstrapGasState(String chemicalRegistryFingerprint) {
 		ensureGrid();
 		refreshGasTopology();
 		return exportGasState(chemicalRegistryFingerprint);
-	}
-
-	/** Preserves a previously closed, inventory-free gas audit across an explicit topology bootstrap. */
-	public void carryClosedGasAuditHistory(GasAuditLedger history) {
-		if (airCellNodeId == null) throw new IllegalStateException("Gas topology has not been explicitly initialized");
-		airNetwork.carryClosedAuditHistory(history);
 	}
 
 	public GasStateSnapshot exportGasState(String chemicalRegistryFingerprint) {
@@ -309,7 +303,7 @@ public final class FlipFluidDomain {
 				chemicalRegistryFingerprint == null ? "" : chemicalRegistryFingerprint);
 	}
 
-	/** Restores a complete v4 gas generation after its matching liquid/material state. */
+	/** Restores complete gas truth after its matching liquid/material state. */
 	public void restoreGasState(GasStateSnapshot state, GasRegistry registry) {
 		if (state == null || registry == null || state.sizeX() != sizeX || state.sizeY() != sizeY || state.sizeZ() != sizeZ
 				|| !state.registryFingerprint().equals(registry.fingerprint())) {
@@ -555,14 +549,14 @@ public final class FlipFluidDomain {
 		precipitationEnabled = enabled;
 	}
 
-	/** Binds the runtime granular registry without changing any v1/v2/v3 handoff or persistence bytes. */
+	/** Binds the runtime granular registry without changing liquid or chemical carrier truth. */
 	public void bindGranular(GranularRegistry registry, FluidMaterialRegistry liquidRegistry) {
 		if (registry == null || liquidRegistry == null) throw new IllegalArgumentException("Granular/liquid registry is missing");
 		if (thermalState != null) {
-			throw new IllegalStateException("M8 state must be bound before a later joint thermal inventory");
+			throw new IllegalStateException("Granular state must be bound before its joint thermal inventory");
 		}
 		if (Float.floatToRawIntBits(config.cellSize()) != Float.floatToRawIntBits(0.5F)) {
-			throw new IllegalArgumentException("M8 granular SVQ currently requires a 0.5 m solver cell");
+			throw new IllegalArgumentException("Granular SVQ requires a 0.5 m solver cell");
 		}
 		bindMaterialRegistry(liquidRegistry);
 		if (granularRegistry != null) {
@@ -623,7 +617,7 @@ public final class FlipFluidDomain {
 		gridDirty = true;
 	}
 
-	/** Inventory-only exact insertion used by M8 fixtures and later transactional service adapters. */
+	/** Inventory-only exact insertion used by fixtures and transactional service adapters. */
 	public GranularInsertion tryInsertExactGranular(
 			int cellX, int cellY, int cellZ, int materialHandle, int compositionHandle,
 			long solidVolumeSvq, double mass
@@ -1261,10 +1255,7 @@ public final class FlipFluidDomain {
 		bindSolidCompositionPoolIfReady();
 	}
 
-	/**
-	 * Binds authoritative M9 thermal state at an explicit operator-supplied initial temperature.
-	 * Production uses this only for a deliberate legacy-region upgrade before committing current thermal state.
-	 */
+	/** Binds authoritative thermal state at an explicit initial temperature. */
 	public void bindThermal(
 			ThermalRegistry registry, FluidMaterialRegistry liquidRegistry, double initialTemperatureK
 	) {
@@ -1278,7 +1269,7 @@ public final class FlipFluidDomain {
 		if (registry == null || liquidRegistry == null) throw new IllegalArgumentException("Thermal/liquid registry is missing");
 		if (!Double.isFinite(initialTemperatureK)) throw new IllegalArgumentException("Initial thermal temperature must be finite");
 		if (Float.floatToRawIntBits(config.cellSize()) != Float.floatToRawIntBits(0.5F)) {
-			throw new IllegalArgumentException("M9 thermal state currently requires a 0.5 m solver cell");
+			throw new IllegalArgumentException("Thermal state requires a 0.5 m solver cell");
 		}
 		bindMaterialRegistry(liquidRegistry);
 		if (thermalState != null) {
@@ -1338,7 +1329,7 @@ public final class FlipFluidDomain {
 		};
 	}
 
-	/** Restores only the orthogonal M9 energy side after material/chemical marker truth is already restored. */
+	/** Restores only the orthogonal energy side after material/chemical marker truth is already restored. */
 	public void restoreThermalParticleState(
 			FlipThermalParticleState state, ThermalRegistry registry
 	) {
@@ -1388,7 +1379,7 @@ public final class FlipFluidDomain {
 		return thermalState.capture(sizeX, sizeY, sizeZ, config.cellSize(), particleCount);
 	}
 
-	/** Explicit heat-reservoir edit used by validation and the administrator-controlled legacy initialization path. */
+	/** Explicit cell-temperature edit used by validation and administrator tools. */
 	public void setThermalTemperatureInCell(int x, int y, int z, double temperatureK) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		thermalState.setTemperatureInCell(cellIndexChecked(x, y, z), temperatureK, thermalMarkerContext());
@@ -2702,7 +2693,7 @@ public final class FlipFluidDomain {
 		gridDirty = true;
 	}
 
-	/** Restores a validated v3 chemical handoff against the authoritative world registry. */
+	/** Restores a validated chemical handoff against the authoritative world registry. */
 	public void restoreChemicalParticleState(FlipChemicalParticleState state, ChemicalRegistry registry) {
 		if (state == null || registry == null) throw new IllegalArgumentException("Chemical restore state/registry is missing");
 		if (!state.registryFingerprint().equals(registry.fingerprint())
@@ -3070,7 +3061,7 @@ public final class FlipFluidDomain {
 		return result;
 	}
 
-	/** In-memory M3 assignment only; callers outside the fluid package cannot create world material state yet. */
+	/** In-memory material assignment only; callers outside the fluid package cannot create world material state. */
 	void setMaterialInCell(int x, int y, int z, FluidMaterialRegistry registry, int materialHandle) {
 		if (registry == null) throw new IllegalArgumentException("Material registry must not be null");
 		registry.material(materialHandle);
@@ -3195,7 +3186,7 @@ public final class FlipFluidDomain {
 		return result;
 	}
 
-	/** Read-only M3 rendering reconstruction; it contains no exact inventory and is not a wire format. */
+	/** Read-only material rendering reconstruction; it contains no exact inventory and is not a wire format. */
 	public FluidMaterialRenderSnapshot copyMaterialRenderSnapshot() {
 		ensureGrid();
 		if (materialRegistry == null) throw new IllegalStateException("Material render snapshot requires a bound registry");
@@ -3349,7 +3340,7 @@ public final class FlipFluidDomain {
 		gridDirty = true;
 	}
 
-	/** Plans one operator clear across liquid markers and every M9 coherent condensed phase. */
+	/** Plans one operator clear across liquid markers and every coherent condensed phase. */
 	public CondensedClearPlan planRemoveAllCondensedExact() {
 		WaterClearPlan liquid = planRemoveAllWaterExact();
 		List<CoherentPhaseStore.Group> groups = thermalState == null
@@ -3476,7 +3467,7 @@ public final class FlipFluidDomain {
 
 
 	/**
-	 * M6 container transfer primitive: all-or-nothing insertion of an exact volume near the
+	 * Container transfer primitive: all-or-nothing insertion of an exact volume near the
 	 * target. Cells, pieces and the marker budget are planned before any state changes, so a
 	 * refusal leaves the domain untouched. Pieces are {@code PARTICLE_VOLUME} chunks plus one
 	 * float remainder; the returned volume is the exact double sum of the stored pieces.
@@ -3894,7 +3885,7 @@ public final class FlipFluidDomain {
 	}
 
 	/**
-	 * M6 container transfer primitive: all-or-nothing extraction of an exact volume near the
+	 * Container transfer primitive: all-or-nothing extraction of an exact volume near the
 	 * target. Availability is verified in double precision first; removal takes whole markers and
 	 * splits the last one, so the returned volume is the exact double sum of real marker
 	 * decreases and exceeds the request by at most one ulp of the split marker.
@@ -4312,7 +4303,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	/**
-	 * Refreshes the gas network from the current grid: rescans cavity topology, migrates
+	 * Refreshes the gas network from the current grid: rescans cavity topology, transfers
 	 * sealed inventories onto the new slots (majority mapping, proportional split with exact
 	 * remainder on a genuine pinch), refreshes available volumes and geometric orifice edges,
 	 * then advances finite-rate orifice transport. New cavities start at ambient equilibrium;
@@ -5689,7 +5680,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	 * Divergence of the free-surface pressure-jump boundary velocity. This is the RHS source that makes
 	 * the ghost-fluid projection consistent with {@code p_interface = sigma * kappa + p_gas} at every
 	 * open air face; the gas term reads the sealed cavity that owns the air cell and stays exactly
-	 * zero for ambient air, so the M4 path is bit-identical whenever no sealed cavity exists.
+	 * zero for ambient air, so the liquid-only path is bit-identical whenever no sealed cavity exists.
 	 */
 	private float surfaceTensionBoundaryDivergence(int index, float dt) {
 		if (!surfaceTensionActive && !gasPressureActive) return 0.0F;

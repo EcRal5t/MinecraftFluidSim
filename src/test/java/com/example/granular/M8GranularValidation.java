@@ -45,7 +45,7 @@ public final class M8GranularValidation {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		FlipFluidDomain domain = new FlipFluidDomain(6, 6, 6, config, 6 * 6 * 6 * 8);
 		domain.bindGranular(registry, liquids); domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		long reactiveSvq = 4_096L;
@@ -112,7 +112,7 @@ public final class M8GranularValidation {
 	private static void phaseTransferPrecipitatesAndDissolves() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
 		// Real transported/reseeded marker volumes are arbitrary IEEE-754 dyadics, not necessarily
@@ -565,7 +565,7 @@ public final class M8GranularValidation {
 	private static void porousBedPreservesHydrostatics() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				200, 1.0e-6F, 0.45F, 2.0e-3F, 0.8F);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		int sizeX = 2, sizeY = 5, sizeZ = 2;
 		FlipFluidDomain domain = new FlipFluidDomain(sizeX, sizeY, sizeZ, config, sizeX * sizeY * sizeZ * 8);
@@ -707,7 +707,7 @@ public final class M8GranularValidation {
 	private static void solverCouplingPreservesInventories(int steps) {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				200, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FlipFluidDomain domain = new FlipFluidDomain(4, 8, 4, config, 4 * 8 * 4 * 8);
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 4; x++) {
@@ -742,7 +742,7 @@ public final class M8GranularValidation {
 	private static void wholeBucketCongestionRemainsLocal(int steps) {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
 		domain.bindGranular(granular, liquids);
@@ -835,7 +835,7 @@ public final class M8GranularValidation {
 	private static void singleBucketPourSettlesWithinTenSeconds() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
 		domain.bindGranular(granular, liquids);
@@ -951,7 +951,7 @@ public final class M8GranularValidation {
 			baseline.setVolume(x, y, z, 1.0F); granular.setVolume(x, y, z, 1.0F);
 		}
 		granular.bindGranular(BuiltinGranularDefinitions.createRegistry(),
-				new FluidMaterialRegistry(BuiltinFluidMaterials.M3_PALETTE));
+				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 		for (int warmup = 0; warmup < 8; warmup++) { baseline.step(); granular.step(); }
 		long[] baselineNanos = new long[samples], granularNanos = new long[samples];
 		for (int sample = 0; sample < samples; sample++) {

@@ -6,7 +6,7 @@ import java.util.Objects;
 public final class FluidProtocol {
 	public static final int MIN_VERSION = 1;
 	public static final int MAX_VERSION = 5;
-	/** Live play traffic remains v1 until the M3 feature gate registers and selects v2. */
+	/** Pure-water traffic layout selected when material gameplay is disabled. */
 	public static final int CURRENT_VERSION = 1;
 	public static final int MATERIAL_SNAPSHOT_VERSION = 2;
 	public static final int CHEMICAL_SNAPSHOT_VERSION = 3;
@@ -58,7 +58,7 @@ public final class FluidProtocol {
 				: serverOffer(materialsEnabled, chemistryEnabled, granularEnabled);
 	}
 
-	/** Standalone M3 offer; the live server does not use it until material gameplay is enabled. */
+	/** Material snapshot offer selected when material gameplay is enabled. */
 	public static Offer materialServerOffer() {
 		return new Offer(MATERIAL_SNAPSHOT_VERSION, MATERIAL_SNAPSHOT_VERSION,
 				REQUIRED_CAPABILITIES | CAP_MATERIAL_SNAPSHOT, 0L);

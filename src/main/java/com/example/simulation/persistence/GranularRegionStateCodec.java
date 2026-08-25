@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Canonical bounded payload nested inside the jointly committed region-state v5 generation. */
+/** Canonical bounded granular payload nested inside a jointly committed region generation. */
 final class GranularRegionStateCodec {
 	static final String MANIFEST_EXTENSION = "realwater:granular_manifest_v1";
 	static final String SECTION_EXTENSION = "realwater:granular_section_v1";
@@ -93,8 +93,7 @@ final class GranularRegionStateCodec {
 			if (input.readInt() != MANIFEST_MAGIC) {
 				throw new IOException("Unknown granular manifest payload");
 			}
-			int payloadVersion = input.readInt();
-			if (payloadVersion != 1 && payloadVersion != PAYLOAD_VERSION) throw new IOException("Unknown granular manifest payload");
+			if (input.readInt() != PAYLOAD_VERSION) throw new IOException("Unknown granular manifest payload");
 			int capabilities = input.readInt();
 			if ((capabilities & ~KNOWN_CAPABILITIES) != 0
 					|| (capabilities & (CAP_MATERIALS | CAP_GRANULAR)) != (CAP_MATERIALS | CAP_GRANULAR)
@@ -136,8 +135,8 @@ final class GranularRegionStateCodec {
 				String id = input.readUTF(); long amount = positive(input.readLong(), "solid species total");
 				if (speciesTotals.put(id, amount) != null) throw new IOException("Duplicate solid species ledger id " + id);
 			}
-			GranularAuditLedger externalSource = payloadVersion >= 2 ? readAudit(input) : GranularAuditLedger.EMPTY;
-			GranularAuditLedger escapedSink = payloadVersion >= 2 ? readAudit(input) : GranularAuditLedger.EMPTY;
+			GranularAuditLedger externalSource = readAudit(input);
+			GranularAuditLedger escapedSink = readAudit(input);
 			int activeCount = bounded(input.readInt(), 0, activeBudget, "active count");
 			int depositCount = bounded(input.readInt(), 0, depositBudget, "deposit group count");
 			int depositCells = bounded(input.readInt(), 0, depositCount, "deposit cell count");
@@ -229,8 +228,7 @@ final class GranularRegionStateCodec {
 			if (input.readInt() != SECTION_MAGIC) {
 				throw new IOException("Unknown granular section payload");
 			}
-			int payloadVersion = input.readInt();
-			if (payloadVersion != 1 && payloadVersion != PAYLOAD_VERSION) throw new IOException("Unknown granular section payload");
+			if (input.readInt() != PAYLOAD_VERSION) throw new IOException("Unknown granular section payload");
 			int activeCount = bounded(input.readInt(), 0, activeBudget, "section active entries");
 			List<ActiveEntry> active = new ArrayList<>(activeCount);
 			for (int index = 0; index < activeCount; index++) {
