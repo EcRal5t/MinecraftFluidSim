@@ -10,11 +10,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-/** Protocol-v5 display payload. Raw U, source/sink/work and exact phase inventories never cross this boundary. */
+/** Thermal display payload. Raw U, source/sink/work and exact phase inventories never cross this boundary. */
 public record FluidThermalSnapshotPayload(
-		int protocolVersion,
+		FluidProtocol.Layout layout,
 		FluidMaterialSnapshotPayload material,
-		int paletteVersion,
 		String registryFingerprint,
 		short[] cellTemperatureQ,
 		byte[] coherentFraction,
@@ -23,10 +22,9 @@ public record FluidThermalSnapshotPayload(
 		FluidChemicalSnapshotPayload chemicalLayer,
 		FluidGranularSnapshotPayload granularLayer
 ) implements CustomPacketPayload {
-	public static final int PALETTE_VERSION = 1;
 	public static final int EMPTY_TEMPERATURE_Q = 0xffff;
 	private static final int MAX_CELLS = 1 << 20;
-	public static final Type<FluidThermalSnapshotPayload> TYPE = new Type<>(MmmMod.id("fluid_snapshot_v5"));
+	public static final Type<FluidThermalSnapshotPayload> TYPE = new Type<>(MmmMod.id("fluid_thermal_snapshot"));
 	public static final StreamCodec<FriendlyByteBuf, FluidThermalSnapshotPayload> CODEC = StreamCodec.of(
 			FluidThermalSnapshotPayload::encode, FluidThermalSnapshotPayload::decode);
 
@@ -37,17 +35,15 @@ public record FluidThermalSnapshotPayload(
 		coherentFraction = Objects.requireNonNull(coherentFraction, "coherentFraction").clone();
 		debugFlags = Objects.requireNonNull(debugFlags, "debugFlags").clone();
 		gasNodes = List.copyOf(Objects.requireNonNull(gasNodes, "gasNodes"));
-		if (protocolVersion != FluidProtocol.THERMAL_SNAPSHOT_VERSION
-				|| material.protocolVersion() != FluidProtocol.MATERIAL_SNAPSHOT_VERSION) {
-			throw new IllegalArgumentException("Thermal snapshot must retain protocol-v2 material geometry inside v5");
+		if (layout != FluidProtocol.Layout.THERMAL || material.layout() != FluidProtocol.Layout.MATERIAL) {
+			throw new IllegalArgumentException("Thermal snapshot must retain material geometry");
 		}
 		if (chemicalLayer != null && granularLayer != null) {
 			throw new IllegalArgumentException("Thermal snapshot cannot duplicate chemical and granular display layers");
 		}
 		if (material.isSnapshot()) {
 			int cells = Math.multiplyExact(Math.multiplyExact(material.sizeX(), material.sizeY()), material.sizeZ());
-			if (cells > MAX_CELLS || paletteVersion != PALETTE_VERSION
-					|| !registryFingerprint.matches("[0-9a-f]{64}")
+			if (cells > MAX_CELLS || !registryFingerprint.matches("[0-9a-f]{64}")
 					|| cellTemperatureQ.length != cells || coherentFraction.length != cells || debugFlags.length != cells
 					|| gasNodes.size() > GasLimits.MAX_NODES_PER_REGION) {
 				throw new IllegalArgumentException("Thermal snapshot field layout or identity is invalid");
@@ -61,7 +57,7 @@ public record FluidThermalSnapshotPayload(
 					|| granularLayer != null && !sameMaterialIdentity(material, granularLayer.material())) {
 				throw new IllegalArgumentException("Thermal optional display layer names another snapshot");
 			}
-		} else if (paletteVersion != 0 || !registryFingerprint.isEmpty() || cellTemperatureQ.length != 0
+		} else if (!registryFingerprint.isEmpty() || cellTemperatureQ.length != 0
 				|| coherentFraction.length != 0 || debugFlags.length != 0 || !gasNodes.isEmpty()
 				|| chemicalLayer != null || granularLayer != null) {
 			throw new IllegalArgumentException("Thermal removal payload cannot carry display state");
@@ -78,16 +74,16 @@ public record FluidThermalSnapshotPayload(
 	public static FluidThermalSnapshotPayload removeRegion(FluidMaterialSnapshotPayload removal) { return empty(removal); }
 	public static FluidThermalSnapshotPayload clearAll() { return empty(FluidMaterialSnapshotPayload.clearAll()); }
 	private static FluidThermalSnapshotPayload empty(FluidMaterialSnapshotPayload material) {
-		return new FluidThermalSnapshotPayload(FluidProtocol.THERMAL_SNAPSHOT_VERSION, material, 0, "",
+		return new FluidThermalSnapshotPayload(FluidProtocol.Layout.THERMAL, material, "",
 				new short[0], new byte[0], new byte[0], List.of(), null, null);
 	}
 
 	@Override public Type<FluidThermalSnapshotPayload> type() { return TYPE; }
 
 	private static void encode(FriendlyByteBuf buffer, FluidThermalSnapshotPayload payload) {
-		buffer.writeVarInt(payload.protocolVersion);
+		buffer.writeEnum(payload.layout);
 		FluidMaterialSnapshotPayload.CODEC.encode(buffer, payload.material);
-		buffer.writeVarInt(payload.paletteVersion); buffer.writeUtf(payload.registryFingerprint, 64);
+		buffer.writeUtf(payload.registryFingerprint, 64);
 		buffer.writeVarInt(payload.cellTemperatureQ.length);
 		for (short temperature : payload.cellTemperatureQ) buffer.writeShort(temperature);
 		buffer.writeByteArray(payload.coherentFraction); buffer.writeByteArray(payload.debugFlags);
@@ -102,9 +98,9 @@ public record FluidThermalSnapshotPayload(
 	}
 
 	private static FluidThermalSnapshotPayload decode(FriendlyByteBuf buffer) {
-		int version = buffer.readVarInt();
+		FluidProtocol.Layout layout = buffer.readEnum(FluidProtocol.Layout.class);
 		FluidMaterialSnapshotPayload material = FluidMaterialSnapshotPayload.CODEC.decode(buffer);
-		int palette = buffer.readVarInt(); String fingerprint = buffer.readUtf(64);
+		String fingerprint = buffer.readUtf(64);
 		int temperatureCount = bounded(buffer.readVarInt(), MAX_CELLS, "cell temperature");
 		short[] temperatures = new short[temperatureCount];
 		for (int cell = 0; cell < temperatureCount; cell++) temperatures[cell] = buffer.readShort();
@@ -117,7 +113,7 @@ public record FluidThermalSnapshotPayload(
 				? FluidChemicalSnapshotPayload.CODEC.decode(buffer) : null;
 		FluidGranularSnapshotPayload granular = buffer.readBoolean()
 				? FluidGranularSnapshotPayload.CODEC.decode(buffer) : null;
-		return new FluidThermalSnapshotPayload(version, material, palette, fingerprint, temperatures,
+		return new FluidThermalSnapshotPayload(layout, material, fingerprint, temperatures,
 				coherent, flags, gas, chemical, granular);
 	}
 

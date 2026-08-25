@@ -4,7 +4,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-/** Client-side protocol-v4 ordering, capability and registry identity gate. */
+/** Client-side granular ordering, capability and registry identity gate. */
 public final class FluidGranularSnapshotLedger {
 	private final Map<UUID, Cursor> cursors = new HashMap<>();
 	private String granularRegistryFingerprint, chemicalRegistryFingerprint;
@@ -12,9 +12,9 @@ public final class FluidGranularSnapshotLedger {
 	public Decision evaluate(FluidGranularSnapshotPayload payload, FluidProtocol.Negotiation negotiation) {
 		long required = FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_GRANULAR_SNAPSHOT;
 		if (negotiation == null || !negotiation.accepted()
-				|| negotiation.selectedVersion() != FluidProtocol.GRANULAR_SNAPSHOT_VERSION
+				|| negotiation.selectedLayout() != FluidProtocol.Layout.GRANULAR
 				|| (negotiation.capabilities() & required) != required
-				|| payload.protocolVersion() != negotiation.selectedVersion()) return Decision.REJECT_PROTOCOL;
+				|| payload.layout() != negotiation.selectedLayout()) return Decision.REJECT_PROTOCOL;
 		if (payload.clearsAll()) { clear(); return Decision.CLEAR_ALL; }
 		FluidMaterialSnapshotPayload material = payload.material();
 		Cursor current = cursors.get(material.regionId());
@@ -23,8 +23,6 @@ public final class FluidGranularSnapshotLedger {
 			return Decision.IGNORE_STALE;
 		}
 		if (payload.isSnapshot()) {
-			if (payload.paletteVersion() != FluidProtocol.GRANULAR_PALETTE_VERSION
-					|| material.paletteVersion() != FluidProtocol.MATERIAL_PALETTE_VERSION) return Decision.REJECT_PALETTE;
 			boolean chemicalNegotiated = (negotiation.capabilities() & FluidProtocol.CAP_CHEMICAL_SNAPSHOT) != 0L;
 			if (chemicalNegotiated != (payload.chemical() != null)) return Decision.REJECT_PROTOCOL;
 			if (granularRegistryFingerprint != null
@@ -46,7 +44,7 @@ public final class FluidGranularSnapshotLedger {
 
 	public enum Decision {
 		ACCEPT_SNAPSHOT, REMOVE_REGION, CLEAR_ALL, IGNORE_STALE,
-		REJECT_PROTOCOL, REJECT_PALETTE, REJECT_REGISTRY
+		REJECT_PROTOCOL, REJECT_REGISTRY
 	}
 
 	private record Cursor(long generation, long sequence) { }

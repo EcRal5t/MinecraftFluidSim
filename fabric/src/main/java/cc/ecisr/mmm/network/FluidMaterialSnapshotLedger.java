@@ -4,15 +4,15 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-/** Client-side v2 ordering/capability gate, kept independent from the v1 ledger's state and cursors. */
+/** Client-side material ordering/capability gate with independent state and cursors. */
 public final class FluidMaterialSnapshotLedger {
 	private final Map<UUID, Cursor> cursors = new HashMap<>();
 
 	public Decision evaluate(FluidMaterialSnapshotPayload payload, FluidProtocol.Negotiation negotiation) {
 		if (negotiation == null || !negotiation.accepted()
-				|| negotiation.selectedVersion() != FluidProtocol.MATERIAL_SNAPSHOT_VERSION
+				|| negotiation.selectedLayout() != FluidProtocol.Layout.MATERIAL
 				|| (negotiation.capabilities() & FluidProtocol.CAP_MATERIAL_SNAPSHOT) == 0L
-				|| payload.protocolVersion() != negotiation.selectedVersion()) {
+				|| payload.layout() != negotiation.selectedLayout()) {
 			return Decision.REJECT_PROTOCOL;
 		}
 		if (payload.clearsAll()) {
@@ -23,9 +23,6 @@ public final class FluidMaterialSnapshotLedger {
 		if (current != null && (payload.generation() < current.generation()
 				|| payload.generation() == current.generation() && payload.sequence() <= current.sequence())) {
 			return Decision.IGNORE_STALE;
-		}
-		if (payload.isSnapshot() && payload.paletteVersion() != FluidProtocol.MATERIAL_PALETTE_VERSION) {
-			return Decision.REJECT_PALETTE;
 		}
 		cursors.put(payload.regionId(), new Cursor(payload.generation(), payload.sequence()));
 		return payload.removesRegion() ? Decision.REMOVE_REGION : Decision.ACCEPT_SNAPSHOT;
@@ -38,8 +35,7 @@ public final class FluidMaterialSnapshotLedger {
 		REMOVE_REGION,
 		CLEAR_ALL,
 		IGNORE_STALE,
-		REJECT_PROTOCOL,
-		REJECT_PALETTE
+		REJECT_PROTOCOL
 	}
 
 	private record Cursor(long generation, long sequence) { }

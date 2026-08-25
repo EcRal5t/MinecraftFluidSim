@@ -31,7 +31,7 @@ public final class MmmModClient implements ClientModInitializer {
 		});
 		ClientPlayNetworking.registerGlobalReceiver(FluidSnapshotPayload.TYPE, (payload, context) -> {
 			FluidProtocol.Negotiation negotiation = negotiated.get();
-			renderer.accept(payload, negotiation == null ? 0 : negotiation.selectedVersion());
+			renderer.accept(payload, negotiation == null ? null : negotiation.selectedLayout());
 		});
 		ClientPlayNetworking.registerGlobalReceiver(FluidMaterialSnapshotPayload.TYPE,
 				(payload, context) -> renderer.accept(payload, negotiated.get()));

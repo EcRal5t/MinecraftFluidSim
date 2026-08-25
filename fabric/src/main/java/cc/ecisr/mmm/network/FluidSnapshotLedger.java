@@ -8,8 +8,8 @@ import java.util.UUID;
 public final class FluidSnapshotLedger {
 	private final Map<UUID, Cursor> cursors = new HashMap<>();
 
-	public Decision evaluate(FluidSnapshotPayload payload, int negotiatedVersion) {
-		if (payload.protocolVersion() != negotiatedVersion || negotiatedVersion != FluidProtocol.CURRENT_VERSION) {
+	public Decision evaluate(FluidSnapshotPayload payload, FluidProtocol.Layout negotiatedLayout) {
+		if (payload.layout() != negotiatedLayout || negotiatedLayout != FluidProtocol.Layout.PURE) {
 			return Decision.REJECT_PROTOCOL;
 		}
 		if (payload.clearsAll()) {
@@ -20,9 +20,6 @@ public final class FluidSnapshotLedger {
 		if (current != null && (payload.generation() < current.generation()
 				|| payload.generation() == current.generation() && payload.sequence() <= current.sequence())) {
 			return Decision.IGNORE_STALE;
-		}
-		if (payload.isSnapshot() && payload.paletteVersion() != FluidProtocol.PURE_WATER_PALETTE_VERSION) {
-			return Decision.REJECT_PALETTE;
 		}
 		cursors.put(payload.regionId(), new Cursor(payload.generation(), payload.sequence()));
 		return payload.removesRegion() ? Decision.REMOVE_REGION : Decision.ACCEPT_SNAPSHOT;
@@ -37,8 +34,7 @@ public final class FluidSnapshotLedger {
 		REMOVE_REGION,
 		CLEAR_ALL,
 		IGNORE_STALE,
-		REJECT_PROTOCOL,
-		REJECT_PALETTE
+		REJECT_PROTOCOL
 	}
 
 	private record Cursor(long generation, long sequence) { }

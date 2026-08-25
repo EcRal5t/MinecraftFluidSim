@@ -12,9 +12,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 
-/** Independent protocol-v3 display payload; exact chemical inventory and mass residuals are deliberately absent. */
+/** Chemical display payload; exact chemical inventory and mass residuals are deliberately absent. */
 public record FluidChemicalSnapshotPayload(
-		int protocolVersion,
+		FluidProtocol.Layout layout,
 		FluidMaterialSnapshotPayload material,
 		String registryFingerprint,
 		List<SpeciesEntry> species,
@@ -27,7 +27,7 @@ public record FluidChemicalSnapshotPayload(
 	private static final int MAX_CELLS = 1 << 20;
 	private static final int MAX_KEY_LENGTH = 128;
 	private static final int MAX_COMPONENT_BYTES = 16 << 20;
-	public static final Type<FluidChemicalSnapshotPayload> TYPE = new Type<>(MmmMod.id("fluid_snapshot_v3"));
+	public static final Type<FluidChemicalSnapshotPayload> TYPE = new Type<>(MmmMod.id("fluid_chemical_snapshot"));
 	public static final StreamCodec<FriendlyByteBuf, FluidChemicalSnapshotPayload> CODEC = StreamCodec.of(
 			FluidChemicalSnapshotPayload::encode, FluidChemicalSnapshotPayload::decode);
 
@@ -40,11 +40,11 @@ public record FluidChemicalSnapshotPayload(
 		residualWeights = Objects.requireNonNull(residualWeights, "residualWeights").clone();
 		ph = Objects.requireNonNull(ph, "ph").clone();
 		indicatorFraction = Objects.requireNonNull(indicatorFraction, "indicatorFraction").clone();
-		if (protocolVersion != FluidProtocol.CHEMICAL_SNAPSHOT_VERSION) {
-			throw new IllegalArgumentException("Chemical snapshot must use protocol v3");
+		if (layout != FluidProtocol.Layout.CHEMICAL) {
+			throw new IllegalArgumentException("Chemical snapshot layout is required");
 		}
-		if (material.protocolVersion() != FluidProtocol.MATERIAL_SNAPSHOT_VERSION) {
-			throw new IllegalArgumentException("Chemical snapshot geometry must retain material v2 fields");
+		if (material.layout() != FluidProtocol.Layout.MATERIAL) {
+			throw new IllegalArgumentException("Chemical snapshot must retain material geometry");
 		}
 		if (material.isSnapshot()) {
 			int cells = Math.multiplyExact(Math.multiplyExact(material.sizeX(), material.sizeY()), material.sizeZ());
@@ -89,7 +89,7 @@ public record FluidChemicalSnapshotPayload(
 	public static FluidChemicalSnapshotPayload snapshot(
 			FluidMaterialSnapshotPayload material, String fingerprint, ChemicalDisplaySnapshot display
 	) {
-		return new FluidChemicalSnapshotPayload(FluidProtocol.CHEMICAL_SNAPSHOT_VERSION, material, fingerprint,
+		return new FluidChemicalSnapshotPayload(FluidProtocol.Layout.CHEMICAL, material, fingerprint,
 				display.species().stream().map(entry -> new SpeciesEntry(entry.id(), entry.argb())).toList(),
 				display.copyTopSpecies(), display.copyTopWeights(), display.copyResidualWeights(),
 				display.copyPh(), display.copyIndicatorFraction());
@@ -104,7 +104,7 @@ public record FluidChemicalSnapshotPayload(
 	}
 
 	private static FluidChemicalSnapshotPayload empty(FluidMaterialSnapshotPayload material) {
-		return new FluidChemicalSnapshotPayload(FluidProtocol.CHEMICAL_SNAPSHOT_VERSION, material, "", List.of(),
+		return new FluidChemicalSnapshotPayload(FluidProtocol.Layout.CHEMICAL, material, "", List.of(),
 				new short[0], new byte[0], new byte[0], new byte[0], new byte[0]);
 	}
 
@@ -114,7 +114,7 @@ public record FluidChemicalSnapshotPayload(
 	@Override public Type<FluidChemicalSnapshotPayload> type() { return TYPE; }
 
 	private static void encode(FriendlyByteBuf buffer, FluidChemicalSnapshotPayload payload) {
-		buffer.writeVarInt(payload.protocolVersion);
+		buffer.writeEnum(payload.layout);
 		FluidMaterialSnapshotPayload.encode(buffer, payload.material);
 		buffer.writeUtf(payload.registryFingerprint, 64);
 		buffer.writeVarInt(payload.species.size());
@@ -130,7 +130,7 @@ public record FluidChemicalSnapshotPayload(
 	}
 
 	private static FluidChemicalSnapshotPayload decode(FriendlyByteBuf buffer) {
-		int version = buffer.readVarInt();
+		FluidProtocol.Layout layout = buffer.readEnum(FluidProtocol.Layout.class);
 		FluidMaterialSnapshotPayload material = FluidMaterialSnapshotPayload.decode(buffer);
 		String fingerprint = buffer.readUtf(64);
 		int speciesCount = bounded(buffer.readVarInt(), ChemicalLimits.MAX_SPECIES, "species palette");
@@ -142,7 +142,7 @@ public record FluidChemicalSnapshotPayload(
 		byte[] residual = buffer.readByteArray(MAX_CELLS);
 		byte[] ph = buffer.readByteArray(MAX_CELLS);
 		byte[] indicator = buffer.readByteArray(MAX_CELLS);
-		return new FluidChemicalSnapshotPayload(version, material, fingerprint, species, top, weights, residual, ph, indicator);
+		return new FluidChemicalSnapshotPayload(layout, material, fingerprint, species, top, weights, residual, ph, indicator);
 	}
 
 	private static int bounded(int count, int maximum, String label) {

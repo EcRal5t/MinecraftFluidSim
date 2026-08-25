@@ -2778,8 +2778,8 @@ public final class FluidSimulationService {
 				? createChemicalLayer(region, base) : null;
 		FluidGranularSnapshotPayload granular = granularFeatureEnabled ? createGranularLayer(region, base) : null;
 		ThermalDisplaySnapshot display = region.domain().copyThermalDisplaySnapshot();
-		return new FluidThermalSnapshotPayload(FluidProtocol.THERMAL_SNAPSHOT_VERSION, base,
-				FluidThermalSnapshotPayload.PALETTE_VERSION, thermalRegistry.fingerprint(),
+		return new FluidThermalSnapshotPayload(FluidProtocol.Layout.THERMAL, base,
+				thermalRegistry.fingerprint(),
 				display.cellTemperatureQ(), display.coherentFraction(), display.debugFlags(),
 				display.gasNodes().stream().map(node -> new FluidThermalSnapshotPayload.GasNodeDisplay(
 						node.nodeId(), node.temperatureQ(), node.gaugePressureDecaPa())).toList(),

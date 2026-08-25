@@ -10,7 +10,7 @@ import java.util.Objects;
 /** Client-to-server configuration-phase negotiation result. */
 public record FluidProtocolResponsePayload(
 		boolean accepted,
-		int selectedVersion,
+		FluidProtocol.Layout selectedLayout,
 		long capabilities,
 		String failure
 ) implements CustomPacketPayload {
@@ -25,18 +25,18 @@ public record FluidProtocolResponsePayload(
 	public FluidProtocolResponsePayload {
 		failure = Objects.requireNonNullElse(failure, "");
 		if (failure.length() > MAX_FAILURE_LENGTH) throw new IllegalArgumentException("Protocol failure text is too long");
-		if (accepted && (selectedVersion <= 0 || !failure.isEmpty())) {
-			throw new IllegalArgumentException("Accepted protocol response must select a version without failure text");
+		if (accepted && (selectedLayout == null || !failure.isEmpty())) {
+			throw new IllegalArgumentException("Accepted protocol response must select a layout without failure text");
 		}
-		if (!accepted && (selectedVersion != 0 || capabilities != 0L || failure.isBlank())) {
+		if (!accepted && (selectedLayout != null || capabilities != 0L || failure.isBlank())) {
 			throw new IllegalArgumentException("Rejected protocol response must contain only a readable failure");
 		}
 	}
 
 	public static FluidProtocolResponsePayload from(FluidProtocol.Negotiation negotiation) {
 		return negotiation.accepted()
-				? new FluidProtocolResponsePayload(true, negotiation.selectedVersion(), negotiation.capabilities(), "")
-				: new FluidProtocolResponsePayload(false, 0, 0L, negotiation.failure());
+				? new FluidProtocolResponsePayload(true, negotiation.selectedLayout(), negotiation.capabilities(), "")
+				: new FluidProtocolResponsePayload(false, null, 0L, negotiation.failure());
 	}
 
 	@Override
@@ -46,14 +46,15 @@ public record FluidProtocolResponsePayload(
 
 	private static void encode(FriendlyByteBuf buffer, FluidProtocolResponsePayload payload) {
 		buffer.writeBoolean(payload.accepted);
-		buffer.writeVarInt(payload.selectedVersion);
+		buffer.writeBoolean(payload.selectedLayout != null);
+		if (payload.selectedLayout != null) buffer.writeEnum(payload.selectedLayout);
 		buffer.writeVarLong(payload.capabilities);
 		buffer.writeUtf(payload.failure, MAX_FAILURE_LENGTH);
 	}
 
 	private static FluidProtocolResponsePayload decode(FriendlyByteBuf buffer) {
-		return new FluidProtocolResponsePayload(
-				buffer.readBoolean(), buffer.readVarInt(), buffer.readVarLong(), buffer.readUtf(MAX_FAILURE_LENGTH)
-		);
+		boolean accepted = buffer.readBoolean();
+		FluidProtocol.Layout layout = buffer.readBoolean() ? buffer.readEnum(FluidProtocol.Layout.class) : null;
+		return new FluidProtocolResponsePayload(accepted, layout, buffer.readVarLong(), buffer.readUtf(MAX_FAILURE_LENGTH));
 	}
 }

@@ -96,8 +96,8 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	private volatile List<MaterialFrame> extractedMaterials = List.of();
 	private volatile List<GranularFrame> extractedGranular = List.of();
 
-	public synchronized void accept(FluidSnapshotPayload payload, int negotiatedVersion) {
-		FluidSnapshotLedger.Decision decision = ledger.evaluate(payload, negotiatedVersion);
+	public synchronized void accept(FluidSnapshotPayload payload, FluidProtocol.Layout negotiatedLayout) {
+		FluidSnapshotLedger.Decision decision = ledger.evaluate(payload, negotiatedLayout);
 		switch (decision) {
 			case CLEAR_ALL -> latest.clear();
 			case REMOVE_REGION -> latest.remove(payload.regionId());
@@ -107,12 +107,8 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 				latest.put(payload.regionId(), new SnapshotTransition(from, payload, System.nanoTime()));
 			}
 			case REJECT_PROTOCOL -> MmmMod.LOGGER.error(
-					"Discarded Matter, Motion & Mechanics snapshot protocol {} after negotiating {}",
-					payload.protocolVersion(), negotiatedVersion
-			);
-			case REJECT_PALETTE -> MmmMod.LOGGER.error(
-					"Discarded Matter, Motion & Mechanics region {} with unsupported palette {}",
-					payload.regionId(), payload.paletteVersion()
+					"Discarded Matter, Motion & Mechanics snapshot layout {} after negotiating {}",
+					payload.layout(), negotiatedLayout
 			);
 			case IGNORE_STALE -> { }
 		}
@@ -130,10 +126,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 				));
 			}
 			case REJECT_PROTOCOL -> MmmMod.LOGGER.error(
-					"Discarded Matter, Motion & Mechanics material snapshot protocol {} after negotiation", payload.protocolVersion());
-			case REJECT_PALETTE -> MmmMod.LOGGER.error(
-					"Discarded Matter, Motion & Mechanics material region {} with unsupported palette {}",
-					payload.regionId(), payload.paletteVersion());
+					"Discarded Matter, Motion & Mechanics material snapshot layout {} after negotiation", payload.layout());
 			case IGNORE_STALE -> { }
 		}
 	}
@@ -152,10 +145,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 								payload.ph(), payload.indicatorFraction())));
 			}
 			case REJECT_PROTOCOL -> MmmMod.LOGGER.error(
-					"Discarded Matter, Motion & Mechanics chemical snapshot protocol {} after negotiation", payload.protocolVersion());
-			case REJECT_PALETTE -> MmmMod.LOGGER.error(
-					"Discarded Matter, Motion & Mechanics chemical region {} with unsupported material palette {}",
-					material.regionId(), material.paletteVersion());
+					"Discarded Matter, Motion & Mechanics chemical snapshot layout {} after negotiation", payload.layout());
 			case REJECT_REGISTRY -> MmmMod.LOGGER.error(
 					"Discarded Matter, Motion & Mechanics chemical region {} with a foreign registry fingerprint", material.regionId());
 			case IGNORE_STALE -> { }
@@ -180,9 +170,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 						payload.depositBulkFill(), payload.depositPorosity(), payload.depositTopMaterial()));
 			}
 			case REJECT_PROTOCOL -> MmmMod.LOGGER.error(
-					"Discarded Matter, Motion & Mechanics granular snapshot protocol {} after negotiation", payload.protocolVersion());
-			case REJECT_PALETTE -> MmmMod.LOGGER.error(
-					"Discarded Matter, Motion & Mechanics granular region {} with an unsupported display palette", material.regionId());
+					"Discarded Matter, Motion & Mechanics granular snapshot layout {} after negotiation", payload.layout());
 			case REJECT_REGISTRY -> MmmMod.LOGGER.error(
 					"Discarded Matter, Motion & Mechanics granular region {} with a foreign registry fingerprint", material.regionId());
 			case IGNORE_STALE -> { }
@@ -220,9 +208,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 				latestThermal.put(material.regionId(), payload);
 			}
 			case REJECT_PROTOCOL -> MmmMod.LOGGER.error(
-					"Discarded Matter, Motion & Mechanics thermal snapshot protocol {} after negotiation", payload.protocolVersion());
-			case REJECT_PALETTE -> MmmMod.LOGGER.error(
-					"Discarded Matter, Motion & Mechanics thermal region {} with an unsupported display palette", material.regionId());
+					"Discarded Matter, Motion & Mechanics thermal snapshot layout {} after negotiation", payload.layout());
 			case REJECT_REGISTRY -> MmmMod.LOGGER.error(
 					"Discarded Matter, Motion & Mechanics thermal region {} with a foreign registry fingerprint", material.regionId());
 			case IGNORE_STALE -> { }
@@ -263,8 +249,8 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 			markers[i] = from.markers()[i] != 0 || to.markers()[i] != 0 ? (byte) 1 : (byte) 0;
 		}
 		return new FluidSnapshotPayload(
-				to.protocolVersion(), to.kind(), to.dimension(), to.regionId(), to.generation(), to.sequence(),
-				to.paletteVersion(), to.origin(), to.cellSize(), to.sizeX(), to.sizeY(), to.sizeZ(),
+				to.layout(), to.kind(), to.dimension(), to.regionId(), to.generation(), to.sequence(),
+				to.origin(), to.cellSize(), to.sizeX(), to.sizeY(), to.sizeZ(),
 				volume, markers, to.solids(), to.debugOverlays(), to.extensions()
 		);
 	}
@@ -272,7 +258,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	private static boolean compatible(FluidSnapshotPayload first, FluidSnapshotPayload second) {
 		return first.regionId().equals(second.regionId())
 				&& first.generation() == second.generation()
-				&& first.paletteVersion() == second.paletteVersion()
+				&& first.layout() == second.layout()
 				&& first.dimension().equals(second.dimension())
 				&& first.origin().equals(second.origin())
 				&& Float.compare(first.cellSize(), second.cellSize()) == 0

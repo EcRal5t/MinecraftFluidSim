@@ -13,11 +13,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-/** Protocol-v4 display payload. Exact solid volume, mass and composition are deliberately absent. */
+/** Granular display payload. Exact solid volume, mass and composition are deliberately absent. */
 public record FluidGranularSnapshotPayload(
-		int protocolVersion,
+		FluidProtocol.Layout layout,
 		FluidMaterialSnapshotPayload material,
-		int paletteVersion,
 		String registryFingerprint,
 		List<GranularDisplaySnapshot.MaterialEntry> granularMaterials,
 		byte[] depositBulkFill,
@@ -29,7 +28,7 @@ public record FluidGranularSnapshotPayload(
 	private static final int MAX_CELLS = 1 << 20;
 	private static final int MAX_KEY_LENGTH = 128;
 	private static final int MAX_CHEMICAL_BYTES = 16 << 20;
-	public static final Type<FluidGranularSnapshotPayload> TYPE = new Type<>(MmmMod.id("fluid_snapshot_v4"));
+	public static final Type<FluidGranularSnapshotPayload> TYPE = new Type<>(MmmMod.id("fluid_granular_snapshot"));
 	public static final StreamCodec<FriendlyByteBuf, FluidGranularSnapshotPayload> CODEC = StreamCodec.of(
 			FluidGranularSnapshotPayload::encode, FluidGranularSnapshotPayload::decode);
 
@@ -41,19 +40,15 @@ public record FluidGranularSnapshotPayload(
 		depositPorosity = Objects.requireNonNull(depositPorosity, "depositPorosity").clone();
 		depositTopMaterial = Objects.requireNonNull(depositTopMaterial, "depositTopMaterial").clone();
 		activeParcels = List.copyOf(Objects.requireNonNull(activeParcels, "activeParcels"));
-		if (protocolVersion != FluidProtocol.GRANULAR_SNAPSHOT_VERSION
-				|| material.protocolVersion() != FluidProtocol.MATERIAL_SNAPSHOT_VERSION) {
-			throw new IllegalArgumentException("Granular snapshot must retain protocol-v2 material geometry inside v4");
+		if (layout != FluidProtocol.Layout.GRANULAR || material.layout() != FluidProtocol.Layout.MATERIAL) {
+			throw new IllegalArgumentException("Granular snapshot must retain material geometry");
 		}
 		if (material.isSnapshot()) {
-			if (paletteVersion != FluidProtocol.GRANULAR_PALETTE_VERSION) {
-				throw new IllegalArgumentException("Unsupported granular display palette");
-			}
 			new GranularDisplaySnapshot(material.sizeX(), material.sizeY(), material.sizeZ(), material.cellSize(),
 					registryFingerprint, granularMaterials, depositBulkFill, depositPorosity,
 					depositTopMaterial, activeParcels);
 			if (chemical != null) chemical.validate(material);
-		} else if (paletteVersion != 0 || !registryFingerprint.isEmpty() || !granularMaterials.isEmpty()
+		} else if (!registryFingerprint.isEmpty() || !granularMaterials.isEmpty()
 				|| depositBulkFill.length != 0 || depositPorosity.length != 0 || depositTopMaterial.length != 0
 				|| !activeParcels.isEmpty() || chemical != null) {
 			throw new IllegalArgumentException("Granular removal payloads cannot carry display state");
@@ -69,8 +64,8 @@ public record FluidGranularSnapshotPayload(
 			String chemicalFingerprint, ChemicalDisplaySnapshot chemical
 	) {
 		ChemicalLayer layer = chemical == null ? null : ChemicalLayer.from(chemicalFingerprint, chemical);
-		return new FluidGranularSnapshotPayload(FluidProtocol.GRANULAR_SNAPSHOT_VERSION, material,
-				FluidProtocol.GRANULAR_PALETTE_VERSION, granular.registryFingerprint(), granular.materials(),
+		return new FluidGranularSnapshotPayload(FluidProtocol.Layout.GRANULAR, material,
+				granular.registryFingerprint(), granular.materials(),
 				granular.depositBulkFill(), granular.depositPorosity(), granular.depositTopMaterial(),
 				granular.activeParcels(), layer);
 	}
@@ -78,7 +73,7 @@ public record FluidGranularSnapshotPayload(
 	public static FluidGranularSnapshotPayload removeRegion(FluidMaterialSnapshotPayload removal) { return empty(removal); }
 	public static FluidGranularSnapshotPayload clearAll() { return empty(FluidMaterialSnapshotPayload.clearAll()); }
 	private static FluidGranularSnapshotPayload empty(FluidMaterialSnapshotPayload material) {
-		return new FluidGranularSnapshotPayload(FluidProtocol.GRANULAR_SNAPSHOT_VERSION, material, 0, "",
+		return new FluidGranularSnapshotPayload(FluidProtocol.Layout.GRANULAR, material, "",
 				List.of(), new byte[0], new byte[0], new short[0], List.of(), null);
 	}
 
@@ -88,7 +83,7 @@ public record FluidGranularSnapshotPayload(
 
 	public FluidChemicalSnapshotPayload toChemicalPayload() {
 		if (chemical == null) return null;
-		return new FluidChemicalSnapshotPayload(FluidProtocol.CHEMICAL_SNAPSHOT_VERSION, material,
+		return new FluidChemicalSnapshotPayload(FluidProtocol.Layout.CHEMICAL, material,
 				chemical.registryFingerprint(), chemical.species(), chemical.topSpecies(), chemical.topWeights(),
 				chemical.residualWeights(), chemical.ph(), chemical.indicatorFraction());
 	}
@@ -96,9 +91,8 @@ public record FluidGranularSnapshotPayload(
 	@Override public Type<FluidGranularSnapshotPayload> type() { return TYPE; }
 
 	private static void encode(FriendlyByteBuf buffer, FluidGranularSnapshotPayload payload) {
-		buffer.writeVarInt(payload.protocolVersion);
+		buffer.writeEnum(payload.layout);
 		FluidMaterialSnapshotPayload.encode(buffer, payload.material);
-		buffer.writeVarInt(payload.paletteVersion);
 		buffer.writeUtf(payload.registryFingerprint, 64);
 		buffer.writeVarInt(payload.granularMaterials.size());
 		for (GranularDisplaySnapshot.MaterialEntry entry : payload.granularMaterials) {
@@ -118,9 +112,8 @@ public record FluidGranularSnapshotPayload(
 	}
 
 	private static FluidGranularSnapshotPayload decode(FriendlyByteBuf buffer) {
-		int version = buffer.readVarInt();
+		FluidProtocol.Layout layout = buffer.readEnum(FluidProtocol.Layout.class);
 		FluidMaterialSnapshotPayload material = FluidMaterialSnapshotPayload.decode(buffer);
-		int paletteVersion = buffer.readVarInt();
 		String fingerprint = buffer.readUtf(64);
 		int materialCount = bounded(buffer.readVarInt(), GranularLimits.MAX_MATERIALS, "material palette");
 		ArrayList<GranularDisplaySnapshot.MaterialEntry> materials = new ArrayList<>(materialCount);
@@ -136,7 +129,7 @@ public record FluidGranularSnapshotPayload(
 				buffer.readUnsignedShort(), buffer.readUnsignedShort(), buffer.readUnsignedShort(),
 				buffer.readUnsignedByte(), buffer.readUnsignedShort()));
 		ChemicalLayer chemical = buffer.readBoolean() ? ChemicalLayer.decode(buffer) : null;
-		return new FluidGranularSnapshotPayload(version, material, paletteVersion, fingerprint, materials,
+		return new FluidGranularSnapshotPayload(layout, material, fingerprint, materials,
 				bulk, porosity, top, parcels, chemical);
 	}
 
@@ -172,7 +165,7 @@ public record FluidGranularSnapshotPayload(
 		}
 
 		void validate(FluidMaterialSnapshotPayload material) {
-			new FluidChemicalSnapshotPayload(FluidProtocol.CHEMICAL_SNAPSHOT_VERSION, material,
+			new FluidChemicalSnapshotPayload(FluidProtocol.Layout.CHEMICAL, material,
 					registryFingerprint, species, topSpecies, topWeights, residualWeights, ph, indicatorFraction);
 		}
 

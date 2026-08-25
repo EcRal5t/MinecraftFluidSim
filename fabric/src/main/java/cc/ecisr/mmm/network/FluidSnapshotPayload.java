@@ -12,15 +12,14 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
-/** Versioned clientbound region snapshot. Density bytes remain unsigned reconstruction data, never exact water. */
+/** Clientbound pure-fluid region snapshot. Density bytes remain unsigned reconstruction data, never exact water. */
 public record FluidSnapshotPayload(
-		int protocolVersion,
+		FluidProtocol.Layout layout,
 		Kind kind,
 		Identifier dimension,
 		UUID regionId,
 		long generation,
 		long sequence,
-		int paletteVersion,
 		BlockPos origin,
 		float cellSize,
 		int sizeX,
@@ -38,7 +37,7 @@ public record FluidSnapshotPayload(
 	private static final UUID NIL_REGION_ID = new UUID(0L, 0L);
 	private static final Identifier CLEAR_DIMENSION = Identifier.fromNamespaceAndPath("minecraft", "overworld");
 
-	public static final Type<FluidSnapshotPayload> TYPE = new Type<>(MmmMod.id("fluid_snapshot_v1"));
+	public static final Type<FluidSnapshotPayload> TYPE = new Type<>(MmmMod.id("fluid_snapshot"));
 
 	/** Extension type carrying the per-cell sealed gas node mask for debug overlays. */
 	public static final int EXTENSION_GAS_NODES = 1;
@@ -49,6 +48,7 @@ public record FluidSnapshotPayload(
 	);
 
 	public FluidSnapshotPayload {
+		if (layout != FluidProtocol.Layout.PURE) throw new IllegalArgumentException("Pure snapshot layout is required");
 		kind = Objects.requireNonNull(kind, "kind");
 		dimension = Objects.requireNonNull(dimension, "dimension");
 		regionId = Objects.requireNonNull(regionId, "regionId");
@@ -57,15 +57,14 @@ public record FluidSnapshotPayload(
 		markers = Objects.requireNonNull(markers, "markers");
 		solids = Objects.requireNonNull(solids, "solids");
 		extensions = List.copyOf(Objects.requireNonNull(extensions, "extensions"));
-		if (protocolVersion <= 0) throw new IllegalArgumentException("Protocol version must be positive");
 		if (extensions.size() > MAX_EXTENSIONS) throw new IllegalArgumentException("Too many snapshot extensions");
 		int extensionBytes = 0;
 		for (Extension extension : extensions) extensionBytes = Math.addExact(extensionBytes, extension.data().length);
 		if (extensionBytes > MAX_EXTENSION_BYTES) throw new IllegalArgumentException("Snapshot extensions are too large");
 
 		if (kind == Kind.SNAPSHOT) {
-			if (regionId.equals(NIL_REGION_ID) || generation <= 0L || sequence <= 0L || paletteVersion <= 0) {
-				throw new IllegalArgumentException("Snapshot identity, generation, sequence and palette must be positive");
+			if (regionId.equals(NIL_REGION_ID) || generation <= 0L || sequence <= 0L) {
+				throw new IllegalArgumentException("Snapshot identity, generation and sequence must be positive");
 			}
 			if (!(cellSize > 0.0F) || !Float.isFinite(cellSize)) {
 				throw new IllegalArgumentException("Snapshot cell size must be finite and positive");
@@ -108,8 +107,8 @@ public record FluidSnapshotPayload(
 			boolean debugOverlays
 	) {
 		return new FluidSnapshotPayload(
-				FluidProtocol.CURRENT_VERSION, Kind.SNAPSHOT, dimension, regionId, generation, sequence,
-				FluidProtocol.PURE_WATER_PALETTE_VERSION, origin, cellSize, sizeX, sizeY, sizeZ,
+				FluidProtocol.Layout.PURE, Kind.SNAPSHOT, dimension, regionId, generation, sequence,
+				origin, cellSize, sizeX, sizeY, sizeZ,
 				volume, markers, solids, debugOverlays, List.of()
 		);
 	}
@@ -131,8 +130,8 @@ public record FluidSnapshotPayload(
 			List<Extension> extensions
 	) {
 		return new FluidSnapshotPayload(
-				FluidProtocol.CURRENT_VERSION, Kind.SNAPSHOT, dimension, regionId, generation, sequence,
-				FluidProtocol.PURE_WATER_PALETTE_VERSION, origin, cellSize, sizeX, sizeY, sizeZ,
+				FluidProtocol.Layout.PURE, Kind.SNAPSHOT, dimension, regionId, generation, sequence,
+				origin, cellSize, sizeX, sizeY, sizeZ,
 				volume, markers, solids, debugOverlays, extensions
 		);
 	}
@@ -158,7 +157,7 @@ public record FluidSnapshotPayload(
 			long sequence
 	) {
 		return new FluidSnapshotPayload(
-				FluidProtocol.CURRENT_VERSION, kind, dimension, regionId, generation, sequence, 0,
+				FluidProtocol.Layout.PURE, kind, dimension, regionId, generation, sequence,
 				BlockPos.ZERO, 1.0F, 0, 0, 0, new byte[0], new byte[0], new byte[0], false, List.of()
 		);
 	}
@@ -173,13 +172,12 @@ public record FluidSnapshotPayload(
 	}
 
 	private static void encode(FriendlyByteBuf buffer, FluidSnapshotPayload payload) {
-		buffer.writeVarInt(payload.protocolVersion);
+		buffer.writeEnum(payload.layout);
 		buffer.writeEnum(payload.kind);
 		buffer.writeIdentifier(payload.dimension);
 		buffer.writeUUID(payload.regionId);
 		buffer.writeVarLong(payload.generation);
 		buffer.writeVarLong(payload.sequence);
-		buffer.writeVarInt(payload.paletteVersion);
 		buffer.writeBlockPos(payload.origin);
 		buffer.writeFloat(payload.cellSize);
 		buffer.writeVarInt(payload.sizeX);
@@ -197,13 +195,12 @@ public record FluidSnapshotPayload(
 	}
 
 	private static FluidSnapshotPayload decode(FriendlyByteBuf buffer) {
-		int protocolVersion = buffer.readVarInt();
+		FluidProtocol.Layout layout = buffer.readEnum(FluidProtocol.Layout.class);
 		Kind kind = buffer.readEnum(Kind.class);
 		Identifier dimension = buffer.readIdentifier();
 		UUID regionId = buffer.readUUID();
 		long generation = buffer.readVarLong();
 		long sequence = buffer.readVarLong();
-		int paletteVersion = buffer.readVarInt();
 		BlockPos origin = buffer.readBlockPos();
 		float cellSize = buffer.readFloat();
 		int sizeX = buffer.readVarInt();
@@ -226,7 +223,7 @@ public record FluidSnapshotPayload(
 			extensions.add(new Extension(type, data));
 		}
 		return new FluidSnapshotPayload(
-				protocolVersion, kind, dimension, regionId, generation, sequence, paletteVersion,
+				layout, kind, dimension, regionId, generation, sequence,
 				origin, cellSize, sizeX, sizeY, sizeZ, volume, markers, solids, debugOverlays, extensions
 		);
 	}

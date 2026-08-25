@@ -17,15 +17,14 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
-/** Independent v2 clientbound material reconstruction payload. It never carries exact marker mass. */
+/** Clientbound material reconstruction payload. It never carries exact marker mass. */
 public record FluidMaterialSnapshotPayload(
-		int protocolVersion,
+		FluidProtocol.Layout layout,
 		Kind kind,
 		Identifier dimension,
 		UUID regionId,
 		long generation,
 		long sequence,
-		int paletteVersion,
 		BlockPos origin,
 		float cellSize,
 		int sizeX,
@@ -50,13 +49,14 @@ public record FluidMaterialSnapshotPayload(
 	private static final UUID NIL_REGION_ID = new UUID(0L, 0L);
 	private static final Identifier CLEAR_DIMENSION = Identifier.fromNamespaceAndPath("minecraft", "overworld");
 
-	public static final Type<FluidMaterialSnapshotPayload> TYPE = new Type<>(MmmMod.id("fluid_snapshot_v2"));
+	public static final Type<FluidMaterialSnapshotPayload> TYPE = new Type<>(MmmMod.id("fluid_material_snapshot"));
 	public static final StreamCodec<FriendlyByteBuf, FluidMaterialSnapshotPayload> CODEC = StreamCodec.of(
 			FluidMaterialSnapshotPayload::encode,
 			FluidMaterialSnapshotPayload::decode
 	);
 
 	public FluidMaterialSnapshotPayload {
+		if (layout != FluidProtocol.Layout.MATERIAL) throw new IllegalArgumentException("Material snapshot layout is required");
 		kind = Objects.requireNonNull(kind, "kind");
 		dimension = Objects.requireNonNull(dimension, "dimension");
 		regionId = Objects.requireNonNull(regionId, "regionId");
@@ -69,9 +69,6 @@ public record FluidMaterialSnapshotPayload(
 		materialFractions = deepCopy(Objects.requireNonNull(materialFractions, "materialFractions"));
 		phaseFractions = deepCopy(Objects.requireNonNull(phaseFractions, "phaseFractions"));
 		extensions = List.copyOf(Objects.requireNonNull(extensions, "extensions"));
-		if (protocolVersion != FluidProtocol.MATERIAL_SNAPSHOT_VERSION) {
-			throw new IllegalArgumentException("Material snapshot must use protocol v2");
-		}
 		if (materials.size() > MAX_PALETTE_ENTRIES || phaseGroups.size() > MAX_PALETTE_ENTRIES) {
 			throw new IllegalArgumentException("Material snapshot palette is too large");
 		}
@@ -82,8 +79,8 @@ public record FluidMaterialSnapshotPayload(
 		if (extensionBytes > MAX_EXTENSION_BYTES) throw new IllegalArgumentException("Material snapshot extensions are too large");
 
 		if (kind == Kind.SNAPSHOT) {
-			if (regionId.equals(NIL_REGION_ID) || generation <= 0L || sequence <= 0L || paletteVersion <= 0) {
-				throw new IllegalArgumentException("Material snapshot identity and palette are invalid");
+			if (regionId.equals(NIL_REGION_ID) || generation <= 0L || sequence <= 0L) {
+				throw new IllegalArgumentException("Material snapshot identity is invalid");
 			}
 			if (!(Float.isFinite(cellSize) && cellSize > 0.0F) || sizeX <= 0 || sizeY <= 0 || sizeZ <= 0) {
 				throw new IllegalArgumentException("Material snapshot geometry is invalid");
@@ -100,7 +97,7 @@ public record FluidMaterialSnapshotPayload(
 			validateNormalizedFractions(markers, materialFractions, "material");
 			validateNormalizedFractions(markers, phaseFractions, "phase");
 		} else {
-			if (paletteVersion != 0 || sizeX != 0 || sizeY != 0 || sizeZ != 0 || !materials.isEmpty()
+			if (sizeX != 0 || sizeY != 0 || sizeZ != 0 || !materials.isEmpty()
 					|| !phaseGroups.isEmpty() || totalVolume.length != 0 || markers.length != 0 || solids.length != 0
 					|| materialFractions.length != 0 || phaseFractions.length != 0 || !extensions.isEmpty()) {
 				throw new IllegalArgumentException("Material removal payloads cannot carry reconstruction state");
@@ -142,8 +139,8 @@ public record FluidMaterialSnapshotPayload(
 		byte[][] phaseFractions = new byte[snapshot.phaseGroups().size()][];
 		for (int phase = 0; phase < phaseFractions.length; phase++) phaseFractions[phase] = snapshot.copyPhaseFractions(phase);
 		return new FluidMaterialSnapshotPayload(
-				FluidProtocol.MATERIAL_SNAPSHOT_VERSION, Kind.SNAPSHOT, dimension, regionId, generation, sequence,
-				FluidProtocol.MATERIAL_PALETTE_VERSION, origin, snapshot.cellSize(), snapshot.sizeX(), snapshot.sizeY(), snapshot.sizeZ(),
+				FluidProtocol.Layout.MATERIAL, Kind.SNAPSHOT, dimension, regionId, generation, sequence,
+				origin, snapshot.cellSize(), snapshot.sizeX(), snapshot.sizeY(), snapshot.sizeZ(),
 				materials, snapshot.phaseGroups(), snapshot.copyTotalVolume(), snapshot.copyMarkers(), snapshot.copySolids(),
 				materialFractions, phaseFractions, debugOverlays, List.of()
 		);
@@ -168,7 +165,7 @@ public record FluidMaterialSnapshotPayload(
 			Kind kind, Identifier dimension, UUID regionId, long generation, long sequence
 	) {
 		return new FluidMaterialSnapshotPayload(
-				FluidProtocol.MATERIAL_SNAPSHOT_VERSION, kind, dimension, regionId, generation, sequence, 0,
+				FluidProtocol.Layout.MATERIAL, kind, dimension, regionId, generation, sequence,
 				BlockPos.ZERO, 1.0F, 0, 0, 0, List.of(), List.of(), new byte[0], new byte[0], new byte[0],
 				new byte[0][], new byte[0][], false, List.of()
 		);
@@ -181,13 +178,12 @@ public record FluidMaterialSnapshotPayload(
 	@Override public Type<FluidMaterialSnapshotPayload> type() { return TYPE; }
 
 	static void encode(FriendlyByteBuf buffer, FluidMaterialSnapshotPayload payload) {
-		buffer.writeVarInt(payload.protocolVersion);
+		buffer.writeEnum(payload.layout);
 		buffer.writeEnum(payload.kind);
 		buffer.writeIdentifier(payload.dimension);
 		buffer.writeUUID(payload.regionId);
 		buffer.writeVarLong(payload.generation);
 		buffer.writeVarLong(payload.sequence);
-		buffer.writeVarInt(payload.paletteVersion);
 		buffer.writeBlockPos(payload.origin);
 		buffer.writeFloat(payload.cellSize);
 		buffer.writeVarInt(payload.sizeX);
@@ -216,13 +212,12 @@ public record FluidMaterialSnapshotPayload(
 	}
 
 	static FluidMaterialSnapshotPayload decode(FriendlyByteBuf buffer) {
-		int protocolVersion = buffer.readVarInt();
+		FluidProtocol.Layout layout = buffer.readEnum(FluidProtocol.Layout.class);
 		Kind kind = buffer.readEnum(Kind.class);
 		Identifier dimension = buffer.readIdentifier();
 		UUID regionId = buffer.readUUID();
 		long generation = buffer.readVarLong();
 		long sequence = buffer.readVarLong();
-		int paletteVersion = buffer.readVarInt();
 		BlockPos origin = buffer.readBlockPos();
 		float cellSize = buffer.readFloat();
 		int sizeX = buffer.readVarInt(), sizeY = buffer.readVarInt(), sizeZ = buffer.readVarInt();
@@ -251,7 +246,7 @@ public record FluidMaterialSnapshotPayload(
 			extensions.add(new Extension(type, data));
 		}
 		return new FluidMaterialSnapshotPayload(
-				protocolVersion, kind, dimension, regionId, generation, sequence, paletteVersion,
+				layout, kind, dimension, regionId, generation, sequence,
 				origin, cellSize, sizeX, sizeY, sizeZ, materials, phases, totalVolume, markers, solids,
 				materialFractions, phaseFractions, debugOverlays, extensions
 		);

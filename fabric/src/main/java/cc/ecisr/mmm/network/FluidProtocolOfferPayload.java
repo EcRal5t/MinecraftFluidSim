@@ -7,8 +7,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 
 /** Server-to-client configuration-phase protocol and capability offer. */
 public record FluidProtocolOfferPayload(
-		int minimumVersion,
-		int maximumVersion,
+		FluidProtocol.Layout layout,
 		long requiredCapabilities,
 		long optionalCapabilities
 ) implements CustomPacketPayload {
@@ -19,15 +18,15 @@ public record FluidProtocolOfferPayload(
 	);
 
 	public FluidProtocolOfferPayload {
-		new FluidProtocol.Offer(minimumVersion, maximumVersion, requiredCapabilities, optionalCapabilities);
+		new FluidProtocol.Offer(layout, requiredCapabilities, optionalCapabilities);
 	}
 
 	public FluidProtocolOfferPayload(FluidProtocol.Offer offer) {
-		this(offer.minimumVersion(), offer.maximumVersion(), offer.requiredCapabilities(), offer.optionalCapabilities());
+		this(offer.layout(), offer.requiredCapabilities(), offer.optionalCapabilities());
 	}
 
 	public FluidProtocol.Offer offer() {
-		return new FluidProtocol.Offer(minimumVersion, maximumVersion, requiredCapabilities, optionalCapabilities);
+		return new FluidProtocol.Offer(layout, requiredCapabilities, optionalCapabilities);
 	}
 
 	@Override
@@ -36,15 +35,13 @@ public record FluidProtocolOfferPayload(
 	}
 
 	private static void encode(FriendlyByteBuf buffer, FluidProtocolOfferPayload payload) {
-		buffer.writeVarInt(payload.minimumVersion);
-		buffer.writeVarInt(payload.maximumVersion);
+		buffer.writeEnum(payload.layout);
 		buffer.writeVarLong(payload.requiredCapabilities);
 		buffer.writeVarLong(payload.optionalCapabilities);
 	}
 
 	private static FluidProtocolOfferPayload decode(FriendlyByteBuf buffer) {
-		return new FluidProtocolOfferPayload(
-				buffer.readVarInt(), buffer.readVarInt(), buffer.readVarLong(), buffer.readVarLong()
-		);
+		return new FluidProtocolOfferPayload(buffer.readEnum(FluidProtocol.Layout.class),
+				buffer.readVarLong(), buffer.readVarLong());
 	}
 }

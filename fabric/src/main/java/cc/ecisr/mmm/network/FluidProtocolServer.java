@@ -24,7 +24,7 @@ import java.util.function.Consumer;
 /** Configuration-phase handshake and negotiated play-session gate for Matter, Motion & Mechanics payloads. */
 public final class FluidProtocolServer {
 	private static final int HANDSHAKE_TIMEOUT_TICKS = 200;
-	private static final ConfigurationTask.Type TASK_TYPE = new ConfigurationTask.Type("mmm:protocol_v1");
+	private static final ConfigurationTask.Type TASK_TYPE = new ConfigurationTask.Type("mmm:protocol");
 	private static final Map<ServerConfigurationPacketListenerImpl, HandshakeTask> PENDING = new IdentityHashMap<>();
 	private static final Map<MinecraftServer, Map<UUID, FluidProtocol.Negotiation>> SESSIONS = new WeakHashMap<>();
 
@@ -69,35 +69,35 @@ public final class FluidProtocolServer {
 	}
 
 	public static boolean send(ServerPlayer player, FluidSnapshotPayload payload) {
-		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.CURRENT_VERSION)
+		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.Layout.PURE)
 				|| !ServerPlayNetworking.canSend(player, FluidSnapshotPayload.TYPE)) return false;
 		ServerPlayNetworking.send(player, payload);
 		return true;
 	}
 
 	public static boolean send(ServerPlayer player, FluidMaterialSnapshotPayload payload) {
-		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.MATERIAL_SNAPSHOT_VERSION)
+		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.Layout.MATERIAL)
 				|| !ServerPlayNetworking.canSend(player, FluidMaterialSnapshotPayload.TYPE)) return false;
 		ServerPlayNetworking.send(player, payload);
 		return true;
 	}
 
 	public static boolean send(ServerPlayer player, FluidChemicalSnapshotPayload payload) {
-		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.CHEMICAL_SNAPSHOT_VERSION)
+		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.Layout.CHEMICAL)
 				|| !ServerPlayNetworking.canSend(player, FluidChemicalSnapshotPayload.TYPE)) return false;
 		ServerPlayNetworking.send(player, payload);
 		return true;
 	}
 
 	public static boolean send(ServerPlayer player, FluidGranularSnapshotPayload payload) {
-		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.GRANULAR_SNAPSHOT_VERSION)
+		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.Layout.GRANULAR)
 				|| !ServerPlayNetworking.canSend(player, FluidGranularSnapshotPayload.TYPE)) return false;
 		ServerPlayNetworking.send(player, payload);
 		return true;
 	}
 
 	public static boolean send(ServerPlayer player, FluidThermalSnapshotPayload payload) {
-		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.THERMAL_SNAPSHOT_VERSION)
+		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.Layout.THERMAL)
 				|| !ServerPlayNetworking.canSend(player, FluidThermalSnapshotPayload.TYPE)) return false;
 		ServerPlayNetworking.send(player, payload);
 		return true;
@@ -144,9 +144,9 @@ public final class FluidProtocolServer {
 		return negotiatedSession(server, playerId) != null;
 	}
 
-	private static boolean isNegotiated(MinecraftServer server, UUID playerId, int version) {
+	private static boolean isNegotiated(MinecraftServer server, UUID playerId, FluidProtocol.Layout layout) {
 		FluidProtocol.Negotiation negotiation = negotiatedSession(server, playerId);
-		return negotiation != null && negotiation.selectedVersion() == version;
+		return negotiation != null && negotiation.selectedLayout() == layout;
 	}
 
 	private static FluidProtocol.Negotiation negotiatedSession(MinecraftServer server, UUID playerId) {
@@ -155,20 +155,14 @@ public final class FluidProtocolServer {
 			FluidProtocol.Negotiation negotiation = serverSessions == null ? null : serverSessions.get(playerId);
 			if (negotiation == null || !negotiation.accepted()
 					|| (negotiation.capabilities() & FluidProtocol.REQUIRED_CAPABILITIES) != FluidProtocol.REQUIRED_CAPABILITIES) return null;
-			if (negotiation.selectedVersion() == FluidProtocol.CURRENT_VERSION) return negotiation;
-			if (negotiation.selectedVersion() == FluidProtocol.MATERIAL_SNAPSHOT_VERSION) {
-				return (negotiation.capabilities() & FluidProtocol.CAP_MATERIAL_SNAPSHOT) != 0L ? negotiation : null;
-			}
-			if (negotiation.selectedVersion() == FluidProtocol.CHEMICAL_SNAPSHOT_VERSION) {
-				return (negotiation.capabilities() & (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_CHEMICAL_SNAPSHOT))
-						== (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_CHEMICAL_SNAPSHOT) ? negotiation : null;
-			}
-			if (negotiation.selectedVersion() == FluidProtocol.GRANULAR_SNAPSHOT_VERSION) return
-					(negotiation.capabilities() & (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_GRANULAR_SNAPSHOT))
-					== (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_GRANULAR_SNAPSHOT) ? negotiation : null;
-			return negotiation.selectedVersion() == FluidProtocol.THERMAL_SNAPSHOT_VERSION
-					&& (negotiation.capabilities() & (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_THERMAL_SNAPSHOT))
-					== (FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_THERMAL_SNAPSHOT) ? negotiation : null;
+			long required = switch (negotiation.selectedLayout()) {
+				case PURE -> 0L;
+				case MATERIAL -> FluidProtocol.CAP_MATERIAL_SNAPSHOT;
+				case CHEMICAL -> FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_CHEMICAL_SNAPSHOT;
+				case GRANULAR -> FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_GRANULAR_SNAPSHOT;
+				case THERMAL -> FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_THERMAL_SNAPSHOT;
+			};
+			return (negotiation.capabilities() & required) == required ? negotiation : null;
 		}
 	}
 
@@ -200,7 +194,8 @@ public final class FluidProtocolServer {
 		public void start(Consumer<Packet<?>> sender) {
 			if (!ServerConfigurationNetworking.canSend(listener, FluidProtocolOfferPayload.TYPE)) {
 				listener.disconnect(Component.literal(
-						"This server requires the Matter, Motion & Mechanics client Mod and protocol " + offer.offer().maximumVersion()
+						"This server requires the Matter, Motion & Mechanics client Mod and "
+								+ offer.offer().layout().name().toLowerCase() + " snapshot layout"
 				));
 				return;
 			}
