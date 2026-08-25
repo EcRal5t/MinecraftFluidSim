@@ -1646,7 +1646,7 @@ public final class FluidSimulationService {
 			}
 		}
 		int affectedEntities = region.entityPhysicsEnabled()
-				? FluidRegionWorldInteraction.applyEntityForces(level, region)
+				? MinecraftEntityFluidInteraction.applyForces(level, region)
 				: 0;
 		region.setLastAffectedEntities(affectedEntities);
 		if (collisionsChanged || affectedEntities > 0) {

@@ -21,7 +21,8 @@
 | 区域登记与预算 | `FluidRegionManager.java` | 拒绝不替换现有域；报告 per-region 和 total 预算 |
 | 世界配置 | `FluidServerConfig.java` | 只接受当前完整配置；功能门与预算在启动时冻结；依赖链严格 |
 | world-local registry snapshot | `ChemicalRegistryStore.java`、`GranularRegistryStore.java`、`GasRegistryStore.java`、`ThermalRegistryStore.java`、`simulation/persistence/DurableFileOperations.java`、`StrictNbtFields.java` | 首次发布先回读再 atomic rename 并同步目录 entry；compound 字段集合和类型必须精确；未知内容保留并锁定 |
-| 世界碰撞/实体采样 | `MinecraftCollisionWorldPort.java`、`FluidRegionWorldInteraction.java`、`core/.../world/` | Minecraft shape 先冻结为纯 Java `CollisionField`；挤水只按 marker 账本 |
+| 世界碰撞 | `MinecraftCollisionWorldPort.java`、`FluidRegionWorldInteraction.java`、`core/.../world/` | Minecraft shape 先冻结为纯 Java `CollisionField`；挤水只按 marker 账本 |
+| 实体流体交互 | `MinecraftEntityFluidInteraction.java`、`core/.../world/` | Fabric 只做实体发现/状态映射；流体采样、力学候选和反作用冲量不引用 Minecraft 类型 |
 | controller footprint | `simulation/controller/` | 非加载读取；破口、缺 chunk、多内腔、重叠或超预算拒绝 |
 | 区域 checkpoint | `simulation/persistence/`、`RegionStateLayout.java`、`GenerationSequence.java` | 双槽完整 generation、语义 layout、CRC、HEAD 最后发布；所有 WAL/HEAD 紧邻代次用统一 overflow-safe 检查；atomic rename/delete 后同步目录 entry |
 | takeover | `TakeoverTransaction.java`、`TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
