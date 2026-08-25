@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
-import java.util.regex.Pattern;
+import cc.ecisr.mmm.api.StableId;
 
 /**
  * Immutable material definition. It is not a network or persistence format; surface fields come from the
@@ -13,7 +13,7 @@ public record FluidMaterial(
 		double surfaceTension,
 		double contactAngleRadians
 ) {
-	private static final Pattern KEY = Pattern.compile("[a-z0-9_.-]+:[a-z0-9/._-]+");
+	private static final int MAX_STABLE_ID_LENGTH = 256;
 	private static final double HALF_PI = Math.PI / 2.0;
 
 	public FluidMaterial {
@@ -41,8 +41,6 @@ public record FluidMaterial(
 	}
 
 	private static void requireKey(String value, String label) {
-		if (value == null || !KEY.matcher(value).matches()) {
-			throw new IllegalArgumentException("Invalid " + label + ": " + value);
-		}
+		StableId.require(value, MAX_STABLE_ID_LENGTH, label);
 	}
 }

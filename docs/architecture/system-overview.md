@@ -1,12 +1,23 @@
 # 系统架构总览
 
-本文说明 Real Water 当前产品基线的组件关系、权威状态、单位、执行顺序和失败模型。具体算法与事务细节由同目录主题文档继续约束。
+本文说明 Matter, Motion & Mechanics 当前产品基线的组件关系、权威状态、单位、执行顺序和失败模型。具体算法与事务细节由同目录主题文档继续约束。
 
 ## 产品边界
 
 当前系统只在显式、闭合、预算受限且 chunk 完整加载的 controller 区域内提供连续流体。开发命令可建立瞬态 fixture，但不会扩大持久 ownership。天然河流、海洋、无界洞穴空气和永久 chunk ticket 不属于当前运行模型。
 
 CPU `FlipFluidDomain` 是规范求解器。GPU probe、客户端 renderer、tooltip、命令 status 和未来外部 Mod 查询都只能读取已提交状态。
+
+## 模块边界
+
+| 模块 | 职责 | 依赖边界 |
+|---|---|---|
+| `api` | stable ID、单位化查询/转移契约和外部观察 ABI | 只依赖 JDK，不暴露 solver 数组或 Minecraft 类型 |
+| `core` | PIC/FLIP、材料、气体、化学、颗粒、热学与候选状态 | 依赖 `api` 和纯 Java 库，不引用 Fabric/Minecraft |
+| `fabric` | Mod 生命周期、世界读取/写入、NBT、数据包、网络、物品与命令 | 依赖并内嵌 `api`、`core`；服务器主线程拥有提交权 |
+| `gpu-probe` | Vulkan 能力验证、只读对照和未来后端实验 | 数值部分依赖 `core`；Fabric 集成只以 compile-only 接入主 Mod |
+
+未来 CPU/GPU 后端都必须接收不可变 step input，并在 tick boundary 返回完整 candidate。世界事务、ownership、actor 和 HEAD 发布不进入数值后端。
 
 ## 组件与数据流
 

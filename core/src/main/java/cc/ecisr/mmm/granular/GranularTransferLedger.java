@@ -1,7 +1,5 @@
 package cc.ecisr.mmm.granular;
 
-import net.minecraft.resources.Identifier;
-
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -40,10 +38,11 @@ public record GranularTransferLedger(List<Group> groups) {
 			this(materialId, solidVolumeSvq, Double.doubleToRawLongBits(mass), composition);
 		}
 		public Group {
-			if (Identifier.tryParse(materialId) == null || solidVolumeSvq <= 0L
+			if (solidVolumeSvq <= 0L
 					|| !(Double.isFinite(Double.longBitsToDouble(massBits)) && Double.longBitsToDouble(massBits) > 0.0)) {
 				throw new IllegalArgumentException("Invalid granular transfer group");
 			}
+			GranularIds.requireId(materialId, "granular transfer material id");
 		}
 		public double mass() { return Double.longBitsToDouble(massBits); }
 	}

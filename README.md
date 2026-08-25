@@ -2,7 +2,9 @@
 
 Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CPU 权威 PIC/FLIP 求解器，支持最多四个独立区域、控制器闭壳、跨 chunk 完整加载、原子 checkpoint、分数自由面、cut-cell 碰撞、多液体、守恒化学、低成本颗粒沉积以及热学与相变。
 
-这不是原版水的全局替代。普通模拟不会自动接管世界，控制器与所有扩展物理功能默认关闭。
+这不是原版水的全局替代。当前稳定基线仍以显式 controller 和开发命令为入口；产品化阶段必须补齐可取得的方块/物品、自动生命周期和原版交互，使正常游玩不依赖 `/mmm`。CPU 目前是规范后端，生产 GPU 后端是后续确定目标，但不会取得世界事务提交权。
+
+代码按边界拆为 `api`（loader-neutral 外部契约）、`core`（纯 Java 物理与状态）、`fabric`（Minecraft/Fabric 适配）和 `gpu-probe`（Vulkan 验证与后端实验）。
 
 ## 持久化与安全边界
 

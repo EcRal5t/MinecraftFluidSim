@@ -1,0 +1,78 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+	id 'maven-publish'
+}
+
+base {
+	archivesName = 'mmm-fabric'
+}
+
+version = project.mod_version
+
+loom {
+	splitEnvironmentSourceSets()
+
+	mods {
+		'mmm' {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	implementation project(':api')
+	implementation project(':core')
+	include project(':api')
+	include project(':core')
+}
+
+processResources {
+	inputs.property 'version', project.version
+	filesMatching('fabric.mod.json') {
+		expand 'version': project.version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.release = 25
+}
+
+tasks.withType(Test).configureEach {
+	failOnNoDiscoveredTests = false
+}
+
+tasks.register('runCpuValidation', JavaExec) {
+	group = 'verification'
+	description = 'Runs selected CPU validation gates in one JVM (default: fast; use -PcpuValidation=list).'
+	dependsOn tasks.named('testClasses')
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = 'cc.ecisr.mmm.validation.CpuValidationSuite'
+	enableAssertions = true
+	args providers.gradleProperty('cpuValidation').getOrElse('fast')
+	def validationWorkDir = layout.buildDirectory.dir('cpu-validation-work').get().asFile
+	workingDir validationWorkDir
+	doFirst { validationWorkDir.mkdirs() }
+}
+
+java {
+	withSourcesJar()
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+jar {
+	from(rootProject.file('LICENSE')) {
+		rename { "${it}_${project.name}" }
+	}
+}
+
+publishing {
+	publications {
+		create('mavenJava', MavenPublication) { from components.java }
+	}
+}

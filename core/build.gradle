@@ -1,0 +1,35 @@
+plugins {
+	id 'java-library'
+	id 'maven-publish'
+}
+
+base {
+	archivesName = 'mmm-core'
+}
+
+version = project.mod_version
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	api project(':api')
+	implementation 'com.google.code.gson:gson:2.14.0'
+}
+
+java {
+	withSourcesJar()
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.release = 25
+}
+
+publishing {
+	publications {
+		create('mavenJava', MavenPublication) { from components.java }
+	}
+}

@@ -8,7 +8,6 @@ base {
 }
 
 version = '0.1.17'
-group = project.group
 
 loom {
 	mods {
@@ -22,7 +21,8 @@ dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-	implementation project(':')
+	implementation project(':core')
+	compileOnly project(':fabric')
 }
 
 processResources {

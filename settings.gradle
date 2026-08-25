@@ -11,4 +11,4 @@ pluginManagement {
 
 // Should match your mod id.
 rootProject.name = 'mmm'
-include 'gpu-probe'
+include 'api', 'core', 'fabric', 'gpu-probe'

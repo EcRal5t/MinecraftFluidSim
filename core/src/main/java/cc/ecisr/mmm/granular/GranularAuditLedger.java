@@ -1,7 +1,6 @@
 package cc.ecisr.mmm.granular;
 
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
-import net.minecraft.resources.Identifier;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -164,11 +163,12 @@ public record GranularAuditLedger(List<Entry> entries) {
 			List<SpeciesAmount> composition
 	) {
 		public Entry {
-			if (Identifier.tryParse(materialId) == null || solidVolumeSvq <= 0L
+			if (solidVolumeSvq <= 0L
 					|| !(Double.isFinite(Double.longBitsToDouble(massBits)) && Double.longBitsToDouble(massBits) > 0.0)
 					|| composition == null || composition.size() > GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES) {
 				throw new IllegalArgumentException("Invalid granular audit entry");
 			}
+			GranularIds.requireId(materialId, "granular audit material id");
 			ArrayList<SpeciesAmount> canonical = new ArrayList<>(composition);
 			canonical.sort(Comparator.comparing(SpeciesAmount::speciesId));
 			if (!canonical.equals(composition)) throw new IllegalArgumentException("Granular audit composition is not canonical");
@@ -193,9 +193,10 @@ public record GranularAuditLedger(List<Entry> entries) {
 
 	public record SpeciesAmount(String speciesId, long amountQuanta) {
 		public SpeciesAmount {
-			if (Identifier.tryParse(speciesId) == null || amountQuanta <= 0L) {
+			if (amountQuanta <= 0L) {
 				throw new IllegalArgumentException("Invalid granular audit species amount");
 			}
+			GranularIds.requireId(speciesId, "granular audit species id");
 		}
 	}
 

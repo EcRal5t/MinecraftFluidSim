@@ -1,4 +1,4 @@
-# Real Water 产品路线
+# Matter, Motion & Mechanics 产品路线
 
 本文件定义产品要走向哪里、阶段依赖和完成条件。它不重复当前 codec 或公式；已生效的组件、真值和 logical-step 数据流见 [`../architecture/system-overview.md`](../architecture/system-overview.md)，主题细节见 [`../architecture/`](../README.md)，代码与最近验证入口见 [`../maintenance/routing.md`](../maintenance/routing.md)。
 
@@ -10,8 +10,9 @@
 4. 材料、species、phase、reaction 和热物性数据驱动；除显式 source/sink 外，质量、体积、组成、电荷和能量可审计闭合。
 5. 颗粒覆盖沉淀、细沙等宏观沉降/沉积，不承诺通用刚体、弹性固体或无依据的全套 MPM。
 6. 先把有界 controller 做成可靠、可恢复、可观察、可与其他 Mod 组合的工业流体系统，再评审天然水体和开放世界 ownership。
+7. 以纯 Java `core` 保留 CPU 规范实现，并在量化边界稳定后交付生产 GPU 求解后端；后端切换不得改变库存、事务或失败语义。
 
-近期不承诺：逐格求解所有开放空气、逐分子/离子粒子、弱酸/活度/完整动力学平衡、通用刚体或弹塑性体、无界洞穴 flood fill、海洋尺度 20 Hz、首版生产 GPU 后端。
+近期不承诺：逐格求解所有开放空气、逐分子/离子粒子、弱酸/活度/完整动力学平衡、通用刚体或弹塑性体、无界洞穴 flood fill、海洋尺度 20 Hz。生产 GPU 后端是明确后续阶段，不与首个 API/原版交互增量绑定。
 
 ## 当前产品基座
 
@@ -50,7 +51,8 @@
 | 3 | 物理完整性增量 | 可观察 fixture | 压力相关固液、双向实体等分别有数据域与守恒门，不互相绑架发布 |
 | 4 | section 生命周期与显式端口 | profile、事务与网络 API | 跨 section/region 仍只有完整代次，不依赖永久 chunk ticket |
 | 5 | 有界范围扩张 | 高休眠率、恢复/性能基准 | 天然小水体在硬预算内可接管、释放和异常恢复 |
-| 6 | 大尺度世界评审 | 前述全部量化 | 河流/海洋方案有成本模型、持久模型和明确停止门后才可开工 |
+| 6 | 生产 GPU 后端 | immutable step input、完整 candidate、CPU 对照与 profile | GPU 超时/设备丢失保留上一完整状态；CPU 可恢复；库存和误差门与后端无关 |
+| 7 | 大尺度世界评审 | 前述全部量化 | 河流/海洋方案有成本模型、持久模型和明确停止门后才可开工 |
 
 阶段编号只表达依赖，不绑定发布版本；各阶段应拆成 routing 可选择的小增量。
 

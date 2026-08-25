@@ -1,108 +1,20 @@
 plugins {
-	id 'net.fabricmc.fabric-loom' version "${loom_version}"
-	id 'maven-publish'
+	id 'base'
 }
 
-repositories {
-	// Add repositories to retrieve artifacts from in here.
-	// You should only use this when depending on other mods because
-	// Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
-	// See https://docs.gradle.org/current/userguide/declaring_repositories.html
-	// for more information about repositories.
+group = project.maven_group
+version = project.mod_version
+
+allprojects {
+	group = rootProject.group
 }
 
-loom {
-	splitEnvironmentSourceSets()
-
-	mods {
-		"mmm" {
-			sourceSet sourceSets.main
-			sourceSet sourceSets.client
-		}
-	}
+tasks.named('assemble') {
+	dependsOn ':api:assemble', ':core:assemble', ':fabric:assemble', ':gpu-probe:assemble'
 }
 
-dependencies {
-	// To change the versions see the gradle.properties file
-	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
-
-	// Fabric API. This is technically optional, but you probably want it anyway.
-	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-}
-
-processResources {
-	def version = project.version
-	inputs.property "version", version
-
-	filesMatching("fabric.mod.json") {
-		expand "version": version
-	}
-}
-
-tasks.withType(JavaCompile).configureEach {
-	it.options.release = 25
-}
-
-// This project deliberately uses executable validation mains instead of a JUnit engine.
-// Gradle 9 otherwise turns the standard lifecycle `check` task red merely because test
-// sources exist while no framework-discoverable tests do.
-tasks.withType(Test).configureEach {
-	failOnNoDiscoveredTests = false
-}
-
-/**
- * One JVM owns every CPU validation selector. This avoids one Gradle task and JVM startup per
- * historical milestone while retaining narrow, independently selectable failure domains.
- * Examples: runCpuValidation (fast), -PcpuValidation=containers, -PcpuValidation=milestone,
- * -PcpuValidation=soak, or a comma-separated selector list.
- */
-tasks.register("runCpuValidation", JavaExec) {
-	group = "verification"
-	description = "Runs selected CPU validation gates in one JVM (default: fast; use -PcpuValidation=list)."
-	dependsOn tasks.named("testClasses")
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "cc.ecisr.mmm.validation.CpuValidationSuite"
-	enableAssertions = true
-	args providers.gradleProperty("cpuValidation").getOrElse("fast")
-	def validationWorkDir = layout.buildDirectory.dir("cpu-validation-work").get().asFile
-	workingDir validationWorkDir
-	doFirst { validationWorkDir.mkdirs() }
-}
-
-
-java {
-	// Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
-	// if it is present.
-	// If you remove this line, sources will not be generated.
-	withSourcesJar()
-
-	sourceCompatibility = JavaVersion.VERSION_25
-	targetCompatibility = JavaVersion.VERSION_25
-}
-
-jar {
-	def projectName = project.name
-	inputs.property "projectName", projectName
-
-	from("LICENSE") {
-		rename { "${it}_$projectName"}
-	}
-}
-
-// configure the maven publication
-publishing {
-	publications {
-		create("mavenJava", MavenPublication) {
-			from components.java
-		}
-	}
-
-	// See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
-	repositories {
-		// Add repositories to publish to here.
-		// Notice: This block does NOT have the same function as the block in the top level.
-		// The repositories here will be used for publishing your artifact, not for
-		// retrieving dependencies.
-	}
+tasks.register('runCpuValidation') {
+	group = 'verification'
+	description = 'Runs the Fabric integration CPU validation suite.'
+	dependsOn ':fabric:runCpuValidation'
 }

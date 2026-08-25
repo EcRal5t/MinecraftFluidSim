@@ -1,14 +1,20 @@
-# Real Water 维护路由
+# Matter, Motion & Mechanics 维护路由
 
 本文只回答“代码在哪里、改完默认跑什么”。状态契约从 [`../README.md`](../README.md) 选择；未来工作见 [`../roadmap/product-roadmap.md`](../roadmap/product-roadmap.md)。
 
-## 主 Mod 职责
+## 模块与主 Mod 职责
+
+- `api/src/main/java/cc/ecisr/mmm/api/`：只放 JDK-only 的稳定外部契约；禁止 Fabric、Minecraft、NBT、live domain 引用。
+- `core/src/main/java/cc/ecisr/mmm/`：物理算法、registry 值对象和权威内存状态；禁止 `net.minecraft`、`net.fabricmc`。
+- `fabric/src/main/java/cc/ecisr/mmm/`：Fabric/Minecraft 编排、数据包/持久化适配和世界事务。
+- `fabric/src/client/java/cc/ecisr/mmm/client/`：只读客户端重建。
+- `gpu-probe/`：Vulkan probe 与后端实验；数值代码依赖 `core`，世界集成 compile-only 依赖 `fabric`。
 
 | 职责 | 首要入口 | 必须保持 |
 |---|---|---|
-| 初始化、tick、payload 注册 | `src/main/java/com/example/RealWaterMod.java` | 生命周期、registry 和网络注册成套 |
-| `/realwater` 命令 | `RealWaterCommands.java` | 状态操作留在服务层；完整输出写 transcript |
-| Minecraft 编排 | `simulation/FluidSimulationService.java` | 每域先过 availability；不把世界事务下沉到 solver |
+| 初始化、tick、payload 注册 | `fabric/src/main/java/cc/ecisr/mmm/MmmMod.java` | 生命周期、registry 和网络注册成套 |
+| `/mmm` 命令 | `MmmCommands.java` | 状态操作留在服务层；完整输出写 transcript |
+| Minecraft 编排 | `fabric/.../simulation/FluidSimulationService.java` | 每域先过 availability；不把世界事务下沉到 solver |
 | 持久区域管理 | `FluidRegionOperations.java`、`FluidRegionPersistence.java` | checkpoint 成功后才释放；当前功能布局必须精确匹配；不改写不匹配载荷 |
 | 区域身份与生命周期 | `FluidRegion.java`、`FluidRegionLifecycle.java`、`ThermalActivity.java` | UNLOADED 仍占预算；motion/thermal 调度不改变库存 |
 | 区域登记与预算 | `FluidRegionManager.java` | 拒绝不替换现有域；报告 per-region 和 total 预算 |
@@ -19,7 +25,7 @@
 | takeover | `TakeoverTransaction.java`、`TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
 | ownership | `simulation/ownership/`、`FluidRegionPersistence.java` | WAL→WARNING→世界→region HEAD→committed；未知状态保留并锁定 |
 | 容器事务 | `ContainerTransferJournal.java`、`ContainerTransferStore.java`、`ContainerTransferRecovery.java`、`FluidTransferService.java` | 只读当前 writer 布局；actor durable save 前不得删 WAL |
-| 活动求解器 | `fluid/FlipFluidDomain.java` | 唯一 CPU 核心；mechanics→conduction→reaction→phase→granular→reseed |
+| 活动求解器 | `core/.../fluid/FlipFluidDomain.java` | CPU 规范实现；mechanics→conduction→reaction→phase→granular→reseed |
 | 自由面/压力 | `FlipFreeSurfaceGeometry.java`、`FlipVolumeDriftCorrection.java`、`FlipVelocityExtrapolator.java` | marker count 决定压力相；平滑 volume 不结算库存 |
 | cut-cell/CCD | `FlipCutCellGeometry.java`、`FlipParticleCollision.java` | pressure 与碰撞共享 aperture；只截断命中法向 |
 | reseed | `FlipParticleReseeder.java` | 保持体积、质量、动量、质心和相身份 |
@@ -28,7 +34,7 @@
 | 化学 | `chemistry/`、`FlipChemicalParticleState.java` | exact species/组成/电荷/残差；indicator provenance 不隔离反应 |
 | 颗粒 | `granular/`、`GranularCouplingFields.java` | SVQ、质量、组成独立；active/deposit/coherent 不混用 |
 | 热学 | `thermal/`、`FlipThermalState.java`、`FlipThermalParticleState.java` | 总 U 权威；温度派生；通量、反应热、相变、功联合审计 |
-| 客户端快照 | `network/`、`src/client/java/com/example/client/` | 只读量化展示；不得反写物理或恢复库存 |
+| 客户端快照 | `fabric/.../network/`、`fabric/src/client/java/cc/ecisr/mmm/client/` | 只读量化展示；不得反写物理或恢复库存 |
 | 命令审计 | `logging/` | UTF-8 观测；记录失败不能改变命令结果 |
 
 ## 高频定位
@@ -43,7 +49,7 @@
 - 气压异常：cavity scanner、available volume、EoS、orifice edge、interface pressure。
 - 热区暂停：thermal/gas registry fingerprint、candidate T/P 有效域、U/source/sink/work、phase pending-work、gas topology ordinal。
 - ownership 锁：ownership store 的 WAL/committed 与 region HEAD base/target。
-- 容器锁：`<world>/realwater/container-transfer/` 扫描、HEAD checksum、actor before/after durable state；不要手删未知 WAL。
+- 容器锁：`<world>/mmm/container-transfer/` 扫描、HEAD checksum、actor before/after durable state；不要手删未知 WAL。
 
 ## CPU 验证
 
@@ -99,4 +105,4 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 
 ## GPU probe
 
-`gpu-probe` 不修改世界或存档，主 Mod 始终 CPU 权威。入口位于 `gpu-probe/src/main/java/com/example/gpuprobe/`；改 descriptor/buffer/stage 时同步 Java binding、shader 和 readback。设备性能使用 Vulkan timestamp，调度与超时仍使用 wall time。
+`gpu-probe` 不修改世界或存档，当前主 Mod 仍以 CPU 为规范后端。入口位于 `gpu-probe/src/main/java/cc/ecisr/mmm/gpuprobe/`；改 descriptor/buffer/stage 时同步 Java binding、shader 和 readback。设备性能使用 Vulkan timestamp，调度与超时仍使用 wall time。生产 GPU 后端必须经 `core` 的不可变输入/完整 candidate 边界接入，不能取得世界或持久化提交权。
