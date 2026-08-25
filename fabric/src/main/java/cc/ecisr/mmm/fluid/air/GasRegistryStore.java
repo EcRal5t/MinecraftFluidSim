@@ -7,6 +7,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
+import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 
 import java.io.IOException;
@@ -107,6 +108,9 @@ public final class GasRegistryStore {
 			CompoundTag tag = new CompoundTag(); tag.putString("Id", component.id());
 			tag.putLong("MassDensityBits", Double.doubleToRawLongBits(component.standardMassPerCubicMeter()));
 			tag.putLong("ResidualDensityBits", Double.doubleToRawLongBits(component.defaultMassResidualPerCubicMeter()));
+			ListTag allowed = new ListTag();
+			for (String speciesId : component.allowedSpecies()) allowed.add(StringTag.valueOf(speciesId));
+			tag.put("AllowedSpecies", allowed);
 			ListTag species = new ListTag();
 			for (GasComponentDefinition.DefaultSpecies entry : component.defaultSpeciesPerCubicMeter()) {
 				CompoundTag value = new CompoundTag(); value.putString("Species", entry.speciesId());
@@ -129,7 +133,18 @@ public final class GasRegistryStore {
 		for (int index = 0; index < list.size(); index++) {
 			CompoundTag tag = compound(list, index, "component");
 			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "MassDensityBits", Tag.TAG_LONG,
-					"ResidualDensityBits", Tag.TAG_LONG, "Species", Tag.TAG_LIST));
+					"ResidualDensityBits", Tag.TAG_LONG, "AllowedSpecies", Tag.TAG_LIST,
+					"Species", Tag.TAG_LIST));
+			ListTag encodedAllowed = tag.getListOrEmpty("AllowedSpecies");
+			if (encodedAllowed.size() > GasLimits.MAX_SPECIES_PER_COMPONENT) {
+				throw new IOException("Gas component allowed species over budget");
+			}
+			ArrayList<String> allowed = new ArrayList<>(encodedAllowed.size());
+			for (int entry = 0; entry < encodedAllowed.size(); entry++) {
+				Tag value = encodedAllowed.get(entry);
+				if (!(value instanceof StringTag text)) throw new IOException("Invalid allowed gas species entry");
+				allowed.add(text.asString().orElseThrow());
+			}
 			ListTag encodedSpecies = tag.getListOrEmpty("Species");
 			if (encodedSpecies.size() > GasLimits.MAX_SPECIES_PER_COMPONENT) throw new IOException("Gas component species over budget");
 			ArrayList<GasComponentDefinition.DefaultSpecies> species = new ArrayList<>(encodedSpecies.size());
@@ -141,7 +156,7 @@ public final class GasRegistryStore {
 			}
 			result.add(new GasComponentDefinition(tag.getStringOr("Id", ""),
 					Double.longBitsToDouble(tag.getLongOr("MassDensityBits", 0L)),
-					Double.longBitsToDouble(tag.getLongOr("ResidualDensityBits", 0L)), species));
+					Double.longBitsToDouble(tag.getLongOr("ResidualDensityBits", 0L)), allowed, species));
 		}
 		return List.copyOf(result);
 	}

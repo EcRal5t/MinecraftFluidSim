@@ -89,6 +89,26 @@ public final class GasRegistry {
 	public byte[] canonicalBytes() { return canonicalBytes.clone(); }
 	public String fingerprint() { return fingerprint; }
 
+	/** Rejects inventory whose component or component-local species identity is outside this frozen registry. */
+	public void requireCompatible(GasInventory inventory) {
+		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
+		for (GasComponentAmount amount : inventory.components()) {
+			requireCompatible(amount.componentId(), amount.species());
+		}
+	}
+
+	/** Rejects one persisted/audited component column whose species do not belong to that component. */
+	public void requireCompatible(String componentId, List<GasComponentAmount.SpeciesAmount> species) {
+		GasComponentDefinition definition = component(componentId);
+		if (species == null) throw new IllegalArgumentException("Gas species list is missing");
+		for (GasComponentAmount.SpeciesAmount amount : species) {
+			if (!definition.allowsSpecies(amount.speciesId())) {
+				throw new IllegalArgumentException("Gas component " + componentId
+						+ " does not allow species " + amount.speciesId());
+			}
+		}
+	}
+
 	/** Creates one explicit ambient-source inventory with exact total standard nanos. */
 	public GasInventory createAmbient(long standardVolumeNanos) {
 		if (standardVolumeNanos < 0L) throw new IllegalArgumentException("Ambient gas volume cannot be negative");
@@ -122,6 +142,8 @@ public final class GasRegistry {
 			out.append("C|").append(component.id()).append('|')
 					.append(Long.toUnsignedString(Double.doubleToRawLongBits(component.standardMassPerCubicMeter()))).append('|')
 					.append(Long.toUnsignedString(Double.doubleToRawLongBits(component.defaultMassResidualPerCubicMeter()))).append('|');
+			for (String species : component.allowedSpecies()) out.append(species).append(';');
+			out.append('|');
 			for (GasComponentDefinition.DefaultSpecies species : component.defaultSpeciesPerCubicMeter()) {
 				out.append(species.speciesId()).append('=').append(species.quantaPerCubicMeter().canonical()).append(';');
 			}

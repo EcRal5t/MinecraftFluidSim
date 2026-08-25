@@ -21,7 +21,7 @@
 这一基座的限制也必须如实保留：
 
 - 不可互溶相目前共享局部速度场，不声称解析切向滑移、乳化和液滴破碎。
-- 实体耦合目前主要是流体对实体的单向采样，不是完整双向动量/排水求解。
+- 实体运动已通过 loader-neutral moving-body request 扰动 marker 动量；当前 kinematic AABB 近似仍不是移动 cut-cell、压力面积积分或严格双向动量/排水闭合。
 - 固液已支持有界、数据化的压力平衡曲线，气液使用绝对压力和 component 分压；更高压力、更多材料和跨相溶解仍需分别验证物性域。
 - Query API 已冻结同步只读单格观察，并已有只查询闭壳相邻液体的可选 Jade 适配；container durable completion 已有 committed event。尚无 WAILA/HWYLA、直接自由面目标、稳定 transfer API、其他提交类型事件或其他 loader 发现桥。
 - section 是一个 region 原子 generation 内的存储分片，不具有独立提交、卸载或 ownership 生命周期。
@@ -100,7 +100,7 @@ Query API 的单位、线程、无加载/唤醒和结构化失败语义已经冻
 
 ### 气液 species 交换
 
-sealed gas component 已独立保存 standard volume、kg、species/residual 和总内能，但当前尚不与液相 species 做溶解/脱气事务。CO2 溶解、气体吸收、洗涤塔和曝气的第一增量必须先冻结：
+sealed gas component 已独立保存 standard volume、kg、species/residual 和总内能，world gas registry 也冻结 component-local allowed species；当前尚不与液相 species 做溶解/脱气事务。CO2 溶解、气体吸收、洗涤塔和曝气的第一增量必须先冻结：
 
 - gas/liquid 两侧的 stable species 映射与 exact mass/residual 搬运；
 - Henry/逸度或其他物性关系的温度、压力、浓度有效域；
@@ -114,7 +114,7 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 ## 实体双向耦合
 
-目标不是立即引入通用刚体求解器，而是把当前单向效果逐步变成可审计的双向边界：
+目标不是立即引入通用刚体求解器，而是把当前运动扰动逐步变成可审计、严格闭合的双向边界：
 
 当前已有 loader-neutral moving-body request：Fabric 的有界湿样本会把实体运动写入附近 marker 动量，并报告实际液体冲量，所以实体运动可扰动自由面。它仍是 kinematic AABB 近似，不替代以下压力、占位和严格动量闭合工作。
 

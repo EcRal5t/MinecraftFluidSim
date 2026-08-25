@@ -16,6 +16,7 @@ public final class AirNetworkValidation {
 		validateSplitMergeVentLedger();
 		validateAmbientInteraction();
 		validateComponentTransport();
+		validateComponentSpeciesBoundary();
 		validatePhaseColumnTake();
 		validateGuards();
 		System.out.println("M5 air network gate passed: isothermal EoS, finite-rate orifice equalization, "
@@ -225,8 +226,10 @@ public final class AirNetworkValidation {
 	private static void validateComponentTransport() {
 		GasRegistry registry = new GasRegistry(List.of(
 				new GasComponentDefinition("test:alpha", 1.0, 0.25,
+						List.of("test:a"),
 						List.of(new GasComponentDefinition.DefaultSpecies("test:a", ExactRational.of(3_000_000_000L)))),
 				new GasComponentDefinition("test:beta", 2.0, 0.5,
+						List.of("test:b"),
 						List.of(new GasComponentDefinition.DefaultSpecies("test:b", ExactRational.of(6_000_000_000L))))),
 				List.of(new GasRegistry.AmbientFraction("test:alpha", ExactRational.parse("1/3")),
 						new GasRegistry.AmbientFraction("test:beta", ExactRational.parse("2/3"))));
@@ -244,6 +247,25 @@ public final class AirNetworkValidation {
 		check(after.components().stream().map(GasComponentAmount::componentId).toList()
 				.equals(List.of("test:alpha", "test:beta")), "component transport lost stable identities");
 		check(network.auditClosed(), "component transport did not close mass/species audit");
+	}
+
+	private static void validateComponentSpeciesBoundary() {
+		expectThrow(() -> new GasComponentDefinition("test:invalid", 1.0, 1.0, List.of(),
+				List.of(new GasComponentDefinition.DefaultSpecies("test:a", ExactRational.ONE))),
+				"default species outside component allow-list");
+		GasRegistry registry = new GasRegistry(List.of(
+				new GasComponentDefinition("test:alpha", 1.0, 1.0, List.of("test:a"), List.of()),
+				new GasComponentDefinition("test:beta", 1.0, 1.0, List.of("test:b"), List.of())),
+				List.of(new GasRegistry.AmbientFraction("test:alpha", ExactRational.ONE)));
+		AirNetwork network = new AirNetwork(registry);
+		int node = network.addNode(1.0, 1.0);
+		GasInventory wrongComponent = new GasInventory(List.of(new GasComponentAmount(
+				"test:alpha", 1L, 1.0E-9,
+				List.of(new GasComponentAmount.SpeciesAmount("test:b", 1L)), 0.0)));
+		long before = network.standardVolumeNanos(node);
+		expectThrow(() -> network.commitPhaseSource(node, wrongComponent), "species attached to wrong component");
+		check(network.standardVolumeNanos(node) == before && network.auditClosed(),
+				"rejected gas species source changed inventory or audit state");
 	}
 
 	private static void validatePhaseColumnTake() {

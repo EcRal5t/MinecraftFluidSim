@@ -21,6 +21,7 @@
 
 - material 定义 carrier kind/id、参考温度、参考比内能、导热率和最多 16 个 caloric segment；
 - species offset 定义某 host material 中每 AU 的参考内能偏移；
+- gas component 允许的 species 在 chemistry 启用时必须全部具有对应 host gas species offset，避免库存先提交、温度反演后失败；
 - transition 定义上下相、有界 `T_eq(p)` 曲线、exact 两侧体积量子、exact 质量批和接口要求；曲线端点是压力有效域的唯一真值，不重复保存参考温度或上下限；
 - boundary 定义哪些世界方块提供固定温度面。
 

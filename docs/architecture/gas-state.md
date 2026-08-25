@@ -23,7 +23,9 @@ air cell 必须同时满足：非 solid、`markerCount == 0`，且扣除 cut-cel
 - source、sink、质量 roundoff 和 residual roundoff 是独立审计列。
 - ambient 节点不持有有限库存；新密闭腔从环境建立时明确记 external source。
 
-`GasRegistry` 规范化 component 定义和 ambient fraction；ambient fraction 必须按 exact rational 精确和为 1。标准态固定为 `101325 Pa`、`293.15 K`。每个 component 分别定义标准态 kg/m³、默认 species quanta/m³ 和质量 residual/m³；创建 ambient inventory 时用 largest-remainder 对整数 nanos 确定分配。
+`GasRegistry` 规范化 component 定义和 ambient fraction；ambient fraction 必须按 exact rational 精确和为 1。标准态固定为 `101325 Pa`、`293.15 K`。每个 component 分别定义标准态 kg/m³、允许承载的 species、默认 species quanta/m³ 和质量 residual/m³；默认 species 必须属于该 component 的允许集合。创建 ambient inventory 时用 largest-remainder 对整数 nanos 确定分配。
+
+component 与 species 的隶属关系是 world-local registry 真值，不由运行时库存临时推断。相变 source、拓扑 remap、恢复和 source/sink audit 都必须在发布前验证该关系；一个已知 chemical species 也不能挂到未声明它的 gas component。允许集合非空只声明能力，当前功能布局中实际出现 species 时仍必须同时存在匹配的 chemical registry 和 host gas thermal species offset。
 
 表示硬上限为：registry 64 个 component、单 node 32 个 component、单 component 16 个 species、单 region 65536 个 sealed node、stable ID 128 字符、单 extension 16 MiB。到达上限时拒绝候选或 fail-open 到 ambient；不能丢掉最小 component 继续运行。
 
@@ -87,4 +89,4 @@ Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 
 气体只作为完整热区域 generation 的 required payload 发布。恢复时从已提交 carrier geometry 重新扫描拓扑，并要求节点数、minimum-cell key、逐格 membership、库存和能量 ordinal 全部一致；任何差异都锁定，不猜测 remap。
 
-持久 payload 还包含 registry fingerprint、unit identity、component palette、节点总账、逐 section membership 和 source/sink/roundoff 审计。edge、pressure、temperature、runtime lineage 和 flow velocity 可从完整库存与几何重建，不进入 checkpoint。
+持久 payload 还包含 registry fingerprint、unit identity、component palette、节点总账、逐 section membership 和 source/sink/roundoff 审计。gas registry fingerprint 同时绑定每个 component 的允许 species 集合；不匹配时原样保留并锁定。edge、pressure、temperature、runtime lineage 和 flow velocity 可从完整库存与几何重建，不进入 checkpoint。

@@ -126,6 +126,7 @@ public final class AirNetwork {
 	/** Books material entering the gas owner from another phase and merges all independent columns. */
 	public void commitPhaseSource(int nodeId, GasInventory addition) {
 		if (addition == null || addition.isEmpty()) throw new IllegalArgumentException("Gas phase source is empty");
+		registry.requireCompatible(addition);
 		AirNode node = sealed(nodeId); MassColumns before = liveMassColumns();
 		node.setInventory(node.inventory().merge(addition));
 		finishMutation(before, addition, GasInventory.EMPTY);
@@ -487,6 +488,9 @@ public final class AirNetwork {
 		if (sourceDelta == null || sinkDelta == null || replacementEdges == null) {
 			throw new IllegalArgumentException("Gas remap plan is incomplete");
 		}
+		for (GasInventory inventory : inventories) registry.requireCompatible(inventory);
+		registry.requireCompatible(sourceDelta);
+		registry.requireCompatible(sinkDelta);
 		TreeMap<Integer, AirNode> replacementNodes = new TreeMap<>();
 		for (int slot = 0; slot < availableVolumes.length; slot++) {
 			if (!(Double.isFinite(availableVolumes[slot]) && availableVolumes[slot] >= 0.0) || inventories.get(slot) == null) {
@@ -543,6 +547,9 @@ public final class AirNetwork {
 				throw new IllegalArgumentException("Invalid restored gas node");
 			}
 		}
+		for (GasInventory inventory : inventories) registry.requireCompatible(inventory);
+		for (GasAuditLedger.Entry entry : source.entries()) registry.requireCompatible(entry.componentId(), entry.species());
+		for (GasAuditLedger.Entry entry : sink.entries()) registry.requireCompatible(entry.componentId(), entry.species());
 		nodes.clear(); edges.clear();
 		for (int slot = 0; slot < inventories.size(); slot++) {
 			nodes.put(slot + 1, new AirNode(availableVolumes[slot], inventories.get(slot)));

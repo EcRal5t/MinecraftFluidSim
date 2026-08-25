@@ -863,17 +863,17 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	private static void validateGasInventoryRegistry(
 			GasInventory inventory, GasRegistry registry, ChemicalRegistry chemicalRegistry
 	) throws IOException {
-		for (GasComponentAmount amount : inventory.components()) {
-			if (!registry.hasComponent(amount.componentId())) throw new IOException("Unknown gas component " + amount.componentId());
-			validateGasSpecies(amount.species(), chemicalRegistry);
-		}
+		try { registry.requireCompatible(inventory); }
+		catch (IllegalArgumentException invalid) { throw new IOException(invalid.getMessage(), invalid); }
+		for (GasComponentAmount amount : inventory.components()) validateGasSpecies(amount.species(), chemicalRegistry);
 	}
 
 	private static void validateGasAuditRegistry(
 			cc.ecisr.mmm.fluid.air.GasAuditLedger ledger, GasRegistry registry, ChemicalRegistry chemicalRegistry
 	) throws IOException {
 		for (cc.ecisr.mmm.fluid.air.GasAuditLedger.Entry entry : ledger.entries()) {
-			if (!registry.hasComponent(entry.componentId())) throw new IOException("Unknown gas audit component " + entry.componentId());
+			try { registry.requireCompatible(entry.componentId(), entry.species()); }
+			catch (IllegalArgumentException invalid) { throw new IOException(invalid.getMessage(), invalid); }
 			validateGasSpecies(entry.species(), chemicalRegistry);
 		}
 	}

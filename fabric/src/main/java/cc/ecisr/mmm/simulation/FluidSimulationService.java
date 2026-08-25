@@ -251,7 +251,7 @@ public final class FluidSimulationService {
 				}
 				GasRegistryStore.LoadResult loaded = gasStore.loadOrCreate(definitions);
 				bootGasRegistry = loaded.registry();
-				validateSupportedGasComponents(bootGasRegistry);
+				validateSupportedGasComponents(bootGasRegistry, bootChemicalRegistry);
 				if (loaded.definitionMismatch()) {
 					MmmMod.LOGGER.warn("Built-in gas definitions differ from authoritative world registry {}; existing inventory keeps world semantics",
 							bootGasRegistry.fingerprint());
@@ -352,9 +352,15 @@ public final class FluidSimulationService {
 		}
 	}
 
-	private static void validateSupportedGasComponents(GasRegistry registry) {
+	private static void validateSupportedGasComponents(GasRegistry registry, ChemicalRegistry chemicalRegistry) {
 		registry.component(BuiltinGasDefinitions.AIR);
 		registry.component(BuiltinGasDefinitions.WATER_VAPOR);
+		for (var component : registry.components()) for (String species : component.allowedSpecies()) {
+			if (chemicalRegistry != null && !chemicalRegistry.hasSpecies(species)) {
+				throw new IllegalArgumentException("Gas component " + component.id()
+						+ " allows unavailable chemical species " + species);
+			}
+		}
 	}
 
 	private static void validateSupportedThermalCarriers(
@@ -369,7 +375,10 @@ public final class FluidSimulationService {
 			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, material.id());
 		}
 		for (var component : gasRegistry.components()) {
-			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS, component.id());
+			int host = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS, component.id());
+			if (chemicalRegistry != null) for (String species : component.allowedSpecies()) {
+				registry.speciesOffset(host, species);
+			}
 		}
 		if (chemicalRegistry != null) for (var phase : chemicalRegistry.phases()) {
 			int host = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, phase.materialId());

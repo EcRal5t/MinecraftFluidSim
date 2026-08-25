@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.fluid.air;
 
+import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
 import cc.ecisr.mmm.chemistry.ExactRational;
 
 import java.util.List;
@@ -17,9 +18,10 @@ public final class BuiltinGasDefinitions {
 	public static GasRegistry createRegistry() {
 		return new GasRegistry(
 				List.of(
-						new GasComponentDefinition(AIR, AirNetwork.AIR_DENSITY, AirNetwork.AIR_DENSITY, List.of()),
+						new GasComponentDefinition(AIR, AirNetwork.AIR_DENSITY, AirNetwork.AIR_DENSITY,
+								List.of(), List.of()),
 						new GasComponentDefinition(WATER_VAPOR, WATER_VAPOR_STANDARD_DENSITY,
-								WATER_VAPOR_STANDARD_DENSITY, List.of())),
+								WATER_VAPOR_STANDARD_DENSITY, List.of(BuiltinChemicalDefinitions.H2O), List.of())),
 				List.of(new GasRegistry.AmbientFraction(AIR, ExactRational.ONE)));
 	}
 }

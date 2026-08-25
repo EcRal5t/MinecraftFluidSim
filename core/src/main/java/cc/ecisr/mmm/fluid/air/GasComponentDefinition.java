@@ -11,6 +11,7 @@ public record GasComponentDefinition(
 		String id,
 		double standardMassPerCubicMeter,
 		double defaultMassResidualPerCubicMeter,
+		List<String> allowedSpecies,
 		List<DefaultSpecies> defaultSpeciesPerCubicMeter
 ) {
 	public record DefaultSpecies(String speciesId, ExactRational quantaPerCubicMeter) {
@@ -30,6 +31,18 @@ public record GasComponentDefinition(
 		if (!Double.isFinite(defaultMassResidualPerCubicMeter)) {
 			throw new IllegalArgumentException("Gas default mass residual density must be finite");
 		}
+		if (allowedSpecies == null || allowedSpecies.size() > GasLimits.MAX_SPECIES_PER_COMPONENT) {
+			throw new IllegalArgumentException("Gas allowed species list is missing or over budget");
+		}
+		ArrayList<String> canonicalAllowed = new ArrayList<>(allowedSpecies);
+		for (String speciesId : canonicalAllowed) GasIds.require(speciesId, "allowed gas species id");
+		canonicalAllowed.sort(String::compareTo);
+		for (int index = 1; index < canonicalAllowed.size(); index++) {
+			if (canonicalAllowed.get(index - 1).equals(canonicalAllowed.get(index))) {
+				throw new IllegalArgumentException("Duplicate allowed gas species " + canonicalAllowed.get(index));
+			}
+		}
+		allowedSpecies = List.copyOf(canonicalAllowed);
 		if (defaultSpeciesPerCubicMeter == null
 				|| defaultSpeciesPerCubicMeter.size() > GasLimits.MAX_SPECIES_PER_COMPONENT) {
 			throw new IllegalArgumentException("Gas default species list is missing or over budget");
@@ -44,6 +57,13 @@ public record GasComponentDefinition(
 				throw new IllegalArgumentException("Duplicate gas default species " + canonical.get(index).speciesId());
 			}
 		}
+		for (DefaultSpecies species : canonical) if (!allowedSpecies.contains(species.speciesId())) {
+			throw new IllegalArgumentException("Default gas species is not allowed by component " + species.speciesId());
+		}
 		defaultSpeciesPerCubicMeter = List.copyOf(canonical);
+	}
+
+	public boolean allowsSpecies(String speciesId) {
+		return java.util.Collections.binarySearch(allowedSpecies, speciesId) >= 0;
 	}
 }
