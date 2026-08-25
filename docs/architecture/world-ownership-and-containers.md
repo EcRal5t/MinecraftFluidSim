@@ -90,7 +90,7 @@ insert/extract 返回“实际转移量”，WAL 和 after item 必须使用这�
 
 当前 WAL 有材料布局和含热布局。reader 只接受当前 writer 产生的两种完整形状，不补缺字段。
 
-更精确的运行序列是：
+`ControllerItemTransferCoordinator` 独占 WAL、staged checkpoint、HEAD 发布与 actor 收敛顺序；`FluidTransferService` 只负责 Minecraft item 分类、目标解析和选择 exact solver primitive。更精确的运行序列是：
 
 1. 验证目标区域可修改、无其他 WAL、actor item count 为 1，并捕获 before fingerprint。
 2. 原子发布 `PREPARED` WAL；此时 after=before，尚无 target checksum。

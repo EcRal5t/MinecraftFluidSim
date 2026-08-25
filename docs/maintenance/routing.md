@@ -25,7 +25,7 @@
 | 区域 checkpoint | `simulation/persistence/`、`RegionStateLayout.java` | 双槽完整 generation、语义 layout、CRC、HEAD 最后发布；required payload 同代 |
 | takeover | `TakeoverTransaction.java`、`TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
 | ownership | `simulation/ownership/`、`FluidRegionPersistence.java` | WAL→WARNING→世界→region HEAD→committed；未知状态保留并锁定 |
-| 容器事务 | `ContainerTransferJournal.java`、`ContainerTransferStore.java`、`ContainerTransferRecovery.java`、`FluidTransferService.java` | 只读当前 writer 布局；actor durable save 前不得删 WAL |
+| 容器事务 | `ControllerItemTransferCoordinator.java`、`ContainerTransferJournal.java`、`ContainerTransferStore.java`、`ContainerTransferRecovery.java`、`FluidTransferService.java` | coordinator 独占 WAL→staged HEAD→actor 收敛顺序；只读当前 writer 布局；actor durable save 前不得删 WAL |
 | 活动求解器 | `core/.../fluid/FlipFluidDomain.java` | CPU 规范实现；mechanics→conduction→reaction→phase→granular→reseed |
 | 后端完整候选 | `FluidDomainState.java`、`FluidStepRequest.java`、`FluidStepCandidate.java`、`FluidSolverBackend.java` | 后端只计算私有完整后继；不持有世界、actor、HEAD 或提交权 |
 | 自由面/压力 | `FlipFreeSurfaceGeometry.java`、`FlipVolumeDriftCorrection.java`、`FlipVelocityExtrapolator.java` | marker count 决定压力相；平滑 volume 不结算库存 |

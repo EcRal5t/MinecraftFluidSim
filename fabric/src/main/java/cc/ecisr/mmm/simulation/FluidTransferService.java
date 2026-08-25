@@ -1,6 +1,5 @@
 package cc.ecisr.mmm.simulation;
 
-import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.item.ContainerFluidLedger;
@@ -30,8 +29,6 @@ import net.minecraft.world.level.block.DispenserBlock;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 
-import java.io.IOException;
-import java.util.UUID;
 
 /**
  * Single server-side entry point for player and dispenser bucket transfers with owned regions.
@@ -182,39 +179,39 @@ public final class FluidTransferService {
 			if (slot < 0) return stack;
 			ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.dispenser(
 					level.dimension().identifier().toString(), source.pos(), slot);
-			ControllerTransfer transaction = switch (kind) {
-				case POUR -> executeControllerTransfer(service, region, level, actor, stack,
-						ContainerTransferJournal.Operation.INSERT, heldVolumeNanos(stack), 0L, cell,
+			ControllerItemTransferCoordinator.Result transaction = switch (kind) {
+				case POUR -> ControllerItemTransferCoordinator.execute(service, region, level, actor, stack,
+						ContainerTransferJournal.Operation.INSERT, heldVolumeNanos(stack), 0L,
 						(requested, base) -> pourIntoCell(service, region, cell, requested, 6, 0, false,
 								resolvedThermal),
 						(rawAfter, before) -> rawAfter);
-				case SCOOP -> executeControllerTransfer(service, region, level, actor, stack,
-						ContainerTransferJournal.Operation.EXTRACT, extractionRequest, heldBaseVolumeNanos(stack), cell,
+				case SCOOP -> ControllerItemTransferCoordinator.execute(service, region, level, actor, stack,
+						ContainerTransferJournal.Operation.EXTRACT, extractionRequest, heldBaseVolumeNanos(stack),
 						(requested, base) -> scoopFromCell(service, region, cell, requested, base, 6, 0,
 								resolvedThermal),
 						(rawAfter, before) -> rawAfter);
-				case MATERIAL_POUR -> executeControllerTransfer(service, region, level, actor, stack,
-						ContainerTransferJournal.Operation.INSERT, MaterialBucketItem.volume(stack), 0L, cell,
+				case MATERIAL_POUR -> ControllerItemTransferCoordinator.execute(service, region, level, actor, stack,
+						ContainerTransferJournal.Operation.INSERT, MaterialBucketItem.volume(stack), 0L,
 						(requested, base) -> resolvedChemical == null
 								? pourMaterialIntoCell(service, region, cell, resolvedMixture, 6, false, resolvedThermal)
 								: pourChemicalIntoCell(service, region, cell, resolvedChemical, 6, false, resolvedThermal),
 						(rawAfter, before) -> rawAfter);
-				case MATERIAL_SCOOP -> executeControllerTransfer(service, region, level, actor, stack,
-						ContainerTransferJournal.Operation.EXTRACT, extractionRequest, 0L, cell,
+				case MATERIAL_SCOOP -> ControllerItemTransferCoordinator.execute(service, region, level, actor, stack,
+						ContainerTransferJournal.Operation.EXTRACT, extractionRequest, 0L,
 						(requested, base) -> service.chemistryFeatureEnabled() && region.domain().hasChemistryState()
 								? scoopChemicalIntoCell(service, region, cell, requested, 6, service.chemicalRegistry())
 								: scoopMaterialIntoCell(service, region, cell, requested, 6),
 						(rawAfter, before) -> rawAfter);
-				case GRANULAR_POUR -> executeControllerTransfer(service, region, level, actor, stack,
+				case GRANULAR_POUR -> ControllerItemTransferCoordinator.execute(service, region, level, actor, stack,
 						ContainerTransferJournal.Operation.INSERT,
 						ContainerTransferJournal.ResourceKind.GRANULAR_SVQ,
-						resolvedGranular.totalSolidVolumeSvq(), 0L, cell,
+						resolvedGranular.totalSolidVolumeSvq(), 0L,
 						(requested, base) -> pourGranularIntoCell(service, region, cell, resolvedGranular, 6, false),
 						(rawAfter, before) -> rawAfter);
-				case GRANULAR_SCOOP -> executeControllerTransfer(service, region, level, actor, stack,
+				case GRANULAR_SCOOP -> ControllerItemTransferCoordinator.execute(service, region, level, actor, stack,
 						ContainerTransferJournal.Operation.EXTRACT,
 						ContainerTransferJournal.ResourceKind.GRANULAR_SVQ,
-						extractionRequest, 0L, cell,
+						extractionRequest, 0L,
 						(requested, base) -> scoopGranularIntoCell(service, region, cell, requested, 6),
 						(rawAfter, before) -> rawAfter);
 				case NONE -> null;
@@ -292,9 +289,9 @@ public final class FluidTransferService {
 		ThermalContents thermal = thermalContents(held);
 		if (region.controllerManaged()) {
 			ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
-			ControllerTransfer transaction = executeControllerTransfer(
+			ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 					service, region, player.level(), actor, held,
-					ContainerTransferJournal.Operation.INSERT, volumeNanos, 0L, cell,
+					ContainerTransferJournal.Operation.INSERT, volumeNanos, 0L,
 					(requested, base) -> chemical == null ? pourMaterialIntoCell(service, region, cell, mixture, 6,
 							externalSource, thermal)
 							: pourChemicalIntoCell(service, region, cell, chemical, 6, externalSource, thermal),
@@ -318,59 +315,67 @@ public final class FluidTransferService {
 		return outcome;
 	}
 
-private static TransferOutcome scoop(
-FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held, int[] cell
-) {
-long capacity = heldFreeNanos(held);
-if (capacity <= 0L) return null;
-long requested = extractableNanos(region.domain(), cell, capacity, 6, 0);
-if (requested <= 0L) return new TransferOutcome(false, false, held, "准星处没有可装入的水体");
-if (region.controllerManaged()) return scoopController(service, region, player, hand, held, requested, cell);
-TransferOutcome outcome = scoopFromCell(service, region, cell, requested, heldBaseVolumeNanos(held), 6, 0,
-thermalContents(held));
-if (!outcome.transferred()) return new TransferOutcome(false, false, held, outcome.message());
-// Creative pour is an explicit external source, but scoop always replaces the hand. Treating
-// scoop as a hidden sink when an equivalent filled bucket already exists loses real solver water
-// and cannot be represented by the controller WAL.
-service.sendSnapshotFor(player, region);
-return outcome;
-}
+	private static TransferOutcome scoop(
+			FluidSimulationService service, FluidRegion region, ServerPlayer player,
+			InteractionHand hand, ItemStack held, int[] cell
+	) {
+		long capacity = heldFreeNanos(held);
+		if (capacity <= 0L) return null;
+		long requested = extractableNanos(region.domain(), cell, capacity, 6, 0);
+		if (requested <= 0L) return new TransferOutcome(false, false, held, "准星处没有可装入的水体");
+		if (region.controllerManaged()) {
+			return scoopController(service, region, player, hand, held, requested, cell);
+		}
+		TransferOutcome outcome = scoopFromCell(service, region, cell, requested,
+				heldBaseVolumeNanos(held), 6, 0, thermalContents(held));
+		if (!outcome.transferred()) return new TransferOutcome(false, false, held, outcome.message());
+		// Creative scoop still replaces the hand. Treating a pre-existing filled bucket as equivalent
+		// would delete solver inventory through a hidden sink that the controller WAL cannot represent.
+		service.sendSnapshotFor(player, region);
+		return outcome;
+	}
 
-private static TransferOutcome scoopMaterial(
-FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held, int[] cell
-) {
-if (!service.materialFeatureEnabled()) {
-return new TransferOutcome(false, false, held, "材料功能门未开启");
-}
-if (!region.domain().hasMaterialState()) {
-return new TransferOutcome(false, false, held, "该区域不是材料区域");
-}
-long capacityNanos = ContainerFluidLedger.NANOS_PER_BLOCK;
-long requestedNanos = extractableNanos(region.domain(), cell, capacityNanos, 6, -1);
-if (requestedNanos <= 0L) return new TransferOutcome(false, false, held, "准星处没有可装入的材料流体");
-if (region.controllerManaged()) {
-ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
-ControllerTransfer transaction = executeControllerTransfer(
-service, region, player.level(), actor, held,
-ContainerTransferJournal.Operation.EXTRACT, requestedNanos, 0L, cell,
-(requested, base) -> service.chemistryFeatureEnabled() && region.domain().hasChemistryState()
-? scoopChemicalIntoCell(service, region, cell, requested, 6, service.chemicalRegistry())
-: scoopMaterialIntoCell(service, region, cell, requested, 6),
-(rawAfter, before) -> rawAfter
-);
-if (!transaction.outcome().transferred()) return transaction.outcome();
-player.setItemInHand(hand, transaction.outcome().stack());
-player.getInventory().setChanged();
-service.sendSnapshotFor(player, region);
-return transaction.outcome();
-}
-TransferOutcome outcome = service.chemistryFeatureEnabled() && region.domain().hasChemistryState()
-? scoopChemicalIntoCell(service, region, cell, requestedNanos, 6, service.chemicalRegistry())
-: scoopMaterialIntoCell(service, region, cell, requestedNanos, 6);
-if (!outcome.transferred()) return new TransferOutcome(false, false, held, outcome.message());
-service.sendSnapshotFor(player, region);
-return outcome;
-}
+	private static TransferOutcome scoopMaterial(
+			FluidSimulationService service, FluidRegion region, ServerPlayer player,
+			InteractionHand hand, ItemStack held, int[] cell
+	) {
+		if (!service.materialFeatureEnabled()) {
+			return new TransferOutcome(false, false, held, "材料功能门未开启");
+		}
+		if (!region.domain().hasMaterialState()) {
+			return new TransferOutcome(false, false, held, "该区域不是材料区域");
+		}
+		long capacityNanos = ContainerFluidLedger.NANOS_PER_BLOCK;
+		long requestedNanos = extractableNanos(region.domain(), cell, capacityNanos, 6, -1);
+		if (requestedNanos <= 0L) {
+			return new TransferOutcome(false, false, held, "准星处没有可装入的材料流体");
+		}
+		if (region.controllerManaged()) {
+			ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(
+					player.getUUID(), hand.name());
+			ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
+					service, region, player.level(), actor, held,
+					ContainerTransferJournal.Operation.EXTRACT, requestedNanos, 0L,
+					(requested, base) -> service.chemistryFeatureEnabled()
+							&& region.domain().hasChemistryState()
+							? scoopChemicalIntoCell(service, region, cell, requested, 6,
+									service.chemicalRegistry())
+							: scoopMaterialIntoCell(service, region, cell, requested, 6),
+					(rawAfter, before) -> rawAfter
+			);
+			if (!transaction.outcome().transferred()) return transaction.outcome();
+			player.setItemInHand(hand, transaction.outcome().stack());
+			player.getInventory().setChanged();
+			service.sendSnapshotFor(player, region);
+			return transaction.outcome();
+		}
+		TransferOutcome outcome = service.chemistryFeatureEnabled() && region.domain().hasChemistryState()
+				? scoopChemicalIntoCell(service, region, cell, requestedNanos, 6, service.chemicalRegistry())
+				: scoopMaterialIntoCell(service, region, cell, requestedNanos, 6);
+		if (!outcome.transferred()) return new TransferOutcome(false, false, held, outcome.message());
+		service.sendSnapshotFor(player, region);
+		return outcome;
+	}
 
 	private static TransferOutcome pourGranular(
 			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand,
@@ -394,9 +399,10 @@ return outcome;
 		}
 		if (contents == null) return new TransferOutcome(false, true, held, "颗粒容器没有有效库存");
 		ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
-		ControllerTransfer transaction = executeControllerTransfer(service, region, player.level(), actor, held,
+		ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
+				service, region, player.level(), actor, held,
 				ContainerTransferJournal.Operation.INSERT, ContainerTransferJournal.ResourceKind.GRANULAR_SVQ,
-				contents.totalSolidVolumeSvq(), 0L, cell,
+				contents.totalSolidVolumeSvq(), 0L,
 				(requested, base) -> pourGranularIntoCell(service, region, cell, contents, 6,
 						player.hasInfiniteMaterials()),
 				(rawAfter, before) -> player.hasInfiniteMaterials() ? before.copy() : rawAfter);
@@ -421,9 +427,10 @@ return outcome;
 			return new TransferOutcome(false, false, held, "干式容器不为空或该区域不是颗粒区域");
 		}
 		ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
-		ControllerTransfer transaction = executeControllerTransfer(service, region, player.level(), actor, held,
+		ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
+				service, region, player.level(), actor, held,
 				ContainerTransferJournal.Operation.EXTRACT, ContainerTransferJournal.ResourceKind.GRANULAR_SVQ,
-				SolidVolume.SVQ_PER_BV, 0L, cell,
+				SolidVolume.SVQ_PER_BV, 0L,
 				(requested, base) -> scoopGranularIntoCell(service, region, cell, requested, 6),
 				(rawAfter, before) -> rawAfter);
 		if (!transaction.outcome().transferred()) return transaction.outcome();
@@ -438,9 +445,9 @@ return outcome;
 			long volumeNanos, int[] cell
 	) {
 		ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
-		ControllerTransfer transaction = executeControllerTransfer(
+		ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 				service, region, player.level(), actor, held,
-				ContainerTransferJournal.Operation.INSERT, volumeNanos, 0L, cell,
+				ContainerTransferJournal.Operation.INSERT, volumeNanos, 0L,
 				(requested, base) -> pourIntoCell(service, region, cell, requested, 6, 0,
 						player.hasInfiniteMaterials(), thermalContents(held)),
 				(rawAfter, before) -> player.hasInfiniteMaterials() ? before.copy() : rawAfter
@@ -457,9 +464,9 @@ return outcome;
 			long capacityNanos, int[] cell
 	) {
 		ContainerTransferJournal.Actor actor = ContainerTransferJournal.Actor.player(player.getUUID(), hand.name());
-		ControllerTransfer transaction = executeControllerTransfer(
+		ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 				service, region, player.level(), actor, held,
-				ContainerTransferJournal.Operation.EXTRACT, capacityNanos, heldBaseVolumeNanos(held), cell,
+				ContainerTransferJournal.Operation.EXTRACT, capacityNanos, heldBaseVolumeNanos(held),
 				(requested, base) -> scoopFromCell(service, region, cell, requested, base, 6, 0,
 						thermalContents(held)),
 				(rawAfter, before) -> rawAfter
@@ -469,242 +476,6 @@ return outcome;
 		player.getInventory().setChanged();
 		service.sendSnapshotFor(player, region);
 		return transaction.outcome();
-	}
-
-	private static ControllerTransfer executeControllerTransfer(
-			FluidSimulationService service,
-			FluidRegion region,
-			ServerLevel level,
-			ContainerTransferJournal.Actor actor,
-			ItemStack beforeStack,
-			ContainerTransferJournal.Operation operation,
-			long requestedNanos,
-			long baseVolumeNanos,
-			int[] cell,
-			TransferExecutor executor,
-			FinalItemResolver finalItemResolver
-	) {
-		return executeControllerTransfer(service, region, level, actor, beforeStack, operation,
-				ContainerTransferJournal.ResourceKind.FLUID_NANOS, requestedNanos, baseVolumeNanos,
-				cell, executor, finalItemResolver);
-	}
-
-	private static ControllerTransfer executeControllerTransfer(
-			FluidSimulationService service,
-			FluidRegion region,
-			ServerLevel level,
-			ContainerTransferJournal.Actor actor,
-			ItemStack beforeStack,
-			ContainerTransferJournal.Operation operation,
-			ContainerTransferJournal.ResourceKind resourceKind,
-			long requestedAmount,
-			long baseAmount,
-			int[] cell,
-			TransferExecutor executor,
-			FinalItemResolver finalItemResolver
-	) {
-		if (service.hasPendingContainerTransfer(region.id())) {
-			return new ControllerTransfer(
-					new TransferOutcome(false, operation == ContainerTransferJournal.Operation.INSERT, beforeStack,
-							"区域存在未完成容器转移 WAL，已锁定"),
-					null);
-		}
-		if (requestedAmount <= 0L) return new ControllerTransfer(null, null);
-		try {
-			service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.BEFORE_PREPARE);
-		} catch (RuntimeException injected) {
-			return failedControllerTransfer(operation, beforeStack, injected.getMessage(), null);
-		}
-		long baseGeneration = region.checkpointGeneration();
-		long targetGeneration = Math.addExact(baseGeneration, 1L);
-		UUID transactionId = UUID.randomUUID();
-		ContainerTransferJournal.ItemFingerprint beforeFingerprint;
-		try {
-			beforeFingerprint = ContainerTransferJournal.ItemFingerprint.of(beforeStack);
-		} catch (IllegalArgumentException invalidItem) {
-			return failedControllerTransfer(operation, beforeStack, invalidItem.getMessage(), null);
-		}
-		Double preparedThermalEnergy = null;
-		if (resourceKind == ContainerTransferJournal.ResourceKind.FLUID_NANOS
-				&& region.domain().hasThermalState()) {
-			preparedThermalEnergy = 0.0;
-			if (operation == ContainerTransferJournal.Operation.INSERT) {
-				ThermalContents source = ThermalContents.fromStack(beforeStack);
-				if (source == null) return failedControllerTransfer(operation, beforeStack,
-						"热区域注入缺少 ThermalContents；拒绝发布不完整 WAL", null);
-				long totalNanos = liquidVolumeNanos(beforeStack);
-				preparedThermalEnergy = coupledSplitEnergy(source, requestedAmount, totalNanos);
-			}
-		}
-		ContainerTransferJournal prepared = transferJournal(transactionId, region, level, baseGeneration,
-				targetGeneration, operation, resourceKind, requestedAmount, actor, beforeFingerprint,
-				beforeFingerprint, preparedThermalEnergy,
-				preparedThermalEnergy == null ? null : service.thermalRegistryFingerprint(), -1L,
-				ContainerTransferJournal.Phase.PREPARED);
-		try {
-			service.writeContainerTransfer(prepared);
-		} catch (IOException exception) {
-			return new ControllerTransfer(
-					new TransferOutcome(false, operation == ContainerTransferJournal.Operation.INSERT, beforeStack,
-							"容器转移 WAL 发布失败：" + exception.getMessage()),
-					null);
-		}
-		try {
-			service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_PREPARE);
-		} catch (RuntimeException injected) {
-			return failedControllerTransfer(operation, beforeStack, injected.getMessage(), transactionId);
-		}
-
-		service.markContainerTransferSolverDirty(transactionId);
-		TransferOutcome rawOutcome;
-		try {
-			rawOutcome = executor.execute(requestedAmount, baseAmount);
-		} catch (RuntimeException transferFailure) {
-			String failure = "容器转移执行异常，区域已锁定；重启后从 base checkpoint 恢复："
-					+ transferFailure.getMessage();
-			service.lockContainerTransferRegion(region, failure);
-			return failedControllerTransfer(operation, beforeStack, failure, transactionId);
-		}
-		if (rawOutcome == null || !rawOutcome.transferred()) {
-			service.markContainerTransferSolverClean(transactionId);
-			deleteQuietly(service, transactionId);
-			return new ControllerTransfer(rawOutcome == null
-					? new TransferOutcome(false, operation == ContainerTransferJournal.Operation.INSERT, beforeStack, "转移未执行")
-					: rawOutcome, null);
-		}
-		boolean thermalTransfer = resourceKind == ContainerTransferJournal.ResourceKind.FLUID_NANOS
-				&& region.domain().hasThermalState();
-		if (thermalTransfer != (rawOutcome.thermalEnergy() != null)) {
-			String failure = "容器转移 solver 未返回与区域热状态一致的 coupled energy；区域已锁定";
-			service.lockContainerTransferRegion(region, failure);
-			return failedControllerTransfer(operation, beforeStack, failure, transactionId);
-		}
-		try {
-			service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_SOLVER);
-		} catch (RuntimeException injected) {
-			String failure = injected.getMessage() + "；区域已锁定，重启后从 base checkpoint 恢复";
-			service.lockContainerTransferRegion(region, failure);
-			return failedControllerTransfer(operation, beforeStack,
-					failure, transactionId);
-		}
-
-		ItemStack finalAfter;
-		ContainerTransferJournal.ItemFingerprint afterFingerprint;
-		try {
-			finalAfter = finalItemResolver.resolve(rawOutcome.stack(), beforeStack);
-			afterFingerprint = ContainerTransferJournal.ItemFingerprint.of(finalAfter);
-		} catch (RuntimeException invalidAfterItem) {
-			region.setPaused(true);
-			region.setAvailabilityFailure("容器转移 after-item 无法写入 WAL，区域已锁定；重启后恢复："
-					+ invalidAfterItem.getMessage());
-			return failedControllerTransfer(operation, beforeStack, region.availabilityFailure(), transactionId);
-		}
-		FluidRegionPersistence.StagedCheckpoint staged;
-		try {
-			staged = service.stageControllerRegionCheckpoint(region, targetGeneration);
-		} catch (IOException | RuntimeException stagingFailure) {
-			region.setPaused(true);
-			region.setAvailabilityFailure("容器转移 checkpoint staging 失败，区域已锁定；重启后恢复："
-					+ stagingFailure.getMessage());
-			return failedControllerTransfer(operation, beforeStack, region.availabilityFailure(), transactionId);
-		}
-		try {
-			service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_STAGE);
-		} catch (RuntimeException injected) {
-			String failure = injected.getMessage() + "；staged generation 尚未发布，重启后从 base checkpoint 恢复";
-			service.lockContainerTransferRegion(region, failure);
-			return failedControllerTransfer(operation, beforeStack, failure, transactionId);
-		}
-		ContainerTransferJournal committed = transferJournal(transactionId, region, level, baseGeneration,
-				targetGeneration, operation, resourceKind, rawOutcome.resourceAmount(), actor,
-				beforeFingerprint, afterFingerprint, rawOutcome.thermalEnergy(),
-				rawOutcome.thermalEnergy() == null ? null : service.thermalRegistryFingerprint(), staged.manifestChecksum(),
-				ContainerTransferJournal.Phase.REGION_COMMITTED);
-		try {
-			service.writeContainerTransfer(committed);
-		} catch (IOException exception) {
-			try { service.abortControllerRegionCheckpoint(staged); }
-			catch (IOException abortFailure) { exception.addSuppressed(abortFailure); }
-			region.setPaused(true);
-			region.setAvailabilityFailure("容器转移 WAL 更新失败，区域已锁定；重启后恢复：" + exception.getMessage());
-			return new ControllerTransfer(
-					new TransferOutcome(false, operation == ContainerTransferJournal.Operation.INSERT, beforeStack,
-							region.availabilityFailure()),
-					null);
-		}
-		try {
-			service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_WAL);
-		} catch (RuntimeException injected) {
-			String failure = injected.getMessage() + "；区域已锁定，重启后恢复";
-			service.lockContainerTransferRegion(region, failure);
-			return failedControllerTransfer(operation, beforeStack,
-					failure, transactionId);
-		}
-
-
-
-		long publishedGeneration;
-		try {
-			publishedGeneration = service.commitControllerRegionCheckpoint(region, staged);
-		} catch (IOException | RuntimeException exception) {
-			region.setPaused(true);
-			region.setAvailabilityFailure("容器转移检查点失败，区域已锁定；重启后恢复：" + exception.getMessage());
-			return new ControllerTransfer(
-					new TransferOutcome(false, operation == ContainerTransferJournal.Operation.INSERT, beforeStack,
-							region.availabilityFailure()),
-					transactionId);
-		}
-		if (publishedGeneration != targetGeneration) {
-			region.setPaused(true);
-			region.setAvailabilityFailure("容器转移检查点代次不一致，区域已锁定；重启后恢复");
-			return new ControllerTransfer(
-					new TransferOutcome(false, operation == ContainerTransferJournal.Operation.INSERT, beforeStack,
-							region.availabilityFailure()),
-					transactionId);
-		}
-		service.markContainerTransferRegionCommitted(transactionId);
-		try {
-			service.injectContainerTransferFault(FluidSimulationService.ContainerTransferFaultPoint.AFTER_CHECKPOINT);
-		} catch (RuntimeException injected) {
-			return failedControllerTransfer(operation, beforeStack,
-					injected.getMessage() + "；已提交区域，WAL 将收敛物品", transactionId);
-		}
-
-
-
-		return new ControllerTransfer(new TransferOutcome(true, operation == ContainerTransferJournal.Operation.INSERT,
-				finalAfter, rawOutcome.message(), rawOutcome.resourceAmount()), transactionId);
-	}
-
-	private static ContainerTransferJournal transferJournal(
-			UUID transactionId, FluidRegion region, ServerLevel level, long baseGeneration, long targetGeneration,
-			ContainerTransferJournal.Operation operation, ContainerTransferJournal.ResourceKind resourceKind,
-			long amount, ContainerTransferJournal.Actor actor,
-			ContainerTransferJournal.ItemFingerprint before, ContainerTransferJournal.ItemFingerprint after,
-			Double thermalEnergy, String thermalFingerprint, long checksum, ContainerTransferJournal.Phase phase
-	) {
-		if (resourceKind == ContainerTransferJournal.ResourceKind.GRANULAR_SVQ) {
-			return ContainerTransferJournal.granular(transactionId, region.id(),
-					level.dimension().identifier().toString(), baseGeneration, targetGeneration,
-					operation, amount, actor, before, after, checksum, phase);
-		}
-		if (thermalEnergy != null) return ContainerTransferJournal.thermalFluid(transactionId, region.id(),
-				level.dimension().identifier().toString(), baseGeneration, targetGeneration, operation, amount,
-				new ContainerTransferJournal.ThermalTransfer(thermalFingerprint, thermalEnergy),
-				actor, before, after, checksum, phase);
-		return new ContainerTransferJournal(transactionId, region.id(),
-				level.dimension().identifier().toString(), baseGeneration, targetGeneration,
-				operation, amount, actor, before, after, checksum, phase);
-	}
-
-	private static ControllerTransfer failedControllerTransfer(
-			ContainerTransferJournal.Operation operation,
-			ItemStack beforeStack,
-			String message,
-			UUID transactionId
-	) {
-		return new ControllerTransfer(new TransferOutcome(false,
-				operation == ContainerTransferJournal.Operation.INSERT, beforeStack, message), transactionId);
 	}
 
 	private static int findDispenserSlot(BlockSource source, ItemStack stack) {
@@ -721,27 +492,6 @@ return outcome;
 		}
 		return fallbackCount == 1 ? fallback : -1;
 	}
-
-	private static void deleteQuietly(FluidSimulationService service, UUID transactionId) {
-		try {
-			service.deleteContainerTransfer(transactionId);
-		} catch (IOException exception) {
-			MmmMod.LOGGER.warn("Could not delete container transfer WAL {}", transactionId, exception);
-		}
-	}
-
-	private record ControllerTransfer(TransferOutcome outcome, UUID transactionId) { }
-
-	@FunctionalInterface
-	private interface FinalItemResolver {
-		ItemStack resolve(ItemStack rawAfter, ItemStack before);
-	}
-
-	@FunctionalInterface
-	private interface TransferExecutor {
-		TransferOutcome execute(long requestedNanos, long baseVolumeNanos);
-	}
-
 
 	private static TransferOutcome pourIntoCell(
 			FluidSimulationService service, FluidRegion region, int[] cell, long volumeNanos, int maxRadius,
@@ -943,32 +693,39 @@ return outcome;
 						/ ContainerFluidLedger.NANOS_PER_BLOCK, contents.groups().size()), taken, thermalEnergy);
 	}
 
-private static TransferOutcome scoopMaterialIntoCell(
-FluidSimulationService service, FluidRegion region, int[] cell, long capacityNanos, int maxRadius
-) {
-if (capacityNanos <= 0L) return null;
-FlipFluidDomain domain = region.domain();
-float requestedCellVolume = nanosToCellVolumeAtMost(capacityNanos);
-if (requestedCellVolume <= 0.0F) {
-return new TransferOutcome(false, false, new ItemStack(MmmItems.MATERIAL_BUCKET),
-"容器余量小于 solver 可表示体积");
-}
-FlipFluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
-cell[0], cell[1], cell[2], requestedCellVolume, maxRadius);
-if (!extracted.transferred() || extracted.portions().isEmpty()) {
-return new TransferOutcome(false, false, new ItemStack(MmmItems.MATERIAL_BUCKET), "准星处没有足够流体");
-}
-FluidMixture mixture = mixtureFromExtraction(domain, extracted.portions(), capacityNanos);
-long taken = mixture.totalVolumeNanos();
-Double thermalEnergy = domain.hasThermalState() ? extracted.internalEnergy() : null;
-ItemStack after = mixture.toStack();
-if (thermalEnergy != null) ThermalContents.attach(after, service.thermalRegistryFingerprint(), thermalEnergy);
-region.wakeForActivity();
-if (thermalEnergy != null) region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
-return new TransferOutcome(true, false, after,
-String.format("已舀取 %.2f%% 桶（%d 种材料）",
-100.0 * taken / ContainerFluidLedger.NANOS_PER_BLOCK, mixture.components().size()), taken, thermalEnergy);
-}
+	private static TransferOutcome scoopMaterialIntoCell(
+			FluidSimulationService service, FluidRegion region, int[] cell,
+			long capacityNanos, int maxRadius
+	) {
+		if (capacityNanos <= 0L) return null;
+		FlipFluidDomain domain = region.domain();
+		float requestedCellVolume = nanosToCellVolumeAtMost(capacityNanos);
+		if (requestedCellVolume <= 0.0F) {
+			return new TransferOutcome(false, false, new ItemStack(MmmItems.MATERIAL_BUCKET),
+					"容器余量小于 solver 可表示体积");
+		}
+		FlipFluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
+				cell[0], cell[1], cell[2], requestedCellVolume, maxRadius);
+		if (!extracted.transferred() || extracted.portions().isEmpty()) {
+			return new TransferOutcome(false, false, new ItemStack(MmmItems.MATERIAL_BUCKET),
+					"准星处没有足够流体");
+		}
+		FluidMixture mixture = mixtureFromExtraction(domain, extracted.portions(), capacityNanos);
+		long taken = mixture.totalVolumeNanos();
+		Double thermalEnergy = domain.hasThermalState() ? extracted.internalEnergy() : null;
+		ItemStack after = mixture.toStack();
+		if (thermalEnergy != null) {
+			ThermalContents.attach(after, service.thermalRegistryFingerprint(), thermalEnergy);
+		}
+		region.wakeForActivity();
+		if (thermalEnergy != null) {
+			region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
+		}
+		return new TransferOutcome(true, false, after,
+				String.format("已舀取 %.2f%% 桶（%d 种材料）",
+						100.0 * taken / ContainerFluidLedger.NANOS_PER_BLOCK,
+						mixture.components().size()), taken, thermalEnergy);
+	}
 
 	private static TransferOutcome pourGranularIntoCell(
 			FluidSimulationService service, FluidRegion region, int[] cell, GranularContents contents,
@@ -1139,7 +896,7 @@ String.format("已舀取 %.2f%% 桶（%d 种材料）",
 		return ThermalContents.fromStack(stack);
 	}
 
-	private static double coupledSplitEnergy(ThermalContents contents, long selectedNanos, long totalNanos) {
+	static double coupledSplitEnergy(ThermalContents contents, long selectedNanos, long totalNanos) {
 		ThermalContents.EnergySplit split = contents.splitEnergy(selectedNanos, totalNanos);
 		return contents.internalEnergy() - split.remainingEnergy();
 	}
@@ -1170,7 +927,7 @@ String.format("已舀取 %.2f%% 桶（%d 种材料）",
 		return volume > 0L ? volume : null;
 	}
 
-	private static long liquidVolumeNanos(ItemStack stack) {
+	static long liquidVolumeNanos(ItemStack stack) {
 		Long pure = heldVolumeNanos(stack);
 		if (pure != null) return pure;
 		if (stack.getItem() instanceof MaterialBucketItem) {
@@ -1256,13 +1013,13 @@ String.format("已舀取 %.2f%% 桶（%d 种材料）",
 				: hitPos.relative(hit.getDirection());
 	}
 
-	private record TransferOutcome(
+	record TransferOutcome(
 			boolean transferred, boolean filled, ItemStack stack, String message, long resourceAmount, Double thermalEnergy
 	) {
-		private TransferOutcome(boolean transferred, boolean filled, ItemStack stack, String message) {
+		TransferOutcome(boolean transferred, boolean filled, ItemStack stack, String message) {
 			this(transferred, filled, stack, message, 0L, null);
 		}
-		private TransferOutcome(boolean transferred, boolean filled, ItemStack stack, String message, long resourceAmount) {
+		TransferOutcome(boolean transferred, boolean filled, ItemStack stack, String message, long resourceAmount) {
 			this(transferred, filled, stack, message, resourceAmount, null);
 		}
 	}
