@@ -64,7 +64,7 @@ caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线�
 
 `FiniteThermalBodyState` 是 loader-neutral 设备真值：绑定 world thermal registry fingerprint、稳定 `DEVICE` material ID、generation、kg 和总 `U`。温度与热容仍由同一个 `ThermalStateFunction` 派生，设备方块不能另存一份可反向覆盖 `U` 的 setpoint。
 
-`FiniteThermalExchange` 对一个设备 body 和最多 16 个独立流体能量端口做有界显式规划。每个端口提供当前温度、当前 caloric interval 内的热容、包含流体/壁面/接触面积热阻的总 conductance，以及该线性化的温度有效域。每个 substep 使用同一 body 温度计算镜像通量，设备 `U` 的变化与各端口增量加总，并把 IEEE-754 总和差记为 exact dyadic roundoff。稳定步长同时受 `0.5*C_body/sum(G)` 与每个 `0.5*C_port/G_port` 限制；超过冻结 substep 预算或任一方越出物性域时整体拒绝计划。
+`FiniteThermalExchange` 对一个设备 body 和最多 16 个独立流体能量端口做有界显式规划。每个端口提供当前温度、当前 caloric interval 内的热容、包含流体/壁面/接触面积热阻的总 conductance，以及该线性化的温度有效域。每个 substep 使用同一 body 温度计算镜像通量，设备 `U` 的变化与各端口增量加总，并把 IEEE-754 总和差记为 exact dyadic roundoff。稳定步长同时受设备完整物性域内最小 `0.5*C_body/sum(G)` 与每个 `0.5*C_port/G_port` 限制；不能只取设备初始温度的热容，否则跨入低热容 caloric segment 后会失稳。超过冻结 substep 预算或任一方越出物性域时整体拒绝计划。
 
 这个 planner 不搬运任何物质，也没有世界、region HEAD 或 block entity 提交权。调用方必须先验证每个 region candidate 能接受对应 `delta U`，再按 body generation 与各 region generation 联合持久提交；在 durable coordinator 接入前，固定温度 boundary 仍是唯一生产世界热边界，不能把有限设备降级成每 tick 改 setpoint。
 

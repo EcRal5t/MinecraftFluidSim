@@ -124,8 +124,16 @@ public final class FiniteThermalExchange {
 			throw new IllegalArgumentException("Finite thermal body material is not a device carrier");
 		}
 		ThermalStateFunction stateFunction = new ThermalStateFunction(registry);
-		ThermalStateFunction.State initialBody = stateFunction.stateForInternalEnergy(
+		stateFunction.stateForInternalEnergy(
 				materialHandle, body.massKilograms(), java.util.Map.of(), body.internalEnergyEu());
+		double minimumBodyHeatCapacity = Double.POSITIVE_INFINITY;
+		for (ThermalMaterialDefinition.CaloricSegment segment : material.caloricSegments()) {
+			minimumBodyHeatCapacity = Math.min(minimumBodyHeatCapacity,
+					body.massKilograms() * segment.specificHeatEuPerMuK());
+		}
+		if (!(Double.isFinite(minimumBodyHeatCapacity) && minimumBodyHeatCapacity > 0.0)) {
+			throw new IllegalArgumentException("Finite thermal body heat-capacity bound is invalid");
+		}
 		double conductanceSum = 0.0;
 		double stableDt = Double.POSITIVE_INFINITY;
 		for (Contact contact : canonical) {
@@ -136,7 +144,10 @@ public final class FiniteThermalExchange {
 		if (!(Double.isFinite(conductanceSum) && conductanceSum > 0.0)) {
 			throw new IllegalArgumentException("Finite thermal conductance sum is invalid");
 		}
-		stableDt = Math.min(stableDt, 0.5 * initialBody.heatCapacityEuPerK() / conductanceSum);
+		// The body may cross a caloric-segment boundary during this plan. Using only its initial
+		// heat capacity can make a later lower-capacity segment unstable, so bind the whole plan
+		// to the smallest capacity in the registry-frozen validity range.
+		stableDt = Math.min(stableDt, 0.5 * minimumBodyHeatCapacity / conductanceSum);
 		int substeps = (int) Math.ceil(logicalDtSeconds / stableDt);
 		if (substeps > maximumSubsteps) {
 			throw new IllegalArgumentException("Finite thermal stability substep budget exceeded: " + substeps);

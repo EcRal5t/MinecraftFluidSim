@@ -1691,6 +1691,21 @@ public final class M9ThermalValidation {
 		require(!noOp.changed() && noOp.after().equals(equilibrium)
 				&& noOp.contacts().stream().allMatch(contact -> contact.internalEnergyDeltaEu() == 0.0),
 				"equilibrated finite thermal body produced a false durable mutation");
+
+		ThermalMaterialDefinition segmented = new ThermalMaterialDefinition("test:thermal/segmented_device",
+				ThermalMaterialDefinition.CarrierKind.DEVICE, "test:segmented_device",
+				350.0, 0.0, 20.0, List.of(
+						new ThermalMaterialDefinition.CaloricSegment(250.0, 300.0, 1.0),
+						new ThermalMaterialDefinition.CaloricSegment(300.0, 500.0, 1_000.0)));
+		ThermalRegistry segmentedRegistry = new ThermalRegistry(List.of(segmented));
+		ThermalStateFunction segmentedState = new ThermalStateFunction(segmentedRegistry);
+		FiniteThermalBodyState segmentedBody = new FiniteThermalBodyState(1L,
+				segmentedRegistry.fingerprint(), segmented.id(), 1.0,
+				segmentedState.internalEnergyAtTemperature(0, 1.0, Map.of(), 400.0));
+		expectFailure(() -> FiniteThermalExchange.plan(segmentedRegistry, segmentedBody, List.of(
+				new FiniteThermalExchange.Contact(0, 250.0, 1_000.0, 100.0, 250.0, 500.0)
+		), 1.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS),
+				"finite thermal planner ignored a lower-capacity reachable caloric segment");
 	}
 
 	private static void productionFixedBoundaryFieldAuditsExchange() {
