@@ -696,6 +696,16 @@ public final class M9ThermalValidation {
 			require(mismatch.definitionMismatch()
 					&& mismatch.registry().fingerprint().equals(authoritative.fingerprint()),
 					"changed thermal datapack reinterpreted the world snapshot");
+			var registryTag = net.minecraft.nbt.NbtIo.readCompressed(store.registryPath(),
+					net.minecraft.nbt.NbtAccounter.create(8L * 1024L * 1024L));
+			registryTag.putString("UnknownField", "must-lock");
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, store.registryPath());
+			try {
+				store.read();
+				throw new AssertionError("unknown thermal registry field was ignored");
+			} catch (java.io.IOException expected) { }
+			registryTag.remove("UnknownField");
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, store.registryPath());
 			java.nio.file.Files.writeString(root.resolve("mmm").resolve("thermal").resolve("foreign.bin"), "foreign");
 			try {
 				store.read();

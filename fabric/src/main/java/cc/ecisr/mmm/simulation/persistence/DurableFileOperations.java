@@ -5,6 +5,8 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Locale;
 
 /** Durability barriers for atomic directory-entry publication where the host JDK exposes them. */
@@ -24,6 +26,19 @@ public final class DurableFileOperations {
 	public static void forceParent(Path path) throws IOException {
 		Path parent = path == null ? null : path.toAbsolutePath().normalize().getParent();
 		if (parent != null) forceDirectory(parent);
+	}
+
+	/** Creates every missing directory and publishes each new directory entry durably where supported. */
+	public static void createDirectories(Path directory) throws IOException {
+		if (directory == null) throw new IllegalArgumentException("Directory is missing");
+		Path normalized = directory.toAbsolutePath().normalize();
+		ArrayList<Path> missing = new ArrayList<>();
+		for (Path current = normalized; current != null && !Files.exists(current); current = current.getParent()) {
+			missing.add(current);
+		}
+		Files.createDirectories(normalized);
+		Collections.reverse(missing);
+		for (Path created : missing) forceParent(created);
 	}
 
 	private static boolean isWindows() {

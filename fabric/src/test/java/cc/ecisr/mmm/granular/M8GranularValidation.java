@@ -338,6 +338,16 @@ public final class M8GranularValidation {
 							BuiltinChemicalDefinitions.REGISTRY));
 			require(mismatch.definitionMismatch() && mismatch.registry().fingerprint().equals(bundled.fingerprint()),
 					"changed granular definitions reinterpreted the authoritative world snapshot");
+			var registryTag = net.minecraft.nbt.NbtIo.readCompressed(store.registryPath(),
+					net.minecraft.nbt.NbtAccounter.create(4L * 1024L * 1024L));
+			registryTag.putString("UnknownField", "must-lock");
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, store.registryPath());
+			try {
+				store.read();
+				throw new AssertionError("unknown granular registry field was ignored");
+			} catch (java.io.IOException expected) { }
+			registryTag.remove("UnknownField");
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, store.registryPath());
 			Files.writeString(world.resolve("mmm").resolve("granular").resolve("foreign.bin"), "foreign");
 			try {
 				store.read();

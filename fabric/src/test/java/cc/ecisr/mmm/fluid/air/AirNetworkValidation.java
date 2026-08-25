@@ -9,6 +9,7 @@ public final class AirNetworkValidation {
 	private AirNetworkValidation() { }
 
 	public static void main(String[] args) {
+		validateRegistrySnapshot();
 		validateEquationOfState();
 		validateOrificeEqualization();
 		validateHoleOpenClose();
@@ -19,6 +20,34 @@ public final class AirNetworkValidation {
 		validateGuards();
 		System.out.println("M5 air network gate passed: isothermal EoS, finite-rate orifice equalization, "
 				+ "hole open/close freeze and exact nanovolume ledger");
+	}
+
+	private static void validateRegistrySnapshot() {
+		java.nio.file.Path root = null;
+		try {
+			root = java.nio.file.Files.createTempDirectory("mmm-gas-registry-");
+			GasRegistryStore store = new GasRegistryStore(root);
+			GasRegistryStore.LoadResult first = store.loadOrCreate(BuiltinGasDefinitions.createRegistry());
+			check(first.created() && !first.definitionMismatch(), "first gas registry snapshot was not published");
+			var registryTag = net.minecraft.nbt.NbtIo.readCompressed(store.registryPath(),
+					net.minecraft.nbt.NbtAccounter.create(4L * 1024L * 1024L));
+			registryTag.putString("UnknownField", "must-lock");
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, store.registryPath());
+			try {
+				store.read();
+				throw new AssertionError("unknown gas registry field was ignored");
+			} catch (java.io.IOException expected) { }
+		} catch (java.io.IOException failure) {
+			throw new AssertionError("gas registry store validation failed", failure);
+		} finally {
+			if (root != null) try (var paths = java.nio.file.Files.walk(root)) {
+				for (java.nio.file.Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+					java.nio.file.Files.deleteIfExists(path);
+				}
+			} catch (java.io.IOException cleanup) {
+				throw new AssertionError("gas registry store cleanup failed", cleanup);
+			}
+		}
 	}
 
 	private static void validateEquationOfState() {

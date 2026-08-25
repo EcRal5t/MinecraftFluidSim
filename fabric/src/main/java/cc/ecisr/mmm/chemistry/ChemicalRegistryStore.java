@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.chemistry;
 
+import cc.ecisr.mmm.simulation.persistence.DurableFileOperations;
+import cc.ecisr.mmm.simulation.persistence.StrictNbtFields;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtAccounter;
@@ -39,8 +41,8 @@ public final class ChemicalRegistryStore {
 			return new LoadResult(authoritative, !authoritative.fingerprint().equals(definitions.fingerprint()), false);
 		}
 		Path temporary = temporaryPath();
-		Files.createDirectories(directory);
-		Files.deleteIfExists(temporary);
+		DurableFileOperations.createDirectories(directory);
+		if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
 		try {
 			NbtIo.writeCompressed(encode(definitions), temporary);
 			force(temporary);
@@ -49,9 +51,12 @@ public final class ChemicalRegistryStore {
 				throw new IOException("Staged chemical registry did not read back identically");
 			}
 			Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
+			DurableFileOperations.forceDirectory(directory);
 			return new LoadResult(read(target), false, true);
 		} catch (IOException failure) {
-			try { Files.deleteIfExists(temporary); } catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+			try {
+				if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
+			} catch (IOException cleanup) { failure.addSuppressed(cleanup); }
 			throw failure;
 		}
 	}
@@ -70,13 +75,9 @@ public final class ChemicalRegistryStore {
 		CompoundTag root;
 		try { root = NbtIo.readCompressed(path, NbtAccounter.create(MAX_BYTES)); }
 		catch (RuntimeException invalid) { throw new IOException("Unreadable chemical registry snapshot " + path, invalid); }
-		require(root, "Schema", Tag.TAG_STRING);
-		require(root, "AuScale", Tag.TAG_LONG);
-		require(root, "Fingerprint", Tag.TAG_STRING);
-		require(root, "Canonical", Tag.TAG_BYTE_ARRAY);
-		require(root, "Species", Tag.TAG_LIST);
-		require(root, "Phases", Tag.TAG_LIST);
-		require(root, "Reactions", Tag.TAG_LIST);
+		requireAll(root, Map.of("Schema", Tag.TAG_STRING, "AuScale", Tag.TAG_LONG,
+				"Fingerprint", Tag.TAG_STRING, "Canonical", Tag.TAG_BYTE_ARRAY,
+				"Species", Tag.TAG_LIST, "Phases", Tag.TAG_LIST, "Reactions", Tag.TAG_LIST));
 		if (!root.getStringOr("Schema", "").equals(SCHEMA)) throw new IOException("Unsupported chemical registry schema");
 		if (root.getLongOr("AuScale", -1L) != ChemicalLimits.QUANTA_PER_AU) throw new IOException("Chemical AU scale mismatch");
 		try {
@@ -225,11 +226,7 @@ public final class ChemicalRegistryStore {
 		return compound;
 	}
 	private static void requireAll(CompoundTag tag, Map<String, Byte> fields) throws IOException {
-		for (Map.Entry<String, Byte> field : fields.entrySet()) require(tag, field.getKey(), field.getValue());
-	}
-	private static void require(CompoundTag tag, String key, byte type) throws IOException {
-		Tag value = tag.get(key);
-		if (value == null || value.getId() != type) throw new IOException("Missing or invalid registry field " + key);
+		StrictNbtFields.requireExact(tag, fields, "chemical registry");
 	}
 	private static void force(Path path) throws IOException {
 		try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) { channel.force(true); }

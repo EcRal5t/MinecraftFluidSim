@@ -1,6 +1,8 @@
 package cc.ecisr.mmm.thermal;
 
 import cc.ecisr.mmm.chemistry.ExactRational;
+import cc.ecisr.mmm.simulation.persistence.DurableFileOperations;
+import cc.ecisr.mmm.simulation.persistence.StrictNbtFields;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtAccounter;
@@ -45,8 +47,8 @@ public final class ThermalRegistryStore {
 			return new LoadResult(authoritative, !authoritative.fingerprint().equals(definitions.fingerprint()), false);
 		}
 		Path temporary = temporaryPath();
-		Files.createDirectories(directory);
-		Files.deleteIfExists(temporary);
+		DurableFileOperations.createDirectories(directory);
+		if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
 		try {
 			NbtIo.writeCompressed(encode(definitions), temporary);
 			force(temporary);
@@ -55,9 +57,12 @@ public final class ThermalRegistryStore {
 				throw new IOException("Staged thermal registry did not read back identically");
 			}
 			Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
+			DurableFileOperations.forceDirectory(directory);
 			return new LoadResult(read(target), false, true);
 		} catch (IOException failure) {
-			try { Files.deleteIfExists(temporary); } catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+			try {
+				if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
+			} catch (IOException cleanup) { failure.addSuppressed(cleanup); }
 			throw failure;
 		}
 	}
@@ -279,12 +284,7 @@ public final class ThermalRegistryStore {
 	}
 
 	private static void requireAll(CompoundTag tag, Map<String, Byte> fields) throws IOException {
-		for (Map.Entry<String, Byte> field : fields.entrySet()) {
-			Tag value = tag.get(field.getKey());
-			if (value == null || value.getId() != field.getValue()) {
-				throw new IOException("Missing or invalid thermal registry field " + field.getKey());
-			}
-		}
+		StrictNbtFields.requireExact(tag, fields, "thermal registry");
 	}
 
 	private static String requireFingerprint(String value, String label) {

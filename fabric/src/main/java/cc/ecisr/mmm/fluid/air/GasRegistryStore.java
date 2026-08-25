@@ -1,6 +1,8 @@
 package cc.ecisr.mmm.fluid.air;
 
 import cc.ecisr.mmm.chemistry.ExactRational;
+import cc.ecisr.mmm.simulation.persistence.DurableFileOperations;
+import cc.ecisr.mmm.simulation.persistence.StrictNbtFields;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtAccounter;
@@ -37,7 +39,9 @@ public final class GasRegistryStore {
 			GasRegistry authoritative = read(target);
 			return new LoadResult(authoritative, !authoritative.fingerprint().equals(definitions.fingerprint()), false);
 		}
-		Path temporary = temporaryPath(); Files.createDirectories(directory); Files.deleteIfExists(temporary);
+		Path temporary = temporaryPath();
+		DurableFileOperations.createDirectories(directory);
+		if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
 		try {
 			NbtIo.writeCompressed(encode(definitions), temporary); force(temporary);
 			GasRegistry reread = read(temporary);
@@ -45,9 +49,12 @@ public final class GasRegistryStore {
 				throw new IOException("Staged gas registry did not read back identically");
 			}
 			Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
+			DurableFileOperations.forceDirectory(directory);
 			return new LoadResult(read(target), false, true);
 		} catch (IOException failure) {
-			try { Files.deleteIfExists(temporary); } catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+			try {
+				if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
+			} catch (IOException cleanup) { failure.addSuppressed(cleanup); }
 			throw failure;
 		}
 	}
@@ -168,10 +175,7 @@ public final class GasRegistryStore {
 	}
 
 	private static void requireAll(CompoundTag tag, Map<String, Byte> fields) throws IOException {
-		for (Map.Entry<String, Byte> field : fields.entrySet()) {
-			Tag value = tag.get(field.getKey());
-			if (value == null || value.getId() != field.getValue()) throw new IOException("Missing or invalid gas registry field " + field.getKey());
-		}
+		StrictNbtFields.requireExact(tag, fields, "gas registry");
 	}
 
 	private static void force(Path path) throws IOException {

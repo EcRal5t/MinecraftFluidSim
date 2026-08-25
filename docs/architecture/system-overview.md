@@ -118,6 +118,8 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 
 region HEAD 是区域物理状态唯一提交点。ownership 与 container WAL 分别把世界方块和 actor item 收敛到该 HEAD；它们不能成为第二个物理真值。任何 publish 都必须遵守“完整写入、回读验证、HEAD 最后替换”。
 
+world-local chemical、granular、gas 和 thermal registry snapshot 的首次发布同样必须回读验证、atomic rename 并同步目录 entry。reader 只接受当前 writer 的精确 compound 字段集合与 NBT 类型；额外字段也属于未知语义，必须保留 snapshot 并 LOCKED，不能忽略后再按当前定义重建。
+
 ## 线程与只读边界
 
 - 世界读取、方块修改、玩家/发射器物品变更和 lifecycle 编排只在服务器主线程发生。

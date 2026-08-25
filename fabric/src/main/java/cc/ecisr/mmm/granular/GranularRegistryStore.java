@@ -2,6 +2,8 @@ package cc.ecisr.mmm.granular;
 
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ExactRational;
+import cc.ecisr.mmm.simulation.persistence.DurableFileOperations;
+import cc.ecisr.mmm.simulation.persistence.StrictNbtFields;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtAccounter;
@@ -41,7 +43,8 @@ public final class GranularRegistryStore {
 			return new LoadResult(authoritative, !authoritative.fingerprint().equals(definitions.fingerprint()), false);
 		}
 		Path temporary = temporaryPath();
-		Files.createDirectories(directory); Files.deleteIfExists(temporary);
+		DurableFileOperations.createDirectories(directory);
+		if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
 		try {
 			NbtIo.writeCompressed(encode(definitions), temporary); force(temporary);
 			GranularRegistry reread = read(temporary);
@@ -49,9 +52,12 @@ public final class GranularRegistryStore {
 				throw new IOException("Staged granular registry did not read back identically");
 			}
 			Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
+			DurableFileOperations.forceDirectory(directory);
 			return new LoadResult(read(target), false, true);
 		} catch (IOException failure) {
-			try { Files.deleteIfExists(temporary); } catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+			try {
+				if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
+			} catch (IOException cleanup) { failure.addSuppressed(cleanup); }
 			throw failure;
 		}
 	}
@@ -236,10 +242,7 @@ public final class GranularRegistryStore {
 		return compound;
 	}
 	private static void requireAll(CompoundTag tag, Map<String, Byte> fields) throws IOException {
-		for (Map.Entry<String, Byte> field : fields.entrySet()) {
-			Tag value = tag.get(field.getKey());
-			if (value == null || value.getId() != field.getValue()) throw new IOException("Missing or invalid granular registry field " + field.getKey());
-		}
+		StrictNbtFields.requireExact(tag, fields, "granular registry");
 	}
 	private static long bits(double value) { return Double.doubleToRawLongBits(value); }
 	private static double value(CompoundTag tag, String field) { return Double.longBitsToDouble(tag.getLongOr(field, 0L)); }
