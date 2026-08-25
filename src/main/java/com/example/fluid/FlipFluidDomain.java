@@ -7,6 +7,7 @@ import com.example.chemistry.ChemicalRegistry;
 import com.example.chemistry.ChemicalTransferLedger;
 import com.example.chemistry.ChemicalLimits;
 import com.example.fluid.air.AirNetwork;
+import com.example.fluid.air.GasAuditLedger;
 import com.example.fluid.air.GasComponentAmount;
 import com.example.fluid.air.GasInventory;
 import com.example.fluid.air.GasRegistry;
@@ -289,6 +290,12 @@ public final class FlipFluidDomain {
 		ensureGrid();
 		refreshGasTopology();
 		return exportGasState(chemicalRegistryFingerprint);
+	}
+
+	/** Preserves a previously closed, inventory-free gas audit across an explicit topology bootstrap. */
+	public void carryClosedGasAuditHistory(GasAuditLedger history) {
+		if (airCellNodeId == null) throw new IllegalStateException("Gas topology has not been explicitly initialized");
+		airNetwork.carryClosedAuditHistory(history);
 	}
 
 	public GasStateSnapshot exportGasState(String chemicalRegistryFingerprint) {

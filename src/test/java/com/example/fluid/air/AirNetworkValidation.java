@@ -15,6 +15,7 @@ public final class AirNetworkValidation {
 		validateSplitMergeVentLedger();
 		validateAmbientInteraction();
 		validateComponentTransport();
+		validateClosedAuditHistoryCarry();
 		validateGuards();
 		System.out.println("M5 air network gate passed: isothermal EoS, finite-rate orifice equalization, "
 				+ "hole open/close freeze and exact nanovolume ledger");
@@ -214,6 +215,20 @@ public final class AirNetworkValidation {
 		check(after.components().stream().map(GasComponentAmount::componentId).toList()
 				.equals(List.of("test:alpha", "test:beta")), "component transport lost stable identities");
 		check(network.auditClosed(), "component transport did not close mass/species audit");
+	}
+
+	private static void validateClosedAuditHistoryCarry() {
+		AirNetwork network = new AirNetwork();
+		network.addNode(2.0, 2.0);
+		GasAuditLedger sourceBefore = network.externalSource();
+		GasAuditLedger sinkBefore = network.escapedSink();
+		GasAuditLedger turnover = GasAuditLedger.of(network.registry().createAmbient(4_005_762L));
+		network.carryClosedAuditHistory(turnover);
+		check(network.externalSource().equals(sourceBefore.add(turnover)),
+				"carried closed history was not retained in the gas source ledger");
+		check(network.escapedSink().equals(sinkBefore.add(turnover)),
+				"carried closed history was not retained in the gas sink ledger");
+		checkLedger(network, "closed audit history carry");
 	}
 
 	private static void checkLedger(AirNetwork network, String context) {

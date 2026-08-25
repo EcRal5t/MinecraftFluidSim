@@ -505,6 +505,21 @@ public final class AirNetwork {
 		}
 	}
 
+	/**
+	 * Carries an exact source/sink turnover that has no remaining live inventory. This changes only
+	 * cumulative audit history; topology, inventories and roundoff columns remain untouched.
+	 */
+	public void carryClosedAuditHistory(GasAuditLedger history) {
+		Objects.requireNonNull(history, "history");
+		if (history.entries().isEmpty()) return;
+		if (!auditClosed()) throw new IllegalStateException("Gas audit must close before carrying history");
+		GasAuditLedger combinedSource = externalSource.add(history);
+		GasAuditLedger combinedSink = escapedSink.add(history);
+		externalSource = combinedSource;
+		escapedSink = combinedSink;
+		if (!auditClosed()) throw new IllegalStateException("Carried gas audit history does not close");
+	}
+
 	public long sealedInventoryNanos() {
 		long sum = 0L;
 		for (Map.Entry<Integer, AirNode> entry : nodes.entrySet()) sum += entry.getValue().standardVolumeNanos();

@@ -4,6 +4,7 @@ import com.example.RealWaterMod;
 import com.example.chemistry.ChemicalRegistry;
 import com.example.fluid.BuiltinFluidMaterials;
 import com.example.fluid.FluidMaterialRegistry;
+import com.example.fluid.air.GasAuditLedger;
 import com.example.fluid.air.GasRegistry;
 import com.example.granular.GranularRegistry;
 import com.example.simulation.controller.FluidRegionFootprint;
@@ -515,7 +516,7 @@ final class FluidRegionPersistence {
 		ThermalInitializationRecord record = new ThermalInitializationRecord(sourceVersion, initialTemperatureK,
 				ThermalInitializationRecord.GasBootstrap.CURRENT_GEOMETRY_AMBIENT_V1, operatorMetadata);
 		try {
-			restoreLegacyForThermalInitialization(region, source, previousGeneration);
+			GasAuditLedger closedGasHistory = restoreLegacyForThermalInitialization(region, source, previousGeneration);
 			if (chemistryEnabled && !region.domain().hasChemistryState()) {
 				if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
 				region.domain().bindChemistry(chemicalRegistry);
@@ -529,6 +530,7 @@ final class FluidRegionPersistence {
 			String chemicalFingerprint = region.domain().hasChemistryState()
 					? chemicalRegistry.fingerprint() : "";
 			region.domain().bootstrapGasState(chemicalFingerprint);
+			region.domain().carryClosedGasAuditHistory(closedGasHistory);
 			region.domain().bindThermal(thermalRegistry, region.domain().materialRegistry(), initialTemperatureK,
 					maximumThermalSubsteps);
 			region.setThermalInitializationRecord(record);
@@ -562,9 +564,10 @@ final class FluidRegionPersistence {
 		}
 	}
 
-	private void restoreLegacyForThermalInitialization(
+	private GasAuditLedger restoreLegacyForThermalInitialization(
 			FluidRegion region, RegionState state, long generation
 	) throws IOException {
+		GasAuditLedger closedGasHistory = GasAuditLedger.EMPTY;
 		RegionManifest manifest = state.manifest();
 		switch (manifest.formatVersion()) {
 			case 1 -> {
@@ -591,12 +594,13 @@ final class FluidRegionPersistence {
 				}
 				region.restoreGranularState(state.reconstructGranular(granularRegistry), granularRegistry, generation);
 			}
-			case 6 -> restoreLegacyV6ForThermalInitialization(region, state, generation);
+			case 6 -> closedGasHistory = restoreLegacyV6ForThermalInitialization(region, state, generation);
 			default -> throw new IOException("Unsupported thermal initialization source");
 		}
+		return closedGasHistory;
 	}
 
-	private void restoreLegacyV6ForThermalInitialization(
+	private GasAuditLedger restoreLegacyV6ForThermalInitialization(
 			FluidRegion region, RegionState state, long generation
 	) throws IOException {
 		var pending = state.reconstructPendingPhaseVolume();
@@ -604,10 +608,7 @@ final class FluidRegionPersistence {
 			throw new IOException("region-state v6 has unconsumed phase volume/work and cannot be reinitialized");
 		}
 		var gas = state.reconstructGas(gasRegistry, chemicalRegistry);
-		if (!gas.nodes().isEmpty() || !gas.externalSource().entries().isEmpty()
-				|| !gas.escapedSink().entries().isEmpty()
-				|| !gas.massRoundoff().equals(com.example.thermal.SignedDyadic.ZERO)
-				|| !gas.residualRoundoff().equals(com.example.thermal.SignedDyadic.ZERO)) {
+		if (!gas.hasNoLiveInventoryAndClosedTurnover()) {
 			throw new IOException("region-state v6 contains gas truth tied to the legacy topology; automatic remapping is forbidden");
 		}
 		if (state.manifest().hasChemicalState()) {
@@ -624,6 +625,7 @@ final class FluidRegionPersistence {
 			}
 			region.restoreGranularState(state.reconstructGranular(granularRegistry), granularRegistry, generation);
 		}
+		return gas.externalSource();
 	}
 
 	private static void validateAdmittedIdentity(FluidRegion region, RegionManifest manifest) throws IOException {

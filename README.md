@@ -13,7 +13,7 @@ Minecraft Java 26.2 / Fabric 的有界三维 PIC/FLIP 流体原型。M0–M8 已
 - 材料功能门默认关闭，且只在服务器启动时读取一次。开启后控制器区域改用 `region-state v2`，连接必须协商 protocol v2；关闭门时磁盘上的 v2 区域会被保留并锁住，不会静默降级或删除。
 - 化学功能门同样默认关闭，要求材料门已配置为开启并在重启后生效。开启后区域使用 `region-state v3`、protocol v3 与 container-transfer WAL v3；关闭门发现 v3、registry snapshot 未知/损坏或 fingerprint 不符时只保留并 `LOCKED`，绝不降级猜测。
 - 颗粒功能门默认关闭并依赖材料门；沉淀门还依赖化学门。开启后联合区域状态使用 `region-state v5`、protocol v4 与 container-transfer WAL v4；world granular registry store v3 冻结 exact extent/SVQ batch 与 chemical dependency。active/deposit、反应性 audit 或 registry 身份未知时同样只保留并 `LOCKED`；旧 v2 registry 不按当前数据包重解释。
-- 热学功能门默认关闭并依赖材料门，相变门又依赖热学门；两者都只在重启后生效。开启后 world gas/thermal registry snapshot 权威，修订后的完整联合区域使用 `region-state v7`、只读展示使用 protocol v5、液体容器事务使用 WAL v5 与 `ThermalContents v1`。温度只是由独立总内能和状态函数派生的读数；unknown/corrupt/fingerprint 失配一律保留并 `LOCKED`。旧 v1/v2/v3/v5 与错误 condensed-mass 尺度的 legacy v6 区域只允许在暂停、ownership 完整且没有未决容器 WAL 时由管理员显式执行 `regions thermalinit <K>`；v4 气体基态不能猜测升级。
+- 热学功能门默认关闭并依赖材料门，相变门又依赖热学门；两者都只在重启后生效。开启后 world gas/thermal registry snapshot 权威，修订后的完整联合区域使用 `region-state v7`、只读展示使用 protocol v5、液体容器事务使用 WAL v5 与 `ThermalContents v1`。温度只是由独立总内能和状态函数派生的读数；unknown/corrupt/fingerprint 失配一律保留并 `LOCKED`。旧 v1/v2/v3/v5 与错误 condensed-mass 尺度的 legacy v6 区域只允许在暂停、ownership 完整且没有未决容器 WAL 时由管理员显式执行 `regions thermalinit <K>`；v6 若仍有活 gas 节点、不闭合账本或 roundoff 也会拒绝，只有无节点且 source=sink 精确闭合的历史周转可保账迁移；v4 气体基态不能猜测升级。
 - 世界桥功能门（`/realwater worldbridge`）默认关闭且重启生效。开启后新激活的控制器区域会通过可恢复的 ownership 事务一次性移除内部纯原版水（WAL 与 WARNING 先行，region HEAD 最后提交）；区域与容器间的转移另有独立 WAL。移除区域前必须先恢复完整状态并确认流体 marker 与固体 SVQ 都恰好为空。
 - 可选 GPU probe 只读、不修改世界或存档；主 Mod 始终以 CPU 为物理规范。
 

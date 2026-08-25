@@ -272,8 +272,11 @@ v1/v2/v3/v5 没有热真值；v6 有旧质量基准下的热真值。两者都�
 `U`。旧 controller 只有在 PAUSED、
 ownership 完整、无 pending WAL 且 operator 显式给定初始温度后，才能在 inactive slot 生成并回读验证完整 v7，
 最后切换 HEAD；修订实现统一生成 v7，初始化 record 保存 source version、raw temperature bits、gas bootstrap 与 operator metadata。
-v6→v7 时旧 `U` 明确作为被 operator 替代的旧基准证据保留在上一槽；material、chemistry、granular 与 gas 库存从同一旧 HEAD
-回读，禁止缩放或按 reference density 重建。初始化温度为全部现存 carrier 建立新的 SI `U` 与 audit baseline。
+v6→v7 时旧 `U` 明确作为被 operator 替代的旧基准证据保留在上一槽；material、chemistry 与 granular 从同一旧 HEAD
+回读，禁止缩放或按 reference density 重建。旧 gas 只在没有 node/live inventory、mass/residual roundoff 均为零且
+source 与 sink 逐列精确相等时允许继续：这部分只是已闭合历史周转，必须同时累加到新 bootstrap 的 source/sink，不能丢弃，
+也不能用来猜测旧拓扑。任何活节点、不闭合账本或 roundoff 都保留并 LOCKED。初始化温度为全部现存 carrier 建立新的
+SI `U` 与 audit baseline。
 这种旧代次在启动后是稳定的 operator-required 等待态：保留 HEAD/marker/体积，暂停且不发布 protocol v5 thermal snapshot，
 每区域只记一次警告并向每个玩家提供一次库存证据，不能作为可重试的恢复错误周期性扫描。
 失败仍以旧 HEAD 为权威。旧 WAL 跨初始化代次且缺能量时保留并 LOCKED 人工处置。

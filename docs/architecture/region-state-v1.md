@@ -33,8 +33,10 @@ This document defines the implemented first persistent Real Water region format.
   capability/unit bits, non-canonical records or ledger disagreement preserve the data and lock the region.
 - Legacy thermal `region-state v6` remains readable but used condensed solver mass weight as kilograms. It is never restored
   into the corrected runtime. `region-state v7` is the complete corrected-SI material + optional chemistry/granular + gas +
-  thermal generation. An operator may explicitly replace a v6 temperature baseline only when no legacy-topology gas truth or
-  unconsumed phase-volume work would be discarded; otherwise the old HEAD is retained and locked. See
+  thermal generation. An operator may explicitly replace a v6 temperature baseline only when no live legacy-topology gas
+  inventory or unconsumed phase-volume work would be discarded. A zero-node, zero-roundoff gas ledger whose source and sink
+  are exactly equal is closed historical turnover: it is retained in both v7 audit columns after the new ambient bootstrap,
+  never interpreted as a legacy node. Every other gas payload keeps the old HEAD retained and locked. See
   [`thermal-state.md`](thermal-state.md).
 - Experimental files created by another branch are not compatible and are never auto-migrated or deleted.
 

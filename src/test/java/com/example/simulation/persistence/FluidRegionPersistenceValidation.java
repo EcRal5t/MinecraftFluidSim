@@ -359,6 +359,19 @@ public final class FluidRegionPersistenceValidation {
 		assertMaterialStateEquals(region.domain().exportMaterialParticleState(), state.reconstructMaterial());
 		GasStateSnapshot decoded = state.reconstructGas(gasRegistry, null);
 		assertGasStateEquals(expected, decoded);
+		var closedTurnover = com.example.fluid.air.GasAuditLedger.of(gasRegistry.createAmbient(17L));
+		GasStateSnapshot historicalOnly = new GasStateSnapshot(1, 1, 1, gasRegistry.fingerprint(), "",
+				List.of(), new int[1], closedTurnover, closedTurnover,
+				com.example.thermal.SignedDyadic.ZERO, com.example.thermal.SignedDyadic.ZERO);
+		require(historicalOnly.hasNoLiveInventoryAndClosedTurnover(),
+				"inventory-free exact gas turnover was not admitted for explicit bootstrap");
+		GasStateSnapshot unclosedHistory = new GasStateSnapshot(1, 1, 1, gasRegistry.fingerprint(), "",
+				List.of(), new int[1], closedTurnover, com.example.fluid.air.GasAuditLedger.EMPTY,
+				com.example.thermal.SignedDyadic.ZERO, com.example.thermal.SignedDyadic.ZERO);
+		require(!unclosedHistory.hasNoLiveInventoryAndClosedTurnover(),
+				"unclosed gas audit was admitted for explicit bootstrap");
+		require(!expected.hasNoLiveInventoryAndClosedTurnover(),
+				"live legacy gas inventory was admitted for topology replacement");
 
 		FlipFluidDomain restored = new FlipFluidDomain(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG, 512);
 		restored.restoreMaterialParticleState(state.reconstructMaterial());

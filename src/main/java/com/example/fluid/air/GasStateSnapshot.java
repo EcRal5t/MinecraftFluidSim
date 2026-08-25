@@ -71,6 +71,16 @@ public record GasStateSnapshot(
 
 	@Override public int[] cellNodeOrdinal() { return cellNodeOrdinal.clone(); }
 
+	/**
+	 * True only when this generation owns no live gas inventory and its remaining audit columns are
+	 * an exact, zero-roundoff historical turnover. Such history can be carried unchanged across an
+	 * operator-authorized topology bootstrap; it cannot be used to reconstruct any old node.
+	 */
+	public boolean hasNoLiveInventoryAndClosedTurnover() {
+		return nodes.isEmpty() && externalSource.equals(escapedSink)
+				&& massRoundoff.equals(SignedDyadic.ZERO) && residualRoundoff.equals(SignedDyadic.ZERO);
+	}
+
 	/** Captures runtime node ids into canonical minimum-cell topology order. */
 	public static GasStateSnapshot capture(int sizeX, int sizeY, int sizeZ, int[] runtimeCellNodeId, AirNetwork network,
 	                                      String chemicalRegistryFingerprint) {
