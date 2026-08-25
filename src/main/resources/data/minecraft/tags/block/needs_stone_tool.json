@@ -1,8 +1,8 @@
 {
   "replace": false,
   "values": [
-    "realwater:fluid_boundary",
-    "realwater:fluid_controller",
-    "realwater:thermal_reservoir"
+    "mmm:fluid_boundary",
+    "mmm:fluid_controller",
+    "mmm:thermal_reservoir"
   ]
 }

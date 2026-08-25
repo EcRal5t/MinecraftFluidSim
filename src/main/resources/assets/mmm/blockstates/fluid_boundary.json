@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "mmm:block/fluid_boundary"
+    }
+  }
+}

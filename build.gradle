@@ -15,7 +15,7 @@ loom {
 	splitEnvironmentSourceSets()
 
 	mods {
-		"modid" {
+		"mmm" {
 			sourceSet sourceSets.main
 			sourceSet sourceSets.client
 		}
@@ -62,7 +62,7 @@ tasks.register("runCpuValidation", JavaExec) {
 	description = "Runs selected CPU validation gates in one JVM (default: fast; use -PcpuValidation=list)."
 	dependsOn tasks.named("testClasses")
 	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = "com.example.validation.CpuValidationSuite"
+	mainClass = "cc.ecisr.mmm.validation.CpuValidationSuite"
 	enableAssertions = true
 	args providers.gradleProperty("cpuValidation").getOrElse("fast")
 	def validationWorkDir = layout.buildDirectory.dir("cpu-validation-work").get().asFile

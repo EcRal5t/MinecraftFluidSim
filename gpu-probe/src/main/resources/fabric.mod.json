@@ -1,9 +1,9 @@
 {
 	"schemaVersion": 1,
-	"id": "realwater_gpu_probe",
+	"id": "mmm_gpu_probe",
 	"version": "${version}",
-	"name": "Real Water GPU Probe",
-	"description": "Optional windowless Vulkan compute probe for Real Water. It never modifies world blocks or save data.",
+	"name": "Matter, Motion & Mechanics GPU Probe",
+	"description": "Optional windowless Vulkan compute probe for Matter, Motion & Mechanics. It never modifies world blocks or save data.",
 	"authors": [
 		"Ecisral"
 	],
@@ -11,7 +11,7 @@
 	"environment": "*",
 	"entrypoints": {
 		"main": [
-			"com.example.gpuprobe.RealWaterGpuProbeMod"
+			"cc.ecisr.mmm.gpuprobe.MmmGpuProbeMod"
 		]
 	},
 	"depends": {
@@ -19,6 +19,6 @@
 		"minecraft": "~26.2",
 		"java": ">=25",
 		"fabric-api": "*",
-		"realwater": ">=0.8.2"
+		"mmm": ">=0.17.0"
 	}
 }

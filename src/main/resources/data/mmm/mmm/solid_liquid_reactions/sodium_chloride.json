@@ -1,0 +1,1 @@
+{"liquid_phase":"mmm:aqueous","aqueous_stoichiometry":{"mmm:na_plus":"64","mmm:cl_minus":"64"},"solid_material":"mmm:precipitate","solid_composition":{"mmm:na_plus":"64","mmm:cl_minus":"64"},"saturation_capacity_extent_per_bv":"1000000","solid_extent_per_batch":"281","solid_volume_svq_per_batch":"400","accessible_surface_svq_per_cell_step":"4096","reversible":true}

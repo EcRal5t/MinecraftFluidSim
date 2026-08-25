@@ -1,24 +1,24 @@
 {
 	"schemaVersion": 1,
-	"id": "realwater",
+	"id": "mmm",
 	"version": "${version}",
-	"name": "Real Water Prototype",
-	"description": "A bounded 3D pressure-based water simulation prototype for Minecraft 26.2.",
+	"name": "Matter, Motion & Mechanics",
+	"description": "A bounded, conservative multiphase fluid simulation for Minecraft 26.2.",
 	"authors": [
 		"Ecisral"
 	],
 	"license": "CC0-1.0",
-	"icon": "assets/modid/icon.png",
+	"icon": "assets/mmm/icon.png",
 	"environment": "*",
 	"mixins": [
-		"realwater.mixins.json"
+		"mmm.mixins.json"
 	],
 	"entrypoints": {
 		"main": [
-			"com.example.RealWaterMod"
+			"cc.ecisr.mmm.MmmMod"
 		],
 		"client": [
-			"com.example.client.RealWaterModClient"
+			"cc.ecisr.mmm.client.MmmModClient"
 		]
 	},
 	"depends": {

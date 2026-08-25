@@ -4,15 +4,15 @@ plugins {
 }
 
 base {
-	archivesName = 'realwater-gpu-probe'
+	archivesName = 'mmm-gpu-probe'
 }
 
-version = '0.1.16'
+version = '0.1.17'
 group = project.group
 
 loom {
 	mods {
-		"realwater_gpu_probe" {
+		"mmm_gpu_probe" {
 			sourceSet sourceSets.main
 		}
 	}
@@ -47,7 +47,7 @@ tasks.register('runHeadlessGpuProbe', JavaExec) {
 	description = 'Runs the windowless Vulkan/Shaderc/VMA compute capability probe.'
 	dependsOn tasks.named('classes')
 	classpath = sourceSets.main.output + configurations.compileClasspath
-	mainClass = 'com.example.gpuprobe.HeadlessGpuProbeMain'
+	mainClass = 'cc.ecisr.mmm.gpuprobe.HeadlessGpuProbeMain'
 	jvmArgs '--enable-native-access=ALL-UNNAMED'
 	def probeWorkDir = layout.buildDirectory.dir('headless-probe-work').get().asFile
 	workingDir probeWorkDir
@@ -69,7 +69,7 @@ tasks.register('runGpuFlipValidation', JavaExec) {
 	description = 'Runs the windowless 3D GPU FLIP correctness suite and current/32-cubed benchmarks.'
 	dependsOn tasks.named('classes')
 	classpath = sourceSets.main.output + configurations.compileClasspath
-	mainClass = 'com.example.gpuprobe.GpuFlipProbeValidation'
+	mainClass = 'cc.ecisr.mmm.gpuprobe.GpuFlipProbeValidation'
 	jvmArgs '--enable-native-access=ALL-UNNAMED'
 	def probeWorkDir = layout.buildDirectory.dir('gpu-flip-validation-work').get().asFile
 	workingDir probeWorkDir
@@ -90,7 +90,7 @@ tasks.register('runGpuOccupancyBenchmark', JavaExec) {
 	description = 'Measures the M1 CPU/GPU break-even matrix across grid, marker and fluid-cell occupancy.'
 	dependsOn tasks.named('classes')
 	classpath = sourceSets.main.output + configurations.compileClasspath
-	mainClass = 'com.example.gpuprobe.GpuOccupancyBreakEvenValidation'
+	mainClass = 'cc.ecisr.mmm.gpuprobe.GpuOccupancyBreakEvenValidation'
 	jvmArgs '--enable-native-access=ALL-UNNAMED'
 	def probeWorkDir = layout.buildDirectory.dir('gpu-occupancy-benchmark-work').get().asFile
 	workingDir probeWorkDir
@@ -110,7 +110,7 @@ tasks.register('runGpuLongRunSurfaceValidation', JavaExec) {
 	description = 'Runs the current-domain long-run GPU/CPU marker-distribution and edge-surface gate.'
 	dependsOn tasks.named('classes')
 	classpath = sourceSets.main.output + configurations.compileClasspath
-	mainClass = 'com.example.gpuprobe.GpuLongRunSurfaceValidation'
+	mainClass = 'cc.ecisr.mmm.gpuprobe.GpuLongRunSurfaceValidation'
 	jvmArgs '--enable-native-access=ALL-UNNAMED'
 	def probeWorkDir = layout.buildDirectory.dir('gpu-long-run-surface-validation-work').get().asFile
 	workingDir probeWorkDir

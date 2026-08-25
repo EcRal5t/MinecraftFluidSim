@@ -1,4 +1,4 @@
-# Real Water
+# Matter, Motion & Mechanics
 
 Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CPU 权威 PIC/FLIP 求解器，支持最多四个独立区域、控制器闭壳、跨 chunk 完整加载、原子 checkpoint、分数自由面、cut-cell 碰撞、多液体、守恒化学、低成本颗粒沉积以及热学与相变。
 
@@ -20,21 +20,21 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 
 | 用途 | 命令 |
 |---|---|
-| 创建开发域 | `/realwater demo`、`capture`、`takeover` |
-| 创建持久闭壳 | `/realwater controllers true`，重启后执行 `/realwater controllerdemo`；或手建边界并空手右击控制器 |
-| 选择与保存区域 | `/realwater regions list`、`regions select <uuid>`、`regions checkpoint` |
-| 恢复上一完整 checkpoint | `/realwater regions recoverprevious <expectedCheckpoint>`；成功后退出并重新进入世界 |
-| 操作库存与碰撞 | `/realwater pour [1-16]`、`drain [1-16]`、`empty`、`refresh` |
-| 运行控制 | `/realwater run`、`pause`、`step [1-20]`、`status` |
-| 功能门 | `/realwater materials`、`chemistry`、`granular`、`precipitation`、`thermal`、`phasechange`、`worldbridge`；均在重启后生效 |
-| 材料与界面调试 | `/realwater materialdemo`、`materialbucket ...`、`tensiondemo [angle]` |
-| 化学调试 | `/realwater chemistrydemo`、`reagent ...`、`chemstatus` |
-| 颗粒调试 | `/realwater granularcontainer ...`、`granstatus` |
-| 气压调试 | `/realwater airdemo [pressure|vacuum]` |
-| 可调恒温边界 | `/give @s realwater:thermal_reservoir`；准星对准后 `/realwater thermalsource [temperatureK]` |
-| ownership 对账 | `/realwater ownership` |
-| 调试与实体 | `/realwater debug`、`entities`、`logpath` |
-| 安全移除 | `/realwater remove` |
+| 创建开发域 | `/mmm demo`、`capture`、`takeover` |
+| 创建持久闭壳 | `/mmm controllers true`，重启后执行 `/mmm controllerdemo`；或手建边界并空手右击控制器 |
+| 选择与保存区域 | `/mmm regions list`、`regions select <uuid>`、`regions checkpoint` |
+| 恢复上一完整 checkpoint | `/mmm regions recoverprevious <expectedCheckpoint>`；成功后退出并重新进入世界 |
+| 操作库存与碰撞 | `/mmm pour [1-16]`、`drain [1-16]`、`empty`、`refresh` |
+| 运行控制 | `/mmm run`、`pause`、`step [1-20]`、`status` |
+| 功能门 | `/mmm materials`、`chemistry`、`granular`、`precipitation`、`thermal`、`phasechange`、`worldbridge`；均在重启后生效 |
+| 材料与界面调试 | `/mmm materialdemo`、`materialbucket ...`、`tensiondemo [angle]` |
+| 化学调试 | `/mmm chemistrydemo`、`reagent ...`、`chemstatus` |
+| 颗粒调试 | `/mmm granularcontainer ...`、`granstatus` |
+| 气压调试 | `/mmm airdemo [pressure|vacuum]` |
+| 可调恒温边界 | `/give @s mmm:thermal_reservoir`；准星对准后 `/mmm thermalsource [temperatureK]` |
+| ownership 对账 | `/mmm ownership` |
+| 调试与实体 | `/mmm debug`、`entities`、`logpath` |
+| 安全移除 | `/mmm remove` |
 
 ## 当前物理边界
 

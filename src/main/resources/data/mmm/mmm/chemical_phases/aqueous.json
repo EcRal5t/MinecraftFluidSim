@@ -1,0 +1,1 @@
+{"material":"mmm:water","allowed_species":["mmm:h2o","mmm:h_plus","mmm:oh_minus","mmm:na_plus","mmm:k_plus","mmm:cl_minus","mmm:no3_minus","mmm:hcl","mmm:naoh","mmm:nano3","mmm:kcl","mmm:nacl","mmm:kno3"],"default_inventory_per_bv":{"mmm:h2o":"500/9"},"accepts_indicator":true}

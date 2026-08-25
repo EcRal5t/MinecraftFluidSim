@@ -1,1 +1,0 @@
-{"material":"realwater:water","allowed_species":["realwater:h2o","realwater:h_plus","realwater:oh_minus","realwater:na_plus","realwater:k_plus","realwater:cl_minus","realwater:no3_minus","realwater:hcl","realwater:naoh","realwater:nano3","realwater:kcl","realwater:nacl","realwater:kno3"],"default_inventory_per_bv":{"realwater:h2o":"500/9"},"accepts_indicator":true}

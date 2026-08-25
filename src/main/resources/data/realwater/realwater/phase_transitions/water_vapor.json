@@ -1,1 +1,0 @@
-{"lower_energy_material":"realwater:water","upper_energy_material":"realwater:water_vapor","equilibrium_temperature_k":"373.15","lower_volume_svq_per_batch":"134","upper_volume_svq_per_batch":"228122","mass_mu_per_batch":"1/1000","interface_requirement":"LIQUID_GAS","minimum_pressure_pa":"10000.0","maximum_pressure_pa":"2000000.0"}
