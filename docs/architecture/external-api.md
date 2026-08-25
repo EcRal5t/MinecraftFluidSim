@@ -54,6 +54,6 @@ Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会�
 
 `ContainerTransferCommittedEvent` 只在 region HEAD 已指向 target、player/dispenser after-item 已完成强制保存且 WAL 已删除后发布。它携带 transaction UUID、dimension、region UUID、checkpoint generation、相对区域的 insert/extract 方向，以及封闭的 `TransferQuantity`：液体记录 `10^-9 m³` nanovolume 和可选 raw `U`，颗粒记录 `2^-40 BV` 的 SVQ，调用方不需要用枚举与无类型 long 自行配对。事件不声称包含材料/species 明细；监听者需要当前库存时重新查询。
 
-`core/.../transfer/` 已保存与 loader 无关的容器体积、逐材料质量、species/residual、颗粒组成和 raw `U` 值对象；Fabric 的 `ContainerItemStacks` 只负责把这些真值映射到 `ItemStack` component。它们是内部事务与未来 transfer adapter 的共享模型，不等同于已经开放写权限；公开 request/plan/commit 仍须先完成可跨重启解析并强制保存的外部 actor 协议。
+`core/.../transfer/` 已保存与 loader 无关的容器体积、逐材料质量、species/residual、颗粒组成、raw `U`、actor identity 和 journal 数据；Fabric 只负责 NBT 持久编码、Minecraft actor 收敛，以及由 `ContainerItemStacks` 映射 `ItemStack` component。它们是内部事务与未来 transfer adapter 的共享模型，不等同于已经开放写权限；公开 request/plan/commit 仍须先完成可跨重启解析并强制保存的外部 actor 协议。
 
 事件是易失通知，不是库存日志：服务器可能在删除 WAL 后、发布事件前退出，监听者也可能晚注册。漏失不能重放或反向驱动物理，消费者必须能从 Query API 恢复当前观察。checkpoint、ownership、phase transition 与安全暂停事件尚未冻结，不能用 container event 猜测这些提交。

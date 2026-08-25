@@ -4,6 +4,8 @@ import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.transfer.ContainerFluidLedger;
 import cc.ecisr.mmm.transfer.ChemicalContents;
+import cc.ecisr.mmm.transfer.ContainerTransferActor;
+import cc.ecisr.mmm.transfer.ContainerTransferJournal;
 import cc.ecisr.mmm.transfer.FluidMixture;
 import cc.ecisr.mmm.item.GranularContainerItem;
 import cc.ecisr.mmm.transfer.GranularContents;
@@ -178,8 +180,10 @@ public final class FluidTransferService {
 		if (region.controllerManaged()) {
 			int slot = findDispenserSlot(source, stack);
 			if (slot < 0) return stack;
+			BlockPos actorPosition = source.pos();
 			ContainerTransferActor actor = ContainerTransferActor.dispenser(
-					level.dimension().identifier().toString(), source.pos(), slot);
+					level.dimension().identifier().toString(), actorPosition.getX(), actorPosition.getY(),
+					actorPosition.getZ(), slot);
 			ControllerItemTransferCoordinator.Result transaction = switch (kind) {
 				case POUR -> ControllerItemTransferCoordinator.execute(service, region, level, actor, stack,
 						ContainerTransferJournal.Operation.INSERT, heldVolumeNanos(stack), 0L,
@@ -289,7 +293,7 @@ public final class FluidTransferService {
 		boolean externalSource = player.hasInfiniteMaterials();
 		ThermalContents thermal = thermalContents(held);
 		if (region.controllerManaged()) {
-			ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), hand.name());
+			ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), actorHand(hand));
 			ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 					service, region, player.level(), actor, held,
 					ContainerTransferJournal.Operation.INSERT, volumeNanos, 0L,
@@ -352,8 +356,7 @@ public final class FluidTransferService {
 			return new TransferOutcome(false, false, held, "准星处没有可装入的材料流体");
 		}
 		if (region.controllerManaged()) {
-			ContainerTransferActor actor = ContainerTransferActor.player(
-					player.getUUID(), hand.name());
+			ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), actorHand(hand));
 			ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 					service, region, player.level(), actor, held,
 					ContainerTransferJournal.Operation.EXTRACT, requestedNanos, 0L,
@@ -399,7 +402,7 @@ public final class FluidTransferService {
 			return new TransferOutcome(false, true, held, "颗粒容器内容损坏、双重表示或 registry 不匹配");
 		}
 		if (contents == null) return new TransferOutcome(false, true, held, "颗粒容器没有有效库存");
-		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), hand.name());
+		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), actorHand(hand));
 		ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 				service, region, player.level(), actor, held,
 				ContainerTransferJournal.Operation.INSERT, ContainerTransferJournal.ResourceKind.GRANULAR_SVQ,
@@ -427,7 +430,7 @@ public final class FluidTransferService {
 		if (!region.domain().hasGranularState() || !GranularContainerItem.isEmpty(held)) {
 			return new TransferOutcome(false, false, held, "干式容器不为空或该区域不是颗粒区域");
 		}
-		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), hand.name());
+		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), actorHand(hand));
 		ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 				service, region, player.level(), actor, held,
 				ContainerTransferJournal.Operation.EXTRACT, ContainerTransferJournal.ResourceKind.GRANULAR_SVQ,
@@ -445,7 +448,7 @@ public final class FluidTransferService {
 			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held,
 			long volumeNanos, int[] cell
 	) {
-		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), hand.name());
+		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), actorHand(hand));
 		ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 				service, region, player.level(), actor, held,
 				ContainerTransferJournal.Operation.INSERT, volumeNanos, 0L,
@@ -464,7 +467,7 @@ public final class FluidTransferService {
 			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand, ItemStack held,
 			long capacityNanos, int[] cell
 	) {
-		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), hand.name());
+		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), actorHand(hand));
 		ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 				service, region, player.level(), actor, held,
 				ContainerTransferJournal.Operation.EXTRACT, capacityNanos, heldBaseVolumeNanos(held),
@@ -936,6 +939,11 @@ public final class FluidTransferService {
 			if (material > 0L) return material;
 		}
 		throw new IllegalArgumentException("Thermal source item has no liquid volume ledger");
+	}
+
+	private static ContainerTransferActor.Hand actorHand(InteractionHand hand) {
+		return hand == InteractionHand.MAIN_HAND
+				? ContainerTransferActor.Hand.MAIN : ContainerTransferActor.Hand.OFF;
 	}
 
 	private static long heldBaseVolumeNanos(ItemStack stack) {

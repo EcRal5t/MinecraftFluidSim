@@ -2,7 +2,8 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.simulation.persistence.DurableFileOperations;
 import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
-import net.minecraft.core.BlockPos;
+import cc.ecisr.mmm.transfer.ContainerTransferActor;
+import cc.ecisr.mmm.transfer.ContainerTransferJournal;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
@@ -217,14 +218,14 @@ switch (actor) {
 case ContainerTransferActor.PlayerHand player -> {
 root.putLong("PlayerUuidMost", player.playerId().getMostSignificantBits());
 root.putLong("PlayerUuidLeast", player.playerId().getLeastSignificantBits());
-root.putString("Hand", player.hand());
+root.putString("Hand", player.hand().name());
 }
 case ContainerTransferActor.Dispenser dispenser -> {
 validateDimension(dispenser.dimensionId());
 root.putString("ActorDimension", dispenser.dimensionId());
-root.putInt("DispenserX", dispenser.position().getX());
-root.putInt("DispenserY", dispenser.position().getY());
-root.putInt("DispenserZ", dispenser.position().getZ());
+root.putInt("DispenserX", dispenser.blockX());
+root.putInt("DispenserY", dispenser.blockY());
+root.putInt("DispenserZ", dispenser.blockZ());
 root.putInt("DispenserSlot", dispenser.slot());
 }
 }
@@ -300,7 +301,7 @@ requireType(root, "PlayerUuidLeast", Tag.TAG_LONG);
 requireType(root, "Hand", Tag.TAG_STRING);
 actor = ContainerTransferActor.player(
 new UUID(root.getLongOr("PlayerUuidMost", 0L), root.getLongOr("PlayerUuidLeast", 0L)),
-root.getStringOr("Hand", "")
+parseHand(root.getStringOr("Hand", ""))
 );
 }
 case DISPENSER -> {
@@ -311,7 +312,7 @@ requireType(root, "DispenserZ", Tag.TAG_INT);
 requireType(root, "DispenserSlot", Tag.TAG_INT);
 actor = ContainerTransferActor.dispenser(
 root.getStringOr("ActorDimension", ""),
-new BlockPos(root.getIntOr("DispenserX", 0), root.getIntOr("DispenserY", 0), root.getIntOr("DispenserZ", 0)),
+root.getIntOr("DispenserX", 0), root.getIntOr("DispenserY", 0), root.getIntOr("DispenserZ", 0),
 root.getIntOr("DispenserSlot", -1)
 );
 }
@@ -664,6 +665,14 @@ return switch (name) {
 case "PLAYER_HAND" -> ContainerTransferActor.Kind.PLAYER_HAND;
 case "DISPENSER" -> ContainerTransferActor.Kind.DISPENSER;
 default -> throw new IOException("Unknown container transfer actor type: " + name);
+};
+}
+
+private static ContainerTransferActor.Hand parseHand(String name) throws IOException {
+return switch (name) {
+case "MAIN" -> ContainerTransferActor.Hand.MAIN;
+case "OFF" -> ContainerTransferActor.Hand.OFF;
+default -> throw new IOException("Unknown container transfer player hand: " + name);
 };
 }
 

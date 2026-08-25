@@ -1,18 +1,13 @@
-package cc.ecisr.mmm.simulation;
+package cc.ecisr.mmm.transfer;
 
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
-import cc.ecisr.mmm.transfer.ChemicalContents;
-import cc.ecisr.mmm.transfer.ContainerFluidLedger;
-import cc.ecisr.mmm.transfer.FluidMixture;
-import cc.ecisr.mmm.transfer.GranularContents;
-import cc.ecisr.mmm.transfer.ThermalContents;
 import java.util.UUID;
 
 /**
- * Short-lived WAL data for one player/dispenser container transfer against a controller region.
- * Region HEAD remains the only commit point. Minecraft item mapping is owned by
- * {@link ContainerTransferItems}; this record is deleted only after the actor after-state is saved.
+ * Loader-neutral short-lived WAL data for one external actor transfer against a controller region.
+ * Region HEAD remains the only commit point. A loader adapter owns item/state mapping and may
+ * delete this record only after the actor after-state has been saved durably.
  */
 public record ContainerTransferJournal(
 		UUID transactionId,

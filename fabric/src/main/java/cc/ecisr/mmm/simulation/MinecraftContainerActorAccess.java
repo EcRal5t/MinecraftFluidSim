@@ -1,5 +1,8 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.transfer.ContainerTransferActor;
+import cc.ecisr.mmm.transfer.ContainerTransferJournal;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
@@ -43,9 +46,8 @@ final class MinecraftContainerActorAccess {
 		ServerPlayer player = server.getPlayerList().getPlayer(actor.playerId());
 		if (player == null) return Convergence.UNAVAILABLE;
 		InteractionHand hand = switch (actor.hand()) {
-			case "MAIN_HAND" -> InteractionHand.MAIN_HAND;
-			case "OFF_HAND" -> InteractionHand.OFF_HAND;
-			default -> throw new IllegalStateException("Validated player actor has an unknown hand");
+			case MAIN -> InteractionHand.MAIN_HAND;
+			case OFF -> InteractionHand.OFF_HAND;
 		};
 		ItemStack current = player.getItemInHand(hand);
 		if (!matches(current, journal.beforeItem()) && !matches(current, journal.afterItem())) {
@@ -62,8 +64,9 @@ final class MinecraftContainerActorAccess {
 			ContainerTransferJournal journal
 	) {
 		ServerLevel level = level(server, actor.dimensionId());
-		if (level == null || !level.hasChunkAt(actor.position())) return Convergence.UNAVAILABLE;
-		if (!(level.getBlockEntity(actor.position()) instanceof DispenserBlockEntity dispenser)
+		BlockPos position = new BlockPos(actor.blockX(), actor.blockY(), actor.blockZ());
+		if (level == null || !level.hasChunkAt(position)) return Convergence.UNAVAILABLE;
+		if (!(level.getBlockEntity(position) instanceof DispenserBlockEntity dispenser)
 				|| actor.slot() >= dispenser.getContainerSize()) {
 			return Convergence.CONFLICT;
 		}

@@ -3,6 +3,8 @@ package cc.ecisr.mmm.simulation;
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.item.ContainerItemStacks;
 import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
+import cc.ecisr.mmm.transfer.ContainerTransferActor;
+import cc.ecisr.mmm.transfer.ContainerTransferJournal;
 import cc.ecisr.mmm.transfer.ThermalContents;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;

@@ -7,6 +7,7 @@ import cc.ecisr.mmm.item.MmmComponents;
 import cc.ecisr.mmm.item.MmmItems;
 import cc.ecisr.mmm.item.PartialWaterBucketItem;
 import cc.ecisr.mmm.transfer.ChemicalContents;
+import cc.ecisr.mmm.transfer.ContainerTransferJournal;
 import cc.ecisr.mmm.transfer.FluidMixture;
 import cc.ecisr.mmm.transfer.GranularContents;
 import net.minecraft.world.item.ItemStack;

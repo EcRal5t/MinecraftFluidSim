@@ -28,6 +28,8 @@ import cc.ecisr.mmm.granular.GranularPhaseTransferEngine;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.granular.GranularRegistryStore;
 import cc.ecisr.mmm.transfer.ChemicalContents;
+import cc.ecisr.mmm.transfer.ContainerTransferActor;
+import cc.ecisr.mmm.transfer.ContainerTransferJournal;
 import cc.ecisr.mmm.transfer.FluidMixture;
 import cc.ecisr.mmm.item.ContainerItemStacks;
 import cc.ecisr.mmm.item.MmmComponents;

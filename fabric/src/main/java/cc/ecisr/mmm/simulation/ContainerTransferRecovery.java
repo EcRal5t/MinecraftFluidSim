@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.transfer.ContainerTransferJournal;
+
 /** Pure recovery decision at the region HEAD commit boundary. */
 final class ContainerTransferRecovery {
 	private ContainerTransferRecovery() { }
