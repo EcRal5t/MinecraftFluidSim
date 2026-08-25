@@ -17,16 +17,16 @@ public final class FlipParticleState {
 	private final int solidCellCount;
 	private final float[] positionVolume;
 	private final float[] particleVelocities;
-	private final byte[] solidMask;
+	private final byte[] collisionMicroMasks;
 
 	public FlipParticleState(int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
 	                         float volumeLedger, float[] positionVolume, float[] particleVelocities,
-	                         byte[] solidMask) {
+	                         byte[] collisionMicroMasks) {
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || !(cellSize > 0.0F)) {
 			throw new IllegalArgumentException("Invalid particle-state grid");
 		}
 		if (particleCount < 0) throw new IllegalArgumentException("Particle-state count must not be negative");
-		if (positionVolume == null || particleVelocities == null || solidMask == null) {
+		if (positionVolume == null || particleVelocities == null || collisionMicroMasks == null) {
 			throw new IllegalArgumentException("Particle-state arrays must not be null");
 		}
 		if (positionVolume.length != Math.multiplyExact(particleCount, 4)) {
@@ -35,8 +35,8 @@ public final class FlipParticleState {
 		if (particleVelocities.length != Math.multiplyExact(particleCount, 3)) {
 			throw new IllegalArgumentException("Velocity size does not match particle count");
 		}
-		if (solidMask.length != Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ)) {
-			throw new IllegalArgumentException("Solid mask size does not match particle-state grid");
+		if (collisionMicroMasks.length != Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ)) {
+			throw new IllegalArgumentException("Collision mask size does not match particle-state grid");
 		}
 		if (!Float.isFinite(volumeLedger) || volumeLedger < 0.0F) {
 			throw new IllegalArgumentException("Particle-state volume ledger is invalid");
@@ -45,9 +45,8 @@ public final class FlipParticleState {
 		double volume = 0.0, weightedX = 0.0;
 		float maximumX = sizeX * cellSize, maximumY = sizeY * cellSize, maximumZ = sizeZ * cellSize;
 		int solids = 0;
-		for (byte value : solidMask) {
-			if (value != 0 && value != 1) throw new IllegalArgumentException("Solid mask entries must be zero or one");
-			if (value != 0) solids++;
+		for (byte value : collisionMicroMasks) {
+			if (Byte.toUnsignedInt(value) == 0xff) solids++;
 		}
 		for (int particle = 0; particle < particleCount; particle++) {
 			int positionBase = particle * 4, velocityBase = particle * 3;
@@ -62,8 +61,13 @@ public final class FlipParticleState {
 			}
 			int cellX = (int) Math.floor(x / cellSize), cellY = (int) Math.floor(y / cellSize);
 			int cellZ = (int) Math.floor(z / cellSize);
-			if (solidMask[cellX + sizeX * (cellY + sizeY * cellZ)] != 0) {
-				throw new IllegalArgumentException("Particle state contains a marker inside a solid cell");
+			int cell = cellX + sizeX * (cellY + sizeY * cellZ);
+			int localX = Math.min(1, (int) Math.floor((x / cellSize - cellX) * 2.0F));
+			int localY = Math.min(1, (int) Math.floor((y / cellSize - cellY) * 2.0F));
+			int localZ = Math.min(1, (int) Math.floor((z / cellSize - cellZ) * 2.0F));
+			int microBit = 1 << (localX + 2 * (localY + 2 * localZ));
+			if ((Byte.toUnsignedInt(collisionMicroMasks[cell]) & microBit) != 0) {
+				throw new IllegalArgumentException("Particle state contains a marker inside collision geometry");
 			}
 			for (int axis = 0; axis < 3; axis++) if (!Float.isFinite(particleVelocities[velocityBase + axis])) {
 				throw new IllegalArgumentException("Particle state contains non-finite marker velocity");
@@ -87,7 +91,7 @@ public final class FlipParticleState {
 		this.solidCellCount = solids;
 		this.positionVolume = positionVolume.clone();
 		this.particleVelocities = particleVelocities.clone();
-		this.solidMask = solidMask.clone();
+		this.collisionMicroMasks = collisionMicroMasks.clone();
 	}
 
 	public int sizeX() { return sizeX; }
@@ -100,7 +104,7 @@ public final class FlipParticleState {
 	public int solidCellCount() { return solidCellCount; }
 	public long cpuBytes() {
 		return (long) positionVolume.length * Float.BYTES
-				+ (long) particleVelocities.length * Float.BYTES + solidMask.length;
+				+ (long) particleVelocities.length * Float.BYTES + collisionMicroMasks.length;
 	}
 
 	public void requireCompatible(int expectedX, int expectedY, int expectedZ, float expectedCellSize) {
@@ -112,9 +116,11 @@ public final class FlipParticleState {
 
 	public float[] copyPositionVolume() { return positionVolume.clone(); }
 	public float[] copyParticleVelocities() { return particleVelocities.clone(); }
-	public byte[] copySolidMask() { return solidMask.clone(); }
+	/** Legacy codec name; values are unsigned 2x2x2 cut-cell occupancy masks, not booleans. */
+	public byte[] copySolidMask() { return collisionMicroMasks.clone(); }
+	public byte[] copyCollisionMicroMasks() { return collisionMicroMasks.clone(); }
 
 	float[] positionVolume() { return positionVolume; }
 	float[] particleVelocities() { return particleVelocities; }
-	byte[] solidMask() { return solidMask; }
+	byte[] collisionMicroMasks() { return collisionMicroMasks; }
 }

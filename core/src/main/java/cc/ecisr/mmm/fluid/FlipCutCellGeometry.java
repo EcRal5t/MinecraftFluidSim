@@ -60,15 +60,17 @@ final class FlipCutCellGeometry {
 		return previous;
 	}
 
-	void restoreBinaryMask(byte[] binaryMask) {
-		if (binaryMask.length != occupancy.length) throw new IllegalArgumentException("Solid mask length changed");
-		for (int index = 0; index < binaryMask.length; index++) {
-			int mask = binaryMask[index] == 0 ? 0 : FULL_MASK;
-			occupancy[index] = (byte) mask;
-			openCellVolume[index] = mask == 0 ? 1.0F : 0.0F;
+	void restoreMicroMasks(byte[] microMasks) {
+		if (microMasks.length != occupancy.length) throw new IllegalArgumentException("Collision mask length changed");
+		for (int index = 0; index < microMasks.length; index++) {
+			int mask = Byte.toUnsignedInt(microMasks[index]);
+			occupancy[index] = microMasks[index];
+			openCellVolume[index] = 1.0F - Integer.bitCount(mask) * MICRO_VOLUME;
 		}
 		facesDirty = true;
 	}
+
+	byte[] copyMicroMasks() { return occupancy.clone(); }
 
 	byte[] copyBinaryFullMask() {
 		byte[] result = new byte[occupancy.length];

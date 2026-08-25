@@ -445,9 +445,9 @@ public final class FluidRegionPersistenceValidation {
 		region.domain().restoreMaterialParticleState(expected);
 		RegionState state = RegionState.captureMaterial(region, 1L);
 		List<Long> sectionChecksums = state.sections().stream().map(RegionSectionState::checksum).toList();
-		require(state.manifest().checksum() == 3_600_341_407L
+		require(state.manifest().checksum() == 3_024_853_648L
 				&& sectionChecksums.equals(List.of(
-				1_545_869_646L, 242_506_058L, 583_914_201L, 3_517_038_483L)),
+				3_991_644_778L, 242_506_058L, 583_914_201L, 3_517_038_483L)),
 				"region-state v2 canonical golden bytes changed: manifest=" + state.manifest().checksum()
 						+ " sections=" + sectionChecksums);
 		state.validate();
@@ -497,9 +497,9 @@ public final class FluidRegionPersistenceValidation {
 		RegionState v1State = RegionState.capture(populatedRegion(new UUID(17L, 18L)), 1L);
 		RegionManifest v1Manifest = v1State.manifest();
 		List<Long> v1SectionChecksums = v1State.sections().stream().map(RegionSectionState::checksum).toList();
-		require(v1Manifest.checksum() == 4_181_447_585L
+		require(v1Manifest.checksum() == 237_095_551L
 				&& v1SectionChecksums.equals(List.of(
-				1_508_618_239L, 2_988_587_419L, 4_098_225_719L, 2_990_622_609L)),
+				3_894_680_795L, 2_988_587_419L, 4_098_225_719L, 2_990_622_609L)),
 				"region-state v1 canonical golden bytes changed: manifest=" + v1Manifest.checksum()
 						+ " sections=" + v1SectionChecksums);
 		CompoundTag encodedV1 = codec.encodeManifest(v1Manifest);

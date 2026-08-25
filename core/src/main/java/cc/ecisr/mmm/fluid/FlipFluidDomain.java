@@ -2648,9 +2648,9 @@ public final class FlipFluidDomain {
 		ensureParticleCapacity(restoredCount);
 		float[] positionVolume = state.positionVolume();
 		float[] particleVelocities = state.particleVelocities();
-		byte[] solidMask = state.solidMask();
-		cutCells.restoreBinaryMask(solidMask);
-		for (int i = 0; i < cellCount; i++) solid[i] = solidMask[i] != 0;
+		byte[] collisionMasks = state.collisionMicroMasks();
+		cutCells.restoreMicroMasks(collisionMasks);
+		for (int i = 0; i < cellCount; i++) solid[i] = Byte.toUnsignedInt(collisionMasks[i]) == 0xff;
 		for (int particle = 0; particle < restoredCount; particle++) {
 			int positionBase = particle * 4, velocityBase = particle * 3;
 			particleX[particle] = positionVolume[positionBase];
@@ -2735,7 +2735,7 @@ public final class FlipFluidDomain {
 		}
 		float[] positionVolume = new float[particleCount * 4];
 		float[] velocities = new float[particleCount * 3];
-		byte[] solidMask = cutCells.copyBinaryFullMask();
+		byte[] solidMask = cutCells.copyMicroMasks();
 		for (int particle = 0; particle < particleCount; particle++) {
 			int positionBase = particle * 4;
 			int velocityBase = particle * 3;
@@ -2770,7 +2770,7 @@ public final class FlipFluidDomain {
 		}
 		return new FlipMaterialParticleState(
 				sizeX, sizeY, sizeZ, config.cellSize(), particleCount, totalVolumeExact(), totalMass(), materialRegistry.materials(),
-				positionVolume, velocities, copySolidMask(),
+				positionVolume, velocities, cutCells.copyMicroMasks(),
 				Arrays.copyOf(particleMass, particleCount), Arrays.copyOf(particleMaterialHandle, particleCount)
 		);
 	}
@@ -2783,7 +2783,7 @@ public final class FlipFluidDomain {
 	/**
 	 * Replaces one runtime 2x2x2 cut-cell mask and returns exact marker volume
 	 * whose centers became occupied or exceeds the new open-cell capacity. This
-	 * geometry is deliberately not persisted.
+	 * geometry is part of the authoritative in-memory/checkpoint collision state.
 	 */
 	public float setSolidMicroMask(int x, int y, int z, int mask) {
 		ChemicalTransferLedger.Builder displaced = chemicalParcels == null ? null

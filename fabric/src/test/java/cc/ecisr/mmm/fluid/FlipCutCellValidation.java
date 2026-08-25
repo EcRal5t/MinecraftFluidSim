@@ -12,7 +12,7 @@ public final class FlipCutCellValidation {
 		cutCellSweepStopsOnlyTheContactNormal();
 		exactMarkerDisplacementUsesMicroOccupancy();
 		cutCellCapacityDisplacesMergedMarkerVolume();
-		binaryCheckpointFallbackRequiresRuntimeResampling();
+		checkpointPreservesCutCellGeometry();
 		partialObstacleFlowRemainsFiniteAndConservative();
 		System.out.println("FlipFluid cut-cell validation passed");
 	}
@@ -73,7 +73,7 @@ public final class FlipCutCellValidation {
 		checkClose(domain.totalVolume(), 1.0F, 1.0E-7F, "cut-cell capacity restored ledger");
 	}
 
-	private static void binaryCheckpointFallbackRequiresRuntimeResampling() {
+	private static void checkpointPreservesCutCellGeometry() {
 		FlipFluidDomain live = new FlipFluidDomain(4, 4, 4, config());
 		live.setSolidMicroMask(1, 1, 1, LOWER_HALF);
 		live.setSolid(3, 3, 3, true);
@@ -82,13 +82,14 @@ public final class FlipCutCellValidation {
 		FlipParticleState checkpoint = live.exportParticleState();
 		int partial = index(4, 4, 1, 1, 1);
 		int full = index(4, 4, 3, 3, 3);
-		check(checkpoint.copySolidMask()[partial] == 0,
-				"region-state v1 fallback must not turn a partial cell into an opaque full cell");
-		check(checkpoint.copySolidMask()[full] == 1, "fully solid checkpoint cell was lost");
+		check(Byte.toUnsignedInt(checkpoint.copyCollisionMicroMasks()[partial]) == LOWER_HALF,
+				"checkpoint lost partial cut-cell geometry");
+		check(Byte.toUnsignedInt(checkpoint.copyCollisionMicroMasks()[full]) == 0xff,
+				"fully solid checkpoint cell was lost");
 
 		FlipFluidDomain restored = new FlipFluidDomain(4, 4, 4, config());
 		restored.restoreParticleState(checkpoint);
-		check(restored.solidMicroMask(1, 1, 1) == 0, "partial runtime geometry leaked into the v1 binary mask");
+		check(restored.solidMicroMask(1, 1, 1) == LOWER_HALF, "partial cut-cell geometry changed on restore");
 		float displacedOnRefresh = restored.setSolidMicroMask(1, 1, 1, LOWER_HALF);
 		checkClose(displacedOnRefresh, 0.0F, 0.0F,
 				"unchanged world geometry displaced markers after checkpoint restore");
