@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
+import cc.ecisr.mmm.api.query.MmmQueryApiV1;
 import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.chemistry.ChemicalDataPackLoader;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
@@ -737,14 +738,19 @@ public final class FluidSimulationService {
 
 
 
-	public static FluidSimulationService get(MinecraftServer server) {
+	public static synchronized FluidSimulationService get(MinecraftServer server) {
 		return SERVICES.computeIfAbsent(server, FluidSimulationService::new);
+	}
+
+	/** Read-only lookup used by external APIs; unlike get(), this never initializes world state. */
+	public static synchronized FluidSimulationService find(MinecraftServer server) {
+		return SERVICES.get(server);
 	}
 
 
 
 
-	public static void removeServer(MinecraftServer server) {
+	public static synchronized void removeServer(MinecraftServer server) {
 		FluidSimulationService service = SERVICES.remove(server);
 		if (service != null) {
 			service.checkpointForShutdown();
@@ -811,6 +817,11 @@ public final class FluidSimulationService {
 
 	public boolean materialFeatureEnabled() {
 		return materialFeatureEnabled;
+	}
+
+	/** Stable read-only API surface; construction performs no world or region I/O. */
+	public MmmQueryApiV1 queryApiV1(MinecraftServer server) {
+		return new FabricFluidQueryApi(server, regionManager);
 	}
 
 	public boolean chemistryFeatureEnabled() {

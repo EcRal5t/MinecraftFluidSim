@@ -3,6 +3,7 @@ package cc.ecisr.mmm.fluid;
 import cc.ecisr.mmm.chemistry.BinaryVolumeAllocator;
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
 import cc.ecisr.mmm.chemistry.ChemicalAuditLedgerCodec;
+import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 import cc.ecisr.mmm.chemistry.ChemicalPhaseDefinition;
@@ -43,6 +44,7 @@ public final class M7ChemicalTransportValidation {
 		validateMergeAndCompaction();
 		validateCollisionDisplacement();
 		validateChemicalHandoff();
+		validateConcentrationControlsDensity();
 		validateChemicalContainerRoundTrip();
 		if (!fast) validatePerformanceBudgets();
 		System.out.println("M7 chemical transport gate passed: packed budget, same-cell reaction, separation and reseeding conservation");
@@ -380,6 +382,54 @@ public final class M7ChemicalTransportValidation {
 		check(state.externalSource().groups().equals(restored.exportChemicalParticleState().externalSource().groups())
 				&& state.escapedSink().groups().equals(restored.exportChemicalParticleState().escapedSink().groups()),
 				"chemical handoff changed external source/sink audit ledgers");
+	}
+
+	private static void validateConcentrationControlsDensity() {
+		FlipFluidDomain source = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 128);
+		source.setVolume(1, 1, 1, 1.0F);
+		source.setVolume(2, 1, 1, 1.0F);
+		source.setMarkerMaterial(0, MATERIALS, 0);
+		source.bindChemistry(CHEMISTRY);
+		FlipMaterialParticleState original = source.exportMaterialParticleState();
+		double[] mass = original.copyParticleMass();
+		float[] positionVolume = original.copyPositionVolume();
+		java.util.ArrayList<ChemicalMixtureRecord> mixtures = new java.util.ArrayList<>(original.particleCount());
+		byte[] indicators = new byte[original.particleCount()];
+		for (int marker = 0; marker < original.particleCount(); marker++) {
+			ChemicalMixtureRecord initial = source.chemicalParcels().record(marker);
+			java.util.TreeMap<String, Long> amounts = new java.util.TreeMap<>(initial.stableAmounts(CHEMISTRY));
+			int cellX = (int) Math.floor(positionVolume[marker * 4] / STATIC_CONFIG.cellSize());
+			if (cellX == 2) {
+				long saltQuanta = Math.round(mass[marker] * 0.10 * ChemicalLimits.QUANTA_PER_AU / 464.0);
+				amounts.merge(BuiltinChemicalDefinitions.NACL, saltQuanta, Math::addExact);
+			}
+			ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(
+					CHEMISTRY, amounts, initial.massResidual());
+			mixtures.add(mixture);
+			mass[marker] = mixture.markerMass(CHEMISTRY);
+		}
+		double totalMass = 0.0;
+		for (double markerMass : mass) totalMass += markerMass;
+		FlipMaterialParticleState materials = new FlipMaterialParticleState(
+				original.sizeX(), original.sizeY(), original.sizeZ(), original.cellSize(), original.particleCount(),
+				original.totalVolume(), totalMass, original.materials(), positionVolume,
+				original.copyParticleVelocities(), original.copySolidMask(), mass,
+				original.copyMaterialPaletteIndex());
+		FlipChemicalParticleState chemical = FlipChemicalParticleState.capture(
+				materials, CHEMISTRY, mixtures, indicators,
+				cc.ecisr.mmm.chemistry.ChemicalTransferLedger.EMPTY,
+				cc.ecisr.mmm.chemistry.ChemicalTransferLedger.EMPTY);
+		FlipFluidDomain stratified = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 128);
+		stratified.restoreChemicalParticleState(chemical, CHEMISTRY);
+		double freshDensity = stratified.densityInCell(1, 1, 1);
+		double brineDensity = stratified.densityInCell(2, 1, 1);
+		FluidCellInventoryView brine = stratified.observeCellInventory(2, 1, 1);
+		check(Math.abs(freshDensity - 1_000.0) < 1.0E-9
+				&& brineDensity > 1_099.999 && brineDensity < 1_100.001
+				&& brine != null && Math.abs(brine.densityKilogramsPerCubicMetre() - brineDensity) < 1.0E-9
+				&& brine.species().stream().anyMatch(value -> value.speciesId().equals(BuiltinChemicalDefinitions.NACL)),
+				"species mass/marker volume did not produce concentration-dependent cell density: fresh="
+						+ freshDensity + " brine=" + brineDensity);
 	}
 
 	private static void validateChemicalContainerRoundTrip() {

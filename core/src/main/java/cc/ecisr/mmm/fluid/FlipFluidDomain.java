@@ -399,6 +399,56 @@ public final class FlipFluidDomain {
 		for (SignedDyadic value : pendingPhaseCellVolume) if (!value.equals(SignedDyadic.ZERO)) return true;
 		return false;
 	}
+	/** Derived local mass/volume density for observation and acceptance; dry cells return NaN. */
+	public double densityInCell(int x, int y, int z) {
+		int cell = cellIndexChecked(x, y, z);
+		ensureGrid();
+		return markerCount[cell] == 0 ? Double.NaN : cellDensity[cell];
+	}
+
+	/**
+	 * Scans authoritative marker truth without rebuilding grids or changing activity. Empty cells return null.
+	 * This is the core-side source for loader query adapters.
+	 */
+	public FluidCellInventoryView observeCellInventory(int x, int y, int z) {
+		int requested = cellIndexChecked(x, y, z);
+		double normalizedVolume = 0.0, solverMass = 0.0;
+		double[] materialVolume = materialRegistry == null ? new double[]{0.0} : new double[materialRegistry.size()];
+		double[] materialMass = new double[materialVolume.length];
+		java.util.TreeMap<String, Long> species = new java.util.TreeMap<>();
+		for (int marker = 0; marker < particleCount; marker++) {
+			if (particleCellIndex(marker) != requested) continue;
+			normalizedVolume += particleVolume[marker];
+			solverMass += particleMass[marker];
+			int material = materialRegistry == null ? 0 : particleMaterialHandle[marker];
+			materialVolume[material] += particleVolume[marker];
+			materialMass[material] += particleMass[marker];
+			if (chemicalParcels != null) {
+				ChemicalMixtureRecord mixture = chemicalParcels.record(marker);
+				for (int entry = 0; entry < mixture.entryCount(); entry++) {
+					species.merge(chemicalParcels.registry().species(mixture.speciesHandle(entry)).id(),
+							mixture.amountAt(entry), Math::addExact);
+				}
+			}
+		}
+		if (!(normalizedVolume > 0.0) || !(solverMass > 0.0)) return null;
+		double cubicMetresPerCell = condensedMassScale.cubicMetersPerNormalizedCellVolume();
+		java.util.ArrayList<FluidCellInventoryView.MaterialAmount> materials = new java.util.ArrayList<>();
+		for (int material = 0; material < materialVolume.length; material++) if (materialVolume[material] > 0.0) {
+			String id = materialRegistry == null ? BuiltinFluidMaterials.WATER.id()
+					: materialRegistry.material(material).id();
+			materials.add(new FluidCellInventoryView.MaterialAmount(id,
+					materialVolume[material] * cubicMetresPerCell,
+					materialMass[material] * cubicMetresPerCell));
+		}
+		java.util.ArrayList<FluidCellInventoryView.SpeciesAmount> stableSpecies = new java.util.ArrayList<>();
+		species.forEach((id, amount) -> stableSpecies.add(new FluidCellInventoryView.SpeciesAmount(id, amount)));
+		java.util.OptionalDouble temperature = thermalState == null ? java.util.OptionalDouble.empty()
+				: java.util.OptionalDouble.of(thermalState.temperatureInCell(requested, thermalMarkerContext()));
+		return new FluidCellInventoryView(normalizedVolume * cubicMetresPerCell,
+				solverMass * cubicMetresPerCell, solverMass / normalizedVolume,
+				temperature, materials, stableSpecies);
+	}
 	public PendingPhaseVolumeState exportPendingPhaseVolumeState() {
 		if (thermalState == null) throw new IllegalStateException("Pending phase volume requires thermal state");
 		return PendingPhaseVolumeState.capture(pendingPhaseCellVolume);
