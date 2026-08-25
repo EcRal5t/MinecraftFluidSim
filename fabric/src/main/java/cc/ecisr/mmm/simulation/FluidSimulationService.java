@@ -90,7 +90,6 @@ public final class FluidSimulationService {
 	private static final int HYDROSTATIC_QUIET_STEPS = 200;
 	private static final int THERMAL_QUIET_STEPS = 200;
 	private static final float HYDROSTATIC_MAX_MARKER_SPEED = 2.5E-3F;
-	private static final double AIM_DISTANCE = 16.0;
 	private static final long COMPATIBILITY_REGION_CELLS = (long) BLOCK_SIZE_X * BLOCK_SIZE_Y * BLOCK_SIZE_Z
 			* CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
 	private static final long COMPATIBILITY_REGION_MARKERS = COMPATIBILITY_REGION_CELLS * 8L;
@@ -101,6 +100,7 @@ public final class FluidSimulationService {
 	private final boolean serverConfigLocked;
 	private FluidServerConfig serverConfig;
 	private final FluidRegionManager regionManager;
+	private final FluidWorldTargetResolver targets;
 	private final FluidRegionOperations regionOperations;
 	private final FluidSnapshotPublisher snapshots;
 	private final ContainerTransferStore containerTransfers;
@@ -319,6 +319,7 @@ public final class FluidSimulationService {
 		thermalFeatureEnabled = serverConfig.thermalEnabled() && thermalRegistry != null && gasRegistry != null;
 		phaseChangeFeatureEnabled = serverConfig.phaseChangeEnabled() && thermalFeatureEnabled;
 		regionManager = new FluidRegionManager(serverConfig.limits());
+		targets = new FluidWorldTargetResolver(regionManager);
 		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, materialFeatureEnabled,
 				chemistryFeatureEnabled, chemicalRegistry, granularFeatureEnabled, granularRegistry,
 				precipitationFeatureEnabled, thermalFeatureEnabled, thermalRegistry, gasRegistry,
@@ -1850,8 +1851,9 @@ public final class FluidSimulationService {
 		if (!ensureRegionAvailable(player.level(), region)) {
 			return WaterEditResult.blocked(region.availabilityFailure());
 		}
-		CellTarget target = findAimedCell(player, false);
-		if (target == null) return WaterEditResult.NO_TARGET;
+		FluidWorldTargetResolver.CellTarget resolved = targets.aimedCellForEdit(player, region, false);
+		if (resolved == null) return WaterEditResult.NO_TARGET;
+		CellTarget target = new CellTarget(resolved.x(), resolved.y(), resolved.z());
 		float requested = buckets * CELL_VOLUMES_PER_BLOCK;
 		FlipFluidDomain.VolumeAddition addition = domain().addVolumeNearBudgeted(
 				target.x(), target.y(), target.z(), requested, 6
@@ -1867,8 +1869,9 @@ public final class FluidSimulationService {
 		if (!ensureRegionAvailable(player.level(), region)) {
 			return WaterEditResult.blocked(region.availabilityFailure());
 		}
-		CellTarget target = findAimedCell(player, true);
-		if (target == null) return WaterEditResult.NO_TARGET;
+		FluidWorldTargetResolver.CellTarget resolved = targets.aimedCellForEdit(player, region, true);
+		if (resolved == null) return WaterEditResult.NO_TARGET;
+		CellTarget target = new CellTarget(resolved.x(), resolved.y(), resolved.z());
 		float requested = buckets * CELL_VOLUMES_PER_BLOCK;
 		float changed = domain().removeVolumeNear(target.x(), target.y(), target.z(), requested, 6);
 		if (changed > 0.0F) region.wakeForActivity();
@@ -1919,43 +1922,6 @@ public final class FluidSimulationService {
 		if (stats.changedCells() > 0) region.wakeForActivity();
 		if (thermalBoundaryChanged) region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
 		return stats;
-	}
-
-	private CellTarget findAimedCell(ServerPlayer player, boolean requireFluid) {
-		FlipFluidDomain domain = domain();
-		Vec3 eye = player.getEyePosition();
-		Vec3 look = player.getLookAngle();
-		double visibleDistance = visibleAimDistance(player);
-		double step = domain.config().cellSize() * 0.25;
-		CellTarget previousOpen = null;
-		CellTarget previousSample = null;
-		boolean enteredDomain = false;
-
-		for (double distance = 0.0; distance <= visibleDistance; distance += step) {
-			Vec3 point = eye.add(look.scale(distance));
-			CellTarget cell = worldToCell(point);
-			if (cell == null) {
-				if (enteredDomain && !requireFluid) return previousOpen;
-				continue;
-			}
-			enteredDomain = true;
-			if (cell.equals(previousSample)) continue;
-			previousSample = cell;
-			if (requireFluid) {
-				if (domain.volume(cell.x(), cell.y(), cell.z()) > domain.config().fluidEpsilon()) return cell;
-			} else if (domain.isSolid(cell.x(), cell.y(), cell.z())) {
-				return previousOpen;
-			} else if (domain.volume(cell.x(), cell.y(), cell.z()) > domain.config().fluidEpsilon()) {
-				return previousOpen == null ? cell : previousOpen;
-			} else {
-				previousOpen = cell;
-			}
-		}
-		return requireFluid ? null : previousOpen;
-	}
-
-	private CellTarget worldToCell(Vec3 point) {
-		return worldToCell(activeRegion(), point);
 	}
 
 	public RestorationStats remove(MinecraftServer server) {
@@ -2224,8 +2190,7 @@ public final class FluidSimulationService {
 
 	/** Transfer-service queries: region presence, selection and availability in one dimension. */
 	public FluidRegion selectedRegionIn(ServerLevel level) {
-		FluidRegion selected = regionManager.selected();
-		return selected != null && selected.dimension().equals(level.dimension()) ? selected : null;
+		return targets.selectedRegionIn(level);
 	}
 
 	public boolean ensureRegionAvailableFor(ServerPlayer player, FluidRegion region) {
@@ -2238,23 +2203,7 @@ public final class FluidSimulationService {
 
 	/** Returns the sole region whose actual interior contains the block position. */
 	public FluidRegion regionAtBlock(ServerLevel level, BlockPos pos) {
-		if (pos == null) return null;
-		for (FluidRegion region : regionManager.regions()) {
-			if (!region.dimension().equals(level.dimension())) continue;
-			FluidRegionFootprint footprint = region.footprint();
-			if (footprint != null) {
-				if (footprint.containsInterior(pos)) return region;
-				continue;
-			}
-			BlockPos origin = region.origin();
-			double h = region.solverConfig().cellSize();
-			if (pos.getX() >= origin.getX() && pos.getX() < origin.getX() + region.sizeX() * h
-					&& pos.getY() >= origin.getY() && pos.getY() < origin.getY() + region.sizeY() * h
-					&& pos.getZ() >= origin.getZ() && pos.getZ() < origin.getZ() + region.sizeZ() * h) {
-				return region;
-			}
-		}
-		return null;
+		return targets.regionAtBlock(level, pos);
 	}
 
 	/**
@@ -2270,23 +2219,9 @@ public final class FluidSimulationService {
 	public TransferTarget transferTargetAtBlock(
 			ServerLevel level, BlockPos position, Direction boundaryInteriorDirection
 	) {
-		if (position == null) return null;
-		FluidRegion direct = regionAtBlock(level, position);
-		if (direct != null) return new TransferTarget(direct, position.immutable());
-		if (!MmmBlocks.isBoundary(level.getBlockState(position))) return null;
-
-		TransferTarget resolved = null;
-		for (FluidRegion region : regionManager.regions()) {
-			FluidRegionFootprint footprint = region.footprint();
-			if (footprint == null || !region.dimension().equals(level.dimension())) continue;
-			BlockPos interior = boundaryInteriorDirection == null
-					? footprint.uniqueAdjacentInterior(position)
-					: footprint.adjacentInteriorAlong(position, boundaryInteriorDirection);
-			if (interior == null) continue;
-			if (resolved != null) return null;
-			resolved = new TransferTarget(region, interior);
-		}
-		return resolved;
+		FluidWorldTargetResolver.TransferTarget resolved =
+				targets.transferTargetAtBlock(level, position, boundaryInteriorDirection);
+		return resolved == null ? null : new TransferTarget(resolved.region(), resolved.interiorBlock());
 	}
 
 	public record TransferTarget(FluidRegion region, BlockPos interiorBlock) { }
@@ -2483,122 +2418,23 @@ public final class FluidSimulationService {
 
 	/** First region volume intersected by the player's ray; selection is intentionally irrelevant. */
 	public FluidRegion aimedRegion(ServerPlayer player) {
-		Vec3 start = player.getEyePosition();
-		Vec3 direction = player.getLookAngle();
-		double visibleDistance = visibleAimDistance(player);
-		for (double distance = 0.0; distance <= visibleDistance; distance += 0.125) {
-			Vec3 point = start.add(direction.scale(distance));
-			for (FluidRegion region : regionManager.regions()) {
-				if (!region.dimension().equals(player.level().dimension())) continue;
-				FluidRegionFootprint footprint = region.footprint();
-				if (footprint != null && !footprint.containsInterior(BlockPos.containing(point))) continue;
-				BlockPos origin = region.origin();
-				double h = region.solverConfig().cellSize();
-				if (point.x >= origin.getX() && point.x < origin.getX() + region.sizeX() * h
-						&& point.y >= origin.getY() && point.y < origin.getY() + region.sizeY() * h
-						&& point.z >= origin.getZ() && point.z < origin.getZ() + region.sizeZ() * h) {
-					return region;
-				}
-			}
-		}
-		return null;
+		return targets.aimedRegion(player);
 	}
 
 	/** Resolves the solver cell containing the center of a block position inside a loaded region. */
 	public int[] cellAtBlock(ServerLevel level, FluidRegion region, BlockPos pos) {
-		if (!level.dimension().equals(region.dimension()) || !region.solverLoaded()) return null;
-		if (region.footprint() != null && !region.footprint().containsInterior(pos)) return null;
-		FlipFluidDomain domain = region.domain();
-		BlockPos origin = region.origin();
-		double h = domain.config().cellSize();
-		int x = Mth.floor((pos.getX() + 0.5 - origin.getX()) / h);
-		int y = Mth.floor((pos.getY() + 0.5 - origin.getY()) / h);
-		int z = Mth.floor((pos.getZ() + 0.5 - origin.getZ()) / h);
-		if (x < 0 || x >= domain.sizeX() || y < 0 || y >= domain.sizeY() || z < 0 || z >= domain.sizeZ()) return null;
-		return new int[] {x, y, z};
+		return targets.cellAtBlock(level, region, pos);
 	}
 
 
 	/** Resolves the transfer target cell near the player's aim; requireFluid selects scoop semantics. */
 	public int[] aimedCellNear(ServerPlayer player, FluidRegion region, boolean requireFluid) {
-		if (region == null || !region.solverLoaded()
-				|| !player.level().dimension().equals(region.dimension())) return null;
-		Vec3 start = player.getEyePosition();
-		Vec3 direction = player.getLookAngle();
-		FlipFluidDomain domain = region.domain();
-		double visibleDistance = visibleAimDistance(player);
-		double step = domain.config().cellSize() * 0.25;
-		CellTarget previousOpen = null;
-		CellTarget previousSample = null;
-		for (double distance = 0.0; distance <= visibleDistance; distance += step) {
-			Vec3 point = start.add(direction.scale(distance));
-			CellTarget cell = worldToCell(region, point);
-			if (cell == null) {
-				if (!requireFluid && previousOpen != null) return cellTargetArray(previousOpen);
-				continue;
-			}
-			if (cell.equals(previousSample)) continue;
-			previousSample = cell;
-			if (requireFluid) {
-				if (domain.volume(cell.x(), cell.y(), cell.z()) > domain.config().fluidEpsilon()) {
-					return cellTargetArray(cell);
-				}
-			} else if (domain.isSolid(cell.x(), cell.y(), cell.z())) {
-				return previousOpen == null ? null : cellTargetArray(previousOpen);
-			} else if (domain.volume(cell.x(), cell.y(), cell.z()) > domain.config().fluidEpsilon()) {
-				return cellTargetArray(previousOpen == null ? cell : previousOpen);
-			} else {
-				previousOpen = cell;
-			}
-		}
-		return null;
+		return targets.aimedCellNear(player, region, requireFluid);
 	}
 
 	/** First ray-intersected cell carrying active or exposed/deep granular inventory truth. */
 	public int[] aimedGranularCellNear(ServerPlayer player, FluidRegion region) {
-		if (region == null || !region.solverLoaded() || !region.domain().hasGranularState()
-				|| !player.level().dimension().equals(region.dimension())) return null;
-		Vec3 start = player.getEyePosition();
-		Vec3 direction = player.getLookAngle();
-		FlipFluidDomain domain = region.domain();
-		double visibleDistance = visibleAimDistance(player);
-		double step = domain.config().cellSize() * 0.25;
-		CellTarget previous = null;
-		for (double distance = 0.0; distance <= visibleDistance; distance += step) {
-			CellTarget cell = worldToCell(region, start.add(direction.scale(distance)));
-			if (cell == null || cell.equals(previous)) continue;
-			previous = cell;
-			if (domain.granularSolidVolumeSvq(cell.x(), cell.y(), cell.z()) > 0L) {
-				return cellTargetArray(cell);
-			}
-		}
-		return null;
-	}
-
-	private static CellTarget worldToCell(FluidRegion region, Vec3 point) {
-		if (region == null || !region.solverLoaded()) return null;
-		FluidRegionFootprint footprint = region.footprint();
-		if (footprint != null && !footprint.containsInterior(BlockPos.containing(point))) return null;
-		FlipFluidDomain domain = region.domain();
-		BlockPos origin = region.origin();
-		float h = domain.config().cellSize();
-		int x = Mth.floor((point.x - origin.getX()) / h);
-		int y = Mth.floor((point.y - origin.getY()) / h);
-		int z = Mth.floor((point.z - origin.getZ()) / h);
-		if (x < 0 || x >= domain.sizeX() || y < 0 || y >= domain.sizeY()
-				|| z < 0 || z >= domain.sizeZ()) return null;
-		return new CellTarget(x, y, z);
-	}
-
-	/** Stops simulation-space targeting at the first Minecraft collision hit. */
-	private static double visibleAimDistance(ServerPlayer player) {
-		Vec3 eye = player.getEyePosition();
-		Vec3 hit = player.pick(AIM_DISTANCE, 1.0F, false).getLocation();
-		return Math.min(AIM_DISTANCE, eye.distanceTo(hit) + 1.0E-6);
-	}
-
-	private static int[] cellTargetArray(CellTarget target) {
-		return new int[] {target.x(), target.y(), target.z()};
+		return targets.aimedGranularCellNear(player, region);
 	}
 
 	public void sendSnapshotFor(ServerPlayer player) {

@@ -15,7 +15,7 @@
 | 初始化、tick、payload 注册 | `fabric/src/main/java/cc/ecisr/mmm/MmmMod.java` | 生命周期、registry 和网络注册成套 |
 | 正常游玩入口 | `block/FluidControllerBlock.java`、`block/MmmBlocks.java`、`item/MmmCreativeEntries.java`、`resources/data/mmm/recipe/` | 激活即运行；潜行交互只切换持久暂停意图；配方、创造栏和注册同步 |
 | `/mmm` 命令 | `MmmCommands.java` | 状态操作留在服务层；完整输出写 transcript |
-| Minecraft 编排 | `fabric/.../simulation/FluidSimulationService.java` | 每域先过 availability；不把世界事务下沉到 solver |
+| Minecraft 编排 | `fabric/.../simulation/FluidSimulationService.java`、`FluidWorldTargetResolver.java` | 服务层每域先过 availability；目标解析只读世界与区域，不提交事务；不把世界事务下沉到 solver |
 | 持久区域管理 | `FluidRegionOperations.java`、`FluidRegionPersistence.java` | checkpoint 成功后才释放；当前功能布局必须精确匹配；不改写不匹配载荷 |
 | 区域身份与生命周期 | `FluidRegion.java`、`FluidRegionLifecycle.java`、`ThermalActivity.java` | UNLOADED 仍占预算；motion/thermal 调度不改变库存 |
 | 区域登记与预算 | `FluidRegionManager.java` | 拒绝不替换现有域；报告 per-region 和 total 预算 |
