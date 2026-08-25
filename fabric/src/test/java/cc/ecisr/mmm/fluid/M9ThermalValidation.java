@@ -158,12 +158,16 @@ public final class M9ThermalValidation {
 				"/data/mmm/mmm/thermal_materials/water.json");
 		     InputStreamReader vaporReader = resourceReader(
 				     "/data/mmm/mmm/thermal_materials/water_vapor.json");
+		     InputStreamReader meltingReader = resourceReader(
+				     "/data/mmm/mmm/phase_transitions/ice_water.json");
 		     InputStreamReader transitionReader = resourceReader(
 				     "/data/mmm/mmm/phase_transitions/water_vapor.json")) {
 			ThermalMaterialDefinition water = ThermalDefinitionCodec.decodeMaterial("mmm:water", waterReader);
 			ThermalMaterialDefinition vapor = ThermalDefinitionCodec.decodeMaterial("mmm:water_vapor", vaporReader);
 			ThermalPhaseTransition transition = ThermalDefinitionCodec.decodeTransition(
 					"mmm:water_vapor", transitionReader);
+			ThermalPhaseTransition melting = ThermalDefinitionCodec.decodeTransition(
+					"mmm:ice_water", meltingReader);
 			double batchMassKg = transition.massMuPerBatch().toDouble();
 			double liquidVolume = (double) transition.lowerVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV;
 			double vaporVolume = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV;
@@ -199,6 +203,13 @@ public final class M9ThermalValidation {
 					"built-in water/vapor caloric or conductivity values drifted");
 			require(Math.abs(latentEnthalpy - 2_256_700.0) < 0.01,
 					"water/vapor state-function gap does not reproduce the 1-atm latent enthalpy: " + latentEnthalpy);
+			require(close(melting.equilibriumTemperatureK(101_325.0), 273.15251907976949)
+					&& close(melting.equilibriumTemperatureK(2_000_000.0), 273.01088655470164)
+					&& melting.equilibriumTemperatureK(1_000_000.0)
+					< melting.equilibriumTemperatureK(101_325.0),
+					"IAPWS ice-Ih pressure curve did not lower the melting point");
+			expectFailure(() -> melting.equilibriumTemperatureK(2_000_001.0),
+					"solid/liquid equilibrium curve extrapolated outside its declared pressure range");
 			require(Math.abs(fourCellReservoirConductance - 2.392) < 1.0E-12
 					&& Math.abs(extremeReservoirPower - 23_919_298.7852) < 1.0E-6
 					&& Math.abs(maximumPhaseMassPerSimulatedSecond - 81.92) < 1.0E-12,

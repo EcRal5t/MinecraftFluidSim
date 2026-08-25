@@ -121,14 +121,22 @@ public final class ThermalStateFunction {
 	public EquilibriumState equilibriumState(
 			int transitionHandle, double massMu, Map<String, Long> speciesQuanta, double internalEnergy
 	) {
+		return equilibriumState(transitionHandle, massMu, speciesQuanta, internalEnergy, 101_325.0);
+	}
+
+	public EquilibriumState equilibriumState(
+			int transitionHandle, double massMu, Map<String, Long> speciesQuanta,
+			double internalEnergy, double absolutePressurePa
+	) {
 		requireMassEnergy(massMu, internalEnergy);
 		ThermalPhaseTransition transition = registry.transition(transitionHandle);
 		int lowerHandle = registry.materialHandle(transition.lowerEnergyMaterialId());
 		int upperHandle = registry.materialHandle(transition.upperEnergyMaterialId());
+		double equilibrium = transition.equilibriumTemperatureK(absolutePressurePa);
 		double lowerBoundary = internalEnergyAtTemperature(lowerHandle, massMu, speciesQuanta,
-				transition.equilibriumTemperatureK());
+				equilibrium);
 		double upperBoundary = internalEnergyAtTemperature(upperHandle, massMu, speciesQuanta,
-				transition.equilibriumTemperatureK());
+				equilibrium);
 		if (!(upperBoundary > lowerBoundary)) throw new IllegalStateException("Thermal transition energy gap is not positive");
 		if (internalEnergy < lowerBoundary) {
 			State state = stateForInternalEnergy(lowerHandle, massMu, speciesQuanta, internalEnergy);
@@ -140,7 +148,7 @@ public final class ThermalStateFunction {
 		}
 		double fraction = (internalEnergy - lowerBoundary) / (upperBoundary - lowerBoundary);
 		if (!Double.isFinite(fraction)) throw new IllegalArgumentException("Thermal phase fraction is not finite");
-		return new EquilibriumState(transition.equilibriumTemperatureK(), PhaseState.PLATEAU,
+		return new EquilibriumState(equilibrium, PhaseState.PLATEAU,
 				Math.max(0.0, Math.min(1.0, fraction)), lowerBoundary, upperBoundary);
 	}
 

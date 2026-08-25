@@ -1538,7 +1538,8 @@ public final class FlipFluidDomain {
 				PhaseCellInventory inventory = phaseCellInventory(cell, liquidHandle, lower.id());
 				if (inventory == null) continue;
 				long remainingBudget = maximumOperations - operations;
-				JointPhasePlan plan = planJointPhaseChange(cell, liquidHandle, transition, inventory, remainingBudget);
+				JointPhasePlan plan = planJointPhaseChange(
+						cell, liquidHandle, transition, inventory, remainingBudget, absolutePressure);
 				if (plan == null) continue;
 				long magnitude = plan.batches();
 				if (plan.freezing()) commitJointFreeze(cell, plan);
@@ -1920,10 +1921,10 @@ public final class FlipFluidDomain {
 
 	private JointPhasePlan planJointPhaseChange(
 			int cell, int liquidHandle, ThermalPhaseTransition transition,
-			PhaseCellInventory before, long maximumBatches
+			PhaseCellInventory before, long maximumBatches, double absolutePressurePa
 	) {
 		double temperature = thermalState.temperatureInCell(cell, thermalMarkerContext());
-		double equilibrium = transition.equilibriumTemperatureK();
+		double equilibrium = transition.equilibriumTemperatureK(absolutePressurePa);
 		if (temperature == equilibrium || maximumBatches == 0L) return null;
 		double batchMass = transition.massMuPerBatch().toDouble();
 		if (!(Double.isFinite(batchMass) && batchMass > 0.0)) {

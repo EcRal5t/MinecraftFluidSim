@@ -56,17 +56,42 @@ public final class ThermalDefinitionCodec {
 
 	public static ThermalPhaseTransition decodeTransition(String stableId, Reader input) {
 		JsonObject root = object(input);
-		requireOnly(root, "lower_energy_material", "upper_energy_material", "equilibrium_temperature_k",
+		requireOnlyOptional(root, Set.of("lower_energy_material", "upper_energy_material", "equilibrium_temperature_k",
+				"lower_volume_svq_per_batch", "upper_volume_svq_per_batch", "mass_mu_per_batch",
+				"interface_requirement", "minimum_pressure_pa", "maximum_pressure_pa", "equilibrium_curve"),
+				"lower_energy_material", "upper_energy_material", "equilibrium_temperature_k",
 				"lower_volume_svq_per_batch", "upper_volume_svq_per_batch", "mass_mu_per_batch",
 				"interface_requirement", "minimum_pressure_pa", "maximum_pressure_pa");
 		ThermalPhaseTransition.InterfaceRequirement requirement;
 		try { requirement = ThermalPhaseTransition.InterfaceRequirement.valueOf(string(root, "interface_requirement")); }
 		catch (IllegalArgumentException invalid) { throw new IllegalArgumentException("Unknown interface_requirement", invalid); }
+		double equilibrium = finiteDouble(root, "equilibrium_temperature_k");
+		double minimumPressure = finiteDouble(root, "minimum_pressure_pa");
+		double maximumPressure = finiteDouble(root, "maximum_pressure_pa");
+		ArrayList<ThermalPhaseTransition.EquilibriumPoint> curve = new ArrayList<>();
+		JsonElement curveElement = root.get("equilibrium_curve");
+		if (curveElement == null) {
+			curve.add(new ThermalPhaseTransition.EquilibriumPoint(minimumPressure, equilibrium));
+			curve.add(new ThermalPhaseTransition.EquilibriumPoint(maximumPressure, equilibrium));
+		} else {
+			if (!curveElement.isJsonArray()) throw new IllegalArgumentException("equilibrium_curve must be an array");
+			JsonArray points = curveElement.getAsJsonArray();
+			if (points.size() < 2 || points.size() > ThermalLimits.MAX_EQUILIBRIUM_CURVE_POINTS) {
+				throw new IllegalArgumentException("equilibrium_curve size is invalid");
+			}
+			for (JsonElement element : points) {
+				if (!element.isJsonObject()) throw new IllegalArgumentException("equilibrium_curve point must be an object");
+				JsonObject point = element.getAsJsonObject();
+				requireOnly(point, "pressure_pa", "temperature_k");
+				curve.add(new ThermalPhaseTransition.EquilibriumPoint(
+						finiteDouble(point, "pressure_pa"), finiteDouble(point, "temperature_k")));
+			}
+		}
 		return new ThermalPhaseTransition(stableId, string(root, "lower_energy_material"),
-				string(root, "upper_energy_material"), finiteDouble(root, "equilibrium_temperature_k"),
+				string(root, "upper_energy_material"), equilibrium,
 				exactLong(root, "lower_volume_svq_per_batch"), exactLong(root, "upper_volume_svq_per_batch"),
 				ExactRational.parse(string(root, "mass_mu_per_batch")), requirement,
-				finiteDouble(root, "minimum_pressure_pa"), finiteDouble(root, "maximum_pressure_pa"));
+				minimumPressure, maximumPressure, curve);
 	}
 
 	public static ThermalBoundaryDefinition decodeBoundary(String stableId, Reader input) {
@@ -128,5 +153,12 @@ public final class ThermalDefinitionCodec {
 			throw new IllegalArgumentException("Unknown thermal definition field " + field);
 		}
 		for (String field : fields) required(root, field);
+	}
+
+	private static void requireOnlyOptional(JsonObject root, Set<String> allowed, String... requiredFields) {
+		for (String field : root.keySet()) if (!allowed.contains(field)) {
+			throw new IllegalArgumentException("Unknown thermal definition field " + field);
+		}
+		for (String field : requiredFields) required(root, field);
 	}
 }

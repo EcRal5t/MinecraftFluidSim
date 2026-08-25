@@ -18,9 +18,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** World-authoritative immutable thermal registry v1 with atomic first publication. */
+/** World-authoritative immutable thermal registry v2 with atomic first publication. */
 public final class ThermalRegistryStore {
-	private static final int FORMAT_VERSION = 1;
+	private static final int FORMAT_VERSION = 2;
 	private static final long MAX_BYTES = 8L * 1024L * 1024L;
 	private static final Set<String> KNOWN_FILES = Set.of("registry.nbt", "registry.nbt.tmp");
 
@@ -145,7 +145,15 @@ public final class ThermalRegistryStore {
 			tag.putString("Mass", transition.massMuPerBatch().canonical());
 			tag.putString("Interface", transition.interfaceRequirement().name());
 			tag.putLong("MinimumPressureBits", bits(transition.minimumPressurePa()));
-			tag.putLong("MaximumPressureBits", bits(transition.maximumPressurePa())); transitions.add(tag);
+			tag.putLong("MaximumPressureBits", bits(transition.maximumPressurePa()));
+			ListTag curve = new ListTag();
+			for (ThermalPhaseTransition.EquilibriumPoint point : transition.equilibriumCurve()) {
+				CompoundTag encoded = new CompoundTag();
+				encoded.putLong("PressureBits", bits(point.pressurePa()));
+				encoded.putLong("TemperatureBits", bits(point.temperatureK()));
+				curve.add(encoded);
+			}
+			tag.put("EquilibriumCurve", curve); transitions.add(tag);
 		}
 		root.put("Transitions", transitions);
 		ListTag boundaries = new ListTag();
@@ -210,12 +218,24 @@ public final class ThermalRegistryStore {
 					Map.entry("Upper", Tag.TAG_STRING), Map.entry("TemperatureBits", Tag.TAG_LONG),
 					Map.entry("LowerSvq", Tag.TAG_LONG), Map.entry("UpperSvq", Tag.TAG_LONG),
 					Map.entry("Mass", Tag.TAG_STRING), Map.entry("Interface", Tag.TAG_STRING),
-					Map.entry("MinimumPressureBits", Tag.TAG_LONG), Map.entry("MaximumPressureBits", Tag.TAG_LONG)));
+					Map.entry("MinimumPressureBits", Tag.TAG_LONG), Map.entry("MaximumPressureBits", Tag.TAG_LONG),
+					Map.entry("EquilibriumCurve", Tag.TAG_LIST)));
+			ListTag encodedCurve = tag.getListOrEmpty("EquilibriumCurve");
+			if (encodedCurve.size() < 2 || encodedCurve.size() > ThermalLimits.MAX_EQUILIBRIUM_CURVE_POINTS) {
+				throw new IOException("Invalid thermal equilibrium curve size");
+			}
+			ArrayList<ThermalPhaseTransition.EquilibriumPoint> curve = new ArrayList<>(encodedCurve.size());
+			for (int point = 0; point < encodedCurve.size(); point++) {
+				CompoundTag value = compound(encodedCurve, point, "equilibrium curve point");
+				requireAll(value, Map.of("PressureBits", Tag.TAG_LONG, "TemperatureBits", Tag.TAG_LONG));
+				curve.add(new ThermalPhaseTransition.EquilibriumPoint(
+						value(value, "PressureBits"), value(value, "TemperatureBits")));
+			}
 			result.add(new ThermalPhaseTransition(tag.getStringOr("Id", ""), tag.getStringOr("Lower", ""),
 					tag.getStringOr("Upper", ""), value(tag, "TemperatureBits"), tag.getLongOr("LowerSvq", -1L),
 					tag.getLongOr("UpperSvq", -1L), ExactRational.parse(tag.getStringOr("Mass", "")),
 					ThermalPhaseTransition.InterfaceRequirement.valueOf(tag.getStringOr("Interface", "")),
-					value(tag, "MinimumPressureBits"), value(tag, "MaximumPressureBits")));
+					value(tag, "MinimumPressureBits"), value(tag, "MaximumPressureBits"), curve));
 		}
 		return List.copyOf(result);
 	}

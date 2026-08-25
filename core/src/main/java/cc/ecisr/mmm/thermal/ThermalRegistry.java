@@ -147,17 +147,19 @@ public final class ThermalRegistry {
 		for (ThermalPhaseTransition transition : transitions) {
 			ThermalMaterialDefinition lower = material(materialHandle(transition.lowerEnergyMaterialId()));
 			ThermalMaterialDefinition upper = material(materialHandle(transition.upperEnergyMaterialId()));
-			double temperature = transition.equilibriumTemperatureK();
-			if (temperature < lower.minimumTemperatureK() || temperature > lower.maximumTemperatureK()
-					|| temperature < upper.minimumTemperatureK() || temperature > upper.maximumTemperatureK()) {
-				throw new IllegalArgumentException("Thermal transition equilibrium is outside a phase validity range: "
-						+ transition.id());
-			}
-			double lowerEnergy = lower.referenceSpecificEnergyEuPerMu() + lower.sensibleSpecificEnergyAt(temperature);
-			double upperEnergy = upper.referenceSpecificEnergyEuPerMu() + upper.sensibleSpecificEnergyAt(temperature);
-			if (!(Double.isFinite(lowerEnergy) && Double.isFinite(upperEnergy) && upperEnergy > lowerEnergy)) {
-				throw new IllegalArgumentException("Thermal transition must have a positive state-function energy gap: "
-						+ transition.id());
+			for (ThermalPhaseTransition.EquilibriumPoint point : transition.equilibriumCurve()) {
+				double temperature = point.temperatureK();
+				if (temperature < lower.minimumTemperatureK() || temperature > lower.maximumTemperatureK()
+						|| temperature < upper.minimumTemperatureK() || temperature > upper.maximumTemperatureK()) {
+					throw new IllegalArgumentException("Thermal transition equilibrium is outside a phase validity range: "
+							+ transition.id());
+				}
+				double lowerEnergy = lower.referenceSpecificEnergyEuPerMu() + lower.sensibleSpecificEnergyAt(temperature);
+				double upperEnergy = upper.referenceSpecificEnergyEuPerMu() + upper.sensibleSpecificEnergyAt(temperature);
+				if (!(Double.isFinite(lowerEnergy) && Double.isFinite(upperEnergy) && upperEnergy > lowerEnergy)) {
+					throw new IllegalArgumentException("Thermal transition must have a positive state-function energy gap: "
+							+ transition.id());
+				}
 			}
 			String pair = transition.lowerEnergyMaterialId() + '\0' + transition.upperEnergyMaterialId();
 			String previous = pairs.putIfAbsent(pair, transition.id());
@@ -177,7 +179,7 @@ public final class ThermalRegistry {
 	}
 
 	private byte[] encodeCanonical() {
-		StringBuilder out = new StringBuilder(4096).append("mmm-thermal-registry-v1\n")
+		StringBuilder out = new StringBuilder(4096).append("mmm-thermal-registry-v2\n")
 				.append("units=").append(UNIT_SYSTEM_ID).append('\n')
 				.append("chemical-registry=").append(chemicalRegistryFingerprint).append('\n')
 				.append("granular-registry=").append(granularRegistryFingerprint).append('\n');
@@ -208,7 +210,12 @@ public final class ThermalRegistry {
 					.append(transition.massMuPerBatch().canonical()).append('|')
 					.append(transition.interfaceRequirement()).append('|');
 			appendDouble(out, transition.minimumPressurePa()); out.append('|');
-			appendDouble(out, transition.maximumPressurePa()); out.append('\n');
+			appendDouble(out, transition.maximumPressurePa()); out.append('|');
+			for (ThermalPhaseTransition.EquilibriumPoint point : transition.equilibriumCurve()) {
+				appendDouble(out, point.pressurePa()); out.append(',');
+				appendDouble(out, point.temperatureK()); out.append(';');
+			}
+			out.append('\n');
 		}
 		for (ThermalBoundaryDefinition boundary : boundaries) {
 			out.append("B|").append(boundary.id()).append('|').append(boundary.targetKind()).append('|')

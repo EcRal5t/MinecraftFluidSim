@@ -7,6 +7,7 @@ public final class ThermalLimits {
 	public static final int MAX_TOTAL_SEGMENTS = 4_096;
 	public static final int MAX_SPECIES_OFFSETS = 512;
 	public static final int MAX_PHASE_TRANSITIONS = 512;
+	public static final int MAX_EQUILIBRIUM_CURVE_POINTS = 64;
 	public static final int MAX_BOUNDARIES = 512;
 	public static final int MAX_COHERENT_GROUPS_PER_REGION = 262_144;
 	public static final int MAX_THERMAL_CARRIERS_PER_CELL = 256;

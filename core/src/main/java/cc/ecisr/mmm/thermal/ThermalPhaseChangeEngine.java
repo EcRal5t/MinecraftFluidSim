@@ -27,6 +27,14 @@ public final class ThermalPhaseChangeEngine {
 			ThermalPhaseTransition transition, double lowerMass, double upperMass,
 			double totalInternalEnergy, long maximumMagnitudeBatches
 	) {
+		return planInert(transition, lowerMass, upperMass, totalInternalEnergy,
+				maximumMagnitudeBatches, 101_325.0);
+	}
+
+	public Plan planInert(
+			ThermalPhaseTransition transition, double lowerMass, double upperMass,
+			double totalInternalEnergy, long maximumMagnitudeBatches, double absolutePressurePa
+	) {
 		if (transition == null || lowerMass < 0.0 || upperMass < 0.0
 				|| !(Double.isFinite(lowerMass) && Double.isFinite(upperMass)
 				&& Double.isFinite(totalInternalEnergy)) || lowerMass + upperMass <= 0.0
@@ -40,25 +48,26 @@ public final class ThermalPhaseChangeEngine {
 			throw new IllegalArgumentException("Thermal transition batch mass is not representable");
 		}
 		double before = solveTemperature(lowerHandle, lowerMass, upperHandle, upperMass, totalInternalEnergy);
+		double equilibrium = transition.equilibriumTemperatureK(absolutePressurePa);
 		double lower = lowerMass, upper = upperMass;
 		long signed = 0L;
 		for (long operation = 0; operation < maximumMagnitudeBatches; operation++) {
-			if (before < transition.equilibriumTemperatureK() && upper + tolerance(upper) >= batchMass) {
+			if (before < equilibrium && upper + tolerance(upper) >= batchMass) {
 				double candidateUpper = upper - batchMass;
 				if (candidateUpper < 0.0 && candidateUpper >= -tolerance(upper)) candidateUpper = 0.0;
 				double candidateLower = lower + batchMass;
 				double candidateTemperature = solveTemperature(
 						lowerHandle, candidateLower, upperHandle, candidateUpper, totalInternalEnergy);
-				if (candidateTemperature > transition.equilibriumTemperatureK()
+				if (candidateTemperature > equilibrium
 						&& signed > 0L) break;
 				lower = candidateLower; upper = candidateUpper; before = candidateTemperature; signed++;
-			} else if (before > transition.equilibriumTemperatureK() && lower + tolerance(lower) >= batchMass) {
+			} else if (before > equilibrium && lower + tolerance(lower) >= batchMass) {
 				double candidateLower = lower - batchMass;
 				if (candidateLower < 0.0 && candidateLower >= -tolerance(lower)) candidateLower = 0.0;
 				double candidateUpper = upper + batchMass;
 				double candidateTemperature = solveTemperature(
 						lowerHandle, candidateLower, upperHandle, candidateUpper, totalInternalEnergy);
-				if (candidateTemperature < transition.equilibriumTemperatureK()
+				if (candidateTemperature < equilibrium
 						&& signed < 0L) break;
 				lower = candidateLower; upper = candidateUpper; before = candidateTemperature; signed--;
 			} else break;
