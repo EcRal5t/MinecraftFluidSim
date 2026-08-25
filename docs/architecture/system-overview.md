@@ -1,0 +1,118 @@
+# 系统架构总览
+
+本文说明 Real Water 当前产品基线的组件关系、权威状态、单位、执行顺序和失败模型。具体算法与事务细节由同目录主题文档继续约束。
+
+## 产品边界
+
+当前系统只在显式、闭合、预算受限且 chunk 完整加载的 controller 区域内提供连续流体。开发命令可建立瞬态 fixture，但不会扩大持久 ownership。天然河流、海洋、无界洞穴空气和永久 chunk ticket 不属于当前运行模型。
+
+CPU `FlipFluidDomain` 是规范求解器。GPU probe、客户端 renderer、tooltip、命令 status 和未来外部 Mod 查询都只能读取已提交状态。
+
+## 组件与数据流
+
+```text
+数据包定义
+  -> material / chemical / granular / gas / thermal registry
+  -> world-local canonical registry snapshot + fingerprint
+
+Minecraft 命令、方块、容器、实体与 chunk 事件
+  -> FluidSimulationService                 世界主线程编排
+  -> FluidRegionManager / FluidRegion       身份、预算、生命周期
+  -> FlipFluidDomain                        CPU mechanics 与载体库存
+       -> AirNetwork                        密闭气体节点与孔流
+       -> ChemicalParcelStore               marker 化学 parcel
+       -> GranularInventory                 active/deposit 固体
+       -> FlipThermalState                  各载体总内能与相变
+
+FluidRegionPersistence / RegionStateFiles   完整区域 checkpoint
+OwnershipTransaction                        原版方块 ownership
+ContainerTransferStore                      region/item 跨域事务
+
+已提交区域状态
+  -> SnapshotBuilder / protocol payload
+  -> 客户端 surface、material、chemical、granular、thermal 重建
+```
+
+Minecraft adapter 负责读取世界、选择区域和提交世界修改；数值核心不持有 `ServerLevel`、ItemStack durable save 或磁盘所有权。持久层保存稳定 ID 和完整库存，不序列化 Java 对象图、GPU buffer 或客户端 mesh。
+
+## 权威真值表
+
+| 领域 | 权威真值 | 只读派生或数值状态 |
+|---|---|---|
+| 液体 | marker 位置、速度、体积、逐材料质量和相身份 | cell volume、density、pressure、PLIC、曲率 |
+| 化学 | species quanta、组成、电荷、质量 residual、indicator provenance、source/sink | pH、Top-N species、颜色 |
+| 颗粒 | active/deposit 的 SVQ、质量、材料、组成、孔隙率和审计 | bulk fill、显示高度、sample |
+| 连续固相 | coherent group 的 SVQ、质量、组成和总内能 | 固相显示 fraction |
+| 气体 | component standard-volume nanos、质量、species/residual、节点总内能和 source/sink | 温度、绝对压力、密度、孔流速度 |
+| 热学 | 每个物质载体的总内能、external source/sink、mechanical work 和 roundoff | 温度、热容、LTE grid、浮力修正 |
+| 世界 | region HEAD、ownership committed/WAL、actor durable item state | controller UI、status、debug layer |
+
+任何“派生”列都不能创建、删除、缩放或恢复“权威”列。状态跨层搬运时必须同时提交所有受影响真值，而不是先改机械库存再尝试补化学或能量。
+
+## 单位与精确量
+
+- `BV`：一个 Minecraft 方块体积；几何上按 `1 m³` 解释。
+- 默认 solver cell edge 为 `0.5 m`，所以 1 BV 包含 `2×2×2` cells，每 cell 为 `0.125 m³`。
+- 液体容器用 `long` nanovolume：`1 BV = 1,000,000,000 nanos`。
+- 固体用整数 SVQ：`1 BV = 2^27 SVQ`，默认 cell 为 `2^24 SVQ`。
+- 化学用整数 quanta：`1 AU = 1,000,000,000 quanta`；AU 是求解器量纲，不宣称等于 mol。
+- marker `particleMass` 是与 solver-cell 体积配对的质量权重；跨入 SI 热学时唯一通过 `CondensedMassScale` 乘 `cellSize³` 得到 kg。
+- gas component 的 standard-volume nanos 与 kg 分开保存；气体 kg 不再经过 condensed scale。
+- 热学当前使用 SI-compatible K、Pa、J、W/mK 与 J/(kg K)。内部审计保留 raw double 或 `SignedDyadic`，不从显示小数恢复。
+
+浮点 marker 尾数、整数 SVQ/nanos/quanta 和独立 residual 都是合法真值。换算必须指定向上、向下或 exact；不能先四舍五入后把差额静默归零。
+
+## 一个 logical step
+
+1. 捕获本步 inventory、source/sink/work 与 pending phase-volume 审计基线。
+2. 根据 world/cut-cell、统一固体 occupancy 和当前 gas topology 建立机械输入。
+3. P2G，施加重力、热浮力、表面张力、气压和颗粒/实体耦合。
+4. 构造目标散度，以 PCG 求解变系数 pressure projection。
+5. G2P、FLIP/PIC 混合、marker advection 与 CCD；颗粒完成运动/碰撞提交。
+6. 从新载体位置重建 thermal grid，提交内部导热和固定温度边界通量。
+7. 提交化学与固液反应 extent，再提交 reaction heat。
+8. 依次计划并提交固液、气液相变；体积变化写入 pending pressure work。
+9. 处理沉积/唤醒和 marker reseed，同时搬运材料、化学和内能侧列。
+10. 重建所有账本；只有全部闭合才发布本步诊断并评估 motion/thermal activity。
+
+相变产生的凝聚相体积/功由下一次真实 pressure projection exactly-once 消费。未消费记录存在时，不能用 `empty`、卸载或重排把它绕过。
+
+## 生命周期和调度
+
+`FluidRegion` 同时拥有身份、硬预算预留、controller footprint、checkpoint generation、motion lifecycle 和正交 thermal activity：
+
+- `ACTIVE`：按 20 Hz 目标推进。
+- `REDUCED`：wall-time 超过 40 ms 后按 1–4 tick pacing 推进同一个 logical step。
+- `PAUSED`：operator 暂停、边界/身份失败或连续三步超过 200 ms；库存仍保留。
+- `UNLOADED`：solver arrays 已释放，但 metadata 和 manager 预算仍保留。
+- motion sleep 与 thermal sleep 独立；静水仍可能导热或相变，静温也可能继续运动。
+
+调度和后端选择不得改变守恒结果。缺 chunk 或 controller 破损时不能把缺失区域当墙继续半步。
+
+## 原子状态与失败模型
+
+系统区分两类失败：
+
+- **LOCKED**：磁盘格式、identity、registry fingerprint、generation、checksum 或 WAL 状态无法被唯一解释。原文件保留，拒绝任何会覆盖证据的操作。
+- **PAUSED**：当前库存可解释，但候选数值步越过物性有效域、容量、预算、审计或 wall-time 安全门。保留内存/已提交状态，允许修正外部条件后重试。
+
+region HEAD 是区域物理状态唯一提交点。ownership 与 container WAL 分别把世界方块和 actor item 收敛到该 HEAD；它们不能成为第二个物理真值。任何 publish 都必须遵守“完整写入、回读验证、HEAD 最后替换”。
+
+## 线程与只读边界
+
+- 世界读取、方块修改、玩家/发射器物品变更和 lifecycle 编排只在服务器主线程发生。
+- 数值代码只消费已冻结的 region arrays、registry 和 boundary sample。
+- checkpoint 捕获的是一个完整 logical state；不发布半步或半个 gas remap。
+- 客户端只接受当前 region generation 的递增 snapshot sequence；迟到包、移除 tombstone 前的包和其他 dimension 的包不能复活状态。
+- renderer、Jade/HWYLA 查询、status 和 GPU probe 都不能唤醒、加载、checkpoint 或回写区域。
+
+## 主题文档
+
+- mechanics、自由面与碰撞：[`fluid-solver.md`](fluid-solver.md)
+- 材料、质量与液液界面：[`material-state.md`](material-state.md)
+- 密闭气体：[`gas-state.md`](gas-state.md)
+- 化学：[`chemistry-state.md`](chemistry-state.md)
+- 颗粒与沉积：[`granular-state.md`](granular-state.md)
+- 热输运、相变和反应热：[`thermal-state.md`](thermal-state.md)
+- checkpoint：[`region-state.md`](region-state.md)
+- ownership、容器与世界事务：[`world-ownership-and-containers.md`](world-ownership-and-containers.md)

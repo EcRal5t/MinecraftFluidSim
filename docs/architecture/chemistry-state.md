@@ -6,12 +6,36 @@
 
 当前数据包与 snapshot 不一致只报告 definition mismatch，不重解释已有库存。snapshot 未知、损坏或身份不符时区域和容器状态保留并 LOCKED。
 
+### 定义层次与规范化
+
+数据包分别提供 species、chemical phase 和 reaction：
+
+- species：stable ID、组成基元整数向量、电荷、每 AU exact mass；
+- phase：绑定一个机械 material，声明允许 species、默认组成和 indicator 接受性；
+- reaction：反应物/生成物整数计量和允许 chemical phase。
+
+exact rational 只接受整数、有限小数或 `numerator/denominator` 文本。解析前先限制 ID 长度、文本长度、小数 scale 和整数位宽，避免用短文本触发无界 `BigInteger` 工作。registry 校验未知 ID、重复 ID、非正质量、组成/电荷/质量不守恒、无界解离和预算，然后按 stable ID 排序并对 canonical UTF-8 bytes 计算 SHA-256。
+
+当前硬边界包括 256 species、64 phases、512 reactions、每 parcel 16 species、每步 131072 次 reaction evaluation 和每区域 `2e15` quanta。所有边界都在分配或部分提交前检查。
+
 ## 独立真值
 
 - marker 的材料质量/体积与 chemical parcel 分开保存。
 - parcel 保存 stable species quanta、组成、净电荷、marker mass residual 和 indicator provenance。
 - 区域保存逐 species 总量、组成/电荷审计、external source、escaped sink 与 residual ledger。
 - `FluidMixture` 只保存机械材料库存；`ChemicalContents` 保存完整化学容器库存。两者不能同时作为同一物品的真值。
+
+`1 AU = 1,000,000,000 quanta`。species 绝对库存是非负 `long`，加减乘和总账使用 checked arithmetic。
+
+marker 只保存 packed mixture handle 与 indicator bit；handle 指向 `PackedChemicalMixturePool` 中按 runtime species handle 排序的 primitive `(species, amountQuanta)` 列和 raw mass-residual bits。相同 record 可共享，修改走 copy-on-write；marker 不持有 `Map` 或对象链。handle、pool refcount、marker ordinal 和 material/chemical-phase 绑定必须同时有效。
+
+质量关系为：
+
+```text
+particleMass = exact_species_mass + massResidual
+```
+
+reaction 只改变 species 列；residual、marker 体积、速度、机械材料和 phase 不因反应被重算。split/merge/transfer 按同一物质权重搬运 residual，raw-bit checkpoint 后仍须闭合允许的 ULP 预算。
 
 ## 反应模型
 
@@ -20,9 +44,21 @@
 - 不实现弱酸、缓冲液、活度、有限速率动力学或通用平衡求解。
 - 指示剂是 parcel provenance：随 marker/reseed/容器输运，不隔离反应，也不自动传播到后来混入的 marker。
 
+反应引擎对完成 advection 的 marker 按 `(cell, chemicalPhase)` 分组，汇总每个 species 的 integer quanta。对 canonical reaction 顺序计算最大完整 extent：每个反应物库存除以对应计量系数并取最小值。只有完整整数 extent 可提交；products、composition basis、charge 和 exact species mass 必须同时回和。
+
+反应后的格总库存再确定性分配回原 marker。最后一个可接收 marker 得到整数 remainder，避免多次均分造成 quanta 漂移；pool 或 marker budget 不足时该 cell 不暴露部分修改。当前反应是瞬时同格模型，不应用 Arrhenius 速率、平衡常数或跨格搜索。
+
+### Indicator 与 pH
+
+indicator 添加只标记当时可接受 indicator 的互溶连通 parcel，受 100 BV 硬上限；超过上限整次拒绝。标记随 advection、reseed 和容器传输，后续混入的未标记 parcel 不自动继承。
+
+pH 是本项目从局部 `H+`/`OH-` 相对库存派生的 0–14 展示刻度，不承诺现实活度精度。客户端只接收每格最多四个展示 species、量化 pH 和可见 indicator fraction；这些值既不能恢复 exact quanta，也不能参与 reaction extent。
+
 ## 求解顺序
 
 每个 logical step 中，机械 advection 完成后按当前 cell 和 chemical phase 分组反应；反应热随后通过热状态的同 cell source/sink 提交。化学反应不得直接修改平滑 density、pressure 或客户端颜色场。
+
+热学开启时，reaction plan 先证明 species/质量闭合，再把定义的状态函数能差提交给参与载体；该能差是内部重排，不重复记 external source。颗粒 precipitation 使用同一 liquid chemical ledger，但必须在 granular/thermal 联合 plan 中另行验证 solid composition、SVQ、容量和 U。
 
 ## 跨层边界
 
@@ -31,6 +67,10 @@
 - 创造模式放出是 external source；创造模式装取不能制造隐藏 sink。
 - 客户端只接收 Top-N species、pH 和 indicator 等量化展示；这些字段不能恢复或结算库存。
 - `chemstatus` 是管理员只读诊断并写 command transcript。
+
+`ChemicalContents` 使用 canonical group 表，每组绑定 mechanical material、indicator、nanovolume、mass/residual 和排序 species 列。物品总量必须与各组 exact sum 一致；部分抽取按体积分配 quanta 和 residual，并把确定性 remainder 留给一侧。容器无法表示完整结果时，在 solver 修改前拒绝。
+
+区域 source/sink 不只是 species 总量：每个 transfer group 同时保存 material/indicator identity、volume、mass、residual 和 species。collision escape、`empty`、创造放出和创造装取分别走同一 ledger，不允许“只记总质量”后丢失组成证据。
 
 ## 功能布局
 

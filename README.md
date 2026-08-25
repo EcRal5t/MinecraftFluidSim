@@ -60,7 +60,9 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 
 文档入口：
 
+- [系统组件与数据流](docs/architecture/system-overview.md)
 - [当前架构契约](docs/README.md)
 - [代码职责与最小验证路由](docs/maintenance/routing.md)
 - [未来产品路线](docs/roadmap/product-roadmap.md)
 - [发布验收策略](docs/roadmap/acceptance-and-release.md)
+- [主 Mod 版本历史](docs/progress/version-history.md)

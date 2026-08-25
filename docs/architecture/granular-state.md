@@ -6,6 +6,10 @@
 
 区域载荷中的 granular 与 chemistry presence 必须与启动时冻结的门一致；不从其他布局构造空颗粒层。
 
+`ParticulateMaterial` 至少固定以下计算定义：颗粒密度、代表粒径、孔隙率、安息角、静/动摩擦系数、恢复系数、临界 Shields 数、侵蚀率、单 parcel 容量、显示信息和 reactive 标志。`GranularCarrier` 将液相材料绑定到动力黏度与允许的最大 Reynolds 数。注册表验证所有范围和引用后冻结；运行时只使用冻结 ordinal，不按数据包名称重复解析。
+
+当前硬上限为：256 个 particulate material、512 个 carrier、512 个 reaction；单 region 16384 个 active parcel、单 server 65536 个；单 cell 8 个 deposit group、单 region 65536 个、单 server 262144 个；solid composition 最多 16 项；每 logical step 131072 次颗粒操作。单 active parcel 最大为 `cell SVQ / 64`。预算不足时延期、拒绝或暂停，不能合并不同 truth 来腾位置。
+
 ## 独立真值
 
 - solid volume 使用整数 SVQ；每种材料质量独立保存。
@@ -15,6 +19,23 @@
 - external source、escaped sink、boundary impulse 与反应审计独立闭合。
 
 显示高度、颜色、active sample、bulk fraction 和 porosity tooltip 都是只读派生，不能结算库存。
+
+## 数量、布局与容量
+
+- `1 BV` 是一个 Minecraft 方块体积；生产子格边长为 `0.5 m`，所以每格为 `0.125 BV`。
+- solid volume 以 `SVQ` 整数记账；SVQ 与 BV 的换算常量在存储、网络和容器中一致，禁止先转 `double` 再结算。
+- active parcel 使用结构分离数组保存位置、速度、材料 ordinal、SVQ、逐材料质量、组成 handle、内能和确定性身份。数组 ordinal 是同代 side column 的共同键。
+- deposit 以 cell 为定位键，cell 内是有硬上限的规范化 group 列表；相同机械身份、组成和孔隙率的 group 才能合并。
+- coherent condensed group 属于相变层，具有自己的 cell、SVQ、质量、组成和内能；它不占 active parcel 或 deposit 的容量。
+
+孔隙率 `phi` 描述骨架体积中可由孔隙水占据的比例。由 solid skeleton volume `Vs` 派生 bulk envelope 时使用
+
+```text
+Vbulk = Vs / (1 - phi)
+Vpore = Vbulk - Vs
+```
+
+实现用定点数向安全方向取整。`Vbulk` 参与 cell 可用体积和压力投影，`Vs` 仍是固体库存；二者不能互相回填。孔隙水始终是普通液体 marker 真值，deposit 只提供可用空间，不保存一份隐含水量。
 
 ## 生产模型
 
@@ -28,6 +49,34 @@
 
 不预建 MPM 或通用刚体/弹性框架。只有量化证明当前模型越过既定成本或质量停止门，才单独评审替代模型。
 
+### Active parcel 力学
+
+parcel 的物理质量由逐材料质量列给出；solver weight 与 kg 之间只在 `cellSize^3` 换算边界转换。每步先从同格液相采样速度、压力梯度、密度和载体黏度，再计算重力、浮力和阻力。球形颗粒的相对 Reynolds 数为
+
+```text
+Re = rho_f * d * |u_f - u_p| / mu
+```
+
+阻力使用 Schiller–Naumann 相关式：`Re < 1000` 时 `Cd = 24/Re * (1 + 0.15 Re^0.687)`，更高时取其常用高 Reynolds 极限 `0.44`。指数松弛积分避免小质量 parcel 在单步内越过载体速度。超过 carrier 声明的有效 Reynolds 数、非有限物性或负容量会安全暂停，而不是钳制到一个看似稳定的值。
+
+浮力和阻力对 parcel 的冲量有等量反向项写回液体动量；cut-cell 无法承接的部分进入 boundary impulse ledger。碰撞使用与流体一致的几何快照、连续碰撞检测和材料摩擦/恢复定义，不依赖渲染表面。
+
+### 统一排水与压力
+
+每个 logical step 从 active、deposit bulk envelope 和 coherent store 构造统一 solid occupancy。occupancy 的时变差进入压力方程目标散度，固体移动造成的排水因而与液体不可压缩约束在同一次 projection 中闭合。可用体积为几何开放体积减去固体 bulk envelope；负容量、重复占用或未消费的相变体积功都拒绝提交。
+
+projection 消费的 phase volume/work 和 granular occupancy delta 都具有 generation 身份；重试不能再次消费，checkpoint 也不能只保存其中一半。
+
+### Deposit 松弛与局部唤醒
+
+- active parcel 连续受到支撑且速度低于阈值满 3 次接触后，才原子转入 deposit；转换保持 SVQ、质量、组成和内能不变。
+- deposit 只在 dirty column 及相邻列执行确定性安息角松弛；邻居起点按 generation/cell 旋转，避免固定方向偏置。
+- 单次形态转移有严格 SVQ 上限，直到局部坡度不超过材料安息角或预算耗尽；预算耗尽保留 dirty 状态到后续 step，不丢库存。
+- 液流的 bed shear 以 Shields 判据与材料阈值比较；越阈值时按 registry 侵蚀率把 exact SVQ 唤醒为 active parcel。
+- 无扰动列连续 20 个 logical step 后休眠。几何变化、parcel 碰撞、压力/液流、相变或反应只标脏受影响邻域。
+
+这里的 deposit 是低成本地貌松弛，不声称求解连续颗粒应力、力链或弹塑性。若 fixture 显示安息角、排水或侵蚀误差越过产品停止门，应先量化失败机制，再评审更重模型。
+
 ## 固液相转移
 
 - precipitation/dissolution 由 registry 的 exact reaction extent 规划，同时验证 liquid species、solid composition、质量和体积容量。
@@ -35,8 +84,21 @@
 - 连续凝固相由 coherent store 保存；熔化后恢复到液体 marker。它不借用 active/deposit 表示。
 - pending phase volume/work 由下一次 pressure projection exactly-once 消费；未消费时拒绝 `empty` 和不安全 checkpoint 操作。
 
+reaction/phase candidate 必须先在不可变快照上规划 exact extent，再一次提交所有 side column。规划预算以 cell、reaction 和 batch 操作计数，有硬上限；预算耗尽延期，不允许把半个 extent 留在液相、另一半留在固相。
+
 ## 容器与清空
 
 - 干颗粒容器一次只保存一个可完整表示的 SVQ 库存，包含逐材料质量和可选固相组成。
 - 玩家和发射器只作用于 controller 内实际目标格，使用与区域 checkpoint 联合的容器 WAL。
 - `empty` 先联合预检液体、化学、coherent、active 和 deposit sink candidate，再一次提交；气体库存不属于凝聚相清空。
+
+## 审计与可观察量
+
+颗粒审计至少验证：
+
+```text
+initial + external source - escaped sink
+= active + deposit + coherent + transferred inventory
+```
+
+等式分别对 SVQ、逐材料质量和可选 species/composition 成立；冲量和热能在各自账本中闭合。`status` 的 active 数、deposit group 数、solid SVQ、bulk occupancy 和休眠列数都是从权威列聚合的只读摘要，不得作为恢复来源。

@@ -5,7 +5,17 @@
 - 每个 marker 独立保存体积、质量和稳定材料身份。
 - 区域总量与逐材料体积/质量账本必须由 marker 精确和闭合。
 - `FluidMaterialRegistry` 是运行时材料定义入口；持久化和容器使用稳定 ID，不保存运行时 handle。
-- 密度、黏度、表面张力、接触角和颜色来自材料定义。只有 marker 质量和体积参与库存结算。
+- 当前机械定义包含 stable ID、参考密度、miscibility group、液气表面张力和接触角；液液张力由 registry 的 phase 无序对表给出。
+- 显示颜色来自独立只读 palette。当前没有把每液体黏度作为 `FluidMaterial` 的权威字段；颗粒阻力使用 granular carrier 自己声明的流体参数。
+- 只有 marker 质量和体积参与库存结算；参考密度用于创建、校验和状态函数绑定，不能覆盖已有 marker 质量。
+
+## Registry 与运行时 handle
+
+定义按声明顺序建立稠密 material handle；stable ID 必须是合法 Minecraft identifier 且唯一。miscibility group 再映射为 phase handle：同组材料不生成内部液液界面，不同组材料保持 phase 分区。
+
+handle 只为了数组索引。checkpoint 保存 canonical material palette，容器保存 stable ID；恢复时先验证完整 palette/registry identity，再建立当前进程 handle。不能把一次进程中的整数 handle 写入长期状态。
+
+内置基线目前提供 water、oil 和 mercury。内置 palette 是生产默认定义集，不是存档的替代品；已提交区域仍由 checkpoint 中的 palette 与 registry identity 解释。
 
 ## 求解器边界
 
@@ -14,12 +24,33 @@
 - reseed split/merge 必须保持体积、质量、动量和质心；不得跨材料或 chemical phase 合并。
 - 单一纯水域必须退化为同一机械求解路径，不额外引入材料修正源汇。
 
+格内机械密度只从实际 marker 重建：
+
+```text
+rho_cell = sum(marker_mass) / (sum(marker_cell_volume) * cellSize^3)
+```
+
+实现内部可把 `particleMass / particleVolume` 保持为 solver density 权重，但跨 SI 热学边界时必须统一乘 `cellSize³`。pressure face 的 `1/rho` 系数按界面距离加权；不得从 material reference density、客户端颜色或平滑 fraction 反推存量质量。
+
+同一 miscibility group 的材料共享 phase 和速度，但当前没有分子扩散或每 marker 连续浓度场：marker 仍各自保存一种机械材料库存，局部格聚合给出混合比例。不同材料不在 reseed 中互相吞并，因此未解析扩散不会丢失组分。不可互溶材料也共享一个压力/速度框架，不承诺双速度界面动力学。
+
+## 表面与展示
+
+- 外表面使用总 liquid occupancy；液液界面使用逐 phase fraction，两者必须分开裁剪。
+- phase pair 只生成一份共享 mesh，归属和法向确定；互溶材料不生成内部面。
+- material palette、ARGB、平滑 fraction 和 marker seed 都是展示数据。
+- 当前内置材料的 surface/contact 参数可以退化为零张力/中性接触角；测试或数据定义只有在进入 runtime registry 后才影响 mechanics。
+
 ## 跨层表示
 
 - 区域 checkpoint 保存稳定材料 palette、每个 marker 的 palette index、独立质量和总账。
 - `FluidMixture` 保存容器内各稳定材料的纳体积和独立质量；tooltip 与耐久条只读。
 - 玩家和发射器只向实际目标区域转移，单次物品计数必须为 1。
 - 容器与区域之间的物质变化通过同一 WAL 事务提交；任何不能被物品表示的结果在修改 solver 前拒绝。
+
+`FluidMixture` 最多保存 64 个按 stable ID 排序的 component；每项包含 `volumeNanos` 和 raw mass bits。构造时拒绝重复 ID、非正体积/质量和超过一桶的总量。物品中单材料可以使用紧凑 component 表示，多材料使用 canonical mixture 文本；进入 WAL 时两者都规范化为完整 mixture truth，reader 不现场合成缺失 component。
+
+抽取先以 double 精确量预检，再按整 marker 与必要尾拆分生成实际 settlement；物品必须能表示实际 volume、每材料 mass 和所有附加化学/热侧列。请求量与实际可表示量不一致时，WAL 记录实际量，不用请求量伪造闭合。
 
 ## 功能门
 
