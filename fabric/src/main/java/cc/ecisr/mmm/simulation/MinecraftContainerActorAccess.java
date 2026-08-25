@@ -28,7 +28,9 @@ final class MinecraftContainerActorAccess {
 			case ContainerTransferActor.Dispenser dispenser -> {
 				ServerLevel level = level(server, dispenser.dimensionId());
 				if (level == null) throw new IOException("Container transfer actor dimension is not loaded");
-				level.save(null, false, false);
+				// Minecraft exposes only a dimension-wide public flush here. A non-flushing autosave
+				// cannot justify deleting the WAL after a dispenser inventory mutation.
+				level.save(null, true, false);
 			}
 		}
 	}
