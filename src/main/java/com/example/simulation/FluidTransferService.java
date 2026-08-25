@@ -55,11 +55,13 @@ public final class FluidTransferService {
 		ServerLevel level = player.level();
 		boolean pouring = kind == TransferKind.POUR || kind == TransferKind.MATERIAL_POUR
 				|| kind == TransferKind.GRANULAR_POUR;
-		BlockPos targetBlock = pouring ? playerPourTargetBlock(player) : null;
+		BlockHitResult blockHit = playerBlockHit(player);
+		BlockPos targetBlock = pouring ? playerPourTargetBlock(player, blockHit) : null;
 		if (pouring && targetBlock == null) return null;
 		FluidSimulationService.TransferTarget transferTarget = pouring
 				? service.transferTargetAtBlock(level, targetBlock)
-				: null;
+				: blockHit != null && RealWaterBlocks.isBoundary(level.getBlockState(blockHit.getBlockPos()))
+						? service.transferTargetAtBlock(level, blockHit.getBlockPos()) : null;
 		FluidRegion region = pouring
 				? transferTarget == null ? null : transferTarget.region()
 				: service.aimedRegion(player);
@@ -76,7 +78,7 @@ public final class FluidTransferService {
 			player.sendSystemMessage(Component.literal(thermalFailure), true);
 			return InteractionResult.FAIL;
 		}
-		int[] cell = pouring
+		int[] cell = transferTarget != null
 				? service.cellAtBlock(level, region, transferTarget.interiorBlock())
 				: kind == TransferKind.GRANULAR_SCOOP
 						? service.aimedGranularCellNear(player, region)
@@ -1240,9 +1242,13 @@ String.format("已舀取 %.2f%% 桶（%d 种材料）",
 		return request;
 	}
 
-	private static BlockPos playerPourTargetBlock(ServerPlayer player) {
-		BlockHitResult hit = (BlockHitResult) player.pick(5.0, 1.0F, false);
-		if (hit.getType() != HitResult.Type.BLOCK) return null;
+	private static BlockHitResult playerBlockHit(ServerPlayer player) {
+		HitResult hit = player.pick(5.0, 1.0F, false);
+		return hit instanceof BlockHitResult blockHit && hit.getType() == HitResult.Type.BLOCK ? blockHit : null;
+	}
+
+	private static BlockPos playerPourTargetBlock(ServerPlayer player, BlockHitResult hit) {
+		if (hit == null) return null;
 		BlockPos hitPos = hit.getBlockPos();
 		if (RealWaterBlocks.isBoundary(player.level().getBlockState(hitPos))) return hitPos;
 		return player.level().getBlockState(hitPos).canBeReplaced()

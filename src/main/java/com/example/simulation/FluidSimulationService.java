@@ -1897,12 +1897,13 @@ public final class FluidSimulationService {
 		FlipFluidDomain domain = domain();
 		Vec3 eye = player.getEyePosition();
 		Vec3 look = player.getLookAngle();
+		double visibleDistance = visibleAimDistance(player);
 		double step = domain.config().cellSize() * 0.25;
 		CellTarget previousOpen = null;
 		CellTarget previousSample = null;
 		boolean enteredDomain = false;
 
-		for (double distance = 0.0; distance <= AIM_DISTANCE; distance += step) {
+		for (double distance = 0.0; distance <= visibleDistance; distance += step) {
 			Vec3 point = eye.add(look.scale(distance));
 			CellTarget cell = worldToCell(point);
 			if (cell == null) {
@@ -1926,14 +1927,7 @@ public final class FluidSimulationService {
 	}
 
 	private CellTarget worldToCell(Vec3 point) {
-		FlipFluidDomain domain = domain();
-		BlockPos origin = origin();
-		float h = domain.config().cellSize();
-		int x = Mth.floor((point.x - origin.getX()) / h);
-		int y = Mth.floor((point.y - origin.getY()) / h);
-		int z = Mth.floor((point.z - origin.getZ()) / h);
-		if (x < 0 || x >= domain.sizeX() || y < 0 || y >= domain.sizeY() || z < 0 || z >= domain.sizeZ()) return null;
-		return new CellTarget(x, y, z);
+		return worldToCell(activeRegion(), point);
 	}
 
 	public RestorationStats remove(MinecraftServer server) {
@@ -2220,11 +2214,16 @@ public final class FluidSimulationService {
 		return available;
 	}
 
-	/** Returns the first region whose solver bounds contain the block position. */
+	/** Returns the sole region whose actual interior contains the block position. */
 	public FluidRegion regionAtBlock(ServerLevel level, BlockPos pos) {
 		if (pos == null) return null;
 		for (FluidRegion region : regionManager.regions()) {
 			if (!region.dimension().equals(level.dimension())) continue;
+			FluidRegionFootprint footprint = region.footprint();
+			if (footprint != null) {
+				if (footprint.containsInterior(pos)) return region;
+				continue;
+			}
 			BlockPos origin = region.origin();
 			double h = region.solverConfig().cellSize();
 			if (pos.getX() >= origin.getX() && pos.getX() < origin.getX() + region.sizeX() * h
@@ -2464,10 +2463,13 @@ public final class FluidSimulationService {
 	public FluidRegion aimedRegion(ServerPlayer player) {
 		Vec3 start = player.getEyePosition();
 		Vec3 direction = player.getLookAngle();
-		for (double distance = 0.0; distance <= AIM_DISTANCE; distance += 0.125) {
+		double visibleDistance = visibleAimDistance(player);
+		for (double distance = 0.0; distance <= visibleDistance; distance += 0.125) {
 			Vec3 point = start.add(direction.scale(distance));
 			for (FluidRegion region : regionManager.regions()) {
 				if (!region.dimension().equals(player.level().dimension())) continue;
+				FluidRegionFootprint footprint = region.footprint();
+				if (footprint != null && !footprint.containsInterior(BlockPos.containing(point))) continue;
 				BlockPos origin = region.origin();
 				double h = region.solverConfig().cellSize();
 				if (point.x >= origin.getX() && point.x < origin.getX() + region.sizeX() * h
@@ -2483,6 +2485,7 @@ public final class FluidSimulationService {
 	/** Resolves the solver cell containing the center of a block position inside a loaded region. */
 	public int[] cellAtBlock(ServerLevel level, FluidRegion region, BlockPos pos) {
 		if (!level.dimension().equals(region.dimension()) || !region.solverLoaded()) return null;
+		if (region.footprint() != null && !region.footprint().containsInterior(pos)) return null;
 		FlipFluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
 		double h = domain.config().cellSize();
@@ -2501,10 +2504,11 @@ public final class FluidSimulationService {
 		Vec3 start = player.getEyePosition();
 		Vec3 direction = player.getLookAngle();
 		FlipFluidDomain domain = region.domain();
+		double visibleDistance = visibleAimDistance(player);
 		double step = domain.config().cellSize() * 0.25;
 		CellTarget previousOpen = null;
 		CellTarget previousSample = null;
-		for (double distance = 0.0; distance <= AIM_DISTANCE; distance += step) {
+		for (double distance = 0.0; distance <= visibleDistance; distance += step) {
 			Vec3 point = start.add(direction.scale(distance));
 			CellTarget cell = worldToCell(region, point);
 			if (cell == null) {
@@ -2535,9 +2539,10 @@ public final class FluidSimulationService {
 		Vec3 start = player.getEyePosition();
 		Vec3 direction = player.getLookAngle();
 		FlipFluidDomain domain = region.domain();
+		double visibleDistance = visibleAimDistance(player);
 		double step = domain.config().cellSize() * 0.25;
 		CellTarget previous = null;
-		for (double distance = 0.0; distance <= AIM_DISTANCE; distance += step) {
+		for (double distance = 0.0; distance <= visibleDistance; distance += step) {
 			CellTarget cell = worldToCell(region, start.add(direction.scale(distance)));
 			if (cell == null || cell.equals(previous)) continue;
 			previous = cell;
@@ -2549,6 +2554,9 @@ public final class FluidSimulationService {
 	}
 
 	private static CellTarget worldToCell(FluidRegion region, Vec3 point) {
+		if (region == null || !region.solverLoaded()) return null;
+		FluidRegionFootprint footprint = region.footprint();
+		if (footprint != null && !footprint.containsInterior(BlockPos.containing(point))) return null;
 		FlipFluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
 		float h = domain.config().cellSize();
@@ -2558,6 +2566,13 @@ public final class FluidSimulationService {
 		if (x < 0 || x >= domain.sizeX() || y < 0 || y >= domain.sizeY()
 				|| z < 0 || z >= domain.sizeZ()) return null;
 		return new CellTarget(x, y, z);
+	}
+
+	/** Stops simulation-space targeting at the first Minecraft collision hit. */
+	private static double visibleAimDistance(ServerPlayer player) {
+		Vec3 eye = player.getEyePosition();
+		Vec3 hit = player.pick(AIM_DISTANCE, 1.0F, false).getLocation();
+		return Math.min(AIM_DISTANCE, eye.distanceTo(hit) + 1.0E-6);
 	}
 
 	private static int[] cellTargetArray(CellTarget target) {
