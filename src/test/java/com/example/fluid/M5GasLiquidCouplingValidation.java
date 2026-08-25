@@ -12,6 +12,7 @@ public final class M5GasLiquidCouplingValidation {
 	private static final float GRAVITY = 9.81F;
 
 	public static void main(String[] args) {
+		validateSplitRetainsSealedShareWhenPeerVents();
 		if (java.util.Arrays.asList(args).contains("--fast")) {
 			validateShortCouplingSmoke();
 			System.out.println("M5 gas-liquid coupling validation passed (short; equilibrium soaks skipped)");
@@ -23,6 +24,36 @@ public final class M5GasLiquidCouplingValidation {
 		validateOrificeEqualization();
 		System.out.println("M5 gas-liquid coupling gate passed: sealed compression, negative-gauge suction, "
 				+ "finite-rate orifice equalization and exact gas/liquid ledgers");
+	}
+
+	/** A simultaneous wall insertion and vent opening must not vent a newly isolated sibling cavity. */
+	private static void validateSplitRetainsSealedShareWhenPeerVents() {
+		int n = 8;
+		FluidSolverConfig config = new FluidSolverConfig(
+				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F);
+		FlipFluidDomain domain = new FlipFluidDomain(n, n, n, config, n * n * n * 8);
+		for (int z = 0; z < n; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
+			boolean shell = x == 0 || x == n - 1 || y == 0 || y == n - 1 || z == 0 || z == n - 1;
+			if (shell) domain.setSolid(x, y, z, true);
+		}
+		domain.bootstrapGasState(null);
+		check(domain.airNetwork().nodeCount() == 1
+				&& domain.airNetwork().standardVolumeNanos(1) == 216_000_000_000L,
+				"mixed split fixture did not begin as one ambient-equilibrium cavity");
+
+		for (int z = 1; z < n - 1; z++) for (int y = 1; y < n - 1; y++) {
+			domain.setSolid(4, y, z, true);
+		}
+		domain.setSolid(6, n - 1, 3, false);
+		domain.synchronizeGasTopologyForPersistence();
+
+		AirNetwork network = domain.airNetwork();
+		check(network.nodeCount() == 1, "mixed sealed/ambient split did not retain one sealed child");
+		check(network.standardVolumeNanos(1) == 129_600_000_000L,
+				"mixed split failed to retain the sealed child's available-volume share");
+		check(network.ventedNanos() == 86_400_000_000L,
+				"mixed split did not vent exactly the ambient child's share");
+		checkLedger(network, "mixed sealed/ambient topology split");
 	}
 
 	/** One-step wiring gate; quantitative equilibrium and long-run stability remain in the soak tier. */

@@ -38,6 +38,7 @@ import java.util.TreeMap;
 	public record Result(
 			int[] cellNodeId,
 			int[] cellLineageNodeId,
+			double[] cellAvailableVolume,
 			int sealedNodeCount,
 			double[] sealedAvailableVolume,
 			List<GeometricEdge> geometricEdges,
@@ -115,18 +116,21 @@ import java.util.TreeMap;
 		if (budgetExhausted) for (int cell = 0; cell < cellCount; cell++) {
 			if (cellNodeId[cell] < 0 && isAirCell(cell, solid, markerCount, cutCells, granular)) cellNodeId[cell] = 0;
 		}
+		double[] cellAvailableVolume = new double[cellCount];
 		double[] sealedAvailableVolume = new double[sealedNodes];
 		for (int cell = 0; cell < cellCount; cell++) {
 			int nodeId = cellNodeId[cell];
+			cellAvailableVolume[cell] = cellAirVolume(cell, cellLiquidVolume, cutCells, granular);
 			if (nodeId >= 1) {
-				sealedAvailableVolume[nodeId - 1] += cellAirVolume(cell, cellLiquidVolume, cutCells, granular);
+				sealedAvailableVolume[nodeId - 1] += cellAvailableVolume[cell];
 			}
 		}
 		int[] cellLineageNodeId = cellNodeId.clone();
 		addInterfaceResiduals(cellNodeId, cellLineageNodeId, solid, markerCount, cellLiquidVolume,
-				cutCells, granular, sealedAvailableVolume);
+				cutCells, granular, cellAvailableVolume, sealedAvailableVolume);
 		List<GeometricEdge> edges = collectGeometricEdges(cellNodeId, cutCells);
-		return new Result(cellNodeId, cellLineageNodeId, sealedNodes, sealedAvailableVolume, edges, visitedAirCells,
+		return new Result(cellNodeId, cellLineageNodeId, cellAvailableVolume,
+				sealedNodes, sealedAvailableVolume, edges, visitedAirCells,
 				budgetExhausted ? StopReason.BUDGET_EXHAUSTED : StopReason.COMPLETED);
 	}
 
@@ -182,11 +186,12 @@ import java.util.TreeMap;
 	private void addInterfaceResiduals(int[] cellNodeId, int[] cellLineageNodeId,
 	                                   boolean[] solid, int[] markerCount,
 	                                   float[] cellLiquidVolume, FlipCutCellGeometry cutCells,
-	                                   GranularCouplingFields granular,
+	                                   GranularCouplingFields granular, double[] cellAvailableVolume,
 	                                   double[] sealedAvailableVolume) {
 		for (int cell = 0; cell < cellNodeId.length; cell++) {
 			if (solid[cell] || markerCount[cell] == 0) continue;
 			double residualVolume = cellAirVolume(cell, cellLiquidVolume, cutCells, granular);
+			cellAvailableVolume[cell] = residualVolume;
 			if (!(residualVolume > 0.0)) continue;
 			int attributed = -1;
 			int x = cell % sizeX;

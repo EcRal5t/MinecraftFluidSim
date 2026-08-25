@@ -4409,35 +4409,25 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		double sourceEnergy = 0.0, sinkEnergy = 0.0;
 		if (previousSealedNodeCount > 0 && sealed > 0) {
 			int previous = previousSealedNodeCount;
-			int[] ambientOverlap = new int[previous + 1];
-			TreeMap<Long, Integer> overlap = new TreeMap<>();
+			TreeMap<Long, Long> overlap = new TreeMap<>();
 			int[] newLabels = result.cellLineageNodeId();
+			double[] cellAvailableVolume = result.cellAvailableVolume();
 			for (int cell = 0; cell < cellCount; cell++) {
 				int old = airCellLineageNodeId[cell];
 				if (old < 1) continue;
 				int now = newLabels[cell];
-				if (now >= 1) {
-					long key = ((long) old << 32) | (now & 0xffffffffL);
-					overlap.merge(key, 1, Integer::sum);
-				} else if (now == 0) {
-					ambientOverlap[old]++;
-				}
+				if (now < 0 || !(cellAvailableVolume[cell] > 0.0)) continue;
+				long key = ((long) old << 32) | (now & 0xffffffffL);
+				long weight = Math.max(1L, AirNetwork.nanos(cellAvailableVolume[cell]));
+				overlap.merge(key, weight, Math::addExact);
 			}
 			boolean[] contributed = new boolean[sealed + 1];
 			for (int old = 1; old <= previous; old++) {
 				GasInventory inventory = airNetwork.inventory(old);
 				if (inventory.isEmpty()) continue;
-				if (ambientOverlap[old] > 0) {
-					sinkDelta = sinkDelta.merge(inventory);
-					if (thermalGas) sinkEnergy += thermalState.gasNodeEnergy(old, airNetwork);
-					continue;
-				}
-				Map<Long, Integer> oldOverlap = overlap.subMap(
+				Map<Long, Long> oldOverlap = overlap.subMap(
 						(long) old << 32, (long) (old + 1) << 32);
-				int destinations = 0;
-				for (int count : oldOverlap.values()) {
-					destinations++;
-				}
+				int destinations = oldOverlap.size();
 				if (destinations == 0) {
 					sinkDelta = sinkDelta.merge(inventory);
 					if (thermalGas) sinkEnergy += thermalState.gasNodeEnergy(old, airNetwork);
@@ -4445,22 +4435,27 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				}
 				long[] weights = new long[destinations];
 				int weight = 0;
-				for (int count : oldOverlap.values()) weights[weight++] = count;
+				for (long available : oldOverlap.values()) weights[weight++] = available;
 				List<GasInventory> parts = inventory.partition(weights);
 				double[] partEnergy = !thermalGas ? null
 						: thermalState.partitionGasNodeEnergy(old, parts, airNetwork);
 				double[] partAvailable = !thermalGas ? null
 						: partitionTopologyVolume(airNetwork.availableVolume(old), weights);
 				int part = 0;
-				for (Map.Entry<Long, Integer> entry : oldOverlap.entrySet()) {
+				for (Map.Entry<Long, Long> entry : oldOverlap.entrySet()) {
 					int node = (int) (entry.getKey() & 0xffffffffL);
-					inventories.set(node - 1, inventories.get(node - 1).merge(parts.get(part)));
-					if (thermalGas) {
-						mixedEnergy[node - 1] += partEnergy[part];
-						inheritedAvailable[node - 1] += partAvailable[part];
+					if (node == AirNetwork.AMBIENT_NODE) {
+						sinkDelta = sinkDelta.merge(parts.get(part));
+						if (thermalGas) sinkEnergy += partEnergy[part];
+					} else {
+						inventories.set(node - 1, inventories.get(node - 1).merge(parts.get(part)));
+						if (thermalGas) {
+							mixedEnergy[node - 1] += partEnergy[part];
+							inheritedAvailable[node - 1] += partAvailable[part];
+						}
+						contributed[node] = true;
 					}
 					part++;
-					contributed[node] = true;
 				}
 			}
 			for (int node = 1; node <= sealed; node++) {
