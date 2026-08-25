@@ -4,16 +4,14 @@ import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.world.CollisionField;
+import cc.ecisr.mmm.world.CollisionRegion;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.world.phys.shapes.BooleanOp;
-import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 import java.util.ArrayList;
@@ -115,18 +113,26 @@ final class FluidRegionWorldInteraction {
 		int blockSizeX = domain.sizeX() / cellsPerBlock;
 		int blockSizeY = domain.sizeY() / cellsPerBlock;
 		int blockSizeZ = domain.sizeZ() / cellsPerBlock;
-		double inset = 1.0E-5;
+		boolean[] interiorBlocks = new boolean[blockSizeX * blockSizeY * blockSizeZ];
+		for (int blockZ = 0; blockZ < blockSizeZ; blockZ++) {
+			for (int blockY = 0; blockY < blockSizeY; blockY++) {
+				for (int blockX = 0; blockX < blockSizeX; blockX++) {
+					BlockPos position = origin.offset(blockX, blockY, blockZ);
+					interiorBlocks[(blockZ * blockSizeY + blockY) * blockSizeX + blockX] =
+							footprint == null || footprint.containsInterior(position);
+				}
+			}
+		}
+		CollisionRegion captureRegion = new CollisionRegion(region.dimension().identifier().toString(),
+				origin.getX(), origin.getY(), origin.getZ(), blockSizeX, blockSizeY, blockSizeZ,
+				cellsPerBlock, interiorBlocks);
+		CollisionField collisionField = new MinecraftCollisionWorldPort(level).capture(captureRegion);
 		List<PlannedBlock> plannedBlocks = new ArrayList<>();
 		List<FlipFluidDomain.CollisionEdit> allEdits = new ArrayList<>();
 
 		for (int blockZ = 0; blockZ < blockSizeZ; blockZ++) {
 			for (int blockY = 0; blockY < blockSizeY; blockY++) {
 				for (int blockX = 0; blockX < blockSizeX; blockX++) {
-					BlockPos pos = origin.offset(blockX, blockY, blockZ);
-					boolean outsideScannedInterior = footprint != null && !footprint.containsInterior(pos);
-					BlockState state = outsideScannedInterior ? Blocks.BEDROCK.defaultBlockState() : level.getBlockState(pos);
-					boolean fullBlock = outsideScannedInterior || state.isCollisionShapeFullBlock(level, pos);
-					VoxelShape shape = fullBlock ? Shapes.block() : state.getCollisionShape(level, pos);
 					List<FlipFluidDomain.CollisionEdit> blockEdits = new ArrayList<>();
 
 					for (int localZ = 0; localZ < cellsPerBlock; localZ++) {
@@ -135,9 +141,7 @@ final class FluidRegionWorldInteraction {
 								int cellX = blockX * cellsPerBlock + localX;
 								int cellY = blockY * cellsPerBlock + localY;
 								int cellZ = blockZ * cellsPerBlock + localZ;
-								int desired = fullBlock ? 0xFF : sampleCutCellMask(
-										shape, localX, localY, localZ, cellsPerBlock, inset
-								);
+								int desired = collisionField.microMask(cellX, cellY, cellZ);
 								if (domain.solidMicroMask(cellX, cellY, cellZ) == desired) continue;
 								FlipFluidDomain.CollisionEdit edit = new FlipFluidDomain.CollisionEdit(
 										cellX, cellY, cellZ, desired);
@@ -247,23 +251,8 @@ final class FluidRegionWorldInteraction {
 			int cellsPerBlock,
 			double inset
 	) {
-		if (shape.isEmpty()) return 0;
-		int subdivisions = cellsPerBlock * 2;
-		double size = 1.0 / subdivisions;
-		int mask = 0;
-		for (int microZ = 0; microZ < 2; microZ++) for (int microY = 0; microY < 2; microY++) for (int microX = 0; microX < 2; microX++) {
-			int sampleX = localX * 2 + microX;
-			int sampleY = localY * 2 + microY;
-			int sampleZ = localZ * 2 + microZ;
-			double minX = sampleX * size + inset, minY = sampleY * size + inset, minZ = sampleZ * size + inset;
-			double maxX = (sampleX + 1) * size - inset;
-			double maxY = (sampleY + 1) * size - inset;
-			double maxZ = (sampleZ + 1) * size - inset;
-			if (Shapes.joinIsNotEmpty(shape, Shapes.box(minX, minY, minZ, maxX, maxY, maxZ), BooleanOp.AND)) {
-				mask |= 1 << (microX + 2 * (microY + 2 * microZ));
-			}
-		}
-		return mask;
+		return MinecraftCollisionWorldPort.sampleCutCellMask(
+				shape, localX, localY, localZ, cellsPerBlock, inset);
 	}
 
 	private record EntityFluidContact(double submergedFraction, Vec3 fluidVelocity) {
