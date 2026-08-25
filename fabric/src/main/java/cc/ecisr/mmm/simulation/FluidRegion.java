@@ -143,7 +143,7 @@ public final class FluidRegion {
 		region.debugOverlays = runtime.debugOverlays();
 		region.stepIntervalTicks = runtime.stepIntervalTicks();
 		region.tick = runtime.tick();
-		region.lifecycle.initializeUnloaded();
+		region.lifecycle.initializeUnloaded(runtime.operatorPaused());
 		return region;
 	}
 
@@ -281,7 +281,8 @@ public final class FluidRegion {
 	public PersistedRuntime persistedRuntime() {
 		FluidRegionLifecycle.State resumeState = lifecycle.state() == FluidRegionLifecycle.State.UNLOADED
 				? unloadedResumeState : lifecycle.state();
-		return new PersistedRuntime(resumeState, entityPhysicsEnabled, debugOverlays, stepIntervalTicks, tick);
+		return new PersistedRuntime(resumeState, lifecycle.operatorPaused(), entityPhysicsEnabled,
+				debugOverlays, stepIntervalTicks, tick);
 	}
 
 	/** Records a complete durable generation while keeping the live solver allocated. */
@@ -302,7 +303,7 @@ public final class FluidRegion {
 		return lifecycle.requestUnload(true, true);
 	}
 
-	/** Restores exact marker truth into a fresh solver. The region remains operator-paused. */
+	/** Restores exact marker truth into a fresh solver while preserving the persisted run intent. */
 	public void restoreSolver(FlipParticleState state, long loadedCheckpointGeneration) {
 		Objects.requireNonNull(state, "state");
 		if (domain != null || lifecycle.state() != FluidRegionLifecycle.State.UNLOADED) {
@@ -318,7 +319,7 @@ public final class FluidRegion {
 		lifecycle.restoreFromUnloaded(unloadedResumeState, stepIntervalTicks);
 	}
 
-	/** Restores exact multi-material marker truth into a fresh solver. The region remains operator-paused. */
+	/** Restores exact multi-material marker truth while preserving the persisted run intent. */
 	public void restoreMaterialSolver(FlipMaterialParticleState state, long loadedCheckpointGeneration) {
 		Objects.requireNonNull(state, "state");
 		if (domain != null || lifecycle.state() != FluidRegionLifecycle.State.UNLOADED) {
@@ -353,7 +354,7 @@ public final class FluidRegion {
 		lifecycle.restoreFromUnloaded(unloadedResumeState, stepIntervalTicks);
 	}
 
-	/** Completes a v5 restore after the matching liquid/material generation has been reconstructed. */
+	/** Completes a granular restore after the matching liquid/material generation has been reconstructed. */
 	public void restoreGranularState(
 			GranularStateSnapshot state, GranularRegistry registry, long loadedCheckpointGeneration
 	) {
@@ -364,7 +365,7 @@ public final class FluidRegion {
 		domain.restoreGranularState(state, registry, domain.materialRegistry());
 	}
 
-	/** Completes a v4/v6/v7 gas restore after the matching liquid/material generation. */
+	/** Completes a gas restore after the matching liquid/material generation. */
 	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, long loadedCheckpointGeneration) {
 		Objects.requireNonNull(state, "state"); Objects.requireNonNull(registry, "registry");
 		if (domain == null || loadedCheckpointGeneration != checkpointGeneration || !domain.hasMaterialState()) {
@@ -401,6 +402,7 @@ public final class FluidRegion {
 
 	public record PersistedRuntime(
 			FluidRegionLifecycle.State resumeState,
+			boolean operatorPaused,
 			boolean entityPhysicsEnabled,
 			boolean debugOverlays,
 			int stepIntervalTicks,

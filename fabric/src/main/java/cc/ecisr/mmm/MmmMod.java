@@ -2,6 +2,7 @@ package cc.ecisr.mmm;
 
 import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.item.MmmComponents;
+import cc.ecisr.mmm.item.MmmCreativeEntries;
 import cc.ecisr.mmm.item.MmmItems;
 import cc.ecisr.mmm.item.MmmRecipes;
 import cc.ecisr.mmm.network.FluidProtocolServer;
@@ -27,6 +28,7 @@ public final class MmmMod implements ModInitializer {
 		MmmBlocks.register();
 		MmmComponents.register();
 		MmmItems.register();
+		MmmCreativeEntries.register();
 		MmmRecipes.register();
 		registerDispenserBehaviors();
 		FluidProtocolServer.register();
@@ -42,7 +44,7 @@ public final class MmmMod implements ModInitializer {
 			FluidProtocolServer.clearServer(server);
 			FluidSimulationService.removeServer(server);
 		});
-		LOGGER.info("Matter, Motion & Mechanics bounded 3D prototype initialized");
+		LOGGER.info("Matter, Motion & Mechanics bounded fluid simulation initialized");
 	}
 
 	private static void registerDispenserBehaviors() {

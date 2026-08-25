@@ -43,10 +43,9 @@ public final class FluidRegionLifecycle {
 		if (!paused) wakeForActivity(stepIntervalTicks);
 	}
 
-	/** A partial or invalid region is frozen and requires an explicit run after it becomes ready again. */
+	/** Availability blocks stepping without overwriting the player's persistent run/pause intent. */
 	public void blockAvailability(String failure) {
 		availabilityFailure = Objects.requireNonNull(failure, "failure");
-		operatorPaused = true;
 		quietCompletedSteps = 0;
 	}
 
@@ -86,15 +85,14 @@ public final class FluidRegionLifecycle {
 	/** The caller must prove both publication and solver release before committing UNLOADED. */
 	boolean requestUnload(boolean completeCheckpointPublished, boolean liveSolverReleased) {
 		if (!completeCheckpointPublished || !liveSolverReleased) return false;
-		operatorPaused = true;
 		availabilityFailure = null;
 		quietCompletedSteps = 0;
 		state = State.UNLOADED;
 		return true;
 	}
 
-	void initializeUnloaded() {
-		operatorPaused = true;
+	void initializeUnloaded(boolean persistedOperatorPaused) {
+		operatorPaused = persistedOperatorPaused;
 		availabilityFailure = null;
 		quietCompletedSteps = 0;
 		state = State.UNLOADED;
@@ -104,7 +102,6 @@ public final class FluidRegionLifecycle {
 		if (state != State.UNLOADED) throw new IllegalStateException("Region is not unloaded");
 		if (resumeState == State.UNLOADED) throw new IllegalArgumentException("Resume state cannot be UNLOADED");
 		state = resumeState == State.HYDROSTATIC_SLEEP ? State.HYDROSTATIC_SLEEP : runningState(stepIntervalTicks);
-		operatorPaused = true;
 		availabilityFailure = null;
 		quietCompletedSteps = 0;
 	}

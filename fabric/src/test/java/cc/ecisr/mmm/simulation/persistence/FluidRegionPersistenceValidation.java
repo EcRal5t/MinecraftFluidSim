@@ -445,7 +445,7 @@ public final class FluidRegionPersistenceValidation {
 		region.domain().restoreMaterialParticleState(expected);
 		RegionState state = RegionState.captureMaterial(region, 1L);
 		List<Long> sectionChecksums = state.sections().stream().map(RegionSectionState::checksum).toList();
-		require(state.manifest().checksum() == 3_024_853_648L
+		require(state.manifest().checksum() == 928_090_518L
 				&& sectionChecksums.equals(List.of(
 				3_991_644_778L, 242_506_058L, 583_914_201L, 3_517_038_483L)),
 				"region-state v2 canonical golden bytes changed: manifest=" + state.manifest().checksum()
@@ -497,7 +497,7 @@ public final class FluidRegionPersistenceValidation {
 		RegionState v1State = RegionState.capture(populatedRegion(new UUID(17L, 18L)), 1L);
 		RegionManifest v1Manifest = v1State.manifest();
 		List<Long> v1SectionChecksums = v1State.sections().stream().map(RegionSectionState::checksum).toList();
-		require(v1Manifest.checksum() == 237_095_551L
+		require(v1Manifest.checksum() == 3_602_817_324L
 				&& v1SectionChecksums.equals(List.of(
 				3_894_680_795L, 2_988_587_419L, 4_098_225_719L, 2_990_622_609L)),
 				"region-state v1 canonical golden bytes changed: manifest=" + v1Manifest.checksum()
@@ -673,10 +673,10 @@ public final class FluidRegionPersistenceValidation {
 	private static void validateWorldConfig() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "config-");
 		FluidServerConfig defaults = FluidServerConfig.loadOrCreate(root);
-		require(!defaults.controllersEnabled() && !defaults.materialsEnabled() && !defaults.worldBridgeEnabled()
+		require(defaults.controllersEnabled() && defaults.materialsEnabled() && defaults.worldBridgeEnabled()
 				&& !defaults.chemistryEnabled() && !defaults.granularEnabled() && !defaults.precipitationEnabled()
 				&& !defaults.thermalEnabled() && !defaults.phaseChangeEnabled()
-				&& defaults.limits().maximumRegions() == 4, "safe default config changed");
+				&& defaults.limits().maximumRegions() == 4, "playable default config changed");
 		FluidServerConfig enabled = defaults.withControllersEnabled(true).withMaterialsEnabled(true)
 				.withWorldBridgeEnabled(true).withChemistryEnabled(true).withGranularEnabled(true)
 				.withPrecipitationEnabled(true).withThermalEnabled(true).withPhaseChangeEnabled(true);

@@ -101,7 +101,7 @@ public record FluidServerConfig(
 	}
 
 	public static FluidServerConfig defaults() {
-		return new FluidServerConfig(false, false, false, false, new FluidRegionManager.Limits(DEFAULT_REGIONS, DEFAULT_CELLS, DEFAULT_MARKERS,
+		return new FluidServerConfig(true, true, true, false, new FluidRegionManager.Limits(DEFAULT_REGIONS, DEFAULT_CELLS, DEFAULT_MARKERS,
 				DEFAULT_CELLS * DEFAULT_REGIONS, DEFAULT_MARKERS * DEFAULT_REGIONS));
 	}
 

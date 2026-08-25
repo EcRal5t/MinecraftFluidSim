@@ -17,8 +17,11 @@
   "item.mmm.granular_container.reactive": "    Reactive composition: %s species",
   "item.mmm.chemical_indicator": "Universal Chemical Indicator",
   "item.mmm.chemical_eraser": "Chemical Indicator Eraser",
-  "message.mmm.controller.activated": "Controller region ready: %s interior blocks, %sx%sx%s dense bounds, %s required chunks. The read-only captured domain is paused.",
-  "message.mmm.controller.selected": "Selected the existing controller region: %s interior blocks, %sx%sx%s dense bounds, %s required chunks. Its marker volume was preserved and availability was rechecked.",
+  "message.mmm.controller.activated": "Controller region activated and running: %s interior blocks, %sx%sx%s dense bounds, %s required chunks. Sneak-use it with an empty hand to pause.",
+  "message.mmm.controller.selected_running": "Selected a running controller region: %s interior blocks, %sx%sx%s dense bounds, %s required chunks.",
+  "message.mmm.controller.selected_paused": "Selected a paused controller region: %s interior blocks, %sx%sx%s dense bounds, %s required chunks. Sneak-use it with an empty hand to resume.",
+  "message.mmm.controller.paused": "Controller region paused: %s interior blocks, %sx%sx%s dense bounds, %s required chunks.",
+  "message.mmm.controller.resumed": "Controller region resumed: %s interior blocks, %sx%sx%s dense bounds, %s required chunks.",
   "message.mmm.controller.disabled": "Matter, Motion & Mechanics controllers are disabled. An administrator must run /mmm controllers true.",
   "message.mmm.controller.failed": "Controller activation refused: %s"
 }

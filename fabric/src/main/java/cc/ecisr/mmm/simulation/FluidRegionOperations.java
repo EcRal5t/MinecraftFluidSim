@@ -330,7 +330,6 @@ final class FluidRegionOperations {
 				continue;
 			}
 
-			region.setPaused(true);
 			try {
 				long generation = persistence.checkpoint(region);
 				MmmMod.LOGGER.info("Published shutdown checkpoint {} for controller region {}", generation, region.id());

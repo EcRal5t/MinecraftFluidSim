@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {
+    "C": "minecraft:comparator",
+    "I": "minecraft:iron_ingot",
+    "R": "minecraft:redstone"
+  },
+  "pattern": [
+    "IRI",
+    "RCR",
+    "IRI"
+  ],
+  "result": {
+    "id": "mmm:fluid_controller"
+  }
+}

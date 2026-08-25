@@ -141,7 +141,8 @@ final class RegionStateIntegrity {
 
 	private static void writeRuntime(DataOutputStream out, FluidRegion.PersistedRuntime runtime) throws IOException {
 		out.writeUTF(runtime.resumeState().name());
-		out.writeBoolean(runtime.entityPhysicsEnabled()); out.writeBoolean(runtime.debugOverlays());
+		out.writeBoolean(runtime.operatorPaused()); out.writeBoolean(runtime.entityPhysicsEnabled());
+		out.writeBoolean(runtime.debugOverlays());
 		out.writeInt(runtime.stepIntervalTicks()); out.writeLong(runtime.tick());
 	}
 

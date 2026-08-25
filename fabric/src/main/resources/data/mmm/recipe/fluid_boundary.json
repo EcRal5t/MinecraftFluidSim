@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "building",
+  "key": {
+    "G": "minecraft:glass",
+    "I": "minecraft:iron_ingot"
+  },
+  "pattern": [
+    "IGI",
+    "GGG",
+    "IGI"
+  ],
+  "result": {
+    "count": 16,
+    "id": "mmm:fluid_boundary"
+  }
+}

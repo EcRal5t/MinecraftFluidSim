@@ -374,17 +374,19 @@ final class RegionStateCodec {
 
 	private static CompoundTag encodeRuntime(FluidRegion.PersistedRuntime runtime) {
 		CompoundTag tag = new CompoundTag();
-		tag.putString("ResumeState", runtime.resumeState().name()); tag.putBoolean("EntityPhysics", runtime.entityPhysicsEnabled());
+		tag.putString("ResumeState", runtime.resumeState().name()); tag.putBoolean("OperatorPaused", runtime.operatorPaused());
+		tag.putBoolean("EntityPhysics", runtime.entityPhysicsEnabled());
 		tag.putBoolean("Debug", runtime.debugOverlays()); tag.putInt("StepInterval", runtime.stepIntervalTicks()); tag.putLong("Tick", runtime.tick());
 		return tag;
 	}
 
 	private static FluidRegion.PersistedRuntime decodeRuntime(CompoundTag tag) throws IOException {
-		require(tag, "ResumeState", Tag.TAG_STRING); require(tag, "EntityPhysics", Tag.TAG_BYTE); require(tag, "Debug", Tag.TAG_BYTE);
+		require(tag, "ResumeState", Tag.TAG_STRING); require(tag, "OperatorPaused", Tag.TAG_BYTE);
+		require(tag, "EntityPhysics", Tag.TAG_BYTE); require(tag, "Debug", Tag.TAG_BYTE);
 		require(tag, "StepInterval", Tag.TAG_INT); require(tag, "Tick", Tag.TAG_LONG);
 		try {
 			return new FluidRegion.PersistedRuntime(FluidRegionLifecycle.State.valueOf(tag.getStringOr("ResumeState", "")),
-					tag.getBooleanOr("EntityPhysics", false), tag.getBooleanOr("Debug", false),
+					tag.getBooleanOr("OperatorPaused", true), tag.getBooleanOr("EntityPhysics", false), tag.getBooleanOr("Debug", false),
 					tag.getIntOr("StepInterval", -1), tag.getLongOr("Tick", -1L));
 		} catch (IllegalArgumentException exception) {
 			throw new IOException("Invalid persisted runtime", exception);

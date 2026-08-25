@@ -10,7 +10,7 @@ public final class FluidRegionLifecycleValidation {
 
 	public static void main(String[] args) {
 		validatePacingAndOperatorPause();
-		validateAvailabilityRequiresExplicitResume();
+		validateAvailabilityPreservesRunIntent();
 		validateHydrostaticSleepAndWake();
 		validateHydrostaticSleepPreservesMarkerLedger();
 		validateUnloadRequiresPublishedCheckpointAndReleasedSolver();
@@ -52,14 +52,18 @@ public final class FluidRegionLifecycleValidation {
 				"operator pause was confused with scheduling state");
 	}
 
-	private static void validateAvailabilityRequiresExplicitResume() {
+	private static void validateAvailabilityPreservesRunIntent() {
 		FluidRegionLifecycle lifecycle = running();
 		lifecycle.blockAvailability("required chunk missing");
-		require(!lifecycle.canStep() && lifecycle.operatorPaused(), "availability failure did not freeze the whole region");
+		require(!lifecycle.canStep() && !lifecycle.operatorPaused(),
+				"availability failure overwrote the running intent");
 		lifecycle.clearAvailabilityBlock();
-		require(!lifecycle.canStep(), "availability recovery silently resumed a previously partial region");
-		lifecycle.setOperatorPaused(false, 1);
-		require(lifecycle.canStep(), "explicit resume after availability recovery failed");
+		require(lifecycle.canStep(), "availability recovery did not restore the running intent");
+		lifecycle.setOperatorPaused(true, 1);
+		lifecycle.blockAvailability("required chunk missing");
+		lifecycle.clearAvailabilityBlock();
+		require(!lifecycle.canStep() && lifecycle.operatorPaused(),
+				"availability recovery resumed an operator-paused region");
 	}
 
 	private static void validateHydrostaticSleepAndWake() {
@@ -84,10 +88,10 @@ public final class FluidRegionLifecycleValidation {
 		require(lifecycle.state() == FluidRegionLifecycle.State.ACTIVE && lifecycle.canStep(),
 				"refused unload changed live scheduling state");
 		require(lifecycle.requestUnload(true, true), "complete checkpoint/release transition was rejected");
-		require(lifecycle.state() == FluidRegionLifecycle.State.UNLOADED && !lifecycle.canStep(),
-				"UNLOADED lifecycle remained runnable");
-		lifecycle.setOperatorPaused(false, 1);
-		require(lifecycle.operatorPaused() && !lifecycle.canStep(), "run bypassed the UNLOADED restore gate");
+		require(lifecycle.state() == FluidRegionLifecycle.State.UNLOADED && !lifecycle.canStep()
+				&& !lifecycle.operatorPaused(), "UNLOADED lifecycle lost its running intent");
+		lifecycle.restoreFromUnloaded(FluidRegionLifecycle.State.ACTIVE, 1);
+		require(lifecycle.canStep(), "restored lifecycle did not resume its persisted running intent");
 	}
 
 	private static FluidRegionLifecycle running() {

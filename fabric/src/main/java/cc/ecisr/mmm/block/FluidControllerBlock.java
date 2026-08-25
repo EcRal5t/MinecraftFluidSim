@@ -30,14 +30,17 @@ final class FluidControllerBlock extends Block {
 		if (!(player instanceof ServerPlayer serverPlayer)) return InteractionResult.PASS;
 
 		FluidSimulationService.ControllerActivation result = FluidSimulationService.get(level.getServer())
-				.activateController(serverPlayer, position);
+				.activateController(serverPlayer, position, player.isShiftKeyDown());
 		if (result.succeeded()) {
-			player.sendSystemMessage(Component.translatable(
-					result.selectedExisting()
-							? "message.mmm.controller.selected"
-							: "message.mmm.controller.activated",
-					result.interiorBlocks(), result.sizeX(), result.sizeY(), result.sizeZ(), result.requiredChunks()
-			));
+			String message = switch (result.action()) {
+				case CREATED -> "message.mmm.controller.activated";
+				case SELECTED_RUNNING -> "message.mmm.controller.selected_running";
+				case SELECTED_PAUSED -> "message.mmm.controller.selected_paused";
+				case PAUSED -> "message.mmm.controller.paused";
+				case RESUMED -> "message.mmm.controller.resumed";
+			};
+			player.sendSystemMessage(Component.translatable(message, result.interiorBlocks(), result.sizeX(),
+					result.sizeY(), result.sizeZ(), result.requiredChunks()));
 		} else if (result.disabled()) {
 			player.sendSystemMessage(Component.translatable("message.mmm.controller.disabled"));
 		} else {

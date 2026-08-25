@@ -17,8 +17,11 @@
   "item.mmm.granular_container.reactive": "    反应性组成：%s 种 species",
   "item.mmm.chemical_indicator": "通用化学指示剂",
   "item.mmm.chemical_eraser": "化学指示剂抹除器",
-  "message.mmm.controller.activated": "控制器区域已就绪：%s 个内部方块，致密范围 %sx%sx%s，关联 %s 个完整加载区块；只读捕获域当前暂停。",
-  "message.mmm.controller.selected": "已选择现有控制器区域：%s 个内部方块，致密范围 %sx%sx%s，关联 %s 个区块；保留原 marker 水量，并重新检查可用性。",
+  "message.mmm.controller.activated": "控制器区域已激活并自动运行：%s 个内部方块，致密范围 %sx%sx%s，关联 %s 个完整加载区块。潜行空手使用控制器可暂停。",
+  "message.mmm.controller.selected_running": "已选择正在运行的控制器区域：%s 个内部方块，致密范围 %sx%sx%s，关联 %s 个区块。",
+  "message.mmm.controller.selected_paused": "已选择暂停中的控制器区域：%s 个内部方块，致密范围 %sx%sx%s，关联 %s 个区块；潜行空手使用可继续。",
+  "message.mmm.controller.paused": "控制器区域已暂停：%s 个内部方块，致密范围 %sx%sx%s，关联 %s 个区块。",
+  "message.mmm.controller.resumed": "控制器区域已继续运行：%s 个内部方块，致密范围 %sx%sx%s，关联 %s 个区块。",
   "message.mmm.controller.disabled": "物质、运动与力学控制器功能门尚未开启；管理员需先执行 /mmm controllers true。",
   "message.mmm.controller.failed": "控制器激活被拒绝：%s"
 }

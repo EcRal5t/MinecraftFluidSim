@@ -797,7 +797,7 @@ public final class FluidSimulationService {
 
 	/** Returns null on success; the world-local flag is durably replaced before runtime state changes. */
 	public String setControllerFeatureEnabled(boolean enabled) {
-		if (serverConfigLocked) return "server.properties 未通过 v1 校验；原文件已保留，请修复后重启服务器";
+		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
 		FluidServerConfig replacement = serverConfig.withControllersEnabled(enabled);
 		try {
 			replacement.save(worldRoot);
@@ -926,6 +926,12 @@ public final class FluidSimulationService {
 	}
 
 	public ControllerActivation activateController(ServerPlayer player, BlockPos controllerPosition) {
+		return activateController(player, controllerPosition, false);
+	}
+
+	public ControllerActivation activateController(
+			ServerPlayer player, BlockPos controllerPosition, boolean toggleRunning
+	) {
 		if (!controllerFeatureEnabled) return ControllerActivation.DISABLED;
 		if (hasContainerTransferStoreIssues()) {
 			return ControllerActivation.failed("container-transfer 恢复目录含未知或损坏内容；已全局锁住新控制器，详见日志");
@@ -940,9 +946,24 @@ public final class FluidSimulationService {
 			if (existingFootprint == null || !existing.dimension().equals(level.dimension())
 					|| !existingFootprint.controllerPosition().equals(controllerPosition)) continue;
 			regionManager.select(existing.id());
-			ensureRegionAvailable(level, existing);
+			if (!ensureRegionAvailable(level, existing)) {
+				return ControllerActivation.failed("控制器区域当前不可用：" + existing.availabilityFailure());
+			}
+			ControllerAction action;
+			if (toggleRunning) {
+				if (existing.paused()) {
+					existing.setPaused(false);
+					existing.wakeForActivity();
+					action = ControllerAction.RESUMED;
+				} else {
+					existing.setPaused(true);
+					action = ControllerAction.PAUSED;
+				}
+			} else {
+				action = existing.paused() ? ControllerAction.SELECTED_PAUSED : ControllerAction.SELECTED_RUNNING;
+			}
 			sendSnapshot(level);
-			return ControllerActivation.selected(existingFootprint);
+			return ControllerActivation.succeeded(existingFootprint, action);
 		}
 		if (regionOperations.creationLocked() || !ownershipIssues.isEmpty()) {
 			return ControllerActivation.failed("存在未解决或超预算的 region-state/ownership；已锁住新控制器区域，详见 /mmm regions list、/mmm ownership 与日志");
@@ -984,7 +1005,8 @@ public final class FluidSimulationService {
 		refreshCollisions(level, candidate);
 		FluidRegionFactory.captureVanillaWater(level, candidate);
 		bindConfiguredState(candidate.domain());
-		candidate.setPaused(true);
+		candidate.setPaused(false);
+		candidate.wakeForActivity();
 		try {
 			if (worldBridgeFeatureEnabled) {
 				regionOperations.acquireOwnership(level, candidate);
@@ -2818,8 +2840,8 @@ public final class FluidSimulationService {
 
 	public record ControllerActivation(
 			boolean succeeded,
-			boolean selectedExisting,
 			boolean disabled,
+			ControllerAction action,
 			String failure,
 			int interiorBlocks,
 			int sizeX,
@@ -2828,28 +2850,32 @@ public final class FluidSimulationService {
 			int requiredChunks
 	) {
 		private static final ControllerActivation DISABLED = new ControllerActivation(
-				false, false, true, "controller feature flag is disabled", 0, 0, 0, 0, 0
+				false, true, null, "controller feature flag is disabled", 0, 0, 0, 0, 0
 		);
 
 		private static ControllerActivation failed(String failure) {
-			return new ControllerActivation(false, false, false, failure, 0, 0, 0, 0, 0);
+			return new ControllerActivation(false, false, null, failure, 0, 0, 0, 0, 0);
 		}
 
 		private static ControllerActivation created(FluidRegionFootprint footprint) {
-			return succeeded(footprint, false);
+			return succeeded(footprint, ControllerAction.CREATED);
 		}
 
-		private static ControllerActivation selected(FluidRegionFootprint footprint) {
-			return succeeded(footprint, true);
-		}
-
-		private static ControllerActivation succeeded(FluidRegionFootprint footprint, boolean selectedExisting) {
+		private static ControllerActivation succeeded(FluidRegionFootprint footprint, ControllerAction action) {
 			return new ControllerActivation(
-					true, selectedExisting, false, null, footprint.interiorBlocks().size(),
+					true, false, action, null, footprint.interiorBlocks().size(),
 					footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ(),
 					footprint.requiredChunks().size()
 			);
 		}
+	}
+
+	public enum ControllerAction {
+		CREATED,
+		SELECTED_RUNNING,
+		SELECTED_PAUSED,
+		PAUSED,
+		RESUMED
 	}
 
 	public record RestorationStats(
