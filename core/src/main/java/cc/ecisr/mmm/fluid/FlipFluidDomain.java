@@ -37,6 +37,7 @@ import cc.ecisr.mmm.thermal.CoherentPhaseStore;
 import cc.ecisr.mmm.thermal.CondensedMassScale;
 import cc.ecisr.mmm.thermal.GranularEnergyColumn;
 import cc.ecisr.mmm.thermal.GasLiquidPhaseModel;
+import cc.ecisr.mmm.thermal.FiniteThermalExchange;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
@@ -1501,6 +1502,64 @@ public final class FlipFluidDomain {
 	public double thermalTemperatureInCell(int x, int y, int z) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		return thermalState.temperatureInCell(cellIndexChecked(x, y, z), thermalMarkerContext());
+	}
+
+	public record ThermalContactRequest(
+			int ordinal, int cellX, int cellY, int cellZ, double conductanceEuPerSecondK
+	) {
+		public ThermalContactRequest {
+			if (ordinal < 0 || !(Double.isFinite(conductanceEuPerSecondK) && conductanceEuPerSecondK > 0.0)) {
+				throw new IllegalArgumentException("Finite thermal contact request is invalid");
+			}
+		}
+	}
+
+	public List<FiniteThermalExchange.Contact> finiteThermalContacts(List<ThermalContactRequest> requests) {
+		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		if (requests == null) throw new IllegalArgumentException("Finite thermal contact requests are missing");
+		ArrayList<FlipThermalState.CellContactRequest> mapped = new ArrayList<>(requests.size());
+		for (ThermalContactRequest request : requests) {
+			if (request == null) throw new IllegalArgumentException("Finite thermal contact requests contain null");
+			mapped.add(new FlipThermalState.CellContactRequest(
+					cellIndexChecked(request.cellX(), request.cellY(), request.cellZ()), request.ordinal(),
+					request.conductanceEuPerSecondK()));
+		}
+		return thermalState.finiteDeviceContacts(mapped, thermalMarkerContext());
+	}
+
+	public record ThermalCellEnergyDelta(int cellX, int cellY, int cellZ, double internalEnergyDeltaEu) {
+		public ThermalCellEnergyDelta {
+			if (!Double.isFinite(internalEnergyDeltaEu)) {
+				throw new IllegalArgumentException("Finite thermal cell energy delta is invalid");
+			}
+		}
+	}
+
+	public static final class FiniteThermalCellPlan {
+		private final FlipThermalState.FiniteDeviceCellPlan delegate;
+		private FiniteThermalCellPlan(FlipThermalState.FiniteDeviceCellPlan delegate) {
+			this.delegate = java.util.Objects.requireNonNull(delegate, "delegate");
+		}
+		public SignedDyadic requestedDelta() { return delegate.requestedDelta(); }
+	}
+
+	public FiniteThermalCellPlan planFiniteThermalCellExchange(List<ThermalCellEnergyDelta> deltas) {
+		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		if (deltas == null) throw new IllegalArgumentException("Finite thermal cell deltas are missing");
+		ArrayList<FlipThermalState.CellEnergyDelta> mapped = new ArrayList<>(deltas.size());
+		for (ThermalCellEnergyDelta delta : deltas) {
+			if (delta == null) throw new IllegalArgumentException("Finite thermal cell deltas contain null");
+			mapped.add(new FlipThermalState.CellEnergyDelta(
+					cellIndexChecked(delta.cellX(), delta.cellY(), delta.cellZ()), delta.internalEnergyDeltaEu()));
+		}
+		return new FiniteThermalCellPlan(thermalState.planFiniteDeviceCellExchange(mapped, thermalMarkerContext()));
+	}
+
+	public void commitFiniteThermalCellExchange(FiniteThermalCellPlan plan) {
+		if (thermalState == null || plan == null) {
+			throw new IllegalArgumentException("Finite thermal cell exchange is unavailable");
+		}
+		thermalState.commitFiniteDeviceCellExchange(plan.delegate, thermalMarkerContext());
 	}
 
 	public ThermalDisplaySnapshot copyThermalDisplaySnapshot() {

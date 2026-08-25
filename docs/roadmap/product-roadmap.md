@@ -110,7 +110,7 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 ### 有限热容量换热器
 
-固定温度 boundary 仍是无限热浴。纯 core 已有有限设备状态与多端口交换 planner：设备保存 registry-bound material、kg、总 `U` 和 generation，两侧只通过各自总 conductance 交换镜像热通量，且有三方能量/roundoff 审计；该路径不平均温度，也没有物质字段。非空设备集合已经作为 region HEAD 的 manifest-only 真值持久化，provider/object 仅提供稳定 locator，不能从 BlockEntity 或外部 Mod 状态反向结算能量。尚缺世界对象 enrollment、接触端口生成、region energy candidate 应用；跨多个区域的设备还需要 multi-HEAD 协调，所以目前不把 planner 伪装成可放置的生产换热器。完成单区域原子路径后，再扩展多方块网络、流向和其他工业 Mod 端口。
+固定温度 boundary 仍是无限热浴。纯 core 已有有限设备状态与多端口交换 planner：设备保存 registry-bound material、kg、总 `U` 和 generation，两侧只通过各自总 conductance 交换镜像热通量；该路径不平均温度，也没有物质字段。非空设备集合已经作为 region HEAD 的 manifest-only 真值持久化，provider/object 仅提供稳定 locator，不能从 BlockEntity 或外部 Mod 状态反向结算能量。同一区域的 body/cell candidate 已能在修改前联合验证并一次应用，solver/device 分列 exchange 与 roundoff，下一 HEAD 同代发布。尚缺世界对象 enrollment、真实接触几何和生产 tick 调度；跨多个区域的设备还需要 multi-HEAD 协调，所以目前不把这条内核路径伪装成可放置的生产换热器。完成世界端口后，再扩展多方块网络、流向和其他工业 Mod 端口。
 
 ## 实体双向耦合
 

@@ -62,7 +62,7 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 | 颗粒 | active/deposit 的 SVQ、质量、材料、组成、孔隙率和审计 | bulk fill、显示高度、sample |
 | 连续固相 | coherent group 的 SVQ、质量、组成和总内能 | 固相显示 fraction |
 | 气体 | component standard-volume nanos、质量、species/residual、节点总内能和 source/sink | 温度、绝对压力、密度、孔流速度 |
-| 热学 | 每个物质载体的总内能、external source/sink、mechanical work 和 roundoff | 温度、热容、LTE grid、浮力修正 |
+| 热学 | 每个物质载体的总内能、external source/sink、mechanical work、finite-device exchange 和 roundoff | 温度、热容、LTE grid、浮力修正 |
 | 有限热设备 | region HEAD 内按 provider/object 定位的 kg、总内能与 generation | 世界位置、接触端口、温度、换热 UI |
 | 世界 | region HEAD、ownership committed/WAL、actor durable item state | controller UI、status、debug layer |
 

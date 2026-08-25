@@ -1800,7 +1800,8 @@ public final class FluidSimulationService {
 		ThermalAuditLedger after = domain.thermalAudit();
 		boolean gasActivity = !after.externalSource().equals(before.externalSource())
 				|| !after.externalSink().equals(before.externalSink())
-				|| !after.mechanicalWork().equals(before.mechanicalWork());
+				|| !after.mechanicalWork().equals(before.mechanicalWork())
+				|| !after.finiteDeviceExchange().equals(before.finiteDeviceExchange());
 		boolean chemistryDirty = domain.lastChemicalReactionStats().changedMarkers() != 0;
 		boolean granularDirty = domain.lastPhaseTransferStats().transfers() != 0
 				|| carrierMotion && (domain.lastGranularDepositStats().settledParcels() != 0
@@ -2152,10 +2153,11 @@ public final class FluidSimulationService {
 						condensed.operations(), gas.operations(),
 						condensed.operations() + gas.operations() == phaseBudget ? "/" + phaseBudget + " budget-hit" : "",
 						gas.boiledCells(), gas.condensedCells());
-		return String.format("thermal %s T=%s U=%.6g EU source=%.6g sink=%.6g work=%.6g coherent=%d SVQ phase=%s pending-work=%s audit=%s",
+		return String.format("thermal %s T=%s U=%.6g EU source=%.6g sink=%.6g work=%.6g device=%.6g coherent=%d SVQ phase=%s pending-work=%s audit=%s",
 				activity == null ? "unbound" : activity.state(), temperature, domain.totalInternalEnergy(),
 				audit.externalSource().toDouble(), audit.externalSink().toDouble(),
-				audit.mechanicalWork().toDouble(), domain.totalCoherentSolidVolumeSvq(), phase,
+				audit.mechanicalWork().toDouble(), audit.finiteDeviceExchange().toDouble(),
+				domain.totalCoherentSolidVolumeSvq(), phase,
 				domain.hasPendingPhaseVolumeWork() ? "yes" : "no",
 				domain.exactInternalEnergy().equals(audit.expectedInventory()) ? "closed" : "FAILED");
 	}

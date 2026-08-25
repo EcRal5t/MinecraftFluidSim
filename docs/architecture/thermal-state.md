@@ -66,7 +66,7 @@ caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线�
 
 `FiniteThermalExchange` 对一个设备 body 和最多 16 个独立流体能量端口做有界显式规划。每个端口提供当前温度、当前 caloric interval 内的热容、包含流体/壁面/接触面积热阻的总 conductance，以及该线性化的温度有效域。每个 substep 使用同一 body 温度计算镜像通量，设备 `U` 的变化与各端口增量加总，并把 IEEE-754 总和差记为 exact dyadic roundoff。稳定步长同时受设备完整物性域内最小 `0.5*C_body/sum(G)` 与每个 `0.5*C_port/G_port` 限制；不能只取设备初始温度的热容，否则跨入低热容 caloric segment 后会失稳。超过冻结 substep 预算或任一方越出物性域时整体拒绝计划。
 
-这个 planner 不搬运任何物质，也没有世界、region HEAD 或 block entity 提交权。同一区域内的 body 与流体候选必须进入同一个 checkpoint 后再由 HEAD 一次发布；接触多个区域时必须先验证全部 candidate，再通过跨 region HEAD 协调提交。当前尚未接入世界对象 enrollment、接触端口生成和 candidate 应用，因此固定温度 boundary 仍是唯一生产世界热边界，不能把有限设备降级成每 tick 改 setpoint。
+这个 planner 不搬运任何物质，也没有世界、region HEAD 或 block entity 提交权。同一区域路径先批量重建一次 LTE grid，冻结每个独立 cell port 的温度、热容和共同有效域；同一 cell 的多面 conductance 必须先聚合，不能伪装成多个能量 owner。body candidate、所有 cell `delta U`、solver `finiteDeviceExchange` 与两侧 roundoff 全部预检后才修改载体，提交异常会恢复 carrier U；下一 checkpoint 把 body 与流体一起交给 HEAD。接触多个区域时不得调用这条单区域路径，必须先验证全部 candidate，再通过跨 region HEAD 协调提交。当前尚未接入世界对象 enrollment、接触几何生成和生产 tick 调度，因此固定温度 boundary 仍是唯一生产世界热边界。
 
 ### 有限体积离散
 
@@ -170,10 +170,10 @@ species reference offset 是组成携带的能量真值。reaction extent 改变
 ```text
 U_inventory
 = U_initial + external_source - external_sink
- + mechanical_work + roundoff_residual
+ + mechanical_work + finite_device_exchange + roundoff_residual
 ```
 
-`U_inventory` 分别汇总 liquid marker、active parcel、deposit、coherent group 和 gas node。载体间 conduction、reaction carrier handoff、phase transfer、gas merge/split 都是内部转移，不进入 external source/sink；只有 ownership 边界物质进出、固定温度 reservoir 或 operator source 才改变外部列。audit 不闭合时保留候选前状态并 PAUSED，不能通过重算温度“修好”。
+`U_inventory` 分别汇总 liquid marker、active parcel、deposit、coherent group 和 gas node。载体间 conduction、reaction carrier handoff、phase transfer、gas merge/split 都是内部转移，不进入 external source/sink；只有 ownership 边界物质进出、固定温度 reservoir 或 operator source 才改变外部列。有限设备位于 solver carrier 边界外、region HEAD 边界内：流体侧把实际请求量记入 `finite_device_exchange`，cell 分配舍入只进 solver roundoff；设备侧独立保存相反的 `solver_exchange` 与 planner roundoff，并要求 body 总 `U` 等于其 expected inventory。两份 roundoff 相加必须等于 region 内 body+fluid 的实际总 `U` 变化。audit 不闭合时保留候选前状态并 PAUSED，不能通过重算温度“修好”。
 
 ## 持久化与容器
 
@@ -190,6 +190,6 @@ motion 和 thermal activity 是正交轴。只有温度残差、边界通量、�
 
 `status` 可读取全域温度范围、总 `U`、source/sink/work、phase batch 和气体节点摘要。Query API 可返回单格权威载体反演出的可选温度；查询只读 marker/side columns，不唤醒、不建网格，也不回写热状态。
 
-thermal activity 与 motion pacing 相互独立：有 face transfer、reservoir exchange、chemistry/granular/phase dirty、gas activity、carrier motion、pending work 或未闭合 audit 时保持 ACTIVE；连续安静观察先进入 REDUCED，再进入 SLEEP。boundary、容器、管理员 source、化学、颗粒、气体、相变或 carrier movement 都是精确唤醒原因。
+thermal activity 与 motion pacing 相互独立：有 face transfer、reservoir exchange、finite-device exchange、chemistry/granular/phase dirty、gas activity、carrier motion、pending work 或未闭合 audit 时保持 ACTIVE；连续安静观察先进入 REDUCED，再进入 SLEEP。boundary、容器、管理员 source、有限设备、化学、颗粒、气体、相变或 carrier movement 都是精确唤醒原因。
 
 以下失败属于 PAUSED 而非 LOCKED：候选温度/压力越出已知物性范围、显式传导 substep 超预算、phase candidate 无法闭合或运行时 audit 失败。registry identity、持久 payload、ordinal/generation 身份不明则属于 LOCKED；两者都禁止猜测修复。

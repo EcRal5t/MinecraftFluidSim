@@ -29,7 +29,7 @@ final class ThermalRegionStateCodec {
 	private static final int KNOWN_CAPABILITIES = CAP_MATERIALS | CAP_CHEMISTRY | CAP_GRANULAR | CAP_GAS | CAP_THERMAL;
 	private static final int MANIFEST_MAGIC = 0x5257544d; // RWTM
 	private static final int SECTION_MAGIC = 0x52575453; // RWTS
-	private static final int PAYLOAD_VERSION = 1;
+	private static final int PAYLOAD_VERSION = 2;
 	private static final int MAX_DYADIC_BYTES = ThermalLimits.MAX_DYADIC_SIGNIFICAND_BITS / 8 + 2;
 
 	byte[] encodeManifest(ManifestData data) throws IOException {
@@ -206,7 +206,8 @@ final class ThermalRegionStateCodec {
 
 	private static void writeAudit(DataOutputStream out, ThermalAuditLedger audit) throws IOException {
 		writeDyadic(out, audit.initialInventory()); writeDyadic(out, audit.externalSource());
-		writeDyadic(out, audit.externalSink()); writeDyadic(out, audit.mechanicalWork()); writeDyadic(out, audit.roundoffResidual());
+		writeDyadic(out, audit.externalSink()); writeDyadic(out, audit.mechanicalWork());
+		writeDyadic(out, audit.finiteDeviceExchange()); writeDyadic(out, audit.roundoffResidual());
 	}
 	private static void writeComposition(
 			DataOutputStream out, CoherentPhaseStore.Composition composition
@@ -232,7 +233,8 @@ final class ThermalRegionStateCodec {
 		return new CoherentPhaseStore.Composition(components, residualBits);
 	}
 	private static ThermalAuditLedger readAudit(DataInputStream input) throws IOException {
-		return new ThermalAuditLedger(readDyadic(input), readDyadic(input), readDyadic(input), readDyadic(input), readDyadic(input));
+		return new ThermalAuditLedger(readDyadic(input), readDyadic(input), readDyadic(input),
+				readDyadic(input), readDyadic(input), readDyadic(input));
 	}
 	private static void writeDyadic(DataOutputStream out, SignedDyadic value) throws IOException {
 		byte[] significand = value.significand().toByteArray();

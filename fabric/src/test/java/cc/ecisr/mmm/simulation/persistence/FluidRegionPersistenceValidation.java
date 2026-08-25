@@ -26,9 +26,11 @@ import cc.ecisr.mmm.thermal.CoherentPhaseStore;
 import cc.ecisr.mmm.thermal.FiniteThermalBodyState;
 import cc.ecisr.mmm.thermal.FiniteThermalDeviceInventory;
 import cc.ecisr.mmm.thermal.FiniteThermalDeviceState;
+import cc.ecisr.mmm.thermal.FiniteThermalExchange;
 import cc.ecisr.mmm.thermal.SignedDyadic;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
+import cc.ecisr.mmm.thermal.ThermalTransport;
 import cc.ecisr.mmm.simulation.FluidRegion;
 import cc.ecisr.mmm.simulation.FluidRegionLifecycle;
 import cc.ecisr.mmm.simulation.FluidRegionManager;
@@ -129,6 +131,33 @@ public final class FluidRegionPersistenceValidation {
 		region.domain().setThermalTemperatureInCell(5, 3, 5, 280.0);
 		region.domain().addCoherentPhaseExternal(3, 2, 3, "mmm:thermal/persistence_solid",
 				SolidVolume.SVQ_PER_CELL / 8L, 0.125, null, 6.25);
+		SignedDyadic fluidBeforeDeviceExchange = region.domain().exactInternalEnergy();
+		SignedDyadic deviceBeforeExchange = expectedDevices.exactInternalEnergy();
+		SignedDyadic fluidRoundoffBefore = region.domain().thermalAudit().roundoffResidual();
+		SignedDyadic deviceRoundoffBefore = expectedDevices.audit().roundoffResidual();
+		List<FiniteThermalExchange.Contact> deviceContacts = region.domain().finiteThermalContacts(List.of(
+				new FlipFluidDomain.ThermalContactRequest(0, 2, 1, 2, 10.0),
+				new FlipFluidDomain.ThermalContactRequest(1, 1, 1, 1, 5.0)));
+		FiniteThermalExchange.Plan deviceExchange = FiniteThermalExchange.plan(thermal,
+				expectedDevices.devices().getFirst().body(), deviceContacts,
+				1.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		region.lifecycle().setOperatorPaused(false, 1);
+		require(region.commitFiniteThermalExchange("mmm:fabric_block", "mmm:persistence/4/5/6",
+				deviceExchange, List.of(
+						new FluidRegion.FiniteThermalCellBinding(0, 2, 1, 2),
+						new FluidRegion.FiniteThermalCellBinding(1, 1, 1, 1)), thermal),
+				"finite thermal device exchange was not committed");
+		expectedDevices = region.finiteThermalDevices(thermal.fingerprint());
+		SignedDyadic combinedDelta = region.domain().exactInternalEnergy().subtract(fluidBeforeDeviceExchange)
+				.add(expectedDevices.exactInternalEnergy().subtract(deviceBeforeExchange));
+		SignedDyadic combinedRoundoff = region.domain().thermalAudit().roundoffResidual()
+				.subtract(fluidRoundoffBefore)
+				.add(expectedDevices.audit().roundoffResidual().subtract(deviceRoundoffBefore));
+		require(deviceExchange.after().generation() == 8L
+				&& region.domain().exactInternalEnergy().equals(region.domain().thermalAudit().expectedInventory())
+				&& expectedDevices.exactInternalEnergy().equals(expectedDevices.audit().expectedInventory())
+				&& combinedDelta.equals(combinedRoundoff),
+				"finite device/body/cell exchange did not close its combined audit");
 		PendingPhaseVolumeState expectedPending = new PendingPhaseVolumeState(
 				region.sizeX() * region.sizeY() * region.sizeZ(), List.of(
 				new PendingPhaseVolumeState.Entry((1 * region.sizeY() + 1) * region.sizeX() + 1,

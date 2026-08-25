@@ -28,6 +28,7 @@ import cc.ecisr.mmm.thermal.CondensedMassScale;
 import cc.ecisr.mmm.thermal.FiniteThermalBodyState;
 import cc.ecisr.mmm.thermal.FiniteThermalExchange;
 import cc.ecisr.mmm.thermal.ThermalBoundaryDefinition;
+import cc.ecisr.mmm.thermal.ThermalCellGrid;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalDefinitionCodec;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
@@ -1702,6 +1703,21 @@ public final class M9ThermalValidation {
 		FiniteThermalBodyState segmentedBody = new FiniteThermalBodyState(1L,
 				segmentedRegistry.fingerprint(), segmented.id(), 1.0,
 				segmentedState.internalEnergyAtTemperature(0, 1.0, Map.of(), 400.0));
+		double[] segmentedCellEnergy = {segmentedBody.internalEnergyEu()};
+		ThermalCellGrid segmentedCell = new ThermalCellGrid(1);
+		segmentedCell.rebuild(new ThermalCellGrid.CarrierAccess() {
+			@Override public int carrierCount() { return 1; }
+			@Override public int cell(int carrier) { return 0; }
+			@Override public ThermalMaterialDefinition material(int carrier) { return segmented; }
+			@Override public double mass(int carrier) { return 1.0; }
+			@Override public double volume(int carrier) { return 1.0; }
+			@Override public double baseEnergy(int carrier) { return 0.0; }
+			@Override public double internalEnergy(int carrier) { return segmentedCellEnergy[carrier]; }
+			@Override public void setInternalEnergy(int carrier, double energy) { segmentedCellEnergy[carrier] = energy; }
+		});
+		require(segmentedCell.minimumTemperature(0) == 300.0
+				&& segmentedCell.maximumTemperature(0) == 500.0,
+				"finite thermal contact exposed a non-linear caloric validity interval");
 		expectFailure(() -> FiniteThermalExchange.plan(segmentedRegistry, segmentedBody, List.of(
 				new FiniteThermalExchange.Contact(0, 250.0, 1_000.0, 100.0, 250.0, 500.0)
 		), 1.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS),

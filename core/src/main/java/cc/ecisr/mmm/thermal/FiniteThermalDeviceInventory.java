@@ -6,7 +6,8 @@ import java.util.List;
 /** Canonical region-owned finite-device truth; provider objects are locators, never energy owners. */
 public record FiniteThermalDeviceInventory(
 		String thermalRegistryFingerprint,
-		List<FiniteThermalDeviceState> devices
+		List<FiniteThermalDeviceState> devices,
+		FiniteThermalDeviceAudit audit
 ) {
 	public FiniteThermalDeviceInventory {
 		if (thermalRegistryFingerprint == null || !thermalRegistryFingerprint.matches("[0-9a-f]{64}")) {
@@ -30,6 +31,14 @@ public record FiniteThermalDeviceInventory(
 			}
 		}
 		devices = List.copyOf(canonical);
+		if (audit == null || !exactInternalEnergy(devices).equals(audit.expectedInventory())) {
+			throw new IllegalArgumentException("Finite thermal device energy audit does not close");
+		}
+	}
+
+	public FiniteThermalDeviceInventory(String thermalRegistryFingerprint, List<FiniteThermalDeviceState> devices) {
+		this(thermalRegistryFingerprint, devices,
+				FiniteThermalDeviceAudit.initialized(exactInternalEnergy(devices)));
 	}
 
 	public static FiniteThermalDeviceInventory empty(String thermalRegistryFingerprint) {
@@ -37,11 +46,35 @@ public record FiniteThermalDeviceInventory(
 	}
 
 	public SignedDyadic exactInternalEnergy() {
-		SignedDyadic total = SignedDyadic.ZERO;
-		for (FiniteThermalDeviceState device : devices) {
-			total = total.add(SignedDyadic.of(device.body().internalEnergyEu()));
+		return exactInternalEnergy(devices);
+	}
+
+	public FiniteThermalDeviceInventory applyExchange(
+			String providerId, String objectId, FiniteThermalExchange.Plan plan
+	) {
+		if (plan == null) throw new IllegalArgumentException("Finite thermal exchange plan is missing");
+		ArrayList<FiniteThermalDeviceState> candidate = new ArrayList<>(devices);
+		int match = -1;
+		for (int index = 0; index < candidate.size(); index++) {
+			FiniteThermalDeviceState device = candidate.get(index);
+			if (device.providerId().equals(providerId) && device.objectId().equals(objectId)) {
+				if (match >= 0) throw new IllegalStateException("Finite thermal device identity is not unique");
+				match = index;
+			}
 		}
-		return total;
+		if (match < 0) throw new IllegalArgumentException("Unknown finite thermal device object");
+		FiniteThermalDeviceState current = candidate.get(match);
+		if (!current.body().equals(plan.before())) {
+			throw new IllegalArgumentException("Finite thermal exchange plan is stale");
+		}
+		candidate.set(match, new FiniteThermalDeviceState(current.providerId(), current.objectId(),
+				current.deviceTypeId(), plan.after()));
+		SignedDyadic fluidDelta = SignedDyadic.ZERO;
+		for (FiniteThermalExchange.ContactDelta contact : plan.contacts()) {
+			fluidDelta = fluidDelta.add(SignedDyadic.of(contact.internalEnergyDeltaEu()));
+		}
+		return new FiniteThermalDeviceInventory(thermalRegistryFingerprint, candidate,
+				audit.withFluidExchange(fluidDelta, plan.roundoffResidual()));
 	}
 
 	public void requireCompatible(ThermalRegistry registry) {
@@ -59,5 +92,15 @@ public record FiniteThermalDeviceInventory(
 			stateFunction.stateForInternalEnergy(materialHandle,
 					device.body().massKilograms(), java.util.Map.of(), device.body().internalEnergyEu());
 		}
+	}
+
+	private static SignedDyadic exactInternalEnergy(List<FiniteThermalDeviceState> devices) {
+		if (devices == null) throw new IllegalArgumentException("Finite thermal device inventory is missing");
+		SignedDyadic total = SignedDyadic.ZERO;
+		for (FiniteThermalDeviceState device : devices) {
+			if (device == null) throw new IllegalArgumentException("Finite thermal device inventory contains null");
+			total = total.add(SignedDyadic.of(device.body().internalEnergyEu()));
+		}
+		return total;
 	}
 }

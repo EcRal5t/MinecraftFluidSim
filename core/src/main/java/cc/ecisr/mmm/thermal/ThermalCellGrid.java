@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.thermal;
 
 import java.util.Arrays;
+import java.util.List;
 
 /** Rebuildable LTE grid derived from authoritative carrier energy; it never owns persistent inventory. */
 public final class ThermalCellGrid {
@@ -24,6 +25,8 @@ public final class ThermalCellGrid {
 	private final double[] heatCapacity;
 	private final double[] conductivity;
 	private final double[] totalVolume;
+	private final double[] minimumTemperature;
+	private final double[] maximumTemperature;
 	private CarrierAccess carriers;
 
 	public ThermalCellGrid(int cellCount) {
@@ -36,6 +39,8 @@ public final class ThermalCellGrid {
 		this.heatCapacity = new double[cellCount];
 		this.conductivity = new double[cellCount];
 		this.totalVolume = new double[cellCount];
+		this.minimumTemperature = new double[cellCount];
+		this.maximumTemperature = new double[cellCount];
 	}
 
 	public void rebuild(CarrierAccess carrierAccess) {
@@ -71,6 +76,8 @@ public final class ThermalCellGrid {
 		Arrays.fill(heatCapacity, 0.0);
 		Arrays.fill(conductivity, 0.0);
 		Arrays.fill(totalVolume, 0.0);
+		Arrays.fill(minimumTemperature, Double.NaN);
+		Arrays.fill(maximumTemperature, Double.NaN);
 		for (int carrier = carrierAccess.carrierCount() - 1; carrier >= 0; carrier--) {
 			int cell = carrierAccess.cell(carrier);
 			if (cell < 0 || cell >= cellCount) throw new IllegalArgumentException("Thermal carrier cell is outside the grid");
@@ -147,11 +154,19 @@ public final class ThermalCellGrid {
 	public double temperature(int cell) { return temperature[cell]; }
 	public double heatCapacity(int cell) { return heatCapacity[cell]; }
 	public double conductivity(int cell) { return conductivity[cell]; }
+	public double minimumTemperature(int cell) { return minimumTemperature[cell]; }
+	public double maximumTemperature(int cell) { return maximumTemperature[cell]; }
 	public double[] copyInternalEnergy() { return internalEnergy.clone(); }
 	public double[] copyCarrierInternalEnergy() {
 		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
 		double[] result = new double[carriers.carrierCount()];
 		for (int carrier = 0; carrier < result.length; carrier++) result[carrier] = carriers.internalEnergy(carrier);
+		return result;
+	}
+	public int[] copyCarrierCells() {
+		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
+		int[] result = new int[carriers.carrierCount()];
+		for (int carrier = 0; carrier < result.length; carrier++) result[carrier] = carriers.cell(carrier);
 		return result;
 	}
 
@@ -181,11 +196,13 @@ public final class ThermalCellGrid {
 		if (targetEnergy <= energyAtMinimum) {
 			temperature[cell] = minimum;
 			heatCapacity[cell] = modeledCellHeatCapacity(cell, minimum);
+			updateLinearTemperatureInterval(cell);
 			return;
 		}
 		if (targetEnergy >= energyAtMaximum) {
 			temperature[cell] = maximum;
 			heatCapacity[cell] = modeledCellHeatCapacity(cell, maximum);
+			updateLinearTemperatureInterval(cell);
 			return;
 		}
 
@@ -207,12 +224,37 @@ public final class ThermalCellGrid {
 				double solved = cursor + (targetEnergy - cursorEnergy) / capacity;
 				temperature[cell] = Math.max(cursor, Math.min(next, solved));
 				heatCapacity[cell] = modeledCellHeatCapacity(cell, temperature[cell]);
+				updateLinearTemperatureInterval(cell);
 				return;
 			}
 			cursorEnergy += intervalEnergy;
 			cursor = next;
 		}
 		throw new IllegalArgumentException("Thermal cell state inversion failed");
+	}
+
+	private void updateLinearTemperatureInterval(int cell) {
+		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
+		double maximum = Double.POSITIVE_INFINITY;
+		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+			List<ThermalMaterialDefinition.CaloricSegment> segments = carriers.material(carrier).caloricSegments();
+			ThermalMaterialDefinition.CaloricSegment selected = null;
+			for (int index = 0; index < segments.size(); index++) {
+				ThermalMaterialDefinition.CaloricSegment segment = segments.get(index);
+				if (temperature[cell] < segment.maximumTemperatureK() || index + 1 == segments.size()) {
+					selected = segment;
+					break;
+				}
+			}
+			if (selected == null) throw new IllegalStateException("Thermal cell caloric segment lookup failed");
+			minimum = Math.max(minimum, selected.minimumTemperatureK());
+			maximum = Math.min(maximum, selected.maximumTemperatureK());
+		}
+		if (!(maximum > minimum && temperature[cell] >= minimum && temperature[cell] <= maximum)) {
+			throw new IllegalArgumentException("Thermal cell has no common linear caloric interval");
+		}
+		minimumTemperature[cell] = minimum;
+		maximumTemperature[cell] = maximum;
 	}
 
 	private double modeledCellEnergy(int cell, double temperatureK) {

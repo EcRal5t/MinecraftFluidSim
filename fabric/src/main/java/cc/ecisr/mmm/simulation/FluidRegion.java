@@ -9,6 +9,7 @@ import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.fluid.air.GasStateSnapshot;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.FiniteThermalDeviceInventory;
+import cc.ecisr.mmm.thermal.FiniteThermalExchange;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
@@ -19,6 +20,9 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 
 import java.util.Objects;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.UUID;
 
 /** Spatial identity, solver ownership, hard marker budget and independent runtime state for one region. */
@@ -306,6 +310,53 @@ public final class FluidRegion {
 			throw new IllegalStateException("Finite thermal device truth changed while restoring a checkpoint");
 		}
 		finiteThermalDevices = inventory;
+	}
+
+	public record FiniteThermalCellBinding(int ordinal, int cellX, int cellY, int cellZ) {
+		public FiniteThermalCellBinding {
+			if (ordinal < 0) throw new IllegalArgumentException("Finite thermal cell binding ordinal is invalid");
+		}
+	}
+
+	/** Atomically applies one already-planned body/cell exchange inside this live region. */
+	public boolean commitFiniteThermalExchange(
+			String providerId, String objectId, FiniteThermalExchange.Plan exchange,
+			List<FiniteThermalCellBinding> bindings, ThermalRegistry registry
+	) {
+		Objects.requireNonNull(exchange, "exchange");
+		Objects.requireNonNull(bindings, "bindings");
+		Objects.requireNonNull(registry, "registry");
+		if (domain == null || !domain.hasThermalState()) {
+			throw new IllegalStateException("Finite thermal exchange requires a loaded thermal region");
+		}
+		if (lifecycle.operatorPaused() || lifecycle.availabilityFailure() != null
+				|| thermalActivity != null && thermalActivity.state() == ThermalActivity.State.PAUSED) {
+			throw new IllegalStateException("Finite thermal exchange cannot modify a paused or locked region");
+		}
+		if (!exchange.changed()) return false;
+		ArrayList<FiniteThermalCellBinding> canonical = new ArrayList<>(bindings);
+		if (canonical.size() != exchange.contacts().size() || canonical.stream().anyMatch(Objects::isNull)) {
+			throw new IllegalArgumentException("Finite thermal cell bindings do not match the exchange plan");
+		}
+		canonical.sort(Comparator.comparingInt(FiniteThermalCellBinding::ordinal));
+		ArrayList<FlipFluidDomain.ThermalCellEnergyDelta> deltas = new ArrayList<>(canonical.size());
+		for (int index = 0; index < canonical.size(); index++) {
+			FiniteThermalCellBinding binding = canonical.get(index);
+			FiniteThermalExchange.ContactDelta contact = exchange.contacts().get(index);
+			if (binding.ordinal() != contact.ordinal()) {
+				throw new IllegalArgumentException("Finite thermal cell binding ordinal changed");
+			}
+			deltas.add(new FlipFluidDomain.ThermalCellEnergyDelta(binding.cellX(), binding.cellY(), binding.cellZ(),
+					contact.internalEnergyDeltaEu()));
+		}
+		FiniteThermalDeviceInventory current = finiteThermalDevices(registry.fingerprint());
+		FiniteThermalDeviceInventory candidate = current.applyExchange(providerId, objectId, exchange);
+		candidate.requireCompatible(registry);
+		FlipFluidDomain.FiniteThermalCellPlan cellPlan = domain.planFiniteThermalCellExchange(deltas);
+		domain.commitFiniteThermalCellExchange(cellPlan);
+		finiteThermalDevices = candidate;
+		wakeThermal(ThermalActivity.WakeReason.FINITE_DEVICE_EXCHANGE);
+		return true;
 	}
 
 	public PersistedRuntime persistedRuntime() {
