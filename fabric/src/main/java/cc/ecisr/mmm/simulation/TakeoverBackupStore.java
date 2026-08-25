@@ -83,7 +83,7 @@ final class TakeoverBackupStore {
 
 				World directory / 世界目录: %s
 				Dimension / 维度: %s
-				Journal version / 日志版本: 1
+				Journal schema / 日志布局: takeover-journal
 				Backed-up blocks / 备份方块数: %d
 
 				Recovery / 恢复步骤:

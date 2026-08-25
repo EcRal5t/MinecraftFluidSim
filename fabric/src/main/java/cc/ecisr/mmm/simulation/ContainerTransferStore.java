@@ -25,8 +25,6 @@ import java.util.UUID;
  */
 public final class ContainerTransferStore {
 private static final String ROOT_DIRECTORY_NAME = "container-transfer";
-private static final int MATERIAL_LAYOUT = 4;
-private static final int THERMAL_LAYOUT = 5;
 private static final long MAX_COMPRESSED_NBT_BYTES = 4L * 1024L * 1024L;
 private static final String TEMP_SUFFIX = ".tmp";
 
@@ -181,8 +179,8 @@ throw denied;
 private static CompoundTag encode(ContainerTransferJournal journal) throws IOException {
 validateTransferShape(journal, true);
 CompoundTag root = new CompoundTag();
-int version = journal.requiresThermalRegistry() ? THERMAL_LAYOUT : MATERIAL_LAYOUT;
-root.putInt("Version", version);
+Layout layout = journal.requiresThermalRegistry() ? Layout.THERMAL : Layout.MATERIAL;
+root.putString("Layout", layout.persistedId);
 root.putLong("TxUuidMost", journal.transactionId().getMostSignificantBits());
 root.putLong("TxUuidLeast", journal.transactionId().getLeastSignificantBits());
 root.putLong("RegionUuidMost", journal.regionId().getMostSignificantBits());
@@ -198,7 +196,7 @@ switch (journal.resourceKind()) {
 case FLUID_NANOS -> root.putLong("VolumeNanos", journal.volumeNanos());
 case GRANULAR_SVQ -> root.putLong("SolidVolumeSvq", journal.solidVolumeSvq());
 }
-if (version == THERMAL_LAYOUT) {
+if (layout == Layout.THERMAL) {
 root.putString("ThermalRegistryFingerprint", journal.thermalTransfer().registryFingerprint());
 root.putLong("ThermalEnergyBits", journal.thermalTransfer().internalEnergyBits());
 }
@@ -225,19 +223,16 @@ root.putInt("DispenserSlot", actor.dispenserSlot());
 }
 }
 
-putFingerprint(root, "Before", journal.beforeItem(), version);
-putFingerprint(root, "After", journal.afterItem(), version);
+putFingerprint(root, "Before", journal.beforeItem(), layout);
+putFingerprint(root, "After", journal.afterItem(), layout);
 root.putString("Phase", phaseName(journal.phase()));
 root.putLong("TargetManifestChecksum", journal.targetManifestChecksum());
 return root;
 }
 
 private static ContainerTransferJournal decode(CompoundTag root) throws IOException {
-requireType(root, "Version", Tag.TAG_INT);
-int version = root.getIntOr("Version", -1);
-if (version != MATERIAL_LAYOUT && version != THERMAL_LAYOUT) {
-throw new IOException("Unsupported container transfer WAL version " + version);
-}
+requireType(root, "Layout", Tag.TAG_STRING);
+Layout layout = Layout.decode(root.getStringOr("Layout", ""));
 
 requireType(root, "TxUuidMost", Tag.TAG_LONG);
 requireType(root, "TxUuidLeast", Tag.TAG_LONG);
@@ -276,7 +271,7 @@ if (root.get("VolumeNanos") != null) throw new IOException("Granular WAL must no
 solidVolumeSvq = root.getLongOr("SolidVolumeSvq", -1L);
 }
 
-if (version == THERMAL_LAYOUT) {
+if (layout == Layout.THERMAL) {
 requireType(root, "ThermalRegistryFingerprint", Tag.TAG_STRING);
 requireType(root, "ThermalEnergyBits", Tag.TAG_LONG);
 try {
@@ -317,8 +312,8 @@ root.getIntOr("DispenserSlot", -1)
 default -> throw new IOException("Unknown actor type " + actorType);
 }
 
-ContainerTransferJournal.ItemFingerprint beforeItem = getFingerprint(root, "Before", version);
-ContainerTransferJournal.ItemFingerprint afterItem = getFingerprint(root, "After", version);
+ContainerTransferJournal.ItemFingerprint beforeItem = getFingerprint(root, "Before", layout);
+ContainerTransferJournal.ItemFingerprint afterItem = getFingerprint(root, "After", layout);
 
 requireType(root, "Phase", Tag.TAG_STRING);
 ContainerTransferJournal.Phase phase = parsePhase(root.getStringOr("Phase", ""));
@@ -334,19 +329,19 @@ return journal;
 }
 
 private static void putFingerprint(
-CompoundTag root, String prefix, ContainerTransferJournal.ItemFingerprint item, int version
+CompoundTag root, String prefix, ContainerTransferJournal.ItemFingerprint item, Layout layout
 ) throws IOException {
 root.putString(prefix + "Kind", itemKindName(item.kind()));
 root.putLong(prefix + "Nanos", item.nanos());
 root.putLong(prefix + "SolidVolumeSvq", item.solidVolumeSvq());
 if (item.materialId() != null) root.putString(prefix + "MaterialId", item.materialId());
 root.putLong(prefix + "MassBits", item.massBits());
-if (version == THERMAL_LAYOUT && item.thermalContents() != null) {
+if (layout == Layout.THERMAL && item.thermalContents() != null) {
 root.putString(prefix + "ThermalContents", item.thermalContents());
 }
 }
 
-private static ContainerTransferJournal.ItemFingerprint getFingerprint(CompoundTag root, String prefix, int version) throws IOException {
+private static ContainerTransferJournal.ItemFingerprint getFingerprint(CompoundTag root, String prefix, Layout layout) throws IOException {
 requireType(root, prefix + "Kind", Tag.TAG_STRING);
 requireType(root, prefix + "Nanos", Tag.TAG_LONG);
 ContainerTransferJournal.ItemKind kind = parseItemKind(root.getStringOr(prefix + "Kind", ""));
@@ -357,7 +352,7 @@ String materialId = root.getStringOr(prefix + "MaterialId", null);
 requireType(root, prefix + "MassBits", Tag.TAG_LONG);
 long massBits = root.getLongOr(prefix + "MassBits", -1L);
 String thermalContents = null;
-if (version == THERMAL_LAYOUT) thermalContents = root.getStringOr(prefix + "ThermalContents", null);
+if (layout == Layout.THERMAL) thermalContents = root.getStringOr(prefix + "ThermalContents", null);
 else if (root.get(prefix + "ThermalContents") != null) {
 throw new IOException("Material-only item fingerprint carries thermal contents");
 }
@@ -654,6 +649,18 @@ case "PREPARED" -> ContainerTransferJournal.Phase.PREPARED;
 case "REGION_COMMITTED" -> ContainerTransferJournal.Phase.REGION_COMMITTED;
 default -> throw new IOException("Unknown container transfer phase: " + name);
 };
+}
+
+private enum Layout {
+MATERIAL("material"), THERMAL("thermal");
+
+private final String persistedId;
+Layout(String persistedId) { this.persistedId = persistedId; }
+
+private static Layout decode(String persistedId) throws IOException {
+for (Layout layout : values()) if (layout.persistedId.equals(persistedId)) return layout;
+throw new IOException("Unsupported container transfer WAL layout " + persistedId);
+}
 }
 
 private static void requireType(CompoundTag tag, String name, byte type) throws IOException {

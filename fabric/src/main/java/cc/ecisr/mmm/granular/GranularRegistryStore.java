@@ -22,7 +22,7 @@ import java.util.TreeMap;
 
 /** World-authoritative immutable granular registry snapshot with atomic first publication. */
 public final class GranularRegistryStore {
-	private static final int FORMAT_VERSION = 3;
+	private static final String SCHEMA = "granular-registry";
 	private static final long MAX_BYTES = 4L * 1024L * 1024L;
 	private static final Set<String> KNOWN_FILES = Set.of("registry.nbt", "registry.nbt.tmp");
 	private final Path directory;
@@ -70,13 +70,13 @@ public final class GranularRegistryStore {
 		CompoundTag root;
 		try { root = NbtIo.readCompressed(path, NbtAccounter.create(MAX_BYTES)); }
 		catch (RuntimeException invalid) { throw new IOException("Unreadable granular registry snapshot " + path, invalid); }
-		requireAll(root, Map.of("Version", Tag.TAG_INT, "SvqPerBv", Tag.TAG_LONG, "PorosityScale", Tag.TAG_INT,
+		requireAll(root, Map.of("Schema", Tag.TAG_STRING, "SvqPerBv", Tag.TAG_LONG, "PorosityScale", Tag.TAG_INT,
 				"Fingerprint", Tag.TAG_STRING, "Canonical", Tag.TAG_BYTE_ARRAY,
 				"ChemicalFingerprint", Tag.TAG_STRING, "Materials", Tag.TAG_LIST,
 				"Carriers", Tag.TAG_LIST, "Reactions", Tag.TAG_LIST));
-		if (root.getIntOr("Version", -1) != FORMAT_VERSION || root.getLongOr("SvqPerBv", -1L) != SolidVolume.SVQ_PER_BV
+		if (!root.getStringOr("Schema", "").equals(SCHEMA) || root.getLongOr("SvqPerBv", -1L) != SolidVolume.SVQ_PER_BV
 				|| root.getIntOr("PorosityScale", -1) != GranularLimits.POROSITY_SCALE) {
-			throw new IOException("Unsupported granular registry version or unit scale");
+			throw new IOException("Unsupported granular registry schema or unit scale");
 		}
 		try {
 			String chemicalFingerprint = root.getStringOr("ChemicalFingerprint", "");
@@ -101,7 +101,7 @@ public final class GranularRegistryStore {
 
 	private static CompoundTag encode(GranularRegistry registry) {
 		CompoundTag root = new CompoundTag();
-		root.putInt("Version", FORMAT_VERSION); root.putLong("SvqPerBv", SolidVolume.SVQ_PER_BV);
+		root.putString("Schema", SCHEMA); root.putLong("SvqPerBv", SolidVolume.SVQ_PER_BV);
 		root.putInt("PorosityScale", GranularLimits.POROSITY_SCALE);
 		root.putString("Fingerprint", registry.fingerprint()); root.putByteArray("Canonical", registry.canonicalBytes());
 		root.putString("ChemicalFingerprint", registry.chemicalRegistryFingerprint());

@@ -12,9 +12,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
-/** Strict codec for the committed ownership registry v1 layout. */
+/** Strict codec for the committed ownership registry layout. */
 final class OwnershipCommittedCodec {
-	static final int FORMAT_VERSION = 1;
+	static final String SCHEMA = "ownership-committed";
 	static final int MAX_OWNED_BLOCKS = 65_536;
 
 	CompoundTag encode(OwnershipCommitted state) throws IOException {
@@ -24,7 +24,7 @@ final class OwnershipCommittedCodec {
 		validateOwnedCount(state.ownedBlocks().size());
 
 		CompoundTag root = new CompoundTag();
-		root.putInt("Version", FORMAT_VERSION);
+		root.putString("Schema", SCHEMA);
 		root.putLong("RegionUuidMost", state.regionId().getMostSignificantBits());
 		root.putLong("RegionUuidLeast", state.regionId().getLeastSignificantBits());
 		root.putString("Dimension", state.dimensionId());
@@ -46,10 +46,10 @@ final class OwnershipCommittedCodec {
 	}
 
 	OwnershipCommitted decode(CompoundTag root) throws IOException {
-		requireType(root, "Version", Tag.TAG_INT);
-		int version = root.getIntOr("Version", -1);
-		if (version != FORMAT_VERSION) {
-			throw new IOException("Unsupported committed ownership version " + version + "; expected v" + FORMAT_VERSION);
+		requireType(root, "Schema", Tag.TAG_STRING);
+		String schema = root.getStringOr("Schema", "");
+		if (!SCHEMA.equals(schema)) {
+			throw new IOException("Unsupported committed ownership schema " + schema);
 		}
 		requireType(root, "RegionUuidMost", Tag.TAG_LONG);
 		requireType(root, "RegionUuidLeast", Tag.TAG_LONG);

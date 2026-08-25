@@ -158,7 +158,7 @@ public void validateThermalRegistry(String fingerprint) {
 if (!requiresThermalRegistry()) return;
 if (thermalTransfer == null || fingerprint == null
 || !thermalTransfer.registryFingerprint().equals(fingerprint)) {
-throw new IllegalArgumentException("Authoritative thermal registry is unavailable or differs from WAL v5");
+throw new IllegalArgumentException("Authoritative thermal registry is unavailable or differs from the WAL");
 }
 beforeItem.validateThermalRegistry(fingerprint); afterItem.validateThermalRegistry(fingerprint);
 }

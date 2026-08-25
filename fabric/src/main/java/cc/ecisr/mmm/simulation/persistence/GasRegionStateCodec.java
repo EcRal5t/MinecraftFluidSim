@@ -18,8 +18,8 @@ import java.util.List;
 
 /** Required bounded gas payload for complete thermal region generations. */
 final class GasRegionStateCodec {
-	static final String MANIFEST_EXTENSION = "mmm:gas_manifest_v1";
-	static final String SECTION_EXTENSION = "mmm:gas_section_v1";
+	static final String MANIFEST_EXTENSION = "mmm:gas_manifest";
+	static final String SECTION_EXTENSION = "mmm:gas_section";
 	static final int CAP_MATERIALS = 1;
 	static final int CAP_CHEMISTRY = 1 << 1;
 	static final int CAP_GAS = 1 << 2;

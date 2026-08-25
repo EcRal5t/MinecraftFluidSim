@@ -20,7 +20,7 @@ import java.util.Set;
 
 /** World-authoritative immutable gas component/ambient registry with atomic first publication. */
 public final class GasRegistryStore {
-	private static final int FORMAT_VERSION = 1;
+	private static final String SCHEMA = "gas-registry";
 	private static final long MAX_BYTES = 4L * 1_048_576L;
 	private static final Set<String> KNOWN_FILES = Set.of("registry.nbt", "registry.nbt.tmp");
 	private final Path directory;
@@ -66,15 +66,15 @@ public final class GasRegistryStore {
 		CompoundTag root;
 		try { root = NbtIo.readCompressed(path, NbtAccounter.create(MAX_BYTES)); }
 		catch (RuntimeException invalid) { throw new IOException("Unreadable gas registry snapshot " + path, invalid); }
-		requireAll(root, Map.of("Version", Tag.TAG_INT, "UnitSystem", Tag.TAG_STRING,
+		requireAll(root, Map.of("Schema", Tag.TAG_STRING, "UnitSystem", Tag.TAG_STRING,
 				"StandardPressureBits", Tag.TAG_LONG, "StandardTemperatureBits", Tag.TAG_LONG,
 				"Fingerprint", Tag.TAG_STRING, "Canonical", Tag.TAG_BYTE_ARRAY,
 				"Components", Tag.TAG_LIST, "Ambient", Tag.TAG_LIST));
-		if (root.getIntOr("Version", -1) != FORMAT_VERSION
+		if (!root.getStringOr("Schema", "").equals(SCHEMA)
 				|| !GasRegistry.UNIT_SYSTEM_ID.equals(root.getStringOr("UnitSystem", ""))
 				|| root.getLongOr("StandardPressureBits", 0L) != Double.doubleToRawLongBits(GasRegistry.STANDARD_PRESSURE_PA)
 				|| root.getLongOr("StandardTemperatureBits", 0L) != Double.doubleToRawLongBits(GasRegistry.STANDARD_TEMPERATURE_K)) {
-			throw new IOException("Unsupported gas registry version or standard state");
+			throw new IOException("Unsupported gas registry schema or standard state");
 		}
 		try {
 			GasRegistry registry = new GasRegistry(decodeComponents(root.getListOrEmpty("Components")),
@@ -90,7 +90,7 @@ public final class GasRegistryStore {
 	}
 
 	private static CompoundTag encode(GasRegistry registry) {
-		CompoundTag root = new CompoundTag(); root.putInt("Version", FORMAT_VERSION);
+		CompoundTag root = new CompoundTag(); root.putString("Schema", SCHEMA);
 		root.putString("UnitSystem", GasRegistry.UNIT_SYSTEM_ID);
 		root.putLong("StandardPressureBits", Double.doubleToRawLongBits(GasRegistry.STANDARD_PRESSURE_PA));
 		root.putLong("StandardTemperatureBits", Double.doubleToRawLongBits(GasRegistry.STANDARD_TEMPERATURE_K));

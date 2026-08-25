@@ -22,7 +22,7 @@ import java.util.TreeMap;
 
 /** World-authoritative immutable registry snapshot with atomic first publication. */
 public final class ChemicalRegistryStore {
-	private static final int FORMAT_VERSION = 1;
+	private static final String SCHEMA = "chemical-registry";
 	private static final long MAX_BYTES = 4L * 1024L * 1024L;
 	private static final Set<String> KNOWN_FILES = Set.of("registry.nbt", "registry.nbt.tmp");
 	private final Path directory;
@@ -70,14 +70,14 @@ public final class ChemicalRegistryStore {
 		CompoundTag root;
 		try { root = NbtIo.readCompressed(path, NbtAccounter.create(MAX_BYTES)); }
 		catch (RuntimeException invalid) { throw new IOException("Unreadable chemical registry snapshot " + path, invalid); }
-		require(root, "Version", Tag.TAG_INT);
+		require(root, "Schema", Tag.TAG_STRING);
 		require(root, "AuScale", Tag.TAG_LONG);
 		require(root, "Fingerprint", Tag.TAG_STRING);
 		require(root, "Canonical", Tag.TAG_BYTE_ARRAY);
 		require(root, "Species", Tag.TAG_LIST);
 		require(root, "Phases", Tag.TAG_LIST);
 		require(root, "Reactions", Tag.TAG_LIST);
-		if (root.getIntOr("Version", -1) != FORMAT_VERSION) throw new IOException("Unsupported chemical registry version");
+		if (!root.getStringOr("Schema", "").equals(SCHEMA)) throw new IOException("Unsupported chemical registry schema");
 		if (root.getLongOr("AuScale", -1L) != ChemicalLimits.QUANTA_PER_AU) throw new IOException("Chemical AU scale mismatch");
 		try {
 			List<ChemicalSpecies> species = decodeSpecies(root.getListOrEmpty("Species"));
@@ -98,7 +98,7 @@ public final class ChemicalRegistryStore {
 
 	private static CompoundTag encode(ChemicalRegistry registry) {
 		CompoundTag root = new CompoundTag();
-		root.putInt("Version", FORMAT_VERSION);
+		root.putString("Schema", SCHEMA);
 		root.putLong("AuScale", ChemicalLimits.QUANTA_PER_AU);
 		root.putString("Fingerprint", registry.fingerprint());
 		root.putByteArray("Canonical", registry.canonicalBytes());

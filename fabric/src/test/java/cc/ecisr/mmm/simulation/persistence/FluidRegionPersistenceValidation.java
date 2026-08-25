@@ -64,10 +64,10 @@ public final class FluidRegionPersistenceValidation {
 
 	public static void main(String[] args) throws Exception {
 		validateExactRoundTripAndMetadataUnload();
-		validateMaterialV2Codec();
+		validateMaterialCodec();
 		validateChemicalCodec();
-		validateGranularV5Codec();
-		validateThermalV7Codec();
+		validateGranularCodec();
+		validateThermalCodec();
 		validateUnknownExtensions();
 		validateFaultMatrix();
 		validateStagedGeneration();
@@ -77,7 +77,7 @@ public final class FluidRegionPersistenceValidation {
 		System.out.println("Fluid region persistence validation passed");
 	}
 
-	private static void validateThermalV7Codec() throws Exception {
+	private static void validateThermalCodec() throws Exception {
 		FluidRegion region = populatedRegion(new UUID(27L, 28L));
 		FlipParticleState pure = region.domain().exportParticleState();
 		float[] positions = pure.copyPositionVolume();
@@ -196,7 +196,7 @@ public final class FluidRegionPersistenceValidation {
 				state.sections()).validate(), "thermal region without buoyancy identity was accepted");
 	}
 
-	private static void validateGranularV5Codec() throws Exception {
+	private static void validateGranularCodec() throws Exception {
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		FluidRegion region = populatedRegion(new UUID(23L, 24L));
@@ -422,7 +422,7 @@ public final class FluidRegionPersistenceValidation {
 				"discovery admitted a chemical manifest whose committed section was missing");
 	}
 
-	private static void validateMaterialV2Codec() throws Exception {
+	private static void validateMaterialCodec() throws Exception {
 		FluidRegion region = populatedRegion(new UUID(15L, 16L));
 		List<FluidMaterial> palette = List.of(
 				new FluidMaterial("mmm:water", 1_000.0, "mmm:water", 0.0, Math.PI / 2.0),
@@ -688,7 +688,7 @@ public final class FluidRegionPersistenceValidation {
 		expectIOException(() -> FluidServerConfig.loadOrCreate(root),
 				"invalid current feature dependency was accepted");
 
-		Files.writeString(FluidServerConfig.path(root), valid.replace("formatVersion=6", "formatVersion=99"));
+		Files.writeString(FluidServerConfig.path(root), valid.replace("schema=controller-runtime", "schema=unknown"));
 		expectIOException(() -> FluidServerConfig.loadOrCreate(root), "unknown config version was silently replaced");
 	}
 

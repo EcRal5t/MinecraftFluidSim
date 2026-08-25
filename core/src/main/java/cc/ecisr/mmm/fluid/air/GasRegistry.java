@@ -16,7 +16,7 @@ import java.util.Map;
 
 /** Immutable canonical gas-component and ambient definition registry. */
 public final class GasRegistry {
-	public static final String UNIT_SYSTEM_ID = "mmm:gas_standard_v1";
+	public static final String UNIT_SYSTEM_ID = "mmm:gas_standard";
 	public static final double STANDARD_PRESSURE_PA = 101_325.0;
 	public static final double STANDARD_TEMPERATURE_K = 293.15;
 

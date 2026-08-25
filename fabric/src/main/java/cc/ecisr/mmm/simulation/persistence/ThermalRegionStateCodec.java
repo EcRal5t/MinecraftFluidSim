@@ -19,8 +19,8 @@ import java.util.List;
 
 /** Required typed thermal payload nested inside complete thermal region generations. */
 final class ThermalRegionStateCodec {
-	static final String MANIFEST_EXTENSION = "mmm:thermal_manifest_v1";
-	static final String SECTION_EXTENSION = "mmm:thermal_section_v1";
+	static final String MANIFEST_EXTENSION = "mmm:thermal_manifest";
+	static final String SECTION_EXTENSION = "mmm:thermal_section";
 	static final int CAP_MATERIALS = 1;
 	static final int CAP_CHEMISTRY = 1 << 1;
 	static final int CAP_GRANULAR = 1 << 2;

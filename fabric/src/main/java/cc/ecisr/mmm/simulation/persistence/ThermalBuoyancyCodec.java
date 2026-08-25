@@ -11,7 +11,7 @@ import java.io.IOException;
 
 /** Manifest-only identity binding for the thermal-region Boussinesq definition set. */
 final class ThermalBuoyancyCodec {
-	static final String MANIFEST_EXTENSION = "mmm:thermal_buoyancy_v1";
+	static final String MANIFEST_EXTENSION = "mmm:thermal_buoyancy";
 	private static final int MAGIC = 0x52574259; // RWBY
 	private static final int PAYLOAD_VERSION = 1;
 

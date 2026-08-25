@@ -321,7 +321,7 @@ final class FlipThermalState {
 		double[] restoredGas = snapshot.copyGasNodeEnergy();
 		if (restoredGas.length != (airNetwork == null ? 0 : airNetwork.nodeCount())
 				|| restoredGas.length > 0 && gasModel == null) {
-			throw new IllegalArgumentException("Restored gas thermal ordinals differ from gas v4 inventory");
+			throw new IllegalArgumentException("Restored gas thermal ordinals differ from gas inventory");
 		}
 		for (int node = 0; node < restoredGas.length; node++) gasModel.absolutePressure(
 				airNetwork.inventory(node + 1), airNetwork.availableVolume(node + 1), restoredGas[node]);
@@ -719,7 +719,7 @@ final class FlipThermalState {
 	private static int quantizedTemperature(double temperatureK) {
 		long quantized = Math.round(temperatureK * 16.0);
 		if (quantized <= 0L || quantized >= ThermalDisplaySnapshot.EMPTY_TEMPERATURE_Q) {
-			throw new IllegalArgumentException("Thermal display temperature is outside the v5 palette");
+			throw new IllegalArgumentException("Thermal display temperature is outside the quantized palette");
 		}
 		return Math.toIntExact(quantized);
 	}

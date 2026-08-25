@@ -19,8 +19,8 @@ import java.util.TreeMap;
 
 /** Canonical bounded granular payload nested inside a jointly committed region generation. */
 final class GranularRegionStateCodec {
-	static final String MANIFEST_EXTENSION = "mmm:granular_manifest_v1";
-	static final String SECTION_EXTENSION = "mmm:granular_section_v1";
+	static final String MANIFEST_EXTENSION = "mmm:granular_manifest";
+	static final String SECTION_EXTENSION = "mmm:granular_section";
 	static final int CAP_MATERIALS = 1;
 	static final int CAP_GRANULAR = 1 << 1;
 	static final int CAP_CHEMISTRY = 1 << 2;

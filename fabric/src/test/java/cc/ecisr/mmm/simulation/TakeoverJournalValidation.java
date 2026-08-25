@@ -34,7 +34,7 @@ public final class TakeoverJournalValidation {
 		run("failure after restoring block N", TakeoverJournalValidation::testFailureAfterRestoration);
 		run("failure before completion delete", TakeoverJournalValidation::testFailureBeforeDelete);
 		run("corrupt journal remains locked", TakeoverJournalValidation::testCorruptJournalLock);
-		run("unknown journal version remains locked", TakeoverJournalValidation::testUnknownVersionLock);
+		run("unknown journal schema remains locked", TakeoverJournalValidation::testUnknownSchemaLock);
 		run("unloaded dimension remains locked", TakeoverJournalValidation::testUnloadedDimension);
 		run("stale temporary files are harmless", TakeoverJournalValidation::testTemporaryFiles);
 		run("atomic move unavailable fails closed", TakeoverJournalValidation::testAtomicMoveUnavailable);
@@ -49,12 +49,12 @@ public final class TakeoverJournalValidation {
 		TakeoverJournalCodec codec = new TakeoverJournalCodec();
 		TakeoverJournal expected = journal(3);
 		CompoundTag encoded = codec.encode(expected);
-		check(encoded.getIntOr("Version", -1) == 1, "codec changed the v1 version");
-		check(encoded.contains("Dimension") && encoded.contains("Blocks"), "codec changed v1 field names");
+		check(encoded.getStringOr("Schema", "").equals("takeover-journal"), "codec changed the journal schema");
+		check(encoded.contains("Dimension") && encoded.contains("Blocks"), "codec changed journal field names");
 		assertJournalEquals(expected, codec.decode(encoded));
 
 		CompoundTag currentRoot = new CompoundTag();
-		currentRoot.putInt("Version", 1);
+		currentRoot.putString("Schema", "takeover-journal");
 		currentRoot.putString("Dimension", DIMENSION);
 		ListTag blocks = new ListTag();
 		CompoundTag block = new CompoundTag();
@@ -188,17 +188,17 @@ public final class TakeoverJournalValidation {
 		});
 	}
 
-	private static void testUnknownVersionLock() throws Exception {
+	private static void testUnknownSchemaLock() throws Exception {
 		withTemporaryWorld(root -> {
 			TakeoverJournal journal = journal(2);
 			FakeWorld world = new FakeWorld(journal);
 			TakeoverJournalFiles files = new TakeoverJournalFiles(root);
 			CompoundTag future = new TakeoverJournalCodec().encode(journal);
-			future.putInt("Version", 99);
+			future.putString("Schema", "unknown");
 			NbtIo.writeCompressed(future, files.journalPath());
 			expectIOException(() -> recover(files, world, TakeoverTransaction.FailureInjector.NONE));
 			expectIOException(() -> begin(files, journal, world, TakeoverTransaction.FailureInjector.NONE));
-			check(files.hasJournal() && world.allOriginal(), "unknown version did not remain locked");
+			check(files.hasJournal() && world.allOriginal(), "unknown schema did not remain locked");
 		});
 	}
 

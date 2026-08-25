@@ -80,11 +80,11 @@ public final class M6OwnershipValidation {
 		OwnershipJournal expected = new OwnershipJournal(regionId, DIMENSION_ID, 5L, 6L,
 				OwnershipJournal.Operation.ACQUIRE, entries(3));
 		CompoundTag encoded = journalCodec.encode(expected);
-		check(encoded.getIntOr("Version", -1) == 1, "codec changed the WAL version");
+		check(encoded.getStringOr("Schema", "").equals("ownership-transition"), "codec changed the WAL schema");
 		assertJournalEquals(expected, journalCodec.decode(encoded));
 
 		CompoundTag future = journalCodec.encode(expected);
-		future.putInt("Version", 99);
+		future.putString("Schema", "unknown");
 		expectIOException(() -> journalCodec.decode(future));
 		CompoundTag missing = journalCodec.encode(expected);
 		missing.remove("RegionUuidMost");

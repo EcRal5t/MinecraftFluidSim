@@ -14,7 +14,7 @@ import java.util.Map;
 
 /** Immutable, canonically ordered world thermal definition candidate. Runtime handles never cross a save or wire boundary. */
 public final class ThermalRegistry {
-	public static final String UNIT_SYSTEM_ID = "mmm:si_block_v1";
+	public static final String UNIT_SYSTEM_ID = "mmm:si_block";
 
 	private final List<ThermalMaterialDefinition> materials;
 	private final List<ThermalSpeciesOffset> speciesOffsets;

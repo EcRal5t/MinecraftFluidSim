@@ -15,7 +15,7 @@ import java.util.ArrayList;
 
 /** Sparse manifest-only thermal record for phase volume awaiting exactly one mechanical projection. */
 final class PendingPhaseVolumeCodec {
-	static final String MANIFEST_EXTENSION = "mmm:pending_phase_volume_v1";
+	static final String MANIFEST_EXTENSION = "mmm:pending_phase_volume";
 	private static final int MAGIC = 0x52575056; // RWPV
 	private static final int VERSION = 1;
 	private static final int MAX_DYADIC_BYTES = ThermalLimits.MAX_DYADIC_SIGNIFICAND_BITS / 8 + 2;

@@ -31,7 +31,7 @@ public record FluidServerConfig(
 		int maximumPhaseOperationsPerStep,
 		FluidRegionManager.Limits limits
 ) {
-	private static final int FORMAT_VERSION = 6;
+	private static final String SCHEMA = "controller-runtime";
 	private static final int DEFAULT_REGIONS = 4;
 	private static final long DEFAULT_CELLS = 9_216L;
 	private static final long DEFAULT_MARKERS = 73_728L;
@@ -119,8 +119,8 @@ public record FluidServerConfig(
 		Properties properties = new Properties();
 		try (InputStream input = Files.newInputStream(path)) { properties.load(input); }
 		try {
-			int version = integer(properties, "formatVersion");
-			if (version != FORMAT_VERSION) throw new IOException("Unsupported Matter, Motion & Mechanics server config version " + version);
+			String schema = required(properties, "schema");
+			if (!schema.equals(SCHEMA)) throw new IOException("Unsupported Matter, Motion & Mechanics server config schema " + schema);
 			String controllers = required(properties, "controllersEnabled");
 			if (!controllers.equals("true") && !controllers.equals("false")) throw new IOException("controllersEnabled must be true or false");
 			String materials = required(properties, "materialsEnabled");
@@ -158,7 +158,7 @@ public record FluidServerConfig(
 		Path target = path(worldRoot), temporary = target.resolveSibling(target.getFileName() + ".tmp");
 		Files.createDirectories(target.getParent());
 		Properties properties = new Properties();
-		properties.setProperty("formatVersion", Integer.toString(FORMAT_VERSION));
+		properties.setProperty("schema", SCHEMA);
 		properties.setProperty("controllersEnabled", Boolean.toString(controllersEnabled));
 		properties.setProperty("materialsEnabled", Boolean.toString(materialsEnabled));
 		properties.setProperty("worldBridgeEnabled", Boolean.toString(worldBridgeEnabled));

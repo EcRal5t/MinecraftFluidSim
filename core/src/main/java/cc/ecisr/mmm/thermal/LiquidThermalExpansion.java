@@ -19,7 +19,7 @@ import java.util.stream.Collectors;
  * executable changes cannot silently reinterpret an existing velocity/temperature field.</p>
  */
 public final class LiquidThermalExpansion {
-	public static final String MODEL_ID = "mmm:boussinesq_builtin_v1";
+	public static final String MODEL_ID = "mmm:boussinesq_builtin";
 
 	public record Definition(String carrierId, double referenceTemperatureK, double volumetricCoefficientPerK) {
 		public Definition {

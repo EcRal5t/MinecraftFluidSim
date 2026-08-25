@@ -11,9 +11,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/** Strict codec for the existing takeover-journal v1 NBT layout. */
+/** Strict codec for the takeover-journal NBT layout. */
 final class TakeoverJournalCodec {
-	static final int FORMAT_VERSION = 1;
+	static final String SCHEMA = "takeover-journal";
 	static final int MAX_BACKUP_BLOCKS = 65_536;
 
 	CompoundTag encode(TakeoverJournal journal) throws IOException {
@@ -21,7 +21,7 @@ final class TakeoverJournalCodec {
 		validateBlockCount(journal.blocks().size());
 
 		CompoundTag root = new CompoundTag();
-		root.putInt("Version", FORMAT_VERSION);
+		root.putString("Schema", SCHEMA);
 		root.putString("Dimension", journal.dimensionId());
 		ListTag entries = new ListTag();
 		Set<Long> positions = new HashSet<>();
@@ -41,10 +41,10 @@ final class TakeoverJournalCodec {
 	}
 
 	TakeoverJournal decode(CompoundTag root) throws IOException {
-		requireType(root, "Version", Tag.TAG_INT);
-		int version = root.getIntOr("Version", -1);
-		if (version != FORMAT_VERSION) {
-			throw new IOException("Unsupported takeover journal version " + version + "; expected v" + FORMAT_VERSION);
+		requireType(root, "Schema", Tag.TAG_STRING);
+		String schema = root.getStringOr("Schema", "");
+		if (!SCHEMA.equals(schema)) {
+			throw new IOException("Unsupported takeover journal schema " + schema);
 		}
 
 		requireType(root, "Dimension", Tag.TAG_STRING);

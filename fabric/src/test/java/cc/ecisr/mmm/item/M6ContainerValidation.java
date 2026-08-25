@@ -337,7 +337,7 @@ public final class M6ContainerValidation {
 				"material extraction did not return removed mass");
 		check(Math.abs(massBefore - (domain.totalMass() + extracted.mass())) <= 1.0E-12,
 				"material extraction failed to close the mass ledger");
-		// This call exercises the strict double volume sum used by region-state v2 handoff.
+		// This call exercises the strict double volume sum used by the material region handoff.
 		domain.exportMaterialParticleState();
 	}
 

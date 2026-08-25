@@ -20,7 +20,7 @@ import java.util.Set;
 
 /** World-authoritative immutable thermal registry with atomic first publication. */
 public final class ThermalRegistryStore {
-	private static final int FORMAT_VERSION = 2;
+	private static final String SCHEMA = "thermal-registry";
 	private static final long MAX_BYTES = 8L * 1024L * 1024L;
 	private static final Set<String> KNOWN_FILES = Set.of("registry.nbt", "registry.nbt.tmp");
 
@@ -77,14 +77,14 @@ public final class ThermalRegistryStore {
 		try { root = NbtIo.readCompressed(path, NbtAccounter.create(MAX_BYTES)); }
 		catch (RuntimeException invalid) { throw new IOException("Unreadable thermal registry snapshot " + path, invalid); }
 		requireAll(root, Map.ofEntries(
-				Map.entry("Version", Tag.TAG_INT), Map.entry("UnitSystem", Tag.TAG_STRING),
+				Map.entry("Schema", Tag.TAG_STRING), Map.entry("UnitSystem", Tag.TAG_STRING),
 				Map.entry("Fingerprint", Tag.TAG_STRING), Map.entry("Canonical", Tag.TAG_BYTE_ARRAY),
 				Map.entry("ChemicalFingerprint", Tag.TAG_STRING), Map.entry("GranularFingerprint", Tag.TAG_STRING),
 				Map.entry("Materials", Tag.TAG_LIST), Map.entry("SpeciesOffsets", Tag.TAG_LIST),
 				Map.entry("Transitions", Tag.TAG_LIST), Map.entry("Boundaries", Tag.TAG_LIST)));
-		if (root.getIntOr("Version", -1) != FORMAT_VERSION
+		if (!root.getStringOr("Schema", "").equals(SCHEMA)
 				|| !ThermalRegistry.UNIT_SYSTEM_ID.equals(root.getStringOr("UnitSystem", ""))) {
-			throw new IOException("Unsupported thermal registry version or unit system");
+			throw new IOException("Unsupported thermal registry schema or unit system");
 		}
 		try {
 			String chemical = root.getStringOr("ChemicalFingerprint", "");
@@ -109,7 +109,7 @@ public final class ThermalRegistryStore {
 
 	private static CompoundTag encode(ThermalRegistry registry) {
 		CompoundTag root = new CompoundTag();
-		root.putInt("Version", FORMAT_VERSION); root.putString("UnitSystem", ThermalRegistry.UNIT_SYSTEM_ID);
+		root.putString("Schema", SCHEMA); root.putString("UnitSystem", ThermalRegistry.UNIT_SYSTEM_ID);
 		root.putString("Fingerprint", registry.fingerprint()); root.putByteArray("Canonical", registry.canonicalBytes());
 		root.putString("ChemicalFingerprint", registry.chemicalRegistryFingerprint());
 		root.putString("GranularFingerprint", registry.granularRegistryFingerprint());

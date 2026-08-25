@@ -444,7 +444,7 @@ public final class M9ThermalValidation {
 				&& (display.debugFlags()[liquidCell] & ThermalDisplaySnapshot.FLAG_CONDENSED) != 0
 				&& Byte.toUnsignedInt(display.coherentFraction()[liquidCell]) == 0
 				&& display.gasNodes().size() == 1 && display.gasNodes().getFirst().nodeId() == 1,
-				"thermal v5 display did not derive quantized condensed/gas state in one rebuild");
+				"thermal display did not derive quantized condensed/gas state in one rebuild");
 		double liquidMassBefore = domain.totalMass();
 		double boiledSolverMass = CondensedMassScale.forCellSize(config.cellSize())
 				.solverMassWeight(batchMass.toDouble());

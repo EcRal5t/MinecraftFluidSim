@@ -546,18 +546,18 @@ public final class RegionStateFiles {
 
 	private static CompoundTag encodeHead(Head head) {
 		CompoundTag tag = new CompoundTag();
-		tag.putInt("Version", 1); tag.putLong("UuidMost", head.id().getMostSignificantBits()); tag.putLong("UuidLeast", head.id().getLeastSignificantBits());
+		tag.putString("Schema", "region-head"); tag.putLong("UuidMost", head.id().getMostSignificantBits()); tag.putLong("UuidLeast", head.id().getLeastSignificantBits());
 		tag.putLong("Generation", head.generation()); tag.putString("Slot", head.slot()); tag.putLong("ManifestChecksum", head.manifestChecksum());
 		tag.putLong("Checksum", headChecksum(head.id(), head.generation(), head.slot(), head.manifestChecksum()));
 		return tag;
 	}
 
 	private static Head decodeHead(CompoundTag tag, UUID expectedId) throws IOException {
-		int version = tag.getIntOr("Version", -1);
+		String schema = tag.getStringOr("Schema", "");
 		UUID id = new UUID(tag.getLongOr("UuidMost", 0L), tag.getLongOr("UuidLeast", 0L));
 		long generation = tag.getLongOr("Generation", -1L), manifestChecksum = tag.getLongOr("ManifestChecksum", -1L);
 		String slot = tag.getStringOr("Slot", "");
-		if (version != 1 || !id.equals(expectedId) || generation <= 0L || (!slot.equals(SLOT_A) && !slot.equals(SLOT_B))) {
+		if (!schema.equals("region-head") || !id.equals(expectedId) || generation <= 0L || (!slot.equals(SLOT_A) && !slot.equals(SLOT_B))) {
 			throw new IOException("Invalid region-state HEAD for " + expectedId);
 		}
 		if (tag.getLongOr("Checksum", -1L) != headChecksum(id, generation, slot, manifestChecksum)) {

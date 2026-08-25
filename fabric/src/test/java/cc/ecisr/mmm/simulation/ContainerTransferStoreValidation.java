@@ -47,7 +47,7 @@ public final class ContainerTransferStoreValidation {
 		Path root = Files.createTempDirectory("mmm-container-wal-test");
 		try {
 			run("round-trip and atomic replace", ContainerTransferStoreValidation::testRoundTrip);
-			run("thermal WAL v5 couples item and region energy", ContainerTransferStoreValidation::testThermalWal);
+			run("thermal WAL couples item and region energy", ContainerTransferStoreValidation::testThermalWal);
 			run("player and dispenser actor codecs", ContainerTransferStoreValidation::testActorCodecs);
 			run("invalid generations and dimensions are rejected", ContainerTransferStoreValidation::testValidation);
 			run("delete removes the transaction", ContainerTransferStoreValidation::testDelete);
@@ -70,7 +70,7 @@ public final class ContainerTransferStoreValidation {
 	}
 
 	private static void testThermalWal() throws Exception {
-		Path root = Files.createTempDirectory("mmm-wal-v5-thermal");
+		Path root = Files.createTempDirectory("mmm-wal-thermal");
 		ContainerTransferStore store = new ContainerTransferStore(root);
 		UUID transaction = UUID.randomUUID(), region = UUID.randomUUID();
 		String fingerprint = "b".repeat(64);
@@ -89,18 +89,18 @@ public final class ContainerTransferStoreValidation {
 				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"), before, before, -1L,
 				ContainerTransferJournal.Phase.PREPARED);
 		store.write(prepared);
-		check(store.read(transaction).equals(prepared), "prepared thermal WAL v5 did not round-trip");
+		check(store.read(transaction).equals(prepared), "prepared thermal WAL did not round-trip");
 		CompoundTag encoded = NbtIo.readCompressed(store.directoryPath().resolve(transaction + ".nbt"),
 				NbtAccounter.create(4L * 1024L * 1024L));
-		check(encoded.getIntOr("Version", -1) == 5 && encoded.get("ThermalEnergyBits") != null,
-				"thermal transaction was not written as WAL v5");
+		check(encoded.getStringOr("Layout", "").equals("thermal") && encoded.get("ThermalEnergyBits") != null,
+				"thermal transaction did not use the thermal WAL layout");
 
 		ContainerTransferJournal committed = ContainerTransferJournal.thermalFluid(
 				transaction, region, "minecraft:overworld", 7L, 8L,
 				ContainerTransferJournal.Operation.INSERT, ContainerFluidLedger.NANOS_PER_BLOCK, transfer,
 				prepared.actor(), before, after, 0x7711L, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(committed);
-		check(store.read(transaction).equals(committed), "committed thermal WAL v5 did not round-trip");
+		check(store.read(transaction).equals(committed), "committed thermal WAL did not round-trip");
 		ThermalContents.EnergySplit creativeSplit = contents.splitEnergy(500_000_000L,
 				ContainerFluidLedger.NANOS_PER_BLOCK);
 		double creativeEnergy = contents.internalEnergy() - creativeSplit.remainingEnergy();
@@ -119,7 +119,7 @@ public final class ContainerTransferStoreValidation {
 				before, after, 0x7713L, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		try {
 			store.write(wrongEnergy);
-			throw new AssertionError("Expected mismatched WAL v5 item/energy rejection");
+			throw new AssertionError("Expected mismatched WAL item/energy rejection");
 		} catch (IOException expected) {
 			// expected
 		}
@@ -275,7 +275,7 @@ public final class ContainerTransferStoreValidation {
 				ContainerTransferJournal.Actor.player(UUID.randomUUID(), "MAIN_HAND"),
 				chemicalBefore, materialAfter, 0x5abcL, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(chemical);
-		check(chemical.equals(store.read(tx5)), "chemical bucket WAL v3 fingerprint did not round-trip");
+		check(chemical.equals(store.read(tx5)), "chemical bucket WAL fingerprint did not round-trip");
 		check(chemical.requiresChemicalRegistry(), "chemical WAL did not declare its registry dependency");
 		chemical.validateChemicalRegistry(BuiltinChemicalDefinitions.REGISTRY);
 		ChemicalContents foreignContents = new ChemicalContents("0".repeat(64), ChemicalLimits.QUANTA_PER_AU,
@@ -343,7 +343,7 @@ public final class ContainerTransferStoreValidation {
 				granularBefore, granularAfter, 0x7abcL,
 				ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(granular);
-		check(granular.equals(store.read(tx7)), "granular container WAL v4 fingerprint did not round-trip");
+		check(granular.equals(store.read(tx7)), "granular container WAL fingerprint did not round-trip");
 		check(granular.requiresGranularRegistry() && granular.requiresChemicalRegistry(),
 				"reactive granular WAL did not declare both registry dependencies");
 		granular.validateGranularRegistry(granularRegistry, BuiltinChemicalDefinitions.REGISTRY);

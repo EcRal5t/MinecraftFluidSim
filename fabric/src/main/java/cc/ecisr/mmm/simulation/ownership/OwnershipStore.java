@@ -190,7 +190,7 @@ public final class OwnershipStore {
 				World directory / 世界目录: %s
 				Region / 区域: %s
 				Dimension / 维度: %s
-				WAL version / 日志版本: 1
+				WAL schema / 日志布局: ownership-transition
 				Operation / 操作: %s
 				Base -> target generation / 基础 -> 目标代次: %d -> %d
 				Transition entries / 事务条目数: %d

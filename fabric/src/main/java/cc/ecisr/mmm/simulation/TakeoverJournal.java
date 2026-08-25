@@ -5,7 +5,7 @@ import net.minecraft.nbt.CompoundTag;
 import java.util.List;
 import java.util.Objects;
 
-/** In-memory form of takeover-journal v1. The serialized field layout is owned by the codec. */
+/** In-memory takeover journal. The serialized field layout is owned by the codec. */
 record TakeoverJournal(String dimensionId, List<BlockEntry> blocks) {
 	TakeoverJournal {
 		Objects.requireNonNull(dimensionId, "dimensionId");
