@@ -29,7 +29,9 @@ public record FluidCellObservation(
 				|| !(Double.isFinite(liquidVolumeCubicMetres) && liquidVolumeCubicMetres > 0.0)
 				|| !(Double.isFinite(liquidMassKilograms) && liquidMassKilograms > 0.0)
 				|| !(Double.isFinite(densityKilogramsPerCubicMetre) && densityKilogramsPerCubicMetre > 0.0)
-				|| temperatureKelvin == null) {
+				|| temperatureKelvin == null || temperatureKelvin.isPresent()
+				&& !(Double.isFinite(temperatureKelvin.getAsDouble()) && temperatureKelvin.getAsDouble() >= 0.0)
+				|| materials == null || species == null) {
 			throw new IllegalArgumentException("Fluid cell observation is invalid");
 		}
 		materials = List.copyOf(materials);

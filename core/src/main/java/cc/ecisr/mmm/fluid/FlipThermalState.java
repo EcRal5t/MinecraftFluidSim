@@ -621,6 +621,54 @@ final class FlipThermalState {
 		return cellGrid.occupied(cell) ? cellGrid.temperature(cell) : Double.NaN;
 	}
 
+	/**
+	 * Derives one cell's LTE temperature directly from authoritative carrier inventory and energy.
+	 * Unlike {@link #temperatureInCell(int, MarkerContext)}, this observation path does not rebuild or
+	 * mutate the reusable transport grid.
+	 */
+	double observeTemperatureInCell(int cell, MarkerContext markers) {
+		if (cell < 0 || cell >= cellGrid.cellCount() || markers == null) {
+			throw new IllegalArgumentException("Thermal observation cell is invalid");
+		}
+		ArrayList<ThermalStateFunction.InventoryPortion> inventory = new ArrayList<>();
+		SignedDyadic energy = SignedDyadic.ZERO;
+		for (int marker = 0; marker < markers.markerCount(); marker++) if (markers.cell(marker) == cell) {
+			inventory.add(new ThermalStateFunction.InventoryPortion(
+					materialByFluidHandle[markers.fluidMaterialHandle(marker)],
+					condensedMassScale.kilograms(markers.mass(marker)),
+					stableAmounts(markers.mixture(marker), markers.chemicalRegistry())));
+			energy = energy.add(SignedDyadic.of(internalEnergy[marker]));
+		}
+		for (CoherentPhaseStore.Group group : coherentPhases.snapshot()) if (group.cell() == cell) {
+			inventory.add(new ThermalStateFunction.InventoryPortion(
+					registry.materialHandle(group.phaseId()), group.mass(),
+					group.composition() == null ? Map.of() : group.composition().stableAmounts()));
+			energy = energy.add(SignedDyadic.of(group.internalEnergy()));
+		}
+		if (markers.activeParcelCount() != granularEnergy.activeCount()) {
+			throw new IllegalStateException("Granular thermal ordinals differ from active inventory");
+		}
+		for (int parcel = 0; parcel < markers.activeParcelCount(); parcel++) {
+			if (markers.activeParcelCell(parcel) != cell) continue;
+			addGranularPortion(inventory, markers.activeParcelMaterial(parcel),
+					markers.activeParcelMass(parcel),
+					markers.solidComposition(markers.activeParcelComposition(parcel)));
+			energy = energy.add(SignedDyadic.of(granularEnergy.activeEnergy(parcel)));
+		}
+		List<GranularEnergyColumn.DepositKey> depositKeys = markers.depositKeys();
+		if (!depositKeys.equals(granularEnergy.depositSnapshot().stream()
+				.map(GranularEnergyColumn.DepositEnergy::key).toList())) {
+			throw new IllegalStateException("Granular thermal ordinals differ from deposit inventory");
+		}
+		for (GranularEnergyColumn.DepositKey key : depositKeys) if (key.cell() == cell) {
+			addGranularPortion(inventory, key.materialHandle(), markers.depositMass(key),
+					markers.solidComposition(key.compositionHandle()));
+			energy = energy.add(SignedDyadic.of(granularEnergy.depositEnergy(key)));
+		}
+		return inventory.isEmpty() ? Double.NaN
+				: stateFunction.stateForInventory(inventory, energy.toDouble()).temperatureK();
+	}
+
 	/** Solves a prospective liquid/coherent phase edit while retaining every same-cell granular heat-bath carrier. */
 	double phaseCandidateTemperature(
 			int cell, List<ThermalStateFunction.InventoryPortion> phaseInventory, MarkerContext markers

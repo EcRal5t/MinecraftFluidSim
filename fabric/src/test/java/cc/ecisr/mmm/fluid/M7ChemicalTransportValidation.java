@@ -426,6 +426,7 @@ public final class M7ChemicalTransportValidation {
 		FluidCellInventoryView brine = stratified.observeCellInventory(2, 1, 1);
 		check(Math.abs(freshDensity - 1_000.0) < 1.0E-9
 				&& brineDensity > 1_099.999 && brineDensity < 1_100.001
+				&& stratified.usesMassWeightedP2G()
 				&& brine != null && Math.abs(brine.densityKilogramsPerCubicMetre() - brineDensity) < 1.0E-9
 				&& brine.species().stream().anyMatch(value -> value.speciesId().equals(BuiltinChemicalDefinitions.NACL)),
 				"species mass/marker volume did not produce concentration-dependent cell density: fresh="

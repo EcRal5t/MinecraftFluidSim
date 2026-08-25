@@ -441,10 +441,11 @@ public final class FlipFluidDomain {
 					materialVolume[material] * cubicMetresPerCell,
 					materialMass[material] * cubicMetresPerCell));
 		}
+		materials.sort(java.util.Comparator.comparing(FluidCellInventoryView.MaterialAmount::materialId));
 		java.util.ArrayList<FluidCellInventoryView.SpeciesAmount> stableSpecies = new java.util.ArrayList<>();
 		species.forEach((id, amount) -> stableSpecies.add(new FluidCellInventoryView.SpeciesAmount(id, amount)));
 		java.util.OptionalDouble temperature = thermalState == null ? java.util.OptionalDouble.empty()
-				: java.util.OptionalDouble.of(thermalState.temperatureInCell(requested, thermalMarkerContext()));
+				: java.util.OptionalDouble.of(thermalState.observeTemperatureInCell(requested, thermalMarkerContext()));
 		return new FluidCellInventoryView(normalizedVolume * cubicMetresPerCell,
 				solverMass * cubicMetresPerCell, solverMass / normalizedVolume,
 				temperature, materials, stableSpecies);

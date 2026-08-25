@@ -33,6 +33,7 @@ final class FabricFluidQueryApi implements MmmQueryApi {
 		FluidRegion identityMatch = null;
 		FluidRegion owner = null;
 		boolean outsideInterior = false;
+		boolean ambiguousOwner = false;
 		for (FluidRegion region : regions.regions()) {
 			if (request.regionId() != null && !request.regionId().equals(region.id())) continue;
 			if (!request.dimensionId().equals(region.dimension().identifier().toString())) continue;
@@ -44,19 +45,24 @@ final class FabricFluidQueryApi implements MmmQueryApi {
 				outsideInterior = true;
 				continue;
 			}
+			if (owner != null) {
+				ambiguousOwner = true;
+				continue;
+			}
 			owner = region;
-			break;
 		}
+		if (ambiguousOwner) return absent(FluidQueryStatus.REGION_UNAVAILABLE,
+				"multiple registered regions claim the requested point");
 		if (owner == null) {
 			if (outsideInterior) return absent(FluidQueryStatus.OUTSIDE_INTERIOR,
 					"point is outside the controller-owned interior");
 			return absent(FluidQueryStatus.NO_REGION, identityMatch == null
 					? "no matching region identity/dimension" : "point is outside the matching region");
 		}
-		if (!owner.solverLoaded()) return absent(FluidQueryStatus.REGION_NOT_LOADED,
-				"matching region exists but its solver is unloaded");
 		if (owner.availabilityFailure() != null) return absent(FluidQueryStatus.REGION_UNAVAILABLE,
 				"matching region is unavailable: " + owner.availabilityFailure());
+		if (!owner.solverLoaded()) return absent(FluidQueryStatus.REGION_NOT_LOADED,
+				"matching region exists but its solver is unloaded");
 		double h = owner.solverConfig().cellSize();
 		int cellX = (int) Math.floor((request.worldXMetres() - owner.origin().getX()) / h);
 		int cellY = (int) Math.floor((request.worldYMetres() - owner.origin().getY()) / h);

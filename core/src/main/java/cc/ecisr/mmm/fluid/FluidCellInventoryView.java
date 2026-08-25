@@ -16,7 +16,8 @@ public record FluidCellInventoryView(
 		if (!(Double.isFinite(liquidVolumeCubicMetres) && liquidVolumeCubicMetres > 0.0)
 				|| !(Double.isFinite(liquidMassKilograms) && liquidMassKilograms > 0.0)
 				|| !(Double.isFinite(densityKilogramsPerCubicMetre) && densityKilogramsPerCubicMetre > 0.0)
-				|| temperatureKelvin == null) {
+				|| temperatureKelvin == null || temperatureKelvin.isPresent()
+				&& !(Double.isFinite(temperatureKelvin.getAsDouble()) && temperatureKelvin.getAsDouble() >= 0.0)) {
 			throw new IllegalArgumentException("Cell inventory view is invalid");
 		}
 		materials = List.copyOf(materials);
