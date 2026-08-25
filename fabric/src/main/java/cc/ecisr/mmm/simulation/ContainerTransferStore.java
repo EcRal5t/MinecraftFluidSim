@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.simulation.persistence.DurableFileOperations;
+import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
@@ -17,7 +18,10 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 
 /**
@@ -331,6 +335,7 @@ transactionId, regionId, dimensionId, baseGeneration, targetGeneration,
 operation, resourceKind, volumeNanos, solidVolumeSvq, thermalTransfer,
 actor, beforeItem, afterItem, targetManifestChecksum, phase);
 validateTransferShape(journal, true);
+validateKnownFields(root, journal, layout);
 return journal;
 }
 
@@ -340,7 +345,7 @@ CompoundTag root, String prefix, ContainerTransferJournal.ItemFingerprint item, 
 root.putString(prefix + "Kind", itemKindName(item.kind()));
 root.putLong(prefix + "Nanos", item.nanos());
 root.putLong(prefix + "SolidVolumeSvq", item.solidVolumeSvq());
-if (item.materialId() != null) root.putString(prefix + "MaterialId", item.materialId());
+if (item.contents() != null) root.putString(prefix + "MaterialId", item.contents());
 root.putLong(prefix + "MassBits", item.massBits());
 if (layout == Layout.THERMAL && item.thermalContents() != null) {
 root.putString(prefix + "ThermalContents", item.thermalContents());
@@ -423,9 +428,56 @@ if (Identifier.tryParse(dimensionId) == null) throw new IOException("Invalid con
 }
 
 private static void validateGeneration(long base, long target) throws IOException {
-if (base < 0L || target != base + 1L) {
-throw new IOException("Container transfer WAL generations are inconsistent: base " + base + ", target " + target);
+GenerationSequence.requireNext(base, target, "Container transfer WAL");
 }
+
+/** Unknown keys may hide inventory that this reader cannot preserve after convergence. */
+private static void validateKnownFields(
+CompoundTag root, ContainerTransferJournal journal, Layout layout
+) throws IOException {
+Set<String> allowed = new HashSet<>(List.of(
+"Layout", "TxUuidMost", "TxUuidLeast", "RegionUuidMost", "RegionUuidLeast", "Dimension",
+"BaseGeneration", "TargetGeneration", "Operation", "ResourceKind", "ActorType", "Phase",
+"TargetManifestChecksum"
+));
+switch (journal.resourceKind()) {
+case FLUID_NANOS -> allowed.add("VolumeNanos");
+case GRANULAR_SVQ -> allowed.add("SolidVolumeSvq");
+}
+if (layout == Layout.THERMAL) {
+allowed.add("ThermalRegistryFingerprint");
+allowed.add("ThermalEnergyBits");
+}
+switch (journal.actor().type()) {
+case PLAYER_HAND -> {
+allowed.add("PlayerUuidMost");
+allowed.add("PlayerUuidLeast");
+allowed.add("Hand");
+}
+case DISPENSER -> {
+allowed.add("ActorDimension");
+allowed.add("DispenserX");
+allowed.add("DispenserY");
+allowed.add("DispenserZ");
+allowed.add("DispenserSlot");
+}
+}
+addFingerprintFields(allowed, "Before", journal.beforeItem(), layout);
+addFingerprintFields(allowed, "After", journal.afterItem(), layout);
+TreeSet<String> unknown = new TreeSet<>(root.keySet());
+unknown.removeAll(allowed);
+if (!unknown.isEmpty()) throw new IOException("Container transfer WAL contains unknown fields: " + unknown);
+}
+
+private static void addFingerprintFields(
+Set<String> allowed, String prefix, ContainerTransferJournal.ItemFingerprint item, Layout layout
+) {
+allowed.add(prefix + "Kind");
+allowed.add(prefix + "Nanos");
+allowed.add(prefix + "SolidVolumeSvq");
+allowed.add(prefix + "MassBits");
+if (item.contents() != null) allowed.add(prefix + "MaterialId");
+if (layout == Layout.THERMAL && item.thermalContents() != null) allowed.add(prefix + "ThermalContents");
 }
 
 /** Rejects syntactically valid WALs whose item delta cannot settle the declared solver delta. */

@@ -101,6 +101,17 @@ public final class M6OwnershipValidation {
 		} catch (IllegalArgumentException expectedFailure) {
 			// expected
 		}
+		try {
+			new OwnershipJournal(regionId, DIMENSION_ID, Long.MAX_VALUE, Long.MIN_VALUE,
+					OwnershipJournal.Operation.ACQUIRE, entries(1));
+			throw new AssertionError("Expected IllegalArgumentException for an overflowed generation pair");
+		} catch (IllegalArgumentException expectedFailure) {
+			// expected
+		}
+		CompoundTag overflowed = journalCodec.encode(expected);
+		overflowed.putLong("BaseGeneration", Long.MAX_VALUE);
+		overflowed.putLong("TargetGeneration", Long.MIN_VALUE);
+		expectIOException(() -> journalCodec.decode(overflowed));
 
 		OwnershipCommittedCodec committedCodec = new OwnershipCommittedCodec();
 		OwnershipCommitted committed = new OwnershipCommitted(regionId, DIMENSION_ID, 4L, entries(2));

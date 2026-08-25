@@ -374,6 +374,13 @@ public final class ContainerTransferStoreValidation {
 				ContainerTransferJournal.Phase.PREPARED
 		);
 		checkThrows(IOException.class, () -> store.write(badGeneration), "bad generation must be rejected");
+		ContainerTransferJournal overflowGeneration = new ContainerTransferJournal(
+				UUID.randomUUID(), UUID.randomUUID(), "minecraft:overworld", Long.MAX_VALUE, Long.MIN_VALUE,
+				ContainerTransferJournal.Operation.INSERT, 1L, actor, item, item,
+				ContainerTransferJournal.Phase.PREPARED
+		);
+		checkThrows(IOException.class, () -> store.write(overflowGeneration),
+				"overflowed generation pair must be rejected");
 
 		ContainerTransferJournal badDimension = new ContainerTransferJournal(
 				UUID.randomUUID(), UUID.randomUUID(), "not a dimension", 0L, 1L,
@@ -389,6 +396,15 @@ public final class ContainerTransferStoreValidation {
 				item, ContainerTransferJournal.Phase.PREPARED
 		);
 		checkThrows(IOException.class, () -> store.write(badPartial), "invalid partial volume must be rejected");
+
+		ContainerTransferJournal valid = journal(ContainerTransferJournal.Phase.PREPARED);
+		store.write(valid);
+		Path validPath = store.directoryPath().resolve(valid.transactionId() + ".nbt");
+		CompoundTag encoded = NbtIo.readCompressed(validPath, NbtAccounter.create(4L * 1024L * 1024L));
+		encoded.putLong("FutureInventory", 1L);
+		NbtIo.writeCompressed(encoded, validPath);
+		checkThrows(IOException.class, () -> store.read(valid.transactionId()),
+				"unknown WAL fields must be preserved as unreadable instead of ignored");
 	}
 
 	private static void testDelete() throws Exception {

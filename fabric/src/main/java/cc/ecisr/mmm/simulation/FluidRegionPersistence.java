@@ -11,6 +11,7 @@ import cc.ecisr.mmm.simulation.ownership.OwnershipCoordinator;
 import cc.ecisr.mmm.simulation.ownership.OwnershipFiles;
 import cc.ecisr.mmm.simulation.ownership.OwnershipJournal;
 import cc.ecisr.mmm.simulation.ownership.OwnershipStore;
+import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
 import cc.ecisr.mmm.simulation.persistence.RegionManifest;
 import cc.ecisr.mmm.simulation.persistence.RegionState;
 import cc.ecisr.mmm.simulation.persistence.RegionStateFiles;
@@ -171,7 +172,7 @@ final class FluidRegionPersistence {
 		if (ownershipLock != null) {
 			throw new IOException("Unresolved world ownership state blocks checkpoint: " + ownershipLock);
 		}
-		long generation = Math.addExact(region.checkpointGeneration(), 1L);
+		long generation = GenerationSequence.next(region.checkpointGeneration(), "Region checkpoint");
 		long published = files.publish(captureForFeatureGate(region, generation));
 		if (!region.recordPublishedCheckpoint(published)) throw new IOException("Published checkpoint was not accepted by the live region");
 		return published;
@@ -186,7 +187,7 @@ final class FluidRegionPersistence {
 	}
 
 	StagedCheckpoint stageCheckpoint(FluidRegion region, long targetGeneration) throws IOException {
-		if (targetGeneration != region.checkpointGeneration() + 1L) {
+		if (!GenerationSequence.isNext(region.checkpointGeneration(), targetGeneration)) {
 			throw new IOException("Staged checkpoint target does not advance the live region by one generation");
 		}
 		String ownershipLock = ownershipLockDescription(region);
@@ -247,8 +248,8 @@ final class FluidRegionPersistence {
 		}
 		String dimensionId = region.dimension().identifier().toString();
 		long baseGeneration = files.committedGeneration(region.id());
-		long generation = baseGeneration + 1L;
-		if (generation != region.checkpointGeneration() + 1L) {
+		long generation = GenerationSequence.next(baseGeneration, "Ownership acquire checkpoint");
+		if (!GenerationSequence.isNext(region.checkpointGeneration(), generation)) {
 			throw new IOException("Region checkpoint " + region.checkpointGeneration()
 					+ " is out of sync with its committed HEAD " + baseGeneration);
 		}
@@ -312,7 +313,7 @@ final class FluidRegionPersistence {
 				return ReleaseAttempt.NOT_OWNED;
 			}
 			long baseGeneration = files.committedGeneration(region.id());
-			targetGeneration = baseGeneration + 1L;
+			targetGeneration = GenerationSequence.next(baseGeneration, "Ownership release checkpoint");
 			RegionState staged = captureForFeatureGate(region, targetGeneration);
 			String warning = OwnershipStore.warningText(ownershipStore.worldRoot(),
 					region.id(), committed.dimensionId(), OwnershipJournal.Operation.RELEASE,

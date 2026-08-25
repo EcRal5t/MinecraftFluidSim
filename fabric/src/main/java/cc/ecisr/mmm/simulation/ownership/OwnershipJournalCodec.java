@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.simulation.ownership;
 
+import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -64,10 +65,7 @@ final class OwnershipJournalCodec {
 		long baseGeneration = root.getLongOr("BaseGeneration", Long.MIN_VALUE);
 		requireType(root, "TargetGeneration", Tag.TAG_LONG);
 		long targetGeneration = root.getLongOr("TargetGeneration", Long.MIN_VALUE);
-		if (baseGeneration < 0L || targetGeneration != baseGeneration + 1L) {
-			throw new IOException("Ownership WAL generations are inconsistent: base " + baseGeneration
-					+ ", target " + targetGeneration);
-		}
+		GenerationSequence.requireNext(baseGeneration, targetGeneration, "Ownership WAL");
 
 		requireType(root, "Operation", Tag.TAG_STRING);
 		OwnershipJournal.Operation operation = parseOperation(root.getStringOr("Operation", ""));

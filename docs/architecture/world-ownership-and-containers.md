@@ -59,7 +59,7 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 - 热液体另外保存 registry-bound 总内能。
 - item count 必须为 1；damage、tooltip、durability bar、颜色和温度不参与结算。
 
-item fingerprint 编码实际可结算的整组数据，而非仅 item id：kind、typed amount、stable material/mixture/chemical/granular payload、raw mass bits、可选 ThermalContents 以及其 registry/underlying hash。空桶、部分桶、材料桶、化学桶和颗粒容器是不同 shape；shape 之间缺字段或同时出现冲突 component 都拒绝。
+item fingerprint 编码实际可结算的整组数据，而非仅 item id：kind、typed amount、stable mixture/chemical/granular contents、raw mass bits、可选 ThermalContents 以及其 registry/underlying hash。`ContainerTransferJournal` 只保存这一数据，`ContainerTransferItems` 独占 fingerprint 与 `ItemStack` 的双向映射。空桶、部分桶、材料桶、化学桶和颗粒容器是不同 shape；shape 之间缺字段或同时出现冲突 component 都拒绝。
 
 液体抽取允许生成不足 1 BV 的 partial item；放入已有部分桶时仍按实际剩余容量规划。`FluidMixture`、`ChemicalContents`、`GranularContents` 和 `ThermalContents` 都有自己的规范编码与总账，item component 只是这些真值的载体。
 
@@ -86,9 +86,9 @@ insert/extract 返回“实际转移量”，WAL 和 after item 必须使用这�
 6. 修改 actor item，并等待玩家存档或 dispenser chunk 完成 durable save。
 7. 删除 WAL。
 
-恢复必须核对 HEAD、checksum、actor、before/after item、resource kind、registry fingerprint 和 generation。任何歧义都保留 WAL 并锁定；不得因为 item 看起来相似就推断完成状态。
+恢复必须核对 HEAD、checksum、actor、before/after item、resource kind、registry fingerprint 和 generation。region、ownership 与 container 的紧邻代次统一拒绝负数和 `long` 溢出，不能让 `Long.MAX_VALUE + 1` 被误认成合法 target。任何歧义都保留 WAL 并锁定；不得因为 item 看起来相似就推断完成状态。
 
-当前 WAL 有材料布局和含热布局。reader 只接受当前 writer 产生的两种完整形状，不补缺字段。
+当前 WAL 有材料布局和含热布局。reader 只接受当前 writer 产生的完整字段集合：缺字段、错 NBT 类型、额外未知字段和溢出的 generation pair 都保持原文件并锁定，不做补全或忽略。
 
 `ControllerItemTransferCoordinator` 独占 WAL、staged checkpoint、HEAD 发布与 actor 收敛顺序；`FluidTransferService` 只负责 Minecraft item 分类、目标解析和选择 exact solver primitive。更精确的运行序列是：
 

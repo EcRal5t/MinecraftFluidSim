@@ -2,6 +2,7 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.item.ContainerItemStacks;
+import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
 import cc.ecisr.mmm.transfer.ThermalContents;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
@@ -48,11 +49,17 @@ final class ControllerItemTransferCoordinator {
 		}
 
 		long baseGeneration = region.checkpointGeneration();
-		long targetGeneration = Math.addExact(baseGeneration, 1L);
+		long targetGeneration;
+		try {
+			targetGeneration = GenerationSequence.next(baseGeneration, "Container transfer checkpoint");
+		} catch (IOException exhausted) {
+			service.lockContainerTransferRegion(region, exhausted.getMessage());
+			return failed(operation, beforeStack, exhausted.getMessage(), null);
+		}
 		UUID transactionId = UUID.randomUUID();
 		ContainerTransferJournal.ItemFingerprint beforeFingerprint;
 		try {
-			beforeFingerprint = ContainerTransferJournal.ItemFingerprint.of(beforeStack);
+			beforeFingerprint = ContainerTransferItems.fingerprint(beforeStack);
 		} catch (IllegalArgumentException invalidItem) {
 			return failed(operation, beforeStack, invalidItem.getMessage(), null);
 		}
@@ -125,7 +132,7 @@ final class ControllerItemTransferCoordinator {
 		ContainerTransferJournal.ItemFingerprint afterFingerprint;
 		try {
 			finalAfter = finalItemResolver.resolve(rawOutcome.stack(), beforeStack);
-			afterFingerprint = ContainerTransferJournal.ItemFingerprint.of(finalAfter);
+			afterFingerprint = ContainerTransferItems.fingerprint(finalAfter);
 		} catch (RuntimeException invalidAfterItem) {
 			region.setPaused(true);
 			region.setAvailabilityFailure("容器转移 after-item 无法写入 WAL，区域已锁定；重启后恢复："

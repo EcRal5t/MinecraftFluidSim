@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.simulation.ownership;
 
+import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
 import net.minecraft.nbt.CompoundTag;
 
 import java.util.List;
@@ -28,7 +29,7 @@ public record OwnershipJournal(
 		Objects.requireNonNull(regionId, "regionId");
 		Objects.requireNonNull(dimensionId, "dimensionId");
 		Objects.requireNonNull(operation, "operation");
-		if (targetGeneration != baseGeneration + 1L) {
+		if (!GenerationSequence.isNext(baseGeneration, targetGeneration)) {
 			throw new IllegalArgumentException("target generation must be base generation + 1");
 		}
 		blocks = List.copyOf(blocks);

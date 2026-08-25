@@ -734,7 +734,7 @@ public final class FluidSimulationService {
 		};
 		ItemStack current = player.getItemInHand(hand);
 		if (!fingerprintMatches(current, journal.beforeItem()) && !fingerprintMatches(current, journal.afterItem())) return false;
-		player.setItemInHand(hand, journal.afterItem().toStack());
+		player.setItemInHand(hand, ContainerTransferItems.toStack(journal.afterItem()));
 		player.getInventory().setChanged();
 		return true;
 	}
@@ -751,14 +751,14 @@ public final class FluidSimulationService {
 		if (actor.dispenserSlot() < 0 || actor.dispenserSlot() >= dispenser.getContainerSize()) return false;
 		ItemStack current = dispenser.getItem(actor.dispenserSlot());
 		if (!fingerprintMatches(current, journal.beforeItem()) && !fingerprintMatches(current, journal.afterItem())) return false;
-		dispenser.setItem(actor.dispenserSlot(), journal.afterItem().toStack());
+		dispenser.setItem(actor.dispenserSlot(), ContainerTransferItems.toStack(journal.afterItem()));
 		dispenser.setChanged();
 		return true;
 	}
 
 	private static boolean fingerprintMatches(ItemStack stack, ContainerTransferJournal.ItemFingerprint fingerprint) {
 		try {
-			return ContainerTransferJournal.ItemFingerprint.of(stack).equals(fingerprint);
+			return ContainerTransferItems.fingerprint(stack).equals(fingerprint);
 		} catch (IllegalArgumentException invalid) {
 			return false;
 		}

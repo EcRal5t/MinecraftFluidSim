@@ -2,6 +2,7 @@ package cc.ecisr.mmm.simulation.ownership;
 
 import cc.ecisr.mmm.simulation.persistence.RegionState;
 import cc.ecisr.mmm.simulation.persistence.RegionStateFiles;
+import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
 
 import java.io.IOException;
 import java.util.List;
@@ -40,7 +41,7 @@ public final class OwnershipCoordinator {
 		RegionStateFiles.PreparedGeneration prepared = regionFiles.prepare(target, (point, path) -> { });
 		try {
 			long baseGeneration = prepared.baseGeneration() == null ? 0L : prepared.baseGeneration();
-			if (target.manifest().checkpointGeneration() != baseGeneration + 1L) {
+			if (!GenerationSequence.isNext(baseGeneration, target.manifest().checkpointGeneration())) {
 				throw new IOException("Acquire target generation must be one past the committed region HEAD "
 						+ baseGeneration + ", got " + target.manifest().checkpointGeneration());
 			}
@@ -107,7 +108,7 @@ public final class OwnershipCoordinator {
 		RegionStateFiles.PreparedGeneration prepared = regionFiles.prepare(target, (point, path) -> { });
 		try {
 			long baseGeneration = prepared.baseGeneration() == null ? 0L : prepared.baseGeneration();
-			if (target.manifest().checkpointGeneration() != baseGeneration + 1L) {
+			if (!GenerationSequence.isNext(baseGeneration, target.manifest().checkpointGeneration())) {
 				throw new IOException("Release target generation must be one past the committed region HEAD "
 						+ baseGeneration + ", got " + target.manifest().checkpointGeneration());
 			}
