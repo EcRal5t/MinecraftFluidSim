@@ -22,6 +22,7 @@ import com.example.thermal.GasThermalModel;
 import com.example.thermal.GasLiquidPhaseModel;
 import com.example.thermal.SignedDyadic;
 import com.example.thermal.GranularEnergyColumn;
+import com.example.thermal.LiquidThermalExpansion;
 import com.example.thermal.CoherentPhaseStore;
 import com.example.thermal.CondensedMassScale;
 import com.example.thermal.ThermalBoundaryDefinition;
@@ -71,6 +72,7 @@ public final class M9ThermalValidation {
 		exactDyadicAuditDoesNotLoseCancellationRemainders();
 		containerTransferCarriesAuthoritativeEnergy();
 		liquidTransportAndHandoffCloseEnergy();
+		localizedHeatingDrivesBoussinesqCirculation();
 		partialCutFaceUsesPlicThermalContact();
 		productionFixedBoundaryFieldAuditsExchange();
 		fixedBoundaryAuditsAndFailedStepRollsBack();
@@ -1281,6 +1283,32 @@ public final class M9ThermalValidation {
 				&& close(restored.thermalTemperatureInCell(1, 1, 1), hot)
 				&& close(restored.thermalTemperatureInCell(2, 1, 1), cold),
 				"orthogonal thermal handoff did not preserve energy/temperature");
+	}
+
+	private static void localizedHeatingDrivesBoussinesqCirculation() {
+		require(LiquidThermalExpansion.require(BuiltinFluidMaterials.WATER.id())
+				.relativeBuoyancy(313.15) > 0.0, "water expansion definition does not produce hot buoyancy");
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		ThermalMaterialDefinition water = new ThermalMaterialDefinition("realwater:thermal/buoyancy_water",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
+				293.15, 0.0, 0.598,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4_184.0)));
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 0.05F,
+				100, 1.0E-5F, 0.40F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = new FlipFluidDomain(6, 6, 6, config, 1_728);
+		for (int z = 0; z < 6; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < 6; x++) {
+			if (x == 0 || x == 5 || y == 0 || y == 5 || z == 0 || z == 5) domain.setSolid(x, y, z, true);
+			else domain.setVolume(x, y, z, 1.0F);
+		}
+		domain.bindThermal(new ThermalRegistry(List.of(water)), liquids, 293.15);
+		domain.setThermalTemperatureInCell(2, 1, 2, 333.15);
+		for (int step = 0; step < 4; step++) domain.step();
+		FlipFluidDomain.VelocitySample plume = domain.sampleVelocity(1.25F, 0.75F, 1.25F);
+		FlipFluidDomain.VelocitySample far = domain.sampleVelocity(1.75F, 0.75F, 1.75F);
+		require(plume.y() > far.y() + 1.0E-5F && domain.maximumParticleSpeed() > 1.0E-4F,
+				"localized heat did not create an upward Boussinesq plume: plume=" + plume.y() + " far=" + far.y());
+		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"Boussinesq momentum coupling changed authoritative thermal energy");
 	}
 
 	private static void partialCutFaceUsesPlicThermalContact() {

@@ -34,6 +34,7 @@ import com.example.thermal.CoherentPhaseStore;
 import com.example.thermal.CondensedMassScale;
 import com.example.thermal.GranularEnergyColumn;
 import com.example.thermal.GasLiquidPhaseModel;
+import com.example.thermal.LiquidThermalExpansion;
 import com.example.thermal.ThermalAuditLedger;
 import com.example.thermal.ThermalMaterialDefinition;
 import com.example.thermal.ThermalLimits;
@@ -175,6 +176,8 @@ public final class FlipFluidDomain {
 	private float lastPressureResidual;
 	private boolean variableDensityActive;
 	private FlipThermalState thermalState;
+	private double[] thermalBuoyancySum;
+	private double[] thermalBuoyancyVolume;
 	/** Runtime world-derived fixed-reservoir temperatures; NaN is the canonical adiabatic face. */
 	private double[] thermalBoundaryTemperatureK;
 	private final SignedDyadic[] pendingPhaseCellVolume;
@@ -1279,6 +1282,8 @@ public final class FlipFluidDomain {
 		thermalState = new FlipThermalState(registry, materialRegistry, initialTemperatureK,
 				particleX.length, sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), airNetwork,
 				maximumTransportSubsteps);
+		thermalBuoyancySum = new double[cellCount];
+		thermalBuoyancyVolume = new double[cellCount];
 		if (granularInventory != null) granularInventory.bindThermalEnergy(thermalGranularAdapter());
 		if (granularCoupling == null) {
 			granularCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
@@ -2422,6 +2427,8 @@ public final class FlipFluidDomain {
 
 	private void clearThermalBinding() {
 		thermalState = null;
+		thermalBuoyancySum = null;
+		thermalBuoyancyVolume = null;
 		thermalBoundaryTemperatureK = null;
 		Arrays.fill(pendingPhaseCellVolume, SignedDyadic.ZERO);
 		if (granularRegistry == null) {
@@ -3969,6 +3976,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			// the full hydrostatic gravity/pressure balance in the shared projection.
 			applyGranularPorousDamping(dt);
 			applyGravity(dt);
+			applyThermalBuoyancy(dt);
 			applyLiquidPairSurfaceTensionForce(dt);
 			enforceSolidFaceVelocities();
 			solvePressure(dt);
@@ -4789,6 +4797,32 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				volume[index], freeSurfaceGeometry.exactCellVolume(index), openVolume,
 				hasAirNeighbor(x, y, z), dt
 		);
+	}
+
+	/** Adds the standard Boussinesq density correction to the existing gravity face impulse. */
+	private void applyThermalBuoyancy(float dt) {
+		if (thermalState == null || particleCount == 0 || config.gravity() == 0.0F) return;
+		Arrays.fill(thermalBuoyancySum, 0.0);
+		Arrays.fill(thermalBuoyancyVolume, 0.0);
+		for (int marker = 0; marker < particleCount; marker++) {
+			int cell = particleCellIndex(marker);
+			double markerVolume = particleVolume[marker];
+			String carrier = materialRegistry.material(particleMaterialHandle[marker]).id();
+			double relative = LiquidThermalExpansion.require(carrier)
+					.relativeBuoyancy(thermalMarkerTemperature(marker));
+			thermalBuoyancySum[cell] += markerVolume * relative;
+			thermalBuoyancyVolume[cell] += markerVolume;
+		}
+		double scale = config.gravity() * dt;
+		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z);
+			float aperture = pressureYFaceOpen(x, y, z);
+			if (!faceActive(below, above, aperture)) continue;
+			double volumeSum = thermalBuoyancyVolume[below] + thermalBuoyancyVolume[above];
+			if (volumeSum <= 0.0) continue;
+			double relative = (thermalBuoyancySum[below] + thermalBuoyancySum[above]) / volumeSum;
+			velocityY[yFaceIndex(x, y, z)] += (float) (scale * relative);
+		}
 	}
 
 	private PhaseTransferStats transferGranularPhases(int[] dirtyCells) {

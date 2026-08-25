@@ -391,6 +391,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					thermal.audit(), List.copyOf(ledgers), gasNodeEnergyBits);
 			manifestExtensions.add(new RegionExtension(ThermalRegionStateCodec.MANIFEST_EXTENSION,
 					codec.encodeManifest(data)));
+			if (particles.formatVersion() == 7) manifestExtensions.add(new RegionExtension(
+					ThermalBuoyancyCodec.MANIFEST_EXTENSION, new ThermalBuoyancyCodec().encodeCurrent()));
 			PendingPhaseVolumeState pendingPhaseVolume = region.domain().exportPendingPhaseVolumeState();
 			if (!pendingPhaseVolume.isEmpty()) manifestExtensions.add(new RegionExtension(
 					PendingPhaseVolumeCodec.MANIFEST_EXTENSION,
@@ -815,6 +817,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 				ThermalInitializationRecord.MANIFEST_EXTENSION);
 		boolean pendingPhaseVolumePayload = hasExtension(manifest.extensions(),
 				PendingPhaseVolumeCodec.MANIFEST_EXTENSION);
+		boolean thermalBuoyancyPayload = hasExtension(manifest.extensions(),
+				ThermalBuoyancyCodec.MANIFEST_EXTENSION);
 		for (RegionSectionState section : sections) if (hasExtension(section.extensions(),
 				ThermalInitializationRecord.MANIFEST_EXTENSION)
 				|| hasExtension(section.extensions(), PendingPhaseVolumeCodec.MANIFEST_EXTENSION)) {
@@ -828,6 +832,13 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					ThermalInitializationRecord.MANIFEST_EXTENSION).payload());
 		}
 		if (pendingPhaseVolumePayload) validatePendingPhaseVolumeCells();
+		if (manifest.formatVersion() == 7) {
+			if (!thermalBuoyancyPayload) throw new IOException("Region-state v7 requires thermal buoyancy identity");
+			new ThermalBuoyancyCodec().requireCurrent(requiredExtension(manifest.extensions(),
+					ThermalBuoyancyCodec.MANIFEST_EXTENSION).payload());
+		} else if (thermalBuoyancyPayload) {
+			throw new IOException("Thermal buoyancy identity is only valid in region-state v7");
+		}
 		if (manifest.formatVersion() == 4) {
 			if (!gasPayload || hasExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION)
 					|| hasExtension(manifest.extensions(), ThermalRegionStateCodec.MANIFEST_EXTENSION)) {

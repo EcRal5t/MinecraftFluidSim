@@ -203,6 +203,10 @@ public final class FluidRegionPersistenceValidation {
 					&& Arrays.equals(decodedV6.positionVolume(), section.positionVolume()),
 					"frozen region-state v6 section reader changed");
 		}
+		List<RegionExtension> withoutBuoyancy = state.manifest().extensions().stream()
+				.filter(extension -> !ThermalBuoyancyCodec.MANIFEST_EXTENSION.equals(extension.type())).toList();
+		expectIOException(() -> new RegionState(manifestWithExtensions(state.manifest(), withoutBuoyancy),
+				state.sections()).validate(), "region-state v7 without buoyancy identity was accepted");
 	}
 
 	private static void validateGranularV5Codec() throws Exception {
@@ -1062,12 +1066,15 @@ public final class FluidRegionPersistenceValidation {
 					signed.checksum()));
 		}
 		RegionManifest original = state.manifest();
+		List<RegionExtension> extensions = original.extensions().stream()
+				.filter(extension -> formatVersion == 7
+						|| !ThermalBuoyancyCodec.MANIFEST_EXTENSION.equals(extension.type())).toList();
 		RegionManifest unsigned = new RegionManifest(formatVersion, original.regionId(), original.dimensionId(),
 				original.checkpointGeneration(), original.networkGeneration(), original.origin(), original.sizeX(),
 				original.sizeY(), original.sizeZ(), original.solverConfig(), original.reservedMarkerCapacity(),
 				original.runtime(), original.footprint(), original.totalMarkerCount(), original.totalVolumeBits(),
 				original.materialPalette(), original.totalMassBits(), original.materialLedgers(), descriptors,
-				original.extensions(), original.registryFingerprint(), original.auScale(), original.speciesPalette(),
+				extensions, original.registryFingerprint(), original.auScale(), original.speciesPalette(),
 				original.chemicalMixtures(), original.chemicalSpeciesTotals(), original.chemicalResidualLedgerBits(), 0L);
 		return new RegionState(signedManifest(unsigned), sections);
 	}
@@ -1088,6 +1095,19 @@ public final class FluidRegionPersistenceValidation {
 				manifest.materialPalette(), manifest.totalMassBits(), manifest.materialLedgers(), manifest.sections(), manifest.extensions(),
 				manifest.registryFingerprint(), manifest.auScale(), manifest.speciesPalette(), manifest.chemicalMixtures(),
 				manifest.chemicalSpeciesTotals(), manifest.chemicalResidualLedgerBits(), RegionStateIntegrity.manifestChecksum(manifest));
+	}
+
+	private static RegionManifest manifestWithExtensions(
+			RegionManifest manifest, List<RegionExtension> extensions
+	) {
+		RegionManifest unsigned = new RegionManifest(manifest.formatVersion(), manifest.regionId(), manifest.dimensionId(),
+				manifest.checkpointGeneration(), manifest.networkGeneration(), manifest.origin(), manifest.sizeX(), manifest.sizeY(),
+				manifest.sizeZ(), manifest.solverConfig(), manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(),
+				manifest.totalMarkerCount(), manifest.totalVolumeBits(), manifest.materialPalette(), manifest.totalMassBits(),
+				manifest.materialLedgers(), manifest.sections(), extensions, manifest.registryFingerprint(), manifest.auScale(),
+				manifest.speciesPalette(), manifest.chemicalMixtures(), manifest.chemicalSpeciesTotals(),
+				manifest.chemicalResidualLedgerBits(), 0L);
+		return signedManifest(unsigned);
 	}
 
 	private static double sumVolumes(float[] positionVolume) {

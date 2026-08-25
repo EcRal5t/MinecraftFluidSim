@@ -42,6 +42,7 @@ import com.example.simulation.persistence.RegionStateFiles;
 import com.example.thermal.ThermalDataPackLoader;
 import com.example.thermal.ThermalAuditLedger;
 import com.example.thermal.ThermalMaterialDefinition;
+import com.example.thermal.LiquidThermalExpansion;
 import com.example.thermal.ThermalRegistry;
 import com.example.thermal.ThermalRegistryStore;
 import com.example.thermal.ThermalDisplaySnapshot;
@@ -351,6 +352,7 @@ public final class FluidSimulationService {
 	) {
 		for (var material : BuiltinFluidMaterials.M3_PALETTE) {
 			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, material.id());
+			LiquidThermalExpansion.require(material.id());
 		}
 		if (granularRegistry != null) for (var material : granularRegistry.materials()) {
 			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, material.id());

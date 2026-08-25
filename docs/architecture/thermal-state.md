@@ -134,11 +134,12 @@ ownership/persistence 评审，不在 M9 v1。
 a_b = -g * beta(T) * (T - T_ref) e_g
 ```
 
-`beta(T)`、共同参考温度和有效温差必须来自 world-authoritative thermal material definition，允许分段常数并要求
-finite、非负和连续有效域。face 加速度只从相邻同 carrier 的服务端 LTE 温度、cut-face aperture 与已有 P2G 支撑派生；
-压力投影随后消去不可压缩部分。无热状态或定义 `beta=0` 时精确退化；超出 Boussinesq 有效温差时进入可读
-thermal-validity PAUSED，异 carrier face 则不猜混合系数。该项是物理模型的一部分，不记 thermal external source/sink，
-也不伪装成热膨胀体积或完整机械总能量守恒。
+首个生产模型只支持 M3 冻结的 water/oil/mercury carrier；`beta` 与共同的 293.15 K 参考温度由独立、canonical 的
+`LiquidThermalExpansion` 定义表提供，不散落在求解器条件分支中。该表的 model ID 与 SHA-256 是 required
+manifest-only v7 extension `realwater:thermal_buoyancy_v1`；恢复必须精确匹配，后续可数据化时也不能静默重解释旧速度/温度场。
+每个 marker 从权威 `U` 派生温度并按自身体积向 cell 聚合 `beta(T-T_ref)`，相邻 cell 再向已有 y-face 动量路径提供
+体力；cut-face aperture 和 P2G 支撑仍由既有 mechanical operator 消费，压力投影随后消去不可压缩部分。无热状态时
+精确退化。该项是物理模型的一部分，不记 thermal external source/sink，也不伪装成热膨胀体积或完整机械总能量守恒。
 
 ## 连续固相与熔化/凝固
 
@@ -254,6 +255,7 @@ thermal sleep 要求连续 quiet steps 内：所有内部/边界可表示通量�
 | container WAL | v5 | 物质 primary resource 与 coupled energy 同一事务；v1--v4 reader 保持 |
 
 `region-state v7` 是一个完整联合 generation，不是 v5/v6 HEAD 加 sidecar。manifest/section 必需 typed thermal extension，
+manifest 还必须携带精确匹配当前冻结定义表的 `realwater:thermal_buoyancy_v1` identity；
 逐 marker/active/deposit/coherent/gas energy ordinal 必须完整且 canonical；HEAD 仍是唯一且最后提交点。
 恢复时可接受由 FLIP advection 留下、尚待下一次压力投影解决的局部 liquid marker 聚集；
 但同格 fixed coherent + granular occupancy 必须独立满足已提交几何容量，禁止为通过恢复而删除或缩放任何库存。
