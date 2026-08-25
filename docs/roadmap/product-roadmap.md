@@ -23,7 +23,7 @@
 - 不可互溶相目前共享局部速度场，不声称解析切向滑移、乳化和液滴破碎。
 - 实体耦合目前主要是流体对实体的单向采样，不是完整双向动量/排水求解。
 - 固液已支持有界、数据化的压力平衡曲线，气液使用绝对压力和 component 分压；更高压力、更多材料和跨相溶解仍需分别验证物性域。
-- Query API v1 已冻结同步只读单格观察；尚无 Jade/WAILA/HWYLA 适配、稳定 transfer/event API 或其他 loader 发现桥。
+- Query API 已冻结同步只读单格观察；尚无 Jade/WAILA/HWYLA 适配、稳定 transfer/event API 或其他 loader 发现桥。
 - section 是一个 region 原子 generation 内的存储分片，不具有独立提交、卸载或 ownership 生命周期。
 - controller 外天然洞穴、河流、海洋和世界生成水不在当前 ownership 范围。
 
@@ -46,7 +46,7 @@
 
 | 顺序 | 产品阶段 | 前置依赖 | 完成时必须证明 |
 |---|---|---|---|
-| 1 | 只读观察适配与外部 Mod API | Query API v1、当前 controller/registry/checkpoint | 外部适配查询不加载、不唤醒、不回写；扩展保持 stable ID/单位/线程/失败语义 |
+| 1 | 只读观察适配与外部 Mod API | Query API、当前 controller/registry/checkpoint | 外部适配查询不加载、不唤醒、不回写；扩展保持 stable ID/单位/线程/失败语义 |
 | 2 | 原版行为与受控转移 API | 查询 API、现有 WAL | 灭火/湿润/岩浆等逐项守恒，外部 actor 可 crash-safe 收敛 |
 | 3 | 物理完整性增量 | 可观察 fixture | 压力相关固液、双向实体等分别有数据域与守恒门，不互相绑架发布 |
 | 4 | section 生命周期与显式端口 | profile、事务与网络 API | 跨 section/region 仍只有完整代次，不依赖永久 chunk ticket |
@@ -58,9 +58,9 @@
 
 ## 下一阶段：原版行为与外部 Mod API
 
-Query API v1 的单位、线程、无加载/唤醒和结构化失败语义已经冻结在 [`../architecture/external-api.md`](../architecture/external-api.md)。下一步按小增量实现：
+Query API 的单位、线程、无加载/唤醒和结构化失败语义已经冻结在 [`../architecture/external-api.md`](../architecture/external-api.md)。下一步按小增量实现：
 
-1. 观察适配：为 Jade/WAILA/HWYLA 接入 v1；查询不得唤醒、加载或回写区域，主 Mod 不增加准星 HUD。
+1. 观察适配：为 Jade/WAILA/HWYLA 接入 Query API；查询不得唤醒、加载或回写区域，主 Mod 不增加准星 HUD。
 2. 受控转移 API：stable material/species ID、纳体积/SVQ、质量和总内能必须显式，复用现有区域/容器事务。
 3. 事件 API：checkpoint、ownership、phase transition 和安全暂停只发布已提交事件，不暴露半代次。
 4. 原版交互：灭火、湿润、岩浆反应、红石、生物和寻路逐项定义并验收，不以“一格水”假设直接映射连续库存。
@@ -69,7 +69,7 @@ Query API v1 的单位、线程、无加载/唤醒和结构化失败语义已经
 
 ### API 形状
 
-后续若有明确适配用例，可向只读 API 增加相态、gas、颗粒或 coherent solid 观察；pressure 与内部调试字段不默认承诺为稳定 API。扩展不能改变 v1 已冻结的单位、状态分类或“非 OK 不返回部分 observation”规则。
+后续若有明确适配用例，可向只读 API 增加相态、gas、颗粒或 coherent solid 观察；pressure 与内部调试字段不默认承诺为稳定 API。扩展不能改变已冻结的单位、状态分类或“非 OK 不返回部分 observation”规则。
 
 受控转移采用显式 request/plan/commit：调用者给出 dimension、实际 world target、stable resource identity、typed amount、可选质量/组成/能量和 actor transaction identity；主 Mod 返回实际可转量或完整拒绝。API 不能让调用者持有 live domain 引用，也不能跨 tick 重用未绑定 generation 的 plan。
 

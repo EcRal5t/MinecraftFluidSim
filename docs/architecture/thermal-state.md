@@ -179,7 +179,7 @@ section payload 逐 ordinal 保存 liquid/active/deposit energy raw bits 和 coh
 
 motion 和 thermal activity 是正交轴。只有温度残差、边界通量、反应/相变或局部几何变化达到唤醒条件时才推进热学；休眠不得改变任何库存。
 
-`status` 可读取全域温度范围、总 `U`、source/sink/work、phase batch 和气体节点摘要。Query API v1 可返回单格权威载体反演出的可选温度；查询只读 marker/side columns，不唤醒、不建网格，也不回写热状态。
+`status` 可读取全域温度范围、总 `U`、source/sink/work、phase batch 和气体节点摘要。Query API 可返回单格权威载体反演出的可选温度；查询只读 marker/side columns，不唤醒、不建网格，也不回写热状态。
 
 thermal activity 与 motion pacing 相互独立：有 face transfer、reservoir exchange、chemistry/granular/phase dirty、gas activity、carrier motion、pending work 或未闭合 audit 时保持 ACTIVE；连续安静观察先进入 REDUCED，再进入 SLEEP。boundary、容器、管理员 source、化学、颗粒、气体、相变或 carrier movement 都是精确唤醒原因。
 

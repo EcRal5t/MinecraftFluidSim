@@ -36,7 +36,7 @@
 | 颗粒 | `granular/`、`GranularCouplingFields.java` | SVQ、质量、组成独立；active/deposit/coherent 不混用 |
 | 热学 | `thermal/`、`FlipThermalState.java`、`FlipThermalParticleState.java` | 总 U 权威；温度派生；通量、反应热、相变、功联合审计 |
 | 客户端快照 | `fabric/.../network/`、`fabric/src/client/java/cc/ecisr/mmm/client/` | 只读量化展示；不得反写物理或恢复库存 |
-| 外部 Query API v1 | `api/.../query/`、`FluidCellInventoryView.java`、`FabricFluidQueryApi.java`、`api/fabric/MmmFabricApi.java` | server-thread only；不加载、不唤醒、不建网格、不返回 live domain |
+| 外部 Query API | `api/.../query/`、`FluidCellInventoryView.java`、`FabricFluidQueryApi.java`、`api/fabric/MmmFabricApi.java` | server-thread only；不加载、不唤醒、不建网格、不返回 live domain |
 | 命令审计 | `logging/` | UTF-8 观测；记录失败不能改变命令结果 |
 
 ## 高频定位

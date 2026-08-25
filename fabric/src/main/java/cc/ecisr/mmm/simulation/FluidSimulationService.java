@@ -1,7 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
-import cc.ecisr.mmm.api.query.MmmQueryApiV1;
+import cc.ecisr.mmm.api.query.MmmQueryApi;
 import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.chemistry.ChemicalDataPackLoader;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
@@ -820,7 +820,7 @@ public final class FluidSimulationService {
 	}
 
 	/** Stable read-only API surface; construction performs no world or region I/O. */
-	public MmmQueryApiV1 queryApiV1(MinecraftServer server) {
+	public MmmQueryApi queryApi(MinecraftServer server) {
 		return new FabricFluidQueryApi(server, regionManager);
 	}
 

@@ -5,7 +5,7 @@ import cc.ecisr.mmm.api.query.FluidCellObservation;
 import cc.ecisr.mmm.api.query.FluidQueryRequest;
 import cc.ecisr.mmm.api.query.FluidQueryResult;
 import cc.ecisr.mmm.api.query.FluidQueryStatus;
-import cc.ecisr.mmm.api.query.MmmQueryApiV1;
+import cc.ecisr.mmm.api.query.MmmQueryApi;
 import cc.ecisr.mmm.fluid.FluidCellInventoryView;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
@@ -13,7 +13,7 @@ import net.minecraft.server.MinecraftServer;
 import java.util.OptionalDouble;
 
 /** Server-thread Fabric adapter over loaded region owners only. */
-final class FabricFluidQueryApi implements MmmQueryApiV1 {
+final class FabricFluidQueryApi implements MmmQueryApi {
 	private final MinecraftServer server;
 	private final FluidRegionManager regions;
 
@@ -24,7 +24,7 @@ final class FabricFluidQueryApi implements MmmQueryApiV1 {
 
 	@Override public FluidQueryResult query(FluidQueryRequest request) {
 		if (!server.isSameThread()) return absent(FluidQueryStatus.WRONG_THREAD,
-				"query-v1 is synchronous and server-thread-only");
+				"query is synchronous and server-thread-only");
 		if (request == null || !StableId.isValid(request.dimensionId(), 128)
 				|| !Double.isFinite(request.worldXMetres()) || !Double.isFinite(request.worldYMetres())
 				|| !Double.isFinite(request.worldZMetres())) {

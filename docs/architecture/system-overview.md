@@ -12,7 +12,7 @@ CPU `FlipFluidDomain` 是规范求解器。GPU probe、客户端 renderer、tool
 
 | 模块 | 职责 | 依赖边界 |
 |---|---|---|
-| `api` | stable ID、单位化外部契约；当前稳定入口为 Query API v1 | 只依赖 JDK，不暴露 solver 数组或 Minecraft 类型 |
+| `api` | stable ID、单位化外部契约；当前稳定入口为 Query API | 只依赖 JDK，不暴露 solver 数组或 Minecraft 类型 |
 | `core` | PIC/FLIP、材料、气体、化学、颗粒、热学与候选状态 | 依赖 `api` 和纯 Java 库，不引用 Fabric/Minecraft |
 | `fabric` | Mod 生命周期、世界读取/写入、NBT、数据包、网络、物品与命令 | 依赖并内嵌 `api`、`core`；服务器主线程拥有提交权 |
 | `gpu-probe` | Vulkan 能力验证、只读对照和未来后端实验 | 数值部分依赖 `core`；Fabric 集成只以 compile-only 接入主 Mod |
@@ -43,7 +43,7 @@ ContainerTransferStore                      region/item 跨域事务
 已提交区域状态
   -> SnapshotBuilder / protocol payload
   -> 客户端 surface、material、chemical、granular、thermal 重建
-  -> MmmQueryApiV1 / FabricFluidQueryApi
+  -> MmmQueryApi / FabricFluidQueryApi
   -> 外部 Mod 的同步只读单格观察
 ```
 
@@ -118,7 +118,7 @@ region HEAD 是区域物理状态唯一提交点。ownership 与 container WAL �
 - 数值代码只消费已冻结的 region arrays、registry 和 boundary sample。
 - checkpoint 捕获的是一个完整 logical state；不发布半步或半个 gas remap。
 - 客户端只接受当前 region generation 的递增 snapshot sequence；迟到包、移除 tombstone 前的包和其他 dimension 的包不能复活状态。
-- Query API v1 只允许服务器主线程同步调用，只扫描已加载 owner 的权威 marker/side columns；它不建网格、不加载 chunk、不分配 solver、不唤醒、不 checkpoint、不推进 logical step，也不返回 live domain 引用。
+- Query API 只允许服务器主线程同步调用，只扫描已加载 owner 的权威 marker/side columns；它不建网格、不加载 chunk、不分配 solver、不唤醒、不 checkpoint、不推进 logical step，也不返回 live domain 引用。
 - Query 的 `regionGeneration` 标识 ownership/checkpoint generation，不是逐 tick revision。观察者需要新鲜值时必须重新查询，不能把 generation 当作缓存时钟。
 - renderer、Jade/HWYLA 适配、status 和 GPU probe 都不能唤醒、加载、checkpoint 或回写区域。
 
