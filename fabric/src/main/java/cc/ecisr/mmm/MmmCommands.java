@@ -264,9 +264,11 @@ public final class MmmCommands {
 		} else if ("water_oil_mix".equals(requested)) {
 			stack = ContainerItemStacks.toStack(new FluidMixture(List.of(
 					new FluidMixture.Component(BuiltinFluidMaterials.WATER.id(),
-							ContainerFluidLedger.NANOS_PER_BLOCK / 2L, 4.0 * BuiltinFluidMaterials.WATER.referenceDensity()),
+							ContainerFluidLedger.NANOS_PER_BLOCK / 2L,
+							0.5 * BuiltinFluidMaterials.WATER.referenceDensity()),
 					new FluidMixture.Component(BuiltinFluidMaterials.OIL.id(),
-							ContainerFluidLedger.NANOS_PER_BLOCK / 2L, 4.0 * BuiltinFluidMaterials.OIL.referenceDensity())
+							ContainerFluidLedger.NANOS_PER_BLOCK / 2L,
+							0.5 * BuiltinFluidMaterials.OIL.referenceDensity())
 			)));
 			description = "半水半油混合材料桶";
 		} else {
@@ -278,7 +280,7 @@ public final class MmmCommands {
 			};
 			if (material == null) return fail(source, "未知材料：" + requested);
 			stack = ContainerItemStacks.toStack(new FluidMixture(List.of(new FluidMixture.Component(material.id(),
-					ContainerFluidLedger.NANOS_PER_BLOCK, 8.0 * material.referenceDensity()))));
+					ContainerFluidLedger.NANOS_PER_BLOCK, material.referenceDensity()))));
 			description = material.id() + " 满材料桶";
 		}
 		if (!"empty".equals(requested)) service.attachDebugLiquidThermalContents(stack);
@@ -306,7 +308,7 @@ public final class MmmCommands {
 			var material = registry.material(registry.materialHandle(materialId));
 			if (material.reactive()) return fail(source, "反应性固体只能由守恒相转移或已有容器产生");
 			long svq = SolidVolume.SVQ_PER_BV;
-			double mass = SolidVolume.toCellVolume(svq) * material.referenceDensity();
+			double mass = svq / (double) SolidVolume.SVQ_PER_BV * material.referenceDensity();
 			GranularTransferLedger ledger = new GranularTransferLedger(List.of(
 					new GranularTransferLedger.Group(material.id(), svq, mass, null)));
 			stack = ContainerItemStacks.toStack(GranularContents.fromLedger(ledger, registry, null));
@@ -347,12 +349,13 @@ public final class MmmCommands {
 				amounts.put(BuiltinChemicalDefinitions.H2O, 50_000_000_000L);
 				amounts.put(species, ChemicalLimits.QUANTA_PER_AU);
 			}
-			double mass = 8_000.0;
+			double mass = 1_000.0;
 			ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0.0);
 			ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry, amounts,
-					mass - exact.exactSpeciesMass(registry).toDouble());
+					mass - exact.exactSpeciesMassKilograms(registry).toDouble());
 			ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
-					BuiltinFluidMaterials.WATER.id(), false, 1.0, mass, mixture.massResidualBits(),
+					BuiltinFluidMaterials.WATER.id(), false, 1.0, mass,
+					mixture.massResidualKilogramsBits(),
 					mixture.stableAmounts(registry))));
 			stack = ContainerItemStacks.toStack(
 					ChemicalContents.fromLedger(ledger, registry, ContainerFluidLedger.NANOS_PER_BLOCK));

@@ -42,7 +42,7 @@ public final class ChemicalTransferLedger {
 	}
 	public double totalMass() {
 		double result = 0.0;
-		for (Group group : groups) result += group.mass();
+		for (Group group : groups) result += group.massKilograms();
 		return result;
 	}
 	public long totalQuanta() {
@@ -65,16 +65,17 @@ public final class ChemicalTransferLedger {
 			String materialId,
 			boolean indicator,
 			double volume,
-			double mass,
-			long massResidualBits,
+			double massKilograms,
+			long massResidualKilogramsBits,
 			Map<String, Long> speciesQuanta
 	) {
 		public Group {
 			ChemicalIds.requireId(materialId, "chemical ledger material id");
-			if (!(Double.isFinite(volume) && volume > 0.0) || !(Double.isFinite(mass) && mass > 0.0)) {
+			if (!(Double.isFinite(volume) && volume > 0.0)
+					|| !(Double.isFinite(massKilograms) && massKilograms > 0.0)) {
 				throw new IllegalArgumentException("Chemical transfer volume and mass must be finite and positive");
 			}
-			if (!Double.isFinite(Double.longBitsToDouble(massResidualBits))) {
+			if (!Double.isFinite(Double.longBitsToDouble(massResidualKilogramsBits))) {
 				throw new IllegalArgumentException("Chemical transfer residual must be finite");
 			}
 			TreeMap<String, Long> canonical = new TreeMap<>();
@@ -91,7 +92,9 @@ public final class ChemicalTransferLedger {
 			}
 			speciesQuanta = Map.copyOf(canonical);
 		}
-		public double massResidual() { return Double.longBitsToDouble(massResidualBits); }
+		public double massResidualKilograms() {
+			return Double.longBitsToDouble(massResidualKilogramsBits);
+		}
 	}
 
 	public static final class Builder {
@@ -101,10 +104,12 @@ public final class ChemicalTransferLedger {
 		private Builder(ChemicalRegistry registry) { this.registry = java.util.Objects.requireNonNull(registry, "registry"); }
 
 		public Builder add(
-				String materialId, boolean indicator, double volume, double mass, ChemicalMixtureRecord mixture
+				String materialId, boolean indicator, double volume, double massKilograms,
+				ChemicalMixtureRecord mixture
 		) {
 			if (mixture == null) throw new IllegalArgumentException("Chemical transfer mixture is missing");
-			return add(new Group(materialId, indicator, volume, mass, mixture.massResidualBits(), mixture.stableAmounts(registry)));
+			return add(new Group(materialId, indicator, volume, massKilograms,
+					mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry)));
 		}
 
 		public Builder add(Group group) {
@@ -135,7 +140,7 @@ public final class ChemicalTransferLedger {
 		private final String materialId;
 		private final boolean indicator;
 		private double volume;
-		private double mass;
+		private double massKilograms;
 		private double residual;
 		private final TreeMap<String, Long> species = new TreeMap<>();
 
@@ -145,15 +150,16 @@ public final class ChemicalTransferLedger {
 		}
 		private void add(Group group) {
 			volume += group.volume();
-			mass += group.mass();
-			residual += group.massResidual();
-			if (!(Double.isFinite(volume) && Double.isFinite(mass) && Double.isFinite(residual))) {
+			massKilograms += group.massKilograms();
+			residual += group.massResidualKilograms();
+			if (!(Double.isFinite(volume) && Double.isFinite(massKilograms) && Double.isFinite(residual))) {
 				throw new IllegalArgumentException("Chemical transfer ledger overflow");
 			}
 			group.speciesQuanta().forEach((id, amount) -> species.merge(id, amount, Math::addExact));
 		}
 		private Group freeze() {
-			return new Group(materialId, indicator, volume, mass, Double.doubleToRawLongBits(residual), species);
+			return new Group(materialId, indicator, volume, massKilograms,
+					Double.doubleToRawLongBits(residual), species);
 		}
 	}
 }

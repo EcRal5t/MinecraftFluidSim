@@ -16,7 +16,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 
-/** Canonical dry-container truth. SVQ, raw mass and optional solid composition remain independent. */
+/** Canonical dry-container truth. SVQ, raw kilogram mass and optional solid composition remain independent. */
 public record GranularContents(String registryFingerprint, long svqPerBlockVolume, List<Group> groups) {
 	private static final String ENCODING_TAG = "mmm:granular-contents";
 	public static final int MAX_GROUPS = 16;

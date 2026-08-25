@@ -14,6 +14,7 @@ import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
 import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.transfer.ChemicalContents;
 import cc.ecisr.mmm.transfer.ContainerFluidLedger;
+import cc.ecisr.mmm.units.SolverUnitScale;
 
 import java.util.Arrays;
 import java.util.List;
@@ -51,7 +52,8 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validatePackedBudgetAndBinaryAllocation() {
-		ChemicalParcelStore maximum = new ChemicalParcelStore(CHEMISTRY, 73_728, 9_216);
+		ChemicalParcelStore maximum = new ChemicalParcelStore(
+				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), 73_728, 9_216);
 		long residentBytes = Math.addExact(maximum.cpuBytes(), 2L * 73_728L * Integer.BYTES);
 		check(residentBytes <= 64L * 1024L * 1024L,
 				"maximum default-domain chemical heap model exceeds 64 MiB: " + residentBytes);
@@ -160,7 +162,7 @@ public final class M7ChemicalTransportValidation {
 		int markerCount = domain.particleCount();
 		long[] residualBits = new long[markerCount];
 		for (int marker = 0; marker < markerCount; marker++) {
-			residualBits[marker] = domain.chemicalParcels().record(marker).massResidualBits();
+			residualBits[marker] = domain.chemicalParcels().record(marker).massResidualKilogramsBits();
 		}
 		double massBefore = domain.totalMass();
 		FlipFluidDomain.StepStats stats = domain.step();
@@ -175,7 +177,7 @@ public final class M7ChemicalTransportValidation {
 				"logical chemistry did not run exactly on the dirty cell");
 		check(domain.particleCount() == markerCount, "reaction-only step changed marker ownership");
 		for (int marker = 0; marker < markerCount; marker++) {
-			check(domain.chemicalParcels().record(marker).massResidualBits() == residualBits[marker],
+			check(domain.chemicalParcels().record(marker).massResidualKilogramsBits() == residualBits[marker],
 					"same-cell reaction rewrote marker mass residual truth");
 		}
 		check(Math.abs(domain.totalMass() - massBefore) <= Math.max(1.0E-9, Math.ulp(massBefore) * 8.0),
@@ -187,7 +189,8 @@ public final class M7ChemicalTransportValidation {
 
 	private static void validateReactionKeepsTinyParcels() {
 		final int markerCount = 3;
-		ChemicalParcelStore parcels = new ChemicalParcelStore(CHEMISTRY, markerCount, 64);
+		ChemicalParcelStore parcels = new ChemicalParcelStore(
+				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), markerCount, 64);
 		ChemicalMixtureRecord acid = ChemicalMixtureRecord.fromStableAmounts(
 				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.HCL, 1_000_000L), 0.0);
 		ChemicalMixtureRecord base = ChemicalMixtureRecord.fromStableAmounts(
@@ -199,7 +202,7 @@ public final class M7ChemicalTransportValidation {
 		parcels.assign(2, water, false);
 		parcels.markDirtyCell((1 * 4 + 1) * 4 + 1);
 		float[] positions = {1.5F, 1.5F, 1.5F};
-		double[] masses = {acid.markerMass(CHEMISTRY), base.markerMass(CHEMISTRY), water.markerMass(CHEMISTRY)};
+		double[] masses = {acid.massKilograms(CHEMISTRY), base.massKilograms(CHEMISTRY), water.massKilograms(CHEMISTRY)};
 		int[] material = new int[markerCount];
 		ChemicalParcelStore.ReactionStats stats = parcels.reactDirtyCells(4, 4, 4, 1.0F,
 				positions, positions, positions, masses, material,
@@ -308,7 +311,8 @@ public final class M7ChemicalTransportValidation {
 		double[] mass = new double[capacity];
 		int[] material = new int[capacity], phase = new int[capacity];
 		boolean[] solid = new boolean[64];
-		ChemicalParcelStore parcels = new ChemicalParcelStore(CHEMISTRY, capacity, 64);
+		ChemicalParcelStore parcels = new ChemicalParcelStore(
+				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), capacity, 64);
 		for (int marker = 0; marker < count; marker++) {
 			x[marker] = 1.1F + 0.18F * (marker & 3);
 			y[marker] = 1.1F + 0.18F * ((marker >>> 2) & 3);
@@ -385,7 +389,13 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateConcentrationControlsDensity() {
-		FlipFluidDomain source = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 128);
+		validateConcentrationControlsDensity(STATIC_CONFIG);
+		validateConcentrationControlsDensity(new FluidSolverConfig(
+				0.5F, 1_000.0F, 0.0F, 0.01F, 64, 1.0E-6F, 0.45F, 0.002F, 0.0F));
+	}
+
+	private static void validateConcentrationControlsDensity(FluidSolverConfig config) {
+		FlipFluidDomain source = new FlipFluidDomain(4, 4, 4, config, 128);
 		source.setVolume(1, 1, 1, 1.0F);
 		source.setVolume(2, 1, 1, 1.0F);
 		source.setMarkerMaterial(0, MATERIALS, 0);
@@ -393,20 +403,22 @@ public final class M7ChemicalTransportValidation {
 		FlipMaterialParticleState original = source.exportMaterialParticleState();
 		double[] mass = original.copyParticleMass();
 		float[] positionVolume = original.copyPositionVolume();
+		SolverUnitScale unitScale = SolverUnitScale.forCellSize(config.cellSize());
 		java.util.ArrayList<ChemicalMixtureRecord> mixtures = new java.util.ArrayList<>(original.particleCount());
 		byte[] indicators = new byte[original.particleCount()];
 		for (int marker = 0; marker < original.particleCount(); marker++) {
 			ChemicalMixtureRecord initial = source.chemicalParcels().record(marker);
 			java.util.TreeMap<String, Long> amounts = new java.util.TreeMap<>(initial.stableAmounts(CHEMISTRY));
-			int cellX = (int) Math.floor(positionVolume[marker * 4] / STATIC_CONFIG.cellSize());
+			int cellX = (int) Math.floor(positionVolume[marker * 4] / config.cellSize());
 			if (cellX == 2) {
-				long saltQuanta = Math.round(mass[marker] * 0.10 * ChemicalLimits.QUANTA_PER_AU / 464.0);
+				long saltQuanta = Math.round(unitScale.kilograms(mass[marker]) * 0.10
+						* ChemicalLimits.QUANTA_PER_AU / 58.0);
 				amounts.merge(BuiltinChemicalDefinitions.NACL, saltQuanta, Math::addExact);
 			}
 			ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(
-					CHEMISTRY, amounts, initial.massResidual());
+					CHEMISTRY, amounts, initial.massResidualKilograms());
 			mixtures.add(mixture);
-			mass[marker] = mixture.markerMass(CHEMISTRY);
+			mass[marker] = unitScale.solverMass(mixture.massKilograms(CHEMISTRY));
 		}
 		double totalMass = 0.0;
 		for (double markerMass : mass) totalMass += markerMass;
@@ -419,7 +431,7 @@ public final class M7ChemicalTransportValidation {
 				materials, CHEMISTRY, mixtures, indicators,
 				cc.ecisr.mmm.chemistry.ChemicalTransferLedger.EMPTY,
 				cc.ecisr.mmm.chemistry.ChemicalTransferLedger.EMPTY);
-		FlipFluidDomain stratified = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 128);
+		FlipFluidDomain stratified = new FlipFluidDomain(4, 4, 4, config, 128);
 		stratified.restoreChemicalParticleState(chemical, CHEMISTRY);
 		double freshDensity = stratified.densityInCell(1, 1, 1);
 		double brineDensity = stratified.densityInCell(2, 1, 1);
@@ -430,7 +442,7 @@ public final class M7ChemicalTransportValidation {
 				&& brine != null && Math.abs(brine.densityKilogramsPerCubicMetre() - brineDensity) < 1.0E-9
 				&& brine.species().stream().anyMatch(value -> value.speciesId().equals(BuiltinChemicalDefinitions.NACL)),
 				"species mass/marker volume did not produce concentration-dependent cell density: fresh="
-						+ freshDensity + " brine=" + brineDensity);
+						+ freshDensity + " brine=" + brineDensity + " cellSize=" + config.cellSize());
 	}
 
 	private static void validateChemicalContainerRoundTrip() {
@@ -489,7 +501,7 @@ public final class M7ChemicalTransportValidation {
 				cc.ecisr.mmm.chemistry.ChemicalLimits.QUANTA_PER_AU, List.of(new ChemicalContents.Group(
 				BuiltinFluidMaterials.OIL.id(), false, 1L,
 				Double.doubleToRawLongBits(CHEMISTRY.species(CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H2O))
-						.massPerAu().toDouble()), Double.doubleToRawLongBits(0.0),
+						.massKilogramsPerAu().toDouble()), Double.doubleToRawLongBits(0.0),
 				List.of(new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O,
 						cc.ecisr.mmm.chemistry.ChemicalLimits.QUANTA_PER_AU)))));
 		try {
@@ -533,7 +545,8 @@ public final class M7ChemicalTransportValidation {
 		long reactionP95 = benchmarkAcidBaseReactionP95();
 		check(reactionP95 <= 10_000_000L,
 				"typical acid/base chemistry p95 exceeds 10 ms: " + reactionP95 / 1_000_000.0 + " ms");
-		long residentBytes = Math.addExact(new ChemicalParcelStore(CHEMISTRY, 73_728, 9_216).cpuBytes(),
+		long residentBytes = Math.addExact(new ChemicalParcelStore(
+				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), 73_728, 9_216).cpuBytes(),
 				2L * 73_728L * Integer.BYTES);
 		System.out.printf("M7.0 budgets: heap=%.2f MiB clean-step-median=%.3f/%.3f ms delta=%.2f%% acid-base-p95=%.3f ms%n",
 				residentBytes / 1048576.0, baselineMedian / 20_000_000.0, chemicalMedian / 20_000_000.0,
@@ -561,7 +574,8 @@ public final class M7ChemicalTransportValidation {
 
 	private static long benchmarkAcidBaseReactionP95() {
 		final int markers = 64, cells = 64;
-		ChemicalParcelStore parcels = new ChemicalParcelStore(CHEMISTRY, markers, cells);
+		ChemicalParcelStore parcels = new ChemicalParcelStore(
+				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), markers, cells);
 		float[] x = new float[markers], y = new float[markers], z = new float[markers];
 		double[] mass = new double[markers];
 		int[] material = new int[markers];
@@ -575,7 +589,7 @@ public final class M7ChemicalTransportValidation {
 			for (int marker = 0; marker < markers; marker++) {
 				ChemicalMixtureRecord input = (marker & 1) == 0 ? acid : base;
 				parcels.assign(marker, input, false);
-				mass[marker] = input.markerMass(CHEMISTRY);
+				mass[marker] = input.massKilograms(CHEMISTRY);
 			}
 			parcels.markDirtyCell((1 * 4 + 1) * 4 + 1);
 			long start = System.nanoTime();

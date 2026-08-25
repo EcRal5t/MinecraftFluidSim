@@ -5,13 +5,14 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /** Immutable absolute parcel inventory; runtime species handles are sorted and unique. */
+/** Immutable species-quanta inventory whose exact and residual mass columns are both kilograms. */
 public final class ChemicalMixtureRecord {
 	private final int[] speciesHandles;
 	private final long[] amounts;
-	private final long massResidualBits;
+	private final long massResidualKilogramsBits;
 	private final int hash;
 
-	public ChemicalMixtureRecord(int[] speciesHandles, long[] amounts, long massResidualBits) {
+	public ChemicalMixtureRecord(int[] speciesHandles, long[] amounts, long massResidualKilogramsBits) {
 		if (speciesHandles == null || amounts == null || speciesHandles.length == 0
 				|| speciesHandles.length != amounts.length
 				|| speciesHandles.length > ChemicalLimits.MAX_SPECIES_PER_PARCEL) {
@@ -27,17 +28,17 @@ public final class ChemicalMixtureRecord {
 		if (total > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
 			throw new IllegalArgumentException("Chemical parcel amount is over budget");
 		}
-		double residual = Double.longBitsToDouble(massResidualBits);
+		double residual = Double.longBitsToDouble(massResidualKilogramsBits);
 		if (!Double.isFinite(residual)) throw new IllegalArgumentException("Chemical mass residual is not finite");
 		this.speciesHandles = speciesHandles.clone();
 		this.amounts = amounts.clone();
-		this.massResidualBits = massResidualBits;
+		this.massResidualKilogramsBits = massResidualKilogramsBits;
 		this.hash = 31 * (31 * Arrays.hashCode(this.speciesHandles) + Arrays.hashCode(this.amounts))
-				+ Long.hashCode(massResidualBits);
+				+ Long.hashCode(massResidualKilogramsBits);
 	}
 
 	public static ChemicalMixtureRecord fromStableAmounts(
-			ChemicalRegistry registry, Map<String, Long> stableAmounts, double massResidual
+			ChemicalRegistry registry, Map<String, Long> stableAmounts, double massResidualKilograms
 	) {
 		TreeMap<Integer, Long> handles = new TreeMap<>();
 		for (Map.Entry<String, Long> entry : stableAmounts.entrySet()) {
@@ -52,14 +53,14 @@ public final class ChemicalMixtureRecord {
 			species[index] = entry.getKey();
 			amounts[index++] = entry.getValue();
 		}
-		return new ChemicalMixtureRecord(species, amounts, Double.doubleToRawLongBits(massResidual));
+		return new ChemicalMixtureRecord(species, amounts, Double.doubleToRawLongBits(massResidualKilograms));
 	}
 
 	public int entryCount() { return speciesHandles.length; }
 	public int speciesHandle(int entry) { return speciesHandles[entry]; }
 	public long amountAt(int entry) { return amounts[entry]; }
-	public long massResidualBits() { return massResidualBits; }
-	public double massResidual() { return Double.longBitsToDouble(massResidualBits); }
+	public long massResidualKilogramsBits() { return massResidualKilogramsBits; }
+	public double massResidualKilograms() { return Double.longBitsToDouble(massResidualKilogramsBits); }
 	public int[] copySpeciesHandles() { return speciesHandles.clone(); }
 	public long[] copyAmounts() { return amounts.clone(); }
 
@@ -74,17 +75,17 @@ public final class ChemicalMixtureRecord {
 		return result;
 	}
 
-	public ExactRational exactSpeciesMass(ChemicalRegistry registry) {
+	public ExactRational exactSpeciesMassKilograms(ChemicalRegistry registry) {
 		ExactRational result = ExactRational.ZERO;
 		for (int i = 0; i < speciesHandles.length; i++) {
-			result = result.add(registry.species(speciesHandles[i]).massPerAu().multiply(amounts[i])
+			result = result.add(registry.species(speciesHandles[i]).massKilogramsPerAu().multiply(amounts[i])
 					.divide(ChemicalLimits.QUANTA_PER_AU));
 		}
 		return result;
 	}
 
-	public double markerMass(ChemicalRegistry registry) {
-		return exactSpeciesMass(registry).toDouble() + massResidual();
+	public double massKilograms(ChemicalRegistry registry) {
+		return exactSpeciesMassKilograms(registry).toDouble() + massResidualKilograms();
 	}
 
 	public long chargeQuanta(ChemicalRegistry registry) {
@@ -103,7 +104,7 @@ public final class ChemicalMixtureRecord {
 
 	@Override public boolean equals(Object other) {
 		return this == other || other instanceof ChemicalMixtureRecord record
-				&& massResidualBits == record.massResidualBits
+				&& massResidualKilogramsBits == record.massResidualKilogramsBits
 				&& Arrays.equals(speciesHandles, record.speciesHandles)
 				&& Arrays.equals(amounts, record.amounts);
 	}

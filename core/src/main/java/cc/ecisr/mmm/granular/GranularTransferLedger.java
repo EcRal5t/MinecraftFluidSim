@@ -6,7 +6,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/** Runtime transfer value object; persistence converts material/species handles to stable IDs. */
+/** Runtime SVQ/kilogram transfer value object; persistence converts material/species handles to stable IDs. */
 public record GranularTransferLedger(List<Group> groups) {
 	public static final int MAX_GROUPS = 16;
 

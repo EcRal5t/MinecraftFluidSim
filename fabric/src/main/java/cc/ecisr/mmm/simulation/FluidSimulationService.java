@@ -851,7 +851,7 @@ public final class FluidSimulationService {
 				}
 				int handle = thermalRegistry.materialHandle(
 						ThermalMaterialDefinition.CarrierKind.LIQUID, group.materialId());
-				energy += stateFunction.internalEnergyAtTemperature(handle, group.mass(), species,
+				energy += stateFunction.internalEnergyAtTemperature(handle, group.massKilograms(), species,
 						GasRegistry.STANDARD_TEMPERATURE_K);
 			}
 		} else {

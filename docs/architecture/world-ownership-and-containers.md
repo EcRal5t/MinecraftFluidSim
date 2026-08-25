@@ -53,13 +53,13 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 ## 容器真值
 
 - 液体容量使用 `long` 纳体积，1 block volume = 1,000,000,000 nanos。
-- 材料桶保存每个稳定材料的纳体积与独立质量。
-- 化学桶另外保存 species quanta、indicator 和 mass residual。
-- 干颗粒容器使用整数 SVQ、逐材料质量与可选 solid composition。
+- 材料桶保存每个稳定材料的纳体积与独立 kg 质量。
+- 化学桶另外保存 species quanta、indicator 和 kg mass residual。
+- 干颗粒容器使用整数 SVQ、逐材料 kg 质量与可选 solid composition。
 - 热液体另外保存 registry-bound 总内能。
 - item count 必须为 1；damage、tooltip、durability bar、颜色和温度不参与结算。
 
-item fingerprint 编码实际可结算的整组数据，而非仅 item id：kind、typed amount、stable mixture/chemical/granular contents、raw mass bits、可选 ThermalContents 以及其 registry/underlying hash。`ContainerTransferJournal` 只保存这一数据，`ContainerTransferItems` 独占 fingerprint 与 `ItemStack` 的双向映射。空桶、部分桶、材料桶、化学桶和颗粒容器是不同 shape；shape 之间缺字段或同时出现冲突 component 都拒绝。
+item fingerprint 编码实际可结算的整组数据，而非仅 item id：kind、typed amount、stable mixture/chemical/granular contents、raw kg mass bits、可选 ThermalContents 以及其 registry/underlying hash。`ContainerTransferJournal` 只保存这一数据，`ContainerTransferItems` 独占 fingerprint 与 `ItemStack` 的双向映射。空桶、部分桶、材料桶、化学桶和颗粒容器是不同 shape；shape 之间缺字段或同时出现冲突 component 都拒绝。
 
 液体抽取允许生成不足 1 BV 的 partial item；放入已有部分桶时仍按实际剩余容量规划。`FluidMixture`、`ChemicalContents`、`GranularContents` 和 `ThermalContents` 都有自己的规范编码与总账，item component 只是这些真值的载体。
 

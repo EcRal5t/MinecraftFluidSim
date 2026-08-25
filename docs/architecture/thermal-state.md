@@ -13,7 +13,7 @@
 - external energy source、sink、mechanical work 与 reaction/phase transfer 都有独立审计列。
 - 温度、热容、焓、密度修正、颜色和 tooltip 由状态函数派生，不持有或修复库存。
 
-凝聚相 solver mass weight 与物理 kg 只通过 `CondensedMassScale` 的 `cellSize³` 边界换算。气体总质量和 chemical mass residual 已经是 kg，不再缩放；signed residual 只在气液相边界换回凝聚相质量基底。
+只有 liquid marker mass 是 solver weight，并通过 `SolverUnitScale` 的 `cellSize³` 边界换算为 kg。active parcel、deposit、coherent phase、气体、chemical species/residual 和有限设备的质量已经是 kg，不再缩放；相变只在实际更新 liquid marker 时把搬运的 kg 换回 solver mass。
 
 同一载体的 identity、质量/体积、组成和 `U` 必须同 ordinal、同 generation。空载体不能残留内能；非空载体不能缺内能。cell 温度是把其中所有载体带入 LTE 反演后的临时结果，不是另一份可独立恢复的真值。
 

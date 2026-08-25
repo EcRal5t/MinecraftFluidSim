@@ -33,7 +33,7 @@ mass_kg   = marker_solver_mass * cellSize^3
 volume_m3 = marker_normalized_volume * cellSize^3
 ```
 
-质量和体积跨 SI 边界时都乘同一个 `cellSize³`，所以密度比值中的尺度严格约去。chemical marker 的 `particleMass = exact_species_mass + massResidual`；溶质增加实际质量而体积不变时，机械密度自然上升，因此盐水下沉来自同一权威质量账本，不需要盐材料特判。pressure face 的 `1/rho` 系数按界面距离加权；不得从 material reference density、客户端颜色或平滑 fraction 反推存量质量。热学 Boussinesq 项是参考态附近的温差浮力近似，与这份组成质量密度正交，不能覆盖它。
+质量和体积跨 SI 边界时都乘同一个 `cellSize³`，所以密度比值中的尺度严格约去。chemical marker 的闭合式为 `particleMass * cellSize³ = exact_species_mass_kg + massResidual_kg`；溶质增加实际质量而体积不变时，机械密度自然上升，因此盐水下沉来自同一权威质量账本，不需要盐材料特判。pressure face 的 `1/rho` 系数按界面距离加权；不得从 material reference density、客户端颜色或平滑 fraction 反推存量质量。热学 Boussinesq 项是参考态附近的温差浮力近似，与这份组成质量密度正交，不能覆盖它。
 
 同一 miscibility group 的材料共享 phase 和速度，但当前没有分子扩散或每 marker 连续浓度场：marker 仍各自保存一种机械材料库存，局部格聚合给出混合比例。不同材料不在 reseed 中互相吞并，因此未解析扩散不会丢失组分。不可互溶材料也共享一个压力/速度框架，不承诺双速度界面动力学。
 
@@ -47,11 +47,11 @@ volume_m3 = marker_normalized_volume * cellSize^3
 ## 跨层表示
 
 - 区域 checkpoint 保存稳定材料 palette、每个 marker 的 palette index、独立质量和总账。
-- `FluidMixture` 保存容器内各稳定材料的纳体积和独立质量；tooltip 与耐久条只读。
+- `FluidMixture` 保存容器内各稳定材料的纳体积和独立 kg 质量；tooltip 与耐久条只读。
 - 玩家和发射器只向实际目标区域转移，单次物品计数必须为 1。
 - 容器与区域之间的物质变化通过同一 WAL 事务提交；任何不能被物品表示的结果在修改 solver 前拒绝。
 
-`FluidMixture` 最多保存 64 个按 stable ID 排序的 component；每项包含 `volumeNanos` 和 raw mass bits。构造时拒绝重复 ID、非正体积/质量和超过一桶的总量。物品中单材料可以使用紧凑 component 表示，多材料使用 canonical mixture 文本；进入 WAL 时两者都规范化为完整 mixture truth，reader 不现场合成缺失 component。
+`FluidMixture` 最多保存 64 个按 stable ID 排序的 component；每项包含 `volumeNanos` 和 raw kg mass bits。构造时拒绝重复 ID、非正体积/质量和超过一桶的总量。物品中单材料可以使用紧凑 component 表示，多材料使用 canonical mixture 文本；进入 WAL 时两者都规范化为完整 mixture truth，reader 不现场合成缺失 component。
 
 抽取先以 double 精确量预检，再按整 marker 与必要尾拆分生成实际 settlement；物品必须能表示实际 volume、每材料 mass 和所有附加化学/热侧列。请求量与实际可表示量不一致时，WAL 记录实际量，不用请求量伪造闭合。
 

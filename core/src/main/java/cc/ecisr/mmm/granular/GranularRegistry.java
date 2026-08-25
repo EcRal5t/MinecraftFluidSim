@@ -134,7 +134,7 @@ public final class GranularRegistry {
 		ExactRational exactMassPerBatch = ExactRational.ZERO;
 		for (Map.Entry<String, Integer> term : reaction.solidComposition().entrySet()) {
 			exactMassPerBatch = exactMassPerBatch.add(
-					chemicalRegistry.species(chemicalRegistry.speciesHandle(term.getKey())).massPerAu()
+					chemicalRegistry.species(chemicalRegistry.speciesHandle(term.getKey())).massKilogramsPerAu()
 					.multiply(term.getValue()).multiply(reaction.solidExtentPerBatch())
 					.divide(cc.ecisr.mmm.chemistry.ChemicalLimits.QUANTA_PER_AU));
 		}

@@ -594,7 +594,7 @@ public final class FluidTransferService {
 		if (!inserted.transferred()) {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(mixture), "空间或 marker 预算不足，未能注入混合物");
 		}
-		MaterialInsertionSettlement settlement = settleMaterialInsertion(mixture, inserted.portions());
+		MaterialInsertionSettlement settlement = settleMaterialInsertion(domain, mixture, inserted.portions());
 		if (settlement.insertedNanos() != plannedNanos) {
 			throw new IllegalStateException("Thermal material settlement changed after planning");
 		}
@@ -803,7 +803,8 @@ public final class FluidTransferService {
 					: Math.max(1L, Math.min(remainingNanos - (componentsLeft - 1L),
 					Math.round(remainingNanos * portion.volume() / remainingVolume)));
 			String materialId = domain.materialRegistry().material(portion.materialHandle()).id();
-			components.add(new FluidMixture.Component(materialId, nanos, portion.mass()));
+			components.add(new FluidMixture.Component(
+					materialId, nanos, domain.physicalMassKilograms(portion.mass())));
 			remainingNanos -= nanos;
 			remainingVolume -= portion.volume();
 		}
@@ -820,16 +821,18 @@ public final class FluidTransferService {
 			long plannedNanos = cellVolumeToNanos(plannedVolume);
 			if (plannedNanos <= 0L) throw new IllegalArgumentException(
 					"材料组分小于 solver 可表示体积：" + component.materialId());
-			double plannedMass = plannedNanos == component.volumeNanos()
+			double plannedMassKilograms = plannedNanos == component.volumeNanos()
 					? component.mass()
 					: component.mass() * plannedNanos / component.volumeNanos();
-			portions.add(new FlipFluidDomain.MaterialPortion(handle, plannedVolume, plannedMass));
+			portions.add(new FlipFluidDomain.MaterialPortion(
+					handle, plannedVolume, domain.solverMassForKilograms(plannedMassKilograms)));
 		}
 		return java.util.List.copyOf(portions);
 	}
 
 	static MaterialInsertionSettlement settleMaterialInsertion(
-			FluidMixture sourceMixture, java.util.List<FlipFluidDomain.MaterialPortion> insertedPortions
+			FlipFluidDomain domain, FluidMixture sourceMixture,
+			java.util.List<FlipFluidDomain.MaterialPortion> insertedPortions
 	) {
 		if (insertedPortions.size() != sourceMixture.components().size()) {
 			throw new IllegalStateException("材料注入返回的组分数与请求不一致");
@@ -842,9 +845,10 @@ public final class FluidTransferService {
 			long componentNanos = settledNanos(actual.volume(), source.volumeNanos());
 			insertedNanos = Math.addExact(insertedNanos, componentNanos);
 			long remainingNanos = source.volumeNanos() - componentNanos;
-			double remainingMass = source.mass() - actual.mass();
+			double actualMassKilograms = domain.physicalMassKilograms(actual.mass());
+			double remainingMass = source.mass() - actualMassKilograms;
 			if (remainingNanos == 0L) {
-				if (Double.doubleToRawLongBits(actual.mass()) != source.massBits()) {
+				if (Double.doubleToRawLongBits(actualMassKilograms) != source.massBits()) {
 					throw new IllegalStateException("完整材料组分注入未结算其全部质量：" + source.materialId());
 				}
 			} else {

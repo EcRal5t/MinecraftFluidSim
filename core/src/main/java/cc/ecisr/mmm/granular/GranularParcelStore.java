@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.granular;
 
-/** Fixed-capacity primitive SoA for active granular parcels. */
+/** Fixed-capacity primitive SoA for active granular parcels; every mass column is kilograms. */
 public final class GranularParcelStore {
 	public static final byte FLAG_SUPPORTED = 1;
 

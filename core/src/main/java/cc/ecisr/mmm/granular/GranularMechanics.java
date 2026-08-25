@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.granular;
 
-/** Schiller-Naumann buoyancy/drag update for active parcels, including equal fluid reaction impulse. */
+/** Schiller-Naumann buoyancy/drag update using kg and SI impulse, including equal fluid reaction impulse. */
 public final class GranularMechanics {
 	private static final double REYNOLDS_EPSILON = 1.0e-12;
 	private static final double GRAVITY = 9.81;
@@ -9,21 +9,21 @@ public final class GranularMechanics {
 
 	public static StepStats stepVelocities(
 			GranularParcelStore parcels, GranularRegistry registry, Environment environment,
-			double cellSizeMeters, double dt
+			double dt
 	) {
-		return stepVelocities(parcels, registry, environment, cellSizeMeters, GRAVITY, dt);
+		return stepVelocities(parcels, registry, environment, GRAVITY, dt);
 	}
 
 	public static StepStats stepVelocities(
 			GranularParcelStore parcels, GranularRegistry registry, Environment environment,
-			double cellSizeMeters, double gravity, double dt
+			double gravity, double dt
 	) {
 		if (parcels == null || registry == null || environment == null) {
 			throw new IllegalArgumentException("Granular mechanics input is missing");
 		}
-		if (!(Double.isFinite(cellSizeMeters) && cellSizeMeters > 0.0 && Double.isFinite(gravity) && gravity >= 0.0
+		if (!(Double.isFinite(gravity) && gravity >= 0.0
 				&& Double.isFinite(dt) && dt > 0.0)) {
-			throw new IllegalArgumentException("Granular mechanics scale and dt must be finite and positive");
+			throw new IllegalArgumentException("Granular mechanics gravity and dt are invalid");
 		}
 		FluidSample[] fluidSamples = sampleAndValidateCarrierRange(parcels, registry, environment);
 		double maximumSpeed = 0.0, totalFluidImpulseX = 0.0, totalFluidImpulseY = 0.0, totalFluidImpulseZ = 0.0;
@@ -40,9 +40,8 @@ public final class GranularMechanics {
 			double dragRate = 0.0;
 			if (fluid.hasLiquid() && fraction > 0.0) {
 				submerged++;
-				double cellVolumeM3 = cellSizeMeters * cellSizeMeters * cellSizeMeters;
 				double solidVolumeM3 = parcel.solidVolumeSvq() / (double) SolidVolume.SVQ_PER_BV;
-				double massKg = parcel.mass() * cellVolumeM3;
+				double massKg = parcel.mass();
 				if (!(Double.isFinite(massKg) && massKg > 0.0)) throw new IllegalStateException("Invalid parcel mass scale");
 				externalAccelerationY += fluid.density() * solidVolumeM3 * fraction * gravity / massKg;
 				double slipX = oldX - fluid.velocityX(), slipY = oldY - fluid.velocityY(), slipZ = oldZ - fluid.velocityZ();

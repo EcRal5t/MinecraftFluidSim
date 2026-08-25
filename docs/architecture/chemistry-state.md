@@ -8,9 +8,9 @@
 
 ### 定义层次与规范化
 
-数据包分别提供 species、chemical phase 和 reaction：
+数据包分别提供 species、chemical phase 和 reaction；species JSON 的 `mass_per_au` 值以 kg/AU 解释：
 
-- species：stable ID、组成基元整数向量、电荷、每 AU exact mass；
+- species：stable ID、组成基元整数向量、电荷、每 AU exact kg；
 - phase：绑定一个机械 material，声明允许 species、默认组成和 indicator 接受性；
 - reaction：反应物/生成物整数计量和允许 chemical phase。
 
@@ -32,10 +32,10 @@ marker 只保存 packed mixture handle 与 indicator bit；handle 指向 `Packed
 质量关系为：
 
 ```text
-particleMass = exact_species_mass + massResidual
+particleMass * cellSize^3 = exact_species_mass_kg + massResidual_kg
 ```
 
-reaction 只改变 species 列；residual、marker 体积、速度、机械材料和 phase 不因反应被重算。split/merge/transfer 按同一物质权重搬运 residual，raw-bit checkpoint 后仍须闭合允许的 ULP 预算。
+`ChemicalSpecies.massKilogramsPerAu` 与 parcel residual 都使用 kg；`SolverUnitScale` 是它们与 liquid marker solver mass 之间的唯一换算。reaction 只改变 species 列；residual、marker 体积、速度、机械材料和 phase 不因反应被重算。split/merge/transfer 按同一物质权重搬运 residual，raw-bit checkpoint 后仍须闭合允许的 ULP 预算。
 
 ## 反应模型
 
@@ -68,7 +68,7 @@ pH 是本项目从局部 `H+`/`OH-` 相对库存派生的 0–14 展示刻度，
 - 客户端只接收 Top-N species、pH 和 indicator 等量化展示；这些字段不能恢复或结算库存。
 - `chemstatus` 是管理员只读诊断并写 command transcript。
 
-`ChemicalContents` 使用 canonical group 表，每组绑定 mechanical material、indicator、nanovolume、mass/residual 和排序 species 列。物品总量必须与各组 exact sum 一致；部分抽取按体积分配 quanta 和 residual，并把确定性 remainder 留给一侧。容器无法表示完整结果时，在 solver 修改前拒绝。
+`ChemicalContents` 使用 canonical group 表，每组绑定 mechanical material、indicator、nanovolume、kg mass/residual 和排序 species 列。物品总量必须与各组 exact sum 一致；部分抽取按体积分配 quanta 和 residual，并把确定性 remainder 留给一侧。容器无法表示完整结果时，在 solver 修改前拒绝。
 
 区域 source/sink 不只是 species 总量：每个 transfer group 同时保存 material/indicator identity、volume、mass、residual 和 species。collision escape、`empty`、创造放出和创造装取分别走同一 ledger，不允许“只记总质量”后丢失组成证据。
 

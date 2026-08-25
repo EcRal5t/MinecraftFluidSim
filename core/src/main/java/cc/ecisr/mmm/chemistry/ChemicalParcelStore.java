@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.chemistry;
 
+import cc.ecisr.mmm.units.SolverUnitScale;
+
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -10,9 +12,13 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.IntFunction;
 
-/** Per-region marker-to-packed-mixture ownership, indicator state, dirty cells and logical reactions. */
+/**
+ * Per-region marker-to-packed-mixture ownership, indicator state, dirty cells and logical reactions.
+ * Marker mass parameters use normalized solver mass; packed species and residual mass use kilograms.
+ */
 public final class ChemicalParcelStore {
 	private final ChemicalRegistry registry;
+	private final SolverUnitScale unitScale;
 	private final PackedChemicalMixturePool pool;
 	private final int[] markerHandles;
 	private final long[] indicatorWords;
@@ -21,9 +27,12 @@ public final class ChemicalParcelStore {
 	private ChemicalTransferLedger escapedSink = ChemicalTransferLedger.EMPTY;
 	private ChemicalTransferLedger externalSource = ChemicalTransferLedger.EMPTY;
 
-	public ChemicalParcelStore(ChemicalRegistry registry, int reservedMarkerCapacity, int cellCount) {
+	public ChemicalParcelStore(
+			ChemicalRegistry registry, SolverUnitScale unitScale, int reservedMarkerCapacity, int cellCount
+	) {
 		if (cellCount <= 0) throw new IllegalArgumentException("Cell count must be positive");
 		this.registry = java.util.Objects.requireNonNull(registry, "registry");
+		this.unitScale = java.util.Objects.requireNonNull(unitScale, "unitScale");
 		this.pool = new PackedChemicalMixturePool(reservedMarkerCapacity);
 		this.markerHandles = new int[reservedMarkerCapacity];
 		this.indicatorWords = new long[(reservedMarkerCapacity + 63) >>> 6];
@@ -31,6 +40,7 @@ public final class ChemicalParcelStore {
 	}
 
 	public ChemicalRegistry registry() { return registry; }
+	public SolverUnitScale unitScale() { return unitScale; }
 	public PackedChemicalMixturePool pool() { return pool; }
 	public long totalQuanta() { return totalQuanta; }
 	public ChemicalTransferLedger escapedSink() { return escapedSink; }
@@ -74,11 +84,12 @@ public final class ChemicalParcelStore {
 				if (!phase.allowedSpecies().contains(species.getKey())) {
 					throw new IllegalArgumentException("Audit species/phase mismatch: " + species.getKey());
 				}
-				exactSpeciesMass = exactSpeciesMass.add(registry.species(handle).massPerAu()
+				exactSpeciesMass = exactSpeciesMass.add(registry.species(handle).massKilogramsPerAu()
 						.multiply(species.getValue()).divide(ChemicalLimits.QUANTA_PER_AU));
 			}
-			double tolerance = Math.max(1.0E-9, Math.ulp(group.mass()) * 8.0);
-			if (Math.abs(exactSpeciesMass.toDouble() + group.massResidual() - group.mass()) > tolerance) {
+			double tolerance = Math.max(1.0E-9, Math.ulp(group.massKilograms()) * 8.0);
+			if (Math.abs(exactSpeciesMass.toDouble() + group.massResidualKilograms()
+					- group.massKilograms()) > tolerance) {
 				throw new IllegalArgumentException("Chemical audit species/mass ledger mismatch");
 			}
 		}
@@ -133,7 +144,7 @@ public final class ChemicalParcelStore {
 		}
 		if (amounts.isEmpty()) throw new IllegalArgumentException("Marker is too small for one default carrier quantum");
 		ChemicalMixtureRecord withoutResidual = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0.0);
-		double residual = markerMass - withoutResidual.exactSpeciesMass(registry).toDouble();
+		double residual = unitScale.kilograms(markerMass) - withoutResidual.exactSpeciesMassKilograms(registry).toDouble();
 		ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, residual);
 		requireCompatible(record, materialId, indicator);
 		return record;
@@ -211,7 +222,7 @@ public final class ChemicalParcelStore {
 		TreeMap<Integer, Long> amounts = new TreeMap<>();
 		copyAmounts(left, amounts); copyAmounts(right, amounts);
 		ChemicalMixtureRecord combined = recordFromHandles(amounts, 0.0);
-		double residual = mergedMass - combined.exactSpeciesMass(registry).toDouble();
+		double residual = unitScale.kilograms(mergedMass) - combined.exactSpeciesMassKilograms(registry).toDouble();
 		combined = recordFromHandles(amounts, residual);
 		pool.overwrite(markerHandles[target], combined);
 		pool.release(markerHandles[source]);
@@ -236,8 +247,10 @@ public final class ChemicalParcelStore {
 		if (first.isEmpty() || second.isEmpty()) throw new IllegalStateException("Split produced an empty chemical parcel");
 		ChemicalMixtureRecord firstRecord = recordFromHandles(first, 0.0);
 		ChemicalMixtureRecord secondRecord = recordFromHandles(second, 0.0);
-		firstRecord = recordFromHandles(first, sourceMass - firstRecord.exactSpeciesMass(registry).toDouble());
-		secondRecord = recordFromHandles(second, destinationMass - secondRecord.exactSpeciesMass(registry).toDouble());
+		firstRecord = recordFromHandles(first,
+				unitScale.kilograms(sourceMass) - firstRecord.exactSpeciesMassKilograms(registry).toDouble());
+		secondRecord = recordFromHandles(second,
+				unitScale.kilograms(destinationMass) - secondRecord.exactSpeciesMassKilograms(registry).toDouble());
 		int newHandle = pool.create(secondRecord);
 		pool.overwrite(markerHandles[source], firstRecord);
 		markerHandles[destination] = newHandle;
@@ -305,8 +318,10 @@ public final class ChemicalParcelStore {
 		}
 		ChemicalMixtureRecord keptRecord = recordFromHandles(kept, 0.0);
 		ChemicalMixtureRecord removedRecord = recordFromHandles(removed, 0.0);
-		keptRecord = recordFromHandles(kept, keptMass - keptRecord.exactSpeciesMass(registry).toDouble());
-		removedRecord = recordFromHandles(removed, removedMass - removedRecord.exactSpeciesMass(registry).toDouble());
+		keptRecord = recordFromHandles(kept,
+				unitScale.kilograms(keptMass) - keptRecord.exactSpeciesMassKilograms(registry).toDouble());
+		removedRecord = recordFromHandles(removed,
+				unitScale.kilograms(removedMass) - removedRecord.exactSpeciesMassKilograms(registry).toDouble());
 		return new SplitPlan(keptRecord, removedRecord);
 	}
 
@@ -353,13 +368,14 @@ public final class ChemicalParcelStore {
 			throw new ChemicalReactionEngine.BudgetExceededException("Retained liquid would have no chemical carrier");
 		}
 		ChemicalMixtureRecord removedZero = ChemicalMixtureRecord.fromStableAmounts(registry, removed, 0.0);
-		double removedResidual = removedMass - removedZero.exactSpeciesMass(registry).toDouble();
+		double removedResidual = unitScale.kilograms(removedMass)
+				- removedZero.exactSpeciesMassKilograms(registry).toDouble();
 		ChemicalMixtureRecord removedRecord = ChemicalMixtureRecord.fromStableAmounts(
 				registry, removed, removedResidual);
 		ChemicalMixtureRecord keptRecord = ChemicalMixtureRecord.fromStableAmounts(
-				registry, kept, original.massResidual() - removedResidual);
-		requireMassClose(removedRecord.markerMass(registry), removedMass, "removed");
-		requireMassClose(keptRecord.markerMass(registry), keptMass, "retained");
+				registry, kept, original.massResidualKilograms() - removedResidual);
+		requireMassClose(removedRecord.massKilograms(registry), unitScale.kilograms(removedMass), "removed");
+		requireMassClose(keptRecord.massKilograms(registry), unitScale.kilograms(keptMass), "retained");
 		return new SplitPlan(keptRecord, removedRecord);
 	}
 
@@ -369,7 +385,7 @@ public final class ChemicalParcelStore {
 		TreeMap<Integer, Long> closed = new TreeMap<>();
 		copyAmounts(plan.removed(), closed);
 		if (plan.kept() != null) copyAmounts(plan.kept(), closed);
-		if (!recordFromHandles(closed, original.massResidual()).stableAmounts(registry)
+		if (!recordFromHandles(closed, original.massResidualKilograms()).stableAmounts(registry)
 				.equals(original.stableAmounts(registry))) {
 			throw new IllegalArgumentException("Chemical truncation species plan does not close");
 		}
@@ -479,7 +495,7 @@ public final class ChemicalParcelStore {
 				int[] ordinals = new int[markers.size()];
 				for (int i = 0; i < markers.size(); i++) {
 					ordinals[i] = markers.get(i);
-					double exactSpeciesMass = record(ordinals[i]).exactSpeciesMass(registry).toDouble();
+					double exactSpeciesMass = record(ordinals[i]).exactSpeciesMassKilograms(registry).toDouble();
 					weights[i] = (float) exactSpeciesMass;
 					if (!(Float.isFinite(weights[i]) && weights[i] > 0.0F)) {
 						throw new ChemicalReactionEngine.BudgetExceededException(
@@ -500,13 +516,14 @@ public final class ChemicalParcelStore {
 				double previousGroupMass = 0.0, candidateGroupMass = 0.0;
 				for (int i = 0; i < markers.size(); i++) {
 					int marker = ordinals[i];
-					replacements[marker] = recordFromHandlesBits(distributed[i], record(marker).massResidualBits());
-					replacementMass[marker] = replacements[marker].markerMass(registry);
+					replacements[marker] = recordFromHandlesBits(
+							distributed[i], record(marker).massResidualKilogramsBits());
+					replacementMass[marker] = unitScale.solverMass(replacements[marker].massKilograms(registry));
 					if (!(Double.isFinite(replacementMass[marker]) && replacementMass[marker] > 0.0)) {
 						throw new ChemicalReactionEngine.BudgetExceededException(
 								"Reaction produced a non-positive marker mass: marker=" + marker
-										+ " speciesMass=" + replacements[marker].exactSpeciesMass(registry).toDouble()
-										+ " residual=" + replacements[marker].massResidual());
+										+ " speciesMass=" + replacements[marker].exactSpeciesMassKilograms(registry).toDouble()
+										+ " residualKg=" + replacements[marker].massResidualKilograms());
 					}
 					previousGroupMass += markerMass[marker];
 					candidateGroupMass += replacementMass[marker];

@@ -17,7 +17,7 @@ public final class ChemicalReactionEngine {
 			inventory[input.speciesHandle(entry)] = input.amountAt(entry);
 		}
 		InventoryResult result = reactInventory(phaseHandle, inventory);
-		return new Result(canonical(result.inventory, input.massResidualBits()), result.evaluations);
+		return new Result(canonical(result.inventory, input.massResidualKilogramsBits()), result.evaluations);
 	}
 
 	/** Reacts one complete cell/phase inventory without applying the per-parcel 16-entry budget. */
@@ -75,7 +75,7 @@ public final class ChemicalReactionEngine {
 			int handle = registry.speciesHandle(addition.getKey());
 			inventory[handle] = Math.addExact(inventory[handle], amount);
 		}
-		return react(phaseHandle, canonical(inventory, base.massResidualBits())).mixture();
+		return react(phaseHandle, canonical(inventory, base.massResidualKilogramsBits())).mixture();
 	}
 
 	public double ph(ChemicalMixtureRecord mixture) {

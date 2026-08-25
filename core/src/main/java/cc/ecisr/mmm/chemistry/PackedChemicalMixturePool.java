@@ -87,7 +87,7 @@ public final class PackedChemicalMixturePool {
 			Arrays.fill(species, base + record.entryCount(), base + previous, (short) 0);
 			Arrays.fill(amounts, base + record.entryCount(), base + previous, 0L);
 		}
-		residualBits[handle] = record.massResidualBits();
+		residualBits[handle] = record.massResidualKilogramsBits();
 		entryCount[handle] = (byte) record.entryCount();
 	}
 

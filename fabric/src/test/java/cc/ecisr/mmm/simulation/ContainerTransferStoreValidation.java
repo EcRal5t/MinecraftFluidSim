@@ -263,7 +263,7 @@ public final class ContainerTransferStoreValidation {
 		ChemicalContents chemicalContents = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
 				ChemicalLimits.QUANTA_PER_AU, List.of(new ChemicalContents.Group(
 						"mmm:water", true, ContainerFluidLedger.NANOS_PER_BLOCK,
-						Double.doubleToRawLongBits(144.0), Double.doubleToRawLongBits(0.0),
+						Double.doubleToRawLongBits(18.0), Double.doubleToRawLongBits(0.0),
 						List.of(new ChemicalContents.SpeciesAmount(
 								BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU)))));
 		ContainerTransferJournal.ItemFingerprint chemicalBefore = new ContainerTransferJournal.ItemFingerprint(
@@ -560,7 +560,7 @@ public final class ContainerTransferStoreValidation {
 		FlipFluidDomain.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(3, 2, 3, planned, 3);
 		check(inserted.transferred(), "non-float-friendly material insertion failed");
 		FluidTransferService.MaterialInsertionSettlement settlement =
-				FluidTransferService.settleMaterialInsertion(source, inserted.portions());
+				FluidTransferService.settleMaterialInsertion(domain, source, inserted.portions());
 		check(settlement.insertedNanos() > 0L && settlement.insertedNanos() <= source.totalVolumeNanos(),
 				"material insertion exceeded its source mixture");
 		long remainingNanos = settlement.remaining() == null ? 0L : settlement.remaining().totalVolumeNanos();

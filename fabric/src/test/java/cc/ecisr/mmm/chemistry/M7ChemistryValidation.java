@@ -31,10 +31,10 @@ public final class M7ChemistryValidation {
 		check(ExactRational.parse("1.25").canonical().equals("5/4"), "finite decimal did not canonicalize exactly");
 		check(ExactRational.parse("10/8").canonical().equals("5/4"), "fraction did not reduce");
 		String species = "{\"composition\":{\"H\":\"2\",\"O\":\"1\"},\"charge\":\"0\","
-				+ "\"mass_per_au\":\"144\",\"base_argb\":\"#ff4e9cff\"}";
+				+ "\"mass_per_au\":\"18\",\"base_argb\":\"#ff4e9cff\"}";
 		ChemicalSpecies decoded = ChemicalDefinitionCodec.decodeSpecies("test:h2o", new StringReader(species));
-		check(decoded.massPerAu().equals(ExactRational.of(144)), "species exact mass codec changed value");
-		expectFailure(() -> ChemicalDefinitionCodec.decodeSpecies("test:bad", new StringReader(species.replace("\"144\"", "144"))),
+		check(decoded.massKilogramsPerAu().equals(ExactRational.of(18)), "species exact mass codec changed value");
+		expectFailure(() -> ChemicalDefinitionCodec.decodeSpecies("test:bad", new StringReader(species.replace("\"18\"", "18"))),
 				"JSON number bypassed exact rational string codec");
 		expectFailure(() -> ExactRational.parse("1/0"), "zero denominator accepted");
 		expectFailure(() -> ExactRational.parse("1e-500000"), "unbounded decimal scale was accepted");
@@ -89,7 +89,8 @@ public final class M7ChemistryValidation {
 		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry,
 				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU), 856.0);
 		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
-				"mmm:water", true, 1.0, 1_000.0, mixture.massResidualBits(), mixture.stableAmounts(registry))));
+				"mmm:water", true, 1.0, 1_000.0,
+				mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry))));
 		byte[] encoded = ChemicalAuditLedgerCodec.encode(ledger, ChemicalTransferLedger.EMPTY);
 		ChemicalAuditLedgerCodec.AuditLedgers decoded = ChemicalAuditLedgerCodec.decode(encoded);
 		check(decoded.externalSource().groups().equals(ledger.groups()) && decoded.escapedSink().isEmpty(),
@@ -115,7 +116,7 @@ public final class M7ChemistryValidation {
 			List<ChemicalSpecies> changedSpecies = new ArrayList<>(BuiltinChemicalDefinitions.species());
 			ChemicalSpecies original = changedSpecies.getFirst();
 			changedSpecies.set(0, new ChemicalSpecies(original.id(), original.composition(), original.charge(),
-					original.massPerAu(), original.baseArgb() ^ 0x00010101));
+					original.massKilogramsPerAu(), original.baseArgb() ^ 0x00010101));
 			ChemicalRegistry changed = new ChemicalRegistry(
 					changedSpecies, BuiltinChemicalDefinitions.phases(), BuiltinChemicalDefinitions.reactions());
 			ChemicalRegistryStore.LoadResult mismatch = store.loadOrCreate(changed);
@@ -230,7 +231,7 @@ public final class M7ChemistryValidation {
 		check(result.amount(registry.speciesHandle(BuiltinChemicalDefinitions.K_PLUS)) == 6_000_000L, "K inventory drifted");
 		check(result.amount(registry.speciesHandle(BuiltinChemicalDefinitions.CL_MINUS)) == 4_000_000L, "Cl inventory drifted");
 		check(result.amount(registry.speciesHandle(BuiltinChemicalDefinitions.NO3_MINUS)) == 6_000_000L, "nitrate inventory drifted");
-		check(salts.exactSpeciesMass(registry).equals(result.exactSpeciesMass(registry)), "salt dissociation changed exact mass");
+		check(salts.exactSpeciesMassKilograms(registry).equals(result.exactSpeciesMassKilograms(registry)), "salt dissociation changed exact mass");
 		check(salts.chargeQuanta(registry) == result.chargeQuanta(registry), "salt dissociation changed charge");
 
 		ChemicalMixtureRecord firstPair = engine.react(phase, record(Map.of(

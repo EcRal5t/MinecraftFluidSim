@@ -107,7 +107,7 @@ public final class ChemicalRegistryStore {
 		for (ChemicalSpecies definition : registry.species()) {
 			CompoundTag tag = new CompoundTag();
 			tag.putString("Id", definition.id()); tag.putInt("Charge", definition.charge());
-			tag.putString("Mass", definition.massPerAu().canonical()); tag.putInt("Color", definition.baseArgb());
+			tag.putString("Mass", definition.massKilogramsPerAu().canonical()); tag.putInt("Color", definition.baseArgb());
 			tag.put("Composition", encodeIntegerMap(definition.composition())); species.add(tag);
 		}
 		root.put("Species", species);

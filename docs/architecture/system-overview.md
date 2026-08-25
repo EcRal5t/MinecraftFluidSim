@@ -75,8 +75,8 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 - 液体容器用 `long` nanovolume：`1 BV = 1,000,000,000 nanos`。
 - 固体用整数 SVQ：`1 BV = 2^27 SVQ`，默认 cell 为 `2^24 SVQ`。
 - 化学用整数 quanta：`1 AU = 1,000,000,000 quanta`；AU 是求解器量纲，不宣称等于 mol。
-- marker `particleMass` 是与 solver-cell 体积配对的质量权重；跨入 SI 热学时唯一通过 `CondensedMassScale` 乘 `cellSize³` 得到 kg。
-- gas component 的 standard-volume nanos 与 kg 分开保存；气体 kg 不再经过 condensed scale。
+- marker `particleMass` 是与 solver-cell 体积配对的质量权重；所有 SI、化学与容器边界只通过 `SolverUnitScale` 乘 `cellSize³` 得到 kg。
+- solid mass、chemical species/residual、gas component mass 和容器 mass 都直接保存 kg；只有 liquid marker mass 使用 solver weight。gas component 的 standard-volume nanos 与 kg 分开保存。
 - 热学当前使用 SI-compatible K、Pa、J、W/mK 与 J/(kg K)。内部审计保留 raw double 或 `SignedDyadic`，不从显示小数恢复。
 
 浮点 marker 尾数、整数 SVQ/nanos/quanta 和独立 residual 都是合法真值。换算必须指定向上、向下或 exact；不能先四舍五入后把差额静默归零。

@@ -13,7 +13,7 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.function.IntToLongFunction;
 
-/** Stable-ID, exact-inventory handoff used only by granular region state and transactional adapters. */
+/** Stable-ID, exact-SVQ/kilogram handoff used only by granular region state and transactional adapters. */
 public final class GranularStateSnapshot {
 	public record ActiveParcel(
 			float x, float y, float z, float velocityX, float velocityY, float velocityZ,

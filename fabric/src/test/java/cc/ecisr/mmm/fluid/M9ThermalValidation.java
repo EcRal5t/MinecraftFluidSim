@@ -24,7 +24,7 @@ import cc.ecisr.mmm.thermal.SignedDyadic;
 import cc.ecisr.mmm.thermal.GranularEnergyColumn;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
-import cc.ecisr.mmm.thermal.CondensedMassScale;
+import cc.ecisr.mmm.units.SolverUnitScale;
 import cc.ecisr.mmm.thermal.FiniteThermalBodyState;
 import cc.ecisr.mmm.thermal.FiniteThermalExchange;
 import cc.ecisr.mmm.thermal.ThermalBoundaryDefinition;
@@ -462,8 +462,8 @@ public final class M9ThermalValidation {
 				&& display.gasNodes().size() == 1 && display.gasNodes().getFirst().nodeId() == 1,
 				"thermal display did not derive quantized condensed/gas state in one rebuild");
 		double liquidMassBefore = domain.totalMass();
-		double boiledSolverMass = CondensedMassScale.forCellSize(config.cellSize())
-				.solverMassWeight(batchMass.toDouble());
+		double boiledSolverMass = SolverUnitScale.forCellSize(config.cellSize())
+				.solverMass(batchMass.toDouble());
 		long gasNanosBefore = domain.airNetwork().standardVolumeNanos(1);
 		SignedDyadic energyBefore = domain.exactInternalEnergy();
 		ThermalAuditLedger auditBefore = domain.thermalAudit();
@@ -493,7 +493,7 @@ public final class M9ThermalValidation {
 				.component(BuiltinGasDefinitions.WATER_VAPOR);
 		long remainingBatches = stats.operations() - condensed.operations();
 		double condensedPhysicalMass = (domain.totalMass() - liquidMassAfterBoiling)
-				* CondensedMassScale.forCellSize(config.cellSize()).cubicMetersPerNormalizedCellVolume();
+				* SolverUnitScale.forCellSize(config.cellSize()).cubicMetersPerNormalizedVolume();
 		double removedVaporMass = vaporAmount.mass()
 				- (vaporAfterCondensation == null ? 0.0 : vaporAfterCondensation.mass());
 		require(condensed.operations() > 1 && condensed.operations() <= stats.operations()
@@ -572,7 +572,8 @@ public final class M9ThermalValidation {
 				BuiltinChemicalDefinitions.NA_PLUS, 1_000_000L), marker == 0);
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long sandSvq = granular.material(sand).maximumActiveParcelSvq();
-		double sandMass = SolidVolume.toCellVolume(sandSvq) * granular.material(sand).referenceDensity();
+		double sandMass = sandSvq / (double) SolidVolume.SVQ_PER_BV
+				* granular.material(sand).referenceDensity();
 		require(domain.tryInsertExactGranular(1, 1, 1, sand, 0, sandSvq, sandMass).inserted(),
 				"gas phase fixture could not insert its granular LTE carrier");
 		domain.bindThermal(thermal, liquids, 500.0);
@@ -586,7 +587,7 @@ public final class M9ThermalValidation {
 		domain.step(true, 2);
 		GasComponentAmount gas = domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
 		FlipChemicalParticleState boiled = domain.exportChemicalParticleState();
-		CondensedMassScale massScale = CondensedMassScale.forCellSize(config.cellSize());
+		SolverUnitScale massScale = SolverUnitScale.forCellSize(config.cellSize());
 		long gasH2o = gas.species().stream().filter(amount -> amount.speciesId().equals(
 				BuiltinChemicalDefinitions.H2O)).mapToLong(GasComponentAmount.SpeciesAmount::amountQuanta).sum();
 		long gasSodium = gas.species().stream().filter(amount -> amount.speciesId().equals(
@@ -594,9 +595,9 @@ public final class M9ThermalValidation {
 		require(domain.lastGasThermalPhaseStats().boiledCells() == 1 && gasH2o > 0L && gasSodium == 0L
 				&& boiled.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O)] + gasH2o == initialH2o
 				&& boiled.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)] == initialSodium
-				&& close(boiled.residualLedger() + massScale.signedSolverMassWeight(gas.massResidual()),
+				&& close(boiled.residualLedger() + gas.massResidual(),
 						initial.residualLedger())
-				&& close(gasSpeciesMassKilograms(chemistry, gas, massScale) + gas.massResidual(), gas.mass())
+				&& close(gasSpeciesMassKilograms(chemistry, gas) + gas.massResidual(), gas.mass())
 				&& Float.floatToRawIntBits(boiled.materials().copyPositionVolume()[3])
 				== Float.floatToRawIntBits(indicatorVolume)
 				&& Double.doubleToRawLongBits(boiled.materials().copyParticleMass()[0])
@@ -620,13 +621,13 @@ public final class M9ThermalValidation {
 		FlipChemicalParticleState partiallyRestored = domain.exportChemicalParticleState();
 		long remainingGasH2o = vaporRemainder.species().stream().filter(amount -> amount.speciesId().equals(
 				BuiltinChemicalDefinitions.H2O)).mapToLong(GasComponentAmount.SpeciesAmount::amountQuanta).sum();
-		double remainingSolverMass = massScale.solverMassWeight(vaporRemainder.mass());
+		double remainingSolverMass = massScale.solverMass(vaporRemainder.mass());
 		require(partiallyRestored.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O)]
 						+ remainingGasH2o == initialH2o
 				&& partiallyRestored.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)] == initialSodium
 				&& close(partiallyRestored.residualLedger()
-						+ massScale.signedSolverMassWeight(vaporRemainder.massResidual()), initial.residualLedger())
-				&& close(gasSpeciesMassKilograms(chemistry, vaporRemainder, massScale)
+						+ vaporRemainder.massResidual(), initial.residualLedger())
+				&& close(gasSpeciesMassKilograms(chemistry, vaporRemainder)
 						+ vaporRemainder.massResidual(), vaporRemainder.mass())
 				&& close(partiallyRestored.materials().totalMass() + remainingSolverMass,
 						initial.materials().totalMass())
@@ -646,15 +647,13 @@ public final class M9ThermalValidation {
 						+ domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
 	}
 
-	private static double gasSpeciesMassKilograms(
-			ChemicalRegistry registry, GasComponentAmount component, CondensedMassScale massScale
-	) {
-		ExactRational solverMass = ExactRational.ZERO;
+	private static double gasSpeciesMassKilograms(ChemicalRegistry registry, GasComponentAmount component) {
+		ExactRational massKilograms = ExactRational.ZERO;
 		for (GasComponentAmount.SpeciesAmount amount : component.species()) {
-			solverMass = solverMass.add(registry.species(registry.speciesHandle(amount.speciesId())).massPerAu()
+			massKilograms = massKilograms.add(registry.species(registry.speciesHandle(amount.speciesId())).massKilogramsPerAu()
 					.multiply(amount.amountQuanta()).divide(ChemicalLimits.QUANTA_PER_AU));
 		}
-		return massScale.kilograms(solverMass.toDouble());
+		return massKilograms.toDouble();
 	}
 
 	private static void setAllCondensedCellTemperatures(FlipFluidDomain domain, double temperatureK) {
@@ -804,7 +803,8 @@ public final class M9ThermalValidation {
 		ChemicalReaction reaction = new ChemicalReaction("test:reaction", ChemicalReaction.Kind.INSTANTANEOUS,
 				phaseId, Map.of(a, 1), Map.of(b, 1), ExactRational.ZERO);
 		ChemicalRegistry chemistry = new ChemicalRegistry(List.of(reactant, product), List.of(phase), List.of(reaction));
-		ChemicalParcelStore parcels = new ChemicalParcelStore(chemistry, 1, 8);
+		ChemicalParcelStore parcels = new ChemicalParcelStore(
+				chemistry, SolverUnitScale.forCellSize(1.0F), 1, 8);
 		ChemicalMixtureRecord initial = ChemicalMixtureRecord.fromStableAmounts(
 				chemistry, Map.of(a, ChemicalLimits.QUANTA_PER_AU), 0.0);
 		parcels.assign(0, initial, false);
@@ -861,8 +861,8 @@ public final class M9ThermalValidation {
 		domain.bindGranular(granular, liquids);
 		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		domain.setMarkerChemical(0, Map.of(
-				BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
-				BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), true);
+				BuiltinChemicalDefinitions.NA_PLUS, 1_100_000L,
+				BuiltinChemicalDefinitions.CL_MINUS, 1_100_000L), true);
 		domain.bindThermal(reactiveGranularThermalRegistry(liquids, granular), liquids, 300.0);
 		domain.setPrecipitationEnabled(true);
 		SignedDyadic beforePrecipitation = domain.exactInternalEnergy();
@@ -880,6 +880,7 @@ public final class M9ThermalValidation {
 				marker, Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L), (marker & 1) == 0);
 		SignedDyadic beforeDissolution = domain.exactInternalEnergy();
 		double temperatureBeforeDissolution = domain.thermalTemperatureInCell(1, 1, 1);
+		long solidBeforeDissolution = domain.totalGranularSolidVolumeSvq();
 		boolean dissolved = false;
 		for (int step = 0; step < 16 && domain.totalGranularSolidVolumeSvq() > 0L; step++) {
 			domain.step(); dissolved |= domain.lastPhaseTransferStats().dissolutions() > 0;
@@ -890,7 +891,11 @@ public final class M9ThermalValidation {
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
 				&& Math.abs(domain.exactInternalEnergy().subtract(beforeDissolution).toDouble()) <= 1.0E-8,
 				"dissolution did not consume sensible energy through the same state function: beforeT="
-						+ temperatureBeforeDissolution + " afterT=" + dissolutionTemperature);
+						+ temperatureBeforeDissolution + " afterT=" + dissolutionTemperature
+						+ " dissolved=" + dissolved + " solidSvq=" + solidBeforeDissolution + "->"
+						+ domain.totalGranularSolidVolumeSvq()
+						+ " audit=" + domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+						+ " deltaU=" + domain.exactInternalEnergy().subtract(beforeDissolution));
 	}
 
 	private static ThermalRegistry reactiveGranularThermalRegistry(
@@ -1063,7 +1068,7 @@ public final class M9ThermalValidation {
 		require(freezeStats.operations() == 4 && freezeStats.signedBatches() == 4L
 				&& close(phaseDomain.totalVolumeExact(), 0.5)
 				&& phaseDomain.totalCoherentSolidVolumeSvq() == SolidVolume.SVQ_PER_CELL / 2L
-				&& close(CondensedMassScale.forCellSize(config.cellSize()).kilograms(phaseDomain.totalMass())
+				&& close(SolverUnitScale.forCellSize(config.cellSize()).kilograms(phaseDomain.totalMass())
 						+ phaseDomain.totalCoherentMass(), 0.125)
 				&& close(phaseDomain.thermalTemperatureInCell(0, 0, 0), 300.0)
 				&& phaseDomain.exactInternalEnergy().equals(coldEnergy)
@@ -1076,7 +1081,7 @@ public final class M9ThermalValidation {
 		require(meltStats.operations() == 4 && meltStats.signedBatches() == -4L
 				&& close(phaseDomain.totalVolumeExact(), 1.0)
 				&& phaseDomain.totalCoherentSolidVolumeSvq() == 0L
-				&& close(CondensedMassScale.forCellSize(config.cellSize()).kilograms(phaseDomain.totalMass())
+				&& close(SolverUnitScale.forCellSize(config.cellSize()).kilograms(phaseDomain.totalMass())
 						+ phaseDomain.totalCoherentMass(), 0.125)
 				&& close(phaseDomain.thermalTemperatureInCell(0, 0, 0), 300.0)
 				&& phaseDomain.exactInternalEnergy().equals(hotEnergy)
@@ -1148,7 +1153,7 @@ public final class M9ThermalValidation {
 		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L), true);
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long sandSvq = granular.material(sand).maximumActiveParcelSvq();
-		double sandMass = SolidVolume.toCellVolume(sandSvq)
+		double sandMass = sandSvq / (double) SolidVolume.SVQ_PER_BV
 				* granular.material(sand).referenceDensity();
 		require(domain.tryInsertExactGranular(1, 1, 1, sand, 0, sandSvq, sandMass).inserted(),
 				"joint phase fixture could not insert its granular heat bath");
@@ -1157,7 +1162,7 @@ public final class M9ThermalValidation {
 		CondensedLedger initial = condensedLedger(domain, chemistry);
 		long initialGranularSvq = domain.totalGranularSolidVolumeSvq();
 		double initialGranularMass = domain.totalGranularMass();
-		CondensedMassScale massScale = CondensedMassScale.forCellSize(config.cellSize());
+		SolverUnitScale massScale = SolverUnitScale.forCellSize(config.cellSize());
 		double initialMass = massScale.kilograms(domain.totalMass()) + domain.totalCoherentMass();
 		SignedDyadic coldEnergy = domain.exactInternalEnergy();
 		FlipFluidDomain.ThermalPhaseStats freeze = domain.stepInertPhaseChangeOnly(16);
@@ -1390,7 +1395,7 @@ public final class M9ThermalValidation {
 		domain.bindThermal(registry, liquids, 300.0);
 		domain.removeAllWaterExact();
 
-		double importedEnergy = CondensedMassScale.forCellSize(config.cellSize()).kilograms(1_000.0)
+		double importedEnergy = SolverUnitScale.forCellSize(config.cellSize()).kilograms(1_000.0)
 				* 4_000.0 * 20.0;
 		FlipFluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(
 				1, 1, 1, 1.0F, 1, 0, false, importedEnergy);
@@ -1478,7 +1483,7 @@ public final class M9ThermalValidation {
 		};
 		FlipThermalState granularThermal = new FlipThermalState(registry, liquids, 300.0,
 				1, 2, 2, 2, 0.5F, carriers);
-		require(granularThermal.exactEnergy(0).equals(SignedDyadic.of(1.875))
+		require(granularThermal.exactEnergy(0).equals(SignedDyadic.of(15.0))
 				&& close(granularThermal.temperatureInCell(0, carriers), 300.0),
 				"M8 active/deposit energy did not join the LTE state function");
 		granularThermal.setTemperatureInCell(0, 310.0, carriers);
@@ -1494,7 +1499,8 @@ public final class M9ThermalValidation {
 		domain.bindGranular(granular, productionLiquids);
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long parcelSvq = SolidVolume.SVQ_PER_BV;
-		double parcelMass = SolidVolume.toCellVolume(parcelSvq) * granular.material(sand).referenceDensity();
+		double parcelMass = parcelSvq / (double) SolidVolume.SVQ_PER_BV
+				* granular.material(sand).referenceDensity();
 		GranularTransferLedger bucket = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
 				BuiltinGranularDefinitions.FINE_SAND, parcelSvq, parcelMass, null)));
 		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted(),

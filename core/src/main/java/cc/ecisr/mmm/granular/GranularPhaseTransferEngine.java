@@ -5,6 +5,7 @@ import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ExactRational;
+import cc.ecisr.mmm.units.SolverUnitScale;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -16,9 +17,11 @@ import java.util.TreeMap;
 /** Pure same-cell saturation planner. Store ownership and commits remain in the domain adapter. */
 public final class GranularPhaseTransferEngine {
 	private final ChemicalRegistry chemistry;
+	private final SolverUnitScale unitScale;
 
-	public GranularPhaseTransferEngine(ChemicalRegistry chemistry) {
+	public GranularPhaseTransferEngine(ChemicalRegistry chemistry, SolverUnitScale unitScale) {
 		this.chemistry = java.util.Objects.requireNonNull(chemistry, "chemistry");
+		this.unitScale = java.util.Objects.requireNonNull(unitScale, "unitScale");
 	}
 
 	public Plan plan(
@@ -36,7 +39,7 @@ public final class GranularPhaseTransferEngine {
 			}
 			for (int entry = 0; entry < parcel.mixture().entryCount(); entry++) inventory[parcel.mixture().speciesHandle(entry)] =
 					Math.addExact(inventory[parcel.mixture().speciesHandle(entry)], parcel.mixture().amountAt(entry));
-			double exactMass = parcel.mixture().exactSpeciesMass(chemistry).toDouble(); massWeights[index] = (float) exactMass;
+			double exactMass = parcel.mixture().exactSpeciesMassKilograms(chemistry).toDouble(); massWeights[index] = (float) exactMass;
 			if (!(Float.isFinite(massWeights[index]) && massWeights[index] > 0.0F)) {
 				throw new BlockedException("Chemical marker exact mass is not a usable phase-transfer weight");
 			}
@@ -81,17 +84,21 @@ public final class GranularPhaseTransferEngine {
 		double oldMass = 0.0, newMass = 0.0;
 		for (int index = 0; index < liquid.size(); index++) {
 			LiquidParcel source = liquid.get(index);
-			ChemicalMixtureRecord replacement = record(distributed[index], source.mixture().massResidualBits());
-			double mass = replacement.markerMass(chemistry);
-			if (!(Double.isFinite(mass) && mass > 0.0)) throw new BlockedException("Phase transfer produced non-positive marker mass");
+			ChemicalMixtureRecord replacement = record(
+					distributed[index], source.mixture().massResidualKilogramsBits());
+			double massKilograms = replacement.massKilograms(chemistry);
+			if (!(Double.isFinite(massKilograms) && massKilograms > 0.0)) {
+				throw new BlockedException("Phase transfer produced non-positive marker mass");
+			}
+			double solverMass = unitScale.solverMass(massKilograms);
 			long signedVolumeDelta = precipitation ? -volumeDeltas[index] : volumeDeltas[index];
 			float cellVolume;
 			try { cellVolume = SolidVolume.addCellVolumeSvqExact(source.cellVolume(), signedVolumeDelta); }
 			catch (IllegalArgumentException unrepresentable) {
 				throw new BlockedException("Liquid marker cannot represent the exact SVQ phase-transfer delta");
 			}
-			updates[index] = new MarkerUpdate(source.marker(), replacement, cellVolume, mass);
-			oldMass += source.mass(); newMass += mass;
+			updates[index] = new MarkerUpdate(source.marker(), replacement, cellVolume, solverMass);
+			oldMass += unitScale.kilograms(source.mass()); newMass += massKilograms;
 		}
 		SolidCompositionRecord solid = recordSolid(transferred);
 		double solidMass = solid.totalMass(chemistry);

@@ -34,7 +34,7 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 				throw new IllegalArgumentException("Duplicate chemical material/indicator group");
 			}
 			entries = Math.addExact(entries, group.species().size());
-			volume = Math.addExact(volume, group.volumeNanos()); mass += group.mass();
+			volume = Math.addExact(volume, group.volumeNanos()); mass += group.massKilograms();
 			for (SpeciesAmount species : group.species()) quanta = Math.addExact(quanta, species.amountQuanta());
 		}
 		if (entries > MAX_TOTAL_ENTRIES || volume > ContainerFluidLedger.NANOS_PER_BLOCK
@@ -75,7 +75,8 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 					.sorted(java.util.Map.Entry.comparingByKey())
 					.map(entry -> new SpeciesAmount(entry.getKey(), entry.getValue())).toList();
 			groups.add(new Group(source.materialId(), source.indicator(), nanos,
-					Double.doubleToRawLongBits(source.mass()), source.massResidualBits(), species));
+					Double.doubleToRawLongBits(source.massKilograms()),
+					source.massResidualKilogramsBits(), species));
 		}
 		ChemicalContents contents = new ChemicalContents(registry.fingerprint(), ChemicalLimits.QUANTA_PER_AU, groups);
 		contents.validateAgainst(registry);
@@ -99,10 +100,10 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 				amounts.put(species.speciesId(), species.amountQuanta());
 			}
 			ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(
-					registry, amounts, Double.longBitsToDouble(group.massResidualBits()));
-			double represented = mixture.markerMass(registry);
-			double tolerance = Math.max(1.0E-9, Math.ulp(group.mass()) * 8.0);
-			if (Math.abs(represented - group.mass()) > tolerance) {
+					registry, amounts, Double.longBitsToDouble(group.massResidualKilogramsBits()));
+			double represented = mixture.massKilograms(registry);
+			double tolerance = Math.max(1.0E-9, Math.ulp(group.massKilograms()) * 8.0);
+			if (Math.abs(represented - group.massKilograms()) > tolerance) {
 				throw new IllegalArgumentException("Chemical bucket species/mass ledger mismatch");
 			}
 		}
@@ -122,8 +123,8 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 			java.util.TreeMap<String, Long> species = new java.util.TreeMap<>();
 			for (SpeciesAmount amount : group.species()) species.put(amount.speciesId(), amount.amountQuanta());
 			result.add(new ChemicalTransferLedger.Group(group.materialId(), group.indicator(),
-					ContainerFluidLedger.nanosToVolume(group.volumeNanos()) * cellVolumesPerBlock, group.mass(),
-					group.massResidualBits(), species));
+					ContainerFluidLedger.nanosToVolume(group.volumeNanos()) * cellVolumesPerBlock,
+					group.massKilograms(), group.massResidualKilogramsBits(), species));
 		}
 		return new ChemicalTransferLedger(result);
 	}
@@ -132,7 +133,7 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 		long result = 0L; for (Group group : groups) result = Math.addExact(result, group.volumeNanos()); return result;
 	}
 	public double totalMass() {
-		double result = 0.0; for (Group group : groups) result += group.mass(); return result;
+		double result = 0.0; for (Group group : groups) result += group.massKilograms(); return result;
 	}
 	public long totalQuanta() {
 		long result = 0L; for (Group group : groups) for (SpeciesAmount species : group.species()) {
@@ -173,7 +174,7 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 			if (insertedSpecies.isEmpty() || remainingSpecies.isEmpty()) {
 				throw new IllegalArgumentException("Chemical partial settlement is below species quantum resolution");
 			}
-			double groupMass = group.mass();
+			double groupMass = group.massKilograms();
 			double insertedMass = groupMass * insertedVolume / group.volumeNanos();
 			double remainingMass = groupMass - insertedMass;
 			inserted.add(splitGroup(group, insertedVolume, insertedMass, insertedSpecies, registry));
@@ -190,7 +191,7 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 		java.util.TreeMap<String, Long> amounts = new java.util.TreeMap<>();
 		for (SpeciesAmount amount : species) amounts.put(amount.speciesId(), amount.amountQuanta());
 		ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0.0);
-		double residual = mass - exact.exactSpeciesMass(registry).toDouble();
+		double residual = mass - exact.exactSpeciesMassKilograms(registry).toDouble();
 		return new Group(source.materialId(), source.indicator(), volume, Double.doubleToRawLongBits(mass),
 				Double.doubleToRawLongBits(residual), species);
 	}
@@ -226,8 +227,8 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 		for (Group group : groups) {
 			encoded.append('|').append(group.materialId()).append(',').append(group.indicator() ? '1' : '0')
 					.append(',').append(group.volumeNanos()).append(',')
-					.append(Long.toUnsignedString(group.massBits(), 16)).append(',')
-					.append(Long.toUnsignedString(group.massResidualBits(), 16)).append(',');
+					.append(Long.toUnsignedString(group.massKilogramsBits(), 16)).append(',')
+					.append(Long.toUnsignedString(group.massResidualKilogramsBits(), 16)).append(',');
 			for (int index = 0; index < group.species().size(); index++) {
 				if (index > 0) encoded.append('+');
 				SpeciesAmount species = group.species().get(index);
@@ -268,16 +269,17 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 	}
 
 	public record Group(
-			String materialId, boolean indicator, long volumeNanos, long massBits,
-			long massResidualBits, List<SpeciesAmount> species
+			String materialId, boolean indicator, long volumeNanos, long massKilogramsBits,
+			long massResidualKilogramsBits, List<SpeciesAmount> species
 	) {
 		private static final Comparator<Group> ORDER = Comparator.comparing(Group::materialId).thenComparing(Group::indicator);
 		public Group {
 			if (!StableId.isValid(materialId, 128) || volumeNanos <= 0L
 					|| volumeNanos > ContainerFluidLedger.NANOS_PER_BLOCK || species == null || species.isEmpty()
 					|| species.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL
-					|| !(Double.isFinite(Double.longBitsToDouble(massBits)) && Double.longBitsToDouble(massBits) > 0.0)
-					|| !Double.isFinite(Double.longBitsToDouble(massResidualBits))) {
+					|| !(Double.isFinite(Double.longBitsToDouble(massKilogramsBits))
+					&& Double.longBitsToDouble(massKilogramsBits) > 0.0)
+					|| !Double.isFinite(Double.longBitsToDouble(massResidualKilogramsBits))) {
 				throw new IllegalArgumentException("Invalid chemical contents group");
 			}
 			ArrayList<SpeciesAmount> canonical = new ArrayList<>(species);
@@ -288,7 +290,7 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 			}
 			species = List.copyOf(canonical);
 		}
-		public double mass() { return Double.longBitsToDouble(massBits); }
+		public double massKilograms() { return Double.longBitsToDouble(massKilogramsBits); }
 	}
 
 	public record SpeciesAmount(String speciesId, long amountQuanta) {

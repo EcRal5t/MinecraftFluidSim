@@ -23,21 +23,21 @@ public final class BuiltinChemicalDefinitions {
 	public static final String MERCURY_CARRIER = "mmm:mercury_carrier";
 
 	private static final List<ChemicalSpecies> SPECIES = List.of(
-			species(H2O, Map.of("H", 2, "O", 1), 0, 144, 0xff4e9cff),
-			species(H_PLUS, Map.of("H", 1), 1, 8, 0xffff5b52),
-			species(OH_MINUS, Map.of("H", 1, "O", 1), -1, 136, 0xff596dff),
-			species(NA_PLUS, Map.of("Na", 1), 1, 184, 0xffd4d8e0),
-			species(K_PLUS, Map.of("K", 1), 1, 312, 0xffcfc0ff),
-			species(CL_MINUS, Map.of("Cl", 1), -1, 280, 0xffb8e88a),
-			species(NO3_MINUS, Map.of("N", 1, "O", 3), -1, 496, 0xffc8e7ff),
-			species(HCL, Map.of("H", 1, "Cl", 1), 0, 288, 0xffff7a5e),
-			species(NAOH, Map.of("Na", 1, "O", 1, "H", 1), 0, 320, 0xff808cff),
-			species(NANO3, Map.of("Na", 1, "N", 1, "O", 3), 0, 680, 0xffdceaff),
-			species(KCL, Map.of("K", 1, "Cl", 1), 0, 592, 0xffd7e3c8),
-			species(NACL, Map.of("Na", 1, "Cl", 1), 0, 464, 0xffe4edf0),
-			species(KNO3, Map.of("K", 1, "N", 1, "O", 3), 0, 808, 0xffe2ddff),
-			species(OIL_CARRIER, Map.of("Oil", 1), 0, 6_400, 0xffc89a32),
-			species(MERCURY_CARRIER, Map.of("Hg", 1), 0, 108_800, 0xffaeb6c2)
+			species(H2O, Map.of("H", 2, "O", 1), 0, 18, 0xff4e9cff),
+			species(H_PLUS, Map.of("H", 1), 1, 1, 0xffff5b52),
+			species(OH_MINUS, Map.of("H", 1, "O", 1), -1, 17, 0xff596dff),
+			species(NA_PLUS, Map.of("Na", 1), 1, 23, 0xffd4d8e0),
+			species(K_PLUS, Map.of("K", 1), 1, 39, 0xffcfc0ff),
+			species(CL_MINUS, Map.of("Cl", 1), -1, 35, 0xffb8e88a),
+			species(NO3_MINUS, Map.of("N", 1, "O", 3), -1, 62, 0xffc8e7ff),
+			species(HCL, Map.of("H", 1, "Cl", 1), 0, 36, 0xffff7a5e),
+			species(NAOH, Map.of("Na", 1, "O", 1, "H", 1), 0, 40, 0xff808cff),
+			species(NANO3, Map.of("Na", 1, "N", 1, "O", 3), 0, 85, 0xffdceaff),
+			species(KCL, Map.of("K", 1, "Cl", 1), 0, 74, 0xffd7e3c8),
+			species(NACL, Map.of("Na", 1, "Cl", 1), 0, 58, 0xffe4edf0),
+			species(KNO3, Map.of("K", 1, "N", 1, "O", 3), 0, 101, 0xffe2ddff),
+			species(OIL_CARRIER, Map.of("Oil", 1), 0, 800, 0xffc89a32),
+			species(MERCURY_CARRIER, Map.of("Hg", 1), 0, 13_600, 0xffaeb6c2)
 	);
 
 	private static final List<ChemicalPhaseDefinition> PHASES = List.of(

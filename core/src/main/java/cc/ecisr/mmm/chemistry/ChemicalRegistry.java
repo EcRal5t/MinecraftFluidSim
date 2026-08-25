@@ -185,7 +185,7 @@ public final class ChemicalRegistry {
 	private ExactRational mass(Map<String, Integer> side) {
 		ExactRational result = ExactRational.ZERO;
 		for (Map.Entry<String, Integer> term : side.entrySet()) {
-			result = result.add(species.get(speciesHandle(term.getKey())).massPerAu().multiply(term.getValue()));
+			result = result.add(species.get(speciesHandle(term.getKey())).massKilogramsPerAu().multiply(term.getValue()));
 		}
 		return result;
 	}
@@ -233,7 +233,7 @@ public final class ChemicalRegistry {
 		StringBuilder out = new StringBuilder(4096).append("mmm-chemistry-registry\n");
 		for (ChemicalSpecies definition : species) {
 			out.append("S|").append(definition.id()).append('|').append(definition.charge()).append('|')
-					.append(definition.massPerAu().canonical()).append('|')
+					.append(definition.massKilogramsPerAu().canonical()).append('|')
 					.append(Integer.toUnsignedString(definition.baseArgb())).append('|');
 			appendMap(out, definition.composition());
 		}

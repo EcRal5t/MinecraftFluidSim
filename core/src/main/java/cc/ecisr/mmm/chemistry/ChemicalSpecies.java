@@ -8,7 +8,7 @@ public record ChemicalSpecies(
 		String id,
 		Map<String, Integer> composition,
 		int charge,
-		ExactRational massPerAu,
+		ExactRational massKilogramsPerAu,
 		int baseArgb
 ) {
 	public ChemicalSpecies {
@@ -29,7 +29,9 @@ public record ChemicalSpecies(
 		if (Math.abs(charge) > ChemicalLimits.MAX_ABSOLUTE_CHARGE) {
 			throw new IllegalArgumentException("Species charge is over budget: " + id);
 		}
-		if (massPerAu == null || massPerAu.signum() <= 0) throw new IllegalArgumentException("Species mass must be positive: " + id);
+		if (massKilogramsPerAu == null || massKilogramsPerAu.signum() <= 0) {
+			throw new IllegalArgumentException("Species mass must be positive: " + id);
+		}
 		composition = Map.copyOf(canonical);
 	}
 }

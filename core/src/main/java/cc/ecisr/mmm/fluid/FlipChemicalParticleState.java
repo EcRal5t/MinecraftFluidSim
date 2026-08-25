@@ -4,6 +4,7 @@ import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
+import cc.ecisr.mmm.units.SolverUnitScale;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -63,6 +64,7 @@ public final class FlipChemicalParticleState {
 		long[] recomputed = new long[speciesTotals.length];
 		double residual = 0.0;
 		double[] mass = materials.copyParticleMass();
+		SolverUnitScale unitScale = SolverUnitScale.forCellSize(materials.cellSize());
 		for (int marker = 0; marker < markerMixtureIndex.length; marker++) {
 			int table = markerMixtureIndex[marker];
 			if (table < 0 || table >= mixtures.size() || (indicator[marker] & ~1) != 0) {
@@ -74,10 +76,11 @@ public final class FlipChemicalParticleState {
 				recomputed[runtime.speciesHandle(entry)] = Math.addExact(
 						recomputed[runtime.speciesHandle(entry)], runtime.amountAt(entry));
 			}
-			residual += runtime.massResidual();
-			double representedMass = runtime.markerMass(registry);
-			double tolerance = Math.max(1.0E-9, Math.ulp(mass[marker]) * 8.0);
-			if (Math.abs(representedMass - mass[marker]) > tolerance) {
+			residual += runtime.massResidualKilograms();
+			double representedMass = runtime.massKilograms(registry);
+			double physicalMass = unitScale.kilograms(mass[marker]);
+			double tolerance = Math.max(1.0E-9, Math.ulp(physicalMass) * 8.0);
+			if (Math.abs(representedMass - physicalMass) > tolerance) {
 				throw new IllegalArgumentException("Chemical marker mass relation does not close at ordinal " + marker);
 			}
 		}
@@ -110,7 +113,7 @@ public final class FlipChemicalParticleState {
 		for (ChemicalMixtureRecord mixture : markerMixtures) {
 			for (int entry = 0; entry < mixture.entryCount(); entry++) totals[mixture.speciesHandle(entry)] = Math.addExact(
 					totals[mixture.speciesHandle(entry)], mixture.amountAt(entry));
-			residual += mixture.massResidual();
+			residual += mixture.massResidualKilograms();
 		}
 		return new FlipChemicalParticleState(materials, registry, table, markerTable, indicator, totals,
 				Double.doubleToRawLongBits(residual), externalSource, escapedSink);
@@ -167,7 +170,7 @@ public final class FlipChemicalParticleState {
 			for (int entry = 0; entry < record.entryCount(); entry++) components.add(new Component(
 					registry.species(record.speciesHandle(entry)).id(), record.amountAt(entry)));
 			components.sort(Comparator.comparing(Component::speciesId));
-			return new StableMixture(components, record.massResidualBits());
+			return new StableMixture(components, record.massResidualKilogramsBits());
 		}
 
 		public ChemicalMixtureRecord toRuntime(ChemicalRegistry registry) {

@@ -12,7 +12,7 @@
 
 ## 独立真值
 
-- solid volume 使用整数 SVQ；每种材料质量独立保存。
+- solid volume 使用整数 SVQ；每种材料质量以 kg 独立保存。
 - reactive solid composition/species 与机械材料身份分开保存。
 - active parcel、deposit group 和 coherent condensed phase 是不同载体，不互相替代。
 - deposit 保存 cell、材料、SVQ、质量、组成、porosity 和孔隙水相关状态。
@@ -24,7 +24,7 @@
 
 - `1 BV` 是一个 Minecraft 方块体积；生产子格边长为 `0.5 m`，所以每格为 `0.125 BV`。
 - solid volume 以 `SVQ` 整数记账；SVQ 与 BV 的换算常量在存储、网络和容器中一致，禁止先转 `double` 再结算。
-- active parcel 使用结构分离数组保存位置、速度、材料 ordinal、SVQ、逐材料质量、组成 handle、内能和确定性身份。数组 ordinal 是同代 side column 的共同键。
+- active parcel 使用结构分离数组保存位置、速度、材料 ordinal、SVQ、逐材料 kg 质量、组成 handle、内能和确定性身份。数组 ordinal 是同代 side column 的共同键。
 - deposit 以 cell 为定位键，cell 内是有硬上限的规范化 group 列表；相同机械身份、组成和孔隙率的 group 才能合并。
 - coherent condensed group 属于相变层，具有自己的 cell、SVQ、质量、组成和内能；它不占 active parcel 或 deposit 的容量。
 
@@ -51,7 +51,7 @@ Vpore = Vbulk - Vs
 
 ### Active parcel 力学
 
-parcel 的物理质量由逐材料质量列给出；solver weight 与 kg 之间只在 `cellSize^3` 换算边界转换。每步先从同格液相采样速度、压力梯度、密度和载体黏度，再计算重力、浮力和阻力。球形颗粒的相对 Reynolds 数为
+parcel 的物理质量列直接使用 kg，SVQ 通过 `SVQ_PER_BV` 直接给出 m³；两者不依赖 liquid solver cell 的质量标度。每步先从同格液相采样速度、压力梯度、密度和载体黏度，再计算重力、浮力和阻力。颗粒反作用冲量只在写入 liquid MAC grid 时经 `SolverUnitScale` 换成 solver momentum。球形颗粒的相对 Reynolds 数为
 
 ```text
 Re = rho_f * d * |u_f - u_p| / mu

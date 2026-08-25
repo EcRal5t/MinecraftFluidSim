@@ -10,6 +10,7 @@ import java.util.TreeMap;
 import java.math.BigInteger;
 
 /** Immutable absolute solid species inventory; indicator and liquid phase never enter this record. */
+/** Immutable solid species inventory whose exact and residual masses are kilograms. */
 public final class SolidCompositionRecord {
 	private final int[] speciesHandles;
 	private final long[] amounts;
@@ -75,7 +76,7 @@ public final class SolidCompositionRecord {
 	public ExactRational exactSpeciesMass(ChemicalRegistry registry) {
 		ExactRational result = ExactRational.ZERO;
 		for (int index = 0; index < speciesHandles.length; index++) {
-			result = result.add(registry.species(speciesHandles[index]).massPerAu().multiply(amounts[index])
+			result = result.add(registry.species(speciesHandles[index]).massKilogramsPerAu().multiply(amounts[index])
 					.divide(ChemicalLimits.QUANTA_PER_AU));
 		}
 		return result;

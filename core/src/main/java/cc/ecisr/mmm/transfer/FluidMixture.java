@@ -8,7 +8,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/** Canonical container inventory: stable material id plus independent nanovolume and mass per component. */
+/** Canonical container inventory: stable material id plus independent nanovolume and kilogram mass per component. */
 public record FluidMixture(List<Component> components) {
 	public static final int MAX_COMPONENTS = 64;
 	public static final int MAX_ENCODED_LENGTH = 8192;

@@ -63,8 +63,8 @@ public final class ChemicalAuditLedgerCodec {
 			output.writeUTF(group.materialId());
 			output.writeBoolean(group.indicator());
 			output.writeLong(Double.doubleToRawLongBits(group.volume()));
-			output.writeLong(Double.doubleToRawLongBits(group.mass()));
-			output.writeLong(group.massResidualBits());
+			output.writeLong(Double.doubleToRawLongBits(group.massKilograms()));
+			output.writeLong(group.massResidualKilogramsBits());
 			output.writeInt(group.speciesQuanta().size());
 			for (Map.Entry<String, Long> species : new TreeMap<>(group.speciesQuanta()).entrySet()) {
 				output.writeUTF(species.getKey());

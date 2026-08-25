@@ -34,7 +34,7 @@ import cc.ecisr.mmm.granular.SolidLiquidReaction;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.thermal.SignedDyadic;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
-import cc.ecisr.mmm.thermal.CondensedMassScale;
+import cc.ecisr.mmm.units.SolverUnitScale;
 import cc.ecisr.mmm.thermal.GranularEnergyColumn;
 import cc.ecisr.mmm.thermal.GasLiquidPhaseModel;
 import cc.ecisr.mmm.thermal.FiniteThermalExchange;
@@ -81,7 +81,7 @@ public final class FlipFluidDomain {
 	private final int sizeZ;
 	private final int cellCount;
 	private final FluidSolverConfig config;
-	private final CondensedMassScale condensedMassScale;
+	private final SolverUnitScale unitScale;
 	private final int maximumParticleCount;
 	private final boolean[] solid;
 	private final FlipCutCellGeometry cutCells;
@@ -205,7 +205,7 @@ public final class FlipFluidDomain {
 		this.sizeZ = sizeZ;
 		this.cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
 		this.config = config;
-		this.condensedMassScale = CondensedMassScale.forCellSize(config.cellSize());
+		this.unitScale = SolverUnitScale.forCellSize(config.cellSize());
 		this.maximumParticleCount = maximumParticleCount;
 		int initialParticleCapacity = Math.min(16_384, maximumParticleCount);
 		this.particleX = new float[initialParticleCapacity];
@@ -393,6 +393,9 @@ public final class FlipFluidDomain {
 		return result;
 	}
 	public FluidSolverConfig config() { return config; }
+	public double physicalMassKilograms(double solverMass) { return unitScale.kilograms(solverMass); }
+	public double solverMassForKilograms(double kilograms) { return unitScale.solverMass(kilograms); }
+	public double physicalVolumeCubicMetres(double normalizedVolume) { return unitScale.cubicMeters(normalizedVolume); }
 	public boolean hasMaterialState() { return materialRegistry != null; }
 	public boolean hasChemistryState() { return chemicalParcels != null; }
 	public boolean hasGranularState() { return granularParcels != null; }
@@ -434,7 +437,7 @@ public final class FlipFluidDomain {
 			}
 		}
 		if (!(normalizedVolume > 0.0) || !(solverMass > 0.0)) return null;
-		double cubicMetresPerCell = condensedMassScale.cubicMetersPerNormalizedCellVolume();
+		double cubicMetresPerCell = unitScale.cubicMetersPerNormalizedVolume();
 		java.util.ArrayList<FluidCellInventoryView.MaterialAmount> materials = new java.util.ArrayList<>();
 		for (int material = 0; material < materialVolume.length; material++) if (materialVolume[material] > 0.0) {
 			String id = materialRegistry == null ? BuiltinFluidMaterials.WATER.id()
@@ -1184,7 +1187,7 @@ public final class FlipFluidDomain {
 		ChemicalTransferLedger.Builder result = ChemicalTransferLedger.builder(chemicalParcels.registry());
 		for (int marker = fromInclusive; marker < toExclusive; marker++) {
 			result.add(materialRegistry.material(particleMaterialHandle[marker]).id(), chemicalParcels.indicator(marker),
-					particleVolume[marker], particleMass[marker], chemicalParcels.record(marker));
+					particleVolume[marker], unitScale.kilograms(particleMass[marker]), chemicalParcels.record(marker));
 		}
 		return result.build();
 	}
@@ -1357,7 +1360,8 @@ public final class FlipFluidDomain {
 				&& !granularRegistry.chemicalRegistryFingerprint().equals(registry.fingerprint())) {
 			throw new IllegalArgumentException("Granular registry chemical dependency mismatch");
 		}
-		ChemicalParcelStore candidate = new ChemicalParcelStore(registry, maximumParticleCount, cellCount);
+		ChemicalParcelStore candidate = new ChemicalParcelStore(
+				registry, unitScale, maximumParticleCount, cellCount);
 		for (FluidMaterial material : materialRegistry.materials()) registry.phaseHandleForMaterial(material.id());
 		for (int marker = 0; marker < particleCount; marker++) {
 			candidate.assignDefault(marker, materialRegistry.material(particleMaterialHandle[marker]).id(),
@@ -1763,7 +1767,7 @@ public final class FlipFluidDomain {
 					cell, liquidHandle, gasThermalHandle, removedSvq, removedMass);
 			GasInventory batch = chemicalParcels == null ? phase.gasBatch(transition, batches)
 					: phase.gasBatch(transition, batches, removal.movedComposition().amounts(),
-							condensedMassScale.signedKilograms(removal.movedComposition().massResidual()));
+							removal.movedComposition().massResidual());
 			double batchEnergy = phase.internalEnergyAtTemperature(transition, batch, liquidTemperature);
 			double candidateLiquidTemperature = thermalState.requirePhaseCandidateState(cell,
 					liquidInventoryAfterRemoval(cell, liquidHandle, removal.allocations()),
@@ -1847,9 +1851,8 @@ public final class FlipFluidDomain {
 			GasComponentAmount proportionalMoved = proportionalTake.first().components().getFirst();
 			double requestedResidual = requestedBatch.components().getFirst().massResidual();
 			if (chemicalParcels != null) {
-				requestedResidual = requestedMass - condensedMassScale.kilograms(
-						PhaseComposition.fromGas(proportionalMoved, condensedMassScale)
-								.exactSpeciesMass(chemicalParcels.registry()).toDouble());
+				requestedResidual = requestedMass - PhaseComposition.fromGas(proportionalMoved)
+						.exactSpeciesMass(chemicalParcels.registry()).toDouble();
 			}
 			GasInventory.Split take;
 			try {
@@ -1878,7 +1881,7 @@ public final class FlipFluidDomain {
 			for (int marker = 0; marker < particleCount; marker++) if (particleCellIndex(marker) == cell
 					&& particleMaterialHandle[marker] == liquidHandle
 					&& (chemicalParcels == null || !chemicalParcels.indicator(marker))) { target = marker; break; }
-			PhaseComposition movedComposition = PhaseComposition.fromGas(moved, condensedMassScale);
+			PhaseComposition movedComposition = PhaseComposition.fromGas(moved);
 			ChemicalMixtureRecord condensedMixture = null;
 			if (chemicalParcels != null) {
 				if (movedComposition.isEmpty()) {
@@ -1898,7 +1901,7 @@ public final class FlipFluidDomain {
 			float targetVolume = 0.0F; double targetMass = 0.0; int slot = -1;
 			if (target >= 0) {
 				targetVolume = phaseAdjustedMarkerVolume(particleVolume[target], addedSvq, "Condensation");
-				targetMass = particleMass[target] + condensedMassScale.solverMassWeight(moved.mass());
+				targetMass = particleMass[target] + unitScale.solverMass(moved.mass());
 			} else {
 				if (particleCount >= maximumParticleCount) {
 					throw new PhaseCandidateUnavailableException("Condensation exceeds marker budget");
@@ -1949,7 +1952,7 @@ public final class FlipFluidDomain {
 		} else {
 			int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
 			spawnParticle(x, y, z, plan.slot(), SolidVolume.toCellVolume(plan.addedSvq()), liquidHandle,
-					condensedMassScale.solverMassWeight(plan.movedMass()),
+					unitScale.solverMass(plan.movedMass()),
 					plan.condensedMixture(), false, false);
 		}
 		gridDirty = true;
@@ -1965,13 +1968,13 @@ public final class FlipFluidDomain {
 				throw new ThermalPhaseBlockedException("Gas phase cell contains another liquid carrier");
 			}
 			svq = Math.addExact(svq, SolidVolume.cellVolumeSvqAtLeast(particleVolume[marker]));
-			mass += condensedMassScale.kilograms(particleMass[marker]);
+			mass += unitScale.kilograms(particleMass[marker]);
 			energy += thermalState.liquidInternalEnergy(marker); found = true;
 			if (chemicalParcels != null) composition.add(chemicalParcels.record(marker));
 			if (chemicalParcels == null || !chemicalParcels.indicator(marker)) {
 				freezableSvq = Math.addExact(freezableSvq,
 						SolidVolume.cellVolumeSvqAtMost(particleVolume[marker]));
-				freezableMass += condensedMassScale.kilograms(particleMass[marker]);
+				freezableMass += unitScale.kilograms(particleMass[marker]);
 			}
 		}
 		return found ? new PhaseCellInventory(0L, svq, 0.0, mass, energy,
@@ -2007,13 +2010,13 @@ public final class FlipFluidDomain {
 				throw new ThermalPhaseBlockedException("Phase cell contains an unsupported liquid heat-bath carrier");
 			}
 			upperSvq = Math.addExact(upperSvq, SolidVolume.cellVolumeSvqAtLeast(particleVolume[marker]));
-			upperMass += condensedMassScale.kilograms(particleMass[marker]);
+			upperMass += unitScale.kilograms(particleMass[marker]);
 			energy += thermalState.liquidInternalEnergy(marker); found = true;
 			if (chemicalParcels != null) upperComposition.add(chemicalParcels.record(marker));
 			if (chemicalParcels == null || !chemicalParcels.indicator(marker)) {
 				freezableUpperSvq = Math.addExact(freezableUpperSvq,
 						SolidVolume.cellVolumeSvqAtMost(particleVolume[marker]));
-				freezableUpperMass += condensedMassScale.kilograms(particleMass[marker]);
+				freezableUpperMass += unitScale.kilograms(particleMass[marker]);
 			}
 		}
 		for (CoherentPhaseStore.Group group : thermalState.coherentPhases().snapshot()) if (group.cell() == cell) {
@@ -2234,8 +2237,8 @@ public final class FlipFluidDomain {
 			if (markerSvq == 0L) continue;
 			long takeSvq = Math.min(markerSvq, remainingSvq);
 			double takeMass = takeSvq == remainingSvq ? remainingMass
-					: condensedMassScale.kilograms(particleMass[marker]) * ((double) takeSvq / markerSvq);
-			double takeSolverMass = condensedMassScale.solverMassWeight(takeMass);
+					: unitScale.kilograms(particleMass[marker]) * ((double) takeSvq / markerSvq);
+			double takeSolverMass = unitScale.solverMass(takeMass);
 			boolean full = takeSvq == markerSvq
 					&& markerSvq == SolidVolume.cellVolumeSvqAtLeast(particleVolume[marker]);
 			float newVolume = full ? 0.0F
@@ -2301,8 +2304,8 @@ public final class FlipFluidDomain {
 				}
 			}
 			double takeMass = takeSvq == remainingSvq ? remainingMass
-					: condensedMassScale.kilograms(particleMass[marker]) * ((double) takeSvq / markerSvq);
-			double takeSolverMass = condensedMassScale.solverMassWeight(takeMass);
+					: unitScale.kilograms(particleMass[marker]) * ((double) takeSvq / markerSvq);
+			double takeSolverMass = unitScale.solverMass(takeMass);
 			boolean full = takeSvq == markerSvq
 					&& markerSvq == SolidVolume.cellVolumeSvqAtLeast(particleVolume[marker]);
 			float newVolume = full ? 0.0F
@@ -2349,7 +2352,7 @@ public final class FlipFluidDomain {
 			ChemicalMixtureRecord mixture = chemicalParcels == null ? null
 					: edit == null ? chemicalParcels.record(marker) : edit.chemicalPlan().kept();
 			result.add(liquidInventoryPortion(liquidHandle,
-					condensedMassScale.kilograms(mass), mixture));
+					unitScale.kilograms(mass), mixture));
 		}
 		return List.copyOf(result);
 	}
@@ -2367,7 +2370,7 @@ public final class FlipFluidDomain {
 			ChemicalMixtureRecord mixture = chemicalParcels == null ? null
 					: marker == target ? condensedMixture : chemicalParcels.record(marker);
 			result.add(liquidInventoryPortion(liquidHandle,
-					condensedMassScale.kilograms(mass), mixture));
+					unitScale.kilograms(mass), mixture));
 		}
 		if (target < 0) result.add(liquidInventoryPortion(liquidHandle, appendedMass, condensedMixture));
 		return List.copyOf(result);
@@ -2414,7 +2417,7 @@ public final class FlipFluidDomain {
 		int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
 		int marker = particleCount;
 		spawnParticle(x, y, z, plan.meltSlot(), SolidVolume.toCellVolume(addedSvq), liquidHandle,
-				condensedMassScale.solverMassWeight(removed.mass()), plan.meltedMixture(), false, false);
+				unitScale.solverMass(removed.mass()), plan.meltedMixture(), false, false);
 		thermalState.addLiquidEnergy(marker, removed.internalEnergy());
 		commitPendingPhaseVolume(cell, plan.signedVolumeSvq());
 		refreshCoherentOccupancy();
@@ -2565,27 +2568,23 @@ public final class FlipFluidDomain {
 			if (mixture == null || registry == null) {
 				throw new IllegalArgumentException("Liquid phase composition is missing");
 			}
-			return new PhaseComposition(mixture.stableAmounts(registry), mixture.massResidual());
+			return new PhaseComposition(mixture.stableAmounts(registry), mixture.massResidualKilograms());
 		}
 
-		private static PhaseComposition fromGas(
-				GasComponentAmount component, CondensedMassScale condensedMassScale
-		) {
-			if (component == null || condensedMassScale == null) {
-				throw new IllegalArgumentException("Gas phase composition or mass scale is missing");
-			}
+		private static PhaseComposition fromGas(GasComponentAmount component) {
+			if (component == null) throw new IllegalArgumentException("Gas phase composition is missing");
 			TreeMap<String, Long> amounts = new TreeMap<>();
 			for (GasComponentAmount.SpeciesAmount amount : component.species()) {
 				amounts.put(amount.speciesId(), amount.amountQuanta());
 			}
-			double residual = condensedMassScale.signedSolverMassWeight(component.massResidual());
+			double residual = component.massResidual();
 			return amounts.isEmpty() && residual == 0.0 ? EMPTY : new PhaseComposition(amounts, residual);
 		}
 
 		private ExactRational exactSpeciesMass(ChemicalRegistry registry) {
 			ExactRational result = ExactRational.ZERO;
 			for (Map.Entry<String, Long> entry : amounts.entrySet()) {
-				result = result.add(registry.species(registry.speciesHandle(entry.getKey())).massPerAu()
+				result = result.add(registry.species(registry.speciesHandle(entry.getKey())).massKilogramsPerAu()
 						.multiply(entry.getValue()).divide(ChemicalLimits.QUANTA_PER_AU));
 			}
 			return result;
@@ -2603,7 +2602,7 @@ public final class FlipFluidDomain {
 			for (Map.Entry<String, Long> entry : record.stableAmounts(chemicalParcels.registry()).entrySet()) {
 				amounts.merge(entry.getKey(), entry.getValue(), Math::addExact);
 			}
-			massResidual += record.massResidual();
+			massResidual += record.massResidualKilograms();
 			if (!Double.isFinite(massResidual)) throw new ArithmeticException("Condensed phase residual overflow");
 		}
 
@@ -2805,7 +2804,7 @@ public final class FlipFluidDomain {
 		solidCompositions = new SolidCompositionPool(chemicalParcels.registry(),
 				Math.addExact(GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, depositCapacity));
 		granularInventory.bindSolidCompositions(solidCompositions);
-		granularPhaseTransfer = new GranularPhaseTransferEngine(chemicalParcels.registry());
+		granularPhaseTransfer = new GranularPhaseTransferEngine(chemicalParcels.registry(), unitScale);
 	}
 
 	/** Test/command reagent injection on one marker using absolute species quanta. */
@@ -2815,7 +2814,8 @@ public final class FlipFluidDomain {
 				chemicalParcels().registry(), stableAmounts, 0.0);
 		ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(
 				chemicalParcels.registry(), stableAmounts,
-				particleMass[marker] - zeroResidual.exactSpeciesMass(chemicalParcels.registry()).toDouble());
+				unitScale.kilograms(particleMass[marker])
+						- zeroResidual.exactSpeciesMassKilograms(chemicalParcels.registry()).toDouble());
 		chemicalParcels.requireCompatible(record,
 				materialRegistry.material(particleMaterialHandle[marker]).id(), indicator);
 		if (thermalState != null) thermalState.requireReactionState(
@@ -2903,7 +2903,8 @@ public final class FlipFluidDomain {
 		}
 		restoreMaterialParticleState(state.materials());
 		for (FluidMaterial material : materialRegistry.materials()) registry.phaseHandleForMaterial(material.id());
-		ChemicalParcelStore restored = new ChemicalParcelStore(registry, maximumParticleCount, cellCount);
+		ChemicalParcelStore restored = new ChemicalParcelStore(
+				registry, unitScale, maximumParticleCount, cellCount);
 		int[] tableIndex = state.copyMarkerMixtureIndex();
 		byte[] indicator = state.copyIndicator();
 		for (int marker = 0; marker < particleCount; marker++) {
@@ -3630,7 +3631,7 @@ public final class FlipFluidDomain {
 			ChemicalTransferLedger.Builder builder = ChemicalTransferLedger.builder(chemicalParcels.registry());
 			for (int marker = 0; marker < particleCount; marker++) builder.add(
 					materialRegistry.material(particleMaterialHandle[marker]).id(), chemicalParcels.indicator(marker),
-					particleVolume[marker], particleMass[marker], chemicalParcels.record(marker));
+					particleVolume[marker], unitScale.kilograms(particleMass[marker]), chemicalParcels.record(marker));
 			drained = builder.build();
 			chemicalParcels.requireCanRecordEscapedSink(drained);
 		}
@@ -3674,7 +3675,7 @@ public final class FlipFluidDomain {
 				builder.add(new ChemicalTransferLedger.Group(
 						coherentLiquidMaterialId(group.phaseId()), false,
 						SolidVolume.toCellVolume(group.occupiedVolumeSvq()),
-						condensedMassScale.solverMassWeight(group.mass()),
+						group.mass(),
 						group.composition().massResidualBits(), group.composition().stableAmounts()));
 			}
 			if (builder != null) coherentChemistry = builder.build();
@@ -4020,7 +4021,7 @@ public final class FlipFluidDomain {
 				ChemicalTransferLedger.Builder source = ChemicalTransferLedger.builder(chemicalParcels.registry());
 				for (MaterialInsertPiece piece : insertPieces) source.add(
 						materialRegistry.material(piece.materialHandle()).id(), false,
-						piece.volume(), piece.mass(), piece.chemical());
+						piece.volume(), unitScale.kilograms(piece.mass()), piece.chemical());
 				externalAddition = source.build();
 				chemicalParcels.requireCanRecordExternalSource(externalAddition);
 			} catch (IllegalArgumentException | ArithmeticException refusedAudit) {
@@ -4134,7 +4135,7 @@ public final class FlipFluidDomain {
 					distributed[piece].put(species.getKey(), allocation[piece]);
 				}
 			}
-			double volumeLeft = group.volume(), massLeft = group.mass();
+			double volumeLeft = group.volume(), massLeft = unitScale.solverMass(group.massKilograms());
 			for (int piece = 0; piece < groupPieces.size(); piece++) {
 				if (distributed[piece].isEmpty()) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 				ChemicalPieceDraft draft = groupPieces.get(piece);
@@ -4144,7 +4145,8 @@ public final class FlipFluidDomain {
 						chemicalParcels.registry(), distributed[piece], 0.0);
 				ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(
 						chemicalParcels.registry(), distributed[piece],
-						mass - withoutResidual.exactSpeciesMass(chemicalParcels.registry()).toDouble());
+						unitScale.kilograms(mass)
+								- withoutResidual.exactSpeciesMassKilograms(chemicalParcels.registry()).toDouble());
 				chemicalParcels.requireCompatible(record, group.materialId(), group.indicator());
 				pieces.add(new ChemicalInsertPiece(draft.cellX(), draft.cellY(), draft.cellZ(),
 						draft.volume(), draft.materialHandle(), mass, record, group.indicator()));
@@ -4229,7 +4231,7 @@ public final class FlipFluidDomain {
 				ChemicalParcelStore.SplitPlan chemicalPlan = chemicalParcels.planTruncate(
 						marker, newVolume, previousVolume - newVolume, newMass, removedMass);
 				ledger.add(materialRegistry.material(particleMaterialHandle[marker]).id(), chemicalParcels.indicator(marker),
-						actual, removedMass, chemicalPlan.removed());
+						actual, unitScale.kilograms(removedMass), chemicalPlan.removed());
 				FlipThermalState.Truncation thermalPlan = planThermalTruncate(marker, newMass,
 						chemicalPlan.kept(), thermalState == null ? Double.NaN : thermalMarkerTemperature(marker));
 				plan.add(new ExtractionAllocation(marker, newVolume, newMass, chemicalPlan, thermalPlan));
@@ -4478,7 +4480,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			if (hasGranularInventory()) {
 				GranularMechanics.StepStats granularMechanics = GranularMechanics.stepVelocities(
 						granularParcels, granularRegistry, granularEnvironment(),
-						config.cellSize(), config.gravity(), dt);
+						config.gravity(), dt);
 				lastGranularBoundaryImpulseX += granularMechanics.boundaryImpulseX();
 				lastGranularBoundaryImpulseY += granularMechanics.boundaryImpulseY();
 				lastGranularBoundaryImpulseZ += granularMechanics.boundaryImpulseZ();
@@ -4966,9 +4968,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 			@Override public GranularMechanics.FluidImpulseApplication addFluidImpulse(float x, float y, float z,
 			                                      double impulseX, double impulseY, double impulseZ) {
-				boolean appliedX = addFaceImpulse(velocityX, velocityWeightX, 0, x, y, z, impulseX);
-				boolean appliedY = addFaceImpulse(velocityY, velocityWeightY, 1, x, y, z, impulseY);
-				boolean appliedZ = addFaceImpulse(velocityZ, velocityWeightZ, 2, x, y, z, impulseZ);
+				boolean appliedX = addFaceImpulse(velocityX, velocityWeightX, 0, x, y, z,
+						unitScale.signedSolverMass(impulseX));
+				boolean appliedY = addFaceImpulse(velocityY, velocityWeightY, 1, x, y, z,
+						unitScale.signedSolverMass(impulseY));
+				boolean appliedZ = addFaceImpulse(velocityZ, velocityWeightZ, 2, x, y, z,
+						unitScale.signedSolverMass(impulseZ));
 				return new GranularMechanics.FluidImpulseApplication(
 						appliedX ? impulseX : 0.0, appliedY ? impulseY : 0.0, appliedZ ? impulseZ : 0.0,
 						appliedX ? 0.0 : impulseX, appliedY ? 0.0 : impulseY, appliedZ ? 0.0 : impulseZ);
@@ -6592,7 +6597,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 						i, newVolume, take, newMass, previousMass - newMass);
 				if (removedChemistry != null) removedChemistry.add(
 						materialRegistry.material(particleMaterialHandle[i]).id(), chemicalParcels.indicator(i),
-						take, previousMass - newMass, chemicalPlan.removed());
+						take, unitScale.kilograms(previousMass - newMass), chemicalPlan.removed());
 				if (newVolume > 0.0F) {
 					chemicalParcels.commitTruncate(i, chemicalPlan);
 				}
@@ -6631,7 +6636,8 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			if ((microMask & bit) == 0) continue;
 			if (chemicalParcels != null && removedChemistry != null) removedChemistry.add(
 					materialRegistry.material(particleMaterialHandle[particle]).id(), chemicalParcels.indicator(particle),
-					particleVolume[particle], particleMass[particle], chemicalParcels.record(particle));
+					particleVolume[particle], unitScale.kilograms(particleMass[particle]),
+					chemicalParcels.record(particle));
 			if (removedMaterials != null) removedMaterials.add(particleMaterialHandle[particle],
 					particleVolume[particle], particleMass[particle]);
 			if (removedThermal != null && thermalState != null) {
