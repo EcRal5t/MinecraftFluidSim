@@ -39,8 +39,9 @@ public final class GasLiquidPhaseModel {
 			throw new IllegalArgumentException("Gas/liquid phase pressure is outside the transition model");
 		}
 		pair.liquid().specificHeatAt(liquidTemperatureK);
+		double referenceTemperature = referenceTemperature(transition);
 		double exponent = -pair.latentEnthalpyPerMass() / pair.gasConstantPerMass()
-				* (1.0 / liquidTemperatureK - 1.0 / transition.equilibriumTemperatureK());
+				* (1.0 / liquidTemperatureK - 1.0 / referenceTemperature);
 		double saturation = GasRegistry.STANDARD_PRESSURE_PA * Math.exp(exponent);
 		if (!(Double.isFinite(saturation) && saturation > 0.0)) {
 			throw new IllegalArgumentException("Saturation pressure is outside the phase model");
@@ -71,10 +72,11 @@ public final class GasLiquidPhaseModel {
 			throw new IllegalArgumentException("Gas phase chemical columns are invalid");
 		}
 		PhasePair pair = requirePair(transition);
+		double referenceTemperature = referenceTemperature(transition);
 		double mass = transition.massMuPerBatch().multiply(batches).toDouble();
 		GasComponentDefinition component = gasRegistry.component(pair.gas().carrierId());
 		double standardVolumePerBatch = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV
-				* GasRegistry.STANDARD_TEMPERATURE_K / transition.equilibriumTemperatureK();
+				* GasRegistry.STANDARD_TEMPERATURE_K / referenceTemperature;
 		long nanosPerBatch = AirNetwork.nanos(standardVolumePerBatch);
 		if (nanosPerBatch <= 0L
 				|| Math.abs(AirNetwork.cubicMeters(nanosPerBatch) - standardVolumePerBatch) > 0.5E-9) {
@@ -120,16 +122,17 @@ public final class GasLiquidPhaseModel {
 			throw new IllegalArgumentException("Liquid/gas transition carrier kinds are invalid");
 		}
 		double mass = transition.massMuPerBatch().toDouble();
+		double referenceTemperature = referenceTemperature(transition);
 		gasRegistry.component(gas.carrierId());
 		double gasVolume = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV
-				* GasRegistry.STANDARD_TEMPERATURE_K / transition.equilibriumTemperatureK();
+				* GasRegistry.STANDARD_TEMPERATURE_K / referenceTemperature;
 		double liquidVolume = (double) transition.lowerVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV;
 		int liquidHandle = thermalRegistry.materialHandle(transition.lowerEnergyMaterialId());
 		int gasHandle = thermalRegistry.materialHandle(transition.upperEnergyMaterialId());
 		double liquidU = stateFunction.internalEnergyAtTemperature(
-				liquidHandle, mass, Map.of(), transition.equilibriumTemperatureK());
+				liquidHandle, mass, Map.of(), referenceTemperature);
 		double gasU = stateFunction.internalEnergyAtTemperature(
-				gasHandle, mass, Map.of(), transition.equilibriumTemperatureK());
+				gasHandle, mass, Map.of(), referenceTemperature);
 		double latentEnthalpy = (gasU - liquidU + GasRegistry.STANDARD_PRESSURE_PA
 				* (gasVolume - liquidVolume)) / mass;
 		double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * gasVolume
@@ -139,6 +142,10 @@ public final class GasLiquidPhaseModel {
 			throw new IllegalArgumentException("Liquid/gas transition has an invalid latent state function");
 		}
 		return new PhasePair(liquid, gas, latentEnthalpy, gasConstant);
+	}
+
+	private static double referenceTemperature(ThermalPhaseTransition transition) {
+		return transition.equilibriumTemperatureK(GasRegistry.STANDARD_PRESSURE_PA);
 	}
 
 	private record PhasePair(

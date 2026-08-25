@@ -145,12 +145,9 @@ public final class ThermalRegistryStore {
 		for (ThermalPhaseTransition transition : registry.transitions()) {
 			CompoundTag tag = new CompoundTag(); tag.putString("Id", transition.id());
 			tag.putString("Lower", transition.lowerEnergyMaterialId()); tag.putString("Upper", transition.upperEnergyMaterialId());
-			tag.putLong("TemperatureBits", bits(transition.equilibriumTemperatureK()));
 			tag.putLong("LowerSvq", transition.lowerVolumeSvqPerBatch()); tag.putLong("UpperSvq", transition.upperVolumeSvqPerBatch());
 			tag.putString("Mass", transition.massMuPerBatch().canonical());
 			tag.putString("Interface", transition.interfaceRequirement().name());
-			tag.putLong("MinimumPressureBits", bits(transition.minimumPressurePa()));
-			tag.putLong("MaximumPressureBits", bits(transition.maximumPressurePa()));
 			ListTag curve = new ListTag();
 			for (ThermalPhaseTransition.EquilibriumPoint point : transition.equilibriumCurve()) {
 				CompoundTag encoded = new CompoundTag();
@@ -220,10 +217,9 @@ public final class ThermalRegistryStore {
 		for (int index = 0; index < list.size(); index++) {
 			CompoundTag tag = compound(list, index, "transition");
 			requireAll(tag, Map.ofEntries(Map.entry("Id", Tag.TAG_STRING), Map.entry("Lower", Tag.TAG_STRING),
-					Map.entry("Upper", Tag.TAG_STRING), Map.entry("TemperatureBits", Tag.TAG_LONG),
+					Map.entry("Upper", Tag.TAG_STRING),
 					Map.entry("LowerSvq", Tag.TAG_LONG), Map.entry("UpperSvq", Tag.TAG_LONG),
 					Map.entry("Mass", Tag.TAG_STRING), Map.entry("Interface", Tag.TAG_STRING),
-					Map.entry("MinimumPressureBits", Tag.TAG_LONG), Map.entry("MaximumPressureBits", Tag.TAG_LONG),
 					Map.entry("EquilibriumCurve", Tag.TAG_LIST)));
 			ListTag encodedCurve = tag.getListOrEmpty("EquilibriumCurve");
 			if (encodedCurve.size() < 2 || encodedCurve.size() > ThermalLimits.MAX_EQUILIBRIUM_CURVE_POINTS) {
@@ -237,10 +233,10 @@ public final class ThermalRegistryStore {
 						value(value, "PressureBits"), value(value, "TemperatureBits")));
 			}
 			result.add(new ThermalPhaseTransition(tag.getStringOr("Id", ""), tag.getStringOr("Lower", ""),
-					tag.getStringOr("Upper", ""), value(tag, "TemperatureBits"), tag.getLongOr("LowerSvq", -1L),
+					tag.getStringOr("Upper", ""), tag.getLongOr("LowerSvq", -1L),
 					tag.getLongOr("UpperSvq", -1L), ExactRational.parse(tag.getStringOr("Mass", "")),
 					ThermalPhaseTransition.InterfaceRequirement.valueOf(tag.getStringOr("Interface", "")),
-					value(tag, "MinimumPressureBits"), value(tag, "MaximumPressureBits"), curve));
+					curve));
 		}
 		return List.copyOf(result);
 	}

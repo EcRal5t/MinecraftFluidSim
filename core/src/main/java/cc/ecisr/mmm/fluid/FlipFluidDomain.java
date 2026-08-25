@@ -1582,11 +1582,16 @@ public final class FlipFluidDomain {
 					|| upper.carrierKind() != ThermalMaterialDefinition.CarrierKind.LIQUID) continue;
 			int liquidHandle = fluidMaterialHandle(upper.carrierId());
 			for (int cell = 0; cell < cellCount && operations < maximumOperations; cell++) {
-				double absolutePressure = AirNetwork.REFERENCE_PRESSURE + pressure[cell];
-				if (absolutePressure < transition.minimumPressurePa()
-						|| absolutePressure > transition.maximumPressurePa()) continue;
 				PhaseCellInventory inventory = phaseCellInventory(cell, liquidHandle, lower.id());
 				if (inventory == null) continue;
+				double absolutePressure = AirNetwork.REFERENCE_PRESSURE + pressure[cell];
+				if (!(Double.isFinite(absolutePressure)
+						&& absolutePressure >= transition.minimumPressurePa()
+						&& absolutePressure <= transition.maximumPressurePa())) {
+					throw new ThermalPhaseBlockedException("Condensed phase pressure " + absolutePressure
+							+ " Pa is outside " + transition.id() + " curve "
+							+ transition.minimumPressurePa() + ".." + transition.maximumPressurePa() + " Pa");
+				}
 				long remainingBudget = maximumOperations - operations;
 				JointPhasePlan plan = planJointPhaseChange(
 						cell, liquidHandle, transition, inventory, remainingBudget, absolutePressure);
@@ -1999,6 +2004,7 @@ public final class FlipFluidDomain {
 		}
 		long minimumBatches = minimumPhaseBatchesForCapacity(occupied, capacity, signedVolumePerBatch);
 		if (high < minimumBatches) return null;
+		boolean capacityForced = occupied > capacity;
 
 		JointPhasePlan first;
 		try {
@@ -2007,6 +2013,8 @@ public final class FlipFluidDomain {
 			// The exact quantum cannot fit this cell's thermal range or its independent marker mass/volume truth.
 			return null;
 		}
+		if (!capacityForced && !strictlyCloserToEquilibrium(
+				first.temperatureAfterK(), temperature, equilibrium)) return null;
 		if (crossedEquilibrium(first.temperatureAfterK(), equilibrium, freezing)) return first;
 		JointPhasePlan best = first;
 		long low = minimumBatches + 1L;
@@ -2020,6 +2028,8 @@ public final class FlipFluidDomain {
 				continue;
 			}
 			if (crossedEquilibrium(candidate.temperatureAfterK(), equilibrium, freezing)) {
+				if (strictlyCloserToEquilibrium(
+						candidate.temperatureAfterK(), best.temperatureAfterK(), equilibrium)) best = candidate;
 				high = middle - 1L;
 			} else {
 				best = candidate;
@@ -2042,6 +2052,14 @@ public final class FlipFluidDomain {
 
 	private static boolean crossedEquilibrium(double candidateK, double equilibriumK, boolean freezing) {
 		return freezing ? candidateK > equilibriumK : candidateK < equilibriumK;
+	}
+
+	private static boolean strictlyCloserToEquilibrium(
+			double candidateK, double acceptedK, double equilibriumK
+	) {
+		double threshold = Math.max(1.0E-12,
+				Math.max(Math.ulp(candidateK), Math.ulp(equilibriumK)) * 16.0);
+		return Math.abs(candidateK - equilibriumK) < Math.abs(acceptedK - equilibriumK) - threshold;
 	}
 
 	private JointPhasePlan jointPhaseCandidate(

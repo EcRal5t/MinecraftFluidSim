@@ -172,7 +172,7 @@ public final class M9ThermalValidation {
 			double liquidVolume = (double) transition.lowerVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV;
 			double vaporVolume = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV;
 			double standardVaporVolume = vaporVolume * GasRegistry.STANDARD_TEMPERATURE_K
-					/ transition.equilibriumTemperatureK();
+					/ transition.equilibriumTemperatureK(GasRegistry.STANDARD_PRESSURE_PA);
 			double liquidDensity = batchMassKg / liquidVolume;
 			double vaporDensityAtBoiling = batchMassKg / vaporVolume;
 			double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * standardVaporVolume
@@ -181,9 +181,11 @@ public final class M9ThermalValidation {
 					List.of(transition), "", "");
 			ThermalStateFunction state = new ThermalStateFunction(registry);
 			double liquidU = state.internalEnergyAtTemperature(
-					registry.materialHandle(water.id()), batchMassKg, Map.of(), transition.equilibriumTemperatureK());
+					registry.materialHandle(water.id()), batchMassKg, Map.of(),
+					transition.equilibriumTemperatureK(GasRegistry.STANDARD_PRESSURE_PA));
 			double vaporU = state.internalEnergyAtTemperature(
-					registry.materialHandle(vapor.id()), batchMassKg, Map.of(), transition.equilibriumTemperatureK());
+					registry.materialHandle(vapor.id()), batchMassKg, Map.of(),
+					transition.equilibriumTemperatureK(GasRegistry.STANDARD_PRESSURE_PA));
 			double latentEnthalpy = (vaporU - liquidU + GasRegistry.STANDARD_PRESSURE_PA
 					* (vaporVolume - liquidVolume)) / batchMassKg;
 			double fourCellReservoirConductance = 4.0 * 2.0 * water.conductivityEuPerSecondMeterK()
@@ -904,14 +906,34 @@ public final class M9ThermalValidation {
 		ThermalRegistry registry = new ThermalRegistry(List.of(water, ice), List.of(), List.of(melt), "", "");
 		ThermalStateFunction state = new ThermalStateFunction(registry);
 		ThermalStateFunction.EquilibriumState lower = state.equilibriumState(registry.transitionHandle(melt.id()),
-				1.0, Map.of(), 0.0);
+				1.0, Map.of(), 0.0, GasRegistry.STANDARD_PRESSURE_PA);
 		double quarterEnergy = lower.lowerBoundaryEnergy()
 				+ 0.25 * (lower.upperBoundaryEnergy() - lower.lowerBoundaryEnergy());
 		ThermalStateFunction.EquilibriumState plateau = state.equilibriumState(registry.transitionHandle(melt.id()),
-				1.0, Map.of(), quarterEnergy);
+				1.0, Map.of(), quarterEnergy, GasRegistry.STANDARD_PRESSURE_PA);
 		require(plateau.phaseState() == ThermalStateFunction.PhaseState.PLATEAU
 				&& close(plateau.temperatureK(), 273.15) && close(plateau.upperPhaseFraction(), 0.25),
 				"phase plateau did not derive its fraction from the state-function energy gap");
+
+		ThermalPhaseTransition highPressure = new ThermalPhaseTransition(
+				"mmm:phase/high_pressure_ice_water", ice.id(), water.id(),
+				SolidVolume.SVQ_PER_BV, SolidVolume.SVQ_PER_BV * 917L / 1_000L,
+				ExactRational.of(917), ThermalPhaseTransition.InterfaceRequirement.NONE,
+				List.of(new ThermalPhaseTransition.EquilibriumPoint(3_000_000.0, 273.15),
+						new ThermalPhaseTransition.EquilibriumPoint(4_000_000.0, 273.15)));
+		ThermalRegistry highPressureRegistry = new ThermalRegistry(
+				List.of(water, ice), List.of(), List.of(highPressure), "", "");
+		require(highPressureRegistry.transition(0).minimumPressurePa() == 3_000_000.0
+				&& close(highPressure.equilibriumTemperatureK(3_500_000.0), 273.15),
+				"solid/liquid curve was incorrectly required to cover standard pressure");
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FlipFluidDomain unsupportedPressure = new FlipFluidDomain(2, 2, 2, config, 128);
+		unsupportedPressure.setVolume(0, 0, 0, 0.5F);
+		unsupportedPressure.bindThermal(highPressureRegistry,
+				new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)), 273.15);
+		expectFailure(() -> unsupportedPressure.stepInertPhaseChangeOnly(16),
+				"solid/liquid phase silently ignored pressure outside its declared curve");
 	}
 
 	private static void coherentPhaseInventoryAndExactBatchPlanning() {
@@ -942,8 +964,10 @@ public final class M9ThermalValidation {
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
 		ThermalRegistry registry = new ThermalRegistry(List.of(lower, upper), List.of(), List.of(transition), "", "");
 		ThermalPhaseChangeEngine engine = new ThermalPhaseChangeEngine(registry);
-		ThermalPhaseChangeEngine.Plan freeze = engine.planInert(transition, 0.0, 1.0, 50.0, 16L);
-		ThermalPhaseChangeEngine.Plan melt = engine.planInert(transition, 1.0, 0.0, 50.0, 16L);
+		ThermalPhaseChangeEngine.Plan freeze = engine.planInert(
+				transition, 0.0, 1.0, 50.0, 16L, GasRegistry.STANDARD_PRESSURE_PA);
+		ThermalPhaseChangeEngine.Plan melt = engine.planInert(
+				transition, 1.0, 0.0, 50.0, 16L, GasRegistry.STANDARD_PRESSURE_PA);
 		require(freeze.signedBatches() == 5L && melt.signedBatches() == -5L
 				&& close(freeze.temperatureAfterK(), 300.0) && close(melt.temperatureAfterK(), 300.0),
 				"exact-batch phase planner did not derive equilibrium extent from conserved energy");
@@ -1049,13 +1073,15 @@ public final class M9ThermalValidation {
 		roundoffDomain.setVolume(0, 0, 0, 0.5F);
 		roundoffDomain.bindThermal(roundoffRegistry, roundoffLiquids, 273.1498);
 		SignedDyadic roundoffEnergy = roundoffDomain.exactInternalEnergy();
-		FlipFluidDomain.ThermalPhaseStats roundoffFreeze = roundoffDomain.stepInertPhaseChangeOnly(16);
-		require(roundoffFreeze.operations() == 1
-				&& Math.abs(roundoffDomain.exactInternalEnergy().subtract(roundoffEnergy).toDouble())
-				<= Math.ulp(roundoffEnergy.toDouble()) * 16.0
+		FlipFluidDomain.ThermalPhaseStats quantizedEquilibrium = roundoffDomain.stepInertPhaseChangeOnly(16);
+		FlipFluidDomain.ThermalPhaseStats repeatedEquilibrium = roundoffDomain.stepInertPhaseChangeOnly(16);
+		require(quantizedEquilibrium.operations() == 0 && repeatedEquilibrium.operations() == 0
+				&& close(roundoffDomain.thermalTemperatureInCell(0, 0, 0), 273.1498)
+				&& roundoffDomain.exactInternalEnergy().equals(roundoffEnergy)
 				&& roundoffDomain.exactInternalEnergy().equals(roundoffDomain.thermalAudit().expectedInventory()),
-				"tiny coherent batch amplified the exact cell-energy remainder into a false LTE failure: stats="
-						+ roundoffFreeze + " energy=" + roundoffDomain.exactInternalEnergy() + "/" + roundoffEnergy
+				"exact phase quantum farther from equilibrium was allowed to create a freeze/melt cycle: stats="
+						+ quantizedEquilibrium + "/" + repeatedEquilibrium
+						+ " energy=" + roundoffDomain.exactInternalEnergy() + "/" + roundoffEnergy
 						+ " expected=" + roundoffDomain.thermalAudit().expectedInventory());
 
 		FlipFluidDomain quantizedDomain = new FlipFluidDomain(2, 2, 2, roundoffConfig, 128);

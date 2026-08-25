@@ -25,14 +25,6 @@ public final class ThermalPhaseChangeEngine {
 	 */
 	public Plan planInert(
 			ThermalPhaseTransition transition, double lowerMass, double upperMass,
-			double totalInternalEnergy, long maximumMagnitudeBatches
-	) {
-		return planInert(transition, lowerMass, upperMass, totalInternalEnergy,
-				maximumMagnitudeBatches, 101_325.0);
-	}
-
-	public Plan planInert(
-			ThermalPhaseTransition transition, double lowerMass, double upperMass,
 			double totalInternalEnergy, long maximumMagnitudeBatches, double absolutePressurePa
 	) {
 		if (transition == null || lowerMass < 0.0 || upperMass < 0.0
@@ -47,33 +39,40 @@ public final class ThermalPhaseChangeEngine {
 		if (!(Double.isFinite(batchMass) && batchMass > 0.0)) {
 			throw new IllegalArgumentException("Thermal transition batch mass is not representable");
 		}
-		double before = solveTemperature(lowerHandle, lowerMass, upperHandle, upperMass, totalInternalEnergy);
+		double original = solveTemperature(lowerHandle, lowerMass, upperHandle, upperMass, totalInternalEnergy);
 		double equilibrium = transition.equilibriumTemperatureK(absolutePressurePa);
+		if (maximumMagnitudeBatches == 0L || original == equilibrium) {
+			return new Plan(0L, original, original);
+		}
+		boolean freezing = original < equilibrium;
 		double lower = lowerMass, upper = upperMass;
+		double acceptedTemperature = original;
+		double acceptedError = Math.abs(original - equilibrium);
 		long signed = 0L;
 		for (long operation = 0; operation < maximumMagnitudeBatches; operation++) {
-			if (before < equilibrium && upper + tolerance(upper) >= batchMass) {
-				double candidateUpper = upper - batchMass;
+			double candidateLower;
+			double candidateUpper;
+			if (freezing && upper + tolerance(upper) >= batchMass) {
+				candidateUpper = upper - batchMass;
 				if (candidateUpper < 0.0 && candidateUpper >= -tolerance(upper)) candidateUpper = 0.0;
-				double candidateLower = lower + batchMass;
-				double candidateTemperature = solveTemperature(
-						lowerHandle, candidateLower, upperHandle, candidateUpper, totalInternalEnergy);
-				if (candidateTemperature > equilibrium
-						&& signed > 0L) break;
-				lower = candidateLower; upper = candidateUpper; before = candidateTemperature; signed++;
-			} else if (before > equilibrium && lower + tolerance(lower) >= batchMass) {
-				double candidateLower = lower - batchMass;
+				candidateLower = lower + batchMass;
+			} else if (!freezing && lower + tolerance(lower) >= batchMass) {
+				candidateLower = lower - batchMass;
 				if (candidateLower < 0.0 && candidateLower >= -tolerance(lower)) candidateLower = 0.0;
-				double candidateUpper = upper + batchMass;
-				double candidateTemperature = solveTemperature(
-						lowerHandle, candidateLower, upperHandle, candidateUpper, totalInternalEnergy);
-				if (candidateTemperature < equilibrium
-						&& signed < 0L) break;
-				lower = candidateLower; upper = candidateUpper; before = candidateTemperature; signed--;
+				candidateUpper = upper + batchMass;
 			} else break;
+			double candidateTemperature = solveTemperature(
+					lowerHandle, candidateLower, upperHandle, candidateUpper, totalInternalEnergy);
+			double candidateError = Math.abs(candidateTemperature - equilibrium);
+			if (!strictlyCloser(candidateError, acceptedError, candidateTemperature, equilibrium)) break;
+			lower = candidateLower;
+			upper = candidateUpper;
+			acceptedTemperature = candidateTemperature;
+			acceptedError = candidateError;
+			signed += freezing ? 1L : -1L;
+			if (freezing ? candidateTemperature >= equilibrium : candidateTemperature <= equilibrium) break;
 		}
-		double original = solveTemperature(lowerHandle, lowerMass, upperHandle, upperMass, totalInternalEnergy);
-		return new Plan(signed, original, before);
+		return new Plan(signed, original, acceptedTemperature);
 	}
 
 	private double solveTemperature(
@@ -86,4 +85,12 @@ public final class ThermalPhaseChangeEngine {
 	}
 
 	private static double tolerance(double value) { return Math.max(1.0E-12, Math.ulp(value) * 16.0); }
+
+	private static boolean strictlyCloser(
+			double candidateError, double acceptedError, double candidateTemperature, double equilibrium
+	) {
+		double threshold = Math.max(1.0E-12,
+				Math.max(Math.ulp(candidateTemperature), Math.ulp(equilibrium)) * 16.0);
+		return candidateError < acceptedError - threshold;
+	}
 }

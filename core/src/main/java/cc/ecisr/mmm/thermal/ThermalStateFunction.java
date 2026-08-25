@@ -119,12 +119,6 @@ public final class ThermalStateFunction {
 	}
 
 	public EquilibriumState equilibriumState(
-			int transitionHandle, double massMu, Map<String, Long> speciesQuanta, double internalEnergy
-	) {
-		return equilibriumState(transitionHandle, massMu, speciesQuanta, internalEnergy, 101_325.0);
-	}
-
-	public EquilibriumState equilibriumState(
 			int transitionHandle, double massMu, Map<String, Long> speciesQuanta,
 			double internalEnergy, double absolutePressurePa
 	) {

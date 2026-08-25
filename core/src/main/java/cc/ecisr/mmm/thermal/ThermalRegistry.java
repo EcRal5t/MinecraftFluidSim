@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.thermal;
 
+import cc.ecisr.mmm.fluid.air.GasRegistry;
+
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -147,6 +149,12 @@ public final class ThermalRegistry {
 		for (ThermalPhaseTransition transition : transitions) {
 			ThermalMaterialDefinition lower = material(materialHandle(transition.lowerEnergyMaterialId()));
 			ThermalMaterialDefinition upper = material(materialHandle(transition.upperEnergyMaterialId()));
+			if (transition.interfaceRequirement() == ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS
+					&& (transition.minimumPressurePa() > GasRegistry.STANDARD_PRESSURE_PA
+					|| transition.maximumPressurePa() < GasRegistry.STANDARD_PRESSURE_PA)) {
+				throw new IllegalArgumentException(
+						"Liquid/gas transition must define its standard-pressure reference state: " + transition.id());
+			}
 			for (ThermalPhaseTransition.EquilibriumPoint point : transition.equilibriumCurve()) {
 				double temperature = point.temperatureK();
 				if (temperature < lower.minimumTemperatureK() || temperature > lower.maximumTemperatureK()
@@ -203,14 +211,11 @@ public final class ThermalRegistry {
 		}
 		for (ThermalPhaseTransition transition : transitions) {
 			out.append("P|").append(transition.id()).append('|').append(transition.lowerEnergyMaterialId()).append('|')
-					.append(transition.upperEnergyMaterialId()).append('|');
-			appendDouble(out, transition.equilibriumTemperatureK());
-			out.append('|').append(transition.lowerVolumeSvqPerBatch()).append('|')
+					.append(transition.upperEnergyMaterialId()).append('|')
+					.append(transition.lowerVolumeSvqPerBatch()).append('|')
 					.append(transition.upperVolumeSvqPerBatch()).append('|')
 					.append(transition.massMuPerBatch().canonical()).append('|')
 					.append(transition.interfaceRequirement()).append('|');
-			appendDouble(out, transition.minimumPressurePa()); out.append('|');
-			appendDouble(out, transition.maximumPressurePa()); out.append('|');
 			for (ThermalPhaseTransition.EquilibriumPoint point : transition.equilibriumCurve()) {
 				appendDouble(out, point.pressurePa()); out.append(',');
 				appendDouble(out, point.temperatureK()); out.append(';');

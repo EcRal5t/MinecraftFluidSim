@@ -21,7 +21,7 @@
 
 - material 定义 carrier kind/id、参考温度、参考比内能、导热率和最多 16 个 caloric segment；
 - species offset 定义某 host material 中每 AU 的参考内能偏移；
-- transition 定义上下相、参考平衡温度、可选的有界 `T_eq(p)` 曲线、exact 两侧体积量子、exact 质量批、接口要求和压力有效域；
+- transition 定义上下相、有界 `T_eq(p)` 曲线、exact 两侧体积量子、exact 质量批和接口要求；曲线端点是压力有效域的唯一真值，不重复保存参考温度或上下限；
 - boundary 定义哪些世界方块提供固定温度面。
 
 总材料数、segment、species offset、transition、boundary、cell carrier 和 phase operation 均有硬上限。world fingerprint 或引用不一致时保留存档并 LOCKED，不按当前数据包重解释。
@@ -111,9 +111,9 @@ p = P0 * (Vstd / Vavailable) * (T / T0)
 
 - 联合搬运物理 kg、condensed weight、液体 marker、coherent SVQ、材料身份、可选 chemical composition/species 和 `U`。
 - 体积变化与机械功写入 pending phase-work，由下一次 pressure projection exactly-once 消费。
-- 固液规划从同一 logical state 的绝对压力取 `T_eq(p)`。曲线使用 registry-bound 单调分段线性点，只在声明的闭区间内插值；无曲线的 transition 使用常量参考平衡温度，任何曲线都禁止外推或钳制。
+- 固液规划从最近一次真实 projection 的 cell gauge pressure 加环境压力得到绝对压力，再取 `T_eq(p)`。曲线使用 registry-bound、按压力严格递增的分段线性点，只在端点闭区间内插值；常温曲线也必须显式给出两个端点。固液曲线不必覆盖标准压力，因此可以表达只有高压区有效的相平衡；液气曲线必须覆盖标准压力，以定义其气体标准体积和潜焓参考态。任何曲线都禁止外推或钳制，有相库存的 cell 越界时整个 thermal candidate 安全暂停，不能静默当作无相变。
 
-内置冰/水 transition 每批为 `0.001 kg`，两侧分别为 `146 SVQ` 与 `134 SVQ`。其 `10 kPa–2 MPa` 平衡曲线取自 [IAPWS R14-08(2011) Ice Ih 熔化压力关系](https://iapws.org/documents/release/MeltSub)的反演采样，包含 1 atm 参考点，在当前分段上相对原关系的最大温度插值误差低于 `4e-5 K`；曲线外拒绝候选。规划器在共享 phase-operation 预算内逐 exact batch 寻找最大可提交 extent；若下一批会跨过压力对应的平台、耗尽可转库存或超出目标容量，就停在上一完整批。
+内置冰/水 transition 每批为 `0.001 kg`，两侧分别为 `146 SVQ` 与 `134 SVQ`。其 `10 kPa–2 MPa` 平衡曲线取自 [IAPWS R14-08(2011) Ice Ih 熔化压力关系](https://iapws.org/documents/release/MeltSub)的反演采样，包含 1 atm 采样点，在当前分段上相对原关系的最大温度插值误差低于 `4e-5 K`；曲线外拒绝候选。规划器在共享 phase-operation 预算内寻找 exact batch lattice 上离 `T_eq(p)` 最近的可表示状态；候选必须严格缩小温差，跨过平台时只在跨越后的格点更近时提交，随后保持稳定，不允许每步冻融往返。由 batch 大小造成的剩余温差是明确量化误差；库存、容量或操作预算先到达时停止。
 
 ### 气液
 
