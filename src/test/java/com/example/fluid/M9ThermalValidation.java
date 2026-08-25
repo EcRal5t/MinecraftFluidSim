@@ -956,6 +956,18 @@ public final class M9ThermalValidation {
 		domain.bindThermal(registry, liquids, 300.0);
 		domain.addCoherentPhaseExternal(0, 0, 0, lower.id(),
 				SolidVolume.SVQ_PER_CELL / 2L, 0.5, null, 0.0);
+		boolean collisionBlocked = false;
+		try {
+			domain.planCollisionEdits(List.of(
+					new FlipFluidDomain.CollisionEdit(1, 1, 1, 0xff),
+					new FlipFluidDomain.CollisionEdit(0, 0, 0, 0xff)));
+		} catch (IllegalStateException expected) {
+			collisionBlocked = true;
+		}
+		require(collisionBlocked && domain.solidMicroMask(1, 1, 1) == 0
+				&& domain.solidMicroMask(0, 0, 0) == 0
+				&& domain.totalCoherentSolidVolumeSvq() == SolidVolume.SVQ_PER_CELL / 2L,
+				"collision batch mutated an earlier cell before rejecting coherent inventory");
 		domain.setVolume(0, 0, 0, 1.0F);
 		require(close(domain.totalVolumeExact(), 0.5)
 				&& domain.totalCoherentSolidVolumeSvq() == SolidVolume.SVQ_PER_CELL / 2L,

@@ -50,8 +50,10 @@ import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.math.BigInteger;
 
@@ -148,6 +150,8 @@ public final class FlipFluidDomain {
 	/** Runtime-only cavity lineage including attributed gas volume inside partial liquid cells. */
 	private int[] airCellLineageNodeId;
 	private int previousSealedNodeCount;
+	private CollisionEditPlan activeCollisionPlan;
+	private int activeCollisionEditIndex;
 	private boolean gasPressureActive;
 	private GranularRegistry granularRegistry;
 	private GranularParcelStore granularParcels;
@@ -2822,15 +2826,89 @@ public final class FlipFluidDomain {
 		return new MaterialDisplacement(volume, material.build(), energy.value().toDouble());
 	}
 
+	/**
+	 * Preflights a complete world collision refresh before any solver owner is mutated. Coherent
+	 * solids reject the whole batch; granular parcels/deposits touching several edited cells are
+	 * selected once and their composition/thermal sidecars are validated as one removal.
+	 */
+	public CollisionEditPlan planCollisionEdits(List<CollisionEdit> edits) {
+		if (edits == null || edits.isEmpty()) throw new IllegalArgumentException("Collision edit batch is missing or empty");
+		ensureGrid();
+		ArrayList<CollisionEdit> canonical = new ArrayList<>(edits.size());
+		int[] previousMasks = new int[edits.size()];
+		boolean[] granularCells = granularRegistry == null ? null : new boolean[cellCount];
+		Set<Integer> uniqueCells = new HashSet<>();
+		for (int editIndex = 0; editIndex < edits.size(); editIndex++) {
+			CollisionEdit edit = edits.get(editIndex);
+			if (edit == null || edit.mask() < 0 || edit.mask() > FlipCutCellGeometry.FULL_MASK) {
+				throw new IllegalArgumentException("Collision edit is invalid");
+			}
+			int cell = cellIndexChecked(edit.x(), edit.y(), edit.z());
+			if (!uniqueCells.add(cell)) throw new IllegalArgumentException("Collision batch edits one cell twice");
+			int previous = cutCells.mask(cell);
+			if (previous == edit.mask()) throw new IllegalArgumentException("Collision batch contains a no-op edit");
+			previousMasks[editIndex] = previous;
+			canonical.add(edit);
+			if ((edit.mask() & ~previous) == 0) continue;
+			if (thermalState != null && thermalState.coherentPhases().cellOccupiedSvq(cell) > 0L) {
+				throw new CollisionEditBlockedException(
+						"Collision edit intersects authoritative coherent phase inventory", null);
+			}
+			if (granularCells != null && (granularCoupling.solidSvq(cell) > 0L
+					|| granularDeposits.cellSolidVolumeSvq(cell) > 0L)) granularCells[cell] = true;
+		}
+		GranularCollisionPlan granularPlan;
+		try {
+			granularPlan = granularCells == null ? null : planGranularCollision(granularCells);
+		} catch (RuntimeException failure) {
+			throw new CollisionEditBlockedException("Granular collision displacement could not be planned", failure);
+		}
+		return new CollisionEditPlan(this, List.copyOf(canonical), previousMasks, particleCount,
+				Double.doubleToRawLongBits(totalVolumeExact()), Double.doubleToRawLongBits(totalMass()), granularPlan);
+	}
+
+	/** Commits the already validated cross-owner prelude; the supplied masks may then be applied without refusal. */
+	public void beginCollisionEdits(CollisionEditPlan plan) {
+		if (plan == null || plan.owner != this || plan.consumed || activeCollisionPlan != null) {
+			throw new IllegalArgumentException("Collision edit plan is missing, foreign or already consumed");
+		}
+		if (particleCount != plan.particleCount
+				|| Double.doubleToRawLongBits(totalVolumeExact()) != plan.totalVolumeBits
+				|| Double.doubleToRawLongBits(totalMass()) != plan.totalMassBits) {
+			throw new IllegalStateException("Liquid inventory changed after collision planning");
+		}
+		for (int index = 0; index < plan.edits.size(); index++) {
+			CollisionEdit edit = plan.edits.get(index);
+			if (solidMicroMask(edit.x(), edit.y(), edit.z()) != plan.previousMasks[index]) {
+				throw new IllegalStateException("Collision geometry changed after planning");
+			}
+		}
+		if (plan.granular != null) try {
+			commitGranularCollision(plan.granular);
+		} catch (RuntimeException failure) {
+			throw new CollisionEditBlockedException("Granular collision displacement could not be committed", failure);
+		}
+		plan.consumed = true;
+		activeCollisionPlan = plan;
+		activeCollisionEditIndex = 0;
+	}
+
 	private float setSolidMicroMaskInternal(
 			int x, int y, int z, int mask, ChemicalTransferLedger.Builder chemicalDisplacement,
 			RemovedMaterialLedger materialDisplacement, RemovedThermalEnergy thermalDisplacement
 	) {
 		int index = cellIndexChecked(x, y, z);
+		boolean plannedBatch = activeCollisionPlan != null;
+		if (plannedBatch) {
+			CollisionEdit expected = activeCollisionPlan.edits.get(activeCollisionEditIndex);
+			if (expected.x() != x || expected.y() != y || expected.z() != z || expected.mask() != mask) {
+				throw new IllegalStateException("Collision edits differ from their committed batch order");
+			}
+		}
 		int previous = cutCells.mask(index);
 		if (previous == mask) return 0.0F;
 		int newlyOccupied = mask & ~previous;
-		if (newlyOccupied != 0 && granularCoupling != null) {
+		if (newlyOccupied != 0 && granularCoupling != null && !plannedBatch) {
 			ensureGrid();
 			if (thermalState != null && thermalState.coherentPhases().cellOccupiedSvq(index) > 0L) {
 				throw new IllegalStateException("Collision edit intersects authoritative coherent phase inventory");
@@ -2839,7 +2917,7 @@ public final class FlipFluidDomain {
 					&& (granularCoupling.solidSvq(index) > 0L || granularDeposits.cellSolidVolumeSvq(index) > 0L)) {
 				try { displaceGranularForCollisionCell(index); }
 				catch (RuntimeException failure) {
-					throw new GranularCollisionBlockedException(
+					throw new CollisionEditBlockedException(
 							"Granular collision displacement could not be committed", failure);
 				}
 			}
@@ -2856,6 +2934,10 @@ public final class FlipFluidDomain {
 		volume[index] = 0.0F;
 		if (granularDepositDynamics != null) granularDepositDynamics.disturbCell(index);
 		gridDirty = true;
+		if (plannedBatch && ++activeCollisionEditIndex == activeCollisionPlan.edits.size()) {
+			activeCollisionPlan = null;
+			activeCollisionEditIndex = 0;
+		}
 		return displaced;
 	}
 
@@ -2865,57 +2947,68 @@ public final class FlipFluidDomain {
 	 * runtime geometry changes. Whole entities are used so reactive composition ownership is never guessed or split.
 	 */
 	private void displaceGranularForCollisionCell(int cell) {
+		boolean[] cells = new boolean[cellCount];
+		cells[cell] = true;
+		GranularCollisionPlan plan = planGranularCollision(cells);
+		if (plan == null) throw new IllegalStateException("Granular collision occupancy has no removable authoritative owner");
+		commitGranularCollision(plan);
+	}
+
+	private GranularCollisionPlan planGranularCollision(boolean[] affectedCells) {
 		exportGranularState();
 		granularCoupling.rebuild(granularParcels, granularDeposits);
 		boolean[] selectedParcels = new boolean[granularParcels.count()];
 		int selectedCount = 0;
 		for (int parcel = 0; parcel < granularParcels.count(); parcel++) {
 			GranularParcelStore.Parcel state = granularParcels.parcel(parcel);
-			if (granularCoupling.parcelShareAtCell(parcelPosition(state), state.solidVolumeSvq(), cell) <= 0L) continue;
-			selectedParcels[parcel] = true;
-			selectedCount++;
+			for (int cell = 0; cell < affectedCells.length; cell++) {
+				if (!affectedCells[cell] || granularCoupling.parcelShareAtCell(
+						parcelPosition(state), state.solidVolumeSvq(), cell) <= 0L) continue;
+				selectedParcels[parcel] = true;
+				selectedCount++;
+				break;
+			}
 		}
-		boolean selectedDepositCell = granularDeposits.cellSolidVolumeSvq(cell) > 0L;
-		if (selectedCount == 0 && !selectedDepositCell) {
-			throw new IllegalStateException("Granular collision occupancy has no removable authoritative owner");
+		boolean[] selectedDepositCells = new boolean[cellCount];
+		boolean anyDeposit = false;
+		for (int cell = 0; cell < cellCount; cell++) if (affectedCells[cell]
+				&& granularDeposits.cellSolidVolumeSvq(cell) > 0L) {
+			selectedDepositCells[cell] = true;
+			anyDeposit = true;
 		}
+		if (selectedCount == 0 && !anyDeposit) return null;
 		GranularAuditLedger removed = GranularAuditLedger.captureSelected(
 				granularRegistry, granularParcels, parcel -> selectedParcels[parcel],
-				granularDeposits, selectedCell -> selectedDepositCell && selectedCell == cell, solidCompositions);
+				granularDeposits, selectedCell -> selectedDepositCells[selectedCell], solidCompositions);
 		GranularAuditLedger sinkAfter = granularEscapedSink.plus(removed);
-		ArrayList<GranularDepositStore.Group> depositGroups = new ArrayList<>();
-		if (selectedDepositCell) granularDeposits.forEachGroup((groupCell, porosity, material, composition, svq, mass) -> {
-			if (groupCell == cell) depositGroups.add(new GranularDepositStore.Group(material, composition, svq, mass));
+		ArrayList<CollisionDeposit> depositGroups = new ArrayList<>();
+		if (anyDeposit) granularDeposits.forEachGroup((groupCell, porosity, material, composition, svq, mass) -> {
+			if (selectedDepositCells[groupCell]) depositGroups.add(new CollisionDeposit(groupCell,
+					new GranularDepositStore.Group(material, composition, svq, mass)));
 		});
 		if (thermalState != null) {
 			for (int parcel = 0; parcel < selectedParcels.length; parcel++) if (selectedParcels[parcel]) {
 				GranularParcelStore.Parcel state = granularParcels.parcel(parcel);
 				thermalState.previewActiveTake(parcel, state.solidVolumeSvq(), state.solidVolumeSvq());
 			}
-			for (GranularDepositStore.Group group : depositGroups) thermalState.previewDepositTake(
-					new GranularEnergyColumn.DepositKey(cell, group.materialHandle(), group.solidCompositionHandle()),
-					group.solidVolumeSvq(), group.solidVolumeSvq());
+			for (CollisionDeposit deposit : depositGroups) {
+				GranularDepositStore.Group group = deposit.group();
+				thermalState.previewDepositTake(new GranularEnergyColumn.DepositKey(
+						deposit.cell(), group.materialHandle(), group.solidCompositionHandle()),
+						group.solidVolumeSvq(), group.solidVolumeSvq());
+			}
 		}
 
-		long removedSvq = 0L;
-		double removedMass = 0.0;
-		for (int parcel = selectedParcels.length - 1; parcel >= 0; parcel--) if (selectedParcels[parcel]) {
-			GranularParcelStore.Parcel state = granularParcels.removeSwap(parcel);
-			if (thermalState != null) thermalState.commitExternalActiveTake(
-					parcel, state.solidVolumeSvq(), state.solidVolumeSvq());
-			removedSvq = Math.addExact(removedSvq, state.solidVolumeSvq());
-			removedMass += state.mass();
-			if (state.solidCompositionHandle() != 0) solidCompositions.release(state.solidCompositionHandle());
+		long plannedSvq = 0L;
+		double plannedMass = 0.0;
+		for (int parcel = 0; parcel < selectedParcels.length; parcel++) if (selectedParcels[parcel]) {
+			GranularParcelStore.Parcel state = granularParcels.parcel(parcel);
+			plannedSvq = Math.addExact(plannedSvq, state.solidVolumeSvq());
+			plannedMass += state.mass();
 		}
-		for (GranularDepositStore.Group group : depositGroups) {
-			GranularDepositStore.SolidPortion taken = granularDeposits.take(
-					cell, group.materialHandle(), group.solidCompositionHandle(), group.solidVolumeSvq());
-			if (thermalState != null) thermalState.commitExternalDepositTake(new GranularEnergyColumn.DepositKey(
-					cell, group.materialHandle(), group.solidCompositionHandle()),
-					group.solidVolumeSvq(), group.solidVolumeSvq());
-			removedSvq = Math.addExact(removedSvq, taken.solidVolumeSvq());
-			removedMass += taken.mass();
-			if (taken.solidCompositionHandle() != 0) solidCompositions.release(taken.solidCompositionHandle());
+		for (CollisionDeposit deposit : depositGroups) {
+			plannedSvq = Math.addExact(plannedSvq, deposit.group().solidVolumeSvq());
+			plannedMass += deposit.group().mass();
 		}
 		long auditSvq = 0L;
 		double auditMass = 0.0;
@@ -2923,13 +3016,41 @@ public final class FlipFluidDomain {
 			auditSvq = Math.addExact(auditSvq, entry.solidVolumeSvq());
 			auditMass += entry.mass();
 		}
-		if (auditSvq != removedSvq || !massClose(auditMass, removedMass)) {
-			throw new IllegalStateException("Granular collision displacement differs from its preflight audit");
+		if (auditSvq != plannedSvq || !massClose(auditMass, plannedMass)) {
+			throw new IllegalStateException("Granular collision plan differs from its preflight audit");
 		}
-		granularEscapedSink = sinkAfter;
+		return new GranularCollisionPlan(selectedParcels, List.copyOf(depositGroups), sinkAfter,
+				affectedCells.clone(), granularParcels.count(), granularInventory.totalSolidVolumeSvq(),
+				Double.doubleToRawLongBits(granularInventory.totalMass()));
+	}
+
+	private void commitGranularCollision(GranularCollisionPlan plan) {
+		if (granularParcels.count() != plan.parcelCount()
+				|| granularInventory.totalSolidVolumeSvq() != plan.totalSvq()
+				|| Double.doubleToRawLongBits(granularInventory.totalMass()) != plan.totalMassBits()) {
+			throw new IllegalStateException("Granular inventory changed after collision planning");
+		}
+		for (int parcel = plan.selectedParcels().length - 1; parcel >= 0; parcel--) if (plan.selectedParcels()[parcel]) {
+			GranularParcelStore.Parcel state = granularParcels.removeSwap(parcel);
+			if (thermalState != null) thermalState.commitExternalActiveTake(
+					parcel, state.solidVolumeSvq(), state.solidVolumeSvq());
+			if (state.solidCompositionHandle() != 0) solidCompositions.release(state.solidCompositionHandle());
+		}
+		for (CollisionDeposit deposit : plan.depositGroups()) {
+			GranularDepositStore.Group group = deposit.group();
+			GranularDepositStore.SolidPortion taken = granularDeposits.take(
+					deposit.cell(), group.materialHandle(), group.solidCompositionHandle(), group.solidVolumeSvq());
+			if (thermalState != null) thermalState.commitExternalDepositTake(new GranularEnergyColumn.DepositKey(
+					deposit.cell(), group.materialHandle(), group.solidCompositionHandle()),
+					group.solidVolumeSvq(), group.solidVolumeSvq());
+			if (taken.solidCompositionHandle() != 0) solidCompositions.release(taken.solidCompositionHandle());
+		}
+		granularEscapedSink = plan.sinkAfter();
 		granularCoupling.rebuild(granularParcels, granularDeposits);
 		pressureGranularCoupling = hasGranularInventory() ? granularCoupling : null;
-		markGranularExternalChange(cell);
+		for (int cell = 0; cell < plan.affectedCells().length; cell++) {
+			if (plan.affectedCells()[cell]) markGranularExternalChange(cell);
+		}
 	}
 
 	public boolean isSolid(int x, int y, int z) { return solid[cellIndexChecked(x, y, z)]; }
@@ -3463,9 +3584,42 @@ public final class FlipFluidDomain {
 	}
 	public record OperatorClear(CondensedClear condensed, GranularClear granular) { }
 	public record OperatorClearPlan(CondensedClearPlan condensed, GranularClearPlan granular) { }
+	public record CollisionEdit(int x, int y, int z, int mask) { }
 
-	public static final class GranularCollisionBlockedException extends IllegalStateException {
-		public GranularCollisionBlockedException(String message, Throwable cause) { super(message, cause); }
+	/** Opaque, single-use permit returned only after every collision owner accepts the batch. */
+	public static final class CollisionEditPlan {
+		private final FlipFluidDomain owner;
+		private final List<CollisionEdit> edits;
+		private final int[] previousMasks;
+		private final int particleCount;
+		private final long totalVolumeBits;
+		private final long totalMassBits;
+		private final GranularCollisionPlan granular;
+		private boolean consumed;
+
+		private CollisionEditPlan(
+				FlipFluidDomain owner, List<CollisionEdit> edits, int[] previousMasks,
+				int particleCount, long totalVolumeBits, long totalMassBits, GranularCollisionPlan granular
+		) {
+			this.owner = owner;
+			this.edits = edits;
+			this.previousMasks = previousMasks.clone();
+			this.particleCount = particleCount;
+			this.totalVolumeBits = totalVolumeBits;
+			this.totalMassBits = totalMassBits;
+			this.granular = granular;
+		}
+	}
+
+	private record CollisionDeposit(int cell, GranularDepositStore.Group group) { }
+	private record GranularCollisionPlan(
+			boolean[] selectedParcels, List<CollisionDeposit> depositGroups,
+			GranularAuditLedger sinkAfter, boolean[] affectedCells,
+			int parcelCount, long totalSvq, long totalMassBits
+	) { }
+
+	public static final class CollisionEditBlockedException extends IllegalStateException {
+		public CollisionEditBlockedException(String message, Throwable cause) { super(message, cause); }
 	}
 
 

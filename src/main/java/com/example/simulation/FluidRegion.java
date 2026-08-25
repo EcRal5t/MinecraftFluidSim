@@ -272,6 +272,10 @@ public final class FluidRegion {
 		setPaused(true);
 		setAvailabilityFailure(failure);
 	}
+	void blockCollision(String failure) {
+		setPaused(true);
+		setAvailabilityFailure(Objects.requireNonNull(failure, "failure"));
+	}
 	String thermalBlockFailure() { return thermalBlockFailure; }
 
 	public PersistedRuntime persistedRuntime() {

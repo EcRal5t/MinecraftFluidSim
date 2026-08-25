@@ -115,12 +115,9 @@ final class FluidRegionWorldInteraction {
 		int blockSizeX = domain.sizeX() / cellsPerBlock;
 		int blockSizeY = domain.sizeY() / cellsPerBlock;
 		int blockSizeZ = domain.sizeZ() / cellsPerBlock;
-		int changedCells = 0;
-		float displaced = 0.0F;
-		float escaped = 0.0F;
-		boolean markerBudgetLimited = false;
 		double inset = 1.0E-5;
-		List<Displacement> restorations = new ArrayList<>();
+		List<PlannedBlock> plannedBlocks = new ArrayList<>();
+		List<FlipFluidDomain.CollisionEdit> allEdits = new ArrayList<>();
 
 		for (int blockZ = 0; blockZ < blockSizeZ; blockZ++) {
 			for (int blockY = 0; blockY < blockSizeY; blockY++) {
@@ -130,13 +127,7 @@ final class FluidRegionWorldInteraction {
 					BlockState state = outsideScannedInterior ? Blocks.BEDROCK.defaultBlockState() : level.getBlockState(pos);
 					boolean fullBlock = outsideScannedInterior || state.isCollisionShapeFullBlock(level, pos);
 					VoxelShape shape = fullBlock ? Shapes.block() : state.getCollisionShape(level, pos);
-					float displacedInBlock = 0.0F;
-					ChemicalTransferLedger displacedChemistry = ChemicalTransferLedger.EMPTY;
-					double[] displacedMaterialVolume = domain.hasMaterialState() && !domain.hasChemistryState()
-							? new double[domain.materialRegistry().size()] : null;
-					double[] displacedMaterialMass = displacedMaterialVolume == null ? null
-							: new double[displacedMaterialVolume.length];
-					SignedDyadic displacedEnergy = SignedDyadic.ZERO;
+					List<FlipFluidDomain.CollisionEdit> blockEdits = new ArrayList<>();
 
 					for (int localZ = 0; localZ < cellsPerBlock; localZ++) {
 						for (int localY = 0; localY < cellsPerBlock; localY++) {
@@ -148,47 +139,71 @@ final class FluidRegionWorldInteraction {
 										shape, localX, localY, localZ, cellsPerBlock, inset
 								);
 								if (domain.solidMicroMask(cellX, cellY, cellZ) == desired) continue;
-								if (domain.hasChemistryState()) {
-									FlipFluidDomain.ChemicalDisplacement chemical = domain.setSolidMicroMaskChemical(
-											cellX, cellY, cellZ, desired);
-									displacedInBlock += chemical.volume();
-									displacedChemistry = displacedChemistry.plus(chemical.ledger());
-									displacedEnergy = displacedEnergy.add(SignedDyadic.of(chemical.internalEnergy()));
-								} else if (displacedMaterialVolume != null) {
-									FlipFluidDomain.MaterialDisplacement material = domain.setSolidMicroMaskMaterial(
-											cellX, cellY, cellZ, desired);
-									displacedInBlock += material.volume();
-									for (FlipFluidDomain.MaterialPortion portion : material.portions()) {
-										displacedMaterialVolume[portion.materialHandle()] += portion.volume();
-										displacedMaterialMass[portion.materialHandle()] += portion.mass();
-									}
-									displacedEnergy = displacedEnergy.add(SignedDyadic.of(material.internalEnergy()));
-								} else {
-									displacedInBlock += domain.setSolidMicroMask(cellX, cellY, cellZ, desired);
-								}
-								changedCells++;
+								FlipFluidDomain.CollisionEdit edit = new FlipFluidDomain.CollisionEdit(
+										cellX, cellY, cellZ, desired);
+								blockEdits.add(edit);
+								allEdits.add(edit);
 							}
 						}
 					}
-
-					if (displacedInBlock > 0.0F) {
-						displaced += displacedInBlock;
-						int centerX = blockX * cellsPerBlock + cellsPerBlock / 2;
-						int centerY = blockY * cellsPerBlock + cellsPerBlock / 2;
-						int centerZ = blockZ * cellsPerBlock + cellsPerBlock / 2;
-						List<FlipFluidDomain.MaterialPortion> displacedMaterials = new ArrayList<>();
-						if (displacedMaterialVolume != null) for (int material = 0;
-								material < displacedMaterialVolume.length; material++) {
-							if (displacedMaterialVolume[material] > 0.0 && displacedMaterialMass[material] > 0.0) {
-								displacedMaterials.add(new FlipFluidDomain.MaterialPortion(material,
-										displacedMaterialVolume[material], displacedMaterialMass[material]));
-							}
-						}
-						restorations.add(new Displacement(centerX, centerY, centerZ, displacedInBlock,
-								displacedChemistry, List.copyOf(displacedMaterials), displacedEnergy.toDouble()));
-					}
+					if (!blockEdits.isEmpty()) plannedBlocks.add(new PlannedBlock(
+							blockX * cellsPerBlock + cellsPerBlock / 2,
+							blockY * cellsPerBlock + cellsPerBlock / 2,
+							blockZ * cellsPerBlock + cellsPerBlock / 2,
+							List.copyOf(blockEdits)));
 				}
 			}
+		}
+		if (allEdits.isEmpty()) return FluidRegion.CollisionStats.EMPTY;
+
+		FlipFluidDomain.CollisionEditPlan plan = domain.planCollisionEdits(allEdits);
+		domain.beginCollisionEdits(plan);
+		int changedCells = 0;
+		float displaced = 0.0F;
+		float escaped = 0.0F;
+		boolean markerBudgetLimited = false;
+		List<Displacement> restorations = new ArrayList<>();
+		for (PlannedBlock block : plannedBlocks) {
+			float displacedInBlock = 0.0F;
+			ChemicalTransferLedger displacedChemistry = ChemicalTransferLedger.EMPTY;
+			double[] displacedMaterialVolume = domain.hasMaterialState() && !domain.hasChemistryState()
+					? new double[domain.materialRegistry().size()] : null;
+			double[] displacedMaterialMass = displacedMaterialVolume == null ? null
+					: new double[displacedMaterialVolume.length];
+			SignedDyadic displacedEnergy = SignedDyadic.ZERO;
+			for (FlipFluidDomain.CollisionEdit edit : block.edits()) {
+				if (domain.hasChemistryState()) {
+					FlipFluidDomain.ChemicalDisplacement chemical = domain.setSolidMicroMaskChemical(
+							edit.x(), edit.y(), edit.z(), edit.mask());
+					displacedInBlock += chemical.volume();
+					displacedChemistry = displacedChemistry.plus(chemical.ledger());
+					displacedEnergy = displacedEnergy.add(SignedDyadic.of(chemical.internalEnergy()));
+				} else if (displacedMaterialVolume != null) {
+					FlipFluidDomain.MaterialDisplacement material = domain.setSolidMicroMaskMaterial(
+							edit.x(), edit.y(), edit.z(), edit.mask());
+					displacedInBlock += material.volume();
+					for (FlipFluidDomain.MaterialPortion portion : material.portions()) {
+						displacedMaterialVolume[portion.materialHandle()] += portion.volume();
+						displacedMaterialMass[portion.materialHandle()] += portion.mass();
+					}
+					displacedEnergy = displacedEnergy.add(SignedDyadic.of(material.internalEnergy()));
+				} else {
+					displacedInBlock += domain.setSolidMicroMask(edit.x(), edit.y(), edit.z(), edit.mask());
+				}
+				changedCells++;
+			}
+			if (displacedInBlock <= 0.0F) continue;
+			displaced += displacedInBlock;
+			List<FlipFluidDomain.MaterialPortion> displacedMaterials = new ArrayList<>();
+			if (displacedMaterialVolume != null) for (int material = 0;
+					material < displacedMaterialVolume.length; material++) {
+				if (displacedMaterialVolume[material] > 0.0 && displacedMaterialMass[material] > 0.0) {
+					displacedMaterials.add(new FlipFluidDomain.MaterialPortion(material,
+							displacedMaterialVolume[material], displacedMaterialMass[material]));
+				}
+			}
+			restorations.add(new Displacement(block.centerX(), block.centerY(), block.centerZ(), displacedInBlock,
+					displacedChemistry, List.copyOf(displacedMaterials), displacedEnergy.toDouble()));
 		}
 		for (Displacement request : restorations) {
 			if (domain.hasChemistryState()) {
@@ -259,4 +274,7 @@ final class FluidRegionWorldInteraction {
 			int centerX, int centerY, int centerZ, float volume, ChemicalTransferLedger chemistry,
 			List<FlipFluidDomain.MaterialPortion> materials, double internalEnergy
 	) { }
+
+	private record PlannedBlock(int centerX, int centerY, int centerZ,
+	                            List<FlipFluidDomain.CollisionEdit> edits) { }
 }
