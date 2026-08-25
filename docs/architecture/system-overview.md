@@ -45,6 +45,10 @@ ContainerTransferStore                      region/item 跨域事务
   -> 客户端 surface、material、chemical、granular、thermal 重建
   -> MmmQueryApi / FabricFluidQueryApi
   -> 外部 Mod 的同步只读单格观察
+
+durable container completion
+  -> MmmEventApi / CommittedEventHub
+  -> 外部 Mod 的易失提交通知（漏失后由 Query API 恢复）
 ```
 
 Minecraft adapter 负责读取世界、选择区域和提交世界修改。`MinecraftCollisionWorldPort` 把 `VoxelShape` 保守采样成纯 Java `CollisionField` 后再交给世界交互服务；数值核心不持有 `ServerLevel`、ItemStack durable save 或磁盘所有权。持久层保存稳定 ID 和完整库存，不序列化 Java 对象图、GPU buffer 或客户端 mesh。

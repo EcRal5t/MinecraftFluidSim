@@ -2,6 +2,8 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.api.query.MmmQueryApi;
+import cc.ecisr.mmm.api.event.ContainerTransferCommittedEvent;
+import cc.ecisr.mmm.api.event.MmmEventApi;
 import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.chemistry.ChemicalDataPackLoader;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
@@ -69,6 +71,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalDouble;
 import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
@@ -94,12 +97,14 @@ public final class FluidSimulationService {
 			* CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
 	private static final long COMPATIBILITY_REGION_MARKERS = COMPATIBILITY_REGION_CELLS * 8L;
 	private static final Map<MinecraftServer, FluidSimulationService> SERVICES = new WeakHashMap<>();
+	private static final Map<MinecraftServer, CommittedEventHub> COMMITTED_EVENTS = new WeakHashMap<>();
 
 	private final Map<BlockPos, BlockState> takeoverOriginalBlocks = new HashMap<>();
 	private final Path worldRoot;
 	private final boolean serverConfigLocked;
 	private FluidServerConfig serverConfig;
 	private final FluidRegionManager regionManager;
+	private final CommittedEventHub committedEvents;
 	private final FluidWorldTargetResolver targets;
 	private final FluidRegionOperations regionOperations;
 	private final FluidSnapshotPublisher snapshots;
@@ -319,6 +324,7 @@ public final class FluidSimulationService {
 		thermalFeatureEnabled = serverConfig.thermalEnabled() && thermalRegistry != null && gasRegistry != null;
 		phaseChangeFeatureEnabled = serverConfig.phaseChangeEnabled() && thermalFeatureEnabled;
 		regionManager = new FluidRegionManager(serverConfig.limits());
+		committedEvents = committedEventHub(server);
 		targets = new FluidWorldTargetResolver(regionManager);
 		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, materialFeatureEnabled,
 				chemistryFeatureEnabled, chemicalRegistry, granularFeatureEnabled, granularRegistry,
@@ -595,10 +601,7 @@ public final class FluidSimulationService {
 				}
 				case CONVERGE_AFTER_ITEM -> {
 					if (applyAfterItem(server, journal)) {
-						persistAfterItem(server, journal);
-						adoptRecoveredContainerCheckpoint(journal);
-						deleteContainerTransfer(transactionId);
-						reportedContainerTransferLocks.remove(transactionId);
+						completeContainerTransferCommit(server, journal);
 						MmmMod.LOGGER.warn("Converged container transfer WAL {} to a durably saved after item", transactionId);
 					} else awaitingContainerActors.add(transactionId);
 				}
@@ -634,10 +637,7 @@ public final class FluidSimulationService {
 		if (journal == null) return;
 		try {
 			if (!applyAfterItem(server, journal)) return;
-			persistAfterItem(server, journal);
-			adoptRecoveredContainerCheckpoint(journal);
-			deleteContainerTransfer(transactionId);
-			reportedContainerTransferLocks.remove(transactionId);
+			completeContainerTransferCommit(server, journal);
 			MmmMod.LOGGER.warn("Converged container transfer WAL {} after its actor became available", transactionId);
 		} catch (IOException | RuntimeException exception) {
 			awaitingContainerActors.remove(transactionId);
@@ -663,6 +663,40 @@ public final class FluidSimulationService {
 			}
 			return;
 		}
+	}
+
+	/** Event publication follows durable actor save and WAL deletion; it is never a commit input. */
+	private void completeContainerTransferCommit(
+			MinecraftServer server, ContainerTransferJournal journal
+	) throws IOException {
+		ContainerTransferCommittedEvent event = committedTransferEvent(journal);
+		persistAfterItem(server, journal);
+		adoptRecoveredContainerCheckpoint(journal);
+		deleteContainerTransfer(journal.transactionId());
+		reportedContainerTransferLocks.remove(journal.transactionId());
+		committedEvents.publish(event);
+	}
+
+	private static ContainerTransferCommittedEvent committedTransferEvent(
+			ContainerTransferJournal journal
+	) {
+		ContainerTransferCommittedEvent.ResourceKind resourceKind = switch (journal.resourceKind()) {
+			case FLUID_NANOS -> ContainerTransferCommittedEvent.ResourceKind.LIQUID_NANOVOLUME;
+			case GRANULAR_SVQ -> ContainerTransferCommittedEvent.ResourceKind.GRANULAR_SOLID_VOLUME_QUANTA;
+		};
+		long amount = switch (journal.resourceKind()) {
+			case FLUID_NANOS -> journal.volumeNanos();
+			case GRANULAR_SVQ -> journal.solidVolumeSvq();
+		};
+		OptionalDouble energy = journal.thermalTransfer() == null
+				? OptionalDouble.empty()
+				: OptionalDouble.of(journal.thermalTransfer().internalEnergy());
+		return new ContainerTransferCommittedEvent(
+				journal.transactionId(), journal.dimensionId(), journal.regionId(), journal.targetGeneration(),
+				journal.operation() == ContainerTransferJournal.Operation.INSERT
+						? ContainerTransferCommittedEvent.Operation.INSERT
+						: ContainerTransferCommittedEvent.Operation.EXTRACT,
+				resourceKind, amount, energy);
 	}
 
 	/** The WAL is deleted only after the actor's owning save file has been forced through Minecraft. */
@@ -738,6 +772,16 @@ public final class FluidSimulationService {
 		return SERVICES.computeIfAbsent(server, FluidSimulationService::new);
 	}
 
+	/** Stable Fabric discovery can register listeners without constructing the world service. */
+	public static synchronized MmmEventApi committedEvents(MinecraftServer server) {
+		if (server == null) throw new IllegalArgumentException("Minecraft server is missing");
+		return committedEventHub(server);
+	}
+
+	private static CommittedEventHub committedEventHub(MinecraftServer server) {
+		return COMMITTED_EVENTS.computeIfAbsent(server, ignored -> new CommittedEventHub());
+	}
+
 	/** Read-only lookup used by external APIs; unlike get(), this never initializes world state. */
 	public static synchronized FluidSimulationService find(MinecraftServer server) {
 		return SERVICES.get(server);
@@ -752,6 +796,8 @@ public final class FluidSimulationService {
 			service.checkpointForShutdown();
 			service.restoreTakeover(server);
 		}
+		CommittedEventHub events = COMMITTED_EVENTS.remove(server);
+		if (events != null) events.clear();
 	}
 
 	public static void recoverTakeoverBackup(MinecraftServer server) {

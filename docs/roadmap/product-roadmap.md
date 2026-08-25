@@ -23,7 +23,7 @@
 - 不可互溶相目前共享局部速度场，不声称解析切向滑移、乳化和液滴破碎。
 - 实体耦合目前主要是流体对实体的单向采样，不是完整双向动量/排水求解。
 - 固液已支持有界、数据化的压力平衡曲线，气液使用绝对压力和 component 分压；更高压力、更多材料和跨相溶解仍需分别验证物性域。
-- Query API 已冻结同步只读单格观察，并已有只查询闭壳相邻液体的可选 Jade 适配；尚无 WAILA/HWYLA、直接自由面目标、稳定 transfer/event API 或其他 loader 发现桥。
+- Query API 已冻结同步只读单格观察，并已有只查询闭壳相邻液体的可选 Jade 适配；container durable completion 已有 committed event。尚无 WAILA/HWYLA、直接自由面目标、稳定 transfer API、其他提交类型事件或其他 loader 发现桥。
 - section 是一个 region 原子 generation 内的存储分片，不具有独立提交、卸载或 ownership 生命周期。
 - controller 外天然洞穴、河流、海洋和世界生成水不在当前 ownership 范围。
 
@@ -62,7 +62,7 @@ Query API 的单位、线程、无加载/唤醒和结构化失败语义已经冻
 
 1. 观察适配：Jade 闭壳观察已经接入 Query API；后续按明确需求扩展直接自由面目标与 WAILA/HWYLA。所有查询不得唤醒、加载或回写区域，主 Mod 不增加准星 HUD。
 2. 受控转移 API：stable material/species ID、纳体积/SVQ、质量和总内能必须显式，复用现有区域/容器事务。
-3. 事件 API：checkpoint、ownership、phase transition 和安全暂停只发布已提交事件，不暴露半代次。
+3. 事件 API：container durable completion 已实现；checkpoint、ownership、phase transition 和安全暂停只发布已提交事件，不暴露半代次。
 4. 原版交互：灭火、湿润、岩浆反应、红石、生物和寻路逐项定义并验收，不以“一格水”假设直接映射连续库存。
 
 该阶段不扩大开放世界 ownership，也不允许外部 Mod 直接修改平滑 density、pressure、runtime handle 或客户端 mesh。
@@ -73,7 +73,7 @@ Query API 的单位、线程、无加载/唤醒和结构化失败语义已经冻
 
 受控转移采用显式 request/plan/commit：调用者给出 dimension、实际 world target、stable resource identity、typed amount、可选质量/组成/能量和 actor transaction identity；主 Mod 返回实际可转量或完整拒绝。API 不能让调用者持有 live domain 引用，也不能跨 tick 重用未绑定 generation 的 plan。
 
-事件只在 HEAD 或同等外部 commit point 后发布，并携带 region generation 与 transaction ID。监听者错过事件时应能通过查询恢复当前状态，事件流本身不是库存日志。
+事件只在 HEAD 或同等外部 commit point 后发布，并携带对应 checkpoint generation 与可用的 transaction ID。container event 还要等 actor durable save 与 WAL 删除。监听者错过事件时应能通过查询恢复当前状态，事件流本身不是库存日志。
 
 ### 原版行为拆分
 
