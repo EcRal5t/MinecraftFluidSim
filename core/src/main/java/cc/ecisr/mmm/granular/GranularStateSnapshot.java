@@ -13,7 +13,7 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.function.IntToLongFunction;
 
-/** Stable-ID, exact-inventory handoff used only by region-state v5 and transactional adapters. */
+/** Stable-ID, exact-inventory handoff used only by granular region state and transactional adapters. */
 public final class GranularStateSnapshot {
 	public record ActiveParcel(
 			float x, float y, float z, float velocityX, float velocityY, float velocityZ,
@@ -90,7 +90,7 @@ public final class GranularStateSnapshot {
 	private final long totalMassBits;
 	private final GranularAuditLedger externalSource, escapedSink;
 
-	/** Compatibility constructor for inert v5 fixtures. */
+	/** Convenience constructor for inert fixtures. */
 	public GranularStateSnapshot(
 			int sizeX, int sizeY, int sizeZ, String registryFingerprint, List<String> materialPalette,
 			List<ActiveParcel> activeParcels, List<DepositGroup> depositGroups,

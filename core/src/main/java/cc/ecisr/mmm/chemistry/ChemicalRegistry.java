@@ -230,7 +230,7 @@ public final class ChemicalRegistry {
 	}
 
 	private byte[] encodeCanonical() {
-		StringBuilder out = new StringBuilder(4096).append("mmm-chemistry-registry-v1\n");
+		StringBuilder out = new StringBuilder(4096).append("mmm-chemistry-registry\n");
 		for (ChemicalSpecies definition : species) {
 			out.append("S|").append(definition.id()).append('|').append(definition.charge()).append('|')
 					.append(definition.massPerAu().canonical()).append('|')

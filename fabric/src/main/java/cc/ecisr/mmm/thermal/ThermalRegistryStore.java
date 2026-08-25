@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** World-authoritative immutable thermal registry v2 with atomic first publication. */
+/** World-authoritative immutable thermal registry with atomic first publication. */
 public final class ThermalRegistryStore {
 	private static final int FORMAT_VERSION = 2;
 	private static final long MAX_BYTES = 8L * 1024L * 1024L;

@@ -114,7 +114,7 @@ public final class GasRegistry {
 	}
 
 	private byte[] encodeCanonical() {
-		StringBuilder out = new StringBuilder(1024).append("mmm-gas-registry-v1\n")
+		StringBuilder out = new StringBuilder(1024).append("mmm-gas-registry\n")
 				.append("units=").append(UNIT_SYSTEM_ID).append('\n')
 				.append("pressure=").append(Long.toUnsignedString(Double.doubleToRawLongBits(STANDARD_PRESSURE_PA))).append('\n')
 				.append("temperature=").append(Long.toUnsignedString(Double.doubleToRawLongBits(STANDARD_TEMPERATURE_K))).append('\n');

@@ -12,7 +12,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Immutable v3-ready CPU handoff: material state plus canonical stable mixtures and indicator provenance. */
+/** Immutable chemical CPU handoff: material state plus canonical stable mixtures and indicator provenance. */
 public final class FlipChemicalParticleState {
 	private final FlipMaterialParticleState materials;
 	private final String registryFingerprint;

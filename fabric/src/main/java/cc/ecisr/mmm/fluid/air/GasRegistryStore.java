@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** World-authoritative immutable gas component/ambient registry v1 with atomic first publication. */
+/** World-authoritative immutable gas component/ambient registry with atomic first publication. */
 public final class GasRegistryStore {
 	private static final int FORMAT_VERSION = 1;
 	private static final long MAX_BYTES = 4L * 1_048_576L;

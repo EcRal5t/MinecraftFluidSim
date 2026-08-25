@@ -10,7 +10,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
-/** Canonical ThermalContents v1: raw total U bound to one exact underlying liquid inventory. */
+/** Canonical thermal truth: raw total U bound to one exact underlying liquid inventory. */
 public record ThermalContents(
 		String registryFingerprint,
 		UnderlyingKind underlyingKind,
@@ -18,6 +18,7 @@ public record ThermalContents(
 		long internalEnergyBits
 ) {
 	public static final int MAX_ENCODED_LENGTH = 256;
+	private static final String ENCODING_TAG = "mmm:thermal-contents";
 
 	public enum UnderlyingKind { PURE_WATER, MATERIAL, CHEMICAL }
 
@@ -100,7 +101,7 @@ public record ThermalContents(
 	}
 
 	public String encode() {
-		return "v1|" + registryFingerprint + '|' + underlyingKind.name() + '|' + underlyingHash + '|'
+		return ENCODING_TAG + '|' + registryFingerprint + '|' + underlyingKind.name() + '|' + underlyingHash + '|'
 				+ Long.toUnsignedString(internalEnergyBits, 16);
 	}
 
@@ -109,7 +110,7 @@ public record ThermalContents(
 			throw new IllegalArgumentException("Invalid thermal contents size");
 		}
 		String[] fields = encoded.split("\\|", -1);
-		if (fields.length != 5 || !fields[0].equals("v1")) {
+		if (fields.length != 5 || !fields[0].equals(ENCODING_TAG)) {
 			throw new IllegalArgumentException("Unsupported thermal contents");
 		}
 		try {

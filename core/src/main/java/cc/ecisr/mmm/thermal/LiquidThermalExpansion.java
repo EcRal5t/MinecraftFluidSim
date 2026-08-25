@@ -15,7 +15,7 @@ import java.util.stream.Collectors;
  * Frozen thermophysical data for the built-in liquid Boussinesq model.
  *
  * <p>The coefficients are volumetric expansion coefficients near 293.15 K. They are definition
- * truth, not a stability knob: the model fingerprint is persisted by region-state v7 so later
+ * truth, not a stability knob: the model fingerprint is persisted by thermal region state so later
  * executable changes cannot silently reinterpret an existing velocity/temperature field.</p>
  */
 public final class LiquidThermalExpansion {

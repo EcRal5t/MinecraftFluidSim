@@ -13,6 +13,7 @@ import java.util.Set;
 public record FluidMixture(List<Component> components) {
 	public static final int MAX_COMPONENTS = 64;
 	public static final int MAX_ENCODED_LENGTH = 8192;
+	private static final String ENCODING_TAG = "mmm:fluid-mixture;";
 
 	public FluidMixture {
 		if (components == null || components.isEmpty()) {
@@ -55,9 +56,9 @@ public record FluidMixture(List<Component> components) {
 		return total;
 	}
 
-	/** Stable v1 textual handle; ids cannot contain ',' or ';' under Minecraft identifier syntax. */
+	/** Canonical textual handle; ids cannot contain ',' or ';' under Minecraft identifier syntax. */
 	public String encode() {
-		StringBuilder result = new StringBuilder("v1;");
+		StringBuilder result = new StringBuilder(ENCODING_TAG);
 		for (int i = 0; i < components.size(); i++) {
 			if (i > 0) result.append(';');
 			Component component = components.get(i);
@@ -72,10 +73,10 @@ public record FluidMixture(List<Component> components) {
 	}
 
 	public static FluidMixture decode(String encoded) {
-		if (encoded == null || encoded.length() > MAX_ENCODED_LENGTH || !encoded.startsWith("v1;")) {
+		if (encoded == null || encoded.length() > MAX_ENCODED_LENGTH || !encoded.startsWith(ENCODING_TAG)) {
 			throw new IllegalArgumentException("Unsupported fluid-mixture handle");
 		}
-		String body = encoded.substring(3);
+		String body = encoded.substring(ENCODING_TAG.length());
 		if (body.isEmpty()) throw new IllegalArgumentException("Empty fluid-mixture handle");
 		List<Component> components = new ArrayList<>();
 		for (String entry : body.split(";", -1)) {

@@ -7,7 +7,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
 
-/** Dry granular container. Tooltip and durability bar are display-only views of GranularContents v1. */
+/** Dry granular container. Tooltip and durability bar are display-only views of canonical granular contents. */
 public final class GranularContainerItem extends Item {
 	private static final int BAR_COLOR = 0xBFA56A;
 

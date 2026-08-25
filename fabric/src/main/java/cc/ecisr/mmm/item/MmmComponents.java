@@ -25,11 +25,11 @@ public final class MmmComponents {
 	public static final DataComponentType<Long> FLUID_MASS_BITS = register("fluid_mass_bits");
 	/** Canonical encoded per-material nanovolume/mass inventory for multi-component buckets. */
 	public static final DataComponentType<String> MIXTURE_COMPONENTS = registerString("mixture_components");
-	/** Canonical ChemicalContents v1; mutually exclusive with material_id/mixture_components. */
+	/** Canonical chemical contents; mutually exclusive with material_id/mixture_components. */
 	public static final DataComponentType<String> CHEMICAL_CONTENTS = registerString("chemical_contents");
-	/** Canonical dry GranularContents v1; mutually exclusive with every liquid component. */
+	/** Canonical dry granular contents; mutually exclusive with every liquid component. */
 	public static final DataComponentType<String> GRANULAR_CONTENTS = registerString("granular_contents");
-	/** Canonical ThermalContents v1; coupled to, but independent from, the exact liquid contents. */
+	/** Canonical thermal contents; coupled to, but independent from, the exact liquid contents. */
 	public static final DataComponentType<String> THERMAL_CONTENTS = registerString("thermal_contents");
 
 	private MmmComponents() { }

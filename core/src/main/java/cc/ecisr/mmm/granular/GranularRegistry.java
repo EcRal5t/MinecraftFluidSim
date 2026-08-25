@@ -69,7 +69,7 @@ public final class GranularRegistry {
 	public String fingerprint() { return fingerprint; }
 
 	private byte[] encodeCanonical() {
-		StringBuilder out = new StringBuilder(2048).append("mmm-granular-registry-v2\n")
+		StringBuilder out = new StringBuilder(2048).append("mmm-granular-registry\n")
 				.append("svq-per-bv=").append(SolidVolume.SVQ_PER_BV).append('\n')
 				.append("porosity-scale=").append(GranularLimits.POROSITY_SCALE).append('\n')
 				.append("chemical-registry=").append(chemicalRegistryFingerprint).append('\n');

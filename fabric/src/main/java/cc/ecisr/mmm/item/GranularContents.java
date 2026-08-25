@@ -19,6 +19,7 @@ import java.util.TreeMap;
 
 /** Canonical dry-container truth. SVQ, raw mass and optional solid composition remain independent. */
 public record GranularContents(String registryFingerprint, long svqPerBlockVolume, List<Group> groups) {
+	private static final String ENCODING_TAG = "mmm:granular-contents";
 	public static final int MAX_GROUPS = 16;
 	public static final int MAX_TOTAL_COMPOSITION_ENTRIES = 64;
 	public static final int MAX_ENCODED_LENGTH = 64 * 1024;
@@ -107,7 +108,7 @@ public record GranularContents(String registryFingerprint, long svqPerBlockVolum
 	}
 
 	public String encode() {
-		StringBuilder encoded = new StringBuilder("v1|").append(registryFingerprint).append('|').append(svqPerBlockVolume);
+		StringBuilder encoded = new StringBuilder(ENCODING_TAG).append('|').append(registryFingerprint).append('|').append(svqPerBlockVolume);
 		for (Group group : groups) {
 			encoded.append('|').append(group.materialId()).append(',').append(group.solidVolumeSvq()).append(',')
 					.append(Long.toUnsignedString(group.massBits(), 16)).append(',');
@@ -130,7 +131,7 @@ public record GranularContents(String registryFingerprint, long svqPerBlockVolum
 			throw new IllegalArgumentException("Invalid granular contents size");
 		}
 		String[] parts = encoded.split("\\|", -1);
-		if (parts.length < 4 || !parts[0].equals("v1")) throw new IllegalArgumentException("Unsupported granular contents");
+		if (parts.length < 4 || !parts[0].equals(ENCODING_TAG)) throw new IllegalArgumentException("Unsupported granular contents");
 		long scale;
 		try { scale = Long.parseLong(parts[2]); }
 		catch (NumberFormatException invalid) { throw new IllegalArgumentException("Invalid granular SVQ scale", invalid); }

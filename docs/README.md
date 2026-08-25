@@ -36,5 +36,5 @@
 3. 尚未实现且已经决定要做的工作写入 `roadmap/`；探索性草案留在 issue、任务讨论或 Git 分支，不进入规范文档。
 4. 实现完成后，把仍有约束力的结论并入 architecture，然后从 roadmap 删除该任务。
 5. architecture 不能退化成摘要：应记录维护实现所需的组件职责、权威数据布局、单位/公式、logical-step 顺序、预算、事务状态机和失败语义。
-6. `progress/version-history.md` 是历史叙述的明确例外；它保留旧版本事实，但不承担当前规范或迁移说明。
+6. `progress/version-history.md` 只记录发布事实，不承担当前规范、路线或迁移说明。
 7. 本地 `maintenance/next-session-initial-prompt.md` 是可随当前工作面整理的会话交接提示，不替代上述三类长期文档。

@@ -349,7 +349,7 @@ public final class M6ContainerValidation {
 				&& expected.totalVolumeNanos() == BUCKET && expected.totalMass() == 920.0,
 				"canonical fluid-mixture handle did not round-trip exact ledgers");
 		try {
-			FluidMixture.decode("v1;" + "x".repeat(FluidMixture.MAX_ENCODED_LENGTH));
+			FluidMixture.decode("mmm:fluid-mixture;" + "x".repeat(FluidMixture.MAX_ENCODED_LENGTH));
 			throw new AssertionError("Expected oversized mixture rejection");
 		} catch (IllegalArgumentException expectedFailure) {
 			// expected: persisted strings are bounded before splitting or allocation

@@ -179,7 +179,7 @@ public final class ThermalRegistry {
 	}
 
 	private byte[] encodeCanonical() {
-		StringBuilder out = new StringBuilder(4096).append("mmm-thermal-registry-v2\n")
+		StringBuilder out = new StringBuilder(4096).append("mmm-thermal-registry\n")
 				.append("units=").append(UNIT_SYSTEM_ID).append('\n')
 				.append("chemical-registry=").append(chemicalRegistryFingerprint).append('\n')
 				.append("granular-registry=").append(granularRegistryFingerprint).append('\n');

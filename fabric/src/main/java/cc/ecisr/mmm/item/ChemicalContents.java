@@ -16,6 +16,7 @@ import java.math.BigInteger;
 
 /** Canonical material/indicator/species bucket inventory, independent from {@link FluidMixture}. */
 public record ChemicalContents(String registryFingerprint, long auScale, List<Group> groups) {
+	private static final String ENCODING_TAG = "mmm:chemical-contents";
 	public static final int MAX_GROUPS = 16;
 	public static final int MAX_TOTAL_ENTRIES = 64;
 	public static final int MAX_ENCODED_BYTES = 64 * 1024;
@@ -222,7 +223,7 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 	}
 
 	public String encode() {
-		StringBuilder encoded = new StringBuilder("v1|").append(registryFingerprint).append('|').append(auScale);
+		StringBuilder encoded = new StringBuilder(ENCODING_TAG).append('|').append(registryFingerprint).append('|').append(auScale);
 		for (Group group : groups) {
 			encoded.append('|').append(group.materialId()).append(',').append(group.indicator() ? '1' : '0')
 					.append(',').append(group.volumeNanos()).append(',')
@@ -241,7 +242,7 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 	public static ChemicalContents decode(String encoded) {
 		if (encoded == null || encoded.length() > MAX_ENCODED_BYTES) throw new IllegalArgumentException("Invalid chemical contents size");
 		String[] parts = encoded.split("\\|", -1);
-		if (parts.length < 4 || !parts[0].equals("v1")) throw new IllegalArgumentException("Unsupported chemical contents");
+		if (parts.length < 4 || !parts[0].equals(ENCODING_TAG)) throw new IllegalArgumentException("Unsupported chemical contents");
 		long scale;
 		try { scale = Long.parseLong(parts[2]); } catch (NumberFormatException invalid) {
 			throw new IllegalArgumentException("Invalid chemical AU scale", invalid);
