@@ -13,7 +13,7 @@
 | 持久化 | 写入/恢复中断、未知布局、chunk 卸载和玩家编辑是否 fail-closed？ |
 | 网络 | capability、sequence、reconnect、unknown optional payload 和拒绝路径是否正确？ |
 | 游戏交互 | controller、容器、实体、方块更新和多人观察是否一致？ |
-| 资源 | block/item/model/recipe、反馈、本地化和功能门默认值是否完整？ |
+| 资源 | block/item/model/recipe、反馈、本地化和固定 capability 内容是否完整？ |
 
 不受改动影响的层明确写“不涉及”，不为此重跑其他领域门。
 

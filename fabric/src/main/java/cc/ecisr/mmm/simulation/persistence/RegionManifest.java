@@ -17,6 +17,9 @@ import java.util.UUID;
 /** Metadata admitted at startup without allocating a solver. */
 public record RegionManifest(
 		RegionStateLayout layout,
+		String capabilityProfileFingerprint,
+		String registryAggregateFingerprint,
+		String materialRegistryFingerprint,
 		UUID regionId,
 		String dimensionId,
 		long checkpointGeneration,
@@ -46,6 +49,17 @@ public record RegionManifest(
 ) {
 	public RegionManifest {
 		Objects.requireNonNull(layout, "layout");
+		capabilityProfileFingerprint = requireOptionalFingerprint(capabilityProfileFingerprint,
+				"world capability profile");
+		registryAggregateFingerprint = requireOptionalFingerprint(registryAggregateFingerprint,
+				"registry aggregate");
+		materialRegistryFingerprint = requireOptionalFingerprint(materialRegistryFingerprint,
+				"material registry");
+		boolean worldBound = !capabilityProfileFingerprint.isEmpty();
+		if (worldBound != !registryAggregateFingerprint.isEmpty()
+				|| !worldBound && !materialRegistryFingerprint.isEmpty()) {
+			throw new IllegalArgumentException("Region world capability bindings are incomplete");
+		}
 		Objects.requireNonNull(regionId, "regionId");
 		Objects.requireNonNull(dimensionId, "dimensionId");
 		origin = Objects.requireNonNull(origin, "origin").immutable();
@@ -129,7 +143,7 @@ public record RegionManifest(
 			FluidRegion.PersistedRuntime runtime, FluidRegionFootprint footprint, int totalMarkerCount,
 			long totalVolumeBits, List<SectionDescriptor> sections, List<RegionExtension> extensions, long checksum
 	) {
-		this(RegionStateLayout.PURE, regionId, dimensionId, checkpointGeneration, networkGeneration, origin, sizeX, sizeY, sizeZ,
+		this(RegionStateLayout.PURE, "", "", "", regionId, dimensionId, checkpointGeneration, networkGeneration, origin, sizeX, sizeY, sizeZ,
 				solverConfig, reservedMarkerCapacity, runtime, footprint, totalMarkerCount, totalVolumeBits,
 				List.of(), 0L, List.of(), sections, extensions, "", 0L, List.of(), List.of(), new long[0], 0L, checksum);
 	}
@@ -143,13 +157,20 @@ public record RegionManifest(
 			List<MaterialLedger> materialLedgers, List<SectionDescriptor> sections,
 			List<RegionExtension> extensions, long checksum
 	) {
-		this(layout, regionId, dimensionId, checkpointGeneration, networkGeneration, origin, sizeX, sizeY, sizeZ,
+		this(layout, "", "", "", regionId, dimensionId, checkpointGeneration, networkGeneration, origin, sizeX, sizeY, sizeZ,
 				solverConfig, reservedMarkerCapacity, runtime, footprint, totalMarkerCount, totalVolumeBits,
 				materialPalette, totalMassBits, materialLedgers, sections, extensions,
 				"", 0L, List.of(), List.of(), new long[0], 0L, checksum);
 	}
 
 	@Override public long[] chemicalSpeciesTotals() { return chemicalSpeciesTotals.clone(); }
+
+	private static String requireOptionalFingerprint(String value, String label) {
+		if (value == null || !value.matches("^$|[0-9a-f]{64}")) {
+			throw new IllegalArgumentException("Invalid " + label + " fingerprint");
+		}
+		return value;
+	}
 
 	@Override
 	public boolean equals(Object other) {
@@ -161,7 +182,10 @@ public record RegionManifest(
 				&& reservedMarkerCapacity == that.reservedMarkerCapacity && totalMarkerCount == that.totalMarkerCount
 				&& totalVolumeBits == that.totalVolumeBits && totalMassBits == that.totalMassBits
 				&& auScale == that.auScale && chemicalResidualLedgerBits == that.chemicalResidualLedgerBits
-				&& checksum == that.checksum && regionId.equals(that.regionId) && dimensionId.equals(that.dimensionId)
+				&& checksum == that.checksum && capabilityProfileFingerprint.equals(that.capabilityProfileFingerprint)
+				&& registryAggregateFingerprint.equals(that.registryAggregateFingerprint)
+				&& materialRegistryFingerprint.equals(that.materialRegistryFingerprint)
+				&& regionId.equals(that.regionId) && dimensionId.equals(that.dimensionId)
 				&& origin.equals(that.origin) && solverConfig.equals(that.solverConfig) && runtime.equals(that.runtime)
 				&& footprint.equals(that.footprint) && materialPalette.equals(that.materialPalette)
 				&& materialLedgers.equals(that.materialLedgers) && sections.equals(that.sections)
@@ -172,7 +196,8 @@ public record RegionManifest(
 
 	@Override
 	public int hashCode() {
-		int result = Objects.hash(layout, regionId, dimensionId, checkpointGeneration, networkGeneration,
+		int result = Objects.hash(layout, capabilityProfileFingerprint, registryAggregateFingerprint,
+				materialRegistryFingerprint, regionId, dimensionId, checkpointGeneration, networkGeneration,
 				origin, sizeX, sizeY, sizeZ, solverConfig, reservedMarkerCapacity, runtime, footprint,
 				totalMarkerCount, totalVolumeBits, materialPalette, totalMassBits, materialLedgers, sections,
 				extensions, registryFingerprint, auScale, speciesPalette, chemicalMixtures,

@@ -265,7 +265,14 @@ public final class FluidNetworkProtocolValidation {
 	}
 
 	private static void validateConfigurationCodecs() {
-		FluidProtocolOfferPayload offer = new FluidProtocolOfferPayload(FluidProtocol.serverOffer());
+		String registryFingerprint = "a".repeat(64);
+		cc.ecisr.mmm.worldprofile.WorldCapabilityProfile profile =
+				cc.ecisr.mmm.worldprofile.WorldCapabilityProfile.of(
+						java.util.EnumSet.allOf(cc.ecisr.mmm.worldprofile.WorldCapability.class),
+						new cc.ecisr.mmm.worldprofile.RegistryFingerprintSet(registryFingerprint,
+								registryFingerprint, registryFingerprint, registryFingerprint, registryFingerprint));
+		FluidProtocolOfferPayload offer = new FluidProtocolOfferPayload(
+				FluidProtocol.serverOffer(true, true, true, true), profile);
 		FluidProtocolOfferPayload decodedOffer;
 		FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
 		try {
@@ -275,6 +282,11 @@ public final class FluidNetworkProtocolValidation {
 			buffer.release();
 		}
 		require(decodedOffer.equals(offer), "configuration offer codec changed fields");
+		require(decodedOffer.worldProfileFingerprint().equals(profile.profileFingerprint())
+				&& decodedOffer.regionLayoutId().equals(profile.regionLayoutId())
+				&& decodedOffer.worldCapabilities().size()
+						== cc.ecisr.mmm.worldprofile.WorldCapability.values().length,
+				"configuration offer did not carry the complete world capability profile view");
 
 		FluidProtocolResponsePayload response = FluidProtocolResponsePayload.from(FluidProtocol.negotiate(offer.offer()));
 		buffer = new FriendlyByteBuf(Unpooled.buffer());

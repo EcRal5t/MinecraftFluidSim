@@ -22,9 +22,10 @@ CPU `FlipFluidDomain` 是规范求解器。GPU probe、客户端 renderer、tool
 ## 组件与数据流
 
 ```text
-数据包定义
-  -> material / chemical / granular / gas / thermal registry
-  -> world-local canonical registry snapshot + fingerprint
+数据包定义（只用于首次发布或 fingerprint 比较）
+  -> WorldCapabilityStartup
+  -> capability HEAD -> committed slot
+       -> immutable profile + material / chemical / granular / gas / thermal registry
 
 Minecraft 命令、方块、容器、实体与 chunk 事件
   -> FluidSimulationService                 世界主线程编排
@@ -117,9 +118,11 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 - **LOCKED**：磁盘格式、identity、registry fingerprint、generation、checksum 或 WAL 状态无法被唯一解释。原文件保留，拒绝任何会覆盖证据的操作。
 - **PAUSED**：当前库存可解释，但候选数值步越过物性有效域、容量、预算、审计或 wall-time 安全门。保留内存/已提交状态，允许修正外部条件后重试。
 
-region HEAD 是区域物理状态唯一提交点。ownership 与 container WAL 分别把世界方块和 actor item 收敛到该 HEAD；它们不能成为第二个物理真值。任何 publish 都必须遵守“完整写入、回读验证、HEAD 最后替换”。
+region HEAD 是区域物理状态唯一提交点。ownership 与 container WAL 分别把世界方块和 actor item 收敛到该 HEAD；它们不能成为第二个物理真值。任何 publish 都必须遵守“完整写入、回读验证、HEAD 最后替换”。region manifest 同时绑定 world capability profile fingerprint、五 registry 聚合 fingerprint、material fingerprint 和唯一语义 layout。
 
-world-local chemical、granular、gas 和 thermal registry snapshot 的首次发布同样必须回读验证、atomic rename 并同步目录 entry。reader 只接受当前 writer 的精确 compound 字段集合与 NBT 类型；额外字段也属于未知语义，必须保留 snapshot 并 LOCKED，不能忽略后再按当前定义重建。
+world capability bundle 把 profile 与 material、chemical、granular、gas、thermal 五份 registry snapshot 作为一个 generation 发布；slot 完整回读后才原子替换 capability HEAD。新世界固定六项能力。已有 HEAD 启动只读该 slot，当前数据包只比较 fingerprint。reader 只接受当前 writer 的精确字段、类型、generation、layout、依赖和 checksum；unknown/corrupt 或身份不一致原样保留并进入 `LOCKED_PROFILE`，不能用数据包重建。
+
+service 启动状态只有 `UNINITIALIZED`、`READY`、`LOCKED_PROFILE` 和 `POLICY_RESTRICTED`。只有 `READY` 可产生新区域权威数据；`POLICY_RESTRICTED` 仍可按 committed bundle discovery/recovery 和只读 Query，`LOCKED_PROFILE` 只允许诊断与显式维护。协议 offer 和 Query capability 都读取 service 持有的同一 profile；没有可读 profile 时不得伪造 pure layout。
 
 ## 线程与只读边界
 

@@ -11,12 +11,12 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 - 控制器区域必须有完整边界，所需 chunk 必须全部加载；Mod 不持有永久 chunk ticket。
 - 世界接管只处理纯原版水。ownership journal 和 WARNING 先发布，原版方块随后修改，region HEAD 最后提交。
 - 区域 checkpoint 使用双槽完整代次与 HEAD 最后发布。`regions recoverprevious` 只在当前 HEAD 恢复失败后，显式验证并激活紧邻的上一完整代。
-- 区域载荷必须与本次启动冻结的功能门完全一致。任何格式、功能布局、registry fingerprint、身份或账本不一致都会保留原文件并锁定，不改写载荷或猜测修复。
+- 世界能力由单一 capability bundle HEAD 提交；profile、material/chemical/granular/gas/thermal 五份 registry snapshot 必须来自同一 slot。区域载荷精确绑定 profile、聚合 fingerprint、material fingerprint 与语义 layout；任何不一致都会保留原文件并锁定。
 - 容器事务跨区域、物品和玩家/发射器持久域。actor 的 after-item 完成 durable save 前不得删除 WAL；未知、损坏或布局不一致的 WAL 保留并锁定。
 - `empty` 联合清空液体、连续凝聚相、active parcel 和 deposit，并把实际移除的物质与能量记入 sink；存在未决容器 WAL 或相变功时拒绝执行。
 - 可选 GPU probe 只读且不修改世界或存档；主 Mod 始终以 CPU 结果为规范。
 
-功能门只在服务器启动时读取。请在创建持久控制器区域前一次配置好需要的 `materials`、`chemistry`、`granular`、`precipitation`、`thermal` 和 `phasechange` 组合；之后改变组合不会改写现有区域。
+新世界首次启动固定发布 materials、chemistry、granular、precipitation、thermal 和 phasechange 六项能力及五份 registry snapshot。已有世界只从 capability HEAD 指向的 slot 恢复；当前数据包仅比较 canonical fingerprint，不能覆盖或补全已提交定义。`server.properties` 只控制新 controller、新原版水接管和预算；配置损坏时仍按 bundle 解释并恢复已有状态，但拒绝新 admission、transfer、step 和 checkpoint。
 
 ## 正常入口
 
@@ -34,7 +34,8 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 | 恢复上一完整 checkpoint | `/mmm regions recoverprevious <expectedCheckpoint>`；成功后退出并重新进入世界 |
 | 操作库存与碰撞 | `/mmm pour [1-16]`、`drain [1-16]`、`empty`、`refresh` |
 | 运行控制 | `/mmm run`、`pause`、`step [1-20]`、`status` |
-| 功能门 | `/mmm materials`、`chemistry`、`granular`、`precipitation`、`thermal`、`phasechange`、`worldbridge`；均在重启后生效 |
+| 世界能力（只读） | `/mmm materials`、`chemistry`、`granular`、`precipitation`、`thermal`、`phasechange` |
+| 运行策略 | `/mmm controllers [true|false]`、`worldbridge [true|false]`；只影响未来 admission/接管，不改变已提交载荷 |
 | 材料与界面调试 | `/mmm materialdemo`、`materialbucket ...`、`tensiondemo [angle]` |
 | 化学调试 | `/mmm chemistrydemo`、`reagent ...`、`chemstatus` |
 | 颗粒调试 | `/mmm granularcontainer ...`、`granstatus` |

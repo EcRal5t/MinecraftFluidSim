@@ -21,6 +21,7 @@ import cc.ecisr.mmm.granular.GranularTransferLedger;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.simulation.FluidSimulationService;
 import cc.ecisr.mmm.simulation.FluidRegion;
+import cc.ecisr.mmm.worldprofile.WorldCapability;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
@@ -120,36 +121,20 @@ public final class MmmCommands {
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
 										.executes(context -> audit(context, () -> setControllerFeature(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
 						.then(Commands.literal("materials")
-								.executes(context -> audit(context, () -> materialFeatureStatus(context.getSource())))
-								.then(Commands.argument("enabled", BoolArgumentType.bool())
-										.executes(context -> audit(context, () -> setMaterialFeature(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+								.executes(context -> audit(context, () -> materialFeatureStatus(context.getSource()))))
 						.then(Commands.literal("chemistry")
-								.executes(context -> audit(context, () -> chemistryFeatureStatus(context.getSource())))
-								.then(Commands.argument("enabled", BoolArgumentType.bool())
-										.executes(context -> audit(context, () -> setChemistryFeature(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+								.executes(context -> audit(context, () -> chemistryFeatureStatus(context.getSource()))))
 						.then(Commands.literal("chemstatus")
 								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.executes(context -> audit(context, () -> chemistryInventoryStatus(context.getSource()))))
 						.then(Commands.literal("granular")
-								.executes(context -> audit(context, () -> granularFeatureStatus(context.getSource())))
-								.then(Commands.argument("enabled", BoolArgumentType.bool())
-										.executes(context -> audit(context, () -> setGranularFeature(
-												context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+								.executes(context -> audit(context, () -> granularFeatureStatus(context.getSource()))))
 						.then(Commands.literal("precipitation")
-								.executes(context -> audit(context, () -> precipitationFeatureStatus(context.getSource())))
-								.then(Commands.argument("enabled", BoolArgumentType.bool())
-										.executes(context -> audit(context, () -> setPrecipitationFeature(
-												context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+								.executes(context -> audit(context, () -> precipitationFeatureStatus(context.getSource()))))
 						.then(Commands.literal("thermal")
-								.executes(context -> audit(context, () -> thermalFeatureStatus(context.getSource())))
-								.then(Commands.argument("enabled", BoolArgumentType.bool())
-										.executes(context -> audit(context, () -> setThermalFeature(
-												context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+								.executes(context -> audit(context, () -> thermalFeatureStatus(context.getSource()))))
 						.then(Commands.literal("phasechange")
-								.executes(context -> audit(context, () -> phaseChangeFeatureStatus(context.getSource())))
-								.then(Commands.argument("enabled", BoolArgumentType.bool())
-										.executes(context -> audit(context, () -> setPhaseChangeFeature(
-												context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
+								.executes(context -> audit(context, () -> phaseChangeFeatureStatus(context.getSource()))))
 						.then(Commands.literal("thermalsource")
 								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.executes(context -> audit(context, () -> thermalSourceStatus(context.getSource())))
@@ -477,50 +462,29 @@ public final class MmmCommands {
 
 	private static int controllerFeatureStatus(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		return succeed(source, "控制器功能门：" + (service.controllerFeatureEnabled() ? "开启" : "关闭"),
+		return succeed(source, "新控制器 admission 策略：" + (service.controllerFeatureEnabled() ? "允许" : "拒绝")
+				+ "；现有控制器的 discovery、恢复和选择不受影响",
 				service.controllerFeatureEnabled() ? 1 : 0);
 	}
 
 	private static int setControllerFeature(CommandSourceStack source, boolean enabled) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
 		String failure = service.setControllerFeatureEnabled(enabled);
-		if (failure != null) return fail(source, "控制器功能门未改变；配置原子发布失败：" + failure);
-		return succeed(source, "控制器功能门已" + (enabled ? "开启" : "关闭；现有控制器域已暂停但未删除"), 1);
+		if (failure != null) return fail(source, "控制器 admission 策略未改变；配置原子发布失败：" + failure);
+		return succeed(source, "新控制器 admission 已" + (enabled ? "允许" : "拒绝")
+				+ "；现有控制器状态不变", 1);
 	}
 
 	private static int materialFeatureStatus(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		boolean live = service.materialFeatureEnabled();
-		boolean configured = service.configuredMaterialFeatureEnabled();
-		String message = "材料功能门：本次启动" + (live ? "开启" : "关闭") + "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
-		return succeed(source, live == configured ? message : message + "；重启服务器后才会切换协议", live ? 1 : 0);
-	}
-
-	private static int setMaterialFeature(CommandSourceStack source, boolean enabled) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		String failure = service.setMaterialFeatureForRestart(enabled);
-		if (failure != null) return fail(source, "材料功能门未改变；配置原子发布失败：" + failure);
-		return succeed(source, "材料功能门配置已" + (enabled ? "开启" : "关闭")
-				+ "；本次启动仍为" + (service.materialFeatureEnabled() ? "开启" : "关闭") + "，重启服务器后生效", 1);
+		return succeed(source, service.worldCapabilityStatus(WorldCapability.MATERIALS),
+				service.materialFeatureEnabled() ? 1 : 0);
 	}
 
 	private static int chemistryFeatureStatus(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		boolean live = service.chemistryFeatureEnabled();
-		boolean configured = service.configuredChemistryFeatureEnabled();
-		String message = "化学功能门：本次启动" + (live ? "开启" : "关闭")
-				+ "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
-		return succeed(source, live == configured ? message : message + "；重启服务器后才会切换存档与协议",
-				live ? 1 : 0);
-	}
-
-	private static int setChemistryFeature(CommandSourceStack source, boolean enabled) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		String failure = service.setChemistryFeatureForRestart(enabled);
-		if (failure != null) return fail(source, "化学功能门未改变；配置原子发布失败：" + failure);
-		return succeed(source, "化学功能门配置已" + (enabled ? "开启" : "关闭")
-				+ "；本次启动仍为" + (service.chemistryFeatureEnabled() ? "开启" : "关闭")
-				+ "，重启服务器后生效", 1);
+		return succeed(source, service.worldCapabilityStatus(WorldCapability.CHEMISTRY),
+				service.chemistryFeatureEnabled() ? 1 : 0);
 	}
 
 	private static int chemistryInventoryStatus(CommandSourceStack source) {
@@ -530,72 +494,26 @@ public final class MmmCommands {
 
 	private static int granularFeatureStatus(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		boolean live = service.granularFeatureEnabled(), configured = service.configuredGranularFeatureEnabled();
-		String message = "颗粒功能门：本次启动" + (live ? "开启" : "关闭")
-				+ "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
-		return succeed(source, live == configured ? message : message + "；重启服务器后才会切换存档与协议",
-				live ? 1 : 0);
-	}
-
-	private static int setGranularFeature(CommandSourceStack source, boolean enabled) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		String failure = service.setGranularFeatureForRestart(enabled);
-		if (failure != null) return fail(source, "颗粒功能门未改变：" + failure);
-		return succeed(source, "颗粒功能门配置已" + (enabled ? "开启" : "关闭")
-				+ "；本次启动仍为" + (service.granularFeatureEnabled() ? "开启" : "关闭")
-				+ "，重启服务器后生效", 1);
+		return succeed(source, service.worldCapabilityStatus(WorldCapability.GRANULAR),
+				service.granularFeatureEnabled() ? 1 : 0);
 	}
 
 	private static int precipitationFeatureStatus(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		boolean live = service.precipitationFeatureEnabled(), configured = service.configuredPrecipitationFeatureEnabled();
-		String message = "沉淀功能门：本次启动" + (live ? "开启" : "关闭")
-				+ "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
-		return succeed(source, live == configured ? message : message + "；重启服务器后生效", live ? 1 : 0);
-	}
-
-	private static int setPrecipitationFeature(CommandSourceStack source, boolean enabled) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		String failure = service.setPrecipitationFeatureForRestart(enabled);
-		if (failure != null) return fail(source, "沉淀功能门未改变：" + failure);
-		return succeed(source, "沉淀功能门配置已" + (enabled ? "开启" : "关闭")
-				+ "；本次启动仍为" + (service.precipitationFeatureEnabled() ? "开启" : "关闭")
-				+ "，重启服务器后生效", 1);
+		return succeed(source, service.worldCapabilityStatus(WorldCapability.PRECIPITATION),
+				service.precipitationFeatureEnabled() ? 1 : 0);
 	}
 
 	private static int thermalFeatureStatus(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		boolean live = service.thermalFeatureEnabled(), configured = service.configuredThermalFeatureEnabled();
-		String message = "热学功能门：本次启动" + (live ? "开启" : "关闭")
-				+ "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
-		return succeed(source, live == configured ? message : message + "；重启服务器后才会切换存档与协议",
-				live ? 1 : 0);
-	}
-
-	private static int setThermalFeature(CommandSourceStack source, boolean enabled) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		String failure = service.setThermalFeatureForRestart(enabled);
-		if (failure != null) return fail(source, "热学功能门未改变：" + failure);
-		return succeed(source, "热学功能门配置已" + (enabled ? "开启" : "关闭")
-				+ "；本次启动仍为" + (service.thermalFeatureEnabled() ? "开启" : "关闭")
-				+ "，重启服务器后生效", 1);
+		return succeed(source, service.worldCapabilityStatus(WorldCapability.THERMAL),
+				service.thermalFeatureEnabled() ? 1 : 0);
 	}
 
 	private static int phaseChangeFeatureStatus(CommandSourceStack source) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		boolean live = service.phaseChangeFeatureEnabled(), configured = service.configuredPhaseChangeFeatureEnabled();
-		String message = "相变功能门：本次启动" + (live ? "开启" : "关闭")
-				+ "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
-		return succeed(source, live == configured ? message : message + "；重启服务器后生效", live ? 1 : 0);
-	}
-
-	private static int setPhaseChangeFeature(CommandSourceStack source, boolean enabled) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
-		String failure = service.setPhaseChangeFeatureForRestart(enabled);
-		if (failure != null) return fail(source, "相变功能门未改变：" + failure);
-		return succeed(source, "相变功能门配置已" + (enabled ? "开启" : "关闭")
-				+ "；本次启动仍为" + (service.phaseChangeFeatureEnabled() ? "开启" : "关闭")
-				+ "，重启服务器后生效", 1);
+		return succeed(source, service.worldCapabilityStatus(WorldCapability.PHASECHANGE),
+				service.phaseChangeFeatureEnabled() ? 1 : 0);
 	}
 
 	private static int granularInventoryStatus(CommandSourceStack source) {
@@ -607,16 +525,18 @@ public final class MmmCommands {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
 		boolean live = service.worldBridgeFeatureEnabled();
 		boolean configured = service.configuredWorldBridgeFeatureEnabled();
-		String message = "世界桥功能门：本次启动" + (live ? "开启" : "关闭") + "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
+		String message = "新原版水接管策略：本次启动" + (live ? "允许" : "拒绝")
+				+ "，配置（下次重启生效）" + (configured ? "允许" : "拒绝")
+				+ "；现有 ownership 恢复及 typed container transfer 不受影响";
 		return succeed(source, live == configured ? message : message + "；重启服务器后才会切换", live ? 1 : 0);
 	}
 
 	private static int setWorldBridgeFeature(CommandSourceStack source, boolean enabled) {
 		FluidSimulationService service = FluidSimulationService.get(source.getServer());
 		String failure = service.setWorldBridgeFeatureForRestart(enabled);
-		if (failure != null) return fail(source, "世界桥功能门未改变；配置原子发布失败：" + failure);
-		return succeed(source, "世界桥功能门配置已" + (enabled ? "开启" : "关闭")
-				+ "；本次启动仍为" + (service.worldBridgeFeatureEnabled() ? "开启" : "关闭")
+		if (failure != null) return fail(source, "原版水接管策略未改变；配置原子发布失败：" + failure);
+		return succeed(source, "新原版水接管配置已" + (enabled ? "允许" : "拒绝")
+				+ "；本次启动仍为" + (service.worldBridgeFeatureEnabled() ? "允许" : "拒绝")
 				+ "，重启服务器后生效；开启后新激活的控制器区域将一次性移除内部原版水并建立可恢复 ownership", 1);
 	}
 

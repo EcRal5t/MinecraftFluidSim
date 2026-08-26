@@ -46,7 +46,7 @@ public final class FluidTransferService {
 	/** Returns null when the transfer does not apply, so vanilla behaviour stays untouched. */
 	public static InteractionResult handlePlayerUse(ServerPlayer player, InteractionHand hand) {
 		FluidSimulationService service = FluidSimulationService.get(player.level().getServer());
-		if (!service.worldBridgeFeatureEnabled()) return null;
+		if (!service.authoritativeWritesReady()) return null;
 		ItemStack held = player.getItemInHand(hand);
 		if (held.isEmpty()) return null;
 
@@ -117,7 +117,7 @@ public final class FluidTransferService {
 	public static ItemStack handleDispenserUse(BlockSource source, ItemStack stack) {
 		FluidSimulationService service = FluidSimulationService.get(source.level().getServer());
 		boolean vanillaItem = stack.is(Items.WATER_BUCKET) || stack.is(Items.BUCKET);
-		if (!service.worldBridgeFeatureEnabled()) return vanillaItem ? null : stack;
+		if (!service.authoritativeWritesReady()) return vanillaItem ? null : stack;
 		TransferKind kind = classify(stack);
 		if (kind == TransferKind.NONE) return stack;
 		ServerLevel level = source.level();

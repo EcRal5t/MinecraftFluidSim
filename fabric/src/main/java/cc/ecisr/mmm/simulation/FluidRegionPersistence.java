@@ -3,6 +3,7 @@ package cc.ecisr.mmm.simulation;
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
+import cc.ecisr.mmm.fluid.FluidMaterial;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
@@ -16,8 +17,10 @@ import cc.ecisr.mmm.simulation.persistence.RegionManifest;
 import cc.ecisr.mmm.simulation.persistence.RegionState;
 import cc.ecisr.mmm.simulation.persistence.RegionStateFiles;
 import cc.ecisr.mmm.simulation.persistence.RegionStateLayout;
+import cc.ecisr.mmm.simulation.persistence.WorldCapabilityLayoutResolver;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
+import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.NbtUtils;
@@ -41,6 +44,10 @@ final class FluidRegionPersistence {
 	private final RegionStateFiles files;
 	private final OwnershipStore ownershipStore;
 	private final boolean materialsEnabled;
+	private final List<FluidMaterial> expectedMaterialPalette;
+	private final WorldCapabilityProfile capabilityProfile;
+	private final boolean worldCapabilityRequired;
+	private final RegionStateLayout expectedLayout;
 	private final boolean chemistryEnabled;
 	private final ChemicalRegistry chemicalRegistry;
 	private final boolean granularEnabled;
@@ -92,6 +99,40 @@ final class FluidRegionPersistence {
 			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
 			int maximumThermalSubsteps
 	) {
+		this(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry, granularEnabled, granularRegistry,
+				precipitationEnabled, thermalEnabled, thermalRegistry, gasRegistry, maximumThermalSubsteps, null, null, false);
+	}
+
+	FluidRegionPersistence(
+			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
+			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled,
+			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
+			int maximumThermalSubsteps, List<FluidMaterial> expectedMaterialPalette
+	) {
+		this(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry, granularEnabled, granularRegistry,
+				precipitationEnabled, thermalEnabled, thermalRegistry, gasRegistry, maximumThermalSubsteps,
+				expectedMaterialPalette, null, false);
+	}
+
+	FluidRegionPersistence(
+			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
+			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled,
+			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
+			int maximumThermalSubsteps, List<FluidMaterial> expectedMaterialPalette,
+			WorldCapabilityProfile capabilityProfile
+	) {
+		this(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry, granularEnabled, granularRegistry,
+				precipitationEnabled, thermalEnabled, thermalRegistry, gasRegistry, maximumThermalSubsteps,
+				expectedMaterialPalette, capabilityProfile, false);
+	}
+
+	FluidRegionPersistence(
+			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
+			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled,
+			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
+			int maximumThermalSubsteps, List<FluidMaterial> expectedMaterialPalette,
+			WorldCapabilityProfile capabilityProfile, boolean worldCapabilityRequired
+	) {
 		files = thermalEnabled
 				? new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry)
 				: granularRegistry == null
@@ -99,6 +140,13 @@ final class FluidRegionPersistence {
 				: new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry);
 		ownershipStore = new OwnershipStore(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry);
 		this.materialsEnabled = materialsEnabled;
+		this.expectedMaterialPalette = expectedMaterialPalette == null ? null : List.copyOf(expectedMaterialPalette);
+		this.capabilityProfile = capabilityProfile;
+		this.worldCapabilityRequired = worldCapabilityRequired;
+		this.expectedLayout = capabilityProfile == null
+				? WorldCapabilityLayoutResolver.fixtureLayout(
+						materialsEnabled, chemistryEnabled, granularEnabled, thermalEnabled)
+				: WorldCapabilityLayoutResolver.resolve(capabilityProfile);
 		this.chemistryEnabled = chemistryEnabled;
 		this.chemicalRegistry = chemicalRegistry;
 		this.granularEnabled = granularEnabled;
@@ -557,7 +605,7 @@ final class FluidRegionPersistence {
 						+ invalidTopology.getMessage() + "; previous HEAD remains authoritative",
 						invalidTopology);
 			}
-			return RegionState.captureThermal(region, generation);
+			return bindWorldCapability(RegionState.captureThermal(region, generation));
 		}
 		if (granularEnabled) {
 			if (granularRegistry == null) throw new IOException("Authoritative granular registry is unavailable");
@@ -570,17 +618,21 @@ final class FluidRegionPersistence {
 				region.domain().bindGranular(granularRegistry, region.domain().materialRegistry());
 			}
 			enablePrecipitationIfConfigured(region);
-			return RegionState.captureGranular(region, generation);
+			return bindWorldCapability(RegionState.captureGranular(region, generation));
 		}
 		if (chemistryEnabled) {
 			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
 			if (!region.domain().hasMaterialState()) throw new IOException("Chemistry requires a material-bound domain");
 			if (!region.domain().hasChemistryState()) region.domain().bindChemistry(chemicalRegistry);
-			return RegionState.captureChemical(region, generation);
+			return bindWorldCapability(RegionState.captureChemical(region, generation));
 		}
-		return region.domain().hasMaterialState()
+		return bindWorldCapability(region.domain().hasMaterialState()
 				? RegionState.captureMaterial(region, generation)
-				: RegionState.capture(region, generation);
+				: RegionState.capture(region, generation));
+	}
+
+	private RegionState bindWorldCapability(RegionState state) {
+		return capabilityProfile == null ? state : state.bindWorldCapabilityProfile(capabilityProfile);
 	}
 
 	private void restoreThermalGeneration(FluidRegion region, RegionState state) throws IOException {
@@ -644,16 +696,17 @@ final class FluidRegionPersistence {
 	}
 
 	private void validateFeatureShape(RegionManifest manifest) throws IOException {
-		RegionStateLayout expectedLayout = thermalEnabled ? RegionStateLayout.THERMAL
-				: granularEnabled ? RegionStateLayout.GRANULAR
-				: chemistryEnabled ? RegionStateLayout.CHEMICAL
-				: materialsEnabled ? RegionStateLayout.MATERIAL : RegionStateLayout.PURE;
+		WorldCapabilityLayoutResolver.validateManifestBinding(
+				capabilityProfile, manifest, worldCapabilityRequired);
 		if (manifest.layout() != expectedLayout
 				|| manifest.hasChemicalState() != chemistryEnabled
 				|| manifest.hasGranularState() != granularEnabled
 				|| manifest.hasThermalState() != thermalEnabled
 				|| manifest.hasGasState() != thermalEnabled) {
 			throw new IOException("Persisted region feature layout does not match the active server feature gates; recreate the region with the current configuration");
+		}
+		if (expectedMaterialPalette != null && !manifest.materialPalette().equals(expectedMaterialPalette)) {
+			throw new IOException("Persisted region material palette does not match the committed world material snapshot");
 		}
 	}
 

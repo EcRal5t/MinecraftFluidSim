@@ -114,7 +114,7 @@ p = P0 * (Vstd / Vavailable) * (T / T0)
 
 ## 相变
 
-相变门依赖热学门。每个 transition 用完整最小守恒量子定义，运行时按可用能量、库存、目标容量、饱和条件和统一操作预算求最大整数 extent。
+profile 中的 phasechange capability 依赖 thermal。每个 transition 用完整最小守恒量子定义，运行时按可用能量、库存、目标容量、饱和条件和统一操作预算求最大整数 extent。
 
 ### 固液
 

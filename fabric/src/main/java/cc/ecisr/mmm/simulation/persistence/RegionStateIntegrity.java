@@ -51,6 +51,9 @@ final class RegionStateIntegrity {
 		return checksum(out -> {
 			writeIdentity(out, manifest.regionId().getMostSignificantBits(), manifest.regionId().getLeastSignificantBits(),
 					manifest.dimensionId(), manifest.checkpointGeneration(), manifest.layout());
+			out.writeUTF(manifest.capabilityProfileFingerprint());
+			out.writeUTF(manifest.registryAggregateFingerprint());
+			out.writeUTF(manifest.materialRegistryFingerprint());
 			out.writeLong(manifest.networkGeneration());
 			writeBlockPos(out, manifest.origin());
 			out.writeInt(manifest.sizeX()); out.writeInt(manifest.sizeY()); out.writeInt(manifest.sizeZ());

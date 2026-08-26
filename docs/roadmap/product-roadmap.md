@@ -16,7 +16,7 @@
 
 ## 当前产品基座
 
-当前生产边界是最多 4 个显式闭壳 controller region，CPU `FlipFluidDomain` 为权威核心。边界和控制器已有生存配方与创造栏入口，激活后自动运行并持久保存玩家暂停意图，`/mmm` 不再是正常生命周期的前置条件。已经具备：连续体积 PIC/FLIP、可变密度材料、液气/液液界面与润湿、密闭气腔、world ownership、玩家/发射器容器事务、守恒化学、active/deposit 颗粒、总内能、导热、反应热以及固液/气液相变。
+当前生产边界是最多 4 个显式闭壳 controller region，CPU `FlipFluidDomain` 为权威核心。边界和控制器已有生存配方与创造栏入口，激活后自动运行并持久保存玩家暂停意图，`/mmm` 不再是正常生命周期的前置条件。世界首次发布固定六项 capability，并以单一 HEAD 原子绑定 profile 与 material/chemical/granular/gas/thermal 五份 registry；service、region admission、Query 和网络协议共享该 profile。已经具备：连续体积 PIC/FLIP、可变密度材料、液气/液液界面与润湿、密闭气腔、world ownership、玩家/发射器容器事务、守恒化学、active/deposit 颗粒、总内能、导热、反应热以及固液/气液相变。
 
 这一基座的限制也必须如实保留：
 

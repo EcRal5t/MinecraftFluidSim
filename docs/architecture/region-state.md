@@ -12,7 +12,7 @@ slot-b/manifest.nbt + section-*.nbt
 
 `RegionState` 在 server thread 上捕获/重建完整逻辑状态；`RegionStateCodec` 只编解码 NBT；`RegionStateIntegrity` 生成与 NBT 字段顺序无关的规范 CRC32C；`RegionStateFiles` 只管理双槽、回读验证与原子 HEAD。任何业务层都不能直接写 slot 或把目录存在当成已提交。
 
-HEAD 使用固定 `region-head` schema；manifest 与每个 section 使用语义 `Layout`：`pure`、`material`、`chemical`、`granular` 或 `thermal`。其中 `granular`、`thermal` 的附加 capability 精确声明是否同时携带 chemistry/granular 状态。启动时由冻结的功能门得到唯一预期 layout 和 registry fingerprint，存档必须精确匹配；未知 layout、未知必需 extension、缺字段或额外能力都不能按数字顺序猜测兼容性，也没有自动迁移或默认补全。
+HEAD 使用固定 `region-head` schema；manifest 与每个 section 使用语义 `Layout`：`pure`、`material`、`chemical`、`granular` 或 `thermal`。其中 `granular`、`thermal` 的附加 capability 精确声明是否同时携带 chemistry/granular 状态。唯一预期 layout 由 committed world capability profile 推导；manifest 必须精确绑定 profile fingerprint、registry aggregate fingerprint 和 material registry fingerprint。未知 layout、未知必需 extension、缺字段或额外能力都不能按数字顺序猜测兼容性，也没有自动迁移或默认补全。
 
 ## 提交模型
 
@@ -44,7 +44,7 @@ HEAD 发布前，当前已提交 generation 仍是唯一权威状态。失败的
 - region UUID、dimension、network/checkpoint generation、origin、网格和 solver config；
 - controller footprint、运行态和 marker 预算；
 - Minecraft 对齐的 section 描述、marker ordinal、位置/体积、速度和 solid mask；
-- 当前功能门要求的材料、化学、颗粒、气体、热能和 pending phase-work 载荷；
+- committed profile 要求的材料、化学、颗粒、气体、热能和 pending phase-work 载荷；
 - manifest、section 与各独立库存的总账和 CRC。
 
 所有 required payload 必须属于同一 region、dimension 和 generation。runtime handle、平滑 density、pressure、mesh 和 UI 读数不持久化。
@@ -56,7 +56,7 @@ manifest 是无需分配 solver 即可审计和预算 admission 的索引，保�
 - region/dimension/checkpoint/network identity；
 - origin、grid、完整 `FluidSolverConfig`、预留 marker capacity 与持久 runtime 状态；
 - controller position、内部/边界 block 集和 required chunk footprint；
-- marker/volume/mass 总账、material/species palette 与 registry identity；
+- world capability profile/aggregate/material fingerprint，marker/volume/mass 总账、material/species palette 与 registry identity；
 - 严格排序的 section descriptor：坐标、marker 数、体积、质量和 section checksum；
 - granular、gas、thermal、pending phase-work 等 manifest extension 与各自总账；
 - 覆盖上述规范编码的 manifest checksum。
@@ -81,7 +81,7 @@ section、palette、mixture、deposit group、gas node 和 ledger 都必须采�
 
 ## 功能布局
 
-当前 runtime 根据启动时冻结的功能门选择一种区域载荷：纯水、材料、化学、颗粒或完整热学。读取时必须与同一次启动的门、registry snapshot 和 capability 完全一致。
+当前 runtime 只通过 `WorldCapabilityLayoutResolver` 从 committed profile 选择一种区域载荷：纯水、材料、化学、颗粒或完整热学。读取时必须与同一个 bundle slot 的 profile、registry snapshot 和 capability 完全一致。
 
 不执行跨布局改写。布局、fingerprint、身份、总账或 required extension 不一致时，文件原样保留并进入 LOCKED。
 
@@ -98,7 +98,7 @@ section、palette、mixture、deposit group、gas node 和 ledger 都必须采�
 
 ## 读取与 admission
 
-启动顺序是先加载并冻结 world registries，再扫描 region-state root。扫描遇到非 UUID 条目、非目录、损坏 HEAD、未知必需布局或 checksum/identity 失败时保留原路径为 issue。若无法从路径安全识别 region，禁止创建所有新区；若能识别，则只锁对应 region。
+启动先由 world capability HEAD 唯一选择 committed slot，严格回读 profile 和五 registry snapshot，再扫描 region-state root。已有 HEAD 不调用任何单 registry `loadOrCreate`；当前数据包只做 fingerprint 比较。扫描遇到非 UUID 条目、非目录、损坏 HEAD、profile/layout/fingerprint 不匹配或 checksum/identity 失败时保留原路径为 issue。若无法从路径安全识别 region，禁止创建所有新区；若能识别，则只锁对应 region。
 
 完整恢复按以下顺序：
 

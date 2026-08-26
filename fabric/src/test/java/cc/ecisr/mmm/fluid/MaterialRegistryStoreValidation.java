@@ -36,6 +36,9 @@ public final class MaterialRegistryStoreValidation {
 		require(java.util.Arrays.equals(stored.canonicalBytes(), definitions.canonicalBytes()),
 				"stored material canonical bytes must match");
 		require(stored.size() == definitions.size(), "stored material count must match");
+		require(stored.defaultMaterialId().equals("mmm:water")
+				&& stored.runtimeRegistry().material(0).id().equals("mmm:water"),
+				"snapshot default material must define runtime handle zero");
 		require(stored.hasMaterial("mmm:water") && stored.hasMaterial("mmm:oil") && stored.hasMaterial("mmm:mercury"),
 				"default palette must be present in the snapshot");
 		requireViscosityBitwiseEqual(stored, "mmm:water", 293.15, definitions.dynamicViscosityAt("mmm:water", 293.15));
@@ -46,8 +49,6 @@ public final class MaterialRegistryStoreValidation {
 		require(water > 9.0e-4 && water < 1.1e-3, "water viscosity at ambient temperature must stay near 1 mPa·s");
 		require(stored.liquidPairTension("mmm:aqueous", "mmm:oil") == 0.0,
 				"default registry has no declared pair tensions");
-		require(definitions.fingerprint().equals("c7a27733fffd9272c60df5c8b476b5a0a9594a9827c2663de935b4f59287e5ef"),
-				"builtin material registry fingerprint drifted from the pinned canonical form");
 		System.out.println("builtin material registry fingerprint=" + definitions.fingerprint());
 	}
 

@@ -101,12 +101,19 @@ public final class MaterialRegistry {
 
 	private final List<MaterialEntry> entries;
 	private final Map<String, MaterialEntry> entryById;
+	private final String defaultMaterialId;
 	private final List<String> miscibilityGroups;
 	private final List<LiquidPairTension> pairTensions;
 	private final byte[] canonicalBytes;
 	private final String fingerprint;
 
 	public MaterialRegistry(List<MaterialEntry> entries, List<LiquidPairTension> pairTensions) {
+		this(entries == null || entries.isEmpty() || entries.getFirst() == null
+				? null : entries.getFirst().material().id(), entries, pairTensions);
+	}
+
+	public MaterialRegistry(String defaultMaterialId, List<MaterialEntry> entries,
+			List<LiquidPairTension> pairTensions) {
 		if (entries == null || entries.isEmpty() || entries.size() > MAX_MATERIALS) {
 			throw new IllegalArgumentException("Material registry is empty or over budget");
 		}
@@ -115,10 +122,14 @@ public final class MaterialRegistry {
 		HashMap<String, MaterialEntry> byId = new HashMap<>();
 		TreeSet<String> groups = new TreeSet<>();
 		for (MaterialEntry entry : canonicalEntries) {
+			if (entry == null) throw new IllegalArgumentException("Material definition is missing");
 			if (byId.put(entry.material().id(), entry) != null) {
 				throw new IllegalArgumentException("Duplicate material id " + entry.material().id());
 			}
 			groups.add(entry.material().miscibilityGroup());
+		}
+		if (defaultMaterialId == null || !byId.containsKey(defaultMaterialId)) {
+			throw new IllegalArgumentException("Default material is missing from the material registry");
 		}
 		ArrayList<LiquidPairTension> canonicalPairs = new ArrayList<>();
 		if (pairTensions != null) {
@@ -141,6 +152,7 @@ public final class MaterialRegistry {
 		}
 		this.entries = List.copyOf(canonicalEntries);
 		this.entryById = Map.copyOf(byId);
+		this.defaultMaterialId = defaultMaterialId;
 		this.miscibilityGroups = List.copyOf(groups);
 		this.pairTensions = List.copyOf(canonicalPairs);
 		this.canonicalBytes = encodeCanonical();
@@ -148,6 +160,7 @@ public final class MaterialRegistry {
 	}
 
 	public List<MaterialEntry> entries() { return entries; }
+	public String defaultMaterialId() { return defaultMaterialId; }
 	public List<String> miscibilityGroups() { return miscibilityGroups; }
 	public List<LiquidPairTension> pairTensions() { return pairTensions; }
 	public int size() { return entries.size(); }
@@ -164,6 +177,26 @@ public final class MaterialRegistry {
 	public boolean declaresViscosity(String id) { return entry(id).declaresViscosity(); }
 
 	public double dynamicViscosityAt(String id, double temperatureK) { return entry(id).dynamicViscosityAt(temperatureK); }
+
+	/** Builds process-local handles from the snapshot's explicit default followed by canonical stable IDs. */
+	public FluidMaterialRegistry runtimeRegistry() {
+		ArrayList<FluidMaterial> materials = new ArrayList<>(entries.size());
+		materials.add(entry(defaultMaterialId).material());
+		for (MaterialEntry entry : entries) {
+			if (!entry.material().id().equals(defaultMaterialId)) materials.add(entry.material());
+		}
+		TreeMap<String, Integer> phaseByGroup = new TreeMap<>();
+		for (FluidMaterial material : materials) {
+			phaseByGroup.computeIfAbsent(material.miscibilityGroup(), ignored -> phaseByGroup.size());
+		}
+		ArrayList<FluidMaterialRegistry.LiquidPairTension> runtimePairs = new ArrayList<>(pairTensions.size());
+		for (LiquidPairTension pair : pairTensions) {
+			runtimePairs.add(new FluidMaterialRegistry.LiquidPairTension(
+					phaseByGroup.get(pair.firstMiscibilityGroup()), phaseByGroup.get(pair.secondMiscibilityGroup()),
+					pair.tension()));
+		}
+		return new FluidMaterialRegistry(materials, runtimePairs);
+	}
 
 	public double liquidPairTension(String firstGroup, String secondGroup) {
 		String low = firstGroup.compareTo(secondGroup) <= 0 ? firstGroup : secondGroup;
@@ -184,7 +217,8 @@ public final class MaterialRegistry {
 
 	private byte[] encodeCanonical() {
 		StringBuilder out = new StringBuilder(1024).append("mmm-material-registry\n")
-				.append("units=").append(UNIT_SYSTEM_ID).append('\n');
+				.append("units=").append(UNIT_SYSTEM_ID).append('\n')
+				.append("default=").append(defaultMaterialId).append('\n');
 		for (MaterialEntry entry : entries) {
 			FluidMaterial material = entry.material();
 			out.append("M|").append(material.id()).append('|')

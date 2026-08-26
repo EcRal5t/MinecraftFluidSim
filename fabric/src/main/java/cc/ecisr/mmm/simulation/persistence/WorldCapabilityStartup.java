@@ -34,6 +34,11 @@ public final class WorldCapabilityStartup {
 				return Result.locked(invalidCandidate);
 			}
 		}
+		if (!policyAllowsAdmission) {
+			IOException restricted = new IOException("Server policy prevents first world capability publication");
+			return presence == WorldCapabilityBundleStore.Presence.EMPTY
+					? Result.uninitialized(restricted) : Result.locked(restricted);
+		}
 
 		WorldCapabilityBundleStore.Definitions definitions;
 		try {

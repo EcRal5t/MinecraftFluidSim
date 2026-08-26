@@ -30,6 +30,9 @@ final class RegionStateCodec {
 
 	CompoundTag encodeManifest(RegionManifest manifest) {
 		CompoundTag root = identity(manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(), manifest.layout());
+		root.putString("CapabilityProfileFingerprint", manifest.capabilityProfileFingerprint());
+		root.putString("RegistryAggregateFingerprint", manifest.registryAggregateFingerprint());
+		root.putString("MaterialRegistryFingerprint", manifest.materialRegistryFingerprint());
 		root.putLong("NetworkGeneration", manifest.networkGeneration());
 		root.putLong("Origin", manifest.origin().asLong());
 		root.putInt("SizeX", manifest.sizeX()); root.putInt("SizeY", manifest.sizeY()); root.putInt("SizeZ", manifest.sizeZ());
@@ -71,6 +74,9 @@ final class RegionStateCodec {
 
 	RegionManifest decodeManifest(CompoundTag root) throws IOException {
 		Identity identity = decodeIdentity(root, "manifest");
+		require(root, "CapabilityProfileFingerprint", Tag.TAG_STRING);
+		require(root, "RegistryAggregateFingerprint", Tag.TAG_STRING);
+		require(root, "MaterialRegistryFingerprint", Tag.TAG_STRING);
 		require(root, "NetworkGeneration", Tag.TAG_LONG); require(root, "Origin", Tag.TAG_LONG);
 		require(root, "SizeX", Tag.TAG_INT); require(root, "SizeY", Tag.TAG_INT); require(root, "SizeZ", Tag.TAG_INT);
 		require(root, "Solver", Tag.TAG_COMPOUND); require(root, "MarkerBudget", Tag.TAG_LONG);
@@ -126,7 +132,9 @@ final class RegionStateCodec {
 			chemicalResidualBits = root.getLongOr("ChemicalResidualBits", 0L);
 		}
 		try {
-			return new RegionManifest(identity.layout(), identity.id(), identity.dimension(), identity.generation(), root.getLongOr("NetworkGeneration", -1L),
+			return new RegionManifest(identity.layout(), root.getStringOr("CapabilityProfileFingerprint", ""),
+					root.getStringOr("RegistryAggregateFingerprint", ""), root.getStringOr("MaterialRegistryFingerprint", ""),
+					identity.id(), identity.dimension(), identity.generation(), root.getLongOr("NetworkGeneration", -1L),
 					BlockPos.of(root.getLongOr("Origin", 0L)), root.getIntOr("SizeX", -1), root.getIntOr("SizeY", -1), root.getIntOr("SizeZ", -1),
 					decodeConfig(root.getCompoundOrEmpty("Solver")), root.getLongOr("MarkerBudget", -1L),
 					decodeRuntime(root.getCompoundOrEmpty("Runtime")), decodeFootprint(root.getCompoundOrEmpty("Footprint")),

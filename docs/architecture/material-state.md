@@ -4,14 +4,14 @@
 
 - 每个 marker 独立保存体积、质量和稳定材料身份。
 - 区域总量与逐材料体积/质量账本必须由 marker 精确和闭合。
-- `FluidMaterialRegistry` 是运行时材料定义入口；持久化和容器使用稳定 ID，不保存运行时 handle。
+- world-local `MaterialRegistry` 是持久定义真值，显式保存 default material；`FluidMaterialRegistry` 只是从 snapshot 构造的运行时 handle/pair view。持久化和容器使用稳定 ID，不保存运行时 handle。
 - 当前机械定义包含 stable ID、参考密度、miscibility group、液气表面张力和接触角；液液张力由 registry 的 phase 无序对表给出。
-- 显示颜色来自独立只读 palette。当前没有把每液体黏度作为 `FluidMaterial` 的权威字段；颗粒阻力使用 granular carrier 自己声明的流体参数。
+- 显示颜色来自独立只读 palette。每种液体的动力黏度 `mu(T)` 由 material registry 的有界分段线性曲线定义；越出声明温域拒绝求值，不能钳制。颗粒阻力仍使用 granular carrier 自己声明且绑定的流体参数。
 - 只有 marker 质量和体积参与库存结算；参考密度用于创建、校验和状态函数绑定，不能覆盖已有 marker 质量。
 
 ## Registry 与运行时 handle
 
-定义按声明顺序建立稠密 material handle；stable ID 必须是合法 Minecraft identifier 且唯一。miscibility group 再映射为 phase handle：同组材料不生成内部液液界面，不同组材料保持 phase 分区。
+snapshot 按 stable ID 规范排序并保存显式 default material。构造运行时 registry 时 default 固定为 material handle 0，其余材料按 stable ID 排列；不能依赖 NBT 列表或 map 遍历顺序猜默认材料。miscibility group 再按这一运行时材料顺序映射 phase handle：同组材料不生成内部液液界面，不同组材料保持 phase 分区。
 
 handle 只为了数组索引。checkpoint 保存 canonical material palette，容器保存 stable ID；恢复时先验证完整 palette/registry identity，再建立当前进程 handle。不能把一次进程中的整数 handle 写入长期状态。
 
@@ -55,6 +55,6 @@ volume_m3 = marker_normalized_volume * cellSize^3
 
 抽取先以 double 精确量预检，再按整 marker 与必要尾拆分生成实际 settlement；物品必须能表示实际 volume、每材料 mass 和所有附加化学/热侧列。请求量与实际可表示量不一致时，WAL 记录实际量，不用请求量伪造闭合。
 
-## 功能门
+## World capability
 
-材料门在启动时冻结。持久区域的载荷形状必须与当前门完全一致；不一致时保留 checkpoint 并锁定，不自动增删材料状态。
+material capability 与 material registry fingerprint 在 world capability bundle 中一次冻结。持久区域的 profile/aggregate/material fingerprint、完整 palette 和载荷形状必须与 committed bundle 一致；不一致时保留 checkpoint 并锁定，不自动增删或从内置材料补全状态。

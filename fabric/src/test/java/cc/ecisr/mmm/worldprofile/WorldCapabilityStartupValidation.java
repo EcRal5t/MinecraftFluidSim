@@ -20,11 +20,45 @@ public final class WorldCapabilityStartupValidation {
 
 	public static void run() {
 		missingFirstDefinitionsStayUninitialized();
+		policyPreventsFirstPublication();
 		committedBundleStaysReadyWithoutCurrentDefinitions();
 		policyAndDefinitionMismatchDoNotChangeBundleTruth();
 		completeSlotRecoversWithoutCurrentDefinitions();
 		knownStagingRestartsButCorruptionLocks();
 		committedCorruptionLocks();
+	}
+
+	private static void policyPreventsFirstPublication() {
+		Path root = null;
+		Path stagingRoot = null;
+		try {
+			root = Files.createTempDirectory("mmm-world-capability-policy-first-publication-");
+			WorldCapabilityBundleStore store = store(root);
+			WorldCapabilityStartup.Result result = WorldCapabilityStartup.start(store,
+					WorldCapabilityBundleStoreValidation::definitions, false);
+			require(result.state() == WorldCapabilityStartup.State.UNINITIALIZED && result.bundle() == null,
+					"restricted policy admitted a new world capability authority");
+			require(store.inspect() == WorldCapabilityBundleStore.Presence.EMPTY,
+					"restricted policy published a first world capability bundle");
+
+			stagingRoot = Files.createTempDirectory("mmm-world-capability-policy-staging-");
+			WorldCapabilityBundleStore staging = store(stagingRoot);
+			WorldCapabilityBundleStore.Definitions definitions = WorldCapabilityBundleStoreValidation.definitions();
+			expectIo(() -> staging.openOrPublish(definitions, boundary -> {
+				if (boundary.phase() == WorldCapabilityBundleStore.PublicationPhase.STAGING_MANIFEST_WRITTEN) {
+					throw new IOException("injected publication interruption");
+				}
+			}), "staging policy fixture did not interrupt publication");
+			WorldCapabilityStartup.Result locked = WorldCapabilityStartup.start(staging, () -> definitions, false);
+			require(locked.state() == WorldCapabilityStartup.State.LOCKED_PROFILE
+					&& staging.inspect() == WorldCapabilityBundleStore.Presence.STAGING,
+					"restricted policy modified or republished an uncommitted staging tree");
+		} catch (IOException failure) {
+			throw new AssertionError("first-publication policy validation failed", failure);
+		} finally {
+			deleteTree(root);
+			deleteTree(stagingRoot);
+		}
 	}
 
 	private static void missingFirstDefinitionsStayUninitialized() {
@@ -74,7 +108,8 @@ public final class WorldCapabilityStartupValidation {
 			WorldCapabilityBundleStore store = store(root);
 			WorldCapabilityBundleStore.Definitions original = WorldCapabilityBundleStoreValidation.definitions();
 			WorldCapabilityStartup.Result ready = WorldCapabilityStartup.start(store, () -> original, true);
-			MaterialRegistry changedMaterial = new MaterialRegistry(original.material().entries(), List.of(
+			MaterialRegistry changedMaterial = new MaterialRegistry(original.material().defaultMaterialId(),
+					original.material().entries(), List.of(
 					new MaterialRegistry.LiquidPairTension("mmm:aqueous", "mmm:oil", Math.nextUp(0.0))));
 			WorldCapabilityBundleStore.Definitions changed = new WorldCapabilityBundleStore.Definitions(
 					changedMaterial, original.chemical(), original.granular(), original.gas(), original.thermal());

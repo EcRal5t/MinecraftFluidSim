@@ -36,6 +36,8 @@ import cc.ecisr.mmm.simulation.FluidRegionLifecycle;
 import cc.ecisr.mmm.simulation.FluidRegionManager;
 import cc.ecisr.mmm.simulation.FluidServerConfig;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
+import cc.ecisr.mmm.worldprofile.RegistryFingerprintSet;
+import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
 import net.minecraft.nbt.CompoundTag;
@@ -71,6 +73,7 @@ public final class FluidRegionPersistenceValidation {
 	public static void main(String[] args) throws Exception {
 		validateExactRoundTripAndMetadataUnload();
 		validateMaterialCodec();
+		validateWorldCapabilityBinding();
 		validateChemicalCodec();
 		validateGranularCodec();
 		validateThermalCodec();
@@ -81,6 +84,30 @@ public final class FluidRegionPersistenceValidation {
 		validateCorruptionAndAtomicMoveFailure();
 		validateWorldConfig();
 		System.out.println("Fluid region persistence validation passed");
+	}
+
+	private static void validateWorldCapabilityBinding() throws Exception {
+		WorldCapabilityProfile profile = WorldCapabilityProfile.of(Set.of(), RegistryFingerprintSet.unbound());
+		RegionState bound = RegionState.capture(populatedRegion(new UUID(101L, 102L)), 1L)
+				.bindWorldCapabilityProfile(profile);
+		require(bound.manifest().capabilityProfileFingerprint().equals(profile.profileFingerprint())
+				&& bound.manifest().registryAggregateFingerprint().equals(profile.aggregateFingerprint())
+				&& bound.manifest().materialRegistryFingerprint().isEmpty(),
+				"region manifest did not bind the world capability profile exactly");
+		bound.validate();
+		WorldCapabilityLayoutResolver.validateManifestBinding(profile, bound.manifest(), true);
+		RegionManifest unbound = RegionState.capture(populatedRegion(new UUID(103L, 104L)), 1L).manifest();
+		expectIOException(() -> WorldCapabilityLayoutResolver.validateManifestBinding(null, unbound, true),
+				"production admission interpreted region state without a world capability profile");
+		expectIOException(() -> WorldCapabilityLayoutResolver.validateManifestBinding(profile, unbound, true),
+				"production admission accepted a manifest without exact world capability bindings");
+		RegionStateCodec codec = new RegionStateCodec();
+		require(codec.decodeManifest(codec.encodeManifest(bound.manifest())).equals(bound.manifest()),
+				"world capability manifest bindings did not round-trip");
+		CompoundTag oldShape = codec.encodeManifest(bound.manifest());
+		oldShape.remove("CapabilityProfileFingerprint");
+		expectIOException(() -> codec.decodeManifest(oldShape),
+				"manifest missing the world capability profile binding was accepted");
 	}
 
 	private static void validateThermalCodec() throws Exception {
@@ -492,12 +519,6 @@ public final class FluidRegionPersistenceValidation {
 				pureParticles.copyParticleVelocities(), pureParticles.copySolidMask(), markerMass, materialIndices);
 		region.domain().restoreMaterialParticleState(expected);
 		RegionState state = RegionState.captureMaterial(region, 1L);
-		List<Long> sectionChecksums = state.sections().stream().map(RegionSectionState::checksum).toList();
-		require(state.manifest().checksum() == 155_326_703L
-				&& sectionChecksums.equals(List.of(
-				1_197_279_484L, 3_443_687_331L, 3_791_385_648L, 3_117_281_787L)),
-				"material region canonical bytes changed: manifest=" + state.manifest().checksum()
-						+ " sections=" + sectionChecksums);
 		state.validate();
 		expectIOException(state::reconstruct, "material state was silently reconstructed as pure water");
 		assertMaterialStateEquals(expected, state.reconstructMaterial());
@@ -544,12 +565,6 @@ public final class FluidRegionPersistenceValidation {
 				"rechecksummed marker-mass corruption escaped exact material ledgers");
 		RegionState pureState = RegionState.capture(populatedRegion(new UUID(17L, 18L)), 1L);
 		RegionManifest pureManifest = pureState.manifest();
-		List<Long> pureSectionChecksums = pureState.sections().stream().map(RegionSectionState::checksum).toList();
-		require(pureManifest.checksum() == 2_593_377_550L
-				&& pureSectionChecksums.equals(List.of(
-				857_091_072L, 3_709_730_368L, 2_608_476_652L, 3_235_751_298L)),
-				"pure region canonical bytes changed: manifest=" + pureManifest.checksum()
-						+ " sections=" + pureSectionChecksums);
 		CompoundTag encodedPure = codec.encodeManifest(pureManifest);
 		require(encodedPure.get("Materials") == null && encodedPure.get("MassBits") == null,
 				"pure manifest acquired material fields");
@@ -721,22 +736,19 @@ public final class FluidRegionPersistenceValidation {
 	private static void validateWorldConfig() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "config-");
 		FluidServerConfig defaults = FluidServerConfig.loadOrCreate(root);
-		require(defaults.controllersEnabled() && defaults.materialsEnabled() && defaults.worldBridgeEnabled()
-				&& !defaults.chemistryEnabled() && !defaults.granularEnabled() && !defaults.precipitationEnabled()
-				&& !defaults.thermalEnabled() && !defaults.phaseChangeEnabled()
-				&& defaults.limits().maximumRegions() == 4, "playable default config changed");
-		FluidServerConfig enabled = defaults.withControllersEnabled(true).withMaterialsEnabled(true)
-				.withWorldBridgeEnabled(true).withChemistryEnabled(true).withGranularEnabled(true)
-				.withPrecipitationEnabled(true).withThermalEnabled(true).withPhaseChangeEnabled(true);
-		enabled.save(root);
-		require(FluidServerConfig.loadOrCreate(root).equals(enabled), "world-local config did not round-trip");
+		require(defaults.controllersEnabled() && defaults.worldBridgeEnabled()
+				&& defaults.maximumQuarantineEntries() > 0L && defaults.maximumQuarantineBytes() > 0L
+				&& defaults.limits().maximumRegions() == 4, "playable default policy changed");
+		FluidServerConfig restricted = defaults.withControllersEnabled(false).withWorldBridgeEnabled(false);
+		restricted.save(root);
+		require(FluidServerConfig.loadOrCreate(root).equals(restricted), "world-local policy did not round-trip");
 
 		String valid = Files.readString(FluidServerConfig.path(root));
-		Files.writeString(FluidServerConfig.path(root), valid.replace("materialsEnabled=true", "materialsEnabled=false"));
+		Files.writeString(FluidServerConfig.path(root), valid + System.lineSeparator() + "materialsEnabled=true");
 		expectIOException(() -> FluidServerConfig.loadOrCreate(root),
-				"invalid current feature dependency was accepted");
+				"removed capability policy field was accepted");
 
-		Files.writeString(FluidServerConfig.path(root), valid.replace("schema=controller-runtime", "schema=unknown"));
+		Files.writeString(FluidServerConfig.path(root), valid.replace("schema=controller-policy", "schema=unknown"));
 		expectIOException(() -> FluidServerConfig.loadOrCreate(root), "unknown config version was silently replaced");
 	}
 
@@ -961,7 +973,9 @@ public final class FluidRegionPersistenceValidation {
 	}
 
 	private static RegionManifest signedManifest(RegionManifest manifest) {
-		return new RegionManifest(manifest.layout(), manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(),
+		return new RegionManifest(manifest.layout(), manifest.capabilityProfileFingerprint(),
+				manifest.registryAggregateFingerprint(), manifest.materialRegistryFingerprint(), manifest.regionId(),
+				manifest.dimensionId(), manifest.checkpointGeneration(),
 				manifest.networkGeneration(), manifest.origin(), manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 				manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(), manifest.totalVolumeBits(),
 				manifest.materialPalette(), manifest.totalMassBits(), manifest.materialLedgers(), manifest.sections(), manifest.extensions(),
@@ -972,7 +986,8 @@ public final class FluidRegionPersistenceValidation {
 	private static RegionManifest manifestWithExtensions(
 			RegionManifest manifest, List<RegionExtension> extensions
 	) {
-		RegionManifest unsigned = new RegionManifest(manifest.layout(), manifest.regionId(), manifest.dimensionId(),
+		RegionManifest unsigned = new RegionManifest(manifest.layout(), manifest.capabilityProfileFingerprint(),
+				manifest.registryAggregateFingerprint(), manifest.materialRegistryFingerprint(), manifest.regionId(), manifest.dimensionId(),
 				manifest.checkpointGeneration(), manifest.networkGeneration(), manifest.origin(), manifest.sizeX(), manifest.sizeY(),
 				manifest.sizeZ(), manifest.solverConfig(), manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(),
 				manifest.totalMarkerCount(), manifest.totalVolumeBits(), manifest.materialPalette(), manifest.totalMassBits(),

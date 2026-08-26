@@ -16,10 +16,12 @@ import java.util.OptionalDouble;
 final class FabricFluidQueryApi implements MmmQueryApi {
 	private final MinecraftServer server;
 	private final FluidRegionManager regions;
+	private final boolean capabilityReadable;
 
-	FabricFluidQueryApi(MinecraftServer server, FluidRegionManager regions) {
+	FabricFluidQueryApi(MinecraftServer server, FluidRegionManager regions, boolean capabilityReadable) {
 		this.server = java.util.Objects.requireNonNull(server, "server");
 		this.regions = java.util.Objects.requireNonNull(regions, "regions");
+		this.capabilityReadable = capabilityReadable;
 	}
 
 	@Override public FluidQueryResult query(FluidQueryRequest request) {
@@ -30,6 +32,8 @@ final class FabricFluidQueryApi implements MmmQueryApi {
 				|| !Double.isFinite(request.worldZMetres())) {
 			return absent(FluidQueryStatus.INVALID_REQUEST, "invalid dimension id or world-space coordinate");
 		}
+		if (!capabilityReadable) return absent(FluidQueryStatus.REGION_UNAVAILABLE,
+				"world capability profile is not readable");
 		FluidRegion identityMatch = null;
 		FluidRegion owner = null;
 		boolean outsideInterior = false;

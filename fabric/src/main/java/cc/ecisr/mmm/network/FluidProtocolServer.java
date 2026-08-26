@@ -185,13 +185,19 @@ public final class FluidProtocolServer {
 			this.listener = listener;
 			this.server = server;
 			FluidSimulationService service = FluidSimulationService.get(server);
-			this.offer = new FluidProtocolOfferPayload(FluidProtocol.serverOffer(
-					service.materialFeatureEnabled(), service.chemistryFeatureEnabled(),
-					service.granularFeatureEnabled(), service.thermalFeatureEnabled()));
+			this.offer = service.worldCapabilityProfile() == null ? null : new FluidProtocolOfferPayload(
+					FluidProtocol.serverOffer(service.materialFeatureEnabled(), service.chemistryFeatureEnabled(),
+							service.granularFeatureEnabled(), service.thermalFeatureEnabled()),
+					service.worldCapabilityProfile());
 		}
 
 		@Override
 		public void start(Consumer<Packet<?>> sender) {
+			if (offer == null) {
+				listener.disconnect(Component.literal(
+						"Matter, Motion & Mechanics world capability profile is unavailable; server is locked"));
+				return;
+			}
 			if (!ServerConfigurationNetworking.canSend(listener, FluidProtocolOfferPayload.TYPE)) {
 				listener.disconnect(Component.literal(
 						"This server requires the Matter, Motion & Mechanics client Mod and "

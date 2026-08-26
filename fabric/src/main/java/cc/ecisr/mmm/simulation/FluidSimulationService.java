@@ -9,7 +9,6 @@ import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.chemistry.ChemicalDataPackLoader;
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
-import cc.ecisr.mmm.chemistry.ChemicalRegistryStore;
 import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
@@ -17,17 +16,16 @@ import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterial;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
+import cc.ecisr.mmm.fluid.MaterialRegistry;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import cc.ecisr.mmm.fluid.air.GasAuditLedger;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
-import cc.ecisr.mmm.fluid.air.GasRegistryStore;
 import cc.ecisr.mmm.granular.GranularDataPackLoader;
 import cc.ecisr.mmm.granular.GranularMechanics;
 import cc.ecisr.mmm.granular.GranularPhaseTransferEngine;
 import cc.ecisr.mmm.granular.GranularRegistry;
-import cc.ecisr.mmm.granular.GranularRegistryStore;
 import cc.ecisr.mmm.transfer.ChemicalContents;
 import cc.ecisr.mmm.transfer.ContainerTransferActor;
 import cc.ecisr.mmm.transfer.ContainerTransferJournal;
@@ -38,16 +36,18 @@ import cc.ecisr.mmm.transfer.ThermalContents;
 import cc.ecisr.mmm.simulation.controller.FluidBoundaryScanner;
 import cc.ecisr.mmm.simulation.controller.FluidControllerRegions;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
-import cc.ecisr.mmm.simulation.persistence.RegionManifest;
-import cc.ecisr.mmm.simulation.persistence.RegionStateFiles;
+import cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStore;
+import cc.ecisr.mmm.simulation.persistence.WorldCapabilityLayoutResolver;
+import cc.ecisr.mmm.simulation.persistence.WorldCapabilityStartup;
 import cc.ecisr.mmm.thermal.ThermalDataPackLoader;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
-import cc.ecisr.mmm.thermal.ThermalRegistryStore;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
+import cc.ecisr.mmm.worldprofile.WorldCapability;
+import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
@@ -126,6 +126,10 @@ public final class FluidSimulationService {
 	private boolean defaultEntityPhysicsEnabled = true;
 	private boolean defaultDebugOverlays;
 	private boolean controllerFeatureEnabled;
+	private final WorldCapabilityStartup.Result capabilityStartup;
+	private final WorldCapabilityProfile capabilityProfile;
+	private final MaterialRegistry materialRegistryDefinitions;
+	private final FluidMaterialRegistry materialRegistry;
 	private final boolean materialFeatureEnabled;
 	private final boolean worldBridgeFeatureEnabled;
 	private final boolean chemistryFeatureEnabled;
@@ -152,205 +156,88 @@ public final class FluidSimulationService {
 			configurationLocked = true;
 			MmmMod.LOGGER.error("Could not load Matter, Motion & Mechanics world config; controllers remain disabled", exception);
 		}
-		ChemicalRegistry bootChemicalRegistry = null;
-		if (serverConfig.chemistryEnabled() || serverConfig.granularEnabled()) {
-			try {
-				ChemicalRegistryStore registryStore = new ChemicalRegistryStore(worldRoot);
-				if (registryStore.exists()) {
-					bootChemicalRegistry = registryStore.read();
-					validateSupportedChemicalMaterials(bootChemicalRegistry);
-					try {
-						ChemicalRegistry datapackDefinitions = ChemicalDataPackLoader.load(server.getResourceManager());
-						if (!datapackDefinitions.fingerprint().equals(bootChemicalRegistry.fingerprint())) {
-							MmmMod.LOGGER.warn("Chemical datapack definitions differ from the authoritative world registry {}; existing inventory keeps world semantics",
-									bootChemicalRegistry.fingerprint());
-						}
-					} catch (IOException | RuntimeException invalidDatapack) {
-						MmmMod.LOGGER.warn("Current chemical datapack definitions are invalid; the valid authoritative world registry {} remains active and inventory is not reinterpreted",
-								bootChemicalRegistry.fingerprint(), invalidDatapack);
-					}
-				} else {
-					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discoverCommittedStructure();
-					if (!regions.issues().isEmpty() || regions.manifests().stream()
-							.anyMatch(RegionManifest::hasChemicalState)) {
-						throw new IOException("chemical region-state or unreadable region data exists but chemistry/registry.nbt is missing");
-					}
-					ChemicalRegistry datapackDefinitions = ChemicalDataPackLoader.load(server.getResourceManager());
-					validateSupportedChemicalMaterials(datapackDefinitions);
-					ChemicalRegistryStore.LoadResult loaded = registryStore.loadOrCreate(datapackDefinitions);
-					bootChemicalRegistry = loaded.registry();
-					validateSupportedChemicalMaterials(bootChemicalRegistry);
-					if (loaded.definitionMismatch()) {
-						MmmMod.LOGGER.warn("Chemical registry appeared during first publication and differs from datapack definitions; world snapshot {} remains authoritative",
-								loaded.registry().fingerprint());
-					} else if (loaded.created()) {
-						MmmMod.LOGGER.info("Published authoritative chemical registry snapshot {}", loaded.registry().fingerprint());
-					}
-				}
-			} catch (IOException | RuntimeException exception) {
-				configurationLocked = true;
-				MmmMod.LOGGER.error("Chemical registry is LOCKED; chemistry/granular registry dependencies and controller creation remain disabled", exception);
-			}
-		}
-		GranularRegistry bootGranularRegistry = null;
-		if (serverConfig.granularEnabled()) {
-			try {
-				if (bootChemicalRegistry == null) throw new IOException("Authoritative chemical registry dependency is unavailable");
-				GranularRegistryStore registryStore = new GranularRegistryStore(worldRoot, bootChemicalRegistry);
-				if (registryStore.exists()) {
-					bootGranularRegistry = registryStore.read();
-					validateSupportedGranularCarriers(bootGranularRegistry);
-					try {
-						GranularRegistry datapackDefinitions = GranularDataPackLoader.load(
-								server.getResourceManager(), bootChemicalRegistry);
-						if (!datapackDefinitions.fingerprint().equals(bootGranularRegistry.fingerprint())) {
-							MmmMod.LOGGER.warn("Granular datapack definitions differ from authoritative world registry {}; existing solid inventory keeps world semantics",
-									bootGranularRegistry.fingerprint());
-						}
-					} catch (IOException | RuntimeException invalidDatapack) {
-						MmmMod.LOGGER.warn("Current granular datapack definitions are invalid; the valid authoritative world registry {} remains active and inventory is not reinterpreted",
-								bootGranularRegistry.fingerprint(), invalidDatapack);
-					}
-				} else {
-					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discoverCommittedStructure();
-					if (!regions.issues().isEmpty() || regions.manifests().stream()
-							.anyMatch(RegionManifest::hasGranularState)) {
-						throw new IOException("granular region-state or unreadable region data exists but granular/registry.nbt is missing");
-					}
-					GranularRegistry datapackDefinitions = GranularDataPackLoader.load(
-							server.getResourceManager(), bootChemicalRegistry);
-					validateSupportedGranularCarriers(datapackDefinitions);
-					GranularRegistryStore.LoadResult loaded = registryStore.loadOrCreate(datapackDefinitions);
-					bootGranularRegistry = loaded.registry();
-					validateSupportedGranularCarriers(bootGranularRegistry);
-					if (loaded.definitionMismatch()) {
-						MmmMod.LOGGER.warn("Granular registry appeared during first publication and differs from datapack definitions; world snapshot {} remains authoritative",
-								loaded.registry().fingerprint());
-					} else if (loaded.created()) {
-						MmmMod.LOGGER.info("Published authoritative granular registry snapshot {}",
-								bootGranularRegistry.fingerprint());
-					}
-				}
-			} catch (IOException | RuntimeException exception) {
-				configurationLocked = true;
-				MmmMod.LOGGER.error("Granular registry is LOCKED; granular state and controller creation remain disabled", exception);
-			}
-		}
-		GasRegistry bootGasRegistry = null;
-		ThermalRegistry bootThermalRegistry = null;
-		ThermalBoundaryResolver bootThermalBoundaryResolver = null;
-		if (serverConfig.thermalEnabled()) {
-			try {
-				GasRegistryStore gasStore = new GasRegistryStore(worldRoot);
-				GasRegistry definitions = BuiltinGasDefinitions.createRegistry();
-				if (!gasStore.exists()) {
-					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discoverCommittedStructure();
-					if (!regions.issues().isEmpty() || regions.manifests().stream()
-							.anyMatch(RegionManifest::hasGasState)) {
-						throw new IOException("gas-bearing region-state or unreadable region data exists but gas/registry.nbt is missing");
-					}
-				}
-				GasRegistryStore.LoadResult loaded = gasStore.loadOrCreate(definitions);
-				bootGasRegistry = loaded.registry();
-				validateSupportedGasComponents(bootGasRegistry, bootChemicalRegistry);
-				if (loaded.definitionMismatch()) {
-					MmmMod.LOGGER.warn("Built-in gas definitions differ from authoritative world registry {}; existing inventory keeps world semantics",
-							bootGasRegistry.fingerprint());
-				} else if (loaded.created()) {
-					MmmMod.LOGGER.info("Published authoritative gas registry snapshot {}", bootGasRegistry.fingerprint());
-				}
-
-				String chemicalFingerprint = bootChemicalRegistry == null ? "" : bootChemicalRegistry.fingerprint();
-				String granularFingerprint = bootGranularRegistry == null ? "" : bootGranularRegistry.fingerprint();
-				String gasFingerprint = bootGasRegistry.fingerprint();
-				ThermalRegistryStore thermalStore = new ThermalRegistryStore(
-						worldRoot, chemicalFingerprint, granularFingerprint, gasFingerprint);
-				if (thermalStore.exists()) {
-					bootThermalRegistry = thermalStore.read();
-					validateSupportedThermalCarriers(bootThermalRegistry, bootChemicalRegistry,
-							bootGranularRegistry, bootGasRegistry);
-					try {
-						ThermalRegistry datapackDefinitions = ThermalDataPackLoader.load(server.getResourceManager(),
-								chemicalFingerprint, granularFingerprint, gasFingerprint);
-						if (!datapackDefinitions.fingerprint().equals(bootThermalRegistry.fingerprint())) {
-							MmmMod.LOGGER.warn("Thermal datapack definitions differ from authoritative world registry {}; existing energy keeps world semantics",
-									bootThermalRegistry.fingerprint());
-						}
-					} catch (IOException | RuntimeException invalidDatapack) {
-						MmmMod.LOGGER.warn("Current thermal datapack definitions are invalid; authoritative world registry {} remains active and energy is not reinterpreted",
-								bootThermalRegistry.fingerprint(), invalidDatapack);
-					}
-				} else {
-					RegionStateFiles.Discovery regions = new RegionStateFiles(worldRoot).discoverCommittedStructure();
-					if (!regions.issues().isEmpty() || regions.manifests().stream()
-							.anyMatch(RegionManifest::hasThermalState)) {
-						throw new IOException("thermal region-state or unreadable region data exists but thermal/registry.nbt is missing");
-					}
-					ThermalRegistry definitionsFromPacks = ThermalDataPackLoader.load(server.getResourceManager(),
-							chemicalFingerprint, granularFingerprint, gasFingerprint);
-					validateSupportedThermalCarriers(definitionsFromPacks, bootChemicalRegistry,
-							bootGranularRegistry, bootGasRegistry);
-					ThermalRegistryStore.LoadResult thermalLoaded = thermalStore.loadOrCreate(definitionsFromPacks);
-					bootThermalRegistry = thermalLoaded.registry();
-					validateSupportedThermalCarriers(bootThermalRegistry, bootChemicalRegistry,
-							bootGranularRegistry, bootGasRegistry);
-					if (thermalLoaded.definitionMismatch()) {
-						MmmMod.LOGGER.warn("Thermal registry appeared during first publication and differs from datapack definitions; world snapshot {} remains authoritative",
-								bootThermalRegistry.fingerprint());
-					} else if (thermalLoaded.created()) {
-						MmmMod.LOGGER.info("Published authoritative thermal registry snapshot {}",
-								bootThermalRegistry.fingerprint());
-					}
-				}
-				bootThermalBoundaryResolver = new ThermalBoundaryResolver(bootThermalRegistry);
-			} catch (IOException | RuntimeException exception) {
-				bootGasRegistry = null;
-				bootThermalRegistry = null;
-				bootThermalBoundaryResolver = null;
-				configurationLocked = true;
-				MmmMod.LOGGER.error("Thermal/gas registry is LOCKED; thermal state and controller creation remain disabled", exception);
-			}
-		}
+		WorldCapabilityBundleStore capabilityStore = new WorldCapabilityBundleStore(worldRoot,
+				new WorldCapabilityBundleStore.QuarantineAdmission(serverConfig.maximumQuarantineEntries(),
+						serverConfig.maximumQuarantineBytes()));
+		capabilityStartup = WorldCapabilityStartup.start(capabilityStore,
+				() -> loadCurrentCapabilityDefinitions(server), !configurationLocked);
+		WorldCapabilityBundleStore.Bundle bundle = capabilityStartup.bundle();
+		capabilityProfile = bundle == null ? null : bundle.profile();
+		if (capabilityProfile != null) WorldCapabilityLayoutResolver.resolve(capabilityProfile);
+		materialRegistryDefinitions = bundle == null ? null : bundle.material();
+		materialRegistry = materialRegistryDefinitions == null ? null : materialRegistryDefinitions.runtimeRegistry();
 		serverConfigLocked = configurationLocked;
-		controllerFeatureEnabled = serverConfig.controllersEnabled();
-		materialFeatureEnabled = serverConfig.materialsEnabled();
-		worldBridgeFeatureEnabled = serverConfig.worldBridgeEnabled();
-		chemicalRegistry = bootChemicalRegistry;
-		chemistryFeatureEnabled = serverConfig.chemistryEnabled() && chemicalRegistry != null;
-		granularRegistry = bootGranularRegistry;
-		granularFeatureEnabled = serverConfig.granularEnabled() && granularRegistry != null;
-		precipitationFeatureEnabled = serverConfig.precipitationEnabled()
-				&& granularFeatureEnabled && chemistryFeatureEnabled && granularRegistry.hasReactiveRules();
-		gasRegistry = bootGasRegistry;
-		thermalRegistry = bootThermalRegistry;
-		thermalBoundaryResolver = bootThermalBoundaryResolver;
-		thermalFeatureEnabled = serverConfig.thermalEnabled() && thermalRegistry != null && gasRegistry != null;
-		phaseChangeFeatureEnabled = serverConfig.phaseChangeEnabled() && thermalFeatureEnabled;
+		controllerFeatureEnabled = !configurationLocked && serverConfig.controllersEnabled();
+		worldBridgeFeatureEnabled = !configurationLocked && serverConfig.worldBridgeEnabled();
+		materialFeatureEnabled = hasCapability(WorldCapability.MATERIALS);
+		chemicalRegistry = bundle == null ? null : bundle.chemical();
+		chemistryFeatureEnabled = hasCapability(WorldCapability.CHEMISTRY);
+		granularRegistry = bundle == null ? null : bundle.granular();
+		granularFeatureEnabled = hasCapability(WorldCapability.GRANULAR);
+		precipitationFeatureEnabled = hasCapability(WorldCapability.PRECIPITATION);
+		gasRegistry = bundle == null ? null : bundle.gas();
+		thermalRegistry = bundle == null ? null : bundle.thermal();
+		thermalBoundaryResolver = thermalRegistry == null ? null : new ThermalBoundaryResolver(thermalRegistry);
+		thermalFeatureEnabled = hasCapability(WorldCapability.THERMAL);
+		phaseChangeFeatureEnabled = hasCapability(WorldCapability.PHASECHANGE);
 		regionManager = new FluidRegionManager(serverConfig.limits());
 		committedEvents = committedEventHub(server);
 		targets = new FluidWorldTargetResolver(regionManager);
-		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, materialFeatureEnabled,
+		regionOperations = new FluidRegionOperations(worldRoot, regionManager,
+				capabilityStartup.state() != WorldCapabilityStartup.State.READY, materialFeatureEnabled,
 				chemistryFeatureEnabled, chemicalRegistry, granularFeatureEnabled, granularRegistry,
 				precipitationFeatureEnabled, thermalFeatureEnabled, thermalRegistry, gasRegistry,
-				serverConfig.maximumThermalSubstepsPerStep());
+				serverConfig.maximumThermalSubstepsPerStep(),
+				materialRegistry == null ? null : materialRegistry.materials(), capabilityProfile, true);
 		snapshots = new FluidSnapshotPublisher(materialFeatureEnabled, chemistryFeatureEnabled, chemicalRegistry,
 				granularFeatureEnabled, thermalFeatureEnabled, thermalRegistry);
 		containerTransfers = new ContainerTransferStore(worldRoot);
 		loadContainerTransferIndex();
 		if (configurationLocked) regionOperations.recordIssue(
 				"server.properties 不可用，已安全使用默认预算并关闭控制器；原文件未覆盖");
+		if (capabilityStartup.state() != WorldCapabilityStartup.State.READY) {
+			regionOperations.recordIssue("world capability startup " + capabilityStartup.state()
+					+ "：" + capabilityStartup.issue());
+			MmmMod.LOGGER.error("Matter, Motion & Mechanics world capability startup is {}: {}",
+					capabilityStartup.state(), capabilityStartup.issue());
+		} else if (capabilityStartup.definitionMismatch()) {
+			MmmMod.LOGGER.warn("Current datapack definitions differ from committed world capability profile {}; bundle snapshots remain authoritative",
+					capabilityProfile.profileFingerprint());
+		} else if (!capabilityStartup.issue().isEmpty()) {
+			MmmMod.LOGGER.warn("Current datapack definitions could not be compared with committed world capability profile {}: {}",
+					capabilityProfile.profileFingerprint(), capabilityStartup.issue());
+		}
 		ownershipIssues = regionOperations.scanOwnershipIssues();
 		for (String issue : ownershipIssues) MmmMod.LOGGER.error("Matter, Motion & Mechanics world ownership issue: {}", issue);
 	}
 
-	private static void validateSupportedChemicalMaterials(ChemicalRegistry registry) {
-		for (var material : BuiltinFluidMaterials.DEFAULT_PALETTE) registry.phaseHandleForMaterial(material.id());
+	private boolean hasCapability(WorldCapability capability) {
+		return capabilityProfile != null && capabilityProfile.hasCapability(capability);
 	}
 
-	private static void validateSupportedGranularCarriers(GranularRegistry registry) {
-		for (var material : BuiltinFluidMaterials.DEFAULT_PALETTE) {
-			if (!registry.hasCarrier(material.id())) throw new IllegalArgumentException(
-					"Granular registry has no carrier for " + material.id());
+	private static WorldCapabilityBundleStore.Definitions loadCurrentCapabilityDefinitions(MinecraftServer server)
+			throws IOException {
+		MaterialRegistry material = BuiltinFluidMaterials.createRegistry();
+		ChemicalRegistry chemical = ChemicalDataPackLoader.load(server.getResourceManager());
+		validateSupportedChemicalMaterials(chemical, material);
+		GranularRegistry granular = GranularDataPackLoader.load(server.getResourceManager(), chemical);
+		validateSupportedGranularCarriers(granular, material);
+		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
+		validateSupportedGasComponents(gas, chemical);
+		ThermalRegistry thermal = ThermalDataPackLoader.load(server.getResourceManager(), chemical.fingerprint(),
+				granular.fingerprint(), gas.fingerprint());
+		validateSupportedThermalCarriers(thermal, material, chemical, granular, gas);
+		return new WorldCapabilityBundleStore.Definitions(material, chemical, granular, gas, thermal);
+	}
+
+	private static void validateSupportedChemicalMaterials(ChemicalRegistry registry, MaterialRegistry materials) {
+		for (var entry : materials.entries()) registry.phaseHandleForMaterial(entry.material().id());
+	}
+
+	private static void validateSupportedGranularCarriers(GranularRegistry registry, MaterialRegistry materials) {
+		for (var entry : materials.entries()) {
+			if (!registry.hasCarrier(entry.material().id())) throw new IllegalArgumentException(
+					"Granular registry has no carrier for " + entry.material().id());
 		}
 	}
 
@@ -366,12 +253,12 @@ public final class FluidSimulationService {
 	}
 
 	private static void validateSupportedThermalCarriers(
-			ThermalRegistry registry, ChemicalRegistry chemicalRegistry,
+			ThermalRegistry registry, MaterialRegistry materials, ChemicalRegistry chemicalRegistry,
 			GranularRegistry granularRegistry, GasRegistry gasRegistry
 	) {
-		for (var material : BuiltinFluidMaterials.DEFAULT_PALETTE) {
-			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, material.id());
-			LiquidThermalExpansion.require(material.id());
+		for (var entry : materials.entries()) {
+			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, entry.material().id());
+			LiquidThermalExpansion.require(entry.material().id());
 		}
 		if (granularRegistry != null) for (var material : granularRegistry.materials()) {
 			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, material.id());
@@ -841,11 +728,6 @@ public final class FluidSimulationService {
 		}
 		serverConfig = replacement;
 		controllerFeatureEnabled = enabled;
-		if (!enabled) {
-			for (FluidRegion region : regionManager.regions()) {
-				if (region.controllerManaged()) region.setAvailabilityFailure("controller feature flag is disabled");
-			}
-		}
 		return null;
 	}
 
@@ -855,7 +737,7 @@ public final class FluidSimulationService {
 
 	/** Stable read-only API surface; construction performs no world or region I/O. */
 	public MmmQueryApi queryApi(MinecraftServer server) {
-		return new FabricFluidQueryApi(server, regionManager);
+		return new FabricFluidQueryApi(server, regionManager, capabilityProfile != null);
 	}
 
 	public boolean chemistryFeatureEnabled() {
@@ -919,30 +801,34 @@ public final class FluidSimulationService {
 		return worldBridgeFeatureEnabled;
 	}
 
-	public boolean configuredMaterialFeatureEnabled() {
-		return serverConfig.materialsEnabled();
+	boolean authoritativeWritesReady() {
+		return capabilityStartup.state() == WorldCapabilityStartup.State.READY;
 	}
 
-	/** Persists the next-startup material gate; live sessions keep their negotiated protocol until restart. */
-	public String setMaterialFeatureForRestart(boolean enabled) {
-		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
-		if (!enabled && (serverConfig.chemistryEnabled() || serverConfig.granularEnabled()
-				|| serverConfig.thermalEnabled())) {
-			return "请先关闭 chemistry、granular 与 thermal；三者都要求 materials=true";
+	private String authoritativeWriteFailure(String operation) {
+		return operation + "失败：world capability startup 为 " + capabilityStartup.state()
+				+ "；只允许读取诊断与恢复既有状态";
+	}
+
+	public String worldCapabilityStatus(WorldCapability capability) {
+		if (capability == null) throw new IllegalArgumentException("World capability is missing");
+		if (capabilityProfile == null) {
+			return "世界能力 " + capability.stableId() + "：不可用；启动状态 " + capabilityStartup.state()
+					+ (capabilityStartup.issue().isEmpty() ? "" : "；" + capabilityStartup.issue());
 		}
-		FluidServerConfig replacement = serverConfig.withMaterialsEnabled(enabled);
-		try {
-			replacement.save(worldRoot);
-		} catch (IOException exception) {
-			MmmMod.LOGGER.error("Could not persist Matter, Motion & Mechanics material feature flag", exception);
-			return exception.getMessage();
-		}
-		serverConfig = replacement;
-		return null;
+		return "世界能力 " + capability.stableId() + "："
+				+ (capabilityProfile.hasCapability(capability) ? "已冻结启用" : "已冻结未启用")
+				+ "；layout=" + capabilityProfile.regionLayoutId()
+				+ "；profile=" + capabilityProfile.profileFingerprint().substring(0, 12)
+				+ "；startup=" + capabilityStartup.state();
+	}
+
+	public WorldCapabilityProfile worldCapabilityProfile() {
+		return capabilityProfile;
 	}
 
 	public boolean configuredWorldBridgeFeatureEnabled() {
-		return serverConfig.worldBridgeEnabled();
+		return !serverConfigLocked && serverConfig.worldBridgeEnabled();
 	}
 
 	/** Persists the next-startup world-bridge gate; ownership binds to this boot's value. */
@@ -966,10 +852,6 @@ public final class FluidSimulationService {
 	public ControllerActivation activateController(
 			ServerPlayer player, BlockPos controllerPosition, boolean toggleRunning
 	) {
-		if (!controllerFeatureEnabled) return ControllerActivation.DISABLED;
-		if (hasContainerTransferStoreIssues()) {
-			return ControllerActivation.failed("container-transfer 恢复目录含未知或损坏内容；已全局锁住新控制器，详见日志");
-		}
 		ServerLevel level = player.level();
 		restoreAirDemoScaffolding(level.getServer());
 		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) {
@@ -985,6 +867,9 @@ public final class FluidSimulationService {
 			}
 			ControllerAction action;
 			if (toggleRunning) {
+				if (!authoritativeWritesReady()) {
+					return ControllerActivation.failed(authoritativeWriteFailure("修改控制器运行意图"));
+				}
 				if (existing.paused()) {
 					existing.setPaused(false);
 					existing.wakeForActivity();
@@ -999,6 +884,13 @@ public final class FluidSimulationService {
 			sendSnapshot(level);
 			return ControllerActivation.succeeded(existingFootprint, action);
 		}
+		if (!authoritativeWritesReady()) {
+			return ControllerActivation.failed(authoritativeWriteFailure("创建控制器区域"));
+		}
+		if (!controllerFeatureEnabled) return ControllerActivation.DISABLED;
+		if (hasContainerTransferStoreIssues()) {
+			return ControllerActivation.failed("container-transfer 恢复目录含未知或损坏内容；已全局锁住新控制器，详见日志");
+		}
 		if (regionOperations.creationLocked() || !ownershipIssues.isEmpty()) {
 			return ControllerActivation.failed("存在未解决或超预算的 region-state/ownership；已锁住新控制器区域，详见 /mmm regions list、/mmm ownership 与日志");
 		}
@@ -1010,6 +902,10 @@ public final class FluidSimulationService {
 		);
 		if (!scan.succeeded()) return ControllerActivation.failed(scan.failure());
 		FluidRegionFootprint footprint = scan.footprint();
+		if (!worldBridgeFeatureEnabled && footprint.interiorBlocks().stream()
+				.map(BlockPos::of).anyMatch(position -> level.getBlockState(position).is(Blocks.WATER))) {
+			return ControllerActivation.failed("worldbridge 策略关闭；拒绝接管壳内原版水，请先排空或启用策略并重启");
+		}
 		long requiredCells;
 		long requiredMarkers;
 		try {
@@ -1037,7 +933,7 @@ public final class FluidSimulationService {
 		FluidRegionManager.AdmissionResult admission = regionManager.addAndSelect(candidate);
 		if (!admission.accepted()) return ControllerActivation.failed(admission.failure());
 		refreshCollisions(level, candidate);
-		FluidRegionFactory.captureVanillaWater(level, candidate);
+		if (worldBridgeFeatureEnabled) FluidRegionFactory.captureVanillaWater(level, candidate);
 		bindConfiguredState(candidate.domain());
 		candidate.setPaused(false);
 		candidate.wakeForActivity();
@@ -1063,6 +959,10 @@ public final class FluidSimulationService {
 	 * failed placement or activation restores every block written by this method.
 	 */
 	public BlockPos createControllerDemo(ServerPlayer player) {
+		if (!authoritativeWritesReady()) {
+			lastTakeoverFailure = authoritativeWriteFailure("创建快速控制器 fixture");
+			return null;
+		}
 		final int interiorSize = 4;
 		final int outerSize = interiorSize + 2;
 		ServerLevel level = player.level();
@@ -1189,6 +1089,10 @@ public final class FluidSimulationService {
 	}
 
 	public boolean createTensionDemo(ServerPlayer player, int angleDegrees) {
+		if (!authoritativeWritesReady()) {
+			lastTakeoverFailure = authoritativeWriteFailure("创建表面张力 fixture");
+			return false;
+		}
 		if (!materialFeatureEnabled) {
 			lastTakeoverFailure = "材料功能门未在本次启动启用；先保存配置并重启";
 			return false;
@@ -1235,6 +1139,10 @@ public final class FluidSimulationService {
 	 * removal, replacement or server shutdown.
 	 */
 		public boolean createAirDemo(ServerPlayer player, boolean vacuum) {
+			if (!authoritativeWritesReady()) {
+				lastTakeoverFailure = authoritativeWriteFailure("创建气体 fixture");
+				return false;
+			}
 			Vec3 look = player.getLookAngle();
 			BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
 			ServerLevel level = player.level();
@@ -1446,6 +1354,10 @@ public final class FluidSimulationService {
 	}
 
 	private boolean createDemo(ServerPlayer player, boolean layeredMaterials) {
+		if (!authoritativeWritesReady()) {
+			lastTakeoverFailure = authoritativeWriteFailure("创建流体 fixture");
+			return false;
+		}
 		Vec3 look = player.getLookAngle();
 		BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
 		ServerLevel level = player.level();
@@ -1484,6 +1396,12 @@ public final class FluidSimulationService {
 	}
 
 	public CaptureResult captureNearbyWater(ServerPlayer player, boolean takeover) {
+		if (!authoritativeWritesReady()) {
+			return new CaptureResult(0, -1, authoritativeWriteFailure("捕获原版水"));
+		}
+		if (takeover && !worldBridgeFeatureEnabled) {
+			return new CaptureResult(0, -1, "worldbridge 策略关闭；拒绝新的原版水接管");
+		}
 		ServerLevel level = player.level();
 		restoreAirDemoScaffolding(level.getServer());
 		RestorationStats restoration = restoreTakeover(level.getServer());
@@ -1599,6 +1517,7 @@ public final class FluidSimulationService {
 	}
 
 	public boolean setPaused(boolean value, ServerLevel level) {
+		if (!authoritativeWritesReady()) return false;
 		FluidRegion region = activeRegion();
 		if (region == null) return false;
 		if (!value && !ensureRegionAvailable(level, region)) return false;
@@ -1630,6 +1549,7 @@ public final class FluidSimulationService {
 	}
 
 	public int step(ServerLevel level, int count) {
+		if (!authoritativeWritesReady()) return -1;
 		if (!hasRegionIn(level)) return 0;
 		FluidRegion region = activeRegion();
 		if (!ensureRegionAvailable(level, region)) return -1;
@@ -1677,6 +1597,7 @@ public final class FluidSimulationService {
 
 	private void tickRegion(ServerLevel level, FluidRegion region) {
 		if (!ensureRegionAvailable(level, region)) return;
+		if (!authoritativeWritesReady()) return;
 		long tick = region.incrementTick();
 		boolean collisionsChanged = false;
 		if (tick % COLLISION_REFRESH_INTERVAL_TICKS == 0) {
@@ -1802,7 +1723,7 @@ public final class FluidSimulationService {
 		}
 
 		boolean available = regionOperations.ensureAvailable(
-				level, region, controllerFeatureEnabled, this::refreshCollisions, this::sendSnapshot,
+				level, region, true, this::refreshCollisions, this::sendSnapshot,
 				snapshots::sendRemoval
 		);
 		if (available && thermalFeatureEnabled && region.solverLoaded() && region.domain().hasThermalState()) {
@@ -1886,6 +1807,7 @@ public final class FluidSimulationService {
 	}
 
 	public WaterEditResult pourWater(ServerPlayer player, int buckets) {
+		if (!authoritativeWritesReady()) return WaterEditResult.blocked(authoritativeWriteFailure("注入测试水"));
 		if (!hasRegionIn(player.level())) return WaterEditResult.NO_DOMAIN;
 		FluidRegion region = activeRegion();
 		if (!ensureRegionAvailable(player.level(), region)) {
@@ -1904,6 +1826,7 @@ public final class FluidSimulationService {
 	}
 
 	public WaterEditResult drainWater(ServerPlayer player, int buckets) {
+		if (!authoritativeWritesReady()) return WaterEditResult.blocked(authoritativeWriteFailure("排出测试水"));
 		if (!hasRegionIn(player.level())) return WaterEditResult.NO_DOMAIN;
 		FluidRegion region = activeRegion();
 		if (!ensureRegionAvailable(player.level(), region)) {
@@ -1921,6 +1844,7 @@ public final class FluidSimulationService {
 
 	/** Re-samples Minecraft collision shapes at the simulation's subcell resolution. */
 	public FluidRegion.CollisionStats refreshCollisions(ServerLevel level) {
+		if (!authoritativeWritesReady()) return FluidRegion.CollisionStats.EMPTY;
 		FluidRegion region = activeRegion();
 		if (region == null || !level.dimension().equals(region.dimension())) return FluidRegion.CollisionStats.EMPTY;
 		if (!ensureRegionAvailable(level, region)) return region.lastCollisionStats();
@@ -2012,6 +1936,7 @@ public final class FluidSimulationService {
 	}
 
 	public String checkpointSelected() {
+		if (!authoritativeWritesReady()) return authoritativeWriteFailure("发布 checkpoint");
 		FluidRegion selected = activeRegion();
 		if (selected != null && hasPendingContainerTransfer(selected.id())) {
 			return "区域存在未完成或不可识别的容器转移 WAL；拒绝发布额外 checkpoint";
@@ -2020,6 +1945,7 @@ public final class FluidSimulationService {
 	}
 
 	public String emptySelectedRegion(ServerLevel level) {
+		if (!authoritativeWritesReady()) return authoritativeWriteFailure("清空区域库存");
 		FluidRegion region = activeRegion();
 		if (region == null || !level.dimension().equals(region.dimension())) return "没有活动流体域或位于其他维度";
 		if (!ensureRegionAvailable(level, region)) return "清空失败：控制器域当前不可用：" + region.availabilityFailure();
@@ -2271,91 +2197,9 @@ public final class FluidSimulationService {
 
 	public record TransferTarget(FluidRegion region, BlockPos interiorBlock) { }
 
-	public boolean configuredChemistryFeatureEnabled() {
-		return serverConfig.chemistryEnabled();
-	}
-
-	/** Persists the next-startup chemistry gate; the registry/protocol remain fixed for this boot. */
-	public String setChemistryFeatureForRestart(boolean enabled) {
-		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
-		if (enabled && !serverConfig.materialsEnabled()) return "chemistry=true 要求先启用 materials";
-		if (!enabled && serverConfig.precipitationEnabled()) return "请先关闭 precipitation；precipitation=true 要求 chemistry=true";
-		FluidServerConfig replacement = serverConfig.withChemistryEnabled(enabled);
-		try {
-			replacement.save(worldRoot);
-		} catch (IOException exception) {
-			MmmMod.LOGGER.error("Could not persist Matter, Motion & Mechanics chemistry feature flag", exception);
-			return exception.getMessage();
-		}
-		serverConfig = replacement;
-		return null;
-	}
-
-	public boolean configuredGranularFeatureEnabled() { return serverConfig.granularEnabled(); }
-	public boolean configuredPrecipitationFeatureEnabled() { return serverConfig.precipitationEnabled(); }
-	public boolean configuredThermalFeatureEnabled() { return serverConfig.thermalEnabled(); }
-	public boolean configuredPhaseChangeFeatureEnabled() { return serverConfig.phaseChangeEnabled(); }
-
-	public String setGranularFeatureForRestart(boolean enabled) {
-		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
-		if (enabled && !serverConfig.materialsEnabled()) return "granular=true 要求先启用 materials";
-		if (!enabled && serverConfig.precipitationEnabled()) return "请先关闭 precipitation；precipitation=true 要求 granular=true";
-		FluidServerConfig replacement = serverConfig.withGranularEnabled(enabled);
-		try { replacement.save(worldRoot); }
-		catch (IOException exception) {
-			MmmMod.LOGGER.error("Could not persist Matter, Motion & Mechanics granular feature flag", exception);
-			return exception.getMessage();
-		}
-		serverConfig = replacement;
-		return null;
-	}
-
-	public String setPrecipitationFeatureForRestart(boolean enabled) {
-		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
-		if (enabled && !(serverConfig.chemistryEnabled() && serverConfig.granularEnabled())) {
-			return "precipitation=true 要求先启用 chemistry 与 granular";
-		}
-		FluidServerConfig replacement = serverConfig.withPrecipitationEnabled(enabled);
-		try { replacement.save(worldRoot); }
-		catch (IOException exception) {
-			MmmMod.LOGGER.error("Could not persist Matter, Motion & Mechanics precipitation feature flag", exception);
-			return exception.getMessage();
-		}
-		serverConfig = replacement;
-		return null;
-	}
-
-	public String setThermalFeatureForRestart(boolean enabled) {
-		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
-		if (enabled && !serverConfig.materialsEnabled()) return "thermal=true 要求先启用 materials";
-		if (!enabled && serverConfig.phaseChangeEnabled()) {
-			return "请先关闭 phasechange；phaseChangeEnabled=true 要求 thermal=true";
-		}
-		FluidServerConfig replacement = serverConfig.withThermalEnabled(enabled);
-		try { replacement.save(worldRoot); }
-		catch (IOException exception) {
-			MmmMod.LOGGER.error("Could not persist Matter, Motion & Mechanics thermal feature flag", exception);
-			return exception.getMessage();
-		}
-		serverConfig = replacement;
-		return null;
-	}
-
-	public String setPhaseChangeFeatureForRestart(boolean enabled) {
-		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
-		if (enabled && !serverConfig.thermalEnabled()) return "phasechange=true 要求先启用 thermal";
-		FluidServerConfig replacement = serverConfig.withPhaseChangeEnabled(enabled);
-		try { replacement.save(worldRoot); }
-		catch (IOException exception) {
-			MmmMod.LOGGER.error("Could not persist Matter, Motion & Mechanics phase-change feature flag", exception);
-			return exception.getMessage();
-		}
-		serverConfig = replacement;
-		return null;
-	}
-
 	/** Applies the bounded indicator/eraser primitive to the actually aimed region. */
 	public IndicatorUseResult editIndicatorAtAim(ServerPlayer player, boolean indicated) {
+		if (!authoritativeWritesReady()) return IndicatorUseResult.rejected(authoritativeWriteFailure("修改 indicator"));
 		if (!chemistryFeatureEnabled) return IndicatorUseResult.rejected("化学功能门本次启动未开启");
 		FluidRegion region = aimedRegion(player);
 		if (region == null) return IndicatorUseResult.rejected("准星方向没有化学流体区域");
@@ -2530,22 +2374,28 @@ public final class FluidSimulationService {
 		static SelectionResult failed(String failure) { return new SelectionResult(false, null, failure); }
 	}
 
-	private static void bindDefaultMaterialState(FlipFluidDomain domain) {
+	private void bindDefaultMaterialState(FlipFluidDomain domain) {
 		if (domain.hasMaterialState()) return;
+		if (materialRegistry == null || materialRegistryDefinitions == null) {
+			throw new IllegalStateException("Committed world material registry is unavailable");
+		}
 		FlipParticleState pure = domain.exportParticleState();
 		float[] positionVolume = pure.copyPositionVolume();
 		double[] markerMass = new double[pure.particleCount()];
 		int[] material = new int[pure.particleCount()];
+		int defaultHandle = materialRegistry.handle(materialRegistryDefinitions.defaultMaterialId());
+		java.util.Arrays.fill(material, defaultHandle);
+		FluidMaterial defaultMaterial = materialRegistry.material(defaultHandle);
 		double totalVolume = 0.0, totalMass = 0.0;
 		for (int marker = 0; marker < pure.particleCount(); marker++) {
 			double volume = positionVolume[marker * 4 + 3];
-			markerMass[marker] = volume * BuiltinFluidMaterials.WATER.referenceDensity();
+			markerMass[marker] = volume * defaultMaterial.referenceDensity();
 			totalVolume += volume;
 			totalMass += markerMass[marker];
 		}
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), totalVolume, totalMass,
-				BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, pure.copyParticleVelocities(), pure.copySolidMask(), markerMass, material
+				materialRegistry.materials(), positionVolume, pure.copyParticleVelocities(), pure.copySolidMask(), markerMass, material
 		));
 	}
 
@@ -2569,11 +2419,13 @@ public final class FluidSimulationService {
 		double[] markerMass = state.copyParticleMass();
 		int[] materials = state.copyMaterialPaletteIndex();
 		double totalMass = 0.0;
+		int water = domain.materialRegistry().handle(BuiltinFluidMaterials.WATER.id());
+		int oil = domain.materialRegistry().handle(BuiltinFluidMaterials.OIL.id());
 		for (int marker = 0; marker < state.particleCount(); marker++) {
-			int material = positionVolume[marker * 4 + 1] >= interfaceY ? 1 : 0;
+			int material = positionVolume[marker * 4 + 1] >= interfaceY ? oil : water;
 			materials[marker] = material;
 			markerMass[marker] = positionVolume[marker * 4 + 3]
-					* BuiltinFluidMaterials.DEFAULT_PALETTE.get(material).referenceDensity();
+					* domain.materialRegistry().material(material).referenceDensity();
 			totalMass += markerMass[marker];
 		}
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(

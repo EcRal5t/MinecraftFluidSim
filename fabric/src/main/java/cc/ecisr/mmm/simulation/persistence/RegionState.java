@@ -24,6 +24,7 @@ import cc.ecisr.mmm.thermal.CoherentPhaseStore;
 import cc.ecisr.mmm.thermal.GasThermalModel;
 import cc.ecisr.mmm.thermal.FiniteThermalDeviceInventory;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
+import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -40,6 +41,23 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 	private static final String CHEMICAL_AUDIT_EXTENSION = "mmm:chemical_audit";
 	public RegionState {
 		sections = List.copyOf(sections);
+	}
+
+	public RegionState bindWorldCapabilityProfile(WorldCapabilityProfile profile) {
+		if (profile == null) throw new IllegalArgumentException("World capability profile is missing");
+		if (WorldCapabilityLayoutResolver.resolve(profile) != manifest.layout()) {
+			throw new IllegalArgumentException("World capability profile layout does not match the captured region");
+		}
+		RegionManifest bound = new RegionManifest(manifest.layout(), profile.profileFingerprint(),
+				profile.aggregateFingerprint(), profile.registryFingerprints().material(), manifest.regionId(),
+				manifest.dimensionId(), manifest.checkpointGeneration(), manifest.networkGeneration(), manifest.origin(),
+				manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
+				manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(),
+				manifest.totalVolumeBits(), manifest.materialPalette(), manifest.totalMassBits(), manifest.materialLedgers(),
+				manifest.sections(), manifest.extensions(), manifest.registryFingerprint(), manifest.auScale(),
+				manifest.speciesPalette(), manifest.chemicalMixtures(), manifest.chemicalSpeciesTotals(),
+				manifest.chemicalResidualLedgerBits(), 0L);
+		return new RegionState(withChecksum(bound), sections);
 	}
 
 	public static RegionState capture(FluidRegion region, long checkpointGeneration) throws IOException {
@@ -377,7 +395,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 					PendingPhaseVolumeCodec.MANIFEST_EXTENSION,
 					new PendingPhaseVolumeCodec().encode(pendingPhaseVolume)));
 		}
-		RegionManifest unsigned = new RegionManifest(particles.layout(), region.id(), region.dimension().identifier().toString(), checkpointGeneration,
+		RegionManifest unsigned = new RegionManifest(particles.layout(), "", "", "", region.id(), region.dimension().identifier().toString(), checkpointGeneration,
 				region.networkGeneration(), region.origin(), region.sizeX(), region.sizeY(), region.sizeZ(), region.solverConfig(),
 				region.reservedMarkerCapacity(), region.persistedRuntime(), region.footprint(), particles.particleCount(),
 				Double.doubleToRawLongBits(sumVolumes(positionVolume)), particles.materialPalette(),
@@ -1265,7 +1283,9 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 
 	private static RegionManifest withChecksum(RegionManifest manifest) {
 		long checksum = RegionStateIntegrity.manifestChecksum(manifest);
-		return new RegionManifest(manifest.layout(), manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(), manifest.networkGeneration(),
+		return new RegionManifest(manifest.layout(), manifest.capabilityProfileFingerprint(),
+				manifest.registryAggregateFingerprint(), manifest.materialRegistryFingerprint(), manifest.regionId(),
+				manifest.dimensionId(), manifest.checkpointGeneration(), manifest.networkGeneration(),
 				manifest.origin(), manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 				manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(),
 				manifest.totalVolumeBits(), manifest.materialPalette(), manifest.totalMassBits(), manifest.materialLedgers(),

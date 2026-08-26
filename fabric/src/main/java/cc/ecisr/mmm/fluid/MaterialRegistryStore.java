@@ -97,13 +97,14 @@ public final class MaterialRegistryStore {
 		}
 		requireAll(root, Map.of("Schema", Tag.TAG_STRING, "UnitSystem", Tag.TAG_STRING,
 				"Fingerprint", Tag.TAG_STRING, "Canonical", Tag.TAG_BYTE_ARRAY,
-				"Materials", Tag.TAG_LIST, "PairTensions", Tag.TAG_LIST));
+				"DefaultMaterial", Tag.TAG_STRING, "Materials", Tag.TAG_LIST, "PairTensions", Tag.TAG_LIST));
 		if (!root.getStringOr("Schema", "").equals(SCHEMA)
 				|| !MaterialRegistry.UNIT_SYSTEM_ID.equals(root.getStringOr("UnitSystem", ""))) {
 			throw new IOException("Unsupported material registry schema or unit system");
 		}
 		try {
-			MaterialRegistry registry = new MaterialRegistry(decodeMaterials(root.getListOrEmpty("Materials")),
+			MaterialRegistry registry = new MaterialRegistry(root.getStringOr("DefaultMaterial", ""),
+					decodeMaterials(root.getListOrEmpty("Materials")),
 					decodePairs(root.getListOrEmpty("PairTensions")));
 			if (!registry.fingerprint().equals(root.getStringOr("Fingerprint", ""))
 					|| !java.util.Arrays.equals(registry.canonicalBytes(), root.getByteArray("Canonical").orElseThrow())) {
@@ -121,6 +122,7 @@ public final class MaterialRegistryStore {
 		root.putString("UnitSystem", MaterialRegistry.UNIT_SYSTEM_ID);
 		root.putString("Fingerprint", registry.fingerprint());
 		root.putByteArray("Canonical", registry.canonicalBytes());
+		root.putString("DefaultMaterial", registry.defaultMaterialId());
 		ListTag materials = new ListTag();
 		for (MaterialRegistry.MaterialEntry entry : registry.entries()) {
 			CompoundTag tag = new CompoundTag();

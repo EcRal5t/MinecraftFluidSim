@@ -2,7 +2,7 @@
 
 ## Registry
 
-化学门默认关闭并依赖材料门。首次启用时，数据包定义被规范化为 world-local registry snapshot；此后该 snapshot 的 stable ID、exact rational 定义、预算和 fingerprint 是世界权威。
+chemistry capability 依赖 materials，并随新世界固定 capability profile 一起发布。首次 capability bundle 事务把数据包定义规范化为 world-local registry snapshot；此后该 snapshot 的 stable ID、exact rational 定义、预算和 fingerprint 是世界权威。
 
 当前数据包与 snapshot 不一致只报告 definition mismatch，不重解释已有库存。snapshot 未知、损坏或身份不符时区域和容器状态保留并 LOCKED。
 
@@ -74,4 +74,4 @@ pH 是本项目从局部 `H+`/`OH-` 相对库存派生的 0–14 展示刻度，
 
 ## 功能布局
 
-区域载荷中的 chemistry presence 必须与本次启动的 chemistry 门完全一致。门变化不会向既有 checkpoint 添加或删除化学真值。
+区域载荷中的 chemistry presence 必须与 committed profile 完全一致。运行策略或当前数据包变化不会向既有 checkpoint 添加或删除化学真值。

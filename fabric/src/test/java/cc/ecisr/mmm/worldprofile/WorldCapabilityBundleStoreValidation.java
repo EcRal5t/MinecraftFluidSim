@@ -53,7 +53,8 @@ public final class WorldCapabilityBundleStoreValidation {
 			require(entryNames(bundleRoot.resolve("slot-a")).equals(slotEntries),
 					"committed world capability slot is not exact");
 
-			MaterialRegistry changedMaterial = new MaterialRegistry(definitions.material().entries(), List.of(
+			MaterialRegistry changedMaterial = new MaterialRegistry(definitions.material().defaultMaterialId(),
+					definitions.material().entries(), List.of(
 					new MaterialRegistry.LiquidPairTension("mmm:aqueous", "mmm:oil", Math.nextUp(0.0))));
 			WorldCapabilityBundleStore.Definitions changed = new WorldCapabilityBundleStore.Definitions(
 					changedMaterial, definitions.chemical(), definitions.granular(), definitions.gas(), definitions.thermal());

@@ -1,10 +1,10 @@
 # 颗粒与沉积状态契约
 
-## Registry 与功能门
+## Registry 与 world capability
 
-颗粒门默认关闭并依赖材料门；沉淀还依赖化学门。world granular registry snapshot 保存 stable material/carrier/reaction ID、exact extent/SVQ batch、化学依赖和 fingerprint。未知、损坏或 identity mismatch 保留并 LOCKED。
+granular capability 依赖 materials，precipitation 还依赖 chemistry；它们随新世界固定 profile 一起发布。world granular registry snapshot 保存 stable material/carrier/reaction ID、exact extent/SVQ batch、化学依赖和 fingerprint。未知、损坏或 identity mismatch 保留并 LOCKED。
 
-区域载荷中的 granular 与 chemistry presence 必须与启动时冻结的门一致；不从其他布局构造空颗粒层。
+区域载荷中的 granular 与 chemistry presence 必须与 committed profile 一致；不从其他布局构造空颗粒层。
 
 `ParticulateMaterial` 至少固定以下计算定义：颗粒密度、代表粒径、孔隙率、安息角、静/动摩擦系数、恢复系数、临界 Shields 数、侵蚀率、单 parcel 容量、显示信息和 reactive 标志。`GranularCarrier` 将液相材料绑定到动力黏度与允许的最大 Reynolds 数。注册表验证所有范围和引用后冻结；运行时只使用冻结 ordinal，不按数据包名称重复解析。
 
