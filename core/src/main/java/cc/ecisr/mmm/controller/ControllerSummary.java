@@ -17,6 +17,7 @@ public record ControllerSummary(
 		long checkpointGeneration,
 		long networkGeneration,
 		Footprint footprint,
+		boolean selected,
 		OperatorIntent operatorIntent,
 		MotionState motionState,
 		ThermalState thermalState,

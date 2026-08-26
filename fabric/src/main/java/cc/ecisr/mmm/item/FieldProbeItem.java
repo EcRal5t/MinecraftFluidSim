@@ -7,6 +7,8 @@ import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.fluid.CellCarrierInventoryView;
 import cc.ecisr.mmm.simulation.FluidSimulationService;
 import cc.ecisr.mmm.simulation.ShellFluidQuery;
+import cc.ecisr.mmm.network.ControllerSummaryPayload;
+import cc.ecisr.mmm.network.FluidProtocolServer;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
@@ -41,9 +43,14 @@ public final class FieldProbeItem extends Item {
 		FluidSimulationService service = FluidSimulationService.get(level.getServer());
 		if (level.getBlockState(context.getClickedPos()).is(MmmBlocks.FLUID_CONTROLLER)) {
 			ControllerSummary summary = service.controllerSummary(player, context.getClickedPos());
-			player.sendSystemMessage(summary == null ? Component.translatable("message.mmm.probe.controller_missing")
-					: present(summary));
-			return summary == null ? InteractionResult.FAIL : InteractionResult.SUCCESS_SERVER;
+			if (summary == null) {
+				player.sendSystemMessage(Component.translatable("message.mmm.probe.controller_missing"));
+				return InteractionResult.FAIL;
+			}
+			if (!FluidProtocolServer.send(player, new ControllerSummaryPayload(summary))) {
+				player.sendSystemMessage(present(summary));
+			}
+			return InteractionResult.SUCCESS_SERVER;
 		}
 		if (!MmmBlocks.isBoundary(level.getBlockState(context.getClickedPos()))) {
 			player.sendSystemMessage(Component.translatable("message.mmm.probe.not_shell"));
@@ -72,7 +79,8 @@ public final class FieldProbeItem extends Item {
 				summary.regionId().toString().substring(0, 8), summary.profileFingerprint().substring(0, 12),
 				summary.checkpointGeneration(), summary.networkGeneration());
 		text.append("\n").append(Component.translatable("message.mmm.probe.controller_state",
-				summary.operatorIntent().name(), summary.motionState().name(), summary.thermalState().name(),
+				summary.selected() ? "SELECTED" : "NOT_SELECTED", summary.operatorIntent().name(),
+				summary.motionState().name(), summary.thermalState().name(),
 				summary.availability().ready() ? "READY" : summary.availability().reason().name()));
 		ControllerSummary.Footprint footprint = summary.footprint();
 		text.append("\n").append(Component.translatable("message.mmm.probe.controller_footprint",

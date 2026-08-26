@@ -12,6 +12,8 @@ import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.controller.ControllerSummary;
+import cc.ecisr.mmm.controller.ControllerConsoleAction;
+import cc.ecisr.mmm.controller.ControllerConsoleSessions;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.CellCarrierInventoryView;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
@@ -127,9 +129,8 @@ public final class FluidSimulationService {
 	private final Set<UUID> runtimeDirtyContainerTransfers = new HashSet<>();
 	/** Prevents an unresolved WAL from emitting the same ERROR every server tick. */
 	private final Map<UUID, String> reportedContainerTransferLocks = new HashMap<>();
-	/** Per-player opaque console token; it never participates in region or inventory persistence. */
-	private final Map<ControllerSummaryViewer, Long> controllerSummaryGenerations = new HashMap<>();
-	private long nextControllerSummaryGeneration = 1L;
+	/** Per-player opaque console tokens; they never participate in region or inventory persistence. */
+	private final ControllerConsoleSessions controllerConsoleSessions = new ControllerConsoleSessions();
 	private Set<String> reportedContainerTransferStoreIssues = Set.of();
 	private ContainerTransferFaultPoint containerTransferFault = ContainerTransferFaultPoint.NONE;
 	private ResourceKey<Level> takeoverDimension;
@@ -807,11 +808,12 @@ public final class FluidSimulationService {
 		if (player == null || controllerPosition == null) return null;
 		ServerLevel level = player.level();
 		if (!level.getServer().isSameThread()) throw new IllegalStateException("Controller summary is server-thread-only");
+		if (player.distanceToSqr(controllerPosition.getX() + 0.5,
+				controllerPosition.getY() + 0.5, controllerPosition.getZ() + 0.5) > 64.0) return null;
+		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) return null;
 		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
 		if (region == null) return null;
-		ControllerSummaryViewer viewer = new ControllerSummaryViewer(player.getUUID(), region.id());
-		long summaryGeneration = nextControllerSummaryGeneration();
-		controllerSummaryGenerations.put(viewer, summaryGeneration);
+		long summaryGeneration = controllerConsoleSessions.issue(player.getUUID(), region.id());
 		return createControllerSummary(region, summaryGeneration);
 	}
 
@@ -840,6 +842,7 @@ public final class FluidSimulationService {
 				new ControllerSummary.Footprint(footprint.controllerPosition().getX(), footprint.controllerPosition().getY(),
 						footprint.controllerPosition().getZ(), footprint.blockSizeX(), footprint.blockSizeY(),
 						footprint.blockSizeZ(), footprint.interiorBlocks().size(), footprint.requiredChunks().size()),
+				regionManager.selected() == region,
 				region.paused() ? ControllerSummary.OperatorIntent.PAUSED : ControllerSummary.OperatorIntent.RUNNING,
 				ControllerSummary.MotionState.valueOf(region.lifecycle().state().name()),
 				thermal == null ? ControllerSummary.ThermalState.UNBOUND
@@ -903,15 +906,54 @@ public final class FluidSimulationService {
 		return ControllerSummary.Capacity.unavailable(limit);
 	}
 
-	private long nextControllerSummaryGeneration() {
-		if (nextControllerSummaryGeneration == Long.MAX_VALUE) {
-			controllerSummaryGenerations.clear();
-			nextControllerSummaryGeneration = 1L;
+	/**
+	 * Applies one ordinary console action after re-resolving every client-supplied identity.
+	 * Returns a readable refusal or {@code null}; the caller always authors a fresh summary.
+	 */
+	public String applyControllerConsoleAction(
+			ServerPlayer player, UUID requestedRegionId, BlockPos controllerPosition,
+			long summaryGeneration, ControllerConsoleAction action
+	) {
+		if (player == null || requestedRegionId == null || controllerPosition == null || action == null) {
+			return "请求缺少控制器身份";
 		}
-		return nextControllerSummaryGeneration++;
+		ServerLevel level = player.level();
+		if (!level.getServer().isSameThread()) throw new IllegalStateException("Controller actions are server-thread-only");
+		double distanceSquared = player.distanceToSqr(controllerPosition.getX() + 0.5,
+				controllerPosition.getY() + 0.5, controllerPosition.getZ() + 0.5);
+		if (distanceSquared > 64.0) return "玩家距离控制器过远";
+		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) return "目标方块不再是控制器";
+		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
+		if (region == null || !region.id().equals(requestedRegionId)) return "控制器 owner 已改变";
+		if (!controllerConsoleSessions.consume(player.getUUID(), region.id(), summaryGeneration)) {
+			return "summary 已过期，请刷新";
+		}
+
+		return switch (action) {
+			case SELECT -> {
+				if (!regionManager.select(region.id())) yield "控制器区域已不存在";
+				yield null;
+			}
+			case REFRESH_AVAILABILITY -> ensureRegionAvailable(level, region)
+					? null : "availability 仍未恢复：" + region.availabilityFailure();
+			case PAUSE -> changeControllerRunIntent(player, region, true);
+			case RESUME -> changeControllerRunIntent(player, region, false);
+		};
 	}
 
-	private record ControllerSummaryViewer(UUID playerId, UUID regionId) { }
+	private String changeControllerRunIntent(ServerPlayer player, FluidRegion region, boolean pause) {
+		if (!player.isCreative()) return "只有创造模式玩家可以修改运行意图";
+		if (!authoritativeWritesReady()) return authoritativeWriteFailure("修改控制器运行意图");
+		if (region.paused() == pause) return "运行意图已改变，请刷新";
+		region.setPaused(pause);
+		if (!pause) region.wakeForActivity();
+		if (region.solverLoaded()) sendSnapshot(player.level(), region);
+		return null;
+	}
+
+	public void forgetControllerConsoleViewer(UUID playerId) {
+		controllerConsoleSessions.forget(playerId);
+	}
 
 	public boolean chemistryFeatureEnabled() {
 		return chemistryFeatureEnabled;

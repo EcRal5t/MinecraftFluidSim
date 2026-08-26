@@ -8,6 +8,7 @@ import cc.ecisr.mmm.network.FluidChemicalSnapshotPayload;
 import cc.ecisr.mmm.network.FluidGranularSnapshotPayload;
 import cc.ecisr.mmm.network.FluidThermalSnapshotPayload;
 import cc.ecisr.mmm.network.FluidSnapshotPayload;
+import cc.ecisr.mmm.network.ControllerSummaryPayload;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientConfigurationConnectionEvents;
@@ -41,6 +42,9 @@ public final class MmmModClient implements ClientModInitializer {
 				(payload, context) -> renderer.accept(payload, negotiated.get()));
 		ClientPlayNetworking.registerGlobalReceiver(FluidThermalSnapshotPayload.TYPE,
 				(payload, context) -> renderer.accept(payload, negotiated.get()));
+		ClientPlayNetworking.registerGlobalReceiver(ControllerSummaryPayload.TYPE, (payload, context) ->
+				context.client().execute(() -> context.client().setScreenAndShow(
+						new ControllerConsoleScreen(payload.summary()))));
 		ClientConfigurationConnectionEvents.START.register((listener, client) -> {
 			negotiated.set(null);
 			renderer.clear();
