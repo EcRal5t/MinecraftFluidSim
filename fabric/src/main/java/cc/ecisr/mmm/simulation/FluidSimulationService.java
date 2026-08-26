@@ -34,6 +34,7 @@ import cc.ecisr.mmm.granular.GranularLimits;
 import cc.ecisr.mmm.granular.GranularMechanics;
 import cc.ecisr.mmm.granular.GranularPhaseTransferEngine;
 import cc.ecisr.mmm.granular.GranularRegistry;
+import cc.ecisr.mmm.recovery.CrossDomainRecovery;
 import cc.ecisr.mmm.transfer.ChemicalContents;
 import cc.ecisr.mmm.transfer.ContainerTransferActor;
 import cc.ecisr.mmm.transfer.ContainerTransferJournal;
@@ -458,11 +459,17 @@ public final class FluidSimulationService {
 		reportedContainerTransferStoreIssues = Set.of();
 		reportedContainerTransferLocks.keySet().retainAll(indexedContainerTransfers.keySet());
 		for (UUID transactionId : List.copyOf(indexedContainerTransfers.keySet())) {
-			if (awaitingContainerActors.contains(transactionId)) {
-				convergeAwaitingContainerActor(server, transactionId);
-			} else if (!auditedContainerTransfers.contains(transactionId)) {
+			if (!awaitingContainerActors.contains(transactionId)
+					&& !auditedContainerTransfers.contains(transactionId)) {
 				processContainerTransfer(server, transactionId);
 			}
+		}
+	}
+
+	/** Explicit player/chunk/world availability events may retry WALs that previously had no actor. */
+	public void retryUnavailableContainerTransfers(MinecraftServer server) {
+		for (UUID transactionId : List.copyOf(awaitingContainerActors)) {
+			convergeAwaitingContainerActor(server, transactionId);
 		}
 	}
 
@@ -542,50 +549,31 @@ public final class FluidSimulationService {
 			}
 			long head = committedRegionGeneration(journal.regionId());
 			long headChecksum = committedRegionManifestChecksum(journal.regionId());
-			ContainerTransferRecovery.Decision decision = ContainerTransferRecovery.decide(
-					head, headChecksum, journal, runtimeDirtyContainerTransfers.contains(transactionId));
-			switch (decision) {
-				case LOCK_LIVE_SOLVER_DIRTY -> {
-					auditedContainerTransfers.add(transactionId);
-					logContainerTransferLockOnce(transactionId,
-							"Container transfer WAL " + transactionId + " remains locked: its live solver changed but region "
-									+ journal.regionId() + " HEAD is still " + head
-									+ "; restart is required to restore the base checkpoint");
-				}
+			CrossDomainRecovery.ExternalTruth actorTruth = containerActors.classify(server, journal);
+			CrossDomainRecovery.Decision decision = ContainerTransferRecovery.decide(
+					head, headChecksum, journal, runtimeDirtyContainerTransfers.contains(transactionId), actorTruth);
+			switch (decision.outcome()) {
 				case DISCARD_UNCOMMITTED -> {
 					deleteContainerTransfer(transactionId);
 					reportedContainerTransferLocks.remove(transactionId);
 					MmmMod.LOGGER.warn("Discarded uncommitted container transfer WAL {} for region {}", transactionId, journal.regionId());
 				}
-				case CONVERGE_AFTER_ITEM -> {
-					switch (containerActors.convergeAfterItem(server, journal)) {
-						case APPLIED -> {
-							completeContainerTransferCommit(server, journal);
-							MmmMod.LOGGER.warn("Converged container transfer WAL {} to a durably saved after item", transactionId);
-						}
+				case CONVERGE_AFTER -> {
+					switch (convergeAndCompleteContainerActor(server, journal)) {
+						case APPLIED -> MmmMod.LOGGER.warn(
+								"Converged container transfer WAL {} to a durably saved and verified after item", transactionId);
 						case UNAVAILABLE -> awaitingContainerActors.add(transactionId);
 						case CONFLICT -> lockContainerActorConflict(transactionId, journal);
 					}
 				}
-				case LOCK_TARGET_WITHOUT_AFTER_ITEM -> {
+				case WAIT_UNAVAILABLE -> awaitingContainerActors.add(transactionId);
+				case LOCKED -> {
 					auditedContainerTransfers.add(transactionId);
 					logContainerTransferLockOnce(transactionId,
-							"Container transfer WAL " + transactionId + " is locked: region " + journal.regionId()
-								+ " HEAD committed target " + head + ", but WAL phase " + journal.phase()
-								+ " contains no authoritative after-item");
-				}
-				case LOCK_CHECKSUM_MISMATCH -> {
-					auditedContainerTransfers.add(transactionId);
-					logContainerTransferLockOnce(transactionId,
-							"Container transfer WAL " + transactionId + " is locked: target generation checksum "
-								+ journal.targetManifestChecksum() + " does not match HEAD " + headChecksum);
-				}
-				case LOCK_GENERATION_MISMATCH -> {
-					auditedContainerTransfers.add(transactionId);
-					logContainerTransferLockOnce(transactionId,
-							"Container transfer WAL " + transactionId + " is locked: region " + journal.regionId()
-								+ " HEAD " + head + " is neither base " + journal.baseGeneration()
-								+ " nor target " + journal.targetGeneration());
+							"Container transfer WAL " + transactionId + " is locked by cross-domain recovery: "
+									+ decision.reason() + " (region=" + journal.regionId() + ", head=" + head
+									+ ", base=" + journal.baseGeneration() + ", target=" + journal.targetGeneration()
+									+ ", actor=" + actorTruth + ")");
 				}
 			}
 		} catch (IOException | RuntimeException exception) {
@@ -595,22 +583,8 @@ public final class FluidSimulationService {
 	}
 
 	private void convergeAwaitingContainerActor(MinecraftServer server, UUID transactionId) {
-		ContainerTransferJournal journal = indexedContainerTransfers.get(transactionId);
-		if (journal == null) return;
-		try {
-			switch (containerActors.convergeAfterItem(server, journal)) {
-				case UNAVAILABLE -> { return; }
-				case CONFLICT -> lockContainerActorConflict(transactionId, journal);
-				case APPLIED -> {
-					completeContainerTransferCommit(server, journal);
-					MmmMod.LOGGER.warn("Converged container transfer WAL {} after its actor became available", transactionId);
-				}
-			}
-		} catch (IOException | RuntimeException exception) {
-			awaitingContainerActors.remove(transactionId);
-			auditedContainerTransfers.add(transactionId);
-			MmmMod.LOGGER.error("Could not converge container transfer WAL {} after actor availability", transactionId, exception);
-		}
+		awaitingContainerActors.remove(transactionId);
+		processContainerTransfer(server, transactionId);
 	}
 
 	private void lockContainerActorConflict(UUID transactionId, ContainerTransferJournal journal) {
@@ -640,16 +614,23 @@ public final class FluidSimulationService {
 		}
 	}
 
-	/** Event publication follows durable actor save and WAL deletion; it is never a commit input. */
-	private void completeContainerTransferCommit(
+	private MinecraftContainerActorAccess.Convergence convergeAndCompleteContainerActor(
 			MinecraftServer server, ContainerTransferJournal journal
 	) throws IOException {
+		MinecraftContainerActorAccess.Convergence applied = containerActors.applyAfterItem(server, journal);
+		if (applied != MinecraftContainerActorAccess.Convergence.APPLIED) return applied;
 		ContainerTransferCommittedEvent event = committedTransferEvent(journal);
 		containerActors.persistAfterItem(server, journal.actor());
+		switch (containerActors.verifyAfterItem(server, journal)) {
+			case UNAVAILABLE -> { return MinecraftContainerActorAccess.Convergence.UNAVAILABLE; }
+			case THIRD -> { return MinecraftContainerActorAccess.Convergence.CONFLICT; }
+			case AFTER -> { }
+		}
 		adoptRecoveredContainerCheckpoint(journal);
 		deleteContainerTransfer(journal.transactionId());
 		reportedContainerTransferLocks.remove(journal.transactionId());
 		committedEvents.publish(event);
+		return MinecraftContainerActorAccess.Convergence.APPLIED;
 	}
 
 	private static ContainerTransferCommittedEvent committedTransferEvent(

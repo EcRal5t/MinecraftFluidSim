@@ -27,6 +27,7 @@ import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterial;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.recovery.CrossDomainRecovery;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 
 import java.io.IOException;
@@ -456,24 +457,64 @@ public final class ContainerTransferStoreValidation {
 				new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.WATER_BUCKET, -1L, null),
 				0x6789L,
 				ContainerTransferJournal.Phase.REGION_COMMITTED);
-		check(ContainerTransferRecovery.decide(4L, prepared, false)
-				== ContainerTransferRecovery.Decision.DISCARD_UNCOMMITTED,
-				"clean base HEAD must discard an uncommitted WAL");
-		check(ContainerTransferRecovery.decide(4L, committed, true)
-				== ContainerTransferRecovery.Decision.LOCK_LIVE_SOLVER_DIRTY,
-				"current-process dirty solver must never be rolled back as if restarted");
-		check(ContainerTransferRecovery.decide(5L, 0x6789L, committed, false)
-				== ContainerTransferRecovery.Decision.CONVERGE_AFTER_ITEM,
-				"target HEAD plus committed after-item must converge");
-		check(ContainerTransferRecovery.decide(5L, 0x6788L, committed, false)
-				== ContainerTransferRecovery.Decision.LOCK_CHECKSUM_MISMATCH,
-				"target HEAD with a different manifest checksum must lock");
-		check(ContainerTransferRecovery.decide(5L, prepared, false)
-				== ContainerTransferRecovery.Decision.LOCK_TARGET_WITHOUT_AFTER_ITEM,
-				"target HEAD without an authoritative after-item must lock");
-		check(ContainerTransferRecovery.decide(6L, committed, false)
-				== ContainerTransferRecovery.Decision.LOCK_GENERATION_MISMATCH,
-				"foreign HEAD generation must lock");
+		check(ContainerTransferRecovery.decide(4L, 0L, prepared, false,
+				CrossDomainRecovery.ExternalTruth.BEFORE).outcome()
+				== CrossDomainRecovery.Outcome.DISCARD_UNCOMMITTED,
+				"clean base HEAD with an exact before actor must discard an uncommitted WAL");
+		check(ContainerTransferRecovery.decide(4L, 0L, committed, false,
+				CrossDomainRecovery.ExternalTruth.AFTER).reason()
+				== CrossDomainRecovery.Reason.BASE_EXTERNAL_CHANGED,
+				"base HEAD accepted an actor that had already changed to after");
+		check(ContainerTransferRecovery.decide(5L, 0x6789L, committed, false,
+				CrossDomainRecovery.ExternalTruth.BEFORE).outcome()
+				== CrossDomainRecovery.Outcome.CONVERGE_AFTER,
+				"target HEAD plus committed journal did not converge a before actor");
+		check(ContainerTransferRecovery.decide(5L, 0x6788L, committed, false,
+				CrossDomainRecovery.ExternalTruth.AFTER).reason()
+				== CrossDomainRecovery.Reason.TARGET_CHECKSUM_MISMATCH,
+				"target HEAD with a different manifest checksum did not lock");
+
+		int combinations = 0;
+		for (CrossDomainRecovery.JournalPhase phase : CrossDomainRecovery.JournalPhase.values()) {
+			for (int headCase = 0; headCase < 4; headCase++) {
+				for (boolean dirty : new boolean[] {false, true}) {
+					for (CrossDomainRecovery.ExternalTruth first : CrossDomainRecovery.ExternalTruth.values()) {
+						for (CrossDomainRecovery.ExternalTruth second : CrossDomainRecovery.ExternalTruth.values()) {
+							long head = headCase == 0 ? 4L : headCase <= 2 ? 5L : 6L;
+							long checksum = headCase == 2 ? 0x6788L : 0x6789L;
+							CrossDomainRecovery.Decision actual = CrossDomainRecovery.decide(
+									new CrossDomainRecovery.Boundary(head, checksum, 4L, 5L,
+											true, 0x6789L, phase, dirty), List.of(first, second));
+							CrossDomainRecovery.Outcome expected;
+							if (headCase == 3 || headCase == 2
+									|| headCase == 1 && phase == CrossDomainRecovery.JournalPhase.PREPARED
+									|| headCase == 0 && dirty) expected = CrossDomainRecovery.Outcome.LOCKED;
+							else if (headCase == 0 && (first == CrossDomainRecovery.ExternalTruth.AFTER
+									|| first == CrossDomainRecovery.ExternalTruth.THIRD
+									|| second == CrossDomainRecovery.ExternalTruth.AFTER
+									|| second == CrossDomainRecovery.ExternalTruth.THIRD)) {
+								expected = CrossDomainRecovery.Outcome.LOCKED;
+							} else if (headCase == 1 && (first == CrossDomainRecovery.ExternalTruth.THIRD
+									|| second == CrossDomainRecovery.ExternalTruth.THIRD)) {
+								expected = CrossDomainRecovery.Outcome.LOCKED;
+							} else if (first == CrossDomainRecovery.ExternalTruth.UNAVAILABLE
+									|| second == CrossDomainRecovery.ExternalTruth.UNAVAILABLE) {
+								expected = CrossDomainRecovery.Outcome.WAIT_UNAVAILABLE;
+							} else expected = headCase == 0 ? CrossDomainRecovery.Outcome.DISCARD_UNCOMMITTED
+									: CrossDomainRecovery.Outcome.CONVERGE_AFTER;
+							check(actual.outcome() == expected, "cross-domain matrix mismatch for "
+									+ phase + "/head=" + headCase + "/dirty=" + dirty + "/" + first + "/" + second);
+							if (actual.outcome() == CrossDomainRecovery.Outcome.CONVERGE_AFTER) {
+								check(actual.beforeMembers().size() + actual.afterMembers().size() == 2,
+										"convergence decision lost an external member");
+							}
+							combinations++;
+						}
+					}
+				}
+			}
+		}
+		check(combinations == 256, "cross-domain recovery matrix was incomplete");
 	}
 
 	private static void testUnknownLayout() throws Exception {
