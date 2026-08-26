@@ -209,13 +209,25 @@ public final class AirNetwork {
 	 * counters count queries that hit the regularisation window.
 	 */
 	public double gaugePressure(int nodeId) {
-		if (nodeId == AMBIENT_NODE) return 0.0;
-		AirNode node = sealed(nodeId);
-		double available = Math.max(node.availableVolume(), MIN_AVAILABLE_VOLUME);
-		double pressure = REFERENCE_PRESSURE * (node.standardVolume() / available - 1.0);
+		double pressure = rawGaugePressure(nodeId);
 		if (pressure > MAX_GAUGE_PRESSURE) { pressureCeilingEvents++; return MAX_GAUGE_PRESSURE; }
 		if (pressure < MIN_GAUGE_PRESSURE) { pressureFloorEvents++; return MIN_GAUGE_PRESSURE; }
 		return pressure;
+	}
+
+	/** Same derived pressure without advancing numerical-window diagnostics; safe for Query/probe consumers. */
+	public double observedGaugePressure(int nodeId) {
+		double pressure = rawGaugePressure(nodeId);
+		if (pressure > MAX_GAUGE_PRESSURE) return MAX_GAUGE_PRESSURE;
+		if (pressure < MIN_GAUGE_PRESSURE) return MIN_GAUGE_PRESSURE;
+		return pressure;
+	}
+
+	private double rawGaugePressure(int nodeId) {
+		if (nodeId == AMBIENT_NODE) return 0.0;
+		AirNode node = sealed(nodeId);
+		double available = Math.max(node.availableVolume(), MIN_AVAILABLE_VOLUME);
+		return REFERENCE_PRESSURE * (node.standardVolume() / available - 1.0);
 	}
 
 	/**

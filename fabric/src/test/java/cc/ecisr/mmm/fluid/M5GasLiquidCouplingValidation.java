@@ -40,6 +40,12 @@ public final class M5GasLiquidCouplingValidation {
 		check(domain.airNetwork().nodeCount() == 1
 				&& domain.airNetwork().standardVolumeNanos(1) == 216_000_000_000L,
 				"mixed split fixture did not begin as one ambient-equilibrium cavity");
+		CellCarrierInventoryView observed = domain.observeCellCarriers(1, 1, 1);
+		check(observed != null && observed.gas() != null && !observed.gas().ambient()
+				&& observed.gas().nodeId() == 1
+				&& observed.gas().components().stream().mapToLong(
+						CellCarrierInventoryView.ComponentAmount::standardVolumeNanos).sum() == 216_000_000_000L,
+				"cell carrier observation lost sealed gas identity or component inventory");
 
 		for (int z = 1; z < n - 1; z++) for (int y = 1; y < n - 1; y++) {
 			domain.setSolid(4, y, z, true);

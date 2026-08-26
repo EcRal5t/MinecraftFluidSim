@@ -21,10 +21,20 @@ public final class ShellFluidQuery {
 	public static FluidQueryResult query(
 			ServerLevel level, BlockPos block, Direction face, Vec3 rawHit
 	) {
+		return resolve(level, block, face, rawHit).result();
+	}
+
+	public static Resolution resolve(
+			ServerLevel level, BlockPos block, Direction face, Vec3 rawHit
+	) {
 		Vec3 hit = clampToFace(rawHit, block, face.getAxis());
-		return select(
-				query(level, hit, face, NEAR_FACE_OFFSET_METRES),
-				query(level, hit, face.getOpposite(), THROUGH_SHELL_OFFSET_METRES));
+		Vec3 nearPoint = offset(hit, face, NEAR_FACE_OFFSET_METRES);
+		Vec3 throughPoint = offset(hit, face.getOpposite(), THROUGH_SHELL_OFFSET_METRES);
+		FluidQueryResult near = query(level, nearPoint), through = query(level, throughPoint);
+		FluidQueryResult selected = select(near, through);
+		boolean observable = selected.status() == FluidQueryStatus.OK || selected.status() == FluidQueryStatus.EMPTY;
+		Vec3 point = !observable ? null : selected == near ? nearPoint : selected == through ? throughPoint : null;
+		return new Resolution(selected, point);
 	}
 
 	static FluidQueryResult select(FluidQueryResult near, FluidQueryResult through) {
@@ -47,12 +57,16 @@ public final class ShellFluidQuery {
 				"neither side of the shell face resolves to a loaded controller interior");
 	}
 
-	private static FluidQueryResult query(ServerLevel level, Vec3 hit, Direction direction, double offset) {
+	private static FluidQueryResult query(ServerLevel level, Vec3 point) {
 		return MmmFabricApi.query(level.getServer()).query(new FluidQueryRequest(
 				level.dimension().identifier().toString(), null,
-				hit.x + direction.getStepX() * offset,
-				hit.y + direction.getStepY() * offset,
-				hit.z + direction.getStepZ() * offset));
+				point.x, point.y, point.z));
+	}
+
+	private static Vec3 offset(Vec3 hit, Direction direction, double distance) {
+		return new Vec3(hit.x + direction.getStepX() * distance,
+				hit.y + direction.getStepY() * distance,
+				hit.z + direction.getStepZ() * distance);
 	}
 
 	private static boolean claimsInterior(FluidQueryResult result) {
@@ -78,5 +92,15 @@ public final class ShellFluidQuery {
 	private static double clamp(double coordinate, int blockMinimum) {
 		return Math.max(blockMinimum + FACE_EDGE_EPSILON_METRES,
 				Math.min(blockMinimum + 1.0 - FACE_EDGE_EPSILON_METRES, coordinate));
+	}
+
+	public record Resolution(FluidQueryResult result, Vec3 interiorPoint) {
+		public Resolution {
+			boolean resolvesInterior = result != null
+					&& (result.status() == FluidQueryStatus.OK || result.status() == FluidQueryStatus.EMPTY);
+			if (result == null || resolvesInterior != (interiorPoint != null)) {
+				throw new IllegalArgumentException("Shell query resolution is inconsistent");
+			}
+		}
 	}
 }

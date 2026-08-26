@@ -1216,6 +1216,13 @@ public final class M9ThermalValidation {
 		domain.bindThermal(registry, liquids, 300.0);
 		domain.addCoherentPhaseExternal(0, 0, 0, lower.id(),
 				SolidVolume.SVQ_PER_CELL / 2L, 0.5, null, 0.0);
+		CellCarrierInventoryView coherentView = domain.observeCellCarriers(0, 0, 0);
+		require(coherentView != null && coherentView.solids().stream().anyMatch(solid ->
+				solid.kind() == CellCarrierInventoryView.SolidKind.COHERENT
+						&& solid.stableId().equals(lower.id())
+						&& solid.solidVolumeSvq() == SolidVolume.SVQ_PER_CELL / 2L
+						&& close(solid.massKilograms(), 0.5)),
+				"cell carrier observation lost coherent phase identity or inventory");
 		boolean collisionBlocked = false;
 		try {
 			domain.planCollisionEdits(List.of(

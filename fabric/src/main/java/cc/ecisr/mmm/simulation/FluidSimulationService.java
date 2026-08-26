@@ -12,6 +12,7 @@ import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
+import cc.ecisr.mmm.fluid.CellCarrierInventoryView;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
@@ -748,6 +749,34 @@ public final class FluidSimulationService {
 	/** Stable read-only API surface; construction performs no world or region I/O. */
 	public MmmQueryApi queryApi(MinecraftServer server) {
 		return new FabricFluidQueryApi(server, regionManager, capabilityProfile != null);
+	}
+
+	/** Read-only companion to Query for cell-local solid/gas carriers; callers first resolve a unique interior point. */
+	public CarrierCellObservation observeCellCarriers(ServerLevel level, Vec3 interiorPoint) {
+		if (!level.getServer().isSameThread()) throw new IllegalStateException("Carrier observation is server-thread-only");
+		FluidRegion region = targets.regionAtBlock(level, BlockPos.containing(interiorPoint));
+		if (region == null || region.availabilityFailure() != null || !region.solverLoaded()) return null;
+		double h = region.solverConfig().cellSize();
+		int x = Mth.floor((interiorPoint.x - region.origin().getX()) / h);
+		int y = Mth.floor((interiorPoint.y - region.origin().getY()) / h);
+		int z = Mth.floor((interiorPoint.z - region.origin().getZ()) / h);
+		if (x < 0 || x >= region.sizeX() || y < 0 || y >= region.sizeY() || z < 0 || z >= region.sizeZ()) {
+			return null;
+		}
+		return new CarrierCellObservation(region.id(), region.networkGeneration(), x, y, z,
+				region.domain().observeCellCarriers(x, y, z));
+	}
+
+	public record CarrierCellObservation(
+			UUID regionId, long regionNetworkGeneration, int cellX, int cellY, int cellZ,
+			CellCarrierInventoryView carriers
+	) {
+		public CarrierCellObservation {
+			if (regionId == null || regionNetworkGeneration <= 0L
+					|| cellX < 0 || cellY < 0 || cellZ < 0) {
+				throw new IllegalArgumentException("Carrier cell observation identity is invalid");
+			}
+		}
 	}
 
 	public boolean chemistryFeatureEnabled() {

@@ -71,12 +71,20 @@ public final class AirNetworkValidation {
 		check(network.gaugePressure(evacuated) == AirNetwork.MIN_GAUGE_PRESSURE,
 				"evacuated cavity must clamp at the near-vacuum floor");
 		check(network.pressureFloorEvents() > 0, "floor clamp was not counted");
+		int floorEvents = network.pressureFloorEvents();
+		check(network.observedGaugePressure(evacuated) == AirNetwork.MIN_GAUGE_PRESSURE
+				&& network.pressureFloorEvents() == floorEvents,
+				"read-only pressure observation changed floor diagnostics");
 
 		int filled = network.addNode(1.0, 1.0);
 		network.updateAvailableVolume(filled, 0.0);
 		check(network.gaugePressure(filled) == AirNetwork.MAX_GAUGE_PRESSURE,
 				"filled cavity must clamp at the pressure ceiling");
 		check(network.pressureCeilingEvents() > 0, "ceiling clamp was not counted");
+		int ceilingEvents = network.pressureCeilingEvents();
+		check(network.observedGaugePressure(filled) == AirNetwork.MAX_GAUGE_PRESSURE
+				&& network.pressureCeilingEvents() == ceilingEvents,
+				"read-only pressure observation changed ceiling diagnostics");
 		checkLedger(network, "equation-of-state probes");
 	}
 

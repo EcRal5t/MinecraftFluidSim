@@ -101,6 +101,13 @@ public final class M8GranularValidation {
 		collision.bindGranular(registry, liquids); collision.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		require(collision.tryInsertExactGranular(1, 1, 1, small, 0, true).inserted(),
 				"collision displacement fixture could not insert its local parcel");
+		var observed = collision.observeCellCarriers(1, 1, 1);
+		require(observed != null && observed.solids().size() == 1
+				&& observed.solids().getFirst().kind() == cc.ecisr.mmm.fluid.CellCarrierInventoryView.SolidKind.ACTIVE
+				&& observed.solids().getFirst().stableId().equals(BuiltinGranularDefinitions.FINE_SAND)
+				&& observed.solids().getFirst().solidVolumeSvq() == small.totalSolidVolumeSvq()
+				&& rawClose(observed.solids().getFirst().massKilograms(), small.totalMass()),
+				"cell carrier observation changed active parcel identity or inventory");
 		FlipFluidDomain.CollisionEditPlan collisionPlan = collision.planCollisionEdits(List.of(
 				new FlipFluidDomain.CollisionEdit(1, 1, 1, 0xff),
 				new FlipFluidDomain.CollisionEdit(2, 1, 1, 0xff)));

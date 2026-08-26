@@ -3,6 +3,8 @@ package cc.ecisr.mmm.item;
 import cc.ecisr.mmm.api.query.FluidCellObservation;
 import cc.ecisr.mmm.api.query.FluidQueryResult;
 import cc.ecisr.mmm.block.MmmBlocks;
+import cc.ecisr.mmm.fluid.CellCarrierInventoryView;
+import cc.ecisr.mmm.simulation.FluidSimulationService;
 import cc.ecisr.mmm.simulation.ShellFluidQuery;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
@@ -23,6 +25,8 @@ import java.util.Locale;
 public final class FieldProbeItem extends Item {
 	private static final int MAX_MATERIALS = 4;
 	private static final int MAX_SPECIES = 4;
+	private static final int MAX_SOLIDS = 4;
+	private static final int MAX_GAS_COMPONENTS = 4;
 
 	public FieldProbeItem(Properties properties) {
 		super(properties);
@@ -37,9 +41,11 @@ public final class FieldProbeItem extends Item {
 			player.sendSystemMessage(Component.translatable("message.mmm.probe.not_shell"));
 			return InteractionResult.FAIL;
 		}
-		FluidQueryResult result = ShellFluidQuery.query(level, context.getClickedPos(),
+		ShellFluidQuery.Resolution resolution = ShellFluidQuery.resolve(level, context.getClickedPos(),
 				context.getClickedFace(), context.getClickLocation());
-		player.sendSystemMessage(present(result));
+		FluidSimulationService.CarrierCellObservation carriers = resolution.interiorPoint() == null ? null
+				: FluidSimulationService.get(level.getServer()).observeCellCarriers(level, resolution.interiorPoint());
+		player.sendSystemMessage(present(resolution.result(), carriers));
 		return InteractionResult.SUCCESS_SERVER;
 	}
 
@@ -50,27 +56,86 @@ public final class FieldProbeItem extends Item {
 		tooltip.accept(Component.translatable("item.mmm.field_probe.tooltip").withStyle(ChatFormatting.GRAY));
 	}
 
-	private static Component present(FluidQueryResult result) {
-		if (result.observation() == null) {
+	private static Component present(
+			FluidQueryResult result, FluidSimulationService.CarrierCellObservation carrierCell
+	) {
+		if (result.observation() == null && carrierCell == null) {
 			return result.availabilityReason() == null
 					? Component.translatable("message.mmm.probe.failed", result.status().name())
 					: Component.translatable("message.mmm.probe.unavailable",
 							result.status().name(), result.availabilityReason().name());
 		}
 		FluidCellObservation observation = result.observation();
-		MutableComponent text = Component.translatable("message.mmm.probe.header",
-				observation.regionId().toString().substring(0, 8), observation.regionNetworkGeneration(),
-				observation.cellX(), observation.cellY(), observation.cellZ());
-		text.append("\n").append(Component.translatable("message.mmm.probe.liquid",
-				decimal(observation.liquidVolumeCubicMetres() * 1_000.0),
-				decimal(observation.liquidMassKilograms()), decimal(observation.densityKilogramsPerCubicMetre())));
-		if (observation.temperatureKelvin().isPresent()) {
-			text.append("\n").append(Component.translatable("message.mmm.probe.temperature",
-					decimal(observation.temperatureKelvin().getAsDouble())));
+		if (observation != null && carrierCell != null && (!observation.regionId().equals(carrierCell.regionId())
+				|| observation.regionNetworkGeneration() != carrierCell.regionNetworkGeneration()
+				|| observation.cellX() != carrierCell.cellX() || observation.cellY() != carrierCell.cellY()
+				|| observation.cellZ() != carrierCell.cellZ())) {
+			return Component.translatable("message.mmm.probe.inconsistent");
 		}
-		appendMaterials(text, observation.materials());
-		appendSpecies(text, observation.species());
+		MutableComponent text = Component.translatable("message.mmm.probe.header",
+				regionId(observation, carrierCell).toString().substring(0, 8), generation(observation, carrierCell),
+				cellX(observation, carrierCell), cellY(observation, carrierCell), cellZ(observation, carrierCell));
+		if (observation != null) {
+			text.append("\n").append(Component.translatable("message.mmm.probe.liquid",
+					decimal(observation.liquidVolumeCubicMetres() * 1_000.0),
+					decimal(observation.liquidMassKilograms()), decimal(observation.densityKilogramsPerCubicMetre())));
+			if (observation.temperatureKelvin().isPresent()) {
+				text.append("\n").append(Component.translatable("message.mmm.probe.temperature",
+						decimal(observation.temperatureKelvin().getAsDouble())));
+			}
+			appendMaterials(text, observation.materials());
+			appendSpecies(text, observation.species());
+		} else if (carrierCell.carriers() == null) {
+			text.append("\n").append(Component.translatable("message.mmm.probe.empty"));
+		}
+		if (carrierCell != null && carrierCell.carriers() != null) appendCarriers(text, carrierCell.carriers());
 		return text;
+	}
+
+	private static java.util.UUID regionId(
+			FluidCellObservation liquid, FluidSimulationService.CarrierCellObservation carriers
+	) { return liquid != null ? liquid.regionId() : carriers.regionId(); }
+
+	private static long generation(
+			FluidCellObservation liquid, FluidSimulationService.CarrierCellObservation carriers
+	) { return liquid != null ? liquid.regionNetworkGeneration() : carriers.regionNetworkGeneration(); }
+
+	private static int cellX(FluidCellObservation liquid, FluidSimulationService.CarrierCellObservation carriers) {
+		return liquid != null ? liquid.cellX() : carriers.cellX();
+	}
+
+	private static int cellY(FluidCellObservation liquid, FluidSimulationService.CarrierCellObservation carriers) {
+		return liquid != null ? liquid.cellY() : carriers.cellY();
+	}
+
+	private static int cellZ(FluidCellObservation liquid, FluidSimulationService.CarrierCellObservation carriers) {
+		return liquid != null ? liquid.cellZ() : carriers.cellZ();
+	}
+
+	private static void appendCarriers(MutableComponent text, CellCarrierInventoryView carriers) {
+		List<CellCarrierInventoryView.SolidAmount> solids = carriers.solids().stream()
+				.sorted(Comparator.comparingLong(CellCarrierInventoryView.SolidAmount::solidVolumeSvq).reversed()
+						.thenComparing(value -> value.kind().name()).thenComparing(CellCarrierInventoryView.SolidAmount::stableId))
+				.toList();
+		for (CellCarrierInventoryView.SolidAmount solid : solids.stream().limit(MAX_SOLIDS).toList()) {
+			text.append("\n").append(Component.translatable("message.mmm.probe.solid", solid.kind().name(),
+					solid.stableId(), solid.solidVolumeSvq(), decimal(solid.massKilograms())));
+		}
+		appendHidden(text, solids.size() - MAX_SOLIDS);
+		CellCarrierInventoryView.GasAmount gas = carriers.gas();
+		if (gas == null) return;
+		text.append("\n").append(Component.translatable(gas.ambient()
+					? "message.mmm.probe.gas_ambient" : "message.mmm.probe.gas_sealed",
+				gas.nodeId(), decimal(gas.absolutePressurePascal()), decimal(gas.temperatureKelvin())));
+		List<CellCarrierInventoryView.ComponentAmount> components = gas.components().stream()
+				.sorted(Comparator.comparingLong(CellCarrierInventoryView.ComponentAmount::standardVolumeNanos).reversed()
+						.thenComparing(CellCarrierInventoryView.ComponentAmount::componentId)).toList();
+		for (CellCarrierInventoryView.ComponentAmount component
+				: components.stream().limit(MAX_GAS_COMPONENTS).toList()) {
+			text.append("\n").append(Component.translatable("message.mmm.probe.gas_component",
+					component.componentId(), component.standardVolumeNanos(), decimal(component.massKilograms())));
+		}
+		appendHidden(text, components.size() - MAX_GAS_COMPONENTS);
 	}
 
 	private static void appendMaterials(MutableComponent text, List<FluidCellObservation.MaterialAmount> materials) {
