@@ -26,6 +26,7 @@ import cc.ecisr.mmm.thermal.GranularEnergyColumn;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
 import cc.ecisr.mmm.units.SolverUnitScale;
+import cc.ecisr.mmm.thermal.FiniteThermalDeviceDefinition;
 import cc.ecisr.mmm.thermal.FiniteThermalBodyState;
 import cc.ecisr.mmm.thermal.FiniteThermalExchange;
 import cc.ecisr.mmm.thermal.ThermalBoundaryDefinition;
@@ -66,6 +67,7 @@ public final class M9ThermalValidation {
 		gasStateCompressionAndCarrierEnergy();
 		builtinWaterAndVaporPhysicsIsCalibrated();
 		builtinCo2GasLiquidPairDataIsFrozen();
+		builtinFiniteThermalDeviceDataIsFrozen();
 		gasLiquidSaturationAndExactBatch();
 		gasRuntimeTransfersEnergyAndWork();
 		persistenceBarrierSynchronizesGasTopology();
@@ -329,6 +331,81 @@ public final class M9ThermalValidation {
 				}
 			} catch (IOException cleanup) {
 				throw new AssertionError("CO2 pair registry store cleanup failed", cleanup);
+			}
+		}
+	}
+
+	private static void builtinFiniteThermalDeviceDataIsFrozen() {
+		java.nio.file.Path root = null;
+		String devicePath = "/data/mmm/mmm/finite_thermal_devices/finite_heat_exchanger.json";
+		try (InputStreamReader deviceReader = resourceReader(devicePath);
+		     InputStreamReader materialReader = resourceReader(
+				     "/data/mmm/mmm/thermal_materials/copper_heat_exchanger.json")) {
+			FiniteThermalDeviceDefinition device = ThermalDefinitionCodec.decodeFiniteDevice(
+					"mmm:finite_heat_exchanger", deviceReader);
+			ThermalMaterialDefinition material = ThermalDefinitionCodec.decodeMaterial(
+					"mmm:copper_heat_exchanger", materialReader);
+			require(material.carrierKind() == ThermalMaterialDefinition.CarrierKind.DEVICE
+					&& material.carrierId().equals(device.id())
+					&& material.conductivityEuPerSecondMeterK() == 394.0
+					&& material.specificHeatAt(293.15) == 385.0
+					&& device.bodyMassKilograms() == 16.0
+					&& device.initialTemperatureK() == 293.15,
+					"built-in finite exchanger copper body definition drifted");
+			require(device.ports().size() == 2
+					&& device.ports().get(0).contactGroupId().equals("mmm:circuit_a")
+					&& device.ports().get(0).localFace() == FiniteThermalDeviceDefinition.LocalFace.NORTH
+					&& device.ports().get(1).contactGroupId().equals("mmm:circuit_b")
+					&& device.ports().get(1).localFace() == FiniteThermalDeviceDefinition.LocalFace.SOUTH
+					&& device.ports().stream().allMatch(port -> port.wallThicknessMeters() == 0.01
+							&& port.fluidFilmThicknessMeters() == 0.01),
+					"built-in finite exchanger port groups or SI geometry drifted");
+			ThermalRegistry registry = new ThermalRegistry(List.of(material), List.of(), List.of(), List.of(),
+					List.of(), List.of(device), "", "", "");
+			require(registry.fingerprint().equals("3551946f35dc822ac7f6472fa792eaad4b245fac78897782eb25524cedf9973b"),
+					"built-in finite exchanger registry fingerprint drifted: " + registry.fingerprint());
+			ThermalStateFunction state = new ThermalStateFunction(registry);
+			double initialEnergy = state.internalEnergyAtTemperature(registry.materialHandle(material.id()),
+					device.bodyMassKilograms(), Map.of(), device.initialTemperatureK());
+			require(initialEnergy == 0.0,
+					"built-in finite exchanger default body energy is not derived from the material state function");
+
+			root = java.nio.file.Files.createTempDirectory("mmm-finite-device-registry-");
+			ThermalRegistryStore store = new ThermalRegistryStore(root, "", "", "");
+			ThermalRegistryStore.LoadResult published = store.loadOrCreate(registry);
+			require(published.created() && published.registry().finiteDevices().equals(List.of(device))
+					&& published.registry().fingerprint().equals(registry.fingerprint()),
+					"finite exchanger definition did not round-trip through the thermal snapshot");
+			var registryTag = net.minecraft.nbt.NbtIo.readCompressed(store.registryPath(),
+					net.minecraft.nbt.NbtAccounter.create(8L * 1024L * 1024L));
+			var encodedDevices = registryTag.getListOrEmpty("FiniteDevices");
+			((net.minecraft.nbt.CompoundTag) encodedDevices.getFirst()).putString("UnknownPortPolicy", "reject");
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, store.registryPath());
+			try {
+				store.read();
+				throw new AssertionError("unknown finite thermal device snapshot field was ignored");
+			} catch (IOException expected) { }
+
+			String json = resourceText(devicePath);
+			expectFailure(() -> ThermalDefinitionCodec.decodeFiniteDevice("mmm:finite_heat_exchanger",
+					new StringReader("{\"unknown\":\"rejected\"," + json.substring(1))),
+					"unknown finite thermal device JSON field was ignored");
+			expectFailure(() -> ThermalDefinitionCodec.decodeFiniteDevice("mmm:finite_heat_exchanger",
+					new StringReader(json.replace("\"body_mass_kg\":\"16.0\"", "\"body_mass_kg\":16.0"))),
+					"numeric finite thermal body mass bypassed the strict string codec");
+			expectFailure(() -> new FiniteThermalDeviceDefinition("mmm:duplicate_face", material.id(), 1.0, 293.15,
+					List.of(device.ports().getFirst(), new FiniteThermalDeviceDefinition.Port("mmm:other",
+							"mmm:other_group", FiniteThermalDeviceDefinition.LocalFace.NORTH, 0.01, 0.01))),
+					"multiple finite thermal ports claimed the same local face");
+		} catch (IOException failure) {
+			throw new AssertionError("Could not validate built-in finite thermal device data", failure);
+		} finally {
+			if (root != null) try (var paths = java.nio.file.Files.walk(root)) {
+				for (java.nio.file.Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+					java.nio.file.Files.deleteIfExists(path);
+				}
+			} catch (IOException cleanup) {
+				throw new AssertionError("finite thermal device registry cleanup failed", cleanup);
 			}
 		}
 	}

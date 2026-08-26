@@ -91,7 +91,7 @@ public final class ThermalRegistryStore {
 				Map.entry("GasFingerprint", Tag.TAG_STRING),
 				Map.entry("Materials", Tag.TAG_LIST), Map.entry("SpeciesOffsets", Tag.TAG_LIST),
 				Map.entry("Transitions", Tag.TAG_LIST), Map.entry("Boundaries", Tag.TAG_LIST),
-				Map.entry("GasLiquidPairs", Tag.TAG_LIST)));
+				Map.entry("GasLiquidPairs", Tag.TAG_LIST), Map.entry("FiniteDevices", Tag.TAG_LIST)));
 		if (!root.getStringOr("Schema", "").equals(SCHEMA)
 				|| !ThermalRegistry.UNIT_SYSTEM_ID.equals(root.getStringOr("UnitSystem", ""))) {
 			throw new IOException("Unsupported thermal registry schema or unit system");
@@ -109,7 +109,8 @@ public final class ThermalRegistryStore {
 					decodeOffsets(root.getListOrEmpty("SpeciesOffsets")),
 					decodeTransitions(root.getListOrEmpty("Transitions")),
 					decodeBoundaries(root.getListOrEmpty("Boundaries")),
-					decodePairs(root.getListOrEmpty("GasLiquidPairs")), chemical, granular, gas);
+					decodePairs(root.getListOrEmpty("GasLiquidPairs")),
+					decodeDevices(root.getListOrEmpty("FiniteDevices")), chemical, granular, gas);
 			if (!registry.fingerprint().equals(root.getStringOr("Fingerprint", ""))
 					|| !java.util.Arrays.equals(registry.canonicalBytes(), root.getByteArray("Canonical").orElseThrow())) {
 				throw new IOException("Thermal registry fingerprint/canonical bytes mismatch");
@@ -207,6 +208,27 @@ public final class ThermalRegistryStore {
 			pairs.add(tag);
 		}
 		root.put("GasLiquidPairs", pairs);
+		ListTag devices = new ListTag();
+		for (FiniteThermalDeviceDefinition device : registry.finiteDevices()) {
+			CompoundTag tag = new CompoundTag();
+			tag.putString("Id", device.id());
+			tag.putString("ThermalMaterial", device.thermalMaterialId());
+			tag.putLong("BodyMassBits", bits(device.bodyMassKilograms()));
+			tag.putLong("InitialTemperatureBits", bits(device.initialTemperatureK()));
+			ListTag ports = new ListTag();
+			for (FiniteThermalDeviceDefinition.Port port : device.ports()) {
+				CompoundTag encoded = new CompoundTag();
+				encoded.putString("Id", port.id());
+				encoded.putString("ContactGroup", port.contactGroupId());
+				encoded.putString("LocalFace", port.localFace().name());
+				encoded.putLong("WallThicknessBits", bits(port.wallThicknessMeters()));
+				encoded.putLong("FluidFilmThicknessBits", bits(port.fluidFilmThicknessMeters()));
+				ports.add(encoded);
+			}
+			tag.put("Ports", ports);
+			devices.add(tag);
+		}
+		root.put("FiniteDevices", devices);
 		return root;
 	}
 
@@ -335,6 +357,38 @@ public final class ThermalRegistryStore {
 					value(tag, "MinimumPressureBits"), value(tag, "MaximumPressureBits"),
 					value(tag, "MaximumConcentrationBits"), value(tag, "LiquidDiffusionBits"),
 					value(tag, "LiquidFilmThicknessBits"), value(tag, "GasResistanceBits")));
+		}
+		return List.copyOf(result);
+	}
+
+	private static List<FiniteThermalDeviceDefinition> decodeDevices(ListTag list) throws IOException {
+		if (list.size() > ThermalLimits.MAX_FINITE_DEVICE_TYPES) {
+			throw new IOException("Invalid finite thermal device count");
+		}
+		ArrayList<FiniteThermalDeviceDefinition> result = new ArrayList<>(list.size());
+		for (int index = 0; index < list.size(); index++) {
+			CompoundTag tag = compound(list, index, "finite thermal device");
+			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "ThermalMaterial", Tag.TAG_STRING,
+					"BodyMassBits", Tag.TAG_LONG, "InitialTemperatureBits", Tag.TAG_LONG,
+					"Ports", Tag.TAG_LIST));
+			ListTag encodedPorts = tag.getListOrEmpty("Ports");
+			if (encodedPorts.isEmpty() || encodedPorts.size() > ThermalLimits.MAX_FINITE_DEVICE_CONTACTS) {
+				throw new IOException("Invalid finite thermal port count");
+			}
+			ArrayList<FiniteThermalDeviceDefinition.Port> ports = new ArrayList<>(encodedPorts.size());
+			for (int port = 0; port < encodedPorts.size(); port++) {
+				CompoundTag value = compound(encodedPorts, port, "finite thermal port");
+				requireAll(value, Map.of("Id", Tag.TAG_STRING, "ContactGroup", Tag.TAG_STRING,
+						"LocalFace", Tag.TAG_STRING, "WallThicknessBits", Tag.TAG_LONG,
+						"FluidFilmThicknessBits", Tag.TAG_LONG));
+				ports.add(new FiniteThermalDeviceDefinition.Port(value.getStringOr("Id", ""),
+						value.getStringOr("ContactGroup", ""),
+						FiniteThermalDeviceDefinition.LocalFace.valueOf(value.getStringOr("LocalFace", "")),
+						value(value, "WallThicknessBits"), value(value, "FluidFilmThicknessBits")));
+			}
+			result.add(new FiniteThermalDeviceDefinition(tag.getStringOr("Id", ""),
+					tag.getStringOr("ThermalMaterial", ""), value(tag, "BodyMassBits"),
+					value(tag, "InitialTemperatureBits"), ports));
 		}
 		return List.copyOf(result);
 	}
