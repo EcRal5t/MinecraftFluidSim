@@ -258,7 +258,7 @@ public final class WorldCapabilityBundleStoreValidation {
 		}
 	}
 
-	private static WorldCapabilityBundleStore.Definitions definitions() {
+	static WorldCapabilityBundleStore.Definitions definitions() {
 		var material = BuiltinFluidMaterials.createRegistry();
 		var chemical = BuiltinChemicalDefinitions.REGISTRY;
 		var granular = BuiltinGranularDefinitions.createRegistry();

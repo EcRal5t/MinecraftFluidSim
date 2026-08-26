@@ -73,6 +73,56 @@ public final class WorldCapabilityBundleStore {
 		return openOrPublish(definitions, FaultInjector.NONE);
 	}
 
+	/** Classifies names and global authority presence without accepting or decoding any payload. */
+	public Presence inspect() throws IOException {
+		if (!Files.exists(directory, LinkOption.NOFOLLOW_LINKS)) {
+			validateMmmInventory(false);
+			return Presence.EMPTY;
+		}
+		requireDirectory(directory, "world capability root");
+		Set<String> entries = entryNames(directory);
+		boolean headEntry = entries.contains(HEAD_FILE);
+		validateMmmInventory(headEntry);
+		if (headEntry) {
+			requireExact(entries, Set.of(HEAD_FILE, SLOT_DIRECTORY), "committed world capability root");
+			return Presence.COMMITTED;
+		}
+		if (entries.isEmpty()) return Presence.EMPTY;
+		if (entries.equals(Set.of(SLOT_DIRECTORY))
+				|| entries.equals(Set.of(SLOT_DIRECTORY, HEAD_TEMPORARY_FILE))) {
+			return Presence.COMMIT_CANDIDATE;
+		}
+		if (entries.equals(Set.of(SLOT_TEMPORARY_DIRECTORY))) return Presence.STAGING;
+		throw new IOException("World capability root has an unprovable uncommitted layout: " + entries);
+	}
+
+	/** Completes HEAD publication from a full slot without consulting current definition sources. */
+	public Bundle recoverCommitCandidate() throws IOException {
+		return recoverCommitCandidate(FaultInjector.NONE);
+	}
+
+	public Bundle recoverCommitCandidate(FaultInjector faultInjector) throws IOException {
+		if (faultInjector == null) throw new IllegalArgumentException("World capability recovery fault injector is missing");
+		if (inspect() != Presence.COMMIT_CANDIDATE) {
+			throw new IOException("World capability root has no complete commit candidate");
+		}
+		Set<String> entries = entryNames(directory);
+		VerifiedSlot slot = verifySlot(slotPath());
+		if (entries.contains(HEAD_TEMPORARY_FILE)) {
+			requireRegularFile(headTemporaryPath(), "world capability temporary HEAD");
+			requireFileBudget(headTemporaryPath(), WorldCapabilityBundleMetadataCodec.MAX_HEAD_BYTES,
+					"world capability temporary HEAD");
+			WorldCapabilityBundleHead temporaryHead = WorldCapabilityBundleMetadataCodec.readHead(headTemporaryPath());
+			requireHeadBinding(temporaryHead, slot);
+			Files.move(headTemporaryPath(), headPath(), StandardCopyOption.ATOMIC_MOVE);
+			DurableFileOperations.forceDirectory(directory);
+			faultInjector.reached(new PublicationBoundary(PublicationPhase.HEAD_PUBLISHED, HEAD_FILE));
+		} else {
+			publishHead(slot, faultInjector);
+		}
+		return readCommitted();
+	}
+
 	public OpenResult openOrPublish(Definitions definitions, FaultInjector faultInjector) throws IOException {
 		if (definitions == null || faultInjector == null) {
 			throw new IllegalArgumentException("World capability bundle open is incomplete");
@@ -574,6 +624,13 @@ public final class WorldCapabilityBundleStore {
 		SLOT_PUBLISHED,
 		HEAD_TEMPORARY_VERIFIED,
 		HEAD_PUBLISHED
+	}
+
+	public enum Presence {
+		EMPTY,
+		STAGING,
+		COMMIT_CANDIDATE,
+		COMMITTED
 	}
 
 	public record PublicationBoundary(PublicationPhase phase, String member) {

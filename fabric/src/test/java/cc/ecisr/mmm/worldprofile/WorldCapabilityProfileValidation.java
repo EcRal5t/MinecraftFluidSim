@@ -29,6 +29,7 @@ public final class WorldCapabilityProfileValidation {
 		strictNbtCodecRoundTripsAndRejectsTampering();
 		bundleMetadataCodecsBindTheOnlyCommitPoint();
 		WorldCapabilityBundleStoreValidation.run();
+		WorldCapabilityStartupValidation.run();
 		System.out.println("World capability profile validation passed");
 	}
 
