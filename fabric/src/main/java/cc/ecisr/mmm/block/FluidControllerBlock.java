@@ -4,6 +4,8 @@ import cc.ecisr.mmm.simulation.FluidSimulationService;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
@@ -41,6 +43,7 @@ final class FluidControllerBlock extends Block {
 			};
 			player.sendSystemMessage(Component.translatable(message, result.interiorBlocks(), result.sizeX(),
 					result.sizeY(), result.sizeZ(), result.requiredChunks()));
+			level.playSound(null, position, SoundEvents.UI_BUTTON_CLICK.value(), SoundSource.BLOCKS, 0.6F, 1.0F);
 		} else if (result.disabled()) {
 			player.sendSystemMessage(Component.translatable("message.mmm.controller.disabled"));
 		} else {

@@ -97,9 +97,10 @@ public final class ControllerConsoleScreen extends Screen {
 		result.add(Component.translatable("screen.mmm.controller.generations",
 				value.checkpointGeneration(), value.networkGeneration()));
 		result.add(Component.translatable("screen.mmm.controller.state",
-				value.selected() ? "SELECTED" : "NOT_SELECTED", value.operatorIntent().name(),
-				value.motionState().name(), value.thermalState().name(),
-				value.availability().ready() ? "READY" : value.availability().reason().name()));
+				common(value.selected() ? "selected" : "not_selected"),
+				localized("operator", value.operatorIntent()), localized("motion", value.motionState()),
+				localized("thermal", value.thermalState()), value.availability().ready()
+						? common("ready") : localized("availability", value.availability().reason())));
 		ControllerSummary.Footprint footprint = value.footprint();
 		result.add(Component.translatable("screen.mmm.controller.footprint", footprint.blockSizeX(),
 				footprint.blockSizeY(), footprint.blockSizeZ(), footprint.interiorBlocks(), footprint.requiredChunks()));
@@ -130,7 +131,7 @@ public final class ControllerConsoleScreen extends Screen {
 		ControllerSummary.Gates gates = value.gates();
 		result.add(Component.translatable("screen.mmm.controller.gates", state(gates.ownershipReady()),
 				state(!gates.containerWalPending()), state(!gates.phaseWorkPending()),
-				gates.worldBridgeEnabled() ? "ON" : "OFF", state(gates.checkpointAllowed())));
+				common(gates.worldBridgeEnabled() ? "on" : "off"), state(gates.checkpointAllowed())));
 		ControllerSummary.Diagnostics diagnostics = value.diagnostics();
 		result.add(Component.translatable("screen.mmm.controller.diagnostics",
 				decimal(diagnostics.lastStepMilliseconds()), diagnostics.pressureIterations(),
@@ -143,6 +144,12 @@ public final class ControllerConsoleScreen extends Screen {
 		return value.available() ? value.used() + "/" + value.limit() : "—/" + value.limit();
 	}
 
-	private static String state(boolean value) { return value ? "READY" : "BLOCKED"; }
+	private static Component state(boolean value) { return common(value ? "ready" : "blocked"); }
+	private static Component common(String value) {
+		return Component.translatable("screen.mmm.common." + value);
+	}
+	private static Component localized(String family, Enum<?> value) {
+		return Component.translatable("screen.mmm." + family + "." + value.name().toLowerCase(Locale.ROOT));
+	}
 	private static String decimal(double value) { return String.format(Locale.ROOT, "%.6g", value); }
 }

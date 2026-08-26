@@ -930,44 +930,50 @@ public final class FluidSimulationService {
 	 * Applies one ordinary console action after re-resolving every client-supplied identity.
 	 * Returns a readable refusal or {@code null}; the caller always authors a fresh summary.
 	 */
-	public String applyControllerConsoleAction(
+	public Component applyControllerConsoleAction(
 			ServerPlayer player, UUID requestedRegionId, BlockPos controllerPosition,
 			long summaryGeneration, ControllerConsoleAction action
 	) {
 		if (player == null || requestedRegionId == null || controllerPosition == null || action == null) {
-			return "请求缺少控制器身份";
+			return Component.translatable("message.mmm.controller.request_identity_missing");
 		}
 		ServerLevel level = player.level();
 		if (!level.getServer().isSameThread()) throw new IllegalStateException("Controller actions are server-thread-only");
 		double distanceSquared = player.distanceToSqr(controllerPosition.getX() + 0.5,
 				controllerPosition.getY() + 0.5, controllerPosition.getZ() + 0.5);
-		if (distanceSquared > 64.0) return "玩家距离控制器过远";
-		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) return "目标方块不再是控制器";
+		if (distanceSquared > 64.0) return Component.translatable("message.mmm.controller.too_far");
+		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) {
+			return Component.translatable("message.mmm.controller.target_gone");
+		}
 		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
-		if (region == null || !region.id().equals(requestedRegionId)) return "控制器 owner 已改变";
+		if (region == null || !region.id().equals(requestedRegionId)) {
+			return Component.translatable("message.mmm.controller.owner_changed");
+		}
 		if (!controllerConsoleSessions.consume(player.getUUID(), region.id(), summaryGeneration)) {
-			return "summary 已过期，请刷新";
+			return Component.translatable("message.mmm.controller.summary_expired");
 		}
 
 		return switch (action) {
 			case SELECT -> {
-				if (!regionManager.select(region.id())) yield "控制器区域已不存在";
+				if (!regionManager.select(region.id())) yield Component.translatable("message.mmm.controller.region_gone");
 				yield null;
 			}
 			case REFRESH_AVAILABILITY -> ensureRegionAvailable(level, region)
-					? null : "availability 仍未恢复：" + region.availabilityFailure();
+					? null : Component.translatable("message.mmm.controller.availability_still_blocked",
+							region.availabilityFailure());
 			case PAUSE -> changeControllerRunIntent(player, region, true);
 			case RESUME -> changeControllerRunIntent(player, region, false);
 		};
 	}
 
-	private String changeControllerRunIntent(ServerPlayer player, FluidRegion region, boolean pause) {
-		if (!player.isCreative()) return "只有创造模式玩家可以修改运行意图";
-		if (!authoritativeWritesReady()) return authoritativeWriteFailure("修改控制器运行意图");
+	private Component changeControllerRunIntent(ServerPlayer player, FluidRegion region, boolean pause) {
+		if (!player.isCreative()) return Component.translatable("message.mmm.controller.creative_required");
+		if (!authoritativeWritesReady()) return Component.translatable("message.mmm.controller.write_not_ready",
+				authoritativeWriteFailure("修改控制器运行意图"));
 		if (!pause && region.solverLoaded() && region.domain().operatorVentedGasTopology()) {
-			return "sealed gas 已由 lifecycle 操作排放；请先 release/remove，不能重新运行并从几何重建库存";
+			return Component.translatable("message.mmm.controller.vented_gas_resume_blocked");
 		}
-		if (region.paused() == pause) return "运行意图已改变，请刷新";
+		if (region.paused() == pause) return Component.translatable("message.mmm.controller.intent_changed");
 		region.setPaused(pause);
 		if (!pause) region.wakeForActivity();
 		if (region.solverLoaded()) sendSnapshot(player.level(), region);
@@ -983,7 +989,7 @@ public final class FluidSimulationService {
 		if (resolved.failure() != null) return LifecyclePreviewResult.failed(resolved.failure());
 		FluidRegion region = resolved.region();
 		if (!controllerConsoleSessions.consume(player.getUUID(), region.id(), summaryGeneration)) {
-			return LifecyclePreviewResult.failed("summary 已过期，请刷新");
+			return LifecyclePreviewResult.failed(Component.translatable("message.mmm.controller.summary_expired"));
 		}
 		LifecycleFacts facts = lifecycleFacts(player, region, operation);
 		LifecycleOperationPreview preview = lifecycleOperationSessions.issue(facts.context(),
@@ -998,13 +1004,14 @@ public final class FluidSimulationService {
 			UUID nonce, LifecycleOperation operation
 	) {
 		ResolvedController resolved = resolveInteractiveController(player, requestedRegionId, controllerPosition);
-		if (resolved.failure() != null) return LifecycleCommitResult.failed(resolved.failure());
+		if (resolved.failure() != null) return LifecycleCommitResult.failedDetail(resolved.failure());
 		FluidRegion region = resolved.region();
 		LifecycleFacts facts = lifecycleFacts(player, region, operation);
 		if (!lifecycleOperationSessions.consume(nonce, facts.context())) {
-			return LifecycleCommitResult.failed("lifecycle preview 已过期，请重新预览");
+			return LifecycleCommitResult.failed("message.mmm.lifecycle.preview_expired");
 		}
-		if (!facts.blockers().isEmpty()) return LifecycleCommitResult.failed("生命周期操作仍被阻止：" + facts.blockers());
+		if (!facts.blockers().isEmpty()) return LifecycleCommitResult.failed(
+				"message.mmm.lifecycle.blocked_confirm", lifecycleBlockers(facts.blockers()));
 		return switch (operation) {
 			case EMPTY_CONDENSED, VENT_SEALED_GAS -> commitInventoryLifecycle(player.level(), region, operation);
 			case RELEASE_OWNERSHIP -> commitOwnershipRelease(player.level().getServer(), region);
@@ -1022,7 +1029,7 @@ public final class FluidSimulationService {
 				candidate.commitOperatorVentSealedGas(candidate.planOperatorVentSealedGas());
 			}
 		} catch (RuntimeException failure) {
-			return LifecycleCommitResult.failed("生命周期候选预检失败，活动库存未改变：" + failure.getMessage());
+			return LifecycleCommitResult.failed("message.mmm.lifecycle.candidate_failed", failure.getMessage());
 		}
 
 		FluidRegionPersistence.StagedCheckpoint staged = null;
@@ -1035,8 +1042,7 @@ public final class FluidSimulationService {
 			region.adoptLifecycleCandidateDomain(candidate, published, true);
 			sendSnapshot(level, region);
 			return LifecycleCommitResult.committed(operation == LifecycleOperation.EMPTY_CONDENSED
-					? "已提交凝聚相清空；sealed gas 保留；checkpoint " + published
-					: "已提交 sealed gas 与实际 U 排放；区域保持暂停；checkpoint " + published);
+					? "message.mmm.lifecycle.empty_committed" : "message.mmm.lifecycle.vent_committed", published);
 		} catch (IOException | RuntimeException failure) {
 			if (!headCommitted && staged != null) {
 				try {
@@ -1050,16 +1056,16 @@ public final class FluidSimulationService {
 				region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID,
 						"lifecycle HEAD 已提交但 live candidate 未收敛；必须从 HEAD 恢复：" + failure.getMessage());
 			}
-			return LifecycleCommitResult.failed("生命周期操作未完成：" + failure.getMessage());
+			return LifecycleCommitResult.failed("message.mmm.lifecycle.commit_failed", failure.getMessage());
 		}
 	}
 
 	private LifecycleCommitResult commitOwnershipRelease(MinecraftServer server, FluidRegion region) {
 		region.setPaused(true);
 		FluidRegionPersistence.ReleaseAttempt release = regionOperations.releaseOwnership(server, region);
-		if (release.failure() != null) return LifecycleCommitResult.failed(release.failure());
-		return LifecycleCommitResult.committed("ownership 已解除；恢复 " + release.restoredBlocks()
-				+ " 个方块，保留玩家占位 " + release.skippedBlocks() + " 个");
+		if (release.failure() != null) return LifecycleCommitResult.failedDetail(release.failure());
+		return LifecycleCommitResult.committed("message.mmm.lifecycle.release_committed",
+				release.restoredBlocks(), release.skippedBlocks());
 	}
 
 	private LifecycleCommitResult commitRegionRemoval(MinecraftServer server, FluidRegion region) {
@@ -1067,7 +1073,7 @@ public final class FluidSimulationService {
 		try {
 			tombstoneGeneration = GenerationSequence.next(region.networkGeneration(), "Network tombstone");
 		} catch (IOException invalid) {
-			return LifecycleCommitResult.failed(invalid.getMessage());
+			return LifecycleCommitResult.failed("message.mmm.lifecycle.remove_failed", invalid.getMessage());
 		}
 		cc.ecisr.mmm.simulation.persistence.RegionStateFiles.PreparedRemoval prepared = null;
 		boolean committed = false;
@@ -1083,12 +1089,12 @@ public final class FluidSimulationService {
 			try {
 				regionOperations.convergeRemovalQuarantine(region.id(), serverConfig.maximumQuarantineEntries(),
 						serverConfig.maximumQuarantineBytes());
-				return LifecycleCommitResult.committed("区域 REMOVED tombstone 已提交；checkpoint "
-						+ removed.targetGeneration());
+				return LifecycleCommitResult.committed("message.mmm.lifecycle.remove_committed",
+						removed.targetGeneration());
 			} catch (IOException quarantineFailure) {
 				regionOperations.recordIssue("REMOVED " + region.id() + " quarantine 待恢复：" + quarantineFailure.getMessage());
-				return LifecycleCommitResult.committed("区域 REMOVED tombstone 已提交；quarantine 将在启动恢复："
-						+ quarantineFailure.getMessage());
+				return LifecycleCommitResult.committed("message.mmm.lifecycle.remove_quarantine_pending",
+						quarantineFailure.getMessage());
 			}
 		} catch (IOException | RuntimeException failure) {
 			if (!committed && prepared != null) {
@@ -1098,9 +1104,9 @@ public final class FluidSimulationService {
 			if (committed) {
 				regionOperations.recordIssue("REMOVED " + region.id() + " runtime 注销待恢复：" + failure.getMessage());
 				regionManager.remove(region.id());
-				return LifecycleCommitResult.committed("区域 REMOVED HEAD 已提交；runtime/quarantine 待启动收敛");
+				return LifecycleCommitResult.committed("message.mmm.lifecycle.remove_runtime_pending");
 			}
-			return LifecycleCommitResult.failed("区域移除未提交：" + failure.getMessage());
+			return LifecycleCommitResult.failed("message.mmm.lifecycle.remove_failed", failure.getMessage());
 		}
 	}
 
@@ -1211,20 +1217,20 @@ public final class FluidSimulationService {
 			ServerPlayer player, UUID requestedRegionId, BlockPos controllerPosition
 	) {
 		if (player == null || requestedRegionId == null || controllerPosition == null) {
-			return ResolvedController.failed("请求缺少控制器身份");
+			return ResolvedController.failed("message.mmm.controller.request_identity_missing");
 		}
 		ServerLevel level = player.level();
 		if (!level.getServer().isSameThread()) throw new IllegalStateException("Lifecycle actions are server-thread-only");
 		if (player.distanceToSqr(controllerPosition.getX() + 0.5,
 				controllerPosition.getY() + 0.5, controllerPosition.getZ() + 0.5) > 64.0) {
-			return ResolvedController.failed("玩家距离控制器过远");
+			return ResolvedController.failed("message.mmm.controller.too_far");
 		}
 		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) {
-			return ResolvedController.failed("目标方块不再是控制器");
+			return ResolvedController.failed("message.mmm.controller.target_gone");
 		}
 		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
 		if (region == null || !region.id().equals(requestedRegionId)) {
-			return ResolvedController.failed("控制器 owner 已改变");
+			return ResolvedController.failed("message.mmm.controller.owner_changed");
 		}
 		return new ResolvedController(region, null);
 	}
@@ -1235,18 +1241,38 @@ public final class FluidSimulationService {
 		if (!blockers.contains(blocker)) blockers.add(blocker);
 	}
 
-	public record LifecyclePreviewResult(LifecycleOperationPreview preview, String failure) {
+	private static Component lifecycleBlockers(List<LifecycleOperationPreview.Blocker> blockers) {
+		var result = Component.empty();
+		for (int index = 0; index < blockers.size(); index++) {
+			if (index > 0) result.append(Component.literal(" · "));
+			result.append(Component.translatable("screen.mmm.blocker."
+					+ blockers.get(index).name().toLowerCase(java.util.Locale.ROOT)));
+		}
+		return result;
+	}
+
+	public record LifecyclePreviewResult(LifecycleOperationPreview preview, Component failure) {
 		public LifecyclePreviewResult {
 			if ((preview == null) == (failure == null)) throw new IllegalArgumentException("Lifecycle preview result is ambiguous");
 		}
-		static LifecyclePreviewResult failed(String failure) { return new LifecyclePreviewResult(null, failure); }
+		static LifecyclePreviewResult failed(Component failure) { return new LifecyclePreviewResult(null, failure); }
 	}
-	public record LifecycleCommitResult(boolean committed, String message) {
+	public record LifecycleCommitResult(boolean committed, Component message) {
 		public LifecycleCommitResult {
-			if (message == null || message.isBlank()) throw new IllegalArgumentException("Lifecycle result message is missing");
+			if (message == null) throw new IllegalArgumentException("Lifecycle result message is missing");
 		}
-		static LifecycleCommitResult committed(String message) { return new LifecycleCommitResult(true, message); }
-		static LifecycleCommitResult failed(String message) { return new LifecycleCommitResult(false, message); }
+		static LifecycleCommitResult committed(String key, Object... arguments) {
+			return new LifecycleCommitResult(true, Component.translatable(key, arguments));
+		}
+		static LifecycleCommitResult failed(String key, Object... arguments) {
+			return new LifecycleCommitResult(false, Component.translatable(key, arguments));
+		}
+		static LifecycleCommitResult failedDetail(Component detail) {
+			return new LifecycleCommitResult(false, detail);
+		}
+		static LifecycleCommitResult failedDetail(String detail) {
+			return failed("message.mmm.lifecycle.detail", detail);
+		}
 	}
 	private record LifecycleFacts(
 			LifecycleOperationSessions.Context context, LifecycleOperationPreview.Removal removal,
@@ -1254,8 +1280,10 @@ public final class FluidSimulationService {
 			List<LifecycleOperationPreview.Blocker> blockers
 	) { }
 	private record GasSummary(long nanos, double mass, long speciesQuanta) { }
-	private record ResolvedController(FluidRegion region, String failure) {
-		static ResolvedController failed(String failure) { return new ResolvedController(null, failure); }
+	private record ResolvedController(FluidRegion region, Component failure) {
+		static ResolvedController failed(String key) {
+			return new ResolvedController(null, Component.translatable(key));
+		}
 	}
 
 	public void forgetInteractiveViewer(UUID playerId) {

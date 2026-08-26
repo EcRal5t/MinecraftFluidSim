@@ -177,7 +177,7 @@ public final class FluidProtocolServer {
 
 	private static void receiveControllerAction(ControllerActionPayload payload, ServerPlayer player) {
 		FluidSimulationService service = FluidSimulationService.get(player.level().getServer());
-		String failure = service.applyControllerConsoleAction(player, payload.regionId(), payload.controllerPosition(),
+		Component failure = service.applyControllerConsoleAction(player, payload.regionId(), payload.controllerPosition(),
 				payload.summaryGeneration(), payload.action());
 		if (failure != null) player.sendSystemMessage(Component.translatable(
 				"message.mmm.controller.console_action_failed", failure), true);
@@ -203,13 +203,17 @@ public final class FluidProtocolServer {
 			if (refreshed == null || !send(player, new LifecycleOperationPreviewPayload(
 					payload.controllerPosition(), result.preview(), refreshed))) {
 				player.sendSystemMessage(Component.translatable(
-						"message.mmm.controller.lifecycle_failed", "客户端不支持 lifecycle preview"), true);
+						"message.mmm.controller.lifecycle_failed",
+						Component.translatable("message.mmm.lifecycle.client_unsupported")), true);
 			}
 			return;
 		}
 
 		var result = service.confirmControllerLifecycleOperation(player, payload.regionId(),
 				payload.controllerPosition(), payload.nonce(), payload.operation());
+		if (result.committed()) player.level().playSound(null, payload.controllerPosition(),
+				net.minecraft.sounds.SoundEvents.BEACON_ACTIVATE,
+				net.minecraft.sounds.SoundSource.BLOCKS, 0.7F, 1.0F);
 		player.sendSystemMessage(Component.translatable(result.committed()
 				? "message.mmm.controller.lifecycle_committed" : "message.mmm.controller.lifecycle_failed",
 				result.message()), true);
@@ -223,8 +227,13 @@ public final class FluidProtocolServer {
 		FluidSimulationService service = FluidSimulationService.get(player.level().getServer());
 		String failure = service.applyThermalReservoirSetpoint(player, payload.position(),
 				payload.summaryGeneration(), payload.temperatureK());
-		if (failure != null) player.sendSystemMessage(Component.translatable(
-				"message.mmm.thermal_reservoir.action_failed", failure), true);
+		if (failure != null) {
+			player.sendSystemMessage(Component.translatable(
+					"message.mmm.thermal_reservoir.action_failed", failure), true);
+		} else {
+			player.level().playSound(null, payload.position(), net.minecraft.sounds.SoundEvents.UI_BUTTON_CLICK.value(),
+					net.minecraft.sounds.SoundSource.BLOCKS, 0.6F, 1.0F);
+		}
 		var summary = service.thermalReservoirSummary(player, payload.position());
 		if (summary != null) send(player, new ThermalReservoirSummaryPayload(summary));
 	}

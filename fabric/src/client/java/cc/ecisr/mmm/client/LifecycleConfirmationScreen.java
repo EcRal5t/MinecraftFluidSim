@@ -55,7 +55,7 @@ public final class LifecycleConfirmationScreen extends Screen {
 
 	private static List<Component> rows(LifecycleOperationPreview preview) {
 		ArrayList<Component> rows = new ArrayList<>();
-		rows.add(Component.translatable("screen.mmm.lifecycle.identity", preview.operation().name(),
+		rows.add(Component.translatable("screen.mmm.lifecycle.identity", localized("operation", preview.operation()),
 				preview.regionId().toString().substring(0, 8), preview.regionGeneration()));
 		LifecycleOperationPreview.Removal removal = preview.removal();
 		rows.add(Component.translatable("screen.mmm.lifecycle.liquid", removal.liquidVolumeNanos(),
@@ -67,13 +67,32 @@ public final class LifecycleConfirmationScreen extends Screen {
 				decimal(removal.sealedGasMassKilograms()), removal.sealedGasSpeciesQuanta()));
 		LifecycleOperationPreview.GasState gas = preview.gasState();
 		rows.add(Component.translatable("screen.mmm.lifecycle.gas_state", gas.standardVolumeNanos(),
-				decimal(gas.massKilograms()), gas.speciesQuanta(), gas.sealedNodes(), gas.ambientBoundaryPresent()));
+				decimal(gas.massKilograms()), gas.speciesQuanta(), gas.sealedNodes(),
+				common(gas.ambientBoundaryPresent() ? "present" : "absent")));
 		rows.add(Component.translatable("screen.mmm.lifecycle.energy_ownership",
 				removal.internalEnergyAvailable() ? decimal(removal.internalEnergyEu()) : "—", preview.ownershipBlocks()));
-		rows.add(Component.translatable("screen.mmm.lifecycle.permission", preview.permissionDecision().name()));
+		rows.add(Component.translatable("screen.mmm.lifecycle.permission",
+				localized("permission", preview.permissionDecision())));
 		rows.add(Component.translatable(preview.ready() ? "screen.mmm.lifecycle.ready" : "screen.mmm.lifecycle.blocked",
-				preview.ready() ? "" : preview.blockers().toString()));
+				preview.ready() ? "" : blockers(preview.blockers())));
 		return List.copyOf(rows);
+	}
+
+	private static Component blockers(List<LifecycleOperationPreview.Blocker> blockers) {
+		var result = Component.empty();
+		for (int index = 0; index < blockers.size(); index++) {
+			if (index > 0) result.append(Component.literal(" · "));
+			result.append(localized("blocker", blockers.get(index)));
+		}
+		return result;
+	}
+
+	private static Component common(String value) {
+		return Component.translatable("screen.mmm.common." + value);
+	}
+
+	private static Component localized(String family, Enum<?> value) {
+		return Component.translatable("screen.mmm." + family + "." + value.name().toLowerCase(Locale.ROOT));
 	}
 
 	private static String decimal(double value) { return String.format(Locale.ROOT, "%.6g", value); }

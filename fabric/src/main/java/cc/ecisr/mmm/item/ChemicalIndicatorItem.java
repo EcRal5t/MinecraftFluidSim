@@ -37,6 +37,8 @@ public final class ChemicalIndicatorItem extends Item {
 		if (result.checkpointWarning() != null) message.append(Component.translatable(
 				"message.mmm.indicator.checkpoint_warning", result.checkpointWarning()));
 		serverPlayer.sendSystemMessage(message, true);
+		level.playSound(null, serverPlayer.blockPosition(), net.minecraft.sounds.SoundEvents.BREWING_STAND_BREW,
+				net.minecraft.sounds.SoundSource.PLAYERS, 0.6F, eraser ? 0.8F : 1.2F);
 		return InteractionResult.SUCCESS_SERVER;
 	}
 
