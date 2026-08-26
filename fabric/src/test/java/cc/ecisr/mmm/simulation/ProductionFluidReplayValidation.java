@@ -184,7 +184,7 @@ public final class ProductionFluidReplayValidation {
 			GranularRegistry granular = GranularDataPackLoader.load(resources, chemical);
 			GasRegistry gas = BuiltinGasDefinitions.createRegistry();
 			ThermalRegistry thermal = ThermalDataPackLoader.load(resources, chemical.fingerprint(),
-					granular.fingerprint());
+					granular.fingerprint(), gas.fingerprint());
 			return new RegistrySet(liquids, chemical, granular, gas, thermal);
 		}
 	}

@@ -18,7 +18,8 @@ public final class ThermalDataPackLoader {
 	private ThermalDataPackLoader() { }
 
 	public static ThermalRegistry load(
-			ResourceManager resources, String chemicalRegistryFingerprint, String granularRegistryFingerprint
+			ResourceManager resources, String chemicalRegistryFingerprint, String granularRegistryFingerprint,
+			String gasRegistryFingerprint
 	) throws IOException {
 		if (resources == null) throw new IOException("Thermal datapack resource manager is missing");
 		List<ThermalMaterialDefinition> materials = loadCategory(resources, ThermalDefinitionCodec.MATERIALS_PATH,
@@ -30,8 +31,11 @@ public final class ThermalDataPackLoader {
 				ThermalDefinitionCodec::decodeTransition, false);
 		List<ThermalBoundaryDefinition> boundaries = loadCategory(resources, ThermalDefinitionCodec.BOUNDARIES_PATH,
 				ThermalDefinitionCodec::decodeBoundary, false);
-		try { return new ThermalRegistry(materials, offsets, transitions, boundaries,
-				chemicalRegistryFingerprint, granularRegistryFingerprint); }
+		List<GasLiquidSpeciesPair> pairs = gasRegistryFingerprint.isEmpty() ? List.of()
+				: loadCategory(resources, ThermalDefinitionCodec.PAIRS_PATH,
+						ThermalDefinitionCodec::decodePair, false);
+		try { return new ThermalRegistry(materials, offsets, transitions, boundaries, pairs,
+				chemicalRegistryFingerprint, granularRegistryFingerprint, gasRegistryFingerprint); }
 		catch (RuntimeException invalid) {
 			throw new IOException("Thermal datapack registry is invalid: " + invalid.getMessage(), invalid);
 		}
@@ -72,6 +76,7 @@ public final class ThermalDataPackLoader {
 			case ThermalSpeciesOffset value -> value.id();
 			case ThermalPhaseTransition value -> value.id();
 			case ThermalBoundaryDefinition value -> value.id();
+			case GasLiquidSpeciesPair value -> value.id();
 			default -> throw new IllegalStateException("Unknown thermal definition type");
 		}));
 		return List.copyOf(definitions);
