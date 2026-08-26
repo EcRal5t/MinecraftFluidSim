@@ -2,7 +2,9 @@ package cc.ecisr.mmm.client;
 
 import cc.ecisr.mmm.controller.ControllerConsoleAction;
 import cc.ecisr.mmm.controller.ControllerSummary;
+import cc.ecisr.mmm.controller.LifecycleOperation;
 import cc.ecisr.mmm.network.ControllerActionPayload;
+import cc.ecisr.mmm.network.LifecycleOperationRequestPayload;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
@@ -34,7 +36,7 @@ public final class ControllerConsoleScreen extends Screen {
 		int gap = 6;
 		int total = buttonWidth * 3 + gap * 2;
 		int left = (width - total) / 2;
-		int y = height - 34;
+		int y = height - 30;
 		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.controller.select"),
 				button -> send(ControllerConsoleAction.SELECT)).bounds(left, y, buttonWidth, 20).build());
 		Component runAction = Component.translatable(summary.operatorIntent() == ControllerSummary.OperatorIntent.PAUSED
@@ -48,6 +50,25 @@ public final class ControllerConsoleScreen extends Screen {
 		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.controller.refresh"),
 				button -> send(ControllerConsoleAction.REFRESH_AVAILABILITY))
 				.bounds(left + (buttonWidth + gap) * 2, y, buttonWidth, 20).build());
+
+		int lifecycleWidth = 76;
+		int lifecycleTotal = lifecycleWidth * 4 + gap * 3;
+		int lifecycleLeft = (width - lifecycleTotal) / 2;
+		int lifecycleY = height - 54;
+		addLifecycleButton(lifecycleLeft, lifecycleY, lifecycleWidth, "empty", LifecycleOperation.EMPTY_CONDENSED);
+		addLifecycleButton(lifecycleLeft + lifecycleWidth + gap, lifecycleY, lifecycleWidth,
+				"vent", LifecycleOperation.VENT_SEALED_GAS);
+		addLifecycleButton(lifecycleLeft + (lifecycleWidth + gap) * 2, lifecycleY, lifecycleWidth,
+				"release", LifecycleOperation.RELEASE_OWNERSHIP);
+		addLifecycleButton(lifecycleLeft + (lifecycleWidth + gap) * 3, lifecycleY, lifecycleWidth,
+				"remove", LifecycleOperation.REMOVE_EMPTY_REGION);
+	}
+
+	private void addLifecycleButton(int x, int y, int width, String label, LifecycleOperation operation) {
+		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.controller." + label),
+				button -> ClientPlayNetworking.send(LifecycleOperationRequestPayload.preview(
+						summary.regionId(), controllerPosition, summary.summaryGeneration(), operation)))
+				.bounds(x, y, width, 20).build());
 	}
 
 	private void send(ControllerConsoleAction action) {
@@ -64,7 +85,7 @@ public final class ControllerConsoleScreen extends Screen {
 			String clipped = font.plainSubstrByWidth(row.getString(), Math.max(80, width - 32));
 			graphics.text(font, clipped, 16, y, 0xd8d8d8, false);
 			y += 12;
-			if (y >= height - 48) break;
+			if (y >= height - 68) break;
 		}
 	}
 

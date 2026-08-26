@@ -71,6 +71,7 @@ public final class M9ThermalValidation {
 		gasLiquidSaturationAndExactBatch();
 		gasRuntimeTransfersEnergyAndWork();
 		persistenceBarrierSynchronizesGasTopology();
+		operatorVentClearsGasAndEnergyTogether();
 		sealedInterfaceBoilingCommitsJointInventory();
 		compositionBearingBoilingMovesOnlyGasAdmittedSpecies();
 		thermalSleepIsOrthogonalToMotion();
@@ -571,6 +572,49 @@ public final class M9ThermalValidation {
 				&& movingInterface.airNetwork().escapedSink().equals(sinkBeforeMove)
 				&& movingInterface.airNetwork().auditClosed(),
 				"moving a partial interface created false sealed-gas source/sink turnover");
+	}
+
+	private static void operatorVentClearsGasAndEnergyTogether() {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
+		ThermalRegistry thermal = new ThermalRegistry(List.of(
+				new ThermalMaterialDefinition("test:thermal/vent_water",
+						ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
+						300.0, 0.0, 0.598,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 4_184.0))),
+				new ThermalMaterialDefinition("test:thermal/vent_air",
+						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+						GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.026,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)))));
+		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 256);
+		domain.sealDomainBoundary();
+		domain.setVolume(1, 1, 1, 0.5F);
+		domain.setMarkerMaterial(0, liquids, 0);
+		domain.bindGasRegistry(gas);
+		domain.bootstrapGasState("");
+		domain.bindThermal(thermal, liquids, 300.0);
+		GasInventory gasBefore = domain.airNetwork().sealedInventory();
+		SignedDyadic energyBefore = domain.exactGasInternalEnergy();
+		int nodesBefore = domain.airNetwork().nodeCount();
+
+		FlipFluidDomain.OperatorGasVent vented = domain.commitOperatorVentSealedGas(
+				domain.planOperatorVentSealedGas());
+		require(nodesBefore > 0 && vented.sealedNodes() == nodesBefore
+				&& vented.removed().equals(gasBefore) && vented.internalEnergy().equals(energyBefore)
+				&& domain.airNetwork().nodeCount() == 0 && domain.airNetwork().sealedInventory().isEmpty()
+				&& domain.airNetwork().escapedSink().equals(domain.airNetwork().externalSource())
+				&& domain.exactGasInternalEnergy().equals(SignedDyadic.ZERO)
+				&& domain.airNetwork().auditClosed()
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"operator vent did not jointly settle sealed gas component and energy truth");
+		FlipFluidDomain restored = FlipFluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		require(restored.airNetwork().nodeCount() == 0
+				&& restored.exactGasInternalEnergy().equals(SignedDyadic.ZERO)
+				&& restored.airNetwork().auditClosed()
+				&& restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
+				"operator-vent state did not survive an authoritative handoff");
 	}
 
 	private static void gasLiquidSaturationAndExactBatch() {

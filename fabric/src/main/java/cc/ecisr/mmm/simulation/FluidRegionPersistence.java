@@ -2,6 +2,7 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
+import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.FluidMaterial;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
@@ -254,6 +255,26 @@ final class FluidRegionPersistence {
 		return new StagedCheckpoint(prepared, prepared.manifestChecksum());
 	}
 
+	/** Stages a private lifecycle result without resynthesizing gas topology from world geometry. */
+	StagedCheckpoint stageLifecycleCheckpoint(
+			FluidRegion region, FlipFluidDomain candidateDomain, long targetGeneration
+	) throws IOException {
+		if (!GenerationSequence.isNext(region.checkpointGeneration(), targetGeneration)) {
+			throw new IOException("Lifecycle checkpoint target does not advance the live region by one generation");
+		}
+		String ownershipLock = ownershipLockDescription(region);
+		if (ownershipLock != null) throw new IOException("Unresolved world ownership state blocks lifecycle staging: " + ownershipLock);
+		FluidRegion candidate = region.lifecycleCandidate(candidateDomain, true);
+		RegionStateFiles.PreparedGeneration prepared = files.prepare(
+				captureForFeatureGate(candidate, targetGeneration, false), (point, path) -> { });
+		return new StagedCheckpoint(prepared, prepared.manifestChecksum());
+	}
+
+	/** Publishes only HEAD; the caller then applies its already-validated live assignment and records the generation. */
+	long commitStagedLifecycleCheckpoint(StagedCheckpoint staged) throws IOException {
+		return files.commit(staged.prepared(), (point, path) -> { });
+	}
+
 	long commitStagedCheckpoint(FluidRegion region, StagedCheckpoint staged) throws IOException {
 		long published = files.commit(staged.prepared(), (point, path) -> { });
 		if (!region.recordPublishedCheckpoint(published)) throw new IOException("Published staged checkpoint was not accepted");
@@ -288,6 +309,20 @@ final class FluidRegionPersistence {
 		} catch (IOException | RuntimeException invalid) {
 			return "ownership committed 状态不可读：" + invalid.getMessage();
 		}
+	}
+
+	int committedOwnershipBlockCount(FluidRegion region) throws IOException {
+		if (!region.controllerManaged()) return 0;
+		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
+		ownershipFiles.assertUnlockedForTransition();
+		if (!ownershipFiles.hasCommitted()) return 0;
+		OwnershipCommitted committed = ownershipFiles.readCommitted();
+		if (!committed.regionId().equals(region.id())
+				|| !committed.dimensionId().equals(region.dimension().identifier().toString())
+				|| committed.generation() > region.checkpointGeneration()) {
+			throw new IOException("Committed ownership does not match the active region identity");
+		}
+		return committed.ownedBlocks().size();
 	}
 
 
@@ -596,6 +631,12 @@ final class FluidRegionPersistence {
 	}
 
 	private RegionState captureForFeatureGate(FluidRegion region, long generation) throws IOException {
+		return captureForFeatureGate(region, generation, true);
+	}
+
+	private RegionState captureForFeatureGate(
+			FluidRegion region, long generation, boolean synchronizeGasTopology
+	) throws IOException {
 		if (thermalEnabled) {
 			if (thermalRegistry == null || gasRegistry == null) {
 				throw new IOException("Authoritative thermal/gas registry is unavailable");
@@ -615,12 +656,14 @@ final class FluidRegionPersistence {
 			if (!region.domain().hasThermalState()) {
 				throw new IOException("Thermal state is unavailable for the active feature layout");
 			}
-			try {
-				region.domain().synchronizeGasTopologyForPersistence();
-			} catch (RuntimeException invalidTopology) {
-				throw new IOException("Current carrier geometry cannot be joined to gas/thermal truth: "
-						+ invalidTopology.getMessage() + "; previous HEAD remains authoritative",
-						invalidTopology);
+			if (synchronizeGasTopology) {
+				try {
+					region.domain().synchronizeGasTopologyForPersistence();
+				} catch (RuntimeException invalidTopology) {
+					throw new IOException("Current carrier geometry cannot be joined to gas/thermal truth: "
+							+ invalidTopology.getMessage() + "; previous HEAD remains authoritative",
+							invalidTopology);
+				}
 			}
 			return bindWorldCapability(RegionState.captureThermal(region, generation));
 		}

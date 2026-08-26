@@ -3,6 +3,7 @@ package cc.ecisr.mmm.simulation;
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
+import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FluidMaterial;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
@@ -138,6 +139,14 @@ final class FluidRegionOperations {
 	FluidRegionPersistence.StagedCheckpoint stageCheckpoint(FluidRegion region, long target) throws IOException {
 		return persistence.stageCheckpoint(region, target);
 	}
+	FluidRegionPersistence.StagedCheckpoint stageLifecycleCheckpoint(
+			FluidRegion region, FlipFluidDomain candidateDomain, long target
+	) throws IOException {
+		return persistence.stageLifecycleCheckpoint(region, candidateDomain, target);
+	}
+	long commitStagedLifecycleCheckpoint(FluidRegionPersistence.StagedCheckpoint staged) throws IOException {
+		return persistence.commitStagedLifecycleCheckpoint(staged);
+	}
 	long commitStagedCheckpoint(FluidRegion region, FluidRegionPersistence.StagedCheckpoint staged) throws IOException {
 		return persistence.commitStagedCheckpoint(region, staged);
 	}
@@ -156,6 +165,9 @@ final class FluidRegionOperations {
 	List<String> scanOwnershipIssues() { return persistence.scanOwnershipIssues(); }
 	List<String> recoverUnfinishedOwnership(MinecraftServer server) { return persistence.recoverUnfinishedOwnership(server); }
 	String ownershipLockDescription(FluidRegion region) { return persistence.ownershipLockDescription(region); }
+	int committedOwnershipBlockCount(FluidRegion region) throws IOException {
+		return persistence.committedOwnershipBlockCount(region);
+	}
 
 	String ownershipSummary(MinecraftServer server, FluidRegion region) {
 		return persistence.ownershipSummary(server, region);
@@ -254,6 +266,10 @@ final class FluidRegionOperations {
 		}
 		region.setAvailabilityFailure(null);
 		return true;
+	}
+
+	FluidRegionPersistence.ReleaseAttempt releaseOwnership(MinecraftServer server, FluidRegion region) {
+		return persistence.releaseOwnership(server, region);
 	}
 
 	void unloadForFailure(

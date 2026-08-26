@@ -157,6 +157,7 @@ public final class FlipFluidDomain {
 	private CollisionEditPlan activeCollisionPlan;
 	private int activeCollisionEditIndex;
 	private boolean gasPressureActive;
+	private boolean operatorVentedGasTopology;
 	private GranularRegistry granularRegistry;
 	private GranularParcelStore granularParcels;
 	private GranularDepositStore granularDeposits;
@@ -308,7 +309,7 @@ public final class FlipFluidDomain {
 		if (airCellNodeId == null) throw new IllegalStateException("Gas topology has not been explicitly initialized");
 		if (!airNetwork.auditClosed()) throw new IllegalStateException("Gas component audit does not close");
 		return GasStateSnapshot.capture(sizeX, sizeY, sizeZ, airCellNodeId, airNetwork,
-				chemicalRegistryFingerprint == null ? "" : chemicalRegistryFingerprint);
+				chemicalRegistryFingerprint == null ? "" : chemicalRegistryFingerprint, operatorVentedGasTopology);
 	}
 
 	/** Restores complete gas truth after its matching liquid/material state. */
@@ -324,13 +325,19 @@ public final class FlipFluidDomain {
 		AirCavityScanner.Result result = airScanner.scan(solid, markerCount, volume, cutCells,
 				pressureGranularCoupling, sealedDomainBoundary);
 		int[] expected = state.cellNodeOrdinal(), actual = result.cellNodeId();
-		if (result.sealedNodeCount() != state.nodes().size()) {
+		boolean ventedAmbient = state.operatorVentedTopology();
+		if (ventedAmbient && !state.nodes().isEmpty()) {
+			throw new IllegalArgumentException("Operator-vented gas state contains sealed inventory");
+		}
+		if (!ventedAmbient && result.sealedNodeCount() != state.nodes().size()) {
 			throw new IllegalArgumentException("Restored gas sealed-node count does not match derived topology");
 		}
 		for (int cell = 0; cell < cellCount; cell++) {
 			int derived = actual[cell] > 0 ? actual[cell] : 0;
-			if (expected[cell] != derived) throw new IllegalArgumentException(
+			if (!ventedAmbient && expected[cell] != derived) throw new IllegalArgumentException(
 					"Restored gas topology differs from committed membership at cell " + cell);
+			if (ventedAmbient && expected[cell] != 0) throw new IllegalArgumentException(
+					"Operator-vented gas topology contains a sealed membership");
 		}
 		for (int node = 0; node < state.nodes().size(); node++) {
 			int minimum = Integer.MAX_VALUE;
@@ -340,20 +347,30 @@ public final class FlipFluidDomain {
 			}
 		}
 		AirNetwork restored = new AirNetwork(registry);
-		restored.restoreNodes(result.sealedAvailableVolume(), state.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
+		restored.restoreNodes(ventedAmbient ? new double[0] : result.sealedAvailableVolume(),
+				state.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
 				state.externalSource(), state.escapedSink(), state.massRoundoff(), state.residualRoundoff());
-		for (AirCavityScanner.GeometricEdge edge : result.geometricEdges()) {
+		for (AirCavityScanner.GeometricEdge edge : ventedAmbient ? List.<AirCavityScanner.GeometricEdge>of()
+				: result.geometricEdges()) {
 			restored.addOrMergeEdge(edge.firstNode(), edge.secondNode(), edge.areaSquareMeters(), 0.65);
 		}
 		airNetwork = restored;
 		airCellNodeId = actual;
 		airCellLineageNodeId = result.cellLineageNodeId();
-		previousSealedNodeCount = result.sealedNodeCount();
+		if (ventedAmbient) {
+			for (int cell = 0; cell < cellCount; cell++) {
+				if (airCellNodeId[cell] > 0) airCellNodeId[cell] = AirNetwork.AMBIENT_NODE;
+				if (airCellLineageNodeId[cell] > 0) airCellLineageNodeId[cell] = AirNetwork.AMBIENT_NODE;
+			}
+		}
+		previousSealedNodeCount = ventedAmbient ? 0 : result.sealedNodeCount();
 		gasPressureActive = previousSealedNodeCount > 0;
+		operatorVentedGasTopology = ventedAmbient;
 	}
 
 	/** True when the current grid contains at least one sealed gas cavity with finite inventory. */
 	public boolean gasPressureActive() { return gasPressureActive; }
+	public boolean operatorVentedGasTopology() { return operatorVentedGasTopology; }
 	public double gasNodeTemperatureK(int nodeId) {
 		return thermalState == null || !thermalState.gasModelBound()
 				? GasRegistry.STANDARD_TEMPERATURE_K : thermalState.gasTemperature(nodeId, airNetwork);
@@ -401,6 +418,11 @@ public final class FlipFluidDomain {
 	public boolean hasChemistryState() { return chemicalParcels != null; }
 	public boolean hasGranularState() { return granularParcels != null; }
 	public boolean hasThermalState() { return thermalState != null; }
+	public boolean hasAmbientGasCells() {
+		if (airCellNodeId == null) return false;
+		for (int node : airCellNodeId) if (node == AirNetwork.AMBIENT_NODE) return true;
+		return false;
+	}
 	/** Last committed liquid/solid LTE range; constant-time and absent until the thermal grid was observed. */
 	public ThermalCellGrid.TemperatureRange observedCarrierTemperatureRange() {
 		return thermalState == null ? null : thermalState.observedCarrierTemperatureRange();
@@ -644,6 +666,9 @@ public final class FlipFluidDomain {
 	}
 	public SignedDyadic exactInternalEnergy() {
 		return thermalState == null ? SignedDyadic.ZERO : thermalState.exactEnergy(particleCount);
+	}
+	public SignedDyadic exactGasInternalEnergy() {
+		return thermalState == null ? SignedDyadic.ZERO : thermalState.exactGasEnergy();
 	}
 	public int granularParcelCount() { return granularParcels == null ? 0 : granularParcels.count(); }
 	public int granularDepositCellCount() { return granularDeposits == null ? 0 : granularDeposits.occupiedCellCount(); }
@@ -1506,7 +1531,7 @@ public final class FlipFluidDomain {
 			throw new IllegalArgumentException("Thermal registry chemical dependency mismatch");
 		}
 		ensureGrid();
-		refreshGasTopology();
+		if (!operatorVentedGasTopology) refreshGasTopology();
 		thermalState = new FlipThermalState(registry, materialRegistry, initialTemperatureK,
 				particleX.length, sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), airNetwork,
 				maximumTransportSubsteps);
@@ -3857,6 +3882,37 @@ public final class FlipFluidDomain {
 		return new OperatorClear(condensed, granular);
 	}
 
+	/** Prevalidates an operator vent without treating ambient as inventory. */
+	public OperatorGasVentPlan planOperatorVentSealedGas() {
+		if (hasPendingPhaseVolumeWork()) {
+			throw new IllegalStateException("Pending phase volume/work must be projected before operator vent");
+		}
+		if (!airNetwork.auditClosed()) throw new IllegalStateException("Gas inventory audit is open");
+		GasInventory removed = airNetwork.sealedInventory();
+		AirNetwork.RemapPlan gasPlan = airNetwork.planRemapNodes(
+				new double[0], List.of(), GasInventory.EMPTY, removed, List.of());
+		FlipThermalState.GasVentPlan thermalPlan = thermalState == null ? null
+				: thermalState.planGasVent(airNetwork, particleCount);
+		return new OperatorGasVentPlan(airNetwork.nodeCount(), removed, gasPlan, thermalPlan);
+	}
+
+	/** Converts every sealed cell to inventory-free ambient topology and books gas plus U to sinks. */
+	public OperatorGasVent commitOperatorVentSealedGas(OperatorGasVentPlan plan) {
+		if (plan == null || airNetwork.nodeCount() != plan.nodeCount()
+				|| !airNetwork.sealedInventory().equals(plan.removed())) {
+			throw new IllegalStateException("Sealed gas inventory changed after vent planning");
+		}
+		if (plan.thermalPlan() != null) thermalState.commitGasVent(plan.thermalPlan());
+		airNetwork.commitRemapNodes(plan.gasPlan());
+		if (airCellNodeId != null) Arrays.fill(airCellNodeId, AirNetwork.AMBIENT_NODE);
+		if (airCellLineageNodeId != null) Arrays.fill(airCellLineageNodeId, AirNetwork.AMBIENT_NODE);
+		previousSealedNodeCount = 0;
+		gasPressureActive = false;
+		operatorVentedGasTopology = true;
+		return new OperatorGasVent(plan.removed(), plan.thermalPlan() == null
+				? SignedDyadic.ZERO : plan.thermalPlan().removedEnergy(), plan.nodeCount());
+	}
+
 	private String coherentLiquidMaterialId(String coherentPhaseId) {
 		String found = null;
 		for (ThermalPhaseTransition transition : thermalState.registry().transitions()) {
@@ -3889,6 +3945,11 @@ public final class FlipFluidDomain {
 		public CondensedClearPlan { coherentGroups = List.copyOf(coherentGroups); }
 	}
 	public record OperatorClear(CondensedClear condensed, GranularClear granular) { }
+	public record OperatorGasVent(GasInventory removed, SignedDyadic internalEnergy, int sealedNodes) { }
+	public record OperatorGasVentPlan(
+			int nodeCount, GasInventory removed, AirNetwork.RemapPlan gasPlan,
+			FlipThermalState.GasVentPlan thermalPlan
+	) { }
 	public static final class OperatorClearPlan {
 		private final CondensedClearPlan condensed;
 		private final GranularClearPlan granular;
@@ -5007,6 +5068,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	 * previous HEAD; it may never publish current markers beside a stale gas-node membership table.
 	 */
 	public void synchronizeGasTopologyForPersistence() {
+		if (operatorVentedGasTopology) return;
 		ensureGrid();
 		refreshGasTopology();
 	}

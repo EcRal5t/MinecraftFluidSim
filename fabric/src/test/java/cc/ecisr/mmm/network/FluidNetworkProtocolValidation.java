@@ -6,6 +6,8 @@ import cc.ecisr.mmm.api.query.FluidQueryStatus;
 import cc.ecisr.mmm.controller.ControllerConsoleAction;
 import cc.ecisr.mmm.controller.ControllerConsoleSessions;
 import cc.ecisr.mmm.controller.ControllerSummary;
+import cc.ecisr.mmm.controller.LifecycleOperation;
+import cc.ecisr.mmm.controller.LifecycleOperationPreview;
 import cc.ecisr.mmm.fluid.FluidMaterialRenderSnapshot;
 import cc.ecisr.mmm.fluid.FluidMaterialSurfaceMesher;
 import cc.ecisr.mmm.granular.GranularDisplaySnapshot;
@@ -117,6 +119,41 @@ public final class FluidNetworkProtocolValidation {
 			decodedAction = ControllerActionPayload.CODEC.decode(buffer);
 		} finally { buffer.release(); }
 		require(decodedAction.equals(action), "controller action identity/token did not round-trip exactly");
+
+		LifecycleOperationRequestPayload request = LifecycleOperationRequestPayload.preview(
+				REGION, new BlockPos(2, 3, 4), 7L, LifecycleOperation.EMPTY_CONDENSED);
+		buffer = new FriendlyByteBuf(Unpooled.buffer());
+		LifecycleOperationRequestPayload decodedRequest;
+		try {
+			LifecycleOperationRequestPayload.CODEC.encode(buffer, request);
+			decodedRequest = LifecycleOperationRequestPayload.CODEC.decode(buffer);
+		} finally { buffer.release(); }
+		require(decodedRequest.equals(request), "lifecycle preview request did not round-trip exactly");
+
+		LifecycleOperationPreview preview = new LifecycleOperationPreview(new UUID(67L, 71L), otherPlayer,
+				REGION, 11L, LifecycleOperation.VENT_SEALED_GAS,
+				LifecycleOperationPreview.PermissionDecision.BUILTIN_ADMIN_GRANTED, 200L,
+				new LifecycleOperationPreview.Removal(0L, 0.0, 0L, 0L, 0.0, 0L, 0.0,
+						321L, 0.42, 99L, true, 12_345.0),
+				new LifecycleOperationPreview.GasState(321L, 0.42, 99L, 2, true), 17,
+				List.of(LifecycleOperationPreview.Blocker.FINITE_DEVICE_NOT_EMPTY));
+		LifecycleOperationPreviewPayload previewPayload = new LifecycleOperationPreviewPayload(
+				new BlockPos(2, 3, 4), preview, summary);
+		buffer = new FriendlyByteBuf(Unpooled.buffer());
+		LifecycleOperationPreviewPayload decodedPreview;
+		try {
+			LifecycleOperationPreviewPayload.CODEC.encode(buffer, previewPayload);
+			decodedPreview = LifecycleOperationPreviewPayload.CODEC.decode(buffer);
+		} finally { buffer.release(); }
+		require(decodedPreview.equals(previewPayload), "lifecycle preview quantities/blockers did not round-trip exactly");
+		LifecycleOperationRequestPayload confirm = LifecycleOperationRequestPayload.confirm(REGION,
+				new BlockPos(2, 3, 4), 19L, preview.operation(), preview.nonce());
+		buffer = new FriendlyByteBuf(Unpooled.buffer());
+		try {
+			LifecycleOperationRequestPayload.CODEC.encode(buffer, confirm);
+			require(LifecycleOperationRequestPayload.CODEC.decode(buffer).equals(confirm),
+					"lifecycle confirm nonce did not round-trip exactly");
+		} finally { buffer.release(); }
 	}
 
 	private static void validateQueryAvailabilityReason() {

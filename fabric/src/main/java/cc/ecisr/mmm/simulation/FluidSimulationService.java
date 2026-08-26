@@ -15,6 +15,9 @@ import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.controller.ControllerConsoleAction;
 import cc.ecisr.mmm.controller.ControllerConsoleSessions;
+import cc.ecisr.mmm.controller.LifecycleOperation;
+import cc.ecisr.mmm.controller.LifecycleOperationPreview;
+import cc.ecisr.mmm.controller.LifecycleOperationSessions;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.CellCarrierInventoryView;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
@@ -49,6 +52,7 @@ import cc.ecisr.mmm.simulation.ownership.OwnershipJournal;
 import cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStore;
 import cc.ecisr.mmm.simulation.persistence.WorldCapabilityLayoutResolver;
 import cc.ecisr.mmm.simulation.persistence.WorldCapabilityStartup;
+import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
 import cc.ecisr.mmm.thermal.ThermalDataPackLoader;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
@@ -70,6 +74,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.permissions.Permissions;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
@@ -83,6 +88,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalDouble;
@@ -135,6 +141,7 @@ public final class FluidSimulationService {
 	private final Map<UUID, String> reportedContainerTransferLocks = new HashMap<>();
 	/** Per-player opaque console tokens; they never participate in region or inventory persistence. */
 	private final ControllerConsoleSessions controllerConsoleSessions = new ControllerConsoleSessions();
+	private final LifecycleOperationSessions lifecycleOperationSessions = new LifecycleOperationSessions();
 	private final WorldPositionActionSessions thermalReservoirSessions = new WorldPositionActionSessions();
 	private Set<String> reportedContainerTransferStoreIssues = Set.of();
 	private ContainerTransferFaultPoint containerTransferFault = ContainerTransferFaultPoint.NONE;
@@ -955,6 +962,9 @@ public final class FluidSimulationService {
 	private String changeControllerRunIntent(ServerPlayer player, FluidRegion region, boolean pause) {
 		if (!player.isCreative()) return "只有创造模式玩家可以修改运行意图";
 		if (!authoritativeWritesReady()) return authoritativeWriteFailure("修改控制器运行意图");
+		if (!pause && region.solverLoaded() && region.domain().operatorVentedGasTopology()) {
+			return "sealed gas 已由 lifecycle 操作排放；请先 release/remove，不能重新运行并从几何重建库存";
+		}
 		if (region.paused() == pause) return "运行意图已改变，请刷新";
 		region.setPaused(pause);
 		if (!pause) region.wakeForActivity();
@@ -962,8 +972,246 @@ public final class FluidSimulationService {
 		return null;
 	}
 
+	/** Issues a bounded destructive-operation preview after consuming the displayed console generation. */
+	public LifecyclePreviewResult previewControllerLifecycleOperation(
+			ServerPlayer player, UUID requestedRegionId, BlockPos controllerPosition,
+			long summaryGeneration, LifecycleOperation operation
+	) {
+		ResolvedController resolved = resolveInteractiveController(player, requestedRegionId, controllerPosition);
+		if (resolved.failure() != null) return LifecyclePreviewResult.failed(resolved.failure());
+		FluidRegion region = resolved.region();
+		if (!controllerConsoleSessions.consume(player.getUUID(), region.id(), summaryGeneration)) {
+			return LifecyclePreviewResult.failed("summary 已过期，请刷新");
+		}
+		LifecycleFacts facts = lifecycleFacts(player, region, operation);
+		LifecycleOperationPreview preview = lifecycleOperationSessions.issue(facts.context(),
+				facts.context().serverTick() + 200L, facts.removal(), facts.gasState(),
+				facts.ownershipBlocks(), facts.blockers());
+		return new LifecyclePreviewResult(preview, null);
+	}
+
+	/** Consumes one same-player preview and rechecks all commit gates before changing authoritative state. */
+	public LifecycleCommitResult confirmControllerLifecycleOperation(
+			ServerPlayer player, UUID requestedRegionId, BlockPos controllerPosition,
+			UUID nonce, LifecycleOperation operation
+	) {
+		ResolvedController resolved = resolveInteractiveController(player, requestedRegionId, controllerPosition);
+		if (resolved.failure() != null) return LifecycleCommitResult.failed(resolved.failure());
+		FluidRegion region = resolved.region();
+		LifecycleFacts facts = lifecycleFacts(player, region, operation);
+		if (!lifecycleOperationSessions.consume(nonce, facts.context())) {
+			return LifecycleCommitResult.failed("lifecycle preview 已过期，请重新预览");
+		}
+		if (!facts.blockers().isEmpty()) return LifecycleCommitResult.failed("生命周期操作仍被阻止：" + facts.blockers());
+		return switch (operation) {
+			case EMPTY_CONDENSED, VENT_SEALED_GAS -> commitInventoryLifecycle(player.level(), region, operation);
+			case RELEASE_OWNERSHIP -> commitOwnershipRelease(player.level().getServer(), region);
+			case REMOVE_EMPTY_REGION -> LifecycleCommitResult.failed("区域移除 tombstone 尚不可提交");
+		};
+	}
+
+	private LifecycleCommitResult commitInventoryLifecycle(ServerLevel level, FluidRegion region, LifecycleOperation operation) {
+		FlipFluidDomain candidate;
+		try {
+			candidate = FlipFluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
+			if (operation == LifecycleOperation.EMPTY_CONDENSED) {
+				candidate.commitOperatorClear(candidate.planOperatorClear());
+			} else {
+				candidate.commitOperatorVentSealedGas(candidate.planOperatorVentSealedGas());
+			}
+		} catch (RuntimeException failure) {
+			return LifecycleCommitResult.failed("生命周期候选预检失败，活动库存未改变：" + failure.getMessage());
+		}
+
+		FluidRegionPersistence.StagedCheckpoint staged = null;
+		boolean headCommitted = false;
+		try {
+			long targetGeneration = GenerationSequence.next(region.checkpointGeneration(), "Lifecycle checkpoint");
+			staged = regionOperations.stageLifecycleCheckpoint(region, candidate, targetGeneration);
+			long published = regionOperations.commitStagedLifecycleCheckpoint(staged);
+			headCommitted = true;
+			region.adoptLifecycleCandidateDomain(candidate, published, true);
+			sendSnapshot(level, region);
+			return LifecycleCommitResult.committed(operation == LifecycleOperation.EMPTY_CONDENSED
+					? "已提交凝聚相清空；sealed gas 保留；checkpoint " + published
+					: "已提交 sealed gas 与实际 U 排放；区域保持暂停；checkpoint " + published);
+		} catch (IOException | RuntimeException failure) {
+			if (!headCommitted && staged != null) {
+				try {
+					regionOperations.abortStagedCheckpoint(staged);
+				} catch (IOException abortFailure) {
+					failure.addSuppressed(abortFailure);
+				}
+			}
+			region.setPaused(true);
+			if (headCommitted) {
+				region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID,
+						"lifecycle HEAD 已提交但 live candidate 未收敛；必须从 HEAD 恢复：" + failure.getMessage());
+			}
+			return LifecycleCommitResult.failed("生命周期操作未完成：" + failure.getMessage());
+		}
+	}
+
+	private LifecycleCommitResult commitOwnershipRelease(MinecraftServer server, FluidRegion region) {
+		region.setPaused(true);
+		FluidRegionPersistence.ReleaseAttempt release = regionOperations.releaseOwnership(server, region);
+		if (release.failure() != null) return LifecycleCommitResult.failed(release.failure());
+		return LifecycleCommitResult.committed("ownership 已解除；恢复 " + release.restoredBlocks()
+				+ " 个方块，保留玩家占位 " + release.skippedBlocks() + " 个");
+	}
+
+	private LifecycleFacts lifecycleFacts(ServerPlayer player, FluidRegion region, LifecycleOperation operation) {
+		long serverTick = Integer.toUnsignedLong(player.level().getServer().getTickCount());
+		LifecycleOperationPreview.PermissionDecision permission = player.permissions()
+				.hasPermission(Permissions.COMMANDS_ADMIN)
+				? LifecycleOperationPreview.PermissionDecision.BUILTIN_ADMIN_GRANTED
+				: LifecycleOperationPreview.PermissionDecision.BUILTIN_ADMIN_DENIED;
+		boolean pendingWal = hasPendingContainerTransfer(region.id());
+		String availabilityIdentity = (authoritativeWritesReady() ? "STARTUP_READY" : "STARTUP_LOCKED")
+				+ "|" + region.availabilityDescription() + "|loaded=" + region.solverLoaded();
+		LifecycleOperationSessions.Context context = new LifecycleOperationSessions.Context(player.getUUID(), region.id(),
+				region.checkpointGeneration(), operation, permission, pendingWal, availabilityIdentity, serverTick);
+		ArrayList<LifecycleOperationPreview.Blocker> blockers = new ArrayList<>();
+		if (permission == LifecycleOperationPreview.PermissionDecision.BUILTIN_ADMIN_DENIED) {
+			blockers.add(LifecycleOperationPreview.Blocker.PERMISSION_DENIED);
+		}
+		if (!authoritativeWritesReady()) blockers.add(LifecycleOperationPreview.Blocker.STARTUP_NOT_READY);
+		if (region.availabilityFailure() != null) blockers.add(LifecycleOperationPreview.Blocker.REGION_UNAVAILABLE);
+		if (!region.solverLoaded()) blockers.add(LifecycleOperationPreview.Blocker.REGION_UNLOADED);
+		if (pendingWal || regionOperations.ownershipLockDescription(region) != null) {
+			blockers.add(LifecycleOperationPreview.Blocker.PENDING_WAL);
+		}
+
+		int ownershipBlocks = 0;
+		try {
+			ownershipBlocks = regionOperations.committedOwnershipBlockCount(region);
+		} catch (IOException | RuntimeException unavailable) {
+			addBlocker(blockers, LifecycleOperationPreview.Blocker.PENDING_WAL);
+		}
+		if (!region.solverLoaded()) return new LifecycleFacts(context, LifecycleOperationPreview.Removal.none(),
+				LifecycleOperationPreview.GasState.none(), ownershipBlocks, List.copyOf(blockers));
+
+		FlipFluidDomain domain = region.domain();
+		if (domain.hasPendingPhaseVolumeWork()) blockers.add(LifecycleOperationPreview.Blocker.PENDING_PHASE_WORK);
+		boolean auditClosed = domain.airNetwork().auditClosed()
+				&& (!domain.hasThermalState()
+				|| domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
+		try {
+			if (operation == LifecycleOperation.EMPTY_CONDENSED) domain.planOperatorClear();
+			if (operation == LifecycleOperation.VENT_SEALED_GAS) domain.planOperatorVentSealedGas();
+			if (operation == LifecycleOperation.RELEASE_OWNERSHIP
+					|| operation == LifecycleOperation.REMOVE_EMPTY_REGION) domain.planOperatorClear();
+		} catch (RuntimeException open) {
+			auditClosed = false;
+		}
+		if (!auditClosed) blockers.add(LifecycleOperationPreview.Blocker.AUDIT_OPEN);
+
+		boolean condensedEmpty = domain.particleCount() == 0
+				&& domain.totalGranularSolidVolumeSvq() == 0L
+				&& domain.totalCoherentSolidVolumeSvq() == 0L;
+		boolean gasEmpty = domain.airNetwork().sealedInventory().isEmpty()
+				&& domain.exactGasInternalEnergy().equals(cc.ecisr.mmm.thermal.SignedDyadic.ZERO);
+		boolean devicesEmpty = thermalRegistry == null
+				|| region.finiteThermalDevices(thermalRegistry.fingerprint()).devices().isEmpty();
+		if ((operation == LifecycleOperation.RELEASE_OWNERSHIP || operation == LifecycleOperation.REMOVE_EMPTY_REGION)
+				&& !condensedEmpty) blockers.add(LifecycleOperationPreview.Blocker.CONDENSED_NOT_EMPTY);
+		if ((operation == LifecycleOperation.RELEASE_OWNERSHIP || operation == LifecycleOperation.REMOVE_EMPTY_REGION)
+				&& !gasEmpty) blockers.add(LifecycleOperationPreview.Blocker.GAS_NOT_EMPTY);
+		if ((operation == LifecycleOperation.RELEASE_OWNERSHIP || operation == LifecycleOperation.REMOVE_EMPTY_REGION)
+				&& !devicesEmpty) blockers.add(LifecycleOperationPreview.Blocker.FINITE_DEVICE_NOT_EMPTY);
+		if (operation == LifecycleOperation.REMOVE_EMPTY_REGION && ownershipBlocks != 0) {
+			blockers.add(LifecycleOperationPreview.Blocker.OWNERSHIP_NOT_RELEASED);
+		}
+		if (operation == LifecycleOperation.REMOVE_EMPTY_REGION) {
+			blockers.add(LifecycleOperationPreview.Blocker.QUARANTINE_UNAVAILABLE);
+		}
+
+		GasSummary gas = lifecycleGasSummary(domain);
+		LifecycleOperationPreview.GasState gasState = new LifecycleOperationPreview.GasState(gas.nanos(), gas.mass(),
+				gas.speciesQuanta(), domain.airNetwork().nodeCount(), domain.hasAmbientGasCells());
+		LifecycleOperationPreview.Removal removal = switch (operation) {
+			case EMPTY_CONDENSED -> new LifecycleOperationPreview.Removal(
+					AirNetwork.nanos(domain.physicalVolumeCubicMetres(domain.totalVolumeExact())),
+					domain.physicalMassKilograms(domain.totalMass()), domain.totalChemicalSpeciesQuanta(),
+					domain.totalGranularSolidVolumeSvq(), domain.totalGranularMass(),
+					domain.totalCoherentSolidVolumeSvq(), domain.totalCoherentMass(),
+					0L, 0.0, 0L, domain.hasThermalState(), domain.hasThermalState()
+					? domain.exactInternalEnergy().subtract(domain.exactGasInternalEnergy()).toDouble() : Double.NaN);
+			case VENT_SEALED_GAS -> new LifecycleOperationPreview.Removal(
+					0L, 0.0, 0L, 0L, 0.0, 0L, 0.0, gas.nanos(), gas.mass(), gas.speciesQuanta(),
+					domain.hasThermalState(), domain.hasThermalState()
+					? domain.exactGasInternalEnergy().toDouble() : Double.NaN);
+			case RELEASE_OWNERSHIP, REMOVE_EMPTY_REGION -> LifecycleOperationPreview.Removal.none();
+		};
+		return new LifecycleFacts(context, removal, gasState, ownershipBlocks, List.copyOf(blockers));
+	}
+
+	private static GasSummary lifecycleGasSummary(FlipFluidDomain domain) {
+		long nanos = 0L, species = 0L;
+		double mass = 0.0;
+		for (var component : domain.airNetwork().sealedInventory().components()) {
+			nanos = Math.addExact(nanos, component.standardVolumeNanos());
+			mass += component.mass();
+			for (var amount : component.species()) species = Math.addExact(species, amount.amountQuanta());
+		}
+		if (!Double.isFinite(mass)) throw new ArithmeticException("Lifecycle gas mass summary overflow");
+		return new GasSummary(nanos, mass, species);
+	}
+
+	private ResolvedController resolveInteractiveController(
+			ServerPlayer player, UUID requestedRegionId, BlockPos controllerPosition
+	) {
+		if (player == null || requestedRegionId == null || controllerPosition == null) {
+			return ResolvedController.failed("请求缺少控制器身份");
+		}
+		ServerLevel level = player.level();
+		if (!level.getServer().isSameThread()) throw new IllegalStateException("Lifecycle actions are server-thread-only");
+		if (player.distanceToSqr(controllerPosition.getX() + 0.5,
+				controllerPosition.getY() + 0.5, controllerPosition.getZ() + 0.5) > 64.0) {
+			return ResolvedController.failed("玩家距离控制器过远");
+		}
+		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) {
+			return ResolvedController.failed("目标方块不再是控制器");
+		}
+		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
+		if (region == null || !region.id().equals(requestedRegionId)) {
+			return ResolvedController.failed("控制器 owner 已改变");
+		}
+		return new ResolvedController(region, null);
+	}
+
+	private static void addBlocker(
+			ArrayList<LifecycleOperationPreview.Blocker> blockers, LifecycleOperationPreview.Blocker blocker
+	) {
+		if (!blockers.contains(blocker)) blockers.add(blocker);
+	}
+
+	public record LifecyclePreviewResult(LifecycleOperationPreview preview, String failure) {
+		public LifecyclePreviewResult {
+			if ((preview == null) == (failure == null)) throw new IllegalArgumentException("Lifecycle preview result is ambiguous");
+		}
+		static LifecyclePreviewResult failed(String failure) { return new LifecyclePreviewResult(null, failure); }
+	}
+	public record LifecycleCommitResult(boolean committed, String message) {
+		public LifecycleCommitResult {
+			if (message == null || message.isBlank()) throw new IllegalArgumentException("Lifecycle result message is missing");
+		}
+		static LifecycleCommitResult committed(String message) { return new LifecycleCommitResult(true, message); }
+		static LifecycleCommitResult failed(String message) { return new LifecycleCommitResult(false, message); }
+	}
+	private record LifecycleFacts(
+			LifecycleOperationSessions.Context context, LifecycleOperationPreview.Removal removal,
+			LifecycleOperationPreview.GasState gasState, int ownershipBlocks,
+			List<LifecycleOperationPreview.Blocker> blockers
+	) { }
+	private record GasSummary(long nanos, double mass, long speciesQuanta) { }
+	private record ResolvedController(FluidRegion region, String failure) {
+		static ResolvedController failed(String failure) { return new ResolvedController(null, failure); }
+	}
+
 	public void forgetInteractiveViewer(UUID playerId) {
 		controllerConsoleSessions.forget(playerId);
+		lifecycleOperationSessions.forget(playerId);
 		thermalReservoirSessions.forget(playerId);
 	}
 
