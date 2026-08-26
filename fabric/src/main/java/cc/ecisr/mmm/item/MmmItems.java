@@ -14,6 +14,8 @@ import net.minecraft.world.item.Item;
  * transfer service (or /give for administrators).
  */
 public final class MmmItems {
+	public static final Item QUICK_START_GUIDE = register("quick_start_guide",
+			properties -> new QuickStartGuideItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 	public static final Item PARTIAL_WATER_BUCKET = register("partial_water_bucket",
 			properties -> new PartialWaterBucketItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 	public static final Item MATERIAL_BUCKET = register("material_bucket",

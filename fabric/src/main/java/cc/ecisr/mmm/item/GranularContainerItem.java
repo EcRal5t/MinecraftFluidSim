@@ -46,7 +46,11 @@ public final class GranularContainerItem extends Item {
 			net.minecraft.world.item.component.TooltipDisplay tooltipDisplay,
 			java.util.function.Consumer<Component> tooltip, TooltipFlag flag) {
 		GranularContents contents = unvalidatedContents(stack);
-		if (contents == null) return;
+		if (contents == null) {
+			if (isEmpty(stack)) tooltip.accept(Component.translatable("item.mmm.granular_container.empty")
+					.withStyle(ChatFormatting.GRAY));
+			return;
+		}
 		tooltip.accept(Component.translatable("item.mmm.granular_container.contents",
 				contents.groups().size(), String.format("%.2f%%", 100.0 * contents.totalSolidVolumeSvq() / SolidVolume.SVQ_PER_BV))
 				.withStyle(ChatFormatting.GRAY));

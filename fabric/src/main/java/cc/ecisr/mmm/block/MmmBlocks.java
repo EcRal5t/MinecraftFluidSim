@@ -57,7 +57,7 @@ public final class MmmBlocks {
 		Registry.register(
 				BuiltInRegistries.ITEM,
 				itemKey,
-				new BlockItem(block, new Item.Properties().setId(itemKey).useBlockDescriptionPrefix())
+				new MmmBlockItem(block, new Item.Properties().setId(itemKey).useBlockDescriptionPrefix())
 		);
 		return block;
 	}

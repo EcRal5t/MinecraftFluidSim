@@ -92,6 +92,11 @@ public final class MaterialBucketItem extends Item {
 	public void appendHoverText(ItemStack stack, TooltipContext context, net.minecraft.world.item.component.TooltipDisplay tooltipDisplay,
 			java.util.function.Consumer<Component> tooltip, TooltipFlag flag) {
 		long nanos = volume(stack);
+		if (nanos == 0L && isEmptyMaterialBucket(stack)) {
+			tooltip.accept(Component.translatable("item.mmm.material_bucket.empty")
+					.withStyle(ChatFormatting.GRAY));
+			return;
+		}
 		FluidMixture mixture = mixture(stack);
 		ChemicalContents chemical = null;
 		String chemicalEncoded = stack.get(MmmComponents.CHEMICAL_CONTENTS);
