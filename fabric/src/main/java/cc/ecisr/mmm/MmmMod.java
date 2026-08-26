@@ -12,6 +12,7 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.minecraft.core.dispenser.DispenseItemBehavior;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.ItemStack;
@@ -34,6 +35,14 @@ public final class MmmMod implements ModInitializer {
 		registerDispenserBehaviors();
 		FluidProtocolServer.register();
 		MmmCommands.register();
+		PlayerBlockBreakEvents.BEFORE.register((level, player, position, state, blockEntity) -> {
+			if (!(level instanceof net.minecraft.server.level.ServerLevel serverLevel)
+					|| !FluidSimulationService.get(serverLevel.getServer())
+					.isLifecycleManagedBlock(serverLevel, position)) return true;
+			player.sendSystemMessage(net.minecraft.network.chat.Component.translatable(
+					"message.mmm.controller.break_blocked"));
+			return false;
+		});
 		ServerTickEvents.END_SERVER_TICK.register(server -> FluidSimulationService.get(server).tick(server));
 		ServerChunkEvents.CHUNK_LOAD.register((level, chunk, newlyGenerated) ->
 				FluidSimulationService.get(level.getServer()).retryUnavailableContainerTransfers(level.getServer()));

@@ -18,6 +18,7 @@ import cc.ecisr.mmm.simulation.persistence.RegionManifest;
 import cc.ecisr.mmm.simulation.persistence.RegionState;
 import cc.ecisr.mmm.simulation.persistence.RegionStateFiles;
 import cc.ecisr.mmm.simulation.persistence.RegionStateLayout;
+import cc.ecisr.mmm.simulation.persistence.RemovedRegionManifest;
 import cc.ecisr.mmm.simulation.persistence.WorldCapabilityLayoutResolver;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
@@ -242,6 +243,42 @@ final class FluidRegionPersistence {
 
 	long committedManifestChecksum(UUID regionId) throws IOException {
 		return files.committedManifestChecksum(regionId);
+	}
+
+	void requireRemovalQuarantineCapacity(FluidRegion region, long maximumEntries, long maximumBytes) throws IOException {
+		files.requireRemovalQuarantineCapacity(region.id(), maximumEntries, maximumBytes);
+	}
+
+	RegionStateFiles.PreparedRemoval prepareRemoval(
+			FluidRegion region, long networkTombstoneGeneration, UUID quarantineTransactionId,
+			long maximumEntries, long maximumBytes
+	) throws IOException {
+		return files.prepareRemoval(region.id(), region.checkpointGeneration(),
+				files.committedManifestChecksum(region.id()), networkTombstoneGeneration,
+				quarantineTransactionId, maximumEntries, maximumBytes);
+	}
+
+	RemovedRegionManifest commitRemoval(RegionStateFiles.PreparedRemoval prepared) throws IOException {
+		return files.commitRemoval(prepared);
+	}
+
+	void abortRemoval(RegionStateFiles.PreparedRemoval prepared) throws IOException { files.abortRemoval(prepared); }
+
+	Path convergeRemovalQuarantine(UUID regionId, long maximumEntries, long maximumBytes) throws IOException {
+		return files.convergeRemovalQuarantine(regionId, maximumEntries, maximumBytes);
+	}
+
+	List<String> recoverRemovedQuarantines(long maximumEntries, long maximumBytes) {
+		ArrayList<String> failures = new ArrayList<>();
+		try {
+			for (RemovedRegionManifest removed : files.discover().removed()) {
+				try { files.convergeRemovalQuarantine(removed.regionId(), maximumEntries, maximumBytes); }
+				catch (IOException failure) { failures.add("REMOVED " + removed.regionId() + " quarantine 未收敛：" + failure.getMessage()); }
+			}
+		} catch (IOException failure) {
+			failures.add("REMOVED tombstone discovery 失败：" + failure.getMessage());
+		}
+		return List.copyOf(failures);
 	}
 
 	StagedCheckpoint stageCheckpoint(FluidRegion region, long targetGeneration) throws IOException {
@@ -768,10 +805,6 @@ final class FluidRegionPersistence {
 		if (expectedMaterialPalette != null && !manifest.materialPalette().equals(expectedMaterialPalette)) {
 			throw new IOException("Persisted region material palette does not match the committed world material snapshot");
 		}
-	}
-
-	void delete(FluidRegion region) throws IOException {
-		if (region.controllerManaged() && region.checkpointGeneration() > 0L) files.quarantine(region.id());
 	}
 
 	private static void validateControllerGeometry(RegionManifest manifest) throws IOException {

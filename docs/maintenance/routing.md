@@ -26,6 +26,7 @@
 | 实体流体交互 | `MinecraftEntityFluidInteraction.java`、`core/.../world/MovingBodyFluidCoupling.java`、`FlipFluidDomain.applyMovingBodyCoupling` | Fabric 冻结实体 AABB/速度与湿样本；core 只用 SI moving-body request 提交 marker 动量并回报实际冲量 |
 | controller footprint | `simulation/controller/` | 非加载读取；破口、缺 chunk、多内腔、重叠或超预算拒绝 |
 | 区域 checkpoint | `simulation/persistence/`、`RegionStateLayout.java`、`GenerationSequence.java` | 双槽完整 generation、语义 layout、CRC、HEAD 最后发布；所有 WAL/HEAD 紧邻代次用统一 overflow-safe 检查；atomic rename/delete 后同步目录 entry |
+| 危险 lifecycle | `core/.../controller/LifecycleOperation*.java`、`FluidSimulationService.java`、`LifecycleOperation*Payload.java`、`client/.../LifecycleConfirmationScreen.java`、`RemovedRegionManifest.java`、`RegionStateFiles.java` | preview 绑定玩家/generation/权限/WAL/availability；确认后只走 candidate/WAL/HEAD；REMOVED HEAD 后注销 runtime 并收敛只读 quarantine；controller 方块破坏不得旁路 |
 | 跨域恢复代数 | `core/.../recovery/CrossDomainRecovery.java`、各 journal adapter | HEAD 只认 base 或 checksum 匹配的 target；外部成员逐一分类 BEFORE/AFTER/THIRD/UNAVAILABLE；base 只接受全 BEFORE，target 只收敛 BEFORE；UNAVAILABLE 只由明确加载事件重试 |
 | takeover | `TakeoverTransaction.java`、`TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
 | ownership | `simulation/ownership/`、`FluidRegionPersistence.java` | WAL→WARNING→世界→region HEAD→committed；未知状态保留并锁定 |
@@ -62,6 +63,7 @@
 - 热区暂停：thermal/gas registry fingerprint、candidate T/P 有效域、U/source/sink/work、phase pending-work、gas topology ordinal。
 - ownership 锁：ownership store 的 WAL/committed 与 region HEAD base/target。
 - 容器锁：`<world>/mmm/container-transfer/` 扫描、HEAD checksum、actor before/after durable state；不要手删未知 WAL。
+- REMOVED 收敛：`region-state/<uuid>/HEAD.nbt` 与 `quarantine/removed-region/<uuid>/<generation>/quarantine.nbt` 必须绑定同一 tombstone；不要手删旧 payload 或把 quarantine 搬回 ACTIVE slot。
 
 ## CPU 验证
 

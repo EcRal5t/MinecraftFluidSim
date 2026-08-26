@@ -76,6 +76,7 @@
   "message.mmm.controller.console_action_failed": "Controller action refused: %s",
   "message.mmm.controller.lifecycle_failed": "Lifecycle operation refused: %s",
   "message.mmm.controller.lifecycle_committed": "%s",
+  "message.mmm.controller.break_blocked": "This block belongs to an active MMM region. Release and remove it through the controller console first.",
   "message.mmm.thermal_reservoir.unavailable": "The thermal reservoir tuning state is unavailable.",
   "message.mmm.thermal_reservoir.action_failed": "Thermal reservoir update refused: %s",
   "screen.mmm.controller.title": "Matter, Motion & Mechanics Controller",

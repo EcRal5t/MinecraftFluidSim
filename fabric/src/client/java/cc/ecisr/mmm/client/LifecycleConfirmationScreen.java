@@ -32,6 +32,7 @@ public final class LifecycleConfirmationScreen extends Screen {
 			ClientPlayNetworking.send(LifecycleOperationRequestPayload.confirm(preview.regionId(),
 					payload.controllerPosition(), payload.refreshedSummary().summaryGeneration(),
 					preview.operation(), preview.nonce()));
+			if (minecraft != null) minecraft.setScreenAndShow(null);
 		}).bounds(left, y, width, 20).build();
 		confirm.active = payload.preview().ready();
 		addRenderableWidget(confirm);

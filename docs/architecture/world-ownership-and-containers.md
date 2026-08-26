@@ -46,11 +46,14 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 - controller 必须有完整闭壳和全部已加载 chunk。
 - UNLOADED 区域不持 solver，但仍占 manager 的 cell/marker 预算。
 - checkpoint 成功后才能释放 solver；恢复成功后先刷新 collision，再发送 snapshot。
-- 删除区域前必须处理 ownership，并要求实际凝聚相库存为空。`remove` 不把未知状态解释成可删除数据。
+- controller console 把 `EMPTY_CONDENSED`、`VENT_SEALED_GAS`、`RELEASE_OWNERSHIP` 和 `REMOVE_EMPTY_REGION` 分成四个显式操作。每次预览绑定玩家、区域 generation、权限判定、WAL/availability 和短时 nonce；确认时全部重算，过期或不一致即拒绝。
+- 清空与排气先从已提交状态构造私有完整 candidate，联合结算各自的实际库存、组成和 `U` sink；candidate slot 回读并发布 HEAD 后才替换 live solver。`empty` 保留 gas，`vent` 不把几何或 pressure 当库存，并留下禁止从几何重建已排放 gas 的持久意图。
+- release 只在凝聚相、gas 与有限设备真值均为空且 WAL/phase-work/audit 闭合时恢复 ownership preimage。玩家占位保持不变。
+- remove 还要求 ownership 已释放和 quarantine 预算预先可接纳。它在 inactive slot 写严格 `REMOVED` manifest，最后发布 HEAD，再发送更高 network tombstone、注销 runtime owner并把旧 ACTIVE payload 原子移入 `mmm/quarantine/removed-region/<uuid>/<generation>/`。REMOVED 不含可重建 solver 的载荷，UUID 永不复用，quarantine 不自动删除。
 
 边界壳、interior set 和 required chunk set 来自持久 footprint。controller 方块存在不等于区域可运行：每次 admission/refresh 都必须核对 dimension、controller identity、完整闭壳和 chunk load。边界打开时停止 step 和修改操作；不会用 chunk ticket 把缺失世界强行加载。
 
-`demo` 只替换当前选择的开发域；`empty` 清除凝聚相真值并把移除库存记入 escaped sink，但保留 controller、ownership 和 sealed gas。区域有未决 WAL、pending phase-work 或不闭合 audit 时拒绝清空。
+创造模式也不能直接破坏仍由 runtime owner 绑定的 controller、边界壳或有限热设备位置；必须先走 console lifecycle。`/mmm empty` 与 `/mmm remove` 仅处理瞬态 fixture/接管恢复，不能绕过持久 controller 的候选和 REMOVED HEAD。
 
 ## 容器真值
 

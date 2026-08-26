@@ -76,6 +76,7 @@
   "message.mmm.controller.console_action_failed": "控制器操作被拒绝：%s",
   "message.mmm.controller.lifecycle_failed": "生命周期操作被拒绝：%s",
   "message.mmm.controller.lifecycle_committed": "%s",
+  "message.mmm.controller.break_blocked": "该方块属于活动 MMM 区域；请先通过控制器界面释放并移除区域。",
   "message.mmm.thermal_reservoir.unavailable": "温度源 tuning 状态不可用。",
   "message.mmm.thermal_reservoir.action_failed": "温度源修改被拒绝：%s",
   "screen.mmm.controller.title": "物质、运动与力学控制器",

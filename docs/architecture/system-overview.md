@@ -122,6 +122,8 @@ availability 对外只使用 JDK-only 的封闭 reason：`PROFILE_LOCKED`、`REG
 
 region HEAD 是区域物理状态唯一提交点。ownership 与 container WAL 分别把世界方块和 actor item 收敛到该 HEAD；它们不能成为第二个物理真值。任何 publish 都必须遵守“完整写入、回读验证、HEAD 最后替换”。region manifest 同时绑定 world capability profile fingerprint、五 registry 聚合 fingerprint、material fingerprint 和唯一语义 layout。
 
+region HEAD 明确区分 `ACTIVE` 与终态 `REMOVED`。危险 lifecycle 操作先预览、再以完整 candidate 或跨域 WAL 提交；只有实际凝聚相、gas、有限设备和 ownership 都按各自操作归零后，才能发布不含 solver 载荷的 REMOVED tombstone。旧 ACTIVE payload 在 HEAD 后只移入带严格 manifest 的只读 quarantine；失败或重启只能继续收敛，不能从目录缺失猜测删除完成，也不能从 quarantine 恢复库存。
+
 world capability bundle 把 profile 与 material、chemical、granular、gas、thermal 五份 registry snapshot 作为一个 generation 发布；slot 完整回读后才原子替换 capability HEAD。新世界固定六项能力。已有 HEAD 启动只读该 slot，当前数据包只比较 fingerprint。reader 只接受当前 writer 的精确字段、类型、generation、layout、依赖和 checksum；unknown/corrupt 或身份不一致原样保留并进入 `LOCKED_PROFILE`，不能用数据包重建。
 
 service 启动状态只有 `UNINITIALIZED`、`READY`、`LOCKED_PROFILE` 和 `POLICY_RESTRICTED`。只有 `READY` 可产生新区域权威数据；`POLICY_RESTRICTED` 仍可按 committed bundle discovery/recovery 和只读 Query，`LOCKED_PROFILE` 只允许诊断与显式维护。协议 offer 和 Query capability 都读取 service 持有的同一 profile；没有可读 profile 时不得伪造 pure layout。

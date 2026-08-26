@@ -80,6 +80,7 @@ public final class FluidRegionPersistenceValidation {
 		validateUnknownExtensions();
 		validateFaultMatrix();
 		validateStagedGeneration();
+		validateRemovedHeadAndQuarantine();
 		validateExplicitPreviousGenerationActivation();
 		validateCorruptionAndAtomicMoveFailure();
 		validateWorldConfig();
@@ -724,13 +725,41 @@ public final class FluidRegionPersistenceValidation {
 		NbtIo.writeCompressed(corruptHead, headPath);
 		expectIOException(() -> headFiles.read(headRegion.id()), "corrupt HEAD checksum was accepted");
 
-		Path deleteRoot = Files.createTempDirectory(Path.of("."), "quarantine-");
-		FluidRegion deleteRegion = populatedRegion(UUID.randomUUID());
-		RegionStateFiles deleteFiles = new RegionStateFiles(deleteRoot);
-		deleteFiles.publish(RegionState.capture(deleteRegion, 1L));
-		deleteFiles.quarantine(deleteRegion.id());
-		require(deleteFiles.discover().manifests().isEmpty() && deleteFiles.discover().issues().isEmpty(),
-				"logically deleted checkpoint remained discoverable");
+	}
+
+	private static void validateRemovedHeadAndQuarantine() throws Exception {
+		Path root = Files.createTempDirectory(Path.of("."), "removed-head-");
+		FluidRegion region = populatedRegion(UUID.randomUUID());
+		WorldCapabilityProfile profile = WorldCapabilityProfile.of(Set.of(), RegistryFingerprintSet.unbound());
+		RegionState active = RegionState.capture(region, 1L).bindWorldCapabilityProfile(profile);
+		RegionStateFiles files = new RegionStateFiles(root);
+		files.publish(active);
+		UUID transaction = UUID.randomUUID();
+		RegionStateFiles.PreparedRemoval prepared = files.prepareRemoval(region.id(), 1L,
+				active.manifest().checksum(), 2L, transaction, 10_000L, 64L * 1024L * 1024L);
+		require(files.discover().manifests().size() == 1 && files.discover().removed().isEmpty(),
+				"ACTIVE restart did not discard exact uncommitted REMOVED staging");
+		prepared = files.prepareRemoval(region.id(), 1L, active.manifest().checksum(), 2L, transaction,
+				10_000L, 64L * 1024L * 1024L);
+		require(files.read(region.id()).manifest().checksum() == active.manifest().checksum(),
+				"staged REMOVED payload became authoritative before HEAD");
+		RemovedRegionManifest removed = files.commitRemoval(prepared);
+		require(removed.baseGeneration() == 1L && removed.targetGeneration() == 2L
+				&& removed.oldManifestChecksum() == active.manifest().checksum()
+				&& removed.networkTombstoneGeneration() == 2L
+				&& removed.quarantineTransactionId().equals(transaction),
+				"REMOVED HEAD lost active/quarantine/network identity");
+		RegionStateFiles.Discovery discovery = files.discover();
+		require(discovery.manifests().isEmpty() && discovery.removed().equals(List.of(removed))
+				&& discovery.issues().isEmpty(), "REMOVED HEAD was admitted as an ACTIVE solver");
+		expectIOException(() -> files.read(region.id()), "REMOVED HEAD reconstructed an empty solver");
+		Path quarantine = files.convergeRemovalQuarantine(region.id(), 10_000L, 64L * 1024L * 1024L);
+		require(Files.isDirectory(quarantine.resolve("payload"))
+				&& Files.isRegularFile(quarantine.resolve("quarantine.nbt"))
+				&& files.convergeRemovalQuarantine(region.id(), 0L, 0L).equals(quarantine),
+				"REMOVED quarantine did not converge idempotently after HEAD");
+		expectIOException(() -> files.publish(RegionState.capture(region, 2L).bindWorldCapabilityProfile(profile)),
+				"REMOVED region UUID was reused by an ACTIVE publication");
 	}
 
 	private static void validateWorldConfig() throws Exception {

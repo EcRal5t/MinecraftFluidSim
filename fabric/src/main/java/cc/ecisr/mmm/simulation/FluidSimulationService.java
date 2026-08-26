@@ -212,6 +212,8 @@ public final class FluidSimulationService {
 				precipitationFeatureEnabled, thermalFeatureEnabled, thermalRegistry, gasRegistry,
 				serverConfig.maximumThermalSubstepsPerStep(),
 				materialRegistry == null ? null : materialRegistry.materials(), capabilityProfile, true);
+		regionOperations.recoverRemovedQuarantines(serverConfig.maximumQuarantineEntries(),
+				serverConfig.maximumQuarantineBytes());
 		snapshots = new FluidSnapshotPublisher(materialFeatureEnabled, chemistryFeatureEnabled, chemicalRegistry,
 				granularFeatureEnabled, thermalFeatureEnabled, thermalRegistry);
 		containerTransfers = new ContainerTransferStore(worldRoot);
@@ -1006,7 +1008,7 @@ public final class FluidSimulationService {
 		return switch (operation) {
 			case EMPTY_CONDENSED, VENT_SEALED_GAS -> commitInventoryLifecycle(player.level(), region, operation);
 			case RELEASE_OWNERSHIP -> commitOwnershipRelease(player.level().getServer(), region);
-			case REMOVE_EMPTY_REGION -> LifecycleCommitResult.failed("区域移除 tombstone 尚不可提交");
+			case REMOVE_EMPTY_REGION -> commitRegionRemoval(player.level().getServer(), region);
 		};
 	}
 
@@ -1060,6 +1062,48 @@ public final class FluidSimulationService {
 				+ " 个方块，保留玩家占位 " + release.skippedBlocks() + " 个");
 	}
 
+	private LifecycleCommitResult commitRegionRemoval(MinecraftServer server, FluidRegion region) {
+		long tombstoneGeneration;
+		try {
+			tombstoneGeneration = GenerationSequence.next(region.networkGeneration(), "Network tombstone");
+		} catch (IOException invalid) {
+			return LifecycleCommitResult.failed(invalid.getMessage());
+		}
+		cc.ecisr.mmm.simulation.persistence.RegionStateFiles.PreparedRemoval prepared = null;
+		boolean committed = false;
+		try {
+			prepared = regionOperations.prepareRemoval(region, tombstoneGeneration, UUID.randomUUID(),
+					serverConfig.maximumQuarantineEntries(), serverConfig.maximumQuarantineBytes());
+			var removed = regionOperations.commitRemoval(prepared);
+			committed = true;
+			snapshots.sendRemoval(server, region, removed.networkTombstoneGeneration());
+			if (regionManager.remove(region.id()) != region) {
+				throw new IOException("REMOVED HEAD committed but runtime owner identity changed");
+			}
+			try {
+				regionOperations.convergeRemovalQuarantine(region.id(), serverConfig.maximumQuarantineEntries(),
+						serverConfig.maximumQuarantineBytes());
+				return LifecycleCommitResult.committed("区域 REMOVED tombstone 已提交；checkpoint "
+						+ removed.targetGeneration());
+			} catch (IOException quarantineFailure) {
+				regionOperations.recordIssue("REMOVED " + region.id() + " quarantine 待恢复：" + quarantineFailure.getMessage());
+				return LifecycleCommitResult.committed("区域 REMOVED tombstone 已提交；quarantine 将在启动恢复："
+						+ quarantineFailure.getMessage());
+			}
+		} catch (IOException | RuntimeException failure) {
+			if (!committed && prepared != null) {
+				try { regionOperations.abortRemoval(prepared); }
+				catch (IOException abortFailure) { failure.addSuppressed(abortFailure); }
+			}
+			if (committed) {
+				regionOperations.recordIssue("REMOVED " + region.id() + " runtime 注销待恢复：" + failure.getMessage());
+				regionManager.remove(region.id());
+				return LifecycleCommitResult.committed("区域 REMOVED HEAD 已提交；runtime/quarantine 待启动收敛");
+			}
+			return LifecycleCommitResult.failed("区域移除未提交：" + failure.getMessage());
+		}
+	}
+
 	private LifecycleFacts lifecycleFacts(ServerPlayer player, FluidRegion region, LifecycleOperation operation) {
 		long serverTick = Integer.toUnsignedLong(player.level().getServer().getTickCount());
 		LifecycleOperationPreview.PermissionDecision permission = player.permissions()
@@ -1109,7 +1153,7 @@ public final class FluidSimulationService {
 		boolean condensedEmpty = domain.particleCount() == 0
 				&& domain.totalGranularSolidVolumeSvq() == 0L
 				&& domain.totalCoherentSolidVolumeSvq() == 0L;
-		boolean gasEmpty = domain.airNetwork().sealedInventory().isEmpty()
+		boolean gasEmpty = domain.airNetwork().nodeCount() == 0 && domain.airNetwork().sealedInventory().isEmpty()
 				&& domain.exactGasInternalEnergy().equals(cc.ecisr.mmm.thermal.SignedDyadic.ZERO);
 		boolean devicesEmpty = thermalRegistry == null
 				|| region.finiteThermalDevices(thermalRegistry.fingerprint()).devices().isEmpty();
@@ -1123,7 +1167,12 @@ public final class FluidSimulationService {
 			blockers.add(LifecycleOperationPreview.Blocker.OWNERSHIP_NOT_RELEASED);
 		}
 		if (operation == LifecycleOperation.REMOVE_EMPTY_REGION) {
-			blockers.add(LifecycleOperationPreview.Blocker.QUARANTINE_UNAVAILABLE);
+			try {
+				regionOperations.requireRemovalQuarantineCapacity(region,
+						serverConfig.maximumQuarantineEntries(), serverConfig.maximumQuarantineBytes());
+			} catch (IOException | RuntimeException unavailable) {
+				blockers.add(LifecycleOperationPreview.Blocker.QUARANTINE_UNAVAILABLE);
+			}
 		}
 
 		GasSummary gas = lifecycleGasSummary(domain);
@@ -2468,6 +2517,10 @@ public final class FluidSimulationService {
 	}
 
 	public RestorationStats remove(MinecraftServer server) {
+		if (regionManager.regions().stream().anyMatch(FluidRegion::controllerManaged)) {
+			return RestorationStats.failed(false, 0, 0, 0,
+					"controller 区域只能在控制台依次清空、排气、解除 ownership 并确认 REMOVED");
+		}
 		if (hasAnyContainerTransferLock()) {
 			return RestorationStats.failed(false, 0, 0, 0,
 					"存在未完成或不可识别的容器转移 WAL；拒绝移除区域，先完成恢复");
@@ -2479,13 +2532,11 @@ public final class FluidSimulationService {
 			return restoration;
 		}
 		restoreAirDemoScaffolding(server);
-		FluidRegionOperations.RegionRemoval removal = regionOperations.deletePersistentRegions(server);
-		if (removal.failure() != null) return RestorationStats.failed(false, 0, 0, 0, removal.failure());
 		regionManager.clear();
 		snapshots.clearAll(server);
 		return new RestorationStats(restoration.journalFound(), restoration.restoredBlocks(),
 				restoration.alreadyRestoredBlocks(), restoration.skippedBlocks(),
-				removal.releasedBlocks(), removal.releasedSkipped(), true, null);
+				0, 0, true, null);
 	}
 
 	public List<String> regionSummaries() {
@@ -2527,6 +2578,7 @@ public final class FluidSimulationService {
 		if (!authoritativeWritesReady()) return authoritativeWriteFailure("清空区域库存");
 		FluidRegion region = activeRegion();
 		if (region == null || !level.dimension().equals(region.dimension())) return "没有活动流体域或位于其他维度";
+		if (region.controllerManaged()) return "清空失败：controller 区域必须使用控制台 lifecycle 确认操作";
 		if (!ensureRegionAvailable(level, region)) return "清空失败：控制器域当前不可用：" + region.availabilityFailure();
 		if (hasPendingContainerTransfer(region.id())) {
 			return "清空失败：区域存在未完成或不可识别的容器转移 WAL；拒绝清空";
@@ -2754,6 +2806,17 @@ public final class FluidSimulationService {
 	/** Returns the sole region whose actual interior contains the block position. */
 	public FluidRegion regionAtBlock(ServerLevel level, BlockPos pos) {
 		return targets.regionAtBlock(level, pos);
+	}
+
+	/** Bound shell/device blocks remain under lifecycle coordination until the runtime owner is removed. */
+	public boolean isLifecycleManagedBlock(ServerLevel level, BlockPos position) {
+		if (level == null || position == null || !level.getServer().isSameThread()) return false;
+		long packed = position.asLong();
+		for (FluidRegion region : regionManager.regions()) {
+			if (region.dimension().equals(level.dimension()) && region.footprint() != null
+					&& region.footprint().boundaryBlocks().contains(packed)) return true;
+		}
+		return false;
 	}
 
 	/**
