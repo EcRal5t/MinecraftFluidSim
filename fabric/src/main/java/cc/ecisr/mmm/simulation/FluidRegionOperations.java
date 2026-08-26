@@ -5,6 +5,8 @@ import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.FluidMaterial;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
+import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
+import cc.ecisr.mmm.simulation.ownership.OwnershipJournal;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
 import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
@@ -139,7 +141,15 @@ final class FluidRegionOperations {
 	void abortStagedCheckpoint(FluidRegionPersistence.StagedCheckpoint staged) throws IOException {
 		persistence.abortStagedCheckpoint(staged);
 	}
-	void acquireOwnership(ServerLevel level, FluidRegion region) throws IOException { persistence.acquireOwnership(level, region); }
+	List<OwnershipJournal.BlockEntry> scanOwnershipPreimage(
+			ServerLevel level, FluidRegionFootprint footprint
+	) throws IOException {
+		return persistence.scanOwnershipPreimage(level, footprint);
+	}
+	void acquireOwnership(ServerLevel level, FluidRegion region,
+			List<OwnershipJournal.BlockEntry> candidates) throws IOException {
+		persistence.acquireOwnership(level, region, candidates);
+	}
 	List<String> scanOwnershipIssues() { return persistence.scanOwnershipIssues(); }
 	List<String> recoverUnfinishedOwnership(MinecraftServer server) { return persistence.recoverUnfinishedOwnership(server); }
 	String ownershipLockDescription(FluidRegion region) { return persistence.ownershipLockDescription(region); }

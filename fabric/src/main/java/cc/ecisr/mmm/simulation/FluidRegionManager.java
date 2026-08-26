@@ -72,6 +72,18 @@ public final class FluidRegionManager {
 				current.reservedCells(), current.reservedMarkers());
 	}
 
+	/** Evaluates the complete candidate without registering it or changing selection. */
+	public AdmissionResult previewAdd(FluidRegion candidate) {
+		Objects.requireNonNull(candidate, "candidate");
+		if (regions.containsKey(candidate.id())) {
+			return AdmissionResult.rejected("region id already exists: " + candidate.id());
+		}
+		BudgetUsage current = usage();
+		AdmissionResult admission = evaluate(candidate, current.regionCount() + 1,
+				current.reservedCells(), current.reservedMarkers());
+		return admission.accepted() ? evaluatePlacement(candidate, null) : admission;
+	}
+
 	/** Atomically replaces the selected region after evaluating the candidate against the remaining regions. */
 	public AdmissionResult replaceSelected(FluidRegion candidate) {
 		Objects.requireNonNull(candidate, "candidate");

@@ -287,9 +287,17 @@ final class FluidRegionPersistence {
 	 * Stages the initial checkpoint, publishes the ownership WAL and WARNING, removes the vanilla
 	 * water, and publishes the region HEAD last as the sole commit point.
 	 */
-	void acquireOwnership(ServerLevel level, FluidRegion region) throws IOException {
+	List<OwnershipJournal.BlockEntry> scanOwnershipPreimage(
+			ServerLevel level, FluidRegionFootprint footprint
+	) throws IOException {
+		return scanPureWaterInterior(level, footprint);
+	}
+
+	void acquireOwnership(
+			ServerLevel level, FluidRegion region, List<OwnershipJournal.BlockEntry> candidates
+	) throws IOException {
 		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
-		List<OwnershipJournal.BlockEntry> candidates = scanPureWaterInterior(level, region.footprint());
+		candidates = List.copyOf(candidates);
 		if (candidates.isEmpty()) {
 			checkpoint(region);
 			return;

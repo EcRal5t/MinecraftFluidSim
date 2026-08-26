@@ -36,6 +36,7 @@ import cc.ecisr.mmm.transfer.ThermalContents;
 import cc.ecisr.mmm.simulation.controller.FluidBoundaryScanner;
 import cc.ecisr.mmm.simulation.controller.FluidControllerRegions;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
+import cc.ecisr.mmm.simulation.ownership.OwnershipJournal;
 import cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStore;
 import cc.ecisr.mmm.simulation.persistence.WorldCapabilityLayoutResolver;
 import cc.ecisr.mmm.simulation.persistence.WorldCapabilityStartup;
@@ -895,6 +896,9 @@ public final class FluidSimulationService {
 			return ControllerActivation.failed("存在未解决或超预算的 region-state/ownership；已锁住新控制器区域，详见 /mmm regions list、/mmm ownership 与日志");
 		}
 
+		RestorationStats restoration = restoreTakeover(level.getServer());
+		if (!restoration.completed()) return ControllerActivation.failed(restoration.failure());
+
 		FluidBoundaryScanner.ScanResult scan = FluidControllerRegions.scan(
 				level, controllerPosition, (int) Math.max(1L, Math.min(Integer.MAX_VALUE,
 						regionManager.limits().maximumCellsPerRegion() / CELL_VOLUMES_PER_BLOCK)
@@ -902,10 +906,17 @@ public final class FluidSimulationService {
 		);
 		if (!scan.succeeded()) return ControllerActivation.failed(scan.failure());
 		FluidRegionFootprint footprint = scan.footprint();
-		if (!worldBridgeFeatureEnabled && footprint.interiorBlocks().stream()
-				.map(BlockPos::of).anyMatch(position -> level.getBlockState(position).is(Blocks.WATER))) {
+		List<OwnershipJournal.BlockEntry> ownershipPreimage;
+		try {
+			ownershipPreimage = regionOperations.scanOwnershipPreimage(level, footprint);
+		} catch (IOException invalidPreimage) {
+			return ControllerActivation.failed("无法冻结 controller world preimage：" + invalidPreimage.getMessage());
+		}
+		if (!worldBridgeFeatureEnabled && !ownershipPreimage.isEmpty()) {
 			return ControllerActivation.failed("worldbridge 策略关闭；拒绝接管壳内原版水，请先排空或启用策略并重启");
 		}
+		ControllerCreationPlan creationPlan = new ControllerCreationPlan(
+				capabilityProfile.profileFingerprint(), footprint, ownershipPreimage);
 		long requiredCells;
 		long requiredMarkers;
 		try {
@@ -917,8 +928,6 @@ public final class FluidSimulationService {
 		FluidRegionManager.AdmissionResult preview = regionManager.previewAdd(requiredCells, requiredMarkers);
 		if (!preview.accepted()) return ControllerActivation.failed(preview.failure());
 
-		RestorationStats restoration = restoreTakeover(level.getServer());
-		if (!restoration.completed()) return ControllerActivation.failed(restoration.failure());
 		String availabilityFailure = FluidControllerRegions.availabilityFailure(level, footprint);
 		if (availabilityFailure != null) return ControllerActivation.failed(availabilityFailure);
 
@@ -930,24 +939,34 @@ public final class FluidSimulationService {
 		}
 		candidate.setEntityPhysicsEnabled(defaultEntityPhysicsEnabled);
 		candidate.setDebugOverlays(defaultDebugOverlays);
-		FluidRegionManager.AdmissionResult admission = regionManager.addAndSelect(candidate);
-		if (!admission.accepted()) return ControllerActivation.failed(admission.failure());
+		FluidRegionManager.AdmissionResult exactPreview = regionManager.previewAdd(candidate);
+		if (!exactPreview.accepted()) return ControllerActivation.failed(exactPreview.failure());
 		refreshCollisions(level, candidate);
 		if (worldBridgeFeatureEnabled) FluidRegionFactory.captureVanillaWater(level, candidate);
 		bindConfiguredState(candidate.domain());
 		candidate.setPaused(false);
 		candidate.wakeForActivity();
 		try {
+			if (!creationPlan.profileFingerprint().equals(capabilityProfile.profileFingerprint())) {
+				throw new IOException("World capability profile changed after controller preflight");
+			}
 			if (worldBridgeFeatureEnabled) {
-				regionOperations.acquireOwnership(level, candidate);
+				regionOperations.acquireOwnership(level, candidate, creationPlan.ownershipPreimage());
 			} else {
 				regionOperations.checkpoint(candidate);
 			}
 		} catch (IOException | RuntimeException exception) {
-			regionManager.remove(candidate.id());
 			candidate.setAvailabilityFailure("initial checkpoint failed: " + exception.getMessage());
 			MmmMod.LOGGER.error("Controller region {} was rejected after its initial checkpoint failed", candidate.id(), exception);
 			return ControllerActivation.failed("区域未创建；初始 checkpoint/ownership 事务失败：" + exception.getMessage());
+		}
+		FluidRegionManager.AdmissionResult admission = regionManager.addAndSelect(candidate);
+		if (!admission.accepted()) {
+			String issue = "首个 region HEAD 已提交，但 live owner 登记违反已通过的 admission 预检：" + admission.failure();
+			regionOperations.recordIssue(issue);
+			MmmMod.LOGGER.error("Controller region {} requires restart after live registration failed: {}",
+					candidate.id(), admission.failure());
+			return ControllerActivation.failed(issue + "；请重启服务器恢复已提交区域");
 		}
 		sendSnapshot(level);
 		return ControllerActivation.created(footprint);
@@ -2196,6 +2215,20 @@ public final class FluidSimulationService {
 	}
 
 	public record TransferTarget(FluidRegion region, BlockPos interiorBlock) { }
+
+	private record ControllerCreationPlan(
+			String profileFingerprint,
+			FluidRegionFootprint footprint,
+			List<OwnershipJournal.BlockEntry> ownershipPreimage
+	) {
+		private ControllerCreationPlan {
+			if (profileFingerprint == null || !profileFingerprint.matches("[0-9a-f]{64}")) {
+				throw new IllegalArgumentException("Controller creation profile fingerprint is invalid");
+			}
+			java.util.Objects.requireNonNull(footprint, "footprint");
+			ownershipPreimage = List.copyOf(ownershipPreimage);
+		}
+	}
 
 	/** Applies the bounded indicator/eraser primitive to the actually aimed region. */
 	public IndicatorUseResult editIndicatorAtAim(ServerPlayer player, boolean indicated) {

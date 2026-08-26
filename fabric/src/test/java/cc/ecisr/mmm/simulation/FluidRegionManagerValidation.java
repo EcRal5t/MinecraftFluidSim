@@ -148,6 +148,11 @@ public final class FluidRegionManagerValidation {
 				"face-touching non-overlapping regions should be admitted");
 		manager.remove(touching.id());
 		FluidRegion overlapping = regionAt(0, 0, 0, 2, 2, 2, 64L);
+		FluidRegionManager.BudgetUsage before = manager.usage();
+		FluidRegionManager.AdmissionResult preview = manager.previewAdd(overlapping);
+		require(!preview.accepted() && preview.failure().contains("overlaps existing region")
+				&& manager.usage().equals(before) && manager.selected() == first,
+				"complete add preview did not reject overlap without registering the candidate");
 		FluidRegionManager.AdmissionResult rejection = manager.addAndSelect(overlapping);
 		require(!rejection.accepted() && rejection.failure().contains("overlaps existing region"),
 				"overlap rejection did not identify its cause");
@@ -167,7 +172,8 @@ public final class FluidRegionManagerValidation {
 		for (FluidRegion region : manager.regions()) {
 			if (region.canStep()) region.incrementTick();
 		}
-		require(blocked.tick() == 0L && blocked.paused(), "unavailable region advanced a partial step");
+		require(blocked.tick() == 0L && !blocked.paused(),
+				"availability block advanced a partial step or overwrote running operator intent");
 		require(runnable.tick() == 1L && !runnable.paused(), "blocked region prevented its independent peer from advancing");
 	}
 
