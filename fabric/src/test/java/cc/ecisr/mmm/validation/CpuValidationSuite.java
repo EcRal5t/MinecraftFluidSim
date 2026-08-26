@@ -26,6 +26,7 @@ import cc.ecisr.mmm.simulation.controller.FluidBoundaryScannerValidation;
 import cc.ecisr.mmm.simulation.ownership.M6OwnershipValidation;
 import cc.ecisr.mmm.simulation.persistence.FluidRegionPersistenceValidation;
 import cc.ecisr.mmm.fluid.M9ThermalValidation;
+import cc.ecisr.mmm.fluid.MaterialRegistryStoreValidation;
 import cc.ecisr.mmm.worldprofile.WorldCapabilityProfileValidation;
 
 import java.util.Collections;
@@ -132,6 +133,7 @@ public final class CpuValidationSuite {
 			FluidRegionPersistenceValidation.main(NONE);
 			M7RegionChemistryPersistenceValidation.main(NONE);
 			WorldCapabilityProfileValidation.main(NONE);
+			MaterialRegistryStoreValidation.main(NONE);
 		});
 		gate(gates, "protocol", () -> {
 			FluidNetworkProtocolValidation.main(NONE);
