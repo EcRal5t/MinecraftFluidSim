@@ -10,6 +10,7 @@ import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.Tag;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -74,7 +75,14 @@ public final class GranularRegistryStore {
 
 	public static void writeSnapshot(Path path, GranularRegistry registry) throws IOException {
 		if (path == null || registry == null) throw new IllegalArgumentException("Granular registry snapshot write is incomplete");
-		NbtIo.writeCompressed(encode(registry), path);
+		Files.write(path, snapshotBytes(registry));
+	}
+
+	public static byte[] snapshotBytes(GranularRegistry registry) throws IOException {
+		if (registry == null) throw new IllegalArgumentException("Granular registry snapshot is missing");
+		ByteArrayOutputStream output = new ByteArrayOutputStream();
+		NbtIo.writeCompressed(encode(registry), output);
+		return output.toByteArray();
 	}
 
 	public static GranularRegistry readSnapshot(Path path, ChemicalRegistry chemicalRegistry) throws IOException {

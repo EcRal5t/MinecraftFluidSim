@@ -9,6 +9,7 @@ import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -73,7 +74,14 @@ public final class ChemicalRegistryStore {
 
 	public static void writeSnapshot(Path path, ChemicalRegistry registry) throws IOException {
 		if (path == null || registry == null) throw new IllegalArgumentException("Chemical registry snapshot write is incomplete");
-		NbtIo.writeCompressed(encode(registry), path);
+		Files.write(path, snapshotBytes(registry));
+	}
+
+	public static byte[] snapshotBytes(ChemicalRegistry registry) throws IOException {
+		if (registry == null) throw new IllegalArgumentException("Chemical registry snapshot is missing");
+		ByteArrayOutputStream output = new ByteArrayOutputStream();
+		NbtIo.writeCompressed(encode(registry), output);
+		return output.toByteArray();
 	}
 
 	public static ChemicalRegistry readSnapshot(Path path) throws IOException {

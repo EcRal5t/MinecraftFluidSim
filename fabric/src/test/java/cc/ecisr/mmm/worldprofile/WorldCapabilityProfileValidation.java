@@ -28,6 +28,7 @@ public final class WorldCapabilityProfileValidation {
 		canonicalBytesExcludeProfileFingerprint();
 		strictNbtCodecRoundTripsAndRejectsTampering();
 		bundleMetadataCodecsBindTheOnlyCommitPoint();
+		WorldCapabilityBundleStoreValidation.run();
 		System.out.println("World capability profile validation passed");
 	}
 

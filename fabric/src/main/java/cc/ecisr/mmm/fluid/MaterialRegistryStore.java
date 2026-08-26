@@ -8,6 +8,7 @@ import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.Tag;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -76,7 +77,14 @@ public final class MaterialRegistryStore {
 
 	public static void writeSnapshot(Path path, MaterialRegistry registry) throws IOException {
 		if (path == null || registry == null) throw new IllegalArgumentException("Material registry snapshot write is incomplete");
-		NbtIo.writeCompressed(encode(registry), path);
+		Files.write(path, snapshotBytes(registry));
+	}
+
+	public static byte[] snapshotBytes(MaterialRegistry registry) throws IOException {
+		if (registry == null) throw new IllegalArgumentException("Material registry snapshot is missing");
+		ByteArrayOutputStream output = new ByteArrayOutputStream();
+		NbtIo.writeCompressed(encode(registry), output);
+		return output.toByteArray();
 	}
 
 	public static MaterialRegistry readSnapshot(Path path) throws IOException {
