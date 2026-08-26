@@ -45,8 +45,9 @@ public final class WorldCapabilityProfileValidation {
 		}
 		require(first.aggregateFingerprint().equals("921c99a7f2b80662e8f91038f3f929d967fe9c9ca773f2d609536c7c754f5c21"),
 				"full-default aggregate fingerprint drifted from the pinned canonical form");
-		require(first.profileFingerprint().equals("c6bc560d43d1f5d099ddee7090dd29d091ccc7935504f4645c6ae6dbfe02fa20"),
-				"full-default profile fingerprint drifted from the pinned canonical form");
+		require(first.profileFingerprint().equals("2836a072eacb089651ae9a7154629f1334ef8f555949712b38c7fbcda256a1e0"),
+				"full-default profile fingerprint drifted from the pinned canonical form: "
+						+ first.profileFingerprint());
 		System.out.println("full-default aggregate=" + first.aggregateFingerprint()
 				+ " profile=" + first.profileFingerprint());
 	}
@@ -112,9 +113,9 @@ public final class WorldCapabilityProfileValidation {
 		Set<WorldCapability> capabilities = EnumSet.allOf(WorldCapability.class);
 		RegistryFingerprintSet bindings = bindings(RegistryKind.values());
 		WorldCapabilityProfile good = WorldCapabilityProfile.of(capabilities, bindings);
-		expectIllegal("schema", () -> new WorldCapabilityProfile("mmm:world-capability-profile/2", WorldCapabilityProfile.UNIT_IDENTITY,
+		expectIllegal("schema", () -> new WorldCapabilityProfile("mmm:other-world-capability-profile", WorldCapabilityProfile.UNIT_IDENTITY,
 				capabilities, good.regionLayoutId(), bindings, good.aggregateFingerprint(), good.profileFingerprint()));
-		expectIllegal("unit identity", () -> new WorldCapabilityProfile(WorldCapabilityProfile.SCHEMA, "mmm:other-units/1",
+		expectIllegal("unit identity", () -> new WorldCapabilityProfile(WorldCapabilityProfile.SCHEMA, "mmm:other-units",
 				capabilities, good.regionLayoutId(), bindings, good.aggregateFingerprint(), good.profileFingerprint()));
 		expectIllegal("Unknown region layout", () -> new WorldCapabilityProfile(WorldCapabilityProfile.SCHEMA, WorldCapabilityProfile.UNIT_IDENTITY,
 				capabilities, "future-layout", bindings, good.aggregateFingerprint(), good.profileFingerprint()));
