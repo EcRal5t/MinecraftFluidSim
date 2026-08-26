@@ -14,6 +14,7 @@ import cc.ecisr.mmm.item.PartialWaterBucketItem;
 import cc.ecisr.mmm.item.MmmItems;
 import cc.ecisr.mmm.item.MmmComponents;
 import cc.ecisr.mmm.item.ContainerItemStacks;
+import cc.ecisr.mmm.item.CreativeSourceItem;
 import cc.ecisr.mmm.transfer.ThermalContents;
 import cc.ecisr.mmm.granular.GranularTransferLedger;
 import cc.ecisr.mmm.granular.SolidVolume;
@@ -49,6 +50,7 @@ public final class FluidTransferService {
 		if (!service.authoritativeWritesReady()) return null;
 		ItemStack held = player.getItemInHand(hand);
 		if (held.isEmpty()) return null;
+		if (held.getItem() instanceof CreativeSourceItem) return handleCreativeSource(player, hand, held, service);
 
 		TransferKind kind = classify(held);
 		if (kind == TransferKind.NONE) return null;
@@ -338,6 +340,74 @@ public final class FluidTransferService {
 		// would delete solver inventory through a hidden sink that the controller WAL cannot represent.
 		service.sendSnapshotFor(player, region);
 		return outcome;
+	}
+
+	private static InteractionResult handleCreativeSource(
+			ServerPlayer player, InteractionHand hand, ItemStack descriptorStack, FluidSimulationService service
+	) {
+		if (!player.hasInfiniteMaterials() || player.getClass() != ServerPlayer.class) {
+			player.sendSystemMessage(Component.literal("创造 source 模板只接受真实创造模式玩家"), true);
+			return InteractionResult.FAIL;
+		}
+		var descriptor = CreativeSourceItem.descriptor(descriptorStack);
+		if (descriptor == null) {
+			player.sendSystemMessage(Component.literal("创造 source descriptor 损坏；未修改区域"), true);
+			return InteractionResult.FAIL;
+		}
+		CreativeSourceCatalog.Resolved resolved;
+		try { resolved = CreativeSourceCatalog.resolve(service, descriptor); }
+		catch (RuntimeException invalid) {
+			player.sendSystemMessage(Component.literal("当前世界拒绝该创造 source：" + invalid.getMessage()), true);
+			return InteractionResult.FAIL;
+		}
+		ServerLevel level = player.level();
+		BlockHitResult hit = playerBlockHit(player);
+		BlockPos targetBlock = playerPourTargetBlock(player, hit);
+		if (targetBlock == null) return InteractionResult.FAIL;
+		FluidSimulationService.TransferTarget target = service.transferTargetAtBlock(level, targetBlock);
+		FluidRegion region = target == null ? null : target.region();
+		if (region == null || !region.controllerManaged()) return InteractionResult.FAIL;
+		if (!service.ensureRegionAvailableFor(player, region)) return InteractionResult.FAIL;
+		int[] cell = service.cellAtBlock(level, region, target.interiorBlock());
+		if (cell == null) return InteractionResult.FAIL;
+
+		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), actorHand(hand));
+		ControllerItemTransferCoordinator.Result transaction;
+		ItemStack actual = resolved.actualStack();
+		if (resolved.kind() == CreativeSourceCatalog.Kind.GRANULAR) {
+			if (!service.granularFeatureEnabled() || !region.domain().hasGranularState()) return InteractionResult.FAIL;
+			GranularContents contents = ContainerItemStacks.granularContents(actual, service.granularRegistry(),
+					service.chemistryFeatureEnabled() ? service.chemicalRegistry() : null);
+			transaction = ControllerItemTransferCoordinator.execute(service, region, level, actor, descriptorStack,
+					ContainerTransferJournal.Operation.INSERT, ContainerTransferJournal.ResourceKind.GRANULAR_SVQ,
+					resolved.typedAmount(), 0L,
+					(requested, base) -> pourGranularIntoCell(service, region, cell, contents, 6, true),
+					(rawAfter, before) -> before.copy());
+		} else {
+			if (!service.materialFeatureEnabled() || !region.domain().hasMaterialState()) return InteractionResult.FAIL;
+			ChemicalContents chemical = actual.get(MmmComponents.CHEMICAL_CONTENTS) == null ? null
+					: ContainerItemStacks.chemicalContents(actual, service.chemicalRegistry());
+			FluidMixture mixture = chemical == null ? ContainerItemStacks.fluidMixture(actual) : null;
+			if (chemical != null && (!service.chemistryFeatureEnabled() || !region.domain().hasChemistryState())) {
+				return InteractionResult.FAIL;
+			}
+			ThermalContents thermal = ContainerItemStacks.thermalContents(actual);
+			transaction = ControllerItemTransferCoordinator.execute(service, region, level, actor, descriptorStack,
+					ContainerTransferJournal.Operation.INSERT, resolved.typedAmount(), 0L,
+					(requested, base) -> chemical == null
+							? pourMaterialIntoCell(service, region, cell, mixture, 6, true, thermal)
+							: pourChemicalIntoCell(service, region, cell, chemical, 6, true, thermal),
+					(rawAfter, before) -> before.copy());
+		}
+		TransferOutcome outcome = transaction.outcome();
+		if (!outcome.message().isEmpty()) player.sendSystemMessage(Component.literal(outcome.message()), true);
+		if (!outcome.transferred()) return InteractionResult.FAIL;
+		player.setItemInHand(hand, outcome.stack());
+		player.getInventory().setChanged();
+		service.sendSnapshotFor(player, region);
+		level.playSound(null, player.getX(), player.getY() + 1.0, player.getZ(), SoundEvents.BUCKET_EMPTY,
+				SoundSource.BLOCKS, 1.0F, 1.0F);
+		return InteractionResult.SUCCESS;
 	}
 
 	private static TransferOutcome scoopMaterial(

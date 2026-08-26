@@ -20,6 +20,8 @@ public final class MmmItems {
 			properties -> new MaterialBucketItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 	public static final Item GRANULAR_CONTAINER = register("granular_container",
 			properties -> new GranularContainerItem(properties.stacksTo(1).useItemDescriptionPrefix()));
+	public static final Item CREATIVE_SOURCE = register("creative_source",
+			properties -> new CreativeSourceItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 	public static final Item CHEMICAL_INDICATOR = register("chemical_indicator",
 			properties -> new ChemicalIndicatorItem(properties.stacksTo(1).useItemDescriptionPrefix(), false));
 	public static final Item CHEMICAL_ERASER = register("chemical_eraser",

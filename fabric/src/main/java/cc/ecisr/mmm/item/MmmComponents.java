@@ -31,6 +31,8 @@ public final class MmmComponents {
 	public static final DataComponentType<String> GRANULAR_CONTENTS = registerString("granular_contents");
 	/** Canonical thermal contents; coupled to, but independent from, the exact liquid contents. */
 	public static final DataComponentType<String> THERMAL_CONTENTS = registerString("thermal_contents");
+	/** Canonical creative source intent; never material inventory. */
+	public static final DataComponentType<String> CREATIVE_SOURCE = registerString("creative_source");
 
 	private MmmComponents() { }
 

@@ -750,8 +750,8 @@ public final class FluidSimulationService {
 	public boolean thermalFeatureEnabled() { return thermalFeatureEnabled; }
 	public boolean phaseChangeFeatureEnabled() { return phaseChangeFeatureEnabled; }
 
-	/** Adds authoritative U to an administrator-created mass-bearing liquid source at standard temperature. */
-	public void attachDebugLiquidThermalContents(ItemStack stack) {
+	/** Adds authoritative U to a server-resolved mass-bearing liquid source. */
+	void attachLiquidThermalContents(ItemStack stack, double temperatureKelvin) {
 		if (!thermalFeatureEnabled) return;
 		if (thermalRegistry == null) throw new IllegalStateException("Authoritative thermal registry is unavailable");
 		ThermalStateFunction stateFunction = new ThermalStateFunction(thermalRegistry);
@@ -767,8 +767,7 @@ public final class FluidSimulationService {
 				}
 				int handle = thermalRegistry.materialHandle(
 						ThermalMaterialDefinition.CarrierKind.LIQUID, group.materialId());
-				energy += stateFunction.internalEnergyAtTemperature(handle, group.massKilograms(), species,
-						GasRegistry.STANDARD_TEMPERATURE_K);
+				energy += stateFunction.internalEnergyAtTemperature(handle, group.massKilograms(), species, temperatureKelvin);
 			}
 		} else {
 			FluidMixture mixture = ContainerItemStacks.fluidMixture(stack);
@@ -776,12 +775,21 @@ public final class FluidSimulationService {
 			for (FluidMixture.Component component : mixture.components()) {
 				int handle = thermalRegistry.materialHandle(
 						ThermalMaterialDefinition.CarrierKind.LIQUID, component.materialId());
-				energy += stateFunction.internalEnergyAtTemperature(handle, component.mass(), Map.of(),
-						GasRegistry.STANDARD_TEMPERATURE_K);
+				energy += stateFunction.internalEnergyAtTemperature(handle, component.mass(), Map.of(), temperatureKelvin);
 			}
 		}
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Debug liquid internal energy overflow");
 		ContainerItemStacks.attachThermal(stack, thermalRegistry.fingerprint(), energy);
+	}
+
+	/** Fixture adapter retained for commands; production creative sources call the temperature-aware resolver. */
+	public void attachDebugLiquidThermalContents(ItemStack stack) {
+		attachLiquidThermalContents(stack, GasRegistry.STANDARD_TEMPERATURE_K);
+	}
+
+	FluidMaterial resolveMaterial(String stableId) {
+		if (materialRegistry == null) throw new IllegalStateException("Authoritative material registry is unavailable");
+		return materialRegistry.material(materialRegistry.handle(stableId));
 	}
 
 	String thermalRegistryFingerprint() {

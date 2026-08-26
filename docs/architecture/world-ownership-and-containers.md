@@ -54,6 +54,8 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 
 ## 容器真值
 
+创造 source 使用不含库存的 `CreativeSourceDescriptor`。客户端栈只携带白名单 template stable ID、typed amount 与可选温度；只有真实创造模式 `ServerPlayer` 可提交。服务端在命中已加载 controller 后以 committed world registry 和热状态函数构造临时 actual settlement，再复用同一 container WAL/region HEAD executor并记 external source。descriptor 本身始终是 actor 的 before/after item，不进入 checkpoint，也不向 dispenser、fake player 或自动化 provider 开放。
+
 - 液体容量使用 `long` 纳体积，1 block volume = 1,000,000,000 nanos。
 - 材料桶保存每个稳定材料的纳体积与独立 kg 质量。
 - 化学桶另外保存 species quanta、indicator 和 kg mass residual。
