@@ -22,14 +22,49 @@ public final class ThermalRegistry {
 	private final List<ThermalSpeciesOffset> speciesOffsets;
 	private final List<ThermalPhaseTransition> transitions;
 	private final List<ThermalBoundaryDefinition> boundaries;
+	private final List<GasLiquidSpeciesPair> gasLiquidPairs;
 	private final Map<String, Integer> materialHandles;
 	private final Map<String, Integer> transitionHandles;
 	private final Map<String, Integer> materialByCarrier;
 	private final Map<String, ThermalSpeciesOffset> offsetByHostSpecies;
 	private final String chemicalRegistryFingerprint;
 	private final String granularRegistryFingerprint;
+	private final String gasRegistryFingerprint;
 	private final byte[] canonicalBytes;
 	private final String fingerprint;
+
+	public ThermalRegistry(
+			List<ThermalMaterialDefinition> materials,
+			List<ThermalSpeciesOffset> speciesOffsets,
+			List<ThermalPhaseTransition> transitions,
+			List<ThermalBoundaryDefinition> boundaries,
+			List<GasLiquidSpeciesPair> gasLiquidPairs,
+			String chemicalRegistryFingerprint,
+			String granularRegistryFingerprint,
+			String gasRegistryFingerprint
+	) {
+		this.materials = canonicalUnique(materials, ThermalLimits.MAX_MATERIALS,
+				ThermalMaterialDefinition::id, "thermal material");
+		this.speciesOffsets = canonicalOffsets(speciesOffsets);
+		this.transitions = canonicalUniqueOptional(transitions, ThermalLimits.MAX_PHASE_TRANSITIONS,
+				ThermalPhaseTransition::id, "thermal transition");
+		this.boundaries = canonicalUniqueOptional(boundaries, ThermalLimits.MAX_BOUNDARIES,
+				ThermalBoundaryDefinition::id, "thermal boundary");
+		this.gasLiquidPairs = canonicalPairs(gasLiquidPairs);
+		this.chemicalRegistryFingerprint = requireFingerprint(chemicalRegistryFingerprint, "chemical");
+		this.granularRegistryFingerprint = requireFingerprint(granularRegistryFingerprint, "granular");
+		this.gasRegistryFingerprint = requireFingerprint(gasRegistryFingerprint, "gas");
+		this.materialHandles = handles(this.materials, ThermalMaterialDefinition::id);
+		this.transitionHandles = handles(this.transitions, ThermalPhaseTransition::id);
+		this.materialByCarrier = validateCarriers();
+		this.offsetByHostSpecies = validateSpeciesOffsets();
+		validateSegmentBudget();
+		validateTransitions();
+		validateBoundaries();
+		validateGasLiquidPairs();
+		this.canonicalBytes = encodeCanonical();
+		this.fingerprint = sha256(canonicalBytes);
+	}
 
 	public ThermalRegistry(
 			List<ThermalMaterialDefinition> materials,
@@ -39,24 +74,8 @@ public final class ThermalRegistry {
 			String chemicalRegistryFingerprint,
 			String granularRegistryFingerprint
 	) {
-		this.materials = canonicalUnique(materials, ThermalLimits.MAX_MATERIALS,
-				ThermalMaterialDefinition::id, "thermal material");
-		this.speciesOffsets = canonicalOffsets(speciesOffsets);
-		this.transitions = canonicalUniqueOptional(transitions, ThermalLimits.MAX_PHASE_TRANSITIONS,
-				ThermalPhaseTransition::id, "thermal transition");
-		this.boundaries = canonicalUniqueOptional(boundaries, ThermalLimits.MAX_BOUNDARIES,
-				ThermalBoundaryDefinition::id, "thermal boundary");
-		this.chemicalRegistryFingerprint = requireFingerprint(chemicalRegistryFingerprint, "chemical");
-		this.granularRegistryFingerprint = requireFingerprint(granularRegistryFingerprint, "granular");
-		this.materialHandles = handles(this.materials, ThermalMaterialDefinition::id);
-		this.transitionHandles = handles(this.transitions, ThermalPhaseTransition::id);
-		this.materialByCarrier = validateCarriers();
-		this.offsetByHostSpecies = validateSpeciesOffsets();
-		validateSegmentBudget();
-		validateTransitions();
-		validateBoundaries();
-		this.canonicalBytes = encodeCanonical();
-		this.fingerprint = sha256(canonicalBytes);
+		this(materials, speciesOffsets, transitions, boundaries, List.of(),
+				chemicalRegistryFingerprint, granularRegistryFingerprint, "");
 	}
 
 	public ThermalRegistry(
@@ -78,6 +97,7 @@ public final class ThermalRegistry {
 	public List<ThermalSpeciesOffset> speciesOffsets() { return speciesOffsets; }
 	public List<ThermalPhaseTransition> transitions() { return transitions; }
 	public List<ThermalBoundaryDefinition> boundaries() { return boundaries; }
+	public List<GasLiquidSpeciesPair> gasLiquidPairs() { return gasLiquidPairs; }
 	public ThermalMaterialDefinition material(int handle) { return materials.get(requireHandle(handle, materials.size(), "material")); }
 	public ThermalPhaseTransition transition(int handle) { return transitions.get(requireHandle(handle, transitions.size(), "transition")); }
 	public int materialHandle(String id) { return requireStableHandle(materialHandles, id, "thermal material"); }
@@ -103,8 +123,46 @@ public final class ThermalRegistry {
 	}
 	public String chemicalRegistryFingerprint() { return chemicalRegistryFingerprint; }
 	public String granularRegistryFingerprint() { return granularRegistryFingerprint; }
+	public String gasRegistryFingerprint() { return gasRegistryFingerprint; }
 	public byte[] canonicalBytes() { return canonicalBytes.clone(); }
 	public String fingerprint() { return fingerprint; }
+
+	public GasLiquidSpeciesPair gasLiquidPair(String id) {
+		for (GasLiquidSpeciesPair pair : gasLiquidPairs) {
+			if (pair.id().equals(id)) return pair;
+		}
+		throw new IllegalArgumentException("Unknown gas/liquid species pair " + id);
+	}
+
+	private void validateGasLiquidPairs() {
+		if (!gasLiquidPairs.isEmpty() && gasRegistryFingerprint.isEmpty()) {
+			throw new IllegalArgumentException("Gas/liquid species pairs require a gas registry fingerprint");
+		}
+		Map<String, String> exchangeKeys = new HashMap<>();
+		for (GasLiquidSpeciesPair pair : gasLiquidPairs) {
+			String key = pair.gasComponentId() + '\0' + pair.liquidPhaseId() + '\0' + pair.speciesId();
+			String previous = exchangeKeys.putIfAbsent(key, pair.id());
+			if (previous != null) throw new IllegalArgumentException(
+					"Competing gas/liquid species pairs: " + previous + ", " + pair.id());
+		}
+	}
+
+	private static List<GasLiquidSpeciesPair> canonicalPairs(List<GasLiquidSpeciesPair> values) {
+		if (values == null || values.size() > ThermalLimits.MAX_GAS_LIQUID_PAIRS) {
+			throw new IllegalArgumentException("Gas/liquid species pairs are missing or over budget");
+		}
+		ArrayList<GasLiquidSpeciesPair> canonical = new ArrayList<>(values);
+		if (canonical.stream().anyMatch(java.util.Objects::isNull)) {
+			throw new IllegalArgumentException("Gas/liquid species pairs contain null");
+		}
+		canonical.sort(Comparator.comparing(GasLiquidSpeciesPair::id));
+		for (int index = 1; index < canonical.size(); index++) {
+			if (canonical.get(index - 1).id().equals(canonical.get(index).id())) {
+				throw new IllegalArgumentException("Duplicate gas/liquid species pair id " + canonical.get(index).id());
+			}
+		}
+		return List.copyOf(canonical);
+	}
 
 	private Map<String, Integer> validateCarriers() {
 		LinkedHashMap<String, Integer> result = new LinkedHashMap<>();
@@ -190,7 +248,8 @@ public final class ThermalRegistry {
 		StringBuilder out = new StringBuilder(4096).append("mmm-thermal-registry\n")
 				.append("units=").append(UNIT_SYSTEM_ID).append('\n')
 				.append("chemical-registry=").append(chemicalRegistryFingerprint).append('\n')
-				.append("granular-registry=").append(granularRegistryFingerprint).append('\n');
+				.append("granular-registry=").append(granularRegistryFingerprint).append('\n')
+				.append("gas-registry=").append(gasRegistryFingerprint).append('\n');
 		for (ThermalMaterialDefinition material : materials) {
 			out.append("M|").append(material.id()).append('|').append(material.carrierKind()).append('|')
 					.append(material.carrierId()).append('|');
@@ -208,6 +267,29 @@ public final class ThermalRegistry {
 			out.append("S|").append(offset.id()).append('|').append(offset.speciesId()).append('|')
 					.append(offset.hostThermalMaterialId()).append('|')
 					.append(offset.referenceInternalEnergyEuPerAu().canonical()).append('\n');
+		}
+		for (GasLiquidSpeciesPair pair : gasLiquidPairs) {
+			out.append("X|").append(pair.id()).append('|').append(pair.gasComponentId()).append('|')
+					.append(pair.liquidPhaseId()).append('|').append(pair.speciesId()).append('|')
+					.append(pair.gasStandardVolumeNanosPerBatch()).append('|');
+			appendDouble(out, pair.gasKilogramsPerBatch()); out.append('|');
+			out.append(pair.liquidQuantaPerBatch()).append('|');
+			appendDouble(out, pair.liquidKilogramsPerBatch()); out.append('|');
+			appendDouble(out, pair.liquidResidualKilogramsPerBatch()); out.append('|');
+			out.append(pair.molesPerBatch().canonical()).append('|');
+			appendDouble(out, pair.minimumPressurePa()); out.append('|');
+			appendDouble(out, pair.maximumPressurePa()); out.append('|');
+			appendDouble(out, pair.maximumLiquidConcentrationMolPerCubicMeter()); out.append('|');
+			appendDouble(out, pair.liquidDiffusionSquareMetersPerSecond()); out.append('|');
+			appendDouble(out, pair.liquidFilmThicknessMeters()); out.append('|');
+			appendDouble(out, pair.gasResistanceSecondsPerMeter()); out.append('|');
+			for (GasLiquidSpeciesPair.HenrySegment segment : pair.henrySegments()) {
+				appendDouble(out, segment.minimumTemperatureK()); out.append(',');
+				appendDouble(out, segment.maximumTemperatureK()); out.append(',');
+				appendDouble(out, segment.henryConstantMolPerCubicMeterPaAtMinimum()); out.append(',');
+				appendDouble(out, segment.henryConstantMolPerCubicMeterPaAtMaximum()); out.append(';');
+			}
+			out.append('\n');
 		}
 		for (ThermalPhaseTransition transition : transitions) {
 			out.append("P|").append(transition.id()).append('|').append(transition.lowerEnergyMaterialId()).append('|')

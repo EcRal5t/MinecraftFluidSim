@@ -29,12 +29,15 @@ public final class ThermalRegistryStore {
 	private final Path directory;
 	private final String chemicalFingerprint;
 	private final String granularFingerprint;
+	private final String gasFingerprint;
 
-	public ThermalRegistryStore(Path worldRoot, String chemicalFingerprint, String granularFingerprint) {
+	public ThermalRegistryStore(Path worldRoot, String chemicalFingerprint, String granularFingerprint,
+			String gasFingerprint) {
 		if (worldRoot == null) throw new IllegalArgumentException("Thermal registry world root is missing");
 		this.directory = worldRoot.toAbsolutePath().normalize().resolve("mmm").resolve("thermal");
 		this.chemicalFingerprint = requireFingerprint(chemicalFingerprint, "chemical");
 		this.granularFingerprint = requireFingerprint(granularFingerprint, "granular");
+		this.gasFingerprint = requireFingerprint(gasFingerprint, "gas");
 	}
 
 	public LoadResult loadOrCreate(ThermalRegistry definitions) throws IOException {
@@ -85,8 +88,10 @@ public final class ThermalRegistryStore {
 				Map.entry("Schema", Tag.TAG_STRING), Map.entry("UnitSystem", Tag.TAG_STRING),
 				Map.entry("Fingerprint", Tag.TAG_STRING), Map.entry("Canonical", Tag.TAG_BYTE_ARRAY),
 				Map.entry("ChemicalFingerprint", Tag.TAG_STRING), Map.entry("GranularFingerprint", Tag.TAG_STRING),
+				Map.entry("GasFingerprint", Tag.TAG_STRING),
 				Map.entry("Materials", Tag.TAG_LIST), Map.entry("SpeciesOffsets", Tag.TAG_LIST),
-				Map.entry("Transitions", Tag.TAG_LIST), Map.entry("Boundaries", Tag.TAG_LIST)));
+				Map.entry("Transitions", Tag.TAG_LIST), Map.entry("Boundaries", Tag.TAG_LIST),
+				Map.entry("GasLiquidPairs", Tag.TAG_LIST)));
 		if (!root.getStringOr("Schema", "").equals(SCHEMA)
 				|| !ThermalRegistry.UNIT_SYSTEM_ID.equals(root.getStringOr("UnitSystem", ""))) {
 			throw new IOException("Unsupported thermal registry schema or unit system");
@@ -94,14 +99,17 @@ public final class ThermalRegistryStore {
 		try {
 			String chemical = root.getStringOr("ChemicalFingerprint", "");
 			String granular = root.getStringOr("GranularFingerprint", "");
-			if (!chemical.equals(chemicalFingerprint) || !granular.equals(granularFingerprint)) {
+			String gas = root.getStringOr("GasFingerprint", "");
+			if (!chemical.equals(chemicalFingerprint) || !granular.equals(granularFingerprint)
+					|| !gas.equals(gasFingerprint)) {
 				throw new IOException("Thermal registry dependency fingerprint mismatch");
 			}
 			ThermalRegistry registry = new ThermalRegistry(
 					decodeMaterials(root.getListOrEmpty("Materials")),
 					decodeOffsets(root.getListOrEmpty("SpeciesOffsets")),
 					decodeTransitions(root.getListOrEmpty("Transitions")),
-					decodeBoundaries(root.getListOrEmpty("Boundaries")), chemical, granular);
+					decodeBoundaries(root.getListOrEmpty("Boundaries")),
+					decodePairs(root.getListOrEmpty("GasLiquidPairs")), chemical, granular, gas);
 			if (!registry.fingerprint().equals(root.getStringOr("Fingerprint", ""))
 					|| !java.util.Arrays.equals(registry.canonicalBytes(), root.getByteArray("Canonical").orElseThrow())) {
 				throw new IOException("Thermal registry fingerprint/canonical bytes mismatch");
@@ -118,6 +126,7 @@ public final class ThermalRegistryStore {
 		root.putString("Fingerprint", registry.fingerprint()); root.putByteArray("Canonical", registry.canonicalBytes());
 		root.putString("ChemicalFingerprint", registry.chemicalRegistryFingerprint());
 		root.putString("GranularFingerprint", registry.granularRegistryFingerprint());
+		root.putString("GasFingerprint", registry.gasRegistryFingerprint());
 		ListTag materials = new ListTag();
 		for (ThermalMaterialDefinition material : registry.materials()) {
 			CompoundTag tag = new CompoundTag(); tag.putString("Id", material.id());
@@ -166,6 +175,38 @@ public final class ThermalRegistryStore {
 			boundaries.add(tag);
 		}
 		root.put("Boundaries", boundaries);
+		ListTag pairs = new ListTag();
+		for (GasLiquidSpeciesPair pair : registry.gasLiquidPairs()) {
+			CompoundTag tag = new CompoundTag();
+			tag.putString("Id", pair.id());
+			tag.putString("GasComponent", pair.gasComponentId());
+			tag.putString("LiquidPhase", pair.liquidPhaseId());
+			tag.putString("Species", pair.speciesId());
+			tag.putLong("GasNanos", pair.gasStandardVolumeNanosPerBatch());
+			tag.putLong("GasKilogramsBits", bits(pair.gasKilogramsPerBatch()));
+			tag.putLong("LiquidQuanta", pair.liquidQuantaPerBatch());
+			tag.putLong("LiquidKilogramsBits", bits(pair.liquidKilogramsPerBatch()));
+			tag.putLong("LiquidResidualBits", bits(pair.liquidResidualKilogramsPerBatch()));
+			tag.putString("Moles", pair.molesPerBatch().canonical());
+			tag.putLong("MinimumPressureBits", bits(pair.minimumPressurePa()));
+			tag.putLong("MaximumPressureBits", bits(pair.maximumPressurePa()));
+			tag.putLong("MaximumConcentrationBits", bits(pair.maximumLiquidConcentrationMolPerCubicMeter()));
+			tag.putLong("LiquidDiffusionBits", bits(pair.liquidDiffusionSquareMetersPerSecond()));
+			tag.putLong("LiquidFilmThicknessBits", bits(pair.liquidFilmThicknessMeters()));
+			tag.putLong("GasResistanceBits", bits(pair.gasResistanceSecondsPerMeter()));
+			ListTag segments = new ListTag();
+			for (GasLiquidSpeciesPair.HenrySegment segment : pair.henrySegments()) {
+				CompoundTag encoded = new CompoundTag();
+				encoded.putLong("MinimumBits", bits(segment.minimumTemperatureK()));
+				encoded.putLong("MaximumBits", bits(segment.maximumTemperatureK()));
+				encoded.putLong("MinimumHenryBits", bits(segment.henryConstantMolPerCubicMeterPaAtMinimum()));
+				encoded.putLong("MaximumHenryBits", bits(segment.henryConstantMolPerCubicMeterPaAtMaximum()));
+				segments.add(encoded);
+			}
+			tag.put("HenrySegments", segments);
+			pairs.add(tag);
+		}
+		root.put("GasLiquidPairs", pairs);
 		return root;
 	}
 
@@ -256,9 +297,52 @@ public final class ThermalRegistryStore {
 		return List.copyOf(result);
 	}
 
+	private static List<GasLiquidSpeciesPair> decodePairs(ListTag list) throws IOException {
+		if (list.size() > ThermalLimits.MAX_GAS_LIQUID_PAIRS) throw new IOException("Invalid gas/liquid pair count");
+		ArrayList<GasLiquidSpeciesPair> result = new ArrayList<>(list.size());
+		for (int index = 0; index < list.size(); index++) {
+			CompoundTag tag = compound(list, index, "gas/liquid pair");
+			requireAll(tag, Map.ofEntries(
+					Map.entry("Id", Tag.TAG_STRING), Map.entry("GasComponent", Tag.TAG_STRING),
+					Map.entry("LiquidPhase", Tag.TAG_STRING), Map.entry("Species", Tag.TAG_STRING),
+					Map.entry("GasNanos", Tag.TAG_LONG), Map.entry("GasKilogramsBits", Tag.TAG_LONG),
+					Map.entry("LiquidQuanta", Tag.TAG_LONG), Map.entry("LiquidKilogramsBits", Tag.TAG_LONG),
+					Map.entry("LiquidResidualBits", Tag.TAG_LONG), Map.entry("Moles", Tag.TAG_STRING),
+					Map.entry("MinimumPressureBits", Tag.TAG_LONG), Map.entry("MaximumPressureBits", Tag.TAG_LONG),
+					Map.entry("MaximumConcentrationBits", Tag.TAG_LONG),
+					Map.entry("LiquidDiffusionBits", Tag.TAG_LONG),
+					Map.entry("LiquidFilmThicknessBits", Tag.TAG_LONG),
+					Map.entry("GasResistanceBits", Tag.TAG_LONG),
+					Map.entry("HenrySegments", Tag.TAG_LIST)));
+			ListTag encodedSegments = tag.getListOrEmpty("HenrySegments");
+			if (encodedSegments.isEmpty() || encodedSegments.size() > ThermalLimits.MAX_HENRY_SEGMENTS_PER_PAIR) {
+				throw new IOException("Invalid Henry segment count");
+			}
+			ArrayList<GasLiquidSpeciesPair.HenrySegment> segments = new ArrayList<>(encodedSegments.size());
+			for (int segment = 0; segment < encodedSegments.size(); segment++) {
+				CompoundTag value = compound(encodedSegments, segment, "Henry segment");
+				requireAll(value, Map.of("MinimumBits", Tag.TAG_LONG, "MaximumBits", Tag.TAG_LONG,
+						"MinimumHenryBits", Tag.TAG_LONG, "MaximumHenryBits", Tag.TAG_LONG));
+				segments.add(new GasLiquidSpeciesPair.HenrySegment(value(value, "MinimumBits"),
+						value(value, "MaximumBits"), value(value, "MinimumHenryBits"), value(value, "MaximumHenryBits")));
+			}
+			result.add(new GasLiquidSpeciesPair(tag.getStringOr("Id", ""),
+					tag.getStringOr("GasComponent", ""), tag.getStringOr("LiquidPhase", ""),
+					tag.getStringOr("Species", ""), tag.getLongOr("GasNanos", 0L),
+					value(tag, "GasKilogramsBits"), tag.getLongOr("LiquidQuanta", 0L),
+					value(tag, "LiquidKilogramsBits"), value(tag, "LiquidResidualBits"),
+					ExactRational.parse(tag.getStringOr("Moles", "")), segments,
+					value(tag, "MinimumPressureBits"), value(tag, "MaximumPressureBits"),
+					value(tag, "MaximumConcentrationBits"), value(tag, "LiquidDiffusionBits"),
+					value(tag, "LiquidFilmThicknessBits"), value(tag, "GasResistanceBits")));
+		}
+		return List.copyOf(result);
+	}
+
 	private void requireDependencies(ThermalRegistry registry) {
 		if (!chemicalFingerprint.equals(registry.chemicalRegistryFingerprint())
-				|| !granularFingerprint.equals(registry.granularRegistryFingerprint())) {
+				|| !granularFingerprint.equals(registry.granularRegistryFingerprint())
+				|| !gasFingerprint.equals(registry.gasRegistryFingerprint())) {
 			throw new IllegalArgumentException("Thermal definition dependency fingerprints changed");
 		}
 	}

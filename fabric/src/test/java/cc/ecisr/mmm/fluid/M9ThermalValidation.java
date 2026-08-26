@@ -18,6 +18,7 @@ import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import cc.ecisr.mmm.fluid.air.GasComponentAmount;
 import cc.ecisr.mmm.fluid.air.GasInventory;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
+import cc.ecisr.mmm.thermal.GasLiquidSpeciesPair;
 import cc.ecisr.mmm.thermal.GasThermalModel;
 import cc.ecisr.mmm.thermal.GasLiquidPhaseModel;
 import cc.ecisr.mmm.thermal.SignedDyadic;
@@ -64,6 +65,7 @@ public final class M9ThermalValidation {
 		piecewiseStateFunctionRoundTrips();
 		gasStateCompressionAndCarrierEnergy();
 		builtinWaterAndVaporPhysicsIsCalibrated();
+		builtinCo2GasLiquidPairDataIsFrozen();
 		gasLiquidSaturationAndExactBatch();
 		gasRuntimeTransfersEnergyAndWork();
 		persistenceBarrierSynchronizesGasTopology();
@@ -229,6 +231,106 @@ public final class M9ThermalValidation {
 		var stream = M9ThermalValidation.class.getResourceAsStream(path);
 		if (stream == null) throw new AssertionError("Missing validation resource " + path);
 		return new InputStreamReader(stream, StandardCharsets.UTF_8);
+	}
+
+	private static String resourceText(String path) throws IOException {
+		try (var stream = M9ThermalValidation.class.getResourceAsStream(path)) {
+			if (stream == null) throw new AssertionError("Missing validation resource " + path);
+			return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+		}
+	}
+
+	private static void builtinCo2GasLiquidPairDataIsFrozen() {
+		java.nio.file.Path root = null;
+		String pairPath = "/data/mmm/mmm/gas_liquid_pairs/co2_water.json";
+		try (InputStreamReader pairReader = resourceReader(pairPath);
+		     InputStreamReader waterReader = resourceReader("/data/mmm/mmm/thermal_materials/water.json");
+		     InputStreamReader co2Reader = resourceReader("/data/mmm/mmm/thermal_materials/co2.json");
+		     InputStreamReader gasOffsetReader = resourceReader("/data/mmm/mmm/thermal_species/co2.json");
+		     InputStreamReader liquidOffsetReader = resourceReader(
+				     "/data/mmm/mmm/thermal_species/water_co2.json")) {
+			GasLiquidSpeciesPair pair = ThermalDefinitionCodec.decodePair("mmm:co2_water", pairReader);
+			ThermalMaterialDefinition water = ThermalDefinitionCodec.decodeMaterial("mmm:water", waterReader);
+			ThermalMaterialDefinition co2 = ThermalDefinitionCodec.decodeMaterial("mmm:co2", co2Reader);
+			ThermalSpeciesOffset gasOffset = ThermalDefinitionCodec.decodeSpecies("mmm:co2", gasOffsetReader);
+			ThermalSpeciesOffset liquidOffset = ThermalDefinitionCodec.decodeSpecies(
+					"mmm:water_co2", liquidOffsetReader);
+			GasRegistry gas = BuiltinGasDefinitions.createRegistry();
+			ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
+			var gasComponent = gas.component(pair.gasComponentId());
+			var liquidPhase = chemistry.phase(chemistry.phaseHandle(pair.liquidPhaseId()));
+			double gasKilograms = gasComponent.standardMassPerCubicMeter()
+					* AirNetwork.cubicMeters(pair.gasStandardVolumeNanosPerBatch());
+			double liquidKilograms = chemistry.species(chemistry.speciesHandle(pair.speciesId()))
+					.massKilogramsPerAu().multiply(pair.liquidQuantaPerBatch())
+					.divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
+
+			require(pair.gasComponentId().equals(BuiltinGasDefinitions.CO2)
+					&& pair.speciesId().equals(BuiltinChemicalDefinitions.CO2)
+					&& gasComponent.allowsSpecies(pair.speciesId())
+					&& liquidPhase.allowedSpecies().contains(pair.speciesId()),
+					"built-in CO2 pair is not admitted by both frozen phase registries");
+			require(Double.doubleToRawLongBits(pair.gasKilogramsPerBatch())
+						== Double.doubleToRawLongBits(gasKilograms)
+					&& Double.doubleToRawLongBits(pair.liquidKilogramsPerBatch())
+						== Double.doubleToRawLongBits(liquidKilograms)
+					&& Double.doubleToRawLongBits(pair.liquidResidualKilogramsPerBatch())
+						== Double.doubleToRawLongBits(gasKilograms - liquidKilograms),
+					"built-in CO2 exact batch does not close nanos/quanta/kg/residual bitwise");
+			require(gasOffset.speciesId().equals(pair.speciesId())
+					&& gasOffset.hostThermalMaterialId().equals(co2.id())
+					&& liquidOffset.speciesId().equals(pair.speciesId())
+					&& liquidOffset.hostThermalMaterialId().equals(water.id())
+					&& liquidOffset.referenceInternalEnergyEuPerAu().equals(ExactRational.of(-19_400_000L)),
+					"built-in CO2 thermal hosts or dissolved state-function offset drifted");
+			require(close(pair.henryConstantMolPerCubicMeterPaAt(293.15), 3.9E-4)
+					&& close(pair.henryConstantMolPerCubicMeterPaAt(288.15), 4.7E-4),
+					"built-in CO2 Henry table did not preserve knots or linear interpolation");
+			expectFailure(() -> pair.henryConstantMolPerCubicMeterPaAt(273.149),
+					"CO2 Henry model extrapolated below its declared temperature domain");
+			expectFailure(() -> pair.henryConstantMolPerCubicMeterPaAt(363.151),
+					"CO2 Henry model extrapolated above its declared temperature domain");
+			require(Double.doubleToRawLongBits(pair.totalResistanceSecondsPerMeter())
+					== Double.doubleToRawLongBits(pair.liquidFilmThicknessMeters()
+					/ pair.liquidDiffusionSquareMetersPerSecond() + pair.gasResistanceSecondsPerMeter()),
+					"CO2 pair did not use the declared series film resistance");
+
+			ThermalRegistry registry = new ThermalRegistry(List.of(water, co2),
+					List.of(gasOffset, liquidOffset), List.of(), List.of(), List.of(pair),
+					chemistry.fingerprint(), "", gas.fingerprint());
+			require(registry.fingerprint().equals("3ad148b10e255ec1415773bccf7eda9c07caf0a5fcd1e4be54de46153576dae4"),
+					"built-in CO2 pair registry fingerprint drifted: " + registry.fingerprint());
+			root = java.nio.file.Files.createTempDirectory("mmm-co2-pair-registry-");
+			ThermalRegistryStore store = new ThermalRegistryStore(
+					root, chemistry.fingerprint(), "", gas.fingerprint());
+			ThermalRegistryStore.LoadResult published = store.loadOrCreate(registry);
+			require(published.created() && published.registry().gasLiquidPairs().equals(List.of(pair))
+					&& published.registry().fingerprint().equals(registry.fingerprint()),
+					"CO2 pair did not round-trip through the authoritative thermal snapshot");
+
+			String json = resourceText(pairPath);
+			expectFailure(() -> ThermalDefinitionCodec.decodePair("mmm:co2_water",
+					new StringReader("{\"unknown\":\"rejected\"," + json.substring(1))),
+					"unknown CO2 pair JSON field was ignored");
+			expectFailure(() -> ThermalDefinitionCodec.decodePair("mmm:co2_water", new StringReader(
+					json.replace("\"gas_standard_volume_nanos_per_batch\":\"24055\"",
+							"\"gas_standard_volume_nanos_per_batch\":24055"))),
+					"numeric CO2 pair amount bypassed the exact string codec");
+			expectFailure(() -> ThermalDefinitionCodec.decodePair("mmm:co2_water", new StringReader(
+					json.replace("\"liquid_residual_kilograms_per_batch\":\"-2.1376376542351153E-10\"",
+							"\"liquid_residual_kilograms_per_batch\":\"0.0\""))),
+					"non-closing CO2 pair residual was accepted");
+		} catch (IOException failure) {
+			throw new AssertionError("Could not validate built-in CO2 gas/liquid pair data", failure);
+		} finally {
+			if (root != null) try (var paths = java.nio.file.Files.walk(root)) {
+				for (java.nio.file.Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+					java.nio.file.Files.deleteIfExists(path);
+				}
+			} catch (IOException cleanup) {
+				throw new AssertionError("CO2 pair registry store cleanup failed", cleanup);
+			}
+		}
 	}
 
 	private static void gasRuntimeTransfersEnergyAndWork() {
@@ -716,7 +818,7 @@ public final class M9ThermalValidation {
 			ThermalMaterialDefinition original = material("test:thermal/store", "test:store", 0.0,
 					List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0)));
 			ThermalRegistry authoritative = new ThermalRegistry(List.of(original));
-			ThermalRegistryStore store = new ThermalRegistryStore(root, "", "");
+			ThermalRegistryStore store = new ThermalRegistryStore(root, "", "", "");
 			ThermalRegistryStore.LoadResult first = store.loadOrCreate(authoritative);
 			require(first.created() && !first.definitionMismatch()
 					&& first.registry().fingerprint().equals(authoritative.fingerprint()),

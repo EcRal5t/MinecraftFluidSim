@@ -9,6 +9,8 @@ public final class ThermalLimits {
 	public static final int MAX_PHASE_TRANSITIONS = 512;
 	public static final int MAX_EQUILIBRIUM_CURVE_POINTS = 64;
 	public static final int MAX_BOUNDARIES = 512;
+	public static final int MAX_GAS_LIQUID_PAIRS = 64;
+	public static final int MAX_HENRY_SEGMENTS_PER_PAIR = 32;
 	public static final int MAX_COHERENT_GROUPS_PER_REGION = 262_144;
 	public static final int MAX_THERMAL_CARRIERS_PER_CELL = 256;
 	public static final int MAX_PHASE_OPERATIONS_PER_STEP = 4_096;

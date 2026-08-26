@@ -16,6 +16,7 @@ public final class ThermalDefinitionCodec {
 	public static final String SPECIES_PATH = "mmm/thermal_species";
 	public static final String TRANSITIONS_PATH = "mmm/phase_transitions";
 	public static final String BOUNDARIES_PATH = "mmm/thermal_boundaries";
+	public static final String PAIRS_PATH = "mmm/gas_liquid_pairs";
 
 	private ThermalDefinitionCodec() { }
 
@@ -95,6 +96,43 @@ public final class ThermalDefinitionCodec {
 		}
 		return new ThermalBoundaryDefinition(stableId, targetKind, string(root, "target_id"), kind,
 				finiteDouble(root, "surface_temperature_k"));
+	}
+
+	public static GasLiquidSpeciesPair decodePair(String stableId, Reader input) {
+		JsonObject root = object(input);
+		requireOnly(root, "gas_component", "liquid_phase", "species",
+				"gas_standard_volume_nanos_per_batch", "gas_kilograms_per_batch",
+				"liquid_quanta_per_batch", "liquid_kilograms_per_batch", "liquid_residual_kilograms_per_batch",
+				"moles_per_batch", "henry_segments", "minimum_pressure_pa", "maximum_pressure_pa",
+				"maximum_liquid_concentration_mol_per_m3", "liquid_diffusion_m2_per_s",
+				"liquid_film_thickness_m", "gas_resistance_s_per_m");
+		JsonElement segmentElement = required(root, "henry_segments");
+		if (!segmentElement.isJsonArray()) throw new IllegalArgumentException("henry_segments must be an array");
+		JsonArray array = segmentElement.getAsJsonArray();
+		if (array.isEmpty() || array.size() > ThermalLimits.MAX_HENRY_SEGMENTS_PER_PAIR) {
+			throw new IllegalArgumentException("henry_segments are empty or over budget");
+		}
+		ArrayList<GasLiquidSpeciesPair.HenrySegment> segments = new ArrayList<>(array.size());
+		for (JsonElement element : array) {
+			if (!element.isJsonObject()) throw new IllegalArgumentException("Henry segment must be an object");
+			JsonObject segment = element.getAsJsonObject();
+			requireOnly(segment, "minimum_temperature_k", "maximum_temperature_k",
+					"henry_constant_mol_per_m3_pa_at_minimum", "henry_constant_mol_per_m3_pa_at_maximum");
+			segments.add(new GasLiquidSpeciesPair.HenrySegment(
+					finiteDouble(segment, "minimum_temperature_k"), finiteDouble(segment, "maximum_temperature_k"),
+					finiteDouble(segment, "henry_constant_mol_per_m3_pa_at_minimum"),
+					finiteDouble(segment, "henry_constant_mol_per_m3_pa_at_maximum")));
+		}
+		return new GasLiquidSpeciesPair(stableId, string(root, "gas_component"), string(root, "liquid_phase"),
+				string(root, "species"), exactLong(root, "gas_standard_volume_nanos_per_batch"),
+				finiteDouble(root, "gas_kilograms_per_batch"), exactLong(root, "liquid_quanta_per_batch"),
+				finiteDouble(root, "liquid_kilograms_per_batch"),
+				finiteDouble(root, "liquid_residual_kilograms_per_batch"),
+				ExactRational.parse(string(root, "moles_per_batch")), segments,
+				finiteDouble(root, "minimum_pressure_pa"), finiteDouble(root, "maximum_pressure_pa"),
+				finiteDouble(root, "maximum_liquid_concentration_mol_per_m3"),
+				finiteDouble(root, "liquid_diffusion_m2_per_s"), finiteDouble(root, "liquid_film_thickness_m"),
+				finiteDouble(root, "gas_resistance_s_per_m"));
 	}
 
 	private static JsonObject object(Reader input) {

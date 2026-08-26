@@ -7,6 +7,7 @@ import cc.ecisr.mmm.api.event.MmmEventApi;
 import cc.ecisr.mmm.api.transfer.TransferQuantity;
 import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.chemistry.ChemicalDataPackLoader;
+import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ChemicalRegistryStore;
 import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
@@ -261,15 +262,16 @@ public final class FluidSimulationService {
 
 				String chemicalFingerprint = bootChemicalRegistry == null ? "" : bootChemicalRegistry.fingerprint();
 				String granularFingerprint = bootGranularRegistry == null ? "" : bootGranularRegistry.fingerprint();
+				String gasFingerprint = bootGasRegistry.fingerprint();
 				ThermalRegistryStore thermalStore = new ThermalRegistryStore(
-						worldRoot, chemicalFingerprint, granularFingerprint);
+						worldRoot, chemicalFingerprint, granularFingerprint, gasFingerprint);
 				if (thermalStore.exists()) {
 					bootThermalRegistry = thermalStore.read();
 					validateSupportedThermalCarriers(bootThermalRegistry, bootChemicalRegistry,
 							bootGranularRegistry, bootGasRegistry);
 					try {
 						ThermalRegistry datapackDefinitions = ThermalDataPackLoader.load(server.getResourceManager(),
-								chemicalFingerprint, granularFingerprint);
+								chemicalFingerprint, granularFingerprint, gasFingerprint);
 						if (!datapackDefinitions.fingerprint().equals(bootThermalRegistry.fingerprint())) {
 							MmmMod.LOGGER.warn("Thermal datapack definitions differ from authoritative world registry {}; existing energy keeps world semantics",
 									bootThermalRegistry.fingerprint());
@@ -285,7 +287,7 @@ public final class FluidSimulationService {
 						throw new IOException("thermal region-state or unreadable region data exists but thermal/registry.nbt is missing");
 					}
 					ThermalRegistry definitionsFromPacks = ThermalDataPackLoader.load(server.getResourceManager(),
-							chemicalFingerprint, granularFingerprint);
+							chemicalFingerprint, granularFingerprint, gasFingerprint);
 					validateSupportedThermalCarriers(definitionsFromPacks, bootChemicalRegistry,
 							bootGranularRegistry, bootGasRegistry);
 					ThermalRegistryStore.LoadResult thermalLoaded = thermalStore.loadOrCreate(definitionsFromPacks);
@@ -388,6 +390,36 @@ public final class FluidSimulationService {
 			int host = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR,
 					reaction.solidMaterialId());
 			for (String species : reaction.solidComposition().keySet()) registry.speciesOffset(host, species);
+		}
+		if (!registry.gasLiquidPairs().isEmpty() && chemicalRegistry == null) {
+			throw new IllegalArgumentException("Gas/liquid species pairs require a chemical registry");
+		}
+		for (var pair : registry.gasLiquidPairs()) {
+			var component = gasRegistry.component(pair.gasComponentId());
+			if (!component.allowsSpecies(pair.speciesId())) throw new IllegalArgumentException(
+					"Gas/liquid pair " + pair.id() + " maps species outside gas component " + component.id());
+			var phase = chemicalRegistry.phase(chemicalRegistry.phaseHandle(pair.liquidPhaseId()));
+			if (!phase.allowedSpecies().contains(pair.speciesId())) throw new IllegalArgumentException(
+					"Gas/liquid pair " + pair.id() + " maps species outside liquid phase " + phase.id());
+			int gasHost = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS, component.id());
+			int liquidHost = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, phase.materialId());
+			registry.speciesOffset(gasHost, pair.speciesId());
+			registry.speciesOffset(liquidHost, pair.speciesId());
+			double mappedGasKilograms = component.standardMassPerCubicMeter()
+					* AirNetwork.cubicMeters(pair.gasStandardVolumeNanosPerBatch());
+			if (Double.doubleToRawLongBits(mappedGasKilograms)
+					!= Double.doubleToRawLongBits(pair.gasKilogramsPerBatch())) {
+				throw new IllegalArgumentException("Gas/liquid pair " + pair.id()
+						+ " gas nanos and kilograms do not close at the gas standard state");
+			}
+			double mappedLiquidKilograms = chemicalRegistry.species(
+					chemicalRegistry.speciesHandle(pair.speciesId())).massKilogramsPerAu()
+					.multiply(pair.liquidQuantaPerBatch()).divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
+			if (Double.doubleToRawLongBits(mappedLiquidKilograms)
+					!= Double.doubleToRawLongBits(pair.liquidKilogramsPerBatch())) {
+				throw new IllegalArgumentException("Gas/liquid pair " + pair.id()
+						+ " liquid quanta and kilograms do not close against the chemical species mass");
+			}
 		}
 	}
 
