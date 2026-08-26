@@ -9,6 +9,7 @@ import cc.ecisr.mmm.simulation.FluidSimulationService;
 import cc.ecisr.mmm.simulation.ShellFluidQuery;
 import cc.ecisr.mmm.network.ControllerSummaryPayload;
 import cc.ecisr.mmm.network.FluidProtocolServer;
+import cc.ecisr.mmm.network.ThermalReservoirSummaryPayload;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
@@ -41,6 +42,14 @@ public final class FieldProbeItem extends Item {
 		if (!(context.getLevel() instanceof ServerLevel level)
 				|| !(context.getPlayer() instanceof ServerPlayer player)) return InteractionResult.PASS;
 		FluidSimulationService service = FluidSimulationService.get(level.getServer());
+		if (level.getBlockState(context.getClickedPos()).is(MmmBlocks.THERMAL_RESERVOIR)) {
+			var summary = service.thermalReservoirSummary(player, context.getClickedPos());
+			if (summary == null || !FluidProtocolServer.send(player, new ThermalReservoirSummaryPayload(summary))) {
+				player.sendSystemMessage(Component.translatable("message.mmm.thermal_reservoir.unavailable"));
+				return InteractionResult.FAIL;
+			}
+			return InteractionResult.SUCCESS_SERVER;
+		}
 		if (level.getBlockState(context.getClickedPos()).is(MmmBlocks.FLUID_CONTROLLER)) {
 			ControllerSummary summary = service.controllerSummary(player, context.getClickedPos());
 			if (summary == null) {

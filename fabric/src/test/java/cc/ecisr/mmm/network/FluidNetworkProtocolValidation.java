@@ -9,6 +9,8 @@ import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.fluid.FluidMaterialRenderSnapshot;
 import cc.ecisr.mmm.fluid.FluidMaterialSurfaceMesher;
 import cc.ecisr.mmm.granular.GranularDisplaySnapshot;
+import cc.ecisr.mmm.thermal.ThermalReservoirSummary;
+import cc.ecisr.mmm.thermal.WorldPositionActionSessions;
 import io.netty.buffer.Unpooled;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
@@ -30,6 +32,7 @@ public final class FluidNetworkProtocolValidation {
 		validateQueryAvailabilityReason();
 		validateConfigurationCodecs();
 		validateControllerConsoleCodecs();
+		validateThermalReservoirCodecs();
 		validateSnapshotCodecAndOptionalSections();
 		validateGenerationAndSequenceOrdering();
 		validateMaterialSnapshot();
@@ -37,6 +40,37 @@ public final class FluidNetworkProtocolValidation {
 		validateGranularSnapshot();
 		validateThermalSnapshot();
 		System.out.println("Fluid network protocol validation passed");
+	}
+
+	private static void validateThermalReservoirCodecs() {
+		UUID player = new UUID(67L, 71L);
+		WorldPositionActionSessions sessions = new WorldPositionActionSessions();
+		long old = sessions.issue(player, DIMENSION.toString(), 2, 3, 4);
+		long current = sessions.issue(player, DIMENSION.toString(), 2, 3, 4);
+		require(!sessions.consume(player, DIMENSION.toString(), 2, 3, 4, old)
+				&& sessions.consume(player, DIMENSION.toString(), 2, 3, 4, current)
+				&& !sessions.consume(player, DIMENSION.toString(), 2, 3, 4, current),
+				"thermal reservoir stale/replay token semantics changed");
+
+		ThermalReservoirSummary summary = new ThermalReservoirSummary(5L, DIMENSION.toString(),
+				2, 3, 4, 293.15, true, 250.0, 600.0);
+		FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
+		ThermalReservoirSummaryPayload decoded;
+		try {
+			ThermalReservoirSummaryPayload.CODEC.encode(buffer, new ThermalReservoirSummaryPayload(summary));
+			decoded = ThermalReservoirSummaryPayload.CODEC.decode(buffer);
+		} finally { buffer.release(); }
+		require(decoded.summary().equals(summary), "thermal reservoir summary did not round-trip exactly");
+
+		ThermalReservoirSetpointPayload setpoint = new ThermalReservoirSetpointPayload(
+				new BlockPos(2, 3, 4), 5L, 310.0);
+		buffer = new FriendlyByteBuf(Unpooled.buffer());
+		ThermalReservoirSetpointPayload decodedSetpoint;
+		try {
+			ThermalReservoirSetpointPayload.CODEC.encode(buffer, setpoint);
+			decodedSetpoint = ThermalReservoirSetpointPayload.CODEC.decode(buffer);
+		} finally { buffer.release(); }
+		require(decodedSetpoint.equals(setpoint), "thermal reservoir setpoint identity/token did not round-trip exactly");
 	}
 
 	private static void validateControllerConsoleCodecs() {

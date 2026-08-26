@@ -7,6 +7,7 @@ import cc.ecisr.mmm.api.event.ContainerTransferCommittedEvent;
 import cc.ecisr.mmm.api.event.MmmEventApi;
 import cc.ecisr.mmm.api.transfer.TransferQuantity;
 import cc.ecisr.mmm.block.MmmBlocks;
+import cc.ecisr.mmm.block.ThermalReservoirBlockEntity;
 import cc.ecisr.mmm.chemistry.ChemicalDataPackLoader;
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
@@ -52,6 +53,8 @@ import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
+import cc.ecisr.mmm.thermal.ThermalReservoirSummary;
+import cc.ecisr.mmm.thermal.WorldPositionActionSessions;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
 import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
@@ -131,6 +134,7 @@ public final class FluidSimulationService {
 	private final Map<UUID, String> reportedContainerTransferLocks = new HashMap<>();
 	/** Per-player opaque console tokens; they never participate in region or inventory persistence. */
 	private final ControllerConsoleSessions controllerConsoleSessions = new ControllerConsoleSessions();
+	private final WorldPositionActionSessions thermalReservoirSessions = new WorldPositionActionSessions();
 	private Set<String> reportedContainerTransferStoreIssues = Set.of();
 	private ContainerTransferFaultPoint containerTransferFault = ContainerTransferFaultPoint.NONE;
 	private ResourceKey<Level> takeoverDimension;
@@ -951,8 +955,71 @@ public final class FluidSimulationService {
 		return null;
 	}
 
-	public void forgetControllerConsoleViewer(UUID playerId) {
+	public void forgetInteractiveViewer(UUID playerId) {
 		controllerConsoleSessions.forget(playerId);
+		thermalReservoirSessions.forget(playerId);
+	}
+
+	/** Read-only tuning state; invalid persisted setpoints remain visible so a creative player can replace them explicitly. */
+	public ThermalReservoirSummary thermalReservoirSummary(ServerPlayer player, BlockPos position) {
+		if (player == null || position == null) return null;
+		ServerLevel level = player.level();
+		if (!level.getServer().isSameThread()) throw new IllegalStateException("Thermal reservoir summary is server-thread-only");
+		if (player.distanceToSqr(position.getX() + 0.5, position.getY() + 0.5, position.getZ() + 0.5) > 64.0
+				|| !level.getBlockState(position).is(MmmBlocks.THERMAL_RESERVOIR)
+				|| !(level.getBlockEntity(position) instanceof ThermalReservoirBlockEntity reservoir)
+				|| thermalRegistry == null) return null;
+		ThermalRegistry.TemperatureRange range = thermalRegistry.worldBoundaryTemperatureRange();
+		double temperature = reservoir.temperatureK();
+		long generation = thermalReservoirSessions.issue(player.getUUID(), level.dimension().identifier().toString(),
+				position.getX(), position.getY(), position.getZ());
+		return new ThermalReservoirSummary(generation, level.dimension().identifier().toString(),
+				position.getX(), position.getY(), position.getZ(), temperature, range.contains(temperature),
+				range.minimumK(), range.maximumK());
+	}
+
+	/** Revalidates a proposed setpoint, persists the world owner, then refreshes and wakes adjacent thermal regions. */
+	public String applyThermalReservoirSetpoint(
+			ServerPlayer player, BlockPos position, long summaryGeneration, double temperatureK
+	) {
+		if (player == null || position == null) return "请求缺少温度源身份";
+		ServerLevel level = player.level();
+		if (!level.getServer().isSameThread()) throw new IllegalStateException("Thermal reservoir actions are server-thread-only");
+		if (player.distanceToSqr(position.getX() + 0.5, position.getY() + 0.5, position.getZ() + 0.5) > 64.0) {
+			return "玩家距离温度源过远";
+		}
+		String dimensionId = level.dimension().identifier().toString();
+		if (!thermalReservoirSessions.consume(player.getUUID(), dimensionId,
+				position.getX(), position.getY(), position.getZ(), summaryGeneration)) return "summary 已过期，请刷新";
+		if (!player.isCreative()) return "只有创造模式玩家可以修改温度源";
+		if (!authoritativeWritesReady()) return authoritativeWriteFailure("修改温度源");
+		if (!level.getBlockState(position).is(MmmBlocks.THERMAL_RESERVOIR)
+				|| !(level.getBlockEntity(position) instanceof ThermalReservoirBlockEntity reservoir)) {
+			return "目标方块不再是温度源";
+		}
+		if (thermalRegistry == null) return "world thermal registry 不可用";
+		ThermalRegistry.TemperatureRange range = thermalRegistry.worldBoundaryTemperatureRange();
+		if (!range.contains(temperatureK)) return String.format(java.util.Locale.ROOT,
+				"温度必须是有限数值且位于 world thermal registry 的 [%.6f, %.6f] K", range.minimumK(), range.maximumK());
+		reservoir.setTemperatureK(temperatureK);
+		refreshThermalReservoir(level, position);
+		return null;
+	}
+
+	private void refreshThermalReservoir(ServerLevel level, BlockPos position) {
+		for (FluidRegion region : regionManager.regions()) {
+			FluidRegionFootprint footprint = region.footprint();
+			if (footprint == null || !region.dimension().equals(level.dimension())
+					|| !footprint.boundaryBlocks().contains(position.asLong())
+					|| !region.solverLoaded() || !region.domain().hasThermalState()) continue;
+			try {
+				if (thermalBoundaryResolver.refresh(level, region, CELLS_PER_BLOCK)) {
+					region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
+				}
+			} catch (RuntimeException invalidBoundary) {
+				blockThermal(level, region, "thermal-definition LOCKED：" + invalidBoundary.getMessage(), invalidBoundary);
+			}
+		}
 	}
 
 	public boolean chemistryFeatureEnabled() {

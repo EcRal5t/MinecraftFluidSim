@@ -147,6 +147,36 @@ public final class ThermalRegistry {
 	public byte[] canonicalBytes() { return canonicalBytes.clone(); }
 	public String fingerprint() { return fingerprint; }
 
+	/** Common validity interval for every material carrier that can directly occupy a region cell. */
+	public TemperatureRange worldBoundaryTemperatureRange() {
+		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
+		double maximum = Double.POSITIVE_INFINITY;
+		boolean found = false;
+		for (ThermalMaterialDefinition material : materials) {
+			if (material.carrierKind() == ThermalMaterialDefinition.CarrierKind.DEVICE) continue;
+			found = true;
+			minimum = Math.max(minimum, material.minimumTemperatureK());
+			maximum = Math.min(maximum, material.maximumTemperatureK());
+		}
+		if (!found || !(Double.isFinite(maximum) && maximum > minimum)) {
+			throw new IllegalStateException("World thermal carriers have no common boundary-temperature interval");
+		}
+		return new TemperatureRange(minimum, maximum);
+	}
+
+	public record TemperatureRange(double minimumK, double maximumK) {
+		public TemperatureRange {
+			if (!(Double.isFinite(minimumK) && Double.isFinite(maximumK)
+					&& minimumK >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K && maximumK > minimumK)) {
+				throw new IllegalArgumentException("Thermal registry temperature range is invalid");
+			}
+		}
+
+		public boolean contains(double temperatureK) {
+			return Double.isFinite(temperatureK) && temperatureK >= minimumK && temperatureK <= maximumK;
+		}
+	}
+
 	public GasLiquidSpeciesPair gasLiquidPair(String id) {
 		for (GasLiquidSpeciesPair pair : gasLiquidPairs) {
 			if (pair.id().equals(id)) return pair;

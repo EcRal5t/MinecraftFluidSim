@@ -89,10 +89,28 @@ public final class M9ThermalValidation {
 		localizedHeatingDrivesBoussinesqCirculation();
 		partialCutFaceUsesPlicThermalContact();
 		finiteThermalBodyExchangesWithoutMixing();
+		worldBoundaryTemperatureRangeExcludesFiniteDevices();
 		productionFixedBoundaryFieldAuditsExchange();
 		fixedBoundaryAuditsAndFailedStepRollsBack();
 		reseedingMovesEnergyWithMarkerTruth();
 		System.out.println("M9 thermal validation passed");
+	}
+
+	private static void worldBoundaryTemperatureRangeExcludesFiniteDevices() {
+		ThermalMaterialDefinition liquid = new ThermalMaterialDefinition("test:thermal/range_liquid",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, "test:range_liquid", 300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 600.0, 1.0)));
+		ThermalMaterialDefinition gas = new ThermalMaterialDefinition("test:thermal/range_gas",
+				ThermalMaterialDefinition.CarrierKind.GAS, "test:range_gas", 300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 500.0, 1.0)));
+		ThermalMaterialDefinition device = new ThermalMaterialDefinition("test:thermal/range_device",
+				ThermalMaterialDefinition.CarrierKind.DEVICE, "test:range_device", 320.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(300.0, 350.0, 1.0)));
+		ThermalRegistry.TemperatureRange range = new ThermalRegistry(List.of(liquid, gas, device))
+				.worldBoundaryTemperatureRange();
+		require(range.minimumK() == 250.0 && range.maximumK() == 500.0
+				&& range.contains(250.0) && range.contains(500.0) && !range.contains(500.1),
+				"fixed-boundary tuning range did not use the common world-carrier validity interval");
 	}
 
 	private static void thermalSleepIsOrthogonalToMotion() {
