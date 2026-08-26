@@ -5,6 +5,16 @@ import java.util.List;
 
 /** Rebuildable LTE grid derived from authoritative carrier energy; it never owns persistent inventory. */
 public final class ThermalCellGrid {
+	/** Last range derived from authoritative occupied carriers; absent until a successful rebuild/commit. */
+	public record TemperatureRange(double minimumK, double maximumK) {
+		public TemperatureRange {
+			if (!(Double.isFinite(minimumK) && Double.isFinite(maximumK)
+					&& minimumK >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K && maximumK >= minimumK)) {
+				throw new IllegalArgumentException("Observed thermal temperature range is invalid");
+			}
+		}
+	}
+
 	public interface CarrierAccess {
 		int carrierCount();
 		int cell(int carrier);
@@ -28,6 +38,7 @@ public final class ThermalCellGrid {
 	private final double[] minimumTemperature;
 	private final double[] maximumTemperature;
 	private CarrierAccess carriers;
+	private TemperatureRange observedTemperatureRange;
 
 	public ThermalCellGrid(int cellCount) {
 		if (cellCount <= 0) throw new IllegalArgumentException("Thermal cell count must be positive");
@@ -49,6 +60,7 @@ public final class ThermalCellGrid {
 			conductivity[cell] /= totalVolume[cell];
 			solveCell(cell, internalEnergy[cell]);
 		}
+		updateObservedTemperatureRange();
 	}
 
 	/** Rebuilds changed carrier topology while solving one cell against its pre-commit conserved U. */
@@ -129,6 +141,7 @@ public final class ThermalCellGrid {
 			validateCarrierAtCellTemperature(remainderCarrier, temperature[cell]);
 			internalEnergy[cell] = requested;
 		}
+		updateObservedTemperatureRange();
 	}
 
 	/** Validates a complete prospective LTE energy assignment without changing any authoritative carrier. */
@@ -156,6 +169,8 @@ public final class ThermalCellGrid {
 	public double conductivity(int cell) { return conductivity[cell]; }
 	public double minimumTemperature(int cell) { return minimumTemperature[cell]; }
 	public double maximumTemperature(int cell) { return maximumTemperature[cell]; }
+	/** Constant-time diagnostic accessor. It never rebuilds the derived grid. */
+	public TemperatureRange observedTemperatureRange() { return observedTemperatureRange; }
 	public double[] copyInternalEnergy() { return internalEnergy.clone(); }
 	public double[] copyCarrierInternalEnergy() {
 		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
@@ -293,6 +308,17 @@ public final class ThermalCellGrid {
 					+ ", restoredTemperature=" + restored + ", energyResidual=" + residual
 					+ ", mass=" + carriers.mass(carrier) + ")");
 		}
+	}
+
+	private void updateObservedTemperatureRange() {
+		double minimum = Double.POSITIVE_INFINITY;
+		double maximum = Double.NEGATIVE_INFINITY;
+		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
+			minimum = Math.min(minimum, temperature[cell]);
+			maximum = Math.max(maximum, temperature[cell]);
+		}
+		observedTemperatureRange = minimum == Double.POSITIVE_INFINITY
+				? null : new TemperatureRange(minimum, maximum);
 	}
 
 	private static double energyTolerance(double... values) {

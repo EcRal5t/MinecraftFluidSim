@@ -40,6 +40,7 @@ import cc.ecisr.mmm.thermal.GasLiquidPhaseModel;
 import cc.ecisr.mmm.thermal.FiniteThermalExchange;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
+import cc.ecisr.mmm.thermal.ThermalCellGrid;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalPhaseTransition;
@@ -400,6 +401,10 @@ public final class FlipFluidDomain {
 	public boolean hasChemistryState() { return chemicalParcels != null; }
 	public boolean hasGranularState() { return granularParcels != null; }
 	public boolean hasThermalState() { return thermalState != null; }
+	/** Last committed liquid/solid LTE range; constant-time and absent until the thermal grid was observed. */
+	public ThermalCellGrid.TemperatureRange observedCarrierTemperatureRange() {
+		return thermalState == null ? null : thermalState.observedCarrierTemperatureRange();
+	}
 	/** Constant-time live chemical-parcel count; does not scan markers. */
 	public int chemicalParcelCount() { return chemicalParcels == null ? 0 : chemicalParcels.pool().liveCount(); }
 	/** Constant-time exact species inventory ledger. */

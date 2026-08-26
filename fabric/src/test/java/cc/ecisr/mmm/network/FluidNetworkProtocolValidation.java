@@ -96,7 +96,8 @@ public final class FluidNetworkProtocolValidation {
 				new ControllerSummary.Usage(full, full, full, full, full, full, full,
 						ControllerSummary.Capacity.unavailable(1_024L)),
 				new ControllerSummary.Inventory(true, 0.75, 741.0, 123L, 456L, 7.5,
-						789L, 8.5, 321L, 0.42, true, 91_000.0),
+						789L, 8.5, 321L, 0.42, true, 91_000.0,
+						ControllerSummary.TemperatureRange.available(278.5, 341.25)),
 				new ControllerSummary.Gates(true, false, true, true, false),
 				new ControllerSummary.Diagnostics(2.5, 17, 1.0E-6, "bounded diagnostic"));
 		FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());

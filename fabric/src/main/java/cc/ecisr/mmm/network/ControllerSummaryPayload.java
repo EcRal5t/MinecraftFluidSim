@@ -106,11 +106,25 @@ public record ControllerSummaryPayload(ControllerSummary summary) implements Cus
 		buffer.writeDouble(inventory.coherentMassKilograms()); buffer.writeVarLong(inventory.gasStandardVolumeNanos());
 		buffer.writeDouble(inventory.gasMassKilograms()); buffer.writeBoolean(inventory.internalEnergyAvailable());
 		buffer.writeDouble(inventory.totalInternalEnergyEu());
+		ControllerSummary.TemperatureRange range = inventory.temperatureRange();
+		buffer.writeBoolean(range.available()); buffer.writeDouble(range.minimumK()); buffer.writeDouble(range.maximumK());
 	}
 
 	private static ControllerSummary.Inventory readInventory(FriendlyByteBuf buffer) {
-		return new ControllerSummary.Inventory(buffer.readBoolean(), buffer.readDouble(), buffer.readDouble(),
-				buffer.readVarLong(), buffer.readVarLong(), buffer.readDouble(), buffer.readVarLong(), buffer.readDouble(),
-				buffer.readVarLong(), buffer.readDouble(), buffer.readBoolean(), buffer.readDouble());
+		boolean live = buffer.readBoolean();
+		double liquidVolume = buffer.readDouble(), liquidMass = buffer.readDouble();
+		long species = buffer.readVarLong(), granularVolume = buffer.readVarLong();
+		double granularMass = buffer.readDouble();
+		long coherentVolume = buffer.readVarLong();
+		double coherentMass = buffer.readDouble();
+		long gasVolume = buffer.readVarLong();
+		double gasMass = buffer.readDouble();
+		boolean energyAvailable = buffer.readBoolean();
+		double energy = buffer.readDouble();
+		ControllerSummary.TemperatureRange range = new ControllerSummary.TemperatureRange(
+				buffer.readBoolean(), buffer.readDouble(), buffer.readDouble());
+		return new ControllerSummary.Inventory(live, liquidVolume, liquidMass,
+				species, granularVolume, granularMass, coherentVolume, coherentMass,
+				gasVolume, gasMass, energyAvailable, energy, range);
 	}
 }

@@ -113,6 +113,10 @@ public final class FieldProbeItem extends Item {
 			text.append("\n").append(Component.translatable("message.mmm.probe.controller_gas_energy_inventory",
 					inventory.gasStandardVolumeNanos(), decimal(inventory.gasMassKilograms()),
 					inventory.internalEnergyAvailable() ? decimal(inventory.totalInternalEnergyEu()) : "—"));
+			ControllerSummary.TemperatureRange range = inventory.temperatureRange();
+			text.append("\n").append(Component.translatable("message.mmm.probe.controller_temperature_range",
+					range.available() ? decimal(range.minimumK()) : "—",
+					range.available() ? decimal(range.maximumK()) : "—"));
 		}
 		ControllerSummary.Gates gates = summary.gates();
 		text.append("\n").append(Component.translatable("message.mmm.probe.controller_gates",

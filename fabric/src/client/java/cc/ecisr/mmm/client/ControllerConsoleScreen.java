@@ -99,6 +99,10 @@ public final class ControllerConsoleScreen extends Screen {
 			result.add(Component.translatable("screen.mmm.controller.inventory_gas_energy",
 					inventory.gasStandardVolumeNanos(), decimal(inventory.gasMassKilograms()),
 					inventory.internalEnergyAvailable() ? decimal(inventory.totalInternalEnergyEu()) : "—"));
+			ControllerSummary.TemperatureRange range = inventory.temperatureRange();
+			result.add(Component.translatable("screen.mmm.controller.temperature_range",
+					range.available() ? decimal(range.minimumK()) : "—",
+					range.available() ? decimal(range.maximumK()) : "—"));
 		} else {
 			result.add(Component.translatable("screen.mmm.controller.inventory_unloaded"));
 		}

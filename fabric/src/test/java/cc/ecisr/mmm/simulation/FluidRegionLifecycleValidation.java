@@ -23,12 +23,14 @@ public final class FluidRegionLifecycleValidation {
 	private static void validateMetadataOnlySummaryCannotInventInventory() {
 		ControllerSummary.Inventory unavailable = ControllerSummary.Inventory.unavailable();
 		require(!unavailable.live() && !unavailable.internalEnergyAvailable()
-				&& Double.isNaN(unavailable.totalInternalEnergyEu()),
+				&& Double.isNaN(unavailable.totalInternalEnergyEu())
+				&& !unavailable.temperatureRange().available(),
 				"metadata-only controller inventory did not remain explicitly unavailable");
 		boolean rejected = false;
 		try {
 			new ControllerSummary.Inventory(false, 1.0, 0.0, 0L, 0L, 0.0,
-					0L, 0.0, 0L, 0.0, false, Double.NaN);
+					0L, 0.0, 0L, 0.0, false, Double.NaN,
+					ControllerSummary.TemperatureRange.unavailable());
 		} catch (IllegalArgumentException expected) {
 			rejected = true;
 		}

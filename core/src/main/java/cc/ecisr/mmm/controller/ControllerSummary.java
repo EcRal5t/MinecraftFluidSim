@@ -124,7 +124,8 @@ public record ControllerSummary(
 			long gasStandardVolumeNanos,
 			double gasMassKilograms,
 			boolean internalEnergyAvailable,
-			double totalInternalEnergyEu
+			double totalInternalEnergyEu,
+			TemperatureRange temperatureRange
 	) {
 		public Inventory {
 			if (!finiteNonNegative(liquidVolumeCubicMetres) || !finiteNonNegative(liquidMassKilograms)
@@ -132,24 +133,45 @@ public record ControllerSummary(
 					|| !finiteNonNegative(granularMassKilograms) || coherentSolidVolumeSvq < 0L
 					|| !finiteNonNegative(coherentMassKilograms) || gasStandardVolumeNanos < 0L
 					|| !finiteNonNegative(gasMassKilograms)
-					|| internalEnergyAvailable != Double.isFinite(totalInternalEnergyEu)) {
+					|| internalEnergyAvailable != Double.isFinite(totalInternalEnergyEu)
+					|| temperatureRange == null) {
 				throw new IllegalArgumentException("Controller summary inventory is invalid");
 			}
 			if (!live && (liquidVolumeCubicMetres != 0.0 || liquidMassKilograms != 0.0
 					|| speciesQuanta != 0L || granularSolidVolumeSvq != 0L || granularMassKilograms != 0.0
 					|| coherentSolidVolumeSvq != 0L || coherentMassKilograms != 0.0
-					|| gasStandardVolumeNanos != 0L || gasMassKilograms != 0.0 || internalEnergyAvailable)) {
+					|| gasStandardVolumeNanos != 0L || gasMassKilograms != 0.0 || internalEnergyAvailable
+					|| temperatureRange.available())) {
 				throw new IllegalArgumentException("Metadata-only controller summary invented live inventory");
 			}
 		}
 
 		public static Inventory unavailable() {
 			return new Inventory(false, 0.0, 0.0, 0L, 0L, 0.0, 0L, 0.0,
-					0L, 0.0, false, Double.NaN);
+					0L, 0.0, false, Double.NaN, TemperatureRange.unavailable());
 		}
 
 		private static boolean finiteNonNegative(double value) {
 			return Double.isFinite(value) && value >= 0.0;
+		}
+	}
+
+	public record TemperatureRange(boolean available, double minimumK, double maximumK) {
+		public TemperatureRange {
+			boolean valid = Double.isFinite(minimumK) && Double.isFinite(maximumK)
+					&& minimumK >= 0.0 && maximumK >= minimumK;
+			if (available != valid || !available
+					&& !(Double.isNaN(minimumK) && Double.isNaN(maximumK))) {
+				throw new IllegalArgumentException("Controller summary temperature range is invalid");
+			}
+		}
+
+		public static TemperatureRange available(double minimumK, double maximumK) {
+			return new TemperatureRange(true, minimumK, maximumK);
+		}
+
+		public static TemperatureRange unavailable() {
+			return new TemperatureRange(false, Double.NaN, Double.NaN);
 		}
 	}
 

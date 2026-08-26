@@ -90,6 +90,7 @@ public final class M9ThermalValidation {
 		partialCutFaceUsesPlicThermalContact();
 		finiteThermalBodyExchangesWithoutMixing();
 		worldBoundaryTemperatureRangeExcludesFiniteDevices();
+		thermalGridCachesObservedTemperatureRange();
 		productionFixedBoundaryFieldAuditsExchange();
 		fixedBoundaryAuditsAndFailedStepRollsBack();
 		reseedingMovesEnergyWithMarkerTruth();
@@ -111,6 +112,33 @@ public final class M9ThermalValidation {
 		require(range.minimumK() == 250.0 && range.maximumK() == 500.0
 				&& range.contains(250.0) && range.contains(500.0) && !range.contains(500.1),
 				"fixed-boundary tuning range did not use the common world-carrier validity interval");
+	}
+
+	private static void thermalGridCachesObservedTemperatureRange() {
+		ThermalMaterialDefinition material = new ThermalMaterialDefinition("test:thermal/range_cache",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, "test:range_cache", 300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 600.0, 2.0)));
+		double[] energy = {-100.0, 200.0};
+		ThermalCellGrid grid = new ThermalCellGrid(2);
+		require(grid.observedTemperatureRange() == null,
+				"unbuilt thermal grid invented an observed temperature range");
+		grid.rebuild(new ThermalCellGrid.CarrierAccess() {
+			@Override public int carrierCount() { return 2; }
+			@Override public int cell(int carrier) { return carrier; }
+			@Override public ThermalMaterialDefinition material(int carrier) { return material; }
+			@Override public double mass(int carrier) { return 1.0; }
+			@Override public double volume(int carrier) { return 1.0; }
+			@Override public double baseEnergy(int carrier) { return 0.0; }
+			@Override public double internalEnergy(int carrier) { return energy[carrier]; }
+			@Override public void setInternalEnergy(int carrier, double value) { energy[carrier] = value; }
+		});
+		ThermalCellGrid.TemperatureRange initial = grid.observedTemperatureRange();
+		require(initial != null && initial.minimumK() == 250.0 && initial.maximumK() == 400.0,
+				"thermal rebuild did not cache the occupied-carrier temperature range");
+		grid.setCellInternalEnergies(new double[] {0.0, 100.0});
+		ThermalCellGrid.TemperatureRange committed = grid.observedTemperatureRange();
+		require(committed != null && committed.minimumK() == 300.0 && committed.maximumK() == 350.0,
+				"thermal energy commit did not refresh the observed temperature range");
 	}
 
 	private static void thermalSleepIsOrthogonalToMotion() {

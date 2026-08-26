@@ -879,27 +879,53 @@ public final class FluidSimulationService {
 	private ControllerSummary.Inventory liveInventory(FluidRegion region, FlipFluidDomain domain) {
 		long gasNanos = 0L;
 		double gasMass = 0.0;
+		double minimumTemperature = Double.POSITIVE_INFINITY;
+		double maximumTemperature = Double.NEGATIVE_INFINITY;
+		var carrierRange = domain.observedCarrierTemperatureRange();
+		if (carrierRange != null) {
+			minimumTemperature = carrierRange.minimumK();
+			maximumTemperature = carrierRange.maximumK();
+		}
 		for (int node : domain.airNetwork().nodeIds()) {
 			var gas = domain.airNetwork().inventory(node);
 			gasNanos = Math.addExact(gasNanos, gas.standardVolumeNanos());
 			for (var component : gas.components()) gasMass += component.mass();
+			if (domain.hasThermalState() && !gas.isEmpty()) {
+				double temperature = domain.gasNodeTemperatureK(node);
+				minimumTemperature = Math.min(minimumTemperature, temperature);
+				maximumTemperature = Math.max(maximumTemperature, temperature);
+			}
 		}
 		if (!Double.isFinite(gasMass)) throw new ArithmeticException("Controller gas mass summary overflow");
 		double totalInternalEnergy = Double.NaN;
 		if (domain.hasThermalState()) {
 			totalInternalEnergy = domain.totalInternalEnergy();
-			if (thermalRegistry != null) totalInternalEnergy += region.finiteThermalDevices(
-					thermalRegistry.fingerprint()).exactInternalEnergy().toDouble();
+			if (thermalRegistry != null) {
+				var devices = region.finiteThermalDevices(thermalRegistry.fingerprint());
+				totalInternalEnergy += devices.exactInternalEnergy().toDouble();
+				ThermalStateFunction stateFunction = new ThermalStateFunction(thermalRegistry);
+				for (var device : devices.devices()) {
+					var body = device.body();
+					double temperature = stateFunction.stateForInternalEnergy(
+							thermalRegistry.materialHandle(body.thermalMaterialId()), body.massKilograms(),
+							Map.of(), body.internalEnergyEu()).temperatureK();
+					minimumTemperature = Math.min(minimumTemperature, temperature);
+					maximumTemperature = Math.max(maximumTemperature, temperature);
+				}
+			}
 			if (!Double.isFinite(totalInternalEnergy)) {
 				throw new ArithmeticException("Controller total internal-energy summary overflow");
 			}
 		}
+		ControllerSummary.TemperatureRange temperatureRange = minimumTemperature == Double.POSITIVE_INFINITY
+				? ControllerSummary.TemperatureRange.unavailable()
+				: ControllerSummary.TemperatureRange.available(minimumTemperature, maximumTemperature);
 		return new ControllerSummary.Inventory(true,
 				domain.physicalVolumeCubicMetres(domain.totalVolumeExact()),
 				domain.physicalMassKilograms(domain.totalMass()), domain.totalChemicalSpeciesQuanta(),
 				domain.totalGranularSolidVolumeSvq(), domain.totalGranularMass(),
 				domain.totalCoherentSolidVolumeSvq(), domain.totalCoherentMass(), gasNanos, gasMass,
-				domain.hasThermalState(), totalInternalEnergy);
+				domain.hasThermalState(), totalInternalEnergy, temperatureRange);
 	}
 
 	private static ControllerSummary.Capacity capacity(long used, long limit) {
