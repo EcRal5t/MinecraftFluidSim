@@ -461,6 +461,14 @@ public final class FluidSimulationService {
 		try {
 			ContainerTransferJournal journal = indexedContainerTransfers.get(transactionId);
 			if (journal == null) return;
+			try {
+				journal.validateProfileFingerprint(capabilityProfile == null ? null : capabilityProfile.profileFingerprint());
+			} catch (RuntimeException foreignProfile) {
+				auditedContainerTransfers.add(transactionId);
+				logContainerTransferLockOnce(transactionId, "Container transfer WAL " + transactionId
+						+ " remains locked: FOREIGN_PROFILE (" + foreignProfile.getMessage() + ")");
+				return;
+			}
 			if (journal.requiresThermalRegistry()) {
 				if (!thermalFeatureEnabled || thermalRegistry == null) {
 					auditedContainerTransfers.add(transactionId);
@@ -790,6 +798,19 @@ public final class FluidSimulationService {
 	FluidMaterial resolveMaterial(String stableId) {
 		if (materialRegistry == null) throw new IllegalStateException("Authoritative material registry is unavailable");
 		return materialRegistry.material(materialRegistry.handle(stableId));
+	}
+
+	public ItemStack bindActualContainerProfile(ItemStack stack) {
+		if (stack.get(MmmComponents.FLUID_VOLUME) != null || stack.get(MmmComponents.CHEMICAL_CONTENTS) != null
+				|| stack.get(MmmComponents.GRANULAR_CONTENTS) != null) {
+			ContainerItemStacks.bindProfile(stack, capabilityProfile.profileFingerprint());
+		}
+		return stack;
+	}
+
+	boolean acceptsActualContainerProfile(ItemStack stack) {
+		return capabilityProfile != null && capabilityProfile.profileFingerprint().equals(
+				ContainerItemStacks.profileFingerprint(stack));
 	}
 
 	String thermalRegistryFingerprint() {

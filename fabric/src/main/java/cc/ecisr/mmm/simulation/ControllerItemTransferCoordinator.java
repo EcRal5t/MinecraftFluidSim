@@ -134,7 +134,7 @@ final class ControllerItemTransferCoordinator {
 		ItemStack finalAfter;
 		ContainerTransferJournal.ItemFingerprint afterFingerprint;
 		try {
-			finalAfter = finalItemResolver.resolve(rawOutcome.stack(), beforeStack);
+			finalAfter = service.bindActualContainerProfile(finalItemResolver.resolve(rawOutcome.stack(), beforeStack));
 			afterFingerprint = ContainerTransferItems.fingerprint(finalAfter);
 		} catch (RuntimeException invalidAfterItem) {
 			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,

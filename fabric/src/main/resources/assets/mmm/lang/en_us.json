@@ -32,6 +32,7 @@
   "item.mmm.creative_source.source.reagent.kno3": "Potassium Nitrate Sample Template",
   "item.mmm.creative_source.source.granular.fine_sand": "Fine Sand Source Template",
   "item.mmm.creative_source.source.granular.light_beads": "Light Beads Source Template",
+  "item.mmm.container.profile": "World profile: %s",
   "item.mmm.chemical_indicator": "Universal Chemical Indicator",
   "item.mmm.chemical_eraser": "Chemical Indicator Eraser",
   "message.mmm.controller.activated": "Controller region activated and running: %s interior blocks, %sx%sx%s dense bounds, %s required chunks. Sneak-use it with an empty hand to pause.",

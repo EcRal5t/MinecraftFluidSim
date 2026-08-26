@@ -54,6 +54,11 @@ public final class FluidTransferService {
 
 		TransferKind kind = classify(held);
 		if (kind == TransferKind.NONE) return null;
+		if ((kind == TransferKind.MATERIAL_POUR || kind == TransferKind.GRANULAR_POUR)
+				&& !service.acceptsActualContainerProfile(held)) {
+			player.sendSystemMessage(Component.literal("FOREIGN_PROFILE：actual container 不属于当前世界；库存保持不变"), true);
+			return InteractionResult.FAIL;
+		}
 		ServerLevel level = player.level();
 		boolean pouring = kind == TransferKind.POUR || kind == TransferKind.MATERIAL_POUR
 				|| kind == TransferKind.GRANULAR_POUR;
@@ -102,6 +107,7 @@ public final class FluidTransferService {
 			player.sendSystemMessage(Component.literal(outcome.message()), true);
 		}
 		if (outcome.transferred()) {
+			service.bindActualContainerProfile(outcome.stack());
 			player.setItemInHand(hand, outcome.stack());
 			level.playSound(null, player.getX(), player.getY() + 1.0, player.getZ(),
 					outcome.filled() ? SoundEvents.BUCKET_EMPTY : SoundEvents.BUCKET_FILL,
@@ -122,6 +128,8 @@ public final class FluidTransferService {
 		if (!service.authoritativeWritesReady()) return vanillaItem ? null : stack;
 		TransferKind kind = classify(stack);
 		if (kind == TransferKind.NONE) return stack;
+		if ((kind == TransferKind.MATERIAL_POUR || kind == TransferKind.GRANULAR_POUR)
+				&& !service.acceptsActualContainerProfile(stack)) return stack;
 		ServerLevel level = source.level();
 		var facing = source.state().getValue(DispenserBlock.FACING);
 		BlockPos target = source.pos().relative(facing);
@@ -244,7 +252,7 @@ public final class FluidTransferService {
 		};
 		if (outcome == null || !outcome.transferred()) return stack;
 		service.sendSnapshot(level, region);
-		return outcome.stack();
+		return service.bindActualContainerProfile(outcome.stack());
 	}
 
 

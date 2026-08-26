@@ -69,6 +69,17 @@ public record ContainerTransferJournal(
 		return beforeItem.requiresChemicalRegistry() || afterItem.requiresChemicalRegistry();
 	}
 
+	public void validateProfileFingerprint(String expected) {
+		if (expected == null || !expected.matches("[0-9a-f]{64}")) {
+			throw new IllegalArgumentException("Authoritative world profile is unavailable");
+		}
+		for (ItemFingerprint item : java.util.List.of(beforeItem, afterItem)) {
+			if (item.profileFingerprint() != null && !item.profileFingerprint().equals(expected)) {
+				throw new IllegalArgumentException("Typed container belongs to a foreign world profile");
+			}
+		}
+	}
+
 	public void validateChemicalRegistry(ChemicalRegistry registry) {
 		if (!requiresChemicalRegistry()) return;
 		if (registry == null) throw new IllegalArgumentException("Authoritative chemical registry is unavailable");
@@ -132,7 +143,8 @@ public record ContainerTransferJournal(
 		MATERIAL_BUCKET,
 		CHEMICAL_BUCKET,
 		EMPTY_GRANULAR_CONTAINER,
-		GRANULAR_CONTAINER
+		GRANULAR_CONTAINER,
+		CREATIVE_SOURCE
 	}
 
 	/** Exact data needed to compare and reconstruct one count-one transfer item. */
@@ -142,18 +154,35 @@ public record ContainerTransferJournal(
 			long solidVolumeSvq,
 			String contents,
 			long massBits,
-			String thermalContents
+			String thermalContents,
+			String profileFingerprint
 	) {
+		public ItemFingerprint {
+			boolean actual = kind == ItemKind.MATERIAL_BUCKET || kind == ItemKind.CHEMICAL_BUCKET
+					|| kind == ItemKind.GRANULAR_CONTAINER;
+			if (actual != (profileFingerprint != null)) {
+				throw new IllegalArgumentException("Only filled typed containers require a world profile fingerprint");
+			}
+			if (profileFingerprint != null && !profileFingerprint.matches("[0-9a-f]{64}")) {
+				throw new IllegalArgumentException("Container world profile fingerprint is invalid");
+			}
+		}
+
 		public ItemFingerprint(ItemKind kind, long nanos, String contents) {
-			this(kind, nanos, -1L, contents, -1L, null);
+			this(kind, nanos, -1L, contents, -1L, null, null);
 		}
 
 		public ItemFingerprint(ItemKind kind, long nanos, String contents, long massBits) {
-			this(kind, nanos, -1L, contents, massBits, null);
+			this(kind, nanos, -1L, contents, massBits, null, null);
 		}
 
 		public ItemFingerprint(ItemKind kind, long nanos, long solidVolumeSvq, String contents, long massBits) {
-			this(kind, nanos, solidVolumeSvq, contents, massBits, null);
+			this(kind, nanos, solidVolumeSvq, contents, massBits, null, null);
+		}
+
+		public ItemFingerprint(ItemKind kind, long nanos, long solidVolumeSvq, String contents,
+				long massBits, String thermalContents) {
+			this(kind, nanos, solidVolumeSvq, contents, massBits, thermalContents, null);
 		}
 
 		public boolean requiresChemicalRegistry() {
@@ -191,7 +220,7 @@ public record ContainerTransferJournal(
 						fingerprint, FluidMixture.decode(contents), thermal.internalEnergy());
 				case CHEMICAL_BUCKET -> ThermalContents.forChemical(
 						fingerprint, ChemicalContents.decode(contents), thermal.internalEnergy());
-				case BUCKET, EMPTY_MATERIAL_BUCKET, EMPTY_GRANULAR_CONTAINER, GRANULAR_CONTAINER ->
+				case BUCKET, EMPTY_MATERIAL_BUCKET, EMPTY_GRANULAR_CONTAINER, GRANULAR_CONTAINER, CREATIVE_SOURCE ->
 						throw new IllegalArgumentException("Non-liquid WAL item carries thermal contents");
 			};
 			if (expected.underlyingKind() != thermal.underlyingKind()

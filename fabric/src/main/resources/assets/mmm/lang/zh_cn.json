@@ -32,6 +32,7 @@
   "item.mmm.creative_source.source.reagent.kno3": "硝酸钾样品模板",
   "item.mmm.creative_source.source.granular.fine_sand": "细砂源模板",
   "item.mmm.creative_source.source.granular.light_beads": "轻质珠源模板",
+  "item.mmm.container.profile": "世界 profile：%s",
   "item.mmm.chemical_indicator": "通用化学指示剂",
   "item.mmm.chemical_eraser": "化学指示剂抹除器",
   "message.mmm.controller.activated": "控制器区域已激活并自动运行：%s 个内部方块，致密范围 %sx%sx%s，关联 %s 个完整加载区块。潜行空手使用控制器可暂停。",

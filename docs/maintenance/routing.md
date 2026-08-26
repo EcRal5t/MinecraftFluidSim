@@ -29,7 +29,7 @@
 | takeover | `TakeoverTransaction.java`、`TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
 | ownership | `simulation/ownership/`、`FluidRegionPersistence.java` | WAL→WARNING→世界→region HEAD→committed；未知状态保留并锁定 |
 | 容器事务 | `core/.../transfer/ContainerTransferActor.java`、`ContainerTransferJournal.java`、`fabric/.../simulation/ControllerItemTransferCoordinator.java`、`MinecraftContainerActorAccess.java`、`ContainerTransferItems.java`、`ContainerTransferStore.java`、`ContainerTransferRecovery.java`、`FluidTransferService.java` | coordinator 独占 WAL→staged HEAD→actor 收敛顺序；journal 与 actor identity 是 loader-neutral 数据；Minecraft actor 定位、冲突分类、NBT/ItemStack 映射与 durable save 只在 Fabric adapter；actor durable save 前不得删 WAL |
-| typed 容器与创造 source | `core/.../transfer/`、`fabric/.../item/ContainerItemStacks.java`、`CreativeSourceItem.java`、`simulation/CreativeSourceCatalog.java` | actual 体积/质量/species/SVQ/U 与 descriptor 意图严格分离；source 只由服务端 world registry 解析并走既有 WAL/HEAD；持久编码不携带 runtime handle |
+| typed 容器与创造 source | `core/.../transfer/`、`fabric/.../item/ContainerItemStacks.java`、`CreativeSourceItem.java`、`simulation/ContainerTransferItems.java`、`CreativeSourceCatalog.java` | actual 体积/质量/species/SVQ/U/profile 与 descriptor 意图严格分离；已装填 actual 只接受当前 committed profile，source 只由服务端 world registry 解析并走既有 WAL/HEAD；持久编码不携带 runtime handle |
 | 活动求解器 | `core/.../fluid/FlipFluidDomain.java` | CPU 规范实现；mechanics→conduction→reaction→phase→granular→reseed |
 | 后端完整候选 | `FluidDomainState.java`、`FluidStepRequest.java`、`FluidStepCandidate.java`、`FluidSolverBackend.java` | 后端只计算私有完整后继；moving-body 输入有硬上限；不持有世界、actor、HEAD 或提交权 |
 | 自由面/压力 | `FlipFreeSurfaceGeometry.java`、`FlipVolumeDriftCorrection.java`、`FlipVelocityExtrapolator.java` | marker count 决定压力相；平滑 volume 不结算库存 |

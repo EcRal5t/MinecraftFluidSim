@@ -17,6 +17,7 @@ public final class GranularContainerItem extends Item {
 	public static boolean isEmpty(ItemStack stack) {
 		return stack.getItem() instanceof GranularContainerItem
 				&& stack.get(MmmComponents.GRANULAR_CONTENTS) == null
+				&& stack.get(MmmComponents.PROFILE_FINGERPRINT) == null
 				&& !ContainerItemStacks.hasLiquidComponents(stack);
 	}
 
@@ -56,5 +57,8 @@ public final class GranularContainerItem extends Item {
 			if (group.reactive()) tooltip.accept(Component.translatable("item.mmm.granular_container.reactive",
 					group.composition().size()).withStyle(ChatFormatting.DARK_GRAY));
 		}
+		String profile = ContainerItemStacks.profileFingerprint(stack);
+		if (profile != null) tooltip.accept(Component.translatable("item.mmm.container.profile",
+				profile.substring(0, 12)).withStyle(ChatFormatting.DARK_GRAY));
 	}
 }

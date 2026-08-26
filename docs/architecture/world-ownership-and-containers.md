@@ -65,6 +65,8 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 
 item fingerprint 编码实际可结算的整组数据，而非仅 item id：kind、typed amount、stable mixture/chemical/granular contents、raw kg mass bits、可选 ThermalContents 以及其 registry/underlying hash。`ContainerTransferJournal` 只保存这一数据，`ContainerTransferItems` 独占 fingerprint 与 `ItemStack` 的双向映射。空桶、部分桶、材料桶、化学桶和颗粒容器是不同 shape；shape 之间缺字段或同时出现冲突 component 都拒绝。
 
+已装填的材料桶、化学桶和颗粒容器同时携带创建它的 world capability profile fingerprint；该 identity 是 actual inventory truth 的一部分，并随 before/after fingerprint 写入 WAL。只有 fingerprint 与目标服务的 committed profile 完全相同才能插入或恢复，否则保留证据并以 `FOREIGN_PROFILE` 拒绝。空容器不绑定 profile，可在当前世界装取后获得当前 profile；创造 source descriptor 也不绑定 profile，其临时 actual settlement 由服务端绑定当前 profile。
+
 液体抽取允许生成不足 1 BV 的 partial item；放入已有部分桶时仍按实际剩余容量规划。`FluidMixture`、`ChemicalContents`、`GranularContents` 和 `ThermalContents` 都有自己的规范编码与总账，item component 只是这些真值的载体。
 
 ## 玩家与发射器路由

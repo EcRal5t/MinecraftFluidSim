@@ -59,6 +59,7 @@ final class CreativeSourceCatalog {
 					material.id(), LIQUID_AMOUNT, material.referenceDensity())));
 		}
 		ItemStack stack = ContainerItemStacks.toStack(mixture);
+		ContainerItemStacks.bindProfile(stack, service.worldCapabilityProfile().profileFingerprint());
 		service.attachLiquidThermalContents(stack, temperature(descriptor));
 		return new Resolved(Kind.LIQUID, stack, LIQUID_AMOUNT);
 	}
@@ -91,6 +92,7 @@ final class CreativeSourceCatalog {
 		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
 				carrier.id(), false, 1.0, mass, mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry))));
 		ItemStack stack = ContainerItemStacks.toStack(ChemicalContents.fromLedger(ledger, registry, LIQUID_AMOUNT));
+		ContainerItemStacks.bindProfile(stack, service.worldCapabilityProfile().profileFingerprint());
 		service.attachLiquidThermalContents(stack, temperature(descriptor));
 		return new Resolved(Kind.LIQUID, stack, LIQUID_AMOUNT);
 	}
@@ -111,7 +113,9 @@ final class CreativeSourceCatalog {
 				material.id(), GRANULAR_AMOUNT, material.referenceDensity(), null)));
 		GranularContents contents = GranularContents.fromLedger(ledger, registry,
 				service.chemistryFeatureEnabled() ? service.chemicalRegistry() : null);
-		return new Resolved(Kind.GRANULAR, ContainerItemStacks.toStack(contents), GRANULAR_AMOUNT);
+		ItemStack stack = ContainerItemStacks.toStack(contents);
+		ContainerItemStacks.bindProfile(stack, service.worldCapabilityProfile().profileFingerprint());
+		return new Resolved(Kind.GRANULAR, stack, GRANULAR_AMOUNT);
 	}
 
 	private static void require(CreativeSourceDescriptor descriptor, long amount) {

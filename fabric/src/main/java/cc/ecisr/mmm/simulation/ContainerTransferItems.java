@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.item.ContainerItemStacks;
+import cc.ecisr.mmm.item.CreativeSourceItem;
 import cc.ecisr.mmm.item.GranularContainerItem;
 import cc.ecisr.mmm.item.MaterialBucketItem;
 import cc.ecisr.mmm.item.MmmComponents;
@@ -10,6 +11,7 @@ import cc.ecisr.mmm.transfer.ChemicalContents;
 import cc.ecisr.mmm.transfer.ContainerTransferJournal;
 import cc.ecisr.mmm.transfer.FluidMixture;
 import cc.ecisr.mmm.transfer.GranularContents;
+import cc.ecisr.mmm.transfer.CreativeSourceDescriptor;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
@@ -33,6 +35,13 @@ final class ContainerTransferItems {
 		}
 		if (stack.getItem() instanceof MaterialBucketItem) return materialFingerprint(stack);
 		if (stack.getItem() instanceof GranularContainerItem) return granularFingerprint(stack);
+		if (stack.getItem() instanceof CreativeSourceItem) {
+			CreativeSourceDescriptor descriptor = CreativeSourceItem.descriptor(stack);
+			if (descriptor == null) throw new IllegalArgumentException("Creative source descriptor is invalid");
+			return new ContainerTransferJournal.ItemFingerprint(
+					ContainerTransferJournal.ItemKind.CREATIVE_SOURCE, -1L, -1L,
+					descriptor.encode(), -1L, null, null);
+		}
 		throw new IllegalArgumentException("Unsupported container item for transfer WAL: " + stack.getItem());
 	}
 
@@ -46,7 +55,11 @@ final class ContainerTransferItems {
 			case CHEMICAL_BUCKET -> chemicalStack(snapshot);
 			case EMPTY_GRANULAR_CONTAINER -> new ItemStack(MmmItems.GRANULAR_CONTAINER);
 			case GRANULAR_CONTAINER -> granularStack(snapshot);
+			case CREATIVE_SOURCE -> CreativeSourceItem.stack(CreativeSourceDescriptor.decode(snapshot.contents()));
 		};
+		if (snapshot.profileFingerprint() != null) {
+			stack.set(MmmComponents.PROFILE_FINGERPRINT, snapshot.profileFingerprint());
+		}
 		if (snapshot.thermalContents() != null) {
 			stack.set(MmmComponents.THERMAL_CONTENTS, snapshot.thermalContents());
 			ContainerItemStacks.thermalContents(stack);
@@ -69,17 +82,16 @@ final class ContainerTransferItems {
 					|| persistedMass != Double.doubleToRawLongBits(contents.totalMass())) {
 				throw new IllegalArgumentException("Chemical bucket has conflicting or mismatched ledgers");
 			}
-			return withThermal(stack, new ContainerTransferJournal.ItemFingerprint(
-					ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, nanos, chemicalEncoded, persistedMass));
+			return withThermal(stack, actualFingerprint(stack, ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET,
+					nanos, -1L, chemicalEncoded, persistedMass));
 		}
 		FluidMixture mixture = MaterialBucketItem.mixture(stack);
 		double mass = MaterialBucketItem.mass(stack);
 		if (nanos <= 0L || mixture == null || !(mass > 0.0)) {
 			throw new IllegalArgumentException("Material bucket has no valid volume/material/mass ledger");
 		}
-		return withThermal(stack, new ContainerTransferJournal.ItemFingerprint(
-				ContainerTransferJournal.ItemKind.MATERIAL_BUCKET, nanos, mixture.encode(),
-				Double.doubleToRawLongBits(mass)));
+		return withThermal(stack, actualFingerprint(stack, ContainerTransferJournal.ItemKind.MATERIAL_BUCKET,
+				nanos, -1L, mixture.encode(), Double.doubleToRawLongBits(mass)));
 	}
 
 	private static ContainerTransferJournal.ItemFingerprint granularFingerprint(ItemStack stack) {
@@ -90,9 +102,16 @@ final class ContainerTransferItems {
 		if (contents == null) {
 			throw new IllegalArgumentException("Granular container has invalid or conflicting contents");
 		}
-		return withThermal(stack, new ContainerTransferJournal.ItemFingerprint(
-				ContainerTransferJournal.ItemKind.GRANULAR_CONTAINER, -1L, contents.totalSolidVolumeSvq(),
-				contents.encode(), Double.doubleToRawLongBits(contents.totalMass())));
+		return withThermal(stack, actualFingerprint(stack, ContainerTransferJournal.ItemKind.GRANULAR_CONTAINER,
+				-1L, contents.totalSolidVolumeSvq(), contents.encode(), Double.doubleToRawLongBits(contents.totalMass())));
+	}
+
+	private static ContainerTransferJournal.ItemFingerprint actualFingerprint(
+			ItemStack stack, ContainerTransferJournal.ItemKind kind, long nanos, long svq, String contents, long massBits
+	) {
+		String profile = ContainerItemStacks.profileFingerprint(stack);
+		if (profile == null) throw new IllegalArgumentException("Filled typed container lacks world profile identity");
+		return new ContainerTransferJournal.ItemFingerprint(kind, nanos, svq, contents, massBits, null, profile);
 	}
 
 	private static ContainerTransferJournal.ItemFingerprint withThermal(
@@ -102,7 +121,7 @@ final class ContainerTransferItems {
 		if (encoded == null) return base;
 		ContainerItemStacks.thermalContents(stack);
 		return new ContainerTransferJournal.ItemFingerprint(base.kind(), base.nanos(), base.solidVolumeSvq(),
-				base.contents(), base.massBits(), encoded);
+				base.contents(), base.massBits(), encoded, base.profileFingerprint());
 	}
 
 	private static ContainerTransferJournal.ItemFingerprint snapshot(ContainerTransferJournal.ItemKind kind) {

@@ -344,6 +344,7 @@ root.putLong(prefix + "Nanos", item.nanos());
 root.putLong(prefix + "SolidVolumeSvq", item.solidVolumeSvq());
 if (item.contents() != null) root.putString(prefix + "MaterialId", item.contents());
 root.putLong(prefix + "MassBits", item.massBits());
+if (item.profileFingerprint() != null) root.putString(prefix + "ProfileFingerprint", item.profileFingerprint());
 if (layout == Layout.THERMAL && item.thermalContents() != null) {
 root.putString(prefix + "ThermalContents", item.thermalContents());
 }
@@ -359,6 +360,7 @@ long solidVolumeSvq = root.getLongOr(prefix + "SolidVolumeSvq", -1L);
 String materialId = root.getStringOr(prefix + "MaterialId", null);
 requireType(root, prefix + "MassBits", Tag.TAG_LONG);
 long massBits = root.getLongOr(prefix + "MassBits", -1L);
+String profileFingerprint = root.getStringOr(prefix + "ProfileFingerprint", null);
 String thermalContents = null;
 if (layout == Layout.THERMAL) thermalContents = root.getStringOr(prefix + "ThermalContents", null);
 else if (root.get(prefix + "ThermalContents") != null) {
@@ -374,6 +376,7 @@ double mass = Double.longBitsToDouble(massBits);
 if (materialId == null || nanos <= 0L
 || nanos > cc.ecisr.mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK
 || solidVolumeSvq != -1L
+|| profileFingerprint == null || !profileFingerprint.matches("[0-9a-f]{64}")
 || !(Double.isFinite(mass) && mass > 0.0)) {
 throw new IOException(prefix + " material bucket fingerprint is invalid");
 }
@@ -388,6 +391,7 @@ throw new IOException(prefix + " material bucket mixture is invalid", invalidMix
 }
 } else if (kind == ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET) {
 try {
+if (profileFingerprint == null || !profileFingerprint.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("profile");
 cc.ecisr.mmm.transfer.ChemicalContents contents = cc.ecisr.mmm.transfer.ChemicalContents.decode(materialId);
 if (contents.totalVolumeNanos() != nanos || Double.doubleToRawLongBits(contents.totalMass()) != massBits
 || solidVolumeSvq != -1L) {
@@ -398,6 +402,7 @@ throw new IOException(prefix + " chemical bucket fingerprint is invalid", invali
 }
 } else if (kind == ContainerTransferJournal.ItemKind.GRANULAR_CONTAINER) {
 try {
+if (profileFingerprint == null || !profileFingerprint.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("profile");
 cc.ecisr.mmm.transfer.GranularContents contents = cc.ecisr.mmm.transfer.GranularContents.decode(materialId);
 if (contents.totalSolidVolumeSvq() != solidVolumeSvq
 || Double.doubleToRawLongBits(contents.totalMass()) != massBits || nanos != -1L) {
@@ -406,11 +411,18 @@ throw new IllegalArgumentException("granular totals disagree with fingerprint");
 } catch (RuntimeException invalidGranular) {
 throw new IOException(prefix + " granular container fingerprint is invalid", invalidGranular);
 }
-} else if (materialId != null || nanos != -1L || solidVolumeSvq != -1L || massBits != -1L) {
+} else if (kind == ContainerTransferJournal.ItemKind.CREATIVE_SOURCE) {
+try {
+cc.ecisr.mmm.transfer.CreativeSourceDescriptor.decode(materialId);
+if (nanos != -1L || solidVolumeSvq != -1L || massBits != -1L || profileFingerprint != null) throw new IllegalArgumentException("inventory fields");
+} catch (RuntimeException invalidSource) {
+throw new IOException(prefix + " creative source fingerprint is invalid", invalidSource);
+}
+} else if (materialId != null || nanos != -1L || solidVolumeSvq != -1L || massBits != -1L || profileFingerprint != null) {
 throw new IOException(prefix + " non-material bucket must not carry material id or nanovolume");
 }
 ContainerTransferJournal.ItemFingerprint result = new ContainerTransferJournal.ItemFingerprint(
-kind, nanos, solidVolumeSvq, materialId, massBits, thermalContents);
+kind, nanos, solidVolumeSvq, materialId, massBits, thermalContents, profileFingerprint);
 if (thermalContents != null) {
 try {
 result.validateThermalRegistry(cc.ecisr.mmm.transfer.ThermalContents.decode(thermalContents).registryFingerprint());
@@ -474,6 +486,7 @@ allowed.add(prefix + "Nanos");
 allowed.add(prefix + "SolidVolumeSvq");
 allowed.add(prefix + "MassBits");
 if (item.contents() != null) allowed.add(prefix + "MaterialId");
+if (item.profileFingerprint() != null) allowed.add(prefix + "ProfileFingerprint");
 if (layout == Layout.THERMAL && item.thermalContents() != null) allowed.add(prefix + "ThermalContents");
 }
 
@@ -520,11 +533,12 @@ long afterMaterial = materialVolume(journal.afterItem());
 boolean prepared = journal.phase() == ContainerTransferJournal.Phase.PREPARED;
 boolean valid;
 if (journal.operation() == ContainerTransferJournal.Operation.INSERT) {
+boolean creative = creativeSourceInsertion(journal, false);
 boolean pure = beforePure >= amount && beforePure > 0L
 && (prepared || afterPure == beforePure - amount || journal.afterItem().equals(journal.beforeItem()));
 boolean material = beforeMaterial >= amount && beforeMaterial > 0L
 && (prepared || afterMaterial == beforeMaterial - amount || journal.afterItem().equals(journal.beforeItem()));
-valid = pure || material;
+valid = creative || pure || material;
 } else {
 boolean pure = beforePure >= 0L && beforePure <= bucket - amount
 && (prepared || afterPure == beforePure + amount);
@@ -551,6 +565,7 @@ journal.validateThermalRegistry(transfer.registryFingerprint());
 } catch (RuntimeException invalidThermal) {
 throw new IOException("Container transfer thermal identity is invalid", invalidThermal);
 }
+if (creativeSourceInsertion(journal, false)) return;
 if (journal.phase() == ContainerTransferJournal.Phase.PREPARED) {
 if (journal.operation() == ContainerTransferJournal.Operation.INSERT && !beforeThermal) {
 throw new IOException("Prepared thermal insertion has no source item energy");
@@ -592,7 +607,7 @@ long after = granularVolume(journal.afterItem());
 boolean prepared = journal.phase() == ContainerTransferJournal.Phase.PREPARED;
 boolean valid;
 if (journal.operation() == ContainerTransferJournal.Operation.INSERT) {
-valid = before == amount
+valid = creativeSourceInsertion(journal, true) || before == amount
 && (prepared || after == 0L || journal.afterItem().equals(journal.beforeItem()));
 } else {
 valid = before == 0L && (prepared || after == amount);
@@ -603,13 +618,26 @@ throw new IOException("Container transfer item delta does not match " + journal.
 }
 }
 
+private static boolean creativeSourceInsertion(ContainerTransferJournal journal, boolean granular) {
+if (journal.operation() != ContainerTransferJournal.Operation.INSERT
+|| journal.beforeItem().kind() != ContainerTransferJournal.ItemKind.CREATIVE_SOURCE
+|| !journal.beforeItem().equals(journal.afterItem())) return false;
+cc.ecisr.mmm.transfer.CreativeSourceDescriptor descriptor =
+cc.ecisr.mmm.transfer.CreativeSourceDescriptor.decode(journal.beforeItem().contents());
+boolean templateGranular = descriptor.templateStableId().startsWith("mmm:source/granular/");
+boolean templateLiquid = descriptor.templateStableId().startsWith("mmm:source/material/")
+|| descriptor.templateStableId().startsWith("mmm:source/reagent/");
+long amount = granular ? journal.solidVolumeSvq() : journal.volumeNanos();
+return (granular ? templateGranular : templateLiquid) && descriptor.requestedTypedAmount() == amount;
+}
+
 private static long pureVolume(ContainerTransferJournal.ItemFingerprint item) {
 return switch (item.kind()) {
 case BUCKET -> 0L;
 case WATER_BUCKET -> cc.ecisr.mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK;
 case PARTIAL -> item.nanos();
 case EMPTY_MATERIAL_BUCKET, MATERIAL_BUCKET, CHEMICAL_BUCKET,
-EMPTY_GRANULAR_CONTAINER, GRANULAR_CONTAINER -> -1L;
+EMPTY_GRANULAR_CONTAINER, GRANULAR_CONTAINER, CREATIVE_SOURCE -> -1L;
 };
 }
 
@@ -617,7 +645,7 @@ private static long materialVolume(ContainerTransferJournal.ItemFingerprint item
 return switch (item.kind()) {
 case EMPTY_MATERIAL_BUCKET -> 0L;
 case MATERIAL_BUCKET, CHEMICAL_BUCKET -> item.nanos();
-case BUCKET, WATER_BUCKET, PARTIAL, EMPTY_GRANULAR_CONTAINER, GRANULAR_CONTAINER -> -1L;
+case BUCKET, WATER_BUCKET, PARTIAL, EMPTY_GRANULAR_CONTAINER, GRANULAR_CONTAINER, CREATIVE_SOURCE -> -1L;
 };
 }
 
@@ -625,7 +653,7 @@ private static long granularVolume(ContainerTransferJournal.ItemFingerprint item
 return switch (item.kind()) {
 case EMPTY_GRANULAR_CONTAINER -> 0L;
 case GRANULAR_CONTAINER -> item.solidVolumeSvq();
-case BUCKET, WATER_BUCKET, PARTIAL, EMPTY_MATERIAL_BUCKET, MATERIAL_BUCKET, CHEMICAL_BUCKET -> -1L;
+case BUCKET, WATER_BUCKET, PARTIAL, EMPTY_MATERIAL_BUCKET, MATERIAL_BUCKET, CHEMICAL_BUCKET, CREATIVE_SOURCE -> -1L;
 };
 }
 
@@ -686,6 +714,7 @@ case MATERIAL_BUCKET -> "MATERIAL_BUCKET";
 case CHEMICAL_BUCKET -> "CHEMICAL_BUCKET";
 case EMPTY_GRANULAR_CONTAINER -> "EMPTY_GRANULAR_CONTAINER";
 case GRANULAR_CONTAINER -> "GRANULAR_CONTAINER";
+case CREATIVE_SOURCE -> "CREATIVE_SOURCE";
 };
 }
 
@@ -699,6 +728,7 @@ case "MATERIAL_BUCKET" -> ContainerTransferJournal.ItemKind.MATERIAL_BUCKET;
 case "CHEMICAL_BUCKET" -> ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET;
 case "EMPTY_GRANULAR_CONTAINER" -> ContainerTransferJournal.ItemKind.EMPTY_GRANULAR_CONTAINER;
 case "GRANULAR_CONTAINER" -> ContainerTransferJournal.ItemKind.GRANULAR_CONTAINER;
+case "CREATIVE_SOURCE" -> ContainerTransferJournal.ItemKind.CREATIVE_SOURCE;
 default -> throw new IOException("Unknown container transfer item kind: " + name);
 };
 }
