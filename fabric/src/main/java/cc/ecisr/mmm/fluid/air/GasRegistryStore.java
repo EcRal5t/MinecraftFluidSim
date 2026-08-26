@@ -37,21 +37,21 @@ public final class GasRegistryStore {
 		if (definitions == null) throw new IllegalArgumentException("Gas registry definitions are missing");
 		validateLayout(); Path target = registryPath();
 		if (Files.exists(target)) {
-			GasRegistry authoritative = read(target);
+			GasRegistry authoritative = readSnapshot(target);
 			return new LoadResult(authoritative, !authoritative.fingerprint().equals(definitions.fingerprint()), false);
 		}
 		Path temporary = temporaryPath();
 		DurableFileOperations.createDirectories(directory);
 		if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
 		try {
-			NbtIo.writeCompressed(encode(definitions), temporary); force(temporary);
-			GasRegistry reread = read(temporary);
+			writeSnapshot(temporary, definitions); force(temporary);
+			GasRegistry reread = readSnapshot(temporary);
 			if (!reread.fingerprint().equals(definitions.fingerprint())) {
 				throw new IOException("Staged gas registry did not read back identically");
 			}
 			Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
 			DurableFileOperations.forceDirectory(directory);
-			return new LoadResult(read(target), false, true);
+			return new LoadResult(readSnapshot(target), false, true);
 		} catch (IOException failure) {
 			try {
 				if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
@@ -63,14 +63,20 @@ public final class GasRegistryStore {
 	public GasRegistry read() throws IOException {
 		validateLayout();
 		if (!exists()) throw new IOException("Gas registry snapshot is missing at " + registryPath());
-		return read(registryPath());
+		return readSnapshot(registryPath());
 	}
 
 	public boolean exists() { return Files.exists(registryPath()); }
 	public Path registryPath() { return directory.resolve("registry.nbt"); }
 	private Path temporaryPath() { return directory.resolve("registry.nbt.tmp"); }
 
-	private GasRegistry read(Path path) throws IOException {
+	public static void writeSnapshot(Path path, GasRegistry registry) throws IOException {
+		if (path == null || registry == null) throw new IllegalArgumentException("Gas registry snapshot write is incomplete");
+		NbtIo.writeCompressed(encode(registry), path);
+	}
+
+	public static GasRegistry readSnapshot(Path path) throws IOException {
+		if (path == null) throw new IllegalArgumentException("Gas registry snapshot path is missing");
 		CompoundTag root;
 		try { root = NbtIo.readCompressed(path, NbtAccounter.create(MAX_BYTES)); }
 		catch (RuntimeException invalid) { throw new IOException("Unreadable gas registry snapshot " + path, invalid); }
