@@ -1,6 +1,9 @@
 package cc.ecisr.mmm.worldprofile;
 
 import cc.ecisr.mmm.simulation.persistence.WorldCapabilityProfileCodec;
+import cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleHead;
+import cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleManifest;
+import cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleMetadataCodec;
 import net.minecraft.nbt.CompoundTag;
 
 import java.io.IOException;
@@ -24,6 +27,7 @@ public final class WorldCapabilityProfileValidation {
 		restoreRejectsTampering();
 		canonicalBytesExcludeProfileFingerprint();
 		strictNbtCodecRoundTripsAndRejectsTampering();
+		bundleMetadataCodecsBindTheOnlyCommitPoint();
 		System.out.println("World capability profile validation passed");
 	}
 
@@ -202,6 +206,75 @@ public final class WorldCapabilityProfileValidation {
 				}
 			} catch (IOException cleanup) {
 				throw new AssertionError("world capability profile codec cleanup failed", cleanup);
+			}
+		}
+	}
+
+	private static void bundleMetadataCodecsBindTheOnlyCommitPoint() {
+		WorldCapabilityProfile profile = WorldCapabilityProfile.of(
+				EnumSet.allOf(WorldCapability.class), bindings(RegistryKind.values()));
+		java.util.UUID transaction = java.util.UUID.fromString("39b7a5b0-e0c1-47b9-9cf2-53a7d93e7386");
+		ArrayList<WorldCapabilityBundleManifest.FileEntry> files = new ArrayList<>();
+		for (int index = 0; index < WorldCapabilityBundleManifest.REQUIRED_FILES.size(); index++) {
+			files.add(new WorldCapabilityBundleManifest.FileEntry(
+					WorldCapabilityBundleManifest.REQUIRED_FILES.get(index), index + 1L,
+					Integer.toHexString(index + 1).repeat(64).substring(0, 64)));
+		}
+		WorldCapabilityBundleManifest manifest = new WorldCapabilityBundleManifest(
+				WorldCapabilityBundleManifest.SCHEMA, 1L, transaction,
+				profile.profileFingerprint(), profile.aggregateFingerprint(), files);
+		String manifestChecksum = "a".repeat(64);
+		WorldCapabilityBundleHead head = new WorldCapabilityBundleHead(WorldCapabilityBundleHead.SCHEMA,
+				1L, transaction, profile.profileFingerprint(), profile.aggregateFingerprint(), manifestChecksum);
+		head.requireManifest(manifest, manifestChecksum);
+
+		java.nio.file.Path root = null;
+		try {
+			root = java.nio.file.Files.createTempDirectory("mmm-world-bundle-metadata-");
+			java.nio.file.Path manifestPath = root.resolve("manifest.nbt");
+			java.nio.file.Path headPath = root.resolve("HEAD.nbt");
+			WorldCapabilityBundleMetadataCodec.writeManifest(manifestPath, manifest);
+			WorldCapabilityBundleMetadataCodec.writeHead(headPath, head);
+			require(WorldCapabilityBundleMetadataCodec.readManifest(manifestPath).equals(manifest),
+					"bundle manifest did not round-trip through strict NBT");
+			require(WorldCapabilityBundleMetadataCodec.readHead(headPath).equals(head),
+					"bundle HEAD did not round-trip through strict NBT");
+
+			CompoundTag extraManifest = WorldCapabilityBundleMetadataCodec.encodeManifest(manifest);
+			extraManifest.putString("Unknown", "reject");
+			expectIo(() -> WorldCapabilityBundleMetadataCodec.decodeManifest(extraManifest),
+					"unknown bundle manifest field was ignored");
+
+			CompoundTag reorderedManifest = WorldCapabilityBundleMetadataCodec.encodeManifest(manifest);
+			var encodedFiles = reorderedManifest.getListOrEmpty("Files");
+			var firstFile = encodedFiles.remove(0);
+			encodedFiles.add(firstFile);
+			expectIo(() -> WorldCapabilityBundleMetadataCodec.decodeManifest(reorderedManifest),
+					"non-canonical bundle file order was accepted");
+
+			CompoundTag unknownFile = WorldCapabilityBundleMetadataCodec.encodeManifest(manifest);
+			unknownFile.getListOrEmpty("Files").getCompoundOrEmpty(0).putString("Name", "foreign.nbt");
+			expectIo(() -> WorldCapabilityBundleMetadataCodec.decodeManifest(unknownFile),
+					"unknown bundle member was accepted");
+
+			CompoundTag badHeadType = WorldCapabilityBundleMetadataCodec.encodeHead(head);
+			badHeadType.putString("Generation", "one");
+			expectIo(() -> WorldCapabilityBundleMetadataCodec.decodeHead(badHeadType),
+					"wrong bundle HEAD field type was accepted");
+
+			expectIllegal("does not bind", () -> head.requireManifest(manifest, "b".repeat(64)));
+			expectIllegal("file table is incomplete", () -> new WorldCapabilityBundleManifest(
+					WorldCapabilityBundleManifest.SCHEMA, 1L, transaction, profile.profileFingerprint(),
+					profile.aggregateFingerprint(), files.subList(0, files.size() - 1)));
+		} catch (IOException failure) {
+			throw new AssertionError("world capability bundle metadata validation failed", failure);
+		} finally {
+			if (root != null) try (var paths = java.nio.file.Files.walk(root)) {
+				for (java.nio.file.Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+					java.nio.file.Files.deleteIfExists(path);
+				}
+			} catch (IOException cleanup) {
+				throw new AssertionError("world capability bundle metadata cleanup failed", cleanup);
 			}
 		}
 	}
