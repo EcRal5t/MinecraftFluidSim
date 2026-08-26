@@ -2,7 +2,7 @@
 
 ## 当前稳定范围
 
-当前冻结同步只读 Query API，以及只发布 durable container completion 的 committed-event API。loader-neutral 契约位于 `api` 模块的 `cc.ecisr.mmm.api.query`、`cc.ecisr.mmm.api.event` 与共享 typed quantity 所在的 `cc.ecisr.mmm.api.transfer`；Fabric 调用方分别通过 `MmmFabricApi.query(MinecraftServer)` 和 `MmmFabricApi.events(MinecraftServer)` 发现实现。Fabric 已提供可选 Jade 观察适配，但它只是 Query API 的展示消费者，不扩展稳定契约。受控 transfer、其他 commit event、WAILA/HWYLA 展示适配和其他 loader 的发现桥仍属于产品路线，不能从只读查询或事件通知推断写入权限。
+当前冻结同步只读 Query API，以及只发布 durable container completion 的 committed-event API。loader-neutral 契约位于 `api` 模块的 `cc.ecisr.mmm.api.query`、`cc.ecisr.mmm.api.event` 与共享 typed quantity 所在的 `cc.ecisr.mmm.api.transfer`；Fabric 调用方分别通过 `MmmFabricApi.query(MinecraftServer)` 和 `MmmFabricApi.events(MinecraftServer)` 发现实现。Fabric 已提供可选 Jade 观察适配和主 Mod field probe，但它们都只是 Query API 的展示消费者，不扩展稳定契约。受控 transfer、其他 commit event、WAILA/HWYLA 展示适配和其他 loader 的发现桥仍属于产品路线，不能从只读查询或事件通知推断写入权限。
 
 `MmmQueryApi.UNIT_SYSTEM = "SI+mmm-quanta"`。接口只依赖 JDK 类型，不返回 Minecraft 对象、runtime handle、solver array 或 live region/domain 引用。产品功能和 Java 类型使用语义名称；格式变化直接替换当前契约，不保留按数字区分的公开入口。
 
@@ -57,3 +57,5 @@ Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会�
 `core/.../transfer/` 已保存与 loader 无关的容器体积、逐材料质量、species/residual、颗粒组成、raw `U`、actor identity 和 journal 数据；Fabric 只负责 NBT 持久编码、Minecraft actor 收敛，以及由 `ContainerItemStacks` 映射 `ItemStack` component。它们是内部事务与未来 transfer adapter 的共享模型，不等同于已经开放写权限；公开 request/plan/commit 仍须先完成可跨重启解析并强制保存的外部 actor 协议。
 
 事件是易失通知，不是库存日志：服务器可能在删除 WAL 后、发布事件前退出，监听者也可能晚注册。漏失不能重放或反向驱动物理，消费者必须能从 Query API 恢复当前观察。checkpoint、ownership、phase transition 与安全暂停事件尚未冻结，不能用 container event 猜测这些提交。
+
+field probe 与 Jade 共用 `ShellFluidQuery`：服务端只查询命中壳面两侧紧邻的 world position，选择唯一声明 controller interior 的结果；两侧都声明 owner 时返回 `OVERLAP`，不按玩家朝向猜测。probe 文本由服务端从完整 `FluidQueryResult` 生成，以固定上限展示材料与 species，非 `OK` 只显示封闭 status 和可选 availability reason。该路径不加载 chunk、不唤醒 solver、不 checkpoint，也不从客户端 mesh 或方块外观反推库存。

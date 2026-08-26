@@ -45,6 +45,7 @@
 | 外部 Query API | `api/.../query/`、`FluidCellInventoryView.java`、`FabricFluidQueryApi.java`、`api/fabric/MmmFabricApi.java` | server-thread only；不加载、不唤醒、不建网格、不返回 live domain |
 | 外部 committed event | `api/.../event/`、`CommittedEventHub.java`、`api/fabric/MmmFabricApi.java` | 只在 durable commit 后发布；监听器异常隔离；事件不是库存日志 |
 | Jade 观察适配 | `fabric/src/main/java/cc/ecisr/mmm/compat/jade/`、`fabric/src/client/java/cc/ecisr/mmm/compat/jade/` | Jade 保持可选；服务端只调 Query API；展示摘要有界且不可回写；改依赖/API 后编译 main 与 client |
+| 主 Mod field probe | `item/FieldProbeItem.java`、`simulation/ShellFluidQuery.java` | 服务端壳面解析必须唯一；只消费 Query、固定条目上限；不得读取 mesh、加载或唤醒区域；最近门 `protocol` |
 | 命令审计 | `logging/` | UTF-8 观测；记录失败不能改变命令结果 |
 
 ## 高频定位

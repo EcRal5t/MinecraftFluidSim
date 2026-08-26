@@ -18,6 +18,8 @@ public final class MmmCreativeEntries {
 			entries.accept(MmmBlocks.FLUID_CONTROLLER);
 			entries.accept(MmmBlocks.THERMAL_RESERVOIR);
 		});
+		CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.TOOLS_AND_UTILITIES)
+				.register(entries -> entries.accept(MmmItems.FIELD_PROBE));
 		CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.INGREDIENTS).register(entries -> {
 			entries.accept(MmmItems.MATERIAL_BUCKET);
 			entries.accept(MmmItems.GRANULAR_CONTAINER);

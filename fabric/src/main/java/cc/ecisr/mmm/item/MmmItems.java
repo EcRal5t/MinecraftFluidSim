@@ -22,6 +22,8 @@ public final class MmmItems {
 			properties -> new GranularContainerItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 	public static final Item CREATIVE_SOURCE = register("creative_source",
 			properties -> new CreativeSourceItem(properties.stacksTo(1).useItemDescriptionPrefix()));
+	public static final Item FIELD_PROBE = register("field_probe",
+			properties -> new FieldProbeItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 	public static final Item CHEMICAL_INDICATOR = register("chemical_indicator",
 			properties -> new ChemicalIndicatorItem(properties.stacksTo(1).useItemDescriptionPrefix(), false));
 	public static final Item CHEMICAL_ERASER = register("chemical_eraser",
