@@ -1,0 +1,1 @@
+{"thermal_material":"mmm:copper_heat_exchanger","body_mass_kg":"16.0","initial_temperature_k":"293.15","ports":[{"id":"mmm:side_a","contact_group":"mmm:circuit_a","local_face":"NORTH","wall_thickness_m":"0.01","fluid_film_thickness_m":"0.01"},{"id":"mmm:side_b","contact_group":"mmm:circuit_b","local_face":"SOUTH","wall_thickness_m":"0.01","fluid_film_thickness_m":"0.01"}]}

@@ -17,6 +17,7 @@ public final class ThermalDefinitionCodec {
 	public static final String TRANSITIONS_PATH = "mmm/phase_transitions";
 	public static final String BOUNDARIES_PATH = "mmm/thermal_boundaries";
 	public static final String PAIRS_PATH = "mmm/gas_liquid_pairs";
+	public static final String DEVICES_PATH = "mmm/finite_thermal_devices";
 
 	private ThermalDefinitionCodec() { }
 
@@ -133,6 +134,32 @@ public final class ThermalDefinitionCodec {
 				finiteDouble(root, "maximum_liquid_concentration_mol_per_m3"),
 				finiteDouble(root, "liquid_diffusion_m2_per_s"), finiteDouble(root, "liquid_film_thickness_m"),
 				finiteDouble(root, "gas_resistance_s_per_m"));
+	}
+
+	public static FiniteThermalDeviceDefinition decodeFiniteDevice(String stableId, Reader input) {
+		JsonObject root = object(input);
+		requireOnly(root, "thermal_material", "body_mass_kg", "initial_temperature_k", "ports");
+		JsonElement portElement = required(root, "ports");
+		if (!portElement.isJsonArray()) throw new IllegalArgumentException("ports must be an array");
+		JsonArray array = portElement.getAsJsonArray();
+		if (array.isEmpty() || array.size() > ThermalLimits.MAX_FINITE_DEVICE_CONTACTS) {
+			throw new IllegalArgumentException("finite thermal device ports are empty or over budget");
+		}
+		ArrayList<FiniteThermalDeviceDefinition.Port> ports = new ArrayList<>(array.size());
+		for (JsonElement element : array) {
+			if (!element.isJsonObject()) throw new IllegalArgumentException("finite thermal port must be an object");
+			JsonObject port = element.getAsJsonObject();
+			requireOnly(port, "id", "contact_group", "local_face", "wall_thickness_m", "fluid_film_thickness_m");
+			FiniteThermalDeviceDefinition.LocalFace face;
+			try { face = FiniteThermalDeviceDefinition.LocalFace.valueOf(string(port, "local_face")); }
+			catch (IllegalArgumentException invalid) {
+				throw new IllegalArgumentException("Unknown finite thermal port local_face", invalid);
+			}
+			ports.add(new FiniteThermalDeviceDefinition.Port(string(port, "id"), string(port, "contact_group"), face,
+					finiteDouble(port, "wall_thickness_m"), finiteDouble(port, "fluid_film_thickness_m")));
+		}
+		return new FiniteThermalDeviceDefinition(stableId, string(root, "thermal_material"),
+				finiteDouble(root, "body_mass_kg"), finiteDouble(root, "initial_temperature_k"), ports);
 	}
 
 	private static JsonObject object(Reader input) {

@@ -23,6 +23,7 @@ public final class ThermalRegistry {
 	private final List<ThermalPhaseTransition> transitions;
 	private final List<ThermalBoundaryDefinition> boundaries;
 	private final List<GasLiquidSpeciesPair> gasLiquidPairs;
+	private final List<FiniteThermalDeviceDefinition> finiteDevices;
 	private final Map<String, Integer> materialHandles;
 	private final Map<String, Integer> transitionHandles;
 	private final Map<String, Integer> materialByCarrier;
@@ -39,6 +40,7 @@ public final class ThermalRegistry {
 			List<ThermalPhaseTransition> transitions,
 			List<ThermalBoundaryDefinition> boundaries,
 			List<GasLiquidSpeciesPair> gasLiquidPairs,
+			List<FiniteThermalDeviceDefinition> finiteDevices,
 			String chemicalRegistryFingerprint,
 			String granularRegistryFingerprint,
 			String gasRegistryFingerprint
@@ -51,6 +53,8 @@ public final class ThermalRegistry {
 		this.boundaries = canonicalUniqueOptional(boundaries, ThermalLimits.MAX_BOUNDARIES,
 				ThermalBoundaryDefinition::id, "thermal boundary");
 		this.gasLiquidPairs = canonicalPairs(gasLiquidPairs);
+		this.finiteDevices = canonicalUniqueOptional(finiteDevices, ThermalLimits.MAX_FINITE_DEVICE_TYPES,
+				FiniteThermalDeviceDefinition::id, "finite thermal device");
 		this.chemicalRegistryFingerprint = requireFingerprint(chemicalRegistryFingerprint, "chemical");
 		this.granularRegistryFingerprint = requireFingerprint(granularRegistryFingerprint, "granular");
 		this.gasRegistryFingerprint = requireFingerprint(gasRegistryFingerprint, "gas");
@@ -62,8 +66,23 @@ public final class ThermalRegistry {
 		validateTransitions();
 		validateBoundaries();
 		validateGasLiquidPairs();
+		validateFiniteDevices();
 		this.canonicalBytes = encodeCanonical();
 		this.fingerprint = sha256(canonicalBytes);
+	}
+
+	public ThermalRegistry(
+			List<ThermalMaterialDefinition> materials,
+			List<ThermalSpeciesOffset> speciesOffsets,
+			List<ThermalPhaseTransition> transitions,
+			List<ThermalBoundaryDefinition> boundaries,
+			List<GasLiquidSpeciesPair> gasLiquidPairs,
+			String chemicalRegistryFingerprint,
+			String granularRegistryFingerprint,
+			String gasRegistryFingerprint
+	) {
+		this(materials, speciesOffsets, transitions, boundaries, gasLiquidPairs, List.of(),
+				chemicalRegistryFingerprint, granularRegistryFingerprint, gasRegistryFingerprint);
 	}
 
 	public ThermalRegistry(
@@ -98,6 +117,7 @@ public final class ThermalRegistry {
 	public List<ThermalPhaseTransition> transitions() { return transitions; }
 	public List<ThermalBoundaryDefinition> boundaries() { return boundaries; }
 	public List<GasLiquidSpeciesPair> gasLiquidPairs() { return gasLiquidPairs; }
+	public List<FiniteThermalDeviceDefinition> finiteDevices() { return finiteDevices; }
 	public ThermalMaterialDefinition material(int handle) { return materials.get(requireHandle(handle, materials.size(), "material")); }
 	public ThermalPhaseTransition transition(int handle) { return transitions.get(requireHandle(handle, transitions.size(), "transition")); }
 	public int materialHandle(String id) { return requireStableHandle(materialHandles, id, "thermal material"); }
@@ -132,6 +152,28 @@ public final class ThermalRegistry {
 			if (pair.id().equals(id)) return pair;
 		}
 		throw new IllegalArgumentException("Unknown gas/liquid species pair " + id);
+	}
+
+	public FiniteThermalDeviceDefinition finiteDevice(String id) {
+		for (FiniteThermalDeviceDefinition device : finiteDevices) {
+			if (device.id().equals(id)) return device;
+		}
+		throw new IllegalArgumentException("Unknown finite thermal device " + id);
+	}
+
+	private void validateFiniteDevices() {
+		for (FiniteThermalDeviceDefinition device : finiteDevices) {
+			ThermalMaterialDefinition material = material(materialHandle(device.thermalMaterialId()));
+			if (material.carrierKind() != ThermalMaterialDefinition.CarrierKind.DEVICE
+					|| !material.carrierId().equals(device.id())) {
+				throw new IllegalArgumentException("Finite thermal device " + device.id()
+						+ " is not the carrier of its device material");
+			}
+			if (material.conductivityEuPerSecondMeterK() <= 0.0) {
+				throw new IllegalArgumentException("Finite thermal device material must conduct heat " + material.id());
+			}
+			material.specificHeatAt(device.initialTemperatureK());
+		}
 	}
 
 	private void validateGasLiquidPairs() {
@@ -260,6 +302,18 @@ public final class ThermalRegistry {
 				appendDouble(out, segment.minimumTemperatureK()); out.append(',');
 				appendDouble(out, segment.maximumTemperatureK()); out.append(',');
 				appendDouble(out, segment.specificHeatEuPerMuK()); out.append(';');
+			}
+			out.append('\n');
+		}
+		for (FiniteThermalDeviceDefinition device : finiteDevices) {
+			out.append("D|").append(device.id()).append('|').append(device.thermalMaterialId()).append('|');
+			appendDouble(out, device.bodyMassKilograms()); out.append('|');
+			appendDouble(out, device.initialTemperatureK()); out.append('|');
+			for (FiniteThermalDeviceDefinition.Port port : device.ports()) {
+				out.append(port.id()).append(',').append(port.contactGroupId()).append(',')
+						.append(port.localFace()).append(',');
+				appendDouble(out, port.wallThicknessMeters()); out.append(',');
+				appendDouble(out, port.fluidFilmThicknessMeters()); out.append(';');
 			}
 			out.append('\n');
 		}
