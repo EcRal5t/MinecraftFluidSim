@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
+import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.api.query.MmmQueryApi;
 import cc.ecisr.mmm.api.event.ContainerTransferCommittedEvent;
 import cc.ecisr.mmm.api.event.MmmEventApi;
@@ -427,7 +428,7 @@ public final class FluidSimulationService {
 	}
 
 	void lockContainerTransferRegion(FluidRegion region, String failure) {
-		region.setAvailabilityFailure(failure);
+		region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL, failure);
 	}
 
 	public void recoverContainerTransfers(MinecraftServer server) {
@@ -1604,10 +1605,12 @@ public final class FluidSimulationService {
 			ServerLevel level = server.getLevel(region.dimension());
 			if (level == null) {
 				if (hasPendingContainerTransfer(region.id())) {
-					region.setAvailabilityFailure("dimension is not loaded; unresolved container transfer WAL prevents unload checkpoint");
+					region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
+							"dimension is not loaded; unresolved container transfer WAL prevents unload checkpoint");
 					continue;
 				}
-				regionOperations.unloadForFailure(server, region, "dimension is not loaded", snapshots::sendRemoval);
+				regionOperations.unloadForFailure(server, region, RegionAvailabilityReason.CHUNK_MISSING,
+						"dimension is not loaded", snapshots::sendRemoval);
 				continue;
 			}
 			tickRegion(level, region);
@@ -1737,7 +1740,8 @@ public final class FluidSimulationService {
 
 	public boolean ensureRegionAvailable(ServerLevel level, FluidRegion region) {
 		if (hasPendingContainerTransfer(region.id())) {
-			region.setAvailabilityFailure("存在未完成容器转移 WAL；恢复完成后才能继续");
+			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
+					"存在未完成容器转移 WAL；恢复完成后才能继续");
 			return false;
 		}
 
@@ -2078,7 +2082,7 @@ public final class FluidSimulationService {
 				? "command"
 				: "controller " + footprint.controllerPosition().toShortString() + ", boundary "
 						+ footprint.boundaryBlocks().size() + ", chunks " + footprint.requiredChunks().size();
-		String availability = region.availabilityFailure() == null ? "ready" : "blocked: " + region.availabilityFailure();
+		String availability = region.availabilityDescription();
 		String gas = gasSummary(domain);
 		String thermal = thermalFeatureEnabled ? thermalSummary(region, domain) : "";
 		return String.format(

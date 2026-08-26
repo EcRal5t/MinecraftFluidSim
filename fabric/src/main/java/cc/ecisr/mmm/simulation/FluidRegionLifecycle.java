@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.api.RegionAvailabilityReason;
+
 import java.util.Objects;
 
 /** Pure scheduling state for one region; it never infers physical water from reconstructed fields. */
@@ -13,6 +15,7 @@ public final class FluidRegionLifecycle {
 
 	private State state = State.ACTIVE;
 	private boolean operatorPaused = true;
+	private RegionAvailabilityReason availabilityReason;
 	private String availabilityFailure;
 	private int quietCompletedSteps;
 
@@ -26,6 +29,10 @@ public final class FluidRegionLifecycle {
 
 	public String availabilityFailure() {
 		return availabilityFailure;
+	}
+
+	public RegionAvailabilityReason availabilityReason() {
+		return availabilityReason;
 	}
 
 	public int quietCompletedSteps() {
@@ -45,11 +52,17 @@ public final class FluidRegionLifecycle {
 
 	/** Availability blocks stepping without overwriting the player's persistent run/pause intent. */
 	public void blockAvailability(String failure) {
+		blockAvailability(RegionAvailabilityReason.NUMERICAL_PAUSE, failure);
+	}
+
+	public void blockAvailability(RegionAvailabilityReason reason, String failure) {
+		availabilityReason = Objects.requireNonNull(reason, "reason");
 		availabilityFailure = Objects.requireNonNull(failure, "failure");
 		quietCompletedSteps = 0;
 	}
 
 	public void clearAvailabilityBlock() {
+		availabilityReason = null;
 		availabilityFailure = null;
 	}
 
@@ -85,6 +98,7 @@ public final class FluidRegionLifecycle {
 	/** The caller must prove both publication and solver release before committing UNLOADED. */
 	boolean requestUnload(boolean completeCheckpointPublished, boolean liveSolverReleased) {
 		if (!completeCheckpointPublished || !liveSolverReleased) return false;
+		availabilityReason = null;
 		availabilityFailure = null;
 		quietCompletedSteps = 0;
 		state = State.UNLOADED;
@@ -93,6 +107,7 @@ public final class FluidRegionLifecycle {
 
 	void initializeUnloaded(boolean persistedOperatorPaused) {
 		operatorPaused = persistedOperatorPaused;
+		availabilityReason = null;
 		availabilityFailure = null;
 		quietCompletedSteps = 0;
 		state = State.UNLOADED;
@@ -102,6 +117,7 @@ public final class FluidRegionLifecycle {
 		if (state != State.UNLOADED) throw new IllegalStateException("Region is not unloaded");
 		if (resumeState == State.UNLOADED) throw new IllegalArgumentException("Resume state cannot be UNLOADED");
 		state = resumeState == State.HYDROSTATIC_SLEEP ? State.HYDROSTATIC_SLEEP : runningState(stepIntervalTicks);
+		availabilityReason = null;
 		availabilityFailure = null;
 		quietCompletedSteps = 0;
 	}

@@ -109,6 +109,8 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 
 新控制器在首次成功提交后直接进入运行态。玩家的暂停意图随 checkpoint 持久化；边界损坏、chunk 缺失或候选失败造成的 availability pause 不得覆盖该意图，条件恢复后按原意图继续。
 
+availability 对外只使用 JDK-only 的封闭 reason：`PROFILE_LOCKED`、`REGISTRY_MISMATCH`、`HEAD_INVALID`、`BOUNDARY_OPEN`、`CHUNK_MISSING`、`OVERLAP`、`BODY_OVERLAP`、`BUDGET`、`PENDING_WAL`、`PENDING_PHASE_WORK`、`GAS_NOT_EMPTY`、`FOREIGN_PROFILE`、`PERMISSION_DENIED`、`NUMERICAL_PAUSE` 和 `POLICY_DISABLED`。Query 返回 typed reason；日志和界面文本只是诊断，不参与恢复判断。合法 HEAD 即使暂时越过运行预算也保留 metadata reservation 并以 `BUDGET` 暂停，不能从 discovery 消失。
+
 调度和后端选择不得改变守恒结果。缺 chunk 或 controller 破损时不能把缺失区域当墙继续半步。
 
 ## 原子状态与失败模型

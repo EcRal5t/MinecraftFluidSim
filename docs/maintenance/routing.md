@@ -17,8 +17,8 @@
 | `/mmm` 命令 | `MmmCommands.java` | 状态操作留在服务层；完整输出写 transcript |
 | Minecraft 编排 | `fabric/.../simulation/FluidSimulationService.java`、`FluidWorldTargetResolver.java` | 服务层每域先过 availability；目标解析只读世界与区域，不提交事务；不把世界事务下沉到 solver |
 | 持久区域管理 | `FluidRegionOperations.java`、`FluidRegionPersistence.java` | checkpoint 成功后才释放；profile/layout/aggregate/material palette 必须精确匹配；不改写不匹配载荷 |
-| 区域身份与生命周期 | `FluidRegion.java`、`FluidRegionLifecycle.java`、`ThermalActivity.java` | UNLOADED 仍占预算；motion/thermal 调度不改变库存 |
-| 区域登记与预算 | `FluidRegionManager.java` | 完整 candidate 可只读预检预算/overlap；首个 HEAD 成功前不得登记；拒绝不替换现有域 |
+| 区域 identity/availability | `api/.../RegionAvailabilityReason.java`、`FluidRegion.java`、`FluidRegionLifecycle.java`、`ThermalActivity.java` | reason 封闭且可 Query；availability 不覆盖 operator intent；motion/thermal 调度不改变库存 |
+| 区域登记与预算 | `FluidRegionManager.java` | 完整 candidate 可只读预检预算/overlap；首个 HEAD 成功前不得登记；合法 committed metadata 即使越过运行预算也保留 reservation |
 | 世界运行策略 | `FluidServerConfig.java` | 只含 controller/worldbridge admission、quarantine 与运行预算；不得定义 inventory capability/layout |
 | world capability 启动/单提交点 | `simulation/persistence/WorldCapabilityStartup.java`、`WorldCapabilityBundleStore.java`、`WorldCapabilityLayoutResolver.java` | profile 与五 registry 同 slot、HEAD 最后；已有 HEAD 只从 slot 恢复；非 READY 不产生新权威数据 |
 | world-local registry snapshot codec | `MaterialRegistryStore.java`、`ChemicalRegistryStore.java`、`GranularRegistryStore.java`、`GasRegistryStore.java`、`ThermalRegistryStore.java`、`simulation/persistence/DurableFileOperations.java`、`StrictNbtFields.java` | 只由 bundle store 统一发布；compound 字段集合和类型必须精确；未知内容保留并锁定 |

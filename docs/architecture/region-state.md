@@ -61,7 +61,7 @@ manifest 是无需分配 solver 即可审计和预算 admission 的索引，保�
 - granular、gas、thermal、pending phase-work 等 manifest extension 与各自总账；
 - 覆盖上述规范编码的 manifest checksum。
 
-metadata discovery 只能相信已经通过 HEAD 绑定、manifest checksum 和结构预算的 manifest。它可以据此保留 UNLOADED 区域的 cell/marker 配额，但不能据此虚构 solver inventory。
+metadata discovery 只能相信已经通过 HEAD 绑定、manifest checksum 和结构预算的 manifest。它必须据此保留全部 UNLOADED 区域身份及 cell/marker reservation；当前运行预算不足只产生 `BUDGET` availability，不得丢弃已提交 metadata。提高预算并重启后重新 admission。metadata 不能据此虚构 solver inventory。
 
 ### Section
 

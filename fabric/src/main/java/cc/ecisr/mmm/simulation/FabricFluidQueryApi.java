@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.api.StableId;
+import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.api.query.FluidCellObservation;
 import cc.ecisr.mmm.api.query.FluidQueryRequest;
 import cc.ecisr.mmm.api.query.FluidQueryResult;
@@ -32,7 +33,7 @@ final class FabricFluidQueryApi implements MmmQueryApi {
 				|| !Double.isFinite(request.worldZMetres())) {
 			return absent(FluidQueryStatus.INVALID_REQUEST, "invalid dimension id or world-space coordinate");
 		}
-		if (!capabilityReadable) return absent(FluidQueryStatus.REGION_UNAVAILABLE,
+		if (!capabilityReadable) return unavailable(RegionAvailabilityReason.PROFILE_LOCKED,
 				"world capability profile is not readable");
 		FluidRegion identityMatch = null;
 		FluidRegion owner = null;
@@ -55,7 +56,7 @@ final class FabricFluidQueryApi implements MmmQueryApi {
 			}
 			owner = region;
 		}
-		if (ambiguousOwner) return absent(FluidQueryStatus.REGION_UNAVAILABLE,
+		if (ambiguousOwner) return unavailable(RegionAvailabilityReason.OVERLAP,
 				"multiple registered regions claim the requested point");
 		if (owner == null) {
 			if (outsideInterior) return absent(FluidQueryStatus.OUTSIDE_INTERIOR,
@@ -63,7 +64,7 @@ final class FabricFluidQueryApi implements MmmQueryApi {
 			return absent(FluidQueryStatus.NO_REGION, identityMatch == null
 					? "no matching region identity/dimension" : "point is outside the matching region");
 		}
-		if (owner.availabilityFailure() != null) return absent(FluidQueryStatus.REGION_UNAVAILABLE,
+		if (owner.availabilityFailure() != null) return unavailable(owner.availabilityReason(),
 				"matching region is unavailable: " + owner.availabilityFailure());
 		if (!owner.solverLoaded()) return absent(FluidQueryStatus.REGION_NOT_LOADED,
 				"matching region exists but its solver is unloaded");
@@ -104,5 +105,9 @@ final class FabricFluidQueryApi implements MmmQueryApi {
 
 	private static FluidQueryResult absent(FluidQueryStatus status, String detail) {
 		return FluidQueryResult.absent(status, detail);
+	}
+
+	private static FluidQueryResult unavailable(RegionAvailabilityReason reason, String detail) {
+		return FluidQueryResult.unavailable(reason, detail);
 	}
 }

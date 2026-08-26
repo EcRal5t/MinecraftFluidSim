@@ -1,5 +1,8 @@
 package cc.ecisr.mmm.network;
 
+import cc.ecisr.mmm.api.RegionAvailabilityReason;
+import cc.ecisr.mmm.api.query.FluidQueryResult;
+import cc.ecisr.mmm.api.query.FluidQueryStatus;
 import cc.ecisr.mmm.fluid.FluidMaterialRenderSnapshot;
 import cc.ecisr.mmm.fluid.FluidMaterialSurfaceMesher;
 import cc.ecisr.mmm.granular.GranularDisplaySnapshot;
@@ -21,6 +24,7 @@ public final class FluidNetworkProtocolValidation {
 
 	public static void main(String[] args) {
 		validateNegotiationMatrix();
+		validateQueryAvailabilityReason();
 		validateConfigurationCodecs();
 		validateSnapshotCodecAndOptionalSections();
 		validateGenerationAndSequenceOrdering();
@@ -29,6 +33,17 @@ public final class FluidNetworkProtocolValidation {
 		validateGranularSnapshot();
 		validateThermalSnapshot();
 		System.out.println("Fluid network protocol validation passed");
+	}
+
+	private static void validateQueryAvailabilityReason() {
+		FluidQueryResult unavailable = FluidQueryResult.unavailable(
+				RegionAvailabilityReason.BUDGET, "runtime admission budget is insufficient");
+		require(unavailable.status() == FluidQueryStatus.REGION_UNAVAILABLE
+				&& unavailable.availabilityReason() == RegionAvailabilityReason.BUDGET
+				&& unavailable.observation() == null,
+				"Query availability lost its stable reason or exposed partial state");
+		require(FluidQueryResult.absent(FluidQueryStatus.NO_REGION, "no region").availabilityReason() == null,
+				"non-availability Query failure acquired an availability reason");
 	}
 
 	private static void validateNegotiationMatrix() {

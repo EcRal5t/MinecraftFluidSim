@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
@@ -54,13 +55,15 @@ public final class FluidRegionLifecycleValidation {
 
 	private static void validateAvailabilityPreservesRunIntent() {
 		FluidRegionLifecycle lifecycle = running();
-		lifecycle.blockAvailability("required chunk missing");
-		require(!lifecycle.canStep() && !lifecycle.operatorPaused(),
+		lifecycle.blockAvailability(RegionAvailabilityReason.CHUNK_MISSING, "required chunk missing");
+		require(!lifecycle.canStep() && !lifecycle.operatorPaused()
+				&& lifecycle.availabilityReason() == RegionAvailabilityReason.CHUNK_MISSING,
 				"availability failure overwrote the running intent");
 		lifecycle.clearAvailabilityBlock();
-		require(lifecycle.canStep(), "availability recovery did not restore the running intent");
+		require(lifecycle.canStep() && lifecycle.availabilityReason() == null,
+				"availability recovery did not restore the running intent");
 		lifecycle.setOperatorPaused(true, 1);
-		lifecycle.blockAvailability("required chunk missing");
+		lifecycle.blockAvailability(RegionAvailabilityReason.BOUNDARY_OPEN, "required boundary missing");
 		lifecycle.clearAvailabilityBlock();
 		require(!lifecycle.canStep() && lifecycle.operatorPaused(),
 				"availability recovery resumed an operator-paused region");

@@ -1,11 +1,14 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
+import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.FluidMaterial;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
+import cc.ecisr.mmm.simulation.controller.FluidBoundaryScanner;
+import cc.ecisr.mmm.simulation.controller.FluidControllerRegions;
 import cc.ecisr.mmm.simulation.ownership.OwnershipJournal;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
@@ -167,15 +170,15 @@ final class FluidRegionOperations {
 			RemovalSender removalSender
 	) {
 		if (region.chemistryBlockFailure() != null) {
-			region.setAvailabilityFailure(region.chemistryBlockFailure());
+			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, region.chemistryBlockFailure());
 			return false;
 		}
 		if (region.granularBlockFailure() != null) {
-			region.setAvailabilityFailure(region.granularBlockFailure());
+			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, region.granularBlockFailure());
 			return false;
 		}
 		if (region.thermalBlockFailure() != null) {
-			region.setAvailabilityFailure(region.thermalBlockFailure());
+			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, region.thermalBlockFailure());
 			return false;
 		}
 		if (!region.controllerManaged()) {
@@ -184,21 +187,31 @@ final class FluidRegionOperations {
 		}
 		String ownershipLock = persistence.ownershipLockDescription(region);
 		if (ownershipLock != null) {
-			region.setPaused(true);
-			region.setAvailabilityFailure("存在未解决 ownership 状态；恢复完成前不能运行或 checkpoint：" + ownershipLock);
+			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
+					"存在未解决 ownership 状态；恢复完成前不能运行或 checkpoint：" + ownershipLock);
 			return false;
 		}
-		String failure = controllersEnabled
-				? cc.ecisr.mmm.simulation.controller.FluidControllerRegions.availabilityFailure(level, region.footprint())
-				: "controller feature flag is disabled";
-		if (failure != null) {
-			unloadForFailure(level.getServer(), region, failure, removalSender);
+		if (!controllersEnabled) {
+			unloadForFailure(level.getServer(), region, RegionAvailabilityReason.POLICY_DISABLED,
+					"controller admission policy is disabled", removalSender);
+			return false;
+		}
+		FluidRegionManager.AdmissionResult admission = manager.runtimeAdmission(region);
+		if (!admission.accepted()) {
+			unloadForFailure(level.getServer(), region, admission.reason(), admission.failure(), removalSender);
+			return false;
+		}
+		FluidBoundaryScanner.AvailabilityResult availability = FluidControllerRegions.availability(level, region.footprint());
+		if (!availability.ready()) {
+			RegionAvailabilityReason reason = availability.status() == FluidBoundaryScanner.AvailabilityStatus.INCOMPLETE_CHUNKS
+					? RegionAvailabilityReason.CHUNK_MISSING : RegionAvailabilityReason.BOUNDARY_OPEN;
+			unloadForFailure(level.getServer(), region, reason, availability.failure(), removalSender);
 			return false;
 		}
 		if (!region.solverLoaded()) {
 			String lockedFailure = checkpointFailures.get(region.id());
 			if (lockedFailure != null) {
-				region.setAvailabilityFailure(lockedFailure);
+				region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID, lockedFailure);
 				return false;
 			}
 			if (serviceTick < retryAt.getOrDefault(region.id(), 0L)) return false;
@@ -213,7 +226,7 @@ final class FluidRegionOperations {
 				snapshotSender.send(level, region);
 			} catch (IOException | RuntimeException exception) {
 				String message = "checkpoint restore failed: " + exception.getMessage();
-				region.setAvailabilityFailure(message);
+				region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID, message);
 				checkpointFailures.put(region.id(), message);
 				retryAt.remove(region.id());
 				MmmMod.LOGGER.error("Could not restore controller region {}", region.id(), exception);
@@ -228,7 +241,7 @@ final class FluidRegionOperations {
 				checkpointFailures.remove(region.id());
 			} catch (IOException | RuntimeException exception) {
 				String message = "initial checkpoint failed; live solver retained: " + exception.getMessage();
-				region.setAvailabilityFailure(message);
+				region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID, message);
 				checkpointFailures.put(region.id(), message);
 				retryAt.put(region.id(), serviceTick + 100L);
 				MmmMod.LOGGER.error("Could not publish initial checkpoint for controller region {}", region.id(), exception);
@@ -243,19 +256,22 @@ final class FluidRegionOperations {
 		return true;
 	}
 
-	void unloadForFailure(MinecraftServer server, FluidRegion region, String failure, RemovalSender removalSender) {
+	void unloadForFailure(
+			MinecraftServer server, FluidRegion region, RegionAvailabilityReason reason,
+			String failure, RemovalSender removalSender
+	) {
 		if (!region.controllerManaged()) {
-			region.setAvailabilityFailure(failure);
+			region.setAvailabilityFailure(reason, failure);
 			return;
 		}
 		String checkpointFailure = checkpointFailures.get(region.id());
 		String displayedFailure = checkpointFailure == null ? failure : failure + "; " + checkpointFailure;
 		if (!displayedFailure.equals(region.availabilityFailure())) MmmMod.LOGGER.warn("Pausing controller region {}: {}", region.id(), failure);
-		region.setAvailabilityFailure(displayedFailure);
+		region.setAvailabilityFailure(reason, displayedFailure);
 		if (!region.solverLoaded() || serviceTick < retryAt.getOrDefault(region.id(), 0L)) return;
 		try {
 			persistence.checkpointAndUnload(region);
-			region.setAvailabilityFailure(failure);
+			region.setAvailabilityFailure(reason, failure);
 			retryAt.remove(region.id());
 			checkpointFailures.remove(region.id());
 			removalSender.send(server, region);
@@ -264,7 +280,7 @@ final class FluidRegionOperations {
 			String message = "checkpoint failed; live solver retained: " + exception.getMessage();
 			checkpointFailures.put(region.id(), message);
 			retryAt.put(region.id(), serviceTick + 100L);
-			region.setAvailabilityFailure(failure + "; " + message);
+			region.setAvailabilityFailure(reason, failure + "; " + message);
 			MmmMod.LOGGER.error("Could not checkpoint controller region {}; solver remains paused in memory", region.id(), exception);
 		}
 	}
@@ -305,6 +321,7 @@ final class FluidRegionOperations {
 			summaries.add((region == selected ? "* " : "  ") + region.id() + " "
 					+ region.dimension().identifier() + " " + (region.controllerManaged() ? "controller" : "command")
 					+ " " + region.lifecycle().state() + "/" + (region.paused() ? "paused" : "running")
+					+ " availability=" + region.availabilityDescription()
 					+ " origin=" + region.origin().toShortString() + " grid=" + region.sizeX() + "x" + region.sizeY() + "x" + region.sizeZ()
 					+ " reserve=" + region.reservedCellCapacity() + "/" + region.reservedMarkerCapacity()
 					+ (region.solverLoaded() ? " markers=" + region.domain().particleCount() + " volume=" + region.domain().totalVolume()
@@ -334,7 +351,8 @@ final class FluidRegionOperations {
 		String ownershipLock = persistence.ownershipLockDescription(region);
 		if (ownershipLock != null) {
 			region.setPaused(true);
-			region.setAvailabilityFailure("存在未解决 ownership 状态；拒绝 checkpoint：" + ownershipLock);
+			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
+					"存在未解决 ownership 状态；拒绝 checkpoint：" + ownershipLock);
 			return region.availabilityFailure();
 		}
 		region.setPaused(true);
@@ -364,7 +382,7 @@ final class FluidRegionOperations {
 					+ " 原子切回完整 checkpoint " + restored
 					+ "；被拒绝的当前 slot 仍保留，必须退出并重启世界后才能载入上一代";
 			checkpointFailures.put(region.id(), restart);
-			region.setAvailabilityFailure(restart);
+			region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID, restart);
 			retryAt.remove(region.id());
 			return restart;
 		} catch (IOException | RuntimeException exception) {

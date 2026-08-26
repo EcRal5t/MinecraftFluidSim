@@ -205,10 +205,19 @@ final class FluidRegionPersistence {
 						manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 						manifest.reservedMarkerCapacity(), manifest.footprint(), manifest.networkGeneration(),
 						manifest.checkpointGeneration(), manifest.totalMarkerCount(), (float) manifest.totalVolume(), manifest.runtime());
-				FluidRegionManager.AdmissionResult admission = manager.add(region);
-				if (!admission.accepted()) issues.add(manifest.regionId() + " 未载入：" + admission.failure());
+				FluidRegionManager.AdmissionResult registration = manager.registerDiscovered(region);
+				if (!registration.accepted()) {
+					throw new IOException("committed metadata registration failed: " + registration.failure());
+				}
 			} catch (IOException | IllegalArgumentException exception) {
 				issues.add(manifest.regionId() + " 已锁定：" + exception.getMessage());
+			}
+		}
+		for (FluidRegion region : manager.regions()) {
+			if (region.solverLoaded()) continue;
+			FluidRegionManager.AdmissionResult runtimeAdmission = manager.runtimeAdmission(region);
+			if (!runtimeAdmission.accepted()) {
+				region.setAvailabilityFailure(runtimeAdmission.reason(), runtimeAdmission.failure());
 			}
 		}
 		return List.copyOf(issues);

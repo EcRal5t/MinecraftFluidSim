@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ExactRational;
@@ -74,6 +75,14 @@ public final class M7RegionChemistryPersistenceValidation {
 				&& admitted.domain().exportGasState("").registryFingerprint().equals(gas.fingerprint())
 				&& admitted.domain().thermalAudit().equals(source.domain().thermalAudit()),
 				"production restore did not reconstruct gas plus thermal truth");
+
+		FluidRegionManager constrained = new FluidRegionManager(
+				new FluidRegionManager.Limits(1, 100L, 100L, 100L, 100L));
+		check(restoring.loadMetadata(constrained).isEmpty() && constrained.regions().size() == 1,
+				"temporary policy budget discarded valid committed metadata");
+		FluidRegion retained = constrained.regions().getFirst();
+		check(!retained.solverLoaded() && retained.availabilityReason() == RegionAvailabilityReason.BUDGET,
+				"over-budget committed metadata was not retained as PAUSED_BUDGET");
 
 		FluidRegionManager gateOff = manager();
 		List<String> gateIssues = new FluidRegionPersistence(root, true).loadMetadata(gateOff);
