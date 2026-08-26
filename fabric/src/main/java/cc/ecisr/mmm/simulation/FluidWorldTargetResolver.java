@@ -192,6 +192,64 @@ final class FluidWorldTargetResolver {
 		return null;
 	}
 
+	/** First condensed cell after entering a uniquely resolved shell interior, using exact grid-boundary DDA. */
+	int[] firstCondensedCellAlong(FluidRegion region, Vec3 interiorPoint, Vec3 direction) {
+		if (region == null || !region.solverLoaded() || interiorPoint == null || direction == null) return null;
+		FlipFluidDomain domain = region.domain();
+		double h = domain.config().cellSize();
+		return firstMatchingCell(
+				(interiorPoint.x - region.origin().getX()) / h,
+				(interiorPoint.y - region.origin().getY()) / h,
+				(interiorPoint.z - region.origin().getZ()) / h,
+				direction.x, direction.y, direction.z,
+				domain.sizeX(), domain.sizeY(), domain.sizeZ(),
+				domain::hasCondensedInventoryInCell);
+	}
+
+	static int[] firstMatchingCell(
+			double startX, double startY, double startZ,
+			double directionX, double directionY, double directionZ,
+			int sizeX, int sizeY, int sizeZ, CellPredicate predicate
+	) {
+		if (!(Double.isFinite(startX) && Double.isFinite(startY) && Double.isFinite(startZ)
+				&& Double.isFinite(directionX) && Double.isFinite(directionY) && Double.isFinite(directionZ))
+				|| sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || predicate == null) return null;
+		int x = Mth.floor(startX), y = Mth.floor(startY), z = Mth.floor(startZ);
+		if (x < 0 || x >= sizeX || y < 0 || y >= sizeY || z < 0 || z >= sizeZ) return null;
+		int stepX = directionX > 0.0 ? 1 : directionX < 0.0 ? -1 : 0;
+		int stepY = directionY > 0.0 ? 1 : directionY < 0.0 ? -1 : 0;
+		int stepZ = directionZ > 0.0 ? 1 : directionZ < 0.0 ? -1 : 0;
+		if (stepX == 0 && stepY == 0 && stepZ == 0) return null;
+		double tDeltaX = stepX == 0 ? Double.POSITIVE_INFINITY : 1.0 / Math.abs(directionX);
+		double tDeltaY = stepY == 0 ? Double.POSITIVE_INFINITY : 1.0 / Math.abs(directionY);
+		double tDeltaZ = stepZ == 0 ? Double.POSITIVE_INFINITY : 1.0 / Math.abs(directionZ);
+		double tMaxX = firstBoundaryDistance(startX, x, directionX, stepX);
+		double tMaxY = firstBoundaryDistance(startY, y, directionY, stepY);
+		double tMaxZ = firstBoundaryDistance(startZ, z, directionZ, stepZ);
+		int maximumVisited = Math.addExact(Math.addExact(sizeX, sizeY), Math.addExact(sizeZ, 1));
+		for (int visited = 0; visited < maximumVisited; visited++) {
+			if (predicate.matches(x, y, z)) return new int[] {x, y, z};
+			double next = Math.min(tMaxX, Math.min(tMaxY, tMaxZ));
+			if (sameBoundary(tMaxX, next)) { x += stepX; tMaxX += tDeltaX; }
+			if (sameBoundary(tMaxY, next)) { y += stepY; tMaxY += tDeltaY; }
+			if (sameBoundary(tMaxZ, next)) { z += stepZ; tMaxZ += tDeltaZ; }
+			if (x < 0 || x >= sizeX || y < 0 || y >= sizeY || z < 0 || z >= sizeZ) return null;
+		}
+		return null;
+	}
+
+	private static double firstBoundaryDistance(double start, int cell, double direction, int step) {
+		if (step == 0) return Double.POSITIVE_INFINITY;
+		double boundary = step > 0 ? cell + 1.0 : cell;
+		return (boundary - start) / direction;
+	}
+
+	private static boolean sameBoundary(double candidate, double minimum) {
+		if (candidate == minimum) return true;
+		return Double.isFinite(candidate) && Double.isFinite(minimum)
+				&& Math.abs(candidate - minimum) <= Math.max(Math.ulp(candidate), Math.ulp(minimum)) * 2.0;
+	}
+
 	private static boolean validPlayerRegion(ServerPlayer player, FluidRegion region) {
 		return region != null && region.solverLoaded() && player.level().dimension().equals(region.dimension());
 	}
@@ -232,4 +290,7 @@ final class FluidWorldTargetResolver {
 	}
 
 	record TransferTarget(FluidRegion region, BlockPos interiorBlock) { }
+
+	@FunctionalInterface
+	interface CellPredicate { boolean matches(int x, int y, int z); }
 }

@@ -1223,6 +1223,8 @@ public final class M9ThermalValidation {
 						&& solid.solidVolumeSvq() == SolidVolume.SVQ_PER_CELL / 2L
 						&& close(solid.massKilograms(), 0.5)),
 				"cell carrier observation lost coherent phase identity or inventory");
+		require(domain.hasCondensedInventoryInCell(0, 0, 0),
+				"bounded probe predicate missed coherent phase inventory");
 		boolean collisionBlocked = false;
 		try {
 			domain.planCollisionEdits(List.of(

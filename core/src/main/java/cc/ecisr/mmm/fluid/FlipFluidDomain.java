@@ -497,6 +497,19 @@ public final class FlipFluidDomain {
 		return solids.isEmpty() && gas == null ? null : new CellCarrierInventoryView(solids, gas);
 	}
 
+	/** Bounded-ray predicate over authoritative condensed carriers; does not build grids or display payloads. */
+	public boolean hasCondensedInventoryInCell(int x, int y, int z) {
+		int requested = cellIndexChecked(x, y, z);
+		for (int marker = 0; marker < particleCount; marker++) {
+			if (particleCellIndex(marker) == requested) return true;
+		}
+		if (granularParcels != null) for (int ordinal = 0; ordinal < granularParcels.count(); ordinal++) {
+			if (granularParcelCell(granularParcels.parcel(ordinal)) == requested) return true;
+		}
+		if (granularDeposits != null && granularDeposits.cellSolidVolumeSvq(requested) > 0L) return true;
+		return thermalState != null && thermalState.coherentPhases().cellOccupiedSvq(requested) > 0L;
+	}
+
 	private double observedGasNodeGaugePressurePa(int nodeId) {
 		return thermalState == null || !thermalState.gasModelBound()
 				? airNetwork.observedGaugePressure(nodeId)

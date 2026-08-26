@@ -63,6 +63,10 @@ public final class ShellFluidQuery {
 				point.x, point.y, point.z));
 	}
 
+	public static FluidQueryResult queryPoint(ServerLevel level, Vec3 interiorPoint) {
+		return query(level, interiorPoint);
+	}
+
 	private static Vec3 offset(Vec3 hit, Direction direction, double distance) {
 		return new Vec3(hit.x + direction.getStepX() * distance,
 				hit.y + direction.getStepY() * distance,

@@ -58,4 +58,6 @@ Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会�
 
 事件是易失通知，不是库存日志：服务器可能在删除 WAL 后、发布事件前退出，监听者也可能晚注册。漏失不能重放或反向驱动物理，消费者必须能从 Query API 恢复当前观察。checkpoint、ownership、phase transition 与安全暂停事件尚未冻结，不能用 container event 猜测这些提交。
 
-field probe 与 Jade 共用 `ShellFluidQuery`：服务端只查询命中壳面两侧紧邻的 world position，选择唯一声明 controller interior 的结果；两侧都声明 owner 时返回 `OVERLAP`，不按玩家朝向猜测。液相继续只来自完整 `FluidQueryResult`；仅当结果为 `OK` 或表示该唯一 owner 单元无液体的 `EMPTY` 时，主 Mod probe 才在同一主线程读取内部 `CellCarrierInventoryView`，有界显示 active/deposit/coherent 的 SVQ/kg，以及 ambient/sealed gas、component standard nanos/kg、派生 Pa/K。其他非 `OK` 状态不返回任何部分库存。carrier view 不属于已冻结的外部 Query ABI，不能被外部调用方当作写权限或库存协议。该路径不加载 chunk、不唤醒 solver、不建网格、不 checkpoint，也不从客户端 mesh 或方块外观反推库存；派生 pressure 读取不会推进数值窗诊断计数。
+field probe 与 Jade 共用 `ShellFluidQuery`：服务端只查询命中壳面两侧紧邻的 world position，选择唯一声明 controller interior 的结果；两侧都声明 owner 时返回 `OVERLAP`，不按玩家朝向猜测。普通使用观察壳面内侧单格；潜行使用从同一已解析 interior point 沿玩家视线执行 cell-boundary DDA，选择第一格 liquid/granular/coherent 库存。DDA 的访问上限由三轴网格尺寸导出，角/边穿越同步推进并且不采样零厚度相邻格；它不读取客户端 mesh。
+
+液相继续只来自完整 `FluidQueryResult`；仅当结果为 `OK` 或表示该唯一 owner 单元无液体的 `EMPTY` 时，主 Mod probe 才在同一主线程读取内部 `CellCarrierInventoryView`，有界显示 active/deposit/coherent 的 SVQ/kg，以及 ambient/sealed gas、component standard nanos/kg、派生 Pa/K。其他非 `OK` 状态不返回任何部分库存。carrier view 不属于已冻结的外部 Query ABI，不能被外部调用方当作写权限或库存协议。该路径不加载 chunk、不唤醒 solver、不建网格、不 checkpoint，也不改变 controller selection；派生 pressure 读取不会推进数值窗诊断计数。

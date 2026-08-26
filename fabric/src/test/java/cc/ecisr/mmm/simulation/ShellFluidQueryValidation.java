@@ -35,6 +35,24 @@ public final class ShellFluidQueryValidation {
 		require(ShellFluidQuery.select(locked, locked).availabilityReason()
 				== RegionAvailabilityReason.PROFILE_LOCKED,
 				"global profile lock was misclassified as a local shell overlap");
+
+		java.util.ArrayList<String> visited = new java.util.ArrayList<>();
+		int[] axial = FluidWorldTargetResolver.firstMatchingCell(
+				0.25, 1.5, 1.5, 1.0, 0.0, 0.0, 5, 4, 4,
+				(x, y, z) -> { visited.add(x + "," + y + "," + z); return x == 3; });
+		require(java.util.Arrays.equals(axial, new int[] {3, 1, 1})
+				&& visited.equals(List.of("0,1,1", "1,1,1", "2,1,1", "3,1,1")),
+				"grid-boundary traversal skipped or duplicated an axial cell");
+		visited.clear();
+		int[] diagonal = FluidWorldTargetResolver.firstMatchingCell(
+				0.5, 0.5, 1.5, 1.0, 1.0, -0.0, 4, 4, 3,
+				(x, y, z) -> { visited.add(x + "," + y + "," + z); return x == 2 && y == 2; });
+		require(java.util.Arrays.equals(diagonal, new int[] {2, 2, 1})
+				&& visited.equals(List.of("0,0,1", "1,1,1", "2,2,1")),
+				"corner traversal sampled a cell touched only at zero thickness");
+		require(FluidWorldTargetResolver.firstMatchingCell(
+				0.5, 0.5, 0.5, 0.0, -0.0, 0.0, 2, 2, 2, (x, y, z) -> true) == null,
+				"zero-length probe ray was accepted");
 		System.out.println("Shell fluid query validation passed");
 	}
 

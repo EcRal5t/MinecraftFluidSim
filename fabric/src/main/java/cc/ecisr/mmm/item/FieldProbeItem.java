@@ -43,9 +43,20 @@ public final class FieldProbeItem extends Item {
 		}
 		ShellFluidQuery.Resolution resolution = ShellFluidQuery.resolve(level, context.getClickedPos(),
 				context.getClickedFace(), context.getClickLocation());
-		FluidSimulationService.CarrierCellObservation carriers = resolution.interiorPoint() == null ? null
-				: FluidSimulationService.get(level.getServer()).observeCellCarriers(level, resolution.interiorPoint());
-		player.sendSystemMessage(present(resolution.result(), carriers));
+		FluidSimulationService service = FluidSimulationService.get(level.getServer());
+		net.minecraft.world.phys.Vec3 point = resolution.interiorPoint();
+		FluidQueryResult liquid = resolution.result();
+		if (player.isShiftKeyDown() && point != null) {
+			point = service.firstCondensedProbePoint(level, point, player.getLookAngle());
+			if (point == null) {
+				player.sendSystemMessage(Component.translatable("message.mmm.probe.no_condensed"));
+				return InteractionResult.FAIL;
+			}
+			liquid = ShellFluidQuery.queryPoint(level, point);
+		}
+		FluidSimulationService.CarrierCellObservation carriers = point == null ? null
+				: service.observeCellCarriers(level, point);
+		player.sendSystemMessage(present(liquid, carriers));
 		return InteractionResult.SUCCESS_SERVER;
 	}
 
@@ -54,6 +65,7 @@ public final class FieldProbeItem extends Item {
 			net.minecraft.world.item.component.TooltipDisplay tooltipDisplay,
 			java.util.function.Consumer<Component> tooltip, TooltipFlag flag) {
 		tooltip.accept(Component.translatable("item.mmm.field_probe.tooltip").withStyle(ChatFormatting.GRAY));
+		tooltip.accept(Component.translatable("item.mmm.field_probe.tooltip_scan").withStyle(ChatFormatting.DARK_GRAY));
 	}
 
 	private static Component present(

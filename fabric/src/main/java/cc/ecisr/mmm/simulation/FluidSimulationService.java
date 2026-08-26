@@ -767,6 +767,19 @@ public final class FluidSimulationService {
 				region.domain().observeCellCarriers(x, y, z));
 	}
 
+	/** Returns the centre of the first liquid/granular/coherent cell along an already resolved interior ray. */
+	public Vec3 firstCondensedProbePoint(ServerLevel level, Vec3 interiorPoint, Vec3 direction) {
+		if (!level.getServer().isSameThread()) throw new IllegalStateException("Probe traversal is server-thread-only");
+		FluidRegion region = targets.regionAtBlock(level, BlockPos.containing(interiorPoint));
+		if (region == null || region.availabilityFailure() != null || !region.solverLoaded()) return null;
+		int[] cell = targets.firstCondensedCellAlong(region, interiorPoint, direction);
+		if (cell == null) return null;
+		double h = region.solverConfig().cellSize();
+		return new Vec3(region.origin().getX() + (cell[0] + 0.5) * h,
+				region.origin().getY() + (cell[1] + 0.5) * h,
+				region.origin().getZ() + (cell[2] + 0.5) * h);
+	}
+
 	public record CarrierCellObservation(
 			UUID regionId, long regionNetworkGeneration, int cellX, int cellY, int cellZ,
 			CellCarrierInventoryView carriers

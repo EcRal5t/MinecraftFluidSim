@@ -108,6 +108,8 @@ public final class M8GranularValidation {
 				&& observed.solids().getFirst().solidVolumeSvq() == small.totalSolidVolumeSvq()
 				&& rawClose(observed.solids().getFirst().massKilograms(), small.totalMass()),
 				"cell carrier observation changed active parcel identity or inventory");
+		require(collision.hasCondensedInventoryInCell(1, 1, 1),
+				"bounded probe predicate missed active granular inventory");
 		FlipFluidDomain.CollisionEditPlan collisionPlan = collision.planCollisionEdits(List.of(
 				new FlipFluidDomain.CollisionEdit(1, 1, 1, 0xff),
 				new FlipFluidDomain.CollisionEdit(2, 1, 1, 0xff)));
