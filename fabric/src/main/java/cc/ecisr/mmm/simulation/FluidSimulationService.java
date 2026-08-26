@@ -11,6 +11,7 @@ import cc.ecisr.mmm.chemistry.ChemicalDataPackLoader;
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
+import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.CellCarrierInventoryView;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
@@ -23,8 +24,10 @@ import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import cc.ecisr.mmm.fluid.air.GasAuditLedger;
+import cc.ecisr.mmm.fluid.air.GasLimits;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularDataPackLoader;
+import cc.ecisr.mmm.granular.GranularLimits;
 import cc.ecisr.mmm.granular.GranularMechanics;
 import cc.ecisr.mmm.granular.GranularPhaseTransferEngine;
 import cc.ecisr.mmm.granular.GranularRegistry;
@@ -48,6 +51,7 @@ import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
+import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.worldprofile.WorldCapability;
 import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
@@ -123,6 +127,9 @@ public final class FluidSimulationService {
 	private final Set<UUID> runtimeDirtyContainerTransfers = new HashSet<>();
 	/** Prevents an unresolved WAL from emitting the same ERROR every server tick. */
 	private final Map<UUID, String> reportedContainerTransferLocks = new HashMap<>();
+	/** Per-player opaque console token; it never participates in region or inventory persistence. */
+	private final Map<ControllerSummaryViewer, Long> controllerSummaryGenerations = new HashMap<>();
+	private long nextControllerSummaryGeneration = 1L;
 	private Set<String> reportedContainerTransferStoreIssues = Set.of();
 	private ContainerTransferFaultPoint containerTransferFault = ContainerTransferFaultPoint.NONE;
 	private ResourceKey<Level> takeoverDimension;
@@ -791,6 +798,120 @@ public final class FluidSimulationService {
 			}
 		}
 	}
+
+	/**
+	 * Resolves one exact controller and snapshots bounded maintained ledgers without loading, waking,
+	 * checkpointing, selecting, rebuilding a grid, or allocating a display snapshot.
+	 */
+	public ControllerSummary controllerSummary(ServerPlayer player, BlockPos controllerPosition) {
+		if (player == null || controllerPosition == null) return null;
+		ServerLevel level = player.level();
+		if (!level.getServer().isSameThread()) throw new IllegalStateException("Controller summary is server-thread-only");
+		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
+		if (region == null) return null;
+		ControllerSummaryViewer viewer = new ControllerSummaryViewer(player.getUUID(), region.id());
+		long summaryGeneration = nextControllerSummaryGeneration();
+		controllerSummaryGenerations.put(viewer, summaryGeneration);
+		return createControllerSummary(region, summaryGeneration);
+	}
+
+	private ControllerSummary createControllerSummary(FluidRegion region, long summaryGeneration) {
+		FluidRegionFootprint footprint = region.footprint();
+		if (footprint == null || capabilityProfile == null) {
+			throw new IllegalStateException("Controller summary requires committed controller/profile identity");
+		}
+		boolean live = region.solverLoaded();
+		FlipFluidDomain domain = live ? region.domain() : null;
+		long markerCount = live ? domain.particleCount() : region.checkpointMarkerCount();
+		long depositLimit = Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
+				Math.multiplyExact(region.reservedCellCapacity(), GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL));
+		ControllerSummary.Inventory inventory = live ? liveInventory(region, domain) : ControllerSummary.Inventory.unavailable();
+		String ownershipLock = regionOperations.ownershipLockDescription(region);
+		boolean containerWalPending = hasPendingContainerTransfer(region.id());
+		boolean phaseWorkPending = live && domain.hasPendingPhaseVolumeWork();
+		boolean checkpointAllowed = authoritativeWritesReady() && live && region.availabilityFailure() == null
+				&& ownershipLock == null && !containerWalPending;
+		FlipFluidDomain.StepStats stats = region.lastStats();
+		ThermalActivity thermal = region.thermalActivity();
+		String numericalFailure = region.availabilityReason() == RegionAvailabilityReason.NUMERICAL_PAUSE
+				? region.availabilityFailure() : null;
+		return new ControllerSummary(summaryGeneration, region.id(), region.dimension().identifier().toString(),
+				capabilityProfile.profileFingerprint(), region.checkpointGeneration(), region.networkGeneration(),
+				new ControllerSummary.Footprint(footprint.controllerPosition().getX(), footprint.controllerPosition().getY(),
+						footprint.controllerPosition().getZ(), footprint.blockSizeX(), footprint.blockSizeY(),
+						footprint.blockSizeZ(), footprint.interiorBlocks().size(), footprint.requiredChunks().size()),
+				region.paused() ? ControllerSummary.OperatorIntent.PAUSED : ControllerSummary.OperatorIntent.RUNNING,
+				ControllerSummary.MotionState.valueOf(region.lifecycle().state().name()),
+				thermal == null ? ControllerSummary.ThermalState.UNBOUND
+						: ControllerSummary.ThermalState.valueOf(thermal.state().name()),
+				new ControllerSummary.Availability(region.availabilityReason(), region.availabilityFailure()),
+				new ControllerSummary.Usage(
+						capacity(region.reservedCellCapacity(), regionManager.limits().maximumCellsPerRegion()),
+						capacity(markerCount, region.reservedMarkerCapacity()),
+						live ? capacity(domain.chemicalParcelCount(), region.reservedMarkerCapacity())
+								: unavailableCapacity(region.reservedMarkerCapacity()),
+						live ? capacity(domain.granularParcelCount(), GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION)
+								: unavailableCapacity(GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION),
+						live ? capacity(domain.granularDepositGroupCount(), depositLimit) : unavailableCapacity(depositLimit),
+						live ? capacity(domain.coherentPhaseGroupCount(), ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION)
+								: unavailableCapacity(ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION),
+						live ? capacity(domain.airNetwork().nodeCount(), GasLimits.MAX_NODES_PER_REGION)
+								: unavailableCapacity(GasLimits.MAX_NODES_PER_REGION),
+						live ? capacity(thermalRegistry == null ? 0L
+								: region.finiteThermalDevices(thermalRegistry.fingerprint()).devices().size(),
+								ThermalLimits.MAX_FINITE_DEVICES_PER_REGION)
+								: unavailableCapacity(ThermalLimits.MAX_FINITE_DEVICES_PER_REGION)),
+				inventory,
+				new ControllerSummary.Gates(ownershipLock == null, containerWalPending, phaseWorkPending,
+						worldBridgeFeatureEnabled, checkpointAllowed),
+				new ControllerSummary.Diagnostics(region.lastStepMilliseconds(),
+						stats == null ? 0 : stats.pressureIterations(), stats == null ? 0.0 : stats.pressureResidual(),
+						numericalFailure));
+	}
+
+	private ControllerSummary.Inventory liveInventory(FluidRegion region, FlipFluidDomain domain) {
+		long gasNanos = 0L;
+		double gasMass = 0.0;
+		for (int node : domain.airNetwork().nodeIds()) {
+			var gas = domain.airNetwork().inventory(node);
+			gasNanos = Math.addExact(gasNanos, gas.standardVolumeNanos());
+			for (var component : gas.components()) gasMass += component.mass();
+		}
+		if (!Double.isFinite(gasMass)) throw new ArithmeticException("Controller gas mass summary overflow");
+		double totalInternalEnergy = Double.NaN;
+		if (domain.hasThermalState()) {
+			totalInternalEnergy = domain.totalInternalEnergy();
+			if (thermalRegistry != null) totalInternalEnergy += region.finiteThermalDevices(
+					thermalRegistry.fingerprint()).exactInternalEnergy().toDouble();
+			if (!Double.isFinite(totalInternalEnergy)) {
+				throw new ArithmeticException("Controller total internal-energy summary overflow");
+			}
+		}
+		return new ControllerSummary.Inventory(true,
+				domain.physicalVolumeCubicMetres(domain.totalVolumeExact()),
+				domain.physicalMassKilograms(domain.totalMass()), domain.totalChemicalSpeciesQuanta(),
+				domain.totalGranularSolidVolumeSvq(), domain.totalGranularMass(),
+				domain.totalCoherentSolidVolumeSvq(), domain.totalCoherentMass(), gasNanos, gasMass,
+				domain.hasThermalState(), totalInternalEnergy);
+	}
+
+	private static ControllerSummary.Capacity capacity(long used, long limit) {
+		return ControllerSummary.Capacity.available(used, limit);
+	}
+
+	private static ControllerSummary.Capacity unavailableCapacity(long limit) {
+		return ControllerSummary.Capacity.unavailable(limit);
+	}
+
+	private long nextControllerSummaryGeneration() {
+		if (nextControllerSummaryGeneration == Long.MAX_VALUE) {
+			controllerSummaryGenerations.clear();
+			nextControllerSummaryGeneration = 1L;
+		}
+		return nextControllerSummaryGeneration++;
+	}
+
+	private record ControllerSummaryViewer(UUID playerId, UUID regionId) { }
 
 	public boolean chemistryFeatureEnabled() {
 		return chemistryFeatureEnabled;

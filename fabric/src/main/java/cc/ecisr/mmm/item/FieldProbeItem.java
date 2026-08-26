@@ -3,6 +3,7 @@ package cc.ecisr.mmm.item;
 import cc.ecisr.mmm.api.query.FluidCellObservation;
 import cc.ecisr.mmm.api.query.FluidQueryResult;
 import cc.ecisr.mmm.block.MmmBlocks;
+import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.fluid.CellCarrierInventoryView;
 import cc.ecisr.mmm.simulation.FluidSimulationService;
 import cc.ecisr.mmm.simulation.ShellFluidQuery;
@@ -37,13 +38,19 @@ public final class FieldProbeItem extends Item {
 		if (context.getLevel().isClientSide()) return InteractionResult.SUCCESS;
 		if (!(context.getLevel() instanceof ServerLevel level)
 				|| !(context.getPlayer() instanceof ServerPlayer player)) return InteractionResult.PASS;
+		FluidSimulationService service = FluidSimulationService.get(level.getServer());
+		if (level.getBlockState(context.getClickedPos()).is(MmmBlocks.FLUID_CONTROLLER)) {
+			ControllerSummary summary = service.controllerSummary(player, context.getClickedPos());
+			player.sendSystemMessage(summary == null ? Component.translatable("message.mmm.probe.controller_missing")
+					: present(summary));
+			return summary == null ? InteractionResult.FAIL : InteractionResult.SUCCESS_SERVER;
+		}
 		if (!MmmBlocks.isBoundary(level.getBlockState(context.getClickedPos()))) {
 			player.sendSystemMessage(Component.translatable("message.mmm.probe.not_shell"));
 			return InteractionResult.FAIL;
 		}
 		ShellFluidQuery.Resolution resolution = ShellFluidQuery.resolve(level, context.getClickedPos(),
 				context.getClickedFace(), context.getClickLocation());
-		FluidSimulationService service = FluidSimulationService.get(level.getServer());
 		net.minecraft.world.phys.Vec3 point = resolution.interiorPoint();
 		FluidQueryResult liquid = resolution.result();
 		if (player.isShiftKeyDown() && point != null) {
@@ -59,6 +66,53 @@ public final class FieldProbeItem extends Item {
 		player.sendSystemMessage(present(liquid, carriers));
 		return InteractionResult.SUCCESS_SERVER;
 	}
+
+	private static Component present(ControllerSummary summary) {
+		MutableComponent text = Component.translatable("message.mmm.probe.controller_header",
+				summary.regionId().toString().substring(0, 8), summary.profileFingerprint().substring(0, 12),
+				summary.checkpointGeneration(), summary.networkGeneration());
+		text.append("\n").append(Component.translatable("message.mmm.probe.controller_state",
+				summary.operatorIntent().name(), summary.motionState().name(), summary.thermalState().name(),
+				summary.availability().ready() ? "READY" : summary.availability().reason().name()));
+		ControllerSummary.Footprint footprint = summary.footprint();
+		text.append("\n").append(Component.translatable("message.mmm.probe.controller_footprint",
+				footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ(),
+				footprint.interiorBlocks(), footprint.requiredChunks()));
+		ControllerSummary.Usage usage = summary.usage();
+		text.append("\n").append(Component.translatable("message.mmm.probe.controller_usage",
+				capacity(usage.cells()), capacity(usage.markers()), capacity(usage.chemicalParcels()),
+				capacity(usage.activeParcels()), capacity(usage.depositGroups()),
+				capacity(usage.coherentGroups()), capacity(usage.gasNodes()), capacity(usage.finiteDevices())));
+		ControllerSummary.Inventory inventory = summary.inventory();
+		if (!inventory.live()) {
+			text.append("\n").append(Component.translatable("message.mmm.probe.controller_inventory_unloaded"));
+		} else {
+			text.append("\n").append(Component.translatable("message.mmm.probe.controller_liquid_inventory",
+					decimal(inventory.liquidVolumeCubicMetres() * 1_000.0),
+					decimal(inventory.liquidMassKilograms()), inventory.speciesQuanta()));
+			text.append("\n").append(Component.translatable("message.mmm.probe.controller_solid_inventory",
+					inventory.granularSolidVolumeSvq(), decimal(inventory.granularMassKilograms()),
+					inventory.coherentSolidVolumeSvq(), decimal(inventory.coherentMassKilograms())));
+			text.append("\n").append(Component.translatable("message.mmm.probe.controller_gas_energy_inventory",
+					inventory.gasStandardVolumeNanos(), decimal(inventory.gasMassKilograms()),
+					inventory.internalEnergyAvailable() ? decimal(inventory.totalInternalEnergyEu()) : "—"));
+		}
+		ControllerSummary.Gates gates = summary.gates();
+		text.append("\n").append(Component.translatable("message.mmm.probe.controller_gates",
+				ready(gates.ownershipReady()), ready(!gates.containerWalPending()), ready(!gates.phaseWorkPending()),
+				gates.worldBridgeEnabled() ? "ON" : "OFF", ready(gates.checkpointAllowed())));
+		if (!summary.availability().ready()) {
+			text.append("\n").append(Component.translatable("message.mmm.probe.controller_failure",
+					summary.availability().detail()));
+		}
+		return text;
+	}
+
+	private static String capacity(ControllerSummary.Capacity value) {
+		return value.available() ? value.used() + "/" + value.limit() : "—/" + value.limit();
+	}
+
+	private static String ready(boolean value) { return value ? "READY" : "BLOCKED"; }
 
 	@Override
 	public void appendHoverText(ItemStack stack, TooltipContext context,

@@ -25,6 +25,17 @@ final class FluidWorldTargetResolver {
 		return selected != null && selected.dimension().equals(level.dimension()) ? selected : null;
 	}
 
+	/** Exact controller identity lookup; boundary adjacency is deliberately not accepted. */
+	FluidRegion controllerRegionAt(ServerLevel level, BlockPos position) {
+		if (position == null) return null;
+		for (FluidRegion region : regionManager.regions()) {
+			FluidRegionFootprint footprint = region.footprint();
+			if (footprint != null && region.dimension().equals(level.dimension())
+					&& footprint.controllerPosition().equals(position)) return region;
+		}
+		return null;
+	}
+
 	/** Returns the sole region whose actual interior contains the block position. */
 	FluidRegion regionAtBlock(ServerLevel level, BlockPos position) {
 		if (position == null) return null;

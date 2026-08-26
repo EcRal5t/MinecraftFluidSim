@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
+import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
@@ -15,7 +16,23 @@ public final class FluidRegionLifecycleValidation {
 		validateHydrostaticSleepAndWake();
 		validateHydrostaticSleepPreservesMarkerLedger();
 		validateUnloadRequiresPublishedCheckpointAndReleasedSolver();
+		validateMetadataOnlySummaryCannotInventInventory();
 		System.out.println("FluidRegionLifecycle validation passed");
+	}
+
+	private static void validateMetadataOnlySummaryCannotInventInventory() {
+		ControllerSummary.Inventory unavailable = ControllerSummary.Inventory.unavailable();
+		require(!unavailable.live() && !unavailable.internalEnergyAvailable()
+				&& Double.isNaN(unavailable.totalInternalEnergyEu()),
+				"metadata-only controller inventory did not remain explicitly unavailable");
+		boolean rejected = false;
+		try {
+			new ControllerSummary.Inventory(false, 1.0, 0.0, 0L, 0L, 0.0,
+					0L, 0.0, 0L, 0.0, false, Double.NaN);
+		} catch (IllegalArgumentException expected) {
+			rejected = true;
+		}
+		require(rejected, "metadata-only controller inventory accepted invented live volume");
 	}
 
 	private static void validateHydrostaticSleepPreservesMarkerLedger() {

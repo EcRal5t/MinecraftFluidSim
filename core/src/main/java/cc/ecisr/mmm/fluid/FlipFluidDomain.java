@@ -400,6 +400,16 @@ public final class FlipFluidDomain {
 	public boolean hasChemistryState() { return chemicalParcels != null; }
 	public boolean hasGranularState() { return granularParcels != null; }
 	public boolean hasThermalState() { return thermalState != null; }
+	/** Constant-time live chemical-parcel count; does not scan markers. */
+	public int chemicalParcelCount() { return chemicalParcels == null ? 0 : chemicalParcels.pool().liveCount(); }
+	/** Constant-time exact species inventory ledger. */
+	public long totalChemicalSpeciesQuanta() { return chemicalParcels == null ? 0L : chemicalParcels.totalQuanta(); }
+	/** Constant-time sparse deposit-group count. */
+	public int granularDepositGroupCount() { return granularDeposits == null ? 0 : granularDeposits.groupCount(); }
+	/** Constant-time coherent phase-group count. */
+	public int coherentPhaseGroupCount() {
+		return thermalState == null ? 0 : thermalState.coherentPhases().groupCount();
+	}
 	public boolean hasPendingPhaseVolumeWork() {
 		for (SignedDyadic value : pendingPhaseCellVolume) if (!value.equals(SignedDyadic.ZERO)) return true;
 		return false;
