@@ -22,36 +22,40 @@
 
 ### D01：surface snapshot 契约
 
-byte volume与marker mask不足以唯一恢复薄自由面和服务端PLIC。扩展协议为有界、按interface cell稀疏编码的展示几何输入：
+byte volume与marker mask不足以唯一恢复薄自由面和服务端PLIC。扩展协议为有界、按interface cell和shared face稀疏编码的展示几何输入：
 
 - region/dimension/network generation/sequence与profile/layout fingerprint；
 - cell坐标、cut-cell raw/aperture摘要、总liquid fraction；
-- 服务端当前PLIC plane的规范化normal与offset，明确量化范围/rounding；
-- 每个不可互溶phase pair的canonical IDs、pair plane/fraction与单一owner；
+- 服务端当前PLIC plane的规范化normal与offset，明确固定点量化范围/rounding；它定义本cell内的piecewise-linear half-space，不承诺与邻cell plane共面；
+- 每个不可互溶phase pair的canonical IDs、pair plane/fraction、label side与单一owner；同cell全部label partition必须无重叠且覆盖其声明liquid volume；
+- 每个shared grid/cut face的canonical identity及两侧cell identity；face topology不由客户端按收到顺序临时配对；
 - material palette及只读chemical/granular/thermal attributes；
-- payload总cell/byte硬上限和checksum。
+- payload总cell/byte、每cell label/plane、每shared face输入segment、planar-arrangement vertex/polygon、triple junction以及最终mesh vertex/triangle硬上限和checksum。
 
-snapshot由已提交state重建并带同generation/sequence，不保存pressure或让客户端反算inventory。非interface满液体格可以继续紧凑编码；任何非零尾量若因协议量化无法表示，必须通过显式`subquantum-present`/cell record保留拓扑存在性，而不是在mesher把scalar强行抬高。量化误差只影响展示位置，server actual nanos不变。
+snapshot由已提交state重建并带同generation/sequence，不保存pressure或让客户端反算inventory。非interface满液体格可以继续紧凑编码；任何非零尾量若因协议量化无法表示，必须通过显式`subquantum-present`/cell record保留拓扑存在性，而不是在mesher把scalar强行抬高。量化误差只影响展示位置，server actual nanos不变。协议量化后的plane、cut polyhedron与shared-face identity就是mesher唯一输入；validator用同一固定点值重放，不能一处用double原值、一处用量化值。
 
 协议协商只接受完整默认thermal layout及其extensions；未知required surface字段拒绝该frame。迟到base/extension不能跨sequence拼接，chemical/granular/thermal attribute必须与base cell table同一identity。
 
 ### D02：确定拓扑 mesher
 
-把mesher拆为纯数据阶段：decode/validate surface cells → reconstruct outer polygons → reconstruct phase-pair polygons → global vertex weld/index → normals/attributes。关键规则：
+展示几何定义为所有cell内“cut polyhedron再按outer/phase PLIC half-space裁剪”所得有标签闭多面体的并集边界。mesher拆为纯数据阶段：decode/validate → build labeled clipped polyhedra → build one canonical planar arrangement per shared face → cancel equal-label coverage / emit differing-label patches → emit in-cell PLIC patches → topology-key index → triangulate → normals/attributes。关键规则：
 
 1. outer plane只由总liquid PLIC生成，phase plane不改变外表面位置。
 2. phase pair按stable phase ID排序，低ID为first，法向固定first→second；共享界面只生成一次。
-3. cell/face/edge遍历使用lexicographic顺序；顶点key由region-local edge/plane交点的规范量化值组成，不用hash迭代顺序。
-4. 相邻cell共边顶点必须复用同一index；边界polygon只在domain/cut face或实际free/interface面结束。
-5. 零面积、NaN、越bounds、同向重复triangle使fixture失败，不能静默删除到“看起来没黑面”。如果量化产生退化，修正snapshot量化或重建规则。
-6. outer/interface不能靠`INTERFACE_INSET`错开；它们在真实三相接触线上共享顶点/边，并由明确render pass/depth policy处理。
-7. normal先从几何face得到；面积/角度加权只在同一smooth group内累积，不跨phase/cut-wall sharp edge。坏normal回退到face normal，不删面。
+3. cell/face/edge遍历使用lexicographic顺序。每个shared face只构建一次二维planar arrangement：把两侧label polyhedron在该face上的全部固定点线段叠加、求交并切成原子polygon；原子polygon两侧label相同则抵消，不同则按canonical pair只发一个有向patch。PLIC不连续产生的是这个face-owned transition patch，不是裂缝，也不移动任一cell内plane。
+4. cell内PLIC patch和shared-face patch通过来源拓扑键共享顶点：`(face/edge identity, sorted generating planes, exact fixed-point/rational coordinate)`；index dedup只合并同一拓扑事件，禁止用距离epsilon或事后global weld修补不同事件。
+5. 三相接触由同一个face arrangement交点生成canonical junction key；所有incident outer/pair patch复用该key。无法得到无重叠label partition、同一原子polygon出现三个side label或junction incidence不闭合时整frame失败。
+6. 边界polygon只在domain/cut boundary或实际free/interface面结束。零面积、NaN、越bounds、同向重复triangle使fixture失败，不能静默删除到“看起来没黑面”。如果量化产生退化，修正snapshot量化或裁剪规则。
+7. outer/interface不能靠`INTERFACE_INSET`错开；它们在真实三相接触线上共享顶点/边。opaque/cut、outer translucent和internal pair分开携带render category；默认renderer使用有界per-pixel A-buffer：先做fragment count/prefix-sum pass，容量通过后才fill，逐pixel按depth和canonical triangle ID排序并front-to-back合成。fragment容量来自协议/render预算；count越界时本帧不绘制MMM fluid surface，只显示结构化capacity overlay并保留完整mesh供后续相机帧重试，不能写partial fragment、回退无序alpha或靠depth bias隐藏重合。不支持所需fragment storage/atomic能力的客户端明确禁用MMM surface renderer并报告协议能力，不切回会增厚的旧路径。
+8. normal先从几何face得到；面积/角度加权只在同一smooth group内累积，不跨phase/cut-wall sharp edge。坏normal回退到face normal，不删面。
+
+所有裁剪和planar arrangement先做checked count/reservation；任何交点分母为零、fixed-point乘加overflow、成员超协议上限或输出超mesh预算都拒绝整个新surface frame并保留旧完整mesh/结构化诊断，不截断某个face或phase pair。BigInteger可以用于纯Java topology oracle/fixture；生产实现若改用checked 64-bit rational，必须逐fixture与oracle得到相同topology key/digest后才切换。
 
 `Mesh`输出indexed vertex/triangle buffers、triangle category/phase ownership和canonical digest。客户端render adapter只消费这份mesh，不再同时维护一个按cell画水平水面的第二正常渲染路径；debug box/volume overlay保留独立开关。
 
 ### D03：mesh validator 与 frame ownership
 
-validator对每类surface分别计算：index bounds、finite、area、unoriented duplicate、directed edge incidence、boundary loops、connected components、Euler characteristic摘要、winding、outer/interface overlap和bounds。封闭fixture要求每条edge incidence=2；开放fixture的boundary edge必须落在声明的domain/cut boundary；三相接触线按category规则允许并单独统计。canonical digest对排序后的量化vertex/triangle/category计算，重复构建必须一致。
+validator对每类surface分别计算：label partition覆盖/重叠、shared-face原子polygon两侧label、index bounds、finite、area、unoriented duplicate、directed edge incidence、boundary loops、connected components、Euler characteristic摘要、winding、outer/interface overlap和bounds。封闭fixture要求每条edge incidence=2；开放fixture的boundary edge必须落在声明的domain/cut boundary；三相接触线按junction incidence规则允许并单独统计。canonical digest对排序后的exact topology key、量化vertex/triangle/category计算，重复构建必须一致。另一个client harness在固定相机轨迹下验证transparency fragment顺序、capacity overflow不产生partial draw且显示诊断、以及不同相机方向不出现category depth fighting。
 
 客户端frame key固定为`(dimension, region UUID, network generation, sequence)`。每个extension先进入有界staging，只有完整同identity frame才替换current。规则：
 
@@ -72,6 +76,8 @@ validator对每类surface分别计算：index bounds、finite、area、unoriente
 - 稀薄单 cell/单 marker 尾量；
 - cut-cell 斜面和墙角；
 - 两种不可互溶液体的单共享界面；
+- 相邻cell的PLIC plane在共享face给出不同trace，必须生成单一face-owned transition patch且仍watertight；
+- 三种label在cell/shared face形成一个canonical triple junction；
 - region remove、generation 替换和迟到 packet；
 - chemical/granular/thermal extension 开关组合。
 
@@ -80,8 +86,8 @@ validator对每类surface分别计算：index bounds、finite、area、unoriente
 ### 实现切片
 
 1. 给 `FluidMaterialSurfaceMesher` 增加纯 Java mesh validator 和确定摘要 hash。
-2. 将 topology 构建、material/phase ownership、normal smoothing 分成独立步骤和数据类型。
-3. 外表面与液液界面分别生成；phase pair canonical 排序和法向只由稳定规则决定。
+2. 将labeled polyhedron clipping、shared-face planar arrangement、topology indexing、material/phase ownership和normal smoothing分成独立步骤和数据类型。
+3. 外表面与液液界面分别分类，但都来自同一label-union boundary；phase pair canonical排序和法向只由稳定规则决定。
 4. 法线以面积/角度加权邻接平滑，但不跨 sharp material boundary；坏法线回退只能影响 shading，不能删 triangle。
 5. 客户端 frame 按 dimension + region UUID + network generation + sequence 管理；tombstone 后旧包不能复活资源。
 6. buffer 替换在 render thread 有明确 ownership；释放旧 frame 不影响新 generation。
@@ -119,17 +125,23 @@ profile不是在真实世界随手看一次`/tick`。建立一个Java runner，�
 | S | `6×4×6 BV` | `12×8×12 = 1,152` | P1单实验室，要求稳定20 Hz |
 | M | `12×8×12 BV` | `24×16×24 = 9,216` | 当前默认单region预算与pacing判断 |
 | L | `32×32×32 BV` | `64³ = 262,144` | GPU/范围评审，非P1承诺 |
+| S4-mixed | 四个独立S region | `4×1,152` | P1 scheduler：一个moving、一个thermal/phase、两个idle；检查aggregate tick与饥饿 |
+| S4-active | 四个独立S region | `4×1,152` | P3并发容量报告，不预先承诺全部20 Hz |
 
-每个规模至少有idle、free-surface dam break、three-material、chemistry+granular、thermal+phase+sealed gas、moving-body六种state。S/M使用相同物理定义和cell size，不通过减少carrier字段伪装快。fixture state及期望inventory digest可重放；runner不写world/HEAD。
+每个单region规模至少有idle、free-surface dam break、three-material、chemistry+granular、thermal+phase+sealed gas、moving-body六种state。S/M使用相同物理定义和cell size，不通过减少carrier字段伪装快。fixture state及期望inventory digest可重放；runner不写world/HEAD。Minecraft adapter另跑无observer、一个observer和两个observer观看同一region；snapshot应每generation只构建一次再按连接编码，报告每client bytes、总bytes、主线程capture/encode/send和client mesh/A-buffer memory。
 
-采样协议固定为JVM warmup至相同stage分布稳定后，再记录足够logical steps以覆盖pacing、GC和sleep transition；报告必须写明实际warmup/sample数，不能只给平均值。保留p50/p95/p99/max、allocation bytes/step和peak resident/device memory。短profile不修改生产阈值。
+采样协议不能写“warmup至稳定”后由执行者自行判断。每个state使用三个全新JVM fork、相同flags和seed：先warmup至少1,000 logical steps；随后以250-step不重叠window比较最近三个window的stage invocation count和总wall-time median，三者count相同且median相对合并median均在3%内才算稳定；最多warmup 5,000 step，仍不稳定则报告`INVALID_UNSTABLE_WARMUP`而不是挑快区间。稳定后固定采5,000 step；包含sleep transition的state另从同一冻结输入重放完整transition，不混入active percentile。保留每fork和合并的p50/p95/p99/max、allocation bytes/step、GC pause和peak resident/device memory。
+
+D04第一次正式报告必须提交一个不可含糊的`P1 reference host` identity：CPU型号/物理核心与SMT、内存、OS、JDK/JVM完整版本与flags、电源模式、GPU/driver以及后台负载约束。本项目基准命令使用指定`D:\ProgramFiles\BienCreng\jdk-26.0.2`并保持Java 25 target。P1关闭引用该记录，不能每次换一台更快机器仍称“目标机器”；reference host变更需要在roadmap显式评审并同时保留旧/新报告。
 
 ### D05：P1 CPU关闭门
 
-- S的全能力active场景在目标机器p95 logical-step wall time小于现有40 ms pacing门，无200 ms step，且candidate/audit全通过；
+- S的全能力active场景在P1 reference host上p95 logical-step wall time小于现有40 ms pacing门，无200 ms step，且candidate/audit全通过；
+- P1 reference host的client必须通过A-buffer feature/capacity harness和RV-01；不支持该能力的其他client得到明确renderer unavailable，不得因此让server更改物理profile；
 - M可以进入REDUCED，但代表性场景不能连续三步越过200 ms自动暂停；报告各stage占比和pacing分布；
+- S4-mixed在同一server scheduler中总main-thread capture/commit与已完成worker candidate的p95不越40 ms；四个region都在冻结pacing策略内获得step机会，两个idle region保持sleep且无starvation。S4-active只在P3报告明确容量/降频/暂停结果；
 - idle S/M在无observer和有只读probe两种情况下得到相同motion/thermal sleep，probe不唤醒；目标至少80%体积/section按现有定义休眠；
-- observer存在时snapshot/mesh降频不改变logical dt或inventory digest；无observer不构造payload/mesh；
+- 零/一/两个observer时logical dt与inventory digest相同；无observer不构造payload/mesh，两个observer不重复构建server snapshot。每client与aggregate snapshot bytes不得超过`FluidProtocolLimits`；mesh build超capacity保留旧完整mesh，A-buffer count超capacity跳过本帧fluid draw并显示诊断，两者都不得提交partial资源；
 - checkpoint和world capture单列计时，不能算进solver后再用GPU结论掩盖I/O瓶颈；
 - 连续创建/删除frame、region load/unload后Java/native buffer计数回到基线，无generation泄漏。
 
@@ -188,7 +200,7 @@ CPU capture → restore → one step 必须与直接 CPU one step 在当前容�
 
 `FluidStepRequest`固定包含region/profile identity、base generation、world geometry revision、entity snapshot revision、dt与deadline policy。backend返回完整`FluidStepCandidate`或结构化failure，不返回“pressure完成、thermal未完成”的partial。
 
-主线程接受candidate时按顺序核对：service/profile仍READY → region/HEAD没有container/world事务 → base generation/geometry/chunk/controller仍匹配 → moving body stale policy满足 →所有inventory/audit/digest/预算有效 → wall-time策略允许。任一失败丢弃整个candidate并保留base；backend scratch可复用但不能被下一request误认成已提交state。
+主线程接受candidate时按顺序核对：service/profile仍READY → region/HEAD没有container/world事务 → base generation/geometry/chunk/controller仍匹配 → moving body stale policy满足 →所有inventory/audit/digest/预算有效 → 同generation `CommittedObservationIndex`完整且checksum通过 → wall-time策略允许。任一失败丢弃整个candidate并保留base；backend scratch可复用但不能被下一request误认成已提交state。CPU backend也从candidate生成同shape observation index，避免Query因后端不同走第二语义。
 
 首个worker CPU实现一次region最多一个in-flight request。同region需要container、boundary或checkpoint mutation时先cancel/等待有界完成或拒绝外部操作，不能在两个candidate间merge。不同region可并行，但world capture和最终commit仍在主线程按canonical region UUID顺序处理，避免调度改变跨region可见顺序。
 
@@ -229,6 +241,8 @@ CPU capture → restore → one step 必须与直接 CPU one step 在当前容�
 
 kernel之间使用明确stage barrier和不可变input/mutablecandidate分区。integer nanos/SVQ/quanta与stable ordering操作优先使用prefix-sum/segmented reduction得到canonical destination；不能依赖atomic到达顺序决定最后余数接收者。浮点reduction采用固定tree/compensated策略并把roundoff送入与CPU相同审计分类。
 
+production eligibility先冻结并记录device feature contract：storage/workgroup/dispatch上限、subgroup语义、32/64-bit integer arithmetic与atomic、所需浮点精度、timestamp可用性和driver identity。exact `long`库存不能经float/double round-trip；设备无原生64-bit算术时只允许经过CPU逐操作对照的checked two-word 32-bit limb实现，carry、比较、乘除、prefix-sum与overflow均有独立fixture。若某个exact operation、确定reduction或所需容量不能在该device上证明，GPU backend不注册production并回到CPU；不能按材料或carrier选择性丢字段。
+
 每个内部kernel增量仍只注册为probe：
 
 1. 上传/readback先用D07 digest round-trip；
@@ -241,12 +255,11 @@ GPU shader不读取world/profile文件或构造registry；主线程把冻结的�
 
 ### D10：readback、checkpoint与设备故障
 
-常态resident state必须有一个CPU可恢复策略。选择其一并用profile证明成本：
+常态resident state使用一个固定CPU合同，不留给实现者二选一：每个GPU candidate在主线程可接受前，必须完成同generation的紧凑`CommittedObservationIndex`与audit header readback。index覆盖现有同步Query的逐cell typed quantity/species/residual/solid/gas/thermal字段、controller ledger摘要、gas node stable key和所有结构化availability所需信息；它不是solver state，不能反向构造marker或库存。缺片、checksum或generation不一致则整个candidate不提交，因此Query始终同步读取当前已提交generation、不唤醒也不触发GPU命令。
 
-- 每N个完整generation异步制作CPU-readable shadow，但shadow只有所有分片同generation/checksum完成后才替换；或
-- checkpoint/unload/backend switch时暂停新step，分片readback当前完整generation，成功后再允许HEAD/cpu switch。
+需要修改当前state的container/public transfer、world action、finite-device/lifecycle操作，以及checkpoint、unload和backend switch，必须先阻止新GPU step并分片readback当前完整generation；完整D07 digest/audit通过后切成CPU-owned state，再按正常WAL/candidate/HEAD提交，完成后才可重新上传。不能让写事务对仅有observation index的状态规划，也不能把readback延迟隐藏成部分提交。只读probe/console使用observation index，不做完整readback。
 
-不能在device lost后声称从已经丢失的resident buffer读取。若没有已完成shadow，region保持最后已提交CPU-readable HEAD并丢弃HEAD之后未checkpoint的GPU runtime candidate，向玩家报告availability pause；绝不能从客户端surface snapshot恢复。
+每个durable checkpoint成功后保留同generation CPU-readable decoded cache；它只是已提交HEAD payload的内存副本，不是第二commit point。额外周期readback若没有随后发布HEAD，只能缩短同一进程内backend切换成本，device lost后仍不得把它冒充durable state。不能在device lost后声称从已经丢失的resident buffer读取：region回到最近完整CPU-readable HEAD并丢弃其后的纯GPU runtime generations，向玩家报告`PAUSED_GPU_STATE_LOST`。所有跨域source/sink/work在提交前都强制CPU化并发布HEAD，因此不能落在被丢弃区间。服务端为该region发布严格更大的network generation和tombstone，再发送恢复state；绝不能发送较小sequence期待客户端回滚，也不能从客户端surface snapshot恢复。
 
 readback fragment header固定包含region/profile/base/candidate generation、ordinal range、payload kind、byte count和checksum。重叠、缺片、乱序可以暂存但不能构造state；超预算/timeout丢弃整组。完整state重建后先跑D07 digest与inventory audit，再交checkpoint或CPU backend。
 
@@ -255,9 +268,9 @@ readback fragment header固定包含region/profile/base/candidate generation、o
 ### 设备常驻与 readback
 
 - marker、grid、side columns 和临时 PCG 向量常驻设备；常规 step 不全量回 JVM。
-- inventory ledger 使用设备 reduction，并回读紧凑 audit/candidate header；不能只信 shader success。
+- inventory ledger使用设备reduction，并回读紧凑audit/candidate header与同generation `CommittedObservationIndex`；不能只信shader success。
 - 客户端 snapshot 可在设备侧生成紧凑展示载荷，但服务端 generation/协议验证仍在 CPU。
-- 完整 state 只在 checkpoint、unload、backend switch、诊断或设备故障恢复需要时分片回读。
+- 完整state在checkpoint、unload、backend switch、需要完整truth的诊断以及任何container/public/world/device/lifecycle写事务前分片回读；Query/probe只读observation index。
 - readback 每片绑定 region/generation/ordinal range/checksum；缺片不构造 partial state。
 
 GPU 不取得磁盘、world、actor 或 HEAD 权限。即使 renderer 与 compute 使用同一物理设备，也不能让客户端 mesh buffer 成为服务端库存。
@@ -278,7 +291,7 @@ GPU 无需逐 bit 等于 CPU，但每个 fixture 必须同时满足：
 
 - shader compile/pipeline 创建失败：区域保持 CPU 或暂停，不修改后端选择的持久真值。
 - step timeout：丢弃整个 candidate，保留 base state；达到策略门后切 CPU 或 PAUSED。
-- device lost：停止提交，释放不可用资源；从最近完整 CPU-readable state/checkpoint 恢复。没有完整状态时 LOCKED/PAUSED，而不是从客户端 snapshot 重建。
+- device lost：停止提交，释放不可用资源；从最近完整CPU-readable state/checkpoint恢复并提升network generation、先发tombstone再发恢复snapshot。没有完整状态时LOCKED/PAUSED，而不是从客户端snapshot重建；客户端已经看见的较新纯运行时frame不得继续存活。
 - GPU audit 失败：保存有界诊断，禁止 HEAD/checkpoint；可在相同 base 上运行 CPU 对照定位。
 - backend switch：只发生在完整 generation 边界，并验证 capture/restore ledger。
 
@@ -287,7 +300,7 @@ GPU 无需逐 bit 等于 CPU，但每个 fixture 必须同时满足：
 1. 代表性 profile 明确 CPU/GPU break-even 和主要耗时占比。
 2. `64^3` cell 目标有容量、显存、readback 和 20 Hz/pacing 报告；不保证所有物理组合都达 20 Hz，但必须有产品预算。
 3. CPU/GPU 对照覆盖 pure/material/chemical/granular/thermal/gas/phase 与 moving body。
-4. GPU 超时、错误 candidate、device lost、checkpoint/readback 中断均只得到完整旧态或完整新态。
+4. GPU超时、错误candidate、device lost、observation/full readback、checkpoint和写事务CPU化中断均只得到完整旧态或完整新态；回退后客户端接受更高network generation且不保留未来mesh。
 5. 无 GPU、驱动不支持或 probe 失败时 CPU Mod 仍可正常游玩。
 6. 文档明确 CPU 继续是规范/恢复实现，生产 GPU 是计算后端而非第二套世界系统。
 
@@ -303,14 +316,14 @@ GPU 无需逐 bit 等于 CPU，但每个 fixture 必须同时满足：
 | D07/D08 | `FluidDomainState/StepRequest/StepCandidate/CpuFluidSolverBackend`、scheduler | `thermal`作为完整carrier handoff门，再按缺失字段追加直接领域 |
 | D09/D10 | `gpu-probe` binding/shader/readback、新production backend adapter | GPU probe harness + CPU对应selector；注册改动加`protocol/lifecycle` |
 
-D01–D03和S规模D05属于P1；D04–D06的M报告属于P3进入门；D07–D10不阻塞P1。若CPU已满足S/M产品门，仍可完成GPU作为既定长期项，但不能以“未来GPU”推迟修复P1的mesh或主线程I/O问题。
+D01–D04、D05的S/M/S4-mixed门属于P1；D05不达门时，直接针对失败hot path的D06切片也成为P1前置。P3复用同一D04 harness增加S4-active/M/L与GPU报告，不重新定义采样协议；D07–D10不阻塞P1。若CPU已满足产品门，仍可完成GPU作为既定长期项，但不能以“未来GPU”推迟修复P1的mesh或主线程I/O问题。
 
 ## 推荐提交顺序
 
 1. D01 surface snapshot与协议identity；先不切默认renderer。
 2. D02 indexed mesher与fixture，D03 validator/digest；对旧renderer做同snapshot只读对照。
 3. 切换默认renderer，删除marker增厚/interface inset路径；再提交frame/buffer ownership。
-4. D04 profile harness与S/M baseline报告，不在同一提交优化。
+4. D04 profile harness、reference host identity与S/M/S4-mixed baseline报告，不在同一提交优化。
 5. D06按最大已证实stage逐项优化，每项保留before/after与reference digest。
 6. D07 state字段表/digest并补齐handoff，D08 worker/candidate协议。
 7. D09逐kernel扩展probe；每个提交都有CPU对照但不注册production。

@@ -16,7 +16,7 @@ cell 机械密度已经由实际 marker mass / volume 重建。化学 species ma
 
 #### 物性定义
 
-把动态黏度放入 world-local material registry，按 `Pa·s` 定义分段 `mu(T)`、有效温区和最大适用剪切/Reynolds 诊断域。首个模型只承诺 Newtonian liquid；不声明则不能参与需要黏度的 fixture。`GranularCarrier` 删除自己的重复 `dynamic_viscosity`，只绑定 liquid material并保留颗粒相关的最大 Reynolds 有效域；granular drag通过统一 material state取 `mu(T)`。profile bundle material fingerprint因此必须覆盖黏度定义。
+把动态黏度放入world-local material registry，按`Pa·s`定义分段`mu(T)`、有效温区和可选剪切率本构有效域。首个模型只承诺Newtonian liquid；不声明则不能参与需要黏度的fixture。不要给Newtonian material定义“最大Reynolds”：Reynolds描述流场/解析度，不是Newtonian本构的材料有效域；只有granular drag等具体经验correlation可以保存自己的Reynolds有效域。`GranularCarrier`删除重复`dynamic_viscosity`，只绑定liquid material；granular drag通过统一material state取`mu(T)`。profile bundle material fingerprint因此必须覆盖黏度定义。
 
 不要从 stable material ID选择黏度，也不要用 density推算。chemical composition当前只通过实际 mass/volume影响机械密度；如果未来 viscosity需要composition，另加数据化混合模型和有效域，本切片不猜测。
 
@@ -29,16 +29,16 @@ tau = mu * (grad(u) + grad(u)^T)
 rho * du/dt = div(tau)
 ```
 
-face/control-volume使用与pressure相同的cut aperture和liquid occupancy；两侧黏度使用守恒调和平均。固定world boundary默认no-penetration，切向条件由明确boundary定义选择no-slip/free-slip；moving body表面速度在C02接入同一通量。pairwise内部应力冲量严格反向，fixed boundary份额进入boundary impulse ledger。
+face/control-volume使用与pressure相同的cut aperture、实际liquid control volume和owner分类；两侧黏度使用守恒调和平均。相同连续liquid内face的应力冲量严格反向；不可互溶Newtonian liquid界面满足法向不可穿透、切向速度与切向应力连续，除非pair registry以后显式声明界面滑移模型。未实现gas viscosity前，liquid-gas free surface使用零切向traction且法向只由pressure/surface-tension路径承担，不能把sealed gas当no-slip wall。固定world boundary默认no-penetration，切向条件由明确boundary定义选择no-slip/free-slip；moving body表面速度在C02接入同一通量。fixed/kinematic boundary份额进入对应boundary impulse/work ledger。
 
-首个实现可用显式substep，稳定步长由离散扩散谱界推导：`dt <= rho_min * dx^2 / (2*d*mu_max)`，其中有效维数和aperture进入实际上界；所需substep超过冻结预算时PAUSED。不能加velocity clamp或“高黏度每tick衰减”。若profile证明显式成本不可接受，再独立实现隐式Helmholtz solve并与显式小步对照。
+首个实现可用显式substep，但稳定步长必须从本次实际离散矩阵求界，不能使用均匀满格公式。对每个momentum control volume定义容量`C_i = rho_i * V_i`，每个开放face的viscous block conductance由`mu_f`、实际`A_f`、中心距和对称梯度离散得到；用该block行和的Gershgorin/spectral上界计算显式积分器允许的`dt_i`，标量退化必须等于`C_i / sum_f(mu_f * A_f / distance_f)`乘以该积分器解析稳定区给出的系数。全域取最小有限正值，sliver cut-cell的`V_i`必须进入分子；零/负容量、非有限conductance或无法证明的谱界直接PAUSED。所需substep超过冻结预算时PAUSED。不能加velocity clamp或“高黏度每tick衰减”。若profile证明显式成本不可接受，再独立实现隐式Helmholtz solve并与显式小步及manufactured solution对照。
 
 #### fixture 与判据
 
 1. 等密度、等温、无外力剪切层：速度分布与解析扩散解对照，网格加密时误差收敛；总动量只由boundary ledger改变。
 2. 同温稳定盐水分层和反置分层：组成密度只来自mass/volume；稳定例沿用已有free-surface静水残差门，反置例重心势能下降且所有inventory闭合。
 3. 同组成温差分层：Boussinesq有效比例沿用registry声明，越界PAUSED；不得改marker mass/volume。
-4. 水平受热层：用registry `rho, mu, beta, k, cv`计算 `Ra = g*beta*DeltaT*H^3/(nu*alpha)`。低于相应边界条件的解析临界值时扰动衰减，高于时出现增长；边界条件和理论临界值作为fixture定义记录，不写进通用solver。
+4. 水平受热层：用registry `rho, mu, beta, k, cv`计算 `Ra = g*beta*DeltaT*H^3/(nu*alpha)`。fixture冻结周期/侧壁、上下no-slip或free-slip与fixed-temperature条件，并施加一个解析允许的确定小振幅模态；用两个相差固定倍数且都在线性域的振幅证明归一化增长率一致，再比较低于临界值的衰减和高于临界值的增长。至少两个网格分辨率报告临界趋势与growth-rate收敛；边界条件、理论临界值、模态和观测窗口只属于fixture，不写进通用solver。
 5. 热盐竞争：分别报告inventory density、Boussinesq delta和最终body force，翻转条件由两项符号/量级自然决定。
 
 所有测试固定真实SI物性、几何、dt和解析/registry有效域。接受阈值优先复用pressure、thermal和resolution-convergence已有误差门；若必须新增数值阈值，在测试中由解析离散误差阶次推导并记录，不把它放入生产算法。
@@ -88,10 +88,12 @@ Minecraft 实体没有通用可靠的 kg 接口，不能把 bounding-box 大小�
 
 moving occupancy与world cut-cell、deposit/coherent occupancy合成时保留owner分类，不能把动态body烘成持久raw mask。每个face的开口变化和body normal velocity进入同一target-divergence；投影输出的pressure face impulse按相反符号累计给body。C01的viscous face stress使用相同surface velocity/area，pressure与viscous分列。
 
+`D u = B v_body`不能以“先把本步body velocity当已知、解完再施冲量”的松耦合声称严格双向。首个动态实现把所有受支持body的三维平移速度作为pressure system的附加未知量，使用实际质量矩阵`M_body`和同一face coupling operator `B/-B^T`组成对称Schur系统：fluid incompressibility、body momentum更新与pressure impulse在一次solve中收敛。Minecraft暂不承诺通用转动惯量，因此旋转surface velocity只能是明确KINEMATIC_EXTERNAL，不能伪装成动态角冲量。PCG residual、body momentum residual和总动量/功审计必须同时通过后才产生candidate。这样added mass进入离散系统本身；不得用经验under-relaxation或速度钳制稳定轻body。若附加body自由度使系统非正定、超condition/budget或不收敛，整个candidate PAUSED。
+
 同步CPU路径的提交顺序：
 
 1. END_SERVER_TICK主线程冻结entity identity、dimension、pose/velocity和definition；
-2. backend在私有state上构造dynamic occupancy、求pressure/viscous candidate并返回per-body settlement；
+2. backend在私有state上构造dynamic occupancy，联合求解fluid pressure与dynamic body post-velocity；viscous substep使用fluid/body合质量的同一pairwise稳定门，返回per-body pressure/viscous settlement；
 3. 接受前重新解析entity UUID，要求dimension、alive状态、pose revision/AABB raw bits与request完全匹配；首个同步实现不使用经验pose tolerance；
 4. 捕获entity pre-velocity；在所有检查完成后进入主线程不可重入提交段，交换fluid candidate并应用entity impulse。正常Minecraft velocity写入必须是同步非抛出；若出现异常，恢复base domain与pre-velocity并把candidate整体判失败，不能留下单边冲量；
 5. 记录 `Delta p_fluid + impulse_entity + impulse_fixed + impulse_kinematic_external = roundoff` 和 displacement work；
@@ -99,7 +101,7 @@ moving occupancy与world cut-cell、deposit/coherent occupancy合成时保留own
 
 异步/GPU阶段不能沿用raw-bit pose相等，因为一帧延迟会使所有dynamic candidate过期；进入D08前另行冻结可证明的predictor/stale协议。不要现在加入任意厘米容差。
 
-body进入液体前先验证新几何available volume。首个产品场景要求存在gas/free-surface headspace；若sealed满液体导致不可压缩容量为负，整candidate PAUSED并向entity施加零MMM冲量，不删液体或缩marker。后续要阻止实体穿入需要接入Minecraft碰撞/约束，不能用escaped sink解决。
+body进入液体前先验证swept新几何available volume。首个产品场景要求存在gas/free-surface headspace。普通连续移动若会使sealed满液体的不可压缩容量为负，Fabric motion constraint在主线程仍匹配pre-pose时拒绝这次entity displacement并保留base fluid；不能只给零冲量后让body永久重叠。teleport/其他Mod移动等无法安全回退的第三方位姿产生`PAUSED_BODY_OVERLAP`，region保留库存且不纳入重叠body，直到实体离开或管理员处理；不删液体、不缩marker、不记escaped sink。
 
 ### 推进切片
 
@@ -114,6 +116,8 @@ body进入液体前先验证新几何available volume。首个产品场景要求
 主线程冻结实体 snapshot → backend candidate 应用 moving boundary 并返回 per-body impulse → tick boundary 接受完整 fluid candidate → Fabric 对仍匹配 identity/pose tolerance 的实体施加冲量。若实体在计算期间改变到无法匹配，拒绝 candidate 或把 body 明确视为 kinematic external boundary；不能提交流体反冲却丢弃实体侧账本。
 
 CPU 同步实现可以先保持同 tick。异步/GPU 接入前必须冻结 pose tolerance 和 stale request 处理。
+
+自动fixture除静水浮力外必须覆盖：单个轻body的added-mass主导场景、两个body通过同一fluid耦合、dynamic/kinematic混合、Schur residual不收敛、viscous pairwise交换、普通移动进入满液体被motion constraint拒绝、teleport产生并恢复`PAUSED_BODY_OVERLAP`、entity在commit前消失以及body顺序置换。每项同时断言fluid/body/fixed/kinematic momentum与work ledger，不能只检查entity速度方向。
 
 ## 压力相关相变
 
@@ -182,7 +186,18 @@ BlockEntity只保存`providerId=mmm`、由dimension+position派生的canonical o
 
 finite device audit增加独立kg与`U`的external source/sink/actor transfer：creative descriptor enrollment记source；实际device item enrollment/拆除是region↔item transfer；creative break记actual sink。solver↔device heat exchange仍是region内部镜像项，不能与device创建/销毁source混在一起。
 
-post-creation place/detach使用一个包含world before/after与可选item actor before/after的`FiniteDeviceJournal`，复用B03/B06的generation、checksum和recovery规则但不串行执行两个journal。顺序固定为stage region→PREPARED journal→REGION_COMMITTED journal→HEAD→world block/BlockEntity after→item actor after→两者durable save/readback→删journal。HEAD为base时保持world/item before；HEAD为target时幂等收敛两种外部域；任一第三状态保留journal并锁定。不能HEAD后只保存掉落物、world block仍处于before就提前删除WAL。
+post-creation place/detach使用一个包含world before/after与可选item actor exact before/after的`FiniteDeviceJournal`，委托world计划B00共同恢复判定器，不串行执行两个journal。顺序固定为stage region→PREPARED journal→REGION_COMMITTED journal→HEAD→world block/BlockEntity after→item actor after→两者durable save/readback→删journal。不能HEAD后只保存掉落物、world block仍处于before就提前删除WAL。
+
+恢复矩阵必须逐行实现并故障注入；“无item”作为恒定AFTER成员，不省略判定：
+
+| HEAD | world成员 | item actor | 动作 |
+|---|---|---|---|
+| base | 全部BEFORE | BEFORE/无item | 删除已知staging与journal；不重写world/item |
+| base | 任一AFTER或THIRD | 任意 | CONFLICT/LOCKED，保留journal；不得回滚外部域 |
+| target + checksum、REGION_COMMITTED | 每个均为BEFORE或AFTER | BEFORE或AFTER/无item | 只对BEFORE幂等应用exact after；全部durable回读后删journal |
+| target + checksum、REGION_COMMITTED | 任一THIRD | 任意 | CONFLICT/LOCKED，保留journal且停止其他写入 |
+| target、PREPARED | 任意 | 任意 | LOCKED；缺少权威after/checksum，不补字段 |
+| 其他HEAD/checksum | 任意 | 任意 | LOCKED |
 
 同一position只能enroll一个body；object ID、body generation、region generation和world block preimage都进入操作candidate。drop cloning、silk touch或creative pick-block不能复制已enrolled body truth；pick-block只得到未绑定creative descriptor。
 
@@ -203,7 +218,7 @@ film thickness若未解析，来自device/port data的SI几何，不使用tick�
 
 #### UI 与验收
 
-controller/probe显示locator、body kg/`U`、派生K、端口数、每步实际exchange和失联reason。UI没有set temperature按钮。自动fixture覆盖initial enrollment、place/detach各WAL故障点、contact去重、两流体零mass/species transfer、device substep跨caloric segment、checkpoint restore和missing locator。最近门`thermal,region-state,ownership`按实际切片追加；真实游戏只在A12同一场景验证可放置/重进。
+controller/probe显示locator、body kg/`U`、派生K、端口数、每步实际exchange和失联reason。UI没有set temperature按钮。自动fixture覆盖initial enrollment、place/detach各WAL故障点、contact去重、两流体零mass/species transfer、device substep跨caloric segment、checkpoint restore和missing locator。最近门`thermal,region-state,ownership`按实际切片追加；真实游戏只在A12-TX验证一次可放置/重进接线，不由玩家目测热交换正确性。
 
 ## 气液 species 交换
 
@@ -255,18 +270,24 @@ world registry 对每个 gas component/liquid species pair 定义：
 - transport：liquid/gas diffusion coefficient和物理film thickness。使用串联film resistance，不用“每tick转百分之几”：
 
 ```text
-J = A * (c_eq - c_liquid)
-    / (delta_liquid / D_liquid + mappedGasResistance)
-extent = J * dt
+c, c_eq       [mol / m^3]
+k_H           [mol / (m^3 Pa)]
+D             [m^2 / s]
+delta         [m]
+R_gas_mapped  [s / m]
+A             [m^2]
+n_dot = A * (c_eq - c_liquid)
+        / (delta_liquid / D_liquid + R_gas_mapped)   [mol / s]
+n_extent = n_dot * dt                                [mol]
 ```
 
-gas-side单位映射和`mappedGasResistance`由pair definition明确；无可验证gas resistance的第一数据可声明liquid-side controlled并把gas resistance设为物理上的零边界条件，而不是隐藏经验常数。溶解/脱气能量差由gas host与liquid host的species state-function offset在同一T下推导，不另存会漂移的“反应热”。
+registry为每个exact batch保存gas standard nanos、liquid quanta、两侧kg/species/residual以及用于规划的exact rational mol amount；mol只是在共同SI模型中的派生量，不成为新库存。`R_gas_mapped`必须与`delta/D`同为`s/m`并由gas film厚度、diffusivity、partition mapping推导。无可验证gas resistance的第一数据可声明liquid-side controlled并把gas resistance设为物理上的零边界条件，而不是隐藏经验常数。连续`n_extent`只用于决定向零量化多少完整batch；提交仍只搬运exact truth。溶解/脱气能量差由gas host与liquid host的species state-function offset在同一T下推导，不另存会漂移的“反应热”。
 
 world profile的chemical/gas/thermal fingerprint必须一起覆盖这些定义。当前world bundle不可变；数据包变化只报告definition mismatch，不给已有world追加pair。
 
 #### logical-step顺序
 
-固定为mechanics/projection → marker advection → gas topology remap → conduction → reaction → ordinary liquid/gas phase change → gas-liquid species transfer → granular/reseed → audit。若water phase change先改变界面/available volume，则species transfer使用其联合candidate中的新lineage和新interface geometry；不能对旧node再转一次。
+固定为mechanics/projection → marker advection → gas topology remap → conduction → reaction → ordinary liquid/gas phase change → gas-liquid species transfer → granular/reseed → audit。若water phase change先改变界面/available volume，则species transfer使用其联合candidate中的新lineage和新interface geometry；不能对旧node再转一次。由于reaction在前，本步新溶解species首次参加reaction是在下一logical step；该一step延迟是冻结语义并进入fixture，不能由不同backend擅自重排。
 
 每个interface由PLIC面积、liquid chemical phase和canonical gas node key唯一识别。planner从exact gas inventory派生partial pressure，从liquid quanta/实际liquid volume派生concentration，在有效域求signed extent，然后向零方向量化为最大的完整exact batch。小于一batch保留在原库存等待未来驱动力，不建立“丢失尾量”字段。
 
@@ -274,24 +295,24 @@ world profile的chemical/gas/thermal fingerprint必须一起覆盖这些定义�
 
 #### 玩家入口与观察
 
-使用A07/B08的gas source/vent把CO2 actual inventory注入sealed headspace；不允许`/mmm airdemo`作为P1证据。field probe/Jade gas extension显示component standard nanos/kg、partial/absolute pressure与K；liquid probe显示aqueous species quanta。sealed吸收、升温/降压脱气和ambient交换三个场景都能从正常入口建立。
+使用A07/B08的gas source/vent把CO2 actual inventory注入sealed headspace；不允许`/mmm airdemo`作为P1证据。ambient交换不是隐藏无限inventory：gas registry冻结ambient component partial pressure/温度边界，有效域内每个actual batch逐standard nanos/kg/species/`U`记external source或sink；边界定义缺失或越域整interface拒绝。field probe/Jade gas extension显示component standard nanos/kg、partial/absolute pressure与K；liquid probe显示aqueous species quanta。sealed吸收、升温/降压脱气和ambient交换三个场景都能从正常入口建立。
 
 #### 自动门
 
-除原fixture外覆盖exact batch边界、零界面面积、film thickness/D有效域、cavity split/merge同step、water vapor phase同step、reaction同cell、U offset、预算耗尽和profile fingerprint mismatch。最近门`gas-liquid,chemistry,thermal`；只改data codec时从最直接的`gas-liquid`开始，跨层后再追加。
+除原fixture外覆盖SI维度/registry rational mol round-trip、exact batch边界、零界面面积、film thickness/D有效域、cavity split/merge同step、water vapor phase同step、reaction同cell且新溶解species延后一step、ambient source/sink、U offset、预算耗尽和profile fingerprint mismatch。最近门`gas-liquid,chemistry,thermal`；只改data codec时从最直接的`gas-liquid`开始，跨层后再追加。
 
 ## 推荐顺序与验证门
 
 推荐依赖顺序：
 
-1. A01同步冻结material黏度snapshot/codec；C01-a统一granular carrier读取；`materials,granular,region-state`按切片选择。
-2. C01-b有限体积viscous step与解析剪切fixture；`free-surface`，改cut aperture才加`cut-cell`。
-3. C01-c密度/热盐/Rayleigh fixture，修复fixture实际暴露的路径；`materials,thermal`。
+1. A01-schema先冻结material黏度与C05 CO2/component/pair的snapshot/codec/default data；`materials,gas-liquid,region-state`按实际data切片选择。这一步不实现solver，且必须在首次bundle发布前完成。
+2. C01-a统一granular carrier读取；再实现有限体积viscous step、shared-interface boundary与解析剪切fixture。均匀满格、极小cut-volume/大aperture sliver和零aperture都必须验证离散谱界；`free-surface,cut-cell`按实际修改选择。
+3. C01-b密度/热盐/Rayleigh fixture，修复fixture实际暴露的路径；`materials,thermal`。
 4. C03 pressure provenance与压力相变fixture；`thermal,gas-liquid`，改projection发布才加`free-surface`。
 5. C02-a loader-neutral盒面snapshot、静水pressure面积分；`free-surface,shape`。
-6. C02-b dynamic occupancy/target divergence、entity impulse joint commit；`free-surface,shape,lifecycle`按实际层选择。
-7. C04 enrollment/contact/tick，再分别提交place/detach world事务与资源；`thermal,region-state,ownership`。
-8. C05 registry/exact mapping、equilibrium/flux、联合candidate、gas创造入口；`gas-liquid,chemistry,thermal`。
+6. C02-b dynamic occupancy/target divergence、含body自由度的pressure Schur系统、motion constraint与entity impulse joint commit；`free-surface,shape,lifecycle`按实际层选择。
+7. B00关闭后做C04 enrollment/contact/tick，再分别提交place/detach world事务与资源；`thermal,region-state,ownership`。
+8. C05-solver消费A01-schema已冻结的exact mapping，依次实现equilibrium/有单位flux、联合candidate和ambient ledger；B08只负责gas创造入口。最近门`gas-liquid,chemistry,thermal`。
 9. multi-region heat device只在公共multi-HEAD coordinator存在后单独评审，不属于P1。
 
 | 工作包 | 首要代码入口 | 必须删除/替换的临时路径 |
@@ -302,4 +323,4 @@ world profile的chemical/gas/thermal fingerprint必须一起覆盖这些定义�
 | C04 | `FiniteThermal*`、`ThermalCellGrid`、`FluidRegion`、world-action coordinator、新block/entity | BlockEntity temperature/`U`副本、把fixed reservoir改名复用 |
 | C05 | gas/chemical/thermal registry、PLIC interface、gas topology lineage、phase/chem candidate | per-tick百分比、CO2 ID分支、从pressure反推gas inventory |
 
-每个work package完成后把最终公式、状态、logical-step顺序和失败语义并入对应architecture，再从本计划删除已完成段。A12是一座统一创造实验室，实体与可放置换热器不再分别请求额外人工场景；真实`VoxelShape`若自动`shape`门仍无法观察，才提出一个单独盒体/斜面场景。
+每个work package完成后把最终公式、状态、logical-step顺序和失败语义并入对应architecture，再从本计划删除已完成段。所有物理定律由自动fixture关闭；A12-TX只验证跨重启世界接线，不再让玩家目测实体/换热器证明算法。真实`VoxelShape`若自动`shape`门仍无法观察，才提出一个独立盒体/斜面场景，不能和A12-TX或RV-01合并。

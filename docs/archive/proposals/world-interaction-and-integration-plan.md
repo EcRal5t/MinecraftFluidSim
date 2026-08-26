@@ -26,13 +26,14 @@
 在 `api` 中定义 JDK-only 请求和结果；名字使用语义，不以数字后缀区分格式。最小形状：
 
 - `TransferTarget`：dimension stable ID、world position、可选 region UUID、face/port identity；
-- `TransferActorIdentity`：provider ID、actor kind、provider 内稳定 object ID、slot/channel；
+- `TransferActorIdentity`：provider ID、actor kind、provider 内稳定 object ID、slot/channel、持久 actor epoch；
 - `TransferResource`：首个封闭 union 只有 liquid 与 granular；liquid 携带 nanos、逐材料 kg、可选 chemical groups/species/residual 和可选 raw `U`，granular 携带 SVQ、逐材料 kg 与可选 solid composition；
-- `TransferRequest`：insert/extract、最大或精确量、composition/energy policy、transaction UUID；
-- `TransferPlan`：绑定 region generation、actor before fingerprint、实际 settlement、过期条件；
+- `TransferOperationIdentity`：actor epoch、严格单调actor operation sequence和仅用于追踪的caller UUID；exactly-once键是`(actor identity, epoch, sequence)`，不依赖永久保存全部UUID；
+- `TransferRequest`：insert/extract、最大或精确量、composition/energy policy、operation identity；
+- `TransferPlanToken`：server生成的有界opaque nonce，绑定完整request digest、profile/registry、target owner、region generation、actor before truth/sequence和过期tick；
 - `TransferResult`：committed/rejected/unavailable/conflict 与结构化原因。
 
-公开 API 不返回 live plan 实现、domain、runtime handle 或 mutable collection。计划不得跨 tick 无期限保存；commit 必须重新核对 generation、target、actor before truth 和 registry fingerprint。
+公开API固定为`plan(request) -> TransferPlanSummary`、`commit(planToken) -> TransferResult`和同tick便利方法`execute(request)`。不返回live plan实现、domain、runtime handle或mutable collection。plan只在server内存的有界表中活到过期tick；token不可序列化为未来承诺。commit只接受原token，不重新读取客户端request来“再规划”，并重新核对generation、target、actor before truth/sequence和registry fingerprint。重启后token失效，调用方使用同一operation identity重试，由actor durable sequence判定已提交或stale，绝不能重新执行。
 
 ### B01：公开值对象与操作语义
 
@@ -40,21 +41,25 @@
 
 - `TransferDirection`：相对 region 的 `INSERT`/`EXTRACT`；
 - `TransferTarget`：dimension stable ID、world metres/block position、可选 region UUID、命中 face 与可选 port ID；
-- `TransferActorIdentity`：provider ID、actor kind、object ID、slot/channel，全部 canonical 且长度有界；
+- `TransferActorIdentity`：provider ID、actor kind、object ID、slot/channel和actor epoch，全部 canonical 且长度有界；
 - `LiquidTransferPayload`：actual nanos、按 stable material 排序的 nanos/kg、可选 chemical groups 与 kg residual、可选 `ThermalPayload(registryFingerprint, rawUBits)`；
 - `GranularTransferPayload`：actual SVQ、排序 group 的 material/SVQ/kg、可选 composition；
 - `TransferConstraint`：exact 或 at-most、允许 stable resource/mixture policy、是否要求完整 chemistry/thermal；
-- `TransferRequest`：transaction UUID、target、actor、direction、constraint；insert 的物质来自 actor capture，不能由调用者另传一份冲突 payload；
-- `TransferPlanSummary`：actual typed settlement、base/target generation、过期 tick、结构化拒绝原因；不含可执行 callback；
+- `TransferOperationIdentity`：actor epoch、非负单调sequence和trace UUID；同一actor的新操作只能使用当前`nextSequence`，UUID重复本身不改变顺序语义；
+- `TransferRequest`：operation identity、target、actor、direction、constraint；insert 的物质来自 actor capture，不能由调用者另传一份冲突 payload；
+- `TransferPlanSummary`：opaque `TransferPlanToken`、request digest、actual typed settlement、base/target generation、actor before/after sequence、过期 tick、结构化拒绝原因；不含可执行 callback或可变actor truth；
+- `TransferCompletionReceipt`：operation identity、request digest、target identity、actual payload、committed region generation、actor after sequence与result digest；受与request相同的payload上限约束并作为actor after truth的一部分持久保存；
 - `TransferResult`：committed/rejected/unavailable/conflict/stale/locked，committed 时返回 actual payload 与 generation。
 
-`at-most` 只允许在 planner 先求出可完整表示 settlement 后提交；WAL、actor after 和 event 始终记录 actual，不记录请求上限冒充结算。insert/extract 都必须选择 composition policy：`PRESERVE_ALL` 是首个默认；调用方无法表示 mixture/species/`U` 时拒绝，不提供“丢掉附加列”的模式。
+`at-most` 只允许在 planner 先求出可完整表示 settlement 后提交；WAL、actor after receipt 和 event 始终记录 actual，不记录请求上限冒充结算。insert/extract 都必须选择 composition policy：`PRESERVE_ALL` 是首个默认；调用方无法表示 mixture/species/`U` 时拒绝，不提供“丢掉附加列”的模式。
 
 API 包只依赖 JDK。core 提供 public payload 与 `FluidMixture`/`ChemicalContents`/`GranularContents`/`ThermalContents` 的严格映射；避免复制算法，但 public ABI 也不直接暴露可变 pool/ledger。所有集合 defensive copy、canonical sort，并在构造阶段做长度、checked arithmetic、finite raw bits 和 stable ID 校验。
 
 ### B02：发现、线程与授权
 
-`MmmFabricApi.transfers(server)` 返回绑定该 server 的 `MmmTransferApi`。`plan`/`commit` 只允许 server main thread；wrong-thread 返回结构化失败，不把任务排队到未来 tick。`plan` 只读 actor/region并绑定当前 tick、profile fingerprint、region generation 和 actor before fingerprint；默认在 tick boundary 过期。提供 `execute(request)` 作为同 tick plan+commit convenience，reference provider 优先使用它。
+`MmmFabricApi.transfers(server)` 返回绑定该 server 的 `MmmTransferApi`。`plan`/`commit` 只允许 server main thread；wrong-thread 返回结构化失败，不把任务排队到未来 tick。`plan` 只读 actor/region并绑定当前 tick、profile fingerprint、region generation、actor exact before truth及其epoch/nextSequence；默认在 tick boundary 过期。提供 `execute(request)` 作为同 tick plan+commit convenience，reference provider 优先使用它。
+
+server-owned plan table有per-server和per-provider硬entry/byte上限；创建新plan前只清理已过期/已消费token，容量不足返回`BUDGET`，不能驱逐仍有效token让另一个调用方获得不确定STALE。token commit最多消费一次；成功、拒绝或过期后移除，server stop全部失效且不落盘。
 
 provider 注册发生在 loader 初始化，而不是某个世界启动后；Fabric adapter 保存 `providerId -> TransferActorProvider` runtime map。provider 接口可以接触 Minecraft server/world 类型，因此留在 `fabric` 发现层；持久 identity、before/after truth 和 recovery decision 仍是 JDK-only。注册重复 provider ID、过长 ID 或启动后替换实现直接拒绝。
 
@@ -64,12 +69,13 @@ provider 注册发生在 loader 初始化，而不是某个世界启动后；Fab
 
 这是公开写入的关键门。provider 必须注册一种可跨重启解析的 actor adapter：
 
-1. `providerId` 和 `objectId` 稳定、长度有界、canonical。
-2. capture 返回封闭 before fingerprint；fingerprint 足以判断 before/after/conflict。
-3. apply-after 只在 region HEAD 已提交后执行，且必须幂等。
-4. durable-save 返回“已经强制保存”的证据；异步 future 或普通 dirty flag 不算完成。
-5. recovery 只能通过持久 identity 重新发现 actor，不能保存 Java callback/class name。
-6. provider 缺失或 actor 所在 chunk 未加载返回 UNAVAILABLE 并保留 WAL；actor 变成第三状态返回 CONFLICT/LOCKED。
+1. `providerId`、provider actor codec ID、`objectId`和actor epoch稳定、长度有界、canonical；codec ID改变时旧WAL不能交给新codec猜测。
+2. capture返回有界canonical `ActorTruth`：epoch、`nextSequence`、完整last `TransferCompletionReceipt`、provider-defined exact payload及fingerprint。WAL保存exact before/after truth和fingerprint，不能只保存fingerprint后要求恢复阶段猜after。
+3. provider提供纯`planAfter(beforeTruth, actualSettlement, operationIdentity)`；成功after必须把`nextSequence`加一并持久保存完整last receipt和after fingerprint。`apply-after`只在region HEAD已提交后执行，且对同一after truth幂等。
+4. sequence小于当前next且不等于last applied时返回`STALE_RETIRED`，大于next返回`OUT_OF_ORDER`，epoch不匹配返回`ACTOR_REPLACED`；任何一种都不得重新规划。这样旧receipt正文可以压缩为actor high-watermark而不重新接受旧请求。
+5. durable-save返回“已经强制保存”的证据；异步future或普通dirty flag不算完成。只有provider能持久保存epoch/sequence/last receipt的actor才可注册公开写入。
+6. recovery只能通过持久identity重新发现actor，不能保存Java callback/class name。
+7. provider缺失或actor所在chunk未加载返回UNAVAILABLE并保留WAL；actor变成第三状态返回CONFLICT/LOCKED。actor明确退休前必须持久保留epoch/high-watermark tombstone；否则object ID不得复用。
 
 复用 `ContainerTransferJournal` 的 generation/settlement/after truth 与 `ControllerItemTransferCoordinator` 的提交顺序。若现有 journal 的 actor union 无法表示 provider identity，直接扩展封闭 union 和严格 codec；不要旁建“API transfer journal”。
 
@@ -78,14 +84,14 @@ provider 注册发生在 loader 初始化，而不是某个世界启动后；Fab
 外部转移应与容器保持同一个骨架：
 
 1. 主线程解析实际 world target 和唯一 owner。
-2. adapter capture actor before truth；验证没有同 region/actor WAL。
+2. adapter capture actor exact before truth；验证operation epoch/sequence、request digest、last receipt并确认没有同region/actor WAL。若同一epoch/sequence及digest已在last receipt中，直接返回原actual result；同sequence不同digest返回`OPERATION_MISMATCH`，旧sequence返回`STALE_RETIRED`，都不接触region。
 3. core 规划实际可转 settlement，包括体积/质量/species/residual/SVQ/U。
 4. 发布 PREPARED WAL。
 5. 在私有 region candidate 应用 exact transfer，capture target generation 并回读验证。
-6. WAL 写入实际 settlement、after truth 和 target checksum。
+6. WAL 写入实际 settlement、exact actor after truth、operation identity和target checksum。
 7. 发布 region HEAD。
-8. 幂等应用 actor after truth并强制保存。
-9. 删除 WAL。
+8. 幂等应用包含新sequence与last receipt的actor after truth并强制保存、回读。
+9. 只有after truth和receipt均durable后删除WAL。
 10. 发布 committed event；监听器失败不得回滚事务。
 
 如果资源跨两个 region 或设备两侧分别属于不同 region，不能连续执行两次单 region transfer。先设计 multi-HEAD coordinator：锁定 canonical region UUID 顺序、准备全部 target slots、发布协调 WAL、逐 HEAD 收敛并允许恢复完成。没有该 coordinator 前明确拒绝跨 region 原子请求。
@@ -95,17 +101,17 @@ provider 注册发生在 loader 初始化，而不是某个世界启动后；Fab
 不要让 public API 直接调用 `FlipFluidDomain.tryInsert...`。提取一个由现有玩家/发射器和公共 provider 共同调用的 `RegionTransferPlanner`，只负责 exact region candidate；`ControllerItemTransferCoordinator` 演化为或委托给统一 `RegionActorTransferCoordinator`，独占以下顺序：
 
 1. 解析 profile-ready target、owner、cell/port、actor provider和当前 before truth。
-2. 检查同 actor、同 region 没有 WAL；生成/核对 caller transaction UUID。
+2. 检查同actor、同region没有WAL；核对caller operation epoch/sequence、trace UUID与request digest。若actor last receipt的epoch/sequence和request digest匹配则返回原committed result；同sequence但digest不同返回`OPERATION_MISMATCH`，sequence已越过或跳号则拒绝。trace UUID不承担去重，不能用更换UUID绕过sequence门。
 3. core 在不可变region快照上规划actual payload、source/sink与可选coupled `U`；provider的纯映射在captured before truth上应用同一actual payload得到after actor truth。两者都不修改live对象。
-4. 发布 PREPARED WAL，保存 base/target generation、profile/registry fingerprint、before fingerprint 和 planned actual settlement。
+4. 发布PREPARED WAL，保存base/target generation、profile/registry fingerprint、provider actor codec ID、operation identity、exact before/after actor truth及planned actual settlement；opaque truth有逐项byte上限和checksum。
 5. 在私有 region candidate 应用 exact settlement，完整 audit 后 stage/force/readback target slot。
 6. 用 target manifest checksum 与 actor after fingerprint 覆盖为 REGION_COMMITTED WAL并 force。
 7. 再核对 HEAD 仍为 base，然后发布 target HEAD；从此 region 不回滚。
-8. provider 幂等 apply-after 并执行其声明的 durable save；返回的证据必须绑定 object ID 与 after fingerprint。
-9. 回读 actor after truth；一致后删除 WAL并同步目录 entry。
+8. provider幂等apply-after并执行其声明的durable save；返回的证据必须绑定object ID、epoch、after sequence、last receipt和after fingerprint。
+9. 回读actor after truth；exact truth、fingerprint和receipt一致后删除WAL并同步目录entry。
 10. 发布 committed event。监听器异常或服务器在 9/10 之间退出不改变库存；事件允许漏失。
 
-player/dispenser 继续使用专用 Minecraft actor adapter，但物质 planner 与 WAL state machine 不再拥有第二份实现。创造 source descriptor 是特殊 actor：before=after descriptor，region insert 仍记 external source；它不允许 EXTRACT。创造装取使用真实 container actor并走普通 after stack。
+player/dispenser继续使用专用Minecraft actor adapter，但物质planner与WAL state machine不再拥有第二份实现。创造source descriptor只允许真实creative `ServerPlayer`，descriptor item本身before=after；其operation epoch/sequence/last receipt由server-owned player creative-source actor state持久保存，region insert仍记external source。dispenser、fake player与public provider不能认领该actor；它不允许EXTRACT。创造装取使用真实container actor并走普通after stack。
 
 ### B04：provider recovery 决策表
 
@@ -113,21 +119,21 @@ player/dispenser 继续使用专用 Minecraft actor adapter，但物质 planner 
 |---|---|---|---|
 | base | PREPARED/REGION_COMMITTED | before | 删除已知 staging与 WAL；region/actor 均保持 before |
 | base | 任意 | after/third | CONFLICT，保留 WAL；不能倒推 actor 或提前提交 HEAD |
-| target + checksum | REGION_COMMITTED | before | 幂等 apply after、force save、回读后删 WAL |
-| target + checksum | REGION_COMMITTED | after | force/证明 durable、删 WAL |
+| target + checksum | REGION_COMMITTED | exact before | 幂等apply exact after、force save、回读epoch/sequence/receipt后删WAL |
+| target + checksum | REGION_COMMITTED | exact after + receipt | force/证明durable、删WAL |
 | target | PREPARED | 任意 | LOCKED；缺少权威 after/checksum，保留证据 |
 | 其他 generation/checksum | 任意 | 任意 | LOCKED |
 | base/target 可判定 | provider 缺失或 actor chunk 未加载 | unknown | UNAVAILABLE，保留 WAL 等待明确 provider/chunk 事件；不每 tick重试 |
 
-provider 的 durable proof 不是随意 boolean。reference provider 若使用 BlockEntity inventory，必须在 owning dimension flush 完成后回读 before/after component fingerprint；若当前 Minecraft API 不能单对象 force，沿用 dispenser 的低频 dimension flush，而不是 dirty flag。provider 抛异常、返回错误 object ID 或 after fingerprint 不一致都保留 WAL。
+provider 的 durable proof 不是随意 boolean。reference provider 若使用 BlockEntity inventory，必须在 owning dimension flush 完成后回读 exact after truth、epoch/sequence/last receipt与component fingerprint；若当前 Minecraft API 不能单对象 force，沿用 dispenser 的低频 dimension flush，而不是 dirty flag。provider 抛异常、返回错误 object ID、receipt或after fingerprint不一致都保留 WAL。
 
-WAL strict codec 扩展为 actor 封闭 union；未知 actor kind、额外字段、错 NBT type、generation overflow、profile mismatch 和 actual payload 账本不闭合保持原文件并锁定。不要保存 provider Java class、lambda、registry object 或世界坐标以外的 runtime handle。
+WAL strict codec扩展为actor封闭union；未知actor kind/actor codec、额外字段、错NBT type、generation/sequence overflow、profile mismatch和actual payload账本不闭合保持原文件并锁定。provider-defined exact truth只允许有界canonical bytes、codec ID和checksum，不保存provider Java class、lambda、registry object或世界坐标以外的runtime handle。
 
 ### B05：reference provider
 
 仓库内实现一个最小 `reference_tank` BlockEntity，只为证明公共 API，不成为第二套 MMM inventory：
 
-- tank 自己持有一个完整可持久 typed liquid 或 granular payload、capacity 与 generation；不支持两类同时非空；
+- tank自己持有一个完整可持久typed liquid或granular payload、capacity、actor epoch、next operation sequence和last completion receipt；不支持两类同时非空；
 - tank 的 `providerId/objectId/slot` 可由 dimension + block position稳定恢复；
 - interaction/红石触发一次明确方向的 transfer，目标必须是相邻 controller port/壳内侧；
 - provider capture、after、durable save 只通过公开 SPI；实现代码不得 import MMM internal simulation/coordinator 类；
@@ -158,6 +164,21 @@ WAL strict codec 扩展为 actor 封闭 union；未知 actor kind、额外字段
 
 不要用“附近存在水 marker”直接移除火，也不要固定每次删除一桶。若未来要模拟冲刷带走的液体，另立实际物质 transfer，不把灭火本身伪装成 liquid sink。
 
+### B00：跨域 journal 的共同恢复代数
+
+`ContainerTransferJournal`、`WorldActionJournal`与`FiniteDeviceJournal`可以有不同strict shape，但必须委托同一个JDK-only恢复判定器，而不是各自解释“before/after/third”。每个外部域都提供canonical identity、revision、exact before truth、exact after truth、durable-readback结果和`BEFORE/AFTER/THIRD/UNAVAILABLE`分类。共同规则固定为：
+
+1. region HEAD只允许精确等于WAL的base，或等于target generation且manifest checksum匹配；其他状态一律LOCKED。
+2. HEAD为base时，合法提交顺序尚未触碰任何外部after；只有所有外部域均为BEFORE时才能删除已知staging和WAL。任一AFTER或THIRD都是冲突证据，保留WAL且绝不能覆盖成before。
+3. HEAD为target且WAL已是REGION_COMMITTED时，每个外部域可独立处于BEFORE或AFTER；对BEFORE幂等应用exact after，对AFTER只验证durability，全部完成后才能删WAL。任一THIRD锁定整个操作，不继续其他写入。
+4. HEAD为target但WAL仍是PREPARED时缺少权威target/after证明，保持全部证据并LOCKED；不能从HEAD或世界外观补WAL字段。
+5. UNAVAILABLE不改变任何truth，保留WAL并只在明确的provider/chunk/world加载事件后重试；不形成每tick轮询。
+6. 多个world block或world+item的部分AFTER不算third；只有每个成员都逐一匹配其canonical before或after时才允许收敛剩余BEFORE。manifest成员、顺序和checksum必须在PREPARED时冻结。
+
+每个具体journal的测试从这六条生成完整笛卡尔矩阵。实现者不得用“正常顺序不可能出现”跳过故障注入，因为崩溃、管理员操作和其他Mod都可能留下可观察组合。
+
+B00只交付loader-neutral truth分类、decision/result值对象、矩阵生成fixture和让现有container recovery委托该判定器；不新增public transfer入口、world action store或fire行为。它可以在P1中先完成，C04复用同一判定器；B03/B06随后只能增加各自strict journal codec和external-domain adapter，不能复制switch表。
+
 ### B06：world action WAL
 
 灭火等“region + world block”操作使用独立、通用但封闭的 `WorldActionJournal`，不滥用长期 ownership registry。journal 保存 action ID/kind、profile fingerprint、region/dimension、base/target generation、target manifest checksum、每个 block 的 canonical before/after、actual material/energy settlement 和 phase。提交顺序：
@@ -169,9 +190,9 @@ WAL strict codec 扩展为 actor 封闭 union；未知 actor kind、额外字段
 5. 用 actual settlement/checksum 覆盖为 REGION_COMMITTED WAL；
 6. 发布 region HEAD；
 7. 对每个 block 再比较 before，幂等应用 after并执行 owning dimension durable save；
-8. 回读 after，删除 WAL，发布 committed event。
+8. 逐block回读after与durable save，删除WAL，发布committed event。
 
-HEAD 仍为 base 时恢复保持/还原 before并删除已知 staging；HEAD 为 target 时只收敛 world after。玩家在 HEAD 前把 fire 改成第三状态则中止；HEAD 后出现第三状态形成 CONFLICT，不能覆盖玩家的新方块。未知 action kind或 block state codec 保留 WAL并锁对应 region。
+恢复严格使用共同代数：HEAD为base且全部block仍为before时只删除已知staging/WAL，不执行“还原before”；出现after或third都保留证据并CONFLICT。HEAD为target时允许多个block处于before/after混合并只补齐before；任一third形成CONFLICT，不能覆盖玩家的新方块。未知action kind或block state codec保留WAL并锁对应region。
 
 ### B07：灭火最小实现
 
@@ -181,11 +202,11 @@ HEAD 仍为 base 时恢复保持/还原 before并删除已知 staging；HEAD 为
 
 ### B08：gas 创造端口与后续公开范围
 
-C05 气液 species 的玩家场景需要建立非 ambient gas inventory。P1 先交付一个只允许创造玩家使用的 `gas source/vent` 正式端口：
+C05 气液 species 的玩家场景需要建立非 ambient gas inventory。P1 先交付一个只允许提交时仍为creative的真实`ServerPlayer`使用的`gas source/vent`正式端口；dispenser、fake player、automation与public provider全部拒绝这条无限source路径：
 
 - target 由壳面和内侧 gas cell 唯一解析，必须属于一个 sealed node；ambient target 需要玩家明确确认 source/sink 语义；
 - source descriptor 只含 gas component stable ID、请求标准体积 nanos和可选 K，服务端从 world gas/thermal/chemical registry 构造实际 component kg/species/residual/`U`；
-- insert/extract 在私有 region candidate 中联合更新 component standard nanos、kg、species/residual、node `U` 与 gas ledger，HEAD 是唯一提交点；创造 source descriptor before=after，insert 记 external source，vent/extract 记 actual external sink；
+- insert/extract在私有region candidate中联合更新component standard nanos、kg、species/residual、node `U`与gas ledger，HEAD是唯一提交点；descriptor item before=after，但player creative-source actor sequence/receipt必须durable；insert记external source，vent/extract逐actual truth记external sink；
 - 不修改 pressure；pressure 由提交后的 inventory/available volume/`U` 派生。超出 P/T/容量域整次拒绝；
 - probe 显示 actual settlement 与 node lineage，端口不持有第二份 gas inventory。
 
@@ -280,6 +301,7 @@ reference provider 通过后，再针对具体 Mod 写薄 adapter。不要在 co
 
 | 工作包 | 首要入口 | 关键输出 | 最近 selector |
 |---|---|---|---|
+| B00 | 现有`ContainerTransferRecovery`、ownership recovery、core新decision值对象 | JDK-only共同恢复判定器与生成矩阵 | `containers,ownership`，先选承载主要修改的一项 |
 | B01 | `api/.../transfer/`、`core/.../transfer/` | public payload/request/result 与 core 严格映射 | `protocol,containers` |
 | B02 | `api/fabric/MmmFabricApi`、新 provider registry | server-bound discovery、main-thread/authorization | `protocol` |
 | B03 | `ControllerItemTransferCoordinator`、`FluidTransferService` | 统一 planner/coordinator，不旁建 WAL | `containers` |
@@ -298,25 +320,26 @@ reference provider 通过后，再针对具体 Mod 写薄 adapter。不要在 co
 ### 自动覆盖
 
 1. request/payload 构造拒绝超长 ID、重复/乱序 component、overflow、NaN `U`、amount/resource kind 不匹配和缺 required fingerprint。
-2. plan 后 region generation、profile fingerprint、actor before、target owner或 tick 任一变化，commit 返回 STALE且文件/region/actor字节不变。
-3. insert/extract exact 与 at-most 都证明 request、actual、WAL、after actor、source/sink/event同量。
-4. B04 每个 recovery 行和每个故障点均覆盖；provider missing/chunk unloaded只在事件后重试，不形成 tick 日志风暴。
-5. reference tank的 block entity save/reload后 fingerprint不变；HEAD target + before actor可幂等完成，third state保留 WAL。
+2. plan后region generation、profile fingerprint、actor exact before/epoch/sequence、target owner或tick任一变化，commit返回STALE且文件/region/actor字节不变；伪造、串actor、串server或过期token同样拒绝。
+3. insert/extract exact与at-most都证明request、actual、WAL、after actor receipt、source/sink/event同量；成功响应丢失后以相同operation重试返回原result且generation不再增加，旧sequence重放只返回`STALE_RETIRED`。
+4. B04与共同跨域代数的每一行、多个外部成员的before/after组合和每个故障点均覆盖；provider missing/chunk unloaded只在事件后重试，不形成tick日志风暴。
+5. reference tank的block entity save/reload后exact truth、epoch/sequence/receipt/fingerprint不变；HEAD target + before actor可幂等完成，third state保留WAL；actor退休后object ID复用不同epoch不能接管旧WAL。
 6. 玩家 material bucket迁入统一 planner前后，对同一 frozen state输出 identical actual settlement和候选 ledger。
 7. fire覆盖 before 被玩家改变、HEAD前崩溃、HEAD后崩溃、world durable save失败、thermal/phase candidate失败；失败时不删火且不改 region。
-8. gas source/vent覆盖 sealed/ambient、component不允许 species、P/T越界、capacity、topology lineage变化和 source/sink/`U`闭合。
+8. gas source/vent覆盖sealed/ambient、component不允许species、P/T越界、capacity、topology lineage变化和source/sink/`U`闭合；dispenser/fake player/automation调用creative source时双方字节不变。
 
 ### 提交顺序与人工验收
 
-1. B01 public 值对象与校验，不注册可写入口。
-2. B02 provider registry、thread/authorization、只读 plan。
-3. B03/B04 统一 coordinator、journal actor union和故障恢复。
-4. B05 reference provider insert，再提交 extract与跨重启恢复。
-5. 迁移一个现有 internal container planner，删除重复路径。
-6. 按真实消费者扩展 gas/solid Query；不要为“也许有用”扩字段。
-7. B06 world-action journal/core planner，再单独提交 B07 fire detector/resources。
-8. B08 gas creative port；public gas ABI留到另一次明确评审。
-9. B09、B10、B11按明确玩家/适配需求各自开切片；P2只要求其中B07灭火，不能用未实现的列表阻止已经闭合的公共transfer。
-10. B12只在对应commit point稳定后逐event提交，不预建空事件层次。
+1. B00共同恢复判定器和现有container委托；不注册新写入口。
+2. P1需要的B08 gas creative port可在A07/A08后独立完成；public gas ABI留到另一次明确评审。
+3. P2开始B01 public值对象与校验，不注册可写入口。
+4. B02 provider registry、thread/authorization、只读plan/token table。
+5. B03/B04统一coordinator、journal actor union和故障恢复，只复用B00。
+6. B05 reference provider insert，再提交extract与跨重启恢复。
+7. 迁移一个现有internal container planner，删除重复路径。
+8. 按真实消费者扩展gas/solid Query；不要为“也许有用”扩字段。
+9. B06 world-action journal/core planner，再单独提交B07 fire detector/resources。
+10. B09、B10、B11按明确玩家/适配需求各自开切片；P2只要求其中B07灭火，不能用未实现的列表阻止已经闭合的公共transfer。
+11. B12只在对应commit point稳定后逐event提交，不预建空事件层次。
 
-真实游戏只验证两个无法由纯门完全观察的事务：reference provider在 REGION_COMMITTED/actor-before 状态退出重进后收敛；一处实际 fire 接触液面后 HEAD/world共同完成。给出各自单一场景、预期 generation/WAL和日志证据，不联调多个第三方 Mod。
+先用restart harness和故障注入关闭全部recovery行；只有自动门仍无法观察真实BlockEntity/world save接线时才请求游戏。允许的人工证据是两个分别申请的单一场景：TX-01让reference provider在REGION_COMMITTED/actor-before状态退出重进后收敛；VI-01让一处实际fire接触液面后HEAD/world共同完成。每次只给该场景的步骤、预期generation/WAL和日志证据，不合并两场景，也不联调多个第三方Mod。
