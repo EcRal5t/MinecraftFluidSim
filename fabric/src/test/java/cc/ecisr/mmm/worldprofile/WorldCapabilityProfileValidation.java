@@ -1,5 +1,9 @@
 package cc.ecisr.mmm.worldprofile;
 
+import cc.ecisr.mmm.simulation.persistence.WorldCapabilityProfileCodec;
+import net.minecraft.nbt.CompoundTag;
+
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -19,6 +23,7 @@ public final class WorldCapabilityProfileValidation {
 		malformedFingerprintsAreRejected();
 		restoreRejectsTampering();
 		canonicalBytesExcludeProfileFingerprint();
+		strictNbtCodecRoundTripsAndRejectsTampering();
 		System.out.println("World capability profile validation passed");
 	}
 
@@ -135,6 +140,71 @@ public final class WorldCapabilityProfileValidation {
 		require(canonical.contains("registry=gas|"), "canonical bytes must list the gas binding");
 	}
 
+	private static void strictNbtCodecRoundTripsAndRejectsTampering() {
+		WorldCapabilityProfile profile = WorldCapabilityProfile.of(
+				EnumSet.allOf(WorldCapability.class), bindings(RegistryKind.values()));
+		java.nio.file.Path root = null;
+		try {
+			root = java.nio.file.Files.createTempDirectory("mmm-world-profile-codec-");
+			java.nio.file.Path file = root.resolve("profile.nbt");
+			WorldCapabilityProfileCodec.write(file, profile);
+			require(WorldCapabilityProfileCodec.read(file).equals(profile),
+					"world capability profile did not round-trip through strict NBT");
+
+			CompoundTag extraRoot = WorldCapabilityProfileCodec.encode(profile);
+			extraRoot.putString("Unknown", "reject");
+			expectIo(() -> WorldCapabilityProfileCodec.decode(extraRoot),
+					"unknown profile root field was ignored");
+
+			CompoundTag missingBinding = WorldCapabilityProfileCodec.encode(profile);
+			missingBinding.getCompoundOrEmpty("RegistryFingerprints").remove("Gas");
+			expectIo(() -> WorldCapabilityProfileCodec.decode(missingBinding),
+					"missing profile registry binding was ignored");
+
+			WorldCapabilityProfile materialOnly = WorldCapabilityProfile.of(
+					EnumSet.of(WorldCapability.MATERIALS), bindings(RegistryKind.MATERIAL));
+			CompoundTag duplicateCapability = WorldCapabilityProfileCodec.encode(materialOnly);
+			CompoundTag repeated = new CompoundTag();
+			repeated.putString("Id", WorldCapability.MATERIALS.stableId());
+			duplicateCapability.getListOrEmpty("Capabilities").add(repeated);
+			expectIo(() -> WorldCapabilityProfileCodec.decode(duplicateCapability),
+					"duplicate world capability was accepted");
+
+			CompoundTag reorderedCapabilities = WorldCapabilityProfileCodec.encode(profile);
+			var capabilityList = reorderedCapabilities.getListOrEmpty("Capabilities");
+			var firstCapability = capabilityList.remove(0);
+			capabilityList.add(firstCapability);
+			expectIo(() -> WorldCapabilityProfileCodec.decode(reorderedCapabilities),
+					"non-canonical world capability order was accepted");
+
+			CompoundTag unknownCapability = WorldCapabilityProfileCodec.encode(profile);
+			unknownCapability.getListOrEmpty("Capabilities").getCompoundOrEmpty(0)
+					.putString("Id", "mmm:future_capability");
+			expectIo(() -> WorldCapabilityProfileCodec.decode(unknownCapability),
+					"unknown world capability was accepted");
+
+			CompoundTag wrongType = WorldCapabilityProfileCodec.encode(profile);
+			wrongType.putString("Capabilities", "not-a-list");
+			expectIo(() -> WorldCapabilityProfileCodec.decode(wrongType),
+					"wrong profile NBT field type was accepted");
+
+			CompoundTag tamperedFingerprint = WorldCapabilityProfileCodec.encode(profile);
+			tamperedFingerprint.putString("ProfileFingerprint", "0".repeat(64));
+			expectIo(() -> WorldCapabilityProfileCodec.decode(tamperedFingerprint),
+					"tampered profile fingerprint was accepted");
+		} catch (IOException failure) {
+			throw new AssertionError("world capability profile codec validation failed", failure);
+		} finally {
+			if (root != null) try (var paths = java.nio.file.Files.walk(root)) {
+				for (java.nio.file.Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+					java.nio.file.Files.deleteIfExists(path);
+				}
+			} catch (IOException cleanup) {
+				throw new AssertionError("world capability profile codec cleanup failed", cleanup);
+			}
+		}
+	}
+
 	private static RegistryFingerprintSet bindingsFor(Set<WorldCapability> capabilities) {
 		boolean condensedThermal = capabilities.contains(WorldCapability.THERMAL)
 				|| capabilities.contains(WorldCapability.PHASECHANGE);
@@ -171,11 +241,21 @@ public final class WorldCapabilityProfileValidation {
 		}
 	}
 
+	private static void expectIo(IoAction action, String message) {
+		try { action.run(); }
+		catch (IOException expected) { return; }
+		throw new AssertionError(message);
+	}
+
 	private static void require(boolean condition, String message) {
 		if (!condition) throw new AssertionError(message);
 	}
 
 	private interface ThrowingAction {
 		void run();
+	}
+
+	private interface IoAction {
+		void run() throws IOException;
 	}
 }
