@@ -681,6 +681,16 @@ final class FlipThermalState {
 		return cellGrid.occupied(cell) ? cellGrid.temperature(cell) : Double.NaN;
 	}
 
+	void fillCellTemperatures(double[] destination, MarkerContext markers) {
+		if (destination == null || destination.length != cellGrid.cellCount()) {
+			throw new IllegalArgumentException("Thermal cell temperature destination is incompatible");
+		}
+		cellGrid.rebuild(carrierAccess(markers));
+		for (int cell = 0; cell < destination.length; cell++) {
+			destination[cell] = cellGrid.occupied(cell) ? cellGrid.temperature(cell) : Double.NaN;
+		}
+	}
+
 	List<FiniteThermalExchange.Contact> finiteDeviceContacts(
 			List<CellContactRequest> requests, MarkerContext markers
 	) {

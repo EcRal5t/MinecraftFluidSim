@@ -66,7 +66,7 @@ public final class MaterialRegistry {
 			if (!declaresViscosity()) {
 				throw new IllegalArgumentException("Material " + material.id() + " does not declare dynamic viscosity");
 			}
-			if (temperatureK < viscosity.getFirst().minimumTemperatureK()
+			if (!Double.isFinite(temperatureK) || temperatureK < viscosity.getFirst().minimumTemperatureK()
 					|| temperatureK > viscosity.getLast().maximumTemperatureK()) {
 				throw new IllegalArgumentException("Temperature " + temperatureK + " is outside the declared viscosity domain of "
 						+ material.id());
@@ -195,7 +195,9 @@ public final class MaterialRegistry {
 					phaseByGroup.get(pair.firstMiscibilityGroup()), phaseByGroup.get(pair.secondMiscibilityGroup()),
 					pair.tension()));
 		}
-		return new FluidMaterialRegistry(materials, runtimePairs);
+		ArrayList<List<ViscositySegment>> runtimeViscosity = new ArrayList<>(materials.size());
+		for (FluidMaterial material : materials) runtimeViscosity.add(entry(material.id()).viscosity());
+		return new FluidMaterialRegistry(materials, runtimePairs, runtimeViscosity);
 	}
 
 	public double liquidPairTension(String firstGroup, String secondGroup) {

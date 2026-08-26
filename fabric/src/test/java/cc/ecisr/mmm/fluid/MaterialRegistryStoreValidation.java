@@ -47,6 +47,15 @@ public final class MaterialRegistryStoreValidation {
 		requireViscosityBitwiseEqual(stored, "mmm:mercury", 234.32, definitions.dynamicViscosityAt("mmm:mercury", 234.32));
 		double water = stored.dynamicViscosityAt("mmm:water", 293.15);
 		require(water > 9.0e-4 && water < 1.1e-3, "water viscosity at ambient temperature must stay near 1 mPa·s");
+		FluidMaterialRegistry runtime = stored.runtimeRegistry();
+		require(Double.doubleToRawLongBits(runtime.dynamicViscosityAt(runtime.handle("mmm:water"), 293.15))
+				== Double.doubleToRawLongBits(water), "runtime handles must consume the frozen viscosity profile");
+		FlipMaterialParticleState handoff = new FlipMaterialParticleState(
+				2, 2, 2, 0.25F, 0, 0.0, 0.0, runtime,
+				new float[0], new float[0], new byte[8], new double[0], new int[0]);
+		require(Double.doubleToRawLongBits(handoff.runtimeRegistry().dynamicViscosityAt(
+				handoff.runtimeRegistry().handle("mmm:water"), 293.15)) == Double.doubleToRawLongBits(water),
+				"backend handoff must retain the frozen viscosity profile");
 		require(stored.liquidPairTension("mmm:aqueous", "mmm:oil") == 0.0,
 				"default registry has no declared pair tensions");
 		System.out.println("builtin material registry fingerprint=" + definitions.fingerprint());
@@ -116,6 +125,8 @@ public final class MaterialRegistryStoreValidation {
 				() -> registry.dynamicViscosityAt("mmm:water", 200.0));
 		expectIllegal("outside the declared viscosity domain",
 				() -> registry.dynamicViscosityAt("mmm:water", 700.0));
+		expectIllegal("outside the declared viscosity domain",
+				() -> registry.dynamicViscosityAt("mmm:water", Double.NaN));
 		MaterialRegistry undeclared = new MaterialRegistry(List.of(new MaterialRegistry.MaterialEntry(
 				new FluidMaterial("mmm:syrup", 1_400.0, "mmm:syrup", 0.0, Math.PI / 2.0), List.of())), List.of());
 		expectIllegal("does not declare dynamic viscosity", () -> undeclared.dynamicViscosityAt("mmm:syrup", 300.0));

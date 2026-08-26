@@ -211,7 +211,7 @@ public final class FluidSimulationService {
 				chemistryFeatureEnabled, chemicalRegistry, granularFeatureEnabled, granularRegistry,
 				precipitationFeatureEnabled, thermalFeatureEnabled, thermalRegistry, gasRegistry,
 				serverConfig.maximumThermalSubstepsPerStep(),
-				materialRegistry == null ? null : materialRegistry.materials(), capabilityProfile, true);
+				materialRegistry, capabilityProfile, true);
 		regionOperations.recoverRemovedQuarantines(serverConfig.maximumQuarantineEntries(),
 				serverConfig.maximumQuarantineBytes());
 		snapshots = new FluidSnapshotPublisher(materialFeatureEnabled, chemistryFeatureEnabled, chemicalRegistry,
@@ -263,6 +263,12 @@ public final class FluidSimulationService {
 		for (var entry : materials.entries()) {
 			if (!registry.hasCarrier(entry.material().id())) throw new IllegalArgumentException(
 					"Granular registry has no carrier for " + entry.material().id());
+			if (!entry.declaresViscosity()) throw new IllegalArgumentException(
+					"Granular liquid carrier has no viscosity profile for " + entry.material().id());
+		}
+		for (var carrier : registry.carriers()) if (!materials.hasMaterial(carrier.liquidMaterialId())) {
+			throw new IllegalArgumentException(
+					"Granular carrier references unavailable liquid material " + carrier.liquidMaterialId());
 		}
 	}
 

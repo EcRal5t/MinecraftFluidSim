@@ -23,12 +23,20 @@ public final class FluidMaterialRegistry {
 	private final Map<String, Integer> handleById;
 	private final int[] phaseHandleByMaterial;
 	private final Map<Long, Double> liquidPairTensions;
+	private final List<List<MaterialRegistry.ViscositySegment>> viscosityByMaterial;
 
 	public FluidMaterialRegistry(List<FluidMaterial> definitions) {
-		this(definitions, List.of());
+		this(definitions, List.of(), null);
 	}
 
 	public FluidMaterialRegistry(List<FluidMaterial> definitions, List<LiquidPairTension> pairTensions) {
+		this(definitions, pairTensions, null);
+	}
+
+	FluidMaterialRegistry(
+			List<FluidMaterial> definitions, List<LiquidPairTension> pairTensions,
+			List<List<MaterialRegistry.ViscositySegment>> viscosity
+	) {
 		if (definitions == null || definitions.isEmpty()) {
 			throw new IllegalArgumentException("Material registry must not be empty");
 		}
@@ -72,6 +80,20 @@ public final class FluidMaterialRegistry {
 			}
 		}
 		liquidPairTensions = Map.copyOf(pairMap);
+		if (viscosity == null) {
+			ArrayList<List<MaterialRegistry.ViscositySegment>> absent = new ArrayList<>(materials.size());
+			for (int handle = 0; handle < materials.size(); handle++) absent.add(List.of());
+			viscosityByMaterial = List.copyOf(absent);
+		} else {
+			if (viscosity.size() != materials.size()) {
+				throw new IllegalArgumentException("Material viscosity profiles disagree with runtime handles");
+			}
+			ArrayList<List<MaterialRegistry.ViscositySegment>> profiles = new ArrayList<>(viscosity.size());
+			for (List<MaterialRegistry.ViscositySegment> profile : viscosity) {
+				profiles.add(profile == null ? List.of() : List.copyOf(profile));
+			}
+			viscosityByMaterial = List.copyOf(profiles);
+		}
 	}
 
 	public int size() { return materials.size(); }
@@ -79,6 +101,15 @@ public final class FluidMaterialRegistry {
 	public List<String> phaseGroups() { return phaseGroups; }
 	public int phaseCount() { return phaseGroups.size(); }
 	public Map<Long, Double> liquidPairTensions() { return liquidPairTensions; }
+	public boolean declaresViscosity(int materialHandle) {
+		material(materialHandle);
+		return !viscosityByMaterial.get(materialHandle).isEmpty();
+	}
+
+	public double dynamicViscosityAt(int materialHandle, double temperatureK) {
+		FluidMaterial material = material(materialHandle);
+		return evaluateViscosity(material.id(), viscosityByMaterial.get(materialHandle), temperatureK);
+	}
 
 	public double liquidPairTension(int firstPhase, int secondPhase) {
 		if (!validPhase(firstPhase) || !validPhase(secondPhase)) {
@@ -110,6 +141,30 @@ public final class FluidMaterialRegistry {
 
 	private boolean validPhase(int phase) {
 		return phase >= 0 && phase < phaseGroups.size();
+	}
+
+	private static double evaluateViscosity(
+			String materialId, List<MaterialRegistry.ViscositySegment> profile, double temperatureK
+	) {
+		if (profile.isEmpty()) {
+			throw new IllegalArgumentException("Material " + materialId + " does not declare dynamic viscosity");
+		}
+		if (!Double.isFinite(temperatureK) || temperatureK < profile.getFirst().minimumTemperatureK()
+				|| temperatureK > profile.getLast().maximumTemperatureK()) {
+			throw new IllegalArgumentException("Temperature " + temperatureK
+					+ " is outside the declared viscosity domain of " + materialId);
+		}
+		int low = 0, high = profile.size() - 1;
+		while (low < high) {
+			int middle = (low + high) >>> 1;
+			if (profile.get(middle).maximumTemperatureK() < temperatureK) low = middle + 1;
+			else high = middle;
+		}
+		MaterialRegistry.ViscositySegment segment = profile.get(low);
+		double alpha = (temperatureK - segment.minimumTemperatureK())
+				/ (segment.maximumTemperatureK() - segment.minimumTemperatureK());
+		return segment.dynamicViscosityPaPerSAtMinimum() * (1.0 - alpha)
+				+ segment.dynamicViscosityPaPerSAtMaximum() * alpha;
 	}
 
 	private static long pairKey(int firstPhase, int secondPhase) {

@@ -9,6 +9,7 @@ import java.util.List;
 public final class FlipMaterialParticleState {
 	private final FlipParticleState particles;
 	private final List<FluidMaterial> materials;
+	private final FluidMaterialRegistry runtimeRegistry;
 	private final double totalVolume;
 	private final double totalMass;
 	private final double[] particleMass;
@@ -20,12 +21,25 @@ public final class FlipMaterialParticleState {
 			float[] positionVolume, float[] particleVelocities, byte[] solidMask,
 			double[] particleMass, int[] materialPaletteIndex
 	) {
+		this(sizeX, sizeY, sizeZ, cellSize, particleCount, volumeLedger, massLedger,
+				new FluidMaterialRegistry(materials), positionVolume, particleVelocities, solidMask,
+				particleMass, materialPaletteIndex);
+	}
+
+	public FlipMaterialParticleState(
+			int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
+			double volumeLedger, double massLedger, FluidMaterialRegistry runtimeRegistry,
+			float[] positionVolume, float[] particleVelocities, byte[] solidMask,
+			double[] particleMass, int[] materialPaletteIndex
+	) {
+		if (runtimeRegistry == null) throw new IllegalArgumentException("Material runtime registry is missing");
 		if (!(Double.isFinite(volumeLedger) && volumeLedger >= 0.0)
 				|| !(Double.isFinite(massLedger) && massLedger >= 0.0)) {
 			throw new IllegalArgumentException("Material particle ledgers must be finite and non-negative");
 		}
-		this.materials = List.copyOf(materials);
-		FluidMaterialRegistry registry = new FluidMaterialRegistry(this.materials);
+		this.runtimeRegistry = runtimeRegistry;
+		this.materials = runtimeRegistry.materials();
+		FluidMaterialRegistry registry = runtimeRegistry;
 		if (particleCount < 0 || positionVolume == null || positionVolume.length != Math.multiplyExact(particleCount, 4)
 				|| particleMass == null || materialPaletteIndex == null
 				|| particleMass.length != particleCount || materialPaletteIndex.length != particleCount) {
@@ -66,6 +80,7 @@ public final class FlipMaterialParticleState {
 	public double totalVolume() { return totalVolume; }
 	public double totalMass() { return totalMass; }
 	public List<FluidMaterial> materials() { return materials; }
+	public FluidMaterialRegistry runtimeRegistry() { return runtimeRegistry; }
 	public float[] copyPositionVolume() { return particles.copyPositionVolume(); }
 	public float[] copyParticleVelocities() { return particles.copyParticleVelocities(); }
 	public byte[] copySolidMask() { return particles.copySolidMask(); }

@@ -35,9 +35,8 @@ public final class GranularDefinitionCodec {
 
 	public static GranularCarrier decodeCarrier(String liquidMaterialId, Reader input) {
 		JsonObject root = object(input);
-		requireOnly(root, "dynamic_viscosity", "maximum_reynolds");
-		return new GranularCarrier(liquidMaterialId, finiteDouble(root, "dynamic_viscosity"),
-				finiteDouble(root, "maximum_reynolds"));
+		requireOnly(root, "maximum_reynolds");
+		return new GranularCarrier(liquidMaterialId, finiteDouble(root, "maximum_reynolds"));
 	}
 
 	public static SolidLiquidReaction decodeReaction(String stableId, Reader input) {

@@ -1,10 +1,14 @@
 package cc.ecisr.mmm.granular;
 
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
+import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
+import cc.ecisr.mmm.thermal.ThermalRegistry;
+import cc.ecisr.mmm.thermal.ThermalSpeciesOffset;
 
 import java.io.StringReader;
 import java.nio.file.Files;
@@ -45,7 +49,7 @@ public final class M8GranularValidation {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		FluidMaterialRegistry liquids = BuiltinFluidMaterials.createRegistry().runtimeRegistry();
 		FlipFluidDomain domain = new FlipFluidDomain(6, 6, 6, config, 6 * 6 * 6 * 8);
 		domain.bindGranular(registry, liquids); domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		long reactiveSvq = 4_096L;
@@ -126,7 +130,7 @@ public final class M8GranularValidation {
 	private static void phaseTransferPrecipitatesAndDissolves() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		FluidMaterialRegistry liquids = BuiltinFluidMaterials.createRegistry().runtimeRegistry();
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
 		// Real transported/reseeded marker volumes are arbitrary IEEE-754 dyadics, not necessarily
@@ -134,6 +138,7 @@ public final class M8GranularValidation {
 		domain.setVolume(1, 1, 1, 0.1F);
 		domain.bindGranular(granular, liquids);
 		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		bindThermal(domain, liquids, granular);
 		domain.setPrecipitationEnabled(true);
 		domain.setMarkerChemical(0, java.util.Map.of(
 				BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
@@ -586,13 +591,13 @@ public final class M8GranularValidation {
 		return new GranularRegistry(List.of(new ParticulateMaterial("mmm:neutral_probe", 1_000.0, 0.0005,
 				400_000, Math.toRadians(30.0), 0.6, 0.4, 0.1, 0.05, 1L,
 				GranularLimits.MAX_PARCEL_VOLUME_SVQ, 0xffffffff, "mmm:neutral_probe", false)),
-				List.of(new GranularCarrier("mmm:water", 1.002e-3, 100_000.0)));
+				List.of(new GranularCarrier("mmm:water", 100_000.0)));
 	}
 
 	private static void porousBedPreservesHydrostatics() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				200, 1.0e-6F, 0.45F, 2.0e-3F, 0.8F);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		FluidMaterialRegistry liquids = BuiltinFluidMaterials.createRegistry().runtimeRegistry();
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		int sizeX = 2, sizeY = 5, sizeZ = 2;
 		FlipFluidDomain domain = new FlipFluidDomain(sizeX, sizeY, sizeZ, config, sizeX * sizeY * sizeZ * 8);
@@ -614,6 +619,7 @@ public final class M8GranularValidation {
 		domain.restoreGranularState(new GranularStateSnapshot(sizeX, sizeY, sizeZ, registry.fingerprint(),
 				registry.materials().stream().map(ParticulateMaterial::id).toList(), List.of(), groups,
 				totalSvq, Double.doubleToRawLongBits(totalMass)), registry, liquids);
+		bindThermal(domain, liquids, registry);
 
 		FlipFluidDomain.StepStats stats = null;
 		for (int step = 0; step < 200; step++) stats = domain.step();
@@ -737,13 +743,14 @@ public final class M8GranularValidation {
 	private static void solverCouplingPreservesInventories(int steps) {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				200, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		FluidMaterialRegistry liquids = BuiltinFluidMaterials.createRegistry().runtimeRegistry();
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FlipFluidDomain domain = new FlipFluidDomain(4, 8, 4, config, 4 * 8 * 4 * 8);
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 4; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
 		domain.bindGranular(granular, liquids);
+		bindThermal(domain, liquids, granular);
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		double mass = svq / (double) SolidVolume.SVQ_PER_BV * granular.material(sand).referenceDensity();
@@ -772,10 +779,11 @@ public final class M8GranularValidation {
 	private static void wholeBucketCongestionRemainsLocal(int steps) {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		FluidMaterialRegistry liquids = BuiltinFluidMaterials.createRegistry().runtimeRegistry();
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
 		domain.bindGranular(granular, liquids);
+		bindThermal(domain, liquids, granular);
 		double density = granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND))
 				.referenceDensity();
 		GranularTransferLedger bucket = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
@@ -865,10 +873,11 @@ public final class M8GranularValidation {
 	private static void singleBucketPourSettlesWithinTenSeconds() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		FluidMaterialRegistry liquids = BuiltinFluidMaterials.createRegistry().runtimeRegistry();
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
 		domain.bindGranular(granular, liquids);
+		bindThermal(domain, liquids, granular);
 		double density = granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND))
 				.referenceDensity();
 		GranularTransferLedger bucket = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
@@ -1008,6 +1017,30 @@ public final class M8GranularValidation {
 		long relativeOrTimerBound = Math.max((long) Math.ceil(baselineMedian * 1.05), baselineMedian + 500_000L);
 		require(granularMedian <= relativeOrTimerBound && granularMedian <= 40_000_000L,
 				"empty granular gate exceeded its 5%/0.5 ms noise envelope or the existing 40 ms pacing boundary");
+	}
+
+	private static void bindThermal(
+			FlipFluidDomain domain, FluidMaterialRegistry liquids, GranularRegistry granular
+	) {
+		ArrayList<ThermalMaterialDefinition> materials = new ArrayList<>();
+		for (int handle = 0; handle < liquids.size(); handle++) materials.add(new ThermalMaterialDefinition(
+				"test:thermal/granular_liquid_" + handle, ThermalMaterialDefinition.CarrierKind.LIQUID,
+				liquids.material(handle).id(), 293.15, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 100.0))));
+		for (int handle = 0; handle < granular.materials().size(); handle++) materials.add(
+				new ThermalMaterialDefinition("test:thermal/granular_solid_" + handle,
+						ThermalMaterialDefinition.CarrierKind.GRANULAR, granular.material(handle).id(),
+						293.15, 0.0, 1.0,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 100.0))));
+		ArrayList<ThermalSpeciesOffset> offsets = new ArrayList<>();
+		for (ThermalMaterialDefinition host : materials) {
+			for (var species : BuiltinChemicalDefinitions.REGISTRY.species()) {
+				offsets.add(new ThermalSpeciesOffset("test:offset/" + offsets.size(), species.id(), host.id(),
+						ExactRational.ZERO));
+			}
+		}
+		domain.bindThermal(new ThermalRegistry(materials, offsets, List.of(),
+				BuiltinChemicalDefinitions.REGISTRY.fingerprint(), granular.fingerprint()), liquids, 293.15);
 	}
 
 	private static GranularMechanics.Environment constantWater(

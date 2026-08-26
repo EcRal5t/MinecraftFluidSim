@@ -5,6 +5,7 @@ import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FluidMaterial;
+import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
@@ -83,7 +84,7 @@ final class FluidRegionOperations {
 	) {
 		this(worldRoot, manager, configurationLocked, materialsEnabled, chemistryEnabled, chemicalRegistry,
 				granularEnabled, granularRegistry, precipitationEnabled, thermalEnabled, thermalRegistry, gasRegistry,
-				maximumThermalSubsteps, null, null, false);
+				maximumThermalSubsteps, (FluidMaterialRegistry) null, null, false);
 	}
 
 	FluidRegionOperations(
@@ -95,7 +96,8 @@ final class FluidRegionOperations {
 	) {
 		this(worldRoot, manager, configurationLocked, materialsEnabled, chemistryEnabled, chemicalRegistry,
 				granularEnabled, granularRegistry, precipitationEnabled, thermalEnabled, thermalRegistry, gasRegistry,
-				maximumThermalSubsteps, expectedMaterialPalette, null, false);
+				maximumThermalSubsteps, expectedMaterialPalette == null ? null
+						: new FluidMaterialRegistry(expectedMaterialPalette), null, false);
 	}
 
 	FluidRegionOperations(
@@ -103,12 +105,12 @@ final class FluidRegionOperations {
 			boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
 			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled,
 			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
-			int maximumThermalSubsteps, List<FluidMaterial> expectedMaterialPalette,
+			int maximumThermalSubsteps, FluidMaterialRegistry expectedMaterialRegistry,
 			WorldCapabilityProfile capabilityProfile
 	) {
 		this(worldRoot, manager, configurationLocked, materialsEnabled, chemistryEnabled, chemicalRegistry,
 				granularEnabled, granularRegistry, precipitationEnabled, thermalEnabled, thermalRegistry, gasRegistry,
-				maximumThermalSubsteps, expectedMaterialPalette, capabilityProfile, false);
+				maximumThermalSubsteps, expectedMaterialRegistry, capabilityProfile, false);
 	}
 
 	FluidRegionOperations(
@@ -116,13 +118,13 @@ final class FluidRegionOperations {
 			boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
 			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled,
 			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
-			int maximumThermalSubsteps, List<FluidMaterial> expectedMaterialPalette,
+			int maximumThermalSubsteps, FluidMaterialRegistry expectedMaterialRegistry,
 			WorldCapabilityProfile capabilityProfile, boolean worldCapabilityRequired
 	) {
 		this.manager = manager;
 		this.persistence = new FluidRegionPersistence(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry,
 				granularEnabled, granularRegistry, precipitationEnabled, thermalEnabled, thermalRegistry, gasRegistry,
-				maximumThermalSubsteps, expectedMaterialPalette, capabilityProfile, worldCapabilityRequired);
+				maximumThermalSubsteps, expectedMaterialRegistry, capabilityProfile, worldCapabilityRequired);
 		creationLocked = configurationLocked;
 		List<String> metadataIssues = persistence.loadMetadata(manager);
 		issues.addAll(metadataIssues);

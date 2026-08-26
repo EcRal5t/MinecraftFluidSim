@@ -21,9 +21,9 @@ public final class BuiltinGranularDefinitions {
 				material(LIGHT_BEADS, 500.0, 0.0001, 400_000, 20.0, 0xffe8e8d8, false),
 				material(PRECIPITATE, 2_799.97507960832, 0.00001, 500_000, 25.0, 0xffd8d4c8, true)
 		), List.of(
-				new GranularCarrier("mmm:water", 1.002e-3, 100_000.0),
-				new GranularCarrier("mmm:oil", 6.5e-2, 10_000.0),
-				new GranularCarrier("mmm:mercury", 1.526e-3, 100_000.0)
+				new GranularCarrier("mmm:water", 100_000.0),
+				new GranularCarrier("mmm:oil", 10_000.0),
+				new GranularCarrier("mmm:mercury", 100_000.0)
 		), List.of(new SolidLiquidReaction(SODIUM_CHLORIDE_PRECIPITATION,
 				BuiltinChemicalDefinitions.AQUEOUS, Map.of(
 						BuiltinChemicalDefinitions.NA_PLUS, 64,

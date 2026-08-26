@@ -191,6 +191,7 @@ public final class FlipFluidDomain {
 	private FlipThermalState thermalState;
 	private double[] thermalBuoyancySum;
 	private double[] thermalBuoyancyVolume;
+	private final double[] thermalCellTemperatureK;
 	/** Runtime world-derived fixed-reservoir temperatures; NaN is the canonical adiabatic face. */
 	private double[] thermalBoundaryTemperatureK;
 	private final SignedDyadic[] pendingPhaseCellVolume;
@@ -233,6 +234,8 @@ public final class FlipFluidDomain {
 		this.exactCellMarkerVolume = new double[cellCount];
 		this.exactCellMarkerMass = new double[cellCount];
 		this.cellDensity = new double[cellCount];
+		this.thermalCellTemperatureK = new double[cellCount];
+		Arrays.fill(thermalCellTemperatureK, Double.NaN);
 		this.surfaceTensionPressure = new float[cellCount];
 		this.surfaceTensionColor = new double[cellCount];
 		this.surfaceTensionSmoothed = new double[cellCount];
@@ -2906,6 +2909,7 @@ public final class FlipFluidDomain {
 		thermalState = null;
 		thermalBuoyancySum = null;
 		thermalBuoyancyVolume = null;
+		Arrays.fill(thermalCellTemperatureK, Double.NaN);
 		thermalBoundaryTemperatureK = null;
 		Arrays.fill(pendingPhaseCellVolume, SignedDyadic.ZERO);
 		if (granularRegistry == null) {
@@ -3005,7 +3009,7 @@ public final class FlipFluidDomain {
 		if (state.particleCount() > maximumParticleCount) {
 			throw new IllegalArgumentException("Material particle state exceeds domain marker budget");
 		}
-		FluidMaterialRegistry registry = new FluidMaterialRegistry(state.materials());
+		FluidMaterialRegistry registry = state.runtimeRegistry();
 		double defaultDensity = registry.material(0).referenceDensity();
 		double tolerance = Math.max(1.0E-9, Math.abs(config.density()) * 1.0E-12);
 		if (Math.abs(defaultDensity - config.density()) > tolerance) {
@@ -3092,7 +3096,7 @@ public final class FlipFluidDomain {
 			velocities[velocityBase + 2] = particleVelocityZ[particle];
 		}
 		return new FlipMaterialParticleState(
-				sizeX, sizeY, sizeZ, config.cellSize(), particleCount, totalVolumeExact(), totalMass(), materialRegistry.materials(),
+				sizeX, sizeY, sizeZ, config.cellSize(), particleCount, totalVolumeExact(), totalMass(), materialRegistry,
 				positionVolume, velocities, cutCells.copyMicroMasks(),
 				Arrays.copyOf(particleMass, particleCount), Arrays.copyOf(particleMaterialHandle, particleCount)
 		);
@@ -3548,6 +3552,19 @@ public final class FlipFluidDomain {
 			throw new IllegalArgumentException("Material handle 0 must match the domain default density");
 		}
 		materialRegistry = registry;
+	}
+
+	/** Rebinds derived material properties after stable palette state is reconstructed from a checkpoint. */
+	public void rebindMaterialRegistry(FluidMaterialRegistry registry) {
+		if (materialRegistry == null || registry == null
+				|| !materialRegistry.materials().equals(registry.materials())) {
+			throw new IllegalArgumentException("Authoritative material registry does not match the restored palette");
+		}
+		materialRegistry = registry;
+		for (int particle = 0; particle < particleCount; particle++) {
+			particlePhaseLabel[particle] = registry.phaseHandle(particleMaterialHandle[particle]);
+		}
+		gridDirty = true;
 	}
 
 	private void assignMarkerMaterial(int particle, FluidMaterialRegistry registry, int materialHandle) {
@@ -4804,6 +4821,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				throw new IllegalStateException("Marker inventory produced invalid cell density");
 			}
 		}
+		if (thermalState != null) thermalState.fillCellTemperatures(thermalCellTemperatureK, thermalMarkerContext());
 		normalize(velocityX, velocityWeightX);
 		normalize(velocityY, velocityWeightY);
 		normalize(velocityZ, velocityWeightZ);
@@ -5130,7 +5148,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						: Math.max(0.0, Math.min(1.0, exactCellMarkerVolume[cell] / capacity));
 				return new GranularMechanics.FluidSample(true,
 						sampleX(velocityX, x, y, z), sampleY(velocityY, x, y, z), sampleZ(velocityZ, x, y, z),
-						cellDensity[cell], carrier.dynamicViscosity(), carrier.maximumReynolds(), submerged);
+						cellDensity[cell], liquidDynamicViscosity(cell, liquidMaterial),
+						carrier.maximumReynolds(), submerged);
 			}
 
 			@Override public GranularMechanics.FluidImpulseApplication addFluidImpulse(float x, float y, float z,
@@ -5310,9 +5329,15 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	private CarrierProperties granularCarrierProperties(int cell) {
 		int liquidMaterial = granularCarrierMaterialByCell == null ? -1 : granularCarrierMaterialByCell[cell];
 		if (markerCount[cell] <= 0 || liquidMaterial < 0) return new CarrierProperties(1.225, 1.81e-5);
-		String materialId = materialRegistry.material(liquidMaterial).id();
-		GranularCarrier carrier = granularRegistry.carrier(granularRegistry.carrierHandle(materialId));
-		return new CarrierProperties(cellDensity[cell], carrier.dynamicViscosity());
+		return new CarrierProperties(cellDensity[cell], liquidDynamicViscosity(cell, liquidMaterial));
+	}
+
+	private double liquidDynamicViscosity(int cell, int materialHandle) {
+		double temperatureK = thermalCellTemperatureK[cell];
+		if (!Double.isFinite(temperatureK)) {
+			throw new IllegalStateException("Liquid viscosity requires a thermal carrier state in the sampled cell");
+		}
+		return materialRegistry.dynamicViscosityAt(materialHandle, temperatureK);
 	}
 
 	private void applyGranularPorousDamping(float dt) {

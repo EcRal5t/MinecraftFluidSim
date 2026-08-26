@@ -143,7 +143,6 @@ public final class GranularRegistryStore {
 		ListTag carriers = new ListTag();
 		for (GranularCarrier carrier : registry.carriers()) {
 			CompoundTag tag = new CompoundTag(); tag.putString("Material", carrier.liquidMaterialId());
-			tag.putLong("ViscosityBits", bits(carrier.dynamicViscosity()));
 			tag.putLong("MaximumReynoldsBits", bits(carrier.maximumReynolds())); carriers.add(tag);
 		}
 		root.put("Carriers", carriers);
@@ -197,10 +196,8 @@ public final class GranularRegistryStore {
 		List<GranularCarrier> result = new ArrayList<>(list.size());
 		for (int index = 0; index < list.size(); index++) {
 			CompoundTag tag = compound(list, index, "granular carrier");
-			requireAll(tag, Map.of("Material", Tag.TAG_STRING, "ViscosityBits", Tag.TAG_LONG,
-					"MaximumReynoldsBits", Tag.TAG_LONG));
-			result.add(new GranularCarrier(tag.getStringOr("Material", ""), value(tag, "ViscosityBits"),
-					value(tag, "MaximumReynoldsBits")));
+			requireAll(tag, Map.of("Material", Tag.TAG_STRING, "MaximumReynoldsBits", Tag.TAG_LONG));
+			result.add(new GranularCarrier(tag.getStringOr("Material", ""), value(tag, "MaximumReynoldsBits")));
 		}
 		return List.copyOf(result);
 	}
