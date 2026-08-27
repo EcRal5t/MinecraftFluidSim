@@ -3,6 +3,7 @@ package cc.ecisr.mmm.fluid;
 import cc.ecisr.mmm.granular.GranularCouplingFields;
 
 import java.util.Arrays;
+import java.util.function.IntToDoubleFunction;
 
 /**
  * Reconstructs one deterministic planar liquid interface per marker-occupied cell.
@@ -52,13 +53,18 @@ final class FlipFreeSurfaceGeometry {
 	}
 
 	void rebuild(boolean[] solid, int[] markerCount, FlipCutCellGeometry cutCells) {
-		rebuild(solid, markerCount, cutCells, null);
+		rebuild(solid, markerCount, cutCells::openCellVolume, null);
 	}
 
 	void rebuild(boolean[] solid, int[] markerCount, FlipCutCellGeometry cutCells,
 	             GranularCouplingFields granular) {
+		rebuild(solid, markerCount, cutCells::openCellVolume, granular);
+	}
+
+	void rebuild(boolean[] solid, int[] markerCount, IntToDoubleFunction openCellVolume,
+	             GranularCouplingFields granular) {
 		for (int index = 0; index < exactCellVolume.length; index++) {
-			float geometricOpen = cutCells.openCellVolume(index);
+			float geometricOpen = (float) openCellVolume.applyAsDouble(index);
 			float openVolume = granular == null ? geometricOpen
 					: granular.effectiveOpenCellVolume(index, geometricOpen);
 			liquidFraction[index] = solid[index] || markerCount[index] == 0

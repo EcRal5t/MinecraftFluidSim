@@ -89,7 +89,7 @@ div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 
 实体交互由 Fabric 在服务器 tick 末冻结实体本 tick 的旧/当前 AABB raw pose、identity、下一 tick 动量速度和数据包定义。已发生的 AABB 位移给出边界轨迹速度；受重力的动态实体从该实际速度减去 solver 的 `g*dt`，不能继承与流体静水压力不一致的 Minecraft 游戏化纵向重力。无重力实体保留冻结的下一 tick 速度。core 将六个解析盒面转换为 runtime-only moving occupancy、cut-face aperture 与表面 patch；它们和 world cut-cell、deposit/coherent occupancy 使用同一容量、气体拓扑、pressure target divergence、marker CCD 和 reseed 几何，但绝不写入持久 raw mask。
 
-动态 body 的三维平移速度以定义中的 kg 质量进入 pressure Schur 系统；压力面积分与同一离散耦合算子给出实体反作用，Newtonian 黏性使用 `mu*A/distance` 的 pairwise surface exchange。候选分别返回 pressure impulse、viscous impulse、displacement work 和 kinematic external 未承接冲量，并在产生候选前检查 PCG、body momentum、work 与黏性 pairwise 守恒。未定义实体按 `KINEMATIC_EXTERNAL` 排水而不猜质量；默认数据提供 player 与 armor stand 的显式定义。没有经验 drag、neutral-submergence、湿格采样或材料/实体 ID 力学特判。
+动态 body 的三维平移速度以定义中的 kg 质量进入 pressure Schur 系统；PLIC 以合成后的 moving open volume 归一化，盒面压力把格心值按局部 `rho*g` 静水梯度解析平移到实际 patch 高度，再由同一离散耦合算子给出实体反作用。Newtonian 黏性使用 `mu*A/distance` 的 pairwise surface exchange，并在重力预测速度写入前消费上一时刻已提交流动。候选分别返回 pressure impulse、viscous impulse、displacement work 和 kinematic external 未承接冲量，并在产生候选前检查 PCG、body momentum、work 与黏性 pairwise 守恒。未定义实体按 `KINEMATIC_EXTERNAL` 排水而不猜质量；默认数据提供 player 与 armor stand 的显式定义。没有经验 drag、neutral-submergence、湿格采样或材料/实体 ID 力学特判。
 
 主线程接受候选前按 UUID、对象 identity、alive、当前 AABB 与 pre-velocity raw bits 重新验证；随后把 region generation 与动态实体速度作为一个可回滚提交段应用。有耦合实体时机械步固定为每个服务器 tick 一次，不能用区域降频产生隔帧冲量；连续硬超时仍按预算安全暂停。容量审计使用全域开放体积、自由液面余量和逐 marker 几何不重叠；marker 中心的 cell 归属体积不是局部欧拉容量，不能据此回退实体位移。真实全域容量不足、静止重叠、越界、第三方状态变化、预算或数值审计失败会暂停区域，不删 marker。当前只承诺平移轴对齐盒；旋转、通用刚体约束和复杂实体形状尚未实现。
 

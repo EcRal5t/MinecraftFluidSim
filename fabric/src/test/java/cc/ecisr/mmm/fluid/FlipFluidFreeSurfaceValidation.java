@@ -30,25 +30,25 @@ public final class FlipFluidFreeSurfaceValidation {
 	private static void floatingBodyReplayHasDecayingEnvelope() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 0.05F,
 				240, 1.0E-6F, 0.40F, 2.0E-3F, 0.0F);
-		FlipFluidDomain domain = new FlipFluidDomain(10, 12, 10, config, 20_000);
-		for (int z = 0; z < 10; z++) for (int y = 0; y < 12; y++) for (int x = 0; x < 10; x++) {
+		FlipFluidDomain domain = new FlipFluidDomain(12, 12, 12, config, 32_000);
+		for (int z = 0; z < 12; z++) for (int y = 0; y < 12; y++) for (int x = 0; x < 12; x++) {
 			domain.setSolid(x, y, z, true);
 		}
-		for (int z = 1; z <= 8; z++) for (int y = 1; y <= 10; y++) for (int x = 1; x <= 8; x++) {
+		for (int z = 1; z <= 10; z++) for (int y = 1; y <= 10; y++) for (int x = 1; x <= 10; x++) {
 			domain.setSolid(x, y, z, false);
 		}
-		for (int z = 1; z <= 8; z++) for (int y = 1; y <= 3; y++) for (int x = 1; x <= 8; x++) {
+		domain.setSolid(1, 11, 1, false);
+		for (int z = 1; z <= 10; z++) for (int y = 1; y <= 5; y++) for (int x = 1; x <= 10; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
-		for (int z = 1; z <= 8; z++) for (int x = 1; x <= 8; x++) domain.setVolume(x, 4, z, 0.5F);
 
 		MovingBodySurfaceSnapshot.BoxPose previous = new MovingBodySurfaceSnapshot.BoxPose(
-				2.2, 1.63, 2.2, 2.8, 3.43, 2.8);
-		prepareBodyCompatibleFluid(domain, previous);
+				2.7, 2.75, 2.7, 3.3, 4.55, 3.3);
+		prepareBodyCompatibleFluid(domain, previous, 5);
 		FluidDomainState state = domain.captureAuthoritativeState();
 		MovingBodySurfaceSnapshot.BoxPose current = previous;
 		double nextTickVelocityY = -config.gravity() * config.timeStep();
-		double[] centres = new double[160];
+		double[] centres = new double[600];
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		for (int step = 0; step < centres.length; step++) {
 			double boundaryVelocityY = (current.minimumY() - previous.minimumY()) / config.timeStep();
@@ -56,8 +56,14 @@ public final class FlipFluidFreeSurfaceValidation {
 					1L, previous, current, 0.0, boundaryVelocityY, 0.0,
 					0.0, nextTickVelocityY, 0.0,
 					MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC, 70.0);
-			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
-					step, state, new MovingBodySurfaceSnapshot(List.of(body)), false, 0));
+			FluidStepCandidate candidate;
+			try {
+				candidate = backend.evaluate(new FluidStepRequest(
+						step, state, new MovingBodySurfaceSnapshot(List.of(body)), false, 0));
+			} catch (RuntimeException failed) {
+				throw new AssertionError("floating player replay failed at tick " + step
+						+ " and y=" + current.minimumY(), failed);
+			}
 			MovingBodyStepResult result = candidate.movingBodyResults().getFirst();
 			state = candidate.state();
 			centres[step] = 0.5 * (current.minimumY() + current.maximumY());
@@ -68,10 +74,10 @@ public final class FlipFluidFreeSurfaceValidation {
 			check(Double.isFinite(current.minimumY()) && Double.isFinite(nextTickVelocityY),
 					"floating player replay produced a non-finite entity state at tick " + step);
 		}
-		checkOscillationEnvelopeDecays(centres);
+		checkOscillationSettles(centres, config.fluidEpsilon() * config.cellSize());
 	}
 
-	private static void checkOscillationEnvelopeDecays(double[] positions) {
+	private static void checkOscillationSettles(double[] positions, double stoppingDistance) {
 		double[] extrema = new double[positions.length];
 		int count = 0;
 		for (int tick = 1; tick + 1 < positions.length; tick++) {
@@ -84,23 +90,26 @@ public final class FlipFluidFreeSurfaceValidation {
 		check(count >= 4, "floating player replay did not expose enough extrema for an envelope audit");
 		double firstHalfCycle = Math.abs(extrema[1] - extrema[0]);
 		double lastHalfCycle = Math.abs(extrema[count - 1] - extrema[count - 2]);
-		check(lastHalfCycle < firstHalfCycle,
-				"floating player oscillation envelope grew: first=" + firstHalfCycle + ", last=" + lastHalfCycle);
+		check(lastHalfCycle < firstHalfCycle && lastHalfCycle <= stoppingDistance,
+				"floating player oscillation did not settle: first=" + firstHalfCycle
+						+ ", last=" + lastHalfCycle + ", stop=" + stoppingDistance);
 	}
 
 	private static void prepareBodyCompatibleFluid(
-			FlipFluidDomain domain, MovingBodySurfaceSnapshot.BoxPose body
+			FlipFluidDomain domain, MovingBodySurfaceSnapshot.BoxPose body, int filledTopCell
 	) {
 		double cellSize = domain.config().cellSize();
 		double cellVolume = cellSize * cellSize * cellSize;
-		for (int z = 1; z <= 8; z++) for (int y = 1; y <= 4; y++) for (int x = 1; x <= 8; x++) {
+		for (int z = 1; z + 1 < domain.sizeZ(); z++) for (int y = 1; y <= filledTopCell; y++) {
+			for (int x = 1; x + 1 < domain.sizeX(); x++) {
 			double overlapX = overlap(x * cellSize, (x + 1) * cellSize, body.minimumX(), body.maximumX());
+			double overlapY = overlap(y * cellSize, (y + 1) * cellSize, body.minimumY(), body.maximumY());
 			double overlapZ = overlap(z * cellSize, (z + 1) * cellSize, body.minimumZ(), body.maximumZ());
 			double maximumBlockedFraction = overlapX * overlapZ * cellSize / cellVolume;
-			if (maximumBlockedFraction > 0.0) {
+			if (overlapY > 0.0 && maximumBlockedFraction > 0.0) {
 				float trajectoryCapacity = Math.nextDown((float) (1.0 - maximumBlockedFraction));
-				float initialVolume = y <= 3 ? 1.0F : 0.5F;
-				domain.setVolume(x, y, z, Math.min(initialVolume, trajectoryCapacity));
+				domain.setVolume(x, y, z, trajectoryCapacity);
+			}
 			}
 		}
 		FlipParticleState particles = domain.exportParticleState();

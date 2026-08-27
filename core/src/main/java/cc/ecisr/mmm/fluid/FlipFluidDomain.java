@@ -4793,6 +4793,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			}
 			if (movingBodyBoundary != null) movingBodyBoundary.applyKnownGasPressure(
 					this::isFluid, this::gasPressureOfAirCell, dt);
+			if (movingBodyBoundary != null) movingBodyBoundary.applyKnownHydrostaticPressureOffset(
+					this::isFluid, cell -> cellDensity[cell], config.gravity(), dt);
 			System.arraycopy(velocityX, 0, p2gVelocityX, 0, velocityX.length);
 			System.arraycopy(velocityY, 0, p2gVelocityY, 0, velocityY.length);
 			System.arraycopy(velocityZ, 0, p2gVelocityZ, 0, velocityZ.length);
@@ -4818,6 +4820,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			// Dampen previously committed flow before body forces so a zero-velocity porous bed retains
 			// the full hydrostatic gravity/pressure balance in the shared projection.
 			applyGranularPorousDamping(dt);
+			if (movingBodyBoundary != null && materialRegistry != null && materialRegistry.hasAnyViscosity()) {
+				applyMovingBodyViscosity(dt);
+			}
 			applyGravity(dt);
 			applyThermalBuoyancy(dt);
 			applyLiquidPairSurfaceTensionForce(dt);
@@ -4830,9 +4835,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				lastViscosityStats = new ViscosityStats(
 						Math.max(lastViscosityStats.substeps(), viscosityPlan.substeps()),
 						viscosityPlan.coupledPairs(), viscosityPlan.maximumRatePerSecond());
-			}
-			if (movingBodyBoundary != null && materialRegistry != null && materialRegistry.hasAnyViscosity()) {
-				applyMovingBodyViscosity(dt);
 			}
 			enforceSolidFaceVelocities();
 			solvePressure(dt);
@@ -4989,13 +4991,13 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		System.arraycopy(velocityWeightZ, 0, p2gMassWeightZ, 0, velocityWeightZ.length);
 		if (granularCoupling == null || !granularInventoryPresent && !coherentInventoryPresent) {
 			if (granularCoupling != null) granularCoupling.clear();
-			freeSurfaceGeometry.rebuild(solid, markerCount, cutCells);
+			freeSurfaceGeometry.rebuild(solid, markerCount, this::movingOpenCellVolume, null);
 			pressureGranularCoupling = null;
 		} else {
 			if (granularInventoryPresent) granularCoupling.rebuild(granularParcels, granularDeposits);
 			else granularCoupling.rebuildFixed();
 			pressureGranularCoupling = granularCoupling;
-			freeSurfaceGeometry.rebuild(solid, markerCount, cutCells, granularCoupling);
+			freeSurfaceGeometry.rebuild(solid, markerCount, this::movingOpenCellVolume, granularCoupling);
 		}
 		rebuildSurfaceTensionPressure();
 		enforceSolidFaceVelocities();

@@ -15,7 +15,7 @@ final class MovingBodyBoundary {
 	private static final double GEOMETRY_ULPS = 16.0;
 
 	private record Patch(int body, int cell, double normalX, double normalY, double normalZ,
-	                     double area, double normalDistance) { }
+	                     double area, double normalDistance, double verticalCentroid) { }
 	private record ViscousCoupling(int body, int cell, int axis, double conductance) { }
 	record ViscousFluidImpulse(double[] cellX, double[] cellY, double[] cellZ,
 	                          int substeps, int coupledPairs, double maximumRatePerSecond) { }
@@ -202,6 +202,28 @@ final class MovingBodyBoundary {
 				body, impulseX[body], impulseY[body], impulseZ[body]);
 	}
 
+	void applyKnownHydrostaticPressureOffset(IntPredicate fluidCell, IntToDoubleFunction density,
+			double gravity,
+			double timeStepSeconds) {
+		double[] impulseX = new double[velocityX.length], impulseY = new double[velocityX.length],
+				impulseZ = new double[velocityX.length];
+		for (Patch patch : patches) if (fluidCell.test(patch.cell)) {
+			int cellY = patch.cell / sizeX % sizeY;
+			double cellCenterY = (cellY + 0.5) * cellSize;
+			double localDensity = density.applyAsDouble(patch.cell);
+			if (!(Double.isFinite(localDensity) && localDensity > 0.0)) {
+				throw new IllegalStateException("Moving-body hydrostatic density is invalid");
+			}
+			double pressureOffset = localDensity * gravity * (cellCenterY - patch.verticalCentroid);
+			double scale = -pressureOffset * patch.area * timeStepSeconds;
+			impulseX[patch.body] += scale * patch.normalX;
+			impulseY[patch.body] += scale * patch.normalY;
+			impulseZ[patch.body] += scale * patch.normalZ;
+		}
+		for (int body = 0; body < velocityX.length; body++) applyPressureImpulse(
+				body, impulseX[body], impulseY[body], impulseZ[body]);
+	}
+
 	void addPressureRhs(float[] rhs, IntPredicate fluidCell, int pressureAnchor,
 			double density, double timeStepSeconds) {
 		double scale = density / timeStepSeconds;
@@ -361,7 +383,8 @@ final class MovingBodyBoundary {
 			for (double[] values : stepBodyImpulse) Arrays.fill(values, 0.0);
 			for (ViscousCoupling coupling : couplings) {
 				double bodyVelocity = bodyVelocity(coupling.body, coupling.axis);
-				double impulse = coupling.conductance * (bodyVelocity - fluidVelocity[coupling.axis][coupling.cell]) * substep;
+				double impulse = coupling.conductance
+						* (bodyVelocity - fluidVelocity[coupling.axis][coupling.cell]) * substep;
 				fluidDelta[coupling.axis][coupling.cell] += impulse / cellMass[coupling.cell];
 				bodyImpulse[coupling.axis][coupling.body] -= impulse;
 				stepBodyImpulse[coupling.axis][coupling.body] -= impulse;
@@ -546,8 +569,20 @@ final class MovingBodyBoundary {
 			double cellMinimum = normalCell * cellSize, cellMaximum = cellMinimum + cellSize;
 			double normalDistance = normal < 0.0 ? 0.5 * (plane - cellMinimum)
 					: 0.5 * (cellMaximum - plane);
+			double firstCellMinimum = first * cellSize, secondCellMinimum = second * cellSize;
+			double clippedFirstMinimum = Math.max(firstMinimum, firstCellMinimum);
+			double clippedFirstMaximum = Math.min(firstMaximum, firstCellMinimum + cellSize);
+			double clippedSecondMinimum = Math.max(secondMinimum, secondCellMinimum);
+			double clippedSecondMaximum = Math.min(secondMaximum, secondCellMinimum + cellSize);
+			double verticalCentroid = switch (axis) {
+				case 0 -> 0.5 * (clippedFirstMinimum + clippedFirstMaximum);
+				case 1 -> plane;
+				case 2 -> 0.5 * (clippedSecondMinimum + clippedSecondMaximum);
+				default -> throw new IllegalStateException("Unknown moving-body patch axis");
+			};
 			patches.add(new Patch(body, cellIndex(x, y, z), axis == 0 ? normal : 0.0,
-					axis == 1 ? normal : 0.0, axis == 2 ? normal : 0.0, area, normalDistance));
+					axis == 1 ? normal : 0.0, axis == 2 ? normal : 0.0,
+					area, normalDistance, verticalCentroid));
 		}
 	}
 
