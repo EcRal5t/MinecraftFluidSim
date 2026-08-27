@@ -1637,11 +1637,15 @@ public final class FlipFluidDomain {
 
 	/** Exact-batch condensed melt/freeze; species and same-cell granular heat baths join the conserved LTE plan. */
 	public ThermalPhaseStats stepInertPhaseChangeOnly(int maximumOperations) {
+		return stepInertPhaseChangeOnly(maximumOperations, false);
+	}
+
+	private ThermalPhaseStats stepInertPhaseChangeOnly(int maximumOperations, boolean phaseGridPrepared) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		if (maximumOperations < 0 || maximumOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
 			throw new IllegalArgumentException("Thermal phase operation budget is invalid");
 		}
-		thermalState.preparePhaseScan(thermalMarkerContext());
+		if (!phaseGridPrepared) thermalState.preparePhaseScan(thermalMarkerContext());
 		int operations = 0, frozen = 0, melted = 0; long signedBatches = 0L;
 		for (ThermalPhaseTransition transition : thermalState.registry().transitions()) {
 			if (transition.interfaceRequirement() != ThermalPhaseTransition.InterfaceRequirement.NONE) continue;
@@ -1687,6 +1691,10 @@ public final class FlipFluidDomain {
 
 	/** Sealed-interface liquid/gas phase transfer, bounded by saturation, energy, inventory and one shared batch budget. */
 	public GasThermalPhaseStats stepGasPhaseChangeOnly(int maximumOperations) {
+		return stepGasPhaseChangeOnly(maximumOperations, false);
+	}
+
+	private GasThermalPhaseStats stepGasPhaseChangeOnly(int maximumOperations, boolean phaseGridPrepared) {
 		if (thermalState == null || !thermalState.gasModelBound()) {
 			throw new IllegalStateException("Gas phase change requires bound gas thermal state");
 		}
@@ -1694,7 +1702,7 @@ public final class FlipFluidDomain {
 			throw new IllegalArgumentException("Gas phase operation budget is invalid");
 		}
 		ensureGrid(); refreshGasTopology();
-		thermalState.preparePhaseScan(thermalMarkerContext());
+		if (!phaseGridPrepared) thermalState.preparePhaseScan(thermalMarkerContext());
 		GasLiquidPhaseModel phase = thermalState.gasLiquidPhase(airNetwork);
 		int operations = 0, boiled = 0, condensed = 0;
 		for (ThermalPhaseTransition transition : thermalState.registry().transitions()) {
@@ -4761,9 +4769,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		lastGasThermalPhaseStats = new GasThermalPhaseStats(0, 0, 0);
 		if (phaseChangeEnabled) {
 			try {
-				lastThermalPhaseStats = stepInertPhaseChangeOnly(maximumPhaseOperations);
+				boolean phaseGridPrepared = chemistry.changedMarkers() == 0
+						&& lastPhaseTransferStats.transfers() == 0;
+				lastThermalPhaseStats = stepInertPhaseChangeOnly(
+						maximumPhaseOperations, phaseGridPrepared);
 				int remaining = maximumPhaseOperations - lastThermalPhaseStats.operations();
-				lastGasThermalPhaseStats = stepGasPhaseChangeOnly(remaining);
+				lastGasThermalPhaseStats = stepGasPhaseChangeOnly(remaining, true);
 			} catch (ThermalPhaseBlockedException blocked) {
 				throw blocked;
 			} catch (IllegalArgumentException invalid) {
