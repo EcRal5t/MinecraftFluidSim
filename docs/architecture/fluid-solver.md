@@ -15,6 +15,8 @@
 
 `FluidDomainState` 捕获恰好一种 liquid carrier 布局（pure/material/chemical）及其 registry、颗粒、气体、热学、相变 pending work、求解配置和硬预算。pressure、平滑 density、mesh、调度与 Minecraft 对象不在其中。`FluidStepRequest` 另外携带有硬上限的 moving-body 输入；后端先在私有 state 上提交这些 marker 动量，再执行同一 logical step。`FluidSolverBackend.evaluate(FluidStepRequest)` 必须返回 base generation 的紧邻完整后继；调用者在 tick boundary 验证后才可发布。当前 `CpuFluidSolverBackend` 是规范实现，GPU probe 尚不满足这份完整状态契约，不能作为生产后端注册。
 
+`FluidStepRequest.mechanicalAuditEnabled` 是只读诊断选择器。启用时，CPU candidate 的 `StepStats` 记录 P2G、颗粒/多孔耦合、重力、热浮力、表面张力、固定边界、pressure projection、G2P、碰撞、载体库存转移和 reseed 各阶段的动能变化，并同时报告初末重力势能、热学库存机械功以及逐阶段 telescoping closure。该审计不进入 `FluidDomainState`、HEAD 或任何库存，也不改变正常未启用请求的物理结果。
+
 ## 网格与 marker
 
 - 默认 cell size 为 0.5 m；每个 Minecraft block 对应 2×2×2 cells。
@@ -50,6 +52,8 @@ marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新�
 6. reseed、局部唤醒、账本和诊断。
 
 相变产生的 pending volume/work 由下一次 projection 消费，因此 pressure step 是唯一机械提交点。
+
+自由面平衡夹具必须区分两种初态：液体几何先建立、随后按剩余空间初始化环境气体，表示无外部做功的半满平衡态；气体先按空腔初始化、随后向密闭域注液，则是压缩气体的 external-source 操作，必须保留相应气体内能和压力功，不能拿前一种夹具的环境态覆盖或归零。
 
 ## 自由面与压力
 

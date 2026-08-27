@@ -49,6 +49,7 @@ public final class ProductionFluidReplayValidation {
 		defaultLiveStepsRemainBounded();
 		fullyBoundHalfFillRoundTripsCurrentGasGeometry();
 		fullyBoundPhaseOnStepRemainsBounded();
+		planarHalfFillWithoutEntitiesRemainsStableAcrossBackend();
 		System.out.println("Production fluid replay passed");
 	}
 
@@ -157,6 +158,78 @@ public final class ProductionFluidReplayValidation {
 						+ milliseconds + " ms");
 	}
 
+	private static void planarHalfFillWithoutEntitiesRemainsStableAcrossBackend() throws Exception {
+		RegistrySet registries = loadProductionRegistries();
+		FlipFluidDomain initial = createFullyBoundPlanarHalfFill(registries);
+		FluidDomainState state = initial.captureAuthoritativeState();
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		long generation = 0L;
+		double initialKinetic = kineticEnergy(initial.exportMaterialParticleState());
+		require(initialKinetic == 0.0, "planar no-entity fixture did not start at rest");
+		double initialCenterY = centerOfMassY(initial.exportMaterialParticleState());
+		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0;
+		double maximumBodyPressureResidual = 0.0;
+		long phaseOperations = 0L, boiledCells = 0L, condensedCells = 0L;
+		FlipFluidDomain restored = initial;
+		for (int step = 0; step < 500; step++) {
+			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+					generation, state, List.of(), true,
+					ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP, true));
+			require(candidate.baseGeneration() == generation
+					&& candidate.candidateGeneration() == generation + 1L,
+					"planar no-entity backend generation was not adjacent at step " + step);
+			FlipFluidDomain.StepStats stats = candidate.stats();
+			FlipFluidDomain.MechanicalStepAudit audit = stats.mechanicalAudit();
+			require(audit.captured(), "planar no-entity backend omitted its requested mechanical audit");
+			double kinetic = audit.finalParticleKineticEnergyJoules();
+			maximumKinetic = Math.max(maximumKinetic, kinetic);
+			if (step >= 300) tailMaximumKinetic = Math.max(tailMaximumKinetic, kinetic);
+			double bodyPressureResidual = audit.gravityWorkJoules()
+					+ audit.thermalBuoyancyWorkJoules() + audit.surfaceTensionWorkJoules()
+					+ audit.fixedBoundaryWorkJoules() + audit.pressureProjectionWorkJoules();
+			maximumBodyPressureResidual = Math.max(
+					maximumBodyPressureResidual, Math.abs(bodyPressureResidual));
+			phaseOperations += stats.gasPhase().operations();
+			boiledCells += stats.gasPhase().boiledCells();
+			condensedCells += stats.gasPhase().condensedCells();
+
+			restored = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+			require(restored.airNetwork().nodeCount() == 1 && restored.airNetwork().auditClosed(),
+					"planar no-entity backend restore opened or changed the sealed gas owner at step " + step);
+			require(restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
+					"planar no-entity backend restore opened total U at step " + step);
+			require(!restored.hasPendingPhaseVolumeWork(),
+					"planar no-entity gas phase left unrelated condensed phase work at step " + step);
+			state = candidate.state();
+			generation++;
+			if ((step + 1) % 100 == 0) {
+				System.out.printf("  planar no-entity backend step %03d: kinetic=%.9g J maxSpeed=%.6g "
+						+ "centerY=%.9f phase=%d/%d/%d p=%+.3f Pa T=%.6f K%n",
+						step + 1, kinetic, restored.maximumParticleSpeed(),
+						centerOfMassY(restored.exportMaterialParticleState()), stats.gasPhase().operations(),
+						stats.gasPhase().boiledCells(), stats.gasPhase().condensedCells(),
+						restored.gasNodeGaugePressurePa(1), restored.gasNodeTemperatureK(1));
+			}
+		}
+		double finalKinetic = kineticEnergy(restored.exportMaterialParticleState());
+		double centerYDelta = centerOfMassY(restored.exportMaterialParticleState()) - initialCenterY;
+		require(Double.isFinite(finalKinetic), "planar no-entity final kinetic observation is not finite");
+		require(maximumKinetic <= 0.025 && tailMaximumKinetic <= 0.005 && finalKinetic <= 0.002,
+				"planar no-entity free surface self-excited: max=" + maximumKinetic
+						+ " tail=" + tailMaximumKinetic + " final=" + finalKinetic + " J");
+		require(Math.abs(centerYDelta) <= 0.001,
+				"planar no-entity center of mass drifted by " + centerYDelta + " m");
+		require(maximumBodyPressureResidual <= 0.05,
+				"planar no-entity body-force/pressure work did not balance: "
+						+ maximumBodyPressureResidual + " J");
+		require(phaseOperations > 0L && boiledCells > 0L && condensedCells > 0L,
+				"planar no-entity fixture did not exercise production gas phase definitions");
+		System.out.printf("  planar no-entity backend gate: kinetic max/tail/final="
+				+ "%.9g/%.9g/%.9g J, centerYDelta=%+.9g m, max body-pressure residual=%.9g J%n",
+				maximumKinetic, tailMaximumKinetic, finalKinetic, centerYDelta,
+				maximumBodyPressureResidual);
+	}
+
 	private static FlipFluidDomain createPouredControllerDomain() {
 		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
 		domain.sealDomainBoundary();
@@ -187,6 +260,47 @@ public final class ProductionFluidReplayValidation {
 					"full-capability fixture did not inject pour " + (pour + 1) + ": " + addition);
 		}
 		return domain;
+	}
+
+	private static FlipFluidDomain createFullyBoundPlanarHalfFill(RegistrySet registries) {
+		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
+		domain.sealDomainBoundary();
+		bindEmptyMaterialState(domain, registries.liquids());
+		FluidMaterialRegistry runtimeLiquids = domain.materialRegistry();
+		for (int y = 0; y < 4; y++) for (int z = 0; z < 8; z++) for (int x = 0; x < 8; x++) {
+			domain.setVolume(x, y, z, 1.0F);
+		}
+		domain.bindChemistry(registries.chemical());
+		domain.bindGranular(registries.granular(), runtimeLiquids);
+		domain.setPrecipitationEnabled(true);
+		domain.bindGasRegistry(registries.gas());
+		domain.bindThermal(registries.thermal(), runtimeLiquids,
+				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		return domain;
+	}
+
+	private static double kineticEnergy(FlipMaterialParticleState state) {
+		double[] mass = state.copyParticleMass();
+		float[] velocity = state.copyParticleVelocities();
+		double result = 0.0;
+		for (int marker = 0; marker < mass.length; marker++) {
+			int base = marker * 3;
+			result += 0.5 * mass[marker] * (velocity[base] * velocity[base]
+					+ velocity[base + 1] * velocity[base + 1]
+					+ velocity[base + 2] * velocity[base + 2]);
+		}
+		return result * Math.pow(state.cellSize(), 3.0);
+	}
+
+	private static double centerOfMassY(FlipMaterialParticleState state) {
+		double[] mass = state.copyParticleMass();
+		float[] positionVolume = state.copyPositionVolume();
+		double weighted = 0.0, total = 0.0;
+		for (int marker = 0; marker < mass.length; marker++) {
+			weighted += mass[marker] * positionVolume[marker * 4 + 1];
+			total += mass[marker];
+		}
+		return weighted / total;
 	}
 
 	private static FluidSolverConfig productionConfig() {

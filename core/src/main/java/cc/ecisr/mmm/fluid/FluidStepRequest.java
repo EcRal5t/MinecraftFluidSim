@@ -12,8 +12,17 @@ public record FluidStepRequest(
 		FluidDomainState state,
 		List<MovingBodyFluidCoupling.Request> movingBodies,
 		boolean phaseChangeEnabled,
-		int maximumPhaseOperations
+		int maximumPhaseOperations,
+		boolean mechanicalAuditEnabled
 ) {
+	public FluidStepRequest(
+			long baseGeneration, FluidDomainState state,
+			List<MovingBodyFluidCoupling.Request> movingBodies,
+			boolean phaseChangeEnabled, int maximumPhaseOperations
+	) {
+		this(baseGeneration, state, movingBodies, phaseChangeEnabled, maximumPhaseOperations, false);
+	}
+
 	public FluidStepRequest {
 		if (baseGeneration < 0L) throw new IllegalArgumentException("Base generation must not be negative");
 		Objects.requireNonNull(state, "state");
