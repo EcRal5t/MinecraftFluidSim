@@ -3,6 +3,8 @@ package cc.ecisr.mmm.fluid;
 import cc.ecisr.mmm.world.MovingBodyPressureIntegrator;
 import cc.ecisr.mmm.world.MovingBodySurfaceSnapshot;
 
+import java.util.List;
+
 /** Deterministic M2.5 gates for PLIC volume reconstruction and ghost-fluid pressure weights. */
 public final class FlipFluidFreeSurfaceValidation {
 	private FlipFluidFreeSurfaceValidation() { }
@@ -50,14 +52,17 @@ public final class FlipFluidFreeSurfaceValidation {
 		for (int z = 1; z <= 3; z++) for (int y = 1; y <= 16; y++) for (int x = 1; x <= 3; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
-		domain.establishPressureProjectionForPhaseChange();
 		MovingBodySurfaceSnapshot.BoxPose pose = new MovingBodySurfaceSnapshot.BoxPose(
 				1.1, 2.75, 1.1, 1.4, 4.75, 1.4);
 		MovingBodySurfaceSnapshot.Body body = new MovingBodySurfaceSnapshot.Body(
 				1L, pose, pose, 0.0, 0.0, 0.0,
 				MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC, 70.0);
-		MovingBodyPressureIntegrator.Result result = MovingBodyPressureIntegrator.integrate(
-				body, domain::sampleProjectedAbsolutePressure, config.timeStep());
+		FluidStepCandidate candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+				0L, domain.captureAuthoritativeState(), List.of(),
+				new MovingBodySurfaceSnapshot(List.of(body)), false, 0));
+		check(candidate.movingBodyPressureResults().size() == 1,
+				"backend candidate omitted its moving-body pressure settlement");
+		MovingBodyPressureIntegrator.Result result = candidate.movingBodyPressureResults().getFirst();
 		double expected = config.density() * config.gravity()
 				* body.displacedVolumeCubicMetres() * config.timeStep();
 		check(Math.abs(result.impulseYKilogramMetresPerSecond() - expected) / expected <= 5.0E-5

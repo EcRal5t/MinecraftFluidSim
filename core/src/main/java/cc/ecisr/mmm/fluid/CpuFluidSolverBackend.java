@@ -11,10 +11,11 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 		FlipFluidDomain candidate = FlipFluidDomain.restoreAuthoritativeState(request.state());
 		long candidateGeneration = Math.addExact(request.baseGeneration(), 1L);
 		candidate.beginLogicalCandidate(candidateGeneration);
+		candidate.prepareMovingBodyPressure(request.movingBodySurfaces());
 		for (var movingBody : request.movingBodies()) candidate.applyMovingBodyCoupling(movingBody);
 		FlipFluidDomain.StepStats stats = candidate.step(
 				request.phaseChangeEnabled(), request.maximumPhaseOperations());
 		return new FluidStepCandidate(id(), request.baseGeneration(), candidateGeneration,
-				candidate.captureAuthoritativeState(), stats);
+				candidate.captureAuthoritativeState(), stats, candidate.lastMovingBodyPressureResults());
 	}
 }

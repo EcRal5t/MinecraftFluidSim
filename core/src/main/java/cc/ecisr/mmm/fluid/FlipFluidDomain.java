@@ -43,6 +43,8 @@ import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalCellGrid;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalLimits;
+import cc.ecisr.mmm.world.MovingBodyPressureIntegrator;
+import cc.ecisr.mmm.world.MovingBodySurfaceSnapshot;
 import cc.ecisr.mmm.thermal.ThermalPhaseTransition;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
@@ -57,6 +59,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.math.BigInteger;
@@ -194,6 +197,8 @@ public final class FlipFluidDomain {
 	private float lastPressureTarget;
 	private long logicalGeneration;
 	private PressureProjectionSnapshot pressureProjectionSnapshot;
+	private MovingBodySurfaceSnapshot movingBodySurfaces = MovingBodySurfaceSnapshot.EMPTY;
+	private List<MovingBodyPressureIntegrator.Result> lastMovingBodyPressureResults = List.of();
 	private boolean variableDensityActive;
 	private FlipThermalState thermalState;
 	private double[] thermalBuoyancySum;
@@ -292,6 +297,15 @@ public final class FlipFluidDomain {
 		if (generation < 0L) throw new IllegalArgumentException("Logical generation must not be negative");
 		logicalGeneration = generation;
 		pressureProjectionSnapshot = null;
+	}
+
+	void prepareMovingBodyPressure(MovingBodySurfaceSnapshot snapshot) {
+		movingBodySurfaces = Objects.requireNonNull(snapshot, "snapshot");
+		lastMovingBodyPressureResults = List.of();
+	}
+
+	List<MovingBodyPressureIntegrator.Result> lastMovingBodyPressureResults() {
+		return lastMovingBodyPressureResults;
 	}
 
 	/** Runtime-only gas network of this domain; it is not a wire or save format. */
@@ -4746,6 +4760,10 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		lastViscosityStats = new ViscosityStats(0, 0, 0.0);
 		int substeps = calculateSubsteps(config.timeStep());
 		float dt = config.timeStep() / substeps;
+		double[] movingImpulseX = new double[movingBodySurfaces.bodies().size()];
+		double[] movingImpulseY = new double[movingBodySurfaces.bodies().size()];
+		double[] movingImpulseZ = new double[movingBodySurfaces.bodies().size()];
+		double[] movingWork = new double[movingBodySurfaces.bodies().size()];
 		int granularParcelCountBeforeAdvection = precipitationEnabled ? captureReactiveGranularCells() : 0;
 		int pressureIterations = 0;
 		for (int substep = 0; substep < substeps; substep++) {
@@ -4809,6 +4827,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			}
 			projectVelocity(dt);
 			publishPressureProjection();
+			accumulateMovingBodyPressure(substep, substeps, dt,
+					movingImpulseX, movingImpulseY, movingImpulseZ, movingWork);
 			if (phaseWork != null) {
 				thermalState.commitPhaseMechanicalWork(phaseWork, thermalMarkerContext());
 				Arrays.fill(pendingPhaseCellVolume, SignedDyadic.ZERO);
@@ -4873,6 +4893,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		if (thermalState != null) thermalState.recordRoundoff(exactInternalEnergy().subtract(thermalBeforeReseed));
 		gridDirty = true;
 		rebuildGridFromParticles();
+		lastMovingBodyPressureResults = movingBodyPressureResults(
+				movingImpulseX, movingImpulseY, movingImpulseZ, movingWork);
+		movingBodySurfaces = MovingBodySurfaceSnapshot.EMPTY;
 		return new StepStats(
 				substeps, pressureIterations, lastPressureResidual, before, totalVolume(), massBefore, totalMass(),
 				reseeding.merged(), reseeding.split(), reseeding.budgetSkipped(), reseeding.geometrySkipped(),
@@ -5001,6 +5024,36 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			}
 		}, (source, target, moved, sourceAfter, targetAfter) -> thermalState.planGasTransfer(
 				source, target, moved, sourceAfter, targetAfter, airNetwork));
+	}
+
+	private void accumulateMovingBodyPressure(int substep, int substeps, double dt,
+			double[] impulseX, double[] impulseY, double[] impulseZ, double[] work) {
+		if (movingBodySurfaces.bodies().isEmpty()) return;
+		if (pressureProjectionSnapshot == null) {
+			throw new IllegalStateException("Moving-body pressure requires a converged projection");
+		}
+		double fraction = (double) (substep + 1) / substeps;
+		for (int index = 0; index < movingBodySurfaces.bodies().size(); index++) {
+			MovingBodyPressureIntegrator.Result result = MovingBodyPressureIntegrator.integrate(
+					movingBodySurfaces.bodies().get(index).atFraction(fraction),
+					this::sampleProjectedAbsolutePressure, dt);
+			impulseX[index] += result.impulseXKilogramMetresPerSecond();
+			impulseY[index] += result.impulseYKilogramMetresPerSecond();
+			impulseZ[index] += result.impulseZKilogramMetresPerSecond();
+			work[index] += result.displacementWorkJoules();
+		}
+	}
+
+	private List<MovingBodyPressureIntegrator.Result> movingBodyPressureResults(
+			double[] impulseX, double[] impulseY, double[] impulseZ, double[] work) {
+		if (movingBodySurfaces.bodies().isEmpty()) return List.of();
+		ArrayList<MovingBodyPressureIntegrator.Result> results = new ArrayList<>(movingBodySurfaces.bodies().size());
+		for (int index = 0; index < movingBodySurfaces.bodies().size(); index++) {
+			results.add(new MovingBodyPressureIntegrator.Result(
+					movingBodySurfaces.bodies().get(index).transientId(),
+					impulseX[index], impulseY[index], impulseZ[index], work[index]));
+		}
+		return List.copyOf(results);
 	}
 
 	/** Runs the non-motion logical axis while a region is hydrostatically asleep. */

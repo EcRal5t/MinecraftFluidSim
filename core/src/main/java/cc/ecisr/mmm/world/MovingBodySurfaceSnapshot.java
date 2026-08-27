@@ -8,6 +8,7 @@ import java.util.List;
 public final class MovingBodySurfaceSnapshot {
 	public static final int MAXIMUM_BODIES = 256;
 	public static final int FACES_PER_BOX = 6;
+	public static final MovingBodySurfaceSnapshot EMPTY = new MovingBodySurfaceSnapshot(List.of());
 
 	public enum CouplingMode { DYNAMIC, KINEMATIC_EXTERNAL }
 
@@ -64,6 +65,21 @@ public final class MovingBodySurfaceSnapshot {
 
 		public double displacedVolumeCubicMetres() { return afterPose.volumeCubicMetres(); }
 
+		public Body atFraction(double fraction) {
+			if (!(Double.isFinite(fraction) && fraction >= 0.0 && fraction <= 1.0)) {
+				throw new IllegalArgumentException("Moving-body interpolation fraction is invalid");
+			}
+			BoxPose pose = new BoxPose(
+					interpolate(beforePose.minimumX(), afterPose.minimumX(), fraction),
+					interpolate(beforePose.minimumY(), afterPose.minimumY(), fraction),
+					interpolate(beforePose.minimumZ(), afterPose.minimumZ(), fraction),
+					interpolate(beforePose.maximumX(), afterPose.maximumX(), fraction),
+					interpolate(beforePose.maximumY(), afterPose.maximumY(), fraction),
+					interpolate(beforePose.maximumZ(), afterPose.maximumZ(), fraction));
+			return new Body(transientId, pose, pose, velocityXMetresPerSecond,
+					velocityYMetresPerSecond, velocityZMetresPerSecond, couplingMode, massKilograms);
+		}
+
 		public List<Face> faces() {
 			double minX = afterPose.minimumX(), minY = afterPose.minimumY(), minZ = afterPose.minimumZ();
 			double maxX = afterPose.maximumX(), maxY = afterPose.maximumY(), maxZ = afterPose.maximumZ();
@@ -88,6 +104,10 @@ public final class MovingBodySurfaceSnapshot {
 
 		private static boolean sameExtent(double first, double second) {
 			return Math.abs(first - second) <= Math.max(Math.ulp(first), Math.ulp(second)) * 8.0;
+		}
+
+		private static double interpolate(double before, double after, double fraction) {
+			return Math.fma(after - before, fraction, before);
 		}
 	}
 
