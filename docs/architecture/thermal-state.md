@@ -116,6 +116,8 @@ p = P0 * (Vstd / Vavailable) * (T / T0)
 
 相变门依赖热学门。每个 transition 用完整最小守恒量子定义，运行时按可用能量、库存、目标容量、饱和条件和统一操作预算求最大整数 extent。
 
+每次固液或气液扫描先从当前全部载体构造一次派生 LTE grid；无相库存或方向上没有可搬运载体的 cell 不构造完整 inventory。气液 extent 的二分候选冻结该 cell 的 exact dyadic 总 `U` 与不变 solid heat-bath inventory，只替换候选 liquid inventory。真实 phase commit 后重建载体 ordinal，但只按守恒余量重新求解被编辑 cell；未编辑 cell 必须已有同代 LTE 状态并原样保留，不能借此反算或改写其 `U`。
+
 ### 固液
 
 - 联合搬运物理 kg、condensed weight、液体 marker、coherent SVQ、材料身份、可选 chemical composition/species 和 `U`。

@@ -65,6 +65,37 @@ public final class ThermalCellGrid {
 		}
 	}
 
+	/**
+	 * Rebuilds carrier ordinals after a cell-local phase edit, retaining the already solved LTE state
+	 * of every untouched cell and assigning only the target cell's conserved energy.
+	 */
+	public void rebuildPhaseCellWithEnergy(CarrierAccess carrierAccess, int targetCell, double targetEnergy) {
+		if (targetCell < 0 || targetCell >= cellCount || !Double.isFinite(targetEnergy)) {
+			throw new IllegalArgumentException("Thermal phase-cell rebuild override is invalid");
+		}
+		double[] previousTemperature = temperature.clone();
+		int[] previousCarrierCount = carrierCount.clone();
+		rebuildTopology(carrierAccess);
+		if (carrierCount[targetCell] == 0) {
+			throw new IllegalArgumentException("Thermal phase edit emptied its carrier cell");
+		}
+		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
+			conductivity[cell] /= totalVolume[cell];
+			if (cell == targetCell) {
+				internalEnergy[cell] = targetEnergy;
+				solveCell(cell, targetEnergy);
+				assignSolvedCellEnergy(cell, targetEnergy);
+			} else {
+				if (previousCarrierCount[cell] == 0 || !Double.isFinite(previousTemperature[cell])) {
+					throw new IllegalArgumentException("Untouched thermal phase cell has no prepared LTE state");
+				}
+				temperature[cell] = previousTemperature[cell];
+				heatCapacity[cell] = modeledCellHeatCapacity(cell, temperature[cell]);
+				updateLinearTemperatureInterval(cell);
+			}
+		}
+	}
+
 	private void rebuildTopology(CarrierAccess carrierAccess) {
 		if (carrierAccess == null) throw new IllegalArgumentException("Thermal carrier access is missing");
 		this.carriers = carrierAccess;
@@ -104,31 +135,35 @@ public final class ThermalCellGrid {
 			}
 			double requested = targetEnergy[cell];
 			solveCell(cell, requested);
-			int remainderCarrier = -1;
-			double largestHeatCapacity = Double.NEGATIVE_INFINITY;
-			double assigned = 0.0;
-			// Put the exact floating-point conservation remainder on the best-conditioned carrier. Phase commits
-			// append very small coherent batches after much larger liquid parcels; assigning the remainder to that
-			// list tail amplifies an unavoidable cell-sum roundoff into a measurable temperature mismatch.
-			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-				double capacity = carriers.mass(carrier) * carriers.material(carrier).specificHeatAt(temperature[cell]);
-				if (capacity > largestHeatCapacity) {
-					largestHeatCapacity = capacity;
-					remainderCarrier = carrier;
-				}
-			}
-			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-				if (carrier == remainderCarrier) continue;
-				double value = modeledEnergy(carrier, temperature[cell]);
-				carriers.setInternalEnergy(carrier, value);
-				assigned += value;
-			}
-			double remainder = requested - assigned;
-			if (!Double.isFinite(remainder)) throw new IllegalArgumentException("Thermal carrier energy remainder is invalid");
-			carriers.setInternalEnergy(remainderCarrier, remainder);
-			validateCarrierAtCellTemperature(remainderCarrier, temperature[cell]);
-			internalEnergy[cell] = requested;
+			assignSolvedCellEnergy(cell, requested);
 		}
+	}
+
+	private void assignSolvedCellEnergy(int cell, double requested) {
+		int remainderCarrier = -1;
+		double largestHeatCapacity = Double.NEGATIVE_INFINITY;
+		double assigned = 0.0;
+		// Put the exact floating-point conservation remainder on the best-conditioned carrier. Phase commits
+		// append very small coherent batches after much larger liquid parcels; assigning the remainder to that
+		// list tail amplifies an unavoidable cell-sum roundoff into a measurable temperature mismatch.
+		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+			double capacity = carriers.mass(carrier) * carriers.material(carrier).specificHeatAt(temperature[cell]);
+			if (capacity > largestHeatCapacity) {
+				largestHeatCapacity = capacity;
+				remainderCarrier = carrier;
+			}
+		}
+		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+			if (carrier == remainderCarrier) continue;
+			double value = modeledEnergy(carrier, temperature[cell]);
+			carriers.setInternalEnergy(carrier, value);
+			assigned += value;
+		}
+		double remainder = requested - assigned;
+		if (!Double.isFinite(remainder)) throw new IllegalArgumentException("Thermal carrier energy remainder is invalid");
+		carriers.setInternalEnergy(remainderCarrier, remainder);
+		validateCarrierAtCellTemperature(remainderCarrier, temperature[cell]);
+		internalEnergy[cell] = requested;
 	}
 
 	/** Validates a complete prospective LTE energy assignment without changing any authoritative carrier. */

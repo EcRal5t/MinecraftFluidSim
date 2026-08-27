@@ -1641,6 +1641,7 @@ public final class FlipFluidDomain {
 		if (maximumOperations < 0 || maximumOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
 			throw new IllegalArgumentException("Thermal phase operation budget is invalid");
 		}
+		thermalState.preparePhaseScan(thermalMarkerContext());
 		int operations = 0, frozen = 0, melted = 0; long signedBatches = 0L;
 		for (ThermalPhaseTransition transition : thermalState.registry().transitions()) {
 			if (transition.interfaceRequirement() != ThermalPhaseTransition.InterfaceRequirement.NONE) continue;
@@ -1652,8 +1653,8 @@ public final class FlipFluidDomain {
 					|| upper.carrierKind() != ThermalMaterialDefinition.CarrierKind.LIQUID) continue;
 			int liquidHandle = fluidMaterialHandle(upper.carrierId());
 			for (int cell = 0; cell < cellCount && operations < maximumOperations; cell++) {
-				PhaseCellInventory inventory = phaseCellInventory(cell, liquidHandle, lower.id());
-				if (inventory == null) continue;
+				long coherentSvq = thermalState.coherentPhases().cellOccupiedSvq(cell);
+				if (markerCount[cell] == 0 && coherentSvq == 0L) continue;
 				double absolutePressure = AirNetwork.REFERENCE_PRESSURE + pressure[cell];
 				if (!(Double.isFinite(absolutePressure)
 						&& absolutePressure >= transition.minimumPressurePa()
@@ -1662,9 +1663,16 @@ public final class FlipFluidDomain {
 							+ " Pa is outside " + transition.id() + " curve "
 							+ transition.minimumPressurePa() + ".." + transition.maximumPressurePa() + " Pa");
 				}
+				double temperature = thermalState.phaseScanTemperatureInCell(cell);
+				double equilibrium = transition.equilibriumTemperatureK(absolutePressure);
+				if (temperature == equilibrium
+						|| temperature < equilibrium && markerCount[cell] == 0
+						|| temperature > equilibrium && coherentSvq == 0L) continue;
+				PhaseCellInventory inventory = phaseCellInventory(cell, liquidHandle, lower.id());
+				if (inventory == null) continue;
 				long remainingBudget = maximumOperations - operations;
 				JointPhasePlan plan = planJointPhaseChange(
-						cell, liquidHandle, transition, inventory, remainingBudget, absolutePressure);
+						cell, liquidHandle, transition, inventory, remainingBudget, temperature, equilibrium);
 				if (plan == null) continue;
 				long magnitude = plan.batches();
 				if (plan.freezing()) commitJointFreeze(cell, plan);
@@ -1686,6 +1694,7 @@ public final class FlipFluidDomain {
 			throw new IllegalArgumentException("Gas phase operation budget is invalid");
 		}
 		ensureGrid(); refreshGasTopology();
+		thermalState.preparePhaseScan(thermalMarkerContext());
 		GasLiquidPhaseModel phase = thermalState.gasLiquidPhase(airNetwork);
 		int operations = 0, boiled = 0, condensed = 0;
 		for (ThermalPhaseTransition transition : thermalState.registry().transitions()) {
@@ -1707,19 +1716,21 @@ public final class FlipFluidDomain {
 				long remainingBudget = maximumOperations - operations;
 				double absolutePressure = GasRegistry.STANDARD_PRESSURE_PA
 						+ thermalState.gasGaugePressure(node, airNetwork);
-				double liquidTemperature = thermalState.temperatureInCell(cell, thermalMarkerContext());
+				double liquidTemperature = thermalState.phaseScanTemperatureInCell(cell);
 				GasLiquidPhaseModel.Direction direction = phase.saturation(
 						transition, liquidTemperature, airNetwork.inventory(node), absolutePressure).direction();
+				FlipThermalState.PhaseCandidateCell thermalCell =
+						thermalState.preparePhaseCandidateCell(cell, thermalMarkerContext());
 				if (direction == GasLiquidPhaseModel.Direction.BOIL) {
 					GasBoilPlan plan = planGasBoil(cell, node, liquidHandle, gasThermalHandle,
-							transition, inventory, phase, liquidTemperature, remainingBudget);
+							transition, inventory, phase, thermalCell, liquidTemperature, remainingBudget);
 					if (plan == null) continue;
 					commitGasBoil(cell, node, plan);
 					ensureGrid(); refreshGasTopology();
 					operations = Math.addExact(operations, Math.toIntExact(plan.batches())); boiled++;
 				} else if (direction == GasLiquidPhaseModel.Direction.CONDENSE) {
 					GasCondensePlan plan = planGasCondense(cell, node, liquidHandle, transition,
-							inventory, phase, gas.carrierId(), remainingBudget);
+							inventory, phase, thermalCell, gas.carrierId(), remainingBudget);
 					if (plan == null) continue;
 					commitGasCondense(cell, node, liquidHandle, plan);
 					ensureGrid(); refreshGasTopology();
@@ -1733,7 +1744,8 @@ public final class FlipFluidDomain {
 	private GasBoilPlan planGasBoil(
 			int cell, int node, int liquidHandle, int gasThermalHandle,
 			ThermalPhaseTransition transition, PhaseCellInventory inventory,
-			GasLiquidPhaseModel phase, double liquidTemperature, long maximumBatches
+			GasLiquidPhaseModel phase, FlipThermalState.PhaseCandidateCell thermalCell,
+			double liquidTemperature, long maximumBatches
 	) {
 		double batchMass = transition.massMuPerBatch().toDouble();
 		long byVolume = inventory.freezableUpperSvq() / transition.lowerVolumeSvqPerBatch();
@@ -1742,14 +1754,14 @@ public final class FlipFluidDomain {
 		long high = Math.min(maximumBatches, Math.min(byVolume, byMass));
 		if (high <= 0L) return null;
 		GasBoilPlan first = gasBoilCandidate(cell, node, liquidHandle, gasThermalHandle,
-				transition, phase, liquidTemperature, 1L);
+				transition, phase, thermalCell, liquidTemperature, 1L);
 		if (first == null || first.directionAfter() != GasLiquidPhaseModel.Direction.BOIL) return first;
 		GasBoilPlan best = first;
 		long low = 2L;
 		while (low <= high) {
 			long middle = low + ((high - low) >>> 1);
 			GasBoilPlan candidate = gasBoilCandidate(cell, node, liquidHandle, gasThermalHandle,
-					transition, phase, liquidTemperature, middle);
+					transition, phase, thermalCell, liquidTemperature, middle);
 			if (candidate == null || candidate.directionAfter() != GasLiquidPhaseModel.Direction.BOIL) {
 				high = middle - 1L;
 			} else {
@@ -1763,20 +1775,20 @@ public final class FlipFluidDomain {
 	private GasBoilPlan gasBoilCandidate(
 			int cell, int node, int liquidHandle, int gasThermalHandle,
 			ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
-			double liquidTemperature, long batches
+			FlipThermalState.PhaseCandidateCell thermalCell, double liquidTemperature, long batches
 	) {
 		try {
 			long removedSvq = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
 			double removedMass = transition.massMuPerBatch().multiply(batches).toDouble();
 			PhaseRemovalPlan removal = planGasPhaseRemoval(
-					cell, liquidHandle, gasThermalHandle, removedSvq, removedMass);
+					cell, liquidHandle, gasThermalHandle, removedSvq, removedMass, liquidTemperature);
 			GasInventory batch = chemicalParcels == null ? phase.gasBatch(transition, batches)
 					: phase.gasBatch(transition, batches, removal.movedComposition().amounts(),
 							removal.movedComposition().massResidual());
 			double batchEnergy = phase.internalEnergyAtTemperature(transition, batch, liquidTemperature);
-			double candidateLiquidTemperature = thermalState.requirePhaseCandidateState(cell,
+			double candidateLiquidTemperature = thermalState.requirePhaseCandidateState(thermalCell,
 					liquidInventoryAfterRemoval(cell, liquidHandle, removal.allocations()),
-					-batchEnergy, thermalMarkerContext());
+					-batchEnergy);
 			GasInventory candidateGas = airNetwork.inventory(node).merge(batch);
 			double candidateGasEnergy = thermalState.gasNodeEnergy(node, airNetwork) + batchEnergy;
 			GasLiquidPhaseModel.Direction directionAfter = prospectiveGasPhaseDirection(
@@ -1811,7 +1823,8 @@ public final class FlipFluidDomain {
 
 	private GasCondensePlan planGasCondense(
 			int cell, int node, int liquidHandle, ThermalPhaseTransition transition,
-			PhaseCellInventory before, GasLiquidPhaseModel phase, String gasCarrierId, long maximumBatches
+			PhaseCellInventory before, GasLiquidPhaseModel phase,
+			FlipThermalState.PhaseCandidateCell thermalCell, String gasCarrierId, long maximumBatches
 	) {
 		GasComponentAmount vapor = airNetwork.inventory(node).component(gasCarrierId);
 		if (vapor == null) return null;
@@ -1825,14 +1838,14 @@ public final class FlipFluidDomain {
 		long high = Math.min(maximumBatches, Math.min(byGas, byCapacity));
 		if (high <= 0L) return null;
 		GasCondensePlan first = gasCondenseCandidate(
-				cell, node, liquidHandle, transition, before, phase, 1L);
+				cell, node, liquidHandle, transition, before, phase, thermalCell, 1L);
 		if (first == null || first.directionAfter() != GasLiquidPhaseModel.Direction.CONDENSE) return first;
 		GasCondensePlan best = first;
 		long low = 2L;
 		while (low <= high) {
 			long middle = low + ((high - low) >>> 1);
 			GasCondensePlan candidate = gasCondenseCandidate(
-					cell, node, liquidHandle, transition, before, phase, middle);
+					cell, node, liquidHandle, transition, before, phase, thermalCell, middle);
 			if (candidate == null || candidate.directionAfter() != GasLiquidPhaseModel.Direction.CONDENSE) {
 				high = middle - 1L;
 			} else {
@@ -1845,7 +1858,8 @@ public final class FlipFluidDomain {
 
 	private GasCondensePlan gasCondenseCandidate(
 			int cell, int node, int liquidHandle, ThermalPhaseTransition transition,
-			PhaseCellInventory before, GasLiquidPhaseModel phase, long batches
+			PhaseCellInventory before, GasLiquidPhaseModel phase,
+			FlipThermalState.PhaseCandidateCell thermalCell, long batches
 	) {
 		try {
 			GasInventory requestedBatch = phase.gasBatch(transition, batches);
@@ -1916,9 +1930,9 @@ public final class FlipFluidDomain {
 					throw new PhaseCandidateUnavailableException("Condensation has no collision-valid marker slot");
 				}
 			}
-			double candidateLiquidTemperature = thermalState.requirePhaseCandidateState(cell,
+			double candidateLiquidTemperature = thermalState.requirePhaseCandidateState(thermalCell,
 					liquidInventoryAfterCondensation(cell, liquidHandle, target, targetMass,
-							condensedMixture, moved.mass()), batchEnergy, thermalMarkerContext());
+							condensedMixture, moved.mass()), batchEnergy);
 			GasLiquidPhaseModel.Direction directionAfter = prospectiveGasPhaseDirection(
 					node, transition, phase, candidateLiquidTemperature, take.second(), candidateGasEnergy);
 			return new GasCondensePlan(batches, take.first(), candidateGasEnergy, target,
@@ -2045,10 +2059,8 @@ public final class FlipFluidDomain {
 
 	private JointPhasePlan planJointPhaseChange(
 			int cell, int liquidHandle, ThermalPhaseTransition transition,
-			PhaseCellInventory before, long maximumBatches, double absolutePressurePa
+			PhaseCellInventory before, long maximumBatches, double temperature, double equilibrium
 	) {
-		double temperature = thermalState.temperatureInCell(cell, thermalMarkerContext());
-		double equilibrium = transition.equilibriumTemperatureK(absolutePressurePa);
 		if (temperature == equilibrium || maximumBatches == 0L) return null;
 		double batchMass = transition.massMuPerBatch().toDouble();
 		if (!(Double.isFinite(batchMass) && batchMass > 0.0)) {
@@ -2274,7 +2286,8 @@ public final class FlipFluidDomain {
 	}
 
 	private PhaseRemovalPlan planGasPhaseRemoval(
-			int cell, int liquidHandle, int gasThermalHandle, long requestedSvq, double requestedMass
+			int cell, int liquidHandle, int gasThermalHandle, long requestedSvq, double requestedMass,
+			double cellTemperature
 	) {
 		ArrayList<PhaseMarkerAllocation> allocations = new ArrayList<>();
 		PhaseCompositionBuilder moved = new PhaseCompositionBuilder();
@@ -2283,7 +2296,6 @@ public final class FlipFluidDomain {
 				thermalState.registry().material(gasThermalHandle).carrierId());
 		long remainingSvq = requestedSvq;
 		double remainingMass = requestedMass;
-		double cellTemperature = thermalState.temperatureInCell(cell, thermalMarkerContext());
 		for (int marker = particleCount - 1; marker >= 0 && remainingSvq > 0L; marker--) {
 			if (particleCellIndex(marker) != cell || particleMaterialHandle[marker] != liquidHandle
 					|| chemicalParcels != null && chemicalParcels.indicator(marker)) continue;
