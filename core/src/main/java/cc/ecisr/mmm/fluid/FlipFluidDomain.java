@@ -1837,6 +1837,30 @@ public final class FlipFluidDomain {
 		return requireProjectedPressure(cellIndexChecked(x, y, z)).absolutePressurePa();
 	}
 
+	double sampleProjectedAbsolutePressure(double localXMetres, double localYMetres, double localZMetres) {
+		if (!(Double.isFinite(localXMetres) && Double.isFinite(localYMetres) && Double.isFinite(localZMetres))) {
+			throw new IllegalArgumentException("Projected pressure sample position is invalid");
+		}
+		double gridX = localXMetres / config.cellSize() - 0.5;
+		double gridY = localYMetres / config.cellSize() - 0.5;
+		double gridZ = localZMetres / config.cellSize() - 0.5;
+		int baseX = (int) Math.floor(gridX), baseY = (int) Math.floor(gridY), baseZ = (int) Math.floor(gridZ);
+		double alphaX = gridX - baseX, alphaY = gridY - baseY, alphaZ = gridZ - baseZ;
+		double result = 0.0, totalWeight = 0.0;
+		for (int dz = 0; dz <= 1; dz++) for (int dy = 0; dy <= 1; dy++) for (int dx = 0; dx <= 1; dx++) {
+			double weight = (dx == 0 ? 1.0 - alphaX : alphaX)
+					* (dy == 0 ? 1.0 - alphaY : alphaY)
+					* (dz == 0 ? 1.0 - alphaZ : alphaZ);
+			if (weight == 0.0) continue;
+			int x = baseX + dx, y = baseY + dy, z = baseZ + dz;
+			if (!inside(x, y, z)) throw new IllegalArgumentException("Projected pressure sample leaves the domain");
+			result += weight * requireProjectedPressure(cellIndex(x, y, z)).absolutePressurePa();
+			totalWeight += weight;
+		}
+		if (!(totalWeight > 0.0)) throw new IllegalStateException("Projected pressure sample has no support");
+		return result / totalWeight;
+	}
+
 	/** Exact-batch condensed melt/freeze; species and same-cell granular heat baths join the conserved LTE plan. */
 	public ThermalPhaseStats stepInertPhaseChangeOnly(int maximumOperations) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");

@@ -1,5 +1,8 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.world.MovingBodyPressureIntegrator;
+import cc.ecisr.mmm.world.MovingBodySurfaceSnapshot;
+
 /** Deterministic M2.5 gates for PLIC volume reconstruction and ghost-fluid pressure weights. */
 public final class FlipFluidFreeSurfaceValidation {
 	private FlipFluidFreeSurfaceValidation() { }
@@ -11,6 +14,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		pureWaterMarkerMassLedgerTracksVolume();
 		volumeDriftCorrectionPreservesLegitimateSurfaceDeficits();
 		fractionalHydrostaticColumnsBalanceGravity();
+		projectedHydrostaticPressureIntegratesOnMovingBox();
 		thinLayerRegularizationRemainsStable();
 		isolatedDropletReceivesUndilutedGravity();
 		if (!fast) longRunHydrostaticSurfaceDoesNotSink();
@@ -31,6 +35,36 @@ public final class FlipFluidFreeSurfaceValidation {
 		domain.step();
 		check(Math.abs(domain.totalMass() - (double) config.density() * domain.totalVolume()) <= 1.0E-9,
 				"pure-water reseeding did not preserve the mass/volume relation");
+	}
+
+	private static void projectedHydrostaticPressureIntegratesOnMovingBox() {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 0.05F,
+				240, 1.0E-6F, 0.40F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = new FlipFluidDomain(5, 19, 5, config, 4_096);
+		for (int z = 0; z < 5; z++) for (int y = 0; y < 19; y++) for (int x = 0; x < 5; x++) {
+			domain.setSolid(x, y, z, true);
+		}
+		for (int z = 1; z <= 3; z++) for (int y = 1; y <= 17; y++) for (int x = 1; x <= 3; x++) {
+			domain.setSolid(x, y, z, false);
+		}
+		for (int z = 1; z <= 3; z++) for (int y = 1; y <= 16; y++) for (int x = 1; x <= 3; x++) {
+			domain.setVolume(x, y, z, 1.0F);
+		}
+		domain.establishPressureProjectionForPhaseChange();
+		MovingBodySurfaceSnapshot.BoxPose pose = new MovingBodySurfaceSnapshot.BoxPose(
+				1.1, 2.75, 1.1, 1.4, 4.75, 1.4);
+		MovingBodySurfaceSnapshot.Body body = new MovingBodySurfaceSnapshot.Body(
+				1L, pose, pose, 0.0, 0.0, 0.0,
+				MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC, 70.0);
+		MovingBodyPressureIntegrator.Result result = MovingBodyPressureIntegrator.integrate(
+				body, domain::sampleProjectedAbsolutePressure, config.timeStep());
+		double expected = config.density() * config.gravity()
+				* body.displacedVolumeCubicMetres() * config.timeStep();
+		check(Math.abs(result.impulseYKilogramMetresPerSecond() - expected) / expected <= 5.0E-5
+				&& Math.abs(result.impulseXKilogramMetresPerSecond()) <= expected * 1.0E-7
+				&& Math.abs(result.impulseZKilogramMetresPerSecond()) <= expected * 1.0E-7,
+				"projected hydrostatic box impulse missed rho*g*V: actual="
+						+ result.impulseYKilogramMetresPerSecond() + " expected=" + expected);
 	}
 
 	private static void planeVolumeInversionIsAccurate() {
