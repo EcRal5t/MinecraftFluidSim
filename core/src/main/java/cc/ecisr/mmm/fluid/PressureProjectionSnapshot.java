@@ -9,6 +9,7 @@ public final class PressureProjectionSnapshot {
 			long markerVolumeBits,
 			long markerMassBits,
 			int solidMicroMask,
+			long movingBlockedVolumeBits,
 			long solidOccupancySvq,
 			int adjacentGasLineage
 	) {
@@ -32,6 +33,7 @@ public final class PressureProjectionSnapshot {
 	private final long[] markerVolumeBits;
 	private final long[] markerMassBits;
 	private final int[] solidMicroMask;
+	private final long[] movingBlockedVolumeBits;
 	private final long[] solidOccupancySvq;
 	private final int[] adjacentGasLineage;
 	private final float[] gaugePressurePa;
@@ -47,6 +49,7 @@ public final class PressureProjectionSnapshot {
 		markerVolumeBits = new long[cells];
 		markerMassBits = new long[cells];
 		solidMicroMask = new int[cells];
+		movingBlockedVolumeBits = new long[cells];
 		solidOccupancySvq = new long[cells];
 		adjacentGasLineage = new int[cells];
 		for (int cell = 0; cell < gaugePressurePa.length; cell++) {
@@ -58,6 +61,7 @@ public final class PressureProjectionSnapshot {
 			markerVolumeBits[cell] = identity.markerVolumeBits();
 			markerMassBits[cell] = identity.markerMassBits();
 			solidMicroMask[cell] = identity.solidMicroMask();
+			movingBlockedVolumeBits[cell] = identity.movingBlockedVolumeBits();
 			solidOccupancySvq[cell] = identity.solidOccupancySvq();
 			adjacentGasLineage[cell] = identity.adjacentGasLineage();
 		}
@@ -88,6 +92,7 @@ public final class PressureProjectionSnapshot {
 				|| markerVolumeBits[cell] != currentIdentity.markerVolumeBits()
 				|| markerMassBits[cell] != currentIdentity.markerMassBits()
 				|| solidMicroMask[cell] != currentIdentity.solidMicroMask()
+				|| movingBlockedVolumeBits[cell] != currentIdentity.movingBlockedVolumeBits()
 				|| solidOccupancySvq[cell] != currentIdentity.solidOccupancySvq()
 				|| adjacentGasLineage[cell] != currentIdentity.adjacentGasLineage()) {
 			throw new IllegalStateException("Pressure projection cell carrier or geometry changed");

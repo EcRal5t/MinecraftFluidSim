@@ -1,0 +1,7 @@
+{
+  "selector_kind": "entity_type",
+  "selector": "minecraft:player",
+  "coupling_mode": "dynamic",
+  "mass_kg": 70.0,
+  "geometry_provider": "axis_aligned_box"
+}

@@ -2,11 +2,16 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
-import cc.ecisr.mmm.world.MovingBodyPressureIntegrator;
+import cc.ecisr.mmm.world.MovingBodyDefinition;
+import cc.ecisr.mmm.world.MovingBodyDefinitionCodec;
+import cc.ecisr.mmm.world.MovingBodyDefinitionRegistry;
 import cc.ecisr.mmm.world.MovingBodySurfaceSnapshot;
 import net.minecraft.world.phys.shapes.BooleanOp;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
+
+import java.io.StringReader;
+import java.util.List;
 
 /** Minecraft VoxelShape-to-runtime-cut-cell sampling regression. */
 public final class FluidCutCellShapeValidation {
@@ -19,8 +24,8 @@ public final class FluidCutCellShapeValidation {
 		stairCornerProducesFractionalSolverCells();
 		thinPaneRemainsAClosedConservativeBarrier();
 		documentedStairPlacementRestoresExactLedger();
+		movingBodyDefinitionsAreStrictAndDataDriven();
 		axisAlignedMovingBodySurfaceIsExactAndBounded();
-		hydrostaticPressureSurfaceIntegralMatchesDisplacement();
 		System.out.println("Minecraft cut-cell shape validation passed");
 	}
 
@@ -43,31 +48,40 @@ public final class FluidCutCellShapeValidation {
 				MovingBodySurfaceSnapshot.CouplingMode.KINEMATIC_EXTERNAL, 0.0);
 		expectFailure(() -> new MovingBodySurfaceSnapshot(java.util.List.of(body, overlap)),
 				"moving-body snapshot accepted overlapping boxes");
+		MovingBodySurfaceSnapshot.Body crossing = new MovingBodySurfaceSnapshot.Body(
+				8L,
+				new MovingBodySurfaceSnapshot.BoxPose(1.5, 1.0, 2.0, 2.5, 3.0, 5.0),
+				new MovingBodySurfaceSnapshot.BoxPose(-1.0, 1.0, 2.0, 0.0, 3.0, 5.0),
+				-2.5, 0.0, 0.0, MovingBodySurfaceSnapshot.CouplingMode.KINEMATIC_EXTERNAL, 0.0);
+		expectFailure(() -> new MovingBodySurfaceSnapshot(List.of(body, crossing)),
+				"moving-body snapshot accepted crossing trajectories");
 	}
 
-	private static void hydrostaticPressureSurfaceIntegralMatchesDisplacement() {
-		double density = 997.0, gravity = 9.81, dt = 0.05;
-		MovingBodySurfaceSnapshot.BoxPose pose = new MovingBodySurfaceSnapshot.BoxPose(
-				0.2, 1.2, 0.3, 0.8, 2.0, 0.8);
-		MovingBodySurfaceSnapshot.Body body = new MovingBodySurfaceSnapshot.Body(
-				11L, pose, pose, 0.0, 0.25, 0.0,
-				MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC, 70.0);
-		MovingBodyPressureIntegrator.Result result = MovingBodyPressureIntegrator.integrate(body,
-				(x, y, z) -> 101_325.0 + density * gravity * (3.0 - y), dt);
-		double expectedUpwardImpulse = density * gravity * body.displacedVolumeCubicMetres() * dt;
-		check(Math.abs(result.impulseXKilogramMetresPerSecond()) <= Math.ulp(101_325.0) * 8.0
-				&& Math.abs(result.impulseZKilogramMetresPerSecond()) <= Math.ulp(101_325.0) * 8.0
-				&& Math.abs(result.impulseYKilogramMetresPerSecond() - expectedUpwardImpulse)
-				<= Math.ulp(expectedUpwardImpulse) * 16.0
-				&& Math.abs(result.displacementWorkJoules() - expectedUpwardImpulse * 0.25)
-				<= Math.ulp(expectedUpwardImpulse * 0.25) * 16.0,
-				"hydrostatic pressure surface integral did not reduce to rho*g*displaced-volume");
-		MovingBodyPressureIntegrator.Result uniform = MovingBodyPressureIntegrator.integrate(body,
-				(x, y, z) -> 101_325.0, dt);
-		check(uniform.impulseXKilogramMetresPerSecond() == 0.0
-				&& uniform.impulseYKilogramMetresPerSecond() == 0.0
-				&& uniform.impulseZKilogramMetresPerSecond() == 0.0,
-				"closed moving-body surface did not cancel uniform absolute pressure");
+	private static void movingBodyDefinitionsAreStrictAndDataDriven() {
+		String json = """
+				{"selector_kind":"entity_type","selector":"minecraft:player","coupling_mode":"dynamic",
+				 "mass_kg":70.0,"geometry_provider":"axis_aligned_box"}
+				""";
+		MovingBodyDefinition player = MovingBodyDefinitionCodec.decode(
+				"mmm:player", new StringReader(json));
+		check(player.selectorKind() == MovingBodyDefinition.SelectorKind.ENTITY_TYPE
+				&& player.couplingMode() == MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC
+				&& player.massKilograms() == 70.0,
+				"moving-body definition codec changed selector or SI mass");
+		MovingBodyDefinition stand = MovingBodyDefinitionCodec.decode("mmm:armor_stand",
+				new StringReader(json.replace("minecraft:player", "minecraft:armor_stand")
+						.replace("70.0", "25.0")));
+		MovingBodyDefinitionRegistry registry = new MovingBodyDefinitionRegistry(List.of(player, stand));
+		check(registry.definitions().getFirst().id().equals("mmm:armor_stand")
+				&& registry.definitions().getLast().id().equals("mmm:player"),
+				"moving-body registry order is not canonical");
+		expectFailure(() -> MovingBodyDefinitionCodec.decode("mmm:bad", new StringReader(
+				json.replace("{", "{\"unknown\":true,"))),
+				"moving-body definition ignored an unknown field");
+		expectFailure(() -> new MovingBodyDefinitionRegistry(List.of(player,
+				new MovingBodyDefinition("mmm:duplicate", player.selectorKind(), player.selectorId(),
+						player.couplingMode(), player.massKilograms(), player.geometryProvider()))),
+				"moving-body registry accepted a duplicate selector");
 	}
 
 	private static void halfSlabPreservesSolverAlignedFaces() {

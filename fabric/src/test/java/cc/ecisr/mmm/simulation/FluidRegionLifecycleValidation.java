@@ -145,7 +145,7 @@ public final class FluidRegionLifecycleValidation {
 				domain, domain.maximumParticleCount());
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		FluidStepCandidate first = backend.evaluate(new FluidStepRequest(
-				region.solverGeneration(), region.domain().captureAuthoritativeState(), List.of(), false, 0));
+				region.solverGeneration(), region.domain().captureAuthoritativeState(), false, 0));
 		region.adoptStepCandidate(first, backend.id());
 		require(region.solverGeneration() == 1L && region.domain() != domain,
 				"valid backend candidate did not atomically replace the live solver");
@@ -161,7 +161,7 @@ public final class FluidRegionLifecycleValidation {
 				"stale backend candidate changed the committed solver");
 
 		FluidStepCandidate second = backend.evaluate(new FluidStepRequest(
-				region.solverGeneration(), region.domain().captureAuthoritativeState(), List.of(), false, 0));
+				region.solverGeneration(), region.domain().captureAuthoritativeState(), false, 0));
 		boolean backendRejected = false;
 		try {
 			region.adoptStepCandidate(second, "mmm:unexpected");
@@ -170,6 +170,16 @@ public final class FluidRegionLifecycleValidation {
 		}
 		require(backendRejected && region.domain() == committed && region.solverGeneration() == 1L,
 				"backend identity mismatch changed the committed solver");
+
+		FluidRegion.PreparedStepCandidate prepared = region.prepareStepCandidate(second, backend.id());
+		require(region.domain() == committed && region.solverGeneration() == 1L,
+				"candidate preparation changed the committed solver before entity revalidation");
+		region.commitPreparedStepCandidate(prepared);
+		require(region.domain() == prepared.replacement() && region.solverGeneration() == 2L,
+				"prepared candidate did not commit as one generation");
+		region.rollbackPreparedStepCandidate(prepared);
+		require(region.domain() == committed && region.solverGeneration() == 1L,
+				"external participant failure did not restore the exact base solver generation");
 	}
 
 	private static void validateAvailabilityPreservesRunIntent() {

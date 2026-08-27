@@ -8,7 +8,7 @@ import java.util.List;
 public final class MovingBodySurfaceSnapshot {
 	public static final int MAXIMUM_BODIES = 256;
 	public static final int FACES_PER_BOX = 6;
-	public static final MovingBodySurfaceSnapshot EMPTY = new MovingBodySurfaceSnapshot(List.of());
+	public static final MovingBodySurfaceSnapshot EMPTY = new MovingBodySurfaceSnapshot("none", List.of());
 
 	public enum CouplingMode { DYNAMIC, KINEMATIC_EXTERNAL }
 
@@ -132,8 +132,16 @@ public final class MovingBodySurfaceSnapshot {
 	}
 
 	private final List<Body> bodies;
+	private final String definitionFingerprint;
 
 	public MovingBodySurfaceSnapshot(List<Body> bodies) {
+		this("fixture", bodies);
+	}
+
+	public MovingBodySurfaceSnapshot(String definitionFingerprint, List<Body> bodies) {
+		if (definitionFingerprint == null || definitionFingerprint.isBlank()) {
+			throw new IllegalArgumentException("Moving-body definition fingerprint is missing");
+		}
 		if (bodies == null || bodies.size() > MAXIMUM_BODIES) {
 			throw new IllegalArgumentException("Moving-body snapshot exceeds its body budget");
 		}
@@ -147,19 +155,56 @@ public final class MovingBodySurfaceSnapshot {
 		}
 		copy.sort(java.util.Comparator.comparingLong(Body::transientId));
 		for (int first = 0; first < copy.size(); first++) for (int second = first + 1; second < copy.size(); second++) {
-			if (overlaps(copy.get(first).afterPose(), copy.get(second).afterPose())) {
-				throw new IllegalArgumentException("Moving-body snapshot contains overlapping bodies");
+			if (collideDuringStep(copy.get(first), copy.get(second))) {
+				throw new IllegalArgumentException("Moving-body snapshot contains colliding body trajectories");
 			}
 		}
 		this.bodies = List.copyOf(copy);
+		this.definitionFingerprint = definitionFingerprint;
 	}
 
 	public List<Body> bodies() { return bodies; }
+	public String definitionFingerprint() { return definitionFingerprint; }
 	public int faceCount() { return Math.multiplyExact(bodies.size(), FACES_PER_BOX); }
 
-	private static boolean overlaps(BoxPose first, BoxPose second) {
-		return first.minimumX() < second.maximumX() && first.maximumX() > second.minimumX()
-				&& first.minimumY() < second.maximumY() && first.maximumY() > second.minimumY()
-				&& first.minimumZ() < second.maximumZ() && first.maximumZ() > second.minimumZ();
+	private static boolean collideDuringStep(Body first, Body second) {
+		double[] interval = {0.0, 1.0};
+		return overlapInterval(interval,
+				centre(first.beforePose().minimumX(), first.beforePose().maximumX())
+						- centre(second.beforePose().minimumX(), second.beforePose().maximumX()),
+				centre(first.afterPose().minimumX(), first.afterPose().maximumX())
+						- centre(second.afterPose().minimumX(), second.afterPose().maximumX()),
+				halfExtent(first.beforePose().minimumX(), first.beforePose().maximumX())
+						+ halfExtent(second.beforePose().minimumX(), second.beforePose().maximumX()))
+				&& overlapInterval(interval,
+				centre(first.beforePose().minimumY(), first.beforePose().maximumY())
+						- centre(second.beforePose().minimumY(), second.beforePose().maximumY()),
+				centre(first.afterPose().minimumY(), first.afterPose().maximumY())
+						- centre(second.afterPose().minimumY(), second.afterPose().maximumY()),
+				halfExtent(first.beforePose().minimumY(), first.beforePose().maximumY())
+						+ halfExtent(second.beforePose().minimumY(), second.beforePose().maximumY()))
+				&& overlapInterval(interval,
+				centre(first.beforePose().minimumZ(), first.beforePose().maximumZ())
+						- centre(second.beforePose().minimumZ(), second.beforePose().maximumZ()),
+				centre(first.afterPose().minimumZ(), first.afterPose().maximumZ())
+						- centre(second.afterPose().minimumZ(), second.afterPose().maximumZ()),
+				halfExtent(first.beforePose().minimumZ(), first.beforePose().maximumZ())
+						+ halfExtent(second.beforePose().minimumZ(), second.beforePose().maximumZ()))
+				&& interval[0] < interval[1];
 	}
+
+	private static boolean overlapInterval(double[] interval, double relativeBefore,
+			double relativeAfter, double halfExtentSum) {
+		double delta = relativeAfter - relativeBefore;
+		if (delta == 0.0) return Math.abs(relativeBefore) < halfExtentSum;
+		double first = (-halfExtentSum - relativeBefore) / delta;
+		double second = (halfExtentSum - relativeBefore) / delta;
+		double entry = Math.min(first, second), exit = Math.max(first, second);
+		interval[0] = Math.max(interval[0], entry);
+		interval[1] = Math.min(interval[1], exit);
+		return interval[0] < interval[1];
+	}
+
+	private static double centre(double minimum, double maximum) { return 0.5 * (minimum + maximum); }
+	private static double halfExtent(double minimum, double maximum) { return 0.5 * (maximum - minimum); }
 }

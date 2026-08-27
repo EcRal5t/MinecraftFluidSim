@@ -136,7 +136,7 @@ service 启动状态只有 `UNINITIALIZED`、`READY`、`LOCKED_PROFILE` 和 `POL
 - 客户端只接受当前 region generation 的递增 snapshot sequence；迟到包、移除 tombstone 前的包和其他 dimension 的包不能复活状态。
 - Query API 只允许服务器主线程同步调用，只扫描已加载 owner 的权威 marker/side columns；它不建网格、不加载 chunk、不分配 solver、不唤醒、不 checkpoint、不推进 logical step，也不返回 live domain 引用。
 - Query 的 `regionNetworkGeneration` 标识网络中的区域 incarnation，不是 checkpoint generation 或逐 tick revision。观察者需要新鲜值时必须重新查询，不能把它当作缓存时钟。
-- Minecraft 实体发现和 AABB 湿采样留在 Fabric；core 的 moving-body request 只携带局部 SI 位置、速度和湿体积，并只提交 marker 动量。实际液体冲量可诊断，尚未实现的刚体质量/压力面积分/移动 cut-cell 不能由 Fabric 猜测补齐。
+- Minecraft 实体发现、definition 解析与旧/当前 AABB raw pose 冻结留在 Fabric；core 的瞬态 moving-solid snapshot 进入统一 occupancy、pressure Schur、黏性和 CCD。逐 body settlement 与 region candidate 在主线程复核后联合提交；未定义实体明确作为 kinematic external，不猜 kg。当前边界只支持平移轴对齐盒，不承诺旋转或通用刚体。
 - renderer、Jade/HWYLA 适配、status 和 GPU probe 都不能唤醒、加载、checkpoint 或回写区域。
 
 ## 主题文档

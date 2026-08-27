@@ -1,10 +1,10 @@
 package cc.ecisr.mmm.fluid;
 
-import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
+import cc.ecisr.mmm.world.MovingBodyStepResult;
+import cc.ecisr.mmm.world.MovingBodySurfaceSnapshot;
 
-import java.util.Arrays;
 import java.util.List;
 
 /** Active-core M3 dynamics gates for unequal-area connected vessels and density inversion. */
@@ -16,7 +16,7 @@ final class M3MaterialDynamicsValidation {
 		LayeringResult layering = densityInversionLayersConservatively();
 		viscousFaceDiffusionIsConservativeAndBounded();
 		activeDomainConsumesFrozenViscosity();
-		movingBodyCommitsOnlyMarkerMomentum();
+		movingBoundaryViscosityIsPairwiseConservative();
 		return new Summary(vessel.finalHeadDifference(), layering.heavyCenterY(), layering.lightCenterY());
 	}
 
@@ -84,46 +84,32 @@ final class M3MaterialDynamicsValidation {
 		}
 	}
 
-	private static void movingBodyCommitsOnlyMarkerMomentum() {
-		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, 1_000.0F, 0.0F, 1.0F / 40.0F,
-				200, 1.0E-5F, 0.40F, 2.0E-3F, 0.80F);
-		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 128);
-		domain.setVolume(1, 1, 1, 1.0F);
-		FlipParticleState before = domain.exportParticleState();
-		double massBefore = domain.totalMass();
-		MovingBodyFluidCoupling.Result result = domain.applyMovingBodyCoupling(
-				new MovingBodyFluidCoupling.Request(0.75F, 0.75F, 0.75F, 2.0, -0.5, 0.25, 0.025));
-		FlipParticleState after = domain.exportParticleState();
-		check(result.coupledMarkers() > 0 && result.coupledVolumeCubicMetres() > 0.0
-				&& result.impulseXKilogramMetresPerSecond() > 0.0
-				&& result.impulseYKilogramMetresPerSecond() < 0.0
-				&& result.impulseZKilogramMetresPerSecond() > 0.0,
-				"moving body did not commit a three-axis marker impulse");
-		check(Arrays.equals(before.copyPositionVolume(), after.copyPositionVolume())
-				&& Double.doubleToRawLongBits(massBefore) == Double.doubleToRawLongBits(domain.totalMass()),
-				"moving-body coupling changed authoritative volume or mass");
-		float[] velocityBefore = before.copyParticleVelocities();
-		float[] velocityAfter = after.copyParticleVelocities();
-		double momentumX = 0.0, momentumY = 0.0, momentumZ = 0.0;
-		double cellVolumeCubicMetres = (double) config.cellSize() * config.cellSize() * config.cellSize();
-		float[] positionVolume = after.copyPositionVolume();
-		for (int marker = 0; marker < after.particleCount(); marker++) {
-			double markerMass = config.density() * positionVolume[marker * 4 + 3];
-			momentumX += markerMass * (velocityAfter[marker * 3] - velocityBefore[marker * 3])
-					* cellVolumeCubicMetres;
-			momentumY += markerMass * (velocityAfter[marker * 3 + 1] - velocityBefore[marker * 3 + 1])
-					* cellVolumeCubicMetres;
-			momentumZ += markerMass * (velocityAfter[marker * 3 + 2] - velocityBefore[marker * 3 + 2])
-					* cellVolumeCubicMetres;
-		}
-		check(Double.doubleToRawLongBits(momentumX)
-				== Double.doubleToRawLongBits(result.impulseXKilogramMetresPerSecond())
-				&& Double.doubleToRawLongBits(momentumY)
-				== Double.doubleToRawLongBits(result.impulseYKilogramMetresPerSecond())
-				&& Double.doubleToRawLongBits(momentumZ)
-				== Double.doubleToRawLongBits(result.impulseZKilogramMetresPerSecond()),
-				"moving-body impulse report differs from committed marker momentum");
+	private static void movingBoundaryViscosityIsPairwiseConservative() {
+		MovingBodySurfaceSnapshot.BoxPose pose = new MovingBodySurfaceSnapshot.BoxPose(
+				0.6, 0.6, 0.6, 0.9, 0.9, 0.9);
+		MovingBodySurfaceSnapshot.Body body = new MovingBodySurfaceSnapshot.Body(
+				3L, pose, pose, 0.0, 0.0, 0.0,
+				MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC, 10.0);
+		FlipCutCellGeometry geometry = new FlipCutCellGeometry(3, 3, 3);
+		MovingBodyBoundary boundary = new MovingBodyBoundary(
+				new MovingBodySurfaceSnapshot(List.of(body)), 3, 3, 3, 0.5, 0.05, geometry);
+		boundary.rebuild(0.0, 1.0, geometry);
+		double[] mass = new double[27], velocityX = new double[27], velocityY = new double[27],
+				velocityZ = new double[27], viscosity = new double[27];
+		java.util.Arrays.fill(mass, 1.0);
+		java.util.Arrays.fill(velocityX, 1.0);
+		java.util.Arrays.fill(viscosity, 1.0);
+		MovingBodyBoundary.ViscousFluidImpulse fluid = boundary.applyViscosity(
+				mass, velocityX, velocityY, velocityZ, viscosity, 0.05, 64);
+		MovingBodyStepResult result = boundary.results().getFirst();
+		double fluidImpulseX = java.util.Arrays.stream(fluid.cellX()).sum();
+		double bodyImpulseX = result.viscousImpulseXKilogramMetresPerSecond();
+		double scale = Math.max(Math.abs(fluidImpulseX), Math.abs(bodyImpulseX));
+		check(fluid.coupledPairs() > 0 && bodyImpulseX > 0.0
+				&& Math.abs(fluidImpulseX + bodyImpulseX) <= Math.ulp(scale) * 32.0
+				&& Math.abs(result.finalVelocityXMetresPerSecond() - bodyImpulseX / 10.0)
+				<= Math.ulp(result.finalVelocityXMetresPerSecond()) * 16.0,
+				"moving-boundary viscous pair did not close fluid/body momentum");
 	}
 
 	private static ConnectedVesselResult unequalAreaConnectedVesselBalances() {

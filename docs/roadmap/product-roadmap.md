@@ -21,7 +21,7 @@
 这一基座的限制也必须如实保留：
 
 - 不可互溶相目前共享局部速度场，不声称解析切向滑移、乳化和液滴破碎。
-- 实体运动已通过 loader-neutral moving-body request 扰动 marker 动量；当前 kinematic AABB 近似仍不是移动 cut-cell、压力面积积分或严格双向动量/排水闭合。
+- 实体平移已通过解析 AABB moving occupancy、pressure Schur 与黏性 pairwise 边界实现排水和动态 kg 反作用；当前不支持旋转、复杂碰撞形状或通用刚体约束。
 - 固液已支持有界、数据化的压力平衡曲线，气液使用绝对压力和 component 分压；更高压力、更多材料和跨相溶解仍需分别验证物性域。
 - Query API 已冻结同步只读单格观察；主 Mod field probe 可观察闭壳相邻格或从壳面向内有界扫描第一个凝聚相格，可选 Jade 观察闭壳相邻液体；container durable completion 已有 committed event。尚无 WAILA/HWYLA、稳定 transfer API、其他提交类型事件或其他 loader 发现桥。
 - section 是一个 region 原子 generation 内的存储分片，不具有独立提交、卸载或 ownership 生命周期。
@@ -114,17 +114,9 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 ## 实体双向耦合
 
-目标不是立即引入通用刚体求解器，而是把当前运动扰动逐步变成可审计、严格闭合的双向边界：
+生产实体边界使用数据驱动 type/tag → kg/coupling mode 定义。Fabric 冻结本 tick 旧/当前 AABB，core 用六个解析面生成瞬态 occupancy、cut-face、target divergence、pressure Schur 与 Newtonian 黏性 pair；动态 body、流体和 kinematic external 各自保留冲量/功账。候选只有在 pressure、body momentum、work 与容量审计全部通过后才会在主线程与实体速度联合提交。
 
-当前已有 loader-neutral moving-body request：Fabric 的有界湿样本会把实体运动写入附近 marker 动量，并报告实际液体冲量，所以实体运动可扰动自由面。它仍是 kinematic AABB 近似，不替代以下压力、占位和严格动量闭合工作。
-
-1. 在实体离散表面采样流体压力，验证静水浮力与姿态无关性。
-2. 将黏性和形状阻力与压力力分开，并给出适用 Reynolds 范围。
-3. 把实体表面速度作为移动 solid boundary 接入压力 projection。
-4. 将压力/阻力反作用冲量回写流体，独立 boundary/entity ledger 闭合。
-5. 实体占据体积进入统一容量并挤开等量液体；空间不足时显式失败或产生已定义的外排路径。
-
-每一步都应能在关闭后退化为当前行为。首版可使用有界表面采样，不要求联合求解 Minecraft 刚体约束。
+当前停止边界是平移轴对齐盒：没有转动惯量、角冲量、boat/复杂凸面 provider 或通用 Minecraft 刚体约束。扩展复杂形状时必须新增有界 geometry provider，并保持同一 occupancy/pressure/viscosity/CCD 与联合提交代数；不能重新引入湿格 drag 或按实体 ID 猜质量。
 
 ## 性能与后端评审
 

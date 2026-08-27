@@ -43,14 +43,13 @@ import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalCellGrid;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalLimits;
-import cc.ecisr.mmm.world.MovingBodyPressureIntegrator;
+import cc.ecisr.mmm.world.MovingBodyStepResult;
 import cc.ecisr.mmm.world.MovingBodySurfaceSnapshot;
 import cc.ecisr.mmm.thermal.ThermalPhaseTransition;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
 import cc.ecisr.mmm.thermal.ThermalTransport;
-import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 
 import java.util.ArrayList;
 import java.util.ArrayDeque;
@@ -197,8 +196,8 @@ public final class FlipFluidDomain {
 	private float lastPressureTarget;
 	private long logicalGeneration;
 	private PressureProjectionSnapshot pressureProjectionSnapshot;
-	private MovingBodySurfaceSnapshot movingBodySurfaces = MovingBodySurfaceSnapshot.EMPTY;
-	private List<MovingBodyPressureIntegrator.Result> lastMovingBodyPressureResults = List.of();
+	private MovingBodyBoundary movingBodyBoundary;
+	private List<MovingBodyStepResult> lastMovingBodyResults = List.of();
 	private boolean variableDensityActive;
 	private FlipThermalState thermalState;
 	private double[] thermalBuoyancySum;
@@ -208,6 +207,9 @@ public final class FlipFluidDomain {
 	/** Runtime world-derived fixed-reservoir temperatures; NaN is the canonical adiabatic face. */
 	private double[] thermalBoundaryTemperatureK;
 	private final SignedDyadic[] pendingPhaseCellVolume;
+	private float[] movingPreviousParticleX;
+	private float[] movingPreviousParticleY;
+	private float[] movingPreviousParticleZ;
 
 	public FlipFluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config) {
 		this(sizeX, sizeY, sizeZ, config, DEFAULT_MAX_PARTICLES);
@@ -299,13 +301,22 @@ public final class FlipFluidDomain {
 		pressureProjectionSnapshot = null;
 	}
 
-	void prepareMovingBodyPressure(MovingBodySurfaceSnapshot snapshot) {
-		movingBodySurfaces = Objects.requireNonNull(snapshot, "snapshot");
-		lastMovingBodyPressureResults = List.of();
+	void prepareMovingBodies(MovingBodySurfaceSnapshot snapshot) {
+		Objects.requireNonNull(snapshot, "snapshot");
+		try {
+			movingBodyBoundary = snapshot.bodies().isEmpty() ? null : new MovingBodyBoundary(
+					snapshot, sizeX, sizeY, sizeZ, config.cellSize(), config.timeStep(), cutCells);
+		} catch (MovingBodyBlockedException blocked) {
+			throw blocked;
+		} catch (IllegalArgumentException | IllegalStateException invalid) {
+			throw new MovingBodyBlockedException(MovingBodyBlockedException.Reason.GEOMETRY,
+					invalid.getMessage(), invalid);
+		}
+		lastMovingBodyResults = List.of();
 	}
 
-	List<MovingBodyPressureIntegrator.Result> lastMovingBodyPressureResults() {
-		return lastMovingBodyPressureResults;
+	List<MovingBodyStepResult> lastMovingBodyResults() {
+		return lastMovingBodyResults;
 	}
 
 	/** Runtime-only gas network of this domain; it is not a wire or save format. */
@@ -3558,12 +3569,12 @@ public final class FlipFluidDomain {
 	}
 
 	private float effectiveOpenCellVolume(int cell) {
-		float geometric = cutCells.openCellVolume(cell);
+		float geometric = (float) movingOpenCellVolume(cell);
 		return granularCoupling == null ? geometric : granularCoupling.effectiveOpenCellVolume(cell, geometric);
 	}
 
 	private float pressureOpenCellVolume(int cell) {
-		float geometric = cutCells.openCellVolume(cell);
+		float geometric = (float) movingOpenCellVolume(cell);
 		return pressureGranularCoupling == null ? geometric
 				: pressureGranularCoupling.effectiveOpenCellVolume(cell, geometric);
 	}
@@ -4760,13 +4771,18 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		lastViscosityStats = new ViscosityStats(0, 0, 0.0);
 		int substeps = calculateSubsteps(config.timeStep());
 		float dt = config.timeStep() / substeps;
-		double[] movingImpulseX = new double[movingBodySurfaces.bodies().size()];
-		double[] movingImpulseY = new double[movingBodySurfaces.bodies().size()];
-		double[] movingImpulseZ = new double[movingBodySurfaces.bodies().size()];
-		double[] movingWork = new double[movingBodySurfaces.bodies().size()];
 		int granularParcelCountBeforeAdvection = precipitationEnabled ? captureReactiveGranularCells() : 0;
 		int pressureIterations = 0;
 		for (int substep = 0; substep < substeps; substep++) {
+			if (movingBodyBoundary != null) try {
+				movingBodyBoundary.rebuild(
+						(double) substep / substeps, (double) (substep + 1) / substeps, cutCells);
+			} catch (MovingBodyBlockedException blocked) {
+				throw blocked;
+			} catch (IllegalArgumentException | IllegalStateException invalid) {
+				throw new MovingBodyBlockedException(MovingBodyBlockedException.Reason.GEOMETRY,
+						invalid.getMessage(), invalid);
+			}
 			rebuildGridFromParticles();
 			FlipViscositySolver.Plan viscosityPlan = prepareViscosityPlan(dt);
 			try {
@@ -4775,6 +4791,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				if (thermalState == null) throw invalidGasThermal;
 				throw new GasThermalBlockedException(invalidGasThermal.getMessage(), invalidGasThermal);
 			}
+			if (movingBodyBoundary != null) movingBodyBoundary.applyKnownGasPressure(
+					this::isFluid, this::gasPressureOfAirCell, dt);
 			System.arraycopy(velocityX, 0, p2gVelocityX, 0, velocityX.length);
 			System.arraycopy(velocityY, 0, p2gVelocityY, 0, velocityY.length);
 			System.arraycopy(velocityZ, 0, p2gVelocityZ, 0, velocityZ.length);
@@ -4813,9 +4831,18 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						Math.max(lastViscosityStats.substeps(), viscosityPlan.substeps()),
 						viscosityPlan.coupledPairs(), viscosityPlan.maximumRatePerSecond());
 			}
+			if (movingBodyBoundary != null && materialRegistry != null && materialRegistry.hasAnyViscosity()) {
+				applyMovingBodyViscosity(dt);
+			}
 			enforceSolidFaceVelocities();
 			solvePressure(dt);
 			pressureIterations += lastPressureIterations;
+			if (movingBodyBoundary != null && !pressureProjectionConverged()) {
+				throw new MovingBodyBlockedException(MovingBodyBlockedException.Reason.NUMERICAL,
+						"Augmented pressure solve did not reach its residual target");
+			}
+			if (movingBodyBoundary != null) movingBodyBoundary.settleFluidPressure(
+					pressure, this::isFluid, dt);
 			FlipThermalState.PhaseMechanicalWorkPlan phaseWork = null;
 			if (substep == 0 && thermalState != null && hasPendingPhaseVolumeWork()) try {
 				phaseWork = thermalState.planPhaseMechanicalWork(
@@ -4827,8 +4854,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			}
 			projectVelocity(dt);
 			publishPressureProjection();
-			accumulateMovingBodyPressure(substep, substeps, dt,
-					movingImpulseX, movingImpulseY, movingImpulseZ, movingWork);
 			if (phaseWork != null) {
 				thermalState.commitPhaseMechanicalWork(phaseWork, thermalMarkerContext());
 				Arrays.fill(pendingPhaseCellVolume, SignedDyadic.ZERO);
@@ -4893,9 +4918,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		if (thermalState != null) thermalState.recordRoundoff(exactInternalEnergy().subtract(thermalBeforeReseed));
 		gridDirty = true;
 		rebuildGridFromParticles();
-		lastMovingBodyPressureResults = movingBodyPressureResults(
-				movingImpulseX, movingImpulseY, movingImpulseZ, movingWork);
-		movingBodySurfaces = MovingBodySurfaceSnapshot.EMPTY;
+		if (movingBodyBoundary != null) requireMovingBodyCapacity();
+		lastMovingBodyResults = movingBodyBoundary == null ? List.of() : movingBodyBoundary.results();
+		movingBodyBoundary = null;
 		return new StepStats(
 				substeps, pressureIterations, lastPressureResidual, before, totalVolume(), massBefore, totalMass(),
 				reseeding.merged(), reseeding.split(), reseeding.budgetSkipped(), reseeding.geometrySkipped(),
@@ -5026,36 +5051,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				source, target, moved, sourceAfter, targetAfter, airNetwork));
 	}
 
-	private void accumulateMovingBodyPressure(int substep, int substeps, double dt,
-			double[] impulseX, double[] impulseY, double[] impulseZ, double[] work) {
-		if (movingBodySurfaces.bodies().isEmpty()) return;
-		if (pressureProjectionSnapshot == null) {
-			throw new IllegalStateException("Moving-body pressure requires a converged projection");
-		}
-		double fraction = (double) (substep + 1) / substeps;
-		for (int index = 0; index < movingBodySurfaces.bodies().size(); index++) {
-			MovingBodyPressureIntegrator.Result result = MovingBodyPressureIntegrator.integrate(
-					movingBodySurfaces.bodies().get(index).atFraction(fraction),
-					this::sampleProjectedAbsolutePressure, dt);
-			impulseX[index] += result.impulseXKilogramMetresPerSecond();
-			impulseY[index] += result.impulseYKilogramMetresPerSecond();
-			impulseZ[index] += result.impulseZKilogramMetresPerSecond();
-			work[index] += result.displacementWorkJoules();
-		}
-	}
-
-	private List<MovingBodyPressureIntegrator.Result> movingBodyPressureResults(
-			double[] impulseX, double[] impulseY, double[] impulseZ, double[] work) {
-		if (movingBodySurfaces.bodies().isEmpty()) return List.of();
-		ArrayList<MovingBodyPressureIntegrator.Result> results = new ArrayList<>(movingBodySurfaces.bodies().size());
-		for (int index = 0; index < movingBodySurfaces.bodies().size(); index++) {
-			results.add(new MovingBodyPressureIntegrator.Result(
-					movingBodySurfaces.bodies().get(index).transientId(),
-					impulseX[index], impulseY[index], impulseZ[index], work[index]));
-		}
-		return List.copyOf(results);
-	}
-
 	/** Runs the non-motion logical axis while a region is hydrostatically asleep. */
 	public ThermalAxisStats stepThermalAxis(boolean phaseChangeEnabled, int maximumPhaseOperations) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
@@ -5118,7 +5113,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private void refreshGasTopology() {
 		AirCavityScanner.Result result = airScanner.scan(solid, markerCount, volume, cutCells,
-				pressureGranularCoupling, sealedDomainBoundary);
+				pressureGranularCoupling, sealedDomainBoundary, movingBodyBoundary);
 		commitGasTopology(planGasTopology(result));
 	}
 
@@ -5530,6 +5525,62 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 	}
 
+	private void applyMovingBodyViscosity(float dt) {
+		// Commit the already-planned grid/body-force delta to markers before applying the
+		// symmetric cell/body surface exchange, then rebuild the pressure input once.
+		gridToParticles();
+		rebuildGridFromParticles();
+		double[] cellMass = new double[cellCount], cellMomentumX = new double[cellCount],
+				cellMomentumY = new double[cellCount], cellMomentumZ = new double[cellCount],
+				cellVolume = new double[cellCount], cellVolumeOverViscosity = new double[cellCount];
+		for (int marker = 0; marker < particleCount; marker++) {
+			int cell = particleCellIndex(marker);
+			double mass = particleMass[marker];
+			cellMass[cell] += mass;
+			cellMomentumX[cell] += mass * particleVelocityX[marker];
+			cellMomentumY[cell] += mass * particleVelocityY[marker];
+			cellMomentumZ[cell] += mass * particleVelocityZ[marker];
+			double mu = materialRegistry.dynamicViscosityAt(
+					particleMaterialHandle[marker], thermalMarkerTemperature(marker));
+			cellVolume[cell] += particleVolume[marker];
+			cellVolumeOverViscosity[cell] += particleVolume[marker] / mu;
+		}
+		double[] cellVelocityX = new double[cellCount], cellVelocityY = new double[cellCount],
+				cellVelocityZ = new double[cellCount], viscosity = new double[cellCount];
+		for (int cell = 0; cell < cellCount; cell++) if (cellMass[cell] > 0.0) {
+			cellVelocityX[cell] = cellMomentumX[cell] / cellMass[cell];
+			cellVelocityY[cell] = cellMomentumY[cell] / cellMass[cell];
+			cellVelocityZ[cell] = cellMomentumZ[cell] / cellMass[cell];
+			viscosity[cell] = cellVolume[cell] / cellVolumeOverViscosity[cell];
+		}
+		MovingBodyBoundary.ViscousFluidImpulse exchange;
+		try {
+			exchange = movingBodyBoundary.applyViscosity(
+					cellMass, cellVelocityX, cellVelocityY, cellVelocityZ, viscosity, dt,
+					MAXIMUM_VISCOSITY_SUBSTEPS);
+		} catch (MovingBodyBlockedException blocked) {
+			throw blocked;
+		} catch (IllegalArgumentException | IllegalStateException invalid) {
+			throw new MovingBodyBlockedException(MovingBodyBlockedException.Reason.NUMERICAL,
+					invalid.getMessage(), invalid);
+		}
+		for (int marker = 0; marker < particleCount; marker++) {
+			int cell = particleCellIndex(marker);
+			if (!(cellMass[cell] > 0.0)) continue;
+			particleVelocityX[marker] += (float) (exchange.cellX()[cell] / cellMass[cell]);
+			particleVelocityY[marker] += (float) (exchange.cellY()[cell] / cellMass[cell]);
+			particleVelocityZ[marker] += (float) (exchange.cellZ()[cell] / cellMass[cell]);
+		}
+		rebuildGridFromParticles();
+		System.arraycopy(velocityX, 0, p2gVelocityX, 0, velocityX.length);
+		System.arraycopy(velocityY, 0, p2gVelocityY, 0, velocityY.length);
+		System.arraycopy(velocityZ, 0, p2gVelocityZ, 0, velocityZ.length);
+		lastViscosityStats = new ViscosityStats(
+				Math.max(lastViscosityStats.substeps(), exchange.substeps()),
+				Math.addExact(lastViscosityStats.coupledPairs(), exchange.coupledPairs()),
+				Math.max(lastViscosityStats.maximumRatePerSecond(), exchange.maximumRatePerSecond()));
+	}
+
 	private FlipViscositySolver.Field viscosityField(
 			int axis, double[] faceVolume, double[] faceVolumeOverViscosity
 	) {
@@ -5544,9 +5595,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		for (int z = 0; z < fieldZ; z++) for (int y = 0; y < fieldY; y++) for (int x = 0; x < fieldX; x++) {
 			int face = (z * fieldY + y) * fieldX + x;
 			aperture[face] = switch (axis) {
-				case 0 -> cutCells.xFaceOpen(x, y, z);
-				case 1 -> cutCells.yFaceOpen(x, y, z);
-				case 2 -> cutCells.zFaceOpen(x, y, z);
+				case 0 -> movingXFaceOpen(x, y, z);
+				case 1 -> movingYFaceOpen(x, y, z);
+				case 2 -> movingZFaceOpen(x, y, z);
 				default -> throw new IllegalArgumentException("Viscosity field axis is invalid");
 			};
 			if (weight[face] <= 1.0E-8F) continue;
@@ -5766,6 +5817,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			rhs[index] = rhsScale * correctedDivergence;
 			fluidCells++;
 		}
+		if (movingBodyBoundary != null) {
+			movingBodyBoundary.addPressureRhs(rhs, this::isFluid, pressureAnchor, config.density(), dt);
+			for (int cell = 0; cell < cellCount; cell++) if (isFluid(cell) && cell != pressureAnchor) {
+				divergence[cell] -= movingBodyBoundary.targetDivergence(cell);
+			}
+		}
 		if (fluidCells == 0) {
 			lastPressureIterations = 0;
 			lastPressureResidual = 0.0F;
@@ -5797,9 +5854,13 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		lastPressureResidual = (float) Math.sqrt(dot(residual, residual) / fluidCells);
 	}
 
-	private void publishPressureProjection() {
+	private boolean pressureProjectionConverged() {
 		float tolerance = Math.max(Math.ulp(lastPressureTarget) * 8.0F, 1.0E-12F);
-		if (!Float.isFinite(lastPressureResidual) || lastPressureResidual > lastPressureTarget + tolerance) {
+		return Float.isFinite(lastPressureResidual) && lastPressureResidual <= lastPressureTarget + tolerance;
+	}
+
+	private void publishPressureProjection() {
+		if (!pressureProjectionConverged()) {
 			pressureProjectionSnapshot = null;
 			return;
 		}
@@ -5829,6 +5890,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return new PressureProjectionSnapshot.CellIdentity(
 				markerCount[cell], Double.doubleToRawLongBits(exactCellMarkerVolume[cell]),
 				Double.doubleToRawLongBits(exactCellMarkerMass[cell]), cutCells.mask(cell),
+				Double.doubleToRawLongBits(movingBodyBoundary == null ? 0.0
+						: movingBodyBoundary.blockedCellFraction(cell)),
 				solidOccupancy, adjacentGasLineage(cell));
 	}
 
@@ -5855,66 +5918,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				volume[index], freeSurfaceGeometry.exactCellVolume(index), openVolume,
 				hasAirNeighbor(x, y, z), dt
 		);
-	}
-
-	/**
-	 * Applies a bounded immersed moving-body constraint to authoritative marker momentum.
-	 * Volume, mass, composition and energy are unchanged; the returned SI impulse is calculated from
-	 * the actual float velocity writes, including their representational roundoff.
-	 */
-	public MovingBodyFluidCoupling.Result applyMovingBodyCoupling(MovingBodyFluidCoupling.Request request) {
-		if (request == null) throw new IllegalArgumentException("Moving-body coupling request is missing");
-		requireFiniteMarkerVelocity(request.velocityXMetresPerSecond());
-		requireFiniteMarkerVelocity(request.velocityYMetresPerSecond());
-		requireFiniteMarkerVelocity(request.velocityZMetresPerSecond());
-		double cellVolumeM3 = (double) config.cellSize() * config.cellSize() * config.cellSize();
-		double requestedCellVolume = request.displacedVolumeCubicMetres() / cellVolumeM3;
-		if (!(Double.isFinite(requestedCellVolume) && requestedCellVolume > 0.0)) {
-			throw new IllegalArgumentException("Moving-body displaced volume is outside the solver scale");
-		}
-		double weightedVolume = 0.0;
-		int coupledMarkers = 0;
-		for (int marker = 0; marker < particleCount; marker++) {
-			double weight = movingBodyWeight(request, marker);
-			if (weight <= 0.0) continue;
-			weightedVolume += weight * particleVolume[marker];
-			coupledMarkers++;
-		}
-		if (!(weightedVolume > 0.0)) return MovingBodyFluidCoupling.Result.NONE;
-		double volumeScale = Math.min(1.0, requestedCellVolume / weightedVolume);
-		double impulseX = 0.0, impulseY = 0.0, impulseZ = 0.0, coupledVolume = 0.0;
-		boolean changed = false;
-		for (int marker = 0; marker < particleCount; marker++) {
-			double weight = movingBodyWeight(request, marker);
-			double blend = volumeScale * weight;
-			if (blend <= 0.0) continue;
-			float oldX = particleVelocityX[marker], oldY = particleVelocityY[marker], oldZ = particleVelocityZ[marker];
-			float newX = (float) (oldX + blend * (request.velocityXMetresPerSecond() - oldX));
-			float newY = (float) (oldY + blend * (request.velocityYMetresPerSecond() - oldY));
-			float newZ = (float) (oldZ + blend * (request.velocityZMetresPerSecond() - oldZ));
-			particleVelocityX[marker] = newX; particleVelocityY[marker] = newY; particleVelocityZ[marker] = newZ;
-			impulseX += particleMass[marker] * (newX - oldX);
-			impulseY += particleMass[marker] * (newY - oldY);
-			impulseZ += particleMass[marker] * (newZ - oldZ);
-			coupledVolume += blend * particleVolume[marker];
-			changed |= newX != oldX || newY != oldY || newZ != oldZ;
-		}
-		if (changed) gridDirty = true;
-		return new MovingBodyFluidCoupling.Result(coupledMarkers, coupledVolume * cellVolumeM3,
-				impulseX * cellVolumeM3, impulseY * cellVolumeM3, impulseZ * cellVolumeM3);
-	}
-
-	private double movingBodyWeight(MovingBodyFluidCoupling.Request request, int marker) {
-		return MovingBodyFluidCoupling.kernelWeight(
-				particleX[marker] - request.localXMetres(),
-				particleY[marker] - request.localYMetres(),
-				particleZ[marker] - request.localZMetres(), config.cellSize());
-	}
-
-	private static void requireFiniteMarkerVelocity(double velocity) {
-		if (!Double.isFinite(velocity) || !Float.isFinite((float) velocity)) {
-			throw new IllegalArgumentException("Moving-body coupling velocity exceeds marker representation");
-		}
 	}
 
 	/** Adds the standard Boussinesq density correction to the existing gravity face impulse. */
@@ -6351,6 +6354,30 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return true;
 	}
 
+	private void requireMovingBodyCapacity() {
+		double available = 0.0, occupied = 0.0;
+		for (int cell = 0; cell < cellCount; cell++) {
+			double capacity = effectiveOpenCellVolume(cell);
+			double tolerance = Math.max(Math.ulp(capacity) * 16.0, 1.0E-9);
+			if (exactCellMarkerVolume[cell] > capacity + tolerance) {
+				throw new MovingBodyBlockedException(MovingBodyBlockedException.Reason.CAPACITY,
+						"Moving body leaves insufficient liquid capacity in cell " + cell
+						+ ": liquid=" + exactCellMarkerVolume[cell] + ", capacity=" + capacity);
+			}
+			available += capacity;
+			occupied += exactCellMarkerVolume[cell];
+		}
+		if (available - occupied < config.fluidEpsilon()) {
+			throw new MovingBodyBlockedException(MovingBodyBlockedException.Reason.CAPACITY,
+					"Moving body requires free-surface or gas headspace");
+		}
+		for (int marker = 0; marker < particleCount; marker++) if (!markerPositionAllowed(
+				particleX[marker], particleY[marker], particleZ[marker])) {
+			throw new MovingBodyBlockedException(MovingBodyBlockedException.Reason.OVERLAP,
+					"Moving body overlaps a committed fluid marker");
+		}
+	}
+
 	private boolean planGranularMerge(
 			long[] planned, GranularParcelStore.Parcel first, GranularParcelStore.Parcel second,
 			GranularParcelStore.Parcel merged
@@ -6716,6 +6743,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			}
 			destination[index] = (diagonal * source[index] + value) * inverseCellSquared;
 		}
+		if (movingBodyBoundary != null) movingBodyBoundary.applyPressureSchur(
+				source, destination, this::isFluid, pressureAnchor, config.density());
 	}
 
 	private float neighborValue(int neighbor, float[] source) { return isFluid(neighbor) && neighbor != pressureAnchor ? source[neighbor] : 0.0F; }
@@ -6777,12 +6806,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		int yz = cell / sizeX;
 		int y = yz % sizeY;
 		int z = yz / sizeY;
-		if (directionX < 0) return cutCells.xFaceOpen(x, y, z);
-		if (directionX > 0) return cutCells.xFaceOpen(x + 1, y, z);
-		if (directionY < 0) return cutCells.yFaceOpen(x, y, z);
-		if (directionY > 0) return cutCells.yFaceOpen(x, y + 1, z);
-		if (directionZ < 0) return cutCells.zFaceOpen(x, y, z);
-		if (directionZ > 0) return cutCells.zFaceOpen(x, y, z + 1);
+		if (directionX < 0) return movingXFaceOpen(x, y, z);
+		if (directionX > 0) return movingXFaceOpen(x + 1, y, z);
+		if (directionY < 0) return movingYFaceOpen(x, y, z);
+		if (directionY > 0) return movingYFaceOpen(x, y + 1, z);
+		if (directionZ < 0) return movingZFaceOpen(x, y, z);
+		if (directionZ > 0) return movingZFaceOpen(x, y, z + 1);
 		throw new IllegalArgumentException("Pressure face direction must be axial");
 	}
 
@@ -6796,15 +6825,35 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	private float pressureXFaceOpen(int x, int y, int z) {
-		float geometric = cutCells.xFaceOpen(x, y, z);
+		float geometric = movingXFaceOpen(x, y, z);
 		if (pressureGranularCoupling == null || geometric <= 0.0F || x <= 0 || x >= sizeX) return geometric;
 		int left = cellIndex(x - 1, y, z), right = cellIndex(x, y, z);
 		return geometric * pressureGranularCoupling.faceVoidScale(
 				left, cutCells.openCellVolume(left), right, cutCells.openCellVolume(right));
 	}
 
+	private float movingXFaceOpen(int x, int y, int z) {
+		float fixed = cutCells.xFaceOpen(x, y, z);
+		return movingBodyBoundary == null ? fixed : movingBodyBoundary.xFaceOpen(x, y, z, fixed);
+	}
+
+	private float movingYFaceOpen(int x, int y, int z) {
+		float fixed = cutCells.yFaceOpen(x, y, z);
+		return movingBodyBoundary == null ? fixed : movingBodyBoundary.yFaceOpen(x, y, z, fixed);
+	}
+
+	private float movingZFaceOpen(int x, int y, int z) {
+		float fixed = cutCells.zFaceOpen(x, y, z);
+		return movingBodyBoundary == null ? fixed : movingBodyBoundary.zFaceOpen(x, y, z, fixed);
+	}
+
+	private double movingOpenCellVolume(int cell) {
+		return movingBodyBoundary == null ? cutCells.openCellVolume(cell)
+				: movingBodyBoundary.openCellFraction(cell, cutCells.openCellVolume(cell));
+	}
+
 	private float pressureYFaceOpen(int x, int y, int z) {
-		float geometric = cutCells.yFaceOpen(x, y, z);
+		float geometric = movingYFaceOpen(x, y, z);
 		if (pressureGranularCoupling == null || geometric <= 0.0F || y <= 0 || y >= sizeY) return geometric;
 		int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z);
 		return geometric * pressureGranularCoupling.faceVoidScale(
@@ -6812,7 +6861,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	private float pressureZFaceOpen(int x, int y, int z) {
-		float geometric = cutCells.zFaceOpen(x, y, z);
+		float geometric = movingZFaceOpen(x, y, z);
 		if (pressureGranularCoupling == null || geometric <= 0.0F || z <= 0 || z >= sizeZ) return geometric;
 		int back = cellIndex(x, y, z - 1), front = cellIndex(x, y, z);
 		return geometric * pressureGranularCoupling.faceVoidScale(
@@ -6831,7 +6880,10 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			if (y + 1 < sizeY) diagonal += pressureFaceCoefficient(index, cellIndex(x, y + 1, z), 0, 1, 0);
 			if (z > 0) diagonal += pressureFaceCoefficient(index, cellIndex(x, y, z - 1), 0, 0, -1);
 			if (z + 1 < sizeZ) diagonal += pressureFaceCoefficient(index, cellIndex(x, y, z + 1), 0, 0, 1);
-			destination[index] = diagonal == 0.0F ? 0.0F : source[index] * cellSquared / diagonal;
+			double schurDiagonal = movingBodyBoundary == null ? 0.0
+					: movingBodyBoundary.pressureSchurDiagonal(index, this::isFluid, config.density());
+			double matrixDiagonal = diagonal / cellSquared + schurDiagonal;
+			destination[index] = matrixDiagonal == 0.0 ? 0.0F : (float) (source[index] / matrixDiagonal);
 		}
 	}
 
@@ -6847,12 +6899,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	private boolean hasAirNeighbor(int x, int y, int z) {
-		return (x > 0 && cutCells.xFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x - 1, y, z)))
-				|| (x + 1 < sizeX && cutCells.xFaceOpen(x + 1, y, z) > 0.0F && isAir(cellIndex(x + 1, y, z)))
-				|| (y > 0 && cutCells.yFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x, y - 1, z)))
-				|| (y + 1 < sizeY && cutCells.yFaceOpen(x, y + 1, z) > 0.0F && isAir(cellIndex(x, y + 1, z)))
-				|| (z > 0 && cutCells.zFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x, y, z - 1)))
-				|| (z + 1 < sizeZ && cutCells.zFaceOpen(x, y, z + 1) > 0.0F && isAir(cellIndex(x, y, z + 1)));
+		return (x > 0 && movingXFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x - 1, y, z)))
+				|| (x + 1 < sizeX && movingXFaceOpen(x + 1, y, z) > 0.0F && isAir(cellIndex(x + 1, y, z)))
+				|| (y > 0 && movingYFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x, y - 1, z)))
+				|| (y + 1 < sizeY && movingYFaceOpen(x, y + 1, z) > 0.0F && isAir(cellIndex(x, y + 1, z)))
+				|| (z > 0 && movingZFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x, y, z - 1)))
+				|| (z + 1 < sizeZ && movingZFaceOpen(x, y, z + 1) > 0.0F && isAir(cellIndex(x, y, z + 1)));
 	}
 
 	private void projectVelocity(float dt) {
@@ -6925,11 +6977,33 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				chemicalMovingMarkers[chemicalMovingCount++] = marker;
 			}
 		}
+		if (movingBodyBoundary != null) {
+			ensureMovingParticleScratch(particleCount);
+			System.arraycopy(particleX, 0, movingPreviousParticleX, 0, particleCount);
+			System.arraycopy(particleY, 0, movingPreviousParticleY, 0, particleCount);
+			System.arraycopy(particleZ, 0, movingPreviousParticleZ, 0, particleCount);
+		}
 		particleCollision.advect(
 				particleX, particleY, particleZ,
 				particleVelocityX, particleVelocityY, particleVelocityZ,
 				particleCount, dt
 		);
+		if (movingBodyBoundary != null) for (int marker = 0; marker < particleCount; marker++) {
+			MovingBodyBoundary.ParticleResolution resolved = movingBodyBoundary.resolveParticle(
+					movingPreviousParticleX[marker], movingPreviousParticleY[marker], movingPreviousParticleZ[marker],
+					particleX[marker], particleY[marker], particleZ[marker],
+					particleVelocityX[marker], particleVelocityY[marker], particleVelocityZ[marker]);
+			particleX[marker] = (float) resolved.x(); particleY[marker] = (float) resolved.y();
+			particleZ[marker] = (float) resolved.z();
+			particleVelocityX[marker] = (float) resolved.velocityX();
+			particleVelocityY[marker] = (float) resolved.velocityY();
+			particleVelocityZ[marker] = (float) resolved.velocityZ();
+			if (particleCollision.centerInSolid(particleX[marker], particleY[marker], particleZ[marker])
+					|| !movingBodyBoundary.markerPositionAllowed(particleX[marker], particleY[marker], particleZ[marker])) {
+				throw new MovingBodyBlockedException(MovingBodyBlockedException.Reason.OVERLAP,
+						"Moving-body CCD could not produce an admissible marker position");
+			}
+		}
 		for (int moving = 0; moving < chemicalMovingCount; moving++) {
 			int marker = chemicalMovingMarkers[moving];
 			int previous = chemicalPreviousCells[marker], current = particleCellIndex(marker);
@@ -6941,18 +7015,26 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		gridDirty = true;
 	}
 
+	private void ensureMovingParticleScratch(int count) {
+		if (movingPreviousParticleX != null && movingPreviousParticleX.length >= count) return;
+		int capacity = Math.max(16, count);
+		movingPreviousParticleX = new float[capacity];
+		movingPreviousParticleY = new float[capacity];
+		movingPreviousParticleZ = new float[capacity];
+	}
+
 	private void enforceSolidFaceVelocities() {
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) {
 			velocityX[xFaceIndex(0, y, z)] = 0.0F; velocityX[xFaceIndex(sizeX, y, z)] = 0.0F;
-			for (int x = 1; x < sizeX; x++) if (cutCells.xFaceOpen(x, y, z) <= 0.0F) velocityX[xFaceIndex(x, y, z)] = 0.0F;
+			for (int x = 1; x < sizeX; x++) if (movingXFaceOpen(x, y, z) <= 0.0F) velocityX[xFaceIndex(x, y, z)] = 0.0F;
 		}
 		for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) {
 			velocityY[yFaceIndex(x, 0, z)] = 0.0F; velocityY[yFaceIndex(x, sizeY, z)] = 0.0F;
-			for (int y = 1; y < sizeY; y++) if (cutCells.yFaceOpen(x, y, z) <= 0.0F) velocityY[yFaceIndex(x, y, z)] = 0.0F;
+			for (int y = 1; y < sizeY; y++) if (movingYFaceOpen(x, y, z) <= 0.0F) velocityY[yFaceIndex(x, y, z)] = 0.0F;
 		}
 		for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			velocityZ[zFaceIndex(x, y, 0)] = 0.0F; velocityZ[zFaceIndex(x, y, sizeZ)] = 0.0F;
-			for (int z = 1; z < sizeZ; z++) if (cutCells.zFaceOpen(x, y, z) <= 0.0F) velocityZ[zFaceIndex(x, y, z)] = 0.0F;
+			for (int z = 1; z < sizeZ; z++) if (movingZFaceOpen(x, y, z) <= 0.0F) velocityZ[zFaceIndex(x, y, z)] = 0.0F;
 		}
 	}
 
@@ -7252,9 +7334,10 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 
 	private void ensureGrid() { if (gridDirty) rebuildGridFromParticles(); }
 	private boolean markerPositionAllowed(float x, float y, float z) {
-		return !particleCollision.centerInSolid(x, y, z);
+		return !particleCollision.centerInSolid(x, y, z)
+				&& (movingBodyBoundary == null || movingBodyBoundary.markerPositionAllowed(x, y, z));
 	}
-	private boolean isFluid(int index) { return !solid[index] && markerCount[index] > 0; }
+	private boolean isFluid(int index) { return !solid[index] && movingOpenCellVolume(index) > 0.0 && markerCount[index] > 0; }
 	private boolean isAir(int index) { return !solid[index] && !isFluid(index); }
 	private boolean faceActive(int first, int second, float openArea) {
 		return openArea > 0.0F && !solid[first] && !solid[second] && (isFluid(first) || isFluid(second));
@@ -7375,6 +7458,23 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	public static final class ViscosityBlockedException extends IllegalStateException {
 		private ViscosityBlockedException(String message) { super(message); }
 		private ViscosityBlockedException(String message, Throwable cause) { super(message, cause); }
+	}
+
+	public static final class MovingBodyBlockedException extends IllegalStateException {
+		public enum Reason { CAPACITY, OVERLAP, GEOMETRY, NUMERICAL }
+		private final Reason reason;
+
+		MovingBodyBlockedException(Reason reason, String message) {
+			super(message);
+			this.reason = Objects.requireNonNull(reason, "reason");
+		}
+
+		MovingBodyBlockedException(Reason reason, String message, Throwable cause) {
+			super(message, cause);
+			this.reason = Objects.requireNonNull(reason, "reason");
+		}
+
+		public Reason reason() { return reason; }
 	}
 
 	public static final class ParticleBudgetExceededException extends IllegalStateException {

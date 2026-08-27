@@ -13,7 +13,7 @@
 
 ### 后端候选边界
 
-`FluidDomainState` 捕获恰好一种 liquid carrier 布局（pure/material/chemical）及其 registry、颗粒、气体、热学、相变 pending work、求解配置和硬预算。pressure、平滑 density、mesh、调度与 Minecraft 对象不在其中。`FluidStepRequest` 另外携带有硬上限的 moving-body 输入；后端先在私有 state 上提交这些 marker 动量，再执行同一 logical step。`FluidSolverBackend.evaluate(FluidStepRequest)` 必须返回 base generation 的紧邻完整后继；调用者在 tick boundary 验证后才可发布。当前 `CpuFluidSolverBackend` 是规范实现，GPU probe 尚不满足这份完整状态契约，不能作为生产后端注册。
+`FluidDomainState` 捕获恰好一种 liquid carrier 布局（pure/material/chemical）及其 registry、颗粒、气体、热学、相变 pending work、求解配置和硬预算。pressure、平滑 density、mesh、调度与 Minecraft 对象不在其中。`FluidStepRequest` 另外携带有硬上限的瞬态 moving-solid snapshot；后端在私有 state 上把其解析占位、表面速度、压力 Schur 自由度和黏性边界纳入同一 logical step。`FluidSolverBackend.evaluate(FluidStepRequest)` 必须返回 base generation 的紧邻完整后继和逐 body settlement；调用者在 tick boundary 验证后才可发布。当前 `CpuFluidSolverBackend` 是规范实现，GPU probe 尚不满足这份完整状态契约，不能作为生产后端注册。
 
 ## 网格与 marker
 
@@ -87,9 +87,11 @@ div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 
 `FlipCutCellGeometry` 从每格 `2×2×2` unsigned micro mask 得到 cell solid volume 和三轴 face aperture。checkpoint 与后端 handoff 保存 raw mask，不能退化为“整格固体/整格空气”；恢复后必须得到相同 aperture。`FlipParticleCollision` 对 marker 轨迹做连续碰撞检测，避免只在步末投影位置造成穿薄墙；碰撞只去除命中法向速度，切向分量保持。
 
-实体交互由 Fabric 冻结有界 AABB 湿样本、实体速度和流体观察，再向 core 提交 SI moving-body request。core 使用紧支撑二次 B-spline 核，在湿体积上把实体运动约束写入附近 marker 速度；返回值由实际 float velocity 写入重新计算 `kg·m/s`，体积、质量、组成和 `U` 不变。该 marker 动量会经过正常 P2G、pressure projection、G2P 和 advection，因此走动、划水和入水速度可以扰动液体，而不是只唤醒调度。
+实体交互由 Fabric 在服务器 tick 末冻结实体本 tick 的旧/当前 AABB raw pose、identity、速度和数据包定义。core 将六个解析盒面转换为 runtime-only moving occupancy、cut-face aperture 与表面 patch；它们和 world cut-cell、deposit/coherent occupancy 使用同一容量、气体拓扑、pressure target divergence、marker CCD 和 reseed 几何，但绝不写入持久 raw mask。
 
-当前 AABB 湿体积是有界 kinematic immersed-boundary 近似：Minecraft 实体运动被视为外部 moving body，不声称已有刚体质量真值或严格等量的实体侧反冲 ledger；实体占位也尚未进入 cut-cell 容量。推进到压力面积分和严格双向闭合前，必须验证静水浮力的采样误差、给出黏性/形状阻力有效域、把实体表面速度接入 pressure boundary，并让实体占位通过统一容量路径排开液体。不得用额外速度钳制或材料特判掩盖这些停止门。
+动态 body 的三维平移速度以定义中的 kg 质量进入 pressure Schur 系统；压力面积分与同一离散耦合算子给出实体反作用，Newtonian 黏性使用 `mu*A/distance` 的 pairwise surface exchange。候选分别返回 pressure impulse、viscous impulse、displacement work 和 kinematic external 未承接冲量，并在产生候选前检查 PCG、body momentum、work 与黏性 pairwise 守恒。未定义实体按 `KINEMATIC_EXTERNAL` 排水而不猜质量；默认数据提供 player 与 armor stand 的显式定义。没有经验 drag、neutral-submergence、湿格采样或材料/实体 ID 力学特判。
+
+主线程接受候选前按 UUID、对象 identity、alive、当前 AABB 与 pre-velocity raw bits 重新验证；随后把 region generation 与动态实体速度作为一个可回滚提交段应用。连续位移导致容量不足时回退本 tick entity displacement并保留 base fluid；静止重叠、越界、第三方状态变化、预算或数值审计失败则暂停区域，不删 marker。当前只承诺平移轴对齐盒；旋转、通用刚体约束和复杂实体形状尚未实现。
 
 ## Reseed 与传输不变量
 

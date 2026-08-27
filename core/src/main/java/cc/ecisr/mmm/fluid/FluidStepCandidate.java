@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
-import cc.ecisr.mmm.world.MovingBodyPressureIntegrator;
+import cc.ecisr.mmm.world.MovingBodyStepResult;
 
 import java.util.List;
 import java.util.Objects;
@@ -12,7 +12,7 @@ public record FluidStepCandidate(
 		long candidateGeneration,
 		FluidDomainState state,
 		FlipFluidDomain.StepStats stats,
-		List<MovingBodyPressureIntegrator.Result> movingBodyPressureResults
+		List<MovingBodyStepResult> movingBodyResults
 ) {
 	public FluidStepCandidate(String backendId, long baseGeneration, long candidateGeneration,
 			FluidDomainState state, FlipFluidDomain.StepStats stats) {
@@ -26,16 +26,16 @@ public record FluidStepCandidate(
 		}
 		Objects.requireNonNull(state, "state");
 		Objects.requireNonNull(stats, "stats");
-		if (movingBodyPressureResults == null) {
-			throw new IllegalArgumentException("Moving-body pressure results are missing");
+		if (movingBodyResults == null) {
+			throw new IllegalArgumentException("Moving-body results are missing");
 		}
 		long previousId = -1L;
-		for (MovingBodyPressureIntegrator.Result result : movingBodyPressureResults) {
+		for (MovingBodyStepResult result : movingBodyResults) {
 			if (result == null || result.transientId() <= previousId) {
 				throw new IllegalArgumentException("Moving-body pressure results must have unique sorted ids");
 			}
 			previousId = result.transientId();
 		}
-		movingBodyPressureResults = List.copyOf(movingBodyPressureResults);
+		movingBodyResults = List.copyOf(movingBodyResults);
 	}
 }

@@ -31,6 +31,7 @@ import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
+import cc.ecisr.mmm.world.MovingBodyDefinitionRegistry;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import cc.ecisr.mmm.fluid.air.GasAuditLedger;
@@ -129,6 +130,7 @@ public final class FluidSimulationService {
 	private FluidServerConfig serverConfig;
 	private final FluidRegionManager regionManager;
 	private final FluidSolverBackend solverBackend = new CpuFluidSolverBackend();
+	private final MovingBodyDefinitionRegistry movingBodyDefinitions;
 	private final CommittedEventHub committedEvents;
 	private final FluidWorldTargetResolver targets;
 	private final FluidRegionOperations regionOperations;
@@ -176,6 +178,11 @@ public final class FluidSimulationService {
 
 	private FluidSimulationService(MinecraftServer server) {
 		worldRoot = server.getWorldPath(LevelResource.ROOT);
+		try {
+			movingBodyDefinitions = MovingBodyDataPackLoader.load(server.getResourceManager());
+		} catch (IOException invalidMovingBodies) {
+			throw new IllegalStateException("Moving-body datapack definitions are invalid", invalidMovingBodies);
+		}
 		boolean configurationLocked = false;
 		try {
 			serverConfig = FluidServerConfig.loadOrCreate(worldRoot);
@@ -2276,11 +2283,16 @@ public final class FluidSimulationService {
 				return;
 			}
 		}
-		FluidRegion.EntityCouplingStats entityCoupling = region.entityPhysicsEnabled()
-				? MinecraftEntityFluidInteraction.applyForces(level, region)
-				: FluidRegion.EntityCouplingStats.EMPTY;
-		region.setLastEntityCoupling(entityCoupling);
-		int affectedEntities = entityCoupling.affectedEntities();
+		MinecraftEntityFluidInteraction.FrozenStep movingBodies;
+		try {
+			movingBodies = region.entityPhysicsEnabled()
+					? MinecraftEntityFluidInteraction.freeze(level, region, movingBodyDefinitions)
+					: MinecraftEntityFluidInteraction.empty();
+		} catch (MinecraftEntityFluidInteraction.BlockedException blocked) {
+			blockMovingBody(level, region, blocked.getMessage(), blocked);
+			return;
+		}
+		int affectedEntities = movingBodies.affectedEntities();
 		if (collisionsChanged || affectedEntities > 0) {
 			region.wakeForActivity();
 			region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
@@ -2299,7 +2311,7 @@ public final class FluidSimulationService {
 		try {
 			if (motionStep) {
 				region.wakeThermal(ThermalActivity.WakeReason.CARRIER_MOTION);
-				stepOnce(region);
+				stepOnce(level, region, movingBodies);
 			} else {
 				stepThermalOnce(region);
 			}
@@ -2339,6 +2351,18 @@ public final class FluidSimulationService {
 			return;
 		} catch (FlipFluidDomain.ViscosityBlockedException blocked) {
 			blockViscosity(level, region, blocked);
+			return;
+		} catch (FlipFluidDomain.MovingBodyBlockedException blocked) {
+			if (blocked.reason() == FlipFluidDomain.MovingBodyBlockedException.Reason.CAPACITY
+					&& movingBodies.rejectContinuousDisplacement(level)) {
+				MmmMod.LOGGER.info("Region {} rejected one continuous entity displacement without changing fluid inventory: {}",
+						region.id(), blocked.getMessage());
+				return;
+			}
+			blockMovingBody(level, region, blocked.getMessage(), blocked);
+			return;
+		} catch (MinecraftEntityFluidInteraction.BlockedException blocked) {
+			blockMovingBody(level, region, blocked.getMessage(), blocked);
 			return;
 		} catch (FlipFluidDomain.ThermalTransportBlockedException blocked) {
 			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
@@ -2407,12 +2431,24 @@ public final class FluidSimulationService {
 	}
 
 	private void stepOnce(FluidRegion region) {
+		stepOnce(null, region, MinecraftEntityFluidInteraction.empty());
+	}
+
+	private void stepOnce(ServerLevel level, FluidRegion region,
+			MinecraftEntityFluidInteraction.FrozenStep movingBodies) {
 		long start = System.nanoTime();
 		FluidStepCandidate candidate = solverBackend.evaluate(new FluidStepRequest(
-				region.solverGeneration(), region.domain().captureAuthoritativeState(), List.of(),
+				region.solverGeneration(), region.domain().captureAuthoritativeState(),
+				movingBodies.snapshot(),
 				phaseChangeFeatureEnabled,
 				phaseChangeFeatureEnabled ? serverConfig.maximumPhaseOperationsPerStep() : 0));
-		region.adoptStepCandidate(candidate, solverBackend.id());
+		if (level == null || movingBodies.affectedEntities() == 0) {
+			region.adoptStepCandidate(candidate, solverBackend.id());
+			region.setLastEntityCoupling(FluidRegion.EntityCouplingStats.EMPTY);
+		} else {
+			FluidRegion.PreparedStepCandidate prepared = region.prepareStepCandidate(candidate, solverBackend.id());
+			region.setLastEntityCoupling(movingBodies.commit(level, region, prepared));
+		}
 		region.recordStep(candidate.stats(), (System.nanoTime() - start) / 1_000_000.0);
 	}
 
@@ -2469,6 +2505,16 @@ public final class FluidSimulationService {
 		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
 				"物质、运动与力学黏性步骤被安全拒绝，区域已暂停：" + blocked.getMessage()
 						+ "；本次粒子速度未提交，请查看 /mmm status"));
+		sendSnapshot(level, region);
+	}
+
+	private void blockMovingBody(ServerLevel level, FluidRegion region, String detail, RuntimeException blocked) {
+		String failure = "moving-body-blocked PAUSED：" + detail;
+		region.blockCollision(failure);
+		MmmMod.LOGGER.error("Region {} rejected a moving-body joint candidate and is paused", region.id(), blocked);
+		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+				"物质、运动与力学实体边界步骤被安全拒绝，区域已暂停：" + detail
+						+ "；流体与实体速度均未单边提交，请查看 /mmm status"));
 		sendSnapshot(level, region);
 	}
 
@@ -2754,7 +2800,7 @@ public final class FluidSimulationService {
 		String gas = gasSummary(domain);
 		String thermal = thermalFeatureEnabled ? thermalSummary(region, domain) : "";
 		return String.format(
-				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d, liquid impulse [%.3g,%.3g,%.3g] kg·m/s | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s%s",
+				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d defs %s, liquid impulse [%.3g,%.3g,%.3g] kg·m/s | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s%s",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",
 				region.id().toString().substring(0, 8),
 				usage.regionCount(), regionManager.limits().maximumRegions(),
@@ -2768,6 +2814,7 @@ public final class FluidSimulationService {
 				distribution.visibleCells(), distribution.denseCells(), takeoverOriginalBlocks.size(), takeoverLock,
 				worldBridgeFeatureEnabled ? "on" : "off",
 				region.entityPhysicsEnabled() ? "on" : "off", region.lastAffectedEntities(),
+				movingBodyDefinitions.fingerprint().substring(0, 12),
 				entityCoupling.impulseXKilogramMetresPerSecond(),
 				entityCoupling.impulseYKilogramMetresPerSecond(),
 				entityCoupling.impulseZKilogramMetresPerSecond(),

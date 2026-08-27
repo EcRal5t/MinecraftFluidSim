@@ -1,0 +1,7 @@
+{
+  "selector_kind": "entity_type",
+  "selector": "minecraft:armor_stand",
+  "coupling_mode": "dynamic",
+  "mass_kg": 25.0,
+  "geometry_provider": "axis_aligned_box"
+}

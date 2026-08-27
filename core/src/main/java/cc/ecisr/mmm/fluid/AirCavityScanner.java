@@ -81,13 +81,19 @@ import java.util.TreeMap;
 	Result scan(boolean[] solid, int[] markerCount, float[] cellLiquidVolume,
 	            FlipCutCellGeometry cutCells, GranularCouplingFields granular,
 	            boolean sealedDomainBoundary) {
+		return scan(solid, markerCount, cellLiquidVolume, cutCells, granular, sealedDomainBoundary, null);
+	}
+
+	Result scan(boolean[] solid, int[] markerCount, float[] cellLiquidVolume,
+	            FlipCutCellGeometry cutCells, GranularCouplingFields granular,
+	            boolean sealedDomainBoundary, MovingBodyBoundary movingBodies) {
 		boolean budgetExhausted = false;
 		int visitedAirCells = 0;
 		int sealedNodes = 0;
 		int[] cellNodeId = new int[cellCount];
 		Arrays.fill(cellNodeId, -1);
 		for (int seed = 0; seed < cellCount && !budgetExhausted; seed++) {
-			if (!isAirCell(seed, solid, markerCount, cutCells, granular) || cellNodeId[seed] != -1) continue;
+			if (!isAirCell(seed, solid, markerCount, cutCells, granular, movingBodies) || cellNodeId[seed] != -1) continue;
 			boolean touchesBoundary = false;
 			int stackSize = 0;
 			floodStack[stackSize++] = seed;
@@ -106,7 +112,8 @@ import java.util.TreeMap;
 				int z = yz / sizeY;
 				if (!sealedDomainBoundary && (x == 0 || x + 1 == sizeX || y == 0 || y + 1 == sizeY
 						|| z == 0 || z + 1 == sizeZ)) touchesBoundary = true;
-				stackSize = floodNeighbors(cellNodeId, solid, markerCount, cutCells, granular, x, y, z, cell, stackSize);
+				stackSize = floodNeighbors(cellNodeId, solid, markerCount, cutCells, granular,
+						movingBodies, x, y, z, cell, stackSize);
 			}
 			visitedAirCells += componentSize;
 			int nodeId = 0;
@@ -114,35 +121,35 @@ import java.util.TreeMap;
 			for (int cell = 0; cell < cellCount; cell++) if (cellNodeId[cell] == -2) cellNodeId[cell] = nodeId;
 		}
 		if (budgetExhausted) for (int cell = 0; cell < cellCount; cell++) {
-			if (cellNodeId[cell] < 0 && isAirCell(cell, solid, markerCount, cutCells, granular)) cellNodeId[cell] = 0;
+			if (cellNodeId[cell] < 0 && isAirCell(cell, solid, markerCount, cutCells, granular, movingBodies)) cellNodeId[cell] = 0;
 		}
 		double[] cellAvailableVolume = new double[cellCount];
 		double[] sealedAvailableVolume = new double[sealedNodes];
 		for (int cell = 0; cell < cellCount; cell++) {
 			int nodeId = cellNodeId[cell];
-			cellAvailableVolume[cell] = cellAirVolume(cell, cellLiquidVolume, cutCells, granular);
+			cellAvailableVolume[cell] = cellAirVolume(cell, cellLiquidVolume, cutCells, granular, movingBodies);
 			if (nodeId >= 1) {
 				sealedAvailableVolume[nodeId - 1] += cellAvailableVolume[cell];
 			}
 		}
 		int[] cellLineageNodeId = cellNodeId.clone();
 		addInterfaceResiduals(cellNodeId, cellLineageNodeId, solid, markerCount, cellLiquidVolume,
-				cutCells, granular, cellAvailableVolume, sealedAvailableVolume);
-		List<GeometricEdge> edges = collectGeometricEdges(cellNodeId, cutCells);
+				cutCells, granular, movingBodies, cellAvailableVolume, sealedAvailableVolume);
+		List<GeometricEdge> edges = collectGeometricEdges(cellNodeId, cutCells, movingBodies);
 		return new Result(cellNodeId, cellLineageNodeId, cellAvailableVolume,
 				sealedNodes, sealedAvailableVolume, edges, visitedAirCells,
 				budgetExhausted ? StopReason.BUDGET_EXHAUSTED : StopReason.COMPLETED);
 	}
 
 	private boolean isAirCell(int cell, boolean[] solid, int[] markerCount, FlipCutCellGeometry cutCells,
-	                          GranularCouplingFields granular) {
-		float geometricOpen = cutCells.openCellVolume(cell);
+	                          GranularCouplingFields granular, MovingBodyBoundary movingBodies) {
+		float geometricOpen = (float) openCellVolume(cell, cutCells, movingBodies);
 		float available = granular == null ? geometricOpen : granular.effectiveOpenCellVolume(cell, geometricOpen);
 		return !solid[cell] && markerCount[cell] == 0 && available > 0.0F;
 	}
 
 	private int floodNeighbors(int[] cellNodeId, boolean[] solid, int[] markerCount, FlipCutCellGeometry cutCells,
-	                           GranularCouplingFields granular,
+	                           GranularCouplingFields granular, MovingBodyBoundary movingBodies,
 	                           int x, int y, int z, int from, int stackSize) {
 		// fixed neighbour order keeps the traversal deterministic
 		for (int axis = 0; axis < 3; axis++) for (int direction = -1; direction <= 1; direction += 2) {
@@ -151,8 +158,8 @@ import java.util.TreeMap;
 			int nz = z + (axis == 2 ? direction : 0);
 			if (nx < 0 || nx >= sizeX || ny < 0 || ny >= sizeY || nz < 0 || nz >= sizeZ) continue;
 			int cell = (nz * sizeY + ny) * sizeX + nx;
-			if (cellNodeId[cell] != -1 || !isAirCell(cell, solid, markerCount, cutCells, granular)) continue;
-			if (faceOpen(cutCells, from, cell) < FULL_FACE_THRESHOLD) continue;
+			if (cellNodeId[cell] != -1 || !isAirCell(cell, solid, markerCount, cutCells, granular, movingBodies)) continue;
+			if (faceOpen(cutCells, movingBodies, from, cell) < FULL_FACE_THRESHOLD) continue;
 			cellNodeId[cell] = -2;
 			floodStack[stackSize++] = cell;
 		}
@@ -160,24 +167,24 @@ import java.util.TreeMap;
 	}
 
 	/** Open fraction of the face shared by two adjacent cells on one axis. */
-	private float faceOpen(FlipCutCellGeometry cutCells, int from, int to) {
+	private float faceOpen(FlipCutCellGeometry cutCells, MovingBodyBoundary movingBodies, int from, int to) {
 		int x = from % sizeX;
 		int yz = from / sizeX;
 		int y = yz % sizeY;
 		int z = yz / sizeY;
-		if (to == from - 1) return cutCells.xFaceOpen(x, y, z);
-		if (to == from + 1) return cutCells.xFaceOpen(x + 1, y, z);
-		if (to == from - sizeX) return cutCells.yFaceOpen(x, y, z);
-		if (to == from + sizeX) return cutCells.yFaceOpen(x, y + 1, z);
-		if (to == from - sizeX * sizeY) return cutCells.zFaceOpen(x, y, z);
-		if (to == from + sizeX * sizeY) return cutCells.zFaceOpen(x, y, z + 1);
+		if (to == from - 1) return xFaceOpen(cutCells, movingBodies, x, y, z);
+		if (to == from + 1) return xFaceOpen(cutCells, movingBodies, x + 1, y, z);
+		if (to == from - sizeX) return yFaceOpen(cutCells, movingBodies, x, y, z);
+		if (to == from + sizeX) return yFaceOpen(cutCells, movingBodies, x, y + 1, z);
+		if (to == from - sizeX * sizeY) return zFaceOpen(cutCells, movingBodies, x, y, z);
+		if (to == from + sizeX * sizeY) return zFaceOpen(cutCells, movingBodies, x, y, z + 1);
 		throw new IllegalArgumentException("Cells are not face-adjacent");
 	}
 
 	/** Continuous air volume of one cell: open volume minus the clamped liquid fraction. */
 	private double cellAirVolume(int cell, float[] cellLiquidVolume, FlipCutCellGeometry cutCells,
-	                             GranularCouplingFields granular) {
-		float geometricOpen = cutCells.openCellVolume(cell);
+	                             GranularCouplingFields granular, MovingBodyBoundary movingBodies) {
+		float geometricOpen = (float) openCellVolume(cell, cutCells, movingBodies);
 		float openVolume = granular == null ? geometricOpen : granular.effectiveOpenCellVolume(cell, geometricOpen);
 		float liquid = Math.min(Math.max(cellLiquidVolume[cell], 0.0F), openVolume);
 		return (openVolume - liquid) * cellVolumeCubicMeters;
@@ -186,11 +193,12 @@ import java.util.TreeMap;
 	private void addInterfaceResiduals(int[] cellNodeId, int[] cellLineageNodeId,
 	                                   boolean[] solid, int[] markerCount,
 	                                   float[] cellLiquidVolume, FlipCutCellGeometry cutCells,
-	                                   GranularCouplingFields granular, double[] cellAvailableVolume,
+	                                   GranularCouplingFields granular, MovingBodyBoundary movingBodies,
+	                                   double[] cellAvailableVolume,
 	                                   double[] sealedAvailableVolume) {
 		for (int cell = 0; cell < cellNodeId.length; cell++) {
 			if (solid[cell] || markerCount[cell] == 0) continue;
-			double residualVolume = cellAirVolume(cell, cellLiquidVolume, cutCells, granular);
+			double residualVolume = cellAirVolume(cell, cellLiquidVolume, cutCells, granular, movingBodies);
 			cellAvailableVolume[cell] = residualVolume;
 			if (!(residualVolume > 0.0)) continue;
 			int attributed = -1;
@@ -205,7 +213,7 @@ import java.util.TreeMap;
 				if (nx < 0 || nx >= sizeX || ny < 0 || ny >= sizeY || nz < 0 || nz >= sizeZ) continue;
 				int neighbor = (nz * sizeY + ny) * sizeX + nx;
 				if (cellNodeId[neighbor] <= -1) continue;
-				if (faceOpen(cutCells, cell, neighbor) <= 0.0F) continue;
+				if (faceOpen(cutCells, movingBodies, cell, neighbor) <= 0.0F) continue;
 				attributed = attributed < 0 ? cellNodeId[neighbor] : Math.min(attributed, cellNodeId[neighbor]);
 				if (attributed == 0) break;
 			}
@@ -214,22 +222,23 @@ import java.util.TreeMap;
 		}
 	}
 
-	private List<GeometricEdge> collectGeometricEdges(int[] cellNodeId, FlipCutCellGeometry cutCells) {
+	private List<GeometricEdge> collectGeometricEdges(int[] cellNodeId, FlipCutCellGeometry cutCells,
+	                                                MovingBodyBoundary movingBodies) {
 		TreeMap<Long, Double> areas = new TreeMap<>();
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
 			int left = (z * sizeY + y) * sizeX + (x - 1);
 			int right = (z * sizeY + y) * sizeX + x;
-			accumulateEdge(areas, cellNodeId[left], cellNodeId[right], cutCells.xFaceOpen(x, y, z));
+			accumulateEdge(areas, cellNodeId[left], cellNodeId[right], xFaceOpen(cutCells, movingBodies, x, y, z));
 		}
 		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int below = (z * sizeY + (y - 1)) * sizeX + x;
 			int above = (z * sizeY + y) * sizeX + x;
-			accumulateEdge(areas, cellNodeId[below], cellNodeId[above], cutCells.yFaceOpen(x, y, z));
+			accumulateEdge(areas, cellNodeId[below], cellNodeId[above], yFaceOpen(cutCells, movingBodies, x, y, z));
 		}
 		for (int z = 1; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int back = ((z - 1) * sizeY + y) * sizeX + x;
 			int front = (z * sizeY + y) * sizeX + x;
-			accumulateEdge(areas, cellNodeId[back], cellNodeId[front], cutCells.zFaceOpen(x, y, z));
+			accumulateEdge(areas, cellNodeId[back], cellNodeId[front], zFaceOpen(cutCells, movingBodies, x, y, z));
 		}
 		List<GeometricEdge> edges = new ArrayList<>(areas.size());
 		for (Map.Entry<Long, Double> entry : areas.entrySet()) {
@@ -237,6 +246,26 @@ import java.util.TreeMap;
 			edges.add(new GeometricEdge((int) (key >>> 32), (int) key, entry.getValue()));
 		}
 		return edges;
+	}
+
+	private double openCellVolume(int cell, FlipCutCellGeometry cutCells, MovingBodyBoundary movingBodies) {
+		return movingBodies == null ? cutCells.openCellVolume(cell)
+				: movingBodies.openCellFraction(cell, cutCells.openCellVolume(cell));
+	}
+
+	private float xFaceOpen(FlipCutCellGeometry cutCells, MovingBodyBoundary movingBodies, int x, int y, int z) {
+		float fixed = cutCells.xFaceOpen(x, y, z);
+		return movingBodies == null ? fixed : movingBodies.xFaceOpen(x, y, z, fixed);
+	}
+
+	private float yFaceOpen(FlipCutCellGeometry cutCells, MovingBodyBoundary movingBodies, int x, int y, int z) {
+		float fixed = cutCells.yFaceOpen(x, y, z);
+		return movingBodies == null ? fixed : movingBodies.yFaceOpen(x, y, z, fixed);
+	}
+
+	private float zFaceOpen(FlipCutCellGeometry cutCells, MovingBodyBoundary movingBodies, int x, int y, int z) {
+		float fixed = cutCells.zFaceOpen(x, y, z);
+		return movingBodies == null ? fixed : movingBodies.zFaceOpen(x, y, z, fixed);
 	}
 
 	private void accumulateEdge(TreeMap<Long, Double> areas, int first, int second, float openFraction) {

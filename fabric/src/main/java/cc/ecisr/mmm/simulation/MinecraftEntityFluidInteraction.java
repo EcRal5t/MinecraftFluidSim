@@ -1,130 +1,223 @@
 package cc.ecisr.mmm.simulation;
 
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
-import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
+import cc.ecisr.mmm.fluid.FluidStepCandidate;
+import cc.ecisr.mmm.world.MovingBodyStepResult;
+import cc.ecisr.mmm.world.MovingBodyDefinition;
+import cc.ecisr.mmm.world.MovingBodyDefinitionRegistry;
+import cc.ecisr.mmm.world.MovingBodySurfaceSnapshot;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.TagKey;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.UUID;
 
-/** Minecraft entity discovery and response over loader-neutral fluid observations. */
+/** Main-thread entity freeze, exact revalidation and joint candidate settlement. */
 final class MinecraftEntityFluidInteraction {
-	private static final int SAMPLES_XZ = 3;
-	private static final int SAMPLES_Y = 5;
-	private static final double NEUTRAL_SUBMERGENCE = 0.72;
-	private static final double FULL_SUBMERGENCE_DRAG = 0.20;
 	private static final double TICKS_PER_SECOND = 20.0;
 
 	private MinecraftEntityFluidInteraction() { }
 
-	static FluidRegion.EntityCouplingStats applyForces(ServerLevel level, FluidRegion region) {
+	static FrozenStep freeze(ServerLevel level, FluidRegion region, MovingBodyDefinitionRegistry definitions) {
+		if (definitions == null) throw new BlockedException("Moving-body definition registry is unavailable");
 		BlockPos origin = region.origin();
-		FlipFluidDomain domain = region.domain();
-		float cellSize = domain.config().cellSize();
-		AABB bounds = new AABB(
-				origin.getX(), origin.getY(), origin.getZ(),
-				origin.getX() + domain.sizeX() * cellSize,
-				origin.getY() + domain.sizeY() * cellSize,
-				origin.getZ() + domain.sizeZ() * cellSize
-		);
-		List<Interaction> interactions = new ArrayList<>();
-		for (Entity entity : level.getEntities((Entity) null, bounds, MinecraftEntityFluidInteraction::canAffect)) {
-			Contact contact = sampleContact(region, entity);
-			if (contact.submergedFraction() <= 0.0) continue;
-			interactions.add(new Interaction(entity, contact, entity.getDeltaMovement()));
+		double cellSize = region.domain().config().cellSize();
+		double timeStepSeconds = region.domain().config().timeStep();
+		AABB bounds = new AABB(origin.getX(), origin.getY(), origin.getZ(),
+				origin.getX() + region.sizeX() * cellSize,
+				origin.getY() + region.sizeY() * cellSize,
+				origin.getZ() + region.sizeZ() * cellSize);
+		ArrayList<Entity> entities = new ArrayList<>(level.getEntities(
+				(Entity) null, bounds, MinecraftEntityFluidInteraction::canCouple));
+		entities.sort(Comparator.comparing(Entity::getUUID));
+		ArrayList<FrozenEntity> frozen = new ArrayList<>(Math.min(
+				entities.size(), MovingBodySurfaceSnapshot.MAXIMUM_BODIES));
+		ArrayList<MovingBodySurfaceSnapshot.Body> bodies = new ArrayList<>(frozen.size());
+		for (Entity entity : entities) {
+			if (frozen.size() == MovingBodySurfaceSnapshot.MAXIMUM_BODIES) {
+				throw new BlockedException("Moving-body entity budget exhausted");
+			}
+			AABB afterWorld = entity.getBoundingBox();
+			if (!strictlyInside(afterWorld, bounds)) continue;
+			AABB beforeWorld = afterWorld.move(entity.xOld - entity.getX(), entity.yOld - entity.getY(),
+					entity.zOld - entity.getZ());
+			if (!strictlyInside(beforeWorld, bounds)) {
+				throw new BlockedException("Moving entity entered the region without an in-region pre-pose");
+			}
+			Vec3 preVelocityPerTick = entity.getDeltaMovement();
+			double velocityX = (afterWorld.minX - beforeWorld.minX) / timeStepSeconds;
+			double velocityY = (afterWorld.minY - beforeWorld.minY) / timeStepSeconds;
+			double velocityZ = (afterWorld.minZ - beforeWorld.minZ) / timeStepSeconds;
+			long transientId = frozen.size();
+			Definition definition = definition(entity, definitions);
+			MovingBodySurfaceSnapshot.BoxPose before = localPose(beforeWorld, origin);
+			MovingBodySurfaceSnapshot.BoxPose after = localPose(afterWorld, origin);
+			MovingBodySurfaceSnapshot.Body body = new MovingBodySurfaceSnapshot.Body(
+					transientId, before, after,
+					velocityX, velocityY, velocityZ,
+					definition.mode(), definition.massKilograms());
+			frozen.add(new FrozenEntity(transientId, entity.getUUID(), entity, beforeWorld, afterWorld,
+					preVelocityPerTick, definition));
+			bodies.add(body);
 		}
-		double impulseX = 0.0, impulseY = 0.0, impulseZ = 0.0;
-		for (Interaction interaction : interactions) {
-			Vec3 bodyVelocity = interaction.velocityBlocksPerTick().scale(TICKS_PER_SECOND);
-			Contact contact = interaction.contact();
-			MovingBodyFluidCoupling.Result coupling = domain.applyMovingBodyCoupling(
-					new MovingBodyFluidCoupling.Request(contact.localX(), contact.localY(), contact.localZ(),
-							bodyVelocity.x, bodyVelocity.y, bodyVelocity.z, contact.displacedVolumeCubicMetres()));
-			impulseX += coupling.impulseXKilogramMetresPerSecond();
-			impulseY += coupling.impulseYKilogramMetresPerSecond();
-			impulseZ += coupling.impulseZKilogramMetresPerSecond();
-			Entity entity = interaction.entity();
-			applyForce(entity, contact);
-		}
-		return new FluidRegion.EntityCouplingStats(interactions.size(), impulseX, impulseY, impulseZ);
+		return new FrozenStep(new MovingBodySurfaceSnapshot(definitions.fingerprint(), bodies), List.copyOf(frozen));
 	}
 
-	private static boolean canAffect(Entity entity) {
-		if (!entity.isAlive() || entity.isRemoved() || entity.noPhysics || entity.isPassenger() || entity.isInWater()) {
-			return false;
-		}
+	static FrozenStep empty() { return new FrozenStep(MovingBodySurfaceSnapshot.EMPTY, List.of()); }
+
+	private static boolean canCouple(Entity entity) {
+		if (!entity.isAlive() || entity.isRemoved() || entity.noPhysics || entity.isPassenger()) return false;
 		return !(entity instanceof Player player) || (!player.isSpectator() && !player.getAbilities().flying);
 	}
 
-	private static Contact sampleContact(FluidRegion region, Entity entity) {
-		FlipFluidDomain domain = region.domain();
-		BlockPos origin = region.origin();
-		AABB box = entity.getBoundingBox();
-		int totalSamples = SAMPLES_XZ * SAMPLES_Y * SAMPLES_XZ;
-		int submergedSamples = 0;
-		double velocityX = 0.0, velocityY = 0.0, velocityZ = 0.0;
-		double localXSum = 0.0, localYSum = 0.0, localZSum = 0.0;
-		for (int sampleZ = 0; sampleZ < SAMPLES_XZ; sampleZ++) {
-			for (int sampleY = 0; sampleY < SAMPLES_Y; sampleY++) {
-				for (int sampleX = 0; sampleX < SAMPLES_XZ; sampleX++) {
-					double worldX = sampleCoordinate(box.minX, box.maxX, sampleX, SAMPLES_XZ);
-					double worldY = sampleCoordinate(box.minY, box.maxY, sampleY, SAMPLES_Y);
-					double worldZ = sampleCoordinate(box.minZ, box.maxZ, sampleZ, SAMPLES_XZ);
-					float localX = (float) (worldX - origin.getX());
-					float localY = (float) (worldY - origin.getY());
-					float localZ = (float) (worldZ - origin.getZ());
-					if (!domain.containsFluidAt(localX, localY, localZ)) continue;
-					FlipFluidDomain.VelocitySample velocity = domain.sampleVelocity(localX, localY, localZ);
-					velocityX += velocity.x();
-					velocityY += velocity.y();
-					velocityZ += velocity.z();
-					localXSum += localX; localYSum += localY; localZSum += localZ;
-					submergedSamples++;
+	private static Definition definition(Entity entity, MovingBodyDefinitionRegistry registry) {
+		String typeId = BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).toString();
+		for (MovingBodyDefinition definition : registry.definitions()) {
+			boolean matches = switch (definition.selectorKind()) {
+				case ENTITY_TYPE -> definition.selectorId().equals(typeId);
+				case ENTITY_TAG -> BuiltInRegistries.ENTITY_TYPE.wrapAsHolder(entity.getType()).is(
+						TagKey.create(Registries.ENTITY_TYPE, Identifier.parse(definition.selectorId())));
+			};
+			if (matches) return new Definition(definition.couplingMode(), definition.massKilograms());
+		}
+		return new Definition(MovingBodySurfaceSnapshot.CouplingMode.KINEMATIC_EXTERNAL, 0.0);
+	}
+
+	private static MovingBodySurfaceSnapshot.BoxPose localPose(AABB world, BlockPos origin) {
+		return new MovingBodySurfaceSnapshot.BoxPose(
+				world.minX - origin.getX(), world.minY - origin.getY(), world.minZ - origin.getZ(),
+				world.maxX - origin.getX(), world.maxY - origin.getY(), world.maxZ - origin.getZ());
+	}
+
+	private static boolean strictlyInside(AABB box, AABB bounds) {
+		return box.minX > bounds.minX && box.minY > bounds.minY && box.minZ > bounds.minZ
+				&& box.maxX < bounds.maxX && box.maxY < bounds.maxY && box.maxZ < bounds.maxZ;
+	}
+
+	record FrozenStep(MovingBodySurfaceSnapshot snapshot, List<FrozenEntity> entities) {
+		FrozenStep {
+			if (snapshot == null || entities == null || snapshot.bodies().size() != entities.size()) {
+				throw new IllegalArgumentException("Frozen moving-body step is inconsistent");
+			}
+			entities = List.copyOf(entities);
+		}
+
+		int affectedEntities() { return entities.size(); }
+
+		FluidRegion.EntityCouplingStats commit(ServerLevel level, FluidRegion region,
+				FluidRegion.PreparedStepCandidate prepared) {
+			FluidStepCandidate candidate = prepared.candidate();
+			List<MovingBodyStepResult> results = candidate.movingBodyResults();
+			if (results.size() != entities.size()) {
+				throw new BlockedException("Backend moving-body result count changed");
+			}
+			ArrayList<Entity> live = new ArrayList<>(entities.size());
+			for (int index = 0; index < entities.size(); index++) {
+				FrozenEntity frozen = entities.get(index);
+				MovingBodyStepResult result = results.get(index);
+				if (result.transientId() != frozen.transientId()
+						|| result.couplingMode() != frozen.definition().mode()) {
+					throw new BlockedException("Backend moving-body identity changed");
 				}
+				Entity entity = level.getEntity(frozen.uuid());
+				if (entity == null || entity != frozen.identity() || !entity.isAlive() || entity.isRemoved()
+						|| !sameAabbRaw(entity.getBoundingBox(), frozen.afterPose())
+						|| !sameVectorRaw(entity.getDeltaMovement(), frozen.preVelocityPerTick())) {
+					throw new BlockedException("Moving entity changed or disappeared before joint commit");
+				}
+				live.add(entity);
+			}
+
+			Vec3[] previousVelocity = new Vec3[live.size()];
+			for (int index = 0; index < live.size(); index++) previousVelocity[index] = live.get(index).getDeltaMovement();
+			boolean fluidCommitted = false;
+			try {
+				region.commitPreparedStepCandidate(prepared);
+				fluidCommitted = true;
+				double impulseX = 0.0, impulseY = 0.0, impulseZ = 0.0;
+				for (int index = 0; index < live.size(); index++) {
+					MovingBodyStepResult result = results.get(index);
+					if (result.couplingMode() == MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC) {
+						Entity entity = live.get(index);
+						entity.setDeltaMovement(result.finalVelocityXMetresPerSecond() / TICKS_PER_SECOND,
+								result.finalVelocityYMetresPerSecond() / TICKS_PER_SECOND,
+								result.finalVelocityZMetresPerSecond() / TICKS_PER_SECOND);
+						entity.hurtMarked = true;
+						if (result.pressureImpulseYKilogramMetresPerSecond() != 0.0
+								|| result.viscousImpulseYKilogramMetresPerSecond() != 0.0) entity.resetFallDistance();
+					}
+					impulseX += result.pressureImpulseXKilogramMetresPerSecond()
+							+ result.viscousImpulseXKilogramMetresPerSecond();
+					impulseY += result.pressureImpulseYKilogramMetresPerSecond()
+							+ result.viscousImpulseYKilogramMetresPerSecond();
+					impulseZ += result.pressureImpulseZKilogramMetresPerSecond()
+							+ result.viscousImpulseZKilogramMetresPerSecond();
+				}
+				return new FluidRegion.EntityCouplingStats(live.size(), impulseX, impulseY, impulseZ);
+			} catch (RuntimeException failure) {
+				for (int index = 0; index < live.size(); index++) {
+					live.get(index).setDeltaMovement(previousVelocity[index]);
+					live.get(index).hurtMarked = true;
+				}
+				if (fluidCommitted) region.rollbackPreparedStepCandidate(prepared);
+				throw failure;
 			}
 		}
-		if (submergedSamples == 0) return Contact.DRY;
-		double inverseWetSamples = 1.0 / submergedSamples;
-		double submergedFraction = (double) submergedSamples / totalSamples;
-		double displacedVolume = box.getXsize() * box.getYsize() * box.getZsize() * submergedFraction;
-		if (!(Double.isFinite(displacedVolume) && displacedVolume > 0.0)) return Contact.DRY;
-		return new Contact(submergedFraction,
-				new Vec3(velocityX * inverseWetSamples, velocityY * inverseWetSamples,
-						velocityZ * inverseWetSamples),
-				(float) (localXSum * inverseWetSamples), (float) (localYSum * inverseWetSamples),
-				(float) (localZSum * inverseWetSamples), displacedVolume);
-	}
 
-	private static double sampleCoordinate(double minimum, double maximum, int sample, int count) {
-		return minimum + (maximum - minimum) * (sample + 0.5) / count;
-	}
-
-	private static void applyForce(Entity entity, Contact contact) {
-		double submerged = contact.submergedFraction();
-		double drag = FULL_SUBMERGENCE_DRAG * submerged;
-		Vec3 targetVelocity = contact.fluidVelocity().scale(1.0 / TICKS_PER_SECOND);
-		Vec3 current = entity.getDeltaMovement();
-		Vec3 next = current.add(targetVelocity.subtract(current).scale(drag));
-		if (!entity.isNoGravity()) {
-			double buoyancy = Math.min(0.20, entity.getGravity() * submerged / NEUTRAL_SUBMERGENCE);
-			next = next.add(0.0, buoyancy, 0.0);
+		boolean rejectContinuousDisplacement(ServerLevel level) {
+			boolean moved = false;
+			ArrayList<Entity> live = new ArrayList<>(entities.size());
+			for (FrozenEntity frozen : entities) {
+				Entity entity = level.getEntity(frozen.uuid());
+				if (entity == null || entity != frozen.identity() || !entity.isAlive() || entity.isRemoved()
+						|| !sameAabbRaw(entity.getBoundingBox(), frozen.afterPose())
+						|| !sameVectorRaw(entity.getDeltaMovement(), frozen.preVelocityPerTick())) return false;
+				moved |= !sameAabbRaw(frozen.beforePose(), frozen.afterPose());
+				live.add(entity);
+			}
+			if (!moved) return false;
+			for (int index = 0; index < live.size(); index++) {
+				Entity entity = live.get(index);
+				FrozenEntity frozen = entities.get(index);
+				AABB before = frozen.beforePose(), after = frozen.afterPose();
+				entity.setPos(entity.getX() + before.minX - after.minX,
+						entity.getY() + before.minY - after.minY,
+						entity.getZ() + before.minZ - after.minZ);
+				entity.setDeltaMovement(Vec3.ZERO);
+				entity.hurtMarked = true;
+			}
+			return true;
 		}
-		entity.setDeltaMovement(next);
-		entity.hurtMarked = true;
-		if (submerged > 0.15) entity.resetFallDistance();
 	}
 
-	private record Interaction(Entity entity, Contact contact, Vec3 velocityBlocksPerTick) { }
+	private static boolean sameAabbRaw(AABB first, AABB second) {
+		return raw(first.minX, second.minX) && raw(first.minY, second.minY) && raw(first.minZ, second.minZ)
+				&& raw(first.maxX, second.maxX) && raw(first.maxY, second.maxY) && raw(first.maxZ, second.maxZ);
+	}
 
-	private record Contact(
-			double submergedFraction, Vec3 fluidVelocity, float localX, float localY, float localZ,
-			double displacedVolumeCubicMetres
-	) {
-		private static final Contact DRY = new Contact(0.0, Vec3.ZERO, 0.0F, 0.0F, 0.0F, 0.0);
+	private static boolean sameVectorRaw(Vec3 first, Vec3 second) {
+		return raw(first.x, second.x) && raw(first.y, second.y) && raw(first.z, second.z);
+	}
+
+	private static boolean raw(double first, double second) {
+		return Double.doubleToRawLongBits(first) == Double.doubleToRawLongBits(second);
+	}
+
+	private record FrozenEntity(long transientId, UUID uuid, Entity identity, AABB beforePose, AABB afterPose,
+	                            Vec3 preVelocityPerTick, Definition definition) { }
+	private record Definition(MovingBodySurfaceSnapshot.CouplingMode mode, double massKilograms) { }
+
+	static final class BlockedException extends IllegalStateException {
+		BlockedException(String message) { super(message); }
+		BlockedException(String message, Throwable cause) { super(message, cause); }
 	}
 }

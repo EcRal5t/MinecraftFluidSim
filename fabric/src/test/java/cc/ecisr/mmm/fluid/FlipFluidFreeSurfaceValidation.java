@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
-import cc.ecisr.mmm.world.MovingBodyPressureIntegrator;
+import cc.ecisr.mmm.world.MovingBodyStepResult;
 import cc.ecisr.mmm.world.MovingBodySurfaceSnapshot;
 
 import java.util.List;
@@ -17,6 +17,8 @@ public final class FlipFluidFreeSurfaceValidation {
 		volumeDriftCorrectionPreservesLegitimateSurfaceDeficits();
 		fractionalHydrostaticColumnsBalanceGravity();
 		projectedHydrostaticPressureIntegratesOnMovingBox();
+		mixedBodiesAreOrderIndependent();
+		movingBodyPressureNonconvergenceRejectsCandidate();
 		thinLayerRegularizationRemainsStable();
 		isolatedDropletReceivesUndilutedGravity();
 		if (!fast) longRunHydrostaticSurfaceDoesNotSink();
@@ -52,24 +54,105 @@ public final class FlipFluidFreeSurfaceValidation {
 		for (int z = 1; z <= 3; z++) for (int y = 1; y <= 16; y++) for (int x = 1; x <= 3; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
+		for (int y = 5; y <= 9; y++) domain.setVolume(2, y, 2, 0.94F);
 		MovingBodySurfaceSnapshot.BoxPose pose = new MovingBodySurfaceSnapshot.BoxPose(
-				1.1, 2.75, 1.1, 1.4, 4.75, 1.4);
+				1.2, 2.75, 1.2, 1.3, 4.75, 1.3);
 		MovingBodySurfaceSnapshot.Body body = new MovingBodySurfaceSnapshot.Body(
 				1L, pose, pose, 0.0, 0.0, 0.0,
-				MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC, 70.0);
+				MovingBodySurfaceSnapshot.CouplingMode.KINEMATIC_EXTERNAL, 0.0);
+		FluidDomainState authoritative = domain.captureAuthoritativeState();
 		FluidStepCandidate candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
-				0L, domain.captureAuthoritativeState(), List.of(),
+				0L, authoritative,
 				new MovingBodySurfaceSnapshot(List.of(body)), false, 0));
-		check(candidate.movingBodyPressureResults().size() == 1,
+		check(candidate.movingBodyResults().size() == 1,
 				"backend candidate omitted its moving-body pressure settlement");
-		MovingBodyPressureIntegrator.Result result = candidate.movingBodyPressureResults().getFirst();
+		MovingBodyStepResult result = candidate.movingBodyResults().getFirst();
 		double expected = config.density() * config.gravity()
 				* body.displacedVolumeCubicMetres() * config.timeStep();
-		check(Math.abs(result.impulseYKilogramMetresPerSecond() - expected) / expected <= 5.0E-5
-				&& Math.abs(result.impulseXKilogramMetresPerSecond()) <= expected * 1.0E-7
-				&& Math.abs(result.impulseZKilogramMetresPerSecond()) <= expected * 1.0E-7,
+		check(Math.abs(result.pressureImpulseYKilogramMetresPerSecond() - expected) / expected <= 1.0E-3
+				&& Math.abs(result.pressureImpulseXKilogramMetresPerSecond()) <= expected * 1.0E-7
+				&& Math.abs(result.pressureImpulseZKilogramMetresPerSecond()) <= expected * 1.0E-7,
 				"projected hydrostatic box impulse missed rho*g*V: actual="
-						+ result.impulseYKilogramMetresPerSecond() + " expected=" + expected);
+						+ result.pressureImpulseYKilogramMetresPerSecond() + " expected=" + expected);
+
+		MovingBodySurfaceSnapshot.Body dynamicBody = new MovingBodySurfaceSnapshot.Body(
+				1L, pose, pose, 0.0, 0.0, 0.0,
+				MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC, 70.0);
+		MovingBodyStepResult dynamic = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+				0L, authoritative, new MovingBodySurfaceSnapshot(List.of(dynamicBody)), false, 0))
+				.movingBodyResults().getFirst();
+		check(dynamic.pressureImpulseYKilogramMetresPerSecond() > 0.0
+				&& dynamic.pressureImpulseYKilogramMetresPerSecond() < result.pressureImpulseYKilogramMetresPerSecond()
+				&& Math.abs(dynamic.finalVelocityYMetresPerSecond()
+				- dynamic.pressureImpulseYKilogramMetresPerSecond() / 70.0) <= 1.0E-12
+				&& dynamic.unacceptedBoundaryImpulseYKilogramMetresPerSecond() == 0.0,
+				"dynamic pressure Schur settlement did not close body momentum or added mass");
+	}
+
+	private static void mixedBodiesAreOrderIndependent() {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 0.05F,
+				240, 1.0E-6F, 0.40F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = enclosedHydrostaticDomain(config);
+		for (int x : new int[]{1, 3}) for (int y = 5; y <= 9; y++) domain.setVolume(x, y, 2, 0.94F);
+		MovingBodySurfaceSnapshot.BoxPose firstPose = new MovingBodySurfaceSnapshot.BoxPose(
+				0.7, 2.75, 1.2, 0.8, 4.75, 1.3);
+		MovingBodySurfaceSnapshot.BoxPose secondPose = new MovingBodySurfaceSnapshot.BoxPose(
+				1.7, 2.75, 1.2, 1.8, 4.75, 1.3);
+		MovingBodySurfaceSnapshot.Body dynamic = new MovingBodySurfaceSnapshot.Body(
+				4L, firstPose, firstPose, 0.0, 0.0, 0.0,
+				MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC, 70.0);
+		MovingBodySurfaceSnapshot.Body external = new MovingBodySurfaceSnapshot.Body(
+				9L, secondPose, secondPose, 0.0, 0.0, 0.0,
+				MovingBodySurfaceSnapshot.CouplingMode.KINEMATIC_EXTERNAL, 0.0);
+		FluidDomainState state = domain.captureAuthoritativeState();
+		FluidStepCandidate forward = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+				0L, state, new MovingBodySurfaceSnapshot(List.of(dynamic, external)), false, 0));
+		FluidStepCandidate reversed = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+				0L, state, new MovingBodySurfaceSnapshot(List.of(external, dynamic)), false, 0));
+		check(forward.movingBodyResults().equals(reversed.movingBodyResults()),
+				"moving-body settlement depends on request order");
+		MovingBodyStepResult dynamicResult = forward.movingBodyResults().getFirst();
+		MovingBodyStepResult externalResult = forward.movingBodyResults().getLast();
+		check(dynamicResult.transientId() == 4L && externalResult.transientId() == 9L
+				&& dynamicResult.unacceptedBoundaryImpulseYKilogramMetresPerSecond() == 0.0
+				&& externalResult.unacceptedBoundaryImpulseYKilogramMetresPerSecond()
+				== externalResult.pressureImpulseYKilogramMetresPerSecond()
+				+ externalResult.viscousImpulseYKilogramMetresPerSecond(),
+				"mixed dynamic/kinematic momentum ledger did not close");
+	}
+
+	private static FlipFluidDomain enclosedHydrostaticDomain(FluidSolverConfig config) {
+		FlipFluidDomain domain = new FlipFluidDomain(5, 19, 5, config, 4_096);
+		for (int z = 0; z < 5; z++) for (int y = 0; y < 19; y++) for (int x = 0; x < 5; x++) {
+			domain.setSolid(x, y, z, true);
+		}
+		for (int z = 1; z <= 3; z++) for (int y = 1; y <= 17; y++) for (int x = 1; x <= 3; x++) {
+			domain.setSolid(x, y, z, false);
+		}
+		for (int z = 1; z <= 3; z++) for (int y = 1; y <= 16; y++) for (int x = 1; x <= 3; x++) {
+			domain.setVolume(x, y, z, 1.0F);
+		}
+		return domain;
+	}
+
+	private static void movingBodyPressureNonconvergenceRejectsCandidate() {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 0.05F,
+				1, 1.0E-12F, 0.40F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = enclosedHydrostaticDomain(config);
+		for (int y = 5; y <= 9; y++) domain.setVolume(2, y, 2, 0.94F);
+		MovingBodySurfaceSnapshot.BoxPose pose = new MovingBodySurfaceSnapshot.BoxPose(
+				1.2, 2.75, 1.2, 1.3, 4.75, 1.3);
+		MovingBodySurfaceSnapshot.Body body = new MovingBodySurfaceSnapshot.Body(
+				1L, pose, pose, 0.0, 0.0, 0.0,
+				MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC, 1.0);
+		try {
+			new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0L,
+					domain.captureAuthoritativeState(), new MovingBodySurfaceSnapshot(List.of(body)), false, 0));
+			throw new AssertionError("nonconverged moving-body pressure candidate was accepted");
+		} catch (FlipFluidDomain.MovingBodyBlockedException expected) {
+			check(expected.getMessage().contains("residual target"),
+					"moving-body pressure rejection lost its numerical reason");
+		}
 	}
 
 	private static void planeVolumeInversionIsAccurate() {

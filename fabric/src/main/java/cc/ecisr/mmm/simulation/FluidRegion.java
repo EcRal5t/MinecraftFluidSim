@@ -395,8 +395,11 @@ public final class FluidRegion {
 		return candidate;
 	}
 
-	/** Atomically replaces the live solver after validating a complete backend result. */
-	void adoptStepCandidate(FluidStepCandidate candidate, String expectedBackendId) {
+	record PreparedStepCandidate(FluidStepCandidate candidate, FlipFluidDomain baseDomain,
+	                             FlipFluidDomain replacement, long baseSolverGeneration) { }
+
+	/** Fully validates and restores a backend result without changing the live owner. */
+	PreparedStepCandidate prepareStepCandidate(FluidStepCandidate candidate, String expectedBackendId) {
 		Objects.requireNonNull(candidate, "candidate");
 		if (domain == null) throw new IllegalStateException("Region solver is unloaded");
 		if (!Objects.requireNonNull(expectedBackendId, "expectedBackendId").equals(candidate.backendId())
@@ -410,8 +413,33 @@ public final class FluidRegion {
 				|| !replacement.config().equals(solverConfig)) {
 			throw new IllegalStateException("Backend candidate layout is incompatible with the live region");
 		}
-		domain = replacement;
-		solverGeneration = candidate.candidateGeneration();
+		return new PreparedStepCandidate(candidate, domain, replacement, solverGeneration);
+	}
+
+	/** No-allocation owner swap after world-side participants have been revalidated. */
+	void commitPreparedStepCandidate(PreparedStepCandidate prepared) {
+		Objects.requireNonNull(prepared, "prepared");
+		if (domain != prepared.baseDomain() || solverGeneration != prepared.baseSolverGeneration()
+				|| prepared.candidate().baseGeneration() != solverGeneration) {
+			throw new IllegalStateException("Prepared backend candidate became stale before commit");
+		}
+		domain = prepared.replacement();
+		solverGeneration = prepared.candidate().candidateGeneration();
+	}
+
+	void rollbackPreparedStepCandidate(PreparedStepCandidate prepared) {
+		Objects.requireNonNull(prepared, "prepared");
+		if (domain != prepared.replacement()
+				|| solverGeneration != prepared.candidate().candidateGeneration()) {
+			throw new IllegalStateException("Cannot roll back a candidate which is not the live generation");
+		}
+		domain = prepared.baseDomain();
+		solverGeneration = prepared.baseSolverGeneration();
+	}
+
+	/** Atomically replaces the live solver when no external participant joins the commit. */
+	void adoptStepCandidate(FluidStepCandidate candidate, String expectedBackendId) {
+		commitPreparedStepCandidate(prepareStepCandidate(candidate, expectedBackendId));
 	}
 
 	/** Adopts the exact solver which was already encoded and published as the lifecycle HEAD. */
