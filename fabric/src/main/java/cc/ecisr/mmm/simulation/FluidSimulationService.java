@@ -2303,7 +2303,8 @@ public final class FluidSimulationService {
 			if (collisionsChanged) sendSnapshot(level, region);
 			return;
 		}
-		if (tick % region.stepIntervalTicks() != 0) {
+		int effectiveStepInterval = effectiveStepInterval(region.stepIntervalTicks(), affectedEntities);
+		if (tick % effectiveStepInterval != 0) {
 			if (collisionsChanged) sendSnapshot(level, region);
 			return;
 		}
@@ -2374,7 +2375,7 @@ public final class FluidSimulationService {
 			blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
 			return;
 		}
-		updateStepPacing(region);
+		updateStepPacing(region, affectedEntities > 0);
 		if (thermalFeatureEnabled) observeThermalStep(region, thermalBefore, motionStep);
 		FlipFluidDomain.StepStats stats = region.lastStats();
 		float residualLimit = Math.max(1.0E-5F, region.domain().config().pressureTolerance() * 4.0F);
@@ -2518,10 +2519,25 @@ public final class FluidSimulationService {
 		sendSnapshot(level, region);
 	}
 
-	private static void updateStepPacing(FluidRegion region) {
+	static int effectiveStepInterval(int configuredStepInterval, int affectedEntities) {
+		if (configuredStepInterval <= 0 || affectedEntities < 0) {
+			throw new IllegalArgumentException("Invalid fluid-step scheduling input");
+		}
+		return affectedEntities > 0 ? 1 : configuredStepInterval;
+	}
+
+	private static void updateStepPacing(FluidRegion region, boolean realtimeMovingBodyCoupling) {
 		double lastStepMilliseconds = region.lastStepMilliseconds();
 		if (lastStepMilliseconds > HARD_PAUSE_MILLIS) region.setHardOverrunStreak(region.hardOverrunStreak() + 1);
 		else region.setHardOverrunStreak(0);
+		if (realtimeMovingBodyCoupling) {
+			if (region.stepIntervalTicks() != 1) {
+				region.setStepIntervalTicks(1);
+				MmmMod.LOGGER.info("Restored 20 Hz fluid simulation for moving-body coupling");
+			}
+			region.setRecoveryStreak(0);
+			return;
+		}
 
 		int requiredInterval = Mth.clamp((int) Math.ceil(lastStepMilliseconds / STEP_BUDGET_MILLIS), 1, MAX_STEP_INTERVAL_TICKS);
 		if (requiredInterval > region.stepIntervalTicks()) {

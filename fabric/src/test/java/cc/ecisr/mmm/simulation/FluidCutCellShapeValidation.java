@@ -26,7 +26,29 @@ public final class FluidCutCellShapeValidation {
 		documentedStairPlacementRestoresExactLedger();
 		movingBodyDefinitionsAreStrictAndDataDriven();
 		axisAlignedMovingBodySurfaceIsExactAndBounded();
+		movingBodySeparatesBoundaryMotionFromMomentum();
+		movingBodiesRequireEveryTickFluidSteps();
 		System.out.println("Minecraft cut-cell shape validation passed");
+	}
+
+	private static void movingBodySeparatesBoundaryMotionFromMomentum() {
+		MovingBodySurfaceSnapshot.BoxPose before = new MovingBodySurfaceSnapshot.BoxPose(
+				1.0, 2.0, 3.0, 1.6, 3.8, 3.6);
+		MovingBodySurfaceSnapshot.BoxPose after = new MovingBodySurfaceSnapshot.BoxPose(
+				1.0, 1.9, 3.0, 1.6, 3.7, 3.6);
+		MovingBodySurfaceSnapshot.Body body = new MovingBodySurfaceSnapshot.Body(
+				1L, before, after, 0.0, -2.0, 0.0, 0.0, -3.0, 0.0,
+				MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC, 70.0);
+		check(body.velocityYMetresPerSecond() == -2.0
+				&& body.initialMomentumVelocityYMetresPerSecond() == -3.0,
+				"moving-body snapshot conflated boundary trajectory with next-tick momentum");
+	}
+
+	private static void movingBodiesRequireEveryTickFluidSteps() {
+		check(FluidSimulationService.effectiveStepInterval(4, 0) == 4,
+				"idle fluid scheduling ignored its configured interval");
+		check(FluidSimulationService.effectiveStepInterval(4, 1) == 1,
+				"moving-body coupling retained a sub-20 Hz fluid cadence");
 	}
 
 	private static void axisAlignedMovingBodySurfaceIsExactAndBounded() {

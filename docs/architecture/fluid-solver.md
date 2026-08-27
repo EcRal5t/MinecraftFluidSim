@@ -87,11 +87,11 @@ div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 
 `FlipCutCellGeometry` 从每格 `2×2×2` unsigned micro mask 得到 cell solid volume 和三轴 face aperture。checkpoint 与后端 handoff 保存 raw mask，不能退化为“整格固体/整格空气”；恢复后必须得到相同 aperture。`FlipParticleCollision` 对 marker 轨迹做连续碰撞检测，避免只在步末投影位置造成穿薄墙；碰撞只去除命中法向速度，切向分量保持。
 
-实体交互由 Fabric 在服务器 tick 末冻结实体本 tick 的旧/当前 AABB raw pose、identity、速度和数据包定义。core 将六个解析盒面转换为 runtime-only moving occupancy、cut-face aperture 与表面 patch；它们和 world cut-cell、deposit/coherent occupancy 使用同一容量、气体拓扑、pressure target divergence、marker CCD 和 reseed 几何，但绝不写入持久 raw mask。
+实体交互由 Fabric 在服务器 tick 末冻结实体本 tick 的旧/当前 AABB raw pose、identity、下一 tick 动量速度和数据包定义。已发生的 AABB 位移给出边界轨迹速度，`getDeltaMovement()` 给出 Minecraft 重力与阻力结算后的初始实体动量；两者不能互相代替。core 将六个解析盒面转换为 runtime-only moving occupancy、cut-face aperture 与表面 patch；它们和 world cut-cell、deposit/coherent occupancy 使用同一容量、气体拓扑、pressure target divergence、marker CCD 和 reseed 几何，但绝不写入持久 raw mask。
 
 动态 body 的三维平移速度以定义中的 kg 质量进入 pressure Schur 系统；压力面积分与同一离散耦合算子给出实体反作用，Newtonian 黏性使用 `mu*A/distance` 的 pairwise surface exchange。候选分别返回 pressure impulse、viscous impulse、displacement work 和 kinematic external 未承接冲量，并在产生候选前检查 PCG、body momentum、work 与黏性 pairwise 守恒。未定义实体按 `KINEMATIC_EXTERNAL` 排水而不猜质量；默认数据提供 player 与 armor stand 的显式定义。没有经验 drag、neutral-submergence、湿格采样或材料/实体 ID 力学特判。
 
-主线程接受候选前按 UUID、对象 identity、alive、当前 AABB 与 pre-velocity raw bits 重新验证；随后把 region generation 与动态实体速度作为一个可回滚提交段应用。连续位移导致容量不足时回退本 tick entity displacement并保留 base fluid；静止重叠、越界、第三方状态变化、预算或数值审计失败则暂停区域，不删 marker。当前只承诺平移轴对齐盒；旋转、通用刚体约束和复杂实体形状尚未实现。
+主线程接受候选前按 UUID、对象 identity、alive、当前 AABB 与 pre-velocity raw bits 重新验证；随后把 region generation 与动态实体速度作为一个可回滚提交段应用。有耦合实体时机械步固定为每个服务器 tick 一次，不能用区域降频产生隔帧冲量；连续硬超时仍按预算安全暂停。连续位移导致容量不足时回退本 tick entity displacement并保留 base fluid；静止重叠、越界、第三方状态变化、预算或数值审计失败则暂停区域，不删 marker。当前只承诺平移轴对齐盒；旋转、通用刚体约束和复杂实体形状尚未实现。
 
 ## Reseed 与传输不变量
 

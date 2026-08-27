@@ -114,9 +114,9 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 ## 实体双向耦合
 
-生产实体边界使用数据驱动 type/tag → kg/coupling mode 定义。Fabric 冻结本 tick 旧/当前 AABB，core 用六个解析面生成瞬态 occupancy、cut-face、target divergence、pressure Schur 与 Newtonian 黏性 pair；动态 body、流体和 kinematic external 各自保留冲量/功账。候选只有在 pressure、body momentum、work 与容量审计全部通过后才会在主线程与实体速度联合提交。
+生产实体边界使用数据驱动 type/tag → kg/coupling mode 定义。Fabric 分别冻结本 tick 旧/当前 AABB 的边界轨迹速度和 Minecraft 已结算的下一 tick 动量速度，core 用六个解析面生成瞬态 occupancy、cut-face、target divergence、pressure Schur 与 Newtonian 黏性 pair；动态 body、流体和 kinematic external 各自保留冲量/功账。候选只有在 pressure、body momentum、work 与容量审计全部通过后才会在主线程与实体速度联合提交；存在耦合实体时不允许把机械步降到 20 Hz 以下。
 
-当前停止边界是平移轴对齐盒：没有转动惯量、角冲量、boat/复杂凸面 provider 或通用 Minecraft 刚体约束。扩展复杂形状时必须新增有界 geometry provider，并保持同一 occupancy/pressure/viscosity/CCD 与联合提交代数；不能重新引入湿格 drag 或按实体 ID 猜质量。
+当前停止边界是平移轴对齐盒：没有转动惯量、角冲量、boat/复杂凸面 provider 或通用 Minecraft 刚体约束。玩家尺寸的逐 tick 浮水重放已经覆盖连续候选与 CCD，但长期振幅衰减尚未成为验收门；加入该门前必须先关闭边界轨迹与求解后实体位移的强耦合差异，不能用经验阻尼强迫静止。扩展复杂形状时必须新增有界 geometry provider，并保持同一 occupancy/pressure/viscosity/CCD 与联合提交代数；不能重新引入湿格 drag 或按实体 ID 猜质量。
 
 ## 性能与后端评审
 

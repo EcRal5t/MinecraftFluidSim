@@ -66,9 +66,9 @@ final class MovingBodyBoundary {
 			requirePoseVelocityConsistency(definition, logicalTimeStep);
 			validatePose(definition.beforePose(), staticGeometry);
 			validatePose(definition.afterPose(), staticGeometry);
-			initialVelocityX[body] = velocityX[body] = definition.velocityXMetresPerSecond();
-			initialVelocityY[body] = velocityY[body] = definition.velocityYMetresPerSecond();
-			initialVelocityZ[body] = velocityZ[body] = definition.velocityZMetresPerSecond();
+			initialVelocityX[body] = velocityX[body] = definition.initialMomentumVelocityXMetresPerSecond();
+			initialVelocityY[body] = velocityY[body] = definition.initialMomentumVelocityYMetresPerSecond();
+			initialVelocityZ[body] = velocityZ[body] = definition.initialMomentumVelocityZMetresPerSecond();
 		}
 	}
 
@@ -157,10 +157,13 @@ final class MovingBodyBoundary {
 				remainX -= inward * hit.normalX; remainY -= inward * hit.normalY; remainZ -= inward * hit.normalZ;
 			}
 			double surfaceX = hitX + remainX, surfaceY = hitY + remainY, surfaceZ = hitZ + remainZ;
-			if (hit.normalX != 0.0) surfaceX = Math.nextAfter(surfaceX, hit.normalX > 0.0 ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY);
-			if (hit.normalY != 0.0) surfaceY = Math.nextAfter(surfaceY, hit.normalY > 0.0 ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY);
-			if (hit.normalZ != 0.0) surfaceZ = Math.nextAfter(surfaceZ, hit.normalZ > 0.0 ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY);
 			resolvedX = endMinX + surfaceX; resolvedY = endMinY + surfaceY; resolvedZ = endMinZ + surfaceZ;
+			if (hit.normalX != 0.0) resolvedX = Math.nextAfter((float) resolvedX,
+					hit.normalX > 0.0 ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY);
+			if (hit.normalY != 0.0) resolvedY = Math.nextAfter((float) resolvedY,
+					hit.normalY > 0.0 ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY);
+			if (hit.normalZ != 0.0) resolvedZ = Math.nextAfter((float) resolvedZ,
+					hit.normalZ > 0.0 ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY);
 			double relativeNormalVelocity = (resolvedVelocityX - velocityX[body]) * hit.normalX
 					+ (resolvedVelocityY - velocityY[body]) * hit.normalY
 					+ (resolvedVelocityZ - velocityZ[body]) * hit.normalZ;
@@ -262,23 +265,36 @@ final class MovingBodyBoundary {
 			double impulseY = pressureImpulseY[body] + viscousImpulseY[body];
 			double impulseZ = pressureImpulseZ[body] + viscousImpulseZ[body];
 			if (external) {
-				requireAuditClose(displacementWork[body], impulseX * initialVelocityX[body]
-						+ impulseY * initialVelocityY[body] + impulseZ * initialVelocityZ[body],
+				double expectedWork = impulseX * initialVelocityX[body]
+						+ impulseY * initialVelocityY[body] + impulseZ * initialVelocityZ[body];
+				double workScale = Math.abs(impulseX * initialVelocityX[body])
+						+ Math.abs(impulseY * initialVelocityY[body])
+						+ Math.abs(impulseZ * initialVelocityZ[body]);
+				requireAuditClose(displacementWork[body], expectedWork, workScale,
 						"kinematic boundary work");
 			} else {
 				double mass = definition.massKilograms();
 				requireAuditClose(mass * (velocityX[body] - initialVelocityX[body]), impulseX,
+						mass * (Math.abs(velocityX[body]) + Math.abs(initialVelocityX[body])) + Math.abs(impulseX),
 						"dynamic body x momentum");
 				requireAuditClose(mass * (velocityY[body] - initialVelocityY[body]), impulseY,
+						mass * (Math.abs(velocityY[body]) + Math.abs(initialVelocityY[body])) + Math.abs(impulseY),
 						"dynamic body y momentum");
 				requireAuditClose(mass * (velocityZ[body] - initialVelocityZ[body]), impulseZ,
+						mass * (Math.abs(velocityZ[body]) + Math.abs(initialVelocityZ[body])) + Math.abs(impulseZ),
 						"dynamic body z momentum");
 				double kineticChange = 0.5 * mass * ((velocityX[body] * velocityX[body]
 						+ velocityY[body] * velocityY[body] + velocityZ[body] * velocityZ[body])
 						- (initialVelocityX[body] * initialVelocityX[body]
 						+ initialVelocityY[body] * initialVelocityY[body]
 						+ initialVelocityZ[body] * initialVelocityZ[body]));
-				requireAuditClose(displacementWork[body], kineticChange, "dynamic body work");
+				double kineticScale = 0.5 * mass * (velocityX[body] * velocityX[body]
+						+ velocityY[body] * velocityY[body] + velocityZ[body] * velocityZ[body]
+						+ initialVelocityX[body] * initialVelocityX[body]
+						+ initialVelocityY[body] * initialVelocityY[body]
+						+ initialVelocityZ[body] * initialVelocityZ[body]);
+				requireAuditClose(displacementWork[body], kineticChange, kineticScale,
+						"dynamic body work");
 			}
 			double unacceptedX = external ? pressureImpulseX[body] + viscousImpulseX[body] : 0.0;
 			double unacceptedY = external ? pressureImpulseY[body] + viscousImpulseY[body] : 0.0;
@@ -390,14 +406,14 @@ final class MovingBodyBoundary {
 	}
 
 	private void requirePairwiseMomentum(double[] fluidImpulse, double[] bodyImpulse, String axis) {
-		double fluid = 0.0, body = 0.0;
-		for (double value : fluidImpulse) fluid += value;
-		for (double value : bodyImpulse) body += value;
-		requireAuditClose(fluid + body, 0.0, "viscous " + axis + " momentum");
+		double fluid = 0.0, body = 0.0, scale = 0.0;
+		for (double value : fluidImpulse) { fluid += value; scale += Math.abs(value); }
+		for (double value : bodyImpulse) { body += value; scale += Math.abs(value); }
+		requireAuditClose(fluid + body, 0.0, scale, "viscous " + axis + " momentum");
 	}
 
-	private static void requireAuditClose(double actual, double expected, String label) {
-		double scale = Math.max(Math.abs(actual), Math.abs(expected));
+	private static void requireAuditClose(double actual, double expected, double operationScale, String label) {
+		double scale = Math.max(operationScale, Math.max(Math.abs(actual), Math.abs(expected)));
 		double tolerance = Math.ulp(scale == 0.0 ? 1.0 : scale) * 128.0;
 		if (!(Double.isFinite(actual) && Double.isFinite(expected) && Math.abs(actual - expected) <= tolerance)) {
 			throw new FlipFluidDomain.MovingBodyBlockedException(
@@ -432,9 +448,15 @@ final class MovingBodyBoundary {
 		double dx = body.afterPose().minimumX() - body.beforePose().minimumX();
 		double dy = body.afterPose().minimumY() - body.beforePose().minimumY();
 		double dz = body.afterPose().minimumZ() - body.beforePose().minimumZ();
-		requireClose(dx, body.velocityXMetresPerSecond() * dt, "x displacement");
-		requireClose(dy, body.velocityYMetresPerSecond() * dt, "y displacement");
-		requireClose(dz, body.velocityZMetresPerSecond() * dt, "z displacement");
+		requireClose(dx, body.velocityXMetresPerSecond() * dt,
+				Math.max(Math.abs(body.beforePose().minimumX()), Math.abs(body.afterPose().minimumX())),
+				"x displacement");
+		requireClose(dy, body.velocityYMetresPerSecond() * dt,
+				Math.max(Math.abs(body.beforePose().minimumY()), Math.abs(body.afterPose().minimumY())),
+				"y displacement");
+		requireClose(dz, body.velocityZMetresPerSecond() * dt,
+				Math.max(Math.abs(body.beforePose().minimumZ()), Math.abs(body.afterPose().minimumZ())),
+				"z displacement");
 	}
 
 	private void validatePose(MovingBodySurfaceSnapshot.BoxPose pose, FlipCutCellGeometry staticGeometry) {
@@ -539,8 +561,9 @@ final class MovingBodyBoundary {
 		}
 	}
 
-	private void requireClose(double actual, double expected, String label) {
-		double tolerance = GEOMETRY_ULPS * Math.max(Math.ulp(actual), Math.ulp(expected));
+	private void requireClose(double actual, double expected, double coordinateScale, String label) {
+		double tolerance = GEOMETRY_ULPS * Math.max(
+				Math.ulp(coordinateScale), Math.max(Math.ulp(actual), Math.ulp(expected)));
 		if (Math.abs(actual - expected) > tolerance) {
 			throw new IllegalArgumentException("Moving-body " + label + " disagrees with surface velocity");
 		}

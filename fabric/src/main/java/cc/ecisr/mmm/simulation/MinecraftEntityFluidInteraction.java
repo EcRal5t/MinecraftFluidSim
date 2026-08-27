@@ -64,6 +64,12 @@ final class MinecraftEntityFluidInteraction {
 			MovingBodySurfaceSnapshot.Body body = new MovingBodySurfaceSnapshot.Body(
 					transientId, before, after,
 					velocityX, velocityY, velocityZ,
+					definition.mode() == MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC
+							? preVelocityPerTick.x * TICKS_PER_SECOND : velocityX,
+					definition.mode() == MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC
+							? preVelocityPerTick.y * TICKS_PER_SECOND : velocityY,
+					definition.mode() == MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC
+							? preVelocityPerTick.z * TICKS_PER_SECOND : velocityZ,
 					definition.mode(), definition.massKilograms());
 			frozen.add(new FrozenEntity(transientId, entity.getUUID(), entity, beforeWorld, afterWorld,
 					preVelocityPerTick, definition));

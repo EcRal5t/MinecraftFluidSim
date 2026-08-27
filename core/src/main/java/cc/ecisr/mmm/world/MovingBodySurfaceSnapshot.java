@@ -36,14 +36,29 @@ public final class MovingBodySurfaceSnapshot {
 			double velocityXMetresPerSecond,
 			double velocityYMetresPerSecond,
 			double velocityZMetresPerSecond,
+			double initialMomentumVelocityXMetresPerSecond,
+			double initialMomentumVelocityYMetresPerSecond,
+			double initialMomentumVelocityZMetresPerSecond,
 			CouplingMode couplingMode,
 			double massKilograms
 	) {
+		public Body(long transientId, BoxPose beforePose, BoxPose afterPose,
+				double velocityXMetresPerSecond, double velocityYMetresPerSecond,
+				double velocityZMetresPerSecond, CouplingMode couplingMode, double massKilograms) {
+			this(transientId, beforePose, afterPose,
+					velocityXMetresPerSecond, velocityYMetresPerSecond, velocityZMetresPerSecond,
+					velocityXMetresPerSecond, velocityYMetresPerSecond, velocityZMetresPerSecond,
+					couplingMode, massKilograms);
+		}
+
 		public Body {
 			if (transientId < 0L || beforePose == null || afterPose == null || couplingMode == null
 					|| !(Double.isFinite(velocityXMetresPerSecond)
 					&& Double.isFinite(velocityYMetresPerSecond)
-					&& Double.isFinite(velocityZMetresPerSecond))) {
+					&& Double.isFinite(velocityZMetresPerSecond)
+					&& Double.isFinite(initialMomentumVelocityXMetresPerSecond)
+					&& Double.isFinite(initialMomentumVelocityYMetresPerSecond)
+					&& Double.isFinite(initialMomentumVelocityZMetresPerSecond))) {
 				throw new IllegalArgumentException("Moving-body identity, pose or velocity is invalid");
 			}
 			if (couplingMode == CouplingMode.DYNAMIC) {
@@ -52,6 +67,10 @@ public final class MovingBodySurfaceSnapshot {
 				}
 			} else if (Double.doubleToRawLongBits(massKilograms) != Double.doubleToRawLongBits(0.0)) {
 				throw new IllegalArgumentException("Kinematic external body must not claim a mass");
+			} else if (!sameVelocity(velocityXMetresPerSecond, initialMomentumVelocityXMetresPerSecond)
+					|| !sameVelocity(velocityYMetresPerSecond, initialMomentumVelocityYMetresPerSecond)
+					|| !sameVelocity(velocityZMetresPerSecond, initialMomentumVelocityZMetresPerSecond)) {
+				throw new IllegalArgumentException("Kinematic external body has no independent momentum velocity");
 			}
 			if (!sameExtent(beforePose.maximumX() - beforePose.minimumX(),
 					afterPose.maximumX() - afterPose.minimumX())
@@ -77,7 +96,9 @@ public final class MovingBodySurfaceSnapshot {
 					interpolate(beforePose.maximumY(), afterPose.maximumY(), fraction),
 					interpolate(beforePose.maximumZ(), afterPose.maximumZ(), fraction));
 			return new Body(transientId, pose, pose, velocityXMetresPerSecond,
-					velocityYMetresPerSecond, velocityZMetresPerSecond, couplingMode, massKilograms);
+					velocityYMetresPerSecond, velocityZMetresPerSecond,
+					initialMomentumVelocityXMetresPerSecond, initialMomentumVelocityYMetresPerSecond,
+					initialMomentumVelocityZMetresPerSecond, couplingMode, massKilograms);
 		}
 
 		public List<Face> faces() {
@@ -104,6 +125,10 @@ public final class MovingBodySurfaceSnapshot {
 
 		private static boolean sameExtent(double first, double second) {
 			return Math.abs(first - second) <= Math.max(Math.ulp(first), Math.ulp(second)) * 8.0;
+		}
+
+		private static boolean sameVelocity(double first, double second) {
+			return Double.doubleToRawLongBits(first) == Double.doubleToRawLongBits(second);
 		}
 
 		private static double interpolate(double before, double after, double fraction) {

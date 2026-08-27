@@ -17,6 +17,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		volumeDriftCorrectionPreservesLegitimateSurfaceDeficits();
 		fractionalHydrostaticColumnsBalanceGravity();
 		projectedHydrostaticPressureIntegratesOnMovingBox();
+		floatingBodyReplayCommitsEveryTick();
 		mixedBodiesAreOrderIndependent();
 		movingBodyPressureNonconvergenceRejectsCandidate();
 		thinLayerRegularizationRemainsStable();
@@ -24,6 +25,94 @@ public final class FlipFluidFreeSurfaceValidation {
 		if (!fast) longRunHydrostaticSurfaceDoesNotSink();
 		waterDescendsAStairSlope();
 		System.out.println("FlipFluid free-surface validation passed" + (fast ? " (short; 5,000-step soak skipped)" : ""));
+	}
+
+	private static void floatingBodyReplayCommitsEveryTick() {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 0.05F,
+				240, 1.0E-6F, 0.40F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = new FlipFluidDomain(10, 12, 10, config, 20_000);
+		for (int z = 0; z < 10; z++) for (int y = 0; y < 12; y++) for (int x = 0; x < 10; x++) {
+			domain.setSolid(x, y, z, true);
+		}
+		for (int z = 1; z <= 8; z++) for (int y = 1; y <= 10; y++) for (int x = 1; x <= 8; x++) {
+			domain.setSolid(x, y, z, false);
+		}
+		for (int z = 1; z <= 8; z++) for (int y = 1; y <= 3; y++) for (int x = 1; x <= 8; x++) {
+			domain.setVolume(x, y, z, 1.0F);
+		}
+		for (int z = 1; z <= 8; z++) for (int x = 1; x <= 8; x++) domain.setVolume(x, 4, z, 0.5F);
+
+		MovingBodySurfaceSnapshot.BoxPose previous = new MovingBodySurfaceSnapshot.BoxPose(
+				2.2, 1.63, 2.2, 2.8, 3.43, 2.8);
+		prepareBodyCompatibleFluid(domain, previous);
+		FluidDomainState state = domain.captureAuthoritativeState();
+		MovingBodySurfaceSnapshot.BoxPose current = previous;
+		double nextTickVelocityY = -1.6 * 0.98;
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		for (int step = 0; step < 80; step++) {
+			double boundaryVelocityY = (current.minimumY() - previous.minimumY()) / config.timeStep();
+			MovingBodySurfaceSnapshot.Body body = new MovingBodySurfaceSnapshot.Body(
+					1L, previous, current, 0.0, boundaryVelocityY, 0.0,
+					0.0, nextTickVelocityY, 0.0,
+					MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC, 70.0);
+			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+					step, state, new MovingBodySurfaceSnapshot(List.of(body)), false, 0));
+			MovingBodyStepResult result = candidate.movingBodyResults().getFirst();
+			state = candidate.state();
+			previous = current;
+			current = translateY(current, result.finalVelocityYMetresPerSecond() * config.timeStep());
+			nextTickVelocityY = (result.finalVelocityYMetresPerSecond() - 1.6) * 0.98;
+			check(Double.isFinite(current.minimumY()) && Double.isFinite(nextTickVelocityY),
+					"floating player replay produced a non-finite entity state at tick " + step);
+		}
+	}
+
+	private static void prepareBodyCompatibleFluid(
+			FlipFluidDomain domain, MovingBodySurfaceSnapshot.BoxPose body
+	) {
+		double cellSize = domain.config().cellSize();
+		double cellVolume = cellSize * cellSize * cellSize;
+		for (int z = 1; z <= 8; z++) for (int y = 1; y <= 4; y++) for (int x = 1; x <= 8; x++) {
+			double overlapX = overlap(x * cellSize, (x + 1) * cellSize, body.minimumX(), body.maximumX());
+			double overlapZ = overlap(z * cellSize, (z + 1) * cellSize, body.minimumZ(), body.maximumZ());
+			double maximumBlockedFraction = overlapX * overlapZ * cellSize / cellVolume;
+			if (maximumBlockedFraction > 0.0) {
+				float trajectoryCapacity = Math.nextDown((float) (1.0 - maximumBlockedFraction));
+				float initialVolume = y <= 3 ? 1.0F : 0.5F;
+				domain.setVolume(x, y, z, Math.min(initialVolume, trajectoryCapacity));
+			}
+		}
+		FlipParticleState particles = domain.exportParticleState();
+		float[] positionVolume = particles.copyPositionVolume();
+		double bodyCentreX = 0.5 * (body.minimumX() + body.maximumX());
+		double bodyCentreZ = 0.5 * (body.minimumZ() + body.maximumZ());
+		for (int marker = 0; marker < particles.particleCount(); marker++) {
+			int base = marker * 4;
+			if (!(positionVolume[base] > body.minimumX() && positionVolume[base] < body.maximumX()
+					&& positionVolume[base + 1] > body.minimumY() && positionVolume[base + 1] < body.maximumY()
+					&& positionVolume[base + 2] > body.minimumZ() && positionVolume[base + 2] < body.maximumZ())) continue;
+			int cellX = (int) Math.floor(positionVolume[base] / cellSize);
+			int cellZ = (int) Math.floor(positionVolume[base + 2] / cellSize);
+			positionVolume[base] = (float) ((cellX + (cellX * cellSize < bodyCentreX ? 0.125 : 0.875)) * cellSize);
+			positionVolume[base + 2] = (float) ((cellZ + (cellZ * cellSize < bodyCentreZ ? 0.125 : 0.875)) * cellSize);
+		}
+		domain.restoreParticleState(new FlipParticleState(
+				particles.sizeX(), particles.sizeY(), particles.sizeZ(), particles.cellSize(),
+				particles.particleCount(), particles.totalVolume(), positionVolume,
+				particles.copyParticleVelocities(), particles.copyCollisionMicroMasks()));
+	}
+
+	private static double overlap(double firstMinimum, double firstMaximum,
+			double secondMinimum, double secondMaximum) {
+		return Math.max(0.0, Math.min(firstMaximum, secondMaximum) - Math.max(firstMinimum, secondMinimum));
+	}
+
+	private static MovingBodySurfaceSnapshot.BoxPose translateY(
+			MovingBodySurfaceSnapshot.BoxPose pose, double displacement
+	) {
+		return new MovingBodySurfaceSnapshot.BoxPose(
+				pose.minimumX(), pose.minimumY() + displacement, pose.minimumZ(),
+				pose.maximumX(), pose.maximumY() + displacement, pose.maximumZ());
 	}
 
 	private static void pureWaterMarkerMassLedgerTracksVolume() {
@@ -87,6 +176,18 @@ public final class FlipFluidFreeSurfaceValidation {
 				- dynamic.pressureImpulseYKilogramMetresPerSecond() / 70.0) <= 1.0E-12
 				&& dynamic.unacceptedBoundaryImpulseYKilogramMetresPerSecond() == 0.0,
 				"dynamic pressure Schur settlement did not close body momentum or added mass");
+
+		MovingBodySurfaceSnapshot.Body fallingAfterStationaryTick = new MovingBodySurfaceSnapshot.Body(
+				1L, pose, pose, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0,
+				MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC, 70.0);
+		MovingBodyStepResult falling = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+				0L, authoritative,
+				new MovingBodySurfaceSnapshot(List.of(fallingAfterStationaryTick)), false, 0))
+				.movingBodyResults().getFirst();
+		double fallingImpulseY = falling.pressureImpulseYKilogramMetresPerSecond()
+				+ falling.viscousImpulseYKilogramMetresPerSecond();
+		check(Math.abs(falling.finalVelocityYMetresPerSecond() - (-1.0 + fallingImpulseY / 70.0)) <= 1.0E-12,
+				"dynamic settlement initialized momentum from boundary displacement instead of next-tick velocity");
 	}
 
 	private static void mixedBodiesAreOrderIndependent() {
