@@ -14,6 +14,7 @@ import cc.ecisr.mmm.thermal.FiniteThermalExchange;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
@@ -40,6 +41,8 @@ public final class FluidRegion {
 	private final long networkGeneration;
 	private final FluidRegionLifecycle lifecycle = new FluidRegionLifecycle();
 	private FlipFluidDomain domain;
+	/** Runtime-only owner revision for synchronous backend candidates; HEAD generation remains independent. */
+	private long solverGeneration;
 	private long checkpointGeneration;
 	private int checkpointMarkerCount;
 	private float checkpointVolume;
@@ -166,6 +169,7 @@ public final class FluidRegion {
 		return domain;
 	}
 	public boolean solverLoaded() { return domain != null; }
+	long solverGeneration() { return solverGeneration; }
 	public long reservedMarkerCapacity() { return reservedMarkerCapacity; }
 	public FluidRegionFootprint footprint() { return footprint; }
 	public boolean controllerManaged() { return footprint != null; }
@@ -385,9 +389,29 @@ public final class FluidRegion {
 		candidate.debugOverlays = runtime.debugOverlays();
 		candidate.stepIntervalTicks = runtime.stepIntervalTicks();
 		candidate.tick = runtime.tick();
+		candidate.solverGeneration = solverGeneration;
 		candidate.finiteThermalDevices = finiteThermalDevices;
 		candidate.lifecycle.initializeLoaded(runtime.resumeState(), operatorPaused, runtime.stepIntervalTicks());
 		return candidate;
+	}
+
+	/** Atomically replaces the live solver after validating a complete backend result. */
+	void adoptStepCandidate(FluidStepCandidate candidate, String expectedBackendId) {
+		Objects.requireNonNull(candidate, "candidate");
+		if (domain == null) throw new IllegalStateException("Region solver is unloaded");
+		if (!Objects.requireNonNull(expectedBackendId, "expectedBackendId").equals(candidate.backendId())
+				|| candidate.baseGeneration() != solverGeneration
+				|| candidate.candidateGeneration() != Math.addExact(solverGeneration, 1L)) {
+			throw new IllegalStateException("Backend candidate identity or generation is stale");
+		}
+		FlipFluidDomain replacement = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+		if (replacement.sizeX() != sizeX || replacement.sizeY() != sizeY || replacement.sizeZ() != sizeZ
+				|| replacement.maximumParticleCount() != reservedMarkerCapacity
+				|| !replacement.config().equals(solverConfig)) {
+			throw new IllegalStateException("Backend candidate layout is incompatible with the live region");
+		}
+		domain = replacement;
+		solverGeneration = candidate.candidateGeneration();
 	}
 
 	/** Adopts the exact solver which was already encoded and published as the lifecycle HEAD. */

@@ -27,6 +27,10 @@ import cc.ecisr.mmm.fluid.FluidMaterial;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.MaterialRegistry;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
+import cc.ecisr.mmm.fluid.FluidSolverBackend;
+import cc.ecisr.mmm.fluid.FluidStepCandidate;
+import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import cc.ecisr.mmm.fluid.air.GasAuditLedger;
@@ -124,6 +128,7 @@ public final class FluidSimulationService {
 	private final boolean serverConfigLocked;
 	private FluidServerConfig serverConfig;
 	private final FluidRegionManager regionManager;
+	private final FluidSolverBackend solverBackend = new CpuFluidSolverBackend();
 	private final CommittedEventHub committedEvents;
 	private final FluidWorldTargetResolver targets;
 	private final FluidRegionOperations regionOperations;
@@ -2403,9 +2408,12 @@ public final class FluidSimulationService {
 
 	private void stepOnce(FluidRegion region) {
 		long start = System.nanoTime();
-		FlipFluidDomain.StepStats stats = region.domain().step(
-				phaseChangeFeatureEnabled, serverConfig.maximumPhaseOperationsPerStep());
-		region.recordStep(stats, (System.nanoTime() - start) / 1_000_000.0);
+		FluidStepCandidate candidate = solverBackend.evaluate(new FluidStepRequest(
+				region.solverGeneration(), region.domain().captureAuthoritativeState(), List.of(),
+				phaseChangeFeatureEnabled,
+				phaseChangeFeatureEnabled ? serverConfig.maximumPhaseOperationsPerStep() : 0));
+		region.adoptStepCandidate(candidate, solverBackend.id());
+		region.recordStep(candidate.stats(), (System.nanoTime() - start) / 1_000_000.0);
 	}
 
 	private void stepThermalOnce(FluidRegion region) {
