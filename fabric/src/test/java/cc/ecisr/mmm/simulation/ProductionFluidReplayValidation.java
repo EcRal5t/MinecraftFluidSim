@@ -18,6 +18,7 @@ import cc.ecisr.mmm.fluid.air.GasStateSnapshot;
 import cc.ecisr.mmm.granular.GranularDataPackLoader;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.thermal.ThermalDataPackLoader;
+import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
 import net.minecraft.network.chat.Component;
@@ -47,6 +48,7 @@ public final class ProductionFluidReplayValidation {
 	public static void main(String[] args) throws Exception {
 		defaultLiveStepsRemainBounded();
 		fullyBoundHalfFillRoundTripsCurrentGasGeometry();
+		fullyBoundPhaseOnStepRemainsBounded();
 		System.out.println("Production fluid replay passed");
 	}
 
@@ -126,6 +128,33 @@ public final class ProductionFluidReplayValidation {
 				+ "substeps=%d, PCG=%d, gasNodes=%d%n", backendMilliseconds,
 				candidate.stats().substeps(), candidate.stats().pressureIterations(),
 				evaluatedRoundTrip.gas().nodes().size());
+	}
+
+	private static void fullyBoundPhaseOnStepRemainsBounded() throws Exception {
+		RegistrySet registries = loadProductionRegistries();
+		FlipFluidDomain phaseOff = createFullyBoundHalfFilledDomain(registries);
+		long phaseOffStart = System.nanoTime();
+		phaseOff.step(false, 0);
+		System.out.printf("  full-capability phase-off direct step: %.3f ms%n",
+				(System.nanoTime() - phaseOffStart) / 1_000_000.0);
+		FlipFluidDomain warmup = createFullyBoundHalfFilledDomain(registries);
+		warmup.step(true, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP);
+
+		FlipFluidDomain domain = createFullyBoundHalfFilledDomain(registries);
+		long start = System.nanoTime();
+		FlipFluidDomain.StepStats stats = domain.step(true, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP);
+		double milliseconds = (System.nanoTime() - start) / 1_000_000.0;
+		FlipFluidDomain.GasThermalPhaseStats phase = domain.lastGasThermalPhaseStats();
+		require(domain.airNetwork().auditClosed()
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"full-capability phase-on step did not close gas or total U audit");
+		System.out.printf("  full-capability phase-on production step: %.3f ms, operations=%d, "
+				+ "boiled=%d, condensed=%d, substeps=%d, PCG=%d%n", milliseconds,
+				phase.operations(), phase.boiledCells(), phase.condensedCells(),
+				stats.substeps(), stats.pressureIterations());
+		require(milliseconds <= STEP_BUDGET_MILLIS,
+				"full-capability phase-on production step exceeded the server-tick budget: "
+						+ milliseconds + " ms");
 	}
 
 	private static FlipFluidDomain createPouredControllerDomain() {

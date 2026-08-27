@@ -1749,6 +1749,12 @@ public final class M9ThermalValidation {
 				"transient thermal transport did not close its audit ledger");
 		require(Math.abs(domain.exactInternalEnergy().subtract(before).toDouble()) <= 1.0E-6,
 				"adiabatic thermal transport changed total internal energy beyond representation residual");
+		double[] equilibratedCarrierEnergy = domain.exportThermalParticleState().copyInternalEnergy();
+		ThermalTransport.Stats noFlux = domain.stepThermalOnly(1.0);
+		require(noFlux.maximumAbsoluteTransferEu() == 0.0
+				&& Arrays.equals(equilibratedCarrierEnergy,
+						domain.exportThermalParticleState().copyInternalEnergy()),
+				"zero-flux LTE transport rewrote authoritative carrier energy");
 
 		FlipMaterialParticleState materials = domain.exportMaterialParticleState();
 		FlipThermalParticleState thermal = domain.exportThermalParticleState();

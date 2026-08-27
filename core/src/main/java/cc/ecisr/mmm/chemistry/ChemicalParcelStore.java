@@ -8,7 +8,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
-import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.IntFunction;
 
@@ -332,29 +331,31 @@ public final class ChemicalParcelStore {
 	 */
 	public SplitPlan planSelectivePhaseTruncate(
 			int marker, float keptVolume, float removedVolume, double keptMass, double removedMass,
-			Set<String> movedSpecies
+			boolean[] movedSpecies
 	) {
 		requireAssigned(marker);
 		if (!(keptVolume >= 0.0F && removedVolume > 0.0F)
 				|| !(keptMass >= 0.0 && removedMass > 0.0)
-				|| movedSpecies == null || movedSpecies.isEmpty()) {
+				|| movedSpecies == null || movedSpecies.length != registry.species().size()) {
 			throw new IllegalArgumentException("Invalid selective chemical phase split");
 		}
 		ChemicalMixtureRecord original = record(marker);
-		TreeMap<String, Long> kept = new TreeMap<>(), removed = new TreeMap<>();
-		for (Map.Entry<String, Long> entry : original.stableAmounts(registry).entrySet()) {
-			if (!movedSpecies.contains(entry.getKey())) {
-				kept.put(entry.getKey(), entry.getValue());
+		TreeMap<Integer, Long> kept = new TreeMap<>(), removed = new TreeMap<>();
+		for (int entry = 0; entry < original.entryCount(); entry++) {
+			int species = original.speciesHandle(entry);
+			long amount = original.amountAt(entry);
+			if (!movedSpecies[species]) {
+				kept.put(species, amount);
 				continue;
 			}
 			if (keptVolume == 0.0F) {
-				removed.put(entry.getKey(), entry.getValue());
+				removed.put(species, amount);
 				continue;
 			}
-			long[] allocation = BinaryVolumeAllocator.allocate(entry.getValue(),
+			long[] allocation = BinaryVolumeAllocator.allocate(amount,
 					new float[]{keptVolume, removedVolume}, new int[]{marker, Integer.MAX_VALUE});
-			if (allocation[0] > 0L) kept.put(entry.getKey(), allocation[0]);
-			if (allocation[1] > 0L) removed.put(entry.getKey(), allocation[1]);
+			if (allocation[0] > 0L) kept.put(species, allocation[0]);
+			if (allocation[1] > 0L) removed.put(species, allocation[1]);
 		}
 		if (removed.isEmpty()) {
 			throw new ChemicalReactionEngine.BudgetExceededException(
@@ -367,13 +368,12 @@ public final class ChemicalParcelStore {
 		if (kept.isEmpty()) {
 			throw new ChemicalReactionEngine.BudgetExceededException("Retained liquid would have no chemical carrier");
 		}
-		ChemicalMixtureRecord removedZero = ChemicalMixtureRecord.fromStableAmounts(registry, removed, 0.0);
+		ChemicalMixtureRecord removedZero = recordFromHandles(removed, 0.0);
 		double removedResidual = unitScale.kilograms(removedMass)
 				- removedZero.exactSpeciesMassKilograms(registry).toDouble();
-		ChemicalMixtureRecord removedRecord = ChemicalMixtureRecord.fromStableAmounts(
-				registry, removed, removedResidual);
-		ChemicalMixtureRecord keptRecord = ChemicalMixtureRecord.fromStableAmounts(
-				registry, kept, original.massResidualKilograms() - removedResidual);
+		ChemicalMixtureRecord removedRecord = recordFromHandles(removed, removedResidual);
+		ChemicalMixtureRecord keptRecord = recordFromHandles(
+				kept, original.massResidualKilograms() - removedResidual);
 		requireMassClose(removedRecord.massKilograms(registry), unitScale.kilograms(removedMass), "removed");
 		requireMassClose(keptRecord.massKilograms(registry), unitScale.kilograms(keptMass), "retained");
 		return new SplitPlan(keptRecord, removedRecord);

@@ -134,6 +134,30 @@ import java.util.TreeMap;
 				budgetExhausted ? StopReason.BUDGET_EXHAUSTED : StopReason.COMPLETED);
 	}
 
+	/** Recomputes node volumes when marker cardinality and every cell membership are unchanged. */
+	double[] measureSealedAvailableVolumes(
+			boolean[] solid, int[] markerCount, float[] cellLiquidVolume,
+			FlipCutCellGeometry cutCells, GranularCouplingFields granular,
+			int[] cellNodeId, int[] cellLineageNodeId, int sealedNodeCount
+	) {
+		if (solid.length != cellCount || markerCount.length != cellCount
+				|| cellLiquidVolume.length != cellCount || cellNodeId.length != cellCount
+				|| cellLineageNodeId.length != cellCount || sealedNodeCount < 0) {
+			throw new IllegalArgumentException("Stable gas topology volume input is incompatible");
+		}
+		double[] result = new double[sealedNodeCount];
+		for (int cell = 0; cell < cellCount; cell++) {
+			int node = cellNodeId[cell];
+			if (node < 1 && !solid[cell] && markerCount[cell] > 0) node = cellLineageNodeId[cell];
+			if (node < 1) continue;
+			if (node > sealedNodeCount) {
+				throw new IllegalArgumentException("Stable gas topology names an unknown node");
+			}
+			result[node - 1] += cellAirVolume(cell, cellLiquidVolume, cutCells, granular);
+		}
+		return result;
+	}
+
 	private boolean isAirCell(int cell, boolean[] solid, int[] markerCount, FlipCutCellGeometry cutCells,
 	                          GranularCouplingFields granular) {
 		float geometricOpen = cutCells.openCellVolume(cell);

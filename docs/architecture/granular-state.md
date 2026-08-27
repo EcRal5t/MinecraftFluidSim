@@ -84,7 +84,7 @@ projection 消费的 phase volume/work 和 granular occupancy delta 都具有 ge
 - 连续凝固相由 coherent store 保存；熔化后恢复到液体 marker。它不借用 active/deposit 表示。
 - pending phase volume/work 由下一次 pressure projection exactly-once 消费；未消费时拒绝 `empty` 和不安全 checkpoint 操作。
 
-reaction/phase candidate 必须先在不可变快照上规划 exact extent，再一次提交所有 side column。规划预算以 cell、reaction 和 batch 操作计数，有硬上限；预算耗尽延期，不允许把半个 extent 留在液相、另一半留在固相。
+reaction/phase candidate 必须先在不可变快照上规划 exact extent，再一次提交所有 side column。规划预算以 cell、reaction 和 batch 操作计数，有硬上限；预算耗尽延期，不允许把半个 extent 留在液相、另一半留在固相。没有可溶 solid 且液相连一个完整 aqueous stoichiometric extent 都不具备时，按 exact species quanta 直接判定为无候选，不进入完整 planner；这不改变任何正向或反向可表示反应。
 
 ## 容器与清空
 

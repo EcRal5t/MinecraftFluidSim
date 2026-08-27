@@ -129,7 +129,9 @@ public final class AirCavityScannerValidation {
 			grid.markerCount[i] = 1;
 			grid.liquidVolume[i] = 0.5F;
 		}
-		AirCavityScanner.Result result = scan(grid, n * n * n);
+		AirCavityScanner scanner = new AirCavityScanner(n, n, n, 1.0F, n * n * n);
+		AirCavityScanner.Result result = scanner.scan(
+				grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells);
 		check(result.sealedNodeCount() == 1, "partially filled sealed tank must stay one cavity");
 		checkRelative(result.sealedAvailableVolume()[0], 6 * 6 * 3 + 6 * 6 * 0.5,
 				"interface residual must join the sealed cavity volume");
@@ -138,6 +140,19 @@ public final class AirCavityScannerValidation {
 			check(result.cellNodeId()[cell] == -1 && result.cellLineageNodeId()[cell] == 1,
 					"partial interface gas must retain runtime cavity lineage without entering persisted membership");
 		}
+		for (int z = 1; z < n - 1; z++) for (int x = 1; x < n - 1; x++) {
+			grid.liquidVolume[(z * n + 3) * n + x] = 0.25F;
+		}
+		double[] stableVolumes = scanner.measureSealedAvailableVolumes(
+				grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null,
+				result.cellNodeId(), result.cellLineageNodeId(), result.sealedNodeCount());
+		AirCavityScanner.Result rescanned = scanner.scan(
+				grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells);
+		check(java.util.Arrays.equals(result.cellNodeId(), rescanned.cellNodeId())
+				&& java.util.Arrays.equals(result.cellLineageNodeId(), rescanned.cellLineageNodeId())
+				&& Double.doubleToRawLongBits(stableVolumes[0])
+				== Double.doubleToRawLongBits(rescanned.sealedAvailableVolume()[0]),
+				"stable-lineage available-volume refresh differed from a complete cavity rescan");
 
 		Grid openGrid = tank(n, false, 1.0F);
 		for (int z = 1; z < n - 1; z++) for (int x = 1; x < n - 1; x++) {

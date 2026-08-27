@@ -528,11 +528,7 @@ final class FlipThermalState {
 				throw new IllegalArgumentException("Thermal reaction marker set is not unique in its cell");
 			}
 		}
-		ThermalCellGrid.CarrierAccess current = carrierAccess(markers);
-		SignedDyadic cellEnergy = SignedDyadic.ZERO;
-		for (int carrier = 0; carrier < current.carrierCount(); carrier++) if (current.cell(carrier) == cell) {
-			cellEnergy = cellEnergy.add(SignedDyadic.of(current.internalEnergy(carrier)));
-		}
+		SignedDyadic cellEnergy = cellGrid.exactCarrierEnergyInCell(cell);
 		ArrayList<ThermalStateFunction.InventoryPortion> finalInventory = new ArrayList<>();
 		for (int marker = 0; marker < markers.markerCount(); marker++) if (markers.cell(marker) == cell) {
 			ReactionMarker replacement = replacements.remove(marker);
@@ -821,11 +817,7 @@ final class FlipThermalState {
 		if (cell < 0 || cell >= cellGrid.cellCount() || markers == null) {
 			throw new IllegalArgumentException("Thermal phase candidate cell is invalid");
 		}
-		ThermalCellGrid.CarrierAccess current = carrierAccess(markers);
-		SignedDyadic cellEnergy = SignedDyadic.ZERO;
-		for (int carrier = 0; carrier < current.carrierCount(); carrier++) if (current.cell(carrier) == cell) {
-			cellEnergy = cellEnergy.add(SignedDyadic.of(current.internalEnergy(carrier)));
-		}
+		SignedDyadic cellEnergy = cellGrid.exactCarrierEnergyInCell(cell);
 		ArrayList<ThermalStateFunction.InventoryPortion> unchangedSolids = new ArrayList<>();
 		for (CoherentPhaseStore.Group group : coherentPhases.snapshot()) if (group.cell() == cell) {
 			unchangedSolids.add(new ThermalStateFunction.InventoryPortion(
@@ -1098,6 +1090,30 @@ final class FlipThermalState {
 		}
 		cellGrid.rebuildPhaseCellWithEnergy(current, cell, targetCellEnergy);
 		audit = audit.withRoundoff(exactEnergy(markers.markerCount()).subtract(inventoryBefore));
+	}
+
+	/** Closes a gas/liquid transfer over its exact two-owner energy boundary without rescanning the region. */
+	void repartitionPhaseCellAndGasEnergyConserving(
+			PhaseCandidateCell beforeCell, double gasEnergyBefore, double gasEnergyAfter,
+			MarkerContext markers, boolean carrierTopologyChanged
+	) {
+		if (beforeCell == null || !Double.isFinite(gasEnergyBefore) || !Double.isFinite(gasEnergyAfter)) {
+			throw new IllegalArgumentException("Gas/liquid thermal closure is invalid");
+		}
+		SignedDyadic beforePair = beforeCell.cellEnergy().add(SignedDyadic.of(gasEnergyBefore));
+		double targetCellEnergy = beforePair.subtract(SignedDyadic.of(gasEnergyAfter)).toDouble();
+		if (!Double.isFinite(targetCellEnergy)) {
+			throw new IllegalArgumentException("Gas/liquid cell energy remainder is not representable");
+		}
+		ThermalCellGrid.CarrierAccess current = carrierAccess(markers);
+		if (carrierTopologyChanged) {
+			cellGrid.rebuildPhaseCellWithEnergy(current, beforeCell.cell(), targetCellEnergy);
+		} else {
+			cellGrid.refreshPhaseCellWithEnergy(current, beforeCell.cell(), targetCellEnergy);
+		}
+		SignedDyadic afterPair = cellGrid.exactCarrierEnergyInCell(beforeCell.cell())
+				.add(SignedDyadic.of(gasEnergyAfter));
+		audit = audit.withRoundoff(afterPair.subtract(beforePair));
 	}
 
 	void requireActiveToDeposit(int active, GranularEnergyColumn.DepositKey target) {

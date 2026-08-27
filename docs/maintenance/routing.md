@@ -81,7 +81,7 @@
 | 活动气液耦合 | `gas-liquid` | 显式选择包含完整平衡门 |
 | manager | `region-manager` | 跨 lifecycle/存档追加最近门 |
 | lifecycle/tick | `lifecycle` | 同时改 ownership 追加 `ownership` |
-| controller 注液/生产 step/权威 handoff/逐帧预算 | `production-replay` | 默认 `8×8×8` 闭壳注入 16 BV，JVM 预热后每个 live step 不超过 40 ms；另以正式 thermal/gas/phase 定义注入半满 32 BV，要求 capture/restore 和 phase-off backend candidate/restore 等价；后者耗时仅诊断，不代表生产性能门通过 |
+| controller 注液/生产 step/权威 handoff/逐帧预算 | `production-replay` | 默认 `8×8×8` 闭壳注入 16 BV，JVM 预热后每个 live step 不超过 40 ms；另以正式 thermal/gas/phase 定义注入半满 32 BV，要求 capture/restore、phase-off backend candidate/restore 等价，并要求独立预热后新建 domain 的首个 phase-on production step 在 40 ms 内闭合 gas 与总 `U`；phase-off backend candidate 的复制耗时仅作诊断 |
 | checkpoint/配置/恢复 | `region-state` | 自动门无法覆盖事务时才做真实重启 |
 | protocol/snapshot | `protocol` | 改注册入口才启动专服 |
 | controller/footprint | `boundary` | 改预算追加 `region-manager` |

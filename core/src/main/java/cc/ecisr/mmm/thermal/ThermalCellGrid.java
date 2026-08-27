@@ -19,6 +19,10 @@ public final class ThermalCellGrid {
 	private final int cellCount;
 	private final int[] cellHead;
 	private int[] carrierNext = new int[0];
+	private ThermalMaterialDefinition[] carrierMaterial = new ThermalMaterialDefinition[0];
+	private double[] carrierMass = new double[0];
+	private double[] carrierBaseEnergy = new double[0];
+	private int topologyCarrierCount;
 	private final int[] carrierCount;
 	private final double[] internalEnergy;
 	private final double[] temperature;
@@ -96,10 +100,60 @@ public final class ThermalCellGrid {
 		}
 	}
 
+	/** Refreshes one edited cell when phase transfer retained every carrier ordinal and cell membership. */
+	public void refreshPhaseCellWithEnergy(CarrierAccess carrierAccess, int targetCell, double targetEnergy) {
+		if (carrierAccess == null || targetCell < 0 || targetCell >= cellCount
+				|| !Double.isFinite(targetEnergy)) {
+			throw new IllegalArgumentException("Thermal phase-cell refresh override is invalid");
+		}
+		if (carrierAccess.carrierCount() != topologyCarrierCount || carrierCount[targetCell] == 0) {
+			throw new IllegalArgumentException("Thermal phase-cell refresh changed carrier topology");
+		}
+		this.carriers = carrierAccess;
+		internalEnergy[targetCell] = 0.0;
+		conductivity[targetCell] = 0.0;
+		totalVolume[targetCell] = 0.0;
+		int refreshed = 0;
+		for (int carrier = cellHead[targetCell]; carrier >= 0; carrier = carrierNext[carrier]) {
+			if (carrierAccess.cell(carrier) != targetCell) {
+				throw new IllegalArgumentException("Thermal phase-cell refresh changed carrier membership");
+			}
+			ThermalMaterialDefinition material = carrierAccess.material(carrier);
+			double mass = carrierAccess.mass(carrier);
+			double energy = carrierAccess.internalEnergy(carrier);
+			double volume = carrierAccess.volume(carrier);
+			if (!(Double.isFinite(mass) && mass > 0.0) || !Double.isFinite(energy)
+					|| !(Double.isFinite(volume) && volume > 0.0)) {
+				throw new IllegalArgumentException("Thermal phase-cell carrier inventory is invalid");
+			}
+			carrierMaterial[carrier] = material;
+			carrierMass[carrier] = mass;
+			carrierBaseEnergy[carrier] = Double.NaN;
+			internalEnergy[targetCell] += energy;
+			totalVolume[targetCell] += volume;
+			conductivity[targetCell] += volume * material.conductivityEuPerSecondMeterK();
+			refreshed++;
+		}
+		if (refreshed != carrierCount[targetCell]) {
+			throw new IllegalArgumentException("Thermal phase-cell refresh changed carrier cardinality");
+		}
+		conductivity[targetCell] /= totalVolume[targetCell];
+		internalEnergy[targetCell] = targetEnergy;
+		solveCell(targetCell, targetEnergy);
+		assignSolvedCellEnergy(targetCell, targetEnergy);
+	}
+
 	private void rebuildTopology(CarrierAccess carrierAccess) {
 		if (carrierAccess == null) throw new IllegalArgumentException("Thermal carrier access is missing");
 		this.carriers = carrierAccess;
-		if (carrierAccess.carrierCount() > carrierNext.length) carrierNext = new int[carrierAccess.carrierCount()];
+		topologyCarrierCount = carrierAccess.carrierCount();
+		if (carrierAccess.carrierCount() > carrierNext.length) {
+			int capacity = carrierAccess.carrierCount();
+			carrierNext = new int[capacity];
+			carrierMaterial = new ThermalMaterialDefinition[capacity];
+			carrierMass = new double[capacity];
+			carrierBaseEnergy = new double[capacity];
+		}
 		Arrays.fill(cellHead, -1);
 		Arrays.fill(carrierCount, 0);
 		Arrays.fill(internalEnergy, 0.0);
@@ -109,12 +163,15 @@ public final class ThermalCellGrid {
 		Arrays.fill(totalVolume, 0.0);
 		Arrays.fill(minimumTemperature, Double.NaN);
 		Arrays.fill(maximumTemperature, Double.NaN);
+		Arrays.fill(carrierBaseEnergy, 0, carrierAccess.carrierCount(), Double.NaN);
 		for (int carrier = carrierAccess.carrierCount() - 1; carrier >= 0; carrier--) {
 			int cell = carrierAccess.cell(carrier);
 			if (cell < 0 || cell >= cellCount) throw new IllegalArgumentException("Thermal carrier cell is outside the grid");
 			carrierNext[carrier] = cellHead[cell];
 			cellHead[cell] = carrier;
 			carrierCount[cell]++;
+			carrierMaterial[carrier] = carrierAccess.material(carrier);
+			carrierMass[carrier] = carrierAccess.mass(carrier);
 			double energy = carrierAccess.internalEnergy(carrier);
 			double volume = carrierAccess.volume(carrier);
 			if (!Double.isFinite(energy) || !(Double.isFinite(volume) && volume > 0.0)) {
@@ -134,7 +191,6 @@ public final class ThermalCellGrid {
 				continue;
 			}
 			double requested = targetEnergy[cell];
-			solveCell(cell, requested);
 			assignSolvedCellEnergy(cell, requested);
 		}
 	}
@@ -147,7 +203,7 @@ public final class ThermalCellGrid {
 		// append very small coherent batches after much larger liquid parcels; assigning the remainder to that
 		// list tail amplifies an unavoidable cell-sum roundoff into a measurable temperature mismatch.
 		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			double capacity = carriers.mass(carrier) * carriers.material(carrier).specificHeatAt(temperature[cell]);
+			double capacity = carrierMass[carrier] * carrierMaterial[carrier].specificHeatAt(temperature[cell]);
 			if (capacity > largestHeatCapacity) {
 				largestHeatCapacity = capacity;
 				remainderCarrier = carrier;
@@ -192,6 +248,31 @@ public final class ThermalCellGrid {
 	public double minimumTemperature(int cell) { return minimumTemperature[cell]; }
 	public double maximumTemperature(int cell) { return maximumTemperature[cell]; }
 	public double[] copyInternalEnergy() { return internalEnergy.clone(); }
+	public boolean carriersMatchSolvedTemperature() {
+		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
+		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
+			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+				ThermalMaterialDefinition material = carrierMaterial[carrier];
+				double sensible = (carriers.internalEnergy(carrier) - cachedBaseEnergy(carrier))
+						/ carrierMass[carrier];
+				double restored = material.temperatureForSensibleSpecificEnergy(sensible);
+				double tolerance = Math.max(1.0E-9,
+						Math.max(Math.ulp(restored), Math.ulp(temperature[cell])) * 16.0);
+				if (Math.abs(restored - temperature[cell]) > tolerance) return false;
+			}
+		}
+		return true;
+	}
+	public SignedDyadic exactCarrierEnergyInCell(int cell) {
+		if (carriers == null || cell < 0 || cell >= cellCount) {
+			throw new IllegalArgumentException("Thermal cell energy query is invalid");
+		}
+		SignedDyadic result = SignedDyadic.ZERO;
+		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+			result = result.add(SignedDyadic.of(carriers.internalEnergy(carrier)));
+		}
+		return result;
+	}
 	public double[] copyCarrierInternalEnergy() {
 		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
 		double[] result = new double[carriers.carrierCount()];
@@ -217,7 +298,7 @@ public final class ThermalCellGrid {
 		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
 		double maximum = Double.POSITIVE_INFINITY;
 		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			ThermalMaterialDefinition material = carriers.material(carrier);
+			ThermalMaterialDefinition material = carrierMaterial[carrier];
 			minimum = Math.max(minimum, material.minimumTemperatureK());
 			maximum = Math.min(maximum, material.maximumTemperatureK());
 		}
@@ -246,7 +327,7 @@ public final class ThermalCellGrid {
 		while (cursor < maximum) {
 			double next = maximum;
 			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-				for (ThermalMaterialDefinition.CaloricSegment segment : carriers.material(carrier).caloricSegments()) {
+				for (ThermalMaterialDefinition.CaloricSegment segment : carrierMaterial[carrier].caloricSegments()) {
 					if (segment.maximumTemperatureK() > cursor && segment.maximumTemperatureK() < next) {
 						next = segment.maximumTemperatureK();
 					}
@@ -272,7 +353,7 @@ public final class ThermalCellGrid {
 		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
 		double maximum = Double.POSITIVE_INFINITY;
 		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			List<ThermalMaterialDefinition.CaloricSegment> segments = carriers.material(carrier).caloricSegments();
+			List<ThermalMaterialDefinition.CaloricSegment> segments = carrierMaterial[carrier].caloricSegments();
 			ThermalMaterialDefinition.CaloricSegment selected = null;
 			for (int index = 0; index < segments.size(); index++) {
 				ThermalMaterialDefinition.CaloricSegment segment = segments.get(index);
@@ -303,22 +384,23 @@ public final class ThermalCellGrid {
 	private double modeledCellHeatCapacity(int cell, double temperatureK) {
 		double total = 0.0;
 		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			total += carriers.mass(carrier) * carriers.material(carrier).specificHeatAt(temperatureK);
+			total += carrierMass[carrier] * carrierMaterial[carrier].specificHeatAt(temperatureK);
 		}
 		if (!(Double.isFinite(total) && total > 0.0)) throw new IllegalArgumentException("Thermal cell heat capacity is invalid");
 		return total;
 	}
 
 	private double modeledEnergy(int carrier, double temperatureK) {
-		ThermalMaterialDefinition material = carriers.material(carrier);
-		double value = carriers.baseEnergy(carrier) + carriers.mass(carrier) * material.sensibleSpecificEnergyAt(temperatureK);
+		ThermalMaterialDefinition material = carrierMaterial[carrier];
+		double value = cachedBaseEnergy(carrier)
+				+ carrierMass[carrier] * material.sensibleSpecificEnergyAt(temperatureK);
 		if (!Double.isFinite(value)) throw new IllegalArgumentException("Thermal carrier modeled energy is invalid");
 		return value;
 	}
 
 	private void validateCarrierAtCellTemperature(int carrier, double cellTemperature) {
-		ThermalMaterialDefinition material = carriers.material(carrier);
-		double sensible = (carriers.internalEnergy(carrier) - carriers.baseEnergy(carrier)) / carriers.mass(carrier);
+		ThermalMaterialDefinition material = carrierMaterial[carrier];
+		double sensible = (carriers.internalEnergy(carrier) - cachedBaseEnergy(carrier)) / carrierMass[carrier];
 		double restored = material.temperatureForSensibleSpecificEnergy(sensible);
 		double tolerance = Math.max(1.0E-9, Math.max(Math.ulp(restored), Math.ulp(cellTemperature)) * 16.0);
 		if (Math.abs(restored - cellTemperature) > tolerance) {
@@ -326,8 +408,18 @@ public final class ThermalCellGrid {
 			throw new IllegalArgumentException("Thermal carrier remainder left local equilibrium"
 					+ " (carrier=" + carrier + ", cellTemperature=" + cellTemperature
 					+ ", restoredTemperature=" + restored + ", energyResidual=" + residual
-					+ ", mass=" + carriers.mass(carrier) + ")");
+					+ ", mass=" + carrierMass[carrier] + ")");
 		}
+	}
+
+	private double cachedBaseEnergy(int carrier) {
+		double value = carrierBaseEnergy[carrier];
+		if (Double.isNaN(value)) {
+			value = carriers.baseEnergy(carrier);
+			if (!Double.isFinite(value)) throw new IllegalArgumentException("Thermal carrier base energy is invalid");
+			carrierBaseEnergy[carrier] = value;
+		}
+		return value;
 	}
 
 	private static double energyTolerance(double... values) {

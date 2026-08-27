@@ -127,6 +127,7 @@ public final class ThermalTransport {
 				deltaEnergy[cell] += transfer;
 				reservoirExchange[0] = reservoirExchange[0].add(SignedDyadic.of(transfer));
 			});
+			if (maximumAbsoluteTransfer[0] == 0.0 && grid.carriersMatchSolvedTemperature()) continue;
 			double[] target = grid.copyInternalEnergy();
 			for (int cell = 0; cell < target.length; cell++) target[cell] += deltaEnergy[cell];
 			grid.setCellInternalEnergies(target);
