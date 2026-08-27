@@ -460,11 +460,16 @@ public final class FlipFluidDomain {
 		return PendingPhaseVolumeState.capture(pendingPhaseCellVolume);
 	}
 
-	/** Captures every authoritative inventory needed to evaluate a generation off-owner. */
+	/**
+	 * Captures every authoritative inventory needed to evaluate a generation off-owner.
+	 * An initialized gas owner is first reconciled to the current condensed carrier geometry so
+	 * a direct world/actor edit cannot publish stale topology beside new markers.
+	 */
 	public FluidDomainState captureAuthoritativeState() {
 		if (activeCollisionPlan != null) {
 			throw new IllegalStateException("Cannot capture while a collision transaction is active");
 		}
+		if (airCellNodeId != null) synchronizeGasTopologyForPersistence();
 		FlipParticleState pure = null;
 		FlipMaterialParticleState materials = null;
 		FlipChemicalParticleState chemicals = null;
