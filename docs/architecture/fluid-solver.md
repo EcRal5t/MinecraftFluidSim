@@ -51,6 +51,8 @@ marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新�
 
 相变产生的 pending volume/work 由下一次 projection 消费，因此 pressure step 是唯一机械提交点。
 
+每个完整候选同时生成只读 mechanical audit：初末 marker 动能，以及 P2G、颗粒耦合、moving/porous boundary、重力、热浮力、表面张力、黏性、固定边界、pressure projection、G2P、CCD、carrier inventory transfer 和 reseed 各阶段的动能差。各列与初末动能的 residual 必须在 128 ULP 的算术预算内闭合，否则拒绝候选；这些列只用于定位能量注入阶段，不能反向修改速度、压力或库存。
+
 ## 自由面与压力
 
 - 开放液面压力使用环境或 gas-node pressure；密闭气体只通过同一界面边界进入 projection。
@@ -87,9 +89,9 @@ div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 
 `FlipCutCellGeometry` 从每格 `2×2×2` unsigned micro mask 得到 cell solid volume 和三轴 face aperture。checkpoint 与后端 handoff 保存 raw mask，不能退化为“整格固体/整格空气”；恢复后必须得到相同 aperture。`FlipParticleCollision` 对 marker 轨迹做连续碰撞检测，避免只在步末投影位置造成穿薄墙；碰撞只去除命中法向速度，切向分量保持。
 
-实体交互由 Fabric 在服务器 tick 末冻结实体本 tick 的旧/当前 AABB raw pose、identity、下一 tick 动量速度和数据包定义。已发生的 AABB 位移给出边界轨迹速度；受重力的动态实体从该实际速度减去 solver 的 `g*dt`，不能继承与流体静水压力不一致的 Minecraft 游戏化纵向重力。无重力实体保留冻结的下一 tick 速度。core 将六个解析盒面转换为 runtime-only moving occupancy、cut-face aperture 与表面 patch；它们和 world cut-cell、deposit/coherent occupancy 使用同一容量、气体拓扑、pressure target divergence、marker CCD 和 reseed 几何，但绝不写入持久 raw mask。
+实体交互由 Fabric 在服务器 tick 末冻结实体本 tick 的旧/当前 AABB raw pose、identity、下一 tick 动量速度和数据包定义。已发生的 AABB 位移给出边界轨迹速度；受重力的动态实体从该实际速度减去 solver 的 `g*dt`，不能继承与流体静水压力不一致的 Minecraft 游戏化纵向重力。无重力实体保留冻结的下一 tick 速度。core 将六个解析盒面转换为 runtime-only moving occupancy、cut-face aperture 与表面 patch；它们和 world cut-cell、deposit/coherent occupancy 使用同一容量、气体拓扑、pressure target divergence、marker CCD 和 reseed 几何，但绝不写入持久 raw mask。moving snapshot 在 step 起点 attach、终点 detach 只是运行时表示切换，不产生气体体积功；只有冻结的旧/当前 pose 轨迹造成的实际 available-volume 改变进入功账。
 
-动态 body 的三维平移速度以定义中的 kg 质量进入 pressure Schur 系统；PLIC 以合成后的 moving open volume 归一化，盒面压力把格心值按局部 `rho*g` 静水梯度解析平移到实际 patch 高度，再由同一离散耦合算子给出实体反作用。Newtonian 黏性使用 `mu*A/distance` 的 pairwise surface exchange，并在重力预测速度写入前消费上一时刻已提交流动。候选分别返回 pressure impulse、viscous impulse、displacement work 和 kinematic external 未承接冲量，并在产生候选前检查 PCG、body momentum、work 与黏性 pairwise 守恒。未定义实体按 `KINEMATIC_EXTERNAL` 排水而不猜质量；默认数据提供 player 与 armor stand 的显式定义。没有经验 drag、neutral-submergence、湿格采样或材料/实体 ID 力学特判。
+动态 body 的三维平移速度以定义中的 kg 质量进入 pressure Schur 系统；PLIC 以合成后的 moving open volume 归一化，盒面压力把格心值按局部 `rho*g` 静水梯度解析平移到实际 patch 高度，再由同一离散耦合算子给出实体反作用。Newtonian 黏性使用 `mu*A/distance` 的 pairwise surface exchange，面积同时受几何 aperture 与该 face 的实际液体支撑体积约束，并在重力预测速度写入前消费上一时刻已提交流动。候选先聚合 pressure/viscous impulse，再从初始动量一次求出 dynamic body 的最终三轴速度；dynamic displacement work 是同一聚合冲量造成的总动能差，kinematic work 是聚合冲量与规定速度的点积。候选分别返回 pressure impulse、viscous impulse、displacement work 和 kinematic external 未承接冲量，并在产生候选前检查 PCG、body momentum、work 与黏性 pairwise 守恒。未定义实体按 `KINEMATIC_EXTERNAL` 排水而不猜质量；默认数据提供 player 与 armor stand 的显式定义。没有经验 drag、neutral-submergence、湿格采样或材料/实体 ID 力学特判。
 
 主线程接受候选前按 UUID、对象 identity、alive、当前 AABB 与 pre-velocity raw bits 重新验证；随后把 region generation 与动态实体速度作为一个可回滚提交段应用。有耦合实体时机械步固定为每个服务器 tick 一次，不能用区域降频产生隔帧冲量；连续硬超时仍按预算安全暂停。容量审计使用全域开放体积、自由液面余量和逐 marker 几何不重叠；marker 中心的 cell 归属体积不是局部欧拉容量，不能据此回退实体位移。真实全域容量不足、静止重叠、越界、第三方状态变化、预算或数值审计失败会暂停区域，不删 marker。当前只承诺平移轴对齐盒；旋转、通用刚体约束和复杂实体形状尚未实现。
 

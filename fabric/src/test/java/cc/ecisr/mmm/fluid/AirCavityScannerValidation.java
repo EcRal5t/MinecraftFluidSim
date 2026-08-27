@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.world.MovingBodySurfaceSnapshot;
+
 import java.util.List;
 
 /** Standalone M5 cavity-scanner gate: ambient/sealed classification, exact available volume, partial-face geometric edges and the scan budget. */
@@ -13,10 +15,31 @@ public final class AirCavityScannerValidation {
 		validateOpenUTubeIsAmbient();
 		validateMultipleSealedCavities();
 		validatePartialFaceGeometricEdge();
+		validateMovingBodyDoesNotCreateCoarseSliverCavities();
 		validateInterfaceResidualAttribution();
 		validateScanBudget();
 		System.out.println("M5 cavity scanner gate passed: ambient/sealed classification, available volume, "
 				+ "geometric edges and budget stop");
+	}
+
+	private static void validateMovingBodyDoesNotCreateCoarseSliverCavities() {
+		int n = 4;
+		Grid grid = new Grid(n);
+		MovingBodySurfaceSnapshot.BoxPose slab = new MovingBodySurfaceSnapshot.BoxPose(
+				0.1, 0.1, 1.2, 3.9, 3.9, 2.8);
+		MovingBodySurfaceSnapshot.Body body = new MovingBodySurfaceSnapshot.Body(
+				1L, slab, slab, 0.0, 0.0, 0.0,
+				MovingBodySurfaceSnapshot.CouplingMode.KINEMATIC_EXTERNAL, 0.0);
+		MovingBodyBoundary boundary = new MovingBodyBoundary(
+				new MovingBodySurfaceSnapshot(List.of(body)), n, n, n, 1.0, 0.05, grid.cutCells);
+		boundary.rebuild(0.0, 1.0, grid.cutCells);
+		AirCavityScanner.Result result = new AirCavityScanner(n, n, n, 1.0F, n * n * n)
+				.scan(grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null, true, boundary);
+		check(result.sealedNodeCount() == 1,
+				"one connected gas volume was fragmented by moving-body coarse partial faces: "
+						+ result.sealedNodeCount());
+		check(result.geometricEdges().isEmpty(),
+				"moving-body coarse partial faces invented internal finite-rate orifices");
 	}
 
 	private static void validateControllerExtentIsSealed() {
@@ -147,6 +170,16 @@ public final class AirCavityScannerValidation {
 		}
 		AirCavityScanner.Result openResult = scan(openGrid, n * n * n);
 		check(openResult.sealedNodeCount() == 0, "residual next to ambient must not create sealed inventory");
+
+		Grid filledMarkerlessPocket = new Grid(4);
+		java.util.Arrays.fill(filledMarkerlessPocket.solid, true);
+		int pocket = (1 * 4 + 1) * 4 + 1;
+		filledMarkerlessPocket.solid[pocket] = false;
+		filledMarkerlessPocket.liquidVolume[pocket] = 1.0F;
+		AirCavityScanner.Result filled = scan(filledMarkerlessPocket, 4 * 4 * 4);
+		check(filled.sealedNodeCount() == 0 && filled.cellNodeId()[pocket] == -1
+				&& filled.cellAvailableVolume()[pocket] == 0.0,
+				"markerless cell with zero residual gas volume created a sealed inventory node");
 	}
 
 	private static void validateScanBudget() {

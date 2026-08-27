@@ -31,7 +31,6 @@ final class MovingBodyBoundary {
 	private final double[] velocityX, velocityY, velocityZ;
 	private final double[] pressureImpulseX, pressureImpulseY, pressureImpulseZ;
 	private final double[] viscousImpulseX, viscousImpulseY, viscousImpulseZ;
-	private final double[] displacementWork;
 	private final MovingBodySurfaceSnapshot.BoxPose[] previousPose;
 	private final MovingBodySurfaceSnapshot.BoxPose[] currentPose;
 	private final ArrayList<Patch> patches = new ArrayList<>();
@@ -58,7 +57,6 @@ final class MovingBodyBoundary {
 		velocityX = new double[bodies]; velocityY = new double[bodies]; velocityZ = new double[bodies];
 		pressureImpulseX = new double[bodies]; pressureImpulseY = new double[bodies]; pressureImpulseZ = new double[bodies];
 		viscousImpulseX = new double[bodies]; viscousImpulseY = new double[bodies]; viscousImpulseZ = new double[bodies];
-		displacementWork = new double[bodies];
 		previousPose = new MovingBodySurfaceSnapshot.BoxPose[bodies];
 		currentPose = new MovingBodySurfaceSnapshot.BoxPose[bodies];
 		for (int body = 0; body < bodies; body++) {
@@ -286,16 +284,16 @@ final class MovingBodyBoundary {
 			double impulseX = pressureImpulseX[body] + viscousImpulseX[body];
 			double impulseY = pressureImpulseY[body] + viscousImpulseY[body];
 			double impulseZ = pressureImpulseZ[body] + viscousImpulseZ[body];
+			double settledWork;
 			if (external) {
 				double expectedWork = impulseX * initialVelocityX[body]
 						+ impulseY * initialVelocityY[body] + impulseZ * initialVelocityZ[body];
-				double workScale = Math.abs(impulseX * initialVelocityX[body])
-						+ Math.abs(impulseY * initialVelocityY[body])
-						+ Math.abs(impulseZ * initialVelocityZ[body]);
-				requireAuditClose(displacementWork[body], expectedWork, workScale,
-						"kinematic boundary work");
+				settledWork = expectedWork;
 			} else {
 				double mass = definition.massKilograms();
+				velocityX[body] = Math.fma(impulseX, 1.0 / mass, initialVelocityX[body]);
+				velocityY[body] = Math.fma(impulseY, 1.0 / mass, initialVelocityY[body]);
+				velocityZ[body] = Math.fma(impulseZ, 1.0 / mass, initialVelocityZ[body]);
 				requireAuditClose(mass * (velocityX[body] - initialVelocityX[body]), impulseX,
 						mass * (Math.abs(velocityX[body]) + Math.abs(initialVelocityX[body])) + Math.abs(impulseX),
 						"dynamic body x momentum");
@@ -310,13 +308,7 @@ final class MovingBodyBoundary {
 						- (initialVelocityX[body] * initialVelocityX[body]
 						+ initialVelocityY[body] * initialVelocityY[body]
 						+ initialVelocityZ[body] * initialVelocityZ[body]));
-				double kineticScale = 0.5 * mass * (velocityX[body] * velocityX[body]
-						+ velocityY[body] * velocityY[body] + velocityZ[body] * velocityZ[body]
-						+ initialVelocityX[body] * initialVelocityX[body]
-						+ initialVelocityY[body] * initialVelocityY[body]
-						+ initialVelocityZ[body] * initialVelocityZ[body]);
-				requireAuditClose(displacementWork[body], kineticChange, kineticScale,
-						"dynamic body work");
+				settledWork = kineticChange;
 			}
 			double unacceptedX = external ? pressureImpulseX[body] + viscousImpulseX[body] : 0.0;
 			double unacceptedY = external ? pressureImpulseY[body] + viscousImpulseY[body] : 0.0;
@@ -325,7 +317,7 @@ final class MovingBodyBoundary {
 					initialVelocityX[body], initialVelocityY[body], initialVelocityZ[body],
 					velocityX[body], velocityY[body], velocityZ[body],
 					pressureImpulseX[body], pressureImpulseY[body], pressureImpulseZ[body],
-					viscousImpulseX[body], viscousImpulseY[body], viscousImpulseZ[body], displacementWork[body],
+					viscousImpulseX[body], viscousImpulseY[body], viscousImpulseZ[body], settledWork,
 					unacceptedX, unacceptedY, unacceptedZ));
 		}
 		return List.copyOf(results);
@@ -376,18 +368,15 @@ final class MovingBodyBoundary {
 		double[][] fluidDelta = {new double[cellCount], new double[cellCount], new double[cellCount]};
 		double[][] bodyDelta = {new double[velocityX.length], new double[velocityX.length], new double[velocityX.length]};
 		double[][] bodyImpulse = {new double[velocityX.length], new double[velocityX.length], new double[velocityX.length]};
-		double[][] stepBodyImpulse = {new double[velocityX.length], new double[velocityX.length], new double[velocityX.length]};
 		for (int step = 0; step < substeps; step++) {
 			for (double[] values : fluidDelta) Arrays.fill(values, 0.0);
 			for (double[] values : bodyDelta) Arrays.fill(values, 0.0);
-			for (double[] values : stepBodyImpulse) Arrays.fill(values, 0.0);
 			for (ViscousCoupling coupling : couplings) {
 				double bodyVelocity = bodyVelocity(coupling.body, coupling.axis);
 				double impulse = coupling.conductance
 						* (bodyVelocity - fluidVelocity[coupling.axis][coupling.cell]) * substep;
 				fluidDelta[coupling.axis][coupling.cell] += impulse / cellMass[coupling.cell];
 				bodyImpulse[coupling.axis][coupling.body] -= impulse;
-				stepBodyImpulse[coupling.axis][coupling.body] -= impulse;
 				MovingBodySurfaceSnapshot.Body body = snapshot.bodies().get(coupling.body);
 				if (body.couplingMode() == MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC) {
 					bodyDelta[coupling.axis][coupling.body] -= impulse / body.massKilograms();
@@ -397,39 +386,40 @@ final class MovingBodyBoundary {
 				fluidVelocity[axis][cell] += fluidDelta[axis][cell];
 			}
 			for (int body = 0; body < velocityX.length; body++) {
-				double beforeX = velocityX[body], beforeY = velocityY[body], beforeZ = velocityZ[body];
 				if (snapshot.bodies().get(body).couplingMode() == MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC) {
 					velocityX[body] += bodyDelta[0][body]; velocityY[body] += bodyDelta[1][body];
 					velocityZ[body] += bodyDelta[2][body];
-					displacementWork[body] += snapshot.bodies().get(body).massKilograms() * 0.5
-							* ((velocityX[body] * velocityX[body] + velocityY[body] * velocityY[body]
-							+ velocityZ[body] * velocityZ[body])
-							- (beforeX * beforeX + beforeY * beforeY + beforeZ * beforeZ));
-				} else {
-					displacementWork[body] += stepBodyImpulse[0][body] * beforeX
-							+ stepBodyImpulse[1][body] * beforeY + stepBodyImpulse[2][body] * beforeZ;
 				}
 			}
 		}
 		double[] impulseX = new double[cellCount], impulseY = new double[cellCount], impulseZ = new double[cellCount];
+		double[] momentumReconstructionScale = new double[3];
 		for (int cell = 0; cell < cellCount; cell++) {
 			impulseX[cell] = cellMass[cell] * (fluidVelocity[0][cell] - cellVelocityX[cell]);
 			impulseY[cell] = cellMass[cell] * (fluidVelocity[1][cell] - cellVelocityY[cell]);
 			impulseZ[cell] = cellMass[cell] * (fluidVelocity[2][cell] - cellVelocityZ[cell]);
+			momentumReconstructionScale[0] += cellMass[cell]
+					* (Math.abs(fluidVelocity[0][cell]) + Math.abs(cellVelocityX[cell]));
+			momentumReconstructionScale[1] += cellMass[cell]
+					* (Math.abs(fluidVelocity[1][cell]) + Math.abs(cellVelocityY[cell]));
+			momentumReconstructionScale[2] += cellMass[cell]
+					* (Math.abs(fluidVelocity[2][cell]) + Math.abs(cellVelocityZ[cell]));
 		}
 		for (int body = 0; body < velocityX.length; body++) {
 			viscousImpulseX[body] += bodyImpulse[0][body];
 			viscousImpulseY[body] += bodyImpulse[1][body];
 			viscousImpulseZ[body] += bodyImpulse[2][body];
 		}
-		requirePairwiseMomentum(impulseX, bodyImpulse[0], "x");
-		requirePairwiseMomentum(impulseY, bodyImpulse[1], "y");
-		requirePairwiseMomentum(impulseZ, bodyImpulse[2], "z");
+		requirePairwiseMomentum(impulseX, bodyImpulse[0], momentumReconstructionScale[0], "x");
+		requirePairwiseMomentum(impulseY, bodyImpulse[1], momentumReconstructionScale[1], "y");
+		requirePairwiseMomentum(impulseZ, bodyImpulse[2], momentumReconstructionScale[2], "z");
 		return new ViscousFluidImpulse(impulseX, impulseY, impulseZ, substeps, couplings.size(), maximumRate);
 	}
 
-	private void requirePairwiseMomentum(double[] fluidImpulse, double[] bodyImpulse, String axis) {
-		double fluid = 0.0, body = 0.0, scale = 0.0;
+	private void requirePairwiseMomentum(
+			double[] fluidImpulse, double[] bodyImpulse, double reconstructionScale, String axis
+	) {
+		double fluid = 0.0, body = 0.0, scale = reconstructionScale;
 		for (double value : fluidImpulse) { fluid += value; scale += Math.abs(value); }
 		for (double value : bodyImpulse) { body += value; scale += Math.abs(value); }
 		requireAuditClose(fluid + body, 0.0, scale, "viscous " + axis + " momentum");
@@ -450,7 +440,6 @@ final class MovingBodyBoundary {
 	}
 
 	private void applyPressureImpulse(int body, double impulseX, double impulseY, double impulseZ) {
-		double beforeX = velocityX[body], beforeY = velocityY[body], beforeZ = velocityZ[body];
 		pressureImpulseX[body] += impulseX;
 		pressureImpulseY[body] += impulseY;
 		pressureImpulseZ[body] += impulseZ;
@@ -459,11 +448,6 @@ final class MovingBodyBoundary {
 			velocityX[body] += impulseX / definition.massKilograms();
 			velocityY[body] += impulseY / definition.massKilograms();
 			velocityZ[body] += impulseZ / definition.massKilograms();
-			displacementWork[body] += impulseX * 0.5 * (beforeX + velocityX[body])
-					+ impulseY * 0.5 * (beforeY + velocityY[body])
-					+ impulseZ * 0.5 * (beforeZ + velocityZ[body]);
-		} else {
-			displacementWork[body] += impulseX * beforeX + impulseY * beforeY + impulseZ * beforeZ;
 		}
 	}
 

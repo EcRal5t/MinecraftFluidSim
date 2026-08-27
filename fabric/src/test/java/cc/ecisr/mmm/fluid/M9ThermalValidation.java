@@ -45,6 +45,7 @@ import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.thermal.ThermalTransport;
 import cc.ecisr.mmm.simulation.ThermalActivity;
 import cc.ecisr.mmm.simulation.FluidRegionLifecycle;
+import cc.ecisr.mmm.world.MovingBodySurfaceSnapshot;
 
 import java.io.StringReader;
 import java.io.IOException;
@@ -574,6 +575,28 @@ public final class M9ThermalValidation {
 				&& movingInterface.airNetwork().escapedSink().equals(sinkBeforeMove)
 				&& movingInterface.airNetwork().auditClosed(),
 				"moving a partial interface created false sealed-gas source/sink turnover");
+
+		FlipFluidDomain attachment = new FlipFluidDomain(4, 4, 4, config, 1_024);
+		attachment.sealDomainBoundary();
+		attachment.setVolume(0, 0, 0, 0.5F);
+		attachment.setMarkerMaterial(0, liquids, 0);
+		attachment.bindGasRegistry(gas);
+		attachment.bootstrapGasState("");
+		attachment.bindThermal(thermal, liquids, 300.0);
+		FluidDomainState beforeAttachment = attachment.captureAuthoritativeState();
+		MovingBodySurfaceSnapshot.BoxPose staticPose = new MovingBodySurfaceSnapshot.BoxPose(
+				0.7, 0.7, 0.7, 1.3, 1.3, 1.3);
+		MovingBodySurfaceSnapshot.Body staticBody = new MovingBodySurfaceSnapshot.Body(
+				7L, staticPose, staticPose, 0.0, 0.0, 0.0,
+				MovingBodySurfaceSnapshot.CouplingMode.KINEMATIC_EXTERNAL, 0.0);
+		FluidDomainState afterAttachment = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+				0L, beforeAttachment, new MovingBodySurfaceSnapshot(List.of(staticBody)), false, 0)).state();
+		require(Arrays.equals(beforeAttachment.thermal().copyGasNodeEnergy(),
+					afterAttachment.thermal().copyGasNodeEnergy())
+				&& beforeAttachment.thermal().audit().mechanicalWork().equals(
+					afterAttachment.thermal().audit().mechanicalWork())
+				&& beforeAttachment.gas().nodes().equals(afterAttachment.gas().nodes()),
+				"runtime moving-body attach/detach booked gas work or changed sealed inventory");
 	}
 
 	private static void operatorVentClearsGasAndEnergyTogether() {
@@ -750,10 +773,24 @@ public final class M9ThermalValidation {
 				&& domain.thermalAudit().mechanicalWork().compareTo(auditBefore.mechanicalWork()) < 0
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"sealed boiling did not jointly conserve liquid/gas mass, volume and energy truth: stats=" + stats
-						+ " liquidMass=" + domain.totalMass() + "/" + liquidMassBefore
-						+ " vapor=" + vaporAmount + " nanos=" + domain.airNetwork().standardVolumeNanos(1)
+						+ " liquidMass=" + domain.totalMass() + "/"
+						+ (liquidMassBefore - boiledSolverMass * stats.operations())
+						+ " vapor=" + vaporAmount + "/" + (batchMass.toDouble() * stats.operations())
+						+ " nanos=" + domain.airNetwork().standardVolumeNanos(1)
 						+ "/" + gasNanosBefore + " deltaU="
-						+ domain.exactInternalEnergy().subtract(energyBefore));
+						+ domain.exactInternalEnergy().subtract(energyBefore)
+						+ " gasAudit=" + domain.airNetwork().auditClosed()
+						+ " workCmp=" + domain.thermalAudit().mechanicalWork().compareTo(auditBefore.mechanicalWork())
+						+ " thermalAudit="
+						+ domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
+		require(domain.hasPendingPhaseVolumeWork(),
+				"sealed boiling did not retain liquid-volume work for the next pressure projection");
+		ThermalAuditLedger auditAfterBoiling = domain.thermalAudit();
+		domain.step(false, 0);
+		require(!domain.hasPendingPhaseVolumeWork()
+				&& domain.thermalAudit().mechanicalWork().compareTo(auditAfterBoiling.mechanicalWork()) > 0
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"sealed boiling volume work was not consumed exactly once by a mechanical projection");
 		domain.setThermalTemperatureInCell(1, 1, 1, 300.0);
 		double liquidMassAfterBoiling = domain.totalMass();
 		SignedDyadic beforeCondensation = domain.exactInternalEnergy();
@@ -792,6 +829,14 @@ public final class M9ThermalValidation {
 						+ java.util.Arrays.toString(domain.exportThermalParticleState().copyGasNodeEnergy())
 						+ " liquid=" + SignedDyadic.sum(beforeCondensationState.copyInternalEnergy()) + "->"
 						+ SignedDyadic.sum(domain.exportThermalParticleState().copyInternalEnergy()));
+		require(domain.hasPendingPhaseVolumeWork(),
+				"sealed condensation did not retain liquid-volume work for the next pressure projection");
+		ThermalAuditLedger auditAfterCondensation = domain.thermalAudit();
+		domain.step(false, 0);
+		require(!domain.hasPendingPhaseVolumeWork()
+				&& domain.thermalAudit().mechanicalWork().compareTo(auditAfterCondensation.mechanicalWork()) < 0
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"sealed condensation volume work was not consumed exactly once by a mechanical projection");
 	}
 
 	private static void compositionBearingBoilingMovesOnlyGasAdmittedSpecies() {
@@ -876,8 +921,17 @@ public final class M9ThermalValidation {
 				&& domain.totalGranularSolidVolumeSvq() == initialGranularSvq
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"species-bearing boiling did not retain solute/indicator and move exact vapor truth");
+		require(domain.hasPendingPhaseVolumeWork(),
+				"species-bearing boiling did not retain liquid-volume work");
+		domain.step(false, 0);
+		require(!domain.hasPendingPhaseVolumeWork()
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"species-bearing boiling volume work was not consumed by its next projection");
+		FlipChemicalParticleState beforeCondensationMarkers = domain.exportChemicalParticleState();
+		float condensationIndicatorVolume = beforeCondensationMarkers.materials().copyPositionVolume()[3];
+		double condensationIndicatorMass = beforeCondensationMarkers.materials().copyParticleMass()[0];
 
-		setAllCondensedCellTemperatures(domain, 300.0);
+		setAllCondensedCellTemperatures(domain, 275.0);
 		FlipFluidDomain.GasThermalPhaseStats firstCondensed = domain.stepGasPhaseChangeOnly(1);
 		GasComponentAmount vaporRemainder = domain.airNetwork().inventory(1)
 				.component(BuiltinGasDefinitions.WATER_VAPOR);
@@ -903,9 +957,9 @@ public final class M9ThermalValidation {
 				&& close(partiallyRestored.materials().totalMass() + remainingSolverMass,
 						initial.materials().totalMass())
 				&& Float.floatToRawIntBits(partiallyRestored.materials().copyPositionVolume()[3])
-				== Float.floatToRawIntBits(indicatorVolume)
+				== Float.floatToRawIntBits(condensationIndicatorVolume)
 				&& Double.doubleToRawLongBits(partiallyRestored.materials().copyParticleMass()[0])
-				== Double.doubleToRawLongBits(indicatorMass)
+				== Double.doubleToRawLongBits(condensationIndicatorMass)
 				&& domain.totalGranularSolidVolumeSvq() == initialGranularSvq
 				&& domain.airNetwork().auditClosed()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
@@ -916,6 +970,12 @@ public final class M9ThermalValidation {
 						+ partiallyRestored.residualLedger() + "+" + vaporRemainder.massResidual()
 						+ "/" + initial.residualLedger() + " audit="
 						+ domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
+		require(domain.hasPendingPhaseVolumeWork(),
+				"species-bearing condensation did not retain liquid-volume work");
+		domain.step(false, 0);
+		require(!domain.hasPendingPhaseVolumeWork()
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"species-bearing condensation volume work was not consumed by its next projection");
 	}
 
 	private static double gasSpeciesMassKilograms(ChemicalRegistry registry, GasComponentAmount component) {
@@ -1202,10 +1262,10 @@ public final class M9ThermalValidation {
 	private static void phasePlateauUsesTheStateFunctionGap() {
 		ThermalMaterialDefinition ice = new ThermalMaterialDefinition("mmm:thermal/ice",
 				ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID, "mmm:ice", 273.15, 0.0, 2.0,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 273.15, 2_100.0)));
+				List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 500.0, 2_100.0)));
 		ThermalMaterialDefinition water = new ThermalMaterialDefinition("mmm:thermal/water",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, "mmm:water", 273.15, 334_000.0, 0.6,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(273.15, 500.0, 4_180.0)));
+				List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 500.0, 4_180.0)));
 		ThermalPhaseTransition melt = new ThermalPhaseTransition("mmm:phase/ice_water", ice.id(), water.id(),
 				273.15, SolidVolume.SVQ_PER_BV, SolidVolume.SVQ_PER_BV * 917L / 1_000L, ExactRational.of(917),
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 80_000.0, 120_000.0);
@@ -1225,12 +1285,12 @@ public final class M9ThermalValidation {
 				"mmm:phase/high_pressure_ice_water", ice.id(), water.id(),
 				SolidVolume.SVQ_PER_BV, SolidVolume.SVQ_PER_BV * 917L / 1_000L,
 				ExactRational.of(917), ThermalPhaseTransition.InterfaceRequirement.NONE,
-				List.of(new ThermalPhaseTransition.EquilibriumPoint(3_000_000.0, 273.15),
-						new ThermalPhaseTransition.EquilibriumPoint(4_000_000.0, 273.15)));
+				List.of(new ThermalPhaseTransition.EquilibriumPoint(3_000_000.0, 274.0),
+						new ThermalPhaseTransition.EquilibriumPoint(4_000_000.0, 274.0)));
 		ThermalRegistry highPressureRegistry = new ThermalRegistry(
 				List.of(water, ice), List.of(), List.of(highPressure), "", "");
 		require(highPressureRegistry.transition(0).minimumPressurePa() == 3_000_000.0
-				&& close(highPressure.equilibriumTemperatureK(3_500_000.0), 273.15),
+				&& close(highPressure.equilibriumTemperatureK(3_500_000.0), 274.0),
 				"solid/liquid curve was incorrectly required to cover standard pressure");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
@@ -1248,6 +1308,10 @@ public final class M9ThermalValidation {
 		unsupportedPressure.beginLogicalCandidate(1L);
 		expectFailure(() -> unsupportedPressure.stepInertPhaseChangeOnly(16),
 				"phase carrier consumed pressure from another logical generation");
+		unsupportedPressure.setThermalTemperatureInCell(0, 0, 0, 300.0);
+		require(unsupportedPressure.stepInertPhaseChangeOnly(16).operations() == 0,
+				"impossible solid/liquid direction consumed a stale pressure sample");
+		unsupportedPressure.setThermalTemperatureInCell(0, 0, 0, 273.15);
 		expectFailure(() -> stepInertPhaseChange(unsupportedPressure, 16),
 				"solid/liquid phase silently ignored pressure outside its declared curve");
 	}

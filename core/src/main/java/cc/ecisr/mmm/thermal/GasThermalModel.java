@@ -14,6 +14,8 @@ import java.util.TreeMap;
 public final class GasThermalModel {
 	public record Compression(double initialTemperatureK, double finalTemperatureK,
 	                          double finalInternalEnergy, double workIntoGas) { }
+	public record Outflow(double initialTemperatureK, double finalTemperatureK,
+	                      double finalInternalEnergy, double carriedEnergy) { }
 
 	private final ThermalRegistry thermalRegistry;
 	private final GasRegistry gasRegistry;
@@ -103,6 +105,41 @@ public final class GasThermalModel {
 				* sourceTemperatureK / GasRegistry.STANDARD_TEMPERATURE_K;
 		if (!Double.isFinite(result)) throw new IllegalArgumentException("Gas flow enthalpy is not finite");
 		return result;
+	}
+
+	/** Exact constant-cv blowdown of one well-mixed rigid node for a finite inventory take. */
+	public Outflow adiabaticOutflow(
+			GasInventory sourceBefore, double internalEnergy, GasInventory sourceAfter
+	) {
+		if (sourceBefore == null || sourceAfter == null || sourceBefore.isEmpty()
+				|| sourceAfter.isEmpty()
+				|| sourceAfter.standardVolumeNanos() >= sourceBefore.standardVolumeNanos()) {
+			throw new IllegalArgumentException("Gas outflow inventories are invalid");
+		}
+		ThermalStateFunction.State initial = state(sourceBefore, internalEnergy);
+		double gasConstant = GasRegistry.STANDARD_PRESSURE_PA
+				* AirNetwork.cubicMeters(sourceBefore.standardVolumeNanos())
+				/ GasRegistry.STANDARD_TEMPERATURE_K;
+		double exponent = gasConstant / initial.heatCapacityEuPerK();
+		if (!(Double.isFinite(exponent) && exponent > 0.0)) {
+			throw new IllegalArgumentException("Gas outflow isentropic exponent is invalid");
+		}
+		double retainedFraction = (double) sourceAfter.standardVolumeNanos()
+				/ sourceBefore.standardVolumeNanos();
+		double targetTemperature = initial.temperatureK() * Math.pow(retainedFraction, exponent);
+		for (ThermalStateFunction.InventoryPortion portion : portions(sourceAfter)) {
+			ThermalMaterialDefinition material = thermalRegistry.material(portion.materialHandle());
+			if (Double.doubleToRawLongBits(material.specificHeatAt(initial.temperatureK()))
+					!= Double.doubleToRawLongBits(material.specificHeatAt(targetTemperature))) {
+				throw new IllegalArgumentException("Gas outflow crosses a caloric segment");
+			}
+		}
+		double finalEnergy = internalEnergyAtTemperature(sourceAfter, targetTemperature);
+		double carried = internalEnergy - finalEnergy;
+		if (!(Double.isFinite(carried) && carried > 0.0)) {
+			throw new IllegalArgumentException("Gas outflow carried energy is invalid");
+		}
+		return new Outflow(initial.temperatureK(), targetTemperature, finalEnergy, carried);
 	}
 
 	/** Splits node U at its derived common temperature; the final child receives raw floating remainder. */

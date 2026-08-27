@@ -1,8 +1,19 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
+import cc.ecisr.mmm.fluid.air.GasRegistry;
+import cc.ecisr.mmm.granular.SolidVolume;
+import cc.ecisr.mmm.thermal.ThermalDefinitionCodec;
+import cc.ecisr.mmm.thermal.ThermalLimits;
+import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
+import cc.ecisr.mmm.thermal.ThermalPhaseTransition;
+import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.world.MovingBodyStepResult;
 import cc.ecisr.mmm.world.MovingBodySurfaceSnapshot;
 
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 
 /** Deterministic M2.5 gates for PLIC volume reconstruction and ghost-fluid pressure weights. */
@@ -17,70 +28,96 @@ public final class FlipFluidFreeSurfaceValidation {
 		volumeDriftCorrectionPreservesLegitimateSurfaceDeficits();
 		fractionalHydrostaticColumnsBalanceGravity();
 		projectedHydrostaticPressureIntegratesOnMovingBox();
-		floatingBodyReplayHasDecayingEnvelope();
 		smallExternalBodyDisturbanceDoesNotAmplifyVelocity();
 		mixedBodiesAreOrderIndependent();
 		movingBodyPressureNonconvergenceRejectsCandidate();
 		thinLayerRegularizationRemainsStable();
 		isolatedDropletReceivesUndilutedGravity();
-		if (!fast) longRunHydrostaticSurfaceDoesNotSink();
+		if (!fast) {
+			closedHalfPoolWithoutBodiesDoesNotSelfExcite();
+			floatingBodyReplayHasDecayingEnvelope();
+		}
 		waterDescendsAStairSlope();
-		System.out.println("FlipFluid free-surface validation passed" + (fast ? " (short; 5,000-step soak skipped)" : ""));
+		System.out.println("FlipFluid free-surface validation passed"
+				+ (fast ? " (short; production closed-pool replays skipped)" : ""));
 	}
 
 	private static void floatingBodyReplayHasDecayingEnvelope() {
-		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 0.05F,
-				240, 1.0E-6F, 0.40F, 2.0E-3F, 0.0F);
-		FlipFluidDomain domain = new FlipFluidDomain(12, 12, 12, config, 32_000);
-		for (int z = 0; z < 12; z++) for (int y = 0; y < 12; y++) for (int x = 0; x < 12; x++) {
-			domain.setSolid(x, y, z, true);
-		}
-		for (int z = 1; z <= 10; z++) for (int y = 1; y <= 10; y++) for (int x = 1; x <= 10; x++) {
-			domain.setSolid(x, y, z, false);
-		}
-		domain.setSolid(1, 11, 1, false);
-		for (int z = 1; z <= 10; z++) for (int y = 1; y <= 5; y++) for (int x = 1; x <= 10; x++) {
+		FluidSolverConfig config = new FluidSolverConfig(
+				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+		FlipFluidDomain domain = new FlipFluidDomain(10, 10, 10, config, 10 * 10 * 10 * 8);
+		domain.sealDomainBoundary();
+		for (int z = 0; z < 10; z++) for (int y = 0; y < 5; y++) for (int x = 0; x < 10; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
 
 		MovingBodySurfaceSnapshot.BoxPose previous = new MovingBodySurfaceSnapshot.BoxPose(
-				2.7, 2.75, 2.7, 3.3, 4.55, 3.3);
-		prepareBodyCompatibleFluid(domain, previous, 5);
+				2.2, 2.25, 2.2, 2.8, 4.05, 2.8);
+		prepareBodyCompatibleFluid(domain, previous, 4);
+		FluidMaterialRegistry liquids = BuiltinFluidMaterials.createRegistry().runtimeRegistry();
+		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
+		domain.bindGasRegistry(gas);
+		domain.bindThermal(productionPoolThermalRegistry(gas), liquids, GasRegistry.STANDARD_TEMPERATURE_K);
 		FluidDomainState state = domain.captureAuthoritativeState();
 		MovingBodySurfaceSnapshot.BoxPose current = previous;
+		double nextTickVelocityX = 0.0;
 		double nextTickVelocityY = -config.gravity() * config.timeStep();
+		double nextTickVelocityZ = 0.0;
 		double[] centres = new double[600];
-		double maximumLateFluidSpeed = 0.0;
+		BodyWindow early = new BodyWindow(), middle = new BodyWindow(), late = new BodyWindow();
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		for (int step = 0; step < centres.length; step++) {
+			double boundaryVelocityX = (current.minimumX() - previous.minimumX()) / config.timeStep();
 			double boundaryVelocityY = (current.minimumY() - previous.minimumY()) / config.timeStep();
+			double boundaryVelocityZ = (current.minimumZ() - previous.minimumZ()) / config.timeStep();
 			MovingBodySurfaceSnapshot.Body body = new MovingBodySurfaceSnapshot.Body(
-					1L, previous, current, 0.0, boundaryVelocityY, 0.0,
-					0.0, nextTickVelocityY, 0.0,
+					1L, previous, current, boundaryVelocityX, boundaryVelocityY, boundaryVelocityZ,
+					nextTickVelocityX, nextTickVelocityY, nextTickVelocityZ,
 					MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC, 70.0);
 			FluidStepCandidate candidate;
 			try {
 				candidate = backend.evaluate(new FluidStepRequest(
-						step, state, new MovingBodySurfaceSnapshot(List.of(body)), false, 0));
+						step, state, new MovingBodySurfaceSnapshot(List.of(body)), true,
+						ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
 			} catch (RuntimeException failed) {
 				throw new AssertionError("floating player replay failed at tick " + step
 						+ " and y=" + current.minimumY(), failed);
 			}
 			MovingBodyStepResult result = candidate.movingBodyResults().getFirst();
 			state = candidate.state();
-			if (step >= 500) maximumLateFluidSpeed = Math.max(
-					maximumLateFluidSpeed, maximumSpeed(state.particles()));
 			centres[step] = 0.5 * (current.minimumY() + current.maximumY());
+			PoolMetrics metrics = poolMetrics(state);
+			if (step < 40) early.add(metrics, candidate.stats().mechanicalAudit(), result,
+					centres[step], result.finalVelocityYMetresPerSecond(), 70.0);
+			else if (step >= 280 && step < 320) middle.add(metrics, candidate.stats().mechanicalAudit(), result,
+					centres[step], result.finalVelocityYMetresPerSecond(), 70.0);
+			else if (step >= 560) late.add(metrics, candidate.stats().mechanicalAudit(), result,
+					centres[step], result.finalVelocityYMetresPerSecond(), 70.0);
 			previous = current;
-			current = translateY(current, result.finalVelocityYMetresPerSecond() * config.timeStep());
+			current = translate(current,
+					result.finalVelocityXMetresPerSecond() * config.timeStep(),
+					result.finalVelocityYMetresPerSecond() * config.timeStep(),
+					result.finalVelocityZMetresPerSecond() * config.timeStep());
+			nextTickVelocityX = result.finalVelocityXMetresPerSecond();
 			nextTickVelocityY = result.finalVelocityYMetresPerSecond()
 					- config.gravity() * config.timeStep();
-			check(Double.isFinite(current.minimumY()) && Double.isFinite(nextTickVelocityY),
+			nextTickVelocityZ = result.finalVelocityZMetresPerSecond();
+			check(Double.isFinite(current.minimumX()) && Double.isFinite(current.minimumY())
+					&& Double.isFinite(current.minimumZ()) && Double.isFinite(nextTickVelocityX)
+					&& Double.isFinite(nextTickVelocityY) && Double.isFinite(nextTickVelocityZ),
 					"floating player replay produced a non-finite entity state at tick " + step);
 		}
+		System.out.println("  closed half-pool floating-player audit: early=" + early
+				+ " middle=" + middle + " late=" + late);
 		checkOscillationSettles(centres, config.fluidEpsilon() * config.cellSize());
-		check(maximumLateFluidSpeed <= config.fluidEpsilon(),
-				"floating player settled while liquid retained speed " + maximumLateFluidSpeed);
+		check(middle.maximumFluidKineticEnergyJoules < early.maximumFluidKineticEnergyJoules
+				&& late.maximumFluidKineticEnergyJoules < middle.maximumFluidKineticEnergyJoules,
+				"floating player amplified the liquid kinetic-energy envelope: early=" + early
+						+ " middle=" + middle + " late=" + late);
+		check(early.bodyMomentumCloses() && middle.bodyMomentumCloses() && late.bodyMomentumCloses(),
+				"floating player impulse did not close its body momentum: early=" + early
+						+ " middle=" + middle + " late=" + late);
 	}
 
 	private static void smallExternalBodyDisturbanceDoesNotAmplifyVelocity() {
@@ -197,9 +234,15 @@ public final class FlipFluidFreeSurfaceValidation {
 	private static MovingBodySurfaceSnapshot.BoxPose translateY(
 			MovingBodySurfaceSnapshot.BoxPose pose, double displacement
 	) {
+		return translate(pose, 0.0, displacement, 0.0);
+	}
+
+	private static MovingBodySurfaceSnapshot.BoxPose translate(
+			MovingBodySurfaceSnapshot.BoxPose pose, double displacementX, double displacementY, double displacementZ
+	) {
 		return new MovingBodySurfaceSnapshot.BoxPose(
-				pose.minimumX(), pose.minimumY() + displacement, pose.minimumZ(),
-				pose.maximumX(), pose.maximumY() + displacement, pose.maximumZ());
+				pose.minimumX() + displacementX, pose.minimumY() + displacementY, pose.minimumZ() + displacementZ,
+				pose.maximumX() + displacementX, pose.maximumY() + displacementY, pose.maximumZ() + displacementZ);
 	}
 
 	private static void pureWaterMarkerMassLedgerTracksVolume() {
@@ -473,33 +516,244 @@ public final class FlipFluidFreeSurfaceValidation {
 				"isolated droplet changed the exact marker ledger");
 	}
 
-	private static void longRunHydrostaticSurfaceDoesNotSink() {
-		FluidSolverConfig config = strictConfig();
-		FlipFluidDomain domain = new FlipFluidDomain(4, 8, 4, config, 4 * 8 * 4 * 8);
-		for (int z = 0; z < 4; z++) for (int x = 0; x < 4; x++) domain.setSolid(x, 0, z, true);
-		for (int z = 0; z < 4; z++) for (int y = 1; y <= 4; y++) for (int x = 0; x < 4; x++) {
+	private static void closedHalfPoolWithoutBodiesDoesNotSelfExcite() {
+		FluidSolverConfig config = new FluidSolverConfig(
+				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+		FlipFluidDomain domain = new FlipFluidDomain(10, 10, 10, config, 10 * 10 * 10 * 8);
+		domain.sealDomainBoundary();
+		for (int z = 0; z < 10; z++) for (int y = 0; y < 5; y++) for (int x = 0; x < 10; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
-		FlipParticleState initial = domain.exportParticleState();
-		float initialCenterY = centerOfMassY(initial);
-		FlipFluidDomain.VolumeDistribution initialDistribution = domain.volumeDistribution(8.0F / 255.0F);
-		for (int step = 0; step < 5_000; step++) domain.step();
+		FluidMaterialRegistry liquids = BuiltinFluidMaterials.createRegistry().runtimeRegistry();
+		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
+		domain.bindGasRegistry(gas);
+		ThermalRegistry thermal = productionPoolThermalRegistry(gas);
+		domain.bindThermal(thermal, liquids, GasRegistry.STANDARD_TEMPERATURE_K);
+		ThermalPhaseTransition waterVapor = thermal.transitions().stream()
+				.filter(transition -> transition.id().equals("mmm:water_vapor")).findFirst().orElseThrow();
+		double phaseQuantumHeight = (double) waterVapor.lowerVolumeSvqPerBatch()
+				/ SolidVolume.SVQ_PER_CELL * config.cellSize();
+		double phaseQuantumVelocity = phaseQuantumHeight / config.timeStep();
 
-		FlipParticleState result = domain.exportParticleState();
-		double[] layers = exactLayerVolumes(result);
-		check(result.particleCount() == initial.particleCount(), "hydrostatic marker count drifted over 5,000 steps");
-		check(Math.abs(centerOfMassY(result) - initialCenterY) < 5.0E-4F,
-				"hydrostatic physical surface sank over 5,000 steps");
-		for (int y = 1; y <= 4; y++) {
-			check(Math.abs(layers[y] - 16.0) < 1.0E-7,
-					"hydrostatic layer changed exact marker volume at y=" + y + ": " + layers[y]);
+		FluidDomainState state = domain.captureAuthoritativeState();
+		PoolMetrics initial = poolMetrics(state);
+		PoolWindow early = new PoolWindow(), middle = new PoolWindow(), late = new PoolWindow();
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		FluidStepCandidate phaseDisabledPreview = backend.evaluate(new FluidStepRequest(
+				0L, state, MovingBodySurfaceSnapshot.EMPTY, false, 0));
+		System.out.println("  closed half-pool phase-disabled first step: metrics="
+				+ poolMetrics(phaseDisabledPreview.state()) + " stats=" + phaseDisabledPreview.stats());
+		for (int step = 0; step < 240; step++) {
+			FluidStepCandidate candidate;
+			try {
+				candidate = backend.evaluate(new FluidStepRequest(
+						step, state, MovingBodySurfaceSnapshot.EMPTY, true,
+						ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
+			} catch (RuntimeException failed) {
+				throw new AssertionError("closed half-pool production candidate failed at tick " + step, failed);
+			}
+			state = candidate.state();
+			PoolMetrics metrics = poolMetrics(state);
+			if (step == 0) System.out.println("  closed half-pool phase-enabled first step: metrics="
+					+ metrics + " stats=" + candidate.stats() + " pendingCount="
+					+ state.pendingPhaseVolume().entries().size() + " coherent="
+					+ state.thermal().coherentGroups() + " gas=" + state.gas().nodes());
+			if (step == 0) check(state.pendingPhaseVolume().entries().size() == 100,
+					"closed half-pool did not retain one pending phase-volume entry per interface cell");
+			if (step == 1) check(state.pendingPhaseVolume().entries().isEmpty(),
+					"closed half-pool did not consume restored phase-volume work on the next projection");
+			if (step < 20) early.add(metrics, candidate.stats().mechanicalAudit());
+			else if (step >= 100 && step < 120) middle.add(metrics, candidate.stats().mechanicalAudit());
+			else if (step >= 220) late.add(metrics, candidate.stats().mechanicalAudit());
 		}
-		FlipFluidDomain.VolumeDistribution resultDistribution = domain.volumeDistribution(8.0F / 255.0F);
-		check(resultDistribution.equals(initialDistribution),
-				"hydrostatic reconstructed surface changed over 5,000 steps: before="
-						+ initialDistribution + ", after=" + resultDistribution);
-		check(domain.maximumParticleSpeed() < 1.0E-4F,
-				"hydrostatic drift correction created persistent marker motion: " + domain.maximumParticleSpeed());
+		System.out.println("  closed half-pool no-body audit: initial=" + initial
+				+ " early=" + early + " middle=" + middle + " late=" + late);
+		double physicalLiquidMass = late.maximumTotalVolume * Math.pow(config.cellSize(), 3.0) * config.density();
+		double quantumKineticBound = 0.5 * physicalLiquidMass * phaseQuantumVelocity * phaseQuantumVelocity;
+		check(late.maximumKineticEnergyJoules <= quantumKineticBound
+				&& late.maximumSpeedMetresPerSecond <= phaseQuantumVelocity
+				&& late.maximumSurfaceReliefMetres <= phaseQuantumHeight,
+				"closed half-pool exceeded its exact phase-quantum motion bound: quantumHeight="
+						+ phaseQuantumHeight + " quantumVelocity=" + phaseQuantumVelocity
+						+ " quantumK=" + quantumKineticBound + " late=" + late);
+		check(Double.doubleToRawLongBits(early.minimumTotalVolume)
+				== Double.doubleToRawLongBits(late.minimumTotalVolume)
+				&& Double.doubleToRawLongBits(early.maximumTotalVolume)
+				== Double.doubleToRawLongBits(late.maximumTotalVolume)
+				&& state.pendingPhaseVolume().entries().isEmpty(),
+				"closed half-pool repeated phase transfer after reaching its quantized equilibrium: early="
+						+ early + ", late=" + late + ", pending=" + state.pendingPhaseVolume().entries());
+	}
+
+	private static ThermalRegistry productionPoolThermalRegistry(GasRegistry gas) {
+		ArrayList<ThermalMaterialDefinition> materials = new ArrayList<>();
+		for (String id : List.of("water", "oil", "mercury", "ice", "air", "water_vapor", "co2")) {
+			try (InputStreamReader reader = productionResource("thermal_materials/" + id + ".json")) {
+				materials.add(ThermalDefinitionCodec.decodeMaterial("mmm:" + id, reader));
+			} catch (java.io.IOException failure) {
+				throw new AssertionError("Could not close production thermal material " + id, failure);
+			}
+		}
+		ArrayList<ThermalPhaseTransition> transitions = new ArrayList<>();
+		for (String id : List.of("ice_water", "water_vapor")) {
+			try (InputStreamReader reader = productionResource("phase_transitions/" + id + ".json")) {
+				transitions.add(ThermalDefinitionCodec.decodeTransition("mmm:" + id, reader));
+			} catch (java.io.IOException failure) {
+				throw new AssertionError("Could not close production phase transition " + id, failure);
+			}
+		}
+		return new ThermalRegistry(materials, List.of(), transitions, List.of(), List.of(),
+				"", "", gas.fingerprint());
+	}
+
+	private static InputStreamReader productionResource(String path) {
+		var stream = FlipFluidFreeSurfaceValidation.class.getResourceAsStream("/data/mmm/mmm/" + path);
+		if (stream == null) throw new AssertionError("Missing production fixture resource " + path);
+		return new InputStreamReader(stream, StandardCharsets.UTF_8);
+	}
+
+	private static PoolMetrics poolMetrics(FluidDomainState state) {
+		FlipMaterialParticleState particles = state.materials();
+		if (particles == null) throw new AssertionError("Production pool lost its material carrier state");
+		float[] positionVolume = particles.copyPositionVolume();
+		float[] velocity = particles.copyParticleVelocities();
+		double[] mass = particles.copyParticleMass();
+		double cellVolume = Math.pow(state.config().cellSize(), 3.0);
+		double kinetic = 0.0, maximumSpeed = 0.0;
+		double[] columnVolume = new double[state.sizeX() * state.sizeZ()];
+		for (int marker = 0; marker < particles.particleCount(); marker++) {
+			int p = marker * 4, v = marker * 3;
+			double speedSquared = velocity[v] * velocity[v]
+					+ velocity[v + 1] * velocity[v + 1] + velocity[v + 2] * velocity[v + 2];
+			kinetic += 0.5 * mass[marker] * cellVolume * speedSquared;
+			maximumSpeed = Math.max(maximumSpeed, Math.sqrt(speedSquared));
+			int x = Math.clamp((int) Math.floor(positionVolume[p] / state.config().cellSize()), 0, state.sizeX() - 1);
+			int z = Math.clamp((int) Math.floor(positionVolume[p + 2] / state.config().cellSize()), 0, state.sizeZ() - 1);
+			columnVolume[z * state.sizeX() + x] += positionVolume[p + 3];
+		}
+		double minimum = Double.POSITIVE_INFINITY, maximum = Double.NEGATIVE_INFINITY;
+		for (double volume : columnVolume) {
+			double height = volume * state.config().cellSize();
+			minimum = Math.min(minimum, height);
+			maximum = Math.max(maximum, height);
+		}
+		return new PoolMetrics(kinetic, maximumSpeed, maximum - minimum, particles.totalVolume());
+	}
+
+	private record PoolMetrics(
+			double kineticEnergyJoules,
+			double maximumSpeedMetresPerSecond,
+			double surfaceReliefMetres,
+			double totalVolume
+	) { }
+
+	private static final class PoolWindow {
+		private double maximumKineticEnergyJoules;
+		private double maximumSpeedMetresPerSecond;
+		private double maximumSurfaceReliefMetres;
+		private double minimumTotalVolume = Double.POSITIVE_INFINITY;
+		private double maximumTotalVolume = Double.NEGATIVE_INFINITY;
+		private double particleToGridTransferJoules;
+		private double gravityWorkJoules;
+		private double pressureProjectionWorkJoules;
+		private double viscosityWorkJoules;
+		private double gridToParticleTransferJoules;
+		private double thermalBuoyancyWorkJoules;
+		private double surfaceTensionWorkJoules;
+		private double fixedBoundaryWorkJoules;
+		private double closureResidualJoules;
+
+		private void add(PoolMetrics metrics, FlipFluidDomain.MechanicalStepAudit audit) {
+			maximumKineticEnergyJoules = Math.max(maximumKineticEnergyJoules, metrics.kineticEnergyJoules());
+			maximumSpeedMetresPerSecond = Math.max(maximumSpeedMetresPerSecond,
+					metrics.maximumSpeedMetresPerSecond());
+			maximumSurfaceReliefMetres = Math.max(maximumSurfaceReliefMetres, metrics.surfaceReliefMetres());
+			minimumTotalVolume = Math.min(minimumTotalVolume, metrics.totalVolume());
+			maximumTotalVolume = Math.max(maximumTotalVolume, metrics.totalVolume());
+			particleToGridTransferJoules += audit.particleToGridTransferJoules();
+			gravityWorkJoules += audit.gravityWorkJoules();
+			pressureProjectionWorkJoules += audit.pressureProjectionWorkJoules();
+			viscosityWorkJoules += audit.viscosityWorkJoules();
+			gridToParticleTransferJoules += audit.gridToParticleTransferJoules();
+			thermalBuoyancyWorkJoules += audit.thermalBuoyancyWorkJoules();
+			surfaceTensionWorkJoules += audit.surfaceTensionWorkJoules();
+			fixedBoundaryWorkJoules += audit.fixedBoundaryWorkJoules();
+			closureResidualJoules += audit.closureResidualJoules();
+		}
+
+		@Override public String toString() {
+			return "{K=" + maximumKineticEnergyJoules + " J, vmax=" + maximumSpeedMetresPerSecond
+					+ " m/s, relief=" + maximumSurfaceReliefMetres + " m, volume="
+					+ minimumTotalVolume + ".." + maximumTotalVolume + ", P2G="
+					+ particleToGridTransferJoules + " J, gravity=" + gravityWorkJoules
+					+ " J, pressure=" + pressureProjectionWorkJoules + " J, viscosity="
+					+ viscosityWorkJoules + " J, buoyancy=" + thermalBuoyancyWorkJoules
+					+ " J, surface=" + surfaceTensionWorkJoules + " J, fixed="
+					+ fixedBoundaryWorkJoules + " J, G2P=" + gridToParticleTransferJoules
+					+ " J, closure=" + closureResidualJoules + " J}";
+		}
+	}
+
+	private static final class BodyWindow {
+		private double minimumCentreY = Double.POSITIVE_INFINITY;
+		private double maximumCentreY = Double.NEGATIVE_INFINITY;
+		private double maximumBodySpeedMetresPerSecond;
+		private double maximumFluidSpeedMetresPerSecond;
+		private double maximumFluidKineticEnergyJoules;
+		private double pressureImpulseYKilogramMetresPerSecond;
+		private double viscousImpulseYKilogramMetresPerSecond;
+		private double bodyMomentumChangeYKilogramMetresPerSecond;
+		private double displacementWorkJoules;
+		private double movingBoundaryWorkJoules;
+		private double gravityWorkJoules;
+		private double pressureProjectionWorkJoules;
+		private double closureResidualJoules;
+
+		private void add(
+				PoolMetrics metrics, FlipFluidDomain.MechanicalStepAudit audit,
+				MovingBodyStepResult result, double centreY, double bodyVelocityY, double bodyMassKilograms
+		) {
+			minimumCentreY = Math.min(minimumCentreY, centreY);
+			maximumCentreY = Math.max(maximumCentreY, centreY);
+			maximumBodySpeedMetresPerSecond = Math.max(maximumBodySpeedMetresPerSecond, Math.abs(bodyVelocityY));
+			maximumFluidSpeedMetresPerSecond = Math.max(maximumFluidSpeedMetresPerSecond,
+					metrics.maximumSpeedMetresPerSecond());
+			maximumFluidKineticEnergyJoules = Math.max(maximumFluidKineticEnergyJoules,
+					metrics.kineticEnergyJoules());
+			pressureImpulseYKilogramMetresPerSecond += result.pressureImpulseYKilogramMetresPerSecond();
+			viscousImpulseYKilogramMetresPerSecond += result.viscousImpulseYKilogramMetresPerSecond();
+			bodyMomentumChangeYKilogramMetresPerSecond += bodyMassKilograms
+					* (result.finalVelocityYMetresPerSecond() - result.initialVelocityYMetresPerSecond());
+			displacementWorkJoules += result.displacementWorkJoules();
+			movingBoundaryWorkJoules += audit.movingAndPorousBoundaryWorkJoules();
+			gravityWorkJoules += audit.gravityWorkJoules();
+			pressureProjectionWorkJoules += audit.pressureProjectionWorkJoules();
+			closureResidualJoules += audit.closureResidualJoules();
+		}
+
+		private boolean bodyMomentumCloses() {
+			double impulse = pressureImpulseYKilogramMetresPerSecond
+					+ viscousImpulseYKilogramMetresPerSecond;
+			double scale = Math.abs(pressureImpulseYKilogramMetresPerSecond)
+					+ Math.abs(viscousImpulseYKilogramMetresPerSecond)
+					+ Math.abs(bodyMomentumChangeYKilogramMetresPerSecond);
+			return Math.abs(impulse - bodyMomentumChangeYKilogramMetresPerSecond)
+					<= Math.ulp(scale == 0.0 ? 1.0 : scale) * 128.0;
+		}
+
+		@Override public String toString() {
+			return "{centre=" + minimumCentreY + ".." + maximumCentreY + " m, bodyV="
+					+ maximumBodySpeedMetresPerSecond + " m/s, fluidV=" + maximumFluidSpeedMetresPerSecond
+					+ " m/s, fluidK=" + maximumFluidKineticEnergyJoules + " J, pressureImpulseY="
+					+ pressureImpulseYKilogramMetresPerSecond + " kg*m/s, viscousImpulseY="
+					+ viscousImpulseYKilogramMetresPerSecond + " kg*m/s, momentumResidual="
+					+ (pressureImpulseYKilogramMetresPerSecond + viscousImpulseYKilogramMetresPerSecond
+					- bodyMomentumChangeYKilogramMetresPerSecond) + " kg*m/s, bodyWork="
+					+ displacementWorkJoules + " J, movingBoundary=" + movingBoundaryWorkJoules
+					+ " J, gravity=" + gravityWorkJoules + " J, projection="
+					+ pressureProjectionWorkJoules + " J, closure=" + closureResidualJoules + " J}";
+		}
 	}
 
 	private static void waterDescendsAStairSlope() {

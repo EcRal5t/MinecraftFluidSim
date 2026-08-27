@@ -520,7 +520,7 @@ public final class AirNetwork {
 		}
 		MassColumns before = liveMassColumns();
 		requireExactRemapClosure(aggregateNodes(), aggregate(inventories), sourceDelta, sinkDelta);
-		MassColumns after = massColumns(aggregate(inventories));
+		MassColumns after = massColumns(inventories);
 		MassColumns source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
 		return new RemapPlan(this, replacementNodes, plannedEdges, inventories.size() + 1,
 				massRoundoff.add(after.mass()).add(sink.mass()).subtract(before.mass()).subtract(source.mass()),
@@ -606,6 +606,35 @@ public final class AirNetwork {
 		MassColumns liveMass = liveMassColumns(), sourceMass = massColumns(externalSource), sinkMass = massColumns(escapedSink);
 		return liveMass.mass().add(sinkMass.mass()).equals(sourceMass.mass().add(massRoundoff))
 				&& liveMass.residual().add(sinkMass.residual()).equals(sourceMass.residual().add(residualRoundoff));
+	}
+
+	/** Read-only exact-column differences for a rejected persistence boundary. */
+	public String auditFailureReport() {
+		TreeMap<String, ExactColumns> live = exactColumns(aggregateNodes());
+		TreeMap<String, ExactColumns> source = exactColumns(externalSource);
+		TreeMap<String, ExactColumns> sink = exactColumns(escapedSink);
+		java.util.TreeSet<String> ids = new java.util.TreeSet<>();
+		ids.addAll(live.keySet()); ids.addAll(source.keySet()); ids.addAll(sink.keySet());
+		ArrayList<String> exactFailures = new ArrayList<>();
+		for (String id : ids) {
+			ExactColumns retainedAndEscaped = ExactColumns.add(live.get(id), sink.get(id));
+			ExactColumns drawn = source.getOrDefault(id, ExactColumns.EMPTY);
+			if (!retainedAndEscaped.equals(drawn)) {
+				exactFailures.add(id + " retained+escaped=" + retainedAndEscaped + " drawn=" + drawn);
+			}
+		}
+		MassColumns liveMass = liveMassColumns(), sourceMass = massColumns(externalSource);
+		MassColumns sinkMass = massColumns(escapedSink);
+		SignedDyadic retainedMass = liveMass.mass().add(sinkMass.mass());
+		SignedDyadic auditedMass = sourceMass.mass().add(massRoundoff);
+		SignedDyadic retainedResidual = liveMass.residual().add(sinkMass.residual());
+		SignedDyadic auditedResidual = sourceMass.residual().add(residualRoundoff);
+		return "exact=" + exactFailures
+				+ ", massDelta=" + retainedMass.subtract(auditedMass)
+				+ " (" + retainedMass.subtract(auditedMass).toDouble() + ")"
+				+ ", residualDelta=" + retainedResidual.subtract(auditedResidual)
+				+ " (" + retainedResidual.subtract(auditedResidual).toDouble() + ")"
+				+ ", liveNodes=" + nodes.size();
 	}
 
 	public int pressureFloorEvents() { return pressureFloorEvents; }
@@ -695,6 +724,15 @@ public final class AirNetwork {
 		SignedDyadic mass = SignedDyadic.ZERO, residual = SignedDyadic.ZERO;
 		for (GasComponentAmount amount : inventory.components()) {
 			mass = mass.add(SignedDyadic.of(amount.mass())); residual = residual.add(SignedDyadic.of(amount.massResidual()));
+		}
+		return new MassColumns(mass, residual);
+	}
+
+	private static MassColumns massColumns(List<GasInventory> inventories) {
+		SignedDyadic mass = SignedDyadic.ZERO, residual = SignedDyadic.ZERO;
+		for (GasInventory inventory : inventories) for (GasComponentAmount amount : inventory.components()) {
+			mass = mass.add(SignedDyadic.of(amount.mass()));
+			residual = residual.add(SignedDyadic.of(amount.massResidual()));
 		}
 		return new MassColumns(mass, residual);
 	}

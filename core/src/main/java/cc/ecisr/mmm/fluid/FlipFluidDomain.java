@@ -352,7 +352,8 @@ public final class FlipFluidDomain {
 
 	public GasStateSnapshot exportGasState(String chemicalRegistryFingerprint) {
 		if (airCellNodeId == null) throw new IllegalStateException("Gas topology has not been explicitly initialized");
-		if (!airNetwork.auditClosed()) throw new IllegalStateException("Gas component audit does not close");
+		if (!airNetwork.auditClosed()) throw new IllegalStateException(
+				"Gas component audit does not close: " + airNetwork.auditFailureReport());
 		return GasStateSnapshot.capture(sizeX, sizeY, sizeZ, airCellNodeId, airNetwork,
 				chemicalRegistryFingerprint == null ? "" : chemicalRegistryFingerprint, operatorVentedGasTopology);
 	}
@@ -1905,6 +1906,8 @@ public final class FlipFluidDomain {
 			for (int cell = 0; cell < cellCount && operations < maximumOperations; cell++) {
 				PhaseCellInventory inventory = phaseCellInventory(cell, liquidHandle, lower.id());
 				if (inventory == null) continue;
+				double temperature = thermalState.temperatureInCell(cell, thermalMarkerContext());
+				if (!inertPhaseCanChangeAtAnyDeclaredPressure(transition, inventory, temperature)) continue;
 				double absolutePressure = requireProjectedPressure(cell).absolutePressurePa();
 				if (!(Double.isFinite(absolutePressure)
 						&& absolutePressure >= transition.minimumPressurePa()
@@ -1928,6 +1931,20 @@ public final class FlipFluidDomain {
 		return new ThermalPhaseStats(operations, frozen, melted, signedBatches);
 	}
 
+	private static boolean inertPhaseCanChangeAtAnyDeclaredPressure(
+			ThermalPhaseTransition transition, PhaseCellInventory inventory, double temperatureK
+	) {
+		double minimumEquilibrium = Double.POSITIVE_INFINITY;
+		double maximumEquilibrium = Double.NEGATIVE_INFINITY;
+		for (ThermalPhaseTransition.EquilibriumPoint point : transition.equilibriumCurve()) {
+			minimumEquilibrium = Math.min(minimumEquilibrium, point.temperatureK());
+			maximumEquilibrium = Math.max(maximumEquilibrium, point.temperatureK());
+		}
+		boolean canFreeze = inventory.freezableUpperSvq() > 0L && temperatureK < maximumEquilibrium;
+		boolean canMelt = inventory.lowerVolumeSvq() > 0L && temperatureK > minimumEquilibrium;
+		return canFreeze || canMelt;
+	}
+
 	/** Sealed-interface liquid/gas phase transfer, bounded by saturation, energy, inventory and one shared batch budget. */
 	public GasThermalPhaseStats stepGasPhaseChangeOnly(int maximumOperations) {
 		if (thermalState == null || !thermalState.gasModelBound()) {
@@ -1939,6 +1956,7 @@ public final class FlipFluidDomain {
 		ensureGrid(); refreshGasTopology();
 		GasLiquidPhaseModel phase = thermalState.gasLiquidPhase(airNetwork);
 		int operations = 0, boiled = 0, condensed = 0;
+		boolean[] boiledCells = new boolean[cellCount], condensedCells = new boolean[cellCount];
 		for (ThermalPhaseTransition transition : thermalState.registry().transitions()) {
 			if (transition.interfaceRequirement() != ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS) continue;
 			ThermalMaterialDefinition liquid = thermalState.registry().material(
@@ -1949,6 +1967,44 @@ public final class FlipFluidDomain {
 					|| gas.carrierKind() != ThermalMaterialDefinition.CarrierKind.GAS) continue;
 			int liquidHandle = fluidMaterialHandle(liquid.carrierId());
 			int gasThermalHandle = thermalState.registry().materialHandle(gas.id());
+			while (operations < maximumOperations) {
+				ensureGrid(); refreshGasTopology();
+				TreeMap<Integer, ArrayList<GasBoilCellInput>> byNode = new TreeMap<>();
+				for (int cell = 0; cell < cellCount; cell++) {
+					if (!pendingPhaseCellVolume[cell].equals(SignedDyadic.ZERO)) continue;
+					int node = sealedInterfaceNode(cell);
+					if (node <= 0) continue;
+					PhaseCellInventory inventory = gasLiquidCellInventory(cell, liquidHandle);
+					if (inventory == null) continue;
+					double absolutePressure = GasRegistry.STANDARD_PRESSURE_PA
+							+ thermalState.gasGaugePressure(node, airNetwork);
+					double liquidTemperature = thermalState.temperatureInCell(cell, thermalMarkerContext());
+					if (phase.saturation(transition, liquidTemperature,
+							airNetwork.inventory(node), absolutePressure).direction()
+							!= GasLiquidPhaseModel.Direction.BOIL) continue;
+					long maximumBatches = maximumGasBoilBatches(transition, inventory,
+							maximumOperations - operations);
+					if (maximumBatches <= 0L || gasBoilCellCandidate(cell, liquidHandle, gasThermalHandle,
+							transition, phase, liquidTemperature, 1L) == null) continue;
+					byNode.computeIfAbsent(node, ignored -> new ArrayList<>()).add(
+							new GasBoilCellInput(cell, liquidTemperature, maximumBatches));
+				}
+				boolean committed = false;
+				for (Map.Entry<Integer, ArrayList<GasBoilCellInput>> entry : byNode.entrySet()) {
+					GasBoilGroupPlan plan = planGasBoilGroup(entry.getKey(), liquidHandle, gasThermalHandle,
+							transition, phase, entry.getValue(), maximumOperations - operations);
+					if (plan == null) continue;
+					commitGasBoilGroup(entry.getKey(), plan);
+					ensureGrid(); refreshGasTopology();
+					for (GasBoilCellPlan cellPlan : plan.cells()) if (!boiledCells[cellPlan.cell()]) {
+						boiledCells[cellPlan.cell()] = true; boiled++;
+					}
+					operations = Math.addExact(operations, Math.toIntExact(plan.batches()));
+					committed = true;
+					break;
+				}
+				if (!committed) break;
+			}
 			for (int cell = 0; cell < cellCount && operations < maximumOperations; cell++) {
 				if (!pendingPhaseCellVolume[cell].equals(SignedDyadic.ZERO)) continue;
 				int node = sealedInterfaceNode(cell);
@@ -1961,47 +2017,52 @@ public final class FlipFluidDomain {
 				double liquidTemperature = thermalState.temperatureInCell(cell, thermalMarkerContext());
 				GasLiquidPhaseModel.Direction direction = phase.saturation(
 						transition, liquidTemperature, airNetwork.inventory(node), absolutePressure).direction();
-				if (direction == GasLiquidPhaseModel.Direction.BOIL) {
-					GasBoilPlan plan = planGasBoil(cell, node, liquidHandle, gasThermalHandle,
-							transition, inventory, phase, liquidTemperature, remainingBudget);
-					if (plan == null) continue;
-					commitGasBoil(cell, node, plan);
-					ensureGrid(); refreshGasTopology();
-					operations = Math.addExact(operations, Math.toIntExact(plan.batches())); boiled++;
-				} else if (direction == GasLiquidPhaseModel.Direction.CONDENSE) {
+				if (direction == GasLiquidPhaseModel.Direction.CONDENSE) {
 					GasCondensePlan plan = planGasCondense(cell, node, liquidHandle, transition,
 							inventory, phase, gas.carrierId(), remainingBudget);
 					if (plan == null) continue;
 					commitGasCondense(cell, node, liquidHandle, plan);
 					ensureGrid(); refreshGasTopology();
-					operations = Math.addExact(operations, Math.toIntExact(plan.batches())); condensed++;
+					operations = Math.addExact(operations, Math.toIntExact(plan.batches()));
+					if (!condensedCells[cell]) { condensedCells[cell] = true; condensed++; }
 				}
 			}
 		}
 		return new GasThermalPhaseStats(operations, boiled, condensed);
 	}
 
-	private GasBoilPlan planGasBoil(
-			int cell, int node, int liquidHandle, int gasThermalHandle,
-			ThermalPhaseTransition transition, PhaseCellInventory inventory,
-			GasLiquidPhaseModel phase, double liquidTemperature, long maximumBatches
+	private long maximumGasBoilBatches(
+			ThermalPhaseTransition transition, PhaseCellInventory inventory, long maximumBatches
 	) {
 		double batchMass = transition.massMuPerBatch().toDouble();
 		long byVolume = inventory.freezableUpperSvq() / transition.lowerVolumeSvqPerBatch();
 		long byMass = (long) Math.floor((inventory.freezableUpperMass()
 				+ massTolerance(inventory.freezableUpperMass())) / batchMass);
-		long high = Math.min(maximumBatches, Math.min(byVolume, byMass));
+		return Math.min(maximumBatches, Math.min(byVolume, byMass));
+	}
+
+	private GasBoilGroupPlan planGasBoilGroup(
+			int node, int liquidHandle, int gasThermalHandle, ThermalPhaseTransition transition,
+			GasLiquidPhaseModel phase, List<GasBoilCellInput> inputs, long maximumBatches
+	) {
+		long high = 0L;
+		for (GasBoilCellInput input : inputs) {
+			high = Math.min(maximumBatches,
+					Math.addExact(high, Math.min(input.maximumBatches(), maximumBatches - high)));
+			if (high == maximumBatches) break;
+		}
 		if (high <= 0L) return null;
-		GasBoilPlan first = gasBoilCandidate(cell, node, liquidHandle, gasThermalHandle,
-				transition, phase, liquidTemperature, 1L);
-		if (first == null || first.directionAfter() != GasLiquidPhaseModel.Direction.BOIL) return first;
-		GasBoilPlan best = first;
+		GasBoilGroupPlan first = gasBoilGroupCandidate(node, liquidHandle, gasThermalHandle,
+				transition, phase, inputs, 1L);
+		if (first == null) return null;
+		if (!first.retainsBoiling()) return first.closerToEquilibrium() ? first : null;
+		GasBoilGroupPlan best = first;
 		long low = 2L;
 		while (low <= high) {
 			long middle = low + ((high - low) >>> 1);
-			GasBoilPlan candidate = gasBoilCandidate(cell, node, liquidHandle, gasThermalHandle,
-					transition, phase, liquidTemperature, middle);
-			if (candidate == null || candidate.directionAfter() != GasLiquidPhaseModel.Direction.BOIL) {
+			GasBoilGroupPlan candidate = gasBoilGroupCandidate(node, liquidHandle, gasThermalHandle,
+					transition, phase, inputs, middle);
+			if (candidate == null || !candidate.retainsBoiling()) {
 				high = middle - 1L;
 			} else {
 				best = candidate;
@@ -2011,10 +2072,99 @@ public final class FlipFluidDomain {
 		return best;
 	}
 
-	private GasBoilPlan gasBoilCandidate(
-			int cell, int node, int liquidHandle, int gasThermalHandle,
-			ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
-			double liquidTemperature, long batches
+	private GasBoilGroupPlan gasBoilGroupCandidate(
+			int node, int liquidHandle, int gasThermalHandle, ThermalPhaseTransition transition,
+			GasLiquidPhaseModel phase, List<GasBoilCellInput> inputs, long totalBatches
+	) {
+		long[] batchesByCell = balancedGasPhaseBatches(inputs, totalBatches);
+		ArrayList<GasBoilCellPlan> cells = new ArrayList<>();
+		GasInventory batch = GasInventory.EMPTY;
+		double batchEnergy = 0.0;
+		for (int index = 0; index < inputs.size(); index++) {
+			long batches = batchesByCell[index];
+			if (batches == 0L) continue;
+			GasBoilCellInput input = inputs.get(index);
+			GasBoilCellPlan cell = gasBoilCellCandidate(input.cell(), liquidHandle, gasThermalHandle,
+					transition, phase, input.liquidTemperature(), batches);
+			if (cell == null) return null;
+			cells.add(cell);
+			batch = batch.merge(cell.batch());
+			batchEnergy += cell.batchEnergy();
+		}
+		if (cells.isEmpty() || !Double.isFinite(batchEnergy)) return null;
+		GasInventory candidateGas = airNetwork.inventory(node).merge(batch);
+		double candidateGasEnergy = thermalState.gasNodeEnergy(node, airNetwork) + batchEnergy;
+		double currentPressure = GasRegistry.STANDARD_PRESSURE_PA
+				+ thermalState.gasGaugePressure(node, airNetwork);
+		double candidatePressure = prospectiveGasPhasePressure(node, candidateGas, candidateGasEnergy);
+		boolean retainsBoiling = true, closerToEquilibrium = true;
+		for (int index = 0; index < inputs.size(); index++) {
+			GasBoilCellInput input = inputs.get(index);
+			double candidateTemperature = input.liquidTemperature();
+			if (batchesByCell[index] > 0L) {
+				candidateTemperature = cells.stream().filter(cell -> cell.cell() == input.cell())
+						.findFirst().orElseThrow().candidateLiquidTemperature();
+			}
+			GasLiquidPhaseModel.Saturation current = phase.saturation(transition,
+					input.liquidTemperature(), airNetwork.inventory(node), currentPressure);
+			GasLiquidPhaseModel.Saturation candidate = phase.saturation(transition,
+					candidateTemperature, candidateGas, candidatePressure);
+			if (candidate.direction() != GasLiquidPhaseModel.Direction.BOIL) {
+				retainsBoiling = false;
+			}
+			if (!(gasSaturationImbalance(candidate) < gasSaturationImbalance(current))) {
+				closerToEquilibrium = false;
+			}
+		}
+		return new GasBoilGroupPlan(totalBatches, List.copyOf(cells), batch,
+				candidateGasEnergy, retainsBoiling, closerToEquilibrium);
+	}
+
+	private static long[] balancedGasPhaseBatches(List<GasBoilCellInput> inputs, long totalBatches) {
+		long low = 0L, high = totalBatches;
+		while (low < high) {
+			long middle = low + ((high - low + 1L) >>> 1);
+			long allocated = 0L;
+			boolean exceeds = false;
+			for (GasBoilCellInput input : inputs) {
+				long addition = Math.min(input.maximumBatches(), middle);
+				if (addition > totalBatches - allocated) { exceeds = true; break; }
+				allocated += addition;
+			}
+			if (!exceeds) low = middle; else high = middle - 1L;
+		}
+		long[] result = new long[inputs.size()];
+		long allocated = 0L;
+		for (int index = 0; index < inputs.size(); index++) {
+			result[index] = Math.min(inputs.get(index).maximumBatches(), low);
+			allocated = Math.addExact(allocated, result[index]);
+		}
+		long remainder = totalBatches - allocated;
+		if (remainder > 0L) {
+			ArrayList<Integer> eligible = new ArrayList<>();
+			for (int index = 0; index < inputs.size(); index++) {
+				if (result[index] < inputs.get(index).maximumBatches()) eligible.add(index);
+			}
+			if (remainder > eligible.size()) throw new IllegalArgumentException(
+					"Balanced gas phase remainder exceeds eligible cells");
+			long previous = 0L;
+			for (int rank = 0; rank < eligible.size(); rank++) {
+				long cumulative = (long) (rank + 1) * remainder / eligible.size();
+				if (cumulative != previous) {
+					result[eligible.get(rank)]++;
+					allocated++;
+				}
+				previous = cumulative;
+			}
+		}
+		if (allocated != totalBatches) throw new IllegalArgumentException(
+				"Balanced gas phase extent exceeds cell inventories");
+		return result;
+	}
+
+	private GasBoilCellPlan gasBoilCellCandidate(
+			int cell, int liquidHandle, int gasThermalHandle, ThermalPhaseTransition transition,
+			GasLiquidPhaseModel phase, double liquidTemperature, long batches
 	) {
 		try {
 			long removedSvq = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
@@ -2028,19 +2178,26 @@ public final class FlipFluidDomain {
 			double candidateLiquidTemperature = thermalState.requirePhaseCandidateState(cell,
 					liquidInventoryAfterRemoval(cell, liquidHandle, removal.allocations()),
 					-batchEnergy, thermalMarkerContext());
-			GasInventory candidateGas = airNetwork.inventory(node).merge(batch);
-			double candidateGasEnergy = thermalState.gasNodeEnergy(node, airNetwork) + batchEnergy;
-			GasLiquidPhaseModel.Direction directionAfter = prospectiveGasPhaseDirection(
-					node, transition, phase, candidateLiquidTemperature, candidateGas, candidateGasEnergy);
-			return new GasBoilPlan(batches, removal, batch, candidateGasEnergy, directionAfter);
+			double candidateCellEnergy = thermalState.phaseCellEnergyAfterDelta(
+					cell, -batchEnergy, thermalMarkerContext());
+			return new GasBoilCellPlan(cell, batches, removal, batch, batchEnergy, removedSvq,
+					candidateLiquidTemperature, candidateCellEnergy);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException | PhaseCandidateUnavailableException unavailable) {
 			return null;
 		}
 	}
 
-	private void commitGasBoil(int cell, int node, GasBoilPlan plan) {
+	private void commitGasBoilGroup(int node, GasBoilGroupPlan plan) {
 		SignedDyadic inventoryBefore = exactInternalEnergy();
-		for (PhaseMarkerAllocation allocation : plan.removal().allocations()) {
+		record Allocation(int cell, PhaseMarkerAllocation value) { }
+		ArrayList<Allocation> allocations = new ArrayList<>();
+		for (GasBoilCellPlan cell : plan.cells()) for (PhaseMarkerAllocation allocation
+				: cell.removal().allocations()) allocations.add(new Allocation(cell.cell(), allocation));
+		allocations.sort(Comparator.comparingInt(
+				(Allocation allocation) -> allocation.value().marker()).reversed());
+		for (Allocation planned : allocations) {
+			int cell = planned.cell();
+			PhaseMarkerAllocation allocation = planned.value();
 			if (allocation.fullRemoval()) {
 				removeParticleInternalPhase(allocation.marker());
 			}
@@ -2056,8 +2213,16 @@ public final class FlipFluidDomain {
 		}
 		airNetwork.commitPhaseSource(node, plan.batch());
 		thermalState.commitGasNodeEnergy(node, plan.candidateGasEnergy());
+		int[] cells = new int[plan.cells().size()];
+		double[] cellEnergy = new double[cells.length];
+		for (int index = 0; index < cells.length; index++) {
+			GasBoilCellPlan cell = plan.cells().get(index);
+			cells[index] = cell.cell();
+			cellEnergy[index] = cell.candidateCellEnergy();
+			commitPendingPhaseVolume(cell.cell(), Math.negateExact(cell.removedSvq()));
+		}
 		gridDirty = true;
-		thermalState.repartitionCellEnergyConserving(cell, thermalMarkerContext(), inventoryBefore);
+		thermalState.repartitionPhaseCellsConserving(cells, cellEnergy, thermalMarkerContext(), inventoryBefore);
 	}
 
 	private GasCondensePlan planGasCondense(
@@ -2075,15 +2240,22 @@ public final class FlipFluidDomain {
 		long byCapacity = (capacity - occupied) / transition.lowerVolumeSvqPerBatch();
 		long high = Math.min(maximumBatches, Math.min(byGas, byCapacity));
 		if (high <= 0L) return null;
+		double liquidTemperature = thermalState.temperatureInCell(cell, thermalMarkerContext());
+		GasLiquidPhaseModel.Saturation current = phase.saturation(transition, liquidTemperature,
+				airNetwork.inventory(node), GasRegistry.STANDARD_PRESSURE_PA
+						+ thermalState.gasGaugePressure(node, airNetwork));
 		GasCondensePlan first = gasCondenseCandidate(
-				cell, node, liquidHandle, transition, before, phase, 1L);
-		if (first == null || first.directionAfter() != GasLiquidPhaseModel.Direction.CONDENSE) return first;
+				cell, node, liquidHandle, transition, before, phase, current, 1L);
+		if (first == null) return null;
+		if (first.directionAfter() != GasLiquidPhaseModel.Direction.CONDENSE) {
+			return first.closerToEquilibrium() ? first : null;
+		}
 		GasCondensePlan best = first;
 		long low = 2L;
 		while (low <= high) {
 			long middle = low + ((high - low) >>> 1);
 			GasCondensePlan candidate = gasCondenseCandidate(
-					cell, node, liquidHandle, transition, before, phase, middle);
+					cell, node, liquidHandle, transition, before, phase, current, middle);
 			if (candidate == null || candidate.directionAfter() != GasLiquidPhaseModel.Direction.CONDENSE) {
 				high = middle - 1L;
 			} else {
@@ -2096,7 +2268,8 @@ public final class FlipFluidDomain {
 
 	private GasCondensePlan gasCondenseCandidate(
 			int cell, int node, int liquidHandle, ThermalPhaseTransition transition,
-			PhaseCellInventory before, GasLiquidPhaseModel phase, long batches
+			PhaseCellInventory before, GasLiquidPhaseModel phase,
+			GasLiquidPhaseModel.Saturation currentSaturation, long batches
 	) {
 		try {
 			GasInventory requestedBatch = phase.gasBatch(transition, batches);
@@ -2170,23 +2343,25 @@ public final class FlipFluidDomain {
 			double candidateLiquidTemperature = thermalState.requirePhaseCandidateState(cell,
 					liquidInventoryAfterCondensation(cell, liquidHandle, target, targetMass,
 							condensedMixture, moved.mass()), batchEnergy, thermalMarkerContext());
-			GasLiquidPhaseModel.Direction directionAfter = prospectiveGasPhaseDirection(
+			GasLiquidPhaseModel.Saturation candidateSaturation = prospectiveGasPhaseSaturation(
 					node, transition, phase, candidateLiquidTemperature, take.second(), candidateGasEnergy);
 			return new GasCondensePlan(batches, take.first(), candidateGasEnergy, target,
-					condensedMixture, targetVolume, targetMass, slot, addedSvq, moved.mass(), directionAfter);
+					condensedMixture, targetVolume, targetMass, slot, addedSvq, moved.mass(),
+					candidateSaturation.direction(), gasSaturationImbalance(candidateSaturation)
+							< gasSaturationImbalance(currentSaturation));
 		} catch (ThermalStateFunction.EnergyOutsideValidityException | PhaseCandidateUnavailableException unavailable) {
 			return null;
 		}
 	}
 
 	/** Converts only prospective gas EoS/saturation validity failures into a shrinkable phase extent. */
-	private GasLiquidPhaseModel.Direction prospectiveGasPhaseDirection(
+	private GasLiquidPhaseModel.Saturation prospectiveGasPhaseSaturation(
 			int node, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
 			double liquidTemperature, GasInventory gasInventory, double gasEnergy
 	) {
 		try {
-			double pressure = thermalState.requireGasNodeState(node, gasInventory, gasEnergy, airNetwork);
-			return phase.saturation(transition, liquidTemperature, gasInventory, pressure).direction();
+			double pressure = prospectiveGasPhasePressure(node, gasInventory, gasEnergy);
+			return phase.saturation(transition, liquidTemperature, gasInventory, pressure);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException outsideThermalRange) {
 			throw outsideThermalRange;
 		} catch (IllegalArgumentException outsideGasPhaseRange) {
@@ -2194,6 +2369,16 @@ public final class FlipFluidDomain {
 					"Gas phase candidate is outside its pressure or saturation validity range",
 					outsideGasPhaseRange);
 		}
+	}
+
+	private double prospectiveGasPhasePressure(int node, GasInventory gasInventory, double gasEnergy) {
+		return thermalState.requireGasNodeState(node, gasInventory, gasEnergy, airNetwork);
+	}
+
+	private static double gasSaturationImbalance(GasLiquidPhaseModel.Saturation saturation) {
+		if (saturation.componentPartialPressurePa() == 0.0) return Double.POSITIVE_INFINITY;
+		return Math.abs(Math.log(
+				saturation.componentPartialPressurePa() / saturation.saturationPressurePa()));
 	}
 
 	private void commitGasCondense(int cell, int node, int liquidHandle, GasCondensePlan plan) {
@@ -2211,6 +2396,7 @@ public final class FlipFluidDomain {
 					unitScale.solverMass(plan.movedMass()),
 					plan.condensedMixture(), false, false);
 		}
+		commitPendingPhaseVolume(cell, plan.addedSvq());
 		gridDirty = true;
 		thermalState.repartitionCellEnergyConserving(cell, thermalMarkerContext(), inventoryBefore);
 	}
@@ -2240,18 +2426,42 @@ public final class FlipFluidDomain {
 
 	private int sealedInterfaceNode(int cell) {
 		if (airCellNodeId == null || markerCount[cell] == 0) return -1;
+		int ownedLineage = airCellLineageNodeId == null ? -1 : airCellLineageNodeId[cell];
+		if (ownedLineage >= 0) return ownedLineage > 0 ? ownedLineage : -1;
 		int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
 		int found = -1;
 		for (int[] direction : SURFACE_TENSION_DIRECTIONS) {
 			int nx = x + direction[0], ny = y + direction[1], nz = z + direction[2];
 			if (!inside(nx, ny, nz)) continue;
+			if (!(gasInterfaceFaceOpen(x, y, z, direction) > 0.0F)) continue;
 			int node = airCellNodeId[cellIndex(nx, ny, nz)];
-			if (node <= 0) continue;
+			if (node == AirNetwork.AMBIENT_NODE) return -1;
+			if (node < 0) continue;
 			if (found < 0) found = node;
-			else if (found != node) throw new ThermalPhaseBlockedException(
-					"Liquid/gas interface touches multiple sealed nodes");
+			else if (found != node) return -1;
 		}
 		return found;
+	}
+
+	private float gasInterfaceFaceOpen(int x, int y, int z, int[] direction) {
+		int dx = direction[0], dy = direction[1], dz = direction[2];
+		float fixed;
+		if (dx != 0) {
+			int faceX = x + (dx > 0 ? 1 : 0);
+			fixed = cutCells.xFaceOpen(faceX, y, z);
+			return movingBodyBoundary == null ? fixed
+					: movingBodyBoundary.xFaceOpen(faceX, y, z, fixed);
+		}
+		if (dy != 0) {
+			int faceY = y + (dy > 0 ? 1 : 0);
+			fixed = cutCells.yFaceOpen(x, faceY, z);
+			return movingBodyBoundary == null ? fixed
+					: movingBodyBoundary.yFaceOpen(x, faceY, z, fixed);
+		}
+		int faceZ = z + (dz > 0 ? 1 : 0);
+		fixed = cutCells.zFaceOpen(x, y, faceZ);
+		return movingBodyBoundary == null ? fixed
+				: movingBodyBoundary.zFaceOpen(x, y, faceZ, fixed);
 	}
 
 	private PhaseCellInventory phaseCellInventory(int cell, int upperLiquidHandle, String lowerPhaseId) {
@@ -2727,14 +2937,22 @@ public final class FlipFluidDomain {
 	private record PhaseRemovalPlan(
 			List<PhaseMarkerAllocation> allocations, PhaseComposition movedComposition, double movedEnergy
 	) { }
-	private record GasBoilPlan(
-			long batches, PhaseRemovalPlan removal, GasInventory batch, double candidateGasEnergy,
-			GasLiquidPhaseModel.Direction directionAfter
+	private record GasBoilCellInput(
+			int cell, double liquidTemperature, long maximumBatches
+	) { }
+	private record GasBoilCellPlan(
+			int cell, long batches, PhaseRemovalPlan removal, GasInventory batch, double batchEnergy,
+			long removedSvq, double candidateLiquidTemperature, double candidateCellEnergy
+	) { }
+	private record GasBoilGroupPlan(
+			long batches, List<GasBoilCellPlan> cells, GasInventory batch,
+			double candidateGasEnergy, boolean retainsBoiling, boolean closerToEquilibrium
 	) { }
 	private record GasCondensePlan(
 			long batches, GasInventory removedGas, double candidateGasEnergy, int target,
 			ChemicalMixtureRecord condensedMixture, float targetVolume, double targetMass, int slot,
-			long addedSvq, double movedMass, GasLiquidPhaseModel.Direction directionAfter
+			long addedSvq, double movedMass, GasLiquidPhaseModel.Direction directionAfter,
+			boolean closerToEquilibrium
 	) { }
 	private record JointPhasePlan(
 			long batches, boolean freezing, PhaseRemovalPlan removal,
@@ -4765,12 +4983,23 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 		float before = totalVolume();
 		double massBefore = totalMass();
+		MechanicalAuditAccumulator mechanicalAudit = new MechanicalAuditAccumulator(
+				particleKineticEnergyJoules());
 		lastGranularBoundaryImpulseX = 0.0;
 		lastGranularBoundaryImpulseY = 0.0;
 		lastGranularBoundaryImpulseZ = 0.0;
 		lastViscosityStats = new ViscosityStats(0, 0, 0.0);
 		int substeps = calculateSubsteps(config.timeStep());
 		float dt = config.timeStep() / substeps;
+		if (movingBodyBoundary != null) try {
+			movingBodyBoundary.rebuild(0.0, 0.0, cutCells);
+			refreshGasTopology(false);
+		} catch (MovingBodyBlockedException blocked) {
+			throw blocked;
+		} catch (IllegalArgumentException | IllegalStateException invalid) {
+			throw new MovingBodyBlockedException(MovingBodyBlockedException.Reason.GEOMETRY,
+					invalid.getMessage(), invalid);
+		}
 		int granularParcelCountBeforeAdvection = precipitationEnabled ? captureReactiveGranularCells() : 0;
 		int pressureIterations = 0;
 		for (int substep = 0; substep < substeps; substep++) {
@@ -4784,6 +5013,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						invalid.getMessage(), invalid);
 			}
 			rebuildGridFromParticles();
+			double stageKineticEnergy = gridKineticEnergyJoules();
+			mechanicalAudit.particleToGridTransferJoules += stageKineticEnergy - particleKineticEnergyJoules();
 			FlipViscositySolver.Plan viscosityPlan = prepareViscosityPlan(dt);
 			try {
 				updateGasNetwork(dt);
@@ -4817,15 +5048,30 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				}
 				pressureGranularCoupling = granularNextCoupling;
 			}
+			double nextKineticEnergy = gridKineticEnergyJoules();
+			mechanicalAudit.granularCouplingWorkJoules += nextKineticEnergy - stageKineticEnergy;
+			stageKineticEnergy = nextKineticEnergy;
 			// Dampen previously committed flow before body forces so a zero-velocity porous bed retains
 			// the full hydrostatic gravity/pressure balance in the shared projection.
 			applyGranularPorousDamping(dt);
 			if (movingBodyBoundary != null && materialRegistry != null && materialRegistry.hasAnyViscosity()) {
 				applyMovingBodyViscosity(dt);
 			}
+			nextKineticEnergy = gridKineticEnergyJoules();
+			mechanicalAudit.movingAndPorousBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
+			stageKineticEnergy = nextKineticEnergy;
 			applyGravity(dt);
+			nextKineticEnergy = gridKineticEnergyJoules();
+			mechanicalAudit.gravityWorkJoules += nextKineticEnergy - stageKineticEnergy;
+			stageKineticEnergy = nextKineticEnergy;
 			applyThermalBuoyancy(dt);
+			nextKineticEnergy = gridKineticEnergyJoules();
+			mechanicalAudit.thermalBuoyancyWorkJoules += nextKineticEnergy - stageKineticEnergy;
+			stageKineticEnergy = nextKineticEnergy;
 			applyLiquidPairSurfaceTensionForce(dt);
+			nextKineticEnergy = gridKineticEnergyJoules();
+			mechanicalAudit.surfaceTensionWorkJoules += nextKineticEnergy - stageKineticEnergy;
+			stageKineticEnergy = nextKineticEnergy;
 			if (viscosityPlan != null) {
 				try {
 					viscosityPlan.apply(dt, config.cellSize());
@@ -4836,7 +5082,13 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						Math.max(lastViscosityStats.substeps(), viscosityPlan.substeps()),
 						viscosityPlan.coupledPairs(), viscosityPlan.maximumRatePerSecond());
 			}
+			nextKineticEnergy = gridKineticEnergyJoules();
+			mechanicalAudit.viscosityWorkJoules += nextKineticEnergy - stageKineticEnergy;
+			stageKineticEnergy = nextKineticEnergy;
 			enforceSolidFaceVelocities();
+			nextKineticEnergy = gridKineticEnergyJoules();
+			mechanicalAudit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
+			stageKineticEnergy = nextKineticEnergy;
 			solvePressure(dt);
 			pressureIterations += lastPressureIterations;
 			if (movingBodyBoundary != null && !pressureProjectionConverged()) {
@@ -4855,17 +5107,28 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						invalidPendingWork);
 			}
 			projectVelocity(dt);
+			nextKineticEnergy = gridKineticEnergyJoules();
+			mechanicalAudit.pressureProjectionWorkJoules += nextKineticEnergy - stageKineticEnergy;
+			stageKineticEnergy = nextKineticEnergy;
 			publishPressureProjection();
 			if (phaseWork != null) {
 				thermalState.commitPhaseMechanicalWork(phaseWork, thermalMarkerContext());
 				Arrays.fill(pendingPhaseCellVolume, SignedDyadic.ZERO);
 			}
 			enforceSolidFaceVelocities();
+			nextKineticEnergy = gridKineticEnergyJoules();
+			mechanicalAudit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
+			stageKineticEnergy = nextKineticEnergy;
 			extrapolateVelocityIntoAir();
 			gridToParticles();
+			double particleKineticEnergy = particleKineticEnergyJoules();
+			mechanicalAudit.gridToParticleTransferJoules += particleKineticEnergy - stageKineticEnergy;
 			advectParticles(dt);
+			double advectedParticleKineticEnergy = particleKineticEnergyJoules();
+			mechanicalAudit.particleCollisionWorkJoules += advectedParticleKineticEnergy - particleKineticEnergy;
 			if (hasGranularInventory()) granularCollision.commit(granularParcels);
 		}
+		double carrierTransferInitialKineticEnergy = particleKineticEnergyJoules();
 		if (precipitationEnabled) markMovedReactiveGranularCells(granularParcelCountBeforeAdvection);
 		ThermalAxisStats thermalAxis = runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations);
 		ChemicalParcelStore.ReactionStats chemistry = thermalAxis.chemistry();
@@ -4905,6 +5168,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				granularCoupling.clear(); pressureGranularCoupling = null;
 			}
 		}
+		double reseedInitialKineticEnergy = particleKineticEnergyJoules();
+		mechanicalAudit.carrierInventoryTransferJoules +=
+				reseedInitialKineticEnergy - carrierTransferInitialKineticEnergy;
 		ensureParticleCapacity(particleReseeder.capacityUpperBound(particleCount));
 		SignedDyadic thermalBeforeReseed = thermalState == null ? SignedDyadic.ZERO : exactInternalEnergy();
 		FlipParticleReseeder.Result reseeding = particleReseeder.reseed(
@@ -4917,18 +5183,58 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				this::markerPositionAllowed
 		);
 		particleCount = reseeding.particleCount();
+		double finalParticleKineticEnergy = particleKineticEnergyJoules();
+		mechanicalAudit.reseedTransferJoules += finalParticleKineticEnergy - reseedInitialKineticEnergy;
 		if (thermalState != null) thermalState.recordRoundoff(exactInternalEnergy().subtract(thermalBeforeReseed));
 		gridDirty = true;
 		rebuildGridFromParticles();
 		if (movingBodyBoundary != null) requireMovingBodyCapacity();
 		lastMovingBodyResults = movingBodyBoundary == null ? List.of() : movingBodyBoundary.results();
-		movingBodyBoundary = null;
+		if (movingBodyBoundary != null) {
+			movingBodyBoundary = null;
+			refreshGasTopology(false);
+		}
 		return new StepStats(
 				substeps, pressureIterations, lastPressureResidual, before, totalVolume(), massBefore, totalMass(),
 				reseeding.merged(), reseeding.split(), reseeding.budgetSkipped(), reseeding.geometrySkipped(),
 				reseeding.ledgerError(), reseeding.massLedgerError(),
-				chemistry.dirtyCells(), chemistry.evaluations(), chemistry.changedMarkers()
+				chemistry.dirtyCells(), chemistry.evaluations(), chemistry.changedMarkers(),
+				thermalAxis.condensedPhase(), thermalAxis.gasPhase(),
+				mechanicalAudit.finish(finalParticleKineticEnergy)
 		);
+	}
+
+	private double particleKineticEnergyJoules() {
+		double energy = 0.0;
+		for (int marker = 0; marker < particleCount; marker++) {
+			double speedSquared = particleVelocityX[marker] * (double) particleVelocityX[marker]
+					+ particleVelocityY[marker] * (double) particleVelocityY[marker]
+					+ particleVelocityZ[marker] * (double) particleVelocityZ[marker];
+			energy += 0.5 * unitScale.kilograms(particleMass[marker]) * speedSquared;
+		}
+		if (!(Double.isFinite(energy) && energy >= 0.0)) {
+			throw new ArithmeticException("Particle kinetic-energy audit is invalid");
+		}
+		return energy;
+	}
+
+	private double gridKineticEnergyJoules() {
+		double energy = faceKineticEnergyJoules(velocityX, p2gMassWeightX)
+				+ faceKineticEnergyJoules(velocityY, p2gMassWeightY)
+				+ faceKineticEnergyJoules(velocityZ, p2gMassWeightZ);
+		if (!(Double.isFinite(energy) && energy >= 0.0)) {
+			throw new ArithmeticException("Grid kinetic-energy audit is invalid");
+		}
+		return energy;
+	}
+
+	private double faceKineticEnergyJoules(float[] velocity, float[] p2gWeight) {
+		double energy = 0.0;
+		for (int face = 0; face < velocity.length; face++) {
+			double mass = unitScale.kilograms(faceSolverMass(p2gWeight[face]));
+			energy += 0.5 * mass * velocity[face] * (double) velocity[face];
+		}
+		return energy;
 	}
 
 	private void rebuildGridFromParticles() {
@@ -5114,13 +5420,21 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	) { }
 
 	private void refreshGasTopology() {
+		refreshGasTopology(true);
+	}
+
+	private void refreshGasTopology(boolean applyVolumeWork) {
 		AirCavityScanner.Result result = airScanner.scan(solid, markerCount, volume, cutCells,
 				pressureGranularCoupling, sealedDomainBoundary, movingBodyBoundary);
-		commitGasTopology(planGasTopology(result));
+		commitGasTopology(planGasTopology(result, applyVolumeWork));
 	}
 
 	/** Builds the complete gas/energy topology candidate before any owner is mutated. */
 	private GasTopologyPlan planGasTopology(AirCavityScanner.Result result) {
+		return planGasTopology(result, true);
+	}
+
+	private GasTopologyPlan planGasTopology(AirCavityScanner.Result result, boolean applyVolumeWork) {
 		int sealed = result.sealedNodeCount();
 		boolean thermalGas = thermalState != null && thermalState.gasModelBound();
 		double[] availableVolumes = result.sealedAvailableVolume();
@@ -5215,7 +5529,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			}
 		}
 		FlipThermalState.GasRemapPlan thermalPlan = !thermalGas ? null : thermalState.planGasRemap(
-				airNetwork, inventories, availableVolumes, mixedEnergy, inheritedAvailable, sourceEnergy, sinkEnergy);
+				airNetwork, inventories, availableVolumes, mixedEnergy, inheritedAvailable,
+				sourceEnergy, sinkEnergy, applyVolumeWork);
 		ArrayList<AirEdge> edges = new ArrayList<>(result.geometricEdges().size());
 		for (AirCavityScanner.GeometricEdge edge : result.geometricEdges()) {
 			edges.add(new AirEdge(edge.firstNode(), edge.secondNode(), edge.areaSquareMeters(), 0.65));
@@ -5596,12 +5911,14 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		float[] aperture = new float[velocity.length];
 		for (int z = 0; z < fieldZ; z++) for (int y = 0; y < fieldY; y++) for (int x = 0; x < fieldX; x++) {
 			int face = (z * fieldY + y) * fieldX + x;
-			aperture[face] = switch (axis) {
+			float geometricAperture = switch (axis) {
 				case 0 -> movingXFaceOpen(x, y, z);
 				case 1 -> movingYFaceOpen(x, y, z);
 				case 2 -> movingZFaceOpen(x, y, z);
 				default -> throw new IllegalArgumentException("Viscosity field axis is invalid");
 			};
+			aperture[face] = (float) Math.min(geometricAperture,
+					Math.max(0.0, faceVolume[face]));
 			if (weight[face] <= 1.0E-8F) continue;
 			mass[face] = unitScale.kilograms(faceSolverMass(weight[face]));
 			viscosity[face] = faceVolume[face] / faceVolumeOverViscosity[face];
@@ -5899,11 +6216,13 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private int adjacentGasLineage(int cell) {
 		if (airCellLineageNodeId == null) return -1;
+		if (airCellLineageNodeId[cell] >= 0) return airCellLineageNodeId[cell];
 		int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
 		int found = -1;
 		for (int[] direction : SURFACE_TENSION_DIRECTIONS) {
 			int nx = x + direction[0], ny = y + direction[1], nz = z + direction[2];
 			if (!inside(nx, ny, nz)) continue;
+			if (!(gasInterfaceFaceOpen(x, y, z, direction) > 0.0F)) continue;
 			int lineage = airCellLineageNodeId[cellIndex(nx, ny, nz)];
 			if (lineage < 0) continue;
 			if (found < 0) found = lineage;
@@ -7428,6 +7747,76 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	public record VolumeDistribution(int activeCells, int visibleCells, int denseCells) { }
 	public record SolidDistribution(int partialCells, int fullCells) { }
 	public record ViscosityStats(int substeps, int coupledPairs, double maximumRatePerSecond) { }
+	public record MechanicalStepAudit(
+			double initialParticleKineticEnergyJoules,
+			double finalParticleKineticEnergyJoules,
+			double particleToGridTransferJoules,
+			double granularCouplingWorkJoules,
+			double movingAndPorousBoundaryWorkJoules,
+			double gravityWorkJoules,
+			double thermalBuoyancyWorkJoules,
+			double surfaceTensionWorkJoules,
+			double viscosityWorkJoules,
+			double fixedBoundaryWorkJoules,
+			double pressureProjectionWorkJoules,
+			double gridToParticleTransferJoules,
+			double particleCollisionWorkJoules,
+			double carrierInventoryTransferJoules,
+			double reseedTransferJoules,
+			double closureResidualJoules
+	) { }
+	private static final class MechanicalAuditAccumulator {
+		private final double initialParticleKineticEnergyJoules;
+		private double particleToGridTransferJoules;
+		private double granularCouplingWorkJoules;
+		private double movingAndPorousBoundaryWorkJoules;
+		private double gravityWorkJoules;
+		private double thermalBuoyancyWorkJoules;
+		private double surfaceTensionWorkJoules;
+		private double viscosityWorkJoules;
+		private double fixedBoundaryWorkJoules;
+		private double pressureProjectionWorkJoules;
+		private double gridToParticleTransferJoules;
+		private double particleCollisionWorkJoules;
+		private double carrierInventoryTransferJoules;
+		private double reseedTransferJoules;
+
+		private MechanicalAuditAccumulator(double initialParticleKineticEnergyJoules) {
+			this.initialParticleKineticEnergyJoules = initialParticleKineticEnergyJoules;
+		}
+
+		private MechanicalStepAudit finish(double finalParticleKineticEnergyJoules) {
+			double accounted = particleToGridTransferJoules + granularCouplingWorkJoules
+					+ movingAndPorousBoundaryWorkJoules + gravityWorkJoules
+					+ thermalBuoyancyWorkJoules + surfaceTensionWorkJoules + viscosityWorkJoules
+					+ fixedBoundaryWorkJoules + pressureProjectionWorkJoules
+					+ gridToParticleTransferJoules + particleCollisionWorkJoules
+					+ carrierInventoryTransferJoules + reseedTransferJoules;
+			double residual = finalParticleKineticEnergyJoules
+					- initialParticleKineticEnergyJoules - accounted;
+			double scale = Math.abs(initialParticleKineticEnergyJoules)
+					+ Math.abs(finalParticleKineticEnergyJoules)
+					+ Math.abs(particleToGridTransferJoules) + Math.abs(granularCouplingWorkJoules)
+					+ Math.abs(movingAndPorousBoundaryWorkJoules) + Math.abs(gravityWorkJoules)
+					+ Math.abs(thermalBuoyancyWorkJoules) + Math.abs(surfaceTensionWorkJoules)
+					+ Math.abs(viscosityWorkJoules) + Math.abs(fixedBoundaryWorkJoules)
+					+ Math.abs(pressureProjectionWorkJoules) + Math.abs(gridToParticleTransferJoules)
+					+ Math.abs(particleCollisionWorkJoules) + Math.abs(carrierInventoryTransferJoules)
+					+ Math.abs(reseedTransferJoules);
+			if (!Double.isFinite(residual) || !Double.isFinite(scale)
+					|| Math.abs(residual) > Math.ulp(scale == 0.0 ? 1.0 : scale) * 128.0) {
+				throw new ArithmeticException("Mechanical step energy audit does not close: residual="
+						+ residual + ", scale=" + scale);
+			}
+			return new MechanicalStepAudit(initialParticleKineticEnergyJoules, finalParticleKineticEnergyJoules,
+					particleToGridTransferJoules, granularCouplingWorkJoules,
+					movingAndPorousBoundaryWorkJoules, gravityWorkJoules, thermalBuoyancyWorkJoules,
+					surfaceTensionWorkJoules, viscosityWorkJoules, fixedBoundaryWorkJoules,
+					pressureProjectionWorkJoules, gridToParticleTransferJoules,
+					particleCollisionWorkJoules, carrierInventoryTransferJoules, reseedTransferJoules,
+					residual);
+		}
+	}
 	record MaterialInventory(double volume, double mass, double centerY) { }
 	public record StepStats(
 			int substeps,
@@ -7445,8 +7834,16 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			double reseedMassLedgerError,
 			int chemistryDirtyCells,
 			int chemistryEvaluations,
-			int chemistryChangedMarkers
+			int chemistryChangedMarkers,
+			ThermalPhaseStats condensedPhase,
+			GasThermalPhaseStats gasPhase,
+			MechanicalStepAudit mechanicalAudit
 	) {
+		public StepStats {
+			Objects.requireNonNull(condensedPhase, "condensedPhase");
+			Objects.requireNonNull(gasPhase, "gasPhase");
+			Objects.requireNonNull(mechanicalAudit, "mechanicalAudit");
+		}
 		public float relativeVolumeError() { return volumeBefore == 0.0F ? 0.0F : Math.abs(volumeAfter - volumeBefore) / volumeBefore; }
 		public double relativeMassError() { return massBefore == 0.0 ? 0.0 : Math.abs(massAfter - massBefore) / massBefore; }
 	}

@@ -255,6 +255,16 @@ public final class AirNetworkValidation {
 		check(after.components().stream().map(GasComponentAmount::componentId).toList()
 				.equals(List.of("test:alpha", "test:beta")), "component transport lost stable identities");
 		check(network.auditClosed(), "component transport did not close mass/species audit");
+
+		List<GasInventory> firstParts = network.inventory(target).partition(new long[] { 17L, 31L });
+		List<GasInventory> secondParts = network.inventory(split[0]).partition(new long[] { 23L, 29L });
+		List<GasInventory> crossed = List.of(
+				firstParts.get(0).merge(secondParts.get(0)),
+				firstParts.get(1).merge(secondParts.get(1)));
+		network.remapNodes(new double[] { 1.75, 2.25 }, crossed,
+				GasInventory.EMPTY, GasInventory.EMPTY);
+		check(network.auditClosed(),
+				"multi-node topology remap used a different mass summation path than live-node audit");
 	}
 
 	private static void validateComponentSpeciesBoundary() {

@@ -110,7 +110,7 @@ gas node 的共同温度由各 component 的质量、species 和 node `U` 反演
 p = P0 * (Vstd / Vavailable) * (T / T0)
 ```
 
-在单一 caloric segment 内，几何改变按常 `cv` 理想气体等熵关系计算压缩/膨胀，`Delta U` 记为进入 gas inventory 的 mechanical work。孔流搬运源状态焓 `h = u + p*v`；node 合并时能量相加，分裂时所有 child 保持 parent 温度且最后一个 child 接受浮点余数。跨 caloric segment 或越过 gas 压力有效窗拒绝候选。
+在单一 caloric segment 内，几何改变按常 `cv` 理想气体等熵关系计算压缩/膨胀，`Delta U` 记为进入 gas inventory 的 mechanical work。有限孔流从刚性 well-mixed source 的解析 blowdown 末态得到 retained `U`，搬运 `U_before-U_after`；target 接收完全相同的 raw 能量。node 合并时能量相加，分裂时所有 child 保持 parent 温度且最后一个 child 接受浮点余数。moving snapshot attach/detach 不代表物理体积轨迹，因此 remap inventory/U 而不记功。跨 caloric segment 或越过 gas 压力有效窗拒绝候选。
 
 ## 相变
 
@@ -129,6 +129,9 @@ profile 中的 phasechange capability 依赖 thermal。每个 transition 用完�
 - liquid water 与 water vapor 使用同一个 transition 的质量、潜热和 exact standard-volume batch。
 - 沸腾/凝结由 water-vapor 分压、温度和 transition 饱和压力关系决定，并受 sealed/ambient gas inventory 容量约束。
 - commit 同时更新 liquid marker、gas component nanos/kg、gas node energy、source/sink 与 topology remap；任何列不闭合则整批拒绝。
+- 同一 sealed node 的所有可沸腾界面 cell 作为一个候选求总 exact integer extent，再按各 cell 库存做确定性的均匀 water-fill 分配；gas inventory/U 只提交一次，cell U 与 marker 侧列同批提交。不能按 cell 顺序把整次 node extent 集中到少数格。
+- 单批跨越饱和平衡时，只有 `abs(log(p_partial/p_sat))` 严格缩小才可提交；到达最接近的可表示格点后保持稳定，不能逐 tick 沸腾/凝结往返。
+- 沸腾把负 liquid SVQ、凝结把正 liquid SVQ 写入 signed pending phase-volume；下一次真实 pressure projection exactly-once 消费并清空。runtime body attach/detach 不得消费或制造这份功。
 
 水/蒸气的方向由 ideal-mixture component 分压和数据化的 Clausius–Clapeyron 饱和关系决定：
 
@@ -143,7 +146,7 @@ p_partial = p_absolute * Vstd,vapor / Vstd,total
 
 每个 logical step 的固液与气液共享最多 4096 次 phase operation；按 0.05 s step 和 1 g batch，理论数值上限为 `81.92 kg/s`。这是防止无界工作量的预算，不是现实相界动力学。真实速率由传入的有限热通量、库存、容量与饱和条件限制；若量化 fixture 需要界面动力学，应新增有适用域的数据模型，不能把 tick 倍率塞入潜热。
 
-气液候选先用当前 marker geometry 同步 gas topology，再规划 inventory/energy；提交后再次验证 node membership、available volume 和 energy ordinal。这样任何可发布 logical state 都不会出现 marker 已变而 gas node 仍属于上一拓扑的半代次。
+气液候选先用当前 marker geometry 同步 gas topology，再规划 inventory/energy；提交后再次验证 node membership、available volume 和 energy ordinal。这样任何可发布 logical state 都不会出现 marker 已变而 gas node 仍属于上一拓扑的半代次。固液相变在当前温度与 transition 全部声明压力下都不可能发生时不读取 projection provenance；一旦存在任一可行方向，仍必须消费匹配 generation、marker、质量、occupancy 与 gas lineage 的真实压力。
 
 ## 反应热
 

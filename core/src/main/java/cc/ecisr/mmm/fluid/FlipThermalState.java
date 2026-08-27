@@ -420,6 +420,15 @@ final class FlipThermalState {
 			double[] mixedEnergy, double[] inheritedAvailableVolumes,
 			double sourceEnergy, double sinkEnergy
 	) {
+		return planGasRemap(oldNetwork, inventories, availableVolumes, mixedEnergy,
+				inheritedAvailableVolumes, sourceEnergy, sinkEnergy, true);
+	}
+
+	GasRemapPlan planGasRemap(
+			AirNetwork oldNetwork, List<GasInventory> inventories, double[] availableVolumes,
+			double[] mixedEnergy, double[] inheritedAvailableVolumes,
+			double sourceEnergy, double sinkEnergy, boolean applyVolumeWork
+	) {
 		if (!hasGasEnergy(oldNetwork.nodeCount()) || inventories == null
 				|| inventories.size() != availableVolumes.length || inventories.size() != mixedEnergy.length
 				|| inventories.size() != inheritedAvailableVolumes.length
@@ -431,14 +440,30 @@ final class FlipThermalState {
 			if (inventories.get(node).isEmpty() || !(Double.isFinite(availableVolumes[node]) && availableVolumes[node] > 0.0)
 					|| !(Double.isFinite(inheritedAvailableVolumes[node]) && inheritedAvailableVolumes[node] > 0.0)
 					|| !Double.isFinite(result[node])) {
-				throw new IllegalArgumentException("Gas thermal remap produced an invalid node");
+				throw new IllegalArgumentException("Gas thermal remap produced an invalid node " + (node + 1)
+						+ ": inventoryNanos=" + inventories.get(node).standardVolumeNanos()
+						+ ", available=" + availableVolumes[node]
+						+ ", inheritedAvailable=" + inheritedAvailableVolumes[node]
+						+ ", mixedEnergy=" + result[node]
+						+ ", sourceEnergy=" + sourceEnergy + ", sinkEnergy=" + sinkEnergy);
 			}
-			if (Double.doubleToRawLongBits(inheritedAvailableVolumes[node])
+			if (!applyVolumeWork || Double.doubleToRawLongBits(inheritedAvailableVolumes[node])
 					== Double.doubleToRawLongBits(availableVolumes[node])) {
 				gasModel.absolutePressure(inventories.get(node), availableVolumes[node], result[node]);
 			} else {
-				result[node] = gasModel.compressAdiabatically(inventories.get(node), result[node],
-						inheritedAvailableVolumes[node], availableVolumes[node]).finalInternalEnergy();
+				try {
+					result[node] = gasModel.compressAdiabatically(inventories.get(node), result[node],
+							inheritedAvailableVolumes[node], availableVolumes[node]).finalInternalEnergy();
+				} catch (IllegalArgumentException invalidCompression) {
+					throw new IllegalArgumentException("Gas thermal remap node " + (node + 1)
+							+ " failed adiabatic volume work: inventoryNanos="
+							+ inventories.get(node).standardVolumeNanos()
+							+ ", inheritedAvailable=" + inheritedAvailableVolumes[node]
+							+ ", available=" + availableVolumes[node]
+							+ ", mixedEnergy=" + result[node]
+							+ ", oldNodes=" + oldNetwork.nodeCount()
+							+ ", newNodes=" + inventories.size(), invalidCompression);
+				}
 			}
 		}
 		SignedDyadic oldGas = SignedDyadic.sum(gasNodeEnergy);
@@ -486,17 +511,19 @@ final class FlipThermalState {
 			throw new IllegalArgumentException("Gas thermal transfer plan is incompatible");
 		}
 		double[] result = gasNodeEnergy.clone();
-		double sourceTemperature = sourceNode == AirNetwork.AMBIENT_NODE
-				? insertionTemperatureK : gasTemperature(sourceNode, network);
-		double carried = gasModel.enthalpy(moved, sourceTemperature);
+		double carried;
 		SignedDyadic before = SignedDyadic.sum(gasNodeEnergy);
 		SignedDyadic imported = SignedDyadic.ZERO, exported = SignedDyadic.ZERO;
 		if (sourceNode == AirNetwork.AMBIENT_NODE) {
+			carried = gasModel.enthalpy(moved, insertionTemperatureK);
 			result[targetNode - 1] += carried;
 			gasModel.absolutePressure(targetAfter, network.availableVolume(targetNode), result[targetNode - 1]);
 			imported = SignedDyadic.of(carried);
 		} else {
-			result[sourceNode - 1] -= carried;
+			GasThermalModel.Outflow outflow = gasModel.adiabaticOutflow(
+					network.inventory(sourceNode), result[sourceNode - 1], sourceAfter);
+			carried = outflow.carriedEnergy();
+			result[sourceNode - 1] = outflow.finalInternalEnergy();
 			gasModel.absolutePressure(sourceAfter, network.availableVolume(sourceNode), result[sourceNode - 1]);
 			if (targetNode == AirNetwork.AMBIENT_NODE) exported = SignedDyadic.of(carried);
 			else {
@@ -861,6 +888,21 @@ final class FlipThermalState {
 		return phaseCandidateState(cell, condensedInventory, cellEnergy, markers).temperatureK();
 	}
 
+	double phaseCellEnergyAfterDelta(int cell, double cellEnergyDelta, MarkerContext markers) {
+		if (cell < 0 || cell >= cellGrid.cellCount() || !Double.isFinite(cellEnergyDelta)) {
+			throw new IllegalArgumentException("Thermal phase cell-energy candidate is invalid");
+		}
+		ThermalCellGrid.CarrierAccess current = carrierAccess(markers);
+		SignedDyadic cellEnergy = SignedDyadic.of(cellEnergyDelta);
+		for (int carrier = 0; carrier < current.carrierCount(); carrier++) if (current.cell(carrier) == cell) {
+			cellEnergy = cellEnergy.add(SignedDyadic.of(current.internalEnergy(carrier)));
+		}
+		double result = cellEnergy.toDouble();
+		if (!Double.isFinite(result)) throw new IllegalArgumentException(
+				"Thermal phase cell-energy candidate is not representable");
+		return result;
+	}
+
 	private ThermalStateFunction.State phaseCandidateState(
 			int cell, List<ThermalStateFunction.InventoryPortion> phaseInventory,
 			SignedDyadic cellEnergy, MarkerContext markers
@@ -1087,6 +1129,28 @@ final class FlipThermalState {
 		}
 		cellGrid.rebuildWithCellEnergy(current, cell, targetCellEnergy);
 		double[] target = cellGrid.copyInternalEnergy();
+		cellGrid.setCellInternalEnergies(target);
+		audit = audit.withRoundoff(exactEnergy(markers.markerCount()).subtract(inventoryBefore));
+	}
+
+	void repartitionPhaseCellsConserving(
+			int[] cells, double[] targetCellEnergy, MarkerContext markers, SignedDyadic inventoryBefore
+	) {
+		if (cells == null || targetCellEnergy == null || cells.length == 0
+				|| cells.length != targetCellEnergy.length) {
+			throw new IllegalArgumentException("Thermal phase cell-energy commit is invalid");
+		}
+		cellGrid.rebuild(carrierAccess(markers));
+		double[] target = cellGrid.copyInternalEnergy();
+		int previous = -1;
+		for (int index = 0; index < cells.length; index++) {
+			int cell = cells[index];
+			if (cell <= previous || cell >= target.length || !Double.isFinite(targetCellEnergy[index])) {
+				throw new IllegalArgumentException("Thermal phase cells are not canonical");
+			}
+			previous = cell;
+			target[cell] = targetCellEnergy[index];
+		}
 		cellGrid.setCellInternalEnergies(target);
 		audit = audit.withRoundoff(exactEnergy(markers.markerCount()).subtract(inventoryBefore));
 	}

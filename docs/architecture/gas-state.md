@@ -9,7 +9,7 @@
 
 ### Cavity scan
 
-air cell 必须同时满足：非 solid、`markerCount == 0`，且扣除 cut-cell、granular/coherent occupancy 后仍有正 open volume。六邻域 flood fill 只跨越接近全开的 face；部分开放 face 不合并 component，而是形成有限速率 geometric edge。
+air cell 必须同时满足：非 solid、`markerCount == 0`，且从几何 open volume 扣除 liquid fraction 与 granular/coherent occupancy 后仍有严格正 residual gas volume。marker 已移走但平滑 liquid volume 仍填满容量的 cell 不能建立零体积 node。六邻域 flood fill 只跨越接近全开的静态 cut-face；静态部分开放 face 不合并 component，而是形成有限速率 geometric edge。轴对齐 moving AABB 只提供粗分数 aperture：原本全开的静态 face 只要仍有正动态 aperture 就保持同一 cavity，降为零才切断连通，避免把盒边的体素薄隙伪造成独立有限气腔。
 
 - controller 已验证闭壳时，solver 外边界不自动判作 ambient；命令临时域和真实缺口仍连接 ambient node 0。
 - scan 按固定邻居顺序执行，节点以 canonical minimum-cell key 排序，保证同一几何得到确定 topology。
@@ -41,7 +41,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 - 新腔体按环境组成和当前可用体积记 source；
 - 相变产生或消耗的 water vapor 通过同一组件库存与 source/sink 审计提交。
 
-部分充液界面的短时拓扑抖动可使用 runtime lineage 减少虚假空气周转，但不能改变持久 membership 或物质账本。
+部分充液界面的短时拓扑抖动使用 scanner 生成的 runtime lineage 减少虚假空气周转，但不能改变持久 membership 或物质账本。气液相变和 pressure provenance 只能消费该 cell 唯一拥有的 sealed lineage；没有 owner、连接 ambient 或同时接触多个 sealed node 时，该 cell 本步不消费气体库存，不能猜一个 node 或因其他合法界面仍可推进而暂停全域。
 
 重扫先建立旧 node 与新 node 的实际 cell overlap，再纯规划全部 transfer：
 
@@ -50,6 +50,8 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 - 一对多 split 按 overlap/available-volume 整数权重分配，最后一个非空 child 接收 raw remainder；
 - 连到 ambient 的份额进入 sink，凭空形成的 sealed volume按 ambient composition进入 source；
 - topology 与 thermal U 的 transfer plan 必须一起可提交，否则 network 保持重扫前状态。
+
+mass 与 residual 的 remap roundoff 必须按 replacement 中每个实际 node inventory 的 component 顺序精确求和，不能先把多个 node 聚成浮点 component 再走一条不同于 live audit 的求和路径。moving snapshot 的运行时 attach/detach 只重建表示并无功 remap inventory/U；snapshot 内旧 pose 到新 pose 的真实几何变化才按 available volume 结算绝热功。
 
 ## 压力与热耦合
 
@@ -83,7 +85,7 @@ rho_gas = total_mass_kg / Vavailable
 Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 ```
 
-一个 step 的 transfer 会被共同平衡压力所需的最大份额限制，不能越过均压点。标准体积 nanos 用整数结算；热状态同时搬运源侧焓 `h = u + p*v`。ambient 流入记 source，流出记 sink；节点间转移不记外部源汇。
+一个 step 的 transfer 会被共同平衡压力所需的最大份额限制，不能越过均压点。标准体积 nanos 用整数结算；热状态的有限 node outflow 使用常 `cv`、刚性、well-mixed blowdown 的解析末态 `T2/T1 = (Vstd2/Vstd1)^(R/Cv)`，搬运能量为 `U1-U2`，而不是用初态焓乘整个有限流量。target 精确接收同一能量；ambient 流入记 source，流出记 sink；节点间转移不记外部源汇。
 
 ## 持久化
 
