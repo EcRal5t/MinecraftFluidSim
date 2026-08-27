@@ -17,7 +17,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		volumeDriftCorrectionPreservesLegitimateSurfaceDeficits();
 		fractionalHydrostaticColumnsBalanceGravity();
 		projectedHydrostaticPressureIntegratesOnMovingBox();
-		floatingBodyReplayCommitsEveryTick();
+		floatingBodyReplayHasDecayingEnvelope();
 		mixedBodiesAreOrderIndependent();
 		movingBodyPressureNonconvergenceRejectsCandidate();
 		thinLayerRegularizationRemainsStable();
@@ -27,7 +27,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		System.out.println("FlipFluid free-surface validation passed" + (fast ? " (short; 5,000-step soak skipped)" : ""));
 	}
 
-	private static void floatingBodyReplayCommitsEveryTick() {
+	private static void floatingBodyReplayHasDecayingEnvelope() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 0.05F,
 				240, 1.0E-6F, 0.40F, 2.0E-3F, 0.0F);
 		FlipFluidDomain domain = new FlipFluidDomain(10, 12, 10, config, 20_000);
@@ -47,9 +47,10 @@ public final class FlipFluidFreeSurfaceValidation {
 		prepareBodyCompatibleFluid(domain, previous);
 		FluidDomainState state = domain.captureAuthoritativeState();
 		MovingBodySurfaceSnapshot.BoxPose current = previous;
-		double nextTickVelocityY = -1.6 * 0.98;
+		double nextTickVelocityY = -config.gravity() * config.timeStep();
+		double[] centres = new double[160];
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
-		for (int step = 0; step < 80; step++) {
+		for (int step = 0; step < centres.length; step++) {
 			double boundaryVelocityY = (current.minimumY() - previous.minimumY()) / config.timeStep();
 			MovingBodySurfaceSnapshot.Body body = new MovingBodySurfaceSnapshot.Body(
 					1L, previous, current, 0.0, boundaryVelocityY, 0.0,
@@ -59,12 +60,32 @@ public final class FlipFluidFreeSurfaceValidation {
 					step, state, new MovingBodySurfaceSnapshot(List.of(body)), false, 0));
 			MovingBodyStepResult result = candidate.movingBodyResults().getFirst();
 			state = candidate.state();
+			centres[step] = 0.5 * (current.minimumY() + current.maximumY());
 			previous = current;
 			current = translateY(current, result.finalVelocityYMetresPerSecond() * config.timeStep());
-			nextTickVelocityY = (result.finalVelocityYMetresPerSecond() - 1.6) * 0.98;
+			nextTickVelocityY = result.finalVelocityYMetresPerSecond()
+					- config.gravity() * config.timeStep();
 			check(Double.isFinite(current.minimumY()) && Double.isFinite(nextTickVelocityY),
 					"floating player replay produced a non-finite entity state at tick " + step);
 		}
+		checkOscillationEnvelopeDecays(centres);
+	}
+
+	private static void checkOscillationEnvelopeDecays(double[] positions) {
+		double[] extrema = new double[positions.length];
+		int count = 0;
+		for (int tick = 1; tick + 1 < positions.length; tick++) {
+			double before = positions[tick] - positions[tick - 1];
+			double after = positions[tick + 1] - positions[tick];
+			if (before != 0.0 && after != 0.0 && Math.signum(before) != Math.signum(after)) {
+				extrema[count++] = positions[tick];
+			}
+		}
+		check(count >= 4, "floating player replay did not expose enough extrema for an envelope audit");
+		double firstHalfCycle = Math.abs(extrema[1] - extrema[0]);
+		double lastHalfCycle = Math.abs(extrema[count - 1] - extrema[count - 2]);
+		check(lastHalfCycle < firstHalfCycle,
+				"floating player oscillation envelope grew: first=" + firstHalfCycle + ", last=" + lastHalfCycle);
 	}
 
 	private static void prepareBodyCompatibleFluid(

@@ -27,8 +27,18 @@ public final class FluidCutCellShapeValidation {
 		movingBodyDefinitionsAreStrictAndDataDriven();
 		axisAlignedMovingBodySurfaceIsExactAndBounded();
 		movingBodySeparatesBoundaryMotionFromMomentum();
+		dynamicBodyUsesSolverGravity();
 		movingBodiesRequireEveryTickFluidSteps();
 		System.out.println("Minecraft cut-cell shape validation passed");
+	}
+
+	private static void dynamicBodyUsesSolverGravity() {
+		double physical = MinecraftEntityFluidInteraction.dynamicMomentumVelocityY(
+				-0.25, -1.75, false, 9.81, 0.05);
+		double gravityFree = MinecraftEntityFluidInteraction.dynamicMomentumVelocityY(
+				-0.25, -1.75, true, 9.81, 0.05);
+		check(physical == -0.25 - 9.81 * 0.05 && gravityFree == -1.75,
+				"dynamic entity momentum did not use the solver gravity contract");
 	}
 
 	private static void movingBodySeparatesBoundaryMotionFromMomentum() {

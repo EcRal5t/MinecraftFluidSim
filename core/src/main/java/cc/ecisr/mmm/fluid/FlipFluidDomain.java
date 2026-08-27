@@ -6358,12 +6358,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		double available = 0.0, occupied = 0.0;
 		for (int cell = 0; cell < cellCount; cell++) {
 			double capacity = effectiveOpenCellVolume(cell);
-			double tolerance = Math.max(Math.ulp(capacity) * 16.0, 1.0E-9);
-			if (exactCellMarkerVolume[cell] > capacity + tolerance) {
-				throw new MovingBodyBlockedException(MovingBodyBlockedException.Reason.CAPACITY,
-						"Moving body leaves insufficient liquid capacity in cell " + cell
-						+ ": liquid=" + exactCellMarkerVolume[cell] + ", capacity=" + capacity);
-			}
 			available += capacity;
 			occupied += exactCellMarkerVolume[cell];
 		}

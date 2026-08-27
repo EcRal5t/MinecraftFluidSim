@@ -57,6 +57,9 @@ final class MinecraftEntityFluidInteraction {
 			double velocityX = (afterWorld.minX - beforeWorld.minX) / timeStepSeconds;
 			double velocityY = (afterWorld.minY - beforeWorld.minY) / timeStepSeconds;
 			double velocityZ = (afterWorld.minZ - beforeWorld.minZ) / timeStepSeconds;
+			double physicalMomentumVelocityY = dynamicMomentumVelocityY(
+					velocityY, preVelocityPerTick.y * TICKS_PER_SECOND, entity.isNoGravity(),
+					region.domain().config().gravity(), timeStepSeconds);
 			long transientId = frozen.size();
 			Definition definition = definition(entity, definitions);
 			MovingBodySurfaceSnapshot.BoxPose before = localPose(beforeWorld, origin);
@@ -67,7 +70,7 @@ final class MinecraftEntityFluidInteraction {
 					definition.mode() == MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC
 							? preVelocityPerTick.x * TICKS_PER_SECOND : velocityX,
 					definition.mode() == MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC
-							? preVelocityPerTick.y * TICKS_PER_SECOND : velocityY,
+							? physicalMomentumVelocityY : velocityY,
 					definition.mode() == MovingBodySurfaceSnapshot.CouplingMode.DYNAMIC
 							? preVelocityPerTick.z * TICKS_PER_SECOND : velocityZ,
 					definition.mode(), definition.massKilograms());
@@ -79,6 +82,17 @@ final class MinecraftEntityFluidInteraction {
 	}
 
 	static FrozenStep empty() { return new FrozenStep(MovingBodySurfaceSnapshot.EMPTY, List.of()); }
+
+	static double dynamicMomentumVelocityY(double boundaryVelocityY, double frozenNextVelocityY,
+			boolean noGravity, double gravityMetresPerSecondSquared, double stepSeconds) {
+		if (!(Double.isFinite(boundaryVelocityY) && Double.isFinite(frozenNextVelocityY)
+				&& Double.isFinite(gravityMetresPerSecondSquared) && gravityMetresPerSecondSquared >= 0.0
+				&& Double.isFinite(stepSeconds) && stepSeconds > 0.0)) {
+			throw new IllegalArgumentException("Dynamic vertical momentum input is invalid");
+		}
+		return noGravity ? frozenNextVelocityY
+				: boundaryVelocityY - gravityMetresPerSecondSquared * stepSeconds;
+	}
 
 	private static boolean canCouple(Entity entity) {
 		if (!entity.isAlive() || entity.isRemoved() || entity.noPhysics || entity.isPassenger()) return false;
