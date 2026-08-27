@@ -191,6 +191,9 @@ public final class FlipFluidDomain {
 	private int pressureAnchor = -1;
 	private int lastPressureIterations;
 	private float lastPressureResidual;
+	private float lastPressureTarget;
+	private long logicalGeneration;
+	private PressureProjectionSnapshot pressureProjectionSnapshot;
 	private boolean variableDensityActive;
 	private FlipThermalState thermalState;
 	private double[] thermalBuoyancySum;
@@ -284,6 +287,12 @@ public final class FlipFluidDomain {
 	public int sizeY() { return sizeY; }
 	public int sizeZ() { return sizeZ; }
 	public int particleCount() { return particleCount; }
+
+	void beginLogicalCandidate(long generation) {
+		if (generation < 0L) throw new IllegalArgumentException("Logical generation must not be negative");
+		logicalGeneration = generation;
+		pressureProjectionSnapshot = null;
+	}
 
 	/** Runtime-only gas network of this domain; it is not a wire or save format. */
 	public AirNetwork airNetwork() { return airNetwork; }
@@ -1812,6 +1821,18 @@ public final class FlipFluidDomain {
 				this::thermalFixedBoundary, dtSeconds);
 	}
 
+	/** Test/diagnostic entry for a genuine projection without advancing authoritative markers. */
+	void establishPressureProjectionForPhaseChange() {
+		rebuildGridFromParticles();
+		applyGravity(config.timeStep());
+		applyThermalBuoyancy(config.timeStep());
+		applyLiquidPairSurfaceTensionForce(config.timeStep());
+		enforceSolidFaceVelocities();
+		solvePressure(config.timeStep());
+		projectVelocity(config.timeStep());
+		publishPressureProjection();
+	}
+
 	/** Exact-batch condensed melt/freeze; species and same-cell granular heat baths join the conserved LTE plan. */
 	public ThermalPhaseStats stepInertPhaseChangeOnly(int maximumOperations) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
@@ -1831,7 +1852,7 @@ public final class FlipFluidDomain {
 			for (int cell = 0; cell < cellCount && operations < maximumOperations; cell++) {
 				PhaseCellInventory inventory = phaseCellInventory(cell, liquidHandle, lower.id());
 				if (inventory == null) continue;
-				double absolutePressure = AirNetwork.REFERENCE_PRESSURE + pressure[cell];
+				double absolutePressure = requireProjectedPressure(cell).absolutePressurePa();
 				if (!(Double.isFinite(absolutePressure)
 						&& absolutePressure >= transition.minimumPressurePa()
 						&& absolutePressure <= transition.maximumPressurePa())) {
@@ -4759,6 +4780,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						invalidPendingWork);
 			}
 			projectVelocity(dt);
+			publishPressureProjection();
 			if (phaseWork != null) {
 				thermalState.commitPhaseMechanicalWork(phaseWork, thermalMarkerContext());
 				Arrays.fill(pendingPhaseCellVolume, SignedDyadic.ZERO);
@@ -5663,12 +5685,18 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			rhs[index] = rhsScale * correctedDivergence;
 			fluidCells++;
 		}
-		if (fluidCells == 0) { lastPressureIterations = 0; lastPressureResidual = 0.0F; return; }
+		if (fluidCells == 0) {
+			lastPressureIterations = 0;
+			lastPressureResidual = 0.0F;
+			lastPressureTarget = 0.0F;
+			return;
+		}
 		System.arraycopy(rhs, 0, residual, 0, cellCount);
 		applyPreconditioner(residual, preconditioned);
 		System.arraycopy(preconditioned, 0, direction, 0, cellCount);
 		double rz = dot(residual, preconditioned);
 		double target = config.pressureTolerance() * Math.max(1.0, Math.sqrt(dot(rhs, rhs) / fluidCells));
+		lastPressureTarget = (float) target;
 		lastPressureIterations = 0;
 		for (int iteration = 0; iteration < config.maxPressureIterations(); iteration++) {
 			applyPressureMatrix(direction, matrixDirection);
@@ -5686,6 +5714,56 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			rz = nextRz;
 		}
 		lastPressureResidual = (float) Math.sqrt(dot(residual, residual) / fluidCells);
+	}
+
+	private void publishPressureProjection() {
+		float tolerance = Math.max(Math.ulp(lastPressureTarget) * 8.0F, 1.0E-12F);
+		if (!Float.isFinite(lastPressureResidual) || lastPressureResidual > lastPressureTarget + tolerance) {
+			pressureProjectionSnapshot = null;
+			return;
+		}
+		pressureProjectionSnapshot = PressureProjectionSnapshot.capture(
+				logicalGeneration, pressure, this::pressureCellIdentity);
+	}
+
+	private PressureProjectionSnapshot.Sample requireProjectedPressure(int cell) {
+		ensureGrid();
+		if (pressureProjectionSnapshot == null) {
+			throw new ThermalPhaseBlockedException("Pressure-dependent phase change requires a converged current projection");
+		}
+		PressureProjectionSnapshot.CellIdentity identity = pressureCellIdentity(cell);
+		if (identity.adjacentGasLineage() == Integer.MIN_VALUE) {
+			throw new ThermalPhaseBlockedException("Pressure cell touches multiple gas topology lineages");
+		}
+		try {
+			return pressureProjectionSnapshot.requireCurrentCell(
+					logicalGeneration, cell, identity, AirNetwork.REFERENCE_PRESSURE);
+		} catch (IllegalArgumentException | IllegalStateException stale) {
+			throw new ThermalPhaseBlockedException("Pressure-dependent phase sample is stale: " + stale.getMessage(), stale);
+		}
+	}
+
+	private PressureProjectionSnapshot.CellIdentity pressureCellIdentity(int cell) {
+		long solidOccupancy = granularCoupling == null ? 0L : granularCoupling.solidSvq(cell);
+		return new PressureProjectionSnapshot.CellIdentity(
+				markerCount[cell], Double.doubleToRawLongBits(exactCellMarkerVolume[cell]),
+				Double.doubleToRawLongBits(exactCellMarkerMass[cell]), cutCells.mask(cell),
+				solidOccupancy, adjacentGasLineage(cell));
+	}
+
+	private int adjacentGasLineage(int cell) {
+		if (airCellLineageNodeId == null) return -1;
+		int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
+		int found = -1;
+		for (int[] direction : SURFACE_TENSION_DIRECTIONS) {
+			int nx = x + direction[0], ny = y + direction[1], nz = z + direction[2];
+			if (!inside(nx, ny, nz)) continue;
+			int lineage = airCellLineageNodeId[cellIndex(nx, ny, nz)];
+			if (lineage < 0) continue;
+			if (found < 0) found = lineage;
+			else if (found != lineage) return Integer.MIN_VALUE;
+		}
+		return found;
 	}
 
 	private float volumeDriftDivergence(int index, float dt) {

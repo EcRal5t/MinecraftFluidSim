@@ -1238,6 +1238,16 @@ public final class M9ThermalValidation {
 		unsupportedPressure.bindThermal(highPressureRegistry,
 				builtinWaterRegistry(), 273.15);
 		expectFailure(() -> unsupportedPressure.stepInertPhaseChangeOnly(16),
+				"new phase carrier consumed default zero pressure before a real projection");
+		unsupportedPressure.establishPressureProjectionForPhaseChange();
+		unsupportedPressure.setVolume(0, 0, 0, 0.625F);
+		expectFailure(() -> unsupportedPressure.stepInertPhaseChangeOnly(16),
+				"phase carrier consumed pressure after its marker geometry changed");
+		unsupportedPressure.establishPressureProjectionForPhaseChange();
+		unsupportedPressure.beginLogicalCandidate(1L);
+		expectFailure(() -> unsupportedPressure.stepInertPhaseChangeOnly(16),
+				"phase carrier consumed pressure from another logical generation");
+		expectFailure(() -> stepInertPhaseChange(unsupportedPressure, 16),
 				"solid/liquid phase silently ignored pressure outside its declared curve");
 	}
 
@@ -1343,7 +1353,7 @@ public final class M9ThermalValidation {
 		phaseDomain.setVolume(0, 0, 0, 1.0F);
 		phaseDomain.bindThermal(cellRegistry, liquids, 295.0);
 		SignedDyadic coldEnergy = phaseDomain.exactInternalEnergy();
-		FlipFluidDomain.ThermalPhaseStats freezeStats = phaseDomain.stepInertPhaseChangeOnly(16);
+		FlipFluidDomain.ThermalPhaseStats freezeStats = stepInertPhaseChange(phaseDomain, 16);
 		require(freezeStats.operations() == 4 && freezeStats.signedBatches() == 4L
 				&& close(phaseDomain.totalVolumeExact(), 0.5)
 				&& phaseDomain.totalCoherentSolidVolumeSvq() == SolidVolume.SVQ_PER_CELL / 2L
@@ -1356,7 +1366,7 @@ public final class M9ThermalValidation {
 
 		phaseDomain.setThermalTemperatureInCell(0, 0, 0, 305.0);
 		SignedDyadic hotEnergy = phaseDomain.exactInternalEnergy();
-		FlipFluidDomain.ThermalPhaseStats meltStats = phaseDomain.stepInertPhaseChangeOnly(16);
+		FlipFluidDomain.ThermalPhaseStats meltStats = stepInertPhaseChange(phaseDomain, 16);
 		require(meltStats.operations() == 4 && meltStats.signedBatches() == -4L
 				&& close(phaseDomain.totalVolumeExact(), 1.0)
 				&& phaseDomain.totalCoherentSolidVolumeSvq() == 0L
@@ -1387,8 +1397,8 @@ public final class M9ThermalValidation {
 		roundoffDomain.setVolume(0, 0, 0, 0.5F);
 		roundoffDomain.bindThermal(roundoffRegistry, roundoffLiquids, 273.1498);
 		SignedDyadic roundoffEnergy = roundoffDomain.exactInternalEnergy();
-		FlipFluidDomain.ThermalPhaseStats quantizedEquilibrium = roundoffDomain.stepInertPhaseChangeOnly(16);
-		FlipFluidDomain.ThermalPhaseStats repeatedEquilibrium = roundoffDomain.stepInertPhaseChangeOnly(16);
+		FlipFluidDomain.ThermalPhaseStats quantizedEquilibrium = stepInertPhaseChange(roundoffDomain, 16);
+		FlipFluidDomain.ThermalPhaseStats repeatedEquilibrium = stepInertPhaseChange(roundoffDomain, 16);
 		require(quantizedEquilibrium.operations() == 0 && repeatedEquilibrium.operations() == 0
 				&& close(roundoffDomain.thermalTemperatureInCell(0, 0, 0), 273.1498)
 				&& roundoffDomain.exactInternalEnergy().equals(roundoffEnergy)
@@ -1405,11 +1415,11 @@ public final class M9ThermalValidation {
 		quantizedDomain.addCoherentPhaseExternal(0, 0, 0, roundoffIce.id(), 146L,
 				0.001, null, quantizedIceEnergy);
 		SignedDyadic quantizedEnergy = quantizedDomain.exactInternalEnergy();
-		FlipFluidDomain.ThermalPhaseStats unavailableMelt = quantizedDomain.stepInertPhaseChangeOnly(16);
-		require(unavailableMelt.operations() == 0
-				&& quantizedDomain.exactInternalEnergy().equals(quantizedEnergy)
+		expectFailure(() -> stepInertPhaseChange(quantizedDomain, 16),
+				"solid-only phase carrier invented an ambient liquid pressure sample");
+		require(quantizedDomain.exactInternalEnergy().equals(quantizedEnergy)
 				&& quantizedDomain.exactInternalEnergy().equals(quantizedDomain.thermalAudit().expectedInventory()),
-				"an unrepresentable exact phase quantum stopped the region instead of leaving inventory unchanged");
+				"blocked solid-only pressure provenance changed phase inventory");
 		require(FlipFluidDomain.minimumPhaseBatchesForCapacity(1_025L, 1_000L, -12L) == 3L,
 				"shrinking phase planning did not clear transient joint-cell overfill before evaluating LTE");
 		long markerSvq = SolidVolume.SVQ_PER_CELL / 8L;
@@ -1444,7 +1454,7 @@ public final class M9ThermalValidation {
 		SolverUnitScale massScale = SolverUnitScale.forCellSize(config.cellSize());
 		double initialMass = massScale.kilograms(domain.totalMass()) + domain.totalCoherentMass();
 		SignedDyadic coldEnergy = domain.exactInternalEnergy();
-		FlipFluidDomain.ThermalPhaseStats freeze = domain.stepInertPhaseChangeOnly(16);
+		FlipFluidDomain.ThermalPhaseStats freeze = stepInertPhaseChange(domain, 16);
 		CondensedLedger frozen = condensedLedger(domain, chemistry);
 		require(freeze.operations() > 0 && freeze.signedBatches() > 0L
 				&& domain.totalCoherentSolidVolumeSvq() > 0L
@@ -1471,7 +1481,7 @@ public final class M9ThermalValidation {
 
 		domain.setThermalTemperatureInCell(1, 1, 1, 305.0);
 		SignedDyadic hotEnergy = domain.exactInternalEnergy();
-		FlipFluidDomain.ThermalPhaseStats melt = domain.stepInertPhaseChangeOnly(16);
+		FlipFluidDomain.ThermalPhaseStats melt = stepInertPhaseChange(domain, 16);
 		CondensedLedger melted = condensedLedger(domain, chemistry);
 		require(melt.operations() > 0 && melt.signedBatches() < 0L
 				&& domain.totalCoherentSolidVolumeSvq() == 0L
@@ -1580,7 +1590,7 @@ public final class M9ThermalValidation {
 		domain.setVolume(0, 0, 0, 0.5F);
 		domain.bindThermal(registry, liquids, 295.0);
 		ThermalAuditLedger before = domain.thermalAudit();
-		FlipFluidDomain.ThermalPhaseStats phase = domain.stepInertPhaseChangeOnly(16);
+		FlipFluidDomain.ThermalPhaseStats phase = stepInertPhaseChange(domain, 16);
 		PendingPhaseVolumeState pending = domain.exportPendingPhaseVolumeState();
 		SignedDyadic signedCellVolume = pending.entries().stream()
 				.map(PendingPhaseVolumeState.Entry::signedCellVolume)
@@ -1640,7 +1650,7 @@ public final class M9ThermalValidation {
 		domain.bindChemistry(chemistry);
 		domain.bindThermal(compositionPhaseThermalRegistry(liquids, granular, chemistry), liquids, 295.0);
 		CondensedLedger before = condensedLedger(domain, chemistry);
-		require(domain.stepInertPhaseChangeOnly(16).operations() > 0
+		require(stepInertPhaseChange(domain, 16).operations() > 0
 				&& domain.totalCoherentSolidVolumeSvq() > 0L,
 				"operator-empty fixture did not create coherent condensed inventory");
 		// The operator command rejects this phase event until a real mechanical projection consumes it.
@@ -2204,6 +2214,13 @@ public final class M9ThermalValidation {
 		MaterialRegistry builtins = BuiltinFluidMaterials.createRegistry();
 		return new MaterialRegistry(List.of(builtins.entry(BuiltinFluidMaterials.WATER.id())), List.of())
 				.runtimeRegistry();
+	}
+
+	private static FlipFluidDomain.ThermalPhaseStats stepInertPhaseChange(
+			FlipFluidDomain domain, int maximumOperations
+	) {
+		domain.establishPressureProjectionForPhaseChange();
+		return domain.stepInertPhaseChangeOnly(maximumOperations);
 	}
 
 	private static boolean close(double first, double second) {
