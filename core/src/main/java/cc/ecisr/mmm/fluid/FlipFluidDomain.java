@@ -459,6 +459,46 @@ public final class FlipFluidDomain {
 		return markerCount[cell] == 0 ? Double.NaN : cellDensity[cell];
 	}
 
+	/** Derived mechanical terms used by density, thermal-buoyancy and pressure diagnostics. */
+	public CellMechanicalDiagnostics mechanicalDiagnosticsInCell(int x, int y, int z) {
+		int cell = cellIndexChecked(x, y, z);
+		ensureGrid();
+		if (markerCount[cell] == 0) return null;
+		double referenceMass = 0.0;
+		double thermalRelativeVolume = 0.0;
+		double totalVolume = 0.0;
+		for (int marker = 0; marker < particleCount; marker++) {
+			if (particleCellIndex(marker) != cell) continue;
+			double markerVolume = particleVolume[marker];
+			double referenceDensity = materialRegistry == null ? config.density()
+					: materialRegistry.material(particleMaterialHandle[marker]).referenceDensity();
+			referenceMass += markerVolume * referenceDensity;
+			if (thermalState != null) {
+				String carrier = materialRegistry.material(particleMaterialHandle[marker]).id();
+				thermalRelativeVolume += markerVolume * LiquidThermalExpansion.require(carrier)
+						.relativeBuoyancy(thermalMarkerTemperature(marker));
+			}
+			totalVolume += markerVolume;
+		}
+		double referenceDensity = referenceMass / totalVolume;
+		double thermalDensityDelta = thermalState == null ? 0.0
+				: -referenceDensity * thermalRelativeVolume / totalVolume;
+		return new CellMechanicalDiagnostics(cellDensity[cell], referenceDensity, thermalDensityDelta,
+				config.density() / cellDensity[cell]);
+	}
+
+	/** Exact coefficient assembled for one pressure-matrix face; dry or closed faces report zero. */
+	public double pressureCoefficientAcrossFace(int x, int y, int z, int directionX, int directionY, int directionZ) {
+		if (Math.abs(directionX) + Math.abs(directionY) + Math.abs(directionZ) != 1) {
+			throw new IllegalArgumentException("Pressure diagnostic direction must be one axis step");
+		}
+		int cell = cellIndexChecked(x, y, z);
+		int neighbor = cellIndexChecked(x + directionX, y + directionY, z + directionZ);
+		ensureGrid();
+		if (!isFluid(cell)) return 0.0;
+		return pressureFaceCoefficient(cell, neighbor, directionX, directionY, directionZ);
+	}
+
 	/**
 	 * Scans authoritative marker truth without rebuilding grids or changing activity. Empty cells return null.
 	 * This is the core-side source for loader query adapters.
@@ -7140,6 +7180,12 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	@FunctionalInterface private interface SplatConsumer { void accept(int index, float weight); }
 	private record CellCandidate(int index, int distanceSquared) { }
 	public record VelocitySample(float x, float y, float z) { private static final VelocitySample ZERO = new VelocitySample(0.0F, 0.0F, 0.0F); }
+	public record CellMechanicalDiagnostics(
+			double inventoryDensity,
+			double referenceDensity,
+			double thermalDensityDelta,
+			double pressureDensityScale
+	) { }
 	public record VolumeAddition(float addedVolume, boolean markerBudgetLimited) { }
 	public record VolumeDistribution(int activeCells, int visibleCells, int denseCells) { }
 	public record SolidDistribution(int partialCells, int fullCells) { }

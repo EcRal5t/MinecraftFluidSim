@@ -188,24 +188,25 @@ final class M3MaterialDynamicsValidation {
 				new FluidMaterial("mmm:light", 800.0, "mmm:light_phase", 0.0, Math.PI / 2.0)
 		));
 		int heavy = registry.handle("mmm:heavy"), light = registry.handle("mmm:light");
-		FluidSolverConfig config = config();
-		FlipFluidDomain domain = new FlipFluidDomain(6, 7, 4, config, 1_024);
-		fillSolid(domain);
-		for (int y = 1; y <= 5; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
-			open(domain, x, y, z);
-		}
-		// vent the box top through the boundary layer so the gas pocket above the liquid is ambient
-		for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) open(domain, x, 6, z);
-		for (int y = 1; y <= 4; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
-			domain.setVolume(x, y, z, 1.0F);
-		}
-		seedInterchangeVelocity(domain);
-		for (int y = 1; y <= 2; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
-			domain.setMaterialInCell(x, y, z, registry, light);
-		}
-		for (int y = 3; y <= 4; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
-			domain.setMaterialInCell(x, y, z, registry, heavy);
-		}
+		FlipFluidDomain stable = layeredDomain(registry, heavy, light);
+		FlipFluidDomain.CellMechanicalDiagnostics lower = stable.mechanicalDiagnosticsInCell(1, 1, 1);
+		double interfaceCoefficient = stable.pressureCoefficientAcrossFace(1, 2, 1, 0, 1, 0);
+		check(lower != null && lower.inventoryDensity() == 1_000.0 && lower.referenceDensity() == 1_000.0
+				&& lower.thermalDensityDelta() == 0.0 && lower.pressureDensityScale() == 1.0
+				&& Math.abs(interfaceCoefficient - 1_000.0 / 900.0) <= 1.0E-6,
+				"layer diagnostics did not expose the pressure path's actual density terms");
+		FlipFluidDomain.MaterialInventory stableInitialHeavy = stable.materialInventory(heavy);
+		FlipFluidDomain.MaterialInventory stableInitialLight = stable.materialInventory(light);
+		for (int step = 0; step < 600; step++) stable.step();
+		FlipFluidDomain.MaterialInventory stableFinalHeavy = stable.materialInventory(heavy);
+		FlipFluidDomain.MaterialInventory stableFinalLight = stable.materialInventory(light);
+		check(stableFinalHeavy.centerY() + 0.50 < stableFinalLight.centerY()
+				&& Math.abs(stableFinalHeavy.mass() - stableInitialHeavy.mass()) <= 1.0E-8
+				&& Math.abs(stableFinalLight.mass() - stableInitialLight.mass()) <= 1.0E-8
+				&& stable.maximumParticleSpeed() < 0.01F * 0.30F,
+				"stable density layering crossed material ledgers");
+
+		FlipFluidDomain domain = layeredDomain(registry, light, heavy);
 		FlipFluidDomain.MaterialInventory initialHeavy = domain.materialInventory(heavy);
 		FlipFluidDomain.MaterialInventory initialLight = domain.materialInventory(light);
 		double maximumMassError = 0.0;
@@ -224,10 +225,32 @@ final class M3MaterialDynamicsValidation {
 				&& Math.abs(finalLight.mass() - initialLight.mass()) <= 1.0E-8,
 				"density inversion moved mass across material ledgers");
 		check(maximumMassError <= 2.0E-12, "density inversion exceeded mass-ledger tolerance");
-		System.out.printf("  active density inversion COM heavy/light %.3f/%.3f -> %.3f/%.3f, maxSpeed=%.3g%n",
-				initialHeavy.centerY(), initialLight.centerY(), finalHeavy.centerY(), finalLight.centerY(),
-				domain.maximumParticleSpeed());
+		System.out.printf("  stable/inverted density COM %.3f/%.3f and %.3f/%.3f, residualSpeed=%.3g%n",
+				stableFinalHeavy.centerY(), stableFinalLight.centerY(), finalHeavy.centerY(), finalLight.centerY(),
+				stable.maximumParticleSpeed());
 		return new LayeringResult(finalHeavy.centerY(), finalLight.centerY());
+	}
+
+	private static FlipFluidDomain layeredDomain(FluidMaterialRegistry registry, int lower, int upper) {
+		FluidSolverConfig config = config();
+		FlipFluidDomain domain = new FlipFluidDomain(6, 7, 4, config, 1_024);
+		fillSolid(domain);
+		for (int y = 1; y <= 5; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
+			open(domain, x, y, z);
+		}
+		// vent the box top through the boundary layer so the gas pocket above the liquid is ambient
+		for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) open(domain, x, 6, z);
+		for (int y = 1; y <= 4; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
+			domain.setVolume(x, y, z, 1.0F);
+		}
+		seedInterchangeVelocity(domain);
+		for (int y = 1; y <= 2; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
+			domain.setMaterialInCell(x, y, z, registry, lower);
+		}
+		for (int y = 3; y <= 4; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
+			domain.setMaterialInCell(x, y, z, registry, upper);
+		}
+		return domain;
 	}
 
 	private static void seedInterchangeVelocity(FlipFluidDomain domain) {

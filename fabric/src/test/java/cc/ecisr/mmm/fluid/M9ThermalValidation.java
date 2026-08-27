@@ -88,6 +88,7 @@ public final class M9ThermalValidation {
 		containerTransferCarriesAuthoritativeEnergy();
 		liquidTransportAndHandoffCloseEnergy();
 		localizedHeatingDrivesBoussinesqCirculation();
+		thermohalineDiagnosticsUseActualChemicalMass();
 		partialCutFaceUsesPlicThermalContact();
 		finiteThermalBodyExchangesWithoutMixing();
 		worldBoundaryTemperatureRangeExcludesFiniteDevices();
@@ -513,7 +514,7 @@ public final class M9ThermalValidation {
 	private static void persistenceBarrierSynchronizesGasTopology() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		FluidMaterialRegistry liquids = builtinWaterRegistry();
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
 		ThermalRegistry thermal = new ThermalRegistry(List.of(
 				new ThermalMaterialDefinition("test:thermal/persistence_water",
@@ -577,7 +578,7 @@ public final class M9ThermalValidation {
 	private static void operatorVentClearsGasAndEnergyTogether() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		FluidMaterialRegistry liquids = builtinWaterRegistry();
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
 		ThermalRegistry thermal = new ThermalRegistry(List.of(
 				new ThermalMaterialDefinition("test:thermal/vent_water",
@@ -795,7 +796,7 @@ public final class M9ThermalValidation {
 	private static void compositionBearingBoilingMovesOnlyGasAdmittedSpecies() {
 		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		FluidMaterialRegistry liquids = builtinWaterRegistry();
 		ThermalMaterialDefinition water = new ThermalMaterialDefinition("test:thermal/species_water",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
 				373.15, 0.0, 0.6,
@@ -1123,7 +1124,7 @@ public final class M9ThermalValidation {
 	private static void granularReactionHeatUsesOneConservedCellEnergy() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 1.0F / 20.0F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		FluidMaterialRegistry liquids = BuiltinFluidMaterials.createRegistry().runtimeRegistry();
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
 		domain.setVolume(1, 1, 1, 0.1F);
@@ -1235,7 +1236,7 @@ public final class M9ThermalValidation {
 		FlipFluidDomain unsupportedPressure = new FlipFluidDomain(2, 2, 2, config, 128);
 		unsupportedPressure.setVolume(0, 0, 0, 0.5F);
 		unsupportedPressure.bindThermal(highPressureRegistry,
-				new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)), 273.15);
+				builtinWaterRegistry(), 273.15);
 		expectFailure(() -> unsupportedPressure.stepInertPhaseChangeOnly(16),
 				"solid/liquid phase silently ignored pressure outside its declared curve");
 	}
@@ -1421,7 +1422,7 @@ public final class M9ThermalValidation {
 	private static void compositionAndGranularPhaseChangeConservesJointTruth() {
 		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		FluidMaterialRegistry liquids = builtinWaterRegistry();
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
 		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 256);
@@ -1630,7 +1631,7 @@ public final class M9ThermalValidation {
 	private static void operatorEmptyClearsAuditedCondensedCarriers() {
 		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		FluidMaterialRegistry liquids = builtinWaterRegistry();
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
 		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 256);
@@ -1660,7 +1661,7 @@ public final class M9ThermalValidation {
 	}
 
 	private static void containerTransferCarriesAuthoritativeEnergy() {
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		FluidMaterialRegistry liquids = builtinWaterRegistry();
 		ThermalMaterialDefinition water = new ThermalMaterialDefinition("mmm:thermal/container_water",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
 				300.0, 0.0, 1.0,
@@ -1770,7 +1771,7 @@ public final class M9ThermalValidation {
 				"M8 active/deposit cell heat exchange did not close the thermal audit");
 
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FluidMaterialRegistry productionLiquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		FluidMaterialRegistry productionLiquids = BuiltinFluidMaterials.createRegistry().runtimeRegistry();
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.8F);
 		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
@@ -1824,7 +1825,7 @@ public final class M9ThermalValidation {
 	}
 
 	private static void liquidTransportAndHandoffCloseEnergy() {
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		FluidMaterialRegistry liquids = builtinWaterRegistry();
 		ThermalMaterialDefinition water = new ThermalMaterialDefinition("mmm:thermal/water",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
 				300.0, 0.0, 1_000.0,
@@ -1885,7 +1886,7 @@ public final class M9ThermalValidation {
 	private static void localizedHeatingDrivesBoussinesqCirculation() {
 		require(LiquidThermalExpansion.require(BuiltinFluidMaterials.WATER.id())
 				.relativeBuoyancy(313.15) > 0.0, "water expansion definition does not produce hot buoyancy");
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		FluidMaterialRegistry liquids = builtinWaterRegistry();
 		ThermalMaterialDefinition water = new ThermalMaterialDefinition("mmm:thermal/buoyancy_water",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
 				293.15, 0.0, 0.598,
@@ -1898,18 +1899,97 @@ public final class M9ThermalValidation {
 			else domain.setVolume(x, y, z, 1.0F);
 		}
 		domain.bindThermal(new ThermalRegistry(List.of(water)), liquids, 293.15);
-		domain.setThermalTemperatureInCell(2, 1, 2, 333.15);
+		double massBefore = domain.totalMass();
+		double[] boundaries = new double[6 * 6 * 6 * 6];
+		Arrays.fill(boundaries, Double.NaN);
+		for (int z = 1; z <= 4; z++) for (int x = 1; x <= 4; x++) {
+			boundaries[((z * 6 + 1) * 6 + x) * 6 + 2] = 313.15;
+			boundaries[((z * 6 + 4) * 6 + x) * 6 + 3] = 273.15;
+		}
+		domain.replaceThermalBoundaryTemperatures(boundaries);
+		domain.setThermalTemperatureInCell(2, 1, 2, 313.25);
+		FlipFluidDomain.CellMechanicalDiagnostics hot = domain.mechanicalDiagnosticsInCell(2, 1, 2);
+		require(hot != null && hot.inventoryDensity() == 1_000.0 && hot.referenceDensity() == 1_000.0
+				&& hot.thermalDensityDelta() < 0.0 && hot.pressureDensityScale() == 1.0,
+				"thermal diagnostics did not separate inventory density from Boussinesq density delta");
 		for (int step = 0; step < 4; step++) domain.step();
 		FlipFluidDomain.VelocitySample plume = domain.sampleVelocity(1.25F, 0.75F, 1.25F);
 		FlipFluidDomain.VelocitySample far = domain.sampleVelocity(1.75F, 0.75F, 1.75F);
 		require(plume.y() > far.y() + 1.0E-5F && domain.maximumParticleSpeed() > 1.0E-4F,
 				"localized heat did not create an upward Boussinesq plume: plume=" + plume.y() + " far=" + far.y());
-		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
-				"Boussinesq momentum coupling changed authoritative thermal energy");
+		require(domain.totalMass() == massBefore
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+				&& domain.lastViscosityStats().coupledPairs() > 0,
+				"viscous natural-convection fixture changed mass/U or bypassed frozen viscosity");
+	}
+
+	private static void thermohalineDiagnosticsUseActualChemicalMass() {
+		FluidMaterialRegistry liquids = builtinWaterRegistry();
+		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 0.05F,
+				100, 1.0E-5F, 0.40F, 2.0E-3F, 0.0F);
+		FlipFluidDomain source = new FlipFluidDomain(4, 3, 3, config, 256);
+		source.setVolume(1, 1, 1, 1.0F);
+		source.setVolume(2, 1, 1, 1.0F);
+		source.setMarkerMaterial(0, liquids, 0);
+		source.bindChemistry(chemistry);
+		FlipMaterialParticleState original = source.exportMaterialParticleState();
+		double[] mass = original.copyParticleMass();
+		float[] positionVolume = original.copyPositionVolume();
+		SolverUnitScale scale = SolverUnitScale.forCellSize(config.cellSize());
+		java.util.ArrayList<ChemicalMixtureRecord> mixtures = new java.util.ArrayList<>(original.particleCount());
+		for (int marker = 0; marker < original.particleCount(); marker++) {
+			ChemicalMixtureRecord initial = source.chemicalParcels().record(marker);
+			java.util.TreeMap<String, Long> amounts = new java.util.TreeMap<>(initial.stableAmounts(chemistry));
+			if ((int) Math.floor(positionVolume[marker * 4] / config.cellSize()) == 2) {
+				long saltQuanta = Math.round(scale.kilograms(mass[marker]) * 0.01
+						* ChemicalLimits.QUANTA_PER_AU / 58.0);
+				amounts.merge(BuiltinChemicalDefinitions.NACL, saltQuanta, Math::addExact);
+			}
+			ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(
+					chemistry, amounts, initial.massResidualKilograms());
+			mixtures.add(mixture);
+			mass[marker] = scale.solverMass(mixture.massKilograms(chemistry));
+		}
+		double totalMass = 0.0;
+		for (double markerMass : mass) totalMass += markerMass;
+		FlipMaterialParticleState materials = new FlipMaterialParticleState(
+				original.sizeX(), original.sizeY(), original.sizeZ(), original.cellSize(), original.particleCount(),
+				original.totalVolume(), totalMass, original.materials(), positionVolume,
+				original.copyParticleVelocities(), original.copySolidMask(), mass,
+				original.copyMaterialPaletteIndex());
+		FlipChemicalParticleState chemical = FlipChemicalParticleState.capture(
+				materials, chemistry, mixtures, new byte[original.particleCount()],
+				cc.ecisr.mmm.chemistry.ChemicalTransferLedger.EMPTY,
+				cc.ecisr.mmm.chemistry.ChemicalTransferLedger.EMPTY);
+		FlipFluidDomain domain = new FlipFluidDomain(4, 3, 3, config, 256);
+		domain.restoreChemicalParticleState(chemical, chemistry);
+		domain.rebindMaterialRegistry(liquids);
+		ThermalMaterialDefinition water = new ThermalMaterialDefinition("mmm:thermal/thermohaline_water",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
+				293.15, 0.0, 0.598,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 650.0, 4_184.0)));
+		domain.bindThermal(new ThermalRegistry(List.of(water), List.of(
+				new ThermalSpeciesOffset("mmm:thermal/thermohaline_h2o", BuiltinChemicalDefinitions.H2O,
+						water.id(), ExactRational.ZERO),
+				new ThermalSpeciesOffset("mmm:thermal/thermohaline_nacl", BuiltinChemicalDefinitions.NACL,
+						water.id(), ExactRational.ZERO)), List.of(),
+				chemistry.fingerprint(), ""), liquids, 293.15);
+		domain.setThermalTemperatureInCell(2, 1, 1, 373.15);
+		FlipFluidDomain.CellMechanicalDiagnostics fresh = domain.mechanicalDiagnosticsInCell(1, 1, 1);
+		FlipFluidDomain.CellMechanicalDiagnostics brine = domain.mechanicalDiagnosticsInCell(2, 1, 1);
+		require(fresh != null && brine != null, "thermohaline fixture lost an occupied diagnostic cell");
+		double compositionDelta = brine.inventoryDensity() - brine.referenceDensity();
+		require(compositionDelta > 9.99 && compositionDelta < 10.01
+				&& brine.thermalDensityDelta() < -compositionDelta
+				&& brine.pressureDensityScale() < fresh.pressureDensityScale()
+				&& domain.totalMass() == totalMass
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"thermal/salt density terms did not compete through independent inventory and Boussinesq paths");
 	}
 
 	private static void partialCutFaceUsesPlicThermalContact() {
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		FluidMaterialRegistry liquids = builtinWaterRegistry();
 		ThermalMaterialDefinition water = new ThermalMaterialDefinition("mmm:thermal/partial_contact_water",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
 				300.0, 0.0, 1.0,
@@ -2009,7 +2089,7 @@ public final class M9ThermalValidation {
 	}
 
 	private static void productionFixedBoundaryFieldAuditsExchange() {
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		FluidMaterialRegistry liquids = builtinWaterRegistry();
 		ThermalMaterialDefinition water = new ThermalMaterialDefinition("mmm:thermal/production_boundary_water",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
 				293.15, 0.0, 0.598,
@@ -2118,6 +2198,12 @@ public final class M9ThermalValidation {
 	) {
 		return new ThermalMaterialDefinition(id, ThermalMaterialDefinition.CarrierKind.LIQUID, carrier,
 				300.0, referenceSpecificEnergy, 0.5, segments);
+	}
+
+	private static FluidMaterialRegistry builtinWaterRegistry() {
+		MaterialRegistry builtins = BuiltinFluidMaterials.createRegistry();
+		return new MaterialRegistry(List.of(builtins.entry(BuiltinFluidMaterials.WATER.id())), List.of())
+				.runtimeRegistry();
 	}
 
 	private static boolean close(double first, double second) {
