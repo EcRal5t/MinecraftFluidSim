@@ -20,6 +20,7 @@ import cc.ecisr.mmm.simulation.FluidCutCellShapeValidation;
 import cc.ecisr.mmm.simulation.FluidRegionLifecycleValidation;
 import cc.ecisr.mmm.simulation.FluidRegionManagerValidation;
 import cc.ecisr.mmm.simulation.M7RegionChemistryPersistenceValidation;
+import cc.ecisr.mmm.simulation.ProductionFluidReplayValidation;
 import cc.ecisr.mmm.simulation.TakeoverJournalValidation;
 import cc.ecisr.mmm.simulation.controller.FluidBoundaryScannerValidation;
 import cc.ecisr.mmm.simulation.ownership.M6OwnershipValidation;
@@ -37,12 +38,12 @@ public final class CpuValidationSuite {
 	private static final String[] NONE = new String[0];
 	private static final String[] FAST = {"--fast"};
 	private static final List<String> FAST_GROUP = List.of(
-			"audit", "air-network", "air-cavity", "region-manager", "lifecycle",
+			"audit", "air-network", "air-cavity", "region-manager", "lifecycle", "production-replay",
 			"free-surface", "reseeding", "cut-cell", "shape", "protocol", "boundary", "containers", "chemistry", "granular",
 			"thermal");
 	private static final List<String> MILESTONE_GROUP = List.of(
 			"materials", "surface-tension", "air-network", "air-cavity", "gas-liquid",
-			"region-manager", "lifecycle", "free-surface", "reseeding", "cut-cell", "shape",
+			"region-manager", "lifecycle", "production-replay", "free-surface", "reseeding", "cut-cell", "shape",
 			"region-state", "protocol", "boundary", "takeover", "containers", "ownership", "audit", "chemistry", "granular",
 			"thermal");
 	private static final List<String> SOAK_GROUP = List.of("gas-liquid", "free-surface", "reseeding");
@@ -119,6 +120,7 @@ public final class CpuValidationSuite {
 				() -> M5GasLiquidCouplingValidation.main(FAST));
 		gate(gates, "region-manager", () -> FluidRegionManagerValidation.main(NONE));
 		gate(gates, "lifecycle", () -> FluidRegionLifecycleValidation.main(NONE));
+		gate(gates, "production-replay", () -> ProductionFluidReplayValidation.main(NONE));
 		gate(gates, "free-surface", () -> FlipFluidFreeSurfaceValidation.main(NONE),
 				() -> FlipFluidFreeSurfaceValidation.main(FAST));
 		gate(gates, "reseeding", () -> FlipFluidReseedingValidation.main(NONE),
