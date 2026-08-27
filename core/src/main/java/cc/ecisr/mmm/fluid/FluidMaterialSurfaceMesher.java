@@ -9,7 +9,6 @@ import java.util.Set;
 /** CPU reference mesher for one total-liquid surface plus singly-owned partitioned liquid/liquid interfaces. */
 public final class FluidMaterialSurfaceMesher {
 	private static final double ISO_LEVEL = 0.5;
-	private static final double MARKER_INTERIOR_LEVEL = 0.65;
 	private static final int SURFACE_THRESHOLD = 8;
 	/** Keeps liquid/liquid geometry strictly inside the free surface so the two categories never render coplanar. */
 	private static final double INTERFACE_INSET = 0.06;
@@ -336,9 +335,7 @@ public final class FluidMaterialSurfaceMesher {
 			weighted += density * weight;
 			weightSum += weight;
 		}
-		double result = weightSum <= EPSILON ? 0.0 : weighted / weightSum;
-		if (snapshot.markerField()[index(snapshot, x, y, z)] != 0) result = Math.max(result, MARKER_INTERIOR_LEVEL);
-		return result;
+		return weightSum <= EPSILON ? 0.0 : weighted / weightSum;
 	}
 
 	private static double phaseFraction(FluidMaterialRenderSnapshot snapshot, int phase, int x, int y, int z) {

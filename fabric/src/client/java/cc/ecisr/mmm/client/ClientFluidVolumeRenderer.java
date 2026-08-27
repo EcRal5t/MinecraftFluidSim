@@ -51,7 +51,6 @@ import java.util.UUID;
 public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	private static final int SURFACE_THRESHOLD = 8;
 	private static final float ISO_LEVEL = 0.50F;
-	private static final float MARKER_INTERIOR_LEVEL = 0.65F;
 	private static final int[][] CUBE_TETRAHEDRA = {
 			{0, 5, 1, 6}, {0, 1, 2, 6}, {0, 2, 3, 6},
 			{0, 3, 7, 6}, {0, 7, 4, 6}, {0, 4, 5, 6}
@@ -582,9 +581,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 			weightedDensity += density * weight;
 			weightSum += weight;
 		}
-		float density = weightSum <= 1.0E-6F ? 0.0F : weightedDensity / weightSum;
-		if (state.markers()[index(state, x, y, z)] != 0) density = Math.max(density, MARKER_INTERIOR_LEVEL);
-		return density;
+		return weightSum <= 1.0E-6F ? 0.0F : weightedDensity / weightSum;
 	}
 
 	private static float kernelWeight(int offset) {

@@ -18,6 +18,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		fractionalHydrostaticColumnsBalanceGravity();
 		projectedHydrostaticPressureIntegratesOnMovingBox();
 		floatingBodyReplayHasDecayingEnvelope();
+		smallExternalBodyDisturbanceDoesNotAmplifyVelocity();
 		mixedBodiesAreOrderIndependent();
 		movingBodyPressureNonconvergenceRejectsCandidate();
 		thinLayerRegularizationRemainsStable();
@@ -49,6 +50,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		MovingBodySurfaceSnapshot.BoxPose current = previous;
 		double nextTickVelocityY = -config.gravity() * config.timeStep();
 		double[] centres = new double[600];
+		double maximumLateFluidSpeed = 0.0;
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		for (int step = 0; step < centres.length; step++) {
 			double boundaryVelocityY = (current.minimumY() - previous.minimumY()) / config.timeStep();
@@ -66,6 +68,8 @@ public final class FlipFluidFreeSurfaceValidation {
 			}
 			MovingBodyStepResult result = candidate.movingBodyResults().getFirst();
 			state = candidate.state();
+			if (step >= 500) maximumLateFluidSpeed = Math.max(
+					maximumLateFluidSpeed, maximumSpeed(state.particles()));
 			centres[step] = 0.5 * (current.minimumY() + current.maximumY());
 			previous = current;
 			current = translateY(current, result.finalVelocityYMetresPerSecond() * config.timeStep());
@@ -75,6 +79,59 @@ public final class FlipFluidFreeSurfaceValidation {
 					"floating player replay produced a non-finite entity state at tick " + step);
 		}
 		checkOscillationSettles(centres, config.fluidEpsilon() * config.cellSize());
+		check(maximumLateFluidSpeed <= config.fluidEpsilon(),
+				"floating player settled while liquid retained speed " + maximumLateFluidSpeed);
+	}
+
+	private static void smallExternalBodyDisturbanceDoesNotAmplifyVelocity() {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 0.05F,
+				240, 1.0E-6F, 0.40F, 2.0E-3F, 0.0F);
+		FlipFluidDomain domain = new FlipFluidDomain(12, 12, 12, config, 32_000);
+		for (int z = 0; z < 12; z++) for (int y = 0; y < 12; y++) for (int x = 0; x < 12; x++) {
+			domain.setSolid(x, y, z, true);
+		}
+		for (int z = 1; z <= 10; z++) for (int y = 1; y <= 10; y++) for (int x = 1; x <= 10; x++) {
+			domain.setSolid(x, y, z, false);
+		}
+		domain.setSolid(1, 11, 1, false);
+		for (int z = 1; z <= 10; z++) for (int y = 1; y <= 5; y++) for (int x = 1; x <= 10; x++) {
+			domain.setVolume(x, y, z, 1.0F);
+		}
+		FluidDomainState state = domain.captureAuthoritativeState();
+		MovingBodySurfaceSnapshot.BoxPose above = new MovingBodySurfaceSnapshot.BoxPose(
+				2.875, 3.01, 2.875, 3.125, 3.26, 3.125);
+		MovingBodySurfaceSnapshot.BoxPose resting = translateY(above, -0.02);
+		double initialPeakSpeed = 0.0, delayedPeakSpeed = 0.0, latePeakSpeed = 0.0;
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		for (int step = 0; step < 600; step++) {
+			MovingBodySurfaceSnapshot.BoxPose before = step == 0 ? above : resting;
+			double velocityY = step == 0 ? -0.02 / config.timeStep() : 0.0;
+			MovingBodySurfaceSnapshot.Body item = new MovingBodySurfaceSnapshot.Body(
+					2L, before, resting, 0.0, velocityY, 0.0,
+					MovingBodySurfaceSnapshot.CouplingMode.KINEMATIC_EXTERNAL, 0.0);
+			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+					step, state, new MovingBodySurfaceSnapshot(List.of(item)), false, 0));
+			state = candidate.state();
+			double speed = maximumSpeed(state.particles());
+			if (step < 100) initialPeakSpeed = Math.max(initialPeakSpeed, speed);
+			else delayedPeakSpeed = Math.max(delayedPeakSpeed, speed);
+			if (step >= 500) latePeakSpeed = Math.max(latePeakSpeed, speed);
+		}
+		check(delayedPeakSpeed <= initialPeakSpeed,
+				"small settled external body caused delayed liquid-speed amplification: "
+						+ initialPeakSpeed + " -> " + delayedPeakSpeed);
+		check(latePeakSpeed <= config.fluidEpsilon(),
+				"small settled external body left liquid moving at " + latePeakSpeed);
+	}
+
+	private static double maximumSpeed(FlipParticleState particles) {
+		float[] velocity = particles.copyParticleVelocities();
+		double maximum = 0.0;
+		for (int marker = 0; marker < particles.particleCount(); marker++) {
+			double vx = velocity[marker * 3], vy = velocity[marker * 3 + 1], vz = velocity[marker * 3 + 2];
+			maximum = Math.max(maximum, Math.sqrt(vx * vx + vy * vy + vz * vz));
+		}
+		return maximum;
 	}
 
 	private static void checkOscillationSettles(double[] positions, double stoppingDistance) {

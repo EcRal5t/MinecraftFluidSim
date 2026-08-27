@@ -40,6 +40,7 @@ final class M3MaterialSurfaceValidation {
 				+ minimumCentroidX + ".." + maximumCentroidX + ", error=" + maximumPlaneError);
 		check(immiscibleDomain.totalVolume() == volumeBefore && immiscibleDomain.totalMass() == massBefore,
 				"read-only material meshing changed physical inventories");
+		validateOuterSurfaceIgnoresMarkerSeeds(layeredSnapshot, layered);
 		int outerColourChecked = validateOuterSurfaceColouring(layeredSnapshot, layered, water, oil);
 		double minimumInterfaceLevel = validateInterfaceStaysInsideLiquid(layeredSnapshot, layered);
 
@@ -66,6 +67,34 @@ final class M3MaterialSurfaceValidation {
 				layered.outerTriangles().size(), layered.interfaceTriangles().size(),
 				junction.interfaceTriangles().size(), maximumPlaneError, outerColourChecked, minimumInterfaceLevel);
 		return new Summary(layered.outerTriangles().size(), layered.interfaceTriangles().size(), junction.interfaceTriangles().size());
+	}
+
+	private static void validateOuterSurfaceIgnoresMarkerSeeds(
+			FluidMaterialRenderSnapshot snapshot, FluidMaterialSurfaceMesher.Mesh reference
+	) {
+		byte[] markers = snapshot.copyMarkers();
+		byte[] volume = snapshot.copyTotalVolume();
+		byte[] solids = snapshot.copySolids();
+		int emptyCell = -1;
+		for (int cell = 0; cell < volume.length; cell++) {
+			if (volume[cell] == 0 && markers[cell] == 0 && solids[cell] == 0) {
+				emptyCell = cell;
+				break;
+			}
+		}
+		check(emptyCell >= 0, "marker-seed fixture has no empty fluid cell");
+		markers[emptyCell] = 1;
+		byte[][] materials = new byte[snapshot.materials().size()][];
+		for (int material = 0; material < materials.length; material++) {
+			materials[material] = snapshot.copyMaterialFractions(material);
+		}
+		byte[][] phases = new byte[snapshot.phaseGroups().size()][];
+		for (int phase = 0; phase < phases.length; phase++) phases[phase] = snapshot.copyPhaseFractions(phase);
+		FluidMaterialRenderSnapshot markerChanged = FluidMaterialRenderSnapshot.fromQuantizedFields(
+				snapshot.sizeX(), snapshot.sizeY(), snapshot.sizeZ(), snapshot.cellSize(),
+				snapshot.materials(), snapshot.phaseGroups(), volume, markers, solids, materials, phases);
+		check(FluidMaterialSurfaceMesher.build(markerChanged).outerTriangles().equals(reference.outerTriangles()),
+				"marker seed changed the outer surface without changing liquid volume");
 	}
 
 	/**
