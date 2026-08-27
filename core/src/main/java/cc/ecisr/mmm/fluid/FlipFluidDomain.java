@@ -74,6 +74,7 @@ public final class FlipFluidDomain {
 	private static final float PARTICLE_VOLUME = 1.0F / PARTICLES_PER_FULL_CELL;
 	private static final float FLIP_RATIO = 0.90F;
 	private static final int DEFAULT_MAX_PARTICLES = 262_144;
+	private static final int MAXIMUM_VISCOSITY_SUBSTEPS = 4_096;
 	private static final int NO_PHASE = Integer.MIN_VALUE;
 	private static final int INDICATOR_AIM_SNAP_CELLS = 2;
 
@@ -122,6 +123,9 @@ public final class FlipFluidDomain {
 	private final float[] velocityWeightX;
 	private final float[] velocityWeightY;
 	private final float[] velocityWeightZ;
+	private final float[] p2gMassWeightX;
+	private final float[] p2gMassWeightY;
+	private final float[] p2gMassWeightZ;
 	private final boolean[] velocityValidX;
 	private final boolean[] velocityValidY;
 	private final boolean[] velocityValidZ;
@@ -192,6 +196,7 @@ public final class FlipFluidDomain {
 	private double[] thermalBuoyancySum;
 	private double[] thermalBuoyancyVolume;
 	private final double[] thermalCellTemperatureK;
+	private ViscosityStats lastViscosityStats = new ViscosityStats(0, 0, 0.0);
 	/** Runtime world-derived fixed-reservoir temperatures; NaN is the canonical adiabatic face. */
 	private double[] thermalBoundaryTemperatureK;
 	private final SignedDyadic[] pendingPhaseCellVolume;
@@ -256,6 +261,9 @@ public final class FlipFluidDomain {
 		this.velocityWeightX = new float[velocityX.length];
 		this.velocityWeightY = new float[velocityY.length];
 		this.velocityWeightZ = new float[velocityZ.length];
+		this.p2gMassWeightX = new float[velocityX.length];
+		this.p2gMassWeightY = new float[velocityY.length];
+		this.p2gMassWeightZ = new float[velocityZ.length];
 		this.velocityValidX = new boolean[velocityX.length];
 		this.velocityValidY = new boolean[velocityY.length];
 		this.velocityValidZ = new boolean[velocityZ.length];
@@ -684,6 +692,7 @@ public final class FlipFluidDomain {
 		return !precipitationEnabled || chemicalParcels == null || !chemicalParcels.hasDirtyCells();
 	}
 	public GranularDepositDynamics.Stats lastGranularDepositStats() { return lastGranularDepositStats; }
+	public ViscosityStats lastViscosityStats() { return lastViscosityStats; }
 	public double lastGranularBoundaryImpulseX() { return lastGranularBoundaryImpulseX; }
 	public double lastGranularBoundaryImpulseY() { return lastGranularBoundaryImpulseY; }
 	public double lastGranularBoundaryImpulseZ() { return lastGranularBoundaryImpulseZ; }
@@ -4645,12 +4654,14 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		lastGranularBoundaryImpulseX = 0.0;
 		lastGranularBoundaryImpulseY = 0.0;
 		lastGranularBoundaryImpulseZ = 0.0;
+		lastViscosityStats = new ViscosityStats(0, 0, 0.0);
 		int substeps = calculateSubsteps(config.timeStep());
 		float dt = config.timeStep() / substeps;
 		int granularParcelCountBeforeAdvection = precipitationEnabled ? captureReactiveGranularCells() : 0;
 		int pressureIterations = 0;
 		for (int substep = 0; substep < substeps; substep++) {
 			rebuildGridFromParticles();
+			FlipViscositySolver.Plan viscosityPlan = prepareViscosityPlan(dt);
 			try {
 				updateGasNetwork(dt);
 			} catch (IllegalArgumentException | IllegalStateException invalidGasThermal) {
@@ -4685,6 +4696,16 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			applyGravity(dt);
 			applyThermalBuoyancy(dt);
 			applyLiquidPairSurfaceTensionForce(dt);
+			if (viscosityPlan != null) {
+				try {
+					viscosityPlan.apply(dt, config.cellSize());
+				} catch (FlipViscositySolver.BlockedException blocked) {
+					throw new ViscosityBlockedException(blocked.getMessage(), blocked);
+				}
+				lastViscosityStats = new ViscosityStats(
+						Math.max(lastViscosityStats.substeps(), viscosityPlan.substeps()),
+						viscosityPlan.coupledPairs(), viscosityPlan.maximumRatePerSecond());
+			}
 			enforceSolidFaceVelocities();
 			solvePressure(dt);
 			pressureIterations += lastPressureIterations;
@@ -4825,6 +4846,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		normalize(velocityX, velocityWeightX);
 		normalize(velocityY, velocityWeightY);
 		normalize(velocityZ, velocityWeightZ);
+		System.arraycopy(velocityWeightX, 0, p2gMassWeightX, 0, velocityWeightX.length);
+		System.arraycopy(velocityWeightY, 0, p2gMassWeightY, 0, velocityWeightY.length);
+		System.arraycopy(velocityWeightZ, 0, p2gMassWeightZ, 0, velocityWeightZ.length);
 		if (granularCoupling == null || !granularInventoryPresent && !coherentInventoryPresent) {
 			if (granularCoupling != null) granularCoupling.clear();
 			freeSurfaceGeometry.rebuild(solid, markerCount, cutCells);
@@ -5154,11 +5178,11 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 			@Override public GranularMechanics.FluidImpulseApplication addFluidImpulse(float x, float y, float z,
 			                                      double impulseX, double impulseY, double impulseZ) {
-				boolean appliedX = addFaceImpulse(velocityX, velocityWeightX, 0, x, y, z,
+				boolean appliedX = addFaceImpulse(velocityX, p2gMassWeightX, 0, x, y, z,
 						unitScale.signedSolverMass(impulseX));
-				boolean appliedY = addFaceImpulse(velocityY, velocityWeightY, 1, x, y, z,
+				boolean appliedY = addFaceImpulse(velocityY, p2gMassWeightY, 1, x, y, z,
 						unitScale.signedSolverMass(impulseY));
-				boolean appliedZ = addFaceImpulse(velocityZ, velocityWeightZ, 2, x, y, z,
+				boolean appliedZ = addFaceImpulse(velocityZ, p2gMassWeightZ, 2, x, y, z,
 						unitScale.signedSolverMass(impulseZ));
 				return new GranularMechanics.FluidImpulseApplication(
 						appliedX ? impulseX : 0.0, appliedY ? impulseY : 0.0, appliedZ ? impulseZ : 0.0,
@@ -5324,6 +5348,71 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 	}
 
+	private FlipViscositySolver.Plan prepareViscosityPlan(float dt) {
+		if (materialRegistry == null || particleCount == 0 || !materialRegistry.hasAnyViscosity()) return null;
+		if (thermalState == null) {
+			throw new ViscosityBlockedException(
+					"Newtonian viscosity requires authoritative liquid temperature");
+		}
+		double[][] faceVolume = {new double[velocityX.length], new double[velocityY.length],
+				new double[velocityZ.length]};
+		double[][] faceVolumeOverViscosity = {new double[velocityX.length], new double[velocityY.length],
+				new double[velocityZ.length]};
+		try {
+			for (int marker = 0; marker < particleCount; marker++) {
+				int material = particleMaterialHandle[marker];
+				if (!materialRegistry.declaresViscosity(material)) {
+					throw new ViscosityBlockedException(
+							"Active liquid material does not declare Newtonian viscosity: "
+									+ materialRegistry.material(material).id());
+				}
+				double mu = materialRegistry.dynamicViscosityAt(material, thermalMarkerTemperature(marker));
+				for (int axis = 0; axis < 3; axis++) {
+					splatFaceDouble(faceVolume[axis], axis, particleX[marker], particleY[marker], particleZ[marker],
+							particleVolume[marker]);
+					splatFaceDouble(faceVolumeOverViscosity[axis], axis, particleX[marker], particleY[marker],
+							particleZ[marker], particleVolume[marker] / mu);
+				}
+			}
+		} catch (IllegalArgumentException invalidMaterialState) {
+			throw new ViscosityBlockedException(invalidMaterialState.getMessage(), invalidMaterialState);
+		}
+		try {
+			return FlipViscositySolver.plan(dt, config.cellSize(), MAXIMUM_VISCOSITY_SUBSTEPS,
+					viscosityField(0, faceVolume[0], faceVolumeOverViscosity[0]),
+					viscosityField(1, faceVolume[1], faceVolumeOverViscosity[1]),
+					viscosityField(2, faceVolume[2], faceVolumeOverViscosity[2]));
+		} catch (FlipViscositySolver.BlockedException blocked) {
+			throw new ViscosityBlockedException(blocked.getMessage(), blocked);
+		}
+	}
+
+	private FlipViscositySolver.Field viscosityField(
+			int axis, double[] faceVolume, double[] faceVolumeOverViscosity
+	) {
+		int fieldX = axis == 0 ? sizeX + 1 : sizeX;
+		int fieldY = axis == 1 ? sizeY + 1 : sizeY;
+		int fieldZ = axis == 2 ? sizeZ + 1 : sizeZ;
+		float[] velocity = axis == 0 ? velocityX : axis == 1 ? velocityY : velocityZ;
+		float[] weight = axis == 0 ? p2gMassWeightX : axis == 1 ? p2gMassWeightY : p2gMassWeightZ;
+		double[] mass = new double[velocity.length];
+		double[] viscosity = new double[velocity.length];
+		float[] aperture = new float[velocity.length];
+		for (int z = 0; z < fieldZ; z++) for (int y = 0; y < fieldY; y++) for (int x = 0; x < fieldX; x++) {
+			int face = (z * fieldY + y) * fieldX + x;
+			aperture[face] = switch (axis) {
+				case 0 -> cutCells.xFaceOpen(x, y, z);
+				case 1 -> cutCells.yFaceOpen(x, y, z);
+				case 2 -> cutCells.zFaceOpen(x, y, z);
+				default -> throw new IllegalArgumentException("Viscosity field axis is invalid");
+			};
+			if (weight[face] <= 1.0E-8F) continue;
+			mass[face] = unitScale.kilograms(faceSolverMass(weight[face]));
+			viscosity[face] = faceVolume[face] / faceVolumeOverViscosity[face];
+		}
+		return new FlipViscositySolver.Field(fieldX, fieldY, fieldZ, velocity, mass, viscosity, aperture);
+	}
+
 	private record CarrierProperties(double density, double viscosity) { }
 
 	private CarrierProperties granularCarrierProperties(int cell) {
@@ -5400,7 +5489,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
 			if (x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz) continue;
 			int face = (z * ny + y) * nx + x;
-			if (faceMass[face] <= 1.0e-8F) continue;
+			if (faceSolverMass(faceMass[face]) <= 1.0e-8) continue;
 			validWeight += trilinearWeight(ox, oy, oz, fx, fy, fz);
 		}
 		if (!(validWeight > 0.0)) return false;
@@ -5408,11 +5497,16 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
 			if (x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz) continue;
 			int face = (z * ny + y) * nx + x;
-			if (faceMass[face] <= 1.0e-8F) continue;
+			double solverMass = faceSolverMass(faceMass[face]);
+			if (solverMass <= 1.0e-8) continue;
 			double share = impulse * trilinearWeight(ox, oy, oz, fx, fy, fz) / validWeight;
-			field[face] += (float) (share / faceMass[face]);
+			field[face] += (float) (share / solverMass);
 		}
 		return true;
+	}
+
+	private double faceSolverMass(float p2gWeight) {
+		return p2gWeight * (variableDensityActive ? 1.0 : config.density());
 	}
 
 	private void splatCenter(float px, float py, float pz, float particleAmount) {
@@ -5453,6 +5547,20 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			sums[index] += value * weighted;
 			weights[index] += weighted;
 		});
+	}
+
+	private void splatFaceDouble(double[] sums, int axis, float px, float py, float pz, double amount) {
+		float h = config.cellSize();
+		int nx = axis == 0 ? sizeX + 1 : sizeX;
+		int ny = axis == 1 ? sizeY + 1 : sizeY;
+		int nz = axis == 2 ? sizeZ + 1 : sizeZ;
+		if (sums.length != Math.multiplyExact(Math.multiplyExact(nx, ny), nz)) {
+			throw new IllegalArgumentException("Viscosity face accumulation shape is invalid");
+		}
+		float gx = px / h - (axis == 0 ? 0.0F : 0.5F);
+		float gy = py / h - (axis == 1 ? 0.0F : 0.5F);
+		float gz = pz / h - (axis == 2 ? 0.0F : 0.5F);
+		splatTrilinear(gx, gy, gz, nx, ny, nz, (index, weight) -> sums[index] += weight * amount);
 	}
 
 	private static void splatTrilinear(float gx, float gy, float gz, int nx, int ny, int nz, SplatConsumer consumer) {
@@ -7035,6 +7143,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	public record VolumeAddition(float addedVolume, boolean markerBudgetLimited) { }
 	public record VolumeDistribution(int activeCells, int visibleCells, int denseCells) { }
 	public record SolidDistribution(int partialCells, int fullCells) { }
+	public record ViscosityStats(int substeps, int coupledPairs, double maximumRatePerSecond) { }
 	record MaterialInventory(double volume, double mass, double centerY) { }
 	public record StepStats(
 			int substeps,
@@ -7056,6 +7165,11 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	) {
 		public float relativeVolumeError() { return volumeBefore == 0.0F ? 0.0F : Math.abs(volumeAfter - volumeBefore) / volumeBefore; }
 		public double relativeMassError() { return massBefore == 0.0 ? 0.0 : Math.abs(massAfter - massBefore) / massBefore; }
+	}
+
+	public static final class ViscosityBlockedException extends IllegalStateException {
+		private ViscosityBlockedException(String message) { super(message); }
+		private ViscosityBlockedException(String message, Throwable cause) { super(message, cause); }
 	}
 
 	public static final class ParticleBudgetExceededException extends IllegalStateException {

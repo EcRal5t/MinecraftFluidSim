@@ -1,6 +1,8 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
+import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
+import cc.ecisr.mmm.thermal.ThermalRegistry;
 
 import java.util.Arrays;
 import java.util.List;
@@ -12,8 +14,74 @@ final class M3MaterialDynamicsValidation {
 	static Summary validate() {
 		ConnectedVesselResult vessel = unequalAreaConnectedVesselBalances();
 		LayeringResult layering = densityInversionLayersConservatively();
+		viscousFaceDiffusionIsConservativeAndBounded();
+		activeDomainConsumesFrozenViscosity();
 		movingBodyCommitsOnlyMarkerMomentum();
 		return new Summary(vessel.finalHeadDifference(), layering.heavyCenterY(), layering.lightCenterY());
+	}
+
+	private static void activeDomainConsumesFrozenViscosity() {
+		FluidMaterial liquid = new FluidMaterial("test:viscous_liquid", 1.0, "test:viscous", 0.0, Math.PI / 2.0);
+		MaterialRegistry definitions = new MaterialRegistry(List.of(new MaterialRegistry.MaterialEntry(liquid,
+				List.of(new MaterialRegistry.ViscositySegment(250.0, 350.0, 1.0, 1.0)))), List.of());
+		FluidMaterialRegistry runtime = definitions.runtimeRegistry();
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.8F);
+		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) {
+			domain.setVolume(x, y, z, 1.0F);
+		}
+		domain.setMarkerMaterial(0, runtime, 0);
+		ThermalMaterialDefinition thermal = new ThermalMaterialDefinition("test:thermal/viscous_liquid",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 300.0, 0.0, 1.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 100.0)));
+		domain.bindThermal(new ThermalRegistry(List.of(thermal)), runtime, 300.0);
+		domain.step();
+		check(domain.lastViscosityStats().coupledPairs() > 0
+				&& domain.lastViscosityStats().substeps() > 0
+				&& domain.lastViscosityStats().maximumRatePerSecond() > 0.0,
+				"active FLIP domain did not consume its frozen mu(T) face operator: "
+						+ domain.lastViscosityStats());
+	}
+
+	private static void viscousFaceDiffusionIsConservativeAndBounded() {
+		float[] velocity = {1.0F, 0.0F, -1.0F};
+		FlipViscositySolver.Field field = new FlipViscositySolver.Field(3, 1, 1, velocity,
+				new double[]{1.0, 1.0, 1.0}, new double[]{2.0, 2.0, 2.0},
+				new float[]{1.0F, 1.0F, 1.0F});
+		FlipViscositySolver.Plan plan = FlipViscositySolver.plan(0.25, 1.0, 8, field);
+		check(plan.substeps() == 1 && plan.coupledPairs() == 2 && plan.maximumRatePerSecond() == 4.0,
+				"viscous Gershgorin plan did not match the three-face analytic operator");
+		plan.apply(0.25, 1.0);
+		check(velocity[0] == 0.5F && velocity[1] == 0.0F && velocity[2] == -0.5F,
+				"viscous three-face eigenmode did not diffuse analytically");
+		check(velocity[0] + velocity[1] + velocity[2] == 0.0F,
+				"internal viscous impulses changed total face momentum");
+
+		float[] harmonicVelocity = {1.0F, 0.0F};
+		FlipViscositySolver.Plan harmonic = FlipViscositySolver.plan(0.1, 1.0, 8,
+				new FlipViscositySolver.Field(2, 1, 1, harmonicVelocity,
+						new double[]{1.0, 1.0}, new double[]{1.0, 3.0}, new float[]{1.0F, 1.0F}));
+		harmonic.apply(0.1, 1.0);
+		check(Math.abs(harmonicVelocity[0] - 0.85F) <= 2.0F * Math.ulp(0.85F)
+				&& Math.abs(harmonicVelocity[1] - 0.15F) <= 2.0F * Math.ulp(0.15F),
+				"viscous material interface did not use harmonic dynamic viscosity");
+
+		float[] isolated = {1.0F, -1.0F};
+		FlipViscositySolver.Plan zeroAperture = FlipViscositySolver.plan(1.0, 1.0, 1,
+				new FlipViscositySolver.Field(2, 1, 1, isolated,
+						new double[]{1.0, 1.0}, new double[]{2.0, 2.0}, new float[]{1.0F, 0.0F}));
+		zeroAperture.apply(1.0, 1.0);
+		check(zeroAperture.coupledPairs() == 0 && isolated[0] == 1.0F && isolated[1] == -1.0F,
+				"zero cut aperture transmitted viscous stress");
+		try {
+			FlipViscositySolver.plan(1.0, 1.0, 4, new FlipViscositySolver.Field(2, 1, 1,
+					new float[]{1.0F, 0.0F}, new double[]{0.01, 0.01}, new double[]{10.0, 10.0},
+					new float[]{1.0F, 1.0F}));
+			throw new AssertionError("Viscous stability budget overflow was accepted");
+		} catch (FlipViscositySolver.BlockedException expected) {
+			check(expected.getMessage().contains("over budget"), "viscous budget rejection lost its reason");
+		}
 	}
 
 	private static void movingBodyCommitsOnlyMarkerMomentum() {

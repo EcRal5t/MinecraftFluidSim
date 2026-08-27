@@ -2215,6 +2215,9 @@ public final class FluidSimulationService {
 		region.wakeForActivity();
 		try {
 			for (int i = 0; i < count; i++) stepOnce(region);
+		} catch (FlipFluidDomain.ViscosityBlockedException blocked) {
+			blockViscosity(level, region, blocked);
+			return -1;
 		} catch (FlipFluidDomain.ThermalTransportBlockedException blocked) {
 			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
 			return -1;
@@ -2328,6 +2331,9 @@ public final class FluidSimulationService {
 					"物质、运动与力学颗粒力学超出定义有效范围，区域被安全暂停：" + invalid.getMessage()
 							+ "；本次速度提交未开始，请查看 /mmm status"));
 			sendSnapshot(level, region);
+			return;
+		} catch (FlipFluidDomain.ViscosityBlockedException blocked) {
+			blockViscosity(level, region, blocked);
 			return;
 		} catch (FlipFluidDomain.ThermalTransportBlockedException blocked) {
 			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
@@ -2443,6 +2449,18 @@ public final class FluidSimulationService {
 				region.id(), failure, blocked);
 		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
 				"物质、运动与力学热学步骤被安全拒绝，区域已暂停：" + failure + "；请查看 /mmm status"));
+		sendSnapshot(level, region);
+	}
+
+	private void blockViscosity(
+			ServerLevel level, FluidRegion region, FlipFluidDomain.ViscosityBlockedException blocked
+	) {
+		String failure = "viscosity-blocked PAUSED：" + blocked.getMessage();
+		region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, failure);
+		MmmMod.LOGGER.error("Region {} rejected a Newtonian viscosity step and is paused", region.id(), blocked);
+		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+				"物质、运动与力学黏性步骤被安全拒绝，区域已暂停：" + blocked.getMessage()
+						+ "；本次粒子速度未提交，请查看 /mmm status"));
 		sendSnapshot(level, region);
 	}
 

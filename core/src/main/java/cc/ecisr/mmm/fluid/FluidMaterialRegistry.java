@@ -24,6 +24,7 @@ public final class FluidMaterialRegistry {
 	private final int[] phaseHandleByMaterial;
 	private final Map<Long, Double> liquidPairTensions;
 	private final List<List<MaterialRegistry.ViscositySegment>> viscosityByMaterial;
+	private final boolean viscosityDeclared;
 
 	public FluidMaterialRegistry(List<FluidMaterial> definitions) {
 		this(definitions, List.of(), null);
@@ -80,6 +81,7 @@ public final class FluidMaterialRegistry {
 			}
 		}
 		liquidPairTensions = Map.copyOf(pairMap);
+		boolean anyViscosity = false;
 		if (viscosity == null) {
 			ArrayList<List<MaterialRegistry.ViscositySegment>> absent = new ArrayList<>(materials.size());
 			for (int handle = 0; handle < materials.size(); handle++) absent.add(List.of());
@@ -90,10 +92,13 @@ public final class FluidMaterialRegistry {
 			}
 			ArrayList<List<MaterialRegistry.ViscositySegment>> profiles = new ArrayList<>(viscosity.size());
 			for (List<MaterialRegistry.ViscositySegment> profile : viscosity) {
-				profiles.add(profile == null ? List.of() : List.copyOf(profile));
+				List<MaterialRegistry.ViscositySegment> frozen = profile == null ? List.of() : List.copyOf(profile);
+				profiles.add(frozen);
+				anyViscosity |= !frozen.isEmpty();
 			}
 			viscosityByMaterial = List.copyOf(profiles);
 		}
+		viscosityDeclared = anyViscosity;
 	}
 
 	public int size() { return materials.size(); }
@@ -101,6 +106,7 @@ public final class FluidMaterialRegistry {
 	public List<String> phaseGroups() { return phaseGroups; }
 	public int phaseCount() { return phaseGroups.size(); }
 	public Map<Long, Double> liquidPairTensions() { return liquidPairTensions; }
+	public boolean hasAnyViscosity() { return viscosityDeclared; }
 	public boolean declaresViscosity(int materialHandle) {
 		material(materialHandle);
 		return !viscosityByMaterial.get(materialHandle).isEmpty();
