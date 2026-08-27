@@ -21,6 +21,7 @@ import cc.ecisr.mmm.simulation.FluidCutCellShapeValidation;
 import cc.ecisr.mmm.simulation.FluidRegionLifecycleValidation;
 import cc.ecisr.mmm.simulation.FluidRegionManagerValidation;
 import cc.ecisr.mmm.simulation.M7RegionChemistryPersistenceValidation;
+import cc.ecisr.mmm.simulation.ProductionFluidReplayValidation;
 import cc.ecisr.mmm.simulation.TakeoverJournalValidation;
 import cc.ecisr.mmm.simulation.controller.FluidBoundaryScannerValidation;
 import cc.ecisr.mmm.simulation.ownership.M6OwnershipValidation;
@@ -122,6 +123,7 @@ public final class CpuValidationSuite {
 				() -> M5GasLiquidCouplingValidation.main(FAST));
 		gate(gates, "region-manager", () -> FluidRegionManagerValidation.main(NONE));
 		gate(gates, "lifecycle", () -> FluidRegionLifecycleValidation.main(NONE));
+		gate(gates, "production-replay", () -> ProductionFluidReplayValidation.main(NONE));
 		gate(gates, "free-surface", () -> FlipFluidFreeSurfaceValidation.main(NONE),
 				() -> FlipFluidFreeSurfaceValidation.main(FAST));
 		gate(gates, "reseeding", () -> FlipFluidReseedingValidation.main(NONE),
