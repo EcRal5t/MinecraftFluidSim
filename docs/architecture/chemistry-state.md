@@ -46,7 +46,7 @@ particleMass * cellSize^3 = exact_species_mass_kg + massResidual_kg
 
 反应引擎对完成 advection 的 marker 按 `(cell, chemicalPhase)` 分组，汇总每个 species 的 integer quanta。对 canonical reaction 顺序计算最大完整 extent：每个反应物库存除以对应计量系数并取最小值。只有完整整数 extent 可提交；products、composition basis、charge 和 exact species mass 必须同时回和。
 
-反应后的格总库存再确定性分配回原 marker。最后一个可接收 marker 得到整数 remainder，避免多次均分造成 quanta 漂移；pool 或 marker budget 不足时该 cell 不暴露部分修改。当前反应是瞬时同格模型，不应用 Arrhenius 速率、平衡常数或跨格搜索。
+反应后的格总库存再确定性分配回原 marker。最后一个可接收 marker 得到整数 remainder，避免多次均分造成 quanta 漂移；pool 或 marker budget 不足时该 cell 不暴露部分修改。若求值后的逐 species integer inventory 与输入逐位相同，该组只消费求值预算并清除 dirty 状态，不进入分配、热候选验证或 parcel 覆写，marker 的组成、残差、质量和 indicator 原样保留。当前反应是瞬时同格模型，不应用 Arrhenius 速率、平衡常数或跨格搜索。
 
 ### Indicator 与 pH
 

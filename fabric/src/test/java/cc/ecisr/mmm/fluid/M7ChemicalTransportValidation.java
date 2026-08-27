@@ -37,6 +37,7 @@ public final class M7ChemicalTransportValidation {
 		validateExternalSourceBoundary();
 		validateSameCellReaction();
 		validateReactionKeepsTinyParcels();
+		validateExactNoOpReactionPreservesParcels();
 		validateAdjacentCellsDoNotReact();
 		validateWallSeparatedCellsDoNotReact();
 		validateImmiscibleMarkersDoNotReact();
@@ -218,6 +219,34 @@ public final class M7ChemicalTransportValidation {
 			check(parcels.record(marker).totalQuanta() > 0L, "reaction left an empty live parcel");
 		}
 		check(parcels.indicator(1), "tiny-parcel repair changed indicator provenance");
+	}
+
+	private static void validateExactNoOpReactionPreservesParcels() {
+		final int markerCount = 2;
+		ChemicalParcelStore parcels = new ChemicalParcelStore(
+				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), markerCount, 64);
+		ChemicalMixtureRecord first = ChemicalMixtureRecord.fromStableAmounts(
+				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.H2O, 1_001L), 0.125);
+		ChemicalMixtureRecord second = ChemicalMixtureRecord.fromStableAmounts(
+				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.H2O, 2_003L), -0.25);
+		parcels.assign(0, first, true);
+		parcels.assign(1, second, false);
+		parcels.markDirtyCell((1 * 4 + 1) * 4 + 1);
+		float[] positions = {1.5F, 1.5F};
+		double[] masses = {first.massKilograms(CHEMISTRY), second.massKilograms(CHEMISTRY)};
+		double[] beforeMasses = masses.clone();
+		int[] validations = {0};
+		ChemicalParcelStore.ReactionStats stats = parcels.reactDirtyCells(4, 4, 4, 1.0F,
+				positions, positions, positions, masses, new int[markerCount],
+				ignored -> BuiltinFluidMaterials.WATER.id(), markerCount,
+				(marker, mixture, mass) -> validations[0]++);
+		check(stats.dirtyCells() == 1 && stats.evaluations() > 0 && stats.changedMarkers() == 0,
+				"exact no-op reaction did not report its evaluated unchanged cell");
+		check(validations[0] == 0, "exact no-op reaction entered candidate thermal validation");
+		check(parcels.record(0).equals(first) && parcels.record(1).equals(second),
+				"exact no-op reaction redistributed marker composition or residuals");
+		check(Arrays.equals(masses, beforeMasses) && parcels.indicator(0) && !parcels.indicator(1),
+				"exact no-op reaction changed marker mass or indicator provenance");
 	}
 
 	private static void validateAdjacentCellsDoNotReact() {

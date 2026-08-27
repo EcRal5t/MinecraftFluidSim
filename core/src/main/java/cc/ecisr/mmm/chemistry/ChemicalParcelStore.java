@@ -485,6 +485,8 @@ public final class ChemicalParcelStore {
 				if (evaluations > ChemicalLimits.MAX_REACTION_EVALUATIONS_PER_STEP) {
 					throw new ChemicalReactionEngine.BudgetExceededException("Logical-step reaction budget exceeded");
 				}
+				long[] reactedInventory = result.inventory();
+				if (Arrays.equals(inventory, reactedInventory)) continue;
 				/*
 				 * A marker residual belongs to that marker, so reaction products must follow the
 				 * incoming exact species-mass share rather than geometric volume. Reactions conserve
@@ -505,7 +507,6 @@ public final class ChemicalParcelStore {
 				@SuppressWarnings("unchecked")
 				TreeMap<Integer, Long>[] distributed = new TreeMap[markers.size()];
 				for (int i = 0; i < distributed.length; i++) distributed[i] = new TreeMap<>();
-				long[] reactedInventory = result.inventory();
 				for (int species = 0; species < reactedInventory.length; species++) if (reactedInventory[species] > 0L) {
 					long[] allocation = BinaryVolumeAllocator.allocate(reactedInventory[species], weights, ordinals);
 					for (int i = 0; i < allocation.length; i++) if (allocation[i] > 0L) {
