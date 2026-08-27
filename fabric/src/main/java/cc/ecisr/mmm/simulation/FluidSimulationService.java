@@ -2374,6 +2374,9 @@ public final class FluidSimulationService {
 		} catch (FlipFluidDomain.ThermalPhaseBlockedException blocked) {
 			blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
 			return;
+		} catch (RuntimeException invalidCandidate) {
+			blockBackendCandidate(level, region, invalidCandidate);
+			return;
 		}
 		updateStepPacing(region, affectedEntities > 0);
 		if (thermalFeatureEnabled) observeThermalStep(region, thermalBefore, motionStep);
@@ -2494,6 +2497,17 @@ public final class FluidSimulationService {
 				region.id(), failure, blocked);
 		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
 				"物质、运动与力学热学步骤被安全拒绝，区域已暂停：" + failure + "；请查看 /mmm status"));
+		sendSnapshot(level, region);
+	}
+
+	private void blockBackendCandidate(ServerLevel level, FluidRegion region, RuntimeException invalidCandidate) {
+		String failure = "backend-candidate-blocked PAUSED：" + invalidCandidate.getMessage();
+		region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, failure);
+		MmmMod.LOGGER.error("Region {} rejected an invalid complete backend candidate and is paused",
+				region.id(), invalidCandidate);
+		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+				"物质、运动与力学后端候选被安全拒绝，区域已暂停：" + invalidCandidate.getMessage()
+						+ "；旧区域状态保持，请查看 /mmm status"));
 		sendSnapshot(level, region);
 	}
 

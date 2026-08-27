@@ -547,16 +547,26 @@ public final class M9ThermalValidation {
 		expectFailure(() -> rejected.restoreGasState(stale, gas),
 				"stale gas topology unexpectedly matched the post-carrier checkpoint geometry");
 
-		domain.synchronizeGasTopologyForPersistence();
-		var synchronizedGas = domain.exportGasState("");
-		FlipFluidDomain restored = new FlipFluidDomain(4, 4, 4, config, 1_024);
-		restored.sealDomainBoundary();
-		restored.restoreMaterialParticleState(carriers);
-		restored.restoreGasState(synchronizedGas, gas);
+		FluidDomainState synchronizedState = domain.captureAuthoritativeState();
+		FlipFluidDomain restored = FlipFluidDomain.restoreAuthoritativeState(synchronizedState);
 		require(restored.airNetwork().nodeCount() == 2
 				&& restored.airNetwork().inventory(1).merge(restored.airNetwork().inventory(2)).equals(beforeGas)
 				&& restored.airNetwork().auditClosed(),
-				"checkpoint gas-topology barrier did not preserve and restore the split inventory");
+				"authoritative capture did not synchronize and restore the split gas inventory");
+
+		FlipFluidDomain directPour = new FlipFluidDomain(4, 4, 4, config, 1_024);
+		directPour.sealDomainBoundary();
+		directPour.bindGasRegistry(gas);
+		directPour.bootstrapGasState("");
+		directPour.bindThermal(thermal, liquids, 300.0);
+		FlipFluidDomain.VolumeAddition poured = directPour.addVolumeNearBudgeted(0, 1, 0, 16.0F, 6);
+		require(poured.addedVolume() == 16.0F, "direct-pour fixture did not add its complete liquid source");
+		FluidDomainState capturedPour = directPour.captureAuthoritativeState();
+		FlipFluidDomain restoredPour = FlipFluidDomain.restoreAuthoritativeState(capturedPour);
+		require(restoredPour.totalVolumeExact() == directPour.totalVolumeExact()
+				&& restoredPour.airNetwork().auditClosed()
+				&& restoredPour.exactInternalEnergy().equals(restoredPour.thermalAudit().expectedInventory()),
+				"direct liquid source capture retained pre-pour gas membership or broke energy truth");
 
 		FlipFluidDomain movingInterface = new FlipFluidDomain(3, 2, 2, config, 128);
 		movingInterface.sealDomainBoundary();

@@ -26,6 +26,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
 		pureWaterMarkerMassLedgerTracksVolume();
 		volumeDriftCorrectionPreservesLegitimateSurfaceDeficits();
+		mechanicalAuditIsOptIn();
 		fractionalHydrostaticColumnsBalanceGravity();
 		projectedHydrostaticPressureIntegratesOnMovingBox();
 		smallExternalBodyDisturbanceDoesNotAmplifyVelocity();
@@ -40,6 +41,20 @@ public final class FlipFluidFreeSurfaceValidation {
 		waterDescendsAStairSlope();
 		System.out.println("FlipFluid free-surface validation passed"
 				+ (fast ? " (short; production closed-pool replays skipped)" : ""));
+	}
+
+	private static void mechanicalAuditIsOptIn() {
+		FlipFluidDomain domain = new FlipFluidDomain(2, 2, 2, strictConfig(), 128);
+		domain.setVolume(0, 0, 0, 1.0F);
+		FluidDomainState state = domain.captureAuthoritativeState();
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		FluidStepCandidate ordinary = backend.evaluate(new FluidStepRequest(
+				0L, state, MovingBodySurfaceSnapshot.EMPTY, false, 0));
+		FluidStepCandidate audited = backend.evaluate(new FluidStepRequest(
+				0L, state, MovingBodySurfaceSnapshot.EMPTY, false, 0, true));
+		check(!ordinary.stats().mechanicalAudit().enabled()
+				&& audited.stats().mechanicalAudit().enabled(),
+				"production request unexpectedly paid for staged mechanical diagnostics");
 	}
 
 	private static void floatingBodyReplayHasDecayingEnvelope() {
@@ -79,7 +94,7 @@ public final class FlipFluidFreeSurfaceValidation {
 			try {
 				candidate = backend.evaluate(new FluidStepRequest(
 						step, state, new MovingBodySurfaceSnapshot(List.of(body)), true,
-						ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
+						ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP, true));
 			} catch (RuntimeException failed) {
 				throw new AssertionError("floating player replay failed at tick " + step
 						+ " and y=" + current.minimumY(), failed);
@@ -541,7 +556,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		PoolWindow early = new PoolWindow(), middle = new PoolWindow(), late = new PoolWindow();
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		FluidStepCandidate phaseDisabledPreview = backend.evaluate(new FluidStepRequest(
-				0L, state, MovingBodySurfaceSnapshot.EMPTY, false, 0));
+				0L, state, MovingBodySurfaceSnapshot.EMPTY, false, 0, true));
 		System.out.println("  closed half-pool phase-disabled first step: metrics="
 				+ poolMetrics(phaseDisabledPreview.state()) + " stats=" + phaseDisabledPreview.stats());
 		for (int step = 0; step < 240; step++) {
@@ -549,7 +564,7 @@ public final class FlipFluidFreeSurfaceValidation {
 			try {
 				candidate = backend.evaluate(new FluidStepRequest(
 						step, state, MovingBodySurfaceSnapshot.EMPTY, true,
-						ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
+						ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP, true));
 			} catch (RuntimeException failed) {
 				throw new AssertionError("closed half-pool production candidate failed at tick " + step, failed);
 			}
@@ -665,6 +680,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		private double closureResidualJoules;
 
 		private void add(PoolMetrics metrics, FlipFluidDomain.MechanicalStepAudit audit) {
+			check(audit.enabled(), "closed-pool fixture did not request its mechanical audit");
 			maximumKineticEnergyJoules = Math.max(maximumKineticEnergyJoules, metrics.kineticEnergyJoules());
 			maximumSpeedMetresPerSecond = Math.max(maximumSpeedMetresPerSecond,
 					metrics.maximumSpeedMetresPerSecond());
@@ -714,6 +730,7 @@ public final class FlipFluidFreeSurfaceValidation {
 				PoolMetrics metrics, FlipFluidDomain.MechanicalStepAudit audit,
 				MovingBodyStepResult result, double centreY, double bodyVelocityY, double bodyMassKilograms
 		) {
+			check(audit.enabled(), "floating-player fixture did not request its mechanical audit");
 			minimumCentreY = Math.min(minimumCentreY, centreY);
 			maximumCentreY = Math.max(maximumCentreY, centreY);
 			maximumBodySpeedMetresPerSecond = Math.max(maximumBodySpeedMetresPerSecond, Math.abs(bodyVelocityY));

@@ -190,6 +190,7 @@ public final class FlipFluidDomain {
 	private int[] granularCarrierMaterialByCell;
 	private double[] granularCarrierVolumeByCell;
 	private boolean gridDirty = true;
+	private boolean gasTopologyDirty = true;
 	private int pressureAnchor = -1;
 	private int lastPressureIterations;
 	private float lastPressureResidual;
@@ -412,6 +413,7 @@ public final class FlipFluidDomain {
 		previousSealedNodeCount = ventedAmbient ? 0 : result.sealedNodeCount();
 		gasPressureActive = previousSealedNodeCount > 0;
 		operatorVentedGasTopology = ventedAmbient;
+		gasTopologyDirty = false;
 	}
 
 	/** True when the current grid contains at least one sealed gas cavity with finite inventory. */
@@ -673,10 +675,16 @@ public final class FlipFluidDomain {
 		return PendingPhaseVolumeState.capture(pendingPhaseCellVolume);
 	}
 
-	/** Captures every authoritative inventory needed to evaluate a generation off-owner. */
+	/**
+	 * Captures every authoritative inventory needed to evaluate a generation off-owner.
+	 * Direct carrier edits first reconcile initialized gas truth to the same geometry generation.
+	 */
 	public FluidDomainState captureAuthoritativeState() {
 		if (activeCollisionPlan != null) {
 			throw new IllegalStateException("Cannot capture while a collision transaction is active");
+		}
+		if (airCellNodeId != null && (gridDirty || gasTopologyDirty)) {
+			synchronizeGasTopologyForPersistence();
 		}
 		FlipParticleState pure = null;
 		FlipMaterialParticleState materials = null;
@@ -4267,6 +4275,7 @@ public final class FlipFluidDomain {
 		previousSealedNodeCount = 0;
 		gasPressureActive = false;
 		operatorVentedGasTopology = true;
+		gasTopologyDirty = false;
 		return new OperatorGasVent(plan.removed(), plan.thermalPlan() == null
 				? SignedDyadic.ZERO : plan.thermalPlan().removedEnergy(), plan.nodeCount());
 	}
@@ -4974,17 +4983,21 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	public record MaterialDisplacement(float volume, List<MaterialPortion> portions, double internalEnergy) { }
 	public record MaterialPortion(int materialHandle, double volume, double mass) { }
 
-	public StepStats step() { return step(false, 0); }
+	public StepStats step() { return step(false, 0, false); }
 
 	public StepStats step(boolean phaseChangeEnabled, int maximumPhaseOperations) {
+		return step(phaseChangeEnabled, maximumPhaseOperations, false);
+	}
+
+	StepStats step(boolean phaseChangeEnabled, int maximumPhaseOperations, boolean mechanicalAuditEnabled) {
 		if (phaseChangeEnabled && (maximumPhaseOperations <= 0
 				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
 			throw new IllegalArgumentException("Production phase operation budget is invalid");
 		}
 		float before = totalVolume();
 		double massBefore = totalMass();
-		MechanicalAuditAccumulator mechanicalAudit = new MechanicalAuditAccumulator(
-				particleKineticEnergyJoules());
+		MechanicalAuditAccumulator mechanicalAudit = mechanicalAuditEnabled
+				? new MechanicalAuditAccumulator(particleKineticEnergyJoules()) : null;
 		lastGranularBoundaryImpulseX = 0.0;
 		lastGranularBoundaryImpulseY = 0.0;
 		lastGranularBoundaryImpulseZ = 0.0;
@@ -5013,8 +5026,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						invalid.getMessage(), invalid);
 			}
 			rebuildGridFromParticles();
-			double stageKineticEnergy = gridKineticEnergyJoules();
-			mechanicalAudit.particleToGridTransferJoules += stageKineticEnergy - particleKineticEnergyJoules();
+			double stageKineticEnergy = 0.0;
+			if (mechanicalAudit != null) {
+				stageKineticEnergy = gridKineticEnergyJoules();
+				mechanicalAudit.particleToGridTransferJoules +=
+						stageKineticEnergy - particleKineticEnergyJoules();
+			}
 			FlipViscositySolver.Plan viscosityPlan = prepareViscosityPlan(dt);
 			try {
 				updateGasNetwork(dt);
@@ -5048,30 +5065,40 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				}
 				pressureGranularCoupling = granularNextCoupling;
 			}
-			double nextKineticEnergy = gridKineticEnergyJoules();
-			mechanicalAudit.granularCouplingWorkJoules += nextKineticEnergy - stageKineticEnergy;
-			stageKineticEnergy = nextKineticEnergy;
+			if (mechanicalAudit != null) {
+				double nextKineticEnergy = gridKineticEnergyJoules();
+				mechanicalAudit.granularCouplingWorkJoules += nextKineticEnergy - stageKineticEnergy;
+				stageKineticEnergy = nextKineticEnergy;
+			}
 			// Dampen previously committed flow before body forces so a zero-velocity porous bed retains
 			// the full hydrostatic gravity/pressure balance in the shared projection.
 			applyGranularPorousDamping(dt);
 			if (movingBodyBoundary != null && materialRegistry != null && materialRegistry.hasAnyViscosity()) {
 				applyMovingBodyViscosity(dt);
 			}
-			nextKineticEnergy = gridKineticEnergyJoules();
-			mechanicalAudit.movingAndPorousBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
-			stageKineticEnergy = nextKineticEnergy;
+			if (mechanicalAudit != null) {
+				double nextKineticEnergy = gridKineticEnergyJoules();
+				mechanicalAudit.movingAndPorousBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
+				stageKineticEnergy = nextKineticEnergy;
+			}
 			applyGravity(dt);
-			nextKineticEnergy = gridKineticEnergyJoules();
-			mechanicalAudit.gravityWorkJoules += nextKineticEnergy - stageKineticEnergy;
-			stageKineticEnergy = nextKineticEnergy;
+			if (mechanicalAudit != null) {
+				double nextKineticEnergy = gridKineticEnergyJoules();
+				mechanicalAudit.gravityWorkJoules += nextKineticEnergy - stageKineticEnergy;
+				stageKineticEnergy = nextKineticEnergy;
+			}
 			applyThermalBuoyancy(dt);
-			nextKineticEnergy = gridKineticEnergyJoules();
-			mechanicalAudit.thermalBuoyancyWorkJoules += nextKineticEnergy - stageKineticEnergy;
-			stageKineticEnergy = nextKineticEnergy;
+			if (mechanicalAudit != null) {
+				double nextKineticEnergy = gridKineticEnergyJoules();
+				mechanicalAudit.thermalBuoyancyWorkJoules += nextKineticEnergy - stageKineticEnergy;
+				stageKineticEnergy = nextKineticEnergy;
+			}
 			applyLiquidPairSurfaceTensionForce(dt);
-			nextKineticEnergy = gridKineticEnergyJoules();
-			mechanicalAudit.surfaceTensionWorkJoules += nextKineticEnergy - stageKineticEnergy;
-			stageKineticEnergy = nextKineticEnergy;
+			if (mechanicalAudit != null) {
+				double nextKineticEnergy = gridKineticEnergyJoules();
+				mechanicalAudit.surfaceTensionWorkJoules += nextKineticEnergy - stageKineticEnergy;
+				stageKineticEnergy = nextKineticEnergy;
+			}
 			if (viscosityPlan != null) {
 				try {
 					viscosityPlan.apply(dt, config.cellSize());
@@ -5082,13 +5109,17 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						Math.max(lastViscosityStats.substeps(), viscosityPlan.substeps()),
 						viscosityPlan.coupledPairs(), viscosityPlan.maximumRatePerSecond());
 			}
-			nextKineticEnergy = gridKineticEnergyJoules();
-			mechanicalAudit.viscosityWorkJoules += nextKineticEnergy - stageKineticEnergy;
-			stageKineticEnergy = nextKineticEnergy;
+			if (mechanicalAudit != null) {
+				double nextKineticEnergy = gridKineticEnergyJoules();
+				mechanicalAudit.viscosityWorkJoules += nextKineticEnergy - stageKineticEnergy;
+				stageKineticEnergy = nextKineticEnergy;
+			}
 			enforceSolidFaceVelocities();
-			nextKineticEnergy = gridKineticEnergyJoules();
-			mechanicalAudit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
-			stageKineticEnergy = nextKineticEnergy;
+			if (mechanicalAudit != null) {
+				double nextKineticEnergy = gridKineticEnergyJoules();
+				mechanicalAudit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
+				stageKineticEnergy = nextKineticEnergy;
+			}
 			solvePressure(dt);
 			pressureIterations += lastPressureIterations;
 			if (movingBodyBoundary != null && !pressureProjectionConverged()) {
@@ -5107,28 +5138,40 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						invalidPendingWork);
 			}
 			projectVelocity(dt);
-			nextKineticEnergy = gridKineticEnergyJoules();
-			mechanicalAudit.pressureProjectionWorkJoules += nextKineticEnergy - stageKineticEnergy;
-			stageKineticEnergy = nextKineticEnergy;
+			if (mechanicalAudit != null) {
+				double nextKineticEnergy = gridKineticEnergyJoules();
+				mechanicalAudit.pressureProjectionWorkJoules += nextKineticEnergy - stageKineticEnergy;
+				stageKineticEnergy = nextKineticEnergy;
+			}
 			publishPressureProjection();
 			if (phaseWork != null) {
 				thermalState.commitPhaseMechanicalWork(phaseWork, thermalMarkerContext());
 				Arrays.fill(pendingPhaseCellVolume, SignedDyadic.ZERO);
 			}
 			enforceSolidFaceVelocities();
-			nextKineticEnergy = gridKineticEnergyJoules();
-			mechanicalAudit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
-			stageKineticEnergy = nextKineticEnergy;
+			if (mechanicalAudit != null) {
+				double nextKineticEnergy = gridKineticEnergyJoules();
+				mechanicalAudit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
+				stageKineticEnergy = nextKineticEnergy;
+			}
 			extrapolateVelocityIntoAir();
 			gridToParticles();
-			double particleKineticEnergy = particleKineticEnergyJoules();
-			mechanicalAudit.gridToParticleTransferJoules += particleKineticEnergy - stageKineticEnergy;
+			double particleKineticEnergy = 0.0;
+			if (mechanicalAudit != null) {
+				particleKineticEnergy = particleKineticEnergyJoules();
+				mechanicalAudit.gridToParticleTransferJoules +=
+						particleKineticEnergy - stageKineticEnergy;
+			}
 			advectParticles(dt);
-			double advectedParticleKineticEnergy = particleKineticEnergyJoules();
-			mechanicalAudit.particleCollisionWorkJoules += advectedParticleKineticEnergy - particleKineticEnergy;
+			if (mechanicalAudit != null) {
+				double advectedParticleKineticEnergy = particleKineticEnergyJoules();
+				mechanicalAudit.particleCollisionWorkJoules +=
+						advectedParticleKineticEnergy - particleKineticEnergy;
+			}
 			if (hasGranularInventory()) granularCollision.commit(granularParcels);
 		}
-		double carrierTransferInitialKineticEnergy = particleKineticEnergyJoules();
+		double carrierTransferInitialKineticEnergy = mechanicalAudit == null
+				? 0.0 : particleKineticEnergyJoules();
 		if (precipitationEnabled) markMovedReactiveGranularCells(granularParcelCountBeforeAdvection);
 		ThermalAxisStats thermalAxis = runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations);
 		ChemicalParcelStore.ReactionStats chemistry = thermalAxis.chemistry();
@@ -5168,8 +5211,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				granularCoupling.clear(); pressureGranularCoupling = null;
 			}
 		}
-		double reseedInitialKineticEnergy = particleKineticEnergyJoules();
-		mechanicalAudit.carrierInventoryTransferJoules +=
+		double reseedInitialKineticEnergy = mechanicalAudit == null ? 0.0 : particleKineticEnergyJoules();
+		if (mechanicalAudit != null) mechanicalAudit.carrierInventoryTransferJoules +=
 				reseedInitialKineticEnergy - carrierTransferInitialKineticEnergy;
 		ensureParticleCapacity(particleReseeder.capacityUpperBound(particleCount));
 		SignedDyadic thermalBeforeReseed = thermalState == null ? SignedDyadic.ZERO : exactInternalEnergy();
@@ -5183,8 +5226,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				this::markerPositionAllowed
 		);
 		particleCount = reseeding.particleCount();
-		double finalParticleKineticEnergy = particleKineticEnergyJoules();
-		mechanicalAudit.reseedTransferJoules += finalParticleKineticEnergy - reseedInitialKineticEnergy;
+		double finalParticleKineticEnergy = mechanicalAudit == null ? 0.0 : particleKineticEnergyJoules();
+		if (mechanicalAudit != null) mechanicalAudit.reseedTransferJoules +=
+				finalParticleKineticEnergy - reseedInitialKineticEnergy;
 		if (thermalState != null) thermalState.recordRoundoff(exactInternalEnergy().subtract(thermalBeforeReseed));
 		gridDirty = true;
 		rebuildGridFromParticles();
@@ -5200,7 +5244,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				reseeding.ledgerError(), reseeding.massLedgerError(),
 				chemistry.dirtyCells(), chemistry.evaluations(), chemistry.changedMarkers(),
 				thermalAxis.condensedPhase(), thermalAxis.gasPhase(),
-				mechanicalAudit.finish(finalParticleKineticEnergy)
+				mechanicalAudit == null ? MechanicalStepAudit.disabled()
+						: mechanicalAudit.finish(finalParticleKineticEnergy)
 		);
 	}
 
@@ -5238,6 +5283,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	private void rebuildGridFromParticles() {
+		if (airCellNodeId != null) gasTopologyDirty = true;
 		Arrays.fill(volume, 0.0F);
 		Arrays.fill(markerCount, 0);
 		Arrays.fill(exactCellMarkerVolume, 0.0);
@@ -5550,6 +5596,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		airCellLineageNodeId = result.cellLineageNodeId();
 		previousSealedNodeCount = sealed;
 		gasPressureActive = sealed > 0;
+		gasTopologyDirty = false;
 	}
 
 	private record GasTopologyPlan(
@@ -7748,6 +7795,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	public record SolidDistribution(int partialCells, int fullCells) { }
 	public record ViscosityStats(int substeps, int coupledPairs, double maximumRatePerSecond) { }
 	public record MechanicalStepAudit(
+			boolean enabled,
 			double initialParticleKineticEnergyJoules,
 			double finalParticleKineticEnergyJoules,
 			double particleToGridTransferJoules,
@@ -7764,7 +7812,12 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			double carrierInventoryTransferJoules,
 			double reseedTransferJoules,
 			double closureResidualJoules
-	) { }
+	) {
+		private static MechanicalStepAudit disabled() {
+			return new MechanicalStepAudit(false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+					0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+		}
+	}
 	private static final class MechanicalAuditAccumulator {
 		private final double initialParticleKineticEnergyJoules;
 		private double particleToGridTransferJoules;
@@ -7808,7 +7861,8 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 				throw new ArithmeticException("Mechanical step energy audit does not close: residual="
 						+ residual + ", scale=" + scale);
 			}
-			return new MechanicalStepAudit(initialParticleKineticEnergyJoules, finalParticleKineticEnergyJoules,
+			return new MechanicalStepAudit(true,
+					initialParticleKineticEnergyJoules, finalParticleKineticEnergyJoules,
 					particleToGridTransferJoules, granularCouplingWorkJoules,
 					movingAndPorousBoundaryWorkJoules, gravityWorkJoules, thermalBuoyancyWorkJoules,
 					surfaceTensionWorkJoules, viscosityWorkJoules, fixedBoundaryWorkJoules,

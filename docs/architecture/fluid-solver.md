@@ -51,7 +51,7 @@ marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新�
 
 相变产生的 pending volume/work 由下一次 projection 消费，因此 pressure step 是唯一机械提交点。
 
-每个完整候选同时生成只读 mechanical audit：初末 marker 动能，以及 P2G、颗粒耦合、moving/porous boundary、重力、热浮力、表面张力、黏性、固定边界、pressure projection、G2P、CCD、carrier inventory transfer 和 reseed 各阶段的动能差。各列与初末动能的 residual 必须在 128 ULP 的算术预算内闭合，否则拒绝候选；这些列只用于定位能量注入阶段，不能反向修改速度、压力或库存。
+`FluidStepRequest` 可显式启用只读 mechanical audit：初末 marker 动能，以及 P2G、颗粒耦合、moving/porous boundary、重力、热浮力、表面张力、黏性、固定边界、pressure projection、G2P、CCD、carrier inventory transfer 和 reseed 各阶段的动能差。启用时，各列与初末动能的 residual 必须在 128 ULP 的算术预算内闭合，否则拒绝候选；这些列只用于定位能量注入阶段，不能反向修改速度、压力或库存。生产 request 默认关闭这项全域诊断，稳定性 fixture 明确开启，避免为每个正常 tick 反复遍历全部 MAC face 与 marker。
 
 ## 自由面与压力
 
@@ -94,6 +94,8 @@ div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 动态 body 的三维平移速度以定义中的 kg 质量进入 pressure Schur 系统；PLIC 以合成后的 moving open volume 归一化，盒面压力把格心值按局部 `rho*g` 静水梯度解析平移到实际 patch 高度，再由同一离散耦合算子给出实体反作用。Newtonian 黏性使用 `mu*A/distance` 的 pairwise surface exchange，面积同时受几何 aperture 与该 face 的实际液体支撑体积约束，并在重力预测速度写入前消费上一时刻已提交流动。候选先聚合 pressure/viscous impulse，再从初始动量一次求出 dynamic body 的最终三轴速度；dynamic displacement work 是同一聚合冲量造成的总动能差，kinematic work 是聚合冲量与规定速度的点积。候选分别返回 pressure impulse、viscous impulse、displacement work 和 kinematic external 未承接冲量，并在产生候选前检查 PCG、body momentum、work 与黏性 pairwise 守恒。未定义实体按 `KINEMATIC_EXTERNAL` 排水而不猜质量；默认数据提供 player 与 armor stand 的显式定义。没有经验 drag、neutral-submergence、湿格采样或材料/实体 ID 力学特判。
 
 主线程接受候选前按 UUID、对象 identity、alive、当前 AABB 与 pre-velocity raw bits 重新验证；随后把 region generation 与动态实体速度作为一个可回滚提交段应用。有耦合实体时机械步固定为每个服务器 tick 一次，不能用区域降频产生隔帧冲量；连续硬超时仍按预算安全暂停。容量审计使用全域开放体积、自由液面余量和逐 marker 几何不重叠；marker 中心的 cell 归属体积不是局部欧拉容量，不能据此回退实体位移。真实全域容量不足、静止重叠、越界、第三方状态变化、预算或数值审计失败会暂停区域，不删 marker。当前只承诺平移轴对齐盒；旋转、通用刚体约束和复杂实体形状尚未实现。
+
+任何 backend restore/evaluate/candidate 异常都在服务器 tick 边界拒绝完整候选并把区域置为数值 PAUSED，保留上一权威状态；异常不能逃逸为 server tick crash。
 
 ## Reseed 与传输不变量
 

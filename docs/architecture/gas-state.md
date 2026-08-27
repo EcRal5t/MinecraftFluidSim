@@ -89,6 +89,6 @@ Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 
 ## 持久化
 
-气体只作为完整热区域 generation 的 required payload 发布。恢复时从已提交 carrier geometry 重新扫描拓扑，并要求节点数、minimum-cell key、逐格 membership、库存和能量 ordinal 全部一致；任何差异都锁定，不猜测 remap。
+气体只作为完整热区域 generation 的 required payload 发布。任何直接 liquid/solid carrier edit 都把 runtime topology 标为 dirty；下一次 authoritative capture 必须先从当前 carrier geometry 同步 membership、inventory 和 U，再冻结完整状态。正常 backend 后继已在 capture 前同步，干净 capture 不重复扫描。恢复时从已提交 carrier geometry 重新扫描拓扑，并要求节点数、minimum-cell key、逐格 membership、库存和能量 ordinal 全部一致；任何差异都锁定，不猜测 remap。
 
 持久 payload 还包含 registry fingerprint、unit identity、component palette、节点总账、逐 section membership 和 source/sink/roundoff 审计。gas registry fingerprint 同时绑定每个 component 的允许 species 集合；不匹配时原样保留并锁定。edge、pressure、temperature、runtime lineage 和 flow velocity 可从完整库存与几何重建，不进入 checkpoint。

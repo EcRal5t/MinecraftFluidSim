@@ -11,11 +11,19 @@ public record FluidStepRequest(
 		FluidDomainState state,
 		MovingBodySurfaceSnapshot movingBodySurfaces,
 		boolean phaseChangeEnabled,
-		int maximumPhaseOperations
+		int maximumPhaseOperations,
+		boolean mechanicalAuditEnabled
 ) {
 	public FluidStepRequest(long baseGeneration, FluidDomainState state,
+			MovingBodySurfaceSnapshot movingBodySurfaces,
 			boolean phaseChangeEnabled, int maximumPhaseOperations) {
-		this(baseGeneration, state, MovingBodySurfaceSnapshot.EMPTY, phaseChangeEnabled, maximumPhaseOperations);
+		this(baseGeneration, state, movingBodySurfaces, phaseChangeEnabled, maximumPhaseOperations, false);
+	}
+
+	public FluidStepRequest(long baseGeneration, FluidDomainState state,
+			boolean phaseChangeEnabled, int maximumPhaseOperations) {
+		this(baseGeneration, state, MovingBodySurfaceSnapshot.EMPTY,
+				phaseChangeEnabled, maximumPhaseOperations, false);
 	}
 
 	public FluidStepRequest {

@@ -13,7 +13,8 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 		candidate.beginLogicalCandidate(candidateGeneration);
 		candidate.prepareMovingBodies(request.movingBodySurfaces());
 		FlipFluidDomain.StepStats stats = candidate.step(
-				request.phaseChangeEnabled(), request.maximumPhaseOperations());
+				request.phaseChangeEnabled(), request.maximumPhaseOperations(),
+				request.mechanicalAuditEnabled());
 		candidate.synchronizeGasTopologyForPersistence();
 		return new FluidStepCandidate(id(), request.baseGeneration(), candidateGeneration,
 				candidate.captureAuthoritativeState(), stats, candidate.lastMovingBodyResults());
