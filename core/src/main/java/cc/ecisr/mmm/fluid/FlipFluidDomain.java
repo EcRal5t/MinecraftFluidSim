@@ -1833,6 +1833,10 @@ public final class FlipFluidDomain {
 		publishPressureProjection();
 	}
 
+	double projectedAbsolutePressureInCell(int x, int y, int z) {
+		return requireProjectedPressure(cellIndexChecked(x, y, z)).absolutePressurePa();
+	}
+
 	/** Exact-batch condensed melt/freeze; species and same-cell granular heat baths join the conserved LTE plan. */
 	public ThermalPhaseStats stepInertPhaseChangeOnly(int maximumOperations) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");

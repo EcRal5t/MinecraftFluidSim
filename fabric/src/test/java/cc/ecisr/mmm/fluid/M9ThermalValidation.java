@@ -79,6 +79,7 @@ public final class M9ThermalValidation {
 		reactionCommitValidatesEnergyBeforeMutation();
 		granularReactionHeatUsesOneConservedCellEnergy();
 		phasePlateauUsesTheStateFunctionGap();
+		hydrostaticProjectionChangesEquilibriumByDepth();
 		coherentPhaseInventoryAndExactBatchPlanning();
 		compositionAndGranularPhaseChangeConservesJointTruth();
 		phaseVolumeWorkWaitsForMechanicalProjection();
@@ -1251,6 +1252,35 @@ public final class M9ThermalValidation {
 				"solid/liquid phase silently ignored pressure outside its declared curve");
 	}
 
+	private static void hydrostaticProjectionChangesEquilibriumByDepth() {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 0.05F,
+				200, 1.0E-5F, 0.40F, 2.0E-3F, 0.0F);
+		FlipFluidDomain column = new FlipFluidDomain(3, 19, 3, config, 2_048);
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 19; y++) for (int x = 0; x < 3; x++) {
+			column.setSolid(x, y, z, true);
+		}
+		for (int y = 1; y <= 17; y++) column.setSolid(1, y, 1, false);
+		for (int y = 1; y <= 16; y++) column.setVolume(1, y, 1, 1.0F);
+		column.establishPressureProjectionForPhaseChange();
+		double bottomPressure = column.projectedAbsolutePressureInCell(1, 1, 1);
+		double topPressure = column.projectedAbsolutePressureInCell(1, 16, 1);
+		double expectedDifference = 1_000.0 * 9.81 * 0.5 * 15.0;
+		ThermalPhaseTransition transition = new ThermalPhaseTransition("test:phase/hydrostatic_curve",
+				"test:thermal/ice", "test:thermal/water", SolidVolume.SVQ_PER_BV,
+				SolidVolume.SVQ_PER_BV, ExactRational.ONE,
+				ThermalPhaseTransition.InterfaceRequirement.NONE, List.of(
+				new ThermalPhaseTransition.EquilibriumPoint(100_000.0, 273.15),
+				new ThermalPhaseTransition.EquilibriumPoint(250_000.0, 273.05)));
+		double bottomEquilibrium = transition.equilibriumTemperatureK(bottomPressure);
+		double topEquilibrium = transition.equilibriumTemperatureK(topPressure);
+		require(bottomPressure > topPressure
+				&& Math.abs((bottomPressure - topPressure) - expectedDifference) / expectedDifference < 0.03
+				&& bottomEquilibrium < topEquilibrium,
+				"projected hydrostatic pressure did not change solid/liquid equilibrium by depth: pressure="
+						+ bottomPressure + "/" + topPressure + " equilibrium="
+						+ bottomEquilibrium + "/" + topEquilibrium);
+	}
+
 	private static void coherentPhaseInventoryAndExactBatchPlanning() {
 		CoherentPhaseStore store = new CoherentPhaseStore(8, 8);
 		CoherentPhaseStore.Composition first = new CoherentPhaseStore.Composition(List.of(
@@ -1353,8 +1383,18 @@ public final class M9ThermalValidation {
 		phaseDomain.setVolume(0, 0, 0, 1.0F);
 		phaseDomain.bindThermal(cellRegistry, liquids, 295.0);
 		SignedDyadic coldEnergy = phaseDomain.exactInternalEnergy();
-		FlipFluidDomain.ThermalPhaseStats freezeStats = stepInertPhaseChange(phaseDomain, 16);
-		require(freezeStats.operations() == 4 && freezeStats.signedBatches() == 4L
+		int freezeOperations = 0;
+		long frozenBatches = 0L;
+		for (int retry = 0; retry < 4; retry++) {
+			FlipFluidDomain.ThermalPhaseStats oneBatch = stepInertPhaseChange(phaseDomain, 1);
+			require(oneBatch.operations() == 1 && oneBatch.signedBatches() == 1L,
+					"phase budget retry did not commit exactly one whole batch");
+			freezeOperations += oneBatch.operations();
+			frozenBatches += oneBatch.signedBatches();
+		}
+		require(stepInertPhaseChange(phaseDomain, 1).operations() == 0,
+				"completed phase queue repeated an already settled exact batch");
+		require(freezeOperations == 4 && frozenBatches == 4L
 				&& close(phaseDomain.totalVolumeExact(), 0.5)
 				&& phaseDomain.totalCoherentSolidVolumeSvq() == SolidVolume.SVQ_PER_CELL / 2L
 				&& close(SolverUnitScale.forCellSize(config.cellSize()).kilograms(phaseDomain.totalMass())
