@@ -137,6 +137,10 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 完整 `FluidDomainState` / `FluidStepRequest` / `FluidStepCandidate` 边界已经提取，CPU 规范实现可在私有副本上生成候选。profile 决定何时实现和启用生产 GPU backend；数值 worker/GPU 只能消费该 immutable step input，在 tick boundary 返回完整 candidate。世界读写、ownership、actor 和 HEAD 发布留在 server thread；超时保留上一完整 state，不能展示或持久化半步。
 
+当前自动进入门有意分开：默认 `8×8×8` controller 的 20 个 live steps 使用 40 ms 硬预算；正式 thermal/gas/phase 定义的半满状态目前只要求 capture/restore，以及关闭 phase 执行一次 backend candidate 后的 gas、总 `U` 和 generation 闭合，其耗时仅作诊断。完整候选的复制链尚未稳定满足 40 ms，而启用 phase 的 exact batch 规划与 gas topology 刷新明显越过帧预算，所以 world capability schema、bundle 元数据或 registry snapshot 的存在都不构成 full profile 的生产启用许可。
+
+重新接入 full profile 或 backend adoption 前必须依次关闭三个门：先让同一正式半满 fixture 的 phase-on logical step 在硬预算内完成；再证明无实体自由面的动能及重力、压力、黏性、相变功账本没有数值自激；最后才加入同场景静浮玩家并验证 entity/liquid 等大反向冲量。任一门失败都保留最后完整状态并停在未启用边界，不能用 pacing fallback、速度阻尼、材料分支或额外 warmup 代替通过。
+
 若阶段性能不达标，依次采用：缩小 active neighborhood、降低更新频率、增加守恒休眠/宏观 node、限制产品范围，最后才降低空间分辨率。不得先放松 ledger 或使用材料特判跳过昂贵物理。
 
 ## 视觉与界面质量
