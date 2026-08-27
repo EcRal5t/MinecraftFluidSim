@@ -3,12 +3,15 @@ package cc.ecisr.mmm.simulation;
 import cc.ecisr.mmm.chemistry.ChemicalDataPackLoader;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
+import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidDomainState;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.fluid.FluidStepCandidate;
+import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.fluid.air.GasStateSnapshot;
@@ -105,6 +108,24 @@ public final class ProductionFluidReplayValidation {
 		requireSameGasState(captured.gas(), roundTrip.gas());
 		System.out.printf("  full-capability half-fill round trip: particles=%d, volume=%.9f, gasNodes=%d%n",
 				restored.particleCount(), restored.totalVolumeExact(), roundTrip.gas().nodes().size());
+
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		long backendStart = System.nanoTime();
+		FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+				7L, captured, List.of(), false, 0));
+		double backendMilliseconds = (System.nanoTime() - backendStart) / 1_000_000.0;
+		FlipFluidDomain evaluated = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+		FluidDomainState evaluatedRoundTrip = evaluated.captureAuthoritativeState();
+		require(candidate.baseGeneration() == 7L && candidate.candidateGeneration() == 8L,
+				"full-capability backend candidate generation is not adjacent");
+		require(evaluated.airNetwork().auditClosed()
+				&& evaluated.exactInternalEnergy().equals(evaluated.thermalAudit().expectedInventory()),
+				"full-capability backend candidate did not close gas or total U audit");
+		requireSameGasState(candidate.state().gas(), evaluatedRoundTrip.gas());
+		System.out.printf("  full-capability phase-off backend candidate: %.3f ms (diagnostic only), "
+				+ "substeps=%d, PCG=%d, gasNodes=%d%n", backendMilliseconds,
+				candidate.stats().substeps(), candidate.stats().pressureIterations(),
+				evaluatedRoundTrip.gas().nodes().size());
 	}
 
 	private static FlipFluidDomain createPouredControllerDomain() {
