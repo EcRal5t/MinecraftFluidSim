@@ -181,9 +181,12 @@ import java.util.TreeMap;
 		boolean[] visited = new boolean[cellCount];
 		int temporaryNodeCount = scanned.sealedNodeCount();
 		boolean retained = false;
+		boolean[] previousSurvivesAsAir = survivingAirNodes(
+				membership, cellAvailable, previousLineage, previousSealedNodeCount);
 		for (int seed = 0; seed < cellCount; seed++) {
 			int previousNode = previousLineage[seed];
 			if (visited[seed] || previousNode < 1 || previousNode > previousSealedNodeCount
+					|| previousSurvivesAsAir[previousNode]
 					|| lineage[seed] >= 0 || solid[seed] || !(cellAvailable[seed] > 0.0)) continue;
 			int head = 0, tail = 0;
 			boolean touchesCurrentGas = false;
@@ -257,6 +260,28 @@ import java.util.TreeMap;
 		}
 		return new Result(membership, lineage, cellAvailable, temporaryNodeCount, availableByNode,
 				List.copyOf(remappedEdges), scanned.visitedAirCells(), scanned.stopReason());
+	}
+
+	/**
+	 * Reports which previous nodes still own at least one current air cell.
+	 *
+	 * <p>Only a previous node whose gas volume now lies entirely in partial liquid cells may be
+	 * rebuilt from its interface lineage. A node that still owns a full-air or ambient cell is
+	 * matched by membership overlap instead, so its interface cells that merely flickered out of
+	 * the current interface set stay unattributed rather than being promoted into an independent
+	 * sealed owner. That keeps an ordinary marker void inside the liquid bulk from being read as
+	 * a new bubble carrying a share of the headspace inventory.</p>
+	 */
+	private boolean[] survivingAirNodes(
+			int[] membership, double[] cellAvailable, int[] previousLineage, int previousSealedNodeCount
+	) {
+		boolean[] survives = new boolean[previousSealedNodeCount + 1];
+		for (int cell = 0; cell < cellCount; cell++) {
+			if (membership[cell] < 0 || !(cellAvailable[cell] > 0.0)) continue;
+			int previousNode = previousLineage[cell];
+			if (previousNode >= 1 && previousNode <= previousSealedNodeCount) survives[previousNode] = true;
+		}
+		return survives;
 	}
 
 	/** Recomputes node volumes when marker cardinality and every cell membership are unchanged. */
@@ -335,7 +360,34 @@ import java.util.TreeMap;
 	                          GranularCouplingFields granular) {
 		float geometricOpen = cutCells.openCellVolume(cell);
 		float available = granular == null ? geometricOpen : granular.effectiveOpenCellVolume(cell, geometricOpen);
-		return !solid[cell] && markerCount[cell] == 0 && available > 0.0F;
+		return !solid[cell] && markerCount[cell] == 0 && available > 0.0F
+				&& !insideLiquidBody(cell, markerCount, cutCells);
+	}
+
+	/**
+	 * Reports whether every open face of a marker-free cell leads to a marker-bearing neighbour.
+	 *
+	 * <p>Liquid is continuous, so a cell that carries no marker while every open neighbour does is
+	 * an unsampled liquid cell, not a resolved gas cavity. Reading it as one would promote an
+	 * ordinary marker gap in the liquid bulk into a separate sealed owner, hand it a share of the
+	 * headspace inventory and then fail the whole candidate once the next advection refills the
+	 * cell and crushes that pocket to zero capacity.</p>
+	 */
+	private boolean insideLiquidBody(int cell, int[] markerCount, FlipCutCellGeometry cutCells) {
+		int x = cell % sizeX;
+		int yz = cell / sizeX;
+		int y = yz % sizeY;
+		int z = yz / sizeY;
+		for (int axis = 0; axis < 3; axis++) for (int direction = -1; direction <= 1; direction += 2) {
+			int nx = x + (axis == 0 ? direction : 0);
+			int ny = y + (axis == 1 ? direction : 0);
+			int nz = z + (axis == 2 ? direction : 0);
+			if (nx < 0 || nx >= sizeX || ny < 0 || ny >= sizeY || nz < 0 || nz >= sizeZ) continue;
+			int neighbor = (nz * sizeY + ny) * sizeX + nx;
+			if (faceOpen(cutCells, cell, neighbor) <= 0.0F) continue;
+			if (markerCount[neighbor] == 0) return false;
+		}
+		return true;
 	}
 
 	private int floodNeighbors(int[] cellNodeId, boolean[] solid, int[] markerCount, FlipCutCellGeometry cutCells,

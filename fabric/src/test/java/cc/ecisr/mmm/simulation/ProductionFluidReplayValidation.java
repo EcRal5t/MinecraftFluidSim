@@ -258,6 +258,55 @@ public final class ProductionFluidReplayValidation {
 				retainedInventory * 1.0E-9, totalGasAvailableVolume(domain), maximumNodes, generation);
 	}
 
+	/**
+	 * Replays the reported two-pour controller trajectory under the default feature gates, where
+	 * the closed headspace is isothermal and bootstrap completes on the empty shell.
+	 *
+	 * <p>The headspace must stay a single sealed owner throughout. A marker-free cell enclosed by
+	 * marker-bearing neighbours is an unsampled liquid cell, not a resolved cavity; treating it as
+	 * one splits off a pocket that carries a share of the headspace inventory and is then crushed
+	 * to zero capacity by the next advection, which pauses the region for good.</p>
+	 */
+	public static void controllerPoursKeepSingleSealedGasOwner() {
+		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
+		domain.sealDomainBoundary();
+		bindEmptyMaterialState(domain, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
+		domain.step(false, 0);
+		long inventory = domain.airNetwork().sealedInventoryNanos();
+		require(inventory == 64_000_000_000L && domain.airNetwork().nodeCount() == 1,
+				"empty default-gate controller did not bootstrap one closed gas owner: "
+						+ gasLedgerDetail(domain));
+
+		FlipFluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(2, 0, 0, 128.0F, 6);
+		require(first.addedVolume() == 128.0F && !first.markerBudgetLimited(),
+				"reported first pour did not inject the complete 16 BV source: " + first);
+		for (int step = 0; step < 60; step++) domain.step(false, 0);
+		require(Math.abs(totalGasAvailableVolume(domain) - 48.0) <= 1.0E-12,
+				"first reported pour did not compress the closed headspace to 48 m3");
+
+		FlipFluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(5, 3, 5, 112.0F, 6);
+		require(second.addedVolume() == 112.0F && !second.markerBudgetLimited(),
+				"reported second pour did not inject the complete 14 BV source: " + second);
+		int maximumNodes = domain.airNetwork().nodeCount();
+		for (int step = 0; step < 200; step++) {
+			domain.step(false, 0);
+			maximumNodes = Math.max(maximumNodes, domain.airNetwork().nodeCount());
+			require(domain.airNetwork().auditClosed(),
+					"reported two-pour replay opened the gas ledger at step " + step
+							+ ": " + gasLedgerDetail(domain));
+		}
+		require(domain.airNetwork().nodeCount() == 1,
+				"reported two-pour replay left the closed headspace split across "
+						+ domain.airNetwork().nodeCount() + " owners, peak " + maximumNodes
+						+ ": " + gasLedgerDetail(domain));
+		require(domain.airNetwork().sealedInventoryNanos() == inventory,
+				"reported two-pour replay changed sealed gas inventory: " + gasLedgerDetail(domain));
+		require(Math.abs(totalGasAvailableVolume(domain) - 34.0) <= 1.0E-12,
+				"settled controller did not retain a 34 m3 headspace");
+		System.out.printf("  controller two-pour headspace: %.9f m3std in %.9f m3, peakNodes=%d%n",
+				inventory * 1.0E-9, totalGasAvailableVolume(domain), maximumNodes);
+	}
+
 	private static String gasLedgerDetail(FlipFluidDomain domain) {
 		StringBuilder nodes = new StringBuilder();
 		for (int node : domain.airNetwork().nodeIds()) nodes.append(" node").append(node)

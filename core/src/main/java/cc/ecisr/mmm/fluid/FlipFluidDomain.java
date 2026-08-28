@@ -5221,8 +5221,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			// interface residual in the previous topology. It inherits only from provably adjacent
 			// runtime lineages; each old inventory is then split by actual child volume. With no old
 			// owner it is a vacuum cavity, never ambient inventory behind an unchanged closed shell.
+			// An old node that still owns an open cell keeps being matched by membership overlap, so
+			// a marker void flickering open inside the liquid bulk stays a vacuum cavity instead of
+			// siphoning a share of a headspace that never went anywhere.
+			boolean[] previousOwnsAirCell = previousNodesOwningAirCells(newMembership, cellAvailableVolume);
 			addAdjacentPreviousGasOverlaps(newMembership, newNodeHasMembershipOverlap,
-					availableVolumes, overlap, hasMembershipOverlap);
+					availableVolumes, overlap, hasMembershipOverlap, previousOwnsAirCell);
 			// Runtime interface lineage is a fallback for a node whose full-air membership vanished
 			// completely. It must not siphon a still-present cavity into ambient as its liquid surface moves.
 			addDisappearingPreviousGasOverlaps(hasMembershipOverlap,
@@ -5326,17 +5330,37 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return new GasTopologyPlan(result, gasPlan, thermalPlan);
 	}
 
+	/**
+	 * Reports which previous nodes still own at least one open cell in the new topology.
+	 *
+	 * <p>A previous node that still owns an open cell is matched by membership overlap, so only a
+	 * node reduced entirely to interface residuals may hand its inventory to a neighbouring new
+	 * component. That keeps a transient marker void in the liquid bulk from being treated as a
+	 * descendant of the headspace; a new cavity with no old owner is an explicit vacuum node.</p>
+	 */
+	private boolean[] previousNodesOwningAirCells(int[] newMembership, double[] cellAvailableVolume) {
+		boolean[] owns = new boolean[previousSealedNodeCount + 1];
+		for (int cell = 0; cell < cellCount; cell++) {
+			if (newMembership[cell] < 0 || !(cellAvailableVolume[cell] > 0.0)) continue;
+			int previous = rawGasNodeOfCell(cell);
+			if (previous >= 1 && previous <= previousSealedNodeCount) owns[previous] = true;
+		}
+		return owns;
+	}
+
 	/** Adds each old lineage touching a newly full-air child in one bounded cell pass. */
 	private void addAdjacentPreviousGasOverlaps(
 			int[] newMembership, boolean[] newNodeHasMembershipOverlap, double[] availableVolumes,
-			TreeMap<Long, Long> overlap, boolean[] hasMembershipOverlap
+			TreeMap<Long, Long> overlap, boolean[] hasMembershipOverlap, boolean[] previousOwnsAirCell
 	) {
 		TreeSet<Long> adjacentPairs = new TreeSet<>();
 		for (int cell = 0; cell < cellCount; cell++) {
 			int newNode = newMembership[cell];
 			if (newNode < 1 || newNodeHasMembershipOverlap[newNode]) continue;
 			int sameCellOwner = airCellLineageNodeId[cell];
-			if (sameCellOwner > 0) adjacentPairs.add(gasOverlapKey(sameCellOwner, newNode));
+			if (sameCellOwner > 0 && !previousOwnsAirCell[sameCellOwner]) {
+				adjacentPairs.add(gasOverlapKey(sameCellOwner, newNode));
+			}
 			int x = cell % sizeX;
 			int yz = cell / sizeX;
 			int y = yz % sizeY;
@@ -5348,7 +5372,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				if (nx < 0 || nx >= sizeX || ny < 0 || ny >= sizeY || nz < 0 || nz >= sizeZ) continue;
 				if (openFaceFromCell(cell, nx - x, ny - y, nz - z) <= 0.0F) continue;
 				int adjacentOwner = airCellLineageNodeId[cellIndex(nx, ny, nz)];
-				if (adjacentOwner > 0) adjacentPairs.add(gasOverlapKey(adjacentOwner, newNode));
+				if (adjacentOwner > 0 && !previousOwnsAirCell[adjacentOwner]) {
+					adjacentPairs.add(gasOverlapKey(adjacentOwner, newNode));
+				}
 			}
 		}
 		for (long key : adjacentPairs) {

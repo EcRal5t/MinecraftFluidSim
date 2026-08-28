@@ -46,3 +46,6 @@ AGENTS.md
 .claude
 .agents
 .zcode
+.workbuddy
+
+tmp/
