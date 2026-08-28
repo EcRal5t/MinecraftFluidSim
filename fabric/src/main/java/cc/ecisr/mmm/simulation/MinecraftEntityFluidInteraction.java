@@ -14,8 +14,6 @@ import java.util.List;
 
 /** Minecraft entity discovery and response over loader-neutral fluid observations. */
 final class MinecraftEntityFluidInteraction {
-	private static final int SAMPLES_XZ = 3;
-	private static final int SAMPLES_Y = 5;
 	private static final double NEUTRAL_SUBMERGENCE = 0.72;
 	private static final double FULL_SUBMERGENCE_DRAG = 0.20;
 	private static final double TICKS_PER_SECOND = 20.0;
@@ -71,43 +69,21 @@ final class MinecraftEntityFluidInteraction {
 		FlipFluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
 		AABB box = entity.getBoundingBox();
-		int totalSamples = SAMPLES_XZ * SAMPLES_Y * SAMPLES_XZ;
-		int submergedSamples = 0;
-		double velocityX = 0.0, velocityY = 0.0, velocityZ = 0.0;
-		double localXSum = 0.0, localYSum = 0.0, localZSum = 0.0;
-		for (int sampleZ = 0; sampleZ < SAMPLES_XZ; sampleZ++) {
-			for (int sampleY = 0; sampleY < SAMPLES_Y; sampleY++) {
-				for (int sampleX = 0; sampleX < SAMPLES_XZ; sampleX++) {
-					double worldX = sampleCoordinate(box.minX, box.maxX, sampleX, SAMPLES_XZ);
-					double worldY = sampleCoordinate(box.minY, box.maxY, sampleY, SAMPLES_Y);
-					double worldZ = sampleCoordinate(box.minZ, box.maxZ, sampleZ, SAMPLES_XZ);
-					float localX = (float) (worldX - origin.getX());
-					float localY = (float) (worldY - origin.getY());
-					float localZ = (float) (worldZ - origin.getZ());
-					if (!domain.containsFluidAt(localX, localY, localZ)) continue;
-					FlipFluidDomain.VelocitySample velocity = domain.sampleVelocity(localX, localY, localZ);
-					velocityX += velocity.x();
-					velocityY += velocity.y();
-					velocityZ += velocity.z();
-					localXSum += localX; localYSum += localY; localZSum += localZ;
-					submergedSamples++;
-				}
-			}
+		FlipFluidDomain.BodyFluidSample sample = domain.sampleAxisAlignedBody(
+				box.minX - origin.getX(), box.minY - origin.getY(), box.minZ - origin.getZ(),
+				box.maxX - origin.getX(), box.maxY - origin.getY(), box.maxZ - origin.getZ());
+		double displacedVolume = sample.displacedVolumeCubicMetres();
+		if (!(displacedVolume > 0.0)) return Contact.DRY;
+		double bodyVolume = box.getXsize() * box.getYsize() * box.getZsize();
+		double submergedFraction = displacedVolume / bodyVolume;
+		if (!(Double.isFinite(submergedFraction) && submergedFraction > 0.0 && submergedFraction <= 1.0 + 1.0E-9)) {
+			throw new IllegalStateException("Fluid/body overlap exceeded finite AABB volume");
 		}
-		if (submergedSamples == 0) return Contact.DRY;
-		double inverseWetSamples = 1.0 / submergedSamples;
-		double submergedFraction = (double) submergedSamples / totalSamples;
-		double displacedVolume = box.getXsize() * box.getYsize() * box.getZsize() * submergedFraction;
-		if (!(Double.isFinite(displacedVolume) && displacedVolume > 0.0)) return Contact.DRY;
 		return new Contact(submergedFraction,
-				new Vec3(velocityX * inverseWetSamples, velocityY * inverseWetSamples,
-						velocityZ * inverseWetSamples),
-				(float) (localXSum * inverseWetSamples), (float) (localYSum * inverseWetSamples),
-				(float) (localZSum * inverseWetSamples), displacedVolume);
-	}
-
-	private static double sampleCoordinate(double minimum, double maximum, int sample, int count) {
-		return minimum + (maximum - minimum) * (sample + 0.5) / count;
+				new Vec3(sample.velocityXMetresPerSecond(), sample.velocityYMetresPerSecond(),
+						sample.velocityZMetresPerSecond()),
+				(float) sample.centerXMetres(), (float) sample.centerYMetres(),
+				(float) sample.centerZMetres(), displacedVolume);
 	}
 
 	private static void applyForce(Entity entity, Contact contact) {

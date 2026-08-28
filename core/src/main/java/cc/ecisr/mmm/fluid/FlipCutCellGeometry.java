@@ -100,6 +100,15 @@ final class FlipCutCellGeometry {
 		return microSolid(microX, microY, microZ);
 	}
 
+	boolean microCellOpen(int cell, int localX, int localY, int localZ) {
+		if (cell < 0 || cell >= occupancy.length || localX < 0 || localX >= MICRO_CELLS_PER_AXIS
+				|| localY < 0 || localY >= MICRO_CELLS_PER_AXIS
+				|| localZ < 0 || localZ >= MICRO_CELLS_PER_AXIS) {
+			throw new IllegalArgumentException("Cut-cell micro coordinate is invalid");
+		}
+		return !occupied(mask(cell), localX, localY, localZ);
+	}
+
 	private void ensureFaces() {
 		if (!facesDirty) return;
 		Arrays.fill(openFaceX, 0.0F);

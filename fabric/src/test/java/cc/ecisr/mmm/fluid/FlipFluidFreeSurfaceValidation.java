@@ -9,6 +9,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		planeVolumeInversionIsAccurate();
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
 		pressurePhaseUsesConservativeFootprintVolume();
+		bodyOverlapResolvesContinuousSubmergence();
 		pureWaterMarkerMassLedgerTracksVolume();
 		volumeDriftCorrectionPreservesLegitimateSurfaceDeficits();
 		fractionalHydrostaticColumnsBalanceGravity();
@@ -18,6 +19,35 @@ public final class FlipFluidFreeSurfaceValidation {
 		if (!fast) longRunHydrostaticSurfaceDoesNotSink();
 		waterDescendsAStairSlope();
 		System.out.println("FlipFluid free-surface validation passed" + (fast ? " (short; 5,000-step soak skipped)" : ""));
+	}
+
+	private static void bodyOverlapResolvesContinuousSubmergence() {
+		FluidSolverConfig config = FluidSolverConfig.prototypeDefaults();
+		FlipFluidDomain domain = new FlipFluidDomain(6, 6, 6, config, 6 * 6 * 6 * 8);
+		for (int z = 0; z < 6; z++) for (int x = 0; x < 6; x++) {
+			domain.setVolume(x, 0, z, 1.0F);
+			domain.setVolume(x, 1, z, 1.0F);
+			domain.setVolume(x, 2, z, 1.0F);
+		}
+		double width = 0.60;
+		double height = 1.80;
+		double expectedFraction = 0.72;
+		double surfaceY = 3.0 * config.cellSize();
+		double minimumY = surfaceY - height * expectedFraction;
+		FlipFluidDomain.BodyFluidSample sample = domain.sampleAxisAlignedBody(
+				1.20, minimumY, 1.20, 1.20 + width, minimumY + height, 1.20 + width);
+		double bodyVolume = width * height * width;
+		check(Math.abs(sample.displacedVolumeCubicMetres() / bodyVolume - expectedFraction) < 1.0E-6,
+				"body overlap quantized continuous neutral submergence: "
+						+ sample.displacedVolumeCubicMetres() / bodyVolume);
+		check(sample.centerYMetres() >= minimumY && sample.centerYMetres() <= surfaceY,
+				"body overlap centroid escaped the wet AABB segment: " + sample.centerYMetres());
+
+		FlipFluidDomain.BodyFluidSample shifted = domain.sampleAxisAlignedBody(
+				1.20, minimumY + 0.01, 1.20, 1.20 + width, minimumY + height + 0.01, 1.20 + width);
+		check(Math.abs((sample.displacedVolumeCubicMetres() - shifted.displacedVolumeCubicMetres())
+				- width * width * 0.01) < 1.0E-6,
+				"body overlap did not respond continuously to a sub-sample vertical displacement");
 	}
 
 	private static void pureWaterMarkerMassLedgerTracksVolume() {

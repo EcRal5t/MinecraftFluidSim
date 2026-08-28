@@ -9,12 +9,28 @@ public final class FlipCutCellValidation {
 
 	public static void main(String[] args) {
 		volumeAndSharedFaceFractionsAreConsistent();
+		bodyOverlapExcludesOccupiedMicroCells();
 		cutCellSweepStopsOnlyTheContactNormal();
 		exactMarkerDisplacementUsesMicroOccupancy();
 		cutCellCapacityDisplacesMergedMarkerVolume();
 		checkpointPreservesCutCellGeometry();
 		partialObstacleFlowRemainsFiniteAndConservative();
 		System.out.println("FlipFluid cut-cell validation passed");
+	}
+
+	private static void bodyOverlapExcludesOccupiedMicroCells() {
+		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config());
+		domain.setSolidMicroMask(1, 1, 1, LOWER_HALF);
+		domain.setVolume(1, 1, 1, 1.0F);
+		double h = domain.config().cellSize();
+		FlipFluidDomain.BodyFluidSample sample = domain.sampleAxisAlignedBody(
+				h, h, h, 2.0 * h, 2.0 * h, 2.0 * h);
+		double expectedOpenVolume = domain.volume(1, 1, 1) * h * h * h;
+		check(Math.abs(sample.displacedVolumeCubicMetres() - expectedOpenVolume) < 1.0E-9,
+				"body overlap counted occupied cut-cell volume: expected=" + expectedOpenVolume
+						+ ", actual=" + sample.displacedVolumeCubicMetres());
+		check(sample.centerYMetres() >= 1.5 * h && sample.centerYMetres() <= 2.0 * h,
+				"body overlap centroid entered occupied cut-cell half");
 	}
 
 	private static void volumeAndSharedFaceFractionsAreConsistent() {

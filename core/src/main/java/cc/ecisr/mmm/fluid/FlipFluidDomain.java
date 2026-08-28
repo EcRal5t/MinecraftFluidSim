@@ -3657,6 +3657,93 @@ public final class FlipFluidDomain {
 		return localY - y * h < reconstructedFill * h;
 	}
 
+	/** Conservative AABB overlap with the current cut-micro-cell, horizontal-slab fluid observation. */
+	public BodyFluidSample sampleAxisAlignedBody(
+			double minimumX, double minimumY, double minimumZ,
+			double maximumX, double maximumY, double maximumZ
+	) {
+		if (!(Double.isFinite(minimumX) && Double.isFinite(minimumY) && Double.isFinite(minimumZ)
+				&& Double.isFinite(maximumX) && Double.isFinite(maximumY) && Double.isFinite(maximumZ)
+				&& maximumX > minimumX && maximumY > minimumY && maximumZ > minimumZ)) {
+			throw new IllegalArgumentException("Axis-aligned body bounds are invalid");
+		}
+		ensureGrid();
+		double h = config.cellSize();
+		int firstX = Math.max(0, (int) Math.floor(minimumX / h));
+		int firstY = Math.max(0, (int) Math.floor(minimumY / h));
+		int firstZ = Math.max(0, (int) Math.floor(minimumZ / h));
+		int lastX = Math.min(sizeX - 1, (int) Math.ceil(maximumX / h) - 1);
+		int lastY = Math.min(sizeY - 1, (int) Math.ceil(maximumY / h) - 1);
+		int lastZ = Math.min(sizeZ - 1, (int) Math.ceil(maximumZ / h) - 1);
+		if (lastX < firstX || lastY < firstY || lastZ < firstZ) return BodyFluidSample.EMPTY;
+		double microSize = h / FlipCutCellGeometry.MICRO_CELLS_PER_AXIS;
+		double displaced = 0.0, centerXSum = 0.0, centerYSum = 0.0, centerZSum = 0.0;
+		double velocityXSum = 0.0, velocityYSum = 0.0, velocityZSum = 0.0;
+		double[] layerFill = new double[FlipCutCellGeometry.MICRO_CELLS_PER_AXIS];
+		for (int z = firstZ; z <= lastZ; z++) for (int y = firstY; y <= lastY; y++) {
+			for (int x = firstX; x <= lastX; x++) {
+				int cell = cellIndex(x, y, z);
+				if (solid[cell] || volume[cell] <= config.fluidEpsilon()) continue;
+				double geometricOpen = cutCells.openCellVolume(cell);
+				double effectiveOpen = effectiveOpenCellVolume(cell);
+				if (!(geometricOpen > 0.0 && effectiveOpen > 0.0)) continue;
+				double poreScale = effectiveOpen / geometricOpen;
+				Arrays.fill(layerFill, 0.0);
+				double remainingFluid = Math.min(volume[cell], effectiveOpen);
+				for (int my = 0; my < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; my++) {
+					int openInLayer = 0;
+					for (int mz = 0; mz < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; mz++) {
+						for (int mx = 0; mx < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; mx++) {
+							if (cutCells.microCellOpen(cell, mx, my, mz)) openInLayer++;
+						}
+					}
+					double layerCapacity = openInLayer * poreScale
+							/ (FlipCutCellGeometry.MICRO_CELLS_PER_AXIS
+							* FlipCutCellGeometry.MICRO_CELLS_PER_AXIS
+							* FlipCutCellGeometry.MICRO_CELLS_PER_AXIS);
+					if (!(layerCapacity > 0.0)) continue;
+					layerFill[my] = Math.min(1.0, remainingFluid / layerCapacity);
+					remainingFluid -= layerFill[my] * layerCapacity;
+				}
+				for (int mz = 0; mz < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; mz++) {
+					for (int my = 0; my < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; my++) {
+						if (!(layerFill[my] > 0.0)) continue;
+						for (int mx = 0; mx < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; mx++) {
+							if (!cutCells.microCellOpen(cell, mx, my, mz)) continue;
+							double lowX = Math.max(minimumX, x * h + mx * microSize);
+							double lowY = Math.max(minimumY, y * h + my * microSize);
+							double lowZ = Math.max(minimumZ, z * h + mz * microSize);
+							double highX = Math.min(maximumX, x * h + (mx + 1) * microSize);
+							double highY = Math.min(maximumY,
+									y * h + (my + layerFill[my]) * microSize);
+							double highZ = Math.min(maximumZ, z * h + (mz + 1) * microSize);
+							if (!(highX > lowX && highY > lowY && highZ > lowZ)) continue;
+							double overlap = (highX - lowX) * (highY - lowY) * (highZ - lowZ) * poreScale;
+							double centerSampleX = 0.5 * (lowX + highX);
+							double centerSampleY = 0.5 * (lowY + highY);
+							double centerSampleZ = 0.5 * (lowZ + highZ);
+							displaced += overlap;
+							centerXSum += overlap * centerSampleX;
+							centerYSum += overlap * centerSampleY;
+							centerZSum += overlap * centerSampleZ;
+							velocityXSum += overlap * sampleX(this.velocityX,
+									(float) centerSampleX, (float) centerSampleY, (float) centerSampleZ);
+							velocityYSum += overlap * sampleY(this.velocityY,
+									(float) centerSampleX, (float) centerSampleY, (float) centerSampleZ);
+							velocityZSum += overlap * sampleZ(this.velocityZ,
+									(float) centerSampleX, (float) centerSampleY, (float) centerSampleZ);
+						}
+					}
+				}
+			}
+		}
+		if (!(displaced > 0.0)) return BodyFluidSample.EMPTY;
+		double inverse = 1.0 / displaced;
+		return new BodyFluidSample(displaced,
+				centerXSum * inverse, centerYSum * inverse, centerZSum * inverse,
+				velocityXSum * inverse, velocityYSum * inverse, velocityZSum * inverse);
+	}
+
 	public VelocitySample sampleVelocity(float localX, float localY, float localZ) {
 		ensureGrid();
 		if (localX < 0.0F || localX > sizeX * config.cellSize()
@@ -7360,6 +7447,27 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	@FunctionalInterface private interface SplatConsumer { void accept(int index, float weight); }
 	private record CellCandidate(int index, int distanceSquared) { }
 	public record VelocitySample(float x, float y, float z) { private static final VelocitySample ZERO = new VelocitySample(0.0F, 0.0F, 0.0F); }
+	public record BodyFluidSample(
+			double displacedVolumeCubicMetres,
+			double centerXMetres, double centerYMetres, double centerZMetres,
+			double velocityXMetresPerSecond, double velocityYMetresPerSecond, double velocityZMetresPerSecond
+	) {
+		private static final BodyFluidSample EMPTY = new BodyFluidSample(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+
+		public BodyFluidSample {
+			if (!(Double.isFinite(displacedVolumeCubicMetres) && displacedVolumeCubicMetres >= 0.0
+					&& Double.isFinite(centerXMetres) && Double.isFinite(centerYMetres) && Double.isFinite(centerZMetres)
+					&& Double.isFinite(velocityXMetresPerSecond) && Double.isFinite(velocityYMetresPerSecond)
+					&& Double.isFinite(velocityZMetresPerSecond))) {
+				throw new IllegalArgumentException("Body fluid sample must be finite with non-negative volume");
+			}
+			if (displacedVolumeCubicMetres == 0.0 && (centerXMetres != 0.0 || centerYMetres != 0.0
+					|| centerZMetres != 0.0 || velocityXMetresPerSecond != 0.0
+					|| velocityYMetresPerSecond != 0.0 || velocityZMetresPerSecond != 0.0)) {
+				throw new IllegalArgumentException("Dry body fluid sample cannot carry derived observations");
+			}
+		}
+	}
 	public record VolumeAddition(float addedVolume, boolean markerBudgetLimited) { }
 	public record VolumeDistribution(int activeCells, int visibleCells, int denseCells) { }
 	public record SolidDistribution(int partialCells, int fullCells) { }
