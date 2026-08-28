@@ -5231,6 +5231,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			// completely. It must not siphon a still-present cavity into ambient as its liquid surface moves.
 			addDisappearingPreviousGasOverlaps(hasMembershipOverlap,
 					newMembership, newLabels, cellAvailableVolume, overlap);
+			if (sealedDomainBoundary) retainClosedOrphans(overlap, previous, sealed, availableVolumes);
 			boolean[] contributed = new boolean[sealed + 1];
 			for (int old = 1; old <= previous; old++) {
 				GasInventory inventory = airNetwork.inventory(old);
@@ -5410,6 +5411,37 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				int neighbor = cellIndex(nx, ny, nz);
 				int now = newMembership[neighbor] >= 0 ? newMembership[neighbor] : newLabels[neighbor];
 				addGasOverlapDestination(old, now, cellAvailableVolume[neighbor], overlap);
+			}
+		}
+	}
+
+	/**
+	 * Hands inventory that lost every topological destination to the cavities that still exist.
+	 *
+	 * <p>A sealed shell cannot lose gas. When a node's cells end up carrying no air volume at all -
+	 * a pocket the carrier closed over, or a headspace fragment it crushed - the scan gives it no
+	 * destination, but `normalizeClosedCapacity` has already reassigned its capacity to the cavities
+	 * that remain. The inventory travels with that capacity, weighted the same way, instead of being
+	 * reported as lost.</p>
+	 *
+	 * <p>This is deliberately not a judgement about what the node used to be. A bubble pinched off by
+	 * the carrier, a headspace split by a rising surface and a carrier void that flickered shut are
+	 * all the same event here: gas in a closed volume whose cavity is gone. Only conservation decides
+	 * where it goes.</p>
+	 */
+	private void retainClosedOrphans(
+			TreeMap<Long, Long> overlap, int previous, int sealed, double[] availableVolumes
+	) {
+		boolean[] orphaned = new boolean[previous + 1];
+		for (int old = 1; old <= previous; old++) {
+			orphaned[old] = !airNetwork.inventory(old).isEmpty()
+					&& overlap.subMap((long) old << 32, (long) (old + 1) << 32).isEmpty();
+		}
+		for (int old = 1; old <= previous; old++) {
+			if (!orphaned[old]) continue;
+			for (int node = 1; node <= sealed; node++) {
+				overlap.merge(gasOverlapKey(old, node),
+						Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1])), Math::addExact);
 			}
 		}
 	}

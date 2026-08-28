@@ -356,38 +356,20 @@ import java.util.TreeMap;
 		sealedAvailableVolume[sealedAvailableVolume.length - 1] = expected - assigned;
 	}
 
+	/**
+	 * The single cavity predicate: a non-solid cell with available volume that carries no marker.
+	 *
+	 * <p>This deliberately does not classify the cell as "air" or as "an unsampled liquid cell". Both
+	 * are the same thing to the scan - a connected component of carrier-free volume - and the same
+	 * flood fill resolves them. What has to differ is not whether a component may become a cavity but
+	 * what inventory it starts with: a component with no previous owner is an explicit vacuum node and
+	 * inherits nothing, which is enforced where lineage is assigned, not here.</p>
+	 */
 	private boolean isAirCell(int cell, boolean[] solid, int[] markerCount, FlipCutCellGeometry cutCells,
 	                          GranularCouplingFields granular) {
 		float geometricOpen = cutCells.openCellVolume(cell);
 		float available = granular == null ? geometricOpen : granular.effectiveOpenCellVolume(cell, geometricOpen);
-		return !solid[cell] && markerCount[cell] == 0 && available > 0.0F
-				&& !insideLiquidBody(cell, markerCount, cutCells);
-	}
-
-	/**
-	 * Reports whether every open face of a marker-free cell leads to a marker-bearing neighbour.
-	 *
-	 * <p>Liquid is continuous, so a cell that carries no marker while every open neighbour does is
-	 * an unsampled liquid cell, not a resolved gas cavity. Reading it as one would promote an
-	 * ordinary marker gap in the liquid bulk into a separate sealed owner, hand it a share of the
-	 * headspace inventory and then fail the whole candidate once the next advection refills the
-	 * cell and crushes that pocket to zero capacity.</p>
-	 */
-	private boolean insideLiquidBody(int cell, int[] markerCount, FlipCutCellGeometry cutCells) {
-		int x = cell % sizeX;
-		int yz = cell / sizeX;
-		int y = yz % sizeY;
-		int z = yz / sizeY;
-		for (int axis = 0; axis < 3; axis++) for (int direction = -1; direction <= 1; direction += 2) {
-			int nx = x + (axis == 0 ? direction : 0);
-			int ny = y + (axis == 1 ? direction : 0);
-			int nz = z + (axis == 2 ? direction : 0);
-			if (nx < 0 || nx >= sizeX || ny < 0 || ny >= sizeY || nz < 0 || nz >= sizeZ) continue;
-			int neighbor = (nz * sizeY + ny) * sizeX + nx;
-			if (faceOpen(cutCells, cell, neighbor) <= 0.0F) continue;
-			if (markerCount[neighbor] == 0) return false;
-		}
-		return true;
+		return !solid[cell] && markerCount[cell] == 0 && available > 0.0F;
 	}
 
 	private int floodNeighbors(int[] cellNodeId, boolean[] solid, int[] markerCount, FlipCutCellGeometry cutCells,
