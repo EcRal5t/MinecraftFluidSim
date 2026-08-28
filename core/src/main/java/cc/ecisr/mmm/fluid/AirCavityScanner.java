@@ -234,7 +234,7 @@ import java.util.TreeMap;
 		for (int node = 1; node <= temporaryNodeCount; node++) {
 			if (minimumCell[node] == Integer.MAX_VALUE
 					|| nodeByMinimumCell.put(minimumCell[node], node) != null) {
-				throw new IllegalStateException("Retained gas node has no canonical owning cell");
+				throw new GasTopologyBlockedException("Retained gas node has no canonical owning cell");
 			}
 		}
 		int[] canonicalByTemporary = new int[temporaryNodeCount + 1];
@@ -309,10 +309,10 @@ import java.util.TreeMap;
 		}
 		double expected = (open - liquid) * cellVolumeCubicMeters;
 		if (!(Double.isFinite(expected) && expected >= 0.0)) {
-			throw new IllegalStateException("Closed gas capacity is smaller than carrier inventory");
+			throw new GasTopologyBlockedException("Closed gas capacity is smaller than carrier inventory");
 		}
 		if (sealedAvailableVolume.length == 0) {
-			if (expected > 1.0E-12) throw new IllegalStateException(
+			if (expected > 1.0E-12) throw new GasTopologyBlockedException(
 					"Closed residual gas volume has no topology owner");
 			return;
 		}
@@ -320,7 +320,7 @@ import java.util.TreeMap;
 		for (double volume : sealedAvailableVolume) measured += volume;
 		if (!(Double.isFinite(measured) && measured > 0.0)) {
 			if (expected == 0.0) return;
-			throw new IllegalStateException("Closed gas topology has no measurable capacity");
+			throw new GasTopologyBlockedException("Closed gas topology has no measurable capacity");
 		}
 		double scale = expected / measured;
 		double assigned = 0.0;

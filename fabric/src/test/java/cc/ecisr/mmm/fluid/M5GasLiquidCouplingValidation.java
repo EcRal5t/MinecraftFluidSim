@@ -15,6 +15,7 @@ public final class M5GasLiquidCouplingValidation {
 		validateSplitRetainsSealedShareWhenPeerVents();
 		validateClosedCavityAfterBootstrapStartsAsVacuum();
 		validateEmptyControllerBoundaryPourRetainsLineage();
+		validateFiniteClosedGasWithoutCapacityBlocksTyped();
 		if (java.util.Arrays.asList(args).contains("--fast")) {
 			validateShortCouplingSmoke();
 			System.out.println("M5 gas-liquid coupling validation passed (short; equilibrium soaks skipped)");
@@ -56,6 +57,25 @@ public final class M5GasLiquidCouplingValidation {
 				throw new IllegalStateException("empty controller partial-bubble handoff failed at step " + step,
 						failure);
 			}
+		}
+	}
+
+	private static void validateFiniteClosedGasWithoutCapacityBlocksTyped() {
+		FluidSolverConfig config = new FluidSolverConfig(
+				0.5F, DENSITY, GRAVITY, 1.0F / 20.0F, 120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+		FlipFluidDomain domain = new FlipFluidDomain(2, 2, 2, config, 128);
+		domain.sealDomainBoundary();
+		domain.bootstrapGasState(null);
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) {
+			domain.setVolume(x, y, z, 1.0F);
+		}
+		try {
+			domain.synchronizeGasTopologyForPersistence();
+			throw new AssertionError("finite closed gas without capacity did not reject its topology candidate");
+		} catch (GasTopologyBlockedException expected) {
+			check(domain.airNetwork().sealedInventoryNanos() == 1_000_000_000L
+					&& domain.airNetwork().auditClosed(),
+					"typed gas-topology rejection changed the committed inventory");
 		}
 	}
 

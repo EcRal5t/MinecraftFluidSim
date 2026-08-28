@@ -4687,6 +4687,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 					stageKineticEnergy - particleKineticEnergyJoules();
 			try {
 				updateGasNetwork(dt);
+			} catch (GasTopologyBlockedException blocked) {
+				throw blocked;
 			} catch (IllegalArgumentException | IllegalStateException invalidGasThermal) {
 				if (thermalState == null) throw invalidGasThermal;
 				throw new GasThermalBlockedException(invalidGasThermal.getMessage(), invalidGasThermal);
@@ -5185,7 +5187,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		boolean initialBootstrap = airCellNodeId == null;
 		if (sealedDomainBoundary && !initialBootstrap
 				&& result.stopReason() != AirCavityScanner.StopReason.COMPLETED) {
-			throw new IllegalStateException("Closed gas topology scan exhausted its budget");
+			throw new GasTopologyBlockedException("Closed gas topology scan exhausted its budget");
 		}
 		boolean thermalGas = thermalState != null && thermalState.gasModelBound();
 		double[] availableVolumes = result.sealedAvailableVolume();
@@ -5234,7 +5236,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				int destinations = oldOverlap.size();
 				if (destinations == 0) {
 					if (sealedDomainBoundary) {
-						throw new IllegalStateException("Closed gas inventory lost its topology lineage: "
+						throw new GasTopologyBlockedException("Closed gas inventory lost its topology lineage: "
 								+ gasTopologyLossDetail(old, newMembership, newLabels, cellAvailableVolume, sealed));
 					}
 					sinkDelta = sinkDelta.merge(inventory);
@@ -5287,7 +5289,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			if (previousSealedNodeCount > 0) {
 				for (int node = 1; node <= previousSealedNodeCount; node++) {
 					if (sealedDomainBoundary && !airNetwork.inventory(node).isEmpty()) {
-						throw new IllegalStateException("Closed gas inventory has no available cavity volume");
+						throw new GasTopologyBlockedException("Closed gas inventory has no available cavity volume");
 					}
 					sinkDelta = sinkDelta.merge(airNetwork.inventory(node));
 					if (thermalGas) sinkEnergy += thermalState.gasNodeEnergy(node, airNetwork);
@@ -5311,7 +5313,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 		if (sealedDomainBoundary && !initialBootstrap
 				&& (!sourceDelta.isEmpty() || !sinkDelta.isEmpty())) {
-			throw new IllegalStateException("Closed gas topology attempted an external source or sink");
+			throw new GasTopologyBlockedException("Closed gas topology attempted an external source or sink");
 		}
 		FlipThermalState.GasRemapPlan thermalPlan = !thermalGas ? null : thermalState.planGasRemap(
 				airNetwork, inventories, availableVolumes, mixedEnergy, inheritedAvailable, sourceEnergy, sinkEnergy);

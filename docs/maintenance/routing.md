@@ -78,7 +78,7 @@
 | 表面张力/润湿 | `surface-tension` | 同时改材料状态追加 `materials` |
 | 气体库存/EoS/孔流 | `air-network` | 改 pressure 消费运行 `gas-liquid` |
 | cavity 扫描/几何边 | `air-cavity` | 改共享 cut-face 追加 `cut-cell` |
-| 活动气液耦合 | `gas-liquid` | 显式选择包含完整平衡门 |
+| 活动气液耦合 | `gas-liquid` | 显式选择包含完整平衡门；同时固定有限密闭库存零容量时 typed rejection 且提交前 inventory/audit 原样保留 |
 | 密闭 partial gas owner / `empty` 后边界注液 | `controller-gas-lineage` | 以 production liquid/gas registry 复现 `34 m³std → empty → 16 BV`，连续 200 个 backend candidate/capture/restore；改 scanner 几何时先跑 `air-cavity`，改压力消费时再跑 `gas-liquid` |
 | 默认 controller 单步 CPU 硬预算 | `production-live-budget` | 独立 JVM 预热另报，随后 20 个 live logical step 各自不超过 40 ms；必须保留逐步 marker、substep、PCG 和 residual 证据，不能用额外 warmup、pacing 或关闭物理绕过 |
 | manager | `region-manager` | 跨 lifecycle/存档追加最近门 |

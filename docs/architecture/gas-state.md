@@ -43,7 +43,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 
 部分充液界面的短时拓扑抖动使用 runtime lineage 减少虚假空气周转，但不能改变物质账本。新 full-air child 没有同格 membership overlap 时，只能继承同格或跨开放 face 相邻的旧 runtime lineage；旧 node 的 full-air membership 完全消失且旧 residual component 仍与新 gas component 相邻时，从原 interface cells 返回该新 lineage。若该 residual component 具有正容量但不接触任何新 gas component，它必须继续拥有原有限库存：该 component 的 partial owner cells 进入本代 topology membership，并按 minimum cell 与其他节点一起重新 canonicalize；若分裂成多个不连通 residual component，则按各自实际容量规划库存 split。这样不会把 marker bulk 的普通空隙猜成气泡，也不会把无法以 full-air cell 表示的真实气泡删除或任意并入另一节点。
 
-稳定 topology 快路每次仍从当前 exact residual volume 重新分配 interface lineage；相变新打开的微小气隙不能沿用上一轮空 residual 的归属，也不能被当成凭空新 node。闭域完成初次环境库存建立后，任何 topology source/sink、正容量有限库存失去 owner 或 scan budget 耗尽都拒绝候选；注液只能改变现有库存的容量、拓扑分配和压缩功。
+稳定 topology 快路每次仍从当前 exact residual volume 重新分配 interface lineage；相变新打开的微小气隙不能沿用上一轮空 residual 的归属，也不能被当成凭空新 node。闭域完成初次环境库存建立后，任何 topology source/sink、正容量有限库存失去 owner、有限库存被压到零容量或 scan budget 耗尽都以 typed gas-topology failure 拒绝完整候选；生产域进入 `NUMERICAL_PAUSE`，不会让该失败穿透 server tick，也不会提交部分 remap。注液只能改变现有库存的容量、拓扑分配和压缩功。
 
 气液相变若只截断或扩充既有 marker，marker cardinality、cell membership、solid/cut-cell 与 granular occupancy 都没有改变，因此 air-cell 连通性和 interface lineage 也严格不变。该中间候选用实际提交前后 float marker 体积差更新被编辑 cell 的 exact marker sum，再沿现有 node membership 重新汇总连续 available volume；每个 node 仍规划完整绝热体积功，并把 gas `U` 与 node volume 一次提交。只有 marker 新增/删除或其他结构变化才重新 flood fill、overlap 和 remap。logical step 末以及 capture 前仍从完整 carrier geometry 重扫，稳定路径不是持久 topology 的替代真值。
 

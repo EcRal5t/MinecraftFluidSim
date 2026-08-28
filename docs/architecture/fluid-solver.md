@@ -73,7 +73,7 @@ div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 - 重力、热浮力和速度载体 face 仍由实际 marker occupancy 激活，不能因 pressure footprint 变宽而给孤立液滴稀释重力。
 - cut-face aperture、界面距离和 `1/rho` 面系数同时进入矩阵、预条件器和最终投影，避免三个路径使用不同几何。
 - 变密度 face coefficient 按两侧界面距离守恒加权；同密度材料必须退化为纯水矩阵。
-- PCG 只对活动流体未知量求解；`pressureTolerance` 是绝对 RMS 代数残差，不随 RHS/静水载荷放大。迭代预算耗尽、breakdown 或非有限残差会拒绝完整候选并把生产区域标记 `NUMERICAL_PAUSE`，不会以未收敛压力继续 advection。
+- PCG 只对活动流体未知量求解；`pressureTolerance` 是绝对 RMS 代数残差，不随 RHS/静水载荷放大。迭代预算耗尽、breakdown、非有限残差或无法闭合有限库存/容量 owner 的 gas topology 会以各自 typed failure 拒绝完整候选并把生产区域标记 `NUMERICAL_PAUSE`，不会以未收敛压力或部分 gas remap 继续 advection。其他 `IllegalStateException` 不在该边界被宽泛吞掉。
 - 环境表压为 gauge zero。gas topology 的 runtime lineage 还会沿连通 pressure-air fringe 扩展到实际 ghost face，但不会穿过 pressure-fluid bulk。只有密闭气体边界时，求解器先减去一个统一 gas gauge reference，PCG 只承受相对压力；对外压力观察、相平衡与 pending `-p ΔV` 再加回该 reference。多个 gas lineage 之间的压差不被消除。
 - drift correction 和 moving-solid occupancy 只通过 `target_divergence` 进入 projection，不直接缩放 marker；相变 pending 只结算已经发生的 marker 几何变化对应的压力功，不能再次制造一份散度源。
 

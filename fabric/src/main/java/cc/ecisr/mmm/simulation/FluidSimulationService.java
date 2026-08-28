@@ -18,6 +18,7 @@ import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterial;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.fluid.GasTopologyBlockedException;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import cc.ecisr.mmm.fluid.air.GasAuditLedger;
@@ -1639,6 +1640,9 @@ public final class FluidSimulationService {
 		} catch (FlipFluidDomain.PressureSolveBlockedException blocked) {
 			blockNumerical(level, region, blocked);
 			return -1;
+		} catch (GasTopologyBlockedException blocked) {
+			blockGasTopology(level, region, blocked);
+			return -1;
 		} catch (FlipFluidDomain.ThermalTransportBlockedException blocked) {
 			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
 			return -1;
@@ -1724,6 +1728,9 @@ public final class FluidSimulationService {
 			}
 		} catch (FlipFluidDomain.PressureSolveBlockedException blocked) {
 			blockNumerical(level, region, blocked);
+			return;
+		} catch (GasTopologyBlockedException blocked) {
+			blockGasTopology(level, region, blocked);
 			return;
 		} catch (ChemicalReactionEngine.BudgetExceededException budget) {
 			String failure = "chemistry-blocked PAUSED：" + budget.getMessage();
@@ -1884,6 +1891,19 @@ public final class FluidSimulationService {
 				region.id(), blocked);
 		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
 				"物质、运动与力学压力求解未收敛，本次候选未提交，区域已安全暂停："
+						+ blocked.getMessage() + "；请查看 /mmm status"));
+		sendSnapshot(level, region);
+	}
+
+	private void blockGasTopology(
+			ServerLevel level, FluidRegion region, GasTopologyBlockedException blocked
+	) {
+		String failure = "gas-topology NUMERICAL_PAUSE：" + blocked.getMessage();
+		region.blockNumerical(failure);
+		MmmMod.LOGGER.error("Region {} rejected a gas-topology candidate and is paused",
+				region.id(), blocked);
+		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+				"物质、运动与力学气体拓扑账本无法闭合，本次候选未提交，区域已安全暂停："
 						+ blocked.getMessage() + "；请查看 /mmm status"));
 		sendSnapshot(level, region);
 	}
