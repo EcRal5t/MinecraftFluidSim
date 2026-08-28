@@ -351,8 +351,11 @@ public final class FlipFluidDomain {
 			throw new IllegalStateException("Gas restore requires an uninitialized topology");
 		}
 		ensureGrid();
-		AirCavityScanner.Result result = airScanner.scan(solid, markerCount, exactCellMarkerVolume, cutCells,
-				pressureGranularCoupling, sealedDomainBoundary);
+		AirCavityScanner.Result result = sealedDomainBoundary
+				? airScanner.scanRetainingClosedLineages(solid, markerCount, exactCellMarkerVolume, cutCells,
+						pressureGranularCoupling, state.cellNodeOrdinal(), state.nodes().size())
+				: airScanner.scan(solid, markerCount, exactCellMarkerVolume, cutCells,
+						pressureGranularCoupling, false);
 		int[] expected = state.cellNodeOrdinal(), actual = result.cellNodeId();
 		if (result.sealedNodeCount() != state.nodes().size()) {
 			throw new IllegalArgumentException("Restored gas sealed-node count does not match derived topology");
@@ -5143,8 +5146,11 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	) { }
 
 	private void refreshGasTopology() {
-		AirCavityScanner.Result result = airScanner.scan(solid, markerCount, exactCellMarkerVolume, cutCells,
-				pressureGranularCoupling, sealedDomainBoundary);
+		AirCavityScanner.Result result = sealedDomainBoundary && airCellLineageNodeId != null
+				? airScanner.scanRetainingClosedLineages(solid, markerCount, exactCellMarkerVolume, cutCells,
+						pressureGranularCoupling, airCellLineageNodeId, previousSealedNodeCount)
+				: airScanner.scan(solid, markerCount, exactCellMarkerVolume, cutCells,
+						pressureGranularCoupling, sealedDomainBoundary);
 		commitGasTopology(planGasTopology(result));
 	}
 
@@ -5228,7 +5234,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				int destinations = oldOverlap.size();
 				if (destinations == 0) {
 					if (sealedDomainBoundary) {
-						throw new IllegalStateException("Closed gas inventory lost its topology lineage");
+						throw new IllegalStateException("Closed gas inventory lost its topology lineage: "
+								+ gasTopologyLossDetail(old, newMembership, newLabels, cellAvailableVolume, sealed));
 					}
 					sinkDelta = sinkDelta.merge(inventory);
 					if (thermalGas) sinkEnergy += thermalState.gasNodeEnergy(old, airNetwork);
@@ -5390,6 +5397,33 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private static long gasOverlapKey(int old, int now) {
 		return ((long) old << 32) | (now & 0xffffffffL);
+	}
+
+	private String gasTopologyLossDetail(
+			int old, int[] newMembership, int[] newLabels, double[] cellAvailableVolume, int sealed
+	) {
+		int oldMembers = 0, oldLineage = 0, becameLiquid = 0, becameAmbient = 0;
+		int lineageLiquid = 0, lineageAmbient = 0, lineageSealed = 0;
+		double lineageAvailable = 0.0;
+		for (int cell = 0; cell < cellCount; cell++) {
+			if (airCellNodeId[cell] == old) {
+				oldMembers++;
+				if (newMembership[cell] < 0) becameLiquid++;
+				else if (newMembership[cell] == AirNetwork.AMBIENT_NODE) becameAmbient++;
+			}
+			if (airCellLineageNodeId[cell] != old) continue;
+			oldLineage++;
+			lineageAvailable += cellAvailableVolume[cell];
+			if (newLabels[cell] < 0) lineageLiquid++;
+			else if (newLabels[cell] == AirNetwork.AMBIENT_NODE) lineageAmbient++;
+			else lineageSealed++;
+		}
+		return "old=" + old + ", previousNodes=" + previousSealedNodeCount + ", newNodes=" + sealed
+				+ ", oldMembers=" + oldMembers + ", oldLineage=" + oldLineage
+				+ ", memberLiquid=" + becameLiquid + ", memberAmbient=" + becameAmbient
+				+ ", lineageLiquid=" + lineageLiquid + ", lineageAmbient=" + lineageAmbient
+				+ ", lineageSealed=" + lineageSealed + ", lineageAvailable=" + lineageAvailable
+				+ ", inventoryNanos=" + airNetwork.inventory(old).standardVolumeNanos();
 	}
 
 	/** Publishes a fully planned topology; all fallible physics and ledger work happened above. */

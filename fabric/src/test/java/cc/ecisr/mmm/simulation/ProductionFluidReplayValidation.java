@@ -52,6 +52,7 @@ public final class ProductionFluidReplayValidation {
 		defaultLiveStepsRemainBounded();
 		controllerPourSequenceWithoutGasSettles();
 		controllerPourSequencePreservesGasInventoryAcrossBackend();
+		controllerEmptyThenBoundaryPourPreservesGasAcrossBackend();
 		fullyBoundHalfFillRoundTripsCurrentGasGeometry();
 		fullyBoundPhaseOnStepRemainsBounded();
 		planarHalfFillWithoutEntitiesRemainsStableAcrossBackend();
@@ -199,6 +200,62 @@ public final class ProductionFluidReplayValidation {
 		double result = 0.0;
 		for (int node : domain.airNetwork().nodeIds()) result += domain.airNetwork().availableVolume(node);
 		return result;
+	}
+
+	/** Replays the thermal-off world path: restore 34 m3std, empty liquid, then pour at the boundary. */
+	public static void controllerEmptyThenBoundaryPourPreservesGasAcrossBackend() throws Exception {
+		RegistrySet registries = loadProductionRegistries();
+		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
+		domain.sealDomainBoundary();
+		bindEmptyMaterialState(domain, registries.liquids());
+		FlipFluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
+		FlipFluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(3, 3, 5, 112.0F, 6);
+		require(first.addedVolume() == 128.0F && second.addedVolume() == 112.0F,
+				"thermal-off restore fixture did not establish 30 BV before gas bootstrap");
+		domain.bindGasRegistry(registries.gas());
+		domain.bootstrapGasState("");
+		long retainedInventory = domain.airNetwork().sealedInventoryNanos();
+		require(retainedInventory == 34_000_000_000L && domain.airNetwork().auditClosed(),
+				"thermal-off restore fixture did not bootstrap the reported 34 m3std inventory");
+		var source = domain.airNetwork().externalSource();
+		var sink = domain.airNetwork().escapedSink();
+		domain.commitOperatorClear(domain.planOperatorClear());
+		require(domain.totalVolumeExact() == 0.0F
+				&& Math.abs(totalGasAvailableVolume(domain) - 64.0) <= 1.0E-12
+				&& domain.airNetwork().sealedInventoryNanos() == retainedInventory,
+				"operator empty did not retain and expand the finite closed gas inventory");
+
+		FlipFluidDomain.VolumeAddition boundaryPour = domain.addVolumeNearBudgeted(6, 0, 0, 128.0F, 6);
+		require(boundaryPour.addedVolume() == 128.0F && !boundaryPour.markerBudgetLimited(),
+				"thermal-off boundary pour did not inject the complete 16 BV source");
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		FluidDomainState state = domain.captureAuthoritativeState();
+		long generation = 0L;
+		int maximumNodes = domain.airNetwork().nodeCount();
+		for (int step = 0; step < 200; step++) {
+			FluidStepCandidate candidate;
+			try {
+				candidate = backend.evaluate(new FluidStepRequest(
+						generation, state, List.of(), false, 0, true));
+			} catch (RuntimeException failure) {
+				throw new IllegalStateException("thermal-off empty/boundary-pour replay failed at step " + step,
+						failure);
+			}
+			domain = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+			maximumNodes = Math.max(maximumNodes, domain.airNetwork().nodeCount());
+			require(domain.airNetwork().sealedInventoryNanos() == retainedInventory
+						&& domain.airNetwork().externalSource().equals(source)
+						&& domain.airNetwork().escapedSink().equals(sink)
+						&& domain.airNetwork().auditClosed()
+						&& Math.abs(totalGasAvailableVolume(domain) - 48.0) <= 1.0E-12,
+					"thermal-off empty/boundary-pour replay changed gas truth at step " + step
+							+ ": " + gasLedgerDetail(domain));
+			state = candidate.state();
+			generation++;
+		}
+		System.out.printf("  thermal-off empty/boundary-pour gas lineage: %.9f m3std in %.9f m3, "
+				+ "maxNodes=%d across %d backend candidates%n",
+				retainedInventory * 1.0E-9, totalGasAvailableVolume(domain), maximumNodes, generation);
 	}
 
 	private static String gasLedgerDetail(FlipFluidDomain domain) {

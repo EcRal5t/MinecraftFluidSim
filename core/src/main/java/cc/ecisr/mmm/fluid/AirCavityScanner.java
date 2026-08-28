@@ -84,6 +84,38 @@ import java.util.TreeMap;
 	Result scan(boolean[] solid, int[] markerCount, double[] cellLiquidVolume,
 	            FlipCutCellGeometry cutCells, GranularCouplingFields granular,
 	            boolean sealedDomainBoundary) {
+		return scan(solid, markerCount, cellLiquidVolume, cutCells, granular,
+				sealedDomainBoundary, true);
+	}
+
+	/**
+	 * Rebuilds a closed topology while retaining a proven finite bubble whose current gas volume
+	 * lies entirely in partial liquid cells. The previous lineage is used only when a connected
+	 * residual component has no current full-air/ambient neighbour; it therefore cannot seed a new
+	 * bubble in liquid bulk or prevent a real merge.
+	 */
+	Result scanRetainingClosedLineages(
+			boolean[] solid, int[] markerCount, double[] cellLiquidVolume,
+			FlipCutCellGeometry cutCells, GranularCouplingFields granular,
+			int[] previousCellLineageNodeId, int previousSealedNodeCount
+	) {
+		if (previousCellLineageNodeId == null || previousCellLineageNodeId.length != cellCount
+				|| previousSealedNodeCount < 0) {
+			throw new IllegalArgumentException("Previous gas lineage is incompatible");
+		}
+		Result scanned = scan(solid, markerCount, cellLiquidVolume, cutCells, granular, true, false);
+		if (scanned.stopReason() == StopReason.COMPLETED) {
+			scanned = retainOrphanedPartialLineages(scanned, solid, cutCells,
+					previousCellLineageNodeId, previousSealedNodeCount);
+			normalizeClosedCapacity(solid, cellLiquidVolume, cutCells, granular,
+					scanned.sealedAvailableVolume());
+		}
+		return scanned;
+	}
+
+	private Result scan(boolean[] solid, int[] markerCount, double[] cellLiquidVolume,
+	                    FlipCutCellGeometry cutCells, GranularCouplingFields granular,
+	                    boolean sealedDomainBoundary, boolean normalizeClosedCapacity) {
 		boolean budgetExhausted = false;
 		int visitedAirCells = 0;
 		int sealedNodes = 0;
@@ -131,12 +163,100 @@ import java.util.TreeMap;
 		int[] cellLineageNodeId = cellNodeId.clone();
 		attributeInterfaceResiduals(cellNodeId, cellLineageNodeId, solid, markerCount, cellLiquidVolume,
 				cutCells, granular, cellAvailableVolume, sealedAvailableVolume);
-		if (sealedDomainBoundary && !budgetExhausted) normalizeClosedCapacity(
+		if (sealedDomainBoundary && !budgetExhausted && normalizeClosedCapacity) normalizeClosedCapacity(
 				solid, cellLiquidVolume, cutCells, granular, sealedAvailableVolume);
 		List<GeometricEdge> edges = collectGeometricEdges(cellNodeId, cutCells);
 		return new Result(cellNodeId, cellLineageNodeId, cellAvailableVolume,
 				sealedNodes, sealedAvailableVolume, edges, visitedAirCells,
 				budgetExhausted ? StopReason.BUDGET_EXHAUSTED : StopReason.COMPLETED);
+	}
+
+	private Result retainOrphanedPartialLineages(
+			Result scanned, boolean[] solid, FlipCutCellGeometry cutCells,
+			int[] previousLineage, int previousSealedNodeCount
+	) {
+		int[] membership = scanned.cellNodeId();
+		int[] lineage = scanned.cellLineageNodeId();
+		double[] cellAvailable = scanned.cellAvailableVolume();
+		boolean[] visited = new boolean[cellCount];
+		int temporaryNodeCount = scanned.sealedNodeCount();
+		boolean retained = false;
+		for (int seed = 0; seed < cellCount; seed++) {
+			int previousNode = previousLineage[seed];
+			if (visited[seed] || previousNode < 1 || previousNode > previousSealedNodeCount
+					|| lineage[seed] >= 0 || solid[seed] || !(cellAvailable[seed] > 0.0)) continue;
+			int head = 0, tail = 0;
+			boolean touchesCurrentGas = false;
+			floodStack[tail++] = seed;
+			visited[seed] = true;
+			while (head < tail) {
+				int cell = floodStack[head++];
+				int x = cell % sizeX;
+				int yz = cell / sizeX;
+				int y = yz % sizeY;
+				int z = yz / sizeY;
+				for (int axis = 0; axis < 3; axis++) for (int direction = -1; direction <= 1; direction += 2) {
+					int nx = x + (axis == 0 ? direction : 0);
+					int ny = y + (axis == 1 ? direction : 0);
+					int nz = z + (axis == 2 ? direction : 0);
+					if (nx < 0 || nx >= sizeX || ny < 0 || ny >= sizeY || nz < 0 || nz >= sizeZ) continue;
+					int neighbor = (nz * sizeY + ny) * sizeX + nx;
+					if (faceOpen(cutCells, cell, neighbor) <= 0.0F) continue;
+					if (lineage[neighbor] >= 0) {
+						touchesCurrentGas = true;
+						continue;
+					}
+					if (!visited[neighbor] && previousLineage[neighbor] == previousNode
+							&& !solid[neighbor] && cellAvailable[neighbor] > 0.0) {
+						visited[neighbor] = true;
+						floodStack[tail++] = neighbor;
+					}
+				}
+			}
+			if (touchesCurrentGas) continue;
+			int retainedNode = ++temporaryNodeCount;
+			for (int componentCell = 0; componentCell < tail; componentCell++) {
+				int cell = floodStack[componentCell];
+				membership[cell] = retainedNode;
+				lineage[cell] = retainedNode;
+			}
+			retained = true;
+		}
+		if (!retained) return scanned;
+
+		int[] minimumCell = new int[temporaryNodeCount + 1];
+		Arrays.fill(minimumCell, Integer.MAX_VALUE);
+		for (int cell = 0; cell < cellCount; cell++) {
+			int node = membership[cell];
+			if (node > 0) minimumCell[node] = Math.min(minimumCell[node], cell);
+		}
+		TreeMap<Integer, Integer> nodeByMinimumCell = new TreeMap<>();
+		for (int node = 1; node <= temporaryNodeCount; node++) {
+			if (minimumCell[node] == Integer.MAX_VALUE
+					|| nodeByMinimumCell.put(minimumCell[node], node) != null) {
+				throw new IllegalStateException("Retained gas node has no canonical owning cell");
+			}
+		}
+		int[] canonicalByTemporary = new int[temporaryNodeCount + 1];
+		int canonical = 0;
+		for (int temporary : nodeByMinimumCell.values()) canonicalByTemporary[temporary] = ++canonical;
+		for (int cell = 0; cell < cellCount; cell++) {
+			if (membership[cell] > 0) membership[cell] = canonicalByTemporary[membership[cell]];
+			if (lineage[cell] > 0) lineage[cell] = canonicalByTemporary[lineage[cell]];
+		}
+		double[] availableByNode = new double[temporaryNodeCount];
+		for (int cell = 0; cell < cellCount; cell++) {
+			int node = membership[cell] > 0 ? membership[cell] : lineage[cell];
+			if (node > 0) availableByNode[node - 1] += cellAvailable[cell];
+		}
+		ArrayList<GeometricEdge> remappedEdges = new ArrayList<>(scanned.geometricEdges().size());
+		for (GeometricEdge edge : scanned.geometricEdges()) {
+			int first = edge.firstNode() > 0 ? canonicalByTemporary[edge.firstNode()] : edge.firstNode();
+			int second = edge.secondNode() > 0 ? canonicalByTemporary[edge.secondNode()] : edge.secondNode();
+			remappedEdges.add(new GeometricEdge(first, second, edge.areaSquareMeters()));
+		}
+		return new Result(membership, lineage, cellAvailable, temporaryNodeCount, availableByNode,
+				List.copyOf(remappedEdges), scanned.visitedAirCells(), scanned.stopReason());
 	}
 
 	/** Recomputes node volumes when marker cardinality and every cell membership are unchanged. */
@@ -348,7 +468,6 @@ import java.util.TreeMap;
 				: granular.effectiveOpenCellVolume(cell, geometricOpen);
 		return cellAvailableVolume[cell] >= 0.5 * openVolume * cellVolumeCubicMeters;
 	}
-
 	private List<GeometricEdge> collectGeometricEdges(int[] cellNodeId, FlipCutCellGeometry cutCells) {
 		TreeMap<Long, Double> areas = new TreeMap<>();
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {

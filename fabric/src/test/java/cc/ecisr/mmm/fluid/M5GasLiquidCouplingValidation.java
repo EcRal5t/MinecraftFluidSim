@@ -14,6 +14,7 @@ public final class M5GasLiquidCouplingValidation {
 	public static void main(String[] args) {
 		validateSplitRetainsSealedShareWhenPeerVents();
 		validateClosedCavityAfterBootstrapStartsAsVacuum();
+		validateEmptyControllerBoundaryPourRetainsLineage();
 		if (java.util.Arrays.asList(args).contains("--fast")) {
 			validateShortCouplingSmoke();
 			System.out.println("M5 gas-liquid coupling validation passed (short; equilibrium soaks skipped)");
@@ -27,6 +28,35 @@ public final class M5GasLiquidCouplingValidation {
 		validateOrificeEqualization();
 		System.out.println("M5 gas-liquid coupling gate passed: analytic positive/negative hydrostatics, "
 				+ "sealed compression, negative-gauge suction, finite-rate orifice equalization and exact ledgers");
+	}
+
+	private static void validateEmptyControllerBoundaryPourRetainsLineage() {
+		int n = 8;
+		FluidSolverConfig config = new FluidSolverConfig(
+				0.5F, DENSITY, GRAVITY, 1.0F / 20.0F, 120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+		FlipFluidDomain domain = new FlipFluidDomain(n, n, n, config, 4_096);
+		domain.sealDomainBoundary();
+		domain.bootstrapGasState(null);
+		domain.airNetwork().setStandardVolume(1, 34.0);
+		long gas = domain.airNetwork().sealedInventoryNanos();
+		FlipFluidDomain.VolumeAddition addition = domain.addVolumeNearBudgeted(6, 0, 0, 128.0F, 6);
+		check(addition.addedVolume() == 128.0F && !addition.markerBudgetLimited(),
+				"empty controller boundary pour did not add 16 BV");
+		for (int step = 0; step < 200; step++) {
+			try { domain.step(); }
+			catch (RuntimeException failure) {
+				throw new IllegalStateException("empty controller negative-pressure boundary pour failed at step " + step,
+						failure);
+			}
+			check(domain.airNetwork().sealedInventoryNanos() == gas && domain.airNetwork().auditClosed(),
+					"empty controller boundary pour changed closed gas inventory at step " + step);
+			try {
+				domain = FlipFluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			} catch (RuntimeException failure) {
+				throw new IllegalStateException("empty controller partial-bubble handoff failed at step " + step,
+						failure);
+			}
+		}
 	}
 
 	private static void validateClosedCavityAfterBootstrapStartsAsVacuum() {

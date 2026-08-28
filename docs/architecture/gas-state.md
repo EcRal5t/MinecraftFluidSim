@@ -9,7 +9,7 @@
 
 ### Cavity scan
 
-air cell 必须同时满足：非 solid、`markerCount == 0`，且扣除 cut-cell、granular/coherent occupancy 后仍有正 open volume。六邻域 flood fill 只跨越接近全开的 face；部分开放 face 不合并 component，而是形成有限速率 geometric edge。
+由当前几何直接发现的 air cell 必须同时满足：非 solid、`markerCount == 0`，且扣除 cut-cell、granular/coherent occupancy 后仍有正 open volume。六邻域 flood fill 只跨越接近全开的 face；部分开放 face 不合并 component，而是形成有限速率 geometric edge。已存在的密闭有限库存若暂时只剩部分充液格，则其旧 lineage 中仍有正 residual volume、且不接触任何本轮 full-air/ambient component 的连通部分成为显式 partial owner component；它不是从 marker 空隙新建的 cavity，真实连通时仍按正常 merge 处理。
 
 - controller 已验证闭壳时，solver 外边界不自动判作 ambient；命令临时域和真实缺口仍连接 ambient node 0。
 - scan 按固定邻居顺序执行，节点以 canonical minimum-cell key 排序，保证同一几何得到确定 topology。
@@ -41,7 +41,9 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 - 开放域中新腔体按环境组成和当前可用体积记 source；
 - 相变产生或消耗的 water vapor 通过同一组件库存与 source/sink 审计提交。
 
-部分充液界面的短时拓扑抖动可使用 runtime lineage 减少虚假空气周转，但不能改变持久 membership 或物质账本。新 full-air child 没有同格 membership overlap 时，只能继承同格或跨开放 face 相邻的旧 runtime lineage；旧 node 的 full-air membership 完全消失时，才可从其原 interface cells 返回相邻的新 lineage。仍有 full-air overlap 的旧 node 不走这条后备，液面摆动不能把密闭库存按 partial overlap 分给 ambient。稳定 topology 快路每次仍从当前 exact residual volume 重新分配 interface lineage；相变新打开的微小气隙不能沿用上一轮空 residual 的归属，也不能被当成凭空新 node。闭域完成初次环境库存建立后，任何 topology source/sink、有限库存失去 owner 或 scan budget 耗尽都拒绝候选；注液只能改变现有库存的容量、拓扑分配和压缩功。
+部分充液界面的短时拓扑抖动使用 runtime lineage 减少虚假空气周转，但不能改变物质账本。新 full-air child 没有同格 membership overlap 时，只能继承同格或跨开放 face 相邻的旧 runtime lineage；旧 node 的 full-air membership 完全消失且旧 residual component 仍与新 gas component 相邻时，从原 interface cells 返回该新 lineage。若该 residual component 具有正容量但不接触任何新 gas component，它必须继续拥有原有限库存：该 component 的 partial owner cells 进入本代 topology membership，并按 minimum cell 与其他节点一起重新 canonicalize；若分裂成多个不连通 residual component，则按各自实际容量规划库存 split。这样不会把 marker bulk 的普通空隙猜成气泡，也不会把无法以 full-air cell 表示的真实气泡删除或任意并入另一节点。
+
+稳定 topology 快路每次仍从当前 exact residual volume 重新分配 interface lineage；相变新打开的微小气隙不能沿用上一轮空 residual 的归属，也不能被当成凭空新 node。闭域完成初次环境库存建立后，任何 topology source/sink、正容量有限库存失去 owner 或 scan budget 耗尽都拒绝候选；注液只能改变现有库存的容量、拓扑分配和压缩功。
 
 气液相变若只截断或扩充既有 marker，marker cardinality、cell membership、solid/cut-cell 与 granular occupancy 都没有改变，因此 air-cell 连通性和 interface lineage 也严格不变。该中间候选用实际提交前后 float marker 体积差更新被编辑 cell 的 exact marker sum，再沿现有 node membership 重新汇总连续 available volume；每个 node 仍规划完整绝热体积功，并把 gas `U` 与 node volume 一次提交。只有 marker 新增/删除或其他结构变化才重新 flood fill、overlap 和 remap。logical step 末以及 capture 前仍从完整 carrier geometry 重扫，稳定路径不是持久 topology 的替代真值。
 
@@ -92,6 +94,6 @@ Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 
 ## 持久化
 
-气体只作为完整热区域 generation 的 required payload 发布。恢复时从已提交 carrier geometry 重新扫描拓扑，并要求节点数、minimum-cell key、逐格 membership、库存和能量 ordinal 全部一致；任何差异都锁定，不猜测 remap。
+气体只作为完整热区域 generation 的 required payload 发布。恢复时从已提交 carrier geometry 重新扫描 full-air topology；已提交 membership 中的 partial owner 只在同一格仍有正 residual、连通部分仍不接触任何重扫 gas component 时重新建立。随后要求节点数、minimum-cell key、逐格 membership、库存和能量 ordinal 全部一致；任何差异都锁定，不猜测 remap。
 
-持久 payload 还包含 registry fingerprint、unit identity、component palette、节点总账、逐 section membership 和 source/sink/roundoff 审计；显式真空 node 以空 component inventory 原样保存。gas registry fingerprint 同时绑定每个 component 的允许 species 集合；不匹配时原样保留并锁定。edge、pressure、temperature、runtime lineage 和 flow velocity 可从完整库存与几何重建，不进入 checkpoint。
+持久 payload 还包含 registry fingerprint、unit identity、component palette、节点总账、逐 section membership（包括必要的 partial owner cells）和 source/sink/roundoff 审计；显式真空 node 以空 component inventory 原样保存。gas registry fingerprint 同时绑定每个 component 的允许 species 集合；不匹配时原样保留并锁定。edge、pressure、temperature、其余 runtime interface lineage 和 flow velocity 可从完整库存与几何重建，不进入 checkpoint。

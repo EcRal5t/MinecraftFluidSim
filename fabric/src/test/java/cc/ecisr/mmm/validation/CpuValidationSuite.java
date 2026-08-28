@@ -123,6 +123,8 @@ public final class CpuValidationSuite {
 		gate(gates, "region-manager", () -> FluidRegionManagerValidation.main(NONE));
 		gate(gates, "lifecycle", () -> FluidRegionLifecycleValidation.main(NONE));
 		gate(gates, "entity-fluid", ProductionFluidReplayValidation::dynamicPlayerFloatRemainsBoundedAcrossBackend);
+		gate(gates, "controller-gas-lineage",
+				ProductionFluidReplayValidation::controllerEmptyThenBoundaryPourPreservesGasAcrossBackend);
 		gate(gates, "production-replay", () -> ProductionFluidReplayValidation.main(NONE));
 		gate(gates, "free-surface", () -> FlipFluidFreeSurfaceValidation.main(NONE),
 				() -> FlipFluidFreeSurfaceValidation.main(FAST));
