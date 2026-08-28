@@ -377,6 +377,7 @@ final class FlipThermalState {
 	}
 	double gasTemperature(int nodeId, AirNetwork network) {
 		requireGasNode(nodeId, network);
+		if (network.inventory(nodeId).isEmpty()) return insertionTemperatureK;
 		return gasModel.state(network.inventory(nodeId), gasNodeEnergy[nodeId - 1]).temperatureK();
 	}
 	double gasGaugePressure(int nodeId, AirNetwork network) {
@@ -424,10 +425,15 @@ final class FlipThermalState {
 		}
 		double[] result = mixedEnergy.clone();
 		for (int node = 0; node < result.length; node++) {
-			if (inventories.get(node).isEmpty() || !(Double.isFinite(availableVolumes[node]) && availableVolumes[node] > 0.0)
+			if (!(Double.isFinite(availableVolumes[node]) && availableVolumes[node] > 0.0)
 					|| !(Double.isFinite(inheritedAvailableVolumes[node]) && inheritedAvailableVolumes[node] > 0.0)
 					|| !Double.isFinite(result[node])) {
 				throw new IllegalArgumentException("Gas thermal remap produced an invalid node");
+			}
+			if (inventories.get(node).isEmpty()) {
+				if (result[node] != 0.0) throw new IllegalArgumentException("Vacuum remap carries internal energy");
+				result[node] = 0.0;
+				continue;
 			}
 			if (Double.doubleToRawLongBits(inheritedAvailableVolumes[node])
 					== Double.doubleToRawLongBits(availableVolumes[node])) {

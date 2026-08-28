@@ -9,6 +9,7 @@ public final class AirCavityScannerValidation {
 	public static void main(String[] args) {
 		validateOpenTankIsAmbient();
 		validateControllerExtentIsSealed();
+		validateClosedCapacityComplementsCarrierInventory();
 		validateSealedTankVolume();
 		validateOpenUTubeIsAmbient();
 		validateMultipleSealedCavities();
@@ -28,6 +29,23 @@ public final class AirCavityScannerValidation {
 				"a validated controller interior must keep boundary-layer headspace sealed");
 		checkRelative(result.sealedAvailableVolume()[0], 64.0,
 				"controller interior gas volume");
+	}
+
+	private static void validateClosedCapacityComplementsCarrierInventory() {
+		int n = 8;
+		Grid grid = new Grid(n);
+		int first = (4 * n + 4) * n + 4;
+		int second = (4 * n + 4) * n + 5;
+		grid.markerCount[first] = 1;
+		grid.markerCount[second] = 1;
+		grid.liquidVolume[first] = 1.5;
+		grid.liquidVolume[second] = 0.5;
+		AirCavityScanner.Result result = new AirCavityScanner(n, n, n, 0.5F, n * n * n)
+				.scan(grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null, true);
+		check(result.sealedNodeCount() == 1,
+				"closed controller capacity regression must retain one gas owner");
+		checkRelative(result.sealedAvailableVolume()[0], (n * n * n - 2.0) * 0.125,
+				"closed gas capacity must complement total authoritative liquid volume");
 	}
 
 	private static void validateOpenTankIsAmbient() {
@@ -145,7 +163,7 @@ public final class AirCavityScannerValidation {
 		}
 		double[] stableVolumes = scanner.measureSealedAvailableVolumes(
 				grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null,
-				result.cellNodeId(), result.cellLineageNodeId(), result.sealedNodeCount());
+				result.cellNodeId(), result.cellLineageNodeId(), result.sealedNodeCount(), false);
 		AirCavityScanner.Result rescanned = scanner.scan(
 				grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells);
 		check(java.util.Arrays.equals(result.cellNodeId(), rescanned.cellNodeId())

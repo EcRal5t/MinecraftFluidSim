@@ -11,6 +11,7 @@ public final class AirNetworkValidation {
 	public static void main(String[] args) {
 		validateRegistrySnapshot();
 		validateEquationOfState();
+		validateVacuumNode();
 		validateOrificeEqualization();
 		validateHoleOpenClose();
 		validateSplitMergeVentLedger();
@@ -78,6 +79,35 @@ public final class AirNetworkValidation {
 				"filled cavity must clamp at the pressure ceiling");
 		check(network.pressureCeilingEvents() > 0, "ceiling clamp was not counted");
 		checkLedger(network, "equation-of-state probes");
+	}
+
+	private static void validateVacuumNode() {
+		AirNetwork network = new AirNetwork();
+		network.addNode(1.0, 1.0);
+		GasInventory inventory = network.inventory(1);
+		network.remapNodes(new double[]{1.0, 1.0},
+				List.of(inventory, GasInventory.EMPTY), GasInventory.EMPTY, GasInventory.EMPTY);
+		check(network.gaugePressure(2) == -AirNetwork.REFERENCE_PRESSURE,
+				"empty sealed cavity must derive exact vacuum pressure");
+		check(network.standardVolumeNanos(2) == 0L && network.auditClosed(),
+				"vacuum node created gas inventory or opened the ledger");
+		GasStateSnapshot snapshot = GasStateSnapshot.capture(
+				2, 1, 1, new int[]{1, 2}, network, "");
+		AirNetwork restored = new AirNetwork(network.registry());
+		restored.restoreNodes(new double[]{1.0, 1.0},
+				snapshot.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
+				snapshot.externalSource(), snapshot.escapedSink(),
+				snapshot.massRoundoff(), snapshot.residualRoundoff());
+		check(restored.inventory(2).isEmpty() && restored.auditClosed(),
+				"vacuum node did not survive complete gas handoff");
+		restored.addOrMergeEdge(AirNetwork.AMBIENT_NODE, 2, 0.01, 0.65);
+		for (int step = 0; step < 20 && restored.gaugePressure(2) < -1.0E-3; step++) {
+			restored.stepEdges(0.05);
+		}
+		check(Math.abs(restored.gaugePressure(2)) <= 1.0E-3
+				&& restored.standardVolumeNanos(2) == 1_000_000_000L,
+				"ambient orifice did not fill a vacuum node to equilibrium");
+		checkLedger(restored, "vacuum fill");
 	}
 
 	private static void validateOrificeEqualization() {

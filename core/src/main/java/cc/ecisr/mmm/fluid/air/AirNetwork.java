@@ -211,6 +211,7 @@ public final class AirNetwork {
 	public double gaugePressure(int nodeId) {
 		if (nodeId == AMBIENT_NODE) return 0.0;
 		AirNode node = sealed(nodeId);
+		if (node.inventory().isEmpty()) return -REFERENCE_PRESSURE;
 		double available = Math.max(node.availableVolume(), MIN_AVAILABLE_VOLUME);
 		double pressure = REFERENCE_PRESSURE * (node.standardVolume() / available - 1.0);
 		if (pressure > MAX_GAUGE_PRESSURE) { pressureCeilingEvents++; return MAX_GAUGE_PRESSURE; }
@@ -266,7 +267,7 @@ public final class AirNetwork {
 			double sourceAbsolutePressure, double targetAbsolutePressure
 	) {
 		if (source == AMBIENT_NODE) {
-			double equilibriumNanos = standardVolumeNanos(target) * REFERENCE_PRESSURE / targetAbsolutePressure;
+			long equilibriumNanos = ambientEquilibriumNanos(target, targetAbsolutePressure);
 			transferCubicMeters = Math.min(transferCubicMeters,
 					Math.max(0.0, (equilibriumNanos - standardVolumeNanos(target)) * AirNode.NANO_VOLUME));
 		} else {
@@ -275,7 +276,7 @@ public final class AirNetwork {
 		long desired = AirNode.toNanos(transferCubicMeters);
 		if (desired <= 0L) return 0L;
 		if (source == AMBIENT_NODE) {
-			long equilibrium = Math.round(standardVolumeNanos(target) * REFERENCE_PRESSURE / targetAbsolutePressure);
+			long equilibrium = ambientEquilibriumNanos(target, targetAbsolutePressure);
 			return Math.min(desired, Math.max(0L, equilibrium - standardVolumeNanos(target)));
 		}
 		if (target == AMBIENT_NODE) {
@@ -283,10 +284,19 @@ public final class AirNetwork {
 			return Math.min(desired, Math.max(0L, standardVolumeNanos(source) - equilibrium));
 		}
 		double sourceSlope = sourceAbsolutePressure / standardVolumeNanos(source);
-		double targetSlope = targetAbsolutePressure / standardVolumeNanos(target);
+		double targetSlope = standardVolumeNanos(target) == 0L
+				? REFERENCE_PRESSURE / availableVolume(target)
+				: targetAbsolutePressure / standardVolumeNanos(target);
 		long equilibriumSourceNanos = Math.round((standardVolumeNanos(source) + standardVolumeNanos(target))
 				* targetSlope / (sourceSlope + targetSlope));
 		return Math.min(desired, Math.max(0L, standardVolumeNanos(source) - equilibriumSourceNanos));
+	}
+
+	private long ambientEquilibriumNanos(int target, double targetAbsolutePressure) {
+		if (standardVolumeNanos(target) == 0L && targetAbsolutePressure == 0.0) {
+			return AirNode.toNanos(availableVolume(target));
+		}
+		return Math.round(standardVolumeNanos(target) * REFERENCE_PRESSURE / targetAbsolutePressure);
 	}
 
 	private void moveInventory(int source, int target, long nanos, TransferPlanner transferPlanner) {
@@ -508,7 +518,7 @@ public final class AirNetwork {
 		}
 		MassColumns before = liveMassColumns();
 		requireExactRemapClosure(aggregateNodes(), aggregate(inventories), sourceDelta, sinkDelta);
-		MassColumns after = massColumns(aggregate(inventories));
+		MassColumns after = massColumns(inventories);
 		MassColumns source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
 		return new RemapPlan(this, replacementNodes, plannedEdges, inventories.size() + 1,
 				massRoundoff.add(after.mass()).add(sink.mass()).subtract(before.mass()).subtract(source.mass()),
@@ -680,6 +690,15 @@ public final class AirNetwork {
 		SignedDyadic mass = SignedDyadic.ZERO, residual = SignedDyadic.ZERO;
 		for (GasComponentAmount amount : inventory.components()) {
 			mass = mass.add(SignedDyadic.of(amount.mass())); residual = residual.add(SignedDyadic.of(amount.massResidual()));
+		}
+		return new MassColumns(mass, residual);
+	}
+
+	private static MassColumns massColumns(List<GasInventory> inventories) {
+		SignedDyadic mass = SignedDyadic.ZERO, residual = SignedDyadic.ZERO;
+		for (GasInventory inventory : inventories) for (GasComponentAmount amount : inventory.components()) {
+			mass = mass.add(SignedDyadic.of(amount.mass()));
+			residual = residual.add(SignedDyadic.of(amount.massResidual()));
 		}
 		return new MassColumns(mass, residual);
 	}

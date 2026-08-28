@@ -131,6 +131,14 @@ public final class M9ThermalValidation {
 				GasRegistry.STANDARD_TEMPERATURE_K, 10.0, 0.025,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)));
 		GasThermalModel model = new GasThermalModel(new ThermalRegistry(List.of(air)), gas);
+		require(model.internalEnergyAtTemperature(GasInventory.EMPTY, GasRegistry.STANDARD_TEMPERATURE_K) == 0.0
+				&& model.absolutePressure(GasInventory.EMPTY, 1.0, 0.0) == 0.0
+				&& model.density(GasInventory.EMPTY, 1.0) == 0.0,
+				"thermal vacuum carried inventory, energy, pressure or density");
+		GasThermalModel.Compression vacuum = model.compressAdiabatically(
+				GasInventory.EMPTY, 0.0, 1.0, 0.5);
+		require(vacuum.finalInternalEnergy() == 0.0 && vacuum.workIntoGas() == 0.0,
+				"vacuum volume change created thermal energy or work");
 		GasInventory inventory = gas.createAmbient(1_000_000_000L);
 		double initial = model.internalEnergyAtTemperature(inventory, GasRegistry.STANDARD_TEMPERATURE_K);
 		require(close(model.state(inventory, initial).temperatureK(), GasRegistry.STANDARD_TEMPERATURE_K),

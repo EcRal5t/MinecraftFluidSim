@@ -17,7 +17,8 @@ import java.util.TreeMap;
 	 * A component is ambient (node 0, gauge zero) when it touches an explicitly ambient
 	 * domain boundary or when the scan budget is exhausted — never a sealed cavity with finite
 	 * inventory. Cavity volume is measured from exact per-cell marker volume: every attributed
-	 * cell contributes its open volume minus the clamped liquid inventory. The smoothed
+	 * cell contributes its open volume minus the locally clamped liquid inventory, while a
+	 * completed closed-domain scan normalizes the node total to the exact global complement. The smoothed
 	 * free-surface field is derived geometry and cannot settle gas capacity or adiabatic work.
 	 * A partially filled surface cell attributes to the adjacent node with the smallest id
 	 * (ambient wins).</p>
@@ -130,6 +131,8 @@ import java.util.TreeMap;
 		int[] cellLineageNodeId = cellNodeId.clone();
 		attributeInterfaceResiduals(cellNodeId, cellLineageNodeId, solid, markerCount, cellLiquidVolume,
 				cutCells, granular, cellAvailableVolume, sealedAvailableVolume);
+		if (sealedDomainBoundary && !budgetExhausted) normalizeClosedCapacity(
+				solid, cellLiquidVolume, cutCells, granular, sealedAvailableVolume);
 		List<GeometricEdge> edges = collectGeometricEdges(cellNodeId, cutCells);
 		return new Result(cellNodeId, cellLineageNodeId, cellAvailableVolume,
 				sealedNodes, sealedAvailableVolume, edges, visitedAirCells,
@@ -140,7 +143,8 @@ import java.util.TreeMap;
 	double[] measureSealedAvailableVolumes(
 			boolean[] solid, int[] markerCount, double[] cellLiquidVolume,
 			FlipCutCellGeometry cutCells, GranularCouplingFields granular,
-			int[] cellNodeId, int[] cellLineageNodeId, int sealedNodeCount
+			int[] cellNodeId, int[] cellLineageNodeId, int sealedNodeCount,
+			boolean sealedDomainBoundary
 	) {
 		if (solid.length != cellCount || markerCount.length != cellCount
 				|| cellLiquidVolume.length != cellCount || cellNodeId.length != cellCount
@@ -163,7 +167,48 @@ import java.util.TreeMap;
 			}
 			result[node - 1] += cellAirVolume(cell, cellLiquidVolume, cutCells, granular);
 		}
+		if (sealedDomainBoundary) normalizeClosedCapacity(
+				solid, cellLiquidVolume, cutCells, granular, result);
 		return result;
+	}
+
+	/** Makes a closed shell's total gas capacity the exact complement of its carrier inventories. */
+	private void normalizeClosedCapacity(
+			boolean[] solid, double[] cellLiquidVolume, FlipCutCellGeometry cutCells,
+			GranularCouplingFields granular, double[] sealedAvailableVolume
+	) {
+		double open = 0.0;
+		double liquid = 0.0;
+		for (int cell = 0; cell < cellCount; cell++) {
+			if (!solid[cell]) {
+				float geometricOpen = cutCells.openCellVolume(cell);
+				open += granular == null ? geometricOpen
+						: granular.effectiveOpenCellVolume(cell, geometricOpen);
+			}
+			liquid += cellLiquidVolume[cell];
+		}
+		double expected = (open - liquid) * cellVolumeCubicMeters;
+		if (!(Double.isFinite(expected) && expected >= 0.0)) {
+			throw new IllegalStateException("Closed gas capacity is smaller than carrier inventory");
+		}
+		if (sealedAvailableVolume.length == 0) {
+			if (expected > 1.0E-12) throw new IllegalStateException(
+					"Closed residual gas volume has no topology owner");
+			return;
+		}
+		double measured = 0.0;
+		for (double volume : sealedAvailableVolume) measured += volume;
+		if (!(Double.isFinite(measured) && measured > 0.0)) {
+			if (expected == 0.0) return;
+			throw new IllegalStateException("Closed gas topology has no measurable capacity");
+		}
+		double scale = expected / measured;
+		double assigned = 0.0;
+		for (int node = 0; node + 1 < sealedAvailableVolume.length; node++) {
+			sealedAvailableVolume[node] *= scale;
+			assigned += sealedAvailableVolume[node];
+		}
+		sealedAvailableVolume[sealedAvailableVolume.length - 1] = expected - assigned;
 	}
 
 	private boolean isAirCell(int cell, boolean[] solid, int[] markerCount, FlipCutCellGeometry cutCells,

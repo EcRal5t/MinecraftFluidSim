@@ -26,6 +26,11 @@ public final class GasThermalModel {
 	}
 
 	public double internalEnergyAtTemperature(GasInventory inventory, double temperatureK) {
+		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
+		if (inventory.isEmpty()) {
+			if (!Double.isFinite(temperatureK)) throw new IllegalArgumentException("Vacuum temperature is not finite");
+			return 0.0;
+		}
 		List<ThermalStateFunction.InventoryPortion> portions = portions(inventory);
 		double energy = 0.0;
 		for (ThermalStateFunction.InventoryPortion portion : portions) {
@@ -44,6 +49,11 @@ public final class GasThermalModel {
 		if (!(Double.isFinite(availableVolume) && availableVolume > 0.0)) {
 			throw new IllegalArgumentException("Gas available volume is outside the thermal model");
 		}
+		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
+		if (inventory.isEmpty()) {
+			if (internalEnergy != 0.0) throw new IllegalArgumentException("Vacuum cannot carry internal energy");
+			return 0.0;
+		}
 		double temperature = state(inventory, internalEnergy).temperatureK();
 		double pressure = GasRegistry.STANDARD_PRESSURE_PA
 				* (AirNetwork.cubicMeters(inventory.standardVolumeNanos()) / availableVolume)
@@ -60,6 +70,8 @@ public final class GasThermalModel {
 		if (!(Double.isFinite(availableVolume) && availableVolume > 0.0)) {
 			throw new IllegalArgumentException("Gas available volume is outside the thermal model");
 		}
+		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
+		if (inventory.isEmpty()) return 0.0;
 		double mass = 0.0;
 		for (GasComponentAmount component : inventory.components()) mass += component.mass();
 		double density = mass / availableVolume;
@@ -76,6 +88,12 @@ public final class GasThermalModel {
 		if (!(Double.isFinite(initialAvailableVolume) && initialAvailableVolume > 0.0
 				&& Double.isFinite(finalAvailableVolume) && finalAvailableVolume > 0.0)) {
 			throw new IllegalArgumentException("Gas compression volumes are invalid");
+		}
+		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
+		if (inventory.isEmpty()) {
+			if (internalEnergy != 0.0) throw new IllegalArgumentException("Vacuum cannot carry internal energy");
+			return new Compression(GasRegistry.STANDARD_TEMPERATURE_K,
+					GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.0);
 		}
 		ThermalStateFunction.State initial = state(inventory, internalEnergy);
 		double gasConstant = GasRegistry.STANDARD_PRESSURE_PA
@@ -108,6 +126,13 @@ public final class GasThermalModel {
 	/** Splits node U at its derived common temperature; the final child receives raw floating remainder. */
 	public double[] partitionEnergy(GasInventory source, double internalEnergy, List<GasInventory> children) {
 		if (children == null || children.isEmpty()) throw new IllegalArgumentException("Gas energy partition needs children");
+		if (source == null) throw new IllegalArgumentException("Gas inventory is missing");
+		if (source.isEmpty()) {
+			if (internalEnergy != 0.0 || children.stream().anyMatch(child -> child == null || !child.isEmpty())) {
+				throw new IllegalArgumentException("Vacuum energy partition is invalid");
+			}
+			return new double[children.size()];
+		}
 		double temperature = state(source, internalEnergy).temperatureK();
 		long childNanos = 0L;
 		for (GasInventory child : children) childNanos = Math.addExact(childNanos, child.standardVolumeNanos());

@@ -22,7 +22,7 @@ public record GasStateSnapshot(
 ) {
 	public record Node(int topologyKey, GasInventory inventory) {
 		public Node {
-			if (topologyKey < 0 || inventory == null || inventory.isEmpty()) {
+			if (topologyKey < 0 || inventory == null) {
 				throw new IllegalArgumentException("Invalid persisted gas node");
 			}
 		}

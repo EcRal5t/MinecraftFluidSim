@@ -142,7 +142,7 @@ final class GasRegionStateCodec {
 		int previousKey = -1;
 		for (NodeData node : data.nodes()) {
 			if (node == null || node.topologyKey() < 0 || node.topologyKey() <= previousKey
-					|| node.inventory() == null || node.inventory().isEmpty()) {
+					|| node.inventory() == null) {
 				throw new IllegalArgumentException("Gas manifest nodes are not canonical");
 			}
 			previousKey = node.topologyKey();

@@ -13,6 +13,7 @@ public final class M5GasLiquidCouplingValidation {
 
 	public static void main(String[] args) {
 		validateSplitRetainsSealedShareWhenPeerVents();
+		validateClosedCavityAfterBootstrapStartsAsVacuum();
 		if (java.util.Arrays.asList(args).contains("--fast")) {
 			validateShortCouplingSmoke();
 			System.out.println("M5 gas-liquid coupling validation passed (short; equilibrium soaks skipped)");
@@ -26,6 +27,31 @@ public final class M5GasLiquidCouplingValidation {
 		validateOrificeEqualization();
 		System.out.println("M5 gas-liquid coupling gate passed: analytic positive/negative hydrostatics, "
 				+ "sealed compression, negative-gauge suction, finite-rate orifice equalization and exact ledgers");
+	}
+
+	private static void validateClosedCavityAfterBootstrapStartsAsVacuum() {
+		int n = 4;
+		FluidSolverConfig config = new FluidSolverConfig(
+				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F);
+		FlipFluidDomain domain = new FlipFluidDomain(n, n, n, config, n * n * n * 8);
+		domain.sealDomainBoundary();
+		for (int z = 0; z < n; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
+			domain.setVolume(x, y, z, 1.0F);
+		}
+		domain.bootstrapGasState(null);
+		check(domain.airNetwork().nodeCount() == 0
+				&& domain.airNetwork().externalSource().entries().isEmpty(),
+				"fully occupied closed bootstrap created gas inventory");
+		FlipFluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(1, 1, 1, 1.0F, 0);
+		check(extracted.transferred(), "closed vacuum fixture could not extract one cell volume");
+		domain.synchronizeGasTopologyForPersistence();
+		check(domain.airNetwork().nodeCount() == 1
+				&& domain.airNetwork().inventory(1).isEmpty()
+				&& domain.airNetwork().externalSource().entries().isEmpty()
+				&& domain.airNetwork().escapedSink().entries().isEmpty()
+				&& domain.airNetwork().gaugePressure(1) == -AirNetwork.REFERENCE_PRESSURE
+				&& domain.airNetwork().auditClosed(),
+				"post-bootstrap closed cavity was filled from ambient instead of remaining vacuum");
 	}
 
 	private static void validateAnalyticStaticHead(int sign) {

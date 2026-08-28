@@ -112,6 +112,8 @@ p = P0 * (Vstd / Vavailable) * (T / T0)
 
 在单一 caloric segment 内，几何改变按常 `cv` 理想气体等熵关系计算压缩/膨胀，`Delta U` 记为进入 gas inventory 的 mechanical work。孔流搬运源状态焓 `h = u + p*v`；node 合并时能量相加，分裂时所有 child 保持 parent 温度且最后一个 child 接受浮点余数。跨 caloric segment 或越过 gas 压力有效窗拒绝候选。
 
+空 component inventory 是显式真空而不是缺失数据：其 `U`、绝对压力、密度和任意无传质体积变化功都严格为零。显示温度使用区域插入温度作为约定值；持久化与 remap 必须保留空 inventory/零 `U`，不能以环境状态补齐。
+
 ## 相变
 
 相变门依赖热学门。每个 transition 用完整最小守恒量子定义，运行时按可用能量、库存、目标容量、饱和条件和统一操作预算求最大整数 extent。
