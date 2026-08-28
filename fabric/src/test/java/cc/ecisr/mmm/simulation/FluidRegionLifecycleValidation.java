@@ -10,11 +10,21 @@ public final class FluidRegionLifecycleValidation {
 
 	public static void main(String[] args) {
 		validatePacingAndOperatorPause();
+		validateMotionInputConsumptionSchedule();
 		validateAvailabilityPreservesRunIntent();
 		validateHydrostaticSleepAndWake();
 		validateHydrostaticSleepPreservesMarkerLedger();
 		validateUnloadRequiresPublishedCheckpointAndReleasedSolver();
 		System.out.println("FluidRegionLifecycle validation passed");
+	}
+
+	private static void validateMotionInputConsumptionSchedule() {
+		require(!FluidRegionLifecycle.consumesMotionInput(false, 4L, 2),
+				"paused motion consumed a frozen entity input");
+		require(!FluidRegionLifecycle.consumesMotionInput(true, 3L, 2),
+				"a skipped game tick consumed a frozen entity input");
+		require(FluidRegionLifecycle.consumesMotionInput(true, 4L, 2),
+				"a due logical motion step did not consume its frozen entity input");
 	}
 
 	private static void validateHydrostaticSleepPreservesMarkerLedger() {

@@ -116,7 +116,7 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 目标不是立即引入通用刚体求解器，而是把当前运动扰动逐步变成可审计、严格闭合的双向边界：
 
-当前已有 loader-neutral moving-body request：Fabric 的有界湿样本会把实体运动写入附近 marker 动量，并报告实际液体冲量，所以实体运动可扰动自由面。它仍是 kinematic AABB 近似，不替代以下压力、占位和严格动量闭合工作。
+当前已有 loader-neutral moving-body request：Fabric 的有界湿样本会把实体运动写入附近 marker 动量，并报告实际液体冲量，所以实体运动可扰动自由面。湿样本每个游戏 tick 冻结，但只在 pacing 到期且 region 可运动的 logical step 消费一次；跳过、PAUSED 和 thermal-only tick 不改写 liquid marker。它仍是 kinematic AABB 近似，不替代以下压力、占位和严格动量闭合工作。
 
 1. 在实体离散表面采样流体压力，验证静水浮力与姿态无关性。
 2. 将黏性和形状阻力与压力力分开，并给出适用 Reynolds 范围。
@@ -139,7 +139,9 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 当前自动进入门有意分开：默认 `8×8×8` controller 的 20 个 live steps 使用 40 ms 硬预算；正式 thermal/gas/phase 定义的半满状态同时要求 capture/restore、关闭 phase 的 backend candidate/restore 等价，以及独立预热后在新建 domain 上执行的首个 phase-on production step 不超过 40 ms。phase-on 门保留完整 phase-operation 预算、exact batch 规划、gas topology/available-volume remap、绝热体积功和总 `U` 审计；phase-off backend candidate 的完整复制耗时继续仅作诊断。该门已经自动闭合，但它只解除性能阻塞，不构成 full profile 的生产启用许可。
 
-重新接入 full profile 或 backend adoption 前分开的自动门中，正式半满 fixture 的 phase-on logical step 硬预算门已经通过，并在 capture/restore 后保留 gas、总 `U` 和待下一次 projection 消费的 phase volume。纯机械门关闭 phase，但仍绑定正式 thermal/gas/phase registry 并每步经过 backend capture/restore：环境气体按既有半满几何初始化的平面自由面连续通过 500 步；先初始化空腔气体再注液形成的压缩气体场景连续通过 1000 步。两者的动能、质心、gas lineage、总 `U`、绝对 PCG 残差和逐阶段体力-pressure 功均闭合；phase-on 长跑产生的局部沸腾温差与热浮力属于真实非平衡热学，不能作为静水机械自激证据。无实体停止门已经关闭，下一停止门是在同一生产半满场景加入静浮玩家，分别验证 scheduler 采样时序、liquid/entity 实际等大反向冲量和振幅不增长。该门完成前仍保留最后完整状态并停在未启用边界，不能用 pacing fallback、速度阻尼、材料分支或额外 warmup 代替通过。
+重新接入 full profile 或 backend adoption 前分开的自动门中，正式半满 fixture 的 phase-on logical step 硬预算门已经通过，并在 capture/restore 后保留 gas、总 `U` 和待下一次 projection 消费的 phase volume。纯机械门关闭 phase，但仍绑定正式 thermal/gas/phase registry 并每步经过 backend capture/restore：环境气体按既有半满几何初始化的平面自由面连续通过 500 步；先初始化空腔气体再注液形成的压缩气体场景连续通过 1000 步。两者的动能、质心、gas lineage、总 `U`、绝对 PCG 残差和逐阶段体力-pressure 功均闭合；phase-on 长跑产生的局部沸腾温差与热浮力属于真实非平衡热学，不能作为静水机械自激证据。
+
+无实体停止门已经关闭。相同平面半满状态加入零速度、玩家尺寸的 kinematic boundary 后连续 500 个 backend candidate 也不放大动能，candidate 回报的 liquid impulse 与 held-body 外部约束反作用严格相反；lifecycle 门同时固定 PAUSED、pacing skip 和 due tick 的 liquid-input exactly-once 时序。这只隔离并关闭“静止边界使液体自激”和“跳过 tick 重复注入液体动量”两项，不冒充真实玩家侧闭合：下一停止门仍须用有质量真值的动态实体，在同一场景验证 pressure/drag 分列的 liquid/entity 等大反向冲量、稳定吃水和振幅不增长。该门完成前仍保留最后完整状态并停在未启用边界，不能用 pacing fallback、速度阻尼、材料分支或额外 warmup 代替通过。
 
 若阶段性能不达标，依次采用：缩小 active neighborhood、降低更新频率、增加守恒休眠/宏观 node、限制产品范围，最后才降低空间分辨率。不得先放松 ledger 或使用材料特判跳过昂贵物理。
 

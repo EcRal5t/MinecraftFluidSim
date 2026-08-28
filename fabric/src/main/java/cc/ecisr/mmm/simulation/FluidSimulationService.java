@@ -1689,11 +1689,12 @@ public final class FluidSimulationService {
 				return;
 			}
 		}
-		FluidRegion.EntityCouplingStats entityCoupling = region.entityPhysicsEnabled()
-				? MinecraftEntityFluidInteraction.applyForces(level, region)
-				: FluidRegion.EntityCouplingStats.EMPTY;
-		region.setLastEntityCoupling(entityCoupling);
-		int affectedEntities = entityCoupling.affectedEntities();
+		MinecraftEntityFluidInteraction.Frame entityFrame = region.entityPhysicsEnabled()
+				? MinecraftEntityFluidInteraction.capture(level, region)
+				: MinecraftEntityFluidInteraction.Frame.EMPTY;
+		MinecraftEntityFluidInteraction.applyEntityForces(entityFrame);
+		int affectedEntities = entityFrame.affectedEntities();
+		region.setLastEntityCoupling(new FluidRegion.EntityCouplingStats(affectedEntities, 0.0, 0.0, 0.0));
 		if (collisionsChanged || affectedEntities > 0) {
 			region.wakeForActivity();
 			region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
@@ -1704,14 +1705,19 @@ public final class FluidSimulationService {
 			if (collisionsChanged) sendSnapshot(level, region);
 			return;
 		}
-		if (tick % region.stepIntervalTicks() != 0) {
+		boolean motionStepDue = FluidRegionLifecycle.consumesMotionInput(
+				motionStep, tick, region.stepIntervalTicks());
+		boolean thermalStepDue = thermalStep && tick % region.stepIntervalTicks() == 0L;
+		if (!motionStepDue && !thermalStepDue) {
 			if (collisionsChanged) sendSnapshot(level, region);
 			return;
 		}
 		ThermalAuditLedger thermalBefore = thermalFeatureEnabled ? region.domain().thermalAudit() : null;
 		try {
-			if (motionStep) {
+			if (motionStepDue) {
 				region.wakeThermal(ThermalActivity.WakeReason.CARRIER_MOTION);
+				region.setLastEntityCoupling(MinecraftEntityFluidInteraction.applyToLiquid(
+						entityFrame, region.domain()));
 				stepOnce(region);
 			} else {
 				stepThermalOnce(region);

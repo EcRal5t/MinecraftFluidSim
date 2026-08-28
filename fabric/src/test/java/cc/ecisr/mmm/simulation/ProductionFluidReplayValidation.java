@@ -21,6 +21,7 @@ import cc.ecisr.mmm.thermal.ThermalDataPackLoader;
 import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
+import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.packs.PackLocationInfo;
 import net.minecraft.server.packs.PackResources;
@@ -51,7 +52,43 @@ public final class ProductionFluidReplayValidation {
 		fullyBoundPhaseOnStepRemainsBounded();
 		planarHalfFillWithoutEntitiesRemainsStableAcrossBackend();
 		compressedPlanarHalfFillRemainsStableAcrossBackend();
+		stationaryPlayerSizedBodyDoesNotExcitePlanarSurface();
 		System.out.println("Production fluid replay passed");
+	}
+
+	private static void stationaryPlayerSizedBodyDoesNotExcitePlanarSurface() throws Exception {
+		RegistrySet registries = loadProductionRegistries();
+		FlipFluidDomain initial = createFullyBoundPlanarHalfFill(registries);
+		FluidDomainState state = initial.captureAuthoritativeState();
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		MovingBodyFluidCoupling.Request body = new MovingBodyFluidCoupling.Request(
+				2.0F, 1.60F, 2.0F, 0.0, 0.0, 0.0, 0.6 * 1.8 * 0.6 * 0.72);
+		double initialCenterY = centerOfMassY(initial.exportMaterialParticleState());
+		double maximumKinetic = 0.0, accumulatedLiquidY = 0.0, accumulatedReactionY = 0.0;
+		FlipFluidDomain restored = initial;
+		for (long generation = 0L; generation < 500L; generation++) {
+			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+					generation, state, List.of(body), false, 0, true));
+			MovingBodyFluidCoupling.Result coupling = candidate.movingBodyCoupling();
+			require(coupling.coupledMarkers() > 0 && coupling.coupledVolumeCubicMetres() > 0.0,
+					"stationary player-sized body lost its wet moving-boundary support");
+			accumulatedLiquidY += coupling.impulseYKilogramMetresPerSecond();
+			accumulatedReactionY -= coupling.impulseYKilogramMetresPerSecond();
+			maximumKinetic = Math.max(maximumKinetic,
+					candidate.stats().mechanicalAudit().finalParticleKineticEnergyJoules());
+			restored = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+			state = candidate.state();
+		}
+		double finalKinetic = kineticEnergy(restored.exportMaterialParticleState());
+		double centerYDelta = centerOfMassY(restored.exportMaterialParticleState()) - initialCenterY;
+		require(Math.abs(accumulatedLiquidY + accumulatedReactionY) <= 1.0E-15,
+				"stationary moving-boundary liquid/reaction impulse ledger did not close");
+		require(maximumKinetic <= 0.025 && finalKinetic <= 0.002 && Math.abs(centerYDelta) <= 0.001,
+				"stationary player-sized moving boundary excited the planar surface: max/final="
+						+ maximumKinetic + "/" + finalKinetic + " J, centerYDelta=" + centerYDelta);
+		System.out.printf("  stationary player-sized body gate: K max/final=%.9g/%.9g J, "
+				+ "centerYDelta=%+.9g m, liquid/reaction Jy=%+.9g/%+.9g kg*m/s%n",
+				maximumKinetic, finalKinetic, centerYDelta, accumulatedLiquidY, accumulatedReactionY);
 	}
 
 	private static void compressedPlanarHalfFillRemainsStableAcrossBackend() throws Exception {
@@ -76,6 +113,8 @@ public final class ProductionFluidReplayValidation {
 		for (int step = 0; step < 1_000; step++) {
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
 					generation, state, List.of(), false, 0, true));
+			require(candidate.movingBodyCoupling().equals(MovingBodyFluidCoupling.Result.NONE),
+					"compressed no-entity backend reported a liquid moving-body impulse at step " + step);
 			require(candidate.baseGeneration() == generation
 					&& candidate.candidateGeneration() == generation + 1L,
 					"compressed planar backend generation was not adjacent at step " + step);
@@ -255,6 +294,8 @@ public final class ProductionFluidReplayValidation {
 		for (int step = 0; step < 500; step++) {
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
 					generation, state, List.of(), false, 0, true));
+			require(candidate.movingBodyCoupling().equals(MovingBodyFluidCoupling.Result.NONE),
+					"planar no-entity backend reported a liquid moving-body impulse at step " + step);
 			require(candidate.baseGeneration() == generation
 					&& candidate.candidateGeneration() == generation + 1L,
 					"planar no-entity backend generation was not adjacent at step " + step);

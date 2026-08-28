@@ -22,7 +22,7 @@ final class MinecraftEntityFluidInteraction {
 
 	private MinecraftEntityFluidInteraction() { }
 
-	static FluidRegion.EntityCouplingStats applyForces(ServerLevel level, FluidRegion region) {
+	static Frame capture(ServerLevel level, FluidRegion region) {
 		BlockPos origin = region.origin();
 		FlipFluidDomain domain = region.domain();
 		float cellSize = domain.config().cellSize();
@@ -38,8 +38,16 @@ final class MinecraftEntityFluidInteraction {
 			if (contact.submergedFraction() <= 0.0) continue;
 			interactions.add(new Interaction(entity, contact, entity.getDeltaMovement()));
 		}
+		return interactions.isEmpty() ? Frame.EMPTY : new Frame(List.copyOf(interactions));
+	}
+
+	static void applyEntityForces(Frame frame) {
+		for (Interaction interaction : frame.interactions()) applyForce(interaction.entity(), interaction.contact());
+	}
+
+	static FluidRegion.EntityCouplingStats applyToLiquid(Frame frame, FlipFluidDomain domain) {
 		double impulseX = 0.0, impulseY = 0.0, impulseZ = 0.0;
-		for (Interaction interaction : interactions) {
+		for (Interaction interaction : frame.interactions()) {
 			Vec3 bodyVelocity = interaction.velocityBlocksPerTick().scale(TICKS_PER_SECOND);
 			Contact contact = interaction.contact();
 			MovingBodyFluidCoupling.Result coupling = domain.applyMovingBodyCoupling(
@@ -48,10 +56,8 @@ final class MinecraftEntityFluidInteraction {
 			impulseX += coupling.impulseXKilogramMetresPerSecond();
 			impulseY += coupling.impulseYKilogramMetresPerSecond();
 			impulseZ += coupling.impulseZKilogramMetresPerSecond();
-			Entity entity = interaction.entity();
-			applyForce(entity, contact);
 		}
-		return new FluidRegion.EntityCouplingStats(interactions.size(), impulseX, impulseY, impulseZ);
+		return new FluidRegion.EntityCouplingStats(frame.interactions().size(), impulseX, impulseY, impulseZ);
 	}
 
 	private static boolean canAffect(Entity entity) {
@@ -120,6 +126,16 @@ final class MinecraftEntityFluidInteraction {
 	}
 
 	private record Interaction(Entity entity, Contact contact, Vec3 velocityBlocksPerTick) { }
+
+	record Frame(List<Interaction> interactions) {
+		static final Frame EMPTY = new Frame(List.of());
+
+		Frame {
+			interactions = List.copyOf(interactions);
+		}
+
+		int affectedEntities() { return interactions.size(); }
+	}
 
 	private record Contact(
 			double submergedFraction, Vec3 fluidVelocity, float localX, float localY, float localZ,

@@ -46,6 +46,15 @@ public final class MovingBodyFluidCoupling {
 				throw new IllegalArgumentException("Moving-body fluid coupling result is invalid");
 			}
 		}
+
+		public Result plus(Result other) {
+			if (other == null) throw new IllegalArgumentException("Moving-body result is missing");
+			return new Result(Math.addExact(coupledMarkers, other.coupledMarkers),
+					coupledVolumeCubicMetres + other.coupledVolumeCubicMetres,
+					impulseXKilogramMetresPerSecond + other.impulseXKilogramMetresPerSecond,
+					impulseYKilogramMetresPerSecond + other.impulseYKilogramMetresPerSecond,
+					impulseZKilogramMetresPerSecond + other.impulseZKilogramMetresPerSecond);
+		}
 	}
 
 	/** Tensor-product quadratic B-spline with unit peak and compact support of 1.5 cells. */

@@ -37,6 +37,13 @@ public final class FluidRegionLifecycle {
 				&& state != State.HYDROSTATIC_SLEEP && state != State.UNLOADED;
 	}
 
+	/** Frozen motion inputs are consumed exactly once, on a due logical motion step. */
+	public static boolean consumesMotionInput(boolean motionCanStep, long tick, int stepIntervalTicks) {
+		if (tick < 0L) throw new IllegalArgumentException("tick must not be negative");
+		if (stepIntervalTicks <= 0) throw new IllegalArgumentException("stepIntervalTicks must be positive");
+		return motionCanStep && tick % stepIntervalTicks == 0L;
+	}
+
 	public void setOperatorPaused(boolean paused, int stepIntervalTicks) {
 		if (!paused && state == State.UNLOADED) return;
 		operatorPaused = paused;
