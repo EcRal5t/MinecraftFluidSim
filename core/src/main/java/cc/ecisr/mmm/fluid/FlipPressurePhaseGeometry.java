@@ -38,10 +38,11 @@ final class FlipPressurePhaseGeometry {
 	}
 
 	void rebuild(
-			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
+			boolean[] solid, int[] markerCount, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
 			GranularCouplingFields granular, boolean[] pressureFluid
 	) {
-		if (solid.length != fraction.length || reconstructedVolume.length != fraction.length
+		if (solid.length != fraction.length || markerCount.length != fraction.length
+				|| reconstructedVolume.length != fraction.length
 				|| pressureFluid.length != fraction.length) {
 			throw new IllegalArgumentException("Pressure phase arrays disagree with the cell count");
 		}
@@ -53,6 +54,13 @@ final class FlipPressurePhaseGeometry {
 					: (float) clamp(reconstructedVolume[cell] / openVolume, 0.0, 1.0);
 			pressureFluid[cell] = !solid[cell] && fraction[cell] >= 0.5F;
 			normalX[cell] = normalY[cell] = normalZ[cell] = planeOffset[cell] = 0.0F;
+		}
+		for (int cell = 0; cell < fraction.length; cell++) if (markerCount[cell] > 0) {
+			int x = cell % sizeX;
+			int yz = cell / sizeX;
+			int y = yz % sizeY;
+			int z = yz / sizeY;
+			if (touchesBlockedFace(cell, x, y, z, cutCells, granular)) pressureFluid[cell] = true;
 		}
 		classifySupportedSubcenterComponents(solid, cutCells, granular, pressureFluid);
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {

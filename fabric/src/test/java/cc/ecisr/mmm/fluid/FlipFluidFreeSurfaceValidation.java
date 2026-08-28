@@ -87,6 +87,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		int cellCount = sizeX * sizeY * sizeZ;
 		boolean[] solid = new boolean[cellCount];
 		boolean[] fluid = new boolean[cellCount];
+		int[] markerCount = new int[cellCount];
 		double[] reconstructed = new double[cellCount];
 		int bulk = index(sizeX, sizeY, 1, 1, 1);
 		int fringe = index(sizeX, sizeY, 2, 1, 1);
@@ -94,17 +95,24 @@ public final class FlipFluidFreeSurfaceValidation {
 		FlipCutCellGeometry cutCells = new FlipCutCellGeometry(sizeX, sizeY, sizeZ);
 		reconstructed[bulk] = 0.875F;
 		reconstructed[fringe] = 0.125F;
-		pressure.rebuild(solid, reconstructed, cutCells, null, fluid);
+		pressure.rebuild(solid, markerCount, reconstructed, cutCells, null, fluid);
 		check(fluid[bulk] && !fluid[fringe]
 				&& Math.abs(pressure.liquidFraction(bulk) - 0.875F) < 1.0E-7F
 				&& Math.abs(pressure.liquidFraction(fringe) - 0.125F) < 1.0E-7F,
 				"pressure phase did not retain the conservative center-contained footprint");
 		reconstructed[bulk] = 0.75F;
 		reconstructed[fringe] = 0.25F;
-		pressure.rebuild(solid, reconstructed, cutCells, null, fluid);
+		pressure.rebuild(solid, markerCount, reconstructed, cutCells, null, fluid);
 		check(fluid[bulk] && !fluid[fringe]
 				&& Math.abs(pressure.liquidFraction(bulk) + pressure.liquidFraction(fringe) - 1.0F) < 1.0E-7F,
 				"pressure footprint transfer did not preserve its source volume");
+		int wall = index(sizeX, sizeY, 2, 2, 1);
+		solid[wall] = true;
+		cutCells.replaceMask(wall, FlipCutCellGeometry.FULL_MASK);
+		markerCount[fringe] = 1;
+		pressure.rebuild(solid, markerCount, reconstructed, cutCells, null, fluid);
+		check(fluid[bulk] && fluid[fringe],
+				"wall-supported marker cell was discarded as footprint-only pressure fringe");
 	}
 
 	private static void volumeDriftCorrectionPreservesLegitimateSurfaceDeficits() {

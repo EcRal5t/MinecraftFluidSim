@@ -4894,7 +4894,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			pressureGranularCoupling = granularCoupling;
 			freeSurfaceGeometry.rebuild(solid, markerCount, cutCells, granularCoupling);
 		}
-		pressurePhaseGeometry.rebuild(solid, pressureVolume, cutCells, pressureGranularCoupling, pressureFluid);
+		pressurePhaseGeometry.rebuild(
+				solid, markerCount, pressureVolume, cutCells, pressureGranularCoupling, pressureFluid);
 		rebuildPressureBoundaryLineage();
 		rebuildSurfaceTensionPressure();
 		enforceSolidFaceVelocities();
@@ -7275,7 +7276,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 				&& (markerCount[first] > 0 || markerCount[second] > 0);
 	}
 	private float pressureInterfaceTheta(int fluid, int directionX, int directionY, int directionZ) {
-		return freeSurfaceGeometry.liquidFraction(fluid) >= 0.5F
+		return markerCount[fluid] > 0
 				? freeSurfaceGeometry.pressureTheta(fluid, directionX, directionY, directionZ)
 				: pressurePhaseGeometry.interfaceTheta(fluid, directionX, directionY, directionZ);
 	}

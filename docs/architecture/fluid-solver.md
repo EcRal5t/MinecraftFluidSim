@@ -68,8 +68,8 @@ pressure 位于 cell center，速度位于 face。离散目标是：
 div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 ```
 
-- 每个 marker 按由标准 `2×2×2` 四分之一格点诱导的 C1 紧支撑核，把自身真实体积守恒分配到开放邻格；该 footprint 决定 pressure fraction/component，不改 marker 库存。若本格 exact marker fraction 已包含 cell center，fluid-air ghost distance 使用 exact marker PLIC；只有 footprint 支撑出的 pressure cell 才使用重建 PLIC，并消费相邻 pressure-air fringe。这样 marker 在 containing cell 内的微小位移不会反向改变一个原本静止的 exact 平面水头。
-- 含 cell center（fraction `>= 0.5`）的 bulk component 只把中心内格作为 pressure unknown，低 fraction fringe 保持自由面；完全低于中心但接触固定边界的连通薄层整体进入 pressure，远离边界的孤立小滴保持 ballistic carrier。
+- 每个 marker 按由标准 `2×2×2` 四分之一格点诱导的 C1 紧支撑核，把自身真实体积守恒分配到开放邻格；该 footprint 决定 pressure fraction/component，不改 marker 库存。含真实 marker 的 pressure cell 使用 containing-cell exact marker PLIC；只有 footprint 支撑但本格没有 marker 的 pressure cell 才使用重建 PLIC，并消费相邻 pressure-air fringe。这样 marker 在 containing cell 内的微小位移不会反向改变一个原本静止的 exact 平面水头，部分格的真实 PLIC 也不会被更宽的 footprint 反向改写。
+- 含 cell center（fraction `>= 0.5`）的 bulk component 以中心内格作为基本 pressure unknown；贴固定边界且含真实 marker 的低占位格也保留为 pressure unknown，避免窄柱里的真实载体被误当成 footprint-only air fringe。完全低于中心但接触固定边界的连通薄层整体进入 pressure；没有壁支撑的低 fraction footprint fringe 和远离边界的孤立小滴保持 ballistic carrier。
 - 重力、热浮力和速度载体 face 仍由实际 marker occupancy 激活，不能因 pressure footprint 变宽而给孤立液滴稀释重力。
 - cut-face aperture、界面距离和 `1/rho` 面系数同时进入矩阵、预条件器和最终投影，避免三个路径使用不同几何。
 - 变密度 face coefficient 按两侧界面距离守恒加权；同密度材料必须退化为纯水矩阵。
