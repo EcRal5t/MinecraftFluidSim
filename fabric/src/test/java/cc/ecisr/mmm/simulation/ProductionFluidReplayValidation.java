@@ -493,7 +493,7 @@ public final class ProductionFluidReplayValidation {
 				centerYDelta, maximumBodyPressureResidual, maximumPressureResidual);
 	}
 
-	private static void defaultLiveStepsRemainBounded() {
+	public static void defaultLiveStepsRemainBounded() {
 		FlipFluidDomain warmup = createPouredControllerDomain();
 		long warmupStart = System.nanoTime();
 		warmup.step(false, 0);

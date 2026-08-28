@@ -22,7 +22,7 @@
 - 默认 cell size 为 0.5 m；每个 Minecraft block 对应 2×2×2 cells。
 - `particleVolume` 的双精度和是液体体积真值；逐格 exact marker sum 只由该真值正向汇总。
 - `volume[]` 是 PIC 平滑、展示和既有表面几何的派生场，不参与库存或 pressure phase 结算；pressure 使用独立的守恒 marker footprint。
-- P2G/G2P 使用共享的 valid face；MAC 空气外推从开放压力面播种，G2P 不采未定义空气零值。
+- P2G/G2P 使用共享的 valid face；MAC 空气外推从开放压力面播种，G2P 不采未定义空气零值。三轴 face splat 直接写入固定 SoA，不为每个 marker/axis 创建 callback；上一 logical step 末已完整发布且 `gridDirty == false` 的派生网格可供下一步首个 substep 直接使用，particle advection 与任何 carrier edit 都会重新置 dirty，后续 substep 不能跳过重建。
 - reseed split/merge 保持体积、质量、动量和质心，并受 marker 硬预算限制；不跨 material 或 phase。
 
 ### 内存布局

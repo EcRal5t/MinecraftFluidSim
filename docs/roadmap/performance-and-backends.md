@@ -24,6 +24,8 @@
 
 报告记录区域尺寸、活动 marker/carrier、substep、PCG iteration/residual、GC、wall time 和设备 timestamp。设备 timestamp 只做性能观测，调度仍以 wall time 为真值。
 
+当前默认 `8×8×8` controller 以独立 `production-live-budget` 门约束注入 16 BV 后的 20 个 live logical step；JVM 预热耗时独立报告，门内任何一步都必须小于 40 ms。P2G face splat 不产生 marker-local callback 对象，logical step 末已同步的 clean grid 在下一步首个 substep 复用；这些只是等价地移除分配与重复 rebuild，不改变 marker、CFL substep、PCG 或 residual。额外 warmup 和 pacing 不能替代该门。
+
 ## 并发边界
 
 Minecraft 世界读取、方块修改和实体快照留在服务器主线程：

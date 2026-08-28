@@ -4681,7 +4681,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		int granularParcelCountBeforeAdvection = precipitationEnabled ? captureReactiveGranularCells() : 0;
 		int pressureIterations = 0;
 		for (int substep = 0; substep < substeps; substep++) {
-			rebuildGridFromParticles();
+			ensureGrid();
 			double stageKineticEnergy = captureMechanicalAudit ? gridKineticEnergyJoules() : 0.0;
 			if (captureMechanicalAudit) mechanicalAudit.particleToGridTransferJoules +=
 					stageKineticEnergy - particleKineticEnergyJoules();
@@ -5928,21 +5928,16 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		float gx = px / h - (axis == 0 ? 0.0F : 0.5F);
 		float gy = py / h - (axis == 1 ? 0.0F : 0.5F);
 		float gz = pz / h - (axis == 2 ? 0.0F : 0.5F);
-		splatTrilinear(gx, gy, gz, nx, ny, nz, (index, weight) -> {
-			float weighted = weight * particleAmount;
-			sums[index] += value * weighted;
-			weights[index] += weighted;
-		});
-	}
-
-	private static void splatTrilinear(float gx, float gy, float gz, int nx, int ny, int nz, SplatConsumer consumer) {
 		int x0 = (int) Math.floor(gx), y0 = (int) Math.floor(gy), z0 = (int) Math.floor(gz);
 		float fx = gx - x0, fy = gy - y0, fz = gz - z0;
 		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
 			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
 			if (x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz) continue;
 			float weight = (ox == 0 ? 1.0F - fx : fx) * (oy == 0 ? 1.0F - fy : fy) * (oz == 0 ? 1.0F - fz : fz);
-			consumer.accept((z * ny + y) * nx + x, weight);
+			int index = (z * ny + y) * nx + x;
+			float weighted = weight * particleAmount;
+			sums[index] += value * weighted;
+			weights[index] += weighted;
 		}
 	}
 
@@ -7578,7 +7573,6 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	private static float clamp(float value, float min, float max) { return Math.max(min, Math.min(max, value)); }
 	private static float lerp(float first, float second, float t) { return first + (second - first) * t; }
 
-	@FunctionalInterface private interface SplatConsumer { void accept(int index, float weight); }
 	private record CellCandidate(int index, int distanceSquared) { }
 	public record VelocitySample(float x, float y, float z) { private static final VelocitySample ZERO = new VelocitySample(0.0F, 0.0F, 0.0F); }
 	public record BodyFluidSample(
