@@ -17,6 +17,7 @@ import cc.ecisr.mmm.item.ContainerItemStacks;
 import cc.ecisr.mmm.transfer.ThermalContents;
 import cc.ecisr.mmm.granular.GranularTransferLedger;
 import cc.ecisr.mmm.granular.SolidVolume;
+import cc.ecisr.mmm.worldprofile.WorldCapability;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.dispenser.BlockSource;
 import net.minecraft.network.chat.Component;
@@ -135,9 +136,9 @@ public final class FluidTransferService {
 		ChemicalContents heldChemical = null;
 		GranularContents heldGranular = null;
 		if (kind == TransferKind.MATERIAL_POUR) {
-			if (!service.materialFeatureEnabled() || !region.domain().hasMaterialState()) return stack;
+			if (!service.worldCapabilityProfile().hasCapability(WorldCapability.MATERIALS) || !region.domain().hasMaterialState()) return stack;
 			if (stack.get(MmmComponents.CHEMICAL_CONTENTS) != null) {
-				if (!service.chemistryFeatureEnabled() || !region.domain().hasChemistryState()) return stack;
+				if (!service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY) || !region.domain().hasChemistryState()) return stack;
 				heldChemical = MaterialBucketItem.chemicalContents(stack, service.chemicalRegistry());
 				if (heldChemical == null) return stack;
 			} else {
@@ -145,19 +146,19 @@ public final class FluidTransferService {
 				if (heldMixture == null) return stack;
 			}
 		} else if (kind == TransferKind.MATERIAL_SCOOP) {
-			if (!service.materialFeatureEnabled() || !region.domain().hasMaterialState()) return stack;
+			if (!service.worldCapabilityProfile().hasCapability(WorldCapability.MATERIALS) || !region.domain().hasMaterialState()) return stack;
 		} else if (kind == TransferKind.GRANULAR_POUR) {
-			if (!service.granularFeatureEnabled() || !region.domain().hasGranularState()
+			if (!service.worldCapabilityProfile().hasCapability(WorldCapability.GRANULAR) || !region.domain().hasGranularState()
 					|| !region.controllerManaged()) return stack;
 			try {
 				heldGranular = ContainerItemStacks.granularContents(stack, service.granularRegistry(),
-						service.chemistryFeatureEnabled() ? service.chemicalRegistry() : null);
+						service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY) ? service.chemicalRegistry() : null);
 			} catch (RuntimeException invalid) {
 				return stack;
 			}
 			if (heldGranular == null) return stack;
 		} else if (kind == TransferKind.GRANULAR_SCOOP) {
-			if (!service.granularFeatureEnabled() || !region.domain().hasGranularState()
+			if (!service.worldCapabilityProfile().hasCapability(WorldCapability.GRANULAR) || !region.domain().hasGranularState()
 					|| !region.controllerManaged()) return stack;
 		}
 		FluidMixture resolvedMixture = heldMixture;
@@ -203,7 +204,7 @@ public final class FluidTransferService {
 						(rawAfter, before) -> rawAfter);
 				case MATERIAL_SCOOP -> ControllerItemTransferCoordinator.execute(service, region, level, actor, stack,
 						ContainerTransferJournal.Operation.EXTRACT, extractionRequest, 0L,
-						(requested, base) -> service.chemistryFeatureEnabled() && region.domain().hasChemistryState()
+						(requested, base) -> service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY) && region.domain().hasChemistryState()
 								? scoopChemicalIntoCell(service, region, cell, requested, 6, service.chemicalRegistry())
 								: scoopMaterialIntoCell(service, region, cell, requested, 6),
 						(rawAfter, before) -> rawAfter);
@@ -234,7 +235,7 @@ public final class FluidTransferService {
 			case MATERIAL_POUR -> resolvedChemical == null
 					? pourMaterialIntoCell(service, region, cell, resolvedMixture, 6, false, resolvedThermal)
 					: pourChemicalIntoCell(service, region, cell, resolvedChemical, 6, false, resolvedThermal);
-			case MATERIAL_SCOOP -> service.chemistryFeatureEnabled() && region.domain().hasChemistryState()
+			case MATERIAL_SCOOP -> service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY) && region.domain().hasChemistryState()
 					? scoopChemicalIntoCell(service, region, cell, extractionRequest, 6, service.chemicalRegistry())
 					: scoopMaterialIntoCell(service, region, cell, extractionRequest, 6);
 			case GRANULAR_POUR, GRANULAR_SCOOP -> null;
@@ -271,7 +272,7 @@ public final class FluidTransferService {
 			int[] cell
 	) {
 		boolean hasChemicalContents = held.get(MmmComponents.CHEMICAL_CONTENTS) != null;
-		if (hasChemicalContents && !service.chemistryFeatureEnabled()) {
+		if (hasChemicalContents && !service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY)) {
 			return new TransferOutcome(false, true, held, "化学功能门本次启动未开启；化学桶保持不变");
 		}
 		ChemicalContents chemical = hasChemicalContents
@@ -281,13 +282,13 @@ public final class FluidTransferService {
 			return new TransferOutcome(false, true, held, "化学桶内容损坏、双重表示或 registry 不匹配");
 		}
 		long volumeNanos = chemical == null ? mixture.totalVolumeNanos() : chemical.totalVolumeNanos();
-		if (!service.materialFeatureEnabled()) {
+		if (!service.worldCapabilityProfile().hasCapability(WorldCapability.MATERIALS)) {
 			return new TransferOutcome(false, true, held, "材料功能门未开启");
 		}
 		if (!region.domain().hasMaterialState()) {
 			return new TransferOutcome(false, true, held, "该区域不是材料区域");
 		}
-		if (chemical != null && (!service.chemistryFeatureEnabled() || !region.domain().hasChemistryState())) {
+		if (chemical != null && (!service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY) || !region.domain().hasChemistryState())) {
 			return new TransferOutcome(false, true, held, "化学桶只能倒入启用相同 registry 的化学区域");
 		}
 		boolean externalSource = player.hasInfiniteMaterials();
@@ -344,7 +345,7 @@ public final class FluidTransferService {
 			FluidSimulationService service, FluidRegion region, ServerPlayer player,
 			InteractionHand hand, ItemStack held, int[] cell
 	) {
-		if (!service.materialFeatureEnabled()) {
+		if (!service.worldCapabilityProfile().hasCapability(WorldCapability.MATERIALS)) {
 			return new TransferOutcome(false, false, held, "材料功能门未开启");
 		}
 		if (!region.domain().hasMaterialState()) {
@@ -360,7 +361,7 @@ public final class FluidTransferService {
 			ControllerItemTransferCoordinator.Result transaction = ControllerItemTransferCoordinator.execute(
 					service, region, player.level(), actor, held,
 					ContainerTransferJournal.Operation.EXTRACT, requestedNanos, 0L,
-					(requested, base) -> service.chemistryFeatureEnabled()
+					(requested, base) -> service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY)
 							&& region.domain().hasChemistryState()
 							? scoopChemicalIntoCell(service, region, cell, requested, 6,
 									service.chemicalRegistry())
@@ -373,7 +374,7 @@ public final class FluidTransferService {
 			service.sendSnapshotFor(player, region);
 			return transaction.outcome();
 		}
-		TransferOutcome outcome = service.chemistryFeatureEnabled() && region.domain().hasChemistryState()
+		TransferOutcome outcome = service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY) && region.domain().hasChemistryState()
 				? scoopChemicalIntoCell(service, region, cell, requestedNanos, 6, service.chemicalRegistry())
 				: scoopMaterialIntoCell(service, region, cell, requestedNanos, 6);
 		if (!outcome.transferred()) return new TransferOutcome(false, false, held, outcome.message());
@@ -385,7 +386,7 @@ public final class FluidTransferService {
 			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand,
 			ItemStack held, int[] cell
 	) {
-		if (!service.granularFeatureEnabled()) {
+		if (!service.worldCapabilityProfile().hasCapability(WorldCapability.GRANULAR)) {
 			return new TransferOutcome(false, true, held, "颗粒功能门本次启动未开启；干式容器保持不变");
 		}
 		if (!region.controllerManaged()) {
@@ -397,7 +398,7 @@ public final class FluidTransferService {
 		GranularContents contents;
 		try {
 			contents = ContainerItemStacks.granularContents(held, service.granularRegistry(),
-					service.chemistryFeatureEnabled() ? service.chemicalRegistry() : null);
+					service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY) ? service.chemicalRegistry() : null);
 		} catch (RuntimeException invalid) {
 			return new TransferOutcome(false, true, held, "颗粒容器内容损坏、双重表示或 registry 不匹配");
 		}
@@ -421,7 +422,7 @@ public final class FluidTransferService {
 			FluidSimulationService service, FluidRegion region, ServerPlayer player, InteractionHand hand,
 			ItemStack held, int[] cell
 	) {
-		if (!service.granularFeatureEnabled()) {
+		if (!service.worldCapabilityProfile().hasCapability(WorldCapability.GRANULAR)) {
 			return new TransferOutcome(false, false, held, "颗粒功能门本次启动未开启；干式容器保持不变");
 		}
 		if (!region.controllerManaged()) {
@@ -738,7 +739,7 @@ public final class FluidTransferService {
 		GranularTransferLedger ledger;
 		try {
 			ledger = contents.toLedger(service.granularRegistry(),
-					service.chemistryFeatureEnabled() ? service.chemicalRegistry() : null);
+					service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY) ? service.chemicalRegistry() : null);
 		} catch (RuntimeException invalid) {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents),
 					"颗粒容器 registry 或账本不合法：" + invalid.getMessage());
@@ -768,7 +769,7 @@ public final class FluidTransferService {
 				cell[0], cell[1], cell[2], capacitySvq, maxRadius, false, ledger -> {
 					try {
 						planned[0] = GranularContents.fromLedger(ledger, service.granularRegistry(),
-								service.chemistryFeatureEnabled() ? service.chemicalRegistry() : null);
+								service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY) ? service.chemicalRegistry() : null);
 						return true;
 					} catch (RuntimeException unrepresentable) {
 						return false;

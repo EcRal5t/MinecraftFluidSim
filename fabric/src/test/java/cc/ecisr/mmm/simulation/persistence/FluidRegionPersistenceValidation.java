@@ -721,22 +721,20 @@ public final class FluidRegionPersistenceValidation {
 	private static void validateWorldConfig() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "config-");
 		FluidServerConfig defaults = FluidServerConfig.loadOrCreate(root);
-		require(defaults.controllersEnabled() && defaults.materialsEnabled() && defaults.worldBridgeEnabled()
-				&& !defaults.chemistryEnabled() && !defaults.granularEnabled() && !defaults.precipitationEnabled()
-				&& !defaults.thermalEnabled() && !defaults.phaseChangeEnabled()
-				&& defaults.limits().maximumRegions() == 4, "playable default config changed");
-		FluidServerConfig enabled = defaults.withControllersEnabled(true).withMaterialsEnabled(true)
-				.withWorldBridgeEnabled(true).withChemistryEnabled(true).withGranularEnabled(true)
-				.withPrecipitationEnabled(true).withThermalEnabled(true).withPhaseChangeEnabled(true);
+		require(defaults.controllersEnabled() && !defaults.worldBridgeEnabled()
+				&& defaults.limits().maximumRegions() == 4
+				&& defaults.maximumQuarantineEntries() > 0L && defaults.maximumQuarantineBytes() > 0L,
+				"playable default config changed");
+		FluidServerConfig enabled = defaults.withControllersEnabled(true).withWorldBridgeEnabled(true);
 		enabled.save(root);
 		require(FluidServerConfig.loadOrCreate(root).equals(enabled), "world-local config did not round-trip");
 
 		String valid = Files.readString(FluidServerConfig.path(root));
-		Files.writeString(FluidServerConfig.path(root), valid.replace("materialsEnabled=true", "materialsEnabled=false"));
+		Files.writeString(FluidServerConfig.path(root), valid + "materialsEnabled=true\n");
 		expectIOException(() -> FluidServerConfig.loadOrCreate(root),
-				"invalid current feature dependency was accepted");
+				"a removed feature gate key was silently accepted by the admission policy");
 
-		Files.writeString(FluidServerConfig.path(root), valid.replace("schema=controller-runtime", "schema=unknown"));
+		Files.writeString(FluidServerConfig.path(root), valid.replace("schema=controller-policy", "schema=unknown"));
 		expectIOException(() -> FluidServerConfig.loadOrCreate(root), "unknown config version was silently replaced");
 	}
 

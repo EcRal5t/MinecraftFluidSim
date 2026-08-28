@@ -185,9 +185,7 @@ public final class FluidProtocolServer {
 			this.listener = listener;
 			this.server = server;
 			FluidSimulationService service = FluidSimulationService.get(server);
-			this.offer = new FluidProtocolOfferPayload(FluidProtocol.serverOffer(
-					service.materialFeatureEnabled(), service.chemistryFeatureEnabled(),
-					service.granularFeatureEnabled(), service.thermalFeatureEnabled()));
+			this.offer = new FluidProtocolOfferPayload(FluidProtocol.serverOffer(service.worldCapabilityProfile()));
 		}
 
 		@Override

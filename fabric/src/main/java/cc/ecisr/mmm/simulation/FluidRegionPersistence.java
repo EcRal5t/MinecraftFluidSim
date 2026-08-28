@@ -18,6 +18,8 @@ import cc.ecisr.mmm.simulation.persistence.RegionStateFiles;
 import cc.ecisr.mmm.simulation.persistence.RegionStateLayout;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
+import cc.ecisr.mmm.worldprofile.WorldCapability;
+import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.NbtUtils;
@@ -40,71 +42,44 @@ import java.util.UUID;
 final class FluidRegionPersistence {
 	private final RegionStateFiles files;
 	private final OwnershipStore ownershipStore;
-	private final boolean materialsEnabled;
-	private final boolean chemistryEnabled;
+	private final WorldCapabilityProfile profile;
 	private final ChemicalRegistry chemicalRegistry;
-	private final boolean granularEnabled;
 	private final GranularRegistry granularRegistry;
-	private final boolean precipitationEnabled;
-	private final boolean thermalEnabled;
 	private final ThermalRegistry thermalRegistry;
 	private final GasRegistry gasRegistry;
 	private final int maximumThermalSubsteps;
 
-	FluidRegionPersistence(Path worldRoot, boolean materialsEnabled) {
-		this(worldRoot, materialsEnabled, false, null);
-	}
-
 	FluidRegionPersistence(
-			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry
+			Path worldRoot, WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,
+			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry, GasRegistry gasRegistry
 	) {
-		this(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry, false, null);
-	}
-
-	FluidRegionPersistence(
-			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
-			boolean granularEnabled, GranularRegistry granularRegistry
-	) {
-		this(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry, granularEnabled, granularRegistry, false);
-	}
-
-	FluidRegionPersistence(
-			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
-			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled
-	) {
-		this(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry, granularEnabled, granularRegistry,
-				precipitationEnabled, false, null, null);
-	}
-
-	FluidRegionPersistence(
-			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
-			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled,
-			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry
-	) {
-		this(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry, granularEnabled, granularRegistry,
-				precipitationEnabled, thermalEnabled, thermalRegistry, gasRegistry,
+		this(worldRoot, profile, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry,
 				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 	}
 
 	FluidRegionPersistence(
-			Path worldRoot, boolean materialsEnabled, boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
-			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled,
-			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
+			Path worldRoot, WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,
+			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
 			int maximumThermalSubsteps
 	) {
-		files = thermalEnabled
+		requireRegistry(profile, WorldCapability.CHEMISTRY, chemicalRegistry);
+		requireRegistry(profile, WorldCapability.GRANULAR, granularRegistry);
+		if (profile.hasCapability(WorldCapability.THERMAL)) {
+			if (thermalRegistry == null || gasRegistry == null) {
+				throw new IllegalArgumentException("Thermal capability requires thermal and gas registries");
+			}
+		} else if (thermalRegistry != null || gasRegistry != null) {
+			throw new IllegalArgumentException("Thermal registries are present without the thermal capability");
+		}
+		files = profile.hasCapability(WorldCapability.THERMAL)
 				? new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry)
 				: granularRegistry == null
 				? chemicalRegistry == null ? new RegionStateFiles(worldRoot) : new RegionStateFiles(worldRoot, chemicalRegistry)
 				: new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry);
 		ownershipStore = new OwnershipStore(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry);
-		this.materialsEnabled = materialsEnabled;
-		this.chemistryEnabled = chemistryEnabled;
+		this.profile = profile;
 		this.chemicalRegistry = chemicalRegistry;
-		this.granularEnabled = granularEnabled;
 		this.granularRegistry = granularRegistry;
-		this.precipitationEnabled = precipitationEnabled;
-		this.thermalEnabled = thermalEnabled;
 		this.thermalRegistry = thermalRegistry;
 		this.gasRegistry = gasRegistry;
 		if (maximumThermalSubsteps <= 0
@@ -136,17 +111,17 @@ final class FluidRegionPersistence {
 			try {
 				validateFeatureShape(manifest);
 				if (manifest.hasChemicalState()) {
-					if (!chemistryEnabled || chemicalRegistry == null) {
+					if (!profile.hasCapability(WorldCapability.CHEMISTRY) || chemicalRegistry == null) {
 						throw new IOException("chemical region-state requires the chemistry feature gate and authoritative registry snapshot");
 					}
 					if (!manifest.registryFingerprint().equals(chemicalRegistry.fingerprint())) {
 						throw new IOException("region-state chemical registry fingerprint does not match the world snapshot");
 					}
 				}
-				if (manifest.hasGranularState() && (!granularEnabled || granularRegistry == null)) {
+				if (manifest.hasGranularState() && (!profile.hasCapability(WorldCapability.GRANULAR) || granularRegistry == null)) {
 					throw new IOException("granular region-state requires the granular feature gate and authoritative registry snapshot");
 				}
-				if (manifest.hasThermalState() && (!thermalEnabled || thermalRegistry == null || gasRegistry == null)) {
+				if (manifest.hasThermalState() && (!profile.hasCapability(WorldCapability.THERMAL) || thermalRegistry == null || gasRegistry == null)) {
 					throw new IOException("thermal region-state requires the thermal feature gate and authoritative thermal/gas registry snapshots");
 				}
 				validateControllerGeometry(manifest);
@@ -434,21 +409,21 @@ final class FluidRegionPersistence {
 				throw new IOException("Committed world ownership does not match the region checkpoint");
 			}
 		}
-		if (thermalEnabled) {
+		if (profile.hasCapability(WorldCapability.THERMAL)) {
 			restoreThermalGeneration(region, state);
 			return;
 		}
-		if (granularEnabled) {
+		if (profile.hasCapability(WorldCapability.GRANULAR)) {
 			restoreGranularGeneration(region, state);
 			return;
 		}
-		if (chemistryEnabled) {
+		if (profile.hasCapability(WorldCapability.CHEMISTRY)) {
 			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
 			region.restoreChemicalSolver(state.reconstructChemical(chemicalRegistry), chemicalRegistry,
 					manifest.checkpointGeneration());
 			return;
 		}
-		if (materialsEnabled) {
+		if (profile.hasCapability(WorldCapability.MATERIALS)) {
 			region.restoreMaterialSolver(state.reconstructMaterial(), manifest.checkpointGeneration());
 		} else {
 			region.restoreSolver(state.reconstruct(), manifest.checkpointGeneration());
@@ -461,7 +436,7 @@ final class FluidRegionPersistence {
 	 * throwaway solver before HEAD moves. Startup never calls this path and never guesses a fallback.
 	 */
 	long recoverPreviousGeneration(FluidRegion region, long expectedCurrentGeneration) throws IOException {
-		if (!thermalEnabled || thermalRegistry == null || gasRegistry == null) {
+		if (!profile.hasCapability(WorldCapability.THERMAL) || thermalRegistry == null || gasRegistry == null) {
 			throw new IOException("Previous-generation recovery requires the active thermal/gas registries");
 		}
 		if (!region.controllerManaged() || region.solverLoaded()
@@ -531,16 +506,16 @@ final class FluidRegionPersistence {
 	}
 
 	private RegionState captureForFeatureGate(FluidRegion region, long generation) throws IOException {
-		if (thermalEnabled) {
+		if (profile.hasCapability(WorldCapability.THERMAL)) {
 			if (thermalRegistry == null || gasRegistry == null) {
 				throw new IOException("Authoritative thermal/gas registry is unavailable");
 			}
 			if (!region.domain().hasMaterialState()) throw new IOException("Thermal state requires a material-bound domain");
-			if (chemistryEnabled) {
+			if (profile.hasCapability(WorldCapability.CHEMISTRY)) {
 				if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
 				if (!region.domain().hasChemistryState()) region.domain().bindChemistry(chemicalRegistry);
 			}
-			if (granularEnabled) {
+			if (profile.hasCapability(WorldCapability.GRANULAR)) {
 				if (granularRegistry == null) throw new IOException("Authoritative granular registry is unavailable");
 				if (!region.domain().hasGranularState()) {
 					region.domain().bindGranular(granularRegistry, region.domain().materialRegistry());
@@ -559,10 +534,10 @@ final class FluidRegionPersistence {
 			}
 			return RegionState.captureThermal(region, generation);
 		}
-		if (granularEnabled) {
+		if (profile.hasCapability(WorldCapability.GRANULAR)) {
 			if (granularRegistry == null) throw new IOException("Authoritative granular registry is unavailable");
 			if (!region.domain().hasMaterialState()) throw new IOException("Granular state requires a material-bound domain");
-			if (chemistryEnabled) {
+			if (profile.hasCapability(WorldCapability.CHEMISTRY)) {
 				if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
 				if (!region.domain().hasChemistryState()) region.domain().bindChemistry(chemicalRegistry);
 			}
@@ -572,7 +547,7 @@ final class FluidRegionPersistence {
 			enablePrecipitationIfConfigured(region);
 			return RegionState.captureGranular(region, generation);
 		}
-		if (chemistryEnabled) {
+		if (profile.hasCapability(WorldCapability.CHEMISTRY)) {
 			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
 			if (!region.domain().hasMaterialState()) throw new IOException("Chemistry requires a material-bound domain");
 			if (!region.domain().hasChemistryState()) region.domain().bindChemistry(chemicalRegistry);
@@ -594,7 +569,7 @@ final class FluidRegionPersistence {
 		long generation = manifest.checkpointGeneration();
 		try {
 			if (manifest.hasChemicalState()) {
-				if (!chemistryEnabled || chemicalRegistry == null) {
+				if (!profile.hasCapability(WorldCapability.CHEMISTRY) || chemicalRegistry == null) {
 					throw new IOException("Chemical thermal checkpoint requires the chemistry registry and gate");
 				}
 				region.restoreChemicalSolver(state.reconstructChemical(chemicalRegistry), chemicalRegistry, generation);
@@ -603,11 +578,11 @@ final class FluidRegionPersistence {
 			}
 			boolean hasGranular = manifest.hasGranularState();
 			if (hasGranular) {
-				if (!granularEnabled || granularRegistry == null) {
+				if (!profile.hasCapability(WorldCapability.GRANULAR) || granularRegistry == null) {
 					throw new IOException("Granular thermal checkpoint requires the granular registry and gate");
 				}
 				region.restoreGranularState(state.reconstructGranular(granularRegistry), granularRegistry, generation);
-			} else if (granularEnabled) {
+			} else if (profile.hasCapability(WorldCapability.GRANULAR)) {
 				throw new IOException("Thermal checkpoint omits granular truth while the granular gate is enabled");
 			}
 			region.restoreGasState(state.reconstructGas(gasRegistry, chemicalRegistry), gasRegistry, generation);
@@ -640,19 +615,19 @@ final class FluidRegionPersistence {
 	}
 
 	private void enablePrecipitationIfConfigured(FluidRegion region) {
-		if (precipitationEnabled) region.domain().setPrecipitationEnabled(true);
+		if (profile.hasCapability(WorldCapability.PRECIPITATION)) region.domain().setPrecipitationEnabled(true);
 	}
 
 	private void validateFeatureShape(RegionManifest manifest) throws IOException {
-		RegionStateLayout expectedLayout = thermalEnabled ? RegionStateLayout.THERMAL
-				: granularEnabled ? RegionStateLayout.GRANULAR
-				: chemistryEnabled ? RegionStateLayout.CHEMICAL
-				: materialsEnabled ? RegionStateLayout.MATERIAL : RegionStateLayout.PURE;
+		RegionStateLayout expectedLayout = profile.hasCapability(WorldCapability.THERMAL) ? RegionStateLayout.THERMAL
+				: profile.hasCapability(WorldCapability.GRANULAR) ? RegionStateLayout.GRANULAR
+				: profile.hasCapability(WorldCapability.CHEMISTRY) ? RegionStateLayout.CHEMICAL
+				: profile.hasCapability(WorldCapability.MATERIALS) ? RegionStateLayout.MATERIAL : RegionStateLayout.PURE;
 		if (manifest.layout() != expectedLayout
-				|| manifest.hasChemicalState() != chemistryEnabled
-				|| manifest.hasGranularState() != granularEnabled
-				|| manifest.hasThermalState() != thermalEnabled
-				|| manifest.hasGasState() != thermalEnabled) {
+				|| manifest.hasChemicalState() != profile.hasCapability(WorldCapability.CHEMISTRY)
+				|| manifest.hasGranularState() != profile.hasCapability(WorldCapability.GRANULAR)
+				|| manifest.hasThermalState() != profile.hasCapability(WorldCapability.THERMAL)
+				|| manifest.hasGasState() != profile.hasCapability(WorldCapability.THERMAL)) {
 			throw new IOException("Persisted region feature layout does not match the active server feature gates; recreate the region with the current configuration");
 		}
 	}
@@ -668,6 +643,12 @@ final class FluidRegionPersistence {
 				|| manifest.sizeY() != Math.multiplyExact(manifest.footprint().blockSizeY(), cellsPerBlock)
 				|| manifest.sizeZ() != Math.multiplyExact(manifest.footprint().blockSizeZ(), cellsPerBlock)) {
 			throw new IOException("Persisted solver grid does not match its visible controller footprint");
+		}
+	}
+	private static void requireRegistry(WorldCapabilityProfile profile, WorldCapability capability, Object registry) {
+		if (profile.hasCapability(capability) != (registry != null)) {
+			throw new IllegalArgumentException("Registry " + capability.stableId()
+					+ " does not match the world capability profile");
 		}
 	}
 }

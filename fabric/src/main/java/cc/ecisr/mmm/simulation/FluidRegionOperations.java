@@ -6,6 +6,7 @@ import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
+import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 
@@ -31,53 +32,23 @@ final class FluidRegionOperations {
 	private long serviceTick;
 
 	FluidRegionOperations(
-			Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean materialsEnabled,
-			boolean chemistryEnabled, ChemicalRegistry chemicalRegistry
+			Path worldRoot, FluidRegionManager manager, boolean configurationLocked,
+			WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,
+			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry, GasRegistry gasRegistry
 	) {
-		this(worldRoot, manager, configurationLocked, materialsEnabled, chemistryEnabled, chemicalRegistry, false, null);
+		this(worldRoot, manager, configurationLocked, profile, chemicalRegistry, granularRegistry, thermalRegistry,
+				gasRegistry, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 	}
 
 	FluidRegionOperations(
-			Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean materialsEnabled,
-			boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
-			boolean granularEnabled, GranularRegistry granularRegistry
-	) {
-		this(worldRoot, manager, configurationLocked, materialsEnabled, chemistryEnabled, chemicalRegistry,
-				granularEnabled, granularRegistry, false);
-	}
-
-	FluidRegionOperations(
-			Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean materialsEnabled,
-			boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
-			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled
-	) {
-		this(worldRoot, manager, configurationLocked, materialsEnabled, chemistryEnabled, chemicalRegistry,
-				granularEnabled, granularRegistry, precipitationEnabled, false, null, null);
-	}
-
-	FluidRegionOperations(
-			Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean materialsEnabled,
-			boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
-			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled,
-			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry
-	) {
-		this(worldRoot, manager, configurationLocked, materialsEnabled, chemistryEnabled, chemicalRegistry,
-				granularEnabled, granularRegistry, precipitationEnabled, thermalEnabled, thermalRegistry, gasRegistry,
-				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-	}
-
-	FluidRegionOperations(
-			Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean materialsEnabled,
-			boolean chemistryEnabled, ChemicalRegistry chemicalRegistry,
-			boolean granularEnabled, GranularRegistry granularRegistry, boolean precipitationEnabled,
-			boolean thermalEnabled, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
+			Path worldRoot, FluidRegionManager manager, boolean configurationLocked,
+			WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,
+			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
 			int maximumThermalSubsteps
 	) {
 		this.manager = manager;
-		this.persistence = new FluidRegionPersistence(worldRoot, materialsEnabled, chemistryEnabled, chemicalRegistry,
-				granularEnabled, granularRegistry, precipitationEnabled, thermalEnabled, thermalRegistry, gasRegistry,
-				maximumThermalSubsteps);
-		creationLocked = configurationLocked;
+		this.persistence = new FluidRegionPersistence(worldRoot, profile, chemicalRegistry, granularRegistry,
+				thermalRegistry, gasRegistry, maximumThermalSubsteps);
 		List<String> metadataIssues = persistence.loadMetadata(manager);
 		issues.addAll(metadataIssues);
 		creationLocked |= !metadataIssues.isEmpty();

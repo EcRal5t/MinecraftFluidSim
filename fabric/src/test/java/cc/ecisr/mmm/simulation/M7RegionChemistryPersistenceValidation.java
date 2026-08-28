@@ -61,13 +61,11 @@ public final class M7RegionChemistryPersistenceValidation {
 		source.domain().bindGasRegistry(gas);
 		source.domain().bindThermal(thermal, source.domain().materialRegistry(), 300.0);
 		source.domain().setThermalTemperatureInCell(2, 1, 2, 325.0);
-		FluidRegionPersistence persistence = new FluidRegionPersistence(root, true, false, null,
-				false, null, false, true, thermal, gas);
+		FluidRegionPersistence persistence = new FluidRegionPersistence(root, TestProfiles.thermal(null, thermal), null, null, thermal, gas);
 		check(persistence.checkpoint(source) == 1L, "production thermal checkpoint was not published");
 
 		FluidRegionManager manager = manager();
-		FluidRegionPersistence restoring = new FluidRegionPersistence(root, true, false, null,
-				false, null, false, true, thermal, gas);
+		FluidRegionPersistence restoring = new FluidRegionPersistence(root, TestProfiles.thermal(null, thermal), null, null, thermal, gas);
 		check(restoring.loadMetadata(manager).isEmpty(), "valid thermal metadata was locked");
 		FluidRegion admitted = manager.regions().getFirst(); restoring.restore(admitted);
 		check(admitted.solverLoaded() && admitted.domain().hasThermalState()
@@ -76,7 +74,7 @@ public final class M7RegionChemistryPersistenceValidation {
 				"production restore did not reconstruct gas plus thermal truth");
 
 		FluidRegionManager gateOff = manager();
-		List<String> gateIssues = new FluidRegionPersistence(root, true).loadMetadata(gateOff);
+		List<String> gateIssues = new FluidRegionPersistence(root, TestProfiles.materials(), null, null, null, null).loadMetadata(gateOff);
 		check(gateOff.regions().isEmpty() && gateIssues.stream().anyMatch(issue -> issue.contains("thermal")),
 				"thermal-off discovery did not preserve and lock thermal region state");
 
@@ -138,13 +136,13 @@ public final class M7RegionChemistryPersistenceValidation {
 		source.domain().bindGranular(granular, source.domain().materialRegistry());
 		new RegionStateFiles(gateRoot, chemistry, granular).publish(RegionState.captureGranular(source, 1L));
 		FluidRegionManager currentManager = manager();
-		FluidRegionPersistence current = new FluidRegionPersistence(gateRoot, true, true, chemistry, true, granular, true);
+		FluidRegionPersistence current = new FluidRegionPersistence(gateRoot, TestProfiles.granular(chemistry, granular), chemistry, granular, null, null);
 		check(current.loadMetadata(currentManager).isEmpty(), "current granular layout was locked");
 		FluidRegion restored = currentManager.regions().getFirst(); current.restore(restored);
 		check(restored.domain().hasChemistryState() && restored.domain().hasGranularState()
 				&& restored.domain().precipitationEnabled(), "current granular layout did not restore");
 		FluidRegionManager gateManager = manager();
-		List<String> issues = new FluidRegionPersistence(gateRoot, true, false, null, false, null).loadMetadata(gateManager);
+		List<String> issues = new FluidRegionPersistence(gateRoot, TestProfiles.materials(), null, null, null, null).loadMetadata(gateManager);
 		check(gateManager.regions().isEmpty() && !issues.isEmpty(),
 				"granular-off discovery did not preserve and lock granular region state");
 	}
@@ -157,12 +155,12 @@ public final class M7RegionChemistryPersistenceValidation {
 		chemical.domain().bindChemistry(chemistry);
 		new RegionStateFiles(gateRoot, chemistry).publish(RegionState.captureChemical(chemical, 1L));
 		FluidRegionManager currentManager = manager();
-		FluidRegionPersistence current = new FluidRegionPersistence(gateRoot, true, true, chemistry);
+		FluidRegionPersistence current = new FluidRegionPersistence(gateRoot, TestProfiles.chemical(chemistry), chemistry, null, null, null);
 		check(current.loadMetadata(currentManager).isEmpty(), "current chemical layout was locked");
 		FluidRegion restored = currentManager.regions().getFirst(); current.restore(restored);
 		assertChemicalStateEquals(chemical.domain().exportChemicalParticleState(), restored.domain().exportChemicalParticleState());
 		FluidRegionManager gateManager = manager();
-		List<String> issues = new FluidRegionPersistence(gateRoot, true, false, null).loadMetadata(gateManager);
+		List<String> issues = new FluidRegionPersistence(gateRoot, TestProfiles.materials(), null, null, null, null).loadMetadata(gateManager);
 		check(gateManager.regions().isEmpty() && !issues.isEmpty(),
 				"chemistry-off discovery did not preserve and lock chemical region state");
 	}

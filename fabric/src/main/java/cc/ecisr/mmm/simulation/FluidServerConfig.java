@@ -14,45 +14,42 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.Properties;
 import java.util.Objects;
+import java.util.Set;
 
-/** World-local controller/material/world-bridge feature gates and hard region budgets. */
+/**
+ * World-local admission policy and hard runtime budgets.
+ *
+ * <p>Inventory layout is not configurable here: the committed world capability bundle decides which
+ * capabilities, registries and region layout a world carries. This file only decides whether the world
+ * admits controllers and how much it may spend doing so.
+ */
 public record FluidServerConfig(
 		boolean controllersEnabled,
-		boolean materialsEnabled,
 		boolean worldBridgeEnabled,
-		boolean chemistryEnabled,
-		boolean granularEnabled,
-		boolean precipitationEnabled,
-		boolean thermalEnabled,
-		boolean phaseChangeEnabled,
 		long maximumGranularParcels,
 		long maximumGranularDepositGroups,
 		int maximumThermalSubstepsPerStep,
 		int maximumPhaseOperationsPerStep,
+		long maximumQuarantineEntries,
+		long maximumQuarantineBytes,
 		FluidRegionManager.Limits limits
 ) {
-	private static final String SCHEMA = "controller-runtime";
+	private static final String SCHEMA = "controller-policy";
 	private static final int DEFAULT_REGIONS = 4;
 	private static final long DEFAULT_CELLS = 9_216L;
 	private static final long DEFAULT_MARKERS = 73_728L;
+	private static final long DEFAULT_QUARANTINE_ENTRIES = 4_096L;
+	private static final long DEFAULT_QUARANTINE_BYTES = 1_073_741_824L;
+	private static final long MAXIMUM_QUARANTINE_ENTRIES = 1_000_000L;
+	private static final long MAXIMUM_QUARANTINE_BYTES = 1L << 40;
+	private static final Set<String> KEYS = Set.of(
+			"schema", "controllersEnabled", "worldBridgeEnabled", "maximumGranularParcels",
+			"maximumGranularDepositGroups", "maximumThermalSubstepsPerStep", "maximumPhaseOperationsPerStep",
+			"maximumQuarantineEntries", "maximumQuarantineBytes", "maximumRegions", "maximumCellsPerRegion",
+			"maximumMarkersPerRegion", "maximumTotalCells", "maximumTotalMarkers");
 
 	public FluidServerConfig {
 		Objects.requireNonNull(limits, "limits");
-		if (chemistryEnabled && !materialsEnabled) {
-			throw new IllegalArgumentException("chemistryEnabled=true requires materialsEnabled=true");
-		}
-		if (granularEnabled && !materialsEnabled) {
-			throw new IllegalArgumentException("granularEnabled=true requires materialsEnabled=true");
-		}
-		if (precipitationEnabled && !(granularEnabled && chemistryEnabled)) {
-			throw new IllegalArgumentException("precipitationEnabled=true requires granularEnabled=true and chemistryEnabled=true");
-		}
-		if (thermalEnabled && !materialsEnabled) {
-			throw new IllegalArgumentException("thermalEnabled=true requires materialsEnabled=true");
-		}
-		if (phaseChangeEnabled && !thermalEnabled) {
-			throw new IllegalArgumentException("phaseChangeEnabled=true requires thermalEnabled=true");
-		}
 		if (maximumGranularParcels <= 0L || maximumGranularParcels > GranularLimits.MAX_ACTIVE_PARCELS_PER_SERVER
 				|| maximumGranularDepositGroups <= 0L
 				|| maximumGranularDepositGroups > GranularLimits.MAX_DEPOSIT_GROUPS_PER_SERVER) {
@@ -64,45 +61,22 @@ public record FluidServerConfig(
 				|| maximumPhaseOperationsPerStep > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
 			throw new IllegalArgumentException("Thermal server budgets are outside hard limits");
 		}
+		if (maximumQuarantineEntries < 0L || maximumQuarantineEntries > MAXIMUM_QUARANTINE_ENTRIES
+				|| maximumQuarantineBytes < 0L || maximumQuarantineBytes > MAXIMUM_QUARANTINE_BYTES) {
+			throw new IllegalArgumentException("Quarantine admission budgets are outside hard limits");
+		}
 	}
 
-	public FluidServerConfig(
-			boolean controllersEnabled, boolean materialsEnabled, boolean worldBridgeEnabled,
-			boolean chemistryEnabled, boolean granularEnabled, boolean precipitationEnabled,
-			long maximumGranularParcels, long maximumGranularDepositGroups,
-			FluidRegionManager.Limits limits
-	) {
-		this(controllersEnabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled, granularEnabled,
-				precipitationEnabled, false, false, maximumGranularParcels, maximumGranularDepositGroups,
-				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP, limits);
-	}
-
-	public FluidServerConfig(
-			boolean controllersEnabled, boolean materialsEnabled, boolean worldBridgeEnabled,
-			boolean chemistryEnabled, FluidRegionManager.Limits limits
-	) {
-		this(controllersEnabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled, false, false,
-				GranularLimits.MAX_ACTIVE_PARCELS_PER_SERVER, GranularLimits.MAX_DEPOSIT_GROUPS_PER_SERVER, limits);
-	}
-
-	public FluidServerConfig(
-			boolean controllersEnabled, boolean materialsEnabled, boolean worldBridgeEnabled,
-			FluidRegionManager.Limits limits
-	) {
-		this(controllersEnabled, materialsEnabled, worldBridgeEnabled, false, limits);
-	}
-
-	public FluidServerConfig(boolean controllersEnabled, boolean materialsEnabled, FluidRegionManager.Limits limits) {
-		this(controllersEnabled, materialsEnabled, false, false, limits);
-	}
-
-	public FluidServerConfig(boolean controllersEnabled, FluidRegionManager.Limits limits) {
-		this(controllersEnabled, false, false, false, limits);
+	public FluidServerConfig(boolean controllersEnabled, boolean worldBridgeEnabled, FluidRegionManager.Limits limits) {
+		this(controllersEnabled, worldBridgeEnabled, GranularLimits.MAX_ACTIVE_PARCELS_PER_SERVER,
+				GranularLimits.MAX_DEPOSIT_GROUPS_PER_SERVER, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS,
+				ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP, DEFAULT_QUARANTINE_ENTRIES,
+				DEFAULT_QUARANTINE_BYTES, limits);
 	}
 
 	public static FluidServerConfig defaults() {
-		return new FluidServerConfig(true, true, true, false, new FluidRegionManager.Limits(DEFAULT_REGIONS, DEFAULT_CELLS, DEFAULT_MARKERS,
-				DEFAULT_CELLS * DEFAULT_REGIONS, DEFAULT_MARKERS * DEFAULT_REGIONS));
+		return new FluidServerConfig(true, false, new FluidRegionManager.Limits(DEFAULT_REGIONS, DEFAULT_CELLS,
+				DEFAULT_MARKERS, DEFAULT_CELLS * DEFAULT_REGIONS, DEFAULT_MARKERS * DEFAULT_REGIONS));
 	}
 
 	public static Path path(Path worldRoot) {
@@ -120,35 +94,25 @@ public record FluidServerConfig(
 		try (InputStream input = Files.newInputStream(path)) { properties.load(input); }
 		try {
 			String schema = required(properties, "schema");
-			if (!schema.equals(SCHEMA)) throw new IOException("Unsupported Matter, Motion & Mechanics server config schema " + schema);
-			String controllers = required(properties, "controllersEnabled");
-			if (!controllers.equals("true") && !controllers.equals("false")) throw new IOException("controllersEnabled must be true or false");
-			String materials = required(properties, "materialsEnabled");
-			if (!materials.equals("true") && !materials.equals("false")) throw new IOException("materialsEnabled must be true or false");
-			String worldBridge = required(properties, "worldBridgeEnabled");
-			if (!worldBridge.equals("true") && !worldBridge.equals("false")) throw new IOException("worldBridgeEnabled must be true or false");
-			String chemistry = required(properties, "chemistryEnabled");
-			if (!chemistry.equals("true") && !chemistry.equals("false")) throw new IOException("chemistryEnabled must be true or false");
-			String granular = required(properties, "granularEnabled");
-			if (!granular.equals("true") && !granular.equals("false")) throw new IOException("granularEnabled must be true or false");
-			String precipitation = required(properties, "precipitationEnabled");
-			if (!precipitation.equals("true") && !precipitation.equals("false")) throw new IOException("precipitationEnabled must be true or false");
-			String thermal = required(properties, "thermalEnabled");
-			if (!thermal.equals("true") && !thermal.equals("false")) throw new IOException("thermalEnabled must be true or false");
-			String phaseChange = required(properties, "phaseChangeEnabled");
-			if (!phaseChange.equals("true") && !phaseChange.equals("false")) throw new IOException("phaseChangeEnabled must be true or false");
+			if (!schema.equals(SCHEMA)) {
+				throw new IOException("Unsupported Matter, Motion & Mechanics server config schema " + schema);
+			}
+			for (String key : properties.stringPropertyNames()) {
+				if (!KEYS.contains(key)) throw new IOException("Unknown Matter, Motion & Mechanics config key " + key);
+			}
 			long granularParcels = positiveLong(properties, "maximumGranularParcels");
 			long granularDeposits = positiveLong(properties, "maximumGranularDepositGroups");
 			int thermalSubsteps = positiveInteger(properties, "maximumThermalSubstepsPerStep");
 			int phaseOperations = positiveInteger(properties, "maximumPhaseOperationsPerStep");
+			long quarantineEntries = nonNegativeLong(properties, "maximumQuarantineEntries");
+			long quarantineBytes = nonNegativeLong(properties, "maximumQuarantineBytes");
 			FluidRegionManager.Limits limits = new FluidRegionManager.Limits(
 					integer(properties, "maximumRegions"), positiveLong(properties, "maximumCellsPerRegion"),
 					positiveLong(properties, "maximumMarkersPerRegion"), positiveLong(properties, "maximumTotalCells"),
 					positiveLong(properties, "maximumTotalMarkers"));
-			return new FluidServerConfig(Boolean.parseBoolean(controllers), Boolean.parseBoolean(materials),
-					Boolean.parseBoolean(worldBridge), Boolean.parseBoolean(chemistry), Boolean.parseBoolean(granular),
-					Boolean.parseBoolean(precipitation), Boolean.parseBoolean(thermal), Boolean.parseBoolean(phaseChange),
-					granularParcels, granularDeposits, thermalSubsteps, phaseOperations, limits);
+			return new FluidServerConfig(flag(properties, "controllersEnabled"), flag(properties, "worldBridgeEnabled"),
+					granularParcels, granularDeposits, thermalSubsteps, phaseOperations, quarantineEntries,
+					quarantineBytes, limits);
 		} catch (IllegalArgumentException exception) {
 			throw new IOException("Invalid Matter, Motion & Mechanics server config: " + exception.getMessage(), exception);
 		}
@@ -160,17 +124,13 @@ public record FluidServerConfig(
 		Properties properties = new Properties();
 		properties.setProperty("schema", SCHEMA);
 		properties.setProperty("controllersEnabled", Boolean.toString(controllersEnabled));
-		properties.setProperty("materialsEnabled", Boolean.toString(materialsEnabled));
 		properties.setProperty("worldBridgeEnabled", Boolean.toString(worldBridgeEnabled));
-		properties.setProperty("chemistryEnabled", Boolean.toString(chemistryEnabled));
-		properties.setProperty("granularEnabled", Boolean.toString(granularEnabled));
-		properties.setProperty("precipitationEnabled", Boolean.toString(precipitationEnabled));
-		properties.setProperty("thermalEnabled", Boolean.toString(thermalEnabled));
-		properties.setProperty("phaseChangeEnabled", Boolean.toString(phaseChangeEnabled));
 		properties.setProperty("maximumGranularParcels", Long.toString(maximumGranularParcels));
 		properties.setProperty("maximumGranularDepositGroups", Long.toString(maximumGranularDepositGroups));
 		properties.setProperty("maximumThermalSubstepsPerStep", Integer.toString(maximumThermalSubstepsPerStep));
 		properties.setProperty("maximumPhaseOperationsPerStep", Integer.toString(maximumPhaseOperationsPerStep));
+		properties.setProperty("maximumQuarantineEntries", Long.toString(maximumQuarantineEntries));
+		properties.setProperty("maximumQuarantineBytes", Long.toString(maximumQuarantineBytes));
 		properties.setProperty("maximumRegions", Integer.toString(limits.maximumRegions()));
 		properties.setProperty("maximumCellsPerRegion", Long.toString(limits.maximumCellsPerRegion()));
 		properties.setProperty("maximumMarkersPerRegion", Long.toString(limits.maximumMarkersPerRegion()));
@@ -178,7 +138,7 @@ public record FluidServerConfig(
 		properties.setProperty("maximumTotalMarkers", Long.toString(limits.maximumTotalMarkers()));
 		try {
 			try (OutputStream output = Files.newOutputStream(temporary, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
-				properties.store(output, "Matter, Motion & Mechanics world-local server configuration; budget changes apply after restart");
+				properties.store(output, "Matter, Motion & Mechanics world-local admission policy; budget changes apply after restart");
 			}
 			try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.WRITE)) { channel.force(true); }
 			Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
@@ -189,51 +149,21 @@ public record FluidServerConfig(
 	}
 
 	public FluidServerConfig withControllersEnabled(boolean enabled) {
-		return new FluidServerConfig(enabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled, granularEnabled,
-				precipitationEnabled, thermalEnabled, phaseChangeEnabled, maximumGranularParcels,
-				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
-	}
-
-	public FluidServerConfig withMaterialsEnabled(boolean enabled) {
-		return new FluidServerConfig(controllersEnabled, enabled, worldBridgeEnabled, chemistryEnabled, granularEnabled,
-				precipitationEnabled, thermalEnabled, phaseChangeEnabled, maximumGranularParcels,
-				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
+		return new FluidServerConfig(enabled, worldBridgeEnabled, maximumGranularParcels, maximumGranularDepositGroups,
+				maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, maximumQuarantineEntries,
+				maximumQuarantineBytes, limits);
 	}
 
 	public FluidServerConfig withWorldBridgeEnabled(boolean enabled) {
-		return new FluidServerConfig(controllersEnabled, materialsEnabled, enabled, chemistryEnabled, granularEnabled,
-				precipitationEnabled, thermalEnabled, phaseChangeEnabled, maximumGranularParcels,
-				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
+		return new FluidServerConfig(controllersEnabled, enabled, maximumGranularParcels, maximumGranularDepositGroups,
+				maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, maximumQuarantineEntries,
+				maximumQuarantineBytes, limits);
 	}
 
-	public FluidServerConfig withChemistryEnabled(boolean enabled) {
-		return new FluidServerConfig(controllersEnabled, materialsEnabled, worldBridgeEnabled, enabled, granularEnabled,
-				precipitationEnabled, thermalEnabled, phaseChangeEnabled, maximumGranularParcels,
-				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
-	}
-
-	public FluidServerConfig withGranularEnabled(boolean enabled) {
-		return new FluidServerConfig(controllersEnabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled, enabled,
-				precipitationEnabled, thermalEnabled, phaseChangeEnabled, maximumGranularParcels,
-				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
-	}
-
-	public FluidServerConfig withPrecipitationEnabled(boolean enabled) {
-		return new FluidServerConfig(controllersEnabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled,
-				granularEnabled, enabled, thermalEnabled, phaseChangeEnabled, maximumGranularParcels,
-				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
-	}
-
-	public FluidServerConfig withThermalEnabled(boolean enabled) {
-		return new FluidServerConfig(controllersEnabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled,
-				granularEnabled, precipitationEnabled, enabled, phaseChangeEnabled, maximumGranularParcels,
-				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
-	}
-
-	public FluidServerConfig withPhaseChangeEnabled(boolean enabled) {
-		return new FluidServerConfig(controllersEnabled, materialsEnabled, worldBridgeEnabled, chemistryEnabled,
-				granularEnabled, precipitationEnabled, thermalEnabled, enabled, maximumGranularParcels,
-				maximumGranularDepositGroups, maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, limits);
+	private static boolean flag(Properties properties, String key) throws IOException {
+		String value = required(properties, key);
+		if (!value.equals("true") && !value.equals("false")) throw new IOException(key + " must be true or false");
+		return Boolean.parseBoolean(value);
 	}
 
 	private static String required(Properties properties, String key) throws IOException {
@@ -251,6 +181,14 @@ public record FluidServerConfig(
 		try {
 			long value = Long.parseLong(required(properties, key));
 			if (value <= 0L) throw new IOException(key + " must be positive");
+			return value;
+		} catch (NumberFormatException exception) { throw new IOException("Invalid integer for " + key, exception); }
+	}
+
+	private static long nonNegativeLong(Properties properties, String key) throws IOException {
+		try {
+			long value = Long.parseLong(required(properties, key));
+			if (value < 0L) throw new IOException(key + " must not be negative");
 			return value;
 		} catch (NumberFormatException exception) { throw new IOException("Invalid integer for " + key, exception); }
 	}

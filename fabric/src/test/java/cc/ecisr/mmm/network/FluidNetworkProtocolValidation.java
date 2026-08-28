@@ -1,5 +1,8 @@
 package cc.ecisr.mmm.network;
 
+import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
+import cc.ecisr.mmm.granular.BuiltinGranularDefinitions;
+import cc.ecisr.mmm.simulation.TestProfiles;
 import cc.ecisr.mmm.fluid.FluidMaterialRenderSnapshot;
 import cc.ecisr.mmm.fluid.FluidMaterialSurfaceMesher;
 import cc.ecisr.mmm.granular.GranularDisplaySnapshot;
@@ -33,14 +36,15 @@ public final class FluidNetworkProtocolValidation {
 
 	private static void validateNegotiationMatrix() {
 		FluidProtocol.Offer offer = FluidProtocol.serverOffer();
-		require(FluidProtocol.serverOffer(false).equals(offer)
-				&& FluidProtocol.serverOffer(true).equals(FluidProtocol.materialServerOffer())
-				&& FluidProtocol.serverOffer(true, true).equals(FluidProtocol.chemicalServerOffer())
-				&& FluidProtocol.serverOffer(true, false, true).equals(FluidProtocol.granularServerOffer(false))
-				&& FluidProtocol.serverOffer(true, true, true).equals(FluidProtocol.granularServerOffer(true))
-				&& FluidProtocol.serverOffer(true, true, true, true).equals(
-						FluidProtocol.thermalServerOffer(true, true)),
-				"feature gates did not select exact semantic server layouts");
+		require(FluidProtocol.serverOffer(TestProfiles.pure()).equals(offer)
+				&& FluidProtocol.serverOffer(TestProfiles.materials()).equals(FluidProtocol.materialServerOffer())
+				&& FluidProtocol.serverOffer(TestProfiles.chemical(BuiltinChemicalDefinitions.REGISTRY))
+						.equals(FluidProtocol.chemicalServerOffer())
+				&& FluidProtocol.serverOffer(TestProfiles.granular(null, BuiltinGranularDefinitions.createRegistry()))
+						.equals(FluidProtocol.granularServerOffer(false))
+				&& FluidProtocol.serverOffer(TestProfiles.granular(BuiltinChemicalDefinitions.REGISTRY,
+						BuiltinGranularDefinitions.createRegistry())).equals(FluidProtocol.granularServerOffer(true)),
+				"world capability profiles did not select exact semantic server layouts");
 		FluidProtocol.Negotiation accepted = FluidProtocol.negotiate(offer);
 		require(accepted.accepted() && accepted.selectedLayout() == FluidProtocol.Layout.PURE
 				&& accepted.capabilities() == FluidProtocol.REQUIRED_CAPABILITIES,

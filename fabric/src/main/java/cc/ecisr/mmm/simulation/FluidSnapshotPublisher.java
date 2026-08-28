@@ -17,6 +17,10 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.List;
+import cc.ecisr.mmm.granular.GranularRegistry;
+import cc.ecisr.mmm.worldprofile.WorldCapability;
+import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
+
 import java.util.Objects;
 
 /** Builds and publishes read-only client projections without owning region lifecycle or world state. */
@@ -28,16 +32,18 @@ final class FluidSnapshotPublisher {
 	private final ChemicalRegistry chemicalRegistry;
 	private final ThermalRegistry thermalRegistry;
 
+	/** Snapshot capabilities follow the committed world capability profile, not a per-world flag set. */
 	FluidSnapshotPublisher(
-			boolean materials,
-			boolean chemistry,
-			ChemicalRegistry chemicalRegistry,
-			boolean granular,
-			boolean thermal,
-			ThermalRegistry thermalRegistry
+			WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,
+			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry
 	) {
-		if (chemistry && (!materials || chemicalRegistry == null)
-				|| granular && !materials || thermal && (!materials || thermalRegistry == null)) {
+		Objects.requireNonNull(profile, "profile");
+		boolean materials = profile.hasCapability(WorldCapability.MATERIALS);
+		boolean chemistry = profile.hasCapability(WorldCapability.CHEMISTRY);
+		boolean granular = profile.hasCapability(WorldCapability.GRANULAR);
+		boolean thermal = profile.hasCapability(WorldCapability.THERMAL);
+		if (chemistry && chemicalRegistry == null || granular && granularRegistry == null
+				|| thermal && thermalRegistry == null) {
 			throw new IllegalArgumentException("Snapshot capabilities are inconsistent");
 		}
 		this.materials = materials;

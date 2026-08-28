@@ -1,5 +1,8 @@
 package cc.ecisr.mmm.network;
 
+import cc.ecisr.mmm.worldprofile.WorldCapability;
+import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
+
 import java.util.Objects;
 
 /** Exact snapshot-layout and capability negotiation shared by configuration payloads and codec tests. */
@@ -26,26 +29,23 @@ public final class FluidProtocol {
 		return new Offer(Layout.PURE, REQUIRED_CAPABILITIES, 0L);
 	}
 
-	public static Offer serverOffer(boolean materialsEnabled) {
-		return materialsEnabled ? materialServerOffer() : serverOffer();
-	}
-
-	public static Offer serverOffer(boolean materialsEnabled, boolean chemistryEnabled) {
-		if (chemistryEnabled && !materialsEnabled) throw new IllegalArgumentException("Chemistry protocol requires materials");
-		return chemistryEnabled ? chemicalServerOffer() : serverOffer(materialsEnabled);
-	}
-
-	public static Offer serverOffer(boolean materialsEnabled, boolean chemistryEnabled, boolean granularEnabled) {
-		if (granularEnabled && !materialsEnabled) throw new IllegalArgumentException("Granular protocol requires materials");
-		return granularEnabled ? granularServerOffer(chemistryEnabled) : serverOffer(materialsEnabled, chemistryEnabled);
-	}
-
-	public static Offer serverOffer(
-			boolean materialsEnabled, boolean chemistryEnabled, boolean granularEnabled, boolean thermalEnabled
-	) {
-		if (thermalEnabled && !materialsEnabled) throw new IllegalArgumentException("Thermal protocol requires materials");
-		return thermalEnabled ? thermalServerOffer(chemistryEnabled, granularEnabled)
-				: serverOffer(materialsEnabled, chemistryEnabled, granularEnabled);
+	/** The offered layout and snapshot capabilities follow the committed world capability profile. */
+	public static Offer serverOffer(WorldCapabilityProfile profile) {
+		Objects.requireNonNull(profile, "profile");
+		Layout layout = switch (profile.regionLayoutId()) {
+			case "pure" -> Layout.PURE;
+			case "material" -> Layout.MATERIAL;
+			case "chemical" -> Layout.CHEMICAL;
+			case "granular" -> Layout.GRANULAR;
+			case "thermal" -> Layout.THERMAL;
+			default -> throw new IllegalArgumentException("Unknown region layout " + profile.regionLayoutId());
+		};
+		long capabilities = REQUIRED_CAPABILITIES;
+		if (profile.hasCapability(WorldCapability.MATERIALS)) capabilities |= CAP_MATERIAL_SNAPSHOT;
+		if (profile.hasCapability(WorldCapability.CHEMISTRY)) capabilities |= CAP_CHEMICAL_SNAPSHOT;
+		if (profile.hasCapability(WorldCapability.GRANULAR)) capabilities |= CAP_GRANULAR_SNAPSHOT;
+		if (profile.hasCapability(WorldCapability.THERMAL)) capabilities |= CAP_THERMAL_SNAPSHOT;
+		return new Offer(layout, capabilities, 0L);
 	}
 
 	public static Offer materialServerOffer() {
