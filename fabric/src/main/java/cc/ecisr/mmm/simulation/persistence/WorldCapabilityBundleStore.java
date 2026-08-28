@@ -56,7 +56,16 @@ public final class WorldCapabilityBundleStore {
 	private static final String MANIFEST_FILE = "manifest.nbt";
 	/** The bundle is immutable once published: registries never change after the world's first admission. */
 	private static final long GENERATION = 1L;
+	private static final String POLICY_FILE = "server.properties";
+	/** Persistence domains that carry their own committed truth and therefore require a committed bundle. */
+	private static final Set<String> AUTHORITY_ROOTS = Set.of(
+			"chemistry", "container-transfer", "gas", "granular", "material", "ownership",
+			"region-state", "thermal");
+	/** Domains this store may create or read without proving authority. */
+	private static final Set<String> NON_AUTHORITY_ROOTS = Set.of(
+			"quarantine", POLICY_FILE, "world-capabilities");
 
+	private final Path mmmDirectory;
 	private final Path directory;
 	private final Path quarantineRoot;
 	private final QuarantineAdmission quarantineAdmission;
@@ -65,14 +74,94 @@ public final class WorldCapabilityBundleStore {
 		if (worldRoot == null || quarantineAdmission == null) {
 			throw new IllegalArgumentException("World capability bundle store configuration is incomplete");
 		}
-		Path mmm = worldRoot.toAbsolutePath().normalize().resolve("mmm");
-		this.directory = mmm.resolve("world-capabilities");
-		this.quarantineRoot = mmm.resolve("quarantine").resolve("world-capability-staging");
+		this.mmmDirectory = worldRoot.toAbsolutePath().normalize().resolve("mmm");
+		this.directory = mmmDirectory.resolve("world-capabilities");
+		this.quarantineRoot = mmmDirectory.resolve("quarantine").resolve("world-capability-staging");
 		this.quarantineAdmission = quarantineAdmission;
 	}
 
 	public OpenResult openOrPublish(Definitions definitions) throws IOException {
 		return openOrPublish(definitions, FaultInjector.NONE);
+	}
+
+	/** Classifies directory entries and global authority presence without decoding any payload. */
+	public Presence inspect() throws IOException {
+		if (!Files.exists(directory, LinkOption.NOFOLLOW_LINKS)) {
+			validateMmmInventory(false);
+			return Presence.EMPTY;
+		}
+		requireDirectory(directory, "world capability root");
+		Set<String> entries = entryNames(directory);
+		boolean committed = entries.contains(HEAD_FILE);
+		validateMmmInventory(committed);
+		if (committed) {
+			requireExact(entries, Set.of(HEAD_FILE, SLOT_DIRECTORY), "committed world capability root");
+			return Presence.COMMITTED;
+		}
+		if (entries.isEmpty()) return Presence.EMPTY;
+		if (entries.equals(Set.of(SLOT_DIRECTORY))
+				|| entries.equals(Set.of(SLOT_DIRECTORY, HEAD_TEMPORARY_FILE))) {
+			return Presence.COMMIT_CANDIDATE;
+		}
+		if (entries.equals(Set.of(SLOT_TEMPORARY_DIRECTORY))) return Presence.STAGING;
+		throw new IOException("World capability root has an unprovable uncommitted layout: " + entries);
+	}
+
+	/**
+	 * Completes HEAD publication from a full slot without consulting current definition sources, so an
+	 * interrupted publication can be finished even when the datapack no longer decodes.
+	 */
+	public Bundle recoverCommitCandidate() throws IOException {
+		return recoverCommitCandidate(FaultInjector.NONE);
+	}
+
+	public Bundle recoverCommitCandidate(FaultInjector faultInjector) throws IOException {
+		if (faultInjector == null) {
+			throw new IllegalArgumentException("World capability recovery fault injector is missing");
+		}
+		if (inspect() != Presence.COMMIT_CANDIDATE) {
+			throw new IOException("World capability root has no complete commit candidate");
+		}
+		VerifiedSlot slot = verifySlot(slotPath());
+		if (Files.exists(headTemporaryPath(), LinkOption.NOFOLLOW_LINKS)) {
+			requireRegularFile(headTemporaryPath(), "world capability temporary HEAD");
+			requireFileBudget(headTemporaryPath(), WorldCapabilityBundleMetadataCodec.MAX_HEAD_BYTES,
+					"world capability temporary HEAD");
+			requireHeadBinding(WorldCapabilityBundleMetadataCodec.readHead(headTemporaryPath()), slot);
+			DurableFileOperations.atomicMove(headTemporaryPath(), headPath());
+			DurableFileOperations.forceDirectory(directory);
+			faultInjector.reached(new PublicationBoundary(PublicationPhase.HEAD_PUBLISHED, HEAD_FILE));
+		} else {
+			publishHead(slot, faultInjector);
+		}
+		return readCommitted();
+	}
+
+	/**
+	 * Authority roots may only exist under a committed bundle. Anything else under `mmm/` is unprovable
+	 * and is left byte for byte rather than adopted, reinterpreted or migrated.
+	 */
+	private void validateMmmInventory(boolean committed) throws IOException {
+		if (!Files.exists(mmmDirectory, LinkOption.NOFOLLOW_LINKS)) return;
+		requireDirectory(mmmDirectory, "MMM persistence root");
+		Set<String> entries = entryNames(mmmDirectory);
+		Set<String> known = new HashSet<>(AUTHORITY_ROOTS);
+		known.addAll(NON_AUTHORITY_ROOTS);
+		if (!known.containsAll(entries)) {
+			Set<String> unknown = new HashSet<>(entries);
+			unknown.removeAll(known);
+			throw new IOException("MMM persistence root contains unknown entries: " + unknown);
+		}
+		Set<String> authority = new HashSet<>(entries);
+		authority.retainAll(AUTHORITY_ROOTS);
+		if (!committed && !authority.isEmpty()) {
+			throw new IOException("MMM authority exists without a committed world capability bundle: " + authority);
+		}
+		for (String name : entries) {
+			Path entry = mmmDirectory.resolve(name);
+			if (name.equals(POLICY_FILE)) requireRegularFile(entry, "MMM policy configuration");
+			else requireDirectory(entry, "MMM persistence domain " + name);
+		}
 	}
 
 	public OpenResult openOrPublish(Definitions definitions, FaultInjector faultInjector) throws IOException {
@@ -545,6 +634,13 @@ public final class WorldCapabilityBundleStore {
 		SLOT_PUBLISHED,
 		HEAD_TEMPORARY_VERIFIED,
 		HEAD_PUBLISHED
+	}
+
+	public enum Presence {
+		EMPTY,
+		STAGING,
+		COMMIT_CANDIDATE,
+		COMMITTED
 	}
 
 	public record PublicationBoundary(PublicationPhase phase, String member) {

@@ -10,6 +10,21 @@
 
 重开时按目录内容判定唯一状态：`{HEAD, slot-a}` 已提交；`{slot-a, HEAD.nbt.tmp}` 补完 HEAD 移动；`{slot-a}` 补发 HEAD；`{slot-a.tmp}` 把中断的 staging 原样移入 quarantine 后重新发布；空目录首次发布；其他组合一律拒绝并原样保留。staging 从不删除，没有 publication identity 的 staging 只能拒绝，不能猜测或清理。quarantine 有 admission 预算，超限即拒绝而不是静默丢弃。
 
+## 启动判定
+
+`WorldCapabilityBundleStore#inspect` 只看目录名与全局权威存在性，不解码任何载荷，返回 `EMPTY` / `STAGING` / `COMMIT_CANDIDATE` / `COMMITTED`。`WorldCapabilityStartup#start` 把它翻译成唯一启动状态：
+
+| 状态 | 含义 |
+|---|---|
+| `UNINITIALIZED` | 没有任何包，也没有完成发布 |
+| `READY` | 包可证明且政策允许接入 |
+| `LOCKED_PROFILE` | 存在包或权威但无法证明可接入；原样保留，不重新解释 |
+| `POLICY_RESTRICTED` | 包可证明，但世界政策暂不接入；bundle 仍然可用 |
+
+**恢复不查当前定义源**：`COMMIT_CANDIDATE` 只凭已写出的 slot 就补完 HEAD，不要求 datapack 仍能解码。已提交包即使与 datapack 不一致也保持权威，只报告 drift，不修复、不重发。
+
+`mmm/` 下的权威域（`chemistry`、`container-transfer`、`gas`、`granular`、`material`、`ownership`、`region-state`、`thermal`）只在存在已提交包时才允许存在；没有包却出现权威，或出现任何未知条目，一律 LOCKED 并原样保留。这里没有迁移、没有版本嗅探、没有字段补全——旧实现产出的存档不被解释。
+
 ## 文件与职责边界
 
 world save 下的 `mmm/region-state/<region UUID>/` 是区域物理状态的唯一持久根。目录内只有：
