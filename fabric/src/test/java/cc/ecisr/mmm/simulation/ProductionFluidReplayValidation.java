@@ -1,6 +1,5 @@
 package cc.ecisr.mmm.simulation;
 
-import cc.ecisr.mmm.chemistry.ChemicalDataPackLoader;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
@@ -13,33 +12,18 @@ import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
-import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.fluid.air.GasStateSnapshot;
-import cc.ecisr.mmm.granular.GranularDataPackLoader;
 import cc.ecisr.mmm.granular.GranularRegistry;
-import cc.ecisr.mmm.thermal.ThermalDataPackLoader;
 import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
 import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
-import net.minecraft.network.chat.Component;
-import net.minecraft.server.packs.PackLocationInfo;
-import net.minecraft.server.packs.PackResources;
-import net.minecraft.server.packs.PackType;
-import net.minecraft.server.packs.PathPackResources;
-import net.minecraft.server.packs.repository.PackSource;
-import net.minecraft.server.packs.resources.MultiPackResourceManager;
 import net.minecraft.world.phys.Vec3;
 
-import java.net.URISyntaxException;
-import java.net.URL;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 
 /** Replays controller injection through the default live step and the complete authoritative handoff. */
 public final class ProductionFluidReplayValidation {
@@ -944,31 +928,9 @@ public final class ProductionFluidReplayValidation {
 	}
 
 	private static RegistrySet loadProductionRegistries() throws Exception {
-		Path root = productionResourceRoot();
-		PackLocationInfo location = new PackLocationInfo("mmm-production-replay",
-				Component.literal("MMM production replay"), PackSource.BUILT_IN, Optional.empty());
-		PackResources pack = new PathPackResources(location, root);
-		try (MultiPackResourceManager resources = new MultiPackResourceManager(PackType.SERVER_DATA, List.of(pack))) {
-			FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
-			ChemicalRegistry chemical = ChemicalDataPackLoader.load(resources);
-			GranularRegistry granular = GranularDataPackLoader.load(resources, chemical);
-			GasRegistry gas = BuiltinGasDefinitions.createRegistry();
-			ThermalRegistry thermal = ThermalDataPackLoader.load(resources, chemical.fingerprint(),
-					granular.fingerprint(), gas.fingerprint());
-			return new RegistrySet(liquids, chemical, granular, gas, thermal);
-		}
-	}
-
-	private static Path productionResourceRoot() throws URISyntaxException {
-		URL water = ProductionFluidReplayValidation.class.getResource(
-				"/data/mmm/mmm/thermal_materials/water.json");
-		if (water == null || !water.getProtocol().equals("file")) {
-			throw new AssertionError("Production datapack resources are not available as a validation directory");
-		}
-		Path cursor = Path.of(water.toURI()).toAbsolutePath().normalize();
-		while (cursor != null && !Files.isDirectory(cursor.resolve("data"))) cursor = cursor.getParent();
-		if (cursor == null) throw new AssertionError("Could not resolve the production datapack root");
-		return cursor;
+		ProductionRegistries.Set registries = ProductionRegistries.load();
+		return new RegistrySet(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
+				registries.chemical(), registries.granular(), registries.gas(), registries.thermal());
 	}
 
 	private static void requireSameGasState(GasStateSnapshot expected, GasStateSnapshot actual) {

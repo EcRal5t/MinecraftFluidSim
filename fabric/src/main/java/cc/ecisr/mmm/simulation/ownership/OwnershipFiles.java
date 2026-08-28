@@ -37,7 +37,7 @@ public final class OwnershipFiles {
 	public OwnershipFiles(Path worldRoot, UUID regionId) {
 		this(worldRoot.resolve("mmm").resolve(ROOT_DIRECTORY_NAME).resolve(regionId.toString()),
 				new OwnershipJournalCodec(), new OwnershipCommittedCodec(),
-				OwnershipFiles::atomicMove, OwnershipFiles::atomicMoveReplacing, Files::deleteIfExists);
+				DurableFileOperations::atomicMove, DurableFileOperations::atomicMoveReplacing, Files::deleteIfExists);
 	}
 
 	OwnershipFiles(
@@ -264,34 +264,6 @@ public final class OwnershipFiles {
 		try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) {
 			channel.force(true);
 		}
-	}
-
-	/** Windows antivirus/indexing can briefly hold handles on freshly written files. */
-	private static void atomicMove(Path source, Path target) throws IOException {
-		moveWithRetry(source, target, StandardCopyOption.ATOMIC_MOVE);
-	}
-
-	private static void atomicMoveReplacing(Path source, Path target) throws IOException {
-		moveWithRetry(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-	}
-
-	private static void moveWithRetry(Path source, Path target, StandardCopyOption... options) throws IOException {
-		IOException denied = null;
-		for (int attempt = 0; attempt < 5; attempt++) {
-			try {
-				Files.move(source, target, options);
-				return;
-			} catch (java.nio.file.AccessDeniedException accessDenied) {
-				denied = accessDenied;
-				try {
-					Thread.sleep(25L << attempt);
-				} catch (InterruptedException interrupted) {
-					Thread.currentThread().interrupt();
-					throw accessDenied;
-				}
-			}
-		}
-		throw denied;
 	}
 
 	@FunctionalInterface

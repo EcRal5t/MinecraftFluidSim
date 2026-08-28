@@ -1,5 +1,15 @@
 # 区域 checkpoint 契约
 
+## 世界能力包
+
+`mmm/world-capabilities/` 保存世界唯一的世界能力包：五个 world registry snapshot 加一份 `profile.nbt`。它是已有库存的唯一解释——区域载荷里的 stable ID 只能按这个包的 registry 解析，区域 section 不复制 registry。
+
+包是不可变的，发布一次，generation 恒为 1；定义漂移只报告 mismatch，不覆盖已提交内容。成员集合固定为 `chemical-registry.nbt`、`gas-registry.nbt`、`granular-registry.nbt`、`material-registry.nbt`、`profile.nbt`、`thermal-registry.nbt`，每个成员的字节就是对应 registry store 的严格规范编码（`*RegistryStore.snapshotBytes`），所以包内 checksum 与该 store 自己发布的文件逐字节一致。manifest 校验和覆盖 manifest 自身，HEAD 额外绑定 manifest 校验和、profile fingerprint 与 aggregate fingerprint。
+
+发布序列与区域 checkpoint 同构：先在 `mmm/quarantine/world-capability-staging/<transaction>.preparing` 写 manifest，原子移为 `slot-a.tmp`；再按规范顺序写成员、回读校验；原子移为 `slot-a`；最后写 `HEAD.nbt.tmp`、回读校验、原子移为 `HEAD.nbt`。**只有 HEAD rename 是 commit point**，slot 在 HEAD 绑定它之前只是 staging。
+
+重开时按目录内容判定唯一状态：`{HEAD, slot-a}` 已提交；`{slot-a, HEAD.nbt.tmp}` 补完 HEAD 移动；`{slot-a}` 补发 HEAD；`{slot-a.tmp}` 把中断的 staging 原样移入 quarantine 后重新发布；空目录首次发布；其他组合一律拒绝并原样保留。staging 从不删除，没有 publication identity 的 staging 只能拒绝，不能猜测或清理。quarantine 有 admission 预算，超限即拒绝而不是静默丢弃。
+
 ## 文件与职责边界
 
 world save 下的 `mmm/region-state/<region UUID>/` 是区域物理状态的唯一持久根。目录内只有：
@@ -98,7 +108,7 @@ section、palette、mixture、deposit group、gas node 和 ledger 都必须采�
 
 ## 读取与 admission
 
-启动顺序是先加载并冻结 world registries，再扫描 region-state root。扫描遇到非 UUID 条目、非目录、损坏 HEAD、未知必需布局或 checksum/identity 失败时保留原路径为 issue。若无法从路径安全识别 region，禁止创建所有新区；若能识别，则只锁对应 region。
+启动顺序是先加载并冻结 world registries 与 world capability bundle，再扫描 region-state root。扫描遇到非 UUID 条目、非目录、损坏 HEAD、未知必需布局或 checksum/identity 失败时保留原路径为 issue。若无法从路径安全识别 region，禁止创建所有新区；若能识别，则只锁对应 region。
 
 完整恢复按以下顺序：
 

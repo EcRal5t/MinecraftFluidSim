@@ -26,6 +26,7 @@ import cc.ecisr.mmm.simulation.TakeoverJournalValidation;
 import cc.ecisr.mmm.simulation.controller.FluidBoundaryScannerValidation;
 import cc.ecisr.mmm.simulation.ownership.M6OwnershipValidation;
 import cc.ecisr.mmm.simulation.persistence.FluidRegionPersistenceValidation;
+import cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStoreValidation;
 import cc.ecisr.mmm.fluid.M9ThermalValidation;
 import cc.ecisr.mmm.fluid.MaterialRegistryStoreValidation;
 import cc.ecisr.mmm.worldprofile.WorldCapabilityProfileValidation;
@@ -145,6 +146,7 @@ public final class CpuValidationSuite {
 			M7RegionChemistryPersistenceValidation.main(NONE);
 			WorldCapabilityProfileValidation.main(NONE);
 			MaterialRegistryStoreValidation.main(NONE);
+			WorldCapabilityBundleStoreValidation.main(NONE);
 		});
 		gate(gates, "protocol", () -> {
 			FluidNetworkProtocolValidation.main(NONE);
