@@ -8,6 +8,7 @@ import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.Tag;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -36,22 +37,22 @@ public final class MaterialRegistryStore {
 		validateLayout();
 		Path target = registryPath();
 		if (Files.exists(target)) {
-			MaterialRegistry authoritative = read(target);
+			MaterialRegistry authoritative = readSnapshot(target);
 			return new LoadResult(authoritative, !authoritative.fingerprint().equals(definitions.fingerprint()), false);
 		}
 		Path temporary = temporaryPath();
 		DurableFileOperations.createDirectories(directory);
 		if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
 		try {
-			NbtIo.writeCompressed(encode(definitions), temporary);
+			writeSnapshot(temporary, definitions);
 			force(temporary);
-			MaterialRegistry reread = read(temporary);
+			MaterialRegistry reread = readSnapshot(temporary);
 			if (!reread.fingerprint().equals(definitions.fingerprint())) {
 				throw new IOException("Staged material registry did not read back identically");
 			}
 			Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
 			DurableFileOperations.forceDirectory(directory);
-			return new LoadResult(read(target), false, true);
+			return new LoadResult(readSnapshot(target), false, true);
 		} catch (IOException failure) {
 			try {
 				if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
@@ -65,7 +66,7 @@ public final class MaterialRegistryStore {
 	public MaterialRegistry read() throws IOException {
 		validateLayout();
 		if (!exists()) throw new IOException("Material registry snapshot is missing at " + registryPath());
-		return read(registryPath());
+		return readSnapshot(registryPath());
 	}
 
 	public boolean exists() { return Files.exists(registryPath()); }
@@ -74,7 +75,21 @@ public final class MaterialRegistryStore {
 
 	private Path temporaryPath() { return directory.resolve("registry.nbt.tmp"); }
 
-	private MaterialRegistry read(Path path) throws IOException {
+	/** Canonical bytes of the strict snapshot; the bundle stores exactly these so checksums agree. */
+	public static byte[] snapshotBytes(MaterialRegistry registry) throws IOException {
+		if (registry == null) throw new IllegalArgumentException("Material registry snapshot is missing");
+		ByteArrayOutputStream output = new ByteArrayOutputStream();
+		NbtIo.writeCompressed(encode(registry), output);
+		return output.toByteArray();
+	}
+
+	public static void writeSnapshot(Path path, MaterialRegistry registry) throws IOException {
+		if (path == null || registry == null) throw new IllegalArgumentException("Material registry snapshot write is incomplete");
+		Files.write(path, snapshotBytes(registry));
+	}
+
+	public static MaterialRegistry readSnapshot(Path path) throws IOException {
+		if (path == null) throw new IllegalArgumentException("Material registry snapshot path is missing");
 		CompoundTag root;
 		try {
 			root = NbtIo.readCompressed(path, NbtAccounter.create(MAX_BYTES));

@@ -9,6 +9,7 @@ import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.Tag;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -46,22 +47,22 @@ public final class ThermalRegistryStore {
 		validateLayout();
 		Path target = registryPath();
 		if (Files.exists(target)) {
-			ThermalRegistry authoritative = read(target);
+			ThermalRegistry authoritative = readSnapshot(target, chemicalFingerprint, granularFingerprint, gasFingerprint);
 			return new LoadResult(authoritative, !authoritative.fingerprint().equals(definitions.fingerprint()), false);
 		}
 		Path temporary = temporaryPath();
 		DurableFileOperations.createDirectories(directory);
 		if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
 		try {
-			NbtIo.writeCompressed(encode(definitions), temporary);
+			writeSnapshot(temporary, definitions);
 			force(temporary);
-			ThermalRegistry reread = read(temporary);
+			ThermalRegistry reread = readSnapshot(temporary, chemicalFingerprint, granularFingerprint, gasFingerprint);
 			if (!reread.fingerprint().equals(definitions.fingerprint())) {
 				throw new IOException("Staged thermal registry did not read back identically");
 			}
 			Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
 			DurableFileOperations.forceDirectory(directory);
-			return new LoadResult(read(target), false, true);
+			return new LoadResult(readSnapshot(target, chemicalFingerprint, granularFingerprint, gasFingerprint), false, true);
 		} catch (IOException failure) {
 			try {
 				if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
@@ -73,14 +74,31 @@ public final class ThermalRegistryStore {
 	public ThermalRegistry read() throws IOException {
 		validateLayout();
 		if (!exists()) throw new IOException("Thermal registry snapshot is missing at " + registryPath());
-		return read(registryPath());
+		return readSnapshot(registryPath(), chemicalFingerprint, granularFingerprint, gasFingerprint);
 	}
 
 	public boolean exists() { return Files.exists(registryPath()); }
 	public Path registryPath() { return directory.resolve("registry.nbt"); }
 	private Path temporaryPath() { return directory.resolve("registry.nbt.tmp"); }
 
-	private ThermalRegistry read(Path path) throws IOException {
+	/** Canonical bytes of the strict snapshot; the bundle stores exactly these so checksums agree. */
+	public static byte[] snapshotBytes(ThermalRegistry registry) throws IOException {
+		if (registry == null) throw new IllegalArgumentException("Thermal registry snapshot is missing");
+		ByteArrayOutputStream output = new ByteArrayOutputStream();
+		NbtIo.writeCompressed(encode(registry), output);
+		return output.toByteArray();
+	}
+
+	public static void writeSnapshot(Path path, ThermalRegistry registry) throws IOException {
+		if (path == null || registry == null) throw new IllegalArgumentException("Thermal registry snapshot write is incomplete");
+		Files.write(path, snapshotBytes(registry));
+	}
+
+	public static ThermalRegistry readSnapshot(Path path, String chemicalFingerprint, String granularFingerprint, String gasFingerprint) throws IOException {
+		if (path == null) throw new IllegalArgumentException("Thermal registry snapshot path is missing");
+		chemicalFingerprint = requireFingerprint(chemicalFingerprint, "chemical");
+		granularFingerprint = requireFingerprint(granularFingerprint, "granular");
+		gasFingerprint = requireFingerprint(gasFingerprint, "gas");
 		CompoundTag root;
 		try { root = NbtIo.readCompressed(path, NbtAccounter.create(MAX_BYTES)); }
 		catch (RuntimeException invalid) { throw new IOException("Unreadable thermal registry snapshot " + path, invalid); }

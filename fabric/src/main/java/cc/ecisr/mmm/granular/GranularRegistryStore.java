@@ -10,6 +10,7 @@ import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.Tag;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -39,21 +40,21 @@ public final class GranularRegistryStore {
 		validateLayout();
 		Path target = registryPath();
 		if (Files.exists(target)) {
-			GranularRegistry authoritative = read(target);
+			GranularRegistry authoritative = readSnapshot(target, chemicalRegistry);
 			return new LoadResult(authoritative, !authoritative.fingerprint().equals(definitions.fingerprint()), false);
 		}
 		Path temporary = temporaryPath();
 		DurableFileOperations.createDirectories(directory);
 		if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
 		try {
-			NbtIo.writeCompressed(encode(definitions), temporary); force(temporary);
-			GranularRegistry reread = read(temporary);
+			writeSnapshot(temporary, definitions); force(temporary);
+			GranularRegistry reread = readSnapshot(temporary, chemicalRegistry);
 			if (!reread.fingerprint().equals(definitions.fingerprint())) {
 				throw new IOException("Staged granular registry did not read back identically");
 			}
 			Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
 			DurableFileOperations.forceDirectory(directory);
-			return new LoadResult(read(target), false, true);
+			return new LoadResult(readSnapshot(target, chemicalRegistry), false, true);
 		} catch (IOException failure) {
 			try {
 				if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
@@ -65,14 +66,29 @@ public final class GranularRegistryStore {
 	public GranularRegistry read() throws IOException {
 		validateLayout();
 		if (!exists()) throw new IOException("Granular registry snapshot is missing at " + registryPath());
-		return read(registryPath());
+		return readSnapshot(registryPath(), chemicalRegistry);
 	}
 
 	public boolean exists() { return Files.exists(registryPath()); }
 	public Path registryPath() { return directory.resolve("registry.nbt"); }
 	private Path temporaryPath() { return directory.resolve("registry.nbt.tmp"); }
 
-	private GranularRegistry read(Path path) throws IOException {
+	/** Canonical bytes of the strict snapshot; the bundle stores exactly these so checksums agree. */
+	public static byte[] snapshotBytes(GranularRegistry registry) throws IOException {
+		if (registry == null) throw new IllegalArgumentException("Granular registry snapshot is missing");
+		ByteArrayOutputStream output = new ByteArrayOutputStream();
+		NbtIo.writeCompressed(encode(registry), output);
+		return output.toByteArray();
+	}
+
+	public static void writeSnapshot(Path path, GranularRegistry registry) throws IOException {
+		if (path == null || registry == null) throw new IllegalArgumentException("Granular registry snapshot write is incomplete");
+		Files.write(path, snapshotBytes(registry));
+	}
+
+	public static GranularRegistry readSnapshot(Path path, ChemicalRegistry chemicalRegistry) throws IOException {
+		if (path == null) throw new IllegalArgumentException("Granular registry snapshot path is missing");
+		if (chemicalRegistry == null) throw new IllegalArgumentException("Granular registry snapshot is missing its chemical registry");
 		CompoundTag root;
 		try { root = NbtIo.readCompressed(path, NbtAccounter.create(MAX_BYTES)); }
 		catch (RuntimeException invalid) { throw new IOException("Unreadable granular registry snapshot " + path, invalid); }

@@ -9,6 +9,7 @@ import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -37,22 +38,22 @@ public final class ChemicalRegistryStore {
 		validateLayout();
 		Path target = registryPath();
 		if (Files.exists(target)) {
-			ChemicalRegistry authoritative = read(target);
+			ChemicalRegistry authoritative = readSnapshot(target);
 			return new LoadResult(authoritative, !authoritative.fingerprint().equals(definitions.fingerprint()), false);
 		}
 		Path temporary = temporaryPath();
 		DurableFileOperations.createDirectories(directory);
 		if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
 		try {
-			NbtIo.writeCompressed(encode(definitions), temporary);
+			writeSnapshot(temporary, definitions);
 			force(temporary);
-			ChemicalRegistry reread = read(temporary);
+			ChemicalRegistry reread = readSnapshot(temporary);
 			if (!reread.fingerprint().equals(definitions.fingerprint())) {
 				throw new IOException("Staged chemical registry did not read back identically");
 			}
 			Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
 			DurableFileOperations.forceDirectory(directory);
-			return new LoadResult(read(target), false, true);
+			return new LoadResult(readSnapshot(target), false, true);
 		} catch (IOException failure) {
 			try {
 				if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
@@ -64,14 +65,28 @@ public final class ChemicalRegistryStore {
 	public ChemicalRegistry read() throws IOException {
 		validateLayout();
 		if (!Files.exists(registryPath())) throw new IOException("Chemical registry snapshot is missing at " + registryPath());
-		return read(registryPath());
+		return readSnapshot(registryPath());
 	}
 
 	public boolean exists() { return Files.exists(registryPath()); }
 	public Path registryPath() { return directory.resolve("registry.nbt"); }
 	private Path temporaryPath() { return directory.resolve("registry.nbt.tmp"); }
 
-	private ChemicalRegistry read(Path path) throws IOException {
+	/** Canonical bytes of the strict snapshot; the bundle stores exactly these so checksums agree. */
+	public static byte[] snapshotBytes(ChemicalRegistry registry) throws IOException {
+		if (registry == null) throw new IllegalArgumentException("Chemical registry snapshot is missing");
+		ByteArrayOutputStream output = new ByteArrayOutputStream();
+		NbtIo.writeCompressed(encode(registry), output);
+		return output.toByteArray();
+	}
+
+	public static void writeSnapshot(Path path, ChemicalRegistry registry) throws IOException {
+		if (path == null || registry == null) throw new IllegalArgumentException("Chemical registry snapshot write is incomplete");
+		Files.write(path, snapshotBytes(registry));
+	}
+
+	public static ChemicalRegistry readSnapshot(Path path) throws IOException {
+		if (path == null) throw new IllegalArgumentException("Chemical registry snapshot path is missing");
 		CompoundTag root;
 		try { root = NbtIo.readCompressed(path, NbtAccounter.create(MAX_BYTES)); }
 		catch (RuntimeException invalid) { throw new IOException("Unreadable chemical registry snapshot " + path, invalid); }
