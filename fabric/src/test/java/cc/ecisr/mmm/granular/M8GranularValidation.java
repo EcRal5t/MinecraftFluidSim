@@ -619,7 +619,9 @@ public final class M8GranularValidation {
 		}
 		require(stats.pressureIterations() > 0 && Float.isFinite(stats.pressureResidual())
 				&& domain.maximumParticleSpeed() < 3.0e-4F,
-				"porous granular bed left a non-hydrostatic liquid state");
+				"porous granular bed left a non-hydrostatic liquid state: speed="
+						+ domain.maximumParticleSpeed() + ", PCG=" + stats.pressureIterations()
+						+ "/" + stats.pressureResidual());
 		require(domain.totalGranularSolidVolumeSvq() == totalSvq && rawClose(domain.totalGranularMass(), totalMass),
 				"porous hydrostatic projection changed granular truth");
 	}

@@ -124,8 +124,8 @@ public final class AirCavityScannerValidation {
 	private static void validateInterfaceResidualAttribution() {
 		int n = 8;
 		Grid grid = tank(n, true, 1.0F);
-		for (int z = 1; z < n - 1; z++) for (int x = 1; x < n - 1; x++) {
-			int i = (z * n + 3) * n + x;
+		for (int y = 2; y <= 3; y++) for (int z = 1; z < n - 1; z++) for (int x = 1; x < n - 1; x++) {
+			int i = (z * n + y) * n + x;
 			grid.markerCount[i] = 1;
 			grid.liquidVolume[i] = 0.5F;
 		}
@@ -133,15 +133,15 @@ public final class AirCavityScannerValidation {
 		AirCavityScanner.Result result = scanner.scan(
 				grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells);
 		check(result.sealedNodeCount() == 1, "partially filled sealed tank must stay one cavity");
-		checkRelative(result.sealedAvailableVolume()[0], 6 * 6 * 3 + 6 * 6 * 0.5,
-				"interface residual must join the sealed cavity volume");
-		for (int z = 1; z < n - 1; z++) for (int x = 1; x < n - 1; x++) {
-			int cell = (z * n + 3) * n + x;
+		checkRelative(result.sealedAvailableVolume()[0], 6 * 6 * 3 + 2 * 6 * 6 * 0.5,
+				"multi-cell interface residual must join the sealed cavity volume");
+		for (int y = 2; y <= 3; y++) for (int z = 1; z < n - 1; z++) for (int x = 1; x < n - 1; x++) {
+			int cell = (z * n + y) * n + x;
 			check(result.cellNodeId()[cell] == -1 && result.cellLineageNodeId()[cell] == 1,
-					"partial interface gas must retain runtime cavity lineage without entering persisted membership");
+					"connected partial interface gas must retain runtime cavity lineage without entering persisted membership");
 		}
-		for (int z = 1; z < n - 1; z++) for (int x = 1; x < n - 1; x++) {
-			grid.liquidVolume[(z * n + 3) * n + x] = 0.25F;
+		for (int y = 2; y <= 3; y++) for (int z = 1; z < n - 1; z++) for (int x = 1; x < n - 1; x++) {
+			grid.liquidVolume[(z * n + y) * n + x] = 0.25F;
 		}
 		double[] stableVolumes = scanner.measureSealedAvailableVolumes(
 				grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null,
@@ -202,7 +202,7 @@ public final class AirCavityScannerValidation {
 		final float cellSize;
 		final boolean[] solid;
 		final int[] markerCount;
-		final float[] liquidVolume;
+		final double[] liquidVolume;
 		final FlipCutCellGeometry cutCells;
 
 		Grid(int sizeX, int sizeY, int sizeZ, float cellSize) {
@@ -212,7 +212,7 @@ public final class AirCavityScannerValidation {
 			this.cellSize = cellSize;
 			this.solid = new boolean[sizeX * sizeY * sizeZ];
 			this.markerCount = new int[sizeX * sizeY * sizeZ];
-			this.liquidVolume = new float[sizeX * sizeY * sizeZ];
+			this.liquidVolume = new double[sizeX * sizeY * sizeZ];
 			this.cutCells = new FlipCutCellGeometry(sizeX, sizeY, sizeZ);
 		}
 

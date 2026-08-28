@@ -8,9 +8,11 @@ public final class FlipFluidFreeSurfaceValidation {
 		boolean fast = java.util.Arrays.asList(args).contains("--fast");
 		planeVolumeInversionIsAccurate();
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
+		pressurePhaseUsesConservativeFootprintVolume();
 		pureWaterMarkerMassLedgerTracksVolume();
 		volumeDriftCorrectionPreservesLegitimateSurfaceDeficits();
 		fractionalHydrostaticColumnsBalanceGravity();
+		pressureNonConvergenceRejectsStep();
 		thinLayerRegularizationRemainsStable();
 		isolatedDropletReceivesUndilutedGravity();
 		if (!fast) longRunHydrostaticSurfaceDoesNotSink();
@@ -80,6 +82,31 @@ public final class FlipFluidFreeSurfaceValidation {
 		}
 	}
 
+	private static void pressurePhaseUsesConservativeFootprintVolume() {
+		int sizeX = 5, sizeY = 3, sizeZ = 3;
+		int cellCount = sizeX * sizeY * sizeZ;
+		boolean[] solid = new boolean[cellCount];
+		boolean[] fluid = new boolean[cellCount];
+		double[] reconstructed = new double[cellCount];
+		int bulk = index(sizeX, sizeY, 1, 1, 1);
+		int fringe = index(sizeX, sizeY, 2, 1, 1);
+		FlipPressurePhaseGeometry pressure = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
+		FlipCutCellGeometry cutCells = new FlipCutCellGeometry(sizeX, sizeY, sizeZ);
+		reconstructed[bulk] = 0.875F;
+		reconstructed[fringe] = 0.125F;
+		pressure.rebuild(solid, reconstructed, cutCells, null, fluid);
+		check(fluid[bulk] && !fluid[fringe]
+				&& Math.abs(pressure.liquidFraction(bulk) - 0.875F) < 1.0E-7F
+				&& Math.abs(pressure.liquidFraction(fringe) - 0.125F) < 1.0E-7F,
+				"pressure phase did not retain the conservative center-contained footprint");
+		reconstructed[bulk] = 0.75F;
+		reconstructed[fringe] = 0.25F;
+		pressure.rebuild(solid, reconstructed, cutCells, null, fluid);
+		check(fluid[bulk] && !fluid[fringe]
+				&& Math.abs(pressure.liquidFraction(bulk) + pressure.liquidFraction(fringe) - 1.0F) < 1.0E-7F,
+				"pressure footprint transfer did not preserve its source volume");
+	}
+
 	private static void volumeDriftCorrectionPreservesLegitimateSurfaceDeficits() {
 		float dt = 0.05F;
 		check(Math.abs(FlipVolumeDriftCorrection.targetDivergence(1.25F, 1.25F, 1.0F, true, dt) - 0.25F) < 1.0E-7F,
@@ -106,7 +133,7 @@ public final class FlipFluidFreeSurfaceValidation {
 				domain.setVolume(x, 2, z, surfaceFraction);
 			}
 			float exactVolume = domain.totalVolume();
-			domain.step();
+			for (int step = 0; step < 200; step++) domain.step();
 			float theta = surfaceFraction >= 1.0F - 1.0E-6F ? 0.5F : surfaceFraction - 0.5F;
 			for (int y = 0; y <= 2; y++) {
 				float expected = config.density() * config.gravity() * config.cellSize() * (2 - y + theta);
@@ -120,6 +147,29 @@ public final class FlipFluidFreeSurfaceValidation {
 					"fractional hydrostatic projection left parasitic marker velocity: " + domain.maximumParticleSpeed());
 			check(Math.abs(domain.totalVolume() - exactVolume) < 1.0E-6F,
 					"fractional pressure changed the exact marker ledger");
+		}
+	}
+
+	private static void pressureNonConvergenceRejectsStep() {
+		FluidSolverConfig config = new FluidSolverConfig(
+				1.0F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				1, 1.0E-12F, 0.45F, 2.0E-3F, 0.80F);
+		FlipFluidDomain domain = new FlipFluidDomain(4, 6, 4, config);
+		for (int z = 0; z < 4; z++) for (int x = 0; x < 4; x++) {
+			domain.setVolume(x, 0, z, 1.0F);
+			domain.setVolume(x, 1, z, 0.75F);
+		}
+		FlipParticleState before = domain.exportParticleState();
+		try {
+			domain.step();
+			throw new AssertionError("unconverged pressure candidate was accepted");
+		} catch (FlipFluidDomain.PressureSolveBlockedException expected) {
+			check(java.util.Arrays.equals(before.copyPositionVolume(),
+						domain.exportParticleState().copyPositionVolume()),
+					"rejected pressure candidate changed marker position/volume truth");
+			check(java.util.Arrays.equals(before.copyParticleVelocities(),
+						domain.exportParticleState().copyParticleVelocities()),
+					"rejected pressure candidate changed marker momentum truth");
 		}
 	}
 

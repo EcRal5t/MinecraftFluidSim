@@ -87,6 +87,10 @@ public final class FlipFluidDomain {
 	private final boolean[] solid;
 	private final FlipCutCellGeometry cutCells;
 	private final int[] markerCount;
+	private final boolean[] pressureFluid;
+	private final FlipPressurePhaseGeometry pressurePhaseGeometry;
+	private final int[] pressureAirNodeId;
+	private final int[] pressureAirQueue;
 	private final int[] cellMarkerHead;
 	private final int[] cellMarkerTail;
 	private final FlipFreeSurfaceGeometry freeSurfaceGeometry;
@@ -94,6 +98,7 @@ public final class FlipFluidDomain {
 	private final FlipParticleCollision particleCollision;
 	private final FlipVelocityExtrapolator velocityExtrapolator;
 	private final float[] volume;
+	private final double[] pressureVolume;
 	private final float[] pressure;
 	private final float[] divergence;
 	private final double[] exactCellMarkerVolume;
@@ -192,6 +197,7 @@ public final class FlipFluidDomain {
 	private double[] granularCarrierVolumeByCell;
 	private boolean gridDirty = true;
 	private int pressureAnchor = -1;
+	private float pressureReference;
 	private int lastPressureIterations;
 	private float lastPressureResidual;
 	private boolean variableDensityActive;
@@ -233,6 +239,11 @@ public final class FlipFluidDomain {
 		this.solid = new boolean[cellCount];
 		this.cutCells = new FlipCutCellGeometry(sizeX, sizeY, sizeZ);
 		this.markerCount = new int[cellCount];
+		this.pressureFluid = new boolean[cellCount];
+		this.pressurePhaseGeometry = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
+		this.pressureAirNodeId = new int[cellCount];
+		this.pressureAirQueue = new int[cellCount];
+		Arrays.fill(pressureAirNodeId, -1);
 		this.cellMarkerHead = new int[cellCount];
 		this.cellMarkerTail = new int[cellCount];
 		this.freeSurfaceGeometry = new FlipFreeSurfaceGeometry(sizeX, sizeY, sizeZ);
@@ -240,6 +251,7 @@ public final class FlipFluidDomain {
 		this.particleCollision = new FlipParticleCollision(sizeX, sizeY, sizeZ, config.cellSize(), solid, cutCells);
 		this.velocityExtrapolator = new FlipVelocityExtrapolator(sizeX, sizeY, sizeZ, cutCells);
 		this.volume = new float[cellCount];
+		this.pressureVolume = new double[cellCount];
 		this.pressure = new float[cellCount];
 		this.divergence = new float[cellCount];
 		this.exactCellMarkerVolume = new double[cellCount];
@@ -338,7 +350,7 @@ public final class FlipFluidDomain {
 			throw new IllegalStateException("Gas restore requires an uninitialized topology");
 		}
 		ensureGrid();
-		AirCavityScanner.Result result = airScanner.scan(solid, markerCount, volume, cutCells,
+		AirCavityScanner.Result result = airScanner.scan(solid, markerCount, exactCellMarkerVolume, cutCells,
 				pressureGranularCoupling, sealedDomainBoundary);
 		int[] expected = state.cellNodeOrdinal(), actual = result.cellNodeId();
 		if (result.sealedNodeCount() != state.nodes().size()) {
@@ -1677,7 +1689,7 @@ public final class FlipFluidDomain {
 			for (int cell = 0; cell < cellCount && operations < maximumOperations; cell++) {
 				long coherentSvq = thermalState.coherentPhases().cellOccupiedSvq(cell);
 				if (markerCount[cell] == 0 && coherentSvq == 0L) continue;
-				double absolutePressure = AirNetwork.REFERENCE_PRESSURE + pressure[cell];
+				double absolutePressure = AirNetwork.REFERENCE_PRESSURE + pressureReference + pressure[cell];
 				if (!(Double.isFinite(absolutePressure)
 						&& absolutePressure >= transition.minimumPressurePa()
 						&& absolutePressure <= transition.maximumPressurePa())) {
@@ -1838,7 +1850,7 @@ public final class FlipFluidDomain {
 			double candidateGasEnergy = thermalState.gasNodeEnergy(node, airNetwork) + batchEnergy;
 			GasLiquidPhaseModel.Direction directionAfter = prospectiveGasPhaseDirection(
 					node, transition, phase, candidateLiquidTemperature, candidateGas, candidateGasEnergy);
-			return new GasBoilPlan(batches, removal, batch, candidateGasEnergy, directionAfter);
+			return new GasBoilPlan(batches, removedSvq, removal, batch, candidateGasEnergy, directionAfter);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException | PhaseCandidateUnavailableException unavailable) {
 			return null;
 		}
@@ -1864,6 +1876,7 @@ public final class FlipFluidDomain {
 		}
 		airNetwork.commitPhaseSource(node, plan.batch());
 		thermalState.commitGasNodeEnergy(node, plan.candidateGasEnergy());
+		commitPendingPhaseVolume(cell, -plan.removedSvq());
 		gridDirty = true;
 		thermalState.repartitionPhaseCellAndGasEnergyConserving(
 				thermalCell, gasEnergyBefore, plan.candidateGasEnergy(), thermalMarkerContext(),
@@ -2026,6 +2039,7 @@ public final class FlipFluidDomain {
 					unitScale.solverMass(plan.movedMass()),
 					plan.condensedMixture(), false, false);
 		}
+		commitPendingPhaseVolume(cell, plan.addedSvq());
 		gridDirty = true;
 		thermalState.repartitionPhaseCellAndGasEnergyConserving(
 				thermalCell, gasEnergyBefore, plan.candidateGasEnergy(), thermalMarkerContext(),
@@ -2545,7 +2559,7 @@ public final class FlipFluidDomain {
 		}
 	}
 	private record GasBoilPlan(
-			long batches, PhaseRemovalPlan removal, GasInventory batch, double candidateGasEnergy,
+			long batches, long removedSvq, PhaseRemovalPlan removal, GasInventory batch, double candidateGasEnergy,
 			GasLiquidPhaseModel.Direction directionAfter
 	) { }
 	private record GasCondensePlan(
@@ -3353,7 +3367,10 @@ public final class FlipFluidDomain {
 		return volume[cellIndexChecked(x, y, z)];
 	}
 
-	public float pressure(int x, int y, int z) { return pressure[cellIndexChecked(x, y, z)]; }
+	public float pressure(int x, int y, int z) {
+		int cell = cellIndexChecked(x, y, z);
+		return isFluid(cell) ? pressureReference + pressure[cell] : pressure[cell];
+	}
 
 	/** Package-private test accessor for the free-surface pressure jump {@code sigma * kappa} at a cell. */
 	float surfaceTensionPressureAt(int x, int y, int z) { return surfaceTensionPressure[cellIndexChecked(x, y, z)]; }
@@ -3557,7 +3574,9 @@ public final class FlipFluidDomain {
 
 	public float maximumPressure() {
 		float maximum = 0.0F;
-		for (float value : pressure) maximum = Math.max(maximum, value);
+		for (int cell = 0; cell < cellCount; cell++) if (isFluid(cell)) {
+			maximum = Math.max(maximum, pressureReference + pressure[cell]);
+		}
 		return maximum;
 	}
 
@@ -3814,7 +3833,7 @@ public final class FlipFluidDomain {
 		if (airCellNodeId != null) {
 			ensureGrid();
 			gasTopology = planGasTopology(airScanner.scan(
-					solid, new int[cellCount], new float[cellCount], cutCells, null, sealedDomainBoundary));
+					solid, new int[cellCount], new double[cellCount], cutCells, null, sealedDomainBoundary));
 		}
 		return new OperatorClearPlan(condensed, granular, gasTopology);
 	}
@@ -4633,7 +4652,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			FlipThermalState.PhaseMechanicalWorkPlan phaseWork = null;
 			if (substep == 0 && thermalState != null && hasPendingPhaseVolumeWork()) try {
 				phaseWork = thermalState.planPhaseMechanicalWork(
-						pendingPhaseCellVolume, pressure, config.cellSize(), thermalMarkerContext());
+						pendingPhaseCellVolume, pressure, pressureReference,
+						config.cellSize(), thermalMarkerContext());
 			} catch (IllegalArgumentException invalidPendingWork) {
 				throw new ThermalPhaseBlockedException(
 						"Pending phase mechanical work cannot be consumed: " + invalidPendingWork.getMessage(),
@@ -4787,6 +4807,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private void rebuildGridFromParticles() {
 		Arrays.fill(volume, 0.0F);
+		Arrays.fill(pressureVolume, 0.0);
 		Arrays.fill(markerCount, 0);
 		Arrays.fill(cellMarkerHead, -1);
 		Arrays.fill(cellMarkerTail, -1);
@@ -4833,6 +4854,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			}
 			freeSurfaceGeometry.addExactVolume(particleCell, particleVolume[i]);
 			splatCenter(particleX[i], particleY[i], particleZ[i], particleVolume[i]);
+			splatPressureVolume(particleX[i], particleY[i], particleZ[i], particleVolume[i]);
 			float transferWeight = variableDensityActive ? (float) particleMass[i] : particleVolume[i];
 			splatFaceField(velocityX, velocityWeightX, 0, particleX[i], particleY[i], particleZ[i], particleVelocityX[i], transferWeight);
 			splatFaceField(velocityY, velocityWeightY, 1, particleX[i], particleY[i], particleZ[i], particleVelocityY[i], transferWeight);
@@ -4860,6 +4882,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			pressureGranularCoupling = granularCoupling;
 			freeSurfaceGeometry.rebuild(solid, markerCount, cutCells, granularCoupling);
 		}
+		pressurePhaseGeometry.rebuild(solid, pressureVolume, cutCells, pressureGranularCoupling, pressureFluid);
+		rebuildPressureBoundaryLineage();
 		rebuildSurfaceTensionPressure();
 		enforceSolidFaceVelocities();
 		extrapolateVelocityIntoAir();
@@ -4872,6 +4896,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		Arrays.fill(markerCount, 0);
 		Arrays.fill(cellMarkerHead, -1);
 		Arrays.fill(cellMarkerTail, -1);
+		Arrays.fill(exactCellMarkerVolume, 0.0);
 		for (int marker = 0; marker < particleCount; marker++) {
 			int cell = particleCellIndex(marker);
 			int previous = cellMarkerTail[cell];
@@ -4881,6 +4906,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			else particleCellNext[previous] = marker;
 			cellMarkerTail[cell] = marker;
 			markerCount[cell]++;
+			exactCellMarkerVolume[cell] += particleVolume[marker];
 			splatCenter(particleX[marker], particleY[marker], particleZ[marker], particleVolume[marker]);
 		}
 	}
@@ -4892,7 +4918,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			return;
 		}
 		Arrays.fill(volume, 0.0F);
+		Arrays.fill(exactCellMarkerVolume, 0.0);
 		for (int marker = 0; marker < particleCount; marker++) {
+			exactCellMarkerVolume[particleCellIndex(marker)] += particleVolume[marker];
 			splatCenter(particleX[marker], particleY[marker], particleZ[marker], particleVolume[marker]);
 		}
 		refreshGasAvailableVolume();
@@ -5010,7 +5038,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	) { }
 
 	private void refreshGasTopology() {
-		AirCavityScanner.Result result = airScanner.scan(solid, markerCount, volume, cutCells,
+		AirCavityScanner.Result result = airScanner.scan(solid, markerCount, exactCellMarkerVolume, cutCells,
 				pressureGranularCoupling, sealedDomainBoundary);
 		commitGasTopology(planGasTopology(result));
 	}
@@ -5022,7 +5050,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			throw new IllegalStateException("Stable gas topology is unavailable");
 		}
 		double[] availableVolumes = airScanner.measureSealedAvailableVolumes(
-				solid, markerCount, volume, cutCells, pressureGranularCoupling,
+				solid, markerCount, exactCellMarkerVolume, cutCells, pressureGranularCoupling,
 				airCellNodeId, airCellLineageNodeId, previousSealedNodeCount);
 		ArrayList<GasInventory> inventories = new ArrayList<>(previousSealedNodeCount);
 		double[] mixedEnergy = new double[previousSealedNodeCount];
@@ -5055,11 +5083,25 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		if (previousSealedNodeCount > 0 && sealed > 0) {
 			int previous = previousSealedNodeCount;
 			TreeMap<Long, Long> overlap = new TreeMap<>();
+			boolean[] hasMembershipOverlap = new boolean[previous + 1];
+			int[] newMembership = result.cellNodeId();
 			int[] newLabels = result.cellLineageNodeId();
 			double[] cellAvailableVolume = result.cellAvailableVolume();
 			for (int cell = 0; cell < cellCount; cell++) {
-				int old = airCellLineageNodeId[cell];
+				int old = airCellNodeId[cell];
 				if (old < 1) continue;
+				int now = newMembership[cell];
+				if (now < 0 || !(cellAvailableVolume[cell] > 0.0)) continue;
+				long key = ((long) old << 32) | (now & 0xffffffffL);
+				long weight = Math.max(1L, AirNetwork.nanos(cellAvailableVolume[cell]));
+				overlap.merge(key, weight, Math::addExact);
+				hasMembershipOverlap[old] = true;
+			}
+			// Runtime interface lineage is a fallback for a node whose full-air membership vanished
+			// completely. It must not siphon a still-present cavity into ambient as its liquid surface moves.
+			for (int cell = 0; cell < cellCount; cell++) {
+				int old = airCellLineageNodeId[cell];
+				if (old < 1 || hasMembershipOverlap[old]) continue;
 				int now = newLabels[cell];
 				if (now < 0 || !(cellAvailableVolume[cell] > 0.0)) continue;
 				long key = ((long) old << 32) | (now & 0xffffffffL);
@@ -5178,10 +5220,68 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	/** Gauge pressure of the sealed cavity owning an air cell; zero for ambient and inactive gas. */
 	private float gasPressureOfAirCell(int airCell) {
 		if (!gasPressureActive) return 0.0F;
-		int node = airCellNodeId[airCell];
+		int node = gasNodeOfAirCell(airCell);
 		if (node <= 0) return 0.0F;
-		return (float) (thermalState == null || !thermalState.gasModelBound() ? airNetwork.gaugePressure(node)
-				: thermalState.gasGaugePressure(node, airNetwork));
+		return gasPressureOfNode(node);
+	}
+
+	private int gasNodeOfAirCell(int airCell) {
+		int node = pressureAirNodeId[airCell];
+		return node >= 0 ? node : rawGasNodeOfCell(airCell);
+	}
+
+	private int rawGasNodeOfCell(int cell) {
+		if (airCellNodeId == null) return -1;
+		int node = airCellNodeId[cell];
+		return node < 0 && airCellLineageNodeId != null ? airCellLineageNodeId[cell] : node;
+	}
+
+	/** Extends gas lineage through pressure-air fringe without crossing pressure-fluid bulk. */
+	private void rebuildPressureBoundaryLineage() {
+		Arrays.fill(pressureAirNodeId, -1);
+		if (!gasPressureActive || airCellNodeId == null) return;
+		for (int node = AirNetwork.AMBIENT_NODE; node <= previousSealedNodeCount; node++) {
+			int head = 0, tail = 0;
+			for (int cell = 0; cell < cellCount; cell++) if (isAir(cell)
+					&& rawGasNodeOfCell(cell) == node
+					&& (pressureAirNodeId[cell] < 0 || node < pressureAirNodeId[cell])) {
+				pressureAirNodeId[cell] = node;
+				pressureAirQueue[tail++] = cell;
+			}
+			while (head < tail) {
+				int cell = pressureAirQueue[head++];
+				int x = cell % sizeX;
+				int yz = cell / sizeX;
+				int y = yz % sizeY;
+				int z = yz / sizeY;
+				tail = visitPressureAir(cell, x - 1, y, z, -1, 0, 0, node, tail);
+				tail = visitPressureAir(cell, x + 1, y, z, 1, 0, 0, node, tail);
+				tail = visitPressureAir(cell, x, y - 1, z, 0, -1, 0, node, tail);
+				tail = visitPressureAir(cell, x, y + 1, z, 0, 1, 0, node, tail);
+				tail = visitPressureAir(cell, x, y, z - 1, 0, 0, -1, node, tail);
+				tail = visitPressureAir(cell, x, y, z + 1, 0, 0, 1, node, tail);
+			}
+		}
+	}
+
+	private int visitPressureAir(
+			int from, int x, int y, int z, int directionX, int directionY, int directionZ,
+			int node, int tail
+	) {
+		if (!inside(x, y, z)) return tail;
+		int cell = cellIndex(x, y, z);
+		if (!isAir(cell) || pressureAirNodeId[cell] >= 0 && pressureAirNodeId[cell] <= node
+				|| !(pressureOpenFaceFromCell(from, cell, directionX, directionY, directionZ) > 0.0F)) {
+			return tail;
+		}
+		pressureAirNodeId[cell] = node;
+		pressureAirQueue[tail] = cell;
+		return tail + 1;
+	}
+
+	private float gasPressureOfNode(int node) {
+		return (float) (thermalState == null || !thermalState.gasModelBound()
+				? airNetwork.gaugePressure(node) : thermalState.gasGaugePressure(node, airNetwork));
 	}
 
 	private static double[] partitionTopologyVolume(double total, long[] weights) {
@@ -5513,6 +5613,71 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 	}
 
+	private void splatPressureVolume(float px, float py, float pz, float particleAmount) {
+		double h = config.cellSize();
+		double gridX = px / h, gridY = py / h, gridZ = pz / h;
+		int centerX = (int) Math.floor(gridX), centerY = (int) Math.floor(gridY), centerZ = (int) Math.floor(gridZ);
+		int neighborX = gridX - centerX < 0.5 ? centerX - 1 : centerX + 1;
+		int neighborY = gridY - centerY < 0.5 ? centerY - 1 : centerY + 1;
+		int neighborZ = gridZ - centerZ < 0.5 ? centerZ - 1 : centerZ + 1;
+		double centerWeightX = pressureKernelWeight(gridX, centerX);
+		double centerWeightY = pressureKernelWeight(gridY, centerY);
+		double centerWeightZ = pressureKernelWeight(gridZ, centerZ);
+		double neighborWeightX = pressureKernelWeight(gridX, neighborX);
+		double neighborWeightY = pressureKernelWeight(gridY, neighborY);
+		double neighborWeightZ = pressureKernelWeight(gridZ, neighborZ);
+		double available = 0.0;
+		for (int oz = 0; oz < 2; oz++) {
+			int z = oz == 0 ? centerZ : neighborZ;
+			double weightZ = oz == 0 ? centerWeightZ : neighborWeightZ;
+			if (z < 0 || z >= sizeZ || !(weightZ > 0.0)) continue;
+			for (int oy = 0; oy < 2; oy++) {
+				int y = oy == 0 ? centerY : neighborY;
+				double weightY = oy == 0 ? centerWeightY : neighborWeightY;
+				if (y < 0 || y >= sizeY || !(weightY > 0.0)) continue;
+				for (int ox = 0; ox < 2; ox++) {
+					int x = ox == 0 ? centerX : neighborX;
+					double weightX = ox == 0 ? centerWeightX : neighborWeightX;
+					if (x < 0 || x >= sizeX || !(weightX > 0.0)) continue;
+					int cell = cellIndex(x, y, z);
+					if (solid[cell]) continue;
+					available += weightX * weightY * weightZ;
+				}
+			}
+		}
+		if (!(available > 0.0)) {
+			throw new IllegalStateException("Marker pressure footprint has no open cell overlap");
+		}
+		double scale = particleAmount / available;
+		for (int oz = 0; oz < 2; oz++) {
+			int z = oz == 0 ? centerZ : neighborZ;
+			double weightZ = oz == 0 ? centerWeightZ : neighborWeightZ;
+			if (z < 0 || z >= sizeZ || !(weightZ > 0.0)) continue;
+			for (int oy = 0; oy < 2; oy++) {
+				int y = oy == 0 ? centerY : neighborY;
+				double weightY = oy == 0 ? centerWeightY : neighborWeightY;
+				if (y < 0 || y >= sizeY || !(weightY > 0.0)) continue;
+				for (int ox = 0; ox < 2; ox++) {
+					int x = ox == 0 ? centerX : neighborX;
+					double weightX = ox == 0 ? centerWeightX : neighborWeightX;
+					if (x < 0 || x >= sizeX || !(weightX > 0.0)) continue;
+					int cell = cellIndex(x, y, z);
+					if (solid[cell]) continue;
+					pressureVolume[cell] += weightX * weightY * weightZ * scale;
+				}
+			}
+		}
+	}
+
+	/** C1 partition induced by the canonical quarter-cell spacing of the 2x2x2 marker lattice. */
+	private static double pressureKernelWeight(double coordinate, int cell) {
+		double distance = Math.abs(coordinate - (cell + 0.5));
+		if (distance <= 0.25) return 1.0;
+		if (distance >= 0.75) return 0.0;
+		double transition = (distance - 0.25) * 2.0;
+		return 1.0 - transition * transition * (3.0 - 2.0 * transition);
+	}
+
 	private static float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz) {
 		return (ox == 0 ? 1.0F - fx : fx) * (oy == 0 ? 1.0F - fy : fy) * (oz == 0 ? 1.0F - fz : fz);
 	}
@@ -5565,14 +5730,18 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		float impulse = config.gravity() * dt;
 		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z);
-			if (faceActive(below, above, pressureYFaceOpen(x, y, z))) velocityY[yFaceIndex(x, y, z)] -= impulse;
+			if (carrierFaceActive(below, above, pressureYFaceOpen(x, y, z))) {
+				velocityY[yFaceIndex(x, y, z)] -= impulse;
+			}
 		}
 	}
 
 	private void solvePressure(float dt) {
-		Arrays.fill(pressure, 0.0F);
+		rebuildPressureBoundaryLineage();
 		Arrays.fill(rhs, 0.0F);
 		pressureAnchor = findPressureAnchor();
+		pressureReference = pressureAnchor < 0 ? pressureBoundaryReference() : 0.0F;
+		Arrays.fill(pressure, 0.0F);
 		float inverseCell = 1.0F / config.cellSize();
 		float rhsScale = -config.density() / dt;
 		int fluidCells = 0;
@@ -5594,27 +5763,70 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 		if (fluidCells == 0) { lastPressureIterations = 0; lastPressureResidual = 0.0F; return; }
 		System.arraycopy(rhs, 0, residual, 0, cellCount);
-		applyPreconditioner(residual, preconditioned);
-		System.arraycopy(preconditioned, 0, direction, 0, cellCount);
+		double target = config.pressureTolerance();
+		double residualRms = Math.sqrt(dot(residual, residual) / fluidCells);
+		boolean converged = Double.isFinite(residualRms) && residualRms <= target;
+		if (!converged) {
+			applyPreconditioner(residual, preconditioned);
+			System.arraycopy(preconditioned, 0, direction, 0, cellCount);
+		}
 		double rz = dot(residual, preconditioned);
-		double target = config.pressureTolerance() * Math.max(1.0, Math.sqrt(dot(rhs, rhs) / fluidCells));
 		lastPressureIterations = 0;
-		for (int iteration = 0; iteration < config.maxPressureIterations(); iteration++) {
+		for (int iteration = 0; !converged && iteration < config.maxPressureIterations(); iteration++) {
 			applyPressureMatrix(direction, matrixDirection);
 			double denominator = dot(direction, matrixDirection);
-			if (!(denominator > 1.0E-20)) break;
+			if (!(Double.isFinite(denominator) && denominator > 1.0E-20
+					&& Double.isFinite(rz) && rz > 0.0)) break;
 			float alpha = (float) (rz / denominator);
+			if (!Float.isFinite(alpha)) break;
 			for (int i = 0; i < cellCount; i++) { pressure[i] += alpha * direction[i]; residual[i] -= alpha * matrixDirection[i]; }
 			lastPressureIterations = iteration + 1;
-			if (Math.sqrt(dot(residual, residual) / fluidCells) <= target) break;
+			residualRms = Math.sqrt(dot(residual, residual) / fluidCells);
+			if (Double.isFinite(residualRms) && residualRms <= target) {
+				converged = true;
+				break;
+			}
 			applyPreconditioner(residual, preconditioned);
 			double nextRz = dot(residual, preconditioned);
-			if (!(Math.abs(rz) > 1.0E-30)) break;
+			if (!(Double.isFinite(nextRz) && nextRz > 0.0)) break;
 			float beta = (float) (nextRz / rz);
+			if (!Float.isFinite(beta)) break;
 			for (int i = 0; i < cellCount; i++) direction[i] = preconditioned[i] + beta * direction[i];
 			rz = nextRz;
 		}
 		lastPressureResidual = (float) Math.sqrt(dot(residual, residual) / fluidCells);
+		if (!converged) {
+			throw new PressureSolveBlockedException("Pressure projection did not converge: residual="
+					+ lastPressureResidual + ", tolerance=" + target + ", iterations=" + lastPressureIterations
+					+ "/" + config.maxPressureIterations());
+		}
+	}
+
+	private float pressureBoundaryReference() {
+		if (!gasPressureActive) return 0.0F;
+		int referenceNode = Integer.MAX_VALUE;
+		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int air = cellIndex(x, y, z);
+			if (!isAir(air)) continue;
+			boolean touchesFluid = x > 0 && cutCells.xFaceOpen(x, y, z) > 0.0F
+					&& isFluid(cellIndex(x - 1, y, z))
+					|| x + 1 < sizeX && cutCells.xFaceOpen(x + 1, y, z) > 0.0F
+					&& isFluid(cellIndex(x + 1, y, z))
+					|| y > 0 && cutCells.yFaceOpen(x, y, z) > 0.0F
+					&& isFluid(cellIndex(x, y - 1, z))
+					|| y + 1 < sizeY && cutCells.yFaceOpen(x, y + 1, z) > 0.0F
+					&& isFluid(cellIndex(x, y + 1, z))
+					|| z > 0 && cutCells.zFaceOpen(x, y, z) > 0.0F
+					&& isFluid(cellIndex(x, y, z - 1))
+					|| z + 1 < sizeZ && cutCells.zFaceOpen(x, y, z + 1) > 0.0F
+					&& isFluid(cellIndex(x, y, z + 1));
+			if (!touchesFluid) continue;
+			int node = gasNodeOfAirCell(air);
+			if (node < 0) continue;
+			referenceNode = Math.min(referenceNode, node);
+			if (referenceNode == AirNetwork.AMBIENT_NODE) return 0.0F;
+		}
+		return referenceNode == Integer.MAX_VALUE ? 0.0F : gasPressureOfNode(referenceNode);
 	}
 
 	private float volumeDriftDivergence(int index, float dt) {
@@ -5705,7 +5917,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z);
 			float aperture = pressureYFaceOpen(x, y, z);
-			if (!faceActive(below, above, aperture)) continue;
+			if (!carrierFaceActive(below, above, aperture)) continue;
 			double volumeSum = thermalBuoyancyVolume[below] + thermalBuoyancyVolume[above];
 			if (volumeSum <= 0.0) continue;
 			double relative = (thermalBuoyancySum[below] + thermalBuoyancySum[above]) / volumeSum;
@@ -6445,10 +6657,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		if (!isAir(neighbor)) return 0.0F;
 		float openArea = pressureOpenFaceFromCell(fluid, neighbor, directionX, directionY, directionZ);
 		if (openArea <= 0.0F) return 0.0F;
-		float theta = freeSurfaceGeometry.pressureTheta(fluid, directionX, directionY, directionZ);
+		float theta = pressureInterfaceTheta(fluid, directionX, directionY, directionZ);
 		if (theta <= 0.0F) return 0.0F;
-		float gas = gasPressureOfAirCell(neighbor);
-		float jump = gas == 0.0F ? surfaceTensionPressure[fluid] : surfaceTensionPressure[fluid] + gas;
+		float jump = surfaceTensionPressure[fluid] + gasPressureOfAirCell(neighbor) - pressureReference;
 		float densityScale = variableDensityActive ? pressureDensityScale(fluid, neighbor) : 1.0F;
 		return -openArea * scale * densityScale * jump / theta * inverseCell;
 	}
@@ -6507,7 +6718,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		if (openArea <= 0.0F || solid[neighbor]) return 0.0F;
 		float densityScale = variableDensityActive ? pressureDensityScale(fluid, neighbor) : 1.0F;
 		if (isFluid(neighbor)) return openArea * densityScale;
-		return openArea * densityScale / freeSurfaceGeometry.pressureTheta(fluid, directionX, directionY, directionZ);
+		return openArea * densityScale
+				/ pressureInterfaceTheta(fluid, directionX, directionY, directionZ);
 	}
 
 	private float pressureDensityScale(int first, int second) {
@@ -6642,30 +6854,30 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		float scale = dt / (config.density() * config.cellSize());
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
 			int left = cellIndex(x - 1, y, z), right = cellIndex(x, y, z), face = xFaceIndex(x, y, z);
-			if (!faceActive(left, right, pressureXFaceOpen(x, y, z))) velocityX[face] = 0.0F;
-			else {
+			float openArea = pressureXFaceOpen(x, y, z);
+			if (faceActive(left, right, openArea)) {
 				float difference = pressureDifference(left, right, 1, 0, 0);
 				if (variableDensityActive) difference *= pressureDensityScale(left, right);
 				velocityX[face] -= scale * difference;
-			}
+			} else if (!carrierFaceActive(left, right, openArea)) velocityX[face] = 0.0F;
 		}
 		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z), face = yFaceIndex(x, y, z);
-			if (!faceActive(below, above, pressureYFaceOpen(x, y, z))) velocityY[face] = 0.0F;
-			else {
+			float openArea = pressureYFaceOpen(x, y, z);
+			if (faceActive(below, above, openArea)) {
 				float difference = pressureDifference(below, above, 0, 1, 0);
 				if (variableDensityActive) difference *= pressureDensityScale(below, above);
 				velocityY[face] -= scale * difference;
-			}
+			} else if (!carrierFaceActive(below, above, openArea)) velocityY[face] = 0.0F;
 		}
 		for (int z = 1; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int back = cellIndex(x, y, z - 1), front = cellIndex(x, y, z), face = zFaceIndex(x, y, z);
-			if (!faceActive(back, front, pressureZFaceOpen(x, y, z))) velocityZ[face] = 0.0F;
-			else {
+			float openArea = pressureZFaceOpen(x, y, z);
+			if (faceActive(back, front, openArea)) {
 				float difference = pressureDifference(back, front, 0, 0, 1);
 				if (variableDensityActive) difference *= pressureDensityScale(back, front);
 				velocityZ[face] -= scale * difference;
-			}
+			} else if (!carrierFaceActive(back, front, openArea)) velocityZ[face] = 0.0F;
 		}
 	}
 
@@ -6674,14 +6886,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		boolean secondFluid = isFluid(second);
 		if (firstFluid && secondFluid) return pressure[second] - pressure[first];
 		if (firstFluid) {
-			float theta = freeSurfaceGeometry.pressureTheta(first, directionX, directionY, directionZ);
-			float gas = gasPressureOfAirCell(second);
-			float jump = gas == 0.0F ? surfaceTensionPressure[first] : surfaceTensionPressure[first] + gas;
+			float theta = pressureInterfaceTheta(first, directionX, directionY, directionZ);
+			float jump = surfaceTensionPressure[first] + gasPressureOfAirCell(second) - pressureReference;
 			return (jump - pressure[first]) / theta;
 		}
-		float theta = freeSurfaceGeometry.pressureTheta(second, -directionX, -directionY, -directionZ);
-		float gas = gasPressureOfAirCell(first);
-		float jump = gas == 0.0F ? surfaceTensionPressure[second] : surfaceTensionPressure[second] + gas;
+		float theta = pressureInterfaceTheta(second, -directionX, -directionY, -directionZ);
+		float jump = surfaceTensionPressure[second] + gasPressureOfAirCell(first) - pressureReference;
 		return (pressure[second] - jump) / theta;
 	}
 
@@ -7039,10 +7249,19 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	private boolean markerPositionAllowed(float x, float y, float z) {
 		return !particleCollision.centerInSolid(x, y, z);
 	}
-	private boolean isFluid(int index) { return !solid[index] && markerCount[index] > 0; }
+	private boolean isFluid(int index) { return pressureFluid[index]; }
 	private boolean isAir(int index) { return !solid[index] && !isFluid(index); }
 	private boolean faceActive(int first, int second, float openArea) {
 		return openArea > 0.0F && !solid[first] && !solid[second] && (isFluid(first) || isFluid(second));
+	}
+	private boolean carrierFaceActive(int first, int second, float openArea) {
+		return openArea > 0.0F && !solid[first] && !solid[second]
+				&& (markerCount[first] > 0 || markerCount[second] > 0);
+	}
+	private float pressureInterfaceTheta(int fluid, int directionX, int directionY, int directionZ) {
+		return freeSurfaceGeometry.liquidFraction(fluid) >= 0.5F
+				? freeSurfaceGeometry.pressureTheta(fluid, directionX, directionY, directionZ)
+				: pressurePhaseGeometry.interfaceTheta(fluid, directionX, directionY, directionZ);
 	}
 	private boolean inside(int x, int y, int z) { return x >= 0 && x < sizeX && y >= 0 && y < sizeY && z >= 0 && z < sizeZ; }
 	private int cellIndex(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
@@ -7253,5 +7472,10 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 
 		public int requiredMarkers() { return requiredMarkers; }
 		public int availableMarkers() { return availableMarkers; }
+	}
+
+	/** Rejects a complete mechanics candidate when its pressure projection is not converged. */
+	public static final class PressureSolveBlockedException extends IllegalStateException {
+		private PressureSolveBlockedException(String message) { super(message); }
 	}
 }

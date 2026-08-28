@@ -589,11 +589,13 @@ final class FlipThermalState {
 	}
 
 	PhaseMechanicalWorkPlan planPhaseMechanicalWork(
-			SignedDyadic[] pendingCellVolume, float[] gaugePressurePa, float cellSize, MarkerContext markers
+			SignedDyadic[] pendingCellVolume, float[] relativeGaugePressurePa,
+			float pressureReferencePa, float cellSize, MarkerContext markers
 	) {
-		if (pendingCellVolume == null || gaugePressurePa == null
+		if (pendingCellVolume == null || relativeGaugePressurePa == null
 				|| pendingCellVolume.length != cellGrid.cellCount()
-				|| gaugePressurePa.length != cellGrid.cellCount()
+				|| relativeGaugePressurePa.length != cellGrid.cellCount()
+				|| !Float.isFinite(pressureReferencePa)
 				|| !(Float.isFinite(cellSize) && cellSize > 0.0F)) {
 			throw new IllegalArgumentException("Pending phase mechanical-work input is invalid");
 		}
@@ -610,7 +612,7 @@ final class FlipThermalState {
 				throw new IllegalArgumentException("Pending phase volume names an empty thermal cell");
 			}
 			double absolutePressure = cc.ecisr.mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE
-					+ gaugePressurePa[cell];
+					+ pressureReferencePa + relativeGaugePressurePa[cell];
 			if (!(Double.isFinite(absolutePressure) && absolutePressure >= 0.0)) {
 				throw new IllegalArgumentException("Phase mechanical-work pressure is invalid");
 			}

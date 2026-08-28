@@ -50,7 +50,81 @@ public final class ProductionFluidReplayValidation {
 		fullyBoundHalfFillRoundTripsCurrentGasGeometry();
 		fullyBoundPhaseOnStepRemainsBounded();
 		planarHalfFillWithoutEntitiesRemainsStableAcrossBackend();
+		compressedPlanarHalfFillRemainsStableAcrossBackend();
 		System.out.println("Production fluid replay passed");
+	}
+
+	private static void compressedPlanarHalfFillRemainsStableAcrossBackend() throws Exception {
+		RegistrySet registries = loadProductionRegistries();
+		FlipFluidDomain initial = createFullyBoundCompressedPlanarHalfFill(registries);
+		FluidDomainState state = initial.captureAuthoritativeState();
+		FlipFluidDomain restored = FlipFluidDomain.restoreAuthoritativeState(state);
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		long generation = 0L;
+		double initialCenterY = centerOfMassY(restored.exportMaterialParticleState());
+		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0;
+		double maximumBodyPressureResidual = 0.0, maximumPressureResidual = 0.0;
+		long phaseOperations = 0L, boiledCells = 0L, condensedCells = 0L;
+		double previousAvailable = restored.airNetwork().availableVolume(1);
+		require(kineticEnergy(restored.exportMaterialParticleState()) == 0.0,
+				"compressed planar fixture did not start at rest");
+		require(restored.gasNodeGaugePressurePa(1) > 100_000.0,
+				"compressed planar fixture did not retain its sealed external compression");
+		System.out.printf("  compressed planar initial: V=%.12f m3 p=%+.6f Pa T=%.9f K U=%.9g J%n",
+				previousAvailable, restored.gasNodeGaugePressurePa(1),
+				restored.gasNodeTemperatureK(1), restored.exactInternalEnergy().toDouble());
+		for (int step = 0; step < 1_000; step++) {
+			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+					generation, state, List.of(), false, 0, true));
+			require(candidate.baseGeneration() == generation
+					&& candidate.candidateGeneration() == generation + 1L,
+					"compressed planar backend generation was not adjacent at step " + step);
+			FlipFluidDomain.StepStats stats = candidate.stats();
+			FlipFluidDomain.MechanicalStepAudit audit = stats.mechanicalAudit();
+			restored = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+			double kinetic = audit.finalParticleKineticEnergyJoules();
+			double available = restored.airNetwork().availableVolume(1);
+			double deltaAvailable = available - previousAvailable;
+			maximumKinetic = Math.max(maximumKinetic, kinetic);
+			if (step >= 500) tailMaximumKinetic = Math.max(tailMaximumKinetic, kinetic);
+			double bodyPressure = audit.gravityWorkJoules() + audit.thermalBuoyancyWorkJoules()
+					+ audit.surfaceTensionWorkJoules() + audit.fixedBoundaryWorkJoules()
+					+ audit.pressureProjectionWorkJoules();
+			maximumBodyPressureResidual = Math.max(maximumBodyPressureResidual, Math.abs(bodyPressure));
+			maximumPressureResidual = Math.max(maximumPressureResidual, stats.pressureResidual());
+			phaseOperations += stats.gasPhase().operations();
+			boiledCells += stats.gasPhase().boiledCells();
+			condensedCells += stats.gasPhase().condensedCells();
+			require(audit.captured() && restored.airNetwork().auditClosed()
+					&& restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
+					"compressed planar backend opened an authoritative audit at step " + step);
+			state = candidate.state();
+			generation++;
+			previousAvailable = available;
+			if ((step + 1) % 100 == 0) {
+				System.out.printf("  compressed planar backend step %03d: K=%.9g J dV=%+.9g m3 "
+						+ "PCG=%d residual=%.9g p=%+.3f Pa T=%.6f K%n",
+						step + 1, kinetic, deltaAvailable, stats.pressureIterations(),
+						stats.pressureResidual(), restored.gasNodeGaugePressurePa(1),
+						restored.gasNodeTemperatureK(1));
+			}
+		}
+		double finalKinetic = kineticEnergy(restored.exportMaterialParticleState());
+		double centerYDelta = centerOfMassY(restored.exportMaterialParticleState()) - initialCenterY;
+		require(maximumKinetic <= 0.025 && tailMaximumKinetic <= 0.015 && finalKinetic <= 0.015,
+				"compressed planar free surface self-excited: max=" + maximumKinetic
+						+ " tail=" + tailMaximumKinetic + " final=" + finalKinetic + " J");
+		require(Math.abs(centerYDelta) <= 0.001,
+				"compressed planar center of mass drifted by " + centerYDelta + " m");
+		require(maximumBodyPressureResidual <= 0.05,
+				"compressed planar body-force/pressure work did not balance: "
+						+ maximumBodyPressureResidual + " J");
+		require(phaseOperations == 0L && boiledCells == 0L && condensedCells == 0L,
+				"compressed mechanical-equilibrium fixture unexpectedly executed gas phase changes");
+		System.out.printf("  compressed planar backend gate: kinetic max/tail/final="
+				+ "%.9g/%.9g/%.9g J, centerYDelta=%+.9g m, max body-pressure residual=%.9g J, "
+				+ "max PCG residual=%.9g%n", maximumKinetic, tailMaximumKinetic, finalKinetic,
+				centerYDelta, maximumBodyPressureResidual, maximumPressureResidual);
 	}
 
 	private static void defaultLiveStepsRemainBounded() {
@@ -146,9 +220,16 @@ public final class ProductionFluidReplayValidation {
 		FlipFluidDomain.StepStats stats = domain.step(true, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP);
 		double milliseconds = (System.nanoTime() - start) / 1_000_000.0;
 		FlipFluidDomain.GasThermalPhaseStats phase = domain.lastGasThermalPhaseStats();
+		FluidDomainState committed = domain.captureAuthoritativeState();
+		FlipFluidDomain restored = FlipFluidDomain.restoreAuthoritativeState(committed);
 		require(domain.airNetwork().auditClosed()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"full-capability phase-on step did not close gas or total U audit");
+		require(committed.pendingPhaseVolume().entries().equals(
+					restored.exportPendingPhaseVolumeState().entries())
+				&& restored.airNetwork().auditClosed()
+				&& restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
+				"full-capability phase-on state did not preserve pending volume, gas or U across restore");
 		System.out.printf("  full-capability phase-on production step: %.3f ms, operations=%d, "
 				+ "boiled=%d, condensed=%d, substeps=%d, PCG=%d%n", milliseconds,
 				phase.operations(), phase.boiledCells(), phase.condensedCells(),
@@ -173,8 +254,7 @@ public final class ProductionFluidReplayValidation {
 		FlipFluidDomain restored = initial;
 		for (int step = 0; step < 500; step++) {
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
-					generation, state, List.of(), true,
-					ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP, true));
+					generation, state, List.of(), false, 0, true));
 			require(candidate.baseGeneration() == generation
 					&& candidate.candidateGeneration() == generation + 1L,
 					"planar no-entity backend generation was not adjacent at step " + step);
@@ -198,8 +278,9 @@ public final class ProductionFluidReplayValidation {
 					"planar no-entity backend restore opened or changed the sealed gas owner at step " + step);
 			require(restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
 					"planar no-entity backend restore opened total U at step " + step);
-			require(!restored.hasPendingPhaseVolumeWork(),
-					"planar no-entity gas phase left unrelated condensed phase work at step " + step);
+			require(candidate.state().pendingPhaseVolume().entries().equals(
+					restored.exportPendingPhaseVolumeState().entries()),
+					"planar no-entity backend restore changed pending phase volume at step " + step);
 			state = candidate.state();
 			generation++;
 			if ((step + 1) % 100 == 0) {
@@ -222,8 +303,8 @@ public final class ProductionFluidReplayValidation {
 		require(maximumBodyPressureResidual <= 0.05,
 				"planar no-entity body-force/pressure work did not balance: "
 						+ maximumBodyPressureResidual + " J");
-		require(phaseOperations > 0L && boiledCells > 0L && condensedCells > 0L,
-				"planar no-entity fixture did not exercise production gas phase definitions");
+		require(phaseOperations == 0L && boiledCells == 0L && condensedCells == 0L,
+				"planar mechanical-equilibrium fixture unexpectedly executed gas phase changes");
 		System.out.printf("  planar no-entity backend gate: kinetic max/tail/final="
 				+ "%.9g/%.9g/%.9g J, centerYDelta=%+.9g m, max body-pressure residual=%.9g J%n",
 				maximumKinetic, tailMaximumKinetic, finalKinetic, centerYDelta,
@@ -276,6 +357,23 @@ public final class ProductionFluidReplayValidation {
 		domain.bindGasRegistry(registries.gas());
 		domain.bindThermal(registries.thermal(), runtimeLiquids,
 				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		return domain;
+	}
+
+	private static FlipFluidDomain createFullyBoundCompressedPlanarHalfFill(RegistrySet registries) {
+		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
+		domain.sealDomainBoundary();
+		bindEmptyMaterialState(domain, registries.liquids());
+		FluidMaterialRegistry runtimeLiquids = domain.materialRegistry();
+		domain.bindChemistry(registries.chemical());
+		domain.bindGranular(registries.granular(), runtimeLiquids);
+		domain.setPrecipitationEnabled(true);
+		domain.bindGasRegistry(registries.gas());
+		domain.bindThermal(registries.thermal(), runtimeLiquids,
+				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		for (int y = 0; y < 4; y++) for (int z = 0; z < 8; z++) for (int x = 0; x < 8; x++) {
+			domain.setVolume(x, y, z, 1.0F);
+		}
 		return domain;
 	}
 

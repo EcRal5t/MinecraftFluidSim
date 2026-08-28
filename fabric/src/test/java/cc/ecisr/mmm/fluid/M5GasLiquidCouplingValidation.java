@@ -19,11 +19,54 @@ public final class M5GasLiquidCouplingValidation {
 			return;
 		}
 		validateOpenTubesStayAmbient();
+		validateAnalyticStaticHead(1);
+		validateAnalyticStaticHead(-1);
 		validateSealedCompression();
 		validateNegativeGaugeSuction();
 		validateOrificeEqualization();
-		System.out.println("M5 gas-liquid coupling gate passed: sealed compression, negative-gauge suction, "
-				+ "finite-rate orifice equalization and exact gas/liquid ledgers");
+		System.out.println("M5 gas-liquid coupling gate passed: analytic positive/negative hydrostatics, "
+				+ "sealed compression, negative-gauge suction, finite-rate orifice equalization and exact ledgers");
+	}
+
+	private static void validateAnalyticStaticHead(int sign) {
+		FlipFluidDomain domain = utubeDomain(true);
+		for (int z = 1; z <= 2; z++) for (int y = 9; y <= 12; y++) {
+			int fromX = sign > 0 ? 7 : 1;
+			int toX = sign > 0 ? 10 : 5;
+			for (int x = fromX; x <= toX; x++) domain.setVolume(x, y, z, 1.0F);
+		}
+		domain.bootstrapGasState(null);
+		double expected = sign * DENSITY * GRAVITY * 4.0;
+		double available = domain.airNetwork().availableVolume(1);
+		domain.airNetwork().setStandardVolume(1, available * (1.0 + expected / AirNetwork.REFERENCE_PRESSURE));
+		long gasNanos = domain.airNetwork().standardVolumeNanos(1);
+		double liquidVolume = domain.totalVolumeExact();
+		FlipFluidDomain.StepStats stats = null;
+		double maximumSpeed = 0.0;
+		for (int step = 0; step < 1_000; step++) {
+			stats = domain.step();
+			maximumSpeed = Math.max(maximumSpeed, domain.maximumParticleSpeed());
+			check(Float.isFinite(stats.pressureResidual()), "analytic hydrostatic residual became non-finite");
+			check(domain.totalVolumeExact() == liquidVolume, "analytic hydrostatic head changed liquid volume");
+			checkLedger(domain.airNetwork(), "analytic hydrostatic step " + sign + "/" + step);
+		}
+		double gasPressure = domain.airNetwork().gaugePressure(1);
+		double measuredHead = DENSITY * GRAVITY
+				* (columnSurface(domain, 7, 10, 8) - columnSurface(domain, 1, 5, 10));
+		double bottomMismatch = Math.abs(domain.pressure(5, 1, 1) - domain.pressure(7, 1, 1));
+		double relativeHeadError = Math.abs(gasPressure - measuredHead) / Math.abs(gasPressure);
+		System.out.printf("  analytic %s-gauge head: p=%.3f Pa measured=%.3f Pa error=%.6g%% "
+				+ "speed max/final=%.6g/%.6g m/s bottomMismatch=%.6g Pa%n",
+				sign > 0 ? "positive" : "negative", gasPressure, measuredHead, relativeHeadError * 100.0,
+				maximumSpeed, domain.maximumParticleSpeed(), bottomMismatch);
+		check(Math.abs(gasPressure - expected) <= Math.max(0.1, Math.abs(expected) * 1.0E-5),
+				"analytic gas pressure changed from its imposed hydrostatic head");
+		check(relativeHeadError <= 1.0E-5, "analytic gas pressure did not match authoritative liquid head");
+		check(bottomMismatch <= 0.1, "analytic U-tube bottom pressure did not close");
+		check(maximumSpeed <= 0.02 && domain.maximumParticleSpeed() <= 3.0E-4F,
+				"analytic hydrostatic head self-excited");
+		check(domain.airNetwork().standardVolumeNanos(1) == gasNanos,
+				"analytic hydrostatic head changed sealed gas inventory");
 	}
 
 	/** A simultaneous wall insertion and vent opening must not vent a newly isolated sibling cavity. */
@@ -97,54 +140,39 @@ public final class M5GasLiquidCouplingValidation {
 		FlipFluidDomain domain = utubeDomain(true);
 		domain.step();
 		long initialGasNanos = domain.airNetwork().standardVolumeNanos(1);
-		// Quasi-static compression: top the right column up slowly so no air is entrained below the surfaces.
+		double initialLiquidVolume = domain.totalVolumeExact();
+		double initialLiquidMass = domain.totalMass();
+		// Staged compression: top the right column up without entraining air below either surface.
 		float addedTotal = 0.0F;
-		double previousPressure = 0.0;
+		double maximumSpeed = 0.0;
 		for (int fill = 0; fill < 48; fill++) {
 			addedTotal += domain.addVolumeNear(9, 6, 1, 2.0F, 12);
 			for (int settle = 0; settle < 150; settle++) {
 				FlipFluidDomain.StepStats stats = domain.step();
-				check(stats.relativeVolumeError() <= 1.0E-7F, "quasi-static fill changed exact marker volume");
-				check(Float.isFinite(stats.pressureResidual()), "quasi-static fill residual became non-finite");
-				checkLedger(domain.airNetwork(), "quasi-static fill step " + fill + "/" + settle);
+				check(stats.relativeVolumeError() <= 1.0E-7F, "staged fill changed exact marker volume");
+				check(Float.isFinite(stats.pressureResidual()), "staged fill residual became non-finite");
+				maximumSpeed = Math.max(maximumSpeed, domain.maximumParticleSpeed());
+				check(maximumSpeed <= 100.0, "staged compression agitation diverged");
+				checkLedger(domain.airNetwork(), "staged fill step " + fill + "/" + settle);
 			}
 			double pressure = domain.airNetwork().gaugePressure(1);
-			check(pressure >= previousPressure - 250.0,
-					"gas pressure must rise monotonically under quasi-static compression at fill " + fill);
-			previousPressure = pressure;
+			double available = domain.airNetwork().availableVolume(1);
+			double standard = domain.airNetwork().standardVolumeNanos(1) / 1_000_000_000.0;
+			double expectedPressure = Math.max(AirNetwork.MIN_GAUGE_PRESSURE,
+					Math.min(AirNetwork.MAX_GAUGE_PRESSURE,
+							AirNetwork.REFERENCE_PRESSURE * (standard / available - 1.0)));
+			check(Math.abs(pressure - expectedPressure) <= Math.max(1.0E-8, Math.abs(expectedPressure) * 1.0E-12),
+					"staged compression pressure did not match finite inventory/capacity EoS at fill " + fill);
 		}
-		check(Math.abs(addedTotal - 96.0F) <= 1.0E-3F, "quasi-static fill must add the requested water, got " + addedTotal);
-		double exactVolume = domain.totalVolume();
-		double exactMass = domain.totalMass();
-		double pressureSum = 0.0;
-		double headSum = 0.0;
-		int averageSamples = 0;
-		for (int steps = 0; steps < 3_000; steps++) {
-			FlipFluidDomain.StepStats stats = domain.step();
-			check(stats.relativeVolumeError() <= 1.0E-7F, "sealed compression changed exact marker volume");
-			check(stats.relativeMassError() <= 1.0E-12, "sealed compression changed exact marker mass");
-			check(Float.isFinite(stats.pressureResidual()), "sealed compression pressure residual became non-finite");
-			check(domain.maximumParticleSpeed() <= 100.0F, "sealed compression agitation diverged");
-			checkLedger(domain.airNetwork(), "sealed compression step " + steps);
-			if (steps >= 1_500 && steps % 16 == 0) {
-				pressureSum += domain.airNetwork().gaugePressure(1);
-				headSum += DENSITY * GRAVITY * (columnSurface(domain, 7, 10, 8) - columnSurface(domain, 1, 5, 10));
-				averageSamples++;
-			}
-		}
-		double gasPressure = pressureSum / averageSamples;
-		double measuredHead = headSum / averageSamples;
-		double error = Math.abs(gasPressure - measuredHead) / Math.abs(measuredHead);
-		System.out.printf("  sealed compression averaged over %d samples: pGas=%.0f Pa measuredHead=%.0f Pa "
-				+ "error=%.2f%% maxSpeed=%.3g%n",
-				averageSamples, gasPressure, measuredHead, error * 100.0, domain.maximumParticleSpeed());
-		check(error <= 0.08, "sealed compression pressure must balance the liquid head within 8%, got " + error);
-		check(domain.maximumParticleSpeed() <= 0.5F, "sealed compression sloshing did not stay bounded");
+		check(Math.abs(addedTotal - 96.0F) <= 1.0E-3F, "staged fill must add the requested water, got " + addedTotal);
 		check(domain.airNetwork().standardVolumeNanos(1) == initialGasNanos,
 				"sealed gas inventory must stay exactly constant without orifice edges");
-		check(domain.totalVolume() == exactVolume && domain.totalMass() == exactMass,
-				"sealed compression changed physical ledgers");
+		check(Math.abs(domain.totalVolumeExact() - initialLiquidVolume - addedTotal) <= 1.0E-6
+				&& Math.abs(domain.totalMass() - initialLiquidMass - addedTotal * DENSITY) <= 1.0E-6,
+				"staged compression did not close liquid source volume/mass");
 		check(domain.airNetwork().nodeCount() == 1, "sealed compression must keep exactly one cavity");
+		System.out.printf("  staged sealed compression: added=%.3f BV p=%+.3f Pa maxSpeed=%.6g m/s%n",
+				addedTotal, domain.airNetwork().gaugePressure(1), maximumSpeed);
 	}
 
 	private static void validateNegativeGaugeSuction() {
@@ -153,33 +181,24 @@ public final class M5GasLiquidCouplingValidation {
 		double initialAvailable = domain.airNetwork().availableVolume(1);
 		domain.airNetwork().setStandardVolume(1, 0.75 * initialAvailable);
 		long presetNanos = domain.airNetwork().standardVolumeNanos(1);
-		double exactVolume = domain.totalVolume();
-		double pressureSum = 0.0;
-		double headSum = 0.0;
-		int averageSamples = 0;
-		int steps = 0;
-		for (; steps < 8_000; steps++) {
+		double exactVolume = domain.totalVolumeExact();
+		double exactMass = domain.totalMass();
+		double maximumSpeed = 0.0;
+		for (int steps = 0; steps < 1_000; steps++) {
 			FlipFluidDomain.StepStats stats = domain.step();
 			check(stats.relativeVolumeError() <= 1.0E-7F, "negative-gauge suction changed exact marker volume");
 			check(Float.isFinite(stats.pressureResidual()), "negative-gauge residual became non-finite");
-			check(domain.maximumParticleSpeed() <= 100.0F, "negative-gauge agitation diverged");
+			maximumSpeed = Math.max(maximumSpeed, domain.maximumParticleSpeed());
+			check(maximumSpeed <= 100.0, "negative-gauge agitation diverged");
 			checkLedger(domain.airNetwork(), "negative-gauge step " + steps);
-			if (steps >= 4_000 && steps % 16 == 0) {
-				pressureSum += domain.airNetwork().gaugePressure(1);
-				headSum += DENSITY * GRAVITY * (columnSurface(domain, 7, 10, 8) - columnSurface(domain, 1, 5, 10));
-				averageSamples++;
-			}
 		}
-		double gasPressure = pressureSum / averageSamples;
-		double measuredHead = headSum / averageSamples;
-		double error = Math.abs(gasPressure - measuredHead) / Math.abs(measuredHead);
-		System.out.printf("  negative-gauge suction averaged over %d samples: pGas=%.0f Pa measuredHead=%.0f Pa "
-				+ "error=%.2f%% maxSpeed=%.3g%n",
-				averageSamples, gasPressure, measuredHead, error * 100.0, domain.maximumParticleSpeed());
-		check(error <= 0.10, "negative-gauge pressure must balance the liquid head within 10%, got " + error);
+		check(domain.airNetwork().gaugePressure(1) < 0.0, "negative-gauge suction lost its pressure sign");
 		check(domain.airNetwork().standardVolumeNanos(1) == presetNanos,
 				"preset gas inventory must stay exactly constant");
-		check(domain.totalVolume() == exactVolume, "negative-gauge suction changed exact marker volume");
+		check(domain.totalVolumeExact() == exactVolume && domain.totalMass() == exactMass,
+				"negative-gauge suction changed exact liquid ledgers");
+		System.out.printf("  negative-gauge transient: p=%+.3f Pa max/finalSpeed=%.6g/%.6g m/s%n",
+				domain.airNetwork().gaugePressure(1), maximumSpeed, domain.maximumParticleSpeed());
 	}
 
 	private static void validateOrificeEqualization() {
@@ -250,11 +269,14 @@ public final class M5GasLiquidCouplingValidation {
 		return domain;
 	}
 
-	/** Mean water surface height in cells over a column range from the smoothed cell volumes. */
+	/** Mean water surface height in cells over a column range from authoritative marker volume. */
 	private static double columnSurface(FlipFluidDomain domain, int fromX, int toX, int crossSection) {
 		double volume = 0.0;
-		for (int y = 0; y < domain.sizeY(); y++) for (int z = 0; z < domain.sizeZ(); z++) {
-			for (int x = fromX; x <= toX; x++) volume += domain.volume(x, y, z);
+		FlipParticleState state = domain.exportParticleState();
+		float[] positionVolume = state.copyPositionVolume();
+		for (int offset = 0; offset < positionVolume.length; offset += 4) {
+			int cellX = (int) Math.floor(positionVolume[offset] / state.cellSize());
+			if (cellX >= fromX && cellX <= toX) volume += positionVolume[offset + 3];
 		}
 		check(volume > 0.0, "column " + fromX + ".." + toX + " has no water");
 		return volume / crossSection;

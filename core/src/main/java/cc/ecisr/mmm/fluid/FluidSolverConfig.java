@@ -4,7 +4,8 @@ package cc.ecisr.mmm.fluid;
  * Numerical parameters for the standalone fluid prototype.
  *
  * <p>The solver uses Minecraft's positive Y direction as "up" and stores
- * pressure as gauge pressure, so atmospheric pressure is zero.</p>
+ * pressure as gauge pressure, so atmospheric pressure is zero. Pressure tolerance is the
+ * absolute RMS algebraic residual accepted from the projection.</p>
  */
 public record FluidSolverConfig(
 		float cellSize,

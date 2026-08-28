@@ -133,6 +133,7 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 - liquid water 与 water vapor 使用同一个 transition 的质量、潜热和 exact standard-volume batch。
 - 沸腾/凝结由 water-vapor 分压、温度和 transition 饱和压力关系决定，并受 sealed/ambient gas inventory 容量约束。
 - commit 同时更新 liquid marker、gas component nanos/kg、gas node energy、source/sink 与 topology remap；任何列不闭合则整批拒绝。
+- 每次气液 commit 还按实际增加/删除的 liquid SVQ 写入带 cell 的 exact pending volume；下一次真实 projection 使用加回统一 gas reference 后的绝对压力消费 `-p ΔV`，随后清除该 entry。capture/restore 必须保留尚未消费的 raw pending 值。
 - 同一 transition、gas node 与 exact liquid temperature 在一个 logical step 内只有一个热力学方向；首次观察到的沸腾或凝结方向是该状态点的唯一方向，后续候选若试图在同一状态点反向则不提交。不同温度的热/冷界面仍独立求值。
 - chemistry 启用时，每个 gas transition 先把允许挥发且具有 host-gas energy offset 的 stable species 编译为本步 runtime handle 集；液体 marker 仍按 ordinal 搬运 exact species、质量 residual 与 `U`，runtime handle 不持久化。
 
@@ -149,7 +150,7 @@ p_partial = p_absolute * Vstd,vapor / Vstd,total
 
 每个 logical step 的固液与气液共享最多 4096 次 phase operation；按 0.05 s step 和 1 g batch，理论数值上限为 `81.92 kg/s`。这是防止无界工作量的预算，不是现实相界动力学。真实速率由传入的有限热通量、库存、容量与饱和条件限制；若量化 fixture 需要界面动力学，应新增有适用域的数据模型，不能把 tick 倍率塞入潜热。
 
-气液候选先用当前 marker geometry 同步 gas topology，再规划 inventory/energy。同一 liquid thermal material 的候选状态函数可把 cell 内剩余 marker 聚合为一份 extensive inventory；实际删除、截断、species 与 residual 搬运仍保留逐 marker exact plan。只截断或扩充既有 marker 时，carrier ordinal 和 air-cell membership 不变：热学只刷新被编辑 cell，气体沿既有 lineage 重算所有 node 的连续 available volume并完整规划绝热体积功。marker 新增/删除时则重建 cell-marker ordinal 并完整重扫 topology。力学 P2G、PLIC、表面张力和速度外推统一在 logical step 末重建一次，capture 前也从完整 geometry 重扫。这样任何可发布 logical state 都不会出现 marker 已变而 gas node 仍属于上一拓扑的半代次，也不会在一次相变扫描中重复构造不参与候选的力学派生场。
+气液候选先用当前 marker geometry 同步 gas topology，再规划 inventory/energy。同一 liquid thermal material 的候选状态函数可把 cell 内剩余 marker 聚合为一份 extensive inventory；实际删除、截断、species 与 residual 搬运仍保留逐 marker exact plan。只截断或扩充既有 marker 时，carrier ordinal 和 air-cell membership 不变：热学只刷新被编辑 cell，气体从逐格 exact marker volume 沿既有 membership 重新建立 interface lineage、汇总 available volume并完整规划绝热体积功。marker 新增/删除时则重建 cell-marker ordinal并完整重扫 topology。力学 P2G、pressure footprint/PLIC、表面张力和速度外推统一在 logical step 末重建一次，capture 前也从完整 geometry 重扫。这样任何可发布 logical state 都不会出现 marker 已变而 gas node 仍属于上一拓扑的半代次，也不会在一次相变扫描中重复构造不参与候选的力学派生场。
 
 ## 反应热
 
@@ -167,7 +168,7 @@ species reference offset 是组成携带的能量真值。reaction extent 改变
 6. granular transition、reseed 与局部唤醒；
 7. 审计闭合后，pending phase-work 留给下一 projection。
 
-每一步都先在快照上形成候选。相变产生的体积改变不能回头修改已经完成的 projection，因此作为带 generation 的 pending volume/work 保存，并且只由下一次 projection 消费一次。存在 pending work 时，`empty`、不完整 checkpoint 和绕过 projection 的转移会被拒绝。
+每一步都先在快照上形成候选。相变产生的体积改变不能回头修改已经完成的 projection，因此作为带 generation 的 pending volume/work 保存，并且只由下一次真实 projection 消费一次。marker 已经携带新的几何体积，pending 不作为第二份目标散度；它只用该 projection 的绝对 cell 压力结算 `-p ΔV`。存在 pending work 时，`empty`、不完整 checkpoint 和绕过 projection 的转移会被拒绝。
 
 ## 能量审计
 

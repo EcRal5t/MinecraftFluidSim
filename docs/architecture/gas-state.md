@@ -14,7 +14,7 @@ air cell 必须同时满足：非 solid、`markerCount == 0`，且扣除 cut-cel
 - controller 已验证闭壳时，solver 外边界不自动判作 ambient；命令临时域和真实缺口仍连接 ambient node 0。
 - scan 按固定邻居顺序执行，节点以 canonical minimum-cell key 排序，保证同一几何得到确定 topology。
 - 超过 scan budget 时，尚未完成的空间 fail-open 为 ambient，不能凭不完整 flood fill 创建有限密闭库存。
-- available volume 是每 cell 的几何 open volume 减液体 fraction 与统一固体 occupancy，再乘 `cellSize³`；部分充液格的 residual gas volume 归属相邻最小 node，ambient 优先。
+- available volume 是每 cell 的几何 open volume 减逐格 exact marker volume 与统一固体 occupancy，再乘 `cellSize³`；平滑液体 fraction 不结算气体容量或绝热功。runtime attribution 可沿 gas-centered（gas residual 至少占 open volume 一半）的连通部分充液格传播，随后只给相邻的一层 liquid-centered interface residual 归属，不能借 marker 空隙穿过整个液体 bulk；多 node 相遇时 ambient/较小 node 优先。
 
 ## 权威真值
 
@@ -41,7 +41,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 - 新腔体按环境组成和当前可用体积记 source；
 - 相变产生或消耗的 water vapor 通过同一组件库存与 source/sink 审计提交。
 
-部分充液界面的短时拓扑抖动可使用 runtime lineage 减少虚假空气周转，但不能改变持久 membership 或物质账本。
+部分充液界面的短时拓扑抖动可使用 runtime lineage 减少虚假空气周转，但不能改变持久 membership 或物质账本。拓扑 remap 只要旧 node 仍有 full-air membership overlap，就只用该 overlap 规划 merge/split/vent；仅在旧 membership 完全消失时才允许 runtime lineage 后备，液面摆动不能把密闭库存按 partial overlap 分给 ambient。稳定 topology 快路每次仍从当前 exact residual volume 重新分配 interface lineage；相变新打开的微小气隙不能沿用上一轮空 residual 的归属，也不能被当成凭空新 node。
 
 气液相变若只截断或扩充既有 marker，marker cardinality、cell membership、solid/cut-cell 与 granular occupancy 都没有改变，因此 air-cell 连通性和 interface lineage 也严格不变。该中间候选沿现有 node membership 重新汇总每格连续 available volume，仍对每个 node 规划完整绝热体积功，并把 gas `U` 与 node volume 一次提交；只有 marker 新增/删除或其他结构变化才重新 flood fill、overlap 和 remap。logical step 末以及 capture 前仍从完整 carrier geometry 重扫，稳定路径不是持久 topology 的替代真值。
 
@@ -59,6 +59,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 - 热状态存在时，气体总内能与节点库存共同派生温度、绝对压力和密度；孔流同步搬运组分与能量。
 - 气液相变用 water-vapor 分压计算饱和条件，受绝对压力、潜热、库存、容量和批预算共同限制。
 - 所有 candidate 温度和压力必须落在 world thermal registry 的有效域；越界安全暂停。
+- mechanics 可从所有液气界面选择一个统一 sealed-node gauge reference，在 PCG 内只求相对压力并在绝对观察/热学边界加回；该数值换元不修改 node pressure、inventory、U 或不同 node 间的压差。
 
 ### 状态方程
 

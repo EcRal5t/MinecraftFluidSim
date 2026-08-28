@@ -656,12 +656,20 @@ public final class M9ThermalValidation {
 				&& domain.airNetwork().standardVolumeNanos(1) > gasNanosBefore
 				&& domain.airNetwork().auditClosed()
 				&& domain.thermalAudit().mechanicalWork().compareTo(auditBefore.mechanicalWork()) < 0
+				&& domain.hasPendingPhaseVolumeWork()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"sealed boiling did not jointly conserve liquid/gas mass, volume and energy truth: stats=" + stats
 						+ " liquidMass=" + domain.totalMass() + "/" + liquidMassBefore
 						+ " vapor=" + vaporAmount + " nanos=" + domain.airNetwork().standardVolumeNanos(1)
 						+ "/" + gasNanosBefore + " deltaU="
 						+ domain.exactInternalEnergy().subtract(energyBefore));
+		ThermalAuditLedger beforeBoilingProjection = domain.thermalAudit();
+		domain.step(false, 0);
+		require(!domain.hasPendingPhaseVolumeWork()
+				&& domain.thermalAudit().mechanicalWork().compareTo(
+						beforeBoilingProjection.mechanicalWork()) > 0
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"boiling phase volume was not consumed by the next real pressure projection");
 		domain.setThermalTemperatureInCell(1, 1, 1, 300.0);
 		double liquidMassAfterBoiling = domain.totalMass();
 		SignedDyadic beforeCondensation = domain.exactInternalEnergy();
@@ -686,6 +694,7 @@ public final class M9ThermalValidation {
 				&& domain.airNetwork().auditClosed()
 				&& domain.thermalAudit().mechanicalWork().compareTo(
 						auditBeforeCondensation.mechanicalWork()) > 0
+				&& domain.hasPendingPhaseVolumeWork()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"sealed condensation did not reverse the exact gas batch with conserved energy: stats=" + condensed
 						+ " mass=" + domain.totalMass() + " vapor=" + vaporAfterCondensation
@@ -700,6 +709,13 @@ public final class M9ThermalValidation {
 						+ java.util.Arrays.toString(domain.exportThermalParticleState().copyGasNodeEnergy())
 						+ " liquid=" + SignedDyadic.sum(beforeCondensationState.copyInternalEnergy()) + "->"
 						+ SignedDyadic.sum(domain.exportThermalParticleState().copyInternalEnergy()));
+		ThermalAuditLedger beforeCondensationProjection = domain.thermalAudit();
+		domain.step(false, 0);
+		require(!domain.hasPendingPhaseVolumeWork()
+				&& domain.thermalAudit().mechanicalWork().compareTo(
+						beforeCondensationProjection.mechanicalWork()) < 0
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"condensation phase volume was not consumed by the next real pressure projection");
 	}
 
 	private static void compositionBearingBoilingMovesOnlyGasAdmittedSpecies() {
@@ -785,12 +801,16 @@ public final class M9ThermalValidation {
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"species-bearing boiling did not retain solute/indicator and move exact vapor truth");
 
+		domain.step(false, 0);
+		require(!domain.hasPendingPhaseVolumeWork(),
+				"species-bearing boiling did not consume pending volume before condensation");
 		setAllCondensedCellTemperatures(domain, 300.0);
 		FlipFluidDomain.GasThermalPhaseStats firstCondensed = domain.stepGasPhaseChangeOnly(1);
 		GasComponentAmount vaporRemainder = domain.airNetwork().inventory(1)
 				.component(BuiltinGasDefinitions.WATER_VAPOR);
 		require(firstCondensed.operations() == 1 && firstCondensed.condensedCells() == 1
 				&& firstCondensed.boiledCells() == 0 && vaporRemainder != null
+				&& domain.hasPendingPhaseVolumeWork()
 				&& domain.airNetwork().auditClosed()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"species-bearing partial condensation did not retain its exact gas remainder: stats="

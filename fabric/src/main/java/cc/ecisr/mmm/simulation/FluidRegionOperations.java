@@ -128,6 +128,10 @@ final class FluidRegionOperations {
 			region.setAvailabilityFailure(region.thermalBlockFailure());
 			return false;
 		}
+		if (region.numericalBlockFailure() != null) {
+			region.setAvailabilityFailure(region.numericalBlockFailure());
+			return false;
+		}
 		if (!region.controllerManaged()) {
 			region.setAvailabilityFailure(null);
 			return true;

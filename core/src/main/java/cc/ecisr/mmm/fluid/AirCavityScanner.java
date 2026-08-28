@@ -16,11 +16,11 @@ import java.util.TreeMap;
 	 * different components becomes a finite-rate geometric edge instead of a connection.
 	 * A component is ambient (node 0, gauge zero) when it touches an explicitly ambient
 	 * domain boundary or when the scan budget is exhausted — never a sealed cavity with finite
-	 * inventory. Cavity volume is measured continuously from the smoothed liquid-volume
-	 * field: every attributed cell contributes its open volume minus the clamped liquid
-	 * fraction, so available volume follows the liquid surface without marker-quantisation
-	 * jitter. A partially filled surface cell attributes to the adjacent node with the
-	 * smallest id (ambient wins).</p>
+	 * inventory. Cavity volume is measured from exact per-cell marker volume: every attributed
+	 * cell contributes its open volume minus the clamped liquid inventory. The smoothed
+	 * free-surface field is derived geometry and cannot settle gas capacity or adiabatic work.
+	 * A partially filled surface cell attributes to the adjacent node with the smallest id
+	 * (ambient wins).</p>
 	 */
 	final class AirCavityScanner {
 	/** Face area at or above this fraction counts as fully open for connectivity. */
@@ -54,6 +54,7 @@ import java.util.TreeMap;
 	private final double faceAreaSquareMeters;
 	private final int scanBudgetCells;
 	private final int[] floodStack;
+	private final double[] measuredCellAvailableVolume;
 
 	AirCavityScanner(int sizeX, int sizeY, int sizeZ, float cellSize, int scanBudgetCells) {
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2) throw new IllegalArgumentException("All dimensions must be at least two cells");
@@ -67,18 +68,19 @@ import java.util.TreeMap;
 		this.faceAreaSquareMeters = (double) cellSize * cellSize;
 		this.scanBudgetCells = scanBudgetCells;
 		this.floodStack = new int[cellCount];
+		this.measuredCellAvailableVolume = new double[cellCount];
 	}
 
-	Result scan(boolean[] solid, int[] markerCount, float[] cellLiquidVolume, FlipCutCellGeometry cutCells) {
+	Result scan(boolean[] solid, int[] markerCount, double[] cellLiquidVolume, FlipCutCellGeometry cutCells) {
 		return scan(solid, markerCount, cellLiquidVolume, cutCells, null, false);
 	}
 
-	Result scan(boolean[] solid, int[] markerCount, float[] cellLiquidVolume,
+	Result scan(boolean[] solid, int[] markerCount, double[] cellLiquidVolume,
 	            FlipCutCellGeometry cutCells, GranularCouplingFields granular) {
 		return scan(solid, markerCount, cellLiquidVolume, cutCells, granular, false);
 	}
 
-	Result scan(boolean[] solid, int[] markerCount, float[] cellLiquidVolume,
+	Result scan(boolean[] solid, int[] markerCount, double[] cellLiquidVolume,
 	            FlipCutCellGeometry cutCells, GranularCouplingFields granular,
 	            boolean sealedDomainBoundary) {
 		boolean budgetExhausted = false;
@@ -126,7 +128,7 @@ import java.util.TreeMap;
 			}
 		}
 		int[] cellLineageNodeId = cellNodeId.clone();
-		addInterfaceResiduals(cellNodeId, cellLineageNodeId, solid, markerCount, cellLiquidVolume,
+		attributeInterfaceResiduals(cellNodeId, cellLineageNodeId, solid, markerCount, cellLiquidVolume,
 				cutCells, granular, cellAvailableVolume, sealedAvailableVolume);
 		List<GeometricEdge> edges = collectGeometricEdges(cellNodeId, cutCells);
 		return new Result(cellNodeId, cellLineageNodeId, cellAvailableVolume,
@@ -136,7 +138,7 @@ import java.util.TreeMap;
 
 	/** Recomputes node volumes when marker cardinality and every cell membership are unchanged. */
 	double[] measureSealedAvailableVolumes(
-			boolean[] solid, int[] markerCount, float[] cellLiquidVolume,
+			boolean[] solid, int[] markerCount, double[] cellLiquidVolume,
 			FlipCutCellGeometry cutCells, GranularCouplingFields granular,
 			int[] cellNodeId, int[] cellLineageNodeId, int sealedNodeCount
 	) {
@@ -146,6 +148,12 @@ import java.util.TreeMap;
 			throw new IllegalArgumentException("Stable gas topology volume input is incompatible");
 		}
 		double[] result = new double[sealedNodeCount];
+		Arrays.fill(measuredCellAvailableVolume, 0.0);
+		for (int cell = 0; cell < cellCount; cell++) if (!solid[cell] && markerCount[cell] > 0) {
+			measuredCellAvailableVolume[cell] = cellAirVolume(cell, cellLiquidVolume, cutCells, granular);
+		}
+		assignInterfaceLineage(cellNodeId, cellLineageNodeId, solid, markerCount,
+				measuredCellAvailableVolume, cutCells, granular, sealedNodeCount);
 		for (int cell = 0; cell < cellCount; cell++) {
 			int node = cellNodeId[cell];
 			if (node < 1 && !solid[cell] && markerCount[cell] > 0) node = cellLineageNodeId[cell];
@@ -199,24 +207,72 @@ import java.util.TreeMap;
 	}
 
 	/** Continuous air volume of one cell: open volume minus the clamped liquid fraction. */
-	private double cellAirVolume(int cell, float[] cellLiquidVolume, FlipCutCellGeometry cutCells,
+	private double cellAirVolume(int cell, double[] cellLiquidVolume, FlipCutCellGeometry cutCells,
 	                             GranularCouplingFields granular) {
 		float geometricOpen = cutCells.openCellVolume(cell);
-		float openVolume = granular == null ? geometricOpen : granular.effectiveOpenCellVolume(cell, geometricOpen);
-		float liquid = Math.min(Math.max(cellLiquidVolume[cell], 0.0F), openVolume);
+		double openVolume = granular == null ? geometricOpen : granular.effectiveOpenCellVolume(cell, geometricOpen);
+		double liquid = Math.min(Math.max(cellLiquidVolume[cell], 0.0), openVolume);
 		return (openVolume - liquid) * cellVolumeCubicMeters;
 	}
 
-	private void addInterfaceResiduals(int[] cellNodeId, int[] cellLineageNodeId,
-	                                   boolean[] solid, int[] markerCount,
-	                                   float[] cellLiquidVolume, FlipCutCellGeometry cutCells,
-	                                   GranularCouplingFields granular, double[] cellAvailableVolume,
-	                                   double[] sealedAvailableVolume) {
+	private void attributeInterfaceResiduals(int[] cellNodeId, int[] cellLineageNodeId,
+	                                         boolean[] solid, int[] markerCount,
+	                                         double[] cellLiquidVolume, FlipCutCellGeometry cutCells,
+	                                         GranularCouplingFields granular, double[] cellAvailableVolume,
+	                                         double[] sealedAvailableVolume) {
 		for (int cell = 0; cell < cellNodeId.length; cell++) {
 			if (solid[cell] || markerCount[cell] == 0) continue;
 			double residualVolume = cellAirVolume(cell, cellLiquidVolume, cutCells, granular);
 			cellAvailableVolume[cell] = residualVolume;
-			if (!(residualVolume > 0.0)) continue;
+		}
+		assignInterfaceLineage(cellNodeId, cellLineageNodeId, solid, markerCount,
+				cellAvailableVolume, cutCells, granular, sealedAvailableVolume.length);
+		for (int cell = 0; cell < cellCount; cell++) {
+			int node = cellLineageNodeId[cell];
+			if (cellNodeId[cell] < 0 && node >= 1) {
+				sealedAvailableVolume[node - 1] += cellAvailableVolume[cell];
+			}
+		}
+	}
+
+	private void assignInterfaceLineage(
+			int[] cellNodeId, int[] cellLineageNodeId, boolean[] solid, int[] markerCount,
+			double[] cellAvailableVolume, FlipCutCellGeometry cutCells,
+			GranularCouplingFields granular, int sealedNodeCount
+	) {
+		System.arraycopy(cellNodeId, 0, cellLineageNodeId, 0, cellCount);
+		// Lower node ids win shared interface paths, matching the direct-neighbour rule (ambient is 0).
+		// Propagation crosses gas-centred residual cells only. Liquid-centred interface cells receive
+		// one adjacent lineage below, but never form a gas path through a bulk liquid body.
+		for (int node = 0; node <= sealedNodeCount; node++) {
+			int stackSize = 0;
+			for (int cell = 0; cell < cellCount; cell++) if (cellNodeId[cell] == node) {
+				floodStack[stackSize++] = cell;
+			}
+			while (stackSize > 0) {
+				int from = floodStack[--stackSize];
+				int x = from % sizeX;
+				int yz = from / sizeX;
+				int y = yz % sizeY;
+				int z = yz / sizeY;
+				for (int axis = 0; axis < 3; axis++) for (int direction = -1; direction <= 1; direction += 2) {
+					int nx = x + (axis == 0 ? direction : 0);
+					int ny = y + (axis == 1 ? direction : 0);
+					int nz = z + (axis == 2 ? direction : 0);
+					if (nx < 0 || nx >= sizeX || ny < 0 || ny >= sizeY || nz < 0 || nz >= sizeZ) continue;
+					int neighbor = (nz * sizeY + ny) * sizeX + nx;
+					if (cellLineageNodeId[neighbor] >= 0 || solid[neighbor]
+							|| markerCount[neighbor] == 0
+							|| !gasCenteredResidual(neighbor, cellAvailableVolume, cutCells, granular)
+							|| faceOpen(cutCells, from, neighbor) <= 0.0F) continue;
+					cellLineageNodeId[neighbor] = node;
+					floodStack[stackSize++] = neighbor;
+				}
+			}
+		}
+		for (int cell = 0; cell < cellCount; cell++) {
+			if (cellLineageNodeId[cell] >= 0 || solid[cell] || markerCount[cell] == 0
+					|| !(cellAvailableVolume[cell] > 0.0)) continue;
 			int attributed = -1;
 			int x = cell % sizeX;
 			int yz = cell / sizeX;
@@ -228,14 +284,24 @@ import java.util.TreeMap;
 				int nz = z + (axis == 2 ? direction : 0);
 				if (nx < 0 || nx >= sizeX || ny < 0 || ny >= sizeY || nz < 0 || nz >= sizeZ) continue;
 				int neighbor = (nz * sizeY + ny) * sizeX + nx;
-				if (cellNodeId[neighbor] <= -1) continue;
-				if (faceOpen(cutCells, cell, neighbor) <= 0.0F) continue;
-				attributed = attributed < 0 ? cellNodeId[neighbor] : Math.min(attributed, cellNodeId[neighbor]);
-				if (attributed == 0) break;
+				int node = cellLineageNodeId[neighbor];
+				if (node < 0 || faceOpen(cutCells, cell, neighbor) <= 0.0F) continue;
+				if (cellNodeId[neighbor] < 0
+						&& !gasCenteredResidual(neighbor, cellAvailableVolume, cutCells, granular)) continue;
+				attributed = attributed < 0 ? node : Math.min(attributed, node);
 			}
 			if (attributed >= 0) cellLineageNodeId[cell] = attributed;
-			if (attributed >= 1) sealedAvailableVolume[attributed - 1] += residualVolume;
 		}
+	}
+
+	private boolean gasCenteredResidual(
+			int cell, double[] cellAvailableVolume, FlipCutCellGeometry cutCells,
+			GranularCouplingFields granular
+	) {
+		float geometricOpen = cutCells.openCellVolume(cell);
+		double openVolume = granular == null ? geometricOpen
+				: granular.effectiveOpenCellVolume(cell, geometricOpen);
+		return cellAvailableVolume[cell] >= 0.5 * openVolume * cellVolumeCubicMeters;
 	}
 
 	private List<GeometricEdge> collectGeometricEdges(int[] cellNodeId, FlipCutCellGeometry cutCells) {

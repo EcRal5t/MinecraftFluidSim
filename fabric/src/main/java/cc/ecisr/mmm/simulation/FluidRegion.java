@@ -58,6 +58,7 @@ public final class FluidRegion {
 	private String chemistryBlockFailure;
 	private String granularBlockFailure;
 	private String thermalBlockFailure;
+	private String numericalBlockFailure;
 	private ThermalActivity thermalActivity;
 	private FiniteThermalDeviceInventory finiteThermalDevices;
 
@@ -286,6 +287,12 @@ public final class FluidRegion {
 		setAvailabilityFailure(Objects.requireNonNull(failure, "failure"));
 	}
 	String thermalBlockFailure() { return thermalBlockFailure; }
+	String numericalBlockFailure() { return numericalBlockFailure; }
+	void blockNumerical(String failure) {
+		numericalBlockFailure = Objects.requireNonNull(failure, "failure");
+		setPaused(true);
+		setAvailabilityFailure(failure);
+	}
 
 	/** Returns immutable region-owned device truth, binding a new empty inventory to this layout. */
 	public FiniteThermalDeviceInventory finiteThermalDevices(String thermalRegistryFingerprint) {

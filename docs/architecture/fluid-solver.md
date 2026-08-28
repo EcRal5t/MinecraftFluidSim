@@ -5,7 +5,7 @@
 ## 状态分层
 
 - **物理真值**：marker 体积、材料质量、化学 parcel、固体 SVQ/质量/组成、气体库存和各载体内能。
-- **数值离散**：MAC 速度/压力、marker count 压力相、平滑 volume、PLIC、cut-cell、曲率和目标散度。
+- **数值离散**：MAC 速度/压力、守恒 marker footprint 压力相、平滑 volume、PLIC、cut-cell、曲率和目标散度。
 - **渲染重建**：客户端 density、界面、颜色、颗粒 sample 和温度量化。
 - **调度状态**：ACTIVE、REDUCED、休眠、PAUSED、UNLOADED。
 
@@ -20,8 +20,8 @@
 ## 网格与 marker
 
 - 默认 cell size 为 0.5 m；每个 Minecraft block 对应 2×2×2 cells。
-- `particleVolume` 的双精度和是液体体积真值。`markerCount > 0` 决定 pressure fluid phase。
-- `volume[]` 是为自由面、PLIC 和渲染构造的平滑场，不参与库存结算。
+- `particleVolume` 的双精度和是液体体积真值；逐格 exact marker sum 只由该真值正向汇总。
+- `volume[]` 是 PIC 平滑、展示和既有表面几何的派生场，不参与库存或 pressure phase 结算；pressure 使用独立的守恒 marker footprint。
 - P2G/G2P 使用共享的 valid face；MAC 空气外推从开放压力面播种，G2P 不采未定义空气零值。
 - reseed split/merge 保持体积、质量、动量和质心，并受 marker 硬预算限制；不跨 material 或 phase。
 
@@ -51,7 +51,7 @@ marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新�
 5. 热传导、反应、相变和颗粒状态转移。
 6. reseed、局部唤醒、账本和诊断。
 
-相变产生的 pending volume/work 由下一次 projection 消费，因此 pressure step 是唯一机械提交点。
+相变产生的 pending volume/work 由下一次真实 projection 按该次绝对压力 exactly-once 消费，因此 pressure step 是唯一机械功提交点。相变提交已经改变 marker 几何，pending volume 不再重复写入目标散度。
 
 自由面平衡夹具必须区分两种初态：液体几何先建立、随后按剩余空间初始化环境气体，表示无外部做功的半满平衡态；气体先按空腔初始化、随后向密闭域注液，则是压缩气体的 external-source 操作，必须保留相应气体内能和压力功，不能拿前一种夹具的环境态覆盖或归零。
 
@@ -68,11 +68,14 @@ pressure 位于 cell center，速度位于 face。离散目标是：
 div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 ```
 
-- 流体格由 `markerCount > 0` 决定；平滑 `volume` 只提供界面几何。
+- 每个 marker 按由标准 `2×2×2` 四分之一格点诱导的 C1 紧支撑核，把自身真实体积守恒分配到开放邻格；该 footprint 决定 pressure fraction/component，不改 marker 库存。若本格 exact marker fraction 已包含 cell center，fluid-air ghost distance 使用 exact marker PLIC；只有 footprint 支撑出的 pressure cell 才使用重建 PLIC，并消费相邻 pressure-air fringe。这样 marker 在 containing cell 内的微小位移不会反向改变一个原本静止的 exact 平面水头。
+- 含 cell center（fraction `>= 0.5`）的 bulk component 只把中心内格作为 pressure unknown，低 fraction fringe 保持自由面；完全低于中心但接触固定边界的连通薄层整体进入 pressure，远离边界的孤立小滴保持 ballistic carrier。
+- 重力、热浮力和速度载体 face 仍由实际 marker occupancy 激活，不能因 pressure footprint 变宽而给孤立液滴稀释重力。
 - cut-face aperture、界面距离和 `1/rho` 面系数同时进入矩阵、预条件器和最终投影，避免三个路径使用不同几何。
 - 变密度 face coefficient 按两侧界面距离守恒加权；同密度材料必须退化为纯水矩阵。
-- PCG 只对活动流体未知量求解；环境表压为 gauge zero，密闭 gas node 给自由面提供非零边界压力。
-- drift correction、相变 pending volume 和 moving-solid occupancy 只通过 `target_divergence` 进入 projection，不直接缩放 marker。
+- PCG 只对活动流体未知量求解；`pressureTolerance` 是绝对 RMS 代数残差，不随 RHS/静水载荷放大。迭代预算耗尽、breakdown 或非有限残差会拒绝完整候选并把生产区域标记 `NUMERICAL_PAUSE`，不会以未收敛压力继续 advection。
+- 环境表压为 gauge zero。gas topology 的 runtime lineage 还会沿连通 pressure-air fringe 扩展到实际 ghost face，但不会穿过 pressure-fluid bulk。只有密闭气体边界时，求解器先减去一个统一 gas gauge reference，PCG 只承受相对压力；对外压力观察、相平衡与 pending `-p ΔV` 再加回该 reference。多个 gas lineage 之间的压差不被消除。
+- drift correction 和 moving-solid occupancy 只通过 `target_divergence` 进入 projection，不直接缩放 marker；相变 pending 只结算已经发生的 marker 几何变化对应的压力功，不能再次制造一份散度源。
 
 ### PLIC、表面张力与润湿
 

@@ -1636,6 +1636,9 @@ public final class FluidSimulationService {
 		region.wakeForActivity();
 		try {
 			for (int i = 0; i < count; i++) stepOnce(region);
+		} catch (FlipFluidDomain.PressureSolveBlockedException blocked) {
+			blockNumerical(level, region, blocked);
+			return -1;
 		} catch (FlipFluidDomain.ThermalTransportBlockedException blocked) {
 			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
 			return -1;
@@ -1713,6 +1716,9 @@ public final class FluidSimulationService {
 			} else {
 				stepThermalOnce(region);
 			}
+		} catch (FlipFluidDomain.PressureSolveBlockedException blocked) {
+			blockNumerical(level, region, blocked);
+			return;
 		} catch (ChemicalReactionEngine.BudgetExceededException budget) {
 			String failure = "chemistry-blocked PAUSED：" + budget.getMessage();
 			region.blockChemistry(failure);
@@ -1860,6 +1866,19 @@ public final class FluidSimulationService {
 				region.id(), failure, blocked);
 		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
 				"物质、运动与力学热学步骤被安全拒绝，区域已暂停：" + failure + "；请查看 /mmm status"));
+		sendSnapshot(level, region);
+	}
+
+	private void blockNumerical(
+			ServerLevel level, FluidRegion region, FlipFluidDomain.PressureSolveBlockedException blocked
+	) {
+		String failure = "pressure-solver NUMERICAL_PAUSE：" + blocked.getMessage();
+		region.blockNumerical(failure);
+		MmmMod.LOGGER.error("Region {} rejected an unconverged pressure candidate and is paused",
+				region.id(), blocked);
+		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+				"物质、运动与力学压力求解未收敛，本次候选未提交，区域已安全暂停："
+						+ blocked.getMessage() + "；请查看 /mmm status"));
 		sendSnapshot(level, region);
 	}
 
