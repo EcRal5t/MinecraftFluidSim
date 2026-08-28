@@ -13,6 +13,7 @@ import cc.ecisr.mmm.thermal.FiniteThermalExchange;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
@@ -39,6 +40,8 @@ public final class FluidRegion {
 	private final long networkGeneration;
 	private final FluidRegionLifecycle lifecycle = new FluidRegionLifecycle();
 	private FlipFluidDomain domain;
+	/** Runtime-only owner revision for synchronous backend candidates; HEAD generation remains independent. */
+	private long solverGeneration;
 	private long checkpointGeneration;
 	private int checkpointMarkerCount;
 	private float checkpointVolume;
@@ -166,6 +169,32 @@ public final class FluidRegion {
 		return domain;
 	}
 	public boolean solverLoaded() { return domain != null; }
+	long solverGeneration() { return solverGeneration; }
+
+	/**
+	 * Atomically replaces the live solver with a complete backend candidate. The live domain is only
+	 * touched after the candidate's backend identity, adjacency and layout have been validated, so a
+	 * rejected step never leaves partially applied marker momentum behind.
+	 */
+	void adoptStepCandidate(FluidStepCandidate candidate, String expectedBackendId) {
+		Objects.requireNonNull(candidate, "candidate");
+		Objects.requireNonNull(expectedBackendId, "expectedBackendId");
+		if (domain == null) throw new IllegalStateException("Region solver is unloaded");
+		if (!expectedBackendId.equals(candidate.backendId())
+				|| candidate.baseGeneration() != solverGeneration
+				|| candidate.candidateGeneration() != Math.addExact(solverGeneration, 1L)) {
+			throw new IllegalStateException("Backend candidate identity or generation is stale");
+		}
+		FlipFluidDomain replacement = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+		if (replacement.sizeX() != sizeX || replacement.sizeY() != sizeY || replacement.sizeZ() != sizeZ
+				|| replacement.maximumParticleCount() != reservedMarkerCapacity
+				|| !replacement.config().equals(solverConfig)) {
+			throw new IllegalStateException("Backend candidate layout is incompatible with the live region");
+		}
+		domain = replacement;
+		solverGeneration = candidate.candidateGeneration();
+	}
+
 	public long reservedMarkerCapacity() { return reservedMarkerCapacity; }
 	public FluidRegionFootprint footprint() { return footprint; }
 	public boolean controllerManaged() { return footprint != null; }

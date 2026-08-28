@@ -22,7 +22,7 @@
 | 世界配置 | `FluidServerConfig.java` | 只接受当前完整配置；功能门与预算在启动时冻结；依赖链严格 |
 | world-local registry snapshot | `ChemicalRegistryStore.java`、`GranularRegistryStore.java`、`GasRegistryStore.java`、`ThermalRegistryStore.java`、`simulation/persistence/DurableFileOperations.java`、`StrictNbtFields.java` | 首次发布先回读再 atomic rename 并同步目录 entry；compound 字段集合和类型必须精确；未知内容保留并锁定 |
 | 世界碰撞 | `MinecraftCollisionWorldPort.java`、`FluidRegionWorldInteraction.java`、`core/.../world/` | Minecraft shape 先冻结为纯 Java `CollisionField`；挤水只按 marker 账本 |
-| 实体流体交互 | `MinecraftEntityFluidInteraction.java`、`FluidRegionLifecycle.java`、`core/.../fluid/FlipFluidDomain.sampleAxisAlignedBody`、`core/.../world/MovingBodyFluidCoupling.java`、`FlipFluidDomain.applyMovingBodyCoupling` | `entity-fluid`；Fabric 每 tick 冻结实体 AABB、原版响应速度和本 tick 实际位姿差，core 按派生水平液层与 cut-micro geometry 连续积分湿体积；只有到期 motion step 消费一次实际位姿速度的 liquid request；core 回报实际合计冲量 |
+| 实体流体交互 | `EntityMotionTracker.java`、`MinecraftEntityFluidInteraction.java`、`FluidRegionLifecycle.java`、`core/.../fluid/FlipFluidDomain.sampleAxisAlignedBody`、`core/.../world/MovingBodyFluidCoupling.java`、`FlipFluidDomain.applyMovingBodyCoupling` | `entity-fluid`；`EntityMotionTracker` 跨相邻服务器观测冻结本 tick 实际位移，不用 `Entity#oldPosition`；Fabric 每 tick 冻结实体 AABB、原版响应速度和该位移，core 按派生水平液层与 cut-micro geometry 连续积分湿体积；只有到期 motion step 消费一次实际位移速度的 liquid request；core 回报实际合计冲量 |
 | controller footprint | `simulation/controller/` | 非加载读取；破口、缺 chunk、多内腔、重叠或超预算拒绝 |
 | 区域 checkpoint | `simulation/persistence/`、`RegionStateLayout.java`、`GenerationSequence.java` | 双槽完整 generation、语义 layout、CRC、HEAD 最后发布；所有 WAL/HEAD 紧邻代次用统一 overflow-safe 检查；atomic rename/delete 后同步目录 entry |
 | takeover | `TakeoverTransaction.java`、`TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
@@ -30,7 +30,7 @@
 | 容器事务 | `core/.../transfer/ContainerTransferActor.java`、`ContainerTransferJournal.java`、`fabric/.../simulation/ControllerItemTransferCoordinator.java`、`MinecraftContainerActorAccess.java`、`ContainerTransferItems.java`、`ContainerTransferStore.java`、`ContainerTransferRecovery.java`、`FluidTransferService.java` | coordinator 独占 WAL→staged HEAD→actor 收敛顺序；journal 与 actor identity 是 loader-neutral 数据；Minecraft actor 定位、冲突分类、NBT/ItemStack 映射与 durable save 只在 Fabric adapter；actor durable save 前不得删 WAL |
 | typed 容器真值 | `core/.../transfer/`、`fabric/.../item/ContainerItemStacks.java` | 体积/质量/species/SVQ/U、actor identity 与 journal 的纯 Java 真值不引用 Minecraft；`ItemStack` component 编解码只留在 Fabric adapter；持久编码不携带 runtime handle |
 | 活动求解器 | `core/.../fluid/FlipFluidDomain.java` | CPU 规范实现；mechanics→conduction→reaction→phase→granular→reseed |
-| 后端完整候选 | `FluidDomainState.java`、`FluidStepRequest.java`、`FluidStepCandidate.java`、`FluidSolverBackend.java` | 后端只计算私有完整后继并回报实际 moving-body 液体冲量；输入有硬上限；不持有世界、actor、HEAD 或提交权 |
+| 后端完整候选 | `FluidDomainState.java`、`FluidStepRequest.java`、`FluidStepCandidate.java`、`FluidSolverBackend.java`、`fabric/.../simulation/FluidSimulationService.stepMotionOnce`、`FluidRegion.adoptStepCandidate` | 后端只计算私有完整后继并回报实际 moving-body 液体冲量；输入有硬上限；不持有世界、actor、HEAD 或提交权；生产 motion step 与 replay 同路，校验通过后才原子替换 live solver，候选失败不改动 live domain |
 | 自由面/压力 | `FlipPressurePhaseGeometry.java`、`FlipFreeSurfaceGeometry.java`、`FlipVolumeDriftCorrection.java`、`FlipVelocityExtrapolator.java` | 守恒 marker footprint 决定 pressure component；含真实 marker 的 pressure cell 使用 exact PLIC，footprint-only cell 使用重建 fallback；贴壁 marker 低占位格不降成 air fringe；carrier face 与库存仍取实际 marker；PCG 使用绝对 RMS 容差，未收敛候选安全暂停 |
 | cut-cell/CCD | `FlipCutCellGeometry.java`、`FlipParticleCollision.java` | pressure 与碰撞共享 aperture；checkpoint/handoff 保留 raw micro mask；只截断命中法向 |
 | reseed | `FlipParticleReseeder.java` | 保持体积、质量、动量、质心和相身份 |
@@ -80,9 +80,10 @@
 | cavity 扫描/几何边 | `air-cavity` | 改共享 cut-face 追加 `cut-cell` |
 | 活动气液耦合 | `gas-liquid` | 显式选择包含完整平衡门；同时固定有限密闭库存零容量时 typed rejection 且提交前 inventory/audit 原样保留 |
 | 密闭 partial gas owner / `empty` 后边界注液 | `controller-gas-lineage` | 以 production liquid/gas registry 复现 `34 m³std → empty → 16 BV`，连续 200 个 backend candidate/capture/restore；改 scanner 几何时先跑 `air-cavity`，改压力消费时再跑 `gas-liquid` |
-| 默认 controller 单步 CPU 硬预算 | `production-live-budget` | 独立 JVM 预热另报，随后 20 个 live logical step 各自不超过 40 ms；必须保留逐步 marker、substep、PCG 和 residual 证据，不能用额外 warmup、pacing 或关闭物理绕过 |
+| 默认 controller 单步 CPU 硬预算 | `production-live-budget` | 20 个 live logical step 各自不超过 40 ms；逐步按生产顺序计时（capture → 完整 candidate → restore），不能用 pacing 或关闭物理绕过；同形状的 10 步预热另报，必须保留逐步 marker、substep、PCG 和 residual 证据 |
 | manager | `region-manager` | 跨 lifecycle/存档追加最近门 |
-| lifecycle/tick | `lifecycle` | 覆盖 PAUSED/跳过/due tick 的 motion-input exactly-once 调度；同时改 ownership 才追加 `ownership` |
+| lifecycle/tick | `lifecycle` | 覆盖 PAUSED/跳过/due tick 的 motion-input exactly-once 调度；同时覆盖后端候选的紧邻 generation/backend id/布局校验与原子替换；同时改 ownership 才追加 `ownership` |
+| 实体 moving-body 接线 | `entity-fluid` | 覆盖跨 tick 位移观测、bodyMotion→request 转换与预算；同时覆盖静态/动态实体不放大液面，以及走动实体必须产生可观察液体响应并在静止后衰减回静止包络 |
 | controller 注液/生产 step/权威 handoff/逐帧预算 | `production-replay` | 默认 `8×8×8` 闭壳注入 16 BV，JVM 预热后每个 live step 不超过 40 ms；另以 `(5,0,4)+16 BV`、40 步后 `(3,3,5)+14 BV` 的非平面注液轨迹建立两条 1000 步门：隔离 gas 的门约束尾部/终值动能及 exact 体积/质量；正式 thermal/gas/phase 定义的门每步经过 backend capture/restore，要求初始 `64 m³std` 库存在两次注液后 source/sink 不变、容量依次为 `48/34 m³`、总 `U` 闭合且压力逐 node 满足 inventory/volume/temperature EoS。thermal-off 的恢复/清空路径另要求 `34 m³std` 库存经 `empty` 扩容到 `64 m³`、边界注入 16 BV 后在 `48 m³` 容量内连续通过 200 个 backend candidate/restore，期间 partial gas owner、source/sink 与总库存不变。正式半满状态还要求 capture/restore、phase-off backend candidate/restore 等价，并要求独立预热后新建 domain 的首个 phase-on production step 在 40 ms 内闭合 gas、pending volume 与总 `U`；环境初始化和先空腔后注液压缩的平面自由面分别连续执行 500/1000 次 phase-off backend candidate/restore，以 opt-in mechanical audit 约束动能峰值/尾部/终值、质心漂移、体力-pressure 功残差、gas lineage 和总 `U`；同一平面场景还以 500 个 candidate 约束静止玩家尺寸 kinematic boundary 不放大动能，并核对液体/外部约束反作用冲量；phase-off backend candidate 的复制耗时仅作诊断，phase-on 长跑会引入真实非平衡相变/自然对流，不能冒充纯机械平衡门 |
 | checkpoint/配置/恢复 | `region-state` | 自动门无法覆盖事务时才做真实重启 |
 | protocol/snapshot | `protocol` | 改注册入口才启动专服 |

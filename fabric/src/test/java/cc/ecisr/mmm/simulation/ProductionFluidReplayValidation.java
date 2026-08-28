@@ -44,6 +44,7 @@ import java.util.Optional;
 /** Replays controller injection through the default live step and the complete authoritative handoff. */
 public final class ProductionFluidReplayValidation {
 	private static final int REPLAY_STEPS = 20;
+	private static final int WARMUP_STEPS = 20;
 	private static final double STEP_BUDGET_MILLIS = 40.0;
 
 	private ProductionFluidReplayValidation() { }
@@ -467,6 +468,95 @@ public final class ProductionFluidReplayValidation {
 				maximumKinetic, finalKinetic, centerYDelta, accumulatedLiquidY, accumulatedReactionY);
 	}
 
+	/**
+	 * Lower bound for the moving-body coupling. The other gates only bound how little a body may excite
+	 * the surface, so a wiring regression which hands core a zero boundary velocity would pass all of
+	 * them while the liquid never responds to a body that is actually moving.
+	 */
+	public static void walkingBodyDisturbsThenSettlesAcrossBackend() throws Exception {
+		final double bodyWidth = 0.60;
+		final double bodyHeight = 1.80;
+		final double bodyVolume = bodyWidth * bodyHeight * bodyWidth;
+		final double walkingMetresPerSecond = 4.3;
+		final int walkingTicks = 8;
+		final int settleTicks = 400;
+		RegistrySet registries = loadProductionRegistries();
+		FlipFluidDomain initial = createFullyBoundPlanarHalfFill(registries);
+		double bodyMinimumX = 0.50;
+		double bodyMinimumZ = 1.70;
+		double bodyMinimumY = bodyBottomForSubmergence(
+				initial, bodyMinimumX, bodyMinimumZ, bodyWidth, bodyHeight,
+				MinecraftEntityFluidInteraction.NEUTRAL_SUBMERGENCE);
+		double perTick = walkingMetresPerSecond / 20.0;
+		// Added-mass scale of the immersed body: the disturbance floor is a small fraction of it, so the
+		// gate rejects a coupling that is silently zero without pinning the exact physical response.
+		double addedMassJoules = 0.5 * productionConfig().density() * bodyVolume
+				* MinecraftEntityFluidInteraction.NEUTRAL_SUBMERGENCE
+				* walkingMetresPerSecond * walkingMetresPerSecond;
+		FluidDomainState state = initial.captureAuthoritativeState();
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		long generation = 0L;
+		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0, peakImpulseX = 0.0;
+		double maximumStepMillis = 0.0;
+		FlipFluidDomain restored = initial;
+		for (int tick = 1; tick <= walkingTicks + settleTicks; tick++) {
+			boolean walking = tick <= walkingTicks;
+			FlipFluidDomain.BodyFluidSample sample = restored.sampleAxisAlignedBody(
+					bodyMinimumX, bodyMinimumY, bodyMinimumZ,
+					bodyMinimumX + bodyWidth, bodyMinimumY + bodyHeight, bodyMinimumZ + bodyWidth);
+			double submergedFraction = sample.displacedVolumeCubicMetres() / bodyVolume;
+			require(submergedFraction > 0.0 && submergedFraction <= 1.0 + 1.0E-9,
+					"walking body left the finite wet AABB observation at tick " + tick
+							+ ": submergence=" + submergedFraction);
+			MovingBodyFluidCoupling.Request body = new MovingBodyFluidCoupling.Request(
+					(float) sample.centerXMetres(), (float) sample.centerYMetres(),
+					(float) sample.centerZMetres(),
+					walking ? walkingMetresPerSecond : 0.0, 0.0, 0.0,
+					sample.displacedVolumeCubicMetres());
+			// Production orders this exactly the same way: capture, freeze the body, evaluate the
+			// complete candidate, then restore it. The wall time therefore covers the whole step.
+			long stepStart = System.nanoTime();
+			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+					generation, state, List.of(body), false, 0));
+			MovingBodyFluidCoupling.Result coupling = candidate.movingBodyCoupling();
+			require(coupling.coupledMarkers() > 0 && coupling.coupledVolumeCubicMetres() > 0.0,
+					"walking body lost its wet moving-boundary support at tick " + tick);
+			restored = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+			double stepMillis = (System.nanoTime() - stepStart) / 1_000_000.0;
+			if (tick > WARMUP_STEPS) maximumStepMillis = Math.max(maximumStepMillis, stepMillis);
+			double kinetic = kineticEnergy(restored.exportMaterialParticleState());
+			maximumKinetic = Math.max(maximumKinetic, kinetic);
+			if (walking) {
+				peakImpulseX = Math.max(peakImpulseX,
+						Math.abs(coupling.impulseXKilogramMetresPerSecond()));
+			} else if (tick > settleTicks - 100) {
+				tailMaximumKinetic = Math.max(tailMaximumKinetic, kinetic);
+			}
+			state = candidate.state();
+			generation++;
+			if (walking) bodyMinimumX += perTick;
+		}
+		double finalKinetic = kineticEnergy(restored.exportMaterialParticleState());
+		System.out.printf("  walking body gate: peak impulse=%.9g kg*m/s, K max/tail/final="
+				+ "%.9g/%.9g/%.9g J, added-mass scale=%.9g J, step max=%.3f ms%n",
+				peakImpulseX, maximumKinetic, tailMaximumKinetic, finalKinetic, addedMassJoules,
+				maximumStepMillis);
+		require(peakImpulseX > 0.0,
+				"a walking body reported no liquid impulse; the moving-body wiring is not reaching the step");
+		require(maximumKinetic >= addedMassJoules * 1.0E-3,
+				"a walking body produced no observable liquid disturbance: K=" + maximumKinetic
+						+ " J against an added-mass scale of " + addedMassJoules + " J");
+		// The current solver has no viscosity stage, so a coherent slosh is only damped through the
+		// PIC/FLIP blend and survives as a bounded standing mode. The gate therefore forbids growth and
+		// self-excitation rather than claiming the injected energy is fully dissipated.
+		require(tailMaximumKinetic <= maximumKinetic * 0.25 && finalKinetic <= maximumKinetic * 0.25,
+				"walking-body disturbance did not stay bounded after the body stopped: max/tail/final="
+						+ maximumKinetic + "/" + tailMaximumKinetic + "/" + finalKinetic + " J");
+		require(maximumStepMillis <= STEP_BUDGET_MILLIS,
+				"a production-shaped backend step exceeded the server-tick budget: max="
+						+ maximumStepMillis + " ms");
+	}
+
 	private static void compressedPlanarHalfFillRemainsStableAcrossBackend() throws Exception {
 		RegistrySet registries = loadProductionRegistries();
 		FlipFluidDomain initial = createFullyBoundCompressedPlanarHalfFill(registries);
@@ -545,20 +635,37 @@ public final class ProductionFluidReplayValidation {
 	public static void defaultLiveStepsRemainBounded() {
 		FlipFluidDomain warmup = createPouredControllerDomain();
 		long warmupStart = System.nanoTime();
-		warmup.step(false, 0);
+		CpuFluidSolverBackend warmupBackend = new CpuFluidSolverBackend();
+		FluidDomainState warmupState = warmup.captureAuthoritativeState();
+		for (int generation = 0; generation < 10; generation++) {
+			FluidStepCandidate warmupCandidate = warmupBackend.evaluate(
+					new FluidStepRequest(generation, warmupState, List.of(), false, 0));
+			warmup = FlipFluidDomain.restoreAuthoritativeState(warmupCandidate.state());
+			warmupState = warmupCandidate.state();
+		}
 		double warmupMilliseconds = (System.nanoTime() - warmupStart) / 1_000_000.0;
-		System.out.printf("  production live JVM warmup: %.3f ms (reported separately from frame budget)%n",
-				warmupMilliseconds);
+		System.out.printf("  production live JVM warmup: %.3f ms for 10 production-shaped steps "
+				+ "(reported separately from frame budget)%n", warmupMilliseconds);
 
 		FlipFluidDomain domain = createPouredControllerDomain();
 		double volume = domain.totalVolumeExact();
 		double mass = domain.totalMass();
 		ArrayList<Double> elapsed = new ArrayList<>(REPLAY_STEPS);
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		FluidDomainState state = domain.captureAuthoritativeState();
+		long generation = 0L;
 		for (int step = 0; step < REPLAY_STEPS; step++) {
 			long start = System.nanoTime();
 			FlipFluidDomain.StepStats stats;
 			try {
-				stats = domain.step(false, 0);
+				// The live budget has to cover what a production motion step actually does: capture the
+				// authoritative state, evaluate a complete candidate, then restore it as the new owner.
+				FluidStepCandidate candidate = backend.evaluate(
+						new FluidStepRequest(generation, state, List.of(), false, 0));
+				domain = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+				stats = candidate.stats();
+				state = candidate.state();
+				generation++;
 			} catch (RuntimeException failure) {
 				throw new AssertionError("production live-domain replay failed at step " + step
 						+ ": " + failure.getMessage(), failure);

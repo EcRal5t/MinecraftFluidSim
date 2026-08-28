@@ -12,7 +12,11 @@ import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ChemicalRegistryStore;
 import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
+import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidSolverBackend;
+import cc.ecisr.mmm.fluid.FluidStepCandidate;
+import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterial;
@@ -49,6 +53,7 @@ import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalRegistryStore;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
+import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
@@ -106,6 +111,8 @@ public final class FluidSimulationService {
 	private final boolean serverConfigLocked;
 	private FluidServerConfig serverConfig;
 	private final FluidRegionManager regionManager;
+	private final FluidSolverBackend solverBackend = new CpuFluidSolverBackend();
+	private final EntityMotionTracker entityMotion = new EntityMotionTracker();
 	private final CommittedEventHub committedEvents;
 	private final FluidWorldTargetResolver targets;
 	private final FluidRegionOperations regionOperations;
@@ -1636,7 +1643,7 @@ public final class FluidSimulationService {
 		if (!ensureRegionAvailable(level, region)) return -1;
 		region.wakeForActivity();
 		try {
-			for (int i = 0; i < count; i++) stepOnce(region);
+			for (int i = 0; i < count; i++) stepMotionOnce(region, List.of());
 		} catch (FlipFluidDomain.PressureSolveBlockedException blocked) {
 			blockNumerical(level, region, blocked);
 			return -1;
@@ -1680,6 +1687,7 @@ public final class FluidSimulationService {
 			}
 			tickRegion(level, region);
 		}
+		entityMotion.rotate();
 	}
 
 	private void tickRegion(ServerLevel level, FluidRegion region) {
@@ -1694,8 +1702,10 @@ public final class FluidSimulationService {
 			}
 		}
 		MinecraftEntityFluidInteraction.Frame entityFrame = region.entityPhysicsEnabled()
-				? MinecraftEntityFluidInteraction.capture(level, region)
+				? MinecraftEntityFluidInteraction.capture(level, region, entityMotion)
 				: MinecraftEntityFluidInteraction.Frame.EMPTY;
+		List<MovingBodyFluidCoupling.Request> movingBodies = entityFrame.interactions().isEmpty()
+				? List.of() : MinecraftEntityFluidInteraction.movingBodyRequests(entityFrame.bodyMotions());
 		MinecraftEntityFluidInteraction.applyEntityForces(entityFrame);
 		int affectedEntities = entityFrame.affectedEntities();
 		region.setLastEntityCoupling(new FluidRegion.EntityCouplingStats(affectedEntities, 0.0, 0.0, 0.0));
@@ -1720,9 +1730,11 @@ public final class FluidSimulationService {
 		try {
 			if (motionStepDue) {
 				region.wakeThermal(ThermalActivity.WakeReason.CARRIER_MOTION);
-				region.setLastEntityCoupling(MinecraftEntityFluidInteraction.applyToLiquid(
-						entityFrame, region.domain()));
-				stepOnce(region);
+				FluidStepCandidate candidate = stepMotionOnce(region, movingBodies);
+				MovingBodyFluidCoupling.Result coupling = candidate.movingBodyCoupling();
+				region.setLastEntityCoupling(new FluidRegion.EntityCouplingStats(affectedEntities,
+						coupling.impulseXKilogramMetresPerSecond(), coupling.impulseYKilogramMetresPerSecond(),
+						coupling.impulseZKilogramMetresPerSecond()));
 			} else {
 				stepThermalOnce(region);
 			}
@@ -1831,11 +1843,22 @@ public final class FluidSimulationService {
 		return available;
 	}
 
-	private void stepOnce(FluidRegion region) {
+	/**
+	 * Evaluates one logical motion step through the complete candidate boundary and adopts the result
+	 * atomically. The live domain is only replaced after the backend returns its whole successor, so a
+	 * rejected step leaves no partially applied marker momentum.
+	 */
+	private FluidStepCandidate stepMotionOnce(
+			FluidRegion region, List<MovingBodyFluidCoupling.Request> movingBodies
+	) {
 		long start = System.nanoTime();
-		FlipFluidDomain.StepStats stats = region.domain().step(
-				phaseChangeFeatureEnabled, serverConfig.maximumPhaseOperationsPerStep());
-		region.recordStep(stats, (System.nanoTime() - start) / 1_000_000.0);
+		FluidStepCandidate candidate = solverBackend.evaluate(new FluidStepRequest(
+				region.solverGeneration(), region.domain().captureAuthoritativeState(), movingBodies,
+				phaseChangeFeatureEnabled,
+				phaseChangeFeatureEnabled ? serverConfig.maximumPhaseOperationsPerStep() : 0));
+		region.adoptStepCandidate(candidate, solverBackend.id());
+		region.recordStep(candidate.stats(), (System.nanoTime() - start) / 1_000_000.0);
+		return candidate;
 	}
 
 	private void stepThermalOnce(FluidRegion region) {

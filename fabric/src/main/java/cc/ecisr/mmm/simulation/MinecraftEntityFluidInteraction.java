@@ -1,6 +1,5 @@
 package cc.ecisr.mmm.simulation;
 
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -10,6 +9,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /** Minecraft entity discovery and response over loader-neutral fluid observations. */
@@ -20,21 +20,15 @@ final class MinecraftEntityFluidInteraction {
 
 	private MinecraftEntityFluidInteraction() { }
 
-	static Frame capture(ServerLevel level, FluidRegion region) {
-		BlockPos origin = region.origin();
-		FlipFluidDomain domain = region.domain();
-		float cellSize = domain.config().cellSize();
-		AABB bounds = new AABB(
-				origin.getX(), origin.getY(), origin.getZ(),
-				origin.getX() + domain.sizeX() * cellSize,
-				origin.getY() + domain.sizeY() * cellSize,
-				origin.getZ() + domain.sizeZ() * cellSize
-		);
+	static Frame capture(ServerLevel level, FluidRegion region, EntityMotionTracker motion) {
 		List<Interaction> interactions = new ArrayList<>();
-		for (Entity entity : level.getEntities((Entity) null, bounds, MinecraftEntityFluidInteraction::canAffect)) {
+		for (Entity entity : level.getEntities((Entity) null, regionBounds(region),
+				MinecraftEntityFluidInteraction::canAffect)) {
+			motion.observe(entity.getUUID(), entity.position());
 			Contact contact = sampleContact(region, entity);
 			if (contact.submergedFraction() <= 0.0) continue;
-			interactions.add(new Interaction(entity, contact, entity.position().subtract(entity.oldPosition())));
+			interactions.add(new Interaction(entity, contact,
+					motion.displacementSincePreviousTick(entity.getUUID(), entity.position())));
 		}
 		return interactions.isEmpty() ? Frame.EMPTY : new Frame(List.copyOf(interactions));
 	}
@@ -43,19 +37,42 @@ final class MinecraftEntityFluidInteraction {
 		for (Interaction interaction : frame.interactions()) applyForce(interaction.entity(), interaction.contact());
 	}
 
-	static FluidRegion.EntityCouplingStats applyToLiquid(Frame frame, FlipFluidDomain domain) {
-		double impulseX = 0.0, impulseY = 0.0, impulseZ = 0.0;
-		for (Interaction interaction : frame.interactions()) {
-			Vec3 bodyVelocity = interaction.displacementBlocksThisTick().scale(TICKS_PER_SECOND);
-			Contact contact = interaction.contact();
-			MovingBodyFluidCoupling.Result coupling = domain.applyMovingBodyCoupling(
-					new MovingBodyFluidCoupling.Request(contact.localX(), contact.localY(), contact.localZ(),
-							bodyVelocity.x, bodyVelocity.y, bodyVelocity.z, contact.displacedVolumeCubicMetres()));
-			impulseX += coupling.impulseXKilogramMetresPerSecond();
-			impulseY += coupling.impulseYKilogramMetresPerSecond();
-			impulseZ += coupling.impulseZKilogramMetresPerSecond();
+	/**
+	 * Converts frozen body observations into the loader-neutral requests a backend consumes.
+	 * Bodies without a previous observation carry no displacement and are not coupled; the documented
+	 * per-step request budget keeps the largest immersed volumes when a region holds more bodies.
+	 */
+	static List<MovingBodyFluidCoupling.Request> movingBodyRequests(List<BodyMotion> motions) {
+		if (motions.isEmpty()) return List.of();
+		List<BodyMotion> ordered = new ArrayList<>(motions.size());
+		for (BodyMotion motion : motions) {
+			if (motion.displacementBlocksThisTick() != null) ordered.add(motion);
 		}
-		return new FluidRegion.EntityCouplingStats(frame.interactions().size(), impulseX, impulseY, impulseZ);
+		if (ordered.isEmpty()) return List.of();
+		if (ordered.size() > MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP) {
+			ordered.sort(Comparator.comparingDouble(BodyMotion::displacedVolumeCubicMetres).reversed());
+			ordered = new ArrayList<>(ordered.subList(0, MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP));
+		}
+		List<MovingBodyFluidCoupling.Request> requests = new ArrayList<>(ordered.size());
+		for (BodyMotion motion : ordered) {
+			Vec3 displacement = motion.displacementBlocksThisTick();
+			requests.add(new MovingBodyFluidCoupling.Request(
+					motion.localXMetres(), motion.localYMetres(), motion.localZMetres(),
+					displacement.x * TICKS_PER_SECOND, displacement.y * TICKS_PER_SECOND,
+					displacement.z * TICKS_PER_SECOND, motion.displacedVolumeCubicMetres()));
+		}
+		return List.copyOf(requests);
+	}
+
+	private static AABB regionBounds(FluidRegion region) {
+		BlockPos origin = region.origin();
+		float cellSize = region.domain().config().cellSize();
+		return new AABB(
+				origin.getX(), origin.getY(), origin.getZ(),
+				origin.getX() + region.domain().sizeX() * cellSize,
+				origin.getY() + region.domain().sizeY() * cellSize,
+				origin.getZ() + region.domain().sizeZ() * cellSize
+		);
 	}
 
 	private static boolean canAffect(Entity entity) {
@@ -66,10 +83,9 @@ final class MinecraftEntityFluidInteraction {
 	}
 
 	private static Contact sampleContact(FluidRegion region, Entity entity) {
-		FlipFluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
 		AABB box = entity.getBoundingBox();
-		FlipFluidDomain.BodyFluidSample sample = domain.sampleAxisAlignedBody(
+		var sample = region.domain().sampleAxisAlignedBody(
 				box.minX - origin.getX(), box.minY - origin.getY(), box.minZ - origin.getZ(),
 				box.maxX - origin.getX(), box.maxY - origin.getY(), box.maxZ - origin.getZ());
 		double displacedVolume = sample.displacedVolumeCubicMetres();
@@ -117,6 +133,15 @@ final class MinecraftEntityFluidInteraction {
 		return next;
 	}
 
+	/** One frozen liquid observation; carries no Minecraft entity reference into core. */
+	record BodyMotion(
+			float localXMetres,
+			float localYMetres,
+			float localZMetres,
+			double displacedVolumeCubicMetres,
+			Vec3 displacementBlocksThisTick
+	) { }
+
 	private record Interaction(Entity entity, Contact contact, Vec3 displacementBlocksThisTick) { }
 
 	record Frame(List<Interaction> interactions) {
@@ -127,6 +152,17 @@ final class MinecraftEntityFluidInteraction {
 		}
 
 		int affectedEntities() { return interactions.size(); }
+
+		List<BodyMotion> bodyMotions() {
+			if (interactions.isEmpty()) return List.of();
+			List<BodyMotion> motions = new ArrayList<>(interactions.size());
+			for (Interaction interaction : interactions) {
+				Contact contact = interaction.contact();
+				motions.add(new BodyMotion(contact.localX(), contact.localY(), contact.localZ(),
+						contact.displacedVolumeCubicMetres(), interaction.displacementBlocksThisTick()));
+			}
+			return List.copyOf(motions);
+		}
 	}
 
 	private record Contact(

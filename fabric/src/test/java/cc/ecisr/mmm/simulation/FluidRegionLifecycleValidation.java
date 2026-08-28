@@ -1,11 +1,27 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.fluid.FluidStepCandidate;
+import cc.ecisr.mmm.fluid.FluidStepRequest;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Registry;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.Level;
+
+import java.util.List;
+import java.util.UUID;
 
 /** Deterministic lifecycle transition gate independent of Minecraft chunks and wall-clock timing. */
 public final class FluidRegionLifecycleValidation {
+	private static final ResourceKey<Registry<Level>> DIMENSION_REGISTRY = ResourceKey.createRegistryKey(
+			Identifier.fromNamespaceAndPath("mmm", "lifecycle_validation_dimension_registry"));
+	private static final ResourceKey<Level> DIMENSION = ResourceKey.create(
+			DIMENSION_REGISTRY, Identifier.fromNamespaceAndPath("mmm", "lifecycle_validation_dimension"));
+
 	private FluidRegionLifecycleValidation() { }
 
 	public static void main(String[] args) {
@@ -14,8 +30,48 @@ public final class FluidRegionLifecycleValidation {
 		validateAvailabilityPreservesRunIntent();
 		validateHydrostaticSleepAndWake();
 		validateHydrostaticSleepPreservesMarkerLedger();
+		validateBackendCandidateAdoption();
 		validateUnloadRequiresPublishedCheckpointAndReleasedSolver();
 		System.out.println("FluidRegionLifecycle validation passed");
+	}
+
+	/** The live solver is only replaced by a complete, adjacent candidate from the expected backend. */
+	private static void validateBackendCandidateAdoption() {
+		FluidSolverConfig config = FluidSolverConfig.prototypeDefaults();
+		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config);
+		domain.setVolume(1, 1, 1, 0.5F);
+		FluidRegion region = new FluidRegion(new UUID(19L, 23L), DIMENSION, BlockPos.ZERO,
+				domain, domain.maximumParticleCount());
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		FluidStepCandidate first = backend.evaluate(new FluidStepRequest(
+				region.solverGeneration(), region.domain().captureAuthoritativeState(), List.of(), false, 0));
+		region.adoptStepCandidate(first, backend.id());
+		require(region.solverGeneration() == 1L && region.domain() != domain,
+				"valid backend candidate did not atomically replace the live solver");
+
+		FlipFluidDomain committed = region.domain();
+		boolean staleRejected = false;
+		try {
+			region.adoptStepCandidate(first, backend.id());
+		} catch (IllegalStateException expected) {
+			staleRejected = true;
+		}
+		require(staleRejected && region.domain() == committed && region.solverGeneration() == 1L,
+				"stale backend candidate changed the committed solver");
+
+		FluidStepCandidate second = backend.evaluate(new FluidStepRequest(
+				region.solverGeneration(), region.domain().captureAuthoritativeState(), List.of(), false, 0));
+		boolean backendRejected = false;
+		try {
+			region.adoptStepCandidate(second, "mmm:unexpected");
+		} catch (IllegalStateException expected) {
+			backendRejected = true;
+		}
+		require(backendRejected && region.domain() == committed && region.solverGeneration() == 1L,
+				"backend identity mismatch changed the committed solver");
+
+		region.adoptStepCandidate(second, backend.id());
+		require(region.solverGeneration() == 2L, "adjacent backend candidate did not advance the generation");
 	}
 
 	private static void validateMotionInputConsumptionSchedule() {

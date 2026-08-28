@@ -15,6 +15,7 @@ import cc.ecisr.mmm.item.M6ContainerValidation;
 import cc.ecisr.mmm.logging.CommandAuditFileValidation;
 import cc.ecisr.mmm.network.FluidNetworkProtocolValidation;
 import cc.ecisr.mmm.simulation.ContainerTransferStoreValidation;
+import cc.ecisr.mmm.simulation.EntityFluidWiringValidation;
 import cc.ecisr.mmm.simulation.CommittedEventHubValidation;
 import cc.ecisr.mmm.simulation.FluidCutCellShapeValidation;
 import cc.ecisr.mmm.simulation.FluidRegionLifecycleValidation;
@@ -122,7 +123,11 @@ public final class CpuValidationSuite {
 				() -> M5GasLiquidCouplingValidation.main(FAST));
 		gate(gates, "region-manager", () -> FluidRegionManagerValidation.main(NONE));
 		gate(gates, "lifecycle", () -> FluidRegionLifecycleValidation.main(NONE));
-		gate(gates, "entity-fluid", ProductionFluidReplayValidation::dynamicPlayerFloatRemainsBoundedAcrossBackend);
+		gate(gates, "entity-fluid", () -> {
+			EntityFluidWiringValidation.main(NONE);
+			ProductionFluidReplayValidation.dynamicPlayerFloatRemainsBoundedAcrossBackend();
+			ProductionFluidReplayValidation.walkingBodyDisturbsThenSettlesAcrossBackend();
+		});
 		gate(gates, "controller-gas-lineage", () -> {
 			ProductionFluidReplayValidation.controllerEmptyThenBoundaryPourPreservesGasAcrossBackend();
 			ProductionFluidReplayValidation.controllerPoursKeepSingleSealedGasOwner();
