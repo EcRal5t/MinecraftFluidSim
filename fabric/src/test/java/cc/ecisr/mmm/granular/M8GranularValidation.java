@@ -326,9 +326,12 @@ public final class M8GranularValidation {
 
 		Path world = Files.createTempDirectory("mmm-granular-registry-");
 		try {
-			GranularRegistryStore store = new GranularRegistryStore(world, BuiltinChemicalDefinitions.REGISTRY);
-			GranularRegistryStore.LoadResult first = store.loadOrCreate(bundled);
-			require(first.created() && !first.definitionMismatch(), "first granular registry snapshot was not published");
+			Path snapshot = world.resolve("granular-registry.nbt");
+			GranularRegistryCodec.writeSnapshot(snapshot, bundled);
+			GranularRegistry rest = GranularRegistryCodec.readSnapshot(snapshot, BuiltinChemicalDefinitions.REGISTRY);
+			require(rest.fingerprint().equals(bundled.fingerprint())
+							&& Arrays.equals(rest.canonicalBytes(), bundled.canonicalBytes()),
+					"granular registry snapshot did not round-trip canonically");
 			List<ParticulateMaterial> changedMaterials = new ArrayList<>(bundled.materials());
 			ParticulateMaterial original = changedMaterials.getFirst();
 			changedMaterials.set(0, new ParticulateMaterial(original.id(), original.referenceDensity(),
@@ -336,25 +339,31 @@ public final class M8GranularValidation {
 					original.staticFriction(), original.dynamicFriction(), original.restitution(), original.criticalShields(),
 					original.erosionRateSvqPerSecond(), original.maximumActiveParcelSvq(), original.baseArgb() ^ 0x00010101,
 					original.displayTextureId(), original.reactive()));
-			GranularRegistryStore.LoadResult mismatch = store.loadOrCreate(
-					new GranularRegistry(changedMaterials, bundled.carriers(), bundled.reactions(),
-							BuiltinChemicalDefinitions.REGISTRY));
-			require(mismatch.definitionMismatch() && mismatch.registry().fingerprint().equals(bundled.fingerprint()),
-					"changed granular definitions reinterpreted the authoritative world snapshot");
-			var registryTag = net.minecraft.nbt.NbtIo.readCompressed(store.registryPath(),
+			GranularRegistry changed = new GranularRegistry(changedMaterials, bundled.carriers(), bundled.reactions(),
+					BuiltinChemicalDefinitions.REGISTRY);
+			require(!changed.fingerprint().equals(bundled.fingerprint()),
+					"changed granular material colour must change the fingerprint");
+			require(!Arrays.equals(GranularRegistryCodec.snapshotBytes(changed),
+							GranularRegistryCodec.snapshotBytes(bundled)),
+					"changed granular definitions produced identical snapshot bytes");
+			var registryTag = net.minecraft.nbt.NbtIo.readCompressed(snapshot,
 					net.minecraft.nbt.NbtAccounter.create(4L * 1024L * 1024L));
 			registryTag.putString("UnknownField", "must-lock");
-			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, store.registryPath());
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, snapshot);
 			try {
-				store.read();
+				GranularRegistryCodec.readSnapshot(snapshot, BuiltinChemicalDefinitions.REGISTRY);
 				throw new AssertionError("unknown granular registry field was ignored");
 			} catch (java.io.IOException expected) { }
 			registryTag.remove("UnknownField");
-			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, store.registryPath());
-			Files.writeString(world.resolve("mmm").resolve("granular").resolve("foreign.bin"), "foreign");
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, snapshot);
+			GranularRegistryCodec.writeSnapshot(snapshot, changed);
+			registryTag = net.minecraft.nbt.NbtIo.readCompressed(snapshot,
+					net.minecraft.nbt.NbtAccounter.create(4L * 1024L * 1024L));
+			registryTag.putString("Fingerprint", bundled.fingerprint());
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, snapshot);
 			try {
-				store.read();
-				throw new AssertionError("unknown granular registry content was ignored");
+				GranularRegistryCodec.readSnapshot(snapshot, BuiltinChemicalDefinitions.REGISTRY);
+				throw new AssertionError("granular registry whose content does not match its fingerprint was accepted");
 			} catch (java.io.IOException expected) { }
 		} finally {
 			try (var paths = Files.walk(world)) {

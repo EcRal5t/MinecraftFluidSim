@@ -20,58 +20,17 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.TreeMap;
 
-/** World-authoritative immutable granular registry snapshot with atomic first publication. */
-public final class GranularRegistryStore {
+/**
+ * Canonical snapshot codec for the granular registry. The world capability bundle is the only place a
+ * registry snapshot is stored, so this codec has no world directory of its own.
+ */
+public final class GranularRegistryCodec {
+	private GranularRegistryCodec() { }
+
 	private static final String SCHEMA = "granular-registry";
 	private static final long MAX_BYTES = 4L * 1024L * 1024L;
-	private static final Set<String> KNOWN_FILES = Set.of("registry.nbt", "registry.nbt.tmp");
-	private final Path directory;
-	private final ChemicalRegistry chemicalRegistry;
-
-	public GranularRegistryStore(Path worldRoot, ChemicalRegistry chemicalRegistry) {
-		directory = worldRoot.toAbsolutePath().normalize().resolve("mmm").resolve("granular");
-		this.chemicalRegistry = java.util.Objects.requireNonNull(chemicalRegistry, "chemicalRegistry");
-	}
-
-	public LoadResult loadOrCreate(GranularRegistry definitions) throws IOException {
-		validateLayout();
-		Path target = registryPath();
-		if (Files.exists(target)) {
-			GranularRegistry authoritative = readSnapshot(target, chemicalRegistry);
-			return new LoadResult(authoritative, !authoritative.fingerprint().equals(definitions.fingerprint()), false);
-		}
-		Path temporary = temporaryPath();
-		DurableFileOperations.createDirectories(directory);
-		if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
-		try {
-			writeSnapshot(temporary, definitions); force(temporary);
-			GranularRegistry reread = readSnapshot(temporary, chemicalRegistry);
-			if (!reread.fingerprint().equals(definitions.fingerprint())) {
-				throw new IOException("Staged granular registry did not read back identically");
-			}
-			Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
-			DurableFileOperations.forceDirectory(directory);
-			return new LoadResult(readSnapshot(target, chemicalRegistry), false, true);
-		} catch (IOException failure) {
-			try {
-				if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
-			} catch (IOException cleanup) { failure.addSuppressed(cleanup); }
-			throw failure;
-		}
-	}
-
-	public GranularRegistry read() throws IOException {
-		validateLayout();
-		if (!exists()) throw new IOException("Granular registry snapshot is missing at " + registryPath());
-		return readSnapshot(registryPath(), chemicalRegistry);
-	}
-
-	public boolean exists() { return Files.exists(registryPath()); }
-	public Path registryPath() { return directory.resolve("registry.nbt"); }
-	private Path temporaryPath() { return directory.resolve("registry.nbt.tmp"); }
 
 	/** Canonical bytes of the strict snapshot; the bundle stores exactly these so checksums agree. */
 	public static byte[] snapshotBytes(GranularRegistry registry) throws IOException {
@@ -242,16 +201,6 @@ public final class GranularRegistryStore {
 		return Map.copyOf(result);
 	}
 
-	private void validateLayout() throws IOException {
-		if (!Files.exists(directory)) return;
-		if (!Files.isDirectory(directory)) throw new IOException("Granular registry path is not a directory: " + directory);
-		try (var entries = Files.newDirectoryStream(directory)) {
-			for (Path entry : entries) if (!KNOWN_FILES.contains(entry.getFileName().toString()) || Files.isDirectory(entry)) {
-				throw new IOException("Unknown granular registry content is preserved at " + entry);
-			}
-		}
-	}
-
 	private static CompoundTag compound(ListTag list, int index, String context) throws IOException {
 		Tag tag = list.get(index);
 		if (!(tag instanceof CompoundTag compound)) throw new IOException("Invalid " + context + " entry");
@@ -262,9 +211,4 @@ public final class GranularRegistryStore {
 	}
 	private static long bits(double value) { return Double.doubleToRawLongBits(value); }
 	private static double value(CompoundTag tag, String field) { return Double.longBitsToDouble(tag.getLongOr(field, 0L)); }
-	private static void force(Path path) throws IOException {
-		try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) { channel.force(true); }
-	}
-
-	public record LoadResult(GranularRegistry registry, boolean definitionMismatch, boolean created) { }
 }

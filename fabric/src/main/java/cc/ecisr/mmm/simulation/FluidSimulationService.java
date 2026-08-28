@@ -9,7 +9,6 @@ import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.chemistry.ChemicalDataPackLoader;
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
-import cc.ecisr.mmm.chemistry.ChemicalRegistryStore;
 import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
@@ -27,12 +26,10 @@ import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import cc.ecisr.mmm.fluid.air.GasAuditLedger;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
-import cc.ecisr.mmm.fluid.air.GasRegistryStore;
 import cc.ecisr.mmm.granular.GranularDataPackLoader;
 import cc.ecisr.mmm.granular.GranularMechanics;
 import cc.ecisr.mmm.granular.GranularPhaseTransferEngine;
 import cc.ecisr.mmm.granular.GranularRegistry;
-import cc.ecisr.mmm.granular.GranularRegistryStore;
 import cc.ecisr.mmm.transfer.ChemicalContents;
 import cc.ecisr.mmm.transfer.ContainerTransferActor;
 import cc.ecisr.mmm.transfer.ContainerTransferJournal;
@@ -48,11 +45,9 @@ import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
-import cc.ecisr.mmm.thermal.ThermalRegistryStore;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.fluid.MaterialRegistry;
-import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import java.util.EnumSet;
 import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 import cc.ecisr.mmm.worldprofile.WorldCapability;
@@ -111,6 +106,13 @@ public final class FluidSimulationService {
 	private static final long COMPATIBILITY_REGION_MARKERS = COMPATIBILITY_REGION_CELLS * 8L;
 	private static final Map<MinecraftServer, FluidSimulationService> SERVICES = new WeakHashMap<>();
 	private static final Map<MinecraftServer, CommittedEventHub> COMMITTED_EVENTS = new WeakHashMap<>();
+	/**
+	 * Capabilities of a world whose bundle cannot be proven. This is the degradation, not a claim about
+	 * committed truth: nothing can be created, every stored region fails its capability check and stays
+	 * locked, and controllers stay disabled through `configurationLocked`.
+	 */
+	private static final WorldCapabilityProfile UNPROVEN_CAPABILITIES = WorldCapabilityProfile.of(
+			EnumSet.noneOf(WorldCapability.class), new RegistryFingerprintSet("", "", "", "", ""));
 
 	private final Map<BlockPos, BlockState> takeoverOriginalBlocks = new HashMap<>();
 	private final Path worldRoot;
@@ -177,12 +179,13 @@ public final class FluidSimulationService {
 			MmmMod.LOGGER.error("Matter, Motion & Mechanics world capability profile is {}; controllers remain disabled: {}",
 					capability.state(), capability.issue());
 		}
-		WorldCapabilityProfile profile = capability.bundle() == null ? null : capability.bundle().profile();
-		chemicalRegistry = capability.bundle() == null ? null : capability.bundle().chemical();
-		granularRegistry = capability.bundle() == null ? null : capability.bundle().granular();
-		gasRegistry = capability.bundle() == null ? null : capability.bundle().gas();
-		thermalRegistry = capability.bundle() == null ? null : capability.bundle().thermal();
-		if (profile != null) {
+		boolean proven = capability.bundle() != null;
+		WorldCapabilityProfile profile = proven ? capability.bundle().profile() : UNPROVEN_CAPABILITIES;
+		chemicalRegistry = proven ? capability.bundle().chemical() : null;
+		granularRegistry = proven ? capability.bundle().granular() : null;
+		gasRegistry = proven ? capability.bundle().gas() : null;
+		thermalRegistry = proven ? capability.bundle().thermal() : null;
+		if (proven) {
 			validateSupportedChemicalMaterials(chemicalRegistry);
 			validateSupportedGranularCarriers(granularRegistry);
 			validateSupportedGasComponents(gasRegistry, chemicalRegistry);

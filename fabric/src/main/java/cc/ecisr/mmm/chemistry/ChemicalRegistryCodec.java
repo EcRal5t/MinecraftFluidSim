@@ -1,6 +1,5 @@
 package cc.ecisr.mmm.chemistry;
 
-import cc.ecisr.mmm.simulation.persistence.DurableFileOperations;
 import cc.ecisr.mmm.simulation.persistence.StrictNbtFields;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
@@ -11,66 +10,22 @@ import net.minecraft.nbt.Tag;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.TreeMap;
 
-/** World-authoritative immutable registry snapshot with atomic first publication. */
-public final class ChemicalRegistryStore {
+/**
+ * Canonical snapshot codec for the chemical registry. The world capability bundle is the only place a
+ * registry snapshot is stored, so this codec has no world directory of its own.
+ */
+public final class ChemicalRegistryCodec {
+	private ChemicalRegistryCodec() { }
+
 	private static final String SCHEMA = "chemical-registry";
 	private static final long MAX_BYTES = 4L * 1024L * 1024L;
-	private static final Set<String> KNOWN_FILES = Set.of("registry.nbt", "registry.nbt.tmp");
-	private final Path directory;
-
-	public ChemicalRegistryStore(Path worldRoot) {
-		this.directory = worldRoot.toAbsolutePath().normalize().resolve("mmm").resolve("chemistry");
-	}
-
-	public LoadResult loadOrCreate(ChemicalRegistry definitions) throws IOException {
-		validateLayout();
-		Path target = registryPath();
-		if (Files.exists(target)) {
-			ChemicalRegistry authoritative = readSnapshot(target);
-			return new LoadResult(authoritative, !authoritative.fingerprint().equals(definitions.fingerprint()), false);
-		}
-		Path temporary = temporaryPath();
-		DurableFileOperations.createDirectories(directory);
-		if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
-		try {
-			writeSnapshot(temporary, definitions);
-			force(temporary);
-			ChemicalRegistry reread = readSnapshot(temporary);
-			if (!reread.fingerprint().equals(definitions.fingerprint())) {
-				throw new IOException("Staged chemical registry did not read back identically");
-			}
-			Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
-			DurableFileOperations.forceDirectory(directory);
-			return new LoadResult(readSnapshot(target), false, true);
-		} catch (IOException failure) {
-			try {
-				if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
-			} catch (IOException cleanup) { failure.addSuppressed(cleanup); }
-			throw failure;
-		}
-	}
-
-	public ChemicalRegistry read() throws IOException {
-		validateLayout();
-		if (!Files.exists(registryPath())) throw new IOException("Chemical registry snapshot is missing at " + registryPath());
-		return readSnapshot(registryPath());
-	}
-
-	public boolean exists() { return Files.exists(registryPath()); }
-	public Path registryPath() { return directory.resolve("registry.nbt"); }
-	private Path temporaryPath() { return directory.resolve("registry.nbt.tmp"); }
 
 	/** Canonical bytes of the strict snapshot; the bundle stores exactly these so checksums agree. */
 	public static byte[] snapshotBytes(ChemicalRegistry registry) throws IOException {
@@ -225,16 +180,6 @@ public final class ChemicalRegistryStore {
 		return result;
 	}
 
-	private void validateLayout() throws IOException {
-		if (!Files.exists(directory)) return;
-		if (!Files.isDirectory(directory)) throw new IOException("Chemical registry path is not a directory: " + directory);
-		try (var entries = Files.newDirectoryStream(directory)) {
-			for (Path entry : entries) if (!KNOWN_FILES.contains(entry.getFileName().toString()) || Files.isDirectory(entry)) {
-				throw new IOException("Unknown chemical registry content is preserved at " + entry);
-			}
-		}
-	}
-
 	private static CompoundTag compound(ListTag list, int index, String context) throws IOException {
 		Tag tag = list.get(index);
 		if (!(tag instanceof CompoundTag compound)) throw new IOException("Invalid " + context + " entry");
@@ -243,9 +188,4 @@ public final class ChemicalRegistryStore {
 	private static void requireAll(CompoundTag tag, Map<String, Byte> fields) throws IOException {
 		StrictNbtFields.requireExact(tag, fields, "chemical registry");
 	}
-	private static void force(Path path) throws IOException {
-		try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) { channel.force(true); }
-	}
-
-	public record LoadResult(ChemicalRegistry registry, boolean definitionMismatch, boolean created) { }
 }

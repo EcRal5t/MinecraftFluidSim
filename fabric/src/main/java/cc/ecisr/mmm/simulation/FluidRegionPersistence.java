@@ -36,6 +36,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /** Coordinates persistent controller state and its joint world-ownership transactions. */
@@ -62,6 +63,7 @@ final class FluidRegionPersistence {
 			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
 			int maximumThermalSubsteps
 	) {
+		Objects.requireNonNull(profile, "profile");
 		requireRegistry(profile, WorldCapability.CHEMISTRY, chemicalRegistry);
 		requireRegistry(profile, WorldCapability.GRANULAR, granularRegistry);
 		if (profile.hasCapability(WorldCapability.THERMAL)) {
@@ -71,11 +73,14 @@ final class FluidRegionPersistence {
 		} else if (thermalRegistry != null || gasRegistry != null) {
 			throw new IllegalArgumentException("Thermal registries are present without the thermal capability");
 		}
-		files = profile.hasCapability(WorldCapability.THERMAL)
-				? new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry)
-				: granularRegistry == null
-				? chemicalRegistry == null ? new RegionStateFiles(worldRoot) : new RegionStateFiles(worldRoot, chemicalRegistry)
-				: new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry);
+		files = switch (profile.regionLayoutId()) {
+			case "pure", "material" -> new RegionStateFiles(worldRoot);
+			case "chemical" -> new RegionStateFiles(worldRoot, chemicalRegistry);
+			case "granular" -> new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry);
+			case "thermal" -> new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry,
+					gasRegistry);
+			default -> throw new IllegalArgumentException("Unknown region layout " + profile.regionLayoutId());
+		};
 		ownershipStore = new OwnershipStore(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry);
 		this.profile = profile;
 		this.chemicalRegistry = chemicalRegistry;

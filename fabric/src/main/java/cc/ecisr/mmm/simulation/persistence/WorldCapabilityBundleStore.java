@@ -2,19 +2,19 @@ package cc.ecisr.mmm.simulation.persistence;
 
 import cc.ecisr.mmm.chemistry.ChemicalPhaseDefinition;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
-import cc.ecisr.mmm.chemistry.ChemicalRegistryStore;
+import cc.ecisr.mmm.chemistry.ChemicalRegistryCodec;
 import cc.ecisr.mmm.fluid.MaterialRegistry;
-import cc.ecisr.mmm.fluid.MaterialRegistryStore;
+import cc.ecisr.mmm.fluid.MaterialRegistryCodec;
 import cc.ecisr.mmm.fluid.air.GasComponentDefinition;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
-import cc.ecisr.mmm.fluid.air.GasRegistryStore;
+import cc.ecisr.mmm.fluid.air.GasRegistryCodec;
 import cc.ecisr.mmm.granular.GranularCarrier;
 import cc.ecisr.mmm.granular.GranularRegistry;
-import cc.ecisr.mmm.granular.GranularRegistryStore;
+import cc.ecisr.mmm.granular.GranularRegistryCodec;
 import cc.ecisr.mmm.thermal.GasLiquidSpeciesPair;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
-import cc.ecisr.mmm.thermal.ThermalRegistryStore;
+import cc.ecisr.mmm.thermal.ThermalRegistryCodec;
 import cc.ecisr.mmm.thermal.ThermalSpeciesOffset;
 import cc.ecisr.mmm.worldprofile.RegistryFingerprintSet;
 import cc.ecisr.mmm.worldprofile.WorldCapability;
@@ -57,10 +57,13 @@ public final class WorldCapabilityBundleStore {
 	/** The bundle is immutable once published: registries never change after the world's first admission. */
 	private static final long GENERATION = 1L;
 	private static final String POLICY_FILE = "server.properties";
-	/** Persistence domains that carry their own committed truth and therefore require a committed bundle. */
+	/**
+	 * Persistence domains that carry their own committed truth and therefore require a committed bundle.
+	 * Registry snapshots are not here: the bundle is their only root, so a per-kind registry directory is
+	 * an unknown entry and locks the world rather than being adopted or migrated.
+	 */
 	private static final Set<String> AUTHORITY_ROOTS = Set.of(
-			"chemistry", "container-transfer", "gas", "granular", "material", "ownership",
-			"region-state", "thermal");
+			"container-transfer", "ownership", "region-state");
 	/** Domains this store may create or read without proving authority. */
 	private static final Set<String> NON_AUTHORITY_ROOTS = Set.of(
 			"quarantine", POLICY_FILE, "world-capabilities");
@@ -315,12 +318,12 @@ public final class WorldCapabilityBundleStore {
 		}
 
 		WorldCapabilityProfile profile = WorldCapabilityProfileCodec.read(slot.resolve("profile.nbt"));
-		MaterialRegistry material = MaterialRegistryStore.readSnapshot(slot.resolve("material-registry.nbt"));
-		ChemicalRegistry chemical = ChemicalRegistryStore.readSnapshot(slot.resolve("chemical-registry.nbt"));
-		GranularRegistry granular = GranularRegistryStore.readSnapshot(
+		MaterialRegistry material = MaterialRegistryCodec.readSnapshot(slot.resolve("material-registry.nbt"));
+		ChemicalRegistry chemical = ChemicalRegistryCodec.readSnapshot(slot.resolve("chemical-registry.nbt"));
+		GranularRegistry granular = GranularRegistryCodec.readSnapshot(
 				slot.resolve("granular-registry.nbt"), chemical);
-		GasRegistry gas = GasRegistryStore.readSnapshot(slot.resolve("gas-registry.nbt"));
-		ThermalRegistry thermal = ThermalRegistryStore.readSnapshot(slot.resolve("thermal-registry.nbt"),
+		GasRegistry gas = GasRegistryCodec.readSnapshot(slot.resolve("gas-registry.nbt"));
+		ThermalRegistry thermal = ThermalRegistryCodec.readSnapshot(slot.resolve("thermal-registry.nbt"),
 				chemical.fingerprint(), granular.fingerprint(), gas.fingerprint());
 		Definitions definitions;
 		try {
@@ -389,14 +392,14 @@ public final class WorldCapabilityBundleStore {
 			Definitions definitions, WorldCapabilityProfile profile
 	) throws IOException {
 		TreeMap<String, byte[]> members = new TreeMap<>();
-		members.put("chemical-registry.nbt", ChemicalRegistryStore.snapshotBytes(definitions.chemical()));
-		members.put("gas-registry.nbt", GasRegistryStore.snapshotBytes(definitions.gas()));
-		members.put("granular-registry.nbt", GranularRegistryStore.snapshotBytes(definitions.granular()));
-		members.put("material-registry.nbt", MaterialRegistryStore.snapshotBytes(definitions.material()));
+		members.put("chemical-registry.nbt", ChemicalRegistryCodec.snapshotBytes(definitions.chemical()));
+		members.put("gas-registry.nbt", GasRegistryCodec.snapshotBytes(definitions.gas()));
+		members.put("granular-registry.nbt", GranularRegistryCodec.snapshotBytes(definitions.granular()));
+		members.put("material-registry.nbt", MaterialRegistryCodec.snapshotBytes(definitions.material()));
 		ByteArrayOutputStream profileOutput = new ByteArrayOutputStream();
 		NbtIo.writeCompressed(WorldCapabilityProfileCodec.encode(profile), profileOutput);
 		members.put("profile.nbt", profileOutput.toByteArray());
-		members.put("thermal-registry.nbt", ThermalRegistryStore.snapshotBytes(definitions.thermal()));
+		members.put("thermal-registry.nbt", ThermalRegistryCodec.snapshotBytes(definitions.thermal()));
 		if (!members.keySet().equals(Set.copyOf(WorldCapabilityBundleManifest.REQUIRED_FILES))) {
 			throw new IllegalStateException("World capability member table is not exact");
 		}

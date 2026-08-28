@@ -18,62 +18,16 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
-/** World-authoritative immutable material registry snapshot with atomic first publication. */
-public final class MaterialRegistryStore {
+/**
+ * Canonical snapshot codec for the material registry. The world capability bundle is the only place a
+ * registry snapshot is stored, so this codec has no world directory of its own.
+ */
+public final class MaterialRegistryCodec {
+	private MaterialRegistryCodec() { }
+
 	private static final String SCHEMA = "material-registry";
 	private static final long MAX_BYTES = 4L * 1_048_576L;
-	private static final Set<String> KNOWN_FILES = Set.of("registry.nbt", "registry.nbt.tmp");
-	private final Path directory;
-
-	public MaterialRegistryStore(Path worldRoot) {
-		if (worldRoot == null) throw new IllegalArgumentException("Material registry world root is missing");
-		directory = worldRoot.toAbsolutePath().normalize().resolve("mmm").resolve("material");
-	}
-
-	public LoadResult loadOrCreate(MaterialRegistry definitions) throws IOException {
-		if (definitions == null) throw new IllegalArgumentException("Material registry definitions are missing");
-		validateLayout();
-		Path target = registryPath();
-		if (Files.exists(target)) {
-			MaterialRegistry authoritative = readSnapshot(target);
-			return new LoadResult(authoritative, !authoritative.fingerprint().equals(definitions.fingerprint()), false);
-		}
-		Path temporary = temporaryPath();
-		DurableFileOperations.createDirectories(directory);
-		if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
-		try {
-			writeSnapshot(temporary, definitions);
-			force(temporary);
-			MaterialRegistry reread = readSnapshot(temporary);
-			if (!reread.fingerprint().equals(definitions.fingerprint())) {
-				throw new IOException("Staged material registry did not read back identically");
-			}
-			Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
-			DurableFileOperations.forceDirectory(directory);
-			return new LoadResult(readSnapshot(target), false, true);
-		} catch (IOException failure) {
-			try {
-				if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
-			} catch (IOException cleanup) {
-				failure.addSuppressed(cleanup);
-			}
-			throw failure;
-		}
-	}
-
-	public MaterialRegistry read() throws IOException {
-		validateLayout();
-		if (!exists()) throw new IOException("Material registry snapshot is missing at " + registryPath());
-		return readSnapshot(registryPath());
-	}
-
-	public boolean exists() { return Files.exists(registryPath()); }
-
-	public Path registryPath() { return directory.resolve("registry.nbt"); }
-
-	private Path temporaryPath() { return directory.resolve("registry.nbt.tmp"); }
 
 	/** Canonical bytes of the strict snapshot; the bundle stores exactly these so checksums agree. */
 	public static byte[] snapshotBytes(MaterialRegistry registry) throws IOException {
@@ -200,18 +154,6 @@ public final class MaterialRegistryStore {
 		return List.copyOf(result);
 	}
 
-	private void validateLayout() throws IOException {
-		if (!Files.exists(directory)) return;
-		if (!Files.isDirectory(directory)) throw new IOException("Material registry path is not a directory: " + directory);
-		try (var entries = Files.newDirectoryStream(directory)) {
-			for (Path entry : entries) {
-				if (!KNOWN_FILES.contains(entry.getFileName().toString()) || Files.isDirectory(entry)) {
-					throw new IOException("Unknown material registry content is preserved at " + entry);
-				}
-			}
-		}
-	}
-
 	private static CompoundTag compound(ListTag list, int index, String context) throws IOException {
 		Tag tag = list.get(index);
 		if (!(tag instanceof CompoundTag parsed)) throw new IOException("Invalid material " + context + " entry");
@@ -222,11 +164,4 @@ public final class MaterialRegistryStore {
 		StrictNbtFields.requireExact(tag, fields, "material registry");
 	}
 
-	private static void force(Path path) throws IOException {
-		try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) {
-			channel.force(true);
-		}
-	}
-
-	public record LoadResult(MaterialRegistry registry, boolean definitionMismatch, boolean created) { }
 }

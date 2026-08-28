@@ -28,26 +28,30 @@ public final class AirNetworkValidation {
 		java.nio.file.Path root = null;
 		try {
 			root = java.nio.file.Files.createTempDirectory("mmm-gas-registry-");
-			GasRegistryStore store = new GasRegistryStore(root);
-			GasRegistryStore.LoadResult first = store.loadOrCreate(BuiltinGasDefinitions.createRegistry());
-			check(first.created() && !first.definitionMismatch(), "first gas registry snapshot was not published");
-			var registryTag = net.minecraft.nbt.NbtIo.readCompressed(store.registryPath(),
+			GasRegistry definitions = BuiltinGasDefinitions.createRegistry();
+			java.nio.file.Path snapshot = root.resolve("gas-registry.nbt");
+			GasRegistryCodec.writeSnapshot(snapshot, definitions);
+			GasRegistry decoded = GasRegistryCodec.readSnapshot(snapshot);
+			check(decoded.fingerprint().equals(definitions.fingerprint())
+							&& java.util.Arrays.equals(decoded.canonicalBytes(), definitions.canonicalBytes()),
+					"gas registry snapshot did not round-trip canonically");
+			var registryTag = net.minecraft.nbt.NbtIo.readCompressed(snapshot,
 					net.minecraft.nbt.NbtAccounter.create(4L * 1024L * 1024L));
 			registryTag.putString("UnknownField", "must-lock");
-			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, store.registryPath());
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, snapshot);
 			try {
-				store.read();
+				GasRegistryCodec.readSnapshot(snapshot);
 				throw new AssertionError("unknown gas registry field was ignored");
 			} catch (java.io.IOException expected) { }
 		} catch (java.io.IOException failure) {
-			throw new AssertionError("gas registry store validation failed", failure);
+			throw new AssertionError("gas registry codec validation failed", failure);
 		} finally {
 			if (root != null) try (var paths = java.nio.file.Files.walk(root)) {
 				for (java.nio.file.Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
 					java.nio.file.Files.deleteIfExists(path);
 				}
 			} catch (java.io.IOException cleanup) {
-				throw new AssertionError("gas registry store cleanup failed", cleanup);
+				throw new AssertionError("gas registry codec cleanup failed", cleanup);
 			}
 		}
 	}

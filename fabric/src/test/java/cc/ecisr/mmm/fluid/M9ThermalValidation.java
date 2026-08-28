@@ -39,7 +39,7 @@ import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalPhaseTransition;
 import cc.ecisr.mmm.thermal.ThermalPhaseChangeEngine;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
-import cc.ecisr.mmm.thermal.ThermalRegistryStore;
+import cc.ecisr.mmm.thermal.ThermalRegistryCodec;
 import cc.ecisr.mmm.thermal.ThermalSpeciesOffset;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.thermal.ThermalTransport;
@@ -311,12 +311,13 @@ public final class M9ThermalValidation {
 			require(registry.fingerprint().equals("3ad148b10e255ec1415773bccf7eda9c07caf0a5fcd1e4be54de46153576dae4"),
 					"built-in CO2 pair registry fingerprint drifted: " + registry.fingerprint());
 			root = java.nio.file.Files.createTempDirectory("mmm-co2-pair-registry-");
-			ThermalRegistryStore store = new ThermalRegistryStore(
-					root, chemistry.fingerprint(), "", gas.fingerprint());
-			ThermalRegistryStore.LoadResult published = store.loadOrCreate(registry);
-			require(published.created() && published.registry().gasLiquidPairs().equals(List.of(pair))
-					&& published.registry().fingerprint().equals(registry.fingerprint()),
-					"CO2 pair did not round-trip through the authoritative thermal snapshot");
+			java.nio.file.Path snapshot = root.resolve("thermal-registry.nbt");
+			ThermalRegistryCodec.writeSnapshot(snapshot, registry);
+			ThermalRegistry decoded = ThermalRegistryCodec.readSnapshot(
+					snapshot, chemistry.fingerprint(), "", gas.fingerprint());
+			require(decoded.gasLiquidPairs().equals(List.of(pair))
+							&& decoded.fingerprint().equals(registry.fingerprint()),
+					"CO2 pair did not round-trip through the thermal registry codec");
 
 			String json = resourceText(pairPath);
 			expectFailure(() -> ThermalDefinitionCodec.decodePair("mmm:co2_water",
@@ -379,18 +380,19 @@ public final class M9ThermalValidation {
 					"built-in finite exchanger default body energy is not derived from the material state function");
 
 			root = java.nio.file.Files.createTempDirectory("mmm-finite-device-registry-");
-			ThermalRegistryStore store = new ThermalRegistryStore(root, "", "", "");
-			ThermalRegistryStore.LoadResult published = store.loadOrCreate(registry);
-			require(published.created() && published.registry().finiteDevices().equals(List.of(device))
-					&& published.registry().fingerprint().equals(registry.fingerprint()),
-					"finite exchanger definition did not round-trip through the thermal snapshot");
-			var registryTag = net.minecraft.nbt.NbtIo.readCompressed(store.registryPath(),
+			java.nio.file.Path snapshot = root.resolve("thermal-registry.nbt");
+			ThermalRegistryCodec.writeSnapshot(snapshot, registry);
+			ThermalRegistry decoded = ThermalRegistryCodec.readSnapshot(snapshot, "", "", "");
+			require(decoded.finiteDevices().equals(List.of(device))
+							&& decoded.fingerprint().equals(registry.fingerprint()),
+					"finite exchanger definition did not round-trip through the thermal registry codec");
+			var registryTag = net.minecraft.nbt.NbtIo.readCompressed(snapshot,
 					net.minecraft.nbt.NbtAccounter.create(8L * 1024L * 1024L));
 			var encodedDevices = registryTag.getListOrEmpty("FiniteDevices");
 			((net.minecraft.nbt.CompoundTag) encodedDevices.getFirst()).putString("UnknownPortPolicy", "reject");
-			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, store.registryPath());
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, snapshot);
 			try {
-				store.read();
+				ThermalRegistryCodec.readSnapshot(snapshot, "", "", "");
 				throw new AssertionError("unknown finite thermal device snapshot field was ignored");
 			} catch (IOException expected) { }
 
@@ -923,41 +925,48 @@ public final class M9ThermalValidation {
 			ThermalMaterialDefinition original = material("test:thermal/store", "test:store", 0.0,
 					List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0)));
 			ThermalRegistry authoritative = new ThermalRegistry(List.of(original));
-			ThermalRegistryStore store = new ThermalRegistryStore(root, "", "", "");
-			ThermalRegistryStore.LoadResult first = store.loadOrCreate(authoritative);
-			require(first.created() && !first.definitionMismatch()
-					&& first.registry().fingerprint().equals(authoritative.fingerprint()),
-					"first thermal registry snapshot was not atomically published");
+			java.nio.file.Path snapshot = root.resolve("thermal-registry.nbt");
+			ThermalRegistryCodec.writeSnapshot(snapshot, authoritative);
+			ThermalRegistry decoded = ThermalRegistryCodec.readSnapshot(snapshot, "", "", "");
+			require(decoded.fingerprint().equals(authoritative.fingerprint())
+							&& java.util.Arrays.equals(decoded.canonicalBytes(), authoritative.canonicalBytes()),
+					"thermal registry snapshot did not round-trip canonically");
 			ThermalMaterialDefinition changed = material("test:thermal/store", "test:store", 1.0,
 					List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0)));
-			ThermalRegistryStore.LoadResult mismatch = store.loadOrCreate(new ThermalRegistry(List.of(changed)));
-			require(mismatch.definitionMismatch()
-					&& mismatch.registry().fingerprint().equals(authoritative.fingerprint()),
-					"changed thermal datapack reinterpreted the world snapshot");
-			var registryTag = net.minecraft.nbt.NbtIo.readCompressed(store.registryPath(),
+			ThermalRegistry redefined = new ThermalRegistry(List.of(changed));
+			require(!redefined.fingerprint().equals(authoritative.fingerprint()),
+					"changed thermal definition must change the fingerprint");
+			require(!java.util.Arrays.equals(ThermalRegistryCodec.snapshotBytes(redefined),
+							ThermalRegistryCodec.snapshotBytes(authoritative)),
+					"changed thermal definitions produced identical snapshot bytes");
+			var registryTag = net.minecraft.nbt.NbtIo.readCompressed(snapshot,
 					net.minecraft.nbt.NbtAccounter.create(8L * 1024L * 1024L));
 			registryTag.putString("UnknownField", "must-lock");
-			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, store.registryPath());
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, snapshot);
 			try {
-				store.read();
+				ThermalRegistryCodec.readSnapshot(snapshot, "", "", "");
 				throw new AssertionError("unknown thermal registry field was ignored");
 			} catch (java.io.IOException expected) { }
 			registryTag.remove("UnknownField");
-			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, store.registryPath());
-			java.nio.file.Files.writeString(root.resolve("mmm").resolve("thermal").resolve("foreign.bin"), "foreign");
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, snapshot);
+			ThermalRegistryCodec.writeSnapshot(snapshot, redefined);
+			registryTag = net.minecraft.nbt.NbtIo.readCompressed(snapshot,
+					net.minecraft.nbt.NbtAccounter.create(8L * 1024L * 1024L));
+			registryTag.putString("Fingerprint", authoritative.fingerprint());
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, snapshot);
 			try {
-				store.read();
-				throw new AssertionError("unknown thermal registry content was ignored");
+				ThermalRegistryCodec.readSnapshot(snapshot, "", "", "");
+				throw new AssertionError("thermal registry whose content does not match its fingerprint was accepted");
 			} catch (java.io.IOException expected) { }
 		} catch (java.io.IOException failure) {
-			throw new AssertionError("thermal registry store validation failed", failure);
+			throw new AssertionError("thermal registry codec validation failed", failure);
 		} finally {
 			if (root != null) try (var paths = java.nio.file.Files.walk(root)) {
 				for (java.nio.file.Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
 					java.nio.file.Files.deleteIfExists(path);
 				}
 			} catch (java.io.IOException cleanup) {
-				throw new AssertionError("thermal registry store cleanup failed", cleanup);
+				throw new AssertionError("thermal registry codec cleanup failed", cleanup);
 			}
 		}
 	}

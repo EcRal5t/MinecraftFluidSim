@@ -4,7 +4,7 @@
 
 `mmm/world-capabilities/` 保存世界唯一的世界能力包：五个 world registry snapshot 加一份 `profile.nbt`。它是已有库存的唯一解释——区域载荷里的 stable ID 只能按这个包的 registry 解析，区域 section 不复制 registry。
 
-包是不可变的，发布一次，generation 恒为 1；定义漂移只报告 mismatch，不覆盖已提交内容。成员集合固定为 `chemical-registry.nbt`、`gas-registry.nbt`、`granular-registry.nbt`、`material-registry.nbt`、`profile.nbt`、`thermal-registry.nbt`，每个成员的字节就是对应 registry store 的严格规范编码（`*RegistryStore.snapshotBytes`），所以包内 checksum 与该 store 自己发布的文件逐字节一致。manifest 校验和覆盖 manifest 自身，HEAD 额外绑定 manifest 校验和、profile fingerprint 与 aggregate fingerprint。
+包是不可变的，发布一次，generation 恒为 1；定义漂移只报告 mismatch，不覆盖已提交内容。成员集合固定为 `chemical-registry.nbt`、`gas-registry.nbt`、`granular-registry.nbt`、`material-registry.nbt`、`profile.nbt`、`thermal-registry.nbt`，每个成员的字节就是对应 registry codec 的严格规范编码（`*RegistryCodec.snapshotBytes`），所以包内 checksum 与 codec 自身编出的字节逐字节一致。**包是 registry snapshot 的唯一根**：五个 codec 没有自己的世界目录，`mmm/chemistry`、`mmm/gas`、`mmm/granular`、`mmm/material`、`mmm/thermal` 这类 per-kind 目录不是权威域，出现即未知条目。manifest 校验和覆盖 manifest 自身，HEAD 额外绑定 manifest 校验和、profile fingerprint 与 aggregate fingerprint。
 
 发布序列与区域 checkpoint 同构：先在 `mmm/quarantine/world-capability-staging/<transaction>.preparing` 写 manifest，原子移为 `slot-a.tmp`；再按规范顺序写成员、回读校验；原子移为 `slot-a`；最后写 `HEAD.nbt.tmp`、回读校验、原子移为 `HEAD.nbt`。**只有 HEAD rename 是 commit point**，slot 在 HEAD 绑定它之前只是 staging。
 
@@ -23,7 +23,9 @@
 
 **恢复不查当前定义源**：`COMMIT_CANDIDATE` 只凭已写出的 slot 就补完 HEAD，不要求 datapack 仍能解码。已提交包即使与 datapack 不一致也保持权威，只报告 drift，不修复、不重发。
 
-`mmm/` 下的权威域（`chemistry`、`container-transfer`、`gas`、`granular`、`material`、`ownership`、`region-state`、`thermal`）只在存在已提交包时才允许存在；没有包却出现权威，或出现任何未知条目，一律 LOCKED 并原样保留。这里没有迁移、没有版本嗅探、没有字段补全——旧实现产出的存档不被解释。
+`mmm/` 下的权威域（`container-transfer`、`ownership`、`region-state`）只在存在已提交包时才允许存在；没有包却出现权威，或出现任何未知条目，一律 LOCKED 并原样保留。这里没有迁移、没有版本嗅探、没有字段补全——旧实现产出的存档不被解释。
+
+这条直接覆盖 per-kind registry 目录：旧 build 会各自发布 `mmm/chemistry/registry.nbt` 等文件，而 registry snapshot 现在只存在于包内。这类目录既不是权威域也不是非权威域，因此按未知条目处理——世界 LOCKED，目录原样保留，不会把它们采纳、合并或迁移成包。同理，任何 `mmm/` 下无法归属的名字都 LOCKED。
 
 ## 文件与职责边界
 

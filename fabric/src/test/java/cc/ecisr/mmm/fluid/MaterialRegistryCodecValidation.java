@@ -8,30 +8,24 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
-/** Strict round-trip, mutation and fault behaviour of the world-local material registry snapshot store. */
-public final class MaterialRegistryStoreValidation {
-	private MaterialRegistryStoreValidation() { }
+/** Strict round-trip, mutation and fault behaviour of the canonical material registry snapshot codec. */
+public final class MaterialRegistryCodecValidation {
+	private MaterialRegistryCodecValidation() { }
 
 	public static void main(String[] args) throws Exception {
-		builtinRegistryPublishesAndRoundTrips();
-		definitionMutationOnlyReportsMismatch();
+		builtinRegistryRoundTripsCanonically();
+		definitionMutationChangesSnapshotBytes();
 		strictDecodeRejectsTampering();
-		foreignContentIsPreservedAndRejected();
 		viscosityDomainIsStrict();
-		System.out.println("Material registry store validation passed");
+		System.out.println("Material registry codec validation passed");
 	}
 
-	private static void builtinRegistryPublishesAndRoundTrips() throws Exception {
+	private static void builtinRegistryRoundTripsCanonically() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "material-registry-roundtrip-");
-		MaterialRegistryStore store = new MaterialRegistryStore(root);
+		Path snapshot = root.resolve("material-registry.nbt");
 		MaterialRegistry definitions = BuiltinFluidMaterials.createRegistry();
-		MaterialRegistryStore.LoadResult first = store.loadOrCreate(definitions);
-		require(first.created(), "first material registry publication must create the snapshot");
-		require(!first.definitionMismatch(), "first material registry publication must not report a mismatch");
-		MaterialRegistryStore.LoadResult second = store.loadOrCreate(definitions);
-		require(!second.created(), "stable material republication must not recreate the snapshot");
-		require(!second.definitionMismatch(), "identical material definitions must not report a mismatch");
-		MaterialRegistry stored = store.read();
+		MaterialRegistryCodec.writeSnapshot(snapshot, definitions);
+		MaterialRegistry stored = MaterialRegistryCodec.readSnapshot(snapshot);
 		require(stored.fingerprint().equals(definitions.fingerprint()), "stored material fingerprint must match");
 		require(java.util.Arrays.equals(stored.canonicalBytes(), definitions.canonicalBytes()),
 				"stored material canonical bytes must match");
@@ -58,19 +52,19 @@ public final class MaterialRegistryStoreValidation {
 				"restored viscosity interpolation must be bitwise identical for " + id + " at " + temperatureK);
 	}
 
-	private static void definitionMutationOnlyReportsMismatch() throws Exception {
+	private static void definitionMutationChangesSnapshotBytes() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "material-registry-mutation-");
-		MaterialRegistryStore store = new MaterialRegistryStore(root);
 		MaterialRegistry original = BuiltinFluidMaterials.createRegistry();
-		store.loadOrCreate(original);
 		MaterialRegistry mutated = mutatedOilDensity(801.0);
 		require(mutated.fingerprint().equals(original.fingerprint()) == false,
 				"different oil density must change the fingerprint");
-		MaterialRegistryStore.LoadResult result = store.loadOrCreate(mutated);
-		require(!result.created(), "mutated publication must not overwrite the snapshot");
-		require(result.definitionMismatch(), "mutated publication must report a definition mismatch");
-		require(store.read().fingerprint().equals(original.fingerprint()),
-				"authoritative snapshot must be preserved verbatim");
+		require(!java.util.Arrays.equals(MaterialRegistryCodec.snapshotBytes(mutated),
+						MaterialRegistryCodec.snapshotBytes(original)),
+				"mutated material definitions produced identical snapshot bytes");
+		Path snapshot = root.resolve("material-registry.nbt");
+		MaterialRegistryCodec.writeSnapshot(snapshot, original);
+		require(MaterialRegistryCodec.readSnapshot(snapshot).fingerprint().equals(original.fingerprint()),
+				"stored material snapshot must keep its own fingerprint");
 	}
 
 	private static MaterialRegistry mutatedOilDensity(double density) {
@@ -85,28 +79,17 @@ public final class MaterialRegistryStoreValidation {
 
 	private static void strictDecodeRejectsTampering() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "material-registry-tamper-");
-		MaterialRegistryStore store = new MaterialRegistryStore(root);
-		store.loadOrCreate(BuiltinFluidMaterials.createRegistry());
-		Path target = store.registryPath();
+		Path target = root.resolve("material-registry.nbt");
+		MaterialRegistryCodec.writeSnapshot(target, BuiltinFluidMaterials.createRegistry());
 		CompoundTag rootTag = NbtIo.readCompressed(target, net.minecraft.nbt.NbtAccounter.create(1_048_576L));
 		rootTag.putLong("UnknownExtraField", 7L);
 		NbtIo.writeCompressed(rootTag, target);
-		expectIOException(() -> store.read(), "unknown root field must be rejected");
+		expectIOException(() -> MaterialRegistryCodec.readSnapshot(target), "unknown root field must be rejected");
 		rootTag = NbtIo.readCompressed(target, net.minecraft.nbt.NbtAccounter.create(1_048_576L));
 		rootTag.putByteArray("Canonical", new byte[] {1});
 		rootTag.remove("UnknownExtraField");
 		NbtIo.writeCompressed(rootTag, target);
-		expectIOException(() -> store.read(), "tampered canonical bytes must be rejected");
-	}
-
-	private static void foreignContentIsPreservedAndRejected() throws Exception {
-		Path root = Files.createTempDirectory(Path.of("."), "material-registry-foreign-");
-		MaterialRegistryStore store = new MaterialRegistryStore(root);
-		store.loadOrCreate(BuiltinFluidMaterials.createRegistry());
-		Files.writeString(root.resolve("mmm").resolve("material").resolve("stray.txt"), "evidence");
-		expectIOException(() -> store.loadOrCreate(BuiltinFluidMaterials.createRegistry()),
-				"foreign content must prevent republication");
-		expectIOException(() -> store.read(), "foreign content must prevent reading");
+		expectIOException(() -> MaterialRegistryCodec.readSnapshot(target), "tampered canonical bytes must be rejected");
 	}
 
 	private static void viscosityDomainIsStrict() {

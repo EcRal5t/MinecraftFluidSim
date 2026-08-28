@@ -29,7 +29,7 @@ import cc.ecisr.mmm.simulation.persistence.FluidRegionPersistenceValidation;
 import cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStoreValidation;
 import cc.ecisr.mmm.simulation.persistence.WorldCapabilityStartupValidation;
 import cc.ecisr.mmm.fluid.M9ThermalValidation;
-import cc.ecisr.mmm.fluid.MaterialRegistryStoreValidation;
+import cc.ecisr.mmm.fluid.MaterialRegistryCodecValidation;
 import cc.ecisr.mmm.worldprofile.WorldCapabilityProfileValidation;
 
 import java.util.Collections;
@@ -146,7 +146,7 @@ public final class CpuValidationSuite {
 			FluidRegionPersistenceValidation.main(NONE);
 			M7RegionChemistryPersistenceValidation.main(NONE);
 			WorldCapabilityProfileValidation.main(NONE);
-			MaterialRegistryStoreValidation.main(NONE);
+			MaterialRegistryCodecValidation.main(NONE);
 			WorldCapabilityBundleStoreValidation.main(NONE);
 			WorldCapabilityStartupValidation.main(NONE);
 		});

@@ -108,35 +108,46 @@ public final class M7ChemistryValidation {
 	private static void validateRegistrySnapshot() throws Exception {
 		java.nio.file.Path root = java.nio.file.Files.createTempDirectory("mmm-chemistry-registry-");
 		try {
-			ChemicalRegistryStore store = new ChemicalRegistryStore(root);
-			ChemicalRegistryStore.LoadResult first = store.loadOrCreate(BuiltinChemicalDefinitions.REGISTRY);
-			check(first.created() && !first.definitionMismatch(), "first registry snapshot was not atomically published");
-			ChemicalRegistryStore.LoadResult second = store.loadOrCreate(BuiltinChemicalDefinitions.REGISTRY);
-			check(!second.created() && !second.definitionMismatch(), "stable registry snapshot reported mismatch");
+			ChemicalRegistry definitions = BuiltinChemicalDefinitions.REGISTRY;
+			java.nio.file.Path snapshot = root.resolve("chemical-registry.nbt");
+			ChemicalRegistryCodec.writeSnapshot(snapshot, definitions);
+			ChemicalRegistry decoded = ChemicalRegistryCodec.readSnapshot(snapshot);
+			check(decoded.fingerprint().equals(definitions.fingerprint())
+							&& java.util.Arrays.equals(decoded.canonicalBytes(), definitions.canonicalBytes()),
+					"chemical registry snapshot did not round-trip canonically");
+			check(java.util.Arrays.equals(ChemicalRegistryCodec.snapshotBytes(definitions),
+							ChemicalRegistryCodec.snapshotBytes(definitions)),
+					"chemical registry snapshot encoding is not deterministic");
 			List<ChemicalSpecies> changedSpecies = new ArrayList<>(BuiltinChemicalDefinitions.species());
 			ChemicalSpecies original = changedSpecies.getFirst();
 			changedSpecies.set(0, new ChemicalSpecies(original.id(), original.composition(), original.charge(),
 					original.massKilogramsPerAu(), original.baseArgb() ^ 0x00010101));
 			ChemicalRegistry changed = new ChemicalRegistry(
 					changedSpecies, BuiltinChemicalDefinitions.phases(), BuiltinChemicalDefinitions.reactions());
-			ChemicalRegistryStore.LoadResult mismatch = store.loadOrCreate(changed);
-			check(mismatch.definitionMismatch(), "data definition change did not report snapshot mismatch");
-			check(mismatch.registry().fingerprint().equals(BuiltinChemicalDefinitions.REGISTRY.fingerprint()),
-					"data definition change reinterpreted authoritative inventory");
-			var registryTag = net.minecraft.nbt.NbtIo.readCompressed(store.registryPath(),
+			check(!changed.fingerprint().equals(definitions.fingerprint()),
+					"changed species colour must change the fingerprint");
+			check(!java.util.Arrays.equals(ChemicalRegistryCodec.snapshotBytes(changed),
+							ChemicalRegistryCodec.snapshotBytes(definitions)),
+					"changed definitions produced identical snapshot bytes");
+			var registryTag = net.minecraft.nbt.NbtIo.readCompressed(snapshot,
 					net.minecraft.nbt.NbtAccounter.create(4L * 1024L * 1024L));
 			registryTag.putString("UnknownField", "must-lock");
-			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, store.registryPath());
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, snapshot);
 			try {
-				store.read();
+				ChemicalRegistryCodec.readSnapshot(snapshot);
 				throw new AssertionError("unknown chemical registry field was ignored");
 			} catch (java.io.IOException expected) { }
 			registryTag.remove("UnknownField");
-			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, store.registryPath());
-			java.nio.file.Files.writeString(root.resolve("mmm").resolve("chemistry").resolve("foreign.bin"), "foreign");
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, snapshot);
+			ChemicalRegistryCodec.writeSnapshot(snapshot, changed);
+			registryTag = net.minecraft.nbt.NbtIo.readCompressed(snapshot,
+					net.minecraft.nbt.NbtAccounter.create(4L * 1024L * 1024L));
+			registryTag.putString("Fingerprint", definitions.fingerprint());
+			net.minecraft.nbt.NbtIo.writeCompressed(registryTag, snapshot);
 			expectFailure(() -> {
-				try { store.read(); } catch (java.io.IOException expected) { throw new RuntimeException(expected); }
-			}, "unknown registry store content was ignored");
+				try { ChemicalRegistryCodec.readSnapshot(snapshot); }
+				catch (java.io.IOException expected) { throw new RuntimeException(expected); }
+			}, "chemical registry whose content does not match its fingerprint was accepted");
 		} finally {
 			try (var paths = java.nio.file.Files.walk(root)) {
 				for (java.nio.file.Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {

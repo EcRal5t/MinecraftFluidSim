@@ -19,67 +19,16 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
-/** World-authoritative immutable thermal registry with atomic first publication. */
-public final class ThermalRegistryStore {
+/**
+ * Canonical snapshot codec for the thermal registry. The world capability bundle is the only place a
+ * registry snapshot is stored, so this codec has no world directory of its own.
+ */
+public final class ThermalRegistryCodec {
+	private ThermalRegistryCodec() { }
+
 	private static final String SCHEMA = "thermal-registry";
 	private static final long MAX_BYTES = 8L * 1024L * 1024L;
-	private static final Set<String> KNOWN_FILES = Set.of("registry.nbt", "registry.nbt.tmp");
-
-	private final Path directory;
-	private final String chemicalFingerprint;
-	private final String granularFingerprint;
-	private final String gasFingerprint;
-
-	public ThermalRegistryStore(Path worldRoot, String chemicalFingerprint, String granularFingerprint,
-			String gasFingerprint) {
-		if (worldRoot == null) throw new IllegalArgumentException("Thermal registry world root is missing");
-		this.directory = worldRoot.toAbsolutePath().normalize().resolve("mmm").resolve("thermal");
-		this.chemicalFingerprint = requireFingerprint(chemicalFingerprint, "chemical");
-		this.granularFingerprint = requireFingerprint(granularFingerprint, "granular");
-		this.gasFingerprint = requireFingerprint(gasFingerprint, "gas");
-	}
-
-	public LoadResult loadOrCreate(ThermalRegistry definitions) throws IOException {
-		if (definitions == null) throw new IllegalArgumentException("Thermal registry definitions are missing");
-		requireDependencies(definitions);
-		validateLayout();
-		Path target = registryPath();
-		if (Files.exists(target)) {
-			ThermalRegistry authoritative = readSnapshot(target, chemicalFingerprint, granularFingerprint, gasFingerprint);
-			return new LoadResult(authoritative, !authoritative.fingerprint().equals(definitions.fingerprint()), false);
-		}
-		Path temporary = temporaryPath();
-		DurableFileOperations.createDirectories(directory);
-		if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
-		try {
-			writeSnapshot(temporary, definitions);
-			force(temporary);
-			ThermalRegistry reread = readSnapshot(temporary, chemicalFingerprint, granularFingerprint, gasFingerprint);
-			if (!reread.fingerprint().equals(definitions.fingerprint())) {
-				throw new IOException("Staged thermal registry did not read back identically");
-			}
-			Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
-			DurableFileOperations.forceDirectory(directory);
-			return new LoadResult(readSnapshot(target, chemicalFingerprint, granularFingerprint, gasFingerprint), false, true);
-		} catch (IOException failure) {
-			try {
-				if (Files.deleteIfExists(temporary)) DurableFileOperations.forceDirectory(directory);
-			} catch (IOException cleanup) { failure.addSuppressed(cleanup); }
-			throw failure;
-		}
-	}
-
-	public ThermalRegistry read() throws IOException {
-		validateLayout();
-		if (!exists()) throw new IOException("Thermal registry snapshot is missing at " + registryPath());
-		return readSnapshot(registryPath(), chemicalFingerprint, granularFingerprint, gasFingerprint);
-	}
-
-	public boolean exists() { return Files.exists(registryPath()); }
-	public Path registryPath() { return directory.resolve("registry.nbt"); }
-	private Path temporaryPath() { return directory.resolve("registry.nbt.tmp"); }
 
 	/** Canonical bytes of the strict snapshot; the bundle stores exactly these so checksums agree. */
 	public static byte[] snapshotBytes(ThermalRegistry registry) throws IOException {
@@ -411,24 +360,6 @@ public final class ThermalRegistryStore {
 		return List.copyOf(result);
 	}
 
-	private void requireDependencies(ThermalRegistry registry) {
-		if (!chemicalFingerprint.equals(registry.chemicalRegistryFingerprint())
-				|| !granularFingerprint.equals(registry.granularRegistryFingerprint())
-				|| !gasFingerprint.equals(registry.gasRegistryFingerprint())) {
-			throw new IllegalArgumentException("Thermal definition dependency fingerprints changed");
-		}
-	}
-
-	private void validateLayout() throws IOException {
-		if (!Files.exists(directory)) return;
-		if (!Files.isDirectory(directory)) throw new IOException("Thermal registry path is not a directory: " + directory);
-		try (var entries = Files.newDirectoryStream(directory)) {
-			for (Path entry : entries) if (!KNOWN_FILES.contains(entry.getFileName().toString()) || Files.isDirectory(entry)) {
-				throw new IOException("Unknown thermal registry content is preserved at " + entry);
-			}
-		}
-	}
-
 	private static CompoundTag compound(ListTag list, int index, String context) throws IOException {
 		Tag tag = list.get(index);
 		if (!(tag instanceof CompoundTag compound)) throw new IOException("Invalid thermal " + context + " entry");
@@ -450,9 +381,4 @@ public final class ThermalRegistryStore {
 	private static double value(CompoundTag tag, String field) {
 		return Double.longBitsToDouble(tag.getLongOr(field, 0L));
 	}
-	private static void force(Path path) throws IOException {
-		try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) { channel.force(true); }
-	}
-
-	public record LoadResult(ThermalRegistry registry, boolean definitionMismatch, boolean created) { }
 }

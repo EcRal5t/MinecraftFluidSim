@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -32,6 +33,7 @@ public final class WorldCapabilityStartupValidation {
 		unreadableCommittedBundleLocks();
 		authorityWithoutACommittedBundleLocks();
 		unknownMmmEntriesLock();
+		stalePerKindRegistryDirectoryLocks();
 		policyCanWithholdAdmission();
 		System.out.println("World capability startup validation passed");
 	}
@@ -138,6 +140,28 @@ public final class WorldCapabilityStartupValidation {
 		WorldCapabilityStartup.Result result = WorldCapabilityStartup.start(store, () -> full, true);
 		require(result.state() == WorldCapabilityStartup.State.LOCKED_PROFILE,
 				"an unknown persistence root must lock: " + result);
+	}
+
+	/**
+	 * A per-kind registry directory is what earlier builds published. The bundle is now the only registry
+	 * root, so it is an unknown entry: the world locks instead of having its registries adopted, merged
+	 * or migrated into a bundle.
+	 */
+	private static void stalePerKindRegistryDirectoryLocks() throws Exception {
+		for (String kind : List.of("chemistry", "gas", "granular", "material", "thermal")) {
+			Path root = Files.createTempDirectory(Path.of("."), "mmm-startup-stale-registry-");
+			Path stale = root.resolve("mmm").resolve(kind);
+			Files.createDirectories(stale);
+			Files.writeString(stale.resolve("registry.nbt"), "unreadable-on-purpose");
+			WorldCapabilityBundleStore store = new WorldCapabilityBundleStore(root, ADMISSION);
+			WorldCapabilityStartup.Result result = WorldCapabilityStartup.start(store, () -> full, true);
+			require(result.state() == WorldCapabilityStartup.State.LOCKED_PROFILE,
+					"a stale " + kind + " registry directory must lock: " + result);
+			require(Files.exists(stale.resolve("registry.nbt")),
+					"a locked world must keep the stale " + kind + " directory byte for byte");
+			require(!Files.exists(root.resolve("mmm").resolve("world-capabilities")),
+					"a locked world must not be given a new bundle");
+		}
 	}
 
 	/** Policy may withhold admission, but the bundle is still proven and returned. */
