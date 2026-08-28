@@ -29,6 +29,7 @@ import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.PathPackResources;
 import net.minecraft.server.packs.repository.PackSource;
 import net.minecraft.server.packs.resources.MultiPackResourceManager;
+import net.minecraft.world.phys.Vec3;
 
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -54,6 +55,116 @@ public final class ProductionFluidReplayValidation {
 		compressedPlanarHalfFillRemainsStableAcrossBackend();
 		stationaryPlayerSizedBodyDoesNotExcitePlanarSurface();
 		System.out.println("Production fluid replay passed");
+	}
+
+	public static void dynamicPlayerFloatRemainsBoundedAcrossBackend() throws Exception {
+		final double bodyWidth = 0.60;
+		final double bodyHeight = 1.80;
+		final double bodyVolume = bodyWidth * bodyHeight * bodyWidth;
+		final double initialBodyMinimumX = 1.70;
+		final double initialBodyMinimumZ = 1.70;
+		final double gravity = 0.08;
+		final double vanillaAirDrag = 0.98;
+		final int motionIntervalTicks = 4;
+		final int totalTicks = 2_000;
+		final int tailTicks = 200;
+		RegistrySet registries = loadProductionRegistries();
+		FlipFluidDomain domain = createFullyBoundPlanarHalfFill(registries);
+		double bodyMinimumX = initialBodyMinimumX;
+		double bodyMinimumZ = initialBodyMinimumZ;
+		double bodyMinimumY = bodyBottomForSubmergence(
+				domain, bodyMinimumX, bodyMinimumZ, bodyWidth, bodyHeight,
+				MinecraftEntityFluidInteraction.NEUTRAL_SUBMERGENCE);
+		double initialBodyMinimumY = bodyMinimumY;
+		double minimumTailY = Double.POSITIVE_INFINITY;
+		double maximumTailY = Double.NEGATIVE_INFINITY;
+		double maximumDisplacement = 0.0;
+		double maximumKinetic = 0.0;
+		double tailMaximumKinetic = 0.0;
+		Vec3 bodyVelocity = Vec3.ZERO;
+		FluidDomainState state = domain.captureAuthoritativeState();
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		long generation = 0L;
+		for (int tick = 1; tick <= totalTicks; tick++) {
+			Vec3 displacementThisTick = bodyVelocity;
+			bodyMinimumX += displacementThisTick.x;
+			bodyMinimumY += displacementThisTick.y;
+			bodyMinimumZ += displacementThisTick.z;
+			Vec3 velocityBeforeResponse = new Vec3(
+					bodyVelocity.x * vanillaAirDrag,
+					(bodyVelocity.y - gravity) * vanillaAirDrag,
+					bodyVelocity.z * vanillaAirDrag);
+			FlipFluidDomain.BodyFluidSample sample = domain.sampleAxisAlignedBody(
+					bodyMinimumX, bodyMinimumY, bodyMinimumZ,
+					bodyMinimumX + bodyWidth, bodyMinimumY + bodyHeight, bodyMinimumZ + bodyWidth);
+			double submergedFraction = sample.displacedVolumeCubicMetres() / bodyVolume;
+			require(submergedFraction > 0.0 && submergedFraction <= 1.0 + 1.0E-9,
+					"dynamic player left the finite wet AABB observation at tick " + tick
+							+ ": submergence=" + submergedFraction);
+			bodyVelocity = MinecraftEntityFluidInteraction.responseVelocity(
+					velocityBeforeResponse,
+					new Vec3(sample.velocityXMetresPerSecond(), sample.velocityYMetresPerSecond(),
+							sample.velocityZMetresPerSecond()),
+					Math.min(1.0, submergedFraction), gravity, false);
+			maximumDisplacement = Math.max(maximumDisplacement, Math.abs(bodyMinimumY - initialBodyMinimumY));
+			if (tick > totalTicks - tailTicks) {
+				minimumTailY = Math.min(minimumTailY, bodyMinimumY);
+				maximumTailY = Math.max(maximumTailY, bodyMinimumY);
+			}
+			if (tick % motionIntervalTicks != 0) continue;
+			MovingBodyFluidCoupling.Request body = new MovingBodyFluidCoupling.Request(
+					(float) sample.centerXMetres(), (float) sample.centerYMetres(),
+					(float) sample.centerZMetres(),
+					displacementThisTick.x * 20.0, displacementThisTick.y * 20.0,
+					displacementThisTick.z * 20.0, sample.displacedVolumeCubicMetres());
+			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+					generation, state, List.of(body), false, 0, true));
+			double kinetic = candidate.stats().mechanicalAudit().finalParticleKineticEnergyJoules();
+			maximumKinetic = Math.max(maximumKinetic, kinetic);
+			if (tick > totalTicks - tailTicks) tailMaximumKinetic = Math.max(tailMaximumKinetic, kinetic);
+			domain = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+			state = candidate.state();
+			generation++;
+		}
+		double tailRange = maximumTailY - minimumTailY;
+		double finalKinetic = kineticEnergy(domain.exportMaterialParticleState());
+		System.out.printf("  dynamic player float gate: displacement=%.9g m, tail range=%.9g m, "
+				+ "tail vy=%+.9g block/tick, liquid K max/tail/final=%.9g/%.9g/%.9g J%n",
+				maximumDisplacement, tailRange, bodyVelocity.y,
+				maximumKinetic, tailMaximumKinetic, finalKinetic);
+		require(maximumDisplacement <= productionConfig().cellSize(),
+				"dynamic player displacement exceeded one solver cell: " + maximumDisplacement + " m");
+		require(tailRange <= 0.05,
+				"dynamic player retained or amplified a visible vertical oscillation: " + tailRange + " m");
+		require(Math.abs(bodyVelocity.y) <= 0.005,
+				"dynamic player tail velocity did not settle: " + bodyVelocity.y + " blocks/tick");
+		require(tailMaximumKinetic <= 0.025 && finalKinetic <= 0.002,
+				"dynamic player disturbance did not decay to the stationary-body energy envelope: max/tail/final="
+						+ maximumKinetic + "/" + tailMaximumKinetic + "/" + finalKinetic + " J");
+	}
+
+	private static double bodyBottomForSubmergence(
+			FlipFluidDomain domain, double minimumX, double minimumZ,
+			double width, double height, double targetFraction
+	) {
+		double bodyVolume = width * height * width;
+		double wet = 0.0;
+		double dry = domain.sizeY() * domain.config().cellSize();
+		for (int iteration = 0; iteration < 80; iteration++) {
+			double middle = 0.5 * (wet + dry);
+			double fraction = domain.sampleAxisAlignedBody(
+					minimumX, middle, minimumZ, minimumX + width, middle + height, minimumZ + width)
+					.displacedVolumeCubicMetres() / bodyVolume;
+			if (fraction > targetFraction) wet = middle;
+			else dry = middle;
+		}
+		double result = 0.5 * (wet + dry);
+		double fraction = domain.sampleAxisAlignedBody(
+				minimumX, result, minimumZ, minimumX + width, result + height, minimumZ + width)
+				.displacedVolumeCubicMetres() / bodyVolume;
+		require(Math.abs(fraction - targetFraction) <= 1.0E-9,
+				"could not place the dynamic player at neutral continuous submergence: " + fraction);
+		return result;
 	}
 
 	private static void stationaryPlayerSizedBodyDoesNotExcitePlanarSurface() throws Exception {

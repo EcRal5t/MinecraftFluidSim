@@ -129,7 +129,7 @@ world-local chemical、granular、gas 和 thermal registry snapshot 的首次发
 - 客户端只接受当前 region generation 的递增 snapshot sequence；迟到包、移除 tombstone 前的包和其他 dimension 的包不能复活状态。
 - Query API 只允许服务器主线程同步调用，只扫描已加载 owner 的权威 marker/side columns；它不建网格、不加载 chunk、不分配 solver、不唤醒、不 checkpoint、不推进 logical step，也不返回 live domain 引用。
 - Query 的 `regionNetworkGeneration` 标识网络中的区域 incarnation，不是 checkpoint generation 或逐 tick revision。观察者需要新鲜值时必须重新查询，不能把它当作缓存时钟。
-- Minecraft 实体发现和世界坐标 AABB 捕获留在 Fabric；core 只读地积分 AABB 与派生水平液层及已有 cut-micro geometry 的连续湿体积，再由 moving-body request 携带局部 SI 位置、速度和湿体积并只提交 marker 动量。实际液体冲量可诊断，尚未实现的刚体质量/压力面积分/实体动态占位 cut-cell 不能由 Fabric 猜测补齐。
+- Minecraft 实体发现、世界坐标 AABB、原版响应速度和本 tick `position - oldPosition` 留在 Fabric；core 只读地积分 AABB 与派生水平液层及已有 cut-micro geometry 的连续湿体积，再由 moving-body request 携带局部 SI 位置、实际当 tick 位移速度和湿体积并只提交 marker 动量。实际液体冲量可诊断，尚未实现的刚体质量/压力面积分/实体动态占位 cut-cell 不能由 Fabric 猜测补齐。
 - renderer、Jade/HWYLA 适配、status 和 GPU probe 都不能唤醒、加载、checkpoint 或回写区域。
 
 ## 主题文档

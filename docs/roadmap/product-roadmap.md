@@ -21,7 +21,7 @@
 这一基座的限制也必须如实保留：
 
 - 不可互溶相目前共享局部速度场，不声称解析切向滑移、乳化和液滴破碎。
-- 实体运动已通过 loader-neutral moving-body request 扰动 marker 动量；当前 kinematic AABB 近似仍不是移动 cut-cell、压力面积积分或严格双向动量/排水闭合。
+- 实体运动已通过 loader-neutral moving-body request 扰动 marker 动量；浸没观察已连续积分 AABB、派生液层和既有 cut-micro geometry，liquid boundary 使用实际当 tick 位姿差而非供下一 tick 使用的原版响应速度。当前 kinematic AABB 近似仍不是移动 cut-cell、压力面积积分或严格双向动量/排水闭合。
 - 固液已支持有界、数据化的压力平衡曲线，气液使用绝对压力和 component 分压；更高压力、更多材料和跨相溶解仍需分别验证物性域。
 - Query API 已冻结同步只读单格观察，并已有只查询闭壳相邻液体的可选 Jade 适配；container durable completion 已有 committed event。尚无 WAILA/HWYLA、直接自由面目标、稳定 transfer API、其他提交类型事件或其他 loader 发现桥。
 - section 是一个 region 原子 generation 内的存储分片，不具有独立提交、卸载或 ownership 生命周期。
@@ -116,7 +116,7 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 目标不是立即引入通用刚体求解器，而是把当前运动扰动逐步变成可审计、严格闭合的双向边界：
 
-当前已有 loader-neutral moving-body request：Fabric 的有界湿样本会把实体运动写入附近 marker 动量，并报告实际液体冲量，所以实体运动可扰动自由面。湿样本每个游戏 tick 冻结，但只在 pacing 到期且 region 可运动的 logical step 消费一次；跳过、PAUSED 和 thermal-only tick 不改写 liquid marker。它仍是 kinematic AABB 近似，不替代以下压力、占位和严格动量闭合工作。
+当前已有 loader-neutral moving-body request：Fabric 冻结实体 AABB 与本 tick 实际位姿差，core 连续积分派生湿体积并把该表面运动写入附近 marker 动量，同时报告实际液体冲量，所以实体运动可扰动自由面。原版更新后的 `deltaMovement` 只参与实体侧响应，不能冒充已经发生的边界位移。观察每个游戏 tick 冻结，但只在 pacing 到期且 region 可运动的 logical step 消费一次；跳过、PAUSED 和 thermal-only tick 不改写 liquid marker。它仍是 kinematic AABB 近似，不替代以下压力、占位和严格动量闭合工作。
 
 1. 在实体离散表面采样流体压力，验证静水浮力与姿态无关性。
 2. 将黏性和形状阻力与压力力分开，并给出适用 Reynolds 范围。
@@ -141,7 +141,7 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 重新接入 full profile 或 backend adoption 前分开的自动门中，正式半满 fixture 的 phase-on logical step 硬预算门已经通过，并在 capture/restore 后保留 gas、总 `U` 和待下一次 projection 消费的 phase volume。纯机械门关闭 phase，但仍绑定正式 thermal/gas/phase registry 并每步经过 backend capture/restore：环境气体按既有半满几何初始化的平面自由面连续通过 500 步；先初始化空腔气体再注液形成的压缩气体场景连续通过 1000 步。两者的动能、质心、gas lineage、总 `U`、绝对 PCG 残差和逐阶段体力-pressure 功均闭合；phase-on 长跑产生的局部沸腾温差与热浮力属于真实非平衡热学，不能作为静水机械自激证据。
 
-无实体停止门已经关闭。相同平面半满状态加入零速度、玩家尺寸的 kinematic boundary 后连续 500 个 backend candidate 也不放大动能，candidate 回报的 liquid impulse 与 held-body 外部约束反作用严格相反；lifecycle 门同时固定 PAUSED、pacing skip 和 due tick 的 liquid-input exactly-once 时序。这只隔离并关闭“静止边界使液体自激”和“跳过 tick 重复注入液体动量”两项，不冒充真实玩家侧闭合：下一停止门仍须用有质量真值的动态实体，在同一场景验证 pressure/drag 分列的 liquid/entity 等大反向冲量、稳定吃水和振幅不增长。该门完成前仍保留最后完整状态并停在未启用边界，不能用 pacing fallback、速度阻尼、材料分支或额外 warmup 代替通过。
+无实体停止门已经关闭。相同平面半满状态加入零速度、玩家尺寸的 kinematic boundary 后连续 500 个 backend candidate 也不放大动能，candidate 回报的 liquid impulse 与 held-body 外部约束反作用严格相反；lifecycle 门同时固定 PAUSED、pacing skip 和 due tick 的 liquid-input exactly-once 时序。动态玩家门按 Minecraft 的“本 tick 位移→重力/空气阻力→Mod 响应”顺序运行 2000 game ticks，并每 4 tick 经过一次完整生产 backend capture/restore；连续 AABB 浸没与实际位姿速度使玩家尾段振幅降至微米级，液体瞬态动能回落到静止边界门内。这关闭了离散湿点和反号边界速度造成的正反馈，但不冒充真实玩家侧动量闭合：下一停止门仍须引入实体质量真值和 pressure/drag 分列，在同一事务中验证 liquid/entity 等大反向冲量与实体占位排水。该门完成前不能用 pacing fallback、速度阻尼、材料分支或额外 warmup 代替通过。
 
 若阶段性能不达标，依次采用：缩小 active neighborhood、降低更新频率、增加守恒休眠/宏观 node、限制产品范围，最后才降低空间分辨率。不得先放松 ledger 或使用材料特判跳过昂贵物理。
 

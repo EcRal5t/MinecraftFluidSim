@@ -22,7 +22,7 @@
 | 世界配置 | `FluidServerConfig.java` | 只接受当前完整配置；功能门与预算在启动时冻结；依赖链严格 |
 | world-local registry snapshot | `ChemicalRegistryStore.java`、`GranularRegistryStore.java`、`GasRegistryStore.java`、`ThermalRegistryStore.java`、`simulation/persistence/DurableFileOperations.java`、`StrictNbtFields.java` | 首次发布先回读再 atomic rename 并同步目录 entry；compound 字段集合和类型必须精确；未知内容保留并锁定 |
 | 世界碰撞 | `MinecraftCollisionWorldPort.java`、`FluidRegionWorldInteraction.java`、`core/.../world/` | Minecraft shape 先冻结为纯 Java `CollisionField`；挤水只按 marker 账本 |
-| 实体流体交互 | `MinecraftEntityFluidInteraction.java`、`FluidRegionLifecycle.java`、`core/.../fluid/FlipFluidDomain.sampleAxisAlignedBody`、`core/.../world/MovingBodyFluidCoupling.java`、`FlipFluidDomain.applyMovingBodyCoupling` | Fabric 每 tick 冻结实体 AABB/速度；core 按派生水平液层与 cut-micro geometry 连续积分湿体积；只有到期 motion step 消费一次 liquid request；core 回报实际合计冲量 |
+| 实体流体交互 | `MinecraftEntityFluidInteraction.java`、`FluidRegionLifecycle.java`、`core/.../fluid/FlipFluidDomain.sampleAxisAlignedBody`、`core/.../world/MovingBodyFluidCoupling.java`、`FlipFluidDomain.applyMovingBodyCoupling` | `entity-fluid`；Fabric 每 tick 冻结实体 AABB、原版响应速度和本 tick 实际位姿差，core 按派生水平液层与 cut-micro geometry 连续积分湿体积；只有到期 motion step 消费一次实际位姿速度的 liquid request；core 回报实际合计冲量 |
 | controller footprint | `simulation/controller/` | 非加载读取；破口、缺 chunk、多内腔、重叠或超预算拒绝 |
 | 区域 checkpoint | `simulation/persistence/`、`RegionStateLayout.java`、`GenerationSequence.java` | 双槽完整 generation、语义 layout、CRC、HEAD 最后发布；所有 WAL/HEAD 紧邻代次用统一 overflow-safe 检查；atomic rename/delete 后同步目录 entry |
 | takeover | `TakeoverTransaction.java`、`TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |

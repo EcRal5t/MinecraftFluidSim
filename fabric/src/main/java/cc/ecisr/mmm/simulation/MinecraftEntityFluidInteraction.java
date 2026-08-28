@@ -14,7 +14,7 @@ import java.util.List;
 
 /** Minecraft entity discovery and response over loader-neutral fluid observations. */
 final class MinecraftEntityFluidInteraction {
-	private static final double NEUTRAL_SUBMERGENCE = 0.72;
+	static final double NEUTRAL_SUBMERGENCE = 0.72;
 	private static final double FULL_SUBMERGENCE_DRAG = 0.20;
 	private static final double TICKS_PER_SECOND = 20.0;
 
@@ -34,7 +34,7 @@ final class MinecraftEntityFluidInteraction {
 		for (Entity entity : level.getEntities((Entity) null, bounds, MinecraftEntityFluidInteraction::canAffect)) {
 			Contact contact = sampleContact(region, entity);
 			if (contact.submergedFraction() <= 0.0) continue;
-			interactions.add(new Interaction(entity, contact, entity.getDeltaMovement()));
+			interactions.add(new Interaction(entity, contact, entity.position().subtract(entity.oldPosition())));
 		}
 		return interactions.isEmpty() ? Frame.EMPTY : new Frame(List.copyOf(interactions));
 	}
@@ -46,7 +46,7 @@ final class MinecraftEntityFluidInteraction {
 	static FluidRegion.EntityCouplingStats applyToLiquid(Frame frame, FlipFluidDomain domain) {
 		double impulseX = 0.0, impulseY = 0.0, impulseZ = 0.0;
 		for (Interaction interaction : frame.interactions()) {
-			Vec3 bodyVelocity = interaction.velocityBlocksPerTick().scale(TICKS_PER_SECOND);
+			Vec3 bodyVelocity = interaction.displacementBlocksThisTick().scale(TICKS_PER_SECOND);
 			Contact contact = interaction.contact();
 			MovingBodyFluidCoupling.Result coupling = domain.applyMovingBodyCoupling(
 					new MovingBodyFluidCoupling.Request(contact.localX(), contact.localY(), contact.localZ(),
@@ -79,6 +79,7 @@ final class MinecraftEntityFluidInteraction {
 		if (!(Double.isFinite(submergedFraction) && submergedFraction > 0.0 && submergedFraction <= 1.0 + 1.0E-9)) {
 			throw new IllegalStateException("Fluid/body overlap exceeded finite AABB volume");
 		}
+		submergedFraction = Math.min(1.0, submergedFraction);
 		return new Contact(submergedFraction,
 				new Vec3(sample.velocityXMetresPerSecond(), sample.velocityYMetresPerSecond(),
 						sample.velocityZMetresPerSecond()),
@@ -87,21 +88,36 @@ final class MinecraftEntityFluidInteraction {
 	}
 
 	private static void applyForce(Entity entity, Contact contact) {
-		double submerged = contact.submergedFraction();
-		double drag = FULL_SUBMERGENCE_DRAG * submerged;
-		Vec3 targetVelocity = contact.fluidVelocity().scale(1.0 / TICKS_PER_SECOND);
-		Vec3 current = entity.getDeltaMovement();
-		Vec3 next = current.add(targetVelocity.subtract(current).scale(drag));
-		if (!entity.isNoGravity()) {
-			double buoyancy = Math.min(0.20, entity.getGravity() * submerged / NEUTRAL_SUBMERGENCE);
-			next = next.add(0.0, buoyancy, 0.0);
-		}
-		entity.setDeltaMovement(next);
+		entity.setDeltaMovement(responseVelocity(entity.getDeltaMovement(), contact.fluidVelocity(),
+				contact.submergedFraction(), entity.getGravity(), entity.isNoGravity()));
 		entity.hurtMarked = true;
-		if (submerged > 0.15) entity.resetFallDistance();
+		if (contact.submergedFraction() > 0.15) entity.resetFallDistance();
 	}
 
-	private record Interaction(Entity entity, Contact contact, Vec3 velocityBlocksPerTick) { }
+	static Vec3 responseVelocity(
+			Vec3 currentBlocksPerTick, Vec3 fluidMetresPerSecond,
+			double submergedFraction, double gravityBlocksPerTickSquared, boolean noGravity
+	) {
+		if (currentBlocksPerTick == null || fluidMetresPerSecond == null
+				|| !(Double.isFinite(currentBlocksPerTick.x) && Double.isFinite(currentBlocksPerTick.y)
+				&& Double.isFinite(currentBlocksPerTick.z) && Double.isFinite(fluidMetresPerSecond.x)
+				&& Double.isFinite(fluidMetresPerSecond.y) && Double.isFinite(fluidMetresPerSecond.z)
+				&& Double.isFinite(submergedFraction) && submergedFraction > 0.0 && submergedFraction <= 1.0
+				&& Double.isFinite(gravityBlocksPerTickSquared) && gravityBlocksPerTickSquared >= 0.0)) {
+			throw new IllegalArgumentException("Entity fluid response input is invalid");
+		}
+		double drag = FULL_SUBMERGENCE_DRAG * submergedFraction;
+		Vec3 targetVelocity = fluidMetresPerSecond.scale(1.0 / TICKS_PER_SECOND);
+		Vec3 next = currentBlocksPerTick.add(targetVelocity.subtract(currentBlocksPerTick).scale(drag));
+		if (!noGravity) {
+			double buoyancy = Math.min(0.20,
+					gravityBlocksPerTickSquared * submergedFraction / NEUTRAL_SUBMERGENCE);
+			next = next.add(0.0, buoyancy, 0.0);
+		}
+		return next;
+	}
+
+	private record Interaction(Entity entity, Contact contact, Vec3 displacementBlocksThisTick) { }
 
 	record Frame(List<Interaction> interactions) {
 		static final Frame EMPTY = new Frame(List.of());

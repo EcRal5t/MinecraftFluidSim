@@ -94,7 +94,7 @@ div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 
 `FlipCutCellGeometry` 从每格 `2×2×2` unsigned micro mask 得到 cell solid volume 和三轴 face aperture。checkpoint 与后端 handoff 保存 raw mask，不能退化为“整格固体/整格空气”；恢复后必须得到相同 aperture。`FlipParticleCollision` 对 marker 轨迹做连续碰撞检测，避免只在步末投影位置造成穿薄墙；碰撞只去除命中法向速度，切向分量保持。
 
-实体交互由 Fabric 每个 Minecraft tick 冻结有界 AABB、实体速度和流体观察。core 将 AABB 与当前派生的水平液层逐格求交；每格液层按开放 `2×2×2` micro layer 自下而上分配，所以浸没体积和湿区质心随子格位移连续变化，并排除 `VoxelShape` 已占据的 micro volume。这个观察不改 marker 库存，也不是压力面积分。实体侧响应仍按游戏 tick 应用；moving-body 输入只能在 region 可运动且 pacing 到期的真实 logical step 消费一次，PAUSED、thermal-only 和被 pacing 跳过的 tick 不得提前或重复改写 marker。core 使用紧支撑二次 B-spline 核，在湿体积上把实体运动约束写入附近 marker 速度；返回值由实际 float velocity 写入重新计算 `kg·m/s`，体积、质量、组成和 `U` 不变。该 marker 动量会经过正常 P2G、pressure projection、G2P 和 advection，因此走动、划水和入水速度可以扰动液体，而不是只唤醒调度。
+实体交互由 Fabric 每个 Minecraft tick 冻结有界 AABB、原版更新后的实体响应速度、本 tick 实际位姿差和流体观察。core 将 AABB 与当前派生的水平液层逐格求交；每格液层按开放 `2×2×2` micro layer 自下而上分配，所以浸没体积和湿区质心随子格位移连续变化，并排除 `VoxelShape` 已占据的 micro volume。这个观察不改 marker 库存，也不是压力面积分。实体侧响应仍按游戏 tick 应用；liquid moving boundary 使用 `position - oldPosition` 的实际当 tick 位移速度，不能把原版已施加重力/阻力、供下一 tick 使用的 `deltaMovement` 反向当成本 tick 表面运动。moving-body 输入只能在 region 可运动且 pacing 到期的真实 logical step 消费一次，PAUSED、thermal-only 和被 pacing 跳过的 tick 不得提前或重复改写 marker。core 使用紧支撑二次 B-spline 核，在湿体积上把实体运动约束写入附近 marker 速度；返回值由实际 float velocity 写入重新计算 `kg·m/s`，体积、质量、组成和 `U` 不变。该 marker 动量会经过正常 P2G、pressure projection、G2P 和 advection，因此走动、划水和入水速度可以扰动液体，而不是只唤醒调度。
 
 当前 AABB 湿体积是有界 kinematic immersed-boundary 近似：Minecraft 实体运动被视为外部 moving body，不声称已有刚体质量真值或严格等量的实体侧反冲 ledger；实体占位也尚未进入 cut-cell 容量。推进到压力面积分和严格双向闭合前，必须验证静水浮力的采样误差、给出黏性/形状阻力有效域、把实体表面速度接入 pressure boundary，并让实体占位通过统一容量路径排开液体。不得用额外速度钳制或材料特判掩盖这些停止门。
 
