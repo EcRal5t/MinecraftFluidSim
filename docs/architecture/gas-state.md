@@ -43,7 +43,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 
 部分充液界面的短时拓扑抖动可使用 runtime lineage 减少虚假空气周转，但不能改变持久 membership 或物质账本。拓扑 remap 只要旧 node 仍有 full-air membership overlap，就只用该 overlap 规划 merge/split/vent；仅在旧 membership 完全消失时才允许 runtime lineage 后备，液面摆动不能把密闭库存按 partial overlap 分给 ambient。稳定 topology 快路每次仍从当前 exact residual volume 重新分配 interface lineage；相变新打开的微小气隙不能沿用上一轮空 residual 的归属，也不能被当成凭空新 node。
 
-气液相变若只截断或扩充既有 marker，marker cardinality、cell membership、solid/cut-cell 与 granular occupancy 都没有改变，因此 air-cell 连通性和 interface lineage 也严格不变。该中间候选沿现有 node membership 重新汇总每格连续 available volume，仍对每个 node 规划完整绝热体积功，并把 gas `U` 与 node volume 一次提交；只有 marker 新增/删除或其他结构变化才重新 flood fill、overlap 和 remap。logical step 末以及 capture 前仍从完整 carrier geometry 重扫，稳定路径不是持久 topology 的替代真值。
+气液相变若只截断或扩充既有 marker，marker cardinality、cell membership、solid/cut-cell 与 granular occupancy 都没有改变，因此 air-cell 连通性和 interface lineage 也严格不变。该中间候选用实际提交前后 float marker 体积差更新被编辑 cell 的 exact marker sum，再沿现有 node membership 重新汇总连续 available volume；每个 node 仍规划完整绝热体积功，并把 gas `U` 与 node volume 一次提交。只有 marker 新增/删除或其他结构变化才重新 flood fill、overlap 和 remap。logical step 末以及 capture 前仍从完整 carrier geometry 重扫，稳定路径不是持久 topology 的替代真值。
 
 重扫先建立旧 node 与新 node 的实际 cell overlap，再纯规划全部 transfer：
 

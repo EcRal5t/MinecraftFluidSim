@@ -1773,21 +1773,33 @@ public final class FlipFluidDomain {
 							liquidTemperature, remainingBudget);
 					if (plan == null) continue;
 					boolean carrierTopologyChanged = plan.removal().carrierTopologyChanged();
+					double markerVolumeDelta = carrierTopologyChanged
+							? 0.0 : phaseMarkerVolumeDelta(plan.removal().allocations());
 					commitGasBoil(cell, node, plan, thermalCell);
-					refreshGasPhaseGeometry(carrierTopologyChanged);
+					refreshGasPhaseGeometry(carrierTopologyChanged, cell, markerVolumeDelta);
 					operations = Math.addExact(operations, Math.toIntExact(plan.batches())); boiled++;
 				} else if (direction == GasLiquidPhaseModel.Direction.CONDENSE) {
 					GasCondensePlan plan = planGasCondense(cell, node, liquidHandle, transition,
 							inventory, phase, thermalCell, gas.carrierId(), remainingBudget);
 					if (plan == null) continue;
 					boolean carrierTopologyChanged = plan.target() < 0;
+					double markerVolumeDelta = carrierTopologyChanged
+							? 0.0 : (double) plan.targetVolume() - particleVolume[plan.target()];
 					commitGasCondense(cell, node, liquidHandle, plan, thermalCell);
-					refreshGasPhaseGeometry(carrierTopologyChanged);
+					refreshGasPhaseGeometry(carrierTopologyChanged, cell, markerVolumeDelta);
 					operations = Math.addExact(operations, Math.toIntExact(plan.batches())); condensed++;
 				}
 			}
 		}
 		return new GasThermalPhaseStats(operations, boiled, condensed);
+	}
+
+	private double phaseMarkerVolumeDelta(List<PhaseMarkerAllocation> allocations) {
+		double delta = 0.0;
+		for (PhaseMarkerAllocation allocation : allocations) {
+			delta += (double) allocation.newVolume() - particleVolume[allocation.marker()];
+		}
+		return delta;
 	}
 
 	private GasBoilPlan planGasBoil(
@@ -4911,18 +4923,22 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 	}
 
-	private void refreshGasPhaseGeometry(boolean carrierTopologyChanged) {
+	private void refreshGasPhaseGeometry(
+			boolean carrierTopologyChanged, int changedCell, double markerVolumeDelta
+	) {
 		if (carrierTopologyChanged) {
 			rebuildGasPhaseGeometryFromParticles();
 			refreshGasTopology();
 			return;
 		}
-		Arrays.fill(volume, 0.0F);
-		Arrays.fill(exactCellMarkerVolume, 0.0);
-		for (int marker = 0; marker < particleCount; marker++) {
-			exactCellMarkerVolume[particleCellIndex(marker)] += particleVolume[marker];
-			splatCenter(particleX[marker], particleY[marker], particleZ[marker], particleVolume[marker]);
+		if (changedCell < 0 || changedCell >= cellCount || !Double.isFinite(markerVolumeDelta)) {
+			throw new IllegalArgumentException("Stable gas phase volume edit is invalid");
 		}
+		double updatedVolume = exactCellMarkerVolume[changedCell] + markerVolumeDelta;
+		if (!(Double.isFinite(updatedVolume) && updatedVolume >= 0.0)) {
+			throw new IllegalStateException("Stable gas phase edit produced invalid liquid volume");
+		}
+		exactCellMarkerVolume[changedCell] = updatedVolume;
 		refreshGasAvailableVolume();
 	}
 

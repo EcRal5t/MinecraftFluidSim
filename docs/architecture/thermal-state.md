@@ -150,7 +150,7 @@ p_partial = p_absolute * Vstd,vapor / Vstd,total
 
 每个 logical step 的固液与气液共享最多 4096 次 phase operation；按 0.05 s step 和 1 g batch，理论数值上限为 `81.92 kg/s`。这是防止无界工作量的预算，不是现实相界动力学。真实速率由传入的有限热通量、库存、容量与饱和条件限制；若量化 fixture 需要界面动力学，应新增有适用域的数据模型，不能把 tick 倍率塞入潜热。
 
-气液候选先用当前 marker geometry 同步 gas topology，再规划 inventory/energy。同一 liquid thermal material 的候选状态函数可把 cell 内剩余 marker 聚合为一份 extensive inventory；实际删除、截断、species 与 residual 搬运仍保留逐 marker exact plan。只截断或扩充既有 marker 时，carrier ordinal 和 air-cell membership 不变：热学只刷新被编辑 cell，气体从逐格 exact marker volume 沿既有 membership 重新建立 interface lineage、汇总 available volume并完整规划绝热体积功。marker 新增/删除时则重建 cell-marker ordinal并完整重扫 topology。力学 P2G、pressure footprint/PLIC、表面张力和速度外推统一在 logical step 末重建一次，capture 前也从完整 geometry 重扫。这样任何可发布 logical state 都不会出现 marker 已变而 gas node 仍属于上一拓扑的半代次，也不会在一次相变扫描中重复构造不参与候选的力学派生场。
+气液候选先用当前 marker geometry 同步 gas topology，再规划 inventory/energy。同一 liquid thermal material 的候选状态函数可把 cell 内剩余 marker 聚合为一份 extensive inventory；实际删除、截断、species 与 residual 搬运仍保留逐 marker exact plan。只截断或扩充既有 marker 时，carrier ordinal 和 air-cell membership 不变：热学只刷新被编辑 cell，气体以实际 float marker 体积差更新该 cell 的 exact marker sum，再沿既有 membership 重新建立 interface lineage、汇总 available volume 并完整规划绝热体积功，不为每个 phase cell 重扫全部 marker 或重建力学平滑场。marker 新增/删除时则重建 cell-marker ordinal 并完整重扫 topology。力学 P2G、pressure footprint/PLIC、表面张力和速度外推统一在 logical step 末重建一次，capture 前也从完整 geometry 重扫。这样任何可发布 logical state 都不会出现 marker 已变而 gas node 仍属于上一拓扑的半代次，也不会在一次相变扫描中重复构造不参与候选的力学派生场。
 
 ## 反应热
 
