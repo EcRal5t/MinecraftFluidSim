@@ -49,12 +49,51 @@ public final class ProductionFluidReplayValidation {
 
 	public static void main(String[] args) throws Exception {
 		defaultLiveStepsRemainBounded();
+		controllerPourSequenceWithoutGasSettles();
 		fullyBoundHalfFillRoundTripsCurrentGasGeometry();
 		fullyBoundPhaseOnStepRemainsBounded();
 		planarHalfFillWithoutEntitiesRemainsStableAcrossBackend();
 		compressedPlanarHalfFillRemainsStableAcrossBackend();
 		stationaryPlayerSizedBodyDoesNotExcitePlanarSurface();
 		System.out.println("Production fluid replay passed");
+	}
+
+	/** Isolates liquid projection from the sealed-gas spring for the reported two-pour trajectory. */
+	private static void controllerPourSequenceWithoutGasSettles() {
+		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
+		domain.sealDomainBoundary();
+		bindEmptyMaterialState(domain, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
+		FlipFluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
+		require(first.addedVolume() == 128.0F && !first.markerBudgetLimited(),
+				"gas-free control did not inject the first 16 BV source: " + first);
+		for (int step = 0; step < 40; step++) domain.stepWithMechanicalAudit(false, 0);
+		FlipFluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(3, 3, 5, 112.0F, 6);
+		require(second.addedVolume() == 112.0F && !second.markerBudgetLimited(),
+				"gas-free control did not inject the second 14 BV source: " + second);
+		double expectedVolume = domain.totalVolumeExact();
+		double expectedMass = domain.totalMass();
+		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0, finalKinetic = 0.0;
+		double cumulativePressureWork = 0.0;
+		for (int step = 0; step < 1_000; step++) {
+			FlipFluidDomain.StepStats stats = domain.stepWithMechanicalAudit(false, 0);
+			FlipFluidDomain.MechanicalStepAudit audit = stats.mechanicalAudit();
+			finalKinetic = audit.finalParticleKineticEnergyJoules();
+			cumulativePressureWork += audit.pressureProjectionWorkJoules();
+			maximumKinetic = Math.max(maximumKinetic, finalKinetic);
+			if (step >= 800) tailMaximumKinetic = Math.max(tailMaximumKinetic, finalKinetic);
+		}
+		require(domain.totalVolumeExact() == expectedVolume && domain.totalMass() == expectedMass,
+				"reported two-pour replay changed exact liquid volume or mass");
+		require(cumulativePressureWork < 0.0,
+				"reported two-pour pressure projection injected net kinetic energy: "
+						+ cumulativePressureWork + " J");
+		require(tailMaximumKinetic <= 60.0 && finalKinetic <= 50.0,
+				"reported two-pour replay remained self-excited: max/tail/final="
+						+ maximumKinetic + "/" + tailMaximumKinetic + "/" + finalKinetic + " J");
+		System.out.printf("  controller pour gas-free control: K max/tail/final="
+				+ "%.9g/%.9g/%.9g J, pressure work=%+.9g J, speed=%.6g%n",
+				maximumKinetic, tailMaximumKinetic, finalKinetic,
+				cumulativePressureWork, domain.maximumParticleSpeed());
 	}
 
 	public static void dynamicPlayerFloatRemainsBoundedAcrossBackend() throws Exception {

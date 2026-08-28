@@ -58,7 +58,7 @@ marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新�
 ## 自由面与压力
 
 - 开放液面压力使用环境或 gas-node pressure；密闭气体只通过同一界面边界进入 projection。
-- marker 分布 drift correction 只生成目标散度，不改 marker 体积，不强制找平。
+- marker 分布 drift correction 只生成目标散度，不改 marker 体积，不强制找平；它读取与 pressure component 相同的守恒 C1 marker footprint，不能把独立的 PIC/展示 `volume[]` 误当成压缩量。
 - 表面张力使用 PLIC/相分数构造曲率和 balanced-force 压力项；`sigma = 0` 不产生额外力。
 - 液液相共享机械 pressure/velocity，但保持材料身份、界面张力和密度分层。
 

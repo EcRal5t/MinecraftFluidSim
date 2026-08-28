@@ -5938,7 +5938,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		int x = index % sizeX, yz = index / sizeX;
 		int y = yz % sizeY, z = yz / sizeY;
 		return FlipVolumeDriftCorrection.targetDivergence(
-				volume[index], freeSurfaceGeometry.exactCellVolume(index), openVolume,
+				(float) pressureVolume[index], freeSurfaceGeometry.exactCellVolume(index), openVolume,
 				hasAirNeighbor(x, y, z), dt
 		);
 	}
