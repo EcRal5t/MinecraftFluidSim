@@ -1,7 +1,10 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
+import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
+import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
+import cc.ecisr.mmm.thermal.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -138,6 +141,189 @@ final class MaterialTransferPlanner {
 		}
 		return new FlipFluidDomain.ExactMixtureTransfer(true, List.copyOf(result), internalEnergy == null ? 0.0 : internalEnergy);
 	}
+
+	float removeVolumeNear(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
+		domain.validateVolumeEdit(amount, maxRadius);
+		float remaining = amount;
+		for (FlipFluidDomain.CellCandidate candidate : domain.nearbyCells(centerX, centerY, centerZ, maxRadius)) {
+			int index = candidate.index();
+			int x = index % domain.sizeX, yz = index / domain.sizeX, y = yz % domain.sizeY, z = yz / domain.sizeY;
+			remaining -= domain.removeParticlesInCell(x, y, z, remaining);
+			if (remaining <= 1.0E-6F) break;
+		}
+		domain.gridDirty = true;
+		return amount - remaining;
+	}
+
+	FlipFluidDomain.ExactChemicalTransfer extractChemical(
+			int centerX, int centerY, int centerZ, float volume, int maxRadius,
+			java.util.function.Predicate<ChemicalTransferLedger> acceptsLedger
+	) {
+		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemical extraction requires chemistry");
+		if (acceptsLedger == null) throw new IllegalArgumentException("Chemical extraction validator is missing");
+		domain.validateVolumeEdit(volume, maxRadius);
+		if (volume <= 0.0F) return new FlipFluidDomain.ExactChemicalTransfer(volume == 0.0F, ChemicalTransferLedger.EMPTY);
+		if (domain.hasPendingPhaseVolumeWork()) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		List<FlipFluidDomain.CellCandidate> cells = domain.nearbyCells(centerX, centerY, centerZ, maxRadius);
+		boolean[] near = new boolean[domain.sizeX * domain.sizeY * domain.sizeZ]; for (FlipFluidDomain.CellCandidate candidate : cells) near[candidate.index()] = true;
+		double available = 0.0;
+		for (int marker = 0; marker < domain.particles.count(); marker++) if (near[domain.particleCellIndex(marker)]) {
+			available += domain.particles.volume(marker);
+		}
+		if (available < volume) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+
+		double remaining = volume, settlementTolerance = Math.ulp(volume);
+		List<ExtractionAllocation> plan = new ArrayList<>();
+		ChemicalTransferLedger.Builder ledger = ChemicalTransferLedger.builder(domain.chemicalParcels.registry());
+		for (FlipFluidDomain.CellCandidate candidate : cells) {
+			if (remaining <= 0.0) break;
+			for (int marker = domain.particles.count() - 1; marker >= 0 && remaining > 0.0; marker--) {
+				if (domain.particleCellIndex(marker) != candidate.index()) continue;
+				float previousVolume = domain.particles.volume(marker);
+				double take = Math.min(previousVolume, remaining);
+				float newVolume = (float) (previousVolume - take);
+				double actual = previousVolume - newVolume;
+				if (actual > remaining && newVolume < previousVolume) {
+					newVolume = Math.nextUp(newVolume); actual = previousVolume - newVolume;
+					settlementTolerance = Math.max(settlementTolerance, Math.ulp(previousVolume));
+				}
+				if (actual <= 0.0) continue;
+				double previousMass = domain.particles.mass(marker);
+				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
+				double removedMass = previousMass - newMass;
+				ChemicalParcelStore.SplitPlan chemicalPlan = domain.chemicalParcels.planTruncate(
+						marker, newVolume, previousVolume - newVolume, newMass, removedMass);
+				ledger.add(domain.materialRegistry.material(domain.particles.materialHandle(marker)).id(), domain.chemicalParcels.indicator(marker),
+						actual, domain.unitScale.kilograms(removedMass), chemicalPlan.removed());
+				FlipThermalState.Truncation thermalPlan = domain.planThermalTruncate(marker, newMass,
+						chemicalPlan.kept(), domain.thermalState == null ? Double.NaN : domain.thermalMarkerTemperature(marker));
+				plan.add(new ExtractionAllocation(marker, newVolume, newMass, chemicalPlan, thermalPlan));
+				remaining -= actual;
+			}
+		}
+		if (remaining > settlementTolerance) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		ChemicalTransferLedger removed = ledger.build();
+		if (removed.totalQuanta() > ChemicalLimits.MAX_BUCKET_TOTAL_QUANTA) {
+			return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		}
+		if (!acceptsLedger.test(removed)) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		for (ExtractionAllocation allocation : plan) {
+			if (allocation.chemicalPlan().kept() != null) {
+				domain.chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
+			}
+			domain.particles.setVolume(allocation.particle(), allocation.newVolume());
+			domain.particles.setMass(allocation.particle(), allocation.newMass());
+			domain.commitThermalTruncate(allocation.particle(), allocation.thermalPlan());
+		}
+		for (int marker = domain.particles.count() - 1; marker >= 0; marker--) if (domain.particles.volume(marker) == 0.0F) domain.removeParticle(marker);
+		domain.gridDirty = true;
+		double removedEnergy = domain.thermalState == null ? 0.0 : SignedDyadic.sum(plan.stream()
+				.mapToDouble(allocation -> allocation.thermalPlan().removedEnergy()).toArray()).toDouble();
+		return new FlipFluidDomain.ExactChemicalTransfer(true, removed, removedEnergy);
+	}
+	FlipFluidDomain.ExactMixtureTransfer extractMixture(
+			int centerX, int centerY, int centerZ, float volume, int maxRadius, int requiredMaterialHandle
+	) {
+		if (domain.hasPendingPhaseVolumeWork()) return new FlipFluidDomain.ExactMixtureTransfer(false, List.of());
+		java.util.List<FlipFluidDomain.CellCandidate> cells = domain.nearbyCells(centerX, centerY, centerZ, maxRadius);
+		boolean[] near = new boolean[domain.sizeX * domain.sizeY * domain.sizeZ];
+		for (FlipFluidDomain.CellCandidate candidate : cells) near[candidate.index()] = true;
+		float h = domain.config.cellSize();
+		double available = 0.0;
+		for (int i = 0; i < domain.particles.count(); i++) {
+			if (requiredMaterialHandle >= 0 && domain.particles.materialHandle(i) != requiredMaterialHandle) continue;
+			if (domain.chemicalParcels != null && !domain.chemicalParcels.isCanonicalDefaultCarrier(
+					i, domain.materialRegistry.material(domain.particles.materialHandle(i)).id())) continue;
+			if (!near[domain.cellIndex((int) Math.floor(domain.particles.positionX(i) / h), (int) Math.floor(domain.particles.positionY(i) / h),
+					(int) Math.floor(domain.particles.positionZ(i) / h))]) continue;
+			available += domain.particles.volume(i);
+		}
+		if (available < volume) return new FlipFluidDomain.ExactMixtureTransfer(false, List.of());
+
+		double remaining = volume;
+		double settlementTolerance = Math.ulp(volume);
+		java.util.List<ExtractionAllocation> plan = new java.util.ArrayList<>();
+		int ledgerSize = domain.materialRegistry == null ? 1 : domain.materialRegistry.size();
+		double[] volumeBefore = new double[ledgerSize];
+		double[] massBefore = new double[ledgerSize];
+		for (int particle = 0; particle < domain.particles.count(); particle++) {
+			volumeBefore[domain.particles.materialHandle(particle)] += domain.particles.volume(particle);
+			massBefore[domain.particles.materialHandle(particle)] += domain.particles.mass(particle);
+		}
+		java.util.Set<Integer> changedHandles = new java.util.TreeSet<>();
+		for (FlipFluidDomain.CellCandidate candidate : cells) {
+			if (remaining <= 0.0) break;
+			int cell = candidate.index();
+			for (int i = domain.particles.count() - 1; i >= 0; i--) {
+				if (remaining <= 0.0) break;
+				if (domain.particleCellIndex(i) != cell
+						|| requiredMaterialHandle >= 0 && domain.particles.materialHandle(i) != requiredMaterialHandle) continue;
+				if (domain.chemicalParcels != null && !domain.chemicalParcels.isCanonicalDefaultCarrier(
+						i, domain.materialRegistry.material(domain.particles.materialHandle(i)).id())) continue;
+				float previousVolume = domain.particles.volume(i);
+				double take = Math.min(previousVolume, remaining);
+				float newVolume = (float) (previousVolume - take);
+				double actual = previousVolume - newVolume;
+				// A nearest-float remainder may round downward and remove more than requested.
+				// Keep the authoritative marker delta at or below the caller's remaining cap;
+				// a later marker can settle any still-representable remainder.
+				if (actual > remaining && newVolume < previousVolume) {
+					newVolume = Math.nextUp(newVolume);
+					actual = previousVolume - newVolume;
+					settlementTolerance = Math.max(settlementTolerance, Math.ulp(previousVolume));
+				}
+				if (actual <= 0.0) continue;
+				double previousMass = domain.particles.mass(i);
+				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
+				int handle = domain.particles.materialHandle(i);
+				ChemicalParcelStore.SplitPlan chemicalPlan = domain.chemicalParcels == null ? null
+						: domain.chemicalParcels.planTruncate(i, newVolume, previousVolume - newVolume,
+						newMass, previousMass - newMass);
+				FlipThermalState.Truncation thermalPlan = domain.planThermalTruncate(i, newMass,
+						chemicalPlan == null ? null : chemicalPlan.kept(),
+						domain.thermalState == null ? Double.NaN : domain.thermalMarkerTemperature(i));
+				plan.add(new ExtractionAllocation(i, newVolume, newMass, chemicalPlan, thermalPlan));
+				changedHandles.add(handle);
+				remaining -= actual;
+			}
+		}
+		if (remaining > settlementTolerance) return new FlipFluidDomain.ExactMixtureTransfer(false, List.of());
+		for (ExtractionAllocation allocation : plan) {
+			if (domain.chemicalParcels != null && allocation.chemicalPlan().kept() != null) {
+				domain.chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
+			}
+			domain.particles.setVolume(allocation.particle(), allocation.newVolume());
+			domain.particles.setMass(allocation.particle(), allocation.newMass());
+			domain.commitThermalTruncate(allocation.particle(), allocation.thermalPlan());
+		}
+		// Do not compact during indexed writes: removeParticle swaps the last marker into the current
+		// index and could invalidate a later planned ordinal. Compact only after every ledger edit.
+		for (int particle = domain.particles.count() - 1; particle >= 0; particle--) {
+			if (domain.particles.volume(particle) == 0.0F) domain.removeParticle(particle);
+		}
+		domain.gridDirty = true;
+		double[] volumeAfter = new double[ledgerSize];
+		double[] massAfter = new double[ledgerSize];
+		for (int particle = 0; particle < domain.particles.count(); particle++) {
+			volumeAfter[domain.particles.materialHandle(particle)] += domain.particles.volume(particle);
+			massAfter[domain.particles.materialHandle(particle)] += domain.particles.mass(particle);
+		}
+		List<FlipFluidDomain.MaterialPortion> result = new java.util.ArrayList<>(changedHandles.size());
+		for (int handle : changedHandles) {
+			double removedVolume = volumeBefore[handle] - volumeAfter[handle];
+			double removedMass = massBefore[handle] - massAfter[handle];
+			if (removedVolume > 0.0 && removedMass > 0.0) {
+				result.add(new FlipFluidDomain.MaterialPortion(handle, removedVolume, removedMass));
+			}
+		}
+		double removedEnergy = domain.thermalState == null ? 0.0 : SignedDyadic.sum(plan.stream()
+				.mapToDouble(allocation -> allocation.thermalPlan().removedEnergy()).toArray()).toDouble();
+		return new FlipFluidDomain.ExactMixtureTransfer(true, List.copyOf(result), removedEnergy);
+}
+	private record ExtractionAllocation(
+			int particle, float newVolume, double newMass, ChemicalParcelStore.SplitPlan chemicalPlan,
+			FlipThermalState.Truncation thermalPlan
+	) { }
 
 	private record InsertAllocation(
 			int x, int y, int z, double amount, int materialHandle, int portionIndex

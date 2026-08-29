@@ -2677,7 +2677,7 @@ public final class FlipFluidDomain {
 		return group;
 	}
 
-	private double thermalMarkerTemperature(int marker) {
+	double thermalMarkerTemperature(int marker) {
 		return thermalState.temperature(marker, thermalMarkerContext());
 	}
 
@@ -2739,14 +2739,14 @@ public final class FlipFluidDomain {
 		};
 	}
 
-	private FlipThermalState.Truncation planThermalTruncate(
+	FlipThermalState.Truncation planThermalTruncate(
 			int marker, double newMass, ChemicalMixtureRecord keptMixture, double previousTemperatureK
 	) {
 		return thermalState == null ? null : thermalState.planTruncate(
 				marker, newMass, keptMixture, previousTemperatureK, thermalMarkerContext());
 	}
 
-	private void commitThermalTruncate(int marker, FlipThermalState.Truncation plan) {
+	void commitThermalTruncate(int marker, FlipThermalState.Truncation plan) {
 		if (thermalState != null) thermalState.commitTruncate(marker, plan);
 	}
 
@@ -3519,20 +3519,11 @@ public final class FlipFluidDomain {
 		return new VolumeAddition(amount - remaining, markerBudgetLimited);
 	}
 
+	/** Removes every marker; the exact marker-volume ledger becomes zero immediately. */
 	public float removeVolumeNear(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
-		validateVolumeEdit(amount, maxRadius);
-		float remaining = amount;
-		for (CellCandidate candidate : nearbyCells(centerX, centerY, centerZ, maxRadius)) {
-			int index = candidate.index();
-			int x = index % sizeX, yz = index / sizeX, y = yz % sizeY, z = yz / sizeY;
-			remaining -= removeParticlesInCell(x, y, z, remaining);
-			if (remaining <= 1.0E-6F) break;
-		}
-		gridDirty = true;
-		return amount - remaining;
+		return transferPlanner.removeVolumeNear(centerX, centerY, centerZ, amount, maxRadius);
 	}
 
-	/** Removes every marker; the exact marker-volume ledger becomes zero immediately. */
 	public void removeAllWaterExact() {
 		commitRemoveAllWaterExact(planRemoveAllWaterExact());
 	}
@@ -3893,30 +3884,6 @@ public final class FlipFluidDomain {
 				externalSource, internalEnergy);
 	}
 
-	private record ExtractionAllocation(
-			int particle, float newVolume, double newMass, ChemicalParcelStore.SplitPlan chemicalPlan,
-			FlipThermalState.Truncation thermalPlan
-	) { }
-	private static final class RemovedMaterialLedger {
-		private final double[] volume;
-		private final double[] mass;
-		private RemovedMaterialLedger(int materialCount) {
-			volume = new double[materialCount]; mass = new double[materialCount];
-		}
-		private void add(int material, double addedVolume, double addedMass) {
-			volume[material] += addedVolume; mass[material] += addedMass;
-		}
-		private List<MaterialPortion> build() {
-			ArrayList<MaterialPortion> result = new ArrayList<>();
-			for (int material = 0; material < volume.length; material++) if (volume[material] > 0.0) {
-				if (!(Double.isFinite(mass[material]) && mass[material] > 0.0)) {
-					throw new IllegalStateException("Displaced material has no positive finite mass");
-				}
-				result.add(new MaterialPortion(material, volume[material], mass[material]));
-			}
-			return List.copyOf(result);
-		}
-	}
 	private record ChemicalPieceDraft(int cellX, int cellY, int cellZ, float volume, int materialHandle) { }
 	private record ChemicalInsertPiece(
 			int cellX, int cellY, int cellZ, float volume, int materialHandle, double mass,
@@ -4068,67 +4035,7 @@ public final class FlipFluidDomain {
 			int centerX, int centerY, int centerZ, float volume, int maxRadius,
 			java.util.function.Predicate<ChemicalTransferLedger> acceptsLedger
 	) {
-		if (chemicalParcels == null) throw new IllegalStateException("Chemical extraction requires chemistry");
-		if (acceptsLedger == null) throw new IllegalArgumentException("Chemical extraction validator is missing");
-		validateVolumeEdit(volume, maxRadius);
-		if (volume <= 0.0F) return new ExactChemicalTransfer(volume == 0.0F, ChemicalTransferLedger.EMPTY);
-		if (hasPendingPhaseVolumeWork()) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-		List<CellCandidate> cells = nearbyCells(centerX, centerY, centerZ, maxRadius);
-		boolean[] near = new boolean[cellCount]; for (CellCandidate candidate : cells) near[candidate.index()] = true;
-		double available = 0.0;
-		for (int marker = 0; marker < particles.count(); marker++) if (near[particleCellIndex(marker)]) {
-			available += particles.volume(marker);
-		}
-		if (available < volume) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-
-		double remaining = volume, settlementTolerance = Math.ulp(volume);
-		List<ExtractionAllocation> plan = new ArrayList<>();
-		ChemicalTransferLedger.Builder ledger = ChemicalTransferLedger.builder(chemicalParcels.registry());
-		for (CellCandidate candidate : cells) {
-			if (remaining <= 0.0) break;
-			for (int marker = particles.count() - 1; marker >= 0 && remaining > 0.0; marker--) {
-				if (particleCellIndex(marker) != candidate.index()) continue;
-				float previousVolume = particles.volume(marker);
-				double take = Math.min(previousVolume, remaining);
-				float newVolume = (float) (previousVolume - take);
-				double actual = previousVolume - newVolume;
-				if (actual > remaining && newVolume < previousVolume) {
-					newVolume = Math.nextUp(newVolume); actual = previousVolume - newVolume;
-					settlementTolerance = Math.max(settlementTolerance, Math.ulp(previousVolume));
-				}
-				if (actual <= 0.0) continue;
-				double previousMass = particles.mass(marker);
-				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
-				double removedMass = previousMass - newMass;
-				ChemicalParcelStore.SplitPlan chemicalPlan = chemicalParcels.planTruncate(
-						marker, newVolume, previousVolume - newVolume, newMass, removedMass);
-				ledger.add(materialRegistry.material(particles.materialHandle(marker)).id(), chemicalParcels.indicator(marker),
-						actual, unitScale.kilograms(removedMass), chemicalPlan.removed());
-				FlipThermalState.Truncation thermalPlan = planThermalTruncate(marker, newMass,
-						chemicalPlan.kept(), thermalState == null ? Double.NaN : thermalMarkerTemperature(marker));
-				plan.add(new ExtractionAllocation(marker, newVolume, newMass, chemicalPlan, thermalPlan));
-				remaining -= actual;
-			}
-		}
-		if (remaining > settlementTolerance) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-		ChemicalTransferLedger removed = ledger.build();
-		if (removed.totalQuanta() > ChemicalLimits.MAX_BUCKET_TOTAL_QUANTA) {
-			return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-		}
-		if (!acceptsLedger.test(removed)) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-		for (ExtractionAllocation allocation : plan) {
-			if (allocation.chemicalPlan().kept() != null) {
-				chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
-			}
-			particles.setVolume(allocation.particle(), allocation.newVolume());
-			particles.setMass(allocation.particle(), allocation.newMass());
-			commitThermalTruncate(allocation.particle(), allocation.thermalPlan());
-		}
-		for (int marker = particles.count() - 1; marker >= 0; marker--) if (particles.volume(marker) == 0.0F) removeParticle(marker);
-		gridDirty = true;
-		double removedEnergy = thermalState == null ? 0.0 : SignedDyadic.sum(plan.stream()
-				.mapToDouble(allocation -> allocation.thermalPlan().removedEnergy()).toArray()).toDouble();
-		return new ExactChemicalTransfer(true, removed, removedEnergy);
+		return transferPlanner.extractChemical(centerX, centerY, centerZ, volume, maxRadius, acceptsLedger);
 	}
 
 	/**
@@ -4144,7 +4051,7 @@ return tryExtractExactVolume(centerX, centerY, centerZ, volume, maxRadius, 0);
 public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int centerZ, float volume, int maxRadius, int materialHandle) {
 	validateVolumeEdit(volume, maxRadius);
 	if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0, 0.0);
-	ExactMixtureTransfer transfer = tryExtractExactMixtureInternal(
+	ExactMixtureTransfer transfer = transferPlanner.extractMixture(
 			centerX, centerY, centerZ, volume, maxRadius, materialHandle);
 	if (!transfer.transferred()) return new ExactVolumeTransfer(false, 0.0, 0.0);
 	MaterialPortion portion = transfer.portions().getFirst();
@@ -4157,108 +4064,30 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	) {
 		validateVolumeEdit(volume, maxRadius);
 		if (volume <= 0.0F) return new ExactMixtureTransfer(volume == 0.0F, List.of());
-		return tryExtractExactMixtureInternal(centerX, centerY, centerZ, volume, maxRadius, -1);
+		return transferPlanner.extractMixture(centerX, centerY, centerZ, volume, maxRadius, -1);
 	}
 
-	private ExactMixtureTransfer tryExtractExactMixtureInternal(
-			int centerX, int centerY, int centerZ, float volume, int maxRadius, int requiredMaterialHandle
-	) {
-		if (hasPendingPhaseVolumeWork()) return new ExactMixtureTransfer(false, List.of());
-		java.util.List<CellCandidate> cells = nearbyCells(centerX, centerY, centerZ, maxRadius);
-		boolean[] near = new boolean[sizeX * sizeY * sizeZ];
-		for (CellCandidate candidate : cells) near[candidate.index()] = true;
-		float h = config.cellSize();
-		double available = 0.0;
-		for (int i = 0; i < particles.count(); i++) {
-			if (requiredMaterialHandle >= 0 && particles.materialHandle(i) != requiredMaterialHandle) continue;
-			if (chemicalParcels != null && !chemicalParcels.isCanonicalDefaultCarrier(
-					i, materialRegistry.material(particles.materialHandle(i)).id())) continue;
-			if (!near[cellIndex((int) Math.floor(particles.positionX(i) / h), (int) Math.floor(particles.positionY(i) / h),
-					(int) Math.floor(particles.positionZ(i) / h))]) continue;
-			available += particles.volume(i);
+	private static final class RemovedMaterialLedger {
+		private final double[] volume;
+		private final double[] mass;
+		private RemovedMaterialLedger(int materialCount) {
+			volume = new double[materialCount]; mass = new double[materialCount];
 		}
-		if (available < volume) return new ExactMixtureTransfer(false, List.of());
-
-		double remaining = volume;
-		double settlementTolerance = Math.ulp(volume);
-		java.util.List<ExtractionAllocation> plan = new java.util.ArrayList<>();
-		int ledgerSize = materialRegistry == null ? 1 : materialRegistry.size();
-		double[] volumeBefore = new double[ledgerSize];
-		double[] massBefore = new double[ledgerSize];
-		for (int particle = 0; particle < particles.count(); particle++) {
-			volumeBefore[particles.materialHandle(particle)] += particles.volume(particle);
-			massBefore[particles.materialHandle(particle)] += particles.mass(particle);
+		private void add(int material, double addedVolume, double addedMass) {
+			volume[material] += addedVolume; mass[material] += addedMass;
 		}
-		java.util.Set<Integer> changedHandles = new java.util.TreeSet<>();
-		for (CellCandidate candidate : cells) {
-			if (remaining <= 0.0) break;
-			int cell = candidate.index();
-			for (int i = particles.count() - 1; i >= 0; i--) {
-				if (remaining <= 0.0) break;
-				if (particleCellIndex(i) != cell
-						|| requiredMaterialHandle >= 0 && particles.materialHandle(i) != requiredMaterialHandle) continue;
-				if (chemicalParcels != null && !chemicalParcels.isCanonicalDefaultCarrier(
-						i, materialRegistry.material(particles.materialHandle(i)).id())) continue;
-				float previousVolume = particles.volume(i);
-				double take = Math.min(previousVolume, remaining);
-				float newVolume = (float) (previousVolume - take);
-				double actual = previousVolume - newVolume;
-				// A nearest-float remainder may round downward and remove more than requested.
-				// Keep the authoritative marker delta at or below the caller's remaining cap;
-				// a later marker can settle any still-representable remainder.
-				if (actual > remaining && newVolume < previousVolume) {
-					newVolume = Math.nextUp(newVolume);
-					actual = previousVolume - newVolume;
-					settlementTolerance = Math.max(settlementTolerance, Math.ulp(previousVolume));
+		private List<MaterialPortion> build() {
+			ArrayList<MaterialPortion> result = new ArrayList<>();
+			for (int material = 0; material < volume.length; material++) if (volume[material] > 0.0) {
+				if (!(Double.isFinite(mass[material]) && mass[material] > 0.0)) {
+					throw new IllegalStateException("Displaced material has no positive finite mass");
 				}
-				if (actual <= 0.0) continue;
-				double previousMass = particles.mass(i);
-				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
-				int handle = particles.materialHandle(i);
-				ChemicalParcelStore.SplitPlan chemicalPlan = chemicalParcels == null ? null
-						: chemicalParcels.planTruncate(i, newVolume, previousVolume - newVolume,
-						newMass, previousMass - newMass);
-				FlipThermalState.Truncation thermalPlan = planThermalTruncate(i, newMass,
-						chemicalPlan == null ? null : chemicalPlan.kept(),
-						thermalState == null ? Double.NaN : thermalMarkerTemperature(i));
-				plan.add(new ExtractionAllocation(i, newVolume, newMass, chemicalPlan, thermalPlan));
-				changedHandles.add(handle);
-				remaining -= actual;
+				result.add(new MaterialPortion(material, volume[material], mass[material]));
 			}
+			return List.copyOf(result);
 		}
-		if (remaining > settlementTolerance) return new ExactMixtureTransfer(false, List.of());
-		for (ExtractionAllocation allocation : plan) {
-			if (chemicalParcels != null && allocation.chemicalPlan().kept() != null) {
-				chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
-			}
-			particles.setVolume(allocation.particle(), allocation.newVolume());
-			particles.setMass(allocation.particle(), allocation.newMass());
-			commitThermalTruncate(allocation.particle(), allocation.thermalPlan());
-		}
-		// Do not compact during indexed writes: removeParticle swaps the last marker into the current
-		// index and could invalidate a later planned ordinal. Compact only after every ledger edit.
-		for (int particle = particles.count() - 1; particle >= 0; particle--) {
-			if (particles.volume(particle) == 0.0F) removeParticle(particle);
-		}
-		gridDirty = true;
-		double[] volumeAfter = new double[ledgerSize];
-		double[] massAfter = new double[ledgerSize];
-		for (int particle = 0; particle < particles.count(); particle++) {
-			volumeAfter[particles.materialHandle(particle)] += particles.volume(particle);
-			massAfter[particles.materialHandle(particle)] += particles.mass(particle);
-		}
-		List<MaterialPortion> result = new java.util.ArrayList<>(changedHandles.size());
-		for (int handle : changedHandles) {
-			double removedVolume = volumeBefore[handle] - volumeAfter[handle];
-			double removedMass = massBefore[handle] - massAfter[handle];
-			if (removedVolume > 0.0 && removedMass > 0.0) {
-				result.add(new MaterialPortion(handle, removedVolume, removedMass));
-			}
-		}
-		double removedEnergy = thermalState == null ? 0.0 : SignedDyadic.sum(plan.stream()
-				.mapToDouble(allocation -> allocation.thermalPlan().removedEnergy()).toArray()).toDouble();
-		return new ExactMixtureTransfer(true, List.copyOf(result), removedEnergy);
-}
+	}
+
 	private static final class RemovedThermalEnergy {
 		private SignedDyadic value = SignedDyadic.ZERO;
 		private void add(double energy) { value = value.add(SignedDyadic.of(energy)); }
@@ -6906,7 +6735,7 @@ ChemicalMixtureRecord mixture, boolean indicator
 spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, indicator);
 }
 
-	private float removeParticlesInCell(int cellX, int cellY, int cellZ, float maximum) {
+	float removeParticlesInCell(int cellX, int cellY, int cellZ, float maximum) {
 		ChemicalTransferLedger.Builder removedChemistry = chemicalParcels == null ? null
 				: ChemicalTransferLedger.builder(chemicalParcels.registry());
 		float removed = removeParticlesInCell(cellX, cellY, cellZ, maximum, removedChemistry);
@@ -6921,7 +6750,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 		return removeParticlesInCell(cellX, cellY, cellZ, maximum, removedChemistry, null, null);
 	}
 
-	private float removeParticlesInCell(
+	float removeParticlesInCell(
 			int cellX, int cellY, int cellZ, float maximum,
 			ChemicalTransferLedger.Builder removedChemistry,
 			RemovedMaterialLedger removedMaterials, RemovedThermalEnergy removedThermal
@@ -7031,7 +6860,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 		return exact;
 	}
 
-	private void removeParticle(int index) {
+	void removeParticle(int index) {
 		coordinator.swapRemoveMarker(
 				CarrierMutationPlan.swapRemove(carrierMutationRevision(), particles.count(), index), false);
 	}
