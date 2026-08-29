@@ -52,12 +52,10 @@ final class DomainInventoryLifecyclePlanner {
 		}
 		FlipFluidDomain.CondensedClearPlan condensed = domain.planRemoveAllCondensedExact();
 		FlipFluidDomain.GranularClearPlan granular = planGranularClear();
-		FlipFluidDomain.GasTopologyPlan gasTopology = null;
+		GasTopologyCoordinator.GasTopologyPlan gasTopology = null;
 		if (domain.gasState.cellNodeId != null && !domain.gasState.operatorVentedTopology) {
 			domain.ensureGrid();
-			gasTopology = domain.planGasTopology(domain.airScanner.scan(
-					domain.geometry.solid, new int[domain.cellCount], new double[domain.cellCount],
-					domain.geometry.cutCells, null, domain.gasState.sealedDomainBoundary));
+			gasTopology = domain.gasTopologyCoordinator.planFromFreshScan();
 		}
 		return new FlipFluidDomain.OperatorClearPlan(condensed, granular, gasTopology);
 	}

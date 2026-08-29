@@ -95,6 +95,7 @@ public final class FlipFluidDomain {
 	private final MaterialTransferPlanner transferPlanner;
 	private final GranularTransferPlanner granularTransferPlanner;
 	private final DomainInventoryLifecyclePlanner lifecyclePlanner;
+	final GasTopologyCoordinator gasTopologyCoordinator;
 	private final FlipPressurePhaseGeometry pressurePhaseGeometry;
 	final FlipFreeSurfaceGeometry freeSurfaceGeometry;
 	private final FlipParticleReseeder particleReseeder;
@@ -115,7 +116,6 @@ public final class FlipFluidDomain {
 	ChemicalParcelStore chemicalParcels;
 	private int[] chemicalPreviousCells;
 	private int[] chemicalMovingMarkers;
-	final AirCavityScanner airScanner;
 	final GasDomainState gasState = new GasDomainState();
 	private final GasPressureBoundary gasBoundary = new GasPressureBoundary(this);
 	private CollisionEditPlan activeCollisionPlan;
@@ -135,7 +135,7 @@ public final class FlipFluidDomain {
 	private int[] granularReactivePreviousCells;
 	GranularCouplingFields granularCoupling;
 	private GranularCouplingFields granularNextCoupling;
-	private GranularCouplingFields pressureGranularCoupling;
+	GranularCouplingFields pressureGranularCoupling;
 	FlipGranularCollision granularCollision;
 	int[] granularCarrierMaterialByCell;
 	double[] granularCarrierVolumeByCell;
@@ -185,7 +185,6 @@ public final class FlipFluidDomain {
 		this.tension = new SurfaceTensionWorkspace(cellCount);
 		this.pendingPhaseCellVolume = new SignedDyadic[cellCount];
 		Arrays.fill(this.pendingPhaseCellVolume, SignedDyadic.ZERO);
-		this.airScanner = new AirCavityScanner(sizeX, sizeY, sizeZ, config.cellSize(), cellCount);
 		this.thermalMarkers = createThermalMarkerContext();
 		this.metrics = new DomainMetrics(this);
 		this.cellInventory = new CellInventoryReader(this);
@@ -195,6 +194,7 @@ public final class FlipFluidDomain {
 		this.clearPlanner = new CondensedInventoryClearPlanner(this);
 		this.granularTransferPlanner = new GranularTransferPlanner(this);
 		this.lifecyclePlanner = new DomainInventoryLifecyclePlanner(this);
+		this.gasTopologyCoordinator = new GasTopologyCoordinator(this);
 	}
 
 	public int sizeX() { return sizeX; }
@@ -233,75 +233,16 @@ public final class FlipFluidDomain {
 
 	/** Initializes gas topology from current carrier geometry and books sealed ambient source once. */
 	public GasStateSnapshot bootstrapGasState(String chemicalRegistryFingerprint) {
-		ensureGrid();
-		refreshGasTopology();
-		return exportGasState(chemicalRegistryFingerprint);
+		return gasTopologyCoordinator.bootstrap(chemicalRegistryFingerprint);
 	}
 
 	public GasStateSnapshot exportGasState(String chemicalRegistryFingerprint) {
-		if (gasState.cellNodeId == null) throw new IllegalStateException("Gas topology has not been explicitly initialized");
-		if (!gasState.network.auditClosed()) throw new IllegalStateException("Gas component audit does not close");
-		return GasStateSnapshot.capture(sizeX, sizeY, sizeZ, gasState.cellNodeId, gasState.network,
-				chemicalRegistryFingerprint == null ? "" : chemicalRegistryFingerprint, gasState.operatorVentedTopology);
+		return gasTopologyCoordinator.export(chemicalRegistryFingerprint);
 	}
 
 	/** Restores complete gas truth after its matching liquid/material state. */
 	public void restoreGasState(GasStateSnapshot state, GasRegistry registry) {
-		if (state == null || registry == null || state.sizeX() != sizeX || state.sizeY() != sizeY || state.sizeZ() != sizeZ
-				|| !state.registryFingerprint().equals(registry.fingerprint())) {
-			throw new IllegalArgumentException("Gas restore identity/dimensions mismatch");
-		}
-		if (gasState.cellNodeId != null || gasState.network.nodeCount() != 0) {
-			throw new IllegalStateException("Gas restore requires an uninitialized topology");
-		}
-		ensureGrid();
-		AirCavityScanner.Result result = gasState.sealedDomainBoundary
-				? airScanner.scanRetainingClosedLineages(geometry.solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, geometry.cutCells,
-						pressureGranularCoupling, state.cellNodeOrdinal(), state.nodes().size())
-				: airScanner.scan(geometry.solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, geometry.cutCells,
-						pressureGranularCoupling, false);
-		int[] expected = state.cellNodeOrdinal(), actual = result.cellNodeId();
-		boolean ventedAmbient = state.operatorVentedTopology();
-		if (ventedAmbient && !state.nodes().isEmpty()) {
-			throw new IllegalArgumentException("Operator-vented gas state contains sealed inventory");
-		}
-		if (!ventedAmbient && result.sealedNodeCount() != state.nodes().size()) {
-			throw new IllegalArgumentException("Restored gas sealed-node count does not match derived topology");
-		}
-		for (int cell = 0; cell < cellCount; cell++) {
-			int derived = actual[cell] > 0 ? actual[cell] : 0;
-			if (!ventedAmbient && expected[cell] != derived) throw new IllegalArgumentException(
-					"Restored gas topology differs from committed membership at cell " + cell);
-			if (ventedAmbient && expected[cell] != 0) throw new IllegalArgumentException(
-					"Operator-vented gas topology contains a sealed membership");
-		}
-		for (int node = 0; node < state.nodes().size(); node++) {
-			int minimum = Integer.MAX_VALUE;
-			for (int cell = 0; cell < expected.length; cell++) if (expected[cell] == node + 1) minimum = Math.min(minimum, cell);
-			if (minimum != state.nodes().get(node).topologyKey()) {
-				throw new IllegalArgumentException("Restored gas topology key mismatch");
-			}
-		}
-		AirNetwork restored = new AirNetwork(registry);
-		restored.restoreNodes(ventedAmbient ? new double[0] : result.sealedAvailableVolume(),
-				state.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
-				state.externalSource(), state.escapedSink(), state.massRoundoff(), state.residualRoundoff());
-		for (AirCavityScanner.GeometricEdge edge : ventedAmbient ? List.<AirCavityScanner.GeometricEdge>of()
-				: result.geometricEdges()) {
-			restored.addOrMergeEdge(edge.firstNode(), edge.secondNode(), edge.areaSquareMeters(), 0.65);
-		}
-		gasState.network = restored;
-		gasState.cellNodeId = actual;
-		gasState.cellLineageNodeId = result.cellLineageNodeId();
-		if (ventedAmbient) {
-			for (int cell = 0; cell < cellCount; cell++) {
-				if (gasState.cellNodeId[cell] > 0) gasState.cellNodeId[cell] = AirNetwork.AMBIENT_NODE;
-				if (gasState.cellLineageNodeId[cell] > 0) gasState.cellLineageNodeId[cell] = AirNetwork.AMBIENT_NODE;
-			}
-		}
-		gasState.previousSealedNodeCount = ventedAmbient ? 0 : result.sealedNodeCount();
-		gasState.pressureActive = gasState.previousSealedNodeCount > 0;
-		gasState.operatorVentedTopology = ventedAmbient;
+		gasTopologyCoordinator.restore(state, registry);
 	}
 
 	/** True when the current grid contains at least one sealed gas cavity with finite inventory. */
@@ -393,7 +334,7 @@ public final class FlipFluidDomain {
 		if (activeCollisionPlan != null) {
 			throw new IllegalStateException("Cannot capture while a collision transaction is active");
 		}
-		if (gasState.cellNodeId != null) synchronizeGasTopologyForPersistence();
+		if (gasState.cellNodeId != null) gasTopologyCoordinator.synchronizeForPersistence();
 		FlipParticleState pure = null;
 		FlipMaterialParticleState materials = null;
 		FlipChemicalParticleState chemicals = null;
@@ -952,7 +893,7 @@ public final class FlipFluidDomain {
 			throw new IllegalArgumentException("Thermal registry chemical dependency mismatch");
 		}
 		ensureGrid();
-		if (!gasState.operatorVentedTopology) refreshGasTopology();
+		if (!gasState.operatorVentedTopology) gasTopologyCoordinator.refresh();
 		thermalState = new FlipThermalState(registry, materialRegistry, initialTemperatureK,
 				particles.capacity(), sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), gasState.network,
 				maximumTransportSubsteps);
@@ -1238,7 +1179,7 @@ public final class FlipFluidDomain {
 		if (maximumOperations < 0 || maximumOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
 			throw new IllegalArgumentException("Gas phase operation budget is invalid");
 		}
-		ensureGrid(); refreshGasTopology();
+		ensureGrid(); gasTopologyCoordinator.refresh();
 		if (!phaseGridPrepared) thermalState.preparePhaseScan(thermalMarkerContext());
 		GasLiquidPhaseModel phase = thermalState.gasLiquidPhase(gasState.network);
 		HashMap<GasPhaseDirectionKey, GasLiquidPhaseModel.Direction> stepDirections = new HashMap<>();
@@ -3213,7 +3154,7 @@ public final class FlipFluidDomain {
 		if (plan == null) throw new IllegalArgumentException("Operator clear plan is missing");
 		CondensedClear condensed = commitRemoveAllCondensedExact(plan.condensed());
 		GranularClear granular = commitRemoveAllGranularExact(plan.granular());
-		if (plan.gasTopology != null) commitGasTopology(plan.gasTopology);
+		if (plan.gasTopology != null) gasTopologyCoordinator.commit(plan.gasTopology);
 		return new OperatorClear(condensed, granular);
 	}
 
@@ -3265,10 +3206,11 @@ public final class FlipFluidDomain {
 	public static final class OperatorClearPlan {
 		private final CondensedClearPlan condensed;
 		private final GranularClearPlan granular;
-		private final GasTopologyPlan gasTopology;
+		private final GasTopologyCoordinator.GasTopologyPlan gasTopology;
 
 		OperatorClearPlan(
-				CondensedClearPlan condensed, GranularClearPlan granular, GasTopologyPlan gasTopology
+				CondensedClearPlan condensed, GranularClearPlan granular,
+				GasTopologyCoordinator.GasTopologyPlan gasTopology
 		) {
 			this.condensed = condensed;
 			this.granular = granular;
@@ -3578,7 +3520,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			if (captureMechanicalAudit) mechanicalAudit.particleToGridTransferJoules +=
 					stageKineticEnergy - particleKineticEnergyJoules();
 			try {
-				updateGasNetwork(dt);
+				gasTopologyCoordinator.step(dt);
 			} catch (GasTopologyBlockedException blocked) {
 				throw blocked;
 			} catch (IllegalArgumentException | IllegalStateException invalidGasThermal) {
@@ -3871,7 +3813,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	) {
 		if (carrierTopologyChanged) {
 			rebuildGasPhaseGeometryFromParticles();
-			refreshGasTopology();
+			gasTopologyCoordinator.refresh();
 			return;
 		}
 		if (changedCell < 0 || changedCell >= cellCount || !Double.isFinite(markerVolumeDelta)) {
@@ -3882,7 +3824,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			throw new IllegalStateException("Stable gas phase edit produced invalid liquid volume");
 		}
 		markerGrid.exactCellMarkerVolume[changedCell] = updatedVolume;
-		refreshGasAvailableVolume();
+		gasTopologyCoordinator.refreshAvailableVolume();
 	}
 
 	private void extrapolateVelocityIntoAir() {
@@ -3892,29 +3834,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				mac.velocityValidX, mac.velocityValidY, mac.velocityValidZ,
 				mac.velocityWeightX, mac.velocityWeightY, mac.velocityWeightZ
 		);
-	}
-
-	/**
-	 * Refreshes the gas network from the current grid: rescans cavity topology, transfers
-	 * sealed inventories onto the new slots (majority mapping, proportional split with exact
-	 * remainder on a genuine pinch), refreshes available volumes and geometric orifice edges,
-	 * then advances finite-rate orifice transport. New cavities start at ambient equilibrium;
-	 * a cavity that opens to ambient or vanishes under liquid vents through the remap ledger.
-	 */
-	private void updateGasNetwork(float dt) {
-		refreshGasTopology();
-		if (!gasState.pressureActive) return;
-		if (thermalState == null || !thermalState.gasModelBound()) gasState.network.stepEdges(dt);
-		else gasState.network.stepEdges(dt, new AirNetwork.NodeThermodynamics() {
-			@Override public double gaugePressure(int nodeId) {
-				return nodeId == AirNetwork.AMBIENT_NODE ? 0.0 : thermalState.gasGaugePressure(nodeId, gasState.network);
-			}
-			@Override public double density(int nodeId) {
-				return nodeId == AirNetwork.AMBIENT_NODE ? AirNetwork.AIR_DENSITY
-						: thermalState.gasDensity(nodeId, gasState.network);
-			}
-		}, (source, target, moved, sourceAfter, targetAfter) -> thermalState.planGasTransfer(
-				source, target, moved, sourceAfter, targetAfter, gasState.network));
 	}
 
 	/** Runs the non-motion logical axis while a region is hydrostatically asleep. */
@@ -3981,190 +3900,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			GasThermalPhaseStats gasPhase
 	) { }
 
-	private void refreshGasTopology() {
-		AirCavityScanner.Result result = gasState.sealedDomainBoundary && gasState.cellLineageNodeId != null
-				? airScanner.scanRetainingClosedLineages(geometry.solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, geometry.cutCells,
-						pressureGranularCoupling, gasState.cellLineageNodeId, gasState.previousSealedNodeCount)
-				: airScanner.scan(geometry.solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, geometry.cutCells,
-						pressureGranularCoupling, gasState.sealedDomainBoundary);
-		commitGasTopology(planGasTopology(result));
-	}
-
-	/** Preserves node membership while updating continuous cavity volume and its adiabatic work candidate. */
-	private void refreshGasAvailableVolume() {
-		if (gasState.cellNodeId == null || gasState.cellLineageNodeId == null
-				|| gasState.previousSealedNodeCount != gasState.network.nodeCount()) {
-			throw new IllegalStateException("Stable gas topology is unavailable");
-		}
-		double[] availableVolumes = airScanner.measureSealedAvailableVolumes(
-				geometry.solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, geometry.cutCells, pressureGranularCoupling,
-				gasState.cellNodeId, gasState.cellLineageNodeId, gasState.previousSealedNodeCount, gasState.sealedDomainBoundary);
-		ArrayList<GasInventory> inventories = new ArrayList<>(gasState.previousSealedNodeCount);
-		double[] mixedEnergy = new double[gasState.previousSealedNodeCount];
-		double[] inheritedAvailable = new double[gasState.previousSealedNodeCount];
-		for (int node = 1; node <= gasState.previousSealedNodeCount; node++) {
-			inventories.add(gasState.network.inventory(node));
-			mixedEnergy[node - 1] = thermalState.gasNodeEnergy(node, gasState.network);
-			inheritedAvailable[node - 1] = gasState.network.availableVolume(node);
-		}
-		FlipThermalState.GasRemapPlan thermalPlan = thermalState.planGasRemap(
-				gasState.network, inventories, availableVolumes, mixedEnergy, inheritedAvailable, 0.0, 0.0);
-		AirNetwork.RemapPlan gasPlan = gasState.network.planRemapNodes(
-				availableVolumes, inventories, GasInventory.EMPTY, GasInventory.EMPTY, gasState.network.edges());
-		thermalState.commitGasRemap(thermalPlan);
-		gasState.network.commitRemapNodes(gasPlan);
-	}
-
-	/** Builds the complete gas/energy topology candidate before any owner is mutated. */
-	GasTopologyPlan planGasTopology(AirCavityScanner.Result result) {
-		int sealed = result.sealedNodeCount();
-		boolean initialBootstrap = gasState.cellNodeId == null;
-		if (gasState.sealedDomainBoundary && !initialBootstrap
-				&& result.stopReason() != AirCavityScanner.StopReason.COMPLETED) {
-			throw new GasTopologyBlockedException("Closed gas topology scan exhausted its budget");
-		}
-		boolean thermalGas = thermalState != null && thermalState.gasModelBound();
-		double[] availableVolumes = result.sealedAvailableVolume();
-		ArrayList<GasInventory> inventories = new ArrayList<>(sealed);
-		for (int node = 0; node < sealed; node++) inventories.add(GasInventory.EMPTY);
-		GasInventory sourceDelta = GasInventory.EMPTY;
-		GasInventory sinkDelta = GasInventory.EMPTY;
-		double[] mixedEnergy = thermalGas ? new double[sealed] : null;
-		double[] inheritedAvailable = thermalGas ? new double[sealed] : null;
-		double sourceEnergy = 0.0, sinkEnergy = 0.0;
-		if (gasState.previousSealedNodeCount > 0 && sealed > 0) {
-			int previous = gasState.previousSealedNodeCount;
-			TreeMap<Long, Long> overlap = new TreeMap<>();
-			boolean[] hasMembershipOverlap = new boolean[previous + 1];
-			boolean[] newNodeHasMembershipOverlap = new boolean[sealed + 1];
-			int[] newMembership = result.cellNodeId();
-			int[] newLabels = result.cellLineageNodeId();
-			double[] cellAvailableVolume = result.cellAvailableVolume();
-			for (int cell = 0; cell < cellCount; cell++) {
-				int old = gasState.cellNodeId[cell];
-				if (old < 1) continue;
-				int now = newMembership[cell];
-				if (now < 0 || !(cellAvailableVolume[cell] > 0.0)) continue;
-				long key = ((long) old << 32) | (now & 0xffffffffL);
-				long weight = Math.max(1L, AirNetwork.nanos(cellAvailableVolume[cell]));
-				overlap.merge(key, weight, Math::addExact);
-				hasMembershipOverlap[old] = true;
-				if (now > 0) newNodeHasMembershipOverlap[now] = true;
-			}
-			// A newly full-air child can have no same-cell membership overlap when its cell was an
-			// interface residual in the previous topology. It inherits only from provably adjacent
-			// runtime lineages; each old inventory is then split by actual child volume. With no old
-			// owner it is a vacuum cavity, never ambient inventory behind an unchanged closed shell.
-			// An old node that still owns an open cell keeps being matched by membership overlap, so
-			// a marker void flickering open inside the liquid bulk stays a vacuum cavity instead of
-			// siphoning a share of a headspace that never went anywhere.
-			boolean[] previousOwnsAirCell = previousNodesOwningAirCells(newMembership, cellAvailableVolume);
-			addAdjacentPreviousGasOverlaps(newMembership, newNodeHasMembershipOverlap,
-					availableVolumes, overlap, hasMembershipOverlap, previousOwnsAirCell);
-			// Runtime interface lineage is a fallback for a node whose full-air membership vanished
-			// completely. It must not siphon a still-present cavity into ambient as its liquid surface moves.
-			addDisappearingPreviousGasOverlaps(hasMembershipOverlap,
-					newMembership, newLabels, cellAvailableVolume, overlap);
-			if (gasState.sealedDomainBoundary) retainClosedOrphans(overlap, previous, sealed, availableVolumes);
-			boolean[] contributed = new boolean[sealed + 1];
-			for (int old = 1; old <= previous; old++) {
-				GasInventory inventory = gasState.network.inventory(old);
-				if (inventory.isEmpty()) continue;
-				Map<Long, Long> oldOverlap = overlap.subMap(
-						(long) old << 32, (long) (old + 1) << 32);
-				int destinations = oldOverlap.size();
-				if (destinations == 0) {
-					if (gasState.sealedDomainBoundary) {
-						throw new GasTopologyBlockedException("Closed gas inventory lost its topology lineage: "
-								+ gasTopologyLossDetail(old, newMembership, newLabels, cellAvailableVolume, sealed));
-					}
-					sinkDelta = sinkDelta.merge(inventory);
-					if (thermalGas) sinkEnergy += thermalState.gasNodeEnergy(old, gasState.network);
-					continue;
-				}
-				long[] weights = new long[destinations];
-				int weight = 0;
-				for (long available : oldOverlap.values()) weights[weight++] = available;
-				List<GasInventory> parts = inventory.partition(weights);
-				double[] partEnergy = !thermalGas ? null
-						: thermalState.partitionGasNodeEnergy(old, parts, gasState.network);
-				double[] partAvailable = !thermalGas ? null
-						: partitionTopologyVolume(gasState.network.availableVolume(old), weights);
-				int part = 0;
-				for (Map.Entry<Long, Long> entry : oldOverlap.entrySet()) {
-					int node = (int) (entry.getKey() & 0xffffffffL);
-					if (node == AirNetwork.AMBIENT_NODE) {
-						sinkDelta = sinkDelta.merge(parts.get(part));
-						if (thermalGas) sinkEnergy += partEnergy[part];
-					} else {
-						inventories.set(node - 1, inventories.get(node - 1).merge(parts.get(part)));
-						if (thermalGas) {
-							mixedEnergy[node - 1] += partEnergy[part];
-							inheritedAvailable[node - 1] += partAvailable[part];
-						}
-						contributed[node] = true;
-					}
-					part++;
-				}
-			}
-			for (int node = 1; node <= sealed; node++) {
-				if (!contributed[node]) {
-					if (gasState.sealedDomainBoundary) {
-						if (thermalGas) inheritedAvailable[node - 1] = availableVolumes[node - 1];
-						continue;
-					}
-					GasInventory created = gasState.network.ambientInventory(
-							Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1])));
-					inventories.set(node - 1, created);
-					sourceDelta = sourceDelta.merge(created);
-					if (thermalGas) {
-						mixedEnergy[node - 1] = thermalState.ambientGasEnergy(created);
-						inheritedAvailable[node - 1] = availableVolumes[node - 1];
-						sourceEnergy += mixedEnergy[node - 1];
-					}
-				}
-			}
-		} else {
-			if (gasState.previousSealedNodeCount > 0) {
-				for (int node = 1; node <= gasState.previousSealedNodeCount; node++) {
-					if (gasState.sealedDomainBoundary && !gasState.network.inventory(node).isEmpty()) {
-						throw new GasTopologyBlockedException("Closed gas inventory has no available cavity volume");
-					}
-					sinkDelta = sinkDelta.merge(gasState.network.inventory(node));
-					if (thermalGas) sinkEnergy += thermalState.gasNodeEnergy(node, gasState.network);
-				}
-			}
-			for (int node = 1; node <= sealed; node++) {
-				if (gasState.sealedDomainBoundary && !initialBootstrap) {
-					if (thermalGas) inheritedAvailable[node - 1] = availableVolumes[node - 1];
-					continue;
-				}
-				GasInventory created = gasState.network.ambientInventory(
-						Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1])));
-				inventories.set(node - 1, created);
-				sourceDelta = sourceDelta.merge(created);
-				if (thermalGas) {
-					mixedEnergy[node - 1] = thermalState.ambientGasEnergy(created);
-					inheritedAvailable[node - 1] = availableVolumes[node - 1];
-					sourceEnergy += mixedEnergy[node - 1];
-				}
-			}
-		}
-		if (gasState.sealedDomainBoundary && !initialBootstrap
-				&& (!sourceDelta.isEmpty() || !sinkDelta.isEmpty())) {
-			throw new GasTopologyBlockedException("Closed gas topology attempted an external source or sink");
-		}
-		FlipThermalState.GasRemapPlan thermalPlan = !thermalGas ? null : thermalState.planGasRemap(
-				gasState.network, inventories, availableVolumes, mixedEnergy, inheritedAvailable, sourceEnergy, sinkEnergy);
-		ArrayList<AirEdge> edges = new ArrayList<>(result.geometricEdges().size());
-		for (AirCavityScanner.GeometricEdge edge : result.geometricEdges()) {
-			edges.add(new AirEdge(edge.firstNode(), edge.secondNode(), edge.areaSquareMeters(), 0.65));
-		}
-		AirNetwork.RemapPlan gasPlan = gasState.network.planRemapNodes(
-				availableVolumes, inventories, sourceDelta, sinkDelta, edges);
-		return new GasTopologyPlan(result, gasPlan, thermalPlan);
-	}
-
 	/**
 	 * Reports which previous nodes still own at least one open cell in the new topology.
 	 *
@@ -4173,181 +3908,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	 * component. That keeps a transient marker void in the liquid bulk from being treated as a
 	 * descendant of the headspace; a new cavity with no old owner is an explicit vacuum node.</p>
 	 */
-	private boolean[] previousNodesOwningAirCells(int[] newMembership, double[] cellAvailableVolume) {
-		boolean[] owns = new boolean[gasState.previousSealedNodeCount + 1];
-		for (int cell = 0; cell < cellCount; cell++) {
-			if (newMembership[cell] < 0 || !(cellAvailableVolume[cell] > 0.0)) continue;
-			int previous = rawGasNodeOfCell(cell);
-			if (previous >= 1 && previous <= gasState.previousSealedNodeCount) owns[previous] = true;
-		}
-		return owns;
-	}
-
-	/** Adds each old lineage touching a newly full-air child in one bounded cell pass. */
-	private void addAdjacentPreviousGasOverlaps(
-			int[] newMembership, boolean[] newNodeHasMembershipOverlap, double[] availableVolumes,
-			TreeMap<Long, Long> overlap, boolean[] hasMembershipOverlap, boolean[] previousOwnsAirCell
-	) {
-		TreeSet<Long> adjacentPairs = new TreeSet<>();
-		for (int cell = 0; cell < cellCount; cell++) {
-			int newNode = newMembership[cell];
-			if (newNode < 1 || newNodeHasMembershipOverlap[newNode]) continue;
-			int sameCellOwner = gasState.cellLineageNodeId[cell];
-			if (sameCellOwner > 0 && !previousOwnsAirCell[sameCellOwner]) {
-				adjacentPairs.add(gasOverlapKey(sameCellOwner, newNode));
-			}
-			int x = cell % sizeX;
-			int yz = cell / sizeX;
-			int y = yz % sizeY;
-			int z = yz / sizeY;
-			for (int axis = 0; axis < 3; axis++) for (int direction = -1; direction <= 1; direction += 2) {
-				int nx = x + (axis == 0 ? direction : 0);
-				int ny = y + (axis == 1 ? direction : 0);
-				int nz = z + (axis == 2 ? direction : 0);
-				if (nx < 0 || nx >= sizeX || ny < 0 || ny >= sizeY || nz < 0 || nz >= sizeZ) continue;
-				if (openFaceFromCell(cell, nx - x, ny - y, nz - z) <= 0.0F) continue;
-				int adjacentOwner = gasState.cellLineageNodeId[cellIndex(nx, ny, nz)];
-				if (adjacentOwner > 0 && !previousOwnsAirCell[adjacentOwner]) {
-					adjacentPairs.add(gasOverlapKey(adjacentOwner, newNode));
-				}
-			}
-		}
-		for (long key : adjacentPairs) {
-			int old = (int) (key >>> 32);
-			int newNode = (int) key;
-			long weight = Math.max(1L, AirNetwork.nanos(availableVolumes[newNode - 1]));
-			overlap.merge(key, weight, Math::addExact);
-			hasMembershipOverlap[old] = true;
-			newNodeHasMembershipOverlap[newNode] = true;
-		}
-	}
-
-	/** Returns every fully vanished old child in one pass over its previous interface cells. */
-	private void addDisappearingPreviousGasOverlaps(
-			boolean[] hasMembershipOverlap, int[] newMembership, int[] newLabels,
-			double[] cellAvailableVolume, TreeMap<Long, Long> overlap
-	) {
-		for (int cell = 0; cell < cellCount; cell++) {
-			int old = gasState.cellLineageNodeId[cell];
-			if (old < 1 || hasMembershipOverlap[old]) continue;
-			addGasOverlapDestination(old, newMembership[cell] >= 0 ? newMembership[cell] : newLabels[cell],
-					cellAvailableVolume[cell], overlap);
-			int x = cell % sizeX;
-			int yz = cell / sizeX;
-			int y = yz % sizeY;
-			int z = yz / sizeY;
-			for (int axis = 0; axis < 3; axis++) for (int direction = -1; direction <= 1; direction += 2) {
-				int nx = x + (axis == 0 ? direction : 0);
-				int ny = y + (axis == 1 ? direction : 0);
-				int nz = z + (axis == 2 ? direction : 0);
-				if (nx < 0 || nx >= sizeX || ny < 0 || ny >= sizeY || nz < 0 || nz >= sizeZ) continue;
-				if (openFaceFromCell(cell, nx - x, ny - y, nz - z) <= 0.0F) continue;
-				int neighbor = cellIndex(nx, ny, nz);
-				int now = newMembership[neighbor] >= 0 ? newMembership[neighbor] : newLabels[neighbor];
-				addGasOverlapDestination(old, now, cellAvailableVolume[neighbor], overlap);
-			}
-		}
-	}
-
 	/**
-	 * Hands inventory that lost every topological destination to the cavities that still exist.
-	 *
-	 * <p>A sealed shell cannot lose gas. When a node's cells end up carrying no air volume at all -
-	 * a pocket the carrier closed over, or a headspace fragment it crushed - the scan gives it no
-	 * destination, but `normalizeClosedCapacity` has already reassigned its capacity to the cavities
-	 * that remain. The inventory travels with that capacity, weighted the same way, instead of being
-	 * reported as lost.</p>
-	 *
-	 * <p>This is deliberately not a judgement about what the node used to be. A bubble pinched off by
-	 * the carrier, a headspace split by a rising surface and a carrier void that flickered shut are
-	 * all the same event here: gas in a closed volume whose cavity is gone. Only conservation decides
-	 * where it goes.</p>
-	 */
-	private void retainClosedOrphans(
-			TreeMap<Long, Long> overlap, int previous, int sealed, double[] availableVolumes
-	) {
-		boolean[] orphaned = new boolean[previous + 1];
-		for (int old = 1; old <= previous; old++) {
-			orphaned[old] = !gasState.network.inventory(old).isEmpty()
-					&& overlap.subMap((long) old << 32, (long) (old + 1) << 32).isEmpty();
-		}
-		for (int old = 1; old <= previous; old++) {
-			if (!orphaned[old]) continue;
-			for (int node = 1; node <= sealed; node++) {
-				overlap.merge(gasOverlapKey(old, node),
-						Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1])), Math::addExact);
-			}
-		}
-	}
-
-	private static void addGasOverlapDestination(
-			int old, int now, double availableVolume, TreeMap<Long, Long> overlap
-	) {
-		if (now < 0 || !(availableVolume > 0.0)) return;
-		long key = gasOverlapKey(old, now);
-		long weight = Math.max(1L, AirNetwork.nanos(availableVolume));
-		overlap.merge(key, weight, Math::addExact);
-	}
-
-	private static long gasOverlapKey(int old, int now) {
-		return ((long) old << 32) | (now & 0xffffffffL);
-	}
-
-	private String gasTopologyLossDetail(
-			int old, int[] newMembership, int[] newLabels, double[] cellAvailableVolume, int sealed
-	) {
-		int oldMembers = 0, oldLineage = 0, becameLiquid = 0, becameAmbient = 0;
-		int lineageLiquid = 0, lineageAmbient = 0, lineageSealed = 0;
-		double lineageAvailable = 0.0;
-		for (int cell = 0; cell < cellCount; cell++) {
-			if (gasState.cellNodeId[cell] == old) {
-				oldMembers++;
-				if (newMembership[cell] < 0) becameLiquid++;
-				else if (newMembership[cell] == AirNetwork.AMBIENT_NODE) becameAmbient++;
-			}
-			if (gasState.cellLineageNodeId[cell] != old) continue;
-			oldLineage++;
-			lineageAvailable += cellAvailableVolume[cell];
-			if (newLabels[cell] < 0) lineageLiquid++;
-			else if (newLabels[cell] == AirNetwork.AMBIENT_NODE) lineageAmbient++;
-			else lineageSealed++;
-		}
-		return "old=" + old + ", previousNodes=" + gasState.previousSealedNodeCount + ", newNodes=" + sealed
-				+ ", oldMembers=" + oldMembers + ", oldLineage=" + oldLineage
-				+ ", memberLiquid=" + becameLiquid + ", memberAmbient=" + becameAmbient
-				+ ", lineageLiquid=" + lineageLiquid + ", lineageAmbient=" + lineageAmbient
-				+ ", lineageSealed=" + lineageSealed + ", lineageAvailable=" + lineageAvailable
-				+ ", inventoryNanos=" + gasState.network.inventory(old).standardVolumeNanos();
-	}
-
-	/** Publishes a fully planned topology; all fallible physics and ledger work happened above. */
-	private void commitGasTopology(GasTopologyPlan plan) {
-		if (plan.thermalPlan() != null) thermalState.commitGasRemap(plan.thermalPlan());
-		gasState.network.commitRemapNodes(plan.gasPlan());
-		AirCavityScanner.Result result = plan.scan();
-		int sealed = result.sealedNodeCount();
-		gasState.cellNodeId = result.cellNodeId();
-		gasState.cellLineageNodeId = result.cellLineageNodeId();
-		gasState.previousSealedNodeCount = sealed;
-		gasState.pressureActive = sealed > 0;
-	}
-
-	record GasTopologyPlan(
-			AirCavityScanner.Result scan,
-			AirNetwork.RemapPlan gasPlan,
-			FlipThermalState.GasRemapPlan thermalPlan
-	) { }
-
-	/**
-	 * Brings the derived gas topology to the same carrier geometry that a checkpoint will encode.
-	 * Marker advection and end-of-step reseeding may change the scanner topology after the last
-	 * mechanical gas update. Persistence must either commit this jointly planned remap or keep the
-	 * previous HEAD; it may never publish current markers beside a stale gas-node membership table.
+	 * Brings the derived gas topology to the same carrier geometry that a checkpoint will encode:
+	 * persistence must either commit this jointly planned remap or keep the previous HEAD.
 	 */
 	public void synchronizeGasTopologyForPersistence() {
-		if (gasState.operatorVentedTopology) return;
-		ensureGrid();
-		refreshGasTopology();
+		gasTopologyCoordinator.synchronizeForPersistence();
 	}
 
 	/** Gauge pressure of the sealed cavity owning an air cell; zero for ambient and inactive gas. */
@@ -4363,7 +3929,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return node >= 0 ? node : rawGasNodeOfCell(airCell);
 	}
 
-	private int rawGasNodeOfCell(int cell) {
+	int rawGasNodeOfCell(int cell) {
 		return gasBoundary.rawCellNode(cell);
 	}
 
@@ -4412,22 +3978,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private float gasPressureOfNode(int node) {
 		return (float) gasBoundary.nodeGaugePressurePa(node);
-	}
-
-	private static double[] partitionTopologyVolume(double total, long[] weights) {
-		long weightSum = 0L;
-		for (long weight : weights) weightSum = Math.addExact(weightSum, weight);
-		if (!(Double.isFinite(total) && total > 0.0) || weightSum <= 0L) {
-			throw new IllegalArgumentException("Gas topology volume partition is invalid");
-		}
-		double[] result = new double[weights.length];
-		double assigned = 0.0;
-		for (int index = 0; index < weights.length; index++) {
-			result[index] = index == weights.length - 1 ? total - assigned
-					: total * ((double) weights[index] / weightSum);
-			assigned += result[index];
-		}
-		return result;
 	}
 
 	int particleCellIndex(int particle) {
@@ -5892,7 +5442,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return 0.0;
 	}
 
-	private float openFaceFromCell(int cell, int directionX, int directionY, int directionZ) {
+	float openFaceFromCell(int cell, int directionX, int directionY, int directionZ) {
 		int x = cell % sizeX;
 		int yz = cell / sizeX;
 		int y = yz % sizeY;
