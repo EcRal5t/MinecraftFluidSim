@@ -111,7 +111,7 @@ public final class FlipFluidDomain {
 	final FlipVelocityExtrapolator velocityExtrapolator;
 	final float[] volume;
 	private boolean surfaceTensionActive;
-	private boolean liquidPairTensionActive;
+	boolean liquidPairTensionActive;
 	private static final int[][] SURFACE_TENSION_DIRECTIONS = {{-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0}, {0,0,-1}, {0,0,1}};
 
 	/** Frozen P2G face mass/volume weights; extrapolation reuses the live weight arrays as scratch. */
@@ -3561,7 +3561,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				mechanicalAudit.thermalBuoyancyWorkJoules += nextKineticEnergy - stageKineticEnergy;
 				stageKineticEnergy = nextKineticEnergy;
 			}
-			applyLiquidPairSurfaceTensionForce(dt);
+			bodyForceStage.applyLiquidPairSurfaceTensionForce(dt);
 			if (captureMechanicalAudit) {
 				nextKineticEnergy = gridKineticEnergyJoules();
 				mechanicalAudit.surfaceTensionWorkJoules += nextKineticEnergy - stageKineticEnergy;
@@ -4793,58 +4793,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	 * The force uses the same face density scaling as the variable-density pressure projection, and the
 	 * pressure RHS is built from the resulting velocity, so the pressure solve cancels the gradient part.
 	 */
-	private void applyLiquidPairSurfaceTensionForce(float dt) {
-		if (!liquidPairTensionActive) return;
-		float scale = dt / (config.density() * config.cellSize());
-		for (Map.Entry<Long, Double> entry : materialRegistry.liquidPairTensions().entrySet()) {
-			if (entry.getValue() <= 0.0) continue;
-			int secondPhase = (int) (entry.getKey() & 0xffffffffL);
-			applyLiquidPairSurfaceTensionPair(secondPhase, entry.getValue(), scale);
-		}
-	}
-
-	private void applyLiquidPairSurfaceTensionPair(int phaseB, double tensionScale, float scale) {
-		for (int index = 0; index < cellCount; index++) {
-			if (geometry.solid[index]) {
-				tension.surfaceTensionColor[index] = 0.0;
-				continue;
-			}
-			tension.surfaceTensionColor[index] = phaseFraction(index, phaseB);
-		}
-		smoothSurfaceTensionColor();
-		rebuildSurfaceTensionNormals();
-		Arrays.fill(tension.surfaceTensionPairCurvature, 0.0);
-		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
-			int index = cellIndex(x, y, z);
-			if (geometry.solid[index] || markerGrid.markerCount[index] == 0) continue;
-			tension.surfaceTensionPairCurvature[index] = surfaceTensionMeanCurvature(x, y, z);
-		}
-		float inverseCell = 1.0F / config.cellSize();
-		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
-			int left = cellIndex(x - 1, y, z), right = cellIndex(x, y, z), face = xFaceIndex(x, y, z);
-			applyLiquidPairFaceForce(left, right, face, tensionScale, scale, inverseCell, pressureXFaceOpen(x, y, z), mac.velocityX);
-		}
-		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
-			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z), face = yFaceIndex(x, y, z);
-			applyLiquidPairFaceForce(below, above, face, tensionScale, scale, inverseCell, pressureYFaceOpen(x, y, z), mac.velocityY);
-		}
-		for (int z = 1; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
-			int back = cellIndex(x, y, z - 1), front = cellIndex(x, y, z), face = zFaceIndex(x, y, z);
-			applyLiquidPairFaceForce(back, front, face, tensionScale, scale, inverseCell, pressureZFaceOpen(x, y, z), mac.velocityZ);
-		}
-	}
-
-	private void applyLiquidPairFaceForce(int first, int second, int face, double tensionScale, float scale,
-	                                      float inverseCell, float openArea, float[] velocity) {
-		if (openArea <= 0.0F || !isFluid(first) || !isFluid(second)) return;
-		double delta = tension.surfaceTensionSmoothed[second] - tension.surfaceTensionSmoothed[first];
-		if (Math.abs(delta) <= 1.0E-12) return;
-		float densityScale = variableDensityActive ? pressureDensityScale(first, second) : 1.0F;
-		double kappa = 0.5 * (tension.surfaceTensionPairCurvature[first] + tension.surfaceTensionPairCurvature[second]);
-		float forceDifference = (float) (tensionScale * kappa * delta);
-		velocity[face] += scale * densityScale * forceDifference;
-	}
-
 	/**
 	 * Liquid-gas surface tension for a pressure cell. Immiscible phases use the first registry material
 	 * of the dominant phase; miscible composition-dependent tension is not modelled yet.
@@ -4887,7 +4835,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 	}
 
-	private void smoothSurfaceTensionColor() {
+	void smoothSurfaceTensionColor() {
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int index = cellIndex(x, y, z);
 			double sum = 0.0;
@@ -4916,7 +4864,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	/** Unit interface normal at a cell centre, pointing from gas into liquid, computed once per cell into the cache. */
-	private void rebuildSurfaceTensionNormals() {
+	void rebuildSurfaceTensionNormals() {
 		double epsilon = 1.0E-6 / config.cellSize();
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int index = cellIndex(x, y, z);
@@ -5002,7 +4950,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	/** Mean curvature {@code kappa = -div(n)}; positive for a liquid sphere surrounded by gas. */
-	private double surfaceTensionMeanCurvature(int x, int y, int z) {
+	double surfaceTensionMeanCurvature(int x, int y, int z) {
 		double inverseTwoCell = 0.5 / config.cellSize();
 		double nxPlus = surfaceTensionNeighborNormal(x, y, z, 1, 0, 0, 0);
 		double nxMinus = surfaceTensionNeighborNormal(x, y, z, -1, 0, 0, 0);
@@ -5105,7 +5053,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return dominant;
 	}
 
-	private double phaseFraction(int cell, int phase) {
+	double phaseFraction(int cell, int phase) {
 		if (markerGrid.exactCellMarkerVolume[cell] <= 0.0) return 0.0;
 		for (int entry = markerGrid.cellPhaseHead[cell]; entry >= 0; entry = markerGrid.phaseEntryNext[entry]) {
 			if (markerGrid.phaseEntryLabel[entry] == phase) return markerGrid.phaseEntryVolume[entry] / markerGrid.exactCellMarkerVolume[cell];

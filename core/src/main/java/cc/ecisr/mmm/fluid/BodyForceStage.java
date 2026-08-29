@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import java.util.Map;
+
 import cc.ecisr.mmm.granular.GranularDepositStore;
 import cc.ecisr.mmm.granular.GranularLimits;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
@@ -94,6 +96,59 @@ final class BodyForceStage {
 			double relative = (domain.thermalBuoyancySum[below] + domain.thermalBuoyancySum[above]) / volumeSum;
 			domain.mac.velocityY[domain.yFaceIndex(x, y, z)] += (float) (scale * relative);
 		}
+	}
+
+	/** Balanced-force CSF momentum for every immiscible liquid pair with a positive sigma12. */
+	void applyLiquidPairSurfaceTensionForce(float dt) {
+		if (!domain.liquidPairTensionActive) return;
+		float scale = dt / (domain.config.density() * domain.config.cellSize());
+		for (Map.Entry<Long, Double> entry : domain.materialRegistry.liquidPairTensions().entrySet()) {
+			if (entry.getValue() <= 0.0) continue;
+			int secondPhase = (int) (entry.getKey() & 0xffffffffL);
+			applyLiquidPairSurfaceTensionPair(secondPhase, entry.getValue(), scale);
+		}
+	}
+
+	private void applyLiquidPairSurfaceTensionPair(int phaseB, double tensionScale, float scale) {
+		for (int index = 0; index < domain.cellCount; index++) {
+			if (domain.geometry.solid[index]) {
+				domain.tension.surfaceTensionColor[index] = 0.0;
+				continue;
+			}
+			domain.tension.surfaceTensionColor[index] = domain.phaseFraction(index, phaseB);
+		}
+		domain.smoothSurfaceTensionColor();
+		domain.rebuildSurfaceTensionNormals();
+		java.util.Arrays.fill(domain.tension.surfaceTensionPairCurvature, 0.0);
+		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
+			int index = domain.cellIndex(x, y, z);
+			if (domain.geometry.solid[index] || domain.markerGrid.markerCount[index] == 0) continue;
+			domain.tension.surfaceTensionPairCurvature[index] = domain.surfaceTensionMeanCurvature(x, y, z);
+		}
+		float inverseCell = 1.0F / domain.config.cellSize();
+		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 1; x < domain.sizeX; x++) {
+			int left = domain.cellIndex(x - 1, y, z), right = domain.cellIndex(x, y, z), face = domain.xFaceIndex(x, y, z);
+			applyLiquidPairFaceForce(left, right, face, tensionScale, scale, inverseCell, domain.pressureXFaceOpen(x, y, z), domain.mac.velocityX);
+		}
+		for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
+			int below = domain.cellIndex(x, y - 1, z), above = domain.cellIndex(x, y, z), face = domain.yFaceIndex(x, y, z);
+			applyLiquidPairFaceForce(below, above, face, tensionScale, scale, inverseCell, domain.pressureYFaceOpen(x, y, z), domain.mac.velocityY);
+		}
+		for (int z = 1; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
+			int back = domain.cellIndex(x, y, z - 1), front = domain.cellIndex(x, y, z), face = domain.zFaceIndex(x, y, z);
+			applyLiquidPairFaceForce(back, front, face, tensionScale, scale, inverseCell, domain.pressureZFaceOpen(x, y, z), domain.mac.velocityZ);
+		}
+	}
+
+	private void applyLiquidPairFaceForce(int first, int second, int face, double tensionScale, float scale,
+	                                      float inverseCell, float openArea, float[] velocity) {
+		if (openArea <= 0.0F || !domain.isFluid(first) || !domain.isFluid(second)) return;
+		double delta = domain.tension.surfaceTensionSmoothed[second] - domain.tension.surfaceTensionSmoothed[first];
+		if (Math.abs(delta) <= 1.0E-12) return;
+		float densityScale = domain.variableDensityActive ? domain.pressureDensityScale(first, second) : 1.0F;
+		double kappa = 0.5 * (domain.tension.surfaceTensionPairCurvature[first] + domain.tension.surfaceTensionPairCurvature[second]);
+		float forceDifference = (float) (tensionScale * kappa * delta);
+		velocity[face] += scale * densityScale * forceDifference;
 	}
 
 	void enforceSolidFaceVelocities() {
