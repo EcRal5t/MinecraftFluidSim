@@ -14,6 +14,7 @@
 | S04a | `MarkerGridIndex`/`MarkerGridBuilder` 接管派生 marker 网格（cell 归属链与计数、逐格精确体积/质量、重构密度、压力相 occupancy 条目）；per-marker 散射环整体保留在 builder 内以维持原浮点累加顺序 | `e74f8f2` |
 | S04b | `MacVelocityGrid`、`PressureProjectionWorkspace`、`SurfaceTensionWorkspace` 接管 MAC、PCG 与表面张力三类可丢弃 workspace；`MarkerGridBuilder` 与观察 reader 改经 owner 访问网格 | `56436fa` |
 | S04c | `DomainGeometry` 接管权威 solid mask 与 cut-cell 微几何；仅有的两个写点是碰撞编辑提交与 wholesale restore | `b7ca809` |
+| S05a | `MaterialTransferPlanner` 接管 pure/material/mixture 精确插入路径：共享容量规划、piece 推导、化学预算与外部 source ledger、热插入 plan 全部在 planning 阶段完成，提交段经 spawn→coordinator 写入且无业务拒答；public 重载链保留委托；提取（extract）半边待 S05b | `a6636ca` |
 
 ## 已定边界决策（审阅时按此为准）
 
