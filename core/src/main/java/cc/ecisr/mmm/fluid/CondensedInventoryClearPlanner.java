@@ -1,8 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
-import cc.ecisr.mmm.fluid.air.AirNetwork;
-import cc.ecisr.mmm.fluid.air.GasInventory;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
 import cc.ecisr.mmm.thermal.SignedDyadic;
@@ -12,10 +10,10 @@ import cc.ecisr.mmm.thermal.ThermalPhaseTransition;
 import java.util.List;
 
 /**
- * Plans the operator-level lifecycle clears against the live inventory without mutating any
- * authoritative column: the drained chemical ledger, coherent phase snapshot, granular clear
- * and sealed-gas vent plans are built here and committed later on the domain through the
- * carrier mutation coordinator. Every fallible audit check happens during planning.
+ * Plans the operator-level liquid/coherent condensed clears against the live inventory
+ * without mutating any authoritative column: the drained chemical ledger and coherent phase
+ * snapshot are built here and committed later on the domain through the carrier mutation
+ * coordinator. Every fallible audit check happens during planning.
  */
 final class CondensedInventoryClearPlanner {
 	private final FlipFluidDomain domain;
