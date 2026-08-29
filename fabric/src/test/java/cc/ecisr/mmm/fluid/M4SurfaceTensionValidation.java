@@ -175,7 +175,7 @@ particle++;
 }
 }
 domain.restoreParticleState(new FlipParticleState(16, 6, 4, config.cellSize(), particleCount,
-totalVolume, positionVolume, velocities, domain.copySolidMask()));
+totalVolume, positionVolume, velocities, domain.copyCollisionMicroMasks()));
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", config.density(), "mmm:test", sigma, contactAngleRadians)));
 for (int marker = 0; marker < domain.particleCount(); marker++) {
@@ -257,7 +257,7 @@ private record DropletMetrics(int contactCells, double centerOfMassY, float maxi
 			}
 		}
 		domain.restoreParticleState(new FlipParticleState(size, size, size, h, particleCount,
-				totalVolume, positionVolume, velocities, domain.copySolidMask()));
+				totalVolume, positionVolume, velocities, domain.copyCollisionMicroMasks()));
 		FluidMaterial a = new FluidMaterial("mmm:a", config.density(), "mmm:a", 0.0, Math.PI / 2.0);
 		FluidMaterial b = new FluidMaterial("mmm:b", config.density(), "mmm:b", 0.0, Math.PI / 2.0);
 		FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(a, b),
@@ -370,7 +370,7 @@ particle++;
 }
 }
 domain.restoreParticleState(new FlipParticleState(size, size, size, h, particleCount,
-totalVolume, positionVolume, velocities, domain.copySolidMask()));
+totalVolume, positionVolume, velocities, domain.copyCollisionMicroMasks()));
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", config.density(), "mmm:test", sigma, Math.PI / 2.0)));
 for (int marker = 0; marker < domain.particleCount(); marker++) {

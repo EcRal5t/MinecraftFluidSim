@@ -1276,7 +1276,8 @@ public final class FluidSimulationService {
 			}
 		}
 		domain.restoreParticleState(new FlipParticleState(
-				sx, sy, sz, cellSize, particleCount, totalVolume, positionVolume, velocities, domain.copySolidMask()
+				sx, sy, sz, cellSize, particleCount, totalVolume, positionVolume, velocities,
+				domain.copyCollisionMicroMasks()
 		));
 	}
 

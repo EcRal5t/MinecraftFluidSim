@@ -130,7 +130,7 @@ final class FluidSnapshotPublisher {
 		return FluidSnapshotPayload.snapshot(
 				region.dimension().identifier(), region.id(), region.networkGeneration(), region.nextSnapshotSequence(),
 				region.origin(), domain.config().cellSize(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
-				domain.copyQuantizedVolume(), domain.copyMarkerMask(), domain.copySolidMask(), region.debugOverlays(),
+				domain.copyQuantizedVolume(), domain.copyMarkerMask(), domain.copyBinarySolidMask(), region.debugOverlays(),
 				extensions);
 	}
 

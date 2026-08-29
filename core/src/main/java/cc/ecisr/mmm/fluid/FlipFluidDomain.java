@@ -3603,8 +3603,18 @@ public final class FlipFluidDomain {
 		return result;
 	}
 
-	public byte[] copySolidMask() {
+	/** Binary mask: 1 where a cell is entirely solid. Not interchangeable with {@link #copyCollisionMicroMasks()}. */
+	public byte[] copyBinarySolidMask() {
 		return cutCells.copyBinaryFullMask();
+	}
+
+	/**
+	 * The 2x2x2 cut-cell occupancy this domain actually resolves against. A particle state round-trips
+	 * collision through this encoding, so handing it a binary mask silently drops every solid cell:
+	 * the collision field is decoded as micro bits and nothing reads back as solid.
+	 */
+	public byte[] copyCollisionMicroMasks() {
+		return cutCells.copyMicroMasks();
 	}
 
 	/** Actual pressure-phase occupancy, separate from the smooth P2G density. */
@@ -3621,7 +3631,7 @@ public final class FlipFluidDomain {
 		if (materialRegistry == null) throw new IllegalStateException("Material render snapshot requires a bound registry");
 		return FluidMaterialRenderSnapshot.capture(
 				sizeX, sizeY, sizeZ, config.cellSize(), materialRegistry,
-				copyQuantizedVolume(), copyMarkerMask(), copySolidMask(),
+				copyQuantizedVolume(), copyMarkerMask(), copyBinarySolidMask(),
 				particleX, particleY, particleZ, particleVolume, particleMaterialHandle, particleCount,
 				exactCellMarkerVolume
 		);
