@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import net.minecraft.core.BlockPos;
@@ -33,6 +34,7 @@ public final class FluidRegionManagerValidation {
 		validateReplacementPreview();
 		validatePerRegionAndTotalRejectionDetails();
 		validateOverlapRejection();
+		validateCommittedMetadataSurvivesPolicyBudget();
 		validateBlockedRegionDoesNotBlockPeer();
 		System.out.println("FluidRegionManager validation passed");
 	}
@@ -148,11 +150,29 @@ public final class FluidRegionManagerValidation {
 				"face-touching non-overlapping regions should be admitted");
 		manager.remove(touching.id());
 		FluidRegion overlapping = regionAt(0, 0, 0, 2, 2, 2, 64L);
+		FluidRegionManager.BudgetUsage before = manager.usage();
+		FluidRegionManager.AdmissionResult preview = manager.previewAdd(overlapping);
+		require(!preview.accepted() && preview.reason() == RegionAvailabilityReason.OVERLAP
+				&& preview.failure().contains("overlaps existing region")
+				&& manager.usage().equals(before) && manager.selected() == first,
+				"complete add preview did not reject overlap without registering the candidate");
 		FluidRegionManager.AdmissionResult rejection = manager.addAndSelect(overlapping);
 		require(!rejection.accepted() && rejection.failure().contains("overlaps existing region"),
 				"overlap rejection did not identify its cause");
 		require(manager.selected() == first && manager.regions().size() == 1,
 				"rejected overlapping add changed selection or registry");
+	}
+
+	private static void validateCommittedMetadataSurvivesPolicyBudget() {
+		FluidRegionManager manager = manager();
+		FluidRegion first = regionAt(0, 0, 0, 2, 2, 2, 96L);
+		FluidRegion overBudget = regionAt(4, 0, 0, 2, 2, 2, 96L);
+		require(manager.registerDiscovered(first).accepted() && manager.registerDiscovered(overBudget).accepted(),
+				"valid committed metadata was discarded by runtime policy");
+		require(manager.regions().size() == 2 && !manager.runtimeAdmission(first).accepted()
+				&& manager.runtimeAdmission(first).reason() == RegionAvailabilityReason.BUDGET
+				&& !manager.runtimeAdmission(overBudget).accepted(),
+				"over-budget committed reservations were not retained in PAUSED_BUDGET state");
 	}
 
 	private static void validateBlockedRegionDoesNotBlockPeer() {
@@ -163,12 +183,17 @@ public final class FluidRegionManagerValidation {
 				"independent tick fixture admission failed");
 		blocked.setPaused(false);
 		runnable.setPaused(false);
-		blocked.setAvailabilityFailure("associated chunk missing");
+		blocked.setAvailabilityFailure(RegionAvailabilityReason.CHUNK_MISSING, "associated chunk missing");
 		for (FluidRegion region : manager.regions()) {
 			if (region.canStep()) region.incrementTick();
 		}
-		require(blocked.tick() == 0L && blocked.paused(), "unavailable region advanced a partial step");
+		require(blocked.tick() == 0L && !blocked.paused()
+				&& blocked.availabilityReason() == RegionAvailabilityReason.CHUNK_MISSING,
+				"availability block advanced a partial step or overwrote running operator intent");
 		require(runnable.tick() == 1L && !runnable.paused(), "blocked region prevented its independent peer from advancing");
+		blocked.blockCollision("moving body overlaps the committed region");
+		require(!blocked.paused() && blocked.availabilityReason() == RegionAvailabilityReason.BODY_OVERLAP,
+				"runtime safety block overwrote operator intent or lost its closed reason");
 	}
 
 	private static FluidRegionManager manager() {

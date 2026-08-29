@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FlipChemicalParticleState;
 import cc.ecisr.mmm.granular.GranularRegistry;
@@ -247,8 +248,7 @@ public final class FluidRegion {
 		enableThermalActivity();
 		thermalBlockFailure = Objects.requireNonNull(failure, "failure");
 		thermalActivity.pause(thermalBlockFailure);
-		setPaused(true);
-		setAvailabilityFailure(thermalBlockFailure);
+		setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, thermalBlockFailure);
 	}
 	long nextSnapshotSequence() {
 		if (snapshotSequence == Long.MAX_VALUE) throw new IllegalStateException("Snapshot sequence exhausted");
@@ -295,32 +295,36 @@ public final class FluidRegion {
 	int recoveryStreak() { return recoveryStreak; }
 	void setRecoveryStreak(int value) { recoveryStreak = value; }
 	String availabilityFailure() { return lifecycle.availabilityFailure(); }
+	RegionAvailabilityReason availabilityReason() { return lifecycle.availabilityReason(); }
+	String availabilityDescription() {
+		return availabilityReason() == null ? "READY" : availabilityReason() + ": " + availabilityFailure();
+	}
 	void setAvailabilityFailure(String value) {
 		if (value == null) lifecycle.clearAvailabilityBlock();
 		else lifecycle.blockAvailability(value);
 	}
+	void setAvailabilityFailure(RegionAvailabilityReason reason, String value) {
+		lifecycle.blockAvailability(reason, value);
+	}
 	String chemistryBlockFailure() { return chemistryBlockFailure; }
 	void blockChemistry(String failure) {
 		chemistryBlockFailure = Objects.requireNonNull(failure, "failure");
-		setPaused(true);
-		setAvailabilityFailure(failure);
+		setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, failure);
 	}
 	String granularBlockFailure() { return granularBlockFailure; }
 	void blockGranular(String failure) {
 		granularBlockFailure = Objects.requireNonNull(failure, "failure");
-		setPaused(true);
-		setAvailabilityFailure(failure);
+		setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, failure);
 	}
 	void blockCollision(String failure) {
-		setPaused(true);
-		setAvailabilityFailure(Objects.requireNonNull(failure, "failure"));
+		setAvailabilityFailure(RegionAvailabilityReason.BODY_OVERLAP,
+				Objects.requireNonNull(failure, "failure"));
 	}
 	String thermalBlockFailure() { return thermalBlockFailure; }
 	String numericalBlockFailure() { return numericalBlockFailure; }
 	void blockNumerical(String failure) {
 		numericalBlockFailure = Objects.requireNonNull(failure, "failure");
-		setPaused(true);
-		setAvailabilityFailure(failure);
+		setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, failure);
 	}
 
 	/** Returns immutable region-owned device truth, binding a new empty inventory to this layout. */

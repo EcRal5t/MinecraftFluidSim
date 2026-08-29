@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.api.fabric;
 
+import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.api.query.MmmQueryApi;
 import cc.ecisr.mmm.api.event.MmmEventApi;
 import cc.ecisr.mmm.api.query.FluidQueryResult;
@@ -15,9 +16,11 @@ public final class MmmFabricApi {
 		if (server == null) throw new IllegalArgumentException("Minecraft server is missing");
 		FluidSimulationService service = FluidSimulationService.find(server);
 		if (service != null) return service.queryApi(server);
-		return request -> FluidQueryResult.absent(server.isSameThread()
-				? FluidQueryStatus.REGION_UNAVAILABLE : FluidQueryStatus.WRONG_THREAD,
-				"Matter, Motion & Mechanics server service is not initialized");
+		return request -> server.isSameThread()
+				? FluidQueryResult.unavailable(RegionAvailabilityReason.PROFILE_LOCKED,
+						"Matter, Motion & Mechanics server service is not initialized")
+				: FluidQueryResult.absent(FluidQueryStatus.WRONG_THREAD,
+						"Matter, Motion & Mechanics server service is not initialized");
 	}
 
 	/** Registration does not initialize world state; callbacks are delivered on the server thread. */

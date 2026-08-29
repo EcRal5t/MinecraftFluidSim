@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.api.RegionAvailabilityReason;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +62,44 @@ public final class FluidRegionManager {
 		AdmissionResult admission = add(candidate);
 		if (admission.accepted()) selectedId = candidate.id();
 		return admission;
+	}
+
+	/** Evaluates the complete candidate without registering it or changing selection. */
+	public AdmissionResult previewAdd(FluidRegion candidate) {
+		Objects.requireNonNull(candidate, "candidate");
+		if (regions.containsKey(candidate.id())) {
+			return AdmissionResult.rejected("region id already exists: " + candidate.id());
+		}
+		BudgetUsage current = usage();
+		AdmissionResult admission = evaluate(candidate, current.regionCount() + 1,
+				current.reservedCells(), current.reservedMarkers());
+		return admission.accepted() ? evaluatePlacement(candidate, null) : admission;
+	}
+
+	/** Retains already committed metadata even when current runtime policy cannot admit its solver. */
+	public AdmissionResult registerDiscovered(FluidRegion candidate) {
+		Objects.requireNonNull(candidate, "candidate");
+		if (regions.containsKey(candidate.id())) {
+			return AdmissionResult.rejected(RegionAvailabilityReason.HEAD_INVALID,
+					"region id already exists: " + candidate.id());
+		}
+		regions.put(candidate.id(), candidate);
+		if (selectedId == null) selectedId = candidate.id();
+		return AdmissionResult.ACCEPTED;
+	}
+
+	/** Re-evaluates one retained metadata reservation against current policy and peer placement. */
+	public AdmissionResult runtimeAdmission(FluidRegion candidate) {
+		Objects.requireNonNull(candidate, "candidate");
+		if (regions.get(candidate.id()) != candidate) {
+			return AdmissionResult.rejected(RegionAvailabilityReason.HEAD_INVALID,
+					"region is not the registered committed metadata instance");
+		}
+		BudgetUsage current = usage();
+		AdmissionResult admission = evaluate(candidate, current.regionCount(),
+				current.reservedCells() - candidate.reservedCellCapacity(),
+				current.reservedMarkers() - candidate.reservedMarkerCapacity());
+		return admission.accepted() ? evaluatePlacement(candidate, candidate) : admission;
 	}
 
 	/** Evaluates an addition before allocating its solver arrays; placement is checked after allocation. */
@@ -138,7 +178,8 @@ public final class FluidRegionManager {
 		for (FluidRegion existing : regions.values()) {
 			if (existing == ignored) continue;
 			if (candidate.spatiallyOverlaps(existing)) {
-				return AdmissionResult.rejected("region overlaps existing region " + existing.id());
+				return AdmissionResult.rejected(RegionAvailabilityReason.OVERLAP,
+						"region overlaps existing region " + existing.id());
 			}
 		}
 		return AdmissionResult.ACCEPTED;
@@ -151,13 +192,16 @@ public final class FluidRegionManager {
 				+ limits.maximumCellsPerRegion() + "/" + limits.maximumMarkersPerRegion() + "; remaining "
 				+ Math.max(0L, remainingCells) + "/" + Math.max(0L, remainingMarkers);
 		if (regionCount > limits.maximumRegions()) {
-			return AdmissionResult.rejected("region-count limit " + limits.maximumRegions() + " exceeded; " + requirement);
+			return AdmissionResult.rejected(RegionAvailabilityReason.BUDGET,
+					"region-count limit " + limits.maximumRegions() + " exceeded; " + requirement);
 		}
 		if (requiredCells > limits.maximumCellsPerRegion() || requiredMarkers > limits.maximumMarkersPerRegion()) {
-			return AdmissionResult.rejected("per-region budget exceeded; " + requirement);
+			return AdmissionResult.rejected(RegionAvailabilityReason.BUDGET,
+					"per-region budget exceeded; " + requirement);
 		}
 		if (requiredCells > remainingCells || requiredMarkers > remainingMarkers) {
-			return AdmissionResult.rejected("server fluid budget exceeded; " + requirement);
+			return AdmissionResult.rejected(RegionAvailabilityReason.BUDGET,
+					"server fluid budget exceeded; " + requirement);
 		}
 		return AdmissionResult.ACCEPTED;
 	}
@@ -182,11 +226,16 @@ public final class FluidRegionManager {
 
 	public record BudgetUsage(int regionCount, long reservedCells, long reservedMarkers) { }
 
-	public record AdmissionResult(boolean accepted, String failure) {
-		private static final AdmissionResult ACCEPTED = new AdmissionResult(true, null);
+	public record AdmissionResult(boolean accepted, RegionAvailabilityReason reason, String failure) {
+		private static final AdmissionResult ACCEPTED = new AdmissionResult(true, null, null);
 
 		private static AdmissionResult rejected(String failure) {
-			return new AdmissionResult(false, Objects.requireNonNull(failure, "failure"));
+			return rejected(RegionAvailabilityReason.HEAD_INVALID, failure);
+		}
+
+		private static AdmissionResult rejected(RegionAvailabilityReason reason, String failure) {
+			return new AdmissionResult(false, Objects.requireNonNull(reason, "reason"),
+					Objects.requireNonNull(failure, "failure"));
 		}
 	}
 }

@@ -79,7 +79,9 @@ final class FluidRegionFactory {
 					double worldY = origin.getY() + (y + 0.5) * cellSize;
 					double worldZ = origin.getZ() + (z + 0.5) * cellSize;
 					BlockPos blockPosition = BlockPos.containing(worldX, worldY, worldZ);
+					if (region.footprint() != null && !region.footprint().containsInterior(blockPosition)) continue;
 					BlockState state = level.getBlockState(blockPosition);
+					if (region.controllerManaged() && !state.is(net.minecraft.world.level.block.Blocks.WATER)) continue;
 					FluidState fluid = state.getFluidState();
 					if (!fluid.is(FluidTags.WATER)) continue;
 					float waterHeight = fluid.getHeight(level, blockPosition);

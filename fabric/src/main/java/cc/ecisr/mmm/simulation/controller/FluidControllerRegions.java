@@ -18,7 +18,13 @@ public final class FluidControllerRegions {
 
 	/** Returns null only when every associated chunk is loaded and the original visible shell remains intact. */
 	public static String availabilityFailure(ServerLevel level, FluidRegionFootprint footprint) {
-		return FluidBoundaryScanner.validateAvailability(footprint, worldView(level)).failure();
+		return availability(level, footprint).failure();
+	}
+
+	public static FluidBoundaryScanner.AvailabilityResult availability(
+			ServerLevel level, FluidRegionFootprint footprint
+	) {
+		return FluidBoundaryScanner.validateAvailability(footprint, worldView(level));
 	}
 
 	private static FluidBoundaryScanner.ScanWorld worldView(ServerLevel level) {

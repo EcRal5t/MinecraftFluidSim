@@ -117,17 +117,17 @@ final class FluidRegionPersistence {
 				validateFeatureShape(manifest);
 				if (manifest.hasChemicalState()) {
 					if (!profile.hasCapability(WorldCapability.CHEMISTRY) || chemicalRegistry == null) {
-						throw new IOException("chemical region-state requires the chemistry feature gate and authoritative registry snapshot");
+						throw new IOException("chemical region-state requires the committed chemistry capability and registry snapshot");
 					}
 					if (!manifest.registryFingerprint().equals(chemicalRegistry.fingerprint())) {
 						throw new IOException("region-state chemical registry fingerprint does not match the world snapshot");
 					}
 				}
 				if (manifest.hasGranularState() && (!profile.hasCapability(WorldCapability.GRANULAR) || granularRegistry == null)) {
-					throw new IOException("granular region-state requires the granular feature gate and authoritative registry snapshot");
+					throw new IOException("granular region-state requires the committed granular capability and registry snapshot");
 				}
 				if (manifest.hasThermalState() && (!profile.hasCapability(WorldCapability.THERMAL) || thermalRegistry == null || gasRegistry == null)) {
-					throw new IOException("thermal region-state requires the thermal feature gate and authoritative thermal/gas registry snapshots");
+					throw new IOException("thermal region-state requires the committed thermal capability and thermal/gas registry snapshots");
 				}
 				validateControllerGeometry(manifest);
 				Identifier dimensionId = Identifier.tryParse(manifest.dimensionId());
@@ -137,10 +137,19 @@ final class FluidRegionPersistence {
 						manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 						manifest.reservedMarkerCapacity(), manifest.footprint(), manifest.networkGeneration(),
 						manifest.checkpointGeneration(), manifest.totalMarkerCount(), (float) manifest.totalVolume(), manifest.runtime());
-				FluidRegionManager.AdmissionResult admission = manager.add(region);
-				if (!admission.accepted()) issues.add(manifest.regionId() + " 未载入：" + admission.failure());
+				FluidRegionManager.AdmissionResult registration = manager.registerDiscovered(region);
+				if (!registration.accepted()) {
+					throw new IOException("committed metadata registration failed: " + registration.failure());
+				}
 			} catch (IOException | IllegalArgumentException exception) {
 				issues.add(manifest.regionId() + " 已锁定：" + exception.getMessage());
+			}
+		}
+		for (FluidRegion region : manager.regions()) {
+			if (region.solverLoaded()) continue;
+			FluidRegionManager.AdmissionResult runtimeAdmission = manager.runtimeAdmission(region);
+			if (!runtimeAdmission.accepted()) {
+				region.setAvailabilityFailure(runtimeAdmission.reason(), runtimeAdmission.failure());
 			}
 		}
 		return List.copyOf(issues);
@@ -219,9 +228,17 @@ final class FluidRegionPersistence {
 	 * Stages the initial checkpoint, publishes the ownership WAL and WARNING, removes the vanilla
 	 * water, and publishes the region HEAD last as the sole commit point.
 	 */
-	void acquireOwnership(ServerLevel level, FluidRegion region) throws IOException {
+	List<OwnershipJournal.BlockEntry> scanOwnershipPreimage(
+			ServerLevel level, FluidRegionFootprint footprint
+	) throws IOException {
+		return scanPureWaterInterior(level, footprint);
+	}
+
+	void acquireOwnership(
+			ServerLevel level, FluidRegion region, List<OwnershipJournal.BlockEntry> candidates
+	) throws IOException {
 		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
-		List<OwnershipJournal.BlockEntry> candidates = scanPureWaterInterior(level, region.footprint());
+		candidates = List.copyOf(candidates);
 		if (candidates.isEmpty()) {
 			checkpoint(region);
 			return;
@@ -633,7 +650,7 @@ final class FluidRegionPersistence {
 				|| manifest.hasGranularState() != profile.hasCapability(WorldCapability.GRANULAR)
 				|| manifest.hasThermalState() != profile.hasCapability(WorldCapability.THERMAL)
 				|| manifest.hasGasState() != profile.hasCapability(WorldCapability.THERMAL)) {
-			throw new IOException("Persisted region feature layout does not match the active server feature gates; recreate the region with the current configuration");
+			throw new IOException("Persisted region layout does not match the committed world capability profile");
 		}
 	}
 

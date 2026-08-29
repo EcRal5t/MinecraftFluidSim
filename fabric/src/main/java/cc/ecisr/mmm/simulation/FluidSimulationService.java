@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
+import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.api.query.MmmQueryApi;
 import cc.ecisr.mmm.api.event.ContainerTransferCommittedEvent;
 import cc.ecisr.mmm.api.event.MmmEventApi;
@@ -40,6 +41,7 @@ import cc.ecisr.mmm.transfer.ThermalContents;
 import cc.ecisr.mmm.simulation.controller.FluidBoundaryScanner;
 import cc.ecisr.mmm.simulation.controller.FluidControllerRegions;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
+import cc.ecisr.mmm.simulation.ownership.OwnershipJournal;
 import cc.ecisr.mmm.thermal.ThermalDataPackLoader;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
@@ -143,7 +145,9 @@ public final class FluidSimulationService {
 	private boolean defaultDebugOverlays;
 	private boolean controllerFeatureEnabled;
 	private final boolean worldBridgeFeatureEnabled;
-	/** Committed world capability profile; null only while the world is LOCKED or uninitialized. */
+	/** Startup proof retained so no authoritative write can use the fail-closed empty profile. */
+	private final WorldCapabilityStartup.Result capabilityStartup;
+	/** Committed profile, or an empty fail-closed value while startup is not provable. */
 	private final WorldCapabilityProfile worldCapabilityProfile;
 	private final ChemicalRegistry chemicalRegistry;
 	private final GranularRegistry granularRegistry;
@@ -157,34 +161,36 @@ public final class FluidSimulationService {
 	private FluidSimulationService(MinecraftServer server) {
 		worldRoot = server.getWorldPath(LevelResource.ROOT);
 		boolean configurationLocked = false;
+		boolean serverConfigurationUnreadable = false;
 		try {
 			serverConfig = FluidServerConfig.loadOrCreate(worldRoot);
 		} catch (IOException exception) {
 			serverConfig = FluidServerConfig.defaults();
 			configurationLocked = true;
+			serverConfigurationUnreadable = true;
 			MmmMod.LOGGER.error("Could not load Matter, Motion & Mechanics world config; controllers remain disabled", exception);
 		}
 		// The bundle is opened before anything else can write authority: it is the only interpretation of
 		// every region payload, so a world that cannot prove it is LOCKED rather than reinterpreted.
-		WorldCapabilityStartup.Result capability = WorldCapabilityStartup.start(
+		capabilityStartup = WorldCapabilityStartup.start(
 				new WorldCapabilityBundleStore(worldRoot, new WorldCapabilityBundleStore.QuarantineAdmission(
 						serverConfig.maximumQuarantineEntries(), serverConfig.maximumQuarantineBytes())),
 				() -> loadCapabilityDefinitions(server), serverConfig.controllersEnabled());
-		if (capability.definitionMismatch()) {
+		if (capabilityStartup.definitionMismatch()) {
 			MmmMod.LOGGER.warn("Current datapack definitions differ from the committed world capability profile {}; "
-					+ "existing inventory keeps world semantics", capability.bundle().profile().profileFingerprint());
+					+ "existing inventory keeps world semantics", capabilityStartup.bundle().profile().profileFingerprint());
 		}
-		if (capability.state() != WorldCapabilityStartup.State.READY) {
+		if (capabilityStartup.state() != WorldCapabilityStartup.State.READY) {
 			configurationLocked = true;
 			MmmMod.LOGGER.error("Matter, Motion & Mechanics world capability profile is {}; controllers remain disabled: {}",
-					capability.state(), capability.issue());
+					capabilityStartup.state(), capabilityStartup.issue());
 		}
-		boolean proven = capability.bundle() != null;
-		WorldCapabilityProfile profile = proven ? capability.bundle().profile() : UNPROVEN_CAPABILITIES;
-		chemicalRegistry = proven ? capability.bundle().chemical() : null;
-		granularRegistry = proven ? capability.bundle().granular() : null;
-		gasRegistry = proven ? capability.bundle().gas() : null;
-		thermalRegistry = proven ? capability.bundle().thermal() : null;
+		boolean proven = capabilityStartup.bundle() != null;
+		WorldCapabilityProfile profile = proven ? capabilityStartup.bundle().profile() : UNPROVEN_CAPABILITIES;
+		chemicalRegistry = proven ? capabilityStartup.bundle().chemical() : null;
+		granularRegistry = proven ? capabilityStartup.bundle().granular() : null;
+		gasRegistry = proven ? capabilityStartup.bundle().gas() : null;
+		thermalRegistry = proven ? capabilityStartup.bundle().thermal() : null;
 		if (proven) {
 			validateSupportedChemicalMaterials(chemicalRegistry);
 			validateSupportedGranularCarriers(granularRegistry);
@@ -201,14 +207,18 @@ public final class FluidSimulationService {
 		regionManager = new FluidRegionManager(serverConfig.limits());
 		committedEvents = committedEventHub(server);
 		targets = new FluidWorldTargetResolver(regionManager);
-		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, profile,
+		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, proven, profile,
 				chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry,
 				serverConfig.maximumThermalSubstepsPerStep());
 		snapshots = new FluidSnapshotPublisher(profile, chemicalRegistry, granularRegistry, thermalRegistry);
 		containerTransfers = new ContainerTransferStore(worldRoot);
 		loadContainerTransferIndex();
-		if (configurationLocked) regionOperations.recordIssue(
+		if (serverConfigurationUnreadable) regionOperations.recordIssue(
 				"server.properties 不可用，已安全使用默认预算并关闭控制器；原文件未覆盖");
+		if (capabilityStartup.state() != WorldCapabilityStartup.State.READY) {
+			regionOperations.recordIssue("world capability startup " + capabilityStartup.state()
+					+ "：" + capabilityStartup.issue());
+		}
 		ownershipIssues = regionOperations.scanOwnershipIssues();
 		for (String issue : ownershipIssues) MmmMod.LOGGER.error("Matter, Motion & Mechanics world ownership issue: {}", issue);
 	}
@@ -421,7 +431,7 @@ public final class FluidSimulationService {
 	}
 
 	void lockContainerTransferRegion(FluidRegion region, String failure) {
-		region.setAvailabilityFailure(failure);
+		region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL, failure);
 	}
 
 	public void recoverContainerTransfers(MinecraftServer server) {
@@ -711,6 +721,18 @@ public final class FluidSimulationService {
 		return controllerFeatureEnabled;
 	}
 
+	private boolean authoritativeWritesReady() {
+		return !serverConfigLocked && capabilityStartup.state() == WorldCapabilityStartup.State.READY;
+	}
+
+	private String authoritativeWriteFailure(String operation) {
+		if (capabilityStartup.state() != WorldCapabilityStartup.State.READY) {
+			return operation + "失败：world capability startup=" + capabilityStartup.state()
+					+ "；不可证明的 profile 不会创建或改写区域";
+		}
+		return operation + "失败：server.properties 未通过校验；原文件已保留，请修复后重启服务器";
+	}
+
 	/** Returns null on success; the world-local flag is durably replaced before runtime state changes. */
 	public String setControllerFeatureEnabled(boolean enabled) {
 		if (serverConfigLocked) return "server.properties 未通过校验；原文件已保留，请修复后重启服务器";
@@ -725,7 +747,8 @@ public final class FluidSimulationService {
 		controllerFeatureEnabled = enabled;
 		if (!enabled) {
 			for (FluidRegion region : regionManager.regions()) {
-				if (region.controllerManaged()) region.setAvailabilityFailure("controller feature flag is disabled");
+				if (region.controllerManaged()) region.setAvailabilityFailure(
+						RegionAvailabilityReason.POLICY_DISABLED, "controller admission policy is disabled");
 			}
 		}
 		return null;
@@ -733,7 +756,7 @@ public final class FluidSimulationService {
 
 	/** Stable read-only API surface; construction performs no world or region I/O. */
 	public MmmQueryApi queryApi(MinecraftServer server) {
-		return new FabricFluidQueryApi(server, regionManager);
+		return new FabricFluidQueryApi(server, regionManager, capabilityStartup.bundle() != null);
 	}
 
 	/** Adds authoritative U to an administrator-created mass-bearing liquid source at standard temperature. */
@@ -789,7 +812,7 @@ public final class FluidSimulationService {
 		return worldBridgeFeatureEnabled;
 	}
 
-	/** The committed world capability profile; null only while the world is LOCKED or uninitialized. */
+	/** The committed profile, or an empty fail-closed value while startup is not provable. */
 	public WorldCapabilityProfile worldCapabilityProfile() {
 		return worldCapabilityProfile;
 	}
@@ -819,10 +842,6 @@ public final class FluidSimulationService {
 	public ControllerActivation activateController(
 			ServerPlayer player, BlockPos controllerPosition, boolean toggleRunning
 	) {
-		if (!controllerFeatureEnabled) return ControllerActivation.DISABLED;
-		if (hasContainerTransferStoreIssues()) {
-			return ControllerActivation.failed("container-transfer 恢复目录含未知或损坏内容；已全局锁住新控制器，详见日志");
-		}
 		ServerLevel level = player.level();
 		restoreAirDemoScaffolding(level.getServer());
 		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) {
@@ -838,6 +857,9 @@ public final class FluidSimulationService {
 			}
 			ControllerAction action;
 			if (toggleRunning) {
+				if (!authoritativeWritesReady()) {
+					return ControllerActivation.failed(authoritativeWriteFailure("修改控制器运行意图"));
+				}
 				if (existing.paused()) {
 					existing.setPaused(false);
 					existing.wakeForActivity();
@@ -852,9 +874,19 @@ public final class FluidSimulationService {
 			sendSnapshot(level);
 			return ControllerActivation.succeeded(existingFootprint, action);
 		}
+		if (!controllerFeatureEnabled) return ControllerActivation.DISABLED;
+		if (!authoritativeWritesReady()) {
+			return ControllerActivation.failed(authoritativeWriteFailure("创建控制器区域"));
+		}
+		if (hasContainerTransferStoreIssues()) {
+			return ControllerActivation.failed("container-transfer 恢复目录含未知或损坏内容；已全局锁住新控制器，详见日志");
+		}
 		if (regionOperations.creationLocked() || !ownershipIssues.isEmpty()) {
 			return ControllerActivation.failed("存在未解决或超预算的 region-state/ownership；已锁住新控制器区域，详见 /mmm regions list、/mmm ownership 与日志");
 		}
+
+		RestorationStats restoration = restoreTakeover(level.getServer());
+		if (!restoration.completed()) return ControllerActivation.failed(restoration.failure());
 
 		FluidBoundaryScanner.ScanResult scan = FluidControllerRegions.scan(
 				level, controllerPosition, (int) Math.max(1L, Math.min(Integer.MAX_VALUE,
@@ -863,6 +895,17 @@ public final class FluidSimulationService {
 		);
 		if (!scan.succeeded()) return ControllerActivation.failed(scan.failure());
 		FluidRegionFootprint footprint = scan.footprint();
+		List<OwnershipJournal.BlockEntry> ownershipPreimage;
+		try {
+			ownershipPreimage = regionOperations.scanOwnershipPreimage(level, footprint);
+		} catch (IOException invalidPreimage) {
+			return ControllerActivation.failed("无法冻结 controller world preimage：" + invalidPreimage.getMessage());
+		}
+		if (!worldBridgeFeatureEnabled && !ownershipPreimage.isEmpty()) {
+			return ControllerActivation.failed("worldbridge 策略关闭；拒绝接管壳内原版水，请先排空或启用策略并重启");
+		}
+		ControllerCreationPlan creationPlan = new ControllerCreationPlan(
+				worldCapabilityProfile.profileFingerprint(), footprint, ownershipPreimage);
 		long requiredCells;
 		long requiredMarkers;
 		try {
@@ -874,8 +917,6 @@ public final class FluidSimulationService {
 		FluidRegionManager.AdmissionResult preview = regionManager.previewAdd(requiredCells, requiredMarkers);
 		if (!preview.accepted()) return ControllerActivation.failed(preview.failure());
 
-		RestorationStats restoration = restoreTakeover(level.getServer());
-		if (!restoration.completed()) return ControllerActivation.failed(restoration.failure());
 		String availabilityFailure = FluidControllerRegions.availabilityFailure(level, footprint);
 		if (availabilityFailure != null) return ControllerActivation.failed(availabilityFailure);
 
@@ -887,24 +928,38 @@ public final class FluidSimulationService {
 		}
 		candidate.setEntityPhysicsEnabled(defaultEntityPhysicsEnabled);
 		candidate.setDebugOverlays(defaultDebugOverlays);
-		FluidRegionManager.AdmissionResult admission = regionManager.addAndSelect(candidate);
-		if (!admission.accepted()) return ControllerActivation.failed(admission.failure());
-		refreshCollisions(level, candidate);
-		FluidRegionFactory.captureVanillaWater(level, candidate);
-		bindConfiguredState(candidate.domain());
+		FluidRegionManager.AdmissionResult exactPreview = regionManager.previewAdd(candidate);
+		if (!exactPreview.accepted()) return ControllerActivation.failed(exactPreview.failure());
+		try {
+			refreshCollisions(level, candidate);
+			if (worldBridgeFeatureEnabled) FluidRegionFactory.captureVanillaWater(level, candidate);
+			bindConfiguredState(candidate.domain());
+		} catch (RuntimeException invalidCandidate) {
+			return ControllerActivation.failed("无法构造完整控制器区域候选：" + invalidCandidate.getMessage());
+		}
 		candidate.setPaused(false);
 		candidate.wakeForActivity();
 		try {
+			if (!creationPlan.profileFingerprint().equals(worldCapabilityProfile.profileFingerprint())
+					|| !creationPlan.footprint().equals(candidate.footprint())) {
+				throw new IOException("Controller creation proof changed after preflight");
+			}
 			if (worldBridgeFeatureEnabled) {
-				regionOperations.acquireOwnership(level, candidate);
+				regionOperations.acquireOwnership(level, candidate, creationPlan.ownershipPreimage());
 			} else {
 				regionOperations.checkpoint(candidate);
 			}
 		} catch (IOException | RuntimeException exception) {
-			regionManager.remove(candidate.id());
-			candidate.setAvailabilityFailure("initial checkpoint failed: " + exception.getMessage());
 			MmmMod.LOGGER.error("Controller region {} was rejected after its initial checkpoint failed", candidate.id(), exception);
 			return ControllerActivation.failed("区域未创建；初始 checkpoint/ownership 事务失败：" + exception.getMessage());
+		}
+		FluidRegionManager.AdmissionResult admission = regionManager.addAndSelect(candidate);
+		if (!admission.accepted()) {
+			String issue = "首个 region HEAD 已提交，但 live owner 登记违反已通过的 admission 预检：" + admission.failure();
+			regionOperations.recordIssue(issue);
+			MmmMod.LOGGER.error("Controller region {} requires restart after live registration failed: {}",
+					candidate.id(), admission.failure());
+			return ControllerActivation.failed(issue + "；请重启服务器恢复已提交区域");
 		}
 		sendSnapshot(level);
 		return ControllerActivation.created(footprint);
@@ -1525,10 +1580,12 @@ public final class FluidSimulationService {
 			ServerLevel level = server.getLevel(region.dimension());
 			if (level == null) {
 				if (hasPendingContainerTransfer(region.id())) {
-					region.setAvailabilityFailure("dimension is not loaded; unresolved container transfer WAL prevents unload checkpoint");
+					region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
+							"dimension is not loaded; unresolved container transfer WAL prevents unload checkpoint");
 					continue;
 				}
-				regionOperations.unloadForFailure(server, region, "dimension is not loaded", snapshots::sendRemoval);
+				regionOperations.unloadForFailure(server, region, RegionAvailabilityReason.CHUNK_MISSING,
+						"dimension is not loaded", snapshots::sendRemoval);
 				continue;
 			}
 			tickRegion(level, region);
@@ -1653,11 +1710,12 @@ public final class FluidSimulationService {
 					region.id(), markerCount, exactVolume);
 		}
 		if (region.hardOverrunStreak() >= HARD_PAUSE_STREAK) {
-			region.setPaused(true);
+			region.blockNumerical("wall-time NUMERICAL_PAUSE：" + HARD_PAUSE_STREAK
+					+ " consecutive steps exceeded " + HARD_PAUSE_MILLIS + " ms");
 			MmmMod.LOGGER.warn("Auto-paused fluid region {} after {} consecutive steps above {} ms",
 					region.id(), HARD_PAUSE_STREAK, HARD_PAUSE_MILLIS);
 		}
-		if (tick % SNAPSHOT_INTERVAL_TICKS == 0 || region.paused()
+		if (tick % SNAPSHOT_INTERVAL_TICKS == 0 || region.paused() || region.availabilityFailure() != null
 				|| region.lifecycle().state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP) {
 			sendSnapshot(level, region);
 		}
@@ -1674,7 +1732,8 @@ public final class FluidSimulationService {
 
 	public boolean ensureRegionAvailable(ServerLevel level, FluidRegion region) {
 		if (hasPendingContainerTransfer(region.id())) {
-			region.setAvailabilityFailure("存在未完成容器转移 WAL；恢复完成后才能继续");
+			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
+					"存在未完成容器转移 WAL；恢复完成后才能继续");
 			return false;
 		}
 
@@ -2047,7 +2106,7 @@ public final class FluidSimulationService {
 				? "command"
 				: "controller " + footprint.controllerPosition().toShortString() + ", boundary "
 						+ footprint.boundaryBlocks().size() + ", chunks " + footprint.requiredChunks().size();
-		String availability = region.availabilityFailure() == null ? "ready" : "blocked: " + region.availabilityFailure();
+		String availability = region.availabilityDescription();
 		String gas = gasSummary(domain);
 		String thermal = worldCapabilityProfile.hasCapability(WorldCapability.THERMAL) ? thermalSummary(region, domain) : "";
 		return String.format(
@@ -2184,6 +2243,20 @@ public final class FluidSimulationService {
 	}
 
 	public record TransferTarget(FluidRegion region, BlockPos interiorBlock) { }
+
+	private record ControllerCreationPlan(
+			String profileFingerprint,
+			FluidRegionFootprint footprint,
+			List<OwnershipJournal.BlockEntry> ownershipPreimage
+	) {
+		private ControllerCreationPlan {
+			if (profileFingerprint == null || !profileFingerprint.matches("[0-9a-f]{64}")) {
+				throw new IllegalArgumentException("Controller creation profile fingerprint is invalid");
+			}
+			java.util.Objects.requireNonNull(footprint, "footprint");
+			ownershipPreimage = List.copyOf(ownershipPreimage);
+		}
+	}
 
 
 	/** Applies the bounded indicator/eraser primitive to the actually aimed region. */

@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
+import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.item.ContainerItemStacks;
 import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
 import cc.ecisr.mmm.transfer.ContainerTransferActor;
@@ -136,8 +137,8 @@ final class ControllerItemTransferCoordinator {
 			finalAfter = finalItemResolver.resolve(rawOutcome.stack(), beforeStack);
 			afterFingerprint = ContainerTransferItems.fingerprint(finalAfter);
 		} catch (RuntimeException invalidAfterItem) {
-			region.setPaused(true);
-			region.setAvailabilityFailure("容器转移 after-item 无法写入 WAL，区域已锁定；重启后恢复："
+			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
+					"容器转移 after-item 无法写入 WAL，区域已锁定；重启后恢复："
 					+ invalidAfterItem.getMessage());
 			return failed(operation, beforeStack, region.availabilityFailure(), transactionId);
 		}
@@ -146,8 +147,8 @@ final class ControllerItemTransferCoordinator {
 		try {
 			staged = service.stageControllerRegionCheckpoint(region, targetGeneration);
 		} catch (IOException | RuntimeException stagingFailure) {
-			region.setPaused(true);
-			region.setAvailabilityFailure("容器转移 checkpoint staging 失败，区域已锁定；重启后恢复："
+			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
+					"容器转移 checkpoint staging 失败，区域已锁定；重启后恢复："
 					+ stagingFailure.getMessage());
 			return failed(operation, beforeStack, region.availabilityFailure(), transactionId);
 		}
@@ -172,8 +173,8 @@ final class ControllerItemTransferCoordinator {
 			} catch (IOException abortFailure) {
 				exception.addSuppressed(abortFailure);
 			}
-			region.setPaused(true);
-			region.setAvailabilityFailure("容器转移 WAL 更新失败，区域已锁定；重启后恢复："
+			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
+					"容器转移 WAL 更新失败，区域已锁定；重启后恢复："
 					+ exception.getMessage());
 			return new Result(new FluidTransferService.TransferOutcome(false,
 					operation == ContainerTransferJournal.Operation.INSERT, beforeStack,
@@ -191,16 +192,16 @@ final class ControllerItemTransferCoordinator {
 		try {
 			publishedGeneration = service.commitControllerRegionCheckpoint(region, staged);
 		} catch (IOException | RuntimeException exception) {
-			region.setPaused(true);
-			region.setAvailabilityFailure("容器转移检查点失败，区域已锁定；重启后恢复："
+			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
+					"容器转移检查点失败，区域已锁定；重启后恢复："
 					+ exception.getMessage());
 			return new Result(new FluidTransferService.TransferOutcome(false,
 					operation == ContainerTransferJournal.Operation.INSERT, beforeStack,
 					region.availabilityFailure()), transactionId);
 		}
 		if (publishedGeneration != targetGeneration) {
-			region.setPaused(true);
-			region.setAvailabilityFailure("容器转移检查点代次不一致，区域已锁定；重启后恢复");
+			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
+					"容器转移检查点代次不一致，区域已锁定；重启后恢复");
 			return new Result(new FluidTransferService.TransferOutcome(false,
 					operation == ContainerTransferJournal.Operation.INSERT, beforeStack,
 					region.availabilityFailure()), transactionId);

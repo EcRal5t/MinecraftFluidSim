@@ -39,7 +39,7 @@ slot-b/manifest.nbt + section-*.nbt
 
 `RegionState` 在 server thread 上捕获/重建完整逻辑状态；`RegionStateCodec` 只编解码 NBT；`RegionStateIntegrity` 生成与 NBT 字段顺序无关的规范 CRC32C；`RegionStateFiles` 只管理双槽、回读验证与原子 HEAD。任何业务层都不能直接写 slot 或把目录存在当成已提交。
 
-HEAD 使用固定 `region-head` schema；manifest 与每个 section 使用语义 `Layout`：`pure`、`material`、`chemical`、`granular` 或 `thermal`。其中 `granular`、`thermal` 的附加 capability 精确声明是否同时携带 chemistry/granular 状态。启动时由冻结的功能门得到唯一预期 layout 和 registry fingerprint，存档必须精确匹配；未知 layout、未知必需 extension、缺字段或额外能力都不能按数字顺序猜测兼容性，也没有自动迁移或默认补全。
+HEAD 使用固定 `region-head` schema；manifest 与每个 section 使用语义 `Layout`：`pure`、`material`、`chemical`、`granular` 或 `thermal`。其中 `granular`、`thermal` 的附加 capability 精确声明是否同时携带 chemistry/granular 状态。启动时由已提交 world capability profile 得到唯一预期 layout 和 registry fingerprint，存档必须精确匹配；未知 layout、未知必需 extension、缺字段或额外能力都不能按数字顺序猜测兼容性，也没有自动迁移或默认补全。
 
 ## 提交模型
 
@@ -71,7 +71,7 @@ HEAD 发布前，当前已提交 generation 仍是唯一权威状态。失败的
 - region UUID、dimension、network/checkpoint generation、origin、网格和 solver config；
 - controller footprint、运行态和 marker 预算；
 - Minecraft 对齐的 section 描述、marker ordinal、位置/体积、速度和 solid mask；
-- 当前功能门要求的材料、化学、颗粒、气体、热能和 pending phase-work 载荷；
+- 已提交 profile 要求的材料、化学、颗粒、气体、热能和 pending phase-work 载荷；
 - manifest、section 与各独立库存的总账和 CRC。
 
 所有 required payload 必须属于同一 region、dimension 和 generation。runtime handle、平滑 density、pressure、mesh 和 UI 读数不持久化。
@@ -108,7 +108,7 @@ section、palette、mixture、deposit group、gas node 和 ledger 都必须采�
 
 ## 功能布局
 
-当前 runtime 根据启动时冻结的功能门选择一种区域载荷：纯水、材料、化学、颗粒或完整热学。读取时必须与同一次启动的门、registry snapshot 和 capability 完全一致。
+当前 runtime 只按已提交 world capability profile 选择一种区域载荷：纯水、材料、化学、颗粒或完整热学。读取时必须与该 profile、bundle 内 registry snapshot 和 capability 完全一致。
 
 不执行跨布局改写。布局、fingerprint、身份、总账或 required extension 不一致时，文件原样保留并进入 LOCKED。
 
@@ -137,6 +137,10 @@ section、palette、mixture、deposit group、gas node 和 ledger 都必须采�
 6. 只有全部成功才分配/激活 solver；随后刷新 collision，再发布 client snapshot。
 
 restore 失败的区域保持 metadata-only UNLOADED/PAUSED 或 LOCKED。命令、world bridge 和容器转移不得绕过 admission 修改它。
+
+可证明的 committed manifest 必须先作为 metadata owner 登记，再单独执行当前 runtime policy 的 budget/placement admission。`BUDGET`、`OVERLAP`、`CHUNK_MISSING`、`BOUNDARY_OPEN` 或 `POLICY_DISABLED` 只形成 availability block：metadata、reservation、checkpoint identity 和 operator intent 都保留。profile/layout/fingerprint/HEAD 本身不可证明才形成持久 issue/LOCKED，不能把暂时预算不足混写成载荷损坏。
+
+availability 使用封闭 reason code；详细诊断只用于日志和本地展示，不充当状态机输入。availability 变化本身不捕获库存；仅当释放已加载 solver 时，才允许先发布一个合法完整 checkpoint。恢复条件满足后重新从原 HEAD restore，并按持久 operator intent 决定是否 step。
 
 ## 恢复
 
