@@ -102,7 +102,7 @@ final class FlipThermalState {
 	}
 	ThermalPhaseChangeEngine phaseChange() { return domain.phaseChange(); }
 	GasLiquidPhaseModel gasLiquidPhase(AirNetwork network) { return domain.gasLiquidPhase(network); }
-	long thermalRevision() { return domain.thermalRevision(); }
+	ThermalDomainState.Revision thermalRevision() { return domain.thermalRevision(); }
 
 	double liquidInternalEnergy(int marker) { return domain.liquidInternalEnergy(marker); }
 	ThermalTransport.Stats lastTransport() { return domain.lastTransport(); }
@@ -184,7 +184,7 @@ final class FlipThermalState {
 	void requireCanCommitGasRemap(GasEnergyStore.GasRemapPlan plan) { domain.requireCanCommitGasRemap(plan); }
 	void commitGasRemap(GasEnergyStore.GasRemapPlan plan) { domain.commitGasRemap(plan); }
 	void requireCanCommitOperatorClear(
-			long baseRevision, SignedDyadic liquidEnergy, SignedDyadic coherentEnergy,
+			ThermalDomainState.Revision baseRevision, SignedDyadic liquidEnergy, SignedDyadic coherentEnergy,
 			SignedDyadic granularEnergy, GasEnergyStore.GasRemapPlan gasPlan
 	) {
 		domain.requireCanCommitOperatorClear(

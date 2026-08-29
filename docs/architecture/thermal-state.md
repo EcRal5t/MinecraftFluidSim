@@ -17,7 +17,7 @@
 
 同一载体的 identity、质量/体积、组成和 `U` 必须同 ordinal、同 generation。空载体不能残留内能；非空载体不能缺内能。cell 温度是把其中所有载体带入 LTE 反演后的临时结果，不是另一份可独立恢复的真值。
 
-各能量 owner 的增量写入口只在 thermal 包内可见；跨包只获得读视图或由 `ThermalDomainState` 暴露的明确事务入口。gas remap 和 operator clear 绑定 owner revision，并在第一处库存修改前完成完整 source/sink/work/roundoff dyadic 链的构造；后续 owner generation 不匹配或精确账本溢出都拒绝整个计划。handoff 对 coherent snapshot 只调用独立的 canonical validator，不能借公开 restore 入口改写 live store。
+各能量 owner 的增量写入口只在 thermal 包内可见；跨包只获得读视图或由 `ThermalDomainState` 暴露的明确事务入口。跨 owner 计划绑定 liquid、granular/coherent、gas 与 audit 四项 revision 的完整元组，不能把它们求和压成可能碰撞的单值；gas remap 和 operator clear 在第一处库存修改前完成完整 source/sink/work/roundoff dyadic 链的构造。后续任一 owner generation 不匹配或精确账本溢出都拒绝整个计划。handoff 对 coherent snapshot 只调用独立的 canonical validator，不能借公开 restore 入口改写 live store。
 
 热学 registry 是 world snapshot：
 

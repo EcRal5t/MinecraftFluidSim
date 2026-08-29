@@ -18,6 +18,8 @@ import java.util.List;
  * {@link #thermalRevision()}.
  */
 public final class ThermalDomainState {
+	/** Exact generation token for the four independently mutable thermal truth owners. */
+	public record Revision(long liquid, long granular, long gas, long audit) { }
 	public record ReactionPlan(int cell, SignedDyadic cellEnergy, SignedDyadic inventoryBefore, double equilibriumTemperatureK) { }
 	public record PhaseMechanicalWorkPlan(
 			double[] targetCellEnergy, SignedDyadic inventoryBefore, SignedDyadic mechanicalWork
@@ -109,8 +111,9 @@ public final class ThermalDomainState {
 		auditState.replace(ThermalAuditLedger.initialized(exactEnergy(markers.markerCount())));
 	}
 
-	public long thermalRevision() {
-		return liquidEnergy.revision() + granularState.revision() + gasState.revision() + auditState.revision();
+	public Revision thermalRevision() {
+		return new Revision(
+				liquidEnergy.revision(), granularState.revision(), gasState.revision(), auditState.revision());
 	}
 
 	public ThermalRegistry registry() { return registry; }
@@ -278,10 +281,10 @@ public final class ThermalDomainState {
 	 * before liquid, coherent, granular or gas truth begins to publish.
 	 */
 	public void requireCanCommitOperatorClear(
-			long baseRevision, SignedDyadic liquidEnergy, SignedDyadic coherentEnergy,
+			Revision baseRevision, SignedDyadic liquidEnergy, SignedDyadic coherentEnergy,
 			SignedDyadic granularEnergy, GasEnergyStore.GasRemapPlan gasPlan
 	) {
-		if (baseRevision != thermalRevision()) {
+		if (!thermalRevision().equals(baseRevision)) {
 			throw new IllegalStateException("Thermal inventory changed after operator clear planning");
 		}
 		if (liquidEnergy == null || coherentEnergy == null || granularEnergy == null) {

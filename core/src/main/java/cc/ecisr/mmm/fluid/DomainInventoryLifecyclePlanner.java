@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.granular.GranularAuditLedger;
+import cc.ecisr.mmm.thermal.ThermalDomainState;
 import cc.ecisr.mmm.units.SignedDyadic;
 
 /**
@@ -58,7 +59,8 @@ final class DomainInventoryLifecyclePlanner {
 			domain.ensureGrid();
 			gasTopology = domain.gasTopologyCoordinator.planFromFreshScan();
 		}
-		long thermalRevision = domain.thermalState == null ? 0L : domain.thermalState.thermalRevision();
+		ThermalDomainState.Revision thermalRevision = domain.thermalState == null
+				? null : domain.thermalState.thermalRevision();
 		if (domain.thermalState != null) domain.thermalState.requireCanCommitOperatorClear(
 				thermalRevision, condensed.liquid().internalEnergy(), condensed.coherentEnergy(),
 				granular.internalEnergy(), gasTopology == null ? null : gasTopology.thermalPlan());

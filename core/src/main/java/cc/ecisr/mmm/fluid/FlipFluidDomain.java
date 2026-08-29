@@ -3213,7 +3213,8 @@ public final class FlipFluidDomain {
 		if (plan == null) throw new IllegalArgumentException("Operator clear plan is missing");
 		preflightCondensedClear(plan.condensed());
 		preflightGranularClear(plan.granular());
-		if (thermalState == null ? plan.thermalRevision != 0L : thermalState.thermalRevision() != plan.thermalRevision) {
+		if (thermalState == null ? plan.thermalRevision != null
+				: !thermalState.thermalRevision().equals(plan.thermalRevision)) {
 			throw new IllegalStateException("Thermal inventory changed after operator clear planning");
 		}
 		if (thermalState != null) thermalState.requireCanCommitOperatorClear(
@@ -3259,11 +3260,11 @@ public final class FlipFluidDomain {
 		private final CondensedClearPlan condensed;
 		private final GranularClearPlan granular;
 		private final GasTopologyCoordinator.GasTopologyPlan gasTopology;
-		private final long thermalRevision;
+		private final ThermalDomainState.Revision thermalRevision;
 
 		OperatorClearPlan(
 				CondensedClearPlan condensed, GranularClearPlan granular,
-				GasTopologyCoordinator.GasTopologyPlan gasTopology, long thermalRevision
+				GasTopologyCoordinator.GasTopologyPlan gasTopology, ThermalDomainState.Revision thermalRevision
 		) {
 			this.condensed = condensed;
 			this.granular = granular;
