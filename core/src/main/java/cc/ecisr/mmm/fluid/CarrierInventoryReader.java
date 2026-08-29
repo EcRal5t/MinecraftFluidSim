@@ -1,0 +1,169 @@
+package cc.ecisr.mmm.fluid;
+
+import cc.ecisr.mmm.chemistry.ChemicalDisplaySnapshot;
+import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
+import cc.ecisr.mmm.granular.GranularDisplaySnapshot;
+import cc.ecisr.mmm.granular.GranularStateSnapshot;
+import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+
+/**
+ * Read-only carrier state export and display snapshot construction. Every method allocates a
+ * fresh immutable snapshot from the authoritative arrays and never exposes the domain's own
+ * storage; capture/restore and renderer adapters consume these as values.
+ */
+final class CarrierInventoryReader {
+	private final FlipFluidDomain domain;
+
+	CarrierInventoryReader(FlipFluidDomain domain) {
+		this.domain = domain;
+	}
+
+	FlipParticleState exportParticleState() {
+		if (domain.hasNonDefaultMaterialState()) {
+			throw new IllegalStateException("Multi-material markers cannot use the pure-water particle handoff");
+		}
+		int particleCount = domain.particleCount;
+		float[] positionVolume = new float[particleCount * 4];
+		float[] velocities = new float[particleCount * 3];
+		byte[] solidMask = domain.cutCells.copyMicroMasks();
+		for (int particle = 0; particle < particleCount; particle++) {
+			int positionBase = particle * 4;
+			int velocityBase = particle * 3;
+			positionVolume[positionBase] = domain.particleX[particle];
+			positionVolume[positionBase + 1] = domain.particleY[particle];
+			positionVolume[positionBase + 2] = domain.particleZ[particle];
+			positionVolume[positionBase + 3] = domain.particleVolume[particle];
+			velocities[velocityBase] = domain.particleVelocityX[particle];
+			velocities[velocityBase + 1] = domain.particleVelocityY[particle];
+			velocities[velocityBase + 2] = domain.particleVelocityZ[particle];
+		}
+		return new FlipParticleState(
+				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), particleCount,
+				domain.totalVolume(), positionVolume, velocities, solidMask
+		);
+	}
+
+	/** Exports exact multi-material marker state; runtime handles are replaced by the stable ordered palette. */
+	FlipMaterialParticleState exportMaterialParticleState() {
+		if (domain.materialRegistry == null) {
+			throw new IllegalStateException("Material particle handoff requires a bound registry");
+		}
+		int particleCount = domain.particleCount;
+		float[] positionVolume = new float[particleCount * 4];
+		float[] velocities = new float[particleCount * 3];
+		for (int particle = 0; particle < particleCount; particle++) {
+			int positionBase = particle * 4, velocityBase = particle * 3;
+			positionVolume[positionBase] = domain.particleX[particle];
+			positionVolume[positionBase + 1] = domain.particleY[particle];
+			positionVolume[positionBase + 2] = domain.particleZ[particle];
+			positionVolume[positionBase + 3] = domain.particleVolume[particle];
+			velocities[velocityBase] = domain.particleVelocityX[particle];
+			velocities[velocityBase + 1] = domain.particleVelocityY[particle];
+			velocities[velocityBase + 2] = domain.particleVelocityZ[particle];
+		}
+		return new FlipMaterialParticleState(
+				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), particleCount,
+				domain.totalVolumeExact(), domain.totalMass(), domain.materialRegistry.materials(),
+				positionVolume, velocities, domain.cutCells.copyMicroMasks(),
+				Arrays.copyOf(domain.particleMass, particleCount),
+				Arrays.copyOf(domain.particleMaterialHandle, particleCount)
+		);
+	}
+
+	/** Exports canonical stable-ID chemical state; runtime mixture handles never cross this boundary. */
+	FlipChemicalParticleState exportChemicalParticleState() {
+		if (domain.chemicalParcels == null) {
+			throw new IllegalStateException("Chemical particle handoff requires chemistry");
+		}
+		ArrayList<ChemicalMixtureRecord> mixtures = new ArrayList<>(domain.particleCount);
+		byte[] indicator = new byte[domain.particleCount];
+		for (int marker = 0; marker < domain.particleCount; marker++) {
+			mixtures.add(domain.chemicalParcels.record(marker));
+			indicator[marker] = domain.chemicalParcels.indicator(marker) ? (byte) 1 : 0;
+		}
+		return FlipChemicalParticleState.capture(
+				exportMaterialParticleState(), domain.chemicalParcels.registry(), mixtures, indicator,
+				domain.chemicalParcels.externalSource(), domain.chemicalParcels.escapedSink());
+	}
+
+	FlipThermalParticleState exportThermalParticleState() {
+		if (domain.thermalState == null) {
+			throw new IllegalStateException("Thermal particle handoff requires thermal state");
+		}
+		return domain.thermalState.capture(domain.sizeX, domain.sizeY, domain.sizeZ,
+				domain.config.cellSize(), domain.particleCount);
+	}
+
+	GranularStateSnapshot exportGranularState() {
+		if (domain.granularRegistry == null) throw new IllegalStateException("Granular state is not bound");
+		return GranularStateSnapshot.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.granularRegistry,
+				domain.granularParcels, domain.granularDeposits, domain.solidCompositions,
+				domain.granularExternalSource, domain.granularEscapedSink);
+	}
+
+	GranularDisplaySnapshot copyGranularDisplaySnapshot() {
+		if (domain.granularRegistry == null) throw new IllegalStateException("Granular state is not bound");
+		return GranularDisplaySnapshot.build(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
+				domain.granularRegistry, domain.granularParcels, domain.granularDeposits);
+	}
+
+	ChemicalDisplaySnapshot copyChemicalDisplaySnapshot() {
+		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemistry is not bound");
+		return ChemicalDisplaySnapshot.build(domain.chemicalParcels.registry(), domain.chemicalParcels,
+				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
+				domain.particleX, domain.particleY, domain.particleZ, domain.particleVolume, domain.particleCount);
+	}
+
+	ThermalDisplaySnapshot copyThermalDisplaySnapshot() {
+		if (domain.thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		return domain.thermalState.displaySnapshot(domain.thermalMarkerContext(), domain.airNetwork);
+	}
+
+	/** Read-only material rendering reconstruction; it contains no exact inventory and is not a wire format. */
+	FluidMaterialRenderSnapshot copyMaterialRenderSnapshot() {
+		domain.ensureGrid();
+		if (domain.materialRegistry == null) {
+			throw new IllegalStateException("Material render snapshot requires a bound registry");
+		}
+		return FluidMaterialRenderSnapshot.capture(
+				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.materialRegistry,
+				copyQuantizedVolume(), copyMarkerMask(), copyBinarySolidMask(),
+				domain.particleX, domain.particleY, domain.particleZ, domain.particleVolume,
+				domain.particleMaterialHandle, domain.particleCount, domain.exactCellMarkerVolume
+		);
+	}
+
+	byte[] copyQuantizedVolume() {
+		domain.ensureGrid();
+		byte[] result = new byte[domain.cellCount];
+		for (int i = 0; i < domain.cellCount; i++) {
+			result[i] = (byte) Math.round(FlipFluidDomain.clamp01(domain.volume[i]) * 255.0F);
+		}
+		return result;
+	}
+
+	/** Binary mask: 1 where a cell is entirely solid. Not interchangeable with copyCollisionMicroMasks(). */
+	byte[] copyBinarySolidMask() {
+		return domain.cutCells.copyBinaryFullMask();
+	}
+
+	/**
+	 * The 2x2x2 cut-cell occupancy this domain actually resolves against. A particle state round-trips
+	 * collision through this encoding, so handing it a binary mask silently drops every solid cell:
+	 * the collision field is decoded as micro bits and nothing reads back as solid.
+	 */
+	byte[] copyCollisionMicroMasks() {
+		return domain.cutCells.copyMicroMasks();
+	}
+
+	/** Actual pressure-phase occupancy, separate from the smooth P2G density. */
+	byte[] copyMarkerMask() {
+		domain.ensureGrid();
+		byte[] result = new byte[domain.cellCount];
+		for (int i = 0; i < domain.cellCount; i++) result[i] = domain.markerCount[i] > 0 ? (byte) 1 : (byte) 0;
+		return result;
+	}
+}
