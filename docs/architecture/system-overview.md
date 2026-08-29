@@ -123,6 +123,8 @@ availability 采用 `RegionAvailabilityReason` 封闭分类；预算、重叠、
 
 region HEAD 是区域物理状态唯一提交点。ownership 与 container WAL 分别把世界方块和 actor item 收敛到该 HEAD；它们不能成为第二个物理真值。任何 publish 都必须遵守“完整写入、回读验证、HEAD 最后替换”。
 
+需要把 region HEAD 与一个或多个外部持久成员收敛的 journal 统一委托 JDK-only `CrossDomainRecovery`：adapter 只能把 durable readback 分类为 exact `BEFORE`、`AFTER`、`THIRD` 或 `UNAVAILABLE`。HEAD 为 base 时只接受全 before；HEAD 为 checksum 匹配的 target 且 journal 已提交时才收敛 remaining before；third 锁定，unavailable 等待明确加载事件。normal tick 不轮询 unavailable actor。
+
 world-local chemical、granular、gas 和 thermal registry snapshot 的首次发布同样必须回读验证、atomic rename 并同步目录 entry。reader 只接受当前 writer 的精确 compound 字段集合与 NBT 类型；额外字段也属于未知语义，必须保留 snapshot 并 LOCKED，不能忽略后再按当前定义重建。
 
 ## 线程与只读边界

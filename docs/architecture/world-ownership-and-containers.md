@@ -94,7 +94,7 @@ insert/extract 返回“实际转移量”，WAL 和 after item 必须使用这�
 6. 修改 actor item，并等待玩家存档或 dispenser chunk 完成 durable save。
 7. 删除 WAL。
 
-恢复必须核对 HEAD、checksum、actor、before/after item、resource kind、world profile fingerprint、各适用 registry fingerprint 和 generation。region、ownership 与 container 的紧邻代次统一拒绝负数和 `long` 溢出，不能让 `Long.MAX_VALUE + 1` 被误认成合法 target。任何歧义都保留 WAL 并锁定；不得因为 item 看起来相似就推断完成状态。
+恢复必须核对 HEAD、checksum、actor、before/after item、resource kind、world profile fingerprint、各适用 registry fingerprint 和 generation。`core/recovery/CrossDomainRecovery` 是 region HEAD 与一个或多个外部持久成员的共同判定器；现有 container adapter 只负责把 durable actor readback 分类为 `BEFORE`、`AFTER`、`THIRD` 或 `UNAVAILABLE`，不能复制 commit switch。未来 world action、外部 provider 或设备 journal 也必须委托同一判定器。region、ownership 与 container 的紧邻代次统一拒绝负数和 `long` 溢出，不能让 `Long.MAX_VALUE + 1` 被误认成合法 target。任何歧义都保留 WAL 并锁定；不得因为 item 看起来相似就推断完成状态。
 
 当前 WAL 有材料布局和含热布局。reader 只接受当前 writer 产生的完整字段集合：缺字段、错 NBT 类型、额外未知字段和溢出的 generation pair 都保持原文件并锁定，不做补全或忽略。
 
@@ -107,7 +107,7 @@ insert/extract 返回“实际转移量”，WAL 和 after item 必须使用这�
 5. 原子用 `REGION_COMMITTED` WAL 覆盖原 WAL，写入实际量、after fingerprint、coupled energy 和 target manifest checksum。
 6. 仅在这份 WAL 已 durable 后发布 region HEAD。HEAD 一旦指向 target，region 侧不可回滚。
 7. 把 actor item 收敛为 after；玩家调用同步 player save，dispenser 调用 owning dimension 的 flushing chunk save。Minecraft 当前没有公开的单 chunk durable save，因此 dispenser 完成路径宁可承担低频的 dimension flush，也不能用非 flush autosave 后提前删除 WAL。
-8. durable save 成功后才删除 WAL；删除失败只留下可幂等收敛的 WAL，不重复资源转移。
+8. durable save 后回读 exact after truth；只有回读仍为 after 才删除 WAL。删除失败只留下可幂等收敛的 WAL，不重复资源转移。
 
 WAL/WARNING/committed/HEAD 的文件内容在 rename 前 `force`，rename 与事务完成后的 delete 还要同步父目录 entry；支持目录 channel 的文件系统执行 directory fsync。Windows JDK 不暴露目录 channel，因此仍依赖同卷原子 rename 与已强制写入的文件内容，但不会把一次普通进程崩溃误当成已提交。
 
@@ -117,12 +117,12 @@ WAL/WARNING/committed/HEAD 的文件内容在 rename 前 `force`，rename 与事
 
 | Region HEAD | WAL phase | 恢复动作 |
 |---|---|---|
-| `base` | 任意 | live solver 未变时丢弃 inactive staging 与 WAL，actor 保持 before；同进程 solver 已变则锁定并要求重启从 base 恢复 |
-| `target` + checksum 相符 | `REGION_COMMITTED` | 幂等把 actor 收敛到 after，强制保存，再删除 WAL |
+| `base` | 任意 | live solver 未变且 actor exact before 时丢弃未提交 WAL；actor after/third 或同进程 solver 已变均锁定 |
+| `target` + checksum 相符 | `REGION_COMMITTED` | actor before/after 均可幂等收敛，强制保存并回读 exact after，再删除 WAL；third 锁定 |
 | `target` | `PREPARED` | 锁定：region 已提交但 WAL 没有权威 after item |
 | 其他 generation 或 checksum 不符 | 任意 | 锁定：无法证明 region 属于本事务 |
 
-恢复在判定前还必须验证 dimension、resource kind、base/target 连续性、actor identity、before/after shape、所有适用 registry fingerprint 和 thermal underlying hash。任一未知内容都原样保留。
+任一外部成员 `UNAVAILABLE` 时不改任何 truth 并保留 WAL。玩家 actor 只在该玩家完成协议加入时重试；dispenser actor 只在其 owning dimension/chunk 加载时重试，不在 tick 中轮询。多成员事务只有每个成员都分别匹配 before 或 after 才能收敛剩余 before；成员索引与顺序由 journal 冻结。恢复在判定前还必须验证 dimension、resource kind、base/target 连续性、actor identity、before/after shape、所有适用 registry fingerprint 和 thermal underlying hash。任一未知内容都原样保留。
 
 container-transfer 根目录是严格短期恢复域：未知文件名、目录、残留 `.tmp`、文件名与 transaction UUID 不同或损坏 NBT 会形成全局容器事务锁，因为无法安全得知它属于哪个区域。`empty` 和 region 删除也必须把“存在任何未决或不可读 WAL”视为拒绝条件。
 

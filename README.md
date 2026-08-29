@@ -12,7 +12,7 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 - 世界接管只处理纯原版水。ownership journal 和 WARNING 先发布，原版方块随后修改，region HEAD 最后提交。
 - 区域 checkpoint 使用双槽完整代次与 HEAD 最后发布。`regions recoverprevious` 只在当前 HEAD 恢复失败后，显式验证并激活紧邻的上一完整代。
 - 区域载荷必须与已提交的世界能力包完全一致。任何格式、区域布局、registry fingerprint、身份或账本不一致都会保留原文件并锁定，不改写载荷或猜测修复。
-- 容器事务跨区域、物品和玩家/发射器持久域。actor 的 after-item 完成 durable save 前不得删除 WAL；未知、损坏或布局不一致的 WAL 保留并锁定。
+- 容器事务跨区域、物品和玩家/发射器持久域。actor 的 after-item 完成 durable save 并回读 exact after 前不得删除 WAL；未知、损坏或布局不一致的 WAL 保留并锁定。
 - `empty` 联合清空液体、连续凝聚相、active parcel 和 deposit，并把实际移除的物质与能量记入 sink；存在未决容器 WAL 或相变功时拒绝执行。
 - 可选 GPU probe 只读且不修改世界或存档；主 Mod 始终以 CPU 结果为规范。
 

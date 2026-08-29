@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.recovery.CrossDomainRecovery;
 import cc.ecisr.mmm.transfer.ContainerTransferActor;
 import cc.ecisr.mmm.transfer.ContainerTransferJournal;
 import net.minecraft.core.BlockPos;
@@ -17,11 +18,27 @@ import java.io.IOException;
 
 /** Locates, converges, and durably saves the Minecraft inventory named by a transfer actor. */
 final class MinecraftContainerActorAccess {
-	Convergence convergeAfterItem(MinecraftServer server, ContainerTransferJournal journal) {
+	CrossDomainRecovery.ExternalTruth classify(MinecraftServer server, ContainerTransferJournal journal) {
+		ItemStack current = currentItem(server, journal.actor());
+		if (current == null) return CrossDomainRecovery.ExternalTruth.UNAVAILABLE;
+		if (matches(current, journal.beforeItem())) return CrossDomainRecovery.ExternalTruth.BEFORE;
+		if (matches(current, journal.afterItem())) return CrossDomainRecovery.ExternalTruth.AFTER;
+		return CrossDomainRecovery.ExternalTruth.THIRD;
+	}
+
+	Convergence applyAfterItem(MinecraftServer server, ContainerTransferJournal journal) {
 		return switch (journal.actor()) {
 			case ContainerTransferActor.PlayerHand player -> convergePlayer(server, player, journal);
 			case ContainerTransferActor.Dispenser dispenser -> convergeDispenser(server, dispenser, journal);
 		};
+	}
+
+	CrossDomainRecovery.ExternalTruth verifyAfterItem(MinecraftServer server, ContainerTransferJournal journal) {
+		ItemStack current = currentItem(server, journal.actor());
+		if (current == null) return CrossDomainRecovery.ExternalTruth.UNAVAILABLE;
+		if (matches(current, journal.afterItem())) return CrossDomainRecovery.ExternalTruth.AFTER;
+		if (matches(current, journal.beforeItem())) return CrossDomainRecovery.ExternalTruth.BEFORE;
+		return CrossDomainRecovery.ExternalTruth.THIRD;
 	}
 
 	/** The WAL may be deleted only after this forces the actor's owning save domain. */
@@ -82,6 +99,26 @@ final class MinecraftContainerActorAccess {
 	private static ServerLevel level(MinecraftServer server, String dimension) {
 		Identifier id = Identifier.tryParse(dimension);
 		return id == null ? null : server.getLevel(ResourceKey.create(Registries.DIMENSION, id));
+	}
+
+	private static ItemStack currentItem(MinecraftServer server, ContainerTransferActor actor) {
+		return switch (actor) {
+			case ContainerTransferActor.PlayerHand player -> {
+				ServerPlayer owner = server.getPlayerList().getPlayer(player.playerId());
+				if (owner == null) yield null;
+				InteractionHand hand = player.hand() == ContainerTransferActor.Hand.MAIN
+						? InteractionHand.MAIN_HAND : InteractionHand.OFF_HAND;
+				yield owner.getItemInHand(hand);
+			}
+			case ContainerTransferActor.Dispenser dispenser -> {
+				ServerLevel owner = level(server, dispenser.dimensionId());
+				BlockPos position = new BlockPos(dispenser.blockX(), dispenser.blockY(), dispenser.blockZ());
+				if (owner == null || !owner.hasChunkAt(position)) yield null;
+				if (!(owner.getBlockEntity(position) instanceof DispenserBlockEntity inventory)
+						|| dispenser.slot() >= inventory.getContainerSize()) yield ItemStack.EMPTY;
+				yield inventory.getItem(dispenser.slot());
+			}
+		};
 	}
 
 	private static boolean matches(ItemStack stack, ContainerTransferJournal.ItemFingerprint fingerprint) {

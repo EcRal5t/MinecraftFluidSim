@@ -9,6 +9,7 @@ import cc.ecisr.mmm.network.FluidProtocolServer;
 import cc.ecisr.mmm.simulation.FluidSimulationService;
 import cc.ecisr.mmm.simulation.FluidTransferService;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.dispenser.DispenseItemBehavior;
@@ -34,6 +35,8 @@ public final class MmmMod implements ModInitializer {
 		FluidProtocolServer.register();
 		MmmCommands.register();
 		ServerTickEvents.END_SERVER_TICK.register(server -> FluidSimulationService.get(server).tick(server));
+		ServerChunkEvents.CHUNK_LOAD.register((level, chunk, newlyGenerated) ->
+				FluidSimulationService.get(level.getServer()).retryUnavailableContainerTransfers(level, chunk.getPos()));
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			FluidSimulationService.recoverTakeoverBackup(server);
 			FluidSimulationService.recoverWorldOwnership(server);

@@ -71,6 +71,7 @@ public final class FluidProtocolServer {
 				listener.disconnect(Component.literal("Matter, Motion & Mechanics protocol negotiation was not completed"));
 				return;
 			}
+			FluidSimulationService.get(server).retryUnavailableContainerTransfers(server, listener.player.getUUID());
 			FluidSimulationService.get(server).sendSnapshots(listener.player);
 		});
 		ServerPlayConnectionEvents.DISCONNECT.register((listener, server) -> {
