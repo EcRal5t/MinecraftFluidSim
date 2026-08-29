@@ -184,6 +184,8 @@ U_inventory
 
 `U_inventory` 分别汇总 liquid marker、active parcel、deposit、coherent group 和 gas node。载体间 conduction、reaction carrier handoff、phase transfer、gas merge/split 都是内部转移，不进入 external source/sink；只有 ownership 边界物质进出、固定温度 reservoir 或 operator source 才改变外部列。有限设备位于 solver carrier 边界外、region HEAD 边界内：流体侧把实际请求量记入 `finite_device_exchange`，cell 分配舍入只进 solver roundoff；设备侧独立保存相反的 `solver_exchange` 与 planner roundoff，并要求 body 总 `U` 等于其 expected inventory。两份 roundoff 相加必须等于 region 内 body+fluid 的实际总 `U` 变化。audit 不闭合时保留候选前状态并 PAUSED，不能通过重算温度“修好”。
 
+管理员清空也遵守同一审计：`EMPTY_CONDENSED` 把 liquid/active/deposit/coherent 的实际 `U` 记入 external sink，`VENT_SEALED_GAS` 把全部 sealed gas node 的实际 `U` 记入 external sink，并与对应物质库存及 topology 在同一私有 candidate/HEAD 中提交。预览展示的能量来自权威总 `U`，不是由温度反算；有限设备非空时 ownership 释放与区域移除都被阻止。
+
 ## 持久化与容器
 
 - 完整热区域 generation 必须联合保存 marker/solid/gas topology、所有载体 `U`、audit、Boussinesq identity 和 pending phase-work。

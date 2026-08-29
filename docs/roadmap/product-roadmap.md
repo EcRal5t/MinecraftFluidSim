@@ -24,7 +24,7 @@
 - 实体运动已通过 loader-neutral moving-body request 扰动 marker 动量；浸没观察已连续积分 AABB、派生液层和既有 cut-micro geometry，liquid boundary 使用实际当 tick 位姿差而非供下一 tick 使用的原版响应速度。当前 kinematic AABB 近似仍不是移动 cut-cell、压力面积积分或严格双向动量/排水闭合。
 - 固液已支持有界、数据化的压力平衡曲线，气液使用绝对压力和 component 分压；更高压力、更多材料和跨相溶解仍需分别验证物性域。
 - Query API 已冻结同步只读单格观察，并已有只查询闭壳相邻液体的可选 Jade 适配；container durable completion 已有 committed event。尚无 WAILA/HWYLA、直接自由面目标、稳定 transfer API、其他提交类型事件或其他 loader 发现桥。
-- 主 Mod 已有 field probe 的 server-authored 液体/solid/gas 有界观察、controller 的 select/pause/resume/availability console，以及 creative-only fixed reservoir setpoint。它们是内部产品界面，不扩展外部 Query/transfer ABI；破坏性 empty/vent/release/remove 尚未进入该 console，仍属于后续生命周期产品化范围。
+- 主 Mod 已有 field probe 的 server-authored 液体/solid/gas 有界观察、controller 的 select/pause/resume/availability console、管理员 empty/vent/release/remove 预览确认流程，以及 creative-only fixed reservoir setpoint。破坏性动作展示实际移除量和 blocker，以短时同玩家一次性 token 确认，并通过 ACTIVE/REMOVED HEAD、network tombstone 与 quarantine 恢复闭合；这些仍是内部产品界面，不扩展外部 Query/transfer ABI。
 - section 是一个 region 原子 generation 内的存储分片，不具有独立提交、卸载或 ownership 生命周期。
 - controller 外天然洞穴、河流、海洋和世界生成水不在当前 ownership 范围。
 

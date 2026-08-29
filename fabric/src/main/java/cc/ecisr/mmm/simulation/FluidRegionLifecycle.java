@@ -128,6 +128,18 @@ public final class FluidRegionLifecycle {
 		quietCompletedSteps = 0;
 	}
 
+	/** Initializes a detached loaded candidate with exactly the persisted scheduling intent. */
+	void initializeLoaded(State persistedState, boolean persistedOperatorPaused, int stepIntervalTicks) {
+		if (persistedState == null || persistedState == State.UNLOADED) {
+			throw new IllegalArgumentException("Loaded candidate state is invalid");
+		}
+		operatorPaused = persistedOperatorPaused;
+		state = persistedState == State.HYDROSTATIC_SLEEP ? State.HYDROSTATIC_SLEEP : runningState(stepIntervalTicks);
+		availabilityReason = null;
+		availabilityFailure = null;
+		quietCompletedSteps = 0;
+	}
+
 	private static State runningState(int stepIntervalTicks) {
 		if (stepIntervalTicks <= 0) throw new IllegalArgumentException("stepIntervalTicks must be positive");
 		return stepIntervalTicks == 1 ? State.ACTIVE : State.REDUCED;

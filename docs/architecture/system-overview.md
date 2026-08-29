@@ -110,6 +110,8 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 
 新控制器在首次成功提交后直接进入运行态。玩家的暂停意图随 checkpoint 持久化；边界损坏、chunk 缺失或候选失败造成的 availability pause 不得覆盖该意图，条件恢复后按原意图继续。
 
+controller console 还提供四个管理员破坏性生命周期动作：清空凝聚相、排放密闭气体、释放 ownership、移除空区域。它们都先由服务端生成短时、内存态、同玩家一次性预览，列出实际将移除的体积/质量/species/能量、当前气体与 ownership 数量以及封闭 blocker；确认时必须重新匹配 region generation、动作、权限、WAL、availability、solver generation 和有限设备真值。清空与排放先在私有完整 candidate 上联合审计并发布新 HEAD，再替换 live domain；ownership 释放和区域移除只能在所有相关库存已空时继续。
+
 availability 采用 `RegionAvailabilityReason` 封闭分类；预算、重叠、chunk、边界、WAL、数值拒答和政策停用不再靠错误文本驱动状态。已提交 metadata 即使当前 runtime budget 无法 admission 也继续登记并保留 reservation；只有 solver restore/step 被阻止。
 
 调度和后端选择不得改变守恒结果。缺 chunk 或 controller 破损时不能把缺失区域当墙继续半步。
@@ -121,7 +123,7 @@ availability 采用 `RegionAvailabilityReason` 封闭分类；预算、重叠、
 - **LOCKED**：磁盘格式、identity、registry fingerprint、generation、checksum 或 WAL 状态无法被唯一解释。原文件保留，拒绝任何会覆盖证据的操作。
 - **PAUSED**：当前库存可解释，但候选数值步越过物性有效域、容量、预算、审计或 wall-time 安全门。保留内存/已提交状态，允许修正外部条件后重试。
 
-region HEAD 是区域物理状态唯一提交点。ownership 与 container WAL 分别把世界方块和 actor item 收敛到该 HEAD；它们不能成为第二个物理真值。任何 publish 都必须遵守“完整写入、回读验证、HEAD 最后替换”。
+region HEAD 是区域物理状态唯一提交点。正常库存由 `ACTIVE` HEAD 指向完整 generation；终止区域由严格 `REMOVED` HEAD 指向零库存 tombstone，UUID 永不复用。ownership 与 container WAL 分别把世界方块和 actor item 收敛到该 HEAD；它们不能成为第二个物理真值。任何 publish 都必须遵守“完整写入、回读验证、HEAD 最后替换”。`REMOVED` HEAD 发布后才发送更高 network generation 的移除 tombstone、注销 runtime owner，并把旧 ACTIVE payload 收敛到持久 quarantine；崩溃恢复不能从旧 payload 重建 solver。
 
 需要把 region HEAD 与一个或多个外部持久成员收敛的 journal 统一委托 JDK-only `CrossDomainRecovery`：adapter 只能把 durable readback 分类为 exact `BEFORE`、`AFTER`、`THIRD` 或 `UNAVAILABLE`。HEAD 为 base 时只接受全 before；HEAD 为 checksum 匹配的 target 且 journal 已提交时才收敛 remaining before；third 锁定，unavailable 等待明确加载事件。normal tick 不轮询 unavailable actor。
 

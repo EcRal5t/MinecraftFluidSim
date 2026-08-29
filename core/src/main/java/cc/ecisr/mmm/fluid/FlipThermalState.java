@@ -315,6 +315,7 @@ final class FlipThermalState {
 		return SignedDyadic.sum(Arrays.copyOf(internalEnergy, count)).add(coherentPhases.exactEnergy())
 				.add(granularEnergy.exactEnergy()).add(SignedDyadic.sum(gasNodeEnergy));
 	}
+	SignedDyadic exactGasEnergy() { return SignedDyadic.sum(gasNodeEnergy); }
 	SignedDyadic exactLiquidEnergy(int count) {
 		return SignedDyadic.sum(Arrays.copyOf(internalEnergy, count));
 	}
@@ -461,6 +462,27 @@ final class FlipThermalState {
 		audit = audit.withExternalSourceEnergy(plan.sourceEnergy()).withExternalSinkEnergy(plan.sinkEnergy())
 				.withMechanicalWork(plan.mechanicalWork()).withRoundoff(plan.roundoff());
 	}
+
+	/** Prevalidates removal of every sealed-node energy as one external sink. */
+	GasVentPlan planGasVent(AirNetwork network, int markerCount) {
+		if (!hasGasEnergy(network.nodeCount()) || !exactEnergy(markerCount).equals(audit.expectedInventory())) {
+			throw new IllegalStateException("Gas energy is not bound to a closed thermal inventory");
+		}
+		SignedDyadic removed = SignedDyadic.sum(gasNodeEnergy);
+		return new GasVentPlan(gasNodeEnergy.length, removed, audit.withExternalSinkEnergy(removed));
+	}
+
+	/** Publishes an already validated all-node gas-energy removal using assignments only. */
+	void commitGasVent(GasVentPlan plan) {
+		if (plan == null || gasNodeEnergy.length != plan.nodeCount()
+				|| !SignedDyadic.sum(gasNodeEnergy).equals(plan.removedEnergy())) {
+			throw new IllegalStateException("Gas energy changed after vent planning");
+		}
+		gasNodeEnergy = new double[0];
+		audit = plan.auditAfter();
+	}
+
+	record GasVentPlan(int nodeCount, SignedDyadic removedEnergy, ThermalAuditLedger auditAfter) { }
 
 	AirNetwork.TransferCommit planGasTransfer(
 			int sourceNode, int targetNode, GasInventory moved,

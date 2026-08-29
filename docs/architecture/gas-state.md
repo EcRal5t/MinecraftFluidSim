@@ -99,3 +99,5 @@ Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 气体只作为完整热区域 generation 的 required payload 发布。恢复时从已提交 carrier geometry 重新扫描 full-air topology；已提交 membership 中的 partial owner 只在同一格仍有正 residual、连通部分仍不接触任何重扫 gas component 时重新建立。随后要求节点数、minimum-cell key、逐格 membership、库存和能量 ordinal 全部一致；任何差异都锁定，不猜测 remap。
 
 持久 payload 还包含 registry fingerprint、unit identity、component palette、节点总账、逐 section membership（包括必要的 partial owner cells）和 source/sink/roundoff 审计；显式真空 node 以空 component inventory 原样保存。gas registry fingerprint 同时绑定每个 component 的允许 species 集合；不匹配时原样保留并锁定。edge、pressure、temperature、其余 runtime interface lineage 和 flow velocity 可从完整库存与几何重建，不进入 checkpoint。
+
+管理员 `VENT_SEALED_GAS` 是一个联合持久候选：所有 sealed component nanos/kg/species/residual 按实际值进入 gas escaped sink，所有 gas node `U` 按实际值进入 thermal external sink，有限 node 与 energy ordinal 一起清零。原 sealed cell 随后只标记为 ambient-connected geometry；ambient 不是 region inventory，不能用 ambient 默认库存补回。`operatorVentedTopology` 随 gas payload 保存并在恢复时重建该语义，因此后续凝聚相 `empty`、capture 或 topology 同步不能重新生成 sealed inventory；排放后的区域也不能恢复运行。

@@ -3,10 +3,12 @@ package cc.ecisr.mmm.simulation.persistence;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
+import cc.ecisr.mmm.recovery.CrossDomainRecovery;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
+import net.minecraft.nbt.Tag;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
@@ -29,9 +31,12 @@ import java.util.zip.CRC32C;
 public final class RegionStateFiles {
 	private static final String HEAD = "HEAD.nbt";
 	private static final String MANIFEST = "manifest.nbt";
+	private static final String REMOVED = "removed.nbt";
 	private static final String SLOT_A = "slot-a";
 	private static final String SLOT_B = "slot-b";
 	private static final long MAX_NBT_BYTES = 64L * 1024L * 1024L;
+	private static final long REMOVAL_QUARANTINE_OVERHEAD_ENTRIES = 6L;
+	private static final long REMOVAL_QUARANTINE_MANIFEST_BUDGET_BYTES = 4_096L;
 
 	private final Path root;
 	private final RegionStateCodec codec;
@@ -186,7 +191,7 @@ public final class RegionStateFiles {
 		UUID id = prepared.id();
 		Path region = regionPath(id);
 		validateBaseUnchanged(prepared, region);
-		Head next = new Head(id, prepared.generation(), prepared.slot(), prepared.manifestChecksum());
+		Head next = new Head(id, prepared.generation(), HeadKind.ACTIVE, prepared.slot(), prepared.manifestChecksum());
 		Path headTemporary = region.resolve(HEAD + ".tmp");
 		NbtIo.writeCompressed(encodeHead(next), headTemporary);
 		forceFile(headTemporary);
@@ -197,6 +202,134 @@ public final class RegionStateFiles {
 		readGeneration(region, readHead(region, id));
 		injector.check(FaultPoint.AFTER_HEAD_PUBLISH, region.resolve(HEAD));
 		return next.generation();
+	}
+
+	/** Stages a terminal tombstone in the inactive slot after re-reading the exact ACTIVE base. */
+	public PreparedRemoval prepareRemoval(
+			UUID id, long expectedBaseGeneration, long expectedManifestChecksum,
+			long networkTombstoneGeneration, UUID quarantineTransactionId,
+			String capabilityProfileFingerprint, String registryAggregateFingerprint,
+			long maximumQuarantineEntries, long maximumQuarantineBytes
+	) throws IOException {
+		Path region = regionPath(id);
+		Head current = readHead(region, id);
+		if (current.kind() != HeadKind.ACTIVE || current.generation() != expectedBaseGeneration
+				|| current.manifestChecksum() != expectedManifestChecksum) {
+			throw new IOException("ACTIVE region HEAD moved before removal staging");
+		}
+		readGeneration(region, current);
+		long target = GenerationSequence.next(expectedBaseGeneration, "Removed region tombstone");
+		RemovedRegionManifest unsigned = new RemovedRegionManifest(id, capabilityProfileFingerprint,
+				registryAggregateFingerprint, expectedBaseGeneration, target, expectedManifestChecksum,
+				networkTombstoneGeneration, quarantineTransactionId,
+				RemovedRegionManifest.ZERO_INVENTORY_DIGEST, 0L);
+		RemovedRegionManifest removed = withRemovedChecksum(unsigned);
+		String inactive = current.slot().equals(SLOT_B) ? SLOT_A : SLOT_B;
+		Path inactivePath = region.resolve(inactive), temporary = region.resolve(inactive + ".tmp");
+		Path quarantineDestination = removedQuarantinePath(id, target);
+		if (Files.exists(quarantineDestination)) {
+			throw new IOException("Removed-region quarantine target already exists");
+		}
+		requireRemovalQuarantineCapacity(region.resolve(current.slot()), maximumQuarantineEntries, maximumQuarantineBytes);
+		deleteTree(temporary); deleteTree(inactivePath); Files.createDirectory(temporary);
+		Path removedPath = temporary.resolve(REMOVED);
+		NbtIo.writeCompressed(encodeRemoved(removed), removedPath); forceFile(removedPath);
+		DurableFileOperations.forceDirectory(temporary);
+		if (!readRemovedSlot(temporary, id).equals(removed)) throw new IOException("Removed tombstone readback changed");
+		atomicMover.move(temporary, inactivePath, false); DurableFileOperations.forceDirectory(region);
+		return new PreparedRemoval(removed, inactive, current.slot(), maximumQuarantineEntries, maximumQuarantineBytes);
+	}
+
+	/** Publishes the REMOVED HEAD as the sole terminal commit point. */
+	public RemovedRegionManifest commitRemoval(PreparedRemoval prepared) throws IOException {
+		RemovedRegionManifest removed = prepared.manifest();
+		Path region = regionPath(removed.regionId());
+		Head current = readHead(region, removed.regionId());
+		if (current.kind() == HeadKind.REMOVED) return readRemovedGeneration(region, current);
+		if (current.kind() != HeadKind.ACTIVE || current.generation() != removed.baseGeneration()
+				|| current.manifestChecksum() != removed.oldManifestChecksum()
+				|| !current.slot().equals(prepared.activeSlot())) {
+			throw new IOException("ACTIVE region HEAD moved before REMOVED commit");
+		}
+		RemovedRegionManifest verified = readRemovedSlot(region.resolve(prepared.tombstoneSlot()), removed.regionId());
+		if (!verified.equals(removed)) throw new IOException("Staged REMOVED tombstone changed before commit");
+		Head next = new Head(removed.regionId(), removed.targetGeneration(), HeadKind.REMOVED,
+				prepared.tombstoneSlot(), removed.checksum());
+		Path temporary = region.resolve(HEAD + ".tmp");
+		NbtIo.writeCompressed(encodeHead(next), temporary); forceFile(temporary);
+		decodeHead(readNbt(temporary), removed.regionId());
+		atomicMover.move(temporary, region.resolve(HEAD), true); DurableFileOperations.forceDirectory(region);
+		return readRemovedGeneration(region, readHead(region, removed.regionId()));
+	}
+
+	public void abortRemoval(PreparedRemoval prepared) throws IOException {
+		RemovedRegionManifest removed = prepared.manifest(); Path region = regionPath(removed.regionId());
+		Head current = readHead(region, removed.regionId());
+		if (current.kind() != HeadKind.ACTIVE || current.generation() != removed.baseGeneration()
+				|| current.manifestChecksum() != removed.oldManifestChecksum()) {
+			throw new IOException("Region HEAD moved while aborting REMOVED staging");
+		}
+		deleteTree(region.resolve(prepared.tombstoneSlot()));
+		deleteTree(region.resolve(prepared.tombstoneSlot() + ".tmp"));
+	}
+
+	public void requireRemovalQuarantineCapacity(UUID id, long maximumEntries, long maximumBytes) throws IOException {
+		Path region = regionPath(id); Head head = readHead(region, id);
+		if (head.kind() != HeadKind.ACTIVE) throw new IOException("Region is not ACTIVE");
+		long target = GenerationSequence.next(head.generation(), "Removed region tombstone");
+		if (Files.exists(removedQuarantinePath(id, target))) {
+			throw new IOException("Removed-region quarantine target already exists");
+		}
+		requireRemovalQuarantineCapacity(region.resolve(head.slot()), maximumEntries, maximumBytes);
+	}
+
+	/** Moves the no-longer-referenced ACTIVE slot into durable quarantine and verifies its manifest. */
+	public Path convergeRemovalQuarantine(
+			UUID id, long maximumQuarantineEntries, long maximumQuarantineBytes
+	) throws IOException {
+		Path region = regionPath(id); Head head = readHead(region, id);
+		RemovedRegionManifest removed = readRemovedGeneration(region, head);
+		String activeSlot = head.slot().equals(SLOT_A) ? SLOT_B : SLOT_A;
+		Path source = region.resolve(activeSlot), destination = removedQuarantinePath(id, removed.targetGeneration());
+		Path payload = destination.resolve("payload"), manifestPath = destination.resolve("quarantine.nbt");
+		CrossDomainRecovery.ExternalTruth truth = classifyRemovedQuarantine(
+				source, destination, payload, manifestPath, removed);
+		CrossDomainRecovery.Decision decision = removalDecision(head, removed,
+				CrossDomainRecovery.JournalPhase.REGION_COMMITTED, truth, false);
+		if (decision.outcome() == CrossDomainRecovery.Outcome.LOCKED) {
+			throw new IOException("REMOVED quarantine recovery is LOCKED: " + decision.reason());
+		}
+		if (decision.outcome() != CrossDomainRecovery.Outcome.CONVERGE_AFTER) {
+			throw new IOException("REMOVED quarantine recovery produced " + decision.outcome());
+		}
+		if (truth == CrossDomainRecovery.ExternalTruth.AFTER) return destination;
+		if (!Files.exists(destination)) {
+			DurableFileOperations.createDirectories(destination); DurableFileOperations.forceDirectory(destination.getParent());
+		}
+		if (Files.exists(source)) {
+			atomicMover.move(source, payload, false); DurableFileOperations.forceDirectory(destination);
+		}
+		validateRemovedPayload(payload, removed);
+		if (!Files.exists(manifestPath)) {
+			Path temporary = destination.resolve("quarantine.nbt.tmp");
+			if (Files.exists(temporary)) {
+				RemovedRegionManifest staged = decodeRemoved(readNbt(temporary), id);
+				if (!staged.equals(removed)) throw new IOException("Staged quarantine manifest differs from REMOVED HEAD");
+			} else {
+				NbtIo.writeCompressed(encodeRemoved(removed), temporary); forceFile(temporary);
+			}
+			atomicMover.move(temporary, manifestPath, false); DurableFileOperations.forceDirectory(destination);
+		}
+		if (classifyRemovedQuarantine(source, destination, payload, manifestPath, removed)
+				!= CrossDomainRecovery.ExternalTruth.AFTER) {
+			throw new IOException("Removed-region quarantine did not reach exact AFTER truth");
+		}
+		return destination;
+	}
+
+	public RemovedRegionManifest readRemoved(UUID id) throws IOException {
+		Path region = regionPath(id);
+		return readRemovedGeneration(region, readHead(region, id));
 	}
 
 	/** Discards a staged generation; the base committed generation stays authoritative. */
@@ -315,7 +448,7 @@ public final class RegionStateFiles {
 			throw new IOException("Previous generation changed after validation");
 		}
 		Head restored = new Head(previous.id(), verified.manifest().checkpointGeneration(),
-				previous.slot(), verified.manifest().checksum());
+				HeadKind.ACTIVE, previous.slot(), verified.manifest().checksum());
 		Path headTemporary = region.resolve(HEAD + ".tmp");
 		Files.deleteIfExists(headTemporary);
 		NbtIo.writeCompressed(encodeHead(restored), headTemporary);
@@ -385,9 +518,10 @@ public final class RegionStateFiles {
 	}
 
 	private Discovery discover(boolean reconstruct) throws IOException {
-		if (!Files.exists(root)) return new Discovery(List.of(), Map.of());
+		if (!Files.exists(root)) return new Discovery(List.of(), List.of(), Map.of());
 		if (!Files.isDirectory(root)) throw new IOException("Region-state root is not a directory: " + root);
 		List<RegionManifest> manifests = new ArrayList<>();
+		List<RemovedRegionManifest> removed = new ArrayList<>();
 		Map<Path, String> issues = new HashMap<>();
 		try (DirectoryStream<Path> entries = Files.newDirectoryStream(root)) {
 			for (Path entry : entries) {
@@ -398,28 +532,63 @@ public final class RegionStateFiles {
 				}
 				try {
 					UUID id = UUID.fromString(entry.getFileName().toString());
-					RegionState committed = read(id);
-					if (reconstruct) validateReconstruction(committed);
-					manifests.add(committed.manifest());
+					Head head = readHead(entry, id);
+					recoverUncommittedRemovalStaging(entry, head);
+					if (head.kind() == HeadKind.REMOVED) {
+						removed.add(readRemovedGeneration(entry, head));
+					} else {
+						RegionState committed = readGeneration(entry, head);
+						if (reconstruct) validateReconstruction(committed);
+						manifests.add(committed.manifest());
+					}
 				} catch (IllegalArgumentException | IOException exception) {
 					issues.put(entry, exception.getMessage());
 				}
 			}
 		}
 		manifests.sort(Comparator.comparing(manifest -> manifest.regionId().toString()));
-		return new Discovery(manifests, issues);
+		removed.sort(Comparator.comparing(manifest -> manifest.regionId().toString()));
+		return new Discovery(manifests, removed, issues);
 	}
 
-	/** Atomically makes a checkpoint undiscoverable before best-effort physical cleanup. */
-	public Path quarantine(UUID id) throws IOException {
-		Path region = regionPath(id);
-		if (!Files.exists(region)) return null;
-		readHead(region, id);
-		Path quarantine = root.resolve(".quarantine-" + id + "-" + UUID.randomUUID());
-		atomicMover.move(region, quarantine, false);
-		DurableFileOperations.forceDirectory(root);
-		try { deleteTree(quarantine); } catch (IOException ignored) { }
-		return quarantine;
+	/** An ACTIVE HEAD proves that an exact inactive REMOVED candidate never committed. */
+	private void recoverUncommittedRemovalStaging(Path region, Head active) throws IOException {
+		if (active.kind() != HeadKind.ACTIVE) return;
+		String inactiveName = active.slot().equals(SLOT_A) ? SLOT_B : SLOT_A;
+		Path inactive = region.resolve(inactiveName), temporary = region.resolve(inactiveName + ".tmp");
+		boolean inactiveRemoval = Files.exists(inactive.resolve(REMOVED));
+		boolean temporaryRemoval = Files.exists(temporary.resolve(REMOVED));
+		if (!inactiveRemoval && !temporaryRemoval) return;
+		if (inactiveRemoval && temporaryRemoval) {
+			throw new IOException("REMOVED staging exists in both inactive and temporary slots");
+		}
+		Path stagedPath = inactiveRemoval ? inactive : temporary;
+		RemovedRegionManifest staged = readRemovedSlot(stagedPath, active.id());
+		if (staged.baseGeneration() != active.generation()
+				|| staged.oldManifestChecksum() != active.manifestChecksum()) {
+			throw new IOException("Uncommitted REMOVED staging does not bind the ACTIVE HEAD");
+		}
+		readGeneration(region, active);
+		Path quarantine = removedQuarantinePath(active.id(), staged.targetGeneration());
+		CrossDomainRecovery.ExternalTruth quarantineTruth = Files.exists(quarantine)
+				? CrossDomainRecovery.ExternalTruth.THIRD : CrossDomainRecovery.ExternalTruth.BEFORE;
+		CrossDomainRecovery.Decision decision = removalDecision(active, staged,
+				CrossDomainRecovery.JournalPhase.PREPARED, quarantineTruth, false);
+		if (decision.outcome() != CrossDomainRecovery.Outcome.DISCARD_UNCOMMITTED) {
+			throw new IOException("Uncommitted REMOVED recovery is LOCKED: " + decision.reason());
+		}
+		Path headTemporary = region.resolve(HEAD + ".tmp");
+		if (Files.exists(headTemporary)) {
+			Head candidate = decodeHead(readNbt(headTemporary), active.id());
+			if (candidate.kind() != HeadKind.REMOVED || candidate.generation() != staged.targetGeneration()
+					|| !candidate.slot().equals(inactiveName)
+					|| candidate.manifestChecksum() != staged.checksum()) {
+				throw new IOException("Uncommitted REMOVED HEAD staging does not bind its tombstone");
+			}
+		}
+		deleteTree(stagedPath);
+		deleteTree(headTemporary);
+		DurableFileOperations.forceDirectory(region);
 	}
 
 	private void discardKnownStagedLeftovers(Path region) throws IOException {
@@ -454,10 +623,199 @@ public final class RegionStateFiles {
 	}
 
 	private RegionState readGeneration(Path region, Head head) throws IOException {
+		if (head.kind() != HeadKind.ACTIVE) throw new IOException("Region HEAD is a REMOVED tombstone");
 		RegionState state = readSlot(region.resolve(head.slot()));
 		validateHeadBinding(head, state.manifest());
 		state.validate();
 		return state;
+	}
+
+	private RemovedRegionManifest readRemovedGeneration(Path region, Head head) throws IOException {
+		if (head.kind() != HeadKind.REMOVED) throw new IOException("Region HEAD is not REMOVED");
+		RemovedRegionManifest removed = readRemovedSlot(region.resolve(head.slot()), head.id());
+		if (removed.targetGeneration() != head.generation() || removed.checksum() != head.manifestChecksum()) {
+			throw new IOException("REMOVED HEAD does not bind its tombstone manifest");
+		}
+		return removed;
+	}
+
+	private RemovedRegionManifest readRemovedSlot(Path slot, UUID expectedId) throws IOException {
+		if (!Files.isDirectory(slot)) throw new IOException("Missing REMOVED tombstone slot");
+		try (DirectoryStream<Path> entries = Files.newDirectoryStream(slot)) {
+			int count = 0;
+			for (Path entry : entries) {
+				count++;
+				if (!Files.isRegularFile(entry) || !entry.getFileName().toString().equals(REMOVED)) {
+					throw new IOException("Unexpected REMOVED tombstone slot content");
+				}
+			}
+			if (count != 1) throw new IOException("Incomplete REMOVED tombstone slot");
+		}
+		return decodeRemoved(readNbt(slot.resolve(REMOVED)), expectedId);
+	}
+
+	private static CompoundTag encodeRemoved(RemovedRegionManifest value) {
+		CompoundTag tag = new CompoundTag(); tag.putString("Schema", "removed-region");
+		tag.putLong("UuidMost", value.regionId().getMostSignificantBits()); tag.putLong("UuidLeast", value.regionId().getLeastSignificantBits());
+		tag.putString("ProfileFingerprint", value.capabilityProfileFingerprint());
+		tag.putString("RegistryAggregateFingerprint", value.registryAggregateFingerprint());
+		tag.putLong("BaseGeneration", value.baseGeneration()); tag.putLong("TargetGeneration", value.targetGeneration());
+		tag.putLong("OldManifestChecksum", value.oldManifestChecksum());
+		tag.putLong("NetworkTombstoneGeneration", value.networkTombstoneGeneration());
+		tag.putLong("QuarantineMost", value.quarantineTransactionId().getMostSignificantBits());
+		tag.putLong("QuarantineLeast", value.quarantineTransactionId().getLeastSignificantBits());
+		tag.putLong("ZeroInventoryDigest", value.zeroInventoryDigest()); tag.putLong("Checksum", value.checksum());
+		return tag;
+	}
+
+	private static RemovedRegionManifest decodeRemoved(CompoundTag tag, UUID expectedId) throws IOException {
+		try {
+			StrictNbtFields.requireExact(tag, Map.ofEntries(
+					Map.entry("Schema", Tag.TAG_STRING),
+					Map.entry("UuidMost", Tag.TAG_LONG),
+					Map.entry("UuidLeast", Tag.TAG_LONG),
+					Map.entry("ProfileFingerprint", Tag.TAG_STRING),
+					Map.entry("RegistryAggregateFingerprint", Tag.TAG_STRING),
+					Map.entry("BaseGeneration", Tag.TAG_LONG),
+					Map.entry("TargetGeneration", Tag.TAG_LONG),
+					Map.entry("OldManifestChecksum", Tag.TAG_LONG),
+					Map.entry("NetworkTombstoneGeneration", Tag.TAG_LONG),
+					Map.entry("QuarantineMost", Tag.TAG_LONG),
+					Map.entry("QuarantineLeast", Tag.TAG_LONG),
+					Map.entry("ZeroInventoryDigest", Tag.TAG_LONG),
+					Map.entry("Checksum", Tag.TAG_LONG)), "REMOVED region manifest");
+			if (!tag.getStringOr("Schema", "").equals("removed-region")) throw new IOException("Unknown REMOVED manifest schema");
+			RemovedRegionManifest value = new RemovedRegionManifest(
+					new UUID(tag.getLongOr("UuidMost", 0L), tag.getLongOr("UuidLeast", 0L)),
+					tag.getStringOr("ProfileFingerprint", ""), tag.getStringOr("RegistryAggregateFingerprint", ""),
+					tag.getLongOr("BaseGeneration", -1L), tag.getLongOr("TargetGeneration", -1L),
+					tag.getLongOr("OldManifestChecksum", -1L), tag.getLongOr("NetworkTombstoneGeneration", -1L),
+					new UUID(tag.getLongOr("QuarantineMost", 0L), tag.getLongOr("QuarantineLeast", 0L)),
+					tag.getLongOr("ZeroInventoryDigest", -1L), tag.getLongOr("Checksum", -1L));
+			if (!value.regionId().equals(expectedId) || value.checksum() != removedChecksum(value)) {
+				throw new IOException("REMOVED manifest checksum or identity mismatch");
+			}
+			return value;
+		} catch (IllegalArgumentException invalid) {
+			throw new IOException("Invalid REMOVED manifest", invalid);
+		}
+	}
+
+	private static RemovedRegionManifest withRemovedChecksum(RemovedRegionManifest value) {
+		return new RemovedRegionManifest(value.regionId(), value.capabilityProfileFingerprint(),
+				value.registryAggregateFingerprint(), value.baseGeneration(), value.targetGeneration(),
+				value.oldManifestChecksum(), value.networkTombstoneGeneration(), value.quarantineTransactionId(),
+				value.zeroInventoryDigest(), removedChecksum(value));
+	}
+
+	private static long removedChecksum(RemovedRegionManifest value) {
+		CRC32C crc = new CRC32C(); updateLong(crc, value.regionId().getMostSignificantBits());
+		updateLong(crc, value.regionId().getLeastSignificantBits());
+		crc.update(value.capabilityProfileFingerprint().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		crc.update(value.registryAggregateFingerprint().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		updateLong(crc, value.baseGeneration()); updateLong(crc, value.targetGeneration());
+		updateLong(crc, value.oldManifestChecksum()); updateLong(crc, value.networkTombstoneGeneration());
+		updateLong(crc, value.quarantineTransactionId().getMostSignificantBits());
+		updateLong(crc, value.quarantineTransactionId().getLeastSignificantBits());
+		updateLong(crc, value.zeroInventoryDigest()); return crc.getValue();
+	}
+
+	private Path removedQuarantinePath(UUID id, long targetGeneration) {
+		return root.getParent().resolve("quarantine").resolve("removed-region")
+				.resolve(id.toString()).resolve(Long.toString(targetGeneration));
+	}
+
+	private void requireRemovalQuarantineCapacity(Path incoming, long maximumEntries, long maximumBytes) throws IOException {
+		if (maximumEntries < 0L || maximumBytes < 0L) throw new IOException("Removed-region quarantine budget is invalid");
+		long[] existing = treeStats(root.getParent().resolve("quarantine"));
+		long[] addition = treeStats(incoming);
+		try {
+			if (Math.addExact(existing[0], Math.addExact(addition[0], REMOVAL_QUARANTINE_OVERHEAD_ENTRIES)) > maximumEntries
+					|| Math.addExact(existing[1], Math.addExact(addition[1], REMOVAL_QUARANTINE_MANIFEST_BUDGET_BYTES)) > maximumBytes) {
+				throw new IOException("Removed-region quarantine is over its admission budget");
+			}
+		} catch (ArithmeticException overflow) { throw new IOException("Removed-region quarantine accounting overflow", overflow); }
+	}
+
+	private static long[] treeStats(Path path) throws IOException {
+		if (!Files.exists(path)) return new long[]{0L, 0L};
+		long entries = 0L, bytes = 0L;
+		try (var stream = Files.walk(path)) {
+			for (Path entry : stream.toList()) {
+				entries = Math.addExact(entries, 1L);
+				if (Files.isRegularFile(entry)) bytes = Math.addExact(bytes, Files.size(entry));
+			}
+		} catch (ArithmeticException overflow) { throw new IOException("Quarantine tree accounting overflow", overflow); }
+		return new long[]{entries, bytes};
+	}
+
+	private static CrossDomainRecovery.Decision removalDecision(
+			Head head, RemovedRegionManifest removed, CrossDomainRecovery.JournalPhase phase,
+			CrossDomainRecovery.ExternalTruth quarantineTruth, boolean baseCandidateDirty
+	) {
+		return CrossDomainRecovery.decide(new CrossDomainRecovery.Boundary(
+				head.generation(), head.manifestChecksum(), removed.baseGeneration(), removed.targetGeneration(),
+				true, removed.checksum(), phase, baseCandidateDirty), List.of(quarantineTruth));
+	}
+
+	private CrossDomainRecovery.ExternalTruth classifyRemovedQuarantine(
+			Path source, Path destination, Path payload, Path manifestPath, RemovedRegionManifest removed
+	) throws IOException {
+		boolean sourceExists = Files.exists(source), payloadExists = Files.exists(payload);
+		if (sourceExists && payloadExists) return CrossDomainRecovery.ExternalTruth.THIRD;
+		if (sourceExists) {
+			validateRemovedPayload(source, removed);
+			if (!Files.exists(destination)) return CrossDomainRecovery.ExternalTruth.BEFORE;
+			if (!Files.isDirectory(destination) || !entryNames(destination).isEmpty()) {
+				return CrossDomainRecovery.ExternalTruth.THIRD;
+			}
+			return CrossDomainRecovery.ExternalTruth.BEFORE;
+		}
+		if (!payloadExists) return CrossDomainRecovery.ExternalTruth.THIRD;
+		try {
+			validateRemovedPayload(payload, removed);
+			Set<String> entries = entryNames(destination);
+			Path temporary = destination.resolve("quarantine.nbt.tmp");
+			if (!Files.exists(manifestPath)) {
+				if (!(entries.equals(Set.of("payload"))
+						|| entries.equals(Set.of("payload", "quarantine.nbt.tmp")))) {
+					return CrossDomainRecovery.ExternalTruth.THIRD;
+				}
+				if (Files.exists(temporary)
+						&& !decodeRemoved(readNbt(temporary), removed.regionId()).equals(removed)) {
+					return CrossDomainRecovery.ExternalTruth.THIRD;
+				}
+				return CrossDomainRecovery.ExternalTruth.BEFORE;
+			}
+			if (!entries.equals(Set.of("payload", "quarantine.nbt"))) {
+				return CrossDomainRecovery.ExternalTruth.THIRD;
+			}
+			return decodeRemoved(readNbt(manifestPath), removed.regionId()).equals(removed)
+					? CrossDomainRecovery.ExternalTruth.AFTER : CrossDomainRecovery.ExternalTruth.THIRD;
+		} catch (IOException | RuntimeException invalid) {
+			return CrossDomainRecovery.ExternalTruth.THIRD;
+		}
+	}
+
+	private void validateRemovedPayload(Path payload, RemovedRegionManifest removed) throws IOException {
+		RegionState previous = readSlot(payload);
+		previous.validate();
+		validateReconstruction(previous);
+		RegionManifest manifest = previous.manifest();
+		if (!manifest.regionId().equals(removed.regionId())
+				|| manifest.checkpointGeneration() != removed.baseGeneration()
+				|| manifest.checksum() != removed.oldManifestChecksum()) {
+			throw new IOException("Removed-region quarantine payload does not bind the old ACTIVE manifest");
+		}
+	}
+
+	private static Set<String> entryNames(Path directory) throws IOException {
+		if (!Files.isDirectory(directory)) throw new IOException("Expected directory " + directory);
+		HashSet<String> names = new HashSet<>();
+		try (DirectoryStream<Path> entries = Files.newDirectoryStream(directory)) {
+			for (Path entry : entries) names.add(entry.getFileName().toString());
+		}
+		return Set.copyOf(names);
 	}
 
 	private void validateReconstruction(RegionState state) throws IOException {
@@ -548,29 +906,43 @@ public final class RegionStateFiles {
 	private static CompoundTag encodeHead(Head head) {
 		CompoundTag tag = new CompoundTag();
 		tag.putString("Schema", "region-head"); tag.putLong("UuidMost", head.id().getMostSignificantBits()); tag.putLong("UuidLeast", head.id().getLeastSignificantBits());
-		tag.putLong("Generation", head.generation()); tag.putString("Slot", head.slot()); tag.putLong("ManifestChecksum", head.manifestChecksum());
-		tag.putLong("Checksum", headChecksum(head.id(), head.generation(), head.slot(), head.manifestChecksum()));
+		tag.putLong("Generation", head.generation()); tag.putString("Kind", head.kind().name());
+		tag.putString("Slot", head.slot()); tag.putLong("ManifestChecksum", head.manifestChecksum());
+		tag.putLong("Checksum", headChecksum(head.id(), head.generation(), head.kind(), head.slot(), head.manifestChecksum()));
 		return tag;
 	}
 
 	private static Head decodeHead(CompoundTag tag, UUID expectedId) throws IOException {
+		StrictNbtFields.requireExact(tag, Map.of(
+				"Schema", Tag.TAG_STRING,
+				"UuidMost", Tag.TAG_LONG,
+				"UuidLeast", Tag.TAG_LONG,
+				"Generation", Tag.TAG_LONG,
+				"Kind", Tag.TAG_STRING,
+				"Slot", Tag.TAG_STRING,
+				"ManifestChecksum", Tag.TAG_LONG,
+				"Checksum", Tag.TAG_LONG), "region-state HEAD");
 		String schema = tag.getStringOr("Schema", "");
 		UUID id = new UUID(tag.getLongOr("UuidMost", 0L), tag.getLongOr("UuidLeast", 0L));
 		long generation = tag.getLongOr("Generation", -1L), manifestChecksum = tag.getLongOr("ManifestChecksum", -1L);
 		String slot = tag.getStringOr("Slot", "");
+		HeadKind kind;
+		try { kind = HeadKind.valueOf(tag.getStringOr("Kind", "")); }
+		catch (IllegalArgumentException invalid) { throw new IOException("Invalid region-state HEAD kind for " + expectedId); }
 		if (!schema.equals("region-head") || !id.equals(expectedId) || generation <= 0L || (!slot.equals(SLOT_A) && !slot.equals(SLOT_B))) {
 			throw new IOException("Invalid region-state HEAD for " + expectedId);
 		}
-		if (tag.getLongOr("Checksum", -1L) != headChecksum(id, generation, slot, manifestChecksum)) {
+		if (tag.getLongOr("Checksum", -1L) != headChecksum(id, generation, kind, slot, manifestChecksum)) {
 			throw new IOException("Region-state HEAD checksum mismatch");
 		}
-		return new Head(id, generation, slot, manifestChecksum);
+		return new Head(id, generation, kind, slot, manifestChecksum);
 	}
 
-	private static long headChecksum(UUID id, long generation, String slot, long manifestChecksum) {
+	private static long headChecksum(UUID id, long generation, HeadKind kind, String slot, long manifestChecksum) {
 		CRC32C crc = new CRC32C();
 		updateLong(crc, id.getMostSignificantBits()); updateLong(crc, id.getLeastSignificantBits());
-		updateLong(crc, generation); crc.update(slot.getBytes(java.nio.charset.StandardCharsets.UTF_8)); updateLong(crc, manifestChecksum);
+		updateLong(crc, generation); crc.update(kind.name().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		crc.update(slot.getBytes(java.nio.charset.StandardCharsets.UTF_8)); updateLong(crc, manifestChecksum);
 		return crc.getValue();
 	}
 
@@ -651,9 +1023,17 @@ public final class RegionStateFiles {
 			return slot == null;
 		}
 	}
+	public record PreparedRemoval(
+			RemovedRegionManifest manifest, String tombstoneSlot, String activeSlot,
+			long maximumQuarantineEntries, long maximumQuarantineBytes
+	) { }
 
-	public record Discovery(List<RegionManifest> manifests, Map<Path, String> issues) {
-		public Discovery { manifests = List.copyOf(manifests); issues = Map.copyOf(issues); }
+	public record Discovery(
+			List<RegionManifest> manifests, List<RemovedRegionManifest> removed, Map<Path, String> issues
+	) {
+		public Discovery {
+			manifests = List.copyOf(manifests); removed = List.copyOf(removed); issues = Map.copyOf(issues);
+		}
 	}
 	public record PreviousGeneration(
 			UUID id,
@@ -668,5 +1048,6 @@ public final class RegionStateFiles {
 			java.util.Objects.requireNonNull(state, "state");
 		}
 	}
-	private record Head(UUID id, long generation, String slot, long manifestChecksum) { }
+	private enum HeadKind { ACTIVE, REMOVED }
+	private record Head(UUID id, long generation, HeadKind kind, String slot, long manifestChecksum) { }
 }

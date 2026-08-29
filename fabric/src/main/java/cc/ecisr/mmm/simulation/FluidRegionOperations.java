@@ -3,6 +3,7 @@ package cc.ecisr.mmm.simulation;
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
+import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.simulation.controller.FluidBoundaryScanner;
@@ -76,8 +77,40 @@ final class FluidRegionOperations {
 	long checkpoint(FluidRegion region) throws IOException { return persistence.checkpoint(region); }
 	long committedGeneration(UUID regionId) throws IOException { return persistence.committedGeneration(regionId); }
 	long committedManifestChecksum(UUID regionId) throws IOException { return persistence.committedManifestChecksum(regionId); }
+	void requireRemovalQuarantineCapacity(FluidRegion region, long maximumEntries, long maximumBytes) throws IOException {
+		persistence.requireRemovalQuarantineCapacity(region, maximumEntries, maximumBytes);
+	}
+	cc.ecisr.mmm.simulation.persistence.RegionStateFiles.PreparedRemoval prepareRemoval(
+			FluidRegion region, long networkGeneration, UUID transactionId, long maximumEntries, long maximumBytes
+	) throws IOException {
+		return persistence.prepareRemoval(region, networkGeneration, transactionId, maximumEntries, maximumBytes);
+	}
+	cc.ecisr.mmm.simulation.persistence.RemovedRegionManifest commitRemoval(
+			cc.ecisr.mmm.simulation.persistence.RegionStateFiles.PreparedRemoval prepared
+	) throws IOException { return persistence.commitRemoval(prepared); }
+	cc.ecisr.mmm.simulation.persistence.RemovedRegionManifest readRemoved(UUID regionId) throws IOException {
+		return persistence.readRemoved(regionId);
+	}
+	void abortRemoval(cc.ecisr.mmm.simulation.persistence.RegionStateFiles.PreparedRemoval prepared) throws IOException {
+		persistence.abortRemoval(prepared);
+	}
+	Path convergeRemovalQuarantine(UUID id, long maximumEntries, long maximumBytes) throws IOException {
+		return persistence.convergeRemovalQuarantine(id, maximumEntries, maximumBytes);
+	}
+	void recoverRemovedQuarantines(long maximumEntries, long maximumBytes) {
+		List<String> failures = persistence.recoverRemovedQuarantines(maximumEntries, maximumBytes);
+		issues.addAll(failures); creationLocked |= !failures.isEmpty();
+	}
 	FluidRegionPersistence.StagedCheckpoint stageCheckpoint(FluidRegion region, long target) throws IOException {
 		return persistence.stageCheckpoint(region, target);
+	}
+	FluidRegionPersistence.StagedCheckpoint stageLifecycleCheckpoint(
+			FluidRegion region, FlipFluidDomain candidateDomain, long target
+	) throws IOException {
+		return persistence.stageLifecycleCheckpoint(region, candidateDomain, target);
+	}
+	long commitStagedLifecycleCheckpoint(FluidRegionPersistence.StagedCheckpoint staged) throws IOException {
+		return persistence.commitStagedLifecycleCheckpoint(staged);
 	}
 	long commitStagedCheckpoint(FluidRegion region, FluidRegionPersistence.StagedCheckpoint staged) throws IOException {
 		return persistence.commitStagedCheckpoint(region, staged);
@@ -103,9 +136,16 @@ final class FluidRegionOperations {
 				: List.of("world capability profile is not proven; ownership recovery was not attempted");
 	}
 	String ownershipLockDescription(FluidRegion region) { return persistence.ownershipLockDescription(region); }
+	int committedOwnershipBlockCount(FluidRegion region) throws IOException {
+		return persistence.committedOwnershipBlockCount(region);
+	}
 
 	String ownershipSummary(MinecraftServer server, FluidRegion region) {
 		return persistence.ownershipSummary(server, region);
+	}
+
+	FluidRegionPersistence.ReleaseAttempt releaseOwnership(MinecraftServer server, FluidRegion region) {
+		return persistence.releaseOwnership(server, region);
 	}
 
 	boolean ensureAvailable(
@@ -233,35 +273,6 @@ final class FluidRegionOperations {
 			retryAt.put(region.id(), serviceTick + 100L);
 			region.setAvailabilityFailure(reason, failure + "; " + message);
 			MmmMod.LOGGER.error("Could not checkpoint controller region {}; solver remains paused in memory", region.id(), exception);
-		}
-	}
-
-	RegionRemoval deletePersistentRegions(MinecraftServer server) {
-		if (creationLocked) return RegionRemoval.failed("存在未解决的 region-state；拒绝把未登记数据误报为已删除，请先按日志人工恢复或隔离");
-		int releasedBlocks = 0;
-		int releasedSkipped = 0;
-		for (FluidRegion region : manager.regions()) {
-			if (!region.controllerManaged()) continue;
-			FluidRegionPersistence.ReleaseAttempt release = persistence.releaseOwnership(server, region);
-			if (release.failure() != null) {
-				for (FluidRegion retained : manager.regions()) retained.setPaused(true);
-				return RegionRemoval.failed("ownership 解除未完成，移除已中止：" + release.failure());
-			}
-			releasedBlocks += release.restoredBlocks();
-			releasedSkipped += release.skippedBlocks();
-			try {
-				persistence.delete(region);
-			} catch (IOException exception) {
-				for (FluidRegion retained : manager.regions()) retained.setPaused(true);
-				return RegionRemoval.failed("持久区域删除未完成，内存 registry 已保留：" + exception.getMessage());
-			}
-		}
-		return new RegionRemoval(null, releasedBlocks, releasedSkipped);
-	}
-
-	record RegionRemoval(String failure, int releasedBlocks, int releasedSkipped) {
-		static RegionRemoval failed(String failure) {
-			return new RegionRemoval(failure, 0, 0);
 		}
 	}
 

@@ -2,6 +2,7 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
+import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
@@ -16,6 +17,7 @@ import cc.ecisr.mmm.simulation.persistence.RegionManifest;
 import cc.ecisr.mmm.simulation.persistence.RegionState;
 import cc.ecisr.mmm.simulation.persistence.RegionStateFiles;
 import cc.ecisr.mmm.simulation.persistence.RegionStateLayout;
+import cc.ecisr.mmm.simulation.persistence.RemovedRegionManifest;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
 import cc.ecisr.mmm.worldprofile.WorldCapability;
@@ -175,6 +177,50 @@ final class FluidRegionPersistence {
 		return files.committedManifestChecksum(regionId);
 	}
 
+	void requireRemovalQuarantineCapacity(FluidRegion region, long maximumEntries, long maximumBytes) throws IOException {
+		files.requireRemovalQuarantineCapacity(region.id(), maximumEntries, maximumBytes);
+	}
+
+	RegionStateFiles.PreparedRemoval prepareRemoval(
+			FluidRegion region, long networkTombstoneGeneration, UUID quarantineTransactionId,
+			long maximumEntries, long maximumBytes
+	) throws IOException {
+		return files.prepareRemoval(region.id(), region.checkpointGeneration(),
+				files.committedManifestChecksum(region.id()), networkTombstoneGeneration,
+				quarantineTransactionId, profile.profileFingerprint(), profile.aggregateFingerprint(),
+				maximumEntries, maximumBytes);
+	}
+
+	RemovedRegionManifest commitRemoval(RegionStateFiles.PreparedRemoval prepared) throws IOException {
+		return files.commitRemoval(prepared);
+	}
+
+	RemovedRegionManifest readRemoved(UUID regionId) throws IOException { return files.readRemoved(regionId); }
+
+	void abortRemoval(RegionStateFiles.PreparedRemoval prepared) throws IOException { files.abortRemoval(prepared); }
+
+	Path convergeRemovalQuarantine(UUID regionId, long maximumEntries, long maximumBytes) throws IOException {
+		return files.convergeRemovalQuarantine(regionId, maximumEntries, maximumBytes);
+	}
+
+	List<String> recoverRemovedQuarantines(long maximumEntries, long maximumBytes) {
+		ArrayList<String> failures = new ArrayList<>();
+		try {
+			for (RemovedRegionManifest removed : files.discover().removed()) {
+				if (!removed.capabilityProfileFingerprint().equals(profile.profileFingerprint())
+						|| !removed.registryAggregateFingerprint().equals(profile.aggregateFingerprint())) {
+					failures.add("REMOVED " + removed.regionId() + " world capability identity 不匹配");
+					continue;
+				}
+				try { files.convergeRemovalQuarantine(removed.regionId(), maximumEntries, maximumBytes); }
+				catch (IOException failure) { failures.add("REMOVED " + removed.regionId() + " quarantine 未收敛：" + failure.getMessage()); }
+			}
+		} catch (IOException failure) {
+			failures.add("REMOVED tombstone discovery 失败：" + failure.getMessage());
+		}
+		return List.copyOf(failures);
+	}
+
 	StagedCheckpoint stageCheckpoint(FluidRegion region, long targetGeneration) throws IOException {
 		if (!GenerationSequence.isNext(region.checkpointGeneration(), targetGeneration)) {
 			throw new IOException("Staged checkpoint target does not advance the live region by one generation");
@@ -184,6 +230,26 @@ final class FluidRegionPersistence {
 		RegionStateFiles.PreparedGeneration prepared = files.prepare(
 				captureForFeatureGate(region, targetGeneration), (point, path) -> { });
 		return new StagedCheckpoint(prepared, prepared.manifestChecksum());
+	}
+
+	/** Stages a private lifecycle result without resynthesizing gas topology from world geometry. */
+	StagedCheckpoint stageLifecycleCheckpoint(
+			FluidRegion region, FlipFluidDomain candidateDomain, long targetGeneration
+	) throws IOException {
+		if (!GenerationSequence.isNext(region.checkpointGeneration(), targetGeneration)) {
+			throw new IOException("Lifecycle checkpoint target does not advance the live region by one generation");
+		}
+		String ownershipLock = ownershipLockDescription(region);
+		if (ownershipLock != null) throw new IOException("Unresolved world ownership state blocks lifecycle staging: " + ownershipLock);
+		FluidRegion candidate = region.lifecycleCandidate(candidateDomain, true);
+		RegionStateFiles.PreparedGeneration prepared = files.prepare(
+				captureForFeatureGate(candidate, targetGeneration, false), (point, path) -> { });
+		return new StagedCheckpoint(prepared, prepared.manifestChecksum());
+	}
+
+	/** Publishes only HEAD; the caller then applies its already-validated live assignment and records the generation. */
+	long commitStagedLifecycleCheckpoint(StagedCheckpoint staged) throws IOException {
+		return files.commit(staged.prepared(), (point, path) -> { });
 	}
 
 	long commitStagedCheckpoint(FluidRegion region, StagedCheckpoint staged) throws IOException {
@@ -220,6 +286,20 @@ final class FluidRegionPersistence {
 		} catch (IOException | RuntimeException invalid) {
 			return "ownership committed 状态不可读：" + invalid.getMessage();
 		}
+	}
+
+	int committedOwnershipBlockCount(FluidRegion region) throws IOException {
+		if (!region.controllerManaged()) return 0;
+		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
+		ownershipFiles.assertUnlockedForTransition();
+		if (!ownershipFiles.hasCommitted()) return 0;
+		OwnershipCommitted committed = ownershipFiles.readCommitted();
+		if (!committed.regionId().equals(region.id())
+				|| !committed.dimensionId().equals(region.dimension().identifier().toString())
+				|| committed.generation() > region.checkpointGeneration()) {
+			throw new IOException("Committed ownership does not match the active region identity");
+		}
+		return committed.ownedBlocks().size();
 	}
 
 
@@ -528,6 +608,12 @@ final class FluidRegionPersistence {
 	}
 
 	private RegionState captureForFeatureGate(FluidRegion region, long generation) throws IOException {
+		return captureForFeatureGate(region, generation, true);
+	}
+
+	private RegionState captureForFeatureGate(
+			FluidRegion region, long generation, boolean synchronizeGasTopology
+	) throws IOException {
 		if (profile.hasCapability(WorldCapability.THERMAL)) {
 			if (thermalRegistry == null || gasRegistry == null) {
 				throw new IOException("Authoritative thermal/gas registry is unavailable");
@@ -547,12 +633,14 @@ final class FluidRegionPersistence {
 			if (!region.domain().hasThermalState()) {
 				throw new IOException("Thermal state is unavailable for the active feature layout");
 			}
-			try {
-				region.domain().synchronizeGasTopologyForPersistence();
-			} catch (RuntimeException invalidTopology) {
-				throw new IOException("Current carrier geometry cannot be joined to gas/thermal truth: "
-						+ invalidTopology.getMessage() + "; previous HEAD remains authoritative",
-						invalidTopology);
+			if (synchronizeGasTopology) {
+				try {
+					region.domain().synchronizeGasTopologyForPersistence();
+				} catch (RuntimeException invalidTopology) {
+					throw new IOException("Current carrier geometry cannot be joined to gas/thermal truth: "
+							+ invalidTopology.getMessage() + "; previous HEAD remains authoritative",
+							invalidTopology);
+				}
 			}
 			return RegionState.captureThermal(region, generation);
 		}
@@ -652,10 +740,6 @@ final class FluidRegionPersistence {
 				|| manifest.hasGasState() != profile.hasCapability(WorldCapability.THERMAL)) {
 			throw new IOException("Persisted region layout does not match the committed world capability profile");
 		}
-	}
-
-	void delete(FluidRegion region) throws IOException {
-		if (region.controllerManaged() && region.checkpointGeneration() > 0L) files.quarantine(region.id());
 	}
 
 	private static void validateControllerGeometry(RegionManifest manifest) throws IOException {

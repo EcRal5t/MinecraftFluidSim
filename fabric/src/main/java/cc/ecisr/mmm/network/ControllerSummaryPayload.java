@@ -20,7 +20,10 @@ public record ControllerSummaryPayload(ControllerSummary summary) implements Cus
 	@Override public Type<ControllerSummaryPayload> type() { return TYPE; }
 
 	private static void encode(FriendlyByteBuf buffer, ControllerSummaryPayload payload) {
-		ControllerSummary value = payload.summary;
+		writeSummary(buffer, payload.summary);
+	}
+
+	static void writeSummary(FriendlyByteBuf buffer, ControllerSummary value) {
 		buffer.writeVarLong(value.summaryGeneration());
 		buffer.writeUUID(value.regionId());
 		buffer.writeUtf(value.dimensionId(), 256);
@@ -63,6 +66,10 @@ public record ControllerSummaryPayload(ControllerSummary summary) implements Cus
 	}
 
 	private static ControllerSummaryPayload decode(FriendlyByteBuf buffer) {
+		return new ControllerSummaryPayload(readSummary(buffer));
+	}
+
+	static ControllerSummary readSummary(FriendlyByteBuf buffer) {
 		long summaryGeneration = buffer.readVarLong();
 		java.util.UUID regionId = buffer.readUUID();
 		String dimension = buffer.readUtf(256), profile = buffer.readUtf(64);
@@ -84,9 +91,9 @@ public record ControllerSummaryPayload(ControllerSummary summary) implements Cus
 				buffer.readBoolean(), buffer.readBoolean(), buffer.readBoolean());
 		ControllerSummary.Diagnostics diagnostics = new ControllerSummary.Diagnostics(buffer.readDouble(),
 				buffer.readVarInt(), buffer.readDouble(), buffer.readBoolean() ? buffer.readUtf(1_024) : null);
-		return new ControllerSummaryPayload(new ControllerSummary(summaryGeneration, regionId, dimension, profile,
+		return new ControllerSummary(summaryGeneration, regionId, dimension, profile,
 				checkpoint, network, footprint, selected, intent, motion, thermal, availability, usage, inventory,
-				gates, diagnostics));
+				gates, diagnostics);
 	}
 
 	private static void writeUsage(FriendlyByteBuf buffer, ControllerSummary.Usage usage) {

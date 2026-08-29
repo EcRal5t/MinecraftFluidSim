@@ -69,13 +69,17 @@ final class FluidSnapshotPublisher {
 	}
 
 	void sendRemoval(MinecraftServer server, FluidRegion region) {
+		sendRemoval(server, region, region.networkGeneration());
+	}
+
+	void sendRemoval(MinecraftServer server, FluidRegion region, long tombstoneNetworkGeneration) {
 		Objects.requireNonNull(server, "server");
 		Objects.requireNonNull(region, "region");
 		long sequence = region.nextSnapshotSequence();
 		FluidSnapshotPayload purePayload = FluidSnapshotPayload.removeRegion(
-				region.dimension().identifier(), region.id(), region.networkGeneration(), sequence);
+				region.dimension().identifier(), region.id(), tombstoneNetworkGeneration, sequence);
 		FluidMaterialSnapshotPayload materialPayload = FluidMaterialSnapshotPayload.removeRegion(
-				region.dimension().identifier(), region.id(), region.networkGeneration(), sequence);
+				region.dimension().identifier(), region.id(), tombstoneNetworkGeneration, sequence);
 		FluidChemicalSnapshotPayload chemicalPayload = FluidChemicalSnapshotPayload.removeRegion(materialPayload);
 		FluidGranularSnapshotPayload granularPayload = FluidGranularSnapshotPayload.removeRegion(materialPayload);
 		FluidThermalSnapshotPayload thermalPayload = FluidThermalSnapshotPayload.removeRegion(materialPayload);

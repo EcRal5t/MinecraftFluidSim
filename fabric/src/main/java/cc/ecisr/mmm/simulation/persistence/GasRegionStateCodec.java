@@ -26,13 +26,13 @@ final class GasRegionStateCodec {
 	private static final int KNOWN_CAPABILITIES = CAP_MATERIALS | CAP_CHEMISTRY | CAP_GAS;
 	private static final int MANIFEST_MAGIC = 0x47534d34;
 	private static final int SECTION_MAGIC = 0x47535334;
-	private static final int PAYLOAD_VERSION = 1;
+	private static final int PAYLOAD_VERSION = 2;
 	private static final int MAX_DYADIC_BYTES = 16 * 1_024;
 
 	record NodeData(int topologyKey, GasInventory inventory) { }
 	record SectionLedger(RegionSectionState.SectionKey key, int sealedCellCount) { }
 	record ManifestData(
-			int capabilities, String registryFingerprint, String chemicalRegistryFingerprint,
+			int capabilities, boolean operatorVentedTopology, String registryFingerprint, String chemicalRegistryFingerprint,
 			List<NodeData> nodes, GasAuditLedger externalSource, GasAuditLedger escapedSink,
 			SignedDyadic massRoundoff, SignedDyadic residualRoundoff, List<SectionLedger> sectionLedgers
 	) {
@@ -47,6 +47,7 @@ final class GasRegionStateCodec {
 		validateManifest(data);
 		return encode(out -> {
 			out.writeInt(MANIFEST_MAGIC); out.writeInt(PAYLOAD_VERSION); out.writeInt(data.capabilities());
+			out.writeBoolean(data.operatorVentedTopology());
 			out.writeUTF(cc.ecisr.mmm.fluid.air.GasRegistry.UNIT_SYSTEM_ID);
 			out.writeLong(Double.doubleToRawLongBits(cc.ecisr.mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA));
 			out.writeLong(Double.doubleToRawLongBits(cc.ecisr.mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K));
@@ -65,10 +66,12 @@ final class GasRegionStateCodec {
 
 	ManifestData decodeManifest(byte[] payload) throws IOException {
 		try (DataInputStream input = input(payload)) {
-			if (input.readInt() != MANIFEST_MAGIC || input.readInt() != PAYLOAD_VERSION) {
+			int magic = input.readInt(), version = input.readInt();
+			if (magic != MANIFEST_MAGIC || version < 1 || version > PAYLOAD_VERSION) {
 				throw new IOException("Unknown gas manifest payload");
 			}
 			int capabilities = input.readInt();
+			boolean operatorVentedTopology = version >= 2 && input.readBoolean();
 			if (!cc.ecisr.mmm.fluid.air.GasRegistry.UNIT_SYSTEM_ID.equals(input.readUTF())
 					|| input.readLong() != Double.doubleToRawLongBits(cc.ecisr.mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA)
 					|| input.readLong() != Double.doubleToRawLongBits(cc.ecisr.mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K)) {
@@ -87,7 +90,7 @@ final class GasRegionStateCodec {
 					new RegionSectionState.SectionKey(input.readInt(), input.readInt(), input.readInt()),
 					count(input.readInt(), Integer.MAX_VALUE, "sealed cells")));
 			requireEnd(input);
-			ManifestData result = new ManifestData(capabilities, registry, chemistry, nodes, source, sink,
+			ManifestData result = new ManifestData(capabilities, operatorVentedTopology, registry, chemistry, nodes, source, sink,
 					massRoundoff, residualRoundoff, ledgers);
 			validateManifest(result);
 			return result;
@@ -161,6 +164,10 @@ final class GasRegionStateCodec {
 				|| data.escapedSink().entries().stream().anyMatch(entry -> !entry.species().isEmpty());
 		if (species && data.chemicalRegistryFingerprint().isEmpty()) {
 			throw new IllegalArgumentException("Gas species lack chemical registry identity");
+		}
+		if (data.operatorVentedTopology() && (!data.nodes().isEmpty()
+				|| data.sectionLedgers().stream().anyMatch(ledger -> ledger.sealedCellCount() != 0))) {
+			throw new IllegalArgumentException("Operator-vented gas manifest contains sealed topology");
 		}
 	}
 

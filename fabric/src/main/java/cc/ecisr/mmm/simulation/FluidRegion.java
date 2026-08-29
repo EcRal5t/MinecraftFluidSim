@@ -406,6 +406,43 @@ public final class FluidRegion {
 				debugOverlays, stepIntervalTicks, tick);
 	}
 
+	/** Creates an unregistered private candidate carrying the same persistent identity and runtime intent. */
+	FluidRegion lifecycleCandidate(FlipFluidDomain candidateDomain, boolean operatorPaused) {
+		Objects.requireNonNull(candidateDomain, "candidateDomain");
+		PersistedRuntime runtime = persistedRuntime();
+		FluidRegion candidate = new FluidRegion(id, dimension, origin, sizeX, sizeY, sizeZ, solverConfig,
+				reservedMarkerCapacity, footprint, networkGeneration, candidateDomain);
+		candidate.checkpointGeneration = checkpointGeneration;
+		candidate.checkpointMarkerCount = checkpointMarkerCount;
+		candidate.checkpointVolume = checkpointVolume;
+		candidate.unloadedResumeState = runtime.resumeState();
+		candidate.entityPhysicsEnabled = runtime.entityPhysicsEnabled();
+		candidate.debugOverlays = runtime.debugOverlays();
+		candidate.stepIntervalTicks = runtime.stepIntervalTicks();
+		candidate.tick = runtime.tick();
+		candidate.finiteThermalDevices = finiteThermalDevices;
+		candidate.lifecycle.initializeLoaded(runtime.resumeState(), operatorPaused, runtime.stepIntervalTicks());
+		return candidate;
+	}
+
+	/** Adopts the exact solver which was already encoded and published as the lifecycle HEAD. */
+	void adoptLifecycleCandidateDomain(
+			FlipFluidDomain candidateDomain, long publishedGeneration, boolean operatorPaused
+	) {
+		Objects.requireNonNull(candidateDomain, "candidateDomain");
+		if (!controllerManaged() || domain == null || publishedGeneration <= checkpointGeneration
+				|| candidateDomain.sizeX() != sizeX || candidateDomain.sizeY() != sizeY
+				|| candidateDomain.sizeZ() != sizeZ || candidateDomain.maximumParticleCount() != reservedMarkerCapacity) {
+			throw new IllegalStateException("Published lifecycle candidate is incompatible with the live region");
+		}
+		domain = candidateDomain;
+		checkpointGeneration = publishedGeneration;
+		checkpointMarkerCount = candidateDomain.particleCount();
+		checkpointVolume = candidateDomain.totalVolume();
+		collisionRefreshRequired = true;
+		lifecycle.setOperatorPaused(operatorPaused, stepIntervalTicks);
+	}
+
 	/** Records a complete durable generation while keeping the live solver allocated. */
 	public boolean recordPublishedCheckpoint(long publishedGeneration) {
 		if (!controllerManaged() || domain == null || publishedGeneration <= checkpointGeneration) return false;

@@ -2,6 +2,9 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.controller.ControllerSummary;
+import cc.ecisr.mmm.controller.LifecycleOperation;
+import cc.ecisr.mmm.controller.LifecycleOperationPreview;
+import cc.ecisr.mmm.controller.LifecycleOperationSessions;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FlipParticleState;
@@ -35,7 +38,53 @@ public final class FluidRegionLifecycleValidation {
 		validateBackendCandidateAdoption();
 		validateUnloadRequiresPublishedCheckpointAndReleasedSolver();
 		validateMetadataOnlySummaryCannotInventInventory();
+		validateLifecyclePreviewTokensBindEveryCommitGate();
 		System.out.println("FluidRegionLifecycle validation passed");
+	}
+
+	private static void validateLifecyclePreviewTokensBindEveryCommitGate() {
+		UUID player = new UUID(1L, 2L), otherPlayer = new UUID(3L, 4L), region = new UUID(5L, 6L);
+		LifecycleOperationSessions sessions = new LifecycleOperationSessions();
+		LifecycleOperationSessions.Context context = lifecycleContext(player, region, 7L,
+				LifecycleOperation.EMPTY_CONDENSED, false, "READY", 100L);
+		LifecycleOperationPreview preview = sessions.issue(context, 140L,
+				LifecycleOperationPreview.Removal.none(), LifecycleOperationPreview.GasState.none(), 9, List.of());
+		require(preview.ready() && preview.ownershipBlocks() == 9,
+				"server lifecycle preview lost its bounded removal/ownership summary");
+		require(!sessions.consume(preview.nonce(), lifecycleContext(otherPlayer, region, 7L,
+				LifecycleOperation.EMPTY_CONDENSED, false, "READY", 101L)),
+				"another player consumed a lifecycle preview token");
+		require(sessions.consume(preview.nonce(), lifecycleContext(player, region, 7L,
+				LifecycleOperation.EMPTY_CONDENSED, false, "READY", 101L))
+				&& !sessions.consume(preview.nonce(), context),
+				"valid lifecycle token did not consume exactly once");
+
+		for (LifecycleOperationSessions.Context changed : List.of(
+				lifecycleContext(player, region, 8L, LifecycleOperation.EMPTY_CONDENSED, false, "READY", 101L),
+				lifecycleContext(player, region, 7L, LifecycleOperation.VENT_SEALED_GAS, false, "READY", 101L),
+				new LifecycleOperationSessions.Context(player, region, 7L,
+						LifecycleOperation.EMPTY_CONDENSED,
+						LifecycleOperationPreview.PermissionDecision.BUILTIN_ADMIN_DENIED,
+						false, "READY", 101L),
+				lifecycleContext(player, region, 7L, LifecycleOperation.EMPTY_CONDENSED, true, "READY", 101L),
+				lifecycleContext(player, region, 7L, LifecycleOperation.EMPTY_CONDENSED, false, "CHUNK_MISSING", 101L),
+				lifecycleContext(player, region, 7L, LifecycleOperation.EMPTY_CONDENSED, false, "READY", 141L))) {
+			LifecycleOperationPreview stale = sessions.issue(context, 140L,
+					LifecycleOperationPreview.Removal.none(), LifecycleOperationPreview.GasState.none(), 0, List.of());
+			require(!sessions.consume(stale.nonce(), changed),
+					"lifecycle preview survived a generation/action/WAL/availability/expiry change");
+			require(!sessions.consume(stale.nonce(), context),
+					"invalidated lifecycle preview token was reusable");
+		}
+	}
+
+	private static LifecycleOperationSessions.Context lifecycleContext(
+			UUID player, UUID region, long generation, LifecycleOperation operation,
+			boolean pendingWal, String availability, long tick
+	) {
+		return new LifecycleOperationSessions.Context(player, region, generation, operation,
+				LifecycleOperationPreview.PermissionDecision.BUILTIN_ADMIN_GRANTED,
+				pendingWal, availability, tick);
 	}
 
 	/** The live solver is only replaced by a complete, adjacent candidate from the expected backend. */

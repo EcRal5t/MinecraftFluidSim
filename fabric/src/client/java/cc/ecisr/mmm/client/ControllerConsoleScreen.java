@@ -2,7 +2,9 @@ package cc.ecisr.mmm.client;
 
 import cc.ecisr.mmm.controller.ControllerConsoleAction;
 import cc.ecisr.mmm.controller.ControllerSummary;
+import cc.ecisr.mmm.controller.LifecycleOperation;
 import cc.ecisr.mmm.network.ControllerActionPayload;
+import cc.ecisr.mmm.network.LifecycleOperationRequestPayload;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
@@ -34,7 +36,7 @@ public final class ControllerConsoleScreen extends Screen {
 		int gap = 6;
 		int total = buttonWidth * 3 + gap * 2;
 		int left = (width - total) / 2;
-		int y = height - 34;
+		int y = height - 30;
 		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.controller.select"),
 				button -> send(ControllerConsoleAction.SELECT)).bounds(left, y, buttonWidth, 20).build());
 		Component runAction = Component.translatable(summary.operatorIntent() == ControllerSummary.OperatorIntent.PAUSED
@@ -48,6 +50,25 @@ public final class ControllerConsoleScreen extends Screen {
 		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.controller.refresh"),
 				button -> send(ControllerConsoleAction.REFRESH_AVAILABILITY))
 				.bounds(left + (buttonWidth + gap) * 2, y, buttonWidth, 20).build());
+
+		int lifecycleWidth = 76;
+		int lifecycleTotal = lifecycleWidth * 4 + gap * 3;
+		int lifecycleLeft = (width - lifecycleTotal) / 2;
+		int lifecycleY = height - 54;
+		addLifecycleButton(lifecycleLeft, lifecycleY, lifecycleWidth, "empty", LifecycleOperation.EMPTY_CONDENSED);
+		addLifecycleButton(lifecycleLeft + lifecycleWidth + gap, lifecycleY, lifecycleWidth,
+				"vent", LifecycleOperation.VENT_SEALED_GAS);
+		addLifecycleButton(lifecycleLeft + (lifecycleWidth + gap) * 2, lifecycleY, lifecycleWidth,
+				"release", LifecycleOperation.RELEASE_OWNERSHIP);
+		addLifecycleButton(lifecycleLeft + (lifecycleWidth + gap) * 3, lifecycleY, lifecycleWidth,
+				"remove", LifecycleOperation.REMOVE_EMPTY_REGION);
+	}
+
+	private void addLifecycleButton(int x, int y, int width, String label, LifecycleOperation operation) {
+		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.controller." + label),
+				button -> ClientPlayNetworking.send(LifecycleOperationRequestPayload.preview(
+						summary.regionId(), controllerPosition, summary.summaryGeneration(), operation)))
+				.bounds(x, y, width, 20).build());
 	}
 
 	private void send(ControllerConsoleAction action) {
@@ -64,7 +85,7 @@ public final class ControllerConsoleScreen extends Screen {
 			String clipped = font.plainSubstrByWidth(row.getString(), Math.max(80, width - 32));
 			graphics.text(font, clipped, 16, y, 0xd8d8d8, false);
 			y += 12;
-			if (y >= height - 48) break;
+			if (y >= height - 68) break;
 		}
 	}
 
@@ -76,9 +97,10 @@ public final class ControllerConsoleScreen extends Screen {
 		result.add(Component.translatable("screen.mmm.controller.generations",
 				value.checkpointGeneration(), value.networkGeneration()));
 		result.add(Component.translatable("screen.mmm.controller.state",
-				value.selected() ? "SELECTED" : "NOT_SELECTED", value.operatorIntent().name(),
-				value.motionState().name(), value.thermalState().name(),
-				value.availability().ready() ? "READY" : value.availability().reason().name()));
+				common(value.selected() ? "selected" : "not_selected"),
+				localized("operator", value.operatorIntent()), localized("motion", value.motionState()),
+				localized("thermal", value.thermalState()), value.availability().ready()
+						? common("ready") : localized("availability", value.availability().reason())));
 		ControllerSummary.Footprint footprint = value.footprint();
 		result.add(Component.translatable("screen.mmm.controller.footprint", footprint.blockSizeX(),
 				footprint.blockSizeY(), footprint.blockSizeZ(), footprint.interiorBlocks(), footprint.requiredChunks()));
@@ -109,7 +131,7 @@ public final class ControllerConsoleScreen extends Screen {
 		ControllerSummary.Gates gates = value.gates();
 		result.add(Component.translatable("screen.mmm.controller.gates", state(gates.ownershipReady()),
 				state(!gates.containerWalPending()), state(!gates.phaseWorkPending()),
-				gates.worldBridgeEnabled() ? "ON" : "OFF", state(gates.checkpointAllowed())));
+				common(gates.worldBridgeEnabled() ? "on" : "off"), state(gates.checkpointAllowed())));
 		ControllerSummary.Diagnostics diagnostics = value.diagnostics();
 		result.add(Component.translatable("screen.mmm.controller.diagnostics",
 				decimal(diagnostics.lastStepMilliseconds()), diagnostics.pressureIterations(),
@@ -122,6 +144,12 @@ public final class ControllerConsoleScreen extends Screen {
 		return value.available() ? value.used() + "/" + value.limit() : "—/" + value.limit();
 	}
 
-	private static String state(boolean value) { return value ? "READY" : "BLOCKED"; }
+	private static Component state(boolean value) { return common(value ? "ready" : "blocked"); }
+	private static Component common(String value) {
+		return Component.translatable("screen.mmm.common." + value);
+	}
+	private static Component localized(String family, Enum<?> value) {
+		return Component.translatable("screen.mmm." + family + "." + value.name().toLowerCase(Locale.ROOT));
+	}
 	private static String decimal(double value) { return String.format(Locale.ROOT, "%.6g", value); }
 }

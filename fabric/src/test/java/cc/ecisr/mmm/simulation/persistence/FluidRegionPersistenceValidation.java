@@ -36,6 +36,8 @@ import cc.ecisr.mmm.simulation.FluidRegionLifecycle;
 import cc.ecisr.mmm.simulation.FluidRegionManager;
 import cc.ecisr.mmm.simulation.FluidServerConfig;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
+import cc.ecisr.mmm.worldprofile.RegistryFingerprintSet;
+import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
 import net.minecraft.nbt.CompoundTag;
@@ -77,6 +79,7 @@ public final class FluidRegionPersistenceValidation {
 		validateUnknownExtensions();
 		validateFaultMatrix();
 		validateStagedGeneration();
+		validateRemovedHeadAndQuarantine();
 		validateExplicitPreviousGenerationActivation();
 		validateCorruptionAndAtomicMoveFailure();
 		validateWorldConfig();
@@ -709,13 +712,118 @@ public final class FluidRegionPersistenceValidation {
 		NbtIo.writeCompressed(corruptHead, headPath);
 		expectIOException(() -> headFiles.read(headRegion.id()), "corrupt HEAD checksum was accepted");
 
-		Path deleteRoot = Files.createTempDirectory(Path.of("."), "quarantine-");
-		FluidRegion deleteRegion = populatedRegion(UUID.randomUUID());
-		RegionStateFiles deleteFiles = new RegionStateFiles(deleteRoot);
-		deleteFiles.publish(RegionState.capture(deleteRegion, 1L));
-		deleteFiles.quarantine(deleteRegion.id());
-		require(deleteFiles.discover().manifests().isEmpty() && deleteFiles.discover().issues().isEmpty(),
-				"logically deleted checkpoint remained discoverable");
+	}
+
+	private static void validateRemovedHeadAndQuarantine() throws Exception {
+		Path root = Files.createTempDirectory(Path.of("."), "removed-head-");
+		FluidRegion region = populatedRegion(UUID.randomUUID());
+		WorldCapabilityProfile profile = WorldCapabilityProfile.of(Set.of(), RegistryFingerprintSet.unbound());
+		RegionState active = RegionState.capture(region, 1L);
+		RegionStateFiles files = new RegionStateFiles(root);
+		files.publish(active);
+		UUID transaction = UUID.randomUUID();
+		RegionStateFiles.PreparedRemoval prepared = files.prepareRemoval(region.id(), 1L,
+				active.manifest().checksum(), 2L, transaction, profile.profileFingerprint(),
+				profile.aggregateFingerprint(), 10_000L, 64L * 1024L * 1024L);
+		require(files.discover().manifests().size() == 1 && files.discover().removed().isEmpty(),
+				"ACTIVE restart did not discard exact uncommitted REMOVED staging");
+		prepared = files.prepareRemoval(region.id(), 1L, active.manifest().checksum(), 2L, transaction,
+				profile.profileFingerprint(), profile.aggregateFingerprint(), 10_000L, 64L * 1024L * 1024L);
+		require(files.read(region.id()).manifest().checksum() == active.manifest().checksum(),
+				"staged REMOVED payload became authoritative before HEAD");
+		RemovedRegionManifest removed = files.commitRemoval(prepared);
+		require(removed.baseGeneration() == 1L && removed.targetGeneration() == 2L
+				&& removed.oldManifestChecksum() == active.manifest().checksum()
+				&& removed.networkTombstoneGeneration() == 2L
+				&& removed.quarantineTransactionId().equals(transaction)
+				&& removed.capabilityProfileFingerprint().equals(profile.profileFingerprint())
+				&& removed.registryAggregateFingerprint().equals(profile.aggregateFingerprint()),
+				"REMOVED HEAD lost active/profile/quarantine/network identity");
+		RegionStateFiles.Discovery discovery = files.discover();
+		require(discovery.manifests().isEmpty() && discovery.removed().equals(List.of(removed))
+				&& discovery.issues().isEmpty(), "REMOVED HEAD was admitted as an ACTIVE solver");
+		expectIOException(() -> files.read(region.id()), "REMOVED HEAD reconstructed an empty solver");
+		Path expectedQuarantine = root.resolve("mmm").resolve("quarantine").resolve("removed-region")
+				.resolve(region.id().toString()).resolve("2");
+		Files.createDirectories(expectedQuarantine);
+		Path quarantine = files.convergeRemovalQuarantine(region.id(), 10_000L, 64L * 1024L * 1024L);
+		require(Files.isDirectory(quarantine.resolve("payload"))
+				&& Files.isRegularFile(quarantine.resolve("quarantine.nbt"))
+				&& files.convergeRemovalQuarantine(region.id(), 0L, 0L).equals(quarantine),
+				"REMOVED quarantine did not converge idempotently after HEAD");
+		expectIOException(() -> files.publish(RegionState.capture(region, 2L)),
+				"REMOVED region UUID was reused by an ACTIVE publication");
+
+		Path strictRoot = Files.createTempDirectory(Path.of("."), "removed-strict-");
+		FluidRegion strictRegion = populatedRegion(UUID.randomUUID());
+		RegionState strictActive = RegionState.capture(strictRegion, 1L);
+		RegionStateFiles strictFiles = new RegionStateFiles(strictRoot);
+		strictFiles.publish(strictActive);
+		RegionStateFiles.PreparedRemoval strictPrepared = strictFiles.prepareRemoval(strictRegion.id(), 1L,
+				strictActive.manifest().checksum(), 2L, UUID.randomUUID(), profile.profileFingerprint(),
+				profile.aggregateFingerprint(), 10_000L, 64L * 1024L * 1024L);
+		strictFiles.commitRemoval(strictPrepared);
+		Path strictRemovedPath = strictRoot.resolve("mmm").resolve("region-state")
+				.resolve(strictRegion.id().toString()).resolve(strictPrepared.tombstoneSlot()).resolve("removed.nbt");
+		CompoundTag strictRemoved = NbtIo.readCompressed(strictRemovedPath, NbtAccounter.unlimitedHeap());
+		strictRemoved.putLong("Unknown", 1L);
+		NbtIo.writeCompressed(strictRemoved, strictRemovedPath);
+		RegionStateFiles.Discovery strictDiscovery = strictFiles.discover();
+		require(strictDiscovery.removed().isEmpty() && !strictDiscovery.issues().isEmpty(),
+				"REMOVED manifest accepted an extra authoritative field");
+
+		Path partialRoot = Files.createTempDirectory(Path.of("."), "removed-partial-");
+		FluidRegion partialRegion = populatedRegion(UUID.randomUUID());
+		RegionState partialActive = RegionState.capture(partialRegion, 1L);
+		RegionStateFiles partialFiles = new RegionStateFiles(partialRoot);
+		partialFiles.publish(partialActive);
+		RegionStateFiles.PreparedRemoval partialPrepared = partialFiles.prepareRemoval(partialRegion.id(), 1L,
+				partialActive.manifest().checksum(), 2L, UUID.randomUUID(), profile.profileFingerprint(),
+				profile.aggregateFingerprint(), 10_000L, 64L * 1024L * 1024L);
+		partialFiles.commitRemoval(partialPrepared);
+		Path partialRegionRoot = partialRoot.resolve("mmm").resolve("region-state").resolve(partialRegion.id().toString());
+		Path partialDestination = partialRoot.resolve("mmm").resolve("quarantine").resolve("removed-region")
+				.resolve(partialRegion.id().toString()).resolve("2");
+		Files.createDirectories(partialDestination);
+		Files.move(partialRegionRoot.resolve(partialPrepared.activeSlot()), partialDestination.resolve("payload"));
+		partialFiles.convergeRemovalQuarantine(partialRegion.id(), 10_000L, 64L * 1024L * 1024L);
+		require(Files.isRegularFile(partialDestination.resolve("quarantine.nbt")),
+				"REMOVED recovery did not resume after payload move and before quarantine manifest");
+
+		Path thirdRoot = Files.createTempDirectory(Path.of("."), "removed-third-");
+		FluidRegion thirdRegion = populatedRegion(UUID.randomUUID());
+		RegionState thirdActive = RegionState.capture(thirdRegion, 1L);
+		RegionStateFiles thirdFiles = new RegionStateFiles(thirdRoot);
+		thirdFiles.publish(thirdActive);
+		RegionStateFiles.PreparedRemoval thirdPrepared = thirdFiles.prepareRemoval(thirdRegion.id(), 1L,
+				thirdActive.manifest().checksum(), 2L, UUID.randomUUID(), profile.profileFingerprint(),
+				profile.aggregateFingerprint(), 10_000L, 64L * 1024L * 1024L);
+		thirdFiles.commitRemoval(thirdPrepared);
+		Path thirdSource = thirdRoot.resolve("mmm").resolve("region-state").resolve(thirdRegion.id().toString())
+				.resolve(thirdPrepared.activeSlot());
+		Path thirdPayload = thirdRoot.resolve("mmm").resolve("quarantine").resolve("removed-region")
+				.resolve(thirdRegion.id().toString()).resolve("2").resolve("payload");
+		Files.createDirectories(thirdPayload);
+		try (var entries = Files.newDirectoryStream(thirdSource)) {
+			for (Path entry : entries) Files.copy(entry, thirdPayload.resolve(entry.getFileName()));
+		}
+		expectIOException(() -> thirdFiles.convergeRemovalQuarantine(
+				thirdRegion.id(), 10_000L, 64L * 1024L * 1024L),
+				"REMOVED recovery accepted simultaneous source and quarantine payloads");
+
+		Path baseThirdRoot = Files.createTempDirectory(Path.of("."), "removed-base-third-");
+		FluidRegion baseThirdRegion = populatedRegion(UUID.randomUUID());
+		RegionState baseThirdActive = RegionState.capture(baseThirdRegion, 1L);
+		RegionStateFiles baseThirdFiles = new RegionStateFiles(baseThirdRoot);
+		baseThirdFiles.publish(baseThirdActive);
+		baseThirdFiles.prepareRemoval(baseThirdRegion.id(), 1L, baseThirdActive.manifest().checksum(),
+				2L, UUID.randomUUID(), profile.profileFingerprint(), profile.aggregateFingerprint(),
+				10_000L, 64L * 1024L * 1024L);
+		Files.createDirectories(baseThirdRoot.resolve("mmm").resolve("quarantine").resolve("removed-region")
+				.resolve(baseThirdRegion.id().toString()).resolve("2"));
+		RegionStateFiles.Discovery baseThirdDiscovery = baseThirdFiles.discover();
+		require(baseThirdDiscovery.manifests().isEmpty() && !baseThirdDiscovery.issues().isEmpty(),
+				"ACTIVE HEAD discarded staged removal after quarantine reached a third state");
 	}
 
 	private static void validateWorldConfig() throws Exception {

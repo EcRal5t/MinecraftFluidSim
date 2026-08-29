@@ -108,7 +108,7 @@ public final class AirNetworkValidation {
 		check(network.standardVolumeNanos(2) == 0L && network.auditClosed(),
 				"vacuum node created gas inventory or opened the ledger");
 		GasStateSnapshot snapshot = GasStateSnapshot.capture(
-				2, 1, 1, new int[]{1, 2}, network, "");
+				2, 1, 1, new int[]{1, 2}, network, "", false);
 		AirNetwork restored = new AirNetwork(network.registry());
 		restored.restoreNodes(new double[]{1.0, 1.0},
 				snapshot.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),

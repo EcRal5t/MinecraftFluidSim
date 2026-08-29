@@ -44,6 +44,8 @@ public final class FluidProtocolServer {
 		PayloadTypeRegistry.clientboundPlay().register(FluidThermalSnapshotPayload.TYPE, FluidThermalSnapshotPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(ControllerSummaryPayload.TYPE, ControllerSummaryPayload.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(ControllerActionPayload.TYPE, ControllerActionPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(LifecycleOperationPreviewPayload.TYPE, LifecycleOperationPreviewPayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(LifecycleOperationRequestPayload.TYPE, LifecycleOperationRequestPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(
 				ThermalReservoirSummaryPayload.TYPE, ThermalReservoirSummaryPayload.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(
@@ -54,6 +56,8 @@ public final class FluidProtocolServer {
 		);
 		ServerPlayNetworking.registerGlobalReceiver(ControllerActionPayload.TYPE, (payload, context) ->
 				context.server().execute(() -> receiveControllerAction(payload, context.player())));
+		ServerPlayNetworking.registerGlobalReceiver(LifecycleOperationRequestPayload.TYPE, (payload, context) ->
+				context.server().execute(() -> receiveLifecycleOperation(payload, context.player())));
 		ServerPlayNetworking.registerGlobalReceiver(ThermalReservoirSetpointPayload.TYPE, (payload, context) ->
 				context.server().execute(() -> receiveThermalReservoirSetpoint(payload, context.player())));
 		ServerConfigurationConnectionEvents.CONFIGURE.register((listener, server) -> {
@@ -122,6 +126,13 @@ public final class FluidProtocolServer {
 		return true;
 	}
 
+	public static boolean send(ServerPlayer player, LifecycleOperationPreviewPayload payload) {
+		if (!isNegotiated(player.level().getServer(), player.getUUID())
+				|| !ServerPlayNetworking.canSend(player, LifecycleOperationPreviewPayload.TYPE)) return false;
+		ServerPlayNetworking.send(player, payload);
+		return true;
+	}
+
 	public static boolean send(ServerPlayer player, ThermalReservoirSummaryPayload payload) {
 		if (!isNegotiated(player.level().getServer(), player.getUUID())
 				|| !ServerPlayNetworking.canSend(player, ThermalReservoirSummaryPayload.TYPE)) return false;
@@ -168,10 +179,46 @@ public final class FluidProtocolServer {
 
 	private static void receiveControllerAction(ControllerActionPayload payload, ServerPlayer player) {
 		FluidSimulationService service = FluidSimulationService.get(player.level().getServer());
-		String failure = service.applyControllerConsoleAction(player, payload.regionId(), payload.controllerPosition(),
+		Component failure = service.applyControllerConsoleAction(player, payload.regionId(), payload.controllerPosition(),
 				payload.summaryGeneration(), payload.action());
 		if (failure != null) player.sendSystemMessage(Component.translatable(
 				"message.mmm.controller.console_action_failed", failure), true);
+		var summary = service.controllerSummary(player, payload.controllerPosition());
+		if (summary != null) send(player, new ControllerSummaryPayload(summary));
+	}
+
+	private static void receiveLifecycleOperation(
+			LifecycleOperationRequestPayload payload, ServerPlayer player
+	) {
+		FluidSimulationService service = FluidSimulationService.get(player.level().getServer());
+		if (payload.kind() == LifecycleOperationRequestPayload.Kind.PREVIEW) {
+			var result = service.previewControllerLifecycleOperation(player, payload.regionId(),
+					payload.controllerPosition(), payload.summaryGeneration(), payload.operation());
+			if (result.failure() != null) {
+				player.sendSystemMessage(Component.translatable(
+						"message.mmm.controller.lifecycle_failed", result.failure()), true);
+				var summary = service.controllerSummary(player, payload.controllerPosition());
+				if (summary != null) send(player, new ControllerSummaryPayload(summary));
+				return;
+			}
+			var refreshed = service.controllerSummary(player, payload.controllerPosition());
+			if (refreshed == null || !send(player, new LifecycleOperationPreviewPayload(
+					payload.controllerPosition(), result.preview(), refreshed))) {
+				player.sendSystemMessage(Component.translatable(
+						"message.mmm.controller.lifecycle_failed",
+						Component.translatable("message.mmm.lifecycle.client_unsupported")), true);
+			}
+			return;
+		}
+
+		var result = service.confirmControllerLifecycleOperation(player, payload.regionId(),
+				payload.controllerPosition(), payload.nonce(), payload.operation());
+		if (result.committed()) player.level().playSound(null, payload.controllerPosition(),
+				net.minecraft.sounds.SoundEvents.BEACON_ACTIVATE,
+				net.minecraft.sounds.SoundSource.BLOCKS, 0.7F, 1.0F);
+		player.sendSystemMessage(Component.translatable(result.committed()
+				? "message.mmm.controller.lifecycle_committed" : "message.mmm.controller.lifecycle_failed",
+				result.message()), true);
 		var summary = service.controllerSummary(player, payload.controllerPosition());
 		if (summary != null) send(player, new ControllerSummaryPayload(summary));
 	}

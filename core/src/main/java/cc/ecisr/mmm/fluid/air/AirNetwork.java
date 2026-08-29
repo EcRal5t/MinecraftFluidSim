@@ -595,6 +595,9 @@ public final class AirNetwork {
 		return sum;
 	}
 
+	/** Immutable aggregate of every sealed component column; ambient is deliberately absent. */
+	public GasInventory sealedInventory() { return aggregateNodes(); }
+
 	public long ventedNanos() { return escapedSink.standardVolumeNanos(); }
 
 	public long drawnFromAmbientNanos() { return externalSource.standardVolumeNanos(); }

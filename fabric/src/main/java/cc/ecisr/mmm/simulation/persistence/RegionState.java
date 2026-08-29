@@ -860,7 +860,8 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		try {
 			snapshot = new GasStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
 					data.registryFingerprint(), data.chemicalRegistryFingerprint(), nodes, memberships,
-					data.externalSource(), data.escapedSink(), data.massRoundoff(), data.residualRoundoff());
+					data.operatorVentedTopology(), data.externalSource(), data.escapedSink(),
+					data.massRoundoff(), data.residualRoundoff());
 			AirNetwork audit = new AirNetwork(registry == null
 					? cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions.createRegistry() : registry);
 			double[] available = new double[nodes.size()]; java.util.Arrays.fill(available, 1.0);
@@ -1356,7 +1357,7 @@ public record RegionState(RegionManifest manifest, List<RegionSectionState> sect
 		if (chemicalState != !snapshot.chemicalRegistryFingerprint().isEmpty()) {
 			throw new IOException("Gas snapshot chemical identity disagrees with liquid generation");
 		}
-		return new GasRegionStateCodec.ManifestData(capabilities, snapshot.registryFingerprint(),
+		return new GasRegionStateCodec.ManifestData(capabilities, snapshot.operatorVentedTopology(), snapshot.registryFingerprint(),
 				snapshot.chemicalRegistryFingerprint(), snapshot.nodes().stream()
 				.map(node -> new GasRegionStateCodec.NodeData(node.topologyKey(), node.inventory())).toList(),
 				snapshot.externalSource(), snapshot.escapedSink(), snapshot.massRoundoff(), snapshot.residualRoundoff(),

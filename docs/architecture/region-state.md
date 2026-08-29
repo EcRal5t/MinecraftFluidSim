@@ -23,7 +23,7 @@
 
 **恢复不查当前定义源**：`COMMIT_CANDIDATE` 只凭已写出的 slot 就补完 HEAD，不要求 datapack 仍能解码。已提交包即使与 datapack 不一致也保持权威，只报告 drift，不修复、不重发。
 
-`mmm/` 下的权威域（`container-transfer`、`ownership`、`region-state`）只在存在已提交包时才允许存在；没有包却出现权威，或出现任何未知条目，一律 LOCKED 并原样保留。这里没有迁移、没有版本嗅探、没有字段补全——旧实现产出的存档不被解释。
+`mmm/` 下的权威域（`container-transfer`、`ownership`、`region-state`）只在存在已提交包时才允许存在；`quarantine` 是已知的持久证据归档根，但不拥有物理真值。没有包却出现权威，或出现任何其他未知条目，一律 LOCKED 并原样保留。这里没有迁移、没有版本嗅探、没有字段补全——旧实现产出的存档不被解释。
 
 这条直接覆盖 per-kind registry 目录：旧 build 会各自发布 `mmm/chemistry/registry.nbt` 等文件，而 registry snapshot 现在只存在于包内。这类目录既不是权威域也不是非权威域，因此按未知条目处理——世界 LOCKED，目录原样保留，不会把它们采纳、合并或迁移成包。同理，任何 `mmm/` 下无法归属的名字都 LOCKED。
 
@@ -33,17 +33,19 @@ world save 下的 `mmm/region-state/<region UUID>/` 是区域物理状态的唯�
 
 ```text
 HEAD.nbt
-slot-a/manifest.nbt + section-*.nbt
-slot-b/manifest.nbt + section-*.nbt
+slot-a/manifest.nbt + section-*.nbt    # ACTIVE generation
+slot-b/manifest.nbt + section-*.nbt    # ACTIVE generation
+slot-a/removed.nbt                     # 或 REMOVED tombstone
+slot-b/removed.nbt                     # 或 REMOVED tombstone
 ```
 
-`RegionState` 在 server thread 上捕获/重建完整逻辑状态；`RegionStateCodec` 只编解码 NBT；`RegionStateIntegrity` 生成与 NBT 字段顺序无关的规范 CRC32C；`RegionStateFiles` 只管理双槽、回读验证与原子 HEAD。任何业务层都不能直接写 slot 或把目录存在当成已提交。
+同一个 slot 只能是完整 ACTIVE generation 或只含一个 `removed.nbt` 的 REMOVED tombstone，不能混合。`RegionState` 在 server thread 上捕获/重建完整逻辑状态；`RegionStateCodec` 只编解码 ACTIVE NBT；`RemovedRegionManifest` 是不可重建 solver 的严格零库存终止真值；`RegionStateIntegrity` 生成与 NBT 字段顺序无关的规范 CRC32C；`RegionStateFiles` 只管理双槽、回读验证、quarantine 收敛与原子 HEAD。任何业务层都不能直接写 slot 或把目录存在当成已提交。
 
-HEAD 使用固定 `region-head` schema；manifest 与每个 section 使用语义 `Layout`：`pure`、`material`、`chemical`、`granular` 或 `thermal`。其中 `granular`、`thermal` 的附加 capability 精确声明是否同时携带 chemistry/granular 状态。启动时由已提交 world capability profile 得到唯一预期 layout 和 registry fingerprint，存档必须精确匹配；未知 layout、未知必需 extension、缺字段或额外能力都不能按数字顺序猜测兼容性，也没有自动迁移或默认补全。
+HEAD 使用固定 `region-head` schema 并显式区分 `ACTIVE` / `REMOVED` kind。ACTIVE manifest 与每个 section 使用语义 `Layout`：`pure`、`material`、`chemical`、`granular` 或 `thermal`。其中 `granular`、`thermal` 的附加 capability 精确声明是否同时携带 chemistry/granular 状态。启动时由已提交 world capability profile 得到唯一预期 layout 和 registry fingerprint，存档必须精确匹配；未知 kind/layout、未知必需 extension、缺字段或额外能力都不能按数字顺序猜测兼容性，也没有自动迁移或默认补全。
 
 ## 提交模型
 
-每个持久 controller 区域使用两个完整 generation slot 和一个很小的 HEAD：
+每个 ACTIVE controller 区域使用两个完整 generation slot 和一个很小的 HEAD：
 
 1. 从活动 solver 捕获一个逻辑时刻的完整状态。
 2. 写入 inactive slot 的 manifest 与所有 section。
@@ -63,6 +65,14 @@ HEAD 发布前，当前已提交 generation 仍是唯一权威状态。失败的
 7. 按新 HEAD 再读一次完整 generation；成功才向调用者返回 generation。
 
 目录 rename 保护 slot 完整性，HEAD rename 是唯一 commit point。若平台不支持所需原子移动则发布失败，不能退化为复制后删除。
+
+### REMOVED 终止代次
+
+`REMOVE_EMPTY_REGION` 先重新读取并验证当前 ACTIVE HEAD、完整 active generation、旧 manifest checksum 与 quarantine admission，再在 inactive slot 写入并回读唯一的 `removed.nbt`。tombstone 保存 region/profile/registry identity、base/target generation、旧 manifest checksum、更高的 network tombstone generation、quarantine transaction UUID、固定零库存 digest 与自身 checksum。只有 `REMOVED` HEAD 的原子替换是删除 commit point；此前 exact staging 可丢弃，ACTIVE generation 仍是唯一真值。
+
+`REMOVED` HEAD 发布后，旧 ACTIVE slot 不再是库存真值，也绝不能用于恢复 solver。服务层先发送 network removal tombstone 并注销 runtime owner，持久层再把旧 slot 原子移动到 `mmm/quarantine/removed-region/<uuid>/<target>/payload`，写入匹配的 `quarantine.nbt` 并回读 exact AFTER 状态。tombstone 永久留在原 region UUID 路径，因此该 UUID 不能重新创建。
+
+启动恢复用 `CrossDomainRecovery` 对 HEAD 与 quarantine 外部成员统一分类。ACTIVE HEAD 只允许清理实现自己产生且可完整验证的未提交 tombstone staging；若 staging 已伴随任何 quarantine 变化则状态不再是 exact BEFORE，必须 LOCKED。REMOVED HEAD 接受 old payload 尚在原 slot、payload 已移动但 quarantine manifest 未发布等可证明的 BEFORE，并幂等收敛到 AFTER；source 与 destination 同时存在、内容不匹配或任意第三状态一律保留并 LOCKED。
 
 ## 完整代次
 
@@ -129,7 +139,7 @@ section、palette、mixture、deposit group、gas node 和 ledger 都必须采�
 
 完整恢复按以下顺序：
 
-1. 由 HEAD 选唯一 slot，并验证 HEAD 中 UUID、generation 和 manifest checksum 的绑定。
+1. 由 HEAD kind 选择唯一 ACTIVE slot 或 REMOVED tombstone，并验证 HEAD 中 UUID、generation 和 manifest checksum 的绑定；REMOVED 只做 quarantine 收敛，不进入 solver 重建。
 2. 按 manifest descriptor 读取且只读取列出的 section；拒绝缺失、重复和额外未知 required 文件。
 3. 检查长度、硬预算、canonical order、CRC 和所有分层 ledger。
 4. 用 world registry stable ID 重建 runtime handle，验证 fingerprint/capability。
@@ -165,6 +175,6 @@ operator intent 与 availability 在 metadata-only 状态也保持正交：操�
 
 发布路径在 slot 写前、每个 section 后、manifest 后、临时回读后、slot rename 后以及 HEAD rename 前后都有故障注入点。最近持久化门必须证明任一点异常退出后，启动只会得到完整旧代或完整新代，不会把 staging 当成 HEAD。
 
-只允许自动清理实现自己产生且名称集合完全已知的首次发布 staging；目录出现未知文件就原样保留并锁定。已提交区域删除时先原子移出可发现命名空间到 quarantine，再 best-effort 物理删除；删除失败也不能让半删目录重新被 discovery 接纳。
+只允许自动清理实现自己产生、名称集合与内容都完全可验证的首次发布或 ACTIVE tombstone staging；目录出现未知文件就原样保留并锁定。区域删除发布永久 `REMOVED` HEAD 后，旧 ACTIVE payload 才移入持久 quarantine，并保留可核对 tombstone 的 manifest；它不是 best-effort 物理删除。任何中断都只能恢复到 ACTIVE exact BEFORE、REMOVED 可收敛中间态或 LOCKED third state，不能让旧 payload 重新被 discovery 接纳为 solver。
 
 普通 checkpoint 不删除上一完整 slot，因为它既是原子覆盖的另一半，也是显式 recoverprevious 的唯一候选。清理逻辑绝不能触碰 HEAD 当前指向的 slot。

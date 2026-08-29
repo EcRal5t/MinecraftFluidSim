@@ -10,6 +10,7 @@ import cc.ecisr.mmm.network.FluidGranularSnapshotPayload;
 import cc.ecisr.mmm.network.FluidThermalSnapshotPayload;
 import cc.ecisr.mmm.network.FluidSnapshotPayload;
 import cc.ecisr.mmm.network.ControllerSummaryPayload;
+import cc.ecisr.mmm.network.LifecycleOperationPreviewPayload;
 import cc.ecisr.mmm.network.ThermalReservoirSummaryPayload;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -56,6 +57,9 @@ public final class MmmModClient implements ClientModInitializer {
 		ClientPlayNetworking.registerGlobalReceiver(ControllerSummaryPayload.TYPE, (payload, context) ->
 				context.client().execute(() -> context.client().setScreenAndShow(
 						new ControllerConsoleScreen(payload.summary()))));
+		ClientPlayNetworking.registerGlobalReceiver(LifecycleOperationPreviewPayload.TYPE, (payload, context) ->
+				context.client().execute(() -> context.client().setScreenAndShow(
+						new LifecycleConfirmationScreen(payload))));
 		ClientPlayNetworking.registerGlobalReceiver(ThermalReservoirSummaryPayload.TYPE, (payload, context) ->
 				context.client().execute(() -> context.client().setScreenAndShow(
 						new ThermalReservoirScreen(payload.summary()))));

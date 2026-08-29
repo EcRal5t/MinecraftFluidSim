@@ -15,6 +15,7 @@ public record GasStateSnapshot(
 		String chemicalRegistryFingerprint,
 		List<Node> nodes,
 		int[] cellNodeOrdinal,
+		boolean operatorVentedTopology,
 		GasAuditLedger externalSource,
 		GasAuditLedger escapedSink,
 		SignedDyadic massRoundoff,
@@ -59,6 +60,10 @@ public record GasStateSnapshot(
 				throw new IllegalArgumentException("Gas node topology key does not match complete cell membership");
 			}
 		}
+		if (operatorVentedTopology && (!nodes.isEmpty()
+				|| java.util.Arrays.stream(cellNodeOrdinal).anyMatch(value -> value != 0))) {
+			throw new IllegalArgumentException("Operator-vented gas topology must be inventory-free ambient topology");
+		}
 		boolean species = nodes.stream().flatMap(node -> node.inventory().components().stream())
 				.anyMatch(component -> !component.species().isEmpty())
 				|| externalSource.entries().stream().anyMatch(entry -> !entry.species().isEmpty())
@@ -73,7 +78,7 @@ public record GasStateSnapshot(
 
 	/** Captures runtime node ids into canonical minimum-cell topology order. */
 	public static GasStateSnapshot capture(int sizeX, int sizeY, int sizeZ, int[] runtimeCellNodeId, AirNetwork network,
-	                                      String chemicalRegistryFingerprint) {
+	                                      String chemicalRegistryFingerprint, boolean operatorVentedTopology) {
 		if (runtimeCellNodeId == null || network == null) throw new IllegalArgumentException("Gas runtime topology is unavailable");
 		int nodeCount = network.nodeCount();
 		int[] keys = new int[nodeCount + 1]; java.util.Arrays.fill(keys, Integer.MAX_VALUE);
@@ -101,7 +106,7 @@ public record GasStateSnapshot(
 			int runtime = runtimeCellNodeId[cell]; memberships[cell] = runtime > 0 ? ordinalByRuntime[runtime] : 0;
 		}
 		return new GasStateSnapshot(sizeX, sizeY, sizeZ, network.registry().fingerprint(), chemicalRegistryFingerprint,
-				List.copyOf(nodes), memberships, network.externalSource(), network.escapedSink(),
+				List.copyOf(nodes), memberships, operatorVentedTopology, network.externalSource(), network.escapedSink(),
 				network.massRoundoff(), network.residualRoundoff());
 	}
 
