@@ -2,6 +2,7 @@ package cc.ecisr.mmm.validation;
 
 import cc.ecisr.mmm.chemistry.M7ChemistryValidation;
 import cc.ecisr.mmm.fluid.AirCavityScannerValidation;
+import cc.ecisr.mmm.fluid.CarrierMutationValidation;
 import cc.ecisr.mmm.fluid.FlipCutCellValidation;
 import cc.ecisr.mmm.fluid.FlipFluidFreeSurfaceValidation;
 import cc.ecisr.mmm.fluid.FlipFluidReseedingValidation;
@@ -143,8 +144,10 @@ public final class CpuValidationSuite {
 		gate(gates, "production-replay", () -> ProductionFluidReplayValidation.main(NONE));
 		gate(gates, "free-surface", () -> FlipFluidFreeSurfaceValidation.main(NONE),
 				() -> FlipFluidFreeSurfaceValidation.main(FAST));
-		gate(gates, "reseeding", () -> FlipFluidReseedingValidation.main(NONE),
-				() -> FlipFluidReseedingValidation.main(FAST));
+		gate(gates, "reseeding", () -> {
+			FlipFluidReseedingValidation.main(NONE);
+			CarrierMutationValidation.main(NONE);
+		}, () -> FlipFluidReseedingValidation.main(FAST));
 		gate(gates, "cut-cell", () -> FlipCutCellValidation.main(NONE));
 		gate(gates, "shape", () -> FluidCutCellShapeValidation.main(NONE));
 		gate(gates, "region-state", () -> {

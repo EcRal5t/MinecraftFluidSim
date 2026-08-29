@@ -96,6 +96,7 @@ public final class ArchitectureDependencyValidation {
 			throw new AssertionError("Architecture gate failed with " + violations.size() + " violation(s)");
 		}
 		System.out.println("Architecture gate passed: " + sources.size() + " production sources scanned.");
+		CarrierMutationPointInventoryValidation.main(new String[] {root.toString()});
 	}
 
 	private static List<SourceFile> scan(Path root) throws IOException {

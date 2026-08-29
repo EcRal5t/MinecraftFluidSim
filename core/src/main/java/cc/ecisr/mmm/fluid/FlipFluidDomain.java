@@ -85,7 +85,7 @@ public final class FlipFluidDomain {
 	final int cellCount;
 	final FluidSolverConfig config;
 	final SolverUnitScale unitScale;
-	private final int maximumParticleCount;
+	final int maximumParticleCount;
 	final boolean[] solid;
 	final FlipCutCellGeometry cutCells;
 	final int[] markerCount;
@@ -146,6 +146,8 @@ public final class FlipFluidDomain {
 	private final float[] matrixDirection;
 
 	final LiquidParticleStore particles;
+	private long carrierMutationRevision;
+	private final CarrierMutationCoordinator coordinator;
 	private int[] particleCellNext;
 	private int[] particleCellPrevious;
 	FluidMaterialRegistry materialRegistry;
@@ -285,6 +287,7 @@ public final class FlipFluidDomain {
 		this.metrics = new DomainMetrics(this);
 		this.cellInventory = new CellInventoryReader(this);
 		this.carriers = new CarrierInventoryReader(this);
+		this.coordinator = new CarrierMutationCoordinator(this);
 	}
 
 	public int sizeX() { return sizeX; }
@@ -2913,7 +2916,8 @@ public final class FlipFluidDomain {
 			particles.setVelocityZ(particle, particleVelocities[velocityBase + 2]);
 			setDefaultMaterialState(particle);
 		}
-		particles.setCount(restoredCount);
+		coordinator.adoptWholesaleCount(
+				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()), restoredCount);
 		clearThermalBinding();
 		materialRegistry = null;
 		chemicalParcels = null;
@@ -3644,10 +3648,10 @@ public final class FlipFluidDomain {
 		}
 		if (chemicalParcels != null) {
 			chemicalParcels.recordEscapedSink(plan.drained());
-			chemicalParcels.clear(particles.count());
 		}
 		if (thermalState != null) thermalState.recordExternalSink(plan.internalEnergy());
-		particles.setCount(0);
+		coordinator.clearLiquidMarkers(
+				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()));
 		gridDirty = true;
 	}
 
@@ -3707,13 +3711,13 @@ public final class FlipFluidDomain {
 		}
 		if (chemicalParcels != null) {
 			chemicalParcels.recordEscapedSink(plan.drained());
-			chemicalParcels.clear(particles.count());
 		}
 		if (thermalState != null) {
 			thermalState.recordExternalSink(liquid.internalEnergy());
 			thermalState.clearCoherentExternal(plan.coherentGroups(), plan.coherentEnergy());
 		}
-		particles.setCount(0);
+		coordinator.clearLiquidMarkers(
+				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()));
 		refreshCoherentOccupancy();
 		gridDirty = true;
 		return new CondensedClear(plan.coherentVolumeSvq(),
@@ -4680,7 +4684,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				particles.count(), usesMassWeightedP2G(),
 				this::markerPositionAllowed
 		);
-		particles.setCount(reseeding.particleCount());
+		coordinator.adoptWholesaleCount(
+				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()),
+				reseeding.particleCount());
 		double finalParticleKineticEnergy = captureMechanicalAudit ? particleKineticEnergyJoules() : 0.0;
 		if (captureMechanicalAudit) mechanicalAudit.reseedTransferJoules +=
 				finalParticleKineticEnergy - reseedInitialKineticEnergy;
@@ -7134,7 +7140,11 @@ private void spawnParticle(
 if (particles.count() >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
 if (!(Float.isFinite(amount) && amount > 0.0F)) throw new IllegalArgumentException("Marker volume must be finite and positive");
 if (!(Double.isFinite(mass) && mass > 0.0)) throw new IllegalArgumentException("Marker mass must be finite and positive");
-ensureParticleCapacity(particles.count() + 1);
+if (materialRegistry != null) materialRegistry.material(materialHandle);
+else if (materialHandle != 0) throw new IllegalArgumentException("Material handle requires a bound material registry");
+if (chemicalParcels != null && chemicalMixture != null) {
+chemicalParcels.requireCompatible(chemicalMixture, materialRegistry.material(materialHandle).id(), indicator);
+}
 float h = config.cellSize();
 float radiusFraction = 0.45F;
 float ox = (slot & 1) == 0 ? 0.25F : 0.75F;
@@ -7146,32 +7156,10 @@ if (cellY == 0 || solid[cellIndex(cellX, cellY - 1, cellZ)]) oy = Math.max(oy, r
 if (cellY + 1 == sizeY || solid[cellIndex(cellX, cellY + 1, cellZ)]) oy = Math.min(oy, 1.0F - radiusFraction);
 if (cellZ == 0 || solid[cellIndex(cellX, cellY, cellZ - 1)]) oz = Math.max(oz, radiusFraction);
 if (cellZ + 1 == sizeZ || solid[cellIndex(cellX, cellY, cellZ + 1)]) oz = Math.min(oz, 1.0F - radiusFraction);
-particles.setPositionX(particles.count(), (cellX + ox) * h);
-particles.setPositionY(particles.count(), (cellY + oy) * h);
-particles.setPositionZ(particles.count(), (cellZ + oz) * h);
-particles.setVelocityX(particles.count(), 0.0F);
-particles.setVelocityY(particles.count(), 0.0F);
-particles.setVelocityZ(particles.count(), 0.0F);
-particles.setVolume(particles.count(), amount);
-if (materialRegistry != null) materialRegistry.material(materialHandle);
-else if (materialHandle != 0) throw new IllegalArgumentException("Material handle requires a bound material registry");
-particles.setMass(particles.count(), mass);
-particles.setMaterialHandle(particles.count(), materialHandle);
-particles.setPhaseLabel(particles.count(), materialRegistry == null ? 0 : materialRegistry.phaseHandle(materialHandle));
-if (chemicalParcels != null) {
-if (chemicalMixture == null) chemicalParcels.assignDefault(
-particles.count(), materialRegistry.material(materialHandle).id(), amount, config.cellSize(), mass, false);
-else {
-chemicalParcels.requireCompatible(chemicalMixture, materialRegistry.material(materialHandle).id(), indicator);
-chemicalParcels.assign(particles.count(), chemicalMixture, indicator);
-}
-chemicalParcels.markDirtyCell(cellIndex(cellX, cellY, cellZ));
-}
-		if (thermalState != null) {
-			if (thermalExternal) thermalState.addExternalMarker(particles.count(), thermalMarkerContext());
-			else thermalState.addInternalMarker(particles.count(), 0.0);
-		}
- particles.incrementCount();
+coordinator.appendMarker(
+CarrierMutationPlan.append(carrierMutationRevision(), particles.count()),
+cellIndex(cellX, cellY, cellZ), (cellX + ox) * h, (cellY + oy) * h, (cellZ + oz) * h,
+amount, materialHandle, mass, chemicalMixture, indicator, thermalExternal);
  }
 
 private void spawnChemicalParticle(
@@ -7307,23 +7295,16 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	}
 
 	private void removeParticle(int index) {
-		if (chemicalParcels != null) chemicalParcels.markDirtyCell(particleCellIndex(index));
-		int last = particles.count() - 1;
-		if (thermalState != null) thermalState.removeExternalAndSwap(index, last);
-		if (chemicalParcels != null) chemicalParcels.swapRemove(index, last);
-		particles.swapRemove(index);
+		coordinator.swapRemoveMarker(
+				CarrierMutationPlan.swapRemove(carrierMutationRevision(), particles.count(), index), false);
 	}
 
 	private double removeParticleInternalPhase(int index) {
-		if (chemicalParcels != null) chemicalParcels.markDirtyCell(particleCellIndex(index));
-		int last = particles.count() - 1;
-		double removedEnergy = thermalState.removeInternalAndSwap(index, last);
-		if (chemicalParcels != null) chemicalParcels.swapRemove(index, last);
-		particles.swapRemove(index);
-		return removedEnergy;
+		return coordinator.swapRemoveMarker(
+				CarrierMutationPlan.swapRemove(carrierMutationRevision(), particles.count(), index), true);
 	}
 
-	private void ensureParticleCapacity(int required) {
+	void ensureParticleCapacity(int required) {
 		if (required > maximumParticleCount) {
 			throw new ParticleBudgetExceededException(required - particles.count(), maximumParticleCount - particles.count());
 		}
@@ -7358,6 +7339,9 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	}
 
 	void ensureGrid() { if (gridDirty) rebuildGridFromParticles(); }
+	long carrierMutationRevision() { return carrierMutationRevision; }
+	void bumpCarrierMutationRevision() { carrierMutationRevision++; }
+	CarrierMutationCoordinator carrierMutations() { return coordinator; }
 	private boolean markerPositionAllowed(float x, float y, float z) {
 		return !particleCollision.centerInSolid(x, y, z);
 	}
