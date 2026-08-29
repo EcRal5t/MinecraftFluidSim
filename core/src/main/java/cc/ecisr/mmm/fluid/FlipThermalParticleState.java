@@ -66,9 +66,8 @@ public final class FlipThermalParticleState {
 			throw new IllegalArgumentException("Thermal particle energy must be finite");
 		}
 		int cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
-		CoherentPhaseStore canonical = new CoherentPhaseStore(
-				cellCount, ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION);
-		canonical.restore(coherentGroups);
+		SignedDyadic coherentEnergy = CoherentPhaseStore.exactEnergyOfCanonicalSnapshot(
+				cellCount, ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION, coherentGroups);
 		if (activeParcelEnergy.length > cc.ecisr.mmm.granular.GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION
 				|| depositEnergy.length > cc.ecisr.mmm.granular.GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION) {
 			throw new IllegalArgumentException("Granular thermal handoff exceeds hard budgets");
@@ -85,7 +84,7 @@ public final class FlipThermalParticleState {
 		for (double energy : gasNodeEnergy) if (!Double.isFinite(energy)) {
 			throw new IllegalArgumentException("Gas node energy is not finite");
 		}
-		SignedDyadic inventory = SignedDyadic.sum(internalEnergy).add(canonical.exactEnergy())
+		SignedDyadic inventory = SignedDyadic.sum(internalEnergy).add(coherentEnergy)
 				.add(SignedDyadic.sum(activeParcelEnergy)).add(SignedDyadic.sum(depositEnergy))
 				.add(SignedDyadic.sum(gasNodeEnergy));
 		if (!inventory.equals(audit.expectedInventory())) {

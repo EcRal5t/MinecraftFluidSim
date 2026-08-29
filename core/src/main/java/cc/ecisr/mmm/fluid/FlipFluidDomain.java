@@ -525,9 +525,11 @@ public final class FlipFluidDomain {
 			}
 			return;
 		}
+		granularState.inventory.requireCanClear();
 		if (granularState.inventory.totalSolidVolumeSvq() != plan.solidVolumeSvq()
 				|| Double.doubleToRawLongBits(granularState.inventory.totalMass()) != plan.totalMassBits()
-				|| Double.doubleToRawLongBits(granularInternalEnergy()) != plan.internalEnergyBits()
+				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.granularEnergy().exactEnergy())
+				.equals(plan.internalEnergy())
 				|| granularState.parcels.count() != plan.activeParcels()
 				|| granularState.deposits.groupCount() != plan.depositGroups()) {
 			throw new IllegalStateException("Granular inventory changed after clear planning");
@@ -541,16 +543,11 @@ public final class FlipFluidDomain {
 		}
 	}
 
-	/** Thermal U held by the granular carriers; the lifecycle plan binds it raw-bit exact. */
-	double granularInternalEnergy() {
-		return thermalState == null ? 0.0 : thermalState.granularEnergy().exactEnergy().toDouble();
-	}
-
 	public record GranularClear(long solidVolumeSvq, double mass, int activeParcels, int depositGroups) { }
 	public record GranularClearPlan(
 			GranularAuditLedger removed, GranularAuditLedger sinkAfter,
 			long solidVolumeSvq, long totalMassBits, int activeParcels, int depositGroups,
-			long internalEnergyBits, long granularRevision
+			SignedDyadic internalEnergy, long granularRevision
 	) { }
 	/** Read-only cell inventory used to aim the dry-container scoop at particle/deposit truth. */
 	public long granularSolidVolumeSvq(int cellX, int cellY, int cellZ) { return cellInventory.granularSolidVolumeSvq(cellX, cellY, cellZ); }
@@ -3215,6 +3212,12 @@ public final class FlipFluidDomain {
 		if (plan == null) throw new IllegalArgumentException("Operator clear plan is missing");
 		preflightCondensedClear(plan.condensed());
 		preflightGranularClear(plan.granular());
+		if (thermalState == null ? plan.thermalRevision != 0L : thermalState.thermalRevision() != plan.thermalRevision) {
+			throw new IllegalStateException("Thermal inventory changed after operator clear planning");
+		}
+		if (thermalState != null) thermalState.requireCanCommitOperatorClear(
+				plan.thermalRevision, plan.condensed.liquid().internalEnergy(), plan.condensed.coherentEnergy(),
+				plan.granular.internalEnergy(), plan.gasTopology == null ? null : plan.gasTopology.thermalPlan());
 		if (plan.gasTopology != null) gasTopologyCoordinator.preflight(plan.gasTopology);
 		CondensedClear condensed = applyCondensedClear(plan.condensed());
 		GranularClear granular = applyGranularClear(plan.granular());
@@ -3255,14 +3258,16 @@ public final class FlipFluidDomain {
 		private final CondensedClearPlan condensed;
 		private final GranularClearPlan granular;
 		private final GasTopologyCoordinator.GasTopologyPlan gasTopology;
+		private final long thermalRevision;
 
 		OperatorClearPlan(
 				CondensedClearPlan condensed, GranularClearPlan granular,
-				GasTopologyCoordinator.GasTopologyPlan gasTopology
+				GasTopologyCoordinator.GasTopologyPlan gasTopology, long thermalRevision
 		) {
 			this.condensed = condensed;
 			this.granular = granular;
 			this.gasTopology = gasTopology;
+			this.thermalRevision = thermalRevision;
 		}
 
 		public CondensedClearPlan condensed() { return condensed; }

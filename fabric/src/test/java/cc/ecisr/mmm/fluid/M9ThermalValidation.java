@@ -1652,6 +1652,26 @@ public final class M9ThermalValidation {
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FlipFluidDomain staleGas = new FlipFluidDomain(3, 3, 3, config, 256);
+		staleGas.sealDomainBoundary();
+		staleGas.setVolume(1, 1, 1, 0.5F);
+		staleGas.bootstrapGasState("");
+		require(staleGas.gasBoundary().nodeCount() == 1,
+				"operator-clear stale-plan fixture did not create one sealed cavity");
+		FlipFluidDomain.OperatorClearPlan staleClear = staleGas.planOperatorClear();
+		staleGas.setGasNodeStandardVolume(1, staleGas.gasBoundary().standardVolume(1) * 1.25);
+		double retainedGas = staleGas.gasBoundary().standardVolume(1);
+		int retainedMarkers = staleGas.particleCount();
+		double retainedLiquid = staleGas.totalVolumeExact();
+		expectFailure(() -> staleGas.commitOperatorClear(staleClear),
+				"operator clear accepted a stale gas owner generation");
+		require(staleGas.particleCount() == retainedMarkers
+				&& Double.doubleToRawLongBits(staleGas.totalVolumeExact())
+				== Double.doubleToRawLongBits(retainedLiquid)
+				&& Double.doubleToRawLongBits(staleGas.gasBoundary().standardVolume(1))
+				== Double.doubleToRawLongBits(retainedGas),
+				"rejected stale operator clear changed condensed or gas truth");
+
 		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 256);
 		domain.setVolume(1, 1, 1, 0.75F);
 		domain.bindGranular(granular, liquids);

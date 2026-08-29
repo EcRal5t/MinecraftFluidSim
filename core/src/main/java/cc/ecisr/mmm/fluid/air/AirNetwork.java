@@ -67,6 +67,7 @@ public final class AirNetwork {
 	private GasAuditLedger externalSource = GasAuditLedger.EMPTY;
 	private SignedDyadic massRoundoff = SignedDyadic.ZERO;
 	private SignedDyadic residualRoundoff = SignedDyadic.ZERO;
+	private long revision;
 	private int pressureFloorEvents;
 	private int pressureCeilingEvents;
 	private int transferClampEvents;
@@ -76,6 +77,8 @@ public final class AirNetwork {
 	public AirNetwork(GasRegistry registry) { this.registry = Objects.requireNonNull(registry, "registry"); }
 
 	public GasRegistry registry() { return registry; }
+	/** Monotonic token over authoritative nodes, inventories, volumes, edges and audit columns. */
+	public long revision() { return revision; }
 
 	/** Creates a sealed cavity node; the initial component inventory is booked as drawn from ambient. */
 	public int addNode(double availableVolume, double standardVolume) {
@@ -98,6 +101,7 @@ public final class AirNetwork {
 
 	public void updateAvailableVolume(int nodeId, double availableVolume) {
 		sealed(nodeId).setAvailableVolume(availableVolume);
+		revision++;
 	}
 
 	public long standardVolumeNanos(int nodeId) { return sealed(nodeId).standardVolumeNanos(); }
@@ -177,15 +181,18 @@ public final class AirNetwork {
 			double combinedDischarge = (edge.dischargeCoefficient() * edge.areaSquareMeters()
 					+ dischargeCoefficient * areaSquareMeters) / combinedArea;
 			edges.set(existing, new AirEdge(firstNode, secondNode, combinedArea, combinedDischarge));
+			revision++;
 			return;
 		}
 		edges.add(new AirEdge(firstNode, secondNode, areaSquareMeters, dischargeCoefficient));
+		revision++;
 	}
 
 	public boolean removeEdge(int firstNode, int secondNode) {
 		int existing = findEdge(firstNode, secondNode);
 		if (existing < 0) return false;
 		edges.remove(existing);
+		revision++;
 		return true;
 	}
 
@@ -535,16 +542,26 @@ public final class AirNetwork {
 		requireExactRemapClosure(aggregateNodes(), aggregate(inventories), sourceDelta, sinkDelta);
 		MassColumns after = massColumns(inventories);
 		MassColumns source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
-		return new RemapPlan(this, replacementNodes, plannedEdges, inventories.size() + 1,
+		return new RemapPlan(this, revision, replacementNodes, plannedEdges, inventories.size() + 1,
 				massRoundoff.add(after.mass()).add(sink.mass()).subtract(before.mass()).subtract(source.mass()),
 				residualRoundoff.add(after.residual()).add(sink.residual())
 						.subtract(before.residual()).subtract(source.residual()),
 				externalSource.add(sourceDelta), escapedSink.add(sinkDelta));
 	}
 
+	/** Rejects a remap planned against another owner or an older authoritative generation. */
+	public void requireCanCommitRemap(RemapPlan plan) {
+		if (plan == null || plan.owner != this) {
+			throw new IllegalArgumentException("Gas remap plan belongs to another network");
+		}
+		if (plan.baseRevision != revision) {
+			throw new IllegalStateException("Gas network changed after remap planning");
+		}
+	}
+
 	/** Publishes a previously validated remap using assignments only. */
 	public void commitRemapNodes(RemapPlan plan) {
-		if (plan == null || plan.owner != this) throw new IllegalArgumentException("Gas remap plan belongs to another network");
+		requireCanCommitRemap(plan);
 		nodes = plan.replacementNodes;
 		edges = plan.replacementEdges;
 		nextNodeId = plan.nextNodeId;
@@ -552,6 +569,7 @@ public final class AirNetwork {
 		residualRoundoff = plan.residualRoundoffAfter;
 		externalSource = plan.externalSourceAfter;
 		escapedSink = plan.escapedSinkAfter;
+		revision++;
 	}
 
 	/** Restores a previously validated complete gas generation into a fresh runtime network. */
@@ -587,6 +605,7 @@ public final class AirNetwork {
 			massRoundoff = SignedDyadic.ZERO; residualRoundoff = SignedDyadic.ZERO; nextNodeId = 1;
 			throw new IllegalArgumentException("Restored gas audit does not close");
 		}
+		revision++;
 	}
 
 	public long sealedInventoryNanos() {
@@ -654,6 +673,7 @@ public final class AirNetwork {
 		residualRoundoff = residualRoundoff.add(after.residual()).add(sink.residual())
 				.subtract(before.residual()).subtract(source.residual());
 		externalSource = externalSource.add(sourceDelta); escapedSink = escapedSink.add(sinkDelta);
+		revision++;
 	}
 
 	/** Performs every fallible ledger calculation before either gas or thermal state is published. */
@@ -679,6 +699,7 @@ public final class AirNetwork {
 		residualRoundoff = mutation.residualRoundoffAfter();
 		externalSource = mutation.externalSourceAfter();
 		escapedSink = mutation.escapedSinkAfter();
+		revision++;
 	}
 
 	private MassColumns liveMassColumns() {
@@ -764,6 +785,7 @@ public final class AirNetwork {
 	private record MassColumns(SignedDyadic mass, SignedDyadic residual) { }
 	public static final class RemapPlan {
 		private final AirNetwork owner;
+		private final long baseRevision;
 		private final TreeMap<Integer, AirNode> replacementNodes;
 		private final ArrayList<AirEdge> replacementEdges;
 		private final int nextNodeId;
@@ -773,12 +795,13 @@ public final class AirNetwork {
 		private final GasAuditLedger escapedSinkAfter;
 
 		private RemapPlan(
-				AirNetwork owner, TreeMap<Integer, AirNode> replacementNodes,
+				AirNetwork owner, long baseRevision, TreeMap<Integer, AirNode> replacementNodes,
 				ArrayList<AirEdge> replacementEdges, int nextNodeId,
 				SignedDyadic massRoundoffAfter, SignedDyadic residualRoundoffAfter,
 				GasAuditLedger externalSourceAfter, GasAuditLedger escapedSinkAfter
 		) {
 			this.owner = owner;
+			this.baseRevision = baseRevision;
 			this.replacementNodes = replacementNodes;
 			this.replacementEdges = replacementEdges;
 			this.nextNodeId = nextNodeId;

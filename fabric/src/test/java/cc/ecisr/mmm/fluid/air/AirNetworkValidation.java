@@ -250,6 +250,14 @@ public final class AirNetworkValidation {
 	private static void validateGuards() {
 		AirNetwork network = new AirNetwork();
 		int node = network.addNode(1.0, 1.0);
+		AirNetwork.RemapPlan staleRemap = network.planRemapNodes(
+				new double[]{1.0}, List.of(network.inventory(node)),
+				GasInventory.EMPTY, GasInventory.EMPTY, List.of());
+		network.setStandardVolume(node, 1.25);
+		long changedInventory = network.standardVolumeNanos(node);
+		expectStateThrow(() -> network.commitRemapNodes(staleRemap), "stale remap generation");
+		check(network.standardVolumeNanos(node) == changedInventory,
+				"stale gas remap overwrote newer inventory truth");
 		expectThrow(() -> network.addOrMergeEdge(node, node, 0.1, 0.65), "self edge");
 		expectThrow(() -> network.addOrMergeEdge(node, AirNetwork.AMBIENT_NODE, 0.0, 0.65), "zero area");
 		expectThrow(() -> network.addOrMergeEdge(node, AirNetwork.AMBIENT_NODE, 0.1, 1.5), "oversized Cd");
@@ -363,5 +371,14 @@ public final class AirNetworkValidation {
 			return;
 		}
 		throw new AssertionError("expected an IllegalArgumentException for " + what);
+	}
+
+	private static void expectStateThrow(Runnable action, String what) {
+		try {
+			action.run();
+		} catch (IllegalStateException expected) {
+			return;
+		}
+		throw new AssertionError("expected an IllegalStateException for " + what);
 	}
 }

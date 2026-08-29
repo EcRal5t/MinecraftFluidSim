@@ -208,6 +208,13 @@ public final class M8GranularValidation {
 				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(
 						BuiltinChemicalDefinitions.NA_PLUS, 640L,
 						BuiltinChemicalDefinitions.CL_MINUS, 640L), 0.0);
+		SolidCompositionPool rollbackPool = new SolidCompositionPool(BuiltinChemicalDefinitions.REGISTRY, 4);
+		int firstReserved = rollbackPool.create(activeRecord);
+		int secondReserved = rollbackPool.create(activeRecord);
+		rollbackPool.release(secondReserved);
+		rollbackPool.release(firstReserved);
+		require(rollbackPool.create(activeRecord) == firstReserved,
+				"reverse rollback did not restore deterministic composition allocation order");
 		int activeComposition = compositions.create(activeRecord);
 		GranularParcelStore parcels = new GranularParcelStore(registry, 4);
 		parcels.add(new GranularParcelStore.Parcel(0.5F, 0.5F, 0.5F, 0.0F, 0.0F, 0.0F,

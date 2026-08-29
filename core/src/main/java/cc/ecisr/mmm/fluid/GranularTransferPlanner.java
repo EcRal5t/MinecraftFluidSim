@@ -199,7 +199,10 @@ final class GranularTransferPlanner {
 					originalCount, drafts.size(),
 					new DraftParcelContext(domain.thermalMarkerContext(), drafts, compositionByDraft));
 		} catch (RuntimeException failure) {
-			for (int handle : createdCompositions) if (granular.compositions.isLive(handle)) granular.compositions.release(handle);
+			for (int index = createdCompositions.size() - 1; index >= 0; index--) {
+				int handle = createdCompositions.get(index);
+				if (granular.compositions.isLive(handle)) granular.compositions.release(handle);
+			}
 			throw failure;
 		}
 		for (int index = 0; index < drafts.size(); index++) {

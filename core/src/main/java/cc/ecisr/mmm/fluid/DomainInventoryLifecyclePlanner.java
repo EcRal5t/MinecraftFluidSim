@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.granular.GranularAuditLedger;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 /**
  * Plans the domain-wide inventory lifecycle: the granular active/deposit clear (jointly
@@ -8,8 +9,7 @@ import cc.ecisr.mmm.granular.GranularAuditLedger;
  * operator clear across condensed liquid, coherent phases, granular inventory and the
  * retained-gas topology. Plans bind the granular structural revision and raw-bit SVQ/mass/U
  * totals; the domain commits re-verify them before any inventory or audit mutation. The
- * thermal side is bound through raw-bit U totals until S10 introduces its own revision
- * counter.
+ * thermal side is bound by its owner generation and exact dyadic inventory.
  */
 final class DomainInventoryLifecyclePlanner {
 	private final FlipFluidDomain domain;
@@ -31,7 +31,7 @@ final class DomainInventoryLifecyclePlanner {
 			return new FlipFluidDomain.GranularClearPlan(GranularAuditLedger.EMPTY,
 					domain.granularState == null ? GranularAuditLedger.EMPTY : domain.granularState.escapedSink,
 					0L, Double.doubleToRawLongBits(0.0), 0, 0,
-					Double.doubleToRawLongBits(0.0), granularRevision);
+					SignedDyadic.ZERO, granularRevision);
 		}
 		// Export validates unique runtime composition ownership before either inventory or audit mutates.
 		domain.exportGranularState();
@@ -41,7 +41,8 @@ final class DomainInventoryLifecyclePlanner {
 		GranularAuditLedger sinkAfter = granular.escapedSink.plus(removed);
 		return new FlipFluidDomain.GranularClearPlan(removed, sinkAfter, granular.inventory.totalSolidVolumeSvq(),
 				Double.doubleToRawLongBits(granular.inventory.totalMass()), granular.parcels.count(),
-				granular.deposits.groupCount(), Double.doubleToRawLongBits(domain.granularInternalEnergy()),
+				granular.deposits.groupCount(), domain.thermalState == null
+						? SignedDyadic.ZERO : domain.thermalState.granularEnergy().exactEnergy(),
 				granularRevision);
 	}
 
@@ -57,6 +58,10 @@ final class DomainInventoryLifecyclePlanner {
 			domain.ensureGrid();
 			gasTopology = domain.gasTopologyCoordinator.planFromFreshScan();
 		}
-		return new FlipFluidDomain.OperatorClearPlan(condensed, granular, gasTopology);
+		long thermalRevision = domain.thermalState == null ? 0L : domain.thermalState.thermalRevision();
+		if (domain.thermalState != null) domain.thermalState.requireCanCommitOperatorClear(
+				thermalRevision, condensed.liquid().internalEnergy(), condensed.coherentEnergy(),
+				granular.internalEnergy(), gasTopology == null ? null : gasTopology.thermalPlan());
+		return new FlipFluidDomain.OperatorClearPlan(condensed, granular, gasTopology, thermalRevision);
 	}
 }

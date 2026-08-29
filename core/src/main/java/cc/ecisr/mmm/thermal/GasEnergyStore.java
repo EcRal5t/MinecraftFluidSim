@@ -140,14 +140,23 @@ public final class GasEnergyStore {
 		SignedDyadic source = SignedDyadic.of(sourceEnergy), sink = SignedDyadic.of(sinkEnergy);
 		SignedDyadic work = finalGas.subtract(mixed);
 		SignedDyadic roundoff = finalGas.subtract(oldGas).subtract(source).add(sink).subtract(work);
-		return new GasRemapPlan(result, source, sink, work, roundoff);
+		return new GasRemapPlan(revision, result, source, sink, work, roundoff);
+	}
+
+	void requireCanCommitRemap(GasRemapPlan plan) {
+		if (plan == null) throw new IllegalArgumentException("Gas thermal remap plan is missing");
+		if (plan.baseRevision() != revision) {
+			throw new IllegalStateException("Gas energy changed after remap planning");
+		}
 	}
 
 	void commitRemap(GasRemapPlan plan) {
-		if (plan == null) throw new IllegalArgumentException("Gas thermal remap plan is missing");
+		requireCanCommitRemap(plan);
+		ThermalAuditLedger auditAfter = audit.ledger()
+				.withExternalSourceEnergy(plan.sourceEnergy()).withExternalSinkEnergy(plan.sinkEnergy())
+				.withMechanicalWork(plan.mechanicalWork()).withRoundoff(plan.roundoff());
 		nodeEnergy = plan.nodeEnergy();
-		audit.update(ledger -> ledger.withExternalSourceEnergy(plan.sourceEnergy()).withExternalSinkEnergy(plan.sinkEnergy())
-				.withMechanicalWork(plan.mechanicalWork()).withRoundoff(plan.roundoff()));
+		audit.replace(auditAfter);
 		revision++;
 	}
 
@@ -214,7 +223,7 @@ public final class GasEnergyStore {
 	}
 
 	public record GasRemapPlan(
-			double[] nodeEnergy, SignedDyadic sourceEnergy, SignedDyadic sinkEnergy,
+			long baseRevision, double[] nodeEnergy, SignedDyadic sourceEnergy, SignedDyadic sinkEnergy,
 			SignedDyadic mechanicalWork, SignedDyadic roundoff
 	) {
 		public GasRemapPlan { nodeEnergy = nodeEnergy.clone(); }

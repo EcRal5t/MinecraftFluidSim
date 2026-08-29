@@ -143,7 +143,6 @@ public final class ThermalDomainState {
 
 	public void restoreAuditLedger(ThermalAuditLedger ledger) { auditState.replace(ledger); }
 	public LiquidEnergyColumn liquid() { return liquidEnergy; }
-	public GranularEnergyState granular() { return granularState; }
 	public GasEnergyStore gas() { return gasState; }
 	public CoherentPhaseStore coherentPhases() { return granularState.coherentPhases(); }
 	public GranularEnergyColumn granularColumn() { return granularState.column(); }
@@ -341,7 +340,39 @@ public final class ThermalDomainState {
 				inheritedAvailableVolumes, sourceEnergy, sinkEnergy);
 	}
 
+	public void requireCanCommitGasRemap(GasEnergyStore.GasRemapPlan plan) {
+		gasState.requireCanCommitRemap(plan);
+	}
+
 	public void commitGasRemap(GasEnergyStore.GasRemapPlan plan) { gasState.commitRemap(plan); }
+
+	/**
+	 * Validates the complete operator-clear audit chain against one thermal generation.
+	 * This is deliberately calculation-only: every possible exact-ledger overflow is found
+	 * before liquid, coherent, granular or gas truth begins to publish.
+	 */
+	public void requireCanCommitOperatorClear(
+			long baseRevision, SignedDyadic liquidEnergy, SignedDyadic coherentEnergy,
+			SignedDyadic granularEnergy, GasEnergyStore.GasRemapPlan gasPlan
+	) {
+		if (baseRevision != thermalRevision()) {
+			throw new IllegalStateException("Thermal inventory changed after operator clear planning");
+		}
+		if (liquidEnergy == null || coherentEnergy == null || granularEnergy == null) {
+			throw new IllegalArgumentException("Operator clear thermal ledger is incomplete");
+		}
+		ThermalAuditLedger candidate = auditState.ledger()
+				.withExternalSinkEnergy(liquidEnergy)
+				.withExternalSinkEnergy(coherentEnergy)
+				.withExternalSinkEnergy(granularEnergy);
+		if (gasPlan != null) {
+			gasState.requireCanCommitRemap(gasPlan);
+			candidate = candidate.withExternalSourceEnergy(gasPlan.sourceEnergy())
+					.withExternalSinkEnergy(gasPlan.sinkEnergy())
+					.withMechanicalWork(gasPlan.mechanicalWork())
+					.withRoundoff(gasPlan.roundoff());
+		}
+	}
 
 	/** Prevalidates removal of every sealed-node energy as one external sink against the joint inventory. */
 	public GasEnergyStore.GasVentPlan planGasVent(AirNetwork network, int markerCount) {

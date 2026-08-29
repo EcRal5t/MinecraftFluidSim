@@ -212,7 +212,7 @@ public final class CoherentPhaseStore {
 	 * snapshot (thermal restore) or validates one (persistence handoff records build a private
 	 * scratch store). Incremental mutation stays package-private to the state owners.
 	 */
-	public void restore(List<Group> snapshot) {
+	void restore(List<Group> snapshot) {
 		if (!groups.isEmpty()) throw new IllegalStateException("Coherent phase restore target is not empty");
 		if (snapshot == null || snapshot.size() > maximumGroups) {
 			throw new IllegalArgumentException("Coherent phase snapshot is missing or over budget");
@@ -225,6 +225,15 @@ public final class CoherentPhaseStore {
 			}
 			groups.add(group); previous = group;
 		}
+	}
+
+	/** Validates a handoff snapshot without exposing a mutation seam on a live store. */
+	public static SignedDyadic exactEnergyOfCanonicalSnapshot(
+			int cellCount, int maximumGroups, List<Group> snapshot
+	) {
+		CoherentPhaseStore canonical = new CoherentPhaseStore(cellCount, maximumGroups);
+		canonical.restore(snapshot);
+		return canonical.exactEnergy();
 	}
 
 	private void validateGroup(Group group) {

@@ -181,7 +181,15 @@ final class FlipThermalState {
 		return domain.planGasRemap(oldNetwork, inventories, availableVolumes, mixedEnergy,
 				inheritedAvailableVolumes, sourceEnergy, sinkEnergy);
 	}
+	void requireCanCommitGasRemap(GasEnergyStore.GasRemapPlan plan) { domain.requireCanCommitGasRemap(plan); }
 	void commitGasRemap(GasEnergyStore.GasRemapPlan plan) { domain.commitGasRemap(plan); }
+	void requireCanCommitOperatorClear(
+			long baseRevision, SignedDyadic liquidEnergy, SignedDyadic coherentEnergy,
+			SignedDyadic granularEnergy, GasEnergyStore.GasRemapPlan gasPlan
+	) {
+		domain.requireCanCommitOperatorClear(
+				baseRevision, liquidEnergy, coherentEnergy, granularEnergy, gasPlan);
+	}
 	GasEnergyStore.GasVentPlan planGasVent(AirNetwork network, int markerCount) {
 		return domain.planGasVent(network, markerCount);
 	}

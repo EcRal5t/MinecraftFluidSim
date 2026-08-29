@@ -205,10 +205,8 @@ public final class GranularInventory {
 
 	public double totalMass() { return parcels.totalMass() + deposits.totalMass(); }
 
-	/** Releases every active/deposit composition exactly once and clears both inventory stores. */
-	public ClearStats clear() {
-		long solidVolumeSvq = totalSolidVolumeSvq(); double mass = totalMass();
-		int activeParcels = parcels.count(), depositGroups = deposits.groupCount();
+	/** Validates unique, complete composition ownership without changing either inventory store. */
+	public void requireCanClear() {
 		HashSet<Integer> compositionHandles = new HashSet<>();
 		for (int index = 0; index < parcels.count(); index++) {
 			int handle = parcels.parcel(index).solidCompositionHandle();
@@ -226,6 +224,13 @@ public final class GranularInventory {
 				|| compositionHandles.stream().anyMatch(handle -> !compositions.isLive(handle))))) {
 			throw new IllegalStateException("Granular clear found invalid solid composition ownership");
 		}
+	}
+
+	/** Releases every active/deposit composition exactly once and clears both inventory stores. */
+	public ClearStats clear() {
+		requireCanClear();
+		long solidVolumeSvq = totalSolidVolumeSvq(); double mass = totalMass();
+		int activeParcels = parcels.count(), depositGroups = deposits.groupCount();
 		while (parcels.count() > 0) {
 			GranularParcelStore.Parcel removed = parcels.removeSwap(parcels.count() - 1);
 			if (removed.solidCompositionHandle() != 0) compositions.release(removed.solidCompositionHandle());

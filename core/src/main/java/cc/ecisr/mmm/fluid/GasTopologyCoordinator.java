@@ -147,6 +147,8 @@ final class GasTopologyCoordinator {
 				domain.gasState.network, inventories, availableVolumes, mixedEnergy, inheritedAvailable, 0.0, 0.0);
 		AirNetwork.RemapPlan gasPlan = domain.gasState.network.planRemapNodes(
 				availableVolumes, inventories, GasInventory.EMPTY, GasInventory.EMPTY, domain.gasState.network.edges());
+		domain.thermalState.requireCanCommitGasRemap(thermalPlan);
+		domain.gasState.network.requireCanCommitRemap(gasPlan);
 		domain.thermalState.commitGasRemap(thermalPlan);
 		domain.gasState.network.commitRemapNodes(gasPlan);
 	}
@@ -478,14 +480,14 @@ final class GasTopologyCoordinator {
 				+ ", inventoryNanos=" + domain.gasState.network.inventory(old).standardVolumeNanos();
 	}
 
-	/** Publishes a fully planned topology; all fallible physics and ledger work happened above. */
 	/**
-	 * Verifies the planned topology against a fresh geometry scan without mutating anything.
+	 * Verifies the planned topology against its owner generations and a fresh geometry scan.
 	 * The scan inputs are the solid geometry only, which neither the condensed nor the granular
 	 * clear changes, so a diverging fresh scan means the plan is stale and the whole operator
 	 * clear must be rejected before any owner mutates.
 	 */
 	void preflight(GasTopologyPlan plan) {
+		requireCanCommit(plan);
 		AirCavityScanner.Result fresh = domain.gasTopologyCoordinator.scanner.scan(
 				domain.geometry.solid, new int[domain.cellCount], new double[domain.cellCount],
 				domain.geometry.cutCells, null, domain.gasState.sealedDomainBoundary);
@@ -497,6 +499,7 @@ final class GasTopologyCoordinator {
 	}
 
 	void commit(GasTopologyPlan plan) {
+		requireCanCommit(plan);
 		if (plan.thermalPlan() != null) domain.thermalState.commitGasRemap(plan.thermalPlan());
 		domain.gasState.network.commitRemapNodes(plan.gasPlan());
 		AirCavityScanner.Result result = plan.scan();
@@ -505,6 +508,18 @@ final class GasTopologyCoordinator {
 		domain.gasState.cellLineageNodeId = result.cellLineageNodeId();
 		domain.gasState.previousSealedNodeCount = sealed;
 		domain.gasState.pressureActive = sealed > 0;
+	}
+
+	/** Checks both owners before either side of the joint gas topology commit is published. */
+	private void requireCanCommit(GasTopologyPlan plan) {
+		if (plan == null) throw new IllegalArgumentException("Gas topology plan is missing");
+		domain.gasState.network.requireCanCommitRemap(plan.gasPlan());
+		if (plan.thermalPlan() != null) {
+			if (domain.thermalState == null) {
+				throw new IllegalStateException("Gas topology plan lost its thermal owner");
+			}
+			domain.thermalState.requireCanCommitGasRemap(plan.thermalPlan());
+		}
 	}
 
 	/**

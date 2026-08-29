@@ -21,7 +21,7 @@ public final class GranularEnergyState {
 	private final ThermalAuditState audit;
 	private long revision;
 
-	public GranularEnergyState(
+	GranularEnergyState(
 			ThermalRegistry registry, GranularEnergyColumn granularEnergy, CoherentPhaseStore coherentPhases,
 			ThermalStateFunction stateFunction, int[] materialByGranularHandle,
 			double insertionTemperatureK, ThermalAuditState audit
@@ -72,34 +72,34 @@ public final class GranularEnergyState {
 	public GranularEnergyColumn column() { return granularEnergy; }
 	public CoherentPhaseStore coherentPhases() { return coherentPhases; }
 
-	public ThermalMaterialDefinition granularMaterial(int granularHandle) {
+	ThermalMaterialDefinition granularMaterial(int granularHandle) {
 		return registry.material(materialByGranularHandle[granularHandle]);
 	}
 
-	public double granularBaseEnergy(int granularHandle, double mass, Map<String, Long> composition) {
+	double granularBaseEnergy(int granularHandle, double mass, Map<String, Long> composition) {
 		return stateFunction.baseEnergy(materialByGranularHandle[granularHandle], mass, composition);
 	}
 
-	public void addGranularReactionActive() { granularEnergy.addActive(0.0); revision++; }
+	void addGranularReactionActive() { granularEnergy.addActive(0.0); revision++; }
 
-	public double takeGranularReactionActive(int active, long takenSvq, long totalSvq) {
+	double takeGranularReactionActive(int active, long takenSvq, long totalSvq) {
 		double taken = takenSvq == totalSvq ? granularEnergy.removeActiveSwap(active)
 				: granularEnergy.takeActivePortion(active, takenSvq, totalSvq);
 		revision++;
 		return taken;
 	}
 
-	public double takeGranularReactionDeposit(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
+	double takeGranularReactionDeposit(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
 		double taken = granularEnergy.takeDeposit(key, takenSvq, totalSvq);
 		revision++;
 		return taken;
 	}
 
-	public void requireActiveToDeposit(int active, GranularEnergyColumn.DepositKey target) {
+	void requireActiveToDeposit(int active, GranularEnergyColumn.DepositKey target) {
 		granularEnergy.requireAddDeposit(target, granularEnergy.activeEnergy(active));
 	}
 
-	public void commitActiveToDeposit(int active, GranularEnergyColumn.DepositKey target) {
+	void commitActiveToDeposit(int active, GranularEnergyColumn.DepositKey target) {
 		SignedDyadic before = granularEnergy.exactEnergy();
 		double energy = granularEnergy.removeActiveSwap(active);
 		granularEnergy.addDeposit(target, energy);
@@ -107,21 +107,21 @@ public final class GranularEnergyState {
 		revision++;
 	}
 
-	public void requireActiveMerge(int first, int second) { granularEnergy.requireMergeActive(first, second); }
+	void requireActiveMerge(int first, int second) { granularEnergy.requireMergeActive(first, second); }
 
-	public void commitActiveMerge(int first, int second) {
+	void commitActiveMerge(int first, int second) {
 		SignedDyadic before = granularEnergy.exactEnergy();
 		granularEnergy.mergeActive(first, second);
 		audit.update(ledger -> ledger.withRoundoff(granularEnergy.exactEnergy().subtract(before)));
 		revision++;
 	}
 
-	public void requireDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {
+	void requireDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {
 		granularEnergy.previewDepositTake(source, takenSvq, totalSvq);
 		granularEnergy.requireAddActive(0.0);
 	}
 
-	public void commitDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {
+	void commitDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {
 		SignedDyadic before = granularEnergy.exactEnergy();
 		double energy = granularEnergy.takeDeposit(source, takenSvq, totalSvq);
 		granularEnergy.addActive(energy);
@@ -129,7 +129,7 @@ public final class GranularEnergyState {
 		revision++;
 	}
 
-	public void requireDepositMove(
+	void requireDepositMove(
 			GranularEnergyColumn.DepositKey source, GranularEnergyColumn.DepositKey target,
 			long movedSvq, long sourceTotalSvq
 	) {
@@ -137,7 +137,7 @@ public final class GranularEnergyState {
 		granularEnergy.requireAddDeposit(target, moved);
 	}
 
-	public void commitDepositMove(
+	void commitDepositMove(
 			GranularEnergyColumn.DepositKey source, GranularEnergyColumn.DepositKey target,
 			long movedSvq, long sourceTotalSvq
 	) {
@@ -147,13 +147,15 @@ public final class GranularEnergyState {
 		revision++;
 	}
 
-	public void clearGranularExternal() {
-		SignedDyadic removed = granularEnergy.clear();
-		audit.update(ledger -> ledger.withExternalSinkEnergy(removed));
+	void clearGranularExternal() {
+		SignedDyadic removed = granularEnergy.exactEnergy();
+		ThermalAuditLedger auditAfter = audit.ledger().withExternalSinkEnergy(removed);
+		granularEnergy.clear();
+		audit.replace(auditAfter);
 		revision++;
 	}
 
-	public double[] planExternalActiveInsertions(int firstOrdinal, int count, ThermalCarrierContext markers) {
+	double[] planExternalActiveInsertions(int firstOrdinal, int count, ThermalCarrierContext markers) {
 		if (firstOrdinal != granularEnergy.activeCount() || count < 0
 				|| firstOrdinal + count != markers.activeParcelCount()) {
 			throw new IllegalArgumentException("Granular thermal insertion ordinals are incompatible");
@@ -169,13 +171,13 @@ public final class GranularEnergyState {
 		return energies;
 	}
 
-	public double planExternalGranularEnergy(int material, int composition, double mass, ThermalCarrierContext markers) {
+	double planExternalGranularEnergy(int material, int composition, double mass, ThermalCarrierContext markers) {
 		double energy = modeledGranularEnergy(material, composition, mass, insertionTemperatureK, markers);
 		granularEnergy.requireAddActive(energy);
 		return energy;
 	}
 
-	public void commitExternalActiveInsertions(double[] energies) {
+	void commitExternalActiveInsertions(double[] energies) {
 		if (energies == null) throw new IllegalArgumentException("Granular thermal insertion plan is missing");
 		SignedDyadic source = SignedDyadic.ZERO;
 		for (double energy : energies) {
@@ -186,15 +188,15 @@ public final class GranularEnergyState {
 		revision++;
 	}
 
-	public double previewActiveTake(int active, long takenSvq, long totalSvq) {
+	double previewActiveTake(int active, long takenSvq, long totalSvq) {
 		return granularEnergy.previewActiveTake(active, takenSvq, totalSvq);
 	}
 
-	public double previewDepositTake(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
+	double previewDepositTake(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
 		return granularEnergy.previewDepositTake(key, takenSvq, totalSvq);
 	}
 
-	public double commitExternalActiveTake(int active, long takenSvq, long totalSvq) {
+	double commitExternalActiveTake(int active, long takenSvq, long totalSvq) {
 		double removed = takenSvq == totalSvq ? granularEnergy.removeActiveSwap(active)
 				: granularEnergy.takeActivePortion(active, takenSvq, totalSvq);
 		audit.update(ledger -> ledger.withExternalSinkEnergy(SignedDyadic.of(removed)));
@@ -202,14 +204,14 @@ public final class GranularEnergyState {
 		return removed;
 	}
 
-	public double commitExternalDepositTake(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
+	double commitExternalDepositTake(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
 		double removed = granularEnergy.takeDeposit(key, takenSvq, totalSvq);
 		audit.update(ledger -> ledger.withExternalSinkEnergy(SignedDyadic.of(removed)));
 		revision++;
 		return removed;
 	}
 
-	public double modeledGranularEnergy(
+	double modeledGranularEnergy(
 			int granularMaterial, int composition, double mass, double temperatureK, ThermalCarrierContext markers
 	) {
 		if (granularMaterial < 0 || granularMaterial >= materialByGranularHandle.length) {
@@ -224,7 +226,7 @@ public final class GranularEnergyState {
 		return energy;
 	}
 
-	public void addGranularPortion(
+	void addGranularPortion(
 			List<ThermalStateFunction.InventoryPortion> inventory, int granularMaterial,
 			double mass, Map<String, Long> composition
 	) {
@@ -235,7 +237,7 @@ public final class GranularEnergyState {
 				materialByGranularHandle[granularMaterial], mass, composition));
 	}
 
-	public void addCoherentExternal(CoherentPhaseStore.Group group) {
+	void addCoherentExternal(CoherentPhaseStore.Group group) {
 		int material = registry.materialHandle(group.phaseId());
 		if (registry.material(material).carrierKind() != ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID) {
 			throw new IllegalArgumentException("Coherent group phase is not a coherent-solid thermal material");
@@ -247,24 +249,25 @@ public final class GranularEnergyState {
 		revision++;
 	}
 
-	public void addCoherentInternal(CoherentPhaseStore.Group group) {
+	void addCoherentInternal(CoherentPhaseStore.Group group) {
 		coherentPhases.add(group);
 		revision++;
 	}
 
-	public CoherentPhaseStore.Group takeCoherentInternal(int cell, String phaseId, long occupiedSvq) {
+	CoherentPhaseStore.Group takeCoherentInternal(int cell, String phaseId, long occupiedSvq) {
 		CoherentPhaseStore.Group taken = coherentPhases.take(cell, phaseId, occupiedSvq);
 		revision++;
 		return taken;
 	}
 
-	public void clearCoherentExternal(List<CoherentPhaseStore.Group> expected, SignedDyadic expectedEnergy) {
+	void clearCoherentExternal(List<CoherentPhaseStore.Group> expected, SignedDyadic expectedEnergy) {
 		if (expected == null || expectedEnergy == null || !coherentPhases.snapshot().equals(expected)
 				|| !coherentPhases.exactEnergy().equals(expectedEnergy)) {
 			throw new IllegalStateException("Coherent phase inventory changed after clear planning");
 		}
+		ThermalAuditLedger auditAfter = audit.ledger().withExternalSinkEnergy(expectedEnergy);
 		coherentPhases.clear();
-		audit.update(ledger -> ledger.withExternalSinkEnergy(expectedEnergy));
+		audit.replace(auditAfter);
 		revision++;
 	}
 
