@@ -1,7 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.granular.GranularMechanics;
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.Arrays;
 

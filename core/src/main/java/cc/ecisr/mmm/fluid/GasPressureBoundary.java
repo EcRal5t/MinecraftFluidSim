@@ -48,8 +48,8 @@ public final class GasPressureBoundary {
 	public int edgeCount() { return domain.gasState.network.edgeCount(); }
 	public GasAuditLedger externalSource() { return domain.gasState.network.externalSource(); }
 	public GasAuditLedger escapedSink() { return domain.gasState.network.escapedSink(); }
-	public cc.ecisr.mmm.thermal.SignedDyadic massRoundoff() { return domain.gasState.network.massRoundoff(); }
-	public cc.ecisr.mmm.thermal.SignedDyadic residualRoundoff() { return domain.gasState.network.residualRoundoff(); }
+	public cc.ecisr.mmm.units.SignedDyadic massRoundoff() { return domain.gasState.network.massRoundoff(); }
+	public cc.ecisr.mmm.units.SignedDyadic residualRoundoff() { return domain.gasState.network.residualRoundoff(); }
 
 	/** Thermal-aware node pressure source; standard-temperature fallback before the gas model binds. */
 	public double nodeGaugePressurePa(int node) {

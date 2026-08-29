@@ -3,7 +3,7 @@ package cc.ecisr.mmm.fluid;
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalPhaseTransition;
 

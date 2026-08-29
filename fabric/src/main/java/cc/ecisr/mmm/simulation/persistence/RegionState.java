@@ -19,7 +19,7 @@ import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.granular.GranularStateSnapshot;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.simulation.FluidRegion;
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
 import cc.ecisr.mmm.thermal.GasThermalModel;
 import cc.ecisr.mmm.thermal.FiniteThermalDeviceInventory;

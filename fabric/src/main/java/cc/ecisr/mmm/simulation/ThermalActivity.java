@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.simulation;
 
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.thermal.ThermalTransport;
 
 import java.util.Objects;

@@ -63,10 +63,6 @@ public final class ArchitectureDependencyValidation {
 	private static final Set<String> PERSISTENCE_RUNTIME_ALLOWLIST = Set.of(
 			"RegionManifest", "RegionState", "RegionStateCodec", "RegionStateIntegrity");
 
-	/** Known core package cycle; thermal state owners (S10) must remove the thermal side. */
-	private static final Set<String> CYCLE_ALLOWLIST = Set.of(
-			"cc.ecisr.mmm.fluid.air<->cc.ecisr.mmm.thermal");
-
 	record SourceFile(
 			String module, String simpleName, String packageName, int lines, List<String> imports, boolean hasLocator
 	) { }
@@ -259,9 +255,7 @@ public final class ArchitectureDependencyValidation {
 		}
 		for (Set<String> component : stronglyConnectedComponents(new TreeMap<>(graph))) {
 			if (component.size() < 2) continue;
-			String key = String.join("<->", component);
-			if (CYCLE_ALLOWLIST.contains(key)) continue;
-			violations.add("core package cycle: " + key);
+			violations.add("core package cycle: " + String.join("<->", component));
 		}
 	}
 

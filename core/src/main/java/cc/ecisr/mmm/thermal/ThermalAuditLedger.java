@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.thermal;
 
+import cc.ecisr.mmm.units.SignedDyadic;
+
 import java.util.Objects;
 
 /** Immutable signed-energy audit. Source/sink are directions; roundoff is never reclassified as either. */

@@ -220,4 +220,16 @@ public final class ThermalStateFunction {
 		for (double value : values) tolerance = Math.max(tolerance, Math.ulp(value) * 16.0);
 		return tolerance;
 	}
+
+	/** Normalizes a chemical mixture into the stable species-amount map used by inventory portions. */
+	public static java.util.Map<String, Long> stableAmounts(
+			ChemicalMixtureRecord mixture, ChemicalRegistry chemicalRegistry
+	) {
+		if (mixture == null) return Map.of();
+		if (chemicalRegistry == null) throw new IllegalArgumentException("Thermal chemical registry is missing");
+		java.util.TreeMap<String, Long> result = new java.util.TreeMap<>();
+		for (int entry = 0; entry < mixture.entryCount(); entry++) result.put(
+				chemicalRegistry.species(mixture.speciesHandle(entry)).id(), mixture.amountAt(entry));
+		return Map.copyOf(result);
+	}
 }

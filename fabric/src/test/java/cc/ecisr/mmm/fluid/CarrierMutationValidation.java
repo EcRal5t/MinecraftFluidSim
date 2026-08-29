@@ -112,7 +112,7 @@ public final class CarrierMutationValidation {
 		double removedMarkerEnergy = thermalLiquidEnergy(domain, removed);
 		double lastEnergy = thermalLiquidEnergy(domain, last);
 		long speciesBefore = domain.totalChemicalSpeciesQuanta();
-		cc.ecisr.mmm.thermal.SignedDyadic energyBefore = domain.exactInternalEnergy();
+		cc.ecisr.mmm.units.SignedDyadic energyBefore = domain.exactInternalEnergy();
 
 		double removedEnergy = domain.carrierMutations().swapRemoveMarker(
 				CarrierMutationPlan.swapRemove(domain.carrierMutationRevision(),
@@ -127,7 +127,7 @@ public final class CarrierMutationValidation {
 		require(domain.totalChemicalSpeciesQuanta() == speciesBefore - removedRecord.totalQuanta(),
 				"swap-remove did not subtract exactly the removed marker's species ledger");
 		require(domain.exactInternalEnergy().equals(
-						energyBefore.subtract(cc.ecisr.mmm.thermal.SignedDyadic.of(removedEnergy))),
+						energyBefore.subtract(cc.ecisr.mmm.units.SignedDyadic.of(removedEnergy))),
 				"swap-remove did not remove exactly the returned marker energy");
 	}
 

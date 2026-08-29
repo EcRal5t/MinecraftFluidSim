@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.fluid.air;
 
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.Comparator;

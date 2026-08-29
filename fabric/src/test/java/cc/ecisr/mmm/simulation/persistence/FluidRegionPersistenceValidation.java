@@ -27,7 +27,7 @@ import cc.ecisr.mmm.thermal.FiniteThermalBodyState;
 import cc.ecisr.mmm.thermal.FiniteThermalDeviceInventory;
 import cc.ecisr.mmm.thermal.FiniteThermalDeviceState;
 import cc.ecisr.mmm.thermal.FiniteThermalExchange;
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.thermal.ThermalTransport;

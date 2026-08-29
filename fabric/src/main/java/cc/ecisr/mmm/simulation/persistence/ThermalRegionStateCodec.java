@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.simulation.persistence;
 
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalLimits;
@@ -30,7 +30,7 @@ final class ThermalRegionStateCodec {
 	private static final int MANIFEST_MAGIC = 0x5257544d; // RWTM
 	private static final int SECTION_MAGIC = 0x52575453; // RWTS
 	private static final int PAYLOAD_VERSION = 2;
-	private static final int MAX_DYADIC_BYTES = ThermalLimits.MAX_DYADIC_SIGNIFICAND_BITS / 8 + 2;
+	private static final int MAX_DYADIC_BYTES = SignedDyadic.MAX_SIGNIFICAND_BITS / 8 + 2;
 
 	byte[] encodeManifest(ManifestData data) throws IOException {
 		validateManifest(data);

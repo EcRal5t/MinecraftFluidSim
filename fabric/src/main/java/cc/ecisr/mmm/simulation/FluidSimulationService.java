@@ -1259,7 +1259,7 @@ public final class FluidSimulationService {
 				&& domain.totalGranularSolidVolumeSvq() == 0L
 				&& domain.totalCoherentSolidVolumeSvq() == 0L;
 		boolean gasEmpty = domain.gasBoundary().nodeCount() == 0 && domain.gasBoundary().sealedInventory().isEmpty()
-				&& domain.exactGasInternalEnergy().equals(cc.ecisr.mmm.thermal.SignedDyadic.ZERO);
+				&& domain.exactGasInternalEnergy().equals(cc.ecisr.mmm.units.SignedDyadic.ZERO);
 		boolean devicesEmpty = thermalRegistry == null
 				|| region.finiteThermalDevices(thermalRegistry.fingerprint()).devices().isEmpty();
 		if ((operation == LifecycleOperation.RELEASE_OWNERSHIP || operation == LifecycleOperation.REMOVE_EMPTY_REGION)

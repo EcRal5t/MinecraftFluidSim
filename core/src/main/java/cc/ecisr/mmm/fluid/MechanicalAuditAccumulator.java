@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 /**
  * Per-stage mechanical energy bookkeeping for one audited logical step. The pipeline adds
