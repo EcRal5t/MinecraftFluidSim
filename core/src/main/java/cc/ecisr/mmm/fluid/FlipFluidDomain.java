@@ -91,6 +91,7 @@ public final class FlipFluidDomain {
 	final MacVelocityGrid mac;
 	final PressureProjectionWorkspace projection;
 	final SurfaceTensionWorkspace tension;
+	private final CondensedInventoryClearPlanner clearPlanner;
 	private final MaterialTransferPlanner transferPlanner;
 	private final FlipPressurePhaseGeometry pressurePhaseGeometry;
 	final FlipFreeSurfaceGeometry freeSurfaceGeometry;
@@ -113,8 +114,8 @@ public final class FlipFluidDomain {
 	private int[] chemicalPreviousCells;
 	private int[] chemicalMovingMarkers;
 	AirNetwork airNetwork;
-	private final AirCavityScanner airScanner;
-	private boolean sealedDomainBoundary;
+	final AirCavityScanner airScanner;
+	boolean sealedDomainBoundary;
 	int[] airCellNodeId;
 	/** Runtime-only cavity lineage including attributed gas volume inside partial liquid cells. */
 	private int[] airCellLineageNodeId;
@@ -122,7 +123,7 @@ public final class FlipFluidDomain {
 	private CollisionEditPlan activeCollisionPlan;
 	private int activeCollisionEditIndex;
 	private boolean gasPressureActive;
-	private boolean operatorVentedGasTopology;
+	boolean operatorVentedGasTopology;
 	GranularRegistry granularRegistry;
 	GranularParcelStore granularParcels;
 	GranularDepositStore granularDeposits;
@@ -204,6 +205,7 @@ public final class FlipFluidDomain {
 		this.carriers = new CarrierInventoryReader(this);
 		this.coordinator = new CarrierMutationCoordinator(this);
 		this.transferPlanner = new MaterialTransferPlanner(this);
+		this.clearPlanner = new CondensedInventoryClearPlanner(this);
 	}
 
 	public int sizeX() { return sizeX; }
@@ -3530,18 +3532,7 @@ public final class FlipFluidDomain {
 
 	/** Completes every fallible liquid-clear audit check without changing marker truth. */
 	public WaterClearPlan planRemoveAllWaterExact() {
-		ChemicalTransferLedger drained = ChemicalTransferLedger.EMPTY;
-		if (chemicalParcels != null) {
-			ChemicalTransferLedger.Builder builder = ChemicalTransferLedger.builder(chemicalParcels.registry());
-			for (int marker = 0; marker < particles.count(); marker++) builder.add(
-					materialRegistry.material(particles.materialHandle(marker)).id(), chemicalParcels.indicator(marker),
-					particles.volume(marker), unitScale.kilograms(particles.mass(marker)), chemicalParcels.record(marker));
-			drained = builder.build();
-			chemicalParcels.requireCanRecordEscapedSink(drained);
-		}
-		return new WaterClearPlan(particles.count(), Double.doubleToRawLongBits(totalVolumeExact()),
-				Double.doubleToRawLongBits(totalMass()), drained,
-				thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particles.count()));
+		return clearPlanner.planWater();
 	}
 
 	/** Commits a previously validated liquid clear; no new ledger candidate is constructed here. */
@@ -3564,34 +3555,7 @@ public final class FlipFluidDomain {
 
 	/** Plans one operator clear across liquid markers and every coherent condensed phase. */
 	public CondensedClearPlan planRemoveAllCondensedExact() {
-		WaterClearPlan liquid = planRemoveAllWaterExact();
-		List<CoherentPhaseStore.Group> groups = thermalState == null
-				? List.of() : thermalState.coherentPhases().snapshot();
-		ChemicalTransferLedger coherentChemistry = ChemicalTransferLedger.EMPTY;
-		if (!groups.isEmpty()) {
-			ChemicalTransferLedger.Builder builder = chemicalParcels == null ? null
-					: ChemicalTransferLedger.builder(chemicalParcels.registry());
-			for (CoherentPhaseStore.Group group : groups) {
-				if (group.composition() == null) continue;
-				if (builder == null) {
-					throw new IllegalStateException("Chemical coherent phase exists without chemistry state");
-				}
-				builder.add(new ChemicalTransferLedger.Group(
-						coherentLiquidMaterialId(group.phaseId()), false,
-						SolidVolume.toCellVolume(group.occupiedVolumeSvq()),
-						group.mass(),
-						group.composition().massResidualBits(), group.composition().stableAmounts()));
-			}
-			if (builder != null) coherentChemistry = builder.build();
-		}
-		ChemicalTransferLedger drained = liquid.drained().plus(coherentChemistry);
-		if (chemicalParcels != null) chemicalParcels.requireCanRecordEscapedSink(drained);
-		SignedDyadic coherentEnergy = thermalState == null
-				? SignedDyadic.ZERO : thermalState.coherentPhases().exactEnergy();
-		long coherentSvq = thermalState == null ? 0L : thermalState.coherentPhases().totalOccupiedSvq();
-		double coherentMass = thermalState == null ? 0.0 : thermalState.coherentPhases().totalMass();
-		return new CondensedClearPlan(liquid, groups, drained, coherentEnergy, coherentSvq,
-				Double.doubleToRawLongBits(coherentMass));
+		return clearPlanner.planCondensed();
 	}
 
 	/** Commits a jointly prevalidated liquid/coherent clear and records only the energy actually removed. */
@@ -3633,18 +3597,7 @@ public final class FlipFluidDomain {
 
 	/** Prevalidates every truth removed by the operator-level condensed inventory reset. */
 	public OperatorClearPlan planOperatorClear() {
-		if (hasPendingPhaseVolumeWork()) {
-			throw new IllegalStateException("Pending phase volume/work must be projected before operator clear");
-		}
-		CondensedClearPlan condensed = planRemoveAllCondensedExact();
-		GranularClearPlan granular = planRemoveAllGranularExact();
-		GasTopologyPlan gasTopology = null;
-		if (airCellNodeId != null && !operatorVentedGasTopology) {
-			ensureGrid();
-			gasTopology = planGasTopology(airScanner.scan(
-					geometry.solid, new int[cellCount], new double[cellCount], geometry.cutCells, null, sealedDomainBoundary));
-		}
-		return new OperatorClearPlan(condensed, granular, gasTopology);
+		return clearPlanner.planOperator();
 	}
 
 	/** Clears all condensed owners and publishes the already-planned retained-gas topology. */
@@ -3658,16 +3611,7 @@ public final class FlipFluidDomain {
 
 	/** Prevalidates an operator vent without treating ambient as inventory. */
 	public OperatorGasVentPlan planOperatorVentSealedGas() {
-		if (hasPendingPhaseVolumeWork()) {
-			throw new IllegalStateException("Pending phase volume/work must be projected before operator vent");
-		}
-		if (!airNetwork.auditClosed()) throw new IllegalStateException("Gas inventory audit is open");
-		GasInventory removed = airNetwork.sealedInventory();
-		AirNetwork.RemapPlan gasPlan = airNetwork.planRemapNodes(
-				new double[0], List.of(), GasInventory.EMPTY, removed, List.of());
-		FlipThermalState.GasVentPlan thermalPlan = thermalState == null ? null
-				: thermalState.planGasVent(airNetwork, particles.count());
-		return new OperatorGasVentPlan(airNetwork.nodeCount(), removed, gasPlan, thermalPlan);
+		return clearPlanner.planVent();
 	}
 
 	/** Converts every sealed cell to inventory-free ambient topology and books gas plus U to sinks. */
@@ -3691,24 +3635,6 @@ public final class FlipFluidDomain {
 				? SignedDyadic.ZERO : plan.thermalPlan().removedEnergy(), plan.nodeCount());
 	}
 
-	private String coherentLiquidMaterialId(String coherentPhaseId) {
-		String found = null;
-		for (ThermalPhaseTransition transition : thermalState.registry().transitions()) {
-			if (!transition.lowerEnergyMaterialId().equals(coherentPhaseId)) continue;
-			ThermalMaterialDefinition upper = thermalState.registry().material(
-					thermalState.registry().materialHandle(transition.upperEnergyMaterialId()));
-			if (upper.carrierKind() != ThermalMaterialDefinition.CarrierKind.LIQUID) continue;
-			materialRegistry.handle(upper.carrierId());
-			if (found != null && !found.equals(upper.carrierId())) {
-				throw new IllegalStateException("Coherent phase has ambiguous liquid chemical ownership");
-			}
-			found = upper.carrierId();
-		}
-		if (found == null) {
-			throw new IllegalStateException("Chemical coherent phase has no unique liquid ownership");
-		}
-		return found;
-	}
 
 	public record WaterClearPlan(
 			int markerCount, long totalVolumeBits, long totalMassBits, ChemicalTransferLedger drained,
@@ -3733,7 +3659,7 @@ public final class FlipFluidDomain {
 		private final GranularClearPlan granular;
 		private final GasTopologyPlan gasTopology;
 
-		private OperatorClearPlan(
+		OperatorClearPlan(
 				CondensedClearPlan condensed, GranularClearPlan granular, GasTopologyPlan gasTopology
 		) {
 			this.condensed = condensed;
@@ -3884,12 +3810,6 @@ public final class FlipFluidDomain {
 				externalSource, internalEnergy);
 	}
 
-	private record ChemicalPieceDraft(int cellX, int cellY, int cellZ, float volume, int materialHandle) { }
-	private record ChemicalInsertPiece(
-			int cellX, int cellY, int cellZ, float volume, int materialHandle, double mass,
-			ChemicalMixtureRecord mixture, boolean indicator
-	) { }
-
 	/** Plans and restores an exact chemical ledger without substituting a default carrier. */
 	public ExactChemicalTransfer tryInsertExactChemical(
 			int centerX, int centerY, int centerZ, ChemicalTransferLedger ledger, int maxRadius
@@ -3916,111 +3836,8 @@ public final class FlipFluidDomain {
 			int centerX, int centerY, int centerZ, ChemicalTransferLedger ledger, int maxRadius,
 			boolean externalSource, Double internalEnergy
 	) {
-		if (chemicalParcels == null) throw new IllegalStateException("Chemical insertion requires chemistry");
-		if (ledger == null || ledger.isEmpty()) return new ExactChemicalTransfer(ledger != null, ChemicalTransferLedger.EMPTY);
-		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
-		try {
-			if (Math.addExact(chemicalParcels.totalQuanta(), ledger.totalQuanta())
-					> cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
-				return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-			}
-		} catch (ArithmeticException overflow) {
-			return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-		}
-		double[] exactCellVolume = exactCellVolumes();
-		List<CellCandidate> nearby = nearbyCells(centerX, centerY, centerZ, maxRadius);
-		List<ChemicalInsertPiece> pieces = new ArrayList<>();
-		try {
-		for (ChemicalTransferLedger.Group group : ledger.groups()) {
-			int material = materialRegistry.handle(group.materialId());
-			double remaining = group.volume();
-			List<ChemicalPieceDraft> groupPieces = new ArrayList<>();
-			for (CellCandidate candidate : nearby) {
-				if (remaining <= 0.0) break;
-				double capacity = Math.max(0.0,
-						effectiveOpenCellVolume(candidate.index()) - exactCellVolume[candidate.index()]);
-				double allocation = Math.min(capacity, remaining);
-				if (allocation <= 0.0) continue;
-				int cellX = candidate.index() % sizeX;
-				int yz = candidate.index() / sizeX;
-				int cellY = yz % sizeY, cellZ = yz / sizeY;
-				double left = allocation;
-				while (left > 0.0) {
-					float piece = (float) Math.min(PARTICLE_VOLUME, left);
-					while (piece > left) piece = Math.nextDown(piece);
-					if (!(piece > 0.0F)) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-					groupPieces.add(new ChemicalPieceDraft(cellX, cellY, cellZ, piece, material));
-					if ((long) particles.count() + pieces.size() + groupPieces.size() > maximumParticleCount) {
-						return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-					}
-					left -= piece;
-				}
-				exactCellVolume[candidate.index()] += allocation;
-				remaining -= allocation;
-			}
-			if (remaining > 0.0) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-			float[] weights = new float[groupPieces.size()];
-			int[] ordinals = new int[groupPieces.size()];
-			for (int piece = 0; piece < groupPieces.size(); piece++) {
-				weights[piece] = groupPieces.get(piece).volume();
-				ordinals[piece] = particles.count() + pieces.size() + piece;
-			}
-			@SuppressWarnings("unchecked")
-			TreeMap<String, Long>[] distributed = new TreeMap[groupPieces.size()];
-			for (int piece = 0; piece < distributed.length; piece++) distributed[piece] = new TreeMap<>();
-			for (Map.Entry<String, Long> species : group.speciesQuanta().entrySet()) {
-				long[] allocation = cc.ecisr.mmm.chemistry.BinaryVolumeAllocator.allocate(species.getValue(), weights, ordinals);
-				for (int piece = 0; piece < allocation.length; piece++) if (allocation[piece] > 0L) {
-					distributed[piece].put(species.getKey(), allocation[piece]);
-				}
-			}
-			double volumeLeft = group.volume(), massLeft = unitScale.solverMass(group.massKilograms());
-			for (int piece = 0; piece < groupPieces.size(); piece++) {
-				if (distributed[piece].isEmpty()) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-				ChemicalPieceDraft draft = groupPieces.get(piece);
-				boolean last = piece + 1 == groupPieces.size();
-				double mass = last ? massLeft : massLeft * draft.volume() / volumeLeft;
-				ChemicalMixtureRecord withoutResidual = ChemicalMixtureRecord.fromStableAmounts(
-						chemicalParcels.registry(), distributed[piece], 0.0);
-				ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(
-						chemicalParcels.registry(), distributed[piece],
-						unitScale.kilograms(mass)
-								- withoutResidual.exactSpeciesMassKilograms(chemicalParcels.registry()).toDouble());
-				chemicalParcels.requireCompatible(record, group.materialId(), group.indicator());
-				pieces.add(new ChemicalInsertPiece(draft.cellX(), draft.cellY(), draft.cellZ(),
-						draft.volume(), draft.materialHandle(), mass, record, group.indicator()));
-				volumeLeft -= draft.volume();
-				massLeft -= mass;
-			}
-		}
-		} catch (IllegalArgumentException | ArithmeticException
-				| cc.ecisr.mmm.chemistry.ChemicalReactionEngine.BudgetExceededException refusedPlan) {
-			return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-		}
-		if (externalSource) try {
-			chemicalParcels.requireCanRecordExternalSource(ledger);
-		} catch (IllegalArgumentException | ArithmeticException refusedAudit) {
-			return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-		}
-		FlipThermalState.ExternalLiquidInsertionPlan thermalPlan = null;
-		if (thermalState != null && internalEnergy != null) {
-			List<FlipThermalState.LiquidInsertion> thermalInsertions = new ArrayList<>(pieces.size());
-			for (ChemicalInsertPiece piece : pieces) thermalInsertions.add(new FlipThermalState.LiquidInsertion(
-					piece.materialHandle(), piece.mass(), piece.mixture()));
-			thermalPlan = thermalState.planExternalLiquidInsertions(thermalInsertions, internalEnergy,
-					thermalMarkerContext());
-		}
-		int firstInsertedOrdinal = particles.count();
-		for (ChemicalInsertPiece piece : pieces) {
-			int slot = firstOpenSlot(cellIndex(piece.cellX(), piece.cellY(), piece.cellZ()), 0);
-			if (slot < 0) throw new IllegalStateException("Chemical insertion lost its planned open slot");
-			spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), slot, piece.volume(),
-					piece.materialHandle(), piece.mass(), piece.mixture(), piece.indicator(), thermalPlan == null);
-		}
-		if (thermalPlan != null) thermalState.commitExternalLiquidInsertions(firstInsertedOrdinal, thermalPlan);
-		if (externalSource) chemicalParcels.recordExternalSource(ledger);
-		gridDirty = true;
-		return new ExactChemicalTransfer(true, ledger, internalEnergy == null ? 0.0 : internalEnergy);
+		return transferPlanner.insertChemical(centerX, centerY, centerZ, ledger, maxRadius,
+				externalSource, internalEnergy);
 	}
 
 	/** All-or-nothing extraction of full species/residual/indicator truth for a chemical container. */
@@ -4591,7 +4408,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	/** Builds the complete gas/energy topology candidate before any owner is mutated. */
-	private GasTopologyPlan planGasTopology(AirCavityScanner.Result result) {
+	GasTopologyPlan planGasTopology(AirCavityScanner.Result result) {
 		int sealed = result.sealedNodeCount();
 		boolean initialBootstrap = airCellNodeId == null;
 		if (sealedDomainBoundary && !initialBootstrap
@@ -4907,7 +4724,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		gasPressureActive = sealed > 0;
 	}
 
-	private record GasTopologyPlan(
+	record GasTopologyPlan(
 			AirCavityScanner.Result scan,
 			AirNetwork.RemapPlan gasPlan,
 			FlipThermalState.GasRemapPlan thermalPlan

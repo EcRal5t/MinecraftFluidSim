@@ -16,6 +16,7 @@
 | S04c | `DomainGeometry` 接管权威 solid mask 与 cut-cell 微几何；仅有的两个写点是碰撞编辑提交与 wholesale restore | `b7ca809` |
 | S05a | `MaterialTransferPlanner` 接管 pure/material/mixture 精确插入路径：共享容量规划、piece 推导、化学预算与外部 source ledger、热插入 plan 全部在 planning 阶段完成，提交段经 spawn→coordinator 写入且无业务拒答；public 重载链保留委托；提取（extract）半边待 S05b | `a6636ca` |
 | S05b | 提取半边收进 `MaterialTransferPlanner`：`extractChemical`（桶预算与调用方表示检查、逐组 cell 分配、整 marker 移除加末位拆分）、`extractMixture`（确定性 cell/marker 顺序，账本编辑完成后才压缩）、`removeVolumeNear`；`RemovedMaterialLedger` 因碰撞位移路径仍使用而留在 domain | `6dafcf4` |
+| S05c | `MaterialTransferPlanner.insertChemical` 收口化学插入（逐 species 二进制体积分配、registry 兼容检查、任意 piece 不可表示即整体拒绝）；`CondensedInventoryClearPlanner` 接管 operator clear/vent 与 liquid/condensed 清空的全部 plan 构建，commit 留在 domain 经 coordinator 执行 | `096cd6c` |
 
 ## 已定边界决策（审阅时按此为准）
 

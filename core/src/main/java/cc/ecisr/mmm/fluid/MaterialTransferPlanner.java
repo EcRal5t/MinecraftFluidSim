@@ -9,7 +9,9 @@ import cc.ecisr.mmm.thermal.SignedDyadic;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 /**
  * Plans exact liquid/material/mixture insertion against shared cell capacity before any
@@ -319,10 +321,133 @@ final class MaterialTransferPlanner {
 		double removedEnergy = domain.thermalState == null ? 0.0 : SignedDyadic.sum(plan.stream()
 				.mapToDouble(allocation -> allocation.thermalPlan().removedEnergy()).toArray()).toDouble();
 		return new FlipFluidDomain.ExactMixtureTransfer(true, List.copyOf(result), removedEnergy);
-}
+	}
+
+	/**
+	 * Plans and restores an exact chemical ledger without substituting a default carrier:
+	 * per-species binary volume allocation across whole markers, registry compatibility for
+	 * every produced mixture, and wholesale rejection when any piece cannot be represented.
+	 */
+	FlipFluidDomain.ExactChemicalTransfer insertChemical(
+			int centerX, int centerY, int centerZ, ChemicalTransferLedger ledger, int maxRadius,
+			boolean externalSource, Double internalEnergy
+	) {
+		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemical insertion requires chemistry");
+		if (ledger == null || ledger.isEmpty()) return new FlipFluidDomain.ExactChemicalTransfer(ledger != null, ChemicalTransferLedger.EMPTY);
+		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
+		try {
+			if (Math.addExact(domain.chemicalParcels.totalQuanta(), ledger.totalQuanta())
+					> cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
+				return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+			}
+		} catch (ArithmeticException overflow) {
+			return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		}
+		double[] exactCellVolume = domain.exactCellVolumes();
+		List<FlipFluidDomain.CellCandidate> nearby = domain.nearbyCells(centerX, centerY, centerZ, maxRadius);
+		List<ChemicalInsertPiece> pieces = new ArrayList<>();
+		try {
+		for (ChemicalTransferLedger.Group group : ledger.groups()) {
+			int material = domain.materialRegistry.handle(group.materialId());
+			double remaining = group.volume();
+			List<ChemicalPieceDraft> groupPieces = new ArrayList<>();
+			for (FlipFluidDomain.CellCandidate candidate : nearby) {
+				if (remaining <= 0.0) break;
+				double capacity = Math.max(0.0,
+						domain.effectiveOpenCellVolume(candidate.index()) - exactCellVolume[candidate.index()]);
+				double allocation = Math.min(capacity, remaining);
+				if (allocation <= 0.0) continue;
+				int cellX = candidate.index() % domain.sizeX;
+				int yz = candidate.index() / domain.sizeX;
+				int cellY = yz % domain.sizeY, cellZ = yz / domain.sizeY;
+				double left = allocation;
+				while (left > 0.0) {
+					float piece = (float) Math.min(domain.PARTICLE_VOLUME, left);
+					while (piece > left) piece = Math.nextDown(piece);
+					if (!(piece > 0.0F)) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+					groupPieces.add(new ChemicalPieceDraft(cellX, cellY, cellZ, piece, material));
+					if ((long) domain.particles.count() + pieces.size() + groupPieces.size() > domain.maximumParticleCount) {
+						return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+					}
+					left -= piece;
+				}
+				exactCellVolume[candidate.index()] += allocation;
+				remaining -= allocation;
+			}
+			if (remaining > 0.0) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+			float[] weights = new float[groupPieces.size()];
+			int[] ordinals = new int[groupPieces.size()];
+			for (int piece = 0; piece < groupPieces.size(); piece++) {
+				weights[piece] = groupPieces.get(piece).volume();
+				ordinals[piece] = domain.particles.count() + pieces.size() + piece;
+			}
+			@SuppressWarnings("unchecked")
+			TreeMap<String, Long>[] distributed = new TreeMap[groupPieces.size()];
+			for (int piece = 0; piece < distributed.length; piece++) distributed[piece] = new TreeMap<>();
+			for (Map.Entry<String, Long> species : group.speciesQuanta().entrySet()) {
+				long[] allocation = cc.ecisr.mmm.chemistry.BinaryVolumeAllocator.allocate(species.getValue(), weights, ordinals);
+				for (int piece = 0; piece < allocation.length; piece++) if (allocation[piece] > 0L) {
+					distributed[piece].put(species.getKey(), allocation[piece]);
+				}
+			}
+			double volumeLeft = group.volume(), massLeft = domain.unitScale.solverMass(group.massKilograms());
+			for (int piece = 0; piece < groupPieces.size(); piece++) {
+				if (distributed[piece].isEmpty()) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+				ChemicalPieceDraft draft = groupPieces.get(piece);
+				boolean last = piece + 1 == groupPieces.size();
+				double mass = last ? massLeft : massLeft * draft.volume() / volumeLeft;
+				ChemicalMixtureRecord withoutResidual = ChemicalMixtureRecord.fromStableAmounts(
+						domain.chemicalParcels.registry(), distributed[piece], 0.0);
+				ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(
+						domain.chemicalParcels.registry(), distributed[piece],
+						domain.unitScale.kilograms(mass)
+								- withoutResidual.exactSpeciesMassKilograms(domain.chemicalParcels.registry()).toDouble());
+				domain.chemicalParcels.requireCompatible(record, group.materialId(), group.indicator());
+				pieces.add(new ChemicalInsertPiece(draft.cellX(), draft.cellY(), draft.cellZ(),
+						draft.volume(), draft.materialHandle(), mass, record, group.indicator()));
+				volumeLeft -= draft.volume();
+				massLeft -= mass;
+			}
+		}
+		} catch (IllegalArgumentException | ArithmeticException
+				| cc.ecisr.mmm.chemistry.ChemicalReactionEngine.BudgetExceededException refusedPlan) {
+			return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		}
+		if (externalSource) try {
+			domain.chemicalParcels.requireCanRecordExternalSource(ledger);
+		} catch (IllegalArgumentException | ArithmeticException refusedAudit) {
+			return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		}
+		FlipThermalState.ExternalLiquidInsertionPlan thermalPlan = null;
+		if (domain.thermalState != null && internalEnergy != null) {
+			List<FlipThermalState.LiquidInsertion> thermalInsertions = new ArrayList<>(pieces.size());
+			for (ChemicalInsertPiece piece : pieces) thermalInsertions.add(new FlipThermalState.LiquidInsertion(
+					piece.materialHandle(), piece.mass(), piece.mixture()));
+			thermalPlan = domain.thermalState.planExternalLiquidInsertions(thermalInsertions, internalEnergy,
+					domain.thermalMarkerContext());
+		}
+		int firstInsertedOrdinal = domain.particles.count();
+		for (ChemicalInsertPiece piece : pieces) {
+			int slot = domain.firstOpenSlot(domain.cellIndex(piece.cellX(), piece.cellY(), piece.cellZ()), 0);
+			if (slot < 0) throw new IllegalStateException("Chemical insertion lost its planned open slot");
+			domain.spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), slot, piece.volume(),
+					piece.materialHandle(), piece.mass(), piece.mixture(), piece.indicator(), thermalPlan == null);
+		}
+		if (thermalPlan != null) domain.thermalState.commitExternalLiquidInsertions(firstInsertedOrdinal, thermalPlan);
+		if (externalSource) domain.chemicalParcels.recordExternalSource(ledger);
+		domain.gridDirty = true;
+		return new FlipFluidDomain.ExactChemicalTransfer(true, ledger, internalEnergy == null ? 0.0 : internalEnergy);
+	}
+
 	private record ExtractionAllocation(
 			int particle, float newVolume, double newMass, ChemicalParcelStore.SplitPlan chemicalPlan,
 			FlipThermalState.Truncation thermalPlan
+	) { }
+
+	private record ChemicalPieceDraft(int cellX, int cellY, int cellZ, float volume, int materialHandle) { }
+	private record ChemicalInsertPiece(
+			int cellX, int cellY, int cellZ, float volume, int materialHandle, double mass,
+			ChemicalMixtureRecord mixture, boolean indicator
 	) { }
 
 	private record InsertAllocation(
