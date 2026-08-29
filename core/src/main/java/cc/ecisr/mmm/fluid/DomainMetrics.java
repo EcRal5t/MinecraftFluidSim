@@ -1,7 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.fluid.air.AirNetwork;
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 /**
  * Read-only aggregate metrics over the committed marker and cell truth: totals, extrema,

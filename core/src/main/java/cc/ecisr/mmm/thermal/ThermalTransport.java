@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.thermal;
 
+import cc.ecisr.mmm.units.SignedDyadic;
+
 import java.util.Arrays;
 
 /** Canonical pairwise explicit finite-volume conduction over a rebuilt LTE grid. */

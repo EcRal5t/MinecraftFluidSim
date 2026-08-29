@@ -2,7 +2,7 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.GasInventory;
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.List;
 

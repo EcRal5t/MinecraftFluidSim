@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.ThermalCarrierContext;
+
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
@@ -21,7 +23,7 @@ import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.thermal.GasLiquidSpeciesPair;
 import cc.ecisr.mmm.thermal.GasThermalModel;
 import cc.ecisr.mmm.thermal.GasLiquidPhaseModel;
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.thermal.GranularEnergyColumn;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
@@ -480,7 +482,7 @@ public final class M9ThermalValidation {
 						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
 						GasRegistry.STANDARD_TEMPERATURE_K, 10.0, 0.025,
 						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)))));
-		FlipThermalState.MarkerContext empty = emptyMarkers();
+		ThermalCarrierContext empty = emptyMarkers();
 
 		AirNetwork compressedNetwork = new AirNetwork(gasRegistry);
 		compressedNetwork.addNode(1.0, 1.0);
@@ -690,8 +692,8 @@ public final class M9ThermalValidation {
 		};
 	}
 
-	private static FlipThermalState.MarkerContext emptyMarkers() {
-		return new FlipThermalState.MarkerContext() {
+	private static ThermalCarrierContext emptyMarkers() {
+		return new ThermalCarrierContext() {
 			@Override public int markerCount() { return 0; }
 			@Override public int cell(int marker) { throw new IllegalArgumentException(); }
 			@Override public int fluidMaterialHandle(int marker) { throw new IllegalArgumentException(); }
@@ -1119,7 +1121,7 @@ public final class M9ThermalValidation {
 		double[] mass = {1.0};
 		FluidMaterial liquid = FluidMaterial.withSurfaceTension(materialId, 1.0, "test:miscible", 0.0, 90.0);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
-		FlipThermalState.MarkerContext markers = new FlipThermalState.MarkerContext() {
+		ThermalCarrierContext markers = new ThermalCarrierContext() {
 			@Override public int markerCount() { return 1; }
 			@Override public int cell(int marker) { return 0; }
 			@Override public int fluidMaterialHandle(int marker) { return 0; }
@@ -1317,7 +1319,7 @@ public final class M9ThermalValidation {
 		FluidMaterial liquid = FluidMaterial.withSurfaceTension("test:liquid", 1.0,
 				"test:miscible", 0.0, 90.0);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
-		FlipThermalState.MarkerContext carriers = new FlipThermalState.MarkerContext() {
+		ThermalCarrierContext carriers = new ThermalCarrierContext() {
 			@Override public int markerCount() { return 1; }
 			@Override public int cell(int marker) { return 0; }
 			@Override public int fluidMaterialHandle(int marker) { return 0; }
@@ -1767,7 +1769,7 @@ public final class M9ThermalValidation {
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(
 				FluidMaterial.withSurfaceTension("test:liquid", 1.0, "test:miscible", 0.0, 90.0)));
 		GranularEnergyColumn.DepositKey deposit = new GranularEnergyColumn.DepositKey(0, 0, 0);
-		FlipThermalState.MarkerContext carriers = new FlipThermalState.MarkerContext() {
+		ThermalCarrierContext carriers = new ThermalCarrierContext() {
 			@Override public int markerCount() { return 0; }
 			@Override public int cell(int marker) { throw new IllegalArgumentException(); }
 			@Override public int fluidMaterialHandle(int marker) { throw new IllegalArgumentException(); }
@@ -2076,7 +2078,7 @@ public final class M9ThermalValidation {
 		ThermalMaterialDefinition definition = new ThermalMaterialDefinition("test:thermal/boundary_liquid",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 300.0, 0.0, 0.125,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0)));
-		FlipThermalState.MarkerContext markers = new FlipThermalState.MarkerContext() {
+		ThermalCarrierContext markers = new ThermalCarrierContext() {
 			@Override public int markerCount() { return 1; }
 			@Override public int cell(int marker) { return 0; }
 			@Override public int fluidMaterialHandle(int marker) { return 0; }

@@ -1,4 +1,4 @@
-package cc.ecisr.mmm.thermal;
+package cc.ecisr.mmm.units;
 
 import java.math.BigInteger;
 import java.util.Objects;
@@ -6,6 +6,9 @@ import java.util.Objects;
 /** Exact finite IEEE-754 sum used at thermal commit and persistence boundaries, never in the face hot loop. */
 public record SignedDyadic(BigInteger significand, int exponent) implements Comparable<SignedDyadic> {
 	public static final SignedDyadic ZERO = new SignedDyadic(BigInteger.ZERO, 0);
+
+	/** Significand bit budget that keeps exact sums inside a bounded storage and codec envelope. */
+	public static final int MAX_SIGNIFICAND_BITS = 32_768;
 
 	public SignedDyadic {
 		Objects.requireNonNull(significand, "significand");
@@ -16,7 +19,7 @@ public record SignedDyadic(BigInteger significand, int exponent) implements Comp
 				significand = significand.shiftRight(trailing);
 				exponent = Math.addExact(exponent, trailing);
 			}
-			if (significand.bitLength() > ThermalLimits.MAX_DYADIC_SIGNIFICAND_BITS) {
+			if (significand.bitLength() > MAX_SIGNIFICAND_BITS) {
 				throw new IllegalArgumentException("Thermal dyadic significand is over budget");
 			}
 		}

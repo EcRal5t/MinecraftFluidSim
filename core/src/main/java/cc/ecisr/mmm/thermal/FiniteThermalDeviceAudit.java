@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.thermal;
 
+import cc.ecisr.mmm.units.SignedDyadic;
+
 import java.util.Objects;
 
 /** Exact audit for device energy; solver exchange is signed energy entering device bodies. */

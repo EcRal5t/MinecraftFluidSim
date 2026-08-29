@@ -3,7 +3,7 @@ package cc.ecisr.mmm.simulation;
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.world.CollisionField;
 import cc.ecisr.mmm.world.CollisionRegion;
 import net.minecraft.core.BlockPos;

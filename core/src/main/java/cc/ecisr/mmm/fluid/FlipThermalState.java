@@ -1,5 +1,12 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.LiquidEnergyColumn;
+import cc.ecisr.mmm.thermal.LiquidEnergyColumn.ExternalLiquidInsertionPlan;
+import cc.ecisr.mmm.thermal.LiquidEnergyColumn.LiquidInsertion;
+import cc.ecisr.mmm.thermal.LiquidEnergyColumn.Truncation;
+import cc.ecisr.mmm.thermal.ThermalAuditState;
+import cc.ecisr.mmm.thermal.ThermalCarrierContext;
+
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.granular.SolidVolume;
@@ -12,7 +19,7 @@ import cc.ecisr.mmm.thermal.FiniteThermalExchange;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
 import cc.ecisr.mmm.units.SolverUnitScale;
 import cc.ecisr.mmm.thermal.GranularEnergyColumn;
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalCellGrid;
 import cc.ecisr.mmm.thermal.ThermalLimits;
@@ -30,57 +37,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Owns the optional liquid-marker energy column; FlipFluidDomain only supplies carrier/cell orchestration. */
+/** Facade over the thermal state owners (liquid/gas/granular energy, LTE grid, audit); pure delegation since S10. */
 final class FlipThermalState {
-	interface MarkerContext {
-		int markerCount();
-		int cell(int marker);
-		int fluidMaterialHandle(int marker);
-		double mass(int marker);
-		double volume(int marker);
-		ChemicalMixtureRecord mixture(int marker);
-		ChemicalRegistry chemicalRegistry();
-		default int granularMaterialCount() { return 0; }
-		default String granularRegistryFingerprint() { return ""; }
-		default String granularMaterialId(int materialHandle) { throw new IllegalArgumentException("No granular state"); }
-		default int activeParcelCount() { return 0; }
-		default int activeParcelCell(int ordinal) { throw new IllegalArgumentException("No granular state"); }
-		default int activeParcelMaterial(int ordinal) { throw new IllegalArgumentException("No granular state"); }
-		default int activeParcelComposition(int ordinal) { throw new IllegalArgumentException("No granular state"); }
-		default long activeParcelSvq(int ordinal) { throw new IllegalArgumentException("No granular state"); }
-		default double activeParcelMass(int ordinal) { throw new IllegalArgumentException("No granular state"); }
-		default List<GranularEnergyColumn.DepositKey> depositKeys() { return List.of(); }
-		default long depositSvq(GranularEnergyColumn.DepositKey key) { throw new IllegalArgumentException("No granular state"); }
-		default double depositMass(GranularEnergyColumn.DepositKey key) { throw new IllegalArgumentException("No granular state"); }
-		default Map<String, Long> solidComposition(int compositionHandle) {
-			if (compositionHandle == 0) return Map.of();
-			throw new IllegalArgumentException("No solid composition state");
-		}
-	}
-
-	record Truncation(double newEnergy, double removedEnergy) {
-		Truncation {
-			if (!Double.isFinite(newEnergy) || !Double.isFinite(removedEnergy)) {
-				throw new IllegalArgumentException("Thermal truncation ledger is invalid");
-			}
-		}
-	}
-	record LiquidInsertion(int fluidMaterialHandle, double mass, ChemicalMixtureRecord mixture) {
-		LiquidInsertion {
-			if (fluidMaterialHandle < 0 || !(Double.isFinite(mass) && mass > 0.0)) {
-				throw new IllegalArgumentException("Thermal liquid insertion inventory is invalid");
-			}
-		}
-	}
-	record ExternalLiquidInsertionPlan(double[] energies, SignedDyadic source, SignedDyadic roundoff) {
-		ExternalLiquidInsertionPlan {
-			if (energies == null || energies.length == 0 || source == null || roundoff == null) {
-				throw new IllegalArgumentException("Thermal liquid insertion plan is incomplete");
-			}
-			energies = energies.clone();
-		}
-		@Override public double[] energies() { return energies.clone(); }
-	}
 	enum GranularReactionKind { ADD_ACTIVE, REPLACE_ACTIVE, REMOVE_ACTIVE, REPLACE_DEPOSIT, REMOVE_DEPOSIT }
 
 	record ReactionMarker(int marker, double mass, ChemicalMixtureRecord mixture) {
@@ -176,16 +134,16 @@ final class FlipThermalState {
 	private final GranularEnergyColumn granularEnergy;
 	private final GasThermalModel gasModel;
 	private final double insertionTemperatureK;
-	private double[] internalEnergy;
+	private final LiquidEnergyColumn liquidEnergy;
+	private final ThermalAuditState auditState;
 	private double[] gasNodeEnergy;
-	private ThermalAuditLedger audit;
 	private ThermalTransport.Stats lastTransport = new ThermalTransport.Stats(
 			0, 0, 0.0, SignedDyadic.ZERO, SignedDyadic.ZERO);
 
 	FlipThermalState(
 			ThermalRegistry registry, FluidMaterialRegistry liquids, double initialTemperatureK,
 			int initialCapacity, int sizeX, int sizeY, int sizeZ, float cellSize,
-			MarkerContext markers
+			ThermalCarrierContext markers
 	) {
 		this(registry, liquids, initialTemperatureK, initialCapacity, sizeX, sizeY, sizeZ, cellSize, markers, null);
 	}
@@ -193,7 +151,7 @@ final class FlipThermalState {
 	FlipThermalState(
 			ThermalRegistry registry, FluidMaterialRegistry liquids, double initialTemperatureK,
 			int initialCapacity, int sizeX, int sizeY, int sizeZ, float cellSize,
-			MarkerContext markers, AirNetwork airNetwork
+			ThermalCarrierContext markers, AirNetwork airNetwork
 	) {
 		this(registry, liquids, initialTemperatureK, initialCapacity, sizeX, sizeY, sizeZ, cellSize,
 				markers, airNetwork, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
@@ -202,7 +160,7 @@ final class FlipThermalState {
 	FlipThermalState(
 			ThermalRegistry registry, FluidMaterialRegistry liquids, double initialTemperatureK,
 			int initialCapacity, int sizeX, int sizeY, int sizeZ, float cellSize,
-			MarkerContext markers, AirNetwork airNetwork, int maximumTransportSubsteps
+			ThermalCarrierContext markers, AirNetwork airNetwork, int maximumTransportSubsteps
 	) {
 		if (registry == null || liquids == null || markers == null) {
 			throw new IllegalArgumentException("Thermal binding input is missing");
@@ -248,11 +206,9 @@ final class FlipThermalState {
 				cc.ecisr.mmm.granular.GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION,
 				cc.ecisr.mmm.granular.GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
 		this.insertionTemperatureK = initialTemperatureK;
-		this.internalEnergy = new double[initialCapacity];
-		for (int marker = 0; marker < markers.markerCount(); marker++) {
-			internalEnergy[marker] = modeledEnergy(marker, markers.mass(marker), markers.mixture(marker),
-					initialTemperatureK, markers);
-		}
+		this.auditState = new ThermalAuditState(ThermalAuditLedger.initialized(SignedDyadic.ZERO));
+		this.liquidEnergy = new LiquidEnergyColumn(registry, stateFunction, unitScale, materialByFluidHandle,
+				initialTemperatureK, auditState, initialCapacity, markers);
 		for (int parcel = 0; parcel < markers.activeParcelCount(); parcel++) {
 			granularEnergy.addActive(modeledGranularEnergy(markers.activeParcelMaterial(parcel),
 					markers.activeParcelComposition(parcel), markers.activeParcelMass(parcel),
@@ -284,11 +240,11 @@ final class FlipThermalState {
 			this.gasModel = null;
 			this.gasNodeEnergy = new double[0];
 		}
-		this.audit = ThermalAuditLedger.initialized(exactEnergy(markers.markerCount()));
+		auditState.replace(ThermalAuditLedger.initialized(exactEnergy(markers.markerCount())));
 	}
 
 	String fingerprint() { return registry.fingerprint(); }
-	ThermalAuditLedger audit() { return audit; }
+	ThermalAuditLedger audit() { return auditState.ledger(); }
 	CoherentPhaseStore coherentPhases() { return coherentPhases; }
 	GranularEnergyColumn granularEnergy() { return granularEnergy; }
 	ThermalRegistry registry() { return registry; }
@@ -300,43 +256,41 @@ final class FlipThermalState {
 		if (gasModel == null) throw new IllegalStateException("Gas thermal model is not bound");
 		return new GasLiquidPhaseModel(registry, network.registry());
 	}
-	double liquidInternalEnergy(int marker) { return internalEnergy[marker]; }
+	double liquidInternalEnergy(int marker) { return liquidEnergy.energy(marker); }
 	ThermalTransport.Stats lastTransport() { return lastTransport; }
 	int maximumTransportSubsteps() { return transport.maximumSubsteps(); }
 	double totalEnergy(int count) {
-		double total = 0.0;
-		for (int marker = 0; marker < count; marker++) total += internalEnergy[marker];
+		double total = liquidEnergy.totalEnergy(count);
 		for (CoherentPhaseStore.Group group : coherentPhases.snapshot()) total += group.internalEnergy();
 		total += granularEnergy.exactEnergy().toDouble();
 		for (double energy : gasNodeEnergy) total += energy;
 		return total;
 	}
 	SignedDyadic exactEnergy(int count) {
-		return SignedDyadic.sum(Arrays.copyOf(internalEnergy, count)).add(coherentPhases.exactEnergy())
+		return liquidEnergy.exactLiquidEnergy(count).add(coherentPhases.exactEnergy())
 				.add(granularEnergy.exactEnergy()).add(SignedDyadic.sum(gasNodeEnergy));
 	}
 	SignedDyadic exactGasEnergy() { return SignedDyadic.sum(gasNodeEnergy); }
 	SignedDyadic exactLiquidEnergy(int count) {
-		return SignedDyadic.sum(Arrays.copyOf(internalEnergy, count));
+		return liquidEnergy.exactLiquidEnergy(count);
 	}
 
 	void ensureCapacity(int capacity) {
-		if (capacity > internalEnergy.length) internalEnergy = Arrays.copyOf(internalEnergy, capacity);
+		liquidEnergy.ensureCapacity(capacity);
 	}
 
 	FlipThermalParticleState capture(int sizeX, int sizeY, int sizeZ, float cellSize, int count) {
 		return new FlipThermalParticleState(sizeX, sizeY, sizeZ, cellSize, count, registry.fingerprint(),
-				Arrays.copyOf(internalEnergy, count), granularEnergy.copyActiveEnergy(),
+				liquidEnergy.copyEnergies(count), granularEnergy.copyActiveEnergy(),
 				granularEnergy.depositSnapshot().stream()
 						.mapToDouble(GranularEnergyColumn.DepositEnergy::internalEnergy).toArray(),
-				coherentPhases.snapshot(), gasNodeEnergy, audit);
+				coherentPhases.snapshot(), gasNodeEnergy, auditState.ledger());
 	}
 
-	void restore(FlipThermalParticleState snapshot, MarkerContext markers, AirNetwork airNetwork) {
+	void restore(FlipThermalParticleState snapshot, ThermalCarrierContext markers, AirNetwork airNetwork) {
 		if (coherentPhases.groupCount() != 0) throw new IllegalStateException("Thermal restore target is not empty");
 		double[] restored = snapshot.copyInternalEnergy();
-		ensureCapacity(restored.length);
-		System.arraycopy(restored, 0, internalEnergy, 0, restored.length);
+		liquidEnergy.adoptRestored(restored);
 		for (CoherentPhaseStore.Group group : snapshot.coherentGroups()) {
 			int material = registry.materialHandle(group.phaseId());
 			if (registry.material(material).carrierKind() != ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID) {
@@ -367,8 +321,8 @@ final class FlipThermalState {
 		gasNodeEnergy = restoredGas;
 		for (int marker = 0; marker < markers.markerCount(); marker++) temperature(marker, markers);
 		cellGrid.rebuild(carrierAccess(markers));
-		audit = snapshot.audit();
-		if (!exactEnergy(markers.markerCount()).equals(audit.expectedInventory())) {
+		auditState.replace(snapshot.audit());
+		if (!exactEnergy(markers.markerCount()).equals(auditState.ledger().expectedInventory())) {
 			throw new IllegalArgumentException("Restored thermal audit does not close");
 		}
 	}
@@ -459,17 +413,17 @@ final class FlipThermalState {
 	void commitGasRemap(GasRemapPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Gas thermal remap plan is missing");
 		gasNodeEnergy = plan.nodeEnergy();
-		audit = audit.withExternalSourceEnergy(plan.sourceEnergy()).withExternalSinkEnergy(plan.sinkEnergy())
-				.withMechanicalWork(plan.mechanicalWork()).withRoundoff(plan.roundoff());
+		auditState.update(ledger -> ledger.withExternalSourceEnergy(plan.sourceEnergy()).withExternalSinkEnergy(plan.sinkEnergy())
+				.withMechanicalWork(plan.mechanicalWork()).withRoundoff(plan.roundoff()));
 	}
 
 	/** Prevalidates removal of every sealed-node energy as one external sink. */
 	GasVentPlan planGasVent(AirNetwork network, int markerCount) {
-		if (!hasGasEnergy(network.nodeCount()) || !exactEnergy(markerCount).equals(audit.expectedInventory())) {
+		if (!hasGasEnergy(network.nodeCount()) || !exactEnergy(markerCount).equals(auditState.ledger().expectedInventory())) {
 			throw new IllegalStateException("Gas energy is not bound to a closed thermal inventory");
 		}
 		SignedDyadic removed = SignedDyadic.sum(gasNodeEnergy);
-		return new GasVentPlan(gasNodeEnergy.length, removed, audit.withExternalSinkEnergy(removed));
+		return new GasVentPlan(gasNodeEnergy.length, removed, auditState.ledger().withExternalSinkEnergy(removed));
 	}
 
 	/** Publishes an already validated all-node gas-energy removal using assignments only. */
@@ -479,7 +433,7 @@ final class FlipThermalState {
 			throw new IllegalStateException("Gas energy changed after vent planning");
 		}
 		gasNodeEnergy = new double[0];
-		audit = plan.auditAfter();
+		auditState.replace(plan.auditAfter());
 	}
 
 	record GasVentPlan(int nodeCount, SignedDyadic removedEnergy, ThermalAuditLedger auditAfter) { }
@@ -512,11 +466,11 @@ final class FlipThermalState {
 		}
 		SignedDyadic after = SignedDyadic.sum(result);
 		SignedDyadic roundoff = after.subtract(before).subtract(imported).add(exported);
-		ThermalAuditLedger auditAfter = audit.withExternalSourceEnergy(imported)
+		ThermalAuditLedger auditAfter = auditState.ledger().withExternalSourceEnergy(imported)
 				.withExternalSinkEnergy(exported).withRoundoff(roundoff);
 		return () -> {
 			gasNodeEnergy = result;
-			audit = auditAfter;
+			auditState.replace(auditAfter);
 		};
 	}
 
@@ -526,28 +480,17 @@ final class FlipThermalState {
 		}
 	}
 
-	double temperature(int marker, MarkerContext markers) {
-		ThermalMaterialDefinition material = material(marker, markers);
-		double sensible = (internalEnergy[marker] - baseEnergy(marker, markers))
-				/ unitScale.kilograms(markers.mass(marker));
-		return material.temperatureForSensibleSpecificEnergy(sensible);
-	}
+	double temperature(int marker, ThermalCarrierContext markers) { return liquidEnergy.temperature(marker, markers); }
 
 	void requireReactionState(
-			int marker, ChemicalMixtureRecord candidateMixture, double candidateMass, MarkerContext markers
+			int marker, ChemicalMixtureRecord candidateMixture, double candidateMass, ThermalCarrierContext markers
 	) {
-		ThermalMaterialDefinition material = material(marker, markers);
-		int thermalHandle = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
-		double physicalMass = unitScale.kilograms(candidateMass);
-		double base = stateFunction.baseEnergy(
-				thermalHandle, physicalMass, candidateMixture, markers.chemicalRegistry());
-		double sensible = (internalEnergy[marker] - base) / physicalMass;
-		material.temperatureForSensibleSpecificEnergy(sensible);
+		liquidEnergy.requireReactionState(marker, candidateMixture, candidateMass, markers);
 	}
 
 	ReactionPlan requireGranularReaction(
 			int cell, List<ReactionMarker> markerReplacements, GranularReactionEdit granularEdit,
-			MarkerContext markers
+			ThermalCarrierContext markers
 	) {
 		if (cell < 0 || cell >= cellGrid.cellCount() || markerReplacements == null || granularEdit == null) {
 			throw new IllegalArgumentException("Thermal granular reaction plan is invalid");
@@ -567,7 +510,7 @@ final class FlipThermalState {
 			ChemicalMixtureRecord mixture = replacement == null ? markers.mixture(marker) : replacement.mixture();
 			finalInventory.add(new ThermalStateFunction.InventoryPortion(
 					materialByFluidHandle[markers.fluidMaterialHandle(marker)], unitScale.kilograms(mass),
-					stableAmounts(mixture, markers.chemicalRegistry())));
+					ThermalStateFunction.stableAmounts(mixture, markers.chemicalRegistry())));
 		}
 		if (!replacements.isEmpty()) throw new IllegalArgumentException("Thermal reaction names a missing liquid marker");
 		for (CoherentPhaseStore.Group group : coherentPhases.snapshot()) if (group.cell() == cell) {
@@ -611,17 +554,17 @@ final class FlipThermalState {
 	double takeGranularReactionDeposit(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
 		return granularEnergy.takeDeposit(key, takenSvq, totalSvq);
 	}
-	void commitGranularReaction(ReactionPlan plan, MarkerContext markers) {
+	void commitGranularReaction(ReactionPlan plan, ThermalCarrierContext markers) {
 		if (plan == null) throw new IllegalArgumentException("Thermal granular reaction plan is missing");
 		cellGrid.rebuildWithCellEnergy(carrierAccess(markers), plan.cell(), plan.cellEnergy().toDouble());
 		double[] target = cellGrid.copyInternalEnergy();
 		cellGrid.setCellInternalEnergies(target);
-		audit = audit.withRoundoff(exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore()));
+		auditState.update(ledger -> ledger.withRoundoff(exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore())));
 	}
 
 	PhaseMechanicalWorkPlan planPhaseMechanicalWork(
 			SignedDyadic[] pendingCellVolume, float[] relativeGaugePressurePa,
-			float pressureReferencePa, float cellSize, MarkerContext markers
+			float pressureReferencePa, float cellSize, ThermalCarrierContext markers
 	) {
 		if (pendingCellVolume == null || relativeGaugePressurePa == null
 				|| pendingCellVolume.length != cellGrid.cellCount()
@@ -659,7 +602,7 @@ final class FlipThermalState {
 		return new PhaseMechanicalWorkPlan(target, before, work);
 	}
 
-	void requirePendingPhaseCells(SignedDyadic[] pendingCellVolume, MarkerContext markers) {
+	void requirePendingPhaseCells(SignedDyadic[] pendingCellVolume, ThermalCarrierContext markers) {
 		if (pendingCellVolume == null || pendingCellVolume.length != cellGrid.cellCount()) {
 			throw new IllegalArgumentException("Pending phase-volume cells are incompatible");
 		}
@@ -672,21 +615,21 @@ final class FlipThermalState {
 		}
 	}
 
-	void commitPhaseMechanicalWork(PhaseMechanicalWorkPlan plan, MarkerContext markers) {
+	void commitPhaseMechanicalWork(PhaseMechanicalWorkPlan plan, ThermalCarrierContext markers) {
 		if (plan == null) throw new IllegalArgumentException("Phase mechanical-work plan is missing");
 		cellGrid.setCellInternalEnergies(plan.targetCellEnergy());
 		SignedDyadic actualDelta = exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore());
-		audit = audit.withMechanicalWork(plan.mechanicalWork())
-				.withRoundoff(actualDelta.subtract(plan.mechanicalWork()));
+		auditState.update(ledger -> ledger.withMechanicalWork(plan.mechanicalWork())
+				.withRoundoff(actualDelta.subtract(plan.mechanicalWork())));
 	}
 
-	double temperatureInCell(int cell, MarkerContext markers) {
+	double temperatureInCell(int cell, ThermalCarrierContext markers) {
 		cellGrid.rebuild(carrierAccess(markers));
 		return cellGrid.occupied(cell) ? cellGrid.temperature(cell) : Double.NaN;
 	}
 
 	/** Rebuilds the derived LTE grid once before a phase scan over many cells. */
-	void preparePhaseScan(MarkerContext markers) {
+	void preparePhaseScan(ThermalCarrierContext markers) {
 		cellGrid.rebuild(carrierAccess(markers));
 	}
 
@@ -699,7 +642,7 @@ final class FlipThermalState {
 	}
 
 	List<FiniteThermalExchange.Contact> finiteDeviceContacts(
-			List<CellContactRequest> requests, MarkerContext markers
+			List<CellContactRequest> requests, ThermalCarrierContext markers
 	) {
 		if (requests == null || requests.isEmpty()
 				|| requests.size() > ThermalLimits.MAX_FINITE_DEVICE_CONTACTS) {
@@ -728,7 +671,7 @@ final class FlipThermalState {
 	}
 
 	FiniteDeviceCellPlan planFiniteDeviceCellExchange(
-			List<CellEnergyDelta> deltas, MarkerContext markers
+			List<CellEnergyDelta> deltas, ThermalCarrierContext markers
 	) {
 		if (deltas == null || deltas.isEmpty() || deltas.size() > ThermalLimits.MAX_FINITE_DEVICE_CONTACTS) {
 			throw new IllegalArgumentException("Finite thermal cell deltas are missing or over budget");
@@ -759,7 +702,7 @@ final class FlipThermalState {
 				cellGrid.copyCarrierInternalEnergy(), exactEnergy(markers.markerCount()), requested);
 	}
 
-	void commitFiniteDeviceCellExchange(FiniteDeviceCellPlan plan, MarkerContext markers) {
+	void commitFiniteDeviceCellExchange(FiniteDeviceCellPlan plan, ThermalCarrierContext markers) {
 		if (plan == null) throw new IllegalArgumentException("Finite thermal cell plan is missing");
 		cellGrid.rebuild(carrierAccess(markers));
 		if (!plan.inventoryBefore().equals(exactEnergy(markers.markerCount()))
@@ -768,14 +711,14 @@ final class FlipThermalState {
 			throw new IllegalArgumentException("Finite thermal cell plan is stale");
 		}
 		double[] rollback = cellGrid.copyCarrierInternalEnergy();
-		ThermalAuditLedger beforeAudit = audit;
+		ThermalAuditLedger beforeAudit = auditState.ledger();
 		try {
 			cellGrid.setCellInternalEnergies(plan.targetCellEnergy());
 			SignedDyadic actualDelta = exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore());
-			audit = beforeAudit.withFiniteDeviceExchange(plan.requestedDelta())
-					.withRoundoff(actualDelta.subtract(plan.requestedDelta()));
+			auditState.update(ledger -> ledger.withFiniteDeviceExchange(plan.requestedDelta())
+					.withRoundoff(actualDelta.subtract(plan.requestedDelta())));
 		} catch (RuntimeException failure) {
-			audit = beforeAudit;
+			auditState.replace(beforeAudit);
 			try { cellGrid.restoreCarrierInternalEnergy(rollback); }
 			catch (RuntimeException rollbackFailure) { failure.addSuppressed(rollbackFailure); }
 			throw failure;
@@ -784,10 +727,10 @@ final class FlipThermalState {
 
 	/**
 	 * Derives one cell's LTE temperature directly from authoritative carrier inventory and energy.
-	 * Unlike {@link #temperatureInCell(int, MarkerContext)}, this observation path does not rebuild or
+	 * Unlike {@link #temperatureInCell(int, ThermalCarrierContext)}, this observation path does not rebuild or
 	 * mutate the reusable transport grid.
 	 */
-	double observeTemperatureInCell(int cell, MarkerContext markers) {
+	double observeTemperatureInCell(int cell, ThermalCarrierContext markers) {
 		if (cell < 0 || cell >= cellGrid.cellCount() || markers == null) {
 			throw new IllegalArgumentException("Thermal observation cell is invalid");
 		}
@@ -797,8 +740,8 @@ final class FlipThermalState {
 			inventory.add(new ThermalStateFunction.InventoryPortion(
 					materialByFluidHandle[markers.fluidMaterialHandle(marker)],
 					unitScale.kilograms(markers.mass(marker)),
-					stableAmounts(markers.mixture(marker), markers.chemicalRegistry())));
-			energy = energy.add(SignedDyadic.of(internalEnergy[marker]));
+					ThermalStateFunction.stableAmounts(markers.mixture(marker), markers.chemicalRegistry())));
+			energy = energy.add(SignedDyadic.of(liquidEnergy.energy(marker)));
 		}
 		for (CoherentPhaseStore.Group group : coherentPhases.snapshot()) if (group.cell() == cell) {
 			inventory.add(new ThermalStateFunction.InventoryPortion(
@@ -832,7 +775,7 @@ final class FlipThermalState {
 
 	/** Solves a prospective liquid/coherent phase edit while retaining every same-cell granular heat-bath carrier. */
 	double phaseCandidateTemperature(
-			int cell, List<ThermalStateFunction.InventoryPortion> phaseInventory, MarkerContext markers
+			int cell, List<ThermalStateFunction.InventoryPortion> phaseInventory, ThermalCarrierContext markers
 	) {
 		if (cell < 0 || cell >= cellGrid.cellCount() || phaseInventory == null || phaseInventory.isEmpty()) {
 			throw new IllegalArgumentException("Thermal phase candidate inventory is invalid");
@@ -846,7 +789,7 @@ final class FlipThermalState {
 	}
 
 	/** Freezes exact same-cell energy and unchanged solid heat baths for a gas/liquid candidate search. */
-	PhaseCandidateCell preparePhaseCandidateCell(int cell, MarkerContext markers) {
+	PhaseCandidateCell preparePhaseCandidateCell(int cell, ThermalCarrierContext markers) {
 		if (cell < 0 || cell >= cellGrid.cellCount() || markers == null) {
 			throw new IllegalArgumentException("Thermal phase candidate cell is invalid");
 		}
@@ -899,7 +842,7 @@ final class FlipThermalState {
 
 	private ThermalStateFunction.State phaseCandidateState(
 			int cell, List<ThermalStateFunction.InventoryPortion> phaseInventory,
-			SignedDyadic cellEnergy, MarkerContext markers
+			SignedDyadic cellEnergy, ThermalCarrierContext markers
 	) {
 		ArrayList<ThermalStateFunction.InventoryPortion> finalInventory = new ArrayList<>(phaseInventory);
 		for (int active = 0; active < markers.activeParcelCount(); active++) {
@@ -928,7 +871,7 @@ final class FlipThermalState {
 		return materialByFluidHandle[fluidHandle];
 	}
 
-	ThermalDisplaySnapshot displaySnapshot(MarkerContext markers, AirNetwork network) {
+	ThermalDisplaySnapshot displaySnapshot(ThermalCarrierContext markers, AirNetwork network) {
 		cellGrid.rebuild(carrierAccess(markers));
 		short[] temperatures = new short[cellGrid.cellCount()];
 		byte[] coherent = new byte[cellGrid.cellCount()];
@@ -962,102 +905,67 @@ final class FlipThermalState {
 		return Math.toIntExact(quantized);
 	}
 
-	void setTemperatureInCell(int cell, double temperatureK, MarkerContext markers) {
+	void setTemperatureInCell(int cell, double temperatureK, ThermalCarrierContext markers) {
 		SignedDyadic before = exactEnergy(markers.markerCount());
 		cellGrid.rebuild(carrierAccess(markers));
 		if (!cellGrid.occupied(cell)) throw new IllegalArgumentException("Cannot set temperature in an empty cell");
 		double[] target = cellGrid.copyInternalEnergy();
 		target[cell] = modeledCellEnergy(cell, temperatureK, markers);
 		cellGrid.setCellInternalEnergies(target);
-		audit = audit.withHeatExchange(exactEnergy(markers.markerCount()).subtract(before));
+		auditState.update(ledger -> ledger.withHeatExchange(exactEnergy(markers.markerCount()).subtract(before)));
 	}
 
-	void resetMarkerTemperature(int marker, double temperatureK, MarkerContext markers, SignedDyadic inventoryBefore) {
-		internalEnergy[marker] = modeledEnergy(marker, markers.mass(marker), markers.mixture(marker), temperatureK, markers);
-		audit = audit.withHeatExchange(exactEnergy(markers.markerCount()).subtract(inventoryBefore));
+	void resetMarkerTemperature(int marker, double temperatureK, ThermalCarrierContext markers, SignedDyadic inventoryBefore) {
+		liquidEnergy.resetMarkerTemperature(marker, temperatureK, markers);
+		auditState.update(ledger -> ledger.withHeatExchange(exactEnergy(markers.markerCount()).subtract(inventoryBefore)));
 	}
 
 	ThermalTransport.Stats step(
-			MarkerContext markers, ThermalTransport.FaceArea faceArea, double dtSeconds
+			ThermalCarrierContext markers, ThermalTransport.FaceArea faceArea, double dtSeconds
 	) {
 		return step(markers, faceArea, (x, y, z, direction) -> null, dtSeconds);
 	}
 
 	ThermalTransport.Stats step(
-			MarkerContext markers, ThermalTransport.FaceArea faceArea,
+			ThermalCarrierContext markers, ThermalTransport.FaceArea faceArea,
 			ThermalTransport.BoundaryFace boundaryFace, double dtSeconds
 	) {
 		SignedDyadic before = exactEnergy(markers.markerCount());
 		cellGrid.rebuild(carrierAccess(markers));
 		lastTransport = transport.step(cellGrid, faceArea, boundaryFace, dtSeconds);
 		SignedDyadic physicalDelta = exactEnergy(markers.markerCount()).subtract(before);
-		audit = audit.withHeatExchange(lastTransport.reservoirExchange())
-				.withRoundoff(physicalDelta.subtract(lastTransport.reservoirExchange()));
+		auditState.update(ledger -> ledger.withHeatExchange(lastTransport.reservoirExchange())
+				.withRoundoff(physicalDelta.subtract(lastTransport.reservoirExchange())));
 		return lastTransport;
 	}
 
-	void addExternalMarker(int marker, MarkerContext markers) {
-		ensureCapacity(marker + 1);
-		internalEnergy[marker] = modeledEnergy(marker, markers.mass(marker), markers.mixture(marker),
-				insertionTemperatureK, markers);
-		audit = audit.withExternalSourceEnergy(SignedDyadic.of(internalEnergy[marker]));
+	void addExternalMarker(int marker, ThermalCarrierContext markers) {
+		liquidEnergy.addExternalMarker(marker, markers);
 	}
 
 	ExternalLiquidInsertionPlan planExternalLiquidInsertions(
-			List<LiquidInsertion> insertions, double totalEnergy, MarkerContext markers
+			List<LiquidInsertion> insertions, double totalEnergy, ThermalCarrierContext markers
 	) {
-		if (insertions == null || insertions.isEmpty() || !Double.isFinite(totalEnergy)) {
-			throw new IllegalArgumentException("Explicit thermal liquid insertion is invalid");
-		}
-		ArrayList<ThermalStateFunction.InventoryPortion> inventory = new ArrayList<>(insertions.size());
-		for (LiquidInsertion insertion : insertions) {
-			if (insertion.fluidMaterialHandle() >= materialByFluidHandle.length) {
-				throw new IllegalArgumentException("Unknown fluid material in thermal insertion");
-			}
-			inventory.add(new ThermalStateFunction.InventoryPortion(
-					materialByFluidHandle[insertion.fluidMaterialHandle()],
-					unitScale.kilograms(insertion.mass()),
-					stableAmounts(insertion.mixture(), markers.chemicalRegistry())));
-		}
-		double temperatureK = stateFunction.stateForInventory(inventory, totalEnergy).temperatureK();
-		double[] energies = new double[insertions.size()];
-		for (int index = 0; index < energies.length; index++) {
-			LiquidInsertion insertion = insertions.get(index);
-			energies[index] = modeledEnergy(insertion.fluidMaterialHandle(), insertion.mass(),
-					insertion.mixture(), temperatureK, markers.chemicalRegistry());
-		}
-		SignedDyadic source = SignedDyadic.of(totalEnergy);
-		return new ExternalLiquidInsertionPlan(energies, source, SignedDyadic.sum(energies).subtract(source));
+		return liquidEnergy.planExternalLiquidInsertions(insertions, totalEnergy, markers);
 	}
 
 	void commitExternalLiquidInsertions(int firstOrdinal, ExternalLiquidInsertionPlan plan) {
-		if (plan == null || firstOrdinal < 0 || firstOrdinal + plan.energies.length > internalEnergy.length) {
-			throw new IllegalArgumentException("Thermal liquid insertion ordinals are incompatible");
-		}
-		for (int index = 0; index < plan.energies.length; index++) {
-			int ordinal = firstOrdinal + index;
-			if (Double.doubleToRawLongBits(internalEnergy[ordinal]) != Double.doubleToRawLongBits(0.0)) {
-				throw new IllegalStateException("Explicit thermal insertion did not reserve an empty energy ordinal");
-			}
-			internalEnergy[ordinal] = plan.energies[index];
-		}
-		audit = audit.withExternalSourceEnergy(plan.source()).withRoundoff(plan.roundoff());
+		liquidEnergy.commitExternalLiquidInsertions(firstOrdinal, plan);
 	}
 
 	void removeExternalAndSwap(int index, int last) {
-		audit = audit.withExternalSinkEnergy(SignedDyadic.of(internalEnergy[index]));
-		if (index != last) internalEnergy[index] = internalEnergy[last];
+		liquidEnergy.removeExternalAndSwap(index, last);
 	}
 
-	void recordExternalSink(SignedDyadic energy) { audit = audit.withExternalSinkEnergy(energy); }
+	void recordExternalSink(SignedDyadic energy) { auditState.update(ledger -> ledger.withExternalSinkEnergy(energy)); }
 	void settleExternalExtraction(double removedCarrierEnergy, double coupledItemEnergy) {
 		if (!Double.isFinite(removedCarrierEnergy) || !Double.isFinite(coupledItemEnergy)) {
 			throw new IllegalArgumentException("Container thermal settlement is not finite");
 		}
 		SignedDyadic delta = SignedDyadic.of(coupledItemEnergy).subtract(SignedDyadic.of(removedCarrierEnergy));
-		audit = audit.withExternalSinkEnergy(delta).withRoundoff(delta);
+		auditState.update(ledger -> ledger.withExternalSinkEnergy(delta).withRoundoff(delta));
 	}
-	void recordRoundoff(SignedDyadic delta) { audit = audit.withRoundoff(delta); }
+	void recordRoundoff(SignedDyadic delta) { auditState.update(ledger -> ledger.withRoundoff(delta)); }
 
 	void addCoherentExternal(CoherentPhaseStore.Group group) {
 		int material = registry.materialHandle(group.phaseId());
@@ -1067,7 +975,7 @@ final class FlipThermalState {
 		Map<String, Long> composition = group.composition() == null ? Map.of() : group.composition().stableAmounts();
 		stateFunction.stateForInternalEnergy(material, group.mass(), composition, group.internalEnergy());
 		coherentPhases.add(group);
-		audit = audit.withExternalSourceEnergy(SignedDyadic.of(group.internalEnergy()));
+		auditState.update(ledger -> ledger.withExternalSourceEnergy(SignedDyadic.of(group.internalEnergy())));
 	}
 
 	void addCoherentInternal(CoherentPhaseStore.Group group) { coherentPhases.add(group); }
@@ -1080,29 +988,23 @@ final class FlipThermalState {
 			throw new IllegalStateException("Coherent phase inventory changed after clear planning");
 		}
 		coherentPhases.clear();
-		audit = audit.withExternalSinkEnergy(expectedEnergy);
+		auditState.update(ledger -> ledger.withExternalSinkEnergy(expectedEnergy));
 	}
 	void addInternalMarker(int marker, double energy) {
-		ensureCapacity(marker + 1);
-		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Internal phase marker energy is not finite");
-		internalEnergy[marker] = energy;
+		liquidEnergy.addInternalMarker(marker, energy);
 	}
 	double removeInternalAndSwap(int index, int last) {
-		double removed = internalEnergy[index];
-		if (index != last) internalEnergy[index] = internalEnergy[last];
-		return removed;
+		return liquidEnergy.removeInternalAndSwap(index, last);
 	}
 	void addLiquidEnergy(int marker, double energy) {
-		double result = internalEnergy[marker] + energy;
-		if (!Double.isFinite(result)) throw new IllegalArgumentException("Internal phase energy transfer overflow");
-		internalEnergy[marker] = result;
+		liquidEnergy.addLiquidEnergy(marker, energy);
 	}
-	void repartitionCellEnergy(int cell, double targetEnergy, MarkerContext markers, SignedDyadic inventoryBefore) {
+	void repartitionCellEnergy(int cell, double targetEnergy, ThermalCarrierContext markers, SignedDyadic inventoryBefore) {
 		cellGrid.rebuild(carrierAccess(markers));
 		double[] target = cellGrid.copyInternalEnergy();
 		target[cell] = targetEnergy;
 		cellGrid.setCellInternalEnergies(target);
-		audit = audit.withRoundoff(exactEnergy(markers.markerCount()).subtract(inventoryBefore));
+		auditState.update(ledger -> ledger.withRoundoff(exactEnergy(markers.markerCount()).subtract(inventoryBefore)));
 	}
 
 	/**
@@ -1110,7 +1012,7 @@ final class FlipThermalState {
 	 * Gas and non-target carrier energy are already authoritative when this is called; the cell remains the LTE
 	 * degree of freedom. This avoids losing a physically meaningful amount through rounded local-energy arithmetic.
 	 */
-	void repartitionCellEnergyConserving(int cell, MarkerContext markers, SignedDyadic inventoryBefore) {
+	void repartitionCellEnergyConserving(int cell, ThermalCarrierContext markers, SignedDyadic inventoryBefore) {
 		ThermalCellGrid.CarrierAccess current = carrierAccess(markers);
 		SignedDyadic currentCellEnergy = SignedDyadic.ZERO;
 		for (int carrier = 0; carrier < current.carrierCount(); carrier++) if (current.cell(carrier) == cell) {
@@ -1122,13 +1024,13 @@ final class FlipThermalState {
 			throw new IllegalArgumentException("Conservative thermal cell remainder is not representable");
 		}
 		cellGrid.rebuildPhaseCellWithEnergy(current, cell, targetCellEnergy);
-		audit = audit.withRoundoff(exactEnergy(markers.markerCount()).subtract(inventoryBefore));
+		auditState.update(ledger -> ledger.withRoundoff(exactEnergy(markers.markerCount()).subtract(inventoryBefore)));
 	}
 
 	/** Closes a gas/liquid transfer over its exact two-owner energy boundary without rescanning the region. */
 	void repartitionPhaseCellAndGasEnergyConserving(
 			PhaseCandidateCell beforeCell, double gasEnergyBefore, double gasEnergyAfter,
-			MarkerContext markers, boolean carrierTopologyChanged
+			ThermalCarrierContext markers, boolean carrierTopologyChanged
 	) {
 		if (beforeCell == null || !Double.isFinite(gasEnergyBefore) || !Double.isFinite(gasEnergyAfter)) {
 			throw new IllegalArgumentException("Gas/liquid thermal closure is invalid");
@@ -1146,7 +1048,7 @@ final class FlipThermalState {
 		}
 		SignedDyadic afterPair = cellGrid.exactCarrierEnergyInCell(beforeCell.cell())
 				.add(SignedDyadic.of(gasEnergyAfter));
-		audit = audit.withRoundoff(afterPair.subtract(beforePair));
+		auditState.update(ledger -> ledger.withRoundoff(afterPair.subtract(beforePair)));
 	}
 
 	void requireActiveToDeposit(int active, GranularEnergyColumn.DepositKey target) {
@@ -1156,13 +1058,13 @@ final class FlipThermalState {
 		SignedDyadic before = granularEnergy.exactEnergy();
 		double energy = granularEnergy.removeActiveSwap(active);
 		granularEnergy.addDeposit(target, energy);
-		audit = audit.withRoundoff(granularEnergy.exactEnergy().subtract(before));
+		auditState.update(ledger -> ledger.withRoundoff(granularEnergy.exactEnergy().subtract(before)));
 	}
 	void requireActiveMerge(int first, int second) { granularEnergy.requireMergeActive(first, second); }
 	void commitActiveMerge(int first, int second) {
 		SignedDyadic before = granularEnergy.exactEnergy();
 		granularEnergy.mergeActive(first, second);
-		audit = audit.withRoundoff(granularEnergy.exactEnergy().subtract(before));
+		auditState.update(ledger -> ledger.withRoundoff(granularEnergy.exactEnergy().subtract(before)));
 	}
 	void requireDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {
 		granularEnergy.previewDepositTake(source, takenSvq, totalSvq);
@@ -1172,7 +1074,7 @@ final class FlipThermalState {
 		SignedDyadic before = granularEnergy.exactEnergy();
 		double energy = granularEnergy.takeDeposit(source, takenSvq, totalSvq);
 		granularEnergy.addActive(energy);
-		audit = audit.withRoundoff(granularEnergy.exactEnergy().subtract(before));
+		auditState.update(ledger -> ledger.withRoundoff(granularEnergy.exactEnergy().subtract(before)));
 	}
 	void requireDepositMove(
 			GranularEnergyColumn.DepositKey source, GranularEnergyColumn.DepositKey target,
@@ -1187,13 +1089,13 @@ final class FlipThermalState {
 	) {
 		SignedDyadic before = granularEnergy.exactEnergy();
 		granularEnergy.moveDeposit(source, target, movedSvq, sourceTotalSvq);
-		audit = audit.withRoundoff(granularEnergy.exactEnergy().subtract(before));
+		auditState.update(ledger -> ledger.withRoundoff(granularEnergy.exactEnergy().subtract(before)));
 	}
 	void clearGranularExternal() {
 		SignedDyadic removed = granularEnergy.clear();
-		audit = audit.withExternalSinkEnergy(removed);
+		auditState.update(ledger -> ledger.withExternalSinkEnergy(removed));
 	}
-	double[] planExternalActiveInsertions(int firstOrdinal, int count, MarkerContext markers) {
+	double[] planExternalActiveInsertions(int firstOrdinal, int count, ThermalCarrierContext markers) {
 		if (firstOrdinal != granularEnergy.activeCount() || count < 0
 				|| firstOrdinal + count != markers.activeParcelCount()) {
 			throw new IllegalArgumentException("Granular thermal insertion ordinals are incompatible");
@@ -1209,7 +1111,7 @@ final class FlipThermalState {
 		return energies;
 	}
 	double planExternalGranularEnergy(
-			int material, int composition, double mass, MarkerContext markers
+			int material, int composition, double mass, ThermalCarrierContext markers
 	) {
 		double energy = modeledGranularEnergy(material, composition, mass, insertionTemperatureK, markers);
 		granularEnergy.requireAddActive(energy);
@@ -1221,7 +1123,8 @@ final class FlipThermalState {
 		for (double energy : energies) {
 			granularEnergy.addActive(energy); source = source.add(SignedDyadic.of(energy));
 		}
-		audit = audit.withExternalSourceEnergy(source);
+		SignedDyadic inserted = source;
+		auditState.update(ledger -> ledger.withExternalSourceEnergy(inserted));
 	}
 	double previewActiveTake(int active, long takenSvq, long totalSvq) {
 		return granularEnergy.previewActiveTake(active, takenSvq, totalSvq);
@@ -1232,59 +1135,51 @@ final class FlipThermalState {
 	double commitExternalActiveTake(int active, long takenSvq, long totalSvq) {
 		double removed = takenSvq == totalSvq ? granularEnergy.removeActiveSwap(active)
 				: granularEnergy.takeActivePortion(active, takenSvq, totalSvq);
-		audit = audit.withExternalSinkEnergy(SignedDyadic.of(removed));
+		auditState.update(ledger -> ledger.withExternalSinkEnergy(SignedDyadic.of(removed)));
 		return removed;
 	}
 	double commitExternalDepositTake(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
 		double removed = granularEnergy.takeDeposit(key, takenSvq, totalSvq);
-		audit = audit.withExternalSinkEnergy(SignedDyadic.of(removed));
+		auditState.update(ledger -> ledger.withExternalSinkEnergy(SignedDyadic.of(removed)));
 		return removed;
 	}
 
 	Truncation planTruncate(
 			int marker, double newMass, ChemicalMixtureRecord keptMixture,
-			double previousTemperatureK, MarkerContext markers
+			double previousTemperatureK, ThermalCarrierContext markers
 	) {
-		double previousEnergy = internalEnergy[marker];
-		double newEnergy = newMass == 0.0 ? 0.0
-				: modeledEnergy(marker, newMass, keptMixture, previousTemperatureK, markers);
-		return new Truncation(newEnergy, previousEnergy - newEnergy);
+		return liquidEnergy.planTruncate(marker, newMass, keptMixture, previousTemperatureK, markers);
 	}
 
 	void commitTruncate(int marker, Truncation plan) {
-		if (plan == null) return;
-		internalEnergy[marker] = plan.newEnergy();
-		audit = audit.withExternalSinkEnergy(SignedDyadic.of(plan.removedEnergy()));
+		liquidEnergy.commitTruncate(marker, plan);
 	}
 
 	void commitInternalTruncate(int marker, Truncation plan) {
-		if (plan == null) return;
-		internalEnergy[marker] = plan.newEnergy();
+		liquidEnergy.commitInternalTruncate(marker, plan);
 	}
 
-	FlipParticleReseeder.ThermalAdapter reseedAdapter(MarkerContext markers) {
+	FlipParticleReseeder.ThermalAdapter reseedAdapter(ThermalCarrierContext markers) {
 		return new FlipParticleReseeder.ThermalAdapter() {
 			@Override public double totalEnergy(int count) { return FlipThermalState.this.totalEnergy(count); }
 			@Override public void merge(int target, int source) {
-				internalEnergy[target] += internalEnergy[source];
-				if (!Double.isFinite(internalEnergy[target])) {
-					throw new IllegalArgumentException("Reseeded thermal merge energy is invalid");
-				}
+				liquidEnergy.mergeReseedEnergy(target, source);
 			}
 			@Override public FlipParticleReseeder.ThermalSplit beforeSplit(int source) {
-				return new FlipParticleReseeder.ThermalSplit(internalEnergy[source], temperature(source, markers));
+				return new FlipParticleReseeder.ThermalSplit(liquidEnergy.energy(source), temperature(source, markers));
 			}
 			@Override public void afterSplit(FlipParticleReseeder.ThermalSplit split, int source, int destination) {
-				internalEnergy[source] = modeledEnergy(source, markers.mass(source), markers.mixture(source),
+				double sourceModeled = liquidEnergy.modeledEnergy(source, markers.mass(source), markers.mixture(source),
 						split.temperatureK(), markers);
-				internalEnergy[destination] = split.parentEnergy() - internalEnergy[source];
+				liquidEnergy.assignReseededEnergies(source, sourceModeled, destination,
+						split.parentEnergy() - sourceModeled);
 				validateTemperature(destination, split.temperatureK(), markers);
 			}
-			@Override public void move(int source, int destination) { internalEnergy[destination] = internalEnergy[source]; }
+			@Override public void move(int source, int destination) { liquidEnergy.moveEnergy(source, destination); }
 		};
 	}
 
-	private ThermalCellGrid.CarrierAccess carrierAccess(MarkerContext markers) {
+	private ThermalCellGrid.CarrierAccess carrierAccess(ThermalCarrierContext markers) {
 		int liquidCount = markers.markerCount(), coherentCount = coherentPhases.groupCount();
 		int activeCount = markers.activeParcelCount();
 		List<GranularEnergyColumn.DepositKey> depositKeys = markers.depositKeys();
@@ -1346,14 +1241,14 @@ final class FlipThermalState {
 						markers.solidComposition(composition));
 			}
 			@Override public double internalEnergy(int carrier) {
-				if (carrier < liquidCount) return internalEnergy[carrier];
+				if (carrier < liquidCount) return liquidEnergy.energy(carrier);
 				if (carrier < activeStart) return coherentPhases.group(carrier - coherentStart).internalEnergy();
 				return carrier < depositStart ? granularEnergy.activeEnergy(carrier - activeStart)
 						: granularEnergy.depositEnergy(depositKeys.get(carrier - depositStart));
 			}
 			@Override public void setInternalEnergy(int carrier, double energy) {
 				if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal carrier energy is not finite");
-				if (carrier < liquidCount) internalEnergy[carrier] = energy;
+				if (carrier < liquidCount) liquidEnergy.setEnergy(carrier, energy);
 				else if (carrier < activeStart) coherentPhases.setInternalEnergy(carrier - coherentStart, energy);
 				else if (carrier < depositStart) granularEnergy.setActiveEnergy(carrier - activeStart, energy);
 				else granularEnergy.setDepositEnergy(depositKeys.get(carrier - depositStart), energy);
@@ -1361,7 +1256,7 @@ final class FlipThermalState {
 		};
 	}
 
-	private double modeledCellEnergy(int cell, double temperatureK, MarkerContext markers) {
+	private double modeledCellEnergy(int cell, double temperatureK, ThermalCarrierContext markers) {
 		double total = 0.0;
 		for (int marker = 0; marker < markers.markerCount(); marker++) if (markers.cell(marker) == cell) {
 			total += modeledEnergy(marker, markers.mass(marker), markers.mixture(marker), temperatureK, markers);
@@ -1384,38 +1279,24 @@ final class FlipThermalState {
 		return total;
 	}
 
-	private ThermalMaterialDefinition material(int marker, MarkerContext markers) {
+	private ThermalMaterialDefinition material(int marker, ThermalCarrierContext markers) {
 		return registry.material(materialByFluidHandle[markers.fluidMaterialHandle(marker)]);
 	}
 
-	private double baseEnergy(int marker, MarkerContext markers) {
+	private double baseEnergy(int marker, ThermalCarrierContext markers) {
 		return stateFunction.baseEnergy(materialByFluidHandle[markers.fluidMaterialHandle(marker)],
 				unitScale.kilograms(markers.mass(marker)),
 				markers.mixture(marker), markers.chemicalRegistry());
 	}
 
 	private double modeledEnergy(
-			int marker, double mass, ChemicalMixtureRecord mixture, double temperatureK, MarkerContext markers
+			int marker, double mass, ChemicalMixtureRecord mixture, double temperatureK, ThermalCarrierContext markers
 	) {
-		return modeledEnergy(markers.fluidMaterialHandle(marker), mass, mixture, temperatureK,
-				markers.chemicalRegistry());
-	}
-
-	private double modeledEnergy(
-			int fluidMaterialHandle, double mass, ChemicalMixtureRecord mixture, double temperatureK,
-			ChemicalRegistry chemicalRegistry
-	) {
-		int thermalHandle = materialByFluidHandle[fluidMaterialHandle];
-		ThermalMaterialDefinition material = registry.material(thermalHandle);
-		double physicalMass = unitScale.kilograms(mass);
-		double base = stateFunction.baseEnergy(thermalHandle, physicalMass, mixture, chemicalRegistry);
-		double energy = base + physicalMass * material.sensibleSpecificEnergyAt(temperatureK);
-		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal marker modeled energy is invalid");
-		return energy;
+		return liquidEnergy.modeledEnergy(marker, mass, mixture, temperatureK, markers);
 	}
 
 	private double modeledGranularEnergy(
-			int granularMaterial, int composition, double mass, double temperatureK, MarkerContext markers
+			int granularMaterial, int composition, double mass, double temperatureK, ThermalCarrierContext markers
 	) {
 		if (granularMaterial < 0 || granularMaterial >= materialByGranularHandle.length) {
 			throw new IllegalArgumentException("Unknown granular thermal material handle");
@@ -1440,18 +1321,8 @@ final class FlipThermalState {
 				materialByGranularHandle[granularMaterial], mass, composition));
 	}
 
-	private static Map<String, Long> stableAmounts(
-			ChemicalMixtureRecord mixture, ChemicalRegistry chemicalRegistry
-	) {
-		if (mixture == null) return Map.of();
-		if (chemicalRegistry == null) throw new IllegalArgumentException("Thermal chemical registry is missing");
-		TreeMap<String, Long> result = new TreeMap<>();
-		for (int entry = 0; entry < mixture.entryCount(); entry++) result.put(
-				chemicalRegistry.species(mixture.speciesHandle(entry)).id(), mixture.amountAt(entry));
-		return Map.copyOf(result);
-	}
 
-	private void validateTemperature(int marker, double expected, MarkerContext markers) {
+	private void validateTemperature(int marker, double expected, ThermalCarrierContext markers) {
 		double restored = temperature(marker, markers);
 		double tolerance = Math.max(1.0E-9, Math.max(Math.ulp(restored), Math.ulp(expected)) * 16.0);
 		if (Math.abs(restored - expected) > tolerance) {

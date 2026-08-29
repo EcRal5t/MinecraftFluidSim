@@ -4,7 +4,7 @@ import cc.ecisr.mmm.thermal.FiniteThermalBodyState;
 import cc.ecisr.mmm.thermal.FiniteThermalDeviceInventory;
 import cc.ecisr.mmm.thermal.FiniteThermalDeviceState;
 import cc.ecisr.mmm.thermal.FiniteThermalDeviceAudit;
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 
@@ -22,7 +22,7 @@ final class FiniteThermalDeviceCodec {
 	static final String MANIFEST_EXTENSION = "mmm:finite_thermal_devices";
 	private static final int MAGIC = 0x52574644; // RWFD
 	private static final int FORMAT = 2;
-	private static final int MAX_DYADIC_BYTES = ThermalLimits.MAX_DYADIC_SIGNIFICAND_BITS / 8 + 2;
+	private static final int MAX_DYADIC_BYTES = SignedDyadic.MAX_SIGNIFICAND_BITS / 8 + 2;
 
 	byte[] encode(FiniteThermalDeviceInventory inventory) throws IOException {
 		if (inventory == null || inventory.devices().isEmpty()) {

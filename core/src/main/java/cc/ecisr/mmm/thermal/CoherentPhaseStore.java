@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.thermal;
 
+import cc.ecisr.mmm.units.SignedDyadic;
+
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 
 import java.math.BigInteger;

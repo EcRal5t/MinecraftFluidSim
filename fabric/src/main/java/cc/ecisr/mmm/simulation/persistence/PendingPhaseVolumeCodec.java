@@ -1,7 +1,7 @@
 package cc.ecisr.mmm.simulation.persistence;
 
 import cc.ecisr.mmm.fluid.PendingPhaseVolumeState;
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.thermal.ThermalLimits;
 
 import java.io.ByteArrayInputStream;
@@ -18,7 +18,7 @@ final class PendingPhaseVolumeCodec {
 	static final String MANIFEST_EXTENSION = "mmm:pending_phase_volume";
 	private static final int MAGIC = 0x52575056; // RWPV
 	private static final int VERSION = 1;
-	private static final int MAX_DYADIC_BYTES = ThermalLimits.MAX_DYADIC_SIGNIFICAND_BITS / 8 + 2;
+	private static final int MAX_DYADIC_BYTES = SignedDyadic.MAX_SIGNIFICAND_BITS / 8 + 2;
 
 	byte[] encode(PendingPhaseVolumeState state) throws IOException {
 		if (state == null || state.isEmpty()) {

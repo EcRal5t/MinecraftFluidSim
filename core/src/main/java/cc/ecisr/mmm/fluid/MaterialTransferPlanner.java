@@ -1,10 +1,12 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.LiquidEnergyColumn;
+
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -122,10 +124,10 @@ final class MaterialTransferPlanner {
 				return new FlipFluidDomain.ExactMixtureTransfer(false, List.of());
 			}
 		}
-		FlipThermalState.ExternalLiquidInsertionPlan thermalPlan = null;
+		LiquidEnergyColumn.ExternalLiquidInsertionPlan thermalPlan = null;
 		if (domain.thermalState != null && internalEnergy != null) {
-			List<FlipThermalState.LiquidInsertion> thermalInsertions = new ArrayList<>(insertPieces.size());
-			for (MaterialInsertPiece piece : insertPieces) thermalInsertions.add(new FlipThermalState.LiquidInsertion(
+			List<LiquidEnergyColumn.LiquidInsertion> thermalInsertions = new ArrayList<>(insertPieces.size());
+			for (MaterialInsertPiece piece : insertPieces) thermalInsertions.add(new LiquidEnergyColumn.LiquidInsertion(
 					piece.materialHandle(), piece.mass(), piece.chemical()));
 			thermalPlan = domain.thermalState.planExternalLiquidInsertions(thermalInsertions, internalEnergy,
 					domain.thermalMarkerContext());
@@ -289,7 +291,7 @@ final class MaterialTransferPlanner {
 						marker, newVolume, previousVolume - newVolume, newMass, removedMass);
 				ledger.add(domain.materialRegistry.material(domain.particles.materialHandle(marker)).id(), domain.chemicalParcels.indicator(marker),
 						actual, domain.unitScale.kilograms(removedMass), chemicalPlan.removed());
-				FlipThermalState.Truncation thermalPlan = domain.planThermalTruncate(marker, newMass,
+				LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(marker, newMass,
 						chemicalPlan.kept(), domain.thermalState == null ? Double.NaN : domain.thermalMarkerTemperature(marker));
 				plan.add(new ExtractionAllocation(marker, newVolume, newMass, chemicalPlan, thermalPlan));
 				remaining -= actual;
@@ -373,7 +375,7 @@ final class MaterialTransferPlanner {
 				ChemicalParcelStore.SplitPlan chemicalPlan = domain.chemicalParcels == null ? null
 						: domain.chemicalParcels.planTruncate(i, newVolume, previousVolume - newVolume,
 						newMass, previousMass - newMass);
-				FlipThermalState.Truncation thermalPlan = domain.planThermalTruncate(i, newMass,
+				LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(i, newMass,
 						chemicalPlan == null ? null : chemicalPlan.kept(),
 						domain.thermalState == null ? Double.NaN : domain.thermalMarkerTemperature(i));
 				plan.add(new ExtractionAllocation(i, newVolume, newMass, chemicalPlan, thermalPlan));
@@ -511,10 +513,10 @@ final class MaterialTransferPlanner {
 		} catch (IllegalArgumentException | ArithmeticException refusedAudit) {
 			return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		}
-		FlipThermalState.ExternalLiquidInsertionPlan thermalPlan = null;
+		LiquidEnergyColumn.ExternalLiquidInsertionPlan thermalPlan = null;
 		if (domain.thermalState != null && internalEnergy != null) {
-			List<FlipThermalState.LiquidInsertion> thermalInsertions = new ArrayList<>(pieces.size());
-			for (ChemicalInsertPiece piece : pieces) thermalInsertions.add(new FlipThermalState.LiquidInsertion(
+			List<LiquidEnergyColumn.LiquidInsertion> thermalInsertions = new ArrayList<>(pieces.size());
+			for (ChemicalInsertPiece piece : pieces) thermalInsertions.add(new LiquidEnergyColumn.LiquidInsertion(
 					piece.materialHandle(), piece.mass(), piece.mixture()));
 			thermalPlan = domain.thermalState.planExternalLiquidInsertions(thermalInsertions, internalEnergy,
 					domain.thermalMarkerContext());
@@ -534,7 +536,7 @@ final class MaterialTransferPlanner {
 
 	private record ExtractionAllocation(
 			int particle, float newVolume, double newMass, ChemicalParcelStore.SplitPlan chemicalPlan,
-			FlipThermalState.Truncation thermalPlan
+			LiquidEnergyColumn.Truncation thermalPlan
 	) { }
 
 	private record ChemicalPieceDraft(int cellX, int cellY, int cellZ, float volume, int materialHandle) { }

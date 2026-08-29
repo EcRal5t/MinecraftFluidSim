@@ -1,5 +1,8 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.LiquidEnergyColumn;
+import cc.ecisr.mmm.thermal.ThermalCarrierContext;
+
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 import cc.ecisr.mmm.chemistry.ChemicalDisplaySnapshot;
@@ -32,7 +35,7 @@ import cc.ecisr.mmm.granular.SolidCompositionPool;
 import cc.ecisr.mmm.granular.SolidCompositionRecord;
 import cc.ecisr.mmm.granular.SolidLiquidReaction;
 import cc.ecisr.mmm.granular.SolidVolume;
-import cc.ecisr.mmm.thermal.SignedDyadic;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
 import cc.ecisr.mmm.units.SolverUnitScale;
 import cc.ecisr.mmm.thermal.GranularEnergyColumn;
@@ -156,7 +159,7 @@ public final class FlipFluidDomain {
 	float lastPressureResidual;
 	boolean variableDensityActive;
 	FlipThermalState thermalState;
-	private final FlipThermalState.MarkerContext thermalMarkers;
+	private final ThermalCarrierContext thermalMarkers;
 	double[] thermalBuoyancySum;
 	double[] thermalBuoyancyVolume;
 	/** Runtime world-derived fixed-reservoir temperatures; NaN is the canonical adiabatic face. */
@@ -1842,7 +1845,7 @@ public final class FlipFluidDomain {
 					: chemicalParcels.planTruncate(marker, newVolume,
 						SolidVolume.toCellVolume(takeSvq), full ? 0.0 : newMass, takeSolverMass);
 			ChemicalMixtureRecord kept = chemicalPlan == null ? null : chemicalPlan.kept();
-			FlipThermalState.Truncation thermalPlan = planThermalTruncate(
+			LiquidEnergyColumn.Truncation thermalPlan = planThermalTruncate(
 					marker, full ? 0.0 : newMass, kept, cellTemperature);
 			if (chemicalPlan != null) moved.add(chemicalPlan.removed());
 			if (thermalPlan != null) movedEnergy = movedEnergy.add(SignedDyadic.of(thermalPlan.removedEnergy()));
@@ -1904,7 +1907,7 @@ public final class FlipFluidDomain {
 							SolidVolume.toCellVolume(takeSvq), full ? 0.0 : newMass, takeSolverMass,
 							volatileSpecies);
 			ChemicalMixtureRecord kept = chemicalPlan == null ? null : chemicalPlan.kept();
-			FlipThermalState.Truncation thermalPlan = planThermalTruncate(
+			LiquidEnergyColumn.Truncation thermalPlan = planThermalTruncate(
 					marker, full ? 0.0 : newMass, kept, cellTemperature);
 			if (chemicalPlan != null) moved.add(chemicalPlan.removed());
 			if (thermalPlan != null) movedEnergy = movedEnergy.add(SignedDyadic.of(thermalPlan.removedEnergy()));
@@ -2025,7 +2028,7 @@ public final class FlipFluidDomain {
 	}
 	private record PhaseMarkerAllocation(
 			int marker, float newVolume, double newMass, boolean fullRemoval,
-			ChemicalParcelStore.SplitPlan chemicalPlan, FlipThermalState.Truncation thermalPlan
+			ChemicalParcelStore.SplitPlan chemicalPlan, LiquidEnergyColumn.Truncation thermalPlan
 	) {
 		private PhaseMarkerAllocation(int marker, float newVolume, double newMass, boolean fullRemoval) {
 			this(marker, newVolume, newMass, fullRemoval, null, null);
@@ -2195,10 +2198,10 @@ public final class FlipFluidDomain {
 		GasThermalBlockedException(String message, Throwable cause) { super(message, cause); }
 	}
 
-	FlipThermalState.MarkerContext thermalMarkerContext() { return thermalMarkers; }
+	ThermalCarrierContext thermalMarkerContext() { return thermalMarkers; }
 
-	private FlipThermalState.MarkerContext createThermalMarkerContext() {
-		return new FlipThermalState.MarkerContext() {
+	private ThermalCarrierContext createThermalMarkerContext() {
+		return new ThermalCarrierContext() {
 			@Override public int markerCount() { return particles.count(); }
 			@Override public int cell(int marker) { return particleCellIndex(marker); }
 			@Override public int fluidMaterialHandle(int marker) { return particles.materialHandle(marker); }
@@ -2332,14 +2335,14 @@ public final class FlipFluidDomain {
 		};
 	}
 
-	FlipThermalState.Truncation planThermalTruncate(
+	LiquidEnergyColumn.Truncation planThermalTruncate(
 			int marker, double newMass, ChemicalMixtureRecord keptMixture, double previousTemperatureK
 	) {
 		return thermalState == null ? null : thermalState.planTruncate(
 				marker, newMass, keptMixture, previousTemperatureK, thermalMarkerContext());
 	}
 
-	void commitThermalTruncate(int marker, FlipThermalState.Truncation plan) {
+	void commitThermalTruncate(int marker, LiquidEnergyColumn.Truncation plan) {
 		if (thermalState != null) thermalState.commitTruncate(marker, plan);
 	}
 
@@ -5074,7 +5077,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	/** Planned per-marker truncation for one cell, applied later without re-deciding anything. */
 	private record MarkerTruncation(
 			int marker, float take, float newVolume, double newMass,
-			ChemicalParcelStore.SplitPlan chemicalPlan, FlipThermalState.Truncation thermalPlan
+			ChemicalParcelStore.SplitPlan chemicalPlan, LiquidEnergyColumn.Truncation thermalPlan
 	) { }
 
 	private record CellRemovalPlan(float removedVolume, List<MarkerTruncation> markers) { }
@@ -5106,7 +5109,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 						materialRegistry.material(particles.materialHandle(i)).id(), chemicalParcels.indicator(i),
 						take, unitScale.kilograms(previousMass - newMass), chemicalPlan.removed());
 			}
-			FlipThermalState.Truncation thermalPlan = planThermalTruncate(i, newMass,
+			LiquidEnergyColumn.Truncation thermalPlan = planThermalTruncate(i, newMass,
 					chemicalPlan == null ? null : chemicalPlan.kept(), previousTemperature);
 			if (removedMaterials != null) removedMaterials.add(
 					particles.materialHandle(i), take, previousMass - newMass);
