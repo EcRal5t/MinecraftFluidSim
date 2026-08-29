@@ -1,14 +1,24 @@
 # 代码架构重整实施进度
 
-执行 [`../archive/proposals/code-architecture-restructuring-plan.md`](../archive/proposals/code-architecture-restructuring-plan.md) 的进度与 revision 索引。本文不承担规范职责：当前约束以 architecture 与 routing 为准，细节见各提交信息。
+执行 [`../archive/proposals/code-architecture-restructuring-plan.md`](../archive/proposals/code-architecture-restructuring-plan.md) 的交付结果与 revision 索引，供后续代码审阅定位每次结构变化的范围。当前约束以 architecture 与 routing 为准；每个切片的验证门与实现细节见对应提交信息。
 
-| 日期 | 切片 | 交付 | revision |
-|---|---|---|---|
-| 2026-08-29 | 提案 | 架构重整实施提案入库（S00–S21） | `1cf9e20` |
-| 2026-08-29 | S00 | `verifyArchitecture` 静态门（import 方向/locator/包环/行数 allowlist）、`FluidDomainState` raw-bit parity 表征挂入 lifecycle 门、基线文档与 pytool 脚本 | `fc911a8` |
-| 2026-08-29 | S01 | 只读观察拆出 `DomainMetrics`/`CellInventoryReader`/`CarrierInventoryReader`；发现并避免 `gaugePressure`/`observedGaugePressure` 诊断计数合并回归；`FlipFluidDomain` −326 行 | `2e564d6` |
-| 2026-08-29 | S02 | `LiquidParticleStore` 接管 marker 主列唯一所有权（9 列 + count + capacity，逐字保真）；in-place 算法改用不逃逸 `DirectArrays` | `2ede2ff` |
-| 2026-08-29 | S03 | `carrierMutationRevision` + `CarrierMutationCoordinator`（append/swap-remove/wholesale 单入口）；结构变更点清单门；`CarrierMutationValidation` 场景；split/merge/reseed 编排留待 S11 | `bed290d` |
-| 2026-08-29 | S04a | `MarkerGridIndex`/`MarkerGridBuilder` 拆出派生 marker 网格；自审修复 wholesale 失效契约不对称；论证 `gridDirty` 的 revision 替换不可表达平流失效，暂缓 | `e74f8f2` |
-| 2026-08-29 | S04b | `MacVelocityGrid`/`PressureProjectionWorkspace`/`SurfaceTensionWorkspace` 迁出 ~340 使用点；同名局部变量/参数撞车逐点甄别；`FlipFluidDomain` 7447 行 | `56436fa` |
-| 2026-08-29 | S04c | `DomainGeometry` 接管 solid mask 与 cut-cell 几何权威所有权；尺寸留 domain（不可变身份，纯 churn 不迁移）；geometryRevision 无消费者暂不预置 | `b7ca809` |
+## 切片交付
+
+| 切片 | 交付 | revision |
+|---|---|---|
+| 提案 | 架构重整实施提案（S00–S21）入库 | `1cf9e20` |
+| S00 | `verifyArchitecture` 静态门：import 方向、静态 locator、core 包环、1000 行硬门（allowlist 逐项绑定关闭切片）；`FluidDomainState` raw-bit 逐位 parity 表征（capture→restore→capture、phase-off/on candidate→restore→capture）挂入既有 lifecycle 门；基线指标见 `docs/maintenance/architecture-baseline.md` | `fc911a8` |
+| S01 | `FlipFluidDomain` 的全部无副作用观察拆为 `DomainMetrics`、`CellInventoryReader`、`CarrierInventoryReader` 三个 package-private 类，public 签名保留为一行委托；气体压力 facade 保留原实现（`gaugePressure` 推进诊断计数，`observedGaugePressure` 是只读变体，二者不可合并） | `2e564d6` |
+| S02 | `LiquidParticleStore` 成为 marker 主列（位置×3、速度×3、体积、solver 质量、材料 handle、压力相标签 + count + capacity）的唯一所有者；初始容量、增长公式、预算异常与 swap-remove 顺序逐字迁移；reseed、平流、化学反应扫描与显示快照以 solver 内不逃逸的 `DirectArrays` 视图继续整列消费 | `2ede2ff` |
+| S03 | `carrierMutationRevision` + `CarrierMutationCoordinator`：marker 结构变更收敛为 append、swap-remove、wholesale count 三个原语，plan 绑定 revision、提交顺序固定（主列→化学列→热列→count→revision→网格失效），注册/容量/兼容性拒答全部前移到 plan 阶段；源码清单门（挂入 verifyArchitecture）钉死结构调用只出现在 coordinator；`CarrierMutationValidation` 覆盖空域、last/middle 序数、容量边界、stale plan 与 wholesale 预算场景 | `bed290d` |
+| S04a | `MarkerGridIndex`/`MarkerGridBuilder` 接管派生 marker 网格（cell 归属链与计数、逐格精确体积/质量、重构密度、压力相 occupancy 条目）；per-marker 散射环整体保留在 builder 内以维持原浮点累加顺序 | `e74f8f2` |
+| S04b | `MacVelocityGrid`、`PressureProjectionWorkspace`、`SurfaceTensionWorkspace` 接管 MAC、PCG 与表面张力三类可丢弃 workspace；`MarkerGridBuilder` 与观察 reader 改经 owner 访问网格 | `56436fa` |
+| S04c | `DomainGeometry` 接管权威 solid mask 与 cut-cell 微几何；仅有的两个写点是碰撞编辑提交与 wholesale restore | `b7ca809` |
+
+## 已定边界决策（审阅时按此为准）
+
+- `gridDirty` 保留为显式失效标志，不替换为 revision 门：它混合载体结构变更、几何编辑与每 substep 平流位置三类失效源，结构 revision 无法表达位置失效；revision 门等待输入真正可 revision 化的 workspace。
+- cell 尺寸（sizeX/Y/Z/cellCount）留在 domain 作为不可变身份，未迁入 `DomainGeometry`；`geometryRevision` 因尚无消费者而未引入。
+- 化学列的整批重建（restore 路径）与 `thermalState.restore` 是列替换而非序数变更，不受 coordinator 管辖。
+- S03 的 plan 目前在生产路径内联构造，revision 绑定的真正跨期调用方自 S05 的 transfer planner 开始出现。
+- split/merge/reseed 的 plan 化编排保留在 reseeder，待 S11 阶段化时收敛。
