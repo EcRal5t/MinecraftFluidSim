@@ -86,8 +86,7 @@ public final class FlipFluidDomain {
 	final FluidSolverConfig config;
 	final SolverUnitScale unitScale;
 	final int maximumParticleCount;
-	final boolean[] solid;
-	final FlipCutCellGeometry cutCells;
+	final DomainGeometry geometry;
 	final MarkerGridIndex markerGrid;
 	final MacVelocityGrid mac;
 	final PressureProjectionWorkspace projection;
@@ -181,14 +180,13 @@ public final class FlipFluidDomain {
 		this.maximumParticleCount = maximumParticleCount;
 		this.particles = new LiquidParticleStore(maximumParticleCount);
 		int initialParticleCapacity = Math.min(16_384, maximumParticleCount);
-		this.solid = new boolean[cellCount];
-		this.cutCells = new FlipCutCellGeometry(sizeX, sizeY, sizeZ);
+		this.geometry = new DomainGeometry(sizeX, sizeY, sizeZ, cellCount);
 		this.markerGrid = new MarkerGridIndex(cellCount, initialParticleCapacity);
 		this.pressurePhaseGeometry = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
 		this.freeSurfaceGeometry = new FlipFreeSurfaceGeometry(sizeX, sizeY, sizeZ);
 		this.particleReseeder = new FlipParticleReseeder(sizeX, sizeY, sizeZ, config.cellSize(), maximumParticleCount);
-		this.particleCollision = new FlipParticleCollision(sizeX, sizeY, sizeZ, config.cellSize(), solid, cutCells);
-		this.velocityExtrapolator = new FlipVelocityExtrapolator(sizeX, sizeY, sizeZ, cutCells);
+		this.particleCollision = new FlipParticleCollision(sizeX, sizeY, sizeZ, config.cellSize(), geometry.solid, geometry.cutCells);
+		this.velocityExtrapolator = new FlipVelocityExtrapolator(sizeX, sizeY, sizeZ, geometry.cutCells);
 		this.volume = new float[cellCount];
 		this.mac = new MacVelocityGrid(sizeX, sizeY, sizeZ);
 		this.projection = new PressureProjectionWorkspace(cellCount);
@@ -260,9 +258,9 @@ public final class FlipFluidDomain {
 		}
 		ensureGrid();
 		AirCavityScanner.Result result = sealedDomainBoundary
-				? airScanner.scanRetainingClosedLineages(solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, cutCells,
+				? airScanner.scanRetainingClosedLineages(geometry.solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, geometry.cutCells,
 						pressureGranularCoupling, state.cellNodeOrdinal(), state.nodes().size())
-				: airScanner.scan(solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, cutCells,
+				: airScanner.scan(geometry.solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, geometry.cutCells,
 						pressureGranularCoupling, false);
 		int[] expected = state.cellNodeOrdinal(), actual = result.cellNodeId();
 		boolean ventedAmbient = state.operatorVentedTopology();
@@ -622,7 +620,7 @@ public final class FlipFluidDomain {
 				granularInventory, sizeX, sizeY, sizeZ, config.cellSize());
 		granularCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
 		granularNextCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
-		granularCollision = new FlipGranularCollision(sizeX, sizeY, sizeZ, config.cellSize(), cutCells, granularDeposits,
+		granularCollision = new FlipGranularCollision(sizeX, sizeY, sizeZ, config.cellSize(), geometry.cutCells, granularDeposits,
 				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION);
 		granularCarrierMaterialByCell = new int[cellCount];
 		granularCarrierVolumeByCell = new double[cellCount];
@@ -647,7 +645,7 @@ public final class FlipFluidDomain {
 		}
 		bindGranular(registry, liquidRegistry);
 		snapshot.restoreInto(registry, granularParcels, granularDeposits, solidCompositions,
-				cell -> SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell)));
+				cell -> SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell)));
 		snapshot.externalSource().validateAgainst(registry, solidCompositions == null ? null : solidCompositions.registry());
 		snapshot.escapedSink().validateAgainst(registry, solidCompositions == null ? null : solidCompositions.registry());
 		granularExternalSource = snapshot.externalSource(); granularEscapedSink = snapshot.escapedSink();
@@ -1402,7 +1400,7 @@ public final class FlipFluidDomain {
 		}
 		ensureGrid();
 		for (int cell = 0; cell < cellCount; cell++) {
-			long geometric = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+			long geometric = SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
 			// FLIP marker clustering may transiently overfill a cell and is resolved by pressure after restore.
 			// Only fixed solid occupancy is required to fit before the solver can safely resume that projection.
 			long fixedSolid = Math.addExact(occupied[cell], phaseGranularSvq(cell));
@@ -1491,7 +1489,7 @@ public final class FlipFluidDomain {
 		int cell = cellIndexChecked(cellX, cellY, cellZ);
 		if (occupiedVolumeSvq <= 0L) throw new IllegalArgumentException("Coherent phase volume is invalid");
 		ensureGrid();
-		long geometric = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+		long geometric = SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
 		long previousCoherent = thermalState.coherentPhases().cellOccupiedSvq(cell);
 		long occupied = granularCoupling.solidSvq(cell);
 		long granular = occupied - previousCoherent;
@@ -1783,7 +1781,7 @@ public final class FlipFluidDomain {
 		long occupied = Math.addExact(Math.addExact(
 				Math.addExact(before.upperVolumeSvq(), before.lowerVolumeSvq()), phaseGranularSvq(cell)),
 				thermalState.coherentPhases().cellOccupiedSvq(cell));
-		long capacity = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+		long capacity = SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
 		long byCapacity = (capacity - occupied) / transition.lowerVolumeSvqPerBatch();
 		long high = Math.min(maximumBatches, Math.min(byGas, byCapacity));
 		if (high <= 0L) return null;
@@ -1839,7 +1837,7 @@ public final class FlipFluidDomain {
 			long occupied = Math.addExact(Math.addExact(
 					Math.addExact(before.upperVolumeSvq(), before.lowerVolumeSvq()), phaseGranularSvq(cell)),
 					thermalState.coherentPhases().cellOccupiedSvq(cell));
-			long capacity = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+			long capacity = SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
 			if (Math.addExact(occupied, addedSvq) > capacity) {
 				throw new PhaseCandidateUnavailableException("Condensation exceeds interface-cell capacity");
 			}
@@ -2059,7 +2057,7 @@ public final class FlipFluidDomain {
 				: transition.upperVolumeSvqPerBatch() - transition.lowerVolumeSvqPerBatch();
 		long occupied = Math.addExact(Math.addExact(before.lowerVolumeSvq(), before.upperVolumeSvq()),
 				phaseGranularSvq(cell));
-		long capacity = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+		long capacity = SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
 		if (signedVolumePerBatch > 0L) {
 			high = Math.min(high, (capacity - occupied) / signedVolumePerBatch);
 		}
@@ -2190,7 +2188,7 @@ public final class FlipFluidDomain {
 		}
 
 		long occupied = Math.addExact(Math.addExact(finalLowerSvq, finalUpperSvq), phaseGranularSvq(cell));
-		long capacity = SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+		long capacity = SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
 		if (occupied > capacity) {
 			throw new ThermalPhaseBlockedException("Condensed phase extent exceeds joint cell capacity");
 		}
@@ -2687,9 +2685,9 @@ public final class FlipFluidDomain {
 
 	private double thermalFaceArea(int x, int y, int z, int axis) {
 		float aperture = switch (axis) {
-			case 0 -> cutCells.xFaceOpen(x + 1, y, z);
-			case 1 -> cutCells.yFaceOpen(x, y + 1, z);
-			case 2 -> cutCells.zFaceOpen(x, y, z + 1);
+			case 0 -> geometry.cutCells.xFaceOpen(x + 1, y, z);
+			case 1 -> geometry.cutCells.yFaceOpen(x, y + 1, z);
+			case 2 -> geometry.cutCells.zFaceOpen(x, y, z + 1);
 			default -> throw new IllegalArgumentException("Unknown thermal face axis");
 		};
 		if (aperture <= 0.0F) return 0.0;
@@ -2707,7 +2705,7 @@ public final class FlipFluidDomain {
 	}
 
 	private double thermalOccupiedFaceFraction(int cell, int direction) {
-		double geometricOpen = cutCells.openCellVolume(cell);
+		double geometricOpen = geometry.cutCells.openCellVolume(cell);
 		if (!(geometricOpen > 0.0)) return 0.0;
 		double solidVolume = granularCoupling == null ? 0.0
 				: SolidVolume.toCellVolume(granularCoupling.solidSvq(cell));
@@ -2729,12 +2727,12 @@ public final class FlipFluidDomain {
 
 	private double thermalOpenFaceFraction(int x, int y, int z, int direction) {
 		return switch (direction) {
-			case 0 -> cutCells.xFaceOpen(x, y, z);
-			case 1 -> cutCells.xFaceOpen(x + 1, y, z);
-			case 2 -> cutCells.yFaceOpen(x, y, z);
-			case 3 -> cutCells.yFaceOpen(x, y + 1, z);
-			case 4 -> cutCells.zFaceOpen(x, y, z);
-			case 5 -> cutCells.zFaceOpen(x, y, z + 1);
+			case 0 -> geometry.cutCells.xFaceOpen(x, y, z);
+			case 1 -> geometry.cutCells.xFaceOpen(x + 1, y, z);
+			case 2 -> geometry.cutCells.yFaceOpen(x, y, z);
+			case 3 -> geometry.cutCells.yFaceOpen(x, y + 1, z);
+			case 4 -> geometry.cutCells.zFaceOpen(x, y, z);
+			case 5 -> geometry.cutCells.zFaceOpen(x, y, z + 1);
 			default -> throw new IllegalArgumentException("Unknown thermal boundary direction");
 		};
 	}
@@ -2819,8 +2817,8 @@ public final class FlipFluidDomain {
 		float[] positionVolume = state.positionVolume();
 		float[] particleVelocities = state.particleVelocities();
 		byte[] collisionMasks = state.collisionMicroMasks();
-		cutCells.restoreMicroMasks(collisionMasks);
-		for (int i = 0; i < cellCount; i++) solid[i] = Byte.toUnsignedInt(collisionMasks[i]) == 0xff;
+		geometry.cutCells.restoreMicroMasks(collisionMasks);
+		for (int i = 0; i < cellCount; i++) geometry.solid[i] = Byte.toUnsignedInt(collisionMasks[i]) == 0xff;
 		for (int particle = 0; particle < restoredCount; particle++) {
 			int positionBase = particle * 4, velocityBase = particle * 3;
 			particles.setPositionX(particle, positionVolume[positionBase]);
@@ -2966,7 +2964,7 @@ public final class FlipFluidDomain {
 			}
 			int cell = cellIndexChecked(edit.x(), edit.y(), edit.z());
 			if (!uniqueCells.add(cell)) throw new IllegalArgumentException("Collision batch edits one cell twice");
-			int previous = cutCells.mask(cell);
+			int previous = geometry.cutCells.mask(cell);
 			if (previous == edit.mask()) throw new IllegalArgumentException("Collision batch contains a no-op edit");
 			previousMasks[editIndex] = previous;
 			canonical.add(edit);
@@ -3026,7 +3024,7 @@ public final class FlipFluidDomain {
 				throw new IllegalStateException("Collision edits differ from their committed batch order");
 			}
 		}
-		int previous = cutCells.mask(index);
+		int previous = geometry.cutCells.mask(index);
 		if (previous == mask) return 0.0F;
 		int newlyOccupied = mask & ~previous;
 		if (newlyOccupied != 0 && granularCoupling != null && !plannedBatch) {
@@ -3043,8 +3041,8 @@ public final class FlipFluidDomain {
 				}
 			}
 		}
-		cutCells.replaceMask(index, mask);
-		solid[index] = mask == FlipCutCellGeometry.FULL_MASK;
+		geometry.cutCells.replaceMask(index, mask);
+		geometry.solid[index] = mask == FlipCutCellGeometry.FULL_MASK;
 		projection.pressure[index] = 0.0F;
 		float displaced = newlyOccupied == 0 ? 0.0F
 				: removeParticlesInMicroMask(x, y, z, newlyOccupied, chemicalDisplacement,
@@ -3174,20 +3172,20 @@ public final class FlipFluidDomain {
 		}
 	}
 
-	public boolean isSolid(int x, int y, int z) { return solid[cellIndexChecked(x, y, z)]; }
-	public int solidMicroMask(int x, int y, int z) { return cutCells.mask(cellIndexChecked(x, y, z)); }
+	public boolean isSolid(int x, int y, int z) { return geometry.solid[cellIndexChecked(x, y, z)]; }
+	public int solidMicroMask(int x, int y, int z) { return geometry.cutCells.mask(cellIndexChecked(x, y, z)); }
 	public float solidVolumeFraction(int x, int y, int z) {
-		return 1.0F - cutCells.openCellVolume(cellIndexChecked(x, y, z));
+		return 1.0F - geometry.cutCells.openCellVolume(cellIndexChecked(x, y, z));
 	}
-	public float openFaceFractionX(int x, int y, int z) { return cutCells.xFaceOpen(x, y, z); }
-	public float openFaceFractionY(int x, int y, int z) { return cutCells.yFaceOpen(x, y, z); }
-	public float openFaceFractionZ(int x, int y, int z) { return cutCells.zFaceOpen(x, y, z); }
+	public float openFaceFractionX(int x, int y, int z) { return geometry.cutCells.xFaceOpen(x, y, z); }
+	public float openFaceFractionY(int x, int y, int z) { return geometry.cutCells.yFaceOpen(x, y, z); }
+	public float openFaceFractionZ(int x, int y, int z) { return geometry.cutCells.zFaceOpen(x, y, z); }
 
 	public void setVolume(int x, int y, int z, float value) {
 		if (granularCoupling != null) ensureGrid();
 		int index = cellIndexChecked(x, y, z);
 		float requested = clamp01(value);
-		if (solid[index] && requested > 0.0F) throw new IllegalStateException("Cannot place fluid in a solid cell");
+		if (geometry.solid[index] && requested > 0.0F) throw new IllegalStateException("Cannot place fluid in a solid cell");
 		float clamped = Math.min(requested, effectiveOpenCellVolume(index));
 		int existingParticles = particleCountInCell(x, y, z);
 		int requiredParticles = particlesRequired(clamped);
@@ -3224,17 +3222,17 @@ public final class FlipFluidDomain {
 
 	private double totalGeometricOpenVolumeExact() {
 		double result = 0.0;
-		for (int cell = 0; cell < cellCount; cell++) result += cutCells.openCellVolume(cell);
+		for (int cell = 0; cell < cellCount; cell++) result += geometry.cutCells.openCellVolume(cell);
 		return result;
 	}
 
 	float effectiveOpenCellVolume(int cell) {
-		float geometric = cutCells.openCellVolume(cell);
+		float geometric = geometry.cutCells.openCellVolume(cell);
 		return granularCoupling == null ? geometric : granularCoupling.effectiveOpenCellVolume(cell, geometric);
 	}
 
 	private float pressureOpenCellVolume(int cell) {
-		float geometric = cutCells.openCellVolume(cell);
+		float geometric = geometry.cutCells.openCellVolume(cell);
 		return pressureGranularCoupling == null ? geometric
 				: pressureGranularCoupling.effectiveOpenCellVolume(cell, geometric);
 	}
@@ -3409,8 +3407,8 @@ public final class FlipFluidDomain {
 		for (int z = firstZ; z <= lastZ; z++) for (int y = firstY; y <= lastY; y++) {
 			for (int x = firstX; x <= lastX; x++) {
 				int cell = cellIndex(x, y, z);
-				if (solid[cell] || volume[cell] <= config.fluidEpsilon()) continue;
-				double geometricOpen = cutCells.openCellVolume(cell);
+				if (geometry.solid[cell] || volume[cell] <= config.fluidEpsilon()) continue;
+				double geometricOpen = geometry.cutCells.openCellVolume(cell);
 				double effectiveOpen = effectiveOpenCellVolume(cell);
 				if (!(geometricOpen > 0.0 && effectiveOpen > 0.0)) continue;
 				double poreScale = effectiveOpen / geometricOpen;
@@ -3420,7 +3418,7 @@ public final class FlipFluidDomain {
 					int openInLayer = 0;
 					for (int mz = 0; mz < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; mz++) {
 						for (int mx = 0; mx < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; mx++) {
-							if (cutCells.microCellOpen(cell, mx, my, mz)) openInLayer++;
+							if (geometry.cutCells.microCellOpen(cell, mx, my, mz)) openInLayer++;
 						}
 					}
 					double layerCapacity = openInLayer * poreScale
@@ -3435,7 +3433,7 @@ public final class FlipFluidDomain {
 					for (int my = 0; my < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; my++) {
 						if (!(layerFill[my] > 0.0)) continue;
 						for (int mx = 0; mx < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; mx++) {
-							if (!cutCells.microCellOpen(cell, mx, my, mz)) continue;
+							if (!geometry.cutCells.microCellOpen(cell, mx, my, mz)) continue;
 							double lowX = Math.max(minimumX, x * h + mx * microSize);
 							double lowY = Math.max(minimumY, y * h + my * microSize);
 							double lowZ = Math.max(minimumZ, z * h + mz * microSize);
@@ -3651,7 +3649,7 @@ public final class FlipFluidDomain {
 		if (airCellNodeId != null && !operatorVentedGasTopology) {
 			ensureGrid();
 			gasTopology = planGasTopology(airScanner.scan(
-					solid, new int[cellCount], new double[cellCount], cutCells, null, sealedDomainBoundary));
+					geometry.solid, new int[cellCount], new double[cellCount], geometry.cutCells, null, sealedDomainBoundary));
 		}
 		return new OperatorClearPlan(condensed, granular, gasTopology);
 	}
@@ -4462,7 +4460,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				granularNextCoupling.rebuild(granularParcels, granularDeposits, granularCollision::previewPosition);
 				if (!granularOccupancyFitsGeometry(granularNextCoupling)) {
 					granularCollision.resolveCapacity(granularParcels, granularCoupling,
-							cell -> SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell)));
+							cell -> SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell)));
 					granularNextCoupling.rebuild(granularParcels, granularDeposits, granularCollision::previewPosition);
 					if (!granularOccupancyFitsGeometry(granularNextCoupling)) {
 						throw new IllegalStateException("Locally resolved granular occupancy exceeds geometry");
@@ -4592,7 +4590,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		SignedDyadic thermalBeforeReseed = thermalState == null ? SignedDyadic.ZERO : exactInternalEnergy();
 		LiquidParticleStore.DirectArrays markerArrays = particles.directArrays();
 		FlipParticleReseeder.Result reseeding = particleReseeder.reseed(
-				solid,
+				geometry.solid,
 				markerArrays.positionX, markerArrays.positionY, markerArrays.positionZ,
 				markerArrays.velocityX, markerArrays.velocityY, markerArrays.velocityZ,
 				markerArrays.volume, markerArrays.mass, markerArrays.materialHandle, markerArrays.phaseLabel, chemicalParcels,
@@ -4691,16 +4689,16 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		if (granularCoupling == null || !hasGranularInventory() && !(thermalState != null
 				&& thermalState.coherentPhases().groupCount() != 0)) {
 			if (granularCoupling != null) granularCoupling.clear();
-			freeSurfaceGeometry.rebuild(solid, markerGrid.markerCount, cutCells);
+			freeSurfaceGeometry.rebuild(geometry.solid, markerGrid.markerCount, geometry.cutCells);
 			pressureGranularCoupling = null;
 		} else {
 			if (hasGranularInventory()) granularCoupling.rebuild(granularParcels, granularDeposits);
 			else granularCoupling.rebuildFixed();
 			pressureGranularCoupling = granularCoupling;
-			freeSurfaceGeometry.rebuild(solid, markerGrid.markerCount, cutCells, granularCoupling);
+			freeSurfaceGeometry.rebuild(geometry.solid, markerGrid.markerCount, geometry.cutCells, granularCoupling);
 		}
 		pressurePhaseGeometry.rebuild(
-				solid, markerGrid.markerCount, projection.pressureVolume, cutCells, pressureGranularCoupling, projection.pressureFluid);
+				geometry.solid, markerGrid.markerCount, projection.pressureVolume, geometry.cutCells, pressureGranularCoupling, projection.pressureFluid);
 		rebuildPressureBoundaryLineage();
 		rebuildSurfaceTensionPressure();
 		enforceSolidFaceVelocities();
@@ -4750,7 +4748,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private void extrapolateVelocityIntoAir() {
 		velocityExtrapolator.rebuildAndExtrapolate(
-				solid, markerGrid.markerCount,
+				geometry.solid, markerGrid.markerCount,
 				mac.velocityX, mac.velocityY, mac.velocityZ,
 				mac.velocityValidX, mac.velocityValidY, mac.velocityValidZ,
 				mac.velocityWeightX, mac.velocityWeightY, mac.velocityWeightZ
@@ -4846,9 +4844,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private void refreshGasTopology() {
 		AirCavityScanner.Result result = sealedDomainBoundary && airCellLineageNodeId != null
-				? airScanner.scanRetainingClosedLineages(solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, cutCells,
+				? airScanner.scanRetainingClosedLineages(geometry.solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, geometry.cutCells,
 						pressureGranularCoupling, airCellLineageNodeId, previousSealedNodeCount)
-				: airScanner.scan(solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, cutCells,
+				: airScanner.scan(geometry.solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, geometry.cutCells,
 						pressureGranularCoupling, sealedDomainBoundary);
 		commitGasTopology(planGasTopology(result));
 	}
@@ -4860,7 +4858,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			throw new IllegalStateException("Stable gas topology is unavailable");
 		}
 		double[] availableVolumes = airScanner.measureSealedAvailableVolumes(
-				solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, cutCells, pressureGranularCoupling,
+				geometry.solid, markerGrid.markerCount, markerGrid.exactCellMarkerVolume, geometry.cutCells, pressureGranularCoupling,
 				airCellNodeId, airCellLineageNodeId, previousSealedNodeCount, sealedDomainBoundary);
 		ArrayList<GasInventory> inventories = new ArrayList<>(previousSealedNodeCount);
 		double[] mixedEnergy = new double[previousSealedNodeCount];
@@ -5309,7 +5307,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	private long granularGeometricOpenSvq(int cell) {
-		return SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+		return SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
 	}
 
 	private GranularMechanics.Environment granularEnvironment() {
@@ -5349,7 +5347,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	private GranularDepositDynamics.Environment granularDepositEnvironment(long[] plannedSolid) {
 		return new GranularDepositDynamics.Environment() {
 			@Override public long geometricOpenSvq(int cell) {
-				return SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell));
+				return SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
 			}
 
 			@Override public boolean horizontalPathOpen(int fromCell, int directionX, int directionZ) {
@@ -5596,7 +5594,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		float validWeight = 0.0F;
 		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
 			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
-			if (!inside(x, y, z) || solid[cellIndex(x, y, z)]) continue;
+			if (!inside(x, y, z) || geometry.solid[cellIndex(x, y, z)]) continue;
 			validWeight += trilinearWeight(ox, oy, oz, fx, fy, fz);
 		}
 		if (validWeight <= 1.0E-8F) return;
@@ -5605,7 +5603,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
 			if (!inside(x, y, z)) continue;
 			int index = cellIndex(x, y, z);
-			if (!solid[index]) volume[index] += scale * trilinearWeight(ox, oy, oz, fx, fy, fz);
+			if (!geometry.solid[index]) volume[index] += scale * trilinearWeight(ox, oy, oz, fx, fy, fz);
 		}
 	}
 
@@ -5636,7 +5634,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 					double weightX = ox == 0 ? centerWeightX : neighborWeightX;
 					if (x < 0 || x >= sizeX || !(weightX > 0.0)) continue;
 					int cell = cellIndex(x, y, z);
-					if (solid[cell]) continue;
+					if (geometry.solid[cell]) continue;
 					available += weightX * weightY * weightZ;
 				}
 			}
@@ -5658,7 +5656,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 					double weightX = ox == 0 ? centerWeightX : neighborWeightX;
 					if (x < 0 || x >= sizeX || !(weightX > 0.0)) continue;
 					int cell = cellIndex(x, y, z);
-					if (solid[cell]) continue;
+					if (geometry.solid[cell]) continue;
 					projection.pressureVolume[cell] += weightX * weightY * weightZ * scale;
 				}
 			}
@@ -5799,17 +5797,17 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int air = cellIndex(x, y, z);
 			if (!isAir(air)) continue;
-			boolean touchesFluid = x > 0 && cutCells.xFaceOpen(x, y, z) > 0.0F
+			boolean touchesFluid = x > 0 && geometry.cutCells.xFaceOpen(x, y, z) > 0.0F
 					&& isFluid(cellIndex(x - 1, y, z))
-					|| x + 1 < sizeX && cutCells.xFaceOpen(x + 1, y, z) > 0.0F
+					|| x + 1 < sizeX && geometry.cutCells.xFaceOpen(x + 1, y, z) > 0.0F
 					&& isFluid(cellIndex(x + 1, y, z))
-					|| y > 0 && cutCells.yFaceOpen(x, y, z) > 0.0F
+					|| y > 0 && geometry.cutCells.yFaceOpen(x, y, z) > 0.0F
 					&& isFluid(cellIndex(x, y - 1, z))
-					|| y + 1 < sizeY && cutCells.yFaceOpen(x, y + 1, z) > 0.0F
+					|| y + 1 < sizeY && geometry.cutCells.yFaceOpen(x, y + 1, z) > 0.0F
 					&& isFluid(cellIndex(x, y + 1, z))
-					|| z > 0 && cutCells.zFaceOpen(x, y, z) > 0.0F
+					|| z > 0 && geometry.cutCells.zFaceOpen(x, y, z) > 0.0F
 					&& isFluid(cellIndex(x, y, z - 1))
-					|| z + 1 < sizeZ && cutCells.zFaceOpen(x, y, z + 1) > 0.0F
+					|| z + 1 < sizeZ && geometry.cutCells.zFaceOpen(x, y, z + 1) > 0.0F
 					&& isFluid(cellIndex(x, y, z + 1));
 			if (!touchesFluid) continue;
 			int node = gasNodeOfAirCell(air);
@@ -6332,7 +6330,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private boolean granularOccupancyFitsGeometry(GranularCouplingFields coupling) {
 		for (int cell = 0; cell < cellCount; cell++) {
-			if (coupling.solidSvq(cell) > SolidVolume.fromCellVolumeExact(cutCells.openCellVolume(cell))) return false;
+			if (coupling.solidSvq(cell) > SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell))) return false;
 		}
 		return true;
 	}
@@ -6392,7 +6390,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private void applyLiquidPairSurfaceTensionPair(int phaseB, double tensionScale, float scale) {
 		for (int index = 0; index < cellCount; index++) {
-			if (solid[index]) {
+			if (geometry.solid[index]) {
 				tension.surfaceTensionColor[index] = 0.0;
 				continue;
 			}
@@ -6403,7 +6401,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		Arrays.fill(tension.surfaceTensionPairCurvature, 0.0);
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int index = cellIndex(x, y, z);
-			if (solid[index] || markerGrid.markerCount[index] == 0) continue;
+			if (geometry.solid[index] || markerGrid.markerCount[index] == 0) continue;
 			tension.surfaceTensionPairCurvature[index] = surfaceTensionMeanCurvature(x, y, z);
 		}
 		float inverseCell = 1.0F / config.cellSize();
@@ -6453,7 +6451,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		Arrays.fill(tension.surfaceTensionPressure, 0.0F);
 		if (!surfaceTensionActive) return;
 		for (int index = 0; index < cellCount; index++) {
-			if (solid[index]) {
+			if (geometry.solid[index]) {
 				tension.surfaceTensionColor[index] = 0.0;
 				continue;
 			}
@@ -6466,7 +6464,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		rebuildSurfaceTensionNormals();
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int index = cellIndex(x, y, z);
-			if (solid[index] || markerGrid.markerCount[index] == 0) continue;
+			if (geometry.solid[index] || markerGrid.markerCount[index] == 0) continue;
 			double sigma = surfaceTensionAtCell(index);
 			if (sigma <= 0.0) continue;
 			double kappa = surfaceTensionMeanCurvature(x, y, z);
@@ -6483,7 +6481,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				int sx = x + dx, sy = y + dy, sz = z + dz;
 				if (!inside(sx, sy, sz)) continue;
 				int neighbor = cellIndex(sx, sy, sz);
-				if (solid[neighbor]) continue;
+				if (geometry.solid[neighbor]) continue;
 				sum += tension.surfaceTensionColor[neighbor];
 				count++;
 			}
@@ -6507,7 +6505,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		double epsilon = 1.0E-6 / config.cellSize();
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int index = cellIndex(x, y, z);
-			if (solid[index]) {
+			if (geometry.solid[index]) {
 				tension.surfaceTensionNormalX[index] = 0.0;
 				tension.surfaceTensionNormalY[index] = 0.0;
 				tension.surfaceTensionNormalZ[index] = 1.0;
@@ -6564,7 +6562,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		for (int[] direction : SURFACE_TENSION_DIRECTIONS) {
 			int dx = direction[0], dy = direction[1], dz = direction[2];
 			int sx = x + dx, sy = y + dy, sz = z + dz;
-			if (!inside(sx, sy, sz) || !solid[cellIndex(sx, sy, sz)]) continue;
+			if (!inside(sx, sy, sz) || !geometry.solid[cellIndex(sx, sy, sz)]) continue;
 			normalX -= dx;
 			normalY -= dy;
 			normalZ -= dz;
@@ -6603,7 +6601,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	/** Neighbor normal used in the divergence; a solid neighbour reuses the cell's own Young-adjusted normal. */
 	private double surfaceTensionNeighborNormal(int x, int y, int z, int dx, int dy, int dz, int component) {
 		int nx = x + dx, ny = y + dy, nz = z + dz;
-		if (inside(nx, ny, nz) && solid[cellIndex(nx, ny, nz)]) {
+		if (inside(nx, ny, nz) && geometry.solid[cellIndex(nx, ny, nz)]) {
 			return cachedSurfaceTensionNormal(cellIndex(x, y, z), component);
 		}
 		return cachedSurfaceTensionNormal(cellIndex(Math.min(sizeX - 1, Math.max(0, nx)),
@@ -6706,7 +6704,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	private float neighborValue(int neighbor, float[] source) { return isFluid(neighbor) && neighbor != pressureAnchor ? source[neighbor] : 0.0F; }
 	private float pressureFaceCoefficient(int fluid, int neighbor, int directionX, int directionY, int directionZ) {
 		float openArea = pressureOpenFaceFromCell(fluid, neighbor, directionX, directionY, directionZ);
-		if (openArea <= 0.0F || solid[neighbor]) return 0.0F;
+		if (openArea <= 0.0F || geometry.solid[neighbor]) return 0.0F;
 		float densityScale = variableDensityActive ? pressureDensityScale(fluid, neighbor) : 1.0F;
 		if (isFluid(neighbor)) return openArea * densityScale;
 		return openArea * densityScale
@@ -6763,12 +6761,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		int yz = cell / sizeX;
 		int y = yz % sizeY;
 		int z = yz / sizeY;
-		if (directionX < 0) return cutCells.xFaceOpen(x, y, z);
-		if (directionX > 0) return cutCells.xFaceOpen(x + 1, y, z);
-		if (directionY < 0) return cutCells.yFaceOpen(x, y, z);
-		if (directionY > 0) return cutCells.yFaceOpen(x, y + 1, z);
-		if (directionZ < 0) return cutCells.zFaceOpen(x, y, z);
-		if (directionZ > 0) return cutCells.zFaceOpen(x, y, z + 1);
+		if (directionX < 0) return geometry.cutCells.xFaceOpen(x, y, z);
+		if (directionX > 0) return geometry.cutCells.xFaceOpen(x + 1, y, z);
+		if (directionY < 0) return geometry.cutCells.yFaceOpen(x, y, z);
+		if (directionY > 0) return geometry.cutCells.yFaceOpen(x, y + 1, z);
+		if (directionZ < 0) return geometry.cutCells.zFaceOpen(x, y, z);
+		if (directionZ > 0) return geometry.cutCells.zFaceOpen(x, y, z + 1);
 		throw new IllegalArgumentException("Pressure face direction must be axial");
 	}
 
@@ -6778,31 +6776,31 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		float geometric = openFaceFromCell(cell, directionX, directionY, directionZ);
 		if (pressureGranularCoupling == null || geometric <= 0.0F) return geometric;
 		return geometric * pressureGranularCoupling.faceVoidScale(
-				cell, cutCells.openCellVolume(cell), neighbor, cutCells.openCellVolume(neighbor));
+				cell, geometry.cutCells.openCellVolume(cell), neighbor, geometry.cutCells.openCellVolume(neighbor));
 	}
 
 	private float pressureXFaceOpen(int x, int y, int z) {
-		float geometric = cutCells.xFaceOpen(x, y, z);
+		float geometric = geometry.cutCells.xFaceOpen(x, y, z);
 		if (pressureGranularCoupling == null || geometric <= 0.0F || x <= 0 || x >= sizeX) return geometric;
 		int left = cellIndex(x - 1, y, z), right = cellIndex(x, y, z);
 		return geometric * pressureGranularCoupling.faceVoidScale(
-				left, cutCells.openCellVolume(left), right, cutCells.openCellVolume(right));
+				left, geometry.cutCells.openCellVolume(left), right, geometry.cutCells.openCellVolume(right));
 	}
 
 	private float pressureYFaceOpen(int x, int y, int z) {
-		float geometric = cutCells.yFaceOpen(x, y, z);
+		float geometric = geometry.cutCells.yFaceOpen(x, y, z);
 		if (pressureGranularCoupling == null || geometric <= 0.0F || y <= 0 || y >= sizeY) return geometric;
 		int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z);
 		return geometric * pressureGranularCoupling.faceVoidScale(
-				below, cutCells.openCellVolume(below), above, cutCells.openCellVolume(above));
+				below, geometry.cutCells.openCellVolume(below), above, geometry.cutCells.openCellVolume(above));
 	}
 
 	private float pressureZFaceOpen(int x, int y, int z) {
-		float geometric = cutCells.zFaceOpen(x, y, z);
+		float geometric = geometry.cutCells.zFaceOpen(x, y, z);
 		if (pressureGranularCoupling == null || geometric <= 0.0F || z <= 0 || z >= sizeZ) return geometric;
 		int back = cellIndex(x, y, z - 1), front = cellIndex(x, y, z);
 		return geometric * pressureGranularCoupling.faceVoidScale(
-				back, cutCells.openCellVolume(back), front, cutCells.openCellVolume(front));
+				back, geometry.cutCells.openCellVolume(back), front, geometry.cutCells.openCellVolume(front));
 	}
 
 	private void applyPreconditioner(float[] source, float[] destination) {
@@ -6833,12 +6831,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	private boolean hasAirNeighbor(int x, int y, int z) {
-		return (x > 0 && cutCells.xFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x - 1, y, z)))
-				|| (x + 1 < sizeX && cutCells.xFaceOpen(x + 1, y, z) > 0.0F && isAir(cellIndex(x + 1, y, z)))
-				|| (y > 0 && cutCells.yFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x, y - 1, z)))
-				|| (y + 1 < sizeY && cutCells.yFaceOpen(x, y + 1, z) > 0.0F && isAir(cellIndex(x, y + 1, z)))
-				|| (z > 0 && cutCells.zFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x, y, z - 1)))
-				|| (z + 1 < sizeZ && cutCells.zFaceOpen(x, y, z + 1) > 0.0F && isAir(cellIndex(x, y, z + 1)));
+		return (x > 0 && geometry.cutCells.xFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x - 1, y, z)))
+				|| (x + 1 < sizeX && geometry.cutCells.xFaceOpen(x + 1, y, z) > 0.0F && isAir(cellIndex(x + 1, y, z)))
+				|| (y > 0 && geometry.cutCells.yFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x, y - 1, z)))
+				|| (y + 1 < sizeY && geometry.cutCells.yFaceOpen(x, y + 1, z) > 0.0F && isAir(cellIndex(x, y + 1, z)))
+				|| (z > 0 && geometry.cutCells.zFaceOpen(x, y, z) > 0.0F && isAir(cellIndex(x, y, z - 1)))
+				|| (z + 1 < sizeZ && geometry.cutCells.zFaceOpen(x, y, z + 1) > 0.0F && isAir(cellIndex(x, y, z + 1)));
 	}
 
 	private void projectVelocity(float dt) {
@@ -6929,15 +6927,15 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	private void enforceSolidFaceVelocities() {
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) {
 			mac.velocityX[xFaceIndex(0, y, z)] = 0.0F; mac.velocityX[xFaceIndex(sizeX, y, z)] = 0.0F;
-			for (int x = 1; x < sizeX; x++) if (cutCells.xFaceOpen(x, y, z) <= 0.0F) mac.velocityX[xFaceIndex(x, y, z)] = 0.0F;
+			for (int x = 1; x < sizeX; x++) if (geometry.cutCells.xFaceOpen(x, y, z) <= 0.0F) mac.velocityX[xFaceIndex(x, y, z)] = 0.0F;
 		}
 		for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) {
 			mac.velocityY[yFaceIndex(x, 0, z)] = 0.0F; mac.velocityY[yFaceIndex(x, sizeY, z)] = 0.0F;
-			for (int y = 1; y < sizeY; y++) if (cutCells.yFaceOpen(x, y, z) <= 0.0F) mac.velocityY[yFaceIndex(x, y, z)] = 0.0F;
+			for (int y = 1; y < sizeY; y++) if (geometry.cutCells.yFaceOpen(x, y, z) <= 0.0F) mac.velocityY[yFaceIndex(x, y, z)] = 0.0F;
 		}
 		for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			mac.velocityZ[zFaceIndex(x, y, 0)] = 0.0F; mac.velocityZ[zFaceIndex(x, y, sizeZ)] = 0.0F;
-			for (int z = 1; z < sizeZ; z++) if (cutCells.zFaceOpen(x, y, z) <= 0.0F) mac.velocityZ[zFaceIndex(x, y, z)] = 0.0F;
+			for (int z = 1; z < sizeZ; z++) if (geometry.cutCells.zFaceOpen(x, y, z) <= 0.0F) mac.velocityZ[zFaceIndex(x, y, z)] = 0.0F;
 		}
 	}
 
@@ -6958,7 +6956,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	private int firstOpenSlot(int cell, int first) {
-		int mask = cutCells.mask(cell);
+		int mask = geometry.cutCells.mask(cell);
 		for (int slot = first; slot < 8; slot++) if ((mask & 1 << slot) == 0) return slot;
 		return -1;
 	}
@@ -7004,12 +7002,12 @@ float radiusFraction = 0.45F;
 float ox = (slot & 1) == 0 ? 0.25F : 0.75F;
 float oy = (slot & 2) == 0 ? 0.25F : 0.75F;
 float oz = (slot & 4) == 0 ? 0.25F : 0.75F;
-if (cellX == 0 || solid[cellIndex(cellX - 1, cellY, cellZ)]) ox = Math.max(ox, radiusFraction);
-if (cellX + 1 == sizeX || solid[cellIndex(cellX + 1, cellY, cellZ)]) ox = Math.min(ox, 1.0F - radiusFraction);
-if (cellY == 0 || solid[cellIndex(cellX, cellY - 1, cellZ)]) oy = Math.max(oy, radiusFraction);
-if (cellY + 1 == sizeY || solid[cellIndex(cellX, cellY + 1, cellZ)]) oy = Math.min(oy, 1.0F - radiusFraction);
-if (cellZ == 0 || solid[cellIndex(cellX, cellY, cellZ - 1)]) oz = Math.max(oz, radiusFraction);
-if (cellZ + 1 == sizeZ || solid[cellIndex(cellX, cellY, cellZ + 1)]) oz = Math.min(oz, 1.0F - radiusFraction);
+if (cellX == 0 || geometry.solid[cellIndex(cellX - 1, cellY, cellZ)]) ox = Math.max(ox, radiusFraction);
+if (cellX + 1 == sizeX || geometry.solid[cellIndex(cellX + 1, cellY, cellZ)]) ox = Math.min(ox, 1.0F - radiusFraction);
+if (cellY == 0 || geometry.solid[cellIndex(cellX, cellY - 1, cellZ)]) oy = Math.max(oy, radiusFraction);
+if (cellY + 1 == sizeY || geometry.solid[cellIndex(cellX, cellY + 1, cellZ)]) oy = Math.min(oy, 1.0F - radiusFraction);
+if (cellZ == 0 || geometry.solid[cellIndex(cellX, cellY, cellZ - 1)]) oz = Math.max(oz, radiusFraction);
+if (cellZ + 1 == sizeZ || geometry.solid[cellIndex(cellX, cellY, cellZ + 1)]) oz = Math.min(oz, 1.0F - radiusFraction);
 coordinator.appendMarker(
 CarrierMutationPlan.append(carrierMutationRevision(), particles.count()),
 cellIndex(cellX, cellY, cellZ), (cellX + ox) * h, (cellY + oy) * h, (cellZ + oz) * h,
@@ -7182,7 +7180,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			for (int y = Math.max(0, centerY - maxRadius); y <= Math.min(sizeY - 1, centerY + maxRadius); y++)
 				for (int x = Math.max(0, centerX - maxRadius); x <= Math.min(sizeX - 1, centerX + maxRadius); x++) {
 					int dx = x - centerX, dy = y - centerY, dz = z - centerZ, index = cellIndex(x, y, z);
-					if (dx * dx + dy * dy + dz * dz <= radiusSquared && !solid[index]) result.add(new CellCandidate(index, dx * dx + dy * dy + dz * dz));
+					if (dx * dx + dy * dy + dz * dz <= radiusSquared && !geometry.solid[index]) result.add(new CellCandidate(index, dx * dx + dy * dy + dz * dz));
 				}
 		result.sort(Comparator.comparingInt(CellCandidate::distanceSquared));
 		return result;
@@ -7196,12 +7194,12 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 		return !particleCollision.centerInSolid(x, y, z);
 	}
 	boolean isFluid(int index) { return projection.pressureFluid[index]; }
-	private boolean isAir(int index) { return !solid[index] && !isFluid(index); }
+	private boolean isAir(int index) { return !geometry.solid[index] && !isFluid(index); }
 	private boolean faceActive(int first, int second, float openArea) {
-		return openArea > 0.0F && !solid[first] && !solid[second] && (isFluid(first) || isFluid(second));
+		return openArea > 0.0F && !geometry.solid[first] && !geometry.solid[second] && (isFluid(first) || isFluid(second));
 	}
 	private boolean carrierFaceActive(int first, int second, float openArea) {
-		return openArea > 0.0F && !solid[first] && !solid[second]
+		return openArea > 0.0F && !geometry.solid[first] && !geometry.solid[second]
 				&& (markerGrid.markerCount[first] > 0 || markerGrid.markerCount[second] > 0);
 	}
 	private float pressureInterfaceTheta(int fluid, int directionX, int directionY, int directionZ) {

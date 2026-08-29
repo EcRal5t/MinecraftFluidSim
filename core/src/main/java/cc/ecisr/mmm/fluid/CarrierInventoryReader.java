@@ -28,7 +28,7 @@ final class CarrierInventoryReader {
 		int particleCount = domain.particles.count();
 		float[] positionVolume = new float[particleCount * 4];
 		float[] velocities = new float[particleCount * 3];
-		byte[] solidMask = domain.cutCells.copyMicroMasks();
+		byte[] solidMask = domain.geometry.cutCells.copyMicroMasks();
 		for (int particle = 0; particle < particleCount; particle++) {
 			int positionBase = particle * 4;
 			int velocityBase = particle * 3;
@@ -67,7 +67,7 @@ final class CarrierInventoryReader {
 		return new FlipMaterialParticleState(
 				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), particleCount,
 				domain.totalVolumeExact(), domain.totalMass(), domain.materialRegistry.materials(),
-				positionVolume, velocities, domain.cutCells.copyMicroMasks(),
+				positionVolume, velocities, domain.geometry.cutCells.copyMicroMasks(),
 				domain.particles.copyMass(),
 				domain.particles.copyMaterialHandles()
 		);
@@ -149,7 +149,7 @@ final class CarrierInventoryReader {
 
 	/** Binary mask: 1 where a cell is entirely solid. Not interchangeable with copyCollisionMicroMasks(). */
 	byte[] copyBinarySolidMask() {
-		return domain.cutCells.copyBinaryFullMask();
+		return domain.geometry.cutCells.copyBinaryFullMask();
 	}
 
 	/**
@@ -158,7 +158,7 @@ final class CarrierInventoryReader {
 	 * the collision field is decoded as micro bits and nothing reads back as solid.
 	 */
 	byte[] copyCollisionMicroMasks() {
-		return domain.cutCells.copyMicroMasks();
+		return domain.geometry.cutCells.copyMicroMasks();
 	}
 
 	/** Actual pressure-phase occupancy, separate from the smooth P2G density. */

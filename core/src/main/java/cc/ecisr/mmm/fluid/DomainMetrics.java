@@ -87,7 +87,7 @@ final class DomainMetrics {
 	FlipFluidDomain.SolidDistribution solidDistribution() {
 		int partial = 0, full = 0;
 		for (int index = 0; index < domain.cellCount; index++) {
-			int mask = domain.cutCells.mask(index);
+			int mask = domain.geometry.cutCells.mask(index);
 			if (mask == FlipCutCellGeometry.FULL_MASK) full++;
 			else if (mask != 0) partial++;
 		}
@@ -100,7 +100,7 @@ final class DomainMetrics {
 		int x = (int) Math.floor(localX / h), y = (int) Math.floor(localY / h), z = (int) Math.floor(localZ / h);
 		if (!domain.inside(x, y, z)) return false;
 		int index = domain.cellIndex(x, y, z);
-		if (domain.solid[index] || domain.cutCells.pointInsideSolid(localX, localY, localZ, h)
+		if (domain.geometry.solid[index] || domain.geometry.cutCells.pointInsideSolid(localX, localY, localZ, h)
 				|| domain.volume[index] <= domain.config.fluidEpsilon()) return false;
 		float openVolume = domain.effectiveOpenCellVolume(index);
 		float reconstructedFill = openVolume <= 0.0F ? 0.0F : FlipFluidDomain.clamp01(domain.volume[index] / openVolume);
