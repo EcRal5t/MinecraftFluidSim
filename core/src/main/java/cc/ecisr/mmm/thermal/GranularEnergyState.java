@@ -268,12 +268,12 @@ public final class GranularEnergyState {
 		revision++;
 	}
 
-	public void restoreCoherent(List<CoherentPhaseStore.Group> groups) {
+	void restoreCoherent(List<CoherentPhaseStore.Group> groups) {
 		coherentPhases.restore(groups);
 		revision++;
 	}
 
-	public void restoreGranular(double[] activeEnergy, List<GranularEnergyColumn.DepositEnergy> deposits) {
+	void restoreGranular(double[] activeEnergy, List<GranularEnergyColumn.DepositEnergy> deposits) {
 		granularEnergy.replace(activeEnergy, deposits);
 		revision++;
 	}

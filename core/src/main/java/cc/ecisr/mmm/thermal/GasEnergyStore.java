@@ -41,15 +41,18 @@ public final class GasEnergyStore {
 	public boolean hasGasEnergy(int nodeCount) { return gasModel != null && nodeEnergy.length == nodeCount; }
 	public boolean gasModelBound() { return gasModel != null; }
 
-	public double[] nodeEnergies() { return nodeEnergy; }
+	/** Read-only snapshot of the node energies; callers can never observe later in-place commits. */
+	public double[] nodeEnergies() { return nodeEnergy.clone(); }
 
-	public void replaceNodeEnergies(double[] restored) {
+	double[] nodeEnergiesRaw() { return nodeEnergy; }
+
+	void replaceNodeEnergies(double[] restored) {
 		nodeEnergy = restored;
 		revision++;
 	}
 
 	/** Prevalidates restored node energies against the restored inventory pressures. */
-	public void validateRestoredNodeEnergies(AirNetwork network, double[] restored) {
+	void validateRestoredNodeEnergies(AirNetwork network, double[] restored) {
 		for (int node = 0; node < restored.length; node++) {
 			gasModel.absolutePressure(network.inventory(node + 1), network.availableVolume(node + 1), restored[node]);
 		}
@@ -82,7 +85,7 @@ public final class GasEnergyStore {
 		return gasModel.absolutePressure(inventory, network.availableVolume(nodeId), energy);
 	}
 
-	public void commitNodeEnergy(int nodeId, double energy) {
+	void commitNodeEnergy(int nodeId, double energy) {
 		if (nodeId <= 0 || nodeId > nodeEnergy.length || !Double.isFinite(energy)) {
 			throw new IllegalArgumentException("Gas phase energy commit is invalid");
 		}
@@ -100,7 +103,7 @@ public final class GasEnergyStore {
 		return gasModel.internalEnergyAtTemperature(inventory, insertionTemperatureK);
 	}
 
-	public GasRemapPlan planRemap(
+	GasRemapPlan planRemap(
 			AirNetwork oldNetwork, List<GasInventory> inventories, double[] availableVolumes,
 			double[] mixedEnergy, double[] inheritedAvailableVolumes,
 			double sourceEnergy, double sinkEnergy
@@ -140,7 +143,7 @@ public final class GasEnergyStore {
 		return new GasRemapPlan(result, source, sink, work, roundoff);
 	}
 
-	public void commitRemap(GasRemapPlan plan) {
+	void commitRemap(GasRemapPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Gas thermal remap plan is missing");
 		nodeEnergy = plan.nodeEnergy();
 		audit.update(ledger -> ledger.withExternalSourceEnergy(plan.sourceEnergy()).withExternalSinkEnergy(plan.sinkEnergy())
@@ -149,13 +152,13 @@ public final class GasEnergyStore {
 	}
 
 	/** Builds the already region-validated all-node gas-energy removal plan. */
-	public GasVentPlan planVent() {
+	GasVentPlan planVent() {
 		SignedDyadic removed = SignedDyadic.sum(nodeEnergy);
 		return new GasVentPlan(nodeEnergy.length, removed, audit.ledger().withExternalSinkEnergy(removed));
 	}
 
 	/** Publishes an already validated all-node gas-energy removal using assignments only. */
-	public void commitVent(GasVentPlan plan) {
+	void commitVent(GasVentPlan plan) {
 		if (plan == null || nodeEnergy.length != plan.nodeCount()
 				|| !SignedDyadic.sum(nodeEnergy).equals(plan.removedEnergy())) {
 			throw new IllegalStateException("Gas energy changed after vent planning");
@@ -167,7 +170,7 @@ public final class GasEnergyStore {
 
 	public record GasVentPlan(int nodeCount, SignedDyadic removedEnergy, ThermalAuditLedger auditAfter) { }
 
-	public AirNetwork.TransferCommit planTransfer(
+	AirNetwork.TransferCommit planTransfer(
 			int sourceNode, int targetNode, GasInventory moved,
 			GasInventory sourceAfter, GasInventory targetAfter, AirNetwork network
 	) {

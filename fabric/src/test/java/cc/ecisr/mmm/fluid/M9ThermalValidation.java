@@ -27,6 +27,7 @@ import cc.ecisr.mmm.thermal.GasThermalModel;
 import cc.ecisr.mmm.thermal.GasLiquidPhaseModel;
 import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.thermal.GranularEnergyColumn;
+import cc.ecisr.mmm.thermal.ThermalOwnerStoreValidation;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
 import cc.ecisr.mmm.units.SolverUnitScale;
@@ -83,6 +84,7 @@ public final class M9ThermalValidation {
 		reactionCommitValidatesEnergyBeforeMutation();
 		granularReactionHeatUsesOneConservedCellEnergy();
 		phasePlateauUsesTheStateFunctionGap();
+		ThermalOwnerStoreValidation.validate();
 		coherentPhaseInventoryAndExactBatchPlanning();
 		compositionAndGranularPhaseChangeConservesJointTruth();
 		phaseVolumeWorkWaitsForMechanicalProjection();
@@ -1283,22 +1285,6 @@ public final class M9ThermalValidation {
 	}
 
 	private static void coherentPhaseInventoryAndExactBatchPlanning() {
-		CoherentPhaseStore store = new CoherentPhaseStore(8, 8);
-		CoherentPhaseStore.Composition first = new CoherentPhaseStore.Composition(List.of(
-				new CoherentPhaseStore.Component("test:a", 8L),
-				new CoherentPhaseStore.Component("test:b", 4L)), Double.doubleToRawLongBits(0.25));
-		CoherentPhaseStore.Composition second = new CoherentPhaseStore.Composition(List.of(
-				new CoherentPhaseStore.Component("test:a", 8L),
-				new CoherentPhaseStore.Component("test:b", 4L)), Double.doubleToRawLongBits(0.25));
-		store.add(new CoherentPhaseStore.Group(3, "test:thermal/solid", 8L, 4.0, first, 32.0));
-		store.add(new CoherentPhaseStore.Group(3, "test:thermal/solid", 8L, 4.0, second, 32.0));
-		CoherentPhaseStore.Group removed = store.take(3, "test:thermal/solid", 8L);
-		require(store.groupCount() == 1 && store.group(0).occupiedVolumeSvq() == 8L
-				&& removed.occupiedVolumeSvq() == 8L && close(store.totalMass() + removed.mass(), 8.0)
-				&& store.exactEnergy().add(SignedDyadic.of(removed.internalEnergy())).equals(SignedDyadic.of(64.0))
-				&& removed.composition().stableAmounts().equals(Map.of("test:a", 8L, "test:b", 4L)),
-				"coherent phase merge/split did not conserve its independent inventories");
-
 		ThermalMaterialDefinition lower = new ThermalMaterialDefinition("test:thermal/lower",
 				ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID, "test:solid", 300.0, 0.0, 1.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0)));
@@ -1738,29 +1724,6 @@ public final class M9ThermalValidation {
 	}
 
 	private static void granularEnergyColumnTransactions() {
-		GranularEnergyColumn column = new GranularEnergyColumn(8, 8);
-		column.addActive(10.0); column.addActive(20.0); column.addActive(30.0);
-		GranularEnergyColumn.DepositKey first = new GranularEnergyColumn.DepositKey(1, 2, 0);
-		GranularEnergyColumn.DepositKey second = new GranularEnergyColumn.DepositKey(2, 2, 0);
-		column.addDeposit(first, 5.0); column.addDeposit(first, 5.0);
-		SignedDyadic initial = column.exactEnergy();
-		column.mergeActive(2, 0);
-		double removedActive = column.takeActivePortion(0, 1L, 4L);
-		double removedDeposit = column.takeDeposit(first, 1L, 4L);
-		column.moveDeposit(first, second, 1L, 3L);
-		SignedDyadic removed = SignedDyadic.of(removedActive).add(SignedDyadic.of(removedDeposit));
-		require(column.activeCount() == 2 && close(column.activeEnergy(0), 30.0)
-				&& close(column.activeEnergy(1), 20.0)
-				&& close(column.depositEnergy(first), 5.0)
-				&& close(column.depositEnergy(second), 2.5)
-				&& column.exactEnergy().add(removed).equals(initial),
-				"granular thermal split/merge/move did not conserve raw energy");
-		GranularEnergyColumn restored = new GranularEnergyColumn(8, 8);
-		restored.restore(column.copyActiveEnergy(), column.depositSnapshot());
-		require(restored.exactEnergy().equals(column.exactEnergy())
-				&& restored.clear().equals(column.exactEnergy()),
-				"granular thermal column handoff/clear did not preserve exact energy");
-
 		String granularFingerprint = "2".repeat(64);
 		ThermalMaterialDefinition liquid = material("test:thermal/granular_host", "test:liquid", 0.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0)));

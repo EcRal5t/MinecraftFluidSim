@@ -481,6 +481,34 @@ public final class FlipFluidDomain {
 
 	/** Commits a previously validated granular clear; no new ledger candidate is constructed here. */
 	public GranularClear commitRemoveAllGranularExact(GranularClearPlan plan) {
+		preflightGranularClear(plan);
+		return applyGranularClear(plan);
+	}
+
+	/** Publishes an already preflighted granular clear; the mutation phase has no rejections. */
+	private GranularClear applyGranularClear(GranularClearPlan plan) {
+		if (granularState == null) return new GranularClear(0L, 0.0, 0, 0);
+		if (!hasGranularInventory()) {
+			granularDepositDynamics.clear(); granularCoupling.clear(); granularNextCoupling.clear();
+			pressureGranularCoupling = null;
+			return new GranularClear(0L, 0.0, 0, 0);
+		}
+		GranularInventory.ClearStats cleared = granularState.inventory.clear();
+		granularState.escapedSink = plan.sinkAfter(); granularDepositDynamics.clear();
+		granularCoupling.clear(); granularNextCoupling.clear(); pressureGranularCoupling = null;
+		lastGranularDepositStats = new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
+		gridDirty = true;
+		return new GranularClear(cleared.solidVolumeSvq(), cleared.mass(),
+				cleared.activeParcels(), cleared.depositGroups());
+	}
+
+	/**
+	 * Reruns every fallible granular-clear check against live truth without mutating anything,
+	 * including the removed-ledger totals: {@link GranularInventory#clear} captures its stats
+	 * before erasing, so validating the ledger against the plan totals here is bit-for-bit the
+	 * check the commit used to run after the inventory was already cleared.
+	 */
+	private void preflightGranularClear(GranularClearPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Granular clear plan is missing");
 		if ((granularState == null ? 0L : granularState.mutationRevision()) != plan.granularRevision()) {
 			throw new IllegalStateException("Granular inventory changed after clear planning");
@@ -489,15 +517,13 @@ public final class FlipFluidDomain {
 			if (plan.solidVolumeSvq() != 0L || plan.activeParcels() != 0 || plan.depositGroups() != 0) {
 				throw new IllegalStateException("Granular inventory changed after clear planning");
 			}
-			return new GranularClear(0L, 0.0, 0, 0);
+			return;
 		}
 		if (!hasGranularInventory()) {
 			if (plan.solidVolumeSvq() != 0L || plan.activeParcels() != 0 || plan.depositGroups() != 0) {
 				throw new IllegalStateException("Granular inventory changed after clear planning");
 			}
-			granularDepositDynamics.clear(); granularCoupling.clear(); granularNextCoupling.clear();
-			pressureGranularCoupling = null;
-			return new GranularClear(0L, 0.0, 0, 0);
+			return;
 		}
 		if (granularState.inventory.totalSolidVolumeSvq() != plan.solidVolumeSvq()
 				|| Double.doubleToRawLongBits(granularState.inventory.totalMass()) != plan.totalMassBits()
@@ -506,20 +532,13 @@ public final class FlipFluidDomain {
 				|| granularState.deposits.groupCount() != plan.depositGroups()) {
 			throw new IllegalStateException("Granular inventory changed after clear planning");
 		}
-		GranularInventory.ClearStats cleared = granularState.inventory.clear();
 		long auditSvq = 0L; double auditMass = 0.0;
 		for (GranularAuditLedger.Entry entry : plan.removed().entries()) {
 			auditSvq = Math.addExact(auditSvq, entry.solidVolumeSvq()); auditMass += entry.mass();
 		}
-		if (auditSvq != cleared.solidVolumeSvq() || !massClose(auditMass, cleared.mass())) {
+		if (auditSvq != plan.solidVolumeSvq() || !massClose(auditMass, Double.longBitsToDouble(plan.totalMassBits()))) {
 			throw new IllegalStateException("Granular clear audit differs from removed inventory");
 		}
-		granularState.escapedSink = plan.sinkAfter(); granularDepositDynamics.clear();
-		granularCoupling.clear(); granularNextCoupling.clear(); pressureGranularCoupling = null;
-		lastGranularDepositStats = new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
-		gridDirty = true;
-		return new GranularClear(cleared.solidVolumeSvq(), cleared.mass(),
-				cleared.activeParcels(), cleared.depositGroups());
 	}
 
 	/** Thermal U held by the granular carriers; the lifecycle plan binds it raw-bit exact. */
@@ -3133,6 +3152,12 @@ public final class FlipFluidDomain {
 
 	/** Commits a jointly prevalidated liquid/coherent clear and records only the energy actually removed. */
 	public CondensedClear commitRemoveAllCondensedExact(CondensedClearPlan plan) {
+		preflightCondensedClear(plan);
+		return applyCondensedClear(plan);
+	}
+
+	/** Reruns every fallible condensed-clear check against live truth without mutating anything. */
+	private void preflightCondensedClear(CondensedClearPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Condensed clear plan is missing");
 		if (carrierMutationRevision() != plan.mutationRevision()
 				|| (chemicalParcels == null ? 0L : chemicalParcels.mutationRevision()) != plan.chemicalRevision()) {
@@ -3157,11 +3182,15 @@ public final class FlipFluidDomain {
 				: thermalState.coherentPhases().totalMass()) != plan.coherentMassBits()) {
 			throw new IllegalStateException("Coherent phase inventory changed after condensed clear planning");
 		}
+	}
+
+	/** Publishes an already preflighted condensed clear; the mutation phase has no rejections. */
+	private CondensedClear applyCondensedClear(CondensedClearPlan plan) {
 		if (chemicalParcels != null) {
 			chemicalParcels.recordEscapedSink(plan.drained());
 		}
 		if (thermalState != null) {
-			thermalState.recordExternalSink(liquid.internalEnergy());
+			thermalState.recordExternalSink(plan.liquid().internalEnergy());
 			thermalState.clearCoherentExternal(plan.coherentGroups(), plan.coherentEnergy());
 		}
 		coordinator.clearLiquidMarkers(
@@ -3177,11 +3206,18 @@ public final class FlipFluidDomain {
 		return lifecyclePlanner.planOperatorClear();
 	}
 
-	/** Clears all condensed owners and publishes the already-planned retained-gas topology. */
+	/**
+	 * Clears all condensed owners and publishes the already-planned retained-gas topology.
+	 * Every sub-plan is preflighted against live truth before the first owner mutates, so a
+	 * stale granular or gas plan can never leave the condensed side already cleared.
+	 */
 	public OperatorClear commitOperatorClear(OperatorClearPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Operator clear plan is missing");
-		CondensedClear condensed = commitRemoveAllCondensedExact(plan.condensed());
-		GranularClear granular = commitRemoveAllGranularExact(plan.granular());
+		preflightCondensedClear(plan.condensed());
+		preflightGranularClear(plan.granular());
+		if (plan.gasTopology != null) gasTopologyCoordinator.preflight(plan.gasTopology);
+		CondensedClear condensed = applyCondensedClear(plan.condensed());
+		GranularClear granular = applyGranularClear(plan.granular());
 		if (plan.gasTopology != null) gasTopologyCoordinator.commit(plan.gasTopology);
 		return new OperatorClear(condensed, granular);
 	}
@@ -5136,6 +5172,47 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			commitThermalTruncate(i, entry.thermalPlan());
 			if (particles.volume(i) <= 1.0E-6F) removeParticle(i);
 		}
+	}
+
+	/**
+	 * Removes up to {@code amount} across the candidate cells as one joint audited removal: every
+	 * cell is planned against the shared escaped-sink ledger first, the joint ledger is validated
+	 * once, and only then are truncations applied and drained markers swept. A rejection on any
+	 * cell therefore leaves every marker untouched.
+	 */
+	float removeVolumeAcrossCells(java.util.List<CellCandidate> candidates, float amount) {
+		ChemicalTransferLedger.Builder removedChemistry = chemicalParcels == null ? null
+				: ChemicalTransferLedger.builder(chemicalParcels.registry());
+		record PlannedCell(int x, int y, int z, CellRemovalPlan plan) { }
+		List<PlannedCell> planned = new ArrayList<>();
+		float remaining = amount;
+		for (CellCandidate candidate : candidates) {
+			int index = candidate.index();
+			int x = index % sizeX, yz = index / sizeX, y = yz % sizeY, z = yz / sizeY;
+			CellRemovalPlan plan = planRemoveParticlesInCell(x, y, z, remaining, removedChemistry, null, null);
+			if (!plan.markers().isEmpty()) planned.add(new PlannedCell(x, y, z, plan));
+			remaining -= plan.removedVolume();
+			if (remaining <= 1.0E-6F) break;
+		}
+		if (removedChemistry != null) chemicalParcels.requireCanRecordEscapedSink(removedChemistry.build());
+		for (PlannedCell cell : planned) {
+			int dirtyCell = cellIndex(cell.x(), cell.y(), cell.z());
+			for (MarkerTruncation entry : cell.plan().markers()) {
+				int i = entry.marker();
+				if (chemicalParcels != null) {
+					chemicalParcels.markDirtyCell(dirtyCell);
+					if (entry.newVolume() > 0.0F) chemicalParcels.commitTruncate(i, entry.chemicalPlan());
+				}
+				particles.setVolume(i, entry.newVolume());
+				particles.setMass(i, entry.newMass());
+				commitThermalTruncate(i, entry.thermalPlan());
+			}
+		}
+		for (int marker = particles.count() - 1; marker >= 0; marker--) {
+			if (particles.volume(marker) == 0.0F) removeParticle(marker);
+		}
+		if (removedChemistry != null) chemicalParcels.recordEscapedSink(removedChemistry.build());
+		return amount - remaining;
 	}
 
 	/**

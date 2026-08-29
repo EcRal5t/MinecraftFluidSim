@@ -7,7 +7,10 @@ import cc.ecisr.mmm.granular.GranularParcelStore;
 import cc.ecisr.mmm.granular.GranularTransferLedger;
 import cc.ecisr.mmm.granular.SolidCompositionRecord;
 import cc.ecisr.mmm.granular.SolidVolume;
+import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
+import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.thermal.GranularEnergyColumn;
+import cc.ecisr.mmm.thermal.ThermalCarrierContext;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -175,22 +178,35 @@ final class GranularTransferPlanner {
 		}
 		GranularAuditLedger sourceAfter = externalSource ? granular.externalSource.plus(
 				ledger, granular.registry, granular.compositions == null ? null : granular.compositions.registry()) : granular.externalSource;
-		int originalCount = granular.parcels.count(); ArrayList<Integer> createdCompositions = new ArrayList<>(reactiveDrafts);
+		int originalCount = granular.parcels.count();
+		// Planning must not touch the live parcel store: a failed candidate would still advance
+		// the parcel mutation revision and invalidate unrelated in-flight plans. Compositions are
+		// reserved first (their pool has no revision, so create/release rollback is invisible),
+		// the thermal insertion plan runs against a draft overlay of the carrier context, and the
+		// parcel store only mutates in the rejection-free commit phase below.
+		int[] compositionByDraft = new int[drafts.size()];
+		ArrayList<Integer> createdCompositions = new ArrayList<>(reactiveDrafts);
 		double[] thermalInsertions = null;
 		try {
-			for (GranularParcelDraft draft : drafts) {
-				int compositionHandle = draft.composition() == null ? 0 : granular.compositions.create(draft.composition());
-				if (compositionHandle != 0) createdCompositions.add(compositionHandle);
-				granular.parcels.add(new GranularParcelStore.Parcel(
-						draft.x(), draft.y(), draft.z(), 0.0F, 0.0F, 0.0F,
-						draft.solidVolumeSvq(), draft.mass(), draft.materialHandle(), compositionHandle, 0, (byte) 0));
+			for (int index = 0; index < drafts.size(); index++) {
+				GranularParcelDraft draft = drafts.get(index);
+				if (draft.composition() != null) {
+					compositionByDraft[index] = granular.compositions.create(draft.composition());
+					createdCompositions.add(compositionByDraft[index]);
+				}
 			}
-			if (domain.thermalState != null) thermalInsertions = domain.thermalState.planExternalActiveInsertions(originalCount,
-					granular.parcels.count() - originalCount, domain.thermalMarkerContext());
+			if (domain.thermalState != null) thermalInsertions = domain.thermalState.planExternalActiveInsertions(
+					originalCount, drafts.size(),
+					new DraftParcelContext(domain.thermalMarkerContext(), drafts, compositionByDraft));
 		} catch (RuntimeException failure) {
-			while (granular.parcels.count() > originalCount) granular.parcels.removeSwap(granular.parcels.count() - 1);
 			for (int handle : createdCompositions) if (granular.compositions.isLive(handle)) granular.compositions.release(handle);
 			throw failure;
+		}
+		for (int index = 0; index < drafts.size(); index++) {
+			GranularParcelDraft draft = drafts.get(index);
+			granular.parcels.add(new GranularParcelStore.Parcel(
+					draft.x(), draft.y(), draft.z(), 0.0F, 0.0F, 0.0F,
+					draft.solidVolumeSvq(), draft.mass(), draft.materialHandle(), compositionByDraft[index], 0, (byte) 0));
 		}
 		if (domain.thermalState != null) domain.thermalState.commitExternalActiveInsertions(thermalInsertions);
 		boolean[] changedCells = new boolean[domain.cellCount];
@@ -295,6 +311,12 @@ final class GranularTransferPlanner {
 		}
 		GranularAuditLedger sinkAfter = escapedSink ? granular.escapedSink.plus(
 				transfer, granular.registry, granular.compositions == null ? null : granular.compositions.registry()) : granular.escapedSink;
+		// Every fallible aggregation completes before the first granular or thermal mutation:
+		// the removed thermal energy is summed from the previews so an overflow can still reject
+		// the whole extraction instead of firing after parcels and deposits already changed.
+		double removedEnergy = 0.0;
+		for (GranularRemoval removal : removals) removedEnergy += removal.internalEnergy();
+		if (!Double.isFinite(removedEnergy)) throw new ArithmeticException("Granular extraction thermal energy overflow");
 		for (GranularRemoval removal : removals) if (removal.deposit()) {
 			granular.deposits.take(removal.cell(), removal.materialHandle(), removal.compositionHandle(), removal.solidVolumeSvq());
 			if (domain.thermalState != null) domain.thermalState.commitExternalDepositTake(new GranularEnergyColumn.DepositKey(
@@ -325,9 +347,6 @@ final class GranularTransferPlanner {
 			domain.markGranularExternalChange(removal.cell()); changedCells[removal.cell()] = true;
 		}
 		granular.escapedSink = sinkAfter;
-		double removedEnergy = 0.0;
-		for (GranularRemoval removal : removals) removedEnergy += removal.internalEnergy();
-		if (!Double.isFinite(removedEnergy)) throw new ArithmeticException("Granular extraction thermal energy overflow");
 		return new FlipFluidDomain.GranularExtraction(true, transfer, removedEnergy, null);
 	}
 
@@ -400,6 +419,60 @@ final class GranularTransferPlanner {
 				composition = new SolidCompositionRecord(handles, amounts, Double.doubleToRawLongBits(residual));
 			}
 			return new GranularTransferLedger.Group(materialId, svq, mass, composition);
+		}
+	}
+
+	/**
+	 * Thermal carrier context that overlays the not-yet-inserted granular drafts onto the live
+	 * marker context, so external-insertion planning can prevalidate the parcels before the
+	 * parcel store itself mutates. Everything else delegates to the live context.
+	 */
+	private record DraftParcelContext(
+			ThermalCarrierContext base, List<GranularParcelDraft> drafts, int[] compositionByDraft
+	) implements ThermalCarrierContext {
+		private int draftOrdinal(int ordinal) {
+			int live = base.activeParcelCount();
+			if (ordinal < live || ordinal >= live + drafts.size()) {
+				throw new IllegalArgumentException("Granular draft overlay ordinal is outside the plan");
+			}
+			return ordinal - live;
+		}
+		@Override public int markerCount() { return base.markerCount(); }
+		@Override public int cell(int marker) { return base.cell(marker); }
+		@Override public int fluidMaterialHandle(int marker) { return base.fluidMaterialHandle(marker); }
+		@Override public double mass(int marker) { return base.mass(marker); }
+		@Override public double volume(int marker) { return base.volume(marker); }
+		@Override public ChemicalMixtureRecord mixture(int marker) { return base.mixture(marker); }
+		@Override public ChemicalRegistry chemicalRegistry() { return base.chemicalRegistry(); }
+		@Override public int granularMaterialCount() { return base.granularMaterialCount(); }
+		@Override public String granularRegistryFingerprint() { return base.granularRegistryFingerprint(); }
+		@Override public String granularMaterialId(int materialHandle) { return base.granularMaterialId(materialHandle); }
+		@Override public int activeParcelCount() { return base.activeParcelCount() + drafts.size(); }
+		@Override public int activeParcelCell(int ordinal) {
+			return ordinal < base.activeParcelCount() ? base.activeParcelCell(ordinal)
+					: drafts.get(draftOrdinal(ordinal)).cell();
+		}
+		@Override public int activeParcelMaterial(int ordinal) {
+			return ordinal < base.activeParcelCount() ? base.activeParcelMaterial(ordinal)
+					: drafts.get(draftOrdinal(ordinal)).materialHandle();
+		}
+		@Override public int activeParcelComposition(int ordinal) {
+			return ordinal < base.activeParcelCount() ? base.activeParcelComposition(ordinal)
+					: compositionByDraft[draftOrdinal(ordinal)];
+		}
+		@Override public long activeParcelSvq(int ordinal) {
+			return ordinal < base.activeParcelCount() ? base.activeParcelSvq(ordinal)
+					: drafts.get(draftOrdinal(ordinal)).solidVolumeSvq();
+		}
+		@Override public double activeParcelMass(int ordinal) {
+			return ordinal < base.activeParcelCount() ? base.activeParcelMass(ordinal)
+					: drafts.get(draftOrdinal(ordinal)).mass();
+		}
+		@Override public List<GranularEnergyColumn.DepositKey> depositKeys() { return base.depositKeys(); }
+		@Override public long depositSvq(GranularEnergyColumn.DepositKey key) { return base.depositSvq(key); }
+		@Override public double depositMass(GranularEnergyColumn.DepositKey key) { return base.depositMass(key); }
+		@Override public Map<String, Long> solidComposition(int compositionHandle) {
+			return base.solidComposition(compositionHandle);
 		}
 	}
 

@@ -240,15 +240,9 @@ final class MaterialTransferPlanner {
 	float removeVolumeNear(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
 		domain.validateVolumeEdit(amount, maxRadius);
 		if (domain.hasPendingPhaseVolumeWork()) return 0.0F;
-		float remaining = amount;
-		for (FlipFluidDomain.CellCandidate candidate : domain.nearbyCells(centerX, centerY, centerZ, maxRadius)) {
-			int index = candidate.index();
-			int x = index % domain.sizeX, yz = index / domain.sizeX, y = yz % domain.sizeY, z = yz / domain.sizeY;
-			remaining -= domain.removeParticlesInCell(x, y, z, remaining);
-			if (remaining <= 1.0E-6F) break;
-		}
+		float removed = domain.removeVolumeAcrossCells(domain.nearbyCells(centerX, centerY, centerZ, maxRadius), amount);
 		domain.gridDirty = true;
-		return amount - remaining;
+		return removed;
 	}
 
 	FlipFluidDomain.ExactChemicalTransfer extractChemical(

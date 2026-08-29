@@ -116,6 +116,32 @@ public final class ThermalDomainState {
 
 	public ThermalRegistry registry() { return registry; }
 	public ThermalAuditState audit() { return auditState; }
+	public ThermalAuditLedger auditLedger() { return auditState.ledger(); }
+
+	// ---- fluid reseeder / restore / capture seams (all revision-bumping coordinated edits) ----
+
+	public void mergeReseedLiquidEnergy(int target, int source) { liquidEnergy.mergeReseedEnergy(target, source); }
+
+	public void assignReseededLiquidEnergies(int source, double sourceEnergy, int destination, double destinationEnergy) {
+		liquidEnergy.assignReseededEnergies(source, sourceEnergy, destination, destinationEnergy);
+	}
+
+	public void moveReseedLiquidEnergy(int source, int destination) { liquidEnergy.moveEnergy(source, destination); }
+
+	public void restoreLiquidEnergies(double[] restored) { liquidEnergy.adoptRestored(restored); }
+
+	public void restoreGasEnergies(AirNetwork network, double[] restored) {
+		gasState.validateRestoredNodeEnergies(network, restored);
+		gasState.replaceNodeEnergies(restored);
+	}
+
+	public void restoreThermalCoherent(List<CoherentPhaseStore.Group> groups) { granularState.restoreCoherent(groups); }
+
+	public void restoreThermalGranular(double[] activeEnergy, List<GranularEnergyColumn.DepositEnergy> deposits) {
+		granularState.restoreGranular(activeEnergy, deposits);
+	}
+
+	public void restoreAuditLedger(ThermalAuditLedger ledger) { auditState.replace(ledger); }
 	public LiquidEnergyColumn liquid() { return liquidEnergy; }
 	public GranularEnergyState granular() { return granularState; }
 	public GasEnergyStore gas() { return gasState; }
@@ -209,7 +235,7 @@ public final class ThermalDomainState {
 		double total = liquidEnergy.totalEnergy(count);
 		for (CoherentPhaseStore.Group group : granularState.coherentPhases().snapshot()) total += group.internalEnergy();
 		total += granularState.column().exactEnergy().toDouble();
-		for (double energy : gasState.nodeEnergies()) total += energy;
+		for (double energy : gasState.nodeEnergiesRaw()) total += energy;
 		return total;
 	}
 
