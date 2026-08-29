@@ -96,6 +96,7 @@ public final class FlipFluidDomain {
 	private final GranularTransferPlanner granularTransferPlanner;
 	private final DomainInventoryLifecyclePlanner lifecyclePlanner;
 	final GasTopologyCoordinator gasTopologyCoordinator;
+	private final GasLifecyclePlanner gasLifecyclePlanner;
 	private final FlipPressurePhaseGeometry pressurePhaseGeometry;
 	final FlipFreeSurfaceGeometry freeSurfaceGeometry;
 	private final FlipParticleReseeder particleReseeder;
@@ -195,6 +196,7 @@ public final class FlipFluidDomain {
 		this.granularTransferPlanner = new GranularTransferPlanner(this);
 		this.lifecyclePlanner = new DomainInventoryLifecyclePlanner(this);
 		this.gasTopologyCoordinator = new GasTopologyCoordinator(this);
+		this.gasLifecyclePlanner = new GasLifecyclePlanner(this);
 	}
 
 	public int sizeX() { return sizeX; }
@@ -3160,28 +3162,12 @@ public final class FlipFluidDomain {
 
 	/** Prevalidates an operator vent without treating ambient as inventory. */
 	public OperatorGasVentPlan planOperatorVentSealedGas() {
-		return clearPlanner.planVent();
+		return gasLifecyclePlanner.planVent();
 	}
 
 	/** Converts every sealed cell to inventory-free ambient topology and books gas plus U to sinks. */
 	public OperatorGasVent commitOperatorVentSealedGas(OperatorGasVentPlan plan) {
-		if (plan == null || gasState.network.nodeCount() != plan.nodeCount()
-				|| !gasState.network.sealedInventory().equals(plan.removed())) {
-			throw new IllegalStateException("Sealed gas inventory changed after vent planning");
-		}
-		if (plan.thermalPlan() != null) thermalState.commitGasVent(plan.thermalPlan());
-		gasState.network.commitRemapNodes(plan.gasPlan());
-		if (gasState.cellNodeId != null) for (int cell = 0; cell < gasState.cellNodeId.length; cell++) {
-			if (gasState.cellNodeId[cell] > 0) gasState.cellNodeId[cell] = AirNetwork.AMBIENT_NODE;
-		}
-		if (gasState.cellLineageNodeId != null) for (int cell = 0; cell < gasState.cellLineageNodeId.length; cell++) {
-			if (gasState.cellLineageNodeId[cell] > 0) gasState.cellLineageNodeId[cell] = AirNetwork.AMBIENT_NODE;
-		}
-		gasState.previousSealedNodeCount = 0;
-		gasState.pressureActive = false;
-		gasState.operatorVentedTopology = true;
-		return new OperatorGasVent(plan.removed(), plan.thermalPlan() == null
-				? SignedDyadic.ZERO : plan.thermalPlan().removedEnergy(), plan.nodeCount());
+		return gasLifecyclePlanner.commitVent(plan);
 	}
 
 
