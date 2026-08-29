@@ -73,7 +73,7 @@ import java.math.BigInteger;
  */
 public final class FlipFluidDomain {
 	private static final int PARTICLES_PER_FULL_CELL = 8;
-	private static final float PARTICLE_VOLUME = 1.0F / PARTICLES_PER_FULL_CELL;
+	static final float PARTICLE_VOLUME = 1.0F / PARTICLES_PER_FULL_CELL;
 	private static final float FLIP_RATIO = 0.90F;
 	private static final int DEFAULT_MAX_PARTICLES = 262_144;
 	private static final int NO_PHASE = Integer.MIN_VALUE;
@@ -91,6 +91,7 @@ public final class FlipFluidDomain {
 	final MacVelocityGrid mac;
 	final PressureProjectionWorkspace projection;
 	final SurfaceTensionWorkspace tension;
+	private final MaterialTransferPlanner transferPlanner;
 	private final FlipPressurePhaseGeometry pressurePhaseGeometry;
 	final FlipFreeSurfaceGeometry freeSurfaceGeometry;
 	private final FlipParticleReseeder particleReseeder;
@@ -202,6 +203,7 @@ public final class FlipFluidDomain {
 		this.cellInventory = new CellInventoryReader(this);
 		this.carriers = new CarrierInventoryReader(this);
 		this.coordinator = new CarrierMutationCoordinator(this);
+		this.transferPlanner = new MaterialTransferPlanner(this);
 	}
 
 	public int sizeX() { return sizeX; }
@@ -3883,124 +3885,43 @@ public final class FlipFluidDomain {
 				Double.valueOf(internalEnergy));
 	}
 
-	private ExactMixtureTransfer tryInsertExactMixture(
+	private FlipFluidDomain.ExactMixtureTransfer tryInsertExactMixture(
 			int centerX, int centerY, int centerZ, List<MaterialPortion> portions, int maxRadius,
 			boolean externalSource, Double internalEnergy
 	) {
-		if (portions == null || portions.isEmpty()) throw new IllegalArgumentException("Mixture insertion is empty");
-		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
-		java.util.Set<Integer> materialHandles = new java.util.HashSet<>();
-		for (MaterialPortion portion : portions) {
-			validateMaterialPortion(portion);
-			if (!materialHandles.add(portion.materialHandle())) {
-				throw new IllegalArgumentException("Mixture insertion contains duplicate material handle "
-						+ portion.materialHandle());
-			}
-		}
-		double[] exactCellVolume = exactCellVolumes();
-		java.util.List<InsertAllocation> plan = new java.util.ArrayList<>();
-		long requiredMarkers = 0L;
-		List<CellCandidate> nearby = nearbyCells(centerX, centerY, centerZ, maxRadius);
-		for (int portionIndex = 0; portionIndex < portions.size(); portionIndex++) {
-			MaterialPortion portion = portions.get(portionIndex);
-			double remaining = portion.volume();
-			for (CellCandidate candidate : nearby) {
-				if (remaining <= 0.0) break;
-				int index = candidate.index();
-				double capacity = Math.max(0.0, effectiveOpenCellVolume(index) - exactCellVolume[index]);
-				double allocate = Math.min(capacity, remaining);
-				if (allocate <= 0.0) continue;
-				requiredMarkers += (long) Math.ceil(allocate / PARTICLE_VOLUME);
-				if (particles.count() + requiredMarkers > maximumParticleCount) {
-					return new ExactMixtureTransfer(false, List.of());
-				}
-				int x = index % sizeX, yz = index / sizeX, y = yz % sizeY, z = yz / sizeY;
-				plan.add(new InsertAllocation(x, y, z, allocate, portion.materialHandle(), portionIndex));
-				exactCellVolume[index] += allocate;
-				remaining -= allocate;
-			}
-			if (remaining > 0.0) return new ExactMixtureTransfer(false, List.of());
-		}
-
-		double[] inserted = new double[portions.size()];
-		double[] insertedMass = new double[portions.size()];
-		double[] volumeLeft = new double[portions.size()];
-		double[] massLeft = new double[portions.size()];
-		for (int i = 0; i < portions.size(); i++) {
-			volumeLeft[i] = portions.get(i).volume();
-			massLeft[i] = portions.get(i).mass();
-		}
-		List<MaterialInsertPiece> insertPieces = new ArrayList<>();
-		long plannedChemicalQuanta = 0L;
-		for (InsertAllocation allocation : plan) {
-			int portionIndex = allocation.portionIndex();
-			double left = allocation.amount();
-			int slot = firstOpenSlot(cellIndex(allocation.x(), allocation.y(), allocation.z()), 0);
-			while (left > 0.0) {
-				boolean allocationRemainder = left < PARTICLE_VOLUME;
-				float piece = allocationRemainder ? (float) left : PARTICLE_VOLUME;
-				if (slot < 0) throw new IllegalStateException("Cut-cell open volume was exhausted while spawning markers");
-				boolean finalPortionPiece = volumeLeft[portionIndex] - piece
-						<= Math.ulp((float) volumeLeft[portionIndex]);
-				double pieceMass = finalPortionPiece ? massLeft[portionIndex]
-						: massLeft[portionIndex] * piece / volumeLeft[portionIndex];
-				ChemicalMixtureRecord chemical = chemicalParcels == null ? null : chemicalParcels.defaultRecord(
-						materialRegistry.material(allocation.materialHandle()).id(), piece, config.cellSize(), pieceMass, false);
-				if (chemical != null) plannedChemicalQuanta = Math.addExact(plannedChemicalQuanta, chemical.totalQuanta());
-				insertPieces.add(new MaterialInsertPiece(allocation.x(), allocation.y(), allocation.z(), slot, piece,
-						allocation.materialHandle(), pieceMass, chemical));
-				inserted[portionIndex] += piece;
-				insertedMass[portionIndex] += pieceMass;
-				left = allocationRemainder ? 0.0 : left - piece;
-				if (finalPortionPiece) {
-					volumeLeft[portionIndex] = 0.0;
-					massLeft[portionIndex] = 0.0;
-				} else {
-					volumeLeft[portionIndex] -= piece;
-					massLeft[portionIndex] -= pieceMass;
-				}
-				slot = firstOpenSlot(cellIndex(allocation.x(), allocation.y(), allocation.z()), slot + 1);
-			}
-		}
-		if (chemicalParcels != null && Math.addExact(chemicalParcels.totalQuanta(), plannedChemicalQuanta)
-				> ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
-			return new ExactMixtureTransfer(false, List.of());
-		}
-		ChemicalTransferLedger externalAddition = ChemicalTransferLedger.EMPTY;
-		if (externalSource && chemicalParcels != null) {
-			try {
-				ChemicalTransferLedger.Builder source = ChemicalTransferLedger.builder(chemicalParcels.registry());
-				for (MaterialInsertPiece piece : insertPieces) source.add(
-						materialRegistry.material(piece.materialHandle()).id(), false,
-						piece.volume(), unitScale.kilograms(piece.mass()), piece.chemical());
-				externalAddition = source.build();
-				chemicalParcels.requireCanRecordExternalSource(externalAddition);
-			} catch (IllegalArgumentException | ArithmeticException refusedAudit) {
-				return new ExactMixtureTransfer(false, List.of());
-			}
-		}
-		FlipThermalState.ExternalLiquidInsertionPlan thermalPlan = null;
-		if (thermalState != null && internalEnergy != null) {
-			List<FlipThermalState.LiquidInsertion> thermalInsertions = new ArrayList<>(insertPieces.size());
-			for (MaterialInsertPiece piece : insertPieces) thermalInsertions.add(new FlipThermalState.LiquidInsertion(
-					piece.materialHandle(), piece.mass(), piece.chemical()));
-			thermalPlan = thermalState.planExternalLiquidInsertions(thermalInsertions, internalEnergy,
-					thermalMarkerContext());
-		}
-		int firstInsertedOrdinal = particles.count();
-		for (MaterialInsertPiece piece : insertPieces) {
-			spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), piece.slot(), piece.volume(),
-					piece.materialHandle(), piece.mass(), piece.chemical(), false, thermalPlan == null);
-		}
-		if (thermalPlan != null) thermalState.commitExternalLiquidInsertions(firstInsertedOrdinal, thermalPlan);
-		if (!externalAddition.isEmpty()) chemicalParcels.recordExternalSource(externalAddition);
-		gridDirty = true;
-		List<MaterialPortion> result = new java.util.ArrayList<>(portions.size());
-		for (int i = 0; i < portions.size(); i++) {
-			result.add(new MaterialPortion(portions.get(i).materialHandle(), inserted[i], insertedMass[i]));
-		}
-		return new ExactMixtureTransfer(true, List.copyOf(result), internalEnergy == null ? 0.0 : internalEnergy);
+		return transferPlanner.insertMixture(centerX, centerY, centerZ, portions, maxRadius,
+				externalSource, internalEnergy);
 	}
+
+	private record ExtractionAllocation(
+			int particle, float newVolume, double newMass, ChemicalParcelStore.SplitPlan chemicalPlan,
+			FlipThermalState.Truncation thermalPlan
+	) { }
+	private static final class RemovedMaterialLedger {
+		private final double[] volume;
+		private final double[] mass;
+		private RemovedMaterialLedger(int materialCount) {
+			volume = new double[materialCount]; mass = new double[materialCount];
+		}
+		private void add(int material, double addedVolume, double addedMass) {
+			volume[material] += addedVolume; mass[material] += addedMass;
+		}
+		private List<MaterialPortion> build() {
+			ArrayList<MaterialPortion> result = new ArrayList<>();
+			for (int material = 0; material < volume.length; material++) if (volume[material] > 0.0) {
+				if (!(Double.isFinite(mass[material]) && mass[material] > 0.0)) {
+					throw new IllegalStateException("Displaced material has no positive finite mass");
+				}
+				result.add(new MaterialPortion(material, volume[material], mass[material]));
+			}
+			return List.copyOf(result);
+		}
+	}
+	private record ChemicalPieceDraft(int cellX, int cellY, int cellZ, float volume, int materialHandle) { }
+	private record ChemicalInsertPiece(
+			int cellX, int cellY, int cellZ, float volume, int materialHandle, double mass,
+			ChemicalMixtureRecord mixture, boolean indicator
+	) { }
 
 	/** Plans and restores an exact chemical ledger without substituting a default carrier. */
 	public ExactChemicalTransfer tryInsertExactChemical(
@@ -4338,42 +4259,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				.mapToDouble(allocation -> allocation.thermalPlan().removedEnergy()).toArray()).toDouble();
 		return new ExactMixtureTransfer(true, List.copyOf(result), removedEnergy);
 }
-	private record InsertAllocation(
-			int x, int y, int z, double amount, int materialHandle, int portionIndex
-	) { }
-	private record ChemicalPieceDraft(int cellX, int cellY, int cellZ, float volume, int materialHandle) { }
-	private record ChemicalInsertPiece(
-			int cellX, int cellY, int cellZ, float volume, int materialHandle, double mass,
-			ChemicalMixtureRecord mixture, boolean indicator
-	) { }
-	private record MaterialInsertPiece(
-			int cellX, int cellY, int cellZ, int slot, float volume, int materialHandle, double mass,
-			ChemicalMixtureRecord chemical
-	) { }
-	private record ExtractionAllocation(
-			int particle, float newVolume, double newMass, ChemicalParcelStore.SplitPlan chemicalPlan,
-			FlipThermalState.Truncation thermalPlan
-	) { }
-	private static final class RemovedMaterialLedger {
-		private final double[] volume;
-		private final double[] mass;
-		private RemovedMaterialLedger(int materialCount) {
-			volume = new double[materialCount]; mass = new double[materialCount];
-		}
-		private void add(int material, double addedVolume, double addedMass) {
-			volume[material] += addedVolume; mass[material] += addedMass;
-		}
-		private List<MaterialPortion> build() {
-			ArrayList<MaterialPortion> result = new ArrayList<>();
-			for (int material = 0; material < volume.length; material++) if (volume[material] > 0.0) {
-				if (!(Double.isFinite(mass[material]) && mass[material] > 0.0)) {
-					throw new IllegalStateException("Displaced material has no positive finite mass");
-				}
-				result.add(new MaterialPortion(material, volume[material], mass[material]));
-			}
-			return List.copyOf(result);
-		}
-	}
 	private static final class RemovedThermalEnergy {
 		private SignedDyadic value = SignedDyadic.ZERO;
 		private void add(double energy) { value = value.add(SignedDyadic.of(energy)); }
@@ -6955,7 +6840,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 	}
 
-	private int firstOpenSlot(int cell, int first) {
+	int firstOpenSlot(int cell, int first) {
 		int mask = geometry.cutCells.mask(cell);
 		for (int slot = first; slot < 8; slot++) if ((mask & 1 << slot) == 0) return slot;
 		return -1;
@@ -6985,7 +6870,7 @@ private void spawnParticle(
 	spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, chemicalMixture, indicator, true);
 }
 
-private void spawnParticle(
+void spawnParticle(
  int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
  ChemicalMixtureRecord chemicalMixture, boolean indicator, boolean thermalExternal
  ) {
@@ -7134,7 +7019,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 		return result;
 	}
 
-	private double[] exactCellVolumes() {
+	double[] exactCellVolumes() {
 		double[] exact = new double[cellCount];
 		float h = config.cellSize();
 		for (int particle = 0; particle < particles.count(); particle++) {
@@ -7257,11 +7142,11 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 		return weightSum <= 1.0E-8F ? 0.0F : weighted / weightSum;
 	}
 
-	private void validateVolumeEdit(float amount, int maxRadius) {
+	void validateVolumeEdit(float amount, int maxRadius) {
 		if (!Float.isFinite(amount) || amount < 0.0F) throw new IllegalArgumentException("amount must be finite and non-negative");
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
 	}
-	private void validateMaterialPortion(MaterialPortion portion) {
+	void validateMaterialPortion(MaterialPortion portion) {
 		if (portion == null || !(Double.isFinite(portion.volume()) && portion.volume() > 0.0
 				&& portion.volume() <= Float.MAX_VALUE && (float) portion.volume() > 0.0F)
 				|| !(Double.isFinite(portion.mass()) && portion.mass() > 0.0)) {
