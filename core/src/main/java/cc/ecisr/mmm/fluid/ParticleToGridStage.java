@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.granular.GranularCouplingFields;
+
 import java.util.Arrays;
 
 /**
@@ -10,54 +12,92 @@ import java.util.Arrays;
  * later stages consume is rebuilt here, exactly once per grid generation.
  */
 final class ParticleToGridStage {
-	private final FlipFluidDomain domain;
+	record Workspace(
+			float[] volume, PressureProjectionWorkspace projection,
+			FlipFreeSurfaceGeometry freeSurfaceGeometry, MacVelocityGrid mac,
+			DomainGeometry geometry, MarkerGridIndex markerGrid,
+			FlipPressurePhaseGeometry pressurePhaseGeometry
+	) { }
+
+	interface Access {
+		void setVariableDensityActive(boolean active);
+		void setSurfaceTensionActive(boolean active);
+		void setLiquidPairTensionActive(boolean active);
+		boolean usesMassWeightedP2G();
+		boolean hasAnySurfaceTension();
+		boolean hasAnyLiquidPairTension();
+		void buildMarkerGrid();
+		void normalize(float[] values, float[] weights);
+		GranularCouplingFields granularCoupling();
+		boolean hasGranularInventory();
+		boolean hasCoherentInventory();
+		GranularDomainState granularState();
+		void setPressureGranularCoupling(GranularCouplingFields coupling);
+		GranularCouplingFields pressureGranularCoupling();
+		void rebuildPressureBoundaryLineage();
+		void rebuildSurfaceTensionPressure();
+		void markGridClean();
+	}
+
+	private final Workspace state;
+	private final Access access;
 	private final BodyForceStage bodyForceStage;
 	private final GridToParticleStage gridToParticleStage;
 
-	ParticleToGridStage(FlipFluidDomain domain, BodyForceStage bodyForceStage, GridToParticleStage gridToParticleStage) {
-		this.domain = domain;
+	ParticleToGridStage(
+			Workspace state, Access access,
+			BodyForceStage bodyForceStage, GridToParticleStage gridToParticleStage
+	) {
+		this.state = state;
+		this.access = access;
 		this.bodyForceStage = bodyForceStage;
 		this.gridToParticleStage = gridToParticleStage;
 	}
 
 	void rebuild() {
-		Arrays.fill(domain.volume, 0.0F);
-		Arrays.fill(domain.projection.pressureVolume, 0.0);
-		domain.freeSurfaceGeometry.clearExactVolumes();
-		Arrays.fill(domain.mac.velocityX, 0.0F);
-		Arrays.fill(domain.mac.velocityY, 0.0F);
-		Arrays.fill(domain.mac.velocityZ, 0.0F);
-		Arrays.fill(domain.mac.velocityWeightX, 0.0F);
-		Arrays.fill(domain.mac.velocityWeightY, 0.0F);
-		Arrays.fill(domain.mac.velocityWeightZ, 0.0F);
-		domain.variableDensityActive = domain.usesMassWeightedP2G();
-		domain.surfaceTensionActive = domain.hasAnySurfaceTension();
-		domain.liquidPairTensionActive = domain.hasAnyLiquidPairTension();
-		MarkerGridBuilder.build(domain);
-		domain.normalize(domain.mac.velocityX, domain.mac.velocityWeightX);
-		domain.normalize(domain.mac.velocityY, domain.mac.velocityWeightY);
-		domain.normalize(domain.mac.velocityZ, domain.mac.velocityWeightZ);
-		System.arraycopy(domain.mac.velocityWeightX, 0, domain.mac.p2gWeightX, 0, domain.mac.velocityWeightX.length);
-		System.arraycopy(domain.mac.velocityWeightY, 0, domain.mac.p2gWeightY, 0, domain.mac.velocityWeightY.length);
-		System.arraycopy(domain.mac.velocityWeightZ, 0, domain.mac.p2gWeightZ, 0, domain.mac.velocityWeightZ.length);
-		if (domain.granularCoupling == null || !domain.hasGranularInventory() && !(domain.thermalState != null
-				&& domain.thermalState.coherentPhases().groupCount() != 0)) {
-			if (domain.granularCoupling != null) domain.granularCoupling.clear();
-			domain.freeSurfaceGeometry.rebuild(domain.geometry.solid, domain.markerGrid.markerCount, domain.geometry.cutCells);
-			domain.pressureGranularCoupling = null;
+		PressureProjectionWorkspace projection = state.projection;
+		MacVelocityGrid mac = state.mac;
+		Arrays.fill(state.volume, 0.0F);
+		Arrays.fill(projection.pressureVolume, 0.0);
+		state.freeSurfaceGeometry.clearExactVolumes();
+		Arrays.fill(mac.velocityX, 0.0F);
+		Arrays.fill(mac.velocityY, 0.0F);
+		Arrays.fill(mac.velocityZ, 0.0F);
+		Arrays.fill(mac.velocityWeightX, 0.0F);
+		Arrays.fill(mac.velocityWeightY, 0.0F);
+		Arrays.fill(mac.velocityWeightZ, 0.0F);
+		access.setVariableDensityActive(access.usesMassWeightedP2G());
+		access.setSurfaceTensionActive(access.hasAnySurfaceTension());
+		access.setLiquidPairTensionActive(access.hasAnyLiquidPairTension());
+		access.buildMarkerGrid();
+		access.normalize(mac.velocityX, mac.velocityWeightX);
+		access.normalize(mac.velocityY, mac.velocityWeightY);
+		access.normalize(mac.velocityZ, mac.velocityWeightZ);
+		System.arraycopy(mac.velocityWeightX, 0, mac.p2gWeightX, 0, mac.velocityWeightX.length);
+		System.arraycopy(mac.velocityWeightY, 0, mac.p2gWeightY, 0, mac.velocityWeightY.length);
+		System.arraycopy(mac.velocityWeightZ, 0, mac.p2gWeightZ, 0, mac.velocityWeightZ.length);
+		GranularCouplingFields granularCoupling = access.granularCoupling();
+		DomainGeometry geometry = state.geometry;
+		MarkerGridIndex markerGrid = state.markerGrid;
+		if (granularCoupling == null || !access.hasGranularInventory() && !access.hasCoherentInventory()) {
+			if (granularCoupling != null) granularCoupling.clear();
+			state.freeSurfaceGeometry.rebuild(geometry.solid, markerGrid.markerCount, geometry.cutCells);
+			access.setPressureGranularCoupling(null);
 		} else {
-			if (domain.hasGranularInventory()) domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
-			else domain.granularCoupling.rebuildFixed();
-			domain.pressureGranularCoupling = domain.granularCoupling;
-			domain.freeSurfaceGeometry.rebuild(domain.geometry.solid, domain.markerGrid.markerCount, domain.geometry.cutCells, domain.granularCoupling);
+			if (access.hasGranularInventory()) granularCoupling.rebuild(
+					access.granularState().parcels, access.granularState().deposits);
+			else granularCoupling.rebuildFixed();
+			access.setPressureGranularCoupling(granularCoupling);
+			state.freeSurfaceGeometry.rebuild(
+					geometry.solid, markerGrid.markerCount, geometry.cutCells, granularCoupling);
 		}
-		domain.pressurePhaseGeometry.rebuild(
-				domain.geometry.solid, domain.markerGrid.markerCount, domain.projection.pressureVolume, domain.geometry.cutCells,
-				domain.pressureGranularCoupling, domain.projection.pressureFluid);
-		domain.rebuildPressureBoundaryLineage();
-		domain.rebuildSurfaceTensionPressure();
+		state.pressurePhaseGeometry.rebuild(
+				geometry.solid, markerGrid.markerCount, projection.pressureVolume, geometry.cutCells,
+				access.pressureGranularCoupling(), projection.pressureFluid);
+		access.rebuildPressureBoundaryLineage();
+		access.rebuildSurfaceTensionPressure();
 		bodyForceStage.enforceSolidFaceVelocities();
 		gridToParticleStage.extrapolateVelocityIntoAir();
-		domain.gridDirty = false;
+		access.markGridClean();
 	}
 }

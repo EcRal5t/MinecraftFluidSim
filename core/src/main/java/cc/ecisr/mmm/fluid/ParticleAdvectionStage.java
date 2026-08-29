@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
+
 /**
  * Marker advection through the collision resolver, bookending the chemical dirty-cell
  * trail: markers that move mark both their source and destination cells so the reaction
@@ -7,36 +9,50 @@ package cc.ecisr.mmm.fluid;
  * columns stay with the domain lifecycle.
  */
 final class ParticleAdvectionStage {
-	private final FlipFluidDomain domain;
+	record Workspace(LiquidParticleStore particles, FlipParticleCollision collision) { }
 
-	ParticleAdvectionStage(FlipFluidDomain domain) {
-		this.domain = domain;
+	interface Access {
+		ChemicalParcelStore chemicalParcels();
+		int[] chemicalPreviousCells();
+		int[] chemicalMovingMarkers();
+		int particleCellIndex(int marker);
+		void markGridDirty();
+	}
+
+	private final Workspace state;
+	private final Access access;
+
+	ParticleAdvectionStage(Workspace state, Access access) {
+		this.state = state;
+		this.access = access;
 	}
 
 	void advect(float dt) {
+		LiquidParticleStore particles = state.particles;
+		ChemicalParcelStore chemicalParcels = access.chemicalParcels();
 		int chemicalMovingCount = 0;
-		if (domain.chemicalParcels != null) {
-			for (int marker = 0; marker < domain.particles.count(); marker++) {
-				if (domain.particles.velocityX(marker) == 0.0F && domain.particles.velocityY(marker) == 0.0F
-						&& domain.particles.velocityZ(marker) == 0.0F) continue;
-				domain.chemicalPreviousCells[marker] = domain.particleCellIndex(marker);
-				domain.chemicalMovingMarkers[chemicalMovingCount++] = marker;
+		if (chemicalParcels != null) {
+			for (int marker = 0; marker < particles.count(); marker++) {
+				if (particles.velocityX(marker) == 0.0F && particles.velocityY(marker) == 0.0F
+						&& particles.velocityZ(marker) == 0.0F) continue;
+				access.chemicalPreviousCells()[marker] = access.particleCellIndex(marker);
+				access.chemicalMovingMarkers()[chemicalMovingCount++] = marker;
 			}
 		}
-		LiquidParticleStore.DirectArrays advectArrays = domain.particles.directArrays();
-		domain.particleCollision.advect(
+		LiquidParticleStore.DirectArrays advectArrays = particles.directArrays();
+		state.collision.advect(
 				advectArrays.positionX, advectArrays.positionY, advectArrays.positionZ,
 				advectArrays.velocityX, advectArrays.velocityY, advectArrays.velocityZ,
-				domain.particles.count(), dt
+				particles.count(), dt
 		);
 		for (int moving = 0; moving < chemicalMovingCount; moving++) {
-			int marker = domain.chemicalMovingMarkers[moving];
-			int previous = domain.chemicalPreviousCells[marker], current = domain.particleCellIndex(marker);
+			int marker = access.chemicalMovingMarkers()[moving];
+			int previous = access.chemicalPreviousCells()[marker], current = access.particleCellIndex(marker);
 			if (previous != current) {
-				domain.chemicalParcels.markDirtyCell(previous);
-				domain.chemicalParcels.markDirtyCell(current);
+				chemicalParcels.markDirtyCell(previous);
+				chemicalParcels.markDirtyCell(current);
 			}
 		}
-		domain.gridDirty = true;
+		access.markGridDirty();
 	}
 }

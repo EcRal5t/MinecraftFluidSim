@@ -6,10 +6,23 @@ package cc.ecisr.mmm.fluid;
  * its workspace stay with the domain lifecycle; the stage only sequences them.
  */
 final class GridToParticleStage {
-	private final FlipFluidDomain domain;
+	record Workspace(
+			DomainGeometry geometry, MarkerGridIndex markerGrid, MacVelocityGrid mac,
+			LiquidParticleStore particles, FlipVelocityExtrapolator velocityExtrapolator
+	) { }
 
-	GridToParticleStage(FlipFluidDomain domain) {
-		this.domain = domain;
+	interface Access {
+		float sampleX(float[] field, float x, float y, float z);
+		float sampleY(float[] field, float x, float y, float z);
+		float sampleZ(float[] field, float x, float y, float z);
+	}
+
+	private final Workspace state;
+	private final Access access;
+
+	GridToParticleStage(Workspace state, Access access) {
+		this.state = state;
+		this.access = access;
 	}
 
 	/** Extrapolates grid velocities into air and blends them into the marker velocities. */
@@ -19,26 +32,29 @@ final class GridToParticleStage {
 	}
 
 	void extrapolateVelocityIntoAir() {
-		domain.velocityExtrapolator.rebuildAndExtrapolate(
-				domain.geometry.solid, domain.markerGrid.markerCount,
-				domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ,
-				domain.mac.velocityValidX, domain.mac.velocityValidY, domain.mac.velocityValidZ,
-				domain.mac.velocityWeightX, domain.mac.velocityWeightY, domain.mac.velocityWeightZ
+		MacVelocityGrid mac = state.mac;
+		state.velocityExtrapolator.rebuildAndExtrapolate(
+				state.geometry.solid, state.markerGrid.markerCount,
+				mac.velocityX, mac.velocityY, mac.velocityZ,
+				mac.velocityValidX, mac.velocityValidY, mac.velocityValidZ,
+				mac.velocityWeightX, mac.velocityWeightY, mac.velocityWeightZ
 		);
 	}
 
 	private void gridToParticles() {
-		for (int i = 0; i < domain.particles.count(); i++) {
-			float x = domain.particles.positionX(i), y = domain.particles.positionY(i), z = domain.particles.positionZ(i);
-			float picX = domain.sampleX(domain.mac.velocityX, x, y, z),
-					picY = domain.sampleY(domain.mac.velocityY, x, y, z),
-					picZ = domain.sampleZ(domain.mac.velocityZ, x, y, z);
-			float deltaX = picX - domain.sampleX(domain.mac.p2gVelocityX, x, y, z);
-			float deltaY = picY - domain.sampleY(domain.mac.p2gVelocityY, x, y, z);
-			float deltaZ = picZ - domain.sampleZ(domain.mac.p2gVelocityZ, x, y, z);
-			domain.particles.setVelocityX(i, lerp(picX, domain.particles.velocityX(i) + deltaX, FLIP_RATIO));
-			domain.particles.setVelocityY(i, lerp(picY, domain.particles.velocityY(i) + deltaY, FLIP_RATIO));
-			domain.particles.setVelocityZ(i, lerp(picZ, domain.particles.velocityZ(i) + deltaZ, FLIP_RATIO));
+		LiquidParticleStore particles = state.particles;
+		MacVelocityGrid mac = state.mac;
+		for (int i = 0; i < particles.count(); i++) {
+			float x = particles.positionX(i), y = particles.positionY(i), z = particles.positionZ(i);
+			float picX = access.sampleX(mac.velocityX, x, y, z),
+					picY = access.sampleY(mac.velocityY, x, y, z),
+					picZ = access.sampleZ(mac.velocityZ, x, y, z);
+			float deltaX = picX - access.sampleX(mac.p2gVelocityX, x, y, z);
+			float deltaY = picY - access.sampleY(mac.p2gVelocityY, x, y, z);
+			float deltaZ = picZ - access.sampleZ(mac.p2gVelocityZ, x, y, z);
+			particles.setVelocityX(i, lerp(picX, particles.velocityX(i) + deltaX, FLIP_RATIO));
+			particles.setVelocityY(i, lerp(picY, particles.velocityY(i) + deltaY, FLIP_RATIO));
+			particles.setVelocityZ(i, lerp(picZ, particles.velocityZ(i) + deltaZ, FLIP_RATIO));
 		}
 	}
 

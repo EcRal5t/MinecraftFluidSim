@@ -215,14 +215,15 @@ public final class FlipFluidDomain {
 		this.gasLifecyclePlanner = new GasLifecyclePlanner(this);
 		this.pressureBoundaryView = new PressureBoundaryView(this);
 		this.pressureSystem = new PressureSystem(this);
-		this.pressureStage = new PressureProjectionStage(this, pressureSystem, pressureBoundaryView);
-		this.granularMechanicalStage = new GranularMechanicalStage(this);
-		this.bodyForceStage = new BodyForceStage(this);
-		this.gridToParticleStage = new GridToParticleStage(this);
-		this.particleAdvectionStage = new ParticleAdvectionStage(this);
-		this.particleToGridStage = new ParticleToGridStage(this, bodyForceStage, gridToParticleStage);
-		this.mechanicalPipeline = new MechanicalStepPipeline(this, granularMechanicalStage,
-				bodyForceStage, pressureStage, gridToParticleStage, particleAdvectionStage);
+		MechanicalStageAssembly.Stages stages = MechanicalStageAssembly.create(
+				this, pressureSystem, pressureBoundaryView);
+		this.pressureStage = stages.pressure();
+		this.granularMechanicalStage = stages.granular();
+		this.bodyForceStage = stages.bodyForce();
+		this.gridToParticleStage = stages.gridToParticle();
+		this.particleAdvectionStage = stages.advection();
+		this.particleToGridStage = stages.particleToGrid();
+		this.mechanicalPipeline = stages.pipeline();
 	}
 
 	public int sizeX() { return sizeX; }
@@ -4058,8 +4059,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			}
 		}
 	}
-
-	record CarrierProperties(double density, double viscosity) { }
 
 	CarrierProperties granularCarrierProperties(int cell) {
 		int liquidMaterial = granularCarrierMaterialByCell == null ? -1 : granularCarrierMaterialByCell[cell];
