@@ -1,5 +1,10 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
+import cc.ecisr.mmm.granular.GranularCouplingFields;
+import cc.ecisr.mmm.granular.GranularDepositDynamics;
+import cc.ecisr.mmm.granular.GranularParcelStore;
+import cc.ecisr.mmm.granular.GranularPhaseTransferEngine;
 import cc.ecisr.mmm.thermal.ThermalTransport;
 
 /** Constructs the thermochemistry pipeline from stage-specific state and capability seams. */
@@ -36,12 +41,32 @@ final class ThermochemistryStageAssembly {
 					@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
 					@Override public FlipThermalState thermalState() { return domain.thermalState; }
 				});
-		GranularReactionStage granular = new GranularReactionStage(new GranularReactionStage.Access() {
-			@Override public boolean enabled() { return domain.precipitationEnabled(); }
-			@Override public FlipFluidDomain.PhaseTransferStats transfer(int[] dirtyCells) {
-				return domain.transferGranularPhases(dirtyCells);
-			}
-		});
+		GranularReactionStage granular = new GranularReactionStage(
+				new GranularReactionStage.Workspace(
+						domain.sizeX, domain.sizeY, domain.cellCount,
+						domain.particles, domain.pendingPhaseCellVolume, domain.thermalMarkerContext()),
+				new GranularReactionStage.Access() {
+					@Override public boolean enabled() { return domain.precipitationEnabled(); }
+					@Override public ChemicalParcelStore chemistry() { return domain.chemicalParcels; }
+					@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
+					@Override public GranularDomainState granularState() { return domain.granularState; }
+					@Override public GranularPhaseTransferEngine transferEngine() {
+						return domain.granularPhaseTransfer();
+					}
+					@Override public FlipGranularCollision collision() { return domain.granularCollision; }
+					@Override public GranularCouplingFields coupling() { return domain.granularCoupling; }
+					@Override public GranularDepositDynamics depositDynamics() {
+						return domain.granularDepositDynamics();
+					}
+					@Override public FlipThermalState thermalState() { return domain.thermalState; }
+					@Override public int particleCell(int marker) { return domain.particleCellIndex(marker); }
+					@Override public int parcelCell(GranularParcelStore.Parcel parcel) {
+						return domain.granularParcelCell(parcel);
+					}
+					@Override public long geometricOpenSvq(int cell) { return domain.granularGeometricOpenSvq(cell); }
+					@Override public float mergeVelocityDelta() { return domain.granularMergeVelocityDelta(); }
+					@Override public void markGridDirty() { domain.gridDirty = true; }
+				});
 		CondensedPhaseChangeStage condensed = new CondensedPhaseChangeStage(
 				(maximumOperations, phaseGridPrepared) ->
 						domain.stepInertPhaseChangeOnly(maximumOperations, phaseGridPrepared));
