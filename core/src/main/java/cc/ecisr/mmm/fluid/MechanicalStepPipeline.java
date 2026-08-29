@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.granular.GranularMechanics;
+import cc.ecisr.mmm.thermal.ThermalDomainState;
 import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.Arrays;
@@ -93,7 +94,7 @@ final class MechanicalStepPipeline {
 		}
 		pressureStage.solve(dt);
 		int pressureIterations = domain.lastPressureIterations;
-		FlipThermalState.PhaseMechanicalWorkPlan phaseWork = null;
+		ThermalDomainState.PhaseMechanicalWorkPlan phaseWork = null;
 		if (substep == 0 && domain.thermalState != null && domain.hasPendingPhaseVolumeWork()) try {
 			phaseWork = domain.thermalState.planPhaseMechanicalWork(
 					domain.pendingPhaseCellVolume, domain.projection.pressure, domain.pressureReference,

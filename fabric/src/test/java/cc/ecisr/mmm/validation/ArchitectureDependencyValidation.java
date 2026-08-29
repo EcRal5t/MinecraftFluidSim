@@ -38,6 +38,11 @@ public final class ArchitectureDependencyValidation {
 	/** Solver mutable domain types that UI/adapter packages must never import. */
 	private static final Set<String> SOLVER_MUTABLE_TYPES = Set.of("FlipFluidDomain", "FlipThermalState");
 
+	/** Thermal mutable state owners that UI/adapter packages must never import (S10). */
+	private static final Set<String> THERMAL_MUTABLE_OWNERS = Set.of(
+			"ThermalDomainState", "LiquidEnergyColumn", "GasEnergyStore", "GranularEnergyState",
+			"ThermalAuditState", "FiniteDeviceExchangeCoordinator");
+
 	/** Classes allowed to keep a static MinecraftServer-keyed locator, with the removing slice. */
 	private static final Map<String, String> LOCATOR_ALLOWLIST = Map.of(
 			"FluidProtocolServer", "S19",
@@ -52,7 +57,6 @@ public final class ArchitectureDependencyValidation {
 			"FlipFluidDomain", "S12",
 			"FluidSimulationService", "S21",
 			"RegionState", "S17",
-			"FlipThermalState", "S10",
 			"VulkanFlipPipeline", "S20",
 			"FluidTransferService", "S16",
 			"RegionStateFiles", "S18");
@@ -215,6 +219,10 @@ public final class ArchitectureDependencyValidation {
 				if (imported.startsWith("cc.ecisr.mmm.fluid.") && (SOLVER_MUTABLE_TYPES.contains(leaf)
 						|| imported.equals("cc.ecisr.mmm.fluid.*"))) {
 					violations.add("adapter imports solver mutable domain: "
+							+ source.simpleName() + " -> " + imported);
+				}
+				if (imported.startsWith("cc.ecisr.mmm.thermal.") && THERMAL_MUTABLE_OWNERS.contains(leaf)) {
+					violations.add("adapter imports thermal mutable owner: "
 							+ source.simpleName() + " -> " + imported);
 				}
 			}

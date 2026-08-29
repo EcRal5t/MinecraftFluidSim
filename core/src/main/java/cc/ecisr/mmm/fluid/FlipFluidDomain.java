@@ -1,6 +1,9 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.FiniteDeviceExchangeCoordinator;
 import cc.ecisr.mmm.thermal.GasEnergyStore;
+import cc.ecisr.mmm.thermal.GranularEnergyState;
+import cc.ecisr.mmm.thermal.ThermalDomainState;
 import cc.ecisr.mmm.thermal.LiquidEnergyColumn;
 import cc.ecisr.mmm.thermal.ThermalCarrierContext;
 
@@ -1032,10 +1035,10 @@ public final class FlipFluidDomain {
 	public List<FiniteThermalExchange.Contact> finiteThermalContacts(List<ThermalContactRequest> requests) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		if (requests == null) throw new IllegalArgumentException("Finite thermal contact requests are missing");
-		ArrayList<FlipThermalState.CellContactRequest> mapped = new ArrayList<>(requests.size());
+		ArrayList<FiniteDeviceExchangeCoordinator.CellContactRequest> mapped = new ArrayList<>(requests.size());
 		for (ThermalContactRequest request : requests) {
 			if (request == null) throw new IllegalArgumentException("Finite thermal contact requests contain null");
-			mapped.add(new FlipThermalState.CellContactRequest(
+			mapped.add(new FiniteDeviceExchangeCoordinator.CellContactRequest(
 					cellIndexChecked(request.cellX(), request.cellY(), request.cellZ()), request.ordinal(),
 					request.conductanceEuPerSecondK()));
 		}
@@ -1051,8 +1054,8 @@ public final class FlipFluidDomain {
 	}
 
 	public static final class FiniteThermalCellPlan {
-		private final FlipThermalState.FiniteDeviceCellPlan delegate;
-		private FiniteThermalCellPlan(FlipThermalState.FiniteDeviceCellPlan delegate) {
+		private final FiniteDeviceExchangeCoordinator.FiniteDeviceCellPlan delegate;
+		private FiniteThermalCellPlan(FiniteDeviceExchangeCoordinator.FiniteDeviceCellPlan delegate) {
 			this.delegate = java.util.Objects.requireNonNull(delegate, "delegate");
 		}
 		public SignedDyadic requestedDelta() { return delegate.requestedDelta(); }
@@ -1061,10 +1064,10 @@ public final class FlipFluidDomain {
 	public FiniteThermalCellPlan planFiniteThermalCellExchange(List<ThermalCellEnergyDelta> deltas) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		if (deltas == null) throw new IllegalArgumentException("Finite thermal cell deltas are missing");
-		ArrayList<FlipThermalState.CellEnergyDelta> mapped = new ArrayList<>(deltas.size());
+		ArrayList<FiniteDeviceExchangeCoordinator.CellEnergyDelta> mapped = new ArrayList<>(deltas.size());
 		for (ThermalCellEnergyDelta delta : deltas) {
 			if (delta == null) throw new IllegalArgumentException("Finite thermal cell deltas contain null");
-			mapped.add(new FlipThermalState.CellEnergyDelta(
+			mapped.add(new FiniteDeviceExchangeCoordinator.CellEnergyDelta(
 					cellIndexChecked(delta.cellX(), delta.cellY(), delta.cellZ()), delta.internalEnergyDeltaEu()));
 		}
 		return new FiniteThermalCellPlan(thermalState.planFiniteDeviceCellExchange(mapped, thermalMarkerContext()));
@@ -1238,7 +1241,7 @@ public final class FlipFluidDomain {
 				PhaseCellInventory inventory = gasLiquidCellInventory(cell, liquidHandle);
 				if (inventory == null) continue;
 				long remainingBudget = maximumOperations - operations;
-				FlipThermalState.PhaseCandidateCell thermalCell =
+				ThermalDomainState.PhaseCandidateCell thermalCell =
 						thermalState.preparePhaseCandidateCell(cell, thermalMarkerContext());
 				if (direction == GasLiquidPhaseModel.Direction.BOIL) {
 					GasBoilPlan plan = planGasBoil(cell, node, liquidHandle, gasThermalHandle,
@@ -1278,7 +1281,7 @@ public final class FlipFluidDomain {
 	private GasBoilPlan planGasBoil(
 			int cell, int node, int liquidHandle, int gasThermalHandle,
 			ThermalPhaseTransition transition, PhaseCellInventory inventory,
-			GasLiquidPhaseModel phase, FlipThermalState.PhaseCandidateCell thermalCell,
+			GasLiquidPhaseModel phase, ThermalDomainState.PhaseCandidateCell thermalCell,
 			boolean[] volatileSpecies,
 			double liquidTemperature, long maximumBatches
 	) {
@@ -1310,7 +1313,7 @@ public final class FlipFluidDomain {
 	private GasBoilPlan gasBoilCandidate(
 			int cell, int node, int liquidHandle, int gasThermalHandle,
 			ThermalPhaseTransition transition, PhaseCellInventory before, GasLiquidPhaseModel phase,
-			FlipThermalState.PhaseCandidateCell thermalCell, boolean[] volatileSpecies,
+			ThermalDomainState.PhaseCandidateCell thermalCell, boolean[] volatileSpecies,
 			double liquidTemperature, long batches
 	) {
 		try {
@@ -1342,7 +1345,7 @@ public final class FlipFluidDomain {
 	}
 
 	private void commitGasBoil(
-			int cell, int node, GasBoilPlan plan, FlipThermalState.PhaseCandidateCell thermalCell
+			int cell, int node, GasBoilPlan plan, ThermalDomainState.PhaseCandidateCell thermalCell
 	) {
 		double gasEnergyBefore = thermalState.gasNodeEnergy(node, gasState.network);
 		for (PhaseMarkerAllocation allocation : plan.removal().allocations()) {
@@ -1371,7 +1374,7 @@ public final class FlipFluidDomain {
 	private GasCondensePlan planGasCondense(
 			int cell, int node, int liquidHandle, ThermalPhaseTransition transition,
 			PhaseCellInventory before, GasLiquidPhaseModel phase,
-			FlipThermalState.PhaseCandidateCell thermalCell, String gasCarrierId, long maximumBatches
+			ThermalDomainState.PhaseCandidateCell thermalCell, String gasCarrierId, long maximumBatches
 	) {
 		GasComponentAmount vapor = gasState.network.inventory(node).component(gasCarrierId);
 		if (vapor == null) return null;
@@ -1406,7 +1409,7 @@ public final class FlipFluidDomain {
 	private GasCondensePlan gasCondenseCandidate(
 			int cell, int node, int liquidHandle, ThermalPhaseTransition transition,
 			PhaseCellInventory before, GasLiquidPhaseModel phase,
-			FlipThermalState.PhaseCandidateCell thermalCell, long batches
+			ThermalDomainState.PhaseCandidateCell thermalCell, long batches
 	) {
 		try {
 			GasInventory requestedBatch = phase.gasBatch(transition, batches);
@@ -1508,7 +1511,7 @@ public final class FlipFluidDomain {
 
 	private void commitGasCondense(
 			int cell, int node, int liquidHandle, GasCondensePlan plan,
-			FlipThermalState.PhaseCandidateCell thermalCell
+			ThermalDomainState.PhaseCandidateCell thermalCell
 	) {
 		double gasEnergyBefore = thermalState.gasNodeEnergy(node, gasState.network);
 		gasState.network.commitPhaseSink(node, plan.removedGas());
@@ -4343,9 +4346,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		int material = granularState.registry.materialHandle(rule.solidMaterialId());
 		PrecipitationMerge merge = precipitationMerge(cell, material, plan, position, carrierMarker, occupiedBefore);
 		if (merge != null) {
-			FlipThermalState.ReactionPlan thermalPlan = thermalState == null ? null : thermalState.requireGranularReaction(
-					cell, thermalReactionMarkers(plan), new FlipThermalState.GranularReactionEdit(
-							FlipThermalState.GranularReactionKind.REPLACE_ACTIVE, merge.parcelIndex(), null,
+			ThermalDomainState.ReactionPlan thermalPlan = thermalState == null ? null : thermalState.requireGranularReaction(
+					cell, thermalReactionMarkers(plan), new GranularEnergyState.GranularReactionEdit(
+							GranularEnergyState.GranularReactionKind.REPLACE_ACTIVE, merge.parcelIndex(), null,
 							material, merge.parcel().mass(),
 							merge.composition().stableAmounts(chemicalParcels.registry())), thermalMarkerContext());
 			chemicalParcels.commitPlannedReplacements(markers, mixtures); applyMarkerUpdates(plan);
@@ -4372,9 +4375,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			granularState.compositions.release(composition);
 			throw new GranularPhaseTransferEngine.BlockedException("Precipitation active parcel budget exceeded");
 		}
-		FlipThermalState.ReactionPlan thermalPlan = thermalState == null ? null : thermalState.requireGranularReaction(
-				cell, thermalReactionMarkers(plan), new FlipThermalState.GranularReactionEdit(
-						FlipThermalState.GranularReactionKind.ADD_ACTIVE, -1, null, material, parcel.mass(),
+		ThermalDomainState.ReactionPlan thermalPlan = thermalState == null ? null : thermalState.requireGranularReaction(
+				cell, thermalReactionMarkers(plan), new GranularEnergyState.GranularReactionEdit(
+						GranularEnergyState.GranularReactionKind.ADD_ACTIVE, -1, null, material, parcel.mass(),
 						plan.transferredComposition().stableAmounts(chemicalParcels.registry())), thermalMarkerContext());
 		try { chemicalParcels.commitPlannedReplacements(markers, mixtures); }
 		catch (RuntimeException failure) { granularState.compositions.release(composition); throw failure; }
@@ -4470,15 +4473,15 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		chemicalParcels.requireCanCommitPlannedReplacements(markers, mixtures);
 		GranularEnergyColumn.DepositKey thermalDepositKey = solid.deposit()
 				? new GranularEnergyColumn.DepositKey(cell, solid.materialHandle(), solid.compositionHandle()) : null;
-		FlipThermalState.GranularReactionKind thermalKind = solid.deposit()
-				? (full ? FlipThermalState.GranularReactionKind.REMOVE_DEPOSIT
-				: FlipThermalState.GranularReactionKind.REPLACE_DEPOSIT)
-				: (full ? FlipThermalState.GranularReactionKind.REMOVE_ACTIVE
-				: FlipThermalState.GranularReactionKind.REPLACE_ACTIVE);
+		GranularEnergyState.GranularReactionKind thermalKind = solid.deposit()
+				? (full ? GranularEnergyState.GranularReactionKind.REMOVE_DEPOSIT
+				: GranularEnergyState.GranularReactionKind.REPLACE_DEPOSIT)
+				: (full ? GranularEnergyState.GranularReactionKind.REMOVE_ACTIVE
+				: GranularEnergyState.GranularReactionKind.REPLACE_ACTIVE);
 		Map<String, Long> finalComposition = full ? Map.of()
 				: remaining.stableAmounts(chemicalParcels.registry());
-		FlipThermalState.ReactionPlan thermalPlan = thermalState == null ? null : thermalState.requireGranularReaction(
-				cell, thermalReactionMarkers(plan), new FlipThermalState.GranularReactionEdit(thermalKind,
+		ThermalDomainState.ReactionPlan thermalPlan = thermalState == null ? null : thermalState.requireGranularReaction(
+				cell, thermalReactionMarkers(plan), new GranularEnergyState.GranularReactionEdit(thermalKind,
 						solid.deposit() ? -1 : solid.index(), thermalDepositKey,
 						full ? -1 : solid.materialHandle(), full ? 0.0 : remainingMass,
 						finalComposition), thermalMarkerContext());
@@ -4559,12 +4562,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return result;
 	}
 
-	private List<FlipThermalState.ReactionMarker> thermalReactionMarkers(
+	private List<GranularEnergyState.ReactionMarker> thermalReactionMarkers(
 			GranularPhaseTransferEngine.Plan plan
 	) {
-		ArrayList<FlipThermalState.ReactionMarker> result = new ArrayList<>(plan.markerUpdates().size());
+		ArrayList<GranularEnergyState.ReactionMarker> result = new ArrayList<>(plan.markerUpdates().size());
 		for (GranularPhaseTransferEngine.MarkerUpdate update : plan.markerUpdates()) result.add(
-				new FlipThermalState.ReactionMarker(update.marker(), update.mass(), update.mixture()));
+				new GranularEnergyState.ReactionMarker(update.marker(), update.mass(), update.mixture()));
 		return List.copyOf(result);
 	}
 

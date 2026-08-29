@@ -35,6 +35,38 @@ public final class GranularEnergyState {
 		this.audit = audit;
 	}
 
+	public enum GranularReactionKind { ADD_ACTIVE, REPLACE_ACTIVE, REMOVE_ACTIVE, REPLACE_DEPOSIT, REMOVE_DEPOSIT }
+
+	public record ReactionMarker(int marker, double mass, cc.ecisr.mmm.chemistry.ChemicalMixtureRecord mixture) {
+		public ReactionMarker {
+			if (marker < 0 || !(Double.isFinite(mass) && mass > 0.0) || mixture == null) {
+				throw new IllegalArgumentException("Thermal reaction marker is invalid");
+			}
+		}
+	}
+
+	public record GranularReactionEdit(
+			GranularReactionKind kind, int activeOrdinal, GranularEnergyColumn.DepositKey depositKey,
+			int materialHandle, double finalMass, Map<String, Long> finalComposition
+	) {
+		public GranularReactionEdit {
+			if (kind == null || finalComposition == null) {
+				throw new IllegalArgumentException("Thermal granular reaction edit is missing");
+			}
+			finalComposition = Map.copyOf(finalComposition);
+			boolean active = kind == GranularReactionKind.ADD_ACTIVE || kind == GranularReactionKind.REPLACE_ACTIVE
+					|| kind == GranularReactionKind.REMOVE_ACTIVE;
+			boolean add = kind == GranularReactionKind.ADD_ACTIVE;
+			boolean remove = kind == GranularReactionKind.REMOVE_ACTIVE || kind == GranularReactionKind.REMOVE_DEPOSIT;
+			if (active != (depositKey == null) || active && add != (activeOrdinal < 0)
+					|| !add && active && activeOrdinal < 0 || !active && activeOrdinal != -1
+					|| remove && (finalMass != 0.0 || materialHandle != -1 || !finalComposition.isEmpty())
+					|| !remove && (materialHandle < 0 || !(Double.isFinite(finalMass) && finalMass > 0.0))) {
+				throw new IllegalArgumentException("Thermal granular reaction edit shape is invalid");
+			}
+		}
+	}
+
 	public long revision() { return revision; }
 
 	public GranularEnergyColumn column() { return granularEnergy; }
