@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.GasEnergyStore;
+
 import cc.ecisr.mmm.fluid.air.AirEdge;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.GasInventory;
@@ -140,7 +142,7 @@ final class GasTopologyCoordinator {
 			mixedEnergy[node - 1] = domain.thermalState.gasNodeEnergy(node, domain.gasState.network);
 			inheritedAvailable[node - 1] = domain.gasState.network.availableVolume(node);
 		}
-		FlipThermalState.GasRemapPlan thermalPlan = domain.thermalState.planGasRemap(
+		GasEnergyStore.GasRemapPlan thermalPlan = domain.thermalState.planGasRemap(
 				domain.gasState.network, inventories, availableVolumes, mixedEnergy, inheritedAvailable, 0.0, 0.0);
 		AirNetwork.RemapPlan gasPlan = domain.gasState.network.planRemapNodes(
 				availableVolumes, inventories, GasInventory.EMPTY, GasInventory.EMPTY, domain.gasState.network.edges());
@@ -293,7 +295,7 @@ final class GasTopologyCoordinator {
 				&& (!sourceDelta.isEmpty() || !sinkDelta.isEmpty())) {
 			throw new GasTopologyBlockedException("Closed gas topology attempted an external source or sink");
 		}
-		FlipThermalState.GasRemapPlan thermalPlan = !thermalGas ? null : domain.thermalState.planGasRemap(
+		GasEnergyStore.GasRemapPlan thermalPlan = !thermalGas ? null : domain.thermalState.planGasRemap(
 				domain.gasState.network, inventories, availableVolumes, mixedEnergy, inheritedAvailable, sourceEnergy, sinkEnergy);
 		ArrayList<AirEdge> edges = new ArrayList<>(result.geometricEdges().size());
 		for (AirCavityScanner.GeometricEdge edge : result.geometricEdges()) {
@@ -526,6 +528,6 @@ final class GasTopologyCoordinator {
 	record GasTopologyPlan(
 			AirCavityScanner.Result scan,
 			AirNetwork.RemapPlan gasPlan,
-			FlipThermalState.GasRemapPlan thermalPlan
+			GasEnergyStore.GasRemapPlan thermalPlan
 	) { }
 }

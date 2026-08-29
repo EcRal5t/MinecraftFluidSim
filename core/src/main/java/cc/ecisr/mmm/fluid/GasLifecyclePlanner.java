@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.GasEnergyStore;
+
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.GasInventory;
 import cc.ecisr.mmm.units.SignedDyadic;
@@ -29,7 +31,7 @@ final class GasLifecyclePlanner {
 		GasInventory removed = domain.gasState.network.sealedInventory();
 		AirNetwork.RemapPlan gasPlan = domain.gasState.network.planRemapNodes(
 				new double[0], List.of(), GasInventory.EMPTY, removed, List.of());
-		FlipThermalState.GasVentPlan thermalPlan = domain.thermalState == null ? null
+		GasEnergyStore.GasVentPlan thermalPlan = domain.thermalState == null ? null
 				: domain.thermalState.planGasVent(domain.gasState.network, domain.particles.count());
 		return new FlipFluidDomain.OperatorGasVentPlan(domain.gasState.network.nodeCount(), removed, gasPlan, thermalPlan);
 	}

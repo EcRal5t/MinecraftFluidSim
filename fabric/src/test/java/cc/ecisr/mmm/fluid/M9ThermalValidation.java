@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.GasEnergyStore;
+
 import cc.ecisr.mmm.thermal.ThermalCarrierContext;
 
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
@@ -489,7 +491,7 @@ public final class M9ThermalValidation {
 		FlipThermalState compressed = new FlipThermalState(registry, liquids,
 				GasRegistry.STANDARD_TEMPERATURE_K, 1, 2, 2, 2, 0.5F, empty, compressedNetwork);
 		double initialEnergy = compressed.gasNodeEnergy(1, compressedNetwork);
-		FlipThermalState.GasRemapPlan compression = compressed.planGasRemap(compressedNetwork,
+		GasEnergyStore.GasRemapPlan compression = compressed.planGasRemap(compressedNetwork,
 				List.of(compressedNetwork.inventory(1)), new double[] {0.8}, new double[] {initialEnergy},
 				new double[] {1.0}, 0.0, 0.0);
 		compressedNetwork.remapNodes(new double[] {0.8}, List.of(compressedNetwork.inventory(1)),
