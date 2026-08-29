@@ -101,11 +101,14 @@ public final class FlipFluidDomain {
 	private final PressureSystem pressureSystem;
 	private final PressureProjectionStage pressureStage;
 	private final GranularMechanicalStage granularMechanicalStage;
+	private final BodyForceStage bodyForceStage;
+	private final GridToParticleStage gridToParticleStage;
+	private final ParticleAdvectionStage particleAdvectionStage;
 	private final FlipPressurePhaseGeometry pressurePhaseGeometry;
 	final FlipFreeSurfaceGeometry freeSurfaceGeometry;
 	private final FlipParticleReseeder particleReseeder;
-	private final FlipParticleCollision particleCollision;
-	private final FlipVelocityExtrapolator velocityExtrapolator;
+	final FlipParticleCollision particleCollision;
+	final FlipVelocityExtrapolator velocityExtrapolator;
 	final float[] volume;
 	private boolean surfaceTensionActive;
 	private boolean liquidPairTensionActive;
@@ -119,8 +122,8 @@ public final class FlipFluidDomain {
 	private final CarrierMutationCoordinator coordinator;
 	FluidMaterialRegistry materialRegistry;
 	ChemicalParcelStore chemicalParcels;
-	private int[] chemicalPreviousCells;
-	private int[] chemicalMovingMarkers;
+	int[] chemicalPreviousCells;
+	int[] chemicalMovingMarkers;
 	final GasDomainState gasState = new GasDomainState();
 	private final GasPressureBoundary gasBoundary = new GasPressureBoundary(this);
 	private CollisionEditPlan activeCollisionPlan;
@@ -152,8 +155,8 @@ public final class FlipFluidDomain {
 	boolean variableDensityActive;
 	FlipThermalState thermalState;
 	private final FlipThermalState.MarkerContext thermalMarkers;
-	private double[] thermalBuoyancySum;
-	private double[] thermalBuoyancyVolume;
+	double[] thermalBuoyancySum;
+	double[] thermalBuoyancyVolume;
 	/** Runtime world-derived fixed-reservoir temperatures; NaN is the canonical adiabatic face. */
 	private double[] thermalBoundaryTemperatureK;
 	final SignedDyadic[] pendingPhaseCellVolume;
@@ -205,6 +208,9 @@ public final class FlipFluidDomain {
 		this.pressureSystem = new PressureSystem(this);
 		this.pressureStage = new PressureProjectionStage(this, pressureSystem, pressureBoundaryView);
 		this.granularMechanicalStage = new GranularMechanicalStage(this);
+		this.bodyForceStage = new BodyForceStage(this);
+		this.gridToParticleStage = new GridToParticleStage(this);
+		this.particleAdvectionStage = new ParticleAdvectionStage(this);
 	}
 
 	public int sizeX() { return sizeX; }
@@ -3537,19 +3543,19 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			}
 			// Dampen previously committed flow before body forces so a zero-velocity porous bed retains
 			// the full hydrostatic gravity/pressure balance in the shared projection.
-			applyGranularPorousDamping(dt);
+			bodyForceStage.applyGranularPorousDamping(dt);
 			if (captureMechanicalAudit) {
 				nextKineticEnergy = gridKineticEnergyJoules();
 				mechanicalAudit.porousBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 				stageKineticEnergy = nextKineticEnergy;
 			}
-			applyGravity(dt);
+			bodyForceStage.applyGravity(dt);
 			if (captureMechanicalAudit) {
 				nextKineticEnergy = gridKineticEnergyJoules();
 				mechanicalAudit.gravityWorkJoules += nextKineticEnergy - stageKineticEnergy;
 				stageKineticEnergy = nextKineticEnergy;
 			}
-			applyThermalBuoyancy(dt);
+			bodyForceStage.applyThermalBuoyancy(dt);
 			if (captureMechanicalAudit) {
 				nextKineticEnergy = gridKineticEnergyJoules();
 				mechanicalAudit.thermalBuoyancyWorkJoules += nextKineticEnergy - stageKineticEnergy;
@@ -3561,7 +3567,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				mechanicalAudit.surfaceTensionWorkJoules += nextKineticEnergy - stageKineticEnergy;
 				stageKineticEnergy = nextKineticEnergy;
 			}
-			enforceSolidFaceVelocities();
+			bodyForceStage.enforceSolidFaceVelocities();
 			if (captureMechanicalAudit) {
 				nextKineticEnergy = gridKineticEnergyJoules();
 				mechanicalAudit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
@@ -3589,18 +3595,17 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				thermalState.commitPhaseMechanicalWork(phaseWork, thermalMarkerContext());
 				Arrays.fill(pendingPhaseCellVolume, SignedDyadic.ZERO);
 			}
-			enforceSolidFaceVelocities();
+			bodyForceStage.enforceSolidFaceVelocities();
 			if (captureMechanicalAudit) {
 				nextKineticEnergy = gridKineticEnergyJoules();
 				mechanicalAudit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 				stageKineticEnergy = nextKineticEnergy;
 			}
-			extrapolateVelocityIntoAir();
-			gridToParticles();
+			gridToParticleStage.extrapolateAndTransfer();
 			double particleKineticEnergy = captureMechanicalAudit ? particleKineticEnergyJoules() : 0.0;
 			if (captureMechanicalAudit) mechanicalAudit.gridToParticleTransferJoules +=
 					particleKineticEnergy - stageKineticEnergy;
-			advectParticles(dt);
+			particleAdvectionStage.advect(dt);
 			if (captureMechanicalAudit) mechanicalAudit.particleCollisionWorkJoules +=
 					particleKineticEnergyJoules() - particleKineticEnergy;
 			granularMechanicalStage.commitCollision();
@@ -3763,8 +3768,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				geometry.solid, markerGrid.markerCount, projection.pressureVolume, geometry.cutCells, pressureGranularCoupling, projection.pressureFluid);
 		rebuildPressureBoundaryLineage();
 		rebuildSurfaceTensionPressure();
-		enforceSolidFaceVelocities();
-		extrapolateVelocityIntoAir();
+		bodyForceStage.enforceSolidFaceVelocities();
+		gridToParticleStage.extrapolateVelocityIntoAir();
 		gridDirty = false;
 	}
 
@@ -3806,15 +3811,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 		markerGrid.exactCellMarkerVolume[changedCell] = updatedVolume;
 		gasTopologyCoordinator.refreshAvailableVolume();
-	}
-
-	private void extrapolateVelocityIntoAir() {
-		velocityExtrapolator.rebuildAndExtrapolate(
-				geometry.solid, markerGrid.markerCount,
-				mac.velocityX, mac.velocityY, mac.velocityZ,
-				mac.velocityValidX, mac.velocityValidY, mac.velocityValidZ,
-				mac.velocityWeightX, mac.velocityWeightY, mac.velocityWeightZ
-		);
 	}
 
 	/** Runs the non-motion logical axis while a region is hydrostatically asleep. */
@@ -4134,56 +4130,14 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 	}
 
-	private record CarrierProperties(double density, double viscosity) { }
+	record CarrierProperties(double density, double viscosity) { }
 
-	private CarrierProperties granularCarrierProperties(int cell) {
+	CarrierProperties granularCarrierProperties(int cell) {
 		int liquidMaterial = granularCarrierMaterialByCell == null ? -1 : granularCarrierMaterialByCell[cell];
 		if (markerGrid.markerCount[cell] <= 0 || liquidMaterial < 0) return new CarrierProperties(1.225, 1.81e-5);
 		String materialId = materialRegistry.material(liquidMaterial).id();
 		GranularCarrier carrier = granularState.registry.carrier(granularState.registry.carrierHandle(materialId));
 		return new CarrierProperties(markerGrid.cellDensity[cell], carrier.dynamicViscosity());
-	}
-
-	private void applyGranularPorousDamping(float dt) {
-		if (granularState == null || granularState.deposits.occupiedCellCount() == 0) return;
-		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
-			int left = cellIndex(x - 1, y, z), right = cellIndex(x, y, z);
-			mac.velocityX[xFaceIndex(x, y, z)] *= granularPorousFaceDamping(left, right, dt);
-		}
-		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
-			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z);
-			mac.velocityY[yFaceIndex(x, y, z)] *= granularPorousFaceDamping(below, above, dt);
-		}
-		for (int z = 1; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
-			int back = cellIndex(x, y, z - 1), front = cellIndex(x, y, z);
-			mac.velocityZ[zFaceIndex(x, y, z)] *= granularPorousFaceDamping(back, front, dt);
-		}
-	}
-
-	private float granularPorousFaceDamping(int first, int second, float dt) {
-		double firstK = granularPermeability(first), secondK = granularPermeability(second);
-		if (Double.isInfinite(firstK) && Double.isInfinite(secondK)) return 1.0F;
-		double permeability;
-		if (Double.isInfinite(firstK)) permeability = secondK;
-		else if (Double.isInfinite(secondK)) permeability = firstK;
-		else permeability = 2.0 * firstK * secondK / (firstK + secondK);
-		CarrierProperties firstCarrier = granularCarrierProperties(first), secondCarrier = granularCarrierProperties(second);
-		double viscosity = 0.5 * (firstCarrier.viscosity() + secondCarrier.viscosity());
-		double density = 0.5 * (firstCarrier.density() + secondCarrier.density());
-		return (float) (1.0 / (1.0 + dt * viscosity / (density * permeability)));
-	}
-
-	private double granularPermeability(int cell) {
-		GranularDepositStore.Group dominant = granularState.deposits.dominantGroup(cell);
-		if (dominant == null) return Double.POSITIVE_INFINITY;
-		double porosity = depositsPorosity(cell);
-		double solid = 1.0 - porosity;
-		double diameter = granularState.registry.material(dominant.materialHandle()).primaryGrainDiameterMeters();
-		return diameter * diameter * porosity * porosity * porosity / (180.0 * solid * solid);
-	}
-
-	private double depositsPorosity(int cell) {
-		return granularState.deposits.porosityQ(cell) / (double) GranularLimits.POROSITY_SCALE;
 	}
 
 	void splatCenter(float px, float py, float pz, float particleAmount) {
@@ -4315,16 +4269,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return Math.max(1, (int) Math.ceil(maximum * dt / (config.cellSize() * config.maxCourantNumber())));
 	}
 
-	private void applyGravity(float dt) {
-		float impulse = config.gravity() * dt;
-		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
-			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z);
-			if (carrierFaceActive(below, above, pressureYFaceOpen(x, y, z))) {
-				mac.velocityY[yFaceIndex(x, y, z)] -= impulse;
-			}
-		}
-	}
-
 	/**
 	 * Applies a bounded immersed moving-body constraint to authoritative marker momentum.
 	 * Volume, mass, composition and energy are unchanged; the returned SI impulse is calculated from
@@ -4382,32 +4326,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	private static void requireFiniteMarkerVelocity(double velocity) {
 		if (!Double.isFinite(velocity) || !Float.isFinite((float) velocity)) {
 			throw new IllegalArgumentException("Moving-body coupling velocity exceeds marker representation");
-		}
-	}
-
-	/** Adds the standard Boussinesq density correction to the existing gravity face impulse. */
-	private void applyThermalBuoyancy(float dt) {
-		if (thermalState == null || particles.count() == 0 || config.gravity() == 0.0F) return;
-		Arrays.fill(thermalBuoyancySum, 0.0);
-		Arrays.fill(thermalBuoyancyVolume, 0.0);
-		for (int marker = 0; marker < particles.count(); marker++) {
-			int cell = particleCellIndex(marker);
-			double markerVolume = particles.volume(marker);
-			String carrier = materialRegistry.material(particles.materialHandle(marker)).id();
-			double relative = LiquidThermalExpansion.require(carrier)
-					.relativeBuoyancy(thermalMarkerTemperature(marker));
-			thermalBuoyancySum[cell] += markerVolume * relative;
-			thermalBuoyancyVolume[cell] += markerVolume;
-		}
-		double scale = config.gravity() * dt;
-		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
-			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z);
-			float aperture = pressureYFaceOpen(x, y, z);
-			if (!carrierFaceActive(below, above, aperture)) continue;
-			double volumeSum = thermalBuoyancyVolume[below] + thermalBuoyancyVolume[above];
-			if (volumeSum <= 0.0) continue;
-			double relative = (thermalBuoyancySum[below] + thermalBuoyancySum[above]) / volumeSum;
-			mac.velocityY[yFaceIndex(x, y, z)] += (float) (scale * relative);
 		}
 	}
 
@@ -5240,61 +5158,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		int back = cellIndex(x, y, z - 1), front = cellIndex(x, y, z);
 		return geometric * pressureGranularCoupling.faceVoidScale(
 				back, geometry.cutCells.openCellVolume(back), front, geometry.cutCells.openCellVolume(front));
-	}
-
-	private void gridToParticles() {
-		for (int i = 0; i < particles.count(); i++) {
-			float x = particles.positionX(i), y = particles.positionY(i), z = particles.positionZ(i);
-			float picX = sampleX(mac.velocityX, x, y, z), picY = sampleY(mac.velocityY, x, y, z), picZ = sampleZ(mac.velocityZ, x, y, z);
-			float deltaX = picX - sampleX(mac.p2gVelocityX, x, y, z);
-			float deltaY = picY - sampleY(mac.p2gVelocityY, x, y, z);
-			float deltaZ = picZ - sampleZ(mac.p2gVelocityZ, x, y, z);
-			particles.setVelocityX(i, lerp(picX, particles.velocityX(i) + deltaX, FLIP_RATIO));
-			particles.setVelocityY(i, lerp(picY, particles.velocityY(i) + deltaY, FLIP_RATIO));
-			particles.setVelocityZ(i, lerp(picZ, particles.velocityZ(i) + deltaZ, FLIP_RATIO));
-		}
-	}
-
-	private void advectParticles(float dt) {
-		int chemicalMovingCount = 0;
-		if (chemicalParcels != null) {
-			for (int marker = 0; marker < particles.count(); marker++) {
-				if (particles.velocityX(marker) == 0.0F && particles.velocityY(marker) == 0.0F
-						&& particles.velocityZ(marker) == 0.0F) continue;
-				chemicalPreviousCells[marker] = particleCellIndex(marker);
-				chemicalMovingMarkers[chemicalMovingCount++] = marker;
-			}
-		}
-		LiquidParticleStore.DirectArrays advectArrays = particles.directArrays();
-		particleCollision.advect(
-				advectArrays.positionX, advectArrays.positionY, advectArrays.positionZ,
-				advectArrays.velocityX, advectArrays.velocityY, advectArrays.velocityZ,
-				particles.count(), dt
-		);
-		for (int moving = 0; moving < chemicalMovingCount; moving++) {
-			int marker = chemicalMovingMarkers[moving];
-			int previous = chemicalPreviousCells[marker], current = particleCellIndex(marker);
-			if (previous != current) {
-				chemicalParcels.markDirtyCell(previous);
-				chemicalParcels.markDirtyCell(current);
-			}
-		}
-		gridDirty = true;
-	}
-
-	private void enforceSolidFaceVelocities() {
-		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) {
-			mac.velocityX[xFaceIndex(0, y, z)] = 0.0F; mac.velocityX[xFaceIndex(sizeX, y, z)] = 0.0F;
-			for (int x = 1; x < sizeX; x++) if (geometry.cutCells.xFaceOpen(x, y, z) <= 0.0F) mac.velocityX[xFaceIndex(x, y, z)] = 0.0F;
-		}
-		for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) {
-			mac.velocityY[yFaceIndex(x, 0, z)] = 0.0F; mac.velocityY[yFaceIndex(x, sizeY, z)] = 0.0F;
-			for (int y = 1; y < sizeY; y++) if (geometry.cutCells.yFaceOpen(x, y, z) <= 0.0F) mac.velocityY[yFaceIndex(x, y, z)] = 0.0F;
-		}
-		for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
-			mac.velocityZ[zFaceIndex(x, y, 0)] = 0.0F; mac.velocityZ[zFaceIndex(x, y, sizeZ)] = 0.0F;
-			for (int z = 1; z < sizeZ; z++) if (geometry.cutCells.zFaceOpen(x, y, z) <= 0.0F) mac.velocityZ[zFaceIndex(x, y, z)] = 0.0F;
-		}
 	}
 
 	private void spawnCellVolume(int x, int y, int z, float amount) {
