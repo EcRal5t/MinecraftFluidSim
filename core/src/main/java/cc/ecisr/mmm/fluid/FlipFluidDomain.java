@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.GasEnergyStore;
 import cc.ecisr.mmm.thermal.LiquidEnergyColumn;
 import cc.ecisr.mmm.thermal.ThermalCarrierContext;
 
@@ -3209,7 +3210,7 @@ public final class FlipFluidDomain {
 	public record OperatorGasVent(GasInventory removed, SignedDyadic internalEnergy, int sealedNodes) { }
 	public record OperatorGasVentPlan(
 			int nodeCount, GasInventory removed, AirNetwork.RemapPlan gasPlan,
-			FlipThermalState.GasVentPlan thermalPlan
+			GasEnergyStore.GasVentPlan thermalPlan
 	) { }
 	public static final class OperatorClearPlan {
 		private final CondensedClearPlan condensed;
