@@ -97,11 +97,11 @@ final class PressureProjectionStage {
 		if (firstFluid && secondFluid) return domain.projection.pressure[second] - domain.projection.pressure[first];
 		if (firstFluid) {
 			float theta = domain.pressureInterfaceTheta(first, directionX, directionY, directionZ);
-			float jump = domain.tension.surfaceTensionPressure[first] + domain.gasPressureOfAirCell(second) - domain.pressureReference;
+			float jump = domain.tension.surfaceTensionPressure[first] + gasBoundary.gasPressureOfAirCell(second) - domain.pressureReference;
 			return (jump - domain.projection.pressure[first]) / theta;
 		}
 		float theta = domain.pressureInterfaceTheta(second, -directionX, -directionY, -directionZ);
-		float jump = domain.tension.surfaceTensionPressure[second] + domain.gasPressureOfAirCell(first) - domain.pressureReference;
+		float jump = domain.tension.surfaceTensionPressure[second] + gasBoundary.gasPressureOfAirCell(first) - domain.pressureReference;
 		return (domain.projection.pressure[second] - jump) / theta;
 	}
 

@@ -15,4 +15,6 @@ final class PressureBoundaryView {
 	boolean pressureActive() { return domain.gasState.pressureActive; }
 	int gasNodeOfAirCell(int airCell) { return domain.gasNodeOfAirCell(airCell); }
 	double gasPressureOfNode(int node) { return domain.gasPressureOfNode(node); }
+	/** Cell-referenced cavity pressure with the ambient/inactive zero gate. */
+	float gasPressureOfAirCell(int airCell) { return domain.gasPressureOfAirCell(airCell); }
 }

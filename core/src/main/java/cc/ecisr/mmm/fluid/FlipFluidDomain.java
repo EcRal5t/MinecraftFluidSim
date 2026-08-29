@@ -100,6 +100,7 @@ public final class FlipFluidDomain {
 	private final PressureBoundaryView pressureBoundaryView;
 	private final PressureSystem pressureSystem;
 	private final PressureProjectionStage pressureStage;
+	private final GranularMechanicalStage granularMechanicalStage;
 	private final FlipPressurePhaseGeometry pressurePhaseGeometry;
 	final FlipFreeSurfaceGeometry freeSurfaceGeometry;
 	private final FlipParticleReseeder particleReseeder;
@@ -138,7 +139,7 @@ public final class FlipFluidDomain {
 	private double lastGranularBoundaryImpulseX, lastGranularBoundaryImpulseY, lastGranularBoundaryImpulseZ;
 	private int[] granularReactivePreviousCells;
 	GranularCouplingFields granularCoupling;
-	private GranularCouplingFields granularNextCoupling;
+	GranularCouplingFields granularNextCoupling;
 	GranularCouplingFields pressureGranularCoupling;
 	FlipGranularCollision granularCollision;
 	int[] granularCarrierMaterialByCell;
@@ -203,6 +204,7 @@ public final class FlipFluidDomain {
 		this.pressureBoundaryView = new PressureBoundaryView(this);
 		this.pressureSystem = new PressureSystem(this);
 		this.pressureStage = new PressureProjectionStage(this, pressureSystem, pressureBoundaryView);
+		this.granularMechanicalStage = new GranularMechanicalStage(this);
 	}
 
 	public int sizeX() { return sizeX; }
@@ -3522,24 +3524,11 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			System.arraycopy(mac.velocityX, 0, mac.p2gVelocityX, 0, mac.velocityX.length);
 			System.arraycopy(mac.velocityY, 0, mac.p2gVelocityY, 0, mac.velocityY.length);
 			System.arraycopy(mac.velocityZ, 0, mac.p2gVelocityZ, 0, mac.velocityZ.length);
-			if (hasGranularInventory()) {
-				GranularMechanics.StepStats granularMechanics = GranularMechanics.stepVelocities(
-						granularState.parcels, granularState.registry, granularEnvironment(),
-						config.gravity(), dt);
+			GranularMechanics.StepStats granularMechanics = granularMechanicalStage.stepVelocities(dt);
+			if (granularMechanics != null) {
 				lastGranularBoundaryImpulseX += granularMechanics.boundaryImpulseX();
 				lastGranularBoundaryImpulseY += granularMechanics.boundaryImpulseY();
 				lastGranularBoundaryImpulseZ += granularMechanics.boundaryImpulseZ();
-				granularCollision.preview(granularState.parcels, granularState.registry, dt);
-				granularNextCoupling.rebuild(granularState.parcels, granularState.deposits, granularCollision::previewPosition);
-				if (!granularOccupancyFitsGeometry(granularNextCoupling)) {
-					granularCollision.resolveCapacity(granularState.parcels, granularCoupling,
-							cell -> SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell)));
-					granularNextCoupling.rebuild(granularState.parcels, granularState.deposits, granularCollision::previewPosition);
-					if (!granularOccupancyFitsGeometry(granularNextCoupling)) {
-						throw new IllegalStateException("Locally resolved granular occupancy exceeds geometry");
-					}
-				}
-				pressureGranularCoupling = granularNextCoupling;
 			}
 			double nextKineticEnergy = captureMechanicalAudit ? gridKineticEnergyJoules() : 0.0;
 			if (captureMechanicalAudit) {
@@ -3614,7 +3603,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			advectParticles(dt);
 			if (captureMechanicalAudit) mechanicalAudit.particleCollisionWorkJoules +=
 					particleKineticEnergyJoules() - particleKineticEnergy;
-			if (hasGranularInventory()) granularCollision.commit(granularState.parcels);
+			granularMechanicalStage.commitCollision();
 		}
 		double carrierTransferInitialKineticEnergy = captureMechanicalAudit ? particleKineticEnergyJoules() : 0.0;
 		if (precipitationEnabled) markMovedReactiveGranularCells(granularParcelCountBeforeAdvection);
@@ -3976,7 +3965,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return particleCellIndex(particles.positionX(particle), particles.positionY(particle), particles.positionZ(particle));
 	}
 
-	private int particleCellIndex(float positionX, float positionY, float positionZ) {
+	int particleCellIndex(float positionX, float positionY, float positionZ) {
 		float h = config.cellSize();
 		int x = Math.min(sizeX - 1, Math.max(0, (int) Math.floor(positionX / h)));
 		int y = Math.min(sizeY - 1, Math.max(0, (int) Math.floor(positionY / h)));
@@ -3986,40 +3975,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	long granularGeometricOpenSvq(int cell) {
 		return SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
-	}
-
-	private GranularMechanics.Environment granularEnvironment() {
-		return new GranularMechanics.Environment() {
-			@Override public GranularMechanics.FluidSample sample(float x, float y, float z) {
-				int cell = particleCellIndex(x, y, z);
-				int liquidMaterial = granularCarrierMaterialByCell[cell];
-				if (markerGrid.markerCount[cell] <= 0 || liquidMaterial < 0) {
-					return new GranularMechanics.FluidSample(false, 0.0, 0.0, 0.0,
-							1.225, 1.81e-5, 100_000.0, 0.0);
-				}
-				String materialId = materialRegistry.material(liquidMaterial).id();
-				GranularCarrier carrier = granularState.registry.carrier(granularState.registry.carrierHandle(materialId));
-				float capacity = effectiveOpenCellVolume(cell);
-				double submerged = capacity <= 0.0F ? 0.0
-						: Math.max(0.0, Math.min(1.0, markerGrid.exactCellMarkerVolume[cell] / capacity));
-				return new GranularMechanics.FluidSample(true,
-						sampleX(mac.velocityX, x, y, z), sampleY(mac.velocityY, x, y, z), sampleZ(mac.velocityZ, x, y, z),
-						markerGrid.cellDensity[cell], carrier.dynamicViscosity(), carrier.maximumReynolds(), submerged);
-			}
-
-			@Override public GranularMechanics.FluidImpulseApplication addFluidImpulse(float x, float y, float z,
-			                                      double impulseX, double impulseY, double impulseZ) {
-				boolean appliedX = addFaceImpulse(mac.velocityX, mac.velocityWeightX, 0, x, y, z,
-						unitScale.signedSolverMass(impulseX));
-				boolean appliedY = addFaceImpulse(mac.velocityY, mac.velocityWeightY, 1, x, y, z,
-						unitScale.signedSolverMass(impulseY));
-				boolean appliedZ = addFaceImpulse(mac.velocityZ, mac.velocityWeightZ, 2, x, y, z,
-						unitScale.signedSolverMass(impulseZ));
-				return new GranularMechanics.FluidImpulseApplication(
-						appliedX ? impulseX : 0.0, appliedY ? impulseY : 0.0, appliedZ ? impulseZ : 0.0,
-						appliedX ? 0.0 : impulseX, appliedY ? 0.0 : impulseY, appliedZ ? 0.0 : impulseZ);
-			}
-		};
 	}
 
 	private GranularDepositDynamics.Environment granularDepositEnvironment(long[] plannedSolid) {
@@ -4231,39 +4186,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return granularState.deposits.porosityQ(cell) / (double) GranularLimits.POROSITY_SCALE;
 	}
 
-	private boolean addFaceImpulse(
-			float[] field, float[] faceMass, int axis, float px, float py, float pz, double impulse
-	) {
-		if (impulse == 0.0) return true;
-		float h = config.cellSize();
-		int nx = axis == 0 ? sizeX + 1 : sizeX;
-		int ny = axis == 1 ? sizeY + 1 : sizeY;
-		int nz = axis == 2 ? sizeZ + 1 : sizeZ;
-		float gx = px / h - (axis == 0 ? 0.0F : 0.5F);
-		float gy = py / h - (axis == 1 ? 0.0F : 0.5F);
-		float gz = pz / h - (axis == 2 ? 0.0F : 0.5F);
-		int x0 = (int) Math.floor(gx), y0 = (int) Math.floor(gy), z0 = (int) Math.floor(gz);
-		float fx = gx - x0, fy = gy - y0, fz = gz - z0;
-		double validWeight = 0.0;
-		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
-			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
-			if (x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz) continue;
-			int face = (z * ny + y) * nx + x;
-			if (faceMass[face] <= 1.0e-8F) continue;
-			validWeight += trilinearWeight(ox, oy, oz, fx, fy, fz);
-		}
-		if (!(validWeight > 0.0)) return false;
-		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
-			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
-			if (x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz) continue;
-			int face = (z * ny + y) * nx + x;
-			if (faceMass[face] <= 1.0e-8F) continue;
-			double share = impulse * trilinearWeight(ox, oy, oz, fx, fy, fz) / validWeight;
-			field[face] += (float) (share / faceMass[face]);
-		}
-		return true;
-	}
-
 	void splatCenter(float px, float py, float pz, float particleAmount) {
 		float h = config.cellSize();
 		float gx = px / h - 0.5F, gy = py / h - 0.5F, gz = pz / h - 0.5F;
@@ -4350,7 +4272,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return 1.0 - transition * transition * (3.0 - 2.0 * transition);
 	}
 
-	private static float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz) {
+	static float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz) {
 		return (ox == 0 ? 1.0F - fx : fx) * (oy == 0 ? 1.0F - fy : fy) * (oz == 0 ? 1.0F - fz : fz);
 	}
 
@@ -4903,7 +4825,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						granularNextCoupling.solidSvq(index), dt);
 	}
 
-	private boolean granularOccupancyFitsGeometry(GranularCouplingFields coupling) {
+	boolean granularOccupancyFitsGeometry(GranularCouplingFields coupling) {
 		for (int cell = 0; cell < cellCount; cell++) {
 			if (coupling.solidSvq(cell) > SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell))) return false;
 		}
@@ -5673,17 +5595,17 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	int zFaceIndex(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
 	int cellIndexChecked(int x, int y, int z) { if (!inside(x, y, z)) throw new IndexOutOfBoundsException(); return cellIndex(x, y, z); }
 
-	private float sampleX(float[] field, float x, float y, float z) {
+	float sampleX(float[] field, float x, float y, float z) {
 		float h = config.cellSize();
 		return trilinearValid(field, mac.velocityValidX, sizeX + 1, sizeY, sizeZ,
 				x / h, y / h - 0.5F, z / h - 0.5F);
 	}
-	private float sampleY(float[] field, float x, float y, float z) {
+	float sampleY(float[] field, float x, float y, float z) {
 		float h = config.cellSize();
 		return trilinearValid(field, mac.velocityValidY, sizeX, sizeY + 1, sizeZ,
 				x / h - 0.5F, y / h, z / h - 0.5F);
 	}
-	private float sampleZ(float[] field, float x, float y, float z) {
+	float sampleZ(float[] field, float x, float y, float z) {
 		float h = config.cellSize();
 		return trilinearValid(field, mac.velocityValidZ, sizeX, sizeY, sizeZ + 1,
 				x / h - 0.5F, y / h - 0.5F, z / h);
