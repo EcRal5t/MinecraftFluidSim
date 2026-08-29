@@ -16,6 +16,23 @@ import java.util.List;
 public final class ContainerItemStacks {
 	private ContainerItemStacks() { }
 
+	public static ItemStack bindProfile(ItemStack stack, String fingerprint) {
+		if (fingerprint == null || !fingerprint.matches("[0-9a-f]{64}")) {
+			throw new IllegalArgumentException("Container world profile fingerprint is invalid");
+		}
+		if (fluidMixture(stack) == null && stack.get(MmmComponents.CHEMICAL_CONTENTS) == null
+				&& stack.get(MmmComponents.GRANULAR_CONTENTS) == null) {
+			throw new IllegalArgumentException("Only a filled typed container may bind a world profile");
+		}
+		stack.set(MmmComponents.PROFILE_FINGERPRINT, fingerprint);
+		return stack;
+	}
+
+	public static String profileFingerprint(ItemStack stack) {
+		String value = stack.get(MmmComponents.PROFILE_FINGERPRINT);
+		return value != null && value.matches("[0-9a-f]{64}") ? value : null;
+	}
+
 	public static FluidMixture fluidMixture(ItemStack stack) {
 		if (!(stack.getItem() instanceof MaterialBucketItem)
 				|| stack.get(MmmComponents.CHEMICAL_CONTENTS) != null) return null;

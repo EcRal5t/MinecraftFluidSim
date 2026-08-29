@@ -17,6 +17,7 @@ public final class GranularContainerItem extends Item {
 	public static boolean isEmpty(ItemStack stack) {
 		return stack.getItem() instanceof GranularContainerItem
 				&& stack.get(MmmComponents.GRANULAR_CONTENTS) == null
+				&& stack.get(MmmComponents.PROFILE_FINGERPRINT) == null
 				&& !ContainerItemStacks.hasLiquidComponents(stack);
 	}
 
@@ -45,7 +46,11 @@ public final class GranularContainerItem extends Item {
 			net.minecraft.world.item.component.TooltipDisplay tooltipDisplay,
 			java.util.function.Consumer<Component> tooltip, TooltipFlag flag) {
 		GranularContents contents = unvalidatedContents(stack);
-		if (contents == null) return;
+		if (contents == null) {
+			if (isEmpty(stack)) tooltip.accept(Component.translatable("item.mmm.granular_container.empty")
+					.withStyle(ChatFormatting.GRAY));
+			return;
+		}
 		tooltip.accept(Component.translatable("item.mmm.granular_container.contents",
 				contents.groups().size(), String.format("%.2f%%", 100.0 * contents.totalSolidVolumeSvq() / SolidVolume.SVQ_PER_BV))
 				.withStyle(ChatFormatting.GRAY));
@@ -55,6 +60,12 @@ public final class GranularContainerItem extends Item {
 					.withStyle(ChatFormatting.DARK_GRAY));
 			if (group.reactive()) tooltip.accept(Component.translatable("item.mmm.granular_container.reactive",
 					group.composition().size()).withStyle(ChatFormatting.DARK_GRAY));
+		}
+		String profile = ContainerItemStacks.profileFingerprint(stack);
+		if (profile != null) tooltip.accept(Component.translatable("item.mmm.container.profile",
+				profile.substring(0, 12)).withStyle(ChatFormatting.DARK_GRAY));
+		else if (stack.get(MmmComponents.PROFILE_FINGERPRINT) != null) {
+			tooltip.accept(Component.translatable("item.mmm.container.profile_invalid").withStyle(ChatFormatting.RED));
 		}
 	}
 }

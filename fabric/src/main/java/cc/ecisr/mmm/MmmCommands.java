@@ -245,7 +245,10 @@ public final class MmmCommands {
 					ContainerFluidLedger.NANOS_PER_BLOCK, material.referenceDensity()))));
 			description = material.id() + " 满材料桶";
 		}
-		if (!"empty".equals(requested)) service.attachDebugLiquidThermalContents(stack);
+		if (!"empty".equals(requested)) {
+			service.bindActualContainerProfile(stack);
+			service.attachDebugLiquidThermalContents(stack);
+		}
 		if (!player.getInventory().add(stack)) player.drop(stack, false);
 		player.getInventory().setChanged();
 		return succeed(source, "已生成 " + description + "（显式 creative/debug 外部源）", 1);
@@ -274,6 +277,7 @@ public final class MmmCommands {
 			GranularTransferLedger ledger = new GranularTransferLedger(List.of(
 					new GranularTransferLedger.Group(material.id(), svq, mass, null)));
 			stack = ContainerItemStacks.toStack(GranularContents.fromLedger(ledger, registry, null));
+			service.bindActualContainerProfile(stack);
 			description = material.id() + " 满干颗粒容器";
 		}
 		if (!player.getInventory().add(stack)) player.drop(stack, false);
@@ -321,6 +325,7 @@ public final class MmmCommands {
 					mixture.stableAmounts(registry))));
 			stack = ContainerItemStacks.toStack(
 					ChemicalContents.fromLedger(ledger, registry, ContainerFluidLedger.NANOS_PER_BLOCK));
+			service.bindActualContainerProfile(stack);
 			service.attachDebugLiquidThermalContents(stack);
 		}
 		if (!player.getInventory().add(stack)) player.drop(stack, false);

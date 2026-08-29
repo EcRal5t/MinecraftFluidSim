@@ -76,12 +76,20 @@ public final class AirNetworkValidation {
 		check(network.gaugePressure(evacuated) == AirNetwork.MIN_GAUGE_PRESSURE,
 				"evacuated cavity must clamp at the near-vacuum floor");
 		check(network.pressureFloorEvents() > 0, "floor clamp was not counted");
+		int floorEvents = network.pressureFloorEvents();
+		check(network.observedGaugePressure(evacuated) == AirNetwork.MIN_GAUGE_PRESSURE
+				&& network.pressureFloorEvents() == floorEvents,
+				"read-only pressure observation changed floor diagnostics");
 
 		int filled = network.addNode(1.0, 1.0);
 		network.updateAvailableVolume(filled, 0.0);
 		check(network.gaugePressure(filled) == AirNetwork.MAX_GAUGE_PRESSURE,
 				"filled cavity must clamp at the pressure ceiling");
 		check(network.pressureCeilingEvents() > 0, "ceiling clamp was not counted");
+		int ceilingEvents = network.pressureCeilingEvents();
+		check(network.observedGaugePressure(filled) == AirNetwork.MAX_GAUGE_PRESSURE
+				&& network.pressureCeilingEvents() == ceilingEvents,
+				"read-only pressure observation changed ceiling diagnostics");
 		checkLedger(network, "equation-of-state probes");
 	}
 
@@ -93,6 +101,10 @@ public final class AirNetworkValidation {
 				List.of(inventory, GasInventory.EMPTY), GasInventory.EMPTY, GasInventory.EMPTY);
 		check(network.gaugePressure(2) == -AirNetwork.REFERENCE_PRESSURE,
 				"empty sealed cavity must derive exact vacuum pressure");
+		check(network.observedGaugePressure(2) == -AirNetwork.REFERENCE_PRESSURE,
+				"read-only empty-cavity pressure changed the exact vacuum convention");
+		new cc.ecisr.mmm.fluid.CellCarrierInventoryView.GasAmount(false, 2, 0.0,
+				GasRegistry.STANDARD_TEMPERATURE_K, List.of());
 		check(network.standardVolumeNanos(2) == 0L && network.auditClosed(),
 				"vacuum node created gas inventory or opened the ledger");
 		GasStateSnapshot snapshot = GasStateSnapshot.capture(

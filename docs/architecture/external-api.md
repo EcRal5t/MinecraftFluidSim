@@ -42,6 +42,14 @@
 
 Query API 不承诺 pressure、速度、相分数、gas/颗粒/coherent solid 摘要或内部调度字段。新增字段或其他库存类型必须保持调用方可判定的单位与失败语义，不能悄悄复用 `detail` 文本扩展协议。
 
+## 内置探针与控制界面
+
+主 Mod 的 field probe 是内部、服务端权威的产品入口，不扩展上述稳定 Query ABI。普通使用先通过 `ShellFluidQuery` 对命中壳面两侧分别调用公开 Query，只有唯一 owner 时才继续；潜行使用以有界 DDA 向内寻找第一格凝聚相。随后它从同一 live region、同一 network generation 和同一 cell 读取 loader-neutral `CellCarrierInventoryView`，显示 active/deposit/coherent solid 与 ambient/sealed gas 的有界 Top-N 摘要。液体 observation 与 carrier observation 身份不一致时整次拒绝，不拼接两个时刻的部分真值；路径不加载 chunk、不恢复 solver、不唤醒、不 checkpoint，也不重建 gas topology 或 thermal grid。这个额外 carrier view 是内部诊断模型，外部 Mod 不能由它推断公开 Query 已承诺 gas/solid 字段。
+
+对 controller 使用探针会打开 server-authored bounded summary：identity、完整 footprint、当前/保留预算、operator intent、motion/thermal state、封闭 availability reason、live inventory（若 solver 已加载）、已观测载体温度范围、事务门和数值诊断。metadata-only UNLOADED 只报告 inventory unavailable，不为展示恢复派生状态。界面只提供 select、pause、resume 和显式 availability refresh；每个动作都携带一次性、按 player+region 隔离的 opaque generation，服务端再次核对距离、方块、owner、权限和 token，客户端 summary 没有提交权。打开或读取 summary 本身不加载、不唤醒、不 checkpoint。
+
+对 fixed thermal reservoir 使用探针会打开 setpoint 界面。summary 绑定一次性 player+dimension+block token，并携带已提交 world thermal registry 的公共载体温度交集；只有创造玩家能提交有限且处于该区间的 K 值。服务端重验距离、方块、世界可写状态和 token，持久化 BlockEntity 后只刷新相邻已加载区域的 boundary flux 并唤醒 thermal scheduling，不直接改写 region `U`。
+
 ## Jade 观察适配
 
 Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会解析任何 Jade 类，也不影响主 Mod 启动。服务端 provider 只对 `fluid_boundary`、`fluid_controller` 和 `thermal_reservoir` 请求数据，并通过上述 Query API 观察命中面近侧或跨过一格壳体的反侧位置。非 `OK` 结果不产生 tooltip，不从方块外观猜测流体。

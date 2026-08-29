@@ -292,6 +292,9 @@ final class FlipThermalState {
 	CoherentPhaseStore coherentPhases() { return coherentPhases; }
 	GranularEnergyColumn granularEnergy() { return granularEnergy; }
 	ThermalRegistry registry() { return registry; }
+	ThermalCellGrid.TemperatureRange observedCarrierTemperatureRange() {
+		return cellGrid.observedTemperatureRange();
+	}
 	ThermalPhaseChangeEngine phaseChange() { return phaseChange; }
 	GasLiquidPhaseModel gasLiquidPhase(AirNetwork network) {
 		if (gasModel == null) throw new IllegalStateException("Gas thermal model is not bound");

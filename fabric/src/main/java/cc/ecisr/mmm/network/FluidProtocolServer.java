@@ -42,10 +42,20 @@ public final class FluidProtocolServer {
 		PayloadTypeRegistry.clientboundPlay().register(FluidChemicalSnapshotPayload.TYPE, FluidChemicalSnapshotPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(FluidGranularSnapshotPayload.TYPE, FluidGranularSnapshotPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(FluidThermalSnapshotPayload.TYPE, FluidThermalSnapshotPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(ControllerSummaryPayload.TYPE, ControllerSummaryPayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(ControllerActionPayload.TYPE, ControllerActionPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(
+				ThermalReservoirSummaryPayload.TYPE, ThermalReservoirSummaryPayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(
+				ThermalReservoirSetpointPayload.TYPE, ThermalReservoirSetpointPayload.CODEC);
 
 		ServerConfigurationNetworking.registerGlobalReceiver(
 				FluidProtocolResponsePayload.TYPE, FluidProtocolServer::receiveResponse
 		);
+		ServerPlayNetworking.registerGlobalReceiver(ControllerActionPayload.TYPE, (payload, context) ->
+				context.server().execute(() -> receiveControllerAction(payload, context.player())));
+		ServerPlayNetworking.registerGlobalReceiver(ThermalReservoirSetpointPayload.TYPE, (payload, context) ->
+				context.server().execute(() -> receiveThermalReservoirSetpoint(payload, context.player())));
 		ServerConfigurationConnectionEvents.CONFIGURE.register((listener, server) -> {
 			removeSession(server, listener.getOwner().id());
 			((FabricServerConfigurationPacketListenerImpl) listener).addTask(new HandshakeTask(listener, server));
@@ -63,9 +73,10 @@ public final class FluidProtocolServer {
 			}
 			FluidSimulationService.get(server).sendSnapshots(listener.player);
 		});
-		ServerPlayConnectionEvents.DISCONNECT.register((listener, server) ->
-				removeSession(server, listener.player.getUUID())
-		);
+		ServerPlayConnectionEvents.DISCONNECT.register((listener, server) -> {
+			FluidSimulationService.get(server).forgetInteractiveViewer(listener.player.getUUID());
+			removeSession(server, listener.player.getUUID());
+		});
 	}
 
 	public static boolean send(ServerPlayer player, FluidSnapshotPayload payload) {
@@ -99,6 +110,20 @@ public final class FluidProtocolServer {
 	public static boolean send(ServerPlayer player, FluidThermalSnapshotPayload payload) {
 		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.Layout.THERMAL)
 				|| !ServerPlayNetworking.canSend(player, FluidThermalSnapshotPayload.TYPE)) return false;
+		ServerPlayNetworking.send(player, payload);
+		return true;
+	}
+
+	public static boolean send(ServerPlayer player, ControllerSummaryPayload payload) {
+		if (!isNegotiated(player.level().getServer(), player.getUUID())
+				|| !ServerPlayNetworking.canSend(player, ControllerSummaryPayload.TYPE)) return false;
+		ServerPlayNetworking.send(player, payload);
+		return true;
+	}
+
+	public static boolean send(ServerPlayer player, ThermalReservoirSummaryPayload payload) {
+		if (!isNegotiated(player.level().getServer(), player.getUUID())
+				|| !ServerPlayNetworking.canSend(player, ThermalReservoirSummaryPayload.TYPE)) return false;
 		ServerPlayNetworking.send(player, payload);
 		return true;
 	}
@@ -138,6 +163,28 @@ public final class FluidProtocolServer {
 			PENDING.remove(listener);
 		}
 		((FabricServerConfigurationPacketListenerImpl) listener).completeTask(TASK_TYPE);
+	}
+
+	private static void receiveControllerAction(ControllerActionPayload payload, ServerPlayer player) {
+		FluidSimulationService service = FluidSimulationService.get(player.level().getServer());
+		String failure = service.applyControllerConsoleAction(player, payload.regionId(), payload.controllerPosition(),
+				payload.summaryGeneration(), payload.action());
+		if (failure != null) player.sendSystemMessage(Component.translatable(
+				"message.mmm.controller.console_action_failed", failure), true);
+		var summary = service.controllerSummary(player, payload.controllerPosition());
+		if (summary != null) send(player, new ControllerSummaryPayload(summary));
+	}
+
+	private static void receiveThermalReservoirSetpoint(
+			ThermalReservoirSetpointPayload payload, ServerPlayer player
+	) {
+		FluidSimulationService service = FluidSimulationService.get(player.level().getServer());
+		String failure = service.applyThermalReservoirSetpoint(player, payload.position(),
+				payload.summaryGeneration(), payload.temperatureK());
+		if (failure != null) player.sendSystemMessage(Component.translatable(
+				"message.mmm.thermal_reservoir.action_failed", failure), true);
+		var summary = service.thermalReservoirSummary(player, payload.position());
+		if (summary != null) send(player, new ThermalReservoirSummaryPayload(summary));
 	}
 
 	private static boolean isNegotiated(MinecraftServer server, UUID playerId) {

@@ -39,6 +39,29 @@ final class ControllerItemTransferCoordinator {
 			long requestedAmount, long baseAmount,
 			TransferExecutor executor, FinalItemResolver finalItemResolver
 	) {
+		return executeCore(service, region, level, actor, beforeStack, beforeStack, operation,
+				resourceKind, requestedAmount, baseAmount, executor, finalItemResolver);
+	}
+
+	/** Creative descriptors remain the actor item while this server-resolved stack supplies physical source truth. */
+	static Result executeCreativeSource(
+			FluidSimulationService service, FluidRegion region, ServerLevel level,
+			ContainerTransferActor actor, ItemStack descriptorStack, ItemStack resolvedSourceStack,
+			ContainerTransferJournal.ResourceKind resourceKind, long requestedAmount,
+			TransferExecutor executor, FinalItemResolver finalItemResolver
+	) {
+		return executeCore(service, region, level, actor, descriptorStack, resolvedSourceStack,
+				ContainerTransferJournal.Operation.INSERT, resourceKind, requestedAmount, 0L,
+				executor, finalItemResolver);
+	}
+
+	private static Result executeCore(
+			FluidSimulationService service, FluidRegion region, ServerLevel level,
+			ContainerTransferActor actor, ItemStack beforeStack, ItemStack resolvedSourceStack,
+			ContainerTransferJournal.Operation operation, ContainerTransferJournal.ResourceKind resourceKind,
+			long requestedAmount, long baseAmount,
+			TransferExecutor executor, FinalItemResolver finalItemResolver
+	) {
 		if (service.hasPendingContainerTransfer(region.id(), actor)) {
 			return new Result(new FluidTransferService.TransferOutcome(false,
 					operation == ContainerTransferJournal.Operation.INSERT, beforeStack,
@@ -66,17 +89,22 @@ final class ControllerItemTransferCoordinator {
 		} catch (IllegalArgumentException invalidItem) {
 			return failed(operation, beforeStack, invalidItem.getMessage(), null);
 		}
+		if (beforeFingerprint.profileFingerprint() != null
+				&& !service.acceptsActualContainerProfile(beforeStack)) {
+			return failed(operation, beforeStack,
+					"FOREIGN_PROFILE：actual container 不属于当前世界；库存保持不变", null);
+		}
 
 		Double preparedThermalEnergy = null;
 		if (resourceKind == ContainerTransferJournal.ResourceKind.FLUID_NANOS
 				&& region.domain().hasThermalState()) {
 			preparedThermalEnergy = 0.0;
 			if (operation == ContainerTransferJournal.Operation.INSERT) {
-				ThermalContents source = ContainerItemStacks.thermalContents(beforeStack);
+				ThermalContents source = ContainerItemStacks.thermalContents(resolvedSourceStack);
 				if (source == null) return failed(operation, beforeStack,
 						"热区域注入缺少 ThermalContents；拒绝发布不完整 WAL", null);
 				preparedThermalEnergy = FluidTransferService.coupledSplitEnergy(source, requestedAmount,
-						FluidTransferService.liquidVolumeNanos(beforeStack));
+						FluidTransferService.liquidVolumeNanos(resolvedSourceStack));
 			}
 		}
 
@@ -134,7 +162,7 @@ final class ControllerItemTransferCoordinator {
 		ItemStack finalAfter;
 		ContainerTransferJournal.ItemFingerprint afterFingerprint;
 		try {
-			finalAfter = finalItemResolver.resolve(rawOutcome.stack(), beforeStack);
+			finalAfter = service.bindActualContainerProfile(finalItemResolver.resolve(rawOutcome.stack(), beforeStack));
 			afterFingerprint = ContainerTransferItems.fingerprint(finalAfter);
 		} catch (RuntimeException invalidAfterItem) {
 			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,

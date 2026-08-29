@@ -14,6 +14,8 @@
 |---|---|---|
 | 初始化、tick、payload 注册 | `fabric/src/main/java/cc/ecisr/mmm/MmmMod.java` | 生命周期、registry 和网络注册成套 |
 | 正常游玩入口 | `block/FluidControllerBlock.java`、`block/MmmBlocks.java`、`item/MmmCreativeEntries.java`、`resources/data/mmm/recipe/` | 激活即运行；潜行交互只切换持久暂停意图；配方、创造栏和注册同步 |
+| 产品目录与创造源 | `item/MmmCreativeEntries.java`、`MmmItems.java`、`CreativeSourceItem.java`、`simulation/CreativeSourceCatalog.java`、`core/.../transfer/CreativeSourceDescriptor.java` | 自定义 tab 顺序稳定；descriptor 只表达意图；每次使用按 committed world registries 服务端解析 exact amount/kg/U；不把 template 当 actual inventory |
+| 快速入门与物品提示 | `item/QuickStartGuideItem.java`、`client/QuickStartScreen.java`、`block/MmmBlockItem.java`、`assets/mmm/lang/` | 指南与 tooltip 只描述当前产品边界；资源、注册和创造栏同步；不从客户端文案获得写权限 |
 | `/mmm` 命令 | `MmmCommands.java` | 状态操作留在服务层；完整输出写 transcript |
 | Minecraft 编排 | `fabric/.../simulation/FluidSimulationService.java`、`FluidWorldTargetResolver.java` | 服务层每域先过 availability；目标解析只读世界与区域，不提交事务；不把世界事务下沉到 solver |
 | 持久区域管理 | `FluidRegionOperations.java`、`FluidRegionPersistence.java` | checkpoint 成功后才释放；当前功能布局必须精确匹配；committed metadata 先登记再做 runtime admission；不改写不匹配载荷 |
@@ -29,7 +31,10 @@
 | takeover | `TakeoverTransaction.java`、`TakeoverBackupStore.java` | journal/WARNING 完成前禁止世界修改 |
 | ownership | `simulation/ownership/`、`FluidRegionPersistence.java` | WAL→WARNING→世界→region HEAD→committed；未知状态保留并锁定 |
 | 容器事务 | `core/.../transfer/ContainerTransferActor.java`、`ContainerTransferJournal.java`、`fabric/.../simulation/ControllerItemTransferCoordinator.java`、`MinecraftContainerActorAccess.java`、`ContainerTransferItems.java`、`ContainerTransferStore.java`、`ContainerTransferRecovery.java`、`FluidTransferService.java` | coordinator 独占 WAL→staged HEAD→actor 收敛顺序；journal 与 actor identity 是 loader-neutral 数据；Minecraft actor 定位、冲突分类、NBT/ItemStack 映射与 durable save 只在 Fabric adapter；actor durable save 前不得删 WAL |
-| typed 容器真值 | `core/.../transfer/`、`fabric/.../item/ContainerItemStacks.java` | 体积/质量/species/SVQ/U、actor identity 与 journal 的纯 Java 真值不引用 Minecraft；`ItemStack` component 编解码只留在 Fabric adapter；持久编码不携带 runtime handle |
+| typed 容器真值 | `core/.../transfer/`、`fabric/.../item/ContainerItemStacks.java` | 体积/质量/species/SVQ/U、world profile、actor identity 与 journal 的纯 Java 真值不引用 Minecraft；actual 非空容器必须绑定 committed profile；`ItemStack` component 编解码只留在 Fabric adapter；持久编码不携带 runtime handle |
+| 内置 field probe | `item/FieldProbeItem.java`、`simulation/ShellFluidQuery.java`、`core/.../fluid/CellCarrierInventoryView.java`、`FluidWorldTargetResolver.java` | 壳面两侧 owner 必须唯一；液体/carrier identity 同代同格；Top-N 有界；不加载、不唤醒、不 checkpoint、不建派生拓扑 |
+| controller console | `core/.../controller/`、`network/Controller*Payload.java`、`client/ControllerConsoleScreen.java`、`FluidSimulationService.controllerSummary` | server-authored bounded summary；UNLOADED 不发明 live inventory；动作 token 一次性且 player+region 隔离；每次动作重验距离/owner/权限；只含 select/pause/resume/availability refresh |
+| fixed thermal reservoir 调节 | `thermal/ThermalReservoirSummary.java`、`WorldPositionActionSessions.java`、`network/ThermalReservoir*Payload.java`、`client/ThermalReservoirScreen.java` | setpoint 限于 committed thermal registry 公共有效域；creative-only；一次性 player+world-position token；只改未来 boundary flux，不直接改 region U |
 | 活动求解器 | `core/.../fluid/FlipFluidDomain.java` | CPU 规范实现；mechanics→conduction→reaction→phase→granular→reseed |
 | 后端完整候选 | `FluidDomainState.java`、`FluidStepRequest.java`、`FluidStepCandidate.java`、`FluidSolverBackend.java`、`fabric/.../simulation/FluidSimulationService.stepMotionOnce`、`FluidRegion.adoptStepCandidate` | 后端只计算私有完整后继并回报实际 moving-body 液体冲量；输入有硬上限；不持有世界、actor、HEAD 或提交权；生产 motion step 与 replay 同路，校验通过后才原子替换 live solver，候选失败不改动 live domain |
 | 自由面/压力 | `FlipPressurePhaseGeometry.java`、`FlipFreeSurfaceGeometry.java`、`FlipVolumeDriftCorrection.java`、`FlipVelocityExtrapolator.java` | 守恒 marker footprint 决定 pressure component；含真实 marker 的 pressure cell 使用 exact PLIC，footprint-only cell 使用重建 fallback；贴壁 marker 低占位格不降成 air fringe；carrier face 与库存仍取实际 marker；PCG 使用绝对 RMS 容差，未收敛候选安全暂停 |
@@ -66,11 +71,11 @@
 所有门由一个 runner 执行。小改动只选表中最近 selector，不累计其他领域：
 
 ```powershell
-./gradlew.bat runCpuValidation --offline --no-daemon
-./gradlew.bat runCpuValidation '-PcpuValidation=region-state,containers' --offline --no-daemon
-./gradlew.bat runCpuValidation -PcpuValidation=milestone --offline --no-daemon
-./gradlew.bat runCpuValidation -PcpuValidation=soak --offline --no-daemon
-./gradlew.bat runCpuValidation -PcpuValidation=list --offline --no-daemon
+./gradlew.bat :fabric:runCpuValidation --offline --no-daemon
+./gradlew.bat :fabric:runCpuValidation '-PcpuValidation=region-state,containers' --offline --no-daemon
+./gradlew.bat :fabric:runCpuValidation -PcpuValidation=milestone --offline --no-daemon
+./gradlew.bat :fabric:runCpuValidation -PcpuValidation=soak --offline --no-daemon
+./gradlew.bat :fabric:runCpuValidation -PcpuValidation=list --offline --no-daemon
 ```
 
 | 改动 | selector | 追加条件 |
@@ -88,6 +93,7 @@
 | controller 注液/生产 step/权威 handoff/逐帧预算 | `production-replay` | 默认 `8×8×8` 闭壳注入 16 BV，JVM 预热后每个 live step 不超过 40 ms；另以 `(5,0,4)+16 BV`、40 步后 `(3,3,5)+14 BV` 的非平面注液轨迹建立两条 1000 步门：隔离 gas 的门约束尾部/终值动能及 exact 体积/质量；正式 thermal/gas/phase 定义的门每步经过 backend capture/restore，要求初始 `64 m³std` 库存在两次注液后 source/sink 不变、容量依次为 `48/34 m³`、总 `U` 闭合且压力逐 node 满足 inventory/volume/temperature EoS。thermal-off 的恢复/清空路径另要求 `34 m³std` 库存经 `empty` 扩容到 `64 m³`、边界注入 16 BV 后在 `48 m³` 容量内连续通过 200 个 backend candidate/restore，期间 partial gas owner、source/sink 与总库存不变。正式半满状态还要求 capture/restore、phase-off backend candidate/restore 等价，并要求独立预热后新建 domain 的首个 phase-on production step 在 40 ms 内闭合 gas、pending volume 与总 `U`；环境初始化和先空腔后注液压缩的平面自由面分别连续执行 500/1000 次 phase-off backend candidate/restore，以 opt-in mechanical audit 约束动能峰值/尾部/终值、质心漂移、体力-pressure 功残差、gas lineage 和总 `U`；同一平面场景还以 500 个 candidate 约束静止玩家尺寸 kinematic boundary 不放大动能，并核对液体/外部约束反作用冲量；phase-off backend candidate 的复制耗时仅作诊断，phase-on 长跑会引入真实非平衡相变/自然对流，不能冒充纯机械平衡门 |
 | checkpoint/配置/恢复 | `region-state` | 自动门无法覆盖事务时才做真实重启；world capability bundle 的发布/恢复/故障注入同属此门，不为它新增 selector |
 | protocol/snapshot | `protocol` | 改注册入口才启动专服 |
+| field probe/controller console/thermal setpoint payload | `protocol` | 改 carrier 观察追加对应 `granular`/`air-network`/`thermal`；改 summary lifecycle 追加 `lifecycle` |
 | controller/footprint | `boundary` | 改预算追加 `region-manager` |
 | pressure/free-surface/MAC/drift | `free-surface` | 改 marker 分布追加 `reseeding` |
 | cut-cell/CCD | `cut-cell` | Minecraft adapter 追加 `shape` |

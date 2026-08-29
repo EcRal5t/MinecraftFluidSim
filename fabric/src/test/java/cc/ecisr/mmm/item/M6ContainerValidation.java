@@ -12,6 +12,7 @@ import cc.ecisr.mmm.granular.SolidCompositionRecord;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.transfer.ChemicalContents;
 import cc.ecisr.mmm.transfer.ContainerFluidLedger;
+import cc.ecisr.mmm.transfer.CreativeSourceDescriptor;
 import cc.ecisr.mmm.transfer.FluidMixture;
 import cc.ecisr.mmm.transfer.GranularContents;
 import cc.ecisr.mmm.transfer.ThermalContents;
@@ -35,6 +36,7 @@ public final class M6ContainerValidation {
 	private M6ContainerValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		validateCreativeSourceDescriptor();
 		run("ledger arithmetic is exact and overflow-checked", M6ContainerValidation::testArithmetic);
 		run("conversions round real marker volumes within half a quantum", M6ContainerValidation::testConversions);
 		run("bucket canonicalization boundaries", M6ContainerValidation::testCanonicalization);
@@ -48,6 +50,17 @@ public final class M6ContainerValidation {
 		run("thermal contents bind raw energy to exact liquid truth", M6ContainerValidation::testThermalContents);
 		run("full bucket round-trips through the primitives", M6ContainerValidation::testBucketRoundTrip);
 		System.out.println("M6ContainerValidation passed " + passed + " scenarios");
+	}
+
+	private static void validateCreativeSourceDescriptor() {
+		CreativeSourceDescriptor descriptor = new CreativeSourceDescriptor(
+				"mmm:source/material/water", ContainerFluidLedger.NANOS_PER_BLOCK, 293.15);
+		check(CreativeSourceDescriptor.decode(descriptor.encode()).equals(descriptor),
+				"creative source descriptor did not round-trip canonically");
+		try {
+			CreativeSourceDescriptor.decode("mmm:source/material/water;1000000000;7ff8000000000000");
+			throw new AssertionError("non-finite creative source temperature was accepted");
+		} catch (IllegalArgumentException expected) { }
 	}
 
 	private static void testThermalContents() {

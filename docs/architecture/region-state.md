@@ -142,6 +142,8 @@ restore 失败的区域保持 metadata-only UNLOADED/PAUSED 或 LOCKED。命令�
 
 availability 使用封闭 reason code；详细诊断只用于日志和本地展示，不充当状态机输入。availability 变化本身不捕获库存；仅当释放已加载 solver 时，才允许先发布一个合法完整 checkpoint。恢复条件满足后重新从原 HEAD restore，并按持久 operator intent 决定是否 step。
 
+operator intent 与 availability 在 metadata-only 状态也保持正交：操作者可以在不恢复 solver 的情况下把 UNLOADED region 的下一次运行意图设为 PAUSED 或 RUNNING；resume intent 不得为了立即运行而加载、唤醒或改写 checkpoint。controller console 的 summary 只读现有 metadata 和已维护的 bounded ledger；live carrier totals、温度范围和需要 solver 的 usage 在 UNLOADED 时明确 unavailable。显式 refresh availability 才可尝试当前 runtime admission/restore，成功后仍按保存的 operator intent 决定是否 step。
+
 ## 恢复
 
 - 正常启动只读取 HEAD 指向的 generation，不自动猜测另一槽。

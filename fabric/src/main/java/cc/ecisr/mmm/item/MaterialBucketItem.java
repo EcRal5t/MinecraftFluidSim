@@ -66,7 +66,8 @@ public final class MaterialBucketItem extends Item {
 				&& mass(stack) < 0.0
 				&& stack.get(MmmComponents.MIXTURE_COMPONENTS) == null
 				&& stack.get(MmmComponents.CHEMICAL_CONTENTS) == null
-				&& stack.get(MmmComponents.THERMAL_CONTENTS) == null;
+				&& stack.get(MmmComponents.THERMAL_CONTENTS) == null
+				&& stack.get(MmmComponents.PROFILE_FINGERPRINT) == null;
 	}
 
 	@Override
@@ -91,6 +92,11 @@ public final class MaterialBucketItem extends Item {
 	public void appendHoverText(ItemStack stack, TooltipContext context, net.minecraft.world.item.component.TooltipDisplay tooltipDisplay,
 			java.util.function.Consumer<Component> tooltip, TooltipFlag flag) {
 		long nanos = volume(stack);
+		if (isEmptyMaterialBucket(stack)) {
+			tooltip.accept(Component.translatable("item.mmm.material_bucket.empty")
+					.withStyle(ChatFormatting.GRAY));
+			return;
+		}
 		FluidMixture mixture = mixture(stack);
 		ChemicalContents chemical = null;
 		String chemicalEncoded = stack.get(MmmComponents.CHEMICAL_CONTENTS);
@@ -116,6 +122,7 @@ public final class MaterialBucketItem extends Item {
 							Long.toString(species.amountQuanta())).withStyle(ChatFormatting.DARK_GRAY));
 				}
 			}
+			appendProfileTooltip(stack, tooltip);
 			return;
 		}
 		if (nanos > 0L && mixture != null) {
@@ -140,6 +147,16 @@ public final class MaterialBucketItem extends Item {
 							.withStyle(ChatFormatting.DARK_GRAY));
 				}
 			}
+			appendProfileTooltip(stack, tooltip);
+		}
+	}
+
+	private static void appendProfileTooltip(ItemStack stack, java.util.function.Consumer<Component> tooltip) {
+		String profile = ContainerItemStacks.profileFingerprint(stack);
+		if (profile != null) tooltip.accept(Component.translatable("item.mmm.container.profile",
+				profile.substring(0, 12)).withStyle(ChatFormatting.DARK_GRAY));
+		else if (stack.get(MmmComponents.PROFILE_FINGERPRINT) != null) {
+			tooltip.accept(Component.translatable("item.mmm.container.profile_invalid").withStyle(ChatFormatting.RED));
 		}
 	}
 

@@ -52,9 +52,8 @@ public final class FluidRegionLifecycle {
 	}
 
 	public void setOperatorPaused(boolean paused, int stepIntervalTicks) {
-		if (!paused && state == State.UNLOADED) return;
 		operatorPaused = paused;
-		if (!paused) wakeForActivity(stepIntervalTicks);
+		if (!paused && state != State.UNLOADED) wakeForActivity(stepIntervalTicks);
 	}
 
 	/** Availability blocks stepping without overwriting the player's persistent run/pause intent. */

@@ -7,11 +7,16 @@ import cc.ecisr.mmm.api.event.ContainerTransferCommittedEvent;
 import cc.ecisr.mmm.api.event.MmmEventApi;
 import cc.ecisr.mmm.api.transfer.TransferQuantity;
 import cc.ecisr.mmm.block.MmmBlocks;
+import cc.ecisr.mmm.block.ThermalReservoirBlockEntity;
 import cc.ecisr.mmm.chemistry.ChemicalDataPackLoader;
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
+import cc.ecisr.mmm.controller.ControllerConsoleAction;
+import cc.ecisr.mmm.controller.ControllerConsoleSessions;
+import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
+import cc.ecisr.mmm.fluid.CellCarrierInventoryView;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverBackend;
@@ -26,8 +31,10 @@ import cc.ecisr.mmm.fluid.GasTopologyBlockedException;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import cc.ecisr.mmm.fluid.air.GasAuditLedger;
+import cc.ecisr.mmm.fluid.air.GasLimits;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularDataPackLoader;
+import cc.ecisr.mmm.granular.GranularLimits;
 import cc.ecisr.mmm.granular.GranularMechanics;
 import cc.ecisr.mmm.granular.GranularPhaseTransferEngine;
 import cc.ecisr.mmm.granular.GranularRegistry;
@@ -47,7 +54,10 @@ import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
+import cc.ecisr.mmm.thermal.ThermalReservoirSummary;
+import cc.ecisr.mmm.thermal.WorldPositionActionSessions;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
+import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.fluid.MaterialRegistry;
 import java.util.EnumSet;
@@ -138,6 +148,9 @@ public final class FluidSimulationService {
 	private final Set<UUID> runtimeDirtyContainerTransfers = new HashSet<>();
 	/** Prevents an unresolved WAL from emitting the same ERROR every server tick. */
 	private final Map<UUID, String> reportedContainerTransferLocks = new HashMap<>();
+	/** Per-player opaque console tokens; they never participate in region or inventory persistence. */
+	private final ControllerConsoleSessions controllerConsoleSessions = new ControllerConsoleSessions();
+	private final WorldPositionActionSessions thermalReservoirSessions = new WorldPositionActionSessions();
 	private Set<String> reportedContainerTransferStoreIssues = Set.of();
 	private ContainerTransferFaultPoint containerTransferFault = ContainerTransferFaultPoint.NONE;
 	private ResourceKey<Level> takeoverDimension;
@@ -149,6 +162,7 @@ public final class FluidSimulationService {
 	private final WorldCapabilityStartup.Result capabilityStartup;
 	/** Committed profile, or an empty fail-closed value while startup is not provable. */
 	private final WorldCapabilityProfile worldCapabilityProfile;
+	private final MaterialRegistry materialRegistry;
 	private final ChemicalRegistry chemicalRegistry;
 	private final GranularRegistry granularRegistry;
 	private final ThermalRegistry thermalRegistry;
@@ -175,7 +189,7 @@ public final class FluidSimulationService {
 		capabilityStartup = WorldCapabilityStartup.start(
 				new WorldCapabilityBundleStore(worldRoot, new WorldCapabilityBundleStore.QuarantineAdmission(
 						serverConfig.maximumQuarantineEntries(), serverConfig.maximumQuarantineBytes())),
-				() -> loadCapabilityDefinitions(server), serverConfig.controllersEnabled());
+				() -> loadCapabilityDefinitions(server), !configurationLocked);
 		if (capabilityStartup.definitionMismatch()) {
 			MmmMod.LOGGER.warn("Current datapack definitions differ from the committed world capability profile {}; "
 					+ "existing inventory keeps world semantics", capabilityStartup.bundle().profile().profileFingerprint());
@@ -187,6 +201,7 @@ public final class FluidSimulationService {
 		}
 		boolean proven = capabilityStartup.bundle() != null;
 		WorldCapabilityProfile profile = proven ? capabilityStartup.bundle().profile() : UNPROVEN_CAPABILITIES;
+		materialRegistry = proven ? capabilityStartup.bundle().material() : null;
 		chemicalRegistry = proven ? capabilityStartup.bundle().chemical() : null;
 		granularRegistry = proven ? capabilityStartup.bundle().granular() : null;
 		gasRegistry = proven ? capabilityStartup.bundle().gas() : null;
@@ -201,9 +216,9 @@ public final class FluidSimulationService {
 			thermalBoundaryResolver = null;
 		}
 		worldCapabilityProfile = profile;
-		serverConfigLocked = configurationLocked;
-		controllerFeatureEnabled = serverConfig.controllersEnabled();
-		worldBridgeFeatureEnabled = serverConfig.worldBridgeEnabled();
+		serverConfigLocked = serverConfigurationUnreadable;
+		controllerFeatureEnabled = !serverConfigurationUnreadable && serverConfig.controllersEnabled();
+		worldBridgeFeatureEnabled = !serverConfigurationUnreadable && serverConfig.worldBridgeEnabled();
 		regionManager = new FluidRegionManager(serverConfig.limits());
 		committedEvents = committedEventHub(server);
 		targets = new FluidWorldTargetResolver(regionManager);
@@ -464,6 +479,15 @@ public final class FluidSimulationService {
 		try {
 			ContainerTransferJournal journal = indexedContainerTransfers.get(transactionId);
 			if (journal == null) return;
+			try {
+				journal.validateProfileFingerprint(capabilityStartup.bundle() == null
+						? null : worldCapabilityProfile.profileFingerprint());
+			} catch (RuntimeException foreignProfile) {
+				auditedContainerTransfers.add(transactionId);
+				logContainerTransferLockOnce(transactionId, "Container transfer WAL " + transactionId
+						+ " remains locked: FOREIGN_PROFILE (" + foreignProfile.getMessage() + ")");
+				return;
+			}
 			if (journal.requiresThermalRegistry()) {
 				if (!worldCapabilityProfile.hasCapability(WorldCapability.THERMAL) || thermalRegistry == null) {
 					auditedContainerTransfers.add(transactionId);
@@ -721,7 +745,7 @@ public final class FluidSimulationService {
 		return controllerFeatureEnabled;
 	}
 
-	private boolean authoritativeWritesReady() {
+	boolean authoritativeWritesReady() {
 		return !serverConfigLocked && capabilityStartup.state() == WorldCapabilityStartup.State.READY;
 	}
 
@@ -759,8 +783,299 @@ public final class FluidSimulationService {
 		return new FabricFluidQueryApi(server, regionManager, capabilityStartup.bundle() != null);
 	}
 
-	/** Adds authoritative U to an administrator-created mass-bearing liquid source at standard temperature. */
-	public void attachDebugLiquidThermalContents(ItemStack stack) {
+	/** Read-only companion to Query for cell-local solid/gas carriers; callers first resolve a unique interior point. */
+	public CarrierCellObservation observeCellCarriers(ServerLevel level, Vec3 interiorPoint) {
+		if (!level.getServer().isSameThread()) throw new IllegalStateException("Carrier observation is server-thread-only");
+		FluidRegion region = targets.regionAtBlock(level, BlockPos.containing(interiorPoint));
+		if (region == null || region.availabilityFailure() != null || !region.solverLoaded()) return null;
+		double h = region.solverConfig().cellSize();
+		int x = Mth.floor((interiorPoint.x - region.origin().getX()) / h);
+		int y = Mth.floor((interiorPoint.y - region.origin().getY()) / h);
+		int z = Mth.floor((interiorPoint.z - region.origin().getZ()) / h);
+		if (x < 0 || x >= region.sizeX() || y < 0 || y >= region.sizeY() || z < 0 || z >= region.sizeZ()) {
+			return null;
+		}
+		return new CarrierCellObservation(region.id(), region.networkGeneration(), x, y, z,
+				region.domain().observeCellCarriers(x, y, z));
+	}
+
+	/** Returns the centre of the first liquid/granular/coherent cell along an already resolved interior ray. */
+	public Vec3 firstCondensedProbePoint(ServerLevel level, Vec3 interiorPoint, Vec3 direction) {
+		if (!level.getServer().isSameThread()) throw new IllegalStateException("Probe traversal is server-thread-only");
+		FluidRegion region = targets.regionAtBlock(level, BlockPos.containing(interiorPoint));
+		if (region == null || region.availabilityFailure() != null || !region.solverLoaded()) return null;
+		int[] cell = targets.firstCondensedCellAlong(region, interiorPoint, direction);
+		if (cell == null) return null;
+		double h = region.solverConfig().cellSize();
+		return new Vec3(region.origin().getX() + (cell[0] + 0.5) * h,
+				region.origin().getY() + (cell[1] + 0.5) * h,
+				region.origin().getZ() + (cell[2] + 0.5) * h);
+	}
+
+	public record CarrierCellObservation(
+			UUID regionId, long regionNetworkGeneration, int cellX, int cellY, int cellZ,
+			CellCarrierInventoryView carriers
+	) {
+		public CarrierCellObservation {
+			if (regionId == null || regionNetworkGeneration <= 0L
+					|| cellX < 0 || cellY < 0 || cellZ < 0) {
+				throw new IllegalArgumentException("Carrier cell observation identity is invalid");
+			}
+		}
+	}
+
+	/** Snapshots bounded maintained ledgers without loading, waking, checkpointing, selecting, or building display grids. */
+	public ControllerSummary controllerSummary(ServerPlayer player, BlockPos controllerPosition) {
+		if (player == null || controllerPosition == null) return null;
+		ServerLevel level = player.level();
+		if (!level.getServer().isSameThread()) throw new IllegalStateException("Controller summary is server-thread-only");
+		if (player.distanceToSqr(controllerPosition.getX() + 0.5,
+				controllerPosition.getY() + 0.5, controllerPosition.getZ() + 0.5) > 64.0) return null;
+		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) return null;
+		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
+		if (region == null || capabilityStartup.bundle() == null) return null;
+		long summaryGeneration = controllerConsoleSessions.issue(player.getUUID(), region.id());
+		return createControllerSummary(region, summaryGeneration);
+	}
+
+	private ControllerSummary createControllerSummary(FluidRegion region, long summaryGeneration) {
+		FluidRegionFootprint footprint = region.footprint();
+		if (footprint == null || capabilityStartup.bundle() == null) {
+			throw new IllegalStateException("Controller summary requires committed controller/profile identity");
+		}
+		boolean live = region.solverLoaded();
+		FlipFluidDomain domain = live ? region.domain() : null;
+		long markerCount = live ? domain.particleCount() : region.checkpointMarkerCount();
+		long depositLimit = Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
+				Math.multiplyExact(region.reservedCellCapacity(), GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL));
+		ControllerSummary.Inventory inventory = live
+				? liveControllerInventory(region, domain) : ControllerSummary.Inventory.unavailable();
+		String ownershipLock = regionOperations.ownershipLockDescription(region);
+		boolean containerWalPending = hasPendingContainerTransfer(region.id());
+		boolean phaseWorkPending = live && domain.hasPendingPhaseVolumeWork();
+		boolean checkpointAllowed = authoritativeWritesReady() && live && region.availabilityFailure() == null
+				&& ownershipLock == null && !containerWalPending;
+		FlipFluidDomain.StepStats stats = region.lastStats();
+		ThermalActivity thermal = region.thermalActivity();
+		String availabilityFailure = boundedSummaryText(region.availabilityFailure());
+		String numericalFailure = region.availabilityReason() == RegionAvailabilityReason.NUMERICAL_PAUSE
+				? availabilityFailure : null;
+		return new ControllerSummary(summaryGeneration, region.id(), region.dimension().identifier().toString(),
+				worldCapabilityProfile.profileFingerprint(), region.checkpointGeneration(), region.networkGeneration(),
+				new ControllerSummary.Footprint(footprint.controllerPosition().getX(),
+						footprint.controllerPosition().getY(), footprint.controllerPosition().getZ(),
+						footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ(),
+						footprint.interiorBlocks().size(), footprint.requiredChunks().size()),
+				regionManager.selected() == region,
+				region.paused() ? ControllerSummary.OperatorIntent.PAUSED : ControllerSummary.OperatorIntent.RUNNING,
+				ControllerSummary.MotionState.valueOf(region.lifecycle().state().name()),
+				thermal == null ? ControllerSummary.ThermalState.UNBOUND
+						: ControllerSummary.ThermalState.valueOf(thermal.state().name()),
+				new ControllerSummary.Availability(region.availabilityReason(), availabilityFailure),
+				new ControllerSummary.Usage(
+						capacity(region.reservedCellCapacity(), regionManager.limits().maximumCellsPerRegion()),
+						capacity(markerCount, region.reservedMarkerCapacity()),
+						live ? capacity(domain.chemicalParcelCount(), region.reservedMarkerCapacity())
+								: unavailableCapacity(region.reservedMarkerCapacity()),
+						live ? capacity(domain.granularParcelCount(), GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION)
+								: unavailableCapacity(GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION),
+						live ? capacity(domain.granularDepositGroupCount(), depositLimit)
+								: unavailableCapacity(depositLimit),
+						live ? capacity(domain.coherentPhaseGroupCount(), ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION)
+								: unavailableCapacity(ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION),
+						live ? capacity(domain.airNetwork().nodeCount(), GasLimits.MAX_NODES_PER_REGION)
+								: unavailableCapacity(GasLimits.MAX_NODES_PER_REGION),
+						live ? capacity(thermalRegistry == null ? 0L
+								: region.finiteThermalDevices(thermalRegistry.fingerprint()).devices().size(),
+								ThermalLimits.MAX_FINITE_DEVICES_PER_REGION)
+								: unavailableCapacity(ThermalLimits.MAX_FINITE_DEVICES_PER_REGION)),
+				inventory,
+				new ControllerSummary.Gates(ownershipLock == null, containerWalPending, phaseWorkPending,
+						worldBridgeFeatureEnabled, checkpointAllowed),
+				new ControllerSummary.Diagnostics(region.lastStepMilliseconds(),
+						stats == null ? 0 : stats.pressureIterations(), stats == null ? 0.0 : stats.pressureResidual(),
+						numericalFailure));
+	}
+
+	private ControllerSummary.Inventory liveControllerInventory(FluidRegion region, FlipFluidDomain domain) {
+		long gasNanos = 0L;
+		double gasMass = 0.0;
+		double minimumTemperature = Double.POSITIVE_INFINITY;
+		double maximumTemperature = Double.NEGATIVE_INFINITY;
+		var carrierRange = domain.observedCarrierTemperatureRange();
+		if (carrierRange != null) {
+			minimumTemperature = carrierRange.minimumK();
+			maximumTemperature = carrierRange.maximumK();
+		}
+		for (int node : domain.airNetwork().nodeIds()) {
+			var gas = domain.airNetwork().inventory(node);
+			gasNanos = Math.addExact(gasNanos, gas.standardVolumeNanos());
+			for (var component : gas.components()) gasMass += component.mass();
+			if (domain.hasThermalState() && !gas.isEmpty()) {
+				double temperature = domain.gasNodeTemperatureK(node);
+				minimumTemperature = Math.min(minimumTemperature, temperature);
+				maximumTemperature = Math.max(maximumTemperature, temperature);
+			}
+		}
+		if (!Double.isFinite(gasMass)) throw new ArithmeticException("Controller gas mass summary overflow");
+		double totalInternalEnergy = Double.NaN;
+		if (domain.hasThermalState()) {
+			totalInternalEnergy = domain.totalInternalEnergy();
+			if (thermalRegistry != null) {
+				var devices = region.finiteThermalDevices(thermalRegistry.fingerprint());
+				totalInternalEnergy += devices.exactInternalEnergy().toDouble();
+				ThermalStateFunction stateFunction = new ThermalStateFunction(thermalRegistry);
+				for (var device : devices.devices()) {
+					var body = device.body();
+					double temperature = stateFunction.stateForInternalEnergy(
+							thermalRegistry.materialHandle(body.thermalMaterialId()), body.massKilograms(),
+							Map.of(), body.internalEnergyEu()).temperatureK();
+					minimumTemperature = Math.min(minimumTemperature, temperature);
+					maximumTemperature = Math.max(maximumTemperature, temperature);
+				}
+			}
+			if (!Double.isFinite(totalInternalEnergy)) {
+				throw new ArithmeticException("Controller total internal-energy summary overflow");
+			}
+		}
+		ControllerSummary.TemperatureRange temperatureRange = minimumTemperature == Double.POSITIVE_INFINITY
+				? ControllerSummary.TemperatureRange.unavailable()
+				: ControllerSummary.TemperatureRange.available(minimumTemperature, maximumTemperature);
+		return new ControllerSummary.Inventory(true,
+				domain.physicalVolumeCubicMetres(domain.totalVolumeExact()),
+				domain.physicalMassKilograms(domain.totalMass()), domain.totalChemicalSpeciesQuanta(),
+				domain.totalGranularSolidVolumeSvq(), domain.totalGranularMass(),
+				domain.totalCoherentSolidVolumeSvq(), domain.totalCoherentMass(), gasNanos, gasMass,
+				domain.hasThermalState(), totalInternalEnergy, temperatureRange);
+	}
+
+	private static ControllerSummary.Capacity capacity(long used, long limit) {
+		return ControllerSummary.Capacity.available(used, limit);
+	}
+
+	private static ControllerSummary.Capacity unavailableCapacity(long limit) {
+		return ControllerSummary.Capacity.unavailable(limit);
+	}
+
+	private static String boundedSummaryText(String value) {
+		if (value == null || value.length() <= 1_024) return value;
+		return value.substring(0, 1_021) + "...";
+	}
+
+	/** Re-resolves every client-supplied identity and consumes the one-use server token before acting. */
+	public String applyControllerConsoleAction(
+			ServerPlayer player, UUID requestedRegionId, BlockPos controllerPosition,
+			long summaryGeneration, ControllerConsoleAction action
+	) {
+		if (player == null || requestedRegionId == null || controllerPosition == null || action == null) {
+			return "请求缺少控制器身份";
+		}
+		ServerLevel level = player.level();
+		if (!level.getServer().isSameThread()) throw new IllegalStateException("Controller actions are server-thread-only");
+		double distanceSquared = player.distanceToSqr(controllerPosition.getX() + 0.5,
+				controllerPosition.getY() + 0.5, controllerPosition.getZ() + 0.5);
+		if (distanceSquared > 64.0) return "玩家距离控制器过远";
+		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) return "目标方块不再是控制器";
+		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
+		if (region == null || !region.id().equals(requestedRegionId)) return "控制器 owner 已改变";
+		if (!controllerConsoleSessions.consume(player.getUUID(), region.id(), summaryGeneration)) {
+			return "summary 已过期，请刷新";
+		}
+
+		return switch (action) {
+			case SELECT -> regionManager.select(region.id()) ? null : "控制器区域已不存在";
+			case REFRESH_AVAILABILITY -> ensureRegionAvailable(level, region)
+					? null : "availability 仍未恢复：" + region.availabilityFailure();
+			case PAUSE -> changeControllerRunIntent(player, region, true);
+			case RESUME -> changeControllerRunIntent(player, region, false);
+		};
+	}
+
+	private String changeControllerRunIntent(ServerPlayer player, FluidRegion region, boolean pause) {
+		if (!player.isCreative()) return "只有创造模式玩家可以修改运行意图";
+		if (!authoritativeWritesReady()) return authoritativeWriteFailure("修改控制器运行意图");
+		if (region.paused() == pause) return "运行意图已改变，请刷新";
+		region.setPaused(pause);
+		if (!pause && region.solverLoaded()) region.wakeForActivity();
+		if (region.solverLoaded()) sendSnapshot(player.level(), region);
+		return null;
+	}
+
+	public void forgetInteractiveViewer(UUID playerId) {
+		controllerConsoleSessions.forget(playerId);
+		thermalReservoirSessions.forget(playerId);
+	}
+
+	/** Read-only tuning state; invalid persisted setpoints remain visible so a creative player can replace them. */
+	public ThermalReservoirSummary thermalReservoirSummary(ServerPlayer player, BlockPos position) {
+		if (player == null || position == null) return null;
+		ServerLevel level = player.level();
+		if (!level.getServer().isSameThread()) {
+			throw new IllegalStateException("Thermal reservoir summary is server-thread-only");
+		}
+		if (player.distanceToSqr(position.getX() + 0.5, position.getY() + 0.5, position.getZ() + 0.5) > 64.0
+				|| !level.getBlockState(position).is(MmmBlocks.THERMAL_RESERVOIR)
+				|| !(level.getBlockEntity(position) instanceof ThermalReservoirBlockEntity reservoir)
+				|| thermalRegistry == null) return null;
+		ThermalRegistry.TemperatureRange range = thermalRegistry.worldBoundaryTemperatureRange();
+		double temperature = reservoir.temperatureK();
+		long generation = thermalReservoirSessions.issue(player.getUUID(), level.dimension().identifier().toString(),
+				position.getX(), position.getY(), position.getZ());
+		return new ThermalReservoirSummary(generation, level.dimension().identifier().toString(),
+				position.getX(), position.getY(), position.getZ(), temperature, range.contains(temperature),
+				range.minimumK(), range.maximumK());
+	}
+
+	/** Revalidates a proposed setpoint, persists the world owner, then refreshes and wakes adjacent thermal regions. */
+	public String applyThermalReservoirSetpoint(
+			ServerPlayer player, BlockPos position, long summaryGeneration, double temperatureK
+	) {
+		if (player == null || position == null) return "请求缺少温度源身份";
+		ServerLevel level = player.level();
+		if (!level.getServer().isSameThread()) {
+			throw new IllegalStateException("Thermal reservoir actions are server-thread-only");
+		}
+		if (player.distanceToSqr(position.getX() + 0.5, position.getY() + 0.5, position.getZ() + 0.5) > 64.0) {
+			return "玩家距离温度源过远";
+		}
+		String dimensionId = level.dimension().identifier().toString();
+		if (!thermalReservoirSessions.consume(player.getUUID(), dimensionId,
+				position.getX(), position.getY(), position.getZ(), summaryGeneration)) return "summary 已过期，请刷新";
+		if (!player.isCreative()) return "只有创造模式玩家可以修改温度源";
+		if (!authoritativeWritesReady()) return authoritativeWriteFailure("修改温度源");
+		if (!level.getBlockState(position).is(MmmBlocks.THERMAL_RESERVOIR)
+				|| !(level.getBlockEntity(position) instanceof ThermalReservoirBlockEntity reservoir)) {
+			return "目标方块不再是温度源";
+		}
+		if (thermalRegistry == null) return "world thermal registry 不可用";
+		ThermalRegistry.TemperatureRange range = thermalRegistry.worldBoundaryTemperatureRange();
+		if (!range.contains(temperatureK)) return String.format(java.util.Locale.ROOT,
+				"温度必须是有限数值且位于 world thermal registry 的 [%.6f, %.6f] K",
+				range.minimumK(), range.maximumK());
+		reservoir.setTemperatureK(temperatureK);
+		refreshThermalReservoir(level, position);
+		return null;
+	}
+
+	private void refreshThermalReservoir(ServerLevel level, BlockPos position) {
+		for (FluidRegion region : regionManager.regions()) {
+			FluidRegionFootprint footprint = region.footprint();
+			if (footprint == null || !region.dimension().equals(level.dimension())
+					|| !footprint.boundaryBlocks().contains(position.asLong())
+					|| !region.solverLoaded() || !region.domain().hasThermalState()) continue;
+			try {
+				if (thermalBoundaryResolver.refresh(level, region, CELLS_PER_BLOCK)) {
+					region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
+				}
+			} catch (RuntimeException invalidBoundary) {
+				blockThermal(level, region,
+						"thermal-definition LOCKED：" + invalidBoundary.getMessage(), invalidBoundary);
+			}
+		}
+	}
+
+	/** Adds authoritative U to a server-resolved mass-bearing liquid source. */
+	void attachLiquidThermalContents(ItemStack stack, double temperatureKelvin) {
 		if (!worldCapabilityProfile.hasCapability(WorldCapability.THERMAL)) return;
 		if (thermalRegistry == null) throw new IllegalStateException("Authoritative thermal registry is unavailable");
 		ThermalStateFunction stateFunction = new ThermalStateFunction(thermalRegistry);
@@ -776,8 +1091,8 @@ public final class FluidSimulationService {
 				}
 				int handle = thermalRegistry.materialHandle(
 						ThermalMaterialDefinition.CarrierKind.LIQUID, group.materialId());
-				energy += stateFunction.internalEnergyAtTemperature(handle, group.massKilograms(), species,
-						GasRegistry.STANDARD_TEMPERATURE_K);
+				validateLiquidTemperature(group.materialId(), temperatureKelvin);
+				energy += stateFunction.internalEnergyAtTemperature(handle, group.massKilograms(), species, temperatureKelvin);
 			}
 		} else {
 			FluidMixture mixture = ContainerItemStacks.fluidMixture(stack);
@@ -785,12 +1100,45 @@ public final class FluidSimulationService {
 			for (FluidMixture.Component component : mixture.components()) {
 				int handle = thermalRegistry.materialHandle(
 						ThermalMaterialDefinition.CarrierKind.LIQUID, component.materialId());
-				energy += stateFunction.internalEnergyAtTemperature(handle, component.mass(), Map.of(),
-						GasRegistry.STANDARD_TEMPERATURE_K);
+				validateLiquidTemperature(component.materialId(), temperatureKelvin);
+				energy += stateFunction.internalEnergyAtTemperature(handle, component.mass(), Map.of(), temperatureKelvin);
 			}
 		}
-		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Debug liquid internal energy overflow");
+		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Liquid internal energy overflow");
 		ContainerItemStacks.attachThermal(stack, thermalRegistry.fingerprint(), energy);
+	}
+
+	/** Fixture adapter retained for commands; production sources use the temperature-aware resolver. */
+	public void attachDebugLiquidThermalContents(ItemStack stack) {
+		attachLiquidThermalContents(stack, GasRegistry.STANDARD_TEMPERATURE_K);
+	}
+
+	FluidMaterial resolveMaterial(String stableId) {
+		if (materialRegistry == null) throw new IllegalStateException("Authoritative material registry is unavailable");
+		return materialRegistry.entry(stableId).material();
+	}
+
+	private void validateLiquidTemperature(String stableId, double temperatureKelvin) {
+		if (materialRegistry == null) throw new IllegalStateException("Authoritative material registry is unavailable");
+		if (materialRegistry.declaresViscosity(stableId)) {
+			materialRegistry.dynamicViscosityAt(stableId, temperatureKelvin);
+		}
+	}
+
+	public ItemStack bindActualContainerProfile(ItemStack stack) {
+		if (stack.get(MmmComponents.FLUID_VOLUME) != null || stack.get(MmmComponents.CHEMICAL_CONTENTS) != null
+				|| stack.get(MmmComponents.GRANULAR_CONTENTS) != null) {
+			if (capabilityStartup.bundle() == null) {
+				throw new IllegalStateException("Authoritative world profile is unavailable");
+			}
+			ContainerItemStacks.bindProfile(stack, worldCapabilityProfile.profileFingerprint());
+		}
+		return stack;
+	}
+
+	boolean acceptsActualContainerProfile(ItemStack stack) {
+		return capabilityStartup.bundle() != null && worldCapabilityProfile.profileFingerprint().equals(
+				ContainerItemStacks.profileFingerprint(stack));
 	}
 
 	String thermalRegistryFingerprint() {

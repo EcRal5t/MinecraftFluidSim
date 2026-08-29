@@ -15,6 +15,7 @@ import cc.ecisr.mmm.item.M6ContainerValidation;
 import cc.ecisr.mmm.logging.CommandAuditFileValidation;
 import cc.ecisr.mmm.network.FluidNetworkProtocolValidation;
 import cc.ecisr.mmm.simulation.ContainerTransferStoreValidation;
+import cc.ecisr.mmm.simulation.ShellFluidQueryValidation;
 import cc.ecisr.mmm.simulation.EntityFluidWiringValidation;
 import cc.ecisr.mmm.simulation.CommittedEventHubValidation;
 import cc.ecisr.mmm.simulation.FluidCutCellShapeValidation;
@@ -153,6 +154,7 @@ public final class CpuValidationSuite {
 		gate(gates, "protocol", () -> {
 			FluidNetworkProtocolValidation.main(NONE);
 			CommittedEventHubValidation.main(NONE);
+			ShellFluidQueryValidation.main(NONE);
 		});
 		gate(gates, "boundary", () -> FluidBoundaryScannerValidation.main(NONE));
 		gate(gates, "takeover", () -> TakeoverJournalValidation.main(NONE));

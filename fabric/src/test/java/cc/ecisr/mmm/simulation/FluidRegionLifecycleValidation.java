@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
+import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
 import cc.ecisr.mmm.fluid.FlipParticleState;
@@ -33,6 +34,7 @@ public final class FluidRegionLifecycleValidation {
 		validateHydrostaticSleepPreservesMarkerLedger();
 		validateBackendCandidateAdoption();
 		validateUnloadRequiresPublishedCheckpointAndReleasedSolver();
+		validateMetadataOnlySummaryCannotInventInventory();
 		System.out.println("FluidRegionLifecycle validation passed");
 	}
 
@@ -159,8 +161,29 @@ public final class FluidRegionLifecycleValidation {
 		require(lifecycle.requestUnload(true, true), "complete checkpoint/release transition was rejected");
 		require(lifecycle.state() == FluidRegionLifecycle.State.UNLOADED && !lifecycle.canStep()
 				&& !lifecycle.operatorPaused(), "UNLOADED lifecycle lost its running intent");
+		lifecycle.setOperatorPaused(true, 1);
+		lifecycle.setOperatorPaused(false, 1);
+		require(!lifecycle.operatorPaused() && lifecycle.state() == FluidRegionLifecycle.State.UNLOADED,
+				"operator could not change intent independently while availability kept the solver unloaded");
 		lifecycle.restoreFromUnloaded(FluidRegionLifecycle.State.ACTIVE, 1);
 		require(lifecycle.canStep(), "restored lifecycle did not resume its persisted running intent");
+	}
+
+	private static void validateMetadataOnlySummaryCannotInventInventory() {
+		ControllerSummary.Inventory unavailable = ControllerSummary.Inventory.unavailable();
+		require(!unavailable.live() && !unavailable.internalEnergyAvailable()
+				&& Double.isNaN(unavailable.totalInternalEnergyEu())
+				&& !unavailable.temperatureRange().available(),
+				"metadata-only controller inventory did not remain explicitly unavailable");
+		boolean rejected = false;
+		try {
+			new ControllerSummary.Inventory(false, 1.0, 0.0, 0L, 0L, 0.0,
+					0L, 0.0, 0L, 0.0, false, Double.NaN,
+					ControllerSummary.TemperatureRange.unavailable());
+		} catch (IllegalArgumentException expected) {
+			rejected = true;
+		}
+		require(rejected, "metadata-only controller inventory accepted invented live volume");
 	}
 
 	private static FluidRegionLifecycle running() {

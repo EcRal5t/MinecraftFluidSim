@@ -3,12 +3,17 @@ package cc.ecisr.mmm.network;
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.api.query.FluidQueryResult;
 import cc.ecisr.mmm.api.query.FluidQueryStatus;
+import cc.ecisr.mmm.controller.ControllerConsoleAction;
+import cc.ecisr.mmm.controller.ControllerConsoleSessions;
+import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
 import cc.ecisr.mmm.granular.BuiltinGranularDefinitions;
 import cc.ecisr.mmm.simulation.TestProfiles;
 import cc.ecisr.mmm.fluid.FluidMaterialRenderSnapshot;
 import cc.ecisr.mmm.fluid.FluidMaterialSurfaceMesher;
 import cc.ecisr.mmm.granular.GranularDisplaySnapshot;
+import cc.ecisr.mmm.thermal.ThermalReservoirSummary;
+import cc.ecisr.mmm.thermal.WorldPositionActionSessions;
 import io.netty.buffer.Unpooled;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
@@ -29,6 +34,8 @@ public final class FluidNetworkProtocolValidation {
 		validateNegotiationMatrix();
 		validateQueryAvailabilityReason();
 		validateConfigurationCodecs();
+		validateControllerConsoleCodecs();
+		validateThermalReservoirCodecs();
 		validateSnapshotCodecAndOptionalSections();
 		validateGenerationAndSequenceOrdering();
 		validateMaterialSnapshot();
@@ -36,6 +43,89 @@ public final class FluidNetworkProtocolValidation {
 		validateGranularSnapshot();
 		validateThermalSnapshot();
 		System.out.println("Fluid network protocol validation passed");
+	}
+
+	private static void validateThermalReservoirCodecs() {
+		UUID player = new UUID(67L, 71L);
+		WorldPositionActionSessions sessions = new WorldPositionActionSessions();
+		long old = sessions.issue(player, DIMENSION.toString(), 2, 3, 4);
+		long current = sessions.issue(player, DIMENSION.toString(), 2, 3, 4);
+		require(!sessions.consume(player, DIMENSION.toString(), 2, 3, 4, old)
+				&& sessions.consume(player, DIMENSION.toString(), 2, 3, 4, current)
+				&& !sessions.consume(player, DIMENSION.toString(), 2, 3, 4, current),
+				"thermal reservoir stale/replay token semantics changed");
+
+		ThermalReservoirSummary summary = new ThermalReservoirSummary(5L, DIMENSION.toString(),
+				2, 3, 4, 293.15, true, 250.0, 600.0);
+		FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
+		ThermalReservoirSummaryPayload decoded;
+		try {
+			ThermalReservoirSummaryPayload.CODEC.encode(buffer, new ThermalReservoirSummaryPayload(summary));
+			decoded = ThermalReservoirSummaryPayload.CODEC.decode(buffer);
+		} finally {
+			buffer.release();
+		}
+		require(decoded.summary().equals(summary), "thermal reservoir summary did not round-trip exactly");
+
+		ThermalReservoirSetpointPayload setpoint = new ThermalReservoirSetpointPayload(
+				new BlockPos(2, 3, 4), 5L, 310.0);
+		buffer = new FriendlyByteBuf(Unpooled.buffer());
+		ThermalReservoirSetpointPayload decodedSetpoint;
+		try {
+			ThermalReservoirSetpointPayload.CODEC.encode(buffer, setpoint);
+			decodedSetpoint = ThermalReservoirSetpointPayload.CODEC.decode(buffer);
+		} finally {
+			buffer.release();
+		}
+		require(decodedSetpoint.equals(setpoint),
+				"thermal reservoir setpoint identity/token did not round-trip exactly");
+	}
+
+	private static void validateControllerConsoleCodecs() {
+		UUID otherPlayer = new UUID(41L, 43L);
+		ControllerConsoleSessions sessions = new ControllerConsoleSessions();
+		long old = sessions.issue(otherPlayer, REGION);
+		long current = sessions.issue(otherPlayer, REGION);
+		require(!sessions.consume(otherPlayer, REGION, old), "stale controller token was accepted");
+		require(sessions.consume(otherPlayer, REGION, current),
+				"stale token invalidated the current controller token");
+		require(!sessions.consume(otherPlayer, REGION, current), "controller token replay was accepted");
+		UUID otherRegion = new UUID(47L, 53L);
+		long isolated = sessions.issue(otherPlayer, otherRegion);
+		require(!sessions.consume(new UUID(59L, 61L), otherRegion, isolated)
+				&& sessions.consume(otherPlayer, otherRegion, isolated),
+				"controller token was not isolated by player and region");
+
+		ControllerSummary.Capacity full = ControllerSummary.Capacity.available(8L, 16L);
+		ControllerSummary summary = new ControllerSummary(7L, REGION, DIMENSION.toString(), "a".repeat(64),
+				11L, 13L, new ControllerSummary.Footprint(2, 3, 4, 5, 6, 7, 180L, 4), true,
+				ControllerSummary.OperatorIntent.RUNNING, ControllerSummary.MotionState.REDUCED,
+				ControllerSummary.ThermalState.SLEEP,
+				new ControllerSummary.Availability(RegionAvailabilityReason.CHUNK_MISSING, "required chunk missing"),
+				new ControllerSummary.Usage(full, full, full, full, full, full, full,
+						ControllerSummary.Capacity.unavailable(1_024L)),
+				new ControllerSummary.Inventory(true, 0.75, 741.0, 123L, 456L, 7.5,
+						789L, 8.5, 321L, 0.42, true, 91_000.0,
+						ControllerSummary.TemperatureRange.available(278.5, 341.25)),
+				new ControllerSummary.Gates(true, false, true, true, false),
+				new ControllerSummary.Diagnostics(2.5, 17, 1.0E-6, "bounded diagnostic"));
+		FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
+		ControllerSummaryPayload decoded;
+		try {
+			ControllerSummaryPayload.CODEC.encode(buffer, new ControllerSummaryPayload(summary));
+			decoded = ControllerSummaryPayload.CODEC.decode(buffer);
+		} finally { buffer.release(); }
+		require(decoded.summary().equals(summary), "controller summary payload did not round-trip exactly");
+
+		ControllerActionPayload action = new ControllerActionPayload(REGION, new BlockPos(2, 3, 4), 7L,
+				ControllerConsoleAction.PAUSE);
+		buffer = new FriendlyByteBuf(Unpooled.buffer());
+		ControllerActionPayload decodedAction;
+		try {
+			ControllerActionPayload.CODEC.encode(buffer, action);
+			decodedAction = ControllerActionPayload.CODEC.decode(buffer);
+		} finally { buffer.release(); }
+		require(decodedAction.equals(action), "controller action identity/token did not round-trip exactly");
 	}
 
 	private static void validateQueryAvailabilityReason() {

@@ -13,6 +13,7 @@ import cc.ecisr.mmm.transfer.ContainerFluidLedger;
 import cc.ecisr.mmm.transfer.ChemicalContents;
 import cc.ecisr.mmm.transfer.ContainerTransferActor;
 import cc.ecisr.mmm.transfer.ContainerTransferJournal;
+import cc.ecisr.mmm.transfer.CreativeSourceDescriptor;
 import cc.ecisr.mmm.transfer.FluidMixture;
 import cc.ecisr.mmm.transfer.GranularContents;
 import cc.ecisr.mmm.transfer.ThermalContents;
@@ -41,6 +42,7 @@ public final class ContainerTransferStoreValidation {
 			Identifier.fromNamespaceAndPath("mmm", "container_transfer_validation_registry"));
 	private static final ResourceKey<Level> DIMENSION = ResourceKey.create(DIMENSION_REGISTRY,
 			Identifier.fromNamespaceAndPath("mmm", "container_transfer_validation"));
+	private static final String PROFILE = "0".repeat(64);
 	private static int passed;
 
 	private ContainerTransferStoreValidation() { }
@@ -114,11 +116,24 @@ public final class ContainerTransferStoreValidation {
 		store.write(creative);
 		check(store.read(creative.transactionId()).equals(creative),
 				"creative unchanged-item WAL did not preserve explicit external source energy");
-		ContainerTransferJournal wrongEnergy = ContainerTransferJournal.thermalFluid(
+		CreativeSourceDescriptor descriptor = new CreativeSourceDescriptor(
+				"mmm:source/material/water", 500_000_000L, 330.0);
+		ContainerTransferJournal.ItemFingerprint descriptorItem = new ContainerTransferJournal.ItemFingerprint(
+				ContainerTransferJournal.ItemKind.CREATIVE_SOURCE, -1L, -1L,
+				descriptor.encode(), -1L, null, null);
+		ContainerTransferJournal descriptorThermal = ContainerTransferJournal.thermalFluid(
 				UUID.randomUUID(), region, "minecraft:overworld", 9L, 10L,
+				ContainerTransferJournal.Operation.INSERT, 500_000_000L,
+				new ContainerTransferJournal.ThermalTransfer(fingerprint, creativeEnergy), committed.actor(),
+				descriptorItem, descriptorItem, 0x7713L, ContainerTransferJournal.Phase.REGION_COMMITTED);
+		store.write(descriptorThermal);
+		check(store.read(descriptorThermal.transactionId()).equals(descriptorThermal),
+				"creative thermal descriptor WAL did not preserve separate actor and source truth");
+		ContainerTransferJournal wrongEnergy = ContainerTransferJournal.thermalFluid(
+				UUID.randomUUID(), region, "minecraft:overworld", 10L, 11L,
 				ContainerTransferJournal.Operation.INSERT, ContainerFluidLedger.NANOS_PER_BLOCK,
 				new ContainerTransferJournal.ThermalTransfer(fingerprint, energy + 1.0), committed.actor(),
-				before, after, 0x7713L, ContainerTransferJournal.Phase.REGION_COMMITTED);
+				before, after, 0x7714L, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		try {
 			store.write(wrongEnergy);
 			throw new AssertionError("Expected mismatched WAL item/energy rejection");
@@ -176,6 +191,20 @@ public final class ContainerTransferStoreValidation {
 		check(partialCommitted.equals(store.read(partialTx)),
 				"committed WAL did not accept the primitive's actual partial-pour settlement");
 		store.delete(partialTx);
+
+		CreativeSourceDescriptor descriptor = new CreativeSourceDescriptor(
+				"mmm:source/granular/fine_sand", SolidVolume.SVQ_PER_BV, null);
+		ContainerTransferJournal.ItemFingerprint source = new ContainerTransferJournal.ItemFingerprint(
+				ContainerTransferJournal.ItemKind.CREATIVE_SOURCE, -1L, -1L,
+				descriptor.encode(), -1L, null, null);
+		UUID sourceTx = UUID.randomUUID();
+		ContainerTransferJournal sourceCommitted = ContainerTransferJournal.granular(
+				sourceTx, region, "minecraft:overworld", 5L, 6L,
+				ContainerTransferJournal.Operation.INSERT, SolidVolume.SVQ_PER_BV, actor,
+				source, source, 0x3456L, ContainerTransferJournal.Phase.REGION_COMMITTED);
+		store.write(sourceCommitted);
+		check(sourceCommitted.equals(store.read(sourceTx)),
+				"creative source WAL did not preserve its unchanged descriptor actor state");
 	}
 
 	private static void testActorCodecs() throws Exception {
@@ -223,11 +252,11 @@ public final class ContainerTransferStoreValidation {
 
 		UUID tx3 = UUID.randomUUID();
 		ContainerTransferJournal.ItemFingerprint materialBefore = new ContainerTransferJournal.ItemFingerprint(
-				ContainerTransferJournal.ItemKind.MATERIAL_BUCKET, 1_000_000_000L,
+				ContainerTransferJournal.ItemKind.MATERIAL_BUCKET, 1_000_000_000L, -1L,
 				new FluidMixture(List.of(
 						new FluidMixture.Component("mmm:oil", 400_000_000L, 320.0),
 						new FluidMixture.Component("mmm:water", 600_000_000L, 600.0))).encode(),
-				Double.doubleToRawLongBits(920.0));
+				Double.doubleToRawLongBits(920.0), null, PROFILE);
 		ContainerTransferJournal.ItemFingerprint materialAfter = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.EMPTY_MATERIAL_BUCKET, -1L, null);
 		ContainerTransferJournal material = new ContainerTransferJournal(
@@ -238,9 +267,13 @@ public final class ContainerTransferStoreValidation {
 		);
 		store.write(material);
 		check(material.equals(store.read(tx3)), "material bucket fingerprint did not round-trip");
+		material.validateProfileFingerprint(PROFILE);
+		checkThrows(IllegalArgumentException.class,
+				() -> material.validateProfileFingerprint("f".repeat(64)),
+				"foreign-profile material WAL was accepted by the world admission check");
 		ContainerTransferJournal.ItemFingerprint incompleteMaterial = new ContainerTransferJournal.ItemFingerprint(
-				ContainerTransferJournal.ItemKind.MATERIAL_BUCKET, 1_000_000_000L,
-				"mmm:water", Double.doubleToRawLongBits(1_000.0));
+				ContainerTransferJournal.ItemKind.MATERIAL_BUCKET, 1_000_000_000L, -1L,
+				"mmm:water", Double.doubleToRawLongBits(1_000.0), null, PROFILE);
 		ContainerTransferJournal incompleteMaterialJournal = new ContainerTransferJournal(
 				UUID.randomUUID(), region, "minecraft:overworld", 3L, 4L,
 				ContainerTransferJournal.Operation.INSERT, 1_000_000_000L,
@@ -267,8 +300,8 @@ public final class ContainerTransferStoreValidation {
 						List.of(new ChemicalContents.SpeciesAmount(
 								BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU)))));
 		ContainerTransferJournal.ItemFingerprint chemicalBefore = new ContainerTransferJournal.ItemFingerprint(
-				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, ContainerFluidLedger.NANOS_PER_BLOCK,
-				chemicalContents.encode(), Double.doubleToRawLongBits(chemicalContents.totalMass()));
+				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, ContainerFluidLedger.NANOS_PER_BLOCK, -1L,
+				chemicalContents.encode(), Double.doubleToRawLongBits(chemicalContents.totalMass()), null, PROFILE);
 		UUID tx5 = UUID.randomUUID();
 		ContainerTransferJournal chemical = new ContainerTransferJournal(
 				tx5, region, "minecraft:overworld", 4L, 5L,
@@ -282,8 +315,8 @@ public final class ContainerTransferStoreValidation {
 		ChemicalContents foreignContents = new ChemicalContents("0".repeat(64), ChemicalLimits.QUANTA_PER_AU,
 				chemicalContents.groups());
 		ContainerTransferJournal.ItemFingerprint foreignChemical = new ContainerTransferJournal.ItemFingerprint(
-				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, ContainerFluidLedger.NANOS_PER_BLOCK,
-				foreignContents.encode(), Double.doubleToRawLongBits(foreignContents.totalMass()));
+				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, ContainerFluidLedger.NANOS_PER_BLOCK, -1L,
+				foreignContents.encode(), Double.doubleToRawLongBits(foreignContents.totalMass()), null, PROFILE);
 		ContainerTransferJournal foreignJournal = new ContainerTransferJournal(
 				UUID.randomUUID(), region, "minecraft:overworld", 4L, 5L,
 				ContainerTransferJournal.Operation.INSERT, ContainerFluidLedger.NANOS_PER_BLOCK,
@@ -295,8 +328,9 @@ public final class ContainerTransferStoreValidation {
 		ChemicalContents.Split chemicalPartial = chemicalContents.split(333_333_333L,
 				BuiltinChemicalDefinitions.REGISTRY);
 		ContainerTransferJournal.ItemFingerprint chemicalAfter = new ContainerTransferJournal.ItemFingerprint(
-				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, chemicalPartial.remaining().totalVolumeNanos(),
-				chemicalPartial.remaining().encode(), Double.doubleToRawLongBits(chemicalPartial.remaining().totalMass()));
+				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, chemicalPartial.remaining().totalVolumeNanos(), -1L,
+				chemicalPartial.remaining().encode(), Double.doubleToRawLongBits(chemicalPartial.remaining().totalMass()),
+				null, PROFILE);
 		UUID tx6 = UUID.randomUUID();
 		ContainerTransferJournal chemicalPartialJournal = new ContainerTransferJournal(
 				tx6, region, "minecraft:overworld", 5L, 6L,
@@ -333,7 +367,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal.ItemFingerprint granularBefore = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.GRANULAR_CONTAINER, -1L,
 				granularContents.totalSolidVolumeSvq(), granularContents.encode(),
-				Double.doubleToRawLongBits(granularContents.totalMass()));
+				Double.doubleToRawLongBits(granularContents.totalMass()), null, PROFILE);
 		ContainerTransferJournal.ItemFingerprint granularAfter = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.EMPTY_GRANULAR_CONTAINER, -1L, -1L, null, -1L);
 		UUID tx7 = UUID.randomUUID();

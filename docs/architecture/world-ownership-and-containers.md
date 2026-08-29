@@ -60,11 +60,14 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 - 化学桶另外保存 species quanta、indicator 和 kg mass residual。
 - 干颗粒容器使用整数 SVQ、逐材料 kg 质量与可选 solid composition。
 - 热液体另外保存 registry-bound 总内能。
+- 任何非空 MMM actual container 还保存创建它的 world capability profile fingerprint；空容器不伪造 profile 身份。
 - item count 必须为 1；damage、tooltip、durability bar、颜色和温度不参与结算。
 
-item fingerprint 编码实际可结算的整组数据，而非仅 item id：kind、typed amount、stable mixture/chemical/granular contents、raw kg mass bits、可选 ThermalContents 以及其 registry/underlying hash。`ContainerTransferJournal` 只保存这一数据，`ContainerTransferItems` 独占 fingerprint 与 `ItemStack` 的双向映射。空桶、部分桶、材料桶、化学桶和颗粒容器是不同 shape；shape 之间缺字段或同时出现冲突 component 都拒绝。
+item fingerprint 编码实际可结算的整组数据，而非仅 item id：kind、typed amount、stable mixture/chemical/granular contents、raw kg mass bits、可选 ThermalContents 及其 registry/underlying hash，以及 actual inventory 的 world profile fingerprint。`ContainerTransferJournal` 只保存这一数据，`ContainerTransferItems` 独占 fingerprint 与 `ItemStack` 的双向映射。空桶、部分桶、材料桶、化学桶、颗粒容器和 creative descriptor 是不同 shape；shape 之间缺字段或同时出现冲突 component 都拒绝。actual container 缺失、损坏或不匹配当前世界 profile 时在准备 WAL 前以 `FOREIGN_PROFILE` 拒绝，恢复也必须以已提交世界 profile 复核 WAL；不能按当前数据包重新解释旧世界库存。
 
 液体抽取允许生成不足 1 BV 的 partial item；放入已有部分桶时仍按实际剩余容量规划。`FluidMixture`、`ChemicalContents`、`GranularContents` 和 `ThermalContents` 都有自己的规范编码与总账，item component 只是这些真值的载体。
+
+创造栏 source template 保存的 `CreativeSourceDescriptor` 只是稳定 source ID、精确 typed amount 和可选温度的意图，不是 actual inventory，也不绑定某个 world profile。每次使用时服务端重新确认玩家仍处于创造模式，按当前已提交 world registry 和封闭 catalog 解析材料/species/SVQ/kg/U，拒绝未知 source、错误数量和越过物性有效域的温度。descriptor item 在事务前后保持相同；对热区域，coordinator 用独立的 server-resolved actual source stack 准备 coupled `U`，不能从 descriptor 猜能量。
 
 ## 玩家与发射器路由
 
@@ -72,6 +75,8 @@ item fingerprint 编码实际可结算的整组数据，而非仅 item id：kind
 - 发射器只按发射方向正对的壳面中心路由；壳边、壳角、多个候选和未加载目标拒绝。
 - 插入/抽取原语 all-or-nothing。insert 先规划 marker/parcel 和容量，extract 先做双精度预检，再按整 marker 与尾拆分结算。
 - 创造模式放出是 external source；创造模式装取仍从 solver 删除实际库存，不能制造隐藏 sink。
+
+typed actual container 与 creative source 的 controller-region 转移只依赖世界能力包和区域写入可用，不依赖 world-bridge 政策；world bridge 只决定是否接管或恢复壳内原版世界流体。关闭 bridge 不能把已经由 controller/WAL 持有的 typed inventory 变成不可转移状态。
 
 目标解析发生在事务准备之前。玩家命中壳的外侧、内部格、区域 UUID 和 dimension 必须唯一；dispenser 朝向只参与最初的目标解析，其 dimension、整数 block coordinates 和 slot 构成持久 actor identity。actor identity 与 journal 位于 core，是不引用 `BlockPos`、`ItemStack` 或 loader 类型的封闭数据；各 actor kind 只能携带自己的完整字段，不能用 null 填充无关字段。同一 region 或同一确切 actor identity 存在 WAL 时不得开始另一笔容器事务。恢复时 actor 离线或 owning chunk 未加载是 `UNAVAILABLE`，保留 WAL 等待；slot/block entity 改变或当前 item 既不等于 before 也不等于 after 是 `CONFLICT`，保留 WAL 并 LOCKED，不能每 tick 猜测或把物品塞到其他手/slot。将来增加外部 Mod actor 时必须给它独立的稳定 provider/type identity 和跨重启可解析状态，不能把运行期 callback 写进 WAL。
 
@@ -89,7 +94,7 @@ insert/extract 返回“实际转移量”，WAL 和 after item 必须使用这�
 6. 修改 actor item，并等待玩家存档或 dispenser chunk 完成 durable save。
 7. 删除 WAL。
 
-恢复必须核对 HEAD、checksum、actor、before/after item、resource kind、registry fingerprint 和 generation。region、ownership 与 container 的紧邻代次统一拒绝负数和 `long` 溢出，不能让 `Long.MAX_VALUE + 1` 被误认成合法 target。任何歧义都保留 WAL 并锁定；不得因为 item 看起来相似就推断完成状态。
+恢复必须核对 HEAD、checksum、actor、before/after item、resource kind、world profile fingerprint、各适用 registry fingerprint 和 generation。region、ownership 与 container 的紧邻代次统一拒绝负数和 `long` 溢出，不能让 `Long.MAX_VALUE + 1` 被误认成合法 target。任何歧义都保留 WAL 并锁定；不得因为 item 看起来相似就推断完成状态。
 
 当前 WAL 有材料布局和含热布局。reader 只接受当前 writer 产生的完整字段集合：缺字段、错 NBT 类型、额外未知字段和溢出的 generation pair 都保持原文件并锁定，不做补全或忽略。
 

@@ -9,17 +9,22 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.item.Item;
 
 /**
- * Matter, Motion & Mechanics item registrations. Registration does not enable container gameplay: transfers are
- * gated by the world-bridge feature flag, and the partial bucket is obtainable only through the
- * transfer service (or /give for administrators).
+ * Matter, Motion & Mechanics item registrations. Actual container transfers remain server-authoritative;
+ * the world-bridge flag only governs ownership of pre-existing vanilla world fluid.
  */
 public final class MmmItems {
+	public static final Item QUICK_START_GUIDE = register("quick_start_guide",
+			properties -> new QuickStartGuideItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 	public static final Item PARTIAL_WATER_BUCKET = register("partial_water_bucket",
 			properties -> new PartialWaterBucketItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 	public static final Item MATERIAL_BUCKET = register("material_bucket",
 			properties -> new MaterialBucketItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 	public static final Item GRANULAR_CONTAINER = register("granular_container",
 			properties -> new GranularContainerItem(properties.stacksTo(1).useItemDescriptionPrefix()));
+	public static final Item CREATIVE_SOURCE = register("creative_source",
+			properties -> new CreativeSourceItem(properties.stacksTo(1).useItemDescriptionPrefix()));
+	public static final Item FIELD_PROBE = register("field_probe",
+			properties -> new FieldProbeItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 	public static final Item CHEMICAL_INDICATOR = register("chemical_indicator",
 			properties -> new ChemicalIndicatorItem(properties.stacksTo(1).useItemDescriptionPrefix(), false));
 	public static final Item CHEMICAL_ERASER = register("chemical_eraser",

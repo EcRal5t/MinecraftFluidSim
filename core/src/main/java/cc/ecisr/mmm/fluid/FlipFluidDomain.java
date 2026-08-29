@@ -40,6 +40,7 @@ import cc.ecisr.mmm.thermal.GasLiquidPhaseModel;
 import cc.ecisr.mmm.thermal.FiniteThermalExchange;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
+import cc.ecisr.mmm.thermal.ThermalCellGrid;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalPhaseTransition;
@@ -434,6 +435,20 @@ public final class FlipFluidDomain {
 	public boolean hasChemistryState() { return chemicalParcels != null; }
 	public boolean hasGranularState() { return granularParcels != null; }
 	public boolean hasThermalState() { return thermalState != null; }
+	/** Last committed liquid/solid LTE range; constant-time and absent until the thermal grid was observed. */
+	public ThermalCellGrid.TemperatureRange observedCarrierTemperatureRange() {
+		return thermalState == null ? null : thermalState.observedCarrierTemperatureRange();
+	}
+	/** Constant-time live chemical-parcel count; does not scan markers. */
+	public int chemicalParcelCount() { return chemicalParcels == null ? 0 : chemicalParcels.pool().liveCount(); }
+	/** Constant-time exact species inventory ledger. */
+	public long totalChemicalSpeciesQuanta() { return chemicalParcels == null ? 0L : chemicalParcels.totalQuanta(); }
+	/** Constant-time sparse deposit-group count. */
+	public int granularDepositGroupCount() { return granularDeposits == null ? 0 : granularDeposits.groupCount(); }
+	/** Constant-time coherent phase-group count. */
+	public int coherentPhaseGroupCount() {
+		return thermalState == null ? 0 : thermalState.coherentPhases().groupCount();
+	}
 	public boolean hasPendingPhaseVolumeWork() {
 		for (SignedDyadic value : pendingPhaseCellVolume) if (!value.equals(SignedDyadic.ZERO)) return true;
 		return false;
@@ -488,6 +503,96 @@ public final class FlipFluidDomain {
 		return new FluidCellInventoryView(normalizedVolume * cubicMetresPerCell,
 				solverMass * cubicMetresPerCell, solverMass / normalizedVolume,
 				temperature, materials, stableSpecies);
+	}
+
+	/** Scans authoritative solid carriers and the already committed gas topology without rebuilding either. */
+	public CellCarrierInventoryView observeCellCarriers(int x, int y, int z) {
+		int requested = cellIndexChecked(x, y, z);
+		java.util.TreeMap<String, SolidObservationAccumulator> accumulated = new java.util.TreeMap<>();
+		if (granularParcels != null) for (int ordinal = 0; ordinal < granularParcels.count(); ordinal++) {
+			GranularParcelStore.Parcel parcel = granularParcels.parcel(ordinal);
+			if (granularParcelCell(parcel) == requested) addObservedSolid(accumulated,
+					CellCarrierInventoryView.SolidKind.ACTIVE,
+					granularRegistry.material(parcel.materialHandle()).id(), parcel.solidVolumeSvq(), parcel.mass());
+		}
+		if (granularDeposits != null) granularDeposits.forEachGroup((cell, ignoredPorosity, material, ignoredComposition,
+				svq, mass) -> {
+			if (cell == requested) addObservedSolid(accumulated, CellCarrierInventoryView.SolidKind.DEPOSIT,
+					granularRegistry.material(material).id(), svq, mass);
+		});
+		if (thermalState != null) for (CoherentPhaseStore.Group group : thermalState.coherentPhases().snapshot()) {
+			if (group.cell() == requested) addObservedSolid(accumulated, CellCarrierInventoryView.SolidKind.COHERENT,
+					group.phaseId(), group.occupiedVolumeSvq(), group.mass());
+		}
+		java.util.ArrayList<CellCarrierInventoryView.SolidAmount> solids = new java.util.ArrayList<>(accumulated.size());
+		for (SolidObservationAccumulator value : accumulated.values()) solids.add(new CellCarrierInventoryView.SolidAmount(
+				value.kind, value.stableId, value.svq, value.mass));
+
+		CellCarrierInventoryView.GasAmount gas = null;
+		if (airCellNodeId != null) {
+			int node = airCellNodeId[requested];
+			if (node == AirNetwork.AMBIENT_NODE) {
+				gas = new CellCarrierInventoryView.GasAmount(true, node, AirNetwork.REFERENCE_PRESSURE,
+						GasRegistry.STANDARD_TEMPERATURE_K, java.util.List.of());
+			} else if (node > 0) {
+				java.util.List<CellCarrierInventoryView.ComponentAmount> components = airNetwork.inventory(node).components()
+						.stream().map(component -> new CellCarrierInventoryView.ComponentAmount(component.componentId(),
+								component.standardVolumeNanos(), component.mass())).toList();
+				gas = new CellCarrierInventoryView.GasAmount(false, node,
+						AirNetwork.REFERENCE_PRESSURE + observedGasNodeGaugePressurePa(node),
+						gasNodeTemperatureK(node), components);
+			}
+		}
+		return solids.isEmpty() && gas == null ? null : new CellCarrierInventoryView(solids, gas);
+	}
+
+	/** Bounded-ray predicate over authoritative condensed carriers; does not build grids or display payloads. */
+	public boolean hasCondensedInventoryInCell(int x, int y, int z) {
+		int requested = cellIndexChecked(x, y, z);
+		for (int marker = 0; marker < particleCount; marker++) {
+			if (particleCellIndex(marker) == requested) return true;
+		}
+		if (granularParcels != null) for (int ordinal = 0; ordinal < granularParcels.count(); ordinal++) {
+			if (granularParcelCell(granularParcels.parcel(ordinal)) == requested) return true;
+		}
+		if (granularDeposits != null && granularDeposits.cellSolidVolumeSvq(requested) > 0L) return true;
+		return thermalState != null && thermalState.coherentPhases().cellOccupiedSvq(requested) > 0L;
+	}
+
+	private double observedGasNodeGaugePressurePa(int nodeId) {
+		return thermalState == null || !thermalState.gasModelBound()
+				? airNetwork.observedGaugePressure(nodeId)
+				: thermalState.gasGaugePressure(nodeId, airNetwork);
+	}
+
+	private static void addObservedSolid(
+			java.util.TreeMap<String, SolidObservationAccumulator> accumulated,
+			CellCarrierInventoryView.SolidKind kind, String stableId, long svq, double mass
+	) {
+		String key = kind.name() + '\0' + stableId;
+		SolidObservationAccumulator current = accumulated.get(key);
+		if (current == null) accumulated.put(key, new SolidObservationAccumulator(kind, stableId, svq, mass));
+		else {
+			current.svq = Math.addExact(current.svq, svq);
+			current.mass += mass;
+			if (!Double.isFinite(current.mass)) throw new ArithmeticException("Observed solid mass overflow");
+		}
+	}
+
+	private static final class SolidObservationAccumulator {
+		private final CellCarrierInventoryView.SolidKind kind;
+		private final String stableId;
+		private long svq;
+		private double mass;
+
+		private SolidObservationAccumulator(
+				CellCarrierInventoryView.SolidKind kind, String stableId, long svq, double mass
+		) {
+			this.kind = kind;
+			this.stableId = stableId;
+			this.svq = svq;
+			this.mass = mass;
+		}
 	}
 	public PendingPhaseVolumeState exportPendingPhaseVolumeState() {
 		if (thermalState == null) throw new IllegalStateException("Pending phase volume requires thermal state");

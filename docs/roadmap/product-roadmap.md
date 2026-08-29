@@ -16,7 +16,7 @@
 
 ## 当前产品基座
 
-当前生产边界是最多 4 个显式闭壳 controller region，CPU `FlipFluidDomain` 为权威核心。边界和控制器已有生存配方与创造栏入口，激活后自动运行并持久保存玩家暂停意图，`/mmm` 不再是正常生命周期的前置条件。已经具备：连续体积 PIC/FLIP、可变密度材料、液气/液液界面与润湿、密闭气腔、world ownership、玩家/发射器容器事务、守恒化学、active/deposit 颗粒、总内能、导热、反应热以及固液/气液相变。
+当前生产边界是最多 4 个显式闭壳 controller region，CPU `FlipFluidDomain` 为权威核心。边界和控制器已有生存配方；自定义创造栏把快速入门、闭壳方块、探针、actual 空容器、server-resolved source templates、指示剂与固定温度源按产品顺序列出。激活后自动运行并持久保存玩家暂停意图，`/mmm` 不再是正常创建、选择和暂停的前置条件。已经具备：连续体积 PIC/FLIP、可变密度材料、液气/液液界面与润湿、密闭气腔、world ownership、profile-bound 玩家/发射器容器事务、守恒化学、active/deposit 颗粒、总内能、导热、反应热以及固液/气液相变。
 
 这一基座的限制也必须如实保留：
 
@@ -24,6 +24,7 @@
 - 实体运动已通过 loader-neutral moving-body request 扰动 marker 动量；浸没观察已连续积分 AABB、派生液层和既有 cut-micro geometry，liquid boundary 使用实际当 tick 位姿差而非供下一 tick 使用的原版响应速度。当前 kinematic AABB 近似仍不是移动 cut-cell、压力面积积分或严格双向动量/排水闭合。
 - 固液已支持有界、数据化的压力平衡曲线，气液使用绝对压力和 component 分压；更高压力、更多材料和跨相溶解仍需分别验证物性域。
 - Query API 已冻结同步只读单格观察，并已有只查询闭壳相邻液体的可选 Jade 适配；container durable completion 已有 committed event。尚无 WAILA/HWYLA、直接自由面目标、稳定 transfer API、其他提交类型事件或其他 loader 发现桥。
+- 主 Mod 已有 field probe 的 server-authored 液体/solid/gas 有界观察、controller 的 select/pause/resume/availability console，以及 creative-only fixed reservoir setpoint。它们是内部产品界面，不扩展外部 Query/transfer ABI；破坏性 empty/vent/release/remove 尚未进入该 console，仍属于后续生命周期产品化范围。
 - section 是一个 region 原子 generation 内的存储分片，不具有独立提交、卸载或 ownership 生命周期。
 - controller 外天然洞穴、河流、海洋和世界生成水不在当前 ownership 范围。
 
