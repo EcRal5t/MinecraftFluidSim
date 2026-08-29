@@ -10,3 +10,4 @@
 | 2026-08-29 | S02 | `LiquidParticleStore` 接管 marker 主列唯一所有权（9 列 + count + capacity，逐字保真）；in-place 算法改用不逃逸 `DirectArrays` | `2ede2ff` |
 | 2026-08-29 | S03 | `carrierMutationRevision` + `CarrierMutationCoordinator`（append/swap-remove/wholesale 单入口）；结构变更点清单门；`CarrierMutationValidation` 场景；split/merge/reseed 编排留待 S11 | `bed290d` |
 | 2026-08-29 | S04a | `MarkerGridIndex`/`MarkerGridBuilder` 拆出派生 marker 网格；自审修复 wholesale 失效契约不对称；论证 `gridDirty` 的 revision 替换不可表达平流失效，暂缓 | `e74f8f2` |
+| 2026-08-29 | S04b | `MacVelocityGrid`/`PressureProjectionWorkspace`/`SurfaceTensionWorkspace` 迁出 ~340 使用点；同名局部变量/参数撞车逐点甄别；`FlipFluidDomain` 7447 行 | `56436fa` |
