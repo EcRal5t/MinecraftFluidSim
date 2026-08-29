@@ -88,6 +88,7 @@ final class CarrierMutationCoordinator {
 		}
 		domain.particles.setCount(newCount);
 		domain.bumpCarrierMutationRevision();
+		domain.gridDirty = true;
 	}
 
 	/** Clears the liquid marker column together with its chemistry column after a validated plan. */
@@ -96,6 +97,7 @@ final class CarrierMutationCoordinator {
 		if (domain.chemicalParcels != null) domain.chemicalParcels.clear(domain.particles.count());
 		domain.particles.setCount(0);
 		domain.bumpCarrierMutationRevision();
+		domain.gridDirty = true;
 	}
 
 	private void verify(CarrierMutationPlan plan, CarrierMutationPlan.Kind kind) {

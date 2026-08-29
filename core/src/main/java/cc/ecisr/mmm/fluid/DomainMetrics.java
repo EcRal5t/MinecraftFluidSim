@@ -111,13 +111,13 @@ final class DomainMetrics {
 	double densityInCell(int x, int y, int z) {
 		int cell = domain.cellIndexChecked(x, y, z);
 		domain.ensureGrid();
-		return domain.markerCount[cell] == 0 ? Double.NaN : domain.cellDensity[cell];
+		return domain.markerGrid.markerCount[cell] == 0 ? Double.NaN : domain.markerGrid.cellDensity[cell];
 	}
 
 	int markerCellCount() {
 		domain.ensureGrid();
 		int result = 0;
-		for (int count : domain.markerCount) if (count > 0) result++;
+		for (int count : domain.markerGrid.markerCount) if (count > 0) result++;
 		return result;
 	}
 

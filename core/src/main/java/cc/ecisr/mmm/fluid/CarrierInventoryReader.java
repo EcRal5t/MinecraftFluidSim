@@ -134,7 +134,7 @@ final class CarrierInventoryReader {
 				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.materialRegistry,
 				copyQuantizedVolume(), copyMarkerMask(), copyBinarySolidMask(),
 				arrays.positionX, arrays.positionY, arrays.positionZ, arrays.volume,
-				arrays.materialHandle, domain.particles.count(), domain.exactCellMarkerVolume
+				arrays.materialHandle, domain.particles.count(), domain.markerGrid.exactCellMarkerVolume
 		);
 	}
 
@@ -165,7 +165,7 @@ final class CarrierInventoryReader {
 	byte[] copyMarkerMask() {
 		domain.ensureGrid();
 		byte[] result = new byte[domain.cellCount];
-		for (int i = 0; i < domain.cellCount; i++) result[i] = domain.markerCount[i] > 0 ? (byte) 1 : (byte) 0;
+		for (int i = 0; i < domain.cellCount; i++) result[i] = domain.markerGrid.markerCount[i] > 0 ? (byte) 1 : (byte) 0;
 		return result;
 	}
 }
