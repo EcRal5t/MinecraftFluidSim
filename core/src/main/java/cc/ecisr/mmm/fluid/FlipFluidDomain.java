@@ -117,9 +117,11 @@ public final class FlipFluidDomain {
 	private final CondensedPhaseChangeStage condensedPhaseChangeStage;
 	private final GasLiquidPhaseChangeStage gasLiquidPhaseChangeStage;
 	private final ThermochemistryPipeline thermochemistryPipeline;
+	private final GranularTransitionStage granularTransitionStage;
+	private final ParticleReseedStage particleReseedStage;
 	final FlipPressurePhaseGeometry pressurePhaseGeometry;
 	final FlipFreeSurfaceGeometry freeSurfaceGeometry;
-	private final FlipParticleReseeder particleReseeder;
+	final FlipParticleReseeder particleReseeder;
 	final FlipParticleCollision particleCollision;
 	final FlipVelocityExtrapolator velocityExtrapolator;
 	final float[] volume;
@@ -233,6 +235,9 @@ public final class FlipFluidDomain {
 		this.condensedPhaseChangeStage = thermalStages.condensedPhase();
 		this.gasLiquidPhaseChangeStage = thermalStages.gasPhase();
 		this.thermochemistryPipeline = thermalStages.pipeline();
+		LogicalStepTailAssembly.Stages tailStages = LogicalStepTailAssembly.create(this);
+		this.granularTransitionStage = tailStages.granularTransition();
+		this.particleReseedStage = tailStages.reseed();
 	}
 
 	public int sizeX() { return sizeX; }
@@ -2304,7 +2309,7 @@ public final class FlipFluidDomain {
 		return thermalState.temperature(marker, thermalMarkerContext());
 	}
 
-	private FlipParticleReseeder.ThermalAdapter thermalReseedAdapter() {
+	FlipParticleReseeder.ThermalAdapter thermalReseedAdapter() {
 		return thermalState.reseedAdapter(thermalMarkerContext());
 	}
 
@@ -3589,66 +3594,15 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		if (precipitationEnabled) markMovedReactiveGranularCells(granularParcelCountBeforeAdvection);
 		ThermalAxisStats thermalAxis = runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations);
 		ChemicalParcelStore.ReactionStats chemistry = thermalAxis.chemistry();
-		if (granularState != null && granularState.parcels.count() > 1) {
-			granularCoupling.rebuild(granularState.parcels, granularState.deposits);
-			long[] compactedSolid = granularCoupling.copySolidSvq();
-			granularState.inventory.compactActive(
-					index -> granularParcelCell(granularState.parcels.parcel(index)),
-					(first, second, merged) -> planGranularMerge(compactedSolid, first, second, merged),
-					granularMergeVelocityDelta(), GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP);
-			granularCoupling.rebuild(granularState.parcels, granularState.deposits);
-			if (!granularCoupling.matchesSolidSvq(compactedSolid)) {
-				throw new IllegalStateException("Granular active compaction differs from its exact occupancy plan");
-			}
-		}
-		if (granularDepositDynamics != null) {
-			long[] dynamicsSolid = null;
-			if (hasGranularInventory() || granularDepositDynamics.dirtyColumnCount() != 0) {
-				granularCoupling.rebuild(granularState.parcels, granularState.deposits);
-				dynamicsSolid = granularCoupling.copySolidSvq();
-				long[] plannedDynamicsSolid = dynamicsSolid;
-				lastGranularDepositStats = granularDepositDynamics.step(
-						granularDepositEnvironment(plannedDynamicsSolid), config.timeStep());
-			} else {
-				lastGranularDepositStats = new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
-			}
-			if (hasGranularInventory()) {
-				granularCoupling.rebuild(granularState.parcels, granularState.deposits);
-				if (!granularCoupling.matchesSolidSvq(dynamicsSolid)) {
-					throw new IllegalStateException("Granular deposit transition differs from its exact occupancy plan");
-				}
-				if (!granularOccupancyFitsGeometry(granularCoupling)) {
-					throw new IllegalStateException("Granular deposit transition exceeds geometry");
-				}
-				pressureGranularCoupling = granularCoupling;
-			} else {
-				granularCoupling.clear(); pressureGranularCoupling = null;
-			}
-		}
-		double reseedInitialKineticEnergy = captureMechanicalAudit ? particleKineticEnergyJoules() : 0.0;
+		lastGranularDepositStats = granularTransitionStage.step();
+		ParticleReseedStage.Outcome reseedOutcome = particleReseedStage.step(captureMechanicalAudit);
+		double reseedInitialKineticEnergy = reseedOutcome.initialKineticEnergy();
 		if (captureMechanicalAudit) mechanicalAudit.carrierInventoryTransferJoules +=
 				reseedInitialKineticEnergy - carrierTransferInitialKineticEnergy;
-		ensureParticleCapacity(particleReseeder.capacityUpperBound(particles.count()));
-		SignedDyadic thermalBeforeReseed = thermalState == null ? SignedDyadic.ZERO : exactInternalEnergy();
-		LiquidParticleStore.DirectArrays markerArrays = particles.directArrays();
-		FlipParticleReseeder.Result reseeding = particleReseeder.reseed(
-				geometry.solid,
-				markerArrays.positionX, markerArrays.positionY, markerArrays.positionZ,
-				markerArrays.velocityX, markerArrays.velocityY, markerArrays.velocityZ,
-				markerArrays.volume, markerArrays.mass, markerArrays.materialHandle, markerArrays.phaseLabel, chemicalParcels,
-				thermalState == null ? null : thermalReseedAdapter(),
-				particles.count(), usesMassWeightedP2G(),
-				this::markerPositionAllowed
-		);
-		coordinator.adoptWholesaleCount(
-				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()),
-				reseeding.particleCount());
-		double finalParticleKineticEnergy = captureMechanicalAudit ? particleKineticEnergyJoules() : 0.0;
+		FlipParticleReseeder.Result reseeding = reseedOutcome.result();
+		double finalParticleKineticEnergy = reseedOutcome.finalKineticEnergy();
 		if (captureMechanicalAudit) mechanicalAudit.reseedTransferJoules +=
 				finalParticleKineticEnergy - reseedInitialKineticEnergy;
-		if (thermalState != null) thermalState.recordRoundoff(exactInternalEnergy().subtract(thermalBeforeReseed));
-		gridDirty = true;
-		rebuildGridFromParticles();
 		return new StepStats(
 				substeps, pressureIterations, lastPressureResidual, before, totalVolume(), massBefore, totalMass(),
 				reseeding.merged(), reseeding.split(), reseeding.budgetSkipped(), reseeding.geometrySkipped(),
@@ -3878,7 +3832,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
 	}
 
-	private GranularDepositDynamics.Environment granularDepositEnvironment(long[] plannedSolid) {
+	GranularDepositDynamics granularDepositDynamics() { return granularDepositDynamics; }
+
+	GranularDepositDynamics.Environment granularDepositEnvironment(long[] plannedSolid) {
 		return new GranularDepositDynamics.Environment() {
 			@Override public long geometricOpenSvq(int cell) {
 				return SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
@@ -4608,7 +4564,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return Math.abs(left - right) <= Math.max(1.0E-9, Math.max(Math.ulp(left), Math.ulp(right)) * 8.0);
 	}
 
-	private float granularMergeVelocityDelta() {
+	float granularMergeVelocityDelta() {
 		return Math.max(config.cellSize() * 0.5F, config.gravity() * config.timeStep() * 1.25F);
 	}
 
@@ -4653,7 +4609,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return true;
 	}
 
-	private boolean planGranularMerge(
+	boolean planGranularMerge(
 			long[] planned, GranularParcelStore.Parcel first, GranularParcelStore.Parcel second,
 			GranularParcelStore.Parcel merged
 	) {
@@ -5329,7 +5285,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	long carrierMutationRevision() { return carrierMutationRevision; }
 	void bumpCarrierMutationRevision() { carrierMutationRevision++; }
 	CarrierMutationCoordinator carrierMutations() { return coordinator; }
-	private boolean markerPositionAllowed(float x, float y, float z) {
+	boolean markerPositionAllowed(float x, float y, float z) {
 		return !particleCollision.centerInSolid(x, y, z);
 	}
 	boolean isFluid(int index) { return projection.pressureFluid[index]; }
