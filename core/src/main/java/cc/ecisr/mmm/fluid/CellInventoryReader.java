@@ -53,14 +53,14 @@ final class CellInventoryReader {
 		}
 
 		CellCarrierInventoryView.GasAmount gas = null;
-		if (domain.airCellNodeId != null) {
-			int node = domain.airCellNodeId[requested];
+		if (domain.gasState.cellNodeId != null) {
+			int node = domain.gasState.cellNodeId[requested];
 			if (node == AirNetwork.AMBIENT_NODE) {
 				gas = new CellCarrierInventoryView.GasAmount(true, node, AirNetwork.REFERENCE_PRESSURE,
 						GasRegistry.STANDARD_TEMPERATURE_K, List.of());
 			} else if (node > 0) {
 				List<CellCarrierInventoryView.ComponentAmount> components =
-						domain.airNetwork.inventory(node).components()
+						domain.gasState.network.inventory(node).components()
 						.stream().map(component -> new CellCarrierInventoryView.ComponentAmount(
 								component.componentId(), component.standardVolumeNanos(), component.mass())).toList();
 				gas = new CellCarrierInventoryView.GasAmount(false, node,
@@ -73,8 +73,8 @@ final class CellInventoryReader {
 
 	double observedGasNodeGaugePressurePa(int nodeId) {
 		return domain.thermalState == null || !domain.thermalState.gasModelBound()
-				? domain.airNetwork.observedGaugePressure(nodeId)
-				: domain.thermalState.gasGaugePressure(nodeId, domain.airNetwork);
+				? domain.gasState.network.observedGaugePressure(nodeId)
+				: domain.thermalState.gasGaugePressure(nodeId, domain.gasState.network);
 	}
 
 	boolean hasCondensedInventoryInCell(int x, int y, int z) {

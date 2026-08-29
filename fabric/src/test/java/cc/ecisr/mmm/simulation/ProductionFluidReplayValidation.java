@@ -88,10 +88,10 @@ public final class ProductionFluidReplayValidation {
 	private static void controllerPourSequencePreservesGasInventoryAcrossBackend() throws Exception {
 		RegistrySet registries = loadProductionRegistries();
 		FlipFluidDomain domain = createEmptyFullyBoundController(registries);
-		var initialSource = domain.airNetwork().externalSource();
-		var initialSink = domain.airNetwork().escapedSink();
-		long initialInventory = domain.airNetwork().sealedInventoryNanos();
-		require(domain.airNetwork().nodeCount() == 1 && domain.airNetwork().auditClosed()
+		var initialSource = domain.gasBoundary().externalSource();
+		var initialSink = domain.gasBoundary().escapedSink();
+		long initialInventory = domain.gasBoundary().sealedInventoryNanos();
+		require(domain.gasBoundary().nodeCount() == 1 && domain.gasBoundary().auditClosed()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"empty production controller did not bootstrap one closed gas owner");
 		FlipFluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
@@ -101,9 +101,9 @@ public final class ProductionFluidReplayValidation {
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		long generation = 0L;
 		FluidDomainState state = domain.captureAuthoritativeState();
-		require(domain.airNetwork().externalSource().equals(initialSource)
-					&& domain.airNetwork().escapedSink().equals(initialSink)
-					&& domain.airNetwork().sealedInventoryNanos() == initialInventory,
+		require(domain.gasBoundary().externalSource().equals(initialSource)
+					&& domain.gasBoundary().escapedSink().equals(initialSink)
+					&& domain.gasBoundary().sealedInventoryNanos() == initialInventory,
 				"capturing the first reported pour changed gas inventory: " + gasLedgerDetail(domain));
 		require(Math.abs(totalGasAvailableVolume(domain) - 48.0) <= 1.0E-12,
 				"first reported pour did not compress the closed headspace to 48 m3");
@@ -116,10 +116,10 @@ public final class ProductionFluidReplayValidation {
 				throw new IllegalStateException("first reported controller pour failed at step " + step, failure);
 			}
 			domain = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
-			require(domain.airNetwork().externalSource().equals(initialSource)
-						&& domain.airNetwork().escapedSink().equals(initialSink)
-						&& domain.airNetwork().sealedInventoryNanos() == initialInventory
-						&& domain.airNetwork().auditClosed()
+			require(domain.gasBoundary().externalSource().equals(initialSource)
+						&& domain.gasBoundary().escapedSink().equals(initialSink)
+						&& domain.gasBoundary().sealedInventoryNanos() == initialInventory
+						&& domain.gasBoundary().auditClosed()
 						&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 					"first reported controller pour changed gas inventory at step " + step);
 			state = candidate.state();
@@ -130,9 +130,9 @@ public final class ProductionFluidReplayValidation {
 		require(second.addedVolume() == 112.0F && !second.markerBudgetLimited(),
 				"production controller did not inject the second 14 BV source: " + second);
 		state = domain.captureAuthoritativeState();
-		require(domain.airNetwork().externalSource().equals(initialSource)
-					&& domain.airNetwork().escapedSink().equals(initialSink)
-					&& domain.airNetwork().sealedInventoryNanos() == initialInventory,
+		require(domain.gasBoundary().externalSource().equals(initialSource)
+					&& domain.gasBoundary().escapedSink().equals(initialSink)
+					&& domain.gasBoundary().sealedInventoryNanos() == initialInventory,
 				"capturing the second reported pour changed gas inventory: " + gasLedgerDetail(domain));
 		require(Math.abs(totalGasAvailableVolume(domain) - 34.0) <= 1.0E-12,
 				"second reported pour did not compress the closed headspace to 34 m3");
@@ -147,10 +147,10 @@ public final class ProductionFluidReplayValidation {
 						+ "; input " + gasLedgerDetail(diagnostic), failure);
 			}
 			domain = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
-			require(domain.airNetwork().externalSource().equals(initialSource)
-						&& domain.airNetwork().escapedSink().equals(initialSink)
-						&& domain.airNetwork().sealedInventoryNanos() == initialInventory
-						&& domain.airNetwork().auditClosed()
+			require(domain.gasBoundary().externalSource().equals(initialSource)
+						&& domain.gasBoundary().escapedSink().equals(initialSink)
+						&& domain.gasBoundary().sealedInventoryNanos() == initialInventory
+						&& domain.gasBoundary().auditClosed()
 						&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 					"second reported controller pour changed gas inventory at step " + step
 							+ ": " + gasLedgerDetail(domain));
@@ -160,12 +160,12 @@ public final class ProductionFluidReplayValidation {
 		double finalAvailable = totalGasAvailableVolume(domain);
 		double minimumGasPressure = Double.POSITIVE_INFINITY;
 		int gasBearingNodes = 0;
-		for (int node : domain.airNetwork().nodeIds()) {
-			if (domain.airNetwork().inventory(node).isEmpty()) continue;
+		for (int node : domain.gasBoundary().nodeIds()) {
+			if (domain.gasBoundary().inventory(node).isEmpty()) continue;
 			gasBearingNodes++;
 			double temperature = domain.gasNodeTemperatureK(node);
 			double expectedPressure = AirNetwork.REFERENCE_PRESSURE
-					* domain.airNetwork().standardVolume(node) / domain.airNetwork().availableVolume(node)
+					* domain.gasBoundary().standardVolume(node) / domain.gasBoundary().availableVolume(node)
 					* temperature / GasRegistry.STANDARD_TEMPERATURE_K - AirNetwork.REFERENCE_PRESSURE;
 			double pressure = domain.gasNodeGaugePressurePa(node);
 			require(Math.abs(pressure - expectedPressure) <= Math.max(1.0E-8, Math.abs(expectedPressure) * 1.0E-12),
@@ -177,13 +177,13 @@ public final class ProductionFluidReplayValidation {
 				"settled controller did not retain a positively pressurized 34 m3 headspace");
 		System.out.printf("  controller pour gas ledger: %.9f m3std in %.9f m3, "
 				+ "minimum gauge pressure=%+.3f Pa across %d backend candidates%n",
-				domain.airNetwork().sealedInventoryNanos() * 1.0E-9, finalAvailable,
+				domain.gasBoundary().sealedInventoryNanos() * 1.0E-9, finalAvailable,
 				minimumGasPressure, generation);
 	}
 
 	private static double totalGasAvailableVolume(FlipFluidDomain domain) {
 		double result = 0.0;
-		for (int node : domain.airNetwork().nodeIds()) result += domain.airNetwork().availableVolume(node);
+		for (int node : domain.gasBoundary().nodeIds()) result += domain.gasBoundary().availableVolume(node);
 		return result;
 	}
 
@@ -199,15 +199,15 @@ public final class ProductionFluidReplayValidation {
 				"thermal-off restore fixture did not establish 30 BV before gas bootstrap");
 		domain.bindGasRegistry(registries.gas());
 		domain.bootstrapGasState("");
-		long retainedInventory = domain.airNetwork().sealedInventoryNanos();
-		require(retainedInventory == 34_000_000_000L && domain.airNetwork().auditClosed(),
+		long retainedInventory = domain.gasBoundary().sealedInventoryNanos();
+		require(retainedInventory == 34_000_000_000L && domain.gasBoundary().auditClosed(),
 				"thermal-off restore fixture did not bootstrap the reported 34 m3std inventory");
-		var source = domain.airNetwork().externalSource();
-		var sink = domain.airNetwork().escapedSink();
+		var source = domain.gasBoundary().externalSource();
+		var sink = domain.gasBoundary().escapedSink();
 		domain.commitOperatorClear(domain.planOperatorClear());
 		require(domain.totalVolumeExact() == 0.0F
 				&& Math.abs(totalGasAvailableVolume(domain) - 64.0) <= 1.0E-12
-				&& domain.airNetwork().sealedInventoryNanos() == retainedInventory,
+				&& domain.gasBoundary().sealedInventoryNanos() == retainedInventory,
 				"operator empty did not retain and expand the finite closed gas inventory");
 
 		FlipFluidDomain.VolumeAddition boundaryPour = domain.addVolumeNearBudgeted(6, 0, 0, 128.0F, 6);
@@ -216,7 +216,7 @@ public final class ProductionFluidReplayValidation {
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		FluidDomainState state = domain.captureAuthoritativeState();
 		long generation = 0L;
-		int maximumNodes = domain.airNetwork().nodeCount();
+		int maximumNodes = domain.gasBoundary().nodeCount();
 		for (int step = 0; step < 200; step++) {
 			FluidStepCandidate candidate;
 			try {
@@ -227,11 +227,11 @@ public final class ProductionFluidReplayValidation {
 						failure);
 			}
 			domain = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
-			maximumNodes = Math.max(maximumNodes, domain.airNetwork().nodeCount());
-			require(domain.airNetwork().sealedInventoryNanos() == retainedInventory
-						&& domain.airNetwork().externalSource().equals(source)
-						&& domain.airNetwork().escapedSink().equals(sink)
-						&& domain.airNetwork().auditClosed()
+			maximumNodes = Math.max(maximumNodes, domain.gasBoundary().nodeCount());
+			require(domain.gasBoundary().sealedInventoryNanos() == retainedInventory
+						&& domain.gasBoundary().externalSource().equals(source)
+						&& domain.gasBoundary().escapedSink().equals(sink)
+						&& domain.gasBoundary().auditClosed()
 						&& Math.abs(totalGasAvailableVolume(domain) - 48.0) <= 1.0E-12,
 					"thermal-off empty/boundary-pour replay changed gas truth at step " + step
 							+ ": " + gasLedgerDetail(domain));
@@ -257,8 +257,8 @@ public final class ProductionFluidReplayValidation {
 		domain.sealDomainBoundary();
 		bindEmptyMaterialState(domain, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 		domain.step(false, 0);
-		long inventory = domain.airNetwork().sealedInventoryNanos();
-		require(inventory == 64_000_000_000L && domain.airNetwork().nodeCount() == 1,
+		long inventory = domain.gasBoundary().sealedInventoryNanos();
+		require(inventory == 64_000_000_000L && domain.gasBoundary().nodeCount() == 1,
 				"empty default-gate controller did not bootstrap one closed gas owner: "
 						+ gasLedgerDetail(domain));
 
@@ -272,19 +272,19 @@ public final class ProductionFluidReplayValidation {
 		FlipFluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(5, 3, 5, 112.0F, 6);
 		require(second.addedVolume() == 112.0F && !second.markerBudgetLimited(),
 				"reported second pour did not inject the complete 14 BV source: " + second);
-		int maximumNodes = domain.airNetwork().nodeCount();
+		int maximumNodes = domain.gasBoundary().nodeCount();
 		for (int step = 0; step < 200; step++) {
 			domain.step(false, 0);
-			maximumNodes = Math.max(maximumNodes, domain.airNetwork().nodeCount());
-			require(domain.airNetwork().auditClosed(),
+			maximumNodes = Math.max(maximumNodes, domain.gasBoundary().nodeCount());
+			require(domain.gasBoundary().auditClosed(),
 					"reported two-pour replay opened the gas ledger at step " + step
 							+ ": " + gasLedgerDetail(domain));
 		}
-		require(domain.airNetwork().nodeCount() == 1,
+		require(domain.gasBoundary().nodeCount() == 1,
 				"reported two-pour replay left the closed headspace split across "
-						+ domain.airNetwork().nodeCount() + " owners, peak " + maximumNodes
+						+ domain.gasBoundary().nodeCount() + " owners, peak " + maximumNodes
 						+ ": " + gasLedgerDetail(domain));
-		require(domain.airNetwork().sealedInventoryNanos() == inventory,
+		require(domain.gasBoundary().sealedInventoryNanos() == inventory,
 				"reported two-pour replay changed sealed gas inventory: " + gasLedgerDetail(domain));
 		require(Math.abs(totalGasAvailableVolume(domain) - 34.0) <= 1.0E-12,
 				"settled controller did not retain a 34 m3 headspace");
@@ -294,17 +294,17 @@ public final class ProductionFluidReplayValidation {
 
 	private static String gasLedgerDetail(FlipFluidDomain domain) {
 		StringBuilder nodes = new StringBuilder();
-		for (int node : domain.airNetwork().nodeIds()) nodes.append(" node").append(node)
-				.append('=').append(domain.airNetwork().inventory(node));
-		return "nodes=" + domain.airNetwork().nodeCount()
-				+ " sealed=" + domain.airNetwork().sealedInventoryNanos()
-				+ " source=" + domain.airNetwork().externalSource().standardVolumeNanos()
-				+ "/" + domain.airNetwork().externalSource().entries()
-				+ " sink=" + domain.airNetwork().escapedSink().standardVolumeNanos()
-				+ "/" + domain.airNetwork().escapedSink().entries()
-				+ " massRoundoff=" + domain.airNetwork().massRoundoff()
-				+ " residualRoundoff=" + domain.airNetwork().residualRoundoff()
-				+ " audit=" + domain.airNetwork().auditClosed() + nodes;
+		for (int node : domain.gasBoundary().nodeIds()) nodes.append(" node").append(node)
+				.append('=').append(domain.gasBoundary().inventory(node));
+		return "nodes=" + domain.gasBoundary().nodeCount()
+				+ " sealed=" + domain.gasBoundary().sealedInventoryNanos()
+				+ " source=" + domain.gasBoundary().externalSource().standardVolumeNanos()
+				+ "/" + domain.gasBoundary().externalSource().entries()
+				+ " sink=" + domain.gasBoundary().escapedSink().standardVolumeNanos()
+				+ "/" + domain.gasBoundary().escapedSink().entries()
+				+ " massRoundoff=" + domain.gasBoundary().massRoundoff()
+				+ " residualRoundoff=" + domain.gasBoundary().residualRoundoff()
+				+ " audit=" + domain.gasBoundary().auditClosed() + nodes;
 	}
 
 	public static void dynamicPlayerFloatRemainsBoundedAcrossBackend() throws Exception {
@@ -552,7 +552,7 @@ public final class ProductionFluidReplayValidation {
 		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0;
 		double maximumBodyPressureResidual = 0.0, maximumPressureResidual = 0.0;
 		long phaseOperations = 0L, boiledCells = 0L, condensedCells = 0L;
-		double previousAvailable = restored.airNetwork().availableVolume(1);
+		double previousAvailable = restored.gasBoundary().availableVolume(1);
 		require(kineticEnergy(restored.exportMaterialParticleState()) == 0.0,
 				"compressed planar fixture did not start at rest");
 		require(restored.gasNodeGaugePressurePa(1) > 100_000.0,
@@ -572,7 +572,7 @@ public final class ProductionFluidReplayValidation {
 			FlipFluidDomain.MechanicalStepAudit audit = stats.mechanicalAudit();
 			restored = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
 			double kinetic = audit.finalParticleKineticEnergyJoules();
-			double available = restored.airNetwork().availableVolume(1);
+			double available = restored.gasBoundary().availableVolume(1);
 			double deltaAvailable = available - previousAvailable;
 			maximumKinetic = Math.max(maximumKinetic, kinetic);
 			if (step >= 500) tailMaximumKinetic = Math.max(tailMaximumKinetic, kinetic);
@@ -584,7 +584,7 @@ public final class ProductionFluidReplayValidation {
 			phaseOperations += stats.gasPhase().operations();
 			boiledCells += stats.gasPhase().boiledCells();
 			condensedCells += stats.gasPhase().condensedCells();
-			require(audit.captured() && restored.airNetwork().auditClosed()
+			require(audit.captured() && restored.gasBoundary().auditClosed()
 					&& restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
 					"compressed planar backend opened an authoritative audit at step " + step);
 			state = candidate.state();
@@ -687,7 +687,7 @@ public final class ProductionFluidReplayValidation {
 		require(committed.exactInternalEnergy().equals(restored.exactInternalEnergy())
 				&& committed.thermalAudit().equals(restored.thermalAudit()),
 				"full-capability capture/restore changed total U or its audit");
-		require(restored.airNetwork().auditClosed(), "restored full-capability gas ledger is open");
+		require(restored.gasBoundary().auditClosed(), "restored full-capability gas ledger is open");
 		requireSameGasState(captured.gas(), roundTrip.gas());
 		System.out.printf("  full-capability half-fill round trip: particles=%d, volume=%.9f, gasNodes=%d%n",
 				restored.particleCount(), restored.totalVolumeExact(), roundTrip.gas().nodes().size());
@@ -701,7 +701,7 @@ public final class ProductionFluidReplayValidation {
 		FluidDomainState evaluatedRoundTrip = evaluated.captureAuthoritativeState();
 		require(candidate.baseGeneration() == 7L && candidate.candidateGeneration() == 8L,
 				"full-capability backend candidate generation is not adjacent");
-		require(evaluated.airNetwork().auditClosed()
+		require(evaluated.gasBoundary().auditClosed()
 				&& evaluated.exactInternalEnergy().equals(evaluated.thermalAudit().expectedInventory()),
 				"full-capability backend candidate did not close gas or total U audit");
 		requireSameGasState(candidate.state().gas(), evaluatedRoundTrip.gas());
@@ -728,12 +728,12 @@ public final class ProductionFluidReplayValidation {
 		FlipFluidDomain.GasThermalPhaseStats phase = domain.lastGasThermalPhaseStats();
 		FluidDomainState committed = domain.captureAuthoritativeState();
 		FlipFluidDomain restored = FlipFluidDomain.restoreAuthoritativeState(committed);
-		require(domain.airNetwork().auditClosed()
+		require(domain.gasBoundary().auditClosed()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"full-capability phase-on step did not close gas or total U audit");
 		require(committed.pendingPhaseVolume().entries().equals(
 					restored.exportPendingPhaseVolumeState().entries())
-				&& restored.airNetwork().auditClosed()
+				&& restored.gasBoundary().auditClosed()
 				&& restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
 				"full-capability phase-on state did not preserve pending volume, gas or U across restore");
 		System.out.printf("  full-capability phase-on production step: %.3f ms, operations=%d, "
@@ -782,7 +782,7 @@ public final class ProductionFluidReplayValidation {
 			condensedCells += stats.gasPhase().condensedCells();
 
 			restored = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
-			require(restored.airNetwork().nodeCount() == 1 && restored.airNetwork().auditClosed(),
+			require(restored.gasBoundary().nodeCount() == 1 && restored.gasBoundary().auditClosed(),
 					"planar no-entity backend restore opened or changed the sealed gas owner at step " + step);
 			require(restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
 					"planar no-entity backend restore opened total U at step " + step);

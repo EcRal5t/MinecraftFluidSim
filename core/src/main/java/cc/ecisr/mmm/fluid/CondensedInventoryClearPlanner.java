@@ -85,13 +85,13 @@ final class CondensedInventoryClearPlanner {
 		if (domain.hasPendingPhaseVolumeWork()) {
 			throw new IllegalStateException("Pending phase volume/work must be projected before operator vent");
 		}
-		if (!domain.airNetwork.auditClosed()) throw new IllegalStateException("Gas inventory audit is open");
-		GasInventory removed = domain.airNetwork.sealedInventory();
-		AirNetwork.RemapPlan gasPlan = domain.airNetwork.planRemapNodes(
+		if (!domain.gasState.network.auditClosed()) throw new IllegalStateException("Gas inventory audit is open");
+		GasInventory removed = domain.gasState.network.sealedInventory();
+		AirNetwork.RemapPlan gasPlan = domain.gasState.network.planRemapNodes(
 				new double[0], List.of(), GasInventory.EMPTY, removed, List.of());
 		FlipThermalState.GasVentPlan thermalPlan = domain.thermalState == null ? null
-				: domain.thermalState.planGasVent(domain.airNetwork, domain.particles.count());
-		return new FlipFluidDomain.OperatorGasVentPlan(domain.airNetwork.nodeCount(), removed, gasPlan, thermalPlan);
+				: domain.thermalState.planGasVent(domain.gasState.network, domain.particles.count());
+		return new FlipFluidDomain.OperatorGasVentPlan(domain.gasState.network.nodeCount(), removed, gasPlan, thermalPlan);
 	}
 
 	private String coherentLiquidMaterialId(String coherentPhaseId) {

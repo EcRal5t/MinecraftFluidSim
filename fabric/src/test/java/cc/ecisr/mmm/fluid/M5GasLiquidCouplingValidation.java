@@ -38,8 +38,8 @@ public final class M5GasLiquidCouplingValidation {
 		FlipFluidDomain domain = new FlipFluidDomain(n, n, n, config, 4_096);
 		domain.sealDomainBoundary();
 		domain.bootstrapGasState(null);
-		domain.airNetwork().setStandardVolume(1, 34.0);
-		long gas = domain.airNetwork().sealedInventoryNanos();
+		domain.setGasNodeStandardVolume(1, 34.0);
+		long gas = domain.gasBoundary().sealedInventoryNanos();
 		FlipFluidDomain.VolumeAddition addition = domain.addVolumeNearBudgeted(6, 0, 0, 128.0F, 6);
 		check(addition.addedVolume() == 128.0F && !addition.markerBudgetLimited(),
 				"empty controller boundary pour did not add 16 BV");
@@ -49,7 +49,7 @@ public final class M5GasLiquidCouplingValidation {
 				throw new IllegalStateException("empty controller negative-pressure boundary pour failed at step " + step,
 						failure);
 			}
-			check(domain.airNetwork().sealedInventoryNanos() == gas && domain.airNetwork().auditClosed(),
+			check(domain.gasBoundary().sealedInventoryNanos() == gas && domain.gasBoundary().auditClosed(),
 					"empty controller boundary pour changed closed gas inventory at step " + step);
 			try {
 				domain = FlipFluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
@@ -73,8 +73,8 @@ public final class M5GasLiquidCouplingValidation {
 			domain.synchronizeGasTopologyForPersistence();
 			throw new AssertionError("finite closed gas without capacity did not reject its topology candidate");
 		} catch (GasTopologyBlockedException expected) {
-			check(domain.airNetwork().sealedInventoryNanos() == 1_000_000_000L
-					&& domain.airNetwork().auditClosed(),
+			check(domain.gasBoundary().sealedInventoryNanos() == 1_000_000_000L
+					&& domain.gasBoundary().auditClosed(),
 					"typed gas-topology rejection changed the committed inventory");
 		}
 	}
@@ -89,18 +89,18 @@ public final class M5GasLiquidCouplingValidation {
 			domain.setVolume(x, y, z, 1.0F);
 		}
 		domain.bootstrapGasState(null);
-		check(domain.airNetwork().nodeCount() == 0
-				&& domain.airNetwork().externalSource().entries().isEmpty(),
+		check(domain.gasBoundary().nodeCount() == 0
+				&& domain.gasBoundary().externalSource().entries().isEmpty(),
 				"fully occupied closed bootstrap created gas inventory");
 		FlipFluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(1, 1, 1, 1.0F, 0);
 		check(extracted.transferred(), "closed vacuum fixture could not extract one cell volume");
 		domain.synchronizeGasTopologyForPersistence();
-		check(domain.airNetwork().nodeCount() == 1
-				&& domain.airNetwork().inventory(1).isEmpty()
-				&& domain.airNetwork().externalSource().entries().isEmpty()
-				&& domain.airNetwork().escapedSink().entries().isEmpty()
-				&& domain.airNetwork().gaugePressure(1) == -AirNetwork.REFERENCE_PRESSURE
-				&& domain.airNetwork().auditClosed(),
+		check(domain.gasBoundary().nodeCount() == 1
+				&& domain.gasBoundary().inventory(1).isEmpty()
+				&& domain.gasBoundary().externalSource().entries().isEmpty()
+				&& domain.gasBoundary().escapedSink().entries().isEmpty()
+				&& domain.gasBoundary().gaugePressure(1) == -AirNetwork.REFERENCE_PRESSURE
+				&& domain.gasBoundary().auditClosed(),
 				"post-bootstrap closed cavity was filled from ambient instead of remaining vacuum");
 	}
 
@@ -113,9 +113,9 @@ public final class M5GasLiquidCouplingValidation {
 		}
 		domain.bootstrapGasState(null);
 		double expected = sign * DENSITY * GRAVITY * 4.0;
-		double available = domain.airNetwork().availableVolume(1);
-		domain.airNetwork().setStandardVolume(1, available * (1.0 + expected / AirNetwork.REFERENCE_PRESSURE));
-		long gasNanos = domain.airNetwork().standardVolumeNanos(1);
+		double available = domain.gasBoundary().availableVolume(1);
+		domain.setGasNodeStandardVolume(1, available * (1.0 + expected / AirNetwork.REFERENCE_PRESSURE));
+		long gasNanos = domain.gasBoundary().standardVolumeNanos(1);
 		double liquidVolume = domain.totalVolumeExact();
 		FlipFluidDomain.StepStats stats = null;
 		double maximumSpeed = 0.0;
@@ -124,9 +124,9 @@ public final class M5GasLiquidCouplingValidation {
 			maximumSpeed = Math.max(maximumSpeed, domain.maximumParticleSpeed());
 			check(Float.isFinite(stats.pressureResidual()), "analytic hydrostatic residual became non-finite");
 			check(domain.totalVolumeExact() == liquidVolume, "analytic hydrostatic head changed liquid volume");
-			checkLedger(domain.airNetwork(), "analytic hydrostatic step " + sign + "/" + step);
+			checkLedger(domain.gasBoundary(), "analytic hydrostatic step " + sign + "/" + step);
 		}
-		double gasPressure = domain.airNetwork().gaugePressure(1);
+		double gasPressure = domain.gasBoundary().gaugePressure(1);
 		double measuredHead = DENSITY * GRAVITY
 				* (columnSurface(domain, 7, 10, 8) - columnSurface(domain, 1, 5, 10));
 		double bottomMismatch = Math.abs(domain.pressure(5, 1, 1) - domain.pressure(7, 1, 1));
@@ -141,7 +141,7 @@ public final class M5GasLiquidCouplingValidation {
 		check(bottomMismatch <= 0.1, "analytic U-tube bottom pressure did not close");
 		check(maximumSpeed <= 0.02 && domain.maximumParticleSpeed() <= 3.0E-4F,
 				"analytic hydrostatic head self-excited");
-		check(domain.airNetwork().standardVolumeNanos(1) == gasNanos,
+		check(domain.gasBoundary().standardVolumeNanos(1) == gasNanos,
 				"analytic hydrostatic head changed sealed gas inventory");
 	}
 
@@ -156,8 +156,8 @@ public final class M5GasLiquidCouplingValidation {
 			if (shell) domain.setSolid(x, y, z, true);
 		}
 		domain.bootstrapGasState(null);
-		check(domain.airNetwork().nodeCount() == 1
-				&& domain.airNetwork().standardVolumeNanos(1) == 216_000_000_000L,
+		check(domain.gasBoundary().nodeCount() == 1
+				&& domain.gasBoundary().standardVolumeNanos(1) == 216_000_000_000L,
 				"mixed split fixture did not begin as one ambient-equilibrium cavity");
 
 		for (int z = 1; z < n - 1; z++) for (int y = 1; y < n - 1; y++) {
@@ -166,7 +166,7 @@ public final class M5GasLiquidCouplingValidation {
 		domain.setSolid(6, n - 1, 3, false);
 		domain.synchronizeGasTopologyForPersistence();
 
-		AirNetwork network = domain.airNetwork();
+		GasPressureBoundary network = domain.gasBoundary();
 		check(network.nodeCount() == 1, "mixed sealed/ambient split did not retain one sealed child");
 		check(network.standardVolumeNanos(1) == 129_600_000_000L,
 				"mixed split failed to retain the sealed child's available-volume share");
@@ -180,23 +180,23 @@ public final class M5GasLiquidCouplingValidation {
 		validateOpenTubesStayAmbient();
 		FlipFluidDomain sealed = utubeDomain(true);
 		sealed.step();
-		double available = sealed.airNetwork().availableVolume(1);
-		sealed.airNetwork().setStandardVolume(1, 0.75 * available);
+		double available = sealed.gasBoundary().availableVolume(1);
+		sealed.setGasNodeStandardVolume(1, 0.75 * available);
 		double exactVolume = sealed.totalVolumeExact();
 		double exactMass = sealed.totalMass();
 		FlipFluidDomain.StepStats stats = sealed.step();
-		check(sealed.gasPressureActive() && sealed.airNetwork().gaugePressure(1) < 0.0,
+		check(sealed.gasPressureActive() && sealed.gasBoundary().gaugePressure(1) < 0.0,
 				"sealed gas pressure was not consumed by the active solver");
 		check(Float.isFinite(stats.pressureResidual()), "short coupling residual became non-finite");
 		check(sealed.totalVolumeExact() == exactVolume && sealed.totalMass() == exactMass,
 				"short coupling smoke changed liquid ledgers");
-		checkLedger(sealed.airNetwork(), "short sealed-cavity smoke");
+		checkLedger(sealed.gasBoundary(), "short sealed-cavity smoke");
 
 		FlipFluidDomain chambers = chamberPairDomain();
 		chambers.step();
-		AirNetwork network = chambers.airNetwork();
-		network.setStandardVolume(1, 2.0 * network.availableVolume(1));
-		network.setStandardVolume(3, network.availableVolume(3));
+		GasPressureBoundary network = chambers.gasBoundary();
+		chambers.setGasNodeStandardVolume(1, 2.0 * network.availableVolume(1));
+		chambers.setGasNodeStandardVolume(3, network.availableVolume(3));
 		double before = Math.abs(network.gaugePressure(1) - network.gaugePressure(3));
 		chambers.step();
 		double after = Math.abs(network.gaugePressure(1) - network.gaugePressure(3));
@@ -208,14 +208,14 @@ public final class M5GasLiquidCouplingValidation {
 		FlipFluidDomain domain = utubeDomain(false);
 		domain.step();
 		check(!domain.gasPressureActive(), "open-topped tube pair must not create sealed gas");
-		check(domain.airNetwork().nodeCount() == 0, "open-topped tube pair must keep zero sealed nodes");
-		checkLedger(domain.airNetwork(), "open tubes");
+		check(domain.gasBoundary().nodeCount() == 0, "open-topped tube pair must keep zero sealed nodes");
+		checkLedger(domain.gasBoundary(), "open tubes");
 	}
 
 	private static void validateSealedCompression() {
 		FlipFluidDomain domain = utubeDomain(true);
 		domain.step();
-		long initialGasNanos = domain.airNetwork().standardVolumeNanos(1);
+		long initialGasNanos = domain.gasBoundary().standardVolumeNanos(1);
 		double initialLiquidVolume = domain.totalVolumeExact();
 		double initialLiquidMass = domain.totalMass();
 		// Staged compression: top the right column up without entraining air below either surface.
@@ -229,11 +229,11 @@ public final class M5GasLiquidCouplingValidation {
 				check(Float.isFinite(stats.pressureResidual()), "staged fill residual became non-finite");
 				maximumSpeed = Math.max(maximumSpeed, domain.maximumParticleSpeed());
 				check(maximumSpeed <= 100.0, "staged compression agitation diverged");
-				checkLedger(domain.airNetwork(), "staged fill step " + fill + "/" + settle);
+				checkLedger(domain.gasBoundary(), "staged fill step " + fill + "/" + settle);
 			}
-			double pressure = domain.airNetwork().gaugePressure(1);
-			double available = domain.airNetwork().availableVolume(1);
-			double standard = domain.airNetwork().standardVolumeNanos(1) / 1_000_000_000.0;
+			double pressure = domain.gasBoundary().gaugePressure(1);
+			double available = domain.gasBoundary().availableVolume(1);
+			double standard = domain.gasBoundary().standardVolumeNanos(1) / 1_000_000_000.0;
 			double expectedPressure = Math.max(AirNetwork.MIN_GAUGE_PRESSURE,
 					Math.min(AirNetwork.MAX_GAUGE_PRESSURE,
 							AirNetwork.REFERENCE_PRESSURE * (standard / available - 1.0)));
@@ -241,22 +241,22 @@ public final class M5GasLiquidCouplingValidation {
 					"staged compression pressure did not match finite inventory/capacity EoS at fill " + fill);
 		}
 		check(Math.abs(addedTotal - 96.0F) <= 1.0E-3F, "staged fill must add the requested water, got " + addedTotal);
-		check(domain.airNetwork().standardVolumeNanos(1) == initialGasNanos,
+		check(domain.gasBoundary().standardVolumeNanos(1) == initialGasNanos,
 				"sealed gas inventory must stay exactly constant without orifice edges");
 		check(Math.abs(domain.totalVolumeExact() - initialLiquidVolume - addedTotal) <= 1.0E-6
 				&& Math.abs(domain.totalMass() - initialLiquidMass - addedTotal * DENSITY) <= 1.0E-6,
 				"staged compression did not close liquid source volume/mass");
-		check(domain.airNetwork().nodeCount() == 1, "sealed compression must keep exactly one cavity");
+		check(domain.gasBoundary().nodeCount() == 1, "sealed compression must keep exactly one cavity");
 		System.out.printf("  staged sealed compression: added=%.3f BV p=%+.3f Pa maxSpeed=%.6g m/s%n",
-				addedTotal, domain.airNetwork().gaugePressure(1), maximumSpeed);
+				addedTotal, domain.gasBoundary().gaugePressure(1), maximumSpeed);
 	}
 
 	private static void validateNegativeGaugeSuction() {
 		FlipFluidDomain domain = utubeDomain(true);
 		domain.step();
-		double initialAvailable = domain.airNetwork().availableVolume(1);
-		domain.airNetwork().setStandardVolume(1, 0.75 * initialAvailable);
-		long presetNanos = domain.airNetwork().standardVolumeNanos(1);
+		double initialAvailable = domain.gasBoundary().availableVolume(1);
+		domain.setGasNodeStandardVolume(1, 0.75 * initialAvailable);
+		long presetNanos = domain.gasBoundary().standardVolumeNanos(1);
 		double exactVolume = domain.totalVolumeExact();
 		double exactMass = domain.totalMass();
 		double maximumSpeed = 0.0;
@@ -266,28 +266,28 @@ public final class M5GasLiquidCouplingValidation {
 			check(Float.isFinite(stats.pressureResidual()), "negative-gauge residual became non-finite");
 			maximumSpeed = Math.max(maximumSpeed, domain.maximumParticleSpeed());
 			check(maximumSpeed <= 100.0, "negative-gauge agitation diverged");
-			checkLedger(domain.airNetwork(), "negative-gauge step " + steps);
+			checkLedger(domain.gasBoundary(), "negative-gauge step " + steps);
 		}
-		check(domain.airNetwork().gaugePressure(1) < 0.0, "negative-gauge suction lost its pressure sign");
-		check(domain.airNetwork().standardVolumeNanos(1) == presetNanos,
+		check(domain.gasBoundary().gaugePressure(1) < 0.0, "negative-gauge suction lost its pressure sign");
+		check(domain.gasBoundary().standardVolumeNanos(1) == presetNanos,
 				"preset gas inventory must stay exactly constant");
 		check(domain.totalVolumeExact() == exactVolume && domain.totalMass() == exactMass,
 				"negative-gauge suction changed exact liquid ledgers");
 		System.out.printf("  negative-gauge transient: p=%+.3f Pa max/finalSpeed=%.6g/%.6g m/s%n",
-				domain.airNetwork().gaugePressure(1), maximumSpeed, domain.maximumParticleSpeed());
+				domain.gasBoundary().gaugePressure(1), maximumSpeed, domain.maximumParticleSpeed());
 	}
 
 	private static void validateOrificeEqualization() {
 		FlipFluidDomain domain = chamberPairDomain();
 		domain.step();
-		AirNetwork network = domain.airNetwork();
+		GasPressureBoundary network = domain.gasBoundary();
 		check(network.nodeCount() == 3, "dry chamber pair must expose two chambers and the sliver pocket");
 		check(network.edgeCount() == 2, "the gap must chain both chambers through the sliver pocket, got "
 				+ network.edgeCount());
 		double leftAvailable = network.availableVolume(1);
 		double rightAvailable = network.availableVolume(3);
-		network.setStandardVolume(1, 2.0 * leftAvailable);
-		network.setStandardVolume(3, rightAvailable);
+		domain.setGasNodeStandardVolume(1, 2.0 * leftAvailable);
+		domain.setGasNodeStandardVolume(3, rightAvailable);
 		double initialDelta = Math.abs(network.gaugePressure(1) - network.gaugePressure(3));
 		check(initialDelta > 0.9 * AirNetwork.REFERENCE_PRESSURE, "pressurized chamber must start with a large delta");
 		double previousDelta = initialDelta;
@@ -358,7 +358,7 @@ public final class M5GasLiquidCouplingValidation {
 		return volume / crossSection;
 	}
 
-	private static void checkLedger(AirNetwork network, String context) {
+	private static void checkLedger(GasPressureBoundary network, String context) {
 		long sealed = network.sealedInventoryNanos();
 		if (sealed + network.ventedNanos() != network.drawnFromAmbientNanos()) {
 			throw new AssertionError("gas ledger identity broken after " + context + ": sealed=" + sealed

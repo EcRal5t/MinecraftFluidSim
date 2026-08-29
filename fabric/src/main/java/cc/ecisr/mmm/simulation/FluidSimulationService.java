@@ -22,6 +22,7 @@ import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.CellCarrierInventoryView;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.GasPressureBoundary;
 import cc.ecisr.mmm.fluid.FluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
@@ -894,7 +895,7 @@ public final class FluidSimulationService {
 								: unavailableCapacity(depositLimit),
 						live ? capacity(domain.coherentPhaseGroupCount(), ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION)
 								: unavailableCapacity(ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION),
-						live ? capacity(domain.airNetwork().nodeCount(), GasLimits.MAX_NODES_PER_REGION)
+						live ? capacity(domain.gasBoundary().nodeCount(), GasLimits.MAX_NODES_PER_REGION)
 								: unavailableCapacity(GasLimits.MAX_NODES_PER_REGION),
 						live ? capacity(thermalRegistry == null ? 0L
 								: region.finiteThermalDevices(thermalRegistry.fingerprint()).devices().size(),
@@ -918,8 +919,8 @@ public final class FluidSimulationService {
 			minimumTemperature = carrierRange.minimumK();
 			maximumTemperature = carrierRange.maximumK();
 		}
-		for (int node : domain.airNetwork().nodeIds()) {
-			var gas = domain.airNetwork().inventory(node);
+		for (int node : domain.gasBoundary().nodeIds()) {
+			var gas = domain.gasBoundary().inventory(node);
 			gasNanos = Math.addExact(gasNanos, gas.standardVolumeNanos());
 			for (var component : gas.components()) gasMass += component.mass();
 			if (domain.hasThermalState() && !gas.isEmpty()) {
@@ -1241,7 +1242,7 @@ public final class FluidSimulationService {
 
 		FlipFluidDomain domain = region.domain();
 		if (domain.hasPendingPhaseVolumeWork()) blockers.add(LifecycleOperationPreview.Blocker.PENDING_PHASE_WORK);
-		boolean auditClosed = domain.airNetwork().auditClosed()
+		boolean auditClosed = domain.gasBoundary().auditClosed()
 				&& (!domain.hasThermalState()
 				|| domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
 		try {
@@ -1257,7 +1258,7 @@ public final class FluidSimulationService {
 		boolean condensedEmpty = domain.particleCount() == 0
 				&& domain.totalGranularSolidVolumeSvq() == 0L
 				&& domain.totalCoherentSolidVolumeSvq() == 0L;
-		boolean gasEmpty = domain.airNetwork().nodeCount() == 0 && domain.airNetwork().sealedInventory().isEmpty()
+		boolean gasEmpty = domain.gasBoundary().nodeCount() == 0 && domain.gasBoundary().sealedInventory().isEmpty()
 				&& domain.exactGasInternalEnergy().equals(cc.ecisr.mmm.thermal.SignedDyadic.ZERO);
 		boolean devicesEmpty = thermalRegistry == null
 				|| region.finiteThermalDevices(thermalRegistry.fingerprint()).devices().isEmpty();
@@ -1281,7 +1282,7 @@ public final class FluidSimulationService {
 
 		GasSummary gas = lifecycleGasSummary(domain);
 		LifecycleOperationPreview.GasState gasState = new LifecycleOperationPreview.GasState(gas.nanos(), gas.mass(),
-				gas.speciesQuanta(), domain.airNetwork().nodeCount(), domain.hasAmbientGasCells());
+				gas.speciesQuanta(), domain.gasBoundary().nodeCount(), domain.hasAmbientGasCells());
 		LifecycleOperationPreview.Removal removal = switch (operation) {
 			case EMPTY_CONDENSED -> new LifecycleOperationPreview.Removal(
 					AirNetwork.nanos(domain.physicalVolumeCubicMetres(domain.totalVolumeExact())),
@@ -1302,7 +1303,7 @@ public final class FluidSimulationService {
 	private static GasSummary lifecycleGasSummary(FlipFluidDomain domain) {
 		long nanos = 0L, species = 0L;
 		double mass = 0.0;
-		for (var component : domain.airNetwork().sealedInventory().components()) {
+		for (var component : domain.gasBoundary().sealedInventory().components()) {
 			nanos = Math.addExact(nanos, component.standardVolumeNanos());
 			mass += component.mass();
 			for (var amount : component.species()) species = Math.addExact(species, amount.amountQuanta());
@@ -1898,7 +1899,7 @@ public final class FluidSimulationService {
 			fillAirDemoWater(domain);
 			bindConfiguredState(domain);
 			domain.step();
-			AirNetwork network = domain.airNetwork();
+			GasPressureBoundary network = domain.gasBoundary();
 			if (network.nodeCount() < 1) {
 				lastTakeoverFailure = "左侧气腔未密闭；玻璃只替换空气方块，请清理模拟区域内的其他方块后重试";
 				restoreAirDemoScaffolding(level.getServer());
@@ -1912,7 +1913,7 @@ public final class FluidSimulationService {
 			int node = network.nodeIds().get(0);
 			// pressure adds inventory (p = P0(V0/V - 1) > 0), vacuum removes it; the soft gas spring
 			// settles near a third of the preset head, so presets are scaled for a visible difference
-			network.setStandardVolume(node, vacuum ? network.availableVolume(node) * 0.78
+			domain.setGasNodeStandardVolume(node, vacuum ? network.availableVolume(node) * 0.78
 					: network.availableVolume(node) / 0.70);
 			activeRegion().setPaused(true);
 			sendSnapshot(level);
@@ -2905,7 +2906,7 @@ public final class FluidSimulationService {
 
 	/** Read-only gas-network summary for status output; empty when no sealed cavity exists. */
 	private static String gasSummary(FlipFluidDomain domain) {
-		AirNetwork network = domain.airNetwork();
+		GasPressureBoundary network = domain.gasBoundary();
 		List<Integer> ids = network.nodeIds();
 		if (ids.isEmpty()) return "";
 		StringBuilder builder = new StringBuilder("gas ");

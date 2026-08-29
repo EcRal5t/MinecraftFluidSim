@@ -159,8 +159,8 @@ final class DomainMetrics {
 	}
 
 	boolean hasAmbientGasCells() {
-		if (domain.airCellNodeId == null) return false;
-		for (int node : domain.airCellNodeId) if (node == AirNetwork.AMBIENT_NODE) return true;
+		if (domain.gasState.cellNodeId == null) return false;
+		for (int node : domain.gasState.cellNodeId) if (node == AirNetwork.AMBIENT_NODE) return true;
 		return false;
 	}
 }

@@ -120,7 +120,7 @@ final class CarrierInventoryReader {
 
 	ThermalDisplaySnapshot copyThermalDisplaySnapshot() {
 		if (domain.thermalState == null) throw new IllegalStateException("Thermal state is not bound");
-		return domain.thermalState.displaySnapshot(domain.thermalMarkerContext(), domain.airNetwork);
+		return domain.thermalState.displaySnapshot(domain.thermalMarkerContext(), domain.gasState.network);
 	}
 
 	/** Read-only material rendering reconstruction; it contains no exact inventory and is not a wire format. */

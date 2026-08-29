@@ -542,11 +542,11 @@ public final class M9ThermalValidation {
 		domain.bindGasRegistry(gas);
 		domain.bootstrapGasState("");
 		domain.bindThermal(thermal, liquids, 300.0);
-		require(domain.airNetwork().nodeCount() == 1, "persistence topology fixture did not start as one cavity");
+		require(domain.gasBoundary().nodeCount() == 1, "persistence topology fixture did not start as one cavity");
 
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) domain.setVolume(2, y, z, 1.0F);
 		FlipMaterialParticleState carriers = domain.exportMaterialParticleState();
-		GasInventory beforeGas = domain.airNetwork().inventory(1);
+		GasInventory beforeGas = domain.gasBoundary().inventory(1);
 		var stale = domain.exportGasState("");
 		FlipFluidDomain rejected = new FlipFluidDomain(4, 4, 4, config, 1_024);
 		rejected.sealDomainBoundary();
@@ -560,9 +560,9 @@ public final class M9ThermalValidation {
 		restored.sealDomainBoundary();
 		restored.restoreMaterialParticleState(carriers);
 		restored.restoreGasState(synchronizedGas, gas);
-		require(restored.airNetwork().nodeCount() == 2
-				&& restored.airNetwork().inventory(1).merge(restored.airNetwork().inventory(2)).equals(beforeGas)
-				&& restored.airNetwork().auditClosed(),
+		require(restored.gasBoundary().nodeCount() == 2
+				&& restored.gasBoundary().inventory(1).merge(restored.gasBoundary().inventory(2)).equals(beforeGas)
+				&& restored.gasBoundary().auditClosed(),
 				"checkpoint gas-topology barrier did not preserve and restore the split inventory");
 
 		FlipFluidDomain movingInterface = new FlipFluidDomain(3, 2, 2, config, 128);
@@ -573,14 +573,14 @@ public final class M9ThermalValidation {
 		movingInterface.setVolume(1, 0, 0, 0.5F);
 		movingInterface.bindGasRegistry(gas);
 		movingInterface.bootstrapGasState("");
-		var sourceBeforeMove = movingInterface.airNetwork().externalSource();
-		var sinkBeforeMove = movingInterface.airNetwork().escapedSink();
+		var sourceBeforeMove = movingInterface.gasBoundary().externalSource();
+		var sinkBeforeMove = movingInterface.gasBoundary().escapedSink();
 		movingInterface.setVolume(1, 0, 0, 0.0F);
 		movingInterface.setVolume(0, 0, 0, 0.5F);
 		movingInterface.synchronizeGasTopologyForPersistence();
-		require(movingInterface.airNetwork().externalSource().equals(sourceBeforeMove)
-				&& movingInterface.airNetwork().escapedSink().equals(sinkBeforeMove)
-				&& movingInterface.airNetwork().auditClosed(),
+		require(movingInterface.gasBoundary().externalSource().equals(sourceBeforeMove)
+				&& movingInterface.gasBoundary().escapedSink().equals(sinkBeforeMove)
+				&& movingInterface.gasBoundary().auditClosed(),
 				"moving a partial interface created false sealed-gas source/sink turnover");
 	}
 
@@ -605,25 +605,25 @@ public final class M9ThermalValidation {
 		domain.bindGasRegistry(gas);
 		domain.bootstrapGasState("");
 		domain.bindThermal(thermal, liquids, 300.0);
-		GasInventory gasBefore = domain.airNetwork().sealedInventory();
+		GasInventory gasBefore = domain.gasBoundary().sealedInventory();
 		SignedDyadic energyBefore = domain.exactGasInternalEnergy();
-		int nodesBefore = domain.airNetwork().nodeCount();
+		int nodesBefore = domain.gasBoundary().nodeCount();
 
 		FlipFluidDomain.OperatorGasVent vented = domain.commitOperatorVentSealedGas(
 				domain.planOperatorVentSealedGas());
 		require(nodesBefore > 0 && vented.sealedNodes() == nodesBefore
 				&& vented.removed().equals(gasBefore) && vented.internalEnergy().equals(energyBefore)
-				&& domain.airNetwork().nodeCount() == 0 && domain.airNetwork().sealedInventory().isEmpty()
-				&& domain.airNetwork().escapedSink().equals(domain.airNetwork().externalSource())
+				&& domain.gasBoundary().nodeCount() == 0 && domain.gasBoundary().sealedInventory().isEmpty()
+				&& domain.gasBoundary().escapedSink().equals(domain.gasBoundary().externalSource())
 				&& domain.exactGasInternalEnergy().equals(SignedDyadic.ZERO)
-				&& domain.airNetwork().auditClosed()
+				&& domain.gasBoundary().auditClosed()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"operator vent did not jointly settle sealed gas component and energy truth");
 		FlipFluidDomain restored = FlipFluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-		require(restored.airNetwork().nodeCount() == 0
+		require(restored.gasBoundary().nodeCount() == 0
 				&& restored.operatorVentedGasTopology()
 				&& restored.exactGasInternalEnergy().equals(SignedDyadic.ZERO)
-				&& restored.airNetwork().auditClosed()
+				&& restored.gasBoundary().auditClosed()
 				&& restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
 				"operator-vent state did not survive an authoritative handoff");
 	}
@@ -732,7 +732,7 @@ public final class M9ThermalValidation {
 		}
 		domain.setVolume(1, 1, 1, 1.0F);
 		domain.bindThermal(thermal, liquids, 500.0);
-		require(domain.airNetwork().nodeCount() == 1, "boiling fixture did not form one sealed receiver");
+		require(domain.gasBoundary().nodeCount() == 1, "boiling fixture did not form one sealed receiver");
 		ThermalDisplaySnapshot display = domain.copyThermalDisplaySnapshot();
 		int liquidCell = (1 * 4 + 1) * 4 + 1;
 		require(display.cellTemperatureQ().length == 64
@@ -744,24 +744,24 @@ public final class M9ThermalValidation {
 		double liquidMassBefore = domain.totalMass();
 		double boiledSolverMass = SolverUnitScale.forCellSize(config.cellSize())
 				.solverMass(batchMass.toDouble());
-		long gasNanosBefore = domain.airNetwork().standardVolumeNanos(1);
+		long gasNanosBefore = domain.gasBoundary().standardVolumeNanos(1);
 		SignedDyadic energyBefore = domain.exactInternalEnergy();
 		ThermalAuditLedger auditBefore = domain.thermalAudit();
 		domain.step(true, 128);
 		FlipFluidDomain.GasThermalPhaseStats stats = domain.lastGasThermalPhaseStats();
-		GasComponentAmount vaporAmount = domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
+		GasComponentAmount vaporAmount = domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
 		require(stats.operations() > 1 && stats.operations() <= 128
 				&& stats.boiledCells() == 1 && stats.condensedCells() == 0
 				&& close(domain.totalMass(), liquidMassBefore - boiledSolverMass * stats.operations())
 				&& vaporAmount != null && close(vaporAmount.mass(), batchMass.toDouble() * stats.operations())
-				&& domain.airNetwork().standardVolumeNanos(1) > gasNanosBefore
-				&& domain.airNetwork().auditClosed()
+				&& domain.gasBoundary().standardVolumeNanos(1) > gasNanosBefore
+				&& domain.gasBoundary().auditClosed()
 				&& domain.thermalAudit().mechanicalWork().compareTo(auditBefore.mechanicalWork()) < 0
 				&& domain.hasPendingPhaseVolumeWork()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"sealed boiling did not jointly conserve liquid/gas mass, volume and energy truth: stats=" + stats
 						+ " liquidMass=" + domain.totalMass() + "/" + liquidMassBefore
-						+ " vapor=" + vaporAmount + " nanos=" + domain.airNetwork().standardVolumeNanos(1)
+						+ " vapor=" + vaporAmount + " nanos=" + domain.gasBoundary().standardVolumeNanos(1)
 						+ "/" + gasNanosBefore + " deltaU="
 						+ domain.exactInternalEnergy().subtract(energyBefore));
 		ThermalAuditLedger beforeBoilingProjection = domain.thermalAudit();
@@ -777,7 +777,7 @@ public final class M9ThermalValidation {
 		ThermalAuditLedger auditBeforeCondensation = domain.thermalAudit();
 		FlipThermalParticleState beforeCondensationState = domain.exportThermalParticleState();
 		FlipFluidDomain.GasThermalPhaseStats condensed = domain.stepGasPhaseChangeOnly(stats.operations());
-		GasComponentAmount vaporAfterCondensation = domain.airNetwork().inventory(1)
+		GasComponentAmount vaporAfterCondensation = domain.gasBoundary().inventory(1)
 				.component(BuiltinGasDefinitions.WATER_VAPOR);
 		long remainingBatches = stats.operations() - condensed.operations();
 		double condensedPhysicalMass = (domain.totalMass() - liquidMassAfterBoiling)
@@ -790,9 +790,9 @@ public final class M9ThermalValidation {
 				&& vaporAfterCondensation != null
 				&& Math.abs(vaporAfterCondensation.mass()
 						- batchMass.toDouble() * remainingBatches) <= 1.0E-9
-				&& domain.airNetwork().standardVolumeNanos(1)
+				&& domain.gasBoundary().standardVolumeNanos(1)
 						== gasNanosBefore + vaporAfterCondensation.standardVolumeNanos()
-				&& domain.airNetwork().auditClosed()
+				&& domain.gasBoundary().auditClosed()
 				&& domain.thermalAudit().mechanicalWork().compareTo(
 						auditBeforeCondensation.mechanicalWork()) > 0
 				&& domain.hasPendingPhaseVolumeWork()
@@ -801,7 +801,7 @@ public final class M9ThermalValidation {
 						+ " mass=" + domain.totalMass() + " vapor=" + vaporAfterCondensation
 						+ " condensedKg=" + condensedPhysicalMass + "/" + removedVaporMass
 						+ " expectedVapor=" + (batchMass.toDouble() * remainingBatches)
-						+ " nanos=" + domain.airNetwork().standardVolumeNanos(1) + "/" + gasNanosBefore
+						+ " nanos=" + domain.gasBoundary().standardVolumeNanos(1) + "/" + gasNanosBefore
 						+ " workCmp=" + domain.thermalAudit().mechanicalWork().compareTo(
 						auditBeforeCondensation.mechanicalWork())
 						+ " audit=" + domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
@@ -881,7 +881,7 @@ public final class M9ThermalValidation {
 		double indicatorMass = initial.materials().copyParticleMass()[0];
 
 		domain.step(true, 2);
-		GasComponentAmount gas = domain.airNetwork().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
+		GasComponentAmount gas = domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
 		FlipChemicalParticleState boiled = domain.exportChemicalParticleState();
 		SolverUnitScale massScale = SolverUnitScale.forCellSize(config.cellSize());
 		long gasH2o = gas.species().stream().filter(amount -> amount.speciesId().equals(
@@ -907,16 +907,16 @@ public final class M9ThermalValidation {
 				"species-bearing boiling did not consume pending volume before condensation");
 		setAllCondensedCellTemperatures(domain, 300.0);
 		FlipFluidDomain.GasThermalPhaseStats firstCondensed = domain.stepGasPhaseChangeOnly(1);
-		GasComponentAmount vaporRemainder = domain.airNetwork().inventory(1)
+		GasComponentAmount vaporRemainder = domain.gasBoundary().inventory(1)
 				.component(BuiltinGasDefinitions.WATER_VAPOR);
 		require(firstCondensed.operations() == 1 && firstCondensed.condensedCells() == 1
 				&& firstCondensed.boiledCells() == 0 && vaporRemainder != null
 				&& domain.hasPendingPhaseVolumeWork()
-				&& domain.airNetwork().auditClosed()
+				&& domain.gasBoundary().auditClosed()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"species-bearing partial condensation did not retain its exact gas remainder: stats="
 						+ firstCondensed + " vapor=" + vaporRemainder + " gasAudit="
-						+ domain.airNetwork().auditClosed() + " thermalAudit="
+						+ domain.gasBoundary().auditClosed() + " thermalAudit="
 						+ domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
 		FlipChemicalParticleState partiallyRestored = domain.exportChemicalParticleState();
 		long remainingGasH2o = vaporRemainder.species().stream().filter(amount -> amount.speciesId().equals(
@@ -936,7 +936,7 @@ public final class M9ThermalValidation {
 				&& Double.doubleToRawLongBits(partiallyRestored.materials().copyParticleMass()[0])
 				== Double.doubleToRawLongBits(indicatorMass)
 				&& domain.totalGranularSolidVolumeSvq() == initialGranularSvq
-				&& domain.airNetwork().auditClosed()
+				&& domain.gasBoundary().auditClosed()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"species-bearing partial condensation did not conserve liquid/gas truth: first="
 						+ firstCondensed + " boiledGas=" + gas + " remainder=" + vaporRemainder
