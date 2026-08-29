@@ -44,7 +44,7 @@ public final class GpuLongRunSurfaceValidation {
 		for (int step = 0; step < STEPS; step++) cpu.step();
 		require(close(cpu.totalVolume(), cpuVolume, 1.0E-4F), "long-run CPU particle-volume ledger changed");
 		SurfaceStats cpuStats = SurfaceStats.of(
-				new VulkanFlipPipeline.SnapshotData(cpu.copyQuantizedVolume(), cpu.copyMarkerMask(), cpu.copySolidMask()),
+				new VulkanFlipPipeline.SnapshotData(cpu.copyQuantizedVolume(), cpu.copyMarkerMask(), cpu.copyBinarySolidMask()),
 				NX, NY, NZ);
 		String detail = String.format(Locale.ROOT,
 				"GPU substeps=%d markerY=%d cells=%d edge=%.3f/%.3f interiorMean=%.3f; CPU markerY=%d cells=%d edge=%.3f/%.3f interiorMean=%.3f",

@@ -134,7 +134,7 @@ public final class GpuFlipProbeValidation {
 				require(close(recovered.totalVolume(), checkpoint.volumeCells(), 1.0E-4F), "CPU recovery volume changed");
 				require(Math.abs(recovered.centerOfMassX() - checkpoint.centerOfMassX()) <= 1.0E-5F,
 						"CPU recovery center of mass changed");
-				require(nonzero(recovered.copySolidMask()) == checkpoint.solidCellCount(), "CPU recovery solid mask changed");
+				require(nonzero(recovered.copyBinarySolidMask()) == checkpoint.solidCellCount(), "CPU recovery solid mask changed");
 				float recoveredVolume = recovered.totalVolume();
 				recovered.step();
 				require(close(recovered.totalVolume(), recoveredVolume, 1.0E-4F),
@@ -356,7 +356,7 @@ public final class GpuFlipProbeValidation {
 			if (solidCells[x + nx * (y + ny * z)] == 0) expectedFluidCells++;
 		}
 		FlipFluidDomain cpuFallback = GpuProbeService.createCpuDamBreak(solidCells);
-		require(mismatches(cpuFallback.copySolidMask(), solidCells) == 0, "CPU fallback world collision mask changed");
+		require(mismatches(cpuFallback.copyBinarySolidMask(), solidCells) == 0, "CPU fallback world collision mask changed");
 		require(close(cpuFallback.totalVolume(), expectedFluidCells, 1.0E-3F), "CPU fallback world collision volume");
 		float cpuVolume = cpuFallback.totalVolume();
 		for (int step = 0; step < 4; step++) cpuFallback.step();

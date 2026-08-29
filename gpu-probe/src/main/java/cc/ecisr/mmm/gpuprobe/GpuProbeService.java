@@ -465,7 +465,7 @@ final class GpuProbeService {
 		@Override public float volumeCells() { return domain.totalVolume(); }
 		@Override public double lastStepMilliseconds() { return lastStepMilliseconds; }
 		@Override public double lastGpuStepMilliseconds() { return Double.NaN; }
-		@Override public Snapshot snapshot() { return new Snapshot(domain.copyQuantizedVolume(), domain.copyMarkerMask(), domain.copySolidMask()); }
+		@Override public Snapshot snapshot() { return new Snapshot(domain.copyQuantizedVolume(), domain.copyMarkerMask(), domain.copyBinarySolidMask()); }
 		@Override public String diagnostics() {
 			return stats == null ? "尚未步进" : String.format(Locale.ROOT, "maxP %.1f | PCG %d residual %.4g",
 					domain.maximumPressure(), stats.pressureIterations(), stats.pressureResidual());
