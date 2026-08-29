@@ -18,3 +18,9 @@ tasks.register('runCpuValidation') {
 	description = 'Runs the Fabric integration CPU validation suite.'
 	dependsOn ':fabric:runCpuValidation'
 }
+
+tasks.register('verifyArchitecture') {
+	group = 'verification'
+	description = 'Runs the architecture dependency/size gate.'
+	dependsOn ':fabric:runArchitectureValidation'
+}

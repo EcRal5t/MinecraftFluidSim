@@ -20,6 +20,7 @@ import cc.ecisr.mmm.simulation.EntityFluidWiringValidation;
 import cc.ecisr.mmm.simulation.CommittedEventHubValidation;
 import cc.ecisr.mmm.simulation.FluidCutCellShapeValidation;
 import cc.ecisr.mmm.simulation.FluidRegionLifecycleValidation;
+import cc.ecisr.mmm.simulation.FluidDomainStateParityValidation;
 import cc.ecisr.mmm.simulation.FluidRegionManagerValidation;
 import cc.ecisr.mmm.simulation.M7RegionChemistryPersistenceValidation;
 import cc.ecisr.mmm.simulation.ProductionFluidReplayValidation;
@@ -125,7 +126,10 @@ public final class CpuValidationSuite {
 		gate(gates, "gas-liquid", () -> M5GasLiquidCouplingValidation.main(NONE),
 				() -> M5GasLiquidCouplingValidation.main(FAST));
 		gate(gates, "region-manager", () -> FluidRegionManagerValidation.main(NONE));
-		gate(gates, "lifecycle", () -> FluidRegionLifecycleValidation.main(NONE));
+		gate(gates, "lifecycle", () -> {
+		FluidRegionLifecycleValidation.main(NONE);
+		FluidDomainStateParityValidation.main(NONE);
+	});
 		gate(gates, "entity-fluid", () -> {
 			EntityFluidWiringValidation.main(NONE);
 			ProductionFluidReplayValidation.dynamicPlayerFloatRemainsBoundedAcrossBackend();

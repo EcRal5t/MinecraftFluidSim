@@ -829,7 +829,7 @@ public final class ProductionFluidReplayValidation {
 		return domain;
 	}
 
-	private static FlipFluidDomain createFullyBoundHalfFilledDomain(RegistrySet registries) {
+	static FlipFluidDomain createFullyBoundHalfFilledDomain(RegistrySet registries) {
 		FlipFluidDomain domain = createEmptyFullyBoundController(registries);
 		int[][] sources = {{3, 0, 0}, {4, 7, 7}};
 		for (int pour = 0; pour < sources.length; pour++) {
@@ -842,7 +842,7 @@ public final class ProductionFluidReplayValidation {
 		return domain;
 	}
 
-	private static FlipFluidDomain createEmptyFullyBoundController(RegistrySet registries) {
+	static FlipFluidDomain createEmptyFullyBoundController(RegistrySet registries) {
 		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
 		domain.sealDomainBoundary();
 		bindEmptyMaterialState(domain, registries.liquids());
@@ -856,7 +856,7 @@ public final class ProductionFluidReplayValidation {
 		return domain;
 	}
 
-	private static FlipFluidDomain createFullyBoundPlanarHalfFill(RegistrySet registries) {
+	static FlipFluidDomain createFullyBoundPlanarHalfFill(RegistrySet registries) {
 		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
 		domain.sealDomainBoundary();
 		bindEmptyMaterialState(domain, registries.liquids());
@@ -927,7 +927,7 @@ public final class ProductionFluidReplayValidation {
 				new double[0], new int[0]));
 	}
 
-	private static RegistrySet loadProductionRegistries() throws Exception {
+	static RegistrySet loadProductionRegistries() throws Exception {
 		ProductionRegistries.Set registries = ProductionRegistries.load();
 		return new RegistrySet(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
 				registries.chemical(), registries.granular(), registries.gas(), registries.thermal());
@@ -950,7 +950,7 @@ public final class ProductionFluidReplayValidation {
 		if (!condition) throw new AssertionError(message);
 	}
 
-	private record RegistrySet(
+	record RegistrySet(
 			FluidMaterialRegistry liquids, ChemicalRegistry chemical, GranularRegistry granular,
 			GasRegistry gas, ThermalRegistry thermal
 	) { }

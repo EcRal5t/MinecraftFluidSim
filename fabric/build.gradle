@@ -68,6 +68,16 @@ tasks.register('runCpuValidation', JavaExec) {
 	doFirst { validationWorkDir.mkdirs() }
 }
 
+tasks.register('runArchitectureValidation', JavaExec) {
+	group = 'verification'
+	description = 'Scans production sources for dependency-direction, locator, cycle and size regressions.'
+	dependsOn tasks.named('testClasses')
+	classpath = sourceSets.test.output
+	mainClass = 'cc.ecisr.mmm.validation.ArchitectureDependencyValidation'
+	enableAssertions = true
+	args rootProject.projectDir.absolutePath
+}
+
 java {
 	withSourcesJar()
 	sourceCompatibility = JavaVersion.VERSION_25
