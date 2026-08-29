@@ -59,7 +59,7 @@ final class DomainMetrics {
 	float maximumPressure() {
 		float maximum = 0.0F;
 		for (int cell = 0; cell < domain.cellCount; cell++) if (domain.isFluid(cell)) {
-			maximum = Math.max(maximum, domain.pressureReference + domain.pressure[cell]);
+			maximum = Math.max(maximum, domain.pressureReference + domain.projection.pressure[cell]);
 		}
 		return maximum;
 	}

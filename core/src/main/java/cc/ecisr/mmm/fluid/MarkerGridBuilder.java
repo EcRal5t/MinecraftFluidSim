@@ -5,7 +5,7 @@ import java.util.Arrays;
 /**
  * Rebuilds the derived marker grid from the authoritative marker columns in the former
  * {@code rebuildGridFromParticles} order. The per-marker loop also scatters the P2G cell
- * fields (center volume, pressure volume, face velocities) because the original loop
+ * fields (center volume, projection.pressure volume, face velocities) because the original loop
  * interleaved them; splitting the loops would reorder those float accumulations, so the
  * scatter stays here until the MAC workspace owns it.
  */
@@ -53,13 +53,13 @@ final class MarkerGridBuilder {
 					domain.particles.positionZ(i), domain.particles.volume(i));
 			float transferWeight = domain.variableDensityActive
 					? (float) domain.particles.mass(i) : domain.particles.volume(i);
-			domain.splatFaceField(domain.velocityX, domain.velocityWeightX, 0,
+			domain.splatFaceField(domain.mac.velocityX, domain.mac.velocityWeightX, 0,
 					domain.particles.positionX(i), domain.particles.positionY(i),
 					domain.particles.positionZ(i), domain.particles.velocityX(i), transferWeight);
-			domain.splatFaceField(domain.velocityY, domain.velocityWeightY, 1,
+			domain.splatFaceField(domain.mac.velocityY, domain.mac.velocityWeightY, 1,
 					domain.particles.positionX(i), domain.particles.positionY(i),
 					domain.particles.positionZ(i), domain.particles.velocityY(i), transferWeight);
-			domain.splatFaceField(domain.velocityZ, domain.velocityWeightZ, 2,
+			domain.splatFaceField(domain.mac.velocityZ, domain.mac.velocityWeightZ, 2,
 					domain.particles.positionX(i), domain.particles.positionY(i),
 					domain.particles.positionZ(i), domain.particles.velocityZ(i), transferWeight);
 		}
