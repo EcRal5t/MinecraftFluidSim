@@ -56,28 +56,28 @@ public final class GranularEnergyColumn {
 		if (energy == null) throw new IllegalArgumentException("Unknown granular thermal deposit group");
 		return energy;
 	}
-	public void setActiveEnergy(int index, double energy) {
+	void setActiveEnergy(int index, double energy) {
 		requireActive(index); requireEnergy(energy); activeEnergy[index] = energy;
 	}
-	public void setDepositEnergy(DepositKey key, double energy) {
+	void setDepositEnergy(DepositKey key, double energy) {
 		requireEnergy(energy);
 		if (!depositEnergy.containsKey(key)) throw new IllegalArgumentException("Unknown granular thermal deposit group");
 		depositEnergy.put(key, energy);
 	}
 
-	public int addActive(double energy) {
+	int addActive(double energy) {
 		requireAddActive(energy);
 		ensureActiveCapacity(activeCount + 1);
 		activeEnergy[activeCount] = energy;
 		return activeCount++;
 	}
-	public void requireAddActive(double energy) {
+	void requireAddActive(double energy) {
 		requireEnergy(energy);
 		if (activeCount == maximumActive) throw new IllegalStateException("Granular thermal active budget exceeded");
 	}
 
 	/** Mirrors granular swap removal and returns the removed carrier energy. */
-	public double removeActiveSwap(int index) {
+	double removeActiveSwap(int index) {
 		requireActive(index);
 		double removed = activeEnergy[index]; int last = --activeCount;
 		if (index != last) activeEnergy[index] = activeEnergy[last];
@@ -86,33 +86,33 @@ public final class GranularEnergyColumn {
 	}
 
 	/** Adds the second energy into the first, then mirrors the granular second-index swap removal. */
-	public void mergeActive(int first, int second) {
+	void mergeActive(int first, int second) {
 		double merged = requireMergeActive(first, second);
 		int last = activeCount - 1;
 		removeActiveSwap(second);
 		if (first == last && second != last) activeEnergy[second] = merged;
 		else activeEnergy[first] = merged;
 	}
-	public double requireMergeActive(int first, int second) {
+	double requireMergeActive(int first, int second) {
 		requireActive(first); requireActive(second);
 		if (first == second) throw new IllegalArgumentException("Cannot merge one granular thermal ordinal with itself");
 		return finiteAdd(activeEnergy[first], activeEnergy[second]);
 	}
 
 	/** Proportionally removes energy without changing the active ordinal cardinality. */
-	public double takeActivePortion(int index, long takenSvq, long totalSvq) {
+	double takeActivePortion(int index, long takenSvq, long totalSvq) {
 		requireActive(index);
 		double removed = previewActiveTake(index, takenSvq, totalSvq);
 		if (takenSvq == totalSvq) throw new IllegalArgumentException("Full active take must use swap removal");
 		activeEnergy[index] -= removed;
 		return removed;
 	}
-	public double previewActiveTake(int index, long takenSvq, long totalSvq) {
+	double previewActiveTake(int index, long takenSvq, long totalSvq) {
 		requireActive(index);
 		return proportionalTake(activeEnergy[index], takenSvq, totalSvq);
 	}
 
-	public void addDeposit(DepositKey key, double energy) {
+	void addDeposit(DepositKey key, double energy) {
 		requireAddDeposit(key, energy);
 		Double current = depositEnergy.get(key);
 		if (current == null) {
@@ -122,7 +122,7 @@ public final class GranularEnergyColumn {
 			depositEnergy.put(key, energy);
 		} else depositEnergy.put(key, finiteAdd(current, energy));
 	}
-	public void requireAddDeposit(DepositKey key, double energy) {
+	void requireAddDeposit(DepositKey key, double energy) {
 		if (key == null) throw new IllegalArgumentException("Granular thermal deposit key is missing");
 		requireEnergy(energy);
 		Double current = depositEnergy.get(key);
@@ -133,18 +133,18 @@ public final class GranularEnergyColumn {
 	}
 
 	/** Proportional exact-SVQ take; caller supplies the group's pre-commit SVQ truth. */
-	public double takeDeposit(DepositKey key, long takenSvq, long totalSvq) {
+	double takeDeposit(DepositKey key, long takenSvq, long totalSvq) {
 		double current = depositEnergy(key);
 		double removed = previewDepositTake(key, takenSvq, totalSvq);
 		if (takenSvq == totalSvq) depositEnergy.remove(key);
 		else depositEnergy.put(key, current - removed);
 		return removed;
 	}
-	public double previewDepositTake(DepositKey key, long takenSvq, long totalSvq) {
+	double previewDepositTake(DepositKey key, long takenSvq, long totalSvq) {
 		return proportionalTake(depositEnergy(key), takenSvq, totalSvq);
 	}
 
-	public void moveDeposit(
+	void moveDeposit(
 			DepositKey source, DepositKey target, long movedSvq, long sourceTotalSvq
 	) {
 		if (source == null || target == null || source.equals(target)) {
@@ -169,7 +169,7 @@ public final class GranularEnergyColumn {
 		return List.copyOf(result);
 	}
 
-	public void restore(double[] active, List<DepositEnergy> deposits) {
+	void restore(double[] active, List<DepositEnergy> deposits) {
 		if (activeCount != 0 || !depositEnergy.isEmpty() || active == null || deposits == null
 				|| active.length > maximumActive || deposits.size() > maximumDeposits) {
 			throw new IllegalArgumentException("Granular thermal restore target/snapshot is invalid");
@@ -185,7 +185,7 @@ public final class GranularEnergyColumn {
 			depositEnergy.put(deposit.key(), deposit.internalEnergy()); previous = deposit.key();
 		}
 	}
-	public void replace(double[] active, List<DepositEnergy> deposits) {
+	void replace(double[] active, List<DepositEnergy> deposits) {
 		Arrays.fill(activeEnergy, 0, activeCount, 0.0); activeCount = 0; depositEnergy.clear();
 		restore(active, deposits);
 	}
@@ -196,7 +196,7 @@ public final class GranularEnergyColumn {
 		return result;
 	}
 
-	public SignedDyadic clear() {
+	SignedDyadic clear() {
 		SignedDyadic removed = exactEnergy();
 		Arrays.fill(activeEnergy, 0, activeCount, 0.0); activeCount = 0; depositEnergy.clear();
 		return removed;

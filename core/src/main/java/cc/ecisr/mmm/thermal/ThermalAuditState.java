@@ -21,13 +21,13 @@ public final class ThermalAuditState {
 	public long revision() { return revision; }
 
 	/** Applies one ledger mutation as a single replacement, preserving the exact chain. */
-	public void update(UnaryOperator<ThermalAuditLedger> mutation) {
+	void update(UnaryOperator<ThermalAuditLedger> mutation) {
 		ThermalAuditLedger next = mutation.apply(ledger);
 		replace(next);
 	}
 
 	/** Replaces the whole ledger wholesale (restore path). */
-	public void replace(ThermalAuditLedger next) {
+	void replace(ThermalAuditLedger next) {
 		if (next == null) throw new IllegalArgumentException("Thermal audit ledger is missing");
 		if (next != ledger) revision++;
 		ledger = next;

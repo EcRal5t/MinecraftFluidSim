@@ -99,7 +99,7 @@ public final class CoherentPhaseStore {
 	}
 
 	/** Adds or canonically merges one cell+phase group. No source/sink semantics are inferred here. */
-	public int add(Group addition) {
+	int add(Group addition) {
 		Group candidate = previewAdd(addition);
 		int found = find(addition.cell(), addition.phaseId());
 		if (found >= 0) {
@@ -128,7 +128,7 @@ public final class CoherentPhaseStore {
 	}
 
 	/** Proportional exact-SVQ split. The caller may subsequently re-equilibrate energy at cell LTE. */
-	public Group take(int cell, String phaseId, long requestedSvq) {
+	Group take(int cell, String phaseId, long requestedSvq) {
 		Group removed = previewTake(cell, phaseId, requestedSvq);
 		int index = find(cell, phaseId);
 		Group current = groups.get(index);
@@ -168,7 +168,7 @@ public final class CoherentPhaseStore {
 		return new Group(cell, phaseId, requestedSvq, removedMass, split[1], removedEnergy);
 	}
 
-	public void setInternalEnergy(int index, double internalEnergy) {
+	void setInternalEnergy(int index, double internalEnergy) {
 		if (!Double.isFinite(internalEnergy)) throw new IllegalArgumentException("Coherent internal energy is not finite");
 		Group group = groups.get(index);
 		groups.set(index, new Group(group.cell(), group.phaseId(), group.occupiedVolumeSvq(), group.mass(),
@@ -205,8 +205,13 @@ public final class CoherentPhaseStore {
 	}
 
 	/** Clears a previously validated whole-store removal without inventing source/sink semantics. */
-	public void clear() { groups.clear(); }
+	void clear() { groups.clear(); }
 
+	/**
+	 * Wholesale restore/canonicalization seam: the only entry that fills an empty store from a
+	 * snapshot (thermal restore) or validates one (persistence handoff records build a private
+	 * scratch store). Incremental mutation stays package-private to the state owners.
+	 */
 	public void restore(List<Group> snapshot) {
 		if (!groups.isEmpty()) throw new IllegalStateException("Coherent phase restore target is not empty");
 		if (snapshot == null || snapshot.size() > maximumGroups) {

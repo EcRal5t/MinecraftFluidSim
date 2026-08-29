@@ -9,6 +9,7 @@ import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.fluid.air.GasStateSnapshot;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -478,6 +479,23 @@ final class GasTopologyCoordinator {
 	}
 
 	/** Publishes a fully planned topology; all fallible physics and ledger work happened above. */
+	/**
+	 * Verifies the planned topology against a fresh geometry scan without mutating anything.
+	 * The scan inputs are the solid geometry only, which neither the condensed nor the granular
+	 * clear changes, so a diverging fresh scan means the plan is stale and the whole operator
+	 * clear must be rejected before any owner mutates.
+	 */
+	void preflight(GasTopologyPlan plan) {
+		AirCavityScanner.Result fresh = domain.gasTopologyCoordinator.scanner.scan(
+				domain.geometry.solid, new int[domain.cellCount], new double[domain.cellCount],
+				domain.geometry.cutCells, null, domain.gasState.sealedDomainBoundary);
+		if (fresh.sealedNodeCount() != plan.scan().sealedNodeCount()
+				|| !Arrays.equals(fresh.cellNodeId(), plan.scan().cellNodeId())
+				|| !Arrays.equals(fresh.cellLineageNodeId(), plan.scan().cellLineageNodeId())) {
+			throw new IllegalStateException("Gas topology changed after operator clear planning");
+		}
+	}
+
 	void commit(GasTopologyPlan plan) {
 		if (plan.thermalPlan() != null) domain.thermalState.commitGasRemap(plan.thermalPlan());
 		domain.gasState.network.commitRemapNodes(plan.gasPlan());

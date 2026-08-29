@@ -92,14 +92,10 @@ final class FlipThermalState {
 	}
 
 	private final ThermalDomainState domain;
-
-	ThermalDomainState domain() { return domain; }
 	String fingerprint() { return domain.registry().fingerprint(); }
-	ThermalAuditLedger audit() { return domain.audit().ledger(); }
+	ThermalAuditLedger audit() { return domain.auditLedger(); }
 	CoherentPhaseStore coherentPhases() { return domain.coherentPhases(); }
 	GranularEnergyColumn granularEnergy() { return domain.granularColumn(); }
-	GranularEnergyState granularState() { return domain.granular(); }
-	GasEnergyStore gasState() { return domain.gas(); }
 	ThermalRegistry registry() { return domain.registry(); }
 	ThermalCellGrid.TemperatureRange observedCarrierTemperatureRange() {
 		return domain.observedCarrierTemperatureRange();
@@ -128,7 +124,7 @@ final class FlipThermalState {
 	void restore(FlipThermalParticleState snapshot, ThermalCarrierContext markers, AirNetwork airNetwork) {
 		if (domain.coherentPhases().groupCount() != 0) throw new IllegalStateException("Thermal restore target is not empty");
 		double[] restored = snapshot.copyInternalEnergy();
-		domain.liquid().adoptRestored(restored);
+		domain.restoreLiquidEnergies(restored);
 		for (CoherentPhaseStore.Group group : snapshot.coherentGroups()) {
 			int material = domain.registry().materialHandle(group.phaseId());
 			if (domain.registry().material(material).carrierKind() != ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID) {
@@ -138,7 +134,7 @@ final class FlipThermalState {
 					group.composition() == null ? Map.of() : group.composition().stableAmounts(),
 					group.internalEnergy());
 		}
-		domain.granular().restoreCoherent(snapshot.coherentGroups());
+		domain.restoreThermalCoherent(snapshot.coherentGroups());
 		double[] activeEnergy = snapshot.copyActiveParcelEnergy(), depositEnergy = snapshot.copyDepositEnergy();
 		List<GranularEnergyColumn.DepositKey> depositKeys = markers.depositKeys();
 		if (activeEnergy.length != markers.activeParcelCount() || depositEnergy.length != depositKeys.size()) {
@@ -148,17 +144,16 @@ final class FlipThermalState {
 		for (int index = 0; index < depositEnergy.length; index++) {
 			deposits.add(new GranularEnergyColumn.DepositEnergy(depositKeys.get(index), depositEnergy[index]));
 		}
-		domain.granular().restoreGranular(activeEnergy, deposits);
+		domain.restoreThermalGranular(activeEnergy, deposits);
 		double[] restoredGas = snapshot.copyGasNodeEnergy();
 		if (restoredGas.length != (airNetwork == null ? 0 : airNetwork.nodeCount())
 				|| restoredGas.length > 0 && !domain.gas().gasModelBound()) {
 			throw new IllegalArgumentException("Restored gas thermal ordinals differ from gas inventory");
 		}
-		domain.gas().validateRestoredNodeEnergies(airNetwork, restoredGas);
-		domain.gas().replaceNodeEnergies(restoredGas);
+		domain.restoreGasEnergies(airNetwork, restoredGas);
 		for (int marker = 0; marker < markers.markerCount(); marker++) temperature(marker, markers);
 		domain.preparePhaseScan(markers);
-		domain.audit().replace(snapshot.audit());
+		domain.restoreAuditLedger(snapshot.audit());
 		if (!domain.exactEnergy(markers.markerCount()).equals(domain.audit().ledger().expectedInventory())) {
 			throw new IllegalArgumentException("Restored thermal audit does not close");
 		}
@@ -387,18 +382,18 @@ final class FlipThermalState {
 	FlipParticleReseeder.ThermalAdapter reseedAdapter(ThermalCarrierContext markers) {
 		return new FlipParticleReseeder.ThermalAdapter() {
 			@Override public double totalEnergy(int count) { return domain.totalEnergy(count); }
-			@Override public void merge(int target, int source) { domain.liquid().mergeReseedEnergy(target, source); }
+			@Override public void merge(int target, int source) { domain.mergeReseedLiquidEnergy(target, source); }
 			@Override public FlipParticleReseeder.ThermalSplit beforeSplit(int source) {
-				return new FlipParticleReseeder.ThermalSplit(domain.liquid().energy(source), temperature(source, markers));
+				return new FlipParticleReseeder.ThermalSplit(domain.liquidInternalEnergy(source), temperature(source, markers));
 			}
 			@Override public void afterSplit(FlipParticleReseeder.ThermalSplit split, int source, int destination) {
 				double sourceModeled = domain.liquid().modeledEnergy(source, markers.mass(source), markers.mixture(source),
 						split.temperatureK(), markers);
-				domain.liquid().assignReseededEnergies(source, sourceModeled, destination,
+				domain.assignReseededLiquidEnergies(source, sourceModeled, destination,
 						split.parentEnergy() - sourceModeled);
 				validateTemperature(destination, split.temperatureK(), markers);
 			}
-			@Override public void move(int source, int destination) { domain.liquid().moveEnergy(source, destination); }
+			@Override public void move(int source, int destination) { domain.moveReseedLiquidEnergy(source, destination); }
 		};
 	}
 

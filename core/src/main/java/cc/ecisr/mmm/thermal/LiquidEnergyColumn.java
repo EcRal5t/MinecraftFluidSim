@@ -55,25 +55,25 @@ public final class LiquidEnergyColumn {
 	public double energy(int ordinal) { return internalEnergy[ordinal]; }
 
 	/** Carrier-access write path: validates finiteness exactly like the composed carrier view. */
-	public void setEnergy(int ordinal, double energy) {
+	void setEnergy(int ordinal, double energy) {
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal carrier energy is not finite");
 		internalEnergy[ordinal] = energy;
 		revision++;
 	}
 
 	/** Raw paired write for reseed splits; values are produced by validated modeling upstream. */
-	public void assignReseededEnergies(int source, double sourceEnergy, int destination, double destinationEnergy) {
+	void assignReseededEnergies(int source, double sourceEnergy, int destination, double destinationEnergy) {
 		internalEnergy[source] = sourceEnergy;
 		internalEnergy[destination] = destinationEnergy;
 		revision++;
 	}
 
-	public void moveEnergy(int source, int destination) {
+	void moveEnergy(int source, int destination) {
 		internalEnergy[destination] = internalEnergy[source];
 		revision++;
 	}
 
-	public void mergeReseedEnergy(int target, int source) {
+	void mergeReseedEnergy(int target, int source) {
 		internalEnergy[target] += internalEnergy[source];
 		if (!Double.isFinite(internalEnergy[target])) {
 			throw new IllegalArgumentException("Reseeded thermal merge energy is invalid");
@@ -83,13 +83,13 @@ public final class LiquidEnergyColumn {
 
 	public double[] copyEnergies(int count) { return Arrays.copyOf(internalEnergy, count); }
 
-	public void adoptRestored(double[] restored) {
+	void adoptRestored(double[] restored) {
 		ensureCapacity(restored.length);
 		System.arraycopy(restored, 0, internalEnergy, 0, restored.length);
 		revision++;
 	}
 
-	public void ensureCapacity(int capacity) {
+	void ensureCapacity(int capacity) {
 		if (capacity > internalEnergy.length) internalEnergy = Arrays.copyOf(internalEnergy, capacity);
 	}
 
@@ -122,7 +122,7 @@ public final class LiquidEnergyColumn {
 		material.temperatureForSensibleSpecificEnergy(sensible);
 	}
 
-	public void addExternalMarker(int marker, ThermalCarrierContext markers) {
+	void addExternalMarker(int marker, ThermalCarrierContext markers) {
 		ensureCapacity(marker + 1);
 		internalEnergy[marker] = modeledEnergy(marker, markers.mass(marker), markers.mixture(marker),
 				insertionTemperatureK, markers);
@@ -157,7 +157,7 @@ public final class LiquidEnergyColumn {
 		return new ExternalLiquidInsertionPlan(energies, source, SignedDyadic.sum(energies).subtract(source));
 	}
 
-	public void commitExternalLiquidInsertions(int firstOrdinal, ExternalLiquidInsertionPlan plan) {
+	void commitExternalLiquidInsertions(int firstOrdinal, ExternalLiquidInsertionPlan plan) {
 		if (plan == null || firstOrdinal < 0 || firstOrdinal + plan.energies.length > internalEnergy.length) {
 			throw new IllegalArgumentException("Thermal liquid insertion ordinals are incompatible");
 		}
@@ -172,27 +172,27 @@ public final class LiquidEnergyColumn {
 		revision++;
 	}
 
-	public void removeExternalAndSwap(int index, int last) {
+	void removeExternalAndSwap(int index, int last) {
 		audit.update(ledger -> ledger.withExternalSinkEnergy(SignedDyadic.of(internalEnergy[index])));
 		if (index != last) internalEnergy[index] = internalEnergy[last];
 		revision++;
 	}
 
-	public void addInternalMarker(int marker, double energy) {
+	void addInternalMarker(int marker, double energy) {
 		ensureCapacity(marker + 1);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Internal phase marker energy is not finite");
 		internalEnergy[marker] = energy;
 		revision++;
 	}
 
-	public double removeInternalAndSwap(int index, int last) {
+	double removeInternalAndSwap(int index, int last) {
 		double removed = internalEnergy[index];
 		if (index != last) internalEnergy[index] = internalEnergy[last];
 		revision++;
 		return removed;
 	}
 
-	public void addLiquidEnergy(int marker, double energy) {
+	void addLiquidEnergy(int marker, double energy) {
 		double result = internalEnergy[marker] + energy;
 		if (!Double.isFinite(result)) throw new IllegalArgumentException("Internal phase energy transfer overflow");
 		internalEnergy[marker] = result;
@@ -209,20 +209,20 @@ public final class LiquidEnergyColumn {
 		return new Truncation(newEnergy, previousEnergy - newEnergy);
 	}
 
-	public void commitTruncate(int marker, Truncation plan) {
+	void commitTruncate(int marker, Truncation plan) {
 		if (plan == null) return;
 		internalEnergy[marker] = plan.newEnergy();
 		audit.update(ledger -> ledger.withExternalSinkEnergy(SignedDyadic.of(plan.removedEnergy())));
 		revision++;
 	}
 
-	public void commitInternalTruncate(int marker, Truncation plan) {
+	void commitInternalTruncate(int marker, Truncation plan) {
 		if (plan == null) return;
 		internalEnergy[marker] = plan.newEnergy();
 		revision++;
 	}
 
-	public void resetMarkerTemperature(int marker, double temperatureK, ThermalCarrierContext markers) {
+	void resetMarkerTemperature(int marker, double temperatureK, ThermalCarrierContext markers) {
 		internalEnergy[marker] = modeledEnergy(marker, markers.mass(marker), markers.mixture(marker), temperatureK, markers);
 		revision++;
 	}
