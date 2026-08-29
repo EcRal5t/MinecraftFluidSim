@@ -11,3 +11,4 @@
 | 2026-08-29 | S03 | `carrierMutationRevision` + `CarrierMutationCoordinator`（append/swap-remove/wholesale 单入口）；结构变更点清单门；`CarrierMutationValidation` 场景；split/merge/reseed 编排留待 S11 | `bed290d` |
 | 2026-08-29 | S04a | `MarkerGridIndex`/`MarkerGridBuilder` 拆出派生 marker 网格；自审修复 wholesale 失效契约不对称；论证 `gridDirty` 的 revision 替换不可表达平流失效，暂缓 | `e74f8f2` |
 | 2026-08-29 | S04b | `MacVelocityGrid`/`PressureProjectionWorkspace`/`SurfaceTensionWorkspace` 迁出 ~340 使用点；同名局部变量/参数撞车逐点甄别；`FlipFluidDomain` 7447 行 | `56436fa` |
+| 2026-08-29 | S04c | `DomainGeometry` 接管 solid mask 与 cut-cell 几何权威所有权；尺寸留 domain（不可变身份，纯 churn 不迁移）；geometryRevision 无消费者暂不预置 | `b7ca809` |
