@@ -41,7 +41,9 @@ final class CondensedInventoryClearPlanner {
 				Double.doubleToRawLongBits(domain.totalVolumeExact()),
 				Double.doubleToRawLongBits(domain.totalMass()), drained,
 				domain.thermalState == null ? SignedDyadic.ZERO
-						: domain.thermalState.exactLiquidEnergy(domain.particles.count()));
+						: domain.thermalState.exactLiquidEnergy(domain.particles.count()),
+				domain.carrierMutationRevision(),
+				domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision());
 	}
 
 	/** Plans one operator clear across liquid markers and every coherent condensed phase. */
@@ -73,7 +75,9 @@ final class CondensedInventoryClearPlanner {
 		long coherentSvq = domain.thermalState == null ? 0L : domain.thermalState.coherentPhases().totalOccupiedSvq();
 		double coherentMass = domain.thermalState == null ? 0.0 : domain.thermalState.coherentPhases().totalMass();
 		return new FlipFluidDomain.CondensedClearPlan(liquid, groups, drained, coherentEnergy, coherentSvq,
-				Double.doubleToRawLongBits(coherentMass));
+				Double.doubleToRawLongBits(coherentMass),
+				domain.carrierMutationRevision(),
+				domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision());
 	}
 
 	/** Prevalidates every truth removed by the operator-level condensed inventory reset. */

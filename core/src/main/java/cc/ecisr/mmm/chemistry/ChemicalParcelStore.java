@@ -23,6 +23,7 @@ public final class ChemicalParcelStore {
 	private final long[] indicatorWords;
 	private final long[] dirtyCellWords;
 	private long totalQuanta;
+	private long mutationRevision;
 	private ChemicalTransferLedger escapedSink = ChemicalTransferLedger.EMPTY;
 	private ChemicalTransferLedger externalSource = ChemicalTransferLedger.EMPTY;
 
@@ -42,6 +43,8 @@ public final class ChemicalParcelStore {
 	public SolverUnitScale unitScale() { return unitScale; }
 	public PackedChemicalMixturePool pool() { return pool; }
 	public long totalQuanta() { return totalQuanta; }
+	/** Monotonic counter over every parcel-truth mutation; lets consumers bind plans to their planned inventory. */
+	public long mutationRevision() { return mutationRevision; }
 	public ChemicalTransferLedger escapedSink() { return escapedSink; }
 	public ChemicalTransferLedger externalSource() { return externalSource; }
 	public void recordEscapedSink(ChemicalTransferLedger ledger) {
@@ -116,6 +119,7 @@ public final class ChemicalParcelStore {
 		else pool.overwrite(markerHandles[marker], record);
 		setIndicator(marker, indicator);
 		totalQuanta = candidate;
+		mutationRevision++;
 	}
 
 	public void assignDefault(
@@ -159,7 +163,10 @@ public final class ChemicalParcelStore {
 	public boolean updateIndicator(int marker, boolean value) {
 		requireAssigned(marker);
 		boolean previous = bit(indicatorWords, marker);
-		if (previous != value) setIndicator(marker, value);
+		if (previous != value) {
+			setIndicator(marker, value);
+			mutationRevision++;
+		}
 		return previous != value;
 	}
 	public boolean isAssigned(int marker) {
@@ -172,6 +179,7 @@ public final class ChemicalParcelStore {
 		long candidate = validatePlannedReplacements(markers, replacements);
 		for (int index = 0; index < markers.length; index++) pool.overwrite(markerHandles[markers[index]], replacements[index]);
 		totalQuanta = candidate;
+		mutationRevision++;
 	}
 
 	public void requireCanCommitPlannedReplacements(int[] markers, ChemicalMixtureRecord[] replacements) {
@@ -227,6 +235,7 @@ public final class ChemicalParcelStore {
 		pool.release(markerHandles[source]);
 		markerHandles[source] = 0;
 		setIndicator(source, false);
+		mutationRevision++;
 	}
 
 	public void split(
@@ -254,6 +263,7 @@ public final class ChemicalParcelStore {
 		pool.overwrite(markerHandles[source], firstRecord);
 		markerHandles[destination] = newHandle;
 		setIndicator(destination, indicator(source));
+		mutationRevision++;
 	}
 
 	public boolean canSplit(int source, int destination, float sourceVolume, float destinationVolume) {
@@ -279,6 +289,7 @@ public final class ChemicalParcelStore {
 		markerHandles[source] = 0;
 		setIndicator(destination, bit(indicatorWords, source));
 		setIndicator(source, false);
+		mutationRevision++;
 	}
 
 	public void remove(int marker) {
@@ -288,6 +299,7 @@ public final class ChemicalParcelStore {
 		pool.release(markerHandles[marker]);
 		markerHandles[marker] = 0;
 		setIndicator(marker, false);
+		mutationRevision++;
 	}
 
 	public void clear(int particleCount) {
@@ -392,6 +404,7 @@ public final class ChemicalParcelStore {
 		if (plan.kept() == null) throw new IllegalArgumentException("Full removals commit through marker removal");
 		pool.overwrite(markerHandles[marker], plan.kept());
 		totalQuanta = Math.subtractExact(totalQuanta, plan.removed().totalQuanta());
+		mutationRevision++;
 	}
 
 	private static void requireMassClose(double actual, double expected, String label) {
@@ -554,6 +567,7 @@ public final class ChemicalParcelStore {
 			markerMass[marker] = replacementMass[marker];
 		}
 		totalQuanta = candidateTotal;
+		mutationRevision++;
 		Arrays.fill(dirtyCellWords, 0L);
 		return new ReactionStats(cells, evaluations, changed);
 	}

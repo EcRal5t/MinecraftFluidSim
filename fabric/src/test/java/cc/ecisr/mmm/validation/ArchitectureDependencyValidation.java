@@ -67,15 +67,17 @@ public final class ArchitectureDependencyValidation {
 	private static final Set<String> CYCLE_ALLOWLIST = Set.of(
 			"cc.ecisr.mmm.fluid.air<->cc.ecisr.mmm.thermal");
 
-	private record SourceFile(
+	record SourceFile(
 			String module, String simpleName, String packageName, int lines, List<String> imports, boolean hasLocator
 	) { }
 
 	private static final Pattern PACKAGE = Pattern.compile("^package\\s+([\\w.]+)\\s*;", Pattern.MULTILINE);
-	private static final Pattern IMPORT = Pattern.compile("^import\\s+(?:static\\s+)?([\\w.]+)\\.(?:\\*|[\\w]+)\\s*;", Pattern.MULTILINE);
+	/** Captures the full import name: package plus type, or a {@code package.*} wildcard. */
+	private static final Pattern IMPORT = Pattern.compile("^import\\s+(?:static\\s+)?([\\w.]+(?:\\.\\*)?)\\s*;", Pattern.MULTILINE);
 	private static final Pattern LOCATOR = Pattern.compile("Map<MinecraftServer[, ]");
 
 	public static void main(String[] args) throws Exception {
+		ArchitectureGateSelfCheck.run();
 		Path root = Path.of(args.length > 0 ? args[0] : ".").toAbsolutePath().normalize();
 		List<SourceFile> sources = scan(root);
 		if (sources.isEmpty()) throw new IllegalStateException("No production sources found under " + root);
@@ -134,6 +136,13 @@ public final class ArchitectureDependencyValidation {
 		return matcher.find() ? matcher.group(1) : "";
 	}
 
+	/** Package part of a full import name: strips the trailing {@code .*} or the last segment. */
+	private static String packageOf(String imported) {
+		if (imported.endsWith(".*")) return imported.substring(0, imported.length() - 2);
+		int dot = imported.lastIndexOf('.');
+		return dot < 0 ? "" : imported.substring(0, dot);
+	}
+
 	/** api may import only JDK types and its own package. */
 	private static void checkApiPurity(List<SourceFile> sources, List<String> violations) {
 		for (SourceFile source : sources) {
@@ -151,13 +160,11 @@ public final class ArchitectureDependencyValidation {
 		for (SourceFile source : sources) {
 			if (!source.module().equals("api/src/main/java") && !source.module().equals("core/src/main/java")) continue;
 			for (String imported : source.imports()) {
-				String top = imported.contains(".")
-						? imported.substring(0, imported.lastIndexOf('.'))
-						: imported;
-				if (forbidden.contains(top)) {
-					violations.add("loader-neutral module imports loader type: "
-							+ source.simpleName() + " -> " + imported);
-				}
+				String importedPackage = packageOf(imported);
+				if (forbidden.stream().noneMatch(top ->
+						importedPackage.equals(top) || importedPackage.startsWith(top + "."))) continue;
+				violations.add("loader-neutral module imports loader type: "
+						+ source.simpleName() + " -> " + imported);
 			}
 		}
 	}
@@ -179,25 +186,27 @@ public final class ArchitectureDependencyValidation {
 	}
 
 	/** persistence codecs and stores must not hold live region runtime types. */
-	private static void checkPersistenceDoesNotReferenceRuntime(List<SourceFile> sources, List<String> violations) {
+	static void checkPersistenceDoesNotReferenceRuntime(List<SourceFile> sources, List<String> violations) {
 		for (SourceFile source : sources) {
 			if (!source.module().equals("fabric/src/main/java")
 					|| !source.packageName().startsWith("cc.ecisr.mmm.simulation.persistence")) {
 				continue;
 			}
 			for (String imported : source.imports()) {
-				String leaf = imported.substring(imported.lastIndexOf('.') + 1);
-				if (imported.startsWith("cc.ecisr.mmm.simulation.") && LIVE_REGION_TYPES.contains(leaf)
+				String leaf = imported.endsWith(".*") ? "*" : imported.substring(imported.lastIndexOf('.') + 1);
+				boolean referencesLiveType = LIVE_REGION_TYPES.contains(leaf)
+						|| imported.equals("cc.ecisr.mmm.simulation.*");
+				if (imported.startsWith("cc.ecisr.mmm.simulation.") && referencesLiveType
 						&& !PERSISTENCE_RUNTIME_ALLOWLIST.contains(source.simpleName())) {
 					violations.add("persistence references live runtime type: "
-							+ source.simpleName() + " -> " + leaf + " (allowlisted until S17)");
+							+ source.simpleName() + " -> " + imported + " (allowlisted until S17)");
 				}
 			}
 		}
 	}
 
 	/** network/command/item/client adapters must not import the mutable solver aggregate. */
-	private static void checkAdaptersDoNotReferenceSolverDomain(List<SourceFile> sources, List<String> violations) {
+	static void checkAdaptersDoNotReferenceSolverDomain(List<SourceFile> sources, List<String> violations) {
 		for (SourceFile source : sources) {
 			boolean adapterModule = source.module().equals("fabric/src/client/java")
 					|| source.module().equals("fabric/src/main/java")
@@ -206,10 +215,11 @@ public final class ArchitectureDependencyValidation {
 						|| source.packageName().startsWith("cc.ecisr.mmm.block"));
 			if (!adapterModule) continue;
 			for (String imported : source.imports()) {
-				String leaf = imported.substring(imported.lastIndexOf('.') + 1);
-				if (imported.startsWith("cc.ecisr.mmm.fluid.") && SOLVER_MUTABLE_TYPES.contains(leaf)) {
+				String leaf = imported.endsWith(".*") ? "*" : imported.substring(imported.lastIndexOf('.') + 1);
+				if (imported.startsWith("cc.ecisr.mmm.fluid.") && (SOLVER_MUTABLE_TYPES.contains(leaf)
+						|| imported.equals("cc.ecisr.mmm.fluid.*"))) {
 					violations.add("adapter imports solver mutable domain: "
-							+ source.simpleName() + " -> " + leaf);
+							+ source.simpleName() + " -> " + imported);
 				}
 			}
 		}
@@ -242,8 +252,9 @@ public final class ArchitectureDependencyValidation {
 			if (!source.module().equals("core/src/main/java")) continue;
 			for (String imported : source.imports()) {
 				if (!imported.startsWith("cc.ecisr.mmm")) continue;
-				if (imported.equals(source.packageName()) || imported.startsWith(source.packageName() + ".")) continue;
-				graph.computeIfAbsent(source.packageName(), key -> new TreeSet<>()).add(imported);
+				String target = packageOf(imported);
+				if (target.equals(source.packageName()) || target.startsWith(source.packageName() + ".")) continue;
+				graph.computeIfAbsent(source.packageName(), key -> new TreeSet<>()).add(target);
 			}
 		}
 		for (Set<String> component : stronglyConnectedComponents(new TreeMap<>(graph))) {

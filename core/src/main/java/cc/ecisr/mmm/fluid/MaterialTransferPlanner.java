@@ -31,6 +31,7 @@ final class MaterialTransferPlanner {
 			boolean externalSource, Double internalEnergy) {
 		if (portions == null || portions.isEmpty()) throw new IllegalArgumentException("Mixture insertion is empty");
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
+		if (domain.hasPendingPhaseVolumeWork()) return new FlipFluidDomain.ExactMixtureTransfer(false, List.of());
 		java.util.Set<Integer> materialHandles = new java.util.HashSet<>();
 		for (FlipFluidDomain.MaterialPortion portion : portions) {
 			domain.validateMaterialPortion(portion);
@@ -144,8 +145,97 @@ final class MaterialTransferPlanner {
 		return new FlipFluidDomain.ExactMixtureTransfer(true, List.copyOf(result), internalEnergy == null ? 0.0 : internalEnergy);
 	}
 
+	/**
+	 * Plans the at-most pure-volume insertion against per-cell capacity, the marker budget and
+	 * the region chemical budget before any marker is written, then commits the pre-validated
+	 * pieces through the spawn path. With chemistry bound the inserted default parcels are
+	 * booked as an external chemical source, the audit twin of the external thermal energy the
+	 * spawn path already records; without chemistry there is no chemical truth to book.
+	 */
+	FlipFluidDomain.VolumeAddition insertVolumeAtMost(
+			int centerX, int centerY, int centerZ, float amount, int maxRadius) {
+		domain.validateVolumeEdit(amount, maxRadius);
+		if (domain.hasPendingPhaseVolumeWork()) return new FlipFluidDomain.VolumeAddition(0.0F, false);
+		double[] exactCellVolume = domain.exactCellVolumes();
+		float remaining = amount;
+		boolean markerBudgetLimited = false;
+		List<MaterialInsertPiece> insertPieces = new ArrayList<>();
+		long plannedChemicalQuanta = 0L;
+		try {
+			cellLoop:
+			for (FlipFluidDomain.CellCandidate candidate : domain.nearbyCells(centerX, centerY, centerZ, maxRadius)) {
+				int index = candidate.index();
+				int x = index % domain.sizeX, yz = index / domain.sizeX, y = yz % domain.sizeY, z = yz / domain.sizeY;
+				float requestedForCell = (float) Math.min(remaining,
+						Math.max(0.0, domain.effectiveOpenCellVolume(index) - exactCellVolume[index]));
+				int availableMarkers = domain.maximumParticleCount - domain.particles.count() - insertPieces.size();
+				float markerCapacity = availableMarkers * domain.PARTICLE_VOLUME;
+				float added = Math.min(requestedForCell, markerCapacity);
+				if (added <= 1.0E-6F) {
+					if (requestedForCell > 1.0E-6F && availableMarkers == 0) markerBudgetLimited = true;
+					if (markerBudgetLimited) break;
+					continue;
+				}
+				int cell = domain.cellIndex(x, y, z);
+				float left = added;
+				for (int slot = domain.firstOpenSlot(cell, 0); left > 1.0E-6F;
+						slot = domain.firstOpenSlot(cell, slot + 1)) {
+					if (slot < 0) throw new IllegalStateException("Cut-cell open volume was exhausted while spawning markers");
+					float piece = Math.min(domain.PARTICLE_VOLUME, left);
+					double pieceMass = (double) piece * (domain.materialRegistry == null
+							? domain.config.density() : domain.materialRegistry.material(0).referenceDensity());
+					ChemicalMixtureRecord chemical = domain.chemicalParcels == null ? null
+							: domain.chemicalParcels.defaultRecord(
+									domain.materialRegistry.material(0).id(), piece, domain.config.cellSize(), pieceMass, false);
+					if (chemical != null) {
+						long pieceQuanta = chemical.totalQuanta();
+						if (Math.addExact(domain.chemicalParcels.totalQuanta(),
+								Math.addExact(plannedChemicalQuanta, pieceQuanta))
+								> cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
+							markerBudgetLimited = true;
+							break cellLoop;
+						}
+						plannedChemicalQuanta = Math.addExact(plannedChemicalQuanta, pieceQuanta);
+					}
+					insertPieces.add(new MaterialInsertPiece(x, y, z, slot, piece, 0, pieceMass, chemical));
+					left -= piece;
+				}
+				exactCellVolume[index] += added;
+				remaining -= added;
+				if (added + 1.0E-6F < requestedForCell) {
+					markerBudgetLimited = true;
+					break;
+				}
+				if (remaining <= 1.0E-6F) break;
+			}
+		} catch (IllegalArgumentException | ArithmeticException refusedPlan) {
+			return new FlipFluidDomain.VolumeAddition(0.0F, false);
+		}
+		ChemicalTransferLedger externalAddition = ChemicalTransferLedger.EMPTY;
+		if (domain.chemicalParcels != null && !insertPieces.isEmpty()) {
+			try {
+				ChemicalTransferLedger.Builder source = ChemicalTransferLedger.builder(domain.chemicalParcels.registry());
+				for (MaterialInsertPiece piece : insertPieces) source.add(
+						domain.materialRegistry.material(piece.materialHandle()).id(), false,
+						piece.volume(), domain.unitScale.kilograms(piece.mass()), piece.chemical());
+				externalAddition = source.build();
+				domain.chemicalParcels.requireCanRecordExternalSource(externalAddition);
+			} catch (IllegalArgumentException | ArithmeticException refusedAudit) {
+				return new FlipFluidDomain.VolumeAddition(0.0F, false);
+			}
+		}
+		for (MaterialInsertPiece piece : insertPieces) {
+			domain.spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), piece.slot(), piece.volume(),
+					piece.materialHandle(), piece.mass(), piece.chemical(), false, true);
+		}
+		if (!externalAddition.isEmpty()) domain.chemicalParcels.recordExternalSource(externalAddition);
+		domain.gridDirty = true;
+		return new FlipFluidDomain.VolumeAddition(amount - remaining, markerBudgetLimited);
+	}
+
 	float removeVolumeNear(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
 		domain.validateVolumeEdit(amount, maxRadius);
+		if (domain.hasPendingPhaseVolumeWork()) return 0.0F;
 		float remaining = amount;
 		for (FlipFluidDomain.CellCandidate candidate : domain.nearbyCells(centerX, centerY, centerZ, maxRadius)) {
 			int index = candidate.index();
@@ -335,6 +425,7 @@ final class MaterialTransferPlanner {
 		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemical insertion requires chemistry");
 		if (ledger == null || ledger.isEmpty()) return new FlipFluidDomain.ExactChemicalTransfer(ledger != null, ChemicalTransferLedger.EMPTY);
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
+		if (domain.hasPendingPhaseVolumeWork()) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		try {
 			if (Math.addExact(domain.chemicalParcels.totalQuanta(), ledger.totalQuanta())
 					> cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {

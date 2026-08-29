@@ -3490,35 +3490,9 @@ public final class FlipFluidDomain {
 		return addVolumeNearBudgeted(centerX, centerY, centerZ, amount, maxRadius).addedVolume();
 	}
 
+	/** Operator pour: inserts as much as fits, with every capacity and audit rejection in planning. */
 	public VolumeAddition addVolumeNearBudgeted(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
-		validateVolumeEdit(amount, maxRadius);
-		double[] exactCellVolume = exactCellVolumes();
-		float remaining = amount;
-		boolean markerBudgetLimited = false;
-		for (CellCandidate candidate : nearbyCells(centerX, centerY, centerZ, maxRadius)) {
-			int index = candidate.index();
-			int x = index % sizeX, yz = index / sizeX, y = yz % sizeY, z = yz / sizeY;
-			float requestedForCell = (float) Math.min(remaining,
-					Math.max(0.0, effectiveOpenCellVolume(index) - exactCellVolume[index]));
-			int availableMarkers = maximumParticleCount - particles.count();
-			float markerCapacity = availableMarkers * PARTICLE_VOLUME;
-			float added = Math.min(requestedForCell, markerCapacity);
-			if (added <= 1.0E-6F) {
-				if (requestedForCell > 1.0E-6F && availableMarkers == 0) markerBudgetLimited = true;
-				if (markerBudgetLimited) break;
-				continue;
-			}
-			spawnCellVolume(x, y, z, added);
-			exactCellVolume[index] += added;
-			remaining -= added;
-			if (added + 1.0E-6F < requestedForCell) {
-				markerBudgetLimited = true;
-				break;
-			}
-			if (remaining <= 1.0E-6F) break;
-		}
-		gridDirty = true;
-		return new VolumeAddition(amount - remaining, markerBudgetLimited);
+		return transferPlanner.insertVolumeAtMost(centerX, centerY, centerZ, amount, maxRadius);
 	}
 
 	/** Removes every marker; the exact marker-volume ledger becomes zero immediately. */
@@ -3538,6 +3512,8 @@ public final class FlipFluidDomain {
 	/** Commits a previously validated liquid clear; no new ledger candidate is constructed here. */
 	public void commitRemoveAllWaterExact(WaterClearPlan plan) {
 		if (plan == null || particles.count() != plan.markerCount()
+				|| carrierMutationRevision() != plan.mutationRevision()
+				|| (chemicalParcels == null ? 0L : chemicalParcels.mutationRevision()) != plan.chemicalRevision()
 				|| Double.doubleToRawLongBits(totalVolumeExact()) != plan.totalVolumeBits()
 				|| Double.doubleToRawLongBits(totalMass()) != plan.totalMassBits()
 				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particles.count()))
@@ -3561,6 +3537,10 @@ public final class FlipFluidDomain {
 	/** Commits a jointly prevalidated liquid/coherent clear and records only the energy actually removed. */
 	public CondensedClear commitRemoveAllCondensedExact(CondensedClearPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Condensed clear plan is missing");
+		if (carrierMutationRevision() != plan.mutationRevision()
+				|| (chemicalParcels == null ? 0L : chemicalParcels.mutationRevision()) != plan.chemicalRevision()) {
+			throw new IllegalStateException("Liquid inventory changed after condensed clear planning");
+		}
 		WaterClearPlan liquid = plan.liquid();
 		if (particles.count() != liquid.markerCount()
 				|| Double.doubleToRawLongBits(totalVolumeExact()) != liquid.totalVolumeBits()
@@ -3638,13 +3618,13 @@ public final class FlipFluidDomain {
 
 	public record WaterClearPlan(
 			int markerCount, long totalVolumeBits, long totalMassBits, ChemicalTransferLedger drained,
-			SignedDyadic internalEnergy
+			SignedDyadic internalEnergy, long mutationRevision, long chemicalRevision
 	) { }
 	public record CondensedClear(long coherentVolumeSvq, double coherentMass, int coherentGroups) { }
 	public record CondensedClearPlan(
 			WaterClearPlan liquid, List<CoherentPhaseStore.Group> coherentGroups,
 			ChemicalTransferLedger drained, SignedDyadic coherentEnergy,
-			long coherentVolumeSvq, long coherentMassBits
+			long coherentVolumeSvq, long coherentMassBits, long mutationRevision, long chemicalRevision
 	) {
 		public CondensedClearPlan { coherentGroups = List.copyOf(coherentGroups); }
 	}
@@ -6552,27 +6532,21 @@ ChemicalMixtureRecord mixture, boolean indicator
 spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, indicator);
 }
 
-	float removeParticlesInCell(int cellX, int cellY, int cellZ, float maximum) {
-		ChemicalTransferLedger.Builder removedChemistry = chemicalParcels == null ? null
-				: ChemicalTransferLedger.builder(chemicalParcels.registry());
-		float removed = removeParticlesInCell(cellX, cellY, cellZ, maximum, removedChemistry);
-		if (removedChemistry != null) chemicalParcels.recordEscapedSink(removedChemistry.build());
-		return removed;
-	}
+	/** Planned per-marker truncation for one cell, applied later without re-deciding anything. */
+	private record MarkerTruncation(
+			int marker, float take, float newVolume, double newMass,
+			ChemicalParcelStore.SplitPlan chemicalPlan, FlipThermalState.Truncation thermalPlan
+	) { }
 
-	private float removeParticlesInCell(
-			int cellX, int cellY, int cellZ, float maximum,
-			ChemicalTransferLedger.Builder removedChemistry
-	) {
-		return removeParticlesInCell(cellX, cellY, cellZ, maximum, removedChemistry, null, null);
-	}
+	private record CellRemovalPlan(float removedVolume, List<MarkerTruncation> markers) { }
 
-	float removeParticlesInCell(
+	private CellRemovalPlan planRemoveParticlesInCell(
 			int cellX, int cellY, int cellZ, float maximum,
 			ChemicalTransferLedger.Builder removedChemistry,
 			RemovedMaterialLedger removedMaterials, RemovedThermalEnergy removedThermal
 	) {
 		float h = config.cellSize(), removed = 0.0F;
+		List<MarkerTruncation> plan = new ArrayList<>();
 		for (int i = particles.count() - 1; i >= 0 && removed < maximum; i--) {
 			if ((int) Math.floor(particles.positionX(i) / h) != cellX || (int) Math.floor(particles.positionY(i) / h) != cellY || (int) Math.floor(particles.positionZ(i) / h) != cellZ) continue;
 			float previousVolume = particles.volume(i);
@@ -6587,28 +6561,60 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			double newMass = previousMass * newVolume / previousVolume;
 			ChemicalParcelStore.SplitPlan chemicalPlan = null;
 			if (chemicalParcels != null) {
-				chemicalParcels.markDirtyCell(cellIndex(cellX, cellY, cellZ));
 				chemicalPlan = chemicalParcels.planTruncate(
 						i, newVolume, take, newMass, previousMass - newMass);
 				if (removedChemistry != null) removedChemistry.add(
 						materialRegistry.material(particles.materialHandle(i)).id(), chemicalParcels.indicator(i),
 						take, unitScale.kilograms(previousMass - newMass), chemicalPlan.removed());
-				if (newVolume > 0.0F) {
-					chemicalParcels.commitTruncate(i, chemicalPlan);
-				}
 			}
 			FlipThermalState.Truncation thermalPlan = planThermalTruncate(i, newMass,
 					chemicalPlan == null ? null : chemicalPlan.kept(), previousTemperature);
 			if (removedMaterials != null) removedMaterials.add(
 					particles.materialHandle(i), take, previousMass - newMass);
 			if (removedThermal != null && thermalPlan != null) removedThermal.add(thermalPlan.removedEnergy());
-			particles.setVolume(i, newVolume);
-			particles.setMass(i, newMass);
-			commitThermalTruncate(i, thermalPlan);
+			plan.add(new MarkerTruncation(i, take, newVolume, newMass, chemicalPlan, thermalPlan));
 			removed += take;
+		}
+		return new CellRemovalPlan(removed, List.copyOf(plan));
+	}
+
+	private void commitRemoveParticlesInCell(int cellX, int cellY, int cellZ, CellRemovalPlan plan) {
+		for (MarkerTruncation entry : plan.markers()) {
+			int i = entry.marker();
+			if (chemicalParcels != null) {
+				chemicalParcels.markDirtyCell(cellIndex(cellX, cellY, cellZ));
+				if (entry.newVolume() > 0.0F) chemicalParcels.commitTruncate(i, entry.chemicalPlan());
+			}
+			particles.setVolume(i, entry.newVolume());
+			particles.setMass(i, entry.newMass());
+			commitThermalTruncate(i, entry.thermalPlan());
 			if (particles.volume(i) <= 1.0E-6F) removeParticle(i);
 		}
-		return removed;
+	}
+
+	/**
+	 * Removes up to {@code maximum} from one cell. Every fallible chemical-sink check runs on the
+	 * planned ledger before the first marker changes; the commit loop itself has no rejections.
+	 */
+	float removeParticlesInCell(int cellX, int cellY, int cellZ, float maximum) {
+		ChemicalTransferLedger.Builder removedChemistry = chemicalParcels == null ? null
+				: ChemicalTransferLedger.builder(chemicalParcels.registry());
+		CellRemovalPlan plan = planRemoveParticlesInCell(cellX, cellY, cellZ, maximum, removedChemistry, null, null);
+		if (removedChemistry != null) chemicalParcels.requireCanRecordEscapedSink(removedChemistry.build());
+		commitRemoveParticlesInCell(cellX, cellY, cellZ, plan);
+		if (removedChemistry != null) chemicalParcels.recordEscapedSink(removedChemistry.build());
+		return plan.removedVolume();
+	}
+
+	float removeParticlesInCell(
+			int cellX, int cellY, int cellZ, float maximum,
+			ChemicalTransferLedger.Builder removedChemistry,
+			RemovedMaterialLedger removedMaterials, RemovedThermalEnergy removedThermal
+	) {
+		CellRemovalPlan plan = planRemoveParticlesInCell(cellX, cellY, cellZ, maximum,
+				removedChemistry, removedMaterials, removedThermal);
+		commitRemoveParticlesInCell(cellX, cellY, cellZ, plan);
+		return plan.removedVolume();
 	}
 
 	private float removeParticlesInMicroMask(
