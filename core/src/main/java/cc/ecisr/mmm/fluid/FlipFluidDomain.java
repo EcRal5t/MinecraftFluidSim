@@ -104,13 +104,14 @@ public final class FlipFluidDomain {
 	private final BodyForceStage bodyForceStage;
 	private final GridToParticleStage gridToParticleStage;
 	private final ParticleAdvectionStage particleAdvectionStage;
-	private final FlipPressurePhaseGeometry pressurePhaseGeometry;
+	private final ParticleToGridStage particleToGridStage;
+	final FlipPressurePhaseGeometry pressurePhaseGeometry;
 	final FlipFreeSurfaceGeometry freeSurfaceGeometry;
 	private final FlipParticleReseeder particleReseeder;
 	final FlipParticleCollision particleCollision;
 	final FlipVelocityExtrapolator velocityExtrapolator;
 	final float[] volume;
-	private boolean surfaceTensionActive;
+	boolean surfaceTensionActive;
 	boolean liquidPairTensionActive;
 	private static final int[][] SURFACE_TENSION_DIRECTIONS = {{-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0}, {0,0,-1}, {0,0,1}};
 
@@ -211,6 +212,7 @@ public final class FlipFluidDomain {
 		this.bodyForceStage = new BodyForceStage(this);
 		this.gridToParticleStage = new GridToParticleStage(this);
 		this.particleAdvectionStage = new ParticleAdvectionStage(this);
+		this.particleToGridStage = new ParticleToGridStage(this, bodyForceStage, gridToParticleStage);
 	}
 
 	public int sizeX() { return sizeX; }
@@ -3733,45 +3735,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return energy;
 	}
 
-	private void rebuildGridFromParticles() {
-		Arrays.fill(volume, 0.0F);
-		Arrays.fill(projection.pressureVolume, 0.0);
-		freeSurfaceGeometry.clearExactVolumes();
-		Arrays.fill(mac.velocityX, 0.0F);
-		Arrays.fill(mac.velocityY, 0.0F);
-		Arrays.fill(mac.velocityZ, 0.0F);
-		Arrays.fill(mac.velocityWeightX, 0.0F);
-		Arrays.fill(mac.velocityWeightY, 0.0F);
-		Arrays.fill(mac.velocityWeightZ, 0.0F);
-		variableDensityActive = usesMassWeightedP2G();
-		surfaceTensionActive = hasAnySurfaceTension();
-		liquidPairTensionActive = hasAnyLiquidPairTension();
-		MarkerGridBuilder.build(this);
-		normalize(mac.velocityX, mac.velocityWeightX);
-		normalize(mac.velocityY, mac.velocityWeightY);
-		normalize(mac.velocityZ, mac.velocityWeightZ);
-		System.arraycopy(mac.velocityWeightX, 0, mac.p2gWeightX, 0, mac.velocityWeightX.length);
-		System.arraycopy(mac.velocityWeightY, 0, mac.p2gWeightY, 0, mac.velocityWeightY.length);
-		System.arraycopy(mac.velocityWeightZ, 0, mac.p2gWeightZ, 0, mac.velocityWeightZ.length);
-		if (granularCoupling == null || !hasGranularInventory() && !(thermalState != null
-				&& thermalState.coherentPhases().groupCount() != 0)) {
-			if (granularCoupling != null) granularCoupling.clear();
-			freeSurfaceGeometry.rebuild(geometry.solid, markerGrid.markerCount, geometry.cutCells);
-			pressureGranularCoupling = null;
-		} else {
-			if (hasGranularInventory()) granularCoupling.rebuild(granularState.parcels, granularState.deposits);
-			else granularCoupling.rebuildFixed();
-			pressureGranularCoupling = granularCoupling;
-			freeSurfaceGeometry.rebuild(geometry.solid, markerGrid.markerCount, geometry.cutCells, granularCoupling);
-		}
-		pressurePhaseGeometry.rebuild(
-				geometry.solid, markerGrid.markerCount, projection.pressureVolume, geometry.cutCells, pressureGranularCoupling, projection.pressureFluid);
-		rebuildPressureBoundaryLineage();
-		rebuildSurfaceTensionPressure();
-		bodyForceStage.enforceSolidFaceVelocities();
-		gridToParticleStage.extrapolateVelocityIntoAir();
-		gridDirty = false;
-	}
+	void rebuildGridFromParticles() { particleToGridStage.rebuild(); }
 
 	/** Rebuilds only the derived carrier geometry consumed by an in-progress gas phase scan. */
 	private void rebuildGasPhaseGeometryFromParticles() {
@@ -4251,7 +4215,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 	}
 
-	private static void normalize(float[] values, float[] weights) {
+	static void normalize(float[] values, float[] weights) {
 		for (int i = 0; i < values.length; i++) values[i] = weights[i] > 1.0E-8F ? values[i] / weights[i] : 0.0F;
 	}
 
@@ -4772,7 +4736,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return false;
 	}
 
-	private boolean hasAnySurfaceTension() {
+	boolean hasAnySurfaceTension() {
 		if (materialRegistry == null) return false;
 		for (FluidMaterial material : materialRegistry.materials()) {
 			if (material.surfaceTension() > 0.0) return true;
@@ -4780,7 +4744,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return false;
 	}
 
-	private boolean hasAnyLiquidPairTension() {
+	boolean hasAnyLiquidPairTension() {
 		if (materialRegistry == null) return false;
 		for (double tension : materialRegistry.liquidPairTensions().values()) {
 			if (tension > 0.0) return true;
@@ -4810,7 +4774,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	/** Rebuilds the cell-centred surface-tension pressure {@code sigma * kappa} used as the free-surface jump. */
-	private void rebuildSurfaceTensionPressure() {
+	void rebuildSurfaceTensionPressure() {
 		Arrays.fill(tension.surfaceTensionPressure, 0.0F);
 		if (!surfaceTensionActive) return;
 		for (int index = 0; index < cellCount; index++) {
@@ -5381,7 +5345,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 		return result;
 	}
 
-	void ensureGrid() { if (gridDirty) rebuildGridFromParticles(); }
+	void ensureGrid() { if (gridDirty) particleToGridStage.rebuild(); }
 	long carrierMutationRevision() { return carrierMutationRevision; }
 	void bumpCarrierMutationRevision() { carrierMutationRevision++; }
 	CarrierMutationCoordinator carrierMutations() { return coordinator; }
