@@ -79,7 +79,7 @@ final class CellInventoryReader {
 
 	boolean hasCondensedInventoryInCell(int x, int y, int z) {
 		int requested = domain.cellIndexChecked(x, y, z);
-		for (int marker = 0; marker < domain.particleCount; marker++) {
+		for (int marker = 0; marker < domain.particles.count(); marker++) {
 			if (domain.particleCellIndex(marker) == requested) return true;
 		}
 		if (domain.granularParcels != null) {
@@ -98,13 +98,13 @@ final class CellInventoryReader {
 				? new double[]{0.0} : new double[domain.materialRegistry.size()];
 		double[] materialMass = new double[materialVolume.length];
 		TreeMap<String, Long> species = new TreeMap<>();
-		for (int marker = 0; marker < domain.particleCount; marker++) {
+		for (int marker = 0; marker < domain.particles.count(); marker++) {
 			if (domain.particleCellIndex(marker) != requested) continue;
-			normalizedVolume += domain.particleVolume[marker];
-			solverMass += domain.particleMass[marker];
-			int material = domain.materialRegistry == null ? 0 : domain.particleMaterialHandle[marker];
-			materialVolume[material] += domain.particleVolume[marker];
-			materialMass[material] += domain.particleMass[marker];
+			normalizedVolume += domain.particles.volume(marker);
+			solverMass += domain.particles.mass(marker);
+			int material = domain.materialRegistry == null ? 0 : domain.particles.materialHandle(marker);
+			materialVolume[material] += domain.particles.volume(marker);
+			materialMass[material] += domain.particles.mass(marker);
 			if (domain.chemicalParcels != null) {
 				ChemicalMixtureRecord mixture = domain.chemicalParcels.record(marker);
 				for (int entry = 0; entry < mixture.entryCount(); entry++) {

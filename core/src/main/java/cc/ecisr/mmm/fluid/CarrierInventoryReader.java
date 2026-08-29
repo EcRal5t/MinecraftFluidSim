@@ -25,20 +25,20 @@ final class CarrierInventoryReader {
 		if (domain.hasNonDefaultMaterialState()) {
 			throw new IllegalStateException("Multi-material markers cannot use the pure-water particle handoff");
 		}
-		int particleCount = domain.particleCount;
+		int particleCount = domain.particles.count();
 		float[] positionVolume = new float[particleCount * 4];
 		float[] velocities = new float[particleCount * 3];
 		byte[] solidMask = domain.cutCells.copyMicroMasks();
 		for (int particle = 0; particle < particleCount; particle++) {
 			int positionBase = particle * 4;
 			int velocityBase = particle * 3;
-			positionVolume[positionBase] = domain.particleX[particle];
-			positionVolume[positionBase + 1] = domain.particleY[particle];
-			positionVolume[positionBase + 2] = domain.particleZ[particle];
-			positionVolume[positionBase + 3] = domain.particleVolume[particle];
-			velocities[velocityBase] = domain.particleVelocityX[particle];
-			velocities[velocityBase + 1] = domain.particleVelocityY[particle];
-			velocities[velocityBase + 2] = domain.particleVelocityZ[particle];
+			positionVolume[positionBase] = domain.particles.positionX(particle);
+			positionVolume[positionBase + 1] = domain.particles.positionY(particle);
+			positionVolume[positionBase + 2] = domain.particles.positionZ(particle);
+			positionVolume[positionBase + 3] = domain.particles.volume(particle);
+			velocities[velocityBase] = domain.particles.velocityX(particle);
+			velocities[velocityBase + 1] = domain.particles.velocityY(particle);
+			velocities[velocityBase + 2] = domain.particles.velocityZ(particle);
 		}
 		return new FlipParticleState(
 				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), particleCount,
@@ -51,25 +51,25 @@ final class CarrierInventoryReader {
 		if (domain.materialRegistry == null) {
 			throw new IllegalStateException("Material particle handoff requires a bound registry");
 		}
-		int particleCount = domain.particleCount;
+		int particleCount = domain.particles.count();
 		float[] positionVolume = new float[particleCount * 4];
 		float[] velocities = new float[particleCount * 3];
 		for (int particle = 0; particle < particleCount; particle++) {
 			int positionBase = particle * 4, velocityBase = particle * 3;
-			positionVolume[positionBase] = domain.particleX[particle];
-			positionVolume[positionBase + 1] = domain.particleY[particle];
-			positionVolume[positionBase + 2] = domain.particleZ[particle];
-			positionVolume[positionBase + 3] = domain.particleVolume[particle];
-			velocities[velocityBase] = domain.particleVelocityX[particle];
-			velocities[velocityBase + 1] = domain.particleVelocityY[particle];
-			velocities[velocityBase + 2] = domain.particleVelocityZ[particle];
+			positionVolume[positionBase] = domain.particles.positionX(particle);
+			positionVolume[positionBase + 1] = domain.particles.positionY(particle);
+			positionVolume[positionBase + 2] = domain.particles.positionZ(particle);
+			positionVolume[positionBase + 3] = domain.particles.volume(particle);
+			velocities[velocityBase] = domain.particles.velocityX(particle);
+			velocities[velocityBase + 1] = domain.particles.velocityY(particle);
+			velocities[velocityBase + 2] = domain.particles.velocityZ(particle);
 		}
 		return new FlipMaterialParticleState(
 				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), particleCount,
 				domain.totalVolumeExact(), domain.totalMass(), domain.materialRegistry.materials(),
 				positionVolume, velocities, domain.cutCells.copyMicroMasks(),
-				Arrays.copyOf(domain.particleMass, particleCount),
-				Arrays.copyOf(domain.particleMaterialHandle, particleCount)
+				domain.particles.copyMass(),
+				domain.particles.copyMaterialHandles()
 		);
 	}
 
@@ -78,9 +78,9 @@ final class CarrierInventoryReader {
 		if (domain.chemicalParcels == null) {
 			throw new IllegalStateException("Chemical particle handoff requires chemistry");
 		}
-		ArrayList<ChemicalMixtureRecord> mixtures = new ArrayList<>(domain.particleCount);
-		byte[] indicator = new byte[domain.particleCount];
-		for (int marker = 0; marker < domain.particleCount; marker++) {
+		ArrayList<ChemicalMixtureRecord> mixtures = new ArrayList<>(domain.particles.count());
+		byte[] indicator = new byte[domain.particles.count()];
+		for (int marker = 0; marker < domain.particles.count(); marker++) {
 			mixtures.add(domain.chemicalParcels.record(marker));
 			indicator[marker] = domain.chemicalParcels.indicator(marker) ? (byte) 1 : 0;
 		}
@@ -94,7 +94,7 @@ final class CarrierInventoryReader {
 			throw new IllegalStateException("Thermal particle handoff requires thermal state");
 		}
 		return domain.thermalState.capture(domain.sizeX, domain.sizeY, domain.sizeZ,
-				domain.config.cellSize(), domain.particleCount);
+				domain.config.cellSize(), domain.particles.count());
 	}
 
 	GranularStateSnapshot exportGranularState() {
@@ -112,9 +112,10 @@ final class CarrierInventoryReader {
 
 	ChemicalDisplaySnapshot copyChemicalDisplaySnapshot() {
 		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemistry is not bound");
+		LiquidParticleStore.DirectArrays arrays = domain.particles.directArrays();
 		return ChemicalDisplaySnapshot.build(domain.chemicalParcels.registry(), domain.chemicalParcels,
 				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
-				domain.particleX, domain.particleY, domain.particleZ, domain.particleVolume, domain.particleCount);
+				arrays.positionX, arrays.positionY, arrays.positionZ, arrays.volume, domain.particles.count());
 	}
 
 	ThermalDisplaySnapshot copyThermalDisplaySnapshot() {
@@ -128,11 +129,12 @@ final class CarrierInventoryReader {
 		if (domain.materialRegistry == null) {
 			throw new IllegalStateException("Material render snapshot requires a bound registry");
 		}
+		LiquidParticleStore.DirectArrays arrays = domain.particles.directArrays();
 		return FluidMaterialRenderSnapshot.capture(
 				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.materialRegistry,
 				copyQuantizedVolume(), copyMarkerMask(), copyBinarySolidMask(),
-				domain.particleX, domain.particleY, domain.particleZ, domain.particleVolume,
-				domain.particleMaterialHandle, domain.particleCount, domain.exactCellMarkerVolume
+				arrays.positionX, arrays.positionY, arrays.positionZ, arrays.volume,
+				arrays.materialHandle, domain.particles.count(), domain.exactCellMarkerVolume
 		);
 	}
 

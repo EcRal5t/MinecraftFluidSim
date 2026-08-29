@@ -22,7 +22,7 @@ final class DomainMetrics {
 	/** Exact double sum of the float marker-volume truth, in stable marker ordinal order. */
 	double totalVolumeExact() {
 		double result = 0.0;
-		for (int i = 0; i < domain.particleCount; i++) result += domain.particleVolume[i];
+		for (int i = 0; i < domain.particles.count(); i++) result += domain.particles.volume(i);
 		return result;
 	}
 
@@ -41,16 +41,16 @@ final class DomainMetrics {
 	/** Exact marker-mass inventory; reconstructed grid density is never used for this ledger. */
 	double totalMass() {
 		double result = 0.0;
-		for (int particle = 0; particle < domain.particleCount; particle++) result += domain.particleMass[particle];
+		for (int particle = 0; particle < domain.particles.count(); particle++) result += domain.particles.mass(particle);
 		return result;
 	}
 
 	float maximumParticleSpeed() {
 		float maximumSquared = 0.0F;
-		for (int i = 0; i < domain.particleCount; i++) {
-			float squared = domain.particleVelocityX[i] * domain.particleVelocityX[i]
-					+ domain.particleVelocityY[i] * domain.particleVelocityY[i]
-					+ domain.particleVelocityZ[i] * domain.particleVelocityZ[i];
+		for (int i = 0; i < domain.particles.count(); i++) {
+			float squared = domain.particles.velocityX(i) * domain.particles.velocityX(i)
+					+ domain.particles.velocityY(i) * domain.particles.velocityY(i)
+					+ domain.particles.velocityZ(i) * domain.particles.velocityZ(i);
 			maximumSquared = Math.max(maximumSquared, squared);
 		}
 		return (float) Math.sqrt(maximumSquared);
@@ -66,9 +66,9 @@ final class DomainMetrics {
 
 	float centerOfMassX() {
 		double weighted = 0.0, mass = 0.0;
-		for (int i = 0; i < domain.particleCount; i++) {
-			weighted += domain.particleX[i] / domain.config.cellSize() * domain.particleVolume[i];
-			mass += domain.particleVolume[i];
+		for (int i = 0; i < domain.particles.count(); i++) {
+			weighted += domain.particles.positionX(i) / domain.config.cellSize() * domain.particles.volume(i);
+			mass += domain.particles.volume(i);
 		}
 		return mass == 0.0 ? Float.NaN : (float) (weighted / mass);
 	}
@@ -127,9 +127,9 @@ final class DomainMetrics {
 		if (domain.materialRegistry == null) return 0;
 		float[] volumes = new float[domain.materialRegistry.size()];
 		float h = domain.config.cellSize();
-		for (int particle = 0; particle < domain.particleCount; particle++) {
+		for (int particle = 0; particle < domain.particles.count(); particle++) {
 			if (domain.particleCellIndex(particle) != cell) continue;
-			volumes[domain.particleMaterialHandle[particle]] += domain.particleVolume[particle];
+			volumes[domain.particles.materialHandle(particle)] += domain.particles.volume(particle);
 		}
 		int best = 0;
 		for (int handle = 1; handle < volumes.length; handle++) {
@@ -146,9 +146,9 @@ final class DomainMetrics {
 			near[candidate.index()] = true;
 		}
 		double result = 0.0;
-		for (int particle = 0; particle < domain.particleCount; particle++) {
-			if (materialHandle >= 0 && domain.particleMaterialHandle[particle] != materialHandle) continue;
-			if (near[domain.particleCellIndex(particle)]) result += domain.particleVolume[particle];
+		for (int particle = 0; particle < domain.particles.count(); particle++) {
+			if (materialHandle >= 0 && domain.particles.materialHandle(particle) != materialHandle) continue;
+			if (near[domain.particleCellIndex(particle)]) result += domain.particles.volume(particle);
 		}
 		return result;
 	}

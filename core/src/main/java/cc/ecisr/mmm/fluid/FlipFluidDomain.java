@@ -145,19 +145,9 @@ public final class FlipFluidDomain {
 	private final float[] direction;
 	private final float[] matrixDirection;
 
-	float[] particleX;
-	float[] particleY;
-	float[] particleZ;
-	float[] particleVelocityX;
-	float[] particleVelocityY;
-	float[] particleVelocityZ;
-	float[] particleVolume;
-	double[] particleMass;
-	int[] particleMaterialHandle;
-	private int[] particlePhaseLabel;
+	final LiquidParticleStore particles;
 	private int[] particleCellNext;
 	private int[] particleCellPrevious;
-	int particleCount;
 	FluidMaterialRegistry materialRegistry;
 	ChemicalParcelStore chemicalParcels;
 	private int[] chemicalPreviousCells;
@@ -229,17 +219,8 @@ public final class FlipFluidDomain {
 		this.config = config;
 		this.unitScale = SolverUnitScale.forCellSize(config.cellSize());
 		this.maximumParticleCount = maximumParticleCount;
+		this.particles = new LiquidParticleStore(maximumParticleCount);
 		int initialParticleCapacity = Math.min(16_384, maximumParticleCount);
-		this.particleX = new float[initialParticleCapacity];
-		this.particleY = new float[initialParticleCapacity];
-		this.particleZ = new float[initialParticleCapacity];
-		this.particleVelocityX = new float[initialParticleCapacity];
-		this.particleVelocityY = new float[initialParticleCapacity];
-		this.particleVelocityZ = new float[initialParticleCapacity];
-		this.particleVolume = new float[initialParticleCapacity];
-		this.particleMass = new double[initialParticleCapacity];
-		this.particleMaterialHandle = new int[initialParticleCapacity];
-		this.particlePhaseLabel = new int[initialParticleCapacity];
 		this.particleCellNext = new int[initialParticleCapacity];
 		this.particleCellPrevious = new int[initialParticleCapacity];
 		this.solid = new boolean[cellCount];
@@ -309,7 +290,7 @@ public final class FlipFluidDomain {
 	public int sizeX() { return sizeX; }
 	public int sizeY() { return sizeY; }
 	public int sizeZ() { return sizeZ; }
-	public int particleCount() { return particleCount; }
+	public int particleCount() { return particles.count(); }
 
 	/** Runtime-only gas network of this domain; it is not a wire or save format. */
 	public AirNetwork airNetwork() { return airNetwork; }
@@ -569,10 +550,10 @@ public final class FlipFluidDomain {
 		thermalState.settleExternalExtraction(removedCarrierEnergy, coupledItemEnergy);
 	}
 	public double totalInternalEnergy() {
-		return thermalState == null ? 0.0 : thermalState.totalEnergy(particleCount);
+		return thermalState == null ? 0.0 : thermalState.totalEnergy(particles.count());
 	}
 	public SignedDyadic exactInternalEnergy() {
-		return thermalState == null ? SignedDyadic.ZERO : thermalState.exactEnergy(particleCount);
+		return thermalState == null ? SignedDyadic.ZERO : thermalState.exactEnergy(particles.count());
 	}
 	public SignedDyadic exactGasInternalEnergy() {
 		return thermalState == null ? SignedDyadic.ZERO : thermalState.exactGasEnergy();
@@ -1201,13 +1182,13 @@ public final class FlipFluidDomain {
 	/** Auditable exact ledger for a stable ordinal range, used immediately after planned external insertion. */
 	public ChemicalTransferLedger chemicalLedgerForMarkerRange(int fromInclusive, int toExclusive) {
 		if (chemicalParcels == null) throw new IllegalStateException("Chemistry is not bound");
-		if (fromInclusive < 0 || toExclusive < fromInclusive || toExclusive > particleCount) {
+		if (fromInclusive < 0 || toExclusive < fromInclusive || toExclusive > particles.count()) {
 			throw new IndexOutOfBoundsException("Invalid chemical marker range");
 		}
 		ChemicalTransferLedger.Builder result = ChemicalTransferLedger.builder(chemicalParcels.registry());
 		for (int marker = fromInclusive; marker < toExclusive; marker++) {
-			result.add(materialRegistry.material(particleMaterialHandle[marker]).id(), chemicalParcels.indicator(marker),
-					particleVolume[marker], unitScale.kilograms(particleMass[marker]), chemicalParcels.record(marker));
+			result.add(materialRegistry.material(particles.materialHandle(marker)).id(), chemicalParcels.indicator(marker),
+					particles.volume(marker), unitScale.kilograms(particles.mass(marker)), chemicalParcels.record(marker));
 		}
 		return result.build();
 	}
@@ -1235,15 +1216,15 @@ public final class FlipFluidDomain {
 		Arrays.fill(dominantPhase, -1);
 		Arrays.fill(dominantVolume, -1.0F);
 		Arrays.fill(dominantMarker, Integer.MAX_VALUE);
-		for (int marker = 0; marker < particleCount; marker++) {
+		for (int marker = 0; marker < particles.count(); marker++) {
 			int cell = particleCellIndex(marker);
-			float candidate = particleVolume[marker];
+			float candidate = particles.volume(marker);
 			if (candidate > dominantVolume[cell]
 					|| candidate == dominantVolume[cell] && marker < dominantMarker[cell]) {
 				dominantVolume[cell] = candidate;
 				dominantMarker[cell] = marker;
 				dominantPhase[cell] = chemicalParcels.registry().phaseHandleForMaterial(
-						materialRegistry.material(particleMaterialHandle[marker]).id());
+						materialRegistry.material(particles.materialHandle(marker)).id());
 			}
 		}
 		IndicatorAimSeed seed = resolveIndicatorAimSeed(requestedStart, dominantPhase, maxScannedCells);
@@ -1255,11 +1236,11 @@ public final class FlipFluidDomain {
 		}
 
 		int[] cellHead = new int[cellCount];
-		int[] markerNext = new int[particleCount];
+		int[] markerNext = new int[particles.count()];
 		boolean[] compatible = new boolean[cellCount];
 		Arrays.fill(cellHead, -1);
-		for (int marker = particleCount - 1; marker >= 0; marker--) {
-			String materialId = materialRegistry.material(particleMaterialHandle[marker]).id();
+		for (int marker = particles.count() - 1; marker >= 0; marker--) {
+			String materialId = materialRegistry.material(particles.materialHandle(marker)).id();
 			if (chemicalParcels.registry().phaseHandleForMaterial(materialId) != targetPhase) continue;
 			int cell = particleCellIndex(marker);
 			markerNext[marker] = cellHead[cell];
@@ -1279,7 +1260,7 @@ public final class FlipFluidDomain {
 			if (++scanned > maxScannedCells) return IndicatorEditResult.rejected("Indicator scan budget exceeded");
 			for (int marker = cellHead[cell]; marker >= 0; marker = markerNext[marker]) {
 				affected.add(marker);
-				cellVolume += particleVolume[marker];
+				cellVolume += particles.volume(marker);
 			}
 			double blockVolume = cellVolume * config.cellSize() * config.cellSize() * config.cellSize();
 			if (indicated && blockVolume > maxAddedBlockVolume) {
@@ -1383,9 +1364,9 @@ public final class FlipFluidDomain {
 		ChemicalParcelStore candidate = new ChemicalParcelStore(
 				registry, unitScale, maximumParticleCount, cellCount);
 		for (FluidMaterial material : materialRegistry.materials()) registry.phaseHandleForMaterial(material.id());
-		for (int marker = 0; marker < particleCount; marker++) {
-			candidate.assignDefault(marker, materialRegistry.material(particleMaterialHandle[marker]).id(),
-					particleVolume[marker], config.cellSize(), particleMass[marker], false);
+		for (int marker = 0; marker < particles.count(); marker++) {
+			candidate.assignDefault(marker, materialRegistry.material(particles.materialHandle(marker)).id(),
+					particles.volume(marker), config.cellSize(), particles.mass(marker), false);
 		}
 		chemicalParcels = candidate;
 		chemicalPreviousCells = new int[maximumParticleCount];
@@ -1423,7 +1404,7 @@ public final class FlipFluidDomain {
 		ensureGrid();
 		if (!operatorVentedGasTopology) refreshGasTopology();
 		thermalState = new FlipThermalState(registry, materialRegistry, initialTemperatureK,
-				particleX.length, sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), airNetwork,
+				particles.capacity(), sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), airNetwork,
 				maximumTransportSubsteps);
 		thermalBuoyancySum = new double[cellCount];
 		thermalBuoyancyVolume = new double[cellCount];
@@ -1479,7 +1460,7 @@ public final class FlipFluidDomain {
 	) {
 		if (state == null || registry == null) throw new IllegalArgumentException("Thermal restore state/registry is missing");
 		if (materialRegistry == null) throw new IllegalStateException("Thermal restore requires restored material state");
-		state.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize(), particleCount);
+		state.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize(), particles.count());
 		if (!state.thermalRegistryFingerprint().equals(registry.fingerprint())) {
 			throw new IllegalArgumentException("Thermal handoff registry identity mismatch");
 		}
@@ -1760,7 +1741,7 @@ public final class FlipFluidDomain {
 					if (plan == null) continue;
 					boolean carrierTopologyChanged = plan.target() < 0;
 					double markerVolumeDelta = carrierTopologyChanged
-							? 0.0 : (double) plan.targetVolume() - particleVolume[plan.target()];
+							? 0.0 : (double) plan.targetVolume() - particles.volume(plan.target());
 					commitGasCondense(cell, node, liquidHandle, plan, thermalCell);
 					refreshGasPhaseGeometry(carrierTopologyChanged, cell, markerVolumeDelta);
 					operations = Math.addExact(operations, Math.toIntExact(plan.batches())); condensed++;
@@ -1773,7 +1754,7 @@ public final class FlipFluidDomain {
 	private double phaseMarkerVolumeDelta(List<PhaseMarkerAllocation> allocations) {
 		double delta = 0.0;
 		for (PhaseMarkerAllocation allocation : allocations) {
-			delta += (double) allocation.newVolume() - particleVolume[allocation.marker()];
+			delta += (double) allocation.newVolume() - particles.volume(allocation.marker());
 		}
 		return delta;
 	}
@@ -1857,8 +1838,8 @@ public final class FlipFluidDomain {
 					chemicalParcels.markDirtyCell(cell);
 					chemicalParcels.commitTruncate(allocation.marker(), allocation.chemicalPlan());
 				}
-				particleVolume[allocation.marker()] = allocation.newVolume();
-				particleMass[allocation.marker()] = allocation.newMass();
+				particles.setVolume(allocation.marker(), allocation.newVolume());
+				particles.setMass(allocation.marker(), allocation.newMass());
 				thermalState.commitInternalTruncate(allocation.marker(), allocation.thermalPlan());
 			}
 		}
@@ -1948,7 +1929,7 @@ public final class FlipFluidDomain {
 			double candidateGasEnergy = thermalState.gasNodeEnergy(node, airNetwork) - batchEnergy;
 			int target = -1;
 			for (int marker = cellMarkerHead[cell]; marker >= 0; marker = particleCellNext[marker]) if (
-					particleMaterialHandle[marker] == liquidHandle
+					particles.materialHandle(marker) == liquidHandle
 					&& (chemicalParcels == null || !chemicalParcels.indicator(marker))) { target = marker; break; }
 			PhaseComposition movedComposition = PhaseComposition.fromGas(moved);
 			ChemicalMixtureRecord condensedMixture = null;
@@ -1969,10 +1950,10 @@ public final class FlipFluidDomain {
 			}
 			float targetVolume = 0.0F; double targetMass = 0.0; int slot = -1;
 			if (target >= 0) {
-				targetVolume = phaseAdjustedMarkerVolume(particleVolume[target], addedSvq, "Condensation");
-				targetMass = particleMass[target] + unitScale.solverMass(moved.mass());
+				targetVolume = phaseAdjustedMarkerVolume(particles.volume(target), addedSvq, "Condensation");
+				targetMass = particles.mass(target) + unitScale.solverMass(moved.mass());
 			} else {
-				if (particleCount >= maximumParticleCount) {
+				if (particles.count() >= maximumParticleCount) {
 					throw new PhaseCandidateUnavailableException("Condensation exceeds marker budget");
 				}
 				slot = firstOpenSlot(cell, 0);
@@ -2019,8 +2000,8 @@ public final class FlipFluidDomain {
 		if (plan.target() >= 0) {
 			if (chemicalParcels != null) chemicalParcels.commitPlannedReplacements(
 					new int[]{plan.target()}, new ChemicalMixtureRecord[]{plan.condensedMixture()});
-			particleVolume[plan.target()] = plan.targetVolume();
-			particleMass[plan.target()] = plan.targetMass();
+			particles.setVolume(plan.target(), plan.targetVolume());
+			particles.setMass(plan.target(), plan.targetMass());
 		} else {
 			int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
 			spawnParticle(x, y, z, plan.slot(), SolidVolume.toCellVolume(plan.addedSvq()), liquidHandle,
@@ -2039,17 +2020,17 @@ public final class FlipFluidDomain {
 		long svq = 0L, freezableSvq = 0L; boolean found = false;
 		PhaseCompositionBuilder composition = chemicalParcels == null ? null : new PhaseCompositionBuilder();
 		for (int marker = cellMarkerHead[cell]; marker >= 0; marker = particleCellNext[marker]) {
-			if (particleMaterialHandle[marker] != liquidHandle) {
+			if (particles.materialHandle(marker) != liquidHandle) {
 				throw new ThermalPhaseBlockedException("Gas phase cell contains another liquid carrier");
 			}
-			svq = Math.addExact(svq, SolidVolume.cellVolumeSvqAtLeast(particleVolume[marker]));
-			mass += unitScale.kilograms(particleMass[marker]);
+			svq = Math.addExact(svq, SolidVolume.cellVolumeSvqAtLeast(particles.volume(marker)));
+			mass += unitScale.kilograms(particles.mass(marker));
 			energy += thermalState.liquidInternalEnergy(marker); found = true;
 			if (chemicalParcels != null) composition.add(chemicalParcels.record(marker));
 			if (chemicalParcels == null || !chemicalParcels.indicator(marker)) {
 				freezableSvq = Math.addExact(freezableSvq,
-						SolidVolume.cellVolumeSvqAtMost(particleVolume[marker]));
-				freezableMass += unitScale.kilograms(particleMass[marker]);
+						SolidVolume.cellVolumeSvqAtMost(particles.volume(marker)));
+				freezableMass += unitScale.kilograms(particles.mass(marker));
 			}
 		}
 		return found ? new PhaseCellInventory(0L, svq, 0.0, mass, energy,
@@ -2060,7 +2041,7 @@ public final class FlipFluidDomain {
 	private boolean gasLiquidCellMatches(int cell, int liquidHandle) {
 		boolean found = false;
 		for (int marker = cellMarkerHead[cell]; marker >= 0; marker = particleCellNext[marker]) {
-			if (particleMaterialHandle[marker] != liquidHandle) {
+			if (particles.materialHandle(marker) != liquidHandle) {
 				throw new ThermalPhaseBlockedException("Gas phase cell contains another liquid carrier");
 			}
 			found = true;
@@ -2104,18 +2085,18 @@ public final class FlipFluidDomain {
 		PhaseCompositionBuilder upperComposition = chemicalParcels == null ? null : new PhaseCompositionBuilder();
 		PhaseComposition lowerComposition = null;
 		boolean found = false;
-		for (int marker = 0; marker < particleCount; marker++) if (particleCellIndex(marker) == cell) {
-			if (particleMaterialHandle[marker] != upperLiquidHandle) {
+		for (int marker = 0; marker < particles.count(); marker++) if (particleCellIndex(marker) == cell) {
+			if (particles.materialHandle(marker) != upperLiquidHandle) {
 				throw new ThermalPhaseBlockedException("Phase cell contains an unsupported liquid heat-bath carrier");
 			}
-			upperSvq = Math.addExact(upperSvq, SolidVolume.cellVolumeSvqAtLeast(particleVolume[marker]));
-			upperMass += unitScale.kilograms(particleMass[marker]);
+			upperSvq = Math.addExact(upperSvq, SolidVolume.cellVolumeSvqAtLeast(particles.volume(marker)));
+			upperMass += unitScale.kilograms(particles.mass(marker));
 			energy += thermalState.liquidInternalEnergy(marker); found = true;
 			if (chemicalParcels != null) upperComposition.add(chemicalParcels.record(marker));
 			if (chemicalParcels == null || !chemicalParcels.indicator(marker)) {
 				freezableUpperSvq = Math.addExact(freezableUpperSvq,
-						SolidVolume.cellVolumeSvqAtMost(particleVolume[marker]));
-				freezableUpperMass += unitScale.kilograms(particleMass[marker]);
+						SolidVolume.cellVolumeSvqAtMost(particles.volume(marker)));
+				freezableUpperMass += unitScale.kilograms(particles.mass(marker));
 			}
 		}
 		for (CoherentPhaseStore.Group group : thermalState.coherentPhases().snapshot()) if (group.cell() == cell) {
@@ -2281,7 +2262,7 @@ public final class FlipFluidDomain {
 			} else if (!moved.isEmpty()) {
 				throw new ThermalPhaseBlockedException("Chemical coherent phase cannot melt without chemistry state");
 			}
-			if (particleCount >= maximumParticleCount) {
+			if (particles.count() >= maximumParticleCount) {
 				throw new ThermalPhaseBlockedException("Melt exceeds the liquid marker budget");
 			}
 			meltSlot = firstOpenSlot(cell, 0);
@@ -2327,21 +2308,21 @@ public final class FlipFluidDomain {
 		long remainingSvq = requestedSvq;
 		double remainingMass = requestedMass;
 		double cellTemperature = thermalState.temperatureInCell(cell, thermalMarkerContext());
-		for (int marker = particleCount - 1; marker >= 0 && remainingSvq > 0L; marker--) {
-			if (particleCellIndex(marker) != cell || particleMaterialHandle[marker] != liquidHandle
+		for (int marker = particles.count() - 1; marker >= 0 && remainingSvq > 0L; marker--) {
+			if (particleCellIndex(marker) != cell || particles.materialHandle(marker) != liquidHandle
 					|| chemicalParcels != null && chemicalParcels.indicator(marker)) continue;
-			long markerSvq = SolidVolume.cellVolumeSvqAtMost(particleVolume[marker]);
+			long markerSvq = SolidVolume.cellVolumeSvqAtMost(particles.volume(marker));
 			if (markerSvq == 0L) continue;
 			long takeSvq = Math.min(markerSvq, remainingSvq);
 			double takeMass = takeSvq == remainingSvq ? remainingMass
-					: unitScale.kilograms(particleMass[marker]) * ((double) takeSvq / markerSvq);
+					: unitScale.kilograms(particles.mass(marker)) * ((double) takeSvq / markerSvq);
 			double takeSolverMass = unitScale.solverMass(takeMass);
 			boolean full = takeSvq == markerSvq
-					&& markerSvq == SolidVolume.cellVolumeSvqAtLeast(particleVolume[marker]);
+					&& markerSvq == SolidVolume.cellVolumeSvqAtLeast(particles.volume(marker));
 			float newVolume = full ? 0.0F
-					: phaseAdjustedMarkerVolume(particleVolume[marker], -takeSvq, "Freeze");
-			double newMass = particleMass[marker] - takeSolverMass;
-			if (!(takeMass > 0.0) || full && Math.abs(newMass) > massTolerance(particleMass[marker])
+					: phaseAdjustedMarkerVolume(particles.volume(marker), -takeSvq, "Freeze");
+			double newMass = particles.mass(marker) - takeSolverMass;
+			if (!(takeMass > 0.0) || full && Math.abs(newMass) > massTolerance(particles.mass(marker))
 					|| !full && !(newMass > 0.0)) {
 				throw new PhaseCandidateUnavailableException("Freeze batch mass/volume split is not representable");
 			}
@@ -2376,9 +2357,9 @@ public final class FlipFluidDomain {
 		double remainingMass = requestedMass;
 		for (int marker = cellMarkerTail[cell]; marker >= 0 && remainingSvq > 0L;
 				marker = particleCellPrevious[marker]) {
-			if (particleMaterialHandle[marker] != liquidHandle
+			if (particles.materialHandle(marker) != liquidHandle
 					|| chemicalParcels != null && chemicalParcels.indicator(marker)) continue;
-			long markerSvq = SolidVolume.cellVolumeSvqAtMost(particleVolume[marker]);
+			long markerSvq = SolidVolume.cellVolumeSvqAtMost(particles.volume(marker));
 			if (markerSvq == 0L) continue;
 			long takeSvq = Math.min(markerSvq, remainingSvq);
 			if (chemicalParcels != null) {
@@ -2395,14 +2376,14 @@ public final class FlipFluidDomain {
 				}
 			}
 			double takeMass = takeSvq == remainingSvq ? remainingMass
-					: unitScale.kilograms(particleMass[marker]) * ((double) takeSvq / markerSvq);
+					: unitScale.kilograms(particles.mass(marker)) * ((double) takeSvq / markerSvq);
 			double takeSolverMass = unitScale.solverMass(takeMass);
 			boolean full = takeSvq == markerSvq
-					&& markerSvq == SolidVolume.cellVolumeSvqAtLeast(particleVolume[marker]);
+					&& markerSvq == SolidVolume.cellVolumeSvqAtLeast(particles.volume(marker));
 			float newVolume = full ? 0.0F
-					: phaseAdjustedMarkerVolume(particleVolume[marker], -takeSvq, "Boiling");
-			double newMass = particleMass[marker] - takeSolverMass;
-			if (!(takeMass > 0.0) || full && Math.abs(newMass) > massTolerance(particleMass[marker])
+					: phaseAdjustedMarkerVolume(particles.volume(marker), -takeSvq, "Boiling");
+			double newMass = particles.mass(marker) - takeSolverMass;
+			if (!(takeMass > 0.0) || full && Math.abs(newMass) > massTolerance(particles.mass(marker))
 					|| !full && !(newMass > 0.0)) {
 				throw new PhaseCandidateUnavailableException("Boiling batch mass/volume split is not representable");
 			}
@@ -2433,10 +2414,10 @@ public final class FlipFluidDomain {
 	) {
 		ArrayList<ThermalStateFunction.InventoryPortion> result = new ArrayList<>();
 		for (int marker = cellMarkerHead[cell]; marker >= 0; marker = particleCellNext[marker]) {
-			if (particleMaterialHandle[marker] != liquidHandle) {
+			if (particles.materialHandle(marker) != liquidHandle) {
 				throw new ThermalPhaseBlockedException("Gas phase cell contains another liquid carrier");
 			}
-			double mass = marker == target ? targetMass : particleMass[marker];
+			double mass = marker == target ? targetMass : particles.mass(marker);
 			ChemicalMixtureRecord mixture = chemicalParcels == null ? null
 					: marker == target ? condensedMixture : chemicalParcels.record(marker);
 			result.add(liquidInventoryPortion(liquidHandle,
@@ -2464,8 +2445,8 @@ public final class FlipFluidDomain {
 					chemicalParcels.markDirtyCell(cell);
 					chemicalParcels.commitTruncate(allocation.marker(), allocation.chemicalPlan());
 				}
-				particleVolume[allocation.marker()] = allocation.newVolume();
-				particleMass[allocation.marker()] = allocation.newMass();
+				particles.setVolume(allocation.marker(), allocation.newVolume());
+				particles.setMass(allocation.marker(), allocation.newMass());
 				thermalState.commitInternalTruncate(allocation.marker(), allocation.thermalPlan());
 			}
 		}
@@ -2485,7 +2466,7 @@ public final class FlipFluidDomain {
 		CoherentPhaseStore.Group removed = thermalState.takeCoherentInternal(
 				cell, transition.lowerEnergyMaterialId(), removedSvq);
 		int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
-		int marker = particleCount;
+		int marker = particles.count();
 		spawnParticle(x, y, z, plan.meltSlot(), SolidVolume.toCellVolume(addedSvq), liquidHandle,
 				unitScale.solverMass(removed.mass()), plan.meltedMixture(), false, false);
 		thermalState.addLiquidEnergy(marker, removed.internalEnergy());
@@ -2706,11 +2687,11 @@ public final class FlipFluidDomain {
 
 	private FlipThermalState.MarkerContext createThermalMarkerContext() {
 		return new FlipThermalState.MarkerContext() {
-			@Override public int markerCount() { return particleCount; }
+			@Override public int markerCount() { return particles.count(); }
 			@Override public int cell(int marker) { return particleCellIndex(marker); }
-			@Override public int fluidMaterialHandle(int marker) { return particleMaterialHandle[marker]; }
-			@Override public double mass(int marker) { return particleMass[marker]; }
-			@Override public double volume(int marker) { return particleVolume[marker]; }
+			@Override public int fluidMaterialHandle(int marker) { return particles.materialHandle(marker); }
+			@Override public double mass(int marker) { return particles.mass(marker); }
+			@Override public double volume(int marker) { return particles.volume(marker); }
 			@Override public ChemicalMixtureRecord mixture(int marker) {
 				return chemicalParcels == null ? null : chemicalParcels.record(marker);
 			}
@@ -2887,17 +2868,17 @@ public final class FlipFluidDomain {
 
 	/** Test/command reagent injection on one marker using absolute species quanta. */
 	public void setMarkerChemical(int marker, Map<String, Long> stableAmounts, boolean indicator) {
-		if (marker < 0 || marker >= particleCount) throw new IllegalArgumentException("Unknown marker " + marker);
+		if (marker < 0 || marker >= particles.count()) throw new IllegalArgumentException("Unknown marker " + marker);
 		ChemicalMixtureRecord zeroResidual = ChemicalMixtureRecord.fromStableAmounts(
 				chemicalParcels().registry(), stableAmounts, 0.0);
 		ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(
 				chemicalParcels.registry(), stableAmounts,
-				unitScale.kilograms(particleMass[marker])
+				unitScale.kilograms(particles.mass(marker))
 						- zeroResidual.exactSpeciesMassKilograms(chemicalParcels.registry()).toDouble());
 		chemicalParcels.requireCompatible(record,
-				materialRegistry.material(particleMaterialHandle[marker]).id(), indicator);
+				materialRegistry.material(particles.materialHandle(marker)).id(), indicator);
 		if (thermalState != null) thermalState.requireReactionState(
-				marker, record, particleMass[marker], thermalMarkerContext());
+				marker, record, particles.mass(marker), thermalMarkerContext());
 		chemicalParcels.assign(marker, record, indicator);
 		chemicalParcels.markDirtyCell(particleCellIndex(marker));
 	}
@@ -2923,16 +2904,16 @@ public final class FlipFluidDomain {
 		for (int i = 0; i < cellCount; i++) solid[i] = Byte.toUnsignedInt(collisionMasks[i]) == 0xff;
 		for (int particle = 0; particle < restoredCount; particle++) {
 			int positionBase = particle * 4, velocityBase = particle * 3;
-			particleX[particle] = positionVolume[positionBase];
-			particleY[particle] = positionVolume[positionBase + 1];
-			particleZ[particle] = positionVolume[positionBase + 2];
-			particleVolume[particle] = positionVolume[positionBase + 3];
-			particleVelocityX[particle] = particleVelocities[velocityBase];
-			particleVelocityY[particle] = particleVelocities[velocityBase + 1];
-			particleVelocityZ[particle] = particleVelocities[velocityBase + 2];
+			particles.setPositionX(particle, positionVolume[positionBase]);
+			particles.setPositionY(particle, positionVolume[positionBase + 1]);
+			particles.setPositionZ(particle, positionVolume[positionBase + 2]);
+			particles.setVolume(particle, positionVolume[positionBase + 3]);
+			particles.setVelocityX(particle, particleVelocities[velocityBase]);
+			particles.setVelocityY(particle, particleVelocities[velocityBase + 1]);
+			particles.setVelocityZ(particle, particleVelocities[velocityBase + 2]);
 			setDefaultMaterialState(particle);
 		}
-		particleCount = restoredCount;
+		particles.setCount(restoredCount);
 		clearThermalBinding();
 		materialRegistry = null;
 		chemicalParcels = null;
@@ -2962,10 +2943,10 @@ public final class FlipFluidDomain {
 		restoreParticleState(state.particles());
 		double[] restoredMass = state.particleMass();
 		int[] restoredMaterial = state.materialPaletteIndex();
-		for (int particle = 0; particle < particleCount; particle++) {
-			particleMass[particle] = restoredMass[particle];
-			particleMaterialHandle[particle] = restoredMaterial[particle];
-			particlePhaseLabel[particle] = registry.phaseHandle(restoredMaterial[particle]);
+		for (int particle = 0; particle < particles.count(); particle++) {
+			particles.setMass(particle, restoredMass[particle]);
+			particles.setMaterialHandle(particle, restoredMaterial[particle]);
+			particles.setPhaseLabel(particle, registry.phaseHandle(restoredMaterial[particle]));
 		}
 		materialRegistry = registry;
 		gridDirty = true;
@@ -2985,12 +2966,12 @@ public final class FlipFluidDomain {
 				registry, unitScale, maximumParticleCount, cellCount);
 		int[] tableIndex = state.copyMarkerMixtureIndex();
 		byte[] indicator = state.copyIndicator();
-		for (int marker = 0; marker < particleCount; marker++) {
+		for (int marker = 0; marker < particles.count(); marker++) {
 			ChemicalMixtureRecord mixture = state.mixtures().get(tableIndex[marker]).toRuntime(registry);
-			restored.requireCompatible(mixture, materialRegistry.material(particleMaterialHandle[marker]).id(), indicator[marker] != 0);
+			restored.requireCompatible(mixture, materialRegistry.material(particles.materialHandle(marker)).id(), indicator[marker] != 0);
 			restored.assign(marker, mixture, indicator[marker] != 0);
 		}
-		if (!Arrays.equals(restored.speciesTotals(particleCount), state.copySpeciesTotals())) {
+		if (!Arrays.equals(restored.speciesTotals(particles.count()), state.copySpeciesTotals())) {
 			throw new IllegalArgumentException("Restored chemical species ledger mismatch");
 		}
 		chemicalParcels = restored;
@@ -3083,7 +3064,7 @@ public final class FlipFluidDomain {
 		} catch (RuntimeException failure) {
 			throw new CollisionEditBlockedException("Granular collision displacement could not be planned", failure);
 		}
-		return new CollisionEditPlan(this, List.copyOf(canonical), previousMasks, particleCount,
+		return new CollisionEditPlan(this, List.copyOf(canonical), previousMasks, particles.count(),
 				Double.doubleToRawLongBits(totalVolumeExact()), Double.doubleToRawLongBits(totalMass()), granularPlan);
 	}
 
@@ -3092,7 +3073,7 @@ public final class FlipFluidDomain {
 		if (plan == null || plan.owner != this || plan.consumed || activeCollisionPlan != null) {
 			throw new IllegalArgumentException("Collision edit plan is missing, foreign or already consumed");
 		}
-		if (particleCount != plan.particleCount
+		if (particles.count() != plan.planMarkerCount
 				|| Double.doubleToRawLongBits(totalVolumeExact()) != plan.totalVolumeBits
 				|| Double.doubleToRawLongBits(totalMass()) != plan.totalMassBits) {
 			throw new IllegalStateException("Liquid inventory changed after collision planning");
@@ -3290,8 +3271,8 @@ public final class FlipFluidDomain {
 		float clamped = Math.min(requested, effectiveOpenCellVolume(index));
 		int existingParticles = particleCountInCell(x, y, z);
 		int requiredParticles = particlesRequired(clamped);
-		if ((long) particleCount - existingParticles + requiredParticles > maximumParticleCount) {
-			throw new ParticleBudgetExceededException(requiredParticles, maximumParticleCount - particleCount + existingParticles);
+		if ((long) particles.count() - existingParticles + requiredParticles > maximumParticleCount) {
+			throw new ParticleBudgetExceededException(requiredParticles, maximumParticleCount - particles.count() + existingParticles);
 		}
 		removeParticlesInCell(x, y, z, Float.POSITIVE_INFINITY);
 		spawnCellVolume(x, y, z, clamped);
@@ -3351,11 +3332,11 @@ public final class FlipFluidDomain {
 
 	MaterialInventory materialInventory(int materialHandle) {
 		double volume = 0.0, mass = 0.0, weightedY = 0.0;
-		for (int particle = 0; particle < particleCount; particle++) {
-			if (particleMaterialHandle[particle] != materialHandle) continue;
-			volume += particleVolume[particle];
-			mass += particleMass[particle];
-			weightedY += particleY[particle] / config.cellSize() * particleVolume[particle];
+		for (int particle = 0; particle < particles.count(); particle++) {
+			if (particles.materialHandle(particle) != materialHandle) continue;
+			volume += particles.volume(particle);
+			mass += particles.mass(particle);
+			weightedY += particles.positionY(particle) / config.cellSize() * particles.volume(particle);
 		}
 		return new MaterialInventory(volume, mass, volume == 0.0 ? Double.NaN : weightedY / volume);
 	}
@@ -3373,12 +3354,12 @@ public final class FlipFluidDomain {
 		registry.material(materialHandle);
 		int cell = cellIndexChecked(x, y, z);
 		boolean found = false;
-		for (int particle = 0; particle < particleCount; particle++) {
+		for (int particle = 0; particle < particles.count(); particle++) {
 			if (particleCellIndex(particle) == cell) found = true;
 		}
 		if (!found) throw new IllegalArgumentException("Cannot assign material to an empty pressure cell");
 		bindMaterialRegistry(registry);
-		for (int particle = 0; particle < particleCount; particle++) {
+		for (int particle = 0; particle < particles.count(); particle++) {
 			if (particleCellIndex(particle) == cell) assignMarkerMaterial(particle, registry, materialHandle);
 		}
 		gridDirty = true;
@@ -3386,7 +3367,7 @@ public final class FlipFluidDomain {
 
 	/** Marker-granular package test injection; indices are intentionally not exposed as a public state contract. */
 	void setMarkerMaterial(int particle, FluidMaterialRegistry registry, int materialHandle) {
-		if (particle < 0 || particle >= particleCount) throw new IllegalArgumentException("Unknown marker index " + particle);
+		if (particle < 0 || particle >= particles.count()) throw new IllegalArgumentException("Unknown marker index " + particle);
 		if (registry == null) throw new IllegalArgumentException("Material registry must not be null");
 		registry.material(materialHandle);
 		bindMaterialRegistry(registry);
@@ -3415,31 +3396,31 @@ public final class FlipFluidDomain {
 		double previousTemperature = thermalState == null ? Double.NaN : thermalMarkerTemperature(particle);
 		SignedDyadic thermalBefore = thermalState == null ? SignedDyadic.ZERO : exactInternalEnergy();
 		FluidMaterial material = registry.material(materialHandle);
-		double mass = (double) particleVolume[particle] * material.referenceDensity();
+		double mass = (double) particles.volume(particle) * material.referenceDensity();
 		if (!(mass <= Float.MAX_VALUE)) throw new IllegalArgumentException("Material mass exceeds P2G range");
-		particleMass[particle] = mass;
-		particleMaterialHandle[particle] = materialHandle;
-		particlePhaseLabel[particle] = registry.phaseHandle(materialHandle);
+		particles.setMass(particle, mass);
+		particles.setMaterialHandle(particle, materialHandle);
+		particles.setPhaseLabel(particle, registry.phaseHandle(materialHandle));
 		if (thermalState != null) thermalState.resetMarkerTemperature(
 				particle, previousTemperature, thermalMarkerContext(), thermalBefore);
 	}
 
 	boolean hasNonDefaultMaterialState() {
 		if (materialRegistry != null) return true;
-		for (int particle = 0; particle < particleCount; particle++) {
-			if (particleMaterialHandle[particle] != 0 || particlePhaseLabel[particle] != 0) return true;
-			float referenceMass = particleVolume[particle] * config.density();
+		for (int particle = 0; particle < particles.count(); particle++) {
+			if (particles.materialHandle(particle) != 0 || particles.phaseLabel(particle) != 0) return true;
+			float referenceMass = particles.volume(particle) * config.density();
 			float tolerance = Math.max(1.0E-5F, Math.ulp(referenceMass) * 8.0F);
-			if (Math.abs(particleMass[particle] - referenceMass) > tolerance) return true;
+			if (Math.abs(particles.mass(particle) - referenceMass) > tolerance) return true;
 		}
 		return false;
 	}
 
 	boolean usesMassWeightedP2G() {
-		for (int particle = 0; particle < particleCount; particle++) {
-			double referenceMass = (double) particleVolume[particle] * config.density();
+		for (int particle = 0; particle < particles.count(); particle++) {
+			double referenceMass = (double) particles.volume(particle) * config.density();
 			double tolerance = Math.max(1.0E-9, Math.abs(referenceMass) * 1.0E-12);
-			if (Math.abs(particleMass[particle] - referenceMass) > tolerance) return true;
+			if (Math.abs(particles.mass(particle) - referenceMass) > tolerance) return true;
 		}
 		return false;
 	}
@@ -3452,9 +3433,7 @@ public final class FlipFluidDomain {
 	 * Marker positions, counts, particleVolume and particleMass are unchanged, so both exact ledgers are unchanged.
 	 */
 	public void commitHydrostaticSleep() {
-		Arrays.fill(particleVelocityX, 0, particleCount, 0.0F);
-		Arrays.fill(particleVelocityY, 0, particleCount, 0.0F);
-		Arrays.fill(particleVelocityZ, 0, particleCount, 0.0F);
+		particles.clearVelocities();
 		gridDirty = true;
 	}
 
@@ -3599,7 +3578,7 @@ public final class FlipFluidDomain {
 			int x = index % sizeX, yz = index / sizeX, y = yz % sizeY, z = yz / sizeY;
 			float requestedForCell = (float) Math.min(remaining,
 					Math.max(0.0, effectiveOpenCellVolume(index) - exactCellVolume[index]));
-			int availableMarkers = maximumParticleCount - particleCount;
+			int availableMarkers = maximumParticleCount - particles.count();
 			float markerCapacity = availableMarkers * PARTICLE_VOLUME;
 			float added = Math.min(requestedForCell, markerCapacity);
 			if (added <= 1.0E-6F) {
@@ -3643,32 +3622,32 @@ public final class FlipFluidDomain {
 		ChemicalTransferLedger drained = ChemicalTransferLedger.EMPTY;
 		if (chemicalParcels != null) {
 			ChemicalTransferLedger.Builder builder = ChemicalTransferLedger.builder(chemicalParcels.registry());
-			for (int marker = 0; marker < particleCount; marker++) builder.add(
-					materialRegistry.material(particleMaterialHandle[marker]).id(), chemicalParcels.indicator(marker),
-					particleVolume[marker], unitScale.kilograms(particleMass[marker]), chemicalParcels.record(marker));
+			for (int marker = 0; marker < particles.count(); marker++) builder.add(
+					materialRegistry.material(particles.materialHandle(marker)).id(), chemicalParcels.indicator(marker),
+					particles.volume(marker), unitScale.kilograms(particles.mass(marker)), chemicalParcels.record(marker));
 			drained = builder.build();
 			chemicalParcels.requireCanRecordEscapedSink(drained);
 		}
-		return new WaterClearPlan(particleCount, Double.doubleToRawLongBits(totalVolumeExact()),
+		return new WaterClearPlan(particles.count(), Double.doubleToRawLongBits(totalVolumeExact()),
 				Double.doubleToRawLongBits(totalMass()), drained,
-				thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particleCount));
+				thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particles.count()));
 	}
 
 	/** Commits a previously validated liquid clear; no new ledger candidate is constructed here. */
 	public void commitRemoveAllWaterExact(WaterClearPlan plan) {
-		if (plan == null || particleCount != plan.markerCount()
+		if (plan == null || particles.count() != plan.markerCount()
 				|| Double.doubleToRawLongBits(totalVolumeExact()) != plan.totalVolumeBits()
 				|| Double.doubleToRawLongBits(totalMass()) != plan.totalMassBits()
-				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particleCount))
+				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particles.count()))
 				.equals(plan.internalEnergy())) {
 			throw new IllegalStateException("Liquid inventory changed after clear planning");
 		}
 		if (chemicalParcels != null) {
 			chemicalParcels.recordEscapedSink(plan.drained());
-			chemicalParcels.clear(particleCount);
+			chemicalParcels.clear(particles.count());
 		}
 		if (thermalState != null) thermalState.recordExternalSink(plan.internalEnergy());
-		particleCount = 0;
+		particles.setCount(0);
 		gridDirty = true;
 	}
 
@@ -3708,10 +3687,10 @@ public final class FlipFluidDomain {
 	public CondensedClear commitRemoveAllCondensedExact(CondensedClearPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Condensed clear plan is missing");
 		WaterClearPlan liquid = plan.liquid();
-		if (particleCount != liquid.markerCount()
+		if (particles.count() != liquid.markerCount()
 				|| Double.doubleToRawLongBits(totalVolumeExact()) != liquid.totalVolumeBits()
 				|| Double.doubleToRawLongBits(totalMass()) != liquid.totalMassBits()
-				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particleCount))
+				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particles.count()))
 				.equals(liquid.internalEnergy())) {
 			throw new IllegalStateException("Liquid inventory changed after condensed clear planning");
 		}
@@ -3728,13 +3707,13 @@ public final class FlipFluidDomain {
 		}
 		if (chemicalParcels != null) {
 			chemicalParcels.recordEscapedSink(plan.drained());
-			chemicalParcels.clear(particleCount);
+			chemicalParcels.clear(particles.count());
 		}
 		if (thermalState != null) {
 			thermalState.recordExternalSink(liquid.internalEnergy());
 			thermalState.clearCoherentExternal(plan.coherentGroups(), plan.coherentEnergy());
 		}
-		particleCount = 0;
+		particles.setCount(0);
 		refreshCoherentOccupancy();
 		gridDirty = true;
 		return new CondensedClear(plan.coherentVolumeSvq(),
@@ -3776,7 +3755,7 @@ public final class FlipFluidDomain {
 		AirNetwork.RemapPlan gasPlan = airNetwork.planRemapNodes(
 				new double[0], List.of(), GasInventory.EMPTY, removed, List.of());
 		FlipThermalState.GasVentPlan thermalPlan = thermalState == null ? null
-				: thermalState.planGasVent(airNetwork, particleCount);
+				: thermalState.planGasVent(airNetwork, particles.count());
 		return new OperatorGasVentPlan(airNetwork.nodeCount(), removed, gasPlan, thermalPlan);
 	}
 
@@ -3861,7 +3840,7 @@ public final class FlipFluidDomain {
 		private final FlipFluidDomain owner;
 		private final List<CollisionEdit> edits;
 		private final int[] previousMasks;
-		private final int particleCount;
+		private final int planMarkerCount;
 		private final long totalVolumeBits;
 		private final long totalMassBits;
 		private final GranularCollisionPlan granular;
@@ -3869,12 +3848,12 @@ public final class FlipFluidDomain {
 
 		private CollisionEditPlan(
 				FlipFluidDomain owner, List<CollisionEdit> edits, int[] previousMasks,
-				int particleCount, long totalVolumeBits, long totalMassBits, GranularCollisionPlan granular
+				int planMarkerCount, long totalVolumeBits, long totalMassBits, GranularCollisionPlan granular
 		) {
 			this.owner = owner;
 			this.edits = edits;
 			this.previousMasks = previousMasks.clone();
-			this.particleCount = particleCount;
+			this.planMarkerCount = planMarkerCount;
 			this.totalVolumeBits = totalVolumeBits;
 			this.totalMassBits = totalMassBits;
 			this.granular = granular;
@@ -4014,7 +3993,7 @@ public final class FlipFluidDomain {
 				double allocate = Math.min(capacity, remaining);
 				if (allocate <= 0.0) continue;
 				requiredMarkers += (long) Math.ceil(allocate / PARTICLE_VOLUME);
-				if (particleCount + requiredMarkers > maximumParticleCount) {
+				if (particles.count() + requiredMarkers > maximumParticleCount) {
 					return new ExactMixtureTransfer(false, List.of());
 				}
 				int x = index % sizeX, yz = index / sizeX, y = yz % sizeY, z = yz / sizeY;
@@ -4090,7 +4069,7 @@ public final class FlipFluidDomain {
 			thermalPlan = thermalState.planExternalLiquidInsertions(thermalInsertions, internalEnergy,
 					thermalMarkerContext());
 		}
-		int firstInsertedOrdinal = particleCount;
+		int firstInsertedOrdinal = particles.count();
 		for (MaterialInsertPiece piece : insertPieces) {
 			spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), piece.slot(), piece.volume(),
 					piece.materialHandle(), piece.mass(), piece.chemical(), false, thermalPlan == null);
@@ -4165,7 +4144,7 @@ public final class FlipFluidDomain {
 					while (piece > left) piece = Math.nextDown(piece);
 					if (!(piece > 0.0F)) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 					groupPieces.add(new ChemicalPieceDraft(cellX, cellY, cellZ, piece, material));
-					if ((long) particleCount + pieces.size() + groupPieces.size() > maximumParticleCount) {
+					if ((long) particles.count() + pieces.size() + groupPieces.size() > maximumParticleCount) {
 						return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 					}
 					left -= piece;
@@ -4178,7 +4157,7 @@ public final class FlipFluidDomain {
 			int[] ordinals = new int[groupPieces.size()];
 			for (int piece = 0; piece < groupPieces.size(); piece++) {
 				weights[piece] = groupPieces.get(piece).volume();
-				ordinals[piece] = particleCount + pieces.size() + piece;
+				ordinals[piece] = particles.count() + pieces.size() + piece;
 			}
 			@SuppressWarnings("unchecked")
 			TreeMap<String, Long>[] distributed = new TreeMap[groupPieces.size()];
@@ -4225,7 +4204,7 @@ public final class FlipFluidDomain {
 			thermalPlan = thermalState.planExternalLiquidInsertions(thermalInsertions, internalEnergy,
 					thermalMarkerContext());
 		}
-		int firstInsertedOrdinal = particleCount;
+		int firstInsertedOrdinal = particles.count();
 		for (ChemicalInsertPiece piece : pieces) {
 			int slot = firstOpenSlot(cellIndex(piece.cellX(), piece.cellY(), piece.cellZ()), 0);
 			if (slot < 0) throw new IllegalStateException("Chemical insertion lost its planned open slot");
@@ -4258,8 +4237,8 @@ public final class FlipFluidDomain {
 		List<CellCandidate> cells = nearbyCells(centerX, centerY, centerZ, maxRadius);
 		boolean[] near = new boolean[cellCount]; for (CellCandidate candidate : cells) near[candidate.index()] = true;
 		double available = 0.0;
-		for (int marker = 0; marker < particleCount; marker++) if (near[particleCellIndex(marker)]) {
-			available += particleVolume[marker];
+		for (int marker = 0; marker < particles.count(); marker++) if (near[particleCellIndex(marker)]) {
+			available += particles.volume(marker);
 		}
 		if (available < volume) return new ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 
@@ -4268,9 +4247,9 @@ public final class FlipFluidDomain {
 		ChemicalTransferLedger.Builder ledger = ChemicalTransferLedger.builder(chemicalParcels.registry());
 		for (CellCandidate candidate : cells) {
 			if (remaining <= 0.0) break;
-			for (int marker = particleCount - 1; marker >= 0 && remaining > 0.0; marker--) {
+			for (int marker = particles.count() - 1; marker >= 0 && remaining > 0.0; marker--) {
 				if (particleCellIndex(marker) != candidate.index()) continue;
-				float previousVolume = particleVolume[marker];
+				float previousVolume = particles.volume(marker);
 				double take = Math.min(previousVolume, remaining);
 				float newVolume = (float) (previousVolume - take);
 				double actual = previousVolume - newVolume;
@@ -4279,12 +4258,12 @@ public final class FlipFluidDomain {
 					settlementTolerance = Math.max(settlementTolerance, Math.ulp(previousVolume));
 				}
 				if (actual <= 0.0) continue;
-				double previousMass = particleMass[marker];
+				double previousMass = particles.mass(marker);
 				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
 				double removedMass = previousMass - newMass;
 				ChemicalParcelStore.SplitPlan chemicalPlan = chemicalParcels.planTruncate(
 						marker, newVolume, previousVolume - newVolume, newMass, removedMass);
-				ledger.add(materialRegistry.material(particleMaterialHandle[marker]).id(), chemicalParcels.indicator(marker),
+				ledger.add(materialRegistry.material(particles.materialHandle(marker)).id(), chemicalParcels.indicator(marker),
 						actual, unitScale.kilograms(removedMass), chemicalPlan.removed());
 				FlipThermalState.Truncation thermalPlan = planThermalTruncate(marker, newMass,
 						chemicalPlan.kept(), thermalState == null ? Double.NaN : thermalMarkerTemperature(marker));
@@ -4302,11 +4281,11 @@ public final class FlipFluidDomain {
 			if (allocation.chemicalPlan().kept() != null) {
 				chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
 			}
-			particleVolume[allocation.particle()] = allocation.newVolume();
-			particleMass[allocation.particle()] = allocation.newMass();
+			particles.setVolume(allocation.particle(), allocation.newVolume());
+			particles.setMass(allocation.particle(), allocation.newMass());
 			commitThermalTruncate(allocation.particle(), allocation.thermalPlan());
 		}
-		for (int marker = particleCount - 1; marker >= 0; marker--) if (particleVolume[marker] == 0.0F) removeParticle(marker);
+		for (int marker = particles.count() - 1; marker >= 0; marker--) if (particles.volume(marker) == 0.0F) removeParticle(marker);
 		gridDirty = true;
 		double removedEnergy = thermalState == null ? 0.0 : SignedDyadic.sum(plan.stream()
 				.mapToDouble(allocation -> allocation.thermalPlan().removedEnergy()).toArray()).toDouble();
@@ -4351,13 +4330,13 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		for (CellCandidate candidate : cells) near[candidate.index()] = true;
 		float h = config.cellSize();
 		double available = 0.0;
-		for (int i = 0; i < particleCount; i++) {
-			if (requiredMaterialHandle >= 0 && particleMaterialHandle[i] != requiredMaterialHandle) continue;
+		for (int i = 0; i < particles.count(); i++) {
+			if (requiredMaterialHandle >= 0 && particles.materialHandle(i) != requiredMaterialHandle) continue;
 			if (chemicalParcels != null && !chemicalParcels.isCanonicalDefaultCarrier(
-					i, materialRegistry.material(particleMaterialHandle[i]).id())) continue;
-			if (!near[cellIndex((int) Math.floor(particleX[i] / h), (int) Math.floor(particleY[i] / h),
-					(int) Math.floor(particleZ[i] / h))]) continue;
-			available += particleVolume[i];
+					i, materialRegistry.material(particles.materialHandle(i)).id())) continue;
+			if (!near[cellIndex((int) Math.floor(particles.positionX(i) / h), (int) Math.floor(particles.positionY(i) / h),
+					(int) Math.floor(particles.positionZ(i) / h))]) continue;
+			available += particles.volume(i);
 		}
 		if (available < volume) return new ExactMixtureTransfer(false, List.of());
 
@@ -4367,21 +4346,21 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		int ledgerSize = materialRegistry == null ? 1 : materialRegistry.size();
 		double[] volumeBefore = new double[ledgerSize];
 		double[] massBefore = new double[ledgerSize];
-		for (int particle = 0; particle < particleCount; particle++) {
-			volumeBefore[particleMaterialHandle[particle]] += particleVolume[particle];
-			massBefore[particleMaterialHandle[particle]] += particleMass[particle];
+		for (int particle = 0; particle < particles.count(); particle++) {
+			volumeBefore[particles.materialHandle(particle)] += particles.volume(particle);
+			massBefore[particles.materialHandle(particle)] += particles.mass(particle);
 		}
 		java.util.Set<Integer> changedHandles = new java.util.TreeSet<>();
 		for (CellCandidate candidate : cells) {
 			if (remaining <= 0.0) break;
 			int cell = candidate.index();
-			for (int i = particleCount - 1; i >= 0; i--) {
+			for (int i = particles.count() - 1; i >= 0; i--) {
 				if (remaining <= 0.0) break;
 				if (particleCellIndex(i) != cell
-						|| requiredMaterialHandle >= 0 && particleMaterialHandle[i] != requiredMaterialHandle) continue;
+						|| requiredMaterialHandle >= 0 && particles.materialHandle(i) != requiredMaterialHandle) continue;
 				if (chemicalParcels != null && !chemicalParcels.isCanonicalDefaultCarrier(
-						i, materialRegistry.material(particleMaterialHandle[i]).id())) continue;
-				float previousVolume = particleVolume[i];
+						i, materialRegistry.material(particles.materialHandle(i)).id())) continue;
+				float previousVolume = particles.volume(i);
 				double take = Math.min(previousVolume, remaining);
 				float newVolume = (float) (previousVolume - take);
 				double actual = previousVolume - newVolume;
@@ -4394,9 +4373,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 					settlementTolerance = Math.max(settlementTolerance, Math.ulp(previousVolume));
 				}
 				if (actual <= 0.0) continue;
-				double previousMass = particleMass[i];
+				double previousMass = particles.mass(i);
 				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
-				int handle = particleMaterialHandle[i];
+				int handle = particles.materialHandle(i);
 				ChemicalParcelStore.SplitPlan chemicalPlan = chemicalParcels == null ? null
 						: chemicalParcels.planTruncate(i, newVolume, previousVolume - newVolume,
 						newMass, previousMass - newMass);
@@ -4413,21 +4392,21 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			if (chemicalParcels != null && allocation.chemicalPlan().kept() != null) {
 				chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
 			}
-			particleVolume[allocation.particle()] = allocation.newVolume();
-			particleMass[allocation.particle()] = allocation.newMass();
+			particles.setVolume(allocation.particle(), allocation.newVolume());
+			particles.setMass(allocation.particle(), allocation.newMass());
 			commitThermalTruncate(allocation.particle(), allocation.thermalPlan());
 		}
 		// Do not compact during indexed writes: removeParticle swaps the last marker into the current
 		// index and could invalidate a later planned ordinal. Compact only after every ledger edit.
-		for (int particle = particleCount - 1; particle >= 0; particle--) {
-			if (particleVolume[particle] == 0.0F) removeParticle(particle);
+		for (int particle = particles.count() - 1; particle >= 0; particle--) {
+			if (particles.volume(particle) == 0.0F) removeParticle(particle);
 		}
 		gridDirty = true;
 		double[] volumeAfter = new double[ledgerSize];
 		double[] massAfter = new double[ledgerSize];
-		for (int particle = 0; particle < particleCount; particle++) {
-			volumeAfter[particleMaterialHandle[particle]] += particleVolume[particle];
-			massAfter[particleMaterialHandle[particle]] += particleMass[particle];
+		for (int particle = 0; particle < particles.count(); particle++) {
+			volumeAfter[particles.materialHandle(particle)] += particles.volume(particle);
+			massAfter[particles.materialHandle(particle)] += particles.mass(particle);
 		}
 		List<MaterialPortion> result = new java.util.ArrayList<>(changedHandles.size());
 		for (int handle : changedHandles) {
@@ -4689,18 +4668,19 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		double reseedInitialKineticEnergy = captureMechanicalAudit ? particleKineticEnergyJoules() : 0.0;
 		if (captureMechanicalAudit) mechanicalAudit.carrierInventoryTransferJoules +=
 				reseedInitialKineticEnergy - carrierTransferInitialKineticEnergy;
-		ensureParticleCapacity(particleReseeder.capacityUpperBound(particleCount));
+		ensureParticleCapacity(particleReseeder.capacityUpperBound(particles.count()));
 		SignedDyadic thermalBeforeReseed = thermalState == null ? SignedDyadic.ZERO : exactInternalEnergy();
+		LiquidParticleStore.DirectArrays markerArrays = particles.directArrays();
 		FlipParticleReseeder.Result reseeding = particleReseeder.reseed(
 				solid,
-				particleX, particleY, particleZ,
-				particleVelocityX, particleVelocityY, particleVelocityZ,
-				particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel, chemicalParcels,
+				markerArrays.positionX, markerArrays.positionY, markerArrays.positionZ,
+				markerArrays.velocityX, markerArrays.velocityY, markerArrays.velocityZ,
+				markerArrays.volume, markerArrays.mass, markerArrays.materialHandle, markerArrays.phaseLabel, chemicalParcels,
 				thermalState == null ? null : thermalReseedAdapter(),
-				particleCount, usesMassWeightedP2G(),
+				particles.count(), usesMassWeightedP2G(),
 				this::markerPositionAllowed
 		);
-		particleCount = reseeding.particleCount();
+		particles.setCount(reseeding.particleCount());
 		double finalParticleKineticEnergy = captureMechanicalAudit ? particleKineticEnergyJoules() : 0.0;
 		if (captureMechanicalAudit) mechanicalAudit.reseedTransferJoules +=
 				finalParticleKineticEnergy - reseedInitialKineticEnergy;
@@ -4722,11 +4702,11 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private double particleKineticEnergyJoules() {
 		double energy = 0.0;
-		for (int marker = 0; marker < particleCount; marker++) {
-			double speedSquared = particleVelocityX[marker] * (double) particleVelocityX[marker]
-					+ particleVelocityY[marker] * (double) particleVelocityY[marker]
-					+ particleVelocityZ[marker] * (double) particleVelocityZ[marker];
-			energy += 0.5 * unitScale.kilograms(particleMass[marker]) * speedSquared;
+		for (int marker = 0; marker < particles.count(); marker++) {
+			double speedSquared = particles.velocityX(marker) * (double) particles.velocityX(marker)
+					+ particles.velocityY(marker) * (double) particles.velocityY(marker)
+					+ particles.velocityZ(marker) * (double) particles.velocityZ(marker);
+			energy += 0.5 * unitScale.kilograms(particles.mass(marker)) * speedSquared;
 		}
 		if (!(Double.isFinite(energy) && energy >= 0.0)) {
 			throw new ArithmeticException("Particle kinetic-energy audit is invalid");
@@ -4736,8 +4716,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private double gravitationalPotentialEnergyJoules() {
 		double energy = 0.0;
-		for (int marker = 0; marker < particleCount; marker++) {
-			energy += unitScale.kilograms(particleMass[marker]) * config.gravity() * particleY[marker];
+		for (int marker = 0; marker < particles.count(); marker++) {
+			energy += unitScale.kilograms(particles.mass(marker)) * config.gravity() * particles.positionY(marker);
 		}
 		if (!(Double.isFinite(energy) && energy >= 0.0)) {
 			throw new ArithmeticException("Particle gravitational-potential audit is invalid");
@@ -4794,7 +4774,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			Arrays.fill(granularCarrierMaterialByCell, -1);
 			Arrays.fill(granularCarrierVolumeByCell, -1.0);
 		}
-		for (int i = 0; i < particleCount; i++) {
+		for (int i = 0; i < particles.count(); i++) {
 			int particleCell = particleCellIndex(i);
 			int previous = cellMarkerTail[particleCell];
 			particleCellPrevious[i] = previous;
@@ -4803,23 +4783,23 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			else particleCellNext[previous] = i;
 			cellMarkerTail[particleCell] = i;
 			markerCount[particleCell]++;
-			exactCellMarkerVolume[particleCell] += particleVolume[i];
-			exactCellMarkerMass[particleCell] += particleMass[i];
-			addCellPhaseVolume(particleCell, particlePhaseLabel[i], particleVolume[i]);
+			exactCellMarkerVolume[particleCell] += particles.volume(i);
+			exactCellMarkerMass[particleCell] += particles.mass(i);
+			addCellPhaseVolume(particleCell, particles.phaseLabel(i), particles.volume(i));
 			if (granularCarrierMaterialByCell != null && granularInventoryPresent
-					&& (particleVolume[i] > granularCarrierVolumeByCell[particleCell]
-					|| particleVolume[i] == granularCarrierVolumeByCell[particleCell]
-					&& particleMaterialHandle[i] < granularCarrierMaterialByCell[particleCell])) {
-				granularCarrierVolumeByCell[particleCell] = particleVolume[i];
-				granularCarrierMaterialByCell[particleCell] = particleMaterialHandle[i];
+					&& (particles.volume(i) > granularCarrierVolumeByCell[particleCell]
+					|| particles.volume(i) == granularCarrierVolumeByCell[particleCell]
+					&& particles.materialHandle(i) < granularCarrierMaterialByCell[particleCell])) {
+				granularCarrierVolumeByCell[particleCell] = particles.volume(i);
+				granularCarrierMaterialByCell[particleCell] = particles.materialHandle(i);
 			}
-			freeSurfaceGeometry.addExactVolume(particleCell, particleVolume[i]);
-			splatCenter(particleX[i], particleY[i], particleZ[i], particleVolume[i]);
-			splatPressureVolume(particleX[i], particleY[i], particleZ[i], particleVolume[i]);
-			float transferWeight = variableDensityActive ? (float) particleMass[i] : particleVolume[i];
-			splatFaceField(velocityX, velocityWeightX, 0, particleX[i], particleY[i], particleZ[i], particleVelocityX[i], transferWeight);
-			splatFaceField(velocityY, velocityWeightY, 1, particleX[i], particleY[i], particleZ[i], particleVelocityY[i], transferWeight);
-			splatFaceField(velocityZ, velocityWeightZ, 2, particleX[i], particleY[i], particleZ[i], particleVelocityZ[i], transferWeight);
+			freeSurfaceGeometry.addExactVolume(particleCell, particles.volume(i));
+			splatCenter(particles.positionX(i), particles.positionY(i), particles.positionZ(i), particles.volume(i));
+			splatPressureVolume(particles.positionX(i), particles.positionY(i), particles.positionZ(i), particles.volume(i));
+			float transferWeight = variableDensityActive ? (float) particles.mass(i) : particles.volume(i);
+			splatFaceField(velocityX, velocityWeightX, 0, particles.positionX(i), particles.positionY(i), particles.positionZ(i), particles.velocityX(i), transferWeight);
+			splatFaceField(velocityY, velocityWeightY, 1, particles.positionX(i), particles.positionY(i), particles.positionZ(i), particles.velocityY(i), transferWeight);
+			splatFaceField(velocityZ, velocityWeightZ, 2, particles.positionX(i), particles.positionY(i), particles.positionZ(i), particles.velocityZ(i), transferWeight);
 		}
 		for (int cell = 0; cell < cellCount; cell++) if (markerCount[cell] > 0) {
 			cellDensity[cell] = exactCellMarkerMass[cell] / exactCellMarkerVolume[cell];
@@ -4859,7 +4839,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		Arrays.fill(cellMarkerHead, -1);
 		Arrays.fill(cellMarkerTail, -1);
 		Arrays.fill(exactCellMarkerVolume, 0.0);
-		for (int marker = 0; marker < particleCount; marker++) {
+		for (int marker = 0; marker < particles.count(); marker++) {
 			int cell = particleCellIndex(marker);
 			int previous = cellMarkerTail[cell];
 			particleCellPrevious[marker] = previous;
@@ -4868,8 +4848,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			else particleCellNext[previous] = marker;
 			cellMarkerTail[cell] = marker;
 			markerCount[cell]++;
-			exactCellMarkerVolume[cell] += particleVolume[marker];
-			splatCenter(particleX[marker], particleY[marker], particleZ[marker], particleVolume[marker]);
+			exactCellMarkerVolume[cell] += particles.volume(marker);
+			splatCenter(particles.positionX(marker), particles.positionY(marker), particles.positionZ(marker), particles.volume(marker));
 		}
 	}
 
@@ -4963,12 +4943,13 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		} catch (IllegalArgumentException invalid) {
 			throw new ThermalTransportBlockedException(invalid.getMessage(), invalid);
 		}
+		LiquidParticleStore.DirectArrays reactionArrays = particles.directArrays();
 		ChemicalParcelStore.ReactionStats chemistry = chemicalParcels == null
 				? new ChemicalParcelStore.ReactionStats(0, 0, 0)
 				: chemicalParcels.reactDirtyCells(
-						sizeX, sizeY, sizeZ, config.cellSize(), particleX, particleY, particleZ,
-						particleMass, particleMaterialHandle,
-						handle -> materialRegistry.material(handle).id(), particleCount,
+						sizeX, sizeY, sizeZ, config.cellSize(), reactionArrays.positionX, reactionArrays.positionY, reactionArrays.positionZ,
+						reactionArrays.mass, reactionArrays.materialHandle,
+						handle -> materialRegistry.material(handle).id(), particles.count(),
 						thermalState == null ? (marker, mixture, mass) -> { }
 								: (marker, mixture, mass) -> thermalState.requireReactionState(
 										marker, mixture, mass, thermalMarkerContext()));
@@ -5456,7 +5437,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	int particleCellIndex(int particle) {
-		return particleCellIndex(particleX[particle], particleY[particle], particleZ[particle]);
+		return particleCellIndex(particles.positionX(particle), particles.positionY(particle), particles.positionZ(particle));
 	}
 
 	private int particleCellIndex(float positionX, float positionY, float positionZ) {
@@ -5864,8 +5845,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private int calculateSubsteps(float dt) {
 		float maximum = 0.0F;
-		for (int i = 0; i < particleCount; i++) {
-			maximum = Math.max(maximum, Math.abs(particleVelocityX[i]) + Math.abs(particleVelocityY[i]) + Math.abs(particleVelocityZ[i]));
+		for (int i = 0; i < particles.count(); i++) {
+			maximum = Math.max(maximum, Math.abs(particles.velocityX(i)) + Math.abs(particles.velocityY(i)) + Math.abs(particles.velocityZ(i)));
 		}
 		if (granularParcels != null) for (int index = 0; index < granularParcels.count(); index++) {
 			GranularParcelStore.Parcel parcel = granularParcels.parcel(index);
@@ -6006,29 +5987,29 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 		double weightedVolume = 0.0;
 		int coupledMarkers = 0;
-		for (int marker = 0; marker < particleCount; marker++) {
+		for (int marker = 0; marker < particles.count(); marker++) {
 			double weight = movingBodyWeight(request, marker);
 			if (weight <= 0.0) continue;
-			weightedVolume += weight * particleVolume[marker];
+			weightedVolume += weight * particles.volume(marker);
 			coupledMarkers++;
 		}
 		if (!(weightedVolume > 0.0)) return MovingBodyFluidCoupling.Result.NONE;
 		double volumeScale = Math.min(1.0, requestedCellVolume / weightedVolume);
 		double impulseX = 0.0, impulseY = 0.0, impulseZ = 0.0, coupledVolume = 0.0;
 		boolean changed = false;
-		for (int marker = 0; marker < particleCount; marker++) {
+		for (int marker = 0; marker < particles.count(); marker++) {
 			double weight = movingBodyWeight(request, marker);
 			double blend = volumeScale * weight;
 			if (blend <= 0.0) continue;
-			float oldX = particleVelocityX[marker], oldY = particleVelocityY[marker], oldZ = particleVelocityZ[marker];
+			float oldX = particles.velocityX(marker), oldY = particles.velocityY(marker), oldZ = particles.velocityZ(marker);
 			float newX = (float) (oldX + blend * (request.velocityXMetresPerSecond() - oldX));
 			float newY = (float) (oldY + blend * (request.velocityYMetresPerSecond() - oldY));
 			float newZ = (float) (oldZ + blend * (request.velocityZMetresPerSecond() - oldZ));
-			particleVelocityX[marker] = newX; particleVelocityY[marker] = newY; particleVelocityZ[marker] = newZ;
-			impulseX += particleMass[marker] * (newX - oldX);
-			impulseY += particleMass[marker] * (newY - oldY);
-			impulseZ += particleMass[marker] * (newZ - oldZ);
-			coupledVolume += blend * particleVolume[marker];
+			particles.setVelocityX(marker, newX); particles.setVelocityY(marker, newY); particles.setVelocityZ(marker, newZ);
+			impulseX += particles.mass(marker) * (newX - oldX);
+			impulseY += particles.mass(marker) * (newY - oldY);
+			impulseZ += particles.mass(marker) * (newZ - oldZ);
+			coupledVolume += blend * particles.volume(marker);
 			changed |= newX != oldX || newY != oldY || newZ != oldZ;
 		}
 		if (changed) gridDirty = true;
@@ -6038,9 +6019,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private double movingBodyWeight(MovingBodyFluidCoupling.Request request, int marker) {
 		return MovingBodyFluidCoupling.kernelWeight(
-				particleX[marker] - request.localXMetres(),
-				particleY[marker] - request.localYMetres(),
-				particleZ[marker] - request.localZMetres(), config.cellSize());
+				particles.positionX(marker) - request.localXMetres(),
+				particles.positionY(marker) - request.localYMetres(),
+				particles.positionZ(marker) - request.localZMetres(), config.cellSize());
 	}
 
 	private static void requireFiniteMarkerVelocity(double velocity) {
@@ -6051,13 +6032,13 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	/** Adds the standard Boussinesq density correction to the existing gravity face impulse. */
 	private void applyThermalBuoyancy(float dt) {
-		if (thermalState == null || particleCount == 0 || config.gravity() == 0.0F) return;
+		if (thermalState == null || particles.count() == 0 || config.gravity() == 0.0F) return;
 		Arrays.fill(thermalBuoyancySum, 0.0);
 		Arrays.fill(thermalBuoyancyVolume, 0.0);
-		for (int marker = 0; marker < particleCount; marker++) {
+		for (int marker = 0; marker < particles.count(); marker++) {
 			int cell = particleCellIndex(marker);
-			double markerVolume = particleVolume[marker];
-			String carrier = materialRegistry.material(particleMaterialHandle[marker]).id();
+			double markerVolume = particles.volume(marker);
+			String carrier = materialRegistry.material(particles.materialHandle(marker)).id();
 			double relative = LiquidThermalExpansion.require(carrier)
 					.relativeBuoyancy(thermalMarkerTemperature(marker));
 			thermalBuoyancySum[cell] += markerVolume * relative;
@@ -6084,10 +6065,10 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 		@SuppressWarnings("unchecked")
 		TreeMap<Integer, List<Integer>>[] liquidByPhase = new TreeMap[cellCount];
-		for (int marker = 0; marker < particleCount; marker++) {
+		for (int marker = 0; marker < particles.count(); marker++) {
 			int cell = particleCellIndex(marker); if (!dirty[cell]) continue;
 			int phase = chemicalParcels.registry().phaseHandleForMaterial(
-					materialRegistry.material(particleMaterialHandle[marker]).id());
+					materialRegistry.material(particles.materialHandle(marker)).id());
 			if (liquidByPhase[cell] == null) liquidByPhase[cell] = new TreeMap<>();
 			liquidByPhase[cell].computeIfAbsent(phase, ignored -> new ArrayList<>()).add(marker);
 		}
@@ -6111,7 +6092,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						"Solid-liquid rule is below one representable transfer extent");
 				List<GranularPhaseTransferEngine.LiquidParcel> liquid = new ArrayList<>(markers.size());
 				for (int marker : markers) liquid.add(new GranularPhaseTransferEngine.LiquidParcel(marker,
-						particleVolume[marker], particleMass[marker], chemicalParcels.record(marker)));
+						particles.volume(marker), particles.mass(marker), chemicalParcels.record(marker)));
 				GranularPhaseTransferEngine.Plan plan = granularPhaseTransfer.plan(rule, liquid, existingExtent, perStepExtent);
 				if (plan.changed() && !plan.precipitation() && accessible != null
 						&& -plan.signedExtent() > accessible.selected().extent()) {
@@ -6195,7 +6176,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		long spawnSequence = ((long) cell << 16) + granularParcels.count();
 		GranularCouplingFields.Position position = granularCollision.spawnPosition(
 				x, y, z, plan.signedSolidSvq(), spawnSequence,
-				particleX[carrierMarker], particleY[carrierMarker], particleZ[carrierMarker]);
+				particles.positionX(carrierMarker), particles.positionY(carrierMarker), particles.positionZ(carrierMarker));
 		if (position == null) {
 			throw new GranularPhaseTransferEngine.BlockedException("Precipitation cell has no collision-valid spawn point");
 		}
@@ -6226,7 +6207,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 		int composition = solidCompositions.create(plan.transferredComposition());
 		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(position.x(), position.y(), position.z(),
-				particleVelocityX[carrierMarker], particleVelocityY[carrierMarker], particleVelocityZ[carrierMarker],
+				particles.velocityX(carrierMarker), particles.velocityY(carrierMarker), particles.velocityZ(carrierMarker),
 				plan.signedSolidSvq(), plan.signedSolidMass(), material,
 				composition, 0, (byte) 0);
 		if (!granularParcels.canAdd(parcel)) {
@@ -6253,8 +6234,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			GranularCouplingFields.Position spawned, int carrierMarker, long[] occupiedBefore
 	) {
 		long maximum = granularRegistry.material(material).maximumActiveParcelSvq();
-		float velocityX = particleVelocityX[carrierMarker], velocityY = particleVelocityY[carrierMarker];
-		float velocityZ = particleVelocityZ[carrierMarker];
+		float velocityX = particles.velocityX(carrierMarker), velocityY = particles.velocityY(carrierMarker);
+		float velocityZ = particles.velocityZ(carrierMarker);
 		float maximumVelocityDelta = granularMergeVelocityDelta();
 		for (int parcelIndex = 0; parcelIndex < granularParcels.count(); parcelIndex++) {
 			GranularParcelStore.Parcel existing = granularParcels.parcel(parcelIndex);
@@ -6293,13 +6274,13 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	private int precipitationCarrierMarker(int cell, GranularPhaseTransferEngine.Plan plan) {
 		int candidates = 0;
 		for (GranularPhaseTransferEngine.MarkerUpdate update : plan.markerUpdates()) {
-			if (particleVolume[update.marker()] > update.cellVolume()) candidates++;
+			if (particles.volume(update.marker()) > update.cellVolume()) candidates++;
 		}
 		if (candidates == 0) throw new GranularPhaseTransferEngine.BlockedException(
 				"Precipitation did not remove volume from a carrier marker");
 		int selected = Math.floorMod((long) cell * 31L + granularParcels.count(), candidates);
 		for (GranularPhaseTransferEngine.MarkerUpdate update : plan.markerUpdates()) {
-			if (particleVolume[update.marker()] <= update.cellVolume()) continue;
+			if (particles.volume(update.marker()) <= update.cellVolume()) continue;
 			if (selected-- == 0) return update.marker();
 		}
 		throw new IllegalStateException("Precipitation carrier selection changed during planning");
@@ -6374,7 +6355,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		SignedDyadic delta = cellVolumeDyadic(plan.signedSolidSvq());
 		for (GranularPhaseTransferEngine.MarkerUpdate update : plan.markerUpdates()) {
 			delta = delta.add(SignedDyadic.of(update.cellVolume()))
-					.subtract(SignedDyadic.of(particleVolume[update.marker()]));
+					.subtract(SignedDyadic.of(particles.volume(update.marker())));
 		}
 		return delta;
 	}
@@ -6431,8 +6412,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private void applyMarkerUpdates(GranularPhaseTransferEngine.Plan plan) {
 		for (GranularPhaseTransferEngine.MarkerUpdate update : plan.markerUpdates()) {
-			particleVolume[update.marker()] = update.cellVolume();
-			particleMass[update.marker()] = update.mass();
+			particles.setVolume(update.marker(), update.cellVolume());
+			particles.setMass(update.marker(), update.mass());
 		}
 	}
 
@@ -7046,32 +7027,33 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	private void gridToParticles() {
-		for (int i = 0; i < particleCount; i++) {
-			float x = particleX[i], y = particleY[i], z = particleZ[i];
+		for (int i = 0; i < particles.count(); i++) {
+			float x = particles.positionX(i), y = particles.positionY(i), z = particles.positionZ(i);
 			float picX = sampleX(velocityX, x, y, z), picY = sampleY(velocityY, x, y, z), picZ = sampleZ(velocityZ, x, y, z);
 			float deltaX = picX - sampleX(p2gVelocityX, x, y, z);
 			float deltaY = picY - sampleY(p2gVelocityY, x, y, z);
 			float deltaZ = picZ - sampleZ(p2gVelocityZ, x, y, z);
-			particleVelocityX[i] = lerp(picX, particleVelocityX[i] + deltaX, FLIP_RATIO);
-			particleVelocityY[i] = lerp(picY, particleVelocityY[i] + deltaY, FLIP_RATIO);
-			particleVelocityZ[i] = lerp(picZ, particleVelocityZ[i] + deltaZ, FLIP_RATIO);
+			particles.setVelocityX(i, lerp(picX, particles.velocityX(i) + deltaX, FLIP_RATIO));
+			particles.setVelocityY(i, lerp(picY, particles.velocityY(i) + deltaY, FLIP_RATIO));
+			particles.setVelocityZ(i, lerp(picZ, particles.velocityZ(i) + deltaZ, FLIP_RATIO));
 		}
 	}
 
 	private void advectParticles(float dt) {
 		int chemicalMovingCount = 0;
 		if (chemicalParcels != null) {
-			for (int marker = 0; marker < particleCount; marker++) {
-				if (particleVelocityX[marker] == 0.0F && particleVelocityY[marker] == 0.0F
-						&& particleVelocityZ[marker] == 0.0F) continue;
+			for (int marker = 0; marker < particles.count(); marker++) {
+				if (particles.velocityX(marker) == 0.0F && particles.velocityY(marker) == 0.0F
+						&& particles.velocityZ(marker) == 0.0F) continue;
 				chemicalPreviousCells[marker] = particleCellIndex(marker);
 				chemicalMovingMarkers[chemicalMovingCount++] = marker;
 			}
 		}
+		LiquidParticleStore.DirectArrays advectArrays = particles.directArrays();
 		particleCollision.advect(
-				particleX, particleY, particleZ,
-				particleVelocityX, particleVelocityY, particleVelocityZ,
-				particleCount, dt
+				advectArrays.positionX, advectArrays.positionY, advectArrays.positionZ,
+				advectArrays.velocityX, advectArrays.velocityY, advectArrays.velocityZ,
+				particles.count(), dt
 		);
 		for (int moving = 0; moving < chemicalMovingCount; moving++) {
 			int marker = chemicalMovingMarkers[moving];
@@ -7101,8 +7083,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private void spawnCellVolume(int x, int y, int z, float amount) {
 		int requiredParticles = particlesRequired(amount);
-		if ((long) particleCount + requiredParticles > maximumParticleCount) {
-			throw new ParticleBudgetExceededException(requiredParticles, maximumParticleCount - particleCount);
+		if ((long) particles.count() + requiredParticles > maximumParticleCount) {
+			throw new ParticleBudgetExceededException(requiredParticles, maximumParticleCount - particles.count());
 		}
 		float remaining = amount;
 		int slot = firstOpenSlot(cellIndex(x, y, z), 0);
@@ -7149,10 +7131,10 @@ private void spawnParticle(
  int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
  ChemicalMixtureRecord chemicalMixture, boolean indicator, boolean thermalExternal
  ) {
-if (particleCount >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
+if (particles.count() >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
 if (!(Float.isFinite(amount) && amount > 0.0F)) throw new IllegalArgumentException("Marker volume must be finite and positive");
 if (!(Double.isFinite(mass) && mass > 0.0)) throw new IllegalArgumentException("Marker mass must be finite and positive");
-ensureParticleCapacity(particleCount + 1);
+ensureParticleCapacity(particles.count() + 1);
 float h = config.cellSize();
 float radiusFraction = 0.45F;
 float ox = (slot & 1) == 0 ? 0.25F : 0.75F;
@@ -7164,32 +7146,32 @@ if (cellY == 0 || solid[cellIndex(cellX, cellY - 1, cellZ)]) oy = Math.max(oy, r
 if (cellY + 1 == sizeY || solid[cellIndex(cellX, cellY + 1, cellZ)]) oy = Math.min(oy, 1.0F - radiusFraction);
 if (cellZ == 0 || solid[cellIndex(cellX, cellY, cellZ - 1)]) oz = Math.max(oz, radiusFraction);
 if (cellZ + 1 == sizeZ || solid[cellIndex(cellX, cellY, cellZ + 1)]) oz = Math.min(oz, 1.0F - radiusFraction);
-particleX[particleCount] = (cellX + ox) * h;
-particleY[particleCount] = (cellY + oy) * h;
-particleZ[particleCount] = (cellZ + oz) * h;
-particleVelocityX[particleCount] = 0.0F;
-particleVelocityY[particleCount] = 0.0F;
-particleVelocityZ[particleCount] = 0.0F;
-particleVolume[particleCount] = amount;
+particles.setPositionX(particles.count(), (cellX + ox) * h);
+particles.setPositionY(particles.count(), (cellY + oy) * h);
+particles.setPositionZ(particles.count(), (cellZ + oz) * h);
+particles.setVelocityX(particles.count(), 0.0F);
+particles.setVelocityY(particles.count(), 0.0F);
+particles.setVelocityZ(particles.count(), 0.0F);
+particles.setVolume(particles.count(), amount);
 if (materialRegistry != null) materialRegistry.material(materialHandle);
 else if (materialHandle != 0) throw new IllegalArgumentException("Material handle requires a bound material registry");
-particleMass[particleCount] = mass;
-particleMaterialHandle[particleCount] = materialHandle;
-particlePhaseLabel[particleCount] = materialRegistry == null ? 0 : materialRegistry.phaseHandle(materialHandle);
+particles.setMass(particles.count(), mass);
+particles.setMaterialHandle(particles.count(), materialHandle);
+particles.setPhaseLabel(particles.count(), materialRegistry == null ? 0 : materialRegistry.phaseHandle(materialHandle));
 if (chemicalParcels != null) {
 if (chemicalMixture == null) chemicalParcels.assignDefault(
-particleCount, materialRegistry.material(materialHandle).id(), amount, config.cellSize(), mass, false);
+particles.count(), materialRegistry.material(materialHandle).id(), amount, config.cellSize(), mass, false);
 else {
 chemicalParcels.requireCompatible(chemicalMixture, materialRegistry.material(materialHandle).id(), indicator);
-chemicalParcels.assign(particleCount, chemicalMixture, indicator);
+chemicalParcels.assign(particles.count(), chemicalMixture, indicator);
 }
 chemicalParcels.markDirtyCell(cellIndex(cellX, cellY, cellZ));
 }
 		if (thermalState != null) {
-			if (thermalExternal) thermalState.addExternalMarker(particleCount, thermalMarkerContext());
-			else thermalState.addInternalMarker(particleCount, 0.0);
+			if (thermalExternal) thermalState.addExternalMarker(particles.count(), thermalMarkerContext());
+			else thermalState.addInternalMarker(particles.count(), 0.0);
 		}
- particleCount++;
+ particles.incrementCount();
  }
 
 private void spawnChemicalParticle(
@@ -7220,11 +7202,11 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			RemovedMaterialLedger removedMaterials, RemovedThermalEnergy removedThermal
 	) {
 		float h = config.cellSize(), removed = 0.0F;
-		for (int i = particleCount - 1; i >= 0 && removed < maximum; i--) {
-			if ((int) Math.floor(particleX[i] / h) != cellX || (int) Math.floor(particleY[i] / h) != cellY || (int) Math.floor(particleZ[i] / h) != cellZ) continue;
-			float previousVolume = particleVolume[i];
+		for (int i = particles.count() - 1; i >= 0 && removed < maximum; i--) {
+			if ((int) Math.floor(particles.positionX(i) / h) != cellX || (int) Math.floor(particles.positionY(i) / h) != cellY || (int) Math.floor(particles.positionZ(i) / h) != cellZ) continue;
+			float previousVolume = particles.volume(i);
 			float take = Math.min(previousVolume, maximum - removed);
-			double previousMass = particleMass[i];
+			double previousMass = particles.mass(i);
 			double previousTemperature = thermalState == null ? Double.NaN : thermalMarkerTemperature(i);
 			float newVolume = previousVolume - take;
 			if (newVolume <= 1.0E-6F) {
@@ -7238,7 +7220,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 				chemicalPlan = chemicalParcels.planTruncate(
 						i, newVolume, take, newMass, previousMass - newMass);
 				if (removedChemistry != null) removedChemistry.add(
-						materialRegistry.material(particleMaterialHandle[i]).id(), chemicalParcels.indicator(i),
+						materialRegistry.material(particles.materialHandle(i)).id(), chemicalParcels.indicator(i),
 						take, unitScale.kilograms(previousMass - newMass), chemicalPlan.removed());
 				if (newVolume > 0.0F) {
 					chemicalParcels.commitTruncate(i, chemicalPlan);
@@ -7247,13 +7229,13 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			FlipThermalState.Truncation thermalPlan = planThermalTruncate(i, newMass,
 					chemicalPlan == null ? null : chemicalPlan.kept(), previousTemperature);
 			if (removedMaterials != null) removedMaterials.add(
-					particleMaterialHandle[i], take, previousMass - newMass);
+					particles.materialHandle(i), take, previousMass - newMass);
 			if (removedThermal != null && thermalPlan != null) removedThermal.add(thermalPlan.removedEnergy());
-			particleVolume[i] = newVolume;
-			particleMass[i] = newMass;
+			particles.setVolume(i, newVolume);
+			particles.setMass(i, newMass);
 			commitThermalTruncate(i, thermalPlan);
 			removed += take;
-			if (particleVolume[i] <= 1.0E-6F) removeParticle(i);
+			if (particles.volume(i) <= 1.0E-6F) removeParticle(i);
 		}
 		return removed;
 	}
@@ -7264,28 +7246,28 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			RemovedMaterialLedger removedMaterials, RemovedThermalEnergy removedThermal
 	) {
 		float h = config.cellSize(), removed = 0.0F;
-		for (int particle = particleCount - 1; particle >= 0; particle--) {
-			if ((int) Math.floor(particleX[particle] / h) != cellX
-					|| (int) Math.floor(particleY[particle] / h) != cellY
-					|| (int) Math.floor(particleZ[particle] / h) != cellZ) continue;
-			float localX = particleX[particle] / h - cellX;
-			float localY = particleY[particle] / h - cellY;
-			float localZ = particleZ[particle] / h - cellZ;
+		for (int particle = particles.count() - 1; particle >= 0; particle--) {
+			if ((int) Math.floor(particles.positionX(particle) / h) != cellX
+					|| (int) Math.floor(particles.positionY(particle) / h) != cellY
+					|| (int) Math.floor(particles.positionZ(particle) / h) != cellZ) continue;
+			float localX = particles.positionX(particle) / h - cellX;
+			float localY = particles.positionY(particle) / h - cellY;
+			float localZ = particles.positionZ(particle) / h - cellZ;
 			int microX = Math.min(1, Math.max(0, (int) Math.floor(localX * 2.0F)));
 			int microY = Math.min(1, Math.max(0, (int) Math.floor(localY * 2.0F)));
 			int microZ = Math.min(1, Math.max(0, (int) Math.floor(localZ * 2.0F)));
 			int bit = 1 << (microX + 2 * (microY + 2 * microZ));
 			if ((microMask & bit) == 0) continue;
 			if (chemicalParcels != null && removedChemistry != null) removedChemistry.add(
-					materialRegistry.material(particleMaterialHandle[particle]).id(), chemicalParcels.indicator(particle),
-					particleVolume[particle], unitScale.kilograms(particleMass[particle]),
+					materialRegistry.material(particles.materialHandle(particle)).id(), chemicalParcels.indicator(particle),
+					particles.volume(particle), unitScale.kilograms(particles.mass(particle)),
 					chemicalParcels.record(particle));
-			if (removedMaterials != null) removedMaterials.add(particleMaterialHandle[particle],
-					particleVolume[particle], particleMass[particle]);
+			if (removedMaterials != null) removedMaterials.add(particles.materialHandle(particle),
+					particles.volume(particle), particles.mass(particle));
 			if (removedThermal != null && thermalState != null) {
 				removedThermal.add(thermalState.liquidInternalEnergy(particle));
 			}
-			removed += particleVolume[particle];
+			removed += particles.volume(particle);
 			removeParticle(particle);
 		}
 		return removed;
@@ -7294,20 +7276,20 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	private int particleCountInCell(int cellX, int cellY, int cellZ) {
 		float h = config.cellSize();
 		int count = 0;
-		for (int particle = 0; particle < particleCount; particle++) {
-			if ((int) Math.floor(particleX[particle] / h) == cellX
-					&& (int) Math.floor(particleY[particle] / h) == cellY
-					&& (int) Math.floor(particleZ[particle] / h) == cellZ) count++;
+		for (int particle = 0; particle < particles.count(); particle++) {
+			if ((int) Math.floor(particles.positionX(particle) / h) == cellX
+					&& (int) Math.floor(particles.positionY(particle) / h) == cellY
+					&& (int) Math.floor(particles.positionZ(particle) / h) == cellZ) count++;
 		}
 		return count;
 	}
 
 	private float exactVolumeInCell(int cellX, int cellY, int cellZ) {
 		float h = config.cellSize(), result = 0.0F;
-		for (int particle = 0; particle < particleCount; particle++) {
-			if ((int) Math.floor(particleX[particle] / h) == cellX
-					&& (int) Math.floor(particleY[particle] / h) == cellY
-					&& (int) Math.floor(particleZ[particle] / h) == cellZ) result += particleVolume[particle];
+		for (int particle = 0; particle < particles.count(); particle++) {
+			if ((int) Math.floor(particles.positionX(particle) / h) == cellX
+					&& (int) Math.floor(particles.positionY(particle) / h) == cellY
+					&& (int) Math.floor(particles.positionZ(particle) / h) == cellZ) result += particles.volume(particle);
 		}
 		return result;
 	}
@@ -7315,58 +7297,38 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	private double[] exactCellVolumes() {
 		double[] exact = new double[cellCount];
 		float h = config.cellSize();
-		for (int particle = 0; particle < particleCount; particle++) {
-			int x = (int) Math.floor(particleX[particle] / h);
-			int y = (int) Math.floor(particleY[particle] / h);
-			int z = (int) Math.floor(particleZ[particle] / h);
-			if (inside(x, y, z)) exact[cellIndex(x, y, z)] += particleVolume[particle];
+		for (int particle = 0; particle < particles.count(); particle++) {
+			int x = (int) Math.floor(particles.positionX(particle) / h);
+			int y = (int) Math.floor(particles.positionY(particle) / h);
+			int z = (int) Math.floor(particles.positionZ(particle) / h);
+			if (inside(x, y, z)) exact[cellIndex(x, y, z)] += particles.volume(particle);
 		}
 		return exact;
 	}
 
 	private void removeParticle(int index) {
 		if (chemicalParcels != null) chemicalParcels.markDirtyCell(particleCellIndex(index));
-		int last = particleCount - 1;
+		int last = particles.count() - 1;
 		if (thermalState != null) thermalState.removeExternalAndSwap(index, last);
 		if (chemicalParcels != null) chemicalParcels.swapRemove(index, last);
-		particleCount = last;
-		if (index == last) return;
-		particleX[index] = particleX[last]; particleY[index] = particleY[last]; particleZ[index] = particleZ[last];
-		particleVelocityX[index] = particleVelocityX[last]; particleVelocityY[index] = particleVelocityY[last]; particleVelocityZ[index] = particleVelocityZ[last];
-		particleVolume[index] = particleVolume[last];
-		particleMass[index] = particleMass[last];
-		particleMaterialHandle[index] = particleMaterialHandle[last];
-		particlePhaseLabel[index] = particlePhaseLabel[last];
+		particles.swapRemove(index);
 	}
 
 	private double removeParticleInternalPhase(int index) {
 		if (chemicalParcels != null) chemicalParcels.markDirtyCell(particleCellIndex(index));
-		int last = particleCount - 1;
+		int last = particles.count() - 1;
 		double removedEnergy = thermalState.removeInternalAndSwap(index, last);
 		if (chemicalParcels != null) chemicalParcels.swapRemove(index, last);
-		particleCount = last;
-		if (index != last) {
-			particleX[index] = particleX[last]; particleY[index] = particleY[last]; particleZ[index] = particleZ[last];
-			particleVelocityX[index] = particleVelocityX[last]; particleVelocityY[index] = particleVelocityY[last];
-			particleVelocityZ[index] = particleVelocityZ[last]; particleVolume[index] = particleVolume[last];
-			particleMass[index] = particleMass[last]; particleMaterialHandle[index] = particleMaterialHandle[last];
-			particlePhaseLabel[index] = particlePhaseLabel[last];
-		}
+		particles.swapRemove(index);
 		return removedEnergy;
 	}
 
 	private void ensureParticleCapacity(int required) {
 		if (required > maximumParticleCount) {
-			throw new ParticleBudgetExceededException(required - particleCount, maximumParticleCount - particleCount);
+			throw new ParticleBudgetExceededException(required - particles.count(), maximumParticleCount - particles.count());
 		}
-		if (required <= particleX.length) return;
-		int capacity = Math.min(maximumParticleCount, Math.max(required, Math.max(1, particleX.length * 2)));
-		particleX = Arrays.copyOf(particleX, capacity); particleY = Arrays.copyOf(particleY, capacity); particleZ = Arrays.copyOf(particleZ, capacity);
-		particleVelocityX = Arrays.copyOf(particleVelocityX, capacity); particleVelocityY = Arrays.copyOf(particleVelocityY, capacity); particleVelocityZ = Arrays.copyOf(particleVelocityZ, capacity);
-		particleVolume = Arrays.copyOf(particleVolume, capacity);
-		particleMass = Arrays.copyOf(particleMass, capacity);
-		particleMaterialHandle = Arrays.copyOf(particleMaterialHandle, capacity);
-		particlePhaseLabel = Arrays.copyOf(particlePhaseLabel, capacity);
+		if (required <= particles.capacity()) return;
+		int capacity = particles.ensureCapacity(required);
 		particleCellNext = Arrays.copyOf(particleCellNext, capacity);
 		particleCellPrevious = Arrays.copyOf(particleCellPrevious, capacity);
 		if (thermalState != null) thermalState.ensureCapacity(capacity);
@@ -7376,9 +7338,9 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	}
 
 	private void setDefaultMaterialState(int particle) {
-		particleMass[particle] = (double) particleVolume[particle] * config.density();
-		particleMaterialHandle[particle] = 0;
-		particlePhaseLabel[particle] = 0;
+		particles.setMass(particle, (double) particles.volume(particle) * config.density());
+		particles.setMaterialHandle(particle, 0);
+		particles.setPhaseLabel(particle, 0);
 	}
 
 	List<CellCandidate> nearbyCells(int centerX, int centerY, int centerZ, int maxRadius) {

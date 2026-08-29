@@ -6,7 +6,7 @@
 
 | 模块 | 类 | 基线行数 | 删除 allowlist 的切片 |
 |---|---|---:|---|
-| core | `FlipFluidDomain` | 7975 | S12 |
+| core | `FlipFluidDomain` | 7975 → 7613（S01 观察、S02 marker store 后） | S12 |
 | fabric | `FluidSimulationService` | 3329 | S21 |
 | fabric | `RegionState` | 1480 | S17 |
 | core | `FlipThermalState` | 1461 | S10 |
