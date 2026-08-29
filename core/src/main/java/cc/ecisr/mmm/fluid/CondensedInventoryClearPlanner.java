@@ -80,23 +80,6 @@ final class CondensedInventoryClearPlanner {
 				domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision());
 	}
 
-	/** Prevalidates every truth removed by the operator-level condensed inventory reset. */
-	FlipFluidDomain.OperatorClearPlan planOperator() {
-		if (domain.hasPendingPhaseVolumeWork()) {
-			throw new IllegalStateException("Pending phase volume/work must be projected before operator clear");
-		}
-		FlipFluidDomain.CondensedClearPlan condensed = planCondensed();
-		FlipFluidDomain.GranularClearPlan granular = domain.planRemoveAllGranularExact();
-		FlipFluidDomain.GasTopologyPlan gasTopology = null;
-		if (domain.airCellNodeId != null && !domain.operatorVentedGasTopology) {
-			domain.ensureGrid();
-			gasTopology = domain.planGasTopology(domain.airScanner.scan(
-					domain.geometry.solid, new int[domain.cellCount], new double[domain.cellCount],
-					domain.geometry.cutCells, null, domain.sealedDomainBoundary));
-		}
-		return new FlipFluidDomain.OperatorClearPlan(condensed, granular, gasTopology);
-	}
-
 	/** Prevalidates an operator vent without treating ambient as inventory. */
 	FlipFluidDomain.OperatorGasVentPlan planVent() {
 		if (domain.hasPendingPhaseVolumeWork()) {

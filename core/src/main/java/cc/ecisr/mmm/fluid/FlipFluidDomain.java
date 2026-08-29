@@ -93,6 +93,8 @@ public final class FlipFluidDomain {
 	final SurfaceTensionWorkspace tension;
 	private final CondensedInventoryClearPlanner clearPlanner;
 	private final MaterialTransferPlanner transferPlanner;
+	private final GranularTransferPlanner granularTransferPlanner;
+	private final DomainInventoryLifecyclePlanner lifecyclePlanner;
 	private final FlipPressurePhaseGeometry pressurePhaseGeometry;
 	final FlipFreeSurfaceGeometry freeSurfaceGeometry;
 	private final FlipParticleReseeder particleReseeder;
@@ -124,13 +126,7 @@ public final class FlipFluidDomain {
 	private int activeCollisionEditIndex;
 	private boolean gasPressureActive;
 	boolean operatorVentedGasTopology;
-	GranularRegistry granularRegistry;
-	GranularParcelStore granularParcels;
-	GranularDepositStore granularDeposits;
-	private GranularInventory granularInventory;
-	GranularAuditLedger granularExternalSource = GranularAuditLedger.EMPTY;
-	GranularAuditLedger granularEscapedSink = GranularAuditLedger.EMPTY;
-	SolidCompositionPool solidCompositions;
+	GranularDomainState granularState;
 	private GranularPhaseTransferEngine granularPhaseTransfer;
 	private boolean precipitationEnabled;
 	private PhaseTransferStats lastPhaseTransferStats = new PhaseTransferStats(0, 0, 0, 0L);
@@ -146,7 +142,7 @@ public final class FlipFluidDomain {
 	GranularCouplingFields granularCoupling;
 	private GranularCouplingFields granularNextCoupling;
 	private GranularCouplingFields pressureGranularCoupling;
-	private FlipGranularCollision granularCollision;
+	FlipGranularCollision granularCollision;
 	int[] granularCarrierMaterialByCell;
 	double[] granularCarrierVolumeByCell;
 	boolean gridDirty = true;
@@ -206,6 +202,8 @@ public final class FlipFluidDomain {
 		this.coordinator = new CarrierMutationCoordinator(this);
 		this.transferPlanner = new MaterialTransferPlanner(this);
 		this.clearPlanner = new CondensedInventoryClearPlanner(this);
+		this.granularTransferPlanner = new GranularTransferPlanner(this);
+		this.lifecyclePlanner = new DomainInventoryLifecyclePlanner(this);
 	}
 
 	public int sizeX() { return sizeX; }
@@ -353,7 +351,7 @@ public final class FlipFluidDomain {
 	public double physicalVolumeCubicMetres(double normalizedVolume) { return unitScale.cubicMeters(normalizedVolume); }
 	public boolean hasMaterialState() { return materialRegistry != null; }
 	public boolean hasChemistryState() { return chemicalParcels != null; }
-	public boolean hasGranularState() { return granularParcels != null; }
+	public boolean hasGranularState() { return granularState != null; }
 	public boolean hasThermalState() { return thermalState != null; }
 	public boolean hasAmbientGasCells() { return metrics.hasAmbientGasCells(); }
 	/** Last committed liquid/solid LTE range; constant-time and absent until the thermal grid was observed. */
@@ -365,7 +363,7 @@ public final class FlipFluidDomain {
 	/** Constant-time exact species inventory ledger. */
 	public long totalChemicalSpeciesQuanta() { return chemicalParcels == null ? 0L : chemicalParcels.totalQuanta(); }
 	/** Constant-time sparse deposit-group count. */
-	public int granularDepositGroupCount() { return granularDeposits == null ? 0 : granularDeposits.groupCount(); }
+	public int granularDepositGroupCount() { return granularState == null ? 0 : granularState.deposits.groupCount(); }
 	/** Constant-time coherent phase-group count. */
 	public int coherentPhaseGroupCount() {
 		return thermalState == null ? 0 : thermalState.coherentPhases().groupCount();
@@ -413,12 +411,13 @@ public final class FlipFluidDomain {
 		} else {
 			pure = exportParticleState();
 		}
-		GranularStateSnapshot granular = granularRegistry == null ? null : exportGranularState();
+		GranularStateSnapshot granular = granularState == null ? null : exportGranularState();
 		String chemicalFingerprint = chemistry == null ? "" : chemistry.fingerprint();
 		GasStateSnapshot gas = airCellNodeId == null ? null : exportGasState(chemicalFingerprint);
 		FlipThermalParticleState thermal = thermalState == null ? null : exportThermalParticleState();
 		return new FluidDomainState(config, maximumParticleCount, sealedDomainBoundary,
-				pure, materials, chemicals, chemistry, granularRegistry, granular, precipitationEnabled,
+				pure, materials, chemicals, chemistry, granularState == null ? null : granularState.registry,
+			granular, precipitationEnabled,
 				airNetwork.registry(), gas, thermalState == null ? null : thermalState.registry(), thermal,
 				thermalState == null ? 0 : thermalState.maximumTransportSubsteps(),
 				thermalState == null ? null : exportPendingPhaseVolumeState());
@@ -479,14 +478,14 @@ public final class FlipFluidDomain {
 	public SignedDyadic exactGasInternalEnergy() {
 		return thermalState == null ? SignedDyadic.ZERO : thermalState.exactGasEnergy();
 	}
-	public int granularParcelCount() { return granularParcels == null ? 0 : granularParcels.count(); }
-	public int granularDepositCellCount() { return granularDeposits == null ? 0 : granularDeposits.occupiedCellCount(); }
+	public int granularParcelCount() { return granularState == null ? 0 : granularState.parcels.count(); }
+	public int granularDepositCellCount() { return granularState == null ? 0 : granularState.deposits.occupiedCellCount(); }
 	public int granularSleepingColumnCount() {
 		return granularDepositDynamics == null ? 0 : granularDepositDynamics.sleepingColumnCount();
 	}
 	public boolean granularReadyForHydrostaticSleep() {
-		if (granularParcels == null) return true;
-		if (granularParcels.count() != 0 || granularDepositDynamics.dirtyColumnCount() != 0) return false;
+		if (granularState == null) return true;
+		if (granularState.parcels.count() != 0 || granularDepositDynamics.dirtyColumnCount() != 0) return false;
 		return !precipitationEnabled || chemicalParcels == null || !chemicalParcels.hasDirtyCells();
 	}
 	public GranularDepositDynamics.Stats lastGranularDepositStats() { return lastGranularDepositStats; }
@@ -498,12 +497,12 @@ public final class FlipFluidDomain {
 	}
 	public GranularStateSnapshot exportGranularState() { return carriers.exportGranularState(); }
 	public GranularDisplaySnapshot copyGranularDisplaySnapshot() { return carriers.copyGranularDisplaySnapshot(); }
-	public GranularAuditLedger granularExternalSource() { return granularExternalSource; }
-	public GranularAuditLedger granularEscapedSink() { return granularEscapedSink; }
-	public long totalGranularSolidVolumeSvq() { return granularInventory == null ? 0L : granularInventory.totalSolidVolumeSvq(); }
-	public double totalGranularMass() { return granularInventory == null ? 0.0 : granularInventory.totalMass(); }
+	public GranularAuditLedger granularExternalSource() { return granularState.externalSource; }
+	public GranularAuditLedger granularEscapedSink() { return granularState.escapedSink; }
+	public long totalGranularSolidVolumeSvq() { return granularState == null ? 0L : granularState.inventory.totalSolidVolumeSvq(); }
+	public double totalGranularMass() { return granularState == null ? 0.0 : granularState.inventory.totalMass(); }
 	boolean hasGranularInventory() {
-		return granularParcels != null && (granularParcels.count() != 0 || granularDeposits.groupCount() != 0);
+		return granularState != null && (granularState.parcels.count() != 0 || granularState.deposits.groupCount() != 0);
 	}
 
 	/** Erases all granular truth as one auditable external sink and releases every owned composition. */
@@ -513,23 +512,16 @@ public final class FlipFluidDomain {
 
 	/** Completes every fallible granular-clear check without changing inventory or audit truth. */
 	public GranularClearPlan planRemoveAllGranularExact() {
-		if (granularInventory == null || !hasGranularInventory()) {
-			return new GranularClearPlan(GranularAuditLedger.EMPTY, granularEscapedSink,
-					0L, Double.doubleToRawLongBits(0.0), 0, 0);
-		}
-		// Export validates unique runtime composition ownership before either inventory or audit mutates.
-		exportGranularState();
-		GranularAuditLedger removed = GranularAuditLedger.captureInventory(
-				granularRegistry, granularParcels, granularDeposits, solidCompositions);
-		GranularAuditLedger sinkAfter = granularEscapedSink.plus(removed);
-		return new GranularClearPlan(removed, sinkAfter, granularInventory.totalSolidVolumeSvq(),
-				Double.doubleToRawLongBits(granularInventory.totalMass()), granularParcels.count(), granularDeposits.groupCount());
+		return lifecyclePlanner.planGranularClear();
 	}
 
 	/** Commits a previously validated granular clear; no new ledger candidate is constructed here. */
 	public GranularClear commitRemoveAllGranularExact(GranularClearPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Granular clear plan is missing");
-		if (granularInventory == null) {
+		if ((granularState == null ? 0L : granularState.mutationRevision()) != plan.granularRevision()) {
+			throw new IllegalStateException("Granular inventory changed after clear planning");
+		}
+		if (granularState == null) {
 			if (plan.solidVolumeSvq() != 0L || plan.activeParcels() != 0 || plan.depositGroups() != 0) {
 				throw new IllegalStateException("Granular inventory changed after clear planning");
 			}
@@ -543,13 +535,14 @@ public final class FlipFluidDomain {
 			pressureGranularCoupling = null;
 			return new GranularClear(0L, 0.0, 0, 0);
 		}
-		if (granularInventory.totalSolidVolumeSvq() != plan.solidVolumeSvq()
-				|| Double.doubleToRawLongBits(granularInventory.totalMass()) != plan.totalMassBits()
-				|| granularParcels.count() != plan.activeParcels()
-				|| granularDeposits.groupCount() != plan.depositGroups()) {
+		if (granularState.inventory.totalSolidVolumeSvq() != plan.solidVolumeSvq()
+				|| Double.doubleToRawLongBits(granularState.inventory.totalMass()) != plan.totalMassBits()
+				|| Double.doubleToRawLongBits(granularInternalEnergy()) != plan.internalEnergyBits()
+				|| granularState.parcels.count() != plan.activeParcels()
+				|| granularState.deposits.groupCount() != plan.depositGroups()) {
 			throw new IllegalStateException("Granular inventory changed after clear planning");
 		}
-		GranularInventory.ClearStats cleared = granularInventory.clear();
+		GranularInventory.ClearStats cleared = granularState.inventory.clear();
 		long auditSvq = 0L; double auditMass = 0.0;
 		for (GranularAuditLedger.Entry entry : plan.removed().entries()) {
 			auditSvq = Math.addExact(auditSvq, entry.solidVolumeSvq()); auditMass += entry.mass();
@@ -557,7 +550,7 @@ public final class FlipFluidDomain {
 		if (auditSvq != cleared.solidVolumeSvq() || !massClose(auditMass, cleared.mass())) {
 			throw new IllegalStateException("Granular clear audit differs from removed inventory");
 		}
-		granularEscapedSink = plan.sinkAfter(); granularDepositDynamics.clear();
+		granularState.escapedSink = plan.sinkAfter(); granularDepositDynamics.clear();
 		granularCoupling.clear(); granularNextCoupling.clear(); pressureGranularCoupling = null;
 		lastGranularDepositStats = new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
 		gridDirty = true;
@@ -565,16 +558,24 @@ public final class FlipFluidDomain {
 				cleared.activeParcels(), cleared.depositGroups());
 	}
 
+	/** Thermal U held by the granular carriers; the lifecycle plan binds it raw-bit exact. */
+	double granularInternalEnergy() {
+		return thermalState == null ? 0.0 : thermalState.granularEnergy().exactEnergy().toDouble();
+	}
+
 	public record GranularClear(long solidVolumeSvq, double mass, int activeParcels, int depositGroups) { }
 	public record GranularClearPlan(
 			GranularAuditLedger removed, GranularAuditLedger sinkAfter,
-			long solidVolumeSvq, long totalMassBits, int activeParcels, int depositGroups
+			long solidVolumeSvq, long totalMassBits, int activeParcels, int depositGroups,
+			long internalEnergyBits, long granularRevision
 	) { }
 	/** Read-only cell inventory used to aim the dry-container scoop at particle/deposit truth. */
 	public long granularSolidVolumeSvq(int cellX, int cellY, int cellZ) { return cellInventory.granularSolidVolumeSvq(cellX, cellY, cellZ); }
 	public SolidCompositionPool solidCompositions() {
-		if (solidCompositions == null) throw new IllegalStateException("Solid composition state is not bound");
-		return solidCompositions;
+		if (granularState == null || granularState.compositions == null) {
+			throw new IllegalStateException("Solid composition state is not bound");
+		}
+		return granularState.compositions;
 	}
 	public boolean precipitationEnabled() { return precipitationEnabled; }
 	public PhaseTransferStats lastPhaseTransferStats() { return lastPhaseTransferStats; }
@@ -582,8 +583,8 @@ public final class FlipFluidDomain {
 	public GasThermalPhaseStats lastGasThermalPhaseStats() { return lastGasThermalPhaseStats; }
 	public ChemicalParcelStore.ReactionStats lastChemicalReactionStats() { return lastChemicalReactionStats; }
 	public void setPrecipitationEnabled(boolean enabled) {
-		if (enabled && (chemicalParcels == null || granularParcels == null || solidCompositions == null
-				|| !granularRegistry.hasReactiveRules())) {
+		if (enabled && (chemicalParcels == null || granularState == null || granularState.compositions == null
+				|| !granularState.registry.hasReactiveRules())) {
 			throw new IllegalStateException("Precipitation requires bound chemistry, granular state and reactive rules");
 		}
 		precipitationEnabled = enabled;
@@ -599,8 +600,8 @@ public final class FlipFluidDomain {
 			throw new IllegalArgumentException("Granular SVQ requires a 0.5 m solver cell");
 		}
 		bindMaterialRegistry(liquidRegistry);
-		if (granularRegistry != null) {
-			if (!granularRegistry.fingerprint().equals(registry.fingerprint())) {
+		if (granularState != null) {
+			if (!granularState.registry.fingerprint().equals(registry.fingerprint())) {
 				throw new IllegalArgumentException("A domain cannot change its granular registry");
 			}
 			return;
@@ -614,17 +615,12 @@ public final class FlipFluidDomain {
 				&& !registry.chemicalRegistryFingerprint().equals(chemicalParcels.registry().fingerprint())) {
 			throw new IllegalArgumentException("Granular registry chemical dependency mismatch");
 		}
-		granularRegistry = registry;
-		granularParcels = new GranularParcelStore(registry, GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION);
-		granularDeposits = new GranularDepositStore(registry, cellCount,
-				Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
-						Math.multiplyExact(cellCount, GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL)));
-		granularInventory = new GranularInventory(granularParcels, granularDeposits);
-		granularDepositDynamics = new GranularDepositDynamics(registry, granularParcels, granularDeposits,
-				granularInventory, sizeX, sizeY, sizeZ, config.cellSize());
+		granularState = new GranularDomainState(registry, cellCount);
+		granularDepositDynamics = new GranularDepositDynamics(registry, granularState.parcels, granularState.deposits,
+				granularState.inventory, sizeX, sizeY, sizeZ, config.cellSize());
 		granularCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
 		granularNextCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
-		granularCollision = new FlipGranularCollision(sizeX, sizeY, sizeZ, config.cellSize(), geometry.cutCells, granularDeposits,
+		granularCollision = new FlipGranularCollision(sizeX, sizeY, sizeZ, config.cellSize(), geometry.cutCells, granularState.deposits,
 				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION);
 		granularCarrierMaterialByCell = new int[cellCount];
 		granularCarrierVolumeByCell = new double[cellCount];
@@ -640,7 +636,7 @@ public final class FlipFluidDomain {
 		if (snapshot.sizeX() != sizeX || snapshot.sizeY() != sizeY || snapshot.sizeZ() != sizeZ) {
 			throw new IllegalArgumentException("Granular snapshot dimensions changed");
 		}
-		if (granularRegistry != null) throw new IllegalStateException("Granular state is already bound");
+		if (granularState != null) throw new IllegalStateException("Granular state is already bound");
 		if (materialRegistry != null) {
 			if (!materialRegistry.materials().equals(liquidRegistry.materials())) {
 				throw new IllegalArgumentException("Granular snapshot liquid palette changed");
@@ -648,12 +644,12 @@ public final class FlipFluidDomain {
 			liquidRegistry = materialRegistry;
 		}
 		bindGranular(registry, liquidRegistry);
-		snapshot.restoreInto(registry, granularParcels, granularDeposits, solidCompositions,
+		snapshot.restoreInto(registry, granularState.parcels, granularState.deposits, granularState.compositions,
 				cell -> SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell)));
-		snapshot.externalSource().validateAgainst(registry, solidCompositions == null ? null : solidCompositions.registry());
-		snapshot.escapedSink().validateAgainst(registry, solidCompositions == null ? null : solidCompositions.registry());
-		granularExternalSource = snapshot.externalSource(); granularEscapedSink = snapshot.escapedSink();
-		granularDeposits.forEachCell((cell, ignoredVolume, ignoredPorosity) -> granularDepositDynamics.disturbCell(cell));
+		snapshot.externalSource().validateAgainst(registry, granularState.compositions == null ? null : granularState.compositions.registry());
+		snapshot.escapedSink().validateAgainst(registry, granularState.compositions == null ? null : granularState.compositions.registry());
+		granularState.externalSource = snapshot.externalSource(); granularState.escapedSink = snapshot.escapedSink();
+		granularState.deposits.forEachCell((cell, ignoredVolume, ignoredPorosity) -> granularDepositDynamics.disturbCell(cell));
 		gridDirty = true;
 	}
 
@@ -662,42 +658,8 @@ public final class FlipFluidDomain {
 			int cellX, int cellY, int cellZ, int materialHandle, int compositionHandle,
 			long solidVolumeSvq, double mass
 	) {
-		if (granularParcels == null) return GranularInsertion.rejected("Granular state is not bound");
-		int cell = cellIndexChecked(cellX, cellY, cellZ);
-		if (solidVolumeSvq <= 0L || !(Double.isFinite(mass) && mass > 0.0)) {
-			throw new IllegalArgumentException("Granular insertion inventory is invalid");
-		}
-		granularRegistry.material(materialHandle);
-		if (compositionHandle != 0 && (solidCompositions == null || !solidCompositions.isLive(compositionHandle))) {
-			throw new IllegalArgumentException("Granular insertion has no live solid composition");
-		}
-		ensureGrid();
-		granularCoupling.rebuild(granularParcels, granularDeposits);
-		long[] plannedSolid = granularCoupling.copySolidSvq();
-		GranularCouplingFields.Position position = null;
-		for (int attempt = 0; attempt < 16 && position == null; attempt++) {
-			GranularCouplingFields.Position candidate = granularCollision.spawnPosition(
-					cellX, cellY, cellZ, solidVolumeSvq, granularParcels.count() + attempt * 16_384L,
-					Float.NaN, Float.NaN, Float.NaN);
-			if (candidate != null && granularCoupling.tryPlanParcel(plannedSolid, candidate, solidVolumeSvq,
-					this::granularGeometricOpenSvq)) position = candidate;
-		}
-		if (position == null) return GranularInsertion.rejected("Target cell has no collision-valid solid capacity");
-		double insertedCellVolume = SolidVolume.toCellVolume(solidVolumeSvq);
-		if (totalVolumeExact() + SolidVolume.toCellVolume(totalGranularSolidVolumeSvq()) + insertedCellVolume
-				> totalGeometricOpenVolumeExact() + 1.0e-9) {
-			return GranularInsertion.rejected("Sealed region has no combined fluid/solid capacity");
-		}
-		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(
-				position.x(), position.y(), position.z(), 0.0F, 0.0F, 0.0F,
-				solidVolumeSvq, mass, materialHandle, compositionHandle, 0, (byte) 0);
-		if (!granularParcels.canAdd(parcel)) return GranularInsertion.rejected("Active granular parcel budget exceeded");
-		double thermalEnergy = thermalState == null ? 0.0 : thermalState.planExternalGranularEnergy(
-				materialHandle, compositionHandle, mass, thermalMarkerContext());
-		granularParcels.add(parcel);
-		if (thermalState != null) thermalState.commitExternalActiveInsertions(new double[]{thermalEnergy});
-		gridDirty = true;
-		return new GranularInsertion(true, solidVolumeSvq, mass, null);
+		return granularTransferPlanner.insertExactInventory(cellX, cellY, cellZ, materialHandle,
+				compositionHandle, solidVolumeSvq, mass);
 	}
 
 	/** All-or-nothing dry-container insertion. The ledger is already stable-ID validated by the item adapter. */
@@ -716,159 +678,7 @@ public final class FlipFluidDomain {
 	public GranularInsertion tryInsertExactGranular(
 			int cellX, int cellY, int cellZ, GranularTransferLedger ledger, int maxRadius, boolean externalSource
 	) {
-		if (granularParcels == null) return GranularInsertion.rejected("Granular state is not bound");
-		if (ledger == null) throw new IllegalArgumentException("Granular insertion ledger is missing");
-		if (maxRadius < 0) throw new IllegalArgumentException("Granular insertion radius is invalid");
-		cellIndexChecked(cellX, cellY, cellZ); ensureGrid();
-		granularCoupling.rebuild(granularParcels, granularDeposits);
-		long insertedSvq = ledger.totalSolidVolumeSvq(); double insertedMass = ledger.totalMass();
-		if (totalVolumeExact() + SolidVolume.toCellVolume(totalGranularSolidVolumeSvq())
-				+ SolidVolume.toCellVolume(insertedSvq) > totalGeometricOpenVolumeExact() + 1.0e-9) {
-			return GranularInsertion.rejected("Sealed region has no combined fluid/solid capacity");
-		}
-		ArrayList<GranularParcelDraft> drafts = new ArrayList<>(); int reactiveDrafts = 0;
-		for (GranularTransferLedger.Group group : ledger.groups()) {
-			int materialHandle = granularRegistry.materialHandle(group.materialId());
-			var material = granularRegistry.material(materialHandle);
-			if (material.reactive() != (group.composition() != null)) {
-				throw new IllegalArgumentException("Granular transfer material/composition kind mismatch");
-			}
-			if (group.composition() != null) {
-				if (solidCompositions == null || !massClose(group.composition().totalMass(solidCompositions.registry()), group.mass())) {
-					throw new IllegalArgumentException("Granular transfer composition/mass mismatch");
-				}
-			}
-			long remainingSvq = group.solidVolumeSvq(); double remainingMass = group.mass();
-			while (remainingSvq > 0L) {
-				long pieceSvq = Math.min(remainingSvq, material.maximumActiveParcelSvq());
-				double pieceMass = pieceSvq == remainingSvq ? remainingMass
-						: group.mass() * ((double) pieceSvq / group.solidVolumeSvq());
-				if (!(Double.isFinite(pieceMass) && pieceMass > 0.0 && pieceMass <= remainingMass)) {
-					return GranularInsertion.rejected("Granular transfer mass split is not representable");
-				}
-				SolidCompositionRecord pieceComposition = group.composition() == null ? null
-						: splitSolidComposition(group.composition(), group.solidVolumeSvq(), pieceSvq, pieceMass);
-				drafts.add(new GranularParcelDraft(materialHandle, pieceSvq, pieceMass, pieceComposition));
-				if (pieceComposition != null) reactiveDrafts++;
-				remainingSvq -= pieceSvq; remainingMass -= pieceMass;
-			}
-		}
-		List<CellCandidate> insertionCells = nearbyCells(cellX, cellY, cellZ, maxRadius);
-		// A dry pour is a loose release envelope, not a vertical stack of mutually blocking
-		// numerical parcels. Prefer nearby horizontal cells; vertical cells remain bounded
-		// fallbacks when the port neighborhood or exact occupancy requires them.
-		insertionCells.sort(Comparator
-				.comparingInt((CellCandidate candidate) -> granularInsertionDistance(candidate, cellY))
-				.thenComparingInt(CellCandidate::distanceSquared)
-				.thenComparingInt(CellCandidate::index));
-		int releaseCellCount = granularReleaseCellCount(insertionCells, ledger);
-		long[] plannedSolid = granularCoupling.copySolidSvq();
-		int[] plannedParcelCounts = new int[cellCount];
-		for (int parcel = 0; parcel < granularParcels.count(); parcel++) {
-			plannedParcelCounts[granularParcelCell(granularParcels.parcel(parcel))]++;
-		}
-		ArrayList<GranularParcelDraft> positioned = new ArrayList<>(drafts.size());
-		for (GranularParcelDraft draft : drafts) {
-			int selected = -1; GranularCouplingFields.Position selectedPosition = null;
-			boolean[] attemptedReleaseCells = new boolean[releaseCellCount];
-			for (int candidateAttempt = 0; candidateAttempt < insertionCells.size(); candidateAttempt++) {
-				int candidateOrdinal;
-				if (candidateAttempt < releaseCellCount) {
-					candidateOrdinal = -1;
-					for (int ordinal = 0; ordinal < releaseCellCount; ordinal++) {
-						if (!attemptedReleaseCells[ordinal] && (candidateOrdinal < 0
-								|| plannedParcelCounts[insertionCells.get(ordinal).index()]
-								< plannedParcelCounts[insertionCells.get(candidateOrdinal).index()])) {
-							candidateOrdinal = ordinal;
-						}
-					}
-					attemptedReleaseCells[candidateOrdinal] = true;
-				} else {
-					candidateOrdinal = candidateAttempt;
-				}
-				CellCandidate candidate = insertionCells.get(candidateOrdinal);
-				int candidateX = candidate.index() % sizeX, candidateYz = candidate.index() / sizeX;
-				int candidateY = candidateYz % sizeY, candidateZ = candidateYz / sizeY;
-				for (int attempt = 0; attempt < 16; attempt++) {
-					long sequence = plannedParcelCounts[candidate.index()] + attempt * 16_384L;
-					GranularCouplingFields.Position spawn = granularCollision.spawnPosition(
-							candidateX, candidateY, candidateZ, draft.solidVolumeSvq(), sequence,
-							Float.NaN, Float.NaN, Float.NaN);
-					if (spawn != null && granularCoupling.tryPlanParcel(plannedSolid, spawn, draft.solidVolumeSvq(),
-							this::granularGeometricOpenSvq)) {
-						selected = candidate.index(); selectedPosition = spawn; break;
-					}
-				}
-				if (selected >= 0) break;
-			}
-			if (selected < 0) return GranularInsertion.rejected("Nearby cells have no collision-valid solid capacity");
-			plannedParcelCounts[selected]++;
-			positioned.add(draft.at(selected, selectedPosition));
-		}
-		drafts = positioned;
-		if (!granularParcels.hasCapacity(drafts.size())
-				|| reactiveDrafts > 0 && !solidCompositions.hasCapacity(reactiveDrafts)) {
-			return GranularInsertion.rejected("Active granular parcel/composition budget exceeded");
-		}
-		GranularAuditLedger sourceAfter = externalSource ? granularExternalSource.plus(
-				ledger, granularRegistry, solidCompositions == null ? null : solidCompositions.registry()) : granularExternalSource;
-		int originalCount = granularParcels.count(); ArrayList<Integer> createdCompositions = new ArrayList<>(reactiveDrafts);
-		double[] thermalInsertions = null;
-		try {
-			for (GranularParcelDraft draft : drafts) {
-				int compositionHandle = draft.composition() == null ? 0 : solidCompositions.create(draft.composition());
-				if (compositionHandle != 0) createdCompositions.add(compositionHandle);
-				granularParcels.add(new GranularParcelStore.Parcel(
-						draft.x(), draft.y(), draft.z(), 0.0F, 0.0F, 0.0F,
-						draft.solidVolumeSvq(), draft.mass(), draft.materialHandle(), compositionHandle, 0, (byte) 0));
-			}
-			if (thermalState != null) thermalInsertions = thermalState.planExternalActiveInsertions(originalCount,
-					granularParcels.count() - originalCount, thermalMarkerContext());
-		} catch (RuntimeException failure) {
-			while (granularParcels.count() > originalCount) granularParcels.removeSwap(granularParcels.count() - 1);
-			for (int handle : createdCompositions) if (solidCompositions.isLive(handle)) solidCompositions.release(handle);
-			throw failure;
-		}
-		if (thermalState != null) thermalState.commitExternalActiveInsertions(thermalInsertions);
-		boolean[] changedCells = new boolean[cellCount];
-		for (GranularParcelDraft draft : drafts) {
-			int changed = draft.cell();
-			if (!changedCells[changed]) { markGranularExternalChange(changed); changedCells[changed] = true; }
-		}
-		granularExternalSource = sourceAfter;
-		return new GranularInsertion(true, insertedSvq, insertedMass, null);
-	}
-
-	/** Number of nearby cells needed to release the local inventory at its material-defined loose packing. */
-	private int granularReleaseCellCount(List<CellCandidate> insertionCells, GranularTransferLedger ledger) {
-		if (insertionCells.isEmpty()) return 0;
-		boolean[] nearby = new boolean[cellCount];
-		long looseBulkSvq = 0L;
-		for (CellCandidate candidate : insertionCells) {
-			nearby[candidate.index()] = true;
-			looseBulkSvq = Math.addExact(looseBulkSvq,
-					granularDeposits.cellBulkVolumeSvq(candidate.index()));
-		}
-		for (int parcel = 0; parcel < granularParcels.count(); parcel++) {
-			GranularParcelStore.Parcel existing = granularParcels.parcel(parcel);
-			if (nearby[granularParcelCell(existing)]) {
-				looseBulkSvq = Math.addExact(looseBulkSvq, SolidVolume.bulkVolumeCeil(
-						existing.solidVolumeSvq(), granularRegistry.material(existing.materialHandle()).restPorosityQ()));
-			}
-		}
-		for (GranularTransferLedger.Group group : ledger.groups()) {
-			var material = granularRegistry.material(granularRegistry.materialHandle(group.materialId()));
-			looseBulkSvq = Math.addExact(looseBulkSvq,
-					SolidVolume.bulkVolumeCeil(group.solidVolumeSvq(), material.restPorosityQ()));
-		}
-		long cells = Math.addExact(looseBulkSvq, SolidVolume.SVQ_PER_CELL - 1L) / SolidVolume.SVQ_PER_CELL;
-		return (int) Math.min(insertionCells.size(), Math.max(1L, cells));
-	}
-
-	private int granularInsertionDistance(CellCandidate candidate, int centerY) {
-		int yz = candidate.index() / sizeX;
-		int deltaY = yz % sizeY - centerY;
-		return candidate.distanceSquared() + 8 * deltaY * deltaY;
+		return granularTransferPlanner.insertExact(cellX, cellY, cellZ, ledger, maxRadius, externalSource);
 	}
 
 	/** Extracts only same-cell active parcels and the one exposed deposit group, never deep inventory. */
@@ -895,199 +705,23 @@ public final class FlipFluidDomain {
 			int cellX, int cellY, int cellZ, long maximumSolidVolumeSvq, int maxRadius, boolean escapedSink,
 			java.util.function.Predicate<GranularTransferLedger> itemAcceptance
 	) {
-		if (granularParcels == null) return GranularExtraction.rejected("Granular state is not bound");
-		if (hasPendingPhaseVolumeWork()) {
-			return GranularExtraction.rejected("Pending phase mechanical work must be projected before extraction");
-		}
-		if (itemAcceptance == null) throw new IllegalArgumentException("Granular item acceptance is missing");
-		if (maximumSolidVolumeSvq <= 0L || maximumSolidVolumeSvq > SolidVolume.SVQ_PER_BV) {
-			throw new IllegalArgumentException("Granular extraction capacity is invalid");
-		}
-		if (maxRadius < 0) throw new IllegalArgumentException("Granular extraction radius is invalid");
-		cellIndexChecked(cellX, cellY, cellZ); long remaining = maximumSolidVolumeSvq;
-		List<CellCandidate> extractionCells = nearbyCells(cellX, cellY, cellZ, maxRadius);
-		boolean[] near = new boolean[cellCount]; for (CellCandidate candidate : extractionCells) near[candidate.index()] = true;
-		ArrayList<GranularRemoval> removals = new ArrayList<>();
-		GranularLedgerBuilder ledger = new GranularLedgerBuilder();
-		for (int parcelIndex = 0; parcelIndex < granularParcels.count() && remaining > 0L; parcelIndex++) {
-			GranularParcelStore.Parcel parcel = granularParcels.parcel(parcelIndex);
-			int parcelCell = granularParcelCell(parcel);
-			if (!near[parcelCell] || !ledger.canAccept(granularRegistry.material(parcel.materialHandle()).id())) continue;
-			long taken = Math.min(remaining, parcel.solidVolumeSvq());
-			if (parcel.solidCompositionHandle() != 0 && taken != parcel.solidVolumeSvq()) continue;
-			double mass = taken == parcel.solidVolumeSvq() ? parcel.mass()
-					: parcel.mass() * ((double) taken / parcel.solidVolumeSvq());
-			SolidCompositionRecord composition = parcel.solidCompositionHandle() == 0 ? null
-					: solidCompositions.record(parcel.solidCompositionHandle());
-			ledger.add(granularRegistry.material(parcel.materialHandle()).id(), taken, mass, composition);
-			double energy = thermalState == null ? 0.0
-					: thermalState.previewActiveTake(parcelIndex, taken, parcel.solidVolumeSvq());
-			removals.add(GranularRemoval.parcel(parcelIndex, parcelCell, parcel, taken, mass, energy)); remaining -= taken;
-		}
-		for (CellCandidate candidate : extractionCells) if (remaining > 0L) {
-			int cell = candidate.index(); GranularDepositStore.Group exposed = granularDeposits.dominantGroup(cell);
-			if (exposed != null && ledger.canAccept(granularRegistry.material(exposed.materialHandle()).id())) {
-				long taken = Math.min(remaining, exposed.solidVolumeSvq());
-				if (exposed.solidCompositionHandle() == 0 || taken == exposed.solidVolumeSvq()) {
-					GranularDepositStore.SolidPortion preview = granularDeposits.peekTake(cell, exposed.materialHandle(),
-							exposed.solidCompositionHandle(), taken);
-					SolidCompositionRecord composition = exposed.solidCompositionHandle() == 0 ? null
-							: solidCompositions.record(exposed.solidCompositionHandle());
-					ledger.add(granularRegistry.material(exposed.materialHandle()).id(), taken, preview.mass(), composition);
-					double energy = thermalState == null ? 0.0 : thermalState.previewDepositTake(
-							new GranularEnergyColumn.DepositKey(cell, exposed.materialHandle(),
-									exposed.solidCompositionHandle()), taken, exposed.solidVolumeSvq());
-					removals.add(GranularRemoval.deposit(cell, exposed, taken, preview.mass(), energy));
-					remaining -= taken;
-				}
-			}
-		}
-		if (removals.isEmpty()) return GranularExtraction.rejected("Target cell has no accessible granular inventory");
-		GranularTransferLedger transfer = ledger.build();
-		if (!itemAcceptance.test(transfer)) {
-			return GranularExtraction.rejected("Accessible granular inventory cannot be represented by the dry container");
-		}
-		GranularAuditLedger sinkAfter = escapedSink ? granularEscapedSink.plus(
-				transfer, granularRegistry, solidCompositions == null ? null : solidCompositions.registry()) : granularEscapedSink;
-		for (GranularRemoval removal : removals) if (removal.deposit()) {
-			granularDeposits.take(removal.cell(), removal.materialHandle(), removal.compositionHandle(), removal.solidVolumeSvq());
-			if (thermalState != null) thermalState.commitExternalDepositTake(new GranularEnergyColumn.DepositKey(
-					removal.cell(), removal.materialHandle(), removal.compositionHandle()),
-					removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
-			if (removal.compositionHandle() != 0) solidCompositions.release(removal.compositionHandle());
-		}
-		for (GranularRemoval removal : removals) if (!removal.deposit()
-				&& removal.solidVolumeSvq() != removal.originalSolidVolumeSvq()) {
-			GranularParcelStore.Parcel parcel = granularParcels.parcel(removal.index());
-			granularParcels.overwrite(removal.index(), new GranularParcelStore.Parcel(parcel.x(), parcel.y(), parcel.z(),
-					parcel.velocityX(), parcel.velocityY(), parcel.velocityZ(),
-					parcel.solidVolumeSvq() - removal.solidVolumeSvq(), parcel.mass() - removal.mass(),
-					parcel.materialHandle(), 0, parcel.contactAge(), parcel.flags()));
-			if (thermalState != null) thermalState.commitExternalActiveTake(
-					removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
-		}
-		removals.stream().filter(removal -> !removal.deposit()
-				&& removal.solidVolumeSvq() == removal.originalSolidVolumeSvq())
-				.sorted(Comparator.comparingInt(GranularRemoval::index).reversed()).forEach(removal -> {
-					GranularParcelStore.Parcel removed = granularParcels.removeSwap(removal.index());
-					if (thermalState != null) thermalState.commitExternalActiveTake(
-							removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
-					if (removed.solidCompositionHandle() != 0) solidCompositions.release(removed.solidCompositionHandle());
-				});
-		boolean[] changedCells = new boolean[cellCount];
-		for (GranularRemoval removal : removals) if (!changedCells[removal.cell()]) {
-			markGranularExternalChange(removal.cell()); changedCells[removal.cell()] = true;
-		}
-		granularEscapedSink = sinkAfter;
-		double removedEnergy = 0.0;
-		for (GranularRemoval removal : removals) removedEnergy += removal.internalEnergy();
-		if (!Double.isFinite(removedEnergy)) throw new ArithmeticException("Granular extraction thermal energy overflow");
-		return new GranularExtraction(true, transfer, removedEnergy, null);
+		return granularTransferPlanner.extractExact(cellX, cellY, cellZ, maximumSolidVolumeSvq, maxRadius,
+				escapedSink, itemAcceptance);
 	}
 
-	private SolidCompositionRecord splitSolidComposition(
-			SolidCompositionRecord source, long sourceSvq, long pieceSvq, double pieceMass
-	) {
-		int[] species = source.copySpeciesHandles(); long[] amounts = source.copyAmounts();
-		for (int entry = 0; entry < amounts.length; entry++) {
-			BigInteger[] division = BigInteger.valueOf(amounts[entry]).multiply(BigInteger.valueOf(pieceSvq))
-					.divideAndRemainder(BigInteger.valueOf(sourceSvq));
-			if (division[1].signum() != 0 || division[0].signum() <= 0) {
-				throw new IllegalArgumentException("Reactive granular container split is below composition resolution");
-			}
-			amounts[entry] = division[0].longValueExact();
-		}
-		SolidCompositionRecord exact = new SolidCompositionRecord(species, amounts, Double.doubleToRawLongBits(0.0));
-		double residual = pieceMass - exact.exactSpeciesMass(solidCompositions.registry()).toDouble();
-		return new SolidCompositionRecord(species, amounts, Double.doubleToRawLongBits(residual));
-	}
-
-	private void markGranularExternalChange(int cell) {
+	void markGranularExternalChange(int cell) {
 		granularDepositDynamics.disturbCell(cell);
 		if (precipitationEnabled) chemicalParcels.markDirtyCell(cell);
 		gridDirty = true;
 	}
 
-	private record GranularParcelDraft(
-			int materialHandle, long solidVolumeSvq, double mass, SolidCompositionRecord composition,
-			int cell, float x, float y, float z
-	) {
-		GranularParcelDraft(int materialHandle, long solidVolumeSvq, double mass, SolidCompositionRecord composition) {
-			this(materialHandle, solidVolumeSvq, mass, composition, -1, Float.NaN, Float.NaN, Float.NaN);
-		}
-		GranularParcelDraft at(int cell, GranularCouplingFields.Position position) {
-			return new GranularParcelDraft(materialHandle, solidVolumeSvq, mass, composition,
-					cell, position.x(), position.y(), position.z());
-		}
-	}
-
-	private static final class GranularLedgerBuilder {
-		private final TreeMap<String, MutableGranularGroup> groups = new TreeMap<>();
-		boolean canAccept(String materialId) {
-			return groups.containsKey(materialId) || groups.size() < GranularTransferLedger.MAX_GROUPS;
-		}
-		void add(String materialId, long svq, double mass, SolidCompositionRecord composition) {
-			groups.computeIfAbsent(materialId, ignored -> new MutableGranularGroup()).add(svq, mass, composition);
-		}
-		GranularTransferLedger build() {
-			ArrayList<GranularTransferLedger.Group> result = new ArrayList<>(groups.size());
-			for (Map.Entry<String, MutableGranularGroup> entry : groups.entrySet()) {
-				result.add(entry.getValue().build(entry.getKey()));
-			}
-			return new GranularTransferLedger(result);
-		}
-	}
-
-	private static final class MutableGranularGroup {
-		private long svq; private double mass, residual; private TreeMap<Integer, Long> species;
-		void add(long addedSvq, double addedMass, SolidCompositionRecord composition) {
-			svq = Math.addExact(svq, addedSvq); mass += addedMass;
-			if (composition == null) {
-				if (species != null) throw new IllegalArgumentException("Mixed inert/reactive granular material group");
-				return;
-			}
-			if (species == null) species = new TreeMap<>(); residual += composition.massResidual();
-			for (int entry = 0; entry < composition.entryCount(); entry++) species.merge(
-					composition.speciesHandle(entry), composition.amountAt(entry), Math::addExact);
-		}
-		GranularTransferLedger.Group build(String materialId) {
-			SolidCompositionRecord composition = null;
-			if (species != null) {
-				int[] handles = new int[species.size()]; long[] amounts = new long[species.size()]; int index = 0;
-				for (Map.Entry<Integer, Long> entry : species.entrySet()) {
-					handles[index] = entry.getKey(); amounts[index++] = entry.getValue();
-				}
-				composition = new SolidCompositionRecord(handles, amounts, Double.doubleToRawLongBits(residual));
-			}
-			return new GranularTransferLedger.Group(materialId, svq, mass, composition);
-		}
-	}
-
-	private record GranularRemoval(
-			boolean deposit, int index, int cell, int materialHandle, int compositionHandle,
-			long solidVolumeSvq, long originalSolidVolumeSvq, double mass, double internalEnergy
-	) {
-		static GranularRemoval parcel(
-				int index, int cell, GranularParcelStore.Parcel parcel, long svq, double mass, double energy
-		) {
-			return new GranularRemoval(false, index, cell, parcel.materialHandle(), parcel.solidCompositionHandle(),
-					svq, parcel.solidVolumeSvq(), mass, energy);
-		}
-		static GranularRemoval deposit(
-				int cell, GranularDepositStore.Group group, long svq, double mass, double energy
-		) {
-			return new GranularRemoval(true, -1, cell, group.materialHandle(), group.solidCompositionHandle(),
-					svq, group.solidVolumeSvq(), mass, energy);
-		}
-	}
-
 	public record GranularInsertion(boolean inserted, long solidVolumeSvq, double mass, String failure) {
-		private static GranularInsertion rejected(String reason) { return new GranularInsertion(false, 0L, 0.0, reason); }
+		static GranularInsertion rejected(String reason) { return new GranularInsertion(false, 0L, 0.0, reason); }
 	}
 	public record GranularExtraction(
 			boolean transferred, GranularTransferLedger ledger, double internalEnergy, String failure
 	) {
-		private static GranularExtraction rejected(String reason) { return new GranularExtraction(false, null, 0.0, reason); }
+		static GranularExtraction rejected(String reason) { return new GranularExtraction(false, null, 0.0, reason); }
 	}
 
 	/** Returns the bound material registry, or null for a pure-water domain. */
@@ -1278,8 +912,8 @@ public final class FlipFluidDomain {
 			}
 			return;
 		}
-		if (granularRegistry != null && granularRegistry.hasReactiveRules()
-				&& !granularRegistry.chemicalRegistryFingerprint().equals(registry.fingerprint())) {
+		if (granularState != null && granularState.registry.hasReactiveRules()
+				&& !granularState.registry.chemicalRegistryFingerprint().equals(registry.fingerprint())) {
 			throw new IllegalArgumentException("Granular registry chemical dependency mismatch");
 		}
 		ChemicalParcelStore candidate = new ChemicalParcelStore(
@@ -1329,7 +963,7 @@ public final class FlipFluidDomain {
 				maximumTransportSubsteps);
 		thermalBuoyancySum = new double[cellCount];
 		thermalBuoyancyVolume = new double[cellCount];
-		if (granularInventory != null) granularInventory.bindThermalEnergy(thermalGranularAdapter());
+		if (granularState != null) granularState.inventory.bindThermalEnergy(thermalGranularAdapter());
 		if (granularCoupling == null) {
 			granularCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
 			granularNextCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
@@ -2212,11 +1846,11 @@ public final class FlipFluidDomain {
 
 	private long phaseGranularSvq(int cell) {
 		long total = 0L;
-		if (granularParcels != null) for (int parcel = 0; parcel < granularParcels.count(); parcel++) {
-			var carrier = granularParcels.parcel(parcel);
+		if (granularState != null) for (int parcel = 0; parcel < granularState.parcels.count(); parcel++) {
+			var carrier = granularState.parcels.parcel(parcel);
 			if (granularParcelCell(carrier) == cell) total = Math.addExact(total, carrier.solidVolumeSvq());
 		}
-		if (granularDeposits != null) total = Math.addExact(total, granularDeposits.cellSolidVolumeSvq(cell));
+		if (granularState != null) total = Math.addExact(total, granularState.deposits.cellSolidVolumeSvq(cell));
 		return total;
 	}
 
@@ -2620,37 +2254,37 @@ public final class FlipFluidDomain {
 				return chemicalParcels == null ? null : chemicalParcels.registry();
 			}
 			@Override public int granularMaterialCount() {
-				return granularRegistry == null ? 0 : granularRegistry.materials().size();
+				return granularState == null ? 0 : granularState.registry.materials().size();
 			}
 			@Override public String granularRegistryFingerprint() {
-				return granularRegistry == null ? "" : granularRegistry.fingerprint();
+				return granularState == null ? "" : granularState.registry.fingerprint();
 			}
 			@Override public String granularMaterialId(int materialHandle) {
-				if (granularRegistry == null) throw new IllegalArgumentException("Granular state is not bound");
-				return granularRegistry.material(materialHandle).id();
+				if (granularState == null) throw new IllegalArgumentException("Granular state is not bound");
+				return granularState.registry.material(materialHandle).id();
 			}
 			@Override public int activeParcelCount() {
-				return granularParcels == null ? 0 : granularParcels.count();
+				return granularState == null ? 0 : granularState.parcels.count();
 			}
 			@Override public int activeParcelCell(int ordinal) {
-				return granularParcelCell(granularParcels.parcel(ordinal));
+				return granularParcelCell(granularState.parcels.parcel(ordinal));
 			}
 			@Override public int activeParcelMaterial(int ordinal) {
-				return granularParcels.parcel(ordinal).materialHandle();
+				return granularState.parcels.parcel(ordinal).materialHandle();
 			}
 			@Override public int activeParcelComposition(int ordinal) {
-				return granularParcels.parcel(ordinal).solidCompositionHandle();
+				return granularState.parcels.parcel(ordinal).solidCompositionHandle();
 			}
 			@Override public long activeParcelSvq(int ordinal) {
-				return granularParcels.parcel(ordinal).solidVolumeSvq();
+				return granularState.parcels.parcel(ordinal).solidVolumeSvq();
 			}
 			@Override public double activeParcelMass(int ordinal) {
-				return granularParcels.parcel(ordinal).mass();
+				return granularState.parcels.parcel(ordinal).mass();
 			}
 			@Override public List<GranularEnergyColumn.DepositKey> depositKeys() {
-				if (granularDeposits == null) return List.of();
-				ArrayList<GranularEnergyColumn.DepositKey> keys = new ArrayList<>(granularDeposits.groupCount());
-				granularDeposits.forEachGroup((cell, porosity, material, composition, volume, mass) ->
+				if (granularState == null) return List.of();
+				ArrayList<GranularEnergyColumn.DepositKey> keys = new ArrayList<>(granularState.deposits.groupCount());
+				granularState.deposits.forEachGroup((cell, porosity, material, composition, volume, mass) ->
 						keys.add(new GranularEnergyColumn.DepositKey(cell, material, composition)));
 				keys.sort(Comparator.naturalOrder());
 				return List.copyOf(keys);
@@ -2663,17 +2297,17 @@ public final class FlipFluidDomain {
 			}
 			@Override public Map<String, Long> solidComposition(int compositionHandle) {
 				if (compositionHandle == 0) return Map.of();
-				if (solidCompositions == null || chemicalParcels == null) {
+				if (granularState.compositions == null || chemicalParcels == null) {
 					throw new IllegalArgumentException("Solid thermal composition state is unavailable");
 				}
-				return solidCompositions.record(compositionHandle).stableAmounts(chemicalParcels.registry());
+				return granularState.compositions.record(compositionHandle).stableAmounts(chemicalParcels.registry());
 			}
 		};
 	}
 
 	private GranularDepositStore.Group thermalDepositGroup(GranularEnergyColumn.DepositKey key) {
-		if (granularDeposits == null || key == null) throw new IllegalArgumentException("Granular deposit state is unavailable");
-		GranularDepositStore.Group group = granularDeposits.matchingGroup(key.cell(), key.materialHandle(),
+		if (granularState == null || key == null) throw new IllegalArgumentException("Granular deposit state is unavailable");
+		GranularDepositStore.Group group = granularState.deposits.matchingGroup(key.cell(), key.materialHandle(),
 				candidate -> candidate.solidCompositionHandle() == key.compositionHandle());
 		if (group == null) throw new IllegalArgumentException("Unknown granular thermal deposit identity");
 		return group;
@@ -2758,7 +2392,7 @@ public final class FlipFluidDomain {
 		thermalBuoyancyVolume = null;
 		thermalBoundaryTemperatureK = null;
 		Arrays.fill(pendingPhaseCellVolume, SignedDyadic.ZERO);
-		if (granularRegistry == null) {
+		if (granularState == null) {
 			granularCoupling = null; granularNextCoupling = null; pressureGranularCoupling = null;
 		}
 	}
@@ -2774,16 +2408,15 @@ public final class FlipFluidDomain {
 	}
 
 	private void bindSolidCompositionPoolIfReady() {
-		if (solidCompositions != null || granularRegistry == null || chemicalParcels == null
-				|| !granularRegistry.hasReactiveRules()) return;
-		if (!granularRegistry.chemicalRegistryFingerprint().equals(chemicalParcels.registry().fingerprint())) {
+		if (granularState == null || granularState.compositions != null || chemicalParcels == null
+				|| !granularState.registry.hasReactiveRules()) return;
+		if (!granularState.registry.chemicalRegistryFingerprint().equals(chemicalParcels.registry().fingerprint())) {
 			throw new IllegalArgumentException("Granular registry chemical dependency mismatch");
 		}
 		int depositCapacity = Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
 				Math.multiplyExact(cellCount, GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL));
-		solidCompositions = new SolidCompositionPool(chemicalParcels.registry(),
-				Math.addExact(GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, depositCapacity));
-		granularInventory.bindSolidCompositions(solidCompositions);
+		granularState.bindCompositions(new SolidCompositionPool(chemicalParcels.registry(),
+				Math.addExact(GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, depositCapacity)));
 		granularPhaseTransfer = new GranularPhaseTransferEngine(chemicalParcels.registry(), unitScale);
 	}
 
@@ -2959,7 +2592,7 @@ public final class FlipFluidDomain {
 		ensureGrid();
 		ArrayList<CollisionEdit> canonical = new ArrayList<>(edits.size());
 		int[] previousMasks = new int[edits.size()];
-		boolean[] granularCells = granularRegistry == null ? null : new boolean[cellCount];
+		boolean[] granularCells = granularState == null ? null : new boolean[cellCount];
 		Set<Integer> uniqueCells = new HashSet<>();
 		for (int editIndex = 0; editIndex < edits.size(); editIndex++) {
 			CollisionEdit edit = edits.get(editIndex);
@@ -2978,7 +2611,7 @@ public final class FlipFluidDomain {
 						"Collision edit intersects authoritative coherent phase inventory", null);
 			}
 			if (granularCells != null && (granularCoupling.solidSvq(cell) > 0L
-					|| granularDeposits.cellSolidVolumeSvq(cell) > 0L)) granularCells[cell] = true;
+					|| granularState.deposits.cellSolidVolumeSvq(cell) > 0L)) granularCells[cell] = true;
 		}
 		GranularCollisionPlan granularPlan;
 		try {
@@ -3036,8 +2669,8 @@ public final class FlipFluidDomain {
 			if (thermalState != null && thermalState.coherentPhases().cellOccupiedSvq(index) > 0L) {
 				throw new IllegalStateException("Collision edit intersects authoritative coherent phase inventory");
 			}
-			if (granularRegistry != null
-					&& (granularCoupling.solidSvq(index) > 0L || granularDeposits.cellSolidVolumeSvq(index) > 0L)) {
+			if (granularState != null
+					&& (granularCoupling.solidSvq(index) > 0L || granularState.deposits.cellSolidVolumeSvq(index) > 0L)) {
 				try { displaceGranularForCollisionCell(index); }
 				catch (RuntimeException failure) {
 					throw new CollisionEditBlockedException(
@@ -3079,11 +2712,11 @@ public final class FlipFluidDomain {
 
 	private GranularCollisionPlan planGranularCollision(boolean[] affectedCells) {
 		exportGranularState();
-		granularCoupling.rebuild(granularParcels, granularDeposits);
-		boolean[] selectedParcels = new boolean[granularParcels.count()];
+		granularCoupling.rebuild(granularState.parcels, granularState.deposits);
+		boolean[] selectedParcels = new boolean[granularState.parcels.count()];
 		int selectedCount = 0;
-		for (int parcel = 0; parcel < granularParcels.count(); parcel++) {
-			GranularParcelStore.Parcel state = granularParcels.parcel(parcel);
+		for (int parcel = 0; parcel < granularState.parcels.count(); parcel++) {
+			GranularParcelStore.Parcel state = granularState.parcels.parcel(parcel);
 			for (int cell = 0; cell < affectedCells.length; cell++) {
 				if (!affectedCells[cell] || granularCoupling.parcelShareAtCell(
 						parcelPosition(state), state.solidVolumeSvq(), cell) <= 0L) continue;
@@ -3095,23 +2728,23 @@ public final class FlipFluidDomain {
 		boolean[] selectedDepositCells = new boolean[cellCount];
 		boolean anyDeposit = false;
 		for (int cell = 0; cell < cellCount; cell++) if (affectedCells[cell]
-				&& granularDeposits.cellSolidVolumeSvq(cell) > 0L) {
+				&& granularState.deposits.cellSolidVolumeSvq(cell) > 0L) {
 			selectedDepositCells[cell] = true;
 			anyDeposit = true;
 		}
 		if (selectedCount == 0 && !anyDeposit) return null;
 		GranularAuditLedger removed = GranularAuditLedger.captureSelected(
-				granularRegistry, granularParcels, parcel -> selectedParcels[parcel],
-				granularDeposits, selectedCell -> selectedDepositCells[selectedCell], solidCompositions);
-		GranularAuditLedger sinkAfter = granularEscapedSink.plus(removed);
+				granularState.registry, granularState.parcels, parcel -> selectedParcels[parcel],
+				granularState.deposits, selectedCell -> selectedDepositCells[selectedCell], granularState.compositions);
+		GranularAuditLedger sinkAfter = granularState.escapedSink.plus(removed);
 		ArrayList<CollisionDeposit> depositGroups = new ArrayList<>();
-		if (anyDeposit) granularDeposits.forEachGroup((groupCell, porosity, material, composition, svq, mass) -> {
+		if (anyDeposit) granularState.deposits.forEachGroup((groupCell, porosity, material, composition, svq, mass) -> {
 			if (selectedDepositCells[groupCell]) depositGroups.add(new CollisionDeposit(groupCell,
 					new GranularDepositStore.Group(material, composition, svq, mass)));
 		});
 		if (thermalState != null) {
 			for (int parcel = 0; parcel < selectedParcels.length; parcel++) if (selectedParcels[parcel]) {
-				GranularParcelStore.Parcel state = granularParcels.parcel(parcel);
+				GranularParcelStore.Parcel state = granularState.parcels.parcel(parcel);
 				thermalState.previewActiveTake(parcel, state.solidVolumeSvq(), state.solidVolumeSvq());
 			}
 			for (CollisionDeposit deposit : depositGroups) {
@@ -3125,7 +2758,7 @@ public final class FlipFluidDomain {
 		long plannedSvq = 0L;
 		double plannedMass = 0.0;
 		for (int parcel = 0; parcel < selectedParcels.length; parcel++) if (selectedParcels[parcel]) {
-			GranularParcelStore.Parcel state = granularParcels.parcel(parcel);
+			GranularParcelStore.Parcel state = granularState.parcels.parcel(parcel);
 			plannedSvq = Math.addExact(plannedSvq, state.solidVolumeSvq());
 			plannedMass += state.mass();
 		}
@@ -3143,33 +2776,33 @@ public final class FlipFluidDomain {
 			throw new IllegalStateException("Granular collision plan differs from its preflight audit");
 		}
 		return new GranularCollisionPlan(selectedParcels, List.copyOf(depositGroups), sinkAfter,
-				affectedCells.clone(), granularParcels.count(), granularInventory.totalSolidVolumeSvq(),
-				Double.doubleToRawLongBits(granularInventory.totalMass()));
+				affectedCells.clone(), granularState.parcels.count(), granularState.inventory.totalSolidVolumeSvq(),
+				Double.doubleToRawLongBits(granularState.inventory.totalMass()));
 	}
 
 	private void commitGranularCollision(GranularCollisionPlan plan) {
-		if (granularParcels.count() != plan.parcelCount()
-				|| granularInventory.totalSolidVolumeSvq() != plan.totalSvq()
-				|| Double.doubleToRawLongBits(granularInventory.totalMass()) != plan.totalMassBits()) {
+		if (granularState.parcels.count() != plan.parcelCount()
+				|| granularState.inventory.totalSolidVolumeSvq() != plan.totalSvq()
+				|| Double.doubleToRawLongBits(granularState.inventory.totalMass()) != plan.totalMassBits()) {
 			throw new IllegalStateException("Granular inventory changed after collision planning");
 		}
 		for (int parcel = plan.selectedParcels().length - 1; parcel >= 0; parcel--) if (plan.selectedParcels()[parcel]) {
-			GranularParcelStore.Parcel state = granularParcels.removeSwap(parcel);
+			GranularParcelStore.Parcel state = granularState.parcels.removeSwap(parcel);
 			if (thermalState != null) thermalState.commitExternalActiveTake(
 					parcel, state.solidVolumeSvq(), state.solidVolumeSvq());
-			if (state.solidCompositionHandle() != 0) solidCompositions.release(state.solidCompositionHandle());
+			if (state.solidCompositionHandle() != 0) granularState.compositions.release(state.solidCompositionHandle());
 		}
 		for (CollisionDeposit deposit : plan.depositGroups()) {
 			GranularDepositStore.Group group = deposit.group();
-			GranularDepositStore.SolidPortion taken = granularDeposits.take(
+			GranularDepositStore.SolidPortion taken = granularState.deposits.take(
 					deposit.cell(), group.materialHandle(), group.solidCompositionHandle(), group.solidVolumeSvq());
 			if (thermalState != null) thermalState.commitExternalDepositTake(new GranularEnergyColumn.DepositKey(
 					deposit.cell(), group.materialHandle(), group.solidCompositionHandle()),
 					group.solidVolumeSvq(), group.solidVolumeSvq());
-			if (taken.solidCompositionHandle() != 0) solidCompositions.release(taken.solidCompositionHandle());
+			if (taken.solidCompositionHandle() != 0) granularState.compositions.release(taken.solidCompositionHandle());
 		}
-		granularEscapedSink = plan.sinkAfter();
-		granularCoupling.rebuild(granularParcels, granularDeposits);
+		granularState.escapedSink = plan.sinkAfter();
+		granularCoupling.rebuild(granularState.parcels, granularState.deposits);
 		pressureGranularCoupling = hasGranularInventory() ? granularCoupling : null;
 		for (int cell = 0; cell < plan.affectedCells().length; cell++) {
 			if (plan.affectedCells()[cell]) markGranularExternalChange(cell);
@@ -3224,7 +2857,7 @@ public final class FlipFluidDomain {
 
 	public double totalOpenVolumeExact() { return metrics.totalOpenVolumeExact(); }
 
-	private double totalGeometricOpenVolumeExact() {
+	double totalGeometricOpenVolumeExact() {
 		double result = 0.0;
 		for (int cell = 0; cell < cellCount; cell++) result += geometry.cutCells.openCellVolume(cell);
 		return result;
@@ -3577,7 +3210,7 @@ public final class FlipFluidDomain {
 
 	/** Prevalidates every truth removed by the operator-level condensed inventory reset. */
 	public OperatorClearPlan planOperatorClear() {
-		return clearPlanner.planOperator();
+		return lifecyclePlanner.planOperatorClear();
 	}
 
 	/** Clears all condensed owners and publishes the already-planned retained-gas topology. */
@@ -3962,17 +3595,17 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			System.arraycopy(mac.velocityZ, 0, mac.p2gVelocityZ, 0, mac.velocityZ.length);
 			if (hasGranularInventory()) {
 				GranularMechanics.StepStats granularMechanics = GranularMechanics.stepVelocities(
-						granularParcels, granularRegistry, granularEnvironment(),
+						granularState.parcels, granularState.registry, granularEnvironment(),
 						config.gravity(), dt);
 				lastGranularBoundaryImpulseX += granularMechanics.boundaryImpulseX();
 				lastGranularBoundaryImpulseY += granularMechanics.boundaryImpulseY();
 				lastGranularBoundaryImpulseZ += granularMechanics.boundaryImpulseZ();
-				granularCollision.preview(granularParcels, granularRegistry, dt);
-				granularNextCoupling.rebuild(granularParcels, granularDeposits, granularCollision::previewPosition);
+				granularCollision.preview(granularState.parcels, granularState.registry, dt);
+				granularNextCoupling.rebuild(granularState.parcels, granularState.deposits, granularCollision::previewPosition);
 				if (!granularOccupancyFitsGeometry(granularNextCoupling)) {
-					granularCollision.resolveCapacity(granularParcels, granularCoupling,
+					granularCollision.resolveCapacity(granularState.parcels, granularCoupling,
 							cell -> SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell)));
-					granularNextCoupling.rebuild(granularParcels, granularDeposits, granularCollision::previewPosition);
+					granularNextCoupling.rebuild(granularState.parcels, granularState.deposits, granularCollision::previewPosition);
 					if (!granularOccupancyFitsGeometry(granularNextCoupling)) {
 						throw new IllegalStateException("Locally resolved granular occupancy exceeds geometry");
 					}
@@ -4052,20 +3685,20 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			advectParticles(dt);
 			if (captureMechanicalAudit) mechanicalAudit.particleCollisionWorkJoules +=
 					particleKineticEnergyJoules() - particleKineticEnergy;
-			if (hasGranularInventory()) granularCollision.commit(granularParcels);
+			if (hasGranularInventory()) granularCollision.commit(granularState.parcels);
 		}
 		double carrierTransferInitialKineticEnergy = captureMechanicalAudit ? particleKineticEnergyJoules() : 0.0;
 		if (precipitationEnabled) markMovedReactiveGranularCells(granularParcelCountBeforeAdvection);
 		ThermalAxisStats thermalAxis = runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations);
 		ChemicalParcelStore.ReactionStats chemistry = thermalAxis.chemistry();
-		if (granularInventory != null && granularParcels.count() > 1) {
-			granularCoupling.rebuild(granularParcels, granularDeposits);
+		if (granularState != null && granularState.parcels.count() > 1) {
+			granularCoupling.rebuild(granularState.parcels, granularState.deposits);
 			long[] compactedSolid = granularCoupling.copySolidSvq();
-			granularInventory.compactActive(
-					index -> granularParcelCell(granularParcels.parcel(index)),
+			granularState.inventory.compactActive(
+					index -> granularParcelCell(granularState.parcels.parcel(index)),
 					(first, second, merged) -> planGranularMerge(compactedSolid, first, second, merged),
 					granularMergeVelocityDelta(), GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP);
-			granularCoupling.rebuild(granularParcels, granularDeposits);
+			granularCoupling.rebuild(granularState.parcels, granularState.deposits);
 			if (!granularCoupling.matchesSolidSvq(compactedSolid)) {
 				throw new IllegalStateException("Granular active compaction differs from its exact occupancy plan");
 			}
@@ -4073,7 +3706,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		if (granularDepositDynamics != null) {
 			long[] dynamicsSolid = null;
 			if (hasGranularInventory() || granularDepositDynamics.dirtyColumnCount() != 0) {
-				granularCoupling.rebuild(granularParcels, granularDeposits);
+				granularCoupling.rebuild(granularState.parcels, granularState.deposits);
 				dynamicsSolid = granularCoupling.copySolidSvq();
 				long[] plannedDynamicsSolid = dynamicsSolid;
 				lastGranularDepositStats = granularDepositDynamics.step(
@@ -4082,7 +3715,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				lastGranularDepositStats = new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
 			}
 			if (hasGranularInventory()) {
-				granularCoupling.rebuild(granularParcels, granularDeposits);
+				granularCoupling.rebuild(granularState.parcels, granularState.deposits);
 				if (!granularCoupling.matchesSolidSvq(dynamicsSolid)) {
 					throw new IllegalStateException("Granular deposit transition differs from its exact occupancy plan");
 				}
@@ -4203,7 +3836,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			freeSurfaceGeometry.rebuild(geometry.solid, markerGrid.markerCount, geometry.cutCells);
 			pressureGranularCoupling = null;
 		} else {
-			if (hasGranularInventory()) granularCoupling.rebuild(granularParcels, granularDeposits);
+			if (hasGranularInventory()) granularCoupling.rebuild(granularState.parcels, granularState.deposits);
 			else granularCoupling.rebuildFixed();
 			pressureGranularCoupling = granularCoupling;
 			freeSurfaceGeometry.rebuild(geometry.solid, markerGrid.markerCount, geometry.cutCells, granularCoupling);
@@ -4817,7 +4450,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return cellIndex(x, y, z);
 	}
 
-	private long granularGeometricOpenSvq(int cell) {
+	long granularGeometricOpenSvq(int cell) {
 		return SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
 	}
 
@@ -4831,7 +4464,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 							1.225, 1.81e-5, 100_000.0, 0.0);
 				}
 				String materialId = materialRegistry.material(liquidMaterial).id();
-				GranularCarrier carrier = granularRegistry.carrier(granularRegistry.carrierHandle(materialId));
+				GranularCarrier carrier = granularState.registry.carrier(granularState.registry.carrierHandle(materialId));
 				float capacity = effectiveOpenCellVolume(cell);
 				double submerged = capacity <= 0.0F ? 0.0
 						: Math.max(0.0, Math.min(1.0, markerGrid.exactCellMarkerVolume[cell] / capacity));
@@ -4988,9 +4621,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	private int captureReactiveGranularCells() {
-		int count = granularParcels.count();
+		int count = granularState.parcels.count();
 		for (int parcel = 0; parcel < count; parcel++) {
-			GranularParcelStore.Parcel state = granularParcels.parcel(parcel);
+			GranularParcelStore.Parcel state = granularState.parcels.parcel(parcel);
 			granularReactivePreviousCells[parcel] = state.solidCompositionHandle() == 0
 					? -1 : granularParcelCell(state);
 		}
@@ -4998,13 +4631,13 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	private void markMovedReactiveGranularCells(int expectedCount) {
-		if (granularParcels.count() != expectedCount) {
+		if (granularState.parcels.count() != expectedCount) {
 			throw new IllegalStateException("Granular advection changed the exact active parcel inventory");
 		}
 		for (int parcel = 0; parcel < expectedCount; parcel++) {
 			int previous = granularReactivePreviousCells[parcel];
 			if (previous < 0) continue;
-			int current = granularParcelCell(granularParcels.parcel(parcel));
+			int current = granularParcelCell(granularState.parcels.parcel(parcel));
 			if (current != previous) {
 				chemicalParcels.markDirtyCell(previous);
 				chemicalParcels.markDirtyCell(current);
@@ -5018,12 +4651,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		int liquidMaterial = granularCarrierMaterialByCell == null ? -1 : granularCarrierMaterialByCell[cell];
 		if (markerGrid.markerCount[cell] <= 0 || liquidMaterial < 0) return new CarrierProperties(1.225, 1.81e-5);
 		String materialId = materialRegistry.material(liquidMaterial).id();
-		GranularCarrier carrier = granularRegistry.carrier(granularRegistry.carrierHandle(materialId));
+		GranularCarrier carrier = granularState.registry.carrier(granularState.registry.carrierHandle(materialId));
 		return new CarrierProperties(markerGrid.cellDensity[cell], carrier.dynamicViscosity());
 	}
 
 	private void applyGranularPorousDamping(float dt) {
-		if (granularDeposits == null || granularDeposits.occupiedCellCount() == 0) return;
+		if (granularState == null || granularState.deposits.occupiedCellCount() == 0) return;
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
 			int left = cellIndex(x - 1, y, z), right = cellIndex(x, y, z);
 			mac.velocityX[xFaceIndex(x, y, z)] *= granularPorousFaceDamping(left, right, dt);
@@ -5052,16 +4685,16 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	private double granularPermeability(int cell) {
-		GranularDepositStore.Group dominant = granularDeposits.dominantGroup(cell);
+		GranularDepositStore.Group dominant = granularState.deposits.dominantGroup(cell);
 		if (dominant == null) return Double.POSITIVE_INFINITY;
 		double porosity = depositsPorosity(cell);
 		double solid = 1.0 - porosity;
-		double diameter = granularRegistry.material(dominant.materialHandle()).primaryGrainDiameterMeters();
+		double diameter = granularState.registry.material(dominant.materialHandle()).primaryGrainDiameterMeters();
 		return diameter * diameter * porosity * porosity * porosity / (180.0 * solid * solid);
 	}
 
 	private double depositsPorosity(int cell) {
-		return granularDeposits.porosityQ(cell) / (double) GranularLimits.POROSITY_SCALE;
+		return granularState.deposits.porosityQ(cell) / (double) GranularLimits.POROSITY_SCALE;
 	}
 
 	private boolean addFaceImpulse(
@@ -5217,8 +4850,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		for (int i = 0; i < particles.count(); i++) {
 			maximum = Math.max(maximum, Math.abs(particles.velocityX(i)) + Math.abs(particles.velocityY(i)) + Math.abs(particles.velocityZ(i)));
 		}
-		if (granularParcels != null) for (int index = 0; index < granularParcels.count(); index++) {
-			GranularParcelStore.Parcel parcel = granularParcels.parcel(index);
+		if (granularState != null) for (int index = 0; index < granularState.parcels.count(); index++) {
+			GranularParcelStore.Parcel parcel = granularState.parcels.parcel(index);
 			maximum = Math.max(maximum, Math.abs(parcel.velocityX())
 					+ Math.abs(parcel.velocityY()) + Math.abs(parcel.velocityZ()));
 		}
@@ -5444,7 +5077,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		int transfers = 0, precipitated = 0, dissolved = 0, evaluations = 0; long signedSvq = 0L;
 		for (int cell : dirtyCells) {
 			if (liquidByPhase[cell] == null) continue;
-			for (SolidLiquidReaction rule : granularRegistry.reactions()) {
+			for (SolidLiquidReaction rule : granularState.registry.reactions()) {
 				if (++evaluations > GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP) {
 					throw new GranularPhaseTransferEngine.BlockedException("Phase-transfer operation budget exceeded");
 				}
@@ -5454,7 +5087,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				long existingExtent = accessible == null ? 0L : accessible.totalExtent();
 				if (existingExtent == 0L && !hasCompleteAqueousExtent(markers, rule)) continue;
 				long perStepBatches = Math.min(rule.accessibleSurfaceSvqPerCellStep(),
-						granularRegistry.material(granularRegistry.materialHandle(rule.solidMaterialId())).maximumActiveParcelSvq())
+						granularState.registry.material(granularState.registry.materialHandle(rule.solidMaterialId())).maximumActiveParcelSvq())
 						/ rule.solidVolumeSvqPerBatch();
 				long perStepExtent = Math.multiplyExact(perStepBatches, rule.solidExtentPerBatch());
 				if (perStepExtent <= 0L) throw new GranularPhaseTransferEngine.BlockedException(
@@ -5497,16 +5130,16 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	private AccessibleSolid accessibleSolid(int cell, SolidLiquidReaction rule) {
 		long total = 0L; SolidEntity selected = null;
-		int material = granularRegistry.materialHandle(rule.solidMaterialId());
-		for (int parcelIndex = 0; parcelIndex < granularParcels.count(); parcelIndex++) {
-			GranularParcelStore.Parcel parcel = granularParcels.parcel(parcelIndex);
+		int material = granularState.registry.materialHandle(rule.solidMaterialId());
+		for (int parcelIndex = 0; parcelIndex < granularState.parcels.count(); parcelIndex++) {
+			GranularParcelStore.Parcel parcel = granularState.parcels.parcel(parcelIndex);
 			if (parcel.materialHandle() != material || granularParcelCell(parcel) != cell) continue;
 			long extent = matchingSolidExtent(parcel.solidCompositionHandle(), parcel.solidVolumeSvq(), parcel.mass(), rule);
 			if (extent <= 0L) continue;
 			total = Math.addExact(total, extent);
 			if (selected == null) selected = SolidEntity.parcel(parcelIndex, parcel, extent);
 		}
-		GranularDepositStore.Group exposed = granularDeposits.dominantGroup(cell);
+		GranularDepositStore.Group exposed = granularState.deposits.dominantGroup(cell);
 		if (exposed != null && exposed.materialHandle() == material) {
 			long extent = matchingSolidExtent(exposed.solidCompositionHandle(), exposed.solidVolumeSvq(), exposed.mass(), rule);
 			if (extent > 0L) {
@@ -5518,8 +5151,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	private long matchingSolidExtent(int compositionHandle, long solidSvq, double mass, SolidLiquidReaction rule) {
-		if (compositionHandle == 0 || !solidCompositions.isLive(compositionHandle)) return 0L;
-		SolidCompositionRecord composition = solidCompositions.record(compositionHandle);
+		if (compositionHandle == 0 || !granularState.compositions.isLive(compositionHandle)) return 0L;
+		SolidCompositionRecord composition = granularState.compositions.record(compositionHandle);
 		if (composition.massResidual() != 0.0 || composition.entryCount() != rule.solidComposition().size()
 				|| !massClose(composition.totalMass(chemicalParcels.registry()), mass)) return 0L;
 		long extent = -1L;
@@ -5542,16 +5175,16 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		chemicalParcels.requireCanCommitPlannedReplacements(markers, mixtures);
 		int carrierMarker = precipitationCarrierMarker(cell, plan);
 		int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
-		long spawnSequence = ((long) cell << 16) + granularParcels.count();
+		long spawnSequence = ((long) cell << 16) + granularState.parcels.count();
 		GranularCouplingFields.Position position = granularCollision.spawnPosition(
 				x, y, z, plan.signedSolidSvq(), spawnSequence,
 				particles.positionX(carrierMarker), particles.positionY(carrierMarker), particles.positionZ(carrierMarker));
 		if (position == null) {
 			throw new GranularPhaseTransferEngine.BlockedException("Precipitation cell has no collision-valid spawn point");
 		}
-		granularCoupling.rebuild(granularParcels, granularDeposits);
+		granularCoupling.rebuild(granularState.parcels, granularState.deposits);
 		long[] occupiedBefore = granularCoupling.copySolidSvq();
-		int material = granularRegistry.materialHandle(rule.solidMaterialId());
+		int material = granularState.registry.materialHandle(rule.solidMaterialId());
 		PrecipitationMerge merge = precipitationMerge(cell, material, plan, position, carrierMarker, occupiedBefore);
 		if (merge != null) {
 			FlipThermalState.ReactionPlan thermalPlan = thermalState == null ? null : thermalState.requireGranularReaction(
@@ -5560,27 +5193,27 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 							material, merge.parcel().mass(),
 							merge.composition().stableAmounts(chemicalParcels.registry())), thermalMarkerContext());
 			chemicalParcels.commitPlannedReplacements(markers, mixtures); applyMarkerUpdates(plan);
-			solidCompositions.overwrite(merge.compositionHandle(), merge.composition());
-			granularParcels.overwrite(merge.parcelIndex(), merge.parcel());
+			granularState.compositions.overwrite(merge.compositionHandle(), merge.composition());
+			granularState.parcels.overwrite(merge.parcelIndex(), merge.parcel());
 			if (thermalPlan != null) thermalState.commitGranularReaction(thermalPlan, thermalMarkerContext());
 			commitPendingPhaseVolume(cell, pendingVolume);
 			markPhaseTransferDirty(cell);
 			return;
 		}
-		if (!solidCompositions.hasCapacity(1) || !granularParcels.hasCapacity(1)) {
+		if (!granularState.compositions.hasCapacity(1) || !granularState.parcels.hasCapacity(1)) {
 			throw new GranularPhaseTransferEngine.BlockedException("Precipitation parcel/composition budget exceeded");
 		}
 		if (!granularCoupling.tryPlanParcel(occupiedBefore, position, plan.signedSolidSvq(),
 				this::granularGeometricOpenSvq)) {
 			throw new GranularPhaseTransferEngine.BlockedException("Precipitation active parcel exceeds exact joint occupancy");
 		}
-		int composition = solidCompositions.create(plan.transferredComposition());
+		int composition = granularState.compositions.create(plan.transferredComposition());
 		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(position.x(), position.y(), position.z(),
 				particles.velocityX(carrierMarker), particles.velocityY(carrierMarker), particles.velocityZ(carrierMarker),
 				plan.signedSolidSvq(), plan.signedSolidMass(), material,
 				composition, 0, (byte) 0);
-		if (!granularParcels.canAdd(parcel)) {
-			solidCompositions.release(composition);
+		if (!granularState.parcels.canAdd(parcel)) {
+			granularState.compositions.release(composition);
 			throw new GranularPhaseTransferEngine.BlockedException("Precipitation active parcel budget exceeded");
 		}
 		FlipThermalState.ReactionPlan thermalPlan = thermalState == null ? null : thermalState.requireGranularReaction(
@@ -5588,8 +5221,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 						FlipThermalState.GranularReactionKind.ADD_ACTIVE, -1, null, material, parcel.mass(),
 						plan.transferredComposition().stableAmounts(chemicalParcels.registry())), thermalMarkerContext());
 		try { chemicalParcels.commitPlannedReplacements(markers, mixtures); }
-		catch (RuntimeException failure) { solidCompositions.release(composition); throw failure; }
-		applyMarkerUpdates(plan); granularParcels.add(parcel);
+		catch (RuntimeException failure) { granularState.compositions.release(composition); throw failure; }
+		applyMarkerUpdates(plan); granularState.parcels.add(parcel);
 		if (thermalPlan != null) {
 			thermalState.addGranularReactionActive();
 			thermalState.commitGranularReaction(thermalPlan, thermalMarkerContext());
@@ -5602,17 +5235,17 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			int cell, int material, GranularPhaseTransferEngine.Plan plan,
 			GranularCouplingFields.Position spawned, int carrierMarker, long[] occupiedBefore
 	) {
-		long maximum = granularRegistry.material(material).maximumActiveParcelSvq();
+		long maximum = granularState.registry.material(material).maximumActiveParcelSvq();
 		float velocityX = particles.velocityX(carrierMarker), velocityY = particles.velocityY(carrierMarker);
 		float velocityZ = particles.velocityZ(carrierMarker);
 		float maximumVelocityDelta = granularMergeVelocityDelta();
-		for (int parcelIndex = 0; parcelIndex < granularParcels.count(); parcelIndex++) {
-			GranularParcelStore.Parcel existing = granularParcels.parcel(parcelIndex);
+		for (int parcelIndex = 0; parcelIndex < granularState.parcels.count(); parcelIndex++) {
+			GranularParcelStore.Parcel existing = granularState.parcels.parcel(parcelIndex);
 			if (existing.materialHandle() != material || existing.solidCompositionHandle() == 0
 					|| granularParcelCell(existing) != cell) continue;
 			long combinedSvq = Math.addExact(existing.solidVolumeSvq(), plan.signedSolidSvq());
 			if (combinedSvq > maximum || !plan.transferredComposition().proportionalTo(
-					solidCompositions.record(existing.solidCompositionHandle()),
+					granularState.compositions.record(existing.solidCompositionHandle()),
 					plan.signedSolidSvq(), existing.solidVolumeSvq())) continue;
 			float deltaX = existing.velocityX() - velocityX, deltaY = existing.velocityY() - velocityY;
 			float deltaZ = existing.velocityZ() - velocityZ;
@@ -5623,7 +5256,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			float y = weighted(existing.y(), existing.solidVolumeSvq(), spawned.y(), plan.signedSolidSvq(), combinedSvq);
 			float z = weighted(existing.z(), existing.solidVolumeSvq(), spawned.z(), plan.signedSolidSvq(), combinedSvq);
 			if (!granularCollision.positionValid(x, y, z, combinedSvq)) continue;
-			SolidCompositionRecord composition = solidCompositions.record(existing.solidCompositionHandle())
+			SolidCompositionRecord composition = granularState.compositions.record(existing.solidCompositionHandle())
 					.plus(plan.transferredComposition());
 			GranularParcelStore.Parcel merged = new GranularParcelStore.Parcel(x, y, z,
 					weighted(existing.velocityX(), existing.mass(), velocityX, plan.signedSolidMass(), combinedMass),
@@ -5647,7 +5280,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		}
 		if (candidates == 0) throw new GranularPhaseTransferEngine.BlockedException(
 				"Precipitation did not remove volume from a carrier marker");
-		int selected = Math.floorMod((long) cell * 31L + granularParcels.count(), candidates);
+		int selected = Math.floorMod((long) cell * 31L + granularState.parcels.count(), candidates);
 		for (GranularPhaseTransferEngine.MarkerUpdate update : plan.markerUpdates()) {
 			if (particles.volume(update.marker()) <= update.cellVolume()) continue;
 			if (selected-- == 0) return update.marker();
@@ -5664,7 +5297,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		if (removedSvq <= 0L || removedSvq > solid.solidSvq()) {
 			throw new GranularPhaseTransferEngine.BlockedException("Dissolution exceeds accessible solid inventory");
 		}
-		SolidCompositionRecord original = solidCompositions.record(solid.compositionHandle());
+		SolidCompositionRecord original = granularState.compositions.record(solid.compositionHandle());
 		boolean full = removedSvq == solid.solidSvq();
 		SolidCompositionRecord remaining = full ? null : subtractComposition(original, plan.transferredComposition());
 		double remainingMass = solid.mass() - removedMass;
@@ -5672,7 +5305,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			throw new GranularPhaseTransferEngine.BlockedException("Dissolution solid mass split is not representable");
 		}
 		if (solid.deposit()) {
-			GranularDepositStore.SolidPortion preview = granularDeposits.peekTakeCompositionAware(cell,
+			GranularDepositStore.SolidPortion preview = granularState.deposits.peekTakeCompositionAware(cell,
 					solid.materialHandle(), solid.compositionHandle(), removedSvq);
 			if (!massClose(preview.mass(), removedMass)) throw new GranularPhaseTransferEngine.BlockedException(
 					"Dissolution deposit mass split is not representable");
@@ -5698,12 +5331,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			else thermalState.previewActiveTake(solid.index(), removedSvq, solid.solidSvq());
 		}
 		chemicalParcels.commitPlannedReplacements(markers, mixtures); applyMarkerUpdates(plan);
-		if (solid.deposit()) granularDeposits.takeCompositionAware(cell, solid.materialHandle(),
+		if (solid.deposit()) granularState.deposits.takeCompositionAware(cell, solid.materialHandle(),
 				solid.compositionHandle(), removedSvq);
-		else if (full) granularParcels.removeSwap(solid.index());
+		else if (full) granularState.parcels.removeSwap(solid.index());
 		else {
-			GranularParcelStore.Parcel parcel = granularParcels.parcel(solid.index());
-			granularParcels.overwrite(solid.index(), new GranularParcelStore.Parcel(parcel.x(), parcel.y(), parcel.z(),
+			GranularParcelStore.Parcel parcel = granularState.parcels.parcel(solid.index());
+			granularState.parcels.overwrite(solid.index(), new GranularParcelStore.Parcel(parcel.x(), parcel.y(), parcel.z(),
 					parcel.velocityX(), parcel.velocityY(), parcel.velocityZ(), parcel.solidVolumeSvq() - removedSvq,
 					remainingMass, parcel.materialHandle(), parcel.solidCompositionHandle(), parcel.contactAge(), parcel.flags()));
 		}
@@ -5712,7 +5345,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 					thermalDepositKey, removedSvq, solid.solidSvq());
 			else thermalState.takeGranularReactionActive(solid.index(), removedSvq, solid.solidSvq());
 		}
-		if (full) solidCompositions.release(solid.compositionHandle()); else solidCompositions.overwrite(
+		if (full) granularState.compositions.release(solid.compositionHandle()); else granularState.compositions.overwrite(
 				solid.compositionHandle(), remaining);
 		if (thermalPlan != null) thermalState.commitGranularReaction(thermalPlan, thermalMarkerContext());
 		commitPendingPhaseVolume(cell, pendingVolume);
@@ -5797,7 +5430,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return cellIndex(x, y, z);
 	}
 
-	private static boolean massClose(double left, double right) {
+	static boolean massClose(double left, double right) {
 		return Math.abs(left - right) <= Math.max(1.0E-9, Math.max(Math.ulp(left), Math.ulp(right)) * 8.0);
 	}
 

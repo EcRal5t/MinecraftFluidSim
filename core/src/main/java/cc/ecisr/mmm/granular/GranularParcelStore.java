@@ -32,6 +32,7 @@ public final class GranularParcelStore {
 	private final int[] materialHandle, solidCompositionHandle, contactAge;
 	private final byte[] flags;
 	private int count;
+	private long mutationRevision;
 
 	public GranularParcelStore(GranularRegistry registry, int capacity) {
 		if (registry == null) throw new IllegalArgumentException("Granular registry is missing");
@@ -50,6 +51,8 @@ public final class GranularParcelStore {
 	public int count() { return count; }
 	public int capacity() { return capacity; }
 	public boolean hasCapacity(int additional) { return additional >= 0 && additional <= capacity - count; }
+	/** Monotonic counter over every structural mutation; plan consumers re-verify it before commit. */
+	public long mutationRevision() { return mutationRevision; }
 	long maximumActiveParcelSvq(int material) { return registry.material(material).maximumActiveParcelSvq(); }
 
 	public int add(Parcel parcel) {
@@ -57,6 +60,7 @@ public final class GranularParcelStore {
 		if (count == capacity) throw new BudgetExceededException("Active granular parcel budget exceeded");
 		int index = count++;
 		write(index, parcel);
+		mutationRevision++;
 		return index;
 	}
 
@@ -76,6 +80,7 @@ public final class GranularParcelStore {
 		requireIndex(index);
 		validate(parcel);
 		write(index, parcel);
+		mutationRevision++;
 	}
 
 	public Parcel removeSwap(int index) {
@@ -85,6 +90,7 @@ public final class GranularParcelStore {
 		count--;
 		if (moved != null) write(index, moved);
 		clear(last);
+		mutationRevision++;
 		return removed;
 	}
 
@@ -101,6 +107,7 @@ public final class GranularParcelStore {
 		write(index, new Parcel(original.x(), original.y(), original.z(), original.velocityX(), original.velocityY(),
 				original.velocityZ(), original.solidVolumeSvq() - takenSvq, remainingMass,
 				original.materialHandle(), original.solidCompositionHandle(), original.contactAge(), original.flags()));
+		mutationRevision++;
 		return add(new Parcel(original.x(), original.y(), original.z(), original.velocityX(), original.velocityY(),
 				original.velocityZ(), takenSvq, takenMass, original.materialHandle(), original.solidCompositionHandle(),
 				original.contactAge(), original.flags()));
@@ -132,6 +139,7 @@ public final class GranularParcelStore {
 		int last = count - 1;
 		removeSwap(second);
 		if (first == last && second != last) write(second, merged);
+		mutationRevision++;
 	}
 
 	public long totalSolidVolumeSvq() {

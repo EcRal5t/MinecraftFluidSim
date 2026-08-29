@@ -27,16 +27,16 @@ final class CellInventoryReader {
 	CellCarrierInventoryView observeCellCarriers(int x, int y, int z) {
 		int requested = domain.cellIndexChecked(x, y, z);
 		TreeMap<String, SolidObservationAccumulator> accumulated = new TreeMap<>();
-		if (domain.granularParcels != null) for (int ordinal = 0; ordinal < domain.granularParcels.count(); ordinal++) {
-			GranularParcelStore.Parcel parcel = domain.granularParcels.parcel(ordinal);
+		if (domain.granularState != null) for (int ordinal = 0; ordinal < domain.granularState.parcels.count(); ordinal++) {
+			GranularParcelStore.Parcel parcel = domain.granularState.parcels.parcel(ordinal);
 			if (domain.granularParcelCell(parcel) == requested) addObservedSolid(accumulated,
 					CellCarrierInventoryView.SolidKind.ACTIVE,
-					domain.granularRegistry.material(parcel.materialHandle()).id(), parcel.solidVolumeSvq(), parcel.mass());
+					domain.granularState.registry.material(parcel.materialHandle()).id(), parcel.solidVolumeSvq(), parcel.mass());
 		}
-		if (domain.granularDeposits != null) domain.granularDeposits.forEachGroup(
+		if (domain.granularState != null) domain.granularState.deposits.forEachGroup(
 				(cell, ignoredPorosity, material, ignoredComposition, svq, mass) -> {
 			if (cell == requested) addObservedSolid(accumulated, CellCarrierInventoryView.SolidKind.DEPOSIT,
-					domain.granularRegistry.material(material).id(), svq, mass);
+					domain.granularState.registry.material(material).id(), svq, mass);
 		});
 		if (domain.thermalState != null) {
 			for (CoherentPhaseStore.Group group : domain.thermalState.coherentPhases().snapshot()) {
@@ -82,12 +82,12 @@ final class CellInventoryReader {
 		for (int marker = 0; marker < domain.particles.count(); marker++) {
 			if (domain.particleCellIndex(marker) == requested) return true;
 		}
-		if (domain.granularParcels != null) {
-			for (int ordinal = 0; ordinal < domain.granularParcels.count(); ordinal++) {
-				if (domain.granularParcelCell(domain.granularParcels.parcel(ordinal)) == requested) return true;
+		if (domain.granularState != null) {
+			for (int ordinal = 0; ordinal < domain.granularState.parcels.count(); ordinal++) {
+				if (domain.granularParcelCell(domain.granularState.parcels.parcel(ordinal)) == requested) return true;
 			}
 		}
-		if (domain.granularDeposits != null && domain.granularDeposits.cellSolidVolumeSvq(requested) > 0L) return true;
+		if (domain.granularState != null && domain.granularState.deposits.cellSolidVolumeSvq(requested) > 0L) return true;
 		return domain.thermalState != null && domain.thermalState.coherentPhases().cellOccupiedSvq(requested) > 0L;
 	}
 

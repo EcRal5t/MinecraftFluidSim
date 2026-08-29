@@ -177,7 +177,7 @@ final class MaterialTransferPlanner {
 					continue;
 				}
 				int cell = domain.cellIndex(x, y, z);
-				float left = added;
+				float left = added, plannedInCell = 0.0F;
 				for (int slot = domain.firstOpenSlot(cell, 0); left > 1.0E-6F;
 						slot = domain.firstOpenSlot(cell, slot + 1)) {
 					if (slot < 0) throw new IllegalStateException("Cut-cell open volume was exhausted while spawning markers");
@@ -193,11 +193,13 @@ final class MaterialTransferPlanner {
 								Math.addExact(plannedChemicalQuanta, pieceQuanta))
 								> cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
 							markerBudgetLimited = true;
+							remaining -= plannedInCell;
 							break cellLoop;
 						}
 						plannedChemicalQuanta = Math.addExact(plannedChemicalQuanta, pieceQuanta);
 					}
 					insertPieces.add(new MaterialInsertPiece(x, y, z, slot, piece, 0, pieceMass, chemical));
+					plannedInCell += piece;
 					left -= piece;
 				}
 				exactCellVolume[index] += added;

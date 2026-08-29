@@ -1,0 +1,423 @@
+package cc.ecisr.mmm.fluid;
+
+import cc.ecisr.mmm.granular.GranularAuditLedger;
+import cc.ecisr.mmm.granular.GranularCouplingFields;
+import cc.ecisr.mmm.granular.GranularDepositStore;
+import cc.ecisr.mmm.granular.GranularParcelStore;
+import cc.ecisr.mmm.granular.GranularTransferLedger;
+import cc.ecisr.mmm.granular.SolidCompositionRecord;
+import cc.ecisr.mmm.granular.SolidVolume;
+import cc.ecisr.mmm.thermal.GranularEnergyColumn;
+
+import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+
+/**
+ * Plans and commits the exact dry-container granular transfers against shared collision
+ * capacity before any parcel, deposit, composition or audit truth changes: ledger piece
+ * derivation, nearby cell selection, loose packing/capacity planning and the thermal energy
+ * settlement are all resolved first, and the commit loops only apply pre-validated pieces.
+ * The inventory-only variant serves fixtures and transactional service adapters.
+ */
+final class GranularTransferPlanner {
+	private final FlipFluidDomain domain;
+
+	GranularTransferPlanner(FlipFluidDomain domain) {
+		this.domain = domain;
+	}
+
+	/** Inventory-only exact insertion used by fixtures and transactional service adapters. */
+	FlipFluidDomain.GranularInsertion insertExactInventory(
+			int cellX, int cellY, int cellZ, int materialHandle, int compositionHandle,
+			long solidVolumeSvq, double mass
+	) {
+		GranularDomainState granular = domain.granularState;
+		if (granular == null) return FlipFluidDomain.GranularInsertion.rejected("Granular state is not bound");
+		int cell = domain.cellIndexChecked(cellX, cellY, cellZ);
+		if (solidVolumeSvq <= 0L || !(Double.isFinite(mass) && mass > 0.0)) {
+			throw new IllegalArgumentException("Granular insertion inventory is invalid");
+		}
+		granular.registry.material(materialHandle);
+		if (compositionHandle != 0 && (granular.compositions == null || !granular.compositions.isLive(compositionHandle))) {
+			throw new IllegalArgumentException("Granular insertion has no live solid composition");
+		}
+		domain.ensureGrid();
+		domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
+		long[] plannedSolid = domain.granularCoupling.copySolidSvq();
+		GranularCouplingFields.Position position = null;
+		for (int attempt = 0; attempt < 16 && position == null; attempt++) {
+			GranularCouplingFields.Position candidate = domain.granularCollision.spawnPosition(
+					cellX, cellY, cellZ, solidVolumeSvq, granular.parcels.count() + attempt * 16_384L,
+					Float.NaN, Float.NaN, Float.NaN);
+			if (candidate != null && domain.granularCoupling.tryPlanParcel(plannedSolid, candidate, solidVolumeSvq,
+					domain::granularGeometricOpenSvq)) position = candidate;
+		}
+		if (position == null) return FlipFluidDomain.GranularInsertion.rejected("Target cell has no collision-valid solid capacity");
+		double insertedCellVolume = SolidVolume.toCellVolume(solidVolumeSvq);
+		if (domain.totalVolumeExact() + SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq()) + insertedCellVolume
+				> domain.totalGeometricOpenVolumeExact() + 1.0e-9) {
+			return FlipFluidDomain.GranularInsertion.rejected("Sealed region has no combined fluid/solid capacity");
+		}
+		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(
+				position.x(), position.y(), position.z(), 0.0F, 0.0F, 0.0F,
+				solidVolumeSvq, mass, materialHandle, compositionHandle, 0, (byte) 0);
+		if (!granular.parcels.canAdd(parcel)) return FlipFluidDomain.GranularInsertion.rejected("Active granular parcel budget exceeded");
+		double thermalEnergy = domain.thermalState == null ? 0.0 : domain.thermalState.planExternalGranularEnergy(
+				materialHandle, compositionHandle, mass, domain.thermalMarkerContext());
+		granular.parcels.add(parcel);
+		if (domain.thermalState != null) domain.thermalState.commitExternalActiveInsertions(new double[]{thermalEnergy});
+		domain.gridDirty = true;
+		return new FlipFluidDomain.GranularInsertion(true, solidVolumeSvq, mass, null);
+	}
+
+	/** All-or-nothing dry-container insertion. The ledger is already stable-ID validated by the item adapter. */
+	FlipFluidDomain.GranularInsertion insertExact(
+			int cellX, int cellY, int cellZ, GranularTransferLedger ledger, int maxRadius, boolean externalSource
+	) {
+		GranularDomainState granular = domain.granularState;
+		if (granular == null) return FlipFluidDomain.GranularInsertion.rejected("Granular state is not bound");
+		if (ledger == null) throw new IllegalArgumentException("Granular insertion ledger is missing");
+		if (maxRadius < 0) throw new IllegalArgumentException("Granular insertion radius is invalid");
+		domain.cellIndexChecked(cellX, cellY, cellZ); domain.ensureGrid();
+		domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
+		long insertedSvq = ledger.totalSolidVolumeSvq(); double insertedMass = ledger.totalMass();
+		if (domain.totalVolumeExact() + SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq())
+				+ SolidVolume.toCellVolume(insertedSvq) > domain.totalGeometricOpenVolumeExact() + 1.0e-9) {
+			return FlipFluidDomain.GranularInsertion.rejected("Sealed region has no combined fluid/solid capacity");
+		}
+		ArrayList<GranularParcelDraft> drafts = new ArrayList<>(); int reactiveDrafts = 0;
+		for (GranularTransferLedger.Group group : ledger.groups()) {
+			int materialHandle = granular.registry.materialHandle(group.materialId());
+			var material = granular.registry.material(materialHandle);
+			if (material.reactive() != (group.composition() != null)) {
+				throw new IllegalArgumentException("Granular transfer material/composition kind mismatch");
+			}
+			if (group.composition() != null) {
+				if (granular.compositions == null || !FlipFluidDomain.massClose(group.composition().totalMass(granular.compositions.registry()), group.mass())) {
+					throw new IllegalArgumentException("Granular transfer composition/mass mismatch");
+				}
+			}
+			long remainingSvq = group.solidVolumeSvq(); double remainingMass = group.mass();
+			while (remainingSvq > 0L) {
+				long pieceSvq = Math.min(remainingSvq, material.maximumActiveParcelSvq());
+				double pieceMass = pieceSvq == remainingSvq ? remainingMass
+						: group.mass() * ((double) pieceSvq / group.solidVolumeSvq());
+				if (!(Double.isFinite(pieceMass) && pieceMass > 0.0 && pieceMass <= remainingMass)) {
+					return FlipFluidDomain.GranularInsertion.rejected("Granular transfer mass split is not representable");
+				}
+				SolidCompositionRecord pieceComposition = group.composition() == null ? null
+						: splitSolidComposition(group.composition(), group.solidVolumeSvq(), pieceSvq, pieceMass);
+				drafts.add(new GranularParcelDraft(materialHandle, pieceSvq, pieceMass, pieceComposition));
+				if (pieceComposition != null) reactiveDrafts++;
+				remainingSvq -= pieceSvq; remainingMass -= pieceMass;
+			}
+		}
+		List<FlipFluidDomain.CellCandidate> insertionCells = domain.nearbyCells(cellX, cellY, cellZ, maxRadius);
+		// A dry pour is a loose release envelope, not a vertical stack of mutually blocking
+		// numerical parcels. Prefer nearby horizontal cells; vertical cells remain bounded
+		// fallbacks when the port neighborhood or exact occupancy requires them.
+		insertionCells.sort(Comparator
+				.comparingInt((FlipFluidDomain.CellCandidate candidate) -> insertionDistance(candidate, cellY))
+				.thenComparingInt(FlipFluidDomain.CellCandidate::distanceSquared)
+				.thenComparingInt(FlipFluidDomain.CellCandidate::index));
+		int releaseCellCount = releaseCellCount(insertionCells, ledger);
+		long[] plannedSolid = domain.granularCoupling.copySolidSvq();
+		int[] plannedParcelCounts = new int[domain.cellCount];
+		for (int parcel = 0; parcel < granular.parcels.count(); parcel++) {
+			plannedParcelCounts[domain.granularParcelCell(granular.parcels.parcel(parcel))]++;
+		}
+		ArrayList<GranularParcelDraft> positioned = new ArrayList<>(drafts.size());
+		for (GranularParcelDraft draft : drafts) {
+			int selected = -1; GranularCouplingFields.Position selectedPosition = null;
+			boolean[] attemptedReleaseCells = new boolean[releaseCellCount];
+			for (int candidateAttempt = 0; candidateAttempt < insertionCells.size(); candidateAttempt++) {
+				int candidateOrdinal;
+				if (candidateAttempt < releaseCellCount) {
+					candidateOrdinal = -1;
+					for (int ordinal = 0; ordinal < releaseCellCount; ordinal++) {
+						if (!attemptedReleaseCells[ordinal] && (candidateOrdinal < 0
+								|| plannedParcelCounts[insertionCells.get(ordinal).index()]
+								< plannedParcelCounts[insertionCells.get(candidateOrdinal).index()])) {
+							candidateOrdinal = ordinal;
+						}
+					}
+					attemptedReleaseCells[candidateOrdinal] = true;
+				} else {
+					candidateOrdinal = candidateAttempt;
+				}
+				FlipFluidDomain.CellCandidate candidate = insertionCells.get(candidateOrdinal);
+				int candidateX = candidate.index() % domain.sizeX, candidateYz = candidate.index() / domain.sizeX;
+				int candidateY = candidateYz % domain.sizeY, candidateZ = candidateYz / domain.sizeY;
+				for (int attempt = 0; attempt < 16; attempt++) {
+					long sequence = plannedParcelCounts[candidate.index()] + attempt * 16_384L;
+					GranularCouplingFields.Position spawn = domain.granularCollision.spawnPosition(
+							candidateX, candidateY, candidateZ, draft.solidVolumeSvq(), sequence,
+							Float.NaN, Float.NaN, Float.NaN);
+					if (spawn != null && domain.granularCoupling.tryPlanParcel(plannedSolid, spawn, draft.solidVolumeSvq(),
+							domain::granularGeometricOpenSvq)) {
+						selected = candidate.index(); selectedPosition = spawn; break;
+					}
+				}
+				if (selected >= 0) break;
+			}
+			if (selected < 0) return FlipFluidDomain.GranularInsertion.rejected("Nearby cells have no collision-valid solid capacity");
+			plannedParcelCounts[selected]++;
+			positioned.add(draft.at(selected, selectedPosition));
+		}
+		drafts = positioned;
+		if (!granular.parcels.hasCapacity(drafts.size())
+				|| reactiveDrafts > 0 && !granular.compositions.hasCapacity(reactiveDrafts)) {
+			return FlipFluidDomain.GranularInsertion.rejected("Active granular parcel/composition budget exceeded");
+		}
+		GranularAuditLedger sourceAfter = externalSource ? granular.externalSource.plus(
+				ledger, granular.registry, granular.compositions == null ? null : granular.compositions.registry()) : granular.externalSource;
+		int originalCount = granular.parcels.count(); ArrayList<Integer> createdCompositions = new ArrayList<>(reactiveDrafts);
+		double[] thermalInsertions = null;
+		try {
+			for (GranularParcelDraft draft : drafts) {
+				int compositionHandle = draft.composition() == null ? 0 : granular.compositions.create(draft.composition());
+				if (compositionHandle != 0) createdCompositions.add(compositionHandle);
+				granular.parcels.add(new GranularParcelStore.Parcel(
+						draft.x(), draft.y(), draft.z(), 0.0F, 0.0F, 0.0F,
+						draft.solidVolumeSvq(), draft.mass(), draft.materialHandle(), compositionHandle, 0, (byte) 0));
+			}
+			if (domain.thermalState != null) thermalInsertions = domain.thermalState.planExternalActiveInsertions(originalCount,
+					granular.parcels.count() - originalCount, domain.thermalMarkerContext());
+		} catch (RuntimeException failure) {
+			while (granular.parcels.count() > originalCount) granular.parcels.removeSwap(granular.parcels.count() - 1);
+			for (int handle : createdCompositions) if (granular.compositions.isLive(handle)) granular.compositions.release(handle);
+			throw failure;
+		}
+		if (domain.thermalState != null) domain.thermalState.commitExternalActiveInsertions(thermalInsertions);
+		boolean[] changedCells = new boolean[domain.cellCount];
+		for (GranularParcelDraft draft : drafts) {
+			int changed = draft.cell();
+			if (!changedCells[changed]) { domain.markGranularExternalChange(changed); changedCells[changed] = true; }
+		}
+		granular.externalSource = sourceAfter;
+		return new FlipFluidDomain.GranularInsertion(true, insertedSvq, insertedMass, null);
+	}
+
+	/** Number of nearby cells needed to release the local inventory at its material-defined loose packing. */
+	private int releaseCellCount(List<FlipFluidDomain.CellCandidate> insertionCells, GranularTransferLedger ledger) {
+		GranularDomainState granular = domain.granularState;
+		if (insertionCells.isEmpty()) return 0;
+		boolean[] nearby = new boolean[domain.cellCount];
+		long looseBulkSvq = 0L;
+		for (FlipFluidDomain.CellCandidate candidate : insertionCells) {
+			nearby[candidate.index()] = true;
+			looseBulkSvq = Math.addExact(looseBulkSvq,
+					granular.deposits.cellBulkVolumeSvq(candidate.index()));
+		}
+		for (int parcel = 0; parcel < granular.parcels.count(); parcel++) {
+			GranularParcelStore.Parcel existing = granular.parcels.parcel(parcel);
+			if (nearby[domain.granularParcelCell(existing)]) {
+				looseBulkSvq = Math.addExact(looseBulkSvq, SolidVolume.bulkVolumeCeil(
+						existing.solidVolumeSvq(), granular.registry.material(existing.materialHandle()).restPorosityQ()));
+			}
+		}
+		for (GranularTransferLedger.Group group : ledger.groups()) {
+			var material = granular.registry.material(granular.registry.materialHandle(group.materialId()));
+			looseBulkSvq = Math.addExact(looseBulkSvq,
+					SolidVolume.bulkVolumeCeil(group.solidVolumeSvq(), material.restPorosityQ()));
+		}
+		long cells = Math.addExact(looseBulkSvq, SolidVolume.SVQ_PER_CELL - 1L) / SolidVolume.SVQ_PER_CELL;
+		return (int) Math.min(insertionCells.size(), Math.max(1L, cells));
+	}
+
+	private int insertionDistance(FlipFluidDomain.CellCandidate candidate, int centerY) {
+		int yz = candidate.index() / domain.sizeX;
+		int deltaY = yz % domain.sizeY - centerY;
+		return candidate.distanceSquared() + 8 * deltaY * deltaY;
+	}
+
+	/** Extracts only same-cell active parcels and the one exposed deposit group, never deep inventory. */
+	FlipFluidDomain.GranularExtraction extractExact(
+			int cellX, int cellY, int cellZ, long maximumSolidVolumeSvq, int maxRadius, boolean escapedSink,
+			java.util.function.Predicate<GranularTransferLedger> itemAcceptance
+	) {
+		GranularDomainState granular = domain.granularState;
+		if (granular == null) return FlipFluidDomain.GranularExtraction.rejected("Granular state is not bound");
+		if (domain.hasPendingPhaseVolumeWork()) {
+			return FlipFluidDomain.GranularExtraction.rejected("Pending phase mechanical work must be projected before extraction");
+		}
+		if (itemAcceptance == null) throw new IllegalArgumentException("Granular item acceptance is missing");
+		if (maximumSolidVolumeSvq <= 0L || maximumSolidVolumeSvq > SolidVolume.SVQ_PER_BV) {
+			throw new IllegalArgumentException("Granular extraction capacity is invalid");
+		}
+		if (maxRadius < 0) throw new IllegalArgumentException("Granular extraction radius is invalid");
+		domain.cellIndexChecked(cellX, cellY, cellZ); long remaining = maximumSolidVolumeSvq;
+		List<FlipFluidDomain.CellCandidate> extractionCells = domain.nearbyCells(cellX, cellY, cellZ, maxRadius);
+		boolean[] near = new boolean[domain.cellCount]; for (FlipFluidDomain.CellCandidate candidate : extractionCells) near[candidate.index()] = true;
+		ArrayList<GranularRemoval> removals = new ArrayList<>();
+		GranularLedgerBuilder ledger = new GranularLedgerBuilder();
+		for (int parcelIndex = 0; parcelIndex < granular.parcels.count() && remaining > 0L; parcelIndex++) {
+			GranularParcelStore.Parcel parcel = granular.parcels.parcel(parcelIndex);
+			int parcelCell = domain.granularParcelCell(parcel);
+			if (!near[parcelCell] || !ledger.canAccept(granular.registry.material(parcel.materialHandle()).id())) continue;
+			long taken = Math.min(remaining, parcel.solidVolumeSvq());
+			if (parcel.solidCompositionHandle() != 0 && taken != parcel.solidVolumeSvq()) continue;
+			double mass = taken == parcel.solidVolumeSvq() ? parcel.mass()
+					: parcel.mass() * ((double) taken / parcel.solidVolumeSvq());
+			SolidCompositionRecord composition = parcel.solidCompositionHandle() == 0 ? null
+					: granular.compositions.record(parcel.solidCompositionHandle());
+			ledger.add(granular.registry.material(parcel.materialHandle()).id(), taken, mass, composition);
+			double energy = domain.thermalState == null ? 0.0
+					: domain.thermalState.previewActiveTake(parcelIndex, taken, parcel.solidVolumeSvq());
+			removals.add(GranularRemoval.parcel(parcelIndex, parcelCell, parcel, taken, mass, energy)); remaining -= taken;
+		}
+		for (FlipFluidDomain.CellCandidate candidate : extractionCells) if (remaining > 0L) {
+			int cell = candidate.index(); GranularDepositStore.Group exposed = granular.deposits.dominantGroup(cell);
+			if (exposed != null && ledger.canAccept(granular.registry.material(exposed.materialHandle()).id())) {
+				long taken = Math.min(remaining, exposed.solidVolumeSvq());
+				if (exposed.solidCompositionHandle() == 0 || taken == exposed.solidVolumeSvq()) {
+					GranularDepositStore.SolidPortion preview = granular.deposits.peekTake(cell, exposed.materialHandle(),
+							exposed.solidCompositionHandle(), taken);
+					SolidCompositionRecord composition = exposed.solidCompositionHandle() == 0 ? null
+							: granular.compositions.record(exposed.solidCompositionHandle());
+					ledger.add(granular.registry.material(exposed.materialHandle()).id(), taken, preview.mass(), composition);
+					double energy = domain.thermalState == null ? 0.0 : domain.thermalState.previewDepositTake(
+							new GranularEnergyColumn.DepositKey(cell, exposed.materialHandle(),
+									exposed.solidCompositionHandle()), taken, exposed.solidVolumeSvq());
+					removals.add(GranularRemoval.deposit(cell, exposed, taken, preview.mass(), energy));
+					remaining -= taken;
+				}
+			}
+		}
+		if (removals.isEmpty()) return FlipFluidDomain.GranularExtraction.rejected("Target cell has no accessible granular inventory");
+		GranularTransferLedger transfer = ledger.build();
+		if (!itemAcceptance.test(transfer)) {
+			return FlipFluidDomain.GranularExtraction.rejected("Accessible granular inventory cannot be represented by the dry container");
+		}
+		GranularAuditLedger sinkAfter = escapedSink ? granular.escapedSink.plus(
+				transfer, granular.registry, granular.compositions == null ? null : granular.compositions.registry()) : granular.escapedSink;
+		for (GranularRemoval removal : removals) if (removal.deposit()) {
+			granular.deposits.take(removal.cell(), removal.materialHandle(), removal.compositionHandle(), removal.solidVolumeSvq());
+			if (domain.thermalState != null) domain.thermalState.commitExternalDepositTake(new GranularEnergyColumn.DepositKey(
+					removal.cell(), removal.materialHandle(), removal.compositionHandle()),
+					removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
+			if (removal.compositionHandle() != 0) granular.compositions.release(removal.compositionHandle());
+		}
+		for (GranularRemoval removal : removals) if (!removal.deposit()
+				&& removal.solidVolumeSvq() != removal.originalSolidVolumeSvq()) {
+			GranularParcelStore.Parcel parcel = granular.parcels.parcel(removal.index());
+			granular.parcels.overwrite(removal.index(), new GranularParcelStore.Parcel(parcel.x(), parcel.y(), parcel.z(),
+					parcel.velocityX(), parcel.velocityY(), parcel.velocityZ(),
+					parcel.solidVolumeSvq() - removal.solidVolumeSvq(), parcel.mass() - removal.mass(),
+					parcel.materialHandle(), 0, parcel.contactAge(), parcel.flags()));
+			if (domain.thermalState != null) domain.thermalState.commitExternalActiveTake(
+					removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
+		}
+		removals.stream().filter(removal -> !removal.deposit()
+				&& removal.solidVolumeSvq() == removal.originalSolidVolumeSvq())
+				.sorted(Comparator.comparingInt(GranularRemoval::index).reversed()).forEach(removal -> {
+					GranularParcelStore.Parcel removed = granular.parcels.removeSwap(removal.index());
+					if (domain.thermalState != null) domain.thermalState.commitExternalActiveTake(
+							removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
+					if (removed.solidCompositionHandle() != 0) granular.compositions.release(removed.solidCompositionHandle());
+				});
+		boolean[] changedCells = new boolean[domain.cellCount];
+		for (GranularRemoval removal : removals) if (!changedCells[removal.cell()]) {
+			domain.markGranularExternalChange(removal.cell()); changedCells[removal.cell()] = true;
+		}
+		granular.escapedSink = sinkAfter;
+		double removedEnergy = 0.0;
+		for (GranularRemoval removal : removals) removedEnergy += removal.internalEnergy();
+		if (!Double.isFinite(removedEnergy)) throw new ArithmeticException("Granular extraction thermal energy overflow");
+		return new FlipFluidDomain.GranularExtraction(true, transfer, removedEnergy, null);
+	}
+
+	private SolidCompositionRecord splitSolidComposition(
+			SolidCompositionRecord source, long sourceSvq, long pieceSvq, double pieceMass
+	) {
+		int[] species = source.copySpeciesHandles(); long[] amounts = source.copyAmounts();
+		for (int entry = 0; entry < amounts.length; entry++) {
+			BigInteger[] division = BigInteger.valueOf(amounts[entry]).multiply(BigInteger.valueOf(pieceSvq))
+					.divideAndRemainder(BigInteger.valueOf(sourceSvq));
+			if (division[1].signum() != 0 || division[0].signum() <= 0) {
+				throw new IllegalArgumentException("Reactive granular container split is below composition resolution");
+			}
+			amounts[entry] = division[0].longValueExact();
+		}
+		SolidCompositionRecord exact = new SolidCompositionRecord(species, amounts, Double.doubleToRawLongBits(0.0));
+		double residual = pieceMass - exact.exactSpeciesMass(domain.granularState.compositions.registry()).toDouble();
+		return new SolidCompositionRecord(species, amounts, Double.doubleToRawLongBits(residual));
+	}
+
+	private record GranularParcelDraft(
+			int materialHandle, long solidVolumeSvq, double mass, SolidCompositionRecord composition,
+			int cell, float x, float y, float z
+	) {
+		GranularParcelDraft(int materialHandle, long solidVolumeSvq, double mass, SolidCompositionRecord composition) {
+			this(materialHandle, solidVolumeSvq, mass, composition, -1, Float.NaN, Float.NaN, Float.NaN);
+		}
+		GranularParcelDraft at(int cell, GranularCouplingFields.Position position) {
+			return new GranularParcelDraft(materialHandle, solidVolumeSvq, mass, composition,
+					cell, position.x(), position.y(), position.z());
+		}
+	}
+
+	private static final class GranularLedgerBuilder {
+		private final TreeMap<String, MutableGranularGroup> groups = new TreeMap<>();
+		boolean canAccept(String materialId) {
+			return groups.containsKey(materialId) || groups.size() < GranularTransferLedger.MAX_GROUPS;
+		}
+		void add(String materialId, long svq, double mass, SolidCompositionRecord composition) {
+			groups.computeIfAbsent(materialId, ignored -> new MutableGranularGroup()).add(svq, mass, composition);
+		}
+		GranularTransferLedger build() {
+			ArrayList<GranularTransferLedger.Group> result = new ArrayList<>(groups.size());
+			for (Map.Entry<String, MutableGranularGroup> entry : groups.entrySet()) {
+				result.add(entry.getValue().build(entry.getKey()));
+			}
+			return new GranularTransferLedger(result);
+		}
+	}
+
+	private static final class MutableGranularGroup {
+		private long svq; private double mass, residual; private TreeMap<Integer, Long> species;
+		void add(long addedSvq, double addedMass, SolidCompositionRecord composition) {
+			svq = Math.addExact(svq, addedSvq); mass += addedMass;
+			if (composition == null) {
+				if (species != null) throw new IllegalArgumentException("Mixed inert/reactive granular material group");
+				return;
+			}
+			if (species == null) species = new TreeMap<>(); residual += composition.massResidual();
+			for (int entry = 0; entry < composition.entryCount(); entry++) species.merge(
+					composition.speciesHandle(entry), composition.amountAt(entry), Math::addExact);
+		}
+		GranularTransferLedger.Group build(String materialId) {
+			SolidCompositionRecord composition = null;
+			if (species != null) {
+				int[] handles = new int[species.size()]; long[] amounts = new long[species.size()]; int index = 0;
+				for (Map.Entry<Integer, Long> entry : species.entrySet()) {
+					handles[index] = entry.getKey(); amounts[index++] = entry.getValue();
+				}
+				composition = new SolidCompositionRecord(handles, amounts, Double.doubleToRawLongBits(residual));
+			}
+			return new GranularTransferLedger.Group(materialId, svq, mass, composition);
+		}
+	}
+
+	private record GranularRemoval(
+			boolean deposit, int index, int cell, int materialHandle, int compositionHandle,
+			long solidVolumeSvq, long originalSolidVolumeSvq, double mass, double internalEnergy
+	) {
+		static GranularRemoval parcel(
+				int index, int cell, GranularParcelStore.Parcel parcel, long svq, double mass, double energy
+		) {
+			return new GranularRemoval(false, index, cell, parcel.materialHandle(), parcel.solidCompositionHandle(),
+					svq, parcel.solidVolumeSvq(), mass, energy);
+		}
+		static GranularRemoval deposit(
+				int cell, GranularDepositStore.Group group, long svq, double mass, double energy
+		) {
+			return new GranularRemoval(true, -1, cell, group.materialHandle(), group.solidCompositionHandle(),
+					svq, group.solidVolumeSvq(), mass, energy);
+		}
+	}
+}

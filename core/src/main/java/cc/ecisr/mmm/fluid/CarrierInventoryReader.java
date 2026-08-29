@@ -98,16 +98,16 @@ final class CarrierInventoryReader {
 	}
 
 	GranularStateSnapshot exportGranularState() {
-		if (domain.granularRegistry == null) throw new IllegalStateException("Granular state is not bound");
-		return GranularStateSnapshot.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.granularRegistry,
-				domain.granularParcels, domain.granularDeposits, domain.solidCompositions,
-				domain.granularExternalSource, domain.granularEscapedSink);
+		if (domain.granularState == null) throw new IllegalStateException("Granular state is not bound");
+		return GranularStateSnapshot.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.granularState.registry,
+				domain.granularState.parcels, domain.granularState.deposits, domain.granularState.compositions,
+				domain.granularState.externalSource, domain.granularState.escapedSink);
 	}
 
 	GranularDisplaySnapshot copyGranularDisplaySnapshot() {
-		if (domain.granularRegistry == null) throw new IllegalStateException("Granular state is not bound");
+		if (domain.granularState == null) throw new IllegalStateException("Granular state is not bound");
 		return GranularDisplaySnapshot.build(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
-				domain.granularRegistry, domain.granularParcels, domain.granularDeposits);
+				domain.granularState.registry, domain.granularState.parcels, domain.granularState.deposits);
 	}
 
 	ChemicalDisplaySnapshot copyChemicalDisplaySnapshot() {

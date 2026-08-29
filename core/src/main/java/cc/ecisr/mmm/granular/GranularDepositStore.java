@@ -21,6 +21,7 @@ public final class GranularDepositStore {
 	private final long[] solidVolumeSvq;
 	private final double[] mass;
 	private int nextUnused, freeCount, groupCount, occupiedCellCount;
+	private long mutationRevision;
 
 	public GranularDepositStore(GranularRegistry registry, int cellCount, int maximumGroups) {
 		if (registry == null) throw new IllegalArgumentException("Granular registry is missing");
@@ -40,6 +41,8 @@ public final class GranularDepositStore {
 	public int cellCount() { return headByCell.length; }
 	public int groupCount() { return groupCount; }
 	public int occupiedCellCount() { return occupiedCellCount; }
+	/** Monotonic counter over every structural mutation; plan consumers re-verify it before commit. */
+	public long mutationRevision() { return mutationRevision; }
 	public int porosityQ(int cell) { requireCell(cell); return porosityQByCell[cell]; }
 	public long cellBulkVolumeSvq(int cell) {
 		long skeleton = cellSolidVolumeSvq(cell);
@@ -121,6 +124,7 @@ public final class GranularDepositStore {
 			if (oldVolume == 0L) occupiedCellCount++;
 		}
 		porosityQByCell[cell] = newPorosity;
+		mutationRevision++;
 		return true;
 	}
 
@@ -149,6 +153,7 @@ public final class GranularDepositStore {
 			mass[entry] -= result.mass();
 		}
 		recomputePorosity(cell);
+		mutationRevision++;
 		return result;
 	}
 
@@ -226,6 +231,7 @@ public final class GranularDepositStore {
 		Arrays.fill(materialHandle, 0); Arrays.fill(solidCompositionHandle, 0);
 		Arrays.fill(solidVolumeSvq, 0L); Arrays.fill(mass, 0.0); Arrays.fill(next, -1);
 		nextUnused = 0; freeCount = 0; groupCount = 0; occupiedCellCount = 0;
+		mutationRevision++;
 	}
 
 	private void validate(SolidPortion portion) {
