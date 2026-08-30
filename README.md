@@ -39,7 +39,7 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 | 材料与界面调试 | `/mmm materialdemo`、`materialbucket ...`、`tensiondemo [angle]` |
 | 化学调试 | `/mmm chemistrydemo`、`reagent ...`、`chemstatus` |
 | 颗粒调试 | `/mmm granularcontainer ...`、`granstatus` |
-| 气压调试 | `/mmm airdemo [pressure|vacuum]` |
+| 气压调试 | `/mmm airdemo [pressure/vacuum]` |
 | 可调恒温边界 | `/give @s mmm:thermal_reservoir`；准星对准后 `/mmm thermalsource [temperatureK]` |
 | ownership 对账 | `/mmm ownership` |
 | 调试与实体 | `/mmm debug`、`entities`、`logpath` |
@@ -62,8 +62,6 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 目标字节码为 Java 25，本机使用 JDK 26：
 
 ```powershell
-$env:JAVA_HOME = 'D:\ProgramFiles\BienCreng\jdk-26.0.2'
-$env:Path = "$env:JAVA_HOME\bin;$env:Path"
 ./gradlew.bat assemble --offline --no-daemon
 ```
 

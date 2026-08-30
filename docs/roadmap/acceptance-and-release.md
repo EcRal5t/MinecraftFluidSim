@@ -47,7 +47,6 @@ CPU 验证由单一 `runCpuValidation` runner 按 selector 执行；`check` 不�
 发布前按实际风险选择完整 selector，再运行：
 
 ```powershell
-$env:JAVA_HOME = 'D:\ProgramFiles\BienCreng\jdk-26.0.2'
 ./gradlew.bat clean assemble compileTestJava --offline --no-daemon
 ```
 

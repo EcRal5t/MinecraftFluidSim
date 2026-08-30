@@ -123,8 +123,6 @@
 只有需要部署或发布时运行：
 
 ```powershell
-$env:JAVA_HOME = 'D:\ProgramFiles\BienCreng\jdk-26.0.2'
-$env:Path = "$env:JAVA_HOME\bin;$env:Path"
 ./gradlew.bat clean assemble compileTestJava --offline --no-daemon
 ```
 
