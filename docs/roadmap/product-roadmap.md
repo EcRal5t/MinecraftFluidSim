@@ -16,7 +16,7 @@
 
 ## 当前产品基座
 
-当前生产边界是最多 4 个显式闭壳 controller region，CPU `FlipFluidDomain` 为权威核心。边界和控制器已有生存配方；自定义创造栏把快速入门、闭壳方块、探针、actual 空容器、server-resolved source templates、指示剂与固定温度源按产品顺序列出。激活后自动运行并持久保存玩家暂停意图，`/mmm` 不再是正常创建、选择和暂停的前置条件。已经具备：连续体积 PIC/FLIP、可变密度材料、液气/液液界面与润湿、密闭气腔、world ownership、profile-bound 玩家/发射器容器事务、守恒化学、active/deposit 颗粒、总内能、导热、反应热以及固液/气液相变。
+当前生产边界是最多 4 个显式闭壳 controller region，CPU `FluidDomain` 为权威求解器聚合根。边界和控制器已有生存配方；自定义创造栏把快速入门、闭壳方块、探针、actual 空容器、server-resolved source templates、指示剂与固定温度源按产品顺序列出。激活后自动运行并持久保存玩家暂停意图，`/mmm` 不再是正常创建、选择和暂停的前置条件。已经具备：连续体积 PIC/FLIP、可变密度材料、液气/液液界面与润湿、密闭气腔、world ownership、profile-bound 玩家/发射器容器事务、守恒化学、active/deposit 颗粒、总内能、导热、反应热以及固液/气液相变。
 
 这一基座的限制也必须如实保留：
 
@@ -136,7 +136,7 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 详细停止门见 [`performance-and-backends.md`](performance-and-backends.md)。
 
-完整 `FluidDomainState` / `FluidStepRequest` / `FluidStepCandidate` 边界已经提取，CPU 规范实现可在私有副本上生成候选。profile 决定何时实现和启用生产 GPU backend；数值 worker/GPU 只能消费该 immutable step input，在 tick boundary 返回完整 candidate。世界读写、ownership、actor 和 HEAD 发布留在 server thread；超时保留上一完整 state，不能展示或持久化半步。
+完整 `FluidDomainState` 交接边界已经提取；motion 使用 `FluidStepRequest` / `FluidStepCandidate`，静水热轴使用 `FluidThermalStepRequest` / `FluidThermalStepCandidate`，CPU 规范实现都只在私有副本上生成候选。profile 决定何时实现和启用生产 GPU backend；数值 worker/GPU 只能消费 immutable step input，在 tick boundary 返回完整 candidate。世界读写、ownership、actor 和 HEAD 发布留在 server thread；超时保留上一完整 state，不能展示或持久化半步。
 
 当前自动进入门有意分开：默认 `8×8×8` controller 的 20 个 live steps 使用 40 ms 硬预算，并以无 marker-local 分配的 face P2G 和 clean-grid 首 substep 复用移除等价冗余；正式 thermal/gas/phase 定义的半满状态同时要求 capture/restore、关闭 phase 的 backend candidate/restore 等价，以及独立预热后在新建 domain 上执行的首个 phase-on production step 不超过 40 ms。phase-on 门保留完整 phase-operation 预算、exact batch 规划、gas topology/available-volume remap、绝热体积功和总 `U` 审计；phase-off backend candidate 的完整复制耗时继续仅作诊断。该门已经自动闭合，但它只解除性能阻塞，不构成 full profile 的生产启用许可。
 

@@ -6,7 +6,7 @@
 
 当前系统只在显式、闭合、预算受限且 chunk 完整加载的 controller 区域内提供连续流体。边界和控制器可制作并从创造栏取得；普通空手右击控制器会创建或选择区域并立即运行，空手潜行右击切换持久的运行意图。`/mmm` 只承担 fixture、诊断、恢复和管理员操作。天然河流、海洋、无界洞穴空气和永久 chunk ticket 不属于当前运行模型。
 
-CPU `FlipFluidDomain` 是规范求解器。GPU probe、客户端 renderer、tooltip、命令 status 和外部 Mod Query API 都只能读取已提交状态。
+CPU `FluidDomain` 是规范求解器聚合根。GPU probe、客户端 renderer、tooltip、命令 status 和外部 Mod Query API 都只能读取已提交状态。
 
 ## 模块边界
 
@@ -17,9 +17,9 @@ CPU `FlipFluidDomain` 是规范求解器。GPU probe、客户端 renderer、tool
 | `fabric` | Mod 生命周期、世界读取/写入、NBT、数据包、网络、物品适配与命令 | 依赖并内嵌 `api`、`core`；服务器主线程拥有提交权；`ContainerItemStacks` 独占纯 Java 容器真值与 `ItemStack` component 的映射 |
 | `gpu-probe` | Vulkan 能力验证、只读对照和未来后端实验 | 数值部分依赖 `core`；Fabric 集成只以 compile-only 接入主 Mod |
 
-`FluidDomainState` 是完整、不可变的数值后端交接状态；`FluidStepRequest` 绑定 base generation，`FluidStepCandidate` 只能返回其紧邻后继。`CpuFluidSolverBackend` 已通过私有恢复副本实现这一边界。未来 GPU 后端必须消费同一完整输入并返回同一完整 candidate；世界事务、ownership、actor、调度和 HEAD 发布不进入数值后端。
+`FluidDomainState` 是完整、不可变的数值后端交接状态。motion 使用 `FluidStepRequest` / `FluidStepCandidate`，静水 thermal-only 轴使用 `FluidThermalStepRequest` / `FluidThermalStepCandidate`；两者都绑定 base generation 且只能返回其紧邻后继。`CpuFluidSolverBackend` 对两类请求都先恢复私有 `FluidDomain`，完整成功后才返回 candidate。未来 GPU 后端必须消费同一完整输入并返回同一完整 candidate；世界事务、ownership、actor、调度和 HEAD 发布不进入数值后端。
 
-生产 motion step 与测试侧 replay 走同一条边界：服务先捕获当前权威状态并冻结本次 moving-body 输入，交给后端求完整候选，只有候选的 backend id、紧邻 generation 和网格/预算布局全部校验通过后才原子替换 live solver。后端抛出的 typed 拒答不会改动 live domain，因此失败步不会留下预先写入的 marker 冲量。
+生产 motion step、静水 thermal-only step 与测试侧 replay 都走完整候选边界：服务先捕获当前权威状态，motion 另冻结本次 moving-body 输入，再交给后端求完整候选；只有 candidate 的 backend id、紧邻 generation 和网格/预算布局全部校验通过后才原子替换 live solver。后端抛出的 typed 拒答不会改动 live domain，因此失败步既不会留下预先写入的 marker 冲量，也不会留下只完成传导或部分反应/相变的热轴状态。本步 thermal/granular 诊断随 candidate outcome 返回，不从 restore 后重置的 aggregate 字段猜测。
 
 ## 组件与数据流
 
@@ -32,7 +32,7 @@ Minecraft 命令、方块、容器、实体与 chunk 事件
   -> FluidSimulationService                 世界主线程编排
   -> FluidRegionManager / FluidRegion       身份、预算、生命周期
   -> CollisionWorldPort                     捕获不可变碰撞场
-  -> FlipFluidDomain                        CPU mechanics 与载体库存
+  -> FluidDomain                            CPU aggregate、mechanics 与载体库存
        -> AirNetwork                        密闭气体节点与孔流
        -> ChemicalParcelStore               marker 化学 parcel
        -> GranularInventory                 active/deposit 固体

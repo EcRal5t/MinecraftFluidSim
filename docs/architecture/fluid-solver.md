@@ -1,6 +1,6 @@
 # CPU 流体求解器契约
 
-`FlipFluidDomain` 是唯一活动物理核心，CPU 结果是规范真值。Minecraft 编排、世界方块、网络、持久化和 GPU probe 不进入数值核心。
+`FluidDomain` 是唯一活动物理聚合根，CPU 结果是规范真值。Minecraft 编排、世界方块、网络、持久化和 GPU probe 不进入数值核心。
 
 ## 状态分层
 
@@ -11,13 +11,15 @@
 
 后三层不能创建、删除、缩放或修复第一层库存。
 
-力学子步由 `MechanicalStepPipeline` 与各专职 stage 组合。stage 不接收或保存 `FlipFluidDomain`：稳定的 SoA/workspace 引用在构造时显式注入，可能随 lifecycle 重新绑定的状态通过各 stage 自己的窄 `Access` 契约取得。不同 stage 不能借 facade 任意读写彼此 scratch；pressure anchor/reference/result 等跨阶段值只能走声明过的写回缝。
+力学子步由 `MechanicalStepPipeline` 与各专职 stage 组合。stage 不接收或保存 `FluidDomain`：稳定的 SoA/workspace 引用在构造时显式注入，可能随 lifecycle 重新绑定的状态通过各 stage 自己的窄 `Access` 契约取得。不同 stage 不能借 aggregate 任意读写彼此 scratch；pressure anchor/reference/result 等跨阶段值只能走声明过的写回缝。
 
 非力学轴由 `ThermochemistryPipeline`、`GranularTransitionStage` 与 `ParticleReseedStage` 组合。`ThermochemistryPipeline` 是传导、液相反应、颗粒析出/溶解、凝聚相变和气液相变的唯一生产顺序源；`ThermochemistryStageAssembly` 只接线，各 stage 只持有明确 workspace/capability seam。固液与气液 stage 共享 `PhaseChangeStageSupport` 的 exact composition、carrier removal、pending volume 与受控 marker mutation 操作，但不共享可任意调用的 aggregate 引用。
 
 ### 后端候选边界
 
-`FluidDomainState` 捕获恰好一种 liquid carrier 布局（pure/material/chemical）及其 registry、颗粒、气体、热学、相变 pending work、求解配置和硬预算。pressure、平滑 density、mesh、调度与 Minecraft 对象不在其中。`FluidStepRequest` 另外携带有硬上限的 moving-body 输入；后端先在私有 state 上提交这些 marker 动量，再执行同一 logical step。`FluidSolverBackend.evaluate(FluidStepRequest)` 必须返回 base generation 的紧邻完整后继，并随 candidate 回报该批输入实际写入液体的合计体积和冲量；调用者在 tick boundary 验证后才可发布。当前 `CpuFluidSolverBackend` 是规范实现，GPU probe 尚不满足这份完整状态契约，不能作为生产后端注册。
+`FluidDomainState` 捕获恰好一种 liquid carrier 布局（pure/material/chemical）及其 registry、颗粒、气体、热学、相变 pending work、求解配置和硬预算。pressure、平滑 density、mesh、调度与 Minecraft 对象不在其中；capture/restore 的装配顺序由 `FluidDomainStateMapper` 集中维护。`FluidStepRequest` 另外携带有硬上限的 moving-body 输入；后端先在私有 state 上提交这些 marker 动量，再执行同一 logical step。`FluidSolverBackend.evaluate(FluidStepRequest)` 必须返回 base generation 的紧邻完整后继，并随 candidate 回报该批输入实际写入液体的合计体积和冲量。
+
+hydrostatic sleep 期间的非运动轴使用 `FluidThermalStepRequest` / `FluidThermalStepCandidate` 和同一个 backend id/generation/layout adoption 门。CPU backend 也必须先恢复私有 aggregate，再顺序执行 conduction、reaction 与 phase；任一后序拒答都会丢弃整个私有 candidate，不能在 live domain 留下已提交的前序 stage。accepted outcome 明确携带本步实际执行的 transport、chemistry、granular reaction 与 condensed/gas phase 诊断；motion `StepStats` 另携带 granular transition 诊断。调度器不得从 restore 后的默认 diagnostics 读取本步活动。当前 `CpuFluidSolverBackend` 是规范实现，GPU probe 尚不满足这份完整状态契约，不能作为生产后端注册。
 
 `FluidStepRequest.mechanicalAuditEnabled` 是只读诊断选择器。启用时，CPU candidate 的 `StepStats` 记录 P2G、颗粒/多孔耦合、重力、热浮力、表面张力、固定边界、pressure projection、G2P、碰撞、载体库存转移和 reseed 各阶段的动能变化，并同时报告初末重力势能、热学库存机械功以及逐阶段 telescoping closure。该审计不进入 `FluidDomainState`、HEAD 或任何库存，也不改变正常未启用请求的物理结果。
 

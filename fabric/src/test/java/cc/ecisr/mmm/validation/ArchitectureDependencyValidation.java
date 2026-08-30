@@ -54,7 +54,7 @@ public final class ArchitectureDependencyValidation {
 
 	/** Production classes above the final 1000-line limit, with the slice that closes each. */
 	private static final Map<String, String> SIZE_ALLOWLIST = Map.of(
-			"FluidDomain", "S12",
+			"FluidDomain", "S21",
 			"FluidSimulationService", "S21",
 			"RegionState", "S17",
 			"VulkanFlipPipeline", "S20",

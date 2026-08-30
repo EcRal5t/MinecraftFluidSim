@@ -204,6 +204,20 @@
 * `FlipFluidDomain` 删除 1000 余行相变算法，`step` 只组合 mechanical pipeline、thermochemistry pipeline、granular transition、reseed 与审计诊断
 * S11 七个 selector 与架构门通过，live budget median/max 为 4.272/8.633 ms（门限 40 ms）
 
+### S12a (`1db5d34`)
+
+* 将真实求解器聚合根从 `FlipFluidDomain` 机械切换为 `FluidDomain`；core、Fabric、全部现有 validation 与 GPU probe 消费者同批迁移，旧类和旧 import 归零，没有保留继承式 compatibility 双路径
+* aggregate 继续留在 `cc.ecisr.mmm.fluid`：当前 stage 热路径依赖同包的 package-private primitive access；此时强搬 `solver/domain` 会迫使内部数组变成广泛 public。`FluidDomainState` 也暂不搬到 `model/state`，因为它仍组合 `FlipParticleState` 等 fluid-side handoff 类型，先搬会制造 `model → solver` 反向依赖
+
+### S12完成 (`fed05cf`)
+
+* `FluidDomainStateMapper` 集中完整 authoritative capture/restore 的 owner、registry、gas topology、thermal 与 pending-work 装配；aggregate 的两个入口缩为稳定委托
+* S11 复审发现 production hydrostatic thermal axis 仍直接修改 live domain：传导成功而后续 reaction/phase 拒答时会留下前序提交。新增 `FluidThermalStepRequest` / `FluidThermalStepCandidate`，`CpuFluidSolverBackend` 只在私有 `FluidDomain` 执行 thermal-only axis，随后与 motion candidate 共用 backend id、紧邻 generation 与布局 adoption 门
+* candidate restore 不保存逐步 diagnostics；旧调度器却从 replacement domain 读取重置后的 transport/reaction/phase/transition 统计，并把 pacing 中仅完成 thermal 的 tick 当成 motion 完成。accepted outcome 现携带完整本步统计，thermal activity 只消费该 outcome，motion quiet streak 只在实际 due motion step 后推进
+* `FluidSolverBackend` 现在明确同时提供 motion 与 thermal-only 完整候选；开发 air demo 的初始化 motion 也改走 production candidate 边界，不再直接 step live aggregate
+* validation 沿既有 `lifecycle` parity 表征增加 thermal-only candidate→restore→capture raw-bit 对照，并验证 backend 求值不修改原 live input；未新增 selector
+* S12 完整门通过：`lifecycle`、full `production-replay`、23 项 milestone 与 `verifyArchitecture`；full production replay 的 live 20 步 median/max 为 11.711/18.683 ms，phase-on production step 为 12.754 ms，均低于 40 ms
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。
@@ -222,3 +236,6 @@ revision 列由该切片的下一次提交补记，避免提交引用自身哈�
 * S11 没有在每个 logical step 尾部追加全 marker/solid/gas 的 O(N) 二次审计扫描：各 owner 的 plan/commit 已在真实变更点结算 species、质量、SVQ、U、source/sink 与 operation budget；`CpuFluidSolverBackend` 的私有完整 candidate 是跨 stage 事务边界，任一 stage 失败都不发布 live state。pipeline 只在全部 stage 返回后替换 diagnostics；发布边界继续执行既有完整 capture/restore/audit 校验。
 * 提案表中“S11 后 `FlipFluidDomain` 约 1000 行以下”不作为本切片完成条件：S11 已删除全部 logical-step 热化学/相变/transition/reseed 算法，但 facade 仍承载 transfer、lifecycle、collision、capture/restore 与调试构造入口，共 4067 行。为追求行数而把这些非 S11 职责塞进 thermochemistry stage 会制造第二职责；它们按 S12 aggregate/facade 迁移和后续 application 切片处理。
 * pressure projection 的 anchor/reference/iterations/residual 写回 domain 字段是有意保留：reference 与 pressure 数组是跨 stage 的权威状态（同一 logical step 内的 phase transfer 与状态输出消费），不属于 S09 点 5 要清除的 stage 间私有 scratch；stage 的全部 gas 读取统一经 `PressureBoundaryView`。
+* S12 删除旧 `FlipFluidDomain`，而不是为无仓库消费者的旧名保留 facade。`FluidDomain` 当前仍有 4031 行，组合的 authoritative owner/workspace/pipeline 已独立，但 application、fixture、collision 与一部分 mechanics seam 尚未迁完；其 size allowlist 明确延至 S21，不能把这些 seam 塞回 stage 或用压缩格式假装达标。
+* `FlipThermalState` 暂留 414 行 package-private 纯委托：它仍是 fluid-side persistence/reseed 类型到 `ThermalDomainState` 的适配边界。S12 不通过公开 thermal owner mutator 来强删它；待显式 thermal port 取代这些 fluid 类型后再删除。
+* S12 没有建立只把 `new FluidDomain` 包一层的伪 test fixture builder。当前 Fabric debug fixture 与 application transfer 仍需 aggregate 的受控构造/变更入口；这些调用按 S13–S16 用例迁移后，S21 才集中 test fixture 并收窄 public surface。

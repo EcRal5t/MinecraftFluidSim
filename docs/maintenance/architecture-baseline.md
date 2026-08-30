@@ -6,7 +6,8 @@
 
 | 模块 | 类 | 基线行数 | 删除 allowlist 的切片 |
 |---|---|---:|---|
-| core | `FlipFluidDomain` | 7975 → 7613（S01 观察、S02 marker store 后） | S12 |
+| core | `FlipFluidDomain` | 7975 → 4067（S01–S11）→ S12 删除 | 已关闭 |
+| core | `FluidDomain` | S12 切换时 4031；已组合独立 owner/workspace/pipeline，残留 application/fixture seam | S21 |
 | fabric | `FluidSimulationService` | 3329 | S21 |
 | fabric | `RegionState` | 1480 | S17 |
 | core | `FlipThermalState` | 1461 | S10 |
@@ -35,11 +36,11 @@
 | gpu-probe kernel 触及集成类型 | `GpuProbeService`、`MmmGpuProbeMod`、`WorldCollisionSnapshot` | S20 |
 | core 包级环 | `cc.ecisr.mmm.fluid.air <-> cc.ecisr.mmm.thermal` | S10 |
 
-`network`/`item`/`block`/client 对 `FlipFluidDomain`/`FlipThermalState` 的 import 当前为 0，规则立即生效，无 allowlist。
+`network`/`item`/`block`/client 对 `FluidDomain`/`FlipThermalState` 的 import 当前为 0，规则立即生效，无方向 allowlist。
 
 ## 行为 characterization
 
-- capture → restore → capture、phase-off/phase-on candidate → restore → capture 的 raw-bit parity 已固定在 `FluidDomainStateParityValidation`，由 `lifecycle` selector 执行。
+- capture → restore → capture、phase-off/phase-on motion candidate 与 thermal-only candidate → restore → capture 的 raw-bit parity 已固定在 `FluidDomainStateParityValidation`，由 `lifecycle` selector 执行。
 - 其余 characterization（exact transfer、lifecycle empty ledger、persistence fault matrix、启动结果）由既有 selector 覆盖：`containers`、`region-state`、`thermal`、`production-replay`；不重复建门。
 
 ## 性能基线
