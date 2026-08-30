@@ -7,6 +7,7 @@ import cc.ecisr.mmm.api.event.ContainerTransferCommittedEvent;
 import cc.ecisr.mmm.api.transfer.TransferQuantity;
 import cc.ecisr.mmm.application.ControllerQueryUseCase;
 import cc.ecisr.mmm.application.RegionApplicationService;
+import cc.ecisr.mmm.application.RegionLifecycleUseCase;
 import cc.ecisr.mmm.application.RegionRuntime;
 import cc.ecisr.mmm.application.RegionTickUseCase;
 import cc.ecisr.mmm.application.ThermalReservoirUseCase;
@@ -132,6 +133,7 @@ public final class FluidSimulationService {
 	private final RegionApplicationService regionApplication;
 	private final RegionTickUseCase regionTick;
 	private final ControllerQueryUseCase controllerQueries;
+	private final RegionLifecycleUseCase regionLifecycle = new RegionLifecycleUseCase();
 	private final ThermalReservoirUseCase thermalReservoirs = new ThermalReservoirUseCase();
 	private final FluidSnapshotPublisher snapshots;
 	private final ContainerTransferStore containerTransfers;
@@ -145,7 +147,6 @@ public final class FluidSimulationService {
 	private final Set<UUID> runtimeDirtyContainerTransfers = new HashSet<>();
 	/** Prevents an unresolved WAL from emitting the same ERROR every server tick. */
 	private final Map<UUID, String> reportedContainerTransferLocks = new HashMap<>();
-	private final LifecycleOperationSessions lifecycleOperationSessions = new LifecycleOperationSessions();
 	private Set<String> reportedContainerTransferStoreIssues = Set.of();
 	private ContainerTransferFaultPoint containerTransferFault = ContainerTransferFaultPoint.NONE;
 	private ResourceKey<Level> takeoverDimension;
@@ -700,13 +701,19 @@ public final class FluidSimulationService {
 	}
 
 	private Component changeControllerRunIntent(ServerPlayer player, FluidRegion region, boolean pause) {
-		if (!player.isCreative()) return Component.translatable("message.mmm.controller.creative_required");
-		if (!authoritativeWritesReady()) return Component.translatable("message.mmm.controller.write_not_ready",
-				authoritativeWriteFailure("修改控制器运行意图"));
-		if (!pause && region.solverLoaded() && region.domain().operatorVentedGasTopology()) {
-			return Component.translatable("message.mmm.controller.vented_gas_resume_blocked");
-		}
-		if (region.paused() == pause) return Component.translatable("message.mmm.controller.intent_changed");
+		RegionLifecycleUseCase.RunIntentDecision decision = regionLifecycle.decideRunIntent(
+				new RegionLifecycleUseCase.RunIntentFacts(pause, player.isCreative(), authoritativeWritesReady(),
+						region.solverLoaded(), region.solverLoaded() && region.domain().operatorVentedGasTopology(),
+						region.paused()));
+		if (decision != RegionLifecycleUseCase.RunIntentDecision.ACCEPTED) return switch (decision) {
+			case PERMISSION_DENIED -> Component.translatable("message.mmm.controller.creative_required");
+			case WRITE_NOT_READY -> Component.translatable("message.mmm.controller.write_not_ready",
+					authoritativeWriteFailure("修改控制器运行意图"));
+			case VENTED_GAS_RESUME_BLOCKED -> Component.translatable(
+					"message.mmm.controller.vented_gas_resume_blocked");
+			case UNCHANGED -> Component.translatable("message.mmm.controller.intent_changed");
+			case ACCEPTED -> throw new IllegalStateException("Accepted run intent entered failure mapping");
+		};
 		region.setPaused(pause);
 		if (!pause && region.solverLoaded()) region.wakeForActivity();
 		if (region.solverLoaded()) sendSnapshot(player.level(), region);
@@ -724,10 +731,8 @@ public final class FluidSimulationService {
 		if (!controllerQueries.consumeActionToken(player.getUUID(), region.id(), summaryGeneration)) {
 			return LifecyclePreviewResult.failed(Component.translatable("message.mmm.controller.summary_expired"));
 		}
-		LifecycleFacts facts = lifecycleFacts(player, region, operation);
-		LifecycleOperationPreview preview = lifecycleOperationSessions.issue(facts.context(),
-				facts.context().serverTick() + 200L, facts.removal(), facts.gasState(),
-				facts.ownershipBlocks(), facts.blockers());
+		RegionLifecycleUseCase.PreviewFacts facts = lifecycleFacts(player, region, operation);
+		LifecycleOperationPreview preview = regionLifecycle.preview(facts);
 		return new LifecyclePreviewResult(preview, null);
 	}
 
@@ -739,12 +744,15 @@ public final class FluidSimulationService {
 		ResolvedController resolved = resolveInteractiveController(player, requestedRegionId, controllerPosition);
 		if (resolved.failure() != null) return LifecycleCommitResult.failedDetail(resolved.failure());
 		FluidRegion region = resolved.region();
-		LifecycleFacts facts = lifecycleFacts(player, region, operation);
-		if (!lifecycleOperationSessions.consume(nonce, facts.context())) {
+		RegionLifecycleUseCase.PreviewFacts facts = lifecycleFacts(player, region, operation);
+		RegionLifecycleUseCase.CommitAuthorization authorization = regionLifecycle.authorizeCommit(nonce, facts);
+		if (authorization.decision() == RegionLifecycleUseCase.CommitDecision.TOKEN_INVALID) {
 			return LifecycleCommitResult.failed("message.mmm.lifecycle.preview_expired");
 		}
-		if (!facts.blockers().isEmpty()) return LifecycleCommitResult.failed(
-				"message.mmm.lifecycle.blocked_confirm", lifecycleBlockers(facts.blockers()));
+		if (authorization.decision() == RegionLifecycleUseCase.CommitDecision.BLOCKED) {
+			return LifecycleCommitResult.failed("message.mmm.lifecycle.blocked_confirm",
+					lifecycleBlockers(authorization.blockers()));
+		}
 		return switch (operation) {
 			case EMPTY_CONDENSED, VENT_SEALED_GAS -> commitInventoryLifecycle(player.level(), region, operation);
 			case RELEASE_OWNERSHIP -> commitOwnershipRelease(player.level().getServer(), region);
@@ -896,7 +904,9 @@ public final class FluidSimulationService {
 		}
 	}
 
-	private LifecycleFacts lifecycleFacts(ServerPlayer player, FluidRegion region, LifecycleOperation operation) {
+	private RegionLifecycleUseCase.PreviewFacts lifecycleFacts(
+			ServerPlayer player, FluidRegion region, LifecycleOperation operation
+	) {
 		long serverTick = Integer.toUnsignedLong(player.level().getServer().getTickCount());
 		LifecycleOperationPreview.PermissionDecision permission = player.permissions()
 				.hasPermission(Permissions.COMMANDS_ADMIN)
@@ -927,7 +937,8 @@ public final class FluidSimulationService {
 		} catch (IOException | RuntimeException unavailable) {
 			addBlocker(blockers, LifecycleOperationPreview.Blocker.PENDING_WAL);
 		}
-		if (!region.solverLoaded()) return new LifecycleFacts(context, LifecycleOperationPreview.Removal.none(),
+		if (!region.solverLoaded()) return new RegionLifecycleUseCase.PreviewFacts(
+				context, LifecycleOperationPreview.Removal.none(),
 				LifecycleOperationPreview.GasState.none(), ownershipBlocks, List.copyOf(blockers));
 
 		FluidDomain domain = region.domain();
@@ -987,7 +998,8 @@ public final class FluidSimulationService {
 					? domain.exactGasInternalEnergy().toDouble() : Double.NaN);
 			case RELEASE_OWNERSHIP, REMOVE_EMPTY_REGION -> LifecycleOperationPreview.Removal.none();
 		};
-		return new LifecycleFacts(context, removal, gasState, ownershipBlocks, List.copyOf(blockers));
+		return new RegionLifecycleUseCase.PreviewFacts(
+				context, removal, gasState, ownershipBlocks, List.copyOf(blockers));
 	}
 
 	private static GasSummary lifecycleGasSummary(FluidDomain domain) {
@@ -1063,11 +1075,6 @@ public final class FluidSimulationService {
 			return new LifecycleCommitResult(false, detail);
 		}
 	}
-	private record LifecycleFacts(
-			LifecycleOperationSessions.Context context, LifecycleOperationPreview.Removal removal,
-			LifecycleOperationPreview.GasState gasState, int ownershipBlocks,
-			List<LifecycleOperationPreview.Blocker> blockers
-	) { }
 	private record GasSummary(long nanos, double mass, long speciesQuanta) { }
 	private record ResolvedController(FluidRegion region, Component failure) {
 		static ResolvedController failed(String key) {
@@ -1077,7 +1084,7 @@ public final class FluidSimulationService {
 
 	public void forgetInteractiveViewer(UUID playerId) {
 		controllerQueries.forgetViewer(playerId);
-		lifecycleOperationSessions.forget(playerId);
+		regionLifecycle.forgetViewer(playerId);
 		thermalReservoirs.forgetViewer(playerId);
 	}
 
