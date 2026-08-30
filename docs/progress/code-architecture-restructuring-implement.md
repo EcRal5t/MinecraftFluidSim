@@ -232,6 +232,15 @@
 * `FluidSimulationService` 删除 summary 装配和直接 solver capture/adopt，降至 3249 行；architecture gate 新增 application 禁止 adapter/payload import 的自检规则
 * existing lifecycle 表征改为 application command/result 测试，覆盖 stale generation、backend mismatch、完整 layout substitution、checkpoint WAL 短路与 metadata-only summary；`lifecycle,protocol,region-state` 和 `verifyArchitecture` 通过
 
+### S14 (`a295212`)
+
+* S13 复审确认 candidate identity/layout/generation 的 application + repository 双重校验仍闭合，checkpoint WAL fact 在 server-thread command→port 同步调用内不存在可插入变更；遗留缺陷是 application 接线仍位于带 I/O 的 service 构造器末端，任一 adapter 的 `get(server)` 都能在非启动语境触发 policy、能力包发布、metadata 恢复和 WAL 扫描
+* 新建 `MmmRuntimeRegistry` / `MmmRuntimeFactory` / `MmmRuntime`：`SERVER_STARTING` 是唯一主运行时构造入口，所有 Fabric、命令、item、network 与 gpu-probe 消费者显式 `require/find` runtime；删除 `FluidSimulationService.SERVICES` / `COMMITTED_EVENTS` / `get/find/removeServer`，主运行时静态索引只剩 registry。pre-start event subscription 由 registry slot 保留同一 event hub，不初始化 world state
+* `WorldStartupCoordinator` 将 policy、capability、definition comparison 与 frozen registry validation 表达为 typed state/stage/code/severity；`MmmRuntimeFactory` 才把 issue 投影到 logger，并固定 metadata load→removed quarantine recovery→startup lock projection→ownership discovery→container WAL discovery→无 I/O service construction 的顺序。依赖已加载 level 的 takeover/ownership/container actor recovery 保持到 `SERVER_STARTED`
+* `RegistryBundleLoader` 接管 datapack definitions 与跨 registry 支持性验证；复审旧顺序发现首次发布先于支持性验证，可能把 codec 可读但求解器不支持的 definitions 永久发布。current definitions 现先验证再参与首次 publication；committed bundle 仍独立复验，当前 definitions drift/不可用不改写既有权威
+* composition types 置于 `simulation` 包而未机械照抄提案的 `bootstrap` 子包：factory 需要组装现有 package-private region/persistence adapters；为目录外观把这些构造面全部改成 public 会扩大写面。文件职责与 runtime 入口已独立，待后续 adapter 真正分包时再随窄接口移动
+* `FluidSimulationService` 构造器降为纯接线，当前 3050 行；配置、能力启动、registry 提取、region metadata/quarantine、ownership 与 container discovery 全部移出。`region-state,lifecycle,containers,ownership` 启动矩阵与 `verifyArchitecture` 通过，覆盖 READY、unreadable policy 的 proven-but-restricted、definition drift、LOCKED_PROFILE/unknown durable evidence、能力包 recovery 与 removed quarantine convergence
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

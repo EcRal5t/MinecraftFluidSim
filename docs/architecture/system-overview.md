@@ -21,12 +21,18 @@ CPU `FluidDomain` 是规范求解器聚合根。GPU probe、客户端 renderer�
 
 生产 motion step、静水 thermal-only step 与测试侧 replay 都走完整候选边界。Fabric 先冻结 region UUID、expected solver generation、moving-body 和 phase budget，再交给 `RegionApplicationService`；`RegionRepository` 只提供完整 immutable capture 和 atomic adopt，不暴露 live domain。application 同时验证 backend id、紧邻 generation 与 `FluidDomainState.Layout`（网格/config/预算、sealed boundary、carrier kind、registry fingerprint、capability 与 thermal budget），port 在发布前按当前 live identity 重验。accepted result 只返回本步统计与 moving-body impulse，不把完整 candidate arrays 再交给 adapter。后端抛出的 typed 拒答不会改动 live domain，因此失败步既不会留下预先写入的 marker 冲量，也不会留下只完成传导或部分反应/相变的热轴状态。
 
+每个 `MinecraftServer` 的主运行时只由 `MmmRuntimeRegistry` 索引。`SERVER_STARTING` 显式调用 `MmmRuntimeFactory`：`WorldStartupCoordinator` 依次读取 world policy、在首次发布前验证当前 definitions、证明或恢复 world capability bundle、提取并复验 frozen registries，再由 factory 按固定顺序构造 region repository、收敛 removed quarantine、扫描 ownership 与 container WAL，最后才构造无 I/O 的 `FluidSimulationService`。startup state 和 issue 是 typed data；logger 只在 factory 边界投影它们，不参与状态机。需要已加载 level 的 takeover、ownership 与 container actor 收敛推迟到 `SERVER_STARTED`，停止时由 registry 注销并清理 event hub。
+
+adapter 查找只能使用 `MmmRuntimeRegistry.require/find`；查找本身不再隐式读取或发布世界状态。`MmmFabricApi.events` 仍允许在 `SERVER_STARTING` 前登记监听器：registry slot 暂存同一个 thread-safe hub，runtime 建立后接管它；只读 Query 的 pre-start lookup 返回 unavailable/wrong-thread，不触发 runtime 初始化。
+
 ## 组件与数据流
 
 ```text
 数据包定义
-  -> material / chemical / granular / gas / thermal registry
+  -> WorldStartupCoordinator               policy / capability / typed issues
+  -> RegistryBundleLoader                  pre-publication + frozen-bundle validation
   -> world-local canonical registry snapshot + fingerprint
+  -> MmmRuntimeFactory / MmmRuntimeRegistry 唯一 server runtime lifetime
 
 Minecraft 命令、方块、容器、实体与 chunk 事件
   -> FluidSimulationService                 校验/冻结 Minecraft facts

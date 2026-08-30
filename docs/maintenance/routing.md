@@ -12,18 +12,19 @@
 
 | 职责 | 首要入口 | 必须保持 |
 |---|---|---|
-| 初始化、tick、payload 注册 | `fabric/src/main/java/cc/ecisr/mmm/MmmMod.java` | 生命周期、registry 和网络注册成套 |
+| 初始化、tick、payload 注册 | `fabric/src/main/java/cc/ecisr/mmm/MmmMod.java` | `SERVER_STARTING` 先建立 runtime；其余 callback 只从 runtime registry 取服务；registry 和网络注册成套 |
 | 正常游玩入口 | `block/FluidControllerBlock.java`、`block/MmmBlocks.java`、`item/MmmCreativeEntries.java`、`resources/data/mmm/recipe/` | 激活即运行；潜行交互只切换持久暂停意图；配方、创造栏和注册同步 |
 | 产品目录与创造源 | `item/MmmCreativeEntries.java`、`MmmItems.java`、`CreativeSourceItem.java`、`simulation/CreativeSourceCatalog.java`、`core/.../transfer/CreativeSourceDescriptor.java` | 自定义 tab 顺序稳定；descriptor 只表达意图；每次使用按 committed world registries 服务端解析 exact amount/kg/U；不把 template 当 actual inventory |
 | 快速入门与物品提示 | `item/QuickStartGuideItem.java`、`client/QuickStartScreen.java`、`block/MmmBlockItem.java`、`assets/mmm/lang/` | 指南与 tooltip 只描述当前产品边界；资源、注册和创造栏同步；不从客户端文案获得写权限 |
 | `/mmm` 命令 | `MmmCommands.java` | 状态操作留在服务层；完整输出写 transcript |
 | Minecraft 编排 | `fabric/.../simulation/FluidSimulationService.java`、`FluidWorldTargetResolver.java` | adapter 校验线程/世界/玩家并冻结 loader-neutral facts；每域先过 availability；目标解析只读世界与区域，不提交事务 |
+| server runtime / world startup | `simulation/MmmRuntimeRegistry.java`、`MmmRuntimeFactory.java`、`MmmRuntime.java`、`WorldStartupCoordinator.java`、`RegistryBundleLoader.java` | 只有 registry 按 `MinecraftServer` 索引主运行时；factory 独占构造期 I/O/发现顺序；current definitions 首次发布前验证，committed bundle 不因 definition drift 改写；world-dependent recovery 只在 `SERVER_STARTED`；pre-start event subscription 不初始化 world state |
 | region application 用例 | `core/.../application/RegionApplicationService.java`、`application/command/`、`application/result/`、`application/port/` | command 只有 stable identity、expected generation、预算与已判定 facts；result 为封闭状态和 bounded data；禁止 Minecraft/NBT/network payload import，不返回 live domain |
 | region application adapters | `FluidRegionRepository.java`、`ControllerSummaryAdapter.java`、`FluidRegionOperations.java` | repository 只做 immutable solver capture/atomic candidate adopt；checkpoint port 发布前重验 generation/ownership；summary adapter 只投影 bounded read model |
 | 持久区域管理 | `FluidRegionOperations.java`、`FluidRegionPersistence.java` | checkpoint 成功后才释放；当前功能布局必须精确匹配；committed metadata 先登记再做 runtime admission；不改写不匹配载荷 |
 | 区域身份与生命周期 | `FluidRegion.java`、`FluidRegionLifecycle.java`、`ThermalActivity.java`、`api/.../RegionAvailabilityReason.java` | operator intent 与封闭 availability reason 正交；UNLOADED 仍占预算；motion/thermal 调度不改变库存 |
 | 区域登记与预算 | `FluidRegionManager.java` | 完整 candidate 可只读预检预算/overlap；首个 HEAD 成功前不得登记；已提交 metadata 不因当前政策预算被丢弃 |
-| 世界配置 | `FluidServerConfig.java` | 只接受当前完整配置；接入政策与预算在启动时冻结；未知 key 直接拒绝，旧 schema 的世界 LOCKED |
+| 世界配置 | `FluidServerConfig.java`、`WorldStartupCoordinator.java` | 只接受当前完整配置；接入政策与预算在启动时冻结；不可读 policy 保留原文件、使用默认预算且返回 typed restricted state；未知 key 直接拒绝，旧 schema 的世界 LOCKED |
 | registry snapshot codec | `MaterialRegistryCodec.java`、`ChemicalRegistryCodec.java`、`GranularRegistryCodec.java`、`GasRegistryCodec.java`、`ThermalRegistryCodec.java`、`StrictNbtFields.java` | 只做规范编解码，没有自己的世界目录；compound 字段集合和类型必须精确；`snapshotBytes`/`writeSnapshot`/`readSnapshot` 是唯一入口，能力包的成员字节与校验和必须共享它 |
 | 世界能力包 | `simulation/persistence/WorldCapabilityBundleStore.java`、`WorldCapabilityStartup.java`、`WorldCapabilityBundleHead.java`、`WorldCapabilityBundleManifest.java`、`WorldCapabilityBundleMetadataCodec.java`、`WorldCapabilityProfileCodec.java`、`core/.../worldprofile/` | HEAD rename 是唯一 commit point；成员字节取自各 registry codec 的 `snapshotBytes`；`inspect` 只看目录名不解码载荷；四种 presence 与四种启动状态各自只有一种可证明的处置；staging 只 quarantine 不删除；恢复不查定义源；每个发布边界都有故障注入点；权威域只有 `container-transfer`/`ownership`/`region-state`，`quarantine` 是已知非权威证据根，per-kind registry 目录是未知条目并 LOCKED |
 | 世界碰撞 | `MinecraftCollisionWorldPort.java`、`FluidRegionWorldInteraction.java`、`core/.../world/` | Minecraft shape 先冻结为纯 Java `CollisionField`；挤水只按 marker 账本 |
