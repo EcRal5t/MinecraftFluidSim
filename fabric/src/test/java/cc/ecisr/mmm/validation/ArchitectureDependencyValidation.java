@@ -24,11 +24,18 @@ import java.util.stream.Stream;
 public final class ArchitectureDependencyValidation {
 	private static final String[] SOURCE_ROOTS = {
 			"api/src/main/java",
+			"model/src/main/java",
+			"solver/src/main/java",
+			"application/src/main/java",
 			"core/src/main/java",
 			"fabric/src/main/java",
 			"fabric/src/client/java",
+			"gpu-probe-kernel/src/main/java",
 			"gpu-probe/src/main/java",
 	};
+	private static final Set<String> LOADER_NEUTRAL_MODULES = Set.of(
+			"api/src/main/java", "model/src/main/java", "solver/src/main/java",
+			"application/src/main/java", "core/src/main/java", "gpu-probe-kernel/src/main/java");
 
 	/** Live runtime types that persistence codecs/stores must never import. */
 	private static final Set<String> LIVE_REGION_TYPES = Set.of(
@@ -47,9 +54,6 @@ public final class ArchitectureDependencyValidation {
 	private static final Map<String, String> LOCATOR_ALLOWLIST = Map.of(
 			"MmmRuntimeRegistry", "server composition root",
 			"GpuProbeService", "S20");
-
-	/** gpu-probe classes allowed to touch Fabric/world integration while S20 has not split the module. */
-	private static final Set<String> GPU_ADAPTER_CLASSES = Set.of("GpuProbeService", "MmmGpuProbeMod", "WorldCollisionSnapshot");
 
 	/** Temporary direct imports of the S21 god service, each named by its removal slice. */
 	private static final Map<String, String> SERVICE_IMPORT_ALLOWLIST = Map.of(
@@ -90,7 +94,7 @@ public final class ArchitectureDependencyValidation {
 		checkAdaptersDoNotImportSimulationService(sources, violations);
 		checkStaticLocators(sources, violations);
 		checkClassSize(sources, violations);
-		checkCorePackageCycles(sources, violations);
+		checkLoaderNeutralPackageCycles(sources, violations);
 
 		if (!violations.isEmpty()) {
 			System.err.println("Architecture violations (" + violations.size() + "):");
@@ -154,11 +158,11 @@ public final class ArchitectureDependencyValidation {
 		}
 	}
 
-	/** api and core must not reference Minecraft, Fabric or Mojang mappings. */
+	/** Physical loader-neutral modules must not reference Minecraft, Fabric or Mojang mappings. */
 	private static void checkLoaderNeutralModules(List<SourceFile> sources, List<String> violations) {
 		Set<String> forbidden = Set.of("net.minecraft", "net.fabricmc", "com.mojang");
 		for (SourceFile source : sources) {
-			if (!source.module().equals("api/src/main/java") && !source.module().equals("core/src/main/java")) continue;
+			if (!LOADER_NEUTRAL_MODULES.contains(source.module())) continue;
 			for (String imported : source.imports()) {
 				String importedPackage = packageOf(imported);
 				if (forbidden.stream().noneMatch(top ->
@@ -169,10 +173,10 @@ public final class ArchitectureDependencyValidation {
 		}
 	}
 
-	/** Application commands/use cases may depend on core models, never Minecraft adapter or payload packages. */
+	/** Application commands/use cases may depend on model/solver, never Minecraft adapter or payload packages. */
 	static void checkApplicationPurity(List<SourceFile> sources, List<String> violations) {
 		for (SourceFile source : sources) {
-			if (!source.module().equals("core/src/main/java")
+			if (!source.module().equals("application/src/main/java")
 					|| !source.packageName().startsWith("cc.ecisr.mmm.application")) continue;
 			for (String imported : source.imports()) {
 				if (imported.startsWith("cc.ecisr.mmm.simulation")
@@ -186,11 +190,10 @@ public final class ArchitectureDependencyValidation {
 		}
 	}
 
-	/** gpu-probe numeric pipeline must not reach simulation/network/Fabric; only the adapter classes may. */
+	/** The physical gpu-probe kernel must not reach simulation/network/Fabric integration. */
 	private static void checkGpuProbeKernel(List<SourceFile> sources, List<String> violations) {
 		for (SourceFile source : sources) {
-			if (!source.module().equals("gpu-probe/src/main/java")) continue;
-			if (GPU_ADAPTER_CLASSES.contains(source.simpleName())) continue;
+			if (!source.module().equals("gpu-probe-kernel/src/main/java")) continue;
 			for (String imported : source.imports()) {
 				if (imported.startsWith("cc.ecisr.mmm.simulation") || imported.startsWith("cc.ecisr.mmm.network")
 						|| imported.startsWith("cc.ecisr.mmm.logging") || imported.startsWith("net.minecraft")
@@ -286,10 +289,10 @@ public final class ArchitectureDependencyValidation {
 		}
 	}
 
-	private static void checkCorePackageCycles(List<SourceFile> sources, List<String> violations) {
+	private static void checkLoaderNeutralPackageCycles(List<SourceFile> sources, List<String> violations) {
 		Map<String, Set<String>> graph = new TreeMap<>();
 		for (SourceFile source : sources) {
-			if (!source.module().equals("core/src/main/java")) continue;
+			if (!LOADER_NEUTRAL_MODULES.contains(source.module())) continue;
 			for (String imported : source.imports()) {
 				if (!imported.startsWith("cc.ecisr.mmm")) continue;
 				String target = packageOf(imported);
@@ -299,7 +302,7 @@ public final class ArchitectureDependencyValidation {
 		}
 		for (Set<String> component : stronglyConnectedComponents(new TreeMap<>(graph))) {
 			if (component.size() < 2) continue;
-			violations.add("core package cycle: " + String.join("<->", component));
+			violations.add("loader-neutral package cycle: " + String.join("<->", component));
 		}
 	}
 

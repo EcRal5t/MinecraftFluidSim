@@ -9,13 +9,11 @@ base {
 
 version = project.mod_version
 
-repositories {
-	mavenCentral()
-}
-
 dependencies {
 	api project(':api')
-	implementation 'com.google.code.gson:gson:2.14.0'
+	api project(':model')
+	api project(':solver')
+	api project(':application')
 }
 
 java {

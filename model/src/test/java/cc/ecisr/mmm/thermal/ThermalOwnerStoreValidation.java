@@ -13,6 +13,11 @@ import java.util.Map;
 public final class ThermalOwnerStoreValidation {
 	private ThermalOwnerStoreValidation() { }
 
+	public static void main(String[] args) {
+		validate();
+		System.out.println("Thermal owner-store validation passed");
+	}
+
 	public static void validate() {
 		coherentPhaseMergeSplitConservesInventories();
 		granularColumnTransactionsConserveEnergy();

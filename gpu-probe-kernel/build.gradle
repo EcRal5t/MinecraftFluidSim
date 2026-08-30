@@ -1,0 +1,38 @@
+plugins {
+	id 'java-library'
+	id 'maven-publish'
+}
+
+base {
+	archivesName = 'mmm-gpu-probe-kernel'
+}
+
+version = project.mod_version
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	api project(':solver')
+	implementation 'org.lwjgl:lwjgl:3.4.1'
+	implementation 'org.lwjgl:lwjgl-shaderc:3.4.1'
+	implementation 'org.lwjgl:lwjgl-vma:3.4.1'
+	implementation 'org.lwjgl:lwjgl-vulkan:3.4.1'
+}
+
+java {
+	withSourcesJar()
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.release = 25
+}
+
+publishing {
+	publications {
+		create('mavenJava', MavenPublication) { from components.java }
+	}
+}

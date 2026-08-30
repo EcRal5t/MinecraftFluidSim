@@ -35,9 +35,17 @@ dependencies {
 	compileOnly "maven.modrinth:jade:${project.jade_version}"
 
 	implementation project(':api')
-	implementation project(':core')
+	implementation project(':model')
+	implementation project(':solver')
+	implementation project(':application')
 	include project(':api')
-	include project(':core')
+	include project(':model')
+	include project(':solver')
+	include project(':application')
+
+	testImplementation project(path: ':model', configuration: 'testArtifacts')
+	testImplementation project(path: ':solver', configuration: 'testArtifacts')
+	testImplementation project(path: ':application', configuration: 'testArtifacts')
 }
 
 processResources {

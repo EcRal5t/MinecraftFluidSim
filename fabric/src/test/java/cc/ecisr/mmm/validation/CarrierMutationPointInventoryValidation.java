@@ -17,9 +17,13 @@ import java.util.stream.Stream;
 public final class CarrierMutationPointInventoryValidation {
 	private static final String[] SOURCE_ROOTS = {
 			"api/src/main/java",
+			"model/src/main/java",
+			"solver/src/main/java",
+			"application/src/main/java",
 			"core/src/main/java",
 			"fabric/src/main/java",
 			"fabric/src/client/java",
+			"gpu-probe-kernel/src/main/java",
 			"gpu-probe/src/main/java",
 	};
 

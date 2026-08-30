@@ -1,0 +1,65 @@
+plugins {
+	id 'java-library'
+	id 'maven-publish'
+}
+
+base {
+	archivesName = 'mmm-model'
+}
+
+version = project.mod_version
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	api project(':api')
+	implementation 'com.google.code.gson:gson:2.14.0'
+}
+
+java {
+	withSourcesJar()
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.release = 25
+}
+
+tasks.withType(Test).configureEach {
+	failOnNoDiscoveredTests = false
+}
+
+tasks.register('runModelValidation', JavaExec) {
+	group = 'verification'
+	description = 'Runs immutable-state and state-owner validation without Minecraft.'
+	dependsOn tasks.named('testClasses')
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'cc.ecisr.mmm.thermal.ThermalOwnerStoreValidation'
+	enableAssertions = true
+}
+
+tasks.register('testJar', Jar) {
+	archiveClassifier = 'tests'
+	from sourceSets.test.output
+	dependsOn tasks.named('testClasses')
+}
+
+configurations {
+	testArtifacts {
+		canBeConsumed = true
+		canBeResolved = false
+	}
+}
+
+artifacts {
+	testArtifacts tasks.named('testJar')
+}
+
+publishing {
+	publications {
+		create('mavenJava', MavenPublication) { from components.java }
+	}
+}

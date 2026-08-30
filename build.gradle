@@ -10,13 +10,20 @@ allprojects {
 }
 
 tasks.named('assemble') {
-	dependsOn ':api:assemble', ':core:assemble', ':fabric:assemble', ':gpu-probe:assemble'
+	dependsOn ':api:assemble', ':model:assemble', ':solver:assemble', ':application:assemble',
+			':core:assemble', ':fabric:assemble', ':gpu-probe-kernel:assemble', ':gpu-probe:assemble'
 }
 
 tasks.register('runCpuValidation') {
 	group = 'verification'
 	description = 'Runs the Fabric integration CPU validation suite.'
 	dependsOn ':fabric:runCpuValidation'
+}
+
+tasks.register('runModuleValidation') {
+	group = 'verification'
+	description = 'Runs the loader-neutral model, solver and application ownership gates.'
+	dependsOn ':model:runModelValidation', ':solver:runSolverValidation', ':application:runApplicationValidation'
 }
 
 tasks.register('verifyArchitecture') {

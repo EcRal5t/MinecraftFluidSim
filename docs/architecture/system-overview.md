@@ -13,9 +13,12 @@ CPU `FluidDomain` 是规范求解器聚合根。GPU probe、客户端 renderer�
 | 模块 | 职责 | 依赖边界 |
 |---|---|---|
 | `api` | stable ID、单位化 Query、committed event 与 typed quantity 契约 | 只依赖 JDK，不暴露 solver 数组或 Minecraft 类型 |
-| `core` | PIC/FLIP、材料、气体、化学、颗粒、热学、typed container truth、候选状态与 loader-neutral application command/result/port | 依赖 `api` 和纯 Java 库，不引用 Fabric/Minecraft、NBT 或 network payload |
-| `fabric` | Mod 生命周期、世界读取/写入、NBT、数据包、网络、物品适配与命令 | 依赖并内嵌 `api`、`core`；服务器主线程拥有提交权；`ContainerItemMapper` 独占事务 fingerprint 与 `ItemStack` 的双向映射，`ContainerItemStacks` 只构造并校验 components |
-| `gpu-probe` | Vulkan 能力验证、只读对照和未来后端实验 | 数值部分依赖 `core`；Fabric 集成只以 compile-only 接入主 Mod |
+| `model` | registry、exact ledger、typed container truth、gas/thermal/granular state 与 durable region model | 依赖 `api` 与必要的纯 Java codec 库，不引用活动 solver 或 loader 类型 |
+| `solver` | CPU PIC/FLIP 聚合根、stage pipeline、immutable step request/state/candidate 与规范 backend | 依赖 `model`；不引用 Fabric/Minecraft、NBT 或 network payload |
+| `application` | loader-neutral command/result/use case/port 与 checkpoint export 边界 | 依赖 `solver` / `model`；不取得世界、actor 或 durable store 具体写权 |
+| `core` | 旧 artifact name 的聚合发布模块 | 无生产源码；只以 API 依赖重导出 `api` / `model` / `solver` / `application` |
+| `fabric` | Mod 生命周期、世界读取/写入、NBT、数据包、网络、物品适配与命令 | 依赖并内嵌 `api` / `model` / `solver` / `application`；服务器主线程拥有提交权；`ContainerItemMapper` 独占事务 fingerprint 与 `ItemStack` 的双向映射 |
+| `gpu-probe` | Vulkan 能力验证、只读对照和未来后端实验 | 数值部分依赖 `solver`；Fabric 集成只以 compile-only 接入主 Mod |
 
 `FluidDomainState` 是完整、不可变的数值后端交接状态。motion 使用 `FluidStepRequest` / `FluidStepCandidate`，静水 thermal-only 轴使用 `FluidThermalStepRequest` / `FluidThermalStepCandidate`；两者都绑定 base generation 且只能返回其紧邻后继。`CpuFluidSolverBackend` 对两类请求都先恢复私有 `FluidDomain`，完整成功后才返回 candidate。未来 GPU 后端必须消费同一完整输入并返回同一完整 candidate；世界事务、ownership、actor、调度和 HEAD 发布不进入数值后端。
 
@@ -173,7 +176,7 @@ world-local chemical、granular、gas 和 thermal registry snapshot 的首次发
 - 客户端只接受当前 region generation 的递增 snapshot sequence；迟到包、移除 tombstone 前的包和其他 dimension 的包不能复活状态。
 - Query API 只允许服务器主线程同步调用，只扫描已加载 owner 的权威 marker/side columns；它不建网格、不加载 chunk、不分配 solver、不唤醒、不 checkpoint、不推进 logical step，也不返回 live domain 引用。
 - Query 的 `regionNetworkGeneration` 标识网络中的区域 incarnation，不是 checkpoint generation 或逐 tick revision。观察者需要新鲜值时必须重新查询，不能把它当作缓存时钟。
-- Minecraft 实体发现、世界坐标 AABB、原版响应速度和本 tick 实际位移留在 Fabric。实际位移由 Mod 跨相邻服务器观测自己冻结，不能用 `Entity#oldPosition` 代替：该字段会被 `snapTo`/`absSnapTo` 与 `ServerLevel#tickNonPassenger`（在 `Entity#tick` 之前调用）重写，而客户端移动包由 `MinecraftServer#processPacketsAndTick` 在 level tick 之前应用；在 server tick 末尾读它只会得到 tick 内的残余运动，会系统性丢失走动玩家的主要位移。首次观测或中断一 tick 的实体没有位移，只参与实体侧响应，不产生 moving-body request。core 只读地积分 AABB 与派生水平液层及已有 cut-micro geometry 的连续湿体积，再由 moving-body request 携带局部 SI 位置、实际当 tick 位移速度和湿体积并只提交 marker 动量。实际液体冲量可诊断，尚未实现的刚体质量/压力面积分/实体动态占位 cut-cell 不能由 Fabric 猜测补齐。
+- Minecraft 实体发现、世界坐标 AABB、原版响应速度和本 tick 实际位移留在 Fabric。实际位移由 Mod 跨相邻服务器观测自己冻结，不能用 `Entity#oldPosition` 代替：该字段会被 `snapTo`/`absSnapTo` 与 `ServerLevel#tickNonPassenger`（在 `Entity#tick` 之前调用）重写，而客户端移动包由 `MinecraftServer#processPacketsAndTick` 在 level tick 之前应用；在 server tick 末尾读它只会得到 tick 内的残余运动，会系统性丢失走动玩家的主要位移。首次观测或中断一 tick 的实体没有位移，只参与实体侧响应，不产生 moving-body request。loader-neutral solver 只读地积分 AABB 与派生水平液层及已有 cut-micro geometry 的连续湿体积，再由 moving-body request 携带局部 SI 位置、实际当 tick 位移速度和湿体积并只提交 marker 动量。实际液体冲量可诊断，尚未实现的刚体质量/压力面积分/实体动态占位 cut-cell 不能由 Fabric 猜测补齐。
 - renderer、Jade/HWYLA 适配、status 和 GPU probe 都不能唤醒、加载、checkpoint 或回写区域。
 
 ## 主题文档

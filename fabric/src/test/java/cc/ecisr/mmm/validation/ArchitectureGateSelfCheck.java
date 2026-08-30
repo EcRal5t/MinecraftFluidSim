@@ -59,7 +59,7 @@ final class ArchitectureGateSelfCheck {
 
 	private static ArchitectureDependencyValidation.SourceFile application(
 			String simpleName, String imported) {
-		return new ArchitectureDependencyValidation.SourceFile("core/src/main/java", simpleName,
+		return new ArchitectureDependencyValidation.SourceFile("application/src/main/java", simpleName,
 				"cc.ecisr.mmm.application", 10, List.of(imported), false);
 	}
 }

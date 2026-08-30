@@ -415,6 +415,12 @@ S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Bri
 * 沿 S19 的真实消费边界重新核对 runtime accessor、协议会话、容器 actor、方块/物品与命令路由；代码中已迁移 owner 仍然闭合，但 `system-overview` 的主数据流还把命令、方块和容器统一画入 `FluidSimulationService`，会让后续模块依赖审核重新引入 god-service 方向。
 * 权威数据流已改为 `MmmRuntime` 显式语义 owner 分流；service 只标记尚未收口的 server tick、operator 写动作与 shutdown/recovery。本修正不改运行时行为，但先消除了 S20 物理模块分层的错误依赖依据。
 
+### S20a
+
+* 没有机械照搬提案的目标包名：当前真实 DAG 是 `api ← model ← solver ← application`。`chemistry/granular/thermal/gas/transfer/controller/worldprofile` 与 immutable particle/region checkpoint state 无活动 `FluidDomain` 依赖，因此进入 `model`；`fluid` 求解器根与 stage 进入 `solver`；已经 loader-neutral 的 command/result/use case/port 与 checkpoint source 进入 `application`。这一切片只移动源文件和 Gradle 所有权，不改 package、类名、算法或持久/协议布局。
+* `core` 现在无生产源码，只作为兼容 artifact 名重导出 `api/model/solver/application`；Fabric 显式编译并内嵌四个实际 artifact，避免空 `core` jar 隐式丢类。物理模块分别产出 sources jar，且使用 Java 25 release 在无 Minecraft classpath 下独立编译。
+* 没有为模块外观新增重复测试；把既有 thermal owner、cut-cell solver stage 与 container application fault-matrix 表征分别迁入所属模块，各模块有独立 JavaExec 门，Fabric CPU selector 通过显式 test artifact 继续聚合同一类。`runModuleValidation`、Fabric test compile 与更新扫描根后的 `verifyArchitecture` 通过；当前规模为 model 128/17173、solver 71/15010、application 24/1848，core 为 0 个生产源。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。
