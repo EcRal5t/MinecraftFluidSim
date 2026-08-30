@@ -45,12 +45,17 @@ public final class ArchitectureDependencyValidation {
 
 	/** Classes allowed to keep a static MinecraftServer-keyed locator, with the removing slice. */
 	private static final Map<String, String> LOCATOR_ALLOWLIST = Map.of(
-			"FluidProtocolServer", "S19",
 			"MmmRuntimeRegistry", "server composition root",
 			"GpuProbeService", "S20");
 
 	/** gpu-probe classes allowed to touch Fabric/world integration while S20 has not split the module. */
 	private static final Set<String> GPU_ADAPTER_CLASSES = Set.of("GpuProbeService", "MmmGpuProbeMod", "WorldCollisionSnapshot");
+
+	/** Temporary direct imports of the S21 god service, each named by its removal slice. */
+	private static final Map<String, String> SERVICE_IMPORT_ALLOWLIST = Map.of(
+			"MmmCommands", "S19f",
+			"ChemicalIndicatorItem", "S19e",
+			"FluidControllerBlock", "S19e");
 
 	/** Production classes above the final 1000-line limit, with the slice that closes each. */
 	private static final Map<String, String> SIZE_ALLOWLIST = Map.of(
@@ -85,6 +90,7 @@ public final class ArchitectureDependencyValidation {
 		checkGpuProbeKernel(sources, violations);
 		checkPersistenceDoesNotReferenceRuntime(sources, violations);
 		checkAdaptersDoNotReferenceSolverDomain(sources, violations);
+		checkAdaptersDoNotImportSimulationService(sources, violations);
 		checkStaticLocators(sources, violations);
 		checkClassSize(sources, violations);
 		checkCorePackageCycles(sources, violations);
@@ -239,6 +245,24 @@ public final class ArchitectureDependencyValidation {
 					violations.add("adapter imports thermal mutable owner: "
 							+ source.simpleName() + " -> " + imported);
 				}
+			}
+		}
+	}
+
+	/** External adapters must depend on runtime semantic owners, never the transitional god service. */
+	static void checkAdaptersDoNotImportSimulationService(List<SourceFile> sources, List<String> violations) {
+		for (SourceFile source : sources) {
+			boolean guarded = source.module().equals("fabric/src/client/java")
+					|| source.module().equals("gpu-probe/src/main/java")
+					|| source.module().equals("fabric/src/main/java")
+					&& (source.packageName().startsWith("cc.ecisr.mmm.network")
+						|| source.packageName().startsWith("cc.ecisr.mmm.item")
+						|| source.packageName().startsWith("cc.ecisr.mmm.block")
+						|| source.packageName().startsWith("cc.ecisr.mmm.api")
+						|| source.simpleName().equals("MmmCommands"));
+			if (!guarded || SERVICE_IMPORT_ALLOWLIST.containsKey(source.simpleName())) continue;
+			if (source.imports().contains("cc.ecisr.mmm.simulation.FluidSimulationService")) {
+				violations.add("external adapter imports simulation god service: " + source.simpleName());
 			}
 		}
 	}

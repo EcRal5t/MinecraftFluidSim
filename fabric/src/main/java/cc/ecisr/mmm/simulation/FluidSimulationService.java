@@ -2,7 +2,6 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
-import cc.ecisr.mmm.api.query.MmmQueryApi;
 import cc.ecisr.mmm.application.ContainerRecoveryCoordinator;
 import cc.ecisr.mmm.application.ContainerTransferCoordinator;
 import cc.ecisr.mmm.application.ControllerQueryUseCase;
@@ -246,11 +245,6 @@ public final class FluidSimulationService {
 			}
 		}
 		return null;
-	}
-
-	/** Stable read-only API surface; construction performs no world or region I/O. */
-	public MmmQueryApi queryApi(MinecraftServer server) {
-		return new FabricFluidQueryApi(server, regionManager, startup.profileProven());
 	}
 
 	/** Adds authoritative U to a server-resolved mass-bearing liquid source. */
@@ -1201,12 +1195,6 @@ public final class FluidSimulationService {
 
 	public void sendSnapshotFor(ServerPlayer player, FluidRegion region) {
 		snapshots.sendTo(player, region);
-	}
-
-	public void sendSnapshots(ServerPlayer player) {
-		for (FluidRegion region : regionManager.regions()) {
-			snapshots.sendTo(player, region);
-		}
 	}
 
 	public void sendSnapshot(ServerLevel level, FluidRegion region) {

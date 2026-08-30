@@ -2,6 +2,7 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.application.ContainerRecoveryCoordinator;
+import cc.ecisr.mmm.network.ProtocolSessions;
 import cc.ecisr.mmm.simulation.persistence.ContainerJournalFileStore;
 import cc.ecisr.mmm.transfer.ContainerTransferJournal;
 import net.minecraft.server.MinecraftServer;
@@ -59,7 +60,10 @@ public final class MmmRuntimeFactory {
 		FluidSimulationService simulation = new FluidSimulationService(startup, regionManager, regionOperations,
 				snapshots, containerRecovery,
 				ownershipIssues, committedEvents);
-		return new MmmRuntime(simulation, committedEvents, startup);
+		return new MmmRuntime(simulation, simulation.controllerConsole(),
+				new MinecraftRegionObservation(regionManager, snapshots), containerRecovery,
+				new FabricFluidQueryApi(server, regionManager, startup.profileProven()), new ProtocolSessions(),
+				committedEvents, startup);
 	}
 
 	private static ContainerTransferIndex discoverContainerTransfers(ContainerJournalFileStore store) {

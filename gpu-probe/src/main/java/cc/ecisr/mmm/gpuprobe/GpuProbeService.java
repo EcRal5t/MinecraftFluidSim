@@ -4,7 +4,6 @@ import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.network.FluidProtocolServer;
 import cc.ecisr.mmm.network.FluidSnapshotPayload;
-import cc.ecisr.mmm.simulation.FluidSimulationService;
 import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
@@ -63,7 +62,7 @@ final class GpuProbeService {
 
 	CreationResult createDemo(ServerPlayer player, int deviceIndex) {
 		MinecraftServer server = player.level().getServer();
-		if (MmmRuntimeRegistry.require(server).simulation().exists()) {
+		if (MmmRuntimeRegistry.require(server).regionObservation().exists()) {
 			return new CreationResult(false, false, "主 Matter, Motion & Mechanics 域正在使用同一个可视化通道；请先 /mmm remove");
 		}
 		Vec3 look = player.getLookAngle();
@@ -75,7 +74,7 @@ final class GpuProbeService {
 
 	CreationResult createWorldDemo(ServerPlayer player, int deviceIndex) {
 		MinecraftServer server = player.level().getServer();
-		if (MmmRuntimeRegistry.require(server).simulation().exists()) {
+		if (MmmRuntimeRegistry.require(server).regionObservation().exists()) {
 			return new CreationResult(false, false, "主 Matter, Motion & Mechanics 域正在使用同一个可视化通道；请先 /mmm remove");
 		}
 		Vec3 look = player.getLookAngle();
@@ -134,7 +133,7 @@ final class GpuProbeService {
 
 	int step(ServerLevel level, int count) {
 		if (backend == null || !level.dimension().equals(dimension)) return 0;
-		if (MmmRuntimeRegistry.require(level.getServer()).simulation().exists()) return 0;
+		if (MmmRuntimeRegistry.require(level.getServer()).regionObservation().exists()) return 0;
 		int completed = runManualLoop(count, this::stepOnce, () -> hardOverrunStreak);
 		sendSnapshot(level);
 		return completed;
@@ -154,7 +153,7 @@ final class GpuProbeService {
 
 	void tick(MinecraftServer server) {
 		if (backend == null) return;
-		if (MmmRuntimeRegistry.require(server).simulation().exists()) {
+		if (MmmRuntimeRegistry.require(server).regionObservation().exists()) {
 			if (!hiddenForMainConflict) {
 				sendRemoval(server);
 				hiddenForMainConflict = true;
@@ -261,7 +260,7 @@ final class GpuProbeService {
 			}
 			diagnostics = backend.diagnostics();
 		}
-		String conflict = MmmRuntimeRegistry.require(server).simulation().exists() ? " | 与主域冲突，已暂停" : "";
+		String conflict = MmmRuntimeRegistry.require(server).regionObservation().exists() ? " | 与主域冲突，已暂停" : "";
 		String checkpointStatus = checkpoint == null ? "" : String.format(Locale.ROOT,
 				" | checkpoint gen %d age %d steps CPU %d B/readback %d B | recoveries %d",
 				checkpoint.generation(), completedSteps - checkpoint.generation(), checkpoint.cpuBytes(),
@@ -281,9 +280,9 @@ final class GpuProbeService {
 	void remove(MinecraftServer server) {
 		sendRemoval(server);
 		closeBackend();
-		FluidSimulationService main = MmmRuntimeRegistry.require(server).simulation();
+		var main = MmmRuntimeRegistry.require(server).regionObservation();
 		if (main.exists()) {
-			for (ServerLevel level : server.getAllLevels()) main.sendSnapshot(level);
+			for (ServerLevel level : server.getAllLevels()) main.sendSelectedTo(level);
 		}
 	}
 

@@ -379,6 +379,13 @@
 * 对照迁移前实现逐守卫确认顺序未变：controller 先重验 server thread、距离、方块和 owner identity，再消费 action token；thermal token 仍先于权限、startup、目标/registry 检查消费，写入仍只更新 BlockEntity，随后刷新相邻已加载 thermal boundary 并按 `BOUNDARY_CHANGE` 唤醒。field probe 仍只观察唯一已加载同代 region，不加载、不唤醒、不 checkpoint。
 * `FieldProbeItem` 与协议交互 handler 已改走 runtime 的语义化 `controllerConsole()`；service 删除 190 行交互实现而不保留委托镜像。`protocol,lifecycle` 与 `verifyArchitecture` 通过，架构门扫描 402 个生产源。无需进游戏：本切片没有视觉、真实 `VoxelShape` 或自动门不可观察的跨重启事务。
 
+### S19d
+
+* 先复审 S19c 的组合方向和授权语义：新 console 的实际依赖与守卫顺序闭合，但 `MmmRuntime` 从 service 内部反取 console 是过渡接线。现在 factory 显式把 console 与其他语义 owner 交给 runtime；adapter 只读 runtime accessor，不再把 service 当 locator 后的万能对象。
+* 新建 runtime-owned `ProtocolSessions`，把 negotiated layout/capability 校验、player session accept/remove/clear 从 `FluidProtocolServer` 的静态 `Map<MinecraftServer,...>` 移入单服务器 runtime；configuration listener 的短期 `PENDING` 仍只绑定握手 task。shutdown 由 runtime 自己清空 sessions，协议门原有 negotiation matrix 替换同一不变量并增加 accept/remove/rejected-session 表征。
+* 新建窄 `MinecraftRegionObservation`，只暴露主域是否存在、向玩家发送全部域、向 level 重发选中域；network join 与 GPU probe 改用它，container retry 直达 runtime-owned recovery，握手读取 committed world profile，Fabric API 直取 runtime-owned Query。network、API、GPU 对 `FluidSimulationService` import 归零，service 的无调用 Query/snapshot convenience surface 同步删除。
+* 架构门删除 `FluidProtocolServer` locator allowlist，并新增带自检 fixture 的外部 adapter→god service import 禁令；indicator/controller block 与命令的既有依赖分别明确登记到 S19e/S19f，没有隐式遗留。`compileJava`、`gpu-probe:compileJava`、`protocol` 与新增规则后的 `verifyArchitecture` 通过，架构门扫描 404 个生产源。无需进游戏：协议会话与 snapshot 路由均有自动表征，不涉及视觉或真实 `VoxelShape`。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

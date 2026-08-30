@@ -25,6 +25,8 @@ CPU `FluidDomain` 是规范求解器聚合根。GPU probe、客户端 renderer�
 
 adapter 查找只能使用 `MmmRuntimeRegistry.require/find`；查找本身不再隐式读取或发布世界状态。`MmmFabricApi.events` 仍允许在 `SERVER_STARTING` 前登记监听器：registry slot 暂存同一个 thread-safe hub，runtime 建立后接管它；只读 Query 的 pre-start lookup 返回 unavailable/wrong-thread，不触发 runtime 初始化。
 
+运行时只向外部 adapter 提供按行为命名的 owner：controller console、只读 region observation/snapshot publish、container recovery、Query、committed world profile 与 protocol sessions。协议协商状态由每个 `MmmRuntime` 的 `ProtocolSessions` 按玩家持有；`FluidProtocolServer` 只保留 configuration listener 对应的短期 pending task，不再维护 `MinecraftServer` 静态会话表。network、外部 API 与 GPU probe 不得依赖 `FluidSimulationService`。
+
 ## 组件与数据流
 
 ```text

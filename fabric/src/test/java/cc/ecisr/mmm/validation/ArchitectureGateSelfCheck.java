@@ -19,16 +19,19 @@ final class ArchitectureGateSelfCheck {
 				persistence("RegionCleanFixture", "cc.ecisr.mmm.simulation.FluidProtocolServer"),
 				adapter("SolverImportFixture", "cc.ecisr.mmm.fluid.FluidDomain"),
 				adapter("SolverCleanFixture", "cc.ecisr.mmm.fluid.AirNetwork"),
+				adapter("ServiceImportFixture", "cc.ecisr.mmm.simulation.FluidSimulationService"),
 				application("PayloadImportFixture", "cc.ecisr.mmm.network.ControllerSummaryPayload"));
 		List<String> violations = new ArrayList<>();
 		ArchitectureDependencyValidation.checkPersistenceDoesNotReferenceRuntime(sources, violations);
 		ArchitectureDependencyValidation.checkAdaptersDoNotReferenceSolverDomain(sources, violations);
+		ArchitectureDependencyValidation.checkAdaptersDoNotImportSimulationService(sources, violations);
 		ArchitectureDependencyValidation.checkApplicationPurity(sources, violations);
 
 		List<String> expected = List.of(
 				"persistence references live runtime type: RegionCodecFixture",
 				"persistence references live runtime type: RegionWildcardFixture",
 				"adapter imports solver mutable domain: SolverImportFixture",
+				"external adapter imports simulation god service: ServiceImportFixture",
 				"application imports Minecraft adapter type: PayloadImportFixture");
 		if (violations.size() != expected.size()) {
 			throw new AssertionError("Architecture gate self-check expected " + expected.size()

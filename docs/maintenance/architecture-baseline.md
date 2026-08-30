@@ -34,11 +34,11 @@ S19g 后的当前值，由 `pytool/arch_baseline.py` 生成：
 | 规则 | 现状 | 关闭切片 |
 |---|---|---|
 | `simulation.persistence` import live region 类型 | `RegionManifest`、`RegionState`、`RegionStateCodec`、`RegionStateIntegrity` | S17 |
-| 静态 `Map<MinecraftServer, …>` locator | 主运行时已只剩 `MmmRuntimeRegistry` composition root；`FluidProtocolServer`（会话表）、`GpuProbeService` 仍待收口 | 主运行时已关闭 / S19 / S20 |
+| 静态 `Map<MinecraftServer, …>` locator | 主运行时与协议会话已只剩 `MmmRuntimeRegistry` composition root；`GpuProbeService` 的隔离 demo locator 待收口 | 主运行时与协议已关闭 / S20 |
 | gpu-probe kernel 触及集成类型 | `GpuProbeService`、`MmmGpuProbeMod`、`WorldCollisionSnapshot` | S20 |
 | core 包级环 | `cc.ecisr.mmm.fluid.air <-> cc.ecisr.mmm.thermal` | S10 |
 
-`network`/`item`/`block`/client 对 `FluidDomain`/`FlipThermalState` 的 import 当前为 0，规则立即生效，无方向 allowlist。
+`network`/`item`/`block`/client 对 `FluidDomain`/`FlipThermalState` 的 import 当前为 0，规则立即生效，无方向 allowlist。外部 adapter 对 `FluidSimulationService` 的 import 门也已生效；当前仅 `ChemicalIndicatorItem`、`FluidControllerBlock` 与 `MmmCommands` 分别按 S19e/S19f 登记迁移期限，network/API/GPU 零例外。
 
 `core/.../application` 禁止 import `simulation`、`network`、`block`、`item` 以及 loader 类型；S13 自检 fixture 固定这条规则。当前 application ports 只接触 immutable core handoff/read model，没有 live domain getter。
 

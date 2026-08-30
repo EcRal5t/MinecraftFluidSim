@@ -251,6 +251,14 @@ public final class FluidNetworkProtocolValidation {
 		require(accepted.accepted() && accepted.selectedLayout() == FluidProtocol.Layout.PURE
 				&& accepted.capabilities() == FluidProtocol.REQUIRED_CAPABILITIES,
 				"matching layout/capability offer was not selected exactly");
+		ProtocolSessions sessions = new ProtocolSessions();
+		UUID viewer = new UUID(41L, 43L);
+		sessions.accept(viewer, accepted);
+		require(sessions.isNegotiated(viewer) && sessions.isNegotiated(viewer, FluidProtocol.Layout.PURE)
+				&& !sessions.isNegotiated(viewer, FluidProtocol.Layout.MATERIAL),
+				"runtime-owned protocol session lost its negotiated layout");
+		sessions.remove(viewer);
+		require(!sessions.isNegotiated(viewer), "removed protocol session remained negotiated");
 
 		long unknown = 1L << 40;
 		FluidProtocol.Negotiation missingRequired = FluidProtocol.negotiate(
@@ -258,6 +266,12 @@ public final class FluidNetworkProtocolValidation {
 		);
 		require(!missingRequired.accepted() && missingRequired.failure().contains("0x"),
 				"unknown required capability was accepted");
+		try {
+			sessions.accept(viewer, missingRequired);
+			throw new AssertionError("rejected negotiation became a runtime session");
+		} catch (IllegalArgumentException expected) {
+			// expected
+		}
 		FluidProtocol.Negotiation ignoredOptional = FluidProtocol.negotiate(
 				new FluidProtocol.Offer(FluidProtocol.Layout.PURE, FluidProtocol.REQUIRED_CAPABILITIES, unknown)
 		);

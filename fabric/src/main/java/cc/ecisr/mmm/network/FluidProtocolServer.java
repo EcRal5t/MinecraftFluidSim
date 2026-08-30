@@ -1,7 +1,7 @@
 package cc.ecisr.mmm.network;
 
-import cc.ecisr.mmm.simulation.FluidSimulationService;
 import cc.ecisr.mmm.simulation.MinecraftControllerConsole;
+import cc.ecisr.mmm.simulation.MmmRuntime;
 import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import net.fabricmc.fabric.api.networking.v1.FabricServerConfigurationPacketListenerImpl;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
@@ -16,11 +16,9 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ConfigurationTask;
 import net.minecraft.server.network.ServerConfigurationPacketListenerImpl;
 
-import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.UUID;
-import java.util.WeakHashMap;
 import java.util.function.Consumer;
 
 /** Configuration-phase handshake and negotiated play-session gate for Matter, Motion & Mechanics payloads. */
@@ -28,7 +26,6 @@ public final class FluidProtocolServer {
 	private static final int HANDSHAKE_TIMEOUT_TICKS = 200;
 	private static final ConfigurationTask.Type TASK_TYPE = new ConfigurationTask.Type("mmm:protocol");
 	private static final Map<ServerConfigurationPacketListenerImpl, HandshakeTask> PENDING = new IdentityHashMap<>();
-	private static final Map<MinecraftServer, Map<UUID, FluidProtocol.Negotiation>> SESSIONS = new WeakHashMap<>();
 
 	private FluidProtocolServer() { }
 
@@ -77,9 +74,9 @@ public final class FluidProtocolServer {
 				listener.disconnect(Component.literal("Matter, Motion & Mechanics protocol negotiation was not completed"));
 				return;
 			}
-			FluidSimulationService simulation = MmmRuntimeRegistry.require(server).simulation();
-			simulation.retryUnavailableContainerTransfers(server, listener.player.getUUID());
-			simulation.sendSnapshots(listener.player);
+			MmmRuntime runtime = MmmRuntimeRegistry.require(server);
+			runtime.containerRecovery().retryPlayer(listener.player.getUUID());
+			runtime.regionObservation().sendAllTo(listener.player);
 		});
 		ServerPlayConnectionEvents.DISCONNECT.register((listener, server) -> {
 			MmmRuntimeRegistry.require(server).controllerConsole().forgetInteractiveViewer(listener.player.getUUID());
@@ -144,9 +141,8 @@ public final class FluidProtocolServer {
 	}
 
 	public static void clearServer(MinecraftServer server) {
-		synchronized (SESSIONS) {
-			SESSIONS.remove(server);
-		}
+		MmmRuntime runtime = MmmRuntimeRegistry.find(server);
+		if (runtime != null) runtime.protocolSessions().clear();
 		synchronized (PENDING) {
 			PENDING.entrySet().removeIf(entry -> entry.getValue().server == server);
 		}
@@ -170,10 +166,8 @@ public final class FluidProtocolServer {
 			listener.disconnect(Component.literal("Matter, Motion & Mechanics protocol incompatible: " + negotiation.failure()));
 			return;
 		}
-		synchronized (SESSIONS) {
-			SESSIONS.computeIfAbsent(context.server(), ignored -> new HashMap<>())
-					.put(listener.getOwner().id(), negotiation);
-		}
+		MmmRuntimeRegistry.require(context.server()).protocolSessions()
+				.accept(listener.getOwner().id(), negotiation);
 		synchronized (PENDING) {
 			PENDING.remove(listener);
 		}
@@ -239,38 +233,18 @@ public final class FluidProtocolServer {
 	}
 
 	private static boolean isNegotiated(MinecraftServer server, UUID playerId) {
-		return negotiatedSession(server, playerId) != null;
+		MmmRuntime runtime = MmmRuntimeRegistry.find(server);
+		return runtime != null && runtime.protocolSessions().isNegotiated(playerId);
 	}
 
 	private static boolean isNegotiated(MinecraftServer server, UUID playerId, FluidProtocol.Layout layout) {
-		FluidProtocol.Negotiation negotiation = negotiatedSession(server, playerId);
-		return negotiation != null && negotiation.selectedLayout() == layout;
-	}
-
-	private static FluidProtocol.Negotiation negotiatedSession(MinecraftServer server, UUID playerId) {
-		synchronized (SESSIONS) {
-			Map<UUID, FluidProtocol.Negotiation> serverSessions = SESSIONS.get(server);
-			FluidProtocol.Negotiation negotiation = serverSessions == null ? null : serverSessions.get(playerId);
-			if (negotiation == null || !negotiation.accepted()
-					|| (negotiation.capabilities() & FluidProtocol.REQUIRED_CAPABILITIES) != FluidProtocol.REQUIRED_CAPABILITIES) return null;
-			long required = switch (negotiation.selectedLayout()) {
-				case PURE -> 0L;
-				case MATERIAL -> FluidProtocol.CAP_MATERIAL_SNAPSHOT;
-				case CHEMICAL -> FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_CHEMICAL_SNAPSHOT;
-				case GRANULAR -> FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_GRANULAR_SNAPSHOT;
-				case THERMAL -> FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_THERMAL_SNAPSHOT;
-			};
-			return (negotiation.capabilities() & required) == required ? negotiation : null;
-		}
+		MmmRuntime runtime = MmmRuntimeRegistry.find(server);
+		return runtime != null && runtime.protocolSessions().isNegotiated(playerId, layout);
 	}
 
 	private static void removeSession(MinecraftServer server, UUID playerId) {
-		synchronized (SESSIONS) {
-			Map<UUID, FluidProtocol.Negotiation> serverSessions = SESSIONS.get(server);
-			if (serverSessions == null) return;
-			serverSessions.remove(playerId);
-			if (serverSessions.isEmpty()) SESSIONS.remove(server);
-		}
+		MmmRuntime runtime = MmmRuntimeRegistry.find(server);
+		if (runtime != null) runtime.protocolSessions().remove(playerId);
 	}
 
 	private static final class HandshakeTask implements ConfigurationTask {
@@ -282,8 +256,8 @@ public final class FluidProtocolServer {
 		private HandshakeTask(ServerConfigurationPacketListenerImpl listener, MinecraftServer server) {
 			this.listener = listener;
 			this.server = server;
-			FluidSimulationService service = MmmRuntimeRegistry.require(server).simulation();
-			this.offer = new FluidProtocolOfferPayload(FluidProtocol.serverOffer(service.worldCapabilityProfile()));
+			this.offer = new FluidProtocolOfferPayload(
+					FluidProtocol.serverOffer(MmmRuntimeRegistry.require(server).worldProfile()));
 		}
 
 		@Override
