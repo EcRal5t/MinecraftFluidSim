@@ -8,26 +8,19 @@ import cc.ecisr.mmm.api.transfer.TransferQuantity;
 import cc.ecisr.mmm.application.ControllerQueryUseCase;
 import cc.ecisr.mmm.application.RegionApplicationService;
 import cc.ecisr.mmm.application.RegionCatalog;
-import cc.ecisr.mmm.application.RegionLifecycleUseCase;
-import cc.ecisr.mmm.application.RegionRuntime;
-import cc.ecisr.mmm.application.RegionTickUseCase;
 import cc.ecisr.mmm.application.ThermalReservoirUseCase;
 import cc.ecisr.mmm.application.command.CheckpointRegionCommand;
 import cc.ecisr.mmm.application.command.ControllerSummaryCommand;
 import cc.ecisr.mmm.application.command.MotionStepCommand;
-import cc.ecisr.mmm.application.command.ThermalStepCommand;
 import cc.ecisr.mmm.application.result.CheckpointRegionResult;
 import cc.ecisr.mmm.application.result.ControllerSummaryResult;
 import cc.ecisr.mmm.application.result.MotionStepResult;
 import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.block.ThermalReservoirBlockEntity;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
-import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.controller.ControllerConsoleAction;
 import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.controller.LifecycleOperation;
-import cc.ecisr.mmm.controller.LifecycleOperationPreview;
-import cc.ecisr.mmm.controller.LifecycleOperationSessions;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.CellCarrierInventoryView;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
@@ -44,9 +37,7 @@ import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import cc.ecisr.mmm.fluid.air.GasAuditLedger;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
-import cc.ecisr.mmm.granular.GranularDepositDynamics;
 import cc.ecisr.mmm.granular.GranularMechanics;
-import cc.ecisr.mmm.granular.GranularPhaseTransferEngine;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.recovery.CrossDomainRecovery;
 import cc.ecisr.mmm.transfer.ChemicalContents;
@@ -70,7 +61,6 @@ import cc.ecisr.mmm.fluid.MaterialRegistry;
 import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 import cc.ecisr.mmm.worldprofile.WorldCapability;
 import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
-import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
@@ -80,7 +70,6 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.permissions.Permissions;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ChunkPos;
@@ -108,13 +97,6 @@ public final class FluidSimulationService {
 	public static final int BLOCK_SIZE_Z = 12;
 	public static final int CELLS_PER_BLOCK = 2;
 	static final int CELL_VOLUMES_PER_BLOCK = CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
-	private static final int SNAPSHOT_INTERVAL_TICKS = 4;
-	private static final RegionTickUseCase.Policy TICK_POLICY = RegionTickUseCase.Policy.production();
-	private static final int HYDROSTATIC_QUIET_STEPS = 200;
-	private static final int THERMAL_QUIET_STEPS = 200;
-	private static final float HYDROSTATIC_MAX_MARKER_SPEED = 2.5E-3F;
-	private static final GranularDepositDynamics.Stats NO_GRANULAR_TRANSITION =
-			new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
 	private static final long COMPATIBILITY_REGION_CELLS = (long) BLOCK_SIZE_X * BLOCK_SIZE_Y * BLOCK_SIZE_Z
 			* CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
 	private static final long COMPATIBILITY_REGION_MARKERS = COMPATIBILITY_REGION_CELLS * 8L;
@@ -125,14 +107,13 @@ public final class FluidSimulationService {
 	private FluidServerConfig serverConfig;
 	private final FluidRegionManager regionManager;
 	private final FluidSolverBackend solverBackend = new CpuFluidSolverBackend();
-	private final MinecraftRegionInputs regionInputs;
 	private final CommittedEventHub committedEvents;
 	private final FluidWorldTargetResolver targets;
 	private final FluidRegionOperations regionOperations;
 	private final RegionApplicationService regionApplication;
-	private final RegionTickUseCase regionTick;
+	private final MinecraftRegionTick regionTick;
 	private final ControllerQueryUseCase controllerQueries;
-	private final RegionLifecycleUseCase regionLifecycle = new RegionLifecycleUseCase();
+	private final MinecraftRegionLifecycle regionLifecycle;
 	private final ThermalReservoirUseCase thermalReservoirs = new ThermalReservoirUseCase();
 	private final FluidSnapshotPublisher snapshots;
 	private final ContainerTransferStore containerTransfers;
@@ -190,7 +171,7 @@ public final class FluidSimulationService {
 		this.granularRegistry = registries == null ? null : registries.granular();
 		this.gasRegistry = registries == null ? null : registries.gas();
 		this.thermalRegistry = registries == null ? null : registries.thermal();
-		this.regionInputs = new MinecraftRegionInputs(thermalRegistry, CELLS_PER_BLOCK);
+		MinecraftRegionInputs regionInputs = new MinecraftRegionInputs(thermalRegistry, CELLS_PER_BLOCK);
 		this.regionManager = java.util.Objects.requireNonNull(regionManager, "Region manager");
 		this.committedEvents = java.util.Objects.requireNonNull(committedEvents, "Committed event hub");
 		this.targets = new FluidWorldTargetResolver(regionManager);
@@ -202,10 +183,13 @@ public final class FluidSimulationService {
 		this.ownershipIssues = List.copyOf(ownershipIssues);
 		this.regionApplication = new RegionApplicationService(solverBackend,
 				new FluidRegionRepository(regionManager), regionOperations);
-		this.regionTick = new RegionTickUseCase(regionApplication, TICK_POLICY);
+		this.regionTick = new MinecraftRegionTick(regionApplication, regionInputs, snapshots,
+				worldCapabilityProfile, serverConfig.maximumPhaseOperationsPerStep());
 		this.controllerQueries = new ControllerQueryUseCase(
 				new ControllerSummaryAdapter(regionManager, regionOperations, worldCapabilityProfile, thermalRegistry,
 						this::hasPendingContainerTransfer, this::authoritativeWritesReady, worldBridgeFeatureEnabled));
+		this.regionLifecycle = new MinecraftRegionLifecycle(startup, regionManager, regionOperations, snapshots, targets,
+				controllerQueries, thermalRegistry, this::hasPendingContainerTransfer);
 	}
 
 	void writeContainerTransfer(ContainerTransferJournal journal) throws IOException {
@@ -699,385 +683,23 @@ public final class FluidSimulationService {
 	}
 
 	private Component changeControllerRunIntent(ServerPlayer player, FluidRegion region, boolean pause) {
-		RegionLifecycleUseCase.RunIntentDecision decision = regionLifecycle.decideRunIntent(
-				new RegionLifecycleUseCase.RunIntentFacts(pause, player.isCreative(), authoritativeWritesReady(),
-						region.solverLoaded(), region.solverLoaded() && region.domain().operatorVentedGasTopology(),
-						region.paused()));
-		if (decision != RegionLifecycleUseCase.RunIntentDecision.ACCEPTED) return switch (decision) {
-			case PERMISSION_DENIED -> Component.translatable("message.mmm.controller.creative_required");
-			case WRITE_NOT_READY -> Component.translatable("message.mmm.controller.write_not_ready",
-					authoritativeWriteFailure("修改控制器运行意图"));
-			case VENTED_GAS_RESUME_BLOCKED -> Component.translatable(
-					"message.mmm.controller.vented_gas_resume_blocked");
-			case UNCHANGED -> Component.translatable("message.mmm.controller.intent_changed");
-			case ACCEPTED -> throw new IllegalStateException("Accepted run intent entered failure mapping");
-		};
-		region.setPaused(pause);
-		if (!pause && region.solverLoaded()) region.wakeForActivity();
-		if (region.solverLoaded()) sendSnapshot(player.level(), region);
-		return null;
+		return regionLifecycle.changeRunIntent(player, region, pause);
 	}
 
 	/** Issues a bounded destructive-operation preview after consuming the displayed console generation. */
-	public LifecyclePreviewResult previewControllerLifecycleOperation(
+	public MinecraftRegionLifecycle.PreviewResult previewControllerLifecycleOperation(
 			ServerPlayer player, UUID requestedRegionId, BlockPos controllerPosition,
 			long summaryGeneration, LifecycleOperation operation
 	) {
-		ResolvedController resolved = resolveInteractiveController(player, requestedRegionId, controllerPosition);
-		if (resolved.failure() != null) return LifecyclePreviewResult.failed(resolved.failure());
-		FluidRegion region = resolved.region();
-		if (!controllerQueries.consumeActionToken(player.getUUID(), region.id(), summaryGeneration)) {
-			return LifecyclePreviewResult.failed(Component.translatable("message.mmm.controller.summary_expired"));
-		}
-		RegionLifecycleUseCase.PreviewFacts facts = lifecycleFacts(player, region, operation);
-		LifecycleOperationPreview preview = regionLifecycle.preview(facts);
-		return new LifecyclePreviewResult(preview, null);
+		return regionLifecycle.preview(player, requestedRegionId, controllerPosition, summaryGeneration, operation);
 	}
 
 	/** Consumes one same-player preview and rechecks all commit gates before changing authoritative state. */
-	public LifecycleCommitResult confirmControllerLifecycleOperation(
+	public MinecraftRegionLifecycle.CommitResult confirmControllerLifecycleOperation(
 			ServerPlayer player, UUID requestedRegionId, BlockPos controllerPosition,
 			UUID nonce, LifecycleOperation operation
 	) {
-		ResolvedController resolved = resolveInteractiveController(player, requestedRegionId, controllerPosition);
-		if (resolved.failure() != null) return LifecycleCommitResult.failedDetail(resolved.failure());
-		FluidRegion region = resolved.region();
-		RegionLifecycleUseCase.PreviewFacts facts = lifecycleFacts(player, region, operation);
-		RegionLifecycleUseCase.CommitAuthorization authorization = regionLifecycle.authorizeCommit(nonce, facts);
-		if (authorization.decision() == RegionLifecycleUseCase.CommitDecision.TOKEN_INVALID) {
-			return LifecycleCommitResult.failed("message.mmm.lifecycle.preview_expired");
-		}
-		if (authorization.decision() == RegionLifecycleUseCase.CommitDecision.BLOCKED) {
-			return LifecycleCommitResult.failed("message.mmm.lifecycle.blocked_confirm",
-					lifecycleBlockers(authorization.blockers()));
-		}
-		return switch (operation) {
-			case EMPTY_CONDENSED, VENT_SEALED_GAS -> commitInventoryLifecycle(player.level(), region, operation);
-			case RELEASE_OWNERSHIP -> commitOwnershipRelease(player.level().getServer(), region);
-			case REMOVE_EMPTY_REGION -> commitRegionRemoval(player.level().getServer(), region);
-		};
-	}
-
-	private LifecycleCommitResult commitInventoryLifecycle(ServerLevel level, FluidRegion region, LifecycleOperation operation) {
-		FluidDomain candidate;
-		try {
-			candidate = FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
-			if (operation == LifecycleOperation.EMPTY_CONDENSED) {
-				candidate.commitOperatorClear(candidate.planOperatorClear());
-			} else {
-				candidate.commitOperatorVentSealedGas(candidate.planOperatorVentSealedGas());
-			}
-		} catch (RuntimeException failure) {
-			return LifecycleCommitResult.failed("message.mmm.lifecycle.candidate_failed", failure.getMessage());
-		}
-
-		FluidRegionPersistence.StagedCheckpoint staged = null;
-		long published;
-		try {
-			long targetGeneration = GenerationSequence.next(region.checkpointGeneration(), "Lifecycle checkpoint");
-			staged = regionOperations.stageLifecycleCheckpoint(region, candidate, targetGeneration);
-			published = regionOperations.commitStagedLifecycleCheckpoint(staged);
-		} catch (IOException | RuntimeException failure) {
-			if (staged == null) return LifecycleCommitResult.failed(
-					"message.mmm.lifecycle.commit_failed", failure.getMessage());
-			try {
-				long durableGeneration = regionOperations.committedGeneration(region.id());
-				long durableChecksum = regionOperations.committedManifestChecksum(region.id());
-				if (durableGeneration == staged.prepared().generation()
-						&& durableChecksum == staged.manifestChecksum()) {
-					published = durableGeneration;
-					MmmMod.LOGGER.warn("Lifecycle HEAD {} for region {} committed despite a post-publish exception",
-							published, region.id(), failure);
-				} else if (staged.prepared().baseGeneration() != null
-						&& durableGeneration == staged.prepared().baseGeneration()
-						&& durableChecksum == staged.prepared().baseManifestChecksum()) {
-					regionOperations.abortStagedCheckpoint(staged);
-					return LifecycleCommitResult.failed("message.mmm.lifecycle.commit_failed", failure.getMessage());
-				} else {
-					region.setPaused(true);
-					region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID,
-							"lifecycle commit 后 durable HEAD 无法分类：" + failure.getMessage());
-					return LifecycleCommitResult.failed("message.mmm.lifecycle.commit_unknown", failure.getMessage());
-				}
-			} catch (IOException | RuntimeException inspectionFailure) {
-				failure.addSuppressed(inspectionFailure);
-				region.setPaused(true);
-				region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID,
-						"lifecycle commit 后无法回读 durable HEAD：" + failure.getMessage());
-				return LifecycleCommitResult.failed("message.mmm.lifecycle.commit_unknown", failure.getMessage());
-			}
-		}
-
-		try {
-			region.adoptLifecycleCandidateDomain(candidate, published, true);
-		} catch (RuntimeException failure) {
-			region.setPaused(true);
-			region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID,
-					"lifecycle HEAD 已提交但 live candidate 未收敛；必须从 HEAD 恢复：" + failure.getMessage());
-			return LifecycleCommitResult.committed("message.mmm.lifecycle.commit_recovery_pending",
-					published, failure.getMessage());
-		}
-		try {
-			sendSnapshot(level, region);
-		} catch (RuntimeException failure) {
-			MmmMod.LOGGER.error("Lifecycle checkpoint {} committed for region {} but its client snapshot failed",
-					published, region.id(), failure);
-			return LifecycleCommitResult.committed("message.mmm.lifecycle.snapshot_pending", published);
-		}
-		return LifecycleCommitResult.committed(operation == LifecycleOperation.EMPTY_CONDENSED
-				? "message.mmm.lifecycle.empty_committed" : "message.mmm.lifecycle.vent_committed", published);
-	}
-
-	private LifecycleCommitResult commitOwnershipRelease(MinecraftServer server, FluidRegion region) {
-		region.setPaused(true);
-		FluidRegionPersistence.ReleaseAttempt release = regionOperations.releaseOwnership(server, region);
-		if (release.failure() != null) return LifecycleCommitResult.failedDetail(release.failure());
-		return LifecycleCommitResult.committed("message.mmm.lifecycle.release_committed",
-				release.restoredBlocks(), release.skippedBlocks());
-	}
-
-	private LifecycleCommitResult commitRegionRemoval(MinecraftServer server, FluidRegion region) {
-		long tombstoneGeneration;
-		try {
-			tombstoneGeneration = GenerationSequence.next(region.networkGeneration(), "Network tombstone");
-		} catch (IOException invalid) {
-			return LifecycleCommitResult.failedDetail(invalid.getMessage());
-		}
-		cc.ecisr.mmm.simulation.persistence.RegionStateFiles.PreparedRemoval prepared = null;
-		boolean committed = false;
-		try {
-			prepared = regionOperations.prepareRemoval(region, tombstoneGeneration, UUID.randomUUID(),
-					serverConfig.maximumQuarantineEntries(), serverConfig.maximumQuarantineBytes());
-			var removed = regionOperations.commitRemoval(prepared);
-			committed = true;
-			ArrayList<String> pending = new ArrayList<>();
-			try {
-				snapshots.sendRemoval(server, region, removed.networkTombstoneGeneration());
-			} catch (RuntimeException networkFailure) {
-				pending.add("network tombstone: " + networkFailure.getMessage());
-			}
-			FluidRegion runtimeOwner = regionManager.remove(region.id());
-			if (runtimeOwner != region) pending.add("runtime owner identity changed");
-			try {
-				regionOperations.convergeRemovalQuarantine(region.id(), serverConfig.maximumQuarantineEntries(),
-						serverConfig.maximumQuarantineBytes());
-			} catch (IOException quarantineFailure) {
-				pending.add("quarantine: " + quarantineFailure.getMessage());
-			}
-			if (pending.isEmpty()) return LifecycleCommitResult.committed(
-					"message.mmm.lifecycle.remove_committed", removed.targetGeneration());
-			String detail = String.join("; ", pending);
-			regionOperations.recordIssue("REMOVED " + region.id() + " 收敛待恢复：" + detail);
-			return LifecycleCommitResult.committed("message.mmm.lifecycle.remove_convergence_pending", detail);
-		} catch (IOException | RuntimeException failure) {
-			if (!committed && prepared != null) {
-				try {
-					committed = regionOperations.readRemoved(region.id()).equals(prepared.manifest());
-				} catch (IOException | RuntimeException notRemoved) {
-					failure.addSuppressed(notRemoved);
-				}
-			}
-			if (!committed && prepared != null) {
-				try { regionOperations.abortRemoval(prepared); }
-				catch (IOException abortFailure) { failure.addSuppressed(abortFailure); }
-			}
-			if (committed) {
-				regionOperations.recordIssue("REMOVED " + region.id() + " 收敛待恢复：" + failure.getMessage());
-				try {
-					snapshots.sendRemoval(server, region, prepared.manifest().networkTombstoneGeneration());
-				} catch (RuntimeException networkFailure) {
-					failure.addSuppressed(networkFailure);
-				}
-				regionManager.remove(region.id());
-				try {
-					regionOperations.convergeRemovalQuarantine(region.id(), serverConfig.maximumQuarantineEntries(),
-							serverConfig.maximumQuarantineBytes());
-				} catch (IOException quarantineFailure) {
-					failure.addSuppressed(quarantineFailure);
-				}
-				return LifecycleCommitResult.committed("message.mmm.lifecycle.remove_convergence_pending",
-						failure.getMessage());
-			}
-			return LifecycleCommitResult.failed("message.mmm.lifecycle.remove_failed", failure.getMessage());
-		}
-	}
-
-	private RegionLifecycleUseCase.PreviewFacts lifecycleFacts(
-			ServerPlayer player, FluidRegion region, LifecycleOperation operation
-	) {
-		long serverTick = Integer.toUnsignedLong(player.level().getServer().getTickCount());
-		LifecycleOperationPreview.PermissionDecision permission = player.permissions()
-				.hasPermission(Permissions.COMMANDS_ADMIN)
-				? LifecycleOperationPreview.PermissionDecision.BUILTIN_ADMIN_GRANTED
-				: LifecycleOperationPreview.PermissionDecision.BUILTIN_ADMIN_DENIED;
-		boolean pendingWal = hasPendingContainerTransfer(region.id());
-		String deviceIdentity = thermalRegistry == null || !region.solverLoaded() ? "none"
-				: region.finiteThermalDevices(thermalRegistry.fingerprint()).toString();
-		String availabilityIdentity = (authoritativeWritesReady() ? "STARTUP_READY" : "STARTUP_LOCKED")
-				+ "|" + region.availabilityDescription() + "|loaded=" + region.solverLoaded()
-				+ "|solver=" + region.solverGeneration() + "|devices=" + deviceIdentity;
-		LifecycleOperationSessions.Context context = new LifecycleOperationSessions.Context(player.getUUID(), region.id(),
-				region.checkpointGeneration(), operation, permission, pendingWal, availabilityIdentity, serverTick);
-		ArrayList<LifecycleOperationPreview.Blocker> blockers = new ArrayList<>();
-		if (permission == LifecycleOperationPreview.PermissionDecision.BUILTIN_ADMIN_DENIED) {
-			blockers.add(LifecycleOperationPreview.Blocker.PERMISSION_DENIED);
-		}
-		if (!authoritativeWritesReady()) blockers.add(LifecycleOperationPreview.Blocker.STARTUP_NOT_READY);
-		if (region.availabilityFailure() != null) blockers.add(LifecycleOperationPreview.Blocker.REGION_UNAVAILABLE);
-		if (!region.solverLoaded()) blockers.add(LifecycleOperationPreview.Blocker.REGION_UNLOADED);
-		if (pendingWal || regionOperations.ownershipLockDescription(region) != null) {
-			blockers.add(LifecycleOperationPreview.Blocker.PENDING_WAL);
-		}
-
-		int ownershipBlocks = 0;
-		try {
-			ownershipBlocks = regionOperations.committedOwnershipBlockCount(region);
-		} catch (IOException | RuntimeException unavailable) {
-			addBlocker(blockers, LifecycleOperationPreview.Blocker.PENDING_WAL);
-		}
-		if (!region.solverLoaded()) return new RegionLifecycleUseCase.PreviewFacts(
-				context, LifecycleOperationPreview.Removal.none(),
-				LifecycleOperationPreview.GasState.none(), ownershipBlocks, List.copyOf(blockers));
-
-		FluidDomain domain = region.domain();
-		if (domain.hasPendingPhaseVolumeWork()) blockers.add(LifecycleOperationPreview.Blocker.PENDING_PHASE_WORK);
-		boolean auditClosed = domain.gasBoundary().auditClosed()
-				&& (!domain.hasThermalState()
-				|| domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
-		try {
-			if (operation == LifecycleOperation.EMPTY_CONDENSED) domain.planOperatorClear();
-			if (operation == LifecycleOperation.VENT_SEALED_GAS) domain.planOperatorVentSealedGas();
-			if (operation == LifecycleOperation.RELEASE_OWNERSHIP
-					|| operation == LifecycleOperation.REMOVE_EMPTY_REGION) domain.planOperatorClear();
-		} catch (RuntimeException open) {
-			auditClosed = false;
-		}
-		if (!auditClosed) blockers.add(LifecycleOperationPreview.Blocker.AUDIT_OPEN);
-
-		boolean condensedEmpty = domain.particleCount() == 0
-				&& domain.totalGranularSolidVolumeSvq() == 0L
-				&& domain.totalCoherentSolidVolumeSvq() == 0L;
-		boolean gasEmpty = domain.gasBoundary().nodeCount() == 0 && domain.gasBoundary().sealedInventory().isEmpty()
-				&& domain.exactGasInternalEnergy().equals(cc.ecisr.mmm.units.SignedDyadic.ZERO);
-		boolean devicesEmpty = thermalRegistry == null
-				|| region.finiteThermalDevices(thermalRegistry.fingerprint()).devices().isEmpty();
-		if ((operation == LifecycleOperation.RELEASE_OWNERSHIP || operation == LifecycleOperation.REMOVE_EMPTY_REGION)
-				&& !condensedEmpty) blockers.add(LifecycleOperationPreview.Blocker.CONDENSED_NOT_EMPTY);
-		if ((operation == LifecycleOperation.RELEASE_OWNERSHIP || operation == LifecycleOperation.REMOVE_EMPTY_REGION)
-				&& !gasEmpty) blockers.add(LifecycleOperationPreview.Blocker.GAS_NOT_EMPTY);
-		if ((operation == LifecycleOperation.RELEASE_OWNERSHIP || operation == LifecycleOperation.REMOVE_EMPTY_REGION)
-				&& !devicesEmpty) blockers.add(LifecycleOperationPreview.Blocker.FINITE_DEVICE_NOT_EMPTY);
-		if (operation == LifecycleOperation.REMOVE_EMPTY_REGION && ownershipBlocks != 0) {
-			blockers.add(LifecycleOperationPreview.Blocker.OWNERSHIP_NOT_RELEASED);
-		}
-		if (operation == LifecycleOperation.REMOVE_EMPTY_REGION) {
-			try {
-				regionOperations.requireRemovalQuarantineCapacity(region,
-						serverConfig.maximumQuarantineEntries(), serverConfig.maximumQuarantineBytes());
-			} catch (IOException | RuntimeException unavailable) {
-				blockers.add(LifecycleOperationPreview.Blocker.QUARANTINE_UNAVAILABLE);
-			}
-		}
-
-		GasSummary gas = lifecycleGasSummary(domain);
-		LifecycleOperationPreview.GasState gasState = new LifecycleOperationPreview.GasState(gas.nanos(), gas.mass(),
-				gas.speciesQuanta(), domain.gasBoundary().nodeCount(), domain.hasAmbientGasCells());
-		LifecycleOperationPreview.Removal removal = switch (operation) {
-			case EMPTY_CONDENSED -> new LifecycleOperationPreview.Removal(
-					AirNetwork.nanos(domain.physicalVolumeCubicMetres(domain.totalVolumeExact())),
-					domain.physicalMassKilograms(domain.totalMass()), domain.totalChemicalSpeciesQuanta(),
-					domain.totalGranularSolidVolumeSvq(), domain.totalGranularMass(),
-					domain.totalCoherentSolidVolumeSvq(), domain.totalCoherentMass(),
-					0L, 0.0, 0L, domain.hasThermalState(), domain.hasThermalState()
-					? domain.exactInternalEnergy().subtract(domain.exactGasInternalEnergy()).toDouble() : Double.NaN);
-			case VENT_SEALED_GAS -> new LifecycleOperationPreview.Removal(
-					0L, 0.0, 0L, 0L, 0.0, 0L, 0.0, gas.nanos(), gas.mass(), gas.speciesQuanta(),
-					domain.hasThermalState(), domain.hasThermalState()
-					? domain.exactGasInternalEnergy().toDouble() : Double.NaN);
-			case RELEASE_OWNERSHIP, REMOVE_EMPTY_REGION -> LifecycleOperationPreview.Removal.none();
-		};
-		return new RegionLifecycleUseCase.PreviewFacts(
-				context, removal, gasState, ownershipBlocks, List.copyOf(blockers));
-	}
-
-	private static GasSummary lifecycleGasSummary(FluidDomain domain) {
-		long nanos = 0L, species = 0L;
-		double mass = 0.0;
-		for (var component : domain.gasBoundary().sealedInventory().components()) {
-			nanos = Math.addExact(nanos, component.standardVolumeNanos());
-			mass += component.mass();
-			for (var amount : component.species()) species = Math.addExact(species, amount.amountQuanta());
-		}
-		if (!Double.isFinite(mass)) throw new ArithmeticException("Lifecycle gas mass summary overflow");
-		return new GasSummary(nanos, mass, species);
-	}
-
-	private ResolvedController resolveInteractiveController(
-			ServerPlayer player, UUID requestedRegionId, BlockPos controllerPosition
-	) {
-		if (player == null || requestedRegionId == null || controllerPosition == null) {
-			return ResolvedController.failed("message.mmm.controller.request_identity_missing");
-		}
-		ServerLevel level = player.level();
-		if (!level.getServer().isSameThread()) throw new IllegalStateException("Lifecycle actions are server-thread-only");
-		if (player.distanceToSqr(controllerPosition.getX() + 0.5,
-				controllerPosition.getY() + 0.5, controllerPosition.getZ() + 0.5) > 64.0) {
-			return ResolvedController.failed("message.mmm.controller.too_far");
-		}
-		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) {
-			return ResolvedController.failed("message.mmm.controller.target_gone");
-		}
-		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
-		if (region == null || !region.id().equals(requestedRegionId)) {
-			return ResolvedController.failed("message.mmm.controller.owner_changed");
-		}
-		return new ResolvedController(region, null);
-	}
-
-	private static void addBlocker(
-			ArrayList<LifecycleOperationPreview.Blocker> blockers, LifecycleOperationPreview.Blocker blocker
-	) {
-		if (!blockers.contains(blocker)) blockers.add(blocker);
-	}
-
-	private static Component lifecycleBlockers(List<LifecycleOperationPreview.Blocker> blockers) {
-		var result = Component.empty();
-		for (int index = 0; index < blockers.size(); index++) {
-			if (index > 0) result.append(Component.literal(" · "));
-			result.append(Component.translatable("screen.mmm.blocker."
-					+ blockers.get(index).name().toLowerCase(java.util.Locale.ROOT)));
-		}
-		return result;
-	}
-
-	public record LifecyclePreviewResult(LifecycleOperationPreview preview, Component failure) {
-		public LifecyclePreviewResult {
-			if ((preview == null) == (failure == null)) throw new IllegalArgumentException("Lifecycle preview result is ambiguous");
-		}
-		static LifecyclePreviewResult failed(Component failure) { return new LifecyclePreviewResult(null, failure); }
-	}
-	public record LifecycleCommitResult(boolean committed, Component message) {
-		public LifecycleCommitResult {
-			if (message == null) throw new IllegalArgumentException("Lifecycle result message is missing");
-		}
-		static LifecycleCommitResult committed(String key, Object... arguments) {
-			return new LifecycleCommitResult(true, Component.translatable(key, arguments));
-		}
-		static LifecycleCommitResult failed(String key, Object... arguments) {
-			return new LifecycleCommitResult(false, Component.translatable(key, arguments));
-		}
-		static LifecycleCommitResult failedDetail(String detail) {
-			return failed("message.mmm.lifecycle.detail", detail);
-		}
-		static LifecycleCommitResult failedDetail(Component detail) {
-			return new LifecycleCommitResult(false, detail);
-		}
-	}
-	private record GasSummary(long nanos, double mass, long speciesQuanta) { }
-	private record ResolvedController(FluidRegion region, Component failure) {
-		static ResolvedController failed(String key) {
-			return new ResolvedController(null, Component.translatable(key));
-		}
+		return regionLifecycle.confirm(player, requestedRegionId, controllerPosition, nonce, operation);
 	}
 
 	public void forgetInteractiveViewer(UUID playerId) {
@@ -1155,14 +777,7 @@ public final class FluidSimulationService {
 			if (footprint == null || !region.dimension().equals(level.dimension())
 					|| !footprint.boundaryBlocks().contains(position.asLong())
 					|| !region.solverLoaded() || !region.domain().hasThermalState()) continue;
-			try {
-				if (regionInputs.refreshThermalBoundary(level, region)) {
-					region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
-				}
-			} catch (RuntimeException invalidBoundary) {
-				blockThermal(level, region,
-						"thermal-definition LOCKED：" + invalidBoundary.getMessage(), invalidBoundary);
-			}
+			regionTick.refreshThermalBoundary(level, region);
 		}
 	}
 
@@ -1371,7 +986,7 @@ public final class FluidSimulationService {
 		RegionCatalog.AdmissionResult exactPreview = regionManager.previewAdd(candidate);
 		if (!exactPreview.accepted()) return ControllerActivation.failed(exactPreview.failure());
 		try {
-			refreshRegionInputs(level, candidate);
+			regionTick.refreshRegionInputs(level, candidate);
 			if (worldBridgeFeatureEnabled) FluidRegionFactory.captureVanillaWater(level, candidate);
 			bindConfiguredState(candidate.domain());
 		} catch (RuntimeException invalidCandidate) {
@@ -1987,19 +1602,19 @@ public final class FluidSimulationService {
 		try {
 			for (int i = 0; i < count; i++) stepMotionOnce(region, List.of());
 		} catch (FluidDomain.PressureSolveBlockedException blocked) {
-			blockNumerical(level, region, blocked);
+			regionTick.blockNumerical(level, region, blocked);
 			return -1;
 		} catch (GasTopologyBlockedException blocked) {
-			blockGasTopology(level, region, blocked);
+			regionTick.blockGasTopology(level, region, blocked);
 			return -1;
 		} catch (FluidDomain.ThermalTransportBlockedException blocked) {
-			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
+			regionTick.blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
 			return -1;
 		} catch (FluidDomain.GasThermalBlockedException blocked) {
-			blockThermal(level, region, "gas-thermal PAUSED：" + blocked.getMessage(), blocked);
+			regionTick.blockThermal(level, region, "gas-thermal PAUSED：" + blocked.getMessage(), blocked);
 			return -1;
 		} catch (FluidDomain.ThermalPhaseBlockedException blocked) {
-			blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
+			regionTick.blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
 			return -1;
 		} catch (GranularMechanics.ValidityExceededException invalid) {
 			region.blockGranular("granular-validity-blocked PAUSED：" + invalid.getMessage());
@@ -2029,146 +1644,9 @@ public final class FluidSimulationService {
 						"dimension is not loaded", snapshots::sendRemoval);
 				continue;
 			}
-			tickRegion(level, region);
+			if (ensureRegionAvailable(level, region)) regionTick.tickAvailable(level, region);
 		}
-		regionInputs.finishServerTick();
-	}
-
-	private void tickRegion(ServerLevel level, FluidRegion region) {
-		if (!ensureRegionAvailable(level, region)) return;
-		long tick = region.incrementTick();
-		boolean collisionsChanged = false;
-		if (regionInputs.boundariesDue(tick)) {
-			try { collisionsChanged = refreshRegionInputs(level, region).changedCells() > 0; }
-			catch (FluidDomain.CollisionEditBlockedException blocked) {
-				blockCollisionEdit(level, region, blocked);
-				return;
-			}
-		}
-		MinecraftRegionInputs.TickInputs inputs = regionInputs.captureTick(level, region, tick,
-				worldCapabilityProfile.hasCapability(WorldCapability.THERMAL));
-		int affectedEntities = inputs.affectedEntities();
-		RegionRuntime tickRuntime = inputs.runtime();
-		RegionTickUseCase.Plan tickPlan = regionTick.plan(tickRuntime);
-		if (tickPlan.axis() == RegionTickUseCase.Axis.NONE) {
-			if (collisionsChanged) sendSnapshot(level, region);
-			return;
-		}
-		boolean motionStepDue = tickPlan.axis() == RegionTickUseCase.Axis.MOTION;
-		ThermalAuditLedger thermalBefore = worldCapabilityProfile.hasCapability(WorldCapability.THERMAL) ? region.domain().thermalAudit() : null;
-		FluidDomain.ThermalAxisStats completedThermalAxis = null;
-		GranularDepositDynamics.Stats completedGranularTransition = NO_GRANULAR_TRANSITION;
-		boolean autoPause = false;
-		try {
-			if (motionStepDue) {
-				region.wakeThermal(ThermalActivity.WakeReason.CARRIER_MOTION);
-				boolean phaseChange = worldCapabilityProfile.hasCapability(WorldCapability.PHASECHANGE);
-				RegionTickUseCase.MotionOutcome outcome = regionTick.executeMotion(tickPlan,
-						new MotionStepCommand(region.id(), region.solverGeneration(), inputs.movingBodies(),
-								phaseChange, phaseChange ? serverConfig.maximumPhaseOperationsPerStep() : 0, false));
-				if (!outcome.result().accepted()) throw new IllegalStateException(
-						"Motion step application rejected synchronous region state: " + outcome.result().status());
-				region.recordStep(outcome.result().stats(), outcome.elapsedMilliseconds());
-				applyTickRuntime(region, tickRuntime, outcome.runtime(), outcome.elapsedMilliseconds());
-				autoPause = outcome.autoPause();
-				completedThermalAxis = outcome.result().stats().thermalAxis();
-				completedGranularTransition = outcome.result().stats().granularTransition();
-				MovingBodyFluidCoupling.Result coupling = outcome.result().movingBodyCoupling();
-				region.setLastEntityCoupling(new FluidRegion.EntityCouplingStats(affectedEntities,
-						coupling.impulseXKilogramMetresPerSecond(), coupling.impulseYKilogramMetresPerSecond(),
-						coupling.impulseZKilogramMetresPerSecond()));
-			} else {
-				boolean phaseChange = worldCapabilityProfile.hasCapability(WorldCapability.PHASECHANGE);
-				RegionTickUseCase.ThermalOutcome outcome = regionTick.executeThermal(tickPlan,
-						new ThermalStepCommand(region.id(), region.solverGeneration(), phaseChange,
-								phaseChange ? serverConfig.maximumPhaseOperationsPerStep() : 0));
-				if (!outcome.result().accepted()) throw new IllegalStateException(
-						"Thermal step application rejected synchronous region state: " + outcome.result().status());
-				region.recordThermalStep(outcome.elapsedMilliseconds());
-				applyTickRuntime(region, tickRuntime, outcome.runtime(), outcome.elapsedMilliseconds());
-				autoPause = outcome.autoPause();
-				completedThermalAxis = outcome.result().stats();
-			}
-		} catch (FluidDomain.PressureSolveBlockedException blocked) {
-			blockNumerical(level, region, blocked);
-			return;
-		} catch (GasTopologyBlockedException blocked) {
-			blockGasTopology(level, region, blocked);
-			return;
-		} catch (ChemicalReactionEngine.BudgetExceededException budget) {
-			String failure = "chemistry-blocked PAUSED：" + budget.getMessage();
-			region.blockChemistry(failure);
-			MmmMod.LOGGER.error("Region {} exhausted a frozen chemistry budget; parcel commit was rejected and the region is paused",
-					region.id(), budget);
-			for (ServerPlayer player : level.players()) {
-				player.sendSystemMessage(Component.literal(
-						"物质、运动与力学化学步骤已整体拒绝，区域被安全暂停：" + budget.getMessage()
-								+ "；未提交部分 parcel 修改，请查看 /mmm status"));
-			}
-			sendSnapshot(level, region);
-			return;
-		} catch (GranularPhaseTransferEngine.BlockedException blocked) {
-			String failure = "granular-phase-blocked PAUSED：" + blocked.getMessage();
-			region.blockGranular(failure);
-			MmmMod.LOGGER.error("Region {} rejected a granular phase-transfer plan and is paused",
-					region.id(), blocked);
-			for (ServerPlayer player : level.players()) {
-				player.sendSystemMessage(Component.literal(
-						"物质、运动与力学固液相转移被安全暂停：" + blocked.getMessage()
-								+ "；当前 plan 未提交，先前已提交 cell 保持，请查看 /mmm status"));
-			}
-			sendSnapshot(level, region);
-			return;
-		} catch (GranularMechanics.ValidityExceededException invalid) {
-			String failure = "granular-validity-blocked PAUSED：" + invalid.getMessage();
-			region.blockGranular(failure);
-			MmmMod.LOGGER.error("Region {} exceeded a frozen granular mechanics validity range and is paused",
-					region.id(), invalid);
-			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
-					"物质、运动与力学颗粒力学超出定义有效范围，区域被安全暂停：" + invalid.getMessage()
-							+ "；本次速度提交未开始，请查看 /mmm status"));
-			sendSnapshot(level, region);
-			return;
-		} catch (FluidDomain.ThermalTransportBlockedException blocked) {
-			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
-			return;
-		} catch (FluidDomain.GasThermalBlockedException blocked) {
-			blockThermal(level, region, "gas-thermal PAUSED：" + blocked.getMessage(), blocked);
-			return;
-		} catch (FluidDomain.ThermalPhaseBlockedException blocked) {
-			blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
-			return;
-		}
-		if (worldCapabilityProfile.hasCapability(WorldCapability.THERMAL)) {
-			observeThermalStep(region, thermalBefore, motionStepDue,
-					completedThermalAxis, completedGranularTransition);
-		}
-		FluidDomain.StepStats stats = region.lastStats();
-		float residualLimit = Math.max(1.0E-5F, region.domain().config().pressureTolerance() * 4.0F);
-		boolean hydrostaticCandidate = !collisionsChanged && affectedEntities == 0
-				&& region.domain().maximumParticleSpeed() <= HYDROSTATIC_MAX_MARKER_SPEED
-				&& region.domain().granularReadyForHydrostaticSleep()
-				&& stats != null && stats.pressureResidual() <= residualLimit;
-		if (motionStepDue && region.lifecycle().observeCompletedStep(hydrostaticCandidate, HYDROSTATIC_QUIET_STEPS)) {
-			float exactVolume = region.domain().totalVolume();
-			int markerCount = region.domain().particleCount();
-			region.domain().commitHydrostaticSleep();
-			if (markerCount != region.domain().particleCount() || exactVolume != region.domain().totalVolume()) {
-				throw new IllegalStateException("Hydrostatic sleep changed the exact marker ledger for region " + region.id());
-			}
-			MmmMod.LOGGER.info("Region {} entered hydrostatic sleep with {} markers and {} exact cell volume",
-					region.id(), markerCount, exactVolume);
-		}
-		if (autoPause) {
-			region.blockNumerical("wall-time NUMERICAL_PAUSE：" + TICK_POLICY.hardPauseStreak()
-					+ " consecutive steps exceeded " + TICK_POLICY.hardPauseMilliseconds() + " ms");
-			MmmMod.LOGGER.warn("Auto-paused fluid region {} after {} consecutive steps above {} ms",
-					region.id(), TICK_POLICY.hardPauseStreak(), TICK_POLICY.hardPauseMilliseconds());
-		}
-		if (tick % SNAPSHOT_INTERVAL_TICKS == 0 || region.paused() || region.availabilityFailure() != null
-				|| region.lifecycle().state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP) {
-			sendSnapshot(level, region);
-		}
+		regionTick.finishServerTick();
 	}
 
 	private void maintainTakeover(ServerLevel level) {
@@ -2188,7 +1666,7 @@ public final class FluidSimulationService {
 		}
 
 		boolean available = regionOperations.ensureAvailable(
-				level, region, controllerFeatureEnabled, this::refreshRegionInputs, this::sendSnapshot,
+				level, region, controllerFeatureEnabled, regionTick::refreshRegionInputs, this::sendSnapshot,
 				snapshots::sendRemoval
 		);
 		if (available && worldCapabilityProfile.hasCapability(WorldCapability.THERMAL) && region.solverLoaded() && region.domain().hasThermalState()) {
@@ -2216,86 +1694,6 @@ public final class FluidSimulationService {
 				"Motion step application rejected synchronous region state: " + result.status());
 		region.recordStep(result.stats(), (System.nanoTime() - start) / 1_000_000.0);
 		return result;
-	}
-
-	private void observeThermalStep(
-			FluidRegion region, ThermalAuditLedger before, boolean carrierMotion,
-			FluidDomain.ThermalAxisStats thermalAxis,
-			GranularDepositDynamics.Stats granularTransition
-	) {
-		FluidDomain domain = region.domain();
-		ThermalAuditLedger after = domain.thermalAudit();
-		boolean gasActivity = !after.externalSource().equals(before.externalSource())
-				|| !after.externalSink().equals(before.externalSink())
-				|| !after.mechanicalWork().equals(before.mechanicalWork())
-				|| !after.finiteDeviceExchange().equals(before.finiteDeviceExchange());
-		boolean chemistryDirty = thermalAxis.chemistry().changedMarkers() != 0;
-		boolean granularDirty = thermalAxis.granularPhase().transfers() != 0
-				|| carrierMotion && (granularTransition.settledParcels() != 0
-				|| granularTransition.relaxedMoves() != 0
-				|| granularTransition.wokenParcels() != 0
-				|| granularTransition.dirtyColumns() != 0);
-		boolean phaseDirty = thermalAxis.condensedPhase().operations() != 0
-				|| thermalAxis.gasPhase().operations() != 0;
-		boolean auditClosed = domain.exactInternalEnergy().equals(after.expectedInventory());
-		boolean pendingVolumeOrWork = domain.hasPendingPhaseVolumeWork();
-		region.observeThermal(new ThermalActivity.Observation(thermalAxis.transport(),
-				chemistryDirty, granularDirty, phaseDirty, gasActivity, carrierMotion,
-				pendingVolumeOrWork, auditClosed),
-				THERMAL_QUIET_STEPS);
-		if (!carrierMotion && (chemistryDirty || granularDirty || phaseDirty || gasActivity
-				|| pendingVolumeOrWork)) {
-			region.wakeForActivity();
-		}
-	}
-
-	private void blockThermal(ServerLevel level, FluidRegion region, String failure, RuntimeException blocked) {
-		region.blockThermal(failure);
-		MmmMod.LOGGER.error("Region {} rejected a thermal logical step and is paused: {}",
-				region.id(), failure, blocked);
-		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
-				"物质、运动与力学热学步骤被安全拒绝，区域已暂停：" + failure + "；请查看 /mmm status"));
-		sendSnapshot(level, region);
-	}
-
-	private void blockNumerical(
-			ServerLevel level, FluidRegion region, FluidDomain.PressureSolveBlockedException blocked
-	) {
-		String failure = "pressure-solver NUMERICAL_PAUSE：" + blocked.getMessage();
-		region.blockNumerical(failure);
-		MmmMod.LOGGER.error("Region {} rejected an unconverged pressure candidate and is paused",
-				region.id(), blocked);
-		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
-				"物质、运动与力学压力求解未收敛，本次候选未提交，区域已安全暂停："
-						+ blocked.getMessage() + "；请查看 /mmm status"));
-		sendSnapshot(level, region);
-	}
-
-	private void blockGasTopology(
-			ServerLevel level, FluidRegion region, GasTopologyBlockedException blocked
-	) {
-		String failure = "gas-topology NUMERICAL_PAUSE：" + blocked.getMessage();
-		region.blockNumerical(failure);
-		MmmMod.LOGGER.error("Region {} rejected a gas-topology candidate and is paused",
-				region.id(), blocked);
-		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
-				"物质、运动与力学气体拓扑账本无法闭合，本次候选未提交，区域已安全暂停："
-						+ blocked.getMessage() + "；请查看 /mmm status"));
-		sendSnapshot(level, region);
-	}
-
-	private static void applyTickRuntime(
-			FluidRegion region, RegionRuntime before, RegionRuntime after, double elapsedMilliseconds
-	) {
-		region.setHardOverrunStreak(after.hardOverrunStreak());
-		region.setRecoveryStreak(after.recoveryStreak());
-		if (after.stepIntervalTicks() != before.stepIntervalTicks()) {
-			region.setStepIntervalTicks(after.stepIntervalTicks());
-			if (after.stepIntervalTicks() > before.stepIntervalTicks()) {
-				MmmMod.LOGGER.info("Reduced fluid simulation rate to approximately {} Hz after a {} ms step",
-						20 / after.stepIntervalTicks(), String.format("%.1f", elapsedMilliseconds));
-			}
-		}
 	}
 
 	public WaterEditResult pourWater(ServerPlayer player, int buckets) {
@@ -2337,36 +1735,11 @@ public final class FluidSimulationService {
 		FluidRegion region = activeRegion();
 		if (region == null || !level.dimension().equals(region.dimension())) return FluidRegion.CollisionStats.EMPTY;
 		if (!ensureRegionAvailable(level, region)) return region.lastCollisionStats();
-		try { return refreshRegionInputs(level, region); }
+		try { return regionTick.refreshRegionInputs(level, region); }
 		catch (FluidDomain.CollisionEditBlockedException blocked) {
-			blockCollisionEdit(level, region, blocked);
+			regionTick.blockCollisionEdit(level, region, blocked);
 			throw blocked;
 		}
-	}
-
-	private void blockCollisionEdit(
-			ServerLevel level, FluidRegion region, FluidDomain.CollisionEditBlockedException blocked
-	) {
-		String detail = blocked.getCause() == null ? blocked.getMessage() : blocked.getCause().getMessage();
-		region.blockCollision("collision-edit-blocked PAUSED：" + detail);
-		MmmMod.LOGGER.error("Region {} could not reconcile a Minecraft collision edit with authoritative inventory and is paused",
-				region.id(), blocked);
-		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
-				"物质、运动与力学无法把方块碰撞编辑与物质账本联合提交，区域已安全暂停：" + detail
-						+ "；世界方块优先，区域代次保持可恢复，请查看 /mmm status"));
-		sendSnapshot(level, region);
-	}
-
-	private FluidRegion.CollisionStats refreshRegionInputs(ServerLevel level, FluidRegion region) {
-		FluidRegion.CollisionStats collisions = regionInputs.refreshCollisions(level, region);
-		try {
-			if (regionInputs.refreshThermalBoundary(level, region)) {
-				region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
-			}
-		} catch (RuntimeException invalidBoundary) {
-			blockThermal(level, region, "thermal-definition LOCKED：" + invalidBoundary.getMessage(), invalidBoundary);
-		}
-		return collisions;
 	}
 
 	public RestorationStats remove(MinecraftServer server) {
