@@ -421,6 +421,12 @@ S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Bri
 * `core` 现在无生产源码，只作为兼容 artifact 名重导出 `api/model/solver/application`；Fabric 显式编译并内嵌四个实际 artifact，避免空 `core` jar 隐式丢类。物理模块分别产出 sources jar，且使用 Java 25 release 在无 Minecraft classpath 下独立编译。
 * 没有为模块外观新增重复测试；把既有 thermal owner、cut-cell solver stage 与 container application fault-matrix 表征分别迁入所属模块，各模块有独立 JavaExec 门，Fabric CPU selector 通过显式 test artifact 继续聚合同一类。`runModuleValidation`、Fabric test compile 与更新扫描根后的 `verifyArchitecture` 通过；当前规模为 model 128/17173、solver 71/15010、application 24/1848，core 为 0 个生产源。
 
+### S20b
+
+* 建立 loader-neutral `gpu-probe-kernel`：Vulkan pipeline、Shaderc/VMA capability probe、四组 headless validation、checkpoint/scenario/benchmark 与 shader 资源整体迁入该 artifact；其生产源码和资源对 Minecraft/Fabric import 为零。可选 Loom 模块只剩 mod initializer、server/world collision adapter 与服务生命周期，并通过 nested kernel jar 消费实现。
+* 把原本混在 server service 的固定 probe scenario、CPU fallback 构造、checkpoint/manual-step 规则及 benchmark 迁入 kernel；世界 `VoxelShape` 采样仍留在 adapter，但八位 block mask 到 solver-cell 的纯展开规则由 kernel 独占。没有改变网格、迭代数、checkpoint 节拍、shader binding 或碰撞位序。
+* headless/GPU JavaExec 门移到 kernel，原 `gpu-probe:*` 任务仅保留兼容委托；原 GPU correctness 中唯一的 Brigadier/Fabric 命令树断言替换为 adapter 自有 `runAdapterValidation`，避免 kernel 反依赖 loader。独立 kernel compile、adapter main/test compile、command adapter 门与 `verifyArchitecture` 通过，架构门扫描 415 个生产源。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

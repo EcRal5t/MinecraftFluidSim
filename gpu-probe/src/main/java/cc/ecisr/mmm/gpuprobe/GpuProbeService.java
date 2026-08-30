@@ -1,7 +1,6 @@
 package cc.ecisr.mmm.gpuprobe;
 
 import cc.ecisr.mmm.fluid.FluidDomain;
-import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.network.FluidProtocolServer;
 import cc.ecisr.mmm.network.FluidSnapshotPayload;
 import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
@@ -17,17 +16,11 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.WeakHashMap;
-import java.util.function.BooleanSupplier;
-import java.util.function.IntSupplier;
 
 /** In-memory service for generated demos and explicit read-only world-collision snapshots. */
 final class GpuProbeService {
-	private static final int NX = 24, NY = 16, NZ = 24;
 	private static final int BLOCKS_X = 12, BLOCKS_Y = 8, BLOCKS_Z = 12;
-	private static final float H = 0.5F, DT = 1.0F / 20.0F, GRAVITY = 9.81F, RHO = 1_000.0F;
-	private static final int PRESSURE_ITERATIONS = 96;
 	private static final int SNAPSHOT_INTERVAL_TICKS = 4;
-	private static final int CHECKPOINT_INTERVAL_STEPS = 20;
 	private static final Map<MinecraftServer, GpuProbeService> SERVICES = new WeakHashMap<>();
 
 	private Backend backend;
@@ -105,7 +98,7 @@ final class GpuProbeService {
 		checkpoint = null;
 		VulkanFlipPipeline pipeline = null;
 		try {
-			pipeline = new VulkanFlipPipeline(gpuConfig(pressureSolver), deviceIndex,
+			pipeline = new VulkanFlipPipeline(GpuProbeScenario.gpuConfig(pressureSolver), deviceIndex,
 					VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, pressureSolver);
 			if (solidCells == null) pipeline.initializeDamBreak(); else pipeline.initializeDamBreakWithSolids(solidCells);
 			checkpoint = pipeline.captureCheckpoint(0L);
@@ -117,7 +110,7 @@ final class GpuProbeService {
 			}
 			fallbackReason = exception.getClass().getSimpleName() + ": " + safeMessage(exception);
 			MmmGpuProbeMod.LOGGER.warn("GPU demo initialization failed; using isolated CPU fallback", exception);
-			backend = new CpuBackend(createCpuDamBreak(solidCells));
+			backend = new CpuBackend(GpuProbeScenario.createCpuDamBreak(solidCells));
 		}
 		paused = true;
 		tick = 0;
@@ -134,20 +127,8 @@ final class GpuProbeService {
 	int step(ServerLevel level, int count) {
 		if (backend == null || !level.dimension().equals(dimension)) return 0;
 		if (MmmRuntimeRegistry.require(level.getServer()).regionObservation().exists()) return 0;
-		int completed = runManualLoop(count, this::stepOnce, () -> hardOverrunStreak);
+		int completed = GpuProbeScenario.runManualLoop(count, this::stepOnce, () -> hardOverrunStreak);
 		sendSnapshot(level);
-		return completed;
-	}
-
-	static int runManualLoop(int count, BooleanSupplier step, IntSupplier hardOverrunStreak) {
-		int completed = 0;
-		for (int i = 0; i < count; i++) {
-			if (!step.getAsBoolean()) break;
-			completed++;
-			// Manual stepping is intentionally available while paused. Stop only at the hard
-			// overrun guard; the ordinary paused flag must not collapse "step N" to one step.
-			if (hardOverrunStreak.getAsInt() >= 3) break;
-		}
 		return completed;
 	}
 
@@ -178,7 +159,7 @@ final class GpuProbeService {
 		try {
 			backend.step();
 			int nextGeneration = Math.addExact(completedSteps, 1);
-			if (backend instanceof VulkanBackend vulkan && checkpointDue(nextGeneration, checkpoint)) {
+			if (backend instanceof VulkanBackend vulkan && GpuProbeScenario.checkpointDue(nextGeneration, checkpoint)) {
 				GpuProbeCheckpoint candidate = vulkan.captureCheckpoint(nextGeneration);
 				if (candidate.generation() != nextGeneration) throw new IllegalStateException("GPU checkpoint generation mismatch");
 				checkpoint = candidate;
@@ -196,10 +177,6 @@ final class GpuProbeService {
 			recoverRuntimeFailure(exception, "step/checkpoint");
 			return false;
 		}
-	}
-
-	static boolean checkpointDue(int completedGeneration, GpuProbeCheckpoint current) {
-		return current != null && completedGeneration - current.generation() >= CHECKPOINT_INTERVAL_STEPS;
 	}
 
 	private boolean recoverRuntimeFailure(Throwable failureCause, String operation) {
@@ -222,7 +199,7 @@ final class GpuProbeService {
 		GpuProbeCheckpoint recoveryPoint = checkpoint;
 		CpuBackend recovered;
 		try {
-			recovered = new CpuBackend(recoveryPoint.restore(cpuConfig()));
+			recovered = new CpuBackend(recoveryPoint.restore(GpuProbeScenario.cpuConfig()));
 		} catch (RuntimeException recoveryFailure) {
 			failureCause.addSuppressed(recoveryFailure);
 			backend = null;
@@ -267,7 +244,8 @@ final class GpuProbeService {
 				checkpoint.gpuReadbackBytes(), runtimeRecoveryCount);
 		return String.format(Locale.ROOT,
 				"%s | backend %s | origin %s | grid %dx%dx%d | water %.2f blocks (%.2f cells) | particles %d | scheduling wall %.3f ms | steps %d | %s | %s%s%s%s%s",
-				paused ? "暂停" : "运行", backend.name(), origin.toShortString(), NX, NY, NZ,
+				paused ? "暂停" : "运行", backend.name(), origin.toShortString(),
+				GpuProbeScenario.NX, GpuProbeScenario.NY, GpuProbeScenario.NZ,
 				backend.volumeCells() / 8.0F, backend.volumeCells(), backend.particleCount(), lastSchedulingWallMilliseconds, completedSteps,
 				diagnostics,
 				collisionDescription,
@@ -296,7 +274,8 @@ final class GpuProbeService {
 			snapshot = backend.snapshot();
 		}
 		FluidSnapshotPayload payload = FluidSnapshotPayload.snapshot(
-				dimension.identifier(), regionId, 1L, ++snapshotSequence, origin, H, NX, NY, NZ,
+				dimension.identifier(), regionId, 1L, ++snapshotSequence, origin, GpuProbeScenario.CELL_SIZE,
+				GpuProbeScenario.NX, GpuProbeScenario.NY, GpuProbeScenario.NZ,
 				snapshot.density(), snapshot.markers(), snapshot.solids(), true
 		);
 		for (ServerPlayer player : level.players()) {
@@ -326,81 +305,6 @@ final class GpuProbeService {
 		hiddenForMainConflict = false;
 		collisionDescription = null;
 		paused = true;
-	}
-
-	static String benchmark(int deviceIndex, int blockSize, VulkanFlipPipeline.PressureSolver pressureSolver) {
-		if (blockSize != 12 && blockSize != 32) throw new IllegalArgumentException("benchmark 只接受 12 或 32 方块边长");
-		boolean large = blockSize == 32;
-		int grid = large ? 64 : 24;
-		int ny = large ? 64 : 16;
-		int particles = large ? 2_097_152 : 24 * 16 * 24 * 8;
-		int pressureIterations = switch (pressureSolver) {
-			case JACOBI -> large ? 64 : PRESSURE_ITERATIONS;
-			case RBGS_SOR -> large ? 64 : 48;
-			case PCG, PCG_DIAGONAL -> large ? 64 : 32;
-			case MULTIGRID_TWO_LEVEL, MULTIGRID_HIERARCHY -> 2;
-		};
-		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(grid, ny, grid, H, DT, large ? 0.0F : GRAVITY, RHO,
-				pressureIterations, particles);
-		try (VulkanFlipPipeline pipeline = new VulkanFlipPipeline(config, deviceIndex,
-				VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING, pressureSolver)) {
-			if (large) pipeline.initializeFull(); else pipeline.initializeDamBreak();
-			int warmup = large ? 1 : 3, measured = large ? 3 : 20;
-			for (int i = 0; i < warmup; i++) pipeline.step();
-			pipeline.diagnostics();
-			double schedulingTotal = 0.0, schedulingMinimum = Double.POSITIVE_INFINITY, schedulingMaximum = 0.0;
-			double gpuTotal = 0.0, gpuMinimum = Double.POSITIVE_INFINITY, gpuMaximum = 0.0;
-			pipeline.beginGpuTimingCapture();
-			long batchStarted = System.nanoTime();
-			for (int i = 0; i < measured; i++) {
-				pipeline.step();
-				double schedulingMillis = pipeline.lastStepMilliseconds();
-				schedulingTotal += schedulingMillis;
-				schedulingMinimum = Math.min(schedulingMinimum, schedulingMillis);
-				schedulingMaximum = Math.max(schedulingMaximum, schedulingMillis);
-			}
-			long[] gpuNanos = pipeline.endGpuTimingCapture();
-			double throughputWallAverage = (System.nanoTime() - batchStarted) / 1_000_000.0 / measured;
-			if (gpuNanos.length != measured) throw new IllegalStateException("Vulkan timestamp capture count mismatch on " + pipeline.deviceName());
-			for (long nanos : gpuNanos) {
-				double gpuMillis = nanos / 1_000_000.0;
-				gpuTotal += gpuMillis; gpuMinimum = Math.min(gpuMinimum, gpuMillis); gpuMaximum = Math.max(gpuMaximum, gpuMillis);
-			}
-			VulkanFlipPipeline.Diagnostics diagnostics = pipeline.diagnostics();
-			VulkanFlipPipeline.ReadbackStats readback = pipeline.measureReadback();
-			return String.format(Locale.ROOT,
-					"%s | memory %s | pressure %s/%d | %dx%dx%d grid | particles %d | %d steps GPU timestamp avg %.3f ms (%.3f..%.3f), throughput wall avg %.3f ms, scheduling wall avg %.3f ms (%.3f..%.3f) | divergence %.5f→%.5f | regular diagnostics 64 B/step through 3-slot ring | snapshot %d B %.3f ms | diagnostic full-state %d B %.3f ms",
-					pipeline.deviceName(), pipeline.memoryMode().label(), pressureSolver.label(), pressureIterations,
-					grid, ny, grid, pipeline.particleCount(), measured, gpuTotal / measured, gpuMinimum, gpuMaximum,
-					throughputWallAverage, schedulingTotal / measured, schedulingMinimum, schedulingMaximum,
-					diagnostics.preProjectionMaximumDivergence(), diagnostics.maximumDivergence(),
-					readback.compactBytes(), readback.compactNanos() / 1_000_000.0,
-					readback.fullBytes(), readback.fullNanos() / 1_000_000.0);
-		}
-	}
-
-	private static VulkanFlipPipeline.Config gpuConfig(VulkanFlipPipeline.PressureSolver pressureSolver) {
-		int iterations = pressureSolver == VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL
-				|| pressureSolver == VulkanFlipPipeline.PressureSolver.MULTIGRID_HIERARCHY ? 2 : PRESSURE_ITERATIONS;
-		return new VulkanFlipPipeline.Config(NX, NY, NZ, H, DT, GRAVITY, RHO, iterations, NX * NY * NZ * 8);
-	}
-
-	static FluidDomain createCpuDamBreak(byte[] solidCells) {
-		FluidDomain domain = new FluidDomain(NX, NY, NZ, cpuConfig());
-		if (solidCells != null) {
-			if (solidCells.length != NX * NY * NZ) throw new IllegalArgumentException("solid mask size does not match CPU grid");
-			for (int z = 0; z < NZ; z++) for (int y = 0; y < NY; y++) for (int x = 0; x < NX; x++) {
-				if (solidCells[x + NX * (y + NY * z)] != 0) domain.setSolid(x, y, z, true);
-			}
-		}
-		for (int z = 0; z < NZ; z++) for (int y = 0; y < NY * 3 / 4; y++) for (int x = 0; x < NX * 2 / 5; x++) {
-			if (!domain.isSolid(x, y, z)) domain.setVolume(x, y, z, 1.0F);
-		}
-		return domain;
-	}
-
-	static FluidSolverConfig cpuConfig() {
-		return new FluidSolverConfig(H, RHO, GRAVITY, DT, 200, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F);
 	}
 
 	private static String safeMessage(Throwable throwable) {

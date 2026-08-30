@@ -154,7 +154,7 @@ public final class MmmGpuProbeMod implements ModInitializer {
 		MmmCommandLog.sendSuccess(source, "开始无窗口 GPU benchmark（pressure " + solver.label()
 				+ "）；32 方块档会让服务器主线程停顿数秒，但不访问世界或存档", false);
 		try {
-			String report = GpuProbeService.benchmark(device, blocks, solver);
+			String report = GpuProbeBenchmark.run(device, blocks, solver);
 			MmmCommandLog.sendSuccess(source, report, false);
 			LOGGER.info("GPU benchmark: {}", report);
 			return 1;

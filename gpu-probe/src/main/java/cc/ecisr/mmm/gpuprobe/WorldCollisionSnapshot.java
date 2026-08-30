@@ -54,49 +54,8 @@ final class WorldCollisionSnapshot {
 			}
 		}
 
-		byte[] solidCells = expandBlockMasks(blocksX, blocksY, blocksZ, blockMasks);
-		return CaptureResult.success(solidCells, countSolidCells(solidCells), solidBlocks, loadedChunks.size());
-	}
-
-	/** Expands each block's eight local collision bits into x-major solver-cell storage. */
-	static byte[] expandBlockMasks(int blocksX, int blocksY, int blocksZ, byte[] blockMasks) {
-		if (blocksX <= 0 || blocksY <= 0 || blocksZ <= 0) {
-			throw new IllegalArgumentException("invalid block collision mask dimensions");
-		}
-		int expectedBlocks = Math.multiplyExact(Math.multiplyExact(blocksX, blocksY), blocksZ);
-		if (blockMasks.length != expectedBlocks) {
-			throw new IllegalArgumentException("invalid block collision mask dimensions");
-		}
-		int nx = blocksX * CELLS_PER_BLOCK;
-		int ny = blocksY * CELLS_PER_BLOCK;
-		int nz = blocksZ * CELLS_PER_BLOCK;
-		byte[] result = new byte[Math.multiplyExact(Math.multiplyExact(nx, ny), nz)];
-		for (int blockZ = 0; blockZ < blocksZ; blockZ++) {
-			for (int blockY = 0; blockY < blocksY; blockY++) {
-				for (int blockX = 0; blockX < blocksX; blockX++) {
-					int mask = Byte.toUnsignedInt(blockMasks[blockIndex(blockX, blockY, blockZ, blocksX, blocksY)]);
-					for (int localZ = 0; localZ < CELLS_PER_BLOCK; localZ++) {
-						for (int localY = 0; localY < CELLS_PER_BLOCK; localY++) {
-							for (int localX = 0; localX < CELLS_PER_BLOCK; localX++) {
-								int bit = localX + CELLS_PER_BLOCK * (localY + CELLS_PER_BLOCK * localZ);
-								if ((mask & (1 << bit)) == 0) continue;
-								int x = blockX * CELLS_PER_BLOCK + localX;
-								int y = blockY * CELLS_PER_BLOCK + localY;
-								int z = blockZ * CELLS_PER_BLOCK + localZ;
-								result[x + nx * (y + ny * z)] = 1;
-							}
-						}
-					}
-				}
-			}
-		}
-		return result;
-	}
-
-	static int countSolidCells(byte[] cells) {
-		int count = 0;
-		for (byte cell : cells) if (cell != 0) count++;
-		return count;
+		byte[] solidCells = CollisionMaskExpansion.expand(blocksX, blocksY, blocksZ, blockMasks);
+		return CaptureResult.success(solidCells, CollisionMaskExpansion.countOccupied(solidCells), solidBlocks, loadedChunks.size());
 	}
 
 	private static int collisionMask(BlockState state, ServerLevel level, BlockPos position) {

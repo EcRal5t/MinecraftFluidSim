@@ -21,8 +21,11 @@ dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-	implementation project(':core')
+	implementation project(':gpu-probe-kernel')
+	include project(':gpu-probe-kernel')
 	compileOnly project(':fabric')
+	testImplementation project(':gpu-probe-kernel')
+	testImplementation project(':fabric')
 }
 
 processResources {
@@ -42,85 +45,34 @@ java {
 	targetCompatibility = JavaVersion.VERSION_25
 }
 
-tasks.register('runHeadlessGpuProbe', JavaExec) {
+tasks.register('runHeadlessGpuProbe') {
 	group = 'verification'
-	description = 'Runs the windowless Vulkan/Shaderc/VMA compute capability probe.'
-	dependsOn tasks.named('classes')
-	classpath = sourceSets.main.output + configurations.compileClasspath
-	mainClass = 'cc.ecisr.mmm.gpuprobe.HeadlessGpuProbeMain'
-	jvmArgs '--enable-native-access=ALL-UNNAMED'
-	def probeWorkDir = layout.buildDirectory.dir('headless-probe-work').get().asFile
-	workingDir probeWorkDir
-	doFirst {
-		probeWorkDir.mkdirs()
-		def nativeDir = providers.gradleProperty('gpuProbeNativesDir').orNull
-		if (nativeDir == null || nativeDir.isBlank()) {
-			throw new GradleException('Pass -PgpuProbeNativesDir=<Minecraft LWJGL native directory>')
-		}
-		systemProperty 'org.lwjgl.librarypath', file(nativeDir).absolutePath
-	}
-	if (providers.gradleProperty('gpuProbeDevice').isPresent()) {
-		args providers.gradleProperty('gpuProbeDevice').get()
-	}
+	description = 'Runs the loader-neutral Vulkan capability probe.'
+	dependsOn ':gpu-probe-kernel:runHeadlessGpuProbe'
 }
 
-tasks.register('runGpuFlipValidation', JavaExec) {
+tasks.register('runGpuFlipValidation') {
 	group = 'verification'
-	description = 'Runs the windowless 3D GPU FLIP correctness suite and current/32-cubed benchmarks.'
-	dependsOn tasks.named('classes')
-	classpath = sourceSets.main.output + configurations.compileClasspath
-	mainClass = 'cc.ecisr.mmm.gpuprobe.GpuFlipProbeValidation'
-	jvmArgs '--enable-native-access=ALL-UNNAMED'
-	def probeWorkDir = layout.buildDirectory.dir('gpu-flip-validation-work').get().asFile
-	workingDir probeWorkDir
-	doFirst {
-		probeWorkDir.mkdirs()
-		def nativeDir = providers.gradleProperty('gpuProbeNativesDir').orNull
-		if (nativeDir == null || nativeDir.isBlank()) {
-			throw new GradleException('Pass -PgpuProbeNativesDir=<Minecraft LWJGL native directory>')
-		}
-		systemProperty 'org.lwjgl.librarypath', file(nativeDir).absolutePath
-	}
-	args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
-	if (providers.gradleProperty('gpuProbeSkipLarge').map(String::toBoolean).getOrElse(false)) args '--skip-large'
+	description = 'Runs the loader-neutral 3D GPU FLIP validation suite.'
+	dependsOn ':gpu-probe-kernel:runGpuFlipValidation'
 }
 
-tasks.register('runGpuOccupancyBenchmark', JavaExec) {
+tasks.register('runGpuOccupancyBenchmark') {
 	group = 'verification'
-	description = 'Measures the M1 CPU/GPU break-even matrix across grid, marker and fluid-cell occupancy.'
-	dependsOn tasks.named('classes')
-	classpath = sourceSets.main.output + configurations.compileClasspath
-	mainClass = 'cc.ecisr.mmm.gpuprobe.GpuOccupancyBreakEvenValidation'
-	jvmArgs '--enable-native-access=ALL-UNNAMED'
-	def probeWorkDir = layout.buildDirectory.dir('gpu-occupancy-benchmark-work').get().asFile
-	workingDir probeWorkDir
-	doFirst {
-		probeWorkDir.mkdirs()
-		def nativeDir = providers.gradleProperty('gpuProbeNativesDir').orNull
-		if (nativeDir == null || nativeDir.isBlank()) {
-			throw new GradleException('Pass -PgpuProbeNativesDir=<Minecraft LWJGL native directory>')
-		}
-		systemProperty 'org.lwjgl.librarypath', file(nativeDir).absolutePath
-	}
-	args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+	description = 'Runs the loader-neutral M1 CPU/GPU break-even matrix.'
+	dependsOn ':gpu-probe-kernel:runGpuOccupancyBenchmark'
 }
 
-tasks.register('runGpuLongRunSurfaceValidation', JavaExec) {
+tasks.register('runGpuLongRunSurfaceValidation') {
 	group = 'verification'
-	description = 'Runs the current-domain long-run GPU/CPU marker-distribution and edge-surface gate.'
-	dependsOn tasks.named('classes')
-	classpath = sourceSets.main.output + configurations.compileClasspath
-	mainClass = 'cc.ecisr.mmm.gpuprobe.GpuLongRunSurfaceValidation'
-	jvmArgs '--enable-native-access=ALL-UNNAMED'
-	def probeWorkDir = layout.buildDirectory.dir('gpu-long-run-surface-validation-work').get().asFile
-	workingDir probeWorkDir
-	doFirst {
-		probeWorkDir.mkdirs()
-		def nativeDir = providers.gradleProperty('gpuProbeNativesDir').orNull
-		if (nativeDir == null || nativeDir.isBlank()) {
-			throw new GradleException('Pass -PgpuProbeNativesDir=<Minecraft LWJGL native directory>')
-		}
-		systemProperty 'org.lwjgl.librarypath', file(nativeDir).absolutePath
-	}
-	args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+	description = 'Runs the loader-neutral long-run GPU/CPU surface gate.'
+	dependsOn ':gpu-probe-kernel:runGpuLongRunSurfaceValidation'
+}
+
+tasks.register('runAdapterValidation', JavaExec) {
+	group = 'verification'
+	description = 'Validates the Fabric probe command adapter shape.'
+	dependsOn tasks.named('testClasses')
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'cc.ecisr.mmm.gpuprobe.GpuProbeAdapterValidation'
 }

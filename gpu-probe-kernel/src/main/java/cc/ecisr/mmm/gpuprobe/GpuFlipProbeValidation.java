@@ -25,7 +25,6 @@ public final class GpuFlipProbeValidation {
 		boolean skipLarge = args.length > 1 && "--skip-large".equals(args[1]);
 		long suiteStarted = System.nanoTime();
 		List<String> results = new ArrayList<>();
-		results.add(validateProbeCommandTree());
 		results.add(validateTimestampQueries(device));
 		results.add(validateBoundedSubmissionRing(device));
 		results.add(validateCpuReadableCheckpoint(device));
@@ -47,15 +46,6 @@ public final class GpuFlipProbeValidation {
 		if (!skipLarge) results.addAll(GpuLargeDomainValidation.run(device));
 		for (String result : results) System.out.println(result);
 		System.out.printf("GPU FLIP validation passed on device %d in %.3f s%n", device, secondsSince(suiteStarted));
-	}
-
-	private static String validateProbeCommandTree() {
-		var probe = MmmGpuProbeMod.probeCommand().build();
-		require("probe".equals(probe.getName()) && probe.getCommand() != null, "probe command lost its default executor");
-		var device = probe.getChild("device");
-		require(device != null && device.getCommand() != null, "probe device argument is not nested under probe");
-		require(probe.getChildren().size() == 1, "probe command has an unexpected child layout");
-		return "correctness command tree: /mmmgpu probe and /mmmgpu probe <device> are both executable";
 	}
 
 	private static String validateTimestampQueries(int device) {
@@ -129,7 +119,7 @@ public final class GpuFlipProbeValidation {
 				require(checkpoint.cpuBytes() == expectedCpuBytes, "checkpoint CPU footprint is not compact and bounded");
 				require(checkpoint.gpuReadbackBytes() == expectedReadbackBytes, "checkpoint readback byte count changed");
 
-				FluidDomain recovered = checkpoint.restore(GpuProbeService.cpuConfig());
+				FluidDomain recovered = checkpoint.restore(GpuProbeScenario.cpuConfig());
 				require(recovered.particleCount() == checkpoint.particleCount(), "CPU recovery particle count changed");
 				require(close(recovered.totalVolume(), checkpoint.volumeCells(), 1.0E-4F), "CPU recovery volume changed");
 				require(Math.abs(recovered.centerOfMassX() - checkpoint.centerOfMassX()) <= 1.0E-5F,
@@ -141,11 +131,11 @@ public final class GpuFlipProbeValidation {
 						"CPU recovery first step changed particle truth");
 
 				for (int step = 0; step < 2; step++) gpu.step();
-				FluidDomain rolledBack = checkpoint.restore(GpuProbeService.cpuConfig());
+				FluidDomain rolledBack = checkpoint.restore(GpuProbeScenario.cpuConfig());
 				require(Math.abs(rolledBack.centerOfMassX() - checkpoint.centerOfMassX()) <= 1.0E-5F,
 						"checkpoint mutated after newer GPU submissions");
-				require(!GpuProbeService.checkpointDue(23, checkpoint)
-						&& GpuProbeService.checkpointDue(24, checkpoint), "checkpoint cadence is not twenty generations");
+				require(!GpuProbeScenario.checkpointDue(23, checkpoint)
+						&& GpuProbeScenario.checkpointDue(24, checkpoint), "checkpoint cadence is not twenty generations");
 				if (!modes.isEmpty()) modes.append(',');
 				modes.append(mode);
 			}
@@ -156,10 +146,10 @@ public final class GpuFlipProbeValidation {
 
 	private static String validateManualStepScheduling() {
 		AtomicInteger executed = new AtomicInteger();
-		int completed = GpuProbeService.runManualLoop(6, () -> { executed.incrementAndGet(); return true; }, () -> 0);
+		int completed = GpuProbeScenario.runManualLoop(6, () -> { executed.incrementAndGet(); return true; }, () -> 0);
 		require(completed == 6 && executed.get() == 6, "paused manual step count collapsed");
 		executed.set(0);
-		completed = GpuProbeService.runManualLoop(20, () -> { executed.incrementAndGet(); return true; },
+		completed = GpuProbeScenario.runManualLoop(20, () -> { executed.incrementAndGet(); return true; },
 				() -> executed.get() >= 3 ? 3 : executed.get());
 		require(completed == 3 && executed.get() == 3, "manual step ignored hard-overrun guard");
 		return "correctness manual scheduling: requested=6 completed=6 hardGuard=3";
@@ -344,9 +334,9 @@ public final class GpuFlipProbeValidation {
 			blockMasks[blockIndex(6, y, z, blocksX, blocksY)] = (byte) 0xff;
 		}
 
-		byte[] solidCells = WorldCollisionSnapshot.expandBlockMasks(blocksX, blocksY, blocksZ, blockMasks);
+		byte[] solidCells = CollisionMaskExpansion.expand(blocksX, blocksY, blocksZ, blockMasks);
 		int nx = blocksX * 2, ny = blocksY * 2, nz = blocksZ * 2;
-		int solidCount = WorldCollisionSnapshot.countSolidCells(solidCells);
+		int solidCount = CollisionMaskExpansion.countOccupied(solidCells);
 		require(solidCount == 1_320, "expanded world collision solid count: " + solidCount);
 		require(solidCells[6 + nx * (6 + ny * 6)] != 0, "lower-half block bit did not map to expected subcell");
 		require(solidCells[6 + nx * (7 + ny * 6)] == 0, "lower-half block occupied upper subcell");
@@ -355,7 +345,7 @@ public final class GpuFlipProbeValidation {
 		for (int z = 0; z < nz; z++) for (int y = 0; y < ny * 3 / 4; y++) for (int x = 0; x < nx * 2 / 5; x++) {
 			if (solidCells[x + nx * (y + ny * z)] == 0) expectedFluidCells++;
 		}
-		FluidDomain cpuFallback = GpuProbeService.createCpuDamBreak(solidCells);
+		FluidDomain cpuFallback = GpuProbeScenario.createCpuDamBreak(solidCells);
 		require(mismatches(cpuFallback.copyBinarySolidMask(), solidCells) == 0, "CPU fallback world collision mask changed");
 		require(close(cpuFallback.totalVolume(), expectedFluidCells, 1.0E-3F), "CPU fallback world collision volume");
 		float cpuVolume = cpuFallback.totalVolume();
