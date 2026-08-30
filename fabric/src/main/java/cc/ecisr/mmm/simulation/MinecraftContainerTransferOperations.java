@@ -27,7 +27,7 @@ final class MinecraftContainerTransferOperations {
 	private MinecraftContainerTransferOperations() { }
 
 	static TransferOutcome pourIntoCell(
-			FluidSimulationService service, FluidRegion region, int[] cell, long volumeNanos, int maxRadius,
+			CommittedWorldRegistries world, FluidRegion region, int[] cell, long volumeNanos, int maxRadius,
 			int materialHandle, boolean externalSource, ThermalContents thermalContents
 	) {
 		if (volumeNanos <= 0L) return null;
@@ -56,7 +56,7 @@ final class MinecraftContainerTransferOperations {
 		if (poured != plannedNanos) throw new IllegalStateException("Thermal insertion settlement changed after planning");
 		ItemStack after = withVolume(volumeNanos - poured);
 		if (thermalSplit != null && volumeNanos > poured) ContainerItemStacks.attachThermal(
-				after, service.thermalRegistryFingerprint(), thermalSplit.remainingEnergy());
+				after, world.thermalRegistryFingerprint(), thermalSplit.remainingEnergy());
 		region.wakeForActivity();
 		if (thermalSplit != null) region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
 		return new TransferOutcome(true, true, after,
@@ -65,7 +65,7 @@ final class MinecraftContainerTransferOperations {
 	}
 
 	static TransferOutcome scoopFromCell(
-			FluidSimulationService service, FluidRegion region, int[] cell, long capacityNanos, long baseVolumeNanos,
+			CommittedWorldRegistries world, FluidRegion region, int[] cell, long capacityNanos, long baseVolumeNanos,
 			int maxRadius, int materialHandle, ThermalContents baseThermal
 	) {
 		if (capacityNanos <= 0L) return null;
@@ -84,7 +84,7 @@ final class MinecraftContainerTransferOperations {
 		if (region.domain().hasThermalState()) {
 			double baseEnergy = baseThermal == null ? 0.0 : baseThermal.internalEnergy();
 			double finalEnergy = baseEnergy + extracted.internalEnergy();
-			ContainerItemStacks.attachThermal(after, service.thermalRegistryFingerprint(), finalEnergy);
+			ContainerItemStacks.attachThermal(after, world.thermalRegistryFingerprint(), finalEnergy);
 			thermalEnergy = finalEnergy - baseEnergy;
 			region.domain().settleExternalContainerExtraction(extracted.internalEnergy(), thermalEnergy);
 		}
@@ -97,7 +97,7 @@ final class MinecraftContainerTransferOperations {
 
 
 	static TransferOutcome pourMaterialIntoCell(
-			FluidSimulationService service, FluidRegion region, int[] cell, FluidMixture mixture, int maxRadius,
+			CommittedWorldRegistries world, FluidRegion region, int[] cell, FluidMixture mixture, int maxRadius,
 			boolean externalSource, ThermalContents thermalContents
 	) {
 		if (mixture == null) return null;
@@ -131,7 +131,7 @@ final class MinecraftContainerTransferOperations {
 				? new ItemStack(MmmItems.MATERIAL_BUCKET)
 				: ContainerItemStacks.toStack(settlement.remaining());
 		if (thermalSplit != null && settlement.remaining() != null) ContainerItemStacks.attachThermal(
-				after, service.thermalRegistryFingerprint(), thermalSplit.remainingEnergy());
+				after, world.thermalRegistryFingerprint(), thermalSplit.remainingEnergy());
 		region.wakeForActivity();
 		if (thermalSplit != null) region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
 		return new TransferOutcome(true, true, after,
@@ -142,7 +142,7 @@ final class MinecraftContainerTransferOperations {
 	}
 
 	static TransferOutcome pourChemicalIntoCell(
-			FluidSimulationService service, FluidRegion region, int[] cell, ChemicalContents contents, int maxRadius,
+			CommittedWorldRegistries world, FluidRegion region, int[] cell, ChemicalContents contents, int maxRadius,
 			boolean externalSource, ThermalContents thermalContents
 	) {
 		FluidDomain domain = region.domain();
@@ -165,7 +165,7 @@ final class MinecraftContainerTransferOperations {
 				continue;
 			}
 			cc.ecisr.mmm.chemistry.ChemicalTransferLedger requested = split.inserted().toLedger(
-					domain.chemicalParcels().registry(), FluidSimulationService.CELL_VOLUMES_PER_BLOCK);
+					domain.chemicalParcels().registry(), FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
 			ThermalContents.EnergySplit thermalSplit = thermalContents == null ? null
 					: thermalContents.splitEnergy(candidate, contents.totalVolumeNanos());
 			Double coupledEnergy = thermalSplit == null ? null
@@ -182,7 +182,7 @@ final class MinecraftContainerTransferOperations {
 			ItemStack after = split.remaining() == null
 					? new ItemStack(MmmItems.MATERIAL_BUCKET) : ContainerItemStacks.toStack(split.remaining());
 			if (thermalSplit != null && split.remaining() != null) ContainerItemStacks.attachThermal(
-					after, service.thermalRegistryFingerprint(), thermalSplit.remainingEnergy());
+					after, world.thermalRegistryFingerprint(), thermalSplit.remainingEnergy());
 			if (thermalSplit != null) region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
 			return new TransferOutcome(true, true, after,
 					String.format("已注入 %.2f%% 桶化学流体", 100.0 * candidate
@@ -193,7 +193,7 @@ final class MinecraftContainerTransferOperations {
 	}
 
 	static TransferOutcome scoopChemicalIntoCell(
-			FluidSimulationService service, FluidRegion region, int[] cell, long capacityNanos, int maxRadius,
+			CommittedWorldRegistries world, FluidRegion region, int[] cell, long capacityNanos, int maxRadius,
 			cc.ecisr.mmm.chemistry.ChemicalRegistry registry
 	) {
 		if (capacityNanos <= 0L) return null;
@@ -218,7 +218,7 @@ final class MinecraftContainerTransferOperations {
 		ChemicalContents contents = plannedContents[0];
 		Double thermalEnergy = region.domain().hasThermalState() ? extracted.internalEnergy() : null;
 		ItemStack after = ContainerItemStacks.toStack(contents);
-		if (thermalEnergy != null) ContainerItemStacks.attachThermal(after, service.thermalRegistryFingerprint(), thermalEnergy);
+		if (thermalEnergy != null) ContainerItemStacks.attachThermal(after, world.thermalRegistryFingerprint(), thermalEnergy);
 		region.wakeForActivity();
 		if (thermalEnergy != null) region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
 		return new TransferOutcome(true, false, after,
@@ -227,7 +227,7 @@ final class MinecraftContainerTransferOperations {
 	}
 
 	static TransferOutcome scoopMaterialIntoCell(
-			FluidSimulationService service, FluidRegion region, int[] cell,
+			CommittedWorldRegistries world, FluidRegion region, int[] cell,
 			long capacityNanos, int maxRadius
 	) {
 		if (capacityNanos <= 0L) return null;
@@ -248,7 +248,7 @@ final class MinecraftContainerTransferOperations {
 		Double thermalEnergy = domain.hasThermalState() ? extracted.internalEnergy() : null;
 		ItemStack after = ContainerItemStacks.toStack(mixture);
 		if (thermalEnergy != null) {
-			ContainerItemStacks.attachThermal(after, service.thermalRegistryFingerprint(), thermalEnergy);
+			ContainerItemStacks.attachThermal(after, world.thermalRegistryFingerprint(), thermalEnergy);
 		}
 		region.wakeForActivity();
 		if (thermalEnergy != null) {
@@ -261,13 +261,13 @@ final class MinecraftContainerTransferOperations {
 	}
 
 	static TransferOutcome pourGranularIntoCell(
-			FluidSimulationService service, FluidRegion region, int[] cell, GranularContents contents,
+			CommittedWorldRegistries world, FluidRegion region, int[] cell, GranularContents contents,
 			int maxRadius, boolean externalSource
 	) {
 		GranularTransferLedger ledger;
 		try {
-			ledger = contents.toLedger(service.granularRegistry(),
-					service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY) ? service.chemicalRegistry() : null);
+			ledger = contents.toLedger(world.granularRegistry(),
+					world.hasCapability(WorldCapability.CHEMISTRY) ? world.chemicalRegistry() : null);
 		} catch (RuntimeException invalid) {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents),
 					"颗粒容器 registry 或账本不合法：" + invalid.getMessage());
@@ -290,14 +290,14 @@ final class MinecraftContainerTransferOperations {
 	}
 
 	static TransferOutcome scoopGranularIntoCell(
-			FluidSimulationService service, FluidRegion region, int[] cell, long capacitySvq, int maxRadius
+			CommittedWorldRegistries world, FluidRegion region, int[] cell, long capacitySvq, int maxRadius
 	) {
 		GranularContents[] planned = new GranularContents[1];
 		FluidDomain.GranularExtraction extracted = region.domain().tryExtractExactGranular(
 				cell[0], cell[1], cell[2], capacitySvq, maxRadius, false, ledger -> {
 					try {
-						planned[0] = GranularContents.fromLedger(ledger, service.granularRegistry(),
-								service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY) ? service.chemicalRegistry() : null);
+						planned[0] = GranularContents.fromLedger(ledger, world.granularRegistry(),
+								world.hasCapability(WorldCapability.CHEMISTRY) ? world.chemicalRegistry() : null);
 						return true;
 					} catch (RuntimeException unrepresentable) {
 						return false;
@@ -403,7 +403,7 @@ final class MinecraftContainerTransferOperations {
 	}
 
 	static String thermalTransferFailure(
-			FluidSimulationService service, FluidRegion region, ItemStack stack, TransferKind kind
+			CommittedWorldRegistries world, FluidRegion region, ItemStack stack, TransferKind kind
 	) {
 		if (kind == TransferKind.NONE || kind == TransferKind.GRANULAR_POUR
 				|| kind == TransferKind.GRANULAR_SCOOP) return null;
@@ -422,7 +422,7 @@ final class MinecraftContainerTransferOperations {
 			return "热区域只接受携带 ThermalContents 的液体容器；拒绝猜测初始温度";
 		}
 		if (contents != null) try {
-			contents.validateRegistryFingerprint(service.thermalRegistryFingerprint());
+			contents.validateRegistryFingerprint(world.thermalRegistryFingerprint());
 		} catch (RuntimeException foreign) {
 			return "容器 thermal registry 与当前世界不一致；转移保持不变";
 		}
@@ -476,7 +476,7 @@ final class MinecraftContainerTransferOperations {
 	}
 
 	static float nanosToCellVolume(long nanos) {
-		return (float) (ContainerFluidLedger.nanosToVolume(nanos) * FluidSimulationService.CELL_VOLUMES_PER_BLOCK);
+		return (float) (ContainerFluidLedger.nanosToVolume(nanos) * FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
 	}
 
 	/** Largest float cell volume whose nanovolume settlement does not exceed the source/capacity. */
@@ -488,7 +488,7 @@ final class MinecraftContainerTransferOperations {
 	}
 
 	static long cellVolumeToNanos(double cellVolume) {
-		return ContainerFluidLedger.volumeToNanos(cellVolume / FluidSimulationService.CELL_VOLUMES_PER_BLOCK);
+		return ContainerFluidLedger.volumeToNanos(cellVolume / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
 	}
 
 	/** Converts the primitive's authoritative marker delta and rejects impossible item overshoot. */

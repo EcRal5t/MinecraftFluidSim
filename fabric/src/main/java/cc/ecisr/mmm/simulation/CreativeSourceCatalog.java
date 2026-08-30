@@ -29,22 +29,22 @@ final class CreativeSourceCatalog {
 
 	private CreativeSourceCatalog() { }
 
-	static Resolved resolve(FluidSimulationService service, CreativeSourceDescriptor descriptor) {
+	static Resolved resolve(CommittedWorldRegistries world, CreativeSourceDescriptor descriptor) {
 		String id = descriptor.templateStableId();
-		if (id.startsWith("mmm:source/material/")) return material(service, descriptor);
-		if (id.startsWith("mmm:source/reagent/")) return reagent(service, descriptor);
-		if (id.startsWith("mmm:source/granular/")) return granular(service, descriptor);
+		if (id.startsWith("mmm:source/material/")) return material(world, descriptor);
+		if (id.startsWith("mmm:source/reagent/")) return reagent(world, descriptor);
+		if (id.startsWith("mmm:source/granular/")) return granular(world, descriptor);
 		throw new IllegalArgumentException("creative source template is not in the committed server whitelist");
 	}
 
-	private static Resolved material(FluidSimulationService service, CreativeSourceDescriptor descriptor) {
+	private static Resolved material(CommittedWorldRegistries world, CreativeSourceDescriptor descriptor) {
 		require(descriptor, LIQUID_AMOUNT);
-		requireCapability(service, WorldCapability.MATERIALS);
+		requireCapability(world, WorldCapability.MATERIALS);
 		String name = descriptor.templateStableId().substring("mmm:source/material/".length());
 		FluidMixture mixture;
 		if (name.equals("water_oil")) {
-			FluidMaterial water = service.resolveMaterial(BuiltinFluidMaterials.WATER.id());
-			FluidMaterial oil = service.resolveMaterial(BuiltinFluidMaterials.OIL.id());
+			FluidMaterial water = world.resolveMaterial(BuiltinFluidMaterials.WATER.id());
+			FluidMaterial oil = world.resolveMaterial(BuiltinFluidMaterials.OIL.id());
 			long first = LIQUID_AMOUNT / 2L;
 			mixture = new FluidMixture(List.of(
 					new FluidMixture.Component(water.id(), first, 0.5 * water.referenceDensity()),
@@ -56,18 +56,18 @@ final class CreativeSourceCatalog {
 				case "mercury" -> BuiltinFluidMaterials.MERCURY.id();
 				default -> throw new IllegalArgumentException("creative material template is not whitelisted");
 			};
-			FluidMaterial material = service.resolveMaterial(materialId);
+			FluidMaterial material = world.resolveMaterial(materialId);
 			mixture = new FluidMixture(List.of(new FluidMixture.Component(
 					material.id(), LIQUID_AMOUNT, material.referenceDensity())));
 		}
-		ItemStack stack = service.bindActualContainerProfile(ContainerItemStacks.toStack(mixture));
-		service.attachLiquidThermalContents(stack, temperature(descriptor));
+		ItemStack stack = world.bindActualContainerProfile(ContainerItemStacks.toStack(mixture));
+		world.attachLiquidThermalContents(stack, temperature(descriptor));
 		return new Resolved(Kind.LIQUID, stack, LIQUID_AMOUNT);
 	}
 
-	private static Resolved reagent(FluidSimulationService service, CreativeSourceDescriptor descriptor) {
+	private static Resolved reagent(CommittedWorldRegistries world, CreativeSourceDescriptor descriptor) {
 		require(descriptor, LIQUID_AMOUNT);
-		requireCapability(service, WorldCapability.CHEMISTRY);
+		requireCapability(world, WorldCapability.CHEMISTRY);
 		String name = descriptor.templateStableId().substring("mmm:source/reagent/".length());
 		String species = switch (name) {
 			case "water" -> BuiltinChemicalDefinitions.H2O;
@@ -79,29 +79,29 @@ final class CreativeSourceCatalog {
 			case "kno3" -> BuiltinChemicalDefinitions.KNO3;
 			default -> throw new IllegalArgumentException("creative reagent template is not whitelisted");
 		};
-		var registry = service.chemicalRegistry();
+		var registry = world.chemicalRegistry();
 		TreeMap<String, Long> amounts = new TreeMap<>();
 		if (species.equals(BuiltinChemicalDefinitions.H2O)) amounts.put(species, 55_555_555_556L);
 		else {
 			amounts.put(BuiltinChemicalDefinitions.H2O, 50_000_000_000L);
 			amounts.put(species, ChemicalLimits.QUANTA_PER_AU);
 		}
-		FluidMaterial carrier = service.resolveMaterial(BuiltinFluidMaterials.WATER.id());
+		FluidMaterial carrier = world.resolveMaterial(BuiltinFluidMaterials.WATER.id());
 		double mass = carrier.referenceDensity();
 		ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0.0);
 		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry, amounts,
 				mass - exact.exactSpeciesMassKilograms(registry).toDouble());
 		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
 				carrier.id(), false, 1.0, mass, mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry))));
-		ItemStack stack = service.bindActualContainerProfile(ContainerItemStacks.toStack(
+		ItemStack stack = world.bindActualContainerProfile(ContainerItemStacks.toStack(
 				ChemicalContents.fromLedger(ledger, registry, LIQUID_AMOUNT)));
-		service.attachLiquidThermalContents(stack, temperature(descriptor));
+		world.attachLiquidThermalContents(stack, temperature(descriptor));
 		return new Resolved(Kind.LIQUID, stack, LIQUID_AMOUNT);
 	}
 
-	private static Resolved granular(FluidSimulationService service, CreativeSourceDescriptor descriptor) {
+	private static Resolved granular(CommittedWorldRegistries world, CreativeSourceDescriptor descriptor) {
 		require(descriptor, GRANULAR_AMOUNT);
-		requireCapability(service, WorldCapability.GRANULAR);
+		requireCapability(world, WorldCapability.GRANULAR);
 		if (descriptor.temperatureKelvin() != null) {
 			throw new IllegalArgumentException("granular source cannot carry temperature");
 		}
@@ -111,15 +111,14 @@ final class CreativeSourceCatalog {
 			case "light_beads" -> BuiltinGranularDefinitions.LIGHT_BEADS;
 			default -> throw new IllegalArgumentException("creative granular template is not whitelisted");
 		};
-		var registry = service.granularRegistry();
+		var registry = world.granularRegistry();
 		var material = registry.material(registry.materialHandle(materialId));
 		if (material.reactive()) throw new IllegalArgumentException("reactive granular source is not allowed");
 		GranularTransferLedger ledger = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
 				material.id(), GRANULAR_AMOUNT, material.referenceDensity(), null)));
 		GranularContents contents = GranularContents.fromLedger(ledger, registry,
-				service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY)
-						? service.chemicalRegistry() : null);
-		ItemStack stack = service.bindActualContainerProfile(ContainerItemStacks.toStack(contents));
+				world.hasCapability(WorldCapability.CHEMISTRY) ? world.chemicalRegistry() : null);
+		ItemStack stack = world.bindActualContainerProfile(ContainerItemStacks.toStack(contents));
 		return new Resolved(Kind.GRANULAR, stack, GRANULAR_AMOUNT);
 	}
 
@@ -129,8 +128,8 @@ final class CreativeSourceCatalog {
 		}
 	}
 
-	private static void requireCapability(FluidSimulationService service, WorldCapability capability) {
-		if (!service.worldCapabilityProfile().hasCapability(capability)) {
+	private static void requireCapability(CommittedWorldRegistries world, WorldCapability capability) {
+		if (!world.hasCapability(capability)) {
 			throw new IllegalArgumentException("world profile does not provide " + capability.stableId());
 		}
 	}

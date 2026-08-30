@@ -42,7 +42,7 @@ final class MinecraftDebugFixtures {
 	static final int BLOCK_SIZE_Y = 8;
 	static final int BLOCK_SIZE_Z = 12;
 	private static final long COMPATIBILITY_REGION_CELLS = (long) BLOCK_SIZE_X * BLOCK_SIZE_Y * BLOCK_SIZE_Z
-			* FluidSimulationService.CELL_VOLUMES_PER_BLOCK;
+			* FluidRegionFactory.CELL_VOLUMES_PER_BLOCK;
 	private static final long COMPATIBILITY_REGION_MARKERS = COMPATIBILITY_REGION_CELLS * 8L;
 
 	/** Region-runtime operations the scenarios need; owned here so the surface stays narrow. */
@@ -325,7 +325,7 @@ final class MinecraftDebugFixtures {
 
 	/** Fills both chambers to 3.5 blocks; the two-block doorway column stays inside the fill range and submerged. */
 	private static void fillAirDemoWater(FluidDomain domain) {
-		int cellsPerBlock = FluidSimulationService.CELLS_PER_BLOCK;
+		int cellsPerBlock = FluidRegionFactory.CELLS_PER_BLOCK;
 		for (int bz = 1; bz <= BLOCK_SIZE_Z - 2; bz++) {
 			for (int bx = 1; bx <= BLOCK_SIZE_X - 2; bx++) {
 				for (int by = 1; by <= 3; by++) {
@@ -417,9 +417,9 @@ final class MinecraftDebugFixtures {
 				300, 1.0E-5F, 0.35F, 2.0E-3F, 0.80F
 		);
 		FluidDomain domain = new FluidDomain(
-				BLOCK_SIZE_X * FluidSimulationService.CELLS_PER_BLOCK,
-				BLOCK_SIZE_Y * FluidSimulationService.CELLS_PER_BLOCK,
-				BLOCK_SIZE_Z * FluidSimulationService.CELLS_PER_BLOCK,
+				BLOCK_SIZE_X * FluidRegionFactory.CELLS_PER_BLOCK,
+				BLOCK_SIZE_Y * FluidRegionFactory.CELLS_PER_BLOCK,
+				BLOCK_SIZE_Z * FluidRegionFactory.CELLS_PER_BLOCK,
 				config, Math.toIntExact(COMPATIBILITY_REGION_MARKERS)
 		);
 		FluidRegion candidate = new FluidRegion(
@@ -525,7 +525,7 @@ final class MinecraftDebugFixtures {
 		int wetCells = FluidRegionFactory.captureVanillaWater(level, regions.selected());
 		runtime.bindCapabilityState(regions.selected().domain());
 		MinecraftTakeoverAdapter.BeginResult begun = takeOver
-				? takeover.begin(level, regions.selected(), FluidSimulationService.CELLS_PER_BLOCK)
+				? takeover.begin(level, regions.selected(), FluidRegionFactory.CELLS_PER_BLOCK)
 				: MinecraftTakeoverAdapter.BeginResult.EMPTY;
 		regions.selected().setPaused(true);
 		sendSnapshot(level);
@@ -543,7 +543,7 @@ final class MinecraftDebugFixtures {
 		if (!preview.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + preview.failure());
 		FluidRegion candidate = FluidRegionFactory.createCommandRegion(
 				level, origin, BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z,
-				FluidSimulationService.CELLS_PER_BLOCK, COMPATIBILITY_REGION_MARKERS
+				COMPATIBILITY_REGION_MARKERS
 		);
 		candidate.setEntityPhysicsEnabled(defaultEntityPhysics.getAsBoolean());
 		candidate.setDebugOverlays(defaultDebugOverlays.getAsBoolean());

@@ -17,6 +17,9 @@ import java.util.UUID;
 
 /** Allocates CPU regions and performs read-only vanilla-water sampling into exact marker volume. */
 final class FluidRegionFactory {
+	static final int CELLS_PER_BLOCK = 2;
+	static final int CELL_VOLUMES_PER_BLOCK = CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
+
 	private FluidRegionFactory() { }
 
 	static FluidRegion createCommandRegion(
@@ -25,11 +28,10 @@ final class FluidRegionFactory {
 			int blockSizeX,
 			int blockSizeY,
 			int blockSizeZ,
-			int cellsPerBlock,
 			long markerCapacity
 	) {
 		FluidDomain domain = createDomain(
-				blockSizeX, blockSizeY, blockSizeZ, cellsPerBlock, markerCapacity
+				blockSizeX, blockSizeY, blockSizeZ, markerCapacity
 		);
 		return new FluidRegion(UUID.randomUUID(), level.dimension(), origin, domain, markerCapacity);
 	}
@@ -37,11 +39,10 @@ final class FluidRegionFactory {
 	static FluidRegion createControllerRegion(
 			ServerLevel level,
 			FluidRegionFootprint footprint,
-			int cellsPerBlock,
 			long markerCapacity
 	) {
 		FluidDomain domain = createDomain(
-				footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ(), cellsPerBlock, markerCapacity
+				footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ(), markerCapacity
 		);
 		return new FluidRegion(
 				UUID.randomUUID(), level.dimension(), footprint.minimumInterior(), domain, markerCapacity, footprint
@@ -52,18 +53,17 @@ final class FluidRegionFactory {
 			int blockSizeX,
 			int blockSizeY,
 			int blockSizeZ,
-			int cellsPerBlock,
 			long markerCapacity
 	) {
-		float cellSize = 1.0F / cellsPerBlock;
+		float cellSize = 1.0F / CELLS_PER_BLOCK;
 		FluidSolverConfig config = new FluidSolverConfig(
 				cellSize, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F
 		);
 		return new FluidDomain(
-				Math.multiplyExact(blockSizeX, cellsPerBlock),
-				Math.multiplyExact(blockSizeY, cellsPerBlock),
-				Math.multiplyExact(blockSizeZ, cellsPerBlock),
+				Math.multiplyExact(blockSizeX, CELLS_PER_BLOCK),
+				Math.multiplyExact(blockSizeY, CELLS_PER_BLOCK),
+				Math.multiplyExact(blockSizeZ, CELLS_PER_BLOCK),
 				config,
 				Math.toIntExact(markerCapacity)
 		);

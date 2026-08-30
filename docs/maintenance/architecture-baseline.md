@@ -8,7 +8,7 @@
 |---|---|---:|---|
 | core | `FlipFluidDomain` | 7975 → 4067（S01–S11）→ S12 删除 | 已关闭 |
 | core | `FluidDomain` | S12 切换时 4031；S13 为 cheap layout identity 增至 4036 | S21 |
-| fabric | `FluidSimulationService` | 3329 → 3249（S13）→ 3050（S14）→ 2412（S15）→ 2099（S16）→ 1516（S19a）→ 1509（S19b） | S21 |
+| fabric | `FluidSimulationService` | 3329 → 3249（S13）→ 3050（S14）→ 2412（S15）→ 2099（S16）→ 1516（S19a）→ 1509（S19b）→ 984（S19c–S19e） | S21 |
 | fabric | `RegionState` | 1480 | S17 |
 | core | `FlipThermalState` | 1461 | S10 |
 | gpu-probe | `VulkanFlipPipeline` | 1237 | S20 |
@@ -38,7 +38,7 @@ S19g 后的当前值，由 `pytool/arch_baseline.py` 生成：
 | gpu-probe kernel 触及集成类型 | `GpuProbeService`、`MmmGpuProbeMod`、`WorldCollisionSnapshot` | S20 |
 | core 包级环 | `cc.ecisr.mmm.fluid.air <-> cc.ecisr.mmm.thermal` | S10 |
 
-`network`/`item`/`block`/client 对 `FluidDomain`/`FlipThermalState` 的 import 当前为 0，规则立即生效，无方向 allowlist。外部 adapter 对 `FluidSimulationService` 的 import 门也已生效；当前仅 `ChemicalIndicatorItem`、`FluidControllerBlock` 与 `MmmCommands` 分别按 S19e/S19f 登记迁移期限，network/API/GPU 零例外。
+`network`/`item`/`block`/client 对 `FluidDomain`/`FlipThermalState` 的 import 当前为 0，规则立即生效，无方向 allowlist。外部 adapter 对 `FluidSimulationService` 的 import 门也已生效；indicator、controller、container actor、network、API 与 GPU 已零例外，当前只为根包 `MmmCommands` 明示保留到 S19f。
 
 `core/.../application` 禁止 import `simulation`、`network`、`block`、`item` 以及 loader 类型；S13 自检 fixture 固定这条规则。当前 application ports 只接触 immutable core handoff/read model，没有 live domain getter。
 

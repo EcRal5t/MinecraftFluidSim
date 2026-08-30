@@ -32,6 +32,7 @@ public final class MmmRuntimeFactory {
 
 		FluidServerConfig config = startup.config();
 		RegistryBundleLoader.RegistryBundle registries = startup.registries();
+		CommittedWorldRegistries worldRegistries = new CommittedWorldRegistries(startup);
 		FluidRegionManager regionManager = new FluidRegionManager(config.limits());
 		FluidRegionOperations regionOperations = new FluidRegionOperations(worldRoot, regionManager,
 				startup.creationLocked(), startup.profileProven(), startup.profile(),
@@ -57,13 +58,16 @@ public final class MmmRuntimeFactory {
 		ContainerRecoveryCoordinator containerRecovery = new ContainerRecoveryCoordinator(containerTransfers,
 				new MinecraftContainerRecoveryAdapter(server, startup, registries, regionManager, regionOperations,
 						committedEvents), containerIndex.journals(), containerIndex.issues());
-		FluidSimulationService simulation = new FluidSimulationService(startup, regionManager, regionOperations,
+		FluidSimulationService simulation = new FluidSimulationService(startup, worldRegistries,
+				regionManager, regionOperations,
 				snapshots, containerRecovery,
 				ownershipIssues, committedEvents);
 		return new MmmRuntime(simulation, simulation.controllerConsole(),
+				simulation.regionActivation(), simulation.indicatorEditing(),
+				simulation.playerContainerTransfers(), simulation.dispenserContainerTransfers(),
 				new MinecraftRegionObservation(regionManager, snapshots), containerRecovery,
 				new FabricFluidQueryApi(server, regionManager, startup.profileProven()), new ProtocolSessions(),
-				committedEvents, startup);
+				worldRegistries, committedEvents, startup);
 	}
 
 	private static ContainerTransferIndex discoverContainerTransfers(ContainerJournalFileStore store) {

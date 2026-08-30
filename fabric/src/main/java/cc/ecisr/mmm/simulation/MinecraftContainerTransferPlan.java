@@ -18,7 +18,8 @@ import net.minecraft.world.item.ItemStack;
 
 /** One resolved item-to-solver transfer plan shared by player and dispenser actor adapters. */
 final class MinecraftContainerTransferPlan {
-	private final FluidSimulationService service;
+	private final MinecraftContainerTransactionAdapter transactions;
+	private final CommittedWorldRegistries world;
 	private final FluidRegion region;
 	private final int[] cell;
 	private final ItemStack sourceStack;
@@ -34,7 +35,8 @@ final class MinecraftContainerTransferPlan {
 	private final ThermalContents thermal;
 
 	private MinecraftContainerTransferPlan(
-			FluidSimulationService service,
+			MinecraftContainerTransactionAdapter transactions,
+			CommittedWorldRegistries world,
 			FluidRegion region,
 			int[] cell,
 			ItemStack sourceStack,
@@ -49,7 +51,8 @@ final class MinecraftContainerTransferPlan {
 			GranularContents granular,
 			ThermalContents thermal
 	) {
-		this.service = service;
+		this.transactions = transactions;
+		this.world = world;
 		this.region = region;
 		this.cell = cell;
 		this.sourceStack = sourceStack;
@@ -66,7 +69,8 @@ final class MinecraftContainerTransferPlan {
 	}
 
 	static Resolution resolve(
-			FluidSimulationService service,
+			MinecraftContainerTransactionAdapter transactions,
+			CommittedWorldRegistries world,
 			FluidRegion region,
 			int[] cell,
 			ItemStack sourceStack,
@@ -79,11 +83,11 @@ final class MinecraftContainerTransferPlan {
 		}
 		if ((kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_POUR
 				|| kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_POUR)
-				&& !service.acceptsActualContainerProfile(sourceStack)) {
+				&& !world.acceptsActualContainerProfile(sourceStack)) {
 			return new Resolution(null, "FOREIGN_PROFILE：actual container 不属于当前世界；库存保持不变");
 		}
 		String thermalFailure = MinecraftContainerTransferOperations.thermalTransferFailure(
-				service, region, sourceStack, kind);
+				world, region, sourceStack, kind);
 		if (thermalFailure != null) return new Resolution(null, thermalFailure);
 
 		ContainerTransferJournal.Operation operation = switch (kind) {
@@ -115,16 +119,16 @@ final class MinecraftContainerTransferPlan {
 					if (requested <= 0L) return new Resolution(null, "准星处没有可装入的水体");
 				}
 				case MATERIAL_POUR -> {
-					if (!service.worldCapabilityProfile().hasCapability(WorldCapability.MATERIALS)) {
+					if (!world.hasCapability(WorldCapability.MATERIALS)) {
 						return new Resolution(null, "材料功能门未开启");
 					}
 					if (!region.domain().hasMaterialState()) return new Resolution(null, "该区域不是材料区域");
 					if (sourceStack.get(MmmComponents.CHEMICAL_CONTENTS) != null) {
-						if (!service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY)
+						if (!world.hasCapability(WorldCapability.CHEMISTRY)
 								|| !region.domain().hasChemistryState()) {
 							return new Resolution(null, "化学桶只能倒入启用相同 registry 的化学区域");
 						}
-						chemical = MaterialBucketItem.chemicalContents(sourceStack, service.chemicalRegistry());
+						chemical = MaterialBucketItem.chemicalContents(sourceStack, world.chemicalRegistry());
 						if (chemical == null) return new Resolution(null, "化学桶内容损坏、双重表示或 registry 不匹配");
 						requested = chemical.totalVolumeNanos();
 					} else {
@@ -134,7 +138,7 @@ final class MinecraftContainerTransferPlan {
 					}
 				}
 				case MATERIAL_SCOOP -> {
-					if (!service.worldCapabilityProfile().hasCapability(WorldCapability.MATERIALS)) {
+					if (!world.hasCapability(WorldCapability.MATERIALS)) {
 						return new Resolution(null, "材料功能门未开启");
 					}
 					if (!region.domain().hasMaterialState()) return new Resolution(null, "该区域不是材料区域");
@@ -143,19 +147,18 @@ final class MinecraftContainerTransferPlan {
 					if (requested <= 0L) return new Resolution(null, "准星处没有可装入的材料流体");
 				}
 				case GRANULAR_POUR -> {
-					if (!service.worldCapabilityProfile().hasCapability(WorldCapability.GRANULAR)) {
+					if (!world.hasCapability(WorldCapability.GRANULAR)) {
 						return new Resolution(null, "颗粒功能门本次启动未开启；干式容器保持不变");
 					}
 					if (!region.controllerManaged()) return new Resolution(null, "颗粒容器只允许在闭壳控制器区域转移");
 					if (!region.domain().hasGranularState()) return new Resolution(null, "该区域不是颗粒区域");
-					granular = ContainerItemStacks.granularContents(sourceStack, service.granularRegistry(),
-							service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY)
-									? service.chemicalRegistry() : null);
+					granular = ContainerItemStacks.granularContents(sourceStack, world.granularRegistry(),
+							world.hasCapability(WorldCapability.CHEMISTRY) ? world.chemicalRegistry() : null);
 					if (granular == null) return new Resolution(null, "颗粒容器没有有效库存");
 					requested = granular.totalSolidVolumeSvq();
 				}
 				case GRANULAR_SCOOP -> {
-					if (!service.worldCapabilityProfile().hasCapability(WorldCapability.GRANULAR)) {
+					if (!world.hasCapability(WorldCapability.GRANULAR)) {
 						return new Resolution(null, "颗粒功能门本次启动未开启；干式容器保持不变");
 					}
 					if (!region.controllerManaged()) return new Resolution(null, "颗粒容器只允许在闭壳控制器区域转移");
@@ -172,7 +175,7 @@ final class MinecraftContainerTransferPlan {
 		if (requested <= 0L) return new Resolution(null, "容器转移请求没有正库存");
 		ThermalContents thermal = resourceKind == ContainerTransferJournal.ResourceKind.FLUID_NANOS
 				? MinecraftContainerTransferOperations.thermalContents(sourceStack) : null;
-		return new Resolution(new MinecraftContainerTransferPlan(service, region, cell, sourceStack, kind,
+		return new Resolution(new MinecraftContainerTransferPlan(transactions, world, region, cell, sourceStack, kind,
 				operation, resourceKind, requested, base, externalSource,
 				mixture, chemical, granular, thermal), null);
 	}
@@ -180,23 +183,23 @@ final class MinecraftContainerTransferPlan {
 	MinecraftContainerTransferOperations.TransferOutcome executeExact(long requested, long base) {
 		return switch (kind) {
 			case POUR -> MinecraftContainerTransferOperations.pourIntoCell(
-					service, region, cell, requested, 6, 0, externalSource, thermal);
+					world, region, cell, requested, 6, 0, externalSource, thermal);
 			case SCOOP -> MinecraftContainerTransferOperations.scoopFromCell(
-					service, region, cell, requested, base, 6, 0, thermal);
+					world, region, cell, requested, base, 6, 0, thermal);
 			case MATERIAL_POUR -> chemical == null
 					? MinecraftContainerTransferOperations.pourMaterialIntoCell(
-							service, region, cell, mixture, 6, externalSource, thermal)
+							world, region, cell, mixture, 6, externalSource, thermal)
 					: MinecraftContainerTransferOperations.pourChemicalIntoCell(
-							service, region, cell, chemical, 6, externalSource, thermal);
+							world, region, cell, chemical, 6, externalSource, thermal);
 			case MATERIAL_SCOOP -> chemistryEnabled()
 					? MinecraftContainerTransferOperations.scoopChemicalIntoCell(
-							service, region, cell, requested, 6, service.chemicalRegistry())
+							world, region, cell, requested, 6, world.chemicalRegistry())
 					: MinecraftContainerTransferOperations.scoopMaterialIntoCell(
-							service, region, cell, requested, 6);
+							world, region, cell, requested, 6);
 			case GRANULAR_POUR -> MinecraftContainerTransferOperations.pourGranularIntoCell(
-					service, region, cell, granular, 6, externalSource);
+					world, region, cell, granular, 6, externalSource);
 			case GRANULAR_SCOOP -> MinecraftContainerTransferOperations.scoopGranularIntoCell(
-					service, region, cell, requested, 6);
+					world, region, cell, requested, 6);
 			case NONE -> null;
 		};
 	}
@@ -212,11 +215,11 @@ final class MinecraftContainerTransferPlan {
 			boolean descriptorActor
 	) {
 		if (descriptorActor) {
-			return service.containerTransactions().executeCreativeSource(region, level, actor,
+			return transactions.executeCreativeSource(region, level, actor,
 					actorBefore, sourceStack, resourceKind, requestedAmount,
 					this::executeExact, (rawAfter, before) -> before.copy());
 		}
-		return service.containerTransactions().execute(region, level, actor, actorBefore,
+		return transactions.execute(region, level, actor, actorBefore,
 				operation, resourceKind, requestedAmount, baseAmount, this::executeExact,
 				(rawAfter, before) -> externalSource ? before.copy() : rawAfter);
 	}
@@ -225,7 +228,7 @@ final class MinecraftContainerTransferPlan {
 	long requestedAmount() { return requestedAmount; }
 
 	private boolean chemistryEnabled() {
-		return service.worldCapabilityProfile().hasCapability(WorldCapability.CHEMISTRY)
+		return world.hasCapability(WorldCapability.CHEMISTRY)
 				&& region.domain().hasChemistryState();
 	}
 

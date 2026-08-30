@@ -19,21 +19,48 @@ import java.util.UUID;
 
 /** Minecraft player hit/hand/output adapter for the shared container transaction path. */
 public final class PlayerContainerTransferAdapter {
-	private PlayerContainerTransferAdapter() { }
+	private final WorldStartupCoordinator.Result startup;
+	private final CommittedWorldRegistries world;
+	private final FluidWorldTargetResolver targets;
+	private final MinecraftRegionAvailability availability;
+	private final MinecraftContainerTransactionAdapter transactions;
+	private final FluidSnapshotPublisher snapshots;
+
+	PlayerContainerTransferAdapter(
+			WorldStartupCoordinator.Result startup,
+			CommittedWorldRegistries world,
+			FluidWorldTargetResolver targets,
+			MinecraftRegionAvailability availability,
+			MinecraftContainerTransactionAdapter transactions,
+			FluidSnapshotPublisher snapshots
+	) {
+		this.startup = startup;
+		this.world = world;
+		this.targets = targets;
+		this.availability = availability;
+		this.transactions = transactions;
+		this.snapshots = snapshots;
+	}
 
 	public static InteractionResult handle(ServerPlayer player, InteractionHand hand) {
-		FluidSimulationService service = MmmRuntimeRegistry.require(player.level().getServer()).simulation();
-		if (!service.authoritativeWritesReady()) return null;
+		return MmmRuntimeRegistry.require(player.level().getServer()).playerContainerTransfers()
+				.handlePlayer(player, hand);
+	}
+
+	private InteractionResult handlePlayer(ServerPlayer player, InteractionHand hand) {
+		if (!startup.authoritativeWritesReady()) return null;
 		ItemStack held = player.getItemInHand(hand);
 		if (held.isEmpty()) return null;
-		if (held.getItem() instanceof CreativeSourceItem) return handleCreativeSource(player, hand, held, service);
+		if (held.getItem() instanceof CreativeSourceItem) {
+			return handleCreativeSource(player, hand, held);
+		}
 
 		MinecraftContainerTransferOperations.TransferKind kind =
 				MinecraftContainerTransferOperations.classify(held);
 		if (kind == MinecraftContainerTransferOperations.TransferKind.NONE) return null;
 		if ((kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_POUR
 				|| kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_POUR)
-				&& !service.acceptsActualContainerProfile(held)) {
+				&& !world.acceptsActualContainerProfile(held)) {
 			message(player, "FOREIGN_PROFILE：actual container 不属于当前世界；库存保持不变");
 			return InteractionResult.FAIL;
 		}
@@ -44,34 +71,34 @@ public final class PlayerContainerTransferAdapter {
 		BlockHitResult hit = playerBlockHit(player);
 		BlockPos targetBlock = pouring ? playerPourTargetBlock(player, hit) : null;
 		if (pouring && targetBlock == null) return null;
-		FluidSimulationService.TransferTarget target = pouring
-				? service.transferTargetAtBlock(level, targetBlock)
+		FluidWorldTargetResolver.TransferTarget target = pouring
+				? targets.transferTargetAtBlock(level, targetBlock, null)
 				: hit != null && MmmBlocks.isBoundary(level.getBlockState(hit.getBlockPos()))
-						? service.transferTargetAtBlock(level, hit.getBlockPos()) : null;
+						? targets.transferTargetAtBlock(level, hit.getBlockPos(), null) : null;
 		FluidRegion region = pouring
 				? target == null ? null : target.region()
-				: service.aimedRegion(player);
+				: targets.aimedRegion(player);
 		if (region == null) return null;
 		if (held.getCount() != 1) {
 			message(player, "物质、运动与力学转移一次只接受 1 个桶；堆叠保持不变");
 			return InteractionResult.FAIL;
 		}
-		if (!service.ensureRegionAvailableFor(player, region)) return InteractionResult.FAIL;
+		if (!ensureAvailableFor(player, region)) return InteractionResult.FAIL;
 		String thermalFailure = MinecraftContainerTransferOperations.thermalTransferFailure(
-				service, region, held, kind);
+				world, region, held, kind);
 		if (thermalFailure != null) {
 			message(player, thermalFailure);
 			return InteractionResult.FAIL;
 		}
 		int[] cell = target != null
-				? service.cellAtBlock(level, region, target.interiorBlock())
+				? targets.cellAtBlock(level, region, target.interiorBlock())
 				: kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_SCOOP
-						? service.aimedGranularCellNear(player, region)
-						: service.aimedCellNear(player, region, true);
+						? targets.aimedGranularCellNear(player, region)
+						: targets.aimedCellNear(player, region, true);
 		if (cell == null) return null;
 
 		MinecraftContainerTransferPlan.Resolution resolution = MinecraftContainerTransferPlan.resolve(
-				service, region, cell, held, player.hasInfiniteMaterials());
+				transactions, world, region, cell, held, player.hasInfiniteMaterials());
 		if (!resolution.resolved()) {
 			message(player, resolution.diagnostic());
 			return InteractionResult.FAIL;
@@ -95,18 +122,18 @@ public final class PlayerContainerTransferAdapter {
 		MinecraftContainerTransferOperations.TransferOutcome outcome = attempt.outcome();
 		if (!outcome.message().isEmpty()) message(player, outcome.message());
 		if (!outcome.transferred()) return InteractionResult.FAIL;
-		player.setItemInHand(hand, service.bindActualContainerProfile(outcome.stack()));
+		player.setItemInHand(hand, world.bindActualContainerProfile(outcome.stack()));
 		player.getInventory().setChanged();
-		service.containerTransactions().completeCommitted(attempt.transactionId());
-		service.sendSnapshotFor(player, region);
+		transactions.completeCommitted(attempt.transactionId());
+		snapshots.sendTo(player, region);
 		level.playSound(null, player.getX(), player.getY() + 1.0, player.getZ(),
 				outcome.filled() ? SoundEvents.BUCKET_EMPTY : SoundEvents.BUCKET_FILL,
 				SoundSource.BLOCKS, 1.0F, 1.0F);
 		return InteractionResult.SUCCESS;
 	}
 
-	private static InteractionResult handleCreativeSource(
-			ServerPlayer player, InteractionHand hand, ItemStack descriptorStack, FluidSimulationService service
+	private InteractionResult handleCreativeSource(
+			ServerPlayer player, InteractionHand hand, ItemStack descriptorStack
 	) {
 		if (!player.hasInfiniteMaterials() || player.getClass() != ServerPlayer.class) {
 			message(player, "创造 source 模板只接受真实创造模式玩家");
@@ -119,7 +146,7 @@ public final class PlayerContainerTransferAdapter {
 		}
 		CreativeSourceCatalog.Resolved resolved;
 		try {
-			resolved = CreativeSourceCatalog.resolve(service, descriptor);
+			resolved = CreativeSourceCatalog.resolve(world, descriptor);
 		} catch (RuntimeException invalid) {
 			message(player, "当前世界拒绝该创造 source：" + invalid.getMessage());
 			return InteractionResult.FAIL;
@@ -128,17 +155,17 @@ public final class PlayerContainerTransferAdapter {
 		BlockHitResult hit = playerBlockHit(player);
 		BlockPos targetBlock = playerPourTargetBlock(player, hit);
 		if (targetBlock == null) return InteractionResult.FAIL;
-		FluidSimulationService.TransferTarget target = service.transferTargetAtBlock(level, targetBlock);
+		FluidWorldTargetResolver.TransferTarget target = targets.transferTargetAtBlock(level, targetBlock, null);
 		FluidRegion region = target == null ? null : target.region();
 		if (region == null || !region.controllerManaged()
-				|| !service.ensureRegionAvailableFor(player, region)) return InteractionResult.FAIL;
-		int[] cell = service.cellAtBlock(level, region, target.interiorBlock());
+				|| !ensureAvailableFor(player, region)) return InteractionResult.FAIL;
+		int[] cell = targets.cellAtBlock(level, region, target.interiorBlock());
 		if (cell == null) return InteractionResult.FAIL;
 
 		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), actorHand(hand));
 		ItemStack actual = resolved.actualStack();
 		MinecraftContainerTransferPlan.Resolution resolution = MinecraftContainerTransferPlan.resolve(
-				service, region, cell, actual, true);
+				transactions, world, region, cell, actual, true);
 		if (!resolution.resolved()) {
 			message(player, resolution.diagnostic());
 			return InteractionResult.FAIL;
@@ -154,8 +181,8 @@ public final class PlayerContainerTransferAdapter {
 		if (!outcome.transferred()) return InteractionResult.FAIL;
 		player.setItemInHand(hand, outcome.stack());
 		player.getInventory().setChanged();
-		service.containerTransactions().completeCommitted(transaction.transactionId());
-		service.sendSnapshotFor(player, region);
+		transactions.completeCommitted(transaction.transactionId());
+		snapshots.sendTo(player, region);
 		level.playSound(null, player.getX(), player.getY() + 1.0, player.getZ(),
 				SoundEvents.BUCKET_EMPTY, SoundSource.BLOCKS, 1.0F, 1.0F);
 		return InteractionResult.SUCCESS;
@@ -163,6 +190,14 @@ public final class PlayerContainerTransferAdapter {
 
 	private static void message(ServerPlayer player, String text) {
 		player.sendSystemMessage(Component.literal(text), true);
+	}
+
+	private boolean ensureAvailableFor(ServerPlayer player, FluidRegion region) {
+		boolean available = availability.ensure(player.level(), region);
+		if (!available) {
+			message(player, "物质、运动与力学目标区域不可用：" + region.availabilityFailure());
+		}
+		return available;
 	}
 
 	private static ContainerTransferActor.Hand actorHand(InteractionHand hand) {

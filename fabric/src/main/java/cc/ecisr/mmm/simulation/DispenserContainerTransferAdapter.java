@@ -10,42 +10,67 @@ import net.minecraft.world.level.block.DispenserBlock;
 
 /** Minecraft dispenser target/slot/output adapter for the shared container transaction path. */
 public final class DispenserContainerTransferAdapter {
-	private DispenserContainerTransferAdapter() { }
+	private final WorldStartupCoordinator.Result startup;
+	private final CommittedWorldRegistries world;
+	private final FluidWorldTargetResolver targets;
+	private final MinecraftRegionAvailability availability;
+	private final MinecraftContainerTransactionAdapter transactions;
+	private final FluidSnapshotPublisher snapshots;
+
+	DispenserContainerTransferAdapter(
+			WorldStartupCoordinator.Result startup,
+			CommittedWorldRegistries world,
+			FluidWorldTargetResolver targets,
+			MinecraftRegionAvailability availability,
+			MinecraftContainerTransactionAdapter transactions,
+			FluidSnapshotPublisher snapshots
+	) {
+		this.startup = startup;
+		this.world = world;
+		this.targets = targets;
+		this.availability = availability;
+		this.transactions = transactions;
+		this.snapshots = snapshots;
+	}
 
 	public static ItemStack handle(BlockSource source, ItemStack stack) {
-		FluidSimulationService service = MmmRuntimeRegistry.require(source.level().getServer()).simulation();
+		return MmmRuntimeRegistry.require(source.level().getServer()).dispenserContainerTransfers()
+				.handleDispenser(source, stack);
+	}
+
+	private ItemStack handleDispenser(BlockSource source, ItemStack stack) {
 		boolean vanillaItem = stack.is(Items.WATER_BUCKET) || stack.is(Items.BUCKET);
-		if (!service.authoritativeWritesReady()) return vanillaItem ? null : stack;
+		if (!startup.authoritativeWritesReady()) return vanillaItem ? null : stack;
 		MinecraftContainerTransferOperations.TransferKind kind =
 				MinecraftContainerTransferOperations.classify(stack);
 		if (kind == MinecraftContainerTransferOperations.TransferKind.NONE) return stack;
 		if ((kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_POUR
 				|| kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_POUR)
-				&& !service.acceptsActualContainerProfile(stack)) return stack;
+				&& !world.acceptsActualContainerProfile(stack)) return stack;
 
 		ServerLevel level = source.level();
 		var facing = source.state().getValue(DispenserBlock.FACING);
 		BlockPos target = source.pos().relative(facing);
-		FluidSimulationService.TransferTarget transferTarget = service.transferTargetAtBlock(level, target, facing);
+		FluidWorldTargetResolver.TransferTarget transferTarget = targets.transferTargetAtBlock(level, target, facing);
 		FluidRegion region = transferTarget == null ? null : transferTarget.region();
 		if (region == null) return vanillaItem ? null : stack;
-		if (stack.getCount() != 1 || !service.ensureRegionAvailable(level, region)) return stack;
-		if (MinecraftContainerTransferOperations.thermalTransferFailure(service, region, stack, kind) != null) {
+		if (stack.getCount() != 1 || !availability.ensure(level, region)) return stack;
+		if (MinecraftContainerTransferOperations.thermalTransferFailure(world, region, stack, kind) != null) {
 			return stack;
 		}
-		int[] cell = service.cellAtBlock(level, region, transferTarget.interiorBlock());
+		int[] cell = targets.cellAtBlock(level, region, transferTarget.interiorBlock());
 		if (cell == null) return stack;
 
 		MinecraftContainerTransferPlan.Resolution resolution = MinecraftContainerTransferPlan.resolve(
-				service, region, cell, stack, false);
+				transactions, world, region, cell, stack, false);
 		if (!resolution.resolved()) return stack;
 		MinecraftContainerTransferPlan plan = resolution.plan();
 
 		if (!region.controllerManaged()) {
 			MinecraftContainerTransferOperations.TransferOutcome outcome = plan.executeUnmanaged();
 			if (outcome == null || !outcome.transferred()) return stack;
-			service.sendSnapshot(level, region);
-			return service.bindActualContainerProfile(outcome.stack());
+			snapshots.sendToLevel(level, region);
+			return world.bindActualContainerProfile(outcome.stack());
 		}
 
 		int slot = findSlot(source, stack);
@@ -59,9 +84,9 @@ public final class DispenserContainerTransferAdapter {
 		if (transaction == null || !transaction.outcome().transferred()) return stack;
 		source.blockEntity().setItem(slot, transaction.outcome().stack());
 		source.blockEntity().setChanged();
-		service.containerTransactions().completeCommitted(transaction.transactionId());
-		service.sendSnapshot(level, region);
-		return service.bindActualContainerProfile(transaction.outcome().stack());
+		transactions.completeCommitted(transaction.transactionId());
+		snapshots.sendToLevel(level, region);
+		return world.bindActualContainerProfile(transaction.outcome().stack());
 	}
 
 	private static int findSlot(BlockSource source, ItemStack stack) {

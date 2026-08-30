@@ -63,9 +63,6 @@ import java.util.UUID;
 
 /** Adapts fluid regions to Minecraft while delegating region-state lifecycle and takeover transactions. */
 public final class FluidSimulationService {
-	public static final int CELLS_PER_BLOCK = 2;
-	static final int CELL_VOLUMES_PER_BLOCK = CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
-
 	private final Path worldRoot;
 	private final boolean serverConfigLocked;
 	private FluidServerConfig serverConfig;
@@ -78,10 +75,15 @@ public final class FluidSimulationService {
 	private final MinecraftTakeoverAdapter takeover;
 	private final MinecraftDebugFixtures debugFixtures;
 	private final MinecraftRegionTick regionTick;
+	private final MinecraftRegionAvailability regionAvailability;
 	private final ControllerQueryUseCase controllerQueries;
 	private final MinecraftRegionLifecycle regionLifecycle;
 	private final ThermalReservoirUseCase thermalReservoirs = new ThermalReservoirUseCase();
 	private final MinecraftControllerConsole controllerConsole;
+	private final MinecraftRegionActivation regionActivation;
+	private final MinecraftIndicatorEditing indicatorEditing;
+	private final PlayerContainerTransferAdapter playerContainerTransfers;
+	private final DispenserContainerTransferAdapter dispenserContainerTransfers;
 	private final FluidSnapshotPublisher snapshots;
 	private final ContainerRecoveryCoordinator containerRecovery;
 	private final MinecraftContainerTransactionAdapter containerTransactions;
@@ -92,16 +94,12 @@ public final class FluidSimulationService {
 	/** Typed startup proof retained so no authoritative write can use the fail-closed empty profile. */
 	private final WorldStartupCoordinator.Result startup;
 	/** Committed profile, or an empty fail-closed value while startup is not provable. */
-	private final WorldCapabilityProfile worldCapabilityProfile;
-	private final MaterialRegistry materialRegistry;
-	private final ChemicalRegistry chemicalRegistry;
-	private final GranularRegistry granularRegistry;
-	private final ThermalRegistry thermalRegistry;
-	private final GasRegistry gasRegistry;
+	private final CommittedWorldRegistries worldRegistries;
 	private List<String> ownershipIssues = List.of();
 
 	FluidSimulationService(
 			WorldStartupCoordinator.Result startup,
+			CommittedWorldRegistries worldRegistries,
 			FluidRegionManager regionManager,
 			FluidRegionOperations regionOperations,
 			FluidSnapshotPublisher snapshots,
@@ -115,14 +113,13 @@ public final class FluidSimulationService {
 		this.serverConfigLocked = !startup.policyReadable();
 		this.controllerFeatureEnabled = startup.policyReadable() && serverConfig.controllersEnabled();
 		this.worldBridgeFeatureEnabled = startup.policyReadable() && serverConfig.worldBridgeEnabled();
-		this.worldCapabilityProfile = startup.profile();
-		RegistryBundleLoader.RegistryBundle registries = startup.registries();
-		this.materialRegistry = registries == null ? null : registries.material();
-		this.chemicalRegistry = registries == null ? null : registries.chemical();
-		this.granularRegistry = registries == null ? null : registries.granular();
-		this.gasRegistry = registries == null ? null : registries.gas();
-		this.thermalRegistry = registries == null ? null : registries.thermal();
-		MinecraftRegionInputs regionInputs = new MinecraftRegionInputs(thermalRegistry, CELLS_PER_BLOCK);
+		this.worldRegistries = java.util.Objects.requireNonNull(worldRegistries, "Committed world registries");
+		WorldCapabilityProfile worldCapabilityProfile = worldRegistries.profile();
+		ChemicalRegistry chemicalRegistry = worldRegistries.chemicalOrNull();
+		GranularRegistry granularRegistry = worldRegistries.granularOrNull();
+		ThermalRegistry thermalRegistry = worldRegistries.thermalOrNull();
+		MinecraftRegionInputs regionInputs = new MinecraftRegionInputs(
+				thermalRegistry, FluidRegionFactory.CELLS_PER_BLOCK);
 		this.regionManager = java.util.Objects.requireNonNull(regionManager, "Region manager");
 		this.committedEvents = java.util.Objects.requireNonNull(committedEvents, "Committed event hub");
 		this.targets = new FluidWorldTargetResolver(regionManager);
@@ -140,6 +137,8 @@ public final class FluidSimulationService {
 				worldCapabilityProfile, () -> defaultEntityPhysicsEnabled, () -> defaultDebugOverlays);
 		this.regionTick = new MinecraftRegionTick(regionApplication, regionInputs, snapshots,
 				worldCapabilityProfile, serverConfig.maximumPhaseOperationsPerStep());
+		this.regionAvailability = new MinecraftRegionAvailability(containerRecovery, regionOperations,
+				() -> controllerFeatureEnabled, regionTick, snapshots, worldRegistries);
 		this.controllerQueries = new ControllerQueryUseCase(
 				new ControllerSummaryAdapter(regionManager, regionOperations, worldCapabilityProfile, thermalRegistry,
 						this::hasPendingContainerTransfer, this::authoritativeWritesReady, worldBridgeFeatureEnabled));
@@ -148,9 +147,24 @@ public final class FluidSimulationService {
 		this.controllerConsole = new MinecraftControllerConsole(targets, controllerQueries, regionLifecycle,
 				thermalReservoirs, regionTick, thermalRegistry, startup, regionManager,
 				this::authoritativeWritesReady, this::ensureRegionAvailable);
+		this.regionActivation = new MinecraftRegionActivation(startup, worldRegistries, regionManager,
+				regionOperations, snapshots, regionTick, takeover, debugFixtures, containerRecovery,
+				() -> controllerFeatureEnabled, () -> defaultEntityPhysicsEnabled, () -> defaultDebugOverlays,
+				() -> ownershipIssues, regionAvailability, worldBridgeFeatureEnabled,
+				serverConfig.maximumThermalSubstepsPerStep());
+		this.indicatorEditing = new MinecraftIndicatorEditing(worldRegistries, targets, regionOperations,
+				snapshots, regionAvailability);
+		this.playerContainerTransfers = new PlayerContainerTransferAdapter(startup, worldRegistries, targets,
+				regionAvailability, containerTransactions, snapshots);
+		this.dispenserContainerTransfers = new DispenserContainerTransferAdapter(startup, worldRegistries, targets,
+				regionAvailability, containerTransactions, snapshots);
 	}
 
 	MinecraftControllerConsole controllerConsole() { return controllerConsole; }
+	MinecraftRegionActivation regionActivation() { return regionActivation; }
+	MinecraftIndicatorEditing indicatorEditing() { return indicatorEditing; }
+	PlayerContainerTransferAdapter playerContainerTransfers() { return playerContainerTransfers; }
+	DispenserContainerTransferAdapter dispenserContainerTransfers() { return dispenserContainerTransfers; }
 
 	MinecraftContainerTransactionAdapter containerTransactions() { return containerTransactions; }
 
@@ -247,95 +261,9 @@ public final class FluidSimulationService {
 		return null;
 	}
 
-	/** Adds authoritative U to a server-resolved mass-bearing liquid source. */
-	void attachLiquidThermalContents(ItemStack stack, double temperatureKelvin) {
-		if (!worldCapabilityProfile.hasCapability(WorldCapability.THERMAL)) return;
-		if (thermalRegistry == null) throw new IllegalStateException("Authoritative thermal registry is unavailable");
-		ThermalStateFunction stateFunction = new ThermalStateFunction(thermalRegistry);
-		double energy = 0.0;
-		if (stack.get(MmmComponents.CHEMICAL_CONTENTS) != null) {
-			if (chemicalRegistry == null) throw new IllegalStateException("Authoritative chemical registry is unavailable");
-			ChemicalContents contents = ContainerItemStacks.chemicalContents(stack, chemicalRegistry);
-			if (contents == null) throw new IllegalArgumentException("Debug chemical liquid inventory is malformed");
-			for (ChemicalContents.Group group : contents.groups()) {
-				java.util.TreeMap<String, Long> species = new java.util.TreeMap<>();
-				for (ChemicalContents.SpeciesAmount amount : group.species()) {
-					species.put(amount.speciesId(), amount.amountQuanta());
-				}
-				int handle = thermalRegistry.materialHandle(
-						ThermalMaterialDefinition.CarrierKind.LIQUID, group.materialId());
-				validateLiquidTemperature(group.materialId(), temperatureKelvin);
-				energy += stateFunction.internalEnergyAtTemperature(handle, group.massKilograms(), species, temperatureKelvin);
-			}
-		} else {
-			FluidMixture mixture = ContainerItemStacks.fluidMixture(stack);
-			if (mixture == null) throw new IllegalArgumentException("Debug material liquid inventory is malformed");
-			for (FluidMixture.Component component : mixture.components()) {
-				int handle = thermalRegistry.materialHandle(
-						ThermalMaterialDefinition.CarrierKind.LIQUID, component.materialId());
-				validateLiquidTemperature(component.materialId(), temperatureKelvin);
-				energy += stateFunction.internalEnergyAtTemperature(handle, component.mass(), Map.of(), temperatureKelvin);
-			}
-		}
-		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Liquid internal energy overflow");
-		ContainerItemStacks.attachThermal(stack, thermalRegistry.fingerprint(), energy);
-	}
-
-	/** Fixture adapter retained for commands; production sources use the temperature-aware resolver. */
-	public void attachDebugLiquidThermalContents(ItemStack stack) {
-		attachLiquidThermalContents(stack, GasRegistry.STANDARD_TEMPERATURE_K);
-	}
-
-	FluidMaterial resolveMaterial(String stableId) {
-		if (materialRegistry == null) throw new IllegalStateException("Authoritative material registry is unavailable");
-		return materialRegistry.entry(stableId).material();
-	}
-
-	private void validateLiquidTemperature(String stableId, double temperatureKelvin) {
-		if (materialRegistry == null) throw new IllegalStateException("Authoritative material registry is unavailable");
-		if (materialRegistry.declaresViscosity(stableId)) {
-			materialRegistry.dynamicViscosityAt(stableId, temperatureKelvin);
-		}
-	}
-
-	public ItemStack bindActualContainerProfile(ItemStack stack) {
-		if (stack.get(MmmComponents.FLUID_VOLUME) != null || stack.get(MmmComponents.CHEMICAL_CONTENTS) != null
-				|| stack.get(MmmComponents.GRANULAR_CONTENTS) != null) {
-			if (!startup.profileProven()) {
-				throw new IllegalStateException("Authoritative world profile is unavailable");
-			}
-			ContainerItemStacks.bindProfile(stack, worldCapabilityProfile.profileFingerprint());
-		}
-		return stack;
-	}
-
-	boolean acceptsActualContainerProfile(ItemStack stack) {
-		return startup.profileProven() && worldCapabilityProfile.profileFingerprint().equals(
-				ContainerItemStacks.profileFingerprint(stack));
-	}
-
-	String thermalRegistryFingerprint() {
-		if (thermalRegistry == null) throw new IllegalStateException("Authoritative thermal registry is unavailable");
-		return thermalRegistry.fingerprint();
-	}
-	public GranularRegistry granularRegistry() {
-		if (granularRegistry == null) throw new IllegalStateException("Authoritative granular registry is unavailable");
-		return granularRegistry;
-	}
-
-	public ChemicalRegistry chemicalRegistry() {
-		if (chemicalRegistry == null) throw new IllegalStateException("Authoritative chemical registry is unavailable");
-		return chemicalRegistry;
-	}
-
 	/** Live world-bridge gate; ownership gameplay binds to this boot's value like the material gate. */
 	public boolean worldBridgeFeatureEnabled() {
 		return worldBridgeFeatureEnabled;
-	}
-
-	/** The committed profile, or an empty fail-closed value while startup is not provable. */
-	public WorldCapabilityProfile worldCapabilityProfile() {
-		return worldCapabilityProfile;
 	}
 
 	public boolean configuredWorldBridgeFeatureEnabled() {
@@ -356,134 +284,10 @@ public final class FluidSimulationService {
 		return null;
 	}
 
-	public ControllerActivation activateController(ServerPlayer player, BlockPos controllerPosition) {
-		return activateController(player, controllerPosition, false);
-	}
-
-	public ControllerActivation activateController(
-			ServerPlayer player, BlockPos controllerPosition, boolean toggleRunning
+	private MinecraftRegionActivation.Result activateController(
+			ServerPlayer player, BlockPos controllerPosition
 	) {
-		ServerLevel level = player.level();
-		restoreAirDemoScaffolding(level.getServer());
-		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) {
-			return ControllerActivation.failed("目标方块不再是 Matter, Motion & Mechanics 控制器");
-		}
-		for (FluidRegion existing : regionManager.regions()) {
-			FluidRegionFootprint existingFootprint = existing.footprint();
-			if (existingFootprint == null || !existing.dimension().equals(level.dimension())
-					|| !existingFootprint.controllerPosition().equals(controllerPosition)) continue;
-			regionManager.select(existing.id());
-			if (!ensureRegionAvailable(level, existing)) {
-				return ControllerActivation.failed("控制器区域当前不可用：" + existing.availabilityFailure());
-			}
-			ControllerAction action;
-			if (toggleRunning) {
-				if (!authoritativeWritesReady()) {
-					return ControllerActivation.failed(authoritativeWriteFailure("修改控制器运行意图"));
-				}
-				if (existing.paused()) {
-					existing.setPaused(false);
-					existing.wakeForActivity();
-					action = ControllerAction.RESUMED;
-				} else {
-					existing.setPaused(true);
-					action = ControllerAction.PAUSED;
-				}
-			} else {
-				action = existing.paused() ? ControllerAction.SELECTED_PAUSED : ControllerAction.SELECTED_RUNNING;
-			}
-			sendSnapshot(level);
-			return ControllerActivation.succeeded(existingFootprint, action);
-		}
-		if (!controllerFeatureEnabled) return ControllerActivation.DISABLED;
-		if (!authoritativeWritesReady()) {
-			return ControllerActivation.failed(authoritativeWriteFailure("创建控制器区域"));
-		}
-		if (hasContainerTransferStoreIssues()) {
-			return ControllerActivation.failed("container-transfer 恢复目录含未知或损坏内容；已全局锁住新控制器，详见日志");
-		}
-		if (regionOperations.creationLocked() || !ownershipIssues.isEmpty()) {
-			return ControllerActivation.failed("存在未解决或超预算的 region-state/ownership；已锁住新控制器区域，详见 /mmm regions list、/mmm ownership 与日志");
-		}
-
-		RestorationStats restoration = restoreTakeover(level.getServer());
-		if (!restoration.completed()) return ControllerActivation.failed(restoration.failure());
-
-		FluidBoundaryScanner.ScanResult scan = FluidControllerRegions.scan(
-				level, controllerPosition, (int) Math.max(1L, Math.min(Integer.MAX_VALUE,
-						regionManager.limits().maximumCellsPerRegion() / CELL_VOLUMES_PER_BLOCK)
-				)
-		);
-		if (!scan.succeeded()) return ControllerActivation.failed(scan.failure());
-		FluidRegionFootprint footprint = scan.footprint();
-		List<OwnershipJournal.BlockEntry> ownershipPreimage;
-		try {
-			ownershipPreimage = regionOperations.scanOwnershipPreimage(level, footprint);
-		} catch (IOException invalidPreimage) {
-			return ControllerActivation.failed("无法冻结 controller world preimage：" + invalidPreimage.getMessage());
-		}
-		if (!worldBridgeFeatureEnabled && !ownershipPreimage.isEmpty()) {
-			return ControllerActivation.failed("worldbridge 策略关闭；拒绝接管壳内原版水，请先排空或启用策略并重启");
-		}
-		ControllerCreationPlan creationPlan = new ControllerCreationPlan(
-				worldCapabilityProfile.profileFingerprint(), footprint, ownershipPreimage);
-		long requiredCells;
-		long requiredMarkers;
-		try {
-			requiredCells = Math.multiplyExact(footprint.denseBlockCapacity(), CELL_VOLUMES_PER_BLOCK);
-			requiredMarkers = Math.multiplyExact(requiredCells, 8L);
-		} catch (ArithmeticException exception) {
-			return ControllerActivation.failed("控制器区域尺寸溢出资源计数");
-		}
-		RegionCatalog.AdmissionResult preview = regionManager.previewAdd(requiredCells, requiredMarkers);
-		if (!preview.accepted()) return ControllerActivation.failed(preview.failure());
-
-		String availabilityFailure = FluidControllerRegions.availabilityFailure(level, footprint);
-		if (availabilityFailure != null) return ControllerActivation.failed(availabilityFailure);
-
-		FluidRegion candidate;
-		try {
-			candidate = FluidRegionFactory.createControllerRegion(level, footprint, CELLS_PER_BLOCK, requiredMarkers);
-		} catch (IllegalArgumentException | ArithmeticException exception) {
-			return ControllerActivation.failed("无法分配控制器区域：" + exception.getMessage());
-		}
-		candidate.setEntityPhysicsEnabled(defaultEntityPhysicsEnabled);
-		candidate.setDebugOverlays(defaultDebugOverlays);
-		RegionCatalog.AdmissionResult exactPreview = regionManager.previewAdd(candidate);
-		if (!exactPreview.accepted()) return ControllerActivation.failed(exactPreview.failure());
-		try {
-			regionTick.refreshRegionInputs(level, candidate);
-			if (worldBridgeFeatureEnabled) FluidRegionFactory.captureVanillaWater(level, candidate);
-			bindConfiguredState(candidate.domain());
-		} catch (RuntimeException invalidCandidate) {
-			return ControllerActivation.failed("无法构造完整控制器区域候选：" + invalidCandidate.getMessage());
-		}
-		candidate.setPaused(false);
-		candidate.wakeForActivity();
-		try {
-			if (!creationPlan.profileFingerprint().equals(worldCapabilityProfile.profileFingerprint())
-					|| !creationPlan.footprint().equals(candidate.footprint())) {
-				throw new IOException("Controller creation proof changed after preflight");
-			}
-			if (worldBridgeFeatureEnabled) {
-				regionOperations.acquireOwnership(level, candidate, creationPlan.ownershipPreimage());
-			} else {
-				regionOperations.checkpoint(candidate);
-			}
-		} catch (IOException | RuntimeException exception) {
-			MmmMod.LOGGER.error("Controller region {} was rejected after its initial checkpoint failed", candidate.id(), exception);
-			return ControllerActivation.failed("区域未创建；初始 checkpoint/ownership 事务失败：" + exception.getMessage());
-		}
-		RegionCatalog.AdmissionResult admission = regionManager.addAndSelect(candidate);
-		if (!admission.accepted()) {
-			String issue = "首个 region HEAD 已提交，但 live owner 登记违反已通过的 admission 预检：" + admission.failure();
-			regionOperations.recordIssue(issue);
-			MmmMod.LOGGER.error("Controller region {} requires restart after live registration failed: {}",
-					candidate.id(), admission.failure());
-			return ControllerActivation.failed(issue + "；请重启服务器恢复已提交区域");
-		}
-		sendSnapshot(level);
-		return ControllerActivation.created(footprint);
+		return regionActivation.activate(player, controllerPosition, false);
 	}
 
 	/** Restores the world blocks the gas-demo glass scaffold replaced before a new scenario. */
@@ -541,11 +345,12 @@ public final class FluidSimulationService {
 			}
 
 			@Override public void bindCapabilityState(FluidDomain domain) {
-				bindConfiguredState(domain);
+				worldRegistries.bindConfiguredState(domain, serverConfig.maximumThermalSubstepsPerStep());
 			}
 
 			@Override public String activateController(ServerPlayer player, BlockPos controllerPosition) {
-				ControllerActivation activation = FluidSimulationService.this.activateController(player, controllerPosition);
+				MinecraftRegionActivation.Result activation =
+						FluidSimulationService.this.activateController(player, controllerPosition);
 				return activation.succeeded() ? null : activation.failure();
 			}
 		};
@@ -635,21 +440,7 @@ public final class FluidSimulationService {
 	}
 
 	public boolean ensureRegionAvailable(ServerLevel level, FluidRegion region) {
-		if (hasPendingContainerTransfer(region.id())) {
-			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
-					"存在未完成容器转移 WAL；恢复完成后才能继续");
-			return false;
-		}
-
-		boolean available = regionOperations.ensureAvailable(
-				level, region, controllerFeatureEnabled, regionTick::refreshRegionInputs, this::sendSnapshot,
-				snapshots::sendRemoval
-		);
-		if (available && worldCapabilityProfile.hasCapability(WorldCapability.THERMAL) && region.solverLoaded() && region.domain().hasThermalState()) {
-			region.enableThermalActivity();
-			if (region.domain().hasPendingPhaseVolumeWork()) region.wakeForActivity();
-		}
-		return available;
+		return regionAvailability.ensure(level, region);
 	}
 
 	/**
@@ -663,8 +454,8 @@ public final class FluidSimulationService {
 		long start = System.nanoTime();
 		MotionStepResult result = regionApplication.stepMotion(new MotionStepCommand(
 				region.id(), region.solverGeneration(), movingBodies,
-				worldCapabilityProfile.hasCapability(WorldCapability.PHASECHANGE),
-				worldCapabilityProfile.hasCapability(WorldCapability.PHASECHANGE)
+				worldRegistries.hasCapability(WorldCapability.PHASECHANGE),
+				worldRegistries.hasCapability(WorldCapability.PHASECHANGE)
 						? serverConfig.maximumPhaseOperationsPerStep() : 0, false));
 		if (!result.accepted()) throw new IllegalStateException(
 				"Motion step application rejected synchronous region state: " + result.status());
@@ -681,7 +472,7 @@ public final class FluidSimulationService {
 		FluidWorldTargetResolver.CellTarget resolved = targets.aimedCellForEdit(player, region, false);
 		if (resolved == null) return WaterEditResult.NO_TARGET;
 		CellTarget target = new CellTarget(resolved.x(), resolved.y(), resolved.z());
-		float requested = buckets * CELL_VOLUMES_PER_BLOCK;
+		float requested = buckets * FluidRegionFactory.CELL_VOLUMES_PER_BLOCK;
 		FluidDomain.VolumeAddition addition = domain().addVolumeNearBudgeted(
 				target.x(), target.y(), target.z(), requested, 6
 		);
@@ -699,7 +490,7 @@ public final class FluidSimulationService {
 		FluidWorldTargetResolver.CellTarget resolved = targets.aimedCellForEdit(player, region, true);
 		if (resolved == null) return WaterEditResult.NO_TARGET;
 		CellTarget target = new CellTarget(resolved.x(), resolved.y(), resolved.z());
-		float requested = buckets * CELL_VOLUMES_PER_BLOCK;
+		float requested = buckets * FluidRegionFactory.CELL_VOLUMES_PER_BLOCK;
 		float changed = domain().removeVolumeNear(target.x(), target.y(), target.z(), requested, 6);
 		if (changed > 0.0F) region.wakeForActivity();
 		sendSnapshot(player.level());
@@ -798,7 +589,7 @@ public final class FluidSimulationService {
 		if (domain.hasPendingPhaseVolumeWork()) {
 			return "清空失败：区域存在尚未由下一次 pressure projection 消费的相变体积/功记录";
 		}
-		float beforeBlocks = domain.totalVolume() / CELL_VOLUMES_PER_BLOCK;
+		float beforeBlocks = domain.totalVolume() / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK;
 		int beforeParticles = domain.particleCount();
 		FluidDomain.OperatorClearPlan clearPlan;
 		try {
@@ -903,7 +694,7 @@ public final class FluidSimulationService {
 						+ footprint.boundaryBlocks().size() + ", chunks " + footprint.requiredChunks().size();
 		String availability = region.availabilityDescription();
 		String gas = gasSummary(domain);
-		String thermal = worldCapabilityProfile.hasCapability(WorldCapability.THERMAL) ? thermalSummary(region, domain) : "";
+		String thermal = worldRegistries.hasCapability(WorldCapability.THERMAL) ? thermalSummary(region, domain) : "";
 		return String.format(
 				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d, liquid impulse [%.3g,%.3g,%.3g] kg·m/s | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s%s",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",
@@ -914,7 +705,7 @@ public final class FluidSimulationService {
 				regionSource, availability,
 				origin.toShortString(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
 				20.0 / region.stepIntervalTicks(),
-				cellVolumes / CELL_VOLUMES_PER_BLOCK, cellVolumes,
+				cellVolumes / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK, cellVolumes,
 				domain.particleCount(), domain.maximumParticleCount(), domain.markerCellCount(),
 				distribution.visibleCells(), distribution.denseCells(), takeover.pendingBlockCount(), takeoverLock,
 				worldBridgeFeatureEnabled ? "on" : "off",
@@ -924,7 +715,7 @@ public final class FluidSimulationService {
 				entityCoupling.impulseZKilogramMetresPerSecond(),
 				domain.maximumPressure(),
 				solids.partialCells(), solids.fullCells(),
-				collision.changedCells(), collision.escapedCellVolume() / CELL_VOLUMES_PER_BLOCK,
+				collision.changedCells(), collision.escapedCellVolume() / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK,
 				collision.markerBudgetLimited() ? " (marker budget)" : "", stats,
 				(gas.isEmpty() ? "" : " | " + gas) + (thermal.isEmpty() ? "" : " | " + thermal)
 		);
@@ -1045,55 +836,9 @@ public final class FluidSimulationService {
 
 	public record TransferTarget(FluidRegion region, BlockPos interiorBlock) { }
 
-	private record ControllerCreationPlan(
-			String profileFingerprint,
-			FluidRegionFootprint footprint,
-			List<OwnershipJournal.BlockEntry> ownershipPreimage
-	) {
-		private ControllerCreationPlan {
-			if (profileFingerprint == null || !profileFingerprint.matches("[0-9a-f]{64}")) {
-				throw new IllegalArgumentException("Controller creation profile fingerprint is invalid");
-			}
-			java.util.Objects.requireNonNull(footprint, "footprint");
-			ownershipPreimage = List.copyOf(ownershipPreimage);
-		}
-	}
-
-
-	/** Applies the bounded indicator/eraser primitive to the actually aimed region. */
-	public IndicatorUseResult editIndicatorAtAim(ServerPlayer player, boolean indicated) {
-		if (!worldCapabilityProfile.hasCapability(WorldCapability.CHEMISTRY)) return IndicatorUseResult.rejected("化学功能门本次启动未开启");
-		FluidRegion region = aimedRegion(player);
-		if (region == null) return IndicatorUseResult.rejected("准星方向没有化学流体区域");
-		if (!ensureRegionAvailableFor(player, region)) {
-			return IndicatorUseResult.rejected("目标控制器区域当前不可用：" + region.availabilityFailure());
-		}
-		int[] cell = aimedCellNear(player, region, true);
-		if (cell == null) return IndicatorUseResult.rejected("准星方向没有化学液体");
-		FluidDomain.IndicatorEditResult edit = region.domain().editIndicatorFloodFill(
-				cell[0], cell[1], cell[2], indicated, Math.toIntExact(region.reservedCellCapacity()), 100.0);
-		if (!edit.accepted()) return IndicatorUseResult.rejected(edit.failure());
-		String checkpointWarning = null;
-		if (edit.changedMarkers() > 0) {
-			region.wakeForActivity();
-			if (region.controllerManaged()) {
-				try {
-					regionOperations.checkpoint(region);
-				} catch (IOException | RuntimeException failure) {
-					checkpointWarning = "live parcel 已修改但 checkpoint 失败：" + failure.getMessage();
-					region.setAvailabilityFailure(checkpointWarning);
-					MmmMod.LOGGER.error("Could not checkpoint indicator edit for region {}", region.id(), failure);
-				}
-			}
-		}
-		sendSnapshot(player.level(), region);
-		return new IndicatorUseResult(true, edit.scannedCells(), edit.changedMarkers(),
-				edit.affectedBlockVolume(), checkpointWarning, null);
-	}
-
 	/** Administrator-only command payload; caller is responsible for enforcing permission and transcript logging. */
 	public String chemistryInventoryStatus(ServerLevel level) {
-		if (!worldCapabilityProfile.hasCapability(WorldCapability.CHEMISTRY)) return "化学功能门本次启动未开启";
+		if (!worldRegistries.hasCapability(WorldCapability.CHEMISTRY)) return "化学功能门本次启动未开启";
 		FluidRegion region = selectedRegionIn(level);
 		if (region == null || !region.solverLoaded() || !region.domain().hasChemistryState()) {
 			return "当前维度没有已加载且选中的化学区域";
@@ -1101,12 +846,13 @@ public final class FluidSimulationService {
 		long[] totals = region.domain().chemicalParcels().speciesTotals(region.domain().particleCount());
 		StringBuilder text = new StringBuilder("region ").append(region.id())
 				.append(" generation ").append(region.checkpointGeneration())
-				.append(" fingerprint ").append(chemicalRegistry.fingerprint())
+				.append(" fingerprint ").append(worldRegistries.chemicalRegistry().fingerprint())
 				.append(" totalQuanta ").append(region.domain().chemicalParcels().totalQuanta())
 				.append(" residualBits 0x").append(Long.toUnsignedString(
 						region.domain().exportChemicalParticleState().residualLedgerBits(), 16));
 		for (int handle = 0; handle < totals.length; handle++) if (totals[handle] != 0L) {
-			text.append('\n').append(chemicalRegistry.species(handle).id()).append('=').append(totals[handle]);
+			text.append('\n').append(worldRegistries.chemicalRegistry().species(handle).id())
+					.append('=').append(totals[handle]);
 		}
 		text.append("\nexternalSourceQuanta=").append(region.domain().chemicalParcels().externalSource().totalQuanta())
 				.append(" escapedSinkQuanta=").append(region.domain().chemicalParcels().escapedSink().totalQuanta());
@@ -1115,7 +861,7 @@ public final class FluidSimulationService {
 
 	/** Administrator-only exact granular inventory/audit report; display snapshots never feed this path. */
 	public String granularInventoryStatus(ServerLevel level) {
-		if (!worldCapabilityProfile.hasCapability(WorldCapability.GRANULAR)) return "颗粒功能门本次启动未开启";
+		if (!worldRegistries.hasCapability(WorldCapability.GRANULAR)) return "颗粒功能门本次启动未开启";
 		FluidRegion region = selectedRegionIn(level);
 		if (region == null || !region.solverLoaded() || !region.domain().hasGranularState()) {
 			return "当前维度没有已加载且选中的颗粒区域";
@@ -1156,15 +902,6 @@ public final class FluidSimulationService {
 			text.append('\n').append("solidSpecies ").append(species.getKey()).append('=').append(species.getValue());
 		}
 		return text.toString();
-	}
-
-	public record IndicatorUseResult(
-			boolean accepted, int scannedCells, int changedMarkers, double affectedBlockVolume,
-			String checkpointWarning, String failure
-	) {
-		private static IndicatorUseResult rejected(String failure) {
-			return new IndicatorUseResult(false, 0, 0, 0.0, null, failure);
-		}
 	}
 
 	/** First region volume intersected by the player's ray; selection is intentionally irrelevant. */
@@ -1224,63 +961,6 @@ public final class FluidSimulationService {
 		static SelectionResult failed(String failure) { return new SelectionResult(false, null, failure); }
 	}
 
-	/** Binds the committed world capability registries to a freshly allocated domain. */
-	private void bindConfiguredState(FluidDomain domain) {
-		if (worldCapabilityProfile.hasCapability(WorldCapability.MATERIALS)) {
-			FluidRegionFactory.bindDefaultMaterialState(domain);
-		}
-		if (worldCapabilityProfile.hasCapability(WorldCapability.CHEMISTRY) && !domain.hasChemistryState()) domain.bindChemistry(chemicalRegistry);
-		if (worldCapabilityProfile.hasCapability(WorldCapability.GRANULAR) && !domain.hasGranularState()) {
-			domain.bindGranular(granularRegistry, domain.materialRegistry());
-		}
-		if (worldCapabilityProfile.hasCapability(WorldCapability.PRECIPITATION)) domain.setPrecipitationEnabled(true);
-		if (worldCapabilityProfile.hasCapability(WorldCapability.THERMAL) && !domain.hasThermalState()) {
-			domain.bindGasRegistry(gasRegistry);
-			domain.bindThermal(thermalRegistry, domain.materialRegistry(), GasRegistry.STANDARD_TEMPERATURE_K,
-					serverConfig.maximumThermalSubstepsPerStep());
-		}
-	}
-
-	public record ControllerActivation(
-			boolean succeeded,
-			boolean disabled,
-			ControllerAction action,
-			String failure,
-			int interiorBlocks,
-			int sizeX,
-			int sizeY,
-			int sizeZ,
-			int requiredChunks
-	) {
-		private static final ControllerActivation DISABLED = new ControllerActivation(
-				false, true, null, "controller feature flag is disabled", 0, 0, 0, 0, 0
-		);
-
-		private static ControllerActivation failed(String failure) {
-			return new ControllerActivation(false, false, null, failure, 0, 0, 0, 0, 0);
-		}
-
-		private static ControllerActivation created(FluidRegionFootprint footprint) {
-			return succeeded(footprint, ControllerAction.CREATED);
-		}
-
-		private static ControllerActivation succeeded(FluidRegionFootprint footprint, ControllerAction action) {
-			return new ControllerActivation(
-					true, false, action, null, footprint.interiorBlocks().size(),
-					footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ(),
-					footprint.requiredChunks().size()
-			);
-		}
-	}
-
-	public enum ControllerAction {
-		CREATED,
-		SELECTED_RUNNING,
-		SELECTED_PAUSED,
-		PAUSED,
-		RESUMED
-	}
-
 	public record WaterEditResult(
 			boolean domainExists,
 			CellTarget target,
@@ -1297,7 +977,7 @@ public final class FluidSimulationService {
 		}
 
 		public float changedBlocks() {
-			return changedCellVolume / CELL_VOLUMES_PER_BLOCK;
+			return changedCellVolume / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK;
 		}
 	}
 

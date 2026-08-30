@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.block;
 
-import cc.ecisr.mmm.simulation.FluidSimulationService;
+import cc.ecisr.mmm.simulation.MinecraftRegionActivation;
 import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
@@ -30,8 +30,8 @@ final class FluidControllerBlock extends Block {
 		if (level.isClientSide()) return InteractionResult.SUCCESS;
 		if (!(player instanceof ServerPlayer serverPlayer)) return InteractionResult.PASS;
 
-		FluidSimulationService.ControllerActivation result = MmmRuntimeRegistry.require(level.getServer()).simulation()
-				.activateController(serverPlayer, position, player.isShiftKeyDown());
+		MinecraftRegionActivation.Result result = MmmRuntimeRegistry.require(level.getServer()).regionActivation()
+				.activate(serverPlayer, position, player.isShiftKeyDown());
 		if (result.succeeded()) {
 			String message = switch (result.action()) {
 				case CREATED -> "message.mmm.controller.activated";

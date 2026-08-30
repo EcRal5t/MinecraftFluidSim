@@ -386,6 +386,13 @@
 * 新建窄 `MinecraftRegionObservation`，只暴露主域是否存在、向玩家发送全部域、向 level 重发选中域；network join 与 GPU probe 改用它，container retry 直达 runtime-owned recovery，握手读取 committed world profile，Fabric API 直取 runtime-owned Query。network、API、GPU 对 `FluidSimulationService` import 归零，service 的无调用 Query/snapshot convenience surface 同步删除。
 * 架构门删除 `FluidProtocolServer` locator allowlist，并新增带自检 fixture 的外部 adapter→god service import 禁令；indicator/controller block 与命令的既有依赖分别明确登记到 S19e/S19f，没有隐式遗留。`compileJava`、`gpu-probe:compileJava`、`protocol` 与新增规则后的 `verifyArchitecture` 通过，架构门扫描 404 个生产源。无需进游戏：协议会话与 snapshot 路由均有自动表征，不涉及视觉或真实 `VoxelShape`。
 
+### S19e
+
+* 先复审 S19d 后的 runtime 边界，确认 network/API/GPU 已不再反取 service；进一步发现容器 actor 初稿虽改读新 registry owner，却仍借 service 完成目标解析、availability、事务与 snapshot，因而没有把消费者真正迁出。最终新增 `MinecraftRegionAvailability`，player/dispenser adapter 直接持有 target、availability、transaction、snapshot 与 committed world owner，`MinecraftContainerTransferPlan` 也只持事务 adapter，不再依赖 service。
+* 新建 `CommittedWorldRegistries`，独占 startup 证明后的 profile/registry、actual 容器 profile 绑定、材料解析与液体 U 绑定；creative source、容器 plan/operations、命令 giver 全部改读该 owner。`CELLS_PER_BLOCK`/`CELL_VOLUMES_PER_BLOCK` 归入 `FluidRegionFactory`，两个 region factory 删除永远取同一常量的形参。
+* controller 激活与 indicator 编辑分别进入 `MinecraftRegionActivation`、`MinecraftIndicatorEditing`；创建前 WAL/ownership/admission/footprint 检查、首个 HEAD 后才登记 live owner、失败文案和 indicator checkpoint-warning 语义均保持。block/item 只从 runtime 取得对应语义 owner，架构门删除二者的 S19e 例外。
+* `FluidSimulationService` 降至 984 行；`containers,materials,chemistry` 与 `verifyArchitecture` 一次 Gradle 运行通过，架构门扫描 408 个生产源。无需进游戏：本切片未改真实 `VoxelShape`，world truth/容器代数有领域门，controller commit 顺序与 indicator checkpoint 路径为逐分支结构迁移。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

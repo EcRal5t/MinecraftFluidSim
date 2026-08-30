@@ -221,7 +221,7 @@ public final class MmmCommands {
 	/** Explicit debug/creative source for exercising material controller transfers and mixtures. */
 	private static int giveMaterialBucket(CommandSourceStack source, String requested) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
+		var world = MmmRuntimeRegistry.require(source.getServer()).worldRegistries();
 		if (!hasCapability(source, WorldCapability.MATERIALS)) return fail(source, "材料功能门本次启动未开启");
 		ItemStack stack;
 		String description;
@@ -251,8 +251,8 @@ public final class MmmCommands {
 			description = material.id() + " 满材料桶";
 		}
 		if (!"empty".equals(requested)) {
-			service.bindActualContainerProfile(stack);
-			service.attachDebugLiquidThermalContents(stack);
+			world.bindActualContainerProfile(stack);
+			world.attachDebugLiquidThermalContents(stack);
 		}
 		if (!player.getInventory().add(stack)) player.drop(stack, false);
 		player.getInventory().setChanged();
@@ -262,7 +262,7 @@ public final class MmmCommands {
 	/** Explicit debug source for exercising authoritative granular controller transfers. */
 	private static int giveGranularContainer(CommandSourceStack source, String requested) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
+		var world = MmmRuntimeRegistry.require(source.getServer()).worldRegistries();
 		if (!hasCapability(source, WorldCapability.GRANULAR)) return fail(source, "颗粒功能门本次启动未开启");
 		ItemStack stack; String description;
 		if ("empty".equals(requested)) {
@@ -274,7 +274,7 @@ public final class MmmCommands {
 				default -> null;
 			};
 			if (materialId == null) return fail(source, "未知或不可直接生成的颗粒材料：" + requested);
-			var registry = service.granularRegistry();
+			var registry = world.granularRegistry();
 			var material = registry.material(registry.materialHandle(materialId));
 			if (material.reactive()) return fail(source, "反应性固体只能由守恒相转移或已有容器产生");
 			long svq = SolidVolume.SVQ_PER_BV;
@@ -282,7 +282,7 @@ public final class MmmCommands {
 			GranularTransferLedger ledger = new GranularTransferLedger(List.of(
 					new GranularTransferLedger.Group(material.id(), svq, mass, null)));
 			stack = ContainerItemStacks.toStack(GranularContents.fromLedger(ledger, registry, null));
-			service.bindActualContainerProfile(stack);
+			world.bindActualContainerProfile(stack);
 			description = material.id() + " 满干颗粒容器";
 		}
 		if (!player.getInventory().add(stack)) player.drop(stack, false);
@@ -293,7 +293,7 @@ public final class MmmCommands {
 	/** Explicit administrator source for exact chemical fixtures and indicator tools. */
 	private static int giveReagent(CommandSourceStack source, String requested) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
+		var world = MmmRuntimeRegistry.require(source.getServer()).worldRegistries();
 		if (!hasCapability(source, WorldCapability.CHEMISTRY)) return fail(source, "化学功能门本次启动未开启");
 		ItemStack stack;
 		if ("indicator".equals(requested)) {
@@ -312,7 +312,7 @@ public final class MmmCommands {
 				default -> null;
 			};
 			if (species == null) return fail(source, "未知 reagent：" + requested);
-			ChemicalRegistry registry = service.chemicalRegistry();
+			ChemicalRegistry registry = world.chemicalRegistry();
 			java.util.TreeMap<String, Long> amounts = new java.util.TreeMap<>();
 			if (species.equals(BuiltinChemicalDefinitions.H2O)) {
 				amounts.put(species, 55_555_555_556L);
@@ -330,8 +330,8 @@ public final class MmmCommands {
 					mixture.stableAmounts(registry))));
 			stack = ContainerItemStacks.toStack(
 					ChemicalContents.fromLedger(ledger, registry, ContainerFluidLedger.NANOS_PER_BLOCK));
-			service.bindActualContainerProfile(stack);
-			service.attachDebugLiquidThermalContents(stack);
+			world.bindActualContainerProfile(stack);
+			world.attachDebugLiquidThermalContents(stack);
 		}
 		if (!player.getInventory().add(stack)) player.drop(stack, false);
 		player.getInventory().setChanged();
@@ -602,8 +602,7 @@ public final class MmmCommands {
 	}
 
 	private static boolean hasCapability(CommandSourceStack source, WorldCapability capability) {
-		WorldCapabilityProfile profile = MmmRuntimeRegistry.require(source.getServer()).simulation()
-				.worldCapabilityProfile();
+		WorldCapabilityProfile profile = MmmRuntimeRegistry.require(source.getServer()).worldProfile();
 		return profile != null && profile.hasCapability(capability);
 	}
 
