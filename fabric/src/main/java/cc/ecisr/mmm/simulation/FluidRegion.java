@@ -202,6 +202,9 @@ public final class FluidRegion {
 				|| candidateGeneration != Math.addExact(solverGeneration, 1L)) {
 			throw new IllegalStateException("Backend candidate identity or generation is stale");
 		}
+		if (!state.layout().equals(domain.captureAuthoritativeState().layout())) {
+			throw new IllegalStateException("Backend candidate changed the live solver layout");
+		}
 		FluidDomain replacement = FluidDomain.restoreAuthoritativeState(state);
 		if (replacement.sizeX() != sizeX || replacement.sizeY() != sizeY || replacement.sizeZ() != sizeZ
 				|| replacement.maximumParticleCount() != reservedMarkerCapacity

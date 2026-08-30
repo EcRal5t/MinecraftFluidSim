@@ -7,6 +7,7 @@ import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.granular.GranularStateSnapshot;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -122,6 +123,48 @@ public final class FluidDomainState {
 	public FlipThermalParticleState thermal() { return thermal; }
 	public int maximumThermalTransportSubsteps() { return maximumThermalTransportSubsteps; }
 	public PendingPhaseVolumeState pendingPhaseVolume() { return pendingPhaseVolume; }
+
+	/** Immutable feature/registry identity which a backend step is not allowed to replace. */
+	public Layout layout() {
+		List<FluidMaterial> materials = switch (carrierKind) {
+			case PURE -> List.of();
+			case MATERIAL -> this.materials.materials();
+			case CHEMICAL -> chemicals.materials().materials();
+		};
+		return new Layout(config, sizeX(), sizeY(), sizeZ(), maximumParticleCount, sealedDomainBoundary,
+				carrierKind, materials,
+				chemicalRegistry == null ? "" : chemicalRegistry.fingerprint(),
+				granularRegistry == null ? "" : granularRegistry.fingerprint(), precipitationEnabled,
+				gasRegistry.fingerprint(), thermalRegistry == null ? "" : thermalRegistry.fingerprint(),
+				maximumThermalTransportSubsteps);
+	}
+
+	public record Layout(
+			FluidSolverConfig config,
+			int sizeX,
+			int sizeY,
+			int sizeZ,
+			int maximumParticleCount,
+			boolean sealedDomainBoundary,
+			CarrierKind carrierKind,
+			List<FluidMaterial> materials,
+			String chemicalRegistryFingerprint,
+			String granularRegistryFingerprint,
+			boolean precipitationEnabled,
+			String gasRegistryFingerprint,
+			String thermalRegistryFingerprint,
+			int maximumThermalTransportSubsteps
+	) {
+		public Layout {
+			Objects.requireNonNull(config, "config");
+			Objects.requireNonNull(carrierKind, "carrierKind");
+			materials = List.copyOf(materials);
+			Objects.requireNonNull(chemicalRegistryFingerprint, "chemicalRegistryFingerprint");
+			Objects.requireNonNull(granularRegistryFingerprint, "granularRegistryFingerprint");
+			Objects.requireNonNull(gasRegistryFingerprint, "gasRegistryFingerprint");
+			Objects.requireNonNull(thermalRegistryFingerprint, "thermalRegistryFingerprint");
+		}
+	}
 
 	private FlipParticleState baseParticles() {
 		return switch (carrierKind) {

@@ -122,6 +122,21 @@ public final class FluidRegionLifecycleValidation {
 		require(backendRejected && region.domain() == committed && region.solverGeneration() == 1L,
 				"backend identity mismatch changed the committed solver");
 
+		FluidDomain alteredLayout = new FluidDomain(4, 4, 4, config);
+		alteredLayout.sealDomainBoundary();
+		alteredLayout.setVolume(1, 1, 1, 0.5F);
+		FluidStepCandidate incompatible = new FluidStepCandidate(second.backendId(), second.baseGeneration(),
+				second.candidateGeneration(), alteredLayout.captureAuthoritativeState(), second.stats(),
+				second.movingBodyCoupling());
+		boolean layoutRejected = false;
+		try {
+			region.adoptStepCandidate(incompatible, backend.id());
+		} catch (IllegalStateException expected) {
+			layoutRejected = true;
+		}
+		require(layoutRejected && region.domain() == committed && region.solverGeneration() == 1L,
+				"backend candidate changed sealed/carrier/registry layout");
+
 		region.adoptStepCandidate(second, backend.id());
 		require(region.solverGeneration() == 2L, "adjacent backend candidate did not advance the generation");
 	}
