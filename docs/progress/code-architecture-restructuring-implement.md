@@ -410,6 +410,11 @@
 
 S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Brigadier 树对 `FluidSimulationService` 零 import；协议会话由单服务器 runtime owner 持有；renderer 为 69 行编排且 ledger/GPU 各有唯一 owner；命令的场景、world truth、region administration 与诊断均已迁出。剩余 service 删除及 `MmmCommandHandlers` operator 写动作迁移按架构门明示归 S21。
 
+### S20 前置复审
+
+* 沿 S19 的真实消费边界重新核对 runtime accessor、协议会话、容器 actor、方块/物品与命令路由；代码中已迁移 owner 仍然闭合，但 `system-overview` 的主数据流还把命令、方块和容器统一画入 `FluidSimulationService`，会让后续模块依赖审核重新引入 god-service 方向。
+* 权威数据流已改为 `MmmRuntime` 显式语义 owner 分流；service 只标记尚未收口的 server tick、operator 写动作与 shutdown/recovery。本修正不改运行时行为，但先消除了 S20 物理模块分层的错误依赖依据。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

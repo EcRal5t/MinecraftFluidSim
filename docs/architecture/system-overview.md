@@ -25,7 +25,7 @@ CPU `FluidDomain` 是规范求解器聚合根。GPU probe、客户端 renderer�
 
 adapter 查找只能使用 `MmmRuntimeRegistry.require/find`；查找本身不再隐式读取或发布世界状态。`MmmFabricApi.events` 仍允许在 `SERVER_STARTING` 前登记监听器：registry slot 暂存同一个 thread-safe hub，runtime 建立后接管它；只读 Query 的 pre-start lookup 返回 unavailable/wrong-thread，不触发 runtime 初始化。
 
-运行时只向外部 adapter 提供按行为命名的 owner：controller console、只读 region observation/snapshot publish、container recovery、Query、committed world profile 与 protocol sessions。协议协商状态由每个 `MmmRuntime` 的 `ProtocolSessions` 按玩家持有；`FluidProtocolServer` 只保留 configuration listener 对应的短期 pending task，不再维护 `MinecraftServer` 静态会话表。network、外部 API 与 GPU probe 不得依赖 `FluidSimulationService`。
+运行时只向外部 adapter 提供按行为命名的 owner：controller console、region activation、indicator editing、debug fixture、region administration/diagnostics/observation、player/dispenser container actor、container recovery、Query、committed world registries 与 protocol sessions。`FluidSimulationService` 仅作为尚未收口的 server tick、operator 写动作与 shutdown/recovery 编排 owner，不再是方块、物品、容器、协议、只读观察或已迁移命令的通用入口。协议协商状态由每个 `MmmRuntime` 的 `ProtocolSessions` 按玩家持有；`FluidProtocolServer` 只保留 configuration listener 对应的短期 pending task，不再维护 `MinecraftServer` 静态会话表。network、外部 API 与 GPU probe 不得依赖 `FluidSimulationService`。
 
 ## 组件与数据流
 
@@ -36,8 +36,14 @@ adapter 查找只能使用 `MmmRuntimeRegistry.require/find`；查找本身不�
   -> world-local canonical registry snapshot + fingerprint
   -> MmmRuntimeFactory / MmmRuntimeRegistry 唯一 server runtime lifetime
 
-Minecraft 命令、方块、容器、实体与 chunk 事件
-  -> FluidSimulationService                 顶层路由、线程/身份/availability 校验
+Minecraft 命令、方块、物品、容器、协议与 chunk 事件
+  -> MmmRuntime 语义 owner              console / activation / indicator / fixture
+                                          administration / diagnostics / observation
+                                          container actors / recovery / Query / protocol
+  -> 各 owner 自有的 Minecraft 授权、世界事实与事务边界
+
+server tick、实体观测与尚未迁出的 operator 写动作
+  -> FluidSimulationService                 全局 maintenance、dimension/availability 与过渡编排
   -> MinecraftRegionInputs                  碰撞/热边界/实体事实与 RegionRuntime
   -> MinecraftRegionTick                    单区域 tick command/result、失败映射与输出
   -> RegionTickUseCase / RegionRuntime       唯一轴计划、step timing 与 pacing
