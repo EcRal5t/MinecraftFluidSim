@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.item;
 
 import cc.ecisr.mmm.simulation.FluidSimulationService;
+import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
@@ -24,7 +25,8 @@ public final class ChemicalIndicatorItem extends Item {
 	@Override
 	public InteractionResult use(Level level, Player player, InteractionHand hand) {
 		if (!(player instanceof ServerPlayer serverPlayer)) return InteractionResult.SUCCESS;
-		FluidSimulationService.IndicatorUseResult result = FluidSimulationService.get(serverPlayer.level().getServer())
+		FluidSimulationService.IndicatorUseResult result = MmmRuntimeRegistry
+				.require(serverPlayer.level().getServer()).simulation()
 				.editIndicatorAtAim(serverPlayer, !eraser);
 		if (!result.accepted()) {
 			serverPlayer.sendSystemMessage(Component.translatable("message.mmm.indicator.failed", result.failure()), true);

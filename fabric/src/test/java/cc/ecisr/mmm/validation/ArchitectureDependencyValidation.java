@@ -46,7 +46,7 @@ public final class ArchitectureDependencyValidation {
 	/** Classes allowed to keep a static MinecraftServer-keyed locator, with the removing slice. */
 	private static final Map<String, String> LOCATOR_ALLOWLIST = Map.of(
 			"FluidProtocolServer", "S19",
-			"FluidSimulationService", "S14",
+			"MmmRuntimeRegistry", "server composition root",
 			"GpuProbeService", "S20");
 
 	/** gpu-probe classes allowed to touch Fabric/world integration while S20 has not split the module. */

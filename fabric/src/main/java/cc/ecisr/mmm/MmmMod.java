@@ -6,8 +6,9 @@ import cc.ecisr.mmm.item.MmmCreativeEntries;
 import cc.ecisr.mmm.item.MmmItems;
 import cc.ecisr.mmm.item.MmmRecipes;
 import cc.ecisr.mmm.network.FluidProtocolServer;
-import cc.ecisr.mmm.simulation.FluidSimulationService;
 import cc.ecisr.mmm.simulation.FluidTransferService;
+import cc.ecisr.mmm.simulation.MmmRuntime;
+import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -35,26 +36,26 @@ public final class MmmMod implements ModInitializer {
 		registerDispenserBehaviors();
 		FluidProtocolServer.register();
 		MmmCommands.register();
+		ServerLifecycleEvents.SERVER_STARTING.register(MmmRuntimeRegistry::start);
 		PlayerBlockBreakEvents.BEFORE.register((level, player, position, state, blockEntity) -> {
 			if (!(level instanceof net.minecraft.server.level.ServerLevel serverLevel)
-					|| !FluidSimulationService.get(serverLevel.getServer())
+					|| !MmmRuntimeRegistry.require(serverLevel.getServer()).simulation()
 					.isLifecycleManagedBlock(serverLevel, position)) return true;
 			player.sendSystemMessage(net.minecraft.network.chat.Component.translatable(
 					"message.mmm.controller.break_blocked"));
 			return false;
 		});
-		ServerTickEvents.END_SERVER_TICK.register(server -> FluidSimulationService.get(server).tick(server));
+		ServerTickEvents.END_SERVER_TICK.register(server ->
+				MmmRuntimeRegistry.require(server).simulation().tick(server));
 		ServerChunkEvents.CHUNK_LOAD.register((level, chunk, newlyGenerated) ->
-				FluidSimulationService.get(level.getServer()).retryUnavailableContainerTransfers(level, chunk.getPos()));
-		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
-			FluidSimulationService.recoverTakeoverBackup(server);
-			FluidSimulationService.recoverWorldOwnership(server);
-			FluidSimulationService.get(server).recoverContainerTransfers(server);
-		});
+				MmmRuntimeRegistry.require(level.getServer()).simulation()
+						.retryUnavailableContainerTransfers(level, chunk.getPos()));
+		ServerLifecycleEvents.SERVER_STARTED.register(server -> MmmRuntimeRegistry.require(server).recoverWorld(server));
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
-			FluidSimulationService.get(server).restoreAirDemoScaffolding(server);
+			MmmRuntime runtime = MmmRuntimeRegistry.find(server);
+			if (runtime != null) runtime.simulation().restoreAirDemoScaffolding(server);
 			FluidProtocolServer.clearServer(server);
-			FluidSimulationService.removeServer(server);
+			MmmRuntimeRegistry.stop(server);
 		});
 		LOGGER.info("Matter, Motion & Mechanics bounded fluid simulation initialized");
 	}

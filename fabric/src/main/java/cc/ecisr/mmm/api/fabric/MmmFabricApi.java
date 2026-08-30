@@ -6,6 +6,8 @@ import cc.ecisr.mmm.api.event.MmmEventApi;
 import cc.ecisr.mmm.api.query.FluidQueryResult;
 import cc.ecisr.mmm.api.query.FluidQueryStatus;
 import cc.ecisr.mmm.simulation.FluidSimulationService;
+import cc.ecisr.mmm.simulation.MmmRuntime;
+import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import net.minecraft.server.MinecraftServer;
 
 /** Fabric discovery bridge; the returned contract itself is loader-neutral. */
@@ -14,8 +16,8 @@ public final class MmmFabricApi {
 
 	public static MmmQueryApi query(MinecraftServer server) {
 		if (server == null) throw new IllegalArgumentException("Minecraft server is missing");
-		FluidSimulationService service = FluidSimulationService.find(server);
-		if (service != null) return service.queryApi(server);
+		MmmRuntime runtime = MmmRuntimeRegistry.find(server);
+		if (runtime != null) return runtime.simulation().queryApi(server);
 		return request -> server.isSameThread()
 				? FluidQueryResult.unavailable(RegionAvailabilityReason.PROFILE_LOCKED,
 						"Matter, Motion & Mechanics server service is not initialized")
@@ -26,6 +28,6 @@ public final class MmmFabricApi {
 	/** Registration does not initialize world state; callbacks are delivered on the server thread. */
 	public static MmmEventApi events(MinecraftServer server) {
 		if (server == null) throw new IllegalArgumentException("Minecraft server is missing");
-		return FluidSimulationService.committedEvents(server);
+		return MmmRuntimeRegistry.events(server);
 	}
 }

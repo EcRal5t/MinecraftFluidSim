@@ -4,7 +4,6 @@ import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.api.query.MmmQueryApi;
 import cc.ecisr.mmm.api.event.ContainerTransferCommittedEvent;
-import cc.ecisr.mmm.api.event.MmmEventApi;
 import cc.ecisr.mmm.api.transfer.TransferQuantity;
 import cc.ecisr.mmm.application.RegionApplicationService;
 import cc.ecisr.mmm.application.command.CheckpointRegionCommand;
@@ -17,8 +16,6 @@ import cc.ecisr.mmm.application.result.MotionStepResult;
 import cc.ecisr.mmm.application.result.ThermalStepResult;
 import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.block.ThermalReservoirBlockEntity;
-import cc.ecisr.mmm.chemistry.ChemicalDataPackLoader;
-import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.controller.ControllerConsoleAction;
@@ -43,7 +40,6 @@ import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import cc.ecisr.mmm.fluid.air.GasAuditLedger;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
-import cc.ecisr.mmm.granular.GranularDataPackLoader;
 import cc.ecisr.mmm.granular.GranularDepositDynamics;
 import cc.ecisr.mmm.granular.GranularMechanics;
 import cc.ecisr.mmm.granular.GranularPhaseTransferEngine;
@@ -60,23 +56,17 @@ import cc.ecisr.mmm.simulation.controller.FluidBoundaryScanner;
 import cc.ecisr.mmm.simulation.controller.FluidControllerRegions;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 import cc.ecisr.mmm.simulation.ownership.OwnershipJournal;
-import cc.ecisr.mmm.thermal.ThermalDataPackLoader;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
-import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalReservoirSummary;
 import cc.ecisr.mmm.thermal.WorldPositionActionSessions;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.fluid.MaterialRegistry;
-import java.util.EnumSet;
 import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 import cc.ecisr.mmm.worldprofile.WorldCapability;
 import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
-import cc.ecisr.mmm.worldprofile.RegistryFingerprintSet;
-import cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStore;
-import cc.ecisr.mmm.simulation.persistence.WorldCapabilityStartup;
 import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -94,7 +84,6 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.storage.LevelResource;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
@@ -108,7 +97,6 @@ import java.util.Map;
 import java.util.OptionalDouble;
 import java.util.Set;
 import java.util.UUID;
-import java.util.WeakHashMap;
 
 /** Adapts fluid regions to Minecraft while delegating region-state lifecycle and takeover transactions. */
 public final class FluidSimulationService {
@@ -132,15 +120,6 @@ public final class FluidSimulationService {
 	private static final long COMPATIBILITY_REGION_CELLS = (long) BLOCK_SIZE_X * BLOCK_SIZE_Y * BLOCK_SIZE_Z
 			* CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
 	private static final long COMPATIBILITY_REGION_MARKERS = COMPATIBILITY_REGION_CELLS * 8L;
-	private static final Map<MinecraftServer, FluidSimulationService> SERVICES = new WeakHashMap<>();
-	private static final Map<MinecraftServer, CommittedEventHub> COMMITTED_EVENTS = new WeakHashMap<>();
-	/**
-	 * Capabilities of a world whose bundle cannot be proven. This is the degradation, not a claim about
-	 * committed truth: nothing can be created, every stored region fails its capability check and stays
-	 * locked, and controllers stay disabled through `configurationLocked`.
-	 */
-	private static final WorldCapabilityProfile UNPROVEN_CAPABILITIES = WorldCapabilityProfile.of(
-			EnumSet.noneOf(WorldCapability.class), new RegistryFingerprintSet("", "", "", "", ""));
 
 	private final Map<BlockPos, BlockState> takeoverOriginalBlocks = new HashMap<>();
 	private final Path worldRoot;
@@ -176,8 +155,8 @@ public final class FluidSimulationService {
 	private boolean defaultDebugOverlays;
 	private boolean controllerFeatureEnabled;
 	private final boolean worldBridgeFeatureEnabled;
-	/** Startup proof retained so no authoritative write can use the fail-closed empty profile. */
-	private final WorldCapabilityStartup.Result capabilityStartup;
+	/** Typed startup proof retained so no authoritative write can use the fail-closed empty profile. */
+	private final WorldStartupCoordinator.Result startup;
 	/** Committed profile, or an empty fail-closed value while startup is not provable. */
 	private final WorldCapabilityProfile worldCapabilityProfile;
 	private final MaterialRegistry materialRegistry;
@@ -190,168 +169,44 @@ public final class FluidSimulationService {
 	private String lastTakeoverFailure;
 	private boolean takeoverMaintenanceEnabled;
 
-	private FluidSimulationService(MinecraftServer server) {
-		worldRoot = server.getWorldPath(LevelResource.ROOT);
-		boolean configurationLocked = false;
-		boolean serverConfigurationUnreadable = false;
-		try {
-			serverConfig = FluidServerConfig.loadOrCreate(worldRoot);
-		} catch (IOException exception) {
-			serverConfig = FluidServerConfig.defaults();
-			configurationLocked = true;
-			serverConfigurationUnreadable = true;
-			MmmMod.LOGGER.error("Could not load Matter, Motion & Mechanics world config; controllers remain disabled", exception);
-		}
-		// The bundle is opened before anything else can write authority: it is the only interpretation of
-		// every region payload, so a world that cannot prove it is LOCKED rather than reinterpreted.
-		capabilityStartup = WorldCapabilityStartup.start(
-				new WorldCapabilityBundleStore(worldRoot, new WorldCapabilityBundleStore.QuarantineAdmission(
-						serverConfig.maximumQuarantineEntries(), serverConfig.maximumQuarantineBytes())),
-				() -> loadCapabilityDefinitions(server), !configurationLocked);
-		if (capabilityStartup.definitionMismatch()) {
-			MmmMod.LOGGER.warn("Current datapack definitions differ from the committed world capability profile {}; "
-					+ "existing inventory keeps world semantics", capabilityStartup.bundle().profile().profileFingerprint());
-		}
-		if (capabilityStartup.state() != WorldCapabilityStartup.State.READY) {
-			configurationLocked = true;
-			MmmMod.LOGGER.error("Matter, Motion & Mechanics world capability profile is {}; controllers remain disabled: {}",
-					capabilityStartup.state(), capabilityStartup.issue());
-		}
-		boolean proven = capabilityStartup.bundle() != null;
-		WorldCapabilityProfile profile = proven ? capabilityStartup.bundle().profile() : UNPROVEN_CAPABILITIES;
-		materialRegistry = proven ? capabilityStartup.bundle().material() : null;
-		chemicalRegistry = proven ? capabilityStartup.bundle().chemical() : null;
-		granularRegistry = proven ? capabilityStartup.bundle().granular() : null;
-		gasRegistry = proven ? capabilityStartup.bundle().gas() : null;
-		thermalRegistry = proven ? capabilityStartup.bundle().thermal() : null;
-		if (proven) {
-			validateSupportedChemicalMaterials(chemicalRegistry);
-			validateSupportedGranularCarriers(granularRegistry);
-			validateSupportedGasComponents(gasRegistry, chemicalRegistry);
-			validateSupportedThermalCarriers(thermalRegistry, chemicalRegistry, granularRegistry, gasRegistry);
-			thermalBoundaryResolver = new ThermalBoundaryResolver(thermalRegistry);
-		} else {
-			thermalBoundaryResolver = null;
-		}
-		worldCapabilityProfile = profile;
-		serverConfigLocked = serverConfigurationUnreadable;
-		controllerFeatureEnabled = !serverConfigurationUnreadable && serverConfig.controllersEnabled();
-		worldBridgeFeatureEnabled = !serverConfigurationUnreadable && serverConfig.worldBridgeEnabled();
-		regionManager = new FluidRegionManager(serverConfig.limits());
-		committedEvents = committedEventHub(server);
-		targets = new FluidWorldTargetResolver(regionManager);
-		regionOperations = new FluidRegionOperations(worldRoot, regionManager, configurationLocked, proven, profile,
-				chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry,
-				serverConfig.maximumThermalSubstepsPerStep());
-		regionOperations.recoverRemovedQuarantines(serverConfig.maximumQuarantineEntries(),
-				serverConfig.maximumQuarantineBytes());
-		snapshots = new FluidSnapshotPublisher(profile, chemicalRegistry, granularRegistry, thermalRegistry);
-		containerTransfers = new ContainerTransferStore(worldRoot);
-		loadContainerTransferIndex();
-		regionApplication = new RegionApplicationService(solverBackend,
+	FluidSimulationService(
+			WorldStartupCoordinator.Result startup,
+			FluidRegionManager regionManager,
+			FluidRegionOperations regionOperations,
+			FluidSnapshotPublisher snapshots,
+			ContainerTransferStore containerTransfers,
+			Map<UUID, ContainerTransferJournal> indexedContainerTransfers,
+			Set<String> indexedContainerTransferIssues,
+			List<String> ownershipIssues,
+			CommittedEventHub committedEvents
+	) {
+		this.startup = java.util.Objects.requireNonNull(startup, "World startup result");
+		this.worldRoot = startup.worldRoot();
+		this.serverConfig = startup.config();
+		this.serverConfigLocked = !startup.policyReadable();
+		this.controllerFeatureEnabled = startup.policyReadable() && serverConfig.controllersEnabled();
+		this.worldBridgeFeatureEnabled = startup.policyReadable() && serverConfig.worldBridgeEnabled();
+		this.worldCapabilityProfile = startup.profile();
+		RegistryBundleLoader.RegistryBundle registries = startup.registries();
+		this.materialRegistry = registries == null ? null : registries.material();
+		this.chemicalRegistry = registries == null ? null : registries.chemical();
+		this.granularRegistry = registries == null ? null : registries.granular();
+		this.gasRegistry = registries == null ? null : registries.gas();
+		this.thermalRegistry = registries == null ? null : registries.thermal();
+		this.thermalBoundaryResolver = thermalRegistry == null ? null : new ThermalBoundaryResolver(thermalRegistry);
+		this.regionManager = java.util.Objects.requireNonNull(regionManager, "Region manager");
+		this.committedEvents = java.util.Objects.requireNonNull(committedEvents, "Committed event hub");
+		this.targets = new FluidWorldTargetResolver(regionManager);
+		this.regionOperations = java.util.Objects.requireNonNull(regionOperations, "Region operations");
+		this.snapshots = java.util.Objects.requireNonNull(snapshots, "Snapshot publisher");
+		this.containerTransfers = java.util.Objects.requireNonNull(containerTransfers, "Container transfer store");
+		this.indexedContainerTransfers.putAll(indexedContainerTransfers);
+		this.indexedContainerTransferIssues = Set.copyOf(indexedContainerTransferIssues);
+		this.ownershipIssues = List.copyOf(ownershipIssues);
+		this.regionApplication = new RegionApplicationService(solverBackend,
 				new FluidRegionRepository(regionManager), regionOperations,
 				new ControllerSummaryAdapter(regionManager, regionOperations, worldCapabilityProfile, thermalRegistry,
 						this::hasPendingContainerTransfer, this::authoritativeWritesReady, worldBridgeFeatureEnabled));
-		if (serverConfigurationUnreadable) regionOperations.recordIssue(
-				"server.properties 不可用，已安全使用默认预算并关闭控制器；原文件未覆盖");
-		if (capabilityStartup.state() != WorldCapabilityStartup.State.READY) {
-			regionOperations.recordIssue("world capability startup " + capabilityStartup.state()
-					+ "：" + capabilityStartup.issue());
-		}
-		ownershipIssues = regionOperations.scanOwnershipIssues();
-		for (String issue : ownershipIssues) MmmMod.LOGGER.error("Matter, Motion & Mechanics world ownership issue: {}", issue);
-	}
-
-	/** Loads the datapack registries that form the world capability bundle on first publication. */
-	private WorldCapabilityBundleStore.Definitions loadCapabilityDefinitions(MinecraftServer server) throws IOException {
-		MaterialRegistry material = BuiltinFluidMaterials.createRegistry();
-		ChemicalRegistry chemical = ChemicalDataPackLoader.load(server.getResourceManager());
-		GranularRegistry granular = GranularDataPackLoader.load(server.getResourceManager(), chemical);
-		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
-		ThermalRegistry thermal = ThermalDataPackLoader.load(server.getResourceManager(), chemical.fingerprint(),
-				granular.fingerprint(), gas.fingerprint());
-		return new WorldCapabilityBundleStore.Definitions(EnumSet.allOf(WorldCapability.class),
-				material, chemical, granular, gas, thermal);
-	}
-
-	private static void validateSupportedChemicalMaterials(ChemicalRegistry registry) {
-		for (var material : BuiltinFluidMaterials.DEFAULT_PALETTE) registry.phaseHandleForMaterial(material.id());
-	}
-
-	private static void validateSupportedGranularCarriers(GranularRegistry registry) {
-		for (var material : BuiltinFluidMaterials.DEFAULT_PALETTE) {
-			if (!registry.hasCarrier(material.id())) throw new IllegalArgumentException(
-					"Granular registry has no carrier for " + material.id());
-		}
-	}
-
-	private static void validateSupportedGasComponents(GasRegistry registry, ChemicalRegistry chemicalRegistry) {
-		registry.component(BuiltinGasDefinitions.AIR);
-		registry.component(BuiltinGasDefinitions.WATER_VAPOR);
-		for (var component : registry.components()) for (String species : component.allowedSpecies()) {
-			if (chemicalRegistry != null && !chemicalRegistry.hasSpecies(species)) {
-				throw new IllegalArgumentException("Gas component " + component.id()
-						+ " allows unavailable chemical species " + species);
-			}
-		}
-	}
-
-	private static void validateSupportedThermalCarriers(
-			ThermalRegistry registry, ChemicalRegistry chemicalRegistry,
-			GranularRegistry granularRegistry, GasRegistry gasRegistry
-	) {
-		for (var material : BuiltinFluidMaterials.DEFAULT_PALETTE) {
-			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, material.id());
-			LiquidThermalExpansion.require(material.id());
-		}
-		if (granularRegistry != null) for (var material : granularRegistry.materials()) {
-			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, material.id());
-		}
-		for (var component : gasRegistry.components()) {
-			int host = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS, component.id());
-			if (chemicalRegistry != null) for (String species : component.allowedSpecies()) {
-				registry.speciesOffset(host, species);
-			}
-		}
-		if (chemicalRegistry != null) for (var phase : chemicalRegistry.phases()) {
-			int host = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, phase.materialId());
-			for (String species : phase.allowedSpecies()) registry.speciesOffset(host, species);
-		}
-		if (granularRegistry != null) for (var reaction : granularRegistry.reactions()) {
-			int host = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR,
-					reaction.solidMaterialId());
-			for (String species : reaction.solidComposition().keySet()) registry.speciesOffset(host, species);
-		}
-		if (!registry.gasLiquidPairs().isEmpty() && chemicalRegistry == null) {
-			throw new IllegalArgumentException("Gas/liquid species pairs require a chemical registry");
-		}
-		for (var pair : registry.gasLiquidPairs()) {
-			var component = gasRegistry.component(pair.gasComponentId());
-			if (!component.allowsSpecies(pair.speciesId())) throw new IllegalArgumentException(
-					"Gas/liquid pair " + pair.id() + " maps species outside gas component " + component.id());
-			var phase = chemicalRegistry.phase(chemicalRegistry.phaseHandle(pair.liquidPhaseId()));
-			if (!phase.allowedSpecies().contains(pair.speciesId())) throw new IllegalArgumentException(
-					"Gas/liquid pair " + pair.id() + " maps species outside liquid phase " + phase.id());
-			int gasHost = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS, component.id());
-			int liquidHost = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, phase.materialId());
-			registry.speciesOffset(gasHost, pair.speciesId());
-			registry.speciesOffset(liquidHost, pair.speciesId());
-			double mappedGasKilograms = component.standardMassPerCubicMeter()
-					* AirNetwork.cubicMeters(pair.gasStandardVolumeNanosPerBatch());
-			if (Double.doubleToRawLongBits(mappedGasKilograms)
-					!= Double.doubleToRawLongBits(pair.gasKilogramsPerBatch())) {
-				throw new IllegalArgumentException("Gas/liquid pair " + pair.id()
-						+ " gas nanos and kilograms do not close at the gas standard state");
-			}
-			double mappedLiquidKilograms = chemicalRegistry.species(
-					chemicalRegistry.speciesHandle(pair.speciesId())).massKilogramsPerAu()
-					.multiply(pair.liquidQuantaPerBatch()).divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
-			if (Double.doubleToRawLongBits(mappedLiquidKilograms)
-					!= Double.doubleToRawLongBits(pair.liquidKilogramsPerBatch())) {
-				throw new IllegalArgumentException("Gas/liquid pair " + pair.id()
-						+ " liquid quanta and kilograms do not close against the chemical species mass");
-			}
-		}
 	}
 
 	void writeContainerTransfer(ContainerTransferJournal journal) throws IOException {
@@ -368,26 +223,6 @@ public final class FluidSimulationService {
 		awaitingContainerActors.remove(transactionId);
 	}
 
-	private void loadContainerTransferIndex() {
-		indexedContainerTransfers.clear();
-		auditedContainerTransfers.clear();
-		awaitingContainerActors.clear();
-		try {
-			ContainerTransferStore.Scan scan = containerTransfers.scan();
-			HashSet<String> issues = new HashSet<>(scan.issues());
-			for (UUID transactionId : scan.transactions()) try {
-				ContainerTransferJournal journal = containerTransfers.read(transactionId);
-				indexedContainerTransfers.put(transactionId, journal);
-			} catch (IOException | RuntimeException unreadable) {
-				issues.add("unreadable indexed container-transfer WAL is preserved: "
-						+ transactionId + " (" + unreadable.getMessage() + ")");
-			}
-			indexedContainerTransferIssues = Set.copyOf(issues);
-		} catch (IOException | RuntimeException scanFailure) {
-			indexedContainerTransferIssues = Set.of(
-					"container-transfer boot scan failed: " + scanFailure.getMessage());
-		}
-	}
 
 	long committedRegionGeneration(UUID regionId) throws IOException {
 		return regionOperations.committedGeneration(regionId);
@@ -529,7 +364,7 @@ public final class FluidSimulationService {
 			ContainerTransferJournal journal = indexedContainerTransfers.get(transactionId);
 			if (journal == null) return;
 			try {
-				journal.validateProfileFingerprint(capabilityStartup.bundle() == null
+				journal.validateProfileFingerprint(!startup.profileProven()
 						? null : worldCapabilityProfile.profileFingerprint());
 			} catch (RuntimeException foreignProfile) {
 				auditedContainerTransfers.add(transactionId);
@@ -700,42 +535,9 @@ public final class FluidSimulationService {
 				quantity);
 	}
 
-	public static synchronized FluidSimulationService get(MinecraftServer server) {
-		return SERVICES.computeIfAbsent(server, FluidSimulationService::new);
-	}
-
-	/** Stable Fabric discovery can register listeners without constructing the world service. */
-	public static synchronized MmmEventApi committedEvents(MinecraftServer server) {
-		if (server == null) throw new IllegalArgumentException("Minecraft server is missing");
-		return committedEventHub(server);
-	}
-
-	private static CommittedEventHub committedEventHub(MinecraftServer server) {
-		return COMMITTED_EVENTS.computeIfAbsent(server, ignored -> new CommittedEventHub());
-	}
-
-	/** Read-only lookup used by external APIs; unlike get(), this never initializes world state. */
-	public static synchronized FluidSimulationService find(MinecraftServer server) {
-		return SERVICES.get(server);
-	}
-
-
-
-
-	public static synchronized void removeServer(MinecraftServer server) {
-		FluidSimulationService service = SERVICES.remove(server);
-		if (service != null) {
-			service.checkpointForShutdown();
-			service.restoreTakeover(server);
-		}
-		CommittedEventHub events = COMMITTED_EVENTS.remove(server);
-		if (events != null) events.clear();
-	}
-
-	public static void recoverTakeoverBackup(MinecraftServer server) {
-		FluidSimulationService service = get(server);
-		for (String issue : service.regionOperations.issues()) MmmMod.LOGGER.error("Matter, Motion & Mechanics persistent region issue: {}", issue);
-		RestorationStats result = service.restoreTakeover(server);
+	void recoverTakeoverBackup(MinecraftServer server) {
+		for (String issue : regionOperations.issues()) MmmMod.LOGGER.error("Matter, Motion & Mechanics persistent region issue: {}", issue);
+		RestorationStats result = restoreTakeover(server);
 		if (result.completed() && result.journalFound()) {
 			MmmMod.LOGGER.warn(
 					"Recovered unfinished Matter, Motion & Mechanics takeover: restored {} blocks, already restored {}, skipped {} occupied positions",
@@ -745,15 +547,14 @@ public final class FluidSimulationService {
 	}
 
 	/** Boot-time ownership recovery; refreshes the issue list so resolved WALs stop locking creation. */
-	public static void recoverWorldOwnership(MinecraftServer server) {
-		FluidSimulationService service = get(server);
-		List<String> failures = service.regionOperations.recoverUnfinishedOwnership(server);
-		List<String> refreshed = new java.util.ArrayList<>(service.regionOperations.scanOwnershipIssues());
+	void recoverWorldOwnership(MinecraftServer server) {
+		List<String> failures = regionOperations.recoverUnfinishedOwnership(server);
+		List<String> refreshed = new java.util.ArrayList<>(regionOperations.scanOwnershipIssues());
 		for (String failure : failures) {
 			refreshed.add(failure);
 			MmmMod.LOGGER.error("Matter, Motion & Mechanics world ownership recovery failed: {}", failure);
 		}
-		service.ownershipIssues = refreshed;
+		ownershipIssues = refreshed;
 	}
 
 	public boolean exists() {
@@ -770,12 +571,12 @@ public final class FluidSimulationService {
 	}
 
 	boolean authoritativeWritesReady() {
-		return !serverConfigLocked && capabilityStartup.state() == WorldCapabilityStartup.State.READY;
+		return startup.authoritativeWritesReady();
 	}
 
 	private String authoritativeWriteFailure(String operation) {
-		if (capabilityStartup.state() != WorldCapabilityStartup.State.READY) {
-			return operation + "失败：world capability startup=" + capabilityStartup.state()
+		if (!startup.authoritativeWritesReady() && startup.state() != WorldStartupCoordinator.State.READY) {
+			return operation + "失败：world capability startup=" + startup.state()
 					+ "；不可证明的 profile 不会创建或改写区域";
 		}
 		return operation + "失败：server.properties 未通过校验；原文件已保留，请修复后重启服务器";
@@ -804,7 +605,7 @@ public final class FluidSimulationService {
 
 	/** Stable read-only API surface; construction performs no world or region I/O. */
 	public MmmQueryApi queryApi(MinecraftServer server) {
-		return new FabricFluidQueryApi(server, regionManager, capabilityStartup.bundle() != null);
+		return new FabricFluidQueryApi(server, regionManager, startup.profileProven());
 	}
 
 	/** Read-only companion to Query for cell-local solid/gas carriers; callers first resolve a unique interior point. */
@@ -857,7 +658,7 @@ public final class FluidSimulationService {
 				controllerPosition.getY() + 0.5, controllerPosition.getZ() + 0.5) > 64.0) return null;
 		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) return null;
 		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
-		if (region == null || capabilityStartup.bundle() == null) return null;
+		if (region == null || !startup.profileProven()) return null;
 		long summaryGeneration = controllerConsoleSessions.issue(player.getUUID(), region.id());
 		ControllerSummaryResult result = regionApplication.controllerSummary(
 				new ControllerSummaryCommand(region.id(), summaryGeneration));
@@ -1403,7 +1204,7 @@ public final class FluidSimulationService {
 	public ItemStack bindActualContainerProfile(ItemStack stack) {
 		if (stack.get(MmmComponents.FLUID_VOLUME) != null || stack.get(MmmComponents.CHEMICAL_CONTENTS) != null
 				|| stack.get(MmmComponents.GRANULAR_CONTENTS) != null) {
-			if (capabilityStartup.bundle() == null) {
+			if (!startup.profileProven()) {
 				throw new IllegalStateException("Authoritative world profile is unavailable");
 			}
 			ContainerItemStacks.bindProfile(stack, worldCapabilityProfile.profileFingerprint());
@@ -1412,7 +1213,7 @@ public final class FluidSimulationService {
 	}
 
 	boolean acceptsActualContainerProfile(ItemStack stack) {
-		return capabilityStartup.bundle() != null && worldCapabilityProfile.profileFingerprint().equals(
+		return startup.profileProven() && worldCapabilityProfile.profileFingerprint().equals(
 				ContainerItemStacks.profileFingerprint(stack));
 	}
 
@@ -2708,7 +2509,7 @@ public final class FluidSimulationService {
 	}
 
 
-	private void checkpointForShutdown() {
+	void checkpointForShutdown() {
 		regionOperations.checkpointForShutdown(region -> !hasPendingContainerTransfer(region.id()));
 	}
 

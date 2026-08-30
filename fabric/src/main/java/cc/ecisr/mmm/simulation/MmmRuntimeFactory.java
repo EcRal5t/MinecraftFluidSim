@@ -1,0 +1,96 @@
+package cc.ecisr.mmm.simulation;
+
+import cc.ecisr.mmm.MmmMod;
+import cc.ecisr.mmm.transfer.ContainerTransferJournal;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.level.storage.LevelResource;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+
+/** The only world-runtime composition root; all construction-time I/O is sequenced here. */
+public final class MmmRuntimeFactory {
+	private MmmRuntimeFactory() { }
+
+	static MmmRuntime create(MinecraftServer server, CommittedEventHub committedEvents) {
+		Objects.requireNonNull(server, "Minecraft server");
+		Objects.requireNonNull(committedEvents, "Committed event hub");
+		Path worldRoot = server.getWorldPath(LevelResource.ROOT);
+		WorldStartupCoordinator.Result startup = WorldStartupCoordinator.start(worldRoot,
+				() -> RegistryBundleLoader.loadDefinitions(server));
+		logStartup(startup);
+
+		FluidServerConfig config = startup.config();
+		RegistryBundleLoader.RegistryBundle registries = startup.registries();
+		FluidRegionManager regionManager = new FluidRegionManager(config.limits());
+		FluidRegionOperations regionOperations = new FluidRegionOperations(worldRoot, regionManager,
+				startup.creationLocked(), startup.profileProven(), startup.profile(),
+				registries == null ? null : registries.chemical(),
+				registries == null ? null : registries.granular(),
+				registries == null ? null : registries.thermal(),
+				registries == null ? null : registries.gas(), config.maximumThermalSubstepsPerStep());
+		regionOperations.recoverRemovedQuarantines(config.maximumQuarantineEntries(), config.maximumQuarantineBytes());
+		for (WorldStartupCoordinator.Issue issue : startup.issues()) if (issue.blocksCreation()) {
+			regionOperations.recordIssue("startup " + issue.stage() + "/" + issue.code() + ": " + issue.detail());
+		}
+		List<String> ownershipIssues = regionOperations.scanOwnershipIssues();
+		for (String issue : ownershipIssues) {
+			MmmMod.LOGGER.error("Matter, Motion & Mechanics world ownership issue: {}", issue);
+		}
+
+		ContainerTransferStore containerTransfers = new ContainerTransferStore(worldRoot);
+		ContainerTransferIndex containerIndex = discoverContainerTransfers(containerTransfers);
+		FluidSnapshotPublisher snapshots = new FluidSnapshotPublisher(startup.profile(),
+				registries == null ? null : registries.chemical(),
+				registries == null ? null : registries.granular(),
+				registries == null ? null : registries.thermal());
+		FluidSimulationService simulation = new FluidSimulationService(startup, regionManager, regionOperations,
+				snapshots, containerTransfers, containerIndex.journals(), containerIndex.issues(),
+				ownershipIssues, committedEvents);
+		return new MmmRuntime(simulation, committedEvents, startup);
+	}
+
+	private static ContainerTransferIndex discoverContainerTransfers(ContainerTransferStore store) {
+		Map<UUID, ContainerTransferJournal> journals = new HashMap<>();
+		Set<String> issues = new HashSet<>();
+		try {
+			ContainerTransferStore.Scan scan = store.scan();
+			issues.addAll(scan.issues());
+			for (UUID transactionId : scan.transactions()) try {
+				journals.put(transactionId, store.read(transactionId));
+			} catch (IOException | RuntimeException unreadable) {
+				issues.add("unreadable indexed container-transfer WAL is preserved: "
+						+ transactionId + " (" + message(unreadable) + ")");
+			}
+		} catch (IOException | RuntimeException scanFailure) {
+			issues.add("container-transfer boot scan failed: " + message(scanFailure));
+		}
+		return new ContainerTransferIndex(Map.copyOf(journals), Set.copyOf(issues));
+	}
+
+	private static void logStartup(WorldStartupCoordinator.Result startup) {
+		for (WorldStartupCoordinator.Issue issue : startup.issues()) {
+			String text = "Matter, Motion & Mechanics startup " + issue.stage() + "/" + issue.code()
+					+ ": " + issue.detail();
+			if (issue.severity() == WorldStartupCoordinator.Severity.ERROR) MmmMod.LOGGER.error(text);
+			else MmmMod.LOGGER.warn(text);
+		}
+	}
+
+	private static String message(Throwable failure) {
+		String detail = failure.getMessage();
+		return detail == null || detail.isBlank() ? failure.getClass().getSimpleName() : detail;
+	}
+
+	private record ContainerTransferIndex(
+			Map<UUID, ContainerTransferJournal> journals,
+			Set<String> issues
+	) { }
+}

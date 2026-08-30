@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.block;
 
 import cc.ecisr.mmm.simulation.FluidSimulationService;
+import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
@@ -29,7 +30,7 @@ final class FluidControllerBlock extends Block {
 		if (level.isClientSide()) return InteractionResult.SUCCESS;
 		if (!(player instanceof ServerPlayer serverPlayer)) return InteractionResult.PASS;
 
-		FluidSimulationService.ControllerActivation result = FluidSimulationService.get(level.getServer())
+		FluidSimulationService.ControllerActivation result = MmmRuntimeRegistry.require(level.getServer()).simulation()
 				.activateController(serverPlayer, position, player.isShiftKeyDown());
 		if (result.succeeded()) {
 			String message = switch (result.action()) {

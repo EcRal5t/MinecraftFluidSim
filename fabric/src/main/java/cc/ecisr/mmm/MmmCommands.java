@@ -20,6 +20,7 @@ import cc.ecisr.mmm.granular.BuiltinGranularDefinitions;
 import cc.ecisr.mmm.granular.GranularTransferLedger;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.simulation.FluidSimulationService;
+import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import cc.ecisr.mmm.simulation.FluidRegion;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
@@ -177,7 +178,7 @@ public final class MmmCommands {
 
 	private static int createDemo(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		if (!service.createDemo(player)) {
 			return fail(source, "无法替换活动域：" + service.lastTakeoverFailure());
 		}
@@ -186,7 +187,7 @@ public final class MmmCommands {
 
 	private static int createMaterialDemo(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		if (!service.createMaterialDemo(player)) {
 			return fail(source, "无法创建多材料测试域：" + service.lastTakeoverFailure());
 		}
@@ -195,7 +196,7 @@ public final class MmmCommands {
 
 	private static int createChemistryDemo(CommandSourceStack source) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		if (!service.createChemistryDemo(player)) {
 			return fail(source, "无法创建酸碱化学测试域：" + service.lastTakeoverFailure());
 		}
@@ -204,7 +205,7 @@ public final class MmmCommands {
 
 	private static int createControllerDemo(CommandSourceStack source) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		net.minecraft.core.BlockPos controller = service.createControllerDemo(player);
 		if (controller == null) {
 			return fail(source, "无法创建快速控制器域：" + service.lastTakeoverFailure());
@@ -216,7 +217,7 @@ public final class MmmCommands {
 	/** Explicit debug/creative source for exercising material controller transfers and mixtures. */
 	private static int giveMaterialBucket(CommandSourceStack source, String requested) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		if (!hasCapability(source, WorldCapability.MATERIALS)) return fail(source, "材料功能门本次启动未开启");
 		ItemStack stack;
 		String description;
@@ -257,7 +258,7 @@ public final class MmmCommands {
 	/** Explicit debug source for exercising authoritative granular controller transfers. */
 	private static int giveGranularContainer(CommandSourceStack source, String requested) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		if (!hasCapability(source, WorldCapability.GRANULAR)) return fail(source, "颗粒功能门本次启动未开启");
 		ItemStack stack; String description;
 		if ("empty".equals(requested)) {
@@ -288,7 +289,7 @@ public final class MmmCommands {
 	/** Explicit administrator source for exact chemical fixtures and indicator tools. */
 	private static int giveReagent(CommandSourceStack source, String requested) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		if (!hasCapability(source, WorldCapability.CHEMISTRY)) return fail(source, "化学功能门本次启动未开启");
 		ItemStack stack;
 		if ("indicator".equals(requested)) {
@@ -336,7 +337,7 @@ public final class MmmCommands {
 	private static int createTensionDemo(CommandSourceStack source, int angleDegrees)
 			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		if (!service.createTensionDemo(player, angleDegrees)) {
 			return fail(source, "无法创建表面张力测试域：" + service.lastTakeoverFailure());
 		}
@@ -350,7 +351,7 @@ public final class MmmCommands {
 			return fail(source, "airdemo 模式必须是 pressure 或 vacuum");
 		}
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		if (!service.createAirDemo(player, vacuum)) {
 			return fail(source, "无法创建气压测试域：" + service.lastTakeoverFailure());
 		}
@@ -363,7 +364,7 @@ public final class MmmCommands {
 
 	private static int capture(CommandSourceStack source, boolean takeover) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		FluidSimulationService.CaptureResult result = service.captureNearbyWater(player, takeover);
 		if (result.failure() != null) {
 			return fail(source, (takeover ? "接管" : "捕获") + "已取消：" + result.failure());
@@ -379,7 +380,7 @@ public final class MmmCommands {
 	}
 
 	private static int setPaused(CommandSourceStack source, boolean paused) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		if (!service.exists()) return fail(source, "请先使用 /mmm demo 或 /mmm capture");
 		if (!service.setPaused(paused, source.getLevel())) {
 			return fail(source, "流体域当前不能运行；" + service.status(source.getServer()));
@@ -390,7 +391,7 @@ public final class MmmCommands {
 	private static int editWater(CommandSourceStack source, int buckets, boolean pour)
 			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		FluidSimulationService.WaterEditResult result = pour
 				? service.pourWater(player, buckets)
 				: service.drainWater(player, buckets);
@@ -411,7 +412,7 @@ public final class MmmCommands {
 	}
 
 	private static int emptyRegion(CommandSourceStack source) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		String result = service.emptySelectedRegion(source.getLevel());
 		if (result.contains("失败") || result.startsWith("没有")) return fail(source, result);
 		return succeed(source, result, 1);
@@ -419,7 +420,7 @@ public final class MmmCommands {
 
 
 	private static int refreshCollisions(CommandSourceStack source) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		if (!service.exists()) return fail(source, "请先使用 /mmm demo 或 /mmm capture");
 		FluidRegion.CollisionStats stats = service.refreshCollisions(source.getLevel());
 		service.sendSnapshot(source.getLevel());
@@ -431,32 +432,32 @@ public final class MmmCommands {
 	}
 
 	private static int entityPhysicsStatus(CommandSourceStack source) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		int result = service.entityPhysicsEnabled() ? 1 : 0;
 		return succeed(source, "实体水动力：" + (service.entityPhysicsEnabled() ? "开启" : "关闭"), result);
 	}
 
 	private static int setEntityPhysics(CommandSourceStack source, boolean enabled) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		service.setEntityPhysicsEnabled(enabled);
 		return succeed(source, "实体水动力已" + (enabled ? "开启" : "关闭"), 1);
 	}
 
 	private static int controllerFeatureStatus(CommandSourceStack source) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		return succeed(source, "控制器功能门：" + (service.controllerFeatureEnabled() ? "开启" : "关闭"),
 				service.controllerFeatureEnabled() ? 1 : 0);
 	}
 
 	private static int setControllerFeature(CommandSourceStack source, boolean enabled) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		String failure = service.setControllerFeatureEnabled(enabled);
 		if (failure != null) return fail(source, "控制器功能门未改变；配置原子发布失败：" + failure);
 		return succeed(source, "控制器功能门已" + (enabled ? "开启" : "关闭；现有控制器域已暂停但未删除"), 1);
 	}
 
 	private static int worldBridgeFeatureStatus(CommandSourceStack source) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		boolean live = service.worldBridgeFeatureEnabled();
 		boolean configured = service.configuredWorldBridgeFeatureEnabled();
 		String message = "世界桥功能门：本次启动" + (live ? "开启" : "关闭") + "，配置（下次重启生效）" + (configured ? "开启" : "关闭");
@@ -464,7 +465,7 @@ public final class MmmCommands {
 	}
 
 	private static int setWorldBridgeFeature(CommandSourceStack source, boolean enabled) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		String failure = service.setWorldBridgeFeatureForRestart(enabled);
 		if (failure != null) return fail(source, "世界桥功能门未改变；配置原子发布失败：" + failure);
 		return succeed(source, "世界桥功能门配置已" + (enabled ? "开启" : "关闭")
@@ -474,7 +475,7 @@ public final class MmmCommands {
 
 
 	private static int transferWalFaultStatus(CommandSourceStack source) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		return succeed(source, "容器转移故障注入点：" + service.containerTransferFault(), 1);
 	}
 
@@ -490,36 +491,38 @@ public final class MmmCommands {
 			default -> null;
 		};
 		if (point == null) return fail(source, "未知故障注入点：" + pointName);
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		service.setContainerTransferFault(point);
 		return succeed(source, "容器转移故障注入点已设为 " + point, 1);
 	}
 
 	private static int ownershipReport(CommandSourceStack source) {
-		return succeed(source, FluidSimulationService.get(source.getServer()).ownershipReport(source.getServer()), 1);
+		return succeed(source, MmmRuntimeRegistry.require(source.getServer()).simulation()
+				.ownershipReport(source.getServer()), 1);
 	}
 
 	private static int listRegions(CommandSourceStack source) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		java.util.List<String> regions = service.regionSummaries();
 		if (regions.isEmpty()) return succeed(source, "没有已登记区域；" + service.status(source.getServer()), 0);
 		return succeed(source, "区域列表（* 为当前选择）：\n" + String.join("\n", regions), regions.size());
 	}
 
 	private static int selectRegion(CommandSourceStack source, String prefix) {
-		FluidSimulationService.SelectionResult result = FluidSimulationService.get(source.getServer()).selectRegion(prefix);
+		FluidSimulationService.SelectionResult result = MmmRuntimeRegistry.require(source.getServer()).simulation()
+				.selectRegion(prefix);
 		if (!result.succeeded()) return fail(source, result.failure());
 		return succeed(source, "已选择区域 " + result.regionId() + "；区域保持原有暂停/运行状态", 1);
 	}
 
 	private static int checkpointRegion(CommandSourceStack source) {
-		String result = FluidSimulationService.get(source.getServer()).checkpointSelected();
+		String result = MmmRuntimeRegistry.require(source.getServer()).simulation().checkpointSelected();
 		if (result.contains("失败") || result.startsWith("没有")) return fail(source, result);
 		return succeed(source, result, 1);
 	}
 
 	private static int recoverPreviousRegion(CommandSourceStack source, long expectedCheckpoint) {
-		String result = FluidSimulationService.get(source.getServer())
+		String result = MmmRuntimeRegistry.require(source.getServer()).simulation()
 				.recoverSelectedPreviousCheckpoint(expectedCheckpoint);
 		if (result.contains("失败") || result.startsWith("没有") || result.startsWith("拒绝")) {
 			return fail(source, result);
@@ -557,20 +560,20 @@ public final class MmmCommands {
 	}
 
 	private static int debugStatus(CommandSourceStack source) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		int result = service.debugOverlays() ? 1 : 0;
 		return succeed(source, "碰撞与边界调试层：" + (service.debugOverlays() ? "显示" : "隐藏"), result);
 	}
 
 	private static int setDebug(CommandSourceStack source, boolean enabled) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		if (!service.exists()) return fail(source, "请先使用 /mmm demo 或 /mmm capture");
 		service.setDebugOverlays(enabled, source.getLevel());
 		return succeed(source, "碰撞与边界调试层已" + (enabled ? "显示" : "隐藏"), 1);
 	}
 
 	private static int step(CommandSourceStack source, int count) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		if (!service.exists()) return fail(source, "请先使用 /mmm demo 或 /mmm capture");
 		int completed = service.step(source.getLevel(), count);
 		if (completed == 0) return fail(source, "活动流体域位于其他维度");
@@ -579,7 +582,7 @@ public final class MmmCommands {
 	}
 
 	private static int status(CommandSourceStack source) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		int result = service.exists() ? 1 : 0;
 		return succeed(source, service.status(source.getServer()), result);
 	}
@@ -589,7 +592,7 @@ public final class MmmCommands {
 	}
 
 	private static int remove(CommandSourceStack source) {
-		FluidSimulationService service = FluidSimulationService.get(source.getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		FluidSimulationService.RestorationStats restoration = service.remove(source.getServer());
 		if (!restoration.completed()) {
 			return fail(source, "移除已暂停：" + restoration.failure() + "；请保留 Mod 与世界备份并查看日志后重试");
@@ -610,7 +613,8 @@ public final class MmmCommands {
 	}
 
 	private static boolean hasCapability(CommandSourceStack source, WorldCapability capability) {
-		WorldCapabilityProfile profile = FluidSimulationService.get(source.getServer()).worldCapabilityProfile();
+		WorldCapabilityProfile profile = MmmRuntimeRegistry.require(source.getServer()).simulation()
+				.worldCapabilityProfile();
 		return profile != null && profile.hasCapability(capability);
 	}
 

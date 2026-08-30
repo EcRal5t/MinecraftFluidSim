@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.simulation.persistence;
 
 import cc.ecisr.mmm.simulation.ProductionRegistries;
+import cc.ecisr.mmm.simulation.WorldStartupCoordinator;
 import cc.ecisr.mmm.worldprofile.WorldCapability;
 
 import java.io.IOException;
@@ -35,6 +36,7 @@ public final class WorldCapabilityStartupValidation {
 		unknownMmmEntriesLock();
 		stalePerKindRegistryDirectoryLocks();
 		policyCanWithholdAdmission();
+		compositionCoordinatorPreservesStartupMatrix();
 		System.out.println("World capability startup validation passed");
 	}
 
@@ -173,6 +175,47 @@ public final class WorldCapabilityStartupValidation {
 				"withheld admission must be reported as POLICY_RESTRICTED: " + result);
 		require(result.bundle() != null && result.bundle().profile().equals(full.profile()),
 				"a policy-restricted startup must still expose the proven bundle");
+	}
+
+	/** The composition boundary preserves capability truth while adding typed policy and drift issues. */
+	private static void compositionCoordinatorPreservesStartupMatrix() throws Exception {
+		Path readyRoot = Files.createTempDirectory(Path.of("."), "mmm-coordinator-ready-");
+		WorldStartupCoordinator.Result ready = WorldStartupCoordinator.start(readyRoot, () -> full);
+		require(ready.state() == WorldStartupCoordinator.State.READY && ready.policyReadable()
+				&& ready.profileProven() && ready.authoritativeWritesReady(),
+				"composition startup did not expose a proven READY state: " + ready);
+
+		EnumSet<WorldCapability> reduced = EnumSet.allOf(WorldCapability.class);
+		reduced.remove(WorldCapability.PHASECHANGE);
+		WorldStartupCoordinator.Result drift = WorldStartupCoordinator.start(readyRoot,
+				() -> definitions(reduced));
+		require(drift.state() == WorldStartupCoordinator.State.READY && drift.issues().stream().anyMatch(issue ->
+				issue.code() == WorldStartupCoordinator.Code.DEFINITION_DRIFT && !issue.blocksCreation()),
+				"definition drift was not retained as a non-blocking typed issue: " + drift);
+
+		Path policyRoot = Files.createTempDirectory(Path.of("."), "mmm-coordinator-policy-");
+		Path policy = policyRoot.resolve("mmm").resolve("server.properties");
+		Files.createDirectories(policy.getParent());
+		String invalidPolicy = "schema=not-supported\ncontrollersEnabled=true\n";
+		Files.writeString(policy, invalidPolicy);
+		WorldStartupCoordinator.Result unreadablePolicy = WorldStartupCoordinator.start(policyRoot, () -> full);
+		require(unreadablePolicy.state() == WorldStartupCoordinator.State.POLICY_RESTRICTED
+				&& !unreadablePolicy.policyReadable() && unreadablePolicy.profileProven()
+				&& !unreadablePolicy.authoritativeWritesReady(),
+				"unreadable policy did not preserve a proven-but-restricted bundle: " + unreadablePolicy);
+		require(unreadablePolicy.issues().stream().anyMatch(issue ->
+				issue.code() == WorldStartupCoordinator.Code.POLICY_UNREADABLE && issue.blocksCreation()),
+				"unreadable policy lacked a blocking typed issue: " + unreadablePolicy);
+		require(Files.readString(policy).equals(invalidPolicy), "startup overwrote the unreadable policy");
+
+		Path unknownRoot = Files.createTempDirectory(Path.of("."), "mmm-coordinator-unknown-");
+		Path unknown = unknownRoot.resolve("mmm").resolve("unknown-durable-root");
+		Files.createDirectories(unknown);
+		WorldStartupCoordinator.Result locked = WorldStartupCoordinator.start(unknownRoot, () -> full);
+		require(locked.state() == WorldStartupCoordinator.State.LOCKED_PROFILE && !locked.profileProven()
+				&& locked.issues().stream().anyMatch(WorldStartupCoordinator.Issue::blocksCreation),
+				"unknown durable content did not fail closed at the composition boundary: " + locked);
+		require(Files.isDirectory(unknown), "composition startup removed unknown durable evidence");
 	}
 
 	private static WorldCapabilityBundleStore.Definitions definitions(Set<WorldCapability> capabilities) {

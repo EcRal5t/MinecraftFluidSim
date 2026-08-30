@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.network;
 
 import cc.ecisr.mmm.simulation.FluidSimulationService;
+import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import net.fabricmc.fabric.api.networking.v1.FabricServerConfigurationPacketListenerImpl;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerConfigurationConnectionEvents;
@@ -75,11 +76,12 @@ public final class FluidProtocolServer {
 				listener.disconnect(Component.literal("Matter, Motion & Mechanics protocol negotiation was not completed"));
 				return;
 			}
-			FluidSimulationService.get(server).retryUnavailableContainerTransfers(server, listener.player.getUUID());
-			FluidSimulationService.get(server).sendSnapshots(listener.player);
+			FluidSimulationService simulation = MmmRuntimeRegistry.require(server).simulation();
+			simulation.retryUnavailableContainerTransfers(server, listener.player.getUUID());
+			simulation.sendSnapshots(listener.player);
 		});
 		ServerPlayConnectionEvents.DISCONNECT.register((listener, server) -> {
-			FluidSimulationService.get(server).forgetInteractiveViewer(listener.player.getUUID());
+			MmmRuntimeRegistry.require(server).simulation().forgetInteractiveViewer(listener.player.getUUID());
 			removeSession(server, listener.player.getUUID());
 		});
 	}
@@ -178,7 +180,7 @@ public final class FluidProtocolServer {
 	}
 
 	private static void receiveControllerAction(ControllerActionPayload payload, ServerPlayer player) {
-		FluidSimulationService service = FluidSimulationService.get(player.level().getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(player.level().getServer()).simulation();
 		Component failure = service.applyControllerConsoleAction(player, payload.regionId(), payload.controllerPosition(),
 				payload.summaryGeneration(), payload.action());
 		if (failure != null) player.sendSystemMessage(Component.translatable(
@@ -190,7 +192,7 @@ public final class FluidProtocolServer {
 	private static void receiveLifecycleOperation(
 			LifecycleOperationRequestPayload payload, ServerPlayer player
 	) {
-		FluidSimulationService service = FluidSimulationService.get(player.level().getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(player.level().getServer()).simulation();
 		if (payload.kind() == LifecycleOperationRequestPayload.Kind.PREVIEW) {
 			var result = service.previewControllerLifecycleOperation(player, payload.regionId(),
 					payload.controllerPosition(), payload.summaryGeneration(), payload.operation());
@@ -226,7 +228,7 @@ public final class FluidProtocolServer {
 	private static void receiveThermalReservoirSetpoint(
 			ThermalReservoirSetpointPayload payload, ServerPlayer player
 	) {
-		FluidSimulationService service = FluidSimulationService.get(player.level().getServer());
+		FluidSimulationService service = MmmRuntimeRegistry.require(player.level().getServer()).simulation();
 		String failure = service.applyThermalReservoirSetpoint(player, payload.position(),
 				payload.summaryGeneration(), payload.temperatureK());
 		if (failure != null) player.sendSystemMessage(Component.translatable(
@@ -279,7 +281,7 @@ public final class FluidProtocolServer {
 		private HandshakeTask(ServerConfigurationPacketListenerImpl listener, MinecraftServer server) {
 			this.listener = listener;
 			this.server = server;
-			FluidSimulationService service = FluidSimulationService.get(server);
+			FluidSimulationService service = MmmRuntimeRegistry.require(server).simulation();
 			this.offer = new FluidProtocolOfferPayload(FluidProtocol.serverOffer(service.worldCapabilityProfile()));
 		}
 
