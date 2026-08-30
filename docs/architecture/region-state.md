@@ -39,7 +39,7 @@ slot-a/removed.nbt                     # 或 REMOVED tombstone
 slot-b/removed.nbt                     # 或 REMOVED tombstone
 ```
 
-同一个 slot 只能是完整 ACTIVE generation 或只含一个 `removed.nbt` 的 REMOVED tombstone，不能混合。`RegionState` 在 server thread 上捕获/重建完整逻辑状态；`RegionStateCodec` 只编解码 ACTIVE NBT；`RemovedRegionManifest` 是不可重建 solver 的严格零库存终止真值；`RegionStateIntegrity` 生成与 NBT 字段顺序无关的规范 CRC32C；`RegionStateFiles` 只管理双槽、回读验证、quarantine 收敛与原子 HEAD。任何业务层都不能直接写 slot 或把目录存在当成已提交。
+同一个 slot 只能是完整 ACTIVE generation 或只含一个 `removed.nbt` 的 REMOVED tombstone，不能混合。逻辑真值是 loader-neutral `RegionCheckpoint`：`RegionIdentity`、`RegionGeometry` 与 `RegionRuntimeIntent` 只保存 stable value，manifest/section/extension 不引用 `BlockPos`、`ResourceKey`、live region 或 lifecycle class。`MinecraftRegionCheckpointSource` 是唯一从 loaded `FluidRegion` 映射这些值并导出 solver snapshot 的 adapter；`RegionCheckpointAssembler` 按 pure/material/chemical/granular/thermal layout 组装完整 section、extension 和总账，`RegionCheckpointValidator` 审计跨 section identity/ownership/ledger，`RegionCheckpointRestorer` 只重建既有 immutable solver state。`RegionState` 只是 durable store 的 27 行过渡 DTO adapter，不再 capture 或 reconstruct live runtime。`RegionStateCodec` 只编解码 ACTIVE NBT；`RemovedRegionManifest` 是不可重建 solver 的严格零库存终止真值；`RegionStateIntegrity` 生成与 NBT 字段顺序无关的规范 CRC32C；`RegionStateFiles` 只管理双槽、回读验证、quarantine 收敛与原子 HEAD。任何业务层都不能直接写 slot 或把目录存在当成已提交。
 
 HEAD 使用固定 `region-head` schema 并显式区分 `ACTIVE` / `REMOVED` kind。ACTIVE manifest 与每个 section 使用语义 `Layout`：`pure`、`material`、`chemical`、`granular` 或 `thermal`。其中 `granular`、`thermal` 的附加 capability 精确声明是否同时携带 chemistry/granular 状态。启动时由已提交 world capability profile 得到唯一预期 layout 和 registry fingerprint，存档必须精确匹配；未知 kind/layout、未知必需 extension、缺字段或额外能力都不能按数字顺序猜测兼容性，也没有自动迁移或默认补全。
 
@@ -47,7 +47,7 @@ HEAD 使用固定 `region-head` schema 并显式区分 `ACTIVE` / `REMOVED` kind
 
 每个 ACTIVE controller 区域使用两个完整 generation slot 和一个很小的 HEAD：
 
-1. 从活动 solver 捕获一个逻辑时刻的完整状态。
+1. Minecraft source 在 server thread 从活动 solver 导出同一逻辑时刻的稳定 metadata 与完整载荷，assembler 形成 `RegionCheckpoint`。
 2. 写入 inactive slot 的 manifest 与所有 section。
 3. 回读、校验 CRC、身份、预算和全部账本。
 4. 原子替换 HEAD，使新 generation 成为唯一提交点。
@@ -58,7 +58,7 @@ HEAD 发布前，当前已提交 generation 仍是唯一权威状态。失败的
 
 具体发布序列为：
 
-1. 验证内存 `RegionState` 的形状与账本。
+1. 通过 `RegionCheckpointValidator` 验证内存 checkpoint 的形状与账本；durable store 只接收它的 `RegionState` adapter。
 2. 读取并完整验证当前 HEAD；要求新 checkpoint generation 严格递增，且 base generation/checksum 未改变。
 3. 删除 inactive slot 的已知旧内容，在 `<slot>.tmp` 逐个写 section，每个文件 `force`。
 4. 最后写 manifest 并 `force`，从临时目录回读全部文件，执行 CRC、预算、账本和可重建性验证。
@@ -90,10 +90,11 @@ HEAD 发布前，当前已提交 generation 仍是唯一权威状态。失败的
 
 ### Manifest
 
-manifest 是无需分配 solver 即可审计和预算 admission 的索引，保存：
+manifest 是无需分配 solver 或 Minecraft runtime 对象即可审计和预算 admission 的索引，保存：
 
-- region/dimension/checkpoint/network identity；
-- origin、grid、完整 `FluidSolverConfig`、预留 marker capacity 与持久 runtime 状态；
+- `RegionIdentity` 中的 region UUID、dimension stable ID 与 checkpoint/network generation；
+- `RegionGeometry` 中的 stable block origin、grid、完整 `FluidSolverConfig`、预留 marker capacity 与 controller footprint；
+- `RegionRuntimeIntent` 中的 resume state、operator intent、entity/debug 开关、step interval 与 tick；
 - controller position、内部/边界 block 集和 required chunk footprint；
 - marker/volume/mass 总账、material/species palette 与 registry identity；
 - 严格排序的 section descriptor：坐标、marker 数、体积、质量和 section checksum；

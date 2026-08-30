@@ -56,7 +56,9 @@ Minecraft 命令、方块、容器、实体与 chunk 事件
        -> GranularInventory                 active/deposit 固体
        -> FlipThermalState                  各载体总内能与相变
 
-FluidRegionPersistence / RegionStateFiles   完整区域 checkpoint
+MinecraftRegionCheckpointSource            live region → stable checkpoint source
+RegionCheckpointAssembler / Restorer       完整逻辑 checkpoint 装配/immutable state 重建
+RegionStateCodec / RegionStateFiles         严格 NBT、双槽 generation 与 HEAD
 OwnershipTransaction                        原版方块 ownership
 ContainerTransferCoordinator                region/item WAL→staged HEAD→HEAD
 ContainerRecoveryCoordinator                boot-indexed actor 收敛与事件重试
