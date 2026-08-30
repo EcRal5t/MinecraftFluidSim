@@ -227,20 +227,6 @@ public final class FluidRegion {
 		return Math.multiplyExact(Math.multiplyExact((long) sizeX, sizeY), sizeZ);
 	}
 
-	boolean spatiallyOverlaps(FluidRegion other) {
-		if (!dimension.equals(other.dimension)) return false;
-		return overlaps(origin.getX(), maximumWorldX(), other.origin.getX(), other.maximumWorldX())
-				&& overlaps(origin.getY(), maximumWorldY(), other.origin.getY(), other.maximumWorldY())
-				&& overlaps(origin.getZ(), maximumWorldZ(), other.origin.getZ(), other.maximumWorldZ());
-	}
-
-	private double maximumWorldX() { return origin.getX() + sizeX * solverConfig.cellSize(); }
-	private double maximumWorldY() { return origin.getY() + sizeY * solverConfig.cellSize(); }
-	private double maximumWorldZ() { return origin.getZ() + sizeZ * solverConfig.cellSize(); }
-	private static boolean overlaps(double firstMin, double firstMax, double secondMin, double secondMax) {
-		return firstMin < secondMax && secondMin < firstMax;
-	}
-
 	boolean paused() { return lifecycle.operatorPaused(); }
 	void setPaused(boolean value) { lifecycle.setOperatorPaused(value, stepIntervalTicks); }
 	boolean canStep() { return domain != null && lifecycle.canStep(); }

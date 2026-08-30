@@ -1,229 +1,96 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
+import cc.ecisr.mmm.application.RegionCatalog;
 
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
-/**
- * Server-thread registry and admission budget for in-memory fluid regions.
- * It does not persist regions, change worlds, step solvers, or infer water from capacity counters.
- */
+/** Minecraft descriptor adapter over the loader-neutral region catalog. */
 public final class FluidRegionManager {
 	private final Limits limits;
-	private final Map<UUID, FluidRegion> regions = new LinkedHashMap<>();
-	private UUID selectedId;
+	private final RegionCatalog<FluidRegion> catalog;
 
 	public FluidRegionManager(Limits limits) {
 		this.limits = Objects.requireNonNull(limits, "limits");
+		this.catalog = new RegionCatalog<>(limits.catalogLimits());
 	}
 
-	public Limits limits() {
-		return limits;
-	}
-
-	public List<FluidRegion> regions() {
-		return List.copyOf(regions.values());
-	}
-
-	public FluidRegion selected() {
-		return selectedId == null ? null : regions.get(selectedId);
-	}
-
-	/** Exact identity lookup for loader-neutral application adapters; it never changes selection. */
-	FluidRegion region(UUID id) { return regions.get(Objects.requireNonNull(id, "id")); }
+	public Limits limits() { return limits; }
+	public List<FluidRegion> regions() { return catalog.values(); }
+	public FluidRegion selected() { return catalog.selected(); }
+	FluidRegion region(UUID id) { return catalog.value(id); }
 
 	public BudgetUsage usage() {
-		long cells = 0L;
-		long markers = 0L;
-		for (FluidRegion region : regions.values()) {
-			cells = Math.addExact(cells, region.reservedCellCapacity());
-			markers = Math.addExact(markers, region.reservedMarkerCapacity());
-		}
-		return new BudgetUsage(regions.size(), cells, markers);
+		RegionCatalog.BudgetUsage usage = catalog.usage();
+		return new BudgetUsage(usage.regionCount(), usage.reservedCells(), usage.reservedMarkers());
 	}
 
 	public AdmissionResult add(FluidRegion candidate) {
-		Objects.requireNonNull(candidate, "candidate");
-		if (regions.containsKey(candidate.id())) {
-			return AdmissionResult.rejected("region id already exists: " + candidate.id());
-		}
-		BudgetUsage current = usage();
-		AdmissionResult admission = evaluate(candidate, current.regionCount() + 1, current.reservedCells(), current.reservedMarkers());
-		if (!admission.accepted()) return admission;
-		AdmissionResult placement = evaluatePlacement(candidate, null);
-		if (!placement.accepted()) return placement;
-		regions.put(candidate.id(), candidate);
-		if (selectedId == null) selectedId = candidate.id();
-		return admission;
+		return result(catalog.add(candidate, descriptor(candidate)));
 	}
 
 	public AdmissionResult addAndSelect(FluidRegion candidate) {
-		AdmissionResult admission = add(candidate);
-		if (admission.accepted()) selectedId = candidate.id();
-		return admission;
+		return result(catalog.addAndSelect(candidate, descriptor(candidate)));
 	}
 
-	/** Evaluates the complete candidate without registering it or changing selection. */
 	public AdmissionResult previewAdd(FluidRegion candidate) {
-		Objects.requireNonNull(candidate, "candidate");
-		if (regions.containsKey(candidate.id())) {
-			return AdmissionResult.rejected("region id already exists: " + candidate.id());
-		}
-		BudgetUsage current = usage();
-		AdmissionResult admission = evaluate(candidate, current.regionCount() + 1,
-				current.reservedCells(), current.reservedMarkers());
-		return admission.accepted() ? evaluatePlacement(candidate, null) : admission;
+		return result(catalog.previewAdd(descriptor(candidate)));
 	}
 
-	/** Retains already committed metadata even when current runtime policy cannot admit its solver. */
 	public AdmissionResult registerDiscovered(FluidRegion candidate) {
-		Objects.requireNonNull(candidate, "candidate");
-		if (regions.containsKey(candidate.id())) {
-			return AdmissionResult.rejected(RegionAvailabilityReason.HEAD_INVALID,
-					"region id already exists: " + candidate.id());
-		}
-		regions.put(candidate.id(), candidate);
-		if (selectedId == null) selectedId = candidate.id();
-		return AdmissionResult.ACCEPTED;
+		return result(catalog.registerDiscovered(candidate, descriptor(candidate)));
 	}
 
-	/** Re-evaluates one retained metadata reservation against current policy and peer placement. */
 	public AdmissionResult runtimeAdmission(FluidRegion candidate) {
-		Objects.requireNonNull(candidate, "candidate");
-		if (regions.get(candidate.id()) != candidate) {
-			return AdmissionResult.rejected(RegionAvailabilityReason.HEAD_INVALID,
-					"region is not the registered committed metadata instance");
-		}
-		BudgetUsage current = usage();
-		AdmissionResult admission = evaluate(candidate, current.regionCount(),
-				current.reservedCells() - candidate.reservedCellCapacity(),
-				current.reservedMarkers() - candidate.reservedMarkerCapacity());
-		return admission.accepted() ? evaluatePlacement(candidate, candidate) : admission;
+		return result(catalog.runtimeAdmission(candidate, descriptor(candidate)));
 	}
 
-	/** Evaluates an addition before allocating its solver arrays; placement is checked after allocation. */
 	public AdmissionResult previewAdd(long requiredCells, long requiredMarkers) {
-		if (requiredCells <= 0L || requiredMarkers <= 0L) {
-			throw new IllegalArgumentException("Fluid region capacity requirements must be positive");
-		}
-		BudgetUsage current = usage();
-		return evaluate(requiredCells, requiredMarkers, current.regionCount() + 1,
-				current.reservedCells(), current.reservedMarkers());
+		return result(catalog.previewAdd(requiredCells, requiredMarkers));
 	}
 
-	/** Atomically replaces the selected region after evaluating the candidate against the remaining regions. */
 	public AdmissionResult replaceSelected(FluidRegion candidate) {
-		Objects.requireNonNull(candidate, "candidate");
-		FluidRegion selected = selected();
-		FluidRegion duplicate = regions.get(candidate.id());
-		if (duplicate != null && duplicate != selected) {
-			return AdmissionResult.rejected("region id already exists: " + candidate.id());
-		}
-
-		BudgetUsage current = usage();
-		int regionCount = selected == null ? current.regionCount() + 1 : current.regionCount();
-		long baseCells = current.reservedCells() - (selected == null ? 0L : selected.reservedCellCapacity());
-		long baseMarkers = current.reservedMarkers() - (selected == null ? 0L : selected.reservedMarkerCapacity());
-		AdmissionResult admission = evaluate(candidate, regionCount, baseCells, baseMarkers);
-		if (!admission.accepted()) return admission;
-		AdmissionResult placement = evaluatePlacement(candidate, selected);
-		if (!placement.accepted()) return placement;
-
-		if (selected != null) regions.remove(selected.id());
-		regions.put(candidate.id(), candidate);
-		selectedId = candidate.id();
-		return admission;
+		return result(catalog.replaceSelected(candidate, descriptor(candidate)));
 	}
 
-	/** Evaluates a replacement before allocating its solver arrays; no registry or selection state is changed. */
 	public AdmissionResult previewReplacement(long requiredCells, long requiredMarkers) {
-		if (requiredCells <= 0L || requiredMarkers <= 0L) {
-			throw new IllegalArgumentException("Fluid region capacity requirements must be positive");
-		}
-		FluidRegion selected = selected();
-		BudgetUsage current = usage();
-		int regionCount = selected == null ? current.regionCount() + 1 : current.regionCount();
-		long baseCells = current.reservedCells() - (selected == null ? 0L : selected.reservedCellCapacity());
-		long baseMarkers = current.reservedMarkers() - (selected == null ? 0L : selected.reservedMarkerCapacity());
-		return evaluate(requiredCells, requiredMarkers, regionCount, baseCells, baseMarkers);
+		return result(catalog.previewReplacement(requiredCells, requiredMarkers));
 	}
 
-	public boolean select(UUID id) {
-		if (!regions.containsKey(id)) return false;
-		selectedId = id;
-		return true;
+	public boolean select(UUID id) { return catalog.select(id); }
+	public FluidRegion remove(UUID id) { return catalog.remove(id); }
+	public void clear() { catalog.clear(); }
+
+	private static RegionCatalog.Descriptor descriptor(FluidRegion region) {
+		Objects.requireNonNull(region, "region");
+		float cellSize = region.solverConfig().cellSize();
+		return new RegionCatalog.Descriptor(region.id(), region.dimension().identifier().toString(),
+				region.origin().getX(), region.origin().getY(), region.origin().getZ(),
+				region.origin().getX() + region.sizeX() * cellSize,
+				region.origin().getY() + region.sizeY() * cellSize,
+				region.origin().getZ() + region.sizeZ() * cellSize,
+				region.reservedCellCapacity(), region.reservedMarkerCapacity());
 	}
 
-	public FluidRegion remove(UUID id) {
-		FluidRegion removed = regions.remove(id);
-		if (removed != null && id.equals(selectedId)) {
-			selectedId = regions.isEmpty() ? null : regions.keySet().iterator().next();
-		}
-		return removed;
-	}
-
-	public void clear() {
-		regions.clear();
-		selectedId = null;
-	}
-
-	private AdmissionResult evaluate(FluidRegion candidate, int regionCount, long baseCells, long baseMarkers) {
-		long requiredCells = candidate.reservedCellCapacity();
-		long requiredMarkers = candidate.reservedMarkerCapacity();
-		return evaluate(requiredCells, requiredMarkers, regionCount, baseCells, baseMarkers);
-	}
-
-	private AdmissionResult evaluatePlacement(FluidRegion candidate, FluidRegion ignored) {
-		for (FluidRegion existing : regions.values()) {
-			if (existing == ignored) continue;
-			if (candidate.spatiallyOverlaps(existing)) {
-				return AdmissionResult.rejected(RegionAvailabilityReason.OVERLAP,
-						"region overlaps existing region " + existing.id());
-			}
-		}
-		return AdmissionResult.ACCEPTED;
-	}
-
-	private AdmissionResult evaluate(long requiredCells, long requiredMarkers, int regionCount, long baseCells, long baseMarkers) {
-		long remainingCells = limits.maximumTotalCells() - baseCells;
-		long remainingMarkers = limits.maximumTotalMarkers() - baseMarkers;
-		String requirement = "requires " + requiredCells + " cells/" + requiredMarkers + " markers; per-region limit "
-				+ limits.maximumCellsPerRegion() + "/" + limits.maximumMarkersPerRegion() + "; remaining "
-				+ Math.max(0L, remainingCells) + "/" + Math.max(0L, remainingMarkers);
-		if (regionCount > limits.maximumRegions()) {
-			return AdmissionResult.rejected(RegionAvailabilityReason.BUDGET,
-					"region-count limit " + limits.maximumRegions() + " exceeded; " + requirement);
-		}
-		if (requiredCells > limits.maximumCellsPerRegion() || requiredMarkers > limits.maximumMarkersPerRegion()) {
-			return AdmissionResult.rejected(RegionAvailabilityReason.BUDGET,
-					"per-region budget exceeded; " + requirement);
-		}
-		if (requiredCells > remainingCells || requiredMarkers > remainingMarkers) {
-			return AdmissionResult.rejected(RegionAvailabilityReason.BUDGET,
-					"server fluid budget exceeded; " + requirement);
-		}
-		return AdmissionResult.ACCEPTED;
+	private static AdmissionResult result(RegionCatalog.AdmissionResult result) {
+		return result.accepted() ? AdmissionResult.ACCEPTED
+				: new AdmissionResult(false, result.reason(), result.failure());
 	}
 
 	public record Limits(
-			int maximumRegions,
-			long maximumCellsPerRegion,
-			long maximumMarkersPerRegion,
-			long maximumTotalCells,
-			long maximumTotalMarkers
+			int maximumRegions, long maximumCellsPerRegion, long maximumMarkersPerRegion,
+			long maximumTotalCells, long maximumTotalMarkers
 	) {
 		public Limits {
-			if (maximumRegions <= 0 || maximumCellsPerRegion <= 0L || maximumMarkersPerRegion <= 0L
-					|| maximumTotalCells <= 0L || maximumTotalMarkers <= 0L) {
-				throw new IllegalArgumentException("Fluid region limits must be positive");
-			}
-			if (maximumCellsPerRegion > maximumTotalCells || maximumMarkersPerRegion > maximumTotalMarkers) {
-				throw new IllegalArgumentException("Per-region limits cannot exceed total limits");
-			}
+			new RegionCatalog.Limits(maximumRegions, maximumCellsPerRegion, maximumMarkersPerRegion,
+					maximumTotalCells, maximumTotalMarkers);
+		}
+
+		private RegionCatalog.Limits catalogLimits() {
+			return new RegionCatalog.Limits(maximumRegions, maximumCellsPerRegion, maximumMarkersPerRegion,
+					maximumTotalCells, maximumTotalMarkers);
 		}
 	}
 
@@ -231,14 +98,10 @@ public final class FluidRegionManager {
 
 	public record AdmissionResult(boolean accepted, RegionAvailabilityReason reason, String failure) {
 		private static final AdmissionResult ACCEPTED = new AdmissionResult(true, null, null);
-
-		private static AdmissionResult rejected(String failure) {
-			return rejected(RegionAvailabilityReason.HEAD_INVALID, failure);
-		}
-
-		private static AdmissionResult rejected(RegionAvailabilityReason reason, String failure) {
-			return new AdmissionResult(false, Objects.requireNonNull(reason, "reason"),
-					Objects.requireNonNull(failure, "failure"));
+		public AdmissionResult {
+			if (accepted ? reason != null || failure != null : reason == null || failure == null) {
+				throw new IllegalArgumentException("Region admission result is inconsistent");
+			}
 		}
 	}
 }
