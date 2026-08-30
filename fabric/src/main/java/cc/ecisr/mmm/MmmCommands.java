@@ -1,7 +1,5 @@
 package cc.ecisr.mmm;
 
-import cc.ecisr.mmm.block.MmmBlocks;
-import cc.ecisr.mmm.block.ThermalReservoirBlockEntity;
 import cc.ecisr.mmm.logging.MmmCommandLog;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.FluidMaterial;
@@ -19,12 +17,13 @@ import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
 import cc.ecisr.mmm.granular.BuiltinGranularDefinitions;
 import cc.ecisr.mmm.granular.GranularTransferLedger;
 import cc.ecisr.mmm.granular.SolidVolume;
+import cc.ecisr.mmm.simulation.CaptureResult;
 import cc.ecisr.mmm.simulation.FluidSimulationService;
 import cc.ecisr.mmm.application.ContainerTransferCoordinator;
 import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import cc.ecisr.mmm.simulation.FluidRegion;
+import cc.ecisr.mmm.simulation.RestorationStats;
 import com.mojang.brigadier.arguments.BoolArgumentType;
-import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.LongArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -38,8 +37,6 @@ import net.minecraft.commands.Commands;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.permissions.Permissions;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.HitResult;
 
 import java.util.List;
 
@@ -366,7 +363,7 @@ public final class MmmCommands {
 	private static int capture(CommandSourceStack source, boolean takeover) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
 		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
-		FluidSimulationService.CaptureResult result = service.captureNearbyWater(player, takeover);
+		CaptureResult result = service.captureNearbyWater(player, takeover);
 		if (result.failure() != null) {
 			return fail(source, (takeover ? "接管" : "捕获") + "已取消：" + result.failure());
 		}
@@ -531,35 +528,6 @@ public final class MmmCommands {
 		return succeed(source, result, 1);
 	}
 
-	private static int thermalSourceStatus(CommandSourceStack source) throws CommandSyntaxException {
-		ThermalReservoirBlockEntity reservoir = aimedThermalReservoir(source);
-		if (reservoir == null) return fail(source, "请让准星对准 8 格内的温度源方块");
-		if (!reservoir.hasValidTemperature()) return fail(source, "温度源保存的设定值无效；请显式设置新温度");
-		return succeed(source, String.format(java.util.Locale.ROOT,
-				"温度源 %s 的恒温设定为 %.6f K", reservoir.getBlockPos().toShortString(), reservoir.temperatureK()), 1);
-	}
-
-	private static int setThermalSource(CommandSourceStack source, double temperatureK) throws CommandSyntaxException {
-		if (!Double.isFinite(temperatureK)) return fail(source, "温度必须是有限数值");
-		ThermalReservoirBlockEntity reservoir = aimedThermalReservoir(source);
-		if (reservoir == null) return fail(source, "请让准星对准 8 格内的温度源方块");
-		reservoir.setTemperatureK(temperatureK);
-		return succeed(source, String.format(java.util.Locale.ROOT,
-				"已将温度源 %s 设为 %.6f K；相邻热区域会在下一次边界扫描时精确唤醒；"
-						+ "设定值不钳制，若载体候选状态越出 world thermal registry 有效域将安全暂停",
-				reservoir.getBlockPos().toShortString(), temperatureK), 1);
-	}
-
-	private static ThermalReservoirBlockEntity aimedThermalReservoir(CommandSourceStack source)
-			throws CommandSyntaxException {
-		ServerPlayer player = source.getPlayerOrException();
-		HitResult hit = player.pick(8.0, 1.0F, false);
-		if (!(hit instanceof BlockHitResult blockHit) || hit.getType() != HitResult.Type.BLOCK) return null;
-		if (!player.level().getBlockState(blockHit.getBlockPos()).is(MmmBlocks.THERMAL_RESERVOIR)) return null;
-		return player.level().getBlockEntity(blockHit.getBlockPos()) instanceof ThermalReservoirBlockEntity reservoir
-				? reservoir : null;
-	}
-
 	private static int debugStatus(CommandSourceStack source) {
 		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
 		int result = service.debugOverlays() ? 1 : 0;
@@ -594,7 +562,7 @@ public final class MmmCommands {
 
 	private static int remove(CommandSourceStack source) {
 		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
-		FluidSimulationService.RestorationStats restoration = service.remove(source.getServer());
+		RestorationStats restoration = service.remove(source.getServer());
 		if (!restoration.completed()) {
 			return fail(source, "移除已暂停：" + restoration.failure() + "；请保留 Mod 与世界备份并查看日志后重试");
 		}

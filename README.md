@@ -40,7 +40,7 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 | 化学调试 | `/mmm chemistrydemo`、`reagent ...`、`chemstatus` |
 | 颗粒调试 | `/mmm granularcontainer ...`、`granstatus` |
 | 气压调试 | `/mmm airdemo [pressure/vacuum]` |
-| 可调恒温边界 | `/give @s mmm:thermal_reservoir`；准星对准后 `/mmm thermalsource [temperatureK]` |
+| 可调恒温边界 | `/give @s mmm:thermal_reservoir`；放置后用 field probe 右击该方块，在服务端签发的调节界面里设置温度（K） |
 | ownership 对账 | `/mmm ownership` |
 | 调试与实体 | `/mmm debug`、`entities`、`logpath` |
 | 安全移除 | `/mmm remove` |

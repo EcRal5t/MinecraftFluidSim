@@ -21,17 +21,12 @@ import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.controller.ControllerConsoleAction;
 import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.controller.LifecycleOperation;
-import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.CellCarrierInventoryView;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.GasPressureBoundary;
 import cc.ecisr.mmm.fluid.FluidSolverBackend;
-import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
-import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterial;
-import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
-import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.fluid.GasTopologyBlockedException;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
@@ -43,7 +38,6 @@ import cc.ecisr.mmm.transfer.ChemicalContents;
 import cc.ecisr.mmm.transfer.FluidMixture;
 import cc.ecisr.mmm.item.ContainerItemStacks;
 import cc.ecisr.mmm.item.MmmComponents;
-import cc.ecisr.mmm.transfer.ThermalContents;
 import cc.ecisr.mmm.simulation.controller.FluidBoundaryScanner;
 import cc.ecisr.mmm.simulation.controller.FluidControllerRegions;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
@@ -61,43 +55,27 @@ import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 
 /** Adapts fluid regions to Minecraft while delegating region-state lifecycle and takeover transactions. */
 public final class FluidSimulationService {
-	public static final int BLOCK_SIZE_X = 12;
-	public static final int BLOCK_SIZE_Y = 8;
-	public static final int BLOCK_SIZE_Z = 12;
 	public static final int CELLS_PER_BLOCK = 2;
 	static final int CELL_VOLUMES_PER_BLOCK = CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
-	private static final long COMPATIBILITY_REGION_CELLS = (long) BLOCK_SIZE_X * BLOCK_SIZE_Y * BLOCK_SIZE_Z
-			* CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
-	private static final long COMPATIBILITY_REGION_MARKERS = COMPATIBILITY_REGION_CELLS * 8L;
 
-	private final Map<BlockPos, BlockState> takeoverOriginalBlocks = new HashMap<>();
 	private final Path worldRoot;
 	private final boolean serverConfigLocked;
 	private FluidServerConfig serverConfig;
@@ -107,6 +85,8 @@ public final class FluidSimulationService {
 	private final FluidWorldTargetResolver targets;
 	private final FluidRegionOperations regionOperations;
 	private final RegionApplicationService regionApplication;
+	private final MinecraftTakeoverAdapter takeover;
+	private final MinecraftDebugFixtures debugFixtures;
 	private final MinecraftRegionTick regionTick;
 	private final ControllerQueryUseCase controllerQueries;
 	private final MinecraftRegionLifecycle regionLifecycle;
@@ -114,7 +94,6 @@ public final class FluidSimulationService {
 	private final FluidSnapshotPublisher snapshots;
 	private final ContainerRecoveryCoordinator containerRecovery;
 	private final MinecraftContainerTransactionAdapter containerTransactions;
-	private ResourceKey<Level> takeoverDimension;
 	private boolean defaultEntityPhysicsEnabled = true;
 	private boolean defaultDebugOverlays;
 	private boolean controllerFeatureEnabled;
@@ -129,8 +108,6 @@ public final class FluidSimulationService {
 	private final ThermalRegistry thermalRegistry;
 	private final GasRegistry gasRegistry;
 	private List<String> ownershipIssues = List.of();
-	private String lastTakeoverFailure;
-	private boolean takeoverMaintenanceEnabled;
 
 	FluidSimulationService(
 			WorldStartupCoordinator.Result startup,
@@ -167,6 +144,9 @@ public final class FluidSimulationService {
 		this.ownershipIssues = List.copyOf(ownershipIssues);
 		this.regionApplication = new RegionApplicationService(solverBackend,
 				new FluidRegionRepository(regionManager), regionOperations);
+		this.takeover = new MinecraftTakeoverAdapter();
+		this.debugFixtures = new MinecraftDebugFixtures(regionManager, snapshots, takeover, debugRuntime(),
+				worldCapabilityProfile, () -> defaultEntityPhysicsEnabled, () -> defaultDebugOverlays);
 		this.regionTick = new MinecraftRegionTick(regionApplication, regionInputs, snapshots,
 				worldCapabilityProfile, serverConfig.maximumPhaseOperationsPerStep());
 		this.controllerQueries = new ControllerQueryUseCase(
@@ -707,547 +687,69 @@ public final class FluidSimulationService {
 		return ControllerActivation.created(footprint);
 	}
 
-	/**
-	 * Safely builds and activates the small persistent controller fixture used by container and
-	 * chemistry smoke tests. The complete 6x6x6 occupied volume must already be loaded and air;
-	 * failed placement or activation restores every block written by this method.
-	 */
+	/** Restores the world blocks the gas-demo glass scaffold replaced before a new scenario. */
+	public void restoreAirDemoScaffolding(MinecraftServer server) {
+		debugFixtures.restoreAirDemoScaffolding(server);
+	}
+
 	public BlockPos createControllerDemo(ServerPlayer player) {
-		final int interiorSize = 4;
-		final int outerSize = interiorSize + 2;
-		ServerLevel level = player.level();
-		Direction facing = player.getDirection();
-		BlockPos nearFace = player.blockPosition().relative(facing, 4).above(2);
-		BlockPos minimum;
-		BlockPos controller;
-		if (facing.getAxis() == Direction.Axis.X) {
-			int minimumX = facing == Direction.EAST ? nearFace.getX() : nearFace.getX() - outerSize + 1;
-			minimum = new BlockPos(minimumX, player.blockPosition().getY(), nearFace.getZ() - 2);
-			controller = new BlockPos(nearFace.getX(), minimum.getY() + 2, minimum.getZ() + 2);
-		} else {
-			int minimumZ = facing == Direction.SOUTH ? nearFace.getZ() : nearFace.getZ() - outerSize + 1;
-			minimum = new BlockPos(nearFace.getX() - 2, player.blockPosition().getY(), minimumZ);
-			controller = new BlockPos(minimum.getX() + 2, minimum.getY() + 2, nearFace.getZ());
-		}
-
-		for (int z = 0; z < outerSize; z++) for (int y = 0; y < outerSize; y++) {
-			for (int x = 0; x < outerSize; x++) {
-				BlockPos position = minimum.offset(x, y, z);
-				if (!level.isInWorldBounds(position) || !level.isInsideBuildHeight(position)) {
-					lastTakeoverFailure = "快速控制器超出世界高度/边界：" + position.toShortString();
-					return null;
-				}
-				if (level.getChunkSource().getChunkNow(position.getX() >> 4, position.getZ() >> 4) == null) {
-					lastTakeoverFailure = "快速控制器需要已加载区块："
-							+ (position.getX() >> 4) + "," + (position.getZ() >> 4);
-					return null;
-				}
-				if (!level.getBlockState(position).isAir()) {
-					lastTakeoverFailure = "快速控制器只替换空气；请清空 " + position.toShortString() + " 后重试";
-					return null;
-				}
-			}
-		}
-
-		List<BlockPos> placed = new java.util.ArrayList<>();
-		try {
-			for (int z = 0; z < outerSize; z++) for (int y = 0; y < outerSize; y++) {
-				for (int x = 0; x < outerSize; x++) {
-					if (x != 0 && x != outerSize - 1 && y != 0 && y != outerSize - 1
-							&& z != 0 && z != outerSize - 1) continue;
-					BlockPos position = minimum.offset(x, y, z);
-					BlockState state = position.equals(controller)
-							? MmmBlocks.FLUID_CONTROLLER.defaultBlockState()
-							: MmmBlocks.FLUID_BOUNDARY.defaultBlockState();
-					if (!level.setBlock(position, state, Block.UPDATE_ALL)) {
-						throw new IllegalStateException("无法放置壳块 " + position.toShortString());
-					}
-					placed.add(position.immutable());
-				}
-			}
-		} catch (RuntimeException failure) {
-			rollbackControllerDemoBlocks(level, placed);
-			lastTakeoverFailure = "快速控制器已回滚：" + failure.getMessage();
-			return null;
-		}
-
-		ControllerActivation activation;
-		try {
-			activation = activateController(player, controller);
-		} catch (RuntimeException failure) {
-			// An unchecked activation failure may have reached persistent region-state. Keep the
-			// visible shell so recovery never has to guess whether removing it is safe.
-			lastTakeoverFailure = "快速控制器激活异常；为保护可能已发布的 region-state，壳体已保留："
-					+ failure.getMessage();
-			return null;
-		}
-		if (!activation.succeeded()) {
-			rollbackControllerDemoBlocks(level, placed);
-			lastTakeoverFailure = "快速控制器已回滚：" + activation.failure();
-			return null;
-		}
-		lastTakeoverFailure = null;
-		return controller.immutable();
+		return debugFixtures.createControllerDemo(player);
 	}
-
-	private static void rollbackControllerDemoBlocks(ServerLevel level, List<BlockPos> placed) {
-		for (int index = placed.size() - 1; index >= 0; index--) {
-			BlockPos position = placed.get(index);
-			if (MmmBlocks.isBoundary(level.getBlockState(position))) {
-				level.setBlock(position, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
-			}
-		}
-	}
-
-	/** World blocks the airdemo glass scaffold replaced, for restoration; null dimension means no scaffold. */
-	private final Map<BlockPos, BlockState> airDemoScaffolding = new HashMap<>();
-	private ResourceKey<Level> airDemoScaffoldingDimension;
 
 	public boolean createDemo(ServerPlayer player) {
-		return createDemo(player, false);
+		return debugFixtures.createDemo(player);
 	}
 
 	public boolean createMaterialDemo(ServerPlayer player) {
-		if (!worldCapabilityProfile.hasCapability(WorldCapability.MATERIALS)) {
-			lastTakeoverFailure = "材料功能门未在本次启动启用；先保存配置并重启";
-			return false;
-		}
-
-		return createDemo(player, true);
+		return debugFixtures.createMaterialDemo(player);
 	}
 
-	/** Creates a paused acid/base fixture without changing the mechanical demo geometry. */
 	public boolean createChemistryDemo(ServerPlayer player) {
-		if (!worldCapabilityProfile.hasCapability(WorldCapability.CHEMISTRY)) {
-			lastTakeoverFailure = "化学功能门未在本次启动启用；先启用 materials/chemistry 并重启";
-			return false;
-		}
-		if (!createDemo(player, false)) return false;
-		FluidDomain domain = domain();
-		float[] positionVolume = domain.exportChemicalParticleState().materials().copyPositionVolume();
-		float divider = domain.sizeX() * domain.config().cellSize() / 5.0F;
-		for (int marker = 0; marker < domain.particleCount(); marker++) {
-			if (positionVolume[marker * 4] < divider) {
-				domain.setMarkerChemical(marker, Map.of("mmm:hcl", 1_000_000L), true);
-			} else {
-				domain.setMarkerChemical(marker, Map.of("mmm:naoh", 1_000_000L), false);
-			}
-		}
-		activeRegion().setPaused(true);
-		sendSnapshot(player.level());
-		return true;
+		return debugFixtures.createChemistryDemo(player);
 	}
 
 	public boolean createTensionDemo(ServerPlayer player, int angleDegrees) {
-		if (!worldCapabilityProfile.hasCapability(WorldCapability.MATERIALS)) {
-			lastTakeoverFailure = "材料功能门未在本次启动启用；先保存配置并重启";
-			return false;
-		}
-		if (worldCapabilityProfile.hasCapability(WorldCapability.CHEMISTRY)) {
-			lastTakeoverFailure = "表面张力测试材料没有 chemical phase；chemistry 开启时拒绝混用测试域";
-			return false;
-		}
-		Vec3 look = player.getLookAngle();
-		BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
-		ServerLevel level = player.level();
-		restoreAirDemoScaffolding(level.getServer());
-		RestorationStats restoration = restoreTakeover(level.getServer());
-		if (!restoration.completed()) return false;
-		if (activeRegion() != null && activeRegion().controllerManaged()) {
-			lastTakeoverFailure = "拒绝用开发测试域覆盖持久控制器区域；请先显式移除控制器区域";
-			return false;
-		}
-		BlockPos newOrigin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
-		try {
-			createTransientEmptyRegion(level, newOrigin);
-		} catch (IllegalStateException exception) {
-			lastTakeoverFailure = exception.getMessage();
-			return false;
-		}
-		refreshCollisions(level);
-		FluidDomain domain = domain();
-		for (int z = 0; z < domain.sizeZ(); z++) for (int x = 0; x < domain.sizeX(); x++) {
-			domain.setSolid(x, 0, z, true);
-		}
-		restoreTensionCap(domain, angleDegrees);
-		bindTensionDemoMaterial(domain, angleDegrees);
-		activeRegion().setPaused(true);
-		sendSnapshot(level);
-		return true;
+		return debugFixtures.createTensionDemo(player, angleDegrees);
 	}
 
-	/**
-	 * Creates a paused transient gas-pressure demo: a glass U-tube is scaffolded into the world
-	 * (replacing only air), the lower part is filled with water, and the sealed left chamber's
-	 * gas pocket is preset above or below ambient pressure while the right chamber stays open.
-	 * Running it shows the gas pressure holding a sustained liquid-level difference. Pure water,
-	 * no surface tension, no material gate; writes no region-state and the scaffold restores on
-	 * removal, replacement or server shutdown.
-	 */
-		public boolean createAirDemo(ServerPlayer player, boolean vacuum) {
-			Vec3 look = player.getLookAngle();
-			BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
-			ServerLevel level = player.level();
-			restoreAirDemoScaffolding(level.getServer());
-			RestorationStats restoration = restoreTakeover(level.getServer());
-			if (!restoration.completed()) return false;
-			if (activeRegion() != null && activeRegion().controllerManaged()) {
-				lastTakeoverFailure = "拒绝用开发测试域覆盖持久控制器区域；请先显式移除控制器区域";
-				return false;
-			}
-			BlockPos newOrigin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
-			try {
-				createTransientEmptyRegion(level, newOrigin);
-			} catch (IllegalStateException exception) {
-				lastTakeoverFailure = exception.getMessage();
-				return false;
-			}
-			placeAirDemoScaffolding(level, newOrigin);
-			refreshCollisions(level);
-			FluidDomain domain = domain();
-			fillAirDemoWater(domain);
-			bindConfiguredState(domain);
-			stepMotionOnce(activeRegion(), List.of());
-			domain = activeRegion().domain();
-			GasPressureBoundary network = domain.gasBoundary();
-			if (network.nodeCount() < 1) {
-				lastTakeoverFailure = "左侧气腔未密闭；玻璃只替换空气方块，请清理模拟区域内的其他方块后重试";
-				restoreAirDemoScaffolding(level.getServer());
-				FluidRegion failedRegion = activeRegion();
-				if (failedRegion != null && !failedRegion.controllerManaged()) {
-					regionManager.remove(failedRegion.id());
-					snapshots.sendRemoval(level.getServer(), failedRegion);
-				}
-				return false;
-			}
-			int node = network.nodeIds().get(0);
-			// pressure adds inventory (p = P0(V0/V - 1) > 0), vacuum removes it; the soft gas spring
-			// settles near a third of the preset head, so presets are scaled for a visible difference
-			domain.setGasNodeStandardVolume(node, vacuum ? network.availableVolume(node) * 0.78
-					: network.availableVolume(node) / 0.70);
-			activeRegion().setPaused(true);
-			sendSnapshot(level);
-			return true;
-		}
-
-	/** Glass U-tube layout in region-relative block coordinates: shell, sealed-left roof and a divider with a bottom doorway. */
-	private static boolean isAirDemoScaffoldBlock(int bx, int by, int bz) {
-		boolean shell = bx == 0 || bx == BLOCK_SIZE_X - 1 || bz == 0 || bz == BLOCK_SIZE_Z - 1 || by == 0;
-		boolean roof = by == BLOCK_SIZE_Y - 1 && bx <= 6;
-		boolean divider = bx == 6 && by >= 3;
-		return shell || roof || divider;
-	}
-
-	private void placeAirDemoScaffolding(ServerLevel level, BlockPos origin) {
-		airDemoScaffolding.clear();
-		airDemoScaffoldingDimension = level.dimension();
-		BlockState glass = Blocks.GLASS.defaultBlockState();
-		for (int by = 0; by < BLOCK_SIZE_Y; by++) for (int bz = 0; bz < BLOCK_SIZE_Z; bz++) {
-			for (int bx = 0; bx < BLOCK_SIZE_X; bx++) {
-				if (!isAirDemoScaffoldBlock(bx, by, bz)) continue;
-				BlockPos pos = origin.offset(bx, by, bz);
-				BlockState previous = level.getBlockState(pos);
-				if (!previous.isAir()) continue;
-				if (level.setBlock(pos, glass, Block.UPDATE_ALL)) airDemoScaffolding.put(pos, previous);
-			}
-		}
-	}
-
-	/** Restores the world blocks the airdemo glass scaffold replaced; player-edited positions are left alone. */
-	public void restoreAirDemoScaffolding(MinecraftServer server) {
-		if (airDemoScaffoldingDimension == null) return;
-		ServerLevel level = server.getLevel(airDemoScaffoldingDimension);
-		if (level != null) {
-			for (Map.Entry<BlockPos, BlockState> entry : airDemoScaffolding.entrySet()) {
-				if (!level.getBlockState(entry.getKey()).is(Blocks.GLASS)) continue;
-				level.setBlock(entry.getKey(), entry.getValue(), Block.UPDATE_ALL);
-			}
-		}
-		airDemoScaffolding.clear();
-		airDemoScaffoldingDimension = null;
-	}
-
-	/** Fills both chambers to 3.5 blocks; the two-block doorway column stays inside the fill range and submerged. */
-	private static void fillAirDemoWater(FluidDomain domain) {
-		for (int bz = 1; bz <= BLOCK_SIZE_Z - 2; bz++) {
-			for (int bx = 1; bx <= BLOCK_SIZE_X - 2; bx++) {
-				for (int by = 1; by <= 3; by++) {
-					float fraction = by <= 2 ? 1.0F : 0.5F;
-					for (int localZ = 0; localZ < CELLS_PER_BLOCK; localZ++) {
-						for (int localY = 0; localY < CELLS_PER_BLOCK; localY++) {
-							for (int localX = 0; localX < CELLS_PER_BLOCK; localX++) {
-								int x = bx * CELLS_PER_BLOCK + localX;
-								int y = by * CELLS_PER_BLOCK + localY;
-								int z = bz * CELLS_PER_BLOCK + localZ;
-								if (!domain.isSolid(x, y, z)) domain.setVolume(x, y, z, fraction);
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	private static void bindTensionDemoMaterial(FluidDomain domain, int angleDegrees) {
-		FlipParticleState pure = domain.exportParticleState();
-		float[] positionVolume = pure.copyPositionVolume();
-		float[] velocities = pure.copyParticleVelocities();
-		double[] markerMass = new double[pure.particleCount()];
-		int[] material = new int[pure.particleCount()];
-		FluidMaterial tensionWater = new FluidMaterial("mmm:tension_water", domain.config().density(),
-				"mmm:tension_water", 100.0, Math.toRadians(angleDegrees));
-		FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(tensionWater));
-		double totalMass = 0.0;
-		for (int marker = 0; marker < pure.particleCount(); marker++) {
-			double volume = positionVolume[marker * 4 + 3];
-			markerMass[marker] = volume * tensionWater.referenceDensity();
-			totalMass += markerMass[marker];
-			material[marker] = 0;
-		}
-		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
-				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
-				pure.totalVolume(), totalMass, registry.materials(), positionVolume, velocities,
-				pure.copySolidMask(), markerMass, material
-		));
-	}
-
-	private void createTransientEmptyRegion(ServerLevel level, BlockPos origin) {
-		FluidRegion replaced = activeRegion();
-		if (replaced != null && replaced.controllerManaged()) {
-			throw new IllegalStateException("Refusing to replace a persistent controller region; remove it explicitly first");
-		}
-		RegionCatalog.AdmissionResult preview = regionManager.previewReplacement(
-				COMPATIBILITY_REGION_CELLS, COMPATIBILITY_REGION_MARKERS);
-		if (!preview.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + preview.failure());
-		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, 1_000.0F, 9.81F, 1.0F / 40.0F,
-				300, 1.0E-5F, 0.35F, 2.0E-3F, 0.80F
-		);
-		FluidDomain domain = new FluidDomain(
-				BLOCK_SIZE_X * CELLS_PER_BLOCK, BLOCK_SIZE_Y * CELLS_PER_BLOCK, BLOCK_SIZE_Z * CELLS_PER_BLOCK,
-				config, Math.toIntExact(COMPATIBILITY_REGION_MARKERS)
-		);
-		FluidRegion candidate = new FluidRegion(
-				UUID.randomUUID(), level.dimension(), origin, domain, COMPATIBILITY_REGION_MARKERS
-		);
-		candidate.setEntityPhysicsEnabled(defaultEntityPhysicsEnabled);
-		candidate.setDebugOverlays(defaultDebugOverlays);
-		RegionCatalog.AdmissionResult admission = regionManager.replaceSelected(candidate);
-		if (!admission.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + admission.failure());
-		if (replaced != null) snapshots.sendRemoval(level.getServer(), replaced);
-	}
-
-	private static void restoreTensionCap(FluidDomain domain, int angleDegrees) {
-		int sx = domain.sizeX(), sy = domain.sizeY(), sz = domain.sizeZ();
-		float cellSize = domain.config().cellSize();
-		double wallY = 0.5 * cellSize;
-		double targetCellVolume = 220.0;
-		double theta = Math.toRadians(angleDegrees);
-		double cos = Math.cos(theta), sin = Math.sin(theta);
-		double radiusCells = Math.cbrt(3.0 * targetCellVolume / (Math.PI * (1.0 - cos) * (1.0 - cos) * (2.0 + cos)));
-		double radius = radiusCells * cellSize;
-		double centerX = 0.5 * (sx - 1) * cellSize;
-		double centerY = wallY - radius * cos;
-		double centerZ = 0.5 * (sz - 1) * cellSize;
-		int particleCount = 0;
-		for (int z = 0; z < sz; z++) for (int y = 1; y < sy; y++) for (int x = 0; x < sx; x++) {
-			if (sphericalCapFraction(x, y, z, cellSize, centerX, centerY, centerZ, radius, wallY) > 1.0E-6) {
-				particleCount += 8;
-			}
-		}
-		float[] positionVolume = new float[particleCount * 4];
-		float[] velocities = new float[particleCount * 3];
-		float totalVolume = 0.0F;
-		int particle = 0;
-		for (int z = 0; z < sz; z++) for (int y = 1; y < sy; y++) for (int x = 0; x < sx; x++) {
-			double fraction = sphericalCapFraction(x, y, z, cellSize, centerX, centerY, centerZ, radius, wallY);
-			if (fraction <= 1.0E-6) continue;
-			float perMarker = (float) (fraction / 8.0);
-			for (int slot = 0; slot < 8; slot++) {
-				int base = particle * 4;
-				positionVolume[base] = (x + 0.5F) * cellSize;
-				positionVolume[base + 1] = (y + 0.5F) * cellSize;
-				positionVolume[base + 2] = (z + 0.5F) * cellSize;
-				positionVolume[base + 3] = perMarker;
-				totalVolume += perMarker;
-				particle++;
-			}
-		}
-		domain.restoreParticleState(new FlipParticleState(
-				sx, sy, sz, cellSize, particleCount, totalVolume, positionVolume, velocities,
-				domain.copyCollisionMicroMasks()
-		));
-	}
-
-	private static double sphericalCapFraction(int x, int y, int z, double cellSize,
-	                                           double centerX, double centerY, double centerZ,
-	                                           double radius, double wallY) {
-		double px = x * cellSize, py = y * cellSize, pz = z * cellSize;
-		int samples = 4;
-		int hits = 0;
-		for (int subZ = 0; subZ < samples; subZ++) for (int subY = 0; subY < samples; subY++) {
-			for (int subX = 0; subX < samples; subX++) {
-				double sx = px + (subX + 0.5) * cellSize / samples;
-				double sy = py + (subY + 0.5) * cellSize / samples;
-				double sz = pz + (subZ + 0.5) * cellSize / samples;
-				double dx = sx - centerX, dy = sy - centerY, dz = sz - centerZ;
-				if (sy >= wallY && dx * dx + dy * dy + dz * dz <= radius * radius) hits++;
-			}
-		}
-		return (double) hits / (samples * samples * samples);
-	}
-
-	private boolean createDemo(ServerPlayer player, boolean layeredMaterials) {
-		Vec3 look = player.getLookAngle();
-		BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
-		ServerLevel level = player.level();
-		restoreAirDemoScaffolding(level.getServer());
-		RestorationStats restoration = restoreTakeover(level.getServer());
-		if (!restoration.completed()) return false;
-		if (activeRegion() != null && activeRegion().controllerManaged()) {
-			lastTakeoverFailure = "拒绝用开发测试域覆盖持久控制器区域；请先显式移除控制器区域";
-			return false;
-		}
-		BlockPos newOrigin = center.offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
-		try {
-			createEmpty(level, newOrigin);
-		} catch (IllegalStateException exception) {
-			lastTakeoverFailure = exception.getMessage();
-			return false;
-		}
-		refreshCollisions(level);
-
-		FluidDomain domain = domain();
-		int fillX = domain.sizeX() * 2 / 5;
-		int fillY = domain.sizeY() * 3 / 4;
-		for (int z = 0; z < domain.sizeZ(); z++) {
-			for (int y = 0; y < fillY; y++) {
-				for (int x = 0; x < fillX; x++) {
-					if (!domain.isSolid(x, y, z)) domain.setVolume(x, y, z, 1.0F);
-				}
-			}
-		}
-		if (worldCapabilityProfile.hasCapability(WorldCapability.MATERIALS)) bindDefaultMaterialState(domain);
-		if (layeredMaterials) assignLayeredDemoMaterials(domain, fillY / 2.0F * domain.config().cellSize());
-		bindConfiguredState(domain);
-		activeRegion().setPaused(true);
-		sendSnapshot(level);
-		return true;
+	public boolean createAirDemo(ServerPlayer player, boolean vacuum) {
+		return debugFixtures.createAirDemo(player, vacuum);
 	}
 
 	public CaptureResult captureNearbyWater(ServerPlayer player, boolean takeover) {
-		ServerLevel level = player.level();
-		restoreAirDemoScaffolding(level.getServer());
-		RestorationStats restoration = restoreTakeover(level.getServer());
-		if (!restoration.completed()) {
-			return new CaptureResult(0, -1, restoration.failure());
-		}
-		if (activeRegion() != null && activeRegion().controllerManaged()) {
-			return new CaptureResult(0, -1, "拒绝用开发捕获域覆盖持久控制器区域；请先显式移除控制器区域");
-		}
-		BlockPos newOrigin = player.blockPosition().offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
-		try {
-			createEmpty(level, newOrigin);
-		} catch (IllegalStateException exception) {
-			return new CaptureResult(0, -1, exception.getMessage());
-		}
-		refreshCollisions(level);
-		int wetCells = FluidRegionFactory.captureVanillaWater(level, activeRegion());
-		bindConfiguredState(activeRegion().domain());
-		int removedBlocks = takeover ? beginTakeover(level) : 0;
-		activeRegion().setPaused(true);
-		sendSnapshot(level);
-		return new CaptureResult(wetCells, removedBlocks, removedBlocks < 0 ? lastTakeoverFailure : null);
+		return debugFixtures.captureNearbyWater(player, takeover);
 	}
 
-	/** Temporarily replaces only standalone vanilla water blocks, never waterlogged blocks. */
-	private int beginTakeover(ServerLevel level) {
-		Map<BlockPos, BlockState> candidates = new HashMap<>();
-		for (int blockZ = 0; blockZ < BLOCK_SIZE_Z; blockZ++) for (int blockY = 0; blockY < BLOCK_SIZE_Y; blockY++) for (int blockX = 0; blockX < BLOCK_SIZE_X; blockX++) {
-			BlockPos pos = origin().offset(blockX, blockY, blockZ);
-			BlockState state = level.getBlockState(pos);
-			if (!state.is(Blocks.WATER)) continue;
-			candidates.put(pos.immutable(), state);
-		}
-		if (candidates.isEmpty()) return 0;
-		try {
-			TakeoverBackupStore.BeginResult result = TakeoverBackupStore.begin(level.getServer(), level.dimension(), candidates);
-			takeoverDimension = level.dimension();
-			for (BlockPos position : result.removedPositions()) {
-				takeoverOriginalBlocks.put(position, candidates.get(position));
-			}
-			takeoverMaintenanceEnabled = result.removedBlocks() > 0;
-			lastTakeoverFailure = null;
-			if (result.removedBlocks() == 0) {
-				RestorationStats cleanup = restoreTakeover(level.getServer());
-				if (!cleanup.completed()) return -1;
-			}
-			return result.removedBlocks();
-		} catch (IOException | RuntimeException exception) {
-			String beginFailure = "接管事务启动失败：" + exception.getMessage();
-			MmmMod.LOGGER.error("Refusing water takeover; no recovery file will be overwritten", exception);
-			RestorationStats rollback = restoreTakeover(level.getServer());
-			lastTakeoverFailure = rollback.completed()
-					? beginFailure + "；已安全回滚，原版水未保持接管状态"
-					: beginFailure + "；自动回滚未完成，journal 已锁定新 takeover：" + rollback.failure();
-			return -1;
-		}
-	}
-
+	/** Restores every journaled vanilla-water block; the journal is cleared only after the world pass. */
 	public RestorationStats restoreTakeover(MinecraftServer server) {
-		// Once restoration begins, never let the tick hook remove a block that an interrupted pass already restored.
-		takeoverMaintenanceEnabled = false;
-		try {
-			TakeoverBackupStore.RecoveryResult result = TakeoverBackupStore.recover(server);
-			if (!result.found() && !takeoverOriginalBlocks.isEmpty()) {
-				lastTakeoverFailure = "活动接管缺少 on-disk journal；已停止替换域，需从世界备份核对";
-				MmmMod.LOGGER.error(lastTakeoverFailure);
-				return RestorationStats.failed(false, 0, 0, 0, lastTakeoverFailure);
-			}
-			takeoverOriginalBlocks.clear();
-			takeoverDimension = null;
-			lastTakeoverFailure = null;
-			return new RestorationStats(
-					result.found(), result.restoredBlocks(), result.alreadyRestoredBlocks(), result.skippedBlocks(), true, null
-			);
-		} catch (TakeoverTransaction.RecoveryException exception) {
-			if (exception.worldPassCompleted()) {
-				takeoverOriginalBlocks.clear();
-				takeoverDimension = null;
-			}
-			lastTakeoverFailure = "恢复未完成，journal 已保留并锁定新 takeover：" + exception.getMessage();
-			MmmMod.LOGGER.error("Could not finish the Matter, Motion & Mechanics takeover recovery; recovery files were preserved", exception);
-			return RestorationStats.failed(
-					true,
-					exception.restoredBlocks(),
-					exception.alreadyRestoredBlocks(),
-					exception.skippedBlocks(),
-					lastTakeoverFailure
-			);
-		} catch (IOException | RuntimeException exception) {
-			lastTakeoverFailure = "恢复未完成，journal 已保留并锁定新 takeover：" + exception.getMessage();
-			MmmMod.LOGGER.error("Could not recover the unfinished Matter, Motion & Mechanics takeover; recovery files were preserved", exception);
-			return RestorationStats.failed(TakeoverBackupStore.isLocked(server), 0, 0, 0, lastTakeoverFailure);
-		}
+		return takeover.restore(server);
 	}
 
-	private void createEmpty(ServerLevel level, BlockPos origin) {
-		FluidRegion replaced = activeRegion();
-		if (replaced != null && replaced.controllerManaged()) {
-			throw new IllegalStateException("Refusing to replace a persistent controller region; remove it explicitly first");
-		}
-		RegionCatalog.AdmissionResult preview = regionManager.previewReplacement(
-				COMPATIBILITY_REGION_CELLS, COMPATIBILITY_REGION_MARKERS);
-		if (!preview.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + preview.failure());
-		FluidRegion candidate = FluidRegionFactory.createCommandRegion(
-				level, origin, BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z,
-				CELLS_PER_BLOCK, COMPATIBILITY_REGION_MARKERS
-		);
-		candidate.setEntityPhysicsEnabled(defaultEntityPhysicsEnabled);
-		candidate.setDebugOverlays(defaultDebugOverlays);
-		RegionCatalog.AdmissionResult admission = regionManager.replaceSelected(candidate);
-		if (!admission.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + admission.failure());
-		if (replaced != null) snapshots.sendRemoval(level.getServer(), replaced);
+	/** The last failure reported by a debug fixture or by an interrupted takeover transaction. */
+	public String lastTakeoverFailure() {
+		return debugFixtures.lastFailure();
+	}
+
+	/** The narrow seam the debug fixtures need back into the live region runtime. */
+	private MinecraftDebugFixtures.Runtime debugRuntime() {
+		return new MinecraftDebugFixtures.Runtime() {
+			@Override public FluidRegion.CollisionStats refreshCollisions(ServerLevel level) {
+				return FluidSimulationService.this.refreshCollisions(level);
+			}
+
+			@Override public void stepMotion(FluidRegion region) {
+				stepMotionOnce(region, List.of());
+			}
+
+			@Override public void bindCapabilityState(FluidDomain domain) {
+				bindConfiguredState(domain);
+			}
+
+			@Override public String activateController(ServerPlayer player, BlockPos controllerPosition) {
+				ControllerActivation activation = FluidSimulationService.this.activateController(player, controllerPosition);
+				return activation.succeeded() ? null : activation.failure();
+			}
+		};
 	}
 
 	public boolean setPaused(boolean value, ServerLevel level) {
@@ -1315,10 +817,7 @@ public final class FluidSimulationService {
 		regionOperations.advanceTick();
 		cleanupContainerTransfers(server);
 
-		if (takeoverDimension != null) {
-			ServerLevel takeoverLevel = server.getLevel(takeoverDimension);
-			if (takeoverLevel != null) maintainTakeover(takeoverLevel);
-		}
+		takeover.maintainActive(server);
 		for (FluidRegion region : regionManager.regions()) {
 			ServerLevel level = server.getLevel(region.dimension());
 			if (level == null) {
@@ -1334,15 +833,6 @@ public final class FluidSimulationService {
 			if (ensureRegionAvailable(level, region)) regionTick.tickAvailable(level, region);
 		}
 		regionTick.finishServerTick();
-	}
-
-	private void maintainTakeover(ServerLevel level) {
-		if (!takeoverMaintenanceEnabled || takeoverOriginalBlocks.isEmpty() || !level.dimension().equals(takeoverDimension)) return;
-		for (BlockPos pos : takeoverOriginalBlocks.keySet()) {
-			if (level.getBlockState(pos).is(Blocks.WATER)) {
-				level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS);
-			}
-		}
 	}
 
 	public boolean ensureRegionAvailable(ServerLevel level, FluidRegion region) {
@@ -1563,7 +1053,7 @@ public final class FluidSimulationService {
 	}
 
 	public String status(MinecraftServer server) {
-		String takeoverLock = TakeoverBackupStore.lockDescription(server);
+		String takeoverLock = MinecraftTakeoverAdapter.lockDescription(server);
 		RegionCatalog.BudgetUsage usage = regionManager.usage();
 		FluidRegion region = activeRegion();
 		if (region == null) {
@@ -1573,7 +1063,7 @@ public final class FluidSimulationService {
 					+ " | takeover lock " + takeoverLock
 					+ (regionOperations.issues().isEmpty() ? "" : " | persistence issues " + regionOperations.issues().size())
 					+ (ownershipIssues.isEmpty() ? "" : " | ownership issues " + ownershipIssues.size())
-					+ (lastTakeoverFailure == null ? "" : " | " + lastTakeoverFailure);
+					+ (debugFixtures.lastFailure() == null ? "" : " | " + debugFixtures.lastFailure());
 		}
 		RegionCatalog.BudgetUsage selectedUsage = regionManager.usage();
 		if (!region.solverLoaded()) {
@@ -1627,7 +1117,7 @@ public final class FluidSimulationService {
 				20.0 / region.stepIntervalTicks(),
 				cellVolumes / CELL_VOLUMES_PER_BLOCK, cellVolumes,
 				domain.particleCount(), domain.maximumParticleCount(), domain.markerCellCount(),
-				distribution.visibleCells(), distribution.denseCells(), takeoverOriginalBlocks.size(), takeoverLock,
+				distribution.visibleCells(), distribution.denseCells(), takeover.pendingBlockCount(), takeoverLock,
 				worldBridgeFeatureEnabled ? "on" : "off",
 				region.entityPhysicsEnabled() ? "on" : "off", region.lastAffectedEntities(),
 				entityCoupling.impulseXKilogramMetresPerSecond(),
@@ -1942,37 +1432,15 @@ public final class FluidSimulationService {
 
 	public record CellTarget(int x, int y, int z) { }
 
-	public String lastTakeoverFailure() {
-		return lastTakeoverFailure;
-	}
-
-	public record CaptureResult(int wetCells, int removedVanillaBlocks, String failure) { }
-
 	public record SelectionResult(boolean succeeded, UUID regionId, String failure) {
 		static SelectionResult failed(String failure) { return new SelectionResult(false, null, failure); }
 	}
 
-	private static void bindDefaultMaterialState(FluidDomain domain) {
-		if (domain.hasMaterialState()) return;
-		FlipParticleState pure = domain.exportParticleState();
-		float[] positionVolume = pure.copyPositionVolume();
-		double[] markerMass = new double[pure.particleCount()];
-		int[] material = new int[pure.particleCount()];
-		double totalVolume = 0.0, totalMass = 0.0;
-		for (int marker = 0; marker < pure.particleCount(); marker++) {
-			double volume = positionVolume[marker * 4 + 3];
-			markerMass[marker] = volume * BuiltinFluidMaterials.WATER.referenceDensity();
-			totalVolume += volume;
-			totalMass += markerMass[marker];
-		}
-		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
-				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), totalVolume, totalMass,
-				BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, pure.copyParticleVelocities(), pure.copySolidMask(), markerMass, material
-		));
-	}
-
+	/** Binds the committed world capability registries to a freshly allocated domain. */
 	private void bindConfiguredState(FluidDomain domain) {
-		if (worldCapabilityProfile.hasCapability(WorldCapability.MATERIALS)) bindDefaultMaterialState(domain);
+		if (worldCapabilityProfile.hasCapability(WorldCapability.MATERIALS)) {
+			FluidRegionFactory.bindDefaultMaterialState(domain);
+		}
 		if (worldCapabilityProfile.hasCapability(WorldCapability.CHEMISTRY) && !domain.hasChemistryState()) domain.bindChemistry(chemicalRegistry);
 		if (worldCapabilityProfile.hasCapability(WorldCapability.GRANULAR) && !domain.hasGranularState()) {
 			domain.bindGranular(granularRegistry, domain.materialRegistry());
@@ -1983,25 +1451,6 @@ public final class FluidSimulationService {
 			domain.bindThermal(thermalRegistry, domain.materialRegistry(), GasRegistry.STANDARD_TEMPERATURE_K,
 					serverConfig.maximumThermalSubstepsPerStep());
 		}
-	}
-
-	private static void assignLayeredDemoMaterials(FluidDomain domain, float interfaceY) {
-		FlipMaterialParticleState state = domain.exportMaterialParticleState();
-		float[] positionVolume = state.copyPositionVolume();
-		double[] markerMass = state.copyParticleMass();
-		int[] materials = state.copyMaterialPaletteIndex();
-		double totalMass = 0.0;
-		for (int marker = 0; marker < state.particleCount(); marker++) {
-			int material = positionVolume[marker * 4 + 1] >= interfaceY ? 1 : 0;
-			materials[marker] = material;
-			markerMass[marker] = positionVolume[marker * 4 + 3]
-					* BuiltinFluidMaterials.DEFAULT_PALETTE.get(material).referenceDensity();
-			totalMass += markerMass[marker];
-		}
-		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
-				state.sizeX(), state.sizeY(), state.sizeZ(), state.cellSize(), state.particleCount(), state.totalVolume(), totalMass,
-				state.materials(), positionVolume, state.copyParticleVelocities(), state.copySolidMask(), markerMass, materials
-		));
 	}
 
 	public record ControllerActivation(
@@ -2042,38 +1491,6 @@ public final class FluidSimulationService {
 		SELECTED_PAUSED,
 		PAUSED,
 		RESUMED
-	}
-
-	public record RestorationStats(
-			boolean journalFound,
-			int restoredBlocks,
-			int alreadyRestoredBlocks,
-			int skippedBlocks,
-			int ownershipRestoredBlocks,
-			int ownershipSkippedBlocks,
-			boolean completed,
-			String failure
-	) {
-		RestorationStats(
-				boolean journalFound,
-				int restoredBlocks,
-				int alreadyRestoredBlocks,
-				int skippedBlocks,
-				boolean completed,
-				String failure
-		) {
-			this(journalFound, restoredBlocks, alreadyRestoredBlocks, skippedBlocks, 0, 0, completed, failure);
-		}
-
-		private static RestorationStats failed(
-				boolean journalFound,
-				int restoredBlocks,
-				int alreadyRestoredBlocks,
-				int skippedBlocks,
-				String failure
-		) {
-			return new RestorationStats(journalFound, restoredBlocks, alreadyRestoredBlocks, skippedBlocks, 0, 0, false, failure);
-		}
 	}
 
 	public record WaterEditResult(

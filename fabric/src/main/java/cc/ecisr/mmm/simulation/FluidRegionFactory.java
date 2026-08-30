@@ -1,5 +1,8 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
+import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
+import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
@@ -64,6 +67,29 @@ final class FluidRegionFactory {
 				config,
 				Math.toIntExact(markerCapacity)
 		);
+	}
+
+	/**
+	 * Gives a pure-water domain its default single-material column. It is a pure function of the
+	 * domain itself, so both controller activation and the debug fixtures share this one path.
+	 */
+	static void bindDefaultMaterialState(FluidDomain domain) {
+		if (domain.hasMaterialState()) return;
+		FlipParticleState pure = domain.exportParticleState();
+		float[] positionVolume = pure.copyPositionVolume();
+		double[] markerMass = new double[pure.particleCount()];
+		int[] material = new int[pure.particleCount()];
+		double totalVolume = 0.0, totalMass = 0.0;
+		for (int marker = 0; marker < pure.particleCount(); marker++) {
+			double volume = positionVolume[marker * 4 + 3];
+			markerMass[marker] = volume * BuiltinFluidMaterials.WATER.referenceDensity();
+			totalVolume += volume;
+			totalMass += markerMass[marker];
+		}
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
+				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), totalVolume, totalMass,
+				BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, pure.copyParticleVelocities(), pure.copySolidMask(), markerMass, material
+		));
 	}
 
 	static int captureVanillaWater(ServerLevel level, FluidRegion region) {

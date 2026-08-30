@@ -8,22 +8,24 @@
 |---|---|---:|---|
 | core | `FlipFluidDomain` | 7975 → 4067（S01–S11）→ S12 删除 | 已关闭 |
 | core | `FluidDomain` | S12 切换时 4031；S13 为 cheap layout identity 增至 4036 | S21 |
-| fabric | `FluidSimulationService` | 3329 → 3249（S13）→ 3050（S14） | S21 |
+| fabric | `FluidSimulationService` | 3329 → 3249（S13）→ 3050（S14）→ 2412（S15）→ 2099（S16）→ 1516（S19a） | S21 |
 | fabric | `RegionState` | 1480 | S17 |
 | core | `FlipThermalState` | 1461 | S10 |
 | gpu-probe | `VulkanFlipPipeline` | 1237 | S20 |
 | fabric | `FluidTransferService` | 1121 | S16 |
 | fabric | `RegionStateFiles` | 1053 | S18 |
 
-超过 600 行但未超限的类只产生 warning，不进 allowlist（当前：`ClientFluidVolumeRenderer` 833、`AirNetwork` 830、`ContainerTransferStore` 768、`FluidRegionPersistence` 760、`ChemicalParcelStore` 695、`WorldCapabilityBundleStore` 677、`MmmCommands` 625、`FluidRegion`/`GpuFlipProbeValidation` 617）。
+超过 600 行但未超限的类只产生 warning，不进 allowlist（S19a 后：`ClientFluidVolumeRenderer` 833、`AirNetwork` 830、`ChemicalParcelStore` 695、`WorldCapabilityBundleStore` 677、`GpuFlipProbeValidation` 617、`FluidRegion` 603；`MmmCommands` 594 与 `MinecraftDebugFixtures` 578 已在 S19a 降到 600 以下）。
 
 ## 模块规模
+
+S19a 后的当前值，由 `pytool/arch_baseline.py` 生成：
 
 | 模块 | 文件 | 行数 |
 |---|---:|---:|
 | `api/src/main` | 11 | 263 |
-| `core/src/main` | 204 | 32005 |
-| `fabric/src/main` | 126 | 24991 |
+| `core/src/main` | 214 | 33393 |
+| `fabric/src/main` | 150 | 25817 |
 | `fabric/src/client` | 8 | 1383 |
 | `gpu-probe/src/main` | 12 | 3868 |
 

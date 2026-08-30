@@ -344,6 +344,20 @@
 * quarantine 容量只在 REMOVED commit 前准入；HEAD 发布后的收敛签名删除无效预算参数，明确已提交事务必须幂等走到 exact AFTER，不能因重启后的预算变化被再次拒绝。HEAD/slot 的 force、回读、atomic rename、directory sync 与 fault point 顺序逐项保持；ownership/container 的 generation 与 checksum 边界未改。
 * `region-state,ownership,containers` 三门与 `verifyArchitecture` 通过，architecture 扫描 391 个生产源。代码提交生产 Java +1829/-1336，净增 493 行；测试 +105/-63，净增 42 行；生产源 385→391。新增量主要是持久状态分类、可证明删除和真实 repository/ownership 边界，旧两个大类均已删除而非并存 façade。无需进游戏：没有视觉、真实 `VoxelShape`，跨重启事务和文件树决策已由现有故障/恢复矩阵自动观察。
 
+### S19a
+
+* 先沿 S17/S18 接缝把持久层当未受信任实现复核，而不是重跑测试：`prepare`/`commit` 与已删除的 `RegionStateFiles` 逐项对照，确认首次发布路径、slot 选择、`alreadyCommitted` 短路、generation 单调性检查、`readPrevious`/`activatePrevious` 与 quarantine 分类语义均未漂移；`prepare` 中旧实现的无条件 `deleteTree(temporary/inactive)` 已由 `clearInactiveForPublication` 的“先验证 writer 归属再删”取代，`current == null` 分支目录必为空，两条路径等价。`ActiveGenerationStore.readGeneration` 对 REMOVED HEAD 的拒答保证 `prepare` 不会复活已移除区域。S18 无需返工。
+* 复核还发现两处与本切片无关的既有问题：`RegionGenerationStore.readManifest` 只有测试消费者；`MmmCommands` 的 `thermalSourceStatus`/`setThermalSource`/`aimedThermalReservoir` 自 `a756645` 起已从命令树摘除（`playable-lifecycle-plan.md` 明确“不要用 `/mmm thermalsource` 作为正式路径”），成为绕过 `ThermalReservoirUseCase` 的死代码。前者保留（测试仍按原入口逐 layout 比对 manifest），后者连同失效 import 一并删除；`README.md` 的可调恒温边界条目仍描述这个已不存在的命令，本次一并按实际正式路径（放置后用 field probe 右击打开服务端签发界面）更正。
+* `FluidSimulationService` 余下的最大非编排职责是 `/mmm` 开发测试域与接管事务。新建 `MinecraftTakeoverAdapter` 独占接管事务的三项状态（被移除水方块的 preimage、所属维度、维护开关）与 `lastFailure`，`begin`/`restore`/`maintainActive`/`lockDescription` 全部随迁；它没有任何协作对象，是本次唯一零参数构造的新 owner。
+* 新建 `MinecraftDebugFixtures` 独占 gas 演示玻璃脚手架状态与 dam break、分层材料、酸碱、表面张力、密闭气压、原版水捕获六类场景的构造与场景数学；四个场景共用的“清脚手架→结束接管→拒绝覆盖持久控制器区域→准入瞬态区域”前奏收敛为一个 `admitTransientRegion`，`lastFailure` 也归它所有。需要回到活动 runtime 的三件事（碰撞刷新/可用性重检、单步同步 motion、控制器激活）与一项世界能力绑定收进由 fixtures 自己声明的 `MinecraftDebugFixtures.Runtime` 窄接口，service 只提供实现，不把 `stepMotionOnce` 或 `activateController` 公开。
+* `RestorationStats` 与 `CaptureResult` 由 service 的嵌套 record 升为 `simulation` 顶层 record：`MinecraftTakeoverAdapter`、fixtures、`MmmCommands` 三方共用，继续嵌套会让搬出的类反向引用 god service。`bindDefaultMaterialState` 下沉为 `FluidRegionFactory` 的纯函数（只依赖 domain 与 `BuiltinFluidMaterials`），controller 激活与 fixtures 共用一条实现；`bindConfiguredState` 留在 service 作为私有方法，fixtures 经 `Runtime` 调用，不复制注册表绑定规则。
+* `FluidSimulationService` 由 2099 行降至 1516 行，删除 15 个失效 import；`MmmCommands` 由 627 降至 594。`verifyArchitecture`、`lifecycle`、`region-state` 通过（架构门扫描 395 个生产源，两个新类均低于 600 行 warning 线）。无需进游戏：本切片只做职责搬移，不涉及视觉、真实 `VoxelShape` 或跨重启事务。
+
+### S19a 已定边界决策
+
+* `CELLS_PER_BLOCK` / `CELL_VOLUMES_PER_BLOCK` 仍留在 `FluidSimulationService`：`MinecraftRegionInputs`、`MinecraftContainerTransferOperations` 与 fixtures 三方共用同一方块↔子格约定，把它搬进 `FluidRegionFactory` 会立刻与后者的 `cellsPerBlock` 形参自相矛盾；真正归属应随“区域分配工作流”切片决定，不在本次提交里顺手改名。
+* 场景失败文案的归属随之明确：接管事务的失败写在 `MinecraftTakeoverAdapter`，场景失败写在 `MinecraftDebugFixtures`。service 的 `lastTakeoverFailure()` 改为返回 fixtures 的 lastFailure，而 fixtures 在每条被 takeover 阻断的路径上都已把 `RestorationStats.failure()` 记进自己的 lastFailure，因此 `/mmm` 五个 demo/capture 子命令的用户可见文案逐字不变。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。
