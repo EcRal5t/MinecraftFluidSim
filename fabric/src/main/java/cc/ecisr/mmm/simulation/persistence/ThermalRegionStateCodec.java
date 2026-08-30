@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.simulation.persistence;
 
+import cc.ecisr.mmm.model.region.RegionSectionState;
+
 import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;

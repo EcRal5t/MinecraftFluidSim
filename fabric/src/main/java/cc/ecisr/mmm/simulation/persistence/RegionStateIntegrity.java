@@ -1,10 +1,14 @@
 package cc.ecisr.mmm.simulation.persistence;
 
+import cc.ecisr.mmm.model.region.RegionExtension;
+import cc.ecisr.mmm.model.region.RegionGeometry;
+import cc.ecisr.mmm.model.region.RegionManifest;
+import cc.ecisr.mmm.model.region.RegionRuntimeIntent;
+import cc.ecisr.mmm.model.region.RegionSectionState;
+import cc.ecisr.mmm.model.region.RegionStateLayout;
+
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.fluid.FluidMaterial;
-import cc.ecisr.mmm.simulation.FluidRegion;
-import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
-import net.minecraft.core.BlockPos;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -139,14 +143,14 @@ final class RegionStateIntegrity {
 		out.writeInt(Float.floatToRawIntBits(config.interfaceCompression()));
 	}
 
-	private static void writeRuntime(DataOutputStream out, FluidRegion.PersistedRuntime runtime) throws IOException {
+	private static void writeRuntime(DataOutputStream out, RegionRuntimeIntent runtime) throws IOException {
 		out.writeUTF(runtime.resumeState().name());
 		out.writeBoolean(runtime.operatorPaused()); out.writeBoolean(runtime.entityPhysicsEnabled());
 		out.writeBoolean(runtime.debugOverlays());
 		out.writeInt(runtime.stepIntervalTicks()); out.writeLong(runtime.tick());
 	}
 
-	private static void writeFootprint(DataOutputStream out, FluidRegionFootprint footprint) throws IOException {
+	private static void writeFootprint(DataOutputStream out, RegionGeometry.ControllerFootprint footprint) throws IOException {
 		writeBlockPos(out, footprint.controllerPosition());
 		writeBlockPos(out, footprint.minimumInterior());
 		writeBlockPos(out, footprint.maximumInterior());
@@ -155,8 +159,8 @@ final class RegionStateIntegrity {
 		writeLongSet(out, footprint.requiredChunks());
 	}
 
-	private static void writeBlockPos(DataOutputStream out, BlockPos pos) throws IOException {
-		out.writeInt(pos.getX()); out.writeInt(pos.getY()); out.writeInt(pos.getZ());
+	private static void writeBlockPos(DataOutputStream out, RegionGeometry.BlockPosition pos) throws IOException {
+		out.writeInt(pos.x()); out.writeInt(pos.y()); out.writeInt(pos.z());
 	}
 
 	private static void writeLongSet(DataOutputStream out, Set<Long> values) throws IOException {

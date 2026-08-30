@@ -30,7 +30,7 @@ public final class ArchitectureDependencyValidation {
 			"gpu-probe/src/main/java",
 	};
 
-	/** Live runtime types that persistence codecs/stores must stop importing (S17/S18). */
+	/** Live runtime types that persistence codecs/stores must never import. */
 	private static final Set<String> LIVE_REGION_TYPES = Set.of(
 			"FluidRegion", "FluidRegionLifecycle", "FluidRegionFootprint", "FluidRegionManager",
 			"FluidRegionOperations", "ThermalActivity");
@@ -56,15 +56,13 @@ public final class ArchitectureDependencyValidation {
 	private static final Map<String, String> SIZE_ALLOWLIST = Map.of(
 			"FluidDomain", "S21",
 			"FluidSimulationService", "S21",
-			"RegionState", "S17",
 			"VulkanFlipPipeline", "S20",
 			"RegionStateFiles", "S18");
 	private static final int SIZE_LIMIT = 1000;
 	private static final int SIZE_WARNING = 600;
 
-	/** persistence classes still allowed to import live region types until the S17 assembler split. */
-	private static final Set<String> PERSISTENCE_RUNTIME_ALLOWLIST = Set.of(
-			"RegionManifest", "RegionState", "RegionStateCodec", "RegionStateIntegrity");
+	/** S17 closed the last persistence-to-live-runtime exception. */
+	private static final Set<String> PERSISTENCE_RUNTIME_ALLOWLIST = Set.of();
 
 	record SourceFile(
 			String module, String simpleName, String packageName, int lines, List<String> imports, boolean hasLocator
@@ -216,7 +214,7 @@ public final class ArchitectureDependencyValidation {
 				if (imported.startsWith("cc.ecisr.mmm.simulation.") && referencesLiveType
 						&& !PERSISTENCE_RUNTIME_ALLOWLIST.contains(source.simpleName())) {
 					violations.add("persistence references live runtime type: "
-							+ source.simpleName() + " -> " + imported + " (allowlisted until S17)");
+							+ source.simpleName() + " -> " + imported);
 				}
 			}
 		}

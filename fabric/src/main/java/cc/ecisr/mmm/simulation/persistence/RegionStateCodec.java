@@ -1,13 +1,16 @@
 package cc.ecisr.mmm.simulation.persistence;
 
+import cc.ecisr.mmm.model.region.RegionExtension;
+import cc.ecisr.mmm.model.region.RegionGeometry;
+import cc.ecisr.mmm.model.region.RegionManifest;
+import cc.ecisr.mmm.model.region.RegionRuntimeIntent;
+import cc.ecisr.mmm.model.region.RegionSectionState;
+import cc.ecisr.mmm.model.region.RegionStateLayout;
+
 import cc.ecisr.mmm.fluid.FluidMaterial;
 import cc.ecisr.mmm.fluid.FlipChemicalParticleState;
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
-import cc.ecisr.mmm.simulation.FluidRegion;
-import cc.ecisr.mmm.simulation.FluidRegionLifecycle;
-import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
-import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
@@ -127,7 +130,7 @@ final class RegionStateCodec {
 		}
 		try {
 			return new RegionManifest(identity.layout(), identity.id(), identity.dimension(), identity.generation(), root.getLongOr("NetworkGeneration", -1L),
-					BlockPos.of(root.getLongOr("Origin", 0L)), root.getIntOr("SizeX", -1), root.getIntOr("SizeY", -1), root.getIntOr("SizeZ", -1),
+					RegionGeometry.BlockPosition.fromPacked(root.getLongOr("Origin", 0L)), root.getIntOr("SizeX", -1), root.getIntOr("SizeY", -1), root.getIntOr("SizeZ", -1),
 					decodeConfig(root.getCompoundOrEmpty("Solver")), root.getLongOr("MarkerBudget", -1L),
 					decodeRuntime(root.getCompoundOrEmpty("Runtime")), decodeFootprint(root.getCompoundOrEmpty("Footprint")),
 					root.getIntOr("MarkerCount", -1), root.getLongOr("VolumeBits", 0L), materials, totalMassBits, materialLedgers, sections,
@@ -368,7 +371,7 @@ final class RegionStateCodec {
 				tag.getIntOr("PressureIterations", -1), bits(tag, "PressureTolerance"), bits(tag, "Courant"), bits(tag, "FluidEpsilon"), bits(tag, "InterfaceCompression"));
 	}
 
-	private static CompoundTag encodeRuntime(FluidRegion.PersistedRuntime runtime) {
+	private static CompoundTag encodeRuntime(RegionRuntimeIntent runtime) {
 		CompoundTag tag = new CompoundTag();
 		tag.putString("ResumeState", runtime.resumeState().name()); tag.putBoolean("OperatorPaused", runtime.operatorPaused());
 		tag.putBoolean("EntityPhysics", runtime.entityPhysicsEnabled());
@@ -376,12 +379,12 @@ final class RegionStateCodec {
 		return tag;
 	}
 
-	private static FluidRegion.PersistedRuntime decodeRuntime(CompoundTag tag) throws IOException {
+	private static RegionRuntimeIntent decodeRuntime(CompoundTag tag) throws IOException {
 		require(tag, "ResumeState", Tag.TAG_STRING); require(tag, "OperatorPaused", Tag.TAG_BYTE);
 		require(tag, "EntityPhysics", Tag.TAG_BYTE); require(tag, "Debug", Tag.TAG_BYTE);
 		require(tag, "StepInterval", Tag.TAG_INT); require(tag, "Tick", Tag.TAG_LONG);
 		try {
-			return new FluidRegion.PersistedRuntime(FluidRegionLifecycle.State.valueOf(tag.getStringOr("ResumeState", "")),
+			return new RegionRuntimeIntent(RegionRuntimeIntent.ResumeState.valueOf(tag.getStringOr("ResumeState", "")),
 					tag.getBooleanOr("OperatorPaused", true), tag.getBooleanOr("EntityPhysics", false), tag.getBooleanOr("Debug", false),
 					tag.getIntOr("StepInterval", -1), tag.getLongOr("Tick", -1L));
 		} catch (IllegalArgumentException exception) {
@@ -389,7 +392,7 @@ final class RegionStateCodec {
 		}
 	}
 
-	private static CompoundTag encodeFootprint(FluidRegionFootprint footprint) {
+	private static CompoundTag encodeFootprint(RegionGeometry.ControllerFootprint footprint) {
 		CompoundTag tag = new CompoundTag();
 		tag.putLong("Controller", footprint.controllerPosition().asLong()); tag.putLong("Minimum", footprint.minimumInterior().asLong());
 		tag.putLong("Maximum", footprint.maximumInterior().asLong()); tag.putLongArray("Interior", longs(footprint.interiorBlocks()));
@@ -397,11 +400,13 @@ final class RegionStateCodec {
 		return tag;
 	}
 
-	private static FluidRegionFootprint decodeFootprint(CompoundTag tag) throws IOException {
+	private static RegionGeometry.ControllerFootprint decodeFootprint(CompoundTag tag) throws IOException {
 		require(tag, "Controller", Tag.TAG_LONG); require(tag, "Minimum", Tag.TAG_LONG); require(tag, "Maximum", Tag.TAG_LONG);
 		require(tag, "Interior", Tag.TAG_LONG_ARRAY); require(tag, "Boundary", Tag.TAG_LONG_ARRAY); require(tag, "Chunks", Tag.TAG_LONG_ARRAY);
-		return new FluidRegionFootprint(BlockPos.of(tag.getLongOr("Controller", 0L)), BlockPos.of(tag.getLongOr("Minimum", 0L)),
-				BlockPos.of(tag.getLongOr("Maximum", 0L)), set(tag.getLongArray("Interior").orElseThrow()),
+		return new RegionGeometry.ControllerFootprint(
+				RegionGeometry.BlockPosition.fromPacked(tag.getLongOr("Controller", 0L)),
+				RegionGeometry.BlockPosition.fromPacked(tag.getLongOr("Minimum", 0L)),
+				RegionGeometry.BlockPosition.fromPacked(tag.getLongOr("Maximum", 0L)), set(tag.getLongArray("Interior").orElseThrow()),
 				set(tag.getLongArray("Boundary").orElseThrow()), set(tag.getLongArray("Chunks").orElseThrow()));
 	}
 

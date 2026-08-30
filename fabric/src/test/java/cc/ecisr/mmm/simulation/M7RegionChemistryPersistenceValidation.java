@@ -144,7 +144,7 @@ public final class M7RegionChemistryPersistenceValidation {
 		FluidRegion source = populatedRegion(UUID.randomUUID()); bindDefaultMaterials(source);
 		source.domain().bindChemistry(chemistry);
 		source.domain().bindGranular(granular, source.domain().materialRegistry());
-		new RegionStateFiles(gateRoot, chemistry, granular).publish(RegionState.captureGranular(source, 1L));
+		new RegionStateFiles(gateRoot, chemistry, granular).publish(RegionCheckpointFixtures.captureGranular(source, 1L));
 		FluidRegionManager currentManager = manager();
 		FluidRegionPersistence current = new FluidRegionPersistence(gateRoot, TestProfiles.granular(chemistry, granular), chemistry, granular, null, null);
 		check(current.loadMetadata(currentManager).isEmpty(), "current granular layout was locked");
@@ -163,7 +163,7 @@ public final class M7RegionChemistryPersistenceValidation {
 		FluidRegion chemical = populatedRegion(UUID.randomUUID());
 		bindDefaultMaterials(chemical);
 		chemical.domain().bindChemistry(chemistry);
-		new RegionStateFiles(gateRoot, chemistry).publish(RegionState.captureChemical(chemical, 1L));
+		new RegionStateFiles(gateRoot, chemistry).publish(RegionCheckpointFixtures.captureChemical(chemical, 1L));
 		FluidRegionManager currentManager = manager();
 		FluidRegionPersistence current = new FluidRegionPersistence(gateRoot, TestProfiles.chemical(chemistry), chemistry, null, null, null);
 		check(current.loadMetadata(currentManager).isEmpty(), "current chemical layout was locked");

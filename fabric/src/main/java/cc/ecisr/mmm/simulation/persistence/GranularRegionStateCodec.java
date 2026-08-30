@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.simulation.persistence;
 
+import cc.ecisr.mmm.model.region.RegionSectionState;
+
 import cc.ecisr.mmm.granular.GranularLimits;
 import cc.ecisr.mmm.granular.GranularAuditLedger;
 import cc.ecisr.mmm.granular.GranularStateSnapshot;

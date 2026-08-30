@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.simulation.ownership;
 
+import cc.ecisr.mmm.simulation.RegionCheckpointFixtures;
+
 import cc.ecisr.mmm.simulation.ownership.OwnershipCoordinator.FailureInjector;
 import cc.ecisr.mmm.simulation.ownership.OwnershipCoordinator.FailurePoint;
 import cc.ecisr.mmm.fluid.FluidDomain;
@@ -148,7 +150,7 @@ public final class M6OwnershipValidation {
 	private static void testGenerationGuard() throws Exception {
 		withTemporaryWorld(root -> {
 			Fixture fixture = new Fixture(root, 2);
-			RegionState wrongTarget = RegionState.capture(populatedRegion(fixture.regionId()), 3L);
+			RegionState wrongTarget = RegionCheckpointFixtures.capture(populatedRegion(fixture.regionId()), 3L);
 			expectIOException(() -> OwnershipCoordinator.acquire(fixture.regionFiles(), fixture.ownershipFiles(),
 					wrongTarget, fixture.world().originalEntries(), "test warning", fixture.world(), FailureInjector.NONE));
 			check(!fixture.ownershipFiles().hasWAL() && fixture.world().allOriginal(),
@@ -180,7 +182,7 @@ public final class M6OwnershipValidation {
 		withTemporaryWorld(root -> {
 			UUID regionId = UUID.randomUUID();
 			RegionStateFiles files = new RegionStateFiles(root);
-			RegionState staged = RegionState.capture(populatedRegion(regionId), 1L);
+			RegionState staged = RegionCheckpointFixtures.capture(populatedRegion(regionId), 1L);
 			files.prepare(staged, (point, path) -> { });
 			Path regionDirectory = root.resolve("mmm").resolve("region-state").resolve(regionId.toString());
 			check(Files.isDirectory(regionDirectory) && files.committedGeneration(regionId) == 0L,
@@ -194,7 +196,7 @@ public final class M6OwnershipValidation {
 
 			UUID nestedForeignId = UUID.randomUUID();
 			RegionStateFiles nestedFiles = new RegionStateFiles(root);
-			nestedFiles.prepare(RegionState.capture(populatedRegion(nestedForeignId), 1L), (point, path) -> { });
+			nestedFiles.prepare(RegionCheckpointFixtures.capture(populatedRegion(nestedForeignId), 1L), (point, path) -> { });
 			Path nestedForeign = root.resolve("mmm").resolve("region-state")
 					.resolve(nestedForeignId.toString()).resolve("slot-a").resolve("foreign").resolve("payload.bin");
 			Files.createDirectories(nestedForeign.getParent());
@@ -490,14 +492,14 @@ public final class M6OwnershipValidation {
 
 	private static OwnershipCoordinator.AcquireResult acquire(Fixture fixture, FailureInjector failures)
 			throws IOException {
-		RegionState staged = RegionState.capture(populatedRegion(fixture.regionId()), 1L);
+		RegionState staged = RegionCheckpointFixtures.capture(populatedRegion(fixture.regionId()), 1L);
 		return OwnershipCoordinator.acquire(fixture.regionFiles(), fixture.ownershipFiles(), staged,
 				fixture.world().originalEntries(), "test warning", fixture.world(), failures);
 	}
 
 	private static OwnershipCoordinator.ReleaseResult release(Fixture fixture, FailureInjector failures)
 			throws IOException {
-		RegionState staged = RegionState.capture(populatedRegion(fixture.regionId()), 2L);
+		RegionState staged = RegionCheckpointFixtures.capture(populatedRegion(fixture.regionId()), 2L);
 		return OwnershipCoordinator.release(fixture.regionFiles(), fixture.ownershipFiles(), staged,
 				"test warning", fixture.world(), failures);
 	}

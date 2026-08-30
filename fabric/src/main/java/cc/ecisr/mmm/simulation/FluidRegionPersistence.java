@@ -1,5 +1,8 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.model.region.RegionManifest;
+import cc.ecisr.mmm.model.region.RegionStateLayout;
+
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
@@ -14,10 +17,10 @@ import cc.ecisr.mmm.simulation.ownership.OwnershipFiles;
 import cc.ecisr.mmm.simulation.ownership.OwnershipJournal;
 import cc.ecisr.mmm.simulation.ownership.OwnershipStore;
 import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
-import cc.ecisr.mmm.simulation.persistence.RegionManifest;
+import cc.ecisr.mmm.simulation.persistence.RegionCheckpointAssembler;
+import cc.ecisr.mmm.simulation.persistence.RegionCheckpointRestorer;
 import cc.ecisr.mmm.simulation.persistence.RegionState;
 import cc.ecisr.mmm.simulation.persistence.RegionStateFiles;
-import cc.ecisr.mmm.simulation.persistence.RegionStateLayout;
 import cc.ecisr.mmm.simulation.persistence.RemovedRegionManifest;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
@@ -136,10 +139,12 @@ final class FluidRegionPersistence {
 				Identifier dimensionId = Identifier.tryParse(manifest.dimensionId());
 				if (dimensionId == null) throw new IOException("invalid dimension");
 				ResourceKey<Level> dimension = ResourceKey.create(Registries.DIMENSION, dimensionId);
-				FluidRegion region = FluidRegion.unloaded(manifest.regionId(), dimension, manifest.origin(),
+				FluidRegion region = FluidRegion.unloaded(manifest.regionId(), dimension,
+						MinecraftRegionCheckpointSource.blockPosition(manifest.origin()),
 						manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
-						manifest.reservedMarkerCapacity(), manifest.footprint(), manifest.networkGeneration(),
-						manifest.checkpointGeneration(), manifest.totalMarkerCount(), (float) manifest.totalVolume(), manifest.runtime());
+						manifest.reservedMarkerCapacity(), MinecraftRegionCheckpointSource.minecraftFootprint(manifest.footprint()),
+						manifest.networkGeneration(), manifest.checkpointGeneration(), manifest.totalMarkerCount(),
+						(float) manifest.totalVolume(), MinecraftRegionCheckpointSource.persistedRuntime(manifest.runtime()));
 				RegionCatalog.AdmissionResult registration = manager.registerDiscovered(region);
 				if (!registration.accepted()) {
 					throw new IOException("committed metadata registration failed: " + registration.failure());
@@ -492,10 +497,11 @@ final class FluidRegionPersistence {
 		if (region.solverLoaded() || region.lifecycle().state() != FluidRegionLifecycle.State.UNLOADED) return;
 		RegionState state = files.read(region.id());
 		RegionManifest manifest = state.manifest();
+		RegionCheckpointRestorer restorer = new RegionCheckpointRestorer(state.checkpoint());
 		validateFeatureShape(manifest);
 		if (manifest.checkpointGeneration() != region.checkpointGeneration() || manifest.networkGeneration() != region.networkGeneration()
 				|| !manifest.dimensionId().equals(region.dimension().identifier().toString())
-				|| !manifest.origin().equals(region.origin()) || manifest.sizeX() != region.sizeX()
+				|| !manifest.origin().equals(MinecraftRegionCheckpointSource.position(region.origin())) || manifest.sizeX() != region.sizeX()
 				|| manifest.sizeY() != region.sizeY() || manifest.sizeZ() != region.sizeZ()
 				|| manifest.reservedMarkerCapacity() != region.reservedMarkerCapacity()) {
 			throw new IOException("Committed checkpoint no longer matches admitted region metadata");
@@ -522,14 +528,14 @@ final class FluidRegionPersistence {
 		}
 		if (profile.hasCapability(WorldCapability.CHEMISTRY)) {
 			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
-			region.restoreChemicalSolver(state.reconstructChemical(chemicalRegistry), chemicalRegistry,
+			region.restoreChemicalSolver(restorer.reconstructChemical(chemicalRegistry), chemicalRegistry,
 					manifest.checkpointGeneration());
 			return;
 		}
 		if (profile.hasCapability(WorldCapability.MATERIALS)) {
-			region.restoreMaterialSolver(state.reconstructMaterial(), manifest.checkpointGeneration());
+			region.restoreMaterialSolver(restorer.reconstructMaterial(), manifest.checkpointGeneration());
 		} else {
-			region.restoreSolver(state.reconstruct(), manifest.checkpointGeneration());
+			region.restoreSolver(restorer.reconstruct(), manifest.checkpointGeneration());
 		}
 	}
 
@@ -587,11 +593,11 @@ final class FluidRegionPersistence {
 	private static void validateRecoveryIdentity(FluidRegion region, RegionManifest manifest) throws IOException {
 		if (manifest.networkGeneration() != region.networkGeneration()
 				|| !manifest.dimensionId().equals(region.dimension().identifier().toString())
-				|| !manifest.origin().equals(region.origin()) || manifest.sizeX() != region.sizeX()
+				|| !manifest.origin().equals(MinecraftRegionCheckpointSource.position(region.origin())) || manifest.sizeX() != region.sizeX()
 				|| manifest.sizeY() != region.sizeY() || manifest.sizeZ() != region.sizeZ()
 				|| !manifest.solverConfig().equals(region.solverConfig())
 				|| manifest.reservedMarkerCapacity() != region.reservedMarkerCapacity()
-				|| !manifest.footprint().equals(region.footprint())) {
+				|| !manifest.footprint().equals(MinecraftRegionCheckpointSource.footprint(region.footprint()))) {
 			throw new IOException("Previous checkpoint does not match the admitted controller identity");
 		}
 	}
@@ -601,11 +607,13 @@ final class FluidRegionPersistence {
 		Identifier dimensionId = Identifier.tryParse(manifest.dimensionId());
 		if (dimensionId == null) throw new IOException("Previous checkpoint has an invalid dimension");
 		return FluidRegion.unloaded(manifest.regionId(),
-				ResourceKey.create(Registries.DIMENSION, dimensionId), manifest.origin(),
+				ResourceKey.create(Registries.DIMENSION, dimensionId),
+				MinecraftRegionCheckpointSource.blockPosition(manifest.origin()),
 				manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
-				manifest.reservedMarkerCapacity(), manifest.footprint(), manifest.networkGeneration(),
+				manifest.reservedMarkerCapacity(), MinecraftRegionCheckpointSource.minecraftFootprint(manifest.footprint()),
+				manifest.networkGeneration(),
 				manifest.checkpointGeneration(), manifest.totalMarkerCount(),
-				(float) manifest.totalVolume(), manifest.runtime());
+				(float) manifest.totalVolume(), MinecraftRegionCheckpointSource.persistedRuntime(manifest.runtime()));
 	}
 
 	private RegionState captureForFeatureGate(FluidRegion region, long generation) throws IOException {
@@ -615,6 +623,7 @@ final class FluidRegionPersistence {
 	private RegionState captureForFeatureGate(
 			FluidRegion region, long generation, boolean synchronizeGasTopology
 	) throws IOException {
+		MinecraftRegionCheckpointSource source = new MinecraftRegionCheckpointSource(region);
 		if (profile.hasCapability(WorldCapability.THERMAL)) {
 			if (thermalRegistry == null || gasRegistry == null) {
 				throw new IOException("Authoritative thermal/gas registry is unavailable");
@@ -643,7 +652,7 @@ final class FluidRegionPersistence {
 							invalidTopology);
 				}
 			}
-			return RegionState.captureThermal(region, generation);
+			return new RegionState(RegionCheckpointAssembler.captureThermal(source, generation));
 		}
 		if (profile.hasCapability(WorldCapability.GRANULAR)) {
 			if (granularRegistry == null) throw new IOException("Authoritative granular registry is unavailable");
@@ -656,17 +665,17 @@ final class FluidRegionPersistence {
 				region.domain().bindGranular(granularRegistry, region.domain().materialRegistry());
 			}
 			enablePrecipitationIfConfigured(region);
-			return RegionState.captureGranular(region, generation);
+			return new RegionState(RegionCheckpointAssembler.captureGranular(source, generation));
 		}
 		if (profile.hasCapability(WorldCapability.CHEMISTRY)) {
 			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
 			if (!region.domain().hasMaterialState()) throw new IOException("Chemistry requires a material-bound domain");
 			if (!region.domain().hasChemistryState()) region.domain().bindChemistry(chemicalRegistry);
-			return RegionState.captureChemical(region, generation);
+			return new RegionState(RegionCheckpointAssembler.captureChemical(source, generation));
 		}
-		return region.domain().hasMaterialState()
-				? RegionState.captureMaterial(region, generation)
-				: RegionState.capture(region, generation);
+		return new RegionState(region.domain().hasMaterialState()
+				? RegionCheckpointAssembler.captureMaterial(source, generation)
+				: RegionCheckpointAssembler.capture(source, generation));
 	}
 
 	private void restoreThermalGeneration(FluidRegion region, RegionState state) throws IOException {
@@ -674,6 +683,7 @@ final class FluidRegionPersistence {
 			throw new IOException("Authoritative thermal/gas registry is unavailable");
 		}
 		RegionManifest manifest = state.manifest();
+		RegionCheckpointRestorer restorer = new RegionCheckpointRestorer(state.checkpoint());
 		if (manifest.layout() != RegionStateLayout.THERMAL) {
 			throw new IOException("Checkpoint does not use the current thermal region layout");
 		}
@@ -683,25 +693,25 @@ final class FluidRegionPersistence {
 				if (!profile.hasCapability(WorldCapability.CHEMISTRY) || chemicalRegistry == null) {
 					throw new IOException("Chemical thermal checkpoint requires the chemistry registry and gate");
 				}
-				region.restoreChemicalSolver(state.reconstructChemical(chemicalRegistry), chemicalRegistry, generation);
+				region.restoreChemicalSolver(restorer.reconstructChemical(chemicalRegistry), chemicalRegistry, generation);
 			} else {
-				region.restoreMaterialSolver(state.reconstructMaterial(), generation);
+				region.restoreMaterialSolver(restorer.reconstructMaterial(), generation);
 			}
 			boolean hasGranular = manifest.hasGranularState();
 			if (hasGranular) {
 				if (!profile.hasCapability(WorldCapability.GRANULAR) || granularRegistry == null) {
 					throw new IOException("Granular thermal checkpoint requires the granular registry and gate");
 				}
-				region.restoreGranularState(state.reconstructGranular(granularRegistry), granularRegistry, generation);
+				region.restoreGranularState(restorer.reconstructGranular(granularRegistry), granularRegistry, generation);
 			} else if (profile.hasCapability(WorldCapability.GRANULAR)) {
 				throw new IOException("Thermal checkpoint omits granular truth while the granular gate is enabled");
 			}
-			region.restoreGasState(state.reconstructGas(gasRegistry, chemicalRegistry), gasRegistry, generation);
-			region.restoreThermalState(state.reconstructThermal(thermalRegistry, gasRegistry, chemicalRegistry),
+			region.restoreGasState(restorer.reconstructGas(gasRegistry, chemicalRegistry), gasRegistry, generation);
+			region.restoreThermalState(restorer.reconstructThermal(thermalRegistry, gasRegistry, chemicalRegistry),
 					thermalRegistry, generation, maximumThermalSubsteps);
 			region.restoreFiniteThermalDevices(
-					state.reconstructFiniteThermalDevices(thermalRegistry), thermalRegistry, generation);
-			region.domain().restorePendingPhaseVolumeState(state.reconstructPendingPhaseVolume());
+					restorer.reconstructFiniteThermalDevices(thermalRegistry), thermalRegistry, generation);
+			region.domain().restorePendingPhaseVolumeState(restorer.reconstructPendingPhaseVolume());
 			enablePrecipitationIfConfigured(region);
 		} catch (IOException | RuntimeException failure) {
 			if (region.solverLoaded() && region.checkpointGeneration() == generation) {
@@ -714,14 +724,15 @@ final class FluidRegionPersistence {
 	private void restoreGranularGeneration(FluidRegion region, RegionState state) throws IOException {
 		if (granularRegistry == null) throw new IOException("Authoritative granular registry is unavailable");
 		RegionManifest manifest = state.manifest();
+		RegionCheckpointRestorer restorer = new RegionCheckpointRestorer(state.checkpoint());
 		long generation = manifest.checkpointGeneration();
 		if (manifest.hasChemicalState()) {
 			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
-			region.restoreChemicalSolver(state.reconstructChemical(chemicalRegistry), chemicalRegistry, generation);
+			region.restoreChemicalSolver(restorer.reconstructChemical(chemicalRegistry), chemicalRegistry, generation);
 		} else {
-			region.restoreMaterialSolver(state.reconstructMaterial(), generation);
+			region.restoreMaterialSolver(restorer.reconstructMaterial(), generation);
 		}
-		region.restoreGranularState(state.reconstructGranular(granularRegistry), granularRegistry, generation);
+		region.restoreGranularState(restorer.reconstructGranular(granularRegistry), granularRegistry, generation);
 		enablePrecipitationIfConfigured(region);
 	}
 

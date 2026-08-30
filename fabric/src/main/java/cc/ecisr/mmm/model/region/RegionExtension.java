@@ -1,4 +1,4 @@
-package cc.ecisr.mmm.simulation.persistence;
+package cc.ecisr.mmm.model.region;
 
 import java.util.Arrays;
 import java.util.Objects;
@@ -29,3 +29,4 @@ public record RegionExtension(String type, byte[] payload) {
 		return 31 * type.hashCode() + Arrays.hashCode(payload);
 	}
 }
+

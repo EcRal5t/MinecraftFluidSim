@@ -1,5 +1,13 @@
 package cc.ecisr.mmm.simulation.persistence;
 
+import cc.ecisr.mmm.simulation.RegionCheckpointFixtures;
+import cc.ecisr.mmm.simulation.MinecraftRegionCheckpointSource;
+
+import cc.ecisr.mmm.model.region.RegionExtension;
+import cc.ecisr.mmm.model.region.RegionManifest;
+import cc.ecisr.mmm.model.region.RegionSectionState;
+import cc.ecisr.mmm.model.region.RegionStateLayout;
+
 import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FlipChemicalParticleState;
@@ -174,24 +182,24 @@ public final class FluidRegionPersistenceValidation {
 		GasStateSnapshot expectedGas = region.domain().exportGasState("");
 		GranularStateSnapshot expectedGranular = region.domain().exportGranularState();
 
-		RegionState state = RegionState.captureThermal(region, 1L);
+		RegionState state = RegionCheckpointFixtures.captureThermal(region, 1L);
 		state.validate();
-		assertMaterialStateEquals(region.domain().exportMaterialParticleState(), state.reconstructMaterial());
-		assertGranularStateEquals(expectedGranular, state.reconstructGranular(granular));
-		assertGasStateEquals(expectedGas, state.reconstructGas(gas, null));
-		assertThermalStateEquals(expected, state.reconstructThermal(thermal));
-		require(state.reconstructFiniteThermalDevices(thermal).equals(expectedDevices),
+		assertMaterialStateEquals(region.domain().exportMaterialParticleState(), restorer(state).reconstructMaterial());
+		assertGranularStateEquals(expectedGranular, restorer(state).reconstructGranular(granular));
+		assertGasStateEquals(expectedGas, restorer(state).reconstructGas(gas, null));
+		assertThermalStateEquals(expected, restorer(state).reconstructThermal(thermal));
+		require(restorer(state).reconstructFiniteThermalDevices(thermal).equals(expectedDevices),
 				"finite thermal device truth did not round-trip");
-		require(state.reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
+		require(restorer(state).reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
 				"pending phase-volume record did not round-trip");
 		FluidDomain restoredDomain = new FluidDomain(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG, 512);
 		restoredDomain.sealDomainBoundary();
-		restoredDomain.restoreMaterialParticleState(state.reconstructMaterial());
-		restoredDomain.restoreGranularState(state.reconstructGranular(granular), granular,
+		restoredDomain.restoreMaterialParticleState(restorer(state).reconstructMaterial());
+		restoredDomain.restoreGranularState(restorer(state).reconstructGranular(granular), granular,
 				restoredDomain.materialRegistry());
-		restoredDomain.restoreGasState(state.reconstructGas(gas, null), gas);
-		restoredDomain.restoreThermalParticleState(state.reconstructThermal(thermal), thermal);
-		restoredDomain.restorePendingPhaseVolumeState(state.reconstructPendingPhaseVolume());
+		restoredDomain.restoreGasState(restorer(state).reconstructGas(gas, null), gas);
+		restoredDomain.restoreThermalParticleState(restorer(state).reconstructThermal(thermal), thermal);
+		restoredDomain.restorePendingPhaseVolumeState(restorer(state).reconstructPendingPhaseVolume());
 		assertGranularStateEquals(expectedGranular, restoredDomain.exportGranularState());
 		assertThermalStateEquals(expected, restoredDomain.exportThermalParticleState());
 		require(restoredDomain.exportPendingPhaseVolumeState().entries().equals(expectedPending.entries()),
@@ -224,12 +232,12 @@ public final class FluidRegionPersistenceValidation {
 		Path root = Files.createTempDirectory(Path.of("."), "thermal-region-");
 		RegionStateFiles files = new RegionStateFiles(root, null, granular, thermal, gas);
 		files.publish(state);
-		assertThermalStateEquals(expected, files.read(region.id()).reconstructThermal(thermal));
-		require(files.read(region.id()).reconstructFiniteThermalDevices(thermal).equals(expectedDevices),
+		assertThermalStateEquals(expected, restorer(files.read(region.id())).reconstructThermal(thermal));
+		require(restorer(files.read(region.id())).reconstructFiniteThermalDevices(thermal).equals(expectedDevices),
 				"published finite thermal device truth did not survive committed readback");
-		require(files.read(region.id()).reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
+		require(restorer(files.read(region.id())).reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
 				"published pending phase volume did not survive committed readback");
-		expectIOException(() -> state.reconstructThermal(thermalRegistry(new FluidMaterialRegistry(
+		expectIOException(() -> restorer(state).reconstructThermal(thermalRegistry(new FluidMaterialRegistry(
 				List.of(BuiltinFluidMaterials.WATER)))), "foreign thermal registry was accepted");
 
 		RegionSectionState original = state.sections().stream()
@@ -276,10 +284,10 @@ public final class FluidRegionPersistenceValidation {
 				Double.doubleToRawLongBits(activeMass + depositMass));
 		region.domain().restoreGranularState(fixture, granular, liquids);
 		GranularStateSnapshot expected = region.domain().exportGranularState();
-		RegionState state = RegionState.captureGranular(region, 1L);
+		RegionState state = RegionCheckpointFixtures.captureGranular(region, 1L);
 		state.validate();
-		assertMaterialStateEquals(region.domain().exportMaterialParticleState(), state.reconstructMaterial());
-		assertGranularStateEquals(expected, state.reconstructGranular(granular));
+		assertMaterialStateEquals(region.domain().exportMaterialParticleState(), restorer(state).reconstructMaterial());
+		assertGranularStateEquals(expected, restorer(state).reconstructGranular(granular));
 
 		RegionStateCodec codec = new RegionStateCodec();
 		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
@@ -313,7 +321,7 @@ public final class FluidRegionPersistenceValidation {
 		RegionStateFiles files = new RegionStateFiles(root, null, granular);
 		files.publish(state);
 		RegionState restored = files.read(region.id());
-		assertGranularStateEquals(expected, restored.reconstructGranular(granular));
+		assertGranularStateEquals(expected, restorer(restored).reconstructGranular(granular));
 
 		FluidRegion reactiveRegion = populatedRegion(new UUID(25L, 26L));
 		FlipParticleState reactivePure = reactiveRegion.domain().exportParticleState();
@@ -349,9 +357,9 @@ public final class FluidRegionPersistenceValidation {
 				&& reactiveRegion.domain().tryInsertExactGranular(1, 1, 1, removedReactive.ledger(), 0, true).inserted(),
 				"reactive granular audit fixture could not cross the region boundary");
 		GranularStateSnapshot reactiveExpected = reactiveRegion.domain().exportGranularState();
-		RegionState reactiveState = RegionState.captureGranular(reactiveRegion, 1L);
+		RegionState reactiveState = RegionCheckpointFixtures.captureGranular(reactiveRegion, 1L);
 		reactiveState.validate();
-		GranularStateSnapshot reactiveRoundTrip = reactiveState.reconstructGranular(granular);
+		GranularStateSnapshot reactiveRoundTrip = restorer(reactiveState).reconstructGranular(granular);
 		reactiveRoundTrip.validateSolidCompositionMasses(BuiltinChemicalDefinitions.REGISTRY);
 		assertGranularStateEquals(reactiveExpected, reactiveRoundTrip);
 		Path reactiveRoot = Files.createTempDirectory(Path.of("."), "reactive-granular-region-");
@@ -362,9 +370,9 @@ public final class FluidRegionPersistenceValidation {
 		GranularStateSnapshot auditOnlyExpected = reactiveRegion.domain().exportGranularState();
 		require(auditOnlyExpected.solidCompositions().isEmpty() && auditOnlyExpected.requiresChemistry(),
 				"reactive clear fixture did not retain audit-only chemistry identity");
-		RegionState auditOnlyState = RegionState.captureGranular(reactiveRegion, 2L);
+		RegionState auditOnlyState = RegionCheckpointFixtures.captureGranular(reactiveRegion, 2L);
 		auditOnlyState.validate();
-		GranularStateSnapshot auditOnlyRoundTrip = auditOnlyState.reconstructGranular(granular);
+		GranularStateSnapshot auditOnlyRoundTrip = restorer(auditOnlyState).reconstructGranular(granular);
 		auditOnlyRoundTrip.validateAgainst(granular, BuiltinChemicalDefinitions.REGISTRY);
 		assertGranularStateEquals(auditOnlyExpected, auditOnlyRoundTrip);
 		reactiveFiles.publish(auditOnlyState);
@@ -406,11 +414,11 @@ public final class FluidRegionPersistenceValidation {
 		region.domain().chemicalParcels().recordExternalSource(auditFixture);
 		region.domain().chemicalParcels().recordEscapedSink(auditFixture);
 		FlipChemicalParticleState expected = region.domain().exportChemicalParticleState();
-		RegionState state = RegionState.captureChemical(region, 1L);
+		RegionState state = RegionCheckpointFixtures.captureChemical(region, 1L);
 		state.validate();
-		expectIOException(state::reconstruct, "chemical state was silently reconstructed as pure water");
-		expectIOException(state::reconstructMaterial, "chemical state was silently reconstructed as material-only state");
-		assertChemicalStateEquals(expected, state.reconstructChemical(chemistry));
+		expectIOException(restorer(state)::reconstruct, "chemical state was silently reconstructed as pure water");
+		expectIOException(restorer(state)::reconstructMaterial, "chemical state was silently reconstructed as material-only state");
+		assertChemicalStateEquals(expected, restorer(state).reconstructChemical(chemistry));
 
 		RegionStateCodec codec = new RegionStateCodec();
 		RegionManifest manifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
@@ -430,7 +438,7 @@ public final class FluidRegionPersistenceValidation {
 		Path root = Files.createTempDirectory(Path.of("."), "chemical-region-");
 		RegionStateFiles files = new RegionStateFiles(root, chemistry);
 		files.publish(state);
-		assertChemicalStateEquals(expected, files.read(region.id()).reconstructChemical(chemistry));
+		assertChemicalStateEquals(expected, restorer(files.read(region.id())).reconstructChemical(chemistry));
 
 		FluidRegion emptyRegion = emptyRegion(new UUID(21L, 22L));
 		FlipParticleState emptyPure = emptyRegion.domain().exportParticleState();
@@ -442,13 +450,13 @@ public final class FluidRegionPersistenceValidation {
 		FlipChemicalParticleState emptyExpected = emptyRegion.domain().exportChemicalParticleState();
 		require(emptyExpected.particleCount() == 0 && emptyExpected.mixtures().isEmpty(),
 				"empty chemistry handoff invented a parcel mixture");
-		RegionState emptyState = RegionState.captureChemical(emptyRegion, 1L);
+		RegionState emptyState = RegionCheckpointFixtures.captureChemical(emptyRegion, 1L);
 		emptyState.validate();
 		RegionManifest emptyManifest = codec.decodeManifest(codec.encodeManifest(emptyState.manifest()));
 		require(emptyManifest.chemicalMixtures().isEmpty(), "empty chemical manifest invented a mixture");
-		assertChemicalStateEquals(emptyExpected, emptyState.reconstructChemical(chemistry));
+		assertChemicalStateEquals(emptyExpected, restorer(emptyState).reconstructChemical(chemistry));
 		files.publish(emptyState);
-		assertChemicalStateEquals(emptyExpected, files.read(emptyRegion.id()).reconstructChemical(chemistry));
+		assertChemicalStateEquals(emptyExpected, restorer(files.read(emptyRegion.id())).reconstructChemical(chemistry));
 
 		CompoundTag missingIndicator = codec.encodeSection(state.sections().stream()
 				.filter(section -> section.markerCount() > 0).findFirst().orElseThrow());
@@ -457,7 +465,7 @@ public final class FluidRegionPersistenceValidation {
 		CompoundTag foreignFingerprint = codec.encodeManifest(state.manifest());
 		foreignFingerprint.putString("RegistryFingerprint", "0".repeat(64));
 		RegionManifest foreign = signedManifest(codec.decodeManifest(foreignFingerprint));
-		expectIOException(() -> new RegionState(foreign, state.sections()).reconstructChemical(chemistry),
+		expectIOException(() -> restorer(new RegionState(foreign, state.sections())).reconstructChemical(chemistry),
 				"foreign chemical registry was accepted without authoritative reconstruction");
 
 		Path regionDir = root.toAbsolutePath().normalize().resolve("mmm").resolve("region-state")
@@ -495,7 +503,7 @@ public final class FluidRegionPersistenceValidation {
 				pureParticles.cellSize(), pureParticles.particleCount(), sumVolumes(positions), totalMass, palette, positions,
 				pureParticles.copyParticleVelocities(), pureParticles.copySolidMask(), markerMass, materialIndices);
 		region.domain().restoreMaterialParticleState(expected);
-		RegionState state = RegionState.captureMaterial(region, 1L);
+		RegionState state = RegionCheckpointFixtures.captureMaterial(region, 1L);
 		List<Long> sectionChecksums = state.sections().stream().map(RegionSectionState::checksum).toList();
 		require(state.manifest().checksum() == 155_326_703L
 				&& sectionChecksums.equals(List.of(
@@ -503,8 +511,8 @@ public final class FluidRegionPersistenceValidation {
 				"material region canonical bytes changed: manifest=" + state.manifest().checksum()
 						+ " sections=" + sectionChecksums);
 		state.validate();
-		expectIOException(state::reconstruct, "material state was silently reconstructed as pure water");
-		assertMaterialStateEquals(expected, state.reconstructMaterial());
+		expectIOException(restorer(state)::reconstruct, "material state was silently reconstructed as pure water");
+		assertMaterialStateEquals(expected, restorer(state).reconstructMaterial());
 
 		RegionStateCodec codec = new RegionStateCodec();
 		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
@@ -546,7 +554,7 @@ public final class FluidRegionPersistenceValidation {
 				base.materialPalette(), base.totalMassBits(), base.materialLedgers(), changedDescriptors, base.extensions(), 0L));
 		expectIOException(() -> new RegionState(changedManifest, changedSections).validate(),
 				"rechecksummed marker-mass corruption escaped exact material ledgers");
-		RegionState pureState = RegionState.capture(populatedRegion(new UUID(17L, 18L)), 1L);
+		RegionState pureState = RegionCheckpointFixtures.capture(populatedRegion(new UUID(17L, 18L)), 1L);
 		RegionManifest pureManifest = pureState.manifest();
 		List<Long> pureSectionChecksums = pureState.sections().stream().map(RegionSectionState::checksum).toList();
 		require(pureManifest.checksum() == 2_593_377_550L
@@ -561,7 +569,7 @@ public final class FluidRegionPersistenceValidation {
 		Path root = Files.createTempDirectory(Path.of("."), "material-region-");
 		RegionStateFiles files = new RegionStateFiles(root);
 		files.publish(state);
-		FlipMaterialParticleState restored = files.read(region.id()).reconstructMaterial();
+		FlipMaterialParticleState restored = restorer(files.read(region.id())).reconstructMaterial();
 		assertMaterialStateEquals(expected, restored);
 		require(region.recordPublishedCheckpoint(1L) && region.releaseSolverAfterCheckpoint(1L),
 				"material controller fixture did not release its published solver");
@@ -574,7 +582,7 @@ public final class FluidRegionPersistenceValidation {
 		Path root = Files.createTempDirectory(Path.of("."), "roundtrip-");
 		FluidRegion region = populatedRegion(new UUID(11L, 12L));
 		FlipParticleState before = region.domain().exportParticleState();
-		RegionState state = RegionState.capture(region, 1L);
+		RegionState state = RegionCheckpointFixtures.capture(region, 1L);
 		require(state.sections().size() == 4, "cross-chunk controller was not split into four complete sections");
 		RegionStateFiles files = new RegionStateFiles(root);
 		require(files.publish(state) == 1L, "first checkpoint generation was not published");
@@ -582,12 +590,14 @@ public final class FluidRegionPersistenceValidation {
 		require(manifest.totalMarkerCount() == before.particleCount()
 				&& Float.floatToRawIntBits((float) manifest.totalVolume()) == Float.floatToRawIntBits(before.totalVolume()),
 				"manifest did not retain the exact marker ledger");
-		FlipParticleState after = files.read(region.id()).reconstruct();
+		FlipParticleState after = restorer(files.read(region.id())).reconstruct();
 		assertParticleStateEquals(before, after);
-		FluidRegion startupMetadata = FluidRegion.unloaded(manifest.regionId(), DIMENSION, manifest.origin(), manifest.sizeX(),
-				manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(), manifest.reservedMarkerCapacity(), manifest.footprint(),
+		FluidRegion startupMetadata = FluidRegion.unloaded(manifest.regionId(), DIMENSION,
+				MinecraftRegionCheckpointSource.blockPosition(manifest.origin()), manifest.sizeX(),
+				manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(), manifest.reservedMarkerCapacity(),
+				MinecraftRegionCheckpointSource.minecraftFootprint(manifest.footprint()),
 				manifest.networkGeneration(), manifest.checkpointGeneration(), manifest.totalMarkerCount(),
-				(float) manifest.totalVolume(), manifest.runtime());
+				(float) manifest.totalVolume(), MinecraftRegionCheckpointSource.persistedRuntime(manifest.runtime()));
 		require(!startupMetadata.solverLoaded() && startupMetadata.lifecycle().state() == FluidRegionLifecycle.State.UNLOADED,
 				"startup metadata allocated solver arrays");
 
@@ -604,11 +614,11 @@ public final class FluidRegionPersistenceValidation {
 				"restore bypassed operator pause or current-world collision refresh");
 		assertParticleStateEquals(before, region.domain().exportParticleState());
 		for (long generation = 2L; generation <= 4L; generation++) {
-			RegionState repeated = RegionState.capture(region, generation);
+			RegionState repeated = RegionCheckpointFixtures.capture(region, generation);
 			files.publish(repeated);
 			require(region.recordPublishedCheckpoint(generation), "repeated checkpoint was not recorded");
 			require(region.releaseSolverAfterCheckpoint(generation), "repeated unload was rejected");
-			FlipParticleState restored = files.read(region.id()).reconstruct();
+			FlipParticleState restored = restorer(files.read(region.id())).reconstruct();
 			region.restoreSolver(restored, generation);
 			assertParticleStateEquals(before, region.domain().exportParticleState());
 		}
@@ -616,7 +626,7 @@ public final class FluidRegionPersistenceValidation {
 
 	private static void validateUnknownExtensions() throws Exception {
 		FluidRegion region = populatedRegion(new UUID(21L, 22L));
-		RegionState original = RegionState.capture(region, 1L);
+		RegionState original = RegionCheckpointFixtures.capture(region, 1L);
 		RegionExtension extension = new RegionExtension("future:test", new byte[] {1, 2, 3, 4});
 		RegionManifest base = original.manifest();
 		RegionManifest unsigned = new RegionManifest(base.regionId(), base.dimensionId(), base.checkpointGeneration(),
@@ -648,13 +658,13 @@ public final class FluidRegionPersistenceValidation {
 			Path root = Files.createTempDirectory(Path.of("."), "fault-" + point.name().toLowerCase() + "-");
 			FluidRegion region = populatedRegion(UUID.randomUUID());
 			RegionStateFiles files = new RegionStateFiles(root);
-			RegionState first = RegionState.capture(region, 1L);
+			RegionState first = RegionCheckpointFixtures.capture(region, 1L);
 			files.publish(first);
-			FlipParticleState firstParticles = first.reconstruct();
+			FlipParticleState firstParticles = restorer(first).reconstruct();
 			FluidRegion nextRegion = populatedRegion(region.id());
 			nextRegion.domain().setVolume(1, 1, 1, 0.5F);
-			RegionState second = RegionState.capture(nextRegion, 2L);
-			FlipParticleState secondParticles = second.reconstruct();
+			RegionState second = RegionCheckpointFixtures.capture(nextRegion, 2L);
+			FlipParticleState secondParticles = restorer(second).reconstruct();
 			try {
 				files.publish(second, (observed, path) -> { if (observed == point) throw new IOException("injected " + point); });
 				throw new AssertionError("Fault point did not interrupt publication: " + point);
@@ -664,7 +674,7 @@ public final class FluidRegionPersistenceValidation {
 			require(reopened.manifest().checkpointGeneration() == expectedGeneration,
 					"fault exposed a mixed or unexpected generation at " + point);
 			require(reopened.manifest().layout() == RegionStateLayout.PURE, "fault changed the current pure-water layout");
-			assertParticleStateEquals(expectedGeneration == 1L ? firstParticles : secondParticles, reopened.reconstruct());
+			assertParticleStateEquals(expectedGeneration == 1L ? firstParticles : secondParticles, restorer(reopened).reconstruct());
 		}
 	}
 
@@ -672,7 +682,7 @@ public final class FluidRegionPersistenceValidation {
 		Path root = Files.createTempDirectory(Path.of("."), "corrupt-");
 		FluidRegion region = populatedRegion(UUID.randomUUID());
 		RegionStateFiles files = new RegionStateFiles(root);
-		RegionState original = RegionState.capture(region, 1L);
+		RegionState original = RegionCheckpointFixtures.capture(region, 1L);
 		RegionSectionState first = original.sections().getFirst();
 		RegionSectionState wrongOwner = signedSection(new RegionSectionState(UUID.randomUUID(), first.dimensionId(),
 				first.checkpointGeneration(), first.sectionX(), first.sectionY(), first.sectionZ(), first.localStartX(), first.localStartY(),
@@ -684,7 +694,7 @@ public final class FluidRegionPersistenceValidation {
 		files.publish(original);
 		require(region.recordPublishedCheckpoint(1L), "corruption fixture did not advance generation");
 		region.domain().setVolume(3, 2, 3, 0.5F);
-		RegionState second = RegionState.capture(region, 2L);
+		RegionState second = RegionCheckpointFixtures.capture(region, 2L);
 		RegionStateFiles unsupported = new RegionStateFiles(root, (source, target, replace) -> {
 			throw new AtomicMoveNotSupportedException(source.toString(), target.toString(), "validation");
 		});
@@ -706,7 +716,7 @@ public final class FluidRegionPersistenceValidation {
 		Path headRoot = Files.createTempDirectory(Path.of("."), "head-corrupt-");
 		FluidRegion headRegion = populatedRegion(UUID.randomUUID());
 		RegionStateFiles headFiles = new RegionStateFiles(headRoot);
-		headFiles.publish(RegionState.capture(headRegion, 1L));
+		headFiles.publish(RegionCheckpointFixtures.capture(headRegion, 1L));
 		Path headPath = headRoot.resolve("mmm").resolve("region-state").resolve(headRegion.id().toString()).resolve("HEAD.nbt");
 		CompoundTag corruptHead = NbtIo.readCompressed(headPath, NbtAccounter.unlimitedHeap());
 		corruptHead.putLong("Checksum", corruptHead.getLongOr("Checksum", 0L) + 1L);
@@ -719,7 +729,7 @@ public final class FluidRegionPersistenceValidation {
 		Path root = Files.createTempDirectory(Path.of("."), "removed-head-");
 		FluidRegion region = populatedRegion(UUID.randomUUID());
 		WorldCapabilityProfile profile = WorldCapabilityProfile.of(Set.of(), RegistryFingerprintSet.unbound());
-		RegionState active = RegionState.capture(region, 1L);
+		RegionState active = RegionCheckpointFixtures.capture(region, 1L);
 		RegionStateFiles files = new RegionStateFiles(root);
 		files.publish(active);
 		UUID transaction = UUID.randomUUID();
@@ -752,12 +762,12 @@ public final class FluidRegionPersistenceValidation {
 				&& Files.isRegularFile(quarantine.resolve("quarantine.nbt"))
 				&& files.convergeRemovalQuarantine(region.id(), 0L, 0L).equals(quarantine),
 				"REMOVED quarantine did not converge idempotently after HEAD");
-		expectIOException(() -> files.publish(RegionState.capture(region, 2L)),
+		expectIOException(() -> files.publish(RegionCheckpointFixtures.capture(region, 2L)),
 				"REMOVED region UUID was reused by an ACTIVE publication");
 
 		Path strictRoot = Files.createTempDirectory(Path.of("."), "removed-strict-");
 		FluidRegion strictRegion = populatedRegion(UUID.randomUUID());
-		RegionState strictActive = RegionState.capture(strictRegion, 1L);
+		RegionState strictActive = RegionCheckpointFixtures.capture(strictRegion, 1L);
 		RegionStateFiles strictFiles = new RegionStateFiles(strictRoot);
 		strictFiles.publish(strictActive);
 		RegionStateFiles.PreparedRemoval strictPrepared = strictFiles.prepareRemoval(strictRegion.id(), 1L,
@@ -775,7 +785,7 @@ public final class FluidRegionPersistenceValidation {
 
 		Path partialRoot = Files.createTempDirectory(Path.of("."), "removed-partial-");
 		FluidRegion partialRegion = populatedRegion(UUID.randomUUID());
-		RegionState partialActive = RegionState.capture(partialRegion, 1L);
+		RegionState partialActive = RegionCheckpointFixtures.capture(partialRegion, 1L);
 		RegionStateFiles partialFiles = new RegionStateFiles(partialRoot);
 		partialFiles.publish(partialActive);
 		RegionStateFiles.PreparedRemoval partialPrepared = partialFiles.prepareRemoval(partialRegion.id(), 1L,
@@ -793,7 +803,7 @@ public final class FluidRegionPersistenceValidation {
 
 		Path thirdRoot = Files.createTempDirectory(Path.of("."), "removed-third-");
 		FluidRegion thirdRegion = populatedRegion(UUID.randomUUID());
-		RegionState thirdActive = RegionState.capture(thirdRegion, 1L);
+		RegionState thirdActive = RegionCheckpointFixtures.capture(thirdRegion, 1L);
 		RegionStateFiles thirdFiles = new RegionStateFiles(thirdRoot);
 		thirdFiles.publish(thirdActive);
 		RegionStateFiles.PreparedRemoval thirdPrepared = thirdFiles.prepareRemoval(thirdRegion.id(), 1L,
@@ -814,7 +824,7 @@ public final class FluidRegionPersistenceValidation {
 
 		Path baseThirdRoot = Files.createTempDirectory(Path.of("."), "removed-base-third-");
 		FluidRegion baseThirdRegion = populatedRegion(UUID.randomUUID());
-		RegionState baseThirdActive = RegionState.capture(baseThirdRegion, 1L);
+		RegionState baseThirdActive = RegionCheckpointFixtures.capture(baseThirdRegion, 1L);
 		RegionStateFiles baseThirdFiles = new RegionStateFiles(baseThirdRoot);
 		baseThirdFiles.publish(baseThirdActive);
 		baseThirdFiles.prepareRemoval(baseThirdRegion.id(), 1L, baseThirdActive.manifest().checksum(),
@@ -853,14 +863,14 @@ public final class FluidRegionPersistenceValidation {
 		RegionStateFiles files = new RegionStateFiles(root);
 		UUID id = UUID.randomUUID();
 
-		RegionState first = RegionState.capture(populatedRegion(id), 1L);
+		RegionState first = RegionCheckpointFixtures.capture(populatedRegion(id), 1L);
 		RegionStateFiles.PreparedGeneration preparedFirst = files.prepare(first, (point, path) -> { });
 		require(!preparedFirst.alreadyCommitted(), "first staging was marked idempotent");
 		expectIOException(() -> files.read(id), "uncommitted staging exposed a readable generation");
 		files.commit(preparedFirst, (point, path) -> { });
 		require(files.read(id).manifest().checkpointGeneration() == 1L, "first staged commit did not publish");
 
-		RegionState second = RegionState.capture(populatedRegion(id), 2L);
+		RegionState second = RegionCheckpointFixtures.capture(populatedRegion(id), 2L);
 		RegionStateFiles.PreparedGeneration preparedSecond = files.prepare(second, (point, path) -> { });
 		require(files.read(id).manifest().checkpointGeneration() == 1L, "staging exposed the uncommitted generation");
 		files.abort(preparedSecond);
@@ -868,12 +878,12 @@ public final class FluidRegionPersistenceValidation {
 		files.publish(second);
 		require(files.read(id).manifest().checkpointGeneration() == 2L, "publish after abort did not advance");
 
-		RegionStateFiles.PreparedGeneration stale = files.prepare(RegionState.capture(populatedRegion(id), 3L), (point, path) -> { });
-		files.publish(RegionState.capture(populatedRegion(id), 4L));
+		RegionStateFiles.PreparedGeneration stale = files.prepare(RegionCheckpointFixtures.capture(populatedRegion(id), 3L), (point, path) -> { });
+		files.publish(RegionCheckpointFixtures.capture(populatedRegion(id), 4L));
 		expectIOException(() -> files.commit(stale, (point, path) -> { }), "commit on a moved base was accepted");
 		require(files.read(id).manifest().checkpointGeneration() == 4L, "moved-base failure changed the committed generation");
 
-		RegionStateFiles.PreparedGeneration repeat = files.prepare(RegionState.capture(populatedRegion(id), 4L), (point, path) -> { });
+		RegionStateFiles.PreparedGeneration repeat = files.prepare(RegionCheckpointFixtures.capture(populatedRegion(id), 4L), (point, path) -> { });
 		require(repeat.alreadyCommitted() && files.commit(repeat, (point, path) -> { }) == 4L,
 				"idempotent re-staging was not recognized");
 	}
@@ -883,10 +893,10 @@ public final class FluidRegionPersistenceValidation {
 		RegionStateFiles files = new RegionStateFiles(root);
 		UUID id = UUID.randomUUID();
 		FluidRegion region = populatedRegion(id);
-		RegionState first = RegionState.capture(region, 1L);
+		RegionState first = RegionCheckpointFixtures.capture(region, 1L);
 		files.publish(first);
 		region.domain().setVolume(3, 2, 3, 0.5F);
-		RegionState second = RegionState.capture(region, 2L);
+		RegionState second = RegionCheckpointFixtures.capture(region, 2L);
 		files.publish(second);
 
 		RegionStateFiles.PreviousGeneration previous = files.readPrevious(id, 2L);
@@ -1108,4 +1118,8 @@ public final class FluidRegionPersistenceValidation {
 
 	private static void require(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
 	@FunctionalInterface private interface IoAction { void run() throws Exception; }
+
+	private static RegionCheckpointRestorer restorer(RegionState state) {
+		return new RegionCheckpointRestorer(state.checkpoint());
+	}
 }

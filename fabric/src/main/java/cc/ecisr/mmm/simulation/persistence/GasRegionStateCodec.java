@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.simulation.persistence;
 
+import cc.ecisr.mmm.model.region.RegionSectionState;
+
 import cc.ecisr.mmm.fluid.air.GasAuditLedger;
 import cc.ecisr.mmm.fluid.air.GasComponentAmount;
 import cc.ecisr.mmm.fluid.air.GasInventory;

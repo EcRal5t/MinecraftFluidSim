@@ -1,4 +1,4 @@
-package cc.ecisr.mmm.simulation.persistence;
+package cc.ecisr.mmm.model.region;
 
 import java.util.List;
 import java.util.Objects;
@@ -154,3 +154,4 @@ public record RegionSectionState(
 		}
 	}
 }
+

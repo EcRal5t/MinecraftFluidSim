@@ -1,4 +1,4 @@
-package cc.ecisr.mmm.simulation.persistence;
+package cc.ecisr.mmm.model.region;
 
 import java.io.IOException;
 
@@ -39,3 +39,4 @@ public enum RegionStateLayout {
 		throw new IOException("Unsupported region-state layout " + persistedId);
 	}
 }
+
