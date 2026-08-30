@@ -26,7 +26,7 @@ public final class EntityFluidWiringValidation {
 	}
 
 	private static void displacementObservationSpansConsecutiveTicks() {
-		EntityMotionTracker tracker = new EntityMotionTracker();
+		MinecraftRegionInputs.MotionHistory tracker = new MinecraftRegionInputs.MotionHistory();
 		require(tracker.displacementSincePreviousTick(BODY, new Vec3(1.0, 2.0, 3.0)) == null,
 				"the first observation of a body reported a displacement");
 		tracker.observe(BODY, new Vec3(1.0, 2.0, 3.0));
@@ -47,11 +47,11 @@ public final class EntityFluidWiringValidation {
 	}
 
 	private static void movingBodyRequestsCarryObservedDisplacement() {
-		List<MinecraftEntityFluidInteraction.BodyMotion> motions = List.of(
-				new MinecraftEntityFluidInteraction.BodyMotion(
+		List<MinecraftRegionInputs.BodyMotion> motions = List.of(
+				new MinecraftRegionInputs.BodyMotion(
 						1.5F, 0.75F, 2.25F, 0.4, new Vec3(0.2, -0.05, 0.0)));
 		List<MovingBodyFluidCoupling.Request> requests =
-				MinecraftEntityFluidInteraction.movingBodyRequests(motions);
+				MinecraftRegionInputs.movingBodyRequests(motions);
 		require(requests.size() == 1, "one observed body did not produce exactly one request");
 		MovingBodyFluidCoupling.Request request = requests.get(0);
 		require(request.localXMetres() == 1.5F && request.localYMetres() == 0.75F
@@ -64,11 +64,11 @@ public final class EntityFluidWiringValidation {
 	}
 
 	private static void movingBodyRequestsSkipUnobservedBodies() {
-		List<MinecraftEntityFluidInteraction.BodyMotion> motions = List.of(
-				new MinecraftEntityFluidInteraction.BodyMotion(1.0F, 1.0F, 1.0F, 0.4, null),
-				new MinecraftEntityFluidInteraction.BodyMotion(2.0F, 1.0F, 1.0F, 0.4, Vec3.ZERO));
+		List<MinecraftRegionInputs.BodyMotion> motions = List.of(
+				new MinecraftRegionInputs.BodyMotion(1.0F, 1.0F, 1.0F, 0.4, null),
+				new MinecraftRegionInputs.BodyMotion(2.0F, 1.0F, 1.0F, 0.4, Vec3.ZERO));
 		List<MovingBodyFluidCoupling.Request> requests =
-				MinecraftEntityFluidInteraction.movingBodyRequests(motions);
+				MinecraftRegionInputs.movingBodyRequests(motions);
 		require(requests.size() == 1 && requests.get(0).localXMetres() == 2.0F,
 				"an unobserved body was coupled instead of skipped: " + requests);
 		require(requests.get(0).velocityXMetresPerSecond() == 0.0
@@ -78,13 +78,13 @@ public final class EntityFluidWiringValidation {
 	}
 
 	private static void movingBodyRequestsHonourTheDocumentedBudget() {
-		List<MinecraftEntityFluidInteraction.BodyMotion> motions = new ArrayList<>();
+		List<MinecraftRegionInputs.BodyMotion> motions = new ArrayList<>();
 		for (int body = 0; body <= MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP; body++) {
-			motions.add(new MinecraftEntityFluidInteraction.BodyMotion(
+			motions.add(new MinecraftRegionInputs.BodyMotion(
 					1.0F + body, 1.0F, 1.0F, body, new Vec3(0.1, 0.0, 0.0)));
 		}
 		List<MovingBodyFluidCoupling.Request> requests =
-				MinecraftEntityFluidInteraction.movingBodyRequests(motions);
+				MinecraftRegionInputs.movingBodyRequests(motions);
 		require(requests.size() == MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP,
 				"moving-body request budget was not applied: " + requests.size());
 		double maximum = 0.0;

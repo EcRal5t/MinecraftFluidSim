@@ -19,7 +19,6 @@ import cc.ecisr.mmm.application.command.ThermalStepCommand;
 import cc.ecisr.mmm.application.result.CheckpointRegionResult;
 import cc.ecisr.mmm.application.result.ControllerSummaryResult;
 import cc.ecisr.mmm.application.result.MotionStepResult;
-import cc.ecisr.mmm.application.result.ThermalStepResult;
 import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.block.ThermalReservoirBlockEntity;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
@@ -110,7 +109,6 @@ public final class FluidSimulationService {
 	public static final int CELLS_PER_BLOCK = 2;
 	static final int CELL_VOLUMES_PER_BLOCK = CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
 	private static final int SNAPSHOT_INTERVAL_TICKS = 4;
-	private static final int COLLISION_REFRESH_INTERVAL_TICKS = 5;
 	private static final RegionTickUseCase.Policy TICK_POLICY = RegionTickUseCase.Policy.production();
 	private static final int HYDROSTATIC_QUIET_STEPS = 200;
 	private static final int THERMAL_QUIET_STEPS = 200;
@@ -127,7 +125,7 @@ public final class FluidSimulationService {
 	private FluidServerConfig serverConfig;
 	private final FluidRegionManager regionManager;
 	private final FluidSolverBackend solverBackend = new CpuFluidSolverBackend();
-	private final EntityMotionTracker entityMotion = new EntityMotionTracker();
+	private final MinecraftRegionInputs regionInputs;
 	private final CommittedEventHub committedEvents;
 	private final FluidWorldTargetResolver targets;
 	private final FluidRegionOperations regionOperations;
@@ -164,7 +162,6 @@ public final class FluidSimulationService {
 	private final GranularRegistry granularRegistry;
 	private final ThermalRegistry thermalRegistry;
 	private final GasRegistry gasRegistry;
-	private final ThermalBoundaryResolver thermalBoundaryResolver;
 	private List<String> ownershipIssues = List.of();
 	private String lastTakeoverFailure;
 	private boolean takeoverMaintenanceEnabled;
@@ -193,7 +190,7 @@ public final class FluidSimulationService {
 		this.granularRegistry = registries == null ? null : registries.granular();
 		this.gasRegistry = registries == null ? null : registries.gas();
 		this.thermalRegistry = registries == null ? null : registries.thermal();
-		this.thermalBoundaryResolver = thermalRegistry == null ? null : new ThermalBoundaryResolver(thermalRegistry);
+		this.regionInputs = new MinecraftRegionInputs(thermalRegistry, CELLS_PER_BLOCK);
 		this.regionManager = java.util.Objects.requireNonNull(regionManager, "Region manager");
 		this.committedEvents = java.util.Objects.requireNonNull(committedEvents, "Committed event hub");
 		this.targets = new FluidWorldTargetResolver(regionManager);
@@ -1159,7 +1156,7 @@ public final class FluidSimulationService {
 					|| !footprint.boundaryBlocks().contains(position.asLong())
 					|| !region.solverLoaded() || !region.domain().hasThermalState()) continue;
 			try {
-				if (thermalBoundaryResolver.refresh(level, region, CELLS_PER_BLOCK)) {
+				if (regionInputs.refreshThermalBoundary(level, region)) {
 					region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
 				}
 			} catch (RuntimeException invalidBoundary) {
@@ -1374,7 +1371,7 @@ public final class FluidSimulationService {
 		RegionCatalog.AdmissionResult exactPreview = regionManager.previewAdd(candidate);
 		if (!exactPreview.accepted()) return ControllerActivation.failed(exactPreview.failure());
 		try {
-			refreshCollisions(level, candidate);
+			refreshRegionInputs(level, candidate);
 			if (worldBridgeFeatureEnabled) FluidRegionFactory.captureVanillaWater(level, candidate);
 			bindConfiguredState(candidate.domain());
 		} catch (RuntimeException invalidCandidate) {
@@ -2034,35 +2031,24 @@ public final class FluidSimulationService {
 			}
 			tickRegion(level, region);
 		}
-		entityMotion.rotate();
+		regionInputs.finishServerTick();
 	}
 
 	private void tickRegion(ServerLevel level, FluidRegion region) {
 		if (!ensureRegionAvailable(level, region)) return;
 		long tick = region.incrementTick();
 		boolean collisionsChanged = false;
-		if (tick % COLLISION_REFRESH_INTERVAL_TICKS == 0) {
-			try { collisionsChanged = refreshCollisions(level, region).changedCells() > 0; }
+		if (regionInputs.boundariesDue(tick)) {
+			try { collisionsChanged = refreshRegionInputs(level, region).changedCells() > 0; }
 			catch (FluidDomain.CollisionEditBlockedException blocked) {
 				blockCollisionEdit(level, region, blocked);
 				return;
 			}
 		}
-		MinecraftEntityFluidInteraction.Frame entityFrame = region.entityPhysicsEnabled()
-				? MinecraftEntityFluidInteraction.capture(level, region, entityMotion)
-				: MinecraftEntityFluidInteraction.Frame.EMPTY;
-		List<MovingBodyFluidCoupling.Request> movingBodies = entityFrame.interactions().isEmpty()
-				? List.of() : MinecraftEntityFluidInteraction.movingBodyRequests(entityFrame.bodyMotions());
-		MinecraftEntityFluidInteraction.applyEntityForces(entityFrame);
-		int affectedEntities = entityFrame.affectedEntities();
-		region.setLastEntityCoupling(new FluidRegion.EntityCouplingStats(affectedEntities, 0.0, 0.0, 0.0));
-		if (collisionsChanged || affectedEntities > 0) {
-			region.wakeForActivity();
-			region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
-		}
-		RegionRuntime tickRuntime = new RegionRuntime(tick, region.stepIntervalTicks(),
-				region.hardOverrunStreak(), region.recoveryStreak(), region.canStep(),
-				worldCapabilityProfile.hasCapability(WorldCapability.THERMAL) && region.canStepThermal());
+		MinecraftRegionInputs.TickInputs inputs = regionInputs.captureTick(level, region, tick,
+				worldCapabilityProfile.hasCapability(WorldCapability.THERMAL));
+		int affectedEntities = inputs.affectedEntities();
+		RegionRuntime tickRuntime = inputs.runtime();
 		RegionTickUseCase.Plan tickPlan = regionTick.plan(tickRuntime);
 		if (tickPlan.axis() == RegionTickUseCase.Axis.NONE) {
 			if (collisionsChanged) sendSnapshot(level, region);
@@ -2078,7 +2064,7 @@ public final class FluidSimulationService {
 				region.wakeThermal(ThermalActivity.WakeReason.CARRIER_MOTION);
 				boolean phaseChange = worldCapabilityProfile.hasCapability(WorldCapability.PHASECHANGE);
 				RegionTickUseCase.MotionOutcome outcome = regionTick.executeMotion(tickPlan,
-						new MotionStepCommand(region.id(), region.solverGeneration(), movingBodies,
+						new MotionStepCommand(region.id(), region.solverGeneration(), inputs.movingBodies(),
 								phaseChange, phaseChange ? serverConfig.maximumPhaseOperationsPerStep() : 0, false));
 				if (!outcome.result().accepted()) throw new IllegalStateException(
 						"Motion step application rejected synchronous region state: " + outcome.result().status());
@@ -2202,7 +2188,7 @@ public final class FluidSimulationService {
 		}
 
 		boolean available = regionOperations.ensureAvailable(
-				level, region, controllerFeatureEnabled, this::refreshCollisions, this::sendSnapshot,
+				level, region, controllerFeatureEnabled, this::refreshRegionInputs, this::sendSnapshot,
 				snapshots::sendRemoval
 		);
 		if (available && worldCapabilityProfile.hasCapability(WorldCapability.THERMAL) && region.solverLoaded() && region.domain().hasThermalState()) {
@@ -2229,18 +2215,6 @@ public final class FluidSimulationService {
 		if (!result.accepted()) throw new IllegalStateException(
 				"Motion step application rejected synchronous region state: " + result.status());
 		region.recordStep(result.stats(), (System.nanoTime() - start) / 1_000_000.0);
-		return result;
-	}
-
-	private ThermalStepResult stepThermalOnce(FluidRegion region) {
-		long start = System.nanoTime();
-		boolean phaseChange = worldCapabilityProfile.hasCapability(WorldCapability.PHASECHANGE);
-		ThermalStepResult result = regionApplication.stepThermal(new ThermalStepCommand(
-				region.id(), region.solverGeneration(), phaseChange,
-				phaseChange ? serverConfig.maximumPhaseOperationsPerStep() : 0));
-		if (!result.accepted()) throw new IllegalStateException(
-				"Thermal step application rejected synchronous region state: " + result.status());
-		region.recordThermalStep((System.nanoTime() - start) / 1_000_000.0);
 		return result;
 	}
 
@@ -2363,7 +2337,7 @@ public final class FluidSimulationService {
 		FluidRegion region = activeRegion();
 		if (region == null || !level.dimension().equals(region.dimension())) return FluidRegion.CollisionStats.EMPTY;
 		if (!ensureRegionAvailable(level, region)) return region.lastCollisionStats();
-		try { return refreshCollisions(level, region); }
+		try { return refreshRegionInputs(level, region); }
 		catch (FluidDomain.CollisionEditBlockedException blocked) {
 			blockCollisionEdit(level, region, blocked);
 			throw blocked;
@@ -2383,24 +2357,16 @@ public final class FluidSimulationService {
 		sendSnapshot(level, region);
 	}
 
-	private FluidRegion.CollisionStats refreshCollisions(ServerLevel level, FluidRegion region) {
-		FluidRegion.CollisionStats stats = FluidRegionWorldInteraction.refreshCollisions(
-				level, region, CELLS_PER_BLOCK
-		);
-		boolean thermalBoundaryChanged = false;
-		if (thermalBoundaryResolver != null) try {
-			thermalBoundaryChanged = thermalBoundaryResolver.refresh(level, region, CELLS_PER_BLOCK);
+	private FluidRegion.CollisionStats refreshRegionInputs(ServerLevel level, FluidRegion region) {
+		FluidRegion.CollisionStats collisions = regionInputs.refreshCollisions(level, region);
+		try {
+			if (regionInputs.refreshThermalBoundary(level, region)) {
+				region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
+			}
 		} catch (RuntimeException invalidBoundary) {
 			blockThermal(level, region, "thermal-definition LOCKED：" + invalidBoundary.getMessage(), invalidBoundary);
 		}
-		if (stats.changedCells() > 0 || stats.displacedCellVolume() > 0.0F
-				|| stats.escapedCellVolume() > 0.0F || stats.markerBudgetLimited()) {
-			region.setLastCollisionStats(stats);
-		}
-		region.markCollisionRefreshed();
-		if (stats.changedCells() > 0) region.wakeForActivity();
-		if (thermalBoundaryChanged) region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
-		return stats;
+		return collisions;
 	}
 
 	public RestorationStats remove(MinecraftServer server) {

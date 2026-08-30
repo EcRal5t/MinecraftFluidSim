@@ -324,7 +324,7 @@ public final class ProductionFluidReplayValidation {
 		double bodyMinimumZ = initialBodyMinimumZ;
 		double bodyMinimumY = bodyBottomForSubmergence(
 				domain, bodyMinimumX, bodyMinimumZ, bodyWidth, bodyHeight,
-				MinecraftEntityFluidInteraction.NEUTRAL_SUBMERGENCE);
+				MinecraftRegionInputs.NEUTRAL_SUBMERGENCE);
 		double initialBodyMinimumY = bodyMinimumY;
 		double minimumTailY = Double.POSITIVE_INFINITY;
 		double maximumTailY = Double.NEGATIVE_INFINITY;
@@ -351,7 +351,7 @@ public final class ProductionFluidReplayValidation {
 			require(submergedFraction > 0.0 && submergedFraction <= 1.0 + 1.0E-9,
 					"dynamic player left the finite wet AABB observation at tick " + tick
 							+ ": submergence=" + submergedFraction);
-			bodyVelocity = MinecraftEntityFluidInteraction.responseVelocity(
+			bodyVelocity = MinecraftRegionInputs.responseVelocity(
 					velocityBeforeResponse,
 					new Vec3(sample.velocityXMetresPerSecond(), sample.velocityYMetresPerSecond(),
 							sample.velocityZMetresPerSecond()),
@@ -470,12 +470,12 @@ public final class ProductionFluidReplayValidation {
 		double bodyMinimumZ = 1.70;
 		double bodyMinimumY = bodyBottomForSubmergence(
 				initial, bodyMinimumX, bodyMinimumZ, bodyWidth, bodyHeight,
-				MinecraftEntityFluidInteraction.NEUTRAL_SUBMERGENCE);
+				MinecraftRegionInputs.NEUTRAL_SUBMERGENCE);
 		double perTick = walkingMetresPerSecond / 20.0;
 		// Added-mass scale of the immersed body: the disturbance floor is a small fraction of it, so the
 		// gate rejects a coupling that is silently zero without pinning the exact physical response.
 		double addedMassJoules = 0.5 * productionConfig().density() * bodyVolume
-				* MinecraftEntityFluidInteraction.NEUTRAL_SUBMERGENCE
+				* MinecraftRegionInputs.NEUTRAL_SUBMERGENCE
 				* walkingMetresPerSecond * walkingMetresPerSecond;
 		FluidDomainState state = initial.captureAuthoritativeState();
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();

@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.application.RegionRuntime;
+import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -10,31 +12,84 @@ import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
-/** Minecraft entity discovery and response over loader-neutral fluid observations. */
-final class MinecraftEntityFluidInteraction {
+/** Freezes region boundary/entity observations and applies the paired per-tick entity response. */
+final class MinecraftRegionInputs {
 	static final double NEUTRAL_SUBMERGENCE = 0.72;
 	private static final double FULL_SUBMERGENCE_DRAG = 0.20;
 	private static final double TICKS_PER_SECOND = 20.0;
+	private static final int COLLISION_REFRESH_INTERVAL_TICKS = 5;
 
-	private MinecraftEntityFluidInteraction() { }
+	private final int cellsPerBlock;
+	private final MotionHistory motion = new MotionHistory();
+	private final ThermalBoundaryResolver thermalBoundaries;
 
-	static Frame capture(ServerLevel level, FluidRegion region, EntityMotionTracker motion) {
+	MinecraftRegionInputs(ThermalRegistry thermalRegistry, int cellsPerBlock) {
+		if (cellsPerBlock <= 0) throw new IllegalArgumentException("cells per block must be positive");
+		this.cellsPerBlock = cellsPerBlock;
+		this.thermalBoundaries = thermalRegistry == null ? null : new ThermalBoundaryResolver(thermalRegistry);
+	}
+
+	boolean boundariesDue(long tick) { return tick % COLLISION_REFRESH_INTERVAL_TICKS == 0L; }
+
+	FluidRegion.CollisionStats refreshCollisions(ServerLevel level, FluidRegion region) {
+		FluidRegion.CollisionStats collisions = FluidRegionWorldInteraction.refreshCollisions(
+				level, region, cellsPerBlock);
+		if (collisions.changedCells() > 0 || collisions.displacedCellVolume() > 0.0F
+				|| collisions.escapedCellVolume() > 0.0F || collisions.markerBudgetLimited()) {
+			region.setLastCollisionStats(collisions);
+		}
+		region.markCollisionRefreshed();
+		if (collisions.changedCells() > 0) {
+			region.wakeForActivity();
+			region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
+		}
+		return collisions;
+	}
+
+	boolean refreshThermalBoundary(ServerLevel level, FluidRegion region) {
+		return thermalBoundaries != null && thermalBoundaries.refresh(level, region, cellsPerBlock);
+	}
+
+	TickInputs captureTick(ServerLevel level, FluidRegion region, long tick, boolean thermalEnabled) {
+		EntityInputs entities = region.entityPhysicsEnabled() ? captureEntities(level, region) : EntityInputs.EMPTY;
+		int affectedEntities = entities.affectedEntities();
+		region.setLastEntityCoupling(new FluidRegion.EntityCouplingStats(affectedEntities, 0.0, 0.0, 0.0));
+		if (affectedEntities > 0) {
+			region.wakeForActivity();
+			region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
+		}
+		RegionRuntime runtime = new RegionRuntime(tick, region.stepIntervalTicks(),
+				region.hardOverrunStreak(), region.recoveryStreak(), region.canStep(),
+				thermalEnabled && region.canStepThermal());
+		return new TickInputs(runtime, entities.movingBodies(), affectedEntities);
+	}
+
+	void finishServerTick() { motion.rotate(); }
+
+	private EntityInputs captureEntities(ServerLevel level, FluidRegion region) {
 		List<Interaction> interactions = new ArrayList<>();
 		for (Entity entity : level.getEntities((Entity) null, regionBounds(region),
-				MinecraftEntityFluidInteraction::canAffect)) {
+				MinecraftRegionInputs::canAffect)) {
 			motion.observe(entity.getUUID(), entity.position());
 			Contact contact = sampleContact(region, entity);
 			if (contact.submergedFraction() <= 0.0) continue;
 			interactions.add(new Interaction(entity, contact,
 					motion.displacementSincePreviousTick(entity.getUUID(), entity.position())));
 		}
-		return interactions.isEmpty() ? Frame.EMPTY : new Frame(List.copyOf(interactions));
-	}
-
-	static void applyEntityForces(Frame frame) {
-		for (Interaction interaction : frame.interactions()) applyForce(interaction.entity(), interaction.contact());
+		if (interactions.isEmpty()) return EntityInputs.EMPTY;
+		List<BodyMotion> motions = new ArrayList<>(interactions.size());
+		for (Interaction interaction : interactions) {
+			Contact contact = interaction.contact();
+			applyForce(interaction.entity(), contact);
+			motions.add(new BodyMotion(contact.localX(), contact.localY(), contact.localZ(),
+					contact.displacedVolumeCubicMetres(), interaction.displacementBlocksThisTick()));
+		}
+		return new EntityInputs(movingBodyRequests(motions), interactions.size());
 	}
 
 	/**
@@ -142,27 +197,16 @@ final class MinecraftEntityFluidInteraction {
 			Vec3 displacementBlocksThisTick
 	) { }
 
+	record TickInputs(
+			RegionRuntime runtime,
+			List<MovingBodyFluidCoupling.Request> movingBodies,
+			int affectedEntities
+	) { }
+
 	private record Interaction(Entity entity, Contact contact, Vec3 displacementBlocksThisTick) { }
 
-	record Frame(List<Interaction> interactions) {
-		static final Frame EMPTY = new Frame(List.of());
-
-		Frame {
-			interactions = List.copyOf(interactions);
-		}
-
-		int affectedEntities() { return interactions.size(); }
-
-		List<BodyMotion> bodyMotions() {
-			if (interactions.isEmpty()) return List.of();
-			List<BodyMotion> motions = new ArrayList<>(interactions.size());
-			for (Interaction interaction : interactions) {
-				Contact contact = interaction.contact();
-				motions.add(new BodyMotion(contact.localX(), contact.localY(), contact.localZ(),
-						contact.displacedVolumeCubicMetres(), interaction.displacementBlocksThisTick()));
-			}
-			return List.copyOf(motions);
-		}
+	private record EntityInputs(List<MovingBodyFluidCoupling.Request> movingBodies, int affectedEntities) {
+		private static final EntityInputs EMPTY = new EntityInputs(List.of(), 0);
 	}
 
 	private record Contact(
@@ -170,5 +214,29 @@ final class MinecraftEntityFluidInteraction {
 			double displacedVolumeCubicMetres
 	) {
 		private static final Contact DRY = new Contact(0.0, Vec3.ZERO, 0.0F, 0.0F, 0.0F, 0.0);
+	}
+
+	/**
+	 * Consecutive-tick position history; an entity missed for one tick restarts unobserved.
+	 * Minecraft's old-position fields are rewritten before this adapter runs, so they cannot preserve
+	 * the client-authoritative displacement of a walking player across server ticks.
+	 */
+	static final class MotionHistory {
+		private final Map<UUID, Vec3> committed = new HashMap<>();
+		private final Map<UUID, Vec3> observed = new HashMap<>();
+
+		/** Returns null until the entity has been observed on the immediately preceding server tick. */
+		Vec3 displacementSincePreviousTick(UUID id, Vec3 currentPosition) {
+			Vec3 previous = committed.get(id);
+			return previous == null ? null : currentPosition.subtract(previous);
+		}
+
+		void observe(UUID id, Vec3 currentPosition) { observed.put(id, currentPosition); }
+
+		void rotate() {
+			committed.clear();
+			committed.putAll(observed);
+			observed.clear();
+		}
 	}
 }
