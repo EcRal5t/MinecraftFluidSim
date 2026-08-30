@@ -8,6 +8,7 @@ import java.util.Objects;
 /** One server's composed runtime; it owns lifecycle coordination, not service convenience methods. */
 public final class MmmRuntime {
 	private final FluidSimulationService simulation;
+	private final MinecraftControllerConsole controllerConsole;
 	private final CommittedEventHub committedEvents;
 	private final WorldStartupCoordinator.Result startup;
 	private boolean worldRecoveryCompleted;
@@ -19,11 +20,13 @@ public final class MmmRuntime {
 			WorldStartupCoordinator.Result startup
 	) {
 		this.simulation = Objects.requireNonNull(simulation, "Simulation service");
+		this.controllerConsole = simulation.controllerConsole();
 		this.committedEvents = Objects.requireNonNull(committedEvents, "Committed event hub");
 		this.startup = Objects.requireNonNull(startup, "World startup result");
 	}
 
 	public FluidSimulationService simulation() { return simulation; }
+	public MinecraftControllerConsole controllerConsole() { return controllerConsole; }
 	public MmmEventApi events() { return committedEvents; }
 	public WorldStartupCoordinator.Result startup() { return startup; }
 

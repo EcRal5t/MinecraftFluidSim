@@ -372,6 +372,13 @@
 * fluid marching-tetrahedra/solid/gas/bounds、material/chemical surface、granular deposit/parcel 与共享 quad emission 分别进入 `FluidSurfaceGeometry`、`MaterialSurfaceGeometry`、`GranularSurfaceGeometry`、`QuadGeometry`；`FluidRenderBackend` 独占唯一 `StagedVertexBuffer`、pipeline/upload/execute/close。`ClientFluidVolumeRenderer` 只保留 store accept/extract、frame→builder→backend 编排和组合关闭，由 833 行降为 69 行，没有 ledger 或 GPU resource 双重 owner。
 * 结构对照除编译外还比较了旧 renderer 与七个新 owner 的数值 literal、字符串 literal 多重集，均完全一致；颜色、`SURFACE_THRESHOLD`、`ISO_LEVEL`、`MARKER_INTERIOR_LEVEL`、`SNAPSHOT_BLEND_NANOS`、vertex 顺序与 `DEBUG_FILLED_BOX` pipeline 未改。`compileClientJava`、`protocol` 与 `verifyArchitecture` 一次 Gradle 运行全部通过，架构门扫描 401 个生产源；本切片 client 生产源 8→14、行数 1383→1590，新增 207 行来自唯一 owner 边界与可读展开，最大新类 311 行。无需进游戏：这是逐方法结构搬移，自动编译/协议门和 literal parity 未发现视觉输入差异。
 
+### S19c
+
+* 先复审 S19g 的帧身份与资源所有权：五类 snapshot ledger 仍在同一锁内完成 accept/extract，material frame 继续携带同 sequence 的 chemical frame，renderer 只有一个 backend/staged buffer 关闭路径；没有发现并发、插值或 GPU 生命周期缺口，故不返工已闭合的客户端拆分。
+* 新建 `MinecraftControllerConsole`，完整接管 field probe carrier/condensed-cell 解析、controller summary/action、lifecycle preview/confirm、viewer session 清理和 thermal reservoir summary/setpoint。它直接持有 target resolver、query/lifecycle/use case、region tick、registry/startup/manager；仅把现有 region availability 工作流作为窄函数缝注入，没有以 service callback 重新制造隐藏 facade。
+* 对照迁移前实现逐守卫确认顺序未变：controller 先重验 server thread、距离、方块和 owner identity，再消费 action token；thermal token 仍先于权限、startup、目标/registry 检查消费，写入仍只更新 BlockEntity，随后刷新相邻已加载 thermal boundary 并按 `BOUNDARY_CHANGE` 唤醒。field probe 仍只观察唯一已加载同代 region，不加载、不唤醒、不 checkpoint。
+* `FieldProbeItem` 与协议交互 handler 已改走 runtime 的语义化 `controllerConsole()`；service 删除 190 行交互实现而不保留委托镜像。`protocol,lifecycle` 与 `verifyArchitecture` 通过，架构门扫描 402 个生产源。无需进游戏：本切片没有视觉、真实 `VoxelShape` 或自动门不可观察的跨重启事务。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

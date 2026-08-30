@@ -10,18 +10,11 @@ import cc.ecisr.mmm.application.RegionApplicationService;
 import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.application.ThermalReservoirUseCase;
 import cc.ecisr.mmm.application.command.CheckpointRegionCommand;
-import cc.ecisr.mmm.application.command.ControllerSummaryCommand;
 import cc.ecisr.mmm.application.command.MotionStepCommand;
 import cc.ecisr.mmm.application.result.CheckpointRegionResult;
-import cc.ecisr.mmm.application.result.ControllerSummaryResult;
 import cc.ecisr.mmm.application.result.MotionStepResult;
 import cc.ecisr.mmm.block.MmmBlocks;
-import cc.ecisr.mmm.block.ThermalReservoirBlockEntity;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
-import cc.ecisr.mmm.controller.ControllerConsoleAction;
-import cc.ecisr.mmm.controller.ControllerSummary;
-import cc.ecisr.mmm.controller.LifecycleOperation;
-import cc.ecisr.mmm.fluid.CellCarrierInventoryView;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.GasPressureBoundary;
@@ -45,7 +38,6 @@ import cc.ecisr.mmm.simulation.ownership.OwnershipJournal;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
-import cc.ecisr.mmm.thermal.ThermalReservoirSummary;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.fluid.MaterialRegistry;
@@ -60,7 +52,6 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.util.Mth;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.Vec3;
 
@@ -91,6 +82,7 @@ public final class FluidSimulationService {
 	private final ControllerQueryUseCase controllerQueries;
 	private final MinecraftRegionLifecycle regionLifecycle;
 	private final ThermalReservoirUseCase thermalReservoirs = new ThermalReservoirUseCase();
+	private final MinecraftControllerConsole controllerConsole;
 	private final FluidSnapshotPublisher snapshots;
 	private final ContainerRecoveryCoordinator containerRecovery;
 	private final MinecraftContainerTransactionAdapter containerTransactions;
@@ -154,7 +146,12 @@ public final class FluidSimulationService {
 						this::hasPendingContainerTransfer, this::authoritativeWritesReady, worldBridgeFeatureEnabled));
 		this.regionLifecycle = new MinecraftRegionLifecycle(startup, regionManager, regionOperations, snapshots, targets,
 				controllerQueries, thermalRegistry, this::hasPendingContainerTransfer);
+		this.controllerConsole = new MinecraftControllerConsole(targets, controllerQueries, regionLifecycle,
+				thermalReservoirs, regionTick, thermalRegistry, startup, regionManager,
+				this::authoritativeWritesReady, this::ensureRegionAvailable);
 	}
+
+	MinecraftControllerConsole controllerConsole() { return controllerConsole; }
 
 	MinecraftContainerTransactionAdapter containerTransactions() { return containerTransactions; }
 
@@ -254,196 +251,6 @@ public final class FluidSimulationService {
 	/** Stable read-only API surface; construction performs no world or region I/O. */
 	public MmmQueryApi queryApi(MinecraftServer server) {
 		return new FabricFluidQueryApi(server, regionManager, startup.profileProven());
-	}
-
-	/** Read-only companion to Query for cell-local solid/gas carriers; callers first resolve a unique interior point. */
-	public CarrierCellObservation observeCellCarriers(ServerLevel level, Vec3 interiorPoint) {
-		if (!level.getServer().isSameThread()) throw new IllegalStateException("Carrier observation is server-thread-only");
-		FluidRegion region = targets.regionAtBlock(level, BlockPos.containing(interiorPoint));
-		if (region == null || region.availabilityFailure() != null || !region.solverLoaded()) return null;
-		double h = region.solverConfig().cellSize();
-		int x = Mth.floor((interiorPoint.x - region.origin().getX()) / h);
-		int y = Mth.floor((interiorPoint.y - region.origin().getY()) / h);
-		int z = Mth.floor((interiorPoint.z - region.origin().getZ()) / h);
-		if (x < 0 || x >= region.sizeX() || y < 0 || y >= region.sizeY() || z < 0 || z >= region.sizeZ()) {
-			return null;
-		}
-		return new CarrierCellObservation(region.id(), region.networkGeneration(), x, y, z,
-				region.domain().observeCellCarriers(x, y, z));
-	}
-
-	/** Returns the centre of the first liquid/granular/coherent cell along an already resolved interior ray. */
-	public Vec3 firstCondensedProbePoint(ServerLevel level, Vec3 interiorPoint, Vec3 direction) {
-		if (!level.getServer().isSameThread()) throw new IllegalStateException("Probe traversal is server-thread-only");
-		FluidRegion region = targets.regionAtBlock(level, BlockPos.containing(interiorPoint));
-		if (region == null || region.availabilityFailure() != null || !region.solverLoaded()) return null;
-		int[] cell = targets.firstCondensedCellAlong(region, interiorPoint, direction);
-		if (cell == null) return null;
-		double h = region.solverConfig().cellSize();
-		return new Vec3(region.origin().getX() + (cell[0] + 0.5) * h,
-				region.origin().getY() + (cell[1] + 0.5) * h,
-				region.origin().getZ() + (cell[2] + 0.5) * h);
-	}
-
-	public record CarrierCellObservation(
-			UUID regionId, long regionNetworkGeneration, int cellX, int cellY, int cellZ,
-			CellCarrierInventoryView carriers
-	) {
-		public CarrierCellObservation {
-			if (regionId == null || regionNetworkGeneration <= 0L
-					|| cellX < 0 || cellY < 0 || cellZ < 0) {
-				throw new IllegalArgumentException("Carrier cell observation identity is invalid");
-			}
-		}
-	}
-
-	/** Snapshots bounded maintained ledgers without loading, waking, checkpointing, selecting, or building display grids. */
-	public ControllerSummary controllerSummary(ServerPlayer player, BlockPos controllerPosition) {
-		if (player == null || controllerPosition == null) return null;
-		ServerLevel level = player.level();
-		if (!level.getServer().isSameThread()) throw new IllegalStateException("Controller summary is server-thread-only");
-		if (player.distanceToSqr(controllerPosition.getX() + 0.5,
-				controllerPosition.getY() + 0.5, controllerPosition.getZ() + 0.5) > 64.0) return null;
-		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) return null;
-		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
-		if (region == null || !startup.profileProven()) return null;
-		ControllerSummaryResult result = controllerQueries.query(
-				new ControllerSummaryCommand(player.getUUID(), region.id()));
-		return result.ok() ? result.summary() : null;
-	}
-
-	/** Re-resolves every client-supplied identity and consumes the one-use server token before acting. */
-	public Component applyControllerConsoleAction(
-			ServerPlayer player, UUID requestedRegionId, BlockPos controllerPosition,
-			long summaryGeneration, ControllerConsoleAction action
-	) {
-		if (player == null || requestedRegionId == null || controllerPosition == null || action == null) {
-			return Component.translatable("message.mmm.controller.request_identity_missing");
-		}
-		ServerLevel level = player.level();
-		if (!level.getServer().isSameThread()) throw new IllegalStateException("Controller actions are server-thread-only");
-		double distanceSquared = player.distanceToSqr(controllerPosition.getX() + 0.5,
-				controllerPosition.getY() + 0.5, controllerPosition.getZ() + 0.5);
-		if (distanceSquared > 64.0) return Component.translatable("message.mmm.controller.too_far");
-		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) {
-			return Component.translatable("message.mmm.controller.target_gone");
-		}
-		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
-		if (region == null || !region.id().equals(requestedRegionId)) {
-			return Component.translatable("message.mmm.controller.owner_changed");
-		}
-		if (!controllerQueries.consumeActionToken(player.getUUID(), region.id(), summaryGeneration)) {
-			return Component.translatable("message.mmm.controller.summary_expired");
-		}
-
-		return switch (action) {
-			case SELECT -> regionManager.select(region.id())
-					? null : Component.translatable("message.mmm.controller.region_gone");
-			case REFRESH_AVAILABILITY -> ensureRegionAvailable(level, region)
-					? null : Component.translatable("message.mmm.controller.availability_still_blocked",
-							region.availabilityFailure());
-			case PAUSE -> changeControllerRunIntent(player, region, true);
-			case RESUME -> changeControllerRunIntent(player, region, false);
-		};
-	}
-
-	private Component changeControllerRunIntent(ServerPlayer player, FluidRegion region, boolean pause) {
-		return regionLifecycle.changeRunIntent(player, region, pause);
-	}
-
-	/** Issues a bounded destructive-operation preview after consuming the displayed console generation. */
-	public MinecraftRegionLifecycle.PreviewResult previewControllerLifecycleOperation(
-			ServerPlayer player, UUID requestedRegionId, BlockPos controllerPosition,
-			long summaryGeneration, LifecycleOperation operation
-	) {
-		return regionLifecycle.preview(player, requestedRegionId, controllerPosition, summaryGeneration, operation);
-	}
-
-	/** Consumes one same-player preview and rechecks all commit gates before changing authoritative state. */
-	public MinecraftRegionLifecycle.CommitResult confirmControllerLifecycleOperation(
-			ServerPlayer player, UUID requestedRegionId, BlockPos controllerPosition,
-			UUID nonce, LifecycleOperation operation
-	) {
-		return regionLifecycle.confirm(player, requestedRegionId, controllerPosition, nonce, operation);
-	}
-
-	public void forgetInteractiveViewer(UUID playerId) {
-		controllerQueries.forgetViewer(playerId);
-		regionLifecycle.forgetViewer(playerId);
-		thermalReservoirs.forgetViewer(playerId);
-	}
-
-	/** Read-only tuning state; invalid persisted setpoints remain visible so a creative player can replace them. */
-	public ThermalReservoirSummary thermalReservoirSummary(ServerPlayer player, BlockPos position) {
-		if (player == null || position == null) return null;
-		ServerLevel level = player.level();
-		if (!level.getServer().isSameThread()) {
-			throw new IllegalStateException("Thermal reservoir summary is server-thread-only");
-		}
-		if (player.distanceToSqr(position.getX() + 0.5, position.getY() + 0.5, position.getZ() + 0.5) > 64.0
-				|| !level.getBlockState(position).is(MmmBlocks.THERMAL_RESERVOIR)
-				|| !(level.getBlockEntity(position) instanceof ThermalReservoirBlockEntity reservoir)
-				|| thermalRegistry == null) return null;
-		ThermalRegistry.TemperatureRange range = thermalRegistry.worldBoundaryTemperatureRange();
-		double temperature = reservoir.temperatureK();
-		return thermalReservoirs.summary(thermalTarget(player, position), temperature, range);
-	}
-
-	/** Revalidates a proposed setpoint, persists the world owner, then refreshes and wakes adjacent thermal regions. */
-	public String applyThermalReservoirSetpoint(
-			ServerPlayer player, BlockPos position, long summaryGeneration, double temperatureK
-	) {
-		if (player == null || position == null) return "请求缺少温度源身份";
-		ServerLevel level = player.level();
-		if (!level.getServer().isSameThread()) {
-			throw new IllegalStateException("Thermal reservoir actions are server-thread-only");
-		}
-		if (player.distanceToSqr(position.getX() + 0.5, position.getY() + 0.5, position.getZ() + 0.5) > 64.0) {
-			return "玩家距离温度源过远";
-		}
-		ThermalReservoirBlockEntity reservoir = level.getBlockEntity(position)
-				instanceof ThermalReservoirBlockEntity found ? found : null;
-		boolean targetPresent = level.getBlockState(position).is(MmmBlocks.THERMAL_RESERVOIR)
-				&& reservoir != null;
-		ThermalReservoirUseCase.Decision authorization = thermalReservoirs.authorize(
-				thermalTarget(player, position), summaryGeneration, player.isCreative(),
-				authoritativeWritesReady(), targetPresent, thermalRegistry != null);
-		if (authorization != ThermalReservoirUseCase.Decision.AUTHORIZED) {
-			return switch (authorization) {
-				case TOKEN_EXPIRED -> "summary 已过期，请刷新";
-				case PERMISSION_DENIED -> "只有创造模式玩家可以修改温度源";
-				case WRITE_NOT_READY -> authoritativeWriteFailure("修改温度源");
-				case TARGET_MISSING -> "目标方块不再是温度源";
-				case REGISTRY_UNAVAILABLE -> "world thermal registry 不可用";
-				case TEMPERATURE_OUT_OF_RANGE, AUTHORIZED -> throw new IllegalStateException(
-						"Unexpected thermal reservoir authorization result " + authorization);
-			};
-		}
-		ThermalRegistry.TemperatureRange range = thermalRegistry.worldBoundaryTemperatureRange();
-		if (thermalReservoirs.validateSetpoint(temperatureK, range)
-				== ThermalReservoirUseCase.Decision.TEMPERATURE_OUT_OF_RANGE) {
-			return String.format(java.util.Locale.ROOT,
-				"温度必须是有限数值且位于 world thermal registry 的 [%.6f, %.6f] K",
-				range.minimumK(), range.maximumK());
-		}
-		reservoir.setTemperatureK(temperatureK);
-		refreshThermalReservoir(level, position);
-		return null;
-	}
-
-	private static ThermalReservoirUseCase.Target thermalTarget(ServerPlayer player, BlockPos position) {
-		return new ThermalReservoirUseCase.Target(player.getUUID(),
-				player.level().dimension().identifier().toString(), position.getX(), position.getY(), position.getZ());
-	}
-
-	private void refreshThermalReservoir(ServerLevel level, BlockPos position) {
-		for (FluidRegion region : regionManager.regions()) {
-			FluidRegionFootprint footprint = region.footprint();
-			if (footprint == null || !region.dimension().equals(level.dimension())
-					|| !footprint.boundaryBlocks().contains(position.asLong())
-					|| !region.solverLoaded() || !region.domain().hasThermalState()) continue;
-			regionTick.refreshThermalBoundary(level, region);
-		}
 	}
 
 	/** Adds authoritative U to a server-resolved mass-bearing liquid source. */

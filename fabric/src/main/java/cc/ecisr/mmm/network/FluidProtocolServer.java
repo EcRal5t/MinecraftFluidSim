@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.network;
 
 import cc.ecisr.mmm.simulation.FluidSimulationService;
+import cc.ecisr.mmm.simulation.MinecraftControllerConsole;
 import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import net.fabricmc.fabric.api.networking.v1.FabricServerConfigurationPacketListenerImpl;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
@@ -81,7 +82,7 @@ public final class FluidProtocolServer {
 			simulation.sendSnapshots(listener.player);
 		});
 		ServerPlayConnectionEvents.DISCONNECT.register((listener, server) -> {
-			MmmRuntimeRegistry.require(server).simulation().forgetInteractiveViewer(listener.player.getUUID());
+			MmmRuntimeRegistry.require(server).controllerConsole().forgetInteractiveViewer(listener.player.getUUID());
 			removeSession(server, listener.player.getUUID());
 		});
 	}
@@ -180,30 +181,30 @@ public final class FluidProtocolServer {
 	}
 
 	private static void receiveControllerAction(ControllerActionPayload payload, ServerPlayer player) {
-		FluidSimulationService service = MmmRuntimeRegistry.require(player.level().getServer()).simulation();
-		Component failure = service.applyControllerConsoleAction(player, payload.regionId(), payload.controllerPosition(),
+		MinecraftControllerConsole console = MmmRuntimeRegistry.require(player.level().getServer()).controllerConsole();
+		Component failure = console.applyControllerConsoleAction(player, payload.regionId(), payload.controllerPosition(),
 				payload.summaryGeneration(), payload.action());
 		if (failure != null) player.sendSystemMessage(Component.translatable(
 				"message.mmm.controller.console_action_failed", failure), true);
-		var summary = service.controllerSummary(player, payload.controllerPosition());
+		var summary = console.controllerSummary(player, payload.controllerPosition());
 		if (summary != null) send(player, new ControllerSummaryPayload(summary));
 	}
 
 	private static void receiveLifecycleOperation(
 			LifecycleOperationRequestPayload payload, ServerPlayer player
 	) {
-		FluidSimulationService service = MmmRuntimeRegistry.require(player.level().getServer()).simulation();
+		MinecraftControllerConsole console = MmmRuntimeRegistry.require(player.level().getServer()).controllerConsole();
 		if (payload.kind() == LifecycleOperationRequestPayload.Kind.PREVIEW) {
-			var result = service.previewControllerLifecycleOperation(player, payload.regionId(),
+			var result = console.previewControllerLifecycleOperation(player, payload.regionId(),
 					payload.controllerPosition(), payload.summaryGeneration(), payload.operation());
 			if (result.failure() != null) {
 				player.sendSystemMessage(Component.translatable(
 						"message.mmm.controller.lifecycle_failed", result.failure()), true);
-				var summary = service.controllerSummary(player, payload.controllerPosition());
+				var summary = console.controllerSummary(player, payload.controllerPosition());
 				if (summary != null) send(player, new ControllerSummaryPayload(summary));
 				return;
 			}
-			var refreshed = service.controllerSummary(player, payload.controllerPosition());
+			var refreshed = console.controllerSummary(player, payload.controllerPosition());
 			if (refreshed == null || !send(player, new LifecycleOperationPreviewPayload(
 					payload.controllerPosition(), result.preview(), refreshed))) {
 				player.sendSystemMessage(Component.translatable(
@@ -213,7 +214,7 @@ public final class FluidProtocolServer {
 			return;
 		}
 
-		var result = service.confirmControllerLifecycleOperation(player, payload.regionId(),
+		var result = console.confirmControllerLifecycleOperation(player, payload.regionId(),
 				payload.controllerPosition(), payload.nonce(), payload.operation());
 		if (result.committed()) player.level().playSound(null, payload.controllerPosition(),
 				net.minecraft.sounds.SoundEvents.BEACON_ACTIVATE,
@@ -221,19 +222,19 @@ public final class FluidProtocolServer {
 		player.sendSystemMessage(Component.translatable(result.committed()
 				? "message.mmm.controller.lifecycle_committed" : "message.mmm.controller.lifecycle_failed",
 				result.message()), true);
-		var summary = service.controllerSummary(player, payload.controllerPosition());
+		var summary = console.controllerSummary(player, payload.controllerPosition());
 		if (summary != null) send(player, new ControllerSummaryPayload(summary));
 	}
 
 	private static void receiveThermalReservoirSetpoint(
 			ThermalReservoirSetpointPayload payload, ServerPlayer player
 	) {
-		FluidSimulationService service = MmmRuntimeRegistry.require(player.level().getServer()).simulation();
-		String failure = service.applyThermalReservoirSetpoint(player, payload.position(),
+		MinecraftControllerConsole console = MmmRuntimeRegistry.require(player.level().getServer()).controllerConsole();
+		String failure = console.applyThermalReservoirSetpoint(player, payload.position(),
 				payload.summaryGeneration(), payload.temperatureK());
 		if (failure != null) player.sendSystemMessage(Component.translatable(
 				"message.mmm.thermal_reservoir.action_failed", failure), true);
-		var summary = service.thermalReservoirSummary(player, payload.position());
+		var summary = console.thermalReservoirSummary(player, payload.position());
 		if (summary != null) send(player, new ThermalReservoirSummaryPayload(summary));
 	}
 

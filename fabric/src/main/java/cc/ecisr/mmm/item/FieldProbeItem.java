@@ -8,7 +8,7 @@ import cc.ecisr.mmm.fluid.CellCarrierInventoryView;
 import cc.ecisr.mmm.network.ControllerSummaryPayload;
 import cc.ecisr.mmm.network.FluidProtocolServer;
 import cc.ecisr.mmm.network.ThermalReservoirSummaryPayload;
-import cc.ecisr.mmm.simulation.FluidSimulationService;
+import cc.ecisr.mmm.simulation.MinecraftControllerConsole;
 import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import cc.ecisr.mmm.simulation.ShellFluidQuery;
 import net.minecraft.ChatFormatting;
@@ -40,9 +40,9 @@ public final class FieldProbeItem extends Item {
 		if (context.getLevel().isClientSide()) return InteractionResult.SUCCESS;
 		if (!(context.getLevel() instanceof ServerLevel level)
 				|| !(context.getPlayer() instanceof ServerPlayer player)) return InteractionResult.PASS;
-		FluidSimulationService service = MmmRuntimeRegistry.require(level.getServer()).simulation();
+		MinecraftControllerConsole console = MmmRuntimeRegistry.require(level.getServer()).controllerConsole();
 		if (level.getBlockState(context.getClickedPos()).is(MmmBlocks.THERMAL_RESERVOIR)) {
-			var summary = service.thermalReservoirSummary(player, context.getClickedPos());
+			var summary = console.thermalReservoirSummary(player, context.getClickedPos());
 			if (summary == null || !FluidProtocolServer.send(player, new ThermalReservoirSummaryPayload(summary))) {
 				player.sendSystemMessage(Component.translatable("message.mmm.thermal_reservoir.unavailable"));
 				return InteractionResult.FAIL;
@@ -50,7 +50,7 @@ public final class FieldProbeItem extends Item {
 			return InteractionResult.SUCCESS_SERVER;
 		}
 		if (level.getBlockState(context.getClickedPos()).is(MmmBlocks.FLUID_CONTROLLER)) {
-			ControllerSummary summary = service.controllerSummary(player, context.getClickedPos());
+			ControllerSummary summary = console.controllerSummary(player, context.getClickedPos());
 			if (summary == null) {
 				player.sendSystemMessage(Component.translatable("message.mmm.probe.controller_missing"));
 				return InteractionResult.FAIL;
@@ -69,15 +69,15 @@ public final class FieldProbeItem extends Item {
 		net.minecraft.world.phys.Vec3 point = resolution.interiorPoint();
 		FluidQueryResult liquid = resolution.result();
 		if (player.isShiftKeyDown() && point != null) {
-			point = service.firstCondensedProbePoint(level, point, player.getLookAngle());
+			point = console.firstCondensedProbePoint(level, point, player.getLookAngle());
 			if (point == null) {
 				player.sendSystemMessage(Component.translatable("message.mmm.probe.no_condensed"));
 				return InteractionResult.FAIL;
 			}
 			liquid = ShellFluidQuery.queryPoint(level, point);
 		}
-		FluidSimulationService.CarrierCellObservation carriers = point == null ? null
-				: service.observeCellCarriers(level, point);
+		MinecraftControllerConsole.CarrierCellObservation carriers = point == null ? null
+				: console.observeCellCarriers(level, point);
 		player.sendSystemMessage(present(liquid, carriers));
 		return InteractionResult.SUCCESS_SERVER;
 	}
@@ -143,7 +143,7 @@ public final class FieldProbeItem extends Item {
 	}
 
 	private static Component present(
-			FluidQueryResult result, FluidSimulationService.CarrierCellObservation carrierCell
+			FluidQueryResult result, MinecraftControllerConsole.CarrierCellObservation carrierCell
 	) {
 		if (result.observation() == null && carrierCell == null) {
 			return result.availabilityReason() == null
@@ -179,22 +179,22 @@ public final class FieldProbeItem extends Item {
 	}
 
 	private static java.util.UUID regionId(
-			FluidCellObservation liquid, FluidSimulationService.CarrierCellObservation carriers
+			FluidCellObservation liquid, MinecraftControllerConsole.CarrierCellObservation carriers
 	) { return liquid != null ? liquid.regionId() : carriers.regionId(); }
 
 	private static long generation(
-			FluidCellObservation liquid, FluidSimulationService.CarrierCellObservation carriers
+			FluidCellObservation liquid, MinecraftControllerConsole.CarrierCellObservation carriers
 	) { return liquid != null ? liquid.regionNetworkGeneration() : carriers.regionNetworkGeneration(); }
 
-	private static int cellX(FluidCellObservation liquid, FluidSimulationService.CarrierCellObservation carriers) {
+	private static int cellX(FluidCellObservation liquid, MinecraftControllerConsole.CarrierCellObservation carriers) {
 		return liquid != null ? liquid.cellX() : carriers.cellX();
 	}
 
-	private static int cellY(FluidCellObservation liquid, FluidSimulationService.CarrierCellObservation carriers) {
+	private static int cellY(FluidCellObservation liquid, MinecraftControllerConsole.CarrierCellObservation carriers) {
 		return liquid != null ? liquid.cellY() : carriers.cellY();
 	}
 
-	private static int cellZ(FluidCellObservation liquid, FluidSimulationService.CarrierCellObservation carriers) {
+	private static int cellZ(FluidCellObservation liquid, MinecraftControllerConsole.CarrierCellObservation carriers) {
 		return liquid != null ? liquid.cellZ() : carriers.cellZ();
 	}
 
