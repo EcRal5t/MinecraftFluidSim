@@ -299,6 +299,14 @@
 * `FluidRegionManager` 继续保留必要的 Minecraft `FluidRegion`→loader-neutral descriptor 映射，但删除对 `RegionCatalog.Limits`、`BudgetUsage`、`AdmissionResult` 的三套镜像 record、转换器和重复校验；world config、service、persistence 与既有测试直接消费 catalog 的规范类型。没有把 descriptor 映射扩散给调用方，也没有删除 catalog 边界。
 * 本提交删除 1 个生产文件，生产 Java 净减 36 行；连同前一收缩提交，S15f 峰值 63,150 行/369 文件降为 63,006 行/367 文件，净减 144 行和 2 个文件。相对重构前仍净增 5,617 行（9.8%）和 82 个生产文件；这是真实 owner/stage/application 边界的当前成本，不再用本轮高风险合并掩盖。`region-manager,lifecycle,region-state` 与 `verifyArchitecture` 通过；下一轮停止收缩复审，回到未完成的 S15 主线，再顺接 S16。
 
+### S15g (`e68950c`)
+
+* 上一轮收缩复审沿 S15→S16 真实接缝再确认：收回 `StepExecutor` 和 catalog 规范 DTO 只改变类型归属，没有改变 step executor 数量、catalog 状态或 durable transaction owner，S16 所需 command/port/repository/runtime 入口仍完整。本切片因此回到 S15 尚未闭合的 world-input 编排，而不继续横向删层。
+* 将既有 `MinecraftEntityFluidInteraction` 演进并迁名为 `MinecraftRegionInputs`，由同一 server-thread adapter 独占五 tick 碰撞刷新、thermal boundary 刷新、实体发现/观测/响应、moving-body request 以及唤醒后的 `RegionRuntime` 冻结。`FluidSimulationService` 保留线程/身份/availability、command 构造、typed failure、本步结果、thermal/hydrostatic post-observation 与 snapshot，不再自行拼接这些输入。
+* 删除仅服务该 adapter 的独立 `EntityMotionTracker`，把相邻服务器 tick 的 actual-displacement history 收为私有嵌套状态；同时删除 service 中无调用者的 `stepThermalOnce`。没有新增通用 collision/entity/snapshot port，也没有复制 capture DTO：生产 Java 净减 5 行，service 由 3073 行降至 3039 行，生产源由 367 个降至 366 个。
+* 差异复审发现碰撞 changed-cells 不能只唤醒 motion；迁移后仍同时以 `BOUNDARY_CHANGE` 唤醒 motion 与 thermal。thermal refresh 的 typed 失败本地化、先收集全部实体观测再响应、每 game tick 更新 motion history、request 顺序/预算以及只有 motion plan 消费 request 均保持原语义。
+* existing `EntityFluidWiringValidation` 与 `ProductionFluidReplayValidation` 只替换同一 owner/类型表征，未新增测试。`lifecycle,entity-fluid` 通过，最终实体步时门最大值 30.307 ms；`verifyArchitecture` 通过（366 个生产源）。无需进游戏：本切片不涉及视觉、真实 `VoxelShape` 差异或跨重启事务。S15 仍未完成，下一切片从 durable lifecycle adapter 边界继续，完成后再进入 S16。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。
@@ -322,7 +330,7 @@ revision 列由该切片的下一次提交补记，避免提交引用自身哈�
 * S12 没有建立只把 `new FluidDomain` 包一层的伪 test fixture builder。当前 Fabric debug fixture 与 application transfer 仍需 aggregate 的受控构造/变更入口；这些调用按 S13–S16 用例迁移后，S21 才集中 test fixture 并收窄 public surface。
 * S13 没有照提案一次性创建 `OwnershipPort`、`ContainerActorPort`、`ContainerJournalRepository`、`CollisionWorldPort`、`EntityMotionPort` 和 `SnapshotSink`：本切片实际迁移的 step 已由 Fabric 在调用前冻结 moving-body facts，checkpoint 与 summary 也各自有窄 port；没有调用者的接口无法从用例倒推出原子性和失败语义。ownership/container ports 分别等待对应用例切片，collision/entity/snapshot 随 S15 tick 编排迁移。
 * application step result 不返回 `FluidStepCandidate`/`FluidThermalStepCandidate`。完整 state 只在 backend 与 repository adoption 边界内存在；Fabric 调度真正需要的是 accepted stats 与 moving-body impulse，借 result 暴露 candidate 会把不受限数组重新变成 adapter 的隐式读口。
-* S15a 的 `RegionRuntime` 是单次 tick 的 scheduling snapshot，不与 `FluidRegion.PersistedRuntime` 争夺权威，也不持有 solver/domain。此时立即创建 collision/entity/snapshot 通用 ports 仍无法表达现有的捕获与输出原子性；这些 world facts 先保持在 server-thread adapter，等 tick orchestration 的实际调用面收窄后再提取 `MinecraftRegionInputs`，而不是预建无消费者接口。
+* `RegionRuntime` 是单次 tick 的 scheduling snapshot，不与 `FluidRegion.PersistedRuntime` 争夺权威，也不持有 solver/domain。`MinecraftRegionInputs` 现已作为 server-thread adapter 独占到期的碰撞/热边界刷新、实体观测/响应、相邻 tick 位移历史和 runtime 冻结；moving-body request 仍只由 motion plan 消费。snapshot 与 post-step observation 留在 service；在捕获/输出没有独立原子契约前不预建无消费者的通用 ports。
 * controller token 只能在 bounded view 已存在、region identity 匹配且完整 summary 字段验证成功后签发。generation 是 authorization nonce，不是 query revision；失败 read/projection 不消耗 generation，旧 token 仍按“最新同 viewer/region token”规则决定是否有效。
 * fixed thermal reservoir 的 setpoint owner 仍是 BlockEntity；application 只拥有 summary/token/policy，不建立虚假的 region thermal port。设定变化只影响未来 boundary flux，Fabric 在成功写入后刷新相邻 region 并按 boundary change 唤醒，不能直接把温差换算成 region `U`。
 * `RegionLifecycleUseCase` 只拥有 run-intent/preview authorization，不以 callback 取得 persistence 或 world 写权。inventory candidate+HEAD、ownership journal 和 REMOVED tombstone/quarantine 是三种不同提交协议；在对应窄 adapter 提取前不得用一个 `commit(operation)` 通用 port 抹平它们的失败分类。

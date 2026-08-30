@@ -19,7 +19,7 @@ CPU `FluidDomain` 是规范求解器聚合根。GPU probe、客户端 renderer�
 
 `FluidDomainState` 是完整、不可变的数值后端交接状态。motion 使用 `FluidStepRequest` / `FluidStepCandidate`，静水 thermal-only 轴使用 `FluidThermalStepRequest` / `FluidThermalStepCandidate`；两者都绑定 base generation 且只能返回其紧邻后继。`CpuFluidSolverBackend` 对两类请求都先恢复私有 `FluidDomain`，完整成功后才返回 candidate。未来 GPU 后端必须消费同一完整输入并返回同一完整 candidate；世界事务、ownership、actor、调度和 HEAD 发布不进入数值后端。
 
-生产 motion step、静水 thermal-only step 与测试侧 replay 都走完整候选边界。Fabric 先冻结 region UUID、expected solver generation、moving-body、phase budget 和只含调度事实的 `RegionRuntime`；`RegionTickUseCase` 根据 tick/interval 与正交 motion/thermal readiness 生成唯一 `NONE` / `MOTION` / `THERMAL` plan，motion 到期时不会再执行同 tick 的 thermal-only 轴。到期轴才经该 use case 自有的 `StepExecutor` 进入 `RegionApplicationService`；该用例只在 accepted step 后按注入的单调时钟推进 pacing 与连续过载证据，rejected/typed exception 不改变调度状态。`RegionRepository` 只提供完整 immutable capture 和 atomic adopt，不暴露 live domain。application 同时验证 backend id、紧邻 generation 与 `FluidDomainState.Layout`（网格/config/预算、sealed boundary、carrier kind、registry fingerprint、capability 与 thermal budget），port 在发布前按当前 live identity 重验。accepted result 只返回本步统计与 moving-body impulse，不把完整 candidate arrays 再交给 adapter。后端抛出的 typed 拒答不会改动 live domain，因此失败步既不会留下预先写入的 marker 冲量，也不会留下只完成传导或部分反应/相变的热轴状态。
+生产 motion step、静水 thermal-only step 与测试侧 replay 都走完整候选边界。`MinecraftRegionInputs` 先刷新到期的碰撞/热边界，冻结实体观测、实际逐 tick 位移、moving-body request 和只含调度事实的 `RegionRuntime`；`FluidSimulationService` 再把 region UUID、expected solver generation 与 phase budget 固定进本 tick command。`RegionTickUseCase` 根据 tick/interval 与正交 motion/thermal readiness 生成唯一 `NONE` / `MOTION` / `THERMAL` plan，motion 到期时不会再执行同 tick 的 thermal-only 轴。到期轴才经该 use case 自有的 `StepExecutor` 进入 `RegionApplicationService`；该用例只在 accepted step 后按注入的单调时钟推进 pacing 与连续过载证据，rejected/typed exception 不改变调度状态。`RegionRepository` 只提供完整 immutable capture 和 atomic adopt，不暴露 live domain。application 同时验证 backend id、紧邻 generation 与 `FluidDomainState.Layout`（网格/config/预算、sealed boundary、carrier kind、registry fingerprint、capability 与 thermal budget），port 在发布前按当前 live identity 重验。accepted result 只返回本步统计与 moving-body impulse，不把完整 candidate arrays 再交给 adapter。后端抛出的 typed 拒答不会改动 live domain，因此失败步既不会留下预先写入的 marker 冲量，也不会留下只完成传导或部分反应/相变的热轴状态。
 
 每个 `MinecraftServer` 的主运行时只由 `MmmRuntimeRegistry` 索引。`SERVER_STARTING` 显式调用 `MmmRuntimeFactory`：`WorldStartupCoordinator` 依次读取 world policy、在首次发布前验证当前 definitions、证明或恢复 world capability bundle、提取并复验 frozen registries，再由 factory 按固定顺序构造 region repository、收敛 removed quarantine、扫描 ownership 与 container WAL，最后才构造无 I/O 的 `FluidSimulationService`。startup state 和 issue 是 typed data；logger 只在 factory 边界投影它们，不参与状态机。需要已加载 level 的 takeover、ownership 与 container actor 收敛推迟到 `SERVER_STARTED`，停止时由 registry 注销并清理 event hub。
 
@@ -35,7 +35,8 @@ adapter 查找只能使用 `MmmRuntimeRegistry.require/find`；查找本身不�
   -> MmmRuntimeFactory / MmmRuntimeRegistry 唯一 server runtime lifetime
 
 Minecraft 命令、方块、容器、实体与 chunk 事件
-  -> FluidSimulationService                 校验/冻结 Minecraft facts
+  -> FluidSimulationService                 线程/身份/availability 校验与 typed 输出
+  -> MinecraftRegionInputs                  碰撞/热边界/实体事实与 RegionRuntime
   -> RegionTickUseCase / RegionRuntime       唯一轴计划、step timing 与 pacing
   -> RegionApplicationService               loader-neutral command/result 编排
        -> RegionRepository                  step capture/adopt
@@ -122,7 +123,7 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 - `UNLOADED`：solver arrays 已释放，但 metadata 和 catalog reservation 仍保留。
 - motion sleep 与 thermal sleep 独立；静水仍可能导热或相变，静温也可能继续运动。
 
-`RegionRuntime` 是 Fabric 在一次 tick 内捕获的 loader-neutral 调度值，不是第二个区域聚合根，也不持有 solver、世界或持久化对象。checkpoint 继续只保存 operator intent、resume state、step interval 与 tick；hard-overrun/recovery streak 是进程内短期证据。用例返回的新 pacing 由 server-thread adapter 应用到当前 `FluidRegion`，世界输入捕获、实体侧响应、thermal/hydrostatic observation 与 snapshot 发布仍属于 adapter 输出阶段。
+`RegionRuntime` 是 Fabric 在一次 tick 内捕获的 loader-neutral 调度值，不是第二个区域聚合根，也不持有 solver、世界或持久化对象。checkpoint 继续只保存 operator intent、resume state、step interval 与 tick；hard-overrun/recovery streak 是进程内短期证据。`MinecraftRegionInputs` 独占到期的碰撞/热边界刷新、实体观测与逐 tick 响应，并在这些输入可能唤醒区域之后冻结 runtime；用例返回的新 pacing 由 `FluidSimulationService` 应用到当前 `FluidRegion`，thermal/hydrostatic post-observation 与 snapshot 发布也仍由该服务完成。
 
 新控制器在首次成功提交后直接进入运行态。玩家的暂停意图随 checkpoint 持久化；边界损坏、chunk 缺失或候选失败造成的 availability pause 不得覆盖该意图，条件恢复后按原意图继续。
 
