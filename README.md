@@ -4,7 +4,7 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 
 这不是原版水的全局替代。当前稳定基线以可制作的边界方块和控制器建立显式闭壳：普通空手右击控制器会创建或选择区域并立即运行，空手潜行右击会持久切换暂停意图；正常生命周期不依赖 `/mmm`。原版世界交互仍按产品路线逐项接入。CPU 目前是规范后端，生产 GPU 后端是后续确定目标，但不会取得世界事务提交权。
 
-代码按编译边界拆为 `api`（loader-neutral 外部契约）、`model`（registry、账本与 immutable state）、`solver`（CPU 物理与完整 candidate）、`application`（用例与 port）、`fabric`（Minecraft/Fabric 适配）和 `gpu-probe`（Vulkan 验证与后端实验）；`core` 仅保留为聚合发布 artifact，不再含生产源码。
+代码按编译边界拆为 `api`（loader-neutral 外部契约）、`model`（registry、账本与 immutable state）、`solver`（CPU 物理与完整 candidate）、`application`（用例与 port）、`fabric`（Minecraft/Fabric 适配）、`gpu-probe-kernel`（无 loader 的 Vulkan 计算与验证）和 `gpu-probe`（可选 Fabric 适配）；`core` 仅保留为聚合发布 artifact，不再含生产源码。
 
 ## 持久化与安全边界
 

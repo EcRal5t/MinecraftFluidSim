@@ -11,7 +11,8 @@
 - `core/`：无生产源码的聚合发布 artifact，只重导出 `api` / `model` / `solver` / `application`。
 - `fabric/src/main/java/cc/ecisr/mmm/`：Fabric/Minecraft 编排、数据包/持久化适配和世界事务。
 - `fabric/src/client/java/cc/ecisr/mmm/`：只读客户端重建与可选观察层格式化。
-- `gpu-probe/`：Vulkan probe 与后端实验；数值代码依赖 `solver`，世界集成 compile-only 依赖 `fabric`。
+- `gpu-probe-kernel/`：loader-neutral Vulkan device/resource/binding/scheduler/readback、shader 与 headless validation；依赖 `solver`，禁止 Minecraft/Fabric 与主 runtime/network。
+- `gpu-probe/`：可选 Fabric lifecycle、命令、只读世界碰撞和 snapshot adapter；内嵌 kernel，compile-only 依赖 `fabric`，不取得世界或持久事务写权。
 
 | 职责 | 首要入口 | 必须保持 |
 |---|---|---|
@@ -142,4 +143,6 @@
 
 ## GPU probe
 
-`gpu-probe` 不修改世界或存档，当前主 Mod 仍以 CPU 为规范后端。入口位于 `gpu-probe/src/main/java/cc/ecisr/mmm/gpuprobe/`；改 descriptor/buffer/stage 时同步 Java binding、shader 和 readback。设备性能使用 Vulkan timestamp，调度与超时仍使用 wall time。生产 GPU 后端必须经 `solver` 的不可变输入/完整 candidate 边界接入，不能取得世界或持久化提交权。
+`gpu-probe` 不修改世界或存档，当前主 Mod 仍以 CPU 为规范后端。数值入口位于 `gpu-probe-kernel/src/main/java/cc/ecisr/mmm/gpuprobe/`，Fabric 入口位于 `gpu-probe/src/main/java/cc/ecisr/mmm/gpuprobe/`。改 buffer layout 时同步 `FlipGpuResources`、`FlipKernelBindings`、shader 与 readback；改提交顺序时只经 `GpuStepScheduler`；主 Mod 冲突与 snapshot 只经 `GpuProbeHostIntegration`。设备性能使用 Vulkan timestamp，调度与超时仍使用 wall time。生产 GPU 后端必须经 `solver` 的不可变输入/完整 candidate 边界接入，不能取得世界或持久化提交权。
+
+最近静态门为 `:gpu-probe-kernel:compileJava :gpu-probe:compileJava :gpu-probe:runAdapterValidation verifyArchitecture`。改 native owner、shader、checkpoint 或 GPU 数值时另跑 `:gpu-probe-kernel:runHeadlessGpuProbe` 与 `:gpu-probe-kernel:runGpuFlipValidation -PgpuProbeSkipLarge=true`；后者包含长跑自由面门，失败不能以阈值放宽、速度钳制或展示修补替代。

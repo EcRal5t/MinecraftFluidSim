@@ -18,7 +18,8 @@ CPU `FluidDomain` 是规范求解器聚合根。GPU probe、客户端 renderer�
 | `application` | loader-neutral command/result/use case/port 与 checkpoint export 边界 | 依赖 `solver` / `model`；不取得世界、actor 或 durable store 具体写权 |
 | `core` | 旧 artifact name 的聚合发布模块 | 无生产源码；只以 API 依赖重导出 `api` / `model` / `solver` / `application` |
 | `fabric` | Mod 生命周期、世界读取/写入、NBT、数据包、网络、物品适配与命令 | 依赖并内嵌 `api` / `model` / `solver` / `application`；服务器主线程拥有提交权；`ContainerItemMapper` 独占事务 fingerprint 与 `ItemStack` 的双向映射 |
-| `gpu-probe` | Vulkan 能力验证、只读对照和未来后端实验 | 数值部分依赖 `solver`；Fabric 集成只以 compile-only 接入主 Mod |
+| `gpu-probe-kernel` | Vulkan device/resource/binding/scheduler/readback、shader、CPU 对照与 headless 验证 | 依赖 `solver`；禁止 Minecraft/Fabric、主 runtime、network 与 logging adapter |
+| `gpu-probe` | 可选 Mod 生命周期、命令、只读世界碰撞采样和 probe snapshot 适配 | 依赖并内嵌 kernel；compile-only 接入 `fabric`，不取得区域 HEAD、ownership 或世界写权 |
 
 `FluidDomainState` 是完整、不可变的数值后端交接状态。motion 使用 `FluidStepRequest` / `FluidStepCandidate`，静水 thermal-only 轴使用 `FluidThermalStepRequest` / `FluidThermalStepCandidate`；两者都绑定 base generation 且只能返回其紧邻后继。`CpuFluidSolverBackend` 对两类请求都先恢复私有 `FluidDomain`，完整成功后才返回 candidate。未来 GPU 后端必须消费同一完整输入并返回同一完整 candidate；世界事务、ownership、actor、调度和 HEAD 发布不进入数值后端。
 
@@ -27,6 +28,8 @@ CPU `FluidDomain` 是规范求解器聚合根。GPU probe、客户端 renderer�
 每个 `MinecraftServer` 的主运行时只由 `MmmRuntimeRegistry` 索引。`SERVER_STARTING` 显式调用 `MmmRuntimeFactory`：`WorldStartupCoordinator` 依次读取 world policy、在首次发布前验证当前 definitions、证明或恢复 world capability bundle、提取并复验 frozen registries，再由 factory 按固定顺序构造 region repository、收敛 removed quarantine、扫描 ownership 与 container WAL，最后才构造无 I/O 的 `FluidSimulationService`。startup state 和 issue 是 typed data；logger 只在 factory 边界投影它们，不参与状态机。需要已加载 level 的 takeover、ownership 与 container actor 收敛推迟到 `SERVER_STARTED`，停止时由 registry 注销并清理 event hub。
 
 adapter 查找只能使用 `MmmRuntimeRegistry.require/find`；查找本身不再隐式读取或发布世界状态。`MmmFabricApi.events` 仍允许在 `SERVER_STARTING` 前登记监听器：registry slot 暂存同一个 thread-safe hub，runtime 建立后接管它；只读 Query 的 pre-start lookup 返回 unavailable/wrong-thread，不触发 runtime 初始化。
+
+可选 GPU probe 不加入主 runtime locator。其 Mod initializer 在自身 `SERVER_STARTING`/tick/`SERVER_STOPPING` 回调中持有唯一 service 实例；service 只经 `GpuProbeHostIntegration` 查询主域冲突、发布/删除 probe snapshot 和恢复主域 snapshot。只有 `MmmGpuProbeHostIntegration` 接触主 runtime 与 network implementation。kernel 的 device、storage resources、descriptor/pipeline、submission ring 和 bulk readback 各有唯一 native owner；probe 仍是只读实验后端，不实现生产 `FluidSolverBackend`。
 
 运行时只向外部 adapter 提供按行为命名的 owner：controller console、region activation、indicator editing、debug fixture、region administration/diagnostics/observation、player/dispenser container actor、container recovery、Query、committed world registries 与 protocol sessions。`FluidSimulationService` 仅作为尚未收口的 server tick、operator 写动作与 shutdown/recovery 编排 owner，不再是方块、物品、容器、协议、只读观察或已迁移命令的通用入口。协议协商状态由每个 `MmmRuntime` 的 `ProtocolSessions` 按玩家持有；`FluidProtocolServer` 只保留 configuration listener 对应的短期 pending task，不再维护 `MinecraftServer` 静态会话表。network、外部 API 与 GPU probe 不得依赖 `FluidSimulationService`。
 
@@ -86,6 +89,13 @@ ContainerJournalCodec / FileStore           严格 NBT / durable file 边界
 durable container completion
   -> MmmEventApi / CommittedEventHub
   -> 外部 Mod 的易失提交通知（漏失后由 Query API 恢复）
+
+可选 GPU probe adapter
+  -> GpuProbeHostIntegration              主域冲突只读判断与 snapshot bridge
+  -> gpu-probe-kernel                     Vulkan probe / checkpoint / headless gates
+       -> VulkanDeviceContext             instance / device / queue
+       -> FlipGpuResources / Bindings     storage / descriptor / compute pipeline
+       -> GpuStepScheduler / GpuReadback  bounded submission / host transfer
 ```
 
 Minecraft adapter 负责读取世界、选择区域和提交世界修改。`MinecraftCollisionWorldPort` 把 `VoxelShape` 保守采样成纯 Java `CollisionField` 后再交给世界交互服务；数值核心不持有 `ServerLevel`、ItemStack durable save 或磁盘所有权。持久层保存稳定 ID 和完整库存，不序列化 Java 对象图、GPU buffer 或客户端 mesh。

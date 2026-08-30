@@ -440,6 +440,14 @@ S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Bri
 * 新建窄 `GpuProbeHostIntegration`，只暴露主域冲突只读判断、probe snapshot/removal 发布与主域 snapshot 复发；唯一 `MmmGpuProbeHostIntegration` 才允许 import host `MmmRuntimeRegistry`/network protocol。service 不再接触主 runtime registry、payload 或 protocol sender，世界碰撞读取仍留在 adapter。
 * 架构门删除 GPU locator 与 `VulkanFlipPipeline` size allowlist，并新增 adapter host-boundary 规则和 self-check fixture；除唯一 integration implementation 外，`gpu-probe` 对 host simulation/network import 为零。adapter compile/command tree 与 `verifyArchitecture` 通过，扫描 422 个生产源，pipeline 仅产生 808 行普通 warning。
 
+### S20 完成
+
+* S20 最终模块边界为 `api ← model ← solver ← application`，Fabric 显式组合这四个实际 artifact；`core` 不再拥有生产源码。可选 GPU 路径分为 loader-neutral `gpu-probe-kernel` 与 Fabric `gpu-probe` adapter，后者产出的 mod jar 已核对内嵌 kernel jar、shader 与 kernel class，不依赖开发源码目录才能装载。
+* Vulkan native 所有权已分别闭合在 device、resources、bindings、scheduler 与 readback owner；adapter host bridge 只有一个实现，static server locator 已删除。README、system overview、routing、performance/backend roadmap 与 architecture baseline 同步为当前依赖方向、运行时数据流、模块规模和选择器入口，不再保留 S19 的过期 god-service 图示。
+* 使用 JDK 26.0.2、Java 25 target 的最终干净运行 `clean assemble runModuleValidation :fabric:runCpuValidation verifyArchitecture -PcpuValidation=milestone --offline --no-daemon` 成功：三个模块边界门、23 个 CPU 里程碑门、carrier inventory 与 422 个生产源架构扫描全部通过；可选 GPU adapter 门与真实 capability probe 也已分别通过。没有需要进游戏观察的视觉、真实 `VoxelShape` 或跨重启场景。
+* 完整 GPU correctness 仍由既有 long-run surface 门拒绝：GPU 约 1728 cells、当前 CPU conservative reseeding 为 2840 cells；在拆 owner 前的 `7af2590` 独立 worktree 中复现为 1727/2840，排除了 S20 生命周期、scheduler 或 readback 回退。该差异没有通过经验阈值、速度钳制、渲染补偿或特例掩盖；GPU backend 继续不具备生产资格，后续应实现与 CPU 同一守恒不变量下的 GPU reseeding，而不是把它误记为本轮架构迁移已修复。
+* S20 的五个实现提交为 `eec1ccd`（运行时权威流）、`b0af168`（物理模块）、`7af2590`（GPU kernel）、`29c8b0e`（Vulkan owner）与 `d646aee`（adapter 生命周期）。结构重组至此闭合；未把独立的 GPU 数值能力缺口隐藏在架构完成声明中。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。
