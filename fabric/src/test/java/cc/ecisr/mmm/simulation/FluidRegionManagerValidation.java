@@ -1,7 +1,6 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
-import cc.ecisr.mmm.application.RegionAdmissionService;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import net.minecraft.core.BlockPos;
@@ -36,7 +35,6 @@ public final class FluidRegionManagerValidation {
 		validatePerRegionAndTotalRejectionDetails();
 		validateOverlapRejection();
 		validateCommittedMetadataSurvivesPolicyBudget();
-		validateRuntimeAdmissionDecisionOrder();
 		validateBlockedRegionDoesNotBlockPeer();
 		System.out.println("FluidRegionManager validation passed");
 	}
@@ -175,45 +173,6 @@ public final class FluidRegionManagerValidation {
 				&& manager.runtimeAdmission(first).reason() == RegionAvailabilityReason.BUDGET
 				&& !manager.runtimeAdmission(overBudget).accepted(),
 				"over-budget committed reservations were not retained in PAUSED_BUDGET state");
-	}
-
-	private static void validateRuntimeAdmissionDecisionOrder() {
-		RegionAdmissionService admission = new RegionAdmissionService();
-		var numerical = admission.initial(new RegionAdmissionService.InitialFacts(
-				"chemistry blocked", "granular blocked", "thermal blocked", "pressure blocked", true));
-		require(numerical.disposition() == RegionAdmissionService.Disposition.BLOCK_IN_PLACE
-				&& numerical.reason() == RegionAvailabilityReason.NUMERICAL_PAUSE
-				&& numerical.failure().equals("chemistry blocked"),
-				"intrinsic admission failure priority or in-place disposition changed");
-		require(admission.initial(new RegionAdmissionService.InitialFacts(
-				null, null, null, null, false)).disposition() == RegionAdmissionService.Disposition.AVAILABLE,
-				"unmanaged region did not bypass controller admission");
-		require(admission.initial(new RegionAdmissionService.InitialFacts(
-				null, null, null, null, true)).disposition() == RegionAdmissionService.Disposition.PROCEED,
-				"healthy controller region did not reach policy admission");
-
-		var ownership = admission.policy(new RegionAdmissionService.PolicyFacts("journal pending", false));
-		require(ownership.disposition() == RegionAdmissionService.Disposition.BLOCK_IN_PLACE
-				&& ownership.reason() == RegionAvailabilityReason.PENDING_WAL,
-				"ownership lock did not precede disabled-policy unload");
-		var disabled = admission.policy(new RegionAdmissionService.PolicyFacts(null, false));
-		require(disabled.disposition() == RegionAdmissionService.Disposition.UNLOAD
-				&& disabled.reason() == RegionAvailabilityReason.POLICY_DISABLED,
-				"disabled controller policy did not require checkpointed unload");
-		var budget = admission.catalog(new RegionAdmissionService.CatalogFact(
-				false, RegionAvailabilityReason.BUDGET, "budget exhausted"));
-		require(budget.disposition() == RegionAdmissionService.Disposition.UNLOAD
-				&& budget.reason() == RegionAvailabilityReason.BUDGET,
-				"catalog rejection did not retain its closed reason or unload disposition");
-		var chunk = admission.boundary(new RegionAdmissionService.BoundaryFact(
-				RegionAdmissionService.BoundaryStatus.CHUNK_MISSING, "chunk missing"));
-		var open = admission.boundary(new RegionAdmissionService.BoundaryFact(
-				RegionAdmissionService.BoundaryStatus.OPEN_BOUNDARY, "boundary open"));
-		require(chunk.reason() == RegionAvailabilityReason.CHUNK_MISSING
-				&& open.reason() == RegionAvailabilityReason.BOUNDARY_OPEN
-				&& chunk.disposition() == RegionAdmissionService.Disposition.UNLOAD
-				&& open.disposition() == RegionAdmissionService.Disposition.UNLOAD,
-				"boundary facts lost their closed availability classification");
 	}
 
 	private static void validateBlockedRegionDoesNotBlockPeer() {

@@ -2,7 +2,6 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
-import cc.ecisr.mmm.application.RegionAdmissionService;
 import cc.ecisr.mmm.application.port.RegionCheckpointPort;
 import cc.ecisr.mmm.application.result.CheckpointRegionResult;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
@@ -34,7 +33,6 @@ import java.util.function.Predicate;
 final class FluidRegionOperations implements RegionCheckpointPort {
 	private final FluidRegionManager manager;
 	private final FluidRegionPersistence persistence;
-	private final RegionAdmissionService admission = new RegionAdmissionService();
 	private final boolean worldProfileProven;
 	private final List<String> issues = new ArrayList<>();
 	private final Map<UUID, Long> retryAt = new HashMap<>();
@@ -160,43 +158,47 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			SnapshotSender snapshotSender,
 			RemovalSender removalSender
 	) {
-		RegionAdmissionService.Decision initial = admission.initial(new RegionAdmissionService.InitialFacts(
-				region.chemistryBlockFailure(), region.granularBlockFailure(), region.thermalBlockFailure(),
-				region.numericalBlockFailure(), region.controllerManaged()));
-		if (initial.disposition() == RegionAdmissionService.Disposition.AVAILABLE) {
+		if (region.chemistryBlockFailure() != null) {
+			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, region.chemistryBlockFailure());
+			return false;
+		}
+		if (region.granularBlockFailure() != null) {
+			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, region.granularBlockFailure());
+			return false;
+		}
+		if (region.thermalBlockFailure() != null) {
+			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, region.thermalBlockFailure());
+			return false;
+		}
+		if (region.numericalBlockFailure() != null) {
+			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, region.numericalBlockFailure());
+			return false;
+		}
+		if (!region.controllerManaged()) {
 			region.setAvailabilityFailure(null);
 			return true;
 		}
-		if (initial.disposition() != RegionAdmissionService.Disposition.PROCEED) {
-			applyAdmissionBlock(level.getServer(), region, initial, removalSender);
-			return false;
-		}
 		String ownershipLock = persistence.ownershipLockDescription(region);
-		RegionAdmissionService.Decision policy = admission.policy(
-				new RegionAdmissionService.PolicyFacts(ownershipLock == null ? null
-						: "存在未解决 ownership 状态；恢复完成前不能运行或 checkpoint：" + ownershipLock,
-						controllersEnabled));
-		if (policy.disposition() != RegionAdmissionService.Disposition.PROCEED) {
-			applyAdmissionBlock(level.getServer(), region, policy, removalSender);
+		if (ownershipLock != null) {
+			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
+					"存在未解决 ownership 状态；恢复完成前不能运行或 checkpoint：" + ownershipLock);
 			return false;
 		}
-		FluidRegionManager.AdmissionResult catalogFact = manager.runtimeAdmission(region);
-		RegionAdmissionService.Decision catalogDecision = admission.catalog(new RegionAdmissionService.CatalogFact(
-				catalogFact.accepted(), catalogFact.reason(), catalogFact.failure()));
-		if (catalogDecision.disposition() != RegionAdmissionService.Disposition.PROCEED) {
-			applyAdmissionBlock(level.getServer(), region, catalogDecision, removalSender);
+		if (!controllersEnabled) {
+			unloadForFailure(level.getServer(), region, RegionAvailabilityReason.POLICY_DISABLED,
+					"controller admission policy is disabled", removalSender);
+			return false;
+		}
+		FluidRegionManager.AdmissionResult admission = manager.runtimeAdmission(region);
+		if (!admission.accepted()) {
+			unloadForFailure(level.getServer(), region, admission.reason(), admission.failure(), removalSender);
 			return false;
 		}
 		FluidBoundaryScanner.AvailabilityResult availability = FluidControllerRegions.availability(level, region.footprint());
-		RegionAdmissionService.BoundaryStatus boundaryStatus = switch (availability.status()) {
-			case READY -> RegionAdmissionService.BoundaryStatus.READY;
-			case INCOMPLETE_CHUNKS -> RegionAdmissionService.BoundaryStatus.CHUNK_MISSING;
-			case OPEN_BOUNDARY -> RegionAdmissionService.BoundaryStatus.OPEN_BOUNDARY;
-		};
-		RegionAdmissionService.Decision boundary = admission.boundary(
-				new RegionAdmissionService.BoundaryFact(boundaryStatus, availability.failure()));
-		if (boundary.disposition() != RegionAdmissionService.Disposition.PROCEED) {
-			applyAdmissionBlock(level.getServer(), region, boundary, removalSender);
+		if (!availability.ready()) {
+			RegionAvailabilityReason reason = availability.status() == FluidBoundaryScanner.AvailabilityStatus.INCOMPLETE_CHUNKS
+					? RegionAvailabilityReason.CHUNK_MISSING : RegionAvailabilityReason.BOUNDARY_OPEN;
+			unloadForFailure(level.getServer(), region, reason, availability.failure(), removalSender);
 			return false;
 		}
 		if (!region.solverLoaded()) {
@@ -245,18 +247,6 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 		}
 		region.setAvailabilityFailure(null);
 		return true;
-	}
-
-	private void applyAdmissionBlock(
-			MinecraftServer server, FluidRegion region,
-			RegionAdmissionService.Decision decision, RemovalSender removalSender
-	) {
-		switch (decision.disposition()) {
-			case BLOCK_IN_PLACE -> region.setAvailabilityFailure(decision.reason(), decision.failure());
-			case UNLOAD -> unloadForFailure(server, region, decision.reason(), decision.failure(), removalSender);
-			case AVAILABLE, PROCEED -> throw new IllegalArgumentException(
-					"Admission decision does not block the region: " + decision.disposition());
-		}
 	}
 
 	void unloadForFailure(
