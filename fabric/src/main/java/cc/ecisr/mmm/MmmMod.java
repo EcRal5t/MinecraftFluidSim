@@ -6,7 +6,7 @@ import cc.ecisr.mmm.item.MmmCreativeEntries;
 import cc.ecisr.mmm.item.MmmItems;
 import cc.ecisr.mmm.item.MmmRecipes;
 import cc.ecisr.mmm.network.FluidProtocolServer;
-import cc.ecisr.mmm.simulation.FluidTransferService;
+import cc.ecisr.mmm.simulation.DispenserContainerTransferAdapter;
 import cc.ecisr.mmm.simulation.MmmRuntime;
 import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import net.fabricmc.api.ModInitializer;
@@ -67,23 +67,23 @@ public final class MmmMod implements ModInitializer {
 				Items.BUCKET, DispenseItemBehavior.NOOP);
 
 		DispenserBlock.registerBehavior(Items.WATER_BUCKET, (source, stack) -> {
-			ItemStack result = FluidTransferService.handleDispenserUse(source, stack);
+			ItemStack result = DispenserContainerTransferAdapter.handle(source, stack);
 			return result != null ? result : vanillaWater.dispense(source, stack);
 		});
 		DispenserBlock.registerBehavior(Items.BUCKET, (source, stack) -> {
-			ItemStack result = FluidTransferService.handleDispenserUse(source, stack);
+			ItemStack result = DispenserContainerTransferAdapter.handle(source, stack);
 			return result != null ? result : vanillaBucket.dispense(source, stack);
 		});
 		DispenserBlock.registerBehavior(MmmItems.PARTIAL_WATER_BUCKET, (source, stack) -> {
-			ItemStack result = FluidTransferService.handleDispenserUse(source, stack);
+			ItemStack result = DispenserContainerTransferAdapter.handle(source, stack);
 			return result != null ? result : stack;
 		});
 		DispenserBlock.registerBehavior(MmmItems.MATERIAL_BUCKET, (source, stack) -> {
-			ItemStack result = FluidTransferService.handleDispenserUse(source, stack);
+			ItemStack result = DispenserContainerTransferAdapter.handle(source, stack);
 			return result != null ? result : stack;
 		});
 		DispenserBlock.registerBehavior(MmmItems.GRANULAR_CONTAINER, (source, stack) -> {
-			ItemStack result = FluidTransferService.handleDispenserUse(source, stack);
+			ItemStack result = DispenserContainerTransferAdapter.handle(source, stack);
 			return result != null ? result : stack;
 		});
 	}

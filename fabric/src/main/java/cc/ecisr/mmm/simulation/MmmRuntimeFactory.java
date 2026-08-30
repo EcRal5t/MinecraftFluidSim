@@ -1,6 +1,8 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
+import cc.ecisr.mmm.application.ContainerRecoveryCoordinator;
+import cc.ecisr.mmm.simulation.persistence.ContainerJournalFileStore;
 import cc.ecisr.mmm.transfer.ContainerTransferJournal;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.storage.LevelResource;
@@ -45,23 +47,26 @@ public final class MmmRuntimeFactory {
 			MmmMod.LOGGER.error("Matter, Motion & Mechanics world ownership issue: {}", issue);
 		}
 
-		ContainerTransferStore containerTransfers = new ContainerTransferStore(worldRoot);
+		ContainerJournalFileStore containerTransfers = new ContainerJournalFileStore(worldRoot);
 		ContainerTransferIndex containerIndex = discoverContainerTransfers(containerTransfers);
 		FluidSnapshotPublisher snapshots = new FluidSnapshotPublisher(startup.profile(),
 				registries == null ? null : registries.chemical(),
 				registries == null ? null : registries.granular(),
 				registries == null ? null : registries.thermal());
+		ContainerRecoveryCoordinator containerRecovery = new ContainerRecoveryCoordinator(containerTransfers,
+				new MinecraftContainerRecoveryAdapter(server, startup, registries, regionManager, regionOperations,
+						committedEvents), containerIndex.journals(), containerIndex.issues());
 		FluidSimulationService simulation = new FluidSimulationService(startup, regionManager, regionOperations,
-				snapshots, containerTransfers, containerIndex.journals(), containerIndex.issues(),
+				snapshots, containerRecovery,
 				ownershipIssues, committedEvents);
 		return new MmmRuntime(simulation, committedEvents, startup);
 	}
 
-	private static ContainerTransferIndex discoverContainerTransfers(ContainerTransferStore store) {
+	private static ContainerTransferIndex discoverContainerTransfers(ContainerJournalFileStore store) {
 		Map<UUID, ContainerTransferJournal> journals = new HashMap<>();
 		Set<String> issues = new HashSet<>();
 		try {
-			ContainerTransferStore.Scan scan = store.scan();
+			ContainerJournalFileStore.Scan scan = store.discover();
 			issues.addAll(scan.issues());
 			for (UUID transactionId : scan.transactions()) try {
 				journals.put(transactionId, store.read(transactionId));

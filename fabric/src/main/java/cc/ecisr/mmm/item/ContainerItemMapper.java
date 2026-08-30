@@ -1,12 +1,5 @@
-package cc.ecisr.mmm.simulation;
+package cc.ecisr.mmm.item;
 
-import cc.ecisr.mmm.item.ContainerItemStacks;
-import cc.ecisr.mmm.item.CreativeSourceItem;
-import cc.ecisr.mmm.item.GranularContainerItem;
-import cc.ecisr.mmm.item.MaterialBucketItem;
-import cc.ecisr.mmm.item.MmmComponents;
-import cc.ecisr.mmm.item.MmmItems;
-import cc.ecisr.mmm.item.PartialWaterBucketItem;
 import cc.ecisr.mmm.transfer.ChemicalContents;
 import cc.ecisr.mmm.transfer.ContainerTransferJournal;
 import cc.ecisr.mmm.transfer.FluidMixture;
@@ -15,11 +8,11 @@ import cc.ecisr.mmm.transfer.CreativeSourceDescriptor;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
-/** Minecraft item mapping for the data-only before/after snapshots stored in a container WAL. */
-final class ContainerTransferItems {
-	private ContainerTransferItems() { }
+/** The only mapping between Minecraft ItemStack components and loader-neutral container truth. */
+public final class ContainerItemMapper {
+	private ContainerItemMapper() { }
 
-	static ContainerTransferJournal.ItemFingerprint fingerprint(ItemStack stack) {
+	public static ContainerTransferJournal.ItemFingerprint fingerprint(ItemStack stack) {
 		if (stack.getCount() != 1) {
 			throw new IllegalArgumentException("控制器容器事务一次只接受 1 个物品；堆叠桶保持不变");
 		}
@@ -45,7 +38,7 @@ final class ContainerTransferItems {
 		throw new IllegalArgumentException("Unsupported container item for transfer WAL: " + stack.getItem());
 	}
 
-	static ItemStack toStack(ContainerTransferJournal.ItemFingerprint snapshot) {
+	public static ItemStack toStack(ContainerTransferJournal.ItemFingerprint snapshot) {
 		ItemStack stack = switch (snapshot.kind()) {
 			case BUCKET -> new ItemStack(Items.BUCKET);
 			case WATER_BUCKET -> new ItemStack(Items.WATER_BUCKET);

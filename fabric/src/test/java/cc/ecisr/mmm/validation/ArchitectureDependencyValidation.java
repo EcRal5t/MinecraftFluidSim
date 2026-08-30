@@ -58,7 +58,6 @@ public final class ArchitectureDependencyValidation {
 			"FluidSimulationService", "S21",
 			"RegionState", "S17",
 			"VulkanFlipPipeline", "S20",
-			"FluidTransferService", "S16",
 			"RegionStateFiles", "S18");
 	private static final int SIZE_LIMIT = 1000;
 	private static final int SIZE_WARNING = 600;

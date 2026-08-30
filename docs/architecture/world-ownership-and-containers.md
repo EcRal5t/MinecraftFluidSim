@@ -71,7 +71,7 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 - 任何非空 MMM actual container 还保存创建它的 world capability profile fingerprint；空容器不伪造 profile 身份。
 - item count 必须为 1；damage、tooltip、durability bar、颜色和温度不参与结算。
 
-item fingerprint 编码实际可结算的整组数据，而非仅 item id：kind、typed amount、stable mixture/chemical/granular contents、raw kg mass bits、可选 ThermalContents 及其 registry/underlying hash，以及 actual inventory 的 world profile fingerprint。`ContainerTransferJournal` 只保存这一数据，`ContainerTransferItems` 独占 fingerprint 与 `ItemStack` 的双向映射。空桶、部分桶、材料桶、化学桶、颗粒容器和 creative descriptor 是不同 shape；shape 之间缺字段或同时出现冲突 component 都拒绝。actual container 缺失、损坏或不匹配当前世界 profile 时在准备 WAL 前以 `FOREIGN_PROFILE` 拒绝，恢复也必须以已提交世界 profile 复核 WAL；不能按当前数据包重新解释旧世界库存。
+item fingerprint 编码实际可结算的整组数据，而非仅 item id：kind、typed amount、stable mixture/chemical/granular contents、raw kg mass bits、可选 ThermalContents 及其 registry/underlying hash，以及 actual inventory 的 world profile fingerprint。`ContainerTransferJournal` 只保存这一数据，Fabric `ContainerItemMapper` 独占 fingerprint 与 `ItemStack` 的双向映射。空桶、部分桶、材料桶、化学桶、颗粒容器和 creative descriptor 是不同 shape；shape 之间缺字段或同时出现冲突 component 都拒绝。actual container 缺失、损坏或不匹配当前世界 profile 时在准备 WAL 前以 `FOREIGN_PROFILE` 拒绝，恢复也必须以已提交世界 profile 复核 WAL；不能按当前数据包重新解释旧世界库存。
 
 液体抽取允许生成不足 1 BV 的 partial item；放入已有部分桶时仍按实际剩余容量规划。`FluidMixture`、`ChemicalContents`、`GranularContents` 和 `ThermalContents` 都有自己的规范编码与总账，item component 只是这些真值的载体。
 
@@ -104,9 +104,9 @@ insert/extract 返回“实际转移量”，WAL 和 after item 必须使用这�
 
 恢复必须核对 HEAD、checksum、actor、before/after item、resource kind、world profile fingerprint、各适用 registry fingerprint 和 generation。`core/recovery/CrossDomainRecovery` 是 region HEAD 与一个或多个外部持久成员的共同判定器；现有 container adapter 只负责把 durable actor readback 分类为 `BEFORE`、`AFTER`、`THIRD` 或 `UNAVAILABLE`，不能复制 commit switch。未来 world action、外部 provider 或设备 journal 也必须委托同一判定器。region、ownership 与 container 的紧邻代次统一拒绝负数和 `long` 溢出，不能让 `Long.MAX_VALUE + 1` 被误认成合法 target。任何歧义都保留 WAL 并锁定；不得因为 item 看起来相似就推断完成状态。
 
-当前 WAL 有材料布局和含热布局。reader 只接受当前 writer 产生的完整字段集合：缺字段、错 NBT 类型、额外未知字段和溢出的 generation pair 都保持原文件并锁定，不做补全或忽略。
+当前 WAL 有材料布局和含热布局。`ContainerJournalCodec` 只接受当前 writer 产生的完整字段集合：缺字段、错 NBT 类型、额外未知字段和溢出的 generation pair 都保持原文件并锁定，不做补全或忽略。`ContainerJournalFileStore` 只负责 discover/read/write/delete、临时文件回读、atomic replace 与目录同步，不解释 HEAD/actor/recovery 状态。
 
-`ControllerItemTransferCoordinator` 独占 WAL、staged checkpoint、HEAD 发布与 actor 收敛顺序；`FluidTransferService` 只负责 Minecraft item 分类、目标解析和选择 exact solver primitive。更精确的运行序列是：
+loader-neutral `ContainerTransferUseCase` 验证 actor/item/profile/thermal truth，`ContainerTransferCoordinator` 独占 WAL、staged checkpoint 与 HEAD 发布顺序；Fabric `MinecraftContainerTransferPlan` 是 player/dispenser 共用的 capability、contents、exact primitive 选择，两个 actor adapter 只分别负责准星/手或朝向/槽位以及最终 Minecraft 输出。mixin 与原版 dispenser registry 分别直连这两个 adapter，不保留旧 transfer service。更精确的运行序列是：
 
 1. 验证目标区域可修改、无其他 WAL、actor item count 为 1，并捕获 before fingerprint。
 2. 原子发布 `PREPARED` WAL；此时 after=before，尚无 target checksum。
@@ -114,8 +114,8 @@ insert/extract 返回“实际转移量”，WAL 和 after item 必须使用这�
 4. 构造最终 after item；将 solver 候选 capture 到 inactive region slot并完整回读。
 5. 原子用 `REGION_COMMITTED` WAL 覆盖原 WAL，写入实际量、after fingerprint、coupled energy 和 target manifest checksum。
 6. 仅在这份 WAL 已 durable 后发布 region HEAD。HEAD 一旦指向 target，region 侧不可回滚。
-7. 把 actor item 收敛为 after；玩家调用同步 player save，dispenser 调用 owning dimension 的 flushing chunk save。Minecraft 当前没有公开的单 chunk durable save，因此 dispenser 完成路径宁可承担低频的 dimension flush，也不能用非 flush autosave 后提前删除 WAL。
-8. durable save 后回读 exact after truth；只有回读仍为 after 才删除 WAL。删除失败只留下可幂等收敛的 WAL，不重复资源转移。
+7. actor adapter 把 item 收敛为 after；`ContainerRecoveryCoordinator` 随即或在对应 player/chunk availability 事件上驱动玩家同步 save 或 owning dimension flushing save。Minecraft 当前没有公开的单 chunk durable save，因此 dispenser 完成路径宁可承担低频的 dimension flush，也不能用非 flush autosave 后提前删除 WAL。
+8. durable save 后回读 exact after truth；只有回读仍为 after 才由 recovery coordinator 删除 WAL 并移出 boot index。删除失败只留下可幂等收敛的 WAL，不重复资源转移；committed event 只能在删除完成后发布。
 
 WAL/WARNING/committed/HEAD 的文件内容在 rename 前 `force`，rename 与事务完成后的 delete 还要同步父目录 entry；支持目录 channel 的文件系统执行 directory fsync。Windows JDK 不暴露目录 channel，因此仍依赖同卷原子 rename 与已强制写入的文件内容，但不会把一次普通进程崩溃误当成已提交。
 

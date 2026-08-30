@@ -14,7 +14,7 @@ CPU `FluidDomain` 是规范求解器聚合根。GPU probe、客户端 renderer�
 |---|---|---|
 | `api` | stable ID、单位化 Query、committed event 与 typed quantity 契约 | 只依赖 JDK，不暴露 solver 数组或 Minecraft 类型 |
 | `core` | PIC/FLIP、材料、气体、化学、颗粒、热学、typed container truth、候选状态与 loader-neutral application command/result/port | 依赖 `api` 和纯 Java 库，不引用 Fabric/Minecraft、NBT 或 network payload |
-| `fabric` | Mod 生命周期、世界读取/写入、NBT、数据包、网络、物品适配与命令 | 依赖并内嵌 `api`、`core`；服务器主线程拥有提交权；`ContainerItemStacks` 独占纯 Java 容器真值与 `ItemStack` component 的映射 |
+| `fabric` | Mod 生命周期、世界读取/写入、NBT、数据包、网络、物品适配与命令 | 依赖并内嵌 `api`、`core`；服务器主线程拥有提交权；`ContainerItemMapper` 独占事务 fingerprint 与 `ItemStack` 的双向映射，`ContainerItemStacks` 只构造并校验 components |
 | `gpu-probe` | Vulkan 能力验证、只读对照和未来后端实验 | 数值部分依赖 `core`；Fabric 集成只以 compile-only 接入主 Mod |
 
 `FluidDomainState` 是完整、不可变的数值后端交接状态。motion 使用 `FluidStepRequest` / `FluidStepCandidate`，静水 thermal-only 轴使用 `FluidThermalStepRequest` / `FluidThermalStepCandidate`；两者都绑定 base generation 且只能返回其紧邻后继。`CpuFluidSolverBackend` 对两类请求都先恢复私有 `FluidDomain`，完整成功后才返回 candidate。未来 GPU 后端必须消费同一完整输入并返回同一完整 candidate；世界事务、ownership、actor、调度和 HEAD 发布不进入数值后端。
@@ -58,7 +58,9 @@ Minecraft 命令、方块、容器、实体与 chunk 事件
 
 FluidRegionPersistence / RegionStateFiles   完整区域 checkpoint
 OwnershipTransaction                        原版方块 ownership
-ContainerTransferStore                      region/item 跨域事务
+ContainerTransferCoordinator                region/item WAL→staged HEAD→HEAD
+ContainerRecoveryCoordinator                boot-indexed actor 收敛与事件重试
+ContainerJournalCodec / FileStore           严格 NBT / durable file 边界
 
 已提交区域状态
   -> FluidSnapshotPublisher / protocol payload

@@ -3,8 +3,8 @@ package cc.ecisr.mmm.simulation;
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.api.query.MmmQueryApi;
-import cc.ecisr.mmm.api.event.ContainerTransferCommittedEvent;
-import cc.ecisr.mmm.api.transfer.TransferQuantity;
+import cc.ecisr.mmm.application.ContainerRecoveryCoordinator;
+import cc.ecisr.mmm.application.ContainerTransferCoordinator;
 import cc.ecisr.mmm.application.ControllerQueryUseCase;
 import cc.ecisr.mmm.application.RegionApplicationService;
 import cc.ecisr.mmm.application.RegionCatalog;
@@ -39,10 +39,7 @@ import cc.ecisr.mmm.fluid.air.GasAuditLedger;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularMechanics;
 import cc.ecisr.mmm.granular.GranularRegistry;
-import cc.ecisr.mmm.recovery.CrossDomainRecovery;
 import cc.ecisr.mmm.transfer.ChemicalContents;
-import cc.ecisr.mmm.transfer.ContainerTransferActor;
-import cc.ecisr.mmm.transfer.ContainerTransferJournal;
 import cc.ecisr.mmm.transfer.FluidMixture;
 import cc.ecisr.mmm.item.ContainerItemStacks;
 import cc.ecisr.mmm.item.MmmComponents;
@@ -86,7 +83,6 @@ import java.util.HashSet;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.OptionalDouble;
 import java.util.Set;
 import java.util.UUID;
 
@@ -116,19 +112,8 @@ public final class FluidSimulationService {
 	private final MinecraftRegionLifecycle regionLifecycle;
 	private final ThermalReservoirUseCase thermalReservoirs = new ThermalReservoirUseCase();
 	private final FluidSnapshotPublisher snapshots;
-	private final ContainerTransferStore containerTransfers;
-	private final MinecraftContainerActorAccess containerActors = new MinecraftContainerActorAccess();
-	/** Boot-decoded WAL truth; normal ticks never rescan or reread the transfer directory. */
-	private final Map<UUID, ContainerTransferJournal> indexedContainerTransfers = new HashMap<>();
-	private final Set<UUID> auditedContainerTransfers = new HashSet<>();
-	private final Set<UUID> awaitingContainerActors = new HashSet<>();
-	private Set<String> indexedContainerTransferIssues = Set.of();
-	/** Transactions which changed the live solver but have not yet proved a committed region HEAD. */
-	private final Set<UUID> runtimeDirtyContainerTransfers = new HashSet<>();
-	/** Prevents an unresolved WAL from emitting the same ERROR every server tick. */
-	private final Map<UUID, String> reportedContainerTransferLocks = new HashMap<>();
-	private Set<String> reportedContainerTransferStoreIssues = Set.of();
-	private ContainerTransferFaultPoint containerTransferFault = ContainerTransferFaultPoint.NONE;
+	private final ContainerRecoveryCoordinator containerRecovery;
+	private final MinecraftContainerTransactionAdapter containerTransactions;
 	private ResourceKey<Level> takeoverDimension;
 	private boolean defaultEntityPhysicsEnabled = true;
 	private boolean defaultDebugOverlays;
@@ -152,9 +137,7 @@ public final class FluidSimulationService {
 			FluidRegionManager regionManager,
 			FluidRegionOperations regionOperations,
 			FluidSnapshotPublisher snapshots,
-			ContainerTransferStore containerTransfers,
-			Map<UUID, ContainerTransferJournal> indexedContainerTransfers,
-			Set<String> indexedContainerTransferIssues,
+			ContainerRecoveryCoordinator containerRecovery,
 			List<String> ownershipIssues,
 			CommittedEventHub committedEvents
 	) {
@@ -177,9 +160,10 @@ public final class FluidSimulationService {
 		this.targets = new FluidWorldTargetResolver(regionManager);
 		this.regionOperations = java.util.Objects.requireNonNull(regionOperations, "Region operations");
 		this.snapshots = java.util.Objects.requireNonNull(snapshots, "Snapshot publisher");
-		this.containerTransfers = java.util.Objects.requireNonNull(containerTransfers, "Container transfer store");
-		this.indexedContainerTransfers.putAll(indexedContainerTransfers);
-		this.indexedContainerTransferIssues = Set.copyOf(indexedContainerTransferIssues);
+		this.containerRecovery = java.util.Objects.requireNonNull(containerRecovery, "Container recovery coordinator");
+		this.containerTransactions = new MinecraftContainerTransactionAdapter(regionManager, regionOperations,
+				containerRecovery, worldCapabilityProfile.profileFingerprint(),
+				thermalRegistry == null ? null : thermalRegistry.fingerprint());
 		this.ownershipIssues = List.copyOf(ownershipIssues);
 		this.regionApplication = new RegionApplicationService(solverBackend,
 				new FluidRegionRepository(regionManager), regionOperations);
@@ -192,331 +176,34 @@ public final class FluidSimulationService {
 				controllerQueries, thermalRegistry, this::hasPendingContainerTransfer);
 	}
 
-	void writeContainerTransfer(ContainerTransferJournal journal) throws IOException {
-		containerTransfers.write(journal);
-		indexedContainerTransfers.put(journal.transactionId(), journal);
-		auditedContainerTransfers.remove(journal.transactionId());
-		awaitingContainerActors.remove(journal.transactionId());
+	MinecraftContainerTransactionAdapter containerTransactions() { return containerTransactions; }
+
+	public void setContainerTransferFault(ContainerTransferCoordinator.FaultPoint point) {
+		containerTransactions.setFault(point);
 	}
 
-	void deleteContainerTransfer(UUID transactionId) throws IOException {
-		containerTransfers.delete(transactionId);
-		indexedContainerTransfers.remove(transactionId);
-		auditedContainerTransfers.remove(transactionId);
-		awaitingContainerActors.remove(transactionId);
+	public ContainerTransferCoordinator.FaultPoint containerTransferFault() {
+		return containerTransactions.fault();
 	}
 
+	boolean hasPendingContainerTransfer(UUID regionId) { return containerRecovery.hasPending(regionId); }
 
-	long committedRegionGeneration(UUID regionId) throws IOException {
-		return regionOperations.committedGeneration(regionId);
-	}
+	boolean hasAnyContainerTransferLock() { return containerRecovery.hasAnyLock(); }
 
-	long committedRegionManifestChecksum(UUID regionId) throws IOException {
-		return regionOperations.committedManifestChecksum(regionId);
-	}
+	boolean hasContainerTransferStoreIssues() { return containerRecovery.hasStoreIssues(); }
 
-	FluidRegionPersistence.StagedCheckpoint stageControllerRegionCheckpoint(FluidRegion region, long target) throws IOException {
-		return regionOperations.stageCheckpoint(region, target);
-	}
+	public void recoverContainerTransfers(MinecraftServer server) { containerRecovery.recoverIndexed(); }
 
-	long commitControllerRegionCheckpoint(FluidRegion region, FluidRegionPersistence.StagedCheckpoint staged) throws IOException {
-		return regionOperations.commitStagedCheckpoint(region, staged);
-	}
-
-	void abortControllerRegionCheckpoint(FluidRegionPersistence.StagedCheckpoint staged) throws IOException {
-		regionOperations.abortStagedCheckpoint(staged);
-	}
-
-	long checkpointControllerRegion(FluidRegion region) throws IOException {
-		return regionOperations.checkpoint(region);
-	}
-
-	public enum ContainerTransferFaultPoint {
-		NONE,
-		BEFORE_PREPARE,
-		AFTER_PREPARE,
-		AFTER_SOLVER,
-		AFTER_STAGE,
-		AFTER_WAL,
-		AFTER_CHECKPOINT
-	}
-
-	public void setContainerTransferFault(ContainerTransferFaultPoint point) {
-		containerTransferFault = point == null ? ContainerTransferFaultPoint.NONE : point;
-	}
-
-	public ContainerTransferFaultPoint containerTransferFault() {
-		return containerTransferFault;
-	}
-
-	void injectContainerTransferFault(ContainerTransferFaultPoint point) {
-		if (containerTransferFault == point) {
-			throw new RuntimeException("Injected container transfer fault: " + point);
-		}
-	}
-
-
-	boolean hasPendingContainerTransfer(UUID regionId) {
-		if (!indexedContainerTransferIssues.isEmpty()) return true;
-		return indexedContainerTransfers.values().stream().anyMatch(journal -> journal.regionId().equals(regionId));
-	}
-
-	boolean hasPendingContainerTransfer(UUID regionId, ContainerTransferActor actor) {
-		if (!indexedContainerTransferIssues.isEmpty()) return true;
-		return indexedContainerTransfers.values().stream().anyMatch(journal ->
-				journal.regionId().equals(regionId) || journal.actor().equals(actor));
-	}
-
-	boolean hasAnyContainerTransferLock() {
-		return !indexedContainerTransferIssues.isEmpty() || !indexedContainerTransfers.isEmpty();
-	}
-
-	boolean hasContainerTransferStoreIssues() {
-		return !indexedContainerTransferIssues.isEmpty();
-	}
-
-	void markContainerTransferSolverDirty(UUID transactionId) {
-		runtimeDirtyContainerTransfers.add(transactionId);
-	}
-
-	void markContainerTransferSolverClean(UUID transactionId) {
-		runtimeDirtyContainerTransfers.remove(transactionId);
-	}
-
-	void markContainerTransferRegionCommitted(UUID transactionId) {
-		runtimeDirtyContainerTransfers.remove(transactionId);
-	}
-
-	void lockContainerTransferRegion(FluidRegion region, String failure) {
-		region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL, failure);
-	}
-
-	public void recoverContainerTransfers(MinecraftServer server) {
-		if (!indexedContainerTransferIssues.isEmpty()) {
-			Set<String> currentIssues = indexedContainerTransferIssues;
-			for (String issue : currentIssues) {
-				if (!reportedContainerTransferStoreIssues.contains(issue)) {
-					MmmMod.LOGGER.error("Container-transfer recovery store is globally LOCKED: {}", issue);
-				}
-			}
-			reportedContainerTransferStoreIssues = currentIssues;
-			return;
-		}
-		reportedContainerTransferStoreIssues = Set.of();
-		reportedContainerTransferLocks.keySet().retainAll(indexedContainerTransfers.keySet());
-		for (UUID transactionId : List.copyOf(indexedContainerTransfers.keySet())) {
-			if (!awaitingContainerActors.contains(transactionId)
-					&& !auditedContainerTransfers.contains(transactionId)) {
-				processContainerTransfer(server, transactionId);
-			}
-		}
-	}
-
-	/** Offline player actors are retried only when that exact player becomes available. */
 	public void retryUnavailableContainerTransfers(MinecraftServer server, UUID playerId) {
-		retryUnavailableContainerTransfers(server, journal -> journal.actor()
-				instanceof ContainerTransferActor.PlayerHand player && player.playerId().equals(playerId));
+		containerRecovery.retryPlayer(playerId);
 	}
 
-	/** Unloaded dispenser actors are retried only when their exact owning chunk becomes available. */
 	public void retryUnavailableContainerTransfers(ServerLevel level, ChunkPos chunk) {
-		String dimension = level.dimension().identifier().toString();
-		retryUnavailableContainerTransfers(level.getServer(), journal -> journal.actor()
-				instanceof ContainerTransferActor.Dispenser dispenser
-				&& dispenser.dimensionId().equals(dimension)
-				&& chunk.contains(new BlockPos(dispenser.blockX(), dispenser.blockY(), dispenser.blockZ())));
+		containerRecovery.retryDispenserChunk(
+				level.dimension().identifier().toString(), chunk.x(), chunk.z());
 	}
 
-	private void retryUnavailableContainerTransfers(
-			MinecraftServer server, java.util.function.Predicate<ContainerTransferJournal> becameAvailable
-	) {
-		for (UUID transactionId : List.copyOf(awaitingContainerActors)) {
-			ContainerTransferJournal journal = indexedContainerTransfers.get(transactionId);
-			if (journal == null || !becameAvailable.test(journal)) continue;
-			awaitingContainerActors.remove(transactionId);
-			processContainerTransfer(server, transactionId);
-		}
-	}
-
-	void cleanupContainerTransfers(MinecraftServer server) {
-		recoverContainerTransfers(server);
-	}
-
-	private void processContainerTransfer(MinecraftServer server, UUID transactionId) {
-		try {
-			ContainerTransferJournal journal = indexedContainerTransfers.get(transactionId);
-			if (journal == null) return;
-			try {
-				journal.validateProfileFingerprint(!startup.profileProven()
-						? null : worldCapabilityProfile.profileFingerprint());
-			} catch (RuntimeException foreignProfile) {
-				auditedContainerTransfers.add(transactionId);
-				logContainerTransferLockOnce(transactionId, "Container transfer WAL " + transactionId
-						+ " remains locked: FOREIGN_PROFILE (" + foreignProfile.getMessage() + ")");
-				return;
-			}
-			if (journal.requiresThermalRegistry()) {
-				if (!worldCapabilityProfile.hasCapability(WorldCapability.THERMAL) || thermalRegistry == null) {
-					auditedContainerTransfers.add(transactionId);
-					logContainerTransferLockOnce(transactionId,
-							"Container transfer WAL " + transactionId
-									+ " remains locked: thermal recovery requires the enabled authoritative world registry");
-					return;
-				}
-				try {
-					journal.validateThermalRegistry(thermalRegistry.fingerprint());
-				} catch (RuntimeException foreignRegistry) {
-					auditedContainerTransfers.add(transactionId);
-					logContainerTransferLockOnce(transactionId,
-							"Container transfer WAL " + transactionId
-									+ " remains locked: thermal item registry identity is foreign or invalid ("
-									+ foreignRegistry.getMessage() + ")");
-					return;
-				}
-			}
-			if (journal.requiresGranularRegistry()) {
-				if (!worldCapabilityProfile.hasCapability(WorldCapability.GRANULAR) || granularRegistry == null) {
-					auditedContainerTransfers.add(transactionId);
-					logContainerTransferLockOnce(transactionId,
-							"Container transfer WAL " + transactionId
-									+ " remains locked: granular recovery requires the enabled authoritative world registry");
-					return;
-				}
-				try {
-					journal.validateGranularRegistry(granularRegistry,
-							worldCapabilityProfile.hasCapability(WorldCapability.CHEMISTRY) ? chemicalRegistry : null);
-				} catch (RuntimeException foreignRegistry) {
-					auditedContainerTransfers.add(transactionId);
-					logContainerTransferLockOnce(transactionId,
-							"Container transfer WAL " + transactionId
-									+ " remains locked: granular item registry identity is foreign or invalid ("
-									+ foreignRegistry.getMessage() + ")");
-					return;
-				}
-			}
-			if (journal.requiresChemicalRegistry()) {
-				if (!worldCapabilityProfile.hasCapability(WorldCapability.CHEMISTRY) || chemicalRegistry == null) {
-					auditedContainerTransfers.add(transactionId);
-					logContainerTransferLockOnce(transactionId,
-							"Container transfer WAL " + transactionId
-									+ " remains locked: chemical recovery requires the enabled authoritative world registry");
-					return;
-				}
-				try {
-					journal.validateChemicalRegistry(chemicalRegistry);
-				} catch (RuntimeException foreignRegistry) {
-					auditedContainerTransfers.add(transactionId);
-					logContainerTransferLockOnce(transactionId,
-							"Container transfer WAL " + transactionId
-									+ " remains locked: chemical item registry identity is foreign or invalid ("
-									+ foreignRegistry.getMessage() + ")");
-					return;
-				}
-			}
-			long head = committedRegionGeneration(journal.regionId());
-			long headChecksum = committedRegionManifestChecksum(journal.regionId());
-			CrossDomainRecovery.ExternalTruth actorTruth = containerActors.classify(server, journal);
-			CrossDomainRecovery.Decision decision = ContainerTransferRecovery.decide(
-					head, headChecksum, journal, runtimeDirtyContainerTransfers.contains(transactionId), actorTruth);
-			switch (decision.outcome()) {
-				case DISCARD_UNCOMMITTED -> {
-					deleteContainerTransfer(transactionId);
-					reportedContainerTransferLocks.remove(transactionId);
-					MmmMod.LOGGER.warn("Discarded uncommitted container transfer WAL {} for region {}", transactionId, journal.regionId());
-				}
-				case CONVERGE_AFTER -> {
-					switch (convergeAndCompleteContainerActor(
-							server, journal, decision.beforeMembers().contains(0))) {
-						case APPLIED -> MmmMod.LOGGER.warn(
-								"Converged container transfer WAL {} to a durably saved and verified after item",
-								transactionId);
-						case UNAVAILABLE -> awaitingContainerActors.add(transactionId);
-						case CONFLICT -> lockContainerActorConflict(transactionId, journal);
-					}
-				}
-				case WAIT_UNAVAILABLE -> awaitingContainerActors.add(transactionId);
-				case LOCKED -> {
-					auditedContainerTransfers.add(transactionId);
-					logContainerTransferLockOnce(transactionId,
-							"Container transfer WAL " + transactionId + " is locked by cross-domain recovery: "
-									+ decision.reason() + " (region=" + journal.regionId() + ", head=" + head
-									+ ", base=" + journal.baseGeneration() + ", target=" + journal.targetGeneration()
-									+ ", actor=" + actorTruth + ")");
-				}
-			}
-		} catch (IOException | RuntimeException exception) {
-			auditedContainerTransfers.add(transactionId);
-			MmmMod.LOGGER.error("Could not recover container transfer WAL {}", transactionId, exception);
-		}
-	}
-
-	private void lockContainerActorConflict(UUID transactionId, ContainerTransferJournal journal) {
-		awaitingContainerActors.remove(transactionId);
-		auditedContainerTransfers.add(transactionId);
-		logContainerTransferLockOnce(transactionId,
-				"Container transfer WAL " + transactionId + " is locked: actor " + journal.actor()
-						+ " changed during convergence or did not read back the authoritative after item");
-	}
-
-	private void logContainerTransferLockOnce(UUID transactionId, String message) {
-		if (!message.equals(reportedContainerTransferLocks.put(transactionId, message))) {
-			MmmMod.LOGGER.error(message);
-		}
-	}
-
-	private void adoptRecoveredContainerCheckpoint(ContainerTransferJournal journal) throws IOException {
-		for (FluidRegion region : regionManager.regions()) {
-			if (!region.id().equals(journal.regionId()) || !region.solverLoaded()) continue;
-			if (region.checkpointGeneration() == journal.targetGeneration()) return;
-			if (region.checkpointGeneration() != journal.baseGeneration()
-					|| !region.recordPublishedCheckpoint(journal.targetGeneration())) {
-				throw new IOException("Live region did not adopt recovered container checkpoint "
-						+ journal.targetGeneration());
-			}
-			return;
-		}
-	}
-
-	private MinecraftContainerActorAccess.Convergence convergeAndCompleteContainerActor(
-			MinecraftServer server, ContainerTransferJournal journal, boolean applyAfterItem
-	) throws IOException {
-		if (applyAfterItem) {
-			MinecraftContainerActorAccess.Convergence applied = containerActors.applyAfterItem(server, journal);
-			if (applied != MinecraftContainerActorAccess.Convergence.APPLIED) return applied;
-		}
-		ContainerTransferCommittedEvent event = committedTransferEvent(journal);
-		containerActors.persistAfterItem(server, journal.actor());
-		CrossDomainRecovery.ExternalTruth readback = containerActors.verifyAfterItem(server, journal);
-		if (readback == CrossDomainRecovery.ExternalTruth.UNAVAILABLE) {
-			return MinecraftContainerActorAccess.Convergence.UNAVAILABLE;
-		}
-		if (readback != CrossDomainRecovery.ExternalTruth.AFTER) {
-			return MinecraftContainerActorAccess.Convergence.CONFLICT;
-		}
-		adoptRecoveredContainerCheckpoint(journal);
-		deleteContainerTransfer(journal.transactionId());
-		reportedContainerTransferLocks.remove(journal.transactionId());
-		committedEvents.publish(event);
-		return MinecraftContainerActorAccess.Convergence.APPLIED;
-	}
-
-	private static ContainerTransferCommittedEvent committedTransferEvent(
-			ContainerTransferJournal journal
-	) {
-		OptionalDouble energy = journal.thermalTransfer() == null
-				? OptionalDouble.empty()
-				: OptionalDouble.of(journal.thermalTransfer().internalEnergy());
-		TransferQuantity quantity = switch (journal.resourceKind()) {
-			case FLUID_NANOS -> new TransferQuantity.Liquid(journal.volumeNanos(), energy);
-			case GRANULAR_SVQ -> new TransferQuantity.Granular(journal.solidVolumeSvq());
-		};
-		return new ContainerTransferCommittedEvent(
-				journal.transactionId(), journal.dimensionId(), journal.regionId(), journal.targetGeneration(),
-				journal.operation() == ContainerTransferJournal.Operation.INSERT
-						? ContainerTransferCommittedEvent.Operation.INSERT
-						: ContainerTransferCommittedEvent.Operation.EXTRACT,
-				quantity);
-	}
+	void cleanupContainerTransfers(MinecraftServer server) { containerRecovery.recoverIndexed(); }
 
 	void recoverTakeoverBackup(MinecraftServer server) {
 		for (String issue : regionOperations.issues()) MmmMod.LOGGER.error("Matter, Motion & Mechanics persistent region issue: {}", issue);

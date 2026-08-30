@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.application.ContainerRecoveryCoordinator;
+import cc.ecisr.mmm.item.ContainerItemMapper;
 import cc.ecisr.mmm.recovery.CrossDomainRecovery;
 import cc.ecisr.mmm.transfer.ContainerTransferActor;
 import cc.ecisr.mmm.transfer.ContainerTransferJournal;
@@ -17,7 +19,7 @@ import net.minecraft.world.level.block.entity.DispenserBlockEntity;
 import java.io.IOException;
 
 /** Locates, converges, and durably saves the Minecraft inventory named by a transfer actor. */
-final class MinecraftContainerActorAccess {
+final class MinecraftContainerActorAdapter {
 	CrossDomainRecovery.ExternalTruth classify(MinecraftServer server, ContainerTransferJournal journal) {
 		ItemStack current = currentItem(server, journal.actor());
 		if (current == null) return CrossDomainRecovery.ExternalTruth.UNAVAILABLE;
@@ -26,7 +28,7 @@ final class MinecraftContainerActorAccess {
 		return CrossDomainRecovery.ExternalTruth.THIRD;
 	}
 
-	Convergence applyAfterItem(MinecraftServer server, ContainerTransferJournal journal) {
+	ContainerRecoveryCoordinator.Convergence applyAfterItem(MinecraftServer server, ContainerTransferJournal journal) {
 		return switch (journal.actor()) {
 			case ContainerTransferActor.PlayerHand player -> convergePlayer(server, player, journal);
 			case ContainerTransferActor.Dispenser dispenser -> convergeDispenser(server, dispenser, journal);
@@ -55,45 +57,45 @@ final class MinecraftContainerActorAccess {
 		}
 	}
 
-	private static Convergence convergePlayer(
+	private static ContainerRecoveryCoordinator.Convergence convergePlayer(
 			MinecraftServer server,
 			ContainerTransferActor.PlayerHand actor,
 			ContainerTransferJournal journal
 	) {
 		ServerPlayer player = server.getPlayerList().getPlayer(actor.playerId());
-		if (player == null) return Convergence.UNAVAILABLE;
+		if (player == null) return ContainerRecoveryCoordinator.Convergence.UNAVAILABLE;
 		InteractionHand hand = switch (actor.hand()) {
 			case MAIN -> InteractionHand.MAIN_HAND;
 			case OFF -> InteractionHand.OFF_HAND;
 		};
 		ItemStack current = player.getItemInHand(hand);
 		if (!matches(current, journal.beforeItem()) && !matches(current, journal.afterItem())) {
-			return Convergence.CONFLICT;
+			return ContainerRecoveryCoordinator.Convergence.CONFLICT;
 		}
-		player.setItemInHand(hand, ContainerTransferItems.toStack(journal.afterItem()));
+		player.setItemInHand(hand, ContainerItemMapper.toStack(journal.afterItem()));
 		player.getInventory().setChanged();
-		return Convergence.APPLIED;
+		return ContainerRecoveryCoordinator.Convergence.APPLIED;
 	}
 
-	private static Convergence convergeDispenser(
+	private static ContainerRecoveryCoordinator.Convergence convergeDispenser(
 			MinecraftServer server,
 			ContainerTransferActor.Dispenser actor,
 			ContainerTransferJournal journal
 	) {
 		ServerLevel level = level(server, actor.dimensionId());
 		BlockPos position = new BlockPos(actor.blockX(), actor.blockY(), actor.blockZ());
-		if (level == null || !level.hasChunkAt(position)) return Convergence.UNAVAILABLE;
+		if (level == null || !level.hasChunkAt(position)) return ContainerRecoveryCoordinator.Convergence.UNAVAILABLE;
 		if (!(level.getBlockEntity(position) instanceof DispenserBlockEntity dispenser)
 				|| actor.slot() >= dispenser.getContainerSize()) {
-			return Convergence.CONFLICT;
+			return ContainerRecoveryCoordinator.Convergence.CONFLICT;
 		}
 		ItemStack current = dispenser.getItem(actor.slot());
 		if (!matches(current, journal.beforeItem()) && !matches(current, journal.afterItem())) {
-			return Convergence.CONFLICT;
+			return ContainerRecoveryCoordinator.Convergence.CONFLICT;
 		}
-		dispenser.setItem(actor.slot(), ContainerTransferItems.toStack(journal.afterItem()));
+		dispenser.setItem(actor.slot(), ContainerItemMapper.toStack(journal.afterItem()));
 		dispenser.setChanged();
-		return Convergence.APPLIED;
+		return ContainerRecoveryCoordinator.Convergence.APPLIED;
 	}
 
 	private static ServerLevel level(MinecraftServer server, String dimension) {
@@ -123,15 +125,10 @@ final class MinecraftContainerActorAccess {
 
 	private static boolean matches(ItemStack stack, ContainerTransferJournal.ItemFingerprint fingerprint) {
 		try {
-			return ContainerTransferItems.fingerprint(stack).equals(fingerprint);
+			return ContainerItemMapper.fingerprint(stack).equals(fingerprint);
 		} catch (IllegalArgumentException invalid) {
 			return false;
 		}
 	}
 
-	enum Convergence {
-		APPLIED,
-		UNAVAILABLE,
-		CONFLICT
-	}
 }

@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.mixin;
 
-import cc.ecisr.mmm.simulation.FluidTransferService;
+import cc.ecisr.mmm.simulation.PlayerContainerTransferAdapter;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -25,7 +25,7 @@ abstract class ItemStackMixin {
 			Level level, Player player, InteractionHand hand, CallbackInfoReturnable<InteractionResult> cir
 	) {
 		if (level.isClientSide() || !(player instanceof ServerPlayer serverPlayer)) return;
-		InteractionResult result = FluidTransferService.handlePlayerUse(serverPlayer, hand);
+		InteractionResult result = PlayerContainerTransferAdapter.handle(serverPlayer, hand);
 		if (result != null && result != InteractionResult.PASS) {
 			cir.setReturnValue(result);
 		}

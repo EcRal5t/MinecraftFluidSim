@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.application.ContainerRecoveryCoordinator;
+import cc.ecisr.mmm.simulation.persistence.ContainerJournalFileStore;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.Identifier;
@@ -76,7 +78,7 @@ public final class ContainerTransferStoreValidation {
 
 	private static void testThermalWal() throws Exception {
 		Path root = Files.createTempDirectory("mmm-wal-thermal");
-		ContainerTransferStore store = new ContainerTransferStore(root);
+		ContainerJournalFileStore store = new ContainerJournalFileStore(root);
 		UUID transaction = UUID.randomUUID(), region = UUID.randomUUID();
 		String fingerprint = "b".repeat(64);
 		double energy = -12_345.25;
@@ -145,7 +147,7 @@ public final class ContainerTransferStoreValidation {
 
 	private static void testRoundTrip() throws Exception {
 		Path root = Files.createTempDirectory("mmm-wal-roundtrip");
-		ContainerTransferStore store = new ContainerTransferStore(root);
+		ContainerJournalFileStore store = new ContainerJournalFileStore(root);
 		UUID tx = UUID.randomUUID();
 		UUID region = UUID.randomUUID();
 		ContainerTransferActor actor = ContainerTransferActor.player(
@@ -161,7 +163,7 @@ public final class ContainerTransferStoreValidation {
 		);
 		store.write(prepared);
 		check(prepared.equals(store.read(tx)), "prepared WAL did not round-trip");
-		check(store.listTransactions().equals(List.of(tx)), "prepared WAL was not listed");
+		check(store.discover().transactions().equals(List.of(tx)), "prepared WAL was not listed");
 
 		ContainerTransferJournal committed = new ContainerTransferJournal(
 				tx, region, "minecraft:overworld", 3L, 4L,
@@ -172,7 +174,7 @@ public final class ContainerTransferStoreValidation {
 		store.write(committed);
 		check(committed.equals(store.read(tx)), "committed WAL did not atomically replace prepared");
 		store.delete(tx);
-		check(!store.listTransactions().contains(tx), "deleted WAL was still listed");
+		check(!store.discover().transactions().contains(tx), "deleted WAL was still listed");
 
 		UUID partialTx = UUID.randomUUID();
 		ContainerTransferJournal.ItemFingerprint partialBefore = new ContainerTransferJournal.ItemFingerprint(
@@ -210,7 +212,7 @@ public final class ContainerTransferStoreValidation {
 
 	private static void testActorCodecs() throws Exception {
 		Path root = Files.createTempDirectory("mmm-wal-actors");
-		ContainerTransferStore store = new ContainerTransferStore(root);
+		ContainerJournalFileStore store = new ContainerJournalFileStore(root);
 		UUID tx = UUID.randomUUID();
 		UUID region = UUID.randomUUID();
 		ContainerTransferJournal.ItemFingerprint before = new ContainerTransferJournal.ItemFingerprint(
@@ -399,7 +401,7 @@ public final class ContainerTransferStoreValidation {
 
 	private static void testValidation() throws Exception {
 		Path root = Files.createTempDirectory("mmm-wal-validation");
-		ContainerTransferStore store = new ContainerTransferStore(root);
+		ContainerJournalFileStore store = new ContainerJournalFileStore(root);
 		ContainerTransferJournal.ItemFingerprint item = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.BUCKET, -1L, null);
 		ContainerTransferActor actor = ContainerTransferActor.player(
@@ -446,7 +448,7 @@ public final class ContainerTransferStoreValidation {
 
 	private static void testDelete() throws Exception {
 		Path root = Files.createTempDirectory("mmm-wal-delete");
-		ContainerTransferStore store = new ContainerTransferStore(root);
+		ContainerJournalFileStore store = new ContainerJournalFileStore(root);
 		UUID tx = UUID.randomUUID();
 		ContainerTransferJournal.ItemFingerprint item = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.BUCKET, -1L, null);
@@ -458,7 +460,7 @@ public final class ContainerTransferStoreValidation {
 		);
 		store.write(journal);
 		store.delete(tx);
-		check(!store.hasAny(), "store should be empty after deleting the only transaction");
+		check(!store.discover().hasAny(), "store should be empty after deleting the only transaction");
 	}
 
 	private static void testRecoveryStateMachine() {
@@ -470,19 +472,19 @@ public final class ContainerTransferStoreValidation {
 				new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.WATER_BUCKET, -1L, null),
 				0x6789L,
 				ContainerTransferJournal.Phase.REGION_COMMITTED);
-		check(ContainerTransferRecovery.decide(4L, 0L, prepared, false,
+		check(ContainerRecoveryCoordinator.decide(4L, 0L, prepared, false,
 				CrossDomainRecovery.ExternalTruth.BEFORE).outcome()
 				== CrossDomainRecovery.Outcome.DISCARD_UNCOMMITTED,
 				"clean base HEAD with an exact before actor must discard an uncommitted WAL");
-		check(ContainerTransferRecovery.decide(4L, 0L, committed, false,
+		check(ContainerRecoveryCoordinator.decide(4L, 0L, committed, false,
 				CrossDomainRecovery.ExternalTruth.AFTER).reason()
 				== CrossDomainRecovery.Reason.BASE_EXTERNAL_CHANGED,
 				"base HEAD accepted an actor that had already changed to after");
-		check(ContainerTransferRecovery.decide(5L, 0x6789L, committed, false,
+		check(ContainerRecoveryCoordinator.decide(5L, 0x6789L, committed, false,
 				CrossDomainRecovery.ExternalTruth.BEFORE).outcome()
 				== CrossDomainRecovery.Outcome.CONVERGE_AFTER,
 				"target HEAD plus committed journal did not converge a before actor");
-		check(ContainerTransferRecovery.decide(5L, 0x6788L, committed, false,
+		check(ContainerRecoveryCoordinator.decide(5L, 0x6788L, committed, false,
 				CrossDomainRecovery.ExternalTruth.AFTER).reason()
 				== CrossDomainRecovery.Reason.TARGET_CHECKSUM_MISMATCH,
 				"target HEAD with a different manifest checksum did not lock");
@@ -547,12 +549,12 @@ public final class ContainerTransferStoreValidation {
 
 	private static void testUnknownLayout() throws Exception {
 		Path root = Files.createTempDirectory("mmm-wal-unknown");
-		ContainerTransferStore store = new ContainerTransferStore(root);
+		ContainerJournalFileStore store = new ContainerJournalFileStore(root);
 		ContainerTransferJournal journal = journal(ContainerTransferJournal.Phase.PREPARED);
 		store.write(journal);
 		Path unknown = store.directoryPath().resolve("future-format.bin");
 		Files.writeString(unknown, "foreign data");
-		ContainerTransferStore.Scan scan = store.scan();
+		ContainerJournalFileStore.Scan scan = store.discover();
 		check(scan.transactions().equals(List.of(journal.transactionId())) && !scan.issues().isEmpty(),
 				"strict scan did not retain the known WAL while reporting foreign content");
 		checkThrows(IOException.class, () -> store.write(journal), "unknown content must refuse WAL replacement");
@@ -562,19 +564,19 @@ public final class ContainerTransferStoreValidation {
 		Files.delete(unknown);
 		Path staged = store.directoryPath().resolve(journal.transactionId() + ".nbt.tmp");
 		Files.writeString(staged, "interrupted replacement");
-		check(!store.scan().issues().isEmpty() && Files.exists(staged),
+		check(!store.discover().issues().isEmpty() && Files.exists(staged),
 				"interrupted WAL replacement was ignored or deleted");
 	}
 
 	private static void testCorruptWal() throws Exception {
 		Path root = Files.createTempDirectory("mmm-wal-corrupt");
-		ContainerTransferStore store = new ContainerTransferStore(root);
+		ContainerJournalFileStore store = new ContainerJournalFileStore(root);
 		UUID transactionId = UUID.randomUUID();
 		Files.createDirectories(store.directoryPath());
 		Path corrupt = store.directoryPath().resolve(transactionId + ".nbt");
 		byte[] bytes = {1, 3, 3, 7};
 		Files.write(corrupt, bytes);
-		ContainerTransferStore.Scan scan = store.scan();
+		ContainerJournalFileStore.Scan scan = store.discover();
 		check(scan.transactions().isEmpty() && !scan.issues().isEmpty() && scan.hasAny(),
 				"corrupt named WAL did not become a global lock");
 		check(java.util.Arrays.equals(bytes, Files.readAllBytes(corrupt)), "corrupt WAL was rewritten");
@@ -590,13 +592,13 @@ public final class ContainerTransferStoreValidation {
 	}
 
 	private static void testNanosCellConversion() {
-		check(FluidTransferService.nanosToCellVolume(1_000_000_000L) == 8.0F,
+		check(MinecraftContainerTransferOperations.nanosToCellVolume(1_000_000_000L) == 8.0F,
 				"one bucket must convert to eight solver cell volumes");
-		check(FluidTransferService.cellVolumeToNanos(8.0) == 1_000_000_000L,
+		check(MinecraftContainerTransferOperations.cellVolumeToNanos(8.0) == 1_000_000_000L,
 				"eight solver cell volumes must convert back to one bucket");
-		check(FluidTransferService.nanosToCellVolume(500_000_000L) == 4.0F,
+		check(MinecraftContainerTransferOperations.nanosToCellVolume(500_000_000L) == 4.0F,
 				"half a bucket must convert to four solver cell volumes");
-		check(FluidTransferService.cellVolumeToNanos(1.0) == 125_000_000L,
+		check(MinecraftContainerTransferOperations.cellVolumeToNanos(1.0) == 125_000_000L,
 				"one solver cell volume must be one eighth of a bucket");
 	}
 
@@ -604,24 +606,24 @@ public final class ContainerTransferStoreValidation {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
 		for (long requested : new long[] {1L, 59L, 333_333_333L, 999_999_999L, 1_000_000_000L}) {
-			float plannedVolume = FluidTransferService.nanosToCellVolumeAtMost(requested);
-			long plannedNanos = FluidTransferService.cellVolumeToNanos(plannedVolume);
+			float plannedVolume = MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(requested);
+			long plannedNanos = MinecraftContainerTransferOperations.cellVolumeToNanos(plannedVolume);
 			check(plannedNanos > 0L && plannedNanos <= requested,
 					"downward request quantization exceeded its item balance for " + requested);
 
 			FluidDomain domain = new FluidDomain(6, 4, 6, config, 1_024);
 			FluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(3, 2, 3, plannedVolume, 3);
 			check(inserted.transferred(), "edge-volume insertion failed for " + requested);
-			long insertedNanos = FluidTransferService.settledNanos(inserted.volume(), requested);
+			long insertedNanos = MinecraftContainerTransferOperations.settledNanos(inserted.volume(), requested);
 			check(insertedNanos > 0L && insertedNanos <= requested,
 					"actual insertion exceeded the source item for " + requested);
 
-			long extractRequest = FluidTransferService.extractableNanos(
+			long extractRequest = MinecraftContainerTransferOperations.extractableNanos(
 					domain, new int[] {3, 2, 3}, ContainerFluidLedger.NANOS_PER_BLOCK, 3, 0);
 			FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(
-					3, 2, 3, FluidTransferService.nanosToCellVolumeAtMost(extractRequest), 3, 0);
+					3, 2, 3, MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(extractRequest), 3, 0);
 			check(extracted.transferred(), "edge-volume extraction failed for " + requested);
-			long extractedNanos = FluidTransferService.settledNanos(extracted.volume(), extractRequest);
+			long extractedNanos = MinecraftContainerTransferOperations.settledNanos(extracted.volume(), extractRequest);
 			check(extractedNanos == insertedNanos && domain.totalVolumeExact() == 0.0,
 					"actual marker settlement did not round-trip for " + requested + ": inserted="
 							+ insertedNanos + ", extracted=" + extractedNanos + ", residual=" + domain.totalVolumeExact());
@@ -646,23 +648,23 @@ public final class ContainerTransferStoreValidation {
 		FluidMixture source = new FluidMixture(List.of(
 				new FluidMixture.Component("mmm:oil", 333_333_333L, 266.6666664),
 				new FluidMixture.Component("mmm:water", 666_666_666L, 666.666666)));
-		List<FluidDomain.MaterialPortion> planned = FluidTransferService.planMaterialInsertion(domain, source);
+		List<FluidDomain.MaterialPortion> planned = MinecraftContainerTransferOperations.planMaterialInsertion(domain, source);
 		FluidDomain.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(3, 2, 3, planned, 3);
 		check(inserted.transferred(), "non-float-friendly material insertion failed");
-		FluidTransferService.MaterialInsertionSettlement settlement =
-				FluidTransferService.settleMaterialInsertion(domain, source, inserted.portions());
+		MinecraftContainerTransferOperations.MaterialInsertionSettlement settlement =
+				MinecraftContainerTransferOperations.settleMaterialInsertion(domain, source, inserted.portions());
 		check(settlement.insertedNanos() > 0L && settlement.insertedNanos() <= source.totalVolumeNanos(),
 				"material insertion exceeded its source mixture");
 		long remainingNanos = settlement.remaining() == null ? 0L : settlement.remaining().totalVolumeNanos();
 		check(settlement.insertedNanos() + remainingNanos == source.totalVolumeNanos(),
 				"material insertion did not retain every component residual quantum");
 
-		long request = FluidTransferService.extractableNanos(
+		long request = MinecraftContainerTransferOperations.extractableNanos(
 				domain, new int[] {3, 2, 3}, ContainerFluidLedger.NANOS_PER_BLOCK, 3, -1);
 		FluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
-				3, 2, 3, FluidTransferService.nanosToCellVolumeAtMost(request), 3);
+				3, 2, 3, MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(request), 3);
 		check(extracted.transferred(), "material extraction failed after service-planned insertion");
-		FluidMixture bucket = FluidTransferService.mixtureFromExtraction(domain, extracted.portions(), request);
+		FluidMixture bucket = MinecraftContainerTransferOperations.mixtureFromExtraction(domain, extracted.portions(), request);
 		check(bucket.totalVolumeNanos() == settlement.insertedNanos() && domain.totalVolumeExact() == 0.0,
 				"material extraction credited the request instead of actual per-material marker deltas");
 		check(Math.abs(bucket.totalMass() + (settlement.remaining() == null ? 0.0 : settlement.remaining().totalMass())
@@ -675,11 +677,11 @@ public final class ContainerTransferStoreValidation {
 				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
 		FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
 		domain.tryInsertExactVolume(2, 2, 2, 0.5F, 1);
-		long requested = FluidTransferService.extractableNanos(domain, new int[] {2, 2, 2},
+		long requested = MinecraftContainerTransferOperations.extractableNanos(domain, new int[] {2, 2, 2},
 				cc.ecisr.mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK, 1, 0);
 		check(requested == 62_500_000L, "partial outlet did not quantize the available half-cell volume");
 		FluidDomain.ExactVolumeTransfer transfer = domain.tryExtractExactVolume(
-				2, 2, 2, FluidTransferService.nanosToCellVolume(requested), 1, 0);
+				2, 2, 2, MinecraftContainerTransferOperations.nanosToCellVolume(requested), 1, 0);
 		check(transfer.transferred() && domain.totalVolumeExact() == 0.0,
 				"partial outlet request could not be settled by the exact primitive");
 	}

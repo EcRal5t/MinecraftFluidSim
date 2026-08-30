@@ -16,6 +16,7 @@ import cc.ecisr.mmm.item.M6ContainerValidation;
 import cc.ecisr.mmm.logging.CommandAuditFileValidation;
 import cc.ecisr.mmm.network.FluidNetworkProtocolValidation;
 import cc.ecisr.mmm.simulation.ContainerTransferStoreValidation;
+import cc.ecisr.mmm.application.ContainerApplicationValidation;
 import cc.ecisr.mmm.simulation.ShellFluidQueryValidation;
 import cc.ecisr.mmm.simulation.EntityFluidWiringValidation;
 import cc.ecisr.mmm.simulation.CommittedEventHubValidation;
@@ -167,6 +168,7 @@ public final class CpuValidationSuite {
 		gate(gates, "takeover", () -> TakeoverJournalValidation.main(NONE));
 		gate(gates, "containers", () -> {
 			M6ContainerValidation.main(NONE);
+			ContainerApplicationValidation.main(NONE);
 			ContainerTransferStoreValidation.main(NONE);
 		});
 		gate(gates, "ownership", () -> M6OwnershipValidation.main(NONE));

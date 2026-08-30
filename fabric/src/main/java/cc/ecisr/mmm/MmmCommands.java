@@ -20,6 +20,7 @@ import cc.ecisr.mmm.granular.BuiltinGranularDefinitions;
 import cc.ecisr.mmm.granular.GranularTransferLedger;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.simulation.FluidSimulationService;
+import cc.ecisr.mmm.application.ContainerTransferCoordinator;
 import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import cc.ecisr.mmm.simulation.FluidRegion;
 import com.mojang.brigadier.arguments.BoolArgumentType;
@@ -480,14 +481,14 @@ public final class MmmCommands {
 	}
 
 	private static int setTransferWalFault(CommandSourceStack source, String pointName) {
-		FluidSimulationService.ContainerTransferFaultPoint point = switch (pointName) {
-			case "none" -> FluidSimulationService.ContainerTransferFaultPoint.NONE;
-			case "beforePrepare" -> FluidSimulationService.ContainerTransferFaultPoint.BEFORE_PREPARE;
-			case "afterPrepare" -> FluidSimulationService.ContainerTransferFaultPoint.AFTER_PREPARE;
-			case "afterSolver" -> FluidSimulationService.ContainerTransferFaultPoint.AFTER_SOLVER;
-			case "afterStage" -> FluidSimulationService.ContainerTransferFaultPoint.AFTER_STAGE;
-			case "afterWal" -> FluidSimulationService.ContainerTransferFaultPoint.AFTER_WAL;
-			case "afterCheckpoint" -> FluidSimulationService.ContainerTransferFaultPoint.AFTER_CHECKPOINT;
+		ContainerTransferCoordinator.FaultPoint point = switch (pointName) {
+			case "none" -> ContainerTransferCoordinator.FaultPoint.NONE;
+			case "beforePrepare" -> ContainerTransferCoordinator.FaultPoint.BEFORE_PREPARE;
+			case "afterPrepare" -> ContainerTransferCoordinator.FaultPoint.AFTER_PREPARE;
+			case "afterSolver" -> ContainerTransferCoordinator.FaultPoint.AFTER_SOLVER;
+			case "afterStage" -> ContainerTransferCoordinator.FaultPoint.AFTER_STAGE;
+			case "afterWal" -> ContainerTransferCoordinator.FaultPoint.AFTER_WAL;
+			case "afterCheckpoint" -> ContainerTransferCoordinator.FaultPoint.AFTER_CHECKPOINT;
 			default -> null;
 		};
 		if (point == null) return fail(source, "未知故障注入点：" + pointName);
