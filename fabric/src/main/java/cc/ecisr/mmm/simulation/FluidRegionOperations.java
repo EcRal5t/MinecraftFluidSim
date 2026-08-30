@@ -2,6 +2,7 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
+import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.application.port.RegionCheckpointPort;
 import cc.ecisr.mmm.application.result.CheckpointRegionResult;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
@@ -189,7 +190,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 					"controller admission policy is disabled", removalSender);
 			return false;
 		}
-		FluidRegionManager.AdmissionResult admission = manager.runtimeAdmission(region);
+		RegionCatalog.AdmissionResult admission = manager.runtimeAdmission(region);
 		if (!admission.accepted()) {
 			unloadForFailure(level.getServer(), region, admission.reason(), admission.failure(), removalSender);
 			return false;

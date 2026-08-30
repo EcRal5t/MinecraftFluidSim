@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
+import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ExactRational;
@@ -75,7 +76,7 @@ public final class M7RegionChemistryPersistenceValidation {
 				"production restore did not reconstruct gas plus thermal truth");
 
 		FluidRegionManager constrained = new FluidRegionManager(
-				new FluidRegionManager.Limits(1, 100L, 100L, 100L, 100L));
+				new RegionCatalog.Limits(1, 100L, 100L, 100L, 100L));
 		check(restoring.loadMetadata(constrained).isEmpty() && constrained.regions().size() == 1,
 				"temporary policy budget discarded valid committed metadata");
 		FluidRegion retained = constrained.regions().getFirst();
@@ -175,7 +176,7 @@ public final class M7RegionChemistryPersistenceValidation {
 	}
 
 	private static FluidRegionManager manager() {
-		return new FluidRegionManager(new FluidRegionManager.Limits(4, 10_000L, 100_000L, 40_000L, 400_000L));
+		return new FluidRegionManager(new RegionCatalog.Limits(4, 10_000L, 100_000L, 40_000L, 400_000L));
 	}
 
 	private static FluidRegion populatedRegion(UUID id) {

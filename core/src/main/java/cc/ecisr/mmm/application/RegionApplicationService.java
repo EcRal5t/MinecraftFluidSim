@@ -18,7 +18,7 @@ import cc.ecisr.mmm.fluid.FluidThermalStepRequest;
 import java.util.Objects;
 
 /** Loader-neutral orchestration for the first migrated region commands and bounded reads. */
-public final class RegionApplicationService implements RegionStepExecutor {
+public final class RegionApplicationService implements RegionTickUseCase.StepExecutor {
 	private final FluidSolverBackend solverBackend;
 	private final RegionRepository regions;
 	private final RegionCheckpointPort checkpoints;

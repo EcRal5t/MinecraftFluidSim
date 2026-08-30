@@ -3,9 +3,9 @@ package cc.ecisr.mmm.simulation;
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.application.ControllerQueryUseCase;
 import cc.ecisr.mmm.application.RegionApplicationService;
+import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.application.RegionLifecycleUseCase;
 import cc.ecisr.mmm.application.RegionRuntime;
-import cc.ecisr.mmm.application.RegionStepExecutor;
 import cc.ecisr.mmm.application.RegionTickUseCase;
 import cc.ecisr.mmm.application.command.CheckpointRegionCommand;
 import cc.ecisr.mmm.application.command.ControllerSummaryCommand;
@@ -133,7 +133,7 @@ public final class FluidRegionLifecycleValidation {
 		domain.setVolume(1, 1, 1, 0.5F);
 		FluidRegion region = new FluidRegion(new UUID(19L, 23L), DIMENSION, BlockPos.ZERO,
 				domain, domain.maximumParticleCount());
-		FluidRegionManager manager = new FluidRegionManager(new FluidRegionManager.Limits(
+		FluidRegionManager manager = new FluidRegionManager(new RegionCatalog.Limits(
 				4, 4_096L, Integer.MAX_VALUE, 16_384L, Integer.MAX_VALUE));
 		require(manager.addAndSelect(region).accepted(), "application test region was not admitted");
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
@@ -227,7 +227,7 @@ public final class FluidRegionLifecycleValidation {
 
 	private static void validateRegionTickPlanningAndPacing() {
 		int[] calls = {0, 0};
-		RegionStepExecutor steps = new RegionStepExecutor() {
+		RegionTickUseCase.StepExecutor steps = new RegionTickUseCase.StepExecutor() {
 			@Override public MotionStepResult stepMotion(MotionStepCommand command) {
 				calls[0]++;
 				return MotionStepResult.rejected(RegionStepStatus.REGION_NOT_FOUND);

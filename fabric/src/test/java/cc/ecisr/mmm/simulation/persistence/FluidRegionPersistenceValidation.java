@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.simulation.persistence;
 
+import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FlipChemicalParticleState;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
@@ -591,9 +592,9 @@ public final class FluidRegionPersistenceValidation {
 				"startup metadata allocated solver arrays");
 
 		require(region.recordPublishedCheckpoint(1L), "live region rejected published generation");
-		FluidRegionManager manager = new FluidRegionManager(new FluidRegionManager.Limits(2, 256L, 512L, 512L, 1_024L));
+		FluidRegionManager manager = new FluidRegionManager(new RegionCatalog.Limits(2, 256L, 512L, 512L, 1_024L));
 		require(manager.add(region).accepted(), "loaded fixture was not admitted");
-		FluidRegionManager.BudgetUsage reserved = manager.usage();
+		RegionCatalog.BudgetUsage reserved = manager.usage();
 		require(region.releaseSolverAfterCheckpoint(1L), "checkpointed solver was not released");
 		require(!region.solverLoaded() && region.lifecycle().state() == FluidRegionLifecycle.State.UNLOADED,
 				"released region did not become metadata-only UNLOADED");

@@ -12,6 +12,12 @@ import java.util.function.LongSupplier;
 public final class RegionTickUseCase {
 	public enum Axis { NONE, MOTION, THERMAL }
 
+	/** Narrow execution seam owned by the tick use case that consumes it. */
+	public interface StepExecutor {
+		MotionStepResult stepMotion(MotionStepCommand command);
+		ThermalStepResult stepThermal(ThermalStepCommand command);
+	}
+
 	public record Policy(
 			double stepBudgetMilliseconds,
 			double hardPauseMilliseconds,
@@ -74,15 +80,15 @@ public final class RegionTickUseCase {
 		}
 	}
 
-	private final RegionStepExecutor steps;
+	private final StepExecutor steps;
 	private final LongSupplier nanoTime;
 	private final Policy policy;
 
-	public RegionTickUseCase(RegionStepExecutor steps, Policy policy) {
+	public RegionTickUseCase(StepExecutor steps, Policy policy) {
 		this(steps, System::nanoTime, policy);
 	}
 
-	public RegionTickUseCase(RegionStepExecutor steps, LongSupplier nanoTime, Policy policy) {
+	public RegionTickUseCase(StepExecutor steps, LongSupplier nanoTime, Policy policy) {
 		this.steps = Objects.requireNonNull(steps, "steps");
 		this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
 		this.policy = Objects.requireNonNull(policy, "policy");

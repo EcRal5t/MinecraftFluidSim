@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.granular.GranularLimits;
 import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalTransport;
@@ -32,7 +33,7 @@ public record FluidServerConfig(
 		int maximumPhaseOperationsPerStep,
 		long maximumQuarantineEntries,
 		long maximumQuarantineBytes,
-		FluidRegionManager.Limits limits
+		RegionCatalog.Limits limits
 ) {
 	private static final String SCHEMA = "controller-policy";
 	private static final int DEFAULT_REGIONS = 4;
@@ -67,7 +68,7 @@ public record FluidServerConfig(
 		}
 	}
 
-	public FluidServerConfig(boolean controllersEnabled, boolean worldBridgeEnabled, FluidRegionManager.Limits limits) {
+	public FluidServerConfig(boolean controllersEnabled, boolean worldBridgeEnabled, RegionCatalog.Limits limits) {
 		this(controllersEnabled, worldBridgeEnabled, GranularLimits.MAX_ACTIVE_PARCELS_PER_SERVER,
 				GranularLimits.MAX_DEPOSIT_GROUPS_PER_SERVER, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS,
 				ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP, DEFAULT_QUARANTINE_ENTRIES,
@@ -75,7 +76,7 @@ public record FluidServerConfig(
 	}
 
 	public static FluidServerConfig defaults() {
-		return new FluidServerConfig(true, false, new FluidRegionManager.Limits(DEFAULT_REGIONS, DEFAULT_CELLS,
+		return new FluidServerConfig(true, false, new RegionCatalog.Limits(DEFAULT_REGIONS, DEFAULT_CELLS,
 				DEFAULT_MARKERS, DEFAULT_CELLS * DEFAULT_REGIONS, DEFAULT_MARKERS * DEFAULT_REGIONS));
 	}
 
@@ -106,7 +107,7 @@ public record FluidServerConfig(
 			int phaseOperations = positiveInteger(properties, "maximumPhaseOperationsPerStep");
 			long quarantineEntries = nonNegativeLong(properties, "maximumQuarantineEntries");
 			long quarantineBytes = nonNegativeLong(properties, "maximumQuarantineBytes");
-			FluidRegionManager.Limits limits = new FluidRegionManager.Limits(
+			RegionCatalog.Limits limits = new RegionCatalog.Limits(
 					integer(properties, "maximumRegions"), positiveLong(properties, "maximumCellsPerRegion"),
 					positiveLong(properties, "maximumMarkersPerRegion"), positiveLong(properties, "maximumTotalCells"),
 					positiveLong(properties, "maximumTotalMarkers"));

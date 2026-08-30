@@ -7,6 +7,7 @@ import cc.ecisr.mmm.api.event.ContainerTransferCommittedEvent;
 import cc.ecisr.mmm.api.transfer.TransferQuantity;
 import cc.ecisr.mmm.application.ControllerQueryUseCase;
 import cc.ecisr.mmm.application.RegionApplicationService;
+import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.application.RegionLifecycleUseCase;
 import cc.ecisr.mmm.application.RegionRuntime;
 import cc.ecisr.mmm.application.RegionTickUseCase;
@@ -1356,7 +1357,7 @@ public final class FluidSimulationService {
 		} catch (ArithmeticException exception) {
 			return ControllerActivation.failed("控制器区域尺寸溢出资源计数");
 		}
-		FluidRegionManager.AdmissionResult preview = regionManager.previewAdd(requiredCells, requiredMarkers);
+		RegionCatalog.AdmissionResult preview = regionManager.previewAdd(requiredCells, requiredMarkers);
 		if (!preview.accepted()) return ControllerActivation.failed(preview.failure());
 
 		String availabilityFailure = FluidControllerRegions.availabilityFailure(level, footprint);
@@ -1370,7 +1371,7 @@ public final class FluidSimulationService {
 		}
 		candidate.setEntityPhysicsEnabled(defaultEntityPhysicsEnabled);
 		candidate.setDebugOverlays(defaultDebugOverlays);
-		FluidRegionManager.AdmissionResult exactPreview = regionManager.previewAdd(candidate);
+		RegionCatalog.AdmissionResult exactPreview = regionManager.previewAdd(candidate);
 		if (!exactPreview.accepted()) return ControllerActivation.failed(exactPreview.failure());
 		try {
 			refreshCollisions(level, candidate);
@@ -1395,7 +1396,7 @@ public final class FluidSimulationService {
 			MmmMod.LOGGER.error("Controller region {} was rejected after its initial checkpoint failed", candidate.id(), exception);
 			return ControllerActivation.failed("区域未创建；初始 checkpoint/ownership 事务失败：" + exception.getMessage());
 		}
-		FluidRegionManager.AdmissionResult admission = regionManager.addAndSelect(candidate);
+		RegionCatalog.AdmissionResult admission = regionManager.addAndSelect(candidate);
 		if (!admission.accepted()) {
 			String issue = "首个 region HEAD 已提交，但 live owner 登记违反已通过的 admission 预检：" + admission.failure();
 			regionOperations.recordIssue(issue);
@@ -1716,7 +1717,7 @@ public final class FluidSimulationService {
 		if (replaced != null && replaced.controllerManaged()) {
 			throw new IllegalStateException("Refusing to replace a persistent controller region; remove it explicitly first");
 		}
-		FluidRegionManager.AdmissionResult preview = regionManager.previewReplacement(
+		RegionCatalog.AdmissionResult preview = regionManager.previewReplacement(
 				COMPATIBILITY_REGION_CELLS, COMPATIBILITY_REGION_MARKERS);
 		if (!preview.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + preview.failure());
 		FluidSolverConfig config = new FluidSolverConfig(
@@ -1732,7 +1733,7 @@ public final class FluidSimulationService {
 		);
 		candidate.setEntityPhysicsEnabled(defaultEntityPhysicsEnabled);
 		candidate.setDebugOverlays(defaultDebugOverlays);
-		FluidRegionManager.AdmissionResult admission = regionManager.replaceSelected(candidate);
+		RegionCatalog.AdmissionResult admission = regionManager.replaceSelected(candidate);
 		if (!admission.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + admission.failure());
 		if (replaced != null) snapshots.sendRemoval(level.getServer(), replaced);
 	}
@@ -1936,7 +1937,7 @@ public final class FluidSimulationService {
 		if (replaced != null && replaced.controllerManaged()) {
 			throw new IllegalStateException("Refusing to replace a persistent controller region; remove it explicitly first");
 		}
-		FluidRegionManager.AdmissionResult preview = regionManager.previewReplacement(
+		RegionCatalog.AdmissionResult preview = regionManager.previewReplacement(
 				COMPATIBILITY_REGION_CELLS, COMPATIBILITY_REGION_MARKERS);
 		if (!preview.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + preview.failure());
 		FluidRegion candidate = FluidRegionFactory.createCommandRegion(
@@ -1945,7 +1946,7 @@ public final class FluidSimulationService {
 		);
 		candidate.setEntityPhysicsEnabled(defaultEntityPhysicsEnabled);
 		candidate.setDebugOverlays(defaultDebugOverlays);
-		FluidRegionManager.AdmissionResult admission = regionManager.replaceSelected(candidate);
+		RegionCatalog.AdmissionResult admission = regionManager.replaceSelected(candidate);
 		if (!admission.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + admission.failure());
 		if (replaced != null) snapshots.sendRemoval(level.getServer(), replaced);
 	}
@@ -2537,7 +2538,7 @@ public final class FluidSimulationService {
 
 	public String status(MinecraftServer server) {
 		String takeoverLock = TakeoverBackupStore.lockDescription(server);
-		FluidRegionManager.BudgetUsage usage = regionManager.usage();
+		RegionCatalog.BudgetUsage usage = regionManager.usage();
 		FluidRegion region = activeRegion();
 		if (region == null) {
 			return "没有活动流体域 | regions 0/" + regionManager.limits().maximumRegions()
@@ -2548,7 +2549,7 @@ public final class FluidSimulationService {
 					+ (ownershipIssues.isEmpty() ? "" : " | ownership issues " + ownershipIssues.size())
 					+ (lastTakeoverFailure == null ? "" : " | " + lastTakeoverFailure);
 		}
-		FluidRegionManager.BudgetUsage selectedUsage = regionManager.usage();
+		RegionCatalog.BudgetUsage selectedUsage = regionManager.usage();
 		if (!region.solverLoaded()) {
 			return String.format(
 					"UNLOADED/PAUSED | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | controller %s | %s | origin %s | grid %dx%dx%d | checkpoint %d, water %.3f cells, markers %d | controller flag %s, bridge %s | takeover lock %s%s",

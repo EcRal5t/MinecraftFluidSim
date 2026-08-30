@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
+import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import net.minecraft.core.BlockPos;
@@ -71,12 +72,12 @@ public final class FluidRegionManagerValidation {
 		require(manager.add(second).accepted(), "second region should be admitted");
 		require(manager.selected() == first, "first admitted region should remain selected");
 		require(manager.select(second.id()) && manager.selected() == second, "explicit selection failed");
-		require(manager.usage().equals(new FluidRegionManager.BudgetUsage(2, 16L, 128L)), "budget usage mismatch");
-		FluidRegionManager.AdmissionResult countLimit = manager.add(region(2, 2, 2, 8L));
+		require(manager.usage().equals(new RegionCatalog.BudgetUsage(2, 16L, 128L)), "budget usage mismatch");
+		RegionCatalog.AdmissionResult countLimit = manager.add(region(2, 2, 2, 8L));
 		require(!countLimit.accepted() && countLimit.failure().contains("region-count limit 2"),
 				"region-count rejection lacks its configured limit");
 		require(!manager.add(first).accepted(), "duplicate region id should be rejected");
-		require(manager.usage().equals(new FluidRegionManager.BudgetUsage(2, 16L, 128L)),
+		require(manager.usage().equals(new RegionCatalog.BudgetUsage(2, 16L, 128L)),
 				"rejected add changed budget usage");
 		require(manager.remove(second.id()) == second && manager.selected() == first, "selected removal fallback failed");
 		manager.clear();
@@ -93,7 +94,7 @@ public final class FluidRegionManagerValidation {
 		require(manager.select(first.id()), "could not select replacement target");
 
 		FluidRegion rejected = region(3, 3, 2, 128L);
-		FluidRegionManager.AdmissionResult rejection = manager.replaceSelected(rejected);
+		RegionCatalog.AdmissionResult rejection = manager.replaceSelected(rejected);
 		require(!rejection.accepted(), "oversized replacement should be rejected");
 		require(manager.selected() == first && manager.regions().contains(first), "rejected replacement changed the selected region");
 		require(first.domain().totalVolume() == exactVolume, "region admission changed exact particle volume");
@@ -101,7 +102,7 @@ public final class FluidRegionManagerValidation {
 		FluidRegion replacement = regionAt(0, 0, 0, 2, 2, 2, 48L);
 		require(manager.replaceSelected(replacement).accepted(), "valid replacement was rejected");
 		require(manager.selected() == replacement && !manager.regions().contains(first), "valid replacement was not atomic");
-		require(manager.usage().equals(new FluidRegionManager.BudgetUsage(2, 16L, 112L)), "replacement usage mismatch");
+		require(manager.usage().equals(new RegionCatalog.BudgetUsage(2, 16L, 112L)), "replacement usage mismatch");
 	}
 
 	private static void validateReplacementPreview() {
@@ -111,13 +112,13 @@ public final class FluidRegionManagerValidation {
 				"add preview changed an empty registry");
 		FluidRegion original = region(2, 2, 2, 64L);
 		require(manager.add(original).accepted(), "preview setup failed");
-		FluidRegionManager.BudgetUsage usage = manager.usage();
-		FluidRegionManager.AdmissionResult addRejected = manager.previewAdd(18L, 128L);
+		RegionCatalog.BudgetUsage usage = manager.usage();
+		RegionCatalog.AdmissionResult addRejected = manager.previewAdd(18L, 128L);
 		require(!addRejected.accepted() && addRejected.failure().contains("requires 18 cells/128 markers"),
 				"add preview omitted capacity detail");
 		require(manager.selected() == original && manager.usage().equals(usage),
 				"rejected add preview changed registry state");
-		FluidRegionManager.AdmissionResult rejected = manager.previewReplacement(18L, 128L);
+		RegionCatalog.AdmissionResult rejected = manager.previewReplacement(18L, 128L);
 		require(!rejected.accepted() && rejected.failure().contains("requires 18 cells/128 markers"),
 				"replacement preview omitted capacity detail");
 		require(manager.selected() == original && manager.usage().equals(usage),
@@ -130,14 +131,14 @@ public final class FluidRegionManagerValidation {
 	private static void validatePerRegionAndTotalRejectionDetails() {
 		FluidRegionManager manager = manager();
 		FluidRegion oversized = region(3, 3, 2, 64L);
-		FluidRegionManager.AdmissionResult perRegion = manager.add(oversized);
+		RegionCatalog.AdmissionResult perRegion = manager.add(oversized);
 		require(!perRegion.accepted() && perRegion.failure().contains("requires 18 cells/64 markers")
 				&& perRegion.failure().contains("per-region limit 16/128"), "per-region rejection lacks budget detail");
 
 		FluidRegion first = region(2, 2, 2, 96L);
 		FluidRegion second = regionAt(4, 0, 0, 2, 2, 2, 96L);
 		require(manager.add(first).accepted(), "total-budget setup failed");
-		FluidRegionManager.AdmissionResult total = manager.add(second);
+		RegionCatalog.AdmissionResult total = manager.add(second);
 		require(!total.accepted() && total.failure().contains("remaining 16/64"), "total rejection lacks remaining budget");
 		require(manager.regions().size() == 1 && manager.selected() == first, "rejected add mutated registry");
 	}
@@ -150,13 +151,13 @@ public final class FluidRegionManagerValidation {
 				"face-touching non-overlapping regions should be admitted");
 		manager.remove(touching.id());
 		FluidRegion overlapping = regionAt(0, 0, 0, 2, 2, 2, 64L);
-		FluidRegionManager.BudgetUsage before = manager.usage();
-		FluidRegionManager.AdmissionResult preview = manager.previewAdd(overlapping);
+		RegionCatalog.BudgetUsage before = manager.usage();
+		RegionCatalog.AdmissionResult preview = manager.previewAdd(overlapping);
 		require(!preview.accepted() && preview.reason() == RegionAvailabilityReason.OVERLAP
 				&& preview.failure().contains("overlaps existing region")
 				&& manager.usage().equals(before) && manager.selected() == first,
 				"complete add preview did not reject overlap without registering the candidate");
-		FluidRegionManager.AdmissionResult rejection = manager.addAndSelect(overlapping);
+		RegionCatalog.AdmissionResult rejection = manager.addAndSelect(overlapping);
 		require(!rejection.accepted() && rejection.failure().contains("overlaps existing region"),
 				"overlap rejection did not identify its cause");
 		require(manager.selected() == first && manager.regions().size() == 1,
@@ -197,7 +198,7 @@ public final class FluidRegionManagerValidation {
 	}
 
 	private static FluidRegionManager manager() {
-		return new FluidRegionManager(new FluidRegionManager.Limits(2, 16L, 128L, 24L, 160L));
+		return new FluidRegionManager(new RegionCatalog.Limits(2, 16L, 128L, 24L, 160L));
 	}
 
 	private static FluidRegion region(int nx, int ny, int nz, long reservedMarkers) {

@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
+import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
@@ -139,7 +140,7 @@ final class FluidRegionPersistence {
 						manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 						manifest.reservedMarkerCapacity(), manifest.footprint(), manifest.networkGeneration(),
 						manifest.checkpointGeneration(), manifest.totalMarkerCount(), (float) manifest.totalVolume(), manifest.runtime());
-				FluidRegionManager.AdmissionResult registration = manager.registerDiscovered(region);
+				RegionCatalog.AdmissionResult registration = manager.registerDiscovered(region);
 				if (!registration.accepted()) {
 					throw new IOException("committed metadata registration failed: " + registration.failure());
 				}
@@ -149,7 +150,7 @@ final class FluidRegionPersistence {
 		}
 		for (FluidRegion region : manager.regions()) {
 			if (region.solverLoaded()) continue;
-			FluidRegionManager.AdmissionResult runtimeAdmission = manager.runtimeAdmission(region);
+			RegionCatalog.AdmissionResult runtimeAdmission = manager.runtimeAdmission(region);
 			if (!runtimeAdmission.accepted()) {
 				region.setAvailabilityFailure(runtimeAdmission.reason(), runtimeAdmission.failure());
 			}
