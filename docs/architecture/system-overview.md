@@ -43,6 +43,7 @@ Minecraft 命令、方块、容器、实体与 chunk 事件
   -> ControllerQueryUseCase                 bounded summary + viewer token
        -> ControllerSummaryPort             bounded controller read model
   -> RegionCatalog / FluidRegionManager      身份、预算、placement、选择
+  -> RegionAdmissionService                  runtime admission 顺序与处置分类
   -> FluidRegion                            durable metadata、runtime、生命周期
   -> CollisionWorldPort                     捕获不可变碰撞场
   -> FluidDomain                            CPU aggregate、mechanics 与载体库存
@@ -129,7 +130,7 @@ controller console 的 Minecraft adapter 先校验 server thread、距离、方�
 
 controller console 还提供四个管理员破坏性生命周期动作：清空凝聚相、排放密闭气体、释放 ownership、移除空区域。Fabric 冻结 permission、WAL、availability、solver/device、ownership 与实际库存摘要后，`RegionLifecycleUseCase` 生成 200 tick、同玩家的一次性 preview，并在确认时消费 nonce、重验 player/region/generation/action/context 后返回当前 blockers；错 viewer 不消费 owner token，同 owner 的 stale/过期尝试会使 token 失效。Fabric 只有收到 `AUTHORIZED` 才进入 durable adapter。清空与排放先在私有完整 candidate 上联合审计并发布新 HEAD，再替换 live domain；ownership 释放和区域移除只能在所有相关库存已空时继续。
 
-availability 采用 `RegionAvailabilityReason` 封闭分类；预算、重叠、chunk、边界、WAL、数值拒答和政策停用不再靠错误文本驱动状态。已提交 metadata 即使当前 runtime budget 无法 admission 也继续登记并保留 reservation；只有 solver restore/step 被阻止。
+availability 采用 `RegionAvailabilityReason` 封闭分类；预算、重叠、chunk、边界、WAL、数值拒答和政策停用不再靠错误文本驱动状态。`RegionAdmissionService` 对 adapter 冻结的内在失败、托管/所有权/政策、catalog 与边界 facts 分阶段排序，并明确返回 `AVAILABLE`、`PROCEED`、`BLOCK_IN_PLACE` 或 `UNLOAD`；它不读取世界，也不执行 restore/checkpoint。已提交 metadata 即使当前 runtime budget 无法 admission 也继续登记并保留 reservation；只有 solver restore/step 被阻止。
 
 调度和后端选择不得改变守恒结果。缺 chunk 或 controller 破损时不能把缺失区域当墙继续半步。
 
