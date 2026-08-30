@@ -156,6 +156,8 @@ availability 使用封闭 reason code；详细诊断只用于日志和本地展�
 
 operator intent 与 availability 在 metadata-only 状态也保持正交：操作者可以在不恢复 solver 的情况下把 UNLOADED region 的下一次运行意图设为 PAUSED 或 RUNNING；resume intent 不得为了立即运行而加载、唤醒或改写 checkpoint。controller console 的 summary 只读现有 metadata 和已维护的 bounded ledger；live carrier totals、温度范围和需要 solver 的 usage 在 UNLOADED 时明确 unavailable。显式 refresh availability 才可尝试当前 runtime admission/restore，成功后仍按保存的 operator intent 决定是否 step。
 
+application 的 `RegionRuntime` 只是单次 tick 的不可变调度快照，不进入 checkpoint，也不替代这里的持久 runtime 载荷。checkpoint 保存 resume state、operator intent、entity/debug 开关、step interval 与 tick；wall-time hard-overrun/recovery streak 是当前进程内的短期调度证据，重启不能把它解释成持久 PAUSED 或数值失败。
+
 ## 恢复
 
 - 正常启动只读取 HEAD 指向的 generation，不自动猜测另一槽。

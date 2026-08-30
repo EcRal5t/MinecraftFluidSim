@@ -241,6 +241,14 @@
 * composition types 置于 `simulation` 包而未机械照抄提案的 `bootstrap` 子包：factory 需要组装现有 package-private region/persistence adapters；为目录外观把这些构造面全部改成 public 会扩大写面。文件职责与 runtime 入口已独立，待后续 adapter 真正分包时再随窄接口移动
 * `FluidSimulationService` 构造器降为纯接线，当前 3050 行；配置、能力启动、registry 提取、region metadata/quarantine、ownership 与 container discovery 全部移出。`region-state,lifecycle,containers,ownership` 启动矩阵与 `verifyArchitecture` 通过，覆盖 READY、unreadable policy 的 proven-but-restricted、definition drift、LOCKED_PROFILE/unknown durable evidence、能力包 recovery 与 removed quarantine convergence
 
+### S15a (`956e94a`)
+
+* S14 复审沿真实 Fabric 注入点确认 `SERVER_STARTING` 虽位于 `setupServer` 之前，但 reloadable resources 已存在且 startup 不读取 level；factory 抛错时服务器启动必然中止，清掉尚无 runtime 可承接的 pre-start event hub 不会丢失可交付事件。typed outer startup state 也确实覆盖“能力获准但 frozen registry 无效”的 fail-closed 情形，因此 S14 无需返工；剩余结构债务仍是 3050 行 service 同时承担 tick/query/lifecycle
+* 新建 loader-neutral `RegionRuntime` / `RegionTickUseCase` / `RegionStepExecutor`。Fabric 每 tick 冻结 tick、interval、短期 pacing streak 与正交 readiness；use case 生成唯一 `NONE` / `MOTION` / `THERMAL` plan，motion 到期时优先且同 tick 不再执行 thermal-only，只有选中的 motion plan 能消费 moving-body request
+* 40 ms pacing、1–4 tick interval、八个 accepted fast step 后逐级恢复、连续三步严格超过 200 ms 后 auto-pause 的状态迁移移出 `FluidSimulationService`。计时使用可注入单调时钟；只有 application accepted candidate 才推进 interval/streak，rejected result 或 typed solver exception 保持旧 runtime 证据
+* `FluidSimulationService#tickRegion` 仍负责 Minecraft collision/entity 输入冻结、实体侧响应、thermal/hydrostatic observation、错误本地化和 snapshot 输出，但不再自行计算 due axis 或 pacing；旧 `FluidRegionLifecycle#consumesMotionInput` 与 service 的五个调度常量/`updateStepPacing` 已删除。service 当前 3054 行，S15 尚未完成，query/lifecycle/catalog/admission 与完整 `MinecraftRegionInputs` adapter 留给后续闭合子切片
+* existing `lifecycle` 调度表征被替换为 use-case 级测试：覆盖 paused/skipped/thermal-only/motion-over-thermal、单次 step executor 调用、40/200 ms 边界、连续过载与八步恢复；真实 `RegionApplicationService` candidate adoption 另经确定性 50 ms clock 验证 accepted outcome→interval=2。`lifecycle` 与 `verifyArchitecture` 通过
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。
@@ -264,3 +272,4 @@ revision 列由该切片的下一次提交补记，避免提交引用自身哈�
 * S12 没有建立只把 `new FluidDomain` 包一层的伪 test fixture builder。当前 Fabric debug fixture 与 application transfer 仍需 aggregate 的受控构造/变更入口；这些调用按 S13–S16 用例迁移后，S21 才集中 test fixture 并收窄 public surface。
 * S13 没有照提案一次性创建 `OwnershipPort`、`ContainerActorPort`、`ContainerJournalRepository`、`CollisionWorldPort`、`EntityMotionPort` 和 `SnapshotSink`：本切片实际迁移的 step 已由 Fabric 在调用前冻结 moving-body facts，checkpoint 与 summary 也各自有窄 port；没有调用者的接口无法从用例倒推出原子性和失败语义。ownership/container ports 分别等待对应用例切片，collision/entity/snapshot 随 S15 tick 编排迁移。
 * application step result 不返回 `FluidStepCandidate`/`FluidThermalStepCandidate`。完整 state 只在 backend 与 repository adoption 边界内存在；Fabric 调度真正需要的是 accepted stats 与 moving-body impulse，借 result 暴露 candidate 会把不受限数组重新变成 adapter 的隐式读口。
+* S15a 的 `RegionRuntime` 是单次 tick 的 scheduling snapshot，不与 `FluidRegion.PersistedRuntime` 争夺权威，也不持有 solver/domain。此时立即创建 collision/entity/snapshot 通用 ports 仍无法表达现有的捕获与输出原子性；这些 world facts 先保持在 server-thread adapter，等 tick orchestration 的实际调用面收窄后再提取 `MinecraftRegionInputs`，而不是预建无消费者接口。
