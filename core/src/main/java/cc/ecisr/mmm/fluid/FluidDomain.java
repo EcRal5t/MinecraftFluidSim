@@ -368,58 +368,15 @@ public final class FluidDomain {
 	 * a direct world/actor edit cannot publish stale topology beside new markers.
 	 */
 	public FluidDomainState captureAuthoritativeState() {
-		if (activeCollisionPlan != null) {
-			throw new IllegalStateException("Cannot capture while a collision transaction is active");
-		}
-		if (gasState.cellNodeId != null) gasTopologyCoordinator.synchronizeForPersistence();
-		FlipParticleState pure = null;
-		FlipMaterialParticleState materials = null;
-		FlipChemicalParticleState chemicals = null;
-		ChemicalRegistry chemistry = null;
-		if (chemicalParcels != null) {
-			chemicals = exportChemicalParticleState();
-			chemistry = chemicalParcels.registry();
-		} else if (materialRegistry != null) {
-			materials = exportMaterialParticleState();
-		} else {
-			pure = exportParticleState();
-		}
-		GranularStateSnapshot granular = granularState == null ? null : exportGranularState();
-		String chemicalFingerprint = chemistry == null ? "" : chemistry.fingerprint();
-		GasStateSnapshot gas = gasState.cellNodeId == null ? null : exportGasState(chemicalFingerprint);
-		FlipThermalParticleState thermal = thermalState == null ? null : exportThermalParticleState();
-		return new FluidDomainState(config, maximumParticleCount, gasState.sealedDomainBoundary,
-				pure, materials, chemicals, chemistry, granularState == null ? null : granularState.registry,
-			granular, precipitationEnabled,
-				gasState.network.registry(), gas, thermalState == null ? null : thermalState.registry(), thermal,
-				thermalState == null ? 0 : thermalState.maximumTransportSubsteps(),
-				thermalState == null ? null : exportPendingPhaseVolumeState());
+		return FluidDomainStateMapper.capture(this);
 	}
 
 	/** Restores a private solver instance without consulting Minecraft/Fabric state. */
 	public static FluidDomain restoreAuthoritativeState(FluidDomainState state) {
-		if (state == null) throw new IllegalArgumentException("Authoritative state is missing");
-		FluidDomain domain = new FluidDomain(state.sizeX(), state.sizeY(), state.sizeZ(),
-				state.config(), state.maximumParticleCount());
-		if (state.sealedDomainBoundary()) domain.sealDomainBoundary();
-		switch (state.carrierKind()) {
-			case PURE -> domain.restoreParticleState(state.particles());
-			case MATERIAL -> domain.restoreMaterialParticleState(state.materials());
-			case CHEMICAL -> domain.restoreChemicalParticleState(state.chemicals(), state.chemicalRegistry());
-		}
-		if (state.granular() != null) {
-			domain.restoreGranularState(state.granular(), state.granularRegistry(), domain.materialRegistry());
-		}
-		if (state.gas() == null) domain.bindGasRegistry(state.gasRegistry());
-		else domain.restoreGasState(state.gas(), state.gasRegistry());
-		if (state.thermal() != null) {
-			domain.restoreThermalParticleState(state.thermal(), state.thermalRegistry(),
-					state.maximumThermalTransportSubsteps());
-			domain.restorePendingPhaseVolumeState(state.pendingPhaseVolume());
-		}
-		if (state.precipitationEnabled()) domain.setPrecipitationEnabled(true);
-		return domain;
+		return FluidDomainStateMapper.restore(state);
 	}
+
+	boolean collisionTransactionActive() { return activeCollisionPlan != null; }
 	public void restorePendingPhaseVolumeState(PendingPhaseVolumeState state) {
 		if (thermalState == null || state == null || state.cellCount() != cellCount
 				|| hasPendingPhaseVolumeWork()) {
@@ -2595,7 +2552,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				captureMechanicalAudit ? mechanicalAudit.finish(
 						finalParticleKineticEnergy, gravitationalPotentialEnergyJoules(),
 						(thermalState == null ? SignedDyadic.ZERO : thermalState.audit().mechanicalWork())
-								.subtract(thermalMechanicalWorkBefore)) : MechanicalStepAudit.notCaptured()
+								.subtract(thermalMechanicalWorkBefore)) : MechanicalStepAudit.notCaptured(),
+				thermalAxis, lastGranularDepositStats
 		);
 	}
 
@@ -4040,8 +3998,14 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			int chemistryChangedMarkers,
 			ThermalPhaseStats condensedPhase,
 			GasThermalPhaseStats gasPhase,
-			MechanicalStepAudit mechanicalAudit
+			MechanicalStepAudit mechanicalAudit,
+			ThermalAxisStats thermalAxis,
+			GranularDepositDynamics.Stats granularTransition
 	) {
+		public StepStats {
+			java.util.Objects.requireNonNull(thermalAxis, "thermalAxis");
+			java.util.Objects.requireNonNull(granularTransition, "granularTransition");
+		}
 		public float relativeVolumeError() { return volumeBefore == 0.0F ? 0.0F : Math.abs(volumeAfter - volumeBefore) / volumeBefore; }
 		public double relativeMassError() { return massBefore == 0.0 ? 0.0 : Math.abs(massAfter - massBefore) / massBefore; }
 	}

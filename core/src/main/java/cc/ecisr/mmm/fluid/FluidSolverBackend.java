@@ -4,4 +4,5 @@ package cc.ecisr.mmm.fluid;
 public interface FluidSolverBackend {
 	String id();
 	FluidStepCandidate evaluate(FluidStepRequest request);
+	FluidThermalStepCandidate evaluateThermal(FluidThermalStepRequest request);
 }

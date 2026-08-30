@@ -5,6 +5,8 @@ import cc.ecisr.mmm.fluid.FluidDomainState;
 import cc.ecisr.mmm.fluid.FluidDomainStateAssertions;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
+import cc.ecisr.mmm.fluid.FluidThermalStepCandidate;
+import cc.ecisr.mmm.fluid.FluidThermalStepRequest;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.thermal.ThermalLimits;
 
@@ -22,6 +24,7 @@ public final class FluidDomainStateParityValidation {
 		captureRestoreCapturePreservesRawBits();
 		phaseOffCandidateRestoresToIdenticalState();
 		phaseOnCandidateRestoresToIdenticalState();
+		thermalOnlyCandidateIsPrivateAndRestorable();
 		System.out.println("Fluid domain state parity characterization passed.");
 	}
 
@@ -62,5 +65,21 @@ public final class FluidDomainStateParityValidation {
 		FluidDomain restored = FluidDomain.restoreAuthoritativeState(candidate.state());
 		FluidDomainStateAssertions.assertSameState(
 				candidate.state(), restored.captureAuthoritativeState(), "phase-on candidate/restore/capture");
+	}
+
+	/** Hydrostatic thermal work must stay on a private backend domain until its whole successor exists. */
+	private static void thermalOnlyCandidateIsPrivateAndRestorable() throws Exception {
+		ProductionFluidReplayValidation.RegistrySet registries = ProductionFluidReplayValidation.loadProductionRegistries();
+		FluidDomain live = ProductionFluidReplayValidation.createFullyBoundHalfFilledDomain(registries);
+		FluidDomainState base = live.captureAuthoritativeState();
+		FluidThermalStepCandidate candidate = new CpuFluidSolverBackend().evaluateThermal(
+				new FluidThermalStepRequest(
+						0L, base, true, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
+		FluidDomainStateAssertions.assertSameState(
+				base, live.captureAuthoritativeState(), "thermal-only backend mutated live input");
+		FluidDomain restored = FluidDomain.restoreAuthoritativeState(candidate.state());
+		FluidDomainStateAssertions.assertSameState(
+				candidate.state(), restored.captureAuthoritativeState(),
+				"thermal-only candidate/restore/capture");
 	}
 }

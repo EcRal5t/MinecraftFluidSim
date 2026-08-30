@@ -23,4 +23,13 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 				Math.addExact(request.baseGeneration(), 1L), candidate.captureAuthoritativeState(), stats,
 				movingBodyCoupling);
 	}
+
+	@Override public FluidThermalStepCandidate evaluateThermal(FluidThermalStepRequest request) {
+		if (request == null) throw new IllegalArgumentException("Thermal step request is missing");
+		FluidDomain candidate = FluidDomain.restoreAuthoritativeState(request.state());
+		FluidDomain.ThermalAxisStats stats = candidate.stepThermalAxis(
+				request.phaseChangeEnabled(), request.maximumPhaseOperations());
+		return new FluidThermalStepCandidate(id(), request.baseGeneration(),
+				Math.addExact(request.baseGeneration(), 1L), candidate.captureAuthoritativeState(), stats);
+	}
 }

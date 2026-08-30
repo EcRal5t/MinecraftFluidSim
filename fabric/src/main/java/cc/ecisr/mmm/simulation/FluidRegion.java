@@ -2,6 +2,7 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.fluid.FluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomainState;
 import cc.ecisr.mmm.fluid.FlipChemicalParticleState;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.granular.GranularStateSnapshot;
@@ -15,6 +16,7 @@ import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
+import cc.ecisr.mmm.fluid.FluidThermalStepCandidate;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
@@ -179,21 +181,35 @@ public final class FluidRegion {
 	 */
 	void adoptStepCandidate(FluidStepCandidate candidate, String expectedBackendId) {
 		Objects.requireNonNull(candidate, "candidate");
+		adoptCandidateState(candidate.backendId(), candidate.baseGeneration(), candidate.candidateGeneration(),
+				candidate.state(), expectedBackendId);
+	}
+
+	/** Applies the same atomic identity/layout gate to a thermal-only private backend successor. */
+	void adoptThermalStepCandidate(FluidThermalStepCandidate candidate, String expectedBackendId) {
+		Objects.requireNonNull(candidate, "candidate");
+		adoptCandidateState(candidate.backendId(), candidate.baseGeneration(), candidate.candidateGeneration(),
+				candidate.state(), expectedBackendId);
+	}
+
+	private void adoptCandidateState(
+			String backendId, long baseGeneration, long candidateGeneration,
+			FluidDomainState state, String expectedBackendId
+	) {
 		Objects.requireNonNull(expectedBackendId, "expectedBackendId");
 		if (domain == null) throw new IllegalStateException("Region solver is unloaded");
-		if (!expectedBackendId.equals(candidate.backendId())
-				|| candidate.baseGeneration() != solverGeneration
-				|| candidate.candidateGeneration() != Math.addExact(solverGeneration, 1L)) {
+		if (!expectedBackendId.equals(backendId) || baseGeneration != solverGeneration
+				|| candidateGeneration != Math.addExact(solverGeneration, 1L)) {
 			throw new IllegalStateException("Backend candidate identity or generation is stale");
 		}
-		FluidDomain replacement = FluidDomain.restoreAuthoritativeState(candidate.state());
+		FluidDomain replacement = FluidDomain.restoreAuthoritativeState(state);
 		if (replacement.sizeX() != sizeX || replacement.sizeY() != sizeY || replacement.sizeZ() != sizeZ
 				|| replacement.maximumParticleCount() != reservedMarkerCapacity
 				|| !replacement.config().equals(solverConfig)) {
 			throw new IllegalStateException("Backend candidate layout is incompatible with the live region");
 		}
 		domain = replacement;
-		solverGeneration = candidate.candidateGeneration();
+		solverGeneration = candidateGeneration;
 	}
 
 	public long reservedMarkerCapacity() { return reservedMarkerCapacity; }

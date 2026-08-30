@@ -26,6 +26,8 @@ import cc.ecisr.mmm.fluid.GasPressureBoundary;
 import cc.ecisr.mmm.fluid.FluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
+import cc.ecisr.mmm.fluid.FluidThermalStepCandidate;
+import cc.ecisr.mmm.fluid.FluidThermalStepRequest;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterial;
@@ -39,6 +41,7 @@ import cc.ecisr.mmm.fluid.air.GasLimits;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularDataPackLoader;
 import cc.ecisr.mmm.granular.GranularLimits;
+import cc.ecisr.mmm.granular.GranularDepositDynamics;
 import cc.ecisr.mmm.granular.GranularMechanics;
 import cc.ecisr.mmm.granular.GranularPhaseTransferEngine;
 import cc.ecisr.mmm.granular.GranularRegistry;
@@ -122,6 +125,8 @@ public final class FluidSimulationService {
 	private static final int HYDROSTATIC_QUIET_STEPS = 200;
 	private static final int THERMAL_QUIET_STEPS = 200;
 	private static final float HYDROSTATIC_MAX_MARKER_SPEED = 2.5E-3F;
+	private static final GranularDepositDynamics.Stats NO_GRANULAR_TRANSITION =
+			new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
 	private static final long COMPATIBILITY_REGION_CELLS = (long) BLOCK_SIZE_X * BLOCK_SIZE_Y * BLOCK_SIZE_Z
 			* CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
 	private static final long COMPATIBILITY_REGION_MARKERS = COMPATIBILITY_REGION_CELLS * 8L;
@@ -1898,7 +1903,8 @@ public final class FluidSimulationService {
 			FluidDomain domain = domain();
 			fillAirDemoWater(domain);
 			bindConfiguredState(domain);
-			domain.step();
+			stepMotionOnce(activeRegion(), List.of());
+			domain = activeRegion().domain();
 			GasPressureBoundary network = domain.gasBoundary();
 			if (network.nodeCount() < 1) {
 				lastTakeoverFailure = "左侧气腔未密闭；玻璃只替换空气方块，请清理模拟区域内的其他方块后重试";
@@ -2363,16 +2369,21 @@ public final class FluidSimulationService {
 			return;
 		}
 		ThermalAuditLedger thermalBefore = worldCapabilityProfile.hasCapability(WorldCapability.THERMAL) ? region.domain().thermalAudit() : null;
+		FluidDomain.ThermalAxisStats completedThermalAxis = null;
+		GranularDepositDynamics.Stats completedGranularTransition = NO_GRANULAR_TRANSITION;
 		try {
 			if (motionStepDue) {
 				region.wakeThermal(ThermalActivity.WakeReason.CARRIER_MOTION);
 				FluidStepCandidate candidate = stepMotionOnce(region, movingBodies);
+				completedThermalAxis = candidate.stats().thermalAxis();
+				completedGranularTransition = candidate.stats().granularTransition();
 				MovingBodyFluidCoupling.Result coupling = candidate.movingBodyCoupling();
 				region.setLastEntityCoupling(new FluidRegion.EntityCouplingStats(affectedEntities,
 						coupling.impulseXKilogramMetresPerSecond(), coupling.impulseYKilogramMetresPerSecond(),
 						coupling.impulseZKilogramMetresPerSecond()));
 			} else {
-				stepThermalOnce(region);
+				FluidThermalStepCandidate candidate = stepThermalOnce(region);
+				completedThermalAxis = candidate.stats();
 			}
 		} catch (FluidDomain.PressureSolveBlockedException blocked) {
 			blockNumerical(level, region, blocked);
@@ -2425,14 +2436,17 @@ public final class FluidSimulationService {
 			return;
 		}
 		updateStepPacing(region);
-		if (worldCapabilityProfile.hasCapability(WorldCapability.THERMAL)) observeThermalStep(region, thermalBefore, motionStep);
+		if (worldCapabilityProfile.hasCapability(WorldCapability.THERMAL)) {
+			observeThermalStep(region, thermalBefore, motionStepDue,
+					completedThermalAxis, completedGranularTransition);
+		}
 		FluidDomain.StepStats stats = region.lastStats();
 		float residualLimit = Math.max(1.0E-5F, region.domain().config().pressureTolerance() * 4.0F);
 		boolean hydrostaticCandidate = !collisionsChanged && affectedEntities == 0
 				&& region.domain().maximumParticleSpeed() <= HYDROSTATIC_MAX_MARKER_SPEED
 				&& region.domain().granularReadyForHydrostaticSleep()
 				&& stats != null && stats.pressureResidual() <= residualLimit;
-		if (motionStep && region.lifecycle().observeCompletedStep(hydrostaticCandidate, HYDROSTATIC_QUIET_STEPS)) {
+		if (motionStepDue && region.lifecycle().observeCompletedStep(hydrostaticCandidate, HYDROSTATIC_QUIET_STEPS)) {
 			float exactVolume = region.domain().totalVolume();
 			int markerCount = region.domain().particleCount();
 			region.domain().commitHydrostaticSleep();
@@ -2499,14 +2513,21 @@ public final class FluidSimulationService {
 		return candidate;
 	}
 
-	private void stepThermalOnce(FluidRegion region) {
+	private FluidThermalStepCandidate stepThermalOnce(FluidRegion region) {
 		long start = System.nanoTime();
-		region.domain().stepThermalAxis(worldCapabilityProfile.hasCapability(WorldCapability.PHASECHANGE), serverConfig.maximumPhaseOperationsPerStep());
+		boolean phaseChange = worldCapabilityProfile.hasCapability(WorldCapability.PHASECHANGE);
+		FluidThermalStepCandidate candidate = solverBackend.evaluateThermal(new FluidThermalStepRequest(
+				region.solverGeneration(), region.domain().captureAuthoritativeState(), phaseChange,
+				phaseChange ? serverConfig.maximumPhaseOperationsPerStep() : 0));
+		region.adoptThermalStepCandidate(candidate, solverBackend.id());
 		region.recordThermalStep((System.nanoTime() - start) / 1_000_000.0);
+		return candidate;
 	}
 
 	private void observeThermalStep(
-			FluidRegion region, ThermalAuditLedger before, boolean carrierMotion
+			FluidRegion region, ThermalAuditLedger before, boolean carrierMotion,
+			FluidDomain.ThermalAxisStats thermalAxis,
+			GranularDepositDynamics.Stats granularTransition
 	) {
 		FluidDomain domain = region.domain();
 		ThermalAuditLedger after = domain.thermalAudit();
@@ -2514,17 +2535,17 @@ public final class FluidSimulationService {
 				|| !after.externalSink().equals(before.externalSink())
 				|| !after.mechanicalWork().equals(before.mechanicalWork())
 				|| !after.finiteDeviceExchange().equals(before.finiteDeviceExchange());
-		boolean chemistryDirty = domain.lastChemicalReactionStats().changedMarkers() != 0;
-		boolean granularDirty = domain.lastPhaseTransferStats().transfers() != 0
-				|| carrierMotion && (domain.lastGranularDepositStats().settledParcels() != 0
-				|| domain.lastGranularDepositStats().relaxedMoves() != 0
-				|| domain.lastGranularDepositStats().wokenParcels() != 0
-				|| domain.lastGranularDepositStats().dirtyColumns() != 0);
-		boolean phaseDirty = domain.lastThermalPhaseStats().operations() != 0
-				|| domain.lastGasThermalPhaseStats().operations() != 0;
+		boolean chemistryDirty = thermalAxis.chemistry().changedMarkers() != 0;
+		boolean granularDirty = thermalAxis.granularPhase().transfers() != 0
+				|| carrierMotion && (granularTransition.settledParcels() != 0
+				|| granularTransition.relaxedMoves() != 0
+				|| granularTransition.wokenParcels() != 0
+				|| granularTransition.dirtyColumns() != 0);
+		boolean phaseDirty = thermalAxis.condensedPhase().operations() != 0
+				|| thermalAxis.gasPhase().operations() != 0;
 		boolean auditClosed = domain.exactInternalEnergy().equals(after.expectedInventory());
 		boolean pendingVolumeOrWork = domain.hasPendingPhaseVolumeWork();
-		region.observeThermal(new ThermalActivity.Observation(domain.lastThermalTransportStats(),
+		region.observeThermal(new ThermalActivity.Observation(thermalAxis.transport(),
 				chemistryDirty, granularDirty, phaseDirty, gasActivity, carrierMotion,
 				pendingVolumeOrWork, auditClosed),
 				THERMAL_QUIET_STEPS);
