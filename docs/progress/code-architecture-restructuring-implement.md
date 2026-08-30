@@ -284,6 +284,13 @@
 * `FluidRegionOperations` 改为惰性冻结每一阶段 fact，只有前一阶段通过才读取 ownership、计算 catalog admission 或扫描边界，保持原有观察与成本顺序；adapter 仍独占中文 ownership 诊断、checkpoint-and-unload、restore、collision 登记和 snapshot publication。没有用通用 callback 把这些写权倒灌给 application
 * existing `region-manager` 表征内替换同一 admission 不变量测试，覆盖内在失败优先级、unmanaged bypass、ownership 胜过 disabled policy、就地阻断与 checkpointed unload 分类，以及 catalog/boundary 封闭 reason；未新增 selector。`region-manager,region-state` 与 `verifyArchitecture` 通过
 
+### S15 收缩复审一 (`976090b`)
+
+* 对 `BeforeReArch` 到 S15f 做生产代码审计：Java 生产源由 57,389 行/285 文件增至 63,150 行/369 文件，净增 5,761 行（10.0%）和 84 个文件；S15a–S15f 自身净增 640 行。确认当前已进入“抽取速度大于删除速度”的迁移层堆积，暂停进入 S16，S15 后续改以职责消失、入口减少和生产代码净下降为切片证据
+* 横向检查 S13–S15 类型后，tick use case 拥有 pacing/clock 状态机，query/reservoir/lifecycle 拥有 token 与授权规则，catalog 拥有索引/预算/选择状态；`RegionAdmissionService` 则无状态、无完整工作流、无第二个生产调用者，只把 `ensureAvailable` 已有顺序包装成四组 fact/decision 往返，未转移实际职责
+* 删除该 ceremonial application layer 和只验证其 DTO 映射的新增测试；`FluidRegionOperations` 恢复单一、可顺读的 admission 工作流，仍按 chemistry→granular→thermal→numerical→unmanaged→ownership→policy→catalog→boundary 惰性取证，typed reason、就地阻断与 checkpoint-before-unload 语义不变
+* 本切片删除 1 个生产类型，生产 Java 净减 88 行、测试净减 41 行，`FluidRegionOperations` 从 396 行降至 384 行；不是合并语句、删除注释或迁移到别处。`region-manager,region-state` 与 `verifyArchitecture` 通过
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。
@@ -312,4 +319,4 @@ revision 列由该切片的下一次提交补记，避免提交引用自身哈�
 * fixed thermal reservoir 的 setpoint owner 仍是 BlockEntity；application 只拥有 summary/token/policy，不建立虚假的 region thermal port。设定变化只影响未来 boundary flux，Fabric 在成功写入后刷新相邻 region 并按 boundary change 唤醒，不能直接把温差换算成 region `U`。
 * `RegionLifecycleUseCase` 只拥有 run-intent/preview authorization，不以 callback 取得 persistence 或 world 写权。inventory candidate+HEAD、ownership journal 和 REMOVED tombstone/quarantine 是三种不同提交协议；在对应窄 adapter 提取前不得用一个 `commit(operation)` 通用 port 抹平它们的失败分类。
 * `RegionCatalog<T>` 的泛型值只作 opaque runtime owner；所有规则只读 immutable descriptor。Fabric 暂保留 `FluidRegionManager` 兼容 facade 来稳定大量调用方与 server config DTO，但 facade 不再计算预算、overlap、selection 或 replacement；后续调用者迁完可删除，不把 Minecraft identity 引入 core。
-* `RegionAdmissionService` 只拥有 runtime admission 的阶段顺序和处置分类。`BLOCK_IN_PLACE` 与 `UNLOAD` 是不同事务语义：前者不得释放 solver，后者也只能由 Fabric 在完整 checkpoint 成功后执行；application 不以回调取得 restore、checkpoint、collision 或 snapshot 写权。
+* runtime admission 不为“层次完整”单独建立无状态 application service。它与 ownership、boundary、restore 和 checkpointed unload 是一条惰性取证的 server-thread 工作流；`RegionCatalog` 继续独占 loader-neutral catalog 规则，但 adapter 直接消费其 typed result。数值/ownership 就地阻断，其他拒答只有完整 checkpoint 成功后才释放 solver。
