@@ -5,7 +5,7 @@ public final class GpuProbeAdapterValidation {
 	private GpuProbeAdapterValidation() { }
 
 	public static void main(String[] args) {
-		var probe = MmmGpuProbeMod.probeCommand().build();
+		var probe = new MmmGpuProbeMod().probeCommand().build();
 		require("probe".equals(probe.getName()) && probe.getCommand() != null,
 				"probe command lost its default executor");
 		var device = probe.getChild("device");

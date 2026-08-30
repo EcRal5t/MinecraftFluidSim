@@ -1,9 +1,6 @@
 package cc.ecisr.mmm.gpuprobe;
 
 import cc.ecisr.mmm.fluid.FluidDomain;
-import cc.ecisr.mmm.network.FluidProtocolServer;
-import cc.ecisr.mmm.network.FluidSnapshotPayload;
-import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
@@ -13,15 +10,16 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.Locale;
-import java.util.Map;
 import java.util.UUID;
-import java.util.WeakHashMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** In-memory service for generated demos and explicit read-only world-collision snapshots. */
 final class GpuProbeService {
+	private static final Logger LOGGER = LoggerFactory.getLogger(GpuProbeService.class);
 	private static final int BLOCKS_X = 12, BLOCKS_Y = 8, BLOCKS_Z = 12;
 	private static final int SNAPSHOT_INTERVAL_TICKS = 4;
-	private static final Map<MinecraftServer, GpuProbeService> SERVICES = new WeakHashMap<>();
+	private final GpuProbeHostIntegration host;
 
 	private Backend backend;
 	private BlockPos origin = BlockPos.ZERO;
@@ -40,22 +38,13 @@ final class GpuProbeService {
 	private String collisionDescription;
 	private GpuProbeCheckpoint checkpoint;
 
-	private GpuProbeService() { }
-
-	static GpuProbeService get(MinecraftServer server) {
-		return SERVICES.computeIfAbsent(server, ignored -> new GpuProbeService());
-	}
-
-	static void removeServer(MinecraftServer server) {
-		GpuProbeService service = SERVICES.remove(server);
-		if (service != null) service.closeBackend();
-	}
+	GpuProbeService(GpuProbeHostIntegration host) { this.host = host; }
 
 	boolean exists() { return backend != null; }
 
 	CreationResult createDemo(ServerPlayer player, int deviceIndex) {
 		MinecraftServer server = player.level().getServer();
-		if (MmmRuntimeRegistry.require(server).regionObservation().exists()) {
+		if (host.mainRegionExists(server)) {
 			return new CreationResult(false, false, "主 Matter, Motion & Mechanics 域正在使用同一个可视化通道；请先 /mmm remove");
 		}
 		Vec3 look = player.getLookAngle();
@@ -67,7 +56,7 @@ final class GpuProbeService {
 
 	CreationResult createWorldDemo(ServerPlayer player, int deviceIndex) {
 		MinecraftServer server = player.level().getServer();
-		if (MmmRuntimeRegistry.require(server).regionObservation().exists()) {
+		if (host.mainRegionExists(server)) {
 			return new CreationResult(false, false, "主 Matter, Motion & Mechanics 域正在使用同一个可视化通道；请先 /mmm remove");
 		}
 		Vec3 look = player.getLookAngle();
@@ -109,7 +98,7 @@ final class GpuProbeService {
 				catch (RuntimeException | LinkageError closeFailure) { exception.addSuppressed(closeFailure); }
 			}
 			fallbackReason = exception.getClass().getSimpleName() + ": " + safeMessage(exception);
-			MmmGpuProbeMod.LOGGER.warn("GPU demo initialization failed; using isolated CPU fallback", exception);
+			LOGGER.warn("GPU demo initialization failed; using isolated CPU fallback", exception);
 			backend = new CpuBackend(GpuProbeScenario.createCpuDamBreak(solidCells));
 		}
 		paused = true;
@@ -126,7 +115,7 @@ final class GpuProbeService {
 
 	int step(ServerLevel level, int count) {
 		if (backend == null || !level.dimension().equals(dimension)) return 0;
-		if (MmmRuntimeRegistry.require(level.getServer()).regionObservation().exists()) return 0;
+		if (host.mainRegionExists(level.getServer())) return 0;
 		int completed = GpuProbeScenario.runManualLoop(count, this::stepOnce, () -> hardOverrunStreak);
 		sendSnapshot(level);
 		return completed;
@@ -134,7 +123,7 @@ final class GpuProbeService {
 
 	void tick(MinecraftServer server) {
 		if (backend == null) return;
-		if (MmmRuntimeRegistry.require(server).regionObservation().exists()) {
+		if (host.mainRegionExists(server)) {
 			if (!hiddenForMainConflict) {
 				sendRemoval(server);
 				hiddenForMainConflict = true;
@@ -184,7 +173,7 @@ final class GpuProbeService {
 		String cause = failureCause.getClass().getSimpleName() + ": " + safeMessage(failureCause);
 		if (!(backend instanceof VulkanBackend failedVulkan)) {
 			failure = operation + " failed without a recoverable GPU checkpoint: " + cause;
-			MmmGpuProbeMod.LOGGER.error("CPU fallback operation failed; isolated demo paused", failureCause);
+			LOGGER.error("CPU fallback operation failed; isolated demo paused", failureCause);
 			return false;
 		}
 		if (checkpoint == null) {
@@ -192,7 +181,7 @@ final class GpuProbeService {
 			failure = operation + " failed without a recoverable GPU checkpoint: " + cause;
 			try { failedVulkan.close(); }
 			catch (RuntimeException | LinkageError closeFailure) { failureCause.addSuppressed(closeFailure); }
-			MmmGpuProbeMod.LOGGER.error("GPU probe operation failed without a recoverable checkpoint; backend disabled", failureCause);
+			LOGGER.error("GPU probe operation failed without a recoverable checkpoint; backend disabled", failureCause);
 			return false;
 		}
 
@@ -206,7 +195,7 @@ final class GpuProbeService {
 			failure = operation + " failed and CPU checkpoint restore was rejected: " + cause;
 			try { failedVulkan.close(); }
 			catch (RuntimeException | LinkageError closeFailure) { failureCause.addSuppressed(closeFailure); }
-			MmmGpuProbeMod.LOGGER.error("GPU probe operation and CPU checkpoint recovery both failed; backend disabled", failureCause);
+			LOGGER.error("GPU probe operation and CPU checkpoint recovery both failed; backend disabled", failureCause);
 			return false;
 		}
 
@@ -220,7 +209,7 @@ final class GpuProbeService {
 				operation, cause, recoveryPoint.generation());
 		try { failedVulkan.close(); }
 		catch (RuntimeException | LinkageError closeFailure) { failureCause.addSuppressed(closeFailure); }
-		MmmGpuProbeMod.LOGGER.error("GPU probe operation failed; restored isolated CPU fallback from the last complete checkpoint and paused", failureCause);
+		LOGGER.error("GPU probe operation failed; restored isolated CPU fallback from the last complete checkpoint and paused", failureCause);
 		return true;
 	}
 
@@ -237,7 +226,7 @@ final class GpuProbeService {
 			}
 			diagnostics = backend.diagnostics();
 		}
-		String conflict = MmmRuntimeRegistry.require(server).regionObservation().exists() ? " | 与主域冲突，已暂停" : "";
+		String conflict = host.mainRegionExists(server) ? " | 与主域冲突，已暂停" : "";
 		String checkpointStatus = checkpoint == null ? "" : String.format(Locale.ROOT,
 				" | checkpoint gen %d age %d steps CPU %d B/readback %d B | recoveries %d",
 				checkpoint.generation(), completedSteps - checkpoint.generation(), checkpoint.cpuBytes(),
@@ -258,10 +247,7 @@ final class GpuProbeService {
 	void remove(MinecraftServer server) {
 		sendRemoval(server);
 		closeBackend();
-		var main = MmmRuntimeRegistry.require(server).regionObservation();
-		if (main.exists()) {
-			for (ServerLevel level : server.getAllLevels()) main.sendSelectedTo(level);
-		}
+		host.republishMainRegions(server);
 	}
 
 	private void sendSnapshot(ServerLevel level) {
@@ -273,29 +259,25 @@ final class GpuProbeService {
 			if (!recoverRuntimeFailure(exception, "snapshot readback") || backend == null) return;
 			snapshot = backend.snapshot();
 		}
-		FluidSnapshotPayload payload = FluidSnapshotPayload.snapshot(
-				dimension.identifier(), regionId, 1L, ++snapshotSequence, origin, GpuProbeScenario.CELL_SIZE,
+		host.publishSnapshot(level, new GpuProbeHostIntegration.SnapshotFrame(
+				dimension, regionId, ++snapshotSequence, origin, GpuProbeScenario.CELL_SIZE,
 				GpuProbeScenario.NX, GpuProbeScenario.NY, GpuProbeScenario.NZ,
-				snapshot.density(), snapshot.markers(), snapshot.solids(), true
-		);
-		for (ServerPlayer player : level.players()) {
-			FluidProtocolServer.send(player, payload);
-		}
+				snapshot.density(), snapshot.markers(), snapshot.solids()));
 		hiddenForMainConflict = false;
 	}
 
 	private void sendRemoval(MinecraftServer server) {
 		if (regionId == null || dimension == null) return;
-		FluidSnapshotPayload payload = FluidSnapshotPayload.removeRegion(
-				dimension.identifier(), regionId, 1L, ++snapshotSequence
-		);
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) FluidProtocolServer.send(player, payload);
+		host.publishRemoval(server, new GpuProbeHostIntegration.RemovalFrame(
+				dimension, regionId, ++snapshotSequence));
 	}
+
+	void close() { closeBackend(); }
 
 	private void closeBackend() {
 		if (backend != null) {
 			try { backend.close(); }
-			catch (RuntimeException | LinkageError exception) { MmmGpuProbeMod.LOGGER.warn("Failed to close GPU probe backend", exception); }
+			catch (RuntimeException | LinkageError exception) { LOGGER.warn("Failed to close GPU probe backend", exception); }
 		}
 		backend = null;
 		checkpoint = null;

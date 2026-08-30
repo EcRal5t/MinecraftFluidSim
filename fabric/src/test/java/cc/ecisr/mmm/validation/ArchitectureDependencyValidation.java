@@ -52,8 +52,7 @@ public final class ArchitectureDependencyValidation {
 
 	/** Classes allowed to keep a static MinecraftServer-keyed locator, with the removing slice. */
 	private static final Map<String, String> LOCATOR_ALLOWLIST = Map.of(
-			"MmmRuntimeRegistry", "server composition root",
-			"GpuProbeService", "S20");
+			"MmmRuntimeRegistry", "server composition root");
 
 	/** Temporary direct imports of the S21 god service, each named by its removal slice. */
 	private static final Map<String, String> SERVICE_IMPORT_ALLOWLIST = Map.of(
@@ -61,8 +60,7 @@ public final class ArchitectureDependencyValidation {
 
 	/** Production classes above the final 1000-line limit, with the slice that closes each. */
 	private static final Map<String, String> SIZE_ALLOWLIST = Map.of(
-			"FluidDomain", "S21",
-			"VulkanFlipPipeline", "S20");
+			"FluidDomain", "S21");
 	private static final int SIZE_LIMIT = 1000;
 	private static final int SIZE_WARNING = 600;
 
@@ -89,6 +87,7 @@ public final class ArchitectureDependencyValidation {
 		checkLoaderNeutralModules(sources, violations);
 		checkApplicationPurity(sources, violations);
 		checkGpuProbeKernel(sources, violations);
+		checkGpuProbeAdapterHostBoundary(sources, violations);
 		checkPersistenceDoesNotReferenceRuntime(sources, violations);
 		checkAdaptersDoNotReferenceSolverDomain(sources, violations);
 		checkAdaptersDoNotImportSimulationService(sources, violations);
@@ -103,6 +102,20 @@ public final class ArchitectureDependencyValidation {
 		}
 		System.out.println("Architecture gate passed: " + sources.size() + " production sources scanned.");
 		CarrierMutationPointInventoryValidation.main(new String[] {root.toString()});
+	}
+
+	/** Optional probe code reaches host runtime/network implementations only through its one adapter. */
+	static void checkGpuProbeAdapterHostBoundary(List<SourceFile> sources, List<String> violations) {
+		for (SourceFile source : sources) {
+			if (!source.module().equals("gpu-probe/src/main/java")
+					|| source.simpleName().equals("MmmGpuProbeHostIntegration")) continue;
+			for (String imported : source.imports()) {
+				if (!imported.startsWith("cc.ecisr.mmm.simulation")
+						&& !imported.startsWith("cc.ecisr.mmm.network")) continue;
+				violations.add("gpu-probe adapter bypasses host integration: "
+						+ source.simpleName() + " -> " + imported);
+			}
+		}
 	}
 
 	private static List<SourceFile> scan(Path root) throws IOException {

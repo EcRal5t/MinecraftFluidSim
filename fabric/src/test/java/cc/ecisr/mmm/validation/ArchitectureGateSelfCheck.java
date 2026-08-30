@@ -20,19 +20,22 @@ final class ArchitectureGateSelfCheck {
 				adapter("SolverImportFixture", "cc.ecisr.mmm.fluid.FluidDomain"),
 				adapter("SolverCleanFixture", "cc.ecisr.mmm.fluid.AirNetwork"),
 				adapter("ServiceImportFixture", "cc.ecisr.mmm.simulation.FluidSimulationService"),
-				application("PayloadImportFixture", "cc.ecisr.mmm.network.ControllerSummaryPayload"));
+				application("PayloadImportFixture", "cc.ecisr.mmm.network.ControllerSummaryPayload"),
+				gpuProbeAdapter("ProbeHostBypassFixture", "cc.ecisr.mmm.network.FluidProtocolServer"));
 		List<String> violations = new ArrayList<>();
 		ArchitectureDependencyValidation.checkPersistenceDoesNotReferenceRuntime(sources, violations);
 		ArchitectureDependencyValidation.checkAdaptersDoNotReferenceSolverDomain(sources, violations);
 		ArchitectureDependencyValidation.checkAdaptersDoNotImportSimulationService(sources, violations);
 		ArchitectureDependencyValidation.checkApplicationPurity(sources, violations);
+		ArchitectureDependencyValidation.checkGpuProbeAdapterHostBoundary(sources, violations);
 
 		List<String> expected = List.of(
 				"persistence references live runtime type: RegionCodecFixture",
 				"persistence references live runtime type: RegionWildcardFixture",
 				"adapter imports solver mutable domain: SolverImportFixture",
 				"external adapter imports simulation god service: ServiceImportFixture",
-				"application imports Minecraft adapter type: PayloadImportFixture");
+				"application imports Minecraft adapter type: PayloadImportFixture",
+				"gpu-probe adapter bypasses host integration: ProbeHostBypassFixture");
 		if (violations.size() != expected.size()) {
 			throw new AssertionError("Architecture gate self-check expected " + expected.size()
 					+ " fixture violations but found " + violations.size() + ": " + violations);
@@ -61,5 +64,11 @@ final class ArchitectureGateSelfCheck {
 			String simpleName, String imported) {
 		return new ArchitectureDependencyValidation.SourceFile("application/src/main/java", simpleName,
 				"cc.ecisr.mmm.application", 10, List.of(imported), false);
+	}
+
+	private static ArchitectureDependencyValidation.SourceFile gpuProbeAdapter(
+			String simpleName, String imported) {
+		return new ArchitectureDependencyValidation.SourceFile("gpu-probe/src/main/java", simpleName,
+				"cc.ecisr.mmm.gpuprobe", 10, List.of(imported), false);
 	}
 }

@@ -434,6 +434,12 @@ S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Bri
 * 真实 GPU gate 暴露了 S17 后未闭合的旧数据流：GPU checkpoint 的 binary solid cell 被直接交给已采用八位 cut-cell mask 的 `FlipParticleState`，导致完整固体统计/CPU recovery 变成零。边界现把 `0/1` 严格验证并映射为 `0x00/0xff`；既有 checkpoint 断言替换为 initial/final exact solid count。capability probe 通过（RTX 5070 Ti，Shaderc/VMA/dispatch 均正常），GPU correctness 已越过 checkpoint、两种 memory mode、timestamp/ring、碰撞与 pressure gates。
 * 最后的既有 long-run surface 门仍失败：新实现 GPU cells=1728、CPU=2840；用 `7af2590` 独立 worktree 对照为 GPU=1727、CPU=2840，证明不是本切片的同步/所有权回退。未放宽断言、调常数或钳制算法；该数值缺陷保留为 S20 收口前必须明确处理的门。
 
+### S20d
+
+* 删除 `GpuProbeService` 的 static `WeakHashMap<MinecraftServer,…>`、`get/removeServer` locator 与全局 capability report；`MmmGpuProbeMod` 实例现在在 `SERVER_STARTING` 创建唯一 service，在 tick 只驱动同一 server identity，并于 `SERVER_STOPPING` close 后清空实例字段。重叠 server lifecycle fail closed，不再让命令或 tick 隐式创建 backend owner。
+* 新建窄 `GpuProbeHostIntegration`，只暴露主域冲突只读判断、probe snapshot/removal 发布与主域 snapshot 复发；唯一 `MmmGpuProbeHostIntegration` 才允许 import host `MmmRuntimeRegistry`/network protocol。service 不再接触主 runtime registry、payload 或 protocol sender，世界碰撞读取仍留在 adapter。
+* 架构门删除 GPU locator 与 `VulkanFlipPipeline` size allowlist，并新增 adapter host-boundary 规则和 self-check fixture；除唯一 integration implementation 外，`gpu-probe` 对 host simulation/network import 为零。adapter compile/command tree 与 `verifyArchitecture` 通过，扫描 422 个生产源，pipeline 仅产生 808 行普通 warning。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。
