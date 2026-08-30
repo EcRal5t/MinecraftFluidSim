@@ -263,6 +263,13 @@
 * `FluidSimulationService` 不再直接持有 `WorldPositionActionSessions` 或构造 reservoir summary；只把 Minecraft facts 投影给 use case、把 typed decision 本地化，AUTHORIZED 后写 world-owned BlockEntity 并刷新相邻已加载 thermal boundary。use case 不取得 region `U` 或 world 写权；service 当前 3065 行
 * existing protocol thermal-reservoir token 表征替换为 use-case 级 stale/replay、denied-consumes-token 与温区闭端点/NaN 拒答；未新增 selector。`protocol` 与 `verifyArchitecture` 通过
 
+### S15d (`3cba502`)
+
+* S15c 复审确认 reservoir 的 token→typed policy→world owner 写入顺序闭合；region destructive lifecycle 则自然分成 loader-neutral 授权与三类 Fabric durable transaction，先迁不会取得 HEAD/ownership/quarantine 写权的授权半边
+* 新建 loader-neutral `RegionLifecycleUseCase`：controller pause/resume 按 permission→authoritative writes→operator-vented resume gate→idempotence 返回封闭 decision；preview 统一固定 200 server ticks，use case 独占 `LifecycleOperationSessions` 的 issue/consume/forget，并在确认时返回 `AUTHORIZED` / `TOKEN_INVALID` / 当前 `BLOCKED` 列表
+* Fabric 继续冻结 permission、WAL、availability、solver generation、finite-device identity、ownership count、quarantine capacity 与 bounded inventory quantities；错 viewer 不消费 owner nonce，同 owner 的 generation/action/permission/WAL/availability/expiry mismatch 会消费并失效，context 匹配后仍以确认时 blockers 为准。只有 AUTHORIZED 才进入既有 inventory candidate→HEAD、ownership release 或 REMOVED tombstone durable adapter
+* `FluidSimulationService` 删除直接 lifecycle session 所有权与 run-intent policy 分支，但 durable commit/facts adapter 尚未提取，当前 3072 行；S15 lifecycle 尚未完成。existing lifecycle 表征改走 use case 并保留全部 commit gate matrix，追加 current blocker after valid token 与 run-intent typed decisions；`lifecycle` 与 `verifyArchitecture` 通过
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。
@@ -289,3 +296,4 @@ revision 列由该切片的下一次提交补记，避免提交引用自身哈�
 * S15a 的 `RegionRuntime` 是单次 tick 的 scheduling snapshot，不与 `FluidRegion.PersistedRuntime` 争夺权威，也不持有 solver/domain。此时立即创建 collision/entity/snapshot 通用 ports 仍无法表达现有的捕获与输出原子性；这些 world facts 先保持在 server-thread adapter，等 tick orchestration 的实际调用面收窄后再提取 `MinecraftRegionInputs`，而不是预建无消费者接口。
 * controller token 只能在 bounded view 已存在、region identity 匹配且完整 summary 字段验证成功后签发。generation 是 authorization nonce，不是 query revision；失败 read/projection 不消耗 generation，旧 token 仍按“最新同 viewer/region token”规则决定是否有效。
 * fixed thermal reservoir 的 setpoint owner 仍是 BlockEntity；application 只拥有 summary/token/policy，不建立虚假的 region thermal port。设定变化只影响未来 boundary flux，Fabric 在成功写入后刷新相邻 region 并按 boundary change 唤醒，不能直接把温差换算成 region `U`。
+* `RegionLifecycleUseCase` 只拥有 run-intent/preview authorization，不以 callback 取得 persistence 或 world 写权。inventory candidate+HEAD、ownership journal 和 REMOVED tombstone/quarantine 是三种不同提交协议；在对应窄 adapter 提取前不得用一个 `commit(operation)` 通用 port 抹平它们的失败分类。

@@ -126,7 +126,7 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 
 controller console 的 Minecraft adapter 先校验 server thread、距离、方块与当前 controller owner，再把 viewer/region identity 交给 `ControllerQueryUseCase`。该用例只从 `ControllerSummaryPort` 的 bounded view 构造 summary，并在 view 存在、identity 匹配且全部字段可投影后才签发同 viewer/region 的一次性 generation；miss、非法 view 和投影失败都不能留下未披露但可消费的 token。动作与 lifecycle preview 都经同一用例消费该 token。
 
-controller console 还提供四个管理员破坏性生命周期动作：清空凝聚相、排放密闭气体、释放 ownership、移除空区域。它们都先由服务端生成短时、内存态、同玩家一次性预览，列出实际将移除的体积/质量/species/能量、当前气体与 ownership 数量以及封闭 blocker；确认时必须重新匹配 region generation、动作、权限、WAL、availability、solver generation 和有限设备真值。清空与排放先在私有完整 candidate 上联合审计并发布新 HEAD，再替换 live domain；ownership 释放和区域移除只能在所有相关库存已空时继续。
+controller console 还提供四个管理员破坏性生命周期动作：清空凝聚相、排放密闭气体、释放 ownership、移除空区域。Fabric 冻结 permission、WAL、availability、solver/device、ownership 与实际库存摘要后，`RegionLifecycleUseCase` 生成 200 tick、同玩家的一次性 preview，并在确认时消费 nonce、重验 player/region/generation/action/context 后返回当前 blockers；错 viewer 不消费 owner token，同 owner 的 stale/过期尝试会使 token 失效。Fabric 只有收到 `AUTHORIZED` 才进入 durable adapter。清空与排放先在私有完整 candidate 上联合审计并发布新 HEAD，再替换 live domain；ownership 释放和区域移除只能在所有相关库存已空时继续。
 
 availability 采用 `RegionAvailabilityReason` 封闭分类；预算、重叠、chunk、边界、WAL、数值拒答和政策停用不再靠错误文本驱动状态。已提交 metadata 即使当前 runtime budget 无法 admission 也继续登记并保留 reservation；只有 solver restore/step 被阻止。
 
