@@ -34,9 +34,9 @@ final class M3MaterialTransferValidation {
 	}
 
 	private static void validateActiveDomainP2G(FluidMaterialRegistry registry) {
-		FlipFluidDomain pure = activeDomainWithShear();
-		FlipFluidDomain equal = activeDomainWithShear();
-		FlipFluidDomain variable = activeDomainWithShear();
+		FluidDomain pure = activeDomainWithShear();
+		FluidDomain equal = activeDomainWithShear();
+		FluidDomain variable = activeDomainWithShear();
 		int a = registry.handle("mmm:material_a");
 		int b = registry.handle("mmm:material_b");
 		int c = registry.handle("mmm:material_c");
@@ -60,7 +60,7 @@ final class M3MaterialTransferValidation {
 		check(handoff.materials().equals(registry.materials()) && handoff.totalMass() == variable.totalMass()
 				&& handoff.totalVolume() == variable.totalVolume(),
 				"material handoff changed the stable palette or exact ledgers");
-		FlipFluidDomain restored = new FlipFluidDomain(4, 4, 4, variable.config(), 64);
+		FluidDomain restored = new FluidDomain(4, 4, 4, variable.config(), 64);
 		restored.restoreMaterialParticleState(handoff);
 		check(restored.usesMassWeightedP2G() && restored.totalMass() == variable.totalMass()
 				&& restored.totalVolume() == variable.totalVolume(),
@@ -75,12 +75,12 @@ final class M3MaterialTransferValidation {
 				handoff.copyMaterialPaletteIndex()));
 	}
 
-	private static FlipFluidDomain activeDomainWithShear() {
+	private static FluidDomain activeDomainWithShear() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, 1_000.0F, 0.0F, 1.0F / 20.0F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F
 		);
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 64);
+		FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
 		domain.setVolume(1, 1, 1, 1.0F);
 		domain.setVolume(2, 1, 1, 1.0F);
 		FlipParticleState initial = domain.exportParticleState();
@@ -101,7 +101,7 @@ final class M3MaterialTransferValidation {
 		int b = registry.handle("mmm:material_b");
 		int c = registry.handle("mmm:material_c");
 		int d = registry.handle("mmm:material_d");
-		FlipFluidDomain miscible = singleCellDomain();
+		FluidDomain miscible = singleCellDomain();
 		for (int particle = 0; particle < miscible.particleCount(); particle++) {
 			miscible.setMarkerMaterial(particle, registry, (particle & 1) == 0 ? a : d);
 		}
@@ -116,13 +116,13 @@ final class M3MaterialTransferValidation {
 		check(mixedSnapshot.materialFraction(a, mixedCell) == 128
 				&& mixedSnapshot.materialFraction(d, mixedCell) == 127,
 				"miscible render fractions were not deterministically normalized");
-		FlipFluidDomain.StepStats miscibleStats = miscible.step();
+		FluidDomain.StepStats miscibleStats = miscible.step();
 		check(miscible.phaseCountInCell(1, 1, 1) == 1,
 				"miscible phase split during an idle active step");
 		check(miscibleStats.relativeVolumeError() <= 1.0E-7F && miscibleStats.relativeMassError() <= 1.0E-12,
 				"miscible active step changed physical inventories");
 
-		FlipFluidDomain junction = singleCellDomain();
+		FluidDomain junction = singleCellDomain();
 		int[] material = {a, b, c, a, b, c, a, b};
 		for (int particle = 0; particle < material.length; particle++) {
 			junction.setMarkerMaterial(particle, registry, material[particle]);
@@ -135,7 +135,7 @@ final class M3MaterialTransferValidation {
 				&& junctionSnapshot.phaseFraction(phaseB, mixedCell) == 95
 				&& junctionSnapshot.phaseFraction(phaseC, mixedCell) == 64,
 				"three-phase render fractions lost deterministic partitioning");
-		FlipFluidDomain.StepStats junctionStats = junction.step();
+		FluidDomain.StepStats junctionStats = junction.step();
 		check(junction.phaseCountInCell(1, 1, 1) == 3,
 				"three-phase junction was lost during pressure/reseeding");
 		checkClose(junction.totalMass(), 950.0, "three-phase marker mass");
@@ -146,12 +146,12 @@ final class M3MaterialTransferValidation {
 		expectIllegal(() -> singleCellDomain().setMarkerMaterial(0, wrongDefault, 0));
 	}
 
-	private static FlipFluidDomain singleCellDomain() {
+	private static FluidDomain singleCellDomain() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, 1_000.0F, 0.0F, 1.0F / 20.0F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F
 		);
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 64);
+		FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
 		domain.setVolume(1, 1, 1, 1.0F);
 		return domain;
 	}
@@ -203,7 +203,7 @@ final class M3MaterialTransferValidation {
 				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
 				200, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F
 		);
-		FlipFluidDomain domain = new FlipFluidDomain(4, 7, 4, config, 128);
+		FluidDomain domain = new FluidDomain(4, 7, 4, config, 128);
 		for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
 			for (int x = 0; x < domain.sizeX(); x++) domain.setSolid(x, y, z, true);
 		}
@@ -214,7 +214,7 @@ final class M3MaterialTransferValidation {
 
 		double heavyDensity = registry.material(heavyHandle).referenceDensity();
 		double lightDensity = registry.material(lightHandle).referenceDensity();
-		FlipFluidDomain.StepStats stats = domain.step();
+		FluidDomain.StepStats stats = domain.step();
 		double[] expected = {
 				config.gravity() * (1.5 * lightDensity + 0.5 * (heavyDensity + lightDensity) + heavyDensity),
 				config.gravity() * (1.5 * lightDensity + 0.5 * (heavyDensity + lightDensity)),

@@ -1,7 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
@@ -206,7 +206,7 @@ public final class FluidRegionManagerValidation {
 
 	private static FluidRegion regionAt(int x, int y, int z, int nx, int ny, int nz, long reservedMarkers) {
 		return new FluidRegion(new UUID(0L, ++nextRegionId), DIMENSION, new BlockPos(x, y, z),
-				new FlipFluidDomain(nx, ny, nz, CONFIG, Math.toIntExact(reservedMarkers)), reservedMarkers);
+				new FluidDomain(nx, ny, nz, CONFIG, Math.toIntExact(reservedMarkers)), reservedMarkers);
 	}
 
 	private static void require(boolean condition, String message) {

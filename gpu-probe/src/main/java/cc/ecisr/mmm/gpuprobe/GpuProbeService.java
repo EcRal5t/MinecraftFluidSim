@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.gpuprobe;
 
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.network.FluidProtocolServer;
 import cc.ecisr.mmm.network.FluidSnapshotPayload;
@@ -385,8 +385,8 @@ final class GpuProbeService {
 		return new VulkanFlipPipeline.Config(NX, NY, NZ, H, DT, GRAVITY, RHO, iterations, NX * NY * NZ * 8);
 	}
 
-	static FlipFluidDomain createCpuDamBreak(byte[] solidCells) {
-		FlipFluidDomain domain = new FlipFluidDomain(NX, NY, NZ, cpuConfig());
+	static FluidDomain createCpuDamBreak(byte[] solidCells) {
+		FluidDomain domain = new FluidDomain(NX, NY, NZ, cpuConfig());
 		if (solidCells != null) {
 			if (solidCells.length != NX * NY * NZ) throw new IllegalArgumentException("solid mask size does not match CPU grid");
 			for (int z = 0; z < NZ; z++) for (int y = 0; y < NY; y++) for (int x = 0; x < NX; x++) {
@@ -451,10 +451,10 @@ final class GpuProbeService {
 	}
 
 	private static final class CpuBackend implements Backend {
-		private final FlipFluidDomain domain;
+		private final FluidDomain domain;
 		private double lastStepMilliseconds;
-		private FlipFluidDomain.StepStats stats;
-		private CpuBackend(FlipFluidDomain domain) { this.domain = domain; }
+		private FluidDomain.StepStats stats;
+		private CpuBackend(FluidDomain domain) { this.domain = domain; }
 		@Override public String name() { return "CPU fallback"; }
 		@Override public void step() {
 			long started = System.nanoTime();

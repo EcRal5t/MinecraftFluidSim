@@ -36,7 +36,7 @@ public final class ArchitectureDependencyValidation {
 			"FluidRegionOperations", "ThermalActivity");
 
 	/** Solver mutable domain types that UI/adapter packages must never import. */
-	private static final Set<String> SOLVER_MUTABLE_TYPES = Set.of("FlipFluidDomain", "FlipThermalState");
+	private static final Set<String> SOLVER_MUTABLE_TYPES = Set.of("FluidDomain", "FlipThermalState");
 
 	/** Thermal mutable state owners that UI/adapter packages must never import (S10). */
 	private static final Set<String> THERMAL_MUTABLE_OWNERS = Set.of(
@@ -54,7 +54,7 @@ public final class ArchitectureDependencyValidation {
 
 	/** Production classes above the final 1000-line limit, with the slice that closes each. */
 	private static final Map<String, String> SIZE_ALLOWLIST = Map.of(
-			"FlipFluidDomain", "S12",
+			"FluidDomain", "S12",
 			"FluidSimulationService", "S21",
 			"RegionState", "S17",
 			"VulkanFlipPipeline", "S20",

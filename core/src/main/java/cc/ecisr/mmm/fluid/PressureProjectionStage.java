@@ -87,7 +87,7 @@ final class PressureProjectionStage {
 		float residual = (float) result.residualRms();
 		access.pressureResult(result.iterations(), residual);
 		if (!result.converged()) {
-			throw new FlipFluidDomain.PressureSolveBlockedException("Pressure projection did not converge: residual="
+			throw new FluidDomain.PressureSolveBlockedException("Pressure projection did not converge: residual="
 					+ residual + ", tolerance=" + target + ", iterations=" + result.iterations()
 					+ "/" + state.config.maxPressureIterations());
 		}

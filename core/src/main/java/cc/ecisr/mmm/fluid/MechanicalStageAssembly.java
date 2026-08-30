@@ -15,7 +15,7 @@ final class MechanicalStageAssembly {
 	private MechanicalStageAssembly() { }
 
 	static Stages create(
-			FlipFluidDomain domain, PressureSystem pressureSystem, PressureBoundaryView pressureBoundary
+			FluidDomain domain, PressureSystem pressureSystem, PressureBoundaryView pressureBoundary
 	) {
 		PressureProjectionStage pressure = new PressureProjectionStage(
 				new PressureProjectionStage.Workspace(
@@ -52,7 +52,7 @@ final class MechanicalStageAssembly {
 		return new Stages(pressure, granular, bodyForce, gridToParticle, advection, particleToGrid, pipeline);
 	}
 
-	private static PressureProjectionStage.Access pressureAccess(FlipFluidDomain domain) {
+	private static PressureProjectionStage.Access pressureAccess(FluidDomain domain) {
 		return new PressureProjectionStage.Access() {
 			@Override public void rebuildPressureBoundaryLineage() { domain.rebuildPressureBoundaryLineage(); }
 			@Override public int cellIndex(int x, int y, int z) { return domain.cellIndex(x, y, z); }
@@ -91,7 +91,7 @@ final class MechanicalStageAssembly {
 		};
 	}
 
-	private static GranularMechanicalStage.Access granularAccess(FlipFluidDomain domain) {
+	private static GranularMechanicalStage.Access granularAccess(FluidDomain domain) {
 		return new GranularMechanicalStage.Access() {
 			@Override public boolean hasGranularInventory() { return domain.hasGranularInventory(); }
 			@Override public GranularDomainState granularState() { return domain.granularState; }
@@ -119,7 +119,7 @@ final class MechanicalStageAssembly {
 		};
 	}
 
-	private static BodyForceStage.Access bodyForceAccess(FlipFluidDomain domain) {
+	private static BodyForceStage.Access bodyForceAccess(FluidDomain domain) {
 		return new BodyForceStage.Access() {
 			@Override public GranularDomainState granularState() { return domain.granularState; }
 			@Override public CarrierProperties granularCarrierProperties(int cell) { return domain.granularCarrierProperties(cell); }
@@ -154,7 +154,7 @@ final class MechanicalStageAssembly {
 		};
 	}
 
-	private static GridToParticleStage.Access gridToParticleAccess(FlipFluidDomain domain) {
+	private static GridToParticleStage.Access gridToParticleAccess(FluidDomain domain) {
 		return new GridToParticleStage.Access() {
 			@Override public float sampleX(float[] field, float x, float y, float z) { return domain.sampleX(field, x, y, z); }
 			@Override public float sampleY(float[] field, float x, float y, float z) { return domain.sampleY(field, x, y, z); }
@@ -162,7 +162,7 @@ final class MechanicalStageAssembly {
 		};
 	}
 
-	private static ParticleAdvectionStage.Access advectionAccess(FlipFluidDomain domain) {
+	private static ParticleAdvectionStage.Access advectionAccess(FluidDomain domain) {
 		return new ParticleAdvectionStage.Access() {
 			@Override public ChemicalParcelStore chemicalParcels() { return domain.chemicalParcels; }
 			@Override public int[] chemicalPreviousCells() { return domain.chemicalPreviousCells; }
@@ -172,7 +172,7 @@ final class MechanicalStageAssembly {
 		};
 	}
 
-	private static ParticleToGridStage.Access particleToGridAccess(FlipFluidDomain domain) {
+	private static ParticleToGridStage.Access particleToGridAccess(FluidDomain domain) {
 		return new ParticleToGridStage.Access() {
 			@Override public void setVariableDensityActive(boolean active) { domain.variableDensityActive = active; }
 			@Override public void setSurfaceTensionActive(boolean active) { domain.surfaceTensionActive = active; }
@@ -198,7 +198,7 @@ final class MechanicalStageAssembly {
 		};
 	}
 
-	private static MechanicalStepPipeline.Access pipelineAccess(FlipFluidDomain domain) {
+	private static MechanicalStepPipeline.Access pipelineAccess(FluidDomain domain) {
 		return new MechanicalStepPipeline.Access() {
 			@Override public void ensureGrid() { domain.ensureGrid(); }
 			@Override public double gridKineticEnergyJoules() { return domain.gridKineticEnergyJoules(); }

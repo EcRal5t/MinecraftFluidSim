@@ -40,7 +40,7 @@ final class GasLiquidPhaseChangeStage {
 		this.support = support;
 	}
 
-	FlipFluidDomain.GasThermalPhaseStats step(int maximumOperations, boolean phaseGridPrepared) {
+	FluidDomain.GasThermalPhaseStats step(int maximumOperations, boolean phaseGridPrepared) {
 		FlipThermalState thermal = support.thermal();
 		if (thermal == null || !thermal.gasModelBound()) {
 			throw new IllegalStateException("Gas phase change requires bound gas thermal state");
@@ -114,7 +114,7 @@ final class GasLiquidPhaseChangeStage {
 				}
 			}
 		}
-		return new FlipFluidDomain.GasThermalPhaseStats(operations, boiled, condensed);
+		return new FluidDomain.GasThermalPhaseStats(operations, boiled, condensed);
 	}
 
 	private double markerVolumeDelta(List<PhaseMarkerAllocation> allocations) {
@@ -284,8 +284,8 @@ final class GasLiquidPhaseChangeStage {
 						"Condensation has no complete representable gas column quantum", unrepresentableColumns);
 			}
 			GasComponentAmount moved = take.first().components().getFirst();
-			if (!FlipFluidDomain.massClose(moved.mass(), requestedMass)) {
-				throw new FlipFluidDomain.ThermalPhaseBlockedException(
+			if (!FluidDomain.massClose(moved.mass(), requestedMass)) {
+				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Condensation gas batch mass differs from its exact transition");
 			}
 			long addedSvq = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
@@ -313,7 +313,7 @@ final class GasLiquidPhaseChangeStage {
 			PhaseComposition movedComposition = PhaseComposition.fromGas(moved);
 			ChemicalMixtureRecord condensedMixture = null;
 			if (chemistry != null) {
-				if (movedComposition.isEmpty()) throw new FlipFluidDomain.ThermalPhaseBlockedException(
+				if (movedComposition.isEmpty()) throw new FluidDomain.ThermalPhaseBlockedException(
 						"Composition-bearing condensation has no gas species truth");
 				condensedMixture = target >= 0
 						? PhaseComposition.fromMixture(chemistry.record(target), chemistry.registry())
@@ -324,7 +324,7 @@ final class GasLiquidPhaseChangeStage {
 				if (target >= 0) chemistry.requireCanCommitPlannedReplacements(
 						new int[]{target}, new ChemicalMixtureRecord[]{condensedMixture});
 			} else if (!moved.species().isEmpty()) {
-				throw new FlipFluidDomain.ThermalPhaseBlockedException(
+				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Gas species require liquid chemistry during condensation");
 			}
 			float targetVolume = 0.0F;
@@ -413,7 +413,7 @@ final class GasLiquidPhaseChangeStage {
 		for (int marker = support.state().markerGrid().cellMarkerHead[cell]; marker >= 0;
 				marker = support.state().markerGrid().particleCellNext[marker]) {
 			if (particles.materialHandle(marker) != liquidHandle) {
-				throw new FlipFluidDomain.ThermalPhaseBlockedException(
+				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Gas phase cell contains another liquid carrier");
 			}
 			svq = Math.addExact(svq, SolidVolume.cellVolumeSvqAtLeast(particles.volume(marker)));
@@ -438,7 +438,7 @@ final class GasLiquidPhaseChangeStage {
 		for (int marker = support.state().markerGrid().cellMarkerHead[cell]; marker >= 0;
 				marker = support.state().markerGrid().particleCellNext[marker]) {
 			if (support.state().particles().materialHandle(marker) != liquidHandle) {
-				throw new FlipFluidDomain.ThermalPhaseBlockedException(
+				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Gas phase cell contains another liquid carrier");
 			}
 			found = true;
@@ -474,7 +474,7 @@ final class GasLiquidPhaseChangeStage {
 			int node = gasState.cellNodeId[support.cellIndex(nx, ny, nz)];
 			if (node <= 0) continue;
 			if (found < 0) found = node;
-			else if (found != node) throw new FlipFluidDomain.ThermalPhaseBlockedException(
+			else if (found != node) throw new FluidDomain.ThermalPhaseBlockedException(
 					"Liquid/gas interface touches multiple sealed nodes");
 		}
 		return found;
@@ -560,7 +560,7 @@ final class GasLiquidPhaseChangeStage {
 		for (int marker = support.state().markerGrid().cellMarkerHead[cell]; marker >= 0;
 				marker = support.state().markerGrid().particleCellNext[marker]) {
 			if (particles.materialHandle(marker) != liquidHandle) {
-				throw new FlipFluidDomain.ThermalPhaseBlockedException(
+				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Gas phase cell contains another liquid carrier");
 			}
 			double mass = marker == target ? targetMass : particles.mass(marker);

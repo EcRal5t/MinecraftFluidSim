@@ -22,7 +22,7 @@ import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.granular.BuiltinGranularDefinitions;
 import cc.ecisr.mmm.granular.SolidCompositionRecord;
 import cc.ecisr.mmm.granular.SolidVolume;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterial;
@@ -609,8 +609,8 @@ public final class ContainerTransferStoreValidation {
 			check(plannedNanos > 0L && plannedNanos <= requested,
 					"downward request quantization exceeded its item balance for " + requested);
 
-			FlipFluidDomain domain = new FlipFluidDomain(6, 4, 6, config, 1_024);
-			FlipFluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(3, 2, 3, plannedVolume, 3);
+			FluidDomain domain = new FluidDomain(6, 4, 6, config, 1_024);
+			FluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(3, 2, 3, plannedVolume, 3);
 			check(inserted.transferred(), "edge-volume insertion failed for " + requested);
 			long insertedNanos = FluidTransferService.settledNanos(inserted.volume(), requested);
 			check(insertedNanos > 0L && insertedNanos <= requested,
@@ -618,7 +618,7 @@ public final class ContainerTransferStoreValidation {
 
 			long extractRequest = FluidTransferService.extractableNanos(
 					domain, new int[] {3, 2, 3}, ContainerFluidLedger.NANOS_PER_BLOCK, 3, 0);
-			FlipFluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(
+			FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(
 					3, 2, 3, FluidTransferService.nanosToCellVolumeAtMost(extractRequest), 3, 0);
 			check(extracted.transferred(), "edge-volume extraction failed for " + requested);
 			long extractedNanos = FluidTransferService.settledNanos(extracted.volume(), extractRequest);
@@ -631,7 +631,7 @@ public final class ContainerTransferStoreValidation {
 	private static void testMaterialSettlement() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
-		FlipFluidDomain domain = new FlipFluidDomain(6, 4, 6, config, 1_024);
+		FluidDomain domain = new FluidDomain(6, 4, 6, config, 1_024);
 		domain.setVolume(1, 1, 1, 0.125F);
 		FlipParticleState pure = domain.exportParticleState();
 		List<FluidMaterial> materials = List.of(
@@ -646,8 +646,8 @@ public final class ContainerTransferStoreValidation {
 		FluidMixture source = new FluidMixture(List.of(
 				new FluidMixture.Component("mmm:oil", 333_333_333L, 266.6666664),
 				new FluidMixture.Component("mmm:water", 666_666_666L, 666.666666)));
-		List<FlipFluidDomain.MaterialPortion> planned = FluidTransferService.planMaterialInsertion(domain, source);
-		FlipFluidDomain.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(3, 2, 3, planned, 3);
+		List<FluidDomain.MaterialPortion> planned = FluidTransferService.planMaterialInsertion(domain, source);
+		FluidDomain.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(3, 2, 3, planned, 3);
 		check(inserted.transferred(), "non-float-friendly material insertion failed");
 		FluidTransferService.MaterialInsertionSettlement settlement =
 				FluidTransferService.settleMaterialInsertion(domain, source, inserted.portions());
@@ -659,7 +659,7 @@ public final class ContainerTransferStoreValidation {
 
 		long request = FluidTransferService.extractableNanos(
 				domain, new int[] {3, 2, 3}, ContainerFluidLedger.NANOS_PER_BLOCK, 3, -1);
-		FlipFluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
+		FluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
 				3, 2, 3, FluidTransferService.nanosToCellVolumeAtMost(request), 3);
 		check(extracted.transferred(), "material extraction failed after service-planned insertion");
 		FluidMixture bucket = FluidTransferService.mixtureFromExtraction(domain, extracted.portions(), request);
@@ -673,12 +673,12 @@ public final class ContainerTransferStoreValidation {
 	private static void testPartialOutlet() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 64);
+		FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
 		domain.tryInsertExactVolume(2, 2, 2, 0.5F, 1);
 		long requested = FluidTransferService.extractableNanos(domain, new int[] {2, 2, 2},
 				cc.ecisr.mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK, 1, 0);
 		check(requested == 62_500_000L, "partial outlet did not quantize the available half-cell volume");
-		FlipFluidDomain.ExactVolumeTransfer transfer = domain.tryExtractExactVolume(
+		FluidDomain.ExactVolumeTransfer transfer = domain.tryExtractExactVolume(
 				2, 2, 2, FluidTransferService.nanosToCellVolume(requested), 1, 0);
 		check(transfer.transferred() && domain.totalVolumeExact() == 0.0,
 				"partial outlet request could not be settled by the exact primitive");
@@ -695,7 +695,7 @@ public final class ContainerTransferStoreValidation {
 			FluidRegionFootprint footprint = new FluidRegionFootprint(
 					controller, origin, origin, Set.of(origin.asLong()), Set.of(controller.asLong()),
 					Set.of(ChunkPos.pack(0, 0)));
-			FlipFluidDomain domain = new FlipFluidDomain(2, 2, 2, config, 64);
+			FluidDomain domain = new FluidDomain(2, 2, 2, config, 64);
 			domain.setVolume(1, 1, 1, 0.25F);
 			FluidRegion region = new FluidRegion(regionId, DIMENSION,
 					origin, domain, 64L, footprint);

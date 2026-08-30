@@ -1,7 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FlipChemicalParticleState;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.granular.GranularStateSnapshot;
@@ -40,7 +40,7 @@ public final class FluidRegion {
 	private final FluidRegionFootprint footprint;
 	private final long networkGeneration;
 	private final FluidRegionLifecycle lifecycle = new FluidRegionLifecycle();
-	private FlipFluidDomain domain;
+	private FluidDomain domain;
 	/** Runtime-only owner revision for synchronous backend candidates; HEAD generation remains independent. */
 	private long solverGeneration;
 	private long checkpointGeneration;
@@ -50,7 +50,7 @@ public final class FluidRegion {
 	private long snapshotSequence;
 	private long tick;
 	private double lastStepMilliseconds;
-	private FlipFluidDomain.StepStats lastStats;
+	private FluidDomain.StepStats lastStats;
 	private CollisionStats lastCollisionStats = CollisionStats.EMPTY;
 	private boolean collisionRefreshRequired;
 	private boolean entityPhysicsEnabled = true;
@@ -66,7 +66,7 @@ public final class FluidRegion {
 	private ThermalActivity thermalActivity;
 	private FiniteThermalDeviceInventory finiteThermalDevices;
 
-	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FlipFluidDomain domain, long reservedMarkerCapacity) {
+	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FluidDomain domain, long reservedMarkerCapacity) {
 		this(id, dimension, origin, domain, reservedMarkerCapacity, null);
 	}
 
@@ -74,7 +74,7 @@ public final class FluidRegion {
 			UUID id,
 			ResourceKey<Level> dimension,
 			BlockPos origin,
-			FlipFluidDomain domain,
+			FluidDomain domain,
 			long reservedMarkerCapacity,
 			FluidRegionFootprint footprint
 	) {
@@ -93,7 +93,7 @@ public final class FluidRegion {
 			long reservedMarkerCapacity,
 			FluidRegionFootprint footprint,
 			long networkGeneration,
-			FlipFluidDomain domain
+			FluidDomain domain
 	) {
 		this.id = Objects.requireNonNull(id, "id");
 		this.dimension = Objects.requireNonNull(dimension, "dimension");
@@ -165,7 +165,7 @@ public final class FluidRegion {
 	public int sizeY() { return sizeY; }
 	public int sizeZ() { return sizeZ; }
 	public FluidSolverConfig solverConfig() { return solverConfig; }
-	public FlipFluidDomain domain() {
+	public FluidDomain domain() {
 		if (domain == null) throw new IllegalStateException("Region solver is unloaded");
 		return domain;
 	}
@@ -186,7 +186,7 @@ public final class FluidRegion {
 				|| candidate.candidateGeneration() != Math.addExact(solverGeneration, 1L)) {
 			throw new IllegalStateException("Backend candidate identity or generation is stale");
 		}
-		FlipFluidDomain replacement = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+		FluidDomain replacement = FluidDomain.restoreAuthoritativeState(candidate.state());
 		if (replacement.sizeX() != sizeX || replacement.sizeY() != sizeY || replacement.sizeZ() != sizeZ
 				|| replacement.maximumParticleCount() != reservedMarkerCapacity
 				|| !replacement.config().equals(solverConfig)) {
@@ -257,8 +257,8 @@ public final class FluidRegion {
 	long incrementTick() { return ++tick; }
 	long tick() { return tick; }
 	double lastStepMilliseconds() { return lastStepMilliseconds; }
-	FlipFluidDomain.StepStats lastStats() { return lastStats; }
-	void recordStep(FlipFluidDomain.StepStats stats, double milliseconds) {
+	FluidDomain.StepStats lastStats() { return lastStats; }
+	void recordStep(FluidDomain.StepStats stats, double milliseconds) {
 		lastStats = Objects.requireNonNull(stats, "stats");
 		lastStepMilliseconds = milliseconds;
 	}
@@ -379,20 +379,20 @@ public final class FluidRegion {
 			throw new IllegalArgumentException("Finite thermal cell bindings do not match the exchange plan");
 		}
 		canonical.sort(Comparator.comparingInt(FiniteThermalCellBinding::ordinal));
-		ArrayList<FlipFluidDomain.ThermalCellEnergyDelta> deltas = new ArrayList<>(canonical.size());
+		ArrayList<FluidDomain.ThermalCellEnergyDelta> deltas = new ArrayList<>(canonical.size());
 		for (int index = 0; index < canonical.size(); index++) {
 			FiniteThermalCellBinding binding = canonical.get(index);
 			FiniteThermalExchange.ContactDelta contact = exchange.contacts().get(index);
 			if (binding.ordinal() != contact.ordinal()) {
 				throw new IllegalArgumentException("Finite thermal cell binding ordinal changed");
 			}
-			deltas.add(new FlipFluidDomain.ThermalCellEnergyDelta(binding.cellX(), binding.cellY(), binding.cellZ(),
+			deltas.add(new FluidDomain.ThermalCellEnergyDelta(binding.cellX(), binding.cellY(), binding.cellZ(),
 					contact.internalEnergyDeltaEu()));
 		}
 		FiniteThermalDeviceInventory current = finiteThermalDevices(registry.fingerprint());
 		FiniteThermalDeviceInventory candidate = current.applyExchange(providerId, objectId, exchange);
 		candidate.requireCompatible(registry);
-		FlipFluidDomain.FiniteThermalCellPlan cellPlan = domain.planFiniteThermalCellExchange(deltas);
+		FluidDomain.FiniteThermalCellPlan cellPlan = domain.planFiniteThermalCellExchange(deltas);
 		domain.commitFiniteThermalCellExchange(cellPlan);
 		finiteThermalDevices = candidate;
 		wakeThermal(ThermalActivity.WakeReason.FINITE_DEVICE_EXCHANGE);
@@ -407,7 +407,7 @@ public final class FluidRegion {
 	}
 
 	/** Creates an unregistered private candidate carrying the same persistent identity and runtime intent. */
-	FluidRegion lifecycleCandidate(FlipFluidDomain candidateDomain, boolean operatorPaused) {
+	FluidRegion lifecycleCandidate(FluidDomain candidateDomain, boolean operatorPaused) {
 		Objects.requireNonNull(candidateDomain, "candidateDomain");
 		PersistedRuntime runtime = persistedRuntime();
 		FluidRegion candidate = new FluidRegion(id, dimension, origin, sizeX, sizeY, sizeZ, solverConfig,
@@ -427,7 +427,7 @@ public final class FluidRegion {
 
 	/** Adopts the exact solver which was already encoded and published as the lifecycle HEAD. */
 	void adoptLifecycleCandidateDomain(
-			FlipFluidDomain candidateDomain, long publishedGeneration, boolean operatorPaused
+			FluidDomain candidateDomain, long publishedGeneration, boolean operatorPaused
 	) {
 		Objects.requireNonNull(candidateDomain, "candidateDomain");
 		if (!controllerManaged() || domain == null || publishedGeneration <= checkpointGeneration
@@ -470,7 +470,7 @@ public final class FluidRegion {
 		if (loadedCheckpointGeneration != checkpointGeneration) {
 			throw new IllegalArgumentException("Checkpoint generation changed while restoring");
 		}
-		FlipFluidDomain restored = freshDomain();
+		FluidDomain restored = freshDomain();
 		restored.restoreParticleState(state);
 		domain = restored;
 		collisionRefreshRequired = true;
@@ -486,7 +486,7 @@ public final class FluidRegion {
 		if (loadedCheckpointGeneration != checkpointGeneration) {
 			throw new IllegalArgumentException("Checkpoint generation changed while restoring");
 		}
-		FlipFluidDomain restored = freshDomain();
+		FluidDomain restored = freshDomain();
 		restored.restoreMaterialParticleState(state);
 		domain = restored;
 		collisionRefreshRequired = true;
@@ -505,7 +505,7 @@ public final class FluidRegion {
 		if (loadedCheckpointGeneration != checkpointGeneration) {
 			throw new IllegalArgumentException("Checkpoint generation changed while restoring");
 		}
-		FlipFluidDomain restored = freshDomain();
+		FluidDomain restored = freshDomain();
 		restored.restoreChemicalParticleState(state, registry);
 		domain = restored;
 		collisionRefreshRequired = true;
@@ -551,8 +551,8 @@ public final class FluidRegion {
 		domain.restoreThermalParticleState(state, registry, maximumTransportSubsteps);
 	}
 
-	private FlipFluidDomain freshDomain() {
-		FlipFluidDomain restored = new FlipFluidDomain(
+	private FluidDomain freshDomain() {
+		FluidDomain restored = new FluidDomain(
 				sizeX, sizeY, sizeZ, solverConfig, (int) reservedMarkerCapacity);
 		if (footprint != null) restored.sealDomainBoundary();
 		return restored;

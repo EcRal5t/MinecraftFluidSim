@@ -541,7 +541,7 @@ public final class M9ThermalValidation {
 						GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.026,
 						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)))));
 
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 1_024);
+		FluidDomain domain = new FluidDomain(4, 4, 4, config, 1_024);
 		domain.sealDomainBoundary();
 		domain.setVolume(0, 0, 0, 0.5F);
 		domain.setMarkerMaterial(0, liquids, 0);
@@ -554,7 +554,7 @@ public final class M9ThermalValidation {
 		FlipMaterialParticleState carriers = domain.exportMaterialParticleState();
 		GasInventory beforeGas = domain.gasBoundary().inventory(1);
 		var stale = domain.exportGasState("");
-		FlipFluidDomain rejected = new FlipFluidDomain(4, 4, 4, config, 1_024);
+		FluidDomain rejected = new FluidDomain(4, 4, 4, config, 1_024);
 		rejected.sealDomainBoundary();
 		rejected.restoreMaterialParticleState(carriers);
 		expectFailure(() -> rejected.restoreGasState(stale, gas),
@@ -562,7 +562,7 @@ public final class M9ThermalValidation {
 
 		domain.synchronizeGasTopologyForPersistence();
 		var synchronizedGas = domain.exportGasState("");
-		FlipFluidDomain restored = new FlipFluidDomain(4, 4, 4, config, 1_024);
+		FluidDomain restored = new FluidDomain(4, 4, 4, config, 1_024);
 		restored.sealDomainBoundary();
 		restored.restoreMaterialParticleState(carriers);
 		restored.restoreGasState(synchronizedGas, gas);
@@ -571,7 +571,7 @@ public final class M9ThermalValidation {
 				&& restored.gasBoundary().auditClosed(),
 				"checkpoint gas-topology barrier did not preserve and restore the split inventory");
 
-		FlipFluidDomain movingInterface = new FlipFluidDomain(3, 2, 2, config, 128);
+		FluidDomain movingInterface = new FluidDomain(3, 2, 2, config, 128);
 		movingInterface.sealDomainBoundary();
 		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 3; x++) {
 			if (!(y == 0 && z == 0 && (x == 0 || x == 1))) movingInterface.setSolid(x, y, z, true);
@@ -604,7 +604,7 @@ public final class M9ThermalValidation {
 						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
 						GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.026,
 						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)))));
-		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 256);
+		FluidDomain domain = new FluidDomain(3, 3, 3, config, 256);
 		domain.sealDomainBoundary();
 		domain.setVolume(1, 1, 1, 0.5F);
 		domain.setMarkerMaterial(0, liquids, 0);
@@ -615,7 +615,7 @@ public final class M9ThermalValidation {
 		SignedDyadic energyBefore = domain.exactGasInternalEnergy();
 		int nodesBefore = domain.gasBoundary().nodeCount();
 
-		FlipFluidDomain.OperatorGasVent vented = domain.commitOperatorVentSealedGas(
+		FluidDomain.OperatorGasVent vented = domain.commitOperatorVentSealedGas(
 				domain.planOperatorVentSealedGas());
 		require(nodesBefore > 0 && vented.sealedNodes() == nodesBefore
 				&& vented.removed().equals(gasBefore) && vented.internalEnergy().equals(energyBefore)
@@ -625,7 +625,7 @@ public final class M9ThermalValidation {
 				&& domain.gasBoundary().auditClosed()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"operator vent did not jointly settle sealed gas component and energy truth");
-		FlipFluidDomain restored = FlipFluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		FluidDomain restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		require(restored.gasBoundary().nodeCount() == 0
 				&& restored.operatorVentedGasTopology()
 				&& restored.exactGasInternalEnergy().equals(SignedDyadic.ZERO)
@@ -732,7 +732,7 @@ public final class M9ThermalValidation {
 				List.of(water, air, vapor), List.of(), List.of(boiling), "", "");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 512);
+		FluidDomain domain = new FluidDomain(4, 4, 4, config, 512);
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
 			if (x == 0 || x == 3 || y == 0 || y == 3 || z == 0 || z == 3) domain.setSolid(x, y, z, true);
 		}
@@ -754,7 +754,7 @@ public final class M9ThermalValidation {
 		SignedDyadic energyBefore = domain.exactInternalEnergy();
 		ThermalAuditLedger auditBefore = domain.thermalAudit();
 		domain.step(true, 128);
-		FlipFluidDomain.GasThermalPhaseStats stats = domain.lastGasThermalPhaseStats();
+		FluidDomain.GasThermalPhaseStats stats = domain.lastGasThermalPhaseStats();
 		GasComponentAmount vaporAmount = domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
 		require(stats.operations() > 1 && stats.operations() <= 128
 				&& stats.boiledCells() == 1 && stats.condensedCells() == 0
@@ -782,7 +782,7 @@ public final class M9ThermalValidation {
 		SignedDyadic beforeCondensation = domain.exactInternalEnergy();
 		ThermalAuditLedger auditBeforeCondensation = domain.thermalAudit();
 		FlipThermalParticleState beforeCondensationState = domain.exportThermalParticleState();
-		FlipFluidDomain.GasThermalPhaseStats condensed = domain.stepGasPhaseChangeOnly(stats.operations());
+		FluidDomain.GasThermalPhaseStats condensed = domain.stepGasPhaseChangeOnly(stats.operations());
 		GasComponentAmount vaporAfterCondensation = domain.gasBoundary().inventory(1)
 				.component(BuiltinGasDefinitions.WATER_VAPOR);
 		long remainingBatches = stats.operations() - condensed.operations();
@@ -862,7 +862,7 @@ public final class M9ThermalValidation {
 				chemistry.fingerprint(), granular.fingerprint());
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 512);
+		FluidDomain domain = new FluidDomain(4, 4, 4, config, 512);
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
 			if (x == 0 || x == 3 || y == 0 || y == 3 || z == 0 || z == 3) domain.setSolid(x, y, z, true);
 		}
@@ -912,7 +912,7 @@ public final class M9ThermalValidation {
 		require(!domain.hasPendingPhaseVolumeWork(),
 				"species-bearing boiling did not consume pending volume before condensation");
 		setAllCondensedCellTemperatures(domain, 300.0);
-		FlipFluidDomain.GasThermalPhaseStats firstCondensed = domain.stepGasPhaseChangeOnly(1);
+		FluidDomain.GasThermalPhaseStats firstCondensed = domain.stepGasPhaseChangeOnly(1);
 		GasComponentAmount vaporRemainder = domain.gasBoundary().inventory(1)
 				.component(BuiltinGasDefinitions.WATER_VAPOR);
 		require(firstCondensed.operations() == 1 && firstCondensed.condensedCells() == 1
@@ -962,7 +962,7 @@ public final class M9ThermalValidation {
 		return massKilograms.toDouble();
 	}
 
-	private static void setAllCondensedCellTemperatures(FlipFluidDomain domain, double temperatureK) {
+	private static void setAllCondensedCellTemperatures(FluidDomain domain, double temperatureK) {
 		FlipMaterialParticleState state = domain.exportMaterialParticleState();
 		byte[] flags = domain.copyThermalDisplaySnapshot().debugFlags();
 		for (int cell = 0; cell < flags.length; cell++) {
@@ -1169,7 +1169,7 @@ public final class M9ThermalValidation {
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidDomain domain = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
 		domain.setVolume(1, 1, 1, 0.1F);
 		domain.bindGranular(granular, liquids);
 		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
@@ -1276,7 +1276,7 @@ public final class M9ThermalValidation {
 				"solid/liquid curve was incorrectly required to cover standard pressure");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FlipFluidDomain unsupportedPressure = new FlipFluidDomain(2, 2, 2, config, 128);
+		FluidDomain unsupportedPressure = new FluidDomain(2, 2, 2, config, 128);
 		unsupportedPressure.setVolume(0, 0, 0, 0.5F);
 		unsupportedPressure.bindThermal(highPressureRegistry,
 				new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)), 273.15);
@@ -1329,7 +1329,7 @@ public final class M9ThermalValidation {
 
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FlipFluidDomain domain = new FlipFluidDomain(2, 2, 2, config, 128);
+		FluidDomain domain = new FluidDomain(2, 2, 2, config, 128);
 		domain.setVolume(0, 0, 0, 0.5F);
 		domain.bindThermal(registry, liquids, 300.0);
 		domain.addCoherentPhaseExternal(0, 0, 0, lower.id(),
@@ -1337,8 +1337,8 @@ public final class M9ThermalValidation {
 		boolean collisionBlocked = false;
 		try {
 			domain.planCollisionEdits(List.of(
-					new FlipFluidDomain.CollisionEdit(1, 1, 1, 0xff),
-					new FlipFluidDomain.CollisionEdit(0, 0, 0, 0xff)));
+					new FluidDomain.CollisionEdit(1, 1, 1, 0xff),
+					new FluidDomain.CollisionEdit(0, 0, 0, 0xff)));
 		} catch (IllegalStateException expected) {
 			collisionBlocked = true;
 		}
@@ -1357,11 +1357,11 @@ public final class M9ThermalValidation {
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
 		ThermalRegistry cellRegistry = new ThermalRegistry(
 				List.of(lower, upper), List.of(), List.of(cellTransition), "", "");
-		FlipFluidDomain phaseDomain = new FlipFluidDomain(2, 2, 2, config, 128);
+		FluidDomain phaseDomain = new FluidDomain(2, 2, 2, config, 128);
 		phaseDomain.setVolume(0, 0, 0, 1.0F);
 		phaseDomain.bindThermal(cellRegistry, liquids, 295.0);
 		SignedDyadic coldEnergy = phaseDomain.exactInternalEnergy();
-		FlipFluidDomain.ThermalPhaseStats freezeStats = phaseDomain.stepInertPhaseChangeOnly(16);
+		FluidDomain.ThermalPhaseStats freezeStats = phaseDomain.stepInertPhaseChangeOnly(16);
 		require(freezeStats.operations() == 4 && freezeStats.signedBatches() == 4L
 				&& close(phaseDomain.totalVolumeExact(), 0.5)
 				&& phaseDomain.totalCoherentSolidVolumeSvq() == SolidVolume.SVQ_PER_CELL / 2L
@@ -1374,7 +1374,7 @@ public final class M9ThermalValidation {
 
 		phaseDomain.setThermalTemperatureInCell(0, 0, 0, 305.0);
 		SignedDyadic hotEnergy = phaseDomain.exactInternalEnergy();
-		FlipFluidDomain.ThermalPhaseStats meltStats = phaseDomain.stepInertPhaseChangeOnly(16);
+		FluidDomain.ThermalPhaseStats meltStats = phaseDomain.stepInertPhaseChangeOnly(16);
 		require(meltStats.operations() == 4 && meltStats.signedBatches() == -4L
 				&& close(phaseDomain.totalVolumeExact(), 1.0)
 				&& phaseDomain.totalCoherentSolidVolumeSvq() == 0L
@@ -1401,12 +1401,12 @@ public final class M9ThermalValidation {
 				List.of(roundoffIce, roundoffWater), List.of(), List.of(roundoffTransition), "", "");
 		FluidSolverConfig roundoffConfig = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FlipFluidDomain roundoffDomain = new FlipFluidDomain(2, 2, 2, roundoffConfig, 128);
+		FluidDomain roundoffDomain = new FluidDomain(2, 2, 2, roundoffConfig, 128);
 		roundoffDomain.setVolume(0, 0, 0, 0.5F);
 		roundoffDomain.bindThermal(roundoffRegistry, roundoffLiquids, 273.1498);
 		SignedDyadic roundoffEnergy = roundoffDomain.exactInternalEnergy();
-		FlipFluidDomain.ThermalPhaseStats quantizedEquilibrium = roundoffDomain.stepInertPhaseChangeOnly(16);
-		FlipFluidDomain.ThermalPhaseStats repeatedEquilibrium = roundoffDomain.stepInertPhaseChangeOnly(16);
+		FluidDomain.ThermalPhaseStats quantizedEquilibrium = roundoffDomain.stepInertPhaseChangeOnly(16);
+		FluidDomain.ThermalPhaseStats repeatedEquilibrium = roundoffDomain.stepInertPhaseChangeOnly(16);
 		require(quantizedEquilibrium.operations() == 0 && repeatedEquilibrium.operations() == 0
 				&& close(roundoffDomain.thermalTemperatureInCell(0, 0, 0), 273.1498)
 				&& roundoffDomain.exactInternalEnergy().equals(roundoffEnergy)
@@ -1416,19 +1416,19 @@ public final class M9ThermalValidation {
 						+ " energy=" + roundoffDomain.exactInternalEnergy() + "/" + roundoffEnergy
 						+ " expected=" + roundoffDomain.thermalAudit().expectedInventory());
 
-		FlipFluidDomain quantizedDomain = new FlipFluidDomain(2, 2, 2, roundoffConfig, 128);
+		FluidDomain quantizedDomain = new FluidDomain(2, 2, 2, roundoffConfig, 128);
 		quantizedDomain.bindThermal(roundoffRegistry, roundoffLiquids, 273.15);
 		double quantizedIceEnergy = new ThermalStateFunction(roundoffRegistry).internalEnergyAtTemperature(
 				roundoffRegistry.materialHandle(roundoffIce.id()), 0.001, Map.of(), 273.16);
 		quantizedDomain.addCoherentPhaseExternal(0, 0, 0, roundoffIce.id(), 146L,
 				0.001, null, quantizedIceEnergy);
 		SignedDyadic quantizedEnergy = quantizedDomain.exactInternalEnergy();
-		FlipFluidDomain.ThermalPhaseStats unavailableMelt = quantizedDomain.stepInertPhaseChangeOnly(16);
+		FluidDomain.ThermalPhaseStats unavailableMelt = quantizedDomain.stepInertPhaseChangeOnly(16);
 		require(unavailableMelt.operations() == 0
 				&& quantizedDomain.exactInternalEnergy().equals(quantizedEnergy)
 				&& quantizedDomain.exactInternalEnergy().equals(quantizedDomain.thermalAudit().expectedInventory()),
 				"an unrepresentable exact phase quantum stopped the region instead of leaving inventory unchanged");
-		require(FlipFluidDomain.minimumPhaseBatchesForCapacity(1_025L, 1_000L, -12L) == 3L,
+		require(FluidDomain.minimumPhaseBatchesForCapacity(1_025L, 1_000L, -12L) == 3L,
 				"shrinking phase planning did not clear transient joint-cell overfill before evaluating LTE");
 		long markerSvq = SolidVolume.SVQ_PER_CELL / 8L;
 		float tailedMarkerVolume = Math.nextUp(SolidVolume.toCellVolume(markerSvq));
@@ -1443,7 +1443,7 @@ public final class M9ThermalValidation {
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 256);
+		FluidDomain domain = new FluidDomain(3, 3, 3, config, 256);
 		domain.setVolume(1, 1, 1, 0.75F);
 		domain.bindGranular(granular, liquids);
 		domain.bindChemistry(chemistry);
@@ -1462,7 +1462,7 @@ public final class M9ThermalValidation {
 		SolverUnitScale massScale = SolverUnitScale.forCellSize(config.cellSize());
 		double initialMass = massScale.kilograms(domain.totalMass()) + domain.totalCoherentMass();
 		SignedDyadic coldEnergy = domain.exactInternalEnergy();
-		FlipFluidDomain.ThermalPhaseStats freeze = domain.stepInertPhaseChangeOnly(16);
+		FluidDomain.ThermalPhaseStats freeze = domain.stepInertPhaseChangeOnly(16);
 		CondensedLedger frozen = condensedLedger(domain, chemistry);
 		require(freeze.operations() > 0 && freeze.signedBatches() > 0L
 				&& domain.totalCoherentSolidVolumeSvq() > 0L
@@ -1489,7 +1489,7 @@ public final class M9ThermalValidation {
 
 		domain.setThermalTemperatureInCell(1, 1, 1, 305.0);
 		SignedDyadic hotEnergy = domain.exactInternalEnergy();
-		FlipFluidDomain.ThermalPhaseStats melt = domain.stepInertPhaseChangeOnly(16);
+		FluidDomain.ThermalPhaseStats melt = domain.stepInertPhaseChangeOnly(16);
 		CondensedLedger melted = condensedLedger(domain, chemistry);
 		require(melt.operations() > 0 && melt.signedBatches() < 0L
 				&& domain.totalCoherentSolidVolumeSvq() == 0L
@@ -1543,7 +1543,7 @@ public final class M9ThermalValidation {
 				chemistry.fingerprint(), granular.fingerprint());
 	}
 
-	private static CondensedLedger condensedLedger(FlipFluidDomain domain, ChemicalRegistry chemistry) {
+	private static CondensedLedger condensedLedger(FluidDomain domain, ChemicalRegistry chemistry) {
 		FlipChemicalParticleState liquid = domain.exportChemicalParticleState();
 		java.util.TreeMap<String, Long> species = new java.util.TreeMap<>();
 		long[] liquidTotals = liquid.copySpeciesTotals();
@@ -1594,11 +1594,11 @@ public final class M9ThermalValidation {
 		ThermalRegistry registry = new ThermalRegistry(List.of(lower, upper), List.of(), List.of(transition), "", "");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FlipFluidDomain domain = new FlipFluidDomain(2, 2, 2, config, 128);
+		FluidDomain domain = new FluidDomain(2, 2, 2, config, 128);
 		domain.setVolume(0, 0, 0, 0.5F);
 		domain.bindThermal(registry, liquids, 295.0);
 		ThermalAuditLedger before = domain.thermalAudit();
-		FlipFluidDomain.ThermalPhaseStats phase = domain.stepInertPhaseChangeOnly(16);
+		FluidDomain.ThermalPhaseStats phase = domain.stepInertPhaseChangeOnly(16);
 		PendingPhaseVolumeState pending = domain.exportPendingPhaseVolumeState();
 		SignedDyadic signedCellVolume = pending.entries().stream()
 				.map(PendingPhaseVolumeState.Entry::signedCellVolume)
@@ -1607,14 +1607,14 @@ public final class M9ThermalValidation {
 				&& domain.hasPendingPhaseVolumeWork()
 				&& domain.thermalAudit().mechanicalWork().equals(before.mechanicalWork()),
 				"phase volume was not retained without prematurely booking projection work");
-		FlipFluidDomain lienDomain = new FlipFluidDomain(2, 2, 2, config, 128);
+		FluidDomain lienDomain = new FluidDomain(2, 2, 2, config, 128);
 		lienDomain.setVolume(0, 0, 0, 0.125F);
 		lienDomain.bindThermal(registry, liquids, 295.0);
 		PendingPhaseVolumeState restoredLien = new PendingPhaseVolumeState(8,
 				List.of(new PendingPhaseVolumeState.Entry(0, SignedDyadic.of(0.125))));
 		lienDomain.restorePendingPhaseVolumeState(restoredLien);
 		double volumeBeforeBlockedExtraction = lienDomain.totalVolumeExact();
-		FlipFluidDomain.ExactVolumeTransfer blockedExtraction = lienDomain.tryExtractExactVolume(
+		FluidDomain.ExactVolumeTransfer blockedExtraction = lienDomain.tryExtractExactVolume(
 				0, 0, 0, 0.125F, 0, 0);
 		require(!blockedExtraction.transferred()
 				&& lienDomain.totalVolumeExact() == volumeBeforeBlockedExtraction
@@ -1652,13 +1652,13 @@ public final class M9ThermalValidation {
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FlipFluidDomain staleGas = new FlipFluidDomain(3, 3, 3, config, 256);
+		FluidDomain staleGas = new FluidDomain(3, 3, 3, config, 256);
 		staleGas.sealDomainBoundary();
 		staleGas.setVolume(1, 1, 1, 0.5F);
 		staleGas.bootstrapGasState("");
 		require(staleGas.gasBoundary().nodeCount() == 1,
 				"operator-clear stale-plan fixture did not create one sealed cavity");
-		FlipFluidDomain.OperatorClearPlan staleClear = staleGas.planOperatorClear();
+		FluidDomain.OperatorClearPlan staleClear = staleGas.planOperatorClear();
 		staleGas.setGasNodeStandardVolume(1, staleGas.gasBoundary().standardVolume(1) * 1.25);
 		double retainedGas = staleGas.gasBoundary().standardVolume(1);
 		int retainedMarkers = staleGas.particleCount();
@@ -1672,7 +1672,7 @@ public final class M9ThermalValidation {
 				== Double.doubleToRawLongBits(retainedGas),
 				"rejected stale operator clear changed condensed or gas truth");
 
-		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 256);
+		FluidDomain domain = new FluidDomain(3, 3, 3, config, 256);
 		domain.setVolume(1, 1, 1, 0.75F);
 		domain.bindGranular(granular, liquids);
 		domain.bindChemistry(chemistry);
@@ -1686,7 +1686,7 @@ public final class M9ThermalValidation {
 		require(!domain.hasPendingPhaseVolumeWork(),
 				"operator-empty fixture did not consume pending phase work");
 		long coherentSvq = domain.totalCoherentSolidVolumeSvq();
-		FlipFluidDomain.OperatorClear cleared = domain.commitOperatorClear(domain.planOperatorClear());
+		FluidDomain.OperatorClear cleared = domain.commitOperatorClear(domain.planOperatorClear());
 		long initialQuanta = before.species().values().stream().mapToLong(Long::longValue).sum();
 		require(domain.particleCount() == 0 && domain.totalCoherentSolidVolumeSvq() == 0L
 				&& cleared.condensed().coherentVolumeSvq() == coherentSvq
@@ -1707,36 +1707,36 @@ public final class M9ThermalValidation {
 		ThermalRegistry registry = new ThermalRegistry(List.of(water));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FlipFluidDomain domain = new FlipFluidDomain(4, 3, 3, config, 512);
+		FluidDomain domain = new FluidDomain(4, 3, 3, config, 512);
 		domain.setVolume(1, 1, 1, 0.125F);
 		domain.bindThermal(registry, liquids, 300.0);
 		domain.removeAllWaterExact();
 
 		double importedEnergy = SolverUnitScale.forCellSize(config.cellSize()).kilograms(1_000.0)
 				* 4_000.0 * 20.0;
-		FlipFluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(
+		FluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(
 				1, 1, 1, 1.0F, 1, 0, false, importedEnergy);
 		require(inserted.transferred() && close(inserted.internalEnergy(), importedEnergy)
 				&& close(domain.thermalTemperatureInCell(1, 1, 1), 320.0)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"explicit container insertion did not assign item U through the state function");
 
-		FlipFluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(1, 1, 1, 1.0F, 1, 0);
+		FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(1, 1, 1, 1.0F, 1, 0);
 		require(extracted.transferred() && close(extracted.internalEnergy(), importedEnergy)
 				&& domain.particleCount() == 0 && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"container extraction did not return the exact removed marker energy");
-		FlipFluidDomain.ExactVolumeTransfer restored = domain.tryInsertExactVolume(
+		FluidDomain.ExactVolumeTransfer restored = domain.tryInsertExactVolume(
 				1, 1, 1, 1.0F, 1, 0, false, extracted.internalEnergy());
 		require(restored.transferred() && close(domain.thermalTemperatureInCell(1, 1, 1), 320.0)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"container energy did not survive an extract/reinsert round trip");
 
-		FlipFluidDomain.MaterialDisplacement collision = domain.setSolidMicroMaskMaterial(1, 1, 1, 0xff);
+		FluidDomain.MaterialDisplacement collision = domain.setSolidMicroMaskMaterial(1, 1, 1, 0xff);
 		require(close(collision.internalEnergy(), importedEnergy) && collision.portions().size() == 1
 				&& domain.particleCount() == 0,
 				"collision displacement did not carry the removed material energy ledger");
 		domain.setSolidMicroMaskMaterial(1, 1, 1, 0);
-		FlipFluidDomain.ExactMixtureTransfer relocated = domain.tryInsertExactMixture(
+		FluidDomain.ExactMixtureTransfer relocated = domain.tryInsertExactMixture(
 				1, 1, 1, collision.portions(), 1, false, collision.internalEnergy());
 		require(relocated.transferred() && close(domain.thermalTemperatureInCell(1, 1, 1), 320.0)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
@@ -1789,7 +1789,7 @@ public final class M9ThermalValidation {
 		FluidMaterialRegistry productionLiquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.8F);
-		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
+		FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
 		domain.bindGranular(granular, productionLiquids);
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long parcelSvq = SolidVolume.SVQ_PER_BV;
@@ -1802,7 +1802,7 @@ public final class M9ThermalValidation {
 		ThermalRegistry productionThermal = granularThermalRegistry(productionLiquids, granular);
 		domain.bindThermal(productionThermal, productionLiquids, 300.0);
 		SignedDyadic insertedEnergy = domain.exactInternalEnergy();
-		FlipFluidDomain.GranularExtraction extracted = domain.tryExtractExactGranular(
+		FluidDomain.GranularExtraction extracted = domain.tryExtractExactGranular(
 				4, 6, 4, parcelSvq, 3, false);
 		require(extracted.transferred() && close(extracted.internalEnergy(), insertedEnergy.toDouble())
 				&& domain.exactInternalEnergy().equals(SignedDyadic.ZERO)
@@ -1848,7 +1848,7 @@ public final class M9ThermalValidation {
 		ThermalRegistry registry = new ThermalRegistry(List.of(water));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FlipFluidDomain domain = new FlipFluidDomain(4, 3, 3, config, 512);
+		FluidDomain domain = new FluidDomain(4, 3, 3, config, 512);
 		domain.setVolume(1, 1, 1, 1.0F);
 		domain.setVolume(2, 1, 1, 1.0F);
 		domain.bindThermal(registry, liquids, 300.0);
@@ -1873,7 +1873,7 @@ public final class M9ThermalValidation {
 
 		FlipMaterialParticleState materials = domain.exportMaterialParticleState();
 		FlipThermalParticleState thermal = domain.exportThermalParticleState();
-		FlipFluidDomain restored = new FlipFluidDomain(4, 3, 3, config, 512);
+		FluidDomain restored = new FluidDomain(4, 3, 3, config, 512);
 		restored.restoreMaterialParticleState(materials);
 		restored.restoreThermalParticleState(thermal, registry);
 		require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
@@ -1882,7 +1882,7 @@ public final class M9ThermalValidation {
 				"orthogonal thermal handoff did not preserve energy/temperature");
 
 		FluidDomainState authoritative = domain.captureAuthoritativeState();
-		FlipFluidDomain fullRestore = FlipFluidDomain.restoreAuthoritativeState(authoritative);
+		FluidDomain fullRestore = FluidDomain.restoreAuthoritativeState(authoritative);
 		var expectedGas = domain.exportGasState("");
 		var restoredGas = fullRestore.exportGasState("");
 		boolean energyEqual = fullRestore.exactInternalEnergy().equals(domain.exactInternalEnergy());
@@ -1914,7 +1914,7 @@ public final class M9ThermalValidation {
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4_184.0)));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 0.05F,
 				100, 1.0E-5F, 0.40F, 2.0E-3F, 0.0F);
-		FlipFluidDomain domain = new FlipFluidDomain(6, 6, 6, config, 1_728);
+		FluidDomain domain = new FluidDomain(6, 6, 6, config, 1_728);
 		for (int z = 0; z < 6; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < 6; x++) {
 			if (x == 0 || x == 5 || y == 0 || y == 5 || z == 0 || z == 5) domain.setSolid(x, y, z, true);
 			else domain.setVolume(x, y, z, 1.0F);
@@ -1922,8 +1922,8 @@ public final class M9ThermalValidation {
 		domain.bindThermal(new ThermalRegistry(List.of(water)), liquids, 293.15);
 		domain.setThermalTemperatureInCell(2, 1, 2, 333.15);
 		for (int step = 0; step < 4; step++) domain.step();
-		FlipFluidDomain.VelocitySample plume = domain.sampleVelocity(1.25F, 0.75F, 1.25F);
-		FlipFluidDomain.VelocitySample far = domain.sampleVelocity(1.75F, 0.75F, 1.75F);
+		FluidDomain.VelocitySample plume = domain.sampleVelocity(1.25F, 0.75F, 1.25F);
+		FluidDomain.VelocitySample far = domain.sampleVelocity(1.75F, 0.75F, 1.75F);
 		require(plume.y() > far.y() + 1.0E-5F && domain.maximumParticleSpeed() > 1.0E-4F,
 				"localized heat did not create an upward Boussinesq plume: plume=" + plume.y() + " far=" + far.y());
 		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
@@ -1938,7 +1938,7 @@ public final class M9ThermalValidation {
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 400.0, 4_000.0)));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FlipFluidDomain domain = new FlipFluidDomain(4, 3, 3, config, 512);
+		FluidDomain domain = new FluidDomain(4, 3, 3, config, 512);
 		// Two microcells obstruct the shared +x face: the authoritative aperture is exactly one half.
 		domain.setSolidMicroMask(1, 1, 1, 0x22);
 		domain.setVolume(1, 1, 1, 0.5F);
@@ -2038,7 +2038,7 @@ public final class M9ThermalValidation {
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4_184.0)));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FlipFluidDomain domain = new FlipFluidDomain(4, 3, 3, config, 512);
+		FluidDomain domain = new FluidDomain(4, 3, 3, config, 512);
 		domain.setVolume(0, 1, 1, 1.0F);
 		domain.bindThermal(new ThermalRegistry(List.of(water)), liquids, 293.15);
 		double[] boundaries = new double[4 * 3 * 3 * 6];

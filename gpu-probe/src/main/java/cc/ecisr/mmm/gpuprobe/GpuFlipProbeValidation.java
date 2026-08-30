@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.gpuprobe;
 
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 
 import java.util.ArrayList;
@@ -129,7 +129,7 @@ public final class GpuFlipProbeValidation {
 				require(checkpoint.cpuBytes() == expectedCpuBytes, "checkpoint CPU footprint is not compact and bounded");
 				require(checkpoint.gpuReadbackBytes() == expectedReadbackBytes, "checkpoint readback byte count changed");
 
-				FlipFluidDomain recovered = checkpoint.restore(GpuProbeService.cpuConfig());
+				FluidDomain recovered = checkpoint.restore(GpuProbeService.cpuConfig());
 				require(recovered.particleCount() == checkpoint.particleCount(), "CPU recovery particle count changed");
 				require(close(recovered.totalVolume(), checkpoint.volumeCells(), 1.0E-4F), "CPU recovery volume changed");
 				require(Math.abs(recovered.centerOfMassX() - checkpoint.centerOfMassX()) <= 1.0E-5F,
@@ -141,7 +141,7 @@ public final class GpuFlipProbeValidation {
 						"CPU recovery first step changed particle truth");
 
 				for (int step = 0; step < 2; step++) gpu.step();
-				FlipFluidDomain rolledBack = checkpoint.restore(GpuProbeService.cpuConfig());
+				FluidDomain rolledBack = checkpoint.restore(GpuProbeService.cpuConfig());
 				require(Math.abs(rolledBack.centerOfMassX() - checkpoint.centerOfMassX()) <= 1.0E-5F,
 						"checkpoint mutated after newer GPU submissions");
 				require(!GpuProbeService.checkpointDue(23, checkpoint)
@@ -169,7 +169,7 @@ public final class GpuFlipProbeValidation {
 		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(24, 16, 24, CELL_SIZE, DT, GRAVITY, RHO, 96, 24 * 16 * 24 * 8);
 		try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device)) {
 			gpu.initializeDamBreak();
-			FlipFluidDomain cpu = cpuDamBreak(config);
+			FluidDomain cpu = cpuDamBreak(config);
 			int expectedParticles = 9 * 12 * 24 * 8;
 			float expectedVolume = expectedParticles / 8.0F;
 			require(gpu.particleCount() == expectedParticles, "dam particle count");
@@ -355,7 +355,7 @@ public final class GpuFlipProbeValidation {
 		for (int z = 0; z < nz; z++) for (int y = 0; y < ny * 3 / 4; y++) for (int x = 0; x < nx * 2 / 5; x++) {
 			if (solidCells[x + nx * (y + ny * z)] == 0) expectedFluidCells++;
 		}
-		FlipFluidDomain cpuFallback = GpuProbeService.createCpuDamBreak(solidCells);
+		FluidDomain cpuFallback = GpuProbeService.createCpuDamBreak(solidCells);
 		require(mismatches(cpuFallback.copyBinarySolidMask(), solidCells) == 0, "CPU fallback world collision mask changed");
 		require(close(cpuFallback.totalVolume(), expectedFluidCells, 1.0E-3F), "CPU fallback world collision volume");
 		float cpuVolume = cpuFallback.totalVolume();
@@ -512,9 +512,9 @@ public final class GpuFlipProbeValidation {
 		}
 	}
 
-	private static FlipFluidDomain cpuDamBreak(VulkanFlipPipeline.Config config) {
+	private static FluidDomain cpuDamBreak(VulkanFlipPipeline.Config config) {
 		FluidSolverConfig cpuConfig = new FluidSolverConfig(CELL_SIZE, RHO, GRAVITY, DT, 200, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F);
-		FlipFluidDomain domain = new FlipFluidDomain(config.nx(), config.ny(), config.nz(), cpuConfig);
+		FluidDomain domain = new FluidDomain(config.nx(), config.ny(), config.nz(), cpuConfig);
 		for (int z = 0; z < config.nz(); z++) for (int y = 0; y < config.ny() * 3 / 4; y++) for (int x = 0; x < config.nx() * 2 / 5; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}

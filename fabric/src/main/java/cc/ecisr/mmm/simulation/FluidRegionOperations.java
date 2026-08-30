@@ -3,7 +3,7 @@ package cc.ecisr.mmm.simulation;
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.simulation.controller.FluidBoundaryScanner;
@@ -105,7 +105,7 @@ final class FluidRegionOperations {
 		return persistence.stageCheckpoint(region, target);
 	}
 	FluidRegionPersistence.StagedCheckpoint stageLifecycleCheckpoint(
-			FluidRegion region, FlipFluidDomain candidateDomain, long target
+			FluidRegion region, FluidDomain candidateDomain, long target
 	) throws IOException {
 		return persistence.stageLifecycleCheckpoint(region, candidateDomain, target);
 	}

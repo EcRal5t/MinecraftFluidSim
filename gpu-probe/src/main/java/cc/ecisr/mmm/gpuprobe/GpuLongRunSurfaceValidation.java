@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.gpuprobe;
 
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 
 import java.util.Locale;
 
@@ -24,7 +24,7 @@ public final class GpuLongRunSurfaceValidation {
 	static String run(int device) {
 		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(
 				NX, NY, NZ, CELL_SIZE, DT, GRAVITY, RHO, 96, NX * NY * NZ * 8);
-		FlipFluidDomain cpu = GpuProbeService.createCpuDamBreak(null);
+		FluidDomain cpu = GpuProbeService.createCpuDamBreak(null);
 		SurfaceStats gpuStats;
 		int gpuPhysicalSubsteps;
 		try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,

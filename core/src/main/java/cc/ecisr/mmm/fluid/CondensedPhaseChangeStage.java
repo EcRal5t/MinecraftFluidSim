@@ -31,7 +31,7 @@ final class CondensedPhaseChangeStage {
 		this.support = support;
 	}
 
-	FlipFluidDomain.ThermalPhaseStats step(int maximumOperations, boolean phaseGridPrepared) {
+	FluidDomain.ThermalPhaseStats step(int maximumOperations, boolean phaseGridPrepared) {
 		FlipThermalState thermal = support.thermal();
 		if (thermal == null) throw new IllegalStateException("Thermal state is not bound");
 		if (maximumOperations < 0 || maximumOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
@@ -57,7 +57,7 @@ final class CondensedPhaseChangeStage {
 				if (!(Double.isFinite(absolutePressure)
 						&& absolutePressure >= transition.minimumPressurePa()
 						&& absolutePressure <= transition.maximumPressurePa())) {
-					throw new FlipFluidDomain.ThermalPhaseBlockedException(
+					throw new FluidDomain.ThermalPhaseBlockedException(
 							"Condensed phase pressure " + absolutePressure + " Pa is outside " + transition.id()
 									+ " curve " + transition.minimumPressurePa() + ".."
 									+ transition.maximumPressurePa() + " Pa");
@@ -81,7 +81,7 @@ final class CondensedPhaseChangeStage {
 				if (plan.freezing()) frozen++; else melted++;
 			}
 		}
-		return new FlipFluidDomain.ThermalPhaseStats(operations, frozen, melted, signedBatches);
+		return new FluidDomain.ThermalPhaseStats(operations, frozen, melted, signedBatches);
 	}
 
 	private PhaseCellInventory phaseCellInventory(int cell, int liquidHandle, String coherentPhaseId) {
@@ -97,7 +97,7 @@ final class CondensedPhaseChangeStage {
 		for (int marker = 0; marker < particles.count(); marker++) {
 			if (support.particleCell(marker) != cell) continue;
 			if (particles.materialHandle(marker) != liquidHandle) {
-				throw new FlipFluidDomain.ThermalPhaseBlockedException(
+				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Phase cell contains an unsupported liquid heat-bath carrier");
 			}
 			liquidSvq = Math.addExact(liquidSvq, SolidVolume.cellVolumeSvqAtLeast(particles.volume(marker)));
@@ -114,14 +114,14 @@ final class CondensedPhaseChangeStage {
 		for (CoherentPhaseStore.Group group : thermal.coherentPhases().snapshot()) {
 			if (group.cell() != cell) continue;
 			if (!group.phaseId().equals(coherentPhaseId)) {
-				throw new FlipFluidDomain.ThermalPhaseBlockedException(
+				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Phase cell contains an unsupported coherent heat-bath carrier");
 			}
-			if (coherentComposition != null) throw new FlipFluidDomain.ThermalPhaseBlockedException(
+			if (coherentComposition != null) throw new FluidDomain.ThermalPhaseBlockedException(
 					"Phase cell contains duplicate coherent groups");
 			if (chemistry != null && group.composition() == null
 					|| chemistry == null && group.composition() != null) {
-				throw new FlipFluidDomain.ThermalPhaseBlockedException(
+				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Coherent composition/chemistry capability mismatch");
 			}
 			coherentComposition = PhaseComposition.fromCoherent(group.composition());
@@ -144,7 +144,7 @@ final class CondensedPhaseChangeStage {
 		if (temperature == equilibrium || maximumBatches == 0L) return null;
 		double batchMass = transition.massMuPerBatch().toDouble();
 		if (!(Double.isFinite(batchMass) && batchMass > 0.0)) {
-			throw new FlipFluidDomain.ThermalPhaseBlockedException(
+			throw new FluidDomain.ThermalPhaseBlockedException(
 					"Condensed phase batch mass is not representable");
 		}
 		boolean freezing = temperature < equilibrium;
@@ -234,7 +234,7 @@ final class CondensedPhaseChangeStage {
 		long upperDelta = Math.multiplyExact(batches, transition.upperVolumeSvqPerBatch());
 		double requestedMass = transition.massMuPerBatch().toDouble() * batches;
 		if (!(Double.isFinite(requestedMass) && requestedMass > 0.0)) {
-			throw new FlipFluidDomain.ThermalPhaseBlockedException(
+			throw new FluidDomain.ThermalPhaseBlockedException(
 					"Condensed phase extent mass is not representable");
 		}
 		long finalLowerSvq, finalUpperSvq;
@@ -247,7 +247,7 @@ final class CondensedPhaseChangeStage {
 		if (freezing) {
 			if (upperDelta > before.freezableUpperSvq()
 					|| requestedMass > before.freezableUpperMass() + massTolerance(before.freezableUpperMass())) {
-				throw new FlipFluidDomain.ThermalPhaseBlockedException(
+				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Freeze extent exceeds non-indicator liquid inventory");
 			}
 			removal = planLiquidRemoval(cell, liquidHandle, upperDelta, requestedMass);
@@ -265,13 +265,13 @@ final class CondensedPhaseChangeStage {
 		} else {
 			if (lowerDelta > before.lowerVolumeSvq()
 					|| requestedMass > before.lowerMass() + massTolerance(before.lowerMass())) {
-				throw new FlipFluidDomain.ThermalPhaseBlockedException(
+				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Melt extent exceeds coherent inventory");
 			}
 			coherentTransfer = thermal.coherentPhases().previewTake(
 					cell, transition.lowerEnergyMaterialId(), lowerDelta);
-			if (!FlipFluidDomain.massClose(coherentTransfer.mass(), requestedMass)) {
-				throw new FlipFluidDomain.ThermalPhaseBlockedException(
+			if (!FluidDomain.massClose(coherentTransfer.mass(), requestedMass)) {
+				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Melt exact batch mass differs from coherent inventory");
 			}
 			PhaseComposition moved = PhaseComposition.fromCoherent(coherentTransfer.composition());
@@ -287,22 +287,22 @@ final class CondensedPhaseChangeStage {
 				chemistry.requireCompatible(
 						meltedMixture, support.materialRegistry().material(liquidHandle).id(), false);
 			} else if (!moved.isEmpty()) {
-				throw new FlipFluidDomain.ThermalPhaseBlockedException(
+				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Chemical coherent phase cannot melt without chemistry state");
 			}
 			if (particles.count() >= support.state().maximumParticleCount()) {
-				throw new FlipFluidDomain.ThermalPhaseBlockedException(
+				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Melt exceeds the liquid marker budget");
 			}
 			meltSlot = support.firstOpenSlot(cell);
-			if (meltSlot < 0) throw new FlipFluidDomain.ThermalPhaseBlockedException(
+			if (meltSlot < 0) throw new FluidDomain.ThermalPhaseBlockedException(
 					"Melt has no collision-valid liquid marker slot");
 		}
 		long occupied = Math.addExact(
 				Math.addExact(finalLowerSvq, finalUpperSvq), support.granularSvq(cell));
 		long capacity = SolidVolume.fromCellVolumeExact(
 				support.state().geometry().cutCells.openCellVolume(cell));
-		if (occupied > capacity) throw new FlipFluidDomain.ThermalPhaseBlockedException(
+		if (occupied > capacity) throw new FluidDomain.ThermalPhaseBlockedException(
 				"Condensed phase extent exceeds joint cell capacity");
 		ArrayList<ThermalStateFunction.InventoryPortion> phaseInventory = new ArrayList<>(2);
 		if (finalLowerMass > 0.0) phaseInventory.add(new ThermalStateFunction.InventoryPortion(

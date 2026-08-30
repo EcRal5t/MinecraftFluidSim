@@ -12,7 +12,7 @@ import java.util.Arrays;
 final class MarkerGridBuilder {
 	private MarkerGridBuilder() { }
 
-	static void build(FlipFluidDomain domain) {
+	static void build(FluidDomain domain) {
 		MarkerGridIndex grid = domain.markerGrid;
 		Arrays.fill(grid.markerCount, 0);
 		Arrays.fill(grid.cellMarkerHead, -1);

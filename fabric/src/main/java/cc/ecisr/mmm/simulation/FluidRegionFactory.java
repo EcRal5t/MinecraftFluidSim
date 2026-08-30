@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.simulation;
 
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
@@ -25,7 +25,7 @@ final class FluidRegionFactory {
 			int cellsPerBlock,
 			long markerCapacity
 	) {
-		FlipFluidDomain domain = createDomain(
+		FluidDomain domain = createDomain(
 				blockSizeX, blockSizeY, blockSizeZ, cellsPerBlock, markerCapacity
 		);
 		return new FluidRegion(UUID.randomUUID(), level.dimension(), origin, domain, markerCapacity);
@@ -37,7 +37,7 @@ final class FluidRegionFactory {
 			int cellsPerBlock,
 			long markerCapacity
 	) {
-		FlipFluidDomain domain = createDomain(
+		FluidDomain domain = createDomain(
 				footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ(), cellsPerBlock, markerCapacity
 		);
 		return new FluidRegion(
@@ -45,7 +45,7 @@ final class FluidRegionFactory {
 		);
 	}
 
-	private static FlipFluidDomain createDomain(
+	private static FluidDomain createDomain(
 			int blockSizeX,
 			int blockSizeY,
 			int blockSizeZ,
@@ -57,7 +57,7 @@ final class FluidRegionFactory {
 				cellSize, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F
 		);
-		return new FlipFluidDomain(
+		return new FluidDomain(
 				Math.multiplyExact(blockSizeX, cellsPerBlock),
 				Math.multiplyExact(blockSizeY, cellsPerBlock),
 				Math.multiplyExact(blockSizeZ, cellsPerBlock),
@@ -67,7 +67,7 @@ final class FluidRegionFactory {
 	}
 
 	static int captureVanillaWater(ServerLevel level, FluidRegion region) {
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
 		float cellSize = domain.config().cellSize();
 		int wetCells = 0;

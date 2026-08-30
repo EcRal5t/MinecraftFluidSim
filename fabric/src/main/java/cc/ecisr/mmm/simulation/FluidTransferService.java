@@ -1,7 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.block.MmmBlocks;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.transfer.ContainerFluidLedger;
 import cc.ecisr.mmm.transfer.ChemicalContents;
 import cc.ecisr.mmm.transfer.ContainerTransferActor;
@@ -588,7 +588,7 @@ public final class FluidTransferService {
 		if (requestedCellVolume <= 0.0F) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "容器余量小于 solver 可表示体积，未能注入");
 		}
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		if (domain.totalOpenVolume() - domain.totalVolume() + 1.0E-6F < requestedCellVolume) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "空间或 marker 预算不足，未能注入");
 		}
@@ -597,7 +597,7 @@ public final class FluidTransferService {
 				: thermalContents.splitEnergy(plannedNanos, volumeNanos);
 		Double coupledEnergy = thermalSplit == null ? null
 				: thermalContents.internalEnergy() - thermalSplit.remainingEnergy();
-		FlipFluidDomain.ExactVolumeTransfer inserted = thermalSplit == null
+		FluidDomain.ExactVolumeTransfer inserted = thermalSplit == null
 				? domain.tryInsertExactVolume(cell[0], cell[1], cell[2], requestedCellVolume, maxRadius,
 						materialHandle, externalSource)
 				: domain.tryInsertExactVolume(cell[0], cell[1], cell[2], requestedCellVolume, maxRadius,
@@ -626,7 +626,7 @@ public final class FluidTransferService {
 		if (requestedCellVolume <= 0.0F) {
 			return new TransferOutcome(false, false, withVolume(baseVolumeNanos), "容器余量小于 solver 可表示体积");
 		}
-		FlipFluidDomain.ExactVolumeTransfer extracted = region.domain().tryExtractExactVolume(
+		FluidDomain.ExactVolumeTransfer extracted = region.domain().tryExtractExactVolume(
 				cell[0], cell[1], cell[2], requestedCellVolume, maxRadius, materialHandle);
 		if (!extracted.transferred() || extracted.volume() <= 0.0) {
 			return new TransferOutcome(false, false, withVolume(baseVolumeNanos), "准星处没有足够水体");
@@ -654,8 +654,8 @@ public final class FluidTransferService {
 			boolean externalSource, ThermalContents thermalContents
 	) {
 		if (mixture == null) return null;
-		FlipFluidDomain domain = region.domain();
-		java.util.List<FlipFluidDomain.MaterialPortion> portions;
+		FluidDomain domain = region.domain();
+		java.util.List<FluidDomain.MaterialPortion> portions;
 		try {
 			portions = planMaterialInsertion(domain, mixture);
 		} catch (IllegalArgumentException unknownMaterial) {
@@ -669,7 +669,7 @@ public final class FluidTransferService {
 				: thermalContents.splitEnergy(plannedNanos, mixture.totalVolumeNanos());
 		Double coupledEnergy = thermalSplit == null ? null
 				: thermalContents.internalEnergy() - thermalSplit.remainingEnergy();
-		FlipFluidDomain.ExactMixtureTransfer inserted = thermalSplit == null
+		FluidDomain.ExactMixtureTransfer inserted = thermalSplit == null
 				? domain.tryInsertExactMixture(cell[0], cell[1], cell[2], portions, maxRadius, externalSource)
 				: domain.tryInsertExactMixture(cell[0], cell[1], cell[2], portions, maxRadius, externalSource,
 						coupledEnergy);
@@ -698,7 +698,7 @@ public final class FluidTransferService {
 			FluidSimulationService service, FluidRegion region, int[] cell, ChemicalContents contents, int maxRadius,
 			boolean externalSource, ThermalContents thermalContents
 	) {
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		if (!domain.hasChemistryState()) return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents), "该区域不是化学区域");
 		try {
 			contents.validateAgainst(domain.chemicalParcels().registry());
@@ -723,7 +723,7 @@ public final class FluidTransferService {
 					: thermalContents.splitEnergy(candidate, contents.totalVolumeNanos());
 			Double coupledEnergy = thermalSplit == null ? null
 					: thermalContents.internalEnergy() - thermalSplit.remainingEnergy();
-			FlipFluidDomain.ExactChemicalTransfer inserted = thermalSplit == null
+			FluidDomain.ExactChemicalTransfer inserted = thermalSplit == null
 					? domain.tryInsertExactChemical(cell[0], cell[1], cell[2], requested, maxRadius, externalSource)
 					: domain.tryInsertExactChemical(cell[0], cell[1], cell[2], requested, maxRadius,
 							externalSource, coupledEnergy);
@@ -755,7 +755,7 @@ public final class FluidTransferService {
 				new ItemStack(MmmItems.MATERIAL_BUCKET), "容器余量小于 solver 可表示体积");
 		ChemicalContents[] plannedContents = new ChemicalContents[1];
 		long[] plannedNanos = new long[1];
-		FlipFluidDomain.ExactChemicalTransfer extracted = region.domain().tryExtractExactChemical(
+		FluidDomain.ExactChemicalTransfer extracted = region.domain().tryExtractExactChemical(
 				cell[0], cell[1], cell[2], requested, maxRadius, ledger -> {
 					try {
 						plannedNanos[0] = settledNanos(ledger.totalVolume(), capacityNanos);
@@ -784,13 +784,13 @@ public final class FluidTransferService {
 			long capacityNanos, int maxRadius
 	) {
 		if (capacityNanos <= 0L) return null;
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		float requestedCellVolume = nanosToCellVolumeAtMost(capacityNanos);
 		if (requestedCellVolume <= 0.0F) {
 			return new TransferOutcome(false, false, new ItemStack(MmmItems.MATERIAL_BUCKET),
 					"容器余量小于 solver 可表示体积");
 		}
-		FlipFluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
+		FluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
 				cell[0], cell[1], cell[2], requestedCellVolume, maxRadius);
 		if (!extracted.transferred() || extracted.portions().isEmpty()) {
 			return new TransferOutcome(false, false, new ItemStack(MmmItems.MATERIAL_BUCKET),
@@ -825,7 +825,7 @@ public final class FluidTransferService {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents),
 					"颗粒容器 registry 或账本不合法：" + invalid.getMessage());
 		}
-		FlipFluidDomain.GranularInsertion inserted = region.domain().tryInsertExactGranular(
+		FluidDomain.GranularInsertion inserted = region.domain().tryInsertExactGranular(
 				cell[0], cell[1], cell[2], ledger, maxRadius, externalSource);
 		if (!inserted.inserted()) {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents),
@@ -846,7 +846,7 @@ public final class FluidTransferService {
 			FluidSimulationService service, FluidRegion region, int[] cell, long capacitySvq, int maxRadius
 	) {
 		GranularContents[] planned = new GranularContents[1];
-		FlipFluidDomain.GranularExtraction extracted = region.domain().tryExtractExactGranular(
+		FluidDomain.GranularExtraction extracted = region.domain().tryExtractExactGranular(
 				cell[0], cell[1], cell[2], capacitySvq, maxRadius, false, ledger -> {
 					try {
 						planned[0] = GranularContents.fromLedger(ledger, service.granularRegistry(),
@@ -870,16 +870,16 @@ public final class FluidTransferService {
 
 	/** Deterministic largest-remainder-style apportionment; component masses remain exact doubles. */
 	static FluidMixture mixtureFromExtraction(
-			FlipFluidDomain domain, java.util.List<FlipFluidDomain.MaterialPortion> portions, long capacityNanos
+			FluidDomain domain, java.util.List<FluidDomain.MaterialPortion> portions, long capacityNanos
 	) {
 		double totalVolume = 0.0;
-		for (FlipFluidDomain.MaterialPortion portion : portions) totalVolume += portion.volume();
+		for (FluidDomain.MaterialPortion portion : portions) totalVolume += portion.volume();
 		long totalNanos = settledNanos(totalVolume, capacityNanos);
 		long remainingNanos = totalNanos;
 		double remainingVolume = totalVolume;
 		java.util.List<FluidMixture.Component> components = new java.util.ArrayList<>(portions.size());
 		for (int i = 0; i < portions.size(); i++) {
-			FlipFluidDomain.MaterialPortion portion = portions.get(i);
+			FluidDomain.MaterialPortion portion = portions.get(i);
 			int componentsLeft = portions.size() - i;
 			long nanos = componentsLeft == 1 ? remainingNanos
 					: Math.max(1L, Math.min(remainingNanos - (componentsLeft - 1L),
@@ -893,10 +893,10 @@ public final class FluidTransferService {
 		return new FluidMixture(components);
 	}
 
-	static java.util.List<FlipFluidDomain.MaterialPortion> planMaterialInsertion(
-			FlipFluidDomain domain, FluidMixture mixture
+	static java.util.List<FluidDomain.MaterialPortion> planMaterialInsertion(
+			FluidDomain domain, FluidMixture mixture
 	) {
-		java.util.List<FlipFluidDomain.MaterialPortion> portions = new java.util.ArrayList<>(mixture.components().size());
+		java.util.List<FluidDomain.MaterialPortion> portions = new java.util.ArrayList<>(mixture.components().size());
 		for (FluidMixture.Component component : mixture.components()) {
 			int handle = domain.materialRegistry().handle(component.materialId());
 			float plannedVolume = nanosToCellVolumeAtMost(component.volumeNanos());
@@ -906,15 +906,15 @@ public final class FluidTransferService {
 			double plannedMassKilograms = plannedNanos == component.volumeNanos()
 					? component.mass()
 					: component.mass() * plannedNanos / component.volumeNanos();
-			portions.add(new FlipFluidDomain.MaterialPortion(
+			portions.add(new FluidDomain.MaterialPortion(
 					handle, plannedVolume, domain.solverMassForKilograms(plannedMassKilograms)));
 		}
 		return java.util.List.copyOf(portions);
 	}
 
 	static MaterialInsertionSettlement settleMaterialInsertion(
-			FlipFluidDomain domain, FluidMixture sourceMixture,
-			java.util.List<FlipFluidDomain.MaterialPortion> insertedPortions
+			FluidDomain domain, FluidMixture sourceMixture,
+			java.util.List<FluidDomain.MaterialPortion> insertedPortions
 	) {
 		if (insertedPortions.size() != sourceMixture.components().size()) {
 			throw new IllegalStateException("材料注入返回的组分数与请求不一致");
@@ -923,7 +923,7 @@ public final class FluidTransferService {
 		long insertedNanos = 0L;
 		for (int i = 0; i < sourceMixture.components().size(); i++) {
 			FluidMixture.Component source = sourceMixture.components().get(i);
-			FlipFluidDomain.MaterialPortion actual = insertedPortions.get(i);
+			FluidDomain.MaterialPortion actual = insertedPortions.get(i);
 			long componentNanos = settledNanos(actual.volume(), source.volumeNanos());
 			insertedNanos = Math.addExact(insertedNanos, componentNanos);
 			long remainingNanos = source.volumeNanos() - componentNanos;
@@ -1076,7 +1076,7 @@ public final class FluidTransferService {
 	}
 
 	static long extractableNanos(
-			FlipFluidDomain domain, int[] cell, long capacityNanos, int maxRadius, int materialHandle
+			FluidDomain domain, int[] cell, long capacityNanos, int maxRadius, int materialHandle
 	) {
 		if (capacityNanos <= 0L) return 0L;
 		double availableCellVolume = domain.exactVolumeNear(

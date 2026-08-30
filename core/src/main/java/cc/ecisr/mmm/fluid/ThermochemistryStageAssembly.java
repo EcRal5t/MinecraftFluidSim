@@ -19,7 +19,7 @@ final class ThermochemistryStageAssembly {
 
 	private ThermochemistryStageAssembly() { }
 
-	static Stages create(FlipFluidDomain domain) {
+	static Stages create(FluidDomain domain) {
 		ThermalTransportStage transport = new ThermalTransportStage(
 				new ThermalTransportStage.Workspace(domain.thermalMarkerContext()),
 				new ThermalTransportStage.Access() {

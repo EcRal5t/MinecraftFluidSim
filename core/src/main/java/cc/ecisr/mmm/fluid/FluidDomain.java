@@ -72,7 +72,7 @@ import java.util.TreeSet;
  * collision. Eight marker particles represent one full grid cell. Particles
 	 * carry exact volume and mass inventories, so liquid cannot diffuse into a low-density VOF haze.</p>
  */
-public final class FlipFluidDomain {
+public final class FluidDomain {
 	private static final int PARTICLES_PER_FULL_CELL = 8;
 	static final float PARTICLE_VOLUME = 1.0F / PARTICLES_PER_FULL_CELL;
 	private static final float FLIP_RATIO = 0.90F;
@@ -173,11 +173,11 @@ public final class FlipFluidDomain {
 	private final CellInventoryReader cellInventory;
 	private final CarrierInventoryReader carriers;
 
-	public FlipFluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config) {
+	public FluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config) {
 		this(sizeX, sizeY, sizeZ, config, DEFAULT_MAX_PARTICLES);
 	}
 
-	public FlipFluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config, int maximumParticleCount) {
+	public FluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config, int maximumParticleCount) {
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2) throw new IllegalArgumentException("All dimensions must be at least two cells");
 		if (maximumParticleCount <= 0) throw new IllegalArgumentException("Maximum particle count must be positive");
 		this.sizeX = sizeX;
@@ -397,9 +397,9 @@ public final class FlipFluidDomain {
 	}
 
 	/** Restores a private solver instance without consulting Minecraft/Fabric state. */
-	public static FlipFluidDomain restoreAuthoritativeState(FluidDomainState state) {
+	public static FluidDomain restoreAuthoritativeState(FluidDomainState state) {
 		if (state == null) throw new IllegalArgumentException("Authoritative state is missing");
-		FlipFluidDomain domain = new FlipFluidDomain(state.sizeX(), state.sizeY(), state.sizeZ(),
+		FluidDomain domain = new FluidDomain(state.sizeX(), state.sizeY(), state.sizeZ(),
 				state.config(), state.maximumParticleCount());
 		if (state.sealedDomainBoundary()) domain.sealDomainBoundary();
 		switch (state.carrierKind()) {
@@ -2273,7 +2273,7 @@ public final class FlipFluidDomain {
 
 	/** Opaque, single-use permit returned only after every collision owner accepts the batch. */
 	public static final class CollisionEditPlan {
-		private final FlipFluidDomain owner;
+		private final FluidDomain owner;
 		private final List<CollisionEdit> edits;
 		private final int[] previousMasks;
 		private final int planMarkerCount;
@@ -2283,7 +2283,7 @@ public final class FlipFluidDomain {
 		private boolean consumed;
 
 		private CollisionEditPlan(
-				FlipFluidDomain owner, List<CollisionEdit> edits, int[] previousMasks,
+				FluidDomain owner, List<CollisionEdit> edits, int[] previousMasks,
 				int planMarkerCount, long totalVolumeBits, long totalMassBits, GranularCollisionPlan granular
 		) {
 			this.owner = owner;
@@ -2401,7 +2401,7 @@ public final class FlipFluidDomain {
 				Double.valueOf(internalEnergy));
 	}
 
-	private FlipFluidDomain.ExactMixtureTransfer tryInsertExactMixture(
+	private FluidDomain.ExactMixtureTransfer tryInsertExactMixture(
 			int centerX, int centerY, int centerZ, List<MaterialPortion> portions, int maxRadius,
 			boolean externalSource, Double internalEnergy
 	) {
@@ -2869,7 +2869,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				GranularCouplingFields.Position position = parcelPosition(parcel);
 				granularCoupling.removePlannedParcel(plannedSolid, position, parcel.solidVolumeSvq());
 				if (granularCoupling.tryPlanCell(plannedSolid, cell, parcel.solidVolumeSvq(),
-						FlipFluidDomain.this::granularGeometricOpenSvq)) return true;
+						FluidDomain.this::granularGeometricOpenSvq)) return true;
 				restorePlannedParcel(plannedSolid, position, parcel.solidVolumeSvq(), "settlement");
 				return false;
 			}
@@ -2882,7 +2882,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			@Override public boolean planRelaxation(int fromCell, int toCell, long solidSvq) {
 				granularCoupling.removePlannedCell(plannedSolid, fromCell, solidSvq);
 				if (granularCoupling.tryPlanCell(plannedSolid, toCell, solidSvq,
-						FlipFluidDomain.this::granularGeometricOpenSvq)) return true;
+						FluidDomain.this::granularGeometricOpenSvq)) return true;
 				restorePlannedCell(plannedSolid, fromCell, solidSvq, "relaxation");
 				return false;
 			}
@@ -2914,7 +2914,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 				granularCoupling.removePlannedCell(plannedSolid, cell, solidSvq);
 				GranularCouplingFields.Position position = new GranularCouplingFields.Position(x, y, z);
 				if (granularCoupling.tryPlanParcel(plannedSolid, position, solidSvq,
-						FlipFluidDomain.this::granularGeometricOpenSvq)) return true;
+						FluidDomain.this::granularGeometricOpenSvq)) return true;
 				restorePlannedCell(plannedSolid, cell, solidSvq, "wake");
 				return false;
 			}

@@ -9,9 +9,9 @@ import cc.ecisr.mmm.units.SignedDyadic;
  * mutates it; every method is safe on a frozen candidate and allocates only its result.
  */
 final class DomainMetrics {
-	private final FlipFluidDomain domain;
+	private final FluidDomain domain;
 
-	DomainMetrics(FlipFluidDomain domain) {
+	DomainMetrics(FluidDomain domain) {
 		this.domain = domain;
 	}
 
@@ -73,7 +73,7 @@ final class DomainMetrics {
 		return mass == 0.0 ? Float.NaN : (float) (weighted / mass);
 	}
 
-	FlipFluidDomain.VolumeDistribution volumeDistribution(float visibleThreshold) {
+	FluidDomain.VolumeDistribution volumeDistribution(float visibleThreshold) {
 		domain.ensureGrid();
 		int active = 0, visible = 0, dense = 0;
 		for (float value : domain.volume) {
@@ -81,17 +81,17 @@ final class DomainMetrics {
 			if (value >= visibleThreshold) visible++;
 			if (value >= 0.90F) dense++;
 		}
-		return new FlipFluidDomain.VolumeDistribution(active, visible, dense);
+		return new FluidDomain.VolumeDistribution(active, visible, dense);
 	}
 
-	FlipFluidDomain.SolidDistribution solidDistribution() {
+	FluidDomain.SolidDistribution solidDistribution() {
 		int partial = 0, full = 0;
 		for (int index = 0; index < domain.cellCount; index++) {
 			int mask = domain.geometry.cutCells.mask(index);
 			if (mask == FlipCutCellGeometry.FULL_MASK) full++;
 			else if (mask != 0) partial++;
 		}
-		return new FlipFluidDomain.SolidDistribution(partial, full);
+		return new FluidDomain.SolidDistribution(partial, full);
 	}
 
 	boolean containsFluidAt(float localX, float localY, float localZ) {
@@ -103,7 +103,7 @@ final class DomainMetrics {
 		if (domain.geometry.solid[index] || domain.geometry.cutCells.pointInsideSolid(localX, localY, localZ, h)
 				|| domain.volume[index] <= domain.config.fluidEpsilon()) return false;
 		float openVolume = domain.effectiveOpenCellVolume(index);
-		float reconstructedFill = openVolume <= 0.0F ? 0.0F : FlipFluidDomain.clamp01(domain.volume[index] / openVolume);
+		float reconstructedFill = openVolume <= 0.0F ? 0.0F : FluidDomain.clamp01(domain.volume[index] / openVolume);
 		return localY - y * h < reconstructedFill * h;
 	}
 
@@ -142,7 +142,7 @@ final class DomainMetrics {
 	double exactVolumeNear(int centerX, int centerY, int centerZ, int maxRadius, int materialHandle) {
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
 		boolean[] near = new boolean[domain.cellCount];
-		for (FlipFluidDomain.CellCandidate candidate : domain.nearbyCells(centerX, centerY, centerZ, maxRadius)) {
+		for (FluidDomain.CellCandidate candidate : domain.nearbyCells(centerX, centerY, centerZ, maxRadius)) {
 			near[candidate.index()] = true;
 		}
 		double result = 0.0;

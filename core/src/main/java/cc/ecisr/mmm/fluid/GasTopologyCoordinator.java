@@ -23,10 +23,10 @@ import java.util.TreeSet;
  * while the domain retains only thin entry delegates.
  */
 final class GasTopologyCoordinator {
-	private final FlipFluidDomain domain;
+	private final FluidDomain domain;
 	private final AirCavityScanner scanner;
 
-	GasTopologyCoordinator(FlipFluidDomain domain) {
+	GasTopologyCoordinator(FluidDomain domain) {
 		this.domain = domain;
 		this.scanner = new AirCavityScanner(domain.sizeX, domain.sizeY, domain.sizeZ,
 				domain.config.cellSize(), domain.cellCount);

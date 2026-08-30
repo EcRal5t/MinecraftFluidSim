@@ -20,7 +20,7 @@ final class M3MaterialDynamicsValidation {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 0.0F, 1.0F / 40.0F,
 				200, 1.0E-5F, 0.40F, 2.0E-3F, 0.80F);
-		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 128);
+		FluidDomain domain = new FluidDomain(3, 3, 3, config, 128);
 		domain.setVolume(1, 1, 1, 1.0F);
 		FlipParticleState before = domain.exportParticleState();
 		double massBefore = domain.totalMass();
@@ -60,7 +60,7 @@ final class M3MaterialDynamicsValidation {
 
 	private static ConnectedVesselResult unequalAreaConnectedVesselBalances() {
 		FluidSolverConfig config = config();
-		FlipFluidDomain domain = new FlipFluidDomain(9, 9, 5, config, 768);
+		FluidDomain domain = new FluidDomain(9, 9, 5, config, 768);
 		fillSolid(domain);
 		for (int x = 1; x <= 7; x++) open(domain, x, 1, 1);
 		for (int x = 6; x <= 7; x++) open(domain, x, 1, 2);
@@ -81,7 +81,7 @@ final class M3MaterialDynamicsValidation {
 		double initialDifference = connectedHeadDifference(domain);
 		int steps = 0;
 		for (; steps < 1_200; steps++) {
-			FlipFluidDomain.StepStats stats = domain.step();
+			FluidDomain.StepStats stats = domain.step();
 			check(stats.relativeVolumeError() <= 2.0E-6F && stats.relativeMassError() <= 2.0E-12,
 					"unequal-area connector changed physical inventories");
 			if (steps >= 300 && connectedHeadDifference(domain) < 0.10 && domain.maximumParticleSpeed() < 0.04F) break;
@@ -100,7 +100,7 @@ final class M3MaterialDynamicsValidation {
 		return new ConnectedVesselResult(initialDifference, finalDifference, steps + 1);
 	}
 
-	private static double connectedHeadDifference(FlipFluidDomain domain) {
+	private static double connectedHeadDifference(FluidDomain domain) {
 		FlipParticleState state = domain.exportParticleState();
 		float[] markers = state.copyPositionVolume();
 		double leftVolume = 0.0, rightVolume = 0.0;
@@ -121,7 +121,7 @@ final class M3MaterialDynamicsValidation {
 		));
 		int heavy = registry.handle("mmm:heavy"), light = registry.handle("mmm:light");
 		FluidSolverConfig config = config();
-		FlipFluidDomain domain = new FlipFluidDomain(6, 7, 4, config, 1_024);
+		FluidDomain domain = new FluidDomain(6, 7, 4, config, 1_024);
 		fillSolid(domain);
 		for (int y = 1; y <= 5; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
 			open(domain, x, y, z);
@@ -138,17 +138,17 @@ final class M3MaterialDynamicsValidation {
 		for (int y = 3; y <= 4; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
 			domain.setMaterialInCell(x, y, z, registry, heavy);
 		}
-		FlipFluidDomain.MaterialInventory initialHeavy = domain.materialInventory(heavy);
-		FlipFluidDomain.MaterialInventory initialLight = domain.materialInventory(light);
+		FluidDomain.MaterialInventory initialHeavy = domain.materialInventory(heavy);
+		FluidDomain.MaterialInventory initialLight = domain.materialInventory(light);
 		double maximumMassError = 0.0;
 		for (int step = 0; step < 1_200; step++) {
-			FlipFluidDomain.StepStats stats = domain.step();
+			FluidDomain.StepStats stats = domain.step();
 			maximumMassError = Math.max(maximumMassError, stats.relativeMassError());
 			check(stats.relativeVolumeError() <= 2.0E-6F,
 					"density inversion changed exact marker volume");
 		}
-		FlipFluidDomain.MaterialInventory finalHeavy = domain.materialInventory(heavy);
-		FlipFluidDomain.MaterialInventory finalLight = domain.materialInventory(light);
+		FluidDomain.MaterialInventory finalHeavy = domain.materialInventory(heavy);
+		FluidDomain.MaterialInventory finalLight = domain.materialInventory(light);
 		check(finalHeavy.centerY() + 0.20 < finalLight.centerY(),
 				"density inversion did not settle heavy material below light material: heavy="
 						+ finalHeavy.centerY() + ", light=" + finalLight.centerY());
@@ -162,7 +162,7 @@ final class M3MaterialDynamicsValidation {
 		return new LayeringResult(finalHeavy.centerY(), finalLight.centerY());
 	}
 
-	private static void seedInterchangeVelocity(FlipFluidDomain domain) {
+	private static void seedInterchangeVelocity(FluidDomain domain) {
 		FlipParticleState initial = domain.exportParticleState();
 		float[] positions = initial.copyPositionVolume();
 		float[] velocities = initial.copyParticleVelocities();
@@ -184,13 +184,13 @@ final class M3MaterialDynamicsValidation {
 		);
 	}
 
-	private static void fillSolid(FlipFluidDomain domain) {
+	private static void fillSolid(FluidDomain domain) {
 		for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
 			for (int x = 0; x < domain.sizeX(); x++) domain.setSolid(x, y, z, true);
 		}
 	}
 
-	private static void open(FlipFluidDomain domain, int x, int y, int z) {
+	private static void open(FluidDomain domain, int x, int y, int z) {
 		domain.setSolid(x, y, z, false);
 	}
 

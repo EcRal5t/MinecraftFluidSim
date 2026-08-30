@@ -2,7 +2,7 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
@@ -234,7 +234,7 @@ final class FluidRegionPersistence {
 
 	/** Stages a private lifecycle result without resynthesizing gas topology from world geometry. */
 	StagedCheckpoint stageLifecycleCheckpoint(
-			FluidRegion region, FlipFluidDomain candidateDomain, long targetGeneration
+			FluidRegion region, FluidDomain candidateDomain, long targetGeneration
 	) throws IOException {
 		if (!GenerationSequence.isNext(region.checkpointGeneration(), targetGeneration)) {
 			throw new IOException("Lifecycle checkpoint target does not advance the live region by one generation");

@@ -30,8 +30,8 @@ public final class CarrierMutationValidation {
 				120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
 	}
 
-	private static FlipFluidDomain emptyMaterialDomain(int maximumParticles) {
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config(), maximumParticles);
+	private static FluidDomain emptyMaterialDomain(int maximumParticles) {
+		FluidDomain domain = new FluidDomain(4, 4, 4, config(), maximumParticles);
 		domain.sealDomainBoundary();
 		FluidMaterialRegistry registry = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
@@ -40,8 +40,8 @@ public final class CarrierMutationValidation {
 		return domain;
 	}
 
-	private static FlipFluidDomain fullCapabilityDomain(ProductionRegistries.Set registries) {
-		FlipFluidDomain domain = emptyMaterialDomain(4_096);
+	private static FluidDomain fullCapabilityDomain(ProductionRegistries.Set registries) {
+		FluidDomain domain = emptyMaterialDomain(4_096);
 		FluidMaterialRegistry runtimeLiquids = domain.materialRegistry();
 		domain.bindChemistry(registries.chemical());
 		domain.bindGranular(registries.granular(), runtimeLiquids);
@@ -53,7 +53,7 @@ public final class CarrierMutationValidation {
 	}
 
 	private static void appendThenRemoveLastClosesLedgers() {
-		FlipFluidDomain domain = emptyMaterialDomain(64);
+		FluidDomain domain = emptyMaterialDomain(64);
 		long revision = domain.carrierMutationRevision();
 		int ordinal = domain.carrierMutations().appendMarker(
 				CarrierMutationPlan.append(revision, domain.particles.count()),
@@ -74,7 +74,7 @@ public final class CarrierMutationValidation {
 	}
 
 	private static void removeMiddleSwapsAllColumnsBitwise() {
-		FlipFluidDomain domain = emptyMaterialDomain(4_096);
+		FluidDomain domain = emptyMaterialDomain(4_096);
 		domain.addVolumeNearBudgeted(1, 1, 1, 0.5F, 1);
 		domain.addVolumeNearBudgeted(2, 2, 2, 0.5F, 1);
 		require(domain.particles.count() == 8, "fixture did not create eight markers");
@@ -103,7 +103,7 @@ public final class CarrierMutationValidation {
 
 	private static void sideColumnsSwapWithTheMainColumn() throws Exception {
 		ProductionRegistries.Set registries = load();
-		FlipFluidDomain domain = fullCapabilityDomain(registries);
+		FluidDomain domain = fullCapabilityDomain(registries);
 		domain.addVolumeNearBudgeted(1, 1, 1, 0.5F, 1);
 		domain.addVolumeNearBudgeted(2, 2, 2, 0.5F, 1);
 		int removed = 3, last = domain.particles.count() - 1;
@@ -141,12 +141,12 @@ public final class CarrierMutationValidation {
 		return true;
 	}
 
-	private static double thermalLiquidEnergy(FlipFluidDomain domain, int marker) {
+	private static double thermalLiquidEnergy(FluidDomain domain, int marker) {
 		return domain.thermalState.liquidInternalEnergy(marker);
 	}
 
 	private static void capacityEdgeRejectsBeforeAnyWrite() {
-		FlipFluidDomain domain = emptyMaterialDomain(1);
+		FluidDomain domain = emptyMaterialDomain(1);
 		domain.carrierMutations().appendMarker(
 				CarrierMutationPlan.append(domain.carrierMutationRevision(), 0),
 				domain.cellIndex(1, 1, 1), 0.6F, 0.6F, 0.6F, 0.125F, 0, 125.0, null, false, false);
@@ -156,7 +156,7 @@ public final class CarrierMutationValidation {
 					CarrierMutationPlan.append(revision, 1),
 					domain.cellIndex(1, 1, 1), 0.6F, 0.6F, 0.6F, 0.125F, 0, 125.0, null, false, false);
 			throw new AssertionError("append beyond the marker budget was accepted");
-		} catch (FlipFluidDomain.ParticleBudgetExceededException expected) {
+		} catch (FluidDomain.ParticleBudgetExceededException expected) {
 			require(domain.particles.count() == 1 && domain.carrierMutationRevision() == revision,
 					"budget rejection changed the carrier state");
 		}
@@ -164,7 +164,7 @@ public final class CarrierMutationValidation {
 
 	private static void stalePlansRejectWithoutStateChange() throws Exception {
 		ProductionRegistries.Set registries = load();
-		FlipFluidDomain domain = fullCapabilityDomain(registries);
+		FluidDomain domain = fullCapabilityDomain(registries);
 		domain.addVolumeNearBudgeted(1, 1, 1, 0.5F, 1);
 		long staleRevision = domain.carrierMutationRevision();
 		int count = domain.particles.count();
@@ -193,7 +193,7 @@ public final class CarrierMutationValidation {
 
 	private static void wholesaleCountBindsRevisionAndBudget() throws Exception {
 		ProductionRegistries.Set registries = load();
-		FlipFluidDomain domain = fullCapabilityDomain(registries);
+		FluidDomain domain = fullCapabilityDomain(registries);
 		domain.addVolumeNearBudgeted(1, 1, 1, 0.5F, 1);
 		int count = domain.particles.count();
 		long staleRevision = domain.carrierMutationRevision();

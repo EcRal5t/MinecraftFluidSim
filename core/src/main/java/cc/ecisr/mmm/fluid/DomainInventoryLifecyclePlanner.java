@@ -13,9 +13,9 @@ import cc.ecisr.mmm.units.SignedDyadic;
  * thermal side is bound by its owner generation and exact dyadic inventory.
  */
 final class DomainInventoryLifecyclePlanner {
-	private final FlipFluidDomain domain;
+	private final FluidDomain domain;
 
-	DomainInventoryLifecyclePlanner(FlipFluidDomain domain) {
+	DomainInventoryLifecyclePlanner(FluidDomain domain) {
 		this.domain = domain;
 	}
 
@@ -26,10 +26,10 @@ final class DomainInventoryLifecyclePlanner {
 	 * granular truth is independent of marker structure and the joint operator clear commits
 	 * the condensed side first.
 	 */
-	FlipFluidDomain.GranularClearPlan planGranularClear() {
+	FluidDomain.GranularClearPlan planGranularClear() {
 		long granularRevision = domain.granularState == null ? 0L : domain.granularState.mutationRevision();
 		if (domain.granularState == null || !domain.hasGranularInventory()) {
-			return new FlipFluidDomain.GranularClearPlan(GranularAuditLedger.EMPTY,
+			return new FluidDomain.GranularClearPlan(GranularAuditLedger.EMPTY,
 					domain.granularState == null ? GranularAuditLedger.EMPTY : domain.granularState.escapedSink,
 					0L, Double.doubleToRawLongBits(0.0), 0, 0,
 					SignedDyadic.ZERO, granularRevision);
@@ -40,7 +40,7 @@ final class DomainInventoryLifecyclePlanner {
 		GranularAuditLedger removed = GranularAuditLedger.captureInventory(
 				granular.registry, granular.parcels, granular.deposits, granular.compositions);
 		GranularAuditLedger sinkAfter = granular.escapedSink.plus(removed);
-		return new FlipFluidDomain.GranularClearPlan(removed, sinkAfter, granular.inventory.totalSolidVolumeSvq(),
+		return new FluidDomain.GranularClearPlan(removed, sinkAfter, granular.inventory.totalSolidVolumeSvq(),
 				Double.doubleToRawLongBits(granular.inventory.totalMass()), granular.parcels.count(),
 				granular.deposits.groupCount(), domain.thermalState == null
 						? SignedDyadic.ZERO : domain.thermalState.granularEnergy().exactEnergy(),
@@ -48,12 +48,12 @@ final class DomainInventoryLifecyclePlanner {
 	}
 
 	/** Prevalidates every truth removed by the operator-level condensed inventory reset. */
-	FlipFluidDomain.OperatorClearPlan planOperatorClear() {
+	FluidDomain.OperatorClearPlan planOperatorClear() {
 		if (domain.hasPendingPhaseVolumeWork()) {
 			throw new IllegalStateException("Pending phase volume/work must be projected before operator clear");
 		}
-		FlipFluidDomain.CondensedClearPlan condensed = domain.planRemoveAllCondensedExact();
-		FlipFluidDomain.GranularClearPlan granular = planGranularClear();
+		FluidDomain.CondensedClearPlan condensed = domain.planRemoveAllCondensedExact();
+		FluidDomain.GranularClearPlan granular = planGranularClear();
 		GasTopologyCoordinator.GasTopologyPlan gasTopology = null;
 		if (domain.gasState.cellNodeId != null && !domain.gasState.operatorVentedTopology) {
 			domain.ensureGrid();
@@ -64,6 +64,6 @@ final class DomainInventoryLifecyclePlanner {
 		if (domain.thermalState != null) domain.thermalState.requireCanCommitOperatorClear(
 				thermalRevision, condensed.liquid().internalEnergy(), condensed.coherentEnergy(),
 				granular.internalEnergy(), gasTopology == null ? null : gasTopology.thermalPlan());
-		return new FlipFluidDomain.OperatorClearPlan(condensed, granular, gasTopology, thermalRevision);
+		return new FluidDomain.OperatorClearPlan(condensed, granular, gasTopology, thermalRevision);
 	}
 }

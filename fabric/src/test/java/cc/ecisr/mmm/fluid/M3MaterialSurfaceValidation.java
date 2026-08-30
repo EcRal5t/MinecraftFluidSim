@@ -15,7 +15,7 @@ final class M3MaterialSurfaceValidation {
 		int oil = registry.handle("mmm:oil");
 		int heavy = registry.handle("mmm:heavy");
 
-		FlipFluidDomain immiscibleDomain = layeredDomain(registry, water, oil);
+		FluidDomain immiscibleDomain = layeredDomain(registry, water, oil);
 		double volumeBefore = immiscibleDomain.totalVolume(), massBefore = immiscibleDomain.totalMass();
 		FluidMaterialRenderSnapshot layeredSnapshot = immiscibleDomain.copyMaterialRenderSnapshot();
 		FluidMaterialSurfaceMesher.Mesh layered = FluidMaterialSurfaceMesher.build(layeredSnapshot);
@@ -106,18 +106,18 @@ final class M3MaterialSurfaceValidation {
 		return minimumLevel;
 	}
 
-	private static FlipFluidDomain layeredDomain(FluidMaterialRegistry registry, int leftMaterial, int rightMaterial) {
-		FlipFluidDomain domain = filledDomain();
+	private static FluidDomain layeredDomain(FluidMaterialRegistry registry, int leftMaterial, int rightMaterial) {
+		FluidDomain domain = filledDomain();
 		for (int z = 1; z <= 4; z++) for (int y = 1; y <= 4; y++) for (int x = 1; x <= 4; x++) {
 			domain.setMaterialInCell(x, y, z, registry, x <= 2 ? leftMaterial : rightMaterial);
 		}
 		return domain;
 	}
 
-	private static FlipFluidDomain threePhaseDomain(
+	private static FluidDomain threePhaseDomain(
 			FluidMaterialRegistry registry, int leftMaterial, int lowRightMaterial, int highRightMaterial
 	) {
-		FlipFluidDomain domain = filledDomain();
+		FluidDomain domain = filledDomain();
 		for (int z = 1; z <= 4; z++) for (int y = 1; y <= 4; y++) for (int x = 1; x <= 4; x++) {
 			int material = x <= 2 ? leftMaterial : z <= 2 ? lowRightMaterial : highRightMaterial;
 			domain.setMaterialInCell(x, y, z, registry, material);
@@ -125,12 +125,12 @@ final class M3MaterialSurfaceValidation {
 		return domain;
 	}
 
-	private static FlipFluidDomain filledDomain() {
+	private static FluidDomain filledDomain() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, 1_000.0F, 0.0F, 1.0F / 40.0F,
 				200, 1.0E-5F, 0.40F, 2.0E-3F, 0.80F
 		);
-		FlipFluidDomain domain = new FlipFluidDomain(6, 6, 6, config, 1_024);
+		FluidDomain domain = new FluidDomain(6, 6, 6, config, 1_024);
 		for (int z = 1; z <= 4; z++) for (int y = 1; y <= 4; y++) for (int x = 1; x <= 4; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}

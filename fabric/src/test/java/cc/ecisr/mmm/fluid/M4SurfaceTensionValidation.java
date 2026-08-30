@@ -39,8 +39,8 @@ private static void validateCurvatureGeometry() {
 
 private static void validateSigmaZeroDegeneration() {
 FluidSolverConfig config = strictConfig();
-FlipFluidDomain pure = new FlipFluidDomain(4, 4, 4, config, 64);
-FlipFluidDomain zeroTension = new FlipFluidDomain(4, 4, 4, config, 64);
+FluidDomain pure = new FluidDomain(4, 4, 4, config, 64);
+FluidDomain zeroTension = new FluidDomain(4, 4, 4, config, 64);
 for (int y = 0; y < 3; y++) {
 pure.setVolume(1, y, 1, y == 2 ? 0.5F : 1.0F);
 zeroTension.setVolume(1, y, 1, y == 2 ? 0.5F : 1.0F);
@@ -69,7 +69,7 @@ FluidSolverConfig config = new FluidSolverConfig(
 1.0F, 1_000.0F, 0.0F, 1.0F / 20.0F,
 100, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F
 );
-FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 64);
+FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
 domain.setVolume(1, 1, 1, 1.0F);
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", 1_000.0, "mmm:test", 0.0728, Math.PI / 2.0)));
@@ -94,9 +94,9 @@ FluidSolverConfig config = new FluidSolverConfig(
 int size = 24;
 double radius = 4.0;
 double sigma = 0.0728;
-FlipFluidDomain domain = sphereDroplet(size, config, radius, sigma);
+FluidDomain domain = sphereDroplet(size, config, radius, sigma);
 double exactVolume = domain.totalVolume();
-FlipFluidDomain.StepStats stats = domain.step();
+FluidDomain.StepStats stats = domain.step();
 double analyticJump = 2.0 * sigma / radius;
 double measuredJump = averageFluidPressure(domain);
 double jumpError = Math.abs(measuredJump - analyticJump) / analyticJump;
@@ -121,11 +121,11 @@ FluidSolverConfig config = new FluidSolverConfig(
 int size = 24;
 double radius = 4.0;
 double sigma = 0.0728;
-FlipFluidDomain domain = sphereDroplet(size, config, radius, sigma);
+FluidDomain domain = sphereDroplet(size, config, radius, sigma);
 double exactVolume = domain.totalVolume();
 float previousMaximum = Float.POSITIVE_INFINITY;
 for (int step = 0; step < 10; step++) {
-FlipFluidDomain.StepStats stats = domain.step();
+FluidDomain.StepStats stats = domain.step();
 check(Float.isFinite(stats.pressureResidual()), "static droplet pressure residual became non-finite");
 check(Math.abs(domain.totalVolume() - exactVolume) <= 1.0E-6F,
 "static droplet changed exact marker volume");
@@ -156,7 +156,7 @@ check(hydrophilic.centerOfMassY() < hydrophobic.centerOfMassY(),
 }
 
 private static DropletMetrics runDroplet(FluidSolverConfig config, double contactAngleRadians, double sigma, int steps) {
-FlipFluidDomain domain = new FlipFluidDomain(16, 6, 4, config, 16 * 6 * 4 * 8);
+FluidDomain domain = new FluidDomain(16, 6, 4, config, 16 * 6 * 4 * 8);
 for (int z = 0; z < 4; z++) for (int x = 0; x < 16; x++) domain.setSolid(x, 0, z, true);
 int particleCount = 8 * 2 * 2 * 2;
 float[] positionVolume = new float[particleCount * 4];
@@ -208,9 +208,9 @@ private record DropletMetrics(int contactCells, double centerOfMassY, float maxi
 		int size = 20;
 		double radius = 4.0;
 		double sigma12 = 0.0728;
-		FlipFluidDomain domain = liquidPairDroplet(size, config, radius, sigma12);
+		FluidDomain domain = liquidPairDroplet(size, config, radius, sigma12);
 		double exactVolume = domain.totalVolume();
-		FlipFluidDomain.StepStats stats = domain.step();
+		FluidDomain.StepStats stats = domain.step();
 		double measuredJump = averagePressureInside(domain, size, radius) - averagePressureOutside(domain, size, radius);
 		double expectedJump = sigma12 * SurfaceTensionCurvatureExperiment.interfaceMeanCurvature(
 				binarySphereColour(size, radius, config.cellSize()), size, config.cellSize());
@@ -227,7 +227,7 @@ private record DropletMetrics(int contactCells, double centerOfMassY, float maxi
 		check(Math.abs(domain.totalVolume() - exactVolume) <= 1.0E-6F,
 				"liquid-pair surface tension changed exact marker volume");
 		for (int step = 0; step < 5; step++) {
-			FlipFluidDomain.StepStats noFlowStats = domain.step();
+			FluidDomain.StepStats noFlowStats = domain.step();
 			check(Float.isFinite(noFlowStats.pressureResidual()), "liquid-pair droplet pressure residual became non-finite");
 			check(Math.abs(domain.totalVolume() - exactVolume) <= 1.0E-6F,
 					"liquid-pair surface tension changed exact marker volume");
@@ -237,8 +237,8 @@ private record DropletMetrics(int contactCells, double centerOfMassY, float maxi
 		}
 	}
 
-	private static FlipFluidDomain liquidPairDroplet(int size, FluidSolverConfig config, double radius, double sigma12) {
-		FlipFluidDomain domain = new FlipFluidDomain(size, size, size, config, size * size * size * 8);
+	private static FluidDomain liquidPairDroplet(int size, FluidSolverConfig config, double radius, double sigma12) {
+		FluidDomain domain = new FluidDomain(size, size, size, config, size * size * size * 8);
 		int particleCount = size * size * size * 8;
 		float[] positionVolume = new float[particleCount * 4];
 		float[] velocities = new float[particleCount * 3];
@@ -279,7 +279,7 @@ private record DropletMetrics(int contactCells, double centerOfMassY, float maxi
 		return colour;
 	}
 
-	private static double averagePressureInside(FlipFluidDomain domain, int size, double radius) {
+	private static double averagePressureInside(FluidDomain domain, int size, double radius) {
 		byte[] mask = domain.copyMarkerMask();
 		double sum = 0.0;
 		int cells = 0;
@@ -296,7 +296,7 @@ private record DropletMetrics(int contactCells, double centerOfMassY, float maxi
 		return cells == 0 ? 0.0 : sum / cells;
 	}
 
-	private static double averagePressureOutside(FlipFluidDomain domain, int size, double radius) {
+	private static double averagePressureOutside(FluidDomain domain, int size, double radius) {
 		byte[] mask = domain.copyMarkerMask();
 		double sum = 0.0;
 		int cells = 0;
@@ -318,7 +318,7 @@ FluidSolverConfig config = new FluidSolverConfig(
 1.0F, 1_000.0F, 0.0F, 1.0F / 20.0F,
 200, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F
 );
-FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
+FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", 1_000.0, "mmm:test", 0.0728, Math.PI / 2.0)));
 domain.setVolume(2, 2, 3, 1.0F);
@@ -335,7 +335,7 @@ domain.setMarkerMaterial(particle, registry, 0);
 double exactVolume = domain.totalVolume();
 double exactMass = domain.totalMass();
 for (int step = 0; step < 20; step++) {
-FlipFluidDomain.StepStats stats = domain.step();
+FluidDomain.StepStats stats = domain.step();
 check(stats.relativeVolumeError() <= 1.0E-7F, "surface-tension merge/breakup changed exact volume");
 check(stats.relativeMassError() <= 1.0E-12, "surface-tension merge/breakup changed exact mass");
 check(domain.totalVolume() == exactVolume && domain.totalMass() == exactMass,
@@ -344,8 +344,8 @@ check(domain.totalVolume() == exactVolume && domain.totalMass() == exactMass,
 }
 
 /** Full-cell spherical droplet; all marker cells are exactly full, so volume drift stays inactive. */
-private static FlipFluidDomain sphereDroplet(int size, FluidSolverConfig config, double radius, double sigma) {
-FlipFluidDomain domain = new FlipFluidDomain(size, size, size, config, size * size * size * 8);
+private static FluidDomain sphereDroplet(int size, FluidSolverConfig config, double radius, double sigma) {
+FluidDomain domain = new FluidDomain(size, size, size, config, size * size * size * 8);
 double[] colour = SurfaceTensionCurvatureExperiment.sphereColour(size, radius, config.cellSize());
 int particleCount = 0;
 for (double fraction : colour) {
@@ -379,7 +379,7 @@ domain.setMarkerMaterial(marker, registry, 0);
 return domain;
 }
 
-private static double averageFluidPressure(FlipFluidDomain domain) {
+private static double averageFluidPressure(FluidDomain domain) {
 byte[] markerMask = domain.copyMarkerMask();
 double sum = 0.0;
 int cells = 0;

@@ -21,7 +21,7 @@ import cc.ecisr.mmm.controller.LifecycleOperationSessions;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.CellCarrierInventoryView;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.GasPressureBoundary;
 import cc.ecisr.mmm.fluid.FluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
@@ -856,7 +856,7 @@ public final class FluidSimulationService {
 			throw new IllegalStateException("Controller summary requires committed controller/profile identity");
 		}
 		boolean live = region.solverLoaded();
-		FlipFluidDomain domain = live ? region.domain() : null;
+		FluidDomain domain = live ? region.domain() : null;
 		long markerCount = live ? domain.particleCount() : region.checkpointMarkerCount();
 		long depositLimit = Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
 				Math.multiplyExact(region.reservedCellCapacity(), GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL));
@@ -867,7 +867,7 @@ public final class FluidSimulationService {
 		boolean phaseWorkPending = live && domain.hasPendingPhaseVolumeWork();
 		boolean checkpointAllowed = authoritativeWritesReady() && live && region.availabilityFailure() == null
 				&& ownershipLock == null && !containerWalPending;
-		FlipFluidDomain.StepStats stats = region.lastStats();
+		FluidDomain.StepStats stats = region.lastStats();
 		ThermalActivity thermal = region.thermalActivity();
 		String availabilityFailure = boundedSummaryText(region.availabilityFailure());
 		String numericalFailure = region.availabilityReason() == RegionAvailabilityReason.NUMERICAL_PAUSE
@@ -909,7 +909,7 @@ public final class FluidSimulationService {
 						numericalFailure));
 	}
 
-	private ControllerSummary.Inventory liveControllerInventory(FluidRegion region, FlipFluidDomain domain) {
+	private ControllerSummary.Inventory liveControllerInventory(FluidRegion region, FluidDomain domain) {
 		long gasNanos = 0L;
 		double gasMass = 0.0;
 		double minimumTemperature = Double.POSITIVE_INFINITY;
@@ -1063,9 +1063,9 @@ public final class FluidSimulationService {
 	}
 
 	private LifecycleCommitResult commitInventoryLifecycle(ServerLevel level, FluidRegion region, LifecycleOperation operation) {
-		FlipFluidDomain candidate;
+		FluidDomain candidate;
 		try {
-			candidate = FlipFluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
+			candidate = FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
 			if (operation == LifecycleOperation.EMPTY_CONDENSED) {
 				candidate.commitOperatorClear(candidate.planOperatorClear());
 			} else {
@@ -1240,7 +1240,7 @@ public final class FluidSimulationService {
 		if (!region.solverLoaded()) return new LifecycleFacts(context, LifecycleOperationPreview.Removal.none(),
 				LifecycleOperationPreview.GasState.none(), ownershipBlocks, List.copyOf(blockers));
 
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		if (domain.hasPendingPhaseVolumeWork()) blockers.add(LifecycleOperationPreview.Blocker.PENDING_PHASE_WORK);
 		boolean auditClosed = domain.gasBoundary().auditClosed()
 				&& (!domain.hasThermalState()
@@ -1300,7 +1300,7 @@ public final class FluidSimulationService {
 		return new LifecycleFacts(context, removal, gasState, ownershipBlocks, List.copyOf(blockers));
 	}
 
-	private static GasSummary lifecycleGasSummary(FlipFluidDomain domain) {
+	private static GasSummary lifecycleGasSummary(FluidDomain domain) {
 		long nanos = 0L, species = 0L;
 		double mass = 0.0;
 		for (var component : domain.gasBoundary().sealedInventory().components()) {
@@ -1814,7 +1814,7 @@ public final class FluidSimulationService {
 			return false;
 		}
 		if (!createDemo(player, false)) return false;
-		FlipFluidDomain domain = domain();
+		FluidDomain domain = domain();
 		float[] positionVolume = domain.exportChemicalParticleState().materials().copyPositionVolume();
 		float divider = domain.sizeX() * domain.config().cellSize() / 5.0F;
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
@@ -1856,7 +1856,7 @@ public final class FluidSimulationService {
 			return false;
 		}
 		refreshCollisions(level);
-		FlipFluidDomain domain = domain();
+		FluidDomain domain = domain();
 		for (int z = 0; z < domain.sizeZ(); z++) for (int x = 0; x < domain.sizeX(); x++) {
 			domain.setSolid(x, 0, z, true);
 		}
@@ -1895,7 +1895,7 @@ public final class FluidSimulationService {
 			}
 			placeAirDemoScaffolding(level, newOrigin);
 			refreshCollisions(level);
-			FlipFluidDomain domain = domain();
+			FluidDomain domain = domain();
 			fillAirDemoWater(domain);
 			bindConfiguredState(domain);
 			domain.step();
@@ -1958,7 +1958,7 @@ public final class FluidSimulationService {
 	}
 
 	/** Fills both chambers to 3.5 blocks; the two-block doorway column stays inside the fill range and submerged. */
-	private static void fillAirDemoWater(FlipFluidDomain domain) {
+	private static void fillAirDemoWater(FluidDomain domain) {
 		for (int bz = 1; bz <= BLOCK_SIZE_Z - 2; bz++) {
 			for (int bx = 1; bx <= BLOCK_SIZE_X - 2; bx++) {
 				for (int by = 1; by <= 3; by++) {
@@ -1978,7 +1978,7 @@ public final class FluidSimulationService {
 		}
 	}
 
-	private static void bindTensionDemoMaterial(FlipFluidDomain domain, int angleDegrees) {
+	private static void bindTensionDemoMaterial(FluidDomain domain, int angleDegrees) {
 		FlipParticleState pure = domain.exportParticleState();
 		float[] positionVolume = pure.copyPositionVolume();
 		float[] velocities = pure.copyParticleVelocities();
@@ -2013,7 +2013,7 @@ public final class FluidSimulationService {
 				0.5F, 1_000.0F, 9.81F, 1.0F / 40.0F,
 				300, 1.0E-5F, 0.35F, 2.0E-3F, 0.80F
 		);
-		FlipFluidDomain domain = new FlipFluidDomain(
+		FluidDomain domain = new FluidDomain(
 				BLOCK_SIZE_X * CELLS_PER_BLOCK, BLOCK_SIZE_Y * CELLS_PER_BLOCK, BLOCK_SIZE_Z * CELLS_PER_BLOCK,
 				config, Math.toIntExact(COMPATIBILITY_REGION_MARKERS)
 		);
@@ -2027,7 +2027,7 @@ public final class FluidSimulationService {
 		if (replaced != null) snapshots.sendRemoval(level.getServer(), replaced);
 	}
 
-	private static void restoreTensionCap(FlipFluidDomain domain, int angleDegrees) {
+	private static void restoreTensionCap(FluidDomain domain, int angleDegrees) {
 		int sx = domain.sizeX(), sy = domain.sizeY(), sz = domain.sizeZ();
 		float cellSize = domain.config().cellSize();
 		double wallY = 0.5 * cellSize;
@@ -2107,7 +2107,7 @@ public final class FluidSimulationService {
 		}
 		refreshCollisions(level);
 
-		FlipFluidDomain domain = domain();
+		FluidDomain domain = domain();
 		int fillX = domain.sizeX() * 2 / 5;
 		int fillY = domain.sizeY() * 3 / 4;
 		for (int z = 0; z < domain.sizeZ(); z++) {
@@ -2278,19 +2278,19 @@ public final class FluidSimulationService {
 		region.wakeForActivity();
 		try {
 			for (int i = 0; i < count; i++) stepMotionOnce(region, List.of());
-		} catch (FlipFluidDomain.PressureSolveBlockedException blocked) {
+		} catch (FluidDomain.PressureSolveBlockedException blocked) {
 			blockNumerical(level, region, blocked);
 			return -1;
 		} catch (GasTopologyBlockedException blocked) {
 			blockGasTopology(level, region, blocked);
 			return -1;
-		} catch (FlipFluidDomain.ThermalTransportBlockedException blocked) {
+		} catch (FluidDomain.ThermalTransportBlockedException blocked) {
 			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
 			return -1;
-		} catch (FlipFluidDomain.GasThermalBlockedException blocked) {
+		} catch (FluidDomain.GasThermalBlockedException blocked) {
 			blockThermal(level, region, "gas-thermal PAUSED：" + blocked.getMessage(), blocked);
 			return -1;
-		} catch (FlipFluidDomain.ThermalPhaseBlockedException blocked) {
+		} catch (FluidDomain.ThermalPhaseBlockedException blocked) {
 			blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
 			return -1;
 		} catch (GranularMechanics.ValidityExceededException invalid) {
@@ -2332,7 +2332,7 @@ public final class FluidSimulationService {
 		boolean collisionsChanged = false;
 		if (tick % COLLISION_REFRESH_INTERVAL_TICKS == 0) {
 			try { collisionsChanged = refreshCollisions(level, region).changedCells() > 0; }
-			catch (FlipFluidDomain.CollisionEditBlockedException blocked) {
+			catch (FluidDomain.CollisionEditBlockedException blocked) {
 				blockCollisionEdit(level, region, blocked);
 				return;
 			}
@@ -2374,7 +2374,7 @@ public final class FluidSimulationService {
 			} else {
 				stepThermalOnce(region);
 			}
-		} catch (FlipFluidDomain.PressureSolveBlockedException blocked) {
+		} catch (FluidDomain.PressureSolveBlockedException blocked) {
 			blockNumerical(level, region, blocked);
 			return;
 		} catch (GasTopologyBlockedException blocked) {
@@ -2414,19 +2414,19 @@ public final class FluidSimulationService {
 							+ "；本次速度提交未开始，请查看 /mmm status"));
 			sendSnapshot(level, region);
 			return;
-		} catch (FlipFluidDomain.ThermalTransportBlockedException blocked) {
+		} catch (FluidDomain.ThermalTransportBlockedException blocked) {
 			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
 			return;
-		} catch (FlipFluidDomain.GasThermalBlockedException blocked) {
+		} catch (FluidDomain.GasThermalBlockedException blocked) {
 			blockThermal(level, region, "gas-thermal PAUSED：" + blocked.getMessage(), blocked);
 			return;
-		} catch (FlipFluidDomain.ThermalPhaseBlockedException blocked) {
+		} catch (FluidDomain.ThermalPhaseBlockedException blocked) {
 			blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
 			return;
 		}
 		updateStepPacing(region);
 		if (worldCapabilityProfile.hasCapability(WorldCapability.THERMAL)) observeThermalStep(region, thermalBefore, motionStep);
-		FlipFluidDomain.StepStats stats = region.lastStats();
+		FluidDomain.StepStats stats = region.lastStats();
 		float residualLimit = Math.max(1.0E-5F, region.domain().config().pressureTolerance() * 4.0F);
 		boolean hydrostaticCandidate = !collisionsChanged && affectedEntities == 0
 				&& region.domain().maximumParticleSpeed() <= HYDROSTATIC_MAX_MARKER_SPEED
@@ -2508,7 +2508,7 @@ public final class FluidSimulationService {
 	private void observeThermalStep(
 			FluidRegion region, ThermalAuditLedger before, boolean carrierMotion
 	) {
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		ThermalAuditLedger after = domain.thermalAudit();
 		boolean gasActivity = !after.externalSource().equals(before.externalSource())
 				|| !after.externalSink().equals(before.externalSink())
@@ -2544,7 +2544,7 @@ public final class FluidSimulationService {
 	}
 
 	private void blockNumerical(
-			ServerLevel level, FluidRegion region, FlipFluidDomain.PressureSolveBlockedException blocked
+			ServerLevel level, FluidRegion region, FluidDomain.PressureSolveBlockedException blocked
 	) {
 		String failure = "pressure-solver NUMERICAL_PAUSE：" + blocked.getMessage();
 		region.blockNumerical(failure);
@@ -2601,7 +2601,7 @@ public final class FluidSimulationService {
 		if (resolved == null) return WaterEditResult.NO_TARGET;
 		CellTarget target = new CellTarget(resolved.x(), resolved.y(), resolved.z());
 		float requested = buckets * CELL_VOLUMES_PER_BLOCK;
-		FlipFluidDomain.VolumeAddition addition = domain().addVolumeNearBudgeted(
+		FluidDomain.VolumeAddition addition = domain().addVolumeNearBudgeted(
 				target.x(), target.y(), target.z(), requested, 6
 		);
 		if (addition.addedVolume() > 0.0F) region.wakeForActivity();
@@ -2631,14 +2631,14 @@ public final class FluidSimulationService {
 		if (region == null || !level.dimension().equals(region.dimension())) return FluidRegion.CollisionStats.EMPTY;
 		if (!ensureRegionAvailable(level, region)) return region.lastCollisionStats();
 		try { return refreshCollisions(level, region); }
-		catch (FlipFluidDomain.CollisionEditBlockedException blocked) {
+		catch (FluidDomain.CollisionEditBlockedException blocked) {
 			blockCollisionEdit(level, region, blocked);
 			throw blocked;
 		}
 	}
 
 	private void blockCollisionEdit(
-			ServerLevel level, FluidRegion region, FlipFluidDomain.CollisionEditBlockedException blocked
+			ServerLevel level, FluidRegion region, FluidDomain.CollisionEditBlockedException blocked
 	) {
 		String detail = blocked.getCause() == null ? blocked.getMessage() : blocked.getCause().getMessage();
 		region.blockCollision("collision-edit-blocked PAUSED：" + detail);
@@ -2736,19 +2736,19 @@ public final class FluidSimulationService {
 		if (hasPendingContainerTransfer(region.id())) {
 			return "清空失败：区域存在未完成或不可识别的容器转移 WAL；拒绝清空";
 		}
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		if (domain.hasPendingPhaseVolumeWork()) {
 			return "清空失败：区域存在尚未由下一次 pressure projection 消费的相变体积/功记录";
 		}
 		float beforeBlocks = domain.totalVolume() / CELL_VOLUMES_PER_BLOCK;
 		int beforeParticles = domain.particleCount();
-		FlipFluidDomain.OperatorClearPlan clearPlan;
+		FluidDomain.OperatorClearPlan clearPlan;
 		try {
 			clearPlan = domain.planOperatorClear();
 		} catch (RuntimeException failure) {
 			return "清空失败：联合液体/coherent/颗粒预检未通过，活动库存未改变：" + failure.getMessage();
 		}
-		FlipFluidDomain.OperatorClear cleared;
+		FluidDomain.OperatorClear cleared;
 		try {
 			cleared = domain.commitOperatorClear(clearPlan);
 		} catch (RuntimeException failure) {
@@ -2757,8 +2757,8 @@ public final class FluidSimulationService {
 			return "清空联合提交失败；区域已暂停：" + failure.getMessage();
 		}
 		region.wakeForActivity();
-		FlipFluidDomain.CondensedClear condensed = cleared.condensed();
-		FlipFluidDomain.GranularClear granular = cleared.granular();
+		FluidDomain.CondensedClear condensed = cleared.condensed();
+		FluidDomain.GranularClear granular = cleared.granular();
 		if (region.controllerManaged()) {
 			try {
 				long generation = regionOperations.checkpoint(region);
@@ -2819,7 +2819,7 @@ public final class FluidSimulationService {
 					worldBridgeFeatureEnabled ? "on" : "off", takeoverLock,
 					regionOperations.issues().isEmpty() ? "" : " | persistence issues " + regionOperations.issues().size());
 		}
-		FlipFluidDomain.StepStats lastStats = region.lastStats();
+		FluidDomain.StepStats lastStats = region.lastStats();
 		String stats = lastStats == null
 				? "尚未步进"
 				: String.format("%.2f ms, substeps %d, PCG %d, residual %.4g%s",
@@ -2831,11 +2831,11 @@ public final class FluidSimulationService {
 										lastStats.reseededSplits(), lastStats.reseededMerges(),
 										lastStats.reseedBudgetSkipped(), lastStats.reseedGeometrySkipped(),
 										lastStats.reseedLedgerError()));
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
 		float cellVolumes = domain.totalVolume();
-		FlipFluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
-		FlipFluidDomain.SolidDistribution solids = domain.solidDistribution();
+		FluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
+		FluidDomain.SolidDistribution solids = domain.solidDistribution();
 		FluidRegion.CollisionStats collision = region.lastCollisionStats();
 		FluidRegion.EntityCouplingStats entityCoupling = region.lastEntityCoupling();
 		FluidRegionFootprint footprint = region.footprint();
@@ -2872,7 +2872,7 @@ public final class FluidSimulationService {
 		);
 	}
 
-	private String thermalSummary(FluidRegion region, FlipFluidDomain domain) {
+	private String thermalSummary(FluidRegion region, FluidDomain domain) {
 		if (!domain.hasThermalState()) return "thermal missing";
 		ThermalAuditLedger audit = domain.thermalAudit();
 		ThermalActivity activity = region.thermalActivity();
@@ -2887,8 +2887,8 @@ public final class FluidSimulationService {
 		String temperature = minimumQ == Integer.MAX_VALUE ? "empty"
 				: minimumQ == maximumQ ? String.format("%.2f K", minimumQ / 16.0)
 				: String.format("%.2f..%.2f K", minimumQ / 16.0, maximumQ / 16.0);
-		FlipFluidDomain.ThermalPhaseStats condensed = domain.lastThermalPhaseStats();
-		FlipFluidDomain.GasThermalPhaseStats gas = domain.lastGasThermalPhaseStats();
+		FluidDomain.ThermalPhaseStats condensed = domain.lastThermalPhaseStats();
+		FluidDomain.GasThermalPhaseStats gas = domain.lastGasThermalPhaseStats();
 		int phaseBudget = serverConfig.maximumPhaseOperationsPerStep();
 		String phase = condensed.operations() == 0 && gas.operations() == 0 ? "idle"
 				: String.format("solid=%d gas=%d%s (boil %d/condense %d cells)",
@@ -2905,7 +2905,7 @@ public final class FluidSimulationService {
 	}
 
 	/** Read-only gas-network summary for status output; empty when no sealed cavity exists. */
-	private static String gasSummary(FlipFluidDomain domain) {
+	private static String gasSummary(FluidDomain domain) {
 		GasPressureBoundary network = domain.gasBoundary();
 		List<Integer> ids = network.nodeIds();
 		if (ids.isEmpty()) return "";
@@ -3017,7 +3017,7 @@ public final class FluidSimulationService {
 		}
 		int[] cell = aimedCellNear(player, region, true);
 		if (cell == null) return IndicatorUseResult.rejected("准星方向没有化学液体");
-		FlipFluidDomain.IndicatorEditResult edit = region.domain().editIndicatorFloodFill(
+		FluidDomain.IndicatorEditResult edit = region.domain().editIndicatorFloodFill(
 				cell[0], cell[1], cell[2], indicated, Math.toIntExact(region.reservedCellCapacity()), 100.0);
 		if (!edit.accepted()) return IndicatorUseResult.rejected(edit.failure());
 		String checkpointWarning = null;
@@ -3158,7 +3158,7 @@ public final class FluidSimulationService {
 		return regionManager.selected();
 	}
 
-	private FlipFluidDomain domain() {
+	private FluidDomain domain() {
 		return activeRegion().domain();
 	}
 
@@ -3183,7 +3183,7 @@ public final class FluidSimulationService {
 		static SelectionResult failed(String failure) { return new SelectionResult(false, null, failure); }
 	}
 
-	private static void bindDefaultMaterialState(FlipFluidDomain domain) {
+	private static void bindDefaultMaterialState(FluidDomain domain) {
 		if (domain.hasMaterialState()) return;
 		FlipParticleState pure = domain.exportParticleState();
 		float[] positionVolume = pure.copyPositionVolume();
@@ -3202,7 +3202,7 @@ public final class FluidSimulationService {
 		));
 	}
 
-	private void bindConfiguredState(FlipFluidDomain domain) {
+	private void bindConfiguredState(FluidDomain domain) {
 		if (worldCapabilityProfile.hasCapability(WorldCapability.MATERIALS)) bindDefaultMaterialState(domain);
 		if (worldCapabilityProfile.hasCapability(WorldCapability.CHEMISTRY) && !domain.hasChemistryState()) domain.bindChemistry(chemicalRegistry);
 		if (worldCapabilityProfile.hasCapability(WorldCapability.GRANULAR) && !domain.hasGranularState()) {
@@ -3216,7 +3216,7 @@ public final class FluidSimulationService {
 		}
 	}
 
-	private static void assignLayeredDemoMaterials(FlipFluidDomain domain, float interfaceY) {
+	private static void assignLayeredDemoMaterials(FluidDomain domain, float interfaceY) {
 		FlipMaterialParticleState state = domain.exportMaterialParticleState();
 		float[] positionVolume = state.copyPositionVolume();
 		double[] markerMass = state.copyParticleMass();

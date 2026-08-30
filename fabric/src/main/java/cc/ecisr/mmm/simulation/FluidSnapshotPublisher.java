@@ -1,7 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidMaterialRenderSnapshot;
 import cc.ecisr.mmm.network.FluidChemicalSnapshotPayload;
 import cc.ecisr.mmm.network.FluidGranularSnapshotPayload;
@@ -124,7 +124,7 @@ final class FluidSnapshotPublisher {
 	}
 
 	private static FluidSnapshotPayload createPureSnapshot(FluidRegion region) {
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		List<FluidSnapshotPayload.Extension> extensions = List.of();
 		long cellCount = (long) domain.sizeX() * domain.sizeY() * domain.sizeZ();
 		if (domain.gasPressureActive() && cellCount <= FluidSnapshotPayload.MAX_EXTENSION_BYTES) {

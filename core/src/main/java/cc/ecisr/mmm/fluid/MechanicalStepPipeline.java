@@ -68,7 +68,7 @@ final class MechanicalStepPipeline {
 			throw blocked;
 		} catch (IllegalArgumentException | IllegalStateException invalidGasThermal) {
 			if (access.thermalState() == null) throw invalidGasThermal;
-			throw new FlipFluidDomain.GasThermalBlockedException(invalidGasThermal.getMessage(), invalidGasThermal);
+			throw new FluidDomain.GasThermalBlockedException(invalidGasThermal.getMessage(), invalidGasThermal);
 		}
 		MacVelocityGrid mac = state.mac;
 		System.arraycopy(mac.velocityX, 0, mac.p2gVelocityX, 0, mac.velocityX.length);
@@ -120,7 +120,7 @@ final class MechanicalStepPipeline {
 					state.pendingPhaseCellVolume, state.projection.pressure, access.pressureReference(),
 					state.config.cellSize(), state.thermalMarkers);
 		} catch (IllegalArgumentException invalidPendingWork) {
-			throw new FlipFluidDomain.ThermalPhaseBlockedException(
+			throw new FluidDomain.ThermalPhaseBlockedException(
 					"Pending phase mechanical work cannot be consumed: " + invalidPendingWork.getMessage(),
 					invalidPendingWork);
 		}

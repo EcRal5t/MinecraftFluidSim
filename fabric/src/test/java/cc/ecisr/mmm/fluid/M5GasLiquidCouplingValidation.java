@@ -35,12 +35,12 @@ public final class M5GasLiquidCouplingValidation {
 		int n = 8;
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, DENSITY, GRAVITY, 1.0F / 20.0F, 120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
-		FlipFluidDomain domain = new FlipFluidDomain(n, n, n, config, 4_096);
+		FluidDomain domain = new FluidDomain(n, n, n, config, 4_096);
 		domain.sealDomainBoundary();
 		domain.bootstrapGasState(null);
 		domain.setGasNodeStandardVolume(1, 34.0);
 		long gas = domain.gasBoundary().sealedInventoryNanos();
-		FlipFluidDomain.VolumeAddition addition = domain.addVolumeNearBudgeted(6, 0, 0, 128.0F, 6);
+		FluidDomain.VolumeAddition addition = domain.addVolumeNearBudgeted(6, 0, 0, 128.0F, 6);
 		check(addition.addedVolume() == 128.0F && !addition.markerBudgetLimited(),
 				"empty controller boundary pour did not add 16 BV");
 		for (int step = 0; step < 200; step++) {
@@ -52,7 +52,7 @@ public final class M5GasLiquidCouplingValidation {
 			check(domain.gasBoundary().sealedInventoryNanos() == gas && domain.gasBoundary().auditClosed(),
 					"empty controller boundary pour changed closed gas inventory at step " + step);
 			try {
-				domain = FlipFluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+				domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 			} catch (RuntimeException failure) {
 				throw new IllegalStateException("empty controller partial-bubble handoff failed at step " + step,
 						failure);
@@ -63,7 +63,7 @@ public final class M5GasLiquidCouplingValidation {
 	private static void validateFiniteClosedGasWithoutCapacityBlocksTyped() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, DENSITY, GRAVITY, 1.0F / 20.0F, 120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
-		FlipFluidDomain domain = new FlipFluidDomain(2, 2, 2, config, 128);
+		FluidDomain domain = new FluidDomain(2, 2, 2, config, 128);
 		domain.sealDomainBoundary();
 		domain.bootstrapGasState(null);
 		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) {
@@ -83,7 +83,7 @@ public final class M5GasLiquidCouplingValidation {
 		int n = 4;
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F);
-		FlipFluidDomain domain = new FlipFluidDomain(n, n, n, config, n * n * n * 8);
+		FluidDomain domain = new FluidDomain(n, n, n, config, n * n * n * 8);
 		domain.sealDomainBoundary();
 		for (int z = 0; z < n; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
 			domain.setVolume(x, y, z, 1.0F);
@@ -92,7 +92,7 @@ public final class M5GasLiquidCouplingValidation {
 		check(domain.gasBoundary().nodeCount() == 0
 				&& domain.gasBoundary().externalSource().entries().isEmpty(),
 				"fully occupied closed bootstrap created gas inventory");
-		FlipFluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(1, 1, 1, 1.0F, 0);
+		FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(1, 1, 1, 1.0F, 0);
 		check(extracted.transferred(), "closed vacuum fixture could not extract one cell volume");
 		domain.synchronizeGasTopologyForPersistence();
 		check(domain.gasBoundary().nodeCount() == 1
@@ -105,7 +105,7 @@ public final class M5GasLiquidCouplingValidation {
 	}
 
 	private static void validateAnalyticStaticHead(int sign) {
-		FlipFluidDomain domain = utubeDomain(true);
+		FluidDomain domain = utubeDomain(true);
 		for (int z = 1; z <= 2; z++) for (int y = 9; y <= 12; y++) {
 			int fromX = sign > 0 ? 7 : 1;
 			int toX = sign > 0 ? 10 : 5;
@@ -117,7 +117,7 @@ public final class M5GasLiquidCouplingValidation {
 		domain.setGasNodeStandardVolume(1, available * (1.0 + expected / AirNetwork.REFERENCE_PRESSURE));
 		long gasNanos = domain.gasBoundary().standardVolumeNanos(1);
 		double liquidVolume = domain.totalVolumeExact();
-		FlipFluidDomain.StepStats stats = null;
+		FluidDomain.StepStats stats = null;
 		double maximumSpeed = 0.0;
 		for (int step = 0; step < 1_000; step++) {
 			stats = domain.step();
@@ -150,7 +150,7 @@ public final class M5GasLiquidCouplingValidation {
 		int n = 8;
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F);
-		FlipFluidDomain domain = new FlipFluidDomain(n, n, n, config, n * n * n * 8);
+		FluidDomain domain = new FluidDomain(n, n, n, config, n * n * n * 8);
 		for (int z = 0; z < n; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
 			boolean shell = x == 0 || x == n - 1 || y == 0 || y == n - 1 || z == 0 || z == n - 1;
 			if (shell) domain.setSolid(x, y, z, true);
@@ -178,13 +178,13 @@ public final class M5GasLiquidCouplingValidation {
 	/** One-step wiring gate; quantitative equilibrium and long-run stability remain in the soak tier. */
 	private static void validateShortCouplingSmoke() {
 		validateOpenTubesStayAmbient();
-		FlipFluidDomain sealed = utubeDomain(true);
+		FluidDomain sealed = utubeDomain(true);
 		sealed.step();
 		double available = sealed.gasBoundary().availableVolume(1);
 		sealed.setGasNodeStandardVolume(1, 0.75 * available);
 		double exactVolume = sealed.totalVolumeExact();
 		double exactMass = sealed.totalMass();
-		FlipFluidDomain.StepStats stats = sealed.step();
+		FluidDomain.StepStats stats = sealed.step();
 		check(sealed.gasPressureActive() && sealed.gasBoundary().gaugePressure(1) < 0.0,
 				"sealed gas pressure was not consumed by the active solver");
 		check(Float.isFinite(stats.pressureResidual()), "short coupling residual became non-finite");
@@ -192,7 +192,7 @@ public final class M5GasLiquidCouplingValidation {
 				"short coupling smoke changed liquid ledgers");
 		checkLedger(sealed.gasBoundary(), "short sealed-cavity smoke");
 
-		FlipFluidDomain chambers = chamberPairDomain();
+		FluidDomain chambers = chamberPairDomain();
 		chambers.step();
 		GasPressureBoundary network = chambers.gasBoundary();
 		chambers.setGasNodeStandardVolume(1, 2.0 * network.availableVolume(1));
@@ -205,7 +205,7 @@ public final class M5GasLiquidCouplingValidation {
 	}
 
 	private static void validateOpenTubesStayAmbient() {
-		FlipFluidDomain domain = utubeDomain(false);
+		FluidDomain domain = utubeDomain(false);
 		domain.step();
 		check(!domain.gasPressureActive(), "open-topped tube pair must not create sealed gas");
 		check(domain.gasBoundary().nodeCount() == 0, "open-topped tube pair must keep zero sealed nodes");
@@ -213,7 +213,7 @@ public final class M5GasLiquidCouplingValidation {
 	}
 
 	private static void validateSealedCompression() {
-		FlipFluidDomain domain = utubeDomain(true);
+		FluidDomain domain = utubeDomain(true);
 		domain.step();
 		long initialGasNanos = domain.gasBoundary().standardVolumeNanos(1);
 		double initialLiquidVolume = domain.totalVolumeExact();
@@ -224,7 +224,7 @@ public final class M5GasLiquidCouplingValidation {
 		for (int fill = 0; fill < 48; fill++) {
 			addedTotal += domain.addVolumeNear(9, 6, 1, 2.0F, 12);
 			for (int settle = 0; settle < 150; settle++) {
-				FlipFluidDomain.StepStats stats = domain.step();
+				FluidDomain.StepStats stats = domain.step();
 				check(stats.relativeVolumeError() <= 1.0E-7F, "staged fill changed exact marker volume");
 				check(Float.isFinite(stats.pressureResidual()), "staged fill residual became non-finite");
 				maximumSpeed = Math.max(maximumSpeed, domain.maximumParticleSpeed());
@@ -252,7 +252,7 @@ public final class M5GasLiquidCouplingValidation {
 	}
 
 	private static void validateNegativeGaugeSuction() {
-		FlipFluidDomain domain = utubeDomain(true);
+		FluidDomain domain = utubeDomain(true);
 		domain.step();
 		double initialAvailable = domain.gasBoundary().availableVolume(1);
 		domain.setGasNodeStandardVolume(1, 0.75 * initialAvailable);
@@ -261,7 +261,7 @@ public final class M5GasLiquidCouplingValidation {
 		double exactMass = domain.totalMass();
 		double maximumSpeed = 0.0;
 		for (int steps = 0; steps < 1_000; steps++) {
-			FlipFluidDomain.StepStats stats = domain.step();
+			FluidDomain.StepStats stats = domain.step();
 			check(stats.relativeVolumeError() <= 1.0E-7F, "negative-gauge suction changed exact marker volume");
 			check(Float.isFinite(stats.pressureResidual()), "negative-gauge residual became non-finite");
 			maximumSpeed = Math.max(maximumSpeed, domain.maximumParticleSpeed());
@@ -278,7 +278,7 @@ public final class M5GasLiquidCouplingValidation {
 	}
 
 	private static void validateOrificeEqualization() {
-		FlipFluidDomain domain = chamberPairDomain();
+		FluidDomain domain = chamberPairDomain();
 		domain.step();
 		GasPressureBoundary network = domain.gasBoundary();
 		check(network.nodeCount() == 3, "dry chamber pair must expose two chambers and the sliver pocket");
@@ -309,11 +309,11 @@ public final class M5GasLiquidCouplingValidation {
 	}
 
 	/** Both chambers share one water body through a bottom opening; the left top can be sealed. */
-	private static FlipFluidDomain utubeDomain(boolean sealLeft) {
+	private static FluidDomain utubeDomain(boolean sealLeft) {
 		int sizeX = 12, sizeY = 24, sizeZ = 4;
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, DENSITY, GRAVITY, 1.0F / 20.0F, 400, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F);
-		FlipFluidDomain domain = new FlipFluidDomain(sizeX, sizeY, sizeZ, config, sizeX * sizeY * sizeZ * 8);
+		FluidDomain domain = new FluidDomain(sizeX, sizeY, sizeZ, config, sizeX * sizeY * sizeZ * 8);
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			boolean shell = x == 0 || x == sizeX - 1 || z == 0 || z == sizeZ - 1 || y == 0;
 			boolean divider = x == 6 && y >= 5;
@@ -330,11 +330,11 @@ public final class M5GasLiquidCouplingValidation {
 	}
 
 	/** Two dry sealed chambers separated by a solid wall whose one cell keeps a quarter-open gap. */
-	private static FlipFluidDomain chamberPairDomain() {
+	private static FluidDomain chamberPairDomain() {
 		int n = 8;
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F);
-		FlipFluidDomain domain = new FlipFluidDomain(n, n, n, config, n * n * n * 8);
+		FluidDomain domain = new FluidDomain(n, n, n, config, n * n * n * 8);
 		for (int z = 0; z < n; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
 			boolean shell = x == 0 || x == n - 1 || z == 0 || z == n - 1 || y == 0 || y == n - 1;
 			boolean divider = x == 4 && y >= 1 && y < n - 1 && z >= 1 && z < n - 1;
@@ -346,7 +346,7 @@ public final class M5GasLiquidCouplingValidation {
 	}
 
 	/** Mean water surface height in cells over a column range from authoritative marker volume. */
-	private static double columnSurface(FlipFluidDomain domain, int fromX, int toX, int crossSection) {
+	private static double columnSurface(FluidDomain domain, int fromX, int toX, int crossSection) {
 		double volume = 0.0;
 		FlipParticleState state = domain.exportParticleState();
 		float[] positionVolume = state.copyPositionVolume();

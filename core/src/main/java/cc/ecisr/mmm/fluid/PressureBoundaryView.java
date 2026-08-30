@@ -6,9 +6,9 @@ package cc.ecisr.mmm.fluid;
  * network; the same reads stay available to the domain for the surface-tension divergence.
  */
 final class PressureBoundaryView {
-	private final FlipFluidDomain domain;
+	private final FluidDomain domain;
 
-	PressureBoundaryView(FlipFluidDomain domain) {
+	PressureBoundaryView(FluidDomain domain) {
 		this.domain = domain;
 	}
 

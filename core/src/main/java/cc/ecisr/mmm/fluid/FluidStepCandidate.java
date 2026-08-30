@@ -10,7 +10,7 @@ public record FluidStepCandidate(
 		long baseGeneration,
 		long candidateGeneration,
 		FluidDomainState state,
-		FlipFluidDomain.StepStats stats,
+		FluidDomain.StepStats stats,
 		MovingBodyFluidCoupling.Result movingBodyCoupling
 ) {
 	public FluidStepCandidate {

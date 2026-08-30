@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.simulation.persistence;
 
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FlipChemicalParticleState;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
@@ -139,8 +139,8 @@ public final class FluidRegionPersistenceValidation {
 		SignedDyadic fluidRoundoffBefore = region.domain().thermalAudit().roundoffResidual();
 		SignedDyadic deviceRoundoffBefore = expectedDevices.audit().roundoffResidual();
 		List<FiniteThermalExchange.Contact> deviceContacts = region.domain().finiteThermalContacts(List.of(
-				new FlipFluidDomain.ThermalContactRequest(0, 2, 1, 2, 10.0),
-				new FlipFluidDomain.ThermalContactRequest(1, 1, 1, 1, 5.0)));
+				new FluidDomain.ThermalContactRequest(0, 2, 1, 2, 10.0),
+				new FluidDomain.ThermalContactRequest(1, 1, 1, 1, 5.0)));
 		FiniteThermalExchange.Plan deviceExchange = FiniteThermalExchange.plan(thermal,
 				expectedDevices.devices().getFirst().body(), deviceContacts,
 				1.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
@@ -183,7 +183,7 @@ public final class FluidRegionPersistenceValidation {
 				"finite thermal device truth did not round-trip");
 		require(state.reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
 				"pending phase-volume record did not round-trip");
-		FlipFluidDomain restoredDomain = new FlipFluidDomain(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG, 512);
+		FluidDomain restoredDomain = new FluidDomain(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG, 512);
 		restoredDomain.sealDomainBoundary();
 		restoredDomain.restoreMaterialParticleState(state.reconstructMaterial());
 		restoredDomain.restoreGranularState(state.reconstructGranular(granular), granular,
@@ -907,7 +907,7 @@ public final class FluidRegionPersistenceValidation {
 
 	private static FluidRegion populatedRegion(UUID id) {
 		BlockPos origin = new BlockPos(15, 16, 15);
-		FlipFluidDomain domain = new FlipFluidDomain(6, 4, 6, CONFIG, 512);
+		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);
@@ -928,7 +928,7 @@ public final class FluidRegionPersistenceValidation {
 
 	private static FluidRegion emptyRegion(UUID id) {
 		BlockPos origin = new BlockPos(32, 16, 32);
-		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, CONFIG, 4_096);
+		FluidDomain domain = new FluidDomain(8, 8, 8, CONFIG, 4_096);
 		Set<Long> interior = new HashSet<>();
 		for (int z = 32; z <= 35; z++) for (int y = 16; y <= 19; y++) {
 			for (int x = 32; x <= 35; x++) interior.add(new BlockPos(x, y, z).asLong());

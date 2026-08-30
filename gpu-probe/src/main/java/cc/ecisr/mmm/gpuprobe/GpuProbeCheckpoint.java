@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.gpuprobe;
 
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 
@@ -17,8 +17,8 @@ final class GpuProbeCheckpoint {
 				volumeLedger, positionVolume, particleVelocities, solidMask);
 	}
 
-	FlipFluidDomain restore(FluidSolverConfig config) {
-		FlipFluidDomain domain = new FlipFluidDomain(particles.sizeX(), particles.sizeY(), particles.sizeZ(), config);
+	FluidDomain restore(FluidSolverConfig config) {
+		FluidDomain domain = new FluidDomain(particles.sizeX(), particles.sizeY(), particles.sizeZ(), config);
 		domain.restoreParticleState(particles);
 		if (domain.particleCount() != particles.particleCount()
 				|| Math.abs(domain.totalVolume() - particles.totalVolume()) > 1.0E-4F) {

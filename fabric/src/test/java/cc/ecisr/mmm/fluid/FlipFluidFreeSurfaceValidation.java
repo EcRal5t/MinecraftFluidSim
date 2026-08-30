@@ -23,7 +23,7 @@ public final class FlipFluidFreeSurfaceValidation {
 
 	private static void bodyOverlapResolvesContinuousSubmergence() {
 		FluidSolverConfig config = FluidSolverConfig.prototypeDefaults();
-		FlipFluidDomain domain = new FlipFluidDomain(6, 6, 6, config, 6 * 6 * 6 * 8);
+		FluidDomain domain = new FluidDomain(6, 6, 6, config, 6 * 6 * 6 * 8);
 		for (int z = 0; z < 6; z++) for (int x = 0; x < 6; x++) {
 			domain.setVolume(x, 0, z, 1.0F);
 			domain.setVolume(x, 1, z, 1.0F);
@@ -34,7 +34,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		double expectedFraction = 0.72;
 		double surfaceY = 3.0 * config.cellSize();
 		double minimumY = surfaceY - height * expectedFraction;
-		FlipFluidDomain.BodyFluidSample sample = domain.sampleAxisAlignedBody(
+		FluidDomain.BodyFluidSample sample = domain.sampleAxisAlignedBody(
 				1.20, minimumY, 1.20, 1.20 + width, minimumY + height, 1.20 + width);
 		double bodyVolume = width * height * width;
 		check(Math.abs(sample.displacedVolumeCubicMetres() / bodyVolume - expectedFraction) < 1.0E-6,
@@ -43,7 +43,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		check(sample.centerYMetres() >= minimumY && sample.centerYMetres() <= surfaceY,
 				"body overlap centroid escaped the wet AABB segment: " + sample.centerYMetres());
 
-		FlipFluidDomain.BodyFluidSample shifted = domain.sampleAxisAlignedBody(
+		FluidDomain.BodyFluidSample shifted = domain.sampleAxisAlignedBody(
 				1.20, minimumY + 0.01, 1.20, 1.20 + width, minimumY + height + 0.01, 1.20 + width);
 		check(Math.abs((sample.displacedVolumeCubicMetres() - shifted.displacedVolumeCubicMetres())
 				- width * width * 0.01) < 1.0E-6,
@@ -52,7 +52,7 @@ public final class FlipFluidFreeSurfaceValidation {
 
 	private static void pureWaterMarkerMassLedgerTracksVolume() {
 		FluidSolverConfig config = FluidSolverConfig.prototypeDefaults();
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config, 128);
+		FluidDomain domain = new FluidDomain(4, 4, 4, config, 128);
 		domain.setVolume(1, 1, 1, 1.0F);
 		domain.setVolume(2, 1, 1, 0.375F);
 		check(Math.abs(domain.totalMass() - (double) config.density() * domain.totalVolume()) <= 1.0E-9,
@@ -164,7 +164,7 @@ public final class FlipFluidFreeSurfaceValidation {
 	private static void fractionalHydrostaticColumnsBalanceGravity() {
 		for (float surfaceFraction : new float[] {0.60F, 0.75F, 1.0F}) {
 			FluidSolverConfig config = strictConfig();
-			FlipFluidDomain domain = new FlipFluidDomain(2, 5, 2, config);
+			FluidDomain domain = new FluidDomain(2, 5, 2, config);
 			for (int z = 0; z < 2; z++) for (int x = 0; x < 2; x++) {
 				domain.setVolume(x, 0, z, 1.0F);
 				domain.setVolume(x, 1, z, 1.0F);
@@ -192,7 +192,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				1, 1.0E-12F, 0.45F, 2.0E-3F, 0.80F);
-		FlipFluidDomain domain = new FlipFluidDomain(4, 6, 4, config);
+		FluidDomain domain = new FluidDomain(4, 6, 4, config);
 		for (int z = 0; z < 4; z++) for (int x = 0; x < 4; x++) {
 			domain.setVolume(x, 0, z, 1.0F);
 			domain.setVolume(x, 1, z, 0.75F);
@@ -201,7 +201,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		try {
 			domain.step();
 			throw new AssertionError("unconverged pressure candidate was accepted");
-		} catch (FlipFluidDomain.PressureSolveBlockedException expected) {
+		} catch (FluidDomain.PressureSolveBlockedException expected) {
 			check(java.util.Arrays.equals(before.copyPositionVolume(),
 						domain.exportParticleState().copyPositionVolume()),
 					"rejected pressure candidate changed marker position/volume truth");
@@ -213,11 +213,11 @@ public final class FlipFluidFreeSurfaceValidation {
 
 	private static void thinLayerRegularizationRemainsStable() {
 		FluidSolverConfig config = strictConfig();
-		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config);
+		FluidDomain domain = new FluidDomain(3, 3, 3, config);
 		for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) domain.setVolume(x, 0, z, 0.25F);
 		float exactVolume = domain.totalVolume();
 		for (int step = 0; step < 40; step++) {
-			FlipFluidDomain.StepStats stats = domain.step();
+			FluidDomain.StepStats stats = domain.step();
 			check(Float.isFinite(stats.pressureResidual()), "thin-layer pressure residual became non-finite");
 			check(stats.relativeVolumeError() < 1.0E-6F, "thin-layer step changed marker volume");
 		}
@@ -232,7 +232,7 @@ public final class FlipFluidFreeSurfaceValidation {
 				0.5F, 1_000.0F, 9.81F, timeStep,
 				200, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F
 		);
-		FlipFluidDomain domain = new FlipFluidDomain(8, 32, 8, config);
+		FluidDomain domain = new FluidDomain(8, 32, 8, config);
 		domain.setVolume(4, 24, 4, 0.125F);
 		float exactVolume = domain.totalVolume();
 		float initialCenterY = centerOfMassY(domain.exportParticleState());
@@ -253,14 +253,14 @@ public final class FlipFluidFreeSurfaceValidation {
 
 	private static void longRunHydrostaticSurfaceDoesNotSink() {
 		FluidSolverConfig config = strictConfig();
-		FlipFluidDomain domain = new FlipFluidDomain(4, 8, 4, config, 4 * 8 * 4 * 8);
+		FluidDomain domain = new FluidDomain(4, 8, 4, config, 4 * 8 * 4 * 8);
 		for (int z = 0; z < 4; z++) for (int x = 0; x < 4; x++) domain.setSolid(x, 0, z, true);
 		for (int z = 0; z < 4; z++) for (int y = 1; y <= 4; y++) for (int x = 0; x < 4; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
 		FlipParticleState initial = domain.exportParticleState();
 		float initialCenterY = centerOfMassY(initial);
-		FlipFluidDomain.VolumeDistribution initialDistribution = domain.volumeDistribution(8.0F / 255.0F);
+		FluidDomain.VolumeDistribution initialDistribution = domain.volumeDistribution(8.0F / 255.0F);
 		for (int step = 0; step < 5_000; step++) domain.step();
 
 		FlipParticleState result = domain.exportParticleState();
@@ -272,7 +272,7 @@ public final class FlipFluidFreeSurfaceValidation {
 			check(Math.abs(layers[y] - 16.0) < 1.0E-7,
 					"hydrostatic layer changed exact marker volume at y=" + y + ": " + layers[y]);
 		}
-		FlipFluidDomain.VolumeDistribution resultDistribution = domain.volumeDistribution(8.0F / 255.0F);
+		FluidDomain.VolumeDistribution resultDistribution = domain.volumeDistribution(8.0F / 255.0F);
 		check(resultDistribution.equals(initialDistribution),
 				"hydrostatic reconstructed surface changed over 5,000 steps: before="
 						+ initialDistribution + ", after=" + resultDistribution);
@@ -285,7 +285,7 @@ public final class FlipFluidFreeSurfaceValidation {
 				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
 				200, 1.0E-5F, 0.35F, 2.0E-3F, 0.80F
 		);
-		FlipFluidDomain domain = new FlipFluidDomain(12, 8, 4, config);
+		FluidDomain domain = new FluidDomain(12, 8, 4, config);
 		for (int z = 0; z < 4; z++) for (int x = 0; x < 12; x++) {
 			int topSolid = x < 2 ? 3 : x < 4 ? 2 : 1;
 			for (int y = 0; y <= topSolid; y++) domain.setSolid(x, y, z, true);
@@ -297,7 +297,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		float exactVolume = domain.totalVolume();
 		float initialCenter = domain.centerOfMassX();
 		for (int step = 0; step < 300; step++) {
-			FlipFluidDomain.StepStats stats = domain.step();
+			FluidDomain.StepStats stats = domain.step();
 			check(Float.isFinite(stats.pressureResidual()), "stair-slope pressure residual became non-finite");
 			check(stats.relativeVolumeError() < 2.0E-6F, "stair-slope flow changed marker volume");
 		}

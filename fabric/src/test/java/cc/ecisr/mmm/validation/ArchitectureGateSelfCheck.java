@@ -17,7 +17,7 @@ final class ArchitectureGateSelfCheck {
 				persistence("RegionCodecFixture", "cc.ecisr.mmm.simulation.FluidRegion"),
 				persistence("RegionWildcardFixture", "cc.ecisr.mmm.simulation.*"),
 				persistence("RegionCleanFixture", "cc.ecisr.mmm.simulation.FluidProtocolServer"),
-				adapter("SolverImportFixture", "cc.ecisr.mmm.fluid.FlipFluidDomain"),
+				adapter("SolverImportFixture", "cc.ecisr.mmm.fluid.FluidDomain"),
 				adapter("SolverCleanFixture", "cc.ecisr.mmm.fluid.AirNetwork"));
 		List<String> violations = new ArrayList<>();
 		ArchitectureDependencyValidation.checkPersistenceDoesNotReferenceRuntime(sources, violations);

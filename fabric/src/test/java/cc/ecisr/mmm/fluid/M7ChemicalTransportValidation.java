@@ -85,7 +85,7 @@ public final class M7ChemicalTransportValidation {
 		FluidMaterialRegistry materials = new FluidMaterialRegistry(List.of(
 				BuiltinFluidMaterials.DEFAULT_PALETTE.getFirst(),
 				new FluidMaterial("test:missing_phase", 1_000.0, "test:missing_phase", 0.0, Math.PI / 2.0)));
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
 		domain.setVolume(1, 1, 1, 0.125F);
 		domain.setMarkerMaterial(0, materials, 0);
 		try {
@@ -97,19 +97,19 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateExternalSourceBoundary() {
-		FlipFluidDomain domain = domainWithCell(1, 1, 1, 0.125F);
-		FlipFluidDomain.ExactVolumeTransfer survival = domain.tryInsertExactVolume(1, 1, 1,
+		FluidDomain domain = domainWithCell(1, 1, 1, 0.125F);
+		FluidDomain.ExactVolumeTransfer survival = domain.tryInsertExactVolume(1, 1, 1,
 				0.125F, 0, 0, false);
 		check(survival.transferred() && domain.chemicalParcels().externalSource().isEmpty(),
 				"conservative insertion was recorded as an external source");
-		FlipFluidDomain.ExactVolumeTransfer creative = domain.tryInsertExactVolume(1, 1, 1,
+		FluidDomain.ExactVolumeTransfer creative = domain.tryInsertExactVolume(1, 1, 1,
 				0.125F, 0, 0, true);
 		check(creative.transferred() && !domain.chemicalParcels().externalSource().isEmpty(),
 				"explicit external insertion was not recorded atomically");
 	}
 
 	private static void validateWallSeparatedCellsDoNotReact() {
-		FlipFluidDomain domain = new FlipFluidDomain(5, 4, 4, STATIC_CONFIG, 64);
+		FluidDomain domain = new FluidDomain(5, 4, 4, STATIC_CONFIG, 64);
 		domain.setVolume(1, 1, 1, 0.125F);
 		domain.setVolume(3, 1, 1, 0.125F);
 		domain.setSolid(2, 1, 1, true);
@@ -142,7 +142,7 @@ public final class M7ChemicalTransportValidation {
 		FluidMaterialRegistry materials = new FluidMaterialRegistry(List.of(
 				new FluidMaterial("test:material_a", 1_000.0, "test:immiscible_a", 0.0, Math.PI / 2.0),
 				new FluidMaterial("test:material_b", 1_000.0, "test:immiscible_b", 0.0, Math.PI / 2.0)));
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setMarkerMaterial(0, materials, 0);
 		domain.setMarkerMaterial(1, materials, 1);
@@ -157,7 +157,7 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateSameCellReaction() {
-		FlipFluidDomain domain = domainWithCell(1, 1, 1, 1.0F);
+		FluidDomain domain = domainWithCell(1, 1, 1, 1.0F);
 		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.HCL, 1_000_000L), true);
 		domain.setMarkerChemical(1, Map.of(BuiltinChemicalDefinitions.NAOH, 1_000_000L), false);
 		int markerCount = domain.particleCount();
@@ -166,7 +166,7 @@ public final class M7ChemicalTransportValidation {
 			residualBits[marker] = domain.chemicalParcels().record(marker).massResidualKilogramsBits();
 		}
 		double massBefore = domain.totalMass();
-		FlipFluidDomain.StepStats stats = domain.step();
+		FluidDomain.StepStats stats = domain.step();
 		long[] totals = domain.chemicalParcels().speciesTotals(domain.particleCount());
 		check(totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H_PLUS)] == 0L, "same-cell reaction left H+");
 		check(totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.OH_MINUS)] == 0L, "same-cell reaction left OH-");
@@ -250,7 +250,7 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateAdjacentCellsDoNotReact() {
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
 		domain.setVolume(1, 1, 1, 0.125F);
 		domain.setVolume(2, 1, 1, 0.125F);
 		domain.setMarkerMaterial(0, MATERIALS, 0);
@@ -266,10 +266,10 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateSplitAndIndicator() {
-		FlipFluidDomain domain = domainWithCell(1, 1, 1, 0.125F);
+		FluidDomain domain = domainWithCell(1, 1, 1, 0.125F);
 		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1_001L), true);
 		long before = domain.chemicalParcels().totalQuanta();
-		FlipFluidDomain.StepStats stats = domain.step();
+		FluidDomain.StepStats stats = domain.step();
 		check(stats.reseededSplits() == 1 && domain.particleCount() == 2, "chemical marker did not split");
 		check(domain.chemicalParcels().totalQuanta() == before, "split changed total chemical quanta");
 		check(domain.chemicalParcels().record(0).totalQuanta()
@@ -279,25 +279,25 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateIndicatorFloodFill() {
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
 		domain.setVolume(1, 1, 1, 0.125F);
 		domain.setVolume(2, 1, 1, 0.125F);
 		domain.setMarkerMaterial(0, MATERIALS, 0);
 		domain.bindChemistry(CHEMISTRY);
-		FlipFluidDomain.IndicatorEditResult rejected = domain.editIndicatorFloodFill(1, 1, 1,
+		FluidDomain.IndicatorEditResult rejected = domain.editIndicatorFloodFill(1, 1, 1,
 				true, 64, 0.1);
 		check(!rejected.accepted(), "over-volume indicator fill was partially accepted");
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			check(!domain.chemicalParcels().indicator(marker), "rejected indicator fill changed a marker");
 		}
-		FlipFluidDomain.IndicatorEditResult added = domain.editIndicatorFloodFill(1, 1, 1,
+		FluidDomain.IndicatorEditResult added = domain.editIndicatorFloodFill(1, 1, 1,
 				true, 64, 100.0);
 		check(added.accepted() && added.changedMarkers() == 2 && added.affectedBlockVolume() == 0.25,
 				"connected aqueous indicator fill did not cover its exact component");
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			check(domain.chemicalParcels().indicator(marker), "connected indicated marker was skipped");
 		}
-		FlipFluidDomain.IndicatorEditResult shallowAim = domain.editIndicatorFloodFill(1, 3, 1,
+		FluidDomain.IndicatorEditResult shallowAim = domain.editIndicatorFloodFill(1, 3, 1,
 				false, 64, Double.POSITIVE_INFINITY);
 		check(shallowAim.accepted() && shallowAim.changedMarkers() == 2,
 				"shallow-surface aim did not snap to nearby chemical marker truth");
@@ -315,19 +315,19 @@ public final class M7ChemicalTransportValidation {
 			if (domain.chemicalParcels().indicator(marker)) marked++; else plain++;
 		}
 		check(marked > 0 && plain > 0, "later mixed markers inherited indicator retroactively");
-		FlipFluidDomain.IndicatorEditResult erased = domain.editIndicatorFloodFill(1, 1, 1,
+		FluidDomain.IndicatorEditResult erased = domain.editIndicatorFloodFill(1, 1, 1,
 				false, 64, Double.POSITIVE_INFINITY);
 		check(erased.accepted() && erased.changedMarkers() == marked, "eraser did not clear only current marked provenance");
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			check(!domain.chemicalParcels().indicator(marker), "eraser left an indicated marker");
 		}
 
-		FlipFluidDomain wall = new FlipFluidDomain(5, 4, 4, STATIC_CONFIG, 64);
+		FluidDomain wall = new FluidDomain(5, 4, 4, STATIC_CONFIG, 64);
 		wall.setVolume(1, 1, 1, 0.125F);
 		wall.setSolid(2, 1, 1, true);
 		wall.setMarkerMaterial(0, MATERIALS, 0);
 		wall.bindChemistry(CHEMISTRY);
-		FlipFluidDomain.IndicatorEditResult throughWall = wall.editIndicatorFloodFill(3, 1, 1,
+		FluidDomain.IndicatorEditResult throughWall = wall.editIndicatorFloodFill(3, 1, 1,
 				true, 64, 100.0);
 		check(!throughWall.accepted(), "shallow-aim snapping crossed a closed cut face");
 	}
@@ -366,13 +366,13 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateCollisionDisplacement() {
-		FlipFluidDomain domain = domainWithCell(1, 1, 1, 1.0F);
+		FluidDomain domain = domainWithCell(1, 1, 1, 1.0F);
 		domain.setMarkerChemical(0, Map.of(
 				BuiltinChemicalDefinitions.H2O, 100_000L,
 				BuiltinChemicalDefinitions.NACL, 10_000L), true);
 		long[] before = domain.chemicalParcels().speciesTotals(domain.particleCount());
 		double volumeBefore = domain.totalVolumeExact();
-		FlipFluidDomain.ChemicalDisplacement displaced = domain.setSolidMicroMaskChemical(1, 1, 1, 0xff);
+		FluidDomain.ChemicalDisplacement displaced = domain.setSolidMicroMaskChemical(1, 1, 1, 0xff);
 		check(domain.particleCount() == 0 && domain.chemicalParcels().totalQuanta() == 0L,
 				"collision did not remove parcel ownership");
 		check(displaced.ledger().totalQuanta() == Arrays.stream(before).sum(),
@@ -380,7 +380,7 @@ public final class M7ChemicalTransportValidation {
 		check(domain.chemicalParcels().escapedSink().isEmpty(),
 				"recoverable collision displacement was recorded as escaped before restoration");
 		domain.setSolidMicroMaskChemical(1, 1, 1, 0);
-		FlipFluidDomain.ExactChemicalTransfer restored = domain.tryInsertExactChemical(
+		FluidDomain.ExactChemicalTransfer restored = domain.tryInsertExactChemical(
 				1, 1, 1, displaced.ledger(), 0);
 		check(restored.transferred(), "exact collision chemistry could not be restored");
 		check(Double.doubleToRawLongBits(domain.totalVolumeExact()) == Double.doubleToRawLongBits(volumeBefore),
@@ -393,7 +393,7 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateChemicalHandoff() {
-		FlipFluidDomain source = domainWithCell(1, 1, 1, 0.25F);
+		FluidDomain source = domainWithCell(1, 1, 1, 0.25F);
 		source.setMarkerChemical(0, Map.of(
 				BuiltinChemicalDefinitions.H2O, 123_457L,
 				BuiltinChemicalDefinitions.NACL, 999L), true);
@@ -401,7 +401,7 @@ public final class M7ChemicalTransportValidation {
 		source.chemicalParcels().recordExternalSource(auditFixture);
 		source.chemicalParcels().recordEscapedSink(auditFixture);
 		FlipChemicalParticleState state = source.exportChemicalParticleState();
-		FlipFluidDomain restored = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+		FluidDomain restored = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
 		restored.restoreChemicalParticleState(state, CHEMISTRY);
 		check(Arrays.equals(source.chemicalParcels().speciesTotals(source.particleCount()),
 				restored.chemicalParcels().speciesTotals(restored.particleCount())),
@@ -424,7 +424,7 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateConcentrationControlsDensity(FluidSolverConfig config) {
-		FlipFluidDomain source = new FlipFluidDomain(4, 4, 4, config, 128);
+		FluidDomain source = new FluidDomain(4, 4, 4, config, 128);
 		source.setVolume(1, 1, 1, 1.0F);
 		source.setVolume(2, 1, 1, 1.0F);
 		source.setMarkerMaterial(0, MATERIALS, 0);
@@ -460,7 +460,7 @@ public final class M7ChemicalTransportValidation {
 				materials, CHEMISTRY, mixtures, indicators,
 				cc.ecisr.mmm.chemistry.ChemicalTransferLedger.EMPTY,
 				cc.ecisr.mmm.chemistry.ChemicalTransferLedger.EMPTY);
-		FlipFluidDomain stratified = new FlipFluidDomain(4, 4, 4, config, 128);
+		FluidDomain stratified = new FluidDomain(4, 4, 4, config, 128);
 		stratified.restoreChemicalParticleState(chemical, CHEMISTRY);
 		double freshDensity = stratified.densityInCell(1, 1, 1);
 		double brineDensity = stratified.densityInCell(2, 1, 1);
@@ -475,7 +475,7 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateChemicalContainerRoundTrip() {
-		FlipFluidDomain source = domainWithCell(1, 1, 1, 0.25F);
+		FluidDomain source = domainWithCell(1, 1, 1, 0.25F);
 		for (int marker = 0; marker < source.particleCount(); marker++) {
 			source.setMarkerChemical(marker, Map.of(
 					BuiltinChemicalDefinitions.H2O, 12_345_678L + marker,
@@ -485,7 +485,7 @@ public final class M7ChemicalTransportValidation {
 		long expectedResidual = source.exportChemicalParticleState().residualLedgerBits();
 		double expectedMass = source.totalMass();
 
-		FlipFluidDomain.ExactChemicalTransfer extracted = source.tryExtractExactChemical(1, 1, 1, 0.25F, 0);
+		FluidDomain.ExactChemicalTransfer extracted = source.tryExtractExactChemical(1, 1, 1, 0.25F, 0);
 		check(extracted.transferred() && source.particleCount() == 0,
 				"chemical bucket extraction was not all-or-nothing");
 		ChemicalContents contents = ChemicalContents.fromLedger(extracted.ledger(), CHEMISTRY,
@@ -503,8 +503,8 @@ public final class M7ChemicalTransportValidation {
 				"partial chemical bucket split did not close volume/species/mass");
 		partial.inserted().validateAgainst(CHEMISTRY);
 		partial.remaining().validateAgainst(CHEMISTRY);
-		FlipFluidDomain restored = source;
-		FlipFluidDomain.ExactChemicalTransfer inserted = restored.tryInsertExactChemical(
+		FluidDomain restored = source;
+		FluidDomain.ExactChemicalTransfer inserted = restored.tryInsertExactChemical(
 				1, 1, 1, contents.toLedger(CHEMISTRY), 0);
 		check(inserted.transferred(), "canonical chemical bucket could not be inserted");
 		check(Arrays.equals(expectedSpecies, restored.chemicalParcels().speciesTotals(restored.particleCount())),
@@ -518,7 +518,7 @@ public final class M7ChemicalTransportValidation {
 		}
 		long[] beforeRefusedSpecies = restored.chemicalParcels().speciesTotals(restored.particleCount());
 		double beforeRefusedVolume = restored.totalVolumeExact();
-		FlipFluidDomain.ExactChemicalTransfer refusedRepresentation = restored.tryExtractExactChemical(
+		FluidDomain.ExactChemicalTransfer refusedRepresentation = restored.tryExtractExactChemical(
 				1, 1, 1, 0.125F, 0, ignored -> false);
 		check(!refusedRepresentation.transferred()
 				&& Double.doubleToRawLongBits(restored.totalVolumeExact()) == Double.doubleToRawLongBits(beforeRefusedVolume)
@@ -543,8 +543,8 @@ public final class M7ChemicalTransportValidation {
 
 	/** Frozen M7.0 wall-time budgets, measured only by the explicit full chemistry selector. */
 	private static void validatePerformanceBudgets() {
-		FlipFluidDomain baseline = benchmarkDomain(false);
-		FlipFluidDomain chemical = benchmarkDomain(true);
+		FluidDomain baseline = benchmarkDomain(false);
+		FluidDomain chemical = benchmarkDomain(true);
 		for (int warmup = 0; warmup < 30; warmup++) {
 			baseline.step();
 			chemical.step();
@@ -582,8 +582,8 @@ public final class M7ChemicalTransportValidation {
 				stepDelta * 100.0, reactionP95 / 1_000_000.0);
 	}
 
-	private static FlipFluidDomain benchmarkDomain(boolean chemistry) {
-		FlipFluidDomain domain = new FlipFluidDomain(10, 7, 10, STATIC_CONFIG, 4_096);
+	private static FluidDomain benchmarkDomain(boolean chemistry) {
+		FluidDomain domain = new FluidDomain(10, 7, 10, STATIC_CONFIG, 4_096);
 		for (int z = 1; z <= 8; z++) for (int y = 1; y <= 4; y++) for (int x = 1; x <= 8; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
@@ -592,10 +592,10 @@ public final class M7ChemicalTransportValidation {
 		return domain;
 	}
 
-	private static long timedSteps(FlipFluidDomain domain, int count) {
+	private static long timedSteps(FluidDomain domain, int count) {
 		long start = System.nanoTime();
 		for (int step = 0; step < count; step++) {
-			FlipFluidDomain.StepStats stats = domain.step();
+			FluidDomain.StepStats stats = domain.step();
 			check(stats.chemistryDirtyCells() == 0, "clean-step benchmark became chemically dirty");
 		}
 		return System.nanoTime() - start;
@@ -653,8 +653,8 @@ public final class M7ChemicalTransportValidation {
 		return contentsSpecies(first, second);
 	}
 
-	private static FlipFluidDomain domainWithCell(int x, int y, int z, float volume) {
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+	private static FluidDomain domainWithCell(int x, int y, int z, float volume) {
+		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
 		domain.setVolume(x, y, z, volume);
 		domain.setMarkerMaterial(0, MATERIALS, 0);
 		domain.bindChemistry(CHEMISTRY);

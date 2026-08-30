@@ -5,7 +5,7 @@ import cc.ecisr.mmm.fluid.FluidDomainState;
 import cc.ecisr.mmm.fluid.FluidDomainStateAssertions;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.thermal.ThermalLimits;
 
 import java.util.List;
@@ -28,9 +28,9 @@ public final class FluidDomainStateParityValidation {
 	/** capture -> restore -> capture must reproduce every authoritative field bit-for-bit. */
 	private static void captureRestoreCapturePreservesRawBits() throws Exception {
 		ProductionFluidReplayValidation.RegistrySet registries = ProductionFluidReplayValidation.loadProductionRegistries();
-		FlipFluidDomain domain = ProductionFluidReplayValidation.createFullyBoundHalfFilledDomain(registries);
+		FluidDomain domain = ProductionFluidReplayValidation.createFullyBoundHalfFilledDomain(registries);
 		FluidDomainState captured = domain.captureAuthoritativeState();
-		FlipFluidDomain restored = FlipFluidDomain.restoreAuthoritativeState(captured);
+		FluidDomain restored = FluidDomain.restoreAuthoritativeState(captured);
 		FluidDomainState recaptured = restored.captureAuthoritativeState();
 		FluidDomainStateAssertions.assertSameState(captured, recaptured, "capture/restore/capture");
 	}
@@ -43,11 +43,11 @@ public final class FluidDomainStateParityValidation {
 		} catch (Exception failure) {
 			throw new IllegalStateException("production registries failed to load", failure);
 		}
-		FlipFluidDomain domain = ProductionFluidReplayValidation.createFullyBoundPlanarHalfFill(registries);
+		FluidDomain domain = ProductionFluidReplayValidation.createFullyBoundPlanarHalfFill(registries);
 		FluidDomainState base = domain.captureAuthoritativeState();
 		FluidStepCandidate candidate = new CpuFluidSolverBackend().evaluate(
 				new FluidStepRequest(0L, base, List.of(), false, 0, true));
-		FlipFluidDomain restored = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+		FluidDomain restored = FluidDomain.restoreAuthoritativeState(candidate.state());
 		FluidDomainStateAssertions.assertSameState(
 				candidate.state(), restored.captureAuthoritativeState(), "phase-off candidate/restore/capture");
 	}
@@ -55,11 +55,11 @@ public final class FluidDomainStateParityValidation {
 	/** The same round trip with the full phase-on pipeline enabled. */
 	private static void phaseOnCandidateRestoresToIdenticalState() throws Exception {
 		ProductionFluidReplayValidation.RegistrySet registries = ProductionFluidReplayValidation.loadProductionRegistries();
-		FlipFluidDomain domain = ProductionFluidReplayValidation.createFullyBoundHalfFilledDomain(registries);
+		FluidDomain domain = ProductionFluidReplayValidation.createFullyBoundHalfFilledDomain(registries);
 		FluidDomainState base = domain.captureAuthoritativeState();
 		FluidStepCandidate candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
 				0L, base, List.of(), true, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP, false));
-		FlipFluidDomain restored = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+		FluidDomain restored = FluidDomain.restoreAuthoritativeState(candidate.state());
 		FluidDomainStateAssertions.assertSameState(
 				candidate.state(), restored.captureAuthoritativeState(), "phase-on candidate/restore/capture");
 	}

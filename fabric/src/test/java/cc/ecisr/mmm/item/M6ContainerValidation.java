@@ -1,7 +1,7 @@
 package cc.ecisr.mmm.item;
 
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterial;
@@ -163,7 +163,7 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testConversions() {
-		FlipFluidDomain domain = new FlipFluidDomain(6, 4, 6, CONFIG, 512);
+		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);
 		domain.setVolume(4, 2, 4, 0.625F);
@@ -273,9 +273,9 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testExactInsert() {
-		FlipFluidDomain domain = new FlipFluidDomain(6, 4, 6, CONFIG, 512);
+		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
 		domain.setSolid(0, 0, 0, true);
-		FlipFluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(3, 2, 3, 0.375F, 2);
+		FluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(3, 2, 3, 0.375F, 2);
 		check(inserted.transferred() && Math.abs(inserted.volume() - 0.375) < 1.0E-9,
 				"exact insert did not report the planned volume");
 		check(Math.abs(sumMarkerVolumes(domain) - inserted.volume()) < 1.0E-9,
@@ -283,13 +283,13 @@ public final class M6ContainerValidation {
 
 		int particlesBefore = domain.particleCount();
 		double volumesBefore = sumMarkerVolumes(domain);
-		FlipFluidDomain.ExactVolumeTransfer oversized = domain.tryInsertExactVolume(3, 2, 3, 100.0F, 3);
+		FluidDomain.ExactVolumeTransfer oversized = domain.tryInsertExactVolume(3, 2, 3, 100.0F, 3);
 		check(!oversized.transferred(), "insert beyond open capacity was accepted");
 		check(domain.particleCount() == particlesBefore && Math.abs(sumMarkerVolumes(domain) - volumesBefore) < 1.0E-9,
 				"refused insert left partial state");
 
-		FlipFluidDomain tiny = new FlipFluidDomain(6, 4, 6, CONFIG, 4);
-		FlipFluidDomain.ExactVolumeTransfer budget = tiny.tryInsertExactVolume(3, 2, 3, 1.0F, 2);
+		FluidDomain tiny = new FluidDomain(6, 4, 6, CONFIG, 4);
+		FluidDomain.ExactVolumeTransfer budget = tiny.tryInsertExactVolume(3, 2, 3, 1.0F, 2);
 		check(!budget.transferred() && tiny.particleCount() == 0 && sumMarkerVolumes(tiny) == 0.0,
 				"marker-budget refusal left partial state");
 		check(tiny.tryInsertExactVolume(3, 2, 3, 0.0F, 2).transferred(),
@@ -297,17 +297,17 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testExactExtract() {
-		FlipFluidDomain domain = new FlipFluidDomain(6, 4, 6, CONFIG, 512);
+		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
 		domain.tryInsertExactVolume(3, 2, 3, 0.375F, 2);
 		double before = sumMarkerVolumes(domain);
 		int particlesBefore = domain.particleCount();
 
-		FlipFluidDomain.ExactVolumeTransfer oversized = domain.tryExtractExactVolume(3, 2, 3, 0.5F, 2);
+		FluidDomain.ExactVolumeTransfer oversized = domain.tryExtractExactVolume(3, 2, 3, 0.5F, 2);
 		check(!oversized.transferred(), "extract beyond availability was accepted");
 		check(domain.particleCount() == particlesBefore && sumMarkerVolumes(domain) == before,
 				"refused extract left partial state");
 
-		FlipFluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(3, 2, 3, 0.25F, 2);
+		FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(3, 2, 3, 0.25F, 2);
 		check(extracted.transferred() && Math.abs(extracted.volume() - 0.25) < 1.0E-12,
 				"whole-marker extraction was not exact");
 		check(Math.abs(sumMarkerVolumes(domain) - (before - extracted.volume())) < 1.0E-12,
@@ -317,16 +317,16 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testExactMaterialMass() {
-		FlipFluidDomain residual = new FlipFluidDomain(4, 4, 4, CONFIG, 64);
-		FlipFluidDomain.ExactVolumeTransfer seeded = residual.tryInsertExactVolume(2, 2, 2, 5.0E-7F, 0);
+		FluidDomain residual = new FluidDomain(4, 4, 4, CONFIG, 64);
+		FluidDomain.ExactVolumeTransfer seeded = residual.tryInsertExactVolume(2, 2, 2, 5.0E-7F, 0);
 		check(seeded.transferred(), "could not seed a sub-micro marker");
-		FlipFluidDomain.ExactVolumeTransfer tiny = residual.tryExtractExactVolume(2, 2, 2, 1.0E-7F, 0);
+		FluidDomain.ExactVolumeTransfer tiny = residual.tryExtractExactVolume(2, 2, 2, 1.0E-7F, 0);
 		check(tiny.transferred() && residual.totalVolumeExact() > 0.0
 				&& residual.totalVolumeExact() < 5.0E-7,
 				"exact extraction zeroed a positive sub-micro residual: transferred=" + tiny.transferred()
 						+ ", removed=" + tiny.volume() + ", residual=" + residual.totalVolumeExact());
 
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, CONFIG, 80);
+		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG, 80);
 		domain.setVolume(1, 1, 1, 0.125F);
 		FlipParticleState pure = domain.exportParticleState();
 		List<FluidMaterial> materials = List.of(
@@ -342,7 +342,7 @@ public final class M6ContainerValidation {
 		domain.removeAllWaterExact();
 
 		double insertedMass = 123.456789012345;
-		FlipFluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactMaterial(
+		FluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactMaterial(
 				2, 2, 2, 0.375F, insertedMass, 1, 1);
 		check(inserted.transferred()
 				&& Double.doubleToRawLongBits(inserted.mass()) == Double.doubleToRawLongBits(domain.totalMass()),
@@ -350,7 +350,7 @@ public final class M6ContainerValidation {
 		check(Math.abs(domain.totalMass() - 0.375 * 800.0) > 100.0,
 				"material insert silently reconstructed mass from reference density");
 		double massBefore = domain.totalMass();
-		FlipFluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(2, 2, 2, 0.125F, 1, 1);
+		FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(2, 2, 2, 0.125F, 1, 1);
 		check(extracted.transferred() && extracted.mass() > 0.0,
 				"material extraction did not return removed mass");
 		check(Math.abs(massBefore - (domain.totalMass() + extracted.mass())) <= 1.0E-12,
@@ -373,7 +373,7 @@ public final class M6ContainerValidation {
 			// expected: persisted strings are bounded before splitting or allocation
 		}
 
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, CONFIG, 80);
+		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG, 80);
 		domain.setVolume(1, 1, 1, 0.125F);
 		FlipParticleState pure = domain.exportParticleState();
 		List<FluidMaterial> materials = List.of(
@@ -385,12 +385,12 @@ public final class M6ContainerValidation {
 				pure.copyParticleVelocities(), pure.copySolidMask(), new double[] {125.0}, new int[] {0}));
 		domain.removeAllWaterExact();
 
-		List<FlipFluidDomain.MaterialPortion> portions = List.of(
-				new FlipFluidDomain.MaterialPortion(1, 3.2, 256.125),
-				new FlipFluidDomain.MaterialPortion(0, 4.8, 480.875));
-		FlipFluidDomain.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(2, 2, 2, portions, 2);
-		double insertedVolume = inserted.portions().stream().mapToDouble(FlipFluidDomain.MaterialPortion::volume).sum();
-		double insertedMass = inserted.portions().stream().mapToDouble(FlipFluidDomain.MaterialPortion::mass).sum();
+		List<FluidDomain.MaterialPortion> portions = List.of(
+				new FluidDomain.MaterialPortion(1, 3.2, 256.125),
+				new FluidDomain.MaterialPortion(0, 4.8, 480.875));
+		FluidDomain.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(2, 2, 2, portions, 2);
+		double insertedVolume = inserted.portions().stream().mapToDouble(FluidDomain.MaterialPortion::volume).sum();
+		double insertedMass = inserted.portions().stream().mapToDouble(FluidDomain.MaterialPortion::mass).sum();
 		check(inserted.transferred() && inserted.portions().size() == 2
 				&& Math.abs(domain.totalVolumeExact() - insertedVolume) <= 1.0E-15
 				&& Math.abs(domain.totalMass() - insertedMass) <= 1.0E-12
@@ -401,13 +401,13 @@ public final class M6ContainerValidation {
 						+ ", mass=" + domain.totalMass());
 		double volumeBeforeRefusal = domain.totalVolumeExact(), massBeforeRefusal = domain.totalMass();
 		check(!domain.tryInsertExactMixture(2, 2, 2,
-				List.of(new FlipFluidDomain.MaterialPortion(0, 100.0, 100.0)), 1).transferred()
+				List.of(new FluidDomain.MaterialPortion(0, 100.0, 100.0)), 1).transferred()
 				&& domain.totalVolumeExact() == volumeBeforeRefusal && domain.totalMass() == massBeforeRefusal,
 				"refused mixture insert left partial markers");
 
-		FlipFluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(2, 2, 2, 8.0F, 2);
-		double extractedVolume = extracted.portions().stream().mapToDouble(FlipFluidDomain.MaterialPortion::volume).sum();
-		double extractedMass = extracted.portions().stream().mapToDouble(FlipFluidDomain.MaterialPortion::mass).sum();
+		FluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(2, 2, 2, 8.0F, 2);
+		double extractedVolume = extracted.portions().stream().mapToDouble(FluidDomain.MaterialPortion::volume).sum();
+		double extractedMass = extracted.portions().stream().mapToDouble(FluidDomain.MaterialPortion::mass).sum();
 		check(extracted.transferred() && extracted.portions().size() == 2
 				&& Math.abs(extractedVolume - 8.0) <= 1.0E-12
 				&& Math.abs(insertedVolume - (domain.totalVolumeExact() + extractedVolume)) <= 1.0E-15
@@ -430,10 +430,10 @@ public final class M6ContainerValidation {
 			// A malformed item must be rejected during construction, before tooltip/WAL callers.
 		}
 
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, CONFIG, 64);
+		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG, 64);
 		try {
 			domain.tryInsertExactMixture(2, 2, 2,
-					List.of(new FlipFluidDomain.MaterialPortion(0, 1.0E-300, 1.0)), 1);
+					List.of(new FluidDomain.MaterialPortion(0, 1.0E-300, 1.0)), 1);
 			throw new AssertionError("Expected sub-float material volume rejection");
 		} catch (IllegalArgumentException expected) {
 			check(domain.particleCount() == 0 && domain.totalVolumeExact() == 0.0,
@@ -447,10 +447,10 @@ public final class M6ContainerValidation {
 	 * debits at most the container's balance. The combined ledger drift stays tiny and bounded.
 	 */
 	private static void testBucketRoundTrip() {
-		FlipFluidDomain domain = new FlipFluidDomain(6, 4, 6, CONFIG, 512);
+		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
 		// Initial pour: a full bucket empties into the region.
 		long containerNanos = BUCKET;
-		FlipFluidDomain.ExactVolumeTransfer filled = domain.tryInsertExactVolume(3, 2, 3,
+		FluidDomain.ExactVolumeTransfer filled = domain.tryInsertExactVolume(3, 2, 3,
 				ContainerFluidLedger.nanosToFloatVolume(containerNanos), 3);
 		check(filled.transferred(), "could not insert one bucket volume");
 		containerNanos = ContainerFluidLedger.checkedSubtract(containerNanos,
@@ -458,14 +458,14 @@ public final class M6ContainerValidation {
 		long initialNanos = ContainerFluidLedger.volumeToNanos(sumMarkerVolumes(domain));
 		long worstDrift = 0L;
 		for (int cycle = 0; cycle < 100; cycle++) {
-			FlipFluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(3, 2, 3,
+			FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(3, 2, 3,
 					ContainerFluidLedger.nanosToFloatVolume(BUCKET - containerNanos), 3);
 			check(extracted.transferred(), "full-bucket extraction failed");
 			long taken = ContainerFluidLedger.volumeToNanos(extracted.volume());
 			containerNanos = ContainerFluidLedger.checkedAdd(containerNanos,
 					Math.min(taken, BUCKET - containerNanos));
 
-			FlipFluidDomain.ExactVolumeTransfer reinserted = domain.tryInsertExactVolume(3, 2, 3,
+			FluidDomain.ExactVolumeTransfer reinserted = domain.tryInsertExactVolume(3, 2, 3,
 					ContainerFluidLedger.nanosToFloatVolume(containerNanos), 3);
 			check(reinserted.transferred(), "re-insertion failed");
 			long given = ContainerFluidLedger.volumeToNanos(reinserted.volume());
@@ -479,7 +479,7 @@ public final class M6ContainerValidation {
 		System.out.println("  worst bucket round-trip drift over 100 cycles: " + worstDrift + " quanta");
 	}
 
-	private static double sumMarkerVolumes(FlipFluidDomain domain) {
+	private static double sumMarkerVolumes(FluidDomain domain) {
 		FlipParticleState state = domain.exportParticleState();
 		float[] markers = state.copyPositionVolume();
 		double sum = 0.0;

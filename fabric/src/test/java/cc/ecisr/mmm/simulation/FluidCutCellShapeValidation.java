@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.simulation;
 
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import net.minecraft.world.phys.shapes.BooleanOp;
 import net.minecraft.world.phys.shapes.Shapes;
@@ -53,7 +53,7 @@ public final class FluidCutCellShapeValidation {
 				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				160, 5.0E-5F, 0.40F, 2.0E-3F, 0.80F
 		);
-		FlipFluidDomain domain = new FlipFluidDomain(24, 16, 24, config, 73_728);
+		FluidDomain domain = new FluidDomain(24, 16, 24, config, 73_728);
 		for (int z = 0; z < 24; z++) for (int y = 0; y < 12; y++) for (int x = 0; x < 9; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
@@ -71,7 +71,7 @@ public final class FluidCutCellShapeValidation {
 				);
 			}
 		}
-		FlipFluidDomain.VolumeAddition restoration = domain.addVolumeNearBudgeted(5, 3, 5, displaced, 8);
+		FluidDomain.VolumeAddition restoration = domain.addVolumeNearBudgeted(5, 3, 5, displaced, 8);
 		checkClose(displaced, 6.0F, 0.0F, "documented stair displacement");
 		checkClose(restoration.addedVolume(), displaced, 0.0F, "documented stair restoration");
 		check(!restoration.markerBudgetLimited(), "documented stair restoration exhausted marker budget");

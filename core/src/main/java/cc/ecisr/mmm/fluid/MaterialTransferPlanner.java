@@ -22,20 +22,20 @@ import java.util.TreeMap;
  * Every rejection happens during planning; the commit loop itself has no business refusals.
  */
 final class MaterialTransferPlanner {
-	private final FlipFluidDomain domain;
+	private final FluidDomain domain;
 
-	MaterialTransferPlanner(FlipFluidDomain domain) {
+	MaterialTransferPlanner(FluidDomain domain) {
 		this.domain = domain;
 	}
 
-	FlipFluidDomain.ExactMixtureTransfer insertMixture(
-			int centerX, int centerY, int centerZ, List<FlipFluidDomain.MaterialPortion> portions, int maxRadius,
+	FluidDomain.ExactMixtureTransfer insertMixture(
+			int centerX, int centerY, int centerZ, List<FluidDomain.MaterialPortion> portions, int maxRadius,
 			boolean externalSource, Double internalEnergy) {
 		if (portions == null || portions.isEmpty()) throw new IllegalArgumentException("Mixture insertion is empty");
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
-		if (domain.hasPendingPhaseVolumeWork()) return new FlipFluidDomain.ExactMixtureTransfer(false, List.of());
+		if (domain.hasPendingPhaseVolumeWork()) return new FluidDomain.ExactMixtureTransfer(false, List.of());
 		java.util.Set<Integer> materialHandles = new java.util.HashSet<>();
-		for (FlipFluidDomain.MaterialPortion portion : portions) {
+		for (FluidDomain.MaterialPortion portion : portions) {
 			domain.validateMaterialPortion(portion);
 			if (!materialHandles.add(portion.materialHandle())) {
 				throw new IllegalArgumentException("Mixture insertion contains duplicate material handle "
@@ -45,11 +45,11 @@ final class MaterialTransferPlanner {
 		double[] exactCellVolume = domain.exactCellVolumes();
 		java.util.List<InsertAllocation> plan = new java.util.ArrayList<>();
 		long requiredMarkers = 0L;
-		List<FlipFluidDomain.CellCandidate> nearby = domain.nearbyCells(centerX, centerY, centerZ, maxRadius);
+		List<FluidDomain.CellCandidate> nearby = domain.nearbyCells(centerX, centerY, centerZ, maxRadius);
 		for (int portionIndex = 0; portionIndex < portions.size(); portionIndex++) {
-			FlipFluidDomain.MaterialPortion portion = portions.get(portionIndex);
+			FluidDomain.MaterialPortion portion = portions.get(portionIndex);
 			double remaining = portion.volume();
-			for (FlipFluidDomain.CellCandidate candidate : nearby) {
+			for (FluidDomain.CellCandidate candidate : nearby) {
 				if (remaining <= 0.0) break;
 				int index = candidate.index();
 				double capacity = Math.max(0.0, domain.effectiveOpenCellVolume(index) - exactCellVolume[index]);
@@ -57,14 +57,14 @@ final class MaterialTransferPlanner {
 				if (allocate <= 0.0) continue;
 				requiredMarkers += (long) Math.ceil(allocate / domain.PARTICLE_VOLUME);
 				if (domain.particles.count() + requiredMarkers > domain.maximumParticleCount) {
-					return new FlipFluidDomain.ExactMixtureTransfer(false, List.of());
+					return new FluidDomain.ExactMixtureTransfer(false, List.of());
 				}
 				int x = index % domain.sizeX, yz = index / domain.sizeX, y = yz % domain.sizeY, z = yz / domain.sizeY;
 				plan.add(new InsertAllocation(x, y, z, allocate, portion.materialHandle(), portionIndex));
 				exactCellVolume[index] += allocate;
 				remaining -= allocate;
 			}
-			if (remaining > 0.0) return new FlipFluidDomain.ExactMixtureTransfer(false, List.of());
+			if (remaining > 0.0) return new FluidDomain.ExactMixtureTransfer(false, List.of());
 		}
 
 		double[] inserted = new double[portions.size()];
@@ -109,7 +109,7 @@ final class MaterialTransferPlanner {
 		}
 		if (domain.chemicalParcels != null && Math.addExact(domain.chemicalParcels.totalQuanta(), plannedChemicalQuanta)
 				> cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
-			return new FlipFluidDomain.ExactMixtureTransfer(false, List.of());
+			return new FluidDomain.ExactMixtureTransfer(false, List.of());
 		}
 		ChemicalTransferLedger externalAddition = ChemicalTransferLedger.EMPTY;
 		if (externalSource && domain.chemicalParcels != null) {
@@ -121,7 +121,7 @@ final class MaterialTransferPlanner {
 				externalAddition = source.build();
 				domain.chemicalParcels.requireCanRecordExternalSource(externalAddition);
 			} catch (IllegalArgumentException | ArithmeticException refusedAudit) {
-				return new FlipFluidDomain.ExactMixtureTransfer(false, List.of());
+				return new FluidDomain.ExactMixtureTransfer(false, List.of());
 			}
 		}
 		LiquidEnergyColumn.ExternalLiquidInsertionPlan thermalPlan = null;
@@ -140,11 +140,11 @@ final class MaterialTransferPlanner {
 		if (thermalPlan != null) domain.thermalState.commitExternalLiquidInsertions(firstInsertedOrdinal, thermalPlan);
 		if (!externalAddition.isEmpty()) domain.chemicalParcels.recordExternalSource(externalAddition);
 		domain.gridDirty = true;
-		List<FlipFluidDomain.MaterialPortion> result = new java.util.ArrayList<>(portions.size());
+		List<FluidDomain.MaterialPortion> result = new java.util.ArrayList<>(portions.size());
 		for (int i = 0; i < portions.size(); i++) {
-			result.add(new FlipFluidDomain.MaterialPortion(portions.get(i).materialHandle(), inserted[i], insertedMass[i]));
+			result.add(new FluidDomain.MaterialPortion(portions.get(i).materialHandle(), inserted[i], insertedMass[i]));
 		}
-		return new FlipFluidDomain.ExactMixtureTransfer(true, List.copyOf(result), internalEnergy == null ? 0.0 : internalEnergy);
+		return new FluidDomain.ExactMixtureTransfer(true, List.copyOf(result), internalEnergy == null ? 0.0 : internalEnergy);
 	}
 
 	/**
@@ -154,10 +154,10 @@ final class MaterialTransferPlanner {
 	 * booked as an external chemical source, the audit twin of the external thermal energy the
 	 * spawn path already records; without chemistry there is no chemical truth to book.
 	 */
-	FlipFluidDomain.VolumeAddition insertVolumeAtMost(
+	FluidDomain.VolumeAddition insertVolumeAtMost(
 			int centerX, int centerY, int centerZ, float amount, int maxRadius) {
 		domain.validateVolumeEdit(amount, maxRadius);
-		if (domain.hasPendingPhaseVolumeWork()) return new FlipFluidDomain.VolumeAddition(0.0F, false);
+		if (domain.hasPendingPhaseVolumeWork()) return new FluidDomain.VolumeAddition(0.0F, false);
 		double[] exactCellVolume = domain.exactCellVolumes();
 		float remaining = amount;
 		boolean markerBudgetLimited = false;
@@ -165,7 +165,7 @@ final class MaterialTransferPlanner {
 		long plannedChemicalQuanta = 0L;
 		try {
 			cellLoop:
-			for (FlipFluidDomain.CellCandidate candidate : domain.nearbyCells(centerX, centerY, centerZ, maxRadius)) {
+			for (FluidDomain.CellCandidate candidate : domain.nearbyCells(centerX, centerY, centerZ, maxRadius)) {
 				int index = candidate.index();
 				int x = index % domain.sizeX, yz = index / domain.sizeX, y = yz % domain.sizeY, z = yz / domain.sizeY;
 				float requestedForCell = (float) Math.min(remaining,
@@ -213,7 +213,7 @@ final class MaterialTransferPlanner {
 				if (remaining <= 1.0E-6F) break;
 			}
 		} catch (IllegalArgumentException | ArithmeticException refusedPlan) {
-			return new FlipFluidDomain.VolumeAddition(0.0F, false);
+			return new FluidDomain.VolumeAddition(0.0F, false);
 		}
 		ChemicalTransferLedger externalAddition = ChemicalTransferLedger.EMPTY;
 		if (domain.chemicalParcels != null && !insertPieces.isEmpty()) {
@@ -225,7 +225,7 @@ final class MaterialTransferPlanner {
 				externalAddition = source.build();
 				domain.chemicalParcels.requireCanRecordExternalSource(externalAddition);
 			} catch (IllegalArgumentException | ArithmeticException refusedAudit) {
-				return new FlipFluidDomain.VolumeAddition(0.0F, false);
+				return new FluidDomain.VolumeAddition(0.0F, false);
 			}
 		}
 		for (MaterialInsertPiece piece : insertPieces) {
@@ -234,7 +234,7 @@ final class MaterialTransferPlanner {
 		}
 		if (!externalAddition.isEmpty()) domain.chemicalParcels.recordExternalSource(externalAddition);
 		domain.gridDirty = true;
-		return new FlipFluidDomain.VolumeAddition(amount - remaining, markerBudgetLimited);
+		return new FluidDomain.VolumeAddition(amount - remaining, markerBudgetLimited);
 	}
 
 	float removeVolumeNear(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
@@ -245,27 +245,27 @@ final class MaterialTransferPlanner {
 		return removed;
 	}
 
-	FlipFluidDomain.ExactChemicalTransfer extractChemical(
+	FluidDomain.ExactChemicalTransfer extractChemical(
 			int centerX, int centerY, int centerZ, float volume, int maxRadius,
 			java.util.function.Predicate<ChemicalTransferLedger> acceptsLedger
 	) {
 		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemical extraction requires chemistry");
 		if (acceptsLedger == null) throw new IllegalArgumentException("Chemical extraction validator is missing");
 		domain.validateVolumeEdit(volume, maxRadius);
-		if (volume <= 0.0F) return new FlipFluidDomain.ExactChemicalTransfer(volume == 0.0F, ChemicalTransferLedger.EMPTY);
-		if (domain.hasPendingPhaseVolumeWork()) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-		List<FlipFluidDomain.CellCandidate> cells = domain.nearbyCells(centerX, centerY, centerZ, maxRadius);
-		boolean[] near = new boolean[domain.sizeX * domain.sizeY * domain.sizeZ]; for (FlipFluidDomain.CellCandidate candidate : cells) near[candidate.index()] = true;
+		if (volume <= 0.0F) return new FluidDomain.ExactChemicalTransfer(volume == 0.0F, ChemicalTransferLedger.EMPTY);
+		if (domain.hasPendingPhaseVolumeWork()) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		List<FluidDomain.CellCandidate> cells = domain.nearbyCells(centerX, centerY, centerZ, maxRadius);
+		boolean[] near = new boolean[domain.sizeX * domain.sizeY * domain.sizeZ]; for (FluidDomain.CellCandidate candidate : cells) near[candidate.index()] = true;
 		double available = 0.0;
 		for (int marker = 0; marker < domain.particles.count(); marker++) if (near[domain.particleCellIndex(marker)]) {
 			available += domain.particles.volume(marker);
 		}
-		if (available < volume) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		if (available < volume) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 
 		double remaining = volume, settlementTolerance = Math.ulp(volume);
 		List<ExtractionAllocation> plan = new ArrayList<>();
 		ChemicalTransferLedger.Builder ledger = ChemicalTransferLedger.builder(domain.chemicalParcels.registry());
-		for (FlipFluidDomain.CellCandidate candidate : cells) {
+		for (FluidDomain.CellCandidate candidate : cells) {
 			if (remaining <= 0.0) break;
 			for (int marker = domain.particles.count() - 1; marker >= 0 && remaining > 0.0; marker--) {
 				if (domain.particleCellIndex(marker) != candidate.index()) continue;
@@ -291,12 +291,12 @@ final class MaterialTransferPlanner {
 				remaining -= actual;
 			}
 		}
-		if (remaining > settlementTolerance) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		if (remaining > settlementTolerance) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		ChemicalTransferLedger removed = ledger.build();
 		if (removed.totalQuanta() > ChemicalLimits.MAX_BUCKET_TOTAL_QUANTA) {
-			return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+			return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		}
-		if (!acceptsLedger.test(removed)) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		if (!acceptsLedger.test(removed)) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		for (ExtractionAllocation allocation : plan) {
 			if (allocation.chemicalPlan().kept() != null) {
 				domain.chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
@@ -309,15 +309,15 @@ final class MaterialTransferPlanner {
 		domain.gridDirty = true;
 		double removedEnergy = domain.thermalState == null ? 0.0 : SignedDyadic.sum(plan.stream()
 				.mapToDouble(allocation -> allocation.thermalPlan().removedEnergy()).toArray()).toDouble();
-		return new FlipFluidDomain.ExactChemicalTransfer(true, removed, removedEnergy);
+		return new FluidDomain.ExactChemicalTransfer(true, removed, removedEnergy);
 	}
-	FlipFluidDomain.ExactMixtureTransfer extractMixture(
+	FluidDomain.ExactMixtureTransfer extractMixture(
 			int centerX, int centerY, int centerZ, float volume, int maxRadius, int requiredMaterialHandle
 	) {
-		if (domain.hasPendingPhaseVolumeWork()) return new FlipFluidDomain.ExactMixtureTransfer(false, List.of());
-		java.util.List<FlipFluidDomain.CellCandidate> cells = domain.nearbyCells(centerX, centerY, centerZ, maxRadius);
+		if (domain.hasPendingPhaseVolumeWork()) return new FluidDomain.ExactMixtureTransfer(false, List.of());
+		java.util.List<FluidDomain.CellCandidate> cells = domain.nearbyCells(centerX, centerY, centerZ, maxRadius);
 		boolean[] near = new boolean[domain.sizeX * domain.sizeY * domain.sizeZ];
-		for (FlipFluidDomain.CellCandidate candidate : cells) near[candidate.index()] = true;
+		for (FluidDomain.CellCandidate candidate : cells) near[candidate.index()] = true;
 		float h = domain.config.cellSize();
 		double available = 0.0;
 		for (int i = 0; i < domain.particles.count(); i++) {
@@ -328,7 +328,7 @@ final class MaterialTransferPlanner {
 					(int) Math.floor(domain.particles.positionZ(i) / h))]) continue;
 			available += domain.particles.volume(i);
 		}
-		if (available < volume) return new FlipFluidDomain.ExactMixtureTransfer(false, List.of());
+		if (available < volume) return new FluidDomain.ExactMixtureTransfer(false, List.of());
 
 		double remaining = volume;
 		double settlementTolerance = Math.ulp(volume);
@@ -341,7 +341,7 @@ final class MaterialTransferPlanner {
 			massBefore[domain.particles.materialHandle(particle)] += domain.particles.mass(particle);
 		}
 		java.util.Set<Integer> changedHandles = new java.util.TreeSet<>();
-		for (FlipFluidDomain.CellCandidate candidate : cells) {
+		for (FluidDomain.CellCandidate candidate : cells) {
 			if (remaining <= 0.0) break;
 			int cell = candidate.index();
 			for (int i = domain.particles.count() - 1; i >= 0; i--) {
@@ -377,7 +377,7 @@ final class MaterialTransferPlanner {
 				remaining -= actual;
 			}
 		}
-		if (remaining > settlementTolerance) return new FlipFluidDomain.ExactMixtureTransfer(false, List.of());
+		if (remaining > settlementTolerance) return new FluidDomain.ExactMixtureTransfer(false, List.of());
 		for (ExtractionAllocation allocation : plan) {
 			if (domain.chemicalParcels != null && allocation.chemicalPlan().kept() != null) {
 				domain.chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
@@ -398,17 +398,17 @@ final class MaterialTransferPlanner {
 			volumeAfter[domain.particles.materialHandle(particle)] += domain.particles.volume(particle);
 			massAfter[domain.particles.materialHandle(particle)] += domain.particles.mass(particle);
 		}
-		List<FlipFluidDomain.MaterialPortion> result = new java.util.ArrayList<>(changedHandles.size());
+		List<FluidDomain.MaterialPortion> result = new java.util.ArrayList<>(changedHandles.size());
 		for (int handle : changedHandles) {
 			double removedVolume = volumeBefore[handle] - volumeAfter[handle];
 			double removedMass = massBefore[handle] - massAfter[handle];
 			if (removedVolume > 0.0 && removedMass > 0.0) {
-				result.add(new FlipFluidDomain.MaterialPortion(handle, removedVolume, removedMass));
+				result.add(new FluidDomain.MaterialPortion(handle, removedVolume, removedMass));
 			}
 		}
 		double removedEnergy = domain.thermalState == null ? 0.0 : SignedDyadic.sum(plan.stream()
 				.mapToDouble(allocation -> allocation.thermalPlan().removedEnergy()).toArray()).toDouble();
-		return new FlipFluidDomain.ExactMixtureTransfer(true, List.copyOf(result), removedEnergy);
+		return new FluidDomain.ExactMixtureTransfer(true, List.copyOf(result), removedEnergy);
 	}
 
 	/**
@@ -416,31 +416,31 @@ final class MaterialTransferPlanner {
 	 * per-species binary volume allocation across whole markers, registry compatibility for
 	 * every produced mixture, and wholesale rejection when any piece cannot be represented.
 	 */
-	FlipFluidDomain.ExactChemicalTransfer insertChemical(
+	FluidDomain.ExactChemicalTransfer insertChemical(
 			int centerX, int centerY, int centerZ, ChemicalTransferLedger ledger, int maxRadius,
 			boolean externalSource, Double internalEnergy
 	) {
 		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemical insertion requires chemistry");
-		if (ledger == null || ledger.isEmpty()) return new FlipFluidDomain.ExactChemicalTransfer(ledger != null, ChemicalTransferLedger.EMPTY);
+		if (ledger == null || ledger.isEmpty()) return new FluidDomain.ExactChemicalTransfer(ledger != null, ChemicalTransferLedger.EMPTY);
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
-		if (domain.hasPendingPhaseVolumeWork()) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		if (domain.hasPendingPhaseVolumeWork()) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		try {
 			if (Math.addExact(domain.chemicalParcels.totalQuanta(), ledger.totalQuanta())
 					> cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
-				return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+				return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 			}
 		} catch (ArithmeticException overflow) {
-			return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+			return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		}
 		double[] exactCellVolume = domain.exactCellVolumes();
-		List<FlipFluidDomain.CellCandidate> nearby = domain.nearbyCells(centerX, centerY, centerZ, maxRadius);
+		List<FluidDomain.CellCandidate> nearby = domain.nearbyCells(centerX, centerY, centerZ, maxRadius);
 		List<ChemicalInsertPiece> pieces = new ArrayList<>();
 		try {
 		for (ChemicalTransferLedger.Group group : ledger.groups()) {
 			int material = domain.materialRegistry.handle(group.materialId());
 			double remaining = group.volume();
 			List<ChemicalPieceDraft> groupPieces = new ArrayList<>();
-			for (FlipFluidDomain.CellCandidate candidate : nearby) {
+			for (FluidDomain.CellCandidate candidate : nearby) {
 				if (remaining <= 0.0) break;
 				double capacity = Math.max(0.0,
 						domain.effectiveOpenCellVolume(candidate.index()) - exactCellVolume[candidate.index()]);
@@ -453,17 +453,17 @@ final class MaterialTransferPlanner {
 				while (left > 0.0) {
 					float piece = (float) Math.min(domain.PARTICLE_VOLUME, left);
 					while (piece > left) piece = Math.nextDown(piece);
-					if (!(piece > 0.0F)) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+					if (!(piece > 0.0F)) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 					groupPieces.add(new ChemicalPieceDraft(cellX, cellY, cellZ, piece, material));
 					if ((long) domain.particles.count() + pieces.size() + groupPieces.size() > domain.maximumParticleCount) {
-						return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+						return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 					}
 					left -= piece;
 				}
 				exactCellVolume[candidate.index()] += allocation;
 				remaining -= allocation;
 			}
-			if (remaining > 0.0) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+			if (remaining > 0.0) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 			float[] weights = new float[groupPieces.size()];
 			int[] ordinals = new int[groupPieces.size()];
 			for (int piece = 0; piece < groupPieces.size(); piece++) {
@@ -481,7 +481,7 @@ final class MaterialTransferPlanner {
 			}
 			double volumeLeft = group.volume(), massLeft = domain.unitScale.solverMass(group.massKilograms());
 			for (int piece = 0; piece < groupPieces.size(); piece++) {
-				if (distributed[piece].isEmpty()) return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+				if (distributed[piece].isEmpty()) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 				ChemicalPieceDraft draft = groupPieces.get(piece);
 				boolean last = piece + 1 == groupPieces.size();
 				double mass = last ? massLeft : massLeft * draft.volume() / volumeLeft;
@@ -500,12 +500,12 @@ final class MaterialTransferPlanner {
 		}
 		} catch (IllegalArgumentException | ArithmeticException
 				| cc.ecisr.mmm.chemistry.ChemicalReactionEngine.BudgetExceededException refusedPlan) {
-			return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+			return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		}
 		if (externalSource) try {
 			domain.chemicalParcels.requireCanRecordExternalSource(ledger);
 		} catch (IllegalArgumentException | ArithmeticException refusedAudit) {
-			return new FlipFluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+			return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		}
 		LiquidEnergyColumn.ExternalLiquidInsertionPlan thermalPlan = null;
 		if (domain.thermalState != null && internalEnergy != null) {
@@ -525,7 +525,7 @@ final class MaterialTransferPlanner {
 		if (thermalPlan != null) domain.thermalState.commitExternalLiquidInsertions(firstInsertedOrdinal, thermalPlan);
 		if (externalSource) domain.chemicalParcels.recordExternalSource(ledger);
 		domain.gridDirty = true;
-		return new FlipFluidDomain.ExactChemicalTransfer(true, ledger, internalEnergy == null ? 0.0 : internalEnergy);
+		return new FluidDomain.ExactChemicalTransfer(true, ledger, internalEnergy == null ? 0.0 : internalEnergy);
 	}
 
 	private record ExtractionAllocation(

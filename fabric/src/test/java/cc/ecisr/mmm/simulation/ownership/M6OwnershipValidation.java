@@ -2,7 +2,7 @@ package cc.ecisr.mmm.simulation.ownership;
 
 import cc.ecisr.mmm.simulation.ownership.OwnershipCoordinator.FailureInjector;
 import cc.ecisr.mmm.simulation.ownership.OwnershipCoordinator.FailurePoint;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.simulation.FluidRegion;
@@ -524,7 +524,7 @@ public final class M6OwnershipValidation {
 
 	private static FluidRegion populatedRegion(UUID id) {
 		BlockPos origin = new BlockPos(15, 16, 15);
-		FlipFluidDomain domain = new FlipFluidDomain(6, 4, 6, CONFIG, 512);
+		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);

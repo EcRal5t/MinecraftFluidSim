@@ -6,7 +6,7 @@ import cc.ecisr.mmm.controller.LifecycleOperation;
 import cc.ecisr.mmm.controller.LifecycleOperationPreview;
 import cc.ecisr.mmm.controller.LifecycleOperationSessions;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
@@ -90,7 +90,7 @@ public final class FluidRegionLifecycleValidation {
 	/** The live solver is only replaced by a complete, adjacent candidate from the expected backend. */
 	private static void validateBackendCandidateAdoption() {
 		FluidSolverConfig config = FluidSolverConfig.prototypeDefaults();
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config);
+		FluidDomain domain = new FluidDomain(4, 4, 4, config);
 		domain.setVolume(1, 1, 1, 0.5F);
 		FluidRegion region = new FluidRegion(new UUID(19L, 23L), DIMENSION, BlockPos.ZERO,
 				domain, domain.maximumParticleCount());
@@ -101,7 +101,7 @@ public final class FluidRegionLifecycleValidation {
 		require(region.solverGeneration() == 1L && region.domain() != domain,
 				"valid backend candidate did not atomically replace the live solver");
 
-		FlipFluidDomain committed = region.domain();
+		FluidDomain committed = region.domain();
 		boolean staleRejected = false;
 		try {
 			region.adoptStepCandidate(first, backend.id());
@@ -137,7 +137,7 @@ public final class FluidRegionLifecycleValidation {
 
 	private static void validateHydrostaticSleepPreservesMarkerLedger() {
 		FluidSolverConfig config = FluidSolverConfig.prototypeDefaults();
-		FlipFluidDomain domain = new FlipFluidDomain(6, 5, 4, config);
+		FluidDomain domain = new FluidDomain(6, 5, 4, config);
 		domain.restoreParticleState(new FlipParticleState(
 				6, 5, 4, config.cellSize(), 2, 0.1875F,
 				new float[] {

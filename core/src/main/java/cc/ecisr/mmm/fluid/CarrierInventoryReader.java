@@ -15,9 +15,9 @@ import java.util.Arrays;
  * storage; capture/restore and renderer adapters consume these as values.
  */
 final class CarrierInventoryReader {
-	private final FlipFluidDomain domain;
+	private final FluidDomain domain;
 
-	CarrierInventoryReader(FlipFluidDomain domain) {
+	CarrierInventoryReader(FluidDomain domain) {
 		this.domain = domain;
 	}
 
@@ -142,7 +142,7 @@ final class CarrierInventoryReader {
 		domain.ensureGrid();
 		byte[] result = new byte[domain.cellCount];
 		for (int i = 0; i < domain.cellCount; i++) {
-			result[i] = (byte) Math.round(FlipFluidDomain.clamp01(domain.volume[i]) * 255.0F);
+			result[i] = (byte) Math.round(FluidDomain.clamp01(domain.volume[i]) * 255.0F);
 		}
 		return result;
 	}

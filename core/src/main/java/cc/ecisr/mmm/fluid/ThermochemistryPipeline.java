@@ -28,7 +28,7 @@ final class ThermochemistryPipeline {
 		this.gasPhase = gasPhase;
 	}
 
-	FlipFluidDomain.ThermalAxisStats step(
+	FluidDomain.ThermalAxisStats step(
 			boolean thermalBound, boolean granularReactionEnabled, double dtSeconds,
 			boolean phaseChangeEnabled, int maximumPhaseOperations
 	) {
@@ -38,22 +38,22 @@ final class ThermochemistryPipeline {
 			transportStats = thermalBound ? transport.step(dtSeconds)
 					: new ThermalTransport.Stats(0, 0, 0.0, SignedDyadic.ZERO, SignedDyadic.ZERO);
 		} catch (IllegalArgumentException invalid) {
-			throw new FlipFluidDomain.ThermalTransportBlockedException(invalid.getMessage(), invalid);
+			throw new FluidDomain.ThermalTransportBlockedException(invalid.getMessage(), invalid);
 		}
 		ChemicalParcelStore.ReactionStats chemicalStats = chemistry.step();
-		FlipFluidDomain.PhaseTransferStats granularStats = granularReaction.step(granularPhaseCells);
-		FlipFluidDomain.ThermalPhaseStats condensedStats = new FlipFluidDomain.ThermalPhaseStats(0, 0, 0, 0L);
-		FlipFluidDomain.GasThermalPhaseStats gasStats = new FlipFluidDomain.GasThermalPhaseStats(0, 0, 0);
+		FluidDomain.PhaseTransferStats granularStats = granularReaction.step(granularPhaseCells);
+		FluidDomain.ThermalPhaseStats condensedStats = new FluidDomain.ThermalPhaseStats(0, 0, 0, 0L);
+		FluidDomain.GasThermalPhaseStats gasStats = new FluidDomain.GasThermalPhaseStats(0, 0, 0);
 		if (phaseChangeEnabled) try {
 			boolean phaseGridPrepared = chemicalStats.changedMarkers() == 0 && granularStats.transfers() == 0;
 			condensedStats = condensedPhase.step(maximumPhaseOperations, phaseGridPrepared);
 			gasStats = gasPhase.step(maximumPhaseOperations - condensedStats.operations(), true);
-		} catch (FlipFluidDomain.ThermalPhaseBlockedException blocked) {
+		} catch (FluidDomain.ThermalPhaseBlockedException blocked) {
 			throw blocked;
 		} catch (IllegalArgumentException invalid) {
-			throw new FlipFluidDomain.ThermalPhaseBlockedException(invalid.getMessage(), invalid);
+			throw new FluidDomain.ThermalPhaseBlockedException(invalid.getMessage(), invalid);
 		}
-		return new FlipFluidDomain.ThermalAxisStats(
+		return new FluidDomain.ThermalAxisStats(
 				transportStats, chemicalStats, granularStats, condensedStats, gasStats);
 	}
 }

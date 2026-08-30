@@ -10,9 +10,9 @@ import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
  * column write happened the commit must not throw a foreseeable business rejection.
  */
 final class CarrierMutationCoordinator {
-	private final FlipFluidDomain domain;
+	private final FluidDomain domain;
 
-	CarrierMutationCoordinator(FlipFluidDomain domain) {
+	CarrierMutationCoordinator(FluidDomain domain) {
 		this.domain = domain;
 	}
 

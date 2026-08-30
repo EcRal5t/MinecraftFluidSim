@@ -9,9 +9,9 @@ import java.util.Arrays;
  * owns assembly, anchoring and the typed non-convergence rejection.
  */
 final class PressureSystem {
-	private final FlipFluidDomain domain;
+	private final FluidDomain domain;
 
-	PressureSystem(FlipFluidDomain domain) {
+	PressureSystem(FluidDomain domain) {
 		this.domain = domain;
 	}
 

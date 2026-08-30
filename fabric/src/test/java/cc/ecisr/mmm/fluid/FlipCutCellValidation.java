@@ -19,11 +19,11 @@ public final class FlipCutCellValidation {
 	}
 
 	private static void bodyOverlapExcludesOccupiedMicroCells() {
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config());
+		FluidDomain domain = new FluidDomain(4, 4, 4, config());
 		domain.setSolidMicroMask(1, 1, 1, LOWER_HALF);
 		domain.setVolume(1, 1, 1, 1.0F);
 		double h = domain.config().cellSize();
-		FlipFluidDomain.BodyFluidSample sample = domain.sampleAxisAlignedBody(
+		FluidDomain.BodyFluidSample sample = domain.sampleAxisAlignedBody(
 				h, h, h, 2.0 * h, 2.0 * h, 2.0 * h);
 		double expectedOpenVolume = domain.volume(1, 1, 1) * h * h * h;
 		check(Math.abs(sample.displacedVolumeCubicMetres() - expectedOpenVolume) < 1.0E-9,
@@ -34,7 +34,7 @@ public final class FlipCutCellValidation {
 	}
 
 	private static void volumeAndSharedFaceFractionsAreConsistent() {
-		FlipFluidDomain domain = new FlipFluidDomain(4, 4, 4, config());
+		FluidDomain domain = new FluidDomain(4, 4, 4, config());
 		domain.setSolidMicroMask(1, 1, 1, LOWER_HALF);
 		checkClose(domain.solidVolumeFraction(1, 1, 1), 0.5F, 0.0F, "cut-cell solid volume");
 		checkClose(domain.openFaceFractionX(1, 1, 1), 0.5F, 0.0F, "negative X aperture");
@@ -61,7 +61,7 @@ public final class FlipCutCellValidation {
 	}
 
 	private static void exactMarkerDisplacementUsesMicroOccupancy() {
-		FlipFluidDomain domain = new FlipFluidDomain(5, 5, 5, config());
+		FluidDomain domain = new FluidDomain(5, 5, 5, config());
 		domain.setVolume(2, 2, 2, 1.0F);
 		float before = domain.totalVolume();
 		float displaced = domain.setSolidMicroMask(2, 2, 2, LOWER_HALF);
@@ -73,7 +73,7 @@ public final class FlipCutCellValidation {
 	}
 
 	private static void cutCellCapacityDisplacesMergedMarkerVolume() {
-		FlipFluidDomain domain = new FlipFluidDomain(5, 5, 5, config());
+		FluidDomain domain = new FluidDomain(5, 5, 5, config());
 		float coordinate = (2.0F + 0.75F) * domain.config().cellSize();
 		domain.restoreParticleState(new FlipParticleState(
 				5, 5, 5, domain.config().cellSize(), 1, 1.0F,
@@ -90,7 +90,7 @@ public final class FlipCutCellValidation {
 	}
 
 	private static void checkpointPreservesCutCellGeometry() {
-		FlipFluidDomain live = new FlipFluidDomain(4, 4, 4, config());
+		FluidDomain live = new FluidDomain(4, 4, 4, config());
 		live.setSolidMicroMask(1, 1, 1, LOWER_HALF);
 		live.setSolid(3, 3, 3, true);
 		live.setVolume(1, 1, 1, 1.0F);
@@ -103,7 +103,7 @@ public final class FlipCutCellValidation {
 		check(Byte.toUnsignedInt(checkpoint.copyCollisionMicroMasks()[full]) == 0xff,
 				"fully solid checkpoint cell was lost");
 
-		FlipFluidDomain restored = new FlipFluidDomain(4, 4, 4, config());
+		FluidDomain restored = new FluidDomain(4, 4, 4, config());
 		restored.restoreParticleState(checkpoint);
 		check(restored.solidMicroMask(1, 1, 1) == LOWER_HALF, "partial cut-cell geometry changed on restore");
 		float displacedOnRefresh = restored.setSolidMicroMask(1, 1, 1, LOWER_HALF);
@@ -113,7 +113,7 @@ public final class FlipCutCellValidation {
 	}
 
 	private static void partialObstacleFlowRemainsFiniteAndConservative() {
-		FlipFluidDomain domain = new FlipFluidDomain(10, 8, 8, config());
+		FluidDomain domain = new FluidDomain(10, 8, 8, config());
 		for (int z = 0; z < 8; z++) for (int x = 0; x < 10; x++) domain.setSolid(x, 0, z, true);
 		for (int z = 2; z <= 5; z++) for (int y = 1; y <= 3; y++) {
 			domain.setSolidMicroMask(5, y, z, NEGATIVE_X_HALF);
@@ -123,7 +123,7 @@ public final class FlipCutCellValidation {
 		}
 		float exactVolume = domain.totalVolume();
 		for (int step = 0; step < 600; step++) {
-			FlipFluidDomain.StepStats stats = domain.step();
+			FluidDomain.StepStats stats = domain.step();
 			check(Float.isFinite(stats.pressureResidual()), "cut-cell PCG residual became non-finite");
 			check(Float.isFinite(domain.maximumPressure()), "cut-cell pressure became non-finite");
 			check(stats.relativeVolumeError() < 2.0E-6F, "cut-cell step changed exact marker volume");
@@ -133,7 +133,7 @@ public final class FlipCutCellValidation {
 		check(domain.centerOfMassX() > 3.0F, "fluid did not pass the partial obstacle aperture");
 	}
 
-	private static void assertNoMarkerCenterInsideSolid(FlipFluidDomain domain) {
+	private static void assertNoMarkerCenterInsideSolid(FluidDomain domain) {
 		FlipParticleState state = domain.exportParticleState();
 		float[] particles = state.copyPositionVolume();
 		float h = domain.config().cellSize();

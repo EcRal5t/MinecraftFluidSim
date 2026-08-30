@@ -55,9 +55,9 @@ final class GranularReactionStage {
 		this.access = access;
 	}
 
-	FlipFluidDomain.PhaseTransferStats step(int[] dirtyCells) {
+	FluidDomain.PhaseTransferStats step(int[] dirtyCells) {
 		if (!access.enabled() || dirtyCells.length == 0) {
-			return new FlipFluidDomain.PhaseTransferStats(0, 0, 0, 0L);
+			return new FluidDomain.PhaseTransferStats(0, 0, 0, 0L);
 		}
 		ChemicalParcelStore chemistry = access.chemistry();
 		GranularDomainState granular = access.granularState();
@@ -124,7 +124,7 @@ final class GranularReactionStage {
 			}
 		}
 		if (transfers > 0) access.markGridDirty();
-		return new FlipFluidDomain.PhaseTransferStats(transfers, precipitated, dissolved, signedSvq);
+		return new FluidDomain.PhaseTransferStats(transfers, precipitated, dissolved, signedSvq);
 	}
 
 	private boolean hasCompleteAqueousExtent(List<Integer> markers, SolidLiquidReaction rule) {
@@ -172,7 +172,7 @@ final class GranularReactionStage {
 		if (compositionHandle == 0 || !granular.compositions.isLive(compositionHandle)) return 0L;
 		SolidCompositionRecord composition = granular.compositions.record(compositionHandle);
 		if (composition.massResidual() != 0.0 || composition.entryCount() != rule.solidComposition().size()
-				|| !FlipFluidDomain.massClose(composition.totalMass(chemistry.registry()), mass)) return 0L;
+				|| !FluidDomain.massClose(composition.totalMass(chemistry.registry()), mass)) return 0L;
 		long extent = -1L;
 		for (Map.Entry<String, Integer> term : rule.solidComposition().entrySet()) {
 			long amount = composition.amount(chemistry.registry().speciesHandle(term.getKey()));
@@ -348,14 +348,14 @@ final class GranularReactionStage {
 				original, plan.transferredComposition());
 		double remainingMass = solid.mass() - removedMass;
 		if (!full && (!(remainingMass > 0.0)
-				|| !FlipFluidDomain.massClose(remaining.totalMass(chemistry.registry()), remainingMass))) {
+				|| !FluidDomain.massClose(remaining.totalMass(chemistry.registry()), remainingMass))) {
 			throw new GranularPhaseTransferEngine.BlockedException(
 					"Dissolution solid mass split is not representable");
 		}
 		if (solid.deposit()) {
 			GranularDepositStore.SolidPortion preview = granular.deposits.peekTakeCompositionAware(
 					cell, solid.materialHandle(), solid.compositionHandle(), removedSvq);
-			if (!FlipFluidDomain.massClose(preview.mass(), removedMass)) {
+			if (!FluidDomain.massClose(preview.mass(), removedMass)) {
 				throw new GranularPhaseTransferEngine.BlockedException(
 						"Dissolution deposit mass split is not representable");
 			}

@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.gpuprobe;
 
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 
 import java.util.ArrayList;
@@ -88,7 +88,7 @@ public final class GpuOccupancyBreakEvenValidation {
 	private static CpuTiming timeCpu(Scenario scenario, int expectedParticles, float expectedVolume) {
 		List<CpuTiming> batches = new ArrayList<>();
 		for (int repeat = 0; repeat < REPEATED_BATCHES; repeat++) {
-			FlipFluidDomain domain = createCpuDomain(scenario);
+			FluidDomain domain = createCpuDomain(scenario);
 			require(domain.particleCount() == expectedParticles, "CPU initial marker count changed for " + scenario.label());
 			require(domain.markerCellCount() == scenario.occupiedCells(), "CPU initial fluid-cell count changed for " + scenario.label());
 			require(close(domain.totalVolume(), expectedVolume), "CPU initial marker volume changed for " + scenario.label());
@@ -97,7 +97,7 @@ public final class GpuOccupancyBreakEvenValidation {
 			int maximumSubsteps = 0, pressureIterations = 0;
 			for (int step = 0; step < MEASURED_STEPS; step++) {
 				long started = System.nanoTime();
-				FlipFluidDomain.StepStats stats = domain.step();
+				FluidDomain.StepStats stats = domain.step();
 				double milliseconds = (System.nanoTime() - started) / 1_000_000.0;
 				totalMillis += milliseconds;
 				minimumMillis = Math.min(minimumMillis, milliseconds);
@@ -173,10 +173,10 @@ public final class GpuOccupancyBreakEvenValidation {
 				throughput, schedulingTotal / MEASURED_STEPS, schedulingMinimum, schedulingMaximum, finalFluidCells);
 	}
 
-	private static FlipFluidDomain createCpuDomain(Scenario scenario) {
+	private static FluidDomain createCpuDomain(Scenario scenario) {
 		FluidSolverConfig config = new FluidSolverConfig(CELL_SIZE, RHO, GRAVITY, DT,
 				200, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F);
-		FlipFluidDomain domain = new FlipFluidDomain(scenario.nx(), scenario.ny(), scenario.nz(), config);
+		FluidDomain domain = new FluidDomain(scenario.nx(), scenario.ny(), scenario.nz(), config);
 		float cellVolume = scenario.markersPerCell() * 0.125F;
 		for (int cell = 0; cell < scenario.occupiedCells(); cell++) {
 			int x = cell % scenario.nx(), yz = cell / scenario.nx();
@@ -188,7 +188,7 @@ public final class GpuOccupancyBreakEvenValidation {
 
 	private static void warmCpuJit() {
 		Scenario warmup = new Scenario("jit", "jit", 12, 12, 12, 432, 8);
-		FlipFluidDomain domain = createCpuDomain(warmup);
+		FluidDomain domain = createCpuDomain(warmup);
 		for (int step = 0; step < 4; step++) domain.step();
 	}
 

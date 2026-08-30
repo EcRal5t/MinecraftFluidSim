@@ -31,7 +31,7 @@ import java.util.List;
  * Package-private facade over {@link ThermalDomainState}, the single thermal aggregate.
  * Every method is one delegation; capture/restore and the reseed adapter stay here because
  * they are bound to fluid-side persistence and reseeder types. The facade is deleted once
- * the domain backend migrates off {@link FlipFluidDomain}.
+ * the domain backend migrates off {@link FluidDomain}.
  */
 final class FlipThermalState {
 	FlipThermalState(

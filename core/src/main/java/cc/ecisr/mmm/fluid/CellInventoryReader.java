@@ -18,9 +18,9 @@ import java.util.TreeMap;
  * empty cells return {@code null}. This is the core-side source for loader query adapters.
  */
 final class CellInventoryReader {
-	private final FlipFluidDomain domain;
+	private final FluidDomain domain;
 
-	CellInventoryReader(FlipFluidDomain domain) {
+	CellInventoryReader(FluidDomain domain) {
 		this.domain = domain;
 	}
 

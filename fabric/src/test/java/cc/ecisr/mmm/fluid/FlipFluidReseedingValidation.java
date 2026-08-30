@@ -161,7 +161,7 @@ public final class FlipFluidReseedingValidation {
 				0.5F, 1_000.0F, 9.81F, 1.0F / 40.0F,
 				160, 1.0E-5F, 0.40F, 2.0E-3F, 0.80F
 		);
-		FlipFluidDomain domain = new FlipFluidDomain(8, 7, 8, config, 8 * 7 * 8 * 8);
+		FluidDomain domain = new FluidDomain(8, 7, 8, config, 8 * 7 * 8 * 8);
 		for (int z = 0; z < 8; z++) for (int x = 0; x < 8; x++) domain.setSolid(x, 0, z, true);
 		for (int z = 0; z < 8; z++) for (int y = 1; y <= 3; y++) for (int x = 0; x < 8; x++) {
 			domain.setVolume(x, y, z, 1.0F);
@@ -183,7 +183,7 @@ public final class FlipFluidReseedingValidation {
 		long merges = 0, splits = 0, budgetSkipped = 0, geometrySkipped = 0;
 		double maximumLedgerError = 0.0;
 		for (int step = 0; step < 5_000; step++) {
-			FlipFluidDomain.StepStats stats = domain.step();
+			FluidDomain.StepStats stats = domain.step();
 			merges += stats.reseededMerges();
 			splits += stats.reseededSplits();
 			budgetSkipped += stats.reseedBudgetSkipped();
@@ -243,7 +243,7 @@ public final class FlipFluidReseedingValidation {
 				160, 1.0E-5F, 0.40F, 2.0E-3F, 0.80F
 		);
 		int sizeX = 12, sizeY = 8, sizeZ = 6;
-		FlipFluidDomain domain = new FlipFluidDomain(sizeX, sizeY, sizeZ, config, sizeX * sizeY * sizeZ * 8);
+		FluidDomain domain = new FluidDomain(sizeX, sizeY, sizeZ, config, sizeX * sizeY * sizeZ * 8);
 		for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) domain.setSolid(x, 0, z, true);
 		for (int z = 0; z < sizeZ; z++) for (int y = 1; y <= 6; y++) for (int x = 0; x < 6; x++) {
 			domain.setVolume(x, y, z, 1.0F);
@@ -253,7 +253,7 @@ public final class FlipFluidReseedingValidation {
 		double maximumLedgerError = 0.0;
 		DamSurface settledReference = null;
 		for (int step = 0; step < 5_000; step++) {
-			FlipFluidDomain.StepStats stats = domain.step();
+			FluidDomain.StepStats stats = domain.step();
 			merges += stats.reseededMerges();
 			splits += stats.reseededSplits();
 			budgetSkipped += stats.reseedBudgetSkipped();
@@ -300,7 +300,7 @@ public final class FlipFluidReseedingValidation {
 						+ settledReference + ", at 5000=" + finalSurface);
 	}
 
-	private static DamSurface damSurface(FlipFluidDomain domain) {
+	private static DamSurface damSurface(FluidDomain domain) {
 		FlipParticleState state = domain.exportParticleState();
 		float[] particles = state.copyPositionVolume();
 		float[] cellVolumes = new float[state.sizeX() * state.sizeY() * state.sizeZ()];
@@ -323,7 +323,7 @@ public final class FlipFluidReseedingValidation {
 			maximumCellVolume = Math.max(maximumCellVolume, cellVolume);
 			excessCellVolume += Math.max(0.0, cellVolume - 1.0F);
 		}
-		FlipFluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
+		FluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
 		return new DamSurface(
 				weightedY / totalVolume, targetTopLayerVolume, volumeAboveTarget,
 				maximumCellVolume, excessCellVolume, distribution.visibleCells()

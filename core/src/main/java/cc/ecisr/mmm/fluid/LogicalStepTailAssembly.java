@@ -11,7 +11,7 @@ final class LogicalStepTailAssembly {
 
 	private LogicalStepTailAssembly() { }
 
-	static Stages create(FlipFluidDomain domain) {
+	static Stages create(FluidDomain domain) {
 		GranularTransitionStage transition = new GranularTransitionStage(
 				new GranularTransitionStage.Workspace(domain.config),
 				new GranularTransitionStage.Access() {

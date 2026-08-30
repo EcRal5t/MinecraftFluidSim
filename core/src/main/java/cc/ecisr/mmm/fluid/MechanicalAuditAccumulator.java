@@ -32,7 +32,7 @@ final class MechanicalAuditAccumulator {
 		this.initialGravitationalPotentialEnergyJoules = initialGravitationalPotentialEnergyJoules;
 	}
 
-	FlipFluidDomain.MechanicalStepAudit finish(
+	FluidDomain.MechanicalStepAudit finish(
 			double finalParticleKineticEnergyJoules,
 			double finalGravitationalPotentialEnergyJoules,
 			SignedDyadic thermalInventoryMechanicalWork
@@ -58,7 +58,7 @@ final class MechanicalAuditAccumulator {
 			throw new ArithmeticException("Mechanical step energy audit does not close: residual="
 					+ residual + ", scale=" + scale);
 		}
-		return new FlipFluidDomain.MechanicalStepAudit(true,
+		return new FluidDomain.MechanicalStepAudit(true,
 				initialParticleKineticEnergyJoules, finalParticleKineticEnergyJoules,
 				initialGravitationalPotentialEnergyJoules, finalGravitationalPotentialEnergyJoules,
 				particleToGridTransferJoules, granularCouplingWorkJoules, porousBoundaryWorkJoules,

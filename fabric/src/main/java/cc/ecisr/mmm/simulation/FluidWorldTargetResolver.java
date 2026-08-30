@@ -1,7 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.block.MmmBlocks;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -109,7 +109,7 @@ final class FluidWorldTargetResolver {
 	/** Exact targeting semantics used by the development pour/drain commands. */
 	CellTarget aimedCellForEdit(ServerPlayer player, FluidRegion region, boolean requireFluid) {
 		if (!validPlayerRegion(player, region)) return null;
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		Vec3 eye = player.getEyePosition();
 		Vec3 look = player.getLookAngle();
 		double visibleDistance = visibleAimDistance(player);
@@ -144,7 +144,7 @@ final class FluidWorldTargetResolver {
 	int[] cellAtBlock(ServerLevel level, FluidRegion region, BlockPos position) {
 		if (!level.dimension().equals(region.dimension()) || !region.solverLoaded()) return null;
 		if (region.footprint() != null && !region.footprint().containsInterior(position)) return null;
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
 		double cellSize = domain.config().cellSize();
 		int x = Mth.floor((position.getX() + 0.5 - origin.getX()) / cellSize);
@@ -159,7 +159,7 @@ final class FluidWorldTargetResolver {
 		if (!validPlayerRegion(player, region)) return null;
 		Vec3 start = player.getEyePosition();
 		Vec3 direction = player.getLookAngle();
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		double visibleDistance = visibleAimDistance(player);
 		double step = domain.config().cellSize() * 0.25;
 		CellTarget previousOpen = null;
@@ -190,7 +190,7 @@ final class FluidWorldTargetResolver {
 		if (!validPlayerRegion(player, region) || !region.domain().hasGranularState()) return null;
 		Vec3 start = player.getEyePosition();
 		Vec3 direction = player.getLookAngle();
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		double visibleDistance = visibleAimDistance(player);
 		double step = domain.config().cellSize() * 0.25;
 		CellTarget previous = null;
@@ -206,7 +206,7 @@ final class FluidWorldTargetResolver {
 	/** First condensed cell after entering a uniquely resolved shell interior, using exact grid-boundary DDA. */
 	int[] firstCondensedCellAlong(FluidRegion region, Vec3 interiorPoint, Vec3 direction) {
 		if (region == null || !region.solverLoaded() || interiorPoint == null || direction == null) return null;
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		double h = domain.config().cellSize();
 		return firstMatchingCell(
 				(interiorPoint.x - region.origin().getX()) / h,
@@ -265,7 +265,7 @@ final class FluidWorldTargetResolver {
 		return region != null && region.solverLoaded() && player.level().dimension().equals(region.dimension());
 	}
 
-	private static boolean hasFluid(FlipFluidDomain domain, CellTarget cell) {
+	private static boolean hasFluid(FluidDomain domain, CellTarget cell) {
 		return domain.volume(cell.x(), cell.y(), cell.z()) > domain.config().fluidEpsilon();
 	}
 
@@ -273,7 +273,7 @@ final class FluidWorldTargetResolver {
 		if (region == null || !region.solverLoaded()) return null;
 		FluidRegionFootprint footprint = region.footprint();
 		if (footprint != null && !footprint.containsInterior(BlockPos.containing(point))) return null;
-		FlipFluidDomain domain = region.domain();
+		FluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
 		float cellSize = domain.config().cellSize();
 		int x = Mth.floor((point.x - origin.getX()) / cellSize);
@@ -282,7 +282,7 @@ final class FluidWorldTargetResolver {
 		return inBounds(domain, x, y, z) ? new CellTarget(x, y, z) : null;
 	}
 
-	private static boolean inBounds(FlipFluidDomain domain, int x, int y, int z) {
+	private static boolean inBounds(FluidDomain domain, int x, int y, int z) {
 		return x >= 0 && x < domain.sizeX() && y >= 0 && y < domain.sizeY()
 				&& z >= 0 && z < domain.sizeZ();
 	}

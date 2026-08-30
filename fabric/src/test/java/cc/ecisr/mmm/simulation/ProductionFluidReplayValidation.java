@@ -4,7 +4,7 @@ import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidDomainState;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
@@ -48,14 +48,14 @@ public final class ProductionFluidReplayValidation {
 
 	/** Isolates liquid projection from the sealed-gas spring for the reported two-pour trajectory. */
 	private static void controllerPourSequenceWithoutGasSettles() {
-		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
+		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
 		domain.sealDomainBoundary();
 		bindEmptyMaterialState(domain, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
-		FlipFluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
+		FluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
 		require(first.addedVolume() == 128.0F && !first.markerBudgetLimited(),
 				"gas-free control did not inject the first 16 BV source: " + first);
 		for (int step = 0; step < 40; step++) domain.stepWithMechanicalAudit(false, 0);
-		FlipFluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(3, 3, 5, 112.0F, 6);
+		FluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(3, 3, 5, 112.0F, 6);
 		require(second.addedVolume() == 112.0F && !second.markerBudgetLimited(),
 				"gas-free control did not inject the second 14 BV source: " + second);
 		double expectedVolume = domain.totalVolumeExact();
@@ -63,8 +63,8 @@ public final class ProductionFluidReplayValidation {
 		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0, finalKinetic = 0.0;
 		double cumulativePressureWork = 0.0;
 		for (int step = 0; step < 1_000; step++) {
-			FlipFluidDomain.StepStats stats = domain.stepWithMechanicalAudit(false, 0);
-			FlipFluidDomain.MechanicalStepAudit audit = stats.mechanicalAudit();
+			FluidDomain.StepStats stats = domain.stepWithMechanicalAudit(false, 0);
+			FluidDomain.MechanicalStepAudit audit = stats.mechanicalAudit();
 			finalKinetic = audit.finalParticleKineticEnergyJoules();
 			cumulativePressureWork += audit.pressureProjectionWorkJoules();
 			maximumKinetic = Math.max(maximumKinetic, finalKinetic);
@@ -87,14 +87,14 @@ public final class ProductionFluidReplayValidation {
 	/** Replays the reported controller pours with the production gas/thermal state and backend handoff. */
 	private static void controllerPourSequencePreservesGasInventoryAcrossBackend() throws Exception {
 		RegistrySet registries = loadProductionRegistries();
-		FlipFluidDomain domain = createEmptyFullyBoundController(registries);
+		FluidDomain domain = createEmptyFullyBoundController(registries);
 		var initialSource = domain.gasBoundary().externalSource();
 		var initialSink = domain.gasBoundary().escapedSink();
 		long initialInventory = domain.gasBoundary().sealedInventoryNanos();
 		require(domain.gasBoundary().nodeCount() == 1 && domain.gasBoundary().auditClosed()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"empty production controller did not bootstrap one closed gas owner");
-		FlipFluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
+		FluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
 		require(first.addedVolume() == 128.0F && !first.markerBudgetLimited(),
 				"production controller did not inject the first 16 BV source: " + first);
 
@@ -115,7 +115,7 @@ public final class ProductionFluidReplayValidation {
 			} catch (RuntimeException failure) {
 				throw new IllegalStateException("first reported controller pour failed at step " + step, failure);
 			}
-			domain = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+			domain = FluidDomain.restoreAuthoritativeState(candidate.state());
 			require(domain.gasBoundary().externalSource().equals(initialSource)
 						&& domain.gasBoundary().escapedSink().equals(initialSink)
 						&& domain.gasBoundary().sealedInventoryNanos() == initialInventory
@@ -126,7 +126,7 @@ public final class ProductionFluidReplayValidation {
 			generation++;
 		}
 
-		FlipFluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(3, 3, 5, 112.0F, 6);
+		FluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(3, 3, 5, 112.0F, 6);
 		require(second.addedVolume() == 112.0F && !second.markerBudgetLimited(),
 				"production controller did not inject the second 14 BV source: " + second);
 		state = domain.captureAuthoritativeState();
@@ -142,11 +142,11 @@ public final class ProductionFluidReplayValidation {
 				candidate = backend.evaluate(new FluidStepRequest(
 						generation, state, List.of(), false, 0, true));
 			} catch (RuntimeException failure) {
-				FlipFluidDomain diagnostic = FlipFluidDomain.restoreAuthoritativeState(state);
+				FluidDomain diagnostic = FluidDomain.restoreAuthoritativeState(state);
 				throw new IllegalStateException("second reported controller pour failed at step " + step
 						+ "; input " + gasLedgerDetail(diagnostic), failure);
 			}
-			domain = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+			domain = FluidDomain.restoreAuthoritativeState(candidate.state());
 			require(domain.gasBoundary().externalSource().equals(initialSource)
 						&& domain.gasBoundary().escapedSink().equals(initialSink)
 						&& domain.gasBoundary().sealedInventoryNanos() == initialInventory
@@ -181,7 +181,7 @@ public final class ProductionFluidReplayValidation {
 				minimumGasPressure, generation);
 	}
 
-	private static double totalGasAvailableVolume(FlipFluidDomain domain) {
+	private static double totalGasAvailableVolume(FluidDomain domain) {
 		double result = 0.0;
 		for (int node : domain.gasBoundary().nodeIds()) result += domain.gasBoundary().availableVolume(node);
 		return result;
@@ -190,11 +190,11 @@ public final class ProductionFluidReplayValidation {
 	/** Replays the thermal-off world path: restore 34 m3std, empty liquid, then pour at the boundary. */
 	public static void controllerEmptyThenBoundaryPourPreservesGasAcrossBackend() throws Exception {
 		RegistrySet registries = loadProductionRegistries();
-		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
+		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
 		domain.sealDomainBoundary();
 		bindEmptyMaterialState(domain, registries.liquids());
-		FlipFluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
-		FlipFluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(3, 3, 5, 112.0F, 6);
+		FluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
+		FluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(3, 3, 5, 112.0F, 6);
 		require(first.addedVolume() == 128.0F && second.addedVolume() == 112.0F,
 				"thermal-off restore fixture did not establish 30 BV before gas bootstrap");
 		domain.bindGasRegistry(registries.gas());
@@ -210,7 +210,7 @@ public final class ProductionFluidReplayValidation {
 				&& domain.gasBoundary().sealedInventoryNanos() == retainedInventory,
 				"operator empty did not retain and expand the finite closed gas inventory");
 
-		FlipFluidDomain.VolumeAddition boundaryPour = domain.addVolumeNearBudgeted(6, 0, 0, 128.0F, 6);
+		FluidDomain.VolumeAddition boundaryPour = domain.addVolumeNearBudgeted(6, 0, 0, 128.0F, 6);
 		require(boundaryPour.addedVolume() == 128.0F && !boundaryPour.markerBudgetLimited(),
 				"thermal-off boundary pour did not inject the complete 16 BV source");
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
@@ -226,7 +226,7 @@ public final class ProductionFluidReplayValidation {
 				throw new IllegalStateException("thermal-off empty/boundary-pour replay failed at step " + step,
 						failure);
 			}
-			domain = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+			domain = FluidDomain.restoreAuthoritativeState(candidate.state());
 			maximumNodes = Math.max(maximumNodes, domain.gasBoundary().nodeCount());
 			require(domain.gasBoundary().sealedInventoryNanos() == retainedInventory
 						&& domain.gasBoundary().externalSource().equals(source)
@@ -253,7 +253,7 @@ public final class ProductionFluidReplayValidation {
 	 * to zero capacity by the next advection, which pauses the region for good.</p>
 	 */
 	public static void controllerPoursKeepSingleSealedGasOwner() {
-		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
+		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
 		domain.sealDomainBoundary();
 		bindEmptyMaterialState(domain, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 		domain.step(false, 0);
@@ -262,14 +262,14 @@ public final class ProductionFluidReplayValidation {
 				"empty default-gate controller did not bootstrap one closed gas owner: "
 						+ gasLedgerDetail(domain));
 
-		FlipFluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(2, 0, 0, 128.0F, 6);
+		FluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(2, 0, 0, 128.0F, 6);
 		require(first.addedVolume() == 128.0F && !first.markerBudgetLimited(),
 				"reported first pour did not inject the complete 16 BV source: " + first);
 		for (int step = 0; step < 60; step++) domain.step(false, 0);
 		require(Math.abs(totalGasAvailableVolume(domain) - 48.0) <= 1.0E-12,
 				"first reported pour did not compress the closed headspace to 48 m3");
 
-		FlipFluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(5, 3, 5, 112.0F, 6);
+		FluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(5, 3, 5, 112.0F, 6);
 		require(second.addedVolume() == 112.0F && !second.markerBudgetLimited(),
 				"reported second pour did not inject the complete 14 BV source: " + second);
 		int maximumNodes = domain.gasBoundary().nodeCount();
@@ -292,7 +292,7 @@ public final class ProductionFluidReplayValidation {
 				inventory * 1.0E-9, totalGasAvailableVolume(domain), maximumNodes);
 	}
 
-	private static String gasLedgerDetail(FlipFluidDomain domain) {
+	private static String gasLedgerDetail(FluidDomain domain) {
 		StringBuilder nodes = new StringBuilder();
 		for (int node : domain.gasBoundary().nodeIds()) nodes.append(" node").append(node)
 				.append('=').append(domain.gasBoundary().inventory(node));
@@ -319,7 +319,7 @@ public final class ProductionFluidReplayValidation {
 		final int totalTicks = 2_000;
 		final int tailTicks = 200;
 		RegistrySet registries = loadProductionRegistries();
-		FlipFluidDomain domain = createFullyBoundPlanarHalfFill(registries);
+		FluidDomain domain = createFullyBoundPlanarHalfFill(registries);
 		double bodyMinimumX = initialBodyMinimumX;
 		double bodyMinimumZ = initialBodyMinimumZ;
 		double bodyMinimumY = bodyBottomForSubmergence(
@@ -344,7 +344,7 @@ public final class ProductionFluidReplayValidation {
 					bodyVelocity.x * vanillaAirDrag,
 					(bodyVelocity.y - gravity) * vanillaAirDrag,
 					bodyVelocity.z * vanillaAirDrag);
-			FlipFluidDomain.BodyFluidSample sample = domain.sampleAxisAlignedBody(
+			FluidDomain.BodyFluidSample sample = domain.sampleAxisAlignedBody(
 					bodyMinimumX, bodyMinimumY, bodyMinimumZ,
 					bodyMinimumX + bodyWidth, bodyMinimumY + bodyHeight, bodyMinimumZ + bodyWidth);
 			double submergedFraction = sample.displacedVolumeCubicMetres() / bodyVolume;
@@ -372,7 +372,7 @@ public final class ProductionFluidReplayValidation {
 			double kinetic = candidate.stats().mechanicalAudit().finalParticleKineticEnergyJoules();
 			maximumKinetic = Math.max(maximumKinetic, kinetic);
 			if (tick > totalTicks - tailTicks) tailMaximumKinetic = Math.max(tailMaximumKinetic, kinetic);
-			domain = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+			domain = FluidDomain.restoreAuthoritativeState(candidate.state());
 			state = candidate.state();
 			generation++;
 		}
@@ -394,7 +394,7 @@ public final class ProductionFluidReplayValidation {
 	}
 
 	private static double bodyBottomForSubmergence(
-			FlipFluidDomain domain, double minimumX, double minimumZ,
+			FluidDomain domain, double minimumX, double minimumZ,
 			double width, double height, double targetFraction
 	) {
 		double bodyVolume = width * height * width;
@@ -419,14 +419,14 @@ public final class ProductionFluidReplayValidation {
 
 	private static void stationaryPlayerSizedBodyDoesNotExcitePlanarSurface() throws Exception {
 		RegistrySet registries = loadProductionRegistries();
-		FlipFluidDomain initial = createFullyBoundPlanarHalfFill(registries);
+		FluidDomain initial = createFullyBoundPlanarHalfFill(registries);
 		FluidDomainState state = initial.captureAuthoritativeState();
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		MovingBodyFluidCoupling.Request body = new MovingBodyFluidCoupling.Request(
 				2.0F, 1.60F, 2.0F, 0.0, 0.0, 0.0, 0.6 * 1.8 * 0.6 * 0.72);
 		double initialCenterY = centerOfMassY(initial.exportMaterialParticleState());
 		double maximumKinetic = 0.0, accumulatedLiquidY = 0.0, accumulatedReactionY = 0.0;
-		FlipFluidDomain restored = initial;
+		FluidDomain restored = initial;
 		for (long generation = 0L; generation < 500L; generation++) {
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
 					generation, state, List.of(body), false, 0, true));
@@ -437,7 +437,7 @@ public final class ProductionFluidReplayValidation {
 			accumulatedReactionY -= coupling.impulseYKilogramMetresPerSecond();
 			maximumKinetic = Math.max(maximumKinetic,
 					candidate.stats().mechanicalAudit().finalParticleKineticEnergyJoules());
-			restored = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+			restored = FluidDomain.restoreAuthoritativeState(candidate.state());
 			state = candidate.state();
 		}
 		double finalKinetic = kineticEnergy(restored.exportMaterialParticleState());
@@ -465,7 +465,7 @@ public final class ProductionFluidReplayValidation {
 		final int walkingTicks = 8;
 		final int settleTicks = 400;
 		RegistrySet registries = loadProductionRegistries();
-		FlipFluidDomain initial = createFullyBoundPlanarHalfFill(registries);
+		FluidDomain initial = createFullyBoundPlanarHalfFill(registries);
 		double bodyMinimumX = 0.50;
 		double bodyMinimumZ = 1.70;
 		double bodyMinimumY = bodyBottomForSubmergence(
@@ -482,10 +482,10 @@ public final class ProductionFluidReplayValidation {
 		long generation = 0L;
 		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0, peakImpulseX = 0.0;
 		double maximumStepMillis = 0.0;
-		FlipFluidDomain restored = initial;
+		FluidDomain restored = initial;
 		for (int tick = 1; tick <= walkingTicks + settleTicks; tick++) {
 			boolean walking = tick <= walkingTicks;
-			FlipFluidDomain.BodyFluidSample sample = restored.sampleAxisAlignedBody(
+			FluidDomain.BodyFluidSample sample = restored.sampleAxisAlignedBody(
 					bodyMinimumX, bodyMinimumY, bodyMinimumZ,
 					bodyMinimumX + bodyWidth, bodyMinimumY + bodyHeight, bodyMinimumZ + bodyWidth);
 			double submergedFraction = sample.displacedVolumeCubicMetres() / bodyVolume;
@@ -505,7 +505,7 @@ public final class ProductionFluidReplayValidation {
 			MovingBodyFluidCoupling.Result coupling = candidate.movingBodyCoupling();
 			require(coupling.coupledMarkers() > 0 && coupling.coupledVolumeCubicMetres() > 0.0,
 					"walking body lost its wet moving-boundary support at tick " + tick);
-			restored = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+			restored = FluidDomain.restoreAuthoritativeState(candidate.state());
 			double stepMillis = (System.nanoTime() - stepStart) / 1_000_000.0;
 			if (tick > WARMUP_STEPS) maximumStepMillis = Math.max(maximumStepMillis, stepMillis);
 			double kinetic = kineticEnergy(restored.exportMaterialParticleState());
@@ -543,9 +543,9 @@ public final class ProductionFluidReplayValidation {
 
 	private static void compressedPlanarHalfFillRemainsStableAcrossBackend() throws Exception {
 		RegistrySet registries = loadProductionRegistries();
-		FlipFluidDomain initial = createFullyBoundCompressedPlanarHalfFill(registries);
+		FluidDomain initial = createFullyBoundCompressedPlanarHalfFill(registries);
 		FluidDomainState state = initial.captureAuthoritativeState();
-		FlipFluidDomain restored = FlipFluidDomain.restoreAuthoritativeState(state);
+		FluidDomain restored = FluidDomain.restoreAuthoritativeState(state);
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		long generation = 0L;
 		double initialCenterY = centerOfMassY(restored.exportMaterialParticleState());
@@ -568,9 +568,9 @@ public final class ProductionFluidReplayValidation {
 			require(candidate.baseGeneration() == generation
 					&& candidate.candidateGeneration() == generation + 1L,
 					"compressed planar backend generation was not adjacent at step " + step);
-			FlipFluidDomain.StepStats stats = candidate.stats();
-			FlipFluidDomain.MechanicalStepAudit audit = stats.mechanicalAudit();
-			restored = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+			FluidDomain.StepStats stats = candidate.stats();
+			FluidDomain.MechanicalStepAudit audit = stats.mechanicalAudit();
+			restored = FluidDomain.restoreAuthoritativeState(candidate.state());
 			double kinetic = audit.finalParticleKineticEnergyJoules();
 			double available = restored.gasBoundary().availableVolume(1);
 			double deltaAvailable = available - previousAvailable;
@@ -617,21 +617,21 @@ public final class ProductionFluidReplayValidation {
 	}
 
 	public static void defaultLiveStepsRemainBounded() {
-		FlipFluidDomain warmup = createPouredControllerDomain();
+		FluidDomain warmup = createPouredControllerDomain();
 		long warmupStart = System.nanoTime();
 		CpuFluidSolverBackend warmupBackend = new CpuFluidSolverBackend();
 		FluidDomainState warmupState = warmup.captureAuthoritativeState();
 		for (int generation = 0; generation < 10; generation++) {
 			FluidStepCandidate warmupCandidate = warmupBackend.evaluate(
 					new FluidStepRequest(generation, warmupState, List.of(), false, 0));
-			warmup = FlipFluidDomain.restoreAuthoritativeState(warmupCandidate.state());
+			warmup = FluidDomain.restoreAuthoritativeState(warmupCandidate.state());
 			warmupState = warmupCandidate.state();
 		}
 		double warmupMilliseconds = (System.nanoTime() - warmupStart) / 1_000_000.0;
 		System.out.printf("  production live JVM warmup: %.3f ms for 10 production-shaped steps "
 				+ "(reported separately from frame budget)%n", warmupMilliseconds);
 
-		FlipFluidDomain domain = createPouredControllerDomain();
+		FluidDomain domain = createPouredControllerDomain();
 		double volume = domain.totalVolumeExact();
 		double mass = domain.totalMass();
 		ArrayList<Double> elapsed = new ArrayList<>(REPLAY_STEPS);
@@ -640,13 +640,13 @@ public final class ProductionFluidReplayValidation {
 		long generation = 0L;
 		for (int step = 0; step < REPLAY_STEPS; step++) {
 			long start = System.nanoTime();
-			FlipFluidDomain.StepStats stats;
+			FluidDomain.StepStats stats;
 			try {
 				// The live budget has to cover what a production motion step actually does: capture the
 				// authoritative state, evaluate a complete candidate, then restore it as the new owner.
 				FluidStepCandidate candidate = backend.evaluate(
 						new FluidStepRequest(generation, state, List.of(), false, 0));
-				domain = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+				domain = FluidDomain.restoreAuthoritativeState(candidate.state());
 				stats = candidate.stats();
 				state = candidate.state();
 				generation++;
@@ -676,9 +676,9 @@ public final class ProductionFluidReplayValidation {
 
 	private static void fullyBoundHalfFillRoundTripsCurrentGasGeometry() throws Exception {
 		RegistrySet registries = loadProductionRegistries();
-		FlipFluidDomain committed = createFullyBoundHalfFilledDomain(registries);
+		FluidDomain committed = createFullyBoundHalfFilledDomain(registries);
 		FluidDomainState captured = committed.captureAuthoritativeState();
-		FlipFluidDomain restored = FlipFluidDomain.restoreAuthoritativeState(captured);
+		FluidDomain restored = FluidDomain.restoreAuthoritativeState(captured);
 		FluidDomainState roundTrip = restored.captureAuthoritativeState();
 
 		require(committed.totalVolumeExact() == restored.totalVolumeExact()
@@ -697,7 +697,7 @@ public final class ProductionFluidReplayValidation {
 		FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
 				7L, captured, List.of(), false, 0));
 		double backendMilliseconds = (System.nanoTime() - backendStart) / 1_000_000.0;
-		FlipFluidDomain evaluated = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+		FluidDomain evaluated = FluidDomain.restoreAuthoritativeState(candidate.state());
 		FluidDomainState evaluatedRoundTrip = evaluated.captureAuthoritativeState();
 		require(candidate.baseGeneration() == 7L && candidate.candidateGeneration() == 8L,
 				"full-capability backend candidate generation is not adjacent");
@@ -713,21 +713,21 @@ public final class ProductionFluidReplayValidation {
 
 	private static void fullyBoundPhaseOnStepRemainsBounded() throws Exception {
 		RegistrySet registries = loadProductionRegistries();
-		FlipFluidDomain phaseOff = createFullyBoundHalfFilledDomain(registries);
+		FluidDomain phaseOff = createFullyBoundHalfFilledDomain(registries);
 		long phaseOffStart = System.nanoTime();
 		phaseOff.step(false, 0);
 		System.out.printf("  full-capability phase-off direct step: %.3f ms%n",
 				(System.nanoTime() - phaseOffStart) / 1_000_000.0);
-		FlipFluidDomain warmup = createFullyBoundHalfFilledDomain(registries);
+		FluidDomain warmup = createFullyBoundHalfFilledDomain(registries);
 		warmup.step(true, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP);
 
-		FlipFluidDomain domain = createFullyBoundHalfFilledDomain(registries);
+		FluidDomain domain = createFullyBoundHalfFilledDomain(registries);
 		long start = System.nanoTime();
-		FlipFluidDomain.StepStats stats = domain.step(true, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP);
+		FluidDomain.StepStats stats = domain.step(true, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP);
 		double milliseconds = (System.nanoTime() - start) / 1_000_000.0;
-		FlipFluidDomain.GasThermalPhaseStats phase = domain.lastGasThermalPhaseStats();
+		FluidDomain.GasThermalPhaseStats phase = domain.lastGasThermalPhaseStats();
 		FluidDomainState committed = domain.captureAuthoritativeState();
-		FlipFluidDomain restored = FlipFluidDomain.restoreAuthoritativeState(committed);
+		FluidDomain restored = FluidDomain.restoreAuthoritativeState(committed);
 		require(domain.gasBoundary().auditClosed()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"full-capability phase-on step did not close gas or total U audit");
@@ -747,7 +747,7 @@ public final class ProductionFluidReplayValidation {
 
 	private static void planarHalfFillWithoutEntitiesRemainsStableAcrossBackend() throws Exception {
 		RegistrySet registries = loadProductionRegistries();
-		FlipFluidDomain initial = createFullyBoundPlanarHalfFill(registries);
+		FluidDomain initial = createFullyBoundPlanarHalfFill(registries);
 		FluidDomainState state = initial.captureAuthoritativeState();
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		long generation = 0L;
@@ -757,7 +757,7 @@ public final class ProductionFluidReplayValidation {
 		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0;
 		double maximumBodyPressureResidual = 0.0;
 		long phaseOperations = 0L, boiledCells = 0L, condensedCells = 0L;
-		FlipFluidDomain restored = initial;
+		FluidDomain restored = initial;
 		for (int step = 0; step < 500; step++) {
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
 					generation, state, List.of(), false, 0, true));
@@ -766,8 +766,8 @@ public final class ProductionFluidReplayValidation {
 			require(candidate.baseGeneration() == generation
 					&& candidate.candidateGeneration() == generation + 1L,
 					"planar no-entity backend generation was not adjacent at step " + step);
-			FlipFluidDomain.StepStats stats = candidate.stats();
-			FlipFluidDomain.MechanicalStepAudit audit = stats.mechanicalAudit();
+			FluidDomain.StepStats stats = candidate.stats();
+			FluidDomain.MechanicalStepAudit audit = stats.mechanicalAudit();
 			require(audit.captured(), "planar no-entity backend omitted its requested mechanical audit");
 			double kinetic = audit.finalParticleKineticEnergyJoules();
 			maximumKinetic = Math.max(maximumKinetic, kinetic);
@@ -781,7 +781,7 @@ public final class ProductionFluidReplayValidation {
 			boiledCells += stats.gasPhase().boiledCells();
 			condensedCells += stats.gasPhase().condensedCells();
 
-			restored = FlipFluidDomain.restoreAuthoritativeState(candidate.state());
+			restored = FluidDomain.restoreAuthoritativeState(candidate.state());
 			require(restored.gasBoundary().nodeCount() == 1 && restored.gasBoundary().auditClosed(),
 					"planar no-entity backend restore opened or changed the sealed gas owner at step " + step);
 			require(restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
@@ -819,22 +819,22 @@ public final class ProductionFluidReplayValidation {
 				maximumBodyPressureResidual);
 	}
 
-	private static FlipFluidDomain createPouredControllerDomain() {
-		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
+	private static FluidDomain createPouredControllerDomain() {
+		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
 		domain.sealDomainBoundary();
 		bindEmptyMaterialState(domain, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
-		FlipFluidDomain.VolumeAddition addition = domain.addVolumeNearBudgeted(3, 0, 0, 128.0F, 6);
+		FluidDomain.VolumeAddition addition = domain.addVolumeNearBudgeted(3, 0, 0, 128.0F, 6);
 		require(addition.addedVolume() == 128.0F && !addition.markerBudgetLimited(),
 				"fixture did not inject the complete 16 BV source: " + addition);
 		return domain;
 	}
 
-	static FlipFluidDomain createFullyBoundHalfFilledDomain(RegistrySet registries) {
-		FlipFluidDomain domain = createEmptyFullyBoundController(registries);
+	static FluidDomain createFullyBoundHalfFilledDomain(RegistrySet registries) {
+		FluidDomain domain = createEmptyFullyBoundController(registries);
 		int[][] sources = {{3, 0, 0}, {4, 7, 7}};
 		for (int pour = 0; pour < sources.length; pour++) {
 			int[] source = sources[pour];
-			FlipFluidDomain.VolumeAddition addition = domain.addVolumeNearBudgeted(
+			FluidDomain.VolumeAddition addition = domain.addVolumeNearBudgeted(
 					source[0], source[1], source[2], 128.0F, 6);
 			require(addition.addedVolume() == 128.0F && !addition.markerBudgetLimited(),
 					"full-capability fixture did not inject pour " + (pour + 1) + ": " + addition);
@@ -842,8 +842,8 @@ public final class ProductionFluidReplayValidation {
 		return domain;
 	}
 
-	static FlipFluidDomain createEmptyFullyBoundController(RegistrySet registries) {
-		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
+	static FluidDomain createEmptyFullyBoundController(RegistrySet registries) {
+		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
 		domain.sealDomainBoundary();
 		bindEmptyMaterialState(domain, registries.liquids());
 		FluidMaterialRegistry runtimeLiquids = domain.materialRegistry();
@@ -856,8 +856,8 @@ public final class ProductionFluidReplayValidation {
 		return domain;
 	}
 
-	static FlipFluidDomain createFullyBoundPlanarHalfFill(RegistrySet registries) {
-		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
+	static FluidDomain createFullyBoundPlanarHalfFill(RegistrySet registries) {
+		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
 		domain.sealDomainBoundary();
 		bindEmptyMaterialState(domain, registries.liquids());
 		FluidMaterialRegistry runtimeLiquids = domain.materialRegistry();
@@ -873,8 +873,8 @@ public final class ProductionFluidReplayValidation {
 		return domain;
 	}
 
-	private static FlipFluidDomain createFullyBoundCompressedPlanarHalfFill(RegistrySet registries) {
-		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, productionConfig(), 4_096);
+	private static FluidDomain createFullyBoundCompressedPlanarHalfFill(RegistrySet registries) {
+		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
 		domain.sealDomainBoundary();
 		bindEmptyMaterialState(domain, registries.liquids());
 		FluidMaterialRegistry runtimeLiquids = domain.materialRegistry();
@@ -919,7 +919,7 @@ public final class ProductionFluidReplayValidation {
 				120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
 	}
 
-	private static void bindEmptyMaterialState(FlipFluidDomain domain, FluidMaterialRegistry liquids) {
+	private static void bindEmptyMaterialState(FluidDomain domain, FluidMaterialRegistry liquids) {
 		FlipParticleState empty = domain.exportParticleState();
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				empty.sizeX(), empty.sizeY(), empty.sizeZ(), empty.cellSize(), 0, 0.0, 0.0, liquids.materials(),

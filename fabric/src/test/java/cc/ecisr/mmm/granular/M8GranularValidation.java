@@ -2,7 +2,7 @@ package cc.ecisr.mmm.granular;
 
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
-import cc.ecisr.mmm.fluid.FlipFluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 
@@ -46,7 +46,7 @@ public final class M8GranularValidation {
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
-		FlipFluidDomain domain = new FlipFluidDomain(6, 6, 6, config, 6 * 6 * 6 * 8);
+		FluidDomain domain = new FluidDomain(6, 6, 6, config, 6 * 6 * 6 * 8);
 		domain.bindGranular(registry, liquids); domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		long reactiveSvq = 4_096L;
 		SolidCompositionRecord reactive = SolidCompositionRecord.fromStableAmounts(
@@ -58,7 +58,7 @@ public final class M8GranularValidation {
 						SolidVolume.SVQ_PER_CELL + 65_536L, 2_600.25, null),
 				new GranularTransferLedger.Group(BuiltinGranularDefinitions.PRECIPITATE, reactiveSvq,
 						reactive.totalMass(BuiltinChemicalDefinitions.REGISTRY), reactive)));
-		FlipFluidDomain.GranularInsertion inserted = domain.tryInsertExactGranular(2, 2, 2, input, 3, true);
+		FluidDomain.GranularInsertion inserted = domain.tryInsertExactGranular(2, 2, 2, input, 3, true);
 		require(inserted.inserted() && domain.totalGranularSolidVolumeSvq() == input.totalSolidVolumeSvq()
 				&& rawClose(domain.totalGranularMass(), input.totalMass()),
 				"dry granular insertion did not preserve exact volume/mass across nearby cells");
@@ -73,7 +73,7 @@ public final class M8GranularValidation {
 				((long) sample.xQ() << 32) | ((long) sample.yQ() << 16) | sample.zQ()).distinct().count();
 		require(distinctPositions >= 32L && display.activeParcels().stream().allMatch(sample -> sample.diameterQ() <= 10),
 				"dry granular insertion collapsed representative parcels onto shared cell centers");
-		FlipFluidDomain.GranularExtraction extracted = domain.tryExtractExactGranular(
+		FluidDomain.GranularExtraction extracted = domain.tryExtractExactGranular(
 				2, 2, 2, SolidVolume.SVQ_PER_BV, 3, true);
 		require(extracted.transferred() && extracted.ledger().totalSolidVolumeSvq() == input.totalSolidVolumeSvq()
 				&& rawClose(extracted.ledger().totalMass(), input.totalMass())
@@ -88,7 +88,7 @@ public final class M8GranularValidation {
 				&& domain.granularExternalSource().entries().stream().mapToLong(GranularAuditLedger.Entry::solidVolumeSvq).sum()
 				== input.totalSolidVolumeSvq(), "dry granular boundary audit did not close source/sink SVQ");
 
-		FlipFluidDomain sealed = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidDomain sealed = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
 		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) sealed.setVolume(x, y, z, 1.0F);
 		sealed.bindGranular(registry, liquids); sealed.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		GranularTransferLedger small = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
@@ -97,13 +97,13 @@ public final class M8GranularValidation {
 				&& sealed.totalGranularSolidVolumeSvq() == 0L,
 				"sealed dry granular insertion was not rejected atomically");
 
-		FlipFluidDomain collision = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidDomain collision = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
 		collision.bindGranular(registry, liquids); collision.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		require(collision.tryInsertExactGranular(1, 1, 1, small, 0, true).inserted(),
 				"collision displacement fixture could not insert its local parcel");
-		FlipFluidDomain.CollisionEditPlan collisionPlan = collision.planCollisionEdits(List.of(
-				new FlipFluidDomain.CollisionEdit(1, 1, 1, 0xff),
-				new FlipFluidDomain.CollisionEdit(2, 1, 1, 0xff)));
+		FluidDomain.CollisionEditPlan collisionPlan = collision.planCollisionEdits(List.of(
+				new FluidDomain.CollisionEdit(1, 1, 1, 0xff),
+				new FluidDomain.CollisionEdit(2, 1, 1, 0xff)));
 		collision.beginCollisionEdits(collisionPlan);
 		collision.setSolid(1, 1, 1, true);
 		collision.setSolid(2, 1, 1, true);
@@ -119,7 +119,7 @@ public final class M8GranularValidation {
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FlipFluidDomain domain = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidDomain domain = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
 		// Real transported/reseeded marker volumes are arbitrary IEEE-754 dyadics, not necessarily
 		// integer SVQ. Exercise the production bridge with such a tail instead of an aligned full cell.
 		domain.setVolume(1, 1, 1, 0.1F);
@@ -192,7 +192,7 @@ public final class M8GranularValidation {
 		require(indicated, "dissolution erased carrier-marker indicator provenance");
 	}
 
-	private static long[] combinedSpecies(FlipFluidDomain domain) {
+	private static long[] combinedSpecies(FluidDomain domain) {
 		long[] result = domain.chemicalParcels().speciesTotals(domain.particleCount());
 		if (domain.totalGranularSolidVolumeSvq() == 0L) return result;
 		long[] solid = domain.solidCompositions().speciesTotals();
@@ -602,7 +602,7 @@ public final class M8GranularValidation {
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		int sizeX = 2, sizeY = 5, sizeZ = 2;
-		FlipFluidDomain domain = new FlipFluidDomain(sizeX, sizeY, sizeZ, config, sizeX * sizeY * sizeZ * 8);
+		FluidDomain domain = new FluidDomain(sizeX, sizeY, sizeZ, config, sizeX * sizeY * sizeZ * 8);
 		for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) {
 			domain.setVolume(x, 0, z, 0.75F);
 			domain.setVolume(x, 1, z, 1.0F);
@@ -622,7 +622,7 @@ public final class M8GranularValidation {
 				registry.materials().stream().map(ParticulateMaterial::id).toList(), List.of(), groups,
 				totalSvq, Double.doubleToRawLongBits(totalMass)), registry, liquids);
 
-		FlipFluidDomain.StepStats stats = null;
+		FluidDomain.StepStats stats = null;
 		for (int step = 0; step < 200; step++) stats = domain.step();
 		float[] actualPressure = {domain.pressure(0, 0, 0), domain.pressure(0, 1, 0), domain.pressure(0, 2, 0)};
 		float expectedGradient = config.density() * config.gravity() * config.cellSize();
@@ -748,7 +748,7 @@ public final class M8GranularValidation {
 				200, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FlipFluidDomain domain = new FlipFluidDomain(4, 8, 4, config, 4 * 8 * 4 * 8);
+		FluidDomain domain = new FluidDomain(4, 8, 4, config, 4 * 8 * 4 * 8);
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 4; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
@@ -756,11 +756,11 @@ public final class M8GranularValidation {
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		double mass = svq / (double) SolidVolume.SVQ_PER_BV * granular.material(sand).referenceDensity();
-		FlipFluidDomain.GranularInsertion inserted = domain.tryInsertExactGranular(2, 5, 2, sand, 0, svq, mass);
+		FluidDomain.GranularInsertion inserted = domain.tryInsertExactGranular(2, 5, 2, sand, 0, svq, mass);
 		require(inserted.inserted(), "solver granular insertion was rejected: " + inserted.failure());
 		double waterBefore = domain.totalVolumeExact();
 		for (int step = 0; step < steps; step++) {
-			FlipFluidDomain.StepStats stats = domain.step();
+			FluidDomain.StepStats stats = domain.step();
 			require(Float.isFinite(stats.pressureResidual()), "granular pressure coupling produced non-finite residual");
 		}
 		require(Double.doubleToRawLongBits(domain.totalVolumeExact()) == Double.doubleToRawLongBits(waterBefore),
@@ -768,12 +768,12 @@ public final class M8GranularValidation {
 		require(domain.totalGranularSolidVolumeSvq() == svq, "solver granular coupling changed solid SVQ");
 		require(rawClose(domain.totalGranularMass(), mass), "solver granular coupling changed solid mass");
 
-		FlipFluidDomain sealed = new FlipFluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidDomain sealed = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
 		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) {
 			sealed.setVolume(x, y, z, 1.0F);
 		}
 		sealed.bindGranular(granular, liquids);
-		FlipFluidDomain.GranularInsertion refused = sealed.tryInsertExactGranular(1, 1, 1, sand, 0, svq, mass);
+		FluidDomain.GranularInsertion refused = sealed.tryInsertExactGranular(1, 1, 1, sand, 0, svq, mass);
 		require(!refused.inserted() && sealed.totalGranularSolidVolumeSvq() == 0L,
 				"sealed granular insertion did not refuse atomically");
 	}
@@ -783,7 +783,7 @@ public final class M8GranularValidation {
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
+		FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
 		domain.bindGranular(granular, liquids);
 		double density = granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND))
 				.referenceDensity();
@@ -857,7 +857,7 @@ public final class M8GranularValidation {
 		System.out.printf("  two-bucket granular fixture after %d steps: active=%d emptyAt=%d floor=%d moving=%d columns=%d depositGroups=%d%n",
 				steps, settled.activeParcels().size(), emptyAt, floorActive, movingActive, activeColumns,
 				settled.depositGroups().size());
-		FlipFluidDomain.GranularClear cleared = domain.removeAllGranularExact();
+		FluidDomain.GranularClear cleared = domain.removeAllGranularExact();
 		GranularStateSnapshot clearedState = domain.exportGranularState();
 		require(cleared.solidVolumeSvq() == exactSvq && rawClose(cleared.mass(), exactMass)
 				&& cleared.activeParcels() == settled.activeParcels().size()
@@ -876,7 +876,7 @@ public final class M8GranularValidation {
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FlipFluidDomain domain = new FlipFluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
+		FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
 		domain.bindGranular(granular, liquids);
 		double density = granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND))
 				.referenceDensity();
@@ -912,7 +912,7 @@ public final class M8GranularValidation {
 				"single-bucket derived bulk volume changed across deposit cells");
 		System.out.printf("  single-bucket loose pour settled all active parcels at step %d, bulk=%.6f BV%n",
 				emptyAt, bulkSvq / (double) SolidVolume.SVQ_PER_BV);
-		FlipFluidDomain.GranularClear cleared = domain.removeAllGranularExact();
+		FluidDomain.GranularClear cleared = domain.removeAllGranularExact();
 		long sourceSvq = domain.granularExternalSource().entries().stream()
 				.mapToLong(GranularAuditLedger.Entry::solidVolumeSvq).sum();
 		long sinkSvq = domain.granularEscapedSink().entries().stream()
@@ -984,8 +984,8 @@ public final class M8GranularValidation {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
 		int sizeX = 24, sizeY = 16, sizeZ = 24, capacity = sizeX * sizeY * sizeZ * 8;
-		FlipFluidDomain baseline = new FlipFluidDomain(sizeX, sizeY, sizeZ, config, capacity);
-		FlipFluidDomain granular = new FlipFluidDomain(sizeX, sizeY, sizeZ, config, capacity);
+		FluidDomain baseline = new FluidDomain(sizeX, sizeY, sizeZ, config, capacity);
+		FluidDomain granular = new FluidDomain(sizeX, sizeY, sizeZ, config, capacity);
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < sizeX; x++) {
 			baseline.setVolume(x, y, z, 1.0F); granular.setVolume(x, y, z, 1.0F);
 		}

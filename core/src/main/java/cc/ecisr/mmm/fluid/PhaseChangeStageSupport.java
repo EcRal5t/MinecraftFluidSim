@@ -81,7 +81,7 @@ final class PhaseChangeStageSupport {
 		for (int handle = 0; handle < registry.size(); handle++) {
 			if (registry.material(handle).id().equals(stableId)) return handle;
 		}
-		throw new FlipFluidDomain.ThermalPhaseBlockedException(
+		throw new FluidDomain.ThermalPhaseBlockedException(
 				"Thermal transition liquid carrier is not bound");
 	}
 
@@ -223,7 +223,7 @@ final class PhaseChangeStageSupport {
 			TreeMap<String, Long> remaining = new TreeMap<>(amounts);
 			for (Map.Entry<String, Long> entry : other.amounts.entrySet()) {
 				long current = remaining.getOrDefault(entry.getKey(), 0L);
-				if (current < entry.getValue()) throw new FlipFluidDomain.ThermalPhaseBlockedException(
+				if (current < entry.getValue()) throw new FluidDomain.ThermalPhaseBlockedException(
 						"Condensed phase species subtraction underflow");
 				long result = current - entry.getValue();
 				if (result == 0L) remaining.remove(entry.getKey());
@@ -234,7 +234,7 @@ final class PhaseChangeStageSupport {
 			if (remaining.isEmpty()) {
 				if (Math.abs(residual) > massTolerance(
 						Math.max(Math.abs(massResidual), Math.abs(other.massResidual)))) {
-					throw new FlipFluidDomain.ThermalPhaseBlockedException(
+					throw new FluidDomain.ThermalPhaseBlockedException(
 							"Empty condensed phase retains a mass residual");
 				}
 				return EMPTY;
@@ -253,7 +253,7 @@ final class PhaseChangeStageSupport {
 		}
 
 		ChemicalMixtureRecord toMixture(ChemicalRegistry registry) {
-			if (isEmpty()) throw new FlipFluidDomain.ThermalPhaseBlockedException(
+			if (isEmpty()) throw new FluidDomain.ThermalPhaseBlockedException(
 					"Chemical melt produced an empty liquid parcel");
 			return ChemicalMixtureRecord.fromStableAmounts(registry, amounts, massResidual);
 		}
