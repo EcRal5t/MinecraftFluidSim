@@ -1,18 +1,14 @@
 package cc.ecisr.mmm.application;
 
 import cc.ecisr.mmm.application.command.CheckpointRegionCommand;
-import cc.ecisr.mmm.application.command.ControllerSummaryCommand;
 import cc.ecisr.mmm.application.command.MotionStepCommand;
 import cc.ecisr.mmm.application.command.ThermalStepCommand;
-import cc.ecisr.mmm.application.port.ControllerSummaryPort;
 import cc.ecisr.mmm.application.port.RegionCheckpointPort;
 import cc.ecisr.mmm.application.port.RegionRepository;
 import cc.ecisr.mmm.application.result.CheckpointRegionResult;
-import cc.ecisr.mmm.application.result.ControllerSummaryResult;
 import cc.ecisr.mmm.application.result.MotionStepResult;
 import cc.ecisr.mmm.application.result.RegionStepStatus;
 import cc.ecisr.mmm.application.result.ThermalStepResult;
-import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.fluid.FluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
@@ -26,18 +22,15 @@ public final class RegionApplicationService implements RegionStepExecutor {
 	private final FluidSolverBackend solverBackend;
 	private final RegionRepository regions;
 	private final RegionCheckpointPort checkpoints;
-	private final ControllerSummaryPort controllerSummaries;
 
 	public RegionApplicationService(
 			FluidSolverBackend solverBackend,
 			RegionRepository regions,
-			RegionCheckpointPort checkpoints,
-			ControllerSummaryPort controllerSummaries
+			RegionCheckpointPort checkpoints
 	) {
 		this.solverBackend = Objects.requireNonNull(solverBackend, "solverBackend");
 		this.regions = Objects.requireNonNull(regions, "regions");
 		this.checkpoints = Objects.requireNonNull(checkpoints, "checkpoints");
-		this.controllerSummaries = Objects.requireNonNull(controllerSummaries, "controllerSummaries");
 	}
 
 	@Override
@@ -89,17 +82,6 @@ public final class RegionApplicationService implements RegionStepExecutor {
 		RegionCheckpointPort.Attempt attempt = checkpoints.checkpoint(
 				command.regionId(), command.expectedCheckpointGeneration());
 		return new CheckpointRegionResult(attempt.status(), attempt.checkpointGeneration(), attempt.diagnostic());
-	}
-
-	public ControllerSummaryResult controllerSummary(ControllerSummaryCommand command) {
-		Objects.requireNonNull(command, "command");
-		return controllerSummaries.read(command.regionId()).map(view -> new ControllerSummaryResult(
-				ControllerSummaryResult.Status.OK,
-				new ControllerSummary(command.summaryGeneration(), view.regionId(), view.dimensionId(),
-						view.profileFingerprint(), view.checkpointGeneration(), view.networkGeneration(),
-						view.footprint(), view.selected(), view.operatorIntent(), view.motionState(), view.thermalState(),
-						view.availability(), view.usage(), view.inventory(), view.gates(), view.diagnostics())))
-				.orElseGet(() -> new ControllerSummaryResult(ControllerSummaryResult.Status.REGION_NOT_FOUND, null));
 	}
 
 	private RegionStepStatus validateCandidate(

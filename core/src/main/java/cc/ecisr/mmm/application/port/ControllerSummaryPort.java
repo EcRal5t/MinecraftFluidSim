@@ -29,8 +29,15 @@ public interface ControllerSummaryPort {
 	) {
 		public View {
 			Objects.requireNonNull(regionId, "regionId");
-			Objects.requireNonNull(dimensionId, "dimensionId");
-			Objects.requireNonNull(profileFingerprint, "profileFingerprint");
+			if (dimensionId == null || dimensionId.isBlank()) {
+				throw new IllegalArgumentException("Controller view dimension is missing");
+			}
+			if (profileFingerprint == null || !profileFingerprint.matches("[0-9a-f]{64}")) {
+				throw new IllegalArgumentException("Controller view profile fingerprint is invalid");
+			}
+			if (checkpointGeneration <= 0L || networkGeneration <= 0L) {
+				throw new IllegalArgumentException("Controller view generations must be positive");
+			}
 			Objects.requireNonNull(footprint, "footprint");
 			Objects.requireNonNull(operatorIntent, "operatorIntent");
 			Objects.requireNonNull(motionState, "motionState");

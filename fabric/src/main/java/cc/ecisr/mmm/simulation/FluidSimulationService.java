@@ -5,6 +5,7 @@ import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.api.query.MmmQueryApi;
 import cc.ecisr.mmm.api.event.ContainerTransferCommittedEvent;
 import cc.ecisr.mmm.api.transfer.TransferQuantity;
+import cc.ecisr.mmm.application.ControllerQueryUseCase;
 import cc.ecisr.mmm.application.RegionApplicationService;
 import cc.ecisr.mmm.application.RegionRuntime;
 import cc.ecisr.mmm.application.RegionTickUseCase;
@@ -21,7 +22,6 @@ import cc.ecisr.mmm.block.ThermalReservoirBlockEntity;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.controller.ControllerConsoleAction;
-import cc.ecisr.mmm.controller.ControllerConsoleSessions;
 import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.controller.LifecycleOperation;
 import cc.ecisr.mmm.controller.LifecycleOperationPreview;
@@ -131,6 +131,7 @@ public final class FluidSimulationService {
 	private final FluidRegionOperations regionOperations;
 	private final RegionApplicationService regionApplication;
 	private final RegionTickUseCase regionTick;
+	private final ControllerQueryUseCase controllerQueries;
 	private final FluidSnapshotPublisher snapshots;
 	private final ContainerTransferStore containerTransfers;
 	private final MinecraftContainerActorAccess containerActors = new MinecraftContainerActorAccess();
@@ -143,8 +144,6 @@ public final class FluidSimulationService {
 	private final Set<UUID> runtimeDirtyContainerTransfers = new HashSet<>();
 	/** Prevents an unresolved WAL from emitting the same ERROR every server tick. */
 	private final Map<UUID, String> reportedContainerTransferLocks = new HashMap<>();
-	/** Per-player opaque console tokens; they never participate in region or inventory persistence. */
-	private final ControllerConsoleSessions controllerConsoleSessions = new ControllerConsoleSessions();
 	private final LifecycleOperationSessions lifecycleOperationSessions = new LifecycleOperationSessions();
 	private final WorldPositionActionSessions thermalReservoirSessions = new WorldPositionActionSessions();
 	private Set<String> reportedContainerTransferStoreIssues = Set.of();
@@ -203,10 +202,11 @@ public final class FluidSimulationService {
 		this.indexedContainerTransferIssues = Set.copyOf(indexedContainerTransferIssues);
 		this.ownershipIssues = List.copyOf(ownershipIssues);
 		this.regionApplication = new RegionApplicationService(solverBackend,
-				new FluidRegionRepository(regionManager), regionOperations,
+				new FluidRegionRepository(regionManager), regionOperations);
+		this.regionTick = new RegionTickUseCase(regionApplication, TICK_POLICY);
+		this.controllerQueries = new ControllerQueryUseCase(
 				new ControllerSummaryAdapter(regionManager, regionOperations, worldCapabilityProfile, thermalRegistry,
 						this::hasPendingContainerTransfer, this::authoritativeWritesReady, worldBridgeFeatureEnabled));
-		this.regionTick = new RegionTickUseCase(regionApplication, TICK_POLICY);
 	}
 
 	void writeContainerTransfer(ContainerTransferJournal journal) throws IOException {
@@ -659,9 +659,8 @@ public final class FluidSimulationService {
 		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) return null;
 		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
 		if (region == null || !startup.profileProven()) return null;
-		long summaryGeneration = controllerConsoleSessions.issue(player.getUUID(), region.id());
-		ControllerSummaryResult result = regionApplication.controllerSummary(
-				new ControllerSummaryCommand(region.id(), summaryGeneration));
+		ControllerSummaryResult result = controllerQueries.query(
+				new ControllerSummaryCommand(player.getUUID(), region.id()));
 		return result.ok() ? result.summary() : null;
 	}
 
@@ -685,7 +684,7 @@ public final class FluidSimulationService {
 		if (region == null || !region.id().equals(requestedRegionId)) {
 			return Component.translatable("message.mmm.controller.owner_changed");
 		}
-		if (!controllerConsoleSessions.consume(player.getUUID(), region.id(), summaryGeneration)) {
+		if (!controllerQueries.consumeActionToken(player.getUUID(), region.id(), summaryGeneration)) {
 			return Component.translatable("message.mmm.controller.summary_expired");
 		}
 
@@ -722,7 +721,7 @@ public final class FluidSimulationService {
 		ResolvedController resolved = resolveInteractiveController(player, requestedRegionId, controllerPosition);
 		if (resolved.failure() != null) return LifecyclePreviewResult.failed(resolved.failure());
 		FluidRegion region = resolved.region();
-		if (!controllerConsoleSessions.consume(player.getUUID(), region.id(), summaryGeneration)) {
+		if (!controllerQueries.consumeActionToken(player.getUUID(), region.id(), summaryGeneration)) {
 			return LifecyclePreviewResult.failed(Component.translatable("message.mmm.controller.summary_expired"));
 		}
 		LifecycleFacts facts = lifecycleFacts(player, region, operation);
@@ -1077,7 +1076,7 @@ public final class FluidSimulationService {
 	}
 
 	public void forgetInteractiveViewer(UUID playerId) {
-		controllerConsoleSessions.forget(playerId);
+		controllerQueries.forgetViewer(playerId);
 		lifecycleOperationSessions.forget(playerId);
 		thermalReservoirSessions.forget(playerId);
 	}

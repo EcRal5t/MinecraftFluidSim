@@ -3,8 +3,10 @@ package cc.ecisr.mmm.network;
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.api.query.FluidQueryResult;
 import cc.ecisr.mmm.api.query.FluidQueryStatus;
+import cc.ecisr.mmm.application.ControllerQueryUseCase;
+import cc.ecisr.mmm.application.command.ControllerSummaryCommand;
+import cc.ecisr.mmm.application.port.ControllerSummaryPort;
 import cc.ecisr.mmm.controller.ControllerConsoleAction;
-import cc.ecisr.mmm.controller.ControllerConsoleSessions;
 import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.controller.LifecycleOperation;
 import cc.ecisr.mmm.controller.LifecycleOperationPreview;
@@ -23,6 +25,7 @@ import net.minecraft.resources.Identifier;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /** Protocol negotiation, codec compatibility and stale-snapshot rejection matrix. */
@@ -85,19 +88,6 @@ public final class FluidNetworkProtocolValidation {
 
 	private static void validateControllerConsoleCodecs() {
 		UUID otherPlayer = new UUID(41L, 43L);
-		ControllerConsoleSessions sessions = new ControllerConsoleSessions();
-		long old = sessions.issue(otherPlayer, REGION);
-		long current = sessions.issue(otherPlayer, REGION);
-		require(!sessions.consume(otherPlayer, REGION, old), "stale controller token was accepted");
-		require(sessions.consume(otherPlayer, REGION, current),
-				"stale token invalidated the current controller token");
-		require(!sessions.consume(otherPlayer, REGION, current), "controller token replay was accepted");
-		UUID otherRegion = new UUID(47L, 53L);
-		long isolated = sessions.issue(otherPlayer, otherRegion);
-		require(!sessions.consume(new UUID(59L, 61L), otherRegion, isolated)
-				&& sessions.consume(otherPlayer, otherRegion, isolated),
-				"controller token was not isolated by player and region");
-
 		ControllerSummary.Capacity full = ControllerSummary.Capacity.available(8L, 16L);
 		ControllerSummary summary = new ControllerSummary(7L, REGION, DIMENSION.toString(), "a".repeat(64),
 				11L, 13L, new ControllerSummary.Footprint(2, 3, 4, 5, 6, 7, 180L, 4), true,
@@ -111,6 +101,51 @@ public final class FluidNetworkProtocolValidation {
 						ControllerSummary.TemperatureRange.available(278.5, 341.25)),
 				new ControllerSummary.Gates(true, false, true, true, false),
 				new ControllerSummary.Diagnostics(2.5, 17, 1.0E-6, "bounded diagnostic"));
+		UUID otherRegion = new UUID(47L, 53L);
+		UUID invalidRegion = new UUID(71L, 73L);
+		ControllerQueryUseCase queries = new ControllerQueryUseCase(regionId -> {
+			if (regionId.equals(REGION) || regionId.equals(otherRegion)) {
+				return Optional.of(controllerView(regionId, summary));
+			}
+			if (regionId.equals(invalidRegion)) {
+				ControllerSummaryPort.View view = controllerView(regionId, summary);
+				return Optional.of(new ControllerSummaryPort.View(view.regionId(), view.dimensionId(),
+						view.profileFingerprint(), 0L, view.networkGeneration(), view.footprint(), view.selected(),
+						view.operatorIntent(), view.motionState(), view.thermalState(), view.availability(),
+						view.usage(), view.inventory(), view.gates(), view.diagnostics()));
+			}
+			return Optional.empty();
+		});
+		var old = queries.query(new ControllerSummaryCommand(otherPlayer, REGION));
+		var current = queries.query(new ControllerSummaryCommand(otherPlayer, REGION));
+		require(old.ok() && current.ok()
+				&& !queries.consumeActionToken(otherPlayer, REGION, old.summary().summaryGeneration()),
+				"stale controller token was accepted");
+		require(queries.consumeActionToken(otherPlayer, REGION, current.summary().summaryGeneration()),
+				"stale token invalidated the current controller token");
+		require(!queries.consumeActionToken(otherPlayer, REGION, current.summary().summaryGeneration()),
+				"controller token replay was accepted");
+		var isolated = queries.query(new ControllerSummaryCommand(otherPlayer, otherRegion));
+		require(!queries.consumeActionToken(new UUID(59L, 61L), otherRegion,
+				isolated.summary().summaryGeneration())
+				&& queries.consumeActionToken(otherPlayer, otherRegion, isolated.summary().summaryGeneration()),
+				"controller token was not isolated by player and region");
+		long beforeMissing = queries.query(new ControllerSummaryCommand(otherPlayer, REGION))
+				.summary().summaryGeneration();
+		require(!queries.query(new ControllerSummaryCommand(otherPlayer, new UUID(79L, 83L))).ok(),
+				"missing controller unexpectedly produced a bounded summary");
+		boolean invalidRejected = false;
+		try {
+			queries.query(new ControllerSummaryCommand(otherPlayer, invalidRegion));
+		} catch (IllegalArgumentException expected) {
+			invalidRejected = true;
+		}
+		require(invalidRejected, "invalid bounded controller view was projected into a summary");
+		long afterMissing = queries.query(new ControllerSummaryCommand(otherPlayer, REGION))
+				.summary().summaryGeneration();
+		require(afterMissing == beforeMissing + 1L,
+				"failed controller read or projection consumed an undisclosed action token generation");
+
 		FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
 		ControllerSummaryPayload decoded;
 		try {
@@ -163,6 +198,13 @@ public final class FluidNetworkProtocolValidation {
 			require(LifecycleOperationRequestPayload.CODEC.decode(buffer).equals(confirm),
 					"lifecycle confirm nonce did not round-trip exactly");
 		} finally { buffer.release(); }
+	}
+
+	private static ControllerSummaryPort.View controllerView(UUID regionId, ControllerSummary summary) {
+		return new ControllerSummaryPort.View(regionId, summary.dimensionId(), summary.profileFingerprint(),
+				summary.checkpointGeneration(), summary.networkGeneration(), summary.footprint(), summary.selected(),
+				summary.operatorIntent(), summary.motionState(), summary.thermalState(), summary.availability(),
+				summary.usage(), summary.inventory(), summary.gates(), summary.diagnostics());
 	}
 
 	private static void validateQueryAvailabilityReason() {

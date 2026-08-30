@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
+import cc.ecisr.mmm.application.ControllerQueryUseCase;
 import cc.ecisr.mmm.application.RegionApplicationService;
 import cc.ecisr.mmm.application.RegionRuntime;
 import cc.ecisr.mmm.application.RegionStepExecutor;
@@ -120,7 +121,7 @@ public final class FluidRegionLifecycleValidation {
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		RegionApplicationService application = application(backend, new FluidRegionRepository(manager),
 				(id, generation) -> new RegionCheckpointPort.Attempt(
-						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null), id -> Optional.empty());
+						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null));
 		long[] clock = {0L, 50_000_000L};
 		int[] clockIndex = {0};
 		RegionTickUseCase ticks = new RegionTickUseCase(application,
@@ -147,7 +148,7 @@ public final class FluidRegionLifecycleValidation {
 		RegionApplicationService wrongBackendApplication = application(
 				fixedBackend(backend.id(), wrongBackend, backend), new FluidRegionRepository(manager),
 				(id, generation) -> new RegionCheckpointPort.Attempt(
-						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null), id -> Optional.empty());
+						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null));
 		var backendRejected = wrongBackendApplication.stepMotion(new MotionStepCommand(
 				region.id(), region.solverGeneration(), List.of(), false, 0, false));
 		require(backendRejected.status() == RegionStepStatus.BACKEND_MISMATCH
@@ -163,7 +164,7 @@ public final class FluidRegionLifecycleValidation {
 		RegionApplicationService incompatibleApplication = application(
 				fixedBackend(backend.id(), incompatible, backend), new FluidRegionRepository(manager),
 				(id, generation) -> new RegionCheckpointPort.Attempt(
-						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null), id -> Optional.empty());
+						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null));
 		var layoutRejected = incompatibleApplication.stepMotion(new MotionStepCommand(
 				region.id(), region.solverGeneration(), List.of(), false, 0, false));
 		require(layoutRejected.status() == RegionStepStatus.LAYOUT_MISMATCH
@@ -196,7 +197,7 @@ public final class FluidRegionLifecycleValidation {
 					Math.addExact(generation, 1L), null);
 		};
 		RegionApplicationService application = application(new CpuFluidSolverBackend(), unusedRepository(),
-				checkpoint, id -> Optional.empty());
+				checkpoint);
 		UUID region = new UUID(29L, 31L);
 		var blocked = application.checkpoint(new CheckpointRegionCommand(region, 7L, true));
 		require(blocked.status() == CheckpointRegionResult.Status.PENDING_CONTAINER_WAL
@@ -369,23 +370,24 @@ public final class FluidRegionLifecycleValidation {
 						unavailableCapacity), unavailable,
 				new ControllerSummary.Gates(true, false, false, false, false),
 				new ControllerSummary.Diagnostics(0.0, 0, 0.0, null));
-		RegionApplicationService application = application(new CpuFluidSolverBackend(), unusedRepository(),
-				(id, generation) -> new RegionCheckpointPort.Attempt(
-						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null),
+		UUID viewer = new UUID(43L, 47L);
+		ControllerQueryUseCase queries = new ControllerQueryUseCase(
 				id -> id.equals(region) ? Optional.of(view) : Optional.empty());
-		var result = application.controllerSummary(new ControllerSummaryCommand(region, 11L));
-		require(result.ok() && result.summary().summaryGeneration() == 11L
+		var result = queries.query(new ControllerSummaryCommand(viewer, region));
+		require(result.ok() && result.summary().summaryGeneration() > 0L
 				&& !result.summary().inventory().live(),
-				"application controller summary invented inventory or lost the authorized token");
+				"controller query invented inventory or lost the authorized token");
+		require(queries.consumeActionToken(viewer, region, result.summary().summaryGeneration())
+				&& !queries.consumeActionToken(viewer, region, result.summary().summaryGeneration()),
+				"controller query token did not consume exactly once");
 	}
 
 	private static RegionApplicationService application(
 			FluidSolverBackend backend,
 			RegionRepository regions,
-			RegionCheckpointPort checkpoints,
-			ControllerSummaryPort summaries
+			RegionCheckpointPort checkpoints
 	) {
-		return new RegionApplicationService(backend, regions, checkpoints, summaries);
+		return new RegionApplicationService(backend, regions, checkpoints);
 	}
 
 	private static RegionRepository unusedRepository() {
