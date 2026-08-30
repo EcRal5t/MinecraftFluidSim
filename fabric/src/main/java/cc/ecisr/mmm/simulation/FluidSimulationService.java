@@ -9,6 +9,7 @@ import cc.ecisr.mmm.application.ControllerQueryUseCase;
 import cc.ecisr.mmm.application.RegionApplicationService;
 import cc.ecisr.mmm.application.RegionRuntime;
 import cc.ecisr.mmm.application.RegionTickUseCase;
+import cc.ecisr.mmm.application.ThermalReservoirUseCase;
 import cc.ecisr.mmm.application.command.CheckpointRegionCommand;
 import cc.ecisr.mmm.application.command.ControllerSummaryCommand;
 import cc.ecisr.mmm.application.command.MotionStepCommand;
@@ -62,7 +63,6 @@ import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalReservoirSummary;
-import cc.ecisr.mmm.thermal.WorldPositionActionSessions;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.fluid.MaterialRegistry;
@@ -132,6 +132,7 @@ public final class FluidSimulationService {
 	private final RegionApplicationService regionApplication;
 	private final RegionTickUseCase regionTick;
 	private final ControllerQueryUseCase controllerQueries;
+	private final ThermalReservoirUseCase thermalReservoirs = new ThermalReservoirUseCase();
 	private final FluidSnapshotPublisher snapshots;
 	private final ContainerTransferStore containerTransfers;
 	private final MinecraftContainerActorAccess containerActors = new MinecraftContainerActorAccess();
@@ -145,7 +146,6 @@ public final class FluidSimulationService {
 	/** Prevents an unresolved WAL from emitting the same ERROR every server tick. */
 	private final Map<UUID, String> reportedContainerTransferLocks = new HashMap<>();
 	private final LifecycleOperationSessions lifecycleOperationSessions = new LifecycleOperationSessions();
-	private final WorldPositionActionSessions thermalReservoirSessions = new WorldPositionActionSessions();
 	private Set<String> reportedContainerTransferStoreIssues = Set.of();
 	private ContainerTransferFaultPoint containerTransferFault = ContainerTransferFaultPoint.NONE;
 	private ResourceKey<Level> takeoverDimension;
@@ -1078,7 +1078,7 @@ public final class FluidSimulationService {
 	public void forgetInteractiveViewer(UUID playerId) {
 		controllerQueries.forgetViewer(playerId);
 		lifecycleOperationSessions.forget(playerId);
-		thermalReservoirSessions.forget(playerId);
+		thermalReservoirs.forgetViewer(playerId);
 	}
 
 	/** Read-only tuning state; invalid persisted setpoints remain visible so a creative player can replace them. */
@@ -1094,11 +1094,7 @@ public final class FluidSimulationService {
 				|| thermalRegistry == null) return null;
 		ThermalRegistry.TemperatureRange range = thermalRegistry.worldBoundaryTemperatureRange();
 		double temperature = reservoir.temperatureK();
-		long generation = thermalReservoirSessions.issue(player.getUUID(), level.dimension().identifier().toString(),
-				position.getX(), position.getY(), position.getZ());
-		return new ThermalReservoirSummary(generation, level.dimension().identifier().toString(),
-				position.getX(), position.getY(), position.getZ(), temperature, range.contains(temperature),
-				range.minimumK(), range.maximumK());
+		return thermalReservoirs.summary(thermalTarget(player, position), temperature, range);
 	}
 
 	/** Revalidates a proposed setpoint, persists the world owner, then refreshes and wakes adjacent thermal regions. */
@@ -1113,23 +1109,39 @@ public final class FluidSimulationService {
 		if (player.distanceToSqr(position.getX() + 0.5, position.getY() + 0.5, position.getZ() + 0.5) > 64.0) {
 			return "玩家距离温度源过远";
 		}
-		String dimensionId = level.dimension().identifier().toString();
-		if (!thermalReservoirSessions.consume(player.getUUID(), dimensionId,
-				position.getX(), position.getY(), position.getZ(), summaryGeneration)) return "summary 已过期，请刷新";
-		if (!player.isCreative()) return "只有创造模式玩家可以修改温度源";
-		if (!authoritativeWritesReady()) return authoritativeWriteFailure("修改温度源");
-		if (!level.getBlockState(position).is(MmmBlocks.THERMAL_RESERVOIR)
-				|| !(level.getBlockEntity(position) instanceof ThermalReservoirBlockEntity reservoir)) {
-			return "目标方块不再是温度源";
+		ThermalReservoirBlockEntity reservoir = level.getBlockEntity(position)
+				instanceof ThermalReservoirBlockEntity found ? found : null;
+		boolean targetPresent = level.getBlockState(position).is(MmmBlocks.THERMAL_RESERVOIR)
+				&& reservoir != null;
+		ThermalReservoirUseCase.Decision authorization = thermalReservoirs.authorize(
+				thermalTarget(player, position), summaryGeneration, player.isCreative(),
+				authoritativeWritesReady(), targetPresent, thermalRegistry != null);
+		if (authorization != ThermalReservoirUseCase.Decision.AUTHORIZED) {
+			return switch (authorization) {
+				case TOKEN_EXPIRED -> "summary 已过期，请刷新";
+				case PERMISSION_DENIED -> "只有创造模式玩家可以修改温度源";
+				case WRITE_NOT_READY -> authoritativeWriteFailure("修改温度源");
+				case TARGET_MISSING -> "目标方块不再是温度源";
+				case REGISTRY_UNAVAILABLE -> "world thermal registry 不可用";
+				case TEMPERATURE_OUT_OF_RANGE, AUTHORIZED -> throw new IllegalStateException(
+						"Unexpected thermal reservoir authorization result " + authorization);
+			};
 		}
-		if (thermalRegistry == null) return "world thermal registry 不可用";
 		ThermalRegistry.TemperatureRange range = thermalRegistry.worldBoundaryTemperatureRange();
-		if (!range.contains(temperatureK)) return String.format(java.util.Locale.ROOT,
+		if (thermalReservoirs.validateSetpoint(temperatureK, range)
+				== ThermalReservoirUseCase.Decision.TEMPERATURE_OUT_OF_RANGE) {
+			return String.format(java.util.Locale.ROOT,
 				"温度必须是有限数值且位于 world thermal registry 的 [%.6f, %.6f] K",
 				range.minimumK(), range.maximumK());
+		}
 		reservoir.setTemperatureK(temperatureK);
 		refreshThermalReservoir(level, position);
 		return null;
+	}
+
+	private static ThermalReservoirUseCase.Target thermalTarget(ServerPlayer player, BlockPos position) {
+		return new ThermalReservoirUseCase.Target(player.getUUID(),
+				player.level().dimension().identifier().toString(), position.getX(), position.getY(), position.getZ());
 	}
 
 	private void refreshThermalReservoir(ServerLevel level, BlockPos position) {

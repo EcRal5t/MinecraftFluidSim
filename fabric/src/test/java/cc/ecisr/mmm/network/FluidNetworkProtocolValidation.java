@@ -4,6 +4,7 @@ import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.api.query.FluidQueryResult;
 import cc.ecisr.mmm.api.query.FluidQueryStatus;
 import cc.ecisr.mmm.application.ControllerQueryUseCase;
+import cc.ecisr.mmm.application.ThermalReservoirUseCase;
 import cc.ecisr.mmm.application.command.ControllerSummaryCommand;
 import cc.ecisr.mmm.application.port.ControllerSummaryPort;
 import cc.ecisr.mmm.controller.ControllerConsoleAction;
@@ -17,7 +18,7 @@ import cc.ecisr.mmm.fluid.FluidMaterialRenderSnapshot;
 import cc.ecisr.mmm.fluid.FluidMaterialSurfaceMesher;
 import cc.ecisr.mmm.granular.GranularDisplaySnapshot;
 import cc.ecisr.mmm.thermal.ThermalReservoirSummary;
-import cc.ecisr.mmm.thermal.WorldPositionActionSessions;
+import cc.ecisr.mmm.thermal.ThermalRegistry;
 import io.netty.buffer.Unpooled;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
@@ -52,13 +53,30 @@ public final class FluidNetworkProtocolValidation {
 
 	private static void validateThermalReservoirCodecs() {
 		UUID player = new UUID(67L, 71L);
-		WorldPositionActionSessions sessions = new WorldPositionActionSessions();
-		long old = sessions.issue(player, DIMENSION.toString(), 2, 3, 4);
-		long current = sessions.issue(player, DIMENSION.toString(), 2, 3, 4);
-		require(!sessions.consume(player, DIMENSION.toString(), 2, 3, 4, old)
-				&& sessions.consume(player, DIMENSION.toString(), 2, 3, 4, current)
-				&& !sessions.consume(player, DIMENSION.toString(), 2, 3, 4, current),
+		ThermalReservoirUseCase reservoirs = new ThermalReservoirUseCase();
+		ThermalReservoirUseCase.Target target = new ThermalReservoirUseCase.Target(
+				player, DIMENSION.toString(), 2, 3, 4);
+		ThermalRegistry.TemperatureRange range = new ThermalRegistry.TemperatureRange(250.0, 600.0);
+		long old = reservoirs.summary(target, 293.15, range).summaryGeneration();
+		long current = reservoirs.summary(target, 293.15, range).summaryGeneration();
+		require(reservoirs.authorize(target, old, true, true, true, true)
+				== ThermalReservoirUseCase.Decision.TOKEN_EXPIRED
+				&& reservoirs.authorize(target, current, true, true, true, true)
+				== ThermalReservoirUseCase.Decision.AUTHORIZED
+				&& reservoirs.authorize(target, current, true, true, true, true)
+				== ThermalReservoirUseCase.Decision.TOKEN_EXPIRED,
 				"thermal reservoir stale/replay token semantics changed");
+		long denied = reservoirs.summary(target, 293.15, range).summaryGeneration();
+		require(reservoirs.authorize(target, denied, false, true, true, true)
+				== ThermalReservoirUseCase.Decision.PERMISSION_DENIED
+				&& reservoirs.authorize(target, denied, true, true, true, true)
+				== ThermalReservoirUseCase.Decision.TOKEN_EXPIRED,
+				"thermal reservoir denied action did not consume its disclosed token");
+		require(reservoirs.validateSetpoint(250.0, range) == ThermalReservoirUseCase.Decision.AUTHORIZED
+				&& reservoirs.validateSetpoint(600.0, range) == ThermalReservoirUseCase.Decision.AUTHORIZED
+				&& reservoirs.validateSetpoint(Double.NaN, range)
+				== ThermalReservoirUseCase.Decision.TEMPERATURE_OUT_OF_RANGE,
+				"thermal reservoir setpoint range semantics changed");
 
 		ThermalReservoirSummary summary = new ThermalReservoirSummary(5L, DIMENSION.toString(),
 				2, 3, 4, 293.15, true, 250.0, 600.0);
