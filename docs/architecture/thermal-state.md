@@ -62,6 +62,8 @@ caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线�
 - 液体热膨胀使用 registry-bound Boussinesq 定义，只向现有 y-face 动量路径提供派生体力，不改变质量或体积真值。
 - 气体孔流同时搬运组分与能量；species 的 host-gas 状态能进入气体温度反演与相变批能量，压缩/膨胀功进入 mechanical work。
 
+`thermal_reservoir` 的 setpoint 真值由世界 BlockEntity 持有，不进入 region HEAD。`ThermalReservoirUseCase` 只拥有 bounded summary、world-position token 与权限/范围决策；Minecraft adapter 才能在 token 消费和当前方块重验后写 BlockEntity。写入只改变未来固定温度 face flux，随后刷新相邻已加载区域并以 `BOUNDARY_CHANGE` 唤醒 thermal activity；不得把新设定值反算成一笔直接注入 region 的 `U`。
+
 ### 有限热容量设备
 
 `FiniteThermalBodyState` 是 loader-neutral 设备 body 真值：绑定 world thermal registry fingerprint、稳定 `DEVICE` material ID、generation、kg 和总 `U`。`FiniteThermalDeviceState` 另存 provider ID、provider 内稳定 object ID 和 device type；这些字段只定位世界对象或外部 Mod 端口，不拥有能量。规范排序后的 `FiniteThermalDeviceInventory` 作为 manifest-only extension 随同 region HEAD 提交，空集合用 extension 缺席表示。codec 回读时重新验证 registry fingerprint、`DEVICE` material、material carrier ID 与 device type；BlockEntity 不能另存一份可反向覆盖 `U` 的 setpoint。

@@ -256,6 +256,13 @@
 * `RegionApplicationService` 删除 controller port/summary 职责并缩至 step + checkpoint；`FluidSimulationService` 仍负责 server-thread、距离、方块和 controller owner 校验，summary、普通动作与破坏性 preview 统一委托 query use case 的同一 token owner。service 当前 3053 行
 * existing lifecycle metadata-only summary 表征改走 `ControllerQueryUseCase`；existing protocol token 表征改为 use-case 级 stale/replay、player/region isolation，并新增同一测试内的 port miss/非法 view 不推进未披露 generation。`lifecycle,protocol` 与 `verifyArchitecture` 通过
 
+### S15c (`4a62a70`)
+
+* S15b 复审确认 controller query 已形成独立读/授权边界；破坏性 region lifecycle 的四种提交仍跨 candidate HEAD、ownership 与 REMOVED quarantine，当前直接统一会退化成通用回调包装。先迁同样有独立身份且无 region commit 权的 fixed thermal reservoir 交互
+* 新建 loader-neutral `ThermalReservoirUseCase`，独占 bounded summary、player+dimension+block token、动作授权顺序和 registry 闭区间 setpoint 判定。summary 先完整验证当前 setpoint/公共温区再签发；动作保持旧顺序：距离由 Fabric 先验，随后消费 token，再判 creative、authoritative writes、当前方块/BlockEntity 与 registry availability；这些拒答后的 token 均不可重放
+* `FluidSimulationService` 不再直接持有 `WorldPositionActionSessions` 或构造 reservoir summary；只把 Minecraft facts 投影给 use case、把 typed decision 本地化，AUTHORIZED 后写 world-owned BlockEntity 并刷新相邻已加载 thermal boundary。use case 不取得 region `U` 或 world 写权；service 当前 3065 行
+* existing protocol thermal-reservoir token 表征替换为 use-case 级 stale/replay、denied-consumes-token 与温区闭端点/NaN 拒答；未新增 selector。`protocol` 与 `verifyArchitecture` 通过
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。
@@ -281,3 +288,4 @@ revision 列由该切片的下一次提交补记，避免提交引用自身哈�
 * application step result 不返回 `FluidStepCandidate`/`FluidThermalStepCandidate`。完整 state 只在 backend 与 repository adoption 边界内存在；Fabric 调度真正需要的是 accepted stats 与 moving-body impulse，借 result 暴露 candidate 会把不受限数组重新变成 adapter 的隐式读口。
 * S15a 的 `RegionRuntime` 是单次 tick 的 scheduling snapshot，不与 `FluidRegion.PersistedRuntime` 争夺权威，也不持有 solver/domain。此时立即创建 collision/entity/snapshot 通用 ports 仍无法表达现有的捕获与输出原子性；这些 world facts 先保持在 server-thread adapter，等 tick orchestration 的实际调用面收窄后再提取 `MinecraftRegionInputs`，而不是预建无消费者接口。
 * controller token 只能在 bounded view 已存在、region identity 匹配且完整 summary 字段验证成功后签发。generation 是 authorization nonce，不是 query revision；失败 read/projection 不消耗 generation，旧 token 仍按“最新同 viewer/region token”规则决定是否有效。
+* fixed thermal reservoir 的 setpoint owner 仍是 BlockEntity；application 只拥有 summary/token/policy，不建立虚假的 region thermal port。设定变化只影响未来 boundary flux，Fabric 在成功写入后刷新相邻 region 并按 boundary change 唤醒，不能直接把温差换算成 region `U`。
