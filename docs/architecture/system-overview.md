@@ -40,6 +40,7 @@ Minecraft 命令、方块、容器、实体与 chunk 事件
   -> RegionApplicationService               loader-neutral command/result 编排
        -> RegionRepository                  step capture/adopt
        -> RegionCheckpointPort              expected-generation HEAD 发布
+  -> ControllerQueryUseCase                 bounded summary + viewer token
        -> ControllerSummaryPort             bounded controller read model
   -> FluidRegionManager / FluidRegion       身份、预算、生命周期
   -> CollisionWorldPort                     捕获不可变碰撞场
@@ -122,6 +123,8 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 `RegionRuntime` 是 Fabric 在一次 tick 内捕获的 loader-neutral 调度值，不是第二个区域聚合根，也不持有 solver、世界或持久化对象。checkpoint 继续只保存 operator intent、resume state、step interval 与 tick；hard-overrun/recovery streak 是进程内短期证据。用例返回的新 pacing 由 server-thread adapter 应用到当前 `FluidRegion`，世界输入捕获、实体侧响应、thermal/hydrostatic observation 与 snapshot 发布仍属于 adapter 输出阶段。
 
 新控制器在首次成功提交后直接进入运行态。玩家的暂停意图随 checkpoint 持久化；边界损坏、chunk 缺失或候选失败造成的 availability pause 不得覆盖该意图，条件恢复后按原意图继续。
+
+controller console 的 Minecraft adapter 先校验 server thread、距离、方块与当前 controller owner，再把 viewer/region identity 交给 `ControllerQueryUseCase`。该用例只从 `ControllerSummaryPort` 的 bounded view 构造 summary，并在 view 存在、identity 匹配且全部字段可投影后才签发同 viewer/region 的一次性 generation；miss、非法 view 和投影失败都不能留下未披露但可消费的 token。动作与 lifecycle preview 都经同一用例消费该 token。
 
 controller console 还提供四个管理员破坏性生命周期动作：清空凝聚相、排放密闭气体、释放 ownership、移除空区域。它们都先由服务端生成短时、内存态、同玩家一次性预览，列出实际将移除的体积/质量/species/能量、当前气体与 ownership 数量以及封闭 blocker；确认时必须重新匹配 region generation、动作、权限、WAL、availability、solver generation 和有限设备真值。清空与排放先在私有完整 candidate 上联合审计并发布新 HEAD，再替换 live domain；ownership 释放和区域移除只能在所有相关库存已空时继续。
 
