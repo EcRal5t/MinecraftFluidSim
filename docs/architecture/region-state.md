@@ -39,7 +39,9 @@ slot-a/removed.nbt                     # 或 REMOVED tombstone
 slot-b/removed.nbt                     # 或 REMOVED tombstone
 ```
 
-同一个 slot 只能是完整 ACTIVE generation 或只含一个 `removed.nbt` 的 REMOVED tombstone，不能混合。逻辑真值是 loader-neutral `RegionCheckpoint`：`RegionIdentity`、`RegionGeometry` 与 `RegionRuntimeIntent` 只保存 stable value，manifest/section/extension 不引用 `BlockPos`、`ResourceKey`、live region 或 lifecycle class。`MinecraftRegionCheckpointSource` 是唯一从 loaded `FluidRegion` 映射这些值并导出 solver snapshot 的 adapter；`RegionCheckpointAssembler` 按 pure/material/chemical/granular/thermal layout 组装完整 section、extension 和总账，`RegionCheckpointValidator` 审计跨 section identity/ownership/ledger，`RegionCheckpointRestorer` 只重建既有 immutable solver state。`RegionState` 只是 durable store 的 27 行过渡 DTO adapter，不再 capture 或 reconstruct live runtime。`RegionStateCodec` 只编解码 ACTIVE NBT；`RemovedRegionManifest` 是不可重建 solver 的严格零库存终止真值；`RegionStateIntegrity` 生成与 NBT 字段顺序无关的规范 CRC32C；`RegionStateFiles` 只管理双槽、回读验证、quarantine 收敛与原子 HEAD。任何业务层都不能直接写 slot 或把目录存在当成已提交。
+同一个 slot 只能是完整 ACTIVE generation 或只含一个 `removed.nbt` 的 REMOVED tombstone，不能混合。逻辑真值是 loader-neutral `RegionCheckpoint`：`RegionIdentity`、`RegionGeometry` 与 `RegionRuntimeIntent` 只保存 stable value，manifest/section/extension 不引用 `BlockPos`、`ResourceKey`、live region 或 lifecycle class。`MinecraftRegionCheckpointSource` 是唯一从 loaded `FluidRegion` 映射这些值并导出 solver snapshot 的 adapter；`RegionCheckpointAssembler` 按 pure/material/chemical/granular/thermal layout 组装完整 section、extension 和总账，`RegionCheckpointValidator` 审计跨 section identity/ownership/ledger，`RegionCheckpointRestorer` 只重建既有 immutable solver state。`RegionState` 只是 durable store 的 27 行 DTO adapter，不 capture 或 reconstruct live runtime。`RegionStateCodec` 只编解码 ACTIVE NBT；`RemovedRegionManifest` 是不可重建 solver 的严格零库存终止真值；`RegionStateIntegrity` 生成与 NBT 字段顺序无关的规范 CRC32C。
+
+`RegionGenerationStore` 独占 prepare/commit/abort/read/discover 状态机和 HEAD 发布顺序。它组合 package-private `RegionHeadStore`、`ActiveGenerationStore`、`RemovedGenerationStore`、`RemovedQuarantineStore` 与 `RegionDiscovery`：子 store 分别拥有严格 HEAD、ACTIVE、REMOVED、quarantine 和启动分类职责，但不能单独形成第二个提交点。`RegionRepositoryAdapter` 组合 Minecraft checkpoint source、generation store、当前 registries/profile 与 live restore；`OwnershipTransactionCoordinator` 才执行 Minecraft 方块 ownership 事务。任何业务层都不能直接写 slot、调用低层 HEAD writer 或把目录存在当成已提交。
 
 HEAD 使用固定 `region-head` schema 并显式区分 `ACTIVE` / `REMOVED` kind。ACTIVE manifest 与每个 section 使用语义 `Layout`：`pure`、`material`、`chemical`、`granular` 或 `thermal`。其中 `granular`、`thermal` 的附加 capability 精确声明是否同时携带 chemistry/granular 状态。启动时由已提交 world capability profile 得到唯一预期 layout 和 registry fingerprint，存档必须精确匹配；未知 kind/layout、未知必需 extension、缺字段或额外能力都不能按数字顺序猜测兼容性，也没有自动迁移或默认补全。
 
@@ -60,7 +62,7 @@ HEAD 发布前，当前已提交 generation 仍是唯一权威状态。失败的
 
 1. 通过 `RegionCheckpointValidator` 验证内存 checkpoint 的形状与账本；durable store 只接收它的 `RegionState` adapter。
 2. 读取并完整验证当前 HEAD；要求新 checkpoint generation 严格递增，且 base generation/checksum 未改变。
-3. 删除 inactive slot 的已知旧内容，在 `<slot>.tmp` 逐个写 section，每个文件 `force`。
+3. 按当前 HEAD、严格 slot 布局和 staging identity 证明 inactive/temp 内容确由 writer 产生；无法证明的文件原样保留并 LOCKED。只有已证明的旧内容可删除，随后在 `<slot>.tmp` 逐个写 section，每个文件 `force`。
 4. 最后写 manifest 并 `force`，从临时目录回读全部文件，执行 CRC、预算、账本和可重建性验证。
 5. 原子把 `<slot>.tmp` 移为 inactive slot。此时它只是完整 staging，仍不权威。
 6. 写、`force`、回读 `HEAD.nbt.tmp`，再以 replace-existing 原子移动为 `HEAD.nbt`。
@@ -70,7 +72,7 @@ HEAD 发布前，当前已提交 generation 仍是唯一权威状态。失败的
 
 ### REMOVED 终止代次
 
-`REMOVE_EMPTY_REGION` 先重新读取并验证当前 ACTIVE HEAD、完整 active generation、旧 manifest checksum 与 quarantine admission，再在 inactive slot 写入并回读唯一的 `removed.nbt`。tombstone 保存 region/profile/registry identity、base/target generation、旧 manifest checksum、更高的 network tombstone generation、quarantine transaction UUID、固定零库存 digest 与自身 checksum。只有 `REMOVED` HEAD 的原子替换是删除 commit point；此前 exact staging 可丢弃，ACTIVE generation 仍是唯一真值。
+`REMOVE_EMPTY_REGION` 先重新读取并验证当前 ACTIVE HEAD、完整 active generation、旧 manifest checksum 与 quarantine admission，再证明 inactive/temp staging 可安全替换，随后写入并回读唯一的 `removed.nbt`。tombstone 保存 region/profile/registry identity、base/target generation、旧 manifest checksum、更高的 network tombstone generation、quarantine transaction UUID、固定零库存 digest 与自身 checksum。只有 `REMOVED` HEAD 的原子替换是删除 commit point；此前 exact staging 可丢弃，ACTIVE generation 仍是唯一真值。容量预算只在该提交前准入；HEAD 已是 REMOVED 后必须继续幂等收敛，不能用变化后的预算拒绝已提交事务。
 
 `REMOVED` HEAD 发布后，旧 ACTIVE slot 不再是库存真值，也绝不能用于恢复 solver。服务层先发送 network removal tombstone 并注销 runtime owner，持久层再把旧 slot 原子移动到 `mmm/quarantine/removed-region/<uuid>/<target>/payload`，写入匹配的 `quarantine.nbt` 并回读 exact AFTER 状态。tombstone 永久留在原 region UUID 路径，因此该 UUID 不能重新创建。
 

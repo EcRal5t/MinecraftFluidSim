@@ -25,7 +25,7 @@ controller 内部由空气和独立 ownership registry 表示。原版水方块�
 
 无水接管时同样先 stage、回读并发布首个 region HEAD。只有 HEAD 回读成功后，service 才把 candidate 登记并选入 live catalog、发送 snapshot 和返回创建成功；此前 Query、网络和其他 tick 看不到该区域。失败 candidate 不进入 catalog，也不发送 removal 来掩盖幽灵状态。controller domain 的原版水采样只接受持久 footprint interior 内的纯 `Blocks.WATER`，不会把 waterlogged、相邻其他内腔或 dense bounds 中不归属的水复制成 marker。
 
-恢复根据 region HEAD 与 WAL 的 base/target generation 判定重放或回滚。未知文件、损坏 NBT、身份不符、generation 歧义或玩家已放置的非水方块一律保留并锁定，不猜测修复，也不覆盖玩家方块。
+恢复根据 region HEAD 与 WAL 的 base/target generation 判定重放或回滚。`OwnershipTransactionCoordinator` 负责 Minecraft footprint/preimage、live checkpoint capture 与结果写回，并把 WAL→世界→HEAD→committed 状态机委托给既有低层 `OwnershipCoordinator`；它不复制恢复代数。未知文件、损坏 NBT、身份不符、generation 歧义或玩家已放置的非水方块一律保留并锁定，不猜测修复，也不覆盖玩家方块。
 
 已加载 solver 在 step、empty、checkpoint 和转移前也必须检查自己的 ownership sidecar；锁只作用于对应区域，但无法识别 region 的 store issue 会形成全局创建锁。
 
@@ -33,7 +33,7 @@ controller 内部由空气和独立 ownership registry 表示。原版水方块�
 
 扫描与世界修改在同一个 server tick 内进行，候选只接受纯原版 water，并保存每个 block 的完整 preimage。region target slot 必须先写完、回读并验证，然后才发布 ownership WAL 与醒目的 WARNING 文件。移除每个方块时再次比较 preimage；扫描后被玩家改变的方块导致事务中止，不会被静默跳过。
 
-HEAD 发布前崩溃时，恢复看到 `HEAD == baseGeneration`，把世界尽可能恢复到 preimage 并丢弃 inactive staging；玩家已占据的位置优先，记为 conflict 而不覆盖。HEAD 发布后崩溃时，`HEAD == targetGeneration`，region inventory 已权威，恢复只重建/核对 committed ownership registry，不再恢复水 preimage。
+HEAD 发布前崩溃时，恢复看到 `HEAD == baseGeneration`，把世界尽可能恢复到 preimage；只有 identity、紧邻 generation 与严格文件布局都证明是本事务的 inactive staging 才可丢弃，未知证据保留并锁定。玩家已占据的位置优先，记为 conflict 而不覆盖。HEAD 发布后崩溃时，`HEAD == targetGeneration`，region inventory 已权威，恢复只重建/核对 committed ownership registry，不再恢复水 preimage。
 
 ### 释放事务
 

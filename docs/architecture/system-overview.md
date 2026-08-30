@@ -58,8 +58,10 @@ Minecraft 命令、方块、容器、实体与 chunk 事件
 
 MinecraftRegionCheckpointSource            live region → stable checkpoint source
 RegionCheckpointAssembler / Restorer       完整逻辑 checkpoint 装配/immutable state 重建
-RegionStateCodec / RegionStateFiles         严格 NBT、双槽 generation 与 HEAD
-OwnershipTransaction                        原版方块 ownership
+RegionRepositoryAdapter                     checkpoint/restore、metadata 与 ownership read guard
+RegionGenerationStore                       ACTIVE/REMOVED 双槽事务与唯一 HEAD 发布者
+Head/Active/Removed/Quarantine stores       package-private 严格 codec、文件与恢复分类
+OwnershipTransactionCoordinator             Minecraft 方块 preimage 与 ownership 事务入口
 ContainerTransferCoordinator                region/item WAL→staged HEAD→HEAD
 ContainerRecoveryCoordinator                boot-indexed actor 收敛与事件重试
 ContainerJournalCodec / FileStore           严格 NBT / durable file 边界
@@ -149,7 +151,7 @@ availability 采用 `RegionAvailabilityReason` 封闭分类；预算、重叠、
 - **LOCKED**：磁盘格式、identity、registry fingerprint、generation、checksum 或 WAL 状态无法被唯一解释。原文件保留，拒绝任何会覆盖证据的操作。
 - **PAUSED**：当前库存可解释，但候选数值步越过物性有效域、容量、预算、审计或 wall-time 安全门。保留内存/已提交状态，允许修正外部条件后重试。
 
-region HEAD 是区域物理状态唯一提交点。正常库存由 `ACTIVE` HEAD 指向完整 generation；终止区域由严格 `REMOVED` HEAD 指向零库存 tombstone，UUID 永不复用。ownership 与 container WAL 分别把世界方块和 actor item 收敛到该 HEAD；它们不能成为第二个物理真值。任何 publish 都必须遵守“完整写入、回读验证、HEAD 最后替换”。`REMOVED` HEAD 发布后才发送更高 network generation 的移除 tombstone、注销 runtime owner，并把旧 ACTIVE payload 收敛到持久 quarantine；崩溃恢复不能从旧 payload 重建 solver。
+region HEAD 是区域物理状态唯一提交点。正常库存由 `ACTIVE` HEAD 指向完整 generation；终止区域由严格 `REMOVED` HEAD 指向零库存 tombstone，UUID 永不复用。ownership 与 container WAL 分别把世界方块和 actor item 收敛到该 HEAD；它们不能成为第二个物理真值。`RegionGenerationStore` 是唯一能组合 slot 写入与 HEAD 发布顺序的 coordinator；package-private 子 store 不能被业务层当成独立 writer。任何 publish 都必须遵守“完整写入、回读验证、HEAD 最后替换”。`REMOVED` HEAD 发布后才发送更高 network generation 的移除 tombstone、注销 runtime owner，并把旧 ACTIVE payload 收敛到持久 quarantine；崩溃恢复不能从旧 payload 重建 solver。
 
 需要把 region HEAD 与一个或多个外部持久成员收敛的 journal 统一委托 JDK-only `CrossDomainRecovery`：adapter 只能把 durable readback 分类为 exact `BEFORE`、`AFTER`、`THIRD` 或 `UNAVAILABLE`。HEAD 为 base 时只接受全 before；HEAD 为 checksum 匹配的 target 且 journal 已提交时才收敛 remaining before；third 锁定，unavailable 等待明确加载事件。normal tick 不轮询 unavailable actor。
 
