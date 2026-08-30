@@ -17,13 +17,13 @@ controller 内部由空气和独立 ownership registry 表示。原版水方块�
 新激活区域只有在 world bridge 已生效时才接管内部纯 `Blocks.WATER`：
 
 1. 只读扫描 controller footprint、required chunk、预算、既有 region overlap 和实际纯原版水 preimage，并绑定当前 profile fingerprint；
-2. 构造尚未登记到 live manager 的完整 domain candidate，初始化 profile 要求的全部 side column，再准备新的完整 region generation；
+2. 构造尚未登记到 live catalog 的完整 domain candidate，初始化 profile 要求的全部 side column，再准备新的完整 region generation；
 3. 发布 ownership WAL 与 WARNING；
 4. 修改世界方块；
 5. 发布 region HEAD；
 6. 建立 committed ownership 记录并清理 WAL。
 
-无水接管时同样先 stage、回读并发布首个 region HEAD。只有 HEAD 回读成功后，service 才把 candidate 登记并选入 live manager、发送 snapshot 和返回创建成功；此前 Query、网络和其他 tick 看不到该区域。失败 candidate 不进入 manager，也不发送 removal 来掩盖幽灵状态。controller domain 的原版水采样只接受持久 footprint interior 内的纯 `Blocks.WATER`，不会把 waterlogged、相邻其他内腔或 dense bounds 中不归属的水复制成 marker。
+无水接管时同样先 stage、回读并发布首个 region HEAD。只有 HEAD 回读成功后，service 才把 candidate 登记并选入 live catalog、发送 snapshot 和返回创建成功；此前 Query、网络和其他 tick 看不到该区域。失败 candidate 不进入 catalog，也不发送 removal 来掩盖幽灵状态。controller domain 的原版水采样只接受持久 footprint interior 内的纯 `Blocks.WATER`，不会把 waterlogged、相邻其他内腔或 dense bounds 中不归属的水复制成 marker。
 
 恢复根据 region HEAD 与 WAL 的 base/target generation 判定重放或回滚。未知文件、损坏 NBT、身份不符、generation 歧义或玩家已放置的非水方块一律保留并锁定，不猜测修复，也不覆盖玩家方块。
 
@@ -44,7 +44,7 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 ## 区域生命周期
 
 - controller 必须有完整闭壳和全部已加载 chunk。
-- UNLOADED 区域不持 solver，但仍占 manager 的 cell/marker 预算。
+- UNLOADED 区域不持 solver，但仍占 catalog 的 cell/marker reservation。
 - 已提交 manifest 的 metadata 先登记、再按本次启动的总预算和 peer overlap 做 runtime admission；临时超预算或重叠只阻止 solver restore，不得让 committed region 从 owner 索引消失。
 - checkpoint 成功后才能释放 solver；恢复成功后先刷新 collision，再发送 snapshot。
 - controller boundary 与 controller block 在区域仍受生命周期管理时不可被玩家破坏；必须先通过显式生命周期操作解除 ownership 并移除区域。

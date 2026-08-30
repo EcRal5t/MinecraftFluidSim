@@ -42,7 +42,8 @@ Minecraft 命令、方块、容器、实体与 chunk 事件
        -> RegionCheckpointPort              expected-generation HEAD 发布
   -> ControllerQueryUseCase                 bounded summary + viewer token
        -> ControllerSummaryPort             bounded controller read model
-  -> FluidRegionManager / FluidRegion       身份、预算、生命周期
+  -> RegionCatalog / FluidRegionManager      身份、预算、placement、选择
+  -> FluidRegion                            durable metadata、runtime、生命周期
   -> CollisionWorldPort                     捕获不可变碰撞场
   -> FluidDomain                            CPU aggregate、mechanics 与载体库存
        -> AirNetwork                        密闭气体节点与孔流
@@ -117,7 +118,7 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 - `ACTIVE`：按 20 Hz 目标推进。
 - `REDUCED`：wall-time 超过 40 ms 后按 1–4 tick pacing 推进同一个 logical step。
 - `PAUSED`：operator 暂停、边界/身份失败或连续三步超过 200 ms；库存仍保留。
-- `UNLOADED`：solver arrays 已释放，但 metadata 和 manager 预算仍保留。
+- `UNLOADED`：solver arrays 已释放，但 metadata 和 catalog reservation 仍保留。
 - motion sleep 与 thermal sleep 独立；静水仍可能导热或相变，静温也可能继续运动。
 
 `RegionRuntime` 是 Fabric 在一次 tick 内捕获的 loader-neutral 调度值，不是第二个区域聚合根，也不持有 solver、世界或持久化对象。checkpoint 继续只保存 operator intent、resume state、step interval 与 tick；hard-overrun/recovery streak 是进程内短期证据。用例返回的新 pacing 由 server-thread adapter 应用到当前 `FluidRegion`，世界输入捕获、实体侧响应、thermal/hydrostatic observation 与 snapshot 发布仍属于 adapter 输出阶段。

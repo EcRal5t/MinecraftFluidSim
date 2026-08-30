@@ -270,6 +270,13 @@
 * Fabric 继续冻结 permission、WAL、availability、solver generation、finite-device identity、ownership count、quarantine capacity 与 bounded inventory quantities；错 viewer 不消费 owner nonce，同 owner 的 generation/action/permission/WAL/availability/expiry mismatch 会消费并失效，context 匹配后仍以确认时 blockers 为准。只有 AUTHORIZED 才进入既有 inventory candidate→HEAD、ownership release 或 REMOVED tombstone durable adapter
 * `FluidSimulationService` 删除直接 lifecycle session 所有权与 run-intent policy 分支，但 durable commit/facts adapter 尚未提取，当前 3072 行；S15 lifecycle 尚未完成。existing lifecycle 表征改走 use case 并保留全部 commit gate matrix，追加 current blocker after valid token 与 run-intent typed decisions；`lifecycle` 与 `verifyArchitecture` 通过
 
+### S15e (`8c92644`)
+
+* S15d 复审确认 authorization 已闭合，但继续增加只返回 decision 的薄类会让 service 继续变长；转向机械搬走 `FluidRegionManager` 的实际规则。耦合审计证明 duplicate/budget/overlap/selection/replacement 只需 UUID、dimension stable ID、AABB 与 reserved cells/markers，不需要 Minecraft、solver 或 repository
+* 新建 loader-neutral 泛型 `RegionCatalog<T>`，以 opaque runtime owner + immutable descriptor 独占有序登记、首项默认选择、显式选择/删除 fallback、预算统计与预检、face-touching AABB、atomic selected replacement、committed metadata 无条件登记和按 owner identity/descriptor 的 runtime re-admission
+* `FluidRegionManager` 从 244 行降为 107 行，只把 `FluidRegion` 投影成 descriptor并映射现有配置/result DTO；旧 `FluidRegion#spatiallyOverlaps` 删除，避免 Fabric 与 core 两套 placement 规则。复审迁移时特意保留旧 `int * float` 上界再提升 double 的舍入顺序，未借 descriptor 改变边界几何
+* existing `region-manager` 表征原样覆盖新 catalog 经 adapter 的 admission/selection/replacement/overlap/committed-metadata 规则；未新增测试或 selector。`region-manager` 与 `verifyArchitecture` 通过
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。
@@ -297,3 +304,4 @@ revision 列由该切片的下一次提交补记，避免提交引用自身哈�
 * controller token 只能在 bounded view 已存在、region identity 匹配且完整 summary 字段验证成功后签发。generation 是 authorization nonce，不是 query revision；失败 read/projection 不消耗 generation，旧 token 仍按“最新同 viewer/region token”规则决定是否有效。
 * fixed thermal reservoir 的 setpoint owner 仍是 BlockEntity；application 只拥有 summary/token/policy，不建立虚假的 region thermal port。设定变化只影响未来 boundary flux，Fabric 在成功写入后刷新相邻 region 并按 boundary change 唤醒，不能直接把温差换算成 region `U`。
 * `RegionLifecycleUseCase` 只拥有 run-intent/preview authorization，不以 callback 取得 persistence 或 world 写权。inventory candidate+HEAD、ownership journal 和 REMOVED tombstone/quarantine 是三种不同提交协议；在对应窄 adapter 提取前不得用一个 `commit(operation)` 通用 port 抹平它们的失败分类。
+* `RegionCatalog<T>` 的泛型值只作 opaque runtime owner；所有规则只读 immutable descriptor。Fabric 暂保留 `FluidRegionManager` 兼容 facade 来稳定大量调用方与 server config DTO，但 facade 不再计算预算、overlap、selection 或 replacement；后续调用者迁完可删除，不把 Minecraft identity 引入 core。
