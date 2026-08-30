@@ -37,7 +37,7 @@ import java.util.function.BooleanSupplier;
  * controller region and never writes region-state. The gas-demo glass scaffold replaces only air
  * blocks and is restored on demand, so a fixture never destroys a player-built block.
  */
-final class MinecraftDebugFixtures {
+public final class MinecraftDebugFixtures {
 	static final int BLOCK_SIZE_X = 12;
 	static final int BLOCK_SIZE_Y = 8;
 	static final int BLOCK_SIZE_Z = 12;
@@ -89,12 +89,12 @@ final class MinecraftDebugFixtures {
 		this.defaultDebugOverlays = defaultDebugOverlays;
 	}
 
-	String lastFailure() {
+	public String lastFailure() {
 		return lastFailure;
 	}
 
 	/** Restores the world blocks the gas-demo glass scaffold replaced; player-edited positions are left alone. */
-	void restoreAirDemoScaffolding(MinecraftServer server) {
+	public void restoreAirDemoScaffolding(MinecraftServer server) {
 		if (airDemoScaffoldingDimension == null) return;
 		ServerLevel level = server.getLevel(airDemoScaffoldingDimension);
 		if (level != null) {
@@ -112,7 +112,7 @@ final class MinecraftDebugFixtures {
 	 * chemistry smoke tests. The complete 6x6x6 occupied volume must already be loaded and air;
 	 * failed placement or activation restores every block written by this method.
 	 */
-	BlockPos createControllerDemo(ServerPlayer player) {
+	public BlockPos createControllerDemo(ServerPlayer player) {
 		final int interiorSize = 4;
 		final int outerSize = interiorSize + 2;
 		ServerLevel level = player.level();
@@ -199,11 +199,11 @@ final class MinecraftDebugFixtures {
 		}
 	}
 
-	boolean createDemo(ServerPlayer player) {
+	public boolean createDemo(ServerPlayer player) {
 		return createDemo(player, false);
 	}
 
-	boolean createMaterialDemo(ServerPlayer player) {
+	public boolean createMaterialDemo(ServerPlayer player) {
 		if (!profile.hasCapability(WorldCapability.MATERIALS)) {
 			lastFailure = "材料功能门未在本次启动启用；先保存配置并重启";
 			return false;
@@ -212,7 +212,7 @@ final class MinecraftDebugFixtures {
 	}
 
 	/** Creates a paused acid/base fixture without changing the mechanical demo geometry. */
-	boolean createChemistryDemo(ServerPlayer player) {
+	public boolean createChemistryDemo(ServerPlayer player) {
 		if (!profile.hasCapability(WorldCapability.CHEMISTRY)) {
 			lastFailure = "化学功能门未在本次启动启用；先启用 materials/chemistry 并重启";
 			return false;
@@ -233,7 +233,7 @@ final class MinecraftDebugFixtures {
 		return true;
 	}
 
-	boolean createTensionDemo(ServerPlayer player, int angleDegrees) {
+	public boolean createTensionDemo(ServerPlayer player, int angleDegrees) {
 		if (!profile.hasCapability(WorldCapability.MATERIALS)) {
 			lastFailure = "材料功能门未在本次启动启用；先保存配置并重启";
 			return false;
@@ -266,7 +266,7 @@ final class MinecraftDebugFixtures {
 	 * no surface tension, no material gate; writes no region-state and the scaffold restores on
 	 * removal, replacement or server shutdown.
 	 */
-	boolean createAirDemo(ServerPlayer player, boolean vacuum) {
+	public boolean createAirDemo(ServerPlayer player, boolean vacuum) {
 		Vec3 look = player.getLookAngle();
 		BlockPos center = BlockPos.containing(player.getX() + look.x * 9.0, player.getY(), player.getZ() + look.z * 9.0);
 		ServerLevel level = player.level();
@@ -517,7 +517,7 @@ final class MinecraftDebugFixtures {
 		return true;
 	}
 
-	CaptureResult captureNearbyWater(ServerPlayer player, boolean takeOver) {
+	public CaptureResult captureNearbyWater(ServerPlayer player, boolean takeOver) {
 		ServerLevel level = player.level();
 		BlockPos newOrigin = player.blockPosition().offset(-BLOCK_SIZE_X / 2, -2, -BLOCK_SIZE_Z / 2);
 		if (!admitTransientRegion(level, newOrigin, false)) return new CaptureResult(0, -1, lastFailure);

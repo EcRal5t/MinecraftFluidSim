@@ -23,6 +23,7 @@ import cc.ecisr.mmm.application.ContainerTransferCoordinator;
 import cc.ecisr.mmm.simulation.MmmRuntimeRegistry;
 import cc.ecisr.mmm.simulation.FluidRegion;
 import cc.ecisr.mmm.simulation.RestorationStats;
+import cc.ecisr.mmm.simulation.SelectionResult;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.LongArgumentType;
@@ -182,37 +183,37 @@ public final class MmmCommands {
 
 	private static int createDemo(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
-		if (!service.createDemo(player)) {
-			return fail(source, "无法替换活动域：" + service.lastTakeoverFailure());
+		var fixtures = MmmRuntimeRegistry.require(source.getServer()).debugFixtures();
+		if (!fixtures.createDemo(player)) {
+			return fail(source, "无法替换活动域：" + fixtures.lastFailure());
 		}
 		return succeed(source, "已创建暂停的 24×16×24 溃坝测试域；使用 /mmm step 或 /mmm run", 1);
 	}
 
 	private static int createMaterialDemo(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
-		if (!service.createMaterialDemo(player)) {
-			return fail(source, "无法创建多材料测试域：" + service.lastTakeoverFailure());
+		var fixtures = MmmRuntimeRegistry.require(source.getServer()).debugFixtures();
+		if (!fixtures.createMaterialDemo(player)) {
+			return fail(source, "无法创建多材料测试域：" + fixtures.lastFailure());
 		}
 		return succeed(source, "已创建暂停的上油下水溃坝测试域（瞬态，不写 region-state）；使用 /mmm step 或 /mmm run", 1);
 	}
 
 	private static int createChemistryDemo(CommandSourceStack source) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
-		if (!service.createChemistryDemo(player)) {
-			return fail(source, "无法创建酸碱化学测试域：" + service.lastTakeoverFailure());
+		var fixtures = MmmRuntimeRegistry.require(source.getServer()).debugFixtures();
+		if (!fixtures.createChemistryDemo(player)) {
+			return fail(source, "无法创建酸碱化学测试域：" + fixtures.lastFailure());
 		}
 		return succeed(source, "已创建暂停的 HCl/NaOH 对半化学域；左半带 indicator，使用 /mmm step 或 /mmm run 观察混合中和", 1);
 	}
 
 	private static int createControllerDemo(CommandSourceStack source) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
-		net.minecraft.core.BlockPos controller = service.createControllerDemo(player);
+		var fixtures = MmmRuntimeRegistry.require(source.getServer()).debugFixtures();
+		net.minecraft.core.BlockPos controller = fixtures.createControllerDemo(player);
 		if (controller == null) {
-			return fail(source, "无法创建快速控制器域：" + service.lastTakeoverFailure());
+			return fail(source, "无法创建快速控制器域：" + fixtures.lastFailure());
 		}
 		return succeed(source, "已在 " + controller.toShortString()
 				+ " 创建并激活内部 4×4×4 的空闭壳；区域当前暂停，可直接对壳面中心使用桶", 1);
@@ -341,9 +342,9 @@ public final class MmmCommands {
 	private static int createTensionDemo(CommandSourceStack source, int angleDegrees)
 			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
-		if (!service.createTensionDemo(player, angleDegrees)) {
-			return fail(source, "无法创建表面张力测试域：" + service.lastTakeoverFailure());
+		var fixtures = MmmRuntimeRegistry.require(source.getServer()).debugFixtures();
+		if (!fixtures.createTensionDemo(player, angleDegrees)) {
+			return fail(source, "无法创建表面张力测试域：" + fixtures.lastFailure());
 		}
 		return succeed(source, "已创建暂停的表面张力球形冠液滴（σ=100，θ=" + angleDegrees + "°；同体积球冠，瞬态，不写 region-state）；先比较 θ=30° 与 θ=120° 的暂停形状，再用 /mmm step 或 /mmm run", 1);
 	}
@@ -355,9 +356,9 @@ public final class MmmCommands {
 			return fail(source, "airdemo 模式必须是 pressure 或 vacuum");
 		}
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
-		if (!service.createAirDemo(player, vacuum)) {
-			return fail(source, "无法创建气压测试域：" + service.lastTakeoverFailure());
+		var fixtures = MmmRuntimeRegistry.require(source.getServer()).debugFixtures();
+		if (!fixtures.createAirDemo(player, vacuum)) {
+			return fail(source, "无法创建气压测试域：" + fixtures.lastFailure());
 		}
 		return succeed(source, "已在准星方向搭好玻璃 U 型管并创建暂停的气压演示域（"
 				+ (vacuum ? "封顶侧气腔预置负压，运行后封顶侧液面被吸升约 1.5 格"
@@ -368,8 +369,8 @@ public final class MmmCommands {
 
 	private static int capture(CommandSourceStack source, boolean takeover) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
-		CaptureResult result = service.captureNearbyWater(player, takeover);
+		CaptureResult result = MmmRuntimeRegistry.require(source.getServer()).debugFixtures()
+				.captureNearbyWater(player, takeover);
 		if (result.failure() != null) {
 			return fail(source, (takeover ? "接管" : "捕获") + "已取消：" + result.failure());
 		}
@@ -520,28 +521,28 @@ public final class MmmCommands {
 	}
 
 	private static int listRegions(CommandSourceStack source) {
-		FluidSimulationService service = MmmRuntimeRegistry.require(source.getServer()).simulation();
-		java.util.List<String> regions = service.regionSummaries();
-		if (regions.isEmpty()) return succeed(source, "没有已登记区域；" + service.status(source.getServer()), 0);
+		var runtime = MmmRuntimeRegistry.require(source.getServer());
+		java.util.List<String> regions = runtime.regionAdministration().summaries();
+		if (regions.isEmpty()) return succeed(source,
+				"没有已登记区域；" + runtime.simulation().status(source.getServer()), 0);
 		return succeed(source, "区域列表（* 为当前选择）：\n" + String.join("\n", regions), regions.size());
 	}
 
 	private static int selectRegion(CommandSourceStack source, String prefix) {
-		FluidSimulationService.SelectionResult result = MmmRuntimeRegistry.require(source.getServer()).simulation()
-				.selectRegion(prefix);
+		SelectionResult result = MmmRuntimeRegistry.require(source.getServer()).regionAdministration().select(prefix);
 		if (!result.succeeded()) return fail(source, result.failure());
 		return succeed(source, "已选择区域 " + result.regionId() + "；区域保持原有暂停/运行状态", 1);
 	}
 
 	private static int checkpointRegion(CommandSourceStack source) {
-		String result = MmmRuntimeRegistry.require(source.getServer()).simulation().checkpointSelected();
+		String result = MmmRuntimeRegistry.require(source.getServer()).regionAdministration().checkpointSelected();
 		if (result.contains("失败") || result.startsWith("没有")) return fail(source, result);
 		return succeed(source, result, 1);
 	}
 
 	private static int recoverPreviousRegion(CommandSourceStack source, long expectedCheckpoint) {
-		String result = MmmRuntimeRegistry.require(source.getServer()).simulation()
-				.recoverSelectedPreviousCheckpoint(expectedCheckpoint);
+		String result = MmmRuntimeRegistry.require(source.getServer()).regionAdministration()
+				.recoverPreviousSelected(expectedCheckpoint);
 		if (result.contains("失败") || result.startsWith("没有") || result.startsWith("拒绝")) {
 			return fail(source, result);
 		}

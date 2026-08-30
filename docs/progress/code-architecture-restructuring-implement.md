@@ -393,6 +393,13 @@
 * controller 激活与 indicator 编辑分别进入 `MinecraftRegionActivation`、`MinecraftIndicatorEditing`；创建前 WAL/ownership/admission/footprint 检查、首个 HEAD 后才登记 live owner、失败文案和 indicator checkpoint-warning 语义均保持。block/item 只从 runtime 取得对应语义 owner，架构门删除二者的 S19e 例外。
 * `FluidSimulationService` 降至 984 行；`containers,materials,chemistry` 与 `verifyArchitecture` 一次 Gradle 运行通过，架构门扫描 408 个生产源。无需进游戏：本切片未改真实 `VoxelShape`，world truth/容器代数有领域门，controller commit 顺序与 indicator checkpoint 路径为逐分支结构迁移。
 
+### S19f
+
+* 先复审 S19e 的消费方向，确认 container plan/actor 已不再反取 service；所有新 owner 仍由 service 构造再显式交给 runtime，这是 S21 删除 service 时上移 composition 的已登记边界，不在命令切片制造重复构造根。
+* `/mmm` 的 demo/materialdemo/chemistrydemo/controllerdemo/tensiondemo/airdemo/capture/takeover 改为直达 `MinecraftDebugFixtures`；fixtures 仅公开既有场景命令面，构造与 consumer-owned `Runtime` 仍保持包内。`MmmMod` 的脚手架清理同样直达 owner，service 的场景委托镜像全部删除。
+* 新建小型 `MinecraftRegionAdministration`，组合现有 catalog/persistence/application/recovery owner，接管 regions list/select/checkpoint/recoverprevious；`SelectionResult` 升为顶层类型，未把低层 `FluidRegionOperations` 整体公开。checkpoint 的 pending-WAL 预检、generation 重验、typed status 到原文案映射保持不变。
+* 其余 run/pause/step/remove/编辑/flag/fault operator 动作仍明确借 service，架构 allowlist 从 S19f 改绑 S21；不是通过新 facade 隐藏未拆职责。service 降至 894 行。`audit,lifecycle,containers` 与 `verifyArchitecture` 一次 Gradle 运行通过，架构门扫描 410 个生产源；无需进游戏。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

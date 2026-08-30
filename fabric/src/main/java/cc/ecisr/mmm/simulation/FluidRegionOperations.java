@@ -298,16 +298,16 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 		return List.copyOf(summaries);
 	}
 
-	FluidSimulationService.SelectionResult select(String prefix) {
+	SelectionResult select(String prefix) {
 		String normalized = prefix.trim().toLowerCase(Locale.ROOT);
-		if (normalized.isEmpty()) return FluidSimulationService.SelectionResult.failed("区域 UUID 前缀不能为空");
+		if (normalized.isEmpty()) return SelectionResult.failed("区域 UUID 前缀不能为空");
 		List<FluidRegion> matches = manager.regions().stream()
 				.filter(region -> region.id().toString().toLowerCase(Locale.ROOT).startsWith(normalized)).toList();
-		if (matches.isEmpty()) return FluidSimulationService.SelectionResult.failed("没有匹配的区域：" + prefix);
-		if (matches.size() > 1) return FluidSimulationService.SelectionResult.failed("区域前缀不唯一，共匹配 " + matches.size() + " 个区域");
+		if (matches.isEmpty()) return SelectionResult.failed("没有匹配的区域：" + prefix);
+		if (matches.size() > 1) return SelectionResult.failed("区域前缀不唯一，共匹配 " + matches.size() + " 个区域");
 		FluidRegion region = matches.getFirst();
 		manager.select(region.id());
-		return new FluidSimulationService.SelectionResult(true, region.id(), null);
+		return new SelectionResult(true, region.id(), null);
 	}
 
 	@Override public Attempt checkpoint(UUID regionId, long expectedCheckpointGeneration) {

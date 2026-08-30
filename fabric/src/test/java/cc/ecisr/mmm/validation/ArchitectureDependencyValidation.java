@@ -53,7 +53,7 @@ public final class ArchitectureDependencyValidation {
 
 	/** Temporary direct imports of the S21 god service, each named by its removal slice. */
 	private static final Map<String, String> SERVICE_IMPORT_ALLOWLIST = Map.of(
-			"MmmCommands", "S19f");
+			"MmmCommands", "S21");
 
 	/** Production classes above the final 1000-line limit, with the slice that closes each. */
 	private static final Map<String, String> SIZE_ALLOWLIST = Map.of(

@@ -8,17 +8,13 @@ import cc.ecisr.mmm.application.ControllerQueryUseCase;
 import cc.ecisr.mmm.application.RegionApplicationService;
 import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.application.ThermalReservoirUseCase;
-import cc.ecisr.mmm.application.command.CheckpointRegionCommand;
 import cc.ecisr.mmm.application.command.MotionStepCommand;
-import cc.ecisr.mmm.application.result.CheckpointRegionResult;
 import cc.ecisr.mmm.application.result.MotionStepResult;
-import cc.ecisr.mmm.block.MmmBlocks;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.GasPressureBoundary;
 import cc.ecisr.mmm.fluid.FluidSolverBackend;
-import cc.ecisr.mmm.fluid.FluidMaterial;
 import cc.ecisr.mmm.fluid.GasTopologyBlockedException;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
@@ -26,20 +22,10 @@ import cc.ecisr.mmm.fluid.air.GasAuditLedger;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularMechanics;
 import cc.ecisr.mmm.granular.GranularRegistry;
-import cc.ecisr.mmm.transfer.ChemicalContents;
-import cc.ecisr.mmm.transfer.FluidMixture;
-import cc.ecisr.mmm.item.ContainerItemStacks;
-import cc.ecisr.mmm.item.MmmComponents;
-import cc.ecisr.mmm.simulation.controller.FluidBoundaryScanner;
-import cc.ecisr.mmm.simulation.controller.FluidControllerRegions;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
-import cc.ecisr.mmm.simulation.ownership.OwnershipJournal;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
-import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
-import cc.ecisr.mmm.thermal.ThermalStateFunction;
-import cc.ecisr.mmm.fluid.MaterialRegistry;
 import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 import cc.ecisr.mmm.worldprofile.WorldCapability;
 import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
@@ -48,8 +34,6 @@ import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.item.ItemStack;
-
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.Vec3;
@@ -82,6 +66,7 @@ public final class FluidSimulationService {
 	private final MinecraftControllerConsole controllerConsole;
 	private final MinecraftRegionActivation regionActivation;
 	private final MinecraftIndicatorEditing indicatorEditing;
+	private final MinecraftRegionAdministration regionAdministration;
 	private final PlayerContainerTransferAdapter playerContainerTransfers;
 	private final DispenserContainerTransferAdapter dispenserContainerTransfers;
 	private final FluidSnapshotPublisher snapshots;
@@ -132,6 +117,8 @@ public final class FluidSimulationService {
 		this.ownershipIssues = List.copyOf(ownershipIssues);
 		this.regionApplication = new RegionApplicationService(solverBackend,
 				new FluidRegionRepository(regionManager), regionOperations);
+		this.regionAdministration = new MinecraftRegionAdministration(
+				regionManager, regionOperations, regionApplication, containerRecovery);
 		this.takeover = new MinecraftTakeoverAdapter();
 		this.debugFixtures = new MinecraftDebugFixtures(regionManager, snapshots, takeover, debugRuntime(),
 				worldCapabilityProfile, () -> defaultEntityPhysicsEnabled, () -> defaultDebugOverlays);
@@ -163,6 +150,8 @@ public final class FluidSimulationService {
 	MinecraftControllerConsole controllerConsole() { return controllerConsole; }
 	MinecraftRegionActivation regionActivation() { return regionActivation; }
 	MinecraftIndicatorEditing indicatorEditing() { return indicatorEditing; }
+	MinecraftRegionAdministration regionAdministration() { return regionAdministration; }
+	MinecraftDebugFixtures debugFixtures() { return debugFixtures; }
 	PlayerContainerTransferAdapter playerContainerTransfers() { return playerContainerTransfers; }
 	DispenserContainerTransferAdapter dispenserContainerTransfers() { return dispenserContainerTransfers; }
 
@@ -290,47 +279,9 @@ public final class FluidSimulationService {
 		return regionActivation.activate(player, controllerPosition, false);
 	}
 
-	/** Restores the world blocks the gas-demo glass scaffold replaced before a new scenario. */
-	public void restoreAirDemoScaffolding(MinecraftServer server) {
-		debugFixtures.restoreAirDemoScaffolding(server);
-	}
-
-	public BlockPos createControllerDemo(ServerPlayer player) {
-		return debugFixtures.createControllerDemo(player);
-	}
-
-	public boolean createDemo(ServerPlayer player) {
-		return debugFixtures.createDemo(player);
-	}
-
-	public boolean createMaterialDemo(ServerPlayer player) {
-		return debugFixtures.createMaterialDemo(player);
-	}
-
-	public boolean createChemistryDemo(ServerPlayer player) {
-		return debugFixtures.createChemistryDemo(player);
-	}
-
-	public boolean createTensionDemo(ServerPlayer player, int angleDegrees) {
-		return debugFixtures.createTensionDemo(player, angleDegrees);
-	}
-
-	public boolean createAirDemo(ServerPlayer player, boolean vacuum) {
-		return debugFixtures.createAirDemo(player, vacuum);
-	}
-
-	public CaptureResult captureNearbyWater(ServerPlayer player, boolean takeover) {
-		return debugFixtures.captureNearbyWater(player, takeover);
-	}
-
 	/** Restores every journaled vanilla-water block; the journal is cleared only after the world pass. */
 	public RestorationStats restoreTakeover(MinecraftServer server) {
 		return takeover.restore(server);
-	}
-
-	/** The last failure reported by a debug fixture or by an interrupted takeover transaction. */
-	public String lastTakeoverFailure() {
-		return debugFixtures.lastFailure();
 	}
 
 	/** The narrow seam the debug fixtures need back into the live region runtime. */
@@ -524,16 +475,12 @@ public final class FluidSimulationService {
 			if (region != null) region.setPaused(true);
 			return restoration;
 		}
-		restoreAirDemoScaffolding(server);
+		debugFixtures.restoreAirDemoScaffolding(server);
 		regionManager.clear();
 		snapshots.clearAll(server);
 		return new RestorationStats(restoration.journalFound(), restoration.restoredBlocks(),
 				restoration.alreadyRestoredBlocks(), restoration.skippedBlocks(),
 				0, 0, true, null);
-	}
-
-	public List<String> regionSummaries() {
-		return regionOperations.summaries();
 	}
 
 	/** Read-only ownership reconciliation report across every controller region. */
@@ -552,28 +499,6 @@ public final class FluidSimulationService {
 		if (!any) report.append("\n没有控制器区域");
 		for (String issue : ownershipIssues) report.append("\n! ").append(issue);
 		return report.toString();
-	}
-
-	public SelectionResult selectRegion(String prefix) {
-		return regionOperations.select(prefix);
-	}
-
-	public String checkpointSelected() {
-		FluidRegion selected = activeRegion();
-		if (selected == null) return "没有选中区域";
-		CheckpointRegionResult result = regionApplication.checkpoint(new CheckpointRegionCommand(
-				selected.id(), selected.checkpointGeneration(), hasPendingContainerTransfer(selected.id())));
-		return switch (result.status()) {
-			case COMMITTED -> "checkpoint " + result.checkpointGeneration() + " 已原子发布";
-			case ALREADY_UNLOADED -> "区域已是 metadata-only UNLOADED；checkpoint "
-					+ result.checkpointGeneration();
-			case REGION_NOT_FOUND -> "没有选中区域";
-			case NOT_PERSISTENT -> "开发命令区域不写入 region-state";
-			case STALE_GENERATION -> "checkpoint generation 已改变；拒绝过期命令，当前为 "
-					+ result.checkpointGeneration();
-			case PENDING_CONTAINER_WAL -> "区域存在未完成或不可识别的容器转移 WAL；拒绝发布额外 checkpoint";
-			case OWNERSHIP_BLOCKED, PERSISTENCE_FAILED -> result.diagnostic();
-		};
 	}
 
 	public String emptySelectedRegion(ServerLevel level) {
@@ -626,17 +551,6 @@ public final class FluidSimulationService {
 				beforeBlocks, beforeParticles, condensed.coherentVolumeSvq(), condensed.coherentGroups(),
 				granular.solidVolumeSvq(), granular.activeParcels(), granular.depositGroups());
 	}
-
-	/** Explicit HEAD rollback is available only after a failed restore and never crosses an item WAL. */
-	public String recoverSelectedPreviousCheckpoint(long expectedCurrentGeneration) {
-		FluidRegion selected = activeRegion();
-		if (selected == null) return "没有选中区域";
-		if (hasPendingContainerTransfer(selected.id())) {
-			return "上一代恢复失败：区域存在未完成或不可识别的容器转移 WAL；禁止跨代回退";
-		}
-		return regionOperations.recoverPreviousSelected(expectedCurrentGeneration);
-	}
-
 
 	void checkpointForShutdown() {
 		regionOperations.checkpointForShutdown(region -> !hasPendingContainerTransfer(region.id()));
@@ -956,10 +870,6 @@ public final class FluidSimulationService {
 	}
 
 	public record CellTarget(int x, int y, int z) { }
-
-	public record SelectionResult(boolean succeeded, UUID regionId, String failure) {
-		static SelectionResult failed(String failure) { return new SelectionResult(false, null, failure); }
-	}
 
 	public record WaterEditResult(
 			boolean domainExists,

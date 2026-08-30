@@ -64,6 +64,7 @@ public final class MmmRuntimeFactory {
 				ownershipIssues, committedEvents);
 		return new MmmRuntime(simulation, simulation.controllerConsole(),
 				simulation.regionActivation(), simulation.indicatorEditing(),
+				simulation.debugFixtures(), simulation.regionAdministration(),
 				simulation.playerContainerTransfers(), simulation.dispenserContainerTransfers(),
 				new MinecraftRegionObservation(regionManager, snapshots), containerRecovery,
 				new FabricFluidQueryApi(server, regionManager, startup.profileProven()), new ProtocolSessions(),

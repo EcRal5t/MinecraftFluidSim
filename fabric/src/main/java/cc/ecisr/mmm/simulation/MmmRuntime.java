@@ -15,6 +15,8 @@ public final class MmmRuntime {
 	private final MinecraftControllerConsole controllerConsole;
 	private final MinecraftRegionActivation regionActivation;
 	private final MinecraftIndicatorEditing indicatorEditing;
+	private final MinecraftDebugFixtures debugFixtures;
+	private final MinecraftRegionAdministration regionAdministration;
 	private final PlayerContainerTransferAdapter playerContainerTransfers;
 	private final DispenserContainerTransferAdapter dispenserContainerTransfers;
 	private final MinecraftRegionObservation regionObservation;
@@ -32,6 +34,8 @@ public final class MmmRuntime {
 			MinecraftControllerConsole controllerConsole,
 			MinecraftRegionActivation regionActivation,
 			MinecraftIndicatorEditing indicatorEditing,
+			MinecraftDebugFixtures debugFixtures,
+			MinecraftRegionAdministration regionAdministration,
 			PlayerContainerTransferAdapter playerContainerTransfers,
 			DispenserContainerTransferAdapter dispenserContainerTransfers,
 			MinecraftRegionObservation regionObservation,
@@ -46,6 +50,8 @@ public final class MmmRuntime {
 		this.controllerConsole = Objects.requireNonNull(controllerConsole, "Controller console");
 		this.regionActivation = Objects.requireNonNull(regionActivation, "Region activation");
 		this.indicatorEditing = Objects.requireNonNull(indicatorEditing, "Indicator editing");
+		this.debugFixtures = Objects.requireNonNull(debugFixtures, "Debug fixtures");
+		this.regionAdministration = Objects.requireNonNull(regionAdministration, "Region administration");
 		this.playerContainerTransfers = Objects.requireNonNull(playerContainerTransfers, "Player container transfers");
 		this.dispenserContainerTransfers = Objects.requireNonNull(
 				dispenserContainerTransfers, "Dispenser container transfers");
@@ -62,6 +68,8 @@ public final class MmmRuntime {
 	public MinecraftControllerConsole controllerConsole() { return controllerConsole; }
 	public MinecraftRegionActivation regionActivation() { return regionActivation; }
 	public MinecraftIndicatorEditing indicatorEditing() { return indicatorEditing; }
+	public MinecraftDebugFixtures debugFixtures() { return debugFixtures; }
+	public MinecraftRegionAdministration regionAdministration() { return regionAdministration; }
 	PlayerContainerTransferAdapter playerContainerTransfers() { return playerContainerTransfers; }
 	DispenserContainerTransferAdapter dispenserContainerTransfers() { return dispenserContainerTransfers; }
 	public MinecraftRegionObservation regionObservation() { return regionObservation; }

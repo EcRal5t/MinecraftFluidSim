@@ -53,7 +53,7 @@ public final class MmmMod implements ModInitializer {
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> MmmRuntimeRegistry.require(server).recoverWorld(server));
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
 			MmmRuntime runtime = MmmRuntimeRegistry.find(server);
-			if (runtime != null) runtime.simulation().restoreAirDemoScaffolding(server);
+			if (runtime != null) runtime.debugFixtures().restoreAirDemoScaffolding(server);
 			FluidProtocolServer.clearServer(server);
 			MmmRuntimeRegistry.stop(server);
 		});
