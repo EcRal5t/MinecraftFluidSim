@@ -289,7 +289,15 @@
 * 对 `BeforeReArch` 到 S15f 做生产代码审计：Java 生产源由 57,389 行/285 文件增至 63,150 行/369 文件，净增 5,761 行（10.0%）和 84 个文件；S15a–S15f 自身净增 640 行。确认当前已进入“抽取速度大于删除速度”的迁移层堆积，暂停进入 S16，S15 后续改以职责消失、入口减少和生产代码净下降为切片证据
 * 横向检查 S13–S15 类型后，tick use case 拥有 pacing/clock 状态机，query/reservoir/lifecycle 拥有 token 与授权规则，catalog 拥有索引/预算/选择状态；`RegionAdmissionService` 则无状态、无完整工作流、无第二个生产调用者，只把 `ensureAvailable` 已有顺序包装成四组 fact/decision 往返，未转移实际职责
 * 删除该 ceremonial application layer 和只验证其 DTO 映射的新增测试；`FluidRegionOperations` 恢复单一、可顺读的 admission 工作流，仍按 chemistry→granular→thermal→numerical→unmanaged→ownership→policy→catalog→boundary 惰性取证，typed reason、就地阻断与 checkpoint-before-unload 语义不变
-* 本切片删除 1 个生产类型，生产 Java 净减 88 行、测试净减 41 行，`FluidRegionOperations` 从 396 行降至 384 行；不是合并语句、删除注释或迁移到别处。`region-manager,region-state` 与 `verifyArchitecture` 通过
+* 本切片删除 1 个生产类型，按 git 物理行差量生产 Java 净减 108 行、测试净减 41 行；不是合并语句、删除注释或迁移到别处。`region-manager,region-state` 与 `verifyArchitecture` 通过
+
+### S15 全面收缩审计 (`53b2345`)
+
+* 对 S00–S15 新增生产类型做一次性全量分类，而不是继续逐类型停轮：逐项区分真实状态/生命周期 owner、数值算法/stage、事务与外部边界、以及纯转发/镜像类型。`RegionRuntime`、runtime/startup composition、candidate/repository、token/session、各 carrier owner 与 stage 均持有不可替代的不变量；`FlipThermalState` 仍承担 fluid persistence/reseed 类型到 thermal owner 的适配，强删会扩大 thermal 写面，留待 S21 的显式 thermal port 收口。本轮不为减少文件数破坏这些边界。
+* 复核 S15→S16 接续：container 主线需要的 `MmmRuntime` 组装入口、application command/result/port、`RegionRepository`、`RegionCatalog`、solver candidate 与 durable transaction owner 均未改动。上一切片删除的无状态 admission 包装也不是 S16 前置；runtime admission 继续直接消费 catalog typed result，并保持 checkpoint-before-unload 顺序。
+* 删除只有一个消费者的独立 `RegionStepExecutor` 文件，把同一窄测试/执行缝收回 `RegionTickUseCase.StepExecutor`；`RegionApplicationService` 直接实现消费者拥有的接口。调度状态机、可注入时钟与 candidate adoption 不变。
+* `FluidRegionManager` 继续保留必要的 Minecraft `FluidRegion`→loader-neutral descriptor 映射，但删除对 `RegionCatalog.Limits`、`BudgetUsage`、`AdmissionResult` 的三套镜像 record、转换器和重复校验；world config、service、persistence 与既有测试直接消费 catalog 的规范类型。没有把 descriptor 映射扩散给调用方，也没有删除 catalog 边界。
+* 本提交删除 1 个生产文件，生产 Java 净减 36 行；连同前一收缩提交，S15f 峰值 63,150 行/369 文件降为 63,006 行/367 文件，净减 144 行和 2 个文件。相对重构前仍净增 5,617 行（9.8%）和 82 个生产文件；这是真实 owner/stage/application 边界的当前成本，不再用本轮高风险合并掩盖。`region-manager,lifecycle,region-state` 与 `verifyArchitecture` 通过；下一轮停止收缩复审，回到未完成的 S15 主线，再顺接 S16。
 
 ---
 
@@ -318,5 +326,5 @@ revision 列由该切片的下一次提交补记，避免提交引用自身哈�
 * controller token 只能在 bounded view 已存在、region identity 匹配且完整 summary 字段验证成功后签发。generation 是 authorization nonce，不是 query revision；失败 read/projection 不消耗 generation，旧 token 仍按“最新同 viewer/region token”规则决定是否有效。
 * fixed thermal reservoir 的 setpoint owner 仍是 BlockEntity；application 只拥有 summary/token/policy，不建立虚假的 region thermal port。设定变化只影响未来 boundary flux，Fabric 在成功写入后刷新相邻 region 并按 boundary change 唤醒，不能直接把温差换算成 region `U`。
 * `RegionLifecycleUseCase` 只拥有 run-intent/preview authorization，不以 callback 取得 persistence 或 world 写权。inventory candidate+HEAD、ownership journal 和 REMOVED tombstone/quarantine 是三种不同提交协议；在对应窄 adapter 提取前不得用一个 `commit(operation)` 通用 port 抹平它们的失败分类。
-* `RegionCatalog<T>` 的泛型值只作 opaque runtime owner；所有规则只读 immutable descriptor。Fabric 暂保留 `FluidRegionManager` 兼容 facade 来稳定大量调用方与 server config DTO，但 facade 不再计算预算、overlap、selection 或 replacement；后续调用者迁完可删除，不把 Minecraft identity 引入 core。
+* `RegionCatalog<T>` 的泛型值只作 opaque runtime owner；所有规则只读 immutable descriptor。Fabric 暂保留 `FluidRegionManager` descriptor adapter 来稳定大量调用方，但 limits/usage/admission result 直接使用 catalog 的规范类型，adapter 不再复制 DTO，也不计算预算、overlap、selection 或 replacement；后续调用者迁完可删除，不把 Minecraft identity 引入 core。
 * runtime admission 不为“层次完整”单独建立无状态 application service。它与 ownership、boundary、restore 和 checkpointed unload 是一条惰性取证的 server-thread 工作流；`RegionCatalog` 继续独占 loader-neutral catalog 规则，但 adapter 直接消费其 typed result。数值/ownership 就地阻断，其他拒答只有完整 checkpoint 成功后才释放 solver。
