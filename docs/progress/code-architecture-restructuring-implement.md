@@ -358,6 +358,12 @@
 * `CELLS_PER_BLOCK` / `CELL_VOLUMES_PER_BLOCK` 仍留在 `FluidSimulationService`：`MinecraftRegionInputs`、`MinecraftContainerTransferOperations` 与 fixtures 三方共用同一方块↔子格约定，把它搬进 `FluidRegionFactory` 会立刻与后者的 `cellsPerBlock` 形参自相矛盾；真正归属应随“区域分配工作流”切片决定，不在本次提交里顺手改名。
 * 场景失败文案的归属随之明确：接管事务的失败写在 `MinecraftTakeoverAdapter`，场景失败写在 `MinecraftDebugFixtures`。service 的 `lastTakeoverFailure()` 改为返回 fixtures 的 lastFailure，而 fixtures 在每条被 takeover 阻断的路径上都已把 `RestorationStats.failure()` 记进自己的 lastFailure，因此 `/mmm` 五个 demo/capture 子命令的用户可见文案逐字不变。
 
+### S19b
+
+* 沿 S19a 的成员消费面逐项审计 `FluidSimulationService`：`/mmm chemstatus` 与 `/mmm granstatus` 自 `a756645` 的静态 locator 迁移起被整批摘除后没有重新接线，但 `chemistryInventoryStatus`/`granularInventoryStatus` 的实现与 `README.md` 的文档都还在——这是迁移副作用造成的真实回归，不是有意裁撤。两个管理员命令按当前 `MmmRuntimeRegistry` 入口原样恢复（admin 权限、`succeed` 返回值沿用旧语义），service 侧实现零改动；`selectedRegionIn` 因此重新有消费者。
+* 删除两处真正的死表面：`regionAtBlock`（无任何调用者，`targets.regionAtBlock` 才是唯一实现）与 `cleanupContainerTransfers`（与 `recoverContainerTransfers` 逐字相同的别名，`tick` 改用后者）。
+* `verifyArchitecture`（395 个生产源）与 `containers`、`audit` 通过；无需进游戏：命令树与死成员清理不涉及视觉、真实 `VoxelShape` 或跨重启事务。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

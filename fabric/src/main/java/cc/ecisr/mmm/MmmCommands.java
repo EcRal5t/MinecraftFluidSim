@@ -65,6 +65,12 @@ public final class MmmCommands {
 										})
 										.executes(context -> audit(context, () -> giveMaterialBucket(
 												context.getSource(), StringArgumentType.getString(context, "material"))))))
+						.then(Commands.literal("chemstatus")
+								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+								.executes(context -> audit(context, () -> chemistryInventoryStatus(context.getSource()))))
+						.then(Commands.literal("granstatus")
+								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+								.executes(context -> audit(context, () -> granularInventoryStatus(context.getSource()))))
 						.then(Commands.literal("granularcontainer")
 								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.then(Commands.argument("material", StringArgumentType.word())
@@ -497,6 +503,20 @@ public final class MmmCommands {
 	private static int ownershipReport(CommandSourceStack source) {
 		return succeed(source, MmmRuntimeRegistry.require(source.getServer()).simulation()
 				.ownershipReport(source.getServer()), 1);
+	}
+
+	/** Administrator-only exact chemical inventory/audit report. */
+	private static int chemistryInventoryStatus(CommandSourceStack source) {
+		String inventory = MmmRuntimeRegistry.require(source.getServer()).simulation()
+				.chemistryInventoryStatus(source.getLevel());
+		return succeed(source, inventory, inventory.startsWith("region ") ? 1 : 0);
+	}
+
+	/** Administrator-only exact granular inventory/audit report. */
+	private static int granularInventoryStatus(CommandSourceStack source) {
+		String inventory = MmmRuntimeRegistry.require(source.getServer()).simulation()
+				.granularInventoryStatus(source.getLevel());
+		return succeed(source, inventory, inventory.startsWith("region ") ? 1 : 0);
 	}
 
 	private static int listRegions(CommandSourceStack source) {

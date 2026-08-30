@@ -183,8 +183,6 @@ public final class FluidSimulationService {
 				level.dimension().identifier().toString(), chunk.x(), chunk.z());
 	}
 
-	void cleanupContainerTransfers(MinecraftServer server) { containerRecovery.recoverIndexed(); }
-
 	void recoverTakeoverBackup(MinecraftServer server) {
 		for (String issue : regionOperations.issues()) MmmMod.LOGGER.error("Matter, Motion & Mechanics persistent region issue: {}", issue);
 		RestorationStats result = restoreTakeover(server);
@@ -815,7 +813,7 @@ public final class FluidSimulationService {
 
 	public void tick(MinecraftServer server) {
 		regionOperations.advanceTick();
-		cleanupContainerTransfers(server);
+		recoverContainerTransfers(server);
 
 		takeover.maintainActive(server);
 		for (FluidRegion region : regionManager.regions()) {
@@ -1213,11 +1211,6 @@ public final class FluidSimulationService {
 			player.sendSystemMessage(Component.literal("物质、运动与力学目标区域不可用：" + region.availabilityFailure()), true);
 		}
 		return available;
-	}
-
-	/** Returns the sole region whose actual interior contains the block position. */
-	public FluidRegion regionAtBlock(ServerLevel level, BlockPos pos) {
-		return targets.regionAtBlock(level, pos);
 	}
 
 	/** Bound shell/device blocks remain under lifecycle coordination until the runtime owner is removed. */
