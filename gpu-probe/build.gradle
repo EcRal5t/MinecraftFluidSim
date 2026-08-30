@@ -75,4 +75,7 @@ tasks.register('runAdapterValidation', JavaExec) {
 	dependsOn tasks.named('testClasses')
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = 'cc.ecisr.mmm.gpuprobe.GpuProbeAdapterValidation'
+	def adapterWorkDir = layout.buildDirectory.dir('adapter-validation-work').get().asFile
+	workingDir adapterWorkDir
+	doFirst { adapterWorkDir.mkdirs() }
 }

@@ -427,6 +427,13 @@ S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Bri
 * 把原本混在 server service 的固定 probe scenario、CPU fallback 构造、checkpoint/manual-step 规则及 benchmark 迁入 kernel；世界 `VoxelShape` 采样仍留在 adapter，但八位 block mask 到 solver-cell 的纯展开规则由 kernel 独占。没有改变网格、迭代数、checkpoint 节拍、shader binding 或碰撞位序。
 * headless/GPU JavaExec 门移到 kernel，原 `gpu-probe:*` 任务仅保留兼容委托；原 GPU correctness 中唯一的 Brigadier/Fabric 命令树断言替换为 adapter 自有 `runAdapterValidation`，避免 kernel 反依赖 loader。独立 kernel compile、adapter main/test compile、command adapter 门与 `verifyArchitecture` 通过，架构门扫描 415 个生产源。
 
+### S20c
+
+* 原 1237 行 `VulkanFlipPipeline` 拆出 `VulkanDeviceContext`、`FlipGpuResources`、`FlipKernelBindings`、`GpuStepScheduler` 与 `GpuReadback` 五个 native owner，pipeline 降至 808 行且不再创建/销毁任何 Vulkan handle。instance/device/queue、27 个 storage buffer、shader/descriptor/pipeline、三槽 command/fence/query ring 和 bulk host transfer 分别有唯一字段与显式逆序 close；dispatch 次序、push layout、descriptor binding、buffer byte layout和四 physical substep 未改。
+* completion executor、slot future 与 fence wait 全部进入 scheduler；slot 复用仍在重录 command pool 前等待前次 completion，close 先聚合完成异常并等待 device idle，再销毁 ring。readback 继续在每次同步 copy 前等待全部 submitted work，device-local 与 host-visible 两条路径仍由同一 API 表征。
+* 真实 GPU gate 暴露了 S17 后未闭合的旧数据流：GPU checkpoint 的 binary solid cell 被直接交给已采用八位 cut-cell mask 的 `FlipParticleState`，导致完整固体统计/CPU recovery 变成零。边界现把 `0/1` 严格验证并映射为 `0x00/0xff`；既有 checkpoint 断言替换为 initial/final exact solid count。capability probe 通过（RTX 5070 Ti，Shaderc/VMA/dispatch 均正常），GPU correctness 已越过 checkpoint、两种 memory mode、timestamp/ring、碰撞与 pressure gates。
+* 最后的既有 long-run surface 门仍失败：新实现 GPU cells=1728、CPU=2840；用 `7af2590` 独立 worktree 对照为 GPU=1727、CPU=2840，证明不是本切片的同步/所有权回退。未放宽断言、调常数或钳制算法；该数值缺陷保留为 S20 收口前必须明确处理的门。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

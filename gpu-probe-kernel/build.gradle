@@ -19,6 +19,9 @@ dependencies {
 	implementation('org.lwjgl:lwjgl-shaderc:3.4.1') { exclude group: 'org.lwjgl', module: 'lwjgl' }
 	implementation('org.lwjgl:lwjgl-vma:3.4.1') { exclude group: 'org.lwjgl', module: 'lwjgl' }
 	implementation('org.lwjgl:lwjgl-vulkan:3.4.1') { exclude group: 'org.lwjgl', module: 'lwjgl' }
+	runtimeOnly('org.lwjgl:lwjgl:3.4.1:natives-windows') { transitive = false }
+	runtimeOnly('org.lwjgl:lwjgl-shaderc:3.4.1:natives-windows') { transitive = false }
+	runtimeOnly('org.lwjgl:lwjgl-vma:3.4.1:natives-windows') { transitive = false }
 }
 
 java {
@@ -44,10 +47,9 @@ def registerGpuProbe = { String taskName, String descriptionText, String mainCla
 		doFirst {
 			probeWorkDir.mkdirs()
 			def nativeDir = providers.gradleProperty('gpuProbeNativesDir').orNull
-			if (nativeDir == null || nativeDir.isBlank()) {
-				throw new GradleException('Pass -PgpuProbeNativesDir=<Minecraft LWJGL native directory>')
+			if (nativeDir != null && !nativeDir.isBlank()) {
+				systemProperty 'org.lwjgl.librarypath', file(nativeDir).absolutePath
 			}
-			systemProperty 'org.lwjgl.librarypath', file(nativeDir).absolutePath
 		}
 		configureArgs(delegate)
 	}

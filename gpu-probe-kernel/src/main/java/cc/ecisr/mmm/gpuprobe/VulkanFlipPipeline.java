@@ -1,6 +1,5 @@
 package cc.ecisr.mmm.gpuprobe;
 
-import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
@@ -9,26 +8,15 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
-import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
-import static org.lwjgl.system.MemoryUtil.NULL;
-import static org.lwjgl.vulkan.EXTShaderAtomicFloat.VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME;
 import static org.lwjgl.vulkan.VK10.*;
-import static org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceFeatures2;
 
 /** Windowless 3D PIC/FLIP probe backend with an explicit device-local production path and host-visible baseline. */
 final class VulkanFlipPipeline implements AutoCloseable {
 	private static final int LOCAL_SIZE = 256;
-	private static final int BUFFER_COUNT = 27;
-	private static final int PUSH_BYTES = 88;
-	private static final int SUBMISSION_RING_SIZE = 3;
 	private static final int PHYSICAL_SUBSTEPS = 4;
 	private static final int MG_PRE_SMOOTHING_SWEEPS = 2;
 	private static final int MG_COARSE_ITERATIONS = 24;
@@ -93,34 +81,17 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private static final int STAGE_MGH_PROLONG_FINE = 25;
 	private static final int STAGE_MGH_PROLONG_COARSE = 26;
 
-	private static final String SHADER = GpuProbeShaderSource.loadFlip();
-
 	private final Config config;
 	private final MemoryMode memoryMode;
 	private final PressureSolver pressureSolver;
-	private final List<GpuBuffer> buffers = new ArrayList<>(BUFFER_COUNT);
-	private final List<SubmissionSlot> submissionRing = new ArrayList<>(SUBMISSION_RING_SIZE);
 	private final List<Long> capturedGpuStepNanos = new ArrayList<>();
-	private GpuBuffer bulkTransferBuffer;
-	private VkInstance instance;
-	private VkPhysicalDevice physicalDevice;
-	private VkDevice device;
-	private VkQueue queue;
-	private int queueFamily;
-	private String deviceName;
-	private long descriptorLayout;
-	private long pipelineLayout;
-	private long shaderModule;
-	private long pipeline;
-	private long descriptorPool;
-	private long descriptorSet;
+	private VulkanDeviceContext deviceContext;
+	private FlipGpuResources resources;
+	private FlipKernelBindings bindings;
+	private GpuStepScheduler scheduler;
+	private GpuReadback readback;
 	private VkCommandBuffer recordingCommandBuffer;
 	private float recordingTimeStep;
-	private ExecutorService completionExecutor;
-	private float timestampPeriodNanos;
-	private int timestampValidBits;
-	private int nextSubmissionSlot;
-	private int maximumOutstandingSubmissions;
 	private int particleCount;
 	private float particleVolumeLedger;
 	private volatile Diagnostics lastDiagnostics = new Diagnostics(0.0F, 0.0F, 0.0F, 0.0F, 0.0F, Float.NaN);
@@ -141,9 +112,11 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		this.memoryMode = memoryMode;
 		this.pressureSolver = pressureSolver;
 		try {
-			createInstanceAndDevice(deviceIndex);
-			allocateBuffers();
-			createPipelineAndDescriptors();
+			deviceContext = new VulkanDeviceContext(deviceIndex);
+			resources = new FlipGpuResources(deviceContext, config, memoryMode, multigridCellCount());
+			bindings = new FlipKernelBindings(deviceContext, resources);
+			scheduler = new GpuStepScheduler(deviceContext, resources, buffer(DIAGNOSTICS).size());
+			readback = new GpuReadback(deviceContext, resources, scheduler, memoryMode);
 		} catch (RuntimeException | LinkageError exception) {
 			try { close(); }
 			catch (RuntimeException | LinkageError closeFailure) { exception.addSuppressed(closeFailure); }
@@ -152,7 +125,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	}
 
 	Config config() { return config; }
-	String deviceName() { return deviceName; }
+	String deviceName() { return deviceContext.deviceName(); }
 	MemoryMode memoryMode() { return memoryMode; }
 	PressureSolver pressureSolver() { return pressureSolver; }
 	int particleCount() { return particleCount; }
@@ -161,15 +134,11 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		awaitSubmittedWork();
 		return lastGpuStepNanos < 0L ? Double.NaN : lastGpuStepNanos / 1_000_000.0;
 	}
-	boolean hasTimestampQueries() { return timestampPeriodNanos > 0.0F && timestampValidBits > 0; }
-	int submissionRingSize() { return SUBMISSION_RING_SIZE; }
-	int maximumOutstandingSubmissions() { return maximumOutstandingSubmissions; }
+	boolean hasTimestampQueries() { return deviceContext.hasTimestampQueries(); }
+	int submissionRingSize() { return scheduler.ringSize(); }
+	int maximumOutstandingSubmissions() { return scheduler.maximumOutstandingSubmissions(); }
 	int physicalSubstepsPerStep() { return PHYSICAL_SUBSTEPS; }
-	long regularStagingBytes() {
-		long bytes = 0L;
-		for (SubmissionSlot slot : submissionRing) bytes += slot.stagingBuffer().size();
-		return bytes;
-	}
+	long regularStagingBytes() { return scheduler.regularStagingBytes(); }
 	float totalParticleVolume() { return particleVolumeLedger; }
 
 	void beginGpuTimingCapture() {
@@ -236,8 +205,8 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	}
 
 	private void initialize(CellSelector selector, CellSelector solidSelector, int markersPerCell) {
-		SubmissionSlot uploadSlot = memoryMode == MemoryMode.HOST_VISIBLE ? null : acquireSubmissionSlot();
-		GpuBuffer upload = memoryMode == MemoryMode.HOST_VISIBLE ? buffer(POSITIONS) : bulkTransferBuffer;
+		GpuStepScheduler.SubmissionSlot uploadSlot = memoryMode == MemoryMode.HOST_VISIBLE ? null : scheduler.acquire();
+		GpuBuffer upload = memoryMode == MemoryMode.HOST_VISIBLE ? buffer(POSITIONS) : readback.transferBuffer();
 		MemoryUtil.memSet(upload.mappedAddress(), 0, buffer(POSITIONS).size());
 		FloatBuffer positions = upload.floats(buffer(POSITIONS).size());
 		if (memoryMode == MemoryMode.HOST_VISIBLE) {
@@ -264,8 +233,8 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		}
 		particleVolumeLedger = particleCount * 0.125F;
 		if (memoryMode == MemoryMode.DEVICE_LOCAL_STAGING) uploadInitialState(uploadSlot);
-		SubmissionSlot solidUploadSlot = memoryMode == MemoryMode.HOST_VISIBLE ? null : acquireSubmissionSlot();
-		GpuBuffer solidUpload = memoryMode == MemoryMode.HOST_VISIBLE ? buffer(SOLIDS) : bulkTransferBuffer;
+		GpuStepScheduler.SubmissionSlot solidUploadSlot = memoryMode == MemoryMode.HOST_VISIBLE ? null : scheduler.acquire();
+		GpuBuffer solidUpload = memoryMode == MemoryMode.HOST_VISIBLE ? buffer(SOLIDS) : readback.transferBuffer();
 		int solidCells = populateSolidMask(solidSelector, solidUpload);
 		if (memoryMode == MemoryMode.DEVICE_LOCAL_STAGING && solidCells > 0) uploadSolidMask(solidUploadSlot);
 		rebuildSnapshot();
@@ -429,49 +398,29 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	}
 
 	ReadbackStats measureReadback() {
-		long fullStarted = System.nanoTime();
-		long fullChecksum = 0L;
-		long fullBytes = 0L;
-		for (int i = 0; i < buffers.size(); i++) {
-			GpuBuffer current = buffer(i);
-			fullChecksum ^= Long.rotateLeft(checksum(readableBuffer(i), current.size()), i * 7);
-			fullBytes += current.size();
-		}
-		long fullNanos = System.nanoTime() - fullStarted;
-		long compactStarted = System.nanoTime();
-		long compactChecksum = checksum(readableBuffer(SNAPSHOT), buffer(SNAPSHOT).size());
-		long compactNanos = System.nanoTime() - compactStarted;
-		return new ReadbackStats(fullBytes, buffer(SNAPSHOT).size(), fullNanos, compactNanos, fullChecksum, compactChecksum);
-	}
-
-	private long checksum(ByteBuffer bytes, long byteCount) {
-		long checksum = 0xcbf29ce484222325L;
-		for (int i = 0; i < byteCount; i += 4) checksum = (checksum ^ Integer.toUnsignedLong(bytes.getInt(i))) * 0x100000001b3L;
-		return checksum;
+		GpuReadback.Measurements measurements = readback.measure(SNAPSHOT);
+		return new ReadbackStats(measurements.fullBytes(), measurements.compactBytes(), measurements.fullNanos(),
+				measurements.compactNanos(), measurements.fullChecksum(), measurements.compactChecksum());
 	}
 
 	private void recordAndSubmit(boolean fullStep) {
 		long started = System.nanoTime();
-		SubmissionSlot slot = acquireSubmissionSlot();
+		GpuStepScheduler.SubmissionSlot slot = scheduler.acquire();
 		int physicalSubsteps = fullStep ? PHYSICAL_SUBSTEPS : 1;
 		recordingTimeStep = config.timeStep() / physicalSubsteps;
 		try (MemoryStack stack = stackPush()) {
-			check(vkResetCommandPool(device, slot.commandPool(), 0), "vkResetCommandPool(step-ring)");
-			recordingCommandBuffer = slot.commandBuffer();
-			VkCommandBufferBeginInfo begin = VkCommandBufferBeginInfo.calloc(stack).sType$Default();
-			check(vkBeginCommandBuffer(recordingCommandBuffer, begin), "vkBeginCommandBuffer(step-ring)");
+			recordingCommandBuffer = scheduler.begin(slot, "step-ring");
 			if (fullStep && slot.timestampQueryPool() != VK_NULL_HANDLE) {
 				vkCmdResetQueryPool(recordingCommandBuffer, slot.timestampQueryPool(), 0, 2);
 				vkCmdWriteTimestamp(recordingCommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, slot.timestampQueryPool(), 0);
 			}
-			vkCmdBindPipeline(recordingCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-			vkCmdBindDescriptorSets(recordingCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptorSet), null);
+			bindings.bind(recordingCommandBuffer, stack);
 			VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack);
 			barrier.get(0).sType$Default().srcAccessMask(VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT)
 					.dstAccessMask(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
 			vkCmdPipelineBarrier(recordingCommandBuffer, VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
 					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, barrier, null, null);
-			ByteBuffer push = stack.malloc(PUSH_BYTES);
+			ByteBuffer push = stack.malloc(FlipKernelBindings.PUSH_BYTES);
 			for (int physicalSubstep = 0; physicalSubstep < physicalSubsteps; physicalSubstep++) {
 				dispatch(push, STAGE_CLEAR, 0, maxGridCount());
 				computeBarrier(barrier);
@@ -511,11 +460,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			if (fullStep && slot.timestampQueryPool() != VK_NULL_HANDLE) {
 				vkCmdWriteTimestamp(recordingCommandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, slot.timestampQueryPool(), 1);
 			}
-			check(vkEndCommandBuffer(recordingCommandBuffer), "vkEndCommandBuffer(step-ring)");
-			VkSubmitInfo.Buffer submit = VkSubmitInfo.calloc(1, stack);
-			submit.get(0).sType$Default().pCommandBuffers(stack.pointers(recordingCommandBuffer));
-			check(vkResetFences(device, stack.longs(slot.fence())), "vkResetFences(step-ring)");
-			check(vkQueueSubmit(queue, submit, slot.fence()), "vkQueueSubmit(step-ring)");
+			scheduler.submitAsync(stack, slot, "step-ring", completed -> completeSubmission(completed, fullStep));
 		}
 		finally {
 			recordingCommandBuffer = null;
@@ -523,36 +468,17 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		}
 		long schedulingNanos = System.nanoTime() - started;
 		if (fullStep) lastStepNanos = schedulingNanos;
-		slot.completion = completionExecutor.submit(() -> completeSubmission(slot, fullStep));
-		maximumOutstandingSubmissions = Math.max(maximumOutstandingSubmissions, outstandingSubmissionCount());
 	}
 
-	private void completeSubmission(SubmissionSlot slot, boolean fullStep) {
-		try (MemoryStack stack = stackPush()) {
-			waitForFence(stack, slot, "step-ring");
-			if (fullStep && slot.timestampQueryPool() != VK_NULL_HANDLE) {
-				long gpuStepNanos = readGpuTimestamp(stack, slot.timestampQueryPool());
-				lastGpuStepNanos = gpuStepNanos;
-				synchronized (capturedGpuStepNanos) {
-					if (captureGpuStepTimings) capturedGpuStepNanos.add(gpuStepNanos);
-				}
+	private void completeSubmission(GpuStepScheduler.SubmissionSlot slot, boolean fullStep) {
+		if (fullStep && slot.timestampQueryPool() != VK_NULL_HANDLE) {
+			long gpuStepNanos = scheduler.readTimestampNanos(slot);
+			lastGpuStepNanos = gpuStepNanos;
+			synchronized (capturedGpuStepNanos) {
+				if (captureGpuStepTimings) capturedGpuStepNanos.add(gpuStepNanos);
 			}
-			updateCachedDiagnostics(slot.stagingBuffer().bytes(buffer(DIAGNOSTICS).size()));
 		}
-	}
-
-	private long readGpuTimestamp(MemoryStack stack, long queryPool) {
-		LongBuffer timestamps = stack.mallocLong(2);
-		check(vkGetQueryPoolResults(device, queryPool, 0, 2, timestamps, Long.BYTES,
-				VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT), "vkGetQueryPoolResults(timestamp)");
-		long ticks;
-		if (timestampValidBits == Long.SIZE) {
-			ticks = timestamps.get(1) - timestamps.get(0);
-		} else {
-			long mask = (1L << timestampValidBits) - 1L;
-			ticks = (timestamps.get(1) - timestamps.get(0)) & mask;
-		}
-		return Math.max(1L, Math.round(ticks * (double) timestampPeriodNanos));
+		updateCachedDiagnostics(slot.stagingBuffer().bytes(buffer(DIAGNOSTICS).size()));
 	}
 
 	private void solvePressure(ByteBuffer push, VkMemoryBarrier.Buffer barrier) {
@@ -647,21 +573,18 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		}
 	}
 
-	private void uploadInitialState(SubmissionSlot slot) {
+	private void uploadInitialState(GpuStepScheduler.SubmissionSlot slot) {
 		try (MemoryStack stack = stackPush()) {
-			check(vkResetCommandPool(device, slot.commandPool(), 0), "vkResetCommandPool(upload)");
-			recordingCommandBuffer = slot.commandBuffer();
-			VkCommandBufferBeginInfo begin = VkCommandBufferBeginInfo.calloc(stack).sType$Default();
-			check(vkBeginCommandBuffer(recordingCommandBuffer, begin), "vkBeginCommandBuffer(upload)");
+			recordingCommandBuffer = scheduler.begin(slot, "upload");
 			VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack);
 			barrier.get(0).sType$Default().srcAccessMask(VK_ACCESS_HOST_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
 			vkCmdPipelineBarrier(recordingCommandBuffer, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, barrier, null, null);
-			copyBuffer(stack, bulkTransferBuffer, buffer(POSITIONS), buffer(POSITIONS).size());
+			copyBuffer(stack, readback.transferBuffer(), buffer(POSITIONS), buffer(POSITIONS).size());
 			vkCmdFillBuffer(recordingCommandBuffer, buffer(VELOCITIES).handle(), 0, buffer(VELOCITIES).size(), 0);
 			vkCmdFillBuffer(recordingCommandBuffer, buffer(SOLIDS).handle(), 0, buffer(SOLIDS).size(), 0);
 			barrier.get(0).srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
 			vkCmdPipelineBarrier(recordingCommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, barrier, null, null);
-			submitAndWait(stack, slot, "upload");
+			scheduler.submitAndWait(stack, slot, "upload");
 		}
 		finally { recordingCommandBuffer = null; }
 	}
@@ -678,134 +601,30 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		return count;
 	}
 
-	private void uploadSolidMask(SubmissionSlot slot) {
+	private void uploadSolidMask(GpuStepScheduler.SubmissionSlot slot) {
 		try (MemoryStack stack = stackPush()) {
-			check(vkResetCommandPool(device, slot.commandPool(), 0), "vkResetCommandPool(solids)");
-			recordingCommandBuffer = slot.commandBuffer();
-			VkCommandBufferBeginInfo begin = VkCommandBufferBeginInfo.calloc(stack).sType$Default();
-			check(vkBeginCommandBuffer(recordingCommandBuffer, begin), "vkBeginCommandBuffer(solids)");
+			recordingCommandBuffer = scheduler.begin(slot, "solids");
 			VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack);
 			barrier.get(0).sType$Default().srcAccessMask(VK_ACCESS_HOST_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
 			vkCmdPipelineBarrier(recordingCommandBuffer, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, barrier, null, null);
-			copyBuffer(stack, bulkTransferBuffer, buffer(SOLIDS), buffer(SOLIDS).size());
+			copyBuffer(stack, readback.transferBuffer(), buffer(SOLIDS), buffer(SOLIDS).size());
 			barrier.get(0).srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
 			vkCmdPipelineBarrier(recordingCommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, barrier, null, null);
-			submitAndWait(stack, slot, "solids");
+			scheduler.submitAndWait(stack, slot, "solids");
 		}
 		finally { recordingCommandBuffer = null; }
 	}
 
-	private ByteBuffer readableBuffer(int index) {
-		return readableBuffer(index, buffer(index).size());
-	}
-
-	private ByteBuffer readableBuffer(int index, long byteCount) {
-		awaitSubmittedWork();
-		GpuBuffer source = buffer(index);
-		if (byteCount < 0L || byteCount > source.size()) throw new IllegalArgumentException("Readback byte range exceeds source buffer");
-		if (memoryMode == MemoryMode.HOST_VISIBLE) return source.bytes(byteCount);
-		return copyDeviceBufferToHost(source, byteCount);
-	}
-
-	private ByteBuffer copiedBuffer(int index) {
-		return copiedBuffer(index, buffer(index).size());
-	}
-
-	private ByteBuffer copiedBuffer(int index, long byteCount) {
-		GpuBuffer source = buffer(index);
-		if (byteCount < 0L || byteCount > source.size()) throw new IllegalArgumentException("Copy byte range exceeds source buffer");
-		ByteBuffer readable = readableBuffer(index, byteCount).duplicate().order(ByteOrder.nativeOrder());
-		readable.position(0).limit(Math.toIntExact(byteCount));
-		ByteBuffer copy = ByteBuffer.allocate(Math.toIntExact(byteCount)).order(ByteOrder.nativeOrder());
-		copy.put(readable).flip();
-		return copy;
-	}
-
-	private ByteBuffer copyDeviceBufferToHost(GpuBuffer source, long byteCount) {
-		SubmissionSlot slot = acquireSubmissionSlot();
-		if (byteCount > source.size() || byteCount > bulkTransferBuffer.size()) {
-			throw new IllegalArgumentException("Bulk transfer staging buffer too small");
-		}
-		try (MemoryStack stack = stackPush()) {
-			check(vkResetCommandPool(device, slot.commandPool(), 0), "vkResetCommandPool(readback)");
-			recordingCommandBuffer = slot.commandBuffer();
-			VkCommandBufferBeginInfo begin = VkCommandBufferBeginInfo.calloc(stack).sType$Default();
-			check(vkBeginCommandBuffer(recordingCommandBuffer, begin), "vkBeginCommandBuffer(readback)");
-			VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack);
-			barrier.get(0).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
-			vkCmdPipelineBarrier(recordingCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, barrier, null, null);
-			copyBuffer(stack, source, bulkTransferBuffer, byteCount);
-			barrier.get(0).srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT);
-			vkCmdPipelineBarrier(recordingCommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, barrier, null, null);
-			submitAndWait(stack, slot, "readback");
-		}
-		finally { recordingCommandBuffer = null; }
-		return bulkTransferBuffer.bytes(byteCount);
-	}
+	private ByteBuffer readableBuffer(int index) { return readback.readableBuffer(index); }
+	private ByteBuffer readableBuffer(int index, long byteCount) { return readback.readableBuffer(index, byteCount); }
+	private ByteBuffer copiedBuffer(int index) { return readback.copiedBuffer(index); }
+	private ByteBuffer copiedBuffer(int index, long byteCount) { return readback.copiedBuffer(index, byteCount); }
 
 	private void copyBuffer(MemoryStack stack, GpuBuffer source, GpuBuffer destination, long bytes) {
-		VkBufferCopy.Buffer region = VkBufferCopy.calloc(1, stack);
-		region.get(0).srcOffset(0).dstOffset(0).size(bytes);
-		vkCmdCopyBuffer(requireRecordingCommandBuffer(), source.handle(), destination.handle(), region);
+		GpuReadback.recordCopy(requireRecordingCommandBuffer(), stack, source, destination, bytes);
 	}
 
-	private void submitAndWait(MemoryStack stack, SubmissionSlot slot, String label) {
-		VkCommandBuffer commandBuffer = requireRecordingCommandBuffer();
-		check(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer(" + label + ")");
-		VkSubmitInfo.Buffer submit = VkSubmitInfo.calloc(1, stack);
-		submit.get(0).sType$Default().pCommandBuffers(stack.pointers(commandBuffer));
-		check(vkResetFences(device, stack.longs(slot.fence())), "vkResetFences(" + label + ")");
-		check(vkQueueSubmit(queue, submit, slot.fence()), "vkQueueSubmit(" + label + ")");
-		waitForFence(stack, slot, label);
-	}
-
-	private SubmissionSlot acquireSubmissionSlot() {
-		if (submissionRing.size() != SUBMISSION_RING_SIZE) throw new IllegalStateException("Vulkan submission ring is unavailable");
-		SubmissionSlot slot = submissionRing.get(nextSubmissionSlot);
-		nextSubmissionSlot = (nextSubmissionSlot + 1) % SUBMISSION_RING_SIZE;
-		awaitSlotCompletion(slot);
-		return slot;
-	}
-
-	private void awaitSubmittedWork() {
-		Throwable failure = null;
-		for (SubmissionSlot slot : submissionRing) {
-			try {
-				awaitSlotCompletion(slot);
-			} catch (RuntimeException | LinkageError exception) {
-				if (failure == null) failure = exception; else failure.addSuppressed(exception);
-			}
-		}
-		rethrow(failure);
-	}
-
-	private void awaitSlotCompletion(SubmissionSlot slot) {
-		Future<?> completion = slot.completion;
-		if (completion == null) return;
-		try {
-			completion.get();
-		} catch (InterruptedException exception) {
-			Thread.currentThread().interrupt();
-			throw new IllegalStateException("Interrupted while waiting for Vulkan submission ring", exception);
-		} catch (ExecutionException exception) {
-			Throwable cause = exception.getCause();
-			if (cause instanceof RuntimeException runtime) throw runtime;
-			if (cause instanceof Error error) throw error;
-			throw new IllegalStateException("Vulkan submission completion failed", cause);
-		} finally {
-			slot.completion = null;
-		}
-	}
-
-	private int outstandingSubmissionCount() {
-		int count = 0;
-		for (SubmissionSlot slot : submissionRing) if (slot.completion != null) count++;
-		return count;
-	}
-
-	private void waitForFence(MemoryStack stack, SubmissionSlot slot, String label) {
-		check(vkWaitForFences(device, stack.longs(slot.fence()), true, -1L), "vkWaitForFences(" + label + ")");
-	}
+	private void awaitSubmittedWork() { scheduler.awaitSubmittedWork(); }
 
 	private VkCommandBuffer requireRecordingCommandBuffer() {
 		if (recordingCommandBuffer == null) throw new IllegalStateException("No Vulkan command buffer is being recorded");
@@ -849,7 +668,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		push.putInt(multigridCellCount());
 		push.flip();
 		VkCommandBuffer commandBuffer = requireRecordingCommandBuffer();
-		vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
+		vkCmdPushConstants(commandBuffer, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
 		vkCmdDispatch(commandBuffer, groups(workItems), 1, 1);
 	}
 
@@ -911,261 +730,44 @@ final class VulkanFlipPipeline implements AutoCloseable {
 		return total;
 	}
 
-	private void createInstanceAndDevice(int deviceIndex) {
-		try (MemoryStack stack = stackPush()) {
-			VkApplicationInfo app = VkApplicationInfo.calloc(stack).sType$Default()
-					.pApplicationName(stack.UTF8("Matter, Motion & Mechanics 3D FLIP Probe")).applicationVersion(1)
-					.pEngineName(stack.UTF8("Matter, Motion & Mechanics")).engineVersion(1).apiVersion(VK_MAKE_API_VERSION(0,1,1,0));
-			VkInstanceCreateInfo instanceInfo = VkInstanceCreateInfo.calloc(stack).sType$Default().pApplicationInfo(app);
-			PointerBuffer instancePointer = stack.mallocPointer(1);
-			check(vkCreateInstance(instanceInfo, null, instancePointer), "vkCreateInstance");
-			instance = new VkInstance(instancePointer.get(0), instanceInfo);
-			IntBuffer count = stack.ints(0);
-			check(vkEnumeratePhysicalDevices(instance, count, null), "vkEnumeratePhysicalDevices(count)");
-			if (deviceIndex < 0 || deviceIndex >= count.get(0)) throw new IllegalArgumentException("GPU index " + deviceIndex + " not in [0," + count.get(0) + ")");
-			PointerBuffer physicalPointers = stack.mallocPointer(count.get(0));
-			check(vkEnumeratePhysicalDevices(instance, count, physicalPointers), "vkEnumeratePhysicalDevices(list)");
-			physicalDevice = new VkPhysicalDevice(physicalPointers.get(deviceIndex), instance);
-			VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.calloc(stack);
-			vkGetPhysicalDeviceProperties(physicalDevice, properties);
-			deviceName = properties.deviceNameString();
-			queueFamily = findComputeQueue(physicalDevice, stack);
-			timestampPeriodNanos = properties.limits().timestampPeriod();
-			timestampValidBits = timestampValidBits(physicalDevice, queueFamily, stack);
+	private GpuBuffer buffer(int index) { return resources.buffer(index); }
 
-			VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFeatures = VkPhysicalDeviceShaderAtomicFloatFeaturesEXT.calloc(stack).sType$Default();
-			VkPhysicalDeviceFeatures2 features = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default().pNext(atomicFeatures.address());
-			vkGetPhysicalDeviceFeatures2(physicalDevice, features);
-			if (!atomicFeatures.shaderBufferFloat32AtomicAdd()) throw new IllegalStateException(deviceName + " lacks shaderBufferFloat32AtomicAdd");
-			atomicFeatures.shaderBufferFloat32AtomicAdd(true).shaderBufferFloat32Atomics(true);
-			VkDeviceQueueCreateInfo.Buffer queueInfo = VkDeviceQueueCreateInfo.calloc(1, stack);
-			queueInfo.get(0).sType$Default().queueFamilyIndex(queueFamily).pQueuePriorities(stack.floats(1.0F));
-			VkDeviceCreateInfo deviceInfo = VkDeviceCreateInfo.calloc(stack).sType$Default().pNext(atomicFeatures.address())
-					.pQueueCreateInfos(queueInfo).ppEnabledExtensionNames(stack.pointers(stack.UTF8(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME)));
-			PointerBuffer devicePointer = stack.mallocPointer(1);
-			check(vkCreateDevice(physicalDevice, deviceInfo, null, devicePointer), "vkCreateDevice");
-			device = new VkDevice(devicePointer.get(0), physicalDevice, deviceInfo);
-			PointerBuffer queuePointer = stack.mallocPointer(1); vkGetDeviceQueue(device, queueFamily, 0, queuePointer);
-			queue = new VkQueue(queuePointer.get(0), device);
+	@Override
+	public void close() {
+		Throwable failure = null;
+		if (scheduler != null) {
+			try { scheduler.close(); }
+			catch (RuntimeException | LinkageError exception) { failure = exception; }
+			scheduler = null;
 		}
-	}
-
-	private void allocateBuffers() {
-		long particleBytes = Math.multiplyExact((long) config.maxParticles(), 4L * Float.BYTES);
-		addBuffer(particleBytes); addBuffer(particleBytes);
-		addBuffer((long) config.cellCount() * Float.BYTES); addBuffer((long) config.cellCount() * Integer.BYTES);
-		addBuffer((long) config.uCount() * Float.BYTES); addBuffer((long) config.uCount() * Float.BYTES); addBuffer((long) config.uCount() * Float.BYTES);
-		addBuffer((long) config.vCount() * Float.BYTES); addBuffer((long) config.vCount() * Float.BYTES); addBuffer((long) config.vCount() * Float.BYTES);
-		addBuffer((long) config.wCount() * Float.BYTES); addBuffer((long) config.wCount() * Float.BYTES); addBuffer((long) config.wCount() * Float.BYTES);
-		addBuffer((long) config.cellCount() * Float.BYTES); addBuffer((long) config.cellCount() * Float.BYTES);
-		addBuffer((long) config.cellCount() * Float.BYTES); addBuffer((long) config.cellCount() * Integer.BYTES);
-		addBuffer((long) config.cellCount() * Integer.BYTES); addBuffer(16L * Integer.BYTES);
-		addBuffer((long) multigridCellCount() * Float.BYTES); addBuffer((long) multigridCellCount() * Integer.BYTES);
-		addBuffer((long) multigridCellCount() * Float.BYTES); addBuffer((long) multigridCellCount() * Float.BYTES);
-		addBuffer((long) multigridCellCount() * Float.BYTES); addBuffer((long) multigridCellCount() * Float.BYTES);
-		addBuffer((long) multigridCellCount() * Float.BYTES); addBuffer((long) multigridCellCount() * Float.BYTES);
-		if (buffers.size() != BUFFER_COUNT) throw new IllegalStateException("Wrong GPU buffer count");
-		if (memoryMode == MemoryMode.DEVICE_LOCAL_STAGING) {
-			long bulkTransferBytes = 0L;
-			for (GpuBuffer buffer : buffers) bulkTransferBytes = Math.max(bulkTransferBytes, buffer.size());
-			bulkTransferBuffer = createBuffer(bulkTransferBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true);
+		if (readback != null) {
+			try { readback.close(); }
+			catch (RuntimeException | LinkageError exception) { failure = append(failure, exception); }
+			readback = null;
 		}
-	}
-
-	private void addBuffer(long bytes) {
-		int memoryProperties = memoryMode == MemoryMode.DEVICE_LOCAL_STAGING
-				? VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-				: VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-		buffers.add(createBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-				memoryProperties, memoryMode == MemoryMode.HOST_VISIBLE));
-	}
-
-	private GpuBuffer createBuffer(long bytes, int usage, int memoryProperties, boolean map) {
-		long handle = VK_NULL_HANDLE;
-		long memory = VK_NULL_HANDLE;
-		long mappedAddress = NULL;
-		try (MemoryStack stack = stackPush()) {
-			VkBufferCreateInfo info = VkBufferCreateInfo.calloc(stack).sType$Default().size(bytes)
-					.usage(usage).sharingMode(VK_SHARING_MODE_EXCLUSIVE);
-			LongBuffer bufferPointer = stack.mallocLong(1); check(vkCreateBuffer(device, info, null, bufferPointer), "vkCreateBuffer");
-			handle = bufferPointer.get(0);
-			VkMemoryRequirements requirements = VkMemoryRequirements.calloc(stack); vkGetBufferMemoryRequirements(device, handle, requirements);
-			int type = findMemoryType(requirements.memoryTypeBits(), memoryProperties, stack);
-			VkMemoryAllocateInfo allocation = VkMemoryAllocateInfo.calloc(stack).sType$Default().allocationSize(requirements.size()).memoryTypeIndex(type);
-			LongBuffer memoryPointer = stack.mallocLong(1); check(vkAllocateMemory(device, allocation, null, memoryPointer), "vkAllocateMemory");
-			memory = memoryPointer.get(0); check(vkBindBufferMemory(device, handle, memory, 0), "vkBindBufferMemory");
-			if (map) {
-				PointerBuffer mapped = stack.mallocPointer(1); check(vkMapMemory(device, memory, 0, bytes, 0, mapped), "vkMapMemory");
-				mappedAddress = mapped.get(0);
-				MemoryUtil.memSet(mappedAddress, 0, bytes);
-			}
-			return new GpuBuffer(handle, memory, mappedAddress, bytes);
-		} catch (RuntimeException | LinkageError exception) {
-			if (mappedAddress != NULL) vkUnmapMemory(device, memory);
-			if (handle != VK_NULL_HANDLE) vkDestroyBuffer(device, handle, null);
-			if (memory != VK_NULL_HANDLE) vkFreeMemory(device, memory, null);
-			throw exception;
+		if (bindings != null) {
+			try { bindings.close(); }
+			catch (RuntimeException | LinkageError exception) { failure = append(failure, exception); }
+			bindings = null;
 		}
-	}
-
-	private void createPipelineAndDescriptors() {
-		try (MemoryStack stack = stackPush()) {
-			VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(BUFFER_COUNT, stack);
-			for (int i = 0; i < BUFFER_COUNT; i++) bindings.get(i).binding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
-			VkDescriptorSetLayoutCreateInfo descriptorInfo = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(bindings);
-			LongBuffer layoutPointer = stack.mallocLong(1); check(vkCreateDescriptorSetLayout(device, descriptorInfo, null, layoutPointer), "vkCreateDescriptorSetLayout"); descriptorLayout = layoutPointer.get(0);
-			VkPushConstantRange.Buffer pushRange = VkPushConstantRange.calloc(1, stack); pushRange.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(PUSH_BYTES);
-			VkPipelineLayoutCreateInfo pipelineLayoutInfo = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default().pSetLayouts(stack.longs(descriptorLayout)).pPushConstantRanges(pushRange);
-			LongBuffer pipelineLayoutPointer = stack.mallocLong(1); check(vkCreatePipelineLayout(device, pipelineLayoutInfo, null, pipelineLayoutPointer), "vkCreatePipelineLayout"); pipelineLayout = pipelineLayoutPointer.get(0);
-			ByteBuffer spirv = compileShader(SHADER);
-			try {
-				VkShaderModuleCreateInfo shaderInfo = VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(spirv);
-				LongBuffer shaderPointer = stack.mallocLong(1); check(vkCreateShaderModule(device, shaderInfo, null, shaderPointer), "vkCreateShaderModule"); shaderModule = shaderPointer.get(0);
-			} finally { MemoryUtil.memFree(spirv); }
-			VkPipelineShaderStageCreateInfo stage = VkPipelineShaderStageCreateInfo.calloc(stack).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(shaderModule).pName(stack.UTF8("main"));
-			VkComputePipelineCreateInfo.Buffer pipelineInfo = VkComputePipelineCreateInfo.calloc(1, stack); pipelineInfo.get(0).sType$Default().stage(stage).layout(pipelineLayout);
-			LongBuffer pipelinePointer = stack.mallocLong(1); check(vkCreateComputePipelines(device, VK_NULL_HANDLE, pipelineInfo, null, pipelinePointer), "vkCreateComputePipelines"); pipeline = pipelinePointer.get(0);
-			VkDescriptorPoolSize.Buffer poolSize = VkDescriptorPoolSize.calloc(1, stack); poolSize.get(0).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(BUFFER_COUNT);
-			VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(poolSize);
-			LongBuffer poolPointer = stack.mallocLong(1); check(vkCreateDescriptorPool(device, poolInfo, null, poolPointer), "vkCreateDescriptorPool"); descriptorPool = poolPointer.get(0);
-			VkDescriptorSetAllocateInfo setInfo = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default().descriptorPool(descriptorPool).pSetLayouts(stack.longs(descriptorLayout));
-			LongBuffer setPointer = stack.mallocLong(1); check(vkAllocateDescriptorSets(device, setInfo, setPointer), "vkAllocateDescriptorSets"); descriptorSet = setPointer.get(0);
-			VkDescriptorBufferInfo.Buffer infos = VkDescriptorBufferInfo.calloc(BUFFER_COUNT, stack);
-			VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(BUFFER_COUNT, stack);
-			for (int i = 0; i < BUFFER_COUNT; i++) {
-				GpuBuffer buffer = buffer(i); infos.get(i).buffer(buffer.handle()).offset(0).range(buffer.size());
-				writes.get(i).sType$Default().dstSet(descriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(VkDescriptorBufferInfo.create(infos.get(i).address(), 1));
-			}
-			vkUpdateDescriptorSets(device, writes, null);
-			createSubmissionRing(stack);
+		if (resources != null) {
+			try { resources.close(); }
+			catch (RuntimeException | LinkageError exception) { failure = append(failure, exception); }
+			resources = null;
 		}
-		completionExecutor = Executors.newSingleThreadExecutor(task -> {
-			Thread thread = new Thread(task, "mmm-gpu-fence-completion");
-			thread.setDaemon(true);
-			return thread;
-		});
-	}
-
-	private void createSubmissionRing(MemoryStack stack) {
-		long stagingBytes = buffer(DIAGNOSTICS).size();
-		for (int index = 0; index < SUBMISSION_RING_SIZE; index++) {
-			GpuBuffer staging = createBuffer(stagingBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true);
-			long commandPool = VK_NULL_HANDLE, fence = VK_NULL_HANDLE, queryPool = VK_NULL_HANDLE;
-			try {
-				VkCommandPoolCreateInfo commandPoolInfo = VkCommandPoolCreateInfo.calloc(stack).sType$Default()
-						.flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT).queueFamilyIndex(queueFamily);
-				LongBuffer commandPoolPointer = stack.mallocLong(1);
-				check(vkCreateCommandPool(device, commandPoolInfo, null, commandPoolPointer), "vkCreateCommandPool(ring)");
-				commandPool = commandPoolPointer.get(0);
-				VkCommandBufferAllocateInfo commandInfo = VkCommandBufferAllocateInfo.calloc(stack).sType$Default()
-						.commandPool(commandPool).level(VK_COMMAND_BUFFER_LEVEL_PRIMARY).commandBufferCount(1);
-				PointerBuffer commandPointer = stack.mallocPointer(1);
-				check(vkAllocateCommandBuffers(device, commandInfo, commandPointer), "vkAllocateCommandBuffers(ring)");
-				VkCommandBuffer commandBuffer = new VkCommandBuffer(commandPointer.get(0), device);
-				VkFenceCreateInfo fenceInfo = VkFenceCreateInfo.calloc(stack).sType$Default();
-				LongBuffer fencePointer = stack.mallocLong(1);
-				check(vkCreateFence(device, fenceInfo, null, fencePointer), "vkCreateFence(ring)");
-				fence = fencePointer.get(0);
-				if (hasTimestampQueries()) {
-					VkQueryPoolCreateInfo queryInfo = VkQueryPoolCreateInfo.calloc(stack).sType$Default()
-							.queryType(VK_QUERY_TYPE_TIMESTAMP).queryCount(2);
-					LongBuffer queryPointer = stack.mallocLong(1);
-					check(vkCreateQueryPool(device, queryInfo, null, queryPointer), "vkCreateQueryPool(ring)");
-					queryPool = queryPointer.get(0);
-				}
-				submissionRing.add(new SubmissionSlot(index, staging, commandPool, commandBuffer, fence, queryPool));
-			} catch (RuntimeException | LinkageError exception) {
-				if (queryPool != VK_NULL_HANDLE) vkDestroyQueryPool(device, queryPool, null);
-				if (fence != VK_NULL_HANDLE) vkDestroyFence(device, fence, null);
-				if (commandPool != VK_NULL_HANDLE) vkDestroyCommandPool(device, commandPool, null);
-				destroyBuffer(staging);
-				throw exception;
-			}
+		if (deviceContext != null) {
+			try { deviceContext.close(); }
+			catch (RuntimeException | LinkageError exception) { failure = append(failure, exception); }
+			deviceContext = null;
 		}
-	}
-
-	private int findComputeQueue(VkPhysicalDevice physical, MemoryStack stack) {
-		IntBuffer count = stack.ints(0); vkGetPhysicalDeviceQueueFamilyProperties(physical, count, null);
-		VkQueueFamilyProperties.Buffer properties = VkQueueFamilyProperties.calloc(count.get(0), stack); vkGetPhysicalDeviceQueueFamilyProperties(physical, count, properties);
-		int fallback = -1;
-		for (int i = 0; i < properties.capacity(); i++) if ((properties.get(i).queueFlags() & VK_QUEUE_COMPUTE_BIT) != 0) { fallback = i; if ((properties.get(i).queueFlags() & VK_QUEUE_GRAPHICS_BIT) == 0) return i; }
-		if (fallback < 0) throw new IllegalStateException("No compute queue on selected device"); return fallback;
-	}
-
-	private static int timestampValidBits(VkPhysicalDevice physical, int queueFamily, MemoryStack stack) {
-		IntBuffer count = stack.ints(0);
-		vkGetPhysicalDeviceQueueFamilyProperties(physical, count, null);
-		VkQueueFamilyProperties.Buffer properties = VkQueueFamilyProperties.calloc(count.get(0), stack);
-		vkGetPhysicalDeviceQueueFamilyProperties(physical, count, properties);
-		return properties.get(queueFamily).timestampValidBits();
-	}
-
-	private int findMemoryType(int bits, int required, MemoryStack stack) {
-		VkPhysicalDeviceMemoryProperties memory = VkPhysicalDeviceMemoryProperties.calloc(stack); vkGetPhysicalDeviceMemoryProperties(physicalDevice, memory);
-		for (int i = 0; i < memory.memoryTypeCount(); i++) if ((bits & (1 << i)) != 0 && (memory.memoryTypes(i).propertyFlags() & required) == required) return i;
-		throw new IllegalStateException("No Vulkan memory type for required flags 0x" + Integer.toHexString(required));
-	}
-
-	private static ByteBuffer compileShader(String source) {
-		long compiler = org.lwjgl.util.shaderc.Shaderc.shaderc_compiler_initialize(); if (compiler == NULL) throw new IllegalStateException("Shaderc compiler unavailable");
-		long result = NULL;
-		try {
-			result = org.lwjgl.util.shaderc.Shaderc.shaderc_compile_into_spv(compiler, source, org.lwjgl.util.shaderc.Shaderc.shaderc_compute_shader, "mmm-flip.comp", "main", NULL);
-			if (result == NULL) throw new IllegalStateException("Shaderc returned NULL");
-			if (org.lwjgl.util.shaderc.Shaderc.shaderc_result_get_compilation_status(result) != org.lwjgl.util.shaderc.Shaderc.shaderc_compilation_status_success)
-				throw new IllegalStateException("FLIP shader compile failed: " + org.lwjgl.util.shaderc.Shaderc.shaderc_result_get_error_message(result));
-			ByteBuffer bytes = org.lwjgl.util.shaderc.Shaderc.shaderc_result_get_bytes(result); if (bytes == null) throw new IllegalStateException("Shaderc returned no SPIR-V");
-			ByteBuffer copy = MemoryUtil.memAlloc(bytes.remaining()); copy.put(bytes).flip(); return copy;
-		} finally { if (result != NULL) org.lwjgl.util.shaderc.Shaderc.shaderc_result_release(result); org.lwjgl.util.shaderc.Shaderc.shaderc_compiler_release(compiler); }
-	}
-
-	private GpuBuffer buffer(int index) { return buffers.get(index); }
-	private static void check(int result, String operation) { if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed with VkResult " + result); }
-	private static void rethrow(Throwable failure) {
 		if (failure instanceof RuntimeException runtime) throw runtime;
 		if (failure instanceof LinkageError linkage) throw linkage;
 	}
-	private void destroyBuffer(GpuBuffer buffer) {
-		if (buffer == null) return;
-		if (buffer.mappedAddress() != NULL) vkUnmapMemory(device, buffer.memory());
-		vkDestroyBuffer(device, buffer.handle(), null);
-		vkFreeMemory(device, buffer.memory(), null);
-	}
 
-	@Override public void close() {
-		Throwable completionFailure = null;
-		if (device != null) {
-			try { awaitSubmittedWork(); }
-			catch (RuntimeException | LinkageError exception) { completionFailure = exception; }
-			if (completionExecutor != null) {
-				completionExecutor.shutdown();
-				completionExecutor = null;
-			}
-			int idleResult = vkDeviceWaitIdle(device);
-			if (idleResult != VK_SUCCESS) {
-				IllegalStateException idleFailure = new IllegalStateException("vkDeviceWaitIdle(close) failed with VkResult " + idleResult);
-				if (completionFailure == null) completionFailure = idleFailure; else completionFailure.addSuppressed(idleFailure);
-			}
-			for (SubmissionSlot slot : submissionRing) {
-				if (slot.timestampQueryPool() != VK_NULL_HANDLE) vkDestroyQueryPool(device, slot.timestampQueryPool(), null);
-				if (slot.fence() != VK_NULL_HANDLE) vkDestroyFence(device, slot.fence(), null);
-				if (slot.commandPool() != VK_NULL_HANDLE) vkDestroyCommandPool(device, slot.commandPool(), null);
-				destroyBuffer(slot.stagingBuffer());
-			}
-			submissionRing.clear();
-			if (descriptorPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(device, descriptorPool, null);
-			if (pipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, pipeline, null);
-			if (shaderModule != VK_NULL_HANDLE) vkDestroyShaderModule(device, shaderModule, null);
-			if (pipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, pipelineLayout, null);
-			if (descriptorLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, descriptorLayout, null);
-			destroyBuffer(bulkTransferBuffer); bulkTransferBuffer = null;
-			for (GpuBuffer buffer : buffers) destroyBuffer(buffer);
-			buffers.clear(); vkDestroyDevice(device, null); device = null;
-		}
-		if (instance != null) { vkDestroyInstance(instance, null); instance = null; }
-		rethrow(completionFailure);
+	private static Throwable append(Throwable current, Throwable addition) {
+		if (current == null) return addition;
+		current.addSuppressed(addition);
+		return current;
 	}
 
 	record Config(int nx, int ny, int nz, float cellSize, float timeStep, float gravity, float density, int pressureIterations, int maxParticles) {
@@ -1185,38 +787,6 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	record ReadbackStats(long fullBytes, long compactBytes, long fullNanos, long compactNanos, long fullChecksum, long compactChecksum) { }
 	record HierarchyLevelStats(int level, int cells, int fluidCells, float maximumRhs, float maximumPressure,
 	                           float minimumPositiveDiagonal, float maximumDiagonal, float maximumWeight) { }
-	private static final class SubmissionSlot {
-		private final int index;
-		private final GpuBuffer stagingBuffer;
-		private final long commandPool;
-		private final VkCommandBuffer commandBuffer;
-		private final long fence;
-		private final long timestampQueryPool;
-		private volatile Future<?> completion;
-
-		private SubmissionSlot(int index, GpuBuffer stagingBuffer, long commandPool, VkCommandBuffer commandBuffer,
-		                       long fence, long timestampQueryPool) {
-			this.index = index;
-			this.stagingBuffer = stagingBuffer;
-			this.commandPool = commandPool;
-			this.commandBuffer = commandBuffer;
-			this.fence = fence;
-			this.timestampQueryPool = timestampQueryPool;
-		}
-
-		int index() { return index; }
-		GpuBuffer stagingBuffer() { return stagingBuffer; }
-		long commandPool() { return commandPool; }
-		VkCommandBuffer commandBuffer() { return commandBuffer; }
-		long fence() { return fence; }
-		long timestampQueryPool() { return timestampQueryPool; }
-	}
-	private record GpuBuffer(long handle, long memory, long mappedAddress, long size) {
-		FloatBuffer floats(long byteCount) { return MemoryUtil.memFloatBuffer(requireMapped(), Math.toIntExact(byteCount / Float.BYTES)); }
-		ByteBuffer bytes() { return bytes(size); }
-		ByteBuffer bytes(long byteCount) { return MemoryUtil.memByteBuffer(requireMapped(), Math.toIntExact(byteCount)).order(ByteOrder.nativeOrder()); }
-		private long requireMapped() { if (mappedAddress == NULL) throw new IllegalStateException("GPU buffer is not host mapped"); return mappedAddress; }
-	}
 	enum MemoryMode {
 		DEVICE_LOCAL_STAGING("device-local+staging"), HOST_VISIBLE("host-visible baseline");
 		private final String label;

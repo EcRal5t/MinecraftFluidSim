@@ -103,6 +103,8 @@ public final class GpuFlipProbeValidation {
 			try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device, mode,
 					VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL)) {
 				gpu.initializeObstacleDamBreak();
+				int initialSolidCells = gpu.solidCellCount();
+				require(initialSolidCells > 0, "initial upload lost obstacle solids in " + mode);
 				for (int step = 0; step < 4; step++) gpu.step();
 				VulkanFlipPipeline.Diagnostics diagnostics = gpu.diagnostics();
 				GpuProbeCheckpoint checkpoint = gpu.captureCheckpoint(4L);
@@ -112,7 +114,9 @@ public final class GpuFlipProbeValidation {
 						"checkpoint particle volume changed");
 				require(Math.abs(checkpoint.centerOfMassX() - diagnostics.centerOfMassX()) <= 1.0E-3F,
 						"checkpoint center of mass differs from completed GPU generation");
-				require(checkpoint.solidCellCount() > 0, "checkpoint lost obstacle solids");
+				require(checkpoint.solidCellCount() == initialSolidCells,
+						"checkpoint changed obstacle solids in " + mode + ": "
+								+ initialSolidCells + " -> " + checkpoint.solidCellCount());
 				long expectedCpuBytes = (long) checkpoint.particleCount() * 7L * Float.BYTES + config.cellCount();
 				long expectedReadbackBytes = (long) checkpoint.particleCount() * 8L * Float.BYTES
 						+ (long) config.cellCount() * Integer.BYTES;
