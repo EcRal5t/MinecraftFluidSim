@@ -13,13 +13,13 @@ CPU `FluidDomain` 是规范求解器聚合根。GPU probe、客户端 renderer�
 | 模块 | 职责 | 依赖边界 |
 |---|---|---|
 | `api` | stable ID、单位化 Query、committed event 与 typed quantity 契约 | 只依赖 JDK，不暴露 solver 数组或 Minecraft 类型 |
-| `core` | PIC/FLIP、材料、气体、化学、颗粒、热学、typed container truth 与候选状态 | 依赖 `api` 和纯 Java 库，不引用 Fabric/Minecraft |
+| `core` | PIC/FLIP、材料、气体、化学、颗粒、热学、typed container truth、候选状态与 loader-neutral application command/result/port | 依赖 `api` 和纯 Java 库，不引用 Fabric/Minecraft、NBT 或 network payload |
 | `fabric` | Mod 生命周期、世界读取/写入、NBT、数据包、网络、物品适配与命令 | 依赖并内嵌 `api`、`core`；服务器主线程拥有提交权；`ContainerItemStacks` 独占纯 Java 容器真值与 `ItemStack` component 的映射 |
 | `gpu-probe` | Vulkan 能力验证、只读对照和未来后端实验 | 数值部分依赖 `core`；Fabric 集成只以 compile-only 接入主 Mod |
 
 `FluidDomainState` 是完整、不可变的数值后端交接状态。motion 使用 `FluidStepRequest` / `FluidStepCandidate`，静水 thermal-only 轴使用 `FluidThermalStepRequest` / `FluidThermalStepCandidate`；两者都绑定 base generation 且只能返回其紧邻后继。`CpuFluidSolverBackend` 对两类请求都先恢复私有 `FluidDomain`，完整成功后才返回 candidate。未来 GPU 后端必须消费同一完整输入并返回同一完整 candidate；世界事务、ownership、actor、调度和 HEAD 发布不进入数值后端。
 
-生产 motion step、静水 thermal-only step 与测试侧 replay 都走完整候选边界：服务先捕获当前权威状态，motion 另冻结本次 moving-body 输入，再交给后端求完整候选；只有 candidate 的 backend id、紧邻 generation 和网格/预算布局全部校验通过后才原子替换 live solver。后端抛出的 typed 拒答不会改动 live domain，因此失败步既不会留下预先写入的 marker 冲量，也不会留下只完成传导或部分反应/相变的热轴状态。本步 thermal/granular 诊断随 candidate outcome 返回，不从 restore 后重置的 aggregate 字段猜测。
+生产 motion step、静水 thermal-only step 与测试侧 replay 都走完整候选边界。Fabric 先冻结 region UUID、expected solver generation、moving-body 和 phase budget，再交给 `RegionApplicationService`；`RegionRepository` 只提供完整 immutable capture 和 atomic adopt，不暴露 live domain。application 同时验证 backend id、紧邻 generation 与 `FluidDomainState.Layout`（网格/config/预算、sealed boundary、carrier kind、registry fingerprint、capability 与 thermal budget），port 在发布前按当前 live identity 重验。accepted result 只返回本步统计与 moving-body impulse，不把完整 candidate arrays 再交给 adapter。后端抛出的 typed 拒答不会改动 live domain，因此失败步既不会留下预先写入的 marker 冲量，也不会留下只完成传导或部分反应/相变的热轴状态。
 
 ## 组件与数据流
 
@@ -29,7 +29,11 @@ CPU `FluidDomain` 是规范求解器聚合根。GPU probe、客户端 renderer�
   -> world-local canonical registry snapshot + fingerprint
 
 Minecraft 命令、方块、容器、实体与 chunk 事件
-  -> FluidSimulationService                 世界主线程编排
+  -> FluidSimulationService                 校验/冻结 Minecraft facts
+  -> RegionApplicationService               loader-neutral command/result 编排
+       -> RegionRepository                  step capture/adopt
+       -> RegionCheckpointPort              expected-generation HEAD 发布
+       -> ControllerSummaryPort             bounded controller read model
   -> FluidRegionManager / FluidRegion       身份、预算、生命周期
   -> CollisionWorldPort                     捕获不可变碰撞场
   -> FluidDomain                            CPU aggregate、mechanics 与载体库存

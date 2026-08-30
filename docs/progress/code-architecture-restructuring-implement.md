@@ -218,6 +218,20 @@
 * validation 沿既有 `lifecycle` parity 表征增加 thermal-only candidate→restore→capture raw-bit 对照，并验证 backend 求值不修改原 live input；未新增 selector
 * S12 完整门通过：`lifecycle`、full `production-replay`、23 项 milestone 与 `verifyArchitecture`；full production replay 的 live 20 步 median/max 为 11.711/18.683 ms，phase-on production step 为 12.754 ms，均低于 40 ms
 
+### S12复审 (`6fa3567`)
+
+* S12 的 adopt “layout 校验”实际只核对网格、marker budget 与 solver config；future backend 仍可把 sealed boundary、carrier kind 或 registry/capability identity 换掉后被接受。新增 immutable `FluidDomainState.Layout`，把这些稳定定义与 thermal transport budget 一起绑定，existing lifecycle adoption 表征替换为明确的 layout-substitution 拒答
+* layout 重验使用 aggregate 的 cheap identity view，不为 adopt 再复制完整 marker/carrier state
+
+### S13 (`8b169d0`)
+
+* 新建 `core/.../application`：motion/thermal step、显式 checkpoint 和 controller summary 各有 loader-neutral command、封闭 result 与实际消费的窄 port；没有预建 ownership/container/entity/collision/snapshot 空接口
+* `RegionApplicationService` 接管 capture→backend→candidate identity/layout validation→atomic adopt。`FluidRegionRepository` 在发布前按当前 live generation/layout 再验证；accepted result 只返回 step stats 与 moving-body impulse，不把完整 candidate arrays 或 live domain 交回 Fabric
+* `/mmm regions checkpoint` 现在冻结 region UUID、expected checkpoint generation 与 container-WAL fact；pending WAL 在触达持久 port 前拒绝，`FluidRegionOperations` 作为 checkpoint adapter 重验 controller/loaded/generation/ownership 后才进入既有 HEAD 发布
+* controller summary 的 Minecraft 线程/距离/方块/owner 校验仍在 service；`ControllerSummaryAdapter` 只投影 use-case-specific bounded read model，application 绑定一次性 summary generation，UNLOADED inventory-unavailable 语义不变
+* `FluidSimulationService` 删除 summary 装配和直接 solver capture/adopt，降至 3249 行；architecture gate 新增 application 禁止 adapter/payload import 的自检规则
+* existing lifecycle 表征改为 application command/result 测试，覆盖 stale generation、backend mismatch、完整 layout substitution、checkpoint WAL 短路与 metadata-only summary；`lifecycle,protocol,region-state` 和 `verifyArchitecture` 通过
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。
@@ -239,3 +253,5 @@ revision 列由该切片的下一次提交补记，避免提交引用自身哈�
 * S12 删除旧 `FlipFluidDomain`，而不是为无仓库消费者的旧名保留 facade。`FluidDomain` 当前仍有 4031 行，组合的 authoritative owner/workspace/pipeline 已独立，但 application、fixture、collision 与一部分 mechanics seam 尚未迁完；其 size allowlist 明确延至 S21，不能把这些 seam 塞回 stage 或用压缩格式假装达标。
 * `FlipThermalState` 暂留 414 行 package-private 纯委托：它仍是 fluid-side persistence/reseed 类型到 `ThermalDomainState` 的适配边界。S12 不通过公开 thermal owner mutator 来强删它；待显式 thermal port 取代这些 fluid 类型后再删除。
 * S12 没有建立只把 `new FluidDomain` 包一层的伪 test fixture builder。当前 Fabric debug fixture 与 application transfer 仍需 aggregate 的受控构造/变更入口；这些调用按 S13–S16 用例迁移后，S21 才集中 test fixture 并收窄 public surface。
+* S13 没有照提案一次性创建 `OwnershipPort`、`ContainerActorPort`、`ContainerJournalRepository`、`CollisionWorldPort`、`EntityMotionPort` 和 `SnapshotSink`：本切片实际迁移的 step 已由 Fabric 在调用前冻结 moving-body facts，checkpoint 与 summary 也各自有窄 port；没有调用者的接口无法从用例倒推出原子性和失败语义。ownership/container ports 分别等待对应用例切片，collision/entity/snapshot 随 S15 tick 编排迁移。
+* application step result 不返回 `FluidStepCandidate`/`FluidThermalStepCandidate`。完整 state 只在 backend 与 repository adoption 边界内存在；Fabric 调度真正需要的是 accepted stats 与 moving-body impulse，借 result 暴露 candidate 会把不受限数组重新变成 adapter 的隐式读口。

@@ -54,6 +54,8 @@ HEAD 使用固定 `region-head` schema 并显式区分 `ACTIVE` / `REMOVED` kind
 
 HEAD 发布前，当前已提交 generation 仍是唯一权威状态。失败的 staging 和被拒绝 slot 不得被当作已提交状态，也不得覆盖原 HEAD。
 
+显式 controller checkpoint 先由 Minecraft adapter 冻结 region UUID、expected checkpoint generation 与 container-WAL presence，再经 loader-neutral `CheckpointRegionCommand` 进入 `RegionApplicationService`。pending WAL 在触达持久端口前拒绝；`RegionCheckpointPort` 在写入前重新查找同一 region 并核对 generation、controller/loaded 身份与 ownership lock。结果只使用封闭状态和 bounded diagnostic，Fabric 负责本地化；任何 stale、ownership 或 persistence 拒答都保留原 HEAD。
+
 具体发布序列为：
 
 1. 验证内存 `RegionState` 的形状与账本。

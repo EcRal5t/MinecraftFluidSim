@@ -7,23 +7,23 @@
 | 模块 | 类 | 基线行数 | 删除 allowlist 的切片 |
 |---|---|---:|---|
 | core | `FlipFluidDomain` | 7975 → 4067（S01–S11）→ S12 删除 | 已关闭 |
-| core | `FluidDomain` | S12 切换时 4031；已组合独立 owner/workspace/pipeline，残留 application/fixture seam | S21 |
-| fabric | `FluidSimulationService` | 3329 | S21 |
+| core | `FluidDomain` | S12 切换时 4031；S13 为 cheap layout identity 增至 4036 | S21 |
+| fabric | `FluidSimulationService` | 3329 → 3249（S13） | S21 |
 | fabric | `RegionState` | 1480 | S17 |
 | core | `FlipThermalState` | 1461 | S10 |
 | gpu-probe | `VulkanFlipPipeline` | 1237 | S20 |
 | fabric | `FluidTransferService` | 1121 | S16 |
 | fabric | `RegionStateFiles` | 1053 | S18 |
 
-超过 600 行但未超限的类只产生 warning，不进 allowlist（当前：`ClientFluidVolumeRenderer` 833、`AirNetwork` 807、`ContainerTransferStore` 768、`FluidRegionPersistence` 760、`ChemicalParcelStore` 681、`WorldCapabilityBundleStore` 677、`MmmCommands` 621、`GpuFlipProbeValidation` 617）。
+超过 600 行但未超限的类只产生 warning，不进 allowlist（当前：`ClientFluidVolumeRenderer` 833、`AirNetwork` 830、`ContainerTransferStore` 768、`FluidRegionPersistence` 760、`ChemicalParcelStore` 695、`WorldCapabilityBundleStore` 677、`MmmCommands` 621、`FluidRegion`/`GpuFlipProbeValidation` 617）。
 
 ## 模块规模
 
 | 模块 | 文件 | 行数 |
 |---|---:|---:|
 | `api/src/main` | 11 | 263 |
-| `core/src/main` | 135 | 27401 |
-| `fabric/src/main` | 119 | 24475 |
+| `core/src/main` | 204 | 32005 |
+| `fabric/src/main` | 121 | 24660 |
 | `fabric/src/client` | 8 | 1383 |
 | `gpu-probe/src/main` | 12 | 3867 |
 
@@ -37,6 +37,8 @@
 | core 包级环 | `cc.ecisr.mmm.fluid.air <-> cc.ecisr.mmm.thermal` | S10 |
 
 `network`/`item`/`block`/client 对 `FluidDomain`/`FlipThermalState` 的 import 当前为 0，规则立即生效，无方向 allowlist。
+
+`core/.../application` 禁止 import `simulation`、`network`、`block`、`item` 以及 loader 类型；S13 自检 fixture 固定这条规则。当前 application ports 只接触 immutable core handoff/read model，没有 live domain getter。
 
 ## 行为 characterization
 
