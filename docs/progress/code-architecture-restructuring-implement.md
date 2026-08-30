@@ -364,6 +364,14 @@
 * 删除两处真正的死表面：`regionAtBlock`（无任何调用者，`targets.regionAtBlock` 才是唯一实现）与 `cleanupContainerTransfers`（与 `recoverContainerTransfers` 逐字相同的别名，`tick` 改用后者）。
 * `verifyArchitecture`（395 个生产源）与 `containers`、`audit` 通过；无需进游戏：命令树与死成员清理不涉及视觉、真实 `VoxelShape` 或跨重启事务。
 
+### S19g
+
+* 先把 S19b 当作未受信任的回归修复复核：恢复后的 `chemstatus`/`granstatus` 与删除前版本逐项保持 admin permission、`audit(...)` 包装、消息正文和 `inventory.startsWith("region ")` 返回值规则；被删的 `regionAtBlock` 确无调用者，`cleanupContainerTransfers` 也只是 `recoverContainerTransfers` 的逐字别名。S19b 无需返工。
+* 接手时工作树已有未跟踪的 `ClientRegionSnapshotStore` 与 `FluidSurfaceGeometry` 草稿，但前者引用未声明的 `latestThermal`/`stagedBuffer`，后者把 fluid/material/granular/quad 四个职责重新塞进 521 行单类且依赖尚未迁出的嵌套 frame，不能编译，也不能作为已完成切片接线。本轮没有照草稿保留第二个 god geometry，而是沿真实 owner 边界收口整个客户端 renderer。
+* `ClientRegionSnapshotStore` 现在独占五类 payload ledger、各 region 最新 accepted frame、generation/sequence/tombstone 决策、200 ms 插值和按 dimension 发布的 immutable frame lists；`ChemicalFrame` 没有删除，因为 material surface 的 `chemicalArgb` 确实经 `MaterialFrame` 消费它。accept/clear 的同步边界和 thermal/material/granular 联动清理顺序保持原样。
+* fluid marching-tetrahedra/solid/gas/bounds、material/chemical surface、granular deposit/parcel 与共享 quad emission 分别进入 `FluidSurfaceGeometry`、`MaterialSurfaceGeometry`、`GranularSurfaceGeometry`、`QuadGeometry`；`FluidRenderBackend` 独占唯一 `StagedVertexBuffer`、pipeline/upload/execute/close。`ClientFluidVolumeRenderer` 只保留 store accept/extract、frame→builder→backend 编排和组合关闭，由 833 行降为 69 行，没有 ledger 或 GPU resource 双重 owner。
+* 结构对照除编译外还比较了旧 renderer 与七个新 owner 的数值 literal、字符串 literal 多重集，均完全一致；颜色、`SURFACE_THRESHOLD`、`ISO_LEVEL`、`MARKER_INTERIOR_LEVEL`、`SNAPSHOT_BLEND_NANOS`、vertex 顺序与 `DEBUG_FILLED_BOX` pipeline 未改。`compileClientJava`、`protocol` 与 `verifyArchitecture` 一次 Gradle 运行全部通过，架构门扫描 401 个生产源；本切片 client 生产源 8→14、行数 1383→1590，新增 207 行来自唯一 owner 边界与可读展开，最大新类 311 行。无需进游戏：这是逐方法结构搬移，自动编译/协议门和 literal parity 未发现视觉输入差异。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。
