@@ -1,11 +1,13 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
+import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.granular.GranularCouplingFields;
 import cc.ecisr.mmm.granular.GranularDepositDynamics;
 import cc.ecisr.mmm.granular.GranularParcelStore;
 import cc.ecisr.mmm.granular.GranularPhaseTransferEngine;
 import cc.ecisr.mmm.thermal.ThermalTransport;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 /** Constructs the thermochemistry pipeline from stage-specific state and capability seams. */
 final class ThermochemistryStageAssembly {
@@ -67,12 +69,49 @@ final class ThermochemistryStageAssembly {
 					@Override public float mergeVelocityDelta() { return domain.granularMergeVelocityDelta(); }
 					@Override public void markGridDirty() { domain.gridDirty = true; }
 				});
-		CondensedPhaseChangeStage condensed = new CondensedPhaseChangeStage(
-				(maximumOperations, phaseGridPrepared) ->
-						domain.stepInertPhaseChangeOnly(maximumOperations, phaseGridPrepared));
-		GasLiquidPhaseChangeStage gas = new GasLiquidPhaseChangeStage(
-				(maximumOperations, phaseGridPrepared) ->
-						domain.stepGasPhaseChangeOnly(maximumOperations, phaseGridPrepared));
+		PhaseChangeStageSupport phaseSupport = new PhaseChangeStageSupport(
+				new PhaseChangeStageSupport.Workspace(
+						domain.sizeX, domain.sizeY, domain.sizeZ, domain.cellCount,
+						domain.maximumParticleCount, domain.unitScale, domain.geometry,
+						domain.markerGrid, domain.projection, domain.particles, domain.gasState,
+						domain.pendingPhaseCellVolume, domain.thermalMarkerContext()),
+				new PhaseChangeStageSupport.Access() {
+					@Override public FlipThermalState thermalState() { return domain.thermalState; }
+					@Override public ChemicalParcelStore chemistry() { return domain.chemicalParcels; }
+					@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
+					@Override public GranularDomainState granularState() { return domain.granularState; }
+					@Override public float pressureReference() { return domain.pressureReference; }
+					@Override public int particleCell(int marker) { return domain.particleCellIndex(marker); }
+					@Override public int parcelCell(GranularParcelStore.Parcel parcel) {
+						return domain.granularParcelCell(parcel);
+					}
+					@Override public int firstOpenSlot(int cell, int first) {
+						return domain.firstOpenSlot(cell, first);
+					}
+					@Override public void removeParticle(int marker) { domain.removeParticleInternalPhase(marker); }
+					@Override public void spawnParticle(
+							int cellX, int cellY, int cellZ, int slot, float volume, int materialHandle,
+							double mass, ChemicalMixtureRecord mixture
+					) {
+						domain.spawnParticle(
+								cellX, cellY, cellZ, slot, volume, materialHandle, mass,
+								mixture, false, false);
+					}
+					@Override public SignedDyadic exactInternalEnergy() {
+						return domain.exactInternalEnergy();
+					}
+					@Override public void ensureGrid() { domain.ensureGrid(); }
+					@Override public void refreshGasTopology() { domain.gasTopologyCoordinator.refresh(); }
+					@Override public void refreshGasGeometry(
+							boolean topologyChanged, int changedCell, double markerVolumeDelta
+					) {
+						domain.refreshGasPhaseGeometry(topologyChanged, changedCell, markerVolumeDelta);
+					}
+					@Override public void refreshCoherentOccupancy() { domain.refreshCoherentOccupancy(); }
+					@Override public void markGridDirty() { domain.gridDirty = true; }
+				});
+		CondensedPhaseChangeStage condensed = new CondensedPhaseChangeStage(phaseSupport);
+		GasLiquidPhaseChangeStage gas = new GasLiquidPhaseChangeStage(phaseSupport);
 		return new Stages(transport, chemistry, granular, condensed, gas,
 				new ThermochemistryPipeline(transport, chemistry, granular, condensed, gas));
 	}
