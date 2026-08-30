@@ -701,7 +701,7 @@ public final class ContainerTransferStoreValidation {
 			domain.setVolume(1, 1, 1, 0.25F);
 			FluidRegion region = new FluidRegion(regionId, DIMENSION,
 					origin, domain, 64L, footprint);
-			FluidRegionPersistence persistence = new FluidRegionPersistence(root, TestProfiles.materials(), null, null, null, null);
+			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.materials(), null, null, null, null);
 			check(persistence.checkpoint(region) == 1L, "fixture did not publish its first checkpoint");
 
 			Path ownershipDirectory = root.resolve("mmm").resolve("ownership").resolve(regionId.toString());

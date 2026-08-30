@@ -10,7 +10,7 @@ import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.simulation.FluidRegion;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 import cc.ecisr.mmm.simulation.persistence.RegionState;
-import cc.ecisr.mmm.simulation.persistence.RegionStateFiles;
+import cc.ecisr.mmm.simulation.persistence.RegionGenerationStore;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
 import net.minecraft.nbt.CompoundTag;
@@ -181,21 +181,21 @@ public final class M6OwnershipValidation {
 	private static void testBootCleansFirstPublicationStaging() throws Exception {
 		withTemporaryWorld(root -> {
 			UUID regionId = UUID.randomUUID();
-			RegionStateFiles files = new RegionStateFiles(root);
+			RegionGenerationStore files = new RegionGenerationStore(root);
 			RegionState staged = RegionCheckpointFixtures.capture(populatedRegion(regionId), 1L);
 			files.prepare(staged, (point, path) -> { });
 			Path regionDirectory = root.resolve("mmm").resolve("region-state").resolve(regionId.toString());
 			check(Files.isDirectory(regionDirectory) && files.committedGeneration(regionId) == 0L,
 					"fixture did not create an uncommitted first publication");
 
-			RegionStateFiles reopened = new RegionStateFiles(root);
+			RegionGenerationStore reopened = new RegionGenerationStore(root);
 			reopened.recoverKnownFirstPublicationStaging();
 			check(!Files.exists(regionDirectory), "boot retained known headless first-publication staging");
 			check(reopened.discover().issues().isEmpty() && reopened.discover().manifests().isEmpty(),
 					"cleaned first publication remained globally locked");
 
 			UUID nestedForeignId = UUID.randomUUID();
-			RegionStateFiles nestedFiles = new RegionStateFiles(root);
+			RegionGenerationStore nestedFiles = new RegionGenerationStore(root);
 			nestedFiles.prepare(RegionCheckpointFixtures.capture(populatedRegion(nestedForeignId), 1L), (point, path) -> { });
 			Path nestedForeign = root.resolve("mmm").resolve("region-state")
 					.resolve(nestedForeignId.toString()).resolve("slot-a").resolve("foreign").resolve("payload.bin");
@@ -277,7 +277,7 @@ public final class M6OwnershipValidation {
 			// Real startup loads region metadata before ownership recovery. The absent HEAD proves the
 			// staged region is uncommitted; discarding it must not discard the ownership WAL needed to
 			// restore the already-mutated world.
-			new RegionStateFiles(root).recoverKnownFirstPublicationStaging();
+			new RegionGenerationStore(root).recoverKnownFirstPublicationStaging();
 			check(fixture.ownershipFiles().hasWAL(), "region staging cleanup deleted the ownership WAL");
 			OwnershipCoordinator.RecoveryResult recovery = recover(fixture, FailureInjector.NONE);
 			check(recovery.kind() == OwnershipCoordinator.RecoveryResult.Kind.ACQUIRE_ROLLED_BACK
@@ -623,7 +623,7 @@ public final class M6OwnershipValidation {
 	}
 
 	private record Fixture(
-			RegionStateFiles regionFiles,
+			RegionGenerationStore regionFiles,
 			OwnershipFiles ownershipFiles,
 			FakeWorld world,
 			UUID regionId
@@ -633,7 +633,7 @@ public final class M6OwnershipValidation {
 		}
 
 		Fixture(Path root, int blockCount, UUID regionId) {
-			this(new RegionStateFiles(root), new OwnershipFiles(root, regionId), new FakeWorld(entries(blockCount)), regionId);
+			this(new RegionGenerationStore(root), new OwnershipFiles(root, regionId), new FakeWorld(entries(blockCount)), regionId);
 		}
 	}
 

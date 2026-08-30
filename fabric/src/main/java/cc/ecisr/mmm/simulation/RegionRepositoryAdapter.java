@@ -3,51 +3,40 @@ package cc.ecisr.mmm.simulation;
 import cc.ecisr.mmm.model.region.RegionManifest;
 import cc.ecisr.mmm.model.region.RegionStateLayout;
 
-import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
-import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 import cc.ecisr.mmm.simulation.ownership.OwnershipCommitted;
-import cc.ecisr.mmm.simulation.ownership.OwnershipCoordinator;
 import cc.ecisr.mmm.simulation.ownership.OwnershipFiles;
-import cc.ecisr.mmm.simulation.ownership.OwnershipJournal;
 import cc.ecisr.mmm.simulation.ownership.OwnershipStore;
 import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
 import cc.ecisr.mmm.simulation.persistence.RegionCheckpointAssembler;
 import cc.ecisr.mmm.simulation.persistence.RegionCheckpointRestorer;
 import cc.ecisr.mmm.simulation.persistence.RegionState;
-import cc.ecisr.mmm.simulation.persistence.RegionStateFiles;
+import cc.ecisr.mmm.simulation.persistence.RegionGenerationStore;
 import cc.ecisr.mmm.simulation.persistence.RemovedRegionManifest;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
 import cc.ecisr.mmm.worldprofile.WorldCapability;
 import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
-import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.nbt.NbtUtils;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.state.BlockState;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
-/** Coordinates persistent controller state and its joint world-ownership transactions. */
-final class FluidRegionPersistence {
-	private final RegionStateFiles files;
+/** Minecraft repository adapter for checkpoint assembly, generation storage and live restore. */
+final class RegionRepositoryAdapter {
+	private final RegionGenerationStore files;
 	private final OwnershipStore ownershipStore;
 	private final WorldCapabilityProfile profile;
 	private final ChemicalRegistry chemicalRegistry;
@@ -56,7 +45,7 @@ final class FluidRegionPersistence {
 	private final GasRegistry gasRegistry;
 	private final int maximumThermalSubsteps;
 
-	FluidRegionPersistence(
+	RegionRepositoryAdapter(
 			Path worldRoot, WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,
 			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry, GasRegistry gasRegistry
 	) {
@@ -64,7 +53,7 @@ final class FluidRegionPersistence {
 				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 	}
 
-	FluidRegionPersistence(
+	RegionRepositoryAdapter(
 			Path worldRoot, WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,
 			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
 			int maximumThermalSubsteps
@@ -80,10 +69,10 @@ final class FluidRegionPersistence {
 			throw new IllegalArgumentException("Thermal registries are present without the thermal capability");
 		}
 		files = switch (profile.regionLayoutId()) {
-			case "pure", "material" -> new RegionStateFiles(worldRoot);
-			case "chemical" -> new RegionStateFiles(worldRoot, chemicalRegistry);
-			case "granular" -> new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry);
-			case "thermal" -> new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry,
+			case "pure", "material" -> new RegionGenerationStore(worldRoot);
+			case "chemical" -> new RegionGenerationStore(worldRoot, chemicalRegistry);
+			case "granular" -> new RegionGenerationStore(worldRoot, chemicalRegistry, granularRegistry);
+			case "thermal" -> new RegionGenerationStore(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry,
 					gasRegistry);
 			default -> throw new IllegalArgumentException("Unknown region layout " + profile.regionLayoutId());
 		};
@@ -100,17 +89,13 @@ final class FluidRegionPersistence {
 		this.maximumThermalSubsteps = maximumThermalSubsteps;
 	}
 
-	List<String> scanOwnershipIssues() {
-		return ownershipStore.scanIssues();
-	}
-
-	List<String> recoverUnfinishedOwnership(MinecraftServer server) {
-		return ownershipStore.recoverUnfinished(server);
+	OwnershipTransactionCoordinator newOwnershipTransactions() {
+		return new OwnershipTransactionCoordinator(this, files, ownershipStore);
 	}
 
 	List<String> loadMetadata(FluidRegionManager manager) {
 		List<String> issues = new ArrayList<>();
-		RegionStateFiles.Discovery discovery;
+		RegionGenerationStore.Discovery discovery;
 		try {
 			files.recoverKnownFirstPublicationStaging();
 			discovery = files.discover();
@@ -170,7 +155,7 @@ final class FluidRegionPersistence {
 			throw new IOException("Unresolved world ownership state blocks checkpoint: " + ownershipLock);
 		}
 		long generation = GenerationSequence.next(region.checkpointGeneration(), "Region checkpoint");
-		long published = files.publish(captureForFeatureGate(region, generation));
+		long published = files.publish(capture(region, generation));
 		if (!region.recordPublishedCheckpoint(published)) throw new IOException("Published checkpoint was not accepted by the live region");
 		return published;
 	}
@@ -187,7 +172,7 @@ final class FluidRegionPersistence {
 		files.requireRemovalQuarantineCapacity(region.id(), maximumEntries, maximumBytes);
 	}
 
-	RegionStateFiles.PreparedRemoval prepareRemoval(
+	RegionGenerationStore.PreparedRemoval prepareRemoval(
 			FluidRegion region, long networkTombstoneGeneration, UUID quarantineTransactionId,
 			long maximumEntries, long maximumBytes
 	) throws IOException {
@@ -197,19 +182,19 @@ final class FluidRegionPersistence {
 				maximumEntries, maximumBytes);
 	}
 
-	RemovedRegionManifest commitRemoval(RegionStateFiles.PreparedRemoval prepared) throws IOException {
+	RemovedRegionManifest commitRemoval(RegionGenerationStore.PreparedRemoval prepared) throws IOException {
 		return files.commitRemoval(prepared);
 	}
 
 	RemovedRegionManifest readRemoved(UUID regionId) throws IOException { return files.readRemoved(regionId); }
 
-	void abortRemoval(RegionStateFiles.PreparedRemoval prepared) throws IOException { files.abortRemoval(prepared); }
+	void abortRemoval(RegionGenerationStore.PreparedRemoval prepared) throws IOException { files.abortRemoval(prepared); }
 
-	Path convergeRemovalQuarantine(UUID regionId, long maximumEntries, long maximumBytes) throws IOException {
-		return files.convergeRemovalQuarantine(regionId, maximumEntries, maximumBytes);
+	Path convergeRemovalQuarantine(UUID regionId) throws IOException {
+		return files.convergeRemovalQuarantine(regionId);
 	}
 
-	List<String> recoverRemovedQuarantines(long maximumEntries, long maximumBytes) {
+	List<String> recoverRemovedQuarantines() {
 		ArrayList<String> failures = new ArrayList<>();
 		try {
 			for (RemovedRegionManifest removed : files.discover().removed()) {
@@ -218,7 +203,7 @@ final class FluidRegionPersistence {
 					failures.add("REMOVED " + removed.regionId() + " world capability identity 不匹配");
 					continue;
 				}
-				try { files.convergeRemovalQuarantine(removed.regionId(), maximumEntries, maximumBytes); }
+				try { files.convergeRemovalQuarantine(removed.regionId()); }
 				catch (IOException failure) { failures.add("REMOVED " + removed.regionId() + " quarantine 未收敛：" + failure.getMessage()); }
 			}
 		} catch (IOException failure) {
@@ -233,8 +218,8 @@ final class FluidRegionPersistence {
 		}
 		String ownershipLock = ownershipLockDescription(region);
 		if (ownershipLock != null) throw new IOException("Unresolved world ownership state blocks staging: " + ownershipLock);
-		RegionStateFiles.PreparedGeneration prepared = files.prepare(
-				captureForFeatureGate(region, targetGeneration), (point, path) -> { });
+		RegionGenerationStore.PreparedGeneration prepared = files.prepare(
+				capture(region, targetGeneration), (point, path) -> { });
 		return new StagedCheckpoint(prepared, prepared.manifestChecksum());
 	}
 
@@ -248,7 +233,7 @@ final class FluidRegionPersistence {
 		String ownershipLock = ownershipLockDescription(region);
 		if (ownershipLock != null) throw new IOException("Unresolved world ownership state blocks lifecycle staging: " + ownershipLock);
 		FluidRegion candidate = region.lifecycleCandidate(candidateDomain, true);
-		RegionStateFiles.PreparedGeneration prepared = files.prepare(
+		RegionGenerationStore.PreparedGeneration prepared = files.prepare(
 				captureForFeatureGate(candidate, targetGeneration, false), (point, path) -> { });
 		return new StagedCheckpoint(prepared, prepared.manifestChecksum());
 	}
@@ -268,7 +253,7 @@ final class FluidRegionPersistence {
 		files.abort(staged.prepared());
 	}
 
-	record StagedCheckpoint(RegionStateFiles.PreparedGeneration prepared, long manifestChecksum) { }
+	record StagedCheckpoint(RegionGenerationStore.PreparedGeneration prepared, long manifestChecksum) { }
 
 	/** Per-region fail-closed guard used for both loaded stepping and every ordinary checkpoint path. */
 	String ownershipLockDescription(FluidRegion region) {
@@ -292,200 +277,6 @@ final class FluidRegionPersistence {
 		} catch (IOException | RuntimeException invalid) {
 			return "ownership committed 状态不可读：" + invalid.getMessage();
 		}
-	}
-
-	int committedOwnershipBlockCount(FluidRegion region) throws IOException {
-		if (!region.controllerManaged()) return 0;
-		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
-		ownershipFiles.assertUnlockedForTransition();
-		if (!ownershipFiles.hasCommitted()) return 0;
-		OwnershipCommitted committed = ownershipFiles.readCommitted();
-		if (!committed.regionId().equals(region.id())
-				|| !committed.dimensionId().equals(region.dimension().identifier().toString())
-				|| committed.generation() > region.checkpointGeneration()) {
-			throw new IOException("Committed ownership does not match the active region identity");
-		}
-		return committed.ownedBlocks().size();
-	}
-
-
-	/**
-	 * Joint acquire: samples no fluid state of its own — the caller has already captured markers.
-	 * Stages the initial checkpoint, publishes the ownership WAL and WARNING, removes the vanilla
-	 * water, and publishes the region HEAD last as the sole commit point.
-	 */
-	List<OwnershipJournal.BlockEntry> scanOwnershipPreimage(
-			ServerLevel level, FluidRegionFootprint footprint
-	) throws IOException {
-		return scanPureWaterInterior(level, footprint);
-	}
-
-	void acquireOwnership(
-			ServerLevel level, FluidRegion region, List<OwnershipJournal.BlockEntry> candidates
-	) throws IOException {
-		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
-		candidates = List.copyOf(candidates);
-		if (candidates.isEmpty()) {
-			checkpoint(region);
-			return;
-		}
-		String dimensionId = region.dimension().identifier().toString();
-		long baseGeneration = files.committedGeneration(region.id());
-		long generation = GenerationSequence.next(baseGeneration, "Ownership acquire checkpoint");
-		if (!GenerationSequence.isNext(region.checkpointGeneration(), generation)) {
-			throw new IOException("Region checkpoint " + region.checkpointGeneration()
-					+ " is out of sync with its committed HEAD " + baseGeneration);
-		}
-		RegionState staged = captureForFeatureGate(region, generation);
-		String warning = OwnershipStore.warningText(ownershipStore.worldRoot(),
-				region.id(), dimensionId, OwnershipJournal.Operation.ACQUIRE,
-				baseGeneration, generation, candidates.size());
-		long publishedGeneration;
-		try {
-			OwnershipCoordinator.AcquireResult result = OwnershipCoordinator.acquire(
-					files, ownershipFiles, staged, candidates, warning,
-					OwnershipStore.worldAccess(level.getServer()), OwnershipCoordinator.FailureInjector.NONE);
-			publishedGeneration = result.generation();
-		} catch (IOException | RuntimeException failure) {
-			OwnershipCoordinator.RecoveryResult recovery;
-			try {
-				recovery = OwnershipCoordinator.recover(files, ownershipFiles,
-						OwnershipStore.worldAccess(level.getServer()), OwnershipCoordinator.FailureInjector.NONE);
-			} catch (IOException recoveryFailure) {
-				failure.addSuppressed(recoveryFailure);
-				throw failure;
-			}
-			if (recovery.kind() != OwnershipCoordinator.RecoveryResult.Kind.COMPLETED
-					|| files.committedGeneration(region.id()) != generation) {
-				throw failure;
-			}
-			publishedGeneration = generation;
-			MmmMod.LOGGER.warn(
-					"Controller ownership acquire for {} completed through in-process post-commit recovery",
-					region.id());
-		}
-		if (!region.recordPublishedCheckpoint(publishedGeneration)) {
-			throw new IOException("Acquired ownership checkpoint " + publishedGeneration
-					+ " was not accepted by the live region");
-		}
-	}
-
-	/**
-	 * Conservative release before persistent deletion: restores the authoritative solver first,
-	 * refuses while any condensed inventory remains, restores the vanilla preimage with player blocks winning, and never runs unless the
-	 * final region checkpoint can be staged and committed.
-	 */
-	ReleaseAttempt releaseOwnership(MinecraftServer server, FluidRegion region) {
-		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
-		long targetGeneration = -1L;
-		try {
-			if (!region.solverLoaded()) restore(region);
-			if (region.domain().particleCount() != 0 || region.domain().totalGranularSolidVolumeSvq() > 0L
-					|| region.domain().totalCoherentSolidVolumeSvq() > 0L) {
-				return ReleaseAttempt.refused("区域 " + region.id() + " 仍持有流体、颗粒或连续固相库存；请先 empty 后再移除");
-			}
-			if (!ownershipFiles.exists()) return ReleaseAttempt.NOT_OWNED;
-			ownershipFiles.assertUnlockedForTransition();
-			if (!ownershipFiles.hasCommitted()) {
-				ownershipFiles.deleteStore();
-				return ReleaseAttempt.NOT_OWNED;
-			}
-			OwnershipCommitted committed = ownershipFiles.readCommitted();
-			if (committed.ownedBlocks().isEmpty()) {
-				ownershipFiles.deleteStore();
-				return ReleaseAttempt.NOT_OWNED;
-			}
-			long baseGeneration = files.committedGeneration(region.id());
-			targetGeneration = GenerationSequence.next(baseGeneration, "Ownership release checkpoint");
-			RegionState staged = captureForFeatureGate(region, targetGeneration);
-			String warning = OwnershipStore.warningText(ownershipStore.worldRoot(),
-					region.id(), committed.dimensionId(), OwnershipJournal.Operation.RELEASE,
-					baseGeneration, targetGeneration, committed.ownedBlocks().size());
-			OwnershipCoordinator.ReleaseResult result = OwnershipCoordinator.release(files, ownershipFiles,
-					staged, warning, OwnershipStore.worldAccess(server), OwnershipCoordinator.FailureInjector.NONE);
-			if (!region.recordPublishedCheckpoint(result.generation())) {
-				throw new IOException("Release checkpoint " + result.generation() + " was not accepted by the live region");
-			}
-			ownershipFiles.deleteStore();
-			return new ReleaseAttempt(null, result.restoredBlocks(), result.skippedBlocks());
-		} catch (IOException | RuntimeException failure) {
-			OwnershipCoordinator.RecoveryResult recovery;
-			try {
-				recovery = OwnershipCoordinator.recover(files, ownershipFiles,
-						OwnershipStore.worldAccess(server), OwnershipCoordinator.FailureInjector.NONE);
-			} catch (IOException recoveryFailure) {
-				failure.addSuppressed(recoveryFailure);
-				MmmMod.LOGGER.error("World ownership release failed for region {}", region.id(), failure);
-				return ReleaseAttempt.refused("区域 " + region.id() + " ownership 解除失败：" + failure.getMessage());
-			}
-			try {
-				if (recovery.kind() == OwnershipCoordinator.RecoveryResult.Kind.COMPLETED
-						&& targetGeneration > 0L && files.committedGeneration(region.id()) == targetGeneration) {
-					if (!region.recordPublishedCheckpoint(targetGeneration)) {
-						throw new IOException("Recovered release checkpoint " + targetGeneration
-								+ " was not accepted by the live region");
-					}
-					ownershipFiles.deleteStore();
-					MmmMod.LOGGER.warn(
-							"Controller ownership release for {} completed through in-process post-commit recovery",
-							region.id());
-					return new ReleaseAttempt(null, recovery.restored(), recovery.skipped());
-				}
-			} catch (IOException recoveryValidationFailure) {
-				failure.addSuppressed(recoveryValidationFailure);
-			}
-			MmmMod.LOGGER.error("World ownership release failed for region {}", region.id(), failure);
-			return ReleaseAttempt.refused("区域 " + region.id() + " ownership 解除失败：" + failure.getMessage());
-		}
-	}
-
-	record ReleaseAttempt(String failure, int restoredBlocks, int skippedBlocks) {
-		static final ReleaseAttempt NOT_OWNED = new ReleaseAttempt(null, 0, 0);
-
-		static ReleaseAttempt refused(String failure) {
-			return new ReleaseAttempt(failure, 0, 0);
-		}
-	}
-
-	/** Read-only ownership reconciliation for one region; never mutates the world or the stores. */
-	String ownershipSummary(MinecraftServer server, FluidRegion region) {
-		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
-		if (!ownershipFiles.exists()) {
-			return region.id() + ": unowned（无 ownership 记录；原版水保留在世界中）";
-		}
-		if (ownershipFiles.isLocked()) {
-			return region.id() + ": 存在未解决事务（" + ownershipFiles.lockDescription() + "）";
-		}
-		if (!ownershipFiles.hasCommitted()) {
-			return region.id() + ": 无 committed 记录";
-		}
-		try {
-			OwnershipCoordinator.ReconcileResult result = OwnershipCoordinator.reconcile(
-					ownershipFiles, OwnershipStore.worldAccess(server));
-			if (result.ownedBlocks() == 0) {
-				return region.id() + ": 第 " + result.generation() + " 代，持有 0 个位置（已排空）";
-			}
-			return String.format("%s: 第 %d 代，持有 %d 个位置（air %d、玩家方块冲突 %d、原版水回流 %d）",
-					region.id(), result.generation(), result.ownedBlocks(), result.ownedAir(),
-					result.playerConflicts(), result.waterConflicts());
-		} catch (IOException exception) {
-			return region.id() + ": ownership 不可读或维度未加载（已锁定）：" + exception.getMessage();
-		}
-	}
-
-	private static List<OwnershipJournal.BlockEntry> scanPureWaterInterior(ServerLevel level, FluidRegionFootprint footprint)
-			throws IOException {
-		List<OwnershipJournal.BlockEntry> candidates = new ArrayList<>();
-		for (long packed : footprint.interiorBlocks()) {
-			BlockPos position = BlockPos.of(packed);
-			BlockState state = level.getBlockState(position);
-			if (state.is(Blocks.WATER)) {
-				candidates.add(new OwnershipJournal.BlockEntry(packed, NbtUtils.writeBlockState(state)));
-			}
-		}
-		candidates.sort(Comparator.comparingLong(OwnershipJournal.BlockEntry::packedPosition));
-		if (candidates.size() > 65_536) throw new IOException("Region interior holds too many water blocks to acquire");
-		return candidates;
 	}
 
 	void checkpointAndUnload(FluidRegion region) throws IOException {
@@ -561,7 +352,7 @@ final class FluidRegionPersistence {
 			throw new IOException("Unresolved world ownership state blocks previous-generation recovery: " + ownershipLock);
 		}
 
-		RegionStateFiles.PreviousGeneration previous = files.readPrevious(region.id(), expectedCurrentGeneration);
+		RegionGenerationStore.PreviousGeneration previous = files.readPrevious(region.id(), expectedCurrentGeneration);
 		RegionManifest manifest = previous.state().manifest();
 		if (manifest.layout() != RegionStateLayout.THERMAL) {
 			throw new IOException("Previous slot does not use the current thermal/gas region layout");
@@ -616,7 +407,7 @@ final class FluidRegionPersistence {
 				(float) manifest.totalVolume(), MinecraftRegionCheckpointSource.persistedRuntime(manifest.runtime()));
 	}
 
-	private RegionState captureForFeatureGate(FluidRegion region, long generation) throws IOException {
+	RegionState capture(FluidRegion region, long generation) throws IOException {
 		return captureForFeatureGate(region, generation, true);
 	}
 

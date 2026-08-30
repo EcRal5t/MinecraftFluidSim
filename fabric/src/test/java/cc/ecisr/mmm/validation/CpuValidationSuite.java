@@ -29,7 +29,7 @@ import cc.ecisr.mmm.simulation.ProductionFluidReplayValidation;
 import cc.ecisr.mmm.simulation.TakeoverJournalValidation;
 import cc.ecisr.mmm.simulation.controller.FluidBoundaryScannerValidation;
 import cc.ecisr.mmm.simulation.ownership.M6OwnershipValidation;
-import cc.ecisr.mmm.simulation.persistence.FluidRegionPersistenceValidation;
+import cc.ecisr.mmm.simulation.persistence.RegionRepositoryAdapterValidation;
 import cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStoreValidation;
 import cc.ecisr.mmm.simulation.persistence.WorldCapabilityStartupValidation;
 import cc.ecisr.mmm.fluid.M9ThermalValidation;
@@ -152,7 +152,7 @@ public final class CpuValidationSuite {
 		gate(gates, "cut-cell", () -> FlipCutCellValidation.main(NONE));
 		gate(gates, "shape", () -> FluidCutCellShapeValidation.main(NONE));
 		gate(gates, "region-state", () -> {
-			FluidRegionPersistenceValidation.main(NONE);
+			RegionRepositoryAdapterValidation.main(NONE);
 			M7RegionChemistryPersistenceValidation.main(NONE);
 			WorldCapabilityProfileValidation.main(NONE);
 			MaterialRegistryCodecValidation.main(NONE);

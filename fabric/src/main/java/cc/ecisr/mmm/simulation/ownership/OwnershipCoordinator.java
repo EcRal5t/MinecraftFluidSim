@@ -1,7 +1,7 @@
 package cc.ecisr.mmm.simulation.ownership;
 
 import cc.ecisr.mmm.simulation.persistence.RegionState;
-import cc.ecisr.mmm.simulation.persistence.RegionStateFiles;
+import cc.ecisr.mmm.simulation.persistence.RegionGenerationStore;
 import cc.ecisr.mmm.simulation.persistence.GenerationSequence;
 
 import java.io.IOException;
@@ -24,7 +24,7 @@ public final class OwnershipCoordinator {
 	private OwnershipCoordinator() { }
 
 	public static AcquireResult acquire(
-			RegionStateFiles regionFiles,
+			RegionGenerationStore regionFiles,
 			OwnershipFiles ownershipFiles,
 			RegionState target,
 			List<OwnershipJournal.BlockEntry> candidates,
@@ -38,7 +38,7 @@ public final class OwnershipCoordinator {
 		UUID regionId = target.manifest().regionId();
 		String dimensionId = target.manifest().dimensionId();
 
-		RegionStateFiles.PreparedGeneration prepared = regionFiles.prepare(target, (point, path) -> { });
+		RegionGenerationStore.PreparedGeneration prepared = regionFiles.prepare(target, (point, path) -> { });
 		try {
 			long baseGeneration = prepared.baseGeneration() == null ? 0L : prepared.baseGeneration();
 			if (!GenerationSequence.isNext(baseGeneration, target.manifest().checkpointGeneration())) {
@@ -87,7 +87,7 @@ public final class OwnershipCoordinator {
 
 	/** Caller must first refuse the release while the region still holds marker volume. */
 	public static ReleaseResult release(
-			RegionStateFiles regionFiles,
+			RegionGenerationStore regionFiles,
 			OwnershipFiles ownershipFiles,
 			RegionState target,
 			String warning,
@@ -105,7 +105,7 @@ public final class OwnershipCoordinator {
 		}
 		if (committed.ownedBlocks().isEmpty()) throw new IOException("Ownership registry holds no owned positions");
 
-		RegionStateFiles.PreparedGeneration prepared = regionFiles.prepare(target, (point, path) -> { });
+		RegionGenerationStore.PreparedGeneration prepared = regionFiles.prepare(target, (point, path) -> { });
 		try {
 			long baseGeneration = prepared.baseGeneration() == null ? 0L : prepared.baseGeneration();
 			if (!GenerationSequence.isNext(baseGeneration, target.manifest().checkpointGeneration())) {
@@ -156,7 +156,7 @@ public final class OwnershipCoordinator {
 	}
 
 	public static RecoveryResult recover(
-			RegionStateFiles regionFiles,
+			RegionGenerationStore regionFiles,
 			OwnershipFiles ownershipFiles,
 			WorldAccess world,
 			FailureInjector failures
@@ -204,7 +204,7 @@ public final class OwnershipCoordinator {
 
 	/** Pre-commit crash: the world returns to the pre-transition state; player blocks always win. */
 	private static RecoveryResult rollbackToBase(
-			RegionStateFiles regionFiles,
+			RegionGenerationStore regionFiles,
 			OwnershipFiles ownershipFiles,
 			WorldAccess world,
 			FailureInjector failures,

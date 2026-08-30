@@ -56,8 +56,7 @@ public final class ArchitectureDependencyValidation {
 	private static final Map<String, String> SIZE_ALLOWLIST = Map.of(
 			"FluidDomain", "S21",
 			"FluidSimulationService", "S21",
-			"VulkanFlipPipeline", "S20",
-			"RegionStateFiles", "S18");
+			"VulkanFlipPipeline", "S20");
 	private static final int SIZE_LIMIT = 1000;
 	private static final int SIZE_WARNING = 600;
 

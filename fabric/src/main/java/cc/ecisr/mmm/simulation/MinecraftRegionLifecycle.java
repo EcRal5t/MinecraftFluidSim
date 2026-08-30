@@ -132,7 +132,7 @@ public final class MinecraftRegionLifecycle {
 			return CommitResult.failed("message.mmm.lifecycle.candidate_failed", failure.getMessage());
 		}
 
-		FluidRegionPersistence.StagedCheckpoint staged = null;
+		RegionRepositoryAdapter.StagedCheckpoint staged = null;
 		long published;
 		try {
 			long targetGeneration = GenerationSequence.next(region.checkpointGeneration(), "Lifecycle checkpoint");
@@ -191,7 +191,7 @@ public final class MinecraftRegionLifecycle {
 
 	private CommitResult commitOwnershipRelease(MinecraftServer server, FluidRegion region) {
 		region.setPaused(true);
-		FluidRegionPersistence.ReleaseAttempt release = operations.releaseOwnership(server, region);
+		OwnershipTransactionCoordinator.ReleaseAttempt release = operations.releaseOwnership(server, region);
 		if (release.failure() != null) return CommitResult.failedDetail(release.failure());
 		return CommitResult.committed("message.mmm.lifecycle.release_committed",
 				release.restoredBlocks(), release.skippedBlocks());
@@ -206,7 +206,7 @@ public final class MinecraftRegionLifecycle {
 		} catch (IOException invalid) {
 			return CommitResult.failedDetail(invalid.getMessage());
 		}
-		cc.ecisr.mmm.simulation.persistence.RegionStateFiles.PreparedRemoval prepared = null;
+		cc.ecisr.mmm.simulation.persistence.RegionGenerationStore.PreparedRemoval prepared = null;
 		boolean committed = false;
 		try {
 			prepared = operations.prepareRemoval(region, tombstoneGeneration, UUID.randomUUID(),
@@ -222,7 +222,7 @@ public final class MinecraftRegionLifecycle {
 			FluidRegion runtimeOwner = regions.remove(region.id());
 			if (runtimeOwner != region) pending.add("runtime owner identity changed");
 			try {
-				operations.convergeRemovalQuarantine(region.id(), maximumQuarantineEntries, maximumQuarantineBytes);
+				operations.convergeRemovalQuarantine(region.id());
 			} catch (IOException quarantineFailure) {
 				pending.add("quarantine: " + quarantineFailure.getMessage());
 			}
@@ -252,8 +252,7 @@ public final class MinecraftRegionLifecycle {
 				}
 				regions.remove(region.id());
 				try {
-					operations.convergeRemovalQuarantine(region.id(), maximumQuarantineEntries,
-							maximumQuarantineBytes);
+					operations.convergeRemovalQuarantine(region.id());
 				} catch (IOException quarantineFailure) {
 					failure.addSuppressed(quarantineFailure);
 				}

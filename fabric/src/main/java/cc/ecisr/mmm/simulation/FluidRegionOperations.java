@@ -33,7 +33,8 @@ import java.util.function.Predicate;
 /** Persistence-backed availability and administration for regions; it never steps physics or changes world blocks. */
 final class FluidRegionOperations implements RegionCheckpointPort {
 	private final FluidRegionManager manager;
-	private final FluidRegionPersistence persistence;
+	private final RegionRepositoryAdapter persistence;
+	private final OwnershipTransactionCoordinator ownershipTransactions;
 	private final boolean worldProfileProven;
 	private final List<String> issues = new ArrayList<>();
 	private final Map<UUID, Long> retryAt = new HashMap<>();
@@ -58,8 +59,9 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 	) {
 		this.manager = manager;
 		this.worldProfileProven = worldProfileProven;
-		this.persistence = new FluidRegionPersistence(worldRoot, profile, chemicalRegistry, granularRegistry,
+		this.persistence = new RegionRepositoryAdapter(worldRoot, profile, chemicalRegistry, granularRegistry,
 				thermalRegistry, gasRegistry, maximumThermalSubsteps);
+		this.ownershipTransactions = persistence.newOwnershipTransactions();
 		creationLocked = configurationLocked || !worldProfileProven;
 		if (worldProfileProven) {
 			List<String> metadataIssues = persistence.loadMetadata(manager);
@@ -83,72 +85,72 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 	void requireRemovalQuarantineCapacity(FluidRegion region, long maximumEntries, long maximumBytes) throws IOException {
 		persistence.requireRemovalQuarantineCapacity(region, maximumEntries, maximumBytes);
 	}
-	cc.ecisr.mmm.simulation.persistence.RegionStateFiles.PreparedRemoval prepareRemoval(
+	cc.ecisr.mmm.simulation.persistence.RegionGenerationStore.PreparedRemoval prepareRemoval(
 			FluidRegion region, long networkGeneration, UUID transactionId, long maximumEntries, long maximumBytes
 	) throws IOException {
 		return persistence.prepareRemoval(region, networkGeneration, transactionId, maximumEntries, maximumBytes);
 	}
 	cc.ecisr.mmm.simulation.persistence.RemovedRegionManifest commitRemoval(
-			cc.ecisr.mmm.simulation.persistence.RegionStateFiles.PreparedRemoval prepared
+			cc.ecisr.mmm.simulation.persistence.RegionGenerationStore.PreparedRemoval prepared
 	) throws IOException { return persistence.commitRemoval(prepared); }
 	cc.ecisr.mmm.simulation.persistence.RemovedRegionManifest readRemoved(UUID regionId) throws IOException {
 		return persistence.readRemoved(regionId);
 	}
-	void abortRemoval(cc.ecisr.mmm.simulation.persistence.RegionStateFiles.PreparedRemoval prepared) throws IOException {
+	void abortRemoval(cc.ecisr.mmm.simulation.persistence.RegionGenerationStore.PreparedRemoval prepared) throws IOException {
 		persistence.abortRemoval(prepared);
 	}
-	Path convergeRemovalQuarantine(UUID id, long maximumEntries, long maximumBytes) throws IOException {
-		return persistence.convergeRemovalQuarantine(id, maximumEntries, maximumBytes);
+	Path convergeRemovalQuarantine(UUID id) throws IOException {
+		return persistence.convergeRemovalQuarantine(id);
 	}
-	void recoverRemovedQuarantines(long maximumEntries, long maximumBytes) {
-		List<String> failures = persistence.recoverRemovedQuarantines(maximumEntries, maximumBytes);
+	void recoverRemovedQuarantines() {
+		List<String> failures = persistence.recoverRemovedQuarantines();
 		issues.addAll(failures); creationLocked |= !failures.isEmpty();
 	}
-	FluidRegionPersistence.StagedCheckpoint stageCheckpoint(FluidRegion region, long target) throws IOException {
+	RegionRepositoryAdapter.StagedCheckpoint stageCheckpoint(FluidRegion region, long target) throws IOException {
 		return persistence.stageCheckpoint(region, target);
 	}
-	FluidRegionPersistence.StagedCheckpoint stageLifecycleCheckpoint(
+	RegionRepositoryAdapter.StagedCheckpoint stageLifecycleCheckpoint(
 			FluidRegion region, FluidDomain candidateDomain, long target
 	) throws IOException {
 		return persistence.stageLifecycleCheckpoint(region, candidateDomain, target);
 	}
-	long commitStagedLifecycleCheckpoint(FluidRegionPersistence.StagedCheckpoint staged) throws IOException {
+	long commitStagedLifecycleCheckpoint(RegionRepositoryAdapter.StagedCheckpoint staged) throws IOException {
 		return persistence.commitStagedLifecycleCheckpoint(staged);
 	}
-	long commitStagedCheckpoint(FluidRegion region, FluidRegionPersistence.StagedCheckpoint staged) throws IOException {
+	long commitStagedCheckpoint(FluidRegion region, RegionRepositoryAdapter.StagedCheckpoint staged) throws IOException {
 		return persistence.commitStagedCheckpoint(region, staged);
 	}
-	void abortStagedCheckpoint(FluidRegionPersistence.StagedCheckpoint staged) throws IOException {
+	void abortStagedCheckpoint(RegionRepositoryAdapter.StagedCheckpoint staged) throws IOException {
 		persistence.abortStagedCheckpoint(staged);
 	}
 	List<OwnershipJournal.BlockEntry> scanOwnershipPreimage(
 			ServerLevel level, FluidRegionFootprint footprint
 	) throws IOException {
-		return persistence.scanOwnershipPreimage(level, footprint);
+		return ownershipTransactions.scanPreimage(level, footprint);
 	}
 	void acquireOwnership(ServerLevel level, FluidRegion region,
 			List<OwnershipJournal.BlockEntry> candidates) throws IOException {
-		persistence.acquireOwnership(level, region, candidates);
+		ownershipTransactions.acquire(level, region, candidates);
 	}
 	List<String> scanOwnershipIssues() {
-		return worldProfileProven ? persistence.scanOwnershipIssues()
+		return worldProfileProven ? ownershipTransactions.scanIssues()
 				: List.of("world capability profile is not proven; ownership metadata was left unread");
 	}
 	List<String> recoverUnfinishedOwnership(MinecraftServer server) {
-		return worldProfileProven ? persistence.recoverUnfinishedOwnership(server)
+		return worldProfileProven ? ownershipTransactions.recoverUnfinished(server)
 				: List.of("world capability profile is not proven; ownership recovery was not attempted");
 	}
 	String ownershipLockDescription(FluidRegion region) { return persistence.ownershipLockDescription(region); }
 	int committedOwnershipBlockCount(FluidRegion region) throws IOException {
-		return persistence.committedOwnershipBlockCount(region);
+		return ownershipTransactions.committedBlockCount(region);
 	}
 
 	String ownershipSummary(MinecraftServer server, FluidRegion region) {
-		return persistence.ownershipSummary(server, region);
+		return ownershipTransactions.summary(server, region);
 	}
 
-	FluidRegionPersistence.ReleaseAttempt releaseOwnership(MinecraftServer server, FluidRegion region) {
-		return persistence.releaseOwnership(server, region);
+	OwnershipTransactionCoordinator.ReleaseAttempt releaseOwnership(MinecraftServer server, FluidRegion region) {
+		return ownershipTransactions.release(server, region);
 	}
 
 	boolean ensureAvailable(

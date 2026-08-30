@@ -235,7 +235,7 @@ final class MinecraftContainerTransactionAdapter {
 		}
 	}
 
-	private record Staged(FluidRegionPersistence.StagedCheckpoint checkpoint)
+	private record Staged(RegionRepositoryAdapter.StagedCheckpoint checkpoint)
 			implements ContainerTransferCoordinator.StagedCheckpoint {
 		@Override
 		public long manifestChecksum() { return checkpoint.manifestChecksum(); }

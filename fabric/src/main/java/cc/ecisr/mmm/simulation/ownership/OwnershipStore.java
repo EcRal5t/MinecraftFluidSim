@@ -4,7 +4,7 @@ import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
-import cc.ecisr.mmm.simulation.persistence.RegionStateFiles;
+import cc.ecisr.mmm.simulation.persistence.RegionGenerationStore;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
@@ -34,7 +34,7 @@ import java.util.UUID;
  */
 public final class OwnershipStore {
 	private final Path worldRoot;
-	private final RegionStateFiles regionFiles;
+	private final RegionGenerationStore regionFiles;
 
 	public OwnershipStore(Path worldRoot) {
 		this(worldRoot, null);
@@ -54,10 +54,10 @@ public final class OwnershipStore {
 	) {
 		this.worldRoot = worldRoot.toAbsolutePath().normalize();
 		this.regionFiles = thermalRegistry != null || gasRegistry != null
-				? new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry)
+				? new RegionGenerationStore(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry)
 				: granularRegistry == null
-					? chemicalRegistry == null ? new RegionStateFiles(worldRoot) : new RegionStateFiles(worldRoot, chemicalRegistry)
-					: new RegionStateFiles(worldRoot, chemicalRegistry, granularRegistry);
+					? chemicalRegistry == null ? new RegionGenerationStore(worldRoot) : new RegionGenerationStore(worldRoot, chemicalRegistry)
+					: new RegionGenerationStore(worldRoot, chemicalRegistry, granularRegistry);
 	}
 
 	public OwnershipFiles files(UUID regionId) {

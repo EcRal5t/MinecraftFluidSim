@@ -69,7 +69,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /** Standalone exact-ledger, codec, atomic-publication and metadata-only unload regression. */
-public final class FluidRegionPersistenceValidation {
+public final class RegionRepositoryAdapterValidation {
 	private static final FluidSolverConfig CONFIG = new FluidSolverConfig(
 			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
 	private static final ResourceKey<Registry<Level>> DIMENSION_REGISTRY = ResourceKey.createRegistryKey(
@@ -77,7 +77,7 @@ public final class FluidRegionPersistenceValidation {
 	private static final ResourceKey<Level> DIMENSION = ResourceKey.create(DIMENSION_REGISTRY,
 			Identifier.fromNamespaceAndPath("mmm", "persistence_validation"));
 
-	private FluidRegionPersistenceValidation() { }
+	private RegionRepositoryAdapterValidation() { }
 
 	public static void main(String[] args) throws Exception {
 		validateExactRoundTripAndMetadataUnload();
@@ -230,7 +230,7 @@ public final class FluidRegionPersistenceValidation {
 				"coherent composition did not round-trip the thermal section payload");
 
 		Path root = Files.createTempDirectory(Path.of("."), "thermal-region-");
-		RegionStateFiles files = new RegionStateFiles(root, null, granular, thermal, gas);
+		RegionGenerationStore files = new RegionGenerationStore(root, null, granular, thermal, gas);
 		files.publish(state);
 		assertThermalStateEquals(expected, restorer(files.read(region.id())).reconstructThermal(thermal));
 		require(restorer(files.read(region.id())).reconstructFiniteThermalDevices(thermal).equals(expectedDevices),
@@ -318,7 +318,7 @@ public final class FluidRegionPersistenceValidation {
 				"non-current granular section payload was accepted");
 
 		Path root = Files.createTempDirectory(Path.of("."), "granular-region-");
-		RegionStateFiles files = new RegionStateFiles(root, null, granular);
+		RegionGenerationStore files = new RegionGenerationStore(root, null, granular);
 		files.publish(state);
 		RegionState restored = files.read(region.id());
 		assertGranularStateEquals(expected, restorer(restored).reconstructGranular(granular));
@@ -363,7 +363,7 @@ public final class FluidRegionPersistenceValidation {
 		reactiveRoundTrip.validateSolidCompositionMasses(BuiltinChemicalDefinitions.REGISTRY);
 		assertGranularStateEquals(reactiveExpected, reactiveRoundTrip);
 		Path reactiveRoot = Files.createTempDirectory(Path.of("."), "reactive-granular-region-");
-		RegionStateFiles reactiveFiles = new RegionStateFiles(
+		RegionGenerationStore reactiveFiles = new RegionGenerationStore(
 				reactiveRoot, BuiltinChemicalDefinitions.REGISTRY, granular);
 		reactiveFiles.publish(reactiveState);
 		reactiveRegion.domain().removeAllGranularExact();
@@ -436,7 +436,7 @@ public final class FluidRegionPersistenceValidation {
 		}
 
 		Path root = Files.createTempDirectory(Path.of("."), "chemical-region-");
-		RegionStateFiles files = new RegionStateFiles(root, chemistry);
+		RegionGenerationStore files = new RegionGenerationStore(root, chemistry);
 		files.publish(state);
 		assertChemicalStateEquals(expected, restorer(files.read(region.id())).reconstructChemical(chemistry));
 
@@ -476,7 +476,7 @@ public final class FluidRegionPersistenceValidation {
 				.filter(path -> path.getFileName().toString().startsWith("section_"))
 				.findFirst().orElseThrow();
 		Files.delete(section);
-		RegionStateFiles.Discovery discovery = files.discover();
+		RegionGenerationStore.Discovery discovery = files.discover();
 		require(discovery.manifests().stream().noneMatch(value -> value.regionId().equals(region.id()))
 				&& discovery.issues().containsKey(regionDir),
 				"discovery admitted a chemical manifest whose committed section was missing");
@@ -567,7 +567,7 @@ public final class FluidRegionPersistenceValidation {
 				"pure manifest acquired material fields");
 
 		Path root = Files.createTempDirectory(Path.of("."), "material-region-");
-		RegionStateFiles files = new RegionStateFiles(root);
+		RegionGenerationStore files = new RegionGenerationStore(root);
 		files.publish(state);
 		FlipMaterialParticleState restored = restorer(files.read(region.id())).reconstructMaterial();
 		assertMaterialStateEquals(expected, restored);
@@ -584,7 +584,7 @@ public final class FluidRegionPersistenceValidation {
 		FlipParticleState before = region.domain().exportParticleState();
 		RegionState state = RegionCheckpointFixtures.capture(region, 1L);
 		require(state.sections().size() == 4, "cross-chunk controller was not split into four complete sections");
-		RegionStateFiles files = new RegionStateFiles(root);
+		RegionGenerationStore files = new RegionGenerationStore(root);
 		require(files.publish(state) == 1L, "first checkpoint generation was not published");
 		RegionManifest manifest = files.readManifest(region.id());
 		require(manifest.totalMarkerCount() == before.particleCount()
@@ -654,10 +654,10 @@ public final class FluidRegionPersistenceValidation {
 	}
 
 	private static void validateFaultMatrix() throws Exception {
-		for (RegionStateFiles.FaultPoint point : RegionStateFiles.FaultPoint.values()) {
+		for (RegionGenerationStore.FaultPoint point : RegionGenerationStore.FaultPoint.values()) {
 			Path root = Files.createTempDirectory(Path.of("."), "fault-" + point.name().toLowerCase() + "-");
 			FluidRegion region = populatedRegion(UUID.randomUUID());
-			RegionStateFiles files = new RegionStateFiles(root);
+			RegionGenerationStore files = new RegionGenerationStore(root);
 			RegionState first = RegionCheckpointFixtures.capture(region, 1L);
 			files.publish(first);
 			FlipParticleState firstParticles = restorer(first).reconstruct();
@@ -669,8 +669,8 @@ public final class FluidRegionPersistenceValidation {
 				files.publish(second, (observed, path) -> { if (observed == point) throw new IOException("injected " + point); });
 				throw new AssertionError("Fault point did not interrupt publication: " + point);
 			} catch (IOException expected) { }
-			RegionState reopened = new RegionStateFiles(root).read(region.id());
-			long expectedGeneration = point == RegionStateFiles.FaultPoint.AFTER_HEAD_PUBLISH ? 2L : 1L;
+			RegionState reopened = new RegionGenerationStore(root).read(region.id());
+			long expectedGeneration = point == RegionGenerationStore.FaultPoint.AFTER_HEAD_PUBLISH ? 2L : 1L;
 			require(reopened.manifest().checkpointGeneration() == expectedGeneration,
 					"fault exposed a mixed or unexpected generation at " + point);
 			require(reopened.manifest().layout() == RegionStateLayout.PURE, "fault changed the current pure-water layout");
@@ -681,7 +681,7 @@ public final class FluidRegionPersistenceValidation {
 	private static void validateCorruptionAndAtomicMoveFailure() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "corrupt-");
 		FluidRegion region = populatedRegion(UUID.randomUUID());
-		RegionStateFiles files = new RegionStateFiles(root);
+		RegionGenerationStore files = new RegionGenerationStore(root);
 		RegionState original = RegionCheckpointFixtures.capture(region, 1L);
 		RegionSectionState first = original.sections().getFirst();
 		RegionSectionState wrongOwner = signedSection(new RegionSectionState(UUID.randomUUID(), first.dimensionId(),
@@ -695,7 +695,7 @@ public final class FluidRegionPersistenceValidation {
 		require(region.recordPublishedCheckpoint(1L), "corruption fixture did not advance generation");
 		region.domain().setVolume(3, 2, 3, 0.5F);
 		RegionState second = RegionCheckpointFixtures.capture(region, 2L);
-		RegionStateFiles unsupported = new RegionStateFiles(root, (source, target, replace) -> {
+		RegionGenerationStore unsupported = new RegionGenerationStore(root, (source, target, replace) -> {
 			throw new AtomicMoveNotSupportedException(source.toString(), target.toString(), "validation");
 		});
 		expectIOException(() -> unsupported.publish(second), "unsupported atomic move did not fail closed");
@@ -709,19 +709,37 @@ public final class FluidRegionPersistenceValidation {
 		Path section = Files.list(slot).filter(path -> path.getFileName().toString().startsWith("section_")).findFirst().orElseThrow();
 		Files.delete(section);
 		expectIOException(() -> files.read(region.id()), "missing section was accepted");
-		RegionStateFiles.Discovery missingSection = files.discover();
+		RegionGenerationStore.Discovery missingSection = files.discover();
 		require(missingSection.manifests().isEmpty() && missingSection.issues().containsKey(regionDir),
 				"discovery admitted a manifest whose committed section was missing");
 
 		Path headRoot = Files.createTempDirectory(Path.of("."), "head-corrupt-");
 		FluidRegion headRegion = populatedRegion(UUID.randomUUID());
-		RegionStateFiles headFiles = new RegionStateFiles(headRoot);
+		RegionGenerationStore headFiles = new RegionGenerationStore(headRoot);
 		headFiles.publish(RegionCheckpointFixtures.capture(headRegion, 1L));
 		Path headPath = headRoot.resolve("mmm").resolve("region-state").resolve(headRegion.id().toString()).resolve("HEAD.nbt");
 		CompoundTag corruptHead = NbtIo.readCompressed(headPath, NbtAccounter.unlimitedHeap());
 		corruptHead.putLong("Checksum", corruptHead.getLongOr("Checksum", 0L) + 1L);
 		NbtIo.writeCompressed(corruptHead, headPath);
 		expectIOException(() -> headFiles.read(headRegion.id()), "corrupt HEAD checksum was accepted");
+
+		Path unknownRoot = Files.createTempDirectory(Path.of("."), "inactive-unknown-");
+		FluidRegion unknownRegion = populatedRegion(UUID.randomUUID());
+		RegionGenerationStore unknownFiles = new RegionGenerationStore(unknownRoot);
+		RegionState unknownFirst = RegionCheckpointFixtures.capture(unknownRegion, 1L);
+		unknownFiles.publish(unknownFirst);
+		Path unknownInactive = unknownRoot.resolve("mmm").resolve("region-state")
+				.resolve(unknownRegion.id().toString()).resolve("slot-b");
+		Files.createDirectory(unknownInactive);
+		Path foreignEvidence = unknownInactive.resolve("foreign.evidence");
+		Files.writeString(foreignEvidence, "retain");
+		unknownRegion.domain().setVolume(2, 2, 2, 0.25F);
+		RegionState unknownSecond = RegionCheckpointFixtures.capture(unknownRegion, 2L);
+		expectIOException(() -> unknownFiles.publish(unknownSecond),
+				"unknown inactive-slot evidence was overwritten by a checkpoint");
+		require(Files.readString(foreignEvidence).equals("retain")
+				&& unknownFiles.read(unknownRegion.id()).manifest().checkpointGeneration() == 1L,
+				"unknown inactive-slot evidence was not retained with the old HEAD authoritative");
 
 	}
 
@@ -730,10 +748,10 @@ public final class FluidRegionPersistenceValidation {
 		FluidRegion region = populatedRegion(UUID.randomUUID());
 		WorldCapabilityProfile profile = WorldCapabilityProfile.of(Set.of(), RegistryFingerprintSet.unbound());
 		RegionState active = RegionCheckpointFixtures.capture(region, 1L);
-		RegionStateFiles files = new RegionStateFiles(root);
+		RegionGenerationStore files = new RegionGenerationStore(root);
 		files.publish(active);
 		UUID transaction = UUID.randomUUID();
-		RegionStateFiles.PreparedRemoval prepared = files.prepareRemoval(region.id(), 1L,
+		RegionGenerationStore.PreparedRemoval prepared = files.prepareRemoval(region.id(), 1L,
 				active.manifest().checksum(), 2L, transaction, profile.profileFingerprint(),
 				profile.aggregateFingerprint(), 10_000L, 64L * 1024L * 1024L);
 		require(files.discover().manifests().size() == 1 && files.discover().removed().isEmpty(),
@@ -750,17 +768,17 @@ public final class FluidRegionPersistenceValidation {
 				&& removed.capabilityProfileFingerprint().equals(profile.profileFingerprint())
 				&& removed.registryAggregateFingerprint().equals(profile.aggregateFingerprint()),
 				"REMOVED HEAD lost active/profile/quarantine/network identity");
-		RegionStateFiles.Discovery discovery = files.discover();
+		RegionGenerationStore.Discovery discovery = files.discover();
 		require(discovery.manifests().isEmpty() && discovery.removed().equals(List.of(removed))
 				&& discovery.issues().isEmpty(), "REMOVED HEAD was admitted as an ACTIVE solver");
 		expectIOException(() -> files.read(region.id()), "REMOVED HEAD reconstructed an empty solver");
 		Path expectedQuarantine = root.resolve("mmm").resolve("quarantine").resolve("removed-region")
 				.resolve(region.id().toString()).resolve("2");
 		Files.createDirectories(expectedQuarantine);
-		Path quarantine = files.convergeRemovalQuarantine(region.id(), 10_000L, 64L * 1024L * 1024L);
+		Path quarantine = files.convergeRemovalQuarantine(region.id());
 		require(Files.isDirectory(quarantine.resolve("payload"))
 				&& Files.isRegularFile(quarantine.resolve("quarantine.nbt"))
-				&& files.convergeRemovalQuarantine(region.id(), 0L, 0L).equals(quarantine),
+				&& files.convergeRemovalQuarantine(region.id()).equals(quarantine),
 				"REMOVED quarantine did not converge idempotently after HEAD");
 		expectIOException(() -> files.publish(RegionCheckpointFixtures.capture(region, 2L)),
 				"REMOVED region UUID was reused by an ACTIVE publication");
@@ -768,9 +786,9 @@ public final class FluidRegionPersistenceValidation {
 		Path strictRoot = Files.createTempDirectory(Path.of("."), "removed-strict-");
 		FluidRegion strictRegion = populatedRegion(UUID.randomUUID());
 		RegionState strictActive = RegionCheckpointFixtures.capture(strictRegion, 1L);
-		RegionStateFiles strictFiles = new RegionStateFiles(strictRoot);
+		RegionGenerationStore strictFiles = new RegionGenerationStore(strictRoot);
 		strictFiles.publish(strictActive);
-		RegionStateFiles.PreparedRemoval strictPrepared = strictFiles.prepareRemoval(strictRegion.id(), 1L,
+		RegionGenerationStore.PreparedRemoval strictPrepared = strictFiles.prepareRemoval(strictRegion.id(), 1L,
 				strictActive.manifest().checksum(), 2L, UUID.randomUUID(), profile.profileFingerprint(),
 				profile.aggregateFingerprint(), 10_000L, 64L * 1024L * 1024L);
 		strictFiles.commitRemoval(strictPrepared);
@@ -779,16 +797,16 @@ public final class FluidRegionPersistenceValidation {
 		CompoundTag strictRemoved = NbtIo.readCompressed(strictRemovedPath, NbtAccounter.unlimitedHeap());
 		strictRemoved.putLong("Unknown", 1L);
 		NbtIo.writeCompressed(strictRemoved, strictRemovedPath);
-		RegionStateFiles.Discovery strictDiscovery = strictFiles.discover();
+		RegionGenerationStore.Discovery strictDiscovery = strictFiles.discover();
 		require(strictDiscovery.removed().isEmpty() && !strictDiscovery.issues().isEmpty(),
 				"REMOVED manifest accepted an extra authoritative field");
 
 		Path partialRoot = Files.createTempDirectory(Path.of("."), "removed-partial-");
 		FluidRegion partialRegion = populatedRegion(UUID.randomUUID());
 		RegionState partialActive = RegionCheckpointFixtures.capture(partialRegion, 1L);
-		RegionStateFiles partialFiles = new RegionStateFiles(partialRoot);
+		RegionGenerationStore partialFiles = new RegionGenerationStore(partialRoot);
 		partialFiles.publish(partialActive);
-		RegionStateFiles.PreparedRemoval partialPrepared = partialFiles.prepareRemoval(partialRegion.id(), 1L,
+		RegionGenerationStore.PreparedRemoval partialPrepared = partialFiles.prepareRemoval(partialRegion.id(), 1L,
 				partialActive.manifest().checksum(), 2L, UUID.randomUUID(), profile.profileFingerprint(),
 				profile.aggregateFingerprint(), 10_000L, 64L * 1024L * 1024L);
 		partialFiles.commitRemoval(partialPrepared);
@@ -797,16 +815,16 @@ public final class FluidRegionPersistenceValidation {
 				.resolve(partialRegion.id().toString()).resolve("2");
 		Files.createDirectories(partialDestination);
 		Files.move(partialRegionRoot.resolve(partialPrepared.activeSlot()), partialDestination.resolve("payload"));
-		partialFiles.convergeRemovalQuarantine(partialRegion.id(), 10_000L, 64L * 1024L * 1024L);
+		partialFiles.convergeRemovalQuarantine(partialRegion.id());
 		require(Files.isRegularFile(partialDestination.resolve("quarantine.nbt")),
 				"REMOVED recovery did not resume after payload move and before quarantine manifest");
 
 		Path thirdRoot = Files.createTempDirectory(Path.of("."), "removed-third-");
 		FluidRegion thirdRegion = populatedRegion(UUID.randomUUID());
 		RegionState thirdActive = RegionCheckpointFixtures.capture(thirdRegion, 1L);
-		RegionStateFiles thirdFiles = new RegionStateFiles(thirdRoot);
+		RegionGenerationStore thirdFiles = new RegionGenerationStore(thirdRoot);
 		thirdFiles.publish(thirdActive);
-		RegionStateFiles.PreparedRemoval thirdPrepared = thirdFiles.prepareRemoval(thirdRegion.id(), 1L,
+		RegionGenerationStore.PreparedRemoval thirdPrepared = thirdFiles.prepareRemoval(thirdRegion.id(), 1L,
 				thirdActive.manifest().checksum(), 2L, UUID.randomUUID(), profile.profileFingerprint(),
 				profile.aggregateFingerprint(), 10_000L, 64L * 1024L * 1024L);
 		thirdFiles.commitRemoval(thirdPrepared);
@@ -818,23 +836,40 @@ public final class FluidRegionPersistenceValidation {
 		try (var entries = Files.newDirectoryStream(thirdSource)) {
 			for (Path entry : entries) Files.copy(entry, thirdPayload.resolve(entry.getFileName()));
 		}
-		expectIOException(() -> thirdFiles.convergeRemovalQuarantine(
-				thirdRegion.id(), 10_000L, 64L * 1024L * 1024L),
+		expectIOException(() -> thirdFiles.convergeRemovalQuarantine(thirdRegion.id()),
 				"REMOVED recovery accepted simultaneous source and quarantine payloads");
 
 		Path baseThirdRoot = Files.createTempDirectory(Path.of("."), "removed-base-third-");
 		FluidRegion baseThirdRegion = populatedRegion(UUID.randomUUID());
 		RegionState baseThirdActive = RegionCheckpointFixtures.capture(baseThirdRegion, 1L);
-		RegionStateFiles baseThirdFiles = new RegionStateFiles(baseThirdRoot);
+		RegionGenerationStore baseThirdFiles = new RegionGenerationStore(baseThirdRoot);
 		baseThirdFiles.publish(baseThirdActive);
 		baseThirdFiles.prepareRemoval(baseThirdRegion.id(), 1L, baseThirdActive.manifest().checksum(),
 				2L, UUID.randomUUID(), profile.profileFingerprint(), profile.aggregateFingerprint(),
 				10_000L, 64L * 1024L * 1024L);
 		Files.createDirectories(baseThirdRoot.resolve("mmm").resolve("quarantine").resolve("removed-region")
 				.resolve(baseThirdRegion.id().toString()).resolve("2"));
-		RegionStateFiles.Discovery baseThirdDiscovery = baseThirdFiles.discover();
+		RegionGenerationStore.Discovery baseThirdDiscovery = baseThirdFiles.discover();
 		require(baseThirdDiscovery.manifests().isEmpty() && !baseThirdDiscovery.issues().isEmpty(),
 				"ACTIVE HEAD discarded staged removal after quarantine reached a third state");
+
+		Path unknownRoot = Files.createTempDirectory(Path.of("."), "removed-unknown-");
+		FluidRegion unknownRegion = populatedRegion(UUID.randomUUID());
+		RegionState unknownActive = RegionCheckpointFixtures.capture(unknownRegion, 1L);
+		RegionGenerationStore unknownFiles = new RegionGenerationStore(unknownRoot);
+		unknownFiles.publish(unknownActive);
+		Path unknownInactive = unknownRoot.resolve("mmm").resolve("region-state")
+				.resolve(unknownRegion.id().toString()).resolve("slot-b");
+		Files.createDirectory(unknownInactive);
+		Path unknownEvidence = unknownInactive.resolve("foreign.evidence");
+		Files.writeString(unknownEvidence, "retain");
+		expectIOException(() -> unknownFiles.prepareRemoval(unknownRegion.id(), 1L,
+				unknownActive.manifest().checksum(), 2L, UUID.randomUUID(), profile.profileFingerprint(),
+				profile.aggregateFingerprint(), 10_000L, 64L * 1024L * 1024L),
+				"REMOVED preparation overwrote unknown inactive-slot evidence");
+		require(Files.readString(unknownEvidence).equals("retain")
+				&& unknownFiles.read(unknownRegion.id()).manifest().checkpointGeneration() == 1L,
+				"REMOVED preparation did not preserve unknown evidence with the ACTIVE HEAD authoritative");
 	}
 
 	private static void validateWorldConfig() throws Exception {
@@ -860,37 +895,37 @@ public final class FluidRegionPersistenceValidation {
 	/** prepare/commit/abort split: staging must stay unreadable until HEAD publishes, and a moved base must fail closed. */
 	private static void validateStagedGeneration() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "staged-");
-		RegionStateFiles files = new RegionStateFiles(root);
+		RegionGenerationStore files = new RegionGenerationStore(root);
 		UUID id = UUID.randomUUID();
 
 		RegionState first = RegionCheckpointFixtures.capture(populatedRegion(id), 1L);
-		RegionStateFiles.PreparedGeneration preparedFirst = files.prepare(first, (point, path) -> { });
+		RegionGenerationStore.PreparedGeneration preparedFirst = files.prepare(first, (point, path) -> { });
 		require(!preparedFirst.alreadyCommitted(), "first staging was marked idempotent");
 		expectIOException(() -> files.read(id), "uncommitted staging exposed a readable generation");
 		files.commit(preparedFirst, (point, path) -> { });
 		require(files.read(id).manifest().checkpointGeneration() == 1L, "first staged commit did not publish");
 
 		RegionState second = RegionCheckpointFixtures.capture(populatedRegion(id), 2L);
-		RegionStateFiles.PreparedGeneration preparedSecond = files.prepare(second, (point, path) -> { });
+		RegionGenerationStore.PreparedGeneration preparedSecond = files.prepare(second, (point, path) -> { });
 		require(files.read(id).manifest().checkpointGeneration() == 1L, "staging exposed the uncommitted generation");
 		files.abort(preparedSecond);
 		require(files.read(id).manifest().checkpointGeneration() == 1L, "abort changed the committed generation");
 		files.publish(second);
 		require(files.read(id).manifest().checkpointGeneration() == 2L, "publish after abort did not advance");
 
-		RegionStateFiles.PreparedGeneration stale = files.prepare(RegionCheckpointFixtures.capture(populatedRegion(id), 3L), (point, path) -> { });
+		RegionGenerationStore.PreparedGeneration stale = files.prepare(RegionCheckpointFixtures.capture(populatedRegion(id), 3L), (point, path) -> { });
 		files.publish(RegionCheckpointFixtures.capture(populatedRegion(id), 4L));
 		expectIOException(() -> files.commit(stale, (point, path) -> { }), "commit on a moved base was accepted");
 		require(files.read(id).manifest().checkpointGeneration() == 4L, "moved-base failure changed the committed generation");
 
-		RegionStateFiles.PreparedGeneration repeat = files.prepare(RegionCheckpointFixtures.capture(populatedRegion(id), 4L), (point, path) -> { });
+		RegionGenerationStore.PreparedGeneration repeat = files.prepare(RegionCheckpointFixtures.capture(populatedRegion(id), 4L), (point, path) -> { });
 		require(repeat.alreadyCommitted() && files.commit(repeat, (point, path) -> { }) == 4L,
 				"idempotent re-staging was not recognized");
 	}
 
 	private static void validateExplicitPreviousGenerationActivation() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "previous-generation-");
-		RegionStateFiles files = new RegionStateFiles(root);
+		RegionGenerationStore files = new RegionGenerationStore(root);
 		UUID id = UUID.randomUUID();
 		FluidRegion region = populatedRegion(id);
 		RegionState first = RegionCheckpointFixtures.capture(region, 1L);
@@ -899,12 +934,20 @@ public final class FluidRegionPersistenceValidation {
 		RegionState second = RegionCheckpointFixtures.capture(region, 2L);
 		files.publish(second);
 
-		RegionStateFiles.PreviousGeneration previous = files.readPrevious(id, 2L);
+		RegionGenerationStore.PreviousGeneration previous = files.readPrevious(id, 2L);
 		require(previous.state().manifest().checkpointGeneration() == 1L
 				&& previous.state().manifest().checksum() == first.manifest().checksum(),
 				"explicit previous-generation probe did not bind the inactive complete slot");
 		expectIOException(() -> files.readPrevious(id, 3L),
 				"previous-generation probe ignored its explicit current-generation guard");
+		Path headTemporary = root.resolve("mmm").resolve("region-state").resolve(id.toString()).resolve("HEAD.nbt.tmp");
+		Files.writeString(headTemporary, "foreign evidence");
+		expectIOException(() -> files.activatePrevious(previous),
+				"previous-generation activation overwrote unknown HEAD staging");
+		require(Files.readString(headTemporary).equals("foreign evidence")
+				&& files.read(id).manifest().checkpointGeneration() == 2L,
+				"previous-generation activation did not preserve unknown staging with the current HEAD authoritative");
+		Files.delete(headTemporary);
 		require(files.activatePrevious(previous) == 1L
 				&& files.read(id).manifest().checkpointGeneration() == 1L
 				&& files.read(id).manifest().checksum() == first.manifest().checksum(),

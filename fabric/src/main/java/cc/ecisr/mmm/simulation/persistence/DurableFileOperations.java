@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Collections;
 import java.util.Locale;
 
@@ -28,6 +29,12 @@ public final class DurableFileOperations {
 	public static void forceParent(Path path) throws IOException {
 		Path parent = path == null ? null : path.toAbsolutePath().normalize().getParent();
 		if (parent != null) forceDirectory(parent);
+	}
+
+	public static void forceFile(Path path) throws IOException {
+		try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) {
+			channel.force(true);
+		}
 	}
 
 	/** Publishes one directory entry atomically, never degrading to copy-then-delete. */
@@ -70,6 +77,37 @@ public final class DurableFileOperations {
 		Files.createDirectories(normalized);
 		Collections.reverse(missing);
 		for (Path created : missing) forceParent(created);
+	}
+
+	/** Deletes only a proven descendant of the supplied durable root and never follows symlinks. */
+	public static void deleteTreeWithin(Path durableRoot, Path target) throws IOException {
+		Path root = requireDescendantRoot(durableRoot, target);
+		Path normalized = target.toAbsolutePath().normalize();
+		if (!Files.exists(normalized)) return;
+		if (Files.exists(root)) {
+			Path realRoot = root.toRealPath();
+			Path realTarget = normalized.toRealPath();
+			if (realTarget.equals(realRoot) || !realTarget.startsWith(realRoot)) {
+				throw new IOException("Refusing to delete a path outside the durable root: " + normalized);
+			}
+		}
+		if (!Files.isDirectory(normalized, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+			Files.delete(normalized);
+			return;
+		}
+		try (var stream = Files.walk(normalized)) {
+			for (Path entry : stream.sorted(Comparator.reverseOrder()).toList()) Files.delete(entry);
+		}
+	}
+
+	private static Path requireDescendantRoot(Path durableRoot, Path target) throws IOException {
+		if (durableRoot == null || target == null) throw new IOException("Durable delete path is missing");
+		Path root = durableRoot.toAbsolutePath().normalize();
+		Path normalized = target.toAbsolutePath().normalize();
+		if (normalized.equals(root) || !normalized.startsWith(root)) {
+			throw new IOException("Refusing to delete a path outside the durable root: " + normalized);
+		}
+		return root;
 	}
 
 	private static boolean isWindows() {
