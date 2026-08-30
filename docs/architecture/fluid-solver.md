@@ -13,6 +13,8 @@
 
 力学子步由 `MechanicalStepPipeline` 与各专职 stage 组合。stage 不接收或保存 `FlipFluidDomain`：稳定的 SoA/workspace 引用在构造时显式注入，可能随 lifecycle 重新绑定的状态通过各 stage 自己的窄 `Access` 契约取得。不同 stage 不能借 facade 任意读写彼此 scratch；pressure anchor/reference/result 等跨阶段值只能走声明过的写回缝。
 
+非力学轴由 `ThermochemistryPipeline`、`GranularTransitionStage` 与 `ParticleReseedStage` 组合。`ThermochemistryPipeline` 是传导、液相反应、颗粒析出/溶解、凝聚相变和气液相变的唯一生产顺序源；`ThermochemistryStageAssembly` 只接线，各 stage 只持有明确 workspace/capability seam。固液与气液 stage 共享 `PhaseChangeStageSupport` 的 exact composition、carrier removal、pending volume 与受控 marker mutation 操作，但不共享可任意调用的 aggregate 引用。
+
 ### 后端候选边界
 
 `FluidDomainState` 捕获恰好一种 liquid carrier 布局（pure/material/chemical）及其 registry、颗粒、气体、热学、相变 pending work、求解配置和硬预算。pressure、平滑 density、mesh、调度与 Minecraft 对象不在其中。`FluidStepRequest` 另外携带有硬上限的 moving-body 输入；后端先在私有 state 上提交这些 marker 动量，再执行同一 logical step。`FluidSolverBackend.evaluate(FluidStepRequest)` 必须返回 base generation 的紧邻完整后继，并随 candidate 回报该批输入实际写入液体的合计体积和冲量；调用者在 tick boundary 验证后才可发布。当前 `CpuFluidSolverBackend` 是规范实现，GPU probe 尚不满足这份完整状态契约，不能作为生产后端注册。
@@ -50,8 +52,10 @@ marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新�
 2. P2G，施加重力、热浮力、气压、颗粒和实体的派生力。
 3. 构造目标散度并求解 pressure projection。
 4. G2P、FLIP/PIC 混合、marker advection 与 CCD。
-5. 热传导、反应、相变和颗粒状态转移。
-6. reseed、局部唤醒、账本和诊断。
+5. 在传导前冻结颗粒反应 dirty cell，随后依次执行有限体积传导、液相反应、颗粒析出/溶解、凝聚相变和气液相变；两类相变共享同一操作预算。
+6. 执行 active/deposit compaction、沉积与局部唤醒。
+7. 经 `CarrierMutationCoordinator` 执行 reseed，同时搬运 chemistry/thermal side column。
+8. 只有整个私有 candidate 成功后才替换诊断并发布完整后继。
 
 相变产生的 pending volume/work 由下一次真实 projection 按该次绝对压力 exactly-once 消费，因此 pressure step 是唯一机械功提交点。相变提交已经改变 marker 几何，pending volume 不再重复写入目标散度。
 

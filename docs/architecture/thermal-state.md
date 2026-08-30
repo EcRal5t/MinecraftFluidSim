@@ -165,12 +165,13 @@ species reference offset 是组成携带的能量真值。reaction extent 改变
 ## Logical step 顺序
 
 1. mechanics、pressure 与 advection；
-2. carrier handoff 和有限体积 conduction；
-3. 化学与固液 reaction extent；
-4. reaction heat；
-5. 固液和气液 phase transition；
-6. granular transition、reseed 与局部唤醒；
-7. 审计闭合后，pending phase-work 留给下一 projection。
+2. 在 conduction 前冻结本步颗粒反应 dirty cell；
+3. carrier handoff 和有限体积 conduction；
+4. 液相 chemical reaction（species 与 reaction energy 在同一 owner plan 中结算）；
+5. granular precipitation/dissolution（liquid/solid composition、SVQ、质量、U 与 pending volume 联合结算）；
+6. 固液 phase transition，再以剩余共享预算执行气液 phase transition；
+7. granular transition、reseed 与局部唤醒；
+8. 审计闭合后，pending phase-work 留给下一 projection。
 
 每一步都先在快照上形成候选。相变产生的体积改变不能回头修改已经完成的 projection，因此作为带 generation 的 pending volume/work 保存，并且只由下一次真实 projection 消费一次。marker 已经携带新的几何体积，pending 不作为第二份目标散度；它只用该 projection 的绝对 cell 压力结算 `-p ΔV`。存在 pending work 时，`empty`、不完整 checkpoint 和绕过 projection 的转移会被拒绝。
 
