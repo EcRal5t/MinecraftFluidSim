@@ -2,14 +2,20 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.application.RegionApplicationService;
+import cc.ecisr.mmm.application.RegionRuntime;
+import cc.ecisr.mmm.application.RegionStepExecutor;
+import cc.ecisr.mmm.application.RegionTickUseCase;
 import cc.ecisr.mmm.application.command.CheckpointRegionCommand;
 import cc.ecisr.mmm.application.command.ControllerSummaryCommand;
 import cc.ecisr.mmm.application.command.MotionStepCommand;
+import cc.ecisr.mmm.application.command.ThermalStepCommand;
 import cc.ecisr.mmm.application.port.ControllerSummaryPort;
 import cc.ecisr.mmm.application.port.RegionCheckpointPort;
 import cc.ecisr.mmm.application.port.RegionRepository;
 import cc.ecisr.mmm.application.result.CheckpointRegionResult;
+import cc.ecisr.mmm.application.result.MotionStepResult;
 import cc.ecisr.mmm.application.result.RegionStepStatus;
+import cc.ecisr.mmm.application.result.ThermalStepResult;
 import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.controller.LifecycleOperation;
 import cc.ecisr.mmm.controller.LifecycleOperationPreview;
@@ -44,7 +50,7 @@ public final class FluidRegionLifecycleValidation {
 
 	public static void main(String[] args) {
 		validatePacingAndOperatorPause();
-		validateMotionInputConsumptionSchedule();
+		validateRegionTickPlanningAndPacing();
 		validateAvailabilityPreservesRunIntent();
 		validateHydrostaticSleepAndWake();
 		validateHydrostaticSleepPreservesMarkerLedger();
@@ -115,9 +121,16 @@ public final class FluidRegionLifecycleValidation {
 		RegionApplicationService application = application(backend, new FluidRegionRepository(manager),
 				(id, generation) -> new RegionCheckpointPort.Attempt(
 						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null), id -> Optional.empty());
-		var firstResult = application.stepMotion(new MotionStepCommand(
-				region.id(), region.solverGeneration(), List.of(), false, 0, false));
-		require(firstResult.accepted(), "valid application motion command was rejected");
+		long[] clock = {0L, 50_000_000L};
+		int[] clockIndex = {0};
+		RegionTickUseCase ticks = new RegionTickUseCase(application,
+				() -> clock[clockIndex[0]++], RegionTickUseCase.Policy.production());
+		RegionTickUseCase.MotionOutcome firstResult = ticks.executeMotion(
+				ticks.plan(new RegionRuntime(2L, 1, 0, 0, true, true)),
+				new MotionStepCommand(region.id(), region.solverGeneration(), List.of(), false, 0, false));
+		require(firstResult.result().accepted() && firstResult.elapsedMilliseconds() == 50.0
+				&& firstResult.runtime().stepIntervalTicks() == 2,
+				"valid tick use case motion command was rejected or lost measured pacing");
 		require(region.solverGeneration() == 1L && region.domain() != domain,
 				"valid backend candidate did not atomically replace the live solver");
 
@@ -193,13 +206,57 @@ public final class FluidRegionLifecycleValidation {
 				"loader-neutral checkpoint command/result lost the committed generation");
 	}
 
-	private static void validateMotionInputConsumptionSchedule() {
-		require(!FluidRegionLifecycle.consumesMotionInput(false, 4L, 2),
-				"paused motion consumed a frozen entity input");
-		require(!FluidRegionLifecycle.consumesMotionInput(true, 3L, 2),
-				"a skipped game tick consumed a frozen entity input");
-		require(FluidRegionLifecycle.consumesMotionInput(true, 4L, 2),
-				"a due logical motion step did not consume its frozen entity input");
+	private static void validateRegionTickPlanningAndPacing() {
+		int[] calls = {0, 0};
+		RegionStepExecutor steps = new RegionStepExecutor() {
+			@Override public MotionStepResult stepMotion(MotionStepCommand command) {
+				calls[0]++;
+				return MotionStepResult.rejected(RegionStepStatus.REGION_NOT_FOUND);
+			}
+			@Override public ThermalStepResult stepThermal(ThermalStepCommand command) {
+				calls[1]++;
+				return ThermalStepResult.rejected(RegionStepStatus.REGION_NOT_FOUND);
+			}
+		};
+		RegionTickUseCase ticks = new RegionTickUseCase(
+				steps, () -> 0L, RegionTickUseCase.Policy.production());
+		require(ticks.plan(new RegionRuntime(4L, 2, 0, 0, false, false)).axis()
+				== RegionTickUseCase.Axis.NONE, "paused axes produced a logical step");
+		require(ticks.plan(new RegionRuntime(3L, 2, 0, 0, true, true)).axis()
+				== RegionTickUseCase.Axis.NONE, "a skipped game tick consumed frozen input");
+		require(ticks.plan(new RegionRuntime(4L, 2, 0, 0, false, true)).axis()
+				== RegionTickUseCase.Axis.THERMAL, "thermal-only runtime did not schedule its due axis");
+		RegionTickUseCase.Plan motion = ticks.plan(new RegionRuntime(4L, 2, 0, 0, true, true));
+		require(motion.axis() == RegionTickUseCase.Axis.MOTION,
+				"a due motion axis did not take precedence over thermal-only stepping");
+		ticks.executeMotion(motion, new MotionStepCommand(new UUID(43L, 47L), 0L,
+				List.of(), false, 0, false));
+		require(calls[0] == 1 && calls[1] == 0,
+				"one due tick consumed more or less than its single frozen motion input");
+
+		RegionRuntime runtime = new RegionRuntime(4L, 1, 0, 0, true, true);
+		RegionTickUseCase.Pacing reduced = ticks.paceAfterAcceptedStep(runtime, 50.0);
+		require(reduced.runtime().stepIntervalTicks() == 2 && !reduced.autoPause(),
+				"step budget did not produce the existing reduced-rate transition");
+		RegionTickUseCase.Pacing threshold = ticks.paceAfterAcceptedStep(
+				new RegionRuntime(4L, 4, 2, 0, true, true), 200.0);
+		require(threshold.runtime().hardOverrunStreak() == 0 && !threshold.autoPause(),
+				"the inclusive 200 ms boundary was treated as a hard overrun");
+		RegionTickUseCase.Pacing overrun = null;
+		runtime = reduced.runtime();
+		for (int i = 0; i < 3; i++) {
+			overrun = ticks.paceAfterAcceptedStep(runtime, 201.0);
+			runtime = overrun.runtime();
+			require(overrun.autoPause() == (i == 2),
+					"hard overrun pause did not require the complete consecutive streak");
+		}
+		runtime = new RegionRuntime(16L, 4, 0, 0, true, false);
+		for (int i = 0; i < 7; i++) runtime = ticks.paceAfterAcceptedStep(runtime, 40.0).runtime();
+		require(runtime.stepIntervalTicks() == 4 && runtime.recoveryStreak() == 7,
+				"reduced pacing recovered before the evidence window closed");
+		runtime = ticks.paceAfterAcceptedStep(runtime, 40.0).runtime();
+		require(runtime.stepIntervalTicks() == 3 && runtime.recoveryStreak() == 0,
+				"complete recovery evidence did not restore exactly one interval level");
 	}
 
 	private static void validateHydrostaticSleepPreservesMarkerLedger() {

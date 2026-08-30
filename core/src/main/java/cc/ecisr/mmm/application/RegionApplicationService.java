@@ -22,7 +22,7 @@ import cc.ecisr.mmm.fluid.FluidThermalStepRequest;
 import java.util.Objects;
 
 /** Loader-neutral orchestration for the first migrated region commands and bounded reads. */
-public final class RegionApplicationService {
+public final class RegionApplicationService implements RegionStepExecutor {
 	private final FluidSolverBackend solverBackend;
 	private final RegionRepository regions;
 	private final RegionCheckpointPort checkpoints;
@@ -40,6 +40,7 @@ public final class RegionApplicationService {
 		this.controllerSummaries = Objects.requireNonNull(controllerSummaries, "controllerSummaries");
 	}
 
+	@Override
 	public MotionStepResult stepMotion(MotionStepCommand command) {
 		Objects.requireNonNull(command, "command");
 		RegionRepository.Capture capture = regions.captureForStep(command.regionId());
@@ -59,6 +60,7 @@ public final class RegionApplicationService {
 				? MotionStepResult.accepted(candidate) : MotionStepResult.rejected(adoption);
 	}
 
+	@Override
 	public ThermalStepResult stepThermal(ThermalStepCommand command) {
 		Objects.requireNonNull(command, "command");
 		RegionRepository.Capture capture = regions.captureForStep(command.regionId());

@@ -6,6 +6,8 @@ import cc.ecisr.mmm.api.query.MmmQueryApi;
 import cc.ecisr.mmm.api.event.ContainerTransferCommittedEvent;
 import cc.ecisr.mmm.api.transfer.TransferQuantity;
 import cc.ecisr.mmm.application.RegionApplicationService;
+import cc.ecisr.mmm.application.RegionRuntime;
+import cc.ecisr.mmm.application.RegionTickUseCase;
 import cc.ecisr.mmm.application.command.CheckpointRegionCommand;
 import cc.ecisr.mmm.application.command.ControllerSummaryCommand;
 import cc.ecisr.mmm.application.command.MotionStepCommand;
@@ -107,11 +109,7 @@ public final class FluidSimulationService {
 	static final int CELL_VOLUMES_PER_BLOCK = CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
 	private static final int SNAPSHOT_INTERVAL_TICKS = 4;
 	private static final int COLLISION_REFRESH_INTERVAL_TICKS = 5;
-	private static final double STEP_BUDGET_MILLIS = 40.0;
-	private static final double HARD_PAUSE_MILLIS = 200.0;
-	private static final int HARD_PAUSE_STREAK = 3;
-	private static final int MAX_STEP_INTERVAL_TICKS = 4;
-	private static final int RECOVERY_STEPS = 8;
+	private static final RegionTickUseCase.Policy TICK_POLICY = RegionTickUseCase.Policy.production();
 	private static final int HYDROSTATIC_QUIET_STEPS = 200;
 	private static final int THERMAL_QUIET_STEPS = 200;
 	private static final float HYDROSTATIC_MAX_MARKER_SPEED = 2.5E-3F;
@@ -132,6 +130,7 @@ public final class FluidSimulationService {
 	private final FluidWorldTargetResolver targets;
 	private final FluidRegionOperations regionOperations;
 	private final RegionApplicationService regionApplication;
+	private final RegionTickUseCase regionTick;
 	private final FluidSnapshotPublisher snapshots;
 	private final ContainerTransferStore containerTransfers;
 	private final MinecraftContainerActorAccess containerActors = new MinecraftContainerActorAccess();
@@ -207,6 +206,7 @@ public final class FluidSimulationService {
 				new FluidRegionRepository(regionManager), regionOperations,
 				new ControllerSummaryAdapter(regionManager, regionOperations, worldCapabilityProfile, thermalRegistry,
 						this::hasPendingContainerTransfer, this::authoritativeWritesReady, worldBridgeFeatureEnabled));
+		this.regionTick = new RegionTickUseCase(regionApplication, TICK_POLICY);
 	}
 
 	void writeContainerTransfer(ContainerTransferJournal journal) throws IOException {
@@ -2041,35 +2041,48 @@ public final class FluidSimulationService {
 			region.wakeForActivity();
 			region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
 		}
-		boolean motionStep = region.canStep();
-		boolean thermalStep = worldCapabilityProfile.hasCapability(WorldCapability.THERMAL) && region.canStepThermal();
-		if (!motionStep && !thermalStep) {
+		RegionRuntime tickRuntime = new RegionRuntime(tick, region.stepIntervalTicks(),
+				region.hardOverrunStreak(), region.recoveryStreak(), region.canStep(),
+				worldCapabilityProfile.hasCapability(WorldCapability.THERMAL) && region.canStepThermal());
+		RegionTickUseCase.Plan tickPlan = regionTick.plan(tickRuntime);
+		if (tickPlan.axis() == RegionTickUseCase.Axis.NONE) {
 			if (collisionsChanged) sendSnapshot(level, region);
 			return;
 		}
-		boolean motionStepDue = FluidRegionLifecycle.consumesMotionInput(
-				motionStep, tick, region.stepIntervalTicks());
-		boolean thermalStepDue = thermalStep && tick % region.stepIntervalTicks() == 0L;
-		if (!motionStepDue && !thermalStepDue) {
-			if (collisionsChanged) sendSnapshot(level, region);
-			return;
-		}
+		boolean motionStepDue = tickPlan.axis() == RegionTickUseCase.Axis.MOTION;
 		ThermalAuditLedger thermalBefore = worldCapabilityProfile.hasCapability(WorldCapability.THERMAL) ? region.domain().thermalAudit() : null;
 		FluidDomain.ThermalAxisStats completedThermalAxis = null;
 		GranularDepositDynamics.Stats completedGranularTransition = NO_GRANULAR_TRANSITION;
+		boolean autoPause = false;
 		try {
 			if (motionStepDue) {
 				region.wakeThermal(ThermalActivity.WakeReason.CARRIER_MOTION);
-				MotionStepResult outcome = stepMotionOnce(region, movingBodies);
-				completedThermalAxis = outcome.stats().thermalAxis();
-				completedGranularTransition = outcome.stats().granularTransition();
-				MovingBodyFluidCoupling.Result coupling = outcome.movingBodyCoupling();
+				boolean phaseChange = worldCapabilityProfile.hasCapability(WorldCapability.PHASECHANGE);
+				RegionTickUseCase.MotionOutcome outcome = regionTick.executeMotion(tickPlan,
+						new MotionStepCommand(region.id(), region.solverGeneration(), movingBodies,
+								phaseChange, phaseChange ? serverConfig.maximumPhaseOperationsPerStep() : 0, false));
+				if (!outcome.result().accepted()) throw new IllegalStateException(
+						"Motion step application rejected synchronous region state: " + outcome.result().status());
+				region.recordStep(outcome.result().stats(), outcome.elapsedMilliseconds());
+				applyTickRuntime(region, tickRuntime, outcome.runtime(), outcome.elapsedMilliseconds());
+				autoPause = outcome.autoPause();
+				completedThermalAxis = outcome.result().stats().thermalAxis();
+				completedGranularTransition = outcome.result().stats().granularTransition();
+				MovingBodyFluidCoupling.Result coupling = outcome.result().movingBodyCoupling();
 				region.setLastEntityCoupling(new FluidRegion.EntityCouplingStats(affectedEntities,
 						coupling.impulseXKilogramMetresPerSecond(), coupling.impulseYKilogramMetresPerSecond(),
 						coupling.impulseZKilogramMetresPerSecond()));
 			} else {
-				ThermalStepResult outcome = stepThermalOnce(region);
-				completedThermalAxis = outcome.stats();
+				boolean phaseChange = worldCapabilityProfile.hasCapability(WorldCapability.PHASECHANGE);
+				RegionTickUseCase.ThermalOutcome outcome = regionTick.executeThermal(tickPlan,
+						new ThermalStepCommand(region.id(), region.solverGeneration(), phaseChange,
+								phaseChange ? serverConfig.maximumPhaseOperationsPerStep() : 0));
+				if (!outcome.result().accepted()) throw new IllegalStateException(
+						"Thermal step application rejected synchronous region state: " + outcome.result().status());
+				region.recordThermalStep(outcome.elapsedMilliseconds());
+				applyTickRuntime(region, tickRuntime, outcome.runtime(), outcome.elapsedMilliseconds());
+				autoPause = outcome.autoPause();
+				completedThermalAxis = outcome.result().stats();
 			}
 		} catch (FluidDomain.PressureSolveBlockedException blocked) {
 			blockNumerical(level, region, blocked);
@@ -2121,7 +2134,6 @@ public final class FluidSimulationService {
 			blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
 			return;
 		}
-		updateStepPacing(region);
 		if (worldCapabilityProfile.hasCapability(WorldCapability.THERMAL)) {
 			observeThermalStep(region, thermalBefore, motionStepDue,
 					completedThermalAxis, completedGranularTransition);
@@ -2142,11 +2154,11 @@ public final class FluidSimulationService {
 			MmmMod.LOGGER.info("Region {} entered hydrostatic sleep with {} markers and {} exact cell volume",
 					region.id(), markerCount, exactVolume);
 		}
-		if (region.hardOverrunStreak() >= HARD_PAUSE_STREAK) {
-			region.blockNumerical("wall-time NUMERICAL_PAUSE：" + HARD_PAUSE_STREAK
-					+ " consecutive steps exceeded " + HARD_PAUSE_MILLIS + " ms");
+		if (autoPause) {
+			region.blockNumerical("wall-time NUMERICAL_PAUSE：" + TICK_POLICY.hardPauseStreak()
+					+ " consecutive steps exceeded " + TICK_POLICY.hardPauseMilliseconds() + " ms");
 			MmmMod.LOGGER.warn("Auto-paused fluid region {} after {} consecutive steps above {} ms",
-					region.id(), HARD_PAUSE_STREAK, HARD_PAUSE_MILLIS);
+					region.id(), TICK_POLICY.hardPauseStreak(), TICK_POLICY.hardPauseMilliseconds());
 		}
 		if (tick % SNAPSHOT_INTERVAL_TICKS == 0 || region.paused() || region.availabilityFailure() != null
 				|| region.lifecycle().state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP) {
@@ -2279,25 +2291,17 @@ public final class FluidSimulationService {
 		sendSnapshot(level, region);
 	}
 
-	private static void updateStepPacing(FluidRegion region) {
-		double lastStepMilliseconds = region.lastStepMilliseconds();
-		if (lastStepMilliseconds > HARD_PAUSE_MILLIS) region.setHardOverrunStreak(region.hardOverrunStreak() + 1);
-		else region.setHardOverrunStreak(0);
-
-		int requiredInterval = Mth.clamp((int) Math.ceil(lastStepMilliseconds / STEP_BUDGET_MILLIS), 1, MAX_STEP_INTERVAL_TICKS);
-		if (requiredInterval > region.stepIntervalTicks()) {
-			region.setStepIntervalTicks(requiredInterval);
-			region.setRecoveryStreak(0);
-			MmmMod.LOGGER.info("Reduced fluid simulation rate to approximately {} Hz after a {} ms step",
-					20 / region.stepIntervalTicks(), String.format("%.1f", lastStepMilliseconds));
-		} else if (requiredInterval < region.stepIntervalTicks()) {
-			region.setRecoveryStreak(region.recoveryStreak() + 1);
-			if (region.recoveryStreak() >= RECOVERY_STEPS) {
-				region.setStepIntervalTicks(region.stepIntervalTicks() - 1);
-				region.setRecoveryStreak(0);
+	private static void applyTickRuntime(
+			FluidRegion region, RegionRuntime before, RegionRuntime after, double elapsedMilliseconds
+	) {
+		region.setHardOverrunStreak(after.hardOverrunStreak());
+		region.setRecoveryStreak(after.recoveryStreak());
+		if (after.stepIntervalTicks() != before.stepIntervalTicks()) {
+			region.setStepIntervalTicks(after.stepIntervalTicks());
+			if (after.stepIntervalTicks() > before.stepIntervalTicks()) {
+				MmmMod.LOGGER.info("Reduced fluid simulation rate to approximately {} Hz after a {} ms step",
+						20 / after.stepIntervalTicks(), String.format("%.1f", elapsedMilliseconds));
 			}
-		} else {
-			region.setRecoveryStreak(0);
 		}
 	}
 
