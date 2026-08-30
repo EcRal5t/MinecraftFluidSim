@@ -33,6 +33,9 @@ public final class FluidRegionManager {
 		return selectedId == null ? null : regions.get(selectedId);
 	}
 
+	/** Exact identity lookup for loader-neutral application adapters; it never changes selection. */
+	FluidRegion region(UUID id) { return regions.get(Objects.requireNonNull(id, "id")); }
+
 	public BudgetUsage usage() {
 		long cells = 0L;
 		long markers = 0L;

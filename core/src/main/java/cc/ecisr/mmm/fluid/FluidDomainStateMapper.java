@@ -4,6 +4,8 @@ import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.air.GasStateSnapshot;
 import cc.ecisr.mmm.granular.GranularStateSnapshot;
 
+import java.util.List;
+
 /** Maps the complete authoritative aggregate to and from the immutable backend handoff state. */
 final class FluidDomainStateMapper {
 	private FluidDomainStateMapper() { }
@@ -42,6 +44,22 @@ final class FluidDomainStateMapper {
 				domain.thermalState == null ? null : domain.thermalState.registry(), thermal,
 				domain.thermalState == null ? 0 : domain.thermalState.maximumTransportSubsteps(),
 				domain.thermalState == null ? null : domain.exportPendingPhaseVolumeState());
+	}
+
+	static FluidDomainState.Layout layout(FluidDomain domain) {
+		if (domain == null) throw new IllegalArgumentException("Domain is missing");
+		FluidDomainState.CarrierKind carrierKind = domain.chemicalParcels != null
+				? FluidDomainState.CarrierKind.CHEMICAL
+				: domain.materialRegistry != null ? FluidDomainState.CarrierKind.MATERIAL
+				: FluidDomainState.CarrierKind.PURE;
+		return new FluidDomainState.Layout(domain.config, domain.sizeX, domain.sizeY, domain.sizeZ,
+				domain.maximumParticleCount, domain.gasState.sealedDomainBoundary, carrierKind,
+				domain.materialRegistry == null ? List.of() : domain.materialRegistry.materials(),
+				domain.chemicalParcels == null ? "" : domain.chemicalParcels.registry().fingerprint(),
+				domain.granularState == null ? "" : domain.granularState.registry.fingerprint(),
+				domain.precipitationEnabled(), domain.gasState.network.registry().fingerprint(),
+				domain.thermalState == null ? "" : domain.thermalState.registry().fingerprint(),
+				domain.thermalState == null ? 0 : domain.thermalState.maximumTransportSubsteps());
 	}
 
 	static FluidDomain restore(FluidDomainState state) {

@@ -2,6 +2,8 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
+import cc.ecisr.mmm.application.port.RegionCheckpointPort;
+import cc.ecisr.mmm.application.result.CheckpointRegionResult;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
@@ -28,7 +30,7 @@ import java.util.function.Predicate;
 
 
 /** Persistence-backed availability and administration for regions; it never steps physics or changes world blocks. */
-final class FluidRegionOperations {
+final class FluidRegionOperations implements RegionCheckpointPort {
 	private final FluidRegionManager manager;
 	private final FluidRegionPersistence persistence;
 	private final boolean worldProfileProven;
@@ -305,28 +307,36 @@ final class FluidRegionOperations {
 		return new FluidSimulationService.SelectionResult(true, region.id(), null);
 	}
 
-	String checkpointSelected() {
-		FluidRegion region = manager.selected();
-		if (region == null) return "没有选中区域";
-		if (!region.controllerManaged()) return "开发命令区域不写入 region-state";
-		if (!region.solverLoaded()) return "区域已是 metadata-only UNLOADED；checkpoint " + region.checkpointGeneration();
+	@Override public Attempt checkpoint(UUID regionId, long expectedCheckpointGeneration) {
+		FluidRegion region = manager.region(regionId);
+		if (region == null) return new Attempt(CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null);
+		if (!region.controllerManaged()) return new Attempt(CheckpointRegionResult.Status.NOT_PERSISTENT,
+				region.checkpointGeneration(), null);
+		if (region.checkpointGeneration() != expectedCheckpointGeneration) {
+			return new Attempt(CheckpointRegionResult.Status.STALE_GENERATION,
+					region.checkpointGeneration(), null);
+		}
+		if (!region.solverLoaded()) return new Attempt(CheckpointRegionResult.Status.ALREADY_UNLOADED,
+				region.checkpointGeneration(), null);
 		String ownershipLock = persistence.ownershipLockDescription(region);
 		if (ownershipLock != null) {
 			region.setPaused(true);
 			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
 					"存在未解决 ownership 状态；拒绝 checkpoint：" + ownershipLock);
-			return region.availabilityFailure();
+			return new Attempt(CheckpointRegionResult.Status.OWNERSHIP_BLOCKED,
+					region.checkpointGeneration(), region.availabilityFailure());
 		}
 		region.setPaused(true);
 		try {
 			long generation = persistence.checkpoint(region);
 			checkpointFailures.remove(region.id());
 			retryAt.remove(region.id());
-			return "checkpoint " + generation + " 已原子发布";
+			return new Attempt(CheckpointRegionResult.Status.COMMITTED, generation, null);
 		} catch (IOException | RuntimeException exception) {
 			String failure = "checkpoint 失败，live solver 已保留：" + exception.getMessage();
 			checkpointFailures.put(region.id(), failure);
-			return failure;
+			return new Attempt(CheckpointRegionResult.Status.PERSISTENCE_FAILED,
+					region.checkpointGeneration(), failure);
 		}
 	}
 

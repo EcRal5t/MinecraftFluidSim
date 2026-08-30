@@ -1,6 +1,15 @@
 package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.api.RegionAvailabilityReason;
+import cc.ecisr.mmm.application.RegionApplicationService;
+import cc.ecisr.mmm.application.command.CheckpointRegionCommand;
+import cc.ecisr.mmm.application.command.ControllerSummaryCommand;
+import cc.ecisr.mmm.application.command.MotionStepCommand;
+import cc.ecisr.mmm.application.port.ControllerSummaryPort;
+import cc.ecisr.mmm.application.port.RegionCheckpointPort;
+import cc.ecisr.mmm.application.port.RegionRepository;
+import cc.ecisr.mmm.application.result.CheckpointRegionResult;
+import cc.ecisr.mmm.application.result.RegionStepStatus;
 import cc.ecisr.mmm.controller.ControllerSummary;
 import cc.ecisr.mmm.controller.LifecycleOperation;
 import cc.ecisr.mmm.controller.LifecycleOperationPreview;
@@ -9,8 +18,11 @@ import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.fluid.FluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
+import cc.ecisr.mmm.fluid.FluidThermalStepCandidate;
+import cc.ecisr.mmm.fluid.FluidThermalStepRequest;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.Identifier;
@@ -18,6 +30,7 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /** Deterministic lifecycle transition gate independent of Minecraft chunks and wall-clock timing. */
@@ -36,6 +49,7 @@ public final class FluidRegionLifecycleValidation {
 		validateHydrostaticSleepAndWake();
 		validateHydrostaticSleepPreservesMarkerLedger();
 		validateBackendCandidateAdoption();
+		validateApplicationCheckpointResults();
 		validateUnloadRequiresPublishedCheckpointAndReleasedSolver();
 		validateMetadataOnlySummaryCannotInventInventory();
 		validateLifecyclePreviewTokensBindEveryCommitGate();
@@ -94,32 +108,37 @@ public final class FluidRegionLifecycleValidation {
 		domain.setVolume(1, 1, 1, 0.5F);
 		FluidRegion region = new FluidRegion(new UUID(19L, 23L), DIMENSION, BlockPos.ZERO,
 				domain, domain.maximumParticleCount());
+		FluidRegionManager manager = new FluidRegionManager(new FluidRegionManager.Limits(
+				4, 4_096L, Integer.MAX_VALUE, 16_384L, Integer.MAX_VALUE));
+		require(manager.addAndSelect(region).accepted(), "application test region was not admitted");
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
-		FluidStepCandidate first = backend.evaluate(new FluidStepRequest(
-				region.solverGeneration(), region.domain().captureAuthoritativeState(), List.of(), false, 0));
-		region.adoptStepCandidate(first, backend.id());
+		RegionApplicationService application = application(backend, new FluidRegionRepository(manager),
+				(id, generation) -> new RegionCheckpointPort.Attempt(
+						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null), id -> Optional.empty());
+		var firstResult = application.stepMotion(new MotionStepCommand(
+				region.id(), region.solverGeneration(), List.of(), false, 0, false));
+		require(firstResult.accepted(), "valid application motion command was rejected");
 		require(region.solverGeneration() == 1L && region.domain() != domain,
 				"valid backend candidate did not atomically replace the live solver");
 
 		FluidDomain committed = region.domain();
-		boolean staleRejected = false;
-		try {
-			region.adoptStepCandidate(first, backend.id());
-		} catch (IllegalStateException expected) {
-			staleRejected = true;
-		}
-		require(staleRejected && region.domain() == committed && region.solverGeneration() == 1L,
+		var stale = application.stepMotion(new MotionStepCommand(region.id(), 0L, List.of(), false, 0, false));
+		require(stale.status() == RegionStepStatus.STALE_GENERATION
+				&& region.domain() == committed && region.solverGeneration() == 1L,
 				"stale backend candidate changed the committed solver");
 
 		FluidStepCandidate second = backend.evaluate(new FluidStepRequest(
 				region.solverGeneration(), region.domain().captureAuthoritativeState(), List.of(), false, 0));
-		boolean backendRejected = false;
-		try {
-			region.adoptStepCandidate(second, "mmm:unexpected");
-		} catch (IllegalStateException expected) {
-			backendRejected = true;
-		}
-		require(backendRejected && region.domain() == committed && region.solverGeneration() == 1L,
+		FluidStepCandidate wrongBackend = new FluidStepCandidate("mmm:unexpected", second.baseGeneration(),
+				second.candidateGeneration(), second.state(), second.stats(), second.movingBodyCoupling());
+		RegionApplicationService wrongBackendApplication = application(
+				fixedBackend(backend.id(), wrongBackend, backend), new FluidRegionRepository(manager),
+				(id, generation) -> new RegionCheckpointPort.Attempt(
+						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null), id -> Optional.empty());
+		var backendRejected = wrongBackendApplication.stepMotion(new MotionStepCommand(
+				region.id(), region.solverGeneration(), List.of(), false, 0, false));
+		require(backendRejected.status() == RegionStepStatus.BACKEND_MISMATCH
+				&& region.domain() == committed && region.solverGeneration() == 1L,
 				"backend identity mismatch changed the committed solver");
 
 		FluidDomain alteredLayout = new FluidDomain(4, 4, 4, config);
@@ -128,17 +147,50 @@ public final class FluidRegionLifecycleValidation {
 		FluidStepCandidate incompatible = new FluidStepCandidate(second.backendId(), second.baseGeneration(),
 				second.candidateGeneration(), alteredLayout.captureAuthoritativeState(), second.stats(),
 				second.movingBodyCoupling());
-		boolean layoutRejected = false;
-		try {
-			region.adoptStepCandidate(incompatible, backend.id());
-		} catch (IllegalStateException expected) {
-			layoutRejected = true;
-		}
-		require(layoutRejected && region.domain() == committed && region.solverGeneration() == 1L,
+		RegionApplicationService incompatibleApplication = application(
+				fixedBackend(backend.id(), incompatible, backend), new FluidRegionRepository(manager),
+				(id, generation) -> new RegionCheckpointPort.Attempt(
+						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null), id -> Optional.empty());
+		var layoutRejected = incompatibleApplication.stepMotion(new MotionStepCommand(
+				region.id(), region.solverGeneration(), List.of(), false, 0, false));
+		require(layoutRejected.status() == RegionStepStatus.LAYOUT_MISMATCH
+				&& region.domain() == committed && region.solverGeneration() == 1L,
 				"backend candidate changed sealed/carrier/registry layout");
 
-		region.adoptStepCandidate(second, backend.id());
+		var secondResult = application.stepMotion(new MotionStepCommand(
+				region.id(), region.solverGeneration(), List.of(), false, 0, false));
+		require(secondResult.accepted(), "second adjacent application candidate was rejected");
 		require(region.solverGeneration() == 2L, "adjacent backend candidate did not advance the generation");
+	}
+
+	private static FluidSolverBackend fixedBackend(
+			String id, FluidStepCandidate motion, FluidSolverBackend thermalDelegate
+	) {
+		return new FluidSolverBackend() {
+			@Override public String id() { return id; }
+			@Override public FluidStepCandidate evaluate(FluidStepRequest request) { return motion; }
+			@Override public FluidThermalStepCandidate evaluateThermal(FluidThermalStepRequest request) {
+				return thermalDelegate.evaluateThermal(request);
+			}
+		};
+	}
+
+	private static void validateApplicationCheckpointResults() {
+		int[] checkpointCalls = {0};
+		RegionCheckpointPort checkpoint = (id, generation) -> {
+			checkpointCalls[0]++;
+			return new RegionCheckpointPort.Attempt(CheckpointRegionResult.Status.COMMITTED,
+					Math.addExact(generation, 1L), null);
+		};
+		RegionApplicationService application = application(new CpuFluidSolverBackend(), unusedRepository(),
+				checkpoint, id -> Optional.empty());
+		UUID region = new UUID(29L, 31L);
+		var blocked = application.checkpoint(new CheckpointRegionCommand(region, 7L, true));
+		require(blocked.status() == CheckpointRegionResult.Status.PENDING_CONTAINER_WAL
+				&& checkpointCalls[0] == 0, "pending WAL reached the durable checkpoint port");
+		var committed = application.checkpoint(new CheckpointRegionCommand(region, 7L, false));
+		require(committed.committed() && committed.checkpointGeneration() == 8L && checkpointCalls[0] == 1,
+				"loader-neutral checkpoint command/result lost the committed generation");
 	}
 
 	private static void validateMotionInputConsumptionSchedule() {
@@ -248,6 +300,49 @@ public final class FluidRegionLifecycleValidation {
 			rejected = true;
 		}
 		require(rejected, "metadata-only controller inventory accepted invented live volume");
+
+		UUID region = new UUID(37L, 41L);
+		ControllerSummary.Capacity unavailableCapacity = ControllerSummary.Capacity.unavailable(64L);
+		ControllerSummaryPort.View view = new ControllerSummaryPort.View(region, "mmm:summary_dimension",
+				"0".repeat(64), 3L, 5L, new ControllerSummary.Footprint(1, 2, 3, 4, 5, 6, 120L, 4),
+				true, ControllerSummary.OperatorIntent.PAUSED, ControllerSummary.MotionState.UNLOADED,
+				ControllerSummary.ThermalState.UNBOUND, new ControllerSummary.Availability(null, null),
+				new ControllerSummary.Usage(unavailableCapacity, unavailableCapacity, unavailableCapacity,
+						unavailableCapacity, unavailableCapacity, unavailableCapacity, unavailableCapacity,
+						unavailableCapacity), unavailable,
+				new ControllerSummary.Gates(true, false, false, false, false),
+				new ControllerSummary.Diagnostics(0.0, 0, 0.0, null));
+		RegionApplicationService application = application(new CpuFluidSolverBackend(), unusedRepository(),
+				(id, generation) -> new RegionCheckpointPort.Attempt(
+						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null),
+				id -> id.equals(region) ? Optional.of(view) : Optional.empty());
+		var result = application.controllerSummary(new ControllerSummaryCommand(region, 11L));
+		require(result.ok() && result.summary().summaryGeneration() == 11L
+				&& !result.summary().inventory().live(),
+				"application controller summary invented inventory or lost the authorized token");
+	}
+
+	private static RegionApplicationService application(
+			FluidSolverBackend backend,
+			RegionRepository regions,
+			RegionCheckpointPort checkpoints,
+			ControllerSummaryPort summaries
+	) {
+		return new RegionApplicationService(backend, regions, checkpoints, summaries);
+	}
+
+	private static RegionRepository unusedRepository() {
+		return new RegionRepository() {
+			@Override public Capture captureForStep(UUID regionId) {
+				return Capture.unavailable(CaptureStatus.REGION_NOT_FOUND);
+			}
+			@Override public RegionStepStatus adoptMotion(
+					UUID regionId, FluidStepCandidate candidate, String expectedBackendId
+			) { return RegionStepStatus.REGION_NOT_FOUND; }
+			@Override public RegionStepStatus adoptThermal(
+					UUID regionId, FluidThermalStepCandidate candidate, String expectedBackendId
+			) { return RegionStepStatus.REGION_NOT_FOUND; }
+		};
 	}
 
 	private static FluidRegionLifecycle running() {

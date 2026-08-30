@@ -85,6 +85,7 @@ public final class ArchitectureDependencyValidation {
 		List<String> violations = new ArrayList<>();
 		checkApiPurity(sources, violations);
 		checkLoaderNeutralModules(sources, violations);
+		checkApplicationPurity(sources, violations);
 		checkGpuProbeKernel(sources, violations);
 		checkPersistenceDoesNotReferenceRuntime(sources, violations);
 		checkAdaptersDoNotReferenceSolverDomain(sources, violations);
@@ -165,6 +166,23 @@ public final class ArchitectureDependencyValidation {
 						importedPackage.equals(top) || importedPackage.startsWith(top + "."))) continue;
 				violations.add("loader-neutral module imports loader type: "
 						+ source.simpleName() + " -> " + imported);
+			}
+		}
+	}
+
+	/** Application commands/use cases may depend on core models, never Minecraft adapter or payload packages. */
+	static void checkApplicationPurity(List<SourceFile> sources, List<String> violations) {
+		for (SourceFile source : sources) {
+			if (!source.module().equals("core/src/main/java")
+					|| !source.packageName().startsWith("cc.ecisr.mmm.application")) continue;
+			for (String imported : source.imports()) {
+				if (imported.startsWith("cc.ecisr.mmm.simulation")
+						|| imported.startsWith("cc.ecisr.mmm.network")
+						|| imported.startsWith("cc.ecisr.mmm.block")
+						|| imported.startsWith("cc.ecisr.mmm.item")) {
+					violations.add("application imports Minecraft adapter type: "
+							+ source.simpleName() + " -> " + imported);
+				}
 			}
 		}
 	}

@@ -202,7 +202,7 @@ public final class FluidRegion {
 				|| candidateGeneration != Math.addExact(solverGeneration, 1L)) {
 			throw new IllegalStateException("Backend candidate identity or generation is stale");
 		}
-		if (!state.layout().equals(domain.captureAuthoritativeState().layout())) {
+		if (!state.layout().equals(domain.authoritativeLayout())) {
 			throw new IllegalStateException("Backend candidate changed the live solver layout");
 		}
 		FluidDomain replacement = FluidDomain.restoreAuthoritativeState(state);

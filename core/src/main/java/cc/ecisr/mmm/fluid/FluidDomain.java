@@ -371,6 +371,11 @@ public final class FluidDomain {
 		return FluidDomainStateMapper.capture(this);
 	}
 
+	/** Cheap immutable identity used to reject backend feature/registry substitution before adoption. */
+	public FluidDomainState.Layout authoritativeLayout() {
+		return FluidDomainStateMapper.layout(this);
+	}
+
 	/** Restores a private solver instance without consulting Minecraft/Fabric state. */
 	public static FluidDomain restoreAuthoritativeState(FluidDomainState state) {
 		return FluidDomainStateMapper.restore(state);
