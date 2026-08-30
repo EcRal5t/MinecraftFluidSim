@@ -6,26 +6,18 @@ import cc.ecisr.mmm.application.ContainerRecoveryCoordinator;
 import cc.ecisr.mmm.application.ContainerTransferCoordinator;
 import cc.ecisr.mmm.application.ControllerQueryUseCase;
 import cc.ecisr.mmm.application.RegionApplicationService;
-import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.application.ThermalReservoirUseCase;
 import cc.ecisr.mmm.application.command.MotionStepCommand;
 import cc.ecisr.mmm.application.result.MotionStepResult;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidDomain;
-import cc.ecisr.mmm.fluid.GasPressureBoundary;
 import cc.ecisr.mmm.fluid.FluidSolverBackend;
 import cc.ecisr.mmm.fluid.GasTopologyBlockedException;
-import cc.ecisr.mmm.fluid.air.AirNetwork;
-import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
-import cc.ecisr.mmm.fluid.air.GasAuditLedger;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularMechanics;
 import cc.ecisr.mmm.granular.GranularRegistry;
-import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
-import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
-import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
 import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 import cc.ecisr.mmm.worldprofile.WorldCapability;
 import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
@@ -67,6 +59,7 @@ public final class FluidSimulationService {
 	private final MinecraftRegionActivation regionActivation;
 	private final MinecraftIndicatorEditing indicatorEditing;
 	private final MinecraftRegionAdministration regionAdministration;
+	private final RegionDiagnosticsReport regionDiagnostics;
 	private final PlayerContainerTransferAdapter playerContainerTransfers;
 	private final DispenserContainerTransferAdapter dispenserContainerTransfers;
 	private final FluidSnapshotPublisher snapshots;
@@ -141,6 +134,10 @@ public final class FluidSimulationService {
 				serverConfig.maximumThermalSubstepsPerStep());
 		this.indicatorEditing = new MinecraftIndicatorEditing(worldRegistries, targets, regionOperations,
 				snapshots, regionAvailability);
+		this.regionDiagnostics = new RegionDiagnosticsReport(regionManager, regionOperations, takeover,
+				debugFixtures, worldRegistries, () -> controllerFeatureEnabled, () -> worldBridgeFeatureEnabled,
+				this::configuredWorldBridgeFeatureEnabled, () -> ownershipIssues,
+				() -> serverConfig.maximumPhaseOperationsPerStep());
 		this.playerContainerTransfers = new PlayerContainerTransferAdapter(startup, worldRegistries, targets,
 				regionAvailability, containerTransactions, snapshots);
 		this.dispenserContainerTransfers = new DispenserContainerTransferAdapter(startup, worldRegistries, targets,
@@ -151,6 +148,7 @@ public final class FluidSimulationService {
 	MinecraftRegionActivation regionActivation() { return regionActivation; }
 	MinecraftIndicatorEditing indicatorEditing() { return indicatorEditing; }
 	MinecraftRegionAdministration regionAdministration() { return regionAdministration; }
+	RegionDiagnosticsReport regionDiagnostics() { return regionDiagnostics; }
 	MinecraftDebugFixtures debugFixtures() { return debugFixtures; }
 	PlayerContainerTransferAdapter playerContainerTransfers() { return playerContainerTransfers; }
 	DispenserContainerTransferAdapter dispenserContainerTransfers() { return dispenserContainerTransfers; }
@@ -483,24 +481,6 @@ public final class FluidSimulationService {
 				0, 0, true, null);
 	}
 
-	/** Read-only ownership reconciliation report across every controller region. */
-	public String ownershipReport(MinecraftServer server) {
-		StringBuilder report = new StringBuilder("worldbridge flag ")
-				.append(worldBridgeFeatureEnabled ? "on" : "off")
-				.append("（配置 ")
-				.append(configuredWorldBridgeFeatureEnabled() ? "on" : "off")
-				.append("）");
-		boolean any = false;
-		for (FluidRegion region : regionManager.regions()) {
-			if (!region.controllerManaged()) continue;
-			any = true;
-			report.append("\n").append(regionOperations.ownershipSummary(server, region));
-		}
-		if (!any) report.append("\n没有控制器区域");
-		for (String issue : ownershipIssues) report.append("\n! ").append(issue);
-		return report.toString();
-	}
-
 	public String emptySelectedRegion(ServerLevel level) {
 		if (!authoritativeWritesReady()) return authoritativeWriteFailure("清空区域库存");
 		FluidRegion region = activeRegion();
@@ -556,151 +536,6 @@ public final class FluidSimulationService {
 		regionOperations.checkpointForShutdown(region -> !hasPendingContainerTransfer(region.id()));
 	}
 
-	public String status(MinecraftServer server) {
-		String takeoverLock = MinecraftTakeoverAdapter.lockDescription(server);
-		RegionCatalog.BudgetUsage usage = regionManager.usage();
-		FluidRegion region = activeRegion();
-		if (region == null) {
-			return "没有活动流体域 | regions 0/" + regionManager.limits().maximumRegions()
-					+ " | controller flag " + (controllerFeatureEnabled ? "on" : "off")
-					+ ", bridge " + (worldBridgeFeatureEnabled ? "on" : "off")
-					+ " | takeover lock " + takeoverLock
-					+ (regionOperations.issues().isEmpty() ? "" : " | persistence issues " + regionOperations.issues().size())
-					+ (ownershipIssues.isEmpty() ? "" : " | ownership issues " + ownershipIssues.size())
-					+ (debugFixtures.lastFailure() == null ? "" : " | " + debugFixtures.lastFailure());
-		}
-		RegionCatalog.BudgetUsage selectedUsage = regionManager.usage();
-		if (!region.solverLoaded()) {
-			return String.format(
-					"UNLOADED/PAUSED | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | controller %s | %s | origin %s | grid %dx%dx%d | checkpoint %d, water %.3f cells, markers %d | controller flag %s, bridge %s | takeover lock %s%s",
-					region.id().toString().substring(0, 8), selectedUsage.regionCount(), regionManager.limits().maximumRegions(),
-					selectedUsage.reservedCells(), regionManager.limits().maximumTotalCells(), selectedUsage.reservedMarkers(),
-					regionManager.limits().maximumTotalMarkers(), region.footprint().controllerPosition().toShortString(),
-					region.availabilityFailure() == null ? "awaiting explicit run" : "blocked: " + region.availabilityFailure(),
-					region.origin().toShortString(), region.sizeX(), region.sizeY(), region.sizeZ(), region.checkpointGeneration(),
-					region.checkpointVolume(), region.checkpointMarkerCount(), controllerFeatureEnabled ? "on" : "off",
-					worldBridgeFeatureEnabled ? "on" : "off", takeoverLock,
-					regionOperations.issues().isEmpty() ? "" : " | persistence issues " + regionOperations.issues().size());
-		}
-		FluidDomain.StepStats lastStats = region.lastStats();
-		String stats = lastStats == null
-				? "尚未步进"
-				: String.format("%.2f ms, substeps %d, PCG %d, residual %.4g%s",
-						region.lastStepMilliseconds(), lastStats.substeps(), lastStats.pressureIterations(), lastStats.pressureResidual(),
-						lastStats.reseededMerges() == 0 && lastStats.reseededSplits() == 0
-								&& lastStats.reseedBudgetSkipped() == 0 && lastStats.reseedGeometrySkipped() == 0
-								? ""
-								: String.format(", reseed split %d/merge %d, skipped budget %d/geometry %d, ledger %.3g",
-										lastStats.reseededSplits(), lastStats.reseededMerges(),
-										lastStats.reseedBudgetSkipped(), lastStats.reseedGeometrySkipped(),
-										lastStats.reseedLedgerError()));
-		FluidDomain domain = region.domain();
-		BlockPos origin = region.origin();
-		float cellVolumes = domain.totalVolume();
-		FluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
-		FluidDomain.SolidDistribution solids = domain.solidDistribution();
-		FluidRegion.CollisionStats collision = region.lastCollisionStats();
-		FluidRegion.EntityCouplingStats entityCoupling = region.lastEntityCoupling();
-		FluidRegionFootprint footprint = region.footprint();
-		String regionSource = footprint == null
-				? "command"
-				: "controller " + footprint.controllerPosition().toShortString() + ", boundary "
-						+ footprint.boundaryBlocks().size() + ", chunks " + footprint.requiredChunks().size();
-		String availability = region.availabilityDescription();
-		String gas = gasSummary(domain);
-		String thermal = worldRegistries.hasCapability(WorldCapability.THERMAL) ? thermalSummary(region, domain) : "";
-		return String.format(
-				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d, liquid impulse [%.3g,%.3g,%.3g] kg·m/s | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s%s",
-				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",
-				region.id().toString().substring(0, 8),
-				usage.regionCount(), regionManager.limits().maximumRegions(),
-				usage.reservedCells(), regionManager.limits().maximumTotalCells(),
-				usage.reservedMarkers(), regionManager.limits().maximumTotalMarkers(),
-				regionSource, availability,
-				origin.toShortString(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
-				20.0 / region.stepIntervalTicks(),
-				cellVolumes / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK, cellVolumes,
-				domain.particleCount(), domain.maximumParticleCount(), domain.markerCellCount(),
-				distribution.visibleCells(), distribution.denseCells(), takeover.pendingBlockCount(), takeoverLock,
-				worldBridgeFeatureEnabled ? "on" : "off",
-				region.entityPhysicsEnabled() ? "on" : "off", region.lastAffectedEntities(),
-				entityCoupling.impulseXKilogramMetresPerSecond(),
-				entityCoupling.impulseYKilogramMetresPerSecond(),
-				entityCoupling.impulseZKilogramMetresPerSecond(),
-				domain.maximumPressure(),
-				solids.partialCells(), solids.fullCells(),
-				collision.changedCells(), collision.escapedCellVolume() / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK,
-				collision.markerBudgetLimited() ? " (marker budget)" : "", stats,
-				(gas.isEmpty() ? "" : " | " + gas) + (thermal.isEmpty() ? "" : " | " + thermal)
-		);
-	}
-
-	private String thermalSummary(FluidRegion region, FluidDomain domain) {
-		if (!domain.hasThermalState()) return "thermal missing";
-		ThermalAuditLedger audit = domain.thermalAudit();
-		ThermalActivity activity = region.thermalActivity();
-		short[] temperatureQ = domain.copyThermalDisplaySnapshot().cellTemperatureQ();
-		int minimumQ = Integer.MAX_VALUE, maximumQ = Integer.MIN_VALUE;
-		for (short raw : temperatureQ) {
-			int value = Short.toUnsignedInt(raw);
-			if (value == ThermalDisplaySnapshot.EMPTY_TEMPERATURE_Q) continue;
-			minimumQ = Math.min(minimumQ, value);
-			maximumQ = Math.max(maximumQ, value);
-		}
-		String temperature = minimumQ == Integer.MAX_VALUE ? "empty"
-				: minimumQ == maximumQ ? String.format("%.2f K", minimumQ / 16.0)
-				: String.format("%.2f..%.2f K", minimumQ / 16.0, maximumQ / 16.0);
-		FluidDomain.ThermalPhaseStats condensed = domain.lastThermalPhaseStats();
-		FluidDomain.GasThermalPhaseStats gas = domain.lastGasThermalPhaseStats();
-		int phaseBudget = serverConfig.maximumPhaseOperationsPerStep();
-		String phase = condensed.operations() == 0 && gas.operations() == 0 ? "idle"
-				: String.format("solid=%d gas=%d%s (boil %d/condense %d cells)",
-						condensed.operations(), gas.operations(),
-						condensed.operations() + gas.operations() == phaseBudget ? "/" + phaseBudget + " budget-hit" : "",
-						gas.boiledCells(), gas.condensedCells());
-		return String.format("thermal %s T=%s U=%.6g EU source=%.6g sink=%.6g work=%.6g device=%.6g coherent=%d SVQ phase=%s pending-work=%s audit=%s",
-				activity == null ? "unbound" : activity.state(), temperature, domain.totalInternalEnergy(),
-				audit.externalSource().toDouble(), audit.externalSink().toDouble(),
-				audit.mechanicalWork().toDouble(), audit.finiteDeviceExchange().toDouble(),
-				domain.totalCoherentSolidVolumeSvq(), phase,
-				domain.hasPendingPhaseVolumeWork() ? "yes" : "no",
-				domain.exactInternalEnergy().equals(audit.expectedInventory()) ? "closed" : "FAILED");
-	}
-
-	/** Read-only gas-network summary for status output; empty when no sealed cavity exists. */
-	private static String gasSummary(FluidDomain domain) {
-		GasPressureBoundary network = domain.gasBoundary();
-		List<Integer> ids = network.nodeIds();
-		if (ids.isEmpty()) return "";
-		StringBuilder builder = new StringBuilder("gas ");
-		for (int i = 0; i < ids.size() && i < 4; i++) {
-			int id = ids.get(i);
-			if (i > 0) builder.append("; ");
-			builder.append(String.format("node %d p=%+.0f Pa T=%.2f K V0=%.2f m³",
-					id, domain.gasNodeGaugePressurePa(id), domain.gasNodeTemperatureK(id),
-					network.standardVolume(id)));
-			var vapor = network.inventory(id).component(BuiltinGasDefinitions.WATER_VAPOR);
-			if (vapor != null) builder.append(String.format(" vapor=%.6g kg/%.6g m³std",
-					vapor.mass(), AirNetwork.cubicMeters(vapor.standardVolumeNanos())));
-		}
-		if (ids.size() > 4) builder.append("; +").append(ids.size() - 4).append(" more");
-		long airSource = componentNanos(network.externalSource(), BuiltinGasDefinitions.AIR);
-		long airSink = componentNanos(network.escapedSink(), BuiltinGasDefinitions.AIR);
-		long vaporSource = componentNanos(network.externalSource(), BuiltinGasDefinitions.WATER_VAPOR);
-		long vaporSink = componentNanos(network.escapedSink(), BuiltinGasDefinitions.WATER_VAPOR);
-		builder.append(String.format(", turnover air=%.2f/%.2f vapor=%.2f/%.2f m³std (source/sink)",
-				AirNetwork.cubicMeters(airSource), AirNetwork.cubicMeters(airSink),
-				AirNetwork.cubicMeters(vaporSource), AirNetwork.cubicMeters(vaporSink)));
-		return builder.toString();
-	}
-
-	private static long componentNanos(GasAuditLedger ledger, String componentId) {
-		for (GasAuditLedger.Entry entry : ledger.entries()) {
-			if (entry.componentId().equals(componentId)) return entry.standardVolumeNanos();
-		}
-		return 0L;
-	}
-
 	public void sendSnapshot(ServerLevel level) {
 		FluidRegion region = activeRegion();
 		if (region != null && level.dimension().equals(region.dimension())) sendSnapshot(level, region);
@@ -749,74 +584,6 @@ public final class FluidSimulationService {
 	}
 
 	public record TransferTarget(FluidRegion region, BlockPos interiorBlock) { }
-
-	/** Administrator-only command payload; caller is responsible for enforcing permission and transcript logging. */
-	public String chemistryInventoryStatus(ServerLevel level) {
-		if (!worldRegistries.hasCapability(WorldCapability.CHEMISTRY)) return "化学功能门本次启动未开启";
-		FluidRegion region = selectedRegionIn(level);
-		if (region == null || !region.solverLoaded() || !region.domain().hasChemistryState()) {
-			return "当前维度没有已加载且选中的化学区域";
-		}
-		long[] totals = region.domain().chemicalParcels().speciesTotals(region.domain().particleCount());
-		StringBuilder text = new StringBuilder("region ").append(region.id())
-				.append(" generation ").append(region.checkpointGeneration())
-				.append(" fingerprint ").append(worldRegistries.chemicalRegistry().fingerprint())
-				.append(" totalQuanta ").append(region.domain().chemicalParcels().totalQuanta())
-				.append(" residualBits 0x").append(Long.toUnsignedString(
-						region.domain().exportChemicalParticleState().residualLedgerBits(), 16));
-		for (int handle = 0; handle < totals.length; handle++) if (totals[handle] != 0L) {
-			text.append('\n').append(worldRegistries.chemicalRegistry().species(handle).id())
-					.append('=').append(totals[handle]);
-		}
-		text.append("\nexternalSourceQuanta=").append(region.domain().chemicalParcels().externalSource().totalQuanta())
-				.append(" escapedSinkQuanta=").append(region.domain().chemicalParcels().escapedSink().totalQuanta());
-		return text.toString();
-	}
-
-	/** Administrator-only exact granular inventory/audit report; display snapshots never feed this path. */
-	public String granularInventoryStatus(ServerLevel level) {
-		if (!worldRegistries.hasCapability(WorldCapability.GRANULAR)) return "颗粒功能门本次启动未开启";
-		FluidRegion region = selectedRegionIn(level);
-		if (region == null || !region.solverLoaded() || !region.domain().hasGranularState()) {
-			return "当前维度没有已加载且选中的颗粒区域";
-		}
-		var snapshot = region.domain().exportGranularState();
-		long[] materialSvq = new long[snapshot.materialPalette().size()];
-		double[] materialMass = new double[materialSvq.length];
-		for (var parcel : snapshot.activeParcels()) {
-			materialSvq[parcel.materialPaletteIndex()] = Math.addExact(
-					materialSvq[parcel.materialPaletteIndex()], parcel.solidVolumeSvq());
-			materialMass[parcel.materialPaletteIndex()] += parcel.mass();
-		}
-		for (var deposit : snapshot.depositGroups()) {
-			materialSvq[deposit.materialPaletteIndex()] = Math.addExact(
-					materialSvq[deposit.materialPaletteIndex()], deposit.solidVolumeSvq());
-			materialMass[deposit.materialPaletteIndex()] += deposit.mass();
-		}
-		long sourceSvq = 0L, sinkSvq = 0L;
-		for (var entry : snapshot.externalSource().entries()) sourceSvq = Math.addExact(sourceSvq, entry.solidVolumeSvq());
-		for (var entry : snapshot.escapedSink().entries()) sinkSvq = Math.addExact(sinkSvq, entry.solidVolumeSvq());
-		StringBuilder text = new StringBuilder("region ").append(region.id())
-				.append(" generation ").append(region.checkpointGeneration())
-				.append(" fingerprint ").append(snapshot.registryFingerprint())
-				.append(" totalSvq ").append(snapshot.totalSolidVolumeSvq())
-				.append(" totalMass ").append(snapshot.totalMass())
-				.append(" active ").append(snapshot.activeParcels().size())
-				.append(" depositGroups ").append(snapshot.depositGroups().size())
-				.append(" sourceSvq ").append(sourceSvq).append(" sinkSvq ").append(sinkSvq)
-				.append(" boundaryImpulse=[")
-				.append(region.domain().lastGranularBoundaryImpulseX()).append(',')
-				.append(region.domain().lastGranularBoundaryImpulseY()).append(',')
-				.append(region.domain().lastGranularBoundaryImpulseZ()).append(']');
-		for (int material = 0; material < materialSvq.length; material++) if (materialSvq[material] > 0L) {
-			text.append('\n').append(snapshot.materialPalette().get(material)).append(" svq=")
-					.append(materialSvq[material]).append(" mass=").append(materialMass[material]);
-		}
-		for (var species : snapshot.solidSpeciesTotals().entrySet()) {
-			text.append('\n').append("solidSpecies ").append(species.getKey()).append('=').append(species.getValue());
-		}
-		return text.toString();
-	}
 
 	/** First region volume intersected by the player's ray; selection is intentionally irrelevant. */
 	public FluidRegion aimedRegion(ServerPlayer player) {

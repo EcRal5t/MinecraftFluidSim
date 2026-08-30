@@ -17,6 +17,7 @@ public final class MmmRuntime {
 	private final MinecraftIndicatorEditing indicatorEditing;
 	private final MinecraftDebugFixtures debugFixtures;
 	private final MinecraftRegionAdministration regionAdministration;
+	private final RegionDiagnosticsReport regionDiagnostics;
 	private final PlayerContainerTransferAdapter playerContainerTransfers;
 	private final DispenserContainerTransferAdapter dispenserContainerTransfers;
 	private final MinecraftRegionObservation regionObservation;
@@ -36,6 +37,7 @@ public final class MmmRuntime {
 			MinecraftIndicatorEditing indicatorEditing,
 			MinecraftDebugFixtures debugFixtures,
 			MinecraftRegionAdministration regionAdministration,
+			RegionDiagnosticsReport regionDiagnostics,
 			PlayerContainerTransferAdapter playerContainerTransfers,
 			DispenserContainerTransferAdapter dispenserContainerTransfers,
 			MinecraftRegionObservation regionObservation,
@@ -52,6 +54,7 @@ public final class MmmRuntime {
 		this.indicatorEditing = Objects.requireNonNull(indicatorEditing, "Indicator editing");
 		this.debugFixtures = Objects.requireNonNull(debugFixtures, "Debug fixtures");
 		this.regionAdministration = Objects.requireNonNull(regionAdministration, "Region administration");
+		this.regionDiagnostics = Objects.requireNonNull(regionDiagnostics, "Region diagnostics");
 		this.playerContainerTransfers = Objects.requireNonNull(playerContainerTransfers, "Player container transfers");
 		this.dispenserContainerTransfers = Objects.requireNonNull(
 				dispenserContainerTransfers, "Dispenser container transfers");
@@ -70,6 +73,7 @@ public final class MmmRuntime {
 	public MinecraftIndicatorEditing indicatorEditing() { return indicatorEditing; }
 	public MinecraftDebugFixtures debugFixtures() { return debugFixtures; }
 	public MinecraftRegionAdministration regionAdministration() { return regionAdministration; }
+	public RegionDiagnosticsReport regionDiagnostics() { return regionDiagnostics; }
 	PlayerContainerTransferAdapter playerContainerTransfers() { return playerContainerTransfers; }
 	DispenserContainerTransferAdapter dispenserContainerTransfers() { return dispenserContainerTransfers; }
 	public MinecraftRegionObservation regionObservation() { return regionObservation; }

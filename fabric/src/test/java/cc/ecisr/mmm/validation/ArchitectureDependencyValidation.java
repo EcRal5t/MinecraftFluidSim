@@ -53,12 +53,11 @@ public final class ArchitectureDependencyValidation {
 
 	/** Temporary direct imports of the S21 god service, each named by its removal slice. */
 	private static final Map<String, String> SERVICE_IMPORT_ALLOWLIST = Map.of(
-			"MmmCommands", "S21");
+			"MmmCommandHandlers", "S21");
 
 	/** Production classes above the final 1000-line limit, with the slice that closes each. */
 	private static final Map<String, String> SIZE_ALLOWLIST = Map.of(
 			"FluidDomain", "S21",
-			"FluidSimulationService", "S21",
 			"VulkanFlipPipeline", "S20");
 	private static final int SIZE_LIMIT = 1000;
 	private static final int SIZE_WARNING = 600;
@@ -257,7 +256,8 @@ public final class ArchitectureDependencyValidation {
 						|| source.packageName().startsWith("cc.ecisr.mmm.item")
 						|| source.packageName().startsWith("cc.ecisr.mmm.block")
 						|| source.packageName().startsWith("cc.ecisr.mmm.api")
-						|| source.simpleName().equals("MmmCommands"));
+						|| source.simpleName().equals("MmmCommands")
+						|| source.simpleName().equals("MmmCommandHandlers"));
 			if (!guarded || SERVICE_IMPORT_ALLOWLIST.containsKey(source.simpleName())) continue;
 			if (source.imports().contains("cc.ecisr.mmm.simulation.FluidSimulationService")) {
 				violations.add("external adapter imports simulation god service: " + source.simpleName());

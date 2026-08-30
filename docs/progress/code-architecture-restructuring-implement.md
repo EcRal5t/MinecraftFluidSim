@@ -400,6 +400,16 @@
 * 新建小型 `MinecraftRegionAdministration`，组合现有 catalog/persistence/application/recovery owner，接管 regions list/select/checkpoint/recoverprevious；`SelectionResult` 升为顶层类型，未把低层 `FluidRegionOperations` 整体公开。checkpoint 的 pending-WAL 预检、generation 重验、typed status 到原文案映射保持不变。
 * 其余 run/pause/step/remove/编辑/flag/fault operator 动作仍明确借 service，架构 allowlist 从 S19f 改绑 S21；不是通过新 facade 隐藏未拆职责。service 降至 894 行。`audit,lifecycle,containers` 与 `verifyArchitecture` 一次 Gradle 运行通过，架构门扫描 410 个生产源；无需进游戏。
 
+### S19h / S19 收口
+
+* 先复审 S19f 的权限与提交边界：所有迁移后的 handler 仍在同一个 `MmmCommandLog.run` 审计包装内；region administration 只接收已解析参数，checkpoint 仍经 application 的 pending-WAL 与 generation 重验。没有发现权限、transcript 或 commit-point 回退。
+* 新建只读 `RegionDiagnosticsReport`，接管 status、thermal/gas summary、ownership、chemistry inventory 与 granular inventory；构造只注入 manager/operations/takeover/fixtures/committed world truth 及窄 flag/budget supplier。region summaries 继续只归 `MinecraftRegionAdministration`，没有为了照抄提案制造第二份 catalog 报告。旧实现与新 owner 三组报告的字符串 literal 多重集逐项一致，命令结果文案未改。
+* `MmmCommands` 的 status/ownership/chemstatus/granstatus 与 step/pause 失败附带状态全部改走 runtime diagnostics；service 的约 230 行只读报告面删除并降至 `arch_baseline.py` 计数 661 行，低于 1000 行硬门，因此删除 size allowlist。service 仍有命令 operator 写动作、tick 与 recovery/shutdown 消费者，其唯一外部 import 例外明确绑定 S21；本轮没有建立替代 god facade。
+* 收口复核发现 Brigadier 树虽已指向语义 owner，但 handler 仍与树同居；最终拆出 package-private `MmmCommandHandlers`。`MmmCommands` 由 618 行降为 159 行，只保留树、权限、参数与统一 audit；475 行 handler 承接原方法，service import 的 S21 allowlist 也精确随迁，架构门同时守住两个根包命令类，未以改名绕过禁令。
+* routing、architecture baseline 与 README 命令表同步为当前权威面；过期的 persistence→live 与 core cycle 方向项从当前 allowlist 表移除，模块规模更新为 api 11/263、core 214/33393、fabric 161/26342、client 14/1590、gpu-probe 12/3867。`audit,protocol,lifecycle,containers` 与 `verifyArchitecture` 一次 Gradle 运行通过；命令类最终拆分后再跑最近的 `audit` 与架构门，扫描 412 个生产源并通过。S19e 另已通过 `materials,chemistry`，S19g 另已通过 client compile/protocol。无需进游戏：S19 没有新增真实 `VoxelShape`、跨重启事务格式或无法自动观察的视觉参数变化。
+
+S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Brigadier 树对 `FluidSimulationService` 零 import；协议会话由单服务器 runtime owner 持有；renderer 为 69 行编排且 ledger/GPU 各有唯一 owner；命令的场景、world truth、region administration 与诊断均已迁出。剩余 service 删除及 `MmmCommandHandlers` operator 写动作迁移按架构门明示归 S21。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

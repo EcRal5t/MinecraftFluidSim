@@ -33,8 +33,8 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 | 选择与保存区域 | `/mmm regions list`、`regions select <uuid>`、`regions checkpoint` |
 | 恢复上一完整 checkpoint | `/mmm regions recoverprevious <expectedCheckpoint>`；成功后退出并重新进入世界 |
 | 操作库存与碰撞 | `/mmm pour [1-16]`、`drain [1-16]`、`empty`、`refresh` |
-| 运行控制 | `/mmm run`、`pause`、`step [1-20]`、`status` |
-| 世界能力状态 | `/mmm status` 输出当前能力包指纹与 drift；能力集由 datapack 决定，不可在运行时更改 |
+| 运行与区域诊断 | `/mmm run`、`pause`、`step [1-20]`、`status`；状态只读 live/committed runtime，不作为库存真值 |
+| 控制器准入配置 | `/mmm controllers [true/false]`；关闭会暂停现有控制器域 |
 | 世界桥接 | `/mmm worldbridge`；重启后生效 |
 | 材料与界面调试 | `/mmm materialdemo`、`materialbucket ...`、`tensiondemo [angle]` |
 | 化学调试 | `/mmm chemistrydemo`、`reagent ...`、`chemstatus` |
@@ -43,6 +43,7 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 | 可调恒温边界 | `/give @s mmm:thermal_reservoir`；放置后用 field probe 右击该方块，在服务端签发的调节界面里设置温度（K） |
 | ownership 对账 | `/mmm ownership` |
 | 调试与实体 | `/mmm debug`、`entities`、`logpath` |
+| 容器 WAL 故障门 | `/mmm transferwal [fault <point>]`；仅用于事务恢复验证 |
 | 安全移除 | `/mmm remove` |
 
 ## 当前物理边界

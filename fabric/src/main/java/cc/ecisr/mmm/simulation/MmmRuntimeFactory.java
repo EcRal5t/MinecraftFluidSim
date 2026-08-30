@@ -65,6 +65,7 @@ public final class MmmRuntimeFactory {
 		return new MmmRuntime(simulation, simulation.controllerConsole(),
 				simulation.regionActivation(), simulation.indicatorEditing(),
 				simulation.debugFixtures(), simulation.regionAdministration(),
+				simulation.regionDiagnostics(),
 				simulation.playerContainerTransfers(), simulation.dispenserContainerTransfers(),
 				new MinecraftRegionObservation(regionManager, snapshots), containerRecovery,
 				new FabricFluidQueryApi(server, regionManager, startup.profileProven()), new ProtocolSessions(),
