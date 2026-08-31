@@ -255,6 +255,16 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			ThermalRegistry registry, FluidMaterialRegistry liquidRegistry, double initialTemperatureK,
 			int maximumTransportSubsteps
 	) {
+		if (!prepareThermalBinding(registry, liquidRegistry, initialTemperatureK)) return;
+		thermalState = FluidThermalBinding.create(registry, materialRegistry, initialTemperatureK,
+				particles.capacity(), sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), gasState.network,
+				maximumTransportSubsteps);
+		finishThermalBinding();
+	}
+
+	private boolean prepareThermalBinding(
+			ThermalRegistry registry, FluidMaterialRegistry liquidRegistry, double initialTemperatureK
+	) {
 		if (registry == null || liquidRegistry == null) throw new IllegalArgumentException("Thermal/liquid registry is missing");
 		if (!Double.isFinite(initialTemperatureK)) throw new IllegalArgumentException("Initial thermal temperature must be finite");
 		if (Float.floatToRawIntBits(config.cellSize()) != Float.floatToRawIntBits(0.5F)) {
@@ -265,7 +275,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			if (!thermalState.registry().fingerprint().equals(registry.fingerprint())) {
 				throw new IllegalArgumentException("A domain cannot change its thermal registry");
 			}
-			return;
+			return false;
 		}
 		if (chemicalParcels != null && !registry.chemicalRegistryFingerprint()
 				.equals(chemicalParcels.registry().fingerprint())) {
@@ -273,9 +283,10 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		}
 		ensureGrid();
 		if (!gasState.operatorVentedTopology) gasTopologyCoordinator.refresh();
-		thermalState = FluidThermalBinding.create(registry, materialRegistry, initialTemperatureK,
-				particles.capacity(), sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), gasState.network,
-				maximumTransportSubsteps);
+		return true;
+	}
+
+	private void finishThermalBinding() {
 		thermalBuoyancySum = new double[cellCount];
 		thermalBuoyancyVolume = new double[cellCount];
 		if (granularState != null) granularState.inventory.bindThermalEnergy(thermalGranularAdapter());
@@ -335,12 +346,17 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			throw new IllegalArgumentException("Thermal handoff registry identity mismatch");
 		}
 		validateCoherentRestoreCapacity(state.coherentGroups());
-		bindThermal(registry, materialRegistry, registry.material(
+		double initialTemperature = registry.material(
 				registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID,
-						materialRegistry.material(0).id())).referenceTemperatureK(), maximumTransportSubsteps);
+						materialRegistry.material(0).id())).referenceTemperatureK();
+		if (!prepareThermalBinding(registry, materialRegistry, initialTemperature)) {
+			throw new IllegalStateException("Thermal restore target is already bound");
+		}
+		thermalState = FluidThermalBinding.createRestoreTarget(registry, materialRegistry, initialTemperature,
+				particles.capacity(), sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), gasState.network,
+				maximumTransportSubsteps, state.copyInternalEnergy());
 		FluidThermalBinding.restore(thermalState, state, thermalMarkerContext(), gasState.network);
-		refreshCoherentOccupancy();
-		gridDirty = true;
+		finishThermalBinding();
 	}
 
 	void validateCoherentRestoreCapacity(List<CoherentPhaseStore.Group> groups) {

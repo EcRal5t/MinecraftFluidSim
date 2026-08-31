@@ -57,6 +57,29 @@ public final class ThermalDomainState {
 			double initialTemperatureK, int initialCapacity, int sizeX, int sizeY, int sizeZ,
 			float cellSize, ThermalCarrierContext markers, AirNetwork airNetwork, int maximumTransportSubsteps
 	) {
+		this(registry, materialByFluidHandle, materialByGranularHandle, initialTemperatureK, initialCapacity,
+				sizeX, sizeY, sizeZ, cellSize, markers, airNetwork, maximumTransportSubsteps, null);
+	}
+
+	/** Builds a private restore target without first modeling energies that the snapshot will replace. */
+	public static ThermalDomainState restoreTarget(
+			ThermalRegistry registry, int[] materialByFluidHandle, int[] materialByGranularHandle,
+			double initialTemperatureK, int initialCapacity, int sizeX, int sizeY, int sizeZ,
+			float cellSize, ThermalCarrierContext markers, AirNetwork airNetwork, int maximumTransportSubsteps,
+			double[] restoredLiquidEnergy
+	) {
+		if (restoredLiquidEnergy == null) throw new IllegalArgumentException("Restored liquid energy is missing");
+		return new ThermalDomainState(registry, materialByFluidHandle, materialByGranularHandle,
+				initialTemperatureK, initialCapacity, sizeX, sizeY, sizeZ, cellSize, markers, airNetwork,
+				maximumTransportSubsteps, restoredLiquidEnergy);
+	}
+
+	private ThermalDomainState(
+			ThermalRegistry registry, int[] materialByFluidHandle, int[] materialByGranularHandle,
+			double initialTemperatureK, int initialCapacity, int sizeX, int sizeY, int sizeZ,
+			float cellSize, ThermalCarrierContext markers, AirNetwork airNetwork, int maximumTransportSubsteps,
+			double[] restoredLiquidEnergy
+	) {
 		if (registry == null || materialByFluidHandle == null || materialByGranularHandle == null || markers == null) {
 			throw new IllegalArgumentException("Thermal binding input is missing");
 		}
@@ -76,7 +99,7 @@ public final class ThermalDomainState {
 		this.insertionTemperatureK = initialTemperatureK;
 		this.auditState = new ThermalAuditState(ThermalAuditLedger.initialized(SignedDyadic.ZERO));
 		this.liquidEnergy = new LiquidEnergyColumn(registry, stateFunction, unitScale, materialByFluidHandle,
-				initialTemperatureK, auditState, initialCapacity, markers);
+				initialTemperatureK, auditState, initialCapacity, markers, restoredLiquidEnergy);
 		GranularEnergyColumn granularColumn = new GranularEnergyColumn(
 				cc.ecisr.mmm.granular.GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION,
 				cc.ecisr.mmm.granular.GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
@@ -108,7 +131,9 @@ public final class ThermalDomainState {
 				registry, stateFunction, unitScale, materialByFluidHandle, materialByGranularHandle,
 				cellGrid, auditState, liquidEnergy, granularState, gasState);
 		this.devices = new FiniteDeviceExchangeCoordinator(this);
-		auditState.replace(ThermalAuditLedger.initialized(exactEnergy(markers.markerCount())));
+		if (restoredLiquidEnergy == null) {
+			auditState.replace(ThermalAuditLedger.initialized(exactEnergy(markers.markerCount())));
+		}
 	}
 
 	public Revision thermalRevision() {

@@ -137,9 +137,9 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 详细停止门见 [`performance-and-backends.md`](performance-and-backends.md)。
 
-完整 `FluidDomainState` 交接边界已经提取；motion 使用 `FluidStepRequest` / `FluidStepCandidate`，静水热轴使用 `FluidThermalStepRequest` / `FluidThermalStepCandidate`，CPU 规范实现都只在私有副本上生成候选。profile 决定何时实现和启用生产 GPU backend；数值 worker/GPU 只能消费 immutable step input，在 tick boundary 返回完整 candidate。世界读写、ownership、actor 和 HEAD 发布留在 server thread；超时保留上一完整 state，不能展示或持久化半步。
+完整 `FluidDomainState` 交接边界已经提取；motion 使用 `FluidStepRequest` / `FluidStepCandidate`，静水热轴使用 `FluidThermalStepRequest` / `FluidThermalStepCandidate`，CPU 规范实现都只在私有副本上生成候选。同进程 CPU 成功帧 single-use 转移已求值 aggregate，只有 checkpoint/replay/diagnostic 才物化完整 immutable candidate state；这与未来 GPU 的 device-resident 常规步、按需完整 readback 是同一所有权语义。profile 决定何时实现和启用生产 GPU backend；世界读写、ownership、actor 和 HEAD 发布留在 server thread；超时保留上一完整 state，不能展示或持久化半步。
 
-当前自动进入门有意分开：默认 `8×8×8` controller 的 20 个 live steps 使用 40 ms 硬预算，并以无 marker-local 分配的 face P2G 和 clean-grid 首 substep 复用移除等价冗余；正式 thermal/gas/phase 定义的半满状态同时要求 capture/restore、关闭 phase 的 backend candidate/restore 等价，以及独立预热后在新建 domain 上执行的首个 phase-on production step 不超过 40 ms。phase-on 门保留完整 phase-operation 预算、exact batch 规划、gas topology/available-volume remap、绝热体积功和总 `U` 审计；phase-off backend candidate 的完整复制耗时继续仅作诊断。该门已经自动闭合，但它只解除性能阻塞，不构成 full profile 的生产启用许可。
+当前自动进入门有意分开：默认 `8×8×8` controller 的 20 个 live steps 使用 40 ms 硬预算；`/mmm demo` 同规模的 `24×16×24` 完整能力状态另跑五步，并要求不形成三步连续超过 200 ms。门内保留完整 phase-operation 预算、exact batch 规划、gas topology/available-volume remap、绝热体积功和总 `U` 审计；CPU 只移除重复 state 往返与等价 exact-sum 分配，不降低求解精度。该门已经自动闭合，但 9,216-cell CPU 稳态仍远高于 20 Hz 目标，只证明 wall-time guard 不再把合法大域锁死，不构成 full profile 或生产 GPU 的启用许可。
 
 重新接入 full profile 或 backend adoption 前分开的自动门中，正式半满 fixture 的 phase-on logical step 硬预算门已经通过，并在 capture/restore 后保留 gas、总 `U` 和待下一次 projection 消费的 phase volume。纯机械门关闭 phase，但仍绑定正式 thermal/gas/phase registry 并每步经过 backend capture/restore：环境气体按既有半满几何初始化的平面自由面连续通过 500 步；先初始化空腔气体再注液形成的压缩气体场景连续通过 1000 步。两者的动能、质心、gas lineage、总 `U`、绝对 PCG 残差和逐阶段体力-pressure 功均闭合；phase-on 长跑产生的局部沸腾温差与热浮力属于真实非平衡热学，不能作为静水机械自激证据。
 

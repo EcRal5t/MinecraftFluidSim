@@ -188,6 +188,14 @@ public final class FluidRegionLifecycleValidation {
 		require(layoutRejected.status() == RegionStepStatus.LAYOUT_MISMATCH
 				&& region.domain() == committed && region.solverGeneration() == 1L,
 				"backend candidate changed sealed/carrier/registry layout");
+		FluidStepCandidate ownershipCandidate = backend.evaluate(new FluidStepRequest(
+				region.solverGeneration(), region.domain().captureAuthoritativeState(), List.of(), false, 0));
+		require(ownershipCandidate.claimPreparedCpuDomain() != null,
+				"CPU candidate did not expose its single-use prepared aggregate");
+		boolean lateStateRejected = false;
+		try { ownershipCandidate.state(); }
+		catch (IllegalStateException expected) { lateStateRejected = true; }
+		require(lateStateRejected, "adopted CPU aggregate could be rematerialized as a stale immutable state");
 
 		var secondResult = application.stepMotion(new MotionStepCommand(
 				region.id(), region.solverGeneration(), List.of(), false, 0, false));
@@ -342,6 +350,9 @@ public final class FluidRegionLifecycleValidation {
 				&& retryRegion.performanceBlockFailure() != null
 				&& retryRegion.numericalBlockFailure() == null,
 				"accepted slow steps were misclassified as a numerical solver failure");
+		require(MinecraftRegionAvailability.inventoryDecreaseMayBypass(retryRegion.availabilityReason())
+				&& !MinecraftRegionAvailability.inventoryDecreaseMayBypass(RegionAvailabilityReason.NUMERICAL_PAUSE),
+				"load-shedding writes did not isolate the retryable performance pause");
 		retryRegion.clearPerformanceBlock();
 		require(retryRegion.availabilityReason() == null && retryRegion.performanceBlockFailure() == null
 				&& retryRegion.hardOverrunStreak() == 0 && retryRegion.recoveryStreak() == 0,

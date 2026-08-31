@@ -19,9 +19,8 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 				? candidate.stepWithMechanicalAudit(
 						request.phaseChangeEnabled(), request.maximumPhaseOperations())
 				: candidate.step(request.phaseChangeEnabled(), request.maximumPhaseOperations());
-		return new FluidStepCandidate(id(), request.baseGeneration(),
-				Math.addExact(request.baseGeneration(), 1L), candidate.captureAuthoritativeState(), stats,
-				movingBodyCoupling);
+		return FluidStepCandidate.preparedCpu(
+				request.baseGeneration(), candidate, stats, movingBodyCoupling);
 	}
 
 	@Override public FluidThermalStepCandidate evaluateThermal(FluidThermalStepRequest request) {
@@ -29,7 +28,6 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 		FluidDomain candidate = FluidDomain.restoreAuthoritativeState(request.state());
 		FluidDomain.ThermalAxisStats stats = candidate.stepThermalAxis(
 				request.phaseChangeEnabled(), request.maximumPhaseOperations());
-		return new FluidThermalStepCandidate(id(), request.baseGeneration(),
-				Math.addExact(request.baseGeneration(), 1L), candidate.captureAuthoritativeState(), stats);
+		return FluidThermalStepCandidate.preparedCpu(request.baseGeneration(), candidate, stats);
 	}
 }

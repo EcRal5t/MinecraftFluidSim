@@ -28,7 +28,7 @@ final class FluidRegionRepository implements RegionRepository {
 	) {
 		FluidRegion region = regions.region(regionId);
 		RegionStepStatus rejected = validate(region, candidate.backendId(), candidate.baseGeneration(),
-				candidate.candidateGeneration(), candidate.state().layout(), expectedBackendId);
+				candidate.candidateGeneration(), candidate.layout(), expectedBackendId);
 		if (rejected != null) return rejected;
 		region.adoptStepCandidate(candidate, expectedBackendId);
 		return RegionStepStatus.ACCEPTED;
@@ -39,7 +39,7 @@ final class FluidRegionRepository implements RegionRepository {
 	) {
 		FluidRegion region = regions.region(regionId);
 		RegionStepStatus rejected = validate(region, candidate.backendId(), candidate.baseGeneration(),
-				candidate.candidateGeneration(), candidate.state().layout(), expectedBackendId);
+				candidate.candidateGeneration(), candidate.layout(), expectedBackendId);
 		if (rejected != null) return rejected;
 		region.adoptThermalStepCandidate(candidate, expectedBackendId);
 		return RegionStepStatus.ACCEPTED;

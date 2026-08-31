@@ -34,6 +34,15 @@ final class MinecraftRegionAvailability {
 	}
 
 	boolean ensure(ServerLevel level, FluidRegion region) {
+		return ensure(level, region, false);
+	}
+
+	/** Runs every ordinary availability gate while allowing only an existing wall-time pause. */
+	boolean ensureForInventoryDecrease(ServerLevel level, FluidRegion region) {
+		return ensure(level, region, true);
+	}
+
+	private boolean ensure(ServerLevel level, FluidRegion region, boolean toleratePerformancePause) {
 		if (containerRecovery.hasPending(region.id())) {
 			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
 					"存在未完成容器转移 WAL；恢复完成后才能继续");
@@ -41,12 +50,16 @@ final class MinecraftRegionAvailability {
 		}
 		boolean available = operations.ensureAvailable(
 				level, region, controllerFeatureEnabled.getAsBoolean(), regionTick::refreshRegionInputs,
-				snapshots::sendToLevel, snapshots::sendRemoval);
+				snapshots::sendToLevel, snapshots::sendRemoval, toleratePerformancePause);
 		if (available && world.hasCapability(WorldCapability.THERMAL)
 				&& region.solverLoaded() && region.domain().hasThermalState()) {
 			region.enableThermalActivity();
 			if (region.domain().hasPendingPhaseVolumeWork()) region.wakeForActivity();
 		}
 		return available;
+	}
+
+	static boolean inventoryDecreaseMayBypass(RegionAvailabilityReason reason) {
+		return reason == RegionAvailabilityReason.PERFORMANCE_PAUSE;
 	}
 }

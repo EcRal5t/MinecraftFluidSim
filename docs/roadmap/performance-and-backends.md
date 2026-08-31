@@ -24,15 +24,15 @@
 
 报告记录区域尺寸、活动 marker/carrier、substep、PCG iteration/residual、GC、wall time 和设备 timestamp。设备 timestamp 只做性能观测，调度仍以 wall time 为真值。
 
-当前默认 `8×8×8` controller 以独立 `production-live-budget` 门约束注入 16 BV 后的 20 个 live logical step；JVM 预热耗时独立报告，门内任何一步都必须小于 40 ms。P2G face splat 不产生 marker-local callback 对象，logical step 末已同步的 clean grid 在下一步首个 substep 复用；这些只是等价地移除分配与重复 rebuild，不改变 marker、CFL substep、PCG 或 residual。额外 warmup 和 pacing 不能替代该门。
+当前 `production-live-budget` 同时约束两种生产路径：默认 `8×8×8` controller 注入 16 BV 后的 20 个 live logical step 每步必须小于 40 ms；与 `/mmm demo` 相同的 `24×16×24`、1,728 个液体 cell、13,824 marker、完整 chemistry/granular/gas/thermal/phase 布局连续执行五步，不得形成三步连续超过 200 ms。JVM 预热耗时独立报告。P2G face splat、exact dyadic 分桶归约与 CPU prepared-candidate ownership transfer 都只等价移除对象分配、逐项大整数归约和重复 candidate capture/restore，不改变 marker、CFL substep、PCG、residual、相变预算或任何账本；额外 warmup、pacing、关闭能力或提高阈值不能替代该门。
 
 ## 并发边界
 
 Minecraft 世界读取、方块修改和实体快照留在服务器主线程：
 
 1. 主线程以 `FluidDomainState` 冻结本步完整权威输入，并用 `FluidStepRequest` 绑定 base generation；
-2. CPU worker 或 GPU 只在私有状态上计算一个 `FluidStepCandidate`；
-3. tick 边界原子提交完整结果；
+2. CPU worker 或 GPU 只在私有状态上计算一个语义完整的 `FluidStepCandidate`；
+3. tick 边界在 backend/generation/layout 重验后原子提交完整结果；同进程 CPU 可 single-use 转移已求值 aggregate，其他 backend 可交付 eager state；
 4. 超时保留上一完整状态，不展示半步；
 5. 世界和物品修改仍由主线程事务执行。
 
@@ -41,7 +41,7 @@ Minecraft 世界读取、方块修改和实体快照留在服务器主线程：
 - CPU 始终是规范、恢复和回退后端。
 - 粒子、网格和临时向量常驻设备内存；常规步不能全量回读 JVM heap。
 - 快照在设备侧压缩，只回读表面、相、温度和有界诊断。
-- 完整状态只在 checkpoint、卸载、后端切换或诊断时按 generation 分片回读。
+- 完整 host state 只在 checkpoint、卸载、后端切换、重播或诊断时按 generation 物化/分片回读；常规 CPU/GPU 帧不得为了形式上的 candidate 对称性强制一次全量往返。
 - 设备丢失时暂停区域，从最近 CPU 可读 checkpoint 恢复。
 - GPU 不要求逐 bit 等于 CPU，但必须满足相同库存账本和数值误差上限。
 - GPU 实现必须覆盖完整 `FluidDomainState`；当前只读纯水 probe 不实现 `FluidSolverBackend`，也不能作为生产后端选择。

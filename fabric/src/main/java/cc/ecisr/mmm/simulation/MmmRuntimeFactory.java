@@ -83,7 +83,7 @@ public final class MmmRuntimeFactory {
 				containerRecovery::hasPending, startup::authoritativeWritesReady,
 				policy.liveWorldBridgeEnabled()));
 		MinecraftRegionLifecycle regionLifecycle = new MinecraftRegionLifecycle(
-				startup, regionManager, regionOperations, snapshots, targets, controllerQueries,
+				startup, regionManager, regionOperations, availability, snapshots, targets, controllerQueries,
 				worldRegistries.thermalOrNull(), containerRecovery::hasPending);
 		MinecraftControllerConsole controllerConsole = new MinecraftControllerConsole(
 				targets, controllerQueries, regionLifecycle, new ThermalReservoirUseCase(), regionTick,

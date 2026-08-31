@@ -7,6 +7,7 @@ import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 
 /**
@@ -30,6 +31,15 @@ public final class LiquidEnergyColumn {
 			int[] materialByFluidHandle, double insertionTemperatureK, ThermalAuditState audit,
 			int initialCapacity, ThermalCarrierContext markers
 	) {
+		this(registry, stateFunction, unitScale, materialByFluidHandle, insertionTemperatureK,
+				audit, initialCapacity, markers, null);
+	}
+
+	LiquidEnergyColumn(
+			ThermalRegistry registry, ThermalStateFunction stateFunction, SolverUnitScale unitScale,
+			int[] materialByFluidHandle, double insertionTemperatureK, ThermalAuditState audit,
+			int initialCapacity, ThermalCarrierContext markers, double[] restoredEnergy
+	) {
 		this.registry = registry;
 		this.stateFunction = stateFunction;
 		this.unitScale = unitScale;
@@ -37,9 +47,27 @@ public final class LiquidEnergyColumn {
 		this.insertionTemperatureK = insertionTemperatureK;
 		this.audit = audit;
 		this.internalEnergy = new double[initialCapacity];
+		if (restoredEnergy != null) {
+			if (restoredEnergy.length != markers.markerCount()) {
+				throw new IllegalArgumentException("Restored liquid energy count differs from marker truth");
+			}
+			System.arraycopy(restoredEnergy, 0, internalEnergy, 0, restoredEnergy.length);
+			return;
+		}
+		HashMap<BaseEnergyKey, Double> baseEnergies = new HashMap<>();
 		for (int marker = 0; marker < markers.markerCount(); marker++) {
-			internalEnergy[marker] = modeledEnergy(marker, markers.mass(marker), markers.mixture(marker),
-					insertionTemperatureK, markers);
+			int thermalHandle = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
+			double physicalMass = unitScale.kilograms(markers.mass(marker));
+			ChemicalMixtureRecord mixture = markers.mixture(marker);
+			BaseEnergyKey key = new BaseEnergyKey(
+					thermalHandle, Double.doubleToRawLongBits(physicalMass), mixture);
+			double base = baseEnergies.computeIfAbsent(key, ignored -> stateFunction.baseEnergy(
+					thermalHandle, physicalMass, mixture, markers.chemicalRegistry()));
+			internalEnergy[marker] = base + physicalMass
+					* registry.material(thermalHandle).sensibleSpecificEnergyAt(insertionTemperatureK);
+			if (!Double.isFinite(internalEnergy[marker])) {
+				throw new IllegalArgumentException("Thermal marker modeled energy is invalid");
+			}
 		}
 	}
 
@@ -100,7 +128,7 @@ public final class LiquidEnergyColumn {
 	}
 
 	public SignedDyadic exactLiquidEnergy(int count) {
-		return SignedDyadic.sum(Arrays.copyOf(internalEnergy, count));
+		return SignedDyadic.sum(internalEnergy, count);
 	}
 
 	public double temperature(int marker, ThermalCarrierContext markers) {
@@ -256,6 +284,8 @@ public final class LiquidEnergyColumn {
 	private ThermalMaterialDefinition material(int marker, ThermalCarrierContext markers) {
 		return registry.material(materialByFluidHandle[markers.fluidMaterialHandle(marker)]);
 	}
+
+	private record BaseEnergyKey(int materialHandle, long massBits, ChemicalMixtureRecord mixture) { }
 
 	public record Truncation(double newEnergy, double removedEnergy) {
 		public Truncation {

@@ -36,7 +36,7 @@ public final class ProductionFluidReplayValidation {
 		DynamicReplayValidationScenarios.walkingBodyDisturbsThenSettlesAcrossBackend();
 	}
 
-	public static void defaultLiveStepsRemainBounded() {
+	public static void defaultLiveStepsRemainBounded() throws Exception {
 		DynamicReplayValidationScenarios.defaultLiveStepsRemainBounded();
 	}
 

@@ -58,6 +58,7 @@ final class ThermalCellOperations {
 		}
 		int coherentStart = liquidCount, activeStart = Math.addExact(coherentStart, coherentCount);
 		int depositStart = Math.addExact(activeStart, activeCount);
+		HashMap<LiquidBaseEnergyKey, Double> liquidBaseEnergies = new HashMap<>();
 		return new ThermalCellGrid.CarrierAccess() {
 			@Override public int carrierCount() { return Math.addExact(depositStart, depositKeys.size()); }
 			@Override public int cell(int carrier) {
@@ -90,7 +91,15 @@ final class ThermalCellOperations {
 						: markers.depositSvq(depositKeys.get(carrier - depositStart)));
 			}
 			@Override public double baseEnergy(int carrier) {
-				if (carrier < liquidCount) return liquidBaseEnergy(carrier, markers);
+				if (carrier < liquidCount) {
+					int thermalHandle = materialByFluidHandle[markers.fluidMaterialHandle(carrier)];
+					double physicalMass = unitScale.kilograms(markers.mass(carrier));
+					ChemicalMixtureRecord mixture = markers.mixture(carrier);
+					LiquidBaseEnergyKey key = new LiquidBaseEnergyKey(
+							thermalHandle, Double.doubleToRawLongBits(physicalMass), mixture);
+					return liquidBaseEnergies.computeIfAbsent(key, ignored -> stateFunction.baseEnergy(
+							thermalHandle, physicalMass, mixture, markers.chemicalRegistry()));
+				}
 				if (carrier < activeStart) {
 					CoherentPhaseStore.Group group = granular.coherentPhases().group(carrier - coherentStart);
 					return stateFunction.baseEnergy(registry.materialHandle(group.phaseId()), group.mass(),
@@ -127,6 +136,10 @@ final class ThermalCellOperations {
 			}
 		};
 	}
+
+	private record LiquidBaseEnergyKey(
+			int materialHandle, long massBits, ChemicalMixtureRecord mixture
+	) { }
 
 	ThermalDomainState.ReactionPlan requireGranularReaction(
 			int cell, List<GranularEnergyState.ReactionMarker> markerReplacements,

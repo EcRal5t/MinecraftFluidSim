@@ -428,6 +428,18 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 	static void exactDyadicAuditDoesNotLoseCancellationRemainders() {
 		SignedDyadic exact = SignedDyadic.sum(new double[]{1.0E16, 1.0, -1.0E16});
 		require(exact.equals(SignedDyadic.of(1.0)), "exact dyadic audit lost a cancellation remainder");
+		double[] varied = new double[8_192];
+		SignedDyadic repeatedAdd = SignedDyadic.ZERO;
+		for (int index = 0; index < varied.length; index++) {
+			int exponent = index % 1_900 - 1_000;
+			varied[index] = Math.scalb((index & 1) == 0 ? index + 1.0 : -(index + 0.5), exponent);
+			repeatedAdd = repeatedAdd.add(SignedDyadic.of(varied[index]));
+		}
+		require(SignedDyadic.sum(varied).equals(repeatedAdd),
+				"binned exact dyadic sum differs from repeated exact addition");
+		require(SignedDyadic.sum(varied, 4_096).equals(
+				SignedDyadic.sum(java.util.Arrays.copyOf(varied, 4_096))),
+				"bounded exact dyadic sum consumed values outside its range");
 		for (double value : new double[]{0.0, -0.0, Double.MIN_VALUE, -17.25, Double.MAX_VALUE}) {
 			require(Double.doubleToRawLongBits(SignedDyadic.of(value).toDouble())
 					== Double.doubleToRawLongBits(value == 0.0 ? 0.0 : value),

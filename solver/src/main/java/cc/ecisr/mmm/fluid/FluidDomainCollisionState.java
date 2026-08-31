@@ -122,8 +122,10 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 				registry, unitScale, maximumParticleCount, cellCount);
 		int[] tableIndex = state.copyMarkerMixtureIndex();
 		byte[] indicator = state.copyIndicator();
+		ChemicalMixtureRecord[] runtimeMixtures = state.mixtures().stream()
+				.map(mixture -> mixture.toRuntime(registry)).toArray(ChemicalMixtureRecord[]::new);
 		for (int marker = 0; marker < particles.count(); marker++) {
-			ChemicalMixtureRecord mixture = state.mixtures().get(tableIndex[marker]).toRuntime(registry);
+			ChemicalMixtureRecord mixture = runtimeMixtures[tableIndex[marker]];
 			restored.requireCompatible(mixture, materialRegistry.material(particles.materialHandle(marker)).id(), indicator[marker] != 0);
 			restored.assign(marker, mixture, indicator[marker] != 0);
 		}

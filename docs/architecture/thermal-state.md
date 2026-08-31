@@ -91,7 +91,7 @@ Delta U_b = -Delta U_a
 dt_stable = min_cell(0.5 * C_cell / sum_faces G_face)
 ```
 
-自动分 substep；`0.5` 保证一对相同 cell 单调趋近平衡而非一步交换温度。所需 substep 超过 8 时安全暂停。hot loop 使用 `double`，每个 face 对的增减严格镜像；commit 边界用 `SignedDyadic` 精确求和记录 IEEE-754 有限数，舍入残差单列保存，不能伪装成 source 或 sink。
+自动分 substep；`0.5` 保证一对相同 cell 单调趋近平衡而非一步交换温度。所需 substep 超过 8 时安全暂停。hot loop 使用 `double`，每个 face 对的增减严格镜像；commit 边界用 `SignedDyadic` 精确求和记录 IEEE-754 有限数，舍入残差单列保存，不能伪装成 source 或 sink。批量求和按 binary64 固有的 2,046 个 dyadic exponent 分桶，每桶以有符号 128-bit 两字累加后只做一次 `BigInteger` 合并；它与逐项 exact add bit-for-bit 等价，不是近似归约，也不会按载体种类跳过审计。
 
 内置水在 293.15 K 使用 `rho = 1000 kg/m³`、`cv = 4184 J/(kg·K)`、`k = 0.598 W/(m·K)`；水蒸气的 `k = 0.025 W/(m·K)`，`cv` 则按 [NIST water-vapor Shomate 数据](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7732185&Table=on&Type=JANAFG)换算为覆盖 `250–1700 K` 的五段数据，不把常温值外推到压缩后的高温状态。一个 0.5 m cell 满水的热容量约 `523 kJ/K`；4 BV 水约 `16.736 MJ/K`。四个完整 reservoir 接触面总导热为 `2.392 W/K`，因此现实标定下温升本来就慢，极端热源只是高功率边界，不是比热缩放。
 

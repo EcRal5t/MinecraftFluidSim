@@ -59,7 +59,7 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 - `RELEASE_OWNERSHIP` 只在凝聚相、气体和有限设备为空且无 WAL/phase work 后恢复 preimage；玩家已经占据的方块优先，不被覆盖。
 - `REMOVE_EMPTY_REGION` 只在上述库存为空、ownership 已释放且 quarantine 可接纳时发布 `REMOVED` HEAD。随后发送 network tombstone、注销 runtime，并把旧 ACTIVE payload 收敛到 `mmm/quarantine/removed-region/`；UUID 永不复用。
 
-旧的 `/mmm empty` 只保留给非 controller 开发域；controller 管理的区域必须使用上述确认流程。任何 audit、WAL、availability 或 quarantine blocker 都在预览中明确列出并阻止提交。
+旧的 `/mmm empty` 只保留给非 controller 开发域；controller 管理的区域必须手持物质场探针普通右击控制器，在控制台按 `EMPTY_CONDENSED`、`VENT_SEALED_GAS`、`RELEASE_OWNERSHIP`、`REMOVE_EMPTY_REGION` 依次预览并确认。纯 wall-time `PERFORMANCE_PAUSE` 不代表库存或账本不可解释，因此仍允许 `drain`、容器装取和上述只减少库存的 lifecycle；操作后保持暂停，需显式 resume。数值、热学、气体、颗粒、边界、ownership、WAL、audit 或 quarantine blocker 仍在预览中明确列出并阻止提交。
 
 ## 容器真值
 

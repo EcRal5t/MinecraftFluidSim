@@ -31,6 +31,7 @@ public final class MinecraftRegionLifecycle {
 	private final WorldStartupCoordinator.Result startup;
 	private final FluidRegionManager regions;
 	private final FluidRegionOperations operations;
+	private final MinecraftRegionAvailability availability;
 	private final FluidSnapshotPublisher snapshots;
 	private final FluidWorldTargetResolver targets;
 	private final ControllerQueryUseCase controllerQueries;
@@ -41,6 +42,7 @@ public final class MinecraftRegionLifecycle {
 			WorldStartupCoordinator.Result startup,
 			FluidRegionManager regions,
 			FluidRegionOperations operations,
+			MinecraftRegionAvailability availability,
 			FluidSnapshotPublisher snapshots,
 			FluidWorldTargetResolver targets,
 			ControllerQueryUseCase controllerQueries,
@@ -50,6 +52,7 @@ public final class MinecraftRegionLifecycle {
 		this.startup = Objects.requireNonNull(startup, "World startup result");
 		this.regions = Objects.requireNonNull(regions, "Region manager");
 		this.operations = Objects.requireNonNull(operations, "Region operations");
+		this.availability = Objects.requireNonNull(availability, "Region availability");
 		this.snapshots = Objects.requireNonNull(snapshots, "Snapshot publisher");
 		this.targets = Objects.requireNonNull(targets, "World target resolver");
 		this.controllerQueries = Objects.requireNonNull(controllerQueries, "Controller query use case");
@@ -89,6 +92,7 @@ public final class MinecraftRegionLifecycle {
 		if (!controllerQueries.consumeActionToken(player.getUUID(), region.id(), summaryGeneration)) {
 			return PreviewResult.failed(Component.translatable("message.mmm.controller.summary_expired"));
 		}
+		availability.ensureForInventoryDecrease(player.level(), region);
 		LifecycleOperationPreview preview = useCase.preview(lifecycleFacts(player, region, operation));
 		return new PreviewResult(preview, null);
 	}
@@ -101,6 +105,7 @@ public final class MinecraftRegionLifecycle {
 		ResolvedController resolved = resolveInteractiveController(player, requestedRegionId, controllerPosition);
 		if (resolved.failure() != null) return CommitResult.failedDetail(resolved.failure());
 		FluidRegion region = resolved.region();
+		availability.ensureForInventoryDecrease(player.level(), region);
 		RegionLifecycleUseCase.CommitAuthorization authorization = useCase.authorizeCommit(
 				nonce, lifecycleFacts(player, region, operation));
 		if (authorization.decision() == RegionLifecycleUseCase.CommitDecision.TOKEN_INVALID) {
@@ -292,7 +297,10 @@ public final class MinecraftRegionLifecycle {
 			blockers.add(LifecycleOperationPreview.Blocker.PERMISSION_DENIED);
 		}
 		if (!startup.authoritativeWritesReady()) blockers.add(LifecycleOperationPreview.Blocker.STARTUP_NOT_READY);
-		if (region.availabilityFailure() != null) blockers.add(LifecycleOperationPreview.Blocker.REGION_UNAVAILABLE);
+		if (region.availabilityFailure() != null
+				&& !MinecraftRegionAvailability.inventoryDecreaseMayBypass(region.availabilityReason())) {
+			blockers.add(LifecycleOperationPreview.Blocker.REGION_UNAVAILABLE);
+		}
 		if (!region.solverLoaded()) blockers.add(LifecycleOperationPreview.Blocker.REGION_UNLOADED);
 		if (pendingWal || operations.ownershipLockDescription(region) != null) {
 			blockers.add(LifecycleOperationPreview.Blocker.PENDING_WAL);

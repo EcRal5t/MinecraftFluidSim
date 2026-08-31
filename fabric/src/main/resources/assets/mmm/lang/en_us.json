@@ -64,7 +64,7 @@
   "message.mmm.controller.disabled": "Matter, Motion & Mechanics controllers are disabled. An administrator must run /mmm controllers true.",
   "message.mmm.controller.failed": "Controller activation refused: %s",
   "block.mmm.fluid_boundary.tooltip": "Build every face of one closed shell; ordinary blocks are insulating",
-  "block.mmm.fluid_controller.tooltip": "Place exactly one in the shell; empty-hand use activates or opens it",
+  "block.mmm.fluid_controller.tooltip": "Place exactly one in the shell; empty-hand use activates, and the field probe opens its console",
   "block.mmm.thermal_reservoir.tooltip": "Declared infinite heat bath; use the field probe to set its temperature",
   "item.mmm.quick_start_guide": "Matter, Motion & Mechanics Quick Start",
   "item.mmm.quick_start_guide.tooltip": "Closed-shell setup, sources, observation, and safe removal",

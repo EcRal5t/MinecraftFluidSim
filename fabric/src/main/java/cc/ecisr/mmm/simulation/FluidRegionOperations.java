@@ -159,7 +159,8 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			boolean controllersEnabled,
 			CollisionRefresher collisionRefresher,
 			SnapshotSender snapshotSender,
-			RemovalSender removalSender
+			RemovalSender removalSender,
+			boolean toleratePerformancePause
 	) {
 		if (region.chemistryBlockFailure() != null) {
 			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, region.chemistryBlockFailure());
@@ -177,12 +178,13 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, region.numericalBlockFailure());
 			return false;
 		}
-		if (region.performanceBlockFailure() != null) {
+		boolean performancePaused = region.performanceBlockFailure() != null;
+		if (performancePaused && !toleratePerformancePause) {
 			region.setAvailabilityFailure(RegionAvailabilityReason.PERFORMANCE_PAUSE, region.performanceBlockFailure());
 			return false;
 		}
 		if (!region.controllerManaged()) {
-			region.setAvailabilityFailure(null);
+			if (!performancePaused) region.setAvailabilityFailure(null);
 			return true;
 		}
 		String ownershipLock = persistence.ownershipLockDescription(region);
@@ -252,7 +254,9 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			collisionRefresher.refresh(level, region);
 			region.markCollisionRefreshed();
 		}
-		region.setAvailabilityFailure(null);
+		if (performancePaused) region.setAvailabilityFailure(
+				RegionAvailabilityReason.PERFORMANCE_PAUSE, region.performanceBlockFailure());
+		else region.setAvailabilityFailure(null);
 		return true;
 	}
 

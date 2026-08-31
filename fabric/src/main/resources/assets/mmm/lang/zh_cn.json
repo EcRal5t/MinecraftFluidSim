@@ -64,7 +64,7 @@
   "message.mmm.controller.disabled": "物质、运动与力学控制器功能门尚未开启；管理员需先执行 /mmm controllers true。",
   "message.mmm.controller.failed": "控制器激活被拒绝：%s",
   "block.mmm.fluid_boundary.tooltip": "用它封闭一个完整壳体的每一面；普通边界绝热",
-  "block.mmm.fluid_controller.tooltip": "壳体中只放一个；空手使用可激活或打开控制台",
+  "block.mmm.fluid_controller.tooltip": "壳体中只放一个；空手使用可激活，物质场探针打开控制台",
   "block.mmm.thermal_reservoir.tooltip": "声明的无限热浴；用物质场探针设定温度",
   "item.mmm.quick_start_guide": "物质、运动与力学快速入门",
   "item.mmm.quick_start_guide.tooltip": "闭壳搭建、投料、观察与安全拆除",

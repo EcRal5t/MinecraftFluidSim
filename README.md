@@ -13,7 +13,7 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 - 区域 checkpoint 使用双槽完整代次与 HEAD 最后发布。`regions recoverprevious` 只在当前 HEAD 恢复失败后，显式验证并激活紧邻的上一完整代。
 - 区域载荷必须与已提交的世界能力包完全一致。任何格式、区域布局、registry fingerprint、身份或账本不一致都会保留原文件并锁定，不改写载荷或猜测修复。
 - 容器事务跨区域、物品和玩家/发射器持久域。actor 的 after-item 完成 durable save 并回读 exact after 前不得删除 WAL；未知、损坏或布局不一致的 WAL 保留并锁定。
-- `empty` 联合清空非控制器开发域中的液体、连续凝聚相、active parcel 和 deposit，并把实际移除的物质与能量记入 sink；控制器区域必须用控制器界面的 `EMPTY_CONDENSED` 预览/确认事务，不能由命令绕过。存在未决容器 WAL 或相变功时拒绝破坏性 lifecycle；普通桶、发射器及 `pour`/`drain` 会先用权威 mechanical candidate 结算已有相变功再转移。
+- `empty` 联合清空非控制器开发域中的液体、连续凝聚相、active parcel 和 deposit，并把实际移除的物质与能量记入 sink；控制器区域必须用控制器界面的 `EMPTY_CONDENSED` 预览/确认事务，不能由命令绕过。存在未决容器 WAL 或相变功时拒绝破坏性 lifecycle；普通桶、发射器及 `pour`/`drain` 会先用权威 mechanical candidate 结算已有相变功再转移。纯 wall-time `PERFORMANCE_PAUSE` 仍允许 `drain`、装取和 lifecycle 清空这类只减少库存的操作；数值、账本、边界或 WAL 暂停不放行。
 - 可选 GPU probe 只读且不修改世界或存档；主 Mod 始终以 CPU 结果为规范。
 
 世界能力（材料、化学、颗粒、降水、热学和相变）不是每个世界的开关，而是由 datapack 定义并在服务器首次启动时发布为不可变的世界能力包（`mmm/world-capabilities/`，HEAD 是唯一提交点）。能力包同时冻结该世界的 registry 快照与区域布局，是已有库存的唯一解释。启动后 datapack 若与已提交包不一致，包继续作为权威，只报告 drift，不修复也不重发；无法证明能力包的世界会锁定并关闭控制器。任何来自其他实现或其他 build 的存档目录都原样保留并锁定，没有迁移或字段补全。
@@ -44,7 +44,7 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 | ownership 对账 | `/mmm ownership` |
 | 调试与实体 | `/mmm debug`、`entities`、`logpath` |
 | 容器 WAL 故障门 | `/mmm transferwal [fault <point>]`；仅用于事务恢复验证 |
-| 安全移除 | `/mmm remove` |
+| 安全移除 | 手持物质场探针普通右击控制器，在控制台依次预览并确认 `EMPTY_CONDENSED` → `VENT_SEALED_GAS` → `RELEASE_OWNERSHIP` → `REMOVE_EMPTY_REGION`；`/mmm remove` 只处理非控制器开发域 |
 
 ## 当前物理边界
 

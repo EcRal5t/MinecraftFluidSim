@@ -9,6 +9,7 @@ public final class PackedChemicalMixturePool {
 	private final short[] species;
 	private final long[] amounts;
 	private final long[] residualBits;
+	private final ChemicalMixtureRecord[] records;
 	private final int[] freeHandles;
 	private int freeCount;
 	private int liveCount;
@@ -20,6 +21,7 @@ public final class PackedChemicalMixturePool {
 		this.species = new short[Math.multiplyExact(handleCapacity, ChemicalLimits.MAX_SPECIES_PER_PARCEL)];
 		this.amounts = new long[species.length];
 		this.residualBits = new long[handleCapacity];
+		this.records = new ChemicalMixtureRecord[handleCapacity];
 		this.freeHandles = new int[reservedMarkerCapacity];
 		for (int handle = reservedMarkerCapacity; handle >= 1; handle--) freeHandles[freeCount++] = handle;
 	}
@@ -45,12 +47,15 @@ public final class PackedChemicalMixturePool {
 		Arrays.fill(amounts, base, base + count, 0L);
 		entryCount[handle] = 0;
 		residualBits[handle] = 0L;
+		records[handle] = null;
 		freeHandles[freeCount++] = handle;
 		liveCount--;
 	}
 
 	public ChemicalMixtureRecord record(int handle) {
 		requireLive(handle);
+		ChemicalMixtureRecord cached = records[handle];
+		if (cached != null) return cached;
 		int count = Byte.toUnsignedInt(entryCount[handle]);
 		int[] recordSpecies = new int[count];
 		long[] recordAmounts = new long[count];
@@ -59,7 +64,7 @@ public final class PackedChemicalMixturePool {
 			recordSpecies[entry] = Short.toUnsignedInt(species[base + entry]);
 			recordAmounts[entry] = amounts[base + entry];
 		}
-		return new ChemicalMixtureRecord(recordSpecies, recordAmounts, residualBits[handle]);
+		return records[handle] = new ChemicalMixtureRecord(recordSpecies, recordAmounts, residualBits[handle]);
 	}
 
 	public boolean isLive(int handle) {
@@ -70,7 +75,8 @@ public final class PackedChemicalMixturePool {
 	public int packedEntryCapacity() { return species.length; }
 	public long cpuBytes() {
 		return entryCount.length + (long) species.length * Short.BYTES + (long) amounts.length * Long.BYTES
-				+ (long) residualBits.length * Long.BYTES + (long) freeHandles.length * Integer.BYTES;
+				+ (long) residualBits.length * Long.BYTES + (long) records.length * Long.BYTES
+				+ (long) freeHandles.length * Integer.BYTES;
 	}
 
 	private void write(int handle, ChemicalMixtureRecord record) {
@@ -89,6 +95,7 @@ public final class PackedChemicalMixturePool {
 		}
 		residualBits[handle] = record.massResidualKilogramsBits();
 		entryCount[handle] = (byte) record.entryCount();
+		records[handle] = record;
 	}
 
 	private void requireLive(int handle) {

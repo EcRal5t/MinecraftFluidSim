@@ -46,7 +46,7 @@ public final class RegionApplicationService implements RegionTickUseCase.StepExe
 				capture.solverGeneration(), capture.state(), command.movingBodies(),
 				command.phaseChangeEnabled(), command.maximumPhaseOperations(), command.mechanicalAuditEnabled()));
 		RegionStepStatus invalid = validateCandidate(capture, candidate.backendId(), candidate.baseGeneration(),
-				candidate.candidateGeneration(), candidate.state().layout());
+				candidate.candidateGeneration(), candidate.layout());
 		if (invalid != null) return MotionStepResult.rejected(invalid);
 		RegionStepStatus adoption = regions.adoptMotion(command.regionId(), candidate, solverBackend.id());
 		return adoption == RegionStepStatus.ACCEPTED
@@ -66,7 +66,7 @@ public final class RegionApplicationService implements RegionTickUseCase.StepExe
 				capture.solverGeneration(), capture.state(), command.phaseChangeEnabled(),
 				command.maximumPhaseOperations()));
 		RegionStepStatus invalid = validateCandidate(capture, candidate.backendId(), candidate.baseGeneration(),
-				candidate.candidateGeneration(), candidate.state().layout());
+				candidate.candidateGeneration(), candidate.layout());
 		if (invalid != null) return ThermalStepResult.rejected(invalid);
 		RegionStepStatus adoption = regions.adoptThermal(command.regionId(), candidate, solverBackend.id());
 		return adoption == RegionStepStatus.ACCEPTED

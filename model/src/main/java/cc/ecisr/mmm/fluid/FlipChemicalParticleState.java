@@ -65,13 +65,15 @@ public final class FlipChemicalParticleState {
 		double residual = 0.0;
 		double[] mass = materials.copyParticleMass();
 		SolverUnitScale unitScale = SolverUnitScale.forCellSize(materials.cellSize());
+		List<ChemicalMixtureRecord> runtimeMixtures = mixtures.stream()
+				.map(mixture -> mixture.toRuntime(registry)).toList();
 		for (int marker = 0; marker < markerMixtureIndex.length; marker++) {
 			int table = markerMixtureIndex[marker];
 			if (table < 0 || table >= mixtures.size() || (indicator[marker] & ~1) != 0) {
 				throw new IllegalArgumentException("Invalid per-marker chemical table index/indicator");
 			}
 			StableMixture mixture = mixtures.get(table);
-			ChemicalMixtureRecord runtime = mixture.toRuntime(registry);
+			ChemicalMixtureRecord runtime = runtimeMixtures.get(table);
 			for (int entry = 0; entry < runtime.entryCount(); entry++) {
 				recomputed[runtime.speciesHandle(entry)] = Math.addExact(
 						recomputed[runtime.speciesHandle(entry)], runtime.amountAt(entry));
@@ -100,7 +102,11 @@ public final class FlipChemicalParticleState {
 	) {
 		if (markerMixtures.size() != materials.particleCount()) throw new IllegalArgumentException("Marker mixture count mismatch");
 		ArrayList<StableMixture> perMarker = new ArrayList<>(markerMixtures.size());
-		for (ChemicalMixtureRecord mixture : markerMixtures) perMarker.add(StableMixture.fromRuntime(registry, mixture));
+		HashMap<ChemicalMixtureRecord, StableMixture> stableByRuntime = new HashMap<>();
+		for (ChemicalMixtureRecord mixture : markerMixtures) {
+			perMarker.add(stableByRuntime.computeIfAbsent(
+					mixture, value -> StableMixture.fromRuntime(registry, value)));
+		}
 		java.util.TreeSet<StableMixture> unique = new java.util.TreeSet<>(StableMixture.ORDER);
 		unique.addAll(perMarker);
 		ArrayList<StableMixture> table = new ArrayList<>(unique);

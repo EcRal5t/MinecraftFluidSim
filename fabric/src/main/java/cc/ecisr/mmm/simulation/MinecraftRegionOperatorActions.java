@@ -134,7 +134,9 @@ public final class MinecraftRegionOperatorActions {
 	public WaterEditResult drainWater(ServerPlayer player, int buckets) {
 		FluidRegion region = activeRegion();
 		if (region == null || !player.level().dimension().equals(region.dimension())) return WaterEditResult.NO_DOMAIN;
-		if (!availability.ensure(player.level(), region)) return WaterEditResult.blocked(region.availabilityFailure());
+		if (!availability.ensureForInventoryDecrease(player.level(), region)) {
+			return WaterEditResult.blocked(region.availabilityFailure());
+		}
 		if (!phaseWorkBarrier.settle(player.level(), region)) return WaterEditResult.blocked(region.availabilityFailure());
 		FluidWorldTargetResolver.CellTarget resolved = targets.aimedCellForEdit(player, region, true);
 		if (resolved == null) return WaterEditResult.NO_TARGET;
@@ -161,7 +163,7 @@ public final class MinecraftRegionOperatorActions {
 	public RestorationStats remove(MinecraftServer server) {
 		if (regions.regions().stream().anyMatch(FluidRegion::controllerManaged)) {
 			return RestorationStats.failed(false, 0, 0, 0,
-					"controller 区域只能在控制台依次清空、排气、解除 ownership 并确认 REMOVED");
+					"controller 区域需手持物质场探针普通右击控制器打开控制台，依次预览并确认：清空凝聚相、排放密闭气体、释放 ownership、移除区域");
 		}
 		if (containerRecovery.hasAnyLock()) return RestorationStats.failed(false, 0, 0, 0,
 				"存在未完成或不可识别的容器转移 WAL；拒绝移除区域，先完成恢复");
@@ -182,8 +184,10 @@ public final class MinecraftRegionOperatorActions {
 		if (!startup.authoritativeWritesReady()) return authoritativeWriteFailure("清空区域库存");
 		FluidRegion region = activeRegion();
 		if (region == null || !level.dimension().equals(region.dimension())) return "没有活动流体域或位于其他维度";
-		if (region.controllerManaged()) return "清空失败：controller 区域必须使用控制台 lifecycle 确认操作";
-		if (!availability.ensure(level, region)) return "清空失败：控制器域当前不可用：" + region.availabilityFailure();
+		if (region.controllerManaged()) return "清空失败：请手持物质场探针普通右击控制器打开控制台，并使用“清空凝聚相”的预览/确认操作";
+		if (!availability.ensureForInventoryDecrease(level, region)) {
+			return "清空失败：流体域当前不可用：" + region.availabilityFailure();
+		}
 		if (containerRecovery.hasPending(region.id())) return "清空失败：区域存在未完成或不可识别的容器转移 WAL；拒绝清空";
 		FluidDomain domain = region.domain();
 		if (domain.hasPendingPhaseVolumeWork()) return "清空失败：区域存在尚未由下一次 pressure projection 消费的相变体积/功记录";

@@ -22,6 +22,28 @@ final class FluidThermalBinding {
 			int initialCapacity, int sizeX, int sizeY, int sizeZ, float cellSize,
 			ThermalCarrierContext markers, AirNetwork airNetwork, int maximumTransportSubsteps
 	) {
+		MaterialMappings mappings = mappings(registry, liquids, initialTemperatureK, markers);
+		return new ThermalDomainState(registry, mappings.liquid(), mappings.granular(),
+				initialTemperatureK, initialCapacity, sizeX, sizeY, sizeZ, cellSize, markers,
+				airNetwork, maximumTransportSubsteps);
+	}
+
+	static ThermalDomainState createRestoreTarget(
+			ThermalRegistry registry, FluidMaterialRegistry liquids, double initialTemperatureK,
+			int initialCapacity, int sizeX, int sizeY, int sizeZ, float cellSize,
+			ThermalCarrierContext markers, AirNetwork airNetwork, int maximumTransportSubsteps,
+			double[] restoredLiquidEnergy
+	) {
+		MaterialMappings mappings = mappings(registry, liquids, initialTemperatureK, markers);
+		return ThermalDomainState.restoreTarget(registry, mappings.liquid(), mappings.granular(),
+				initialTemperatureK, initialCapacity, sizeX, sizeY, sizeZ, cellSize, markers,
+				airNetwork, maximumTransportSubsteps, restoredLiquidEnergy);
+	}
+
+	private static MaterialMappings mappings(
+			ThermalRegistry registry, FluidMaterialRegistry liquids, double initialTemperatureK,
+			ThermalCarrierContext markers
+	) {
 		if (registry == null || liquids == null || markers == null) {
 			throw new IllegalArgumentException("Thermal binding input is missing");
 		}
@@ -46,10 +68,10 @@ final class FluidThermalBinding {
 			requireTemperature(material, initialTemperatureK);
 			materialByGranularHandle[handle] = thermalHandle;
 		}
-		return new ThermalDomainState(registry, materialByFluidHandle, materialByGranularHandle,
-				initialTemperatureK, initialCapacity, sizeX, sizeY, sizeZ, cellSize, markers,
-				airNetwork, maximumTransportSubsteps);
+		return new MaterialMappings(materialByFluidHandle, materialByGranularHandle);
 	}
+
+	private record MaterialMappings(int[] liquid, int[] granular) { }
 
 	static ThermalDomainState create(
 			ThermalRegistry registry, FluidMaterialRegistry liquids, double initialTemperatureK,
@@ -84,7 +106,6 @@ final class FluidThermalBinding {
 			ThermalCarrierContext markers, AirNetwork airNetwork
 	) {
 		if (state.coherentPhases().groupCount() != 0) throw new IllegalStateException("Thermal restore target is not empty");
-		state.restoreLiquidEnergies(snapshot.copyInternalEnergy());
 		for (CoherentPhaseStore.Group group : snapshot.coherentGroups()) {
 			int material = state.registry().materialHandle(group.phaseId());
 			if (state.registry().material(material).carrierKind()
@@ -114,7 +135,6 @@ final class FluidThermalBinding {
 		}
 		state.restoreGasEnergies(airNetwork, restoredGas);
 		for (int marker = 0; marker < markers.markerCount(); marker++) state.temperature(marker, markers);
-		state.preparePhaseScan(markers);
 		state.restoreAuditLedger(snapshot.audit());
 		if (!state.exactEnergy(markers.markerCount()).equals(state.audit().ledger().expectedInventory())) {
 			throw new IllegalArgumentException("Restored thermal audit does not close");

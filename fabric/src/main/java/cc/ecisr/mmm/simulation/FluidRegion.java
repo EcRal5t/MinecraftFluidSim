@@ -182,20 +182,25 @@ public final class FluidRegion {
 	 */
 	void adoptStepCandidate(FluidStepCandidate candidate, String expectedBackendId) {
 		Objects.requireNonNull(candidate, "candidate");
+		FluidDomain preparedCpuDomain = candidate.claimPreparedCpuDomain();
 		adoptCandidateState(candidate.backendId(), candidate.baseGeneration(), candidate.candidateGeneration(),
-				candidate.state(), expectedBackendId);
+				candidate.layout(), preparedCpuDomain,
+				preparedCpuDomain == null ? candidate.state() : null, expectedBackendId);
 	}
 
 	/** Applies the same atomic identity/layout gate to a thermal-only private backend successor. */
 	void adoptThermalStepCandidate(FluidThermalStepCandidate candidate, String expectedBackendId) {
 		Objects.requireNonNull(candidate, "candidate");
+		FluidDomain preparedCpuDomain = candidate.claimPreparedCpuDomain();
 		adoptCandidateState(candidate.backendId(), candidate.baseGeneration(), candidate.candidateGeneration(),
-				candidate.state(), expectedBackendId);
+				candidate.layout(), preparedCpuDomain,
+				preparedCpuDomain == null ? candidate.state() : null, expectedBackendId);
 	}
 
 	private void adoptCandidateState(
 			String backendId, long baseGeneration, long candidateGeneration,
-			FluidDomainState state, String expectedBackendId
+			FluidDomainState.Layout candidateLayout, FluidDomain preparedCpuDomain,
+			FluidDomainState materializedState, String expectedBackendId
 	) {
 		Objects.requireNonNull(expectedBackendId, "expectedBackendId");
 		if (domain == null) throw new IllegalStateException("Region solver is unloaded");
@@ -203,10 +208,12 @@ public final class FluidRegion {
 				|| candidateGeneration != Math.addExact(solverGeneration, 1L)) {
 			throw new IllegalStateException("Backend candidate identity or generation is stale");
 		}
-		if (!state.layout().equals(domain.authoritativeLayout())) {
+		if (!candidateLayout.equals(domain.authoritativeLayout())) {
 			throw new IllegalStateException("Backend candidate changed the live solver layout");
 		}
-		FluidDomain replacement = FluidDomain.restoreAuthoritativeState(state);
+		FluidDomain replacement = preparedCpuDomain == null
+				? FluidDomain.restoreAuthoritativeState(Objects.requireNonNull(materializedState, "materializedState"))
+				: preparedCpuDomain;
 		if (replacement.sizeX() != sizeX || replacement.sizeY() != sizeY || replacement.sizeZ() != sizeZ
 				|| replacement.maximumParticleCount() != reservedMarkerCapacity
 				|| !replacement.config().equals(solverConfig)) {

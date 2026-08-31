@@ -57,7 +57,11 @@ public final class DispenserContainerTransferAdapter {
 		FluidWorldTargetResolver.TransferTarget transferTarget = targets.transferTargetAtBlock(level, target, facing);
 		FluidRegion region = transferTarget == null ? null : transferTarget.region();
 		if (region == null) return vanillaItem ? null : stack;
-		if (stack.getCount() != 1 || !availability.ensure(level, region)) return stack;
+		boolean inventoryDecrease = kind == MinecraftContainerTransferOperations.TransferKind.SCOOP
+				|| kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_SCOOP
+				|| kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_SCOOP;
+		if (stack.getCount() != 1 || !(inventoryDecrease
+				? availability.ensureForInventoryDecrease(level, region) : availability.ensure(level, region))) return stack;
 		if (!phaseWorkBarrier.settle(level, region)) return stack;
 		if (MinecraftContainerTransferOperations.thermalTransferFailure(world, region, stack, kind) != null) {
 			return stack;

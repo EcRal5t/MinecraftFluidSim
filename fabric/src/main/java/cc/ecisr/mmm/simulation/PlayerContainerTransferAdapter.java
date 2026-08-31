@@ -86,7 +86,7 @@ public final class PlayerContainerTransferAdapter {
 			message(player, "物质、运动与力学转移一次只接受 1 个桶；堆叠保持不变");
 			return InteractionResult.FAIL;
 		}
-		if (!ensureAvailableFor(player, region)) return InteractionResult.FAIL;
+		if (!ensureAvailableFor(player, region, !pouring)) return InteractionResult.FAIL;
 		if (!phaseWorkBarrier.settle(level, region)) return InteractionResult.FAIL;
 		String thermalFailure = MinecraftContainerTransferOperations.thermalTransferFailure(
 				world, region, held, kind);
@@ -198,7 +198,13 @@ public final class PlayerContainerTransferAdapter {
 	}
 
 	private boolean ensureAvailableFor(ServerPlayer player, FluidRegion region) {
-		boolean available = availability.ensure(player.level(), region);
+		return ensureAvailableFor(player, region, false);
+	}
+
+	private boolean ensureAvailableFor(ServerPlayer player, FluidRegion region, boolean inventoryDecrease) {
+		boolean available = inventoryDecrease
+				? availability.ensureForInventoryDecrease(player.level(), region)
+				: availability.ensure(player.level(), region);
 		if (!available) {
 			message(player, "物质、运动与力学目标区域不可用：" + region.availabilityFailure());
 		}

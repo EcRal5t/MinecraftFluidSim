@@ -324,16 +324,14 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 				centerYDelta, maximumBodyPressureResidual, maximumPressureResidual);
 	}
 
-	static void defaultLiveStepsRemainBounded() {
+	static void defaultLiveStepsRemainBounded() throws Exception {
 		FluidDomain warmup = createPouredControllerDomain();
 		long warmupStart = System.nanoTime();
 		CpuFluidSolverBackend warmupBackend = new CpuFluidSolverBackend();
-		FluidDomainState warmupState = warmup.captureAuthoritativeState();
 		for (int generation = 0; generation < 10; generation++) {
 			FluidStepCandidate warmupCandidate = warmupBackend.evaluate(
-					new FluidStepRequest(generation, warmupState, List.of(), false, 0));
-			warmup = FluidDomain.restoreAuthoritativeState(warmupCandidate.state());
-			warmupState = warmupCandidate.state();
+					new FluidStepRequest(generation, warmup.captureAuthoritativeState(), List.of(), false, 0));
+			warmup = requirePreparedCpuDomain(warmupCandidate);
 		}
 		double warmupMilliseconds = (System.nanoTime() - warmupStart) / 1_000_000.0;
 		System.out.printf("  production live JVM warmup: %.3f ms for 10 production-shaped steps "
@@ -344,19 +342,17 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		double mass = domain.totalMass();
 		ArrayList<Double> elapsed = new ArrayList<>(REPLAY_STEPS);
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
-		FluidDomainState state = domain.captureAuthoritativeState();
 		long generation = 0L;
 		for (int step = 0; step < REPLAY_STEPS; step++) {
 			long start = System.nanoTime();
 			FluidDomain.StepStats stats;
 			try {
-				// The live budget has to cover what a production motion step actually does: capture the
-				// authoritative state, evaluate a complete candidate, then restore it as the new owner.
+				// The live budget covers the production CPU path: capture one immutable input, evaluate on
+				// a private aggregate, and atomically adopt that already evaluated aggregate.
 				FluidStepCandidate candidate = backend.evaluate(
-						new FluidStepRequest(generation, state, List.of(), false, 0));
-				domain = FluidDomain.restoreAuthoritativeState(candidate.state());
+						new FluidStepRequest(generation, domain.captureAuthoritativeState(), List.of(), false, 0));
+				domain = requirePreparedCpuDomain(candidate);
 				stats = candidate.stats();
-				state = candidate.state();
 				generation++;
 			} catch (RuntimeException failure) {
 				throw new AssertionError("production live-domain replay failed at step " + step
@@ -380,6 +376,56 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		require(maximum <= STEP_BUDGET_MILLIS,
 				"a production step exceeded the server-tick budget: max=" + maximum + " ms");
 		System.out.println("  default live-domain replay remained valid and bounded for 20 steps");
+
+		damBreakProductionStepsRemainBelowPauseThreshold();
+	}
+
+	private static void damBreakProductionStepsRemainBelowPauseThreshold() throws Exception {
+		final double performancePauseThresholdMillis = 200.0;
+		FullCapabilityTestFixture.Registries registries = loadProductionRegistries();
+		FluidDomain warmup = createFullyBoundHalfFilledDomain(registries);
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		for (int generation = 0; generation < 5; generation++) {
+			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+					generation, warmup.captureAuthoritativeState(), List.of(), true,
+					ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
+			warmup = requirePreparedCpuDomain(candidate);
+		}
+
+		FluidDomain domain = createFullyBoundDamBreakDemo(registries);
+		double volume = domain.totalVolumeExact();
+		double mass = domain.totalMass();
+		double maximumMillis = 0.0;
+		int consecutiveOverruns = 0;
+		int maximumConsecutiveOverruns = 0;
+		for (int generation = 0; generation < 5; generation++) {
+			long start = System.nanoTime();
+			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+					generation, domain.captureAuthoritativeState(), List.of(), true,
+					ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
+			domain = requirePreparedCpuDomain(candidate);
+			double elapsedMillis = (System.nanoTime() - start) / 1_000_000.0;
+			maximumMillis = Math.max(maximumMillis, elapsedMillis);
+			consecutiveOverruns = elapsedMillis > performancePauseThresholdMillis
+					? consecutiveOverruns + 1 : 0;
+			maximumConsecutiveOverruns = Math.max(maximumConsecutiveOverruns, consecutiveOverruns);
+			require(domain.totalVolumeExact() == volume && domain.totalMass() == mass,
+					"dam-break production step changed liquid volume or mass");
+			System.out.printf("  dam-break live step %d: %.3f ms, particles=%d, PCG=%d, residual=%.6g%n",
+					generation + 1, elapsedMillis, domain.particleCount(),
+					candidate.stats().pressureIterations(), candidate.stats().pressureResidual());
+		}
+		require(maximumConsecutiveOverruns < 3,
+				"dam-break production path would trigger the wall-time pause: max="
+						+ maximumMillis + " ms, consecutive overruns=" + maximumConsecutiveOverruns);
+		System.out.printf("  dam-break live maximum %.3f ms; consecutive > %.1f ms=%d (< 3 pause limit)%n",
+				maximumMillis, performancePauseThresholdMillis, maximumConsecutiveOverruns);
+	}
+
+	private static FluidDomain requirePreparedCpuDomain(FluidStepCandidate candidate) {
+		FluidDomain prepared = candidate.claimPreparedCpuDomain();
+		require(prepared != null, "CPU backend did not retain its evaluated candidate aggregate");
+		return prepared;
 	}
 
 	static void fullyBoundHalfFillRoundTripsCurrentGasGeometry() throws Exception {
