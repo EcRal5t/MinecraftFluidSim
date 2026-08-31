@@ -80,6 +80,12 @@ public final class GasEnergyStore {
 		return gasModel.density(network.inventory(nodeId), network.availableVolume(nodeId));
 	}
 
+	public GasThermalModel.HydrodynamicState hydrodynamicState(int nodeId, AirNetwork network) {
+		requireGasNode(nodeId, network);
+		return gasModel.hydrodynamicState(network.inventory(nodeId), network.availableVolume(nodeId),
+				nodeEnergy[nodeId - 1]);
+	}
+
 	public double requireNodeState(int nodeId, GasInventory inventory, double energy, AirNetwork network) {
 		requireGasNode(nodeId, network);
 		return gasModel.absolutePressure(inventory, network.availableVolume(nodeId), energy);

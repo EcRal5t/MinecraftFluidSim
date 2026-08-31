@@ -19,6 +19,17 @@ final class PressureProjectionWorkspace {
 	final float[] preconditioned;
 	final float[] direction;
 	final float[] matrixDirection;
+	final boolean[] gasPressureUnknown;
+	final int[] gasUnknownNodes;
+	final float[] gasPressure;
+	final float[] gasRhs;
+	final float[] gasResidual;
+	final float[] gasPreconditioned;
+	final float[] gasDirection;
+	final float[] gasMatrixDirection;
+	final float[] gasMatrixDiagonal;
+	final float[] gasStorageCoefficient;
+	int gasUnknownCount;
 
 	PressureProjectionWorkspace(int cellCount) {
 		this.pressureFluid = new boolean[cellCount];
@@ -33,5 +44,17 @@ final class PressureProjectionWorkspace {
 		this.preconditioned = new float[cellCount];
 		this.direction = new float[cellCount];
 		this.matrixDirection = new float[cellCount];
+		// Node ids are one-based and cannot outnumber cells. These vectors are projection scratch;
+		// AirNetwork inventory/U remain the sole persistent gas truth.
+		this.gasPressureUnknown = new boolean[cellCount + 1];
+		this.gasUnknownNodes = new int[cellCount];
+		this.gasPressure = new float[cellCount + 1];
+		this.gasRhs = new float[cellCount + 1];
+		this.gasResidual = new float[cellCount + 1];
+		this.gasPreconditioned = new float[cellCount + 1];
+		this.gasDirection = new float[cellCount + 1];
+		this.gasMatrixDirection = new float[cellCount + 1];
+		this.gasMatrixDiagonal = new float[cellCount + 1];
+		this.gasStorageCoefficient = new float[cellCount + 1];
 	}
 }

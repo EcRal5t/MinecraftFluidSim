@@ -20,7 +20,7 @@ final class MechanicalStageAssembly {
 		PressureProjectionStage pressure = new PressureProjectionStage(
 				new PressureProjectionStage.Workspace(
 						domain.sizeX, domain.sizeY, domain.sizeZ, domain.config, domain.geometry, domain.mac,
-						domain.projection, domain.tension),
+						domain.projection),
 				pressureAccess(domain), pressureSystem, pressureBoundary);
 		GranularMechanicalStage granular = new GranularMechanicalStage(
 				new GranularMechanicalStage.Workspace(
@@ -75,12 +75,10 @@ final class MechanicalStageAssembly {
 			@Override public float granularMovingSolidDivergence(int cell, float dt) {
 				return domain.granularMovingSolidDivergence(cell, dt);
 			}
-			@Override public float pressureInterfaceTheta(int cell, int dx, int dy, int dz) {
-				return domain.pressureInterfaceTheta(cell, dx, dy, dz);
-			}
-			@Override public boolean variableDensityActive() { return domain.variableDensityActive; }
-			@Override public float pressureDensityScale(int first, int second) {
-				return domain.pressureDensityScale(first, second);
+			@Override public PressureFaceCoupling pressureFaceCoupling(
+					int first, int second, int dx, int dy, int dz
+			) {
+				return domain.pressureFaceCoupling(first, second, dx, dy, dz);
 			}
 			@Override public void pressureAnchor(int cell) { domain.pressureAnchor = cell; }
 			@Override public void pressureReference(float value) { domain.pressureReference = value; }

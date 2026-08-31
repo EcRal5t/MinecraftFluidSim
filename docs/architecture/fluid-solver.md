@@ -66,7 +66,7 @@ marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新�
 
 ## 自由面与压力
 
-- 开放液面压力使用环境或 gas-node pressure；密闭气体只通过同一界面边界进入 projection。
+- 开放环境和真空液面使用 Dirichlet pressure；接触液体的有限密闭 gas node 以状态方程导出的集总可压缩 pressure unknown 进入同一个 projection。两者都只走唯一液气 face 通量，不另加气体体力或材料分支。
 - 物理 pressure projection 的不可压目标散度为零（再叠加表面张力、移动固体等真实边界项），不接收 marker 分布误差或逐格过容量作为机械源项。marker 聚集只由散度一致平流、CCD 与守恒 reseed 处理；不得另造目标散度、位置投影或体积修正来掩盖传递误差。
 - 表面张力使用 PLIC/相分数构造曲率和 balanced-force 压力项；`sigma = 0` 不产生额外力。
 - 液液相共享机械 pressure/velocity，但保持材料身份、界面张力和密度分层。
@@ -82,13 +82,22 @@ div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 - 重力、热浮力和速度载体 face 仍由实际 marker occupancy 激活，不能因 pressure footprint 变宽而给孤立液滴稀释重力。
 - cut-face aperture、界面距离和 `1/rho` 面系数同时进入矩阵、预条件器和最终投影，避免三个路径使用不同几何。
 - 变密度 face coefficient 按两侧界面距离守恒加权；同密度材料必须退化为纯水矩阵。
-- PCG 只对活动流体未知量求解；`pressureTolerance` 是绝对 RMS 代数残差，不随 RHS/静水载荷放大。迭代预算耗尽、breakdown、非有限残差或无法闭合有限库存/容量 owner 的 gas topology 会以各自 typed failure 拒绝完整候选并把生产区域标记 `NUMERICAL_PAUSE`，不会以未收敛压力或部分 gas remap 继续 advection。其他 `IllegalStateException` 不在该边界被宽泛吞掉。
+- PCG 对活动 liquid cell 与接触液体的有限 sealed gas node 联合求解；`pressureTolerance` 是整个 block system 的绝对 RMS 代数残差，不随 RHS/静水载荷放大。迭代预算耗尽、breakdown、非有限残差或无法闭合有限库存/容量 owner 的 gas topology 会以各自 typed failure 拒绝完整候选并把生产区域标记 `NUMERICAL_PAUSE`，不会以未收敛压力或部分 gas remap 继续 advection。其他 `IllegalStateException` 不在该边界被宽泛吞掉。
 - 环境表压为 gauge zero。gas topology 的 runtime lineage 还会沿连通 pressure-air fringe 扩展到实际 ghost face，但不会穿过 pressure-fluid bulk。只有密闭气体边界时，求解器先减去一个统一 gas gauge reference，PCG 只承受相对压力；对外压力观察、相平衡与 pending `-p ΔV` 再加回该 reference。多个 gas lineage 之间的压差不被消除。
 - moving-solid occupancy 只通过物理 `target_divergence` 进入 projection，不直接缩放 marker；相变 pending 只结算已经发生的 marker 几何变化对应的压力功，不能再次制造一份散度源。
 
 ### 液体与可压缩气体的能力边界
 
-当前空间动量网格仍只承载凝聚相：液体以不可压约束求 pressure，密闭/开放气体由 `AirNetwork` 保存组分、质量、`U`，并以 node pressure 作为同一液气界面的边界条件。`GasThermalModel` 已从同一库存、体积与 `U` 唯一派生温度、压力、密度、`gamma`、绝热体积模量、声速和 pressure compliance，且不再用固定压力窗修复状态；这冻结了空间求解所需的本构输入，但还不是逐 cell/face 气体动量场。
+当前空间动量网格仍只承载凝聚相；`AirNetwork` 保存密闭气体的组分、质量与 `U`。开放环境和真空仍是液面 Dirichlet pressure，接触液体的有限 sealed node 则以一项集总 pressure unknown 与液体联合求解：无热状态使用 `V/p_abs`，热状态使用 `V*beta_s = V/(gamma*p_abs)` 作为体积 compliance。该 unknown 只是当次 projection scratch；下一次 topology refresh 仍从唯一 inventory/volume/`U` 计算非线性 EoS 与绝热功，不保存或反算第二份气体库存。它消除了把有限气腔整步冻结成 pressure boundary 的显式滞后，但仍不解析腔体内部逐 cell/face 动量、声波或混合层。
+
+液气 face 的有向跳跃约定为 `J = p_liquid(interface) - p_gas(interface) = sigma*kappa`。若两侧 center 到界面的距离（以 cell width 为单位）为 `d_l,d_g`，同一 face mobility 与速度修正为：
+
+```text
+m_f = rho_ref / (rho_l*d_l + rho_g*d_g)
+u[n+1] = u* - dt/(rho_ref*h) * m_f * (p_g - p_l + J)
+```
+
+当前 node 没有空间 gas inertia segment，因此严格取 `d_g = 0`，恰好退化为既有 one-sided ghost-fluid 消元；未来两侧都有 pressure unknown 时使用同一 series mass resistance，而不是按密度比切算法。一个 face 向 liquid/gas 两行加入相同对角与相反 off-diagonal，`J` 以等量反号进入 RHS，所以矩阵保持对称，静态 `p_l-p_g=J` 不产生冲量。集总 node 行另加 `rho_ref*V*beta_s/(dt^2*h^3)` 储存对角；真空没有 continuum unknown。
 
 统一气液空间算法复用同一守恒 P2G/G2P、`H(div)` 重建、平流和碰撞算子；相别差异只进入本构闭合。对冻结组分的局部绝热响应，令 `beta_s = 1 / (rho*c²)`；压力隐式步满足：
 

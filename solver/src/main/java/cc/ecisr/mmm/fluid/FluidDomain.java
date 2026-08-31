@@ -3364,11 +3364,36 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		if (!isAir(neighbor)) return 0.0F;
 		float openArea = pressureOpenFaceFromCell(fluid, neighbor, directionX, directionY, directionZ);
 		if (openArea <= 0.0F) return 0.0F;
-		float theta = pressureInterfaceTheta(fluid, directionX, directionY, directionZ);
-		if (theta <= 0.0F) return 0.0F;
-		float jump = tension.surfaceTensionPressure[fluid] + gasPressureOfAirCell(neighbor) - pressureReference;
-		float densityScale = variableDensityActive ? pressureDensityScale(fluid, neighbor) : 1.0F;
-		return -openArea * scale * densityScale * jump / theta * inverseCell;
+		PressureFaceCoupling coupling = pressureFaceCoupling(
+				fluid, neighbor, directionX, directionY, directionZ);
+		float gasPressure = gasPressureOfAirCell(neighbor) - pressureReference;
+		return -scale * inverseCell * coupling.firstDirichletRhs(openArea, gasPressure);
+	}
+
+	/**
+	 * Unique oriented pressure-face algebra for matrix assembly, jump RHS and velocity projection.
+	 * Open gas is Dirichlet and a finite sealed node may own a lumped pressure unknown, but neither
+	 * has a spatial gas-inertia segment. A future spatial gas solve replaces only this one-sided
+	 * metric construction, not the interface convention or jump algebra.
+	 */
+	PressureFaceCoupling pressureFaceCoupling(
+			int first, int second, int directionX, int directionY, int directionZ
+	) {
+		boolean firstFluid = isFluid(first), secondFluid = isFluid(second);
+		if (!firstFluid && !secondFluid) {
+			throw new IllegalArgumentException("A pressure face must touch a pressure-fluid cell");
+		}
+		float densityScale = variableDensityActive ? pressureDensityScale(first, second) : 1.0F;
+		if (firstFluid && secondFluid) return PressureFaceCoupling.centered(densityScale);
+		int fluid = firstFluid ? first : second;
+		int fluidDirectionX = firstFluid ? directionX : -directionX;
+		int fluidDirectionY = firstFluid ? directionY : -directionY;
+		int fluidDirectionZ = firstFluid ? directionZ : -directionZ;
+		PressureFaceCoupling liquidToGas = PressureFaceCoupling.oneSided(
+				densityScale,
+				pressureInterfaceTheta(fluid, fluidDirectionX, fluidDirectionY, fluidDirectionZ),
+				tension.surfaceTensionPressure[fluid]);
+		return firstFluid ? liquidToGas : liquidToGas.reversed();
 	}
 
 	float pressureDensityScale(int first, int second) {

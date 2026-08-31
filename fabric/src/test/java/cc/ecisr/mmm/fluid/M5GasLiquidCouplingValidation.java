@@ -4,18 +4,22 @@ import cc.ecisr.mmm.fluid.air.AirNetwork;
 
 /**
  * M5 active-solver gas-liquid coupling gate: sealed-cavity compression, negative-gauge suction,
- * orifice equalization through geometric edges and exact gas/liquid ledgers. Pure water with
- * zero surface tension, so any deviation from M4 behaviour comes only from sealed gas pressure.
+ * orifice equalization through geometric edges and exact gas/liquid ledgers. The transient
+ * fixtures use zero surface tension; one static fixture deliberately combines finite gas
+ * compliance and a sharp capillary jump on the same faces.
  */
 public final class M5GasLiquidCouplingValidation {
 	private static final float DENSITY = 1_000.0F;
 	private static final float GRAVITY = 9.81F;
 
 	public static void main(String[] args) {
+		validateSharedLiquidGasFaceAlgebra();
+		validateSealedGasAndCapillaryJumpShareFaces();
 		validateSplitRetainsSealedShareWhenPeerVents();
 		validateClosedCavityAfterBootstrapStartsAsVacuum();
 		validateEmptyControllerBoundaryPourRetainsLineage();
 		validateFiniteClosedGasWithoutCapacityBlocksTyped();
+		validateFiniteGasNodeUsesEquationOfStateCompliance();
 		if (java.util.Arrays.asList(args).contains("--fast")) {
 			validateShortCouplingSmoke();
 			System.out.println("M5 gas-liquid coupling validation passed (short; equilibrium soaks skipped)");
@@ -29,6 +33,75 @@ public final class M5GasLiquidCouplingValidation {
 		validateOrificeEqualization();
 		System.out.println("M5 gas-liquid coupling gate passed: analytic positive/negative hydrostatics, "
 				+ "sealed compression, negative-gauge suction, finite-rate orifice equalization and exact ledgers");
+	}
+
+	/**
+	 * Locks the one face law shared by a liquid unknown, a gas unknown and the current node-owned
+	 * gas boundary. The 1000:1 density ratio is resolved by series mass resistance, not by a
+	 * material branch, and reversing the face must only reverse its pressure jump.
+	 */
+	private static void validateSharedLiquidGasFaceAlgebra() {
+		float referenceDensity = 1_000.0F;
+		float liquidDensity = 1_000.0F;
+		float gasDensity = 1.0F;
+		float liquidDistance = 0.25F;
+		float gasDistance = 0.75F;
+		float pressureJump = 250.0F;
+		float openArea = 0.625F;
+
+		PressureFaceCoupling mixed = PressureFaceCoupling.twoSided(
+				referenceDensity, liquidDensity, liquidDistance,
+				gasDensity, gasDistance, pressureJump);
+		float expectedMobility = referenceDensity
+				/ (liquidDensity * liquidDistance + gasDensity * gasDistance);
+		check(Math.abs(mixed.mobilityScale() - expectedMobility) <= Math.ulp(expectedMobility),
+				"liquid/gas face did not use the two phase segments as series mass resistance");
+		check(mixed.orientedPressureDifference(101_575.0F, 101_325.0F) == 0.0F,
+				"Laplace-balanced liquid/gas contact produced a face impulse");
+		PressureFaceCoupling reversed = mixed.reversed();
+		check(reversed.mobilityScale() == mixed.mobilityScale()
+				&& reversed.pressureJumpFirstMinusSecond() == -pressureJump
+				&& reversed.orientedPressureDifference(101_325.0F, 101_575.0F) == 0.0F,
+				"reversing a liquid/gas face changed its metric or static balance");
+		check(mixed.firstJumpRhs(openArea) == -mixed.secondJumpRhs(openArea)
+				&& mixed.matrixCoefficient(openArea) == reversed.matrixCoefficient(openArea),
+				"two-sided interface assembly is not symmetric with antisymmetric jump sources");
+
+		PressureFaceCoupling currentBoundary = PressureFaceCoupling.oneSided(
+				referenceDensity / liquidDensity, liquidDistance, pressureJump);
+		PressureFaceCoupling collapsedGasSegment = PressureFaceCoupling.twoSided(
+				referenceDensity, liquidDensity, liquidDistance, gasDensity, 0.0, pressureJump);
+		check(currentBoundary.mobilityScale() == collapsedGasSegment.mobilityScale()
+				&& currentBoundary.firstDirichletRhs(openArea, 13_000.0F)
+				== collapsedGasSegment.firstDirichletRhs(openArea, 13_000.0F),
+				"node-owned gas boundary is not the exact eliminated-gas limit of the mixed face");
+	}
+
+	private static void validateSealedGasAndCapillaryJumpShareFaces() {
+		FluidSolverConfig config = new FluidSolverConfig(
+				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F);
+		FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
+		domain.setVolume(1, 1, 1, 1.0F);
+		FluidMaterialRegistry registry = new FluidMaterialRegistry(java.util.List.of(
+				new FluidMaterial("mmm:gas_contact_test", DENSITY, "mmm:gas_contact_test",
+						0.0728, Math.PI / 2.0)));
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			domain.setMarkerMaterial(marker, registry, 0);
+		}
+		domain.sealDomainBoundary();
+		domain.bootstrapGasState(null);
+		long gasInventory = domain.gasBoundary().sealedInventoryNanos();
+		domain.step();
+		float jump = domain.surfaceTensionPressureAt(1, 1, 1);
+		float solvedGasPressure = domain.pressureReference + domain.projection.gasPressure[1];
+		check(domain.projection.gasPressureUnknown[1]
+				&& Math.abs(domain.pressure(1, 1, 1) - solvedGasPressure - jump) <= 1.0E-6F,
+				"finite gas compliance and capillary jump did not share one balanced interface face");
+		check(domain.maximumParticleSpeed() <= 1.0E-8F,
+				"static sealed gas/capillary contact produced parasitic liquid motion");
+		check(domain.gasBoundary().sealedInventoryNanos() == gasInventory
+				&& domain.gasBoundary().auditClosed(),
+				"static sealed gas/capillary contact changed gas inventory truth");
 	}
 
 	private static void validateEmptyControllerBoundaryPourRetainsLineage() {
@@ -77,6 +150,29 @@ public final class M5GasLiquidCouplingValidation {
 					&& domain.gasBoundary().auditClosed(),
 					"typed gas-topology rejection changed the committed inventory");
 		}
+	}
+
+	private static void validateFiniteGasNodeUsesEquationOfStateCompliance() {
+		FluidDomain domain = utubeDomain(true);
+		domain.step();
+		double volume = domain.gasBoundary().availableVolume(1);
+		domain.setGasNodeStandardVolume(1, 1.5 * volume);
+		double absolutePressure = AirNetwork.REFERENCE_PRESSURE + domain.gasBoundary().gaugePressure(1);
+		double dt = domain.config.timeStep();
+		double h = domain.config.cellSize();
+		float expectedStorage = (float) (domain.config.density() * volume / absolutePressure
+				/ (dt * dt * h * h * h));
+		domain.step();
+		check(domain.projection.gasPressureUnknown[1],
+				"finite sealed gas touching liquid stayed a lagged Dirichlet boundary");
+		check(Math.abs(domain.projection.gasStorageCoefficient[1] - expectedStorage)
+				<= Math.ulp(expectedStorage),
+				"isothermal cavity pressure row did not use V/p absolute EoS compliance");
+		check(domain.projection.gasMatrixDiagonal[1] > domain.projection.gasStorageCoefficient[1],
+				"compressible gas row did not share any symmetric liquid interface face");
+		check(Float.isFinite(domain.projection.gasPressure[1])
+				&& domain.projection.gasPressure[1] != 0.0F,
+				"compressible gas pressure unknown did not respond to liquid interface motion");
 	}
 
 	private static void validateClosedCavityAfterBootstrapStartsAsVacuum() {

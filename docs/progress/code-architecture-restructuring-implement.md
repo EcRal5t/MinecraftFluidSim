@@ -463,6 +463,13 @@ S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Bri
 * `GasThermalModel.HydrodynamicState` 现在从同一 non-vacuum inventory、available volume 与权威 `U` 派生 `T`、`p_abs`、`rho`、`C_v`、`R`、`gamma`、绝热体积模量、声速和 pressure compliance；`absolutePressure` 与绝热压缩复用该闭合。等温和热 EoS 都删除固定 `-0.99 P0..20 P0` 压力窗与 `1e-9 m³` 体积修补：有限库存零体积显式拒绝，正体积直接保留状态方程结果，真空明确没有 continuum pressure unknown。无热孔流的源密度也不再固定为 `1.2 kg/m³`，而从同一 node inventory/available volume 派生；环境标准态密度由 registry ambient mixture 取得，不按 component ID 分支。
 * 现有同一不变量测试已替换：`air-network` 验证 registry-mixture 密度、压缩密度、连续近真空、原 ceiling 外有限高压和零体积拒绝；`thermal` 验证标准态密度/`gamma`/体积模量/声速/compliance 恒等式、vacuum exclusion，以及超过旧压力窗后仍满足 `p*V^gamma` 的绝热路径。`air-network,thermal,gas-liquid` 三个最近门和扫描 425 个生产源的架构门均通过。架构文档冻结统一 Helmholtz 压力式及其 `beta_s -> 0` 不可压极限，并明确空间候选还必须共同守恒逐格质量、组分、动量和总能量；本轮没有把一个未接线的 storage 数组冒充空间气体完成。
 
+### 液气界面与集总可压缩气腔
+
+* 复审发现热力学闭合本身成立，但 pressure matrix、surface-tension RHS 与 velocity projection 曾各自重算液气面系数，而且有限密闭气体仍被整步冻结为 Dirichlet pressure；直接把气体 cell 加入旧 Poisson 又会与 node inventory 形成双重真值。现以唯一有向 `PressureFaceCoupling` 统一三处消费：`J = p_liquid - p_gas`，两侧空间段采用串联质量阻抗 `m_f = rho_ref/(rho_l*d_l + rho_g*d_g)`，静态 Laplace jump 恰好给出零冲量。交换朝向只反转 jump，matrix coefficient 不变；不存在密度比、材料 ID、界面正则化或经验下限分支。
+* 接触液体的有限 sealed gas node 以一个集总 pressure unknown 进入与液体相同的对称 PCG block。node 行的储存对角为 `rho_ref*V*beta_s/(dt^2*h^3)`：无热路径由同一 ideal-mixture inventory 得到 `beta=1/p_abs`，热路径从同一 `U` 得到绝热 `beta_s=1/(gamma*p_abs)`；face 向 liquid/gas 两行加入相同对角和相反 off-diagonal，capillary jump 以等量反号进入 RHS。开放环境和真空仍为 Dirichlet，真空不伪造 continuum unknown。
+* 该 pressure unknown、PCG 向量与 active-node ordinal 仅为当次 projection scratch；`AirNetwork` 的组分/质量和 `GasEnergyStore` 的 `U` 仍是唯一气体真值。下一次 topology refresh 从真实液体面通量改变后的 cavity volume 重新求非线性 EoS 与绝热功，不把线性解压力持久化或反算成第二份库存。当前 node 没有内部速度、逐格动量、声波或混合层，因此只宣称完成液体与有限气腔的一步隐式机械闭合，不宣称空间气体完成。
+* 同一不变量门现覆盖 1000:1 密度比的精确串联 mobility、two-sided 到 zero gas segment 的精确退化、静态 capillary jump 零寄生速度、有限气腔与表面张力共面时的库存不变、等温储存行和热绝热储存行。最终 `gas-liquid,surface-tension,free-surface,thermal` 与扫描 426 个生产源的架构门通过；`production-replay` 通过全部 500 步 ambient、1000 步 compressed thermal gas、body/ledger/candidate restore 场景，总耗时 74.397 s，实时 20-step median/max 为 20.037/26.154 ms，phase-on 为 27.766 ms。没有需要进游戏观察的视觉、真实 `VoxelShape` 或跨重启事务场景。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

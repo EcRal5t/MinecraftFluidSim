@@ -108,7 +108,7 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 | 化学 | species quanta、组成、电荷、质量 residual、indicator provenance、source/sink | pH、Top-N species、颜色 |
 | 颗粒 | active/deposit 的 SVQ、质量、材料、组成、孔隙率和审计 | bulk fill、显示高度、sample |
 | 连续固相 | coherent group 的 SVQ、质量、组成和总内能 | 固相显示 fraction |
-| 气体 | component standard-volume nanos、质量、species/residual、节点总内能和 source/sink | 温度、绝对压力、密度、孔流速度 |
+| 气体 | component standard-volume nanos、质量、species/residual、节点总内能和 source/sink | 温度、绝对压力、密度、孔流速度、液体接触面上的集总 pressure scratch |
 | 热学 | 每个物质载体的总内能、external source/sink、mechanical work、finite-device exchange 和 roundoff | 温度、热容、LTE grid、浮力修正 |
 | 有限热设备 | region HEAD 内按 provider/object 定位的 kg、总内能与 generation | 世界位置、接触端口、温度、换热 UI |
 | 世界 | region HEAD、ownership committed/WAL、actor durable item state | controller UI、status、debug layer |
@@ -133,7 +133,7 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 1. 捕获本步 inventory、source/sink/work 与 pending phase-volume 审计基线。
 2. 根据 world/cut-cell、统一固体 occupancy 和当前 gas topology 建立机械输入。
 3. P2G，施加重力、热浮力、表面张力、气压和颗粒/实体耦合。
-4. 构造物理目标散度，以 PCG 求解变系数 pressure projection；marker 过容量不进入这份机械 RHS。
+4. 构造物理目标散度，以 PCG 联合求解变系数 liquid pressure 与接触液体的有限 sealed-gas compliance row；环境/真空仍为 Dirichlet，marker 过容量不进入这份机械 RHS。
 5. G2P 解析选择能量可接受的最大 FLIP 增量，随后以散度一致的 `H(div)` 重建/RK4 做 marker advection 与 CCD；颗粒完成运动/碰撞提交，逐格聚集不产生伪 pressure 源或第二位置投影。
 6. 从新载体位置重建 thermal grid，提交内部导热和固定温度边界通量。
 7. 提交化学与固液反应 extent，再提交 reaction heat。

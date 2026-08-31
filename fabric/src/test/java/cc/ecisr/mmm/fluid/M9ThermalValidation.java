@@ -75,6 +75,7 @@ public final class M9ThermalValidation {
 		builtinFiniteThermalDeviceDataIsFrozen();
 		gasLiquidSaturationAndExactBatch();
 		gasRuntimeTransfersEnergyAndWork();
+		thermalGasPressureRowUsesIsentropicCompliance();
 		persistenceBarrierSynchronizesGasTopology();
 		operatorVentClearsGasAndEnergyTogether();
 		sealedInterfaceBoilingCommitsJointInventory();
@@ -606,6 +607,49 @@ public final class M9ThermalValidation {
 				&& movingInterface.gasBoundary().escapedSink().equals(sinkBeforeMove)
 				&& movingInterface.gasBoundary().auditClosed(),
 				"moving a partial interface created false sealed-gas source/sink turnover");
+	}
+
+	private static void thermalGasPressureRowUsesIsentropicCompliance() {
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
+		ThermalRegistry thermal = new ThermalRegistry(List.of(
+				new ThermalMaterialDefinition("test:thermal/compliance_water",
+						ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
+						300.0, 0.0, 0.598,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 4_184.0))),
+				new ThermalMaterialDefinition("test:thermal/compliance_air",
+						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+						GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.026,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)))));
+		FluidDomain domain = new FluidDomain(4, 4, 4, config, 128);
+		domain.sealDomainBoundary();
+		domain.setVolume(1, 1, 1, 1.0F);
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			domain.setMarkerMaterial(marker, liquids, 0);
+		}
+		domain.bindGasRegistry(gas);
+		domain.bootstrapGasState("");
+		domain.bindThermal(thermal, liquids, 300.0);
+		GasInventory inventory = domain.gasBoundary().inventory(1);
+		double available = domain.gasBoundary().availableVolume(1);
+		double internalEnergy = domain.thermalState.gasNodeEnergy(1, domain.gasState.network);
+		GasThermalModel.HydrodynamicState state = new GasThermalModel(thermal, gas)
+				.hydrodynamicState(inventory, available, internalEnergy);
+		double expectedStorage = config.density() * available * state.pressureCompliancePerPa()
+				/ (config.timeStep() * (double) config.timeStep()
+				* config.cellSize() * config.cellSize() * config.cellSize());
+		domain.step();
+		require(domain.projection.gasPressureUnknown[1]
+				&& Math.abs(domain.projection.gasStorageCoefficient[1] - expectedStorage)
+				<= Math.ulp((float) expectedStorage),
+				"thermal gas pressure row did not use V/(gamma*p) from the authoritative inventory/U closure");
+		double isothermalStorage = config.density() * available / state.absolutePressurePa()
+				/ (config.timeStep() * (double) config.timeStep()
+				* config.cellSize() * config.cellSize() * config.cellSize());
+		require(domain.projection.gasStorageCoefficient[1] < isothermalStorage,
+				"thermal gas pressure row silently used isothermal compliance");
 	}
 
 	private static void operatorVentClearsGasAndEnergyTogether() {

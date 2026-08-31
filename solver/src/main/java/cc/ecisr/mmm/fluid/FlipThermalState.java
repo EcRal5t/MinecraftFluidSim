@@ -164,6 +164,10 @@ final class FlipThermalState {
 	double gasTemperature(int nodeId, AirNetwork network) { return domain.gasTemperature(nodeId, network); }
 	double gasGaugePressure(int nodeId, AirNetwork network) { return domain.gasGaugePressure(nodeId, network); }
 	double gasDensity(int nodeId, AirNetwork network) { return domain.gasDensity(nodeId, network); }
+	double gasVolumeCompliance(int nodeId, AirNetwork network) {
+		return network.availableVolume(nodeId)
+				* domain.gasHydrodynamicState(nodeId, network).pressureCompliancePerPa();
+	}
 	double requireGasNodeState(int nodeId, GasInventory inventory, double energy, AirNetwork network) {
 		return domain.requireGasNodeState(nodeId, inventory, energy, network);
 	}
