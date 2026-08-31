@@ -59,9 +59,12 @@ public final class AirNetworkValidation {
 	private static void validateEquationOfState() {
 		AirNetwork network = new AirNetwork();
 		int node = network.addNode(8.0, 8.0);
-		check(network.gaugePressure(node) == 0.0, "ambient-balanced cavity must start at gauge zero");
+		check(network.gaugePressure(node) == 0.0 && network.density(node) == AirNetwork.AIR_DENSITY,
+				"ambient-balanced cavity must start at the registry standard state");
 		network.updateAvailableVolume(node, 4.0);
 		checkRelative(network.gaugePressure(node), AirNetwork.REFERENCE_PRESSURE, "halved volume must double absolute pressure");
+		checkRelative(network.density(node), 2.0 * AirNetwork.AIR_DENSITY,
+				"halved volume must double density from the same inventory");
 		network.updateAvailableVolume(node, 2.0);
 		checkRelative(network.gaugePressure(node), 3.0 * AirNetwork.REFERENCE_PRESSURE, "quarter volume must quadruple absolute pressure");
 		network.updateAvailableVolume(node, 16.0);
@@ -73,23 +76,19 @@ public final class AirNetworkValidation {
 		check(network.gaugePressure(tinyNano) == 0.0, "one-nanovolume cavity must start at gauge zero");
 		int evacuated = network.addNode(1.0, 1.0);
 		network.updateAvailableVolume(evacuated, 1.0E4);
-		check(network.gaugePressure(evacuated) == AirNetwork.MIN_GAUGE_PRESSURE,
-				"evacuated cavity must clamp at the near-vacuum floor");
-		check(network.pressureFloorEvents() > 0, "floor clamp was not counted");
-		int floorEvents = network.pressureFloorEvents();
-		check(network.observedGaugePressure(evacuated) == AirNetwork.MIN_GAUGE_PRESSURE
-				&& network.pressureFloorEvents() == floorEvents,
-				"read-only pressure observation changed floor diagnostics");
+		double nearVacuum = AirNetwork.REFERENCE_PRESSURE * (1.0E-4 - 1.0);
+		checkRelative(network.gaugePressure(evacuated), nearVacuum,
+				"evacuated cavity must approach exact vacuum pressure without a floor");
+		checkRelative(network.observedGaugePressure(evacuated), nearVacuum,
+				"read-only pressure observation changed the equation of state");
 
 		int filled = network.addNode(1.0, 1.0);
+		network.updateAvailableVolume(filled, 1.0E-3);
+		checkRelative(network.gaugePressure(filled), 999.0 * AirNetwork.REFERENCE_PRESSURE,
+				"high-pressure cavity must retain its equation-of-state pressure without a ceiling");
 		network.updateAvailableVolume(filled, 0.0);
-		check(network.gaugePressure(filled) == AirNetwork.MAX_GAUGE_PRESSURE,
-				"filled cavity must clamp at the pressure ceiling");
-		check(network.pressureCeilingEvents() > 0, "ceiling clamp was not counted");
-		int ceilingEvents = network.pressureCeilingEvents();
-		check(network.observedGaugePressure(filled) == AirNetwork.MAX_GAUGE_PRESSURE
-				&& network.pressureCeilingEvents() == ceilingEvents,
-				"read-only pressure observation changed ceiling diagnostics");
+		expectStateThrow(() -> network.gaugePressure(filled),
+				"finite inventory in zero available volume");
 		checkLedger(network, "equation-of-state probes");
 	}
 
@@ -101,6 +100,7 @@ public final class AirNetworkValidation {
 				List.of(inventory, GasInventory.EMPTY), GasInventory.EMPTY, GasInventory.EMPTY);
 		check(network.gaugePressure(2) == -AirNetwork.REFERENCE_PRESSURE,
 				"empty sealed cavity must derive exact vacuum pressure");
+		check(network.density(2) == 0.0, "empty sealed cavity acquired isothermal density");
 		check(network.observedGaugePressure(2) == -AirNetwork.REFERENCE_PRESSURE,
 				"read-only empty-cavity pressure changed the exact vacuum convention");
 		new cc.ecisr.mmm.fluid.CellCarrierInventoryView.GasAmount(false, 2, 0.0,
@@ -290,6 +290,10 @@ public final class AirNetworkValidation {
 		AirNetwork network = new AirNetwork(registry);
 		int source = network.addNode(3.0, 3.0);
 		int target = network.addNode(1.0, 1.0);
+		checkRelative(network.density(AirNetwork.AMBIENT_NODE), 5.0 / 3.0,
+				"ambient mixture density must come from registry standard-state fractions");
+		checkRelative(network.density(source), network.density(AirNetwork.AMBIENT_NODE),
+				"balanced mixed cavity must inherit the registry ambient density");
 		GasInventory initial = network.inventory(source).merge(network.inventory(target));
 		int[] split = network.splitNode(source, 1.0, 2.0);
 		network.mergeNodes(target, split[1]);

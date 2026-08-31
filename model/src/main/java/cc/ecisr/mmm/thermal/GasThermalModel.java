@@ -15,6 +15,38 @@ public final class GasThermalModel {
 	public record Compression(double initialTemperatureK, double finalTemperatureK,
 	                          double finalInternalEnergy, double workIntoGas) { }
 
+	/**
+	 * Local ideal-gas closure for a non-vacuum control volume.  The acoustic quantities are
+	 * derivatives of the same inventory/U equation of state as pressure; they are not solver
+	 * tuning parameters.  Vacuum deliberately has no instance of this record because it has no
+	 * continuum pressure unknown.
+	 */
+	public record HydrodynamicState(
+			double temperatureK,
+			double absolutePressurePa,
+			double densityKgPerCubicMeter,
+			double heatCapacityEuPerK,
+			double gasConstantEuPerK,
+			double isentropicExponent,
+			double adiabaticBulkModulusPa,
+			double soundSpeedMetersPerSecond,
+			double pressureCompliancePerPa
+	) {
+		public HydrodynamicState {
+			if (!(Double.isFinite(temperatureK) && temperatureK > 0.0
+					&& Double.isFinite(absolutePressurePa) && absolutePressurePa > 0.0
+					&& Double.isFinite(densityKgPerCubicMeter) && densityKgPerCubicMeter > 0.0
+					&& Double.isFinite(heatCapacityEuPerK) && heatCapacityEuPerK > 0.0
+					&& Double.isFinite(gasConstantEuPerK) && gasConstantEuPerK > 0.0
+					&& Double.isFinite(isentropicExponent) && isentropicExponent > 1.0
+					&& Double.isFinite(adiabaticBulkModulusPa) && adiabaticBulkModulusPa > 0.0
+					&& Double.isFinite(soundSpeedMetersPerSecond) && soundSpeedMetersPerSecond > 0.0
+					&& Double.isFinite(pressureCompliancePerPa) && pressureCompliancePerPa > 0.0)) {
+				throw new IllegalArgumentException("Gas hydrodynamic state is invalid");
+			}
+		}
+	}
+
 	private final ThermalRegistry thermalRegistry;
 	private final GasRegistry gasRegistry;
 	private final ThermalStateFunction stateFunction;
@@ -45,36 +77,46 @@ public final class GasThermalModel {
 		return stateFunction.stateForInventory(portions(inventory), internalEnergy);
 	}
 
-	public double absolutePressure(GasInventory inventory, double availableVolume, double internalEnergy) {
-		if (!(Double.isFinite(availableVolume) && availableVolume > 0.0)) {
-			throw new IllegalArgumentException("Gas available volume is outside the thermal model");
+	/** Derives the thermodynamic and acoustic closure used by a compressible pressure solve. */
+	public HydrodynamicState hydrodynamicState(
+			GasInventory inventory, double availableVolume, double internalEnergy
+	) {
+		requireAvailableVolume(availableVolume);
+		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
+		if (inventory.isEmpty()) {
+			if (internalEnergy != 0.0) throw new IllegalArgumentException("Vacuum cannot carry internal energy");
+			throw new IllegalArgumentException("Vacuum has no continuum hydrodynamic state");
 		}
+		ThermalStateFunction.State thermal = state(inventory, internalEnergy);
+		double standardVolume = AirNetwork.cubicMeters(inventory.standardVolumeNanos());
+		double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * standardVolume
+				/ GasRegistry.STANDARD_TEMPERATURE_K;
+		double pressure = gasConstant * thermal.temperatureK() / availableVolume;
+		double density = requirePositiveMass(inventory) / availableVolume;
+		double exponent = 1.0 + gasConstant / thermal.heatCapacityEuPerK();
+		double bulkModulus = exponent * pressure;
+		double soundSpeed = Math.sqrt(bulkModulus / density);
+		double compliance = 1.0 / bulkModulus;
+		return new HydrodynamicState(thermal.temperatureK(), pressure, density,
+				thermal.heatCapacityEuPerK(), gasConstant, exponent, bulkModulus,
+				soundSpeed, compliance);
+	}
+
+	public double absolutePressure(GasInventory inventory, double availableVolume, double internalEnergy) {
+		requireAvailableVolume(availableVolume);
 		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
 		if (inventory.isEmpty()) {
 			if (internalEnergy != 0.0) throw new IllegalArgumentException("Vacuum cannot carry internal energy");
 			return 0.0;
 		}
-		double temperature = state(inventory, internalEnergy).temperatureK();
-		double pressure = GasRegistry.STANDARD_PRESSURE_PA
-				* (AirNetwork.cubicMeters(inventory.standardVolumeNanos()) / availableVolume)
-				* (temperature / GasRegistry.STANDARD_TEMPERATURE_K);
-		double minimum = GasRegistry.STANDARD_PRESSURE_PA + AirNetwork.MIN_GAUGE_PRESSURE;
-		double maximum = GasRegistry.STANDARD_PRESSURE_PA + AirNetwork.MAX_GAUGE_PRESSURE;
-		if (!(Double.isFinite(pressure) && pressure >= minimum && pressure <= maximum)) {
-			throw new IllegalArgumentException("Gas pressure is outside the reviewed validity window");
-		}
-		return pressure;
+		return hydrodynamicState(inventory, availableVolume, internalEnergy).absolutePressurePa();
 	}
 
 	public double density(GasInventory inventory, double availableVolume) {
-		if (!(Double.isFinite(availableVolume) && availableVolume > 0.0)) {
-			throw new IllegalArgumentException("Gas available volume is outside the thermal model");
-		}
+		requireAvailableVolume(availableVolume);
 		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
 		if (inventory.isEmpty()) return 0.0;
-		double mass = 0.0;
-		for (GasComponentAmount component : inventory.components()) mass += component.mass();
-		double density = mass / availableVolume;
+		double density = requirePositiveMass(inventory) / availableVolume;
 		if (!(Double.isFinite(density) && density > 0.0)) {
 			throw new IllegalArgumentException("Gas density is outside the thermal model");
 		}
@@ -95,13 +137,9 @@ public final class GasThermalModel {
 			return new Compression(GasRegistry.STANDARD_TEMPERATURE_K,
 					GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.0);
 		}
-		ThermalStateFunction.State initial = state(inventory, internalEnergy);
-		double gasConstant = GasRegistry.STANDARD_PRESSURE_PA
-				* AirNetwork.cubicMeters(inventory.standardVolumeNanos()) / GasRegistry.STANDARD_TEMPERATURE_K;
-		double exponent = gasConstant / initial.heatCapacityEuPerK();
-		if (!(Double.isFinite(exponent) && exponent > 0.0)) throw new IllegalArgumentException("Gas isentropic exponent is invalid");
+		HydrodynamicState initial = hydrodynamicState(inventory, initialAvailableVolume, internalEnergy);
 		double targetTemperature = initial.temperatureK()
-				* Math.pow(initialAvailableVolume / finalAvailableVolume, exponent);
+				* Math.pow(initialAvailableVolume / finalAvailableVolume, initial.isentropicExponent() - 1.0);
 		for (ThermalStateFunction.InventoryPortion portion : portions(inventory)) {
 			ThermalMaterialDefinition material = thermalRegistry.material(portion.materialHandle());
 			if (Double.doubleToRawLongBits(material.specificHeatAt(initial.temperatureK()))
@@ -110,7 +148,7 @@ public final class GasThermalModel {
 			}
 		}
 		double finalEnergy = internalEnergyAtTemperature(inventory, targetTemperature);
-		absolutePressure(inventory, finalAvailableVolume, finalEnergy);
+		hydrodynamicState(inventory, finalAvailableVolume, finalEnergy);
 		return new Compression(initial.temperatureK(), targetTemperature, finalEnergy, finalEnergy - internalEnergy);
 	}
 
@@ -163,5 +201,19 @@ public final class GasThermalModel {
 			portions.add(new ThermalStateFunction.InventoryPortion(handle, component.mass(), Map.copyOf(species)));
 		}
 		return List.copyOf(portions);
+	}
+
+	private static void requireAvailableVolume(double availableVolume) {
+		if (!(Double.isFinite(availableVolume) && availableVolume > 0.0)) {
+			throw new IllegalArgumentException("Gas available volume is outside the thermal model");
+		}
+	}
+
+	private static double requirePositiveMass(GasInventory inventory) {
+		double mass = inventory.totalMass();
+		if (!(Double.isFinite(mass) && mass > 0.0)) {
+			throw new IllegalArgumentException("Gas mass is outside the thermal model");
+		}
+		return mass;
 	}
 }

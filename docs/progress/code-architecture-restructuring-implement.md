@@ -457,6 +457,12 @@ S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Bri
 * `GpuCompactDiagnostics` 独占 compact frame 解码、pressure convergence、在线体积误差界与 reseed budget 校验，`VulkanFlipPipeline` 降至 942 行。异步 completion 现在捕获本次 submission 的 substep time，不再读取提交后已复位的可变 `recordingTimeStep`，因此初始化 submission 与四 physical substep 的诊断属于各自帧。
 * 当前 GPU 能力边界明确收窄为单一、常密度 carrier；多材料/变密度、表面张力、空间气体/热力学尚未移植，不能以 CPU fallback 或 probe 通过宣称 production parity。现有集中参数 sealed-cavity 气压边界仍由 CPU 门覆盖，但空间可压缩气体求解留给后续物理切片。最终验证包括 GPU 1000 步 exact ledger、完整短程 solver/memory matrix、CPU `free-surface,reseeding,cut-cell,surface-tension,materials,gas-liquid` 六门、production replay、三个 loader-neutral module 门，以及扫描 425 个生产源的架构门，均通过；无需进游戏观察。
 
+### 空间可压缩气体起始切片
+
+* 先复审 S20 数值收口与现有 gas owner：液体的守恒 P2G/G2P、`H(div)` 平流、压力几何和 CPU/GPU 共同子集可以复用，但当前 `PressureSystem` 是严格不可压 Poisson operator；`AirNetwork` 则只拥有 node 级 exact inventory/`U` 和孔流，没有空间动量。若直接新增逐格气体而保留可独立演化的 node inventory，会制造双重物理真值，因此本切片先冻结表示切换和全马赫方程，不伪造尚未存在的空间 owner。
+* `GasThermalModel.HydrodynamicState` 现在从同一 non-vacuum inventory、available volume 与权威 `U` 派生 `T`、`p_abs`、`rho`、`C_v`、`R`、`gamma`、绝热体积模量、声速和 pressure compliance；`absolutePressure` 与绝热压缩复用该闭合。等温和热 EoS 都删除固定 `-0.99 P0..20 P0` 压力窗与 `1e-9 m³` 体积修补：有限库存零体积显式拒绝，正体积直接保留状态方程结果，真空明确没有 continuum pressure unknown。无热孔流的源密度也不再固定为 `1.2 kg/m³`，而从同一 node inventory/available volume 派生；环境标准态密度由 registry ambient mixture 取得，不按 component ID 分支。
+* 现有同一不变量测试已替换：`air-network` 验证 registry-mixture 密度、压缩密度、连续近真空、原 ceiling 外有限高压和零体积拒绝；`thermal` 验证标准态密度/`gamma`/体积模量/声速/compliance 恒等式、vacuum exclusion，以及超过旧压力窗后仍满足 `p*V^gamma` 的绝热路径。`air-network,thermal,gas-liquid` 三个最近门和扫描 425 个生产源的架构门均通过。架构文档冻结统一 Helmholtz 压力式及其 `beta_s -> 0` 不可压极限，并明确空间候选还必须共同守恒逐格质量、组分、动量和总能量；本轮没有把一个未接线的 storage 数组冒充空间气体完成。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

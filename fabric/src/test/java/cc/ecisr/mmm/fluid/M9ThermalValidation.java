@@ -196,15 +196,33 @@ public final class M9ThermalValidation {
 		double initial = model.internalEnergyAtTemperature(inventory, GasRegistry.STANDARD_TEMPERATURE_K);
 		require(close(model.state(inventory, initial).temperatureK(), GasRegistry.STANDARD_TEMPERATURE_K),
 				"gas temperature was not derived from authoritative U");
+		GasThermalModel.HydrodynamicState standard = model.hydrodynamicState(inventory, 1.0, initial);
+		double expectedGasConstant = GasRegistry.STANDARD_PRESSURE_PA / GasRegistry.STANDARD_TEMPERATURE_K;
+		double expectedExponent = 1.0 + expectedGasConstant / (1.2 * 718.0);
+		require(close(standard.absolutePressurePa(), GasRegistry.STANDARD_PRESSURE_PA)
+				&& close(standard.densityKgPerCubicMeter(), 1.2)
+				&& close(standard.gasConstantEuPerK(), expectedGasConstant)
+				&& close(standard.isentropicExponent(), expectedExponent)
+				&& close(standard.adiabaticBulkModulusPa(),
+					expectedExponent * GasRegistry.STANDARD_PRESSURE_PA)
+				&& close(standard.soundSpeedMetersPerSecond() * standard.soundSpeedMetersPerSecond(),
+					standard.adiabaticBulkModulusPa() / standard.densityKgPerCubicMeter())
+				&& close(standard.pressureCompliancePerPa(), 1.0 / standard.adiabaticBulkModulusPa()),
+				"gas pressure/density/acoustic closure did not derive from the same inventory and U");
+		expectFailure(() -> model.hydrodynamicState(GasInventory.EMPTY, 1.0, 0.0),
+				"vacuum continuum closure");
 		GasThermalModel.Compression compressed = model.compressAdiabatically(inventory, initial, 1.0, 0.5);
-		double exponent = GasRegistry.STANDARD_PRESSURE_PA
-				/ GasRegistry.STANDARD_TEMPERATURE_K / (1.2 * 718.0);
-		double expectedTemperature = GasRegistry.STANDARD_TEMPERATURE_K * Math.pow(2.0, exponent);
+		double expectedTemperature = GasRegistry.STANDARD_TEMPERATURE_K * Math.pow(2.0, expectedExponent - 1.0);
 		require(Math.abs(compressed.finalTemperatureK() - expectedTemperature) < 1.0E-10
 				&& compressed.workIntoGas() > 0.0
 				&& model.absolutePressure(inventory, 0.5, compressed.finalInternalEnergy())
 				> 2.0 * GasRegistry.STANDARD_PRESSURE_PA,
 				"analytic gas compression did not close state/work/EoS");
+		GasThermalModel.Compression highPressure = model.compressAdiabatically(inventory, initial, 1.0, 0.1);
+		double highPressurePa = model.hydrodynamicState(
+				inventory, 0.1, highPressure.finalInternalEnergy()).absolutePressurePa();
+		require(close(highPressurePa / GasRegistry.STANDARD_PRESSURE_PA, Math.pow(10.0, expectedExponent)),
+				"adiabatic EoS did not preserve p*V^gamma beyond the removed numerical pressure ceiling");
 		GasThermalModel.Compression expanded = model.compressAdiabatically(
 				inventory, compressed.finalInternalEnergy(), 0.5, 1.0);
 		require(Math.abs(expanded.finalInternalEnergy() - initial) < 1.0E-9,
@@ -690,7 +708,7 @@ public final class M9ThermalValidation {
 				return nodeId == AirNetwork.AMBIENT_NODE ? 0.0 : thermal.gasGaugePressure(nodeId, network);
 			}
 			@Override public double density(int nodeId) {
-				return nodeId == AirNetwork.AMBIENT_NODE ? AirNetwork.AIR_DENSITY
+				return nodeId == AirNetwork.AMBIENT_NODE ? network.density(nodeId)
 						: thermal.gasDensity(nodeId, network);
 			}
 		};

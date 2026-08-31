@@ -234,9 +234,7 @@ public final class M5GasLiquidCouplingValidation {
 			double pressure = domain.gasBoundary().gaugePressure(1);
 			double available = domain.gasBoundary().availableVolume(1);
 			double standard = domain.gasBoundary().standardVolumeNanos(1) / 1_000_000_000.0;
-			double expectedPressure = Math.max(AirNetwork.MIN_GAUGE_PRESSURE,
-					Math.min(AirNetwork.MAX_GAUGE_PRESSURE,
-							AirNetwork.REFERENCE_PRESSURE * (standard / available - 1.0)));
+			double expectedPressure = AirNetwork.REFERENCE_PRESSURE * (standard / available - 1.0);
 			check(Math.abs(pressure - expectedPressure) <= Math.max(1.0E-8, Math.abs(expectedPressure) * 1.0E-12),
 					"staged compression pressure did not match finite inventory/capacity EoS at fill " + fill);
 		}

@@ -34,6 +34,17 @@ public final class GasInventory {
 	public List<GasComponentAmount> components() { return components; }
 	public long standardVolumeNanos() { return standardVolumeNanos; }
 	public boolean isEmpty() { return components.isEmpty(); }
+
+	/** Derived physical mass in kg, summed in canonical component order. */
+	public double totalMass() {
+		double result = 0.0;
+		for (GasComponentAmount component : components) result += component.mass();
+		if (!(Double.isFinite(result) && result >= 0.0)) {
+			throw new IllegalStateException("Gas inventory mass is not finite");
+		}
+		return result;
+	}
+
 	public GasComponentAmount component(String componentId) {
 		for (GasComponentAmount component : components) if (component.componentId().equals(componentId)) return component;
 		return null;

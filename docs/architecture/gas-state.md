@@ -62,12 +62,14 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 ## 压力与热耦合
 
 - 无热状态时使用等温状态方程和有限速率孔流。
-- 热状态存在时，气体总内能与节点库存共同派生温度、绝对压力和密度；孔流同步搬运组分与能量。
+- 热状态存在时，气体总内能与节点库存共同派生温度、绝对压力、密度和声学闭合；孔流同步搬运组分与能量。
 - 气液相变用 water-vapor 分压计算饱和条件，受绝对压力、潜热、库存、容量和批预算共同限制。
-- 所有 candidate 温度和压力必须落在 world thermal registry 的有效域；越界安全暂停。
+- 所有 candidate 温度必须落在 world thermal registry 的 caloric 有效域；相变候选的压力还必须落在相应平衡曲线的数据域，越界安全暂停。
 - mechanics 可从所有液气界面选择一个统一 sealed-node gauge reference，在 PCG 内只求相对压力并在绝对观察/热学边界加回；该数值换元不修改 node pressure、inventory、U 或不同 node 间的压差。
 
 当前 `AirNetwork` 是有限体积热力学/孔流网络，不是逐 cell/face 的气体动量求解器；空间 FLIP 网格仍只承载不可压凝聚相。气体的可压缩性已经由库存、available volume、`U` 与状态方程表达，并通过界面 pressure 耦合液体，但尚不承诺解析腔体内部速度场、声学传播或气体混合层。后续若把气体迁入共享空间动量内核，必须保留这里的 exact 组分/质量/能量账，并以状态方程闭合密度和非零散度；不能复用液体零散度 projection 把气体错误地压成不可压，也不能按材料 ID 选择另一套平流/传递算法。
+
+空间化时 node inventory 与逐 cell inventory 不能同时成为真值。进入空间内核的连通气体必须由逐控制体的 component nanos/kg/species/residual、动量和总能量唯一持有；`AirNetwork` 只能在未空间解析的腔体继续持有 exact node 总账，或作为逐格总账可证明的 coarse projection。两种表示之间的切换必须是同一候选内的守恒 repartition，不能先复制 node 再让两侧各自演化。
 
 ### 状态方程
 
@@ -75,6 +77,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 
 ```text
 p_gauge = P0 * (Vstd / Vavailable - 1)
+rho_gas = total_mass_kg / Vavailable
 ```
 
 热状态使用节点权威 U 反演 `T`，再计算：
@@ -82,11 +85,18 @@ p_gauge = P0 * (Vstd / Vavailable - 1)
 ```text
 p_abs = P0 * (Vstd / Vavailable) * (T / T0)
 rho_gas = total_mass_kg / Vavailable
+R_total = P0 * Vstd / T0
+gamma = 1 + R_total / C_v,total
+K_s = gamma * p_abs
+c = sqrt(K_s / rho_gas)
+beta_s = 1 / K_s
 ```
+
+`GasThermalModel.HydrodynamicState` 是上述局部 ideal-gas mixture 闭合的唯一实现：`C_v,total` 来自同一库存和权威 `U` 所在 caloric segment，`R_total` 来自同一 exact standard volume；绝热体积模量 `K_s`、声速 `c` 与压力 compliance `beta_s` 都是状态方程导数，不是 CFL 调参或材料特例。caloric 数据域仍约束温度；相平衡曲线继续拥有自己的压力数据域。若要支持非理想气体，应扩展数据驱动的状态方程及其导数，不能在 solver 中按 component ID 修正压力。
 
 零库存 sealed node 表示真空：`p_abs = 0`、`rho = 0`、`U = 0`，几何体积变化不产生绝热功。真空的温度没有热力学定义；只读显示使用区域插入温度作为约定值，不能据此反算库存。孔流可按有限速率把环境或相邻节点的真实库存搬入真空。
 
-无热状态保留早期等温网络的数值正则：available volume 最低取 `1e-9 m³`，gauge pressure 限制在 `-0.99 P0 .. 20 P0`，并分别累计 floor/ceiling diagnostic；这只限制传给机械求解器的派生压力，不改气体库存。热状态不使用该钳制修复候选，而把相同压力窗作为有效域，越界安全暂停。无传质绝热体积变化按 constant-`c_v` ideal-gas isentrope 计算新温度与 `delta U`；跨 caloric segment 或有效域时整步暂停。
+等温与热状态都不钳制派生压力：正 available volume 直接使用状态方程，有限库存落入零 available volume 是奇异候选并显式拒绝。非空库存的绝对压力因而始终为正，可连续逼近真空，也可表达有限的高压状态；算法不再以固定压力窗替代物性有效域。无传质绝热体积变化按 constant-`c_v` ideal-gas isentrope 计算新温度与 `delta U`；跨 caloric segment 时整步暂停。
 
 ### 孔流
 

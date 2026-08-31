@@ -42,13 +42,7 @@ public final class AirNetwork {
 	}
 	/** Reference (ambient) absolute pressure in Pa; gauge zero matches the solver convention. */
 	public static final double REFERENCE_PRESSURE = 101_325.0;
-	/** Numerical ceiling for cavity gauge pressure; guards the fully-filled cavity singularity. */
-	public static final double MAX_GAUGE_PRESSURE = 20.0 * REFERENCE_PRESSURE;
-	/** Numerical floor for cavity gauge pressure; a cavity cannot be pulled below near-vacuum. */
-	public static final double MIN_GAUGE_PRESSURE = -0.99 * REFERENCE_PRESSURE;
-	/** Available-volume regularisation (m³) for the isothermal state equation; equal to one nanovolume quantum so a newly discovered cavity always starts at gauge zero. */
-	public static final double MIN_AVAILABLE_VOLUME = 1.0E-9;
-	/** Constant air density (kg/m³) used by isothermal orifice flow. */
+	/** Built-in air standard-state density (kg/m³). */
 	public static final double AIR_DENSITY = 1.2;
 	/** The ambient reservoir: gauge pressure zero, unbounded inventory, never stored as a node. */
 	public static final int AMBIENT_NODE = 0;
@@ -62,19 +56,24 @@ public final class AirNetwork {
 	private TreeMap<Integer, AirNode> nodes = new TreeMap<>();
 	private List<AirEdge> edges = new ArrayList<>();
 	private final GasRegistry registry;
+	private final double ambientDensity;
 	private int nextNodeId = 1;
 	private GasAuditLedger escapedSink = GasAuditLedger.EMPTY;
 	private GasAuditLedger externalSource = GasAuditLedger.EMPTY;
 	private SignedDyadic massRoundoff = SignedDyadic.ZERO;
 	private SignedDyadic residualRoundoff = SignedDyadic.ZERO;
 	private long revision;
-	private int pressureFloorEvents;
-	private int pressureCeilingEvents;
 	private int transferClampEvents;
 
 	public AirNetwork() { this(BuiltinGasDefinitions.createRegistry()); }
 
-	public AirNetwork(GasRegistry registry) { this.registry = Objects.requireNonNull(registry, "registry"); }
+	public AirNetwork(GasRegistry registry) {
+		this.registry = Objects.requireNonNull(registry, "registry");
+		this.ambientDensity = registry.createAmbient(AirNode.toNanos(1.0)).totalMass();
+		if (!(Double.isFinite(ambientDensity) && ambientDensity > 0.0)) {
+			throw new IllegalArgumentException("Ambient gas density is invalid");
+		}
+	}
 
 	public GasRegistry registry() { return registry; }
 	/** Monotonic token over authoritative nodes, inventories, volumes, edges and audit columns. */
@@ -211,46 +210,59 @@ public final class AirNetwork {
 	public int edgeCount() { return edges.size(); }
 
 	/**
-	 * Isothermal state equation: {@code p = P0 * (V0 / max(V, V_min) - 1)}, clamped to the
-	 * numerical pressure window. Ambient is exactly zero with no state. Floor and ceiling
-	 * counters count queries that hit the regularisation window.
+	 * Isothermal state equation: {@code p = P0 * (V0 / V - 1)}. Ambient is exactly zero with
+	 * no state. A finite inventory in zero volume is a singular candidate and is rejected rather
+	 * than repaired by changing its pressure.
 	 */
 	public double gaugePressure(int nodeId) {
 		if (nodeId == AMBIENT_NODE) return 0.0;
 		AirNode node = sealed(nodeId);
 		if (node.inventory().isEmpty()) return -REFERENCE_PRESSURE;
-		double pressure = rawGaugePressure(node);
-		if (pressure > MAX_GAUGE_PRESSURE) { pressureCeilingEvents++; return MAX_GAUGE_PRESSURE; }
-		if (pressure < MIN_GAUGE_PRESSURE) { pressureFloorEvents++; return MIN_GAUGE_PRESSURE; }
-		return pressure;
+		return rawGaugePressure(node);
 	}
 
-	/** Same derived pressure without advancing numerical-window diagnostics; safe for Query/probe consumers. */
+	/** Read-only derivation of the same pressure; safe for Query/probe consumers. */
 	public double observedGaugePressure(int nodeId) {
 		if (nodeId == AMBIENT_NODE) return 0.0;
 		AirNode node = sealed(nodeId);
 		if (node.inventory().isEmpty()) return -REFERENCE_PRESSURE;
-		double pressure = rawGaugePressure(node);
-		if (pressure > MAX_GAUGE_PRESSURE) return MAX_GAUGE_PRESSURE;
-		if (pressure < MIN_GAUGE_PRESSURE) return MIN_GAUGE_PRESSURE;
-		return pressure;
+		return rawGaugePressure(node);
 	}
 
 	private double rawGaugePressure(AirNode node) {
-		double available = Math.max(node.availableVolume(), MIN_AVAILABLE_VOLUME);
-		return REFERENCE_PRESSURE * (node.standardVolume() / available - 1.0);
+		if (!(node.availableVolume() > 0.0)) {
+			throw new IllegalStateException("Finite gas inventory has no available volume");
+		}
+		double pressure = REFERENCE_PRESSURE * (node.standardVolume() / node.availableVolume() - 1.0);
+		if (!Double.isFinite(pressure)) throw new IllegalStateException("Derived gas pressure is not finite");
+		return pressure;
+	}
+
+	/** Isothermal density from the same inventory and available volume as pressure. */
+	public double density(int nodeId) {
+		if (nodeId == AMBIENT_NODE) return ambientDensity;
+		AirNode node = sealed(nodeId);
+		if (node.inventory().isEmpty()) return 0.0;
+		if (!(node.availableVolume() > 0.0)) {
+			throw new IllegalStateException("Finite gas inventory has no available volume");
+		}
+		double density = node.inventory().totalMass() / node.availableVolume();
+		if (!(Double.isFinite(density) && density > 0.0)) {
+			throw new IllegalStateException("Derived gas density is invalid");
+		}
+		return density;
 	}
 
 	/**
 	 * Advances orifice transport by one step. Flow follows the CONTAM power law
-	 * {@code Q = Cd * A * sqrt(2 * dp / rho_air)}; the transferred standard volume is clamped
+	 * {@code Q = Cd * A * sqrt(2 * dp / rho_source)}; the transferred standard volume is capped
 	 * to the equalization split, so the pressure difference decays monotonically and never
 	 * overshoots equilibrium. Edges apply in list order with inventories refreshed in place.
 	 */
 	public void stepEdges(double dt) {
 		stepEdges(dt, new NodeThermodynamics() {
 			@Override public double gaugePressure(int nodeId) { return AirNetwork.this.gaugePressure(nodeId); }
-			@Override public double density(int nodeId) { return AIR_DENSITY; }
+			@Override public double density(int nodeId) { return AirNetwork.this.density(nodeId); }
 		}, (source, target, moved, sourceAfter, targetAfter) -> () -> { });
 	}
 
@@ -267,7 +279,10 @@ public final class AirNetwork {
 			int target = firstPressure > secondPressure ? edge.secondNode() : edge.firstNode();
 			double delta = Math.abs(firstPressure - secondPressure);
 			double sourcePressure = Math.max(firstPressure, secondPressure);
-			double density = source == AMBIENT_NODE ? AIR_DENSITY : thermodynamics.density(source);
+			double density = thermodynamics.density(source);
+			if (!(Double.isFinite(density) && density > 0.0)) {
+				throw new IllegalArgumentException("Gas orifice source density is invalid");
+			}
 			double flow = edge.dischargeCoefficient() * edge.areaSquareMeters()
 					* Math.sqrt(2.0 * delta / density);
 			double transferCubicMeters = flow * dt * (REFERENCE_PRESSURE + sourcePressure) / REFERENCE_PRESSURE;
@@ -639,10 +654,6 @@ public final class AirNetwork {
 		return liveMass.mass().add(sinkMass.mass()).equals(sourceMass.mass().add(massRoundoff))
 				&& liveMass.residual().add(sinkMass.residual()).equals(sourceMass.residual().add(residualRoundoff));
 	}
-
-	public int pressureFloorEvents() { return pressureFloorEvents; }
-
-	public int pressureCeilingEvents() { return pressureCeilingEvents; }
 
 	public int transferClampEvents() { return transferClampEvents; }
 

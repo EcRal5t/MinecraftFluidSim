@@ -55,7 +55,7 @@
 | cut-cell/CCD | `FlipCutCellGeometry.java`、`FlipParticleCollision.java` | pressure 与碰撞共享 aperture；checkpoint/handoff 保留 raw micro mask；只截断命中法向 |
 | logical step 尾部与 reseed | `LogicalStepTailAssembly.java`、`GranularTransitionStage.java`、`ParticleReseedStage.java`、`FlipParticleReseeder.java`、`ConservativeMarkerSampling.java`、`CarrierMutationCoordinator.java` | granular compaction/deposit 与 reseed 分列；reseed 保持体积、质量、动量、质心和相身份；不可精确表示的 float merge 保留 residual marker 并单列 conservation refusal；coordinator 同序搬运 chemistry/thermal side column |
 | 材料与单位边界 | `FluidMaterial*.java`、`BuiltinFluidMaterials.java`、`units/SolverUnitScale.java` | marker 体积与 solver mass 独立；SI/容器只在统一边界换成 m³/kg；stable ID 上链，runtime handle 不上链 |
-| 气体 | `fluid/air/`、`GasRegistryCodec.java`、`AirCavityScanner.java`、`GasLiquidPhaseModel.java` | component nanos/kg/species/source/sink 闭合；gas mass/residual 均为 kg；component-local allowed species 由 world registry 冻结并在所有发布入口验证；热区域持久拓扑同代 |
+| 气体 | `model/.../fluid/air/`、`model/.../thermal/GasThermalModel.java`、`GasRegistryCodec.java`、`solver/.../fluid/AirCavityScanner.java`、`GasLiquidPhaseModel.java` | component nanos/kg/species/source/sink 闭合；gas mass/residual 均为 kg；温度/压力/密度/绝热体积模量/声速/compliance 来自同一 inventory+volume+U 闭合；真空无 continuum pressure unknown；component-local allowed species 由 world registry 冻结并在所有发布入口验证；热区域持久拓扑同代 |
 | 化学 | `chemistry/`、`FlipChemicalParticleState.java`、`units/SolverUnitScale.java` | exact species/组成/电荷/kg 残差；indicator provenance 不隔离反应 |
 | 颗粒 | `granular/`、`GranularCouplingFields.java` | SVQ、kg 质量、组成独立；active/deposit/coherent 不混用 |
 | 热学 | `thermal/ThermalDomainState.java`、`thermal/ThermalCellOperations.java`、`thermal/`、`FlipThermalState.java`、`FlipThermalParticleState.java` | carrier owner/审计与无库存的 LTE/reaction/phase 派生算法分离；总 U 权威；温度派生；`T_eq(p)` curve 是唯一压力域/平衡真值；超域暂停；exact phase batch 选择最近可表示平衡；通量、反应热、相变、功联合审计 |
@@ -101,6 +101,7 @@
 | marker 材料/质量/材料界面 | `materials` | 同时改存档或协议才追加最近门 |
 | 表面张力/润湿 | `surface-tension` | 同时改材料状态追加 `materials` |
 | 气体库存/EoS/孔流 | `air-network` | 改 pressure 消费运行 `gas-liquid` |
+| 气体热力学/声学闭合 | `thermal` | 同时改等温 EoS 追加 `air-network`；接入 pressure operator 再追加 `gas-liquid,free-surface` |
 | cavity 扫描/几何边 | `air-cavity` | 改共享 cut-face 追加 `cut-cell` |
 | 活动气液耦合 | `gas-liquid` | 显式选择包含完整平衡门；同时固定有限密闭库存零容量时 typed rejection 且提交前 inventory/audit 原样保留 |
 | 密闭 partial gas owner / `empty` 后边界注液 | `controller-gas-lineage` | 以 production liquid/gas registry 复现 `34 m³std → empty → 16 BV`，连续 200 个 backend candidate/capture/restore；改 scanner 几何时先跑 `air-cavity`，改压力消费时再跑 `gas-liquid` |

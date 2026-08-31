@@ -539,7 +539,7 @@ final class GasTopologyCoordinator {
 						: domain.thermalState.gasGaugePressure(nodeId, domain.gasState.network);
 			}
 			@Override public double density(int nodeId) {
-				return nodeId == AirNetwork.AMBIENT_NODE ? AirNetwork.AIR_DENSITY
+				return nodeId == AirNetwork.AMBIENT_NODE ? domain.gasState.network.density(nodeId)
 						: domain.thermalState.gasDensity(nodeId, domain.gasState.network);
 			}
 		}, (source, target, moved, sourceAfter, targetAfter) -> domain.thermalState.planGasTransfer(
