@@ -6,3 +6,4 @@
 |---|---|---|
 | `arch_baseline.py` | 扫描生产 Java 源，输出超过 600/1000 行的类表与模块规模，用于更新 [`architecture-baseline.md`](architecture-baseline.md) | `uv run pytool/arch_baseline.py` |
 | `unused_imports.py` | 报告结构搬移后残留的未使用 import；不依赖编译器，只做正则匹配 | `uv run pytool/unused_imports.py <file.java> [...]` |
+| `jfr_hotspots.py` | 聚合 JFR 执行采样，按方法列出 self/inclusive 命中，或查看指定方法的 caller、callee 与代表性调用栈 | `uv run pytool/jfr_hotspots.py <recording.jfr> [--top N] [--module cc.ecisr.mmm]` |

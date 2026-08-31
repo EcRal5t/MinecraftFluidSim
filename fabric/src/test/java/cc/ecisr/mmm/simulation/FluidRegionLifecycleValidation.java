@@ -353,10 +353,15 @@ public final class FluidRegionLifecycleValidation {
 		require(MinecraftRegionAvailability.inventoryDecreaseMayBypass(retryRegion.availabilityReason())
 				&& !MinecraftRegionAvailability.inventoryDecreaseMayBypass(RegionAvailabilityReason.NUMERICAL_PAUSE),
 				"load-shedding writes did not isolate the retryable performance pause");
-		retryRegion.clearPerformanceBlock();
+		MinecraftRegionOperatorActions.clearPerformancePauseForExplicitRetry(retryRegion);
 		require(retryRegion.availabilityReason() == null && retryRegion.performanceBlockFailure() == null
 				&& retryRegion.hardOverrunStreak() == 0 && retryRegion.recoveryStreak() == 0,
-				"explicit performance retry did not clear its retryable availability block");
+				"explicit run/step retry did not clear its retryable performance block");
+		retryRegion.blockNumerical("pressure solve did not converge");
+		MinecraftRegionOperatorActions.clearPerformancePauseForExplicitRetry(retryRegion);
+		require(retryRegion.availabilityReason() == RegionAvailabilityReason.NUMERICAL_PAUSE
+				&& retryRegion.numericalBlockFailure() != null,
+				"explicit run/step retry cleared a numerical failure");
 	}
 
 	private static void validateAvailabilityPreservesRunIntent() {

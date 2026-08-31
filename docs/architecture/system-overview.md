@@ -154,7 +154,7 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 - `ACTIVE`：按 20 Hz 目标推进。
 - `REDUCED`：wall-time 超过 40 ms 后按 1–4 tick pacing 推进同一个 logical step。
 - `PAUSED`：operator 暂停或边界/身份/数值候选失败；库存仍保留。
-- `PERFORMANCE_PAUSE`：连续三步超过 200 ms 的可重试调度暂停；`/mmm run` 显式清除本次 wall-time 证据并从同一已提交状态重试，不能与不可解释的数值失败共用永久 blocker。
+- `PERFORMANCE_PAUSE`：连续三步超过 200 ms 的可重试调度暂停；`/mmm run` 与手动 `/mmm step` 显式清除本次 wall-time 证据并从同一已提交状态重试，不能与不可解释的数值失败共用永久 blocker。
 - `UNLOADED`：solver arrays 已释放，但 metadata 和 catalog reservation 仍保留。
 - motion sleep 与 thermal sleep 独立；静水仍可能导热或相变，静温也可能继续运动。
 

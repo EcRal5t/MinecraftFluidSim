@@ -61,10 +61,7 @@ public final class MinecraftRegionOperatorActions {
 
 	public boolean setPaused(boolean paused, ServerLevel level) {
 		FluidRegion region = activeRegion();
-		if (region != null && !paused
-				&& region.availabilityReason() == cc.ecisr.mmm.api.RegionAvailabilityReason.PERFORMANCE_PAUSE) {
-			region.clearPerformanceBlock();
-		}
+		if (region != null && !paused) clearPerformancePauseForExplicitRetry(region);
 		if (region == null || (!paused && !availability.ensure(level, region))) return false;
 		region.setPaused(paused);
 		return true;
@@ -87,6 +84,7 @@ public final class MinecraftRegionOperatorActions {
 	public int step(ServerLevel level, int count) {
 		FluidRegion region = activeRegion();
 		if (region == null || !level.dimension().equals(region.dimension())) return 0;
+		clearPerformancePauseForExplicitRetry(region);
 		if (!availability.ensure(level, region)) return -1;
 		region.wakeForActivity();
 		try {
@@ -112,6 +110,13 @@ public final class MinecraftRegionOperatorActions {
 		}
 		sendSnapshot(level);
 		return count;
+	}
+
+	/** Explicit run/step retries clear only wall-time evidence, never physical or transaction failures. */
+	static void clearPerformancePauseForExplicitRetry(FluidRegion region) {
+		if (region.availabilityReason() == cc.ecisr.mmm.api.RegionAvailabilityReason.PERFORMANCE_PAUSE) {
+			region.clearPerformanceBlock();
+		}
 	}
 
 	public WaterEditResult pourWater(ServerPlayer player, int buckets) {

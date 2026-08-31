@@ -75,19 +75,16 @@ abstract class ProductionReplayValidationSupport {
 		return domain;
 	}
 
-	/** Exact solver-side shape and capability profile created by {@code /mmm demo} on flat ground. */
+	/** Maximum-fill solver-side shape and capability profile created by {@code /mmm demo} in empty space. */
 	static FluidDomain createFullyBoundDamBreakDemo(FullCapabilityTestFixture.Registries registries) {
 		FluidDomain domain = new FluidDomain(24, 16, 24, productionConfig(), 73_728);
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
-		for (int y = 0; y < 4; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 24; x++) {
-			domain.setSolid(x, y, z, true);
-		}
 		for (int y = 0; y < 12; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 9; x++) {
-			if (!domain.isSolid(x, y, z)) domain.setVolume(x, y, z, 1.0F);
+			domain.setVolume(x, y, z, 1.0F);
 		}
 		FullCapabilityTestFixture.bindFull(domain, registries,
 				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-		require(domain.particleCount() == 13_824 && domain.totalVolumeExact() == 1_728.0,
+		require(domain.particleCount() == 20_736 && domain.totalVolumeExact() == 2_592.0,
 				"dam-break fixture does not match the production demo inventory");
 		return domain;
 	}

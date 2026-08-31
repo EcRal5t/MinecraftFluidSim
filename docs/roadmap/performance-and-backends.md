@@ -24,7 +24,7 @@
 
 报告记录区域尺寸、活动 marker/carrier、substep、PCG iteration/residual、GC、wall time 和设备 timestamp。设备 timestamp 只做性能观测，调度仍以 wall time 为真值。
 
-当前 `production-live-budget` 同时约束两种生产路径：默认 `8×8×8` controller 注入 16 BV 后的 20 个 live logical step 每步必须小于 40 ms；与 `/mmm demo` 相同的 `24×16×24`、1,728 个液体 cell、13,824 marker、完整 chemistry/granular/gas/thermal/phase 布局连续执行五步，不得形成三步连续超过 200 ms。JVM 预热耗时独立报告。P2G face splat、exact dyadic 分桶归约与 CPU prepared-candidate ownership transfer 都只等价移除对象分配、逐项大整数归约和重复 candidate capture/restore，不改变 marker、CFL substep、PCG、residual、相变预算或任何账本；额外 warmup、pacing、关闭能力或提高阈值不能替代该门。
+当前 `production-live-budget` 同时约束两种生产路径：默认 `8×8×8` controller 注入 16 BV 后的 20 个 live logical step 每步必须小于 40 ms；空场景最大装量 `/mmm demo` 的 `24×16×24`、2,592 个液体 cell、20,736 初始 marker、完整 chemistry/granular/gas/thermal/phase 布局连续执行 20 步，不得形成三步连续超过 200 ms。JVM 预热耗时独立报告。exact dyadic 分桶归约、CPU prepared-candidate ownership transfer，以及每次 projection 固定 pressure unknown/face matrix 后只遍历活动 unknown，都只移除重复归约、状态往返或物理系数重建；逐步 CFL substep、PCG iteration/residual 和相变事件保持原轨迹，账本不作近似。额外 warmup、pacing、关闭能力或提高阈值不能替代该门。
 
 ## 并发边界
 

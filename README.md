@@ -33,7 +33,7 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 | 选择与保存区域 | `/mmm regions list`、`regions select <uuid>`、`regions checkpoint` |
 | 恢复上一完整 checkpoint | `/mmm regions recoverprevious <expectedCheckpoint>`；成功后退出并重新进入世界 |
 | 操作库存与碰撞 | `/mmm pour [1-16]`、`drain [1-16]`、`empty`（仅非控制器开发域）、`refresh`；控制器清空用控制器界面 `EMPTY_CONDENSED` 的预览/确认 |
-| 运行与区域诊断 | `/mmm run`、`pause`、`step [1-20]`、`status`；`run` 可显式重试 wall-time `PERFORMANCE_PAUSE`，不会清除真正的数值失败；状态只读 live/committed runtime，不作为库存真值 |
+| 运行与区域诊断 | `/mmm run`、`pause`、`step [1-20]`、`status`；`run` 与手动 `step` 可显式重试 wall-time `PERFORMANCE_PAUSE`，不会清除真正的数值失败；状态只读 live/committed runtime，不作为库存真值 |
 | 控制器准入配置 | `/mmm controllers [true/false]`；关闭会暂停现有控制器域 |
 | 世界桥接 | `/mmm worldbridge`；重启后生效 |
 | 材料与界面调试 | `/mmm materialdemo`、`materialbucket ...`、`tensiondemo [angle]` |

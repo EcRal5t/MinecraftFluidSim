@@ -393,12 +393,12 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		}
 
 		FluidDomain domain = createFullyBoundDamBreakDemo(registries);
-		double volume = domain.totalVolumeExact();
-		double mass = domain.totalMass();
 		double maximumMillis = 0.0;
 		int consecutiveOverruns = 0;
 		int maximumConsecutiveOverruns = 0;
-		for (int generation = 0; generation < 5; generation++) {
+		for (int generation = 0; generation < 20; generation++) {
+			double volumeBefore = domain.totalVolumeExact();
+			double massBefore = domain.totalMass();
 			long start = System.nanoTime();
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
 					generation, domain.captureAuthoritativeState(), List.of(), true,
@@ -409,11 +409,21 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			consecutiveOverruns = elapsedMillis > performancePauseThresholdMillis
 					? consecutiveOverruns + 1 : 0;
 			maximumConsecutiveOverruns = Math.max(maximumConsecutiveOverruns, consecutiveOverruns);
-			require(domain.totalVolumeExact() == volume && domain.totalMass() == mass,
-					"dam-break production step changed liquid volume or mass");
-			System.out.printf("  dam-break live step %d: %.3f ms, particles=%d, PCG=%d, residual=%.6g%n",
+			int phaseOperations = candidate.stats().condensedPhase().operations()
+					+ candidate.stats().gasPhase().operations()
+					+ candidate.stats().thermalAxis().granularPhase().transfers();
+			if (phaseOperations == 0) {
+				require(domain.totalVolumeExact() == volumeBefore && domain.totalMass() == massBefore,
+						"phase-idle dam-break step changed liquid volume or mass");
+			}
+			require(Double.isFinite(domain.totalVolumeExact()) && domain.totalVolumeExact() > 0.0
+					&& Double.isFinite(domain.totalMass()) && domain.totalMass() > 0.0,
+					"dam-break production step produced invalid liquid inventory");
+			System.out.printf("  dam-break live step %d: %.3f ms, particles=%d, volume=%.9f, "
+					+ "substeps=%d, PCG=%d, residual=%.6g, phase=%d%n",
 					generation + 1, elapsedMillis, domain.particleCount(),
-					candidate.stats().pressureIterations(), candidate.stats().pressureResidual());
+					domain.totalVolumeExact(), candidate.stats().substeps(),
+					candidate.stats().pressureIterations(), candidate.stats().pressureResidual(), phaseOperations);
 		}
 		require(maximumConsecutiveOverruns < 3,
 				"dam-break production path would trigger the wall-time pause: max="

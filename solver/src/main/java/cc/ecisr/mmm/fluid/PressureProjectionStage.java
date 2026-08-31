@@ -61,6 +61,7 @@ final class PressureProjectionStage {
 		Arrays.fill(state.projection.gasRhs, 0.0F);
 		Arrays.fill(state.projection.gasMatrixDiagonal, 0.0F);
 		Arrays.fill(state.projection.gasStorageCoefficient, 0.0F);
+		state.projection.fluidUnknownCount = 0;
 		state.projection.gasUnknownCount = 0;
 		int pressureAnchor = findPressureAnchor();
 		access.pressureAnchor(pressureAnchor);
@@ -82,6 +83,7 @@ final class PressureProjectionStage {
 					- access.granularMovingSolidDivergence(index, dt);
 			state.projection.divergence[index] = correctedDivergence;
 			state.projection.rhs[index] = rhsScale * correctedDivergence;
+			state.projection.fluidUnknownCells[state.projection.fluidUnknownCount++] = index;
 			fluidCells++;
 		}
 		if (fluidCells == 0) { access.pressureResult(0, 0.0F); return; }

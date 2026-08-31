@@ -421,7 +421,7 @@ final class MmmCommandHandlers {
 		int completed = actions.step(source.getLevel(), count);
 		if (completed == 0) return fail(source, "活动流体域位于其他维度");
 		if (completed < 0) return fail(source,
-				"控制器域未完整加载或边界已打开；" + runtime.regionDiagnostics().status(source.getServer()));
+				"流体域当前不能手动步进；" + runtime.regionDiagnostics().status(source.getServer()));
 		return succeed(source, "已执行 " + completed + " 个流体步；"
 				+ runtime.regionDiagnostics().status(source.getServer()), completed);
 	}

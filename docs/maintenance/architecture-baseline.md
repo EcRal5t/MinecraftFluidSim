@@ -16,18 +16,18 @@
 | `RegionStateFiles` 1053 行 | S18 删除 |
 | `VulkanFlipPipeline` 1237 行 | device/resources/bindings/scheduler/readback 与 compact diagnostics 拆出后为 942 行 |
 
-当前超过 600 行但未超限的类为：`VulkanFlipPipeline` 942、`AirNetwork` 841、`FluidDomainMechanicalFields` 750、`FluidDomainCapabilities` 724、`FluidDomainStepCoordinator` 714、`ChemicalParcelStore` 695、`WorldCapabilityBundleStore` 677、`GpuFlipProbeValidation` 653、`FluidRegion` 615、`FluidDomainCollisionState` 613。它们只产生 warning，不进入例外表。本轮液气多 node 邻接解析单独归入 `GasPhaseInterfaceResolver`，使 `GasLiquidPhaseChangeStage` 保持在 597 行且只拥有 extent/commit。
+当前超过 600 行但未超限的类为：`VulkanFlipPipeline` 942、`AirNetwork` 841、`FluidDomainMechanicalFields` 750、`FluidDomainCapabilities` 740、`FluidDomainStepCoordinator` 714、`ChemicalParcelStore` 695、`WorldCapabilityBundleStore` 677、`GpuFlipProbeValidation` 653、`FluidRegion` 622、`FluidDomainCollisionState` 615。它们只产生 warning，不进入例外表。本轮液气多 node 邻接解析单独归入 `GasPhaseInterfaceResolver`，使 `GasLiquidPhaseChangeStage` 保持在 597 行且只拥有 extent/commit。
 
 ## 模块规模
 
 | 模块 | 文件 | 行数 |
 |---|---:|---:|
 | `api/src/main/java` | 11 | 264 |
-| `model/src/main/java` | 128 | 17337 |
-| `solver/src/main/java` | 83 | 15572 |
+| `model/src/main/java` | 128 | 17464 |
+| `solver/src/main/java` | 83 | 15806 |
 | `application/src/main/java` | 24 | 1848 |
 | `core/src/main/java` | 0 | 0 |
-| `fabric/src/main/java` | 158 | 25752 |
+| `fabric/src/main/java` | 158 | 25803 |
 | `fabric/src/client/java` | 14 | 1590 |
 | `gpu-probe-kernel/src/main/java` | 18 | 4129 |
 | `gpu-probe/src/main/java` | 5 | 734 |
@@ -56,4 +56,4 @@
 
 ## 性能基线
 
-S21 游戏回归复审最终干净运行（JDK 26.0.2、Java 25 target）的 `production-live-budget` 同场景数据：默认 8×8×8 controller、1024 初始 markers，20 个 live logical steps median/max 为 4.287/5.073 ms，低于 40 ms 产品门；phase-on production step 为 8.293 ms。JVM 10 步预热 36.263 ms 单列，不计入 frame budget。性能数字只作本机相对证据。
+S21 最大装量复审最终干净运行（JDK 26.0.2、Java 25 target）的 `production-live-budget` 数据：默认 8×8×8 controller、1024 初始 markers，20 个 live logical steps median/max 为 11.641/20.330 ms，低于 40 ms 产品门；空场景最大装量 `/mmm demo` 为 24×16×24、2,592 liquid cells、20,736 初始 markers，20 步最大 193.220 ms，连续超过 200 ms 为 0。JVM 预热单列，不计入 frame budget。性能数字只作本机相对证据。

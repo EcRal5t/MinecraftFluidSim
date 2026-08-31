@@ -1,7 +1,5 @@
 package cc.ecisr.mmm.fluid;
 
-import java.util.Arrays;
-
 /**
  * Pure pressure numerics: PCG over the symmetric liquid-cell / lumped gas-node block and
  * its diagonal preconditioner. The stage owns physical RHS/storage assembly, anchoring and
@@ -16,9 +14,15 @@ final class PressureSystem {
 
 	/** Runs PCG on the assembled right-hand side; the pressure vector mutates in the workspace. */
 	PressureProjectionResult solve(int unknownCount, double target) {
-		System.arraycopy(domain.projection.rhs, 0, domain.projection.residual, 0, domain.projection.residual.length);
-		System.arraycopy(domain.projection.gasRhs, 0, domain.projection.gasResidual, 0,
-				domain.projection.gasResidual.length);
+		assembleMatrix();
+		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
+			int cell = domain.projection.fluidUnknownCells[ordinal];
+			domain.projection.residual[cell] = domain.projection.rhs[cell];
+		}
+		for (int ordinal = 0; ordinal < domain.projection.gasUnknownCount; ordinal++) {
+			int node = domain.projection.gasUnknownNodes[ordinal];
+			domain.projection.gasResidual[node] = domain.projection.gasRhs[node];
+		}
 		double residualRms = Math.sqrt(dot(
 				domain.projection.residual, domain.projection.gasResidual,
 				domain.projection.residual, domain.projection.gasResidual) / unknownCount);
@@ -26,9 +30,14 @@ final class PressureSystem {
 		if (!converged) {
 			applyPreconditioner(domain.projection.residual, domain.projection.gasResidual,
 					domain.projection.preconditioned, domain.projection.gasPreconditioned);
-			System.arraycopy(domain.projection.preconditioned, 0, domain.projection.direction, 0, domain.projection.residual.length);
-			System.arraycopy(domain.projection.gasPreconditioned, 0, domain.projection.gasDirection, 0,
-					domain.projection.gasResidual.length);
+			for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
+				int cell = domain.projection.fluidUnknownCells[ordinal];
+				domain.projection.direction[cell] = domain.projection.preconditioned[cell];
+			}
+			for (int ordinal = 0; ordinal < domain.projection.gasUnknownCount; ordinal++) {
+				int node = domain.projection.gasUnknownNodes[ordinal];
+				domain.projection.gasDirection[node] = domain.projection.gasPreconditioned[node];
+			}
 		}
 		double rz = dot(domain.projection.residual, domain.projection.gasResidual,
 				domain.projection.preconditioned, domain.projection.gasPreconditioned);
@@ -42,9 +51,10 @@ final class PressureSystem {
 					&& Double.isFinite(rz) && rz > 0.0)) break;
 			float alpha = (float) (rz / denominator);
 			if (!Float.isFinite(alpha)) break;
-			for (int i = 0; i < domain.cellCount; i++) {
-				domain.projection.pressure[i] += alpha * domain.projection.direction[i];
-				domain.projection.residual[i] -= alpha * domain.projection.matrixDirection[i];
+			for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
+				int cell = domain.projection.fluidUnknownCells[ordinal];
+				domain.projection.pressure[cell] += alpha * domain.projection.direction[cell];
+				domain.projection.residual[cell] -= alpha * domain.projection.matrixDirection[cell];
 			}
 			for (int ordinal = 0; ordinal < domain.projection.gasUnknownCount; ordinal++) {
 				int node = domain.projection.gasUnknownNodes[ordinal];
@@ -66,7 +76,11 @@ final class PressureSystem {
 			if (!(Double.isFinite(nextRz) && nextRz > 0.0)) break;
 			float beta = (float) (nextRz / rz);
 			if (!Float.isFinite(beta)) break;
-			for (int i = 0; i < domain.cellCount; i++) domain.projection.direction[i] = domain.projection.preconditioned[i] + beta * domain.projection.direction[i];
+			for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
+				int cell = domain.projection.fluidUnknownCells[ordinal];
+				domain.projection.direction[cell] = domain.projection.preconditioned[cell]
+						+ beta * domain.projection.direction[cell];
+			}
 			for (int ordinal = 0; ordinal < domain.projection.gasUnknownCount; ordinal++) {
 				int node = domain.projection.gasUnknownNodes[ordinal];
 				domain.projection.gasDirection[node] = domain.projection.gasPreconditioned[node]
@@ -77,56 +91,84 @@ final class PressureSystem {
 		return new PressureProjectionResult(iterations, residualRms, converged);
 	}
 
+	/** Freezes the physical face operator once for this projection; PCG only changes its vectors. */
+	private void assembleMatrix() {
+		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
+			int index = domain.projection.fluidUnknownCells[ordinal];
+			int x = index % domain.sizeX;
+			int yz = index / domain.sizeX;
+			int y = yz % domain.sizeY;
+			int z = yz / domain.sizeY;
+			float negativeX = x > 0
+					? pressureFaceCoefficient(index, index - 1, -1, 0, 0) : 0.0F;
+			float positiveX = x + 1 < domain.sizeX
+					? pressureFaceCoefficient(index, index + 1, 1, 0, 0) : 0.0F;
+			float negativeY = y > 0
+					? pressureFaceCoefficient(index, index - domain.sizeX, 0, -1, 0) : 0.0F;
+			float positiveY = y + 1 < domain.sizeY
+					? pressureFaceCoefficient(index, index + domain.sizeX, 0, 1, 0) : 0.0F;
+			int zStride = domain.sizeX * domain.sizeY;
+			float negativeZ = z > 0
+					? pressureFaceCoefficient(index, index - zStride, 0, 0, -1) : 0.0F;
+			float positiveZ = z + 1 < domain.sizeZ
+					? pressureFaceCoefficient(index, index + zStride, 0, 0, 1) : 0.0F;
+			domain.projection.matrixNegativeX[index] = negativeX;
+			domain.projection.matrixPositiveX[index] = positiveX;
+			domain.projection.matrixNegativeY[index] = negativeY;
+			domain.projection.matrixPositiveY[index] = positiveY;
+			domain.projection.matrixNegativeZ[index] = negativeZ;
+			domain.projection.matrixPositiveZ[index] = positiveZ;
+			domain.projection.matrixDiagonal[index] = negativeX + positiveX
+					+ negativeY + positiveY + negativeZ + positiveZ;
+		}
+	}
+
 	private void applyPressureMatrix(
 			float[] source, float[] gasSource, float[] destination, float[] gasDestination
 	) {
-		Arrays.fill(destination, 0.0F);
-		Arrays.fill(gasDestination, 0.0F);
+		for (int ordinal = 0; ordinal < domain.projection.gasUnknownCount; ordinal++) {
+			gasDestination[domain.projection.gasUnknownNodes[ordinal]] = 0.0F;
+		}
 		float inverseCellSquared = 1.0F / (domain.config.cellSize() * domain.config.cellSize());
-		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
-			int index = domain.cellIndex(x, y, z);
-			if (!domain.isFluid(index) || index == domain.pressureAnchor) continue;
+		int yStride = domain.sizeX;
+		int zStride = domain.sizeX * domain.sizeY;
+		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
+			int index = domain.projection.fluidUnknownCells[ordinal];
+			float diagonal = domain.projection.matrixDiagonal[index];
 			float value = 0.0F;
-			float diagonal = 0.0F;
-			if (x > 0) {
-				int neighbor = domain.cellIndex(x - 1, y, z);
-				float coefficient = pressureFaceCoefficient(index, neighbor, -1, 0, 0);
-				diagonal += coefficient;
+			float coefficient = domain.projection.matrixNegativeX[index];
+			if (coefficient > 0.0F) {
+				int neighbor = index - 1;
 				value -= coefficient * neighborValue(neighbor, source, gasSource);
 				accumulateGasFace(index, neighbor, coefficient, source, gasSource, gasDestination, inverseCellSquared);
 			}
-			if (x + 1 < domain.sizeX) {
-				int neighbor = domain.cellIndex(x + 1, y, z);
-				float coefficient = pressureFaceCoefficient(index, neighbor, 1, 0, 0);
-				diagonal += coefficient;
+			coefficient = domain.projection.matrixPositiveX[index];
+			if (coefficient > 0.0F) {
+				int neighbor = index + 1;
 				value -= coefficient * neighborValue(neighbor, source, gasSource);
 				accumulateGasFace(index, neighbor, coefficient, source, gasSource, gasDestination, inverseCellSquared);
 			}
-			if (y > 0) {
-				int neighbor = domain.cellIndex(x, y - 1, z);
-				float coefficient = pressureFaceCoefficient(index, neighbor, 0, -1, 0);
-				diagonal += coefficient;
+			coefficient = domain.projection.matrixNegativeY[index];
+			if (coefficient > 0.0F) {
+				int neighbor = index - yStride;
 				value -= coefficient * neighborValue(neighbor, source, gasSource);
 				accumulateGasFace(index, neighbor, coefficient, source, gasSource, gasDestination, inverseCellSquared);
 			}
-			if (y + 1 < domain.sizeY) {
-				int neighbor = domain.cellIndex(x, y + 1, z);
-				float coefficient = pressureFaceCoefficient(index, neighbor, 0, 1, 0);
-				diagonal += coefficient;
+			coefficient = domain.projection.matrixPositiveY[index];
+			if (coefficient > 0.0F) {
+				int neighbor = index + yStride;
 				value -= coefficient * neighborValue(neighbor, source, gasSource);
 				accumulateGasFace(index, neighbor, coefficient, source, gasSource, gasDestination, inverseCellSquared);
 			}
-			if (z > 0) {
-				int neighbor = domain.cellIndex(x, y, z - 1);
-				float coefficient = pressureFaceCoefficient(index, neighbor, 0, 0, -1);
-				diagonal += coefficient;
+			coefficient = domain.projection.matrixNegativeZ[index];
+			if (coefficient > 0.0F) {
+				int neighbor = index - zStride;
 				value -= coefficient * neighborValue(neighbor, source, gasSource);
 				accumulateGasFace(index, neighbor, coefficient, source, gasSource, gasDestination, inverseCellSquared);
 			}
-			if (z + 1 < domain.sizeZ) {
-				int neighbor = domain.cellIndex(x, y, z + 1);
-				float coefficient = pressureFaceCoefficient(index, neighbor, 0, 0, 1);
-				diagonal += coefficient;
+			coefficient = domain.projection.matrixPositiveZ[index];
+			if (coefficient > 0.0F) {
+				int neighbor = index + zStride;
 				value -= coefficient * neighborValue(neighbor, source, gasSource);
 				accumulateGasFace(index, neighbor, coefficient, source, gasSource, gasDestination, inverseCellSquared);
 			}
@@ -171,16 +213,9 @@ final class PressureSystem {
 			float[] source, float[] gasSource, float[] destination, float[] gasDestination
 	) {
 		float cellSquared = domain.config.cellSize() * domain.config.cellSize();
-		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
-			int index = domain.cellIndex(x, y, z);
-			if (!domain.isFluid(index) || index == domain.pressureAnchor) { destination[index] = 0.0F; continue; }
-			float diagonal = 0.0F;
-			if (x > 0) diagonal += pressureFaceCoefficient(index, domain.cellIndex(x - 1, y, z), -1, 0, 0);
-			if (x + 1 < domain.sizeX) diagonal += pressureFaceCoefficient(index, domain.cellIndex(x + 1, y, z), 1, 0, 0);
-			if (y > 0) diagonal += pressureFaceCoefficient(index, domain.cellIndex(x, y - 1, z), 0, -1, 0);
-			if (y + 1 < domain.sizeY) diagonal += pressureFaceCoefficient(index, domain.cellIndex(x, y + 1, z), 0, 1, 0);
-			if (z > 0) diagonal += pressureFaceCoefficient(index, domain.cellIndex(x, y, z - 1), 0, 0, -1);
-			if (z + 1 < domain.sizeZ) diagonal += pressureFaceCoefficient(index, domain.cellIndex(x, y, z + 1), 0, 0, 1);
+		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
+			int index = domain.projection.fluidUnknownCells[ordinal];
+			float diagonal = domain.projection.matrixDiagonal[index];
 			destination[index] = diagonal == 0.0F ? 0.0F : source[index] * cellSquared / diagonal;
 		}
 		for (int ordinal = 0; ordinal < domain.projection.gasUnknownCount; ordinal++) {
@@ -191,7 +226,10 @@ final class PressureSystem {
 
 	private double dot(float[] first, float[] firstGas, float[] second, float[] secondGas) {
 		double sum = 0.0;
-		for (int i = 0; i < first.length; i++) sum += (double) first[i] * second[i];
+		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
+			int cell = domain.projection.fluidUnknownCells[ordinal];
+			sum += (double) first[cell] * second[cell];
+		}
 		for (int ordinal = 0; ordinal < domain.projection.gasUnknownCount; ordinal++) {
 			int node = domain.projection.gasUnknownNodes[ordinal];
 			sum += (double) firstGas[node] * secondGas[node];
