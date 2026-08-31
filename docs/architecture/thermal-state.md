@@ -93,7 +93,7 @@ dt_stable = min_cell(0.5 * C_cell / sum_faces G_face)
 
 自动分 substep；`0.5` 保证一对相同 cell 单调趋近平衡而非一步交换温度。所需 substep 超过 8 时安全暂停。hot loop 使用 `double`，每个 face 对的增减严格镜像；commit 边界用 `SignedDyadic` 精确求和记录 IEEE-754 有限数，舍入残差单列保存，不能伪装成 source 或 sink。
 
-内置水在 293.15 K 使用 `rho = 1000 kg/m³`、`cv = 4184 J/(kg·K)`、`k = 0.598 W/(m·K)`；水蒸气使用 `cv = 1410 J/(kg·K)`、`k = 0.025 W/(m·K)`。一个 0.5 m cell 满水的热容量约 `523 kJ/K`；4 BV 水约 `16.736 MJ/K`。四个完整 reservoir 接触面总导热为 `2.392 W/K`，因此现实标定下温升本来就慢，极端热源只是高功率边界，不是比热缩放。
+内置水在 293.15 K 使用 `rho = 1000 kg/m³`、`cv = 4184 J/(kg·K)`、`k = 0.598 W/(m·K)`；水蒸气的 `k = 0.025 W/(m·K)`，`cv` 则按 [NIST water-vapor Shomate 数据](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7732185&Table=on&Type=JANAFG)换算为覆盖 `250–1700 K` 的五段数据，不把常温值外推到压缩后的高温状态。一个 0.5 m cell 满水的热容量约 `523 kJ/K`；4 BV 水约 `16.736 MJ/K`。四个完整 reservoir 接触面总导热为 `2.392 W/K`，因此现实标定下温升本来就慢，极端热源只是高功率边界，不是比热缩放。
 
 ### 热浮力
 
@@ -114,7 +114,7 @@ gas node 的共同温度由各 component 的质量、species 和 node `U` 反演
 p = P0 * (Vstd / Vavailable) * (T / T0)
 ```
 
-在单一 caloric segment 内，几何改变按常 `cv` 理想气体等熵关系计算压缩/膨胀，`Delta U` 记为进入 gas inventory 的 mechanical work。孔流搬运源状态焓 `h = u + p*v`；node 合并时能量相加，分裂时所有 child 保持 parent 温度且最后一个 child 接受浮点余数。跨 caloric segment 或越过 gas 压力有效窗拒绝候选。
+几何改变使用分段常 `cv` 的理想气体等熵闭式积分：逐段满足 `∫Cv(T)/T dT = R ln(V_initial/V_final)`，在共同 caloric 边界间以指数式求解，必要时精确走过多个 segment；`Delta U` 记为进入 gas inventory 的 mechanical work。该过程没有迭代容差、速度钳制或跨段拒答，只有越出所有 component 的共同 caloric 有效域才拒绝候选。孔流搬运源状态焓 `h = u + p*v`；node 合并时能量相加，分裂时所有 child 保持 parent 温度且最后一个 child 接受浮点余数。
 
 空 component inventory 是显式真空而不是缺失数据：其 `U`、绝对压力、密度和任意无传质体积变化功都严格为零。显示温度使用区域插入温度作为约定值；持久化与 remap 必须保留空 inventory/零 `U`，不能以环境状态补齐。
 
@@ -141,6 +141,8 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 - commit 同时更新 liquid marker、gas component nanos/kg、gas node energy、source/sink 与 topology remap；任何列不闭合则整批拒绝。
 - 每次气液 commit 还按实际增加/删除的 liquid SVQ 写入带 cell 的 exact pending volume；下一次真实 projection 使用加回统一 gas reference 后的绝对压力消费 `-p ΔV`，随后清除该 entry。capture/restore 必须保留尚未消费的 raw pending 值。
 - 同一 transition、gas node 与 exact liquid temperature 在一个 logical step 内只有一个热力学方向；首次观察到的沸腾或凝结方向是该状态点的唯一方向，后续候选若试图在同一状态点反向则不提交。不同温度的热/冷界面仍独立求值。
+- exact batch 搜索以 `|p_sat-p_partial|` 为物理残差；跨越平衡点的最小批只有在严格缩小该残差时才提交，不能因“至少执行一批”在两个可表示状态间往返。
+- 一个液体 cell 同时接触多个互不连通的 sealed node 是合法界面，不得因此暂停或合并气腔。一次 pressure interval 内该 cell 只向一个 node 提交一次守恒交换：按 `|p_sat-p_partial|` 从大到小尝试，最强候选若受库存、能量、组分或容量约束无法执行再尝试下一 node；相同驱动力按稳定 node ID 决定顺序。
 - chemistry 启用时，每个 gas transition 先把允许挥发且具有 host-gas energy offset 的 stable species 编译为本步 runtime handle 集；液体 marker 仍按 ordinal 搬运 exact species、质量 residual 与 `U`，runtime handle 不持久化。
 
 水/蒸气的方向由 ideal-mixture component 分压和数据化的 Clausius–Clapeyron 饱和关系决定：
@@ -150,7 +152,7 @@ p_sat(T) = P0 * exp[-L/R * (1/T - 1/T_eq)]
 p_partial = p_absolute * Vstd,vapor / Vstd,total
 ```
 
-`p_sat > p_partial` 允许沸腾，反向允许凝结，相等时不转移。这里 `L` 从上下相 `U(T_eq)` 加 `p*Delta V` 推导，不另存一个可能漂移的潜热常量。
+`p_sat > p_partial` 允许沸腾，反向允许凝结，相等时不转移。这里 `L` 从上下相 `U(T_eq)` 加 `p*Delta V` 推导，不另存一个可能漂移的潜热常量。transition 的压力曲线只在标准压力处定义参考平衡态；当前总气压不是 Clausius–Clapeyron 的独立输入，因此有限非负总压（包括真空）不会因落在固液曲线端点外而被拒绝，实际方向始终由蒸气分压与液体温度决定。
 
 内置 batch 为 `0.001 kg`：液体体积 `134 SVQ`，沸点体积 `228122 SVQ`，换成标准状态约 `0.001335254 m³std`；这组数给出约 `1000 kg/m³` 液水、`0.588 kg/m³` 沸点蒸气和 `461.52 J/(kg·K)` 水蒸气气体常数。上下相状态函数在 1 atm 给出 `2.2567 MJ/kg` 汽化焓。
 
@@ -175,7 +177,7 @@ species reference offset 是组成携带的能量真值。reaction extent 改变
 7. granular transition、reseed 与局部唤醒；
 8. 审计闭合后，pending phase-work 留给下一 projection。
 
-每一步都先在快照上形成候选。相变产生的体积改变不能回头修改已经完成的 projection，因此作为带 generation 的 pending volume/work 保存，并且只由下一次真实 projection 消费一次。marker 已经携带新的几何体积，pending 不作为第二份目标散度；它只用该 projection 的绝对 cell 压力结算 `-p ΔV`。存在 pending work 时，`empty`、不完整 checkpoint 和绕过 projection 的转移会被拒绝。
+每一步都先在快照上形成候选。相变产生的体积改变不能回头修改已经完成的 projection，因此作为带 generation 的 pending volume/work 保存，并且只由下一次真实 projection 消费一次。marker 已经携带新的几何体积，pending 不作为第二份目标散度；它只用该 projection 的绝对 cell 压力结算 `-p ΔV`。存在 pending work 时，`empty`、不完整 checkpoint 和绕过 projection 的转移会被拒绝。Minecraft 的同步管理员/玩家/发射器物质转移不会绕过该门：adapter 先以关闭新相变的权威 mechanical candidate 消费旧 lien，确认 pending 清空后才进入物质或容器事务。
 
 ## 能量审计
 

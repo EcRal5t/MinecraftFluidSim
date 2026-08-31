@@ -123,7 +123,7 @@ public final class GasThermalModel {
 		return density;
 	}
 
-	/** Exact constant-cv ideal-gas isentrope. Crossing a caloric segment is a validity failure. */
+	/** Exact ideal-gas isentrope integrated across the material-owned piecewise-constant caloric model. */
 	public Compression compressAdiabatically(
 			GasInventory inventory, double internalEnergy, double initialAvailableVolume, double finalAvailableVolume
 	) {
@@ -138,18 +138,96 @@ public final class GasThermalModel {
 					GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.0);
 		}
 		HydrodynamicState initial = hydrodynamicState(inventory, initialAvailableVolume, internalEnergy);
-		double targetTemperature = initial.temperatureK()
-				* Math.pow(initialAvailableVolume / finalAvailableVolume, initial.isentropicExponent() - 1.0);
-		for (ThermalStateFunction.InventoryPortion portion : portions(inventory)) {
-			ThermalMaterialDefinition material = thermalRegistry.material(portion.materialHandle());
-			if (Double.doubleToRawLongBits(material.specificHeatAt(initial.temperatureK()))
-					!= Double.doubleToRawLongBits(material.specificHeatAt(targetTemperature))) {
-				throw new IllegalArgumentException("Gas compression crosses a caloric segment");
-			}
-		}
+		List<ThermalStateFunction.InventoryPortion> portions = portions(inventory);
+		double entropyChange = initial.gasConstantEuPerK()
+				* Math.log(initialAvailableVolume / finalAvailableVolume);
+		double targetTemperature = isentropicTemperature(
+				portions, initial.temperatureK(), entropyChange);
 		double finalEnergy = internalEnergyAtTemperature(inventory, targetTemperature);
 		hydrodynamicState(inventory, finalAvailableVolume, finalEnergy);
 		return new Compression(initial.temperatureK(), targetTemperature, finalEnergy, finalEnergy - internalEnergy);
+	}
+
+	private double isentropicTemperature(
+			List<ThermalStateFunction.InventoryPortion> portions,
+			double initialTemperatureK,
+			double entropyChangeEuPerK
+	) {
+		if (entropyChangeEuPerK == 0.0) return initialTemperatureK;
+		boolean heating = entropyChangeEuPerK > 0.0;
+		double remaining = Math.abs(entropyChangeEuPerK);
+		double temperature = initialTemperatureK;
+		while (remaining > 0.0) {
+			double boundary = heating
+					? nextUpperCaloricBoundary(portions, temperature)
+					: nextLowerCaloricBoundary(portions, temperature);
+			if (!(heating ? boundary > temperature : boundary < temperature)) {
+				throw new IllegalArgumentException("Gas isentrope leaves the common caloric validity range");
+			}
+			double sampleTemperature = Math.sqrt(temperature * boundary);
+			double heatCapacity = heatCapacityAt(portions, sampleTemperature);
+			double intervalEntropy = heatCapacity * Math.abs(Math.log(boundary / temperature));
+			if (remaining <= intervalEntropy) {
+				double signed = (heating ? 1.0 : -1.0) * remaining / heatCapacity;
+				return temperature * Math.exp(signed);
+			}
+			remaining -= intervalEntropy;
+			temperature = boundary;
+		}
+		return temperature;
+	}
+
+	private double nextUpperCaloricBoundary(
+			List<ThermalStateFunction.InventoryPortion> portions, double temperatureK
+	) {
+		double boundary = Double.POSITIVE_INFINITY;
+		for (ThermalStateFunction.InventoryPortion portion : portions) {
+			ThermalMaterialDefinition material = thermalRegistry.material(portion.materialHandle());
+			double candidate = material.maximumTemperatureK();
+			for (ThermalMaterialDefinition.CaloricSegment segment
+					: material.caloricSegments()) {
+				if (segment.maximumTemperatureK() > temperatureK) {
+					candidate = segment.maximumTemperatureK();
+					break;
+				}
+			}
+			boundary = Math.min(boundary, candidate);
+		}
+		return boundary;
+	}
+
+	private double nextLowerCaloricBoundary(
+			List<ThermalStateFunction.InventoryPortion> portions, double temperatureK
+	) {
+		double boundary = Double.NEGATIVE_INFINITY;
+		for (ThermalStateFunction.InventoryPortion portion : portions) {
+			ThermalMaterialDefinition material = thermalRegistry.material(portion.materialHandle());
+			List<ThermalMaterialDefinition.CaloricSegment> segments = material.caloricSegments();
+			double candidate = material.minimumTemperatureK();
+			for (int index = segments.size() - 1; index >= 0; index--) {
+				ThermalMaterialDefinition.CaloricSegment segment = segments.get(index);
+				if (segment.minimumTemperatureK() < temperatureK) {
+					candidate = segment.minimumTemperatureK();
+					break;
+				}
+			}
+			boundary = Math.max(boundary, candidate);
+		}
+		return boundary;
+	}
+
+	private double heatCapacityAt(
+			List<ThermalStateFunction.InventoryPortion> portions, double temperatureK
+	) {
+		double heatCapacity = 0.0;
+		for (ThermalStateFunction.InventoryPortion portion : portions) {
+			heatCapacity += portion.massMu()
+					* thermalRegistry.material(portion.materialHandle()).specificHeatAt(temperatureK);
+		}
+		if (!(Double.isFinite(heatCapacity) && heatCapacity > 0.0)) {
+			throw new IllegalArgumentException("Gas heat capacity is invalid");
+		}
+		return heatCapacity;
 	}
 
 	/** Source-state enthalpy carried by an orifice portion: h = u + p*v = u + P0*Vstd*T/T0. */

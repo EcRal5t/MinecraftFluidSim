@@ -145,7 +145,7 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 9. 处理沉积/唤醒和 marker reseed，同时搬运材料、化学和内能侧列。
 10. 重建所有账本；只有全部闭合才发布本步诊断并评估 motion/thermal activity。
 
-相变产生的凝聚相体积/功由下一次真实 pressure projection exactly-once 消费。未消费记录存在时，不能用 `empty`、卸载或重排把它绕过。
+相变产生的凝聚相体积/功由下一次真实 pressure projection exactly-once 消费。未消费记录存在时，不能用 `empty`、卸载或重排把它绕过。同步管理员命令、玩家桶和发射器转移若撞上该帧间 lien，先通过当前权威 backend 执行一次禁止产生新相变的 mechanical candidate，消费旧 `-pΔV` 后才修改物质库存；CPU/GPU backend 不得各自在 host adapter 复制一套结算算法。
 
 ## 生命周期和调度
 
@@ -153,7 +153,8 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 
 - `ACTIVE`：按 20 Hz 目标推进。
 - `REDUCED`：wall-time 超过 40 ms 后按 1–4 tick pacing 推进同一个 logical step。
-- `PAUSED`：operator 暂停、边界/身份失败或连续三步超过 200 ms；库存仍保留。
+- `PAUSED`：operator 暂停或边界/身份/数值候选失败；库存仍保留。
+- `PERFORMANCE_PAUSE`：连续三步超过 200 ms 的可重试调度暂停；`/mmm run` 显式清除本次 wall-time 证据并从同一已提交状态重试，不能与不可解释的数值失败共用永久 blocker。
 - `UNLOADED`：solver arrays 已释放，但 metadata 和 catalog reservation 仍保留。
 - motion sleep 与 thermal sleep 独立；静水仍可能导热或相变，静温也可能继续运动。
 
@@ -165,7 +166,7 @@ controller console 的 Minecraft adapter 先校验 server thread、距离、方�
 
 controller console 还提供四个管理员破坏性生命周期动作：清空凝聚相、排放密闭气体、释放 ownership、移除空区域。`MinecraftRegionLifecycle` 冻结 permission、WAL、availability、solver/device、ownership 与实际库存摘要后，`RegionLifecycleUseCase` 生成 200 tick、同玩家的一次性 preview，并在确认时消费 nonce、重验 player/region/generation/action/context 后返回当前 blockers；错 viewer 不消费 owner token，同 owner 的 stale/过期尝试会使 token 失效。只有 `AUTHORIZED` 才进入同一 adapter 内职责分明的 durable 路径。清空与排放先在私有完整 candidate 上联合审计并发布新 HEAD，再替换 live domain；ownership release 调现有 ownership transaction；区域移除按 REMOVED HEAD→network tombstone→runtime unregister→quarantine convergence 收口，commit point 后的输出/收敛失败不会被误报成未提交。
 
-availability 采用 `RegionAvailabilityReason` 封闭分类；预算、重叠、chunk、边界、WAL、数值拒答和政策停用不再靠错误文本驱动状态。runtime admission 是 `FluidRegionOperations` 内一个按副作用顺序惰性取证的 server-thread 工作流：先检查内在数值失败与非托管 bypass，再读取 ownership/policy、catalog admission 和世界边界；数值失败与 ownership 就地阻断，policy/catalog/boundary 拒答则先发布合法完整 checkpoint 再卸载。已提交 metadata 即使当前 runtime budget 无法 admission 也继续登记并保留 reservation；只有 solver restore/step 被阻止。
+availability 采用 `RegionAvailabilityReason` 封闭分类；预算、重叠、chunk、边界、WAL、数值拒答、可重试性能暂停和政策停用不再靠错误文本驱动状态。runtime admission 是 `FluidRegionOperations` 内一个按副作用顺序惰性取证的 server-thread 工作流：先检查内在数值失败与非托管 bypass，再读取 ownership/policy、catalog admission 和世界边界；数值失败与 ownership 就地阻断，policy/catalog/boundary 拒答则先发布合法完整 checkpoint 再卸载。已提交 metadata 即使当前 runtime budget 无法 admission 也继续登记并保留 reservation；只有 solver restore/step 被阻止。
 
 调度和后端选择不得改变守恒结果。缺 chunk 或 controller 破损时不能把缺失区域当墙继续半步。
 
@@ -174,7 +175,7 @@ availability 采用 `RegionAvailabilityReason` 封闭分类；预算、重叠、
 系统区分两类失败：
 
 - **LOCKED**：磁盘格式、identity、registry fingerprint、generation、checksum 或 WAL 状态无法被唯一解释。原文件保留，拒绝任何会覆盖证据的操作。
-- **PAUSED**：当前库存可解释，但候选数值步越过物性有效域、容量、预算、审计或 wall-time 安全门。保留内存/已提交状态，允许修正外部条件后重试。
+- **PAUSED**：当前库存可解释，但候选数值步越过物性有效域、容量、预算或审计安全门。保留内存/已提交状态，修正物理条件后重试；wall-time 过载使用独立的可清除 `PERFORMANCE_PAUSE`，不能伪装成数值不可解释。
 
 region HEAD 是区域物理状态唯一提交点。正常库存由 `ACTIVE` HEAD 指向完整 generation；终止区域由严格 `REMOVED` HEAD 指向零库存 tombstone，UUID 永不复用。ownership 与 container WAL 分别把世界方块和 actor item 收敛到该 HEAD；它们不能成为第二个物理真值。`RegionGenerationStore` 是唯一能组合 slot 写入与 HEAD 发布顺序的 coordinator；package-private 子 store 不能被业务层当成独立 writer。任何 publish 都必须遵守“完整写入、回读验证、HEAD 最后替换”。`REMOVED` HEAD 发布后才发送更高 network generation 的移除 tombstone、注销 runtime owner，并把旧 ACTIVE payload 收敛到持久 quarantine；崩溃恢复不能从旧 payload 重建 solver。
 

@@ -4,7 +4,6 @@ import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 import cc.ecisr.mmm.fluid.air.GasComponentAmount;
 import cc.ecisr.mmm.fluid.air.GasInventory;
-import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.thermal.GasLiquidPhaseModel;
 import cc.ecisr.mmm.thermal.LiquidEnergyColumn;
@@ -30,14 +29,12 @@ import static cc.ecisr.mmm.fluid.PhaseChangeStageSupport.massTolerance;
 
 /** Owns sealed-interface liquid/gas planning and commit in the thermal axis. */
 final class GasLiquidPhaseChangeStage {
-	private static final int[][] NEIGHBOURS = {
-			{-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}
-	};
-
 	private final PhaseChangeStageSupport support;
+	private final GasPhaseInterfaceResolver interfaces;
 
 	GasLiquidPhaseChangeStage(PhaseChangeStageSupport support) {
 		this.support = support;
+		this.interfaces = new GasPhaseInterfaceResolver(support);
 	}
 
 	FluidDomain.GasThermalPhaseStats step(int maximumOperations, boolean phaseGridPrepared) {
@@ -69,68 +66,64 @@ final class GasLiquidPhaseChangeStage {
 			boolean[] volatileSpecies = gasVolatileSpecies(gasThermalHandle);
 			for (int cell = 0; cell < support.state().cellCount() && operations < maximumOperations; cell++) {
 				if (!support.state().pendingPhaseCellVolume()[cell].equals(SignedDyadic.ZERO)) continue;
-				int node = sealedInterfaceNode(cell);
-				if (node <= 0 || !gasLiquidCellMatches(cell, liquidHandle)) continue;
-				double absolutePressure = GasRegistry.STANDARD_PRESSURE_PA
-						+ thermal.gasGaugePressure(node, gasState.network);
+				if (!gasLiquidCellMatches(cell, liquidHandle)) continue;
 				double liquidTemperature = thermal.phaseScanTemperatureInCell(cell);
-				GasLiquidPhaseModel.Direction direction = phase.saturation(
-						transition, liquidTemperature, gasState.network.inventory(node), absolutePressure).direction();
-				if (direction == GasLiquidPhaseModel.Direction.EQUILIBRIUM) continue;
-				GasPhaseDirectionKey directionKey = new GasPhaseDirectionKey(
-						transition.id(), node, Double.doubleToRawLongBits(liquidTemperature));
-				GasLiquidPhaseModel.Direction firstDirection = stepDirections.putIfAbsent(directionKey, direction);
-				if (firstDirection != null && firstDirection != direction) continue;
 				PhaseCellInventory inventory = gasLiquidCellInventory(cell, liquidHandle);
 				if (inventory == null) continue;
-				long remainingBudget = maximumOperations - operations;
 				ThermalDomainState.PhaseCandidateCell thermalCell = thermal.preparePhaseCandidateCell(
 						cell, support.state().thermalMarkers());
-				if (direction == GasLiquidPhaseModel.Direction.BOIL) {
-					GasBoilPlan plan = planBoil(
-							cell, node, liquidHandle, gasThermalHandle, transition, inventory,
-							phase, thermalCell, volatileSpecies, liquidTemperature, remainingBudget);
-					if (plan == null) continue;
-					boolean topologyChanged = plan.removal().carrierTopologyChanged();
-					double volumeDelta = topologyChanged ? 0.0
-							: markerVolumeDelta(plan.removal().allocations());
-					commitBoil(cell, node, plan, thermalCell);
-					support.refreshGasGeometry(topologyChanged, cell, volumeDelta);
-					operations = Math.addExact(operations, Math.toIntExact(plan.batches()));
-					boiled++;
-				} else if (direction == GasLiquidPhaseModel.Direction.CONDENSE) {
-					GasCondensePlan plan = planCondense(
-							cell, node, liquidHandle, transition, inventory, phase,
-							thermalCell, gas.carrierId(), remainingBudget);
-					if (plan == null) continue;
-					boolean topologyChanged = plan.target() < 0;
-					double volumeDelta = topologyChanged ? 0.0
-							: (double) plan.targetVolume()
-									- support.state().particles().volume(plan.target());
-					commitCondense(cell, node, liquidHandle, plan, thermalCell);
-					support.refreshGasGeometry(topologyChanged, cell, volumeDelta);
-					operations = Math.addExact(operations, Math.toIntExact(plan.batches()));
-					condensed++;
+				for (GasPhaseInterfaceResolver.Candidate gasInterface : interfaces.resolve(
+						cell, transition, phase, gasState, liquidTemperature)) {
+					int node = gasInterface.node();
+					GasLiquidPhaseModel.Saturation saturation = gasInterface.saturation();
+					GasLiquidPhaseModel.Direction direction = saturation.direction();
+					if (direction == GasLiquidPhaseModel.Direction.EQUILIBRIUM) continue;
+					GasPhaseDirectionKey directionKey = new GasPhaseDirectionKey(
+							transition.id(), node, Double.doubleToRawLongBits(liquidTemperature));
+					GasLiquidPhaseModel.Direction firstDirection = stepDirections.putIfAbsent(directionKey, direction);
+					if (firstDirection != null && firstDirection != direction) continue;
+					long remainingBudget = maximumOperations - operations;
+					if (direction == GasLiquidPhaseModel.Direction.BOIL) {
+						GasBoilPlan plan = planBoil(
+								cell, node, liquidHandle, gasThermalHandle, transition, inventory,
+								phase, thermalCell, volatileSpecies, liquidTemperature,
+								saturation.pressureImbalancePa(), remainingBudget);
+						if (plan == null) continue;
+						boolean topologyChanged = plan.removal().carrierTopologyChanged();
+						double volumeDelta = topologyChanged ? 0.0
+								: support.markerVolumeDelta(plan.removal().allocations());
+						commitBoil(cell, node, plan, thermalCell);
+						support.refreshGasGeometry(topologyChanged, cell, volumeDelta);
+						operations = Math.addExact(operations, Math.toIntExact(plan.batches()));
+						boiled++;
+						break;
+					} else if (direction == GasLiquidPhaseModel.Direction.CONDENSE) {
+						GasCondensePlan plan = planCondense(
+								cell, node, liquidHandle, transition, inventory, phase,
+								thermalCell, gas.carrierId(), saturation.pressureImbalancePa(), remainingBudget);
+						if (plan == null) continue;
+						boolean topologyChanged = plan.target() < 0;
+						double volumeDelta = topologyChanged ? 0.0
+								: (double) plan.targetVolume()
+										- support.state().particles().volume(plan.target());
+						commitCondense(cell, node, liquidHandle, plan, thermalCell);
+						support.refreshGasGeometry(topologyChanged, cell, volumeDelta);
+						operations = Math.addExact(operations, Math.toIntExact(plan.batches()));
+						condensed++;
+						break;
+					}
 				}
 			}
 		}
 		return new FluidDomain.GasThermalPhaseStats(operations, boiled, condensed);
 	}
 
-	private double markerVolumeDelta(List<PhaseMarkerAllocation> allocations) {
-		double delta = 0.0;
-		for (PhaseMarkerAllocation allocation : allocations) {
-			delta += (double) allocation.newVolume()
-					- support.state().particles().volume(allocation.marker());
-		}
-		return delta;
-	}
-
 	private GasBoilPlan planBoil(
 			int cell, int node, int liquidHandle, int gasThermalHandle,
 			ThermalPhaseTransition transition, PhaseCellInventory inventory,
 			GasLiquidPhaseModel phase, ThermalDomainState.PhaseCandidateCell thermalCell,
-			boolean[] volatileSpecies, double liquidTemperature, long maximumBatches
+			boolean[] volatileSpecies, double liquidTemperature,
+			double initialPressureImbalancePa, long maximumBatches
 	) {
 		double batchMass = transition.massMuPerBatch().toDouble();
 		long byVolume = inventory.freezableUpperSvq() / transition.lowerVolumeSvqPerBatch();
@@ -141,8 +134,13 @@ final class GasLiquidPhaseChangeStage {
 		GasBoilPlan first = boilCandidate(
 				cell, node, liquidHandle, gasThermalHandle, transition, inventory, phase,
 				thermalCell, volatileSpecies, liquidTemperature, 1L);
-		if (first == null || first.directionAfter() != GasLiquidPhaseModel.Direction.BOIL) return first;
+		if (first == null) return null;
+		if (first.directionAfter() == GasLiquidPhaseModel.Direction.CONDENSE) {
+			return first.saturationAfter().closerToEquilibriumThan(initialPressureImbalancePa) ? first : null;
+		}
+		if (first.directionAfter() == GasLiquidPhaseModel.Direction.EQUILIBRIUM) return first;
 		GasBoilPlan best = first;
+		long limit = high;
 		long low = 2L;
 		while (low <= high) {
 			long middle = low + ((high - low) >>> 1);
@@ -156,7 +154,13 @@ final class GasLiquidPhaseChangeStage {
 				low = middle + 1L;
 			}
 		}
-		return best;
+		long crossingBatches = best.batches() + 1L;
+		if (crossingBatches > limit) return best;
+		GasBoilPlan crossing = boilCandidate(
+				cell, node, liquidHandle, gasThermalHandle, transition, inventory, phase,
+				thermalCell, volatileSpecies, liquidTemperature, crossingBatches);
+		return crossing != null && crossing.saturationAfter().closerToEquilibriumThan(
+				best.saturationAfter().pressureImbalancePa()) ? crossing : best;
 	}
 
 	private GasBoilPlan boilCandidate(
@@ -188,10 +192,10 @@ final class GasLiquidPhaseChangeStage {
 					thermalCell, remainingLiquid, -batchEnergy);
 			GasInventory candidateGas = gasState.network.inventory(node).merge(batch);
 			double candidateGasEnergy = thermal.gasNodeEnergy(node, gasState.network) + batchEnergy;
-			GasLiquidPhaseModel.Direction directionAfter = prospectiveDirection(
+			GasLiquidPhaseModel.Saturation saturationAfter = prospectiveSaturation(
 					node, transition, phase, candidateLiquidTemperature, candidateGas, candidateGasEnergy);
 			return new GasBoilPlan(
-					batches, removedSvq, removal, batch, candidateGasEnergy, directionAfter);
+					batches, removedSvq, removal, batch, candidateGasEnergy, saturationAfter);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
 				| PhaseCandidateUnavailableException unavailable) {
 			return null;
@@ -218,7 +222,8 @@ final class GasLiquidPhaseChangeStage {
 	private GasCondensePlan planCondense(
 			int cell, int node, int liquidHandle, ThermalPhaseTransition transition,
 			PhaseCellInventory before, GasLiquidPhaseModel phase,
-			ThermalDomainState.PhaseCandidateCell thermalCell, String gasCarrierId, long maximumBatches
+			ThermalDomainState.PhaseCandidateCell thermalCell, String gasCarrierId,
+			double initialPressureImbalancePa, long maximumBatches
 	) {
 		GasDomainState gasState = support.gasState();
 		GasComponentAmount vapor = gasState.network.inventory(node).component(gasCarrierId);
@@ -235,8 +240,13 @@ final class GasLiquidPhaseChangeStage {
 		if (high <= 0L) return null;
 		GasCondensePlan first = condenseCandidate(
 				cell, node, liquidHandle, transition, before, phase, thermalCell, 1L);
-		if (first == null || first.directionAfter() != GasLiquidPhaseModel.Direction.CONDENSE) return first;
+		if (first == null) return null;
+		if (first.directionAfter() == GasLiquidPhaseModel.Direction.BOIL) {
+			return first.saturationAfter().closerToEquilibriumThan(initialPressureImbalancePa) ? first : null;
+		}
+		if (first.directionAfter() == GasLiquidPhaseModel.Direction.EQUILIBRIUM) return first;
 		GasCondensePlan best = first;
+		long limit = high;
 		long low = 2L;
 		while (low <= high) {
 			long middle = low + ((high - low) >>> 1);
@@ -250,7 +260,12 @@ final class GasLiquidPhaseChangeStage {
 				low = middle + 1L;
 			}
 		}
-		return best;
+		long crossingBatches = best.batches() + 1L;
+		if (crossingBatches > limit) return best;
+		GasCondensePlan crossing = condenseCandidate(
+				cell, node, liquidHandle, transition, before, phase, thermalCell, crossingBatches);
+		return crossing != null && crossing.saturationAfter().closerToEquilibriumThan(
+				best.saturationAfter().pressureImbalancePa()) ? crossing : best;
 	}
 
 	private GasCondensePlan condenseCandidate(
@@ -346,25 +361,25 @@ final class GasLiquidPhaseChangeStage {
 					thermalCell, liquidInventoryAfterCondensation(
 							cell, liquidHandle, target, targetMass, condensedMixture, moved.mass()),
 					batchEnergy);
-			GasLiquidPhaseModel.Direction directionAfter = prospectiveDirection(
+			GasLiquidPhaseModel.Saturation saturationAfter = prospectiveSaturation(
 					node, transition, phase, candidateLiquidTemperature, take.second(), candidateGasEnergy);
 			return new GasCondensePlan(
 					batches, take.first(), candidateGasEnergy, target, condensedMixture,
-					targetVolume, targetMass, slot, addedSvq, moved.mass(), directionAfter);
+					targetVolume, targetMass, slot, addedSvq, moved.mass(), saturationAfter);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
 				| PhaseCandidateUnavailableException unavailable) {
 			return null;
 		}
 	}
 
-	private GasLiquidPhaseModel.Direction prospectiveDirection(
+	private GasLiquidPhaseModel.Saturation prospectiveSaturation(
 			int node, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
 			double liquidTemperature, GasInventory gasInventory, double gasEnergy
 	) {
 		try {
 			double pressure = support.thermal().requireGasNodeState(
 					node, gasInventory, gasEnergy, support.gasState().network);
-			return phase.saturation(transition, liquidTemperature, gasInventory, pressure).direction();
+			return phase.saturation(transition, liquidTemperature, gasInventory, pressure);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException outsideThermalRange) {
 			throw outsideThermalRange;
 		} catch (IllegalArgumentException outsideGasPhaseRange) {
@@ -458,26 +473,6 @@ final class GasLiquidPhaseChangeStage {
 					&& support.thermal().registry().hasSpeciesOffset(gasThermalHandle, stableId);
 		}
 		return result;
-	}
-
-	private int sealedInterfaceNode(int cell) {
-		GasDomainState gasState = support.gasState();
-		if (gasState.cellNodeId == null || support.state().markerGrid().markerCount[cell] == 0) return -1;
-		int x = cell % support.state().sizeX();
-		int yz = cell / support.state().sizeX();
-		int y = yz % support.state().sizeY();
-		int z = yz / support.state().sizeY();
-		int found = -1;
-		for (int[] direction : NEIGHBOURS) {
-			int nx = x + direction[0], ny = y + direction[1], nz = z + direction[2];
-			if (!support.inside(nx, ny, nz)) continue;
-			int node = gasState.cellNodeId[support.cellIndex(nx, ny, nz)];
-			if (node <= 0) continue;
-			if (found < 0) found = node;
-			else if (found != node) throw new FluidDomain.ThermalPhaseBlockedException(
-					"Liquid/gas interface touches multiple sealed nodes");
-		}
-		return found;
 	}
 
 	private PhaseRemovalPlan planGasRemoval(
@@ -585,14 +580,18 @@ final class GasLiquidPhaseChangeStage {
 
 	private record GasBoilPlan(
 			long batches, long removedSvq, PhaseRemovalPlan removal, GasInventory batch,
-			double candidateGasEnergy, GasLiquidPhaseModel.Direction directionAfter
-	) { }
+			double candidateGasEnergy, GasLiquidPhaseModel.Saturation saturationAfter
+	) {
+		GasLiquidPhaseModel.Direction directionAfter() { return saturationAfter.direction(); }
+	}
 
 	private record GasCondensePlan(
 			long batches, GasInventory removedGas, double candidateGasEnergy, int target,
 			ChemicalMixtureRecord condensedMixture, float targetVolume, double targetMass,
-			int slot, long addedSvq, double movedMass, GasLiquidPhaseModel.Direction directionAfter
-	) { }
+			int slot, long addedSvq, double movedMass, GasLiquidPhaseModel.Saturation saturationAfter
+	) {
+		GasLiquidPhaseModel.Direction directionAfter() { return saturationAfter.direction(); }
+	}
 
 	private record GasPhaseDirectionKey(String transitionId, int node, long liquidTemperatureBits) { }
 }

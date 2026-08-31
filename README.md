@@ -13,7 +13,7 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 - 区域 checkpoint 使用双槽完整代次与 HEAD 最后发布。`regions recoverprevious` 只在当前 HEAD 恢复失败后，显式验证并激活紧邻的上一完整代。
 - 区域载荷必须与已提交的世界能力包完全一致。任何格式、区域布局、registry fingerprint、身份或账本不一致都会保留原文件并锁定，不改写载荷或猜测修复。
 - 容器事务跨区域、物品和玩家/发射器持久域。actor 的 after-item 完成 durable save 并回读 exact after 前不得删除 WAL；未知、损坏或布局不一致的 WAL 保留并锁定。
-- `empty` 联合清空液体、连续凝聚相、active parcel 和 deposit，并把实际移除的物质与能量记入 sink；存在未决容器 WAL 或相变功时拒绝执行。
+- `empty` 联合清空非控制器开发域中的液体、连续凝聚相、active parcel 和 deposit，并把实际移除的物质与能量记入 sink；控制器区域必须用控制器界面的 `EMPTY_CONDENSED` 预览/确认事务，不能由命令绕过。存在未决容器 WAL 或相变功时拒绝破坏性 lifecycle；普通桶、发射器及 `pour`/`drain` 会先用权威 mechanical candidate 结算已有相变功再转移。
 - 可选 GPU probe 只读且不修改世界或存档；主 Mod 始终以 CPU 结果为规范。
 
 世界能力（材料、化学、颗粒、降水、热学和相变）不是每个世界的开关，而是由 datapack 定义并在服务器首次启动时发布为不可变的世界能力包（`mmm/world-capabilities/`，HEAD 是唯一提交点）。能力包同时冻结该世界的 registry 快照与区域布局，是已有库存的唯一解释。启动后 datapack 若与已提交包不一致，包继续作为权威，只报告 drift，不修复也不重发；无法证明能力包的世界会锁定并关闭控制器。任何来自其他实现或其他 build 的存档目录都原样保留并锁定，没有迁移或字段补全。
@@ -32,8 +32,8 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 | 创建持久闭壳 fixture | `/mmm controllerdemo`；正常游玩请制作并放置边界与控制器 |
 | 选择与保存区域 | `/mmm regions list`、`regions select <uuid>`、`regions checkpoint` |
 | 恢复上一完整 checkpoint | `/mmm regions recoverprevious <expectedCheckpoint>`；成功后退出并重新进入世界 |
-| 操作库存与碰撞 | `/mmm pour [1-16]`、`drain [1-16]`、`empty`、`refresh` |
-| 运行与区域诊断 | `/mmm run`、`pause`、`step [1-20]`、`status`；状态只读 live/committed runtime，不作为库存真值 |
+| 操作库存与碰撞 | `/mmm pour [1-16]`、`drain [1-16]`、`empty`（仅非控制器开发域）、`refresh`；控制器清空用控制器界面 `EMPTY_CONDENSED` 的预览/确认 |
+| 运行与区域诊断 | `/mmm run`、`pause`、`step [1-20]`、`status`；`run` 可显式重试 wall-time `PERFORMANCE_PAUSE`，不会清除真正的数值失败；状态只读 live/committed runtime，不作为库存真值 |
 | 控制器准入配置 | `/mmm controllers [true/false]`；关闭会暂停现有控制器域 |
 | 世界桥接 | `/mmm worldbridge`；重启后生效 |
 | 材料与界面调试 | `/mmm materialdemo`、`materialbucket ...`、`tensiondemo [angle]` |
@@ -53,7 +53,7 @@ Minecraft Java 26.2 / Fabric 的有界三维物理流体 Mod。主 Mod 使用 CP
 - 强电解质只做完整解离和同格同 chemical phase 的瞬时计量反应。指示剂随 parcel 输运，但不隔离反应，也不会自动扩散到后来混入的 marker。
 - 颗粒采用 active parcel + deposit cell 模型，包含统一排水/压力、浮力/阻力、安息角、孔隙水、休眠与局部唤醒。没有通用 MPM 框架。
 - 温度由权威内能和 world thermal registry 的状态函数派生。热量只经有限体积边界通量、反应热、相变和机械功进入审计账本。
-- 固液和气液相变受能量、库存、容量、饱和压力、绝对压力有效域与每步预算约束。气体 pressure/temperature/volume 由密闭节点库存派生。
+- 固液和气液相变受能量、库存、容量、饱和/分压条件、材料温度有效域与每步预算约束。气体 pressure/temperature/volume 由密闭节点库存派生；真空及低总压不会被误判为超出液气 transition 曲线。
 - `thermal_reservoir` 是无限热浴，但实际交换仍只通过相邻 cut-face 通量；越出材料有效温区会安全暂停。
 
 外部 Mod 可通过 JDK-only Query API 同步读取已加载区域的单格材料、体积、质量、密度、species 和可选温度；Fabric 发现入口为 `MmmFabricApi.query(server)`。查询不加载、不唤醒、不回写。`MmmFabricApi.events(server)` 只在容器 actor 已强制保存、WAL 已删除后发布 committed event，并以封闭 typed quantity 区分液体 nanovolume/raw `U` 与颗粒 SVQ。安装 Jade 时，观察本 Mod 的闭壳方块可显示相邻液体摘要；Jade 仍是可选依赖，主 Mod 不提供独立准星 HUD。受控写入、WAILA/HWYLA 与直接命中自由面的适配仍待实现。

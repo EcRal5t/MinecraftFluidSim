@@ -479,6 +479,16 @@ S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Bri
 * 迁移 allowlist 已全部删除。`verifyArchitecture` 对依赖方向、唯一 runtime locator、GPU host 边界、carrier mutation 与生产类 1000 行硬门直接失败；最终扫描 439 个生产源，超限为 0。`uv run pytool/unused_imports.py` 对全部改动 Java 无报告，`uv run pytool/arch_baseline.py` 已回填当前规模。
 * 最终 JDK 26.0.2 / Java 25 target 干净运行 `clean assemble compileTestJava runModuleValidation :fabric:runCpuValidation verifyArchitecture -PcpuValidation=milestone --offline --no-daemon` 成功：模块门、23 个 CPU 里程碑门、production replay 和架构门全部通过，live 20 步 median/max 为 4.361/6.441 ms，phase-on 为 11.327 ms。另行 full soak 已通过 gas-liquid、5000 步 free-surface 与长程 reseeding；GPU 1000 步 exact-ledger correctness、headless Vulkan capability 与 Fabric adapter validation 均通过。没有视觉、真实 `VoxelShape` 或自动门不可观察的跨重启差异，不需要进游戏验收。
 
+### S21 游戏回归复审
+
+* 用户实机日志暴露了旧 production 门的盲区：正式 controller replay 一直关闭相变，唯一 phase-on 场景也只有单个平面 step，因而没有覆盖“空闭壳先建立 `64 m³std` 气体、再注入 16 BV、长期相变、再次转移”的真实路径。按日志坐标建立的 400 步 full-budget phase-on 回放连续揭示并固定了总压/分压混淆、蒸气 caloric 数据域不足、跨 caloric segment 绝热压缩被拒、单液体 cell 邻接多气腔被误判非法，以及 pending phase-work 令转移永久返回零五个失败层；该场景归入既有 `production-replay`，没有新增 selector。
+* 液气饱和方向现在只比较由液温得到的 `p_sat` 与气体 component partial pressure；有限非负总压（包括真空）不再被拿去查询固液 `T_eq(p)` 的压力端点。exact phase batch 在跨过平衡点时只选择严格缩小 `|p_sat-p_partial|` 的可表示状态，删除“至少一批”造成的逐步蒸发/凝结往返。一个液体 cell 邻接多个独立气腔是合法几何：planner 保留 node owner，按绝对分压失衡选择本 pressure interval 的一次交换，若受库存/能量/组分/容量约束不可执行再尝试下一 node；没有合并气腔、deadband、迟滞阈值或材料 ID 分支。
+* `GasThermalModel` 用 `∫Cv(T)/T dT = R ln(V_initial/V_final)` 的分段解析等熵路径取代单段跨界拒答，可精确穿过共同 caloric boundaries 并可逆往返；内置 water vapor 按 NIST Shomate 数据换算为 `250–1700 K` 的五段 `cv`，不把 293 K 常量外推到压缩高温。能量、gas inventory、species、质量 residual、source/sink 和 pending `-pΔV` 继续由原 exact ledger 闭合。
+* solver 仍拒绝在未结算 phase-work 上直接修改物质；Minecraft host 新增单一同步 barrier，管理员 `pour`/`drain`、玩家桶和发射器在转移前先通过当前权威 backend 运行一次禁止新相变的 mechanical candidate，exactly-once 消费旧 lien 后才进入库存/WAL 事务。控制器 `empty` 仍必须走控制器界面的 `EMPTY_CONDENSED` 预览/确认，命令不绕过生命周期授权；README 已消除这一入口歧义。
+* 连续三次超过 200 ms 的 wall-time 保护改为封闭的 `PERFORMANCE_PAUSE`，与物理候选失败的 `NUMERICAL_PAUSE` 分离；`/mmm run` 只清除前者的短期 overrun 证据并从同一已提交状态重试，不会解锁无法解释的数值状态。实机日志中显示的 11–20 ms 本身不是超时证据，其实际暂停来自旧液气压力域误判；最终干净回放的 production live median/max 为 4.287/5.073 ms，phase-on production step 为 8.293 ms，均低于 40 ms 门。
+* `entity-fluid` 的走动玩家尺度回放测得峰值反作用冲量 `1305.92590 kg·m/s`、液体动能峰值 `1906.20569 J`，对比有限排水体积的 added-mass 能标 `4313.34720 J`，且停止后回落到 `0.001070 J`；S21 未改 target resolver 或 moving-body 算法，没有证据支持准星距离或玩家动量耦合发生代码回退，故未凭主观观感修改这两条物理/交互语义。
+* 最终 JDK 26.0.2 / Java 25 target 验证通过 `thermal,gas-liquid,lifecycle,entity-fluid,production-replay` 五个最近 CPU 门、loader-neutral module validation、完整 assemble/test compile 与扫描 441 个生产源的 architecture gate；GPU 按 routing 的最近门通过 `--skip-large --skip-long` 短程 solver/memory/collision matrix、headless Vulkan capability 和 Fabric adapter validation。GPU 仍只代表单一常密度 carrier 的共同能力子集，空间气体、热化学和完整 `FluidDomainState` 尚未迁移，不把 probe 结果表述为 production parity。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

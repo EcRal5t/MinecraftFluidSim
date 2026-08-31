@@ -14,7 +14,12 @@ import java.util.TreeMap;
 /** Pure ideal-mixture saturation and exact-batch creation functions for liquid/gas transitions. */
 public final class GasLiquidPhaseModel {
 	public enum Direction { BOIL, CONDENSE, EQUILIBRIUM }
-	public record Saturation(double saturationPressurePa, double componentPartialPressurePa, Direction direction) { }
+	public record Saturation(double saturationPressurePa, double componentPartialPressurePa, Direction direction) {
+		public double pressureImbalancePa() { return saturationPressurePa - componentPartialPressurePa; }
+		public boolean closerToEquilibriumThan(double otherPressureImbalancePa) {
+			return Math.abs(pressureImbalancePa()) < Math.abs(otherPressureImbalancePa);
+		}
+	}
 
 	private final ThermalRegistry thermalRegistry;
 	private final GasRegistry gasRegistry;
@@ -33,9 +38,7 @@ public final class GasLiquidPhaseModel {
 			GasInventory gasInventory, double absolutePressurePa
 	) {
 		PhasePair pair = requirePair(transition);
-		if (!(Double.isFinite(absolutePressurePa) && absolutePressurePa > 0.0)
-				|| absolutePressurePa < transition.minimumPressurePa()
-				|| absolutePressurePa > transition.maximumPressurePa()) {
+		if (!(Double.isFinite(absolutePressurePa) && absolutePressurePa >= 0.0)) {
 			throw new IllegalArgumentException("Gas/liquid phase pressure is outside the transition model");
 		}
 		pair.liquid().specificHeatAt(liquidTemperatureK);

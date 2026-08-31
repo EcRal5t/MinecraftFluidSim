@@ -23,6 +23,7 @@ public final class PlayerContainerTransferAdapter {
 	private final CommittedWorldRegistries world;
 	private final FluidWorldTargetResolver targets;
 	private final MinecraftRegionAvailability availability;
+	private final MinecraftPendingPhaseWorkBarrier phaseWorkBarrier;
 	private final MinecraftContainerTransactionAdapter transactions;
 	private final FluidSnapshotPublisher snapshots;
 
@@ -31,6 +32,7 @@ public final class PlayerContainerTransferAdapter {
 			CommittedWorldRegistries world,
 			FluidWorldTargetResolver targets,
 			MinecraftRegionAvailability availability,
+			MinecraftPendingPhaseWorkBarrier phaseWorkBarrier,
 			MinecraftContainerTransactionAdapter transactions,
 			FluidSnapshotPublisher snapshots
 	) {
@@ -38,6 +40,7 @@ public final class PlayerContainerTransferAdapter {
 		this.world = world;
 		this.targets = targets;
 		this.availability = availability;
+		this.phaseWorkBarrier = phaseWorkBarrier;
 		this.transactions = transactions;
 		this.snapshots = snapshots;
 	}
@@ -84,6 +87,7 @@ public final class PlayerContainerTransferAdapter {
 			return InteractionResult.FAIL;
 		}
 		if (!ensureAvailableFor(player, region)) return InteractionResult.FAIL;
+		if (!phaseWorkBarrier.settle(level, region)) return InteractionResult.FAIL;
 		String thermalFailure = MinecraftContainerTransferOperations.thermalTransferFailure(
 				world, region, held, kind);
 		if (thermalFailure != null) {
@@ -159,6 +163,7 @@ public final class PlayerContainerTransferAdapter {
 		FluidRegion region = target == null ? null : target.region();
 		if (region == null || !region.controllerManaged()
 				|| !ensureAvailableFor(player, region)) return InteractionResult.FAIL;
+		if (!phaseWorkBarrier.settle(level, region)) return InteractionResult.FAIL;
 		int[] cell = targets.cellAtBlock(level, region, target.interiorBlock());
 		if (cell == null) return InteractionResult.FAIL;
 

@@ -74,6 +74,13 @@ final class PhaseChangeStageSupport {
 	void refreshGasGeometry(boolean topologyChanged, int cell, double volumeDelta) {
 		access.refreshGasGeometry(topologyChanged, cell, volumeDelta);
 	}
+	double markerVolumeDelta(List<PhaseMarkerAllocation> allocations) {
+		double delta = 0.0;
+		for (PhaseMarkerAllocation allocation : allocations) {
+			delta += (double) allocation.newVolume() - state.particles().volume(allocation.marker());
+		}
+		return delta;
+	}
 	void refreshCoherentOccupancy() { access.refreshCoherentOccupancy(); }
 	void markGridDirty() { access.markGridDirty(); }
 	SignedDyadic exactInternalEnergy() { return access.exactInternalEnergy(); }

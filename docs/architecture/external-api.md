@@ -32,7 +32,7 @@
 | `OUTSIDE_INTERIOR` | 点位于 controller footprint 但不在可求解 interior |
 | `STATE_NOT_READY` | 已提交库存存在，但派生 observation 无法完整、安全构造 |
 
-只有 `OK` 携带 observation；其他状态不返回部分库存。`REGION_UNAVAILABLE` 还必须携带一个封闭的 `RegionAvailabilityReason`，用于稳定地区分 profile、registry/HEAD、边界/chunk、overlap、预算、WAL、pending work、权限、数值暂停与政策停用；其他状态不得携带该字段。`detail` 只作诊断，调用方不得解析错误文本，也不得把 Minecraft 水方块外观或上一次成功结果解释成当前库存。
+只有 `OK` 携带 observation；其他状态不返回部分库存。`REGION_UNAVAILABLE` 还必须携带一个封闭的 `RegionAvailabilityReason`，用于稳定地区分 profile、registry/HEAD、边界/chunk、overlap、预算、WAL、pending work、权限、数值暂停、可重试性能暂停与政策停用；其他状态不得携带该字段。`PERFORMANCE_PAUSE` 只表示已提交状态上的 wall-time 调度保护，operator 可显式重试；`NUMERICAL_PAUSE` 仍表示候选物理或账本无法闭合，两者不能靠 `detail` 文本互换。`detail` 只作诊断，调用方不得解析错误文本，也不得把 Minecraft 水方块外观或上一次成功结果解释成当前库存。
 
 ## Observation
 

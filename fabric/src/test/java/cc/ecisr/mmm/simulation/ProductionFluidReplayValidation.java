@@ -10,6 +10,7 @@ public final class ProductionFluidReplayValidation {
 		defaultLiveStepsRemainBounded();
 		ControllerReplayValidationScenarios.controllerPourSequenceWithoutGasSettles();
 		ControllerReplayValidationScenarios.controllerPourSequencePreservesGasInventoryAcrossBackend();
+		ControllerReplayValidationScenarios.phaseEnabledControllerPourRemainsDefinedAcrossBackend();
 		controllerEmptyThenBoundaryPourPreservesGasAcrossBackend();
 		DynamicReplayValidationScenarios.fullyBoundHalfFillRoundTripsCurrentGasGeometry();
 		DynamicReplayValidationScenarios.fullyBoundPhaseOnStepRemainsBounded();

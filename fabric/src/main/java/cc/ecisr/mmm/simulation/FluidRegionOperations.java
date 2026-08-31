@@ -177,6 +177,10 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, region.numericalBlockFailure());
 			return false;
 		}
+		if (region.performanceBlockFailure() != null) {
+			region.setAvailabilityFailure(RegionAvailabilityReason.PERFORMANCE_PAUSE, region.performanceBlockFailure());
+			return false;
+		}
 		if (!region.controllerManaged()) {
 			region.setAvailabilityFailure(null);
 			return true;

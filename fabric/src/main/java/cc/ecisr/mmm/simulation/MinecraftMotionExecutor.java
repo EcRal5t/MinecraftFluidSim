@@ -26,8 +26,25 @@ final class MinecraftMotionExecutor {
 	}
 
 	MotionStepResult step(FluidRegion region, List<MovingBodyFluidCoupling.Request> movingBodies) {
-		long start = System.nanoTime();
 		boolean phaseChange = registries.hasCapability(WorldCapability.PHASECHANGE);
+		return step(region, movingBodies, phaseChange);
+	}
+
+	/** Advances one authoritative mechanical projection without creating another phase-work lien. */
+	MotionStepResult settlePendingPhaseWork(FluidRegion region) {
+		if (!region.domain().hasPendingPhaseVolumeWork()) return null;
+		MotionStepResult result = step(region, List.of(), false);
+		if (region.domain().hasPendingPhaseVolumeWork()) {
+			throw new cc.ecisr.mmm.fluid.FluidDomain.ThermalPhaseBlockedException(
+					"Mechanical settlement retained pending phase work");
+		}
+		return result;
+	}
+
+	private MotionStepResult step(
+			FluidRegion region, List<MovingBodyFluidCoupling.Request> movingBodies, boolean phaseChange
+	) {
+		long start = System.nanoTime();
 		MotionStepResult result = application.stepMotion(new MotionStepCommand(
 				region.id(), region.solverGeneration(), movingBodies, phaseChange,
 				phaseChange ? policy.maximumPhaseOperationsPerStep() : 0, false));

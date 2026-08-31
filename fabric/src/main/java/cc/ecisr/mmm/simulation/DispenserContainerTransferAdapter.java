@@ -14,6 +14,7 @@ public final class DispenserContainerTransferAdapter {
 	private final CommittedWorldRegistries world;
 	private final FluidWorldTargetResolver targets;
 	private final MinecraftRegionAvailability availability;
+	private final MinecraftPendingPhaseWorkBarrier phaseWorkBarrier;
 	private final MinecraftContainerTransactionAdapter transactions;
 	private final FluidSnapshotPublisher snapshots;
 
@@ -22,6 +23,7 @@ public final class DispenserContainerTransferAdapter {
 			CommittedWorldRegistries world,
 			FluidWorldTargetResolver targets,
 			MinecraftRegionAvailability availability,
+			MinecraftPendingPhaseWorkBarrier phaseWorkBarrier,
 			MinecraftContainerTransactionAdapter transactions,
 			FluidSnapshotPublisher snapshots
 	) {
@@ -29,6 +31,7 @@ public final class DispenserContainerTransferAdapter {
 		this.world = world;
 		this.targets = targets;
 		this.availability = availability;
+		this.phaseWorkBarrier = phaseWorkBarrier;
 		this.transactions = transactions;
 		this.snapshots = snapshots;
 	}
@@ -55,6 +58,7 @@ public final class DispenserContainerTransferAdapter {
 		FluidRegion region = transferTarget == null ? null : transferTarget.region();
 		if (region == null) return vanillaItem ? null : stack;
 		if (stack.getCount() != 1 || !availability.ensure(level, region)) return stack;
+		if (!phaseWorkBarrier.settle(level, region)) return stack;
 		if (MinecraftContainerTransferOperations.thermalTransferFailure(world, region, stack, kind) != null) {
 			return stack;
 		}

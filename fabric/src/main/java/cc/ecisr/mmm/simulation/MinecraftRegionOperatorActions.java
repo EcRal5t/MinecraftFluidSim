@@ -23,6 +23,7 @@ public final class MinecraftRegionOperatorActions {
 	private final MinecraftRegionAvailability availability;
 	private final MinecraftRegionTick regionTick;
 	private final MinecraftMotionExecutor motion;
+	private final MinecraftPendingPhaseWorkBarrier phaseWorkBarrier;
 	private final MinecraftRuntimePolicy policy;
 	private final cc.ecisr.mmm.application.ContainerRecoveryCoordinator containerRecovery;
 
@@ -37,6 +38,7 @@ public final class MinecraftRegionOperatorActions {
 			MinecraftRegionAvailability availability,
 			MinecraftRegionTick regionTick,
 			MinecraftMotionExecutor motion,
+			MinecraftPendingPhaseWorkBarrier phaseWorkBarrier,
 			MinecraftRuntimePolicy policy,
 			cc.ecisr.mmm.application.ContainerRecoveryCoordinator containerRecovery
 	) {
@@ -50,6 +52,7 @@ public final class MinecraftRegionOperatorActions {
 		this.availability = Objects.requireNonNull(availability, "Region availability");
 		this.regionTick = Objects.requireNonNull(regionTick, "Region tick");
 		this.motion = Objects.requireNonNull(motion, "Motion executor");
+		this.phaseWorkBarrier = Objects.requireNonNull(phaseWorkBarrier, "Phase-work barrier");
 		this.policy = Objects.requireNonNull(policy, "Runtime policy");
 		this.containerRecovery = Objects.requireNonNull(containerRecovery, "Container recovery coordinator");
 	}
@@ -58,6 +61,10 @@ public final class MinecraftRegionOperatorActions {
 
 	public boolean setPaused(boolean paused, ServerLevel level) {
 		FluidRegion region = activeRegion();
+		if (region != null && !paused
+				&& region.availabilityReason() == cc.ecisr.mmm.api.RegionAvailabilityReason.PERFORMANCE_PAUSE) {
+			region.clearPerformanceBlock();
+		}
 		if (region == null || (!paused && !availability.ensure(level, region))) return false;
 		region.setPaused(paused);
 		return true;
@@ -111,6 +118,7 @@ public final class MinecraftRegionOperatorActions {
 		FluidRegion region = activeRegion();
 		if (region == null || !player.level().dimension().equals(region.dimension())) return WaterEditResult.NO_DOMAIN;
 		if (!availability.ensure(player.level(), region)) return WaterEditResult.blocked(region.availabilityFailure());
+		if (!phaseWorkBarrier.settle(player.level(), region)) return WaterEditResult.blocked(region.availabilityFailure());
 		FluidWorldTargetResolver.CellTarget resolved = targets.aimedCellForEdit(player, region, false);
 		if (resolved == null) return WaterEditResult.NO_TARGET;
 		CellTarget target = new CellTarget(resolved.x(), resolved.y(), resolved.z());
@@ -127,6 +135,7 @@ public final class MinecraftRegionOperatorActions {
 		FluidRegion region = activeRegion();
 		if (region == null || !player.level().dimension().equals(region.dimension())) return WaterEditResult.NO_DOMAIN;
 		if (!availability.ensure(player.level(), region)) return WaterEditResult.blocked(region.availabilityFailure());
+		if (!phaseWorkBarrier.settle(player.level(), region)) return WaterEditResult.blocked(region.availabilityFailure());
 		FluidWorldTargetResolver.CellTarget resolved = targets.aimedCellForEdit(player, region, true);
 		if (resolved == null) return WaterEditResult.NO_TARGET;
 		CellTarget target = new CellTarget(resolved.x(), resolved.y(), resolved.z());

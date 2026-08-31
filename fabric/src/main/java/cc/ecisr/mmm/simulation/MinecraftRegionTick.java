@@ -111,50 +111,8 @@ final class MinecraftRegionTick {
 				autoPause = outcome.autoPause();
 				completedThermalAxis = outcome.result().stats();
 			}
-		} catch (FluidDomain.PressureSolveBlockedException blocked) {
-			blockNumerical(level, region, blocked);
-			return;
-		} catch (GasTopologyBlockedException blocked) {
-			blockGasTopology(level, region, blocked);
-			return;
-		} catch (ChemicalReactionEngine.BudgetExceededException budget) {
-			String failure = "chemistry-blocked PAUSED：" + budget.getMessage();
-			region.blockChemistry(failure);
-			MmmMod.LOGGER.error("Region {} exhausted a frozen chemistry budget; parcel commit was rejected and the region is paused",
-					region.id(), budget);
-			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
-					"物质、运动与力学化学步骤已整体拒绝，区域被安全暂停：" + budget.getMessage()
-							+ "；未提交部分 parcel 修改，请查看 /mmm status"));
-			snapshots.sendToLevel(level, region);
-			return;
-		} catch (GranularPhaseTransferEngine.BlockedException blocked) {
-			String failure = "granular-phase-blocked PAUSED：" + blocked.getMessage();
-			region.blockGranular(failure);
-			MmmMod.LOGGER.error("Region {} rejected a granular phase-transfer plan and is paused",
-					region.id(), blocked);
-			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
-					"物质、运动与力学固液相转移被安全暂停：" + blocked.getMessage()
-							+ "；当前 plan 未提交，先前已提交 cell 保持，请查看 /mmm status"));
-			snapshots.sendToLevel(level, region);
-			return;
-		} catch (GranularMechanics.ValidityExceededException invalid) {
-			String failure = "granular-validity-blocked PAUSED：" + invalid.getMessage();
-			region.blockGranular(failure);
-			MmmMod.LOGGER.error("Region {} exceeded a frozen granular mechanics validity range and is paused",
-					region.id(), invalid);
-			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
-					"物质、运动与力学颗粒力学超出定义有效范围，区域被安全暂停：" + invalid.getMessage()
-							+ "；本次速度提交未开始，请查看 /mmm status"));
-			snapshots.sendToLevel(level, region);
-			return;
-		} catch (FluidDomain.ThermalTransportBlockedException blocked) {
-			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
-			return;
-		} catch (FluidDomain.GasThermalBlockedException blocked) {
-			blockThermal(level, region, "gas-thermal PAUSED：" + blocked.getMessage(), blocked);
-			return;
-		} catch (FluidDomain.ThermalPhaseBlockedException blocked) {
-			blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
+		} catch (RuntimeException failure) {
+			if (!blockStepFailure(level, region, failure)) throw failure;
 			return;
 		}
 		if (profile.hasCapability(WorldCapability.THERMAL)) {
@@ -178,7 +136,7 @@ final class MinecraftRegionTick {
 					region.id(), markerCount, exactVolume);
 		}
 		if (autoPause) {
-			region.blockNumerical("wall-time NUMERICAL_PAUSE：" + POLICY.hardPauseStreak()
+			region.blockPerformance("wall-time PERFORMANCE_PAUSE：" + POLICY.hardPauseStreak()
 					+ " consecutive steps exceeded " + POLICY.hardPauseMilliseconds() + " ms");
 			MmmMod.LOGGER.warn("Auto-paused fluid region {} after {} consecutive steps above {} ms",
 					region.id(), POLICY.hardPauseStreak(), POLICY.hardPauseMilliseconds());
@@ -258,6 +216,63 @@ final class MinecraftRegionTick {
 				"物质、运动与力学气体拓扑账本无法闭合，本次候选未提交，区域已安全暂停："
 						+ blocked.getMessage() + "；请查看 /mmm status"));
 		snapshots.sendToLevel(level, region);
+	}
+
+	/** Maps a rejected logical-step candidate through the single runtime pause taxonomy. */
+	boolean blockStepFailure(ServerLevel level, FluidRegion region, RuntimeException failure) {
+		if (failure instanceof FluidDomain.PressureSolveBlockedException blocked) {
+			blockNumerical(level, region, blocked);
+			return true;
+		}
+		if (failure instanceof GasTopologyBlockedException blocked) {
+			blockGasTopology(level, region, blocked);
+			return true;
+		}
+		if (failure instanceof FluidDomain.ThermalTransportBlockedException blocked) {
+			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
+			return true;
+		}
+		if (failure instanceof FluidDomain.GasThermalBlockedException blocked) {
+			blockThermal(level, region, "gas-thermal PAUSED：" + blocked.getMessage(), blocked);
+			return true;
+		}
+		if (failure instanceof FluidDomain.ThermalPhaseBlockedException blocked) {
+			blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
+			return true;
+		}
+		if (failure instanceof ChemicalReactionEngine.BudgetExceededException budget) {
+			String detail = "chemistry-blocked PAUSED：" + budget.getMessage();
+			region.blockChemistry(detail);
+			MmmMod.LOGGER.error("Region {} exhausted a frozen chemistry budget; the complete candidate was rejected and the region is paused",
+					region.id(), budget);
+			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+					"物质、运动与力学化学步骤已整体拒绝，区域被安全暂停：" + budget.getMessage()
+							+ "；候选未提交，请查看 /mmm status"));
+			snapshots.sendToLevel(level, region);
+			return true;
+		}
+		if (failure instanceof GranularPhaseTransferEngine.BlockedException blocked) {
+			String detail = "granular-phase-blocked PAUSED：" + blocked.getMessage();
+			region.blockGranular(detail);
+			MmmMod.LOGGER.error("Region {} rejected a granular phase-transfer candidate and is paused",
+					region.id(), blocked);
+			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+					"物质、运动与力学固液相转移被安全暂停：" + blocked.getMessage()
+							+ "；候选未提交，请查看 /mmm status"));
+			snapshots.sendToLevel(level, region);
+			return true;
+		}
+		if (failure instanceof GranularMechanics.ValidityExceededException invalid) {
+			region.blockGranular("granular-validity-blocked PAUSED：" + invalid.getMessage());
+			MmmMod.LOGGER.error("Region {} exceeded a frozen granular mechanics validity range and is paused",
+					region.id(), invalid);
+			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+					"物质、运动与力学颗粒力学超出定义有效范围，区域被安全暂停：" + invalid.getMessage()
+							+ "；候选未提交，请查看 /mmm status"));
+			snapshots.sendToLevel(level, region);
+			return true;
+		}
+		return false;
 	}
 
 	private static void observeThermalStep(

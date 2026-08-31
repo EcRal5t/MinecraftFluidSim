@@ -9,6 +9,7 @@ import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
+import cc.ecisr.mmm.thermal.ThermalLimits;
 
 import java.util.List;
 
@@ -182,6 +183,73 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 				minimumGasPressure, generation);
 	}
 
+	/** Replays the live phase-enabled path after pouring into an already bootstrapped closed shell. */
+	static void phaseEnabledControllerPourRemainsDefinedAcrossBackend() throws Exception {
+		FullCapabilityTestFixture.Registries registries = loadProductionRegistries();
+		FluidDomain domain = createEmptyFullyBoundController(registries);
+		FluidDomain.VolumeAddition pour = domain.addVolumeNearBudgeted(7, 6, 7, 128.0F, 6);
+		require(pour.addedVolume() == 128.0F && !pour.markerBudgetLimited(),
+				"phase-enabled controller did not inject the complete 16 BV source: " + pour);
+
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		FluidDomainState state = domain.captureAuthoritativeState();
+		long generation = 0L;
+		long phaseOperations = 0L;
+		int boiledCells = 0, condensedCells = 0;
+		for (int step = 0; step < 400; step++) {
+			FluidStepCandidate candidate;
+			try {
+				candidate = backend.evaluate(new FluidStepRequest(
+						generation, state, List.of(), true,
+						ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP, false));
+			} catch (RuntimeException failure) {
+				FluidDomain diagnostic = FluidDomain.restoreAuthoritativeState(state);
+				throw new IllegalStateException("phase-enabled controller pour failed at step " + step
+						+ "; input " + gasLedgerDetail(diagnostic), failure);
+			}
+			domain = FluidDomain.restoreAuthoritativeState(candidate.state());
+			FluidDomain.GasThermalPhaseStats phase = candidate.stats().gasPhase();
+			phaseOperations += phase.operations();
+			boiledCells += phase.boiledCells();
+			condensedCells += phase.condensedCells();
+			require(domain.gasBoundary().auditClosed()
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"phase-enabled controller pour opened an exact ledger at step " + step
+							+ ": " + gasLedgerDetail(domain));
+			state = candidate.state();
+			generation++;
+			if (step == 199) {
+				if (domain.hasPendingPhaseVolumeWork()) {
+					FluidStepCandidate settlement = backend.evaluate(new FluidStepRequest(
+							generation, state, List.of(), false, 0, false));
+					domain = FluidDomain.restoreAuthoritativeState(settlement.state());
+					state = settlement.state();
+					generation++;
+				}
+				require(!domain.hasPendingPhaseVolumeWork(),
+						"phase-off operator barrier retained phase work: stepPhase="
+								+ phase + ", cumulative=" + phaseOperations + ", boiled=" + boiledCells
+								+ ", condensed=" + condensedCells + ", " + gasLedgerDetail(domain));
+				FluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(7, 6, 7, 128.0F, 6);
+				require(second.addedVolume() == 128.0F && !second.markerBudgetLimited(),
+						"settled phase-enabled controller rejected the second 16 BV source: " + second);
+				state = domain.captureAuthoritativeState();
+			}
+		}
+		require(phaseOperations > 0L,
+				"closed controller did not exercise production phase change");
+		if (domain.hasPendingPhaseVolumeWork()) {
+			FluidStepCandidate settlement = backend.evaluate(new FluidStepRequest(
+					generation, state, List.of(), false, 0, false));
+			domain = FluidDomain.restoreAuthoritativeState(settlement.state());
+		}
+		require(!domain.hasPendingPhaseVolumeWork()
+				&& domain.removeVolumeNear(4, 1, 4, 128.0F, 6) == 128.0F,
+				"settled phase-enabled controller rejected the reported 16 BV drain target");
+		System.out.printf("  phase-enabled controller pour: operations=%d, boiled=%d, condensed=%d, %s%n",
+				phaseOperations, boiledCells, condensedCells, gasLedgerDetail(domain));
+	}
+
 	static double totalGasAvailableVolume(FluidDomain domain) {
 		double result = 0.0;
 		for (int node : domain.gasBoundary().nodeIds()) result += domain.gasBoundary().availableVolume(node);
@@ -297,7 +365,10 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 	static String gasLedgerDetail(FluidDomain domain) {
 		StringBuilder nodes = new StringBuilder();
 		for (int node : domain.gasBoundary().nodeIds()) nodes.append(" node").append(node)
-				.append('=').append(domain.gasBoundary().inventory(node));
+				.append('=').append(domain.gasBoundary().inventory(node))
+				.append('@').append(domain.gasBoundary().availableVolume(node)).append("m3")
+				.append('/').append(domain.gasNodeTemperatureK(node)).append('K')
+				.append('/').append(domain.gasNodeGaugePressurePa(node)).append("Pa");
 		return "nodes=" + domain.gasBoundary().nodeCount()
 				+ " sealed=" + domain.gasBoundary().sealedInventoryNanos()
 				+ " source=" + domain.gasBoundary().externalSource().standardVolumeNanos()

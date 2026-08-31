@@ -174,6 +174,25 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				inventory, compressed.finalInternalEnergy(), 0.5, 1.0);
 		require(Math.abs(expanded.finalInternalEnergy() - initial) < 1.0E-9,
 				"reversible analytic gas expansion did not return initial U");
+		ThermalMaterialDefinition piecewiseAir = new ThermalMaterialDefinition("mmm:thermal/piecewise_air",
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+				GasRegistry.STANDARD_TEMPERATURE_K, 10.0, 0.025, List.of(
+						new ThermalMaterialDefinition.CaloricSegment(150.0, 400.0, 718.0),
+						new ThermalMaterialDefinition.CaloricSegment(400.0, 1_500.0, 900.0)));
+		GasThermalModel piecewise = new GasThermalModel(new ThermalRegistry(List.of(piecewiseAir)), gas);
+		double piecewiseInitial = piecewise.internalEnergyAtTemperature(
+				inventory, GasRegistry.STANDARD_TEMPERATURE_K);
+		GasThermalModel.Compression acrossSegment = piecewise.compressAdiabatically(
+				inventory, piecewiseInitial, 1.0, 0.1);
+		double entropyToBoundary = 1.2 * 718.0
+				* Math.log(400.0 / GasRegistry.STANDARD_TEMPERATURE_K);
+		double expectedAcrossSegment = 400.0 * Math.exp((expectedGasConstant * Math.log(10.0)
+				- entropyToBoundary) / (1.2 * 900.0));
+		GasThermalModel.Compression acrossSegmentReversed = piecewise.compressAdiabatically(
+				inventory, acrossSegment.finalInternalEnergy(), 0.1, 1.0);
+		require(Math.abs(acrossSegment.finalTemperatureK() - expectedAcrossSegment) < 1.0E-9
+				&& Math.abs(acrossSegmentReversed.finalInternalEnergy() - piecewiseInitial) < 1.0E-8,
+				"piecewise-caloric gas isentrope did not integrate and reverse across its segment boundary");
 		List<GasInventory> children = inventory.partition(new long[] { 1L, 2L, 3L });
 		double[] energies = model.partitionEnergy(inventory, initial, children);
 		double partitioned = 0.0;
@@ -235,6 +254,10 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			require(water.specificHeatAt(293.15) == 4_184.0
 					&& water.conductivityEuPerSecondMeterK() == 0.598
 					&& vapor.specificHeatAt(373.15) == 1_410.0
+					&& vapor.specificHeatAt(600.0) == 1_554.43
+					&& vapor.specificHeatAt(850.0) == 1_723.57
+					&& vapor.specificHeatAt(1_200.0) == 1_967.03
+					&& vapor.specificHeatAt(1_550.0) == 2_180.66
 					&& vapor.conductivityEuPerSecondMeterK() == 0.025,
 					"built-in water/vapor caloric or conductivity values drifted");
 			require(Math.abs(latentEnthalpy - 2_256_700.0) < 0.01,
@@ -676,6 +699,11 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				transition, 373.15, batch, GasRegistry.STANDARD_PRESSURE_PA);
 		require(close(equilibrium.saturationPressurePa(), GasRegistry.STANDARD_PRESSURE_PA)
 				&& equilibrium.direction() == GasLiquidPhaseModel.Direction.EQUILIBRIUM
+				&& model.saturation(transition, 373.15, GasInventory.EMPTY, 0.0).direction()
+						== GasLiquidPhaseModel.Direction.BOIL
+				&& model.saturation(transition, 373.15, batch,
+						transition.maximumPressurePa() * 2.0).direction()
+						== GasLiquidPhaseModel.Direction.CONDENSE
 				&& model.saturation(transition, 383.15, batch,
 				GasRegistry.STANDARD_PRESSURE_PA).direction() == GasLiquidPhaseModel.Direction.BOIL
 				&& model.saturation(transition, 363.15, batch,
@@ -919,7 +947,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		domain.step(false, 0);
 		require(!domain.hasPendingPhaseVolumeWork(),
 				"species-bearing boiling did not consume pending volume before condensation");
-		setAllCondensedCellTemperatures(domain, 300.0);
+		setAllCondensedCellTemperatures(domain, 260.0);
 		FluidDomain.GasThermalPhaseStats firstCondensed = domain.stepGasPhaseChangeOnly(1);
 		GasComponentAmount vaporRemainder = domain.gasBoundary().inventory(1)
 				.component(BuiltinGasDefinitions.WATER_VAPOR);

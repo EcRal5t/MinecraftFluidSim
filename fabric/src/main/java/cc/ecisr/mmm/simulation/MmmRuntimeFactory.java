@@ -129,13 +129,15 @@ public final class MmmRuntimeFactory {
 		MinecraftContainerTransactionAdapter containerTransactions = new MinecraftContainerTransactionAdapter(
 				regionManager, regionOperations, containerRecovery, worldRegistries.profile().profileFingerprint(),
 				worldRegistries.thermalOrNull() == null ? null : worldRegistries.thermalOrNull().fingerprint());
+		MinecraftPendingPhaseWorkBarrier phaseWorkBarrier =
+				new MinecraftPendingPhaseWorkBarrier(motion, regionTick);
 		PlayerContainerTransferAdapter playerContainerTransfers = new PlayerContainerTransferAdapter(
-				startup, worldRegistries, targets, availability, containerTransactions, snapshots);
+				startup, worldRegistries, targets, availability, phaseWorkBarrier, containerTransactions, snapshots);
 		DispenserContainerTransferAdapter dispenserContainerTransfers = new DispenserContainerTransferAdapter(
-				startup, worldRegistries, targets, availability, containerTransactions, snapshots);
+				startup, worldRegistries, targets, availability, phaseWorkBarrier, containerTransactions, snapshots);
 		MinecraftRegionOperatorActions operatorActions = new MinecraftRegionOperatorActions(
 				startup, regionManager, targets, regionOperations, snapshots, takeover, debugFixtures,
-				availability, regionTick, motion, policy, containerRecovery);
+				availability, regionTick, motion, phaseWorkBarrier, policy, containerRecovery);
 		MinecraftSimulationLoop simulationLoop = new MinecraftSimulationLoop(
 				regionManager, regionOperations, snapshots, containerRecovery, takeover,
 				availability, regionTick, ownership::replace);

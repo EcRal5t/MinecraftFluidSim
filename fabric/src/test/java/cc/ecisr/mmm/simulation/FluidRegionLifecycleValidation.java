@@ -331,6 +331,21 @@ public final class FluidRegionLifecycleValidation {
 		lifecycle.setOperatorPaused(true, 3);
 		require(!lifecycle.canStep() && lifecycle.state() == FluidRegionLifecycle.State.REDUCED,
 				"operator pause was confused with scheduling state");
+
+		FluidDomain retryDomain = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+		FluidRegion retryRegion = new FluidRegion(new UUID(11L, 13L), DIMENSION, BlockPos.ZERO,
+				retryDomain, retryDomain.maximumParticleCount());
+		retryRegion.blockPerformance("three accepted steps exceeded the wall-time guard");
+		retryRegion.setHardOverrunStreak(3);
+		retryRegion.setRecoveryStreak(2);
+		require(retryRegion.availabilityReason() == RegionAvailabilityReason.PERFORMANCE_PAUSE
+				&& retryRegion.performanceBlockFailure() != null
+				&& retryRegion.numericalBlockFailure() == null,
+				"accepted slow steps were misclassified as a numerical solver failure");
+		retryRegion.clearPerformanceBlock();
+		require(retryRegion.availabilityReason() == null && retryRegion.performanceBlockFailure() == null
+				&& retryRegion.hardOverrunStreak() == 0 && retryRegion.recoveryStreak() == 0,
+				"explicit performance retry did not clear its retryable availability block");
 	}
 
 	private static void validateAvailabilityPreservesRunIntent() {

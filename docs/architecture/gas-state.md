@@ -63,8 +63,9 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 
 - 无热状态时使用等温状态方程和有限速率孔流。
 - 热状态存在时，气体总内能与节点库存共同派生温度、绝对压力、密度和声学闭合；孔流同步搬运组分与能量。
-- 气液相变用 water-vapor 分压计算饱和条件，受绝对压力、潜热、库存、容量和批预算共同限制。
-- 所有 candidate 温度必须落在 world thermal registry 的 caloric 有效域；相变候选的压力还必须落在相应平衡曲线的数据域，越界安全暂停。
+- 气液相变用 water-vapor 分压计算饱和条件，受状态方程、潜热、库存、容量和批预算共同限制。有限非负总压包括真空；它不被误当作固液 `T_eq(p)` 曲线的查询坐标，液气方向只由液温给出的饱和压与实际 vapor partial pressure 决定。
+- 所有 candidate 温度必须落在 world thermal registry 的 caloric 有效域；只有真正以当前压力查询 `T_eq(p)` 的凝聚相候选受对应曲线端点约束，越界安全暂停。
+- 一个 liquid cell 可同时邻接多个独立 sealed node。gas topology 继续保留各 node 的库存和 `U`，phase planner 不合并它们；每个 pressure interval 只向绝对分压失衡最大的可执行 node 提交一次 cell 交换，随后由下一 projection 结算该体积功。
 - mechanics 可从所有液气界面选择一个统一 sealed-node gauge reference，在 PCG 内只求相对压力并在绝对观察/热学边界加回；该数值换元不修改 node inventory、U 或不同 node 间的压差。接触液体的有限 node 会得到当次 projection 的集总可压缩 pressure unknown；它是由同一 EoS 线性化的 scratch，不是新的权威 node pressure 列。
 
 当前 `AirNetwork` 是有限体积热力学/孔流网络，不是逐 cell/face 的气体动量求解器；空间 FLIP 网格仍只承载不可压凝聚相。有限 node 与液体接触时已用 `C_V = V*beta_s` 作为集总储存项进入同一对称 pressure block system，液体侵入/退出气腔的面通量与 node 压力响应因而在本子步隐式闭合；等温 `beta=1/p_abs`，热状态 `beta_s=1/(gamma*p_abs)`。node 内部仍没有速度自由度，所以这不承诺解析腔体内声学传播或气体混合层。后续若把气体迁入共享空间动量内核，必须保留这里的 exact 组分/质量/能量账，并以状态方程闭合密度和非零散度；不能复用液体零散度 projection 把气体错误地压成不可压，也不能按材料 ID 选择另一套平流/传递算法。
@@ -96,7 +97,7 @@ beta_s = 1 / K_s
 
 零库存 sealed node 表示真空：`p_abs = 0`、`rho = 0`、`U = 0`，几何体积变化不产生绝热功。真空的温度没有热力学定义；只读显示使用区域插入温度作为约定值，不能据此反算库存。孔流可按有限速率把环境或相邻节点的真实库存搬入真空。
 
-等温与热状态都不钳制派生压力：正 available volume 直接使用状态方程，有限库存落入零 available volume 是奇异候选并显式拒绝。非空库存的绝对压力因而始终为正，可连续逼近真空，也可表达有限的高压状态；算法不再以固定压力窗替代物性有效域。无传质绝热体积变化按 constant-`c_v` ideal-gas isentrope 计算新温度与 `delta U`；跨 caloric segment 时整步暂停。
+等温与热状态都不钳制派生压力：正 available volume 直接使用状态方程，有限库存落入零 available volume 是奇异候选并显式拒绝。非空库存的绝对压力因而始终为正，可连续逼近真空，也可表达有限的高压状态；算法不再以固定压力窗替代物性有效域。无传质绝热体积变化按分段常 `c_v` 的 exact ideal-gas isentrope 计算新温度与 `delta U`，通过 `∫Cv(T)/T dT = R ln(V_initial/V_final)` 解析穿越共同 caloric segment；只有最终状态越出共同温度有效域才拒绝。
 
 ### 孔流
 
