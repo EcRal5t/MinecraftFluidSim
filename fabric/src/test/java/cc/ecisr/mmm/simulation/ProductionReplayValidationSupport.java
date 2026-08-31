@@ -89,6 +89,23 @@ abstract class ProductionReplayValidationSupport {
 		return domain;
 	}
 
+	/** Production {@code /mmm demo} over four full collision layers, matching the world fixture. */
+	static FluidDomain createFullyBoundFloorDamBreakDemo(FullCapabilityTestFixture.Registries registries) {
+		FluidDomain domain = new FluidDomain(24, 16, 24, productionConfig(), 73_728);
+		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
+		for (int y = 0; y < 4; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 24; x++) {
+			domain.setSolid(x, y, z, true);
+		}
+		for (int y = 0; y < 12; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 9; x++) {
+			if (!domain.isSolid(x, y, z)) domain.setVolume(x, y, z, 1.0F);
+		}
+		FullCapabilityTestFixture.bindFull(domain, registries,
+				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		require(domain.particleCount() == 13_824 && domain.totalVolumeExact() == 1_728.0,
+				"floor dam-break fixture does not match the production demo inventory");
+		return domain;
+	}
+
 	static double kineticEnergy(FlipMaterialParticleState state) {
 		double[] mass = state.copyParticleMass();
 		float[] velocity = state.copyParticleVelocities();

@@ -11,7 +11,7 @@ public final class M9ThermalValidation {
 		ThermochemistryValidationScenarios.worldRegistrySnapshotIsAuthoritative();
 		ThermochemistryValidationScenarios.piecewiseStateFunctionRoundTrips();
 		ThermalGasValidationScenarios.gasStateCompressionAndCarrierEnergy();
-		ThermalGasValidationScenarios.builtinWaterAndVaporPhysicsIsCalibrated();
+		ThermalGasValidationScenarios.builtinDryAirWaterAndVaporPhysicsIsCalibrated();
 		ThermalGasValidationScenarios.builtinCo2GasLiquidPairDataIsFrozen();
 		ThermalGasValidationScenarios.builtinFiniteThermalDeviceDataIsFrozen();
 		ThermalGasValidationScenarios.gasLiquidSaturationAndExactBatch();

@@ -68,10 +68,8 @@ final class GasLiquidPhaseChangeStage {
 				if (!support.state().pendingPhaseCellVolume()[cell].equals(SignedDyadic.ZERO)) continue;
 				if (!gasLiquidCellMatches(cell, liquidHandle)) continue;
 				double liquidTemperature = thermal.phaseScanTemperatureInCell(cell);
-				PhaseCellInventory inventory = gasLiquidCellInventory(cell, liquidHandle);
-				if (inventory == null) continue;
-				ThermalDomainState.PhaseCandidateCell thermalCell = thermal.preparePhaseCandidateCell(
-						cell, support.state().thermalMarkers());
+				PhaseCellInventory inventory = null;
+				ThermalDomainState.PhaseCandidateCell thermalCell = null;
 				for (GasPhaseInterfaceResolver.Candidate gasInterface : interfaces.resolve(
 						cell, transition, phase, gasState, liquidTemperature)) {
 					int node = gasInterface.node();
@@ -82,6 +80,12 @@ final class GasLiquidPhaseChangeStage {
 							transition.id(), node, Double.doubleToRawLongBits(liquidTemperature));
 					GasLiquidPhaseModel.Direction firstDirection = stepDirections.putIfAbsent(directionKey, direction);
 					if (firstDirection != null && firstDirection != direction) continue;
+					if (inventory == null) {
+						inventory = gasLiquidCellInventory(cell, liquidHandle);
+						if (inventory == null) break;
+						thermalCell = thermal.preparePhaseCandidateCell(
+								cell, support.state().thermalMarkers());
+					}
 					long remainingBudget = maximumOperations - operations;
 					if (direction == GasLiquidPhaseModel.Direction.BOIL) {
 						GasBoilPlan plan = planBoil(

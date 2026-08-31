@@ -605,6 +605,15 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 				keys.sort(Comparator.naturalOrder());
 				return List.copyOf(keys);
 			}
+			@Override public List<GranularEnergyColumn.DepositKey> depositKeys(int cell) {
+				if (granularState == null) return List.of();
+				ArrayList<GranularEnergyColumn.DepositKey> keys = new ArrayList<>();
+				granularState.deposits.forEachGroupInCell(cell,
+						(groupCell, porosity, material, composition, volume, mass) ->
+								keys.add(new GranularEnergyColumn.DepositKey(groupCell, material, composition)));
+				keys.sort(Comparator.naturalOrder());
+				return List.copyOf(keys);
+			}
 			@Override public long depositSvq(GranularEnergyColumn.DepositKey key) {
 				return thermalDepositGroup(key).solidVolumeSvq();
 			}

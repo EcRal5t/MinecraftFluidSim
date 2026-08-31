@@ -42,8 +42,9 @@ public final class AirNetwork {
 	}
 	/** Reference (ambient) absolute pressure in Pa; gauge zero matches the solver convention. */
 	public static final double REFERENCE_PRESSURE = 101_325.0;
-	/** Built-in air standard-state density (kg/m³). */
-	public static final double AIR_DENSITY = 1.2;
+	/** NIST dry N2/O2/Ar mixture density at the frozen gas standard state (kg/m³). */
+	public static final double AIR_DENSITY = REFERENCE_PRESSURE * 0.02895968300420168
+			/ (8.314462618 * GasRegistry.STANDARD_TEMPERATURE_K);
 	/** The ambient reservoir: gauge pressure zero, unbounded inventory, never stored as a node. */
 	public static final int AMBIENT_NODE = 0;
 

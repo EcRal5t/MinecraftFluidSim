@@ -9,7 +9,7 @@
 
 ### Cavity scan
 
-由当前几何直接发现的 air cell 同时满足：非 solid、`markerCount == 0`、扣除 cut-cell、granular/coherent occupancy 后仍有正 open volume。**扫描不区分"气"和"未采样的液体格"**：两者对同一个 flood fill 是同一件事——一段连通的无载体体积。是否成为腔体不靠分类决定，腔体带什么初始库存才需要区分，而那由 lineage 分配处负责：无旧 owner 的新 component 是显式真空节点，库存、质量与 `U` 均为零。marker bulk 的普通空隙不必被猜成气泡，因为它即使成为 component 也拿不到库存。六邻域 flood fill 只跨越接近全开的 face；部分开放 face 不合并 component，而是形成有限速率 geometric edge。已存在的密闭有限库存若暂时只剩部分充液格，则其旧 lineage 中仍有正 residual volume、且不接触任何本轮 full-air/ambient component 的连通部分成为显式 partial owner component；真实连通时仍按正常 merge 处理。
+由当前几何直接发现的 air cell 同时满足：非 solid、`markerCount == 0`、扣除 cut-cell、granular/coherent occupancy 后仍有正 open volume。**扫描不区分"气"和"未采样的液体格"**：两者对同一个 flood fill 是同一件事——一段连通的无载体体积。是否成为腔体不靠分类决定，腔体带什么初始库存才需要区分，而那由 lineage 分配处负责：无旧 owner 的新 component 是显式真空节点，库存、质量与 `U` 均为零；开放域里上一代明确连接 ambient 的实际体积若本代被夹断为 sealed，则按该体积截留环境库存，即使它同时并入一个既有有限气泡也一样。marker bulk 的普通空隙不必被猜成气泡，因为它即使成为 component 也拿不到库存。六邻域 flood fill 只跨越接近全开的 face；部分开放 face 不合并 component，而是形成有限速率 geometric edge。已存在的密闭有限库存若暂时只剩部分充液格，则其旧 lineage 中仍有正 residual volume、且不接触任何本轮 full-air/ambient component 的连通部分成为显式 partial owner component；真实连通时仍按正常 merge 处理。
 
 密闭壳内失去全部拓扑去向的库存**不判为丢失**：腔体消失时 `normalizeClosedCapacity` 已经把它的容量重新分给仍然存在的腔体，库存按同一组容量权重随之转移。被载体挤没的气泡、被抬升液面压碎的 headspace 碎片、以及闪断的载体空隙在这里是同一个事件——闭体积里的气，腔体没了；只有守恒决定它去哪。开放域中同样的情形才记 escaped sink。
 
@@ -42,7 +42,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 - merge 汇总完整库存和能量；
 - split 按几何份额分配，精确余数只落入一个确定节点；
 - 开放域中打开或消失的腔体把实际库存记入环境 sink；密闭域中不产生 source/sink，失去拓扑去向的库存按剩余腔体容量权重转移，不记为丢失；
-- 开放域中新腔体按环境组成和当前可用体积记 source；
+- 开放域中从上一代 ambient lineage 被夹断的实际体积按环境组成记 source；若同一新节点还继承既有 sealed node，则环境来源体积与旧节点体积、库存和 `U` 分列合并后，才对最终几何差额结算功；同一节点中上一代无 owner 的本代体积仍是零库存真空并进入 inherited volume；
 - 相变产生或消耗的 water vapor 通过同一组件库存与 source/sink 审计提交。
 
 部分充液界面的短时拓扑抖动使用 runtime lineage 减少虚假空气周转，但不能改变物质账本。新 full-air child 没有同格 membership overlap 时，只能继承同格或跨开放 face 相邻的旧 runtime lineage。**继承只在旧 node 已经不拥有任何本轮开放 cell 时发生**：仍拥有开放 cell 的旧 node 一律按 membership overlap 匹配，不会把库存分给一个新出现的空腔。因此已启动闭域里无旧 owner 的新 cavity 按契约是显式真空节点，库存、质量与 `U` 均为零，不伪造 ambient source。旧 node 的 full-air membership 完全消失且旧 residual component 仍与新 gas component 相邻时，从原 interface cells 返回该新 lineage。若该 residual component 具有正容量但不接触任何新 gas component，它必须继续拥有原有限库存：该 component 的 partial owner cells 进入本代 topology membership，并按 minimum cell 与其他节点一起重新 canonicalize；若分裂成多个不连通 residual component，则按各自实际容量规划库存 split。这样不会把无法以 full-air cell 表示的真实气泡删除或任意并入另一节点。marker bulk 的普通空隙也不需要专门识别：它即使成为 component 也拿不到库存，消失时又按上一条守恒规则把库存交回余下腔体。
@@ -55,8 +55,9 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 
 - 一对一 lineage 携带完整 node inventory；
 - 多对一 merge 对 component、species、mass/residual 和 U 分列求和；
+- 空库存节点若并入有限气体，旧真空控制体积也进入 inherited volume；本代新出现且上一代没有 sealed/ambient owner 的体积同样作为新真空控制体积进入该列。气体向这些体积的自由膨胀保持 `U` 不变，不能误记为可逆边界功；真空被载体完全挤至零体积且没有后继时则没有物质、`U` 或控制体积需要转移；
 - 一对多 split 按 overlap/available-volume 整数权重分配，最后一个非空 child 接收 raw remainder；
-- 连到 ambient 的份额进入 sink，凭空形成的 sealed volume按 ambient composition进入 source；
+- 连到 ambient 的旧有限库存份额进入 sink；只有从上一代 ambient lineage 截留的体积按 ambient composition 进入 source，无 owner 的 sealed volume 是显式真空；
 - topology 与 thermal U 的 transfer plan 必须一起可提交，否则 network 保持重扫前状态。
 
 ## 压力与热耦合

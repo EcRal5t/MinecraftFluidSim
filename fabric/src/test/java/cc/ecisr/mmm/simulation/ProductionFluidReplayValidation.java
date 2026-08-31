@@ -7,11 +7,11 @@ public final class ProductionFluidReplayValidation {
 	private ProductionFluidReplayValidation() { }
 
 	public static void main(String[] args) throws Exception {
-		defaultLiveStepsRemainBounded();
 		ControllerReplayValidationScenarios.controllerPourSequenceWithoutGasSettles();
 		ControllerReplayValidationScenarios.controllerPourSequencePreservesGasInventoryAcrossBackend();
 		ControllerReplayValidationScenarios.phaseEnabledControllerPourRemainsDefinedAcrossBackend();
 		controllerEmptyThenBoundaryPourPreservesGasAcrossBackend();
+		DynamicReplayValidationScenarios.floorDamBreakGasThermalPathRemainsDefined();
 		DynamicReplayValidationScenarios.fullyBoundHalfFillRoundTripsCurrentGasGeometry();
 		DynamicReplayValidationScenarios.fullyBoundPhaseOnStepRemainsBounded();
 		DynamicReplayValidationScenarios.planarHalfFillWithoutEntitiesRemainsStableAcrossBackend();

@@ -176,7 +176,7 @@ final class GasTopologyCoordinator {
 		double[] mixedEnergy = thermalGas ? new double[sealed] : null;
 		double[] inheritedAvailable = thermalGas ? new double[sealed] : null;
 		double sourceEnergy = 0.0, sinkEnergy = 0.0;
-		if (domain.gasState.previousSealedNodeCount > 0 && sealed > 0) {
+		if (!initialBootstrap && sealed > 0) {
 			int previous = domain.gasState.previousSealedNodeCount;
 			TreeMap<Long, Long> overlap = new TreeMap<>();
 			boolean[] hasMembershipOverlap = new boolean[previous + 1];
@@ -184,15 +184,26 @@ final class GasTopologyCoordinator {
 			int[] newMembership = result.cellNodeId();
 			int[] newLabels = result.cellLineageNodeId();
 			double[] cellAvailableVolume = result.cellAvailableVolume();
+			double[] ambientInheritedAvailable = new double[sealed + 1];
+			double[] vacuumInheritedAvailable = new double[sealed + 1];
 			for (int cell = 0; cell < domain.cellCount; cell++) {
-				int old = domain.gasState.cellNodeId[cell];
-				if (old < 1) continue;
+				int oldMembership = domain.gasState.cellNodeId[cell];
+				int oldLineage = domain.rawGasNodeOfCell(cell);
+				int ambientDestination = newMembership[cell] >= 0 ? newMembership[cell] : newLabels[cell];
+				if (!domain.gasState.sealedDomainBoundary && oldLineage == AirNetwork.AMBIENT_NODE
+						&& ambientDestination > 0 && cellAvailableVolume[cell] > 0.0) {
+					ambientInheritedAvailable[ambientDestination] += cellAvailableVolume[cell];
+				}
+				if (oldLineage < 0 && ambientDestination > 0 && cellAvailableVolume[cell] > 0.0) {
+					vacuumInheritedAvailable[ambientDestination] += cellAvailableVolume[cell];
+				}
+				if (oldMembership < 1) continue;
 				int now = newMembership[cell];
 				if (now < 0 || !(cellAvailableVolume[cell] > 0.0)) continue;
-				long key = ((long) old << 32) | (now & 0xffffffffL);
+				long key = ((long) oldMembership << 32) | (now & 0xffffffffL);
 				long weight = Math.max(1L, AirNetwork.nanos(cellAvailableVolume[cell]));
 				overlap.merge(key, weight, Math::addExact);
-				hasMembershipOverlap[old] = true;
+				hasMembershipOverlap[oldMembership] = true;
 				if (now > 0) newNodeHasMembershipOverlap[now] = true;
 			}
 			// A newly full-air child can have no same-cell membership overlap when its cell was an
@@ -213,11 +224,14 @@ final class GasTopologyCoordinator {
 			boolean[] contributed = new boolean[sealed + 1];
 			for (int old = 1; old <= previous; old++) {
 				GasInventory inventory = domain.gasState.network.inventory(old);
-				if (inventory.isEmpty()) continue;
 				Map<Long, Long> oldOverlap = overlap.subMap(
 						(long) old << 32, (long) (old + 1) << 32);
 				int destinations = oldOverlap.size();
 				if (destinations == 0) {
+					// A vacuum cavity crushed to zero volume has no matter, U or surviving
+					// control volume to transfer. A vacuum with a destination is handled below
+					// so its inherited volume still distinguishes free expansion from work.
+					if (inventory.isEmpty()) continue;
 					if (domain.gasState.sealedDomainBoundary) {
 						throw new GasTopologyBlockedException("Closed gas inventory lost its topology lineage: "
 								+ gasTopologyLossDetail(old, newMembership, newLabels, cellAvailableVolume, sealed));
@@ -230,7 +244,7 @@ final class GasTopologyCoordinator {
 				int weight = 0;
 				for (long available : oldOverlap.values()) weights[weight++] = available;
 				List<GasInventory> parts = inventory.partition(weights);
-				double[] partEnergy = !thermalGas ? null
+				double[] partEnergy = !thermalGas ? null : inventory.isEmpty() ? new double[destinations]
 						: domain.thermalState.partitionGasNodeEnergy(old, parts, domain.gasState.network);
 				double[] partAvailable = !thermalGas ? null
 						: partitionTopologyVolume(domain.gasState.network.availableVolume(old), weights);
@@ -243,6 +257,9 @@ final class GasTopologyCoordinator {
 					} else {
 						inventories.set(node - 1, inventories.get(node - 1).merge(parts.get(part)));
 						if (thermalGas) {
+							// A zero-inventory node is still an already existing vacuum control volume.
+							// Carrying its old volume prevents a later merge from being mistaken for
+							// reversible boundary expansion and creating fictitious cooling/work.
 							mixedEnergy[node - 1] += partEnergy[part];
 							inheritedAvailable[node - 1] += partAvailable[part];
 						}
@@ -252,20 +269,30 @@ final class GasTopologyCoordinator {
 				}
 			}
 			for (int node = 1; node <= sealed; node++) {
+				if (!(vacuumInheritedAvailable[node] > 0.0)) continue;
+				if (thermalGas) inheritedAvailable[node - 1] += vacuumInheritedAvailable[node];
+				contributed[node] = true;
+			}
+			for (int node = 1; node <= sealed; node++) {
+				if (!(ambientInheritedAvailable[node] > 0.0)) continue;
+				GasInventory trappedAmbient = domain.gasState.network.ambientInventory(
+						Math.max(1L, AirNetwork.nanos(ambientInheritedAvailable[node])));
+				inventories.set(node - 1, inventories.get(node - 1).merge(trappedAmbient));
+				sourceDelta = sourceDelta.merge(trappedAmbient);
+				if (thermalGas) {
+					double trappedEnergy = domain.thermalState.ambientGasEnergy(trappedAmbient);
+					mixedEnergy[node - 1] += trappedEnergy;
+					inheritedAvailable[node - 1] += ambientInheritedAvailable[node];
+					sourceEnergy += trappedEnergy;
+				}
+				contributed[node] = true;
+			}
+			for (int node = 1; node <= sealed; node++) {
 				if (!contributed[node]) {
-					if (domain.gasState.sealedDomainBoundary) {
-						if (thermalGas) inheritedAvailable[node - 1] = availableVolumes[node - 1];
-						continue;
-					}
-					GasInventory created = domain.gasState.network.ambientInventory(
-							Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1])));
-					inventories.set(node - 1, created);
-					sourceDelta = sourceDelta.merge(created);
-					if (thermalGas) {
-						mixedEnergy[node - 1] = domain.thermalState.ambientGasEnergy(created);
-						inheritedAvailable[node - 1] = availableVolumes[node - 1];
-						sourceEnergy += mixedEnergy[node - 1];
-					}
+					// After bootstrap, a new component with neither sealed nor ambient
+					// lineage is a genuine vacuum cavity. Its current control volume is
+					// inherited without matter, U or an external source.
+					if (thermalGas) inheritedAvailable[node - 1] = availableVolumes[node - 1];
 				}
 			}
 		} else {

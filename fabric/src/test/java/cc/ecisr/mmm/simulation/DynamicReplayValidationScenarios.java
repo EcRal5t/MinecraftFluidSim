@@ -5,6 +5,7 @@ import cc.ecisr.mmm.fluid.FluidDomainState;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
+import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 import net.minecraft.world.phys.Vec3;
@@ -430,6 +431,53 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 						+ maximumMillis + " ms, consecutive overruns=" + maximumConsecutiveOverruns);
 		System.out.printf("  dam-break live maximum %.3f ms; consecutive > %.1f ms=%d (< 3 pause limit)%n",
 				maximumMillis, performancePauseThresholdMillis, maximumConsecutiveOverruns);
+	}
+
+	static void floorDamBreakGasThermalPathRemainsDefined() throws Exception {
+		FullCapabilityTestFixture.Registries registries = loadProductionRegistries();
+		FluidDomain domain = createFullyBoundFloorDamBreakDemo(registries);
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		boolean observedTrappedAmbient = false;
+		boolean observedAirVaporMixture = false;
+		for (int generation = 0; generation < 200; generation++) {
+			try {
+				FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+						generation, domain.captureAuthoritativeState(), List.of(), true,
+						ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
+				domain = requirePreparedCpuDomain(candidate);
+				require(domain.gasBoundary().auditClosed()
+						&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+						"floor dam-break opened its gas or total-U audit at step " + (generation + 1));
+				for (int node = 1; node <= domain.gasBoundary().nodeCount(); node++) {
+					require(Double.isFinite(domain.gasBoundary().availableVolume(node))
+							&& domain.gasBoundary().availableVolume(node) > 0.0
+							&& domain.gasBoundary().standardVolumeNanos(node) >= 0L,
+							"floor dam-break produced an invalid sealed gas node at step " + (generation + 1));
+					observedAirVaporMixture |= domain.gasBoundary().inventory(node)
+							.component(BuiltinGasDefinitions.AIR) != null
+							&& domain.gasBoundary().inventory(node)
+							.component(BuiltinGasDefinitions.WATER_VAPOR) != null;
+				}
+				observedTrappedAmbient |= domain.gasBoundary().drawnFromAmbientNanos() > 0L;
+				if ((generation + 1) % 20 == 0) {
+					System.out.printf("  floor dam-break step %d: particles=%d, volume=%.9f, "
+							+ "gasNodes=%d, phase=%d%n", generation + 1, domain.particleCount(),
+							domain.totalVolumeExact(), domain.gasBoundary().nodeCount(),
+							candidate.stats().gasPhase().operations());
+				}
+			} catch (RuntimeException failure) {
+				StringBuilder gas = new StringBuilder();
+				for (int node = 1; node <= domain.gasBoundary().nodeCount(); node++) {
+					gas.append(" node=").append(node)
+							.append(" V=").append(domain.gasBoundary().availableVolume(node))
+							.append(" Vstd=").append(domain.gasBoundary().standardVolume(node));
+				}
+				throw new AssertionError("floor dam-break failed at step " + (generation + 1) + gas
+						+ ": " + failure.getMessage(), failure);
+			}
+		}
+		require(observedTrappedAmbient && observedAirVaporMixture,
+				"floor dam-break did not exercise ambient pinch-off into a finite air/vapor node");
 	}
 
 	private static FluidDomain requirePreparedCpuDomain(FluidStepCandidate candidate) {

@@ -141,8 +141,19 @@ public final class GasThermalModel {
 		List<ThermalStateFunction.InventoryPortion> portions = portions(inventory);
 		double entropyChange = initial.gasConstantEuPerK()
 				* Math.log(initialAvailableVolume / finalAvailableVolume);
-		double targetTemperature = isentropicTemperature(
-				portions, initial.temperatureK(), entropyChange);
+		double targetTemperature;
+		try {
+			targetTemperature = isentropicTemperature(
+					portions, initial.temperatureK(), entropyChange);
+		} catch (CaloricRangeException outside) {
+			throw new IllegalArgumentException("Gas isentrope leaves the common caloric validity range: "
+					+ "T0=" + initial.temperatureK() + " K, V0=" + initialAvailableVolume
+					+ " m^3, V1=" + finalAvailableVolume + " m^3, Vstd="
+					+ AirNetwork.cubicMeters(inventory.standardVolumeNanos()) + " m^3std, components="
+					+ inventory.components().stream().map(GasComponentAmount::componentId).toList()
+					+ ", remaining |dS|="
+					+ outside.remainingEntropyEuPerK + " EU/K", outside);
+		}
 		double finalEnergy = internalEnergyAtTemperature(inventory, targetTemperature);
 		hydrodynamicState(inventory, finalAvailableVolume, finalEnergy);
 		return new Compression(initial.temperatureK(), targetTemperature, finalEnergy, finalEnergy - internalEnergy);
@@ -162,7 +173,7 @@ public final class GasThermalModel {
 					? nextUpperCaloricBoundary(portions, temperature)
 					: nextLowerCaloricBoundary(portions, temperature);
 			if (!(heating ? boundary > temperature : boundary < temperature)) {
-				throw new IllegalArgumentException("Gas isentrope leaves the common caloric validity range");
+				throw new CaloricRangeException(remaining);
 			}
 			double sampleTemperature = Math.sqrt(temperature * boundary);
 			double heatCapacity = heatCapacityAt(portions, sampleTemperature);
@@ -175,6 +186,14 @@ public final class GasThermalModel {
 			temperature = boundary;
 		}
 		return temperature;
+	}
+
+	private static final class CaloricRangeException extends IllegalArgumentException {
+		private final double remainingEntropyEuPerK;
+
+		private CaloricRangeException(double remainingEntropyEuPerK) {
+			this.remainingEntropyEuPerK = remainingEntropyEuPerK;
+		}
 	}
 
 	private double nextUpperCaloricBoundary(

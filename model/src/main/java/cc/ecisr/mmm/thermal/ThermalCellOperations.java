@@ -179,7 +179,7 @@ final class ThermalCellOperations {
 			} else granular.addGranularPortion(finalInventory, markers.activeParcelMaterial(active),
 					markers.activeParcelMass(active), markers.solidComposition(markers.activeParcelComposition(active)));
 		}
-		for (GranularEnergyColumn.DepositKey key : markers.depositKeys()) if (key.cell() == cell) {
+		for (GranularEnergyColumn.DepositKey key : markers.depositKeys(cell)) {
 			if (key.equals(granularEdit.depositKey())) {
 				matchedGranular = true;
 				if (granularEdit.kind() != GranularEnergyState.GranularReactionKind.REMOVE_DEPOSIT) granular.addGranularPortion(
@@ -354,7 +354,7 @@ final class ThermalCellOperations {
 					markers.activeParcelMaterial(active), markers.activeParcelMass(active),
 					markers.solidComposition(markers.activeParcelComposition(active)));
 		}
-		for (GranularEnergyColumn.DepositKey key : markers.depositKeys()) if (key.cell() == cell) {
+		for (GranularEnergyColumn.DepositKey key : markers.depositKeys(cell)) {
 			granular.addGranularPortion(unchangedSolids, key.materialHandle(), markers.depositMass(key),
 					markers.solidComposition(key.compositionHandle()));
 		}
@@ -486,7 +486,7 @@ final class ThermalCellOperations {
 					markers.activeParcelMaterial(active), markers.activeParcelMass(active),
 					markers.solidComposition(markers.activeParcelComposition(active)));
 		}
-		for (GranularEnergyColumn.DepositKey key : markers.depositKeys()) if (key.cell() == cell) {
+		for (GranularEnergyColumn.DepositKey key : markers.depositKeys(cell)) {
 			granular.addGranularPortion(finalInventory, key.materialHandle(), markers.depositMass(key),
 					markers.solidComposition(key.compositionHandle()));
 		}
@@ -516,7 +516,7 @@ final class ThermalCellOperations {
 					markers.activeParcelMaterial(parcel), markers.activeParcelComposition(parcel),
 					markers.activeParcelMass(parcel), temperatureK, markers);
 		}
-		for (GranularEnergyColumn.DepositKey key : markers.depositKeys()) if (key.cell() == cell) {
+		for (GranularEnergyColumn.DepositKey key : markers.depositKeys(cell)) {
 			total += granular.modeledGranularEnergy(key.materialHandle(), key.compositionHandle(),
 					markers.depositMass(key), temperatureK, markers);
 		}

@@ -93,7 +93,7 @@ dt_stable = min_cell(0.5 * C_cell / sum_faces G_face)
 
 自动分 substep；`0.5` 保证一对相同 cell 单调趋近平衡而非一步交换温度。所需 substep 超过 8 时安全暂停。hot loop 使用 `double`，每个 face 对的增减严格镜像；commit 边界用 `SignedDyadic` 精确求和记录 IEEE-754 有限数，舍入残差单列保存，不能伪装成 source 或 sink。批量求和按 binary64 固有的 2,046 个 dyadic exponent 分桶，每桶以有符号 128-bit 两字累加后只做一次 `BigInteger` 合并；它与逐项 exact add bit-for-bit 等价，不是近似归约，也不会按载体种类跳过审计。
 
-内置水在 293.15 K 使用 `rho = 1000 kg/m³`、`cv = 4184 J/(kg·K)`、`k = 0.598 W/(m·K)`；水蒸气的 `k = 0.025 W/(m·K)`，`cv` 则按 [NIST water-vapor Shomate 数据](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7732185&Table=on&Type=JANAFG)换算为覆盖 `250–1700 K` 的五段数据，不把常温值外推到压缩后的高温状态。一个 0.5 m cell 满水的热容量约 `523 kJ/K`；4 BV 水约 `16.736 MJ/K`。四个完整 reservoir 接触面总导热为 `2.392 W/K`，因此现实标定下温升本来就慢，极端热源只是高功率边界，不是比热缩放。
+内置 `mmm:air` 按 [NIST 干空气组成](https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=921756)中的 N₂/O₂/Ar（CO₂ 在 registry 中是独立 component）以及 [N₂](https://webbook.nist.gov/cgi/cbook.cgi?ID=7727-37-9&cTG=on)、[O₂](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7782447&Mask=1001&Table=on&Type=JANAFG)、[Ar](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7440371&Mask=11) 的 caloric 数据，在冻结标准态由理想气体关系得到 `rho = 1.2038886846941566 kg/m³`，并把 `Cp-R` 的区间焓积分换算为覆盖 `100–1700 K` 的七段质量比 `cv`；标准态所在的 `250–350 K` 单独成段，其余边界随物性曲率展开，避免宽区间平均值歪曲常温声学闭合，也不把热表查找膨胀到 material 的段数硬上限。数据域外仍拒绝候选，不作常量外推。内置水在 293.15 K 使用 `rho = 1000 kg/m³`、`cv = 4184 J/(kg·K)`、`k = 0.598 W/(m·K)`；水蒸气的 `k = 0.025 W/(m·K)`，`cv` 则按 [NIST water-vapor Shomate 数据](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7732185&Table=on&Type=JANAFG)换算为覆盖 `250–1700 K` 的五段数据，不把常温值外推到压缩后的高温状态。一个 0.5 m cell 满水的热容量约 `523 kJ/K`；4 BV 水约 `16.736 MJ/K`。四个完整 reservoir 接触面总导热为 `2.392 W/K`，因此现实标定下温升本来就慢，极端热源只是高功率边界，不是比热缩放。
 
 ### 热浮力
 
@@ -122,7 +122,7 @@ p = P0 * (Vstd / Vavailable) * (T / T0)
 
 相变门依赖热学门。每个 transition 用完整最小守恒量子定义，运行时按可用能量、库存、目标容量、饱和条件和统一操作预算求最大整数 extent。
 
-logical thermal axis 在最后一次真实 carrier 修改后从全部载体构造派生 LTE grid；若 chemistry 与 granular phase 统计都证明零提交，后续固液和气液扫描复用导热留下的同代 grid，独立 phase 入口则自行重建。无相库存或方向上没有可搬运载体的 cell 不构造完整 inventory。气液 extent 的二分候选冻结该 cell 的 exact dyadic 总 `U` 与不变 solid heat-bath inventory，只替换候选 liquid inventory。真实 phase commit 后重建载体 ordinal，但只按守恒余量重新求解被编辑 cell；未编辑 cell 必须已有同代 LTE 状态并原样保留，不能借此反算或改写其 `U`。
+logical thermal axis 在最后一次真实 carrier 修改后从全部载体构造派生 LTE grid；若 chemistry 与 granular phase 统计都证明零提交，后续固液和气液扫描复用导热留下的同代 grid，独立 phase 入口则自行重建。无相库存、已处于平衡或方向上没有可搬运载体的 cell 不构造完整 inventory；只有首个可执行气液 interface 才物化 exact liquid/solid heat-bath 候选。deposit heat-bath 通过目标 cell 的 canonical sparse group 视图读取，不为每个 phase cell 扫描全 region。气液 extent 的二分候选冻结该 cell 的 exact dyadic 总 `U` 与不变 solid heat-bath inventory，只替换候选 liquid inventory。真实 phase commit 后重建载体 ordinal，但只按守恒余量重新求解被编辑 cell；未编辑 cell 必须已有同代 LTE 状态并原样保留，不能借此反算或改写其 `U`。
 
 导热若所有 face 与 reservoir 的实际通量都严格为零，并且每个 carrier 从自身 raw `U` 恢复出的温度已位于该 cell 的 LTE 容差内，则保持全部 carrier `U` raw bits 不变；否则仍执行完整 cell 能量分配与验证。这里的短路只识别数学上的零转移，不把小通量钳为零。
 

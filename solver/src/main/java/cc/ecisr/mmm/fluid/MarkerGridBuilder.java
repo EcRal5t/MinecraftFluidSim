@@ -28,7 +28,13 @@ final class MarkerGridBuilder {
 			Arrays.fill(domain.granularCarrierVolumeByCell, -1.0);
 		}
 		for (int i = 0; i < domain.particles.count(); i++) {
-			int particleCell = domain.particleCellIndex(i);
+			float positionX = domain.particles.positionX(i);
+			float positionY = domain.particles.positionY(i);
+			float positionZ = domain.particles.positionZ(i);
+			float particleVolume = domain.particles.volume(i);
+			double particleMass = domain.particles.mass(i);
+			int materialHandle = domain.particles.materialHandle(i);
+			int particleCell = domain.particleCellIndex(positionX, positionY, positionZ);
 			int previous = grid.cellMarkerTail[particleCell];
 			grid.particleCellPrevious[i] = previous;
 			grid.particleCellNext[i] = -1;
@@ -36,32 +42,27 @@ final class MarkerGridBuilder {
 			else grid.particleCellNext[previous] = i;
 			grid.cellMarkerTail[particleCell] = i;
 			grid.markerCount[particleCell]++;
-			grid.exactCellMarkerVolume[particleCell] += domain.particles.volume(i);
-			grid.exactCellMarkerMass[particleCell] += domain.particles.mass(i);
-			grid.addCellPhaseVolume(particleCell, domain.particles.phaseLabel(i), domain.particles.volume(i));
+			grid.exactCellMarkerVolume[particleCell] += particleVolume;
+			grid.exactCellMarkerMass[particleCell] += particleMass;
+			grid.addCellPhaseVolume(particleCell, domain.particles.phaseLabel(i), particleVolume);
 			if (domain.granularCarrierMaterialByCell != null && granularInventoryPresent
-					&& (domain.particles.volume(i) > domain.granularCarrierVolumeByCell[particleCell]
-					|| domain.particles.volume(i) == domain.granularCarrierVolumeByCell[particleCell]
-					&& domain.particles.materialHandle(i) < domain.granularCarrierMaterialByCell[particleCell])) {
-				domain.granularCarrierVolumeByCell[particleCell] = domain.particles.volume(i);
-				domain.granularCarrierMaterialByCell[particleCell] = domain.particles.materialHandle(i);
+					&& (particleVolume > domain.granularCarrierVolumeByCell[particleCell]
+					|| particleVolume == domain.granularCarrierVolumeByCell[particleCell]
+					&& materialHandle < domain.granularCarrierMaterialByCell[particleCell])) {
+				domain.granularCarrierVolumeByCell[particleCell] = particleVolume;
+				domain.granularCarrierMaterialByCell[particleCell] = materialHandle;
 			}
-			domain.freeSurfaceGeometry.addExactVolume(particleCell, domain.particles.volume(i));
-			domain.splatCenter(domain.particles.positionX(i), domain.particles.positionY(i),
-					domain.particles.positionZ(i), domain.particles.volume(i));
-			domain.splatPressureVolume(domain.particles.positionX(i), domain.particles.positionY(i),
-					domain.particles.positionZ(i), domain.particles.volume(i));
+			domain.freeSurfaceGeometry.addExactVolume(particleCell, particleVolume);
+			domain.splatCenter(positionX, positionY, positionZ, particleVolume);
+			domain.splatPressureVolume(positionX, positionY, positionZ, particleVolume);
 			float transferWeight = domain.variableDensityActive
-					? (float) domain.particles.mass(i) : domain.particles.volume(i);
+					? (float) particleMass : particleVolume;
 			domain.splatFaceField(domain.mac.velocityX, domain.mac.velocityWeightX, 0,
-					domain.particles.positionX(i), domain.particles.positionY(i),
-					domain.particles.positionZ(i), domain.particles.velocityX(i), transferWeight);
+					positionX, positionY, positionZ, domain.particles.velocityX(i), transferWeight);
 			domain.splatFaceField(domain.mac.velocityY, domain.mac.velocityWeightY, 1,
-					domain.particles.positionX(i), domain.particles.positionY(i),
-					domain.particles.positionZ(i), domain.particles.velocityY(i), transferWeight);
+					positionX, positionY, positionZ, domain.particles.velocityY(i), transferWeight);
 			domain.splatFaceField(domain.mac.velocityZ, domain.mac.velocityWeightZ, 2,
-					domain.particles.positionX(i), domain.particles.positionY(i),
-					domain.particles.positionZ(i), domain.particles.velocityZ(i), transferWeight);
+					positionX, positionY, positionZ, domain.particles.velocityZ(i), transferWeight);
 		}
 		for (int cell = 0; cell < grid.cellCount; cell++) if (grid.markerCount[cell] > 0) {
 			grid.cellDensity[cell] = grid.exactCellMarkerMass[cell] / grid.exactCellMarkerVolume[cell];

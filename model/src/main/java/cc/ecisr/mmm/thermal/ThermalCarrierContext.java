@@ -30,6 +30,9 @@ public interface ThermalCarrierContext {
 	default long activeParcelSvq(int ordinal) { throw new IllegalArgumentException("No granular state"); }
 	default double activeParcelMass(int ordinal) { throw new IllegalArgumentException("No granular state"); }
 	default List<GranularEnergyColumn.DepositKey> depositKeys() { return List.of(); }
+	default List<GranularEnergyColumn.DepositKey> depositKeys(int cell) {
+		return depositKeys().stream().filter(key -> key.cell() == cell).toList();
+	}
 	default long depositSvq(GranularEnergyColumn.DepositKey key) { throw new IllegalArgumentException("No granular state"); }
 	default double depositMass(GranularEnergyColumn.DepositKey key) { throw new IllegalArgumentException("No granular state"); }
 	default Map<String, Long> solidComposition(int compositionHandle) {

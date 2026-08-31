@@ -215,11 +215,22 @@ public final class GranularDepositStore {
 
 	public void forEachGroup(GroupConsumer consumer) {
 		if (consumer == null) throw new IllegalArgumentException("Deposit group consumer is missing");
+		if (groupCount == 0) return;
 		for (int cell = 0; cell < headByCell.length; cell++) {
 			for (int entry = headByCell[cell]; entry >= 0; entry = next[entry]) {
 				consumer.accept(cell, porosityQByCell[cell], materialHandle[entry], solidCompositionHandle[entry],
 						solidVolumeSvq[entry], mass[entry]);
 			}
+		}
+	}
+
+	/** Visits the canonical sparse groups owned by one cell without scanning unrelated cells. */
+	public void forEachGroupInCell(int cell, GroupConsumer consumer) {
+		requireCell(cell);
+		if (consumer == null) throw new IllegalArgumentException("Deposit group consumer is missing");
+		for (int entry = headByCell[cell]; entry >= 0; entry = next[entry]) {
+			consumer.accept(cell, porosityQByCell[cell], materialHandle[entry], solidCompositionHandle[entry],
+					solidVolumeSvq[entry], mass[entry]);
 		}
 	}
 

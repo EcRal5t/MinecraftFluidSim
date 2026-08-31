@@ -145,9 +145,9 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				"gas temperature was not derived from authoritative U");
 		GasThermalModel.HydrodynamicState standard = model.hydrodynamicState(inventory, 1.0, initial);
 		double expectedGasConstant = GasRegistry.STANDARD_PRESSURE_PA / GasRegistry.STANDARD_TEMPERATURE_K;
-		double expectedExponent = 1.0 + expectedGasConstant / (1.2 * 718.0);
+		double expectedExponent = 1.0 + expectedGasConstant / (inventory.totalMass() * 718.0);
 		require(close(standard.absolutePressurePa(), GasRegistry.STANDARD_PRESSURE_PA)
-				&& close(standard.densityKgPerCubicMeter(), 1.2)
+				&& close(standard.densityKgPerCubicMeter(), AirNetwork.AIR_DENSITY)
 				&& close(standard.gasConstantEuPerK(), expectedGasConstant)
 				&& close(standard.isentropicExponent(), expectedExponent)
 				&& close(standard.adiabaticBulkModulusPa(),
@@ -184,10 +184,10 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				inventory, GasRegistry.STANDARD_TEMPERATURE_K);
 		GasThermalModel.Compression acrossSegment = piecewise.compressAdiabatically(
 				inventory, piecewiseInitial, 1.0, 0.1);
-		double entropyToBoundary = 1.2 * 718.0
+		double entropyToBoundary = inventory.totalMass() * 718.0
 				* Math.log(400.0 / GasRegistry.STANDARD_TEMPERATURE_K);
 		double expectedAcrossSegment = 400.0 * Math.exp((expectedGasConstant * Math.log(10.0)
-				- entropyToBoundary) / (1.2 * 900.0));
+				- entropyToBoundary) / (inventory.totalMass() * 900.0));
 		GasThermalModel.Compression acrossSegmentReversed = piecewise.compressAdiabatically(
 				inventory, acrossSegment.finalInternalEnergy(), 0.1, 1.0);
 		require(Math.abs(acrossSegment.finalTemperatureK() - expectedAcrossSegment) < 1.0E-9
@@ -206,8 +206,10 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				"gas topology/orifice carrier energy did not close");
 	}
 
-	static void builtinWaterAndVaporPhysicsIsCalibrated() {
-		try (InputStreamReader waterReader = resourceReader(
+	static void builtinDryAirWaterAndVaporPhysicsIsCalibrated() {
+		try (InputStreamReader airReader = resourceReader(
+				"/data/mmm/mmm/thermal_materials/air.json");
+		     InputStreamReader waterReader = resourceReader(
 				"/data/mmm/mmm/thermal_materials/water.json");
 		     InputStreamReader vaporReader = resourceReader(
 				     "/data/mmm/mmm/thermal_materials/water_vapor.json");
@@ -215,6 +217,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				     "/data/mmm/mmm/phase_transitions/ice_water.json");
 		     InputStreamReader transitionReader = resourceReader(
 				     "/data/mmm/mmm/phase_transitions/water_vapor.json")) {
+			ThermalMaterialDefinition air = ThermalDefinitionCodec.decodeMaterial("mmm:air", airReader);
 			ThermalMaterialDefinition water = ThermalDefinitionCodec.decodeMaterial("mmm:water", waterReader);
 			ThermalMaterialDefinition vapor = ThermalDefinitionCodec.decodeMaterial("mmm:water_vapor", vaporReader);
 			ThermalPhaseTransition transition = ThermalDefinitionCodec.decodeTransition(
@@ -251,7 +254,17 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					&& relativeError(vaporDensityAtBoiling, 0.588) < 0.001
 					&& relativeError(gasConstant, 461.52) < 1.0E-5,
 					"built-in phase volumes do not reproduce water/vapor SI density and gas constant");
-			require(water.specificHeatAt(293.15) == 4_184.0
+			double[] expectedAirCv = {
+					715.5184374797511, 718.0965575743058, 730.345643090267,
+					764.3848905212396, 822.1840487741881, 885.9605202540622, 928.3976344371151
+			};
+			double[] airSamples = { 200.0, 300.0, 400.0, 600.0, 850.0, 1_200.0, 1_550.0 };
+			for (int segment = 0; segment < expectedAirCv.length; segment++) {
+				require(air.specificHeatAt(airSamples[segment]) == expectedAirCv[segment],
+						"built-in dry-air caloric segment drifted at index " + segment);
+			}
+			require(relativeError(AirNetwork.AIR_DENSITY, 1.2038886846941566) < 1.0E-14
+					&& water.specificHeatAt(293.15) == 4_184.0
 					&& water.conductivityEuPerSecondMeterK() == 0.598
 					&& vapor.specificHeatAt(373.15) == 1_410.0
 					&& vapor.specificHeatAt(600.0) == 1_554.43
@@ -259,7 +272,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					&& vapor.specificHeatAt(1_200.0) == 1_967.03
 					&& vapor.specificHeatAt(1_550.0) == 2_180.66
 					&& vapor.conductivityEuPerSecondMeterK() == 0.025,
-					"built-in water/vapor caloric or conductivity values drifted");
+					"built-in dry-air/water/vapor caloric or conductivity values drifted");
 			require(Math.abs(latentEnthalpy - 2_256_700.0) < 0.01,
 					"water/vapor state-function gap does not reproduce the 1-atm latent enthalpy: " + latentEnthalpy);
 			require(close(melting.equilibriumTemperatureK(101_325.0), 273.15251907976949)
@@ -349,7 +362,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			ThermalRegistry registry = new ThermalRegistry(List.of(water, co2),
 					List.of(gasOffset, liquidOffset), List.of(), List.of(), List.of(pair),
 					chemistry.fingerprint(), "", gas.fingerprint());
-			require(registry.fingerprint().equals("3ad148b10e255ec1415773bccf7eda9c07caf0a5fcd1e4be54de46153576dae4"),
+			require(registry.fingerprint().equals("6095e97de32ac72dea39cad4025210a70bcd987f6f3edc73e679f943cd92bf23"),
 					"built-in CO2 pair registry fingerprint drifted: " + registry.fingerprint());
 			root = java.nio.file.Files.createTempDirectory("mmm-co2-pair-registry-");
 			java.nio.file.Path snapshot = root.resolve("thermal-registry.nbt");
@@ -576,6 +589,67 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& movingInterface.gasBoundary().escapedSink().equals(sinkBeforeMove)
 				&& movingInterface.gasBoundary().auditClosed(),
 				"moving a partial interface created false sealed-gas source/sink turnover");
+
+		FluidDomain ambientPinch = new FluidDomain(3, 3, 3, config, 128);
+		ambientPinch.bindGasRegistry(gas);
+		ambientPinch.bootstrapGasState("");
+		ambientPinch.bindThermal(thermal, liquids, GasRegistry.STANDARD_TEMPERATURE_K);
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) {
+			if (Math.abs(x - 1) + Math.abs(y - 1) + Math.abs(z - 1) == 1) {
+				ambientPinch.setSolid(x, y, z, true);
+			}
+		}
+		ambientPinch.synchronizeGasTopologyForPersistence();
+		long centerCellNanos = AirNetwork.nanos(0.125);
+		require(ambientPinch.gasBoundary().nodeCount() == 1
+				&& ambientPinch.gasBoundary().standardVolumeNanos(1) == centerCellNanos
+				&& ambientPinch.gasBoundary().drawnFromAmbientNanos() == centerCellNanos
+				&& ambientPinch.gasBoundary().auditClosed()
+				&& ambientPinch.exactInternalEnergy().equals(
+						ambientPinch.thermalAudit().expectedInventory()),
+				"first ambient-to-sealed pinch did not trap its actual source volume and U");
+
+		FluidDomain vacuumBirth = new FluidDomain(3, 3, 3, config, 128);
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) {
+			vacuumBirth.setSolid(x, y, z, true);
+		}
+		vacuumBirth.bindGasRegistry(gas);
+		vacuumBirth.bootstrapGasState("");
+		vacuumBirth.bindThermal(thermal, liquids, GasRegistry.STANDARD_TEMPERATURE_K);
+		vacuumBirth.setSolidMicroMask(1, 1, 1, 0xAA);
+		vacuumBirth.synchronizeGasTopologyForPersistence();
+		require(vacuumBirth.gasBoundary().nodeCount() == 1
+				&& vacuumBirth.gasBoundary().inventory(1).isEmpty()
+				&& vacuumBirth.gasBoundary().drawnFromAmbientNanos() == 0L
+				&& vacuumBirth.exactInternalEnergy().equals(
+						vacuumBirth.thermalAudit().expectedInventory()),
+				"first unowned sealed cavity was not preserved as explicit vacuum");
+
+		FluidDomain vacuumMerge = new FluidDomain(2, 2, 2, config, 128);
+		vacuumMerge.sealDomainBoundary();
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) {
+			vacuumMerge.setSolid(x, y, z, true);
+		}
+		vacuumMerge.setSolidMicroMask(0, 0, 0, 0xAA);
+		vacuumMerge.bindGasRegistry(gas);
+		vacuumMerge.bootstrapGasState("");
+		vacuumMerge.bindThermal(thermal, liquids, GasRegistry.STANDARD_TEMPERATURE_K);
+		SignedDyadic energyBeforeVacuum = vacuumMerge.exactInternalEnergy();
+		double temperatureBeforeVacuum = vacuumMerge.thermalState.gasTemperature(
+				1, vacuumMerge.gasState.network);
+		vacuumMerge.setSolidMicroMask(1, 0, 0, 0x55);
+		vacuumMerge.synchronizeGasTopologyForPersistence();
+		require(vacuumMerge.gasBoundary().nodeCount() == 2
+				&& vacuumMerge.gasBoundary().inventory(2).isEmpty(),
+				"new closed cut-cell cavity did not remain an explicit vacuum node");
+		vacuumMerge.setSolidMicroMask(0, 0, 0, 0x55);
+		vacuumMerge.setSolidMicroMask(1, 0, 0, 0xAA);
+		vacuumMerge.synchronizeGasTopologyForPersistence();
+		require(vacuumMerge.gasBoundary().nodeCount() == 1
+				&& vacuumMerge.exactInternalEnergy().equals(energyBeforeVacuum)
+				&& close(vacuumMerge.thermalState.gasTemperature(1, vacuumMerge.gasState.network),
+					temperatureBeforeVacuum),
+				"gas/vacuum topology merge created reversible boundary work or changed U");
 	}
 
 	static void thermalGasPressureRowUsesIsentropicCompliance() {
