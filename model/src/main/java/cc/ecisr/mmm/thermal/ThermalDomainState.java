@@ -1,7 +1,6 @@
 package cc.ecisr.mmm.thermal;
 
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
-import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.GasInventory;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
@@ -423,7 +422,14 @@ public final class ThermalDomainState {
 		if (!Double.isFinite(removedCarrierEnergy) || !Double.isFinite(coupledItemEnergy)) {
 			throw new IllegalArgumentException("Container thermal settlement is not finite");
 		}
-		SignedDyadic delta = SignedDyadic.of(coupledItemEnergy).subtract(SignedDyadic.of(removedCarrierEnergy));
+		settleExternalExtraction(SignedDyadic.of(removedCarrierEnergy), coupledItemEnergy);
+	}
+
+	public void settleExternalExtraction(SignedDyadic bookedBoundaryEnergy, double coupledItemEnergy) {
+		if (bookedBoundaryEnergy == null || !Double.isFinite(coupledItemEnergy)) {
+			throw new IllegalArgumentException("Container thermal settlement is not finite");
+		}
+		SignedDyadic delta = SignedDyadic.of(coupledItemEnergy).subtract(bookedBoundaryEnergy);
 		auditState.update(ledger -> ledger.withExternalSinkEnergy(delta).withRoundoff(delta));
 	}
 

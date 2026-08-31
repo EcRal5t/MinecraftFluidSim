@@ -239,8 +239,10 @@ public final class LiquidEnergyColumn {
 
 	void commitTruncate(int marker, Truncation plan) {
 		if (plan == null) return;
+		SignedDyadic carrierEnergy = SignedDyadic.of(internalEnergy[marker])
+				.subtract(SignedDyadic.of(plan.newEnergy()));
 		internalEnergy[marker] = plan.newEnergy();
-		audit.update(ledger -> ledger.withExternalSinkEnergy(SignedDyadic.of(plan.removedEnergy())));
+		audit.update(ledger -> ledger.withExternalSinkEnergy(carrierEnergy));
 		revision++;
 	}
 

@@ -16,18 +16,18 @@
 | `RegionStateFiles` 1053 行 | S18 删除 |
 | `VulkanFlipPipeline` 1237 行 | device/resources/bindings/scheduler/readback 与 compact diagnostics 拆出后为 942 行 |
 
-当前超过 600 行但未超限的类为：`VulkanFlipPipeline` 942、`AirNetwork` 841、`FluidDomainMechanicalFields` 750、`FluidDomainCapabilities` 740、`FluidDomainStepCoordinator` 714、`ChemicalParcelStore` 695、`WorldCapabilityBundleStore` 677、`GpuFlipProbeValidation` 653、`FluidRegion` 622、`FluidDomainCollisionState` 615。它们只产生 warning，不进入例外表。本轮液气多 node 邻接解析单独归入 `GasPhaseInterfaceResolver`，使 `GasLiquidPhaseChangeStage` 保持在 597 行且只拥有 extent/commit。
+当前超过 600 行但未超限的类为：`VulkanFlipPipeline` 942、`AirNetwork` 842、`FluidDomainMechanicalFields` 750、`FluidDomainCapabilities` 749、`FluidDomainStepCoordinator` 714、`ChemicalParcelStore` 695、`WorldCapabilityBundleStore` 677、`GpuFlipProbeValidation` 653、`FluidRegion` 622、`FluidDomainCollisionState` 615、`GasLiquidPhaseChangeStage` 601。它们只产生 warning，不进入例外表；液气多 node 邻接解析仍单独归入 `GasPhaseInterfaceResolver`，stage 只拥有 extent/commit。
 
 ## 模块规模
 
 | 模块 | 文件 | 行数 |
 |---|---:|---:|
 | `api/src/main/java` | 11 | 264 |
-| `model/src/main/java` | 128 | 17464 |
-| `solver/src/main/java` | 83 | 15806 |
+| `model/src/main/java` | 128 | 17506 |
+| `solver/src/main/java` | 83 | 15865 |
 | `application/src/main/java` | 24 | 1848 |
 | `core/src/main/java` | 0 | 0 |
-| `fabric/src/main/java` | 158 | 25803 |
+| `fabric/src/main/java` | 158 | 25804 |
 | `fabric/src/client/java` | 14 | 1590 |
 | `gpu-probe-kernel/src/main/java` | 18 | 4129 |
 | `gpu-probe/src/main/java` | 5 | 734 |

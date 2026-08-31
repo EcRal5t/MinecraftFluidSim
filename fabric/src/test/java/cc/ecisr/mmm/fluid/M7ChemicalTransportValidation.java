@@ -14,7 +14,9 @@ import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
 import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.transfer.ChemicalContents;
 import cc.ecisr.mmm.transfer.ContainerFluidLedger;
+import cc.ecisr.mmm.simulation.FullCapabilityTestFixture;
 import cc.ecisr.mmm.units.SolverUnitScale;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.Arrays;
 import java.util.List;
@@ -29,7 +31,7 @@ public final class M7ChemicalTransportValidation {
 
 	private M7ChemicalTransportValidation() { }
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws Exception {
 		boolean fast = args.length > 0 && args[0].equals("--fast");
 		validatePackedBudgetAndBinaryAllocation();
 		validateInternalTransferLedgerDiversity();
@@ -480,7 +482,8 @@ public final class M7ChemicalTransportValidation {
 						+ freshDensity + " brine=" + brineDensity + " cellSize=" + config.cellSize());
 	}
 
-	private static void validateChemicalContainerRoundTrip() {
+	private static void validateChemicalContainerRoundTrip() throws Exception {
+		validateThermalChemicalExtractionAudit();
 		FluidDomain source = domainWithCell(1, 1, 1, 0.25F);
 		for (int marker = 0; marker < source.particleCount(); marker++) {
 			source.setMarkerChemical(marker, Map.of(
@@ -545,6 +548,44 @@ public final class M7ChemicalTransportValidation {
 		} catch (IllegalArgumentException expected) {
 			// The item remains intact; no solver mutation is attempted.
 		}
+	}
+
+	private static void validateThermalChemicalExtractionAudit() throws Exception {
+		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
+		FluidSolverConfig config = new FluidSolverConfig(
+				0.5F, 1_000.0F, 9.81F, 0.05F, 64, 1.0E-6F, 0.45F, 0.002F, 0.0F);
+		FluidDomain source = new FluidDomain(10, 8, 10, config, 8_192);
+		for (int z = 0; z < source.sizeZ(); z++) for (int y = 0; y < 6; y++) {
+			for (int x = 0; x < 4; x++) source.setVolume(x, y, z, 1.0F);
+		}
+		for (int marker = 0; marker < source.particleCount(); marker++) {
+			source.setMarkerMaterial(marker, registries.liquids(), 0);
+		}
+		FullCapabilityTestFixture.bindFull(source, registries, 293.15, 8);
+		float[] positionVolume = source.exportChemicalParticleState().materials().copyPositionVolume();
+		for (int marker = 0; marker < source.particleCount(); marker++) {
+			boolean acid = positionVolume[marker * 4] < 2.0F;
+			source.setMarkerChemical(marker, Map.of(acid
+					? BuiltinChemicalDefinitions.HCL : BuiltinChemicalDefinitions.NAOH, 1_000_000L), acid);
+		}
+		for (int step = 0; step < 40; step++) source.step();
+		SignedDyadic sinkBefore = source.thermalAudit().externalSink();
+		SignedDyadic roundoffBefore = source.thermalAudit().roundoffResidual();
+		SignedDyadic inventoryBefore = source.exactInternalEnergy();
+		FluidDomain.ExactChemicalTransfer extracted = source.tryExtractExactChemical(3, 4, 5, 8.0F, 12);
+		check(extracted.transferred(), "thermal chemical bucket fixture could not be extracted");
+		// Capture is the next production action after the server-thread container transaction.
+		// It must accept the remaining inventory and the exported item energy as one closed audit.
+		source.exportThermalParticleState();
+		check(source.thermalAudit().externalSink().subtract(sinkBefore)
+				.equals(SignedDyadic.of(extracted.internalEnergy())),
+				"chemical bucket energy and region external-sink ledger diverged");
+		SignedDyadic carrierEnergy = inventoryBefore.subtract(source.exactInternalEnergy());
+		SignedDyadic representationResidual = SignedDyadic.of(extracted.internalEnergy()).subtract(carrierEnergy);
+		check(!representationResidual.equals(SignedDyadic.ZERO)
+				&& source.thermalAudit().roundoffResidual().subtract(roundoffBefore)
+				.equals(representationResidual),
+				"chemical bucket carrier/item representation residual was not audited exactly");
 	}
 
 	/** Frozen M7.0 wall-time budgets, measured only by the explicit full chemistry selector. */

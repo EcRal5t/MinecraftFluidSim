@@ -515,6 +515,13 @@ S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Bri
 * 性能复审没有把热力学修复掩盖成阈值调整：JFR 定位到气液扫描为每个候选 cell 调用 `depositKeys()`，即使无颗粒库存也反复遍历全域 9,216 个 deposit head。生产 `ThermalCarrierContext` 现在从 `GranularDepositStore` 的目标 cell canonical sparse chain 读取 heat bath；平衡 interface 只做温度/饱和方向判定，直到首个可执行方向才构造 exact liquid inventory 与 thermal candidate。P2G marker loop 另把同一 marker 的 immutable 位置、体积、质量和材料列各读取一次，继续按原 center→pressure→X/Y/Z face 次序累加。三项都只删除不参与候选的重复派生或数组读取，不改变 phase extent、浮点加法顺序、操作预算或账本；`thermal,gas-liquid,air-network,air-cavity,granular,free-surface` 与包含 200 步四层地板场景的完整 `production-replay` 通过，后者仍得到 5,007 次 phase operation 并闭合 gas/source/sink/总 `U`；loader-neutral module validation 与扫描 441 个生产源的 architecture gate 通过。
 * 最终无并行 Minecraft 进程、无 JFR 的 `production-live-budget` 通过：默认 `8³` live 域 20 步 median/max 为 `11.302/16.863 ms`；最大装量 `24×16×24` 域 20 步最大 `174.813 ms`、连续超过 `200 ms` 为 0，并覆盖 1→3 substeps、74→267 aggregate PCG 与第 17 步 62 次真实相变操作。该结果关闭本轮 CPU 自动暂停回归，但 9,216-cell CPU 域仍不满足 20 Hz，完整材料/gas/thermal 后端迁移 GPU 的产品路线不变。
 
+### S21 化学容器热审计实机回归
+
+* 先确认上一轮开放域气体修复及性能收口已经以 `9a1a10a`、`486502b` 提交且工作树干净，再按用户实机日志追踪本轮故障。主崩溃不是 Iris、GPU 或 Realms：运行中的 `chemistrydemo` 被空材料桶抽取后，下一次 backend capture 在 `FlipThermalParticleState` 拒绝了不闭合的 thermal handoff；日志尾部另有 server runtime 已停止后 play disconnect listener 仍调用 `require` 的次生异常。
+* 根因位于多 marker 容器能量边界。旧路径逐 marker 用 binary64 `previousEnergy-newEnergy` 记 sink，再把这些值精确求和后舍入为一个 item `double`；运行过反应、传导和 marker 演化后，逐项表示、实际 raw carrier `U_before-U_after` 与整桶一次舍入不再相同。现在提取计划在修改前按每个 raw carrier 能量和 planned new energy 构造 exact dyadic 总差，以它作为真实搬运能量；marker 截断先按实际 carrier 差闭合 region，整件物品只舍入一次，再把 item raw energy 与 exact carrier 差单列为 thermal roundoff。最终 external sink 与 `ThermalContents` raw energy 完全相等，没有放宽 handoff 审计、温度修补或材料特判；材料 mixture 与 chemical 两条抽取路径共用同一结算。
+* 既有 chemical container round-trip 表征已替换为 production registries、0.5 m cell、HCl/NaOH 对半、40 个完整 logical step 后抽取 8 BV 的场景；它要求下一次 thermal capture 成功、external sink 等于物品能量，并明确证明该场景的 exact carrier/item representation residual 非零且只出现在 roundoff。play disconnect listener 改为可选查找 runtime：正常在线事件仍清理 console viewer/session，shutdown 已先移除 runtime 时不再制造第二个停止异常。
+* JDK 26.0.2 / Java 25 target 下，`chemistry,thermal,containers,protocol,cut-cell` 五个最近 CPU selector、loader-neutral `runModuleValidation` 与扫描 441 个生产源的 architecture gate 全部通过；改动 Java 的 unused-import 审计和 `git diff --check` 通过，architecture baseline 也按当前 441 个生产源回填。该回归现可由自动 capture、item/sink 与 exact roundoff 共同观察，不需要再次进游戏验证。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

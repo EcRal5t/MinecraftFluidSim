@@ -136,6 +136,6 @@ container-transfer 根目录是严格短期恢复域：未知文件名、目录�
 
 ## 守恒边界
 
-对 insert：item resource 减少量 = region external source 增加量；对 extract：region external sink/transfer ledger 增加量 = item resource 增加量。材料质量、species、solid composition 和总内能分别闭合，不能只凭体积相等通过事务。
+对 insert：item resource 减少量 = region external source 增加量；对 extract：region external sink/transfer ledger 增加量 = item resource 增加量。材料质量、species、solid composition 和总内能分别闭合，不能只凭体积相等通过事务。含热抽取以实际 carrier `U` 的 exact dyadic 变化为物理量，整件物品只舍入一次；external sink 使用物品保存的 raw energy，舍入差单列 thermal roundoff，不能逐 marker 累积近似后令 item 与 region 分叉。
 
 创造放出没有物品侧减少，因此明确记 region external source；创造装取仍必须从 region 删除，只是 Minecraft 不消费/替换玩家物品。这个不对称是显式 actor 语义，不得隐藏在 tooltip 或 item damage 中。

@@ -79,7 +79,8 @@ public final class FluidProtocolServer {
 			runtime.regionObservation().sendAllTo(listener.player);
 		});
 		ServerPlayConnectionEvents.DISCONNECT.register((listener, server) -> {
-			MmmRuntimeRegistry.require(server).controllerConsole().forgetInteractiveViewer(listener.player.getUUID());
+			MmmRuntime runtime = MmmRuntimeRegistry.find(server);
+			if (runtime != null) runtime.controllerConsole().forgetInteractiveViewer(listener.player.getUUID());
 			removeSession(server, listener.player.getUUID());
 		});
 	}

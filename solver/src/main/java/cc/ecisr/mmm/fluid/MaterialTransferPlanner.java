@@ -297,6 +297,7 @@ final class MaterialTransferPlanner {
 			return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		}
 		if (!acceptsLedger.test(removed)) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		SignedDyadic extractionEnergy = exactExtractionEnergy(plan);
 		for (ExtractionAllocation allocation : plan) {
 			if (allocation.chemicalPlan().kept() != null) {
 				domain.chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
@@ -307,8 +308,10 @@ final class MaterialTransferPlanner {
 		}
 		for (int marker = domain.particles.count() - 1; marker >= 0; marker--) if (domain.particles.volume(marker) == 0.0F) domain.removeParticle(marker);
 		domain.gridDirty = true;
-		double removedEnergy = domain.thermalState == null ? 0.0 : SignedDyadic.sum(plan.stream()
-				.mapToDouble(allocation -> allocation.thermalPlan().removedEnergy()).toArray()).toDouble();
+		double removedEnergy = extractionEnergy.toDouble();
+		if (domain.thermalState != null) {
+			domain.thermalState.settleExternalExtraction(extractionEnergy, removedEnergy);
+		}
 		return new FluidDomain.ExactChemicalTransfer(true, removed, removedEnergy);
 	}
 	FluidDomain.ExactMixtureTransfer extractMixture(
@@ -378,6 +381,7 @@ final class MaterialTransferPlanner {
 			}
 		}
 		if (remaining > settlementTolerance) return new FluidDomain.ExactMixtureTransfer(false, List.of());
+		SignedDyadic extractionEnergy = exactExtractionEnergy(plan);
 		for (ExtractionAllocation allocation : plan) {
 			if (domain.chemicalParcels != null && allocation.chemicalPlan().kept() != null) {
 				domain.chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
@@ -406,9 +410,23 @@ final class MaterialTransferPlanner {
 				result.add(new FluidDomain.MaterialPortion(handle, removedVolume, removedMass));
 			}
 		}
-		double removedEnergy = domain.thermalState == null ? 0.0 : SignedDyadic.sum(plan.stream()
-				.mapToDouble(allocation -> allocation.thermalPlan().removedEnergy()).toArray()).toDouble();
+		double removedEnergy = extractionEnergy.toDouble();
+		if (domain.thermalState != null) {
+			domain.thermalState.settleExternalExtraction(extractionEnergy, removedEnergy);
+		}
 		return new FluidDomain.ExactMixtureTransfer(true, List.copyOf(result), removedEnergy);
+	}
+
+	private SignedDyadic exactExtractionEnergy(List<ExtractionAllocation> plan) {
+		if (domain.thermalState == null) return SignedDyadic.ZERO;
+		SignedDyadic carrierEnergy = SignedDyadic.ZERO;
+		for (ExtractionAllocation allocation : plan) {
+			LiquidEnergyColumn.Truncation thermal = allocation.thermalPlan();
+			carrierEnergy = carrierEnergy.add(SignedDyadic.of(
+					domain.thermalState.liquidInternalEnergy(allocation.particle()))
+					.subtract(SignedDyadic.of(thermal.newEnergy())));
+		}
+		return carrierEnergy;
 	}
 
 	/**
