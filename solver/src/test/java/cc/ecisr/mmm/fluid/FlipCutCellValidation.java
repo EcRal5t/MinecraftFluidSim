@@ -9,6 +9,7 @@ public final class FlipCutCellValidation {
 
 	public static void main(String[] args) {
 		volumeAndSharedFaceFractionsAreConsistent();
+		wallAreasFollowMicroGeometry();
 		bodyOverlapExcludesOccupiedMicroCells();
 		cutCellSweepStopsOnlyTheContactNormal();
 		exactMarkerDisplacementUsesMicroOccupancy();
@@ -45,6 +46,20 @@ public final class FlipCutCellValidation {
 		checkClose(domain.openFaceFractionZ(1, 1, 2), 0.5F, 0.0F, "positive Z aperture");
 	}
 
+	private static void wallAreasFollowMicroGeometry() {
+		int size = 5;
+		FlipCutCellGeometry geometry = new FlipCutCellGeometry(size, size, size);
+		int cutCell = index(size, size, 2, 2, 2);
+		geometry.replaceMask(cutCell, LOWER_HALF);
+		checkClose(geometry.solidWallArea(cutCell, 0), 0.0F, 0.0F, "cut-cell X-normal wall area");
+		checkClose(geometry.solidWallArea(cutCell, 1), 1.0F, 0.0F, "cut-cell internal Y-normal wall area");
+		checkClose(geometry.solidWallArea(cutCell, 2), 0.0F, 0.0F, "cut-cell Z-normal wall area");
+		checkClose(geometry.solidWallArea(index(size, size, 1, 2, 2), 0), 0.5F, 0.0F,
+				"open neighbor did not own the cut-cell side wall");
+		checkClose(geometry.solidWallArea(index(size, size, 2, 1, 2), 1), 1.0F, 0.0F,
+				"open neighbor did not own the cut-cell lower wall");
+	}
+
 	private static void cutCellSweepStopsOnlyTheContactNormal() {
 		int size = 3;
 		boolean[] fullySolid = new boolean[size * size * size];
@@ -53,7 +68,8 @@ public final class FlipCutCellValidation {
 		FlipParticleCollision collision = new FlipParticleCollision(size, size, size, 1.0F, fullySolid, geometry);
 		float[] x = {1.75F}, y = {1.50F}, z = {1.50F};
 		float[] velocityX = {-10.0F}, velocityY = {0.0F}, velocityZ = {2.0F};
-		collision.advect(x, y, z, velocityX, velocityY, velocityZ, 1, 0.10F);
+		collision.advect(x, y, z, velocityX, velocityY, velocityZ,
+				velocityX, velocityY, velocityZ, 1, 0.10F);
 		check(x[0] >= 1.5F, "swept marker crossed a cut-cell wall");
 		checkClose(velocityX[0], 0.0F, 0.0F, "cut-cell contact normal velocity");
 		checkClose(z[0], 1.70F, 1.0E-6F, "cut-cell tangential displacement");

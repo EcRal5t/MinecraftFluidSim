@@ -16,6 +16,7 @@ final class GpuProbeScenario {
 	static final float GRAVITY = 9.81F;
 	static final float DENSITY = 1_000.0F;
 	static final int PRESSURE_ITERATIONS = 96;
+	static final float PRESSURE_TOLERANCE = 1.0E-5F;
 	private static final int CHECKPOINT_INTERVAL_STEPS = 20;
 
 	private GpuProbeScenario() { }
@@ -48,7 +49,7 @@ final class GpuProbeScenario {
 
 	static FluidSolverConfig cpuConfig() {
 		return new FluidSolverConfig(CELL_SIZE, DENSITY, GRAVITY, TIME_STEP,
-				200, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F);
+				200, PRESSURE_TOLERANCE, 0.45F, 2.0E-3F, 0.80F);
 	}
 
 	static boolean checkpointDue(int completedGeneration, GpuProbeCheckpoint current) {

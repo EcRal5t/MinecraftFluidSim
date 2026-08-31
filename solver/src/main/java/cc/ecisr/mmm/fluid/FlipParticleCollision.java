@@ -29,6 +29,9 @@ final class FlipParticleCollision {
 			float[] particleX,
 			float[] particleY,
 			float[] particleZ,
+			float[] motionX,
+			float[] motionY,
+			float[] motionZ,
 			float[] velocityX,
 			float[] velocityY,
 			float[] velocityZ,
@@ -40,17 +43,26 @@ final class FlipParticleCollision {
 		float maximumY = sizeY * cellSize - radius;
 		float maximumZ = sizeZ * cellSize - radius;
 		for (int particle = 0; particle < particleCount; particle++) {
-			float targetX = clamp(particleX[particle] + velocityX[particle] * dt, radius, maximumX);
+			float proposedX = particleX[particle] + motionX[particle] * dt;
+			float targetX = clamp(proposedX, radius, maximumX);
+			if (proposedX < radius) velocityX[particle] = Math.max(0.0F, velocityX[particle]);
+			else if (proposedX > maximumX) velocityX[particle] = Math.min(0.0F, velocityX[particle]);
 			particleX[particle] = sweepAxis(
 					particleX[particle], targetX, particleY[particle], particleZ[particle],
 					0, particle, velocityX, velocityY, velocityZ
 			);
-			float targetY = clamp(particleY[particle] + velocityY[particle] * dt, radius, maximumY);
+			float proposedY = particleY[particle] + motionY[particle] * dt;
+			float targetY = clamp(proposedY, radius, maximumY);
+			if (proposedY < radius) velocityY[particle] = Math.max(0.0F, velocityY[particle]);
+			else if (proposedY > maximumY) velocityY[particle] = Math.min(0.0F, velocityY[particle]);
 			particleY[particle] = sweepAxis(
 					particleY[particle], targetY, particleX[particle], particleZ[particle],
 					1, particle, velocityX, velocityY, velocityZ
 			);
-			float targetZ = clamp(particleZ[particle] + velocityZ[particle] * dt, radius, maximumZ);
+			float proposedZ = particleZ[particle] + motionZ[particle] * dt;
+			float targetZ = clamp(proposedZ, radius, maximumZ);
+			if (proposedZ < radius) velocityZ[particle] = Math.max(0.0F, velocityZ[particle]);
+			else if (proposedZ > maximumZ) velocityZ[particle] = Math.min(0.0F, velocityZ[particle]);
 			particleZ[particle] = sweepAxis(
 					particleZ[particle], targetZ, particleX[particle], particleY[particle],
 					2, particle, velocityX, velocityY, velocityZ

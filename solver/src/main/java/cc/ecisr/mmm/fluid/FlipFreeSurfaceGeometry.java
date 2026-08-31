@@ -10,13 +10,10 @@ import java.util.Arrays;
  * <p>The exact marker-volume sum in a cell supplies only the plane's volume fraction;
  * it never replaces the marker ledger. A centered fraction gradient supplies the
  * orientation. Pressure still uses {@code markerCount > 0} for phase classification,
- * so interfaces that would put an occupied cell center outside liquid are regularized
- * to {@link #MINIMUM_THETA}. Runtime cut-cell open volume normalizes the local
- * liquid fraction; shared solid-face aperture is applied separately by the
+ * Runtime cut-cell open volume normalizes the local liquid fraction; shared solid-face aperture is applied separately by the
  * pressure operator.</p>
  */
 final class FlipFreeSurfaceGeometry {
-	static final float MINIMUM_THETA = 0.05F;
 	private static final float FRACTION_EPSILON = 1.0E-6F;
 	private static final float NORMAL_EPSILON_SQUARED = 1.0E-10F;
 
@@ -103,17 +100,6 @@ final class FlipFreeSurfaceGeometry {
 			normalZ[index] = nz;
 			planeOffset[index] = solvePlaneOffset(nx, ny, nz, centerFraction);
 		}
-	}
-
-	float pressureTheta(int fluidIndex, int directionX, int directionY, int directionZ) {
-		float fraction = liquidFraction[fluidIndex];
-		if (fraction >= 1.0F - FRACTION_EPSILON) return 0.5F;
-		float outward = normalX[fluidIndex] * directionX
-				+ normalY[fluidIndex] * directionY + normalZ[fluidIndex] * directionZ;
-		if (!(outward > 1.0E-6F)) return 1.0F;
-		float centerProjection = 0.5F * (normalX[fluidIndex] + normalY[fluidIndex] + normalZ[fluidIndex]);
-		float distance = (planeOffset[fluidIndex] - centerProjection) / outward;
-		return clamp(distance, MINIMUM_THETA, 1.0F);
 	}
 
 	float liquidFraction(int index) {

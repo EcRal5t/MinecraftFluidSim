@@ -50,9 +50,10 @@
 | 力学 stage 边界 | `MechanicalStageAssembly.java`、`MechanicalStepPipeline.java`、`ParticleToGridStage.java`、`GranularMechanicalStage.java`、`BodyForceStage.java`、`PressureProjectionStage.java`、`GridToParticleStage.java`、`ParticleAdvectionStage.java` | assembly 只负责一次性接线；stage 只持有稳定 workspace 与本 stage 的窄 `Access`，不得保存 aggregate/facade 或通过通用 god adapter 取得无关状态 |
 | 热化学 stage 边界 | `ThermochemistryStageAssembly.java`、`ThermochemistryPipeline.java`、`ThermalTransportStage.java`、`ChemicalReactionStage.java`、`GranularReactionStage.java`、`CondensedPhaseChangeStage.java`、`GasLiquidPhaseChangeStage.java`、`PhaseChangeStageSupport.java` | pipeline 是 conduction→chemical reaction→granular reaction→condensed phase→gas phase 的唯一生产顺序源；两类 phase 共享 exact carrier/composition 操作而不互相持有；assembly/stage 不保存 aggregate |
 | 后端完整候选 | `FluidDomainState.java`、`FluidStepRequest.java`、`FluidStepCandidate.java`、`FluidThermalStepRequest.java`、`FluidThermalStepCandidate.java`、`FluidSolverBackend.java`、`application/RegionApplicationService.java`、`FluidRegionRepository.java` | 后端只计算私有完整后继；application 校验 backend/紧邻 generation/完整 `Layout`，repository 按 live identity 重验后 atomic adopt；accepted result 只携带 stats/impulse，不向 adapter 返回 candidate arrays |
-| 自由面/压力 | `FlipPressurePhaseGeometry.java`、`FlipFreeSurfaceGeometry.java`、`FlipVolumeDriftCorrection.java`、`FlipVelocityExtrapolator.java` | 守恒 marker footprint 决定 pressure component；含真实 marker 的 pressure cell 使用 exact PLIC，footprint-only cell 使用重建 fallback；贴壁 marker 低占位格不降成 air fringe；carrier face 与库存仍取实际 marker；PCG 使用绝对 RMS 容差，未收敛候选安全暂停 |
+| 自由面/压力/传递 | `FlipPressurePhaseGeometry.java`、`FlipFreeSurfaceGeometry.java`、`FlipTransferScheme.java`、`GridToParticleStage.java`、`DivergenceConformingVelocityField.java`、`ParticleAdvectionStage.java`、`FlipVelocityExtrapolator.java` | 守恒 marker footprint/PLIC 的 center containment 决定 pressure unknown；物理 pressure 不接收体积漂移或过容量伪源；G2P 取能量可接受的最大 FLIP 增量；全开面平流使用散度一致 `H(div)`/RK4，partial cut-face 保留 cut-cell 路径；PCG 使用绝对 RMS 容差，未收敛候选安全暂停 |
+| 表面张力/润湿 | `BodyForceStage.java`、`SurfaceTensionWorkspace.java`、`FlipCutCellGeometry.java`、`FluidDomain.rebuildSurfaceTensionPressure` | 已解析液气面走 sharp jump，亚格 carrier 面走互补 CSF；液液走 pairwise balanced-force；Young 接触角只进入 cut-wall surface energy，不旋转曲率法向 |
 | cut-cell/CCD | `FlipCutCellGeometry.java`、`FlipParticleCollision.java` | pressure 与碰撞共享 aperture；checkpoint/handoff 保留 raw micro mask；只截断命中法向 |
-| logical step 尾部与 reseed | `LogicalStepTailAssembly.java`、`GranularTransitionStage.java`、`ParticleReseedStage.java`、`FlipParticleReseeder.java`、`CarrierMutationCoordinator.java` | granular compaction/deposit 与 reseed 分列；reseed 保持体积、质量、动量、质心和相身份，并经 coordinator 同序搬运 chemistry/thermal side column |
+| logical step 尾部与 reseed | `LogicalStepTailAssembly.java`、`GranularTransitionStage.java`、`ParticleReseedStage.java`、`FlipParticleReseeder.java`、`ConservativeMarkerSampling.java`、`CarrierMutationCoordinator.java` | granular compaction/deposit 与 reseed 分列；reseed 保持体积、质量、动量、质心和相身份；不可精确表示的 float merge 保留 residual marker 并单列 conservation refusal；coordinator 同序搬运 chemistry/thermal side column |
 | 材料与单位边界 | `FluidMaterial*.java`、`BuiltinFluidMaterials.java`、`units/SolverUnitScale.java` | marker 体积与 solver mass 独立；SI/容器只在统一边界换成 m³/kg；stable ID 上链，runtime handle 不上链 |
 | 气体 | `fluid/air/`、`GasRegistryCodec.java`、`AirCavityScanner.java`、`GasLiquidPhaseModel.java` | component nanos/kg/species/source/sink 闭合；gas mass/residual 均为 kg；component-local allowed species 由 world registry 冻结并在所有发布入口验证；热区域持久拓扑同代 |
 | 化学 | `chemistry/`、`FlipChemicalParticleState.java`、`units/SolverUnitScale.java` | exact species/组成/电荷/kg 残差；indicator provenance 不隔离反应 |
@@ -71,7 +72,7 @@
 - 精确水量丢失：`setSolid`、marker create/remove、transfer primitive、`escapedSink`。
 - 压力/散度：`solvePressure`、`applyPressureMatrix`、`projectVelocity`。
 - 小水滴慢落：`FlipVelocityExtrapolator`、`trilinearValid`。
-- 水量正常但液面下降：drift correction、reseed 分布；禁止 renderer 增厚或强制找平。
+- 水量正常但液面下降：先区分 raw-float exact marker ledger、顺序相关 reduction、8-bit 展示量化和 containing-cell 分布，再查 P2G face weight、G2P 能量约束、pressure PLIC、`H(div)` 平流与 reseed；禁止向物理 RHS 塞漂移源、增加第二位置投影、renderer 增厚或强制找平。
 - partial 方块或穿墙：cut-cell aperture、marker CCD、world shape adapter。
 - 水体存在但客户端消失：snapshot ledger、marker mask、renderer scalar/iso threshold。
 - 液液界面异常：material fraction、surface mesher、surface tension；视觉法线与物理锐化分开评估。
@@ -112,7 +113,7 @@
 | protocol/snapshot | `protocol` | 改注册入口才启动专服 |
 | field probe/controller console/thermal setpoint payload | `protocol` | 改 carrier 观察追加对应 `granular`/`air-network`/`thermal`；改 summary 或破坏性 preview token 追加 `lifecycle`；改 REMOVED 持久边界追加 `region-state`/`ownership` |
 | controller/footprint | `boundary` | 改预算追加 `region-manager` |
-| pressure/free-surface/MAC/drift | `free-surface` | 改 marker 分布追加 `reseeding` |
+| pressure/free-surface/MAC/G2P/advection | `free-surface` | 改 marker 分布追加 `reseeding`；改 surface tension 追加 `surface-tension`；改 gas pressure 边界追加 `gas-liquid` |
 | cut-cell/CCD | `cut-cell` | Minecraft adapter 追加 `shape` |
 | `VoxelShape` adapter | `shape` | 不运行长期 solver 门 |
 | marker split/merge | `reseeding` | 改 checkpoint 追加 `region-state` |
@@ -143,6 +144,6 @@
 
 ## GPU probe
 
-`gpu-probe` 不修改世界或存档，当前主 Mod 仍以 CPU 为规范后端。数值入口位于 `gpu-probe-kernel/src/main/java/cc/ecisr/mmm/gpuprobe/`，Fabric 入口位于 `gpu-probe/src/main/java/cc/ecisr/mmm/gpuprobe/`。改 buffer layout 时同步 `FlipGpuResources`、`FlipKernelBindings`、shader 与 readback；改提交顺序时只经 `GpuStepScheduler`；主 Mod 冲突与 snapshot 只经 `GpuProbeHostIntegration`。设备性能使用 Vulkan timestamp，调度与超时仍使用 wall time。生产 GPU 后端必须经 `solver` 的不可变输入/完整 candidate 边界接入，不能取得世界或持久化提交权。
+`gpu-probe` 不修改世界或存档，当前主 Mod 仍以 CPU 为规范后端。数值入口位于 `gpu-probe-kernel/src/main/java/cc/ecisr/mmm/gpuprobe/`，Fabric 入口位于 `gpu-probe/src/main/java/cc/ecisr/mmm/gpuprobe/`。改 buffer layout 时同步 `FlipGpuResources`、`FlipKernelBindings`、shader 与 readback；改提交顺序时只经 `GpuStepScheduler`；主 Mod 冲突与 snapshot 只经 `GpuProbeHostIntegration`。GPU reseed 的 raw-float merge 可表示性判定必须保留 GLSL `precise`，否则编译器代数重排会把守恒检查消掉。设备性能使用 Vulkan timestamp，调度与超时仍使用 wall time。当前 kernel 只有单一常密度 carrier，不含材料/表面张力/gas/thermal candidate；生产 GPU 后端必须经 `solver` 的不可变输入/完整 candidate 边界接入，不能取得世界或持久化提交权。
 
-最近静态门为 `:gpu-probe-kernel:compileJava :gpu-probe:compileJava :gpu-probe:runAdapterValidation verifyArchitecture`。改 native owner、shader、checkpoint 或 GPU 数值时另跑 `:gpu-probe-kernel:runHeadlessGpuProbe` 与 `:gpu-probe-kernel:runGpuFlipValidation -PgpuProbeSkipLarge=true`；后者包含长跑自由面门，失败不能以阈值放宽、速度钳制或展示修补替代。
+最近静态门为 `:gpu-probe-kernel:compileJava :gpu-probe:compileJava :gpu-probe:runAdapterValidation verifyArchitecture`。改 native owner、shader、checkpoint 或 GPU 数值时先跑 `:gpu-probe-kernel:runGpuFlipValidation -PgpuProbeSkipLarge=true -PgpuProbeSkipLong=true`；长程分布/能量最近门为 `:gpu-probe-kernel:runGpuLongRunSurfaceValidation -PgpuProbeLongRunSteps=100`，完整 1000 步再去掉该属性或运行默认任务。改 capability/device 初始化另跑 `:gpu-probe-kernel:runHeadlessGpuProbe`。长跑以每个 raw float 的精确二进制有理数和比较库存；GPU reduction 只在解析舍入界内作在线诊断。其余只比较机械能非增、域边界和发布 footprint 等可比不变量，不要求 CPU/GPU 浮点归约后的逐格轨迹一致；失败不能以阈值放宽、速度钳制或展示修补替代。

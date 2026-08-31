@@ -76,6 +76,9 @@ registerGpuProbe(
 	if (providers.gradleProperty('gpuProbeSkipLarge').map(String::toBoolean).getOrElse(false)) {
 		probeTask.args '--skip-large'
 	}
+	if (providers.gradleProperty('gpuProbeSkipLong').map(String::toBoolean).getOrElse(false)) {
+		probeTask.args '--skip-long'
+	}
 }
 
 registerGpuProbe(
@@ -94,6 +97,9 @@ registerGpuProbe(
 	'gpu-long-run-surface-validation-work'
 ) { probeTask ->
 	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+	if (providers.gradleProperty('gpuProbeLongRunSteps').isPresent()) {
+		probeTask.args providers.gradleProperty('gpuProbeLongRunSteps').get()
+	}
 }
 
 publishing {

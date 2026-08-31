@@ -26,10 +26,11 @@ hydrostatic sleep 期间的非运动轴使用 `FluidThermalStepRequest` / `Fluid
 ## 网格与 marker
 
 - 默认 cell size 为 0.5 m；每个 Minecraft block 对应 2×2×2 cells。
-- `particleVolume` 的双精度和是液体体积真值；逐格 exact marker sum 只由该真值正向汇总。
+- 每个 marker 的 raw float `particleVolume` 是液体体积真值，物理总量是这些二进制有理数的精确和；逐格 marker sum 只由该真值正向汇总。顺序相关的 float/double reduction 只能作带解析舍入界的诊断，不能替代 exact ledger。
 - `volume[]` 是 PIC 平滑、展示和既有表面几何的派生场，不参与库存或 pressure phase 结算；pressure 使用独立的守恒 marker footprint。
-- P2G/G2P 使用共享的 valid face；MAC 空气外推从开放压力面播种，G2P 不采未定义空气零值。三轴 face splat 直接写入固定 SoA，不为每个 marker/axis 创建 callback；上一 logical step 末已完整发布且 `gridDirty == false` 的派生网格可供下一步首个 substep 直接使用，particle advection 与任何 carrier edit 都会重新置 dirty，后续 substep 不能跳过重建。
-- reseed split/merge 保持体积、质量、动量和质心，并受 marker 硬预算限制；不跨 material 或 phase。
+- P2G/G2P 使用共享的 valid face；均匀密度时 face 分子/分母按 marker 体积散射，变密度时按 marker 质量散射，并在归一化前保留同一份 P2G face weight 供动能度量。MAC 空气外推从开放压力面播种，G2P 不采未定义空气零值。三轴 face splat 直接写入固定 SoA，不为每个 marker/axis 创建 callback；上一 logical step 末已完整发布且 `gridDirty == false` 的派生网格可供下一步首个 substep 直接使用，particle advection 与任何 carrier edit 都会重新置 dirty，后续 substep 不能跳过重建。
+- G2P 不使用固定 FLIP/PIC 比例。对全体 marker 写成 `v(alpha) = v_pic + alpha * (v_old - v_p2g)`，解析选择 `[0,1]` 内不超过 `max(E_pic, E_projected_grid)` 的最大 `alpha`；纯 FLIP 能量可接受时严格取 `1`，否则才退到能量可行边界。这是传递算子的全局能量约束，不是逐粒子速度钳制，也不冒充黏性。registry 已保存材料黏度，但当前连续液体动量方程还没有黏性扩散 stage。
+- reseed 以标准 `2×2×2` marker quadrature 的单 marker 体积决定逐格目标数；split 保持体积、质量、动量和质心，merge 还要求两个 raw float 体积之和可由一个 float 精确表示，否则保留 residual marker 并报告 conservation refusal；不跨 material 或 phase。GPU 的相同判定必须以禁止代数重排的精确求值执行。
 
 ### 内存布局
 
@@ -51,9 +52,9 @@ marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新�
 ## Logical step
 
 1. 读取当前 geometry、cut-cell、carrier occupancy 和边界条件。
-2. P2G，施加重力、热浮力、气压、颗粒和实体的派生力。
-3. 构造目标散度并求解 pressure projection。
-4. G2P、FLIP/PIC 混合、marker advection 与 CCD。
+2. 体积/质量加权 P2G，施加重力、热浮力、气压、颗粒和实体的派生力。
+3. 构造物理目标散度并求解 pressure projection；该解是本步对外 pressure/机械功真值。
+4. 以投影后网格动能约束 G2P 的最大 FLIP 增量；marker 位置沿与 MAC 离散散度一致的二阶 `H(div)` 场以 RK4 推进，再进入 CCD；partial cut-face 暂沿用 cut-cell 插值与 CCD。
 5. 在传导前冻结颗粒反应 dirty cell，随后依次执行有限体积传导、液相反应、颗粒析出/溶解、凝聚相变和气液相变；两类相变共享同一操作预算。
 6. 执行 active/deposit compaction、沉积与局部唤醒。
 7. 经 `CarrierMutationCoordinator` 执行 reseed，同时搬运 chemistry/thermal side column。
@@ -66,7 +67,7 @@ marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新�
 ## 自由面与压力
 
 - 开放液面压力使用环境或 gas-node pressure；密闭气体只通过同一界面边界进入 projection。
-- marker 分布 drift correction 只生成目标散度，不改 marker 体积，不强制找平；它读取与 pressure component 相同的守恒 C1 marker footprint，不能把独立的 PIC/展示 `volume[]` 误当成压缩量。
+- 物理 pressure projection 的不可压目标散度为零（再叠加表面张力、移动固体等真实边界项），不接收 marker 分布误差或逐格过容量作为机械源项。marker 聚集只由散度一致平流、CCD 与守恒 reseed 处理；不得另造目标散度、位置投影或体积修正来掩盖传递误差。
 - 表面张力使用 PLIC/相分数构造曲率和 balanced-force 压力项；`sigma = 0` 不产生额外力。
 - 液液相共享机械 pressure/velocity，但保持材料身份、界面张力和密度分层。
 
@@ -76,20 +77,28 @@ pressure 位于 cell center，速度位于 face。离散目标是：
 div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 ```
 
-- 每个 marker 按由标准 `2×2×2` 四分之一格点诱导的 C1 紧支撑核，把自身真实体积守恒分配到开放邻格；该 footprint 决定 pressure fraction/component，不改 marker 库存。含真实 marker 的 pressure cell 使用 containing-cell exact marker PLIC；只有 footprint 支撑但本格没有 marker 的 pressure cell 才使用重建 PLIC，并消费相邻 pressure-air fringe。这样 marker 在 containing cell 内的微小位移不会反向改变一个原本静止的 exact 平面水头，部分格的真实 PLIC 也不会被更宽的 footprint 反向改写。
-- 含 cell center（fraction `>= 0.5`）的 bulk component 以中心内格作为基本 pressure unknown；贴固定边界且含真实 marker 的低占位格也保留为 pressure unknown，避免窄柱里的真实载体被误当成 footprint-only air fringe。完全低于中心但接触固定边界的连通薄层整体进入 pressure；没有壁支撑的低 fraction footprint fringe 和远离边界的孤立小滴保持 ballistic carrier。
+- 每个 marker 按由标准 `2×2×2` 四分之一格点诱导的 C1 紧支撑核，把自身真实体积守恒分配到开放邻格；该 footprint 决定 pressure fraction/PLIC，不改 marker 库存，也不使用展示 `volume[]`。
+- pressure unknown 只包含其重建 PLIC 真正覆盖 cell center 的开放格；满格直接进入，部分格以 plane/center 几何判定。含 marker 但只占据中心以下薄层的格仍是液体 carrier，可参与重力、平流和补充界面力，却不能仅凭 marker 存在强行取得 pressure unknown。这样 pressure 矩阵、ghost-fluid 距离与载体拓扑使用同一界面几何，不再靠极小 `theta` 或 marker override 制造薄压力层。
 - 重力、热浮力和速度载体 face 仍由实际 marker occupancy 激活，不能因 pressure footprint 变宽而给孤立液滴稀释重力。
 - cut-face aperture、界面距离和 `1/rho` 面系数同时进入矩阵、预条件器和最终投影，避免三个路径使用不同几何。
 - 变密度 face coefficient 按两侧界面距离守恒加权；同密度材料必须退化为纯水矩阵。
 - PCG 只对活动流体未知量求解；`pressureTolerance` 是绝对 RMS 代数残差，不随 RHS/静水载荷放大。迭代预算耗尽、breakdown、非有限残差或无法闭合有限库存/容量 owner 的 gas topology 会以各自 typed failure 拒绝完整候选并把生产区域标记 `NUMERICAL_PAUSE`，不会以未收敛压力或部分 gas remap 继续 advection。其他 `IllegalStateException` 不在该边界被宽泛吞掉。
 - 环境表压为 gauge zero。gas topology 的 runtime lineage 还会沿连通 pressure-air fringe 扩展到实际 ghost face，但不会穿过 pressure-fluid bulk。只有密闭气体边界时，求解器先减去一个统一 gas gauge reference，PCG 只承受相对压力；对外压力观察、相平衡与 pending `-p ΔV` 再加回该 reference。多个 gas lineage 之间的压差不被消除。
-- drift correction 和 moving-solid occupancy 只通过 `target_divergence` 进入 projection，不直接缩放 marker；相变 pending 只结算已经发生的 marker 几何变化对应的压力功，不能再次制造一份散度源。
+- moving-solid occupancy 只通过物理 `target_divergence` 进入 projection，不直接缩放 marker；相变 pending 只结算已经发生的 marker 几何变化对应的压力功，不能再次制造一份散度源。
+
+### 液体与可压缩气体的能力边界
+
+当前空间动量网格仍只承载凝聚相：液体以不可压约束求 pressure，密闭/开放气体由 `AirNetwork` 保存组分、质量、`U`、温度、密度和状态方程，并以 node pressure 作为同一液气界面的边界条件。气体目前没有逐 cell/face 的 FLIP 动量场，因此不能把液体的零散度 projection 套到气体上并声称已经得到可压缩流。
+
+后续统一气液空间算法时应复用同一守恒 P2G/G2P、`H(div)` 重建、平流和碰撞算子；相别差异进入本构闭合：液体取不可压极限，气体由状态方程把密度/内能变化与 pressure、非零散度联系起来。低密度、高密度比、混合与相变必须由质量、能量和组分方程自然产生，不能用材料 ID 分支、固定 FLIP 比例或速度钳制代替可压缩闭合。
 
 ### PLIC、表面张力与润湿
 
 自由面由 cell liquid fraction 与局部法向构造 PLIC。ghost-fluid 距离决定 fluid-air pressure face；液液界面则从逐相体积分数字段构造 pairwise 界面。
 
-液气压力跳跃满足 `delta p = sigma * kappa`。液液张力使用 phase 无序对定义，以 balanced-force CSF 接入同一 pressure 路径，减少压力梯度与曲率力离散不一致造成的寄生流。近壁法向只由 Young 接触角旋转；没有“浅水吸墙”、墙角偏置或按材料 ID 写死润湿。
+液气压力跳跃满足 `delta p = sigma * kappa`：有 pressure unknown 的已解析界面走 sharp ghost-fluid jump；两侧都没有 pressure unknown、但 marker carrier 跨面的亚格界面走互补 balanced-force CSF，二者拓扑互斥。液液张力使用 phase 无序对定义，以 balanced-force CSF 接入同一 pressure 路径。液气曲率法向始终只来自液气几何；润湿由 Young 表面能 `sigma_sl - sigma_sg = -sigma cos(theta)` 的切向离散梯度产生，固壁面积取自同一 `2×2×2` cut-cell microgeometry（含域边界），不旋转曲率法向，也不使用浅水吸墙、墙角偏置或材料 ID 特判。
+
+当前 `gpu-probe-kernel` 只覆盖单一常密度不可压 carrier 的 pressure 几何、P2G/G2P、散度一致平流、碰撞和守恒 reseed。它尚未承载材料质量列、变密度、液气/液液表面张力与 Young 壁能、gas boundary、热化学或完整 immutable candidate，因此这些 CPU 能力不能被记作 GPU 已实现；probe 继续不具备生产资格。
 
 当前不可互溶相共享一个机械速度场：系统承诺静水压力、密度分层和界面张力，不声称解析界面切向滑移、乳化或湍流液滴破碎。
 
@@ -109,6 +118,7 @@ div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 ## Reseed 与传输不变量
 
 - split 把一个 marker 的体积、质量、动量和所有 side truth 按同一权重分给两个子 marker；merge 只在 material、phase 和化学可合并性一致时进行。
+- merge 只有在目标 raw float volume 能精确表示两 marker 的数学和时才提交；否则 marker 数可暂时高于 nominal target，但 exact 体积/质量优先，诊断必须区分 geometry、budget 与 conservation refusal。
 - marker 预算不足时先拒绝整个候选，不允许创建基础 marker 后再丢弃 side column。
 - insert/extract 先完成容量、可表示尾数、物品形状和事务预检，再修改数组。
 - 数值清理只能删除零或被显式转入 sink 的库存；“太小而看不见”不是删除理由。

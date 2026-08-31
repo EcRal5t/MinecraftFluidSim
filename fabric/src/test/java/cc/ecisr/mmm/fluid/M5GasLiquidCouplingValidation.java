@@ -243,9 +243,13 @@ public final class M5GasLiquidCouplingValidation {
 		check(Math.abs(addedTotal - 96.0F) <= 1.0E-3F, "staged fill must add the requested water, got " + addedTotal);
 		check(domain.gasBoundary().standardVolumeNanos(1) == initialGasNanos,
 				"sealed gas inventory must stay exactly constant without orifice edges");
-		check(Math.abs(domain.totalVolumeExact() - initialLiquidVolume - addedTotal) <= 1.0E-6
-				&& Math.abs(domain.totalMass() - initialLiquidMass - addedTotal * DENSITY) <= 1.0E-6,
-				"staged compression did not close liquid source volume/mass");
+		double volumeClosure = domain.totalVolumeExact() - initialLiquidVolume - addedTotal;
+		check(Math.abs(volumeClosure) <= 1.0E-6,
+				"staged compression did not close liquid source volume: " + volumeClosure);
+		double insertedVolume = domain.totalVolumeExact() - initialLiquidVolume;
+		double massClosure = domain.totalMass() - initialLiquidMass - insertedVolume * DENSITY;
+		check(Math.abs(massClosure) <= Math.ulp(domain.totalMass()),
+				"staged compression mass diverged from density times authoritative inserted volume: " + massClosure);
 		check(domain.gasBoundary().nodeCount() == 1, "sealed compression must keep exactly one cavity");
 		System.out.printf("  staged sealed compression: added=%.3f BV p=%+.3f Pa maxSpeed=%.6g m/s%n",
 				addedTotal, domain.gasBoundary().gaugePressure(1), maximumSpeed);

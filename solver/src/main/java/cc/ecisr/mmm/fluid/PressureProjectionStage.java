@@ -5,9 +5,10 @@ import cc.ecisr.mmm.fluid.air.AirNetwork;
 import java.util.Arrays;
 
 /**
- * The pressure projection stage: gas lineage refresh, reference anchoring, target-divergence
- * assembly (surface-tension, volume-drift and granular-moving-solid contributions), the PCG
- * solve through {@link PressureSystem} and the velocity projection. Loop order, float/double
+ * The pressure projection stage: gas lineage refresh, reference anchoring, physical target-divergence
+ * assembly (surface-tension and granular-moving-solid contributions), the PCG solve through
+ * {@link PressureSystem} and velocity projection.
+ * Loop order, float/double
  * typing, the absolute RMS tolerance and the typed non-convergence rejection are kept
  * verbatim; the pending phase-work plan is produced by the step pipeline only after
  * {@code solve} returns and before {@code projectVelocities} runs.
@@ -15,8 +16,7 @@ import java.util.Arrays;
 final class PressureProjectionStage {
 	record Workspace(
 			int sizeX, int sizeY, int sizeZ, FluidSolverConfig config, DomainGeometry geometry,
-			MacVelocityGrid mac, PressureProjectionWorkspace projection,
-			FlipFreeSurfaceGeometry freeSurfaceGeometry, SurfaceTensionWorkspace tension
+			MacVelocityGrid mac, PressureProjectionWorkspace projection, SurfaceTensionWorkspace tension
 	) { }
 
 	interface Access {
@@ -33,7 +33,6 @@ final class PressureProjectionStage {
 		boolean carrierFaceActive(int first, int second, float openArea);
 		float surfaceTensionBoundaryDivergence(int cell, float dt);
 		float granularMovingSolidDivergence(int cell, float dt);
-		float pressureOpenCellVolume(int cell);
 		float pressureInterfaceTheta(int fluidCell, int directionX, int directionY, int directionZ);
 		boolean variableDensityActive();
 		float pressureDensityScale(int first, int second);
@@ -74,9 +73,8 @@ final class PressureProjectionStage {
 					- access.pressureYFaceOpen(x, y, z) * state.mac.velocityY[access.yFaceIndex(x, y, z)]
 					+ access.pressureZFaceOpen(x, y, z + 1) * state.mac.velocityZ[access.zFaceIndex(x, y, z + 1)]
 					- access.pressureZFaceOpen(x, y, z) * state.mac.velocityZ[access.zFaceIndex(x, y, z)]) * inverseCell;
-			// Solve toward the drift target: div(u_projected) = targetDivergence.
 			float correctedDivergence = div + access.surfaceTensionBoundaryDivergence(index, dt)
-					- volumeDriftDivergence(index, dt) - access.granularMovingSolidDivergence(index, dt);
+					- access.granularMovingSolidDivergence(index, dt);
 			state.projection.divergence[index] = correctedDivergence;
 			state.projection.rhs[index] = rhsScale * correctedDivergence;
 			fluidCells++;
@@ -168,16 +166,6 @@ final class PressureProjectionStage {
 			if (referenceNode == AirNetwork.AMBIENT_NODE) return 0.0F;
 		}
 		return referenceNode == Integer.MAX_VALUE ? 0.0F : (float) gasBoundary.gasPressureOfNode(referenceNode);
-	}
-
-	private float volumeDriftDivergence(int index, float dt) {
-		float openVolume = access.pressureOpenCellVolume(index);
-		int x = index % state.sizeX, yz = index / state.sizeX;
-		int y = yz % state.sizeY, z = yz / state.sizeY;
-		return FlipVolumeDriftCorrection.targetDivergence(
-				(float) state.projection.pressureVolume[index], state.freeSurfaceGeometry.exactCellVolume(index), openVolume,
-				hasAirNeighbor(x, y, z), dt
-		);
 	}
 
 	private int findPressureAnchor() {

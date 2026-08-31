@@ -20,7 +20,7 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Owns the FLIP storage buffers and centralizes Vulkan memory allocation. */
 final class FlipGpuResources implements AutoCloseable {
-	static final int BUFFER_COUNT = 27;
+	static final int BUFFER_COUNT = 46;
 
 	private final VulkanDeviceContext context;
 	private final List<GpuBuffer> buffers = new ArrayList<>(BUFFER_COUNT);
@@ -31,6 +31,10 @@ final class FlipGpuResources implements AutoCloseable {
 		try {
 			long particleBytes = Math.multiplyExact((long) config.maxParticles(), 4L * Float.BYTES);
 			addStorageBuffer(particleBytes, memoryMode); addStorageBuffer(particleBytes, memoryMode);
+			int energyItems = Math.max(config.maxParticles(),
+					Math.max(config.uCount(), Math.max(config.vCount(), config.wCount())));
+			long reductionFloats = Math.max(config.cellCount(),
+					4L * ((energyItems + 255L) / 256L));
 			addStorageBuffer((long) config.cellCount() * Float.BYTES, memoryMode);
 			addStorageBuffer((long) config.cellCount() * Integer.BYTES, memoryMode);
 			addStorageBuffer((long) config.uCount() * Float.BYTES, memoryMode);
@@ -50,6 +54,25 @@ final class FlipGpuResources implements AutoCloseable {
 				long bytes = (long) multigridCellCount * (i == 1 ? Integer.BYTES : Float.BYTES);
 				addStorageBuffer(bytes, memoryMode);
 			}
+			addStorageBuffer((long) config.cellCount() * Float.BYTES, memoryMode);
+			addStorageBuffer(reductionFloats * Float.BYTES, memoryMode);
+			addStorageBuffer((long) config.cellCount() * Integer.BYTES, memoryMode);
+			addStorageBuffer((long) config.cellCount() * Integer.BYTES, memoryMode);
+			addStorageBuffer((long) config.maxParticles() * Integer.BYTES, memoryMode);
+			addStorageBuffer((long) config.maxParticles() * Integer.BYTES, memoryMode);
+			addStorageBuffer(8L * Integer.BYTES, memoryMode);
+			addStorageBuffer((long) config.cellCount() * Float.BYTES, memoryMode);
+			addStorageBuffer((long) config.cellCount() * Integer.BYTES, memoryMode);
+			addStorageBuffer((long) config.cellCount() * 4L * Float.BYTES, memoryMode);
+			addStorageBuffer(16L * Integer.BYTES, memoryMode);
+			addStorageBuffer((long) config.uCount() * Float.BYTES, memoryMode);
+			addStorageBuffer((long) config.vCount() * Float.BYTES, memoryMode);
+			addStorageBuffer((long) config.wCount() * Float.BYTES, memoryMode);
+			addStorageBuffer((long) config.maxParticles() * Integer.BYTES, memoryMode);
+			addStorageBuffer((long) config.uCount() * Float.BYTES, memoryMode);
+			addStorageBuffer((long) config.vCount() * Float.BYTES, memoryMode);
+			addStorageBuffer((long) config.wCount() * Float.BYTES, memoryMode);
+			addStorageBuffer(16L * Integer.BYTES, memoryMode);
 			if (buffers.size() != BUFFER_COUNT) throw new IllegalStateException("Wrong GPU buffer count");
 		} catch (RuntimeException | LinkageError exception) {
 			try { close(); }

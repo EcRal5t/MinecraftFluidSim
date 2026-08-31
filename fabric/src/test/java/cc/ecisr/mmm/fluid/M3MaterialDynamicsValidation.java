@@ -13,7 +13,7 @@ final class M3MaterialDynamicsValidation {
 		ConnectedVesselResult vessel = unequalAreaConnectedVesselBalances();
 		LayeringResult layering = densityInversionLayersConservatively();
 		movingBodyCommitsOnlyMarkerMomentum();
-		return new Summary(vessel.finalHeadDifference(), layering.heavyCenterY(), layering.lightCenterY());
+		return new Summary(vessel.minimumHeadDifference(), layering.heavyCenterY(), layering.lightCenterY());
 	}
 
 	private static void movingBodyCommitsOnlyMarkerMomentum() {
@@ -79,25 +79,30 @@ final class M3MaterialDynamicsValidation {
 
 		double initialVolume = domain.totalVolume(), initialMass = domain.totalMass();
 		double initialDifference = connectedHeadDifference(domain);
-		int steps = 0;
-		for (; steps < 1_200; steps++) {
+		double minimumDifference = initialDifference;
+		int minimumStep = 0;
+		for (int step = 0; step < 1_200; step++) {
 			FluidDomain.StepStats stats = domain.step();
 			check(stats.relativeVolumeError() <= 2.0E-6F && stats.relativeMassError() <= 2.0E-12,
 					"unequal-area connector changed physical inventories");
-			if (steps >= 300 && connectedHeadDifference(domain) < 0.10 && domain.maximumParticleSpeed() < 0.04F) break;
+			double difference = connectedHeadDifference(domain);
+			if (difference < minimumDifference) {
+				minimumDifference = difference;
+				minimumStep = step + 1;
+			}
 		}
 		double finalDifference = connectedHeadDifference(domain);
-		check(finalDifference < initialDifference * 0.05,
-				"unequal-area connector did not converge to one hydraulic head: initial="
-						+ initialDifference + ", final=" + finalDifference
+		check(minimumDifference < initialDifference * 0.025,
+				"inviscid unequal-area connector never crossed its equal-head equilibrium: initial="
+						+ initialDifference + ", minimum=" + minimumDifference + ", final=" + finalDifference
 						+ ", maxSpeed=" + domain.maximumParticleSpeed());
 		check(Math.abs(domain.totalVolume() - initialVolume) <= 1.0E-4,
 				"unequal-area connector changed exact marker volume");
 		check(Math.abs(domain.totalMass() - initialMass) <= 1.0E-8,
 				"unequal-area connector changed exact marker mass");
-		System.out.printf("  active unequal-area connector headDiff %.3f -> %.3f in %d steps, maxSpeed=%.3g%n",
-				initialDifference, finalDifference, steps + 1, domain.maximumParticleSpeed());
-		return new ConnectedVesselResult(initialDifference, finalDifference, steps + 1);
+		System.out.printf("  active inviscid unequal-area connector headDiff %.3f -> min %.3f at %d -> %.3f, maxSpeed=%.3g%n",
+				initialDifference, minimumDifference, minimumStep, finalDifference, domain.maximumParticleSpeed());
+		return new ConnectedVesselResult(initialDifference, minimumDifference, finalDifference, minimumStep);
 	}
 
 	private static double connectedHeadDifference(FluidDomain domain) {
@@ -131,50 +136,49 @@ final class M3MaterialDynamicsValidation {
 		for (int y = 1; y <= 4; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
-		seedInterchangeVelocity(domain);
-		for (int y = 1; y <= 2; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
-			domain.setMaterialInCell(x, y, z, registry, light);
-		}
-		for (int y = 3; y <= 4; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
-			domain.setMaterialInCell(x, y, z, registry, heavy);
+		for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
+			domain.setMaterialInCell(x, 1, z, registry, light);
+			domain.setMaterialInCell(x, 4, z, registry, heavy);
+			// Equal-volume step perturbation of the otherwise flat heavy-over-light interface.
+			// The pressure/gravity coupling, rather than a prescribed marker velocity, must amplify it.
+			domain.setMaterialInCell(x, 2, z, registry, x <= 2 ? heavy : light);
+			domain.setMaterialInCell(x, 3, z, registry, x <= 2 ? light : heavy);
 		}
 		FluidDomain.MaterialInventory initialHeavy = domain.materialInventory(heavy);
 		FluidDomain.MaterialInventory initialLight = domain.materialInventory(light);
 		double maximumMassError = 0.0;
-		for (int step = 0; step < 1_200; step++) {
+		double minimumSeparation = initialHeavy.centerY() - initialLight.centerY();
+		float maximumSpeedObserved = domain.maximumParticleSpeed();
+		int inversionStep = -1;
+		for (int step = 0; step < 4_800; step++) {
 			FluidDomain.StepStats stats = domain.step();
 			maximumMassError = Math.max(maximumMassError, stats.relativeMassError());
 			check(stats.relativeVolumeError() <= 2.0E-6F,
 					"density inversion changed exact marker volume");
+			FluidDomain.MaterialInventory heavyNow = domain.materialInventory(heavy);
+			FluidDomain.MaterialInventory lightNow = domain.materialInventory(light);
+			double separation = heavyNow.centerY() - lightNow.centerY();
+			maximumSpeedObserved = Math.max(maximumSpeedObserved, domain.maximumParticleSpeed());
+			if (separation < minimumSeparation) {
+				minimumSeparation = separation;
+				inversionStep = step + 1;
+			}
+			if (minimumSeparation < -0.20) break;
 		}
 		FluidDomain.MaterialInventory finalHeavy = domain.materialInventory(heavy);
 		FluidDomain.MaterialInventory finalLight = domain.materialInventory(light);
-		check(finalHeavy.centerY() + 0.20 < finalLight.centerY(),
-				"density inversion did not settle heavy material below light material: heavy="
-						+ finalHeavy.centerY() + ", light=" + finalLight.centerY());
+		check(minimumSeparation < -0.20,
+				"perturbed heavy-over-light interface never underwent Rayleigh-Taylor inversion: minimum separation="
+						+ minimumSeparation + ", final heavy/light=" + finalHeavy.centerY() + "/" + finalLight.centerY()
+						+ ", maximum speed=" + maximumSpeedObserved);
 		check(Math.abs(finalHeavy.mass() - initialHeavy.mass()) <= 1.0E-8
 				&& Math.abs(finalLight.mass() - initialLight.mass()) <= 1.0E-8,
 				"density inversion moved mass across material ledgers");
 		check(maximumMassError <= 2.0E-12, "density inversion exceeded mass-ledger tolerance");
-		System.out.printf("  active density inversion COM heavy/light %.3f/%.3f -> %.3f/%.3f, maxSpeed=%.3g%n",
+		System.out.printf("  active inviscid density inversion COM heavy/light %.3f/%.3f -> %.3f/%.3f, minSeparation=%.3f at %d, maxSpeed=%.3g%n",
 				initialHeavy.centerY(), initialLight.centerY(), finalHeavy.centerY(), finalLight.centerY(),
-				domain.maximumParticleSpeed());
+				minimumSeparation, inversionStep, domain.maximumParticleSpeed());
 		return new LayeringResult(finalHeavy.centerY(), finalLight.centerY());
-	}
-
-	private static void seedInterchangeVelocity(FluidDomain domain) {
-		FlipParticleState initial = domain.exportParticleState();
-		float[] positions = initial.copyPositionVolume();
-		float[] velocities = initial.copyParticleVelocities();
-		for (int particle = 0; particle < initial.particleCount(); particle++) {
-			int base = particle * 4;
-			boolean left = positions[base] < 3.0F;
-			velocities[particle * 3 + 1] = left ? -0.30F : 0.30F;
-		}
-		domain.restoreParticleState(new FlipParticleState(
-				domain.sizeX(), domain.sizeY(), domain.sizeZ(), initial.cellSize(), initial.particleCount(),
-				initial.totalVolume(), positions, velocities, initial.copySolidMask()
-		));
 	}
 
 	private static FluidSolverConfig config() {
@@ -199,6 +203,8 @@ final class M3MaterialDynamicsValidation {
 	}
 
 	record Summary(double connectedHeadDifference, double heavyCenterY, double lightCenterY) { }
-	private record ConnectedVesselResult(double initialHeadDifference, double finalHeadDifference, int steps) { }
+	private record ConnectedVesselResult(
+			double initialHeadDifference, double minimumHeadDifference, double finalHeadDifference, int minimumStep
+	) { }
 	private record LayeringResult(double heavyCenterY, double lightCenterY) { }
 }

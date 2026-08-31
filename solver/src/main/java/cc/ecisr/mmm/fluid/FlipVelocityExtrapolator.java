@@ -4,8 +4,6 @@ import java.util.Arrays;
 
 /** Extends pressure-phase MAC velocities into the air stencil used by marker G2P sampling. */
 final class FlipVelocityExtrapolator {
-	private static final int LAYERS = 2;
-
 	private final int sizeX;
 	private final int sizeY;
 	private final int sizeZ;
@@ -61,7 +59,7 @@ final class FlipVelocityExtrapolator {
 			int axis, int nx, int ny, int nz
 	) {
 		int zStride = nx * ny;
-		for (int layer = 0; layer < LAYERS; layer++) {
+		for (int layer = 0; layer < FlipTransferScheme.VELOCITY_EXTRAPOLATION_LAYERS; layer++) {
 			Arrays.fill(addedThisLayer, 0.0F);
 			int added = 0;
 			for (int z = 0; z < nz; z++) for (int y = 0; y < ny; y++) for (int x = 0; x < nx; x++) {

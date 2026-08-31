@@ -6,14 +6,6 @@ import java.util.Arrays;
 
 /** Deterministic, cell-local marker merge/split maintenance for the CPU FLIP reference solver. */
 final class FlipParticleReseeder {
-	private static final int MAXIMUM_MARKERS_PER_CELL = 12;
-	private static final int MERGE_TARGET_MARKERS = 8;
-	private static final float MEDIUM_VOLUME = 0.125F;
-	private static final float LARGE_VOLUME = 0.50F;
-	private static final float POSITION_EPSILON_FRACTION = 1.0E-3F;
-	private static final float DOMAIN_CONTACT_FRACTION = 0.45F;
-	private static final float SOLID_CONTACT_FRACTION = 0.451F;
-
 	private final int sizeX;
 	private final int sizeY;
 	private final int sizeZ;
@@ -100,12 +92,13 @@ final class FlipParticleReseeder {
 		int split = 0;
 		int budgetSkipped = 0;
 		int geometrySkipped = mergeResult.geometrySkipped();
+		int conservationSkipped = mergeResult.conservationSkipped();
 		for (int cell = 0; cell < cellCount; cell++) {
 			if (solid[cell] || cellMarkerCount[cell] == 0) continue;
-			int minimum = minimumMarkers(cellExactVolume[cell]);
-			while (cellMarkerCount[cell] < minimum) {
+			int target = ConservativeMarkerSampling.targetMarkers(cellExactVolume[cell]);
+			while (cellMarkerCount[cell] < target) {
 				if (particleCount >= maximumParticleCount || particleCount >= particleX.length) {
-					budgetSkipped += minimum - cellMarkerCount[cell];
+					budgetSkipped += target - cellMarkerCount[cell];
 					break;
 				}
 				int source = largestMarker(cell, particleVolume);
@@ -115,7 +108,7 @@ final class FlipParticleReseeder {
 						particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel,
 						chemicalParcels, thermal, positionValidator
 				)) {
-					geometrySkipped += minimum - cellMarkerCount[cell];
+					geometrySkipped += target - cellMarkerCount[cell];
 					break;
 				}
 				nextParticle[particleCount] = cellHead[cell];
@@ -130,7 +123,7 @@ final class FlipParticleReseeder {
 		double massAfter = totalMass(particleMass, particleCount);
 		double energyAfter = thermal == null ? 0.0 : thermal.totalEnergy(particleCount);
 		double ledgerError = volumeAfter - volumeBefore;
-		return new Result(particleCount, merged, split, budgetSkipped, geometrySkipped,
+		return new Result(particleCount, merged, split, budgetSkipped, geometrySkipped, conservationSkipped,
 				ledgerError, massAfter - massBefore, energyAfter - energyBefore);
 	}
 
@@ -154,9 +147,11 @@ final class FlipParticleReseeder {
 		Arrays.fill(removed, 0, particleCount, false);
 		int merged = 0;
 		int geometrySkipped = 0;
+		int conservationSkipped = 0;
 		for (int cell = 0; cell < cellCount; cell++) {
 			int count = cellMarkerCount[cell];
-			if (count <= MAXIMUM_MARKERS_PER_CELL) continue;
+			int target = ConservativeMarkerSampling.targetMarkers(cellExactVolume[cell]);
+			if (count <= target) continue;
 			ensureLocalCapacity(count);
 			int localCount = 0;
 			for (int particle = cellHead[cell]; particle >= 0; particle = nextParticle[particle]) {
@@ -164,7 +159,7 @@ final class FlipParticleReseeder {
 			}
 			Arrays.sort(localParticles, 0, localCount);
 			Arrays.fill(representative, 0, localCount, false);
-			selectDistributedRepresentatives(particleX, particleY, particleZ, localCount);
+			selectDistributedRepresentatives(particleX, particleY, particleZ, localCount, target);
 			ensureMaterialRepresentatives(particleMaterialHandle, particlePhaseLabel, chemicalParcels, localCount);
 			for (int local = 0; local < localCount; local++) {
 				if (representative[local]) continue;
@@ -177,26 +172,30 @@ final class FlipParticleReseeder {
 					geometrySkipped++;
 					continue;
 				}
-				int target = localParticles[targetLocal];
-				if (!mergeParticleInto(
-						target, source, particleX, particleY, particleZ,
+				int targetParticle = localParticles[targetLocal];
+				MergeOutcome outcome = mergeParticleInto(
+						targetParticle, source, particleX, particleY, particleZ,
 						velocityX, velocityY, velocityZ, particleVolume, particleMass,
 						chemicalParcels, thermal, massWeightedDynamics, positionValidator
-				)) {
-					geometrySkipped++;
+				);
+				if (outcome != MergeOutcome.MERGED) {
+					if (outcome == MergeOutcome.CONSERVATION_BLOCKED) conservationSkipped++;
+					else geometrySkipped++;
 					continue;
 				}
 				removed[source] = true;
 				merged++;
 			}
 		}
-		return new MergeResult(merged, geometrySkipped);
+		return new MergeResult(merged, geometrySkipped, conservationSkipped);
 	}
 
-	private void selectDistributedRepresentatives(float[] particleX, float[] particleY, float[] particleZ, int count) {
+	private void selectDistributedRepresentatives(
+			float[] particleX, float[] particleY, float[] particleZ, int count, int target
+	) {
 		representative[0] = true;
 		int selected = 1;
-		while (selected < MERGE_TARGET_MARKERS) {
+		while (selected < target) {
 			int best = -1;
 			float bestDistance = -1.0F;
 			for (int candidate = 0; candidate < count; candidate++) {
@@ -263,7 +262,7 @@ final class FlipParticleReseeder {
 		return best;
 	}
 
-	private static boolean mergeParticleInto(
+	private static MergeOutcome mergeParticleInto(
 			int target,
 			int source,
 			float[] particleX,
@@ -282,10 +281,11 @@ final class FlipParticleReseeder {
 		double targetVolume = particleVolume[target];
 		double sourceVolume = particleVolume[source];
 		double mergedVolume = targetVolume + sourceVolume;
+		if ((double) (float) mergedVolume != mergedVolume) return MergeOutcome.CONSERVATION_BLOCKED;
 		float mergedX = (float) ((particleX[target] * targetVolume + particleX[source] * sourceVolume) / mergedVolume);
 		float mergedY = (float) ((particleY[target] * targetVolume + particleY[source] * sourceVolume) / mergedVolume);
 		float mergedZ = (float) ((particleZ[target] * targetVolume + particleZ[source] * sourceVolume) / mergedVolume);
-		if (!positionValidator.allowed(mergedX, mergedY, mergedZ)) return false;
+		if (!positionValidator.allowed(mergedX, mergedY, mergedZ)) return MergeOutcome.GEOMETRY_BLOCKED;
 		particleX[target] = mergedX;
 		particleY[target] = mergedY;
 		particleZ[target] = mergedZ;
@@ -299,7 +299,7 @@ final class FlipParticleReseeder {
 		particleMass[target] += particleMass[source];
 		if (chemicalParcels != null) chemicalParcels.merge(target, source, particleMass[target]);
 		if (thermal != null) thermal.merge(target, source);
-		return true;
+		return MergeOutcome.MERGED;
 	}
 
 	private boolean splitParticle(
@@ -339,8 +339,10 @@ final class FlipParticleReseeder {
 		}
 		float sourceX = particleX[source], sourceY = particleY[source], sourceZ = particleZ[source];
 		float destinationX = sourceX, destinationY = sourceY, destinationZ = sourceZ;
-		if (bestAxis >= 0 && bestRoom > cellSize * 1.0E-4F) {
-			float displacement = Math.min(cellSize * 0.20F, bestRoom * 0.80F);
+		if (bestAxis >= 0 && bestRoom > 0.0F) {
+			// Half the available symmetric interval gives the two-point quadrature spacing
+			// without a tuned displacement or a near-wall overshoot.
+			float displacement = bestRoom * 0.5F;
 			if (bestAxis == 0) {
 				if (positionValidator.allowed(sourceX - displacement, sourceY, sourceZ)
 						&& positionValidator.allowed(sourceX + displacement, sourceY, sourceZ)) {
@@ -392,16 +394,20 @@ final class FlipParticleReseeder {
 
 	private float minimumCoordinate(int axis, int x, int y, int z, boolean[] solid) {
 		int coordinate = axis == 0 ? x : axis == 1 ? y : z;
-		float inset = coordinate == 0 ? DOMAIN_CONTACT_FRACTION
-				: neighborSolid(axis, -1, x, y, z, solid) ? SOLID_CONTACT_FRACTION : POSITION_EPSILON_FRACTION;
+		float inset = coordinate == 0 ? ConservativeMarkerSampling.DOMAIN_CONTACT_FRACTION
+				: neighborSolid(axis, -1, x, y, z, solid)
+				? ConservativeMarkerSampling.SOLID_CONTACT_FRACTION
+				: ConservativeMarkerSampling.POSITION_EPSILON_FRACTION;
 		return (coordinate + inset) * cellSize;
 	}
 
 	private float maximumCoordinate(int axis, int x, int y, int z, boolean[] solid) {
 		int coordinate = axis == 0 ? x : axis == 1 ? y : z;
 		int size = axis == 0 ? sizeX : axis == 1 ? sizeY : sizeZ;
-		float inset = coordinate + 1 == size ? DOMAIN_CONTACT_FRACTION
-				: neighborSolid(axis, 1, x, y, z, solid) ? SOLID_CONTACT_FRACTION : POSITION_EPSILON_FRACTION;
+		float inset = coordinate + 1 == size ? ConservativeMarkerSampling.DOMAIN_CONTACT_FRACTION
+				: neighborSolid(axis, 1, x, y, z, solid)
+				? ConservativeMarkerSampling.SOLID_CONTACT_FRACTION
+				: ConservativeMarkerSampling.POSITION_EPSILON_FRACTION;
 		return (coordinate + 1.0F - inset) * cellSize;
 	}
 
@@ -495,12 +501,6 @@ final class FlipParticleReseeder {
 		particlePhaseLabel[destination] = particlePhaseLabel[source];
 	}
 
-	private int minimumMarkers(float exactVolume) {
-		if (exactVolume >= LARGE_VOLUME) return 4;
-		if (exactVolume >= MEDIUM_VOLUME) return 2;
-		return 1;
-	}
-
 	private int particleCell(float x, float y, float z) {
 		int cellX = Math.min(sizeX - 1, Math.max(0, (int) Math.floor(x / cellSize)));
 		int cellY = Math.min(sizeY - 1, Math.max(0, (int) Math.floor(y / cellSize)));
@@ -558,7 +558,9 @@ final class FlipParticleReseeder {
 
 	record ThermalSplit(double parentEnergy, double temperatureK) { }
 
-	private record MergeResult(int merged, int geometrySkipped) { }
+	private enum MergeOutcome { MERGED, GEOMETRY_BLOCKED, CONSERVATION_BLOCKED }
+
+	private record MergeResult(int merged, int geometrySkipped, int conservationSkipped) { }
 
 	record Result(
 			int particleCount,
@@ -566,6 +568,7 @@ final class FlipParticleReseeder {
 			int split,
 			int budgetSkipped,
 			int geometrySkipped,
+			int conservationSkipped,
 			double ledgerError,
 			double massLedgerError,
 			double energyLedgerError

@@ -50,7 +50,6 @@ public final class ProductionFluidReplayValidation {
 	private static void controllerPourSequenceWithoutGasSettles() {
 		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
 		domain.sealDomainBoundary();
-		bindEmptyMaterialState(domain, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 		FluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
 		require(first.addedVolume() == 128.0F && !first.markerBudgetLimited(),
 				"gas-free control did not inject the first 16 BV source: " + first);
@@ -61,26 +60,60 @@ public final class ProductionFluidReplayValidation {
 		double expectedVolume = domain.totalVolumeExact();
 		double expectedMass = domain.totalMass();
 		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0, finalKinetic = 0.0;
+		double initialMechanicalEnergy = Double.NaN, maximumMechanicalEnergy = 0.0;
+		FluidDomain.MechanicalStepAudit maximumMechanicalAudit = null;
+		int maximumMechanicalStep = 0;
+		float maximumMechanicalPressure = 0.0F;
+		FluidDomain.VolumeDistribution maximumMechanicalDistribution = null;
 		double cumulativePressureWork = 0.0;
+		double reportedVolumeChange = 0.0, reportedMassChange = 0.0;
+		long reseededMerges = 0;
 		for (int step = 0; step < 1_000; step++) {
 			FluidDomain.StepStats stats = domain.stepWithMechanicalAudit(false, 0);
 			FluidDomain.MechanicalStepAudit audit = stats.mechanicalAudit();
+			if (step == 0) initialMechanicalEnergy = audit.initialParticleKineticEnergyJoules()
+					+ audit.initialGravitationalPotentialEnergyJoules();
 			finalKinetic = audit.finalParticleKineticEnergyJoules();
+			double finalMechanicalEnergy = finalKinetic + audit.finalGravitationalPotentialEnergyJoules();
+			if (finalMechanicalEnergy > maximumMechanicalEnergy) {
+				maximumMechanicalEnergy = finalMechanicalEnergy;
+				maximumMechanicalAudit = audit;
+				maximumMechanicalStep = step + 1;
+				maximumMechanicalPressure = domain.maximumPressure();
+				maximumMechanicalDistribution = domain.volumeDistribution(8.0F / 255.0F);
+			}
 			cumulativePressureWork += audit.pressureProjectionWorkJoules();
+			reportedVolumeChange += stats.reseedLedgerError();
+			reportedMassChange += stats.reseedMassLedgerError();
+			reseededMerges += stats.reseededMerges();
 			maximumKinetic = Math.max(maximumKinetic, finalKinetic);
 			if (step >= 800) tailMaximumKinetic = Math.max(tailMaximumKinetic, finalKinetic);
 		}
-		require(domain.totalVolumeExact() == expectedVolume && domain.totalMass() == expectedMass,
-				"reported two-pour replay changed exact liquid volume or mass");
+		double volumeChange = domain.totalVolumeExact() - expectedVolume;
+		double massChange = domain.totalMass() - expectedMass;
+		double volumeRoundoff = floatingPointOperationBound(expectedVolume, reseededMerges, 24);
+		double massRoundoff = floatingPointOperationBound(expectedMass, reseededMerges, 53);
+		double reconciliationRoundoff = floatingPointOperationBound(
+				Math.max(Math.abs(volumeChange), Math.abs(reportedVolumeChange)), 1_000, 53);
+		require(Math.abs(volumeChange) <= volumeRoundoff && Math.abs(massChange) <= massRoundoff
+				&& Math.abs(volumeChange - reportedVolumeChange) <= reconciliationRoundoff
+				&& Math.abs(massChange - reportedMassChange) <= massRoundoff,
+				"reported two-pour replay exceeded or bypassed its floating-point reseed ledger: volume="
+						+ volumeChange + " (reported " + reportedVolumeChange + ", bound " + volumeRoundoff
+						+ "), mass=" + massChange + " (reported " + reportedMassChange + ", bound "
+						+ massRoundoff + "), merges=" + reseededMerges);
 		require(cumulativePressureWork < 0.0,
 				"reported two-pour pressure projection injected net kinetic energy: "
 						+ cumulativePressureWork + " J");
-		require(tailMaximumKinetic <= 60.0 && finalKinetic <= 50.0,
-				"reported two-pour replay remained self-excited: max/tail/final="
-						+ maximumKinetic + "/" + tailMaximumKinetic + "/" + finalKinetic + " J");
+		require(maximumMechanicalEnergy <= initialMechanicalEnergy,
+				"reported two-pour replay created mechanical energy: initial/maximum="
+						+ initialMechanicalEnergy + "/" + maximumMechanicalEnergy + " J at step "
+						+ maximumMechanicalStep + ", pressure=" + maximumMechanicalPressure
+						+ ", distribution=" + maximumMechanicalDistribution + ": " + maximumMechanicalAudit);
 		System.out.printf("  controller pour gas-free control: K max/tail/final="
-				+ "%.9g/%.9g/%.9g J, pressure work=%+.9g J, speed=%.6g%n",
+				+ "%.9g/%.9g/%.9g J, E initial/max=%.9g/%.9g J, pressure work=%+.9g J, speed=%.6g%n",
 				maximumKinetic, tailMaximumKinetic, finalKinetic,
+				initialMechanicalEnergy, maximumMechanicalEnergy,
 				cumulativePressureWork, domain.maximumParticleSpeed());
 	}
 
@@ -944,6 +977,14 @@ public final class ProductionFluidReplayValidation {
 				&& expected.massRoundoff().equals(actual.massRoundoff())
 				&& expected.residualRoundoff().equals(actual.residualRoundoff()),
 				"full-capability gas topology or inventory changed across capture/restore");
+	}
+
+	/** Higham's gamma bound for a sequence of correctly rounded operations. */
+	private static double floatingPointOperationBound(double magnitude, long operations, int precisionBits) {
+		if (operations <= 0 || magnitude == 0.0) return 0.0;
+		double accumulatedRoundoff = operations * Math.scalb(1.0, -precisionBits);
+		if (!(accumulatedRoundoff < 1.0)) return Double.POSITIVE_INFINITY;
+		return Math.abs(magnitude) * accumulatedRoundoff / (1.0 - accumulatedRoundoff);
 	}
 
 	private static void require(boolean condition, String message) {

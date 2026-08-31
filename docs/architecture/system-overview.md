@@ -133,8 +133,8 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 1. 捕获本步 inventory、source/sink/work 与 pending phase-volume 审计基线。
 2. 根据 world/cut-cell、统一固体 occupancy 和当前 gas topology 建立机械输入。
 3. P2G，施加重力、热浮力、表面张力、气压和颗粒/实体耦合。
-4. 构造目标散度，以 PCG 求解变系数 pressure projection。
-5. G2P、FLIP/PIC 混合、marker advection 与 CCD；颗粒完成运动/碰撞提交。
+4. 构造物理目标散度，以 PCG 求解变系数 pressure projection；marker 过容量不进入这份机械 RHS。
+5. G2P 解析选择能量可接受的最大 FLIP 增量，随后以散度一致的 `H(div)` 重建/RK4 做 marker advection 与 CCD；颗粒完成运动/碰撞提交，逐格聚集不产生伪 pressure 源或第二位置投影。
 6. 从新载体位置重建 thermal grid，提交内部导热和固定温度边界通量。
 7. 提交化学与固液反应 extent，再提交 reaction heat。
 8. 依次计划并提交固液、气液相变；体积变化写入 pending pressure work。

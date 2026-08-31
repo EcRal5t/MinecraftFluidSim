@@ -67,6 +67,8 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 - 所有 candidate 温度和压力必须落在 world thermal registry 的有效域；越界安全暂停。
 - mechanics 可从所有液气界面选择一个统一 sealed-node gauge reference，在 PCG 内只求相对压力并在绝对观察/热学边界加回；该数值换元不修改 node pressure、inventory、U 或不同 node 间的压差。
 
+当前 `AirNetwork` 是有限体积热力学/孔流网络，不是逐 cell/face 的气体动量求解器；空间 FLIP 网格仍只承载不可压凝聚相。气体的可压缩性已经由库存、available volume、`U` 与状态方程表达，并通过界面 pressure 耦合液体，但尚不承诺解析腔体内部速度场、声学传播或气体混合层。后续若把气体迁入共享空间动量内核，必须保留这里的 exact 组分/质量/能量账，并以状态方程闭合密度和非零散度；不能复用液体零散度 projection 把气体错误地压成不可压，也不能按材料 ID 选择另一套平流/传递算法。
+
 ### 状态方程
 
 无热状态的等温 gauge pressure 为：

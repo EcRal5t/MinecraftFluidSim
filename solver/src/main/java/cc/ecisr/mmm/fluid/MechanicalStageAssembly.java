@@ -20,7 +20,7 @@ final class MechanicalStageAssembly {
 		PressureProjectionStage pressure = new PressureProjectionStage(
 				new PressureProjectionStage.Workspace(
 						domain.sizeX, domain.sizeY, domain.sizeZ, domain.config, domain.geometry, domain.mac,
-						domain.projection, domain.freeSurfaceGeometry, domain.tension),
+						domain.projection, domain.tension),
 				pressureAccess(domain), pressureSystem, pressureBoundary);
 		GranularMechanicalStage granular = new GranularMechanicalStage(
 				new GranularMechanicalStage.Workspace(
@@ -37,7 +37,9 @@ final class MechanicalStageAssembly {
 						domain.geometry, domain.markerGrid, domain.mac, domain.particles, domain.velocityExtrapolator),
 				gridToParticleAccess(domain));
 		ParticleAdvectionStage advection = new ParticleAdvectionStage(
-				new ParticleAdvectionStage.Workspace(domain.particles, domain.particleCollision),
+				new ParticleAdvectionStage.Workspace(
+						domain.particles, domain.particleCollision, domain.mac, domain.geometry,
+						domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize()),
 				advectionAccess(domain));
 		ParticleToGridStage particleToGrid = new ParticleToGridStage(
 				new ParticleToGridStage.Workspace(
@@ -73,7 +75,6 @@ final class MechanicalStageAssembly {
 			@Override public float granularMovingSolidDivergence(int cell, float dt) {
 				return domain.granularMovingSolidDivergence(cell, dt);
 			}
-			@Override public float pressureOpenCellVolume(int cell) { return domain.pressureOpenCellVolume(cell); }
 			@Override public float pressureInterfaceTheta(int cell, int dx, int dy, int dz) {
 				return domain.pressureInterfaceTheta(cell, dx, dy, dz);
 			}
@@ -139,6 +140,7 @@ final class MechanicalStageAssembly {
 			@Override public int particleCellIndex(int marker) { return domain.particleCellIndex(marker); }
 			@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
 			@Override public double thermalMarkerTemperature(int marker) { return domain.thermalMarkerTemperature(marker); }
+			@Override public boolean liquidGasTensionActive() { return domain.surfaceTensionActive; }
 			@Override public boolean liquidPairTensionActive() { return domain.liquidPairTensionActive; }
 			@Override public double phaseFraction(int cell, int phase) { return domain.phaseFraction(cell, phase); }
 			@Override public void smoothSurfaceTensionColor() { domain.smoothSurfaceTensionColor(); }
@@ -151,6 +153,9 @@ final class MechanicalStageAssembly {
 			@Override public float pressureDensityScale(int first, int second) {
 				return domain.pressureDensityScale(first, second);
 			}
+			@Override public float carrierDensityScale(int first, int second) {
+				return domain.carrierDensityScale(first, second);
+			}
 		};
 	}
 
@@ -159,6 +164,8 @@ final class MechanicalStageAssembly {
 			@Override public float sampleX(float[] field, float x, float y, float z) { return domain.sampleX(field, x, y, z); }
 			@Override public float sampleY(float[] field, float x, float y, float z) { return domain.sampleY(field, x, y, z); }
 			@Override public float sampleZ(float[] field, float x, float y, float z) { return domain.sampleZ(field, x, y, z); }
+			@Override public boolean variableDensityActive() { return domain.variableDensityActive; }
+			@Override public float referenceDensity() { return domain.config.density(); }
 		};
 	}
 

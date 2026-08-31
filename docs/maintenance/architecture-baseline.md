@@ -7,15 +7,15 @@
 | 模块 | 类 | 基线行数 | 删除 allowlist 的切片 |
 |---|---|---:|---|
 | core | `FlipFluidDomain` | 7975 → 4067（S01–S11）→ S12 删除 | 已关闭 |
-| core | `FluidDomain` | S12 切换时 4031；S13 为 cheap layout identity 增至 4036 | S21 |
+| solver | `FluidDomain` | S12 切换时 4031；S20 数值收口后 3987 | S21 |
 | fabric | `FluidSimulationService` | 3329 → 3249（S13）→ 3050（S14）→ 2412（S15）→ 2099（S16）→ 1516（S19a）→ 1509（S19b）→ 984（S19c–S19e）→ 894（S19f）→ 661（S19h） | 已关闭；剩余职责在 S21 删除 |
 | fabric | `RegionState` | 1480 → S17 拆分 | 已关闭 |
 | core | `FlipThermalState` | 1461 → S10 降为窄适配器 | 已关闭 |
-| gpu-probe-kernel | `VulkanFlipPipeline` | 1237 → 807（device/resources/bindings/scheduler/readback 拆分） | 已关闭 |
+| gpu-probe-kernel | `VulkanFlipPipeline` | 1237 → 807（native owner 拆分）→ 1008（数值门扩展）→ 942（compact diagnostics owner 拆分） | 已关闭 |
 | fabric | `FluidTransferService` | 1121 → S16 删除 | 已关闭 |
 | fabric | `RegionStateFiles` | 1053 → S18 拆分 | 已关闭 |
 
-超过 600 行但未超限的类只产生 warning，不进 allowlist（当前：`AirNetwork` 830、`VulkanFlipPipeline` 807、`ChemicalParcelStore` 695、`WorldCapabilityBundleStore` 677、`FluidSimulationService` 661、`GpuFlipProbeValidation` 611、`FluidRegion` 603）。`MmmCommands` 已由 618 行拆为 159 行 Brigadier 树与 475 行 handler；`ClientFluidVolumeRenderer` 已由 833 行降为 69 行编排，`MinecraftDebugFixtures` 为 578 行。
+超过 600 行但未超限的类只产生 warning，不进 allowlist（当前：`VulkanFlipPipeline` 942、`AirNetwork` 830、`ChemicalParcelStore` 695、`WorldCapabilityBundleStore` 677、`FluidSimulationService` 661、`GpuFlipProbeValidation` 653、`FluidRegion` 603）。`MmmCommands` 已由 618 行拆为 159 行 Brigadier 树与 475 行 handler；`ClientFluidVolumeRenderer` 已由 833 行降为 69 行编排，`MinecraftDebugFixtures` 为 578 行。
 
 ## 模块规模
 
@@ -25,12 +25,12 @@
 |---|---:|---:|
 | `api/src/main` | 11 | 263 |
 | `model/src/main` | 128 | 17173 |
-| `solver/src/main` | 71 | 15010 |
+| `solver/src/main` | 73 | 15279 |
 | `application/src/main` | 24 | 1848 |
 | `core/src/main` | 0 | 0 |
-| `fabric/src/main` | 152 | 25704 |
+| `fabric/src/main` | 152 | 25706 |
 | `fabric/src/client` | 14 | 1590 |
-| `gpu-probe-kernel/src/main` | 17 | 3700 |
+| `gpu-probe-kernel/src/main` | 18 | 4129 |
 | `gpu-probe/src/main` | 5 | 734 |
 
 ## 当前被 allowlist 的方向性违规

@@ -92,7 +92,7 @@ final class ParticleToGridStage {
 					geometry.solid, markerGrid.markerCount, geometry.cutCells, granularCoupling);
 		}
 		state.pressurePhaseGeometry.rebuild(
-				geometry.solid, markerGrid.markerCount, projection.pressureVolume, geometry.cutCells,
+				geometry.solid, projection.pressureVolume, geometry.cutCells,
 				access.pressureGranularCoupling(), projection.pressureFluid);
 		access.rebuildPressureBoundaryLineage();
 		access.rebuildSurfaceTensionPressure();

@@ -100,6 +100,8 @@ final class MechanicalStepPipeline {
 			audit.thermalBuoyancyWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
+		bodyForceStage.applyLiquidGasSurfaceTensionForce(dt);
+		bodyForceStage.applyLiquidSolidSurfaceEnergyForce(dt);
 		bodyForceStage.applyLiquidPairSurfaceTensionForce(dt);
 		if (captureAudit) {
 			nextKineticEnergy = access.gridKineticEnergyJoules();
@@ -112,6 +114,7 @@ final class MechanicalStepPipeline {
 			audit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
+		gridToParticleStage.capturePreProjectionEnergy();
 		pressureStage.solve(dt);
 		int pressureIterations = access.lastPressureIterations();
 		ThermalDomainState.PhaseMechanicalWorkPlan phaseWork = null;

@@ -144,15 +144,14 @@ private static void validateContactAngleSpreading() {
 			300, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F
 	);
 DropletMetrics hydrophilic = runDroplet(config, Math.toRadians(30.0), 100.0, 1200);
+DropletMetrics neutral = runDroplet(config, Math.toRadians(90.0), 100.0, 1200);
 DropletMetrics hydrophobic = runDroplet(config, Math.toRadians(120.0), 100.0, 1200);
-System.out.printf("  contact-angle wetting theta30 contact=%d comY=%.3f maxSpeed=%.3g%n",
-hydrophilic.contactCells(), hydrophilic.centerOfMassY(), hydrophilic.maximumSpeed());
-System.out.printf("  contact-angle wetting theta120 contact=%d comY=%.3f maxSpeed=%.3g%n",
-hydrophobic.contactCells(), hydrophobic.centerOfMassY(), hydrophobic.maximumSpeed());
-check(hydrophilic.contactCells() > hydrophobic.contactCells(),
-"hydrophilic droplet did not spread wider than hydrophobic");
-check(hydrophilic.centerOfMassY() < hydrophobic.centerOfMassY(),
-"hydrophilic droplet did not flatten more than hydrophobic");
+System.out.printf("  contact-angle wall moments theta30=%.6f theta90=%.6f theta120=%.6f "
+		+ "maxSpeed=%.3g/%.3g/%.3g%n",
+hydrophilic.varianceX(), neutral.varianceX(), hydrophobic.varianceX(),
+hydrophilic.maximumSpeed(), neutral.maximumSpeed(), hydrophobic.maximumSpeed());
+check(hydrophilic.varianceX() > neutral.varianceX() && neutral.varianceX() > hydrophobic.varianceX(),
+"Young wall energy did not monotonically widen the continuous liquid footprint");
 }
 
 private static DropletMetrics runDroplet(FluidSolverConfig config, double contactAngleRadians, double sigma, int steps) {
@@ -166,9 +165,9 @@ int particle = 0;
 for (int z = 1; z <= 2; z++) for (int y = 1; y <= 1; y++) for (int x = 4; x <= 7; x++) {
 for (int slot = 0; slot < 8; slot++) {
 int base = particle * 4;
-positionVolume[base] = (x + 0.5F) * config.cellSize();
-positionVolume[base + 1] = (y + 0.5F) * config.cellSize();
-positionVolume[base + 2] = (z + 0.5F) * config.cellSize();
+positionVolume[base] = (x + ((slot & 1) == 0 ? 0.25F : 0.75F)) * config.cellSize();
+positionVolume[base + 1] = (y + ((slot & 2) == 0 ? 0.25F : 0.75F)) * config.cellSize();
+positionVolume[base + 2] = (z + ((slot & 4) == 0 ? 0.25F : 0.75F)) * config.cellSize();
 positionVolume[base + 3] = 0.125F;
 totalVolume += 0.125F;
 particle++;
@@ -182,23 +181,19 @@ for (int marker = 0; marker < domain.particleCount(); marker++) {
 domain.setMarkerMaterial(marker, registry, 0);
 }
 for (int step = 0; step < steps; step++) domain.step();
-byte[] markerMask = domain.copyMarkerMask();
-int contactCells = 0;
-	for (int z = 0; z < 4; z++) for (int x = 0; x < 16; x++) {
-		if (markerMask[(z * 6 + 1) * 16 + x] != 0) contactCells++;
-	}
 FlipMaterialParticleState state = domain.exportMaterialParticleState();
 float[] positionVolumeCopy = state.copyPositionVolume();
-double weightedY = 0.0, volume = 0.0;
+double weightedX = 0.0, weightedX2 = 0.0, volume = 0.0;
 for (int offset = 0; offset < positionVolumeCopy.length; offset += 4) {
-weightedY += positionVolumeCopy[offset + 1] * positionVolumeCopy[offset + 3];
+weightedX += positionVolumeCopy[offset] * positionVolumeCopy[offset + 3];
+weightedX2 += positionVolumeCopy[offset] * positionVolumeCopy[offset] * positionVolumeCopy[offset + 3];
 volume += positionVolumeCopy[offset + 3];
 }
-double centerOfMassY = volume == 0.0 ? Double.NaN : weightedY / volume;
-return new DropletMetrics(contactCells, centerOfMassY, domain.maximumParticleSpeed());
+double meanX = weightedX / volume;
+return new DropletMetrics(weightedX2 / volume - meanX * meanX, domain.maximumParticleSpeed());
 }
 
-private record DropletMetrics(int contactCells, double centerOfMassY, float maximumSpeed) { }
+private record DropletMetrics(double varianceX, float maximumSpeed) { }
 
 	private static void validateLiquidPairPressureJump() {
 		FluidSolverConfig config = new FluidSolverConfig(
@@ -343,7 +338,7 @@ check(domain.totalVolume() == exactVolume && domain.totalMass() == exactMass,
 }
 }
 
-/** Full-cell spherical droplet; all marker cells are exactly full, so volume drift stays inactive. */
+/** Full-cell spherical droplet; all marker cells are exactly full, so the capacity constraint stays inactive. */
 private static FluidDomain sphereDroplet(int size, FluidSolverConfig config, double radius, double sigma) {
 FluidDomain domain = new FluidDomain(size, size, size, config, size * size * size * 8);
 double[] colour = SurfaceTensionCurvatureExperiment.sphereColour(size, radius, config.cellSize());

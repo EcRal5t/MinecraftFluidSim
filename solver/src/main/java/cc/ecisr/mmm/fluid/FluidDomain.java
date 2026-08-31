@@ -65,7 +65,7 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 
 /**
- * A bounded three-dimensional PIC/FLIP liquid domain.
+ * A bounded three-dimensional FLIP liquid domain.
  *
  * <p>The update order mirrors the user's Godot compute implementation: P2G,
  * grid forces, pressure projection, G2P, then particle advection with solid
@@ -75,7 +75,6 @@ import java.util.TreeSet;
 public final class FluidDomain {
 	private static final int PARTICLES_PER_FULL_CELL = 8;
 	static final float PARTICLE_VOLUME = 1.0F / PARTICLES_PER_FULL_CELL;
-	private static final float FLIP_RATIO = 0.90F;
 	private static final int DEFAULT_MAX_PARTICLES = 262_144;
 	private static final int NO_PHASE = Integer.MIN_VALUE;
 	private static final int INDICATOR_AIM_SNAP_CELLS = 2;
@@ -121,7 +120,6 @@ public final class FluidDomain {
 	final float[] volume;
 	boolean surfaceTensionActive;
 	boolean liquidPairTensionActive;
-	private static final int[][] SURFACE_TENSION_DIRECTIONS = {{-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0}, {0,0,-1}, {0,0,1}};
 
 	/** Frozen P2G face mass/volume weights; extrapolation reuses the live weight arrays as scratch. */
 
@@ -1805,13 +1803,6 @@ public final class FluidDomain {
 		return granularCoupling == null ? geometric : granularCoupling.effectiveOpenCellVolume(cell, geometric);
 	}
 
-	float pressureOpenCellVolume(int cell) {
-		float geometric = geometry.cutCells.openCellVolume(cell);
-		return pressureGranularCoupling == null ? geometric
-				: pressureGranularCoupling.effectiveOpenCellVolume(cell, geometric);
-	}
-
-
 	/** Exact marker-mass inventory; reconstructed grid density is never used for this ledger. */
 	public double totalMass() { return metrics.totalMass(); }
 
@@ -2551,6 +2542,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return new StepStats(
 				substeps, pressureIterations, lastPressureResidual, before, totalVolume(), massBefore, totalMass(),
 				reseeding.merged(), reseeding.split(), reseeding.budgetSkipped(), reseeding.geometrySkipped(),
+				reseeding.conservationSkipped(),
 				reseeding.ledgerError(), reseeding.massLedgerError(),
 				chemistry.dirtyCells(), chemistry.evaluations(), chemistry.changedMarkers(),
 				thermalAxis.condensedPhase(), thermalAxis.gasPhase(),
@@ -2588,22 +2580,26 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	double gridKineticEnergyJoules() {
-		double energy = faceKineticEnergyJoules(mac.velocityX, mac.p2gWeightX)
-				+ faceKineticEnergyJoules(mac.velocityY, mac.p2gWeightY)
-				+ faceKineticEnergyJoules(mac.velocityZ, mac.p2gWeightZ);
+		double energy = unitScale.kilograms(gridKineticEnergySolverUnits());
 		if (!(Double.isFinite(energy) && energy >= 0.0)) {
 			throw new ArithmeticException("Grid kinetic-energy audit is invalid");
 		}
 		return energy;
 	}
 
-	private double faceKineticEnergyJoules(float[] faceVelocity, float[] p2gWeight) {
+	/** Kinetic energy in solver mass units for the pressure projection's variational face metric. */
+	double gridKineticEnergySolverUnits() {
+		double densityScale = variableDensityActive ? 1.0 : config.density();
+		double energy = faceKineticEnergy(mac.velocityX, mac.p2gWeightX, densityScale)
+				+ faceKineticEnergy(mac.velocityY, mac.p2gWeightY, densityScale)
+				+ faceKineticEnergy(mac.velocityZ, mac.p2gWeightZ, densityScale);
+		return energy;
+	}
+
+	private static double faceKineticEnergy(float[] velocity, float[] weight, double densityScale) {
 		double energy = 0.0;
-		for (int face = 0; face < faceVelocity.length; face++) {
-			double solverMass = variableDensityActive ? p2gWeight[face]
-					: p2gWeight[face] * config.density();
-			energy += 0.5 * unitScale.kilograms(solverMass)
-					* faceVelocity[face] * (double) faceVelocity[face];
+		for (int face = 0; face < velocity.length; face++) {
+			energy += 0.5 * densityScale * weight[face] * velocity[face] * (double) velocity[face];
 		}
 		return energy;
 	}
@@ -2682,14 +2678,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			GasThermalPhaseStats gasPhase
 	) { }
 
-	/**
-	 * Reports which previous nodes still own at least one open cell in the new topology.
-	 *
-	 * <p>A previous node that still owns an open cell is matched by membership overlap, so only a
-	 * node reduced entirely to interface residuals may hand its inventory to a neighbouring new
-	 * component. That keeps a transient marker void in the liquid bulk from being treated as a
-	 * descendant of the headspace; a new cavity with no old owner is an explicit vacuum node.</p>
-	 */
 	/**
 	 * Brings the derived gas topology to the same carrier geometry that a checkpoint will encode:
 	 * persistence must either commit this jointly planned remap or keep the previous HEAD.
@@ -3203,11 +3191,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	}
 
 	/**
-	 * Adds balanced-force CSF momentum for every immiscible liquid pair with a positive {@code sigma12}.
-	 * The force uses the same face density scaling as the variable-density pressure projection, and the
-	 * pressure RHS is built from the resulting velocity, so the pressure solve cancels the gradient part.
-	 */
-	/**
 	 * Liquid-gas surface tension for a pressure cell. Immiscible phases use the first registry material
 	 * of the dominant phase; miscible composition-dependent tension is not modelled yet.
 	 */
@@ -3226,6 +3209,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 	/** Rebuilds the cell-centred surface-tension pressure {@code sigma * kappa} used as the free-surface jump. */
 	void rebuildSurfaceTensionPressure() {
 		Arrays.fill(tension.surfaceTensionPressure, 0.0F);
+		Arrays.fill(tension.wallSurfaceEnergyDensity, 0.0);
 		if (!surfaceTensionActive) return;
 		for (int index = 0; index < cellCount; index++) {
 			if (geometry.solid[index]) {
@@ -3246,6 +3230,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			if (sigma <= 0.0) continue;
 			double kappa = surfaceTensionMeanCurvature(x, y, z);
 			tension.surfaceTensionPressure[index] = (float) (sigma * kappa);
+			tension.wallSurfaceEnergyDensity[index] = -sigma
+					* Math.cos(surfaceTensionContactAngleAtCell(index)) / config.cellSize();
 		}
 	}
 
@@ -3279,7 +3265,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	/** Unit interface normal at a cell centre, pointing from gas into liquid, computed once per cell into the cache. */
 	void rebuildSurfaceTensionNormals() {
-		double epsilon = 1.0E-6 / config.cellSize();
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int index = cellIndex(x, y, z);
 			if (geometry.solid[index]) {
@@ -3292,7 +3277,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			double gradientY = surfaceTensionCentralDifference(x, y, z, 0, 1, 0);
 			double gradientZ = surfaceTensionCentralDifference(x, y, z, 0, 0, 1);
 			double length = Math.sqrt(gradientX * gradientX + gradientY * gradientY + gradientZ * gradientZ);
-			if (length <= epsilon) {
+			if (!(length > 0.0)) {
 				tension.surfaceTensionNormalX[index] = 0.0;
 				tension.surfaceTensionNormalY[index] = 0.0;
 				tension.surfaceTensionNormalZ[index] = 1.0;
@@ -3301,54 +3286,10 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			double normalX = gradientX / length;
 			double normalY = gradientY / length;
 			double normalZ = gradientZ / length;
-			double[] solidNormal = surfaceTensionSolidNormal(x, y, z);
-			if (solidNormal == null) {
-				tension.surfaceTensionNormalX[index] = normalX;
-				tension.surfaceTensionNormalY[index] = normalY;
-				tension.surfaceTensionNormalZ[index] = normalZ;
-				continue;
-			}
-			double contactAngle = surfaceTensionContactAngleAtCell(index);
-			double cosTheta = Math.cos(contactAngle);
-			double sinTheta = Math.sin(contactAngle);
-			double nsx = solidNormal[0], nsy = solidNormal[1], nsz = solidNormal[2];
-			double dot = normalX * nsx + normalY * nsy + normalZ * nsz;
-			double tangentX = normalX - dot * nsx;
-			double tangentY = normalY - dot * nsy;
-			double tangentZ = normalZ - dot * nsz;
-			double tangentLength = Math.sqrt(tangentX * tangentX + tangentY * tangentY + tangentZ * tangentZ);
-			if (tangentLength <= 1.0E-9) {
-				tangentX = Math.abs(nsx) < 0.9 ? 1.0 : 0.0;
-				tangentY = Math.abs(nsx) < 0.9 ? 0.0 : 1.0;
-				tangentZ = 0.0;
-				dot = tangentX * nsx + tangentY * nsy + tangentZ * nsz;
-				tangentX -= dot * nsx;
-				tangentY -= dot * nsy;
-				tangentZ -= dot * nsz;
-				tangentLength = Math.sqrt(tangentX * tangentX + tangentY * tangentY + tangentZ * tangentZ);
-			}
-			tension.surfaceTensionNormalX[index] = -cosTheta * nsx + sinTheta * tangentX / tangentLength;
-			tension.surfaceTensionNormalY[index] = -cosTheta * nsy + sinTheta * tangentY / tangentLength;
-			tension.surfaceTensionNormalZ[index] = -cosTheta * nsz + sinTheta * tangentZ / tangentLength;
+			tension.surfaceTensionNormalX[index] = normalX;
+			tension.surfaceTensionNormalY[index] = normalY;
+			tension.surfaceTensionNormalZ[index] = normalZ;
 		}
-	}
-
-	private double[] surfaceTensionSolidNormal(int x, int y, int z) {
-		double normalX = 0.0, normalY = 0.0, normalZ = 0.0;
-		int count = 0;
-		for (int[] direction : SURFACE_TENSION_DIRECTIONS) {
-			int dx = direction[0], dy = direction[1], dz = direction[2];
-			int sx = x + dx, sy = y + dy, sz = z + dz;
-			if (!inside(sx, sy, sz) || !geometry.solid[cellIndex(sx, sy, sz)]) continue;
-			normalX -= dx;
-			normalY -= dy;
-			normalZ -= dz;
-			count++;
-		}
-		if (count == 0) return null;
-		double length = Math.sqrt(normalX * normalX + normalY * normalY + normalZ * normalZ);
-		if (length <= 1.0E-9) return null;
-		return new double[] {normalX / length, normalY / length, normalZ / length};
 	}
 
 	private double surfaceTensionContactAngleAtCell(int cell) {
@@ -3375,7 +3316,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return -((nxPlus - nxMinus) + (nyPlus - nyMinus) + (nzPlus - nzMinus)) * inverseTwoCell;
 	}
 
-	/** Neighbor normal used in the divergence; a solid neighbour reuses the cell's own Young-adjusted normal. */
+	/** Neighbor normal used in the divergence; a solid neighbour extends the liquid-gas normal constantly. */
 	private double surfaceTensionNeighborNormal(int x, int y, int z, int dx, int dy, int dz, int component) {
 		int nx = x + dx, ny = y + dy, nz = z + dz;
 		if (inside(nx, ny, nz) && geometry.solid[cellIndex(nx, ny, nz)]) {
@@ -3438,6 +3379,16 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		return (float) (config.density() / markerGrid.cellDensity[fluid]);
 	}
 
+	float carrierDensityScale(int first, int second) {
+		boolean firstCarrier = markerGrid.markerCount[first] > 0;
+		boolean secondCarrier = markerGrid.markerCount[second] > 0;
+		if (firstCarrier && secondCarrier) {
+			return (float) (config.density() / materialFaceEffectiveDensity(first, second));
+		}
+		int carrier = firstCarrier ? first : second;
+		return (float) (config.density() / markerGrid.cellDensity[carrier]);
+	}
+
 	private double materialFaceEffectiveDensity(int one, int two) {
 		int first = Math.min(one, two), second = Math.max(one, two);
 		double fraction = 0.5;
@@ -3446,8 +3397,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 			double firstSigned = phaseFraction(first, firstPhase) - 0.5;
 			double secondSigned = phaseFraction(second, firstPhase) - 0.5;
 			double denominator = firstSigned - secondSigned;
-			if (firstSigned > 0.0 && secondSigned < 0.0 && denominator > 1.0E-12) {
-				fraction = Math.max(0.05, Math.min(0.95, firstSigned / denominator));
+			if (firstSigned > 0.0 && secondSigned < 0.0) {
+				fraction = firstSigned / denominator;
 			}
 		}
 		return fraction * markerGrid.cellDensity[first] + (1.0 - fraction) * markerGrid.cellDensity[second];
@@ -3850,9 +3801,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 				&& (markerGrid.markerCount[first] > 0 || markerGrid.markerCount[second] > 0);
 	}
 	float pressureInterfaceTheta(int fluid, int directionX, int directionY, int directionZ) {
-		return markerGrid.markerCount[fluid] > 0
-				? freeSurfaceGeometry.pressureTheta(fluid, directionX, directionY, directionZ)
-				: pressurePhaseGeometry.interfaceTheta(fluid, directionX, directionY, directionZ);
+		return pressurePhaseGeometry.interfaceTheta(fluid, directionX, directionY, directionZ);
 	}
 	boolean inside(int x, int y, int z) { return x >= 0 && x < sizeX && y >= 0 && y < sizeY && z >= 0 && z < sizeZ; }
 	int cellIndex(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
@@ -3877,7 +3826,8 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 				x / h - 0.5F, y / h - 0.5F, z / h);
 	}
 
-	private static float trilinearValid(
+
+	static float trilinearValid(
 			float[] values, boolean[] valid, int nx, int ny, int nz, float x, float y, float z
 	) {
 		float cx = clamp(x, 0.0F, nx - 1.0F), cy = clamp(y, 0.0F, ny - 1.0F), cz = clamp(z, 0.0F, nz - 1.0F);
@@ -3996,6 +3946,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			int reseededSplits,
 			int reseedBudgetSkipped,
 			int reseedGeometrySkipped,
+			int reseedConservationSkipped,
 			double reseedLedgerError,
 			double reseedMassLedgerError,
 			int chemistryDirtyCells,

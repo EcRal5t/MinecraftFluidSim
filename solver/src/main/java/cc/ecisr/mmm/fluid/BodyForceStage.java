@@ -9,7 +9,7 @@ import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 /**
  * Body-force stages of the substep, in pipeline order: porous damping of the previously
  * committed flow, gravity, the Boussinesq thermal buoyancy correction and the solid-face
- * velocity enforcement. The liquid-pair surface tension force joins this stage in its own
+ * velocity enforcement. Liquid-gas, liquid-solid and liquid-pair surface forces join this stage in their own
  * slice; the buoyancy scratch columns stay with the domain lifecycle.
  */
 final class BodyForceStage {
@@ -36,6 +36,7 @@ final class BodyForceStage {
 		int particleCellIndex(int marker);
 		FluidMaterialRegistry materialRegistry();
 		double thermalMarkerTemperature(int marker);
+		boolean liquidGasTensionActive();
 		boolean liquidPairTensionActive();
 		double phaseFraction(int cell, int phase);
 		void smoothSurfaceTensionColor();
@@ -44,6 +45,7 @@ final class BodyForceStage {
 		boolean isFluid(int cell);
 		boolean variableDensityActive();
 		float pressureDensityScale(int first, int second);
+		float carrierDensityScale(int first, int second);
 	}
 
 	private final Workspace state;
@@ -136,6 +138,88 @@ final class BodyForceStage {
 		}
 	}
 
+	/**
+	 * Balanced-force CSF momentum on liquid-gas carrier faces that have no pressure unknown on either
+	 * side. Resolved faces receive the same capillary stress as a sharp ghost-fluid jump; this slice
+	 * closes only the complementary sub-cell interface, avoiding both a missing contact-line force and
+	 * double application. The exact volume fraction is the discrete Heaviside field, while normals and
+	 * curvature are reconstructed from its smoothed copy.
+	 */
+	void applyLiquidGasSurfaceTensionForce(float dt) {
+		if (!access.liquidGasTensionActive()) return;
+		float scale = dt / (state.config.density() * state.config.cellSize());
+		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 1; x < state.sizeX; x++) {
+			int left = access.cellIndex(x - 1, y, z), right = access.cellIndex(x, y, z), face = access.xFaceIndex(x, y, z);
+			applyLiquidGasFaceForce(left, right, face, scale, access.pressureXFaceOpen(x, y, z), state.mac.velocityX);
+		}
+		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
+			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z), face = access.yFaceIndex(x, y, z);
+			applyLiquidGasFaceForce(below, above, face, scale, access.pressureYFaceOpen(x, y, z), state.mac.velocityY);
+		}
+		for (int z = 1; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
+			int back = access.cellIndex(x, y, z - 1), front = access.cellIndex(x, y, z), face = access.zFaceIndex(x, y, z);
+			applyLiquidGasFaceForce(back, front, face, scale, access.pressureZFaceOpen(x, y, z), state.mac.velocityZ);
+		}
+	}
+
+	/** Tangential force obtained from the Young wall-energy density sigma_sl - sigma_sg. */
+	void applyLiquidSolidSurfaceEnergyForce(float dt) {
+		if (!access.liquidGasTensionActive()) return;
+		float scale = dt / (state.config.density() * state.config.cellSize());
+		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 1; x < state.sizeX; x++) {
+			int left = access.cellIndex(x - 1, y, z), right = access.cellIndex(x, y, z), face = access.xFaceIndex(x, y, z);
+			applyWallEnergyFaceForce(left, right, face, 0, scale, access.pressureXFaceOpen(x, y, z), state.mac.velocityX);
+		}
+		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
+			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z), face = access.yFaceIndex(x, y, z);
+			applyWallEnergyFaceForce(below, above, face, 1, scale, access.pressureYFaceOpen(x, y, z), state.mac.velocityY);
+		}
+		for (int z = 1; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
+			int back = access.cellIndex(x, y, z - 1), front = access.cellIndex(x, y, z), face = access.zFaceIndex(x, y, z);
+			applyWallEnergyFaceForce(back, front, face, 2, scale, access.pressureZFaceOpen(x, y, z), state.mac.velocityZ);
+		}
+	}
+
+	private void applyWallEnergyFaceForce(int first, int second, int face, int velocityAxis,
+	                                      float scale, float openArea, float[] velocity) {
+		if (!access.carrierFaceActive(first, second, openArea)) return;
+		double firstPotential = state.tension.wallSurfaceEnergyDensity[first]
+				* state.tension.surfaceTensionColor[first] * tangentialWallArea(first, velocityAxis);
+		double secondPotential = state.tension.wallSurfaceEnergyDensity[second]
+				* state.tension.surfaceTensionColor[second] * tangentialWallArea(second, velocityAxis);
+		double difference = secondPotential - firstPotential;
+		if (difference == 0.0) return;
+		float densityScale = access.variableDensityActive() ? access.carrierDensityScale(first, second) : 1.0F;
+		velocity[face] += (float) (scale * densityScale * difference);
+	}
+
+	private double tangentialWallArea(int cell, int velocityAxis) {
+		double area = 0.0;
+		for (int wallNormalAxis = 0; wallNormalAxis < 3; wallNormalAxis++) {
+			if (wallNormalAxis != velocityAxis) area += state.geometry.cutCells.solidWallArea(cell, wallNormalAxis);
+		}
+		return area;
+	}
+
+	private void applyLiquidGasFaceForce(int first, int second, int face, float scale,
+	                                     float openArea, float[] velocity) {
+		if (!access.carrierFaceActive(first, second, openArea)) return;
+		if (access.isFluid(first) || access.isFluid(second)) return;
+		double delta = state.tension.surfaceTensionSmoothed[second] - state.tension.surfaceTensionSmoothed[first];
+		if (delta == 0.0) return;
+		boolean firstCarriesLiquid = state.markerGrid.markerCount[first] > 0;
+		boolean secondCarriesLiquid = state.markerGrid.markerCount[second] > 0;
+		double capillaryPressure;
+		if (firstCarriesLiquid && secondCarriesLiquid) {
+			capillaryPressure = 0.5 * (state.tension.surfaceTensionPressure[first]
+					+ state.tension.surfaceTensionPressure[second]);
+		} else {
+			capillaryPressure = state.tension.surfaceTensionPressure[firstCarriesLiquid ? first : second];
+		}
+		float densityScale = access.variableDensityActive() ? access.carrierDensityScale(first, second) : 1.0F;
+		velocity[face] += (float) (scale * densityScale * capillaryPressure * delta);
+	}
+
 	/** Balanced-force CSF momentum for every immiscible liquid pair with a positive sigma12. */
 	void applyLiquidPairSurfaceTensionForce(float dt) {
 		if (!access.liquidPairTensionActive()) return;
@@ -182,7 +266,7 @@ final class BodyForceStage {
 	                                      float inverseCell, float openArea, float[] velocity) {
 		if (openArea <= 0.0F || !access.isFluid(first) || !access.isFluid(second)) return;
 		double delta = state.tension.surfaceTensionSmoothed[second] - state.tension.surfaceTensionSmoothed[first];
-		if (Math.abs(delta) <= 1.0E-12) return;
+		if (delta == 0.0) return;
 		float densityScale = access.variableDensityActive() ? access.pressureDensityScale(first, second) : 1.0F;
 		double kappa = 0.5 * (state.tension.surfaceTensionPairCurvature[first] + state.tension.surfaceTensionPairCurvature[second]);
 		float forceDifference = (float) (tensionScale * kappa * delta);

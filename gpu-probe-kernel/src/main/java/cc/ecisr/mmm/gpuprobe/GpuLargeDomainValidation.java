@@ -53,7 +53,7 @@ final class GpuLargeDomainValidation {
 		int grid = 64, capacity = 32 * 32 * 32 * 64;
 		List<String> results = new ArrayList<>();
 		for (VulkanFlipPipeline.PressureSolver solver : VulkanFlipPipeline.PressureSolver.values()) {
-			int iterations = switch (solver) { case JACOBI -> 64; case RBGS_SOR -> 64; case PCG, PCG_DIAGONAL -> 64; case MULTIGRID_TWO_LEVEL, MULTIGRID_HIERARCHY -> 2; };
+			int iterations = switch (solver) { case JACOBI -> 64; case RBGS_SOR -> 64; case PCG_DIAGONAL -> 64; case MULTIGRID_TWO_LEVEL, MULTIGRID_HIERARCHY -> 2; };
 			VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(grid, grid, grid, CELL_SIZE, DT, GRAVITY, RHO,
 					iterations, capacity);
 			try (VulkanFlipPipeline gpu = new VulkanFlipPipeline(config, device,

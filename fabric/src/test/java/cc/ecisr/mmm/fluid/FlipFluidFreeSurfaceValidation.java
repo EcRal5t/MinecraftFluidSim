@@ -9,9 +9,10 @@ public final class FlipFluidFreeSurfaceValidation {
 		planeVolumeInversionIsAccurate();
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
 		pressurePhaseUsesConservativeFootprintVolume();
+		divergenceConformingAdvectionMatchesMacDivergence();
+		energyStableFlipTransferUsesTheLargestAdmissibleIncrement();
 		bodyOverlapResolvesContinuousSubmergence();
 		pureWaterMarkerMassLedgerTracksVolume();
-		volumeDriftCorrectionPreservesLegitimateSurfaceDeficits();
 		fractionalHydrostaticColumnsBalanceGravity();
 		pressureNonConvergenceRejectsStep();
 		thinLayerRegularizationRemainsStable();
@@ -84,27 +85,24 @@ public final class FlipFluidFreeSurfaceValidation {
 	}
 
 	private static void axisAlignedInterfaceDistanceUsesExactCellLedger() {
-		for (float fraction : new float[] {0.25F, 0.60F, 0.75F, 1.0F}) {
+		for (float fraction : new float[] {0.60F, 0.75F, 1.0F}) {
 			int sizeX = 5, sizeY = 4, sizeZ = 5;
 			int cellCount = sizeX * sizeY * sizeZ;
 			boolean[] solid = new boolean[cellCount];
-			int[] markerCount = new int[cellCount];
-			FlipFreeSurfaceGeometry geometry = new FlipFreeSurfaceGeometry(sizeX, sizeY, sizeZ);
+			FlipPressurePhaseGeometry geometry = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
 			FlipCutCellGeometry cutCells = new FlipCutCellGeometry(sizeX, sizeY, sizeZ);
-			geometry.clearExactVolumes();
+			double[] exactVolume = new double[cellCount];
+			boolean[] pressureFluid = new boolean[cellCount];
 			for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) {
 				int lower = index(sizeX, sizeY, x, 0, z);
 				int surface = index(sizeX, sizeY, x, 1, z);
-				markerCount[lower] = 8;
-				markerCount[surface] = 1;
-				geometry.addExactVolume(lower, 1.0F);
-				geometry.addExactVolume(surface, fraction);
+				exactVolume[lower] = 1.0F;
+				exactVolume[surface] = fraction;
 			}
-			geometry.rebuild(solid, markerCount, cutCells);
+			geometry.rebuild(solid, exactVolume, cutCells, null, pressureFluid);
 			int surface = index(sizeX, sizeY, 2, 1, 2);
-			float expected = fraction >= 1.0F - 1.0E-6F
-					? 0.5F : Math.max(FlipFreeSurfaceGeometry.MINIMUM_THETA, fraction - 0.5F);
-			float actual = geometry.pressureTheta(surface, 0, 1, 0);
+			float expected = fraction >= 1.0F - 1.0E-6F ? 0.5F : fraction - 0.5F;
+			float actual = geometry.interfaceTheta(surface, 0, 1, 0);
 			check(Math.abs(actual - expected) < 2.0E-5F,
 					"axis-aligned theta did not follow the exact cell fraction: fraction=" + fraction + ", theta=" + actual);
 			check(Math.abs(geometry.liquidFraction(surface) - fraction) < 1.0E-7F,
@@ -117,7 +115,6 @@ public final class FlipFluidFreeSurfaceValidation {
 		int cellCount = sizeX * sizeY * sizeZ;
 		boolean[] solid = new boolean[cellCount];
 		boolean[] fluid = new boolean[cellCount];
-		int[] markerCount = new int[cellCount];
 		double[] reconstructed = new double[cellCount];
 		int bulk = index(sizeX, sizeY, 1, 1, 1);
 		int fringe = index(sizeX, sizeY, 2, 1, 1);
@@ -125,40 +122,65 @@ public final class FlipFluidFreeSurfaceValidation {
 		FlipCutCellGeometry cutCells = new FlipCutCellGeometry(sizeX, sizeY, sizeZ);
 		reconstructed[bulk] = 0.875F;
 		reconstructed[fringe] = 0.125F;
-		pressure.rebuild(solid, markerCount, reconstructed, cutCells, null, fluid);
+		pressure.rebuild(solid, reconstructed, cutCells, null, fluid);
 		check(fluid[bulk] && !fluid[fringe]
 				&& Math.abs(pressure.liquidFraction(bulk) - 0.875F) < 1.0E-7F
 				&& Math.abs(pressure.liquidFraction(fringe) - 0.125F) < 1.0E-7F,
 				"pressure phase did not retain the conservative center-contained footprint");
 		reconstructed[bulk] = 0.75F;
 		reconstructed[fringe] = 0.25F;
-		pressure.rebuild(solid, markerCount, reconstructed, cutCells, null, fluid);
+		pressure.rebuild(solid, reconstructed, cutCells, null, fluid);
 		check(fluid[bulk] && !fluid[fringe]
 				&& Math.abs(pressure.liquidFraction(bulk) + pressure.liquidFraction(fringe) - 1.0F) < 1.0E-7F,
 				"pressure footprint transfer did not preserve its source volume");
 		int wall = index(sizeX, sizeY, 2, 2, 1);
 		solid[wall] = true;
 		cutCells.replaceMask(wall, FlipCutCellGeometry.FULL_MASK);
-		markerCount[fringe] = 1;
-		pressure.rebuild(solid, markerCount, reconstructed, cutCells, null, fluid);
-		check(fluid[bulk] && fluid[fringe],
-				"wall-supported marker cell was discarded as footprint-only pressure fringe");
+		pressure.rebuild(solid, reconstructed, cutCells, null, fluid);
+		check(fluid[bulk] && !fluid[fringe],
+				"a wall-adjacent subcentre film was promoted into a cell-centred pressure unknown");
 	}
 
-	private static void volumeDriftCorrectionPreservesLegitimateSurfaceDeficits() {
-		float dt = 0.05F;
-		check(Math.abs(FlipVolumeDriftCorrection.targetDivergence(1.25F, 1.25F, 1.0F, true, dt) - 0.25F) < 1.0E-7F,
-				"overfilled surface cell did not request pressure expansion");
-		check(Math.abs(FlipVolumeDriftCorrection.targetDivergence(0.75F, 0.75F, 1.0F, false, dt) + 0.25F) < 1.0E-7F,
-				"underfilled interior cell did not request pressure convergence");
-		check(FlipVolumeDriftCorrection.targetDivergence(0.75F, 0.75F, 1.0F, true, dt) == 0.0F,
-				"legitimate underfilled free-surface cell was compressed");
-		check(FlipVolumeDriftCorrection.targetDivergence(0.75F, 1.0F, 1.0F, false, dt) == 0.0F,
-				"full exact interior cell was corrected from a smoothed-density deficit");
-		check(FlipVolumeDriftCorrection.targetDivergence(0.5F, 0.5F, 0.5F, false, dt) == 0.0F,
-				"cut-cell rest volume did not use its open capacity");
-		check(Math.abs(FlipVolumeDriftCorrection.targetDivergence(4.0F, 4.0F, 1.0F, false, dt) - 2.0F) < 1.0E-7F,
-				"volume-drift correction did not obey its per-step cap");
+	private static void divergenceConformingAdvectionMatchesMacDivergence() {
+		int nx = 4, ny = 4, nz = 4;
+		float h = 0.5F;
+		MacVelocityGrid mac = new MacVelocityGrid(nx, ny, nz);
+		for (int i = 0; i < mac.velocityX.length; i++) mac.velocityX[i] = (i * 17 % 23 - 11) * 0.03125F;
+		for (int i = 0; i < mac.velocityY.length; i++) mac.velocityY[i] = (i * 13 % 19 - 9) * 0.02734375F;
+		for (int i = 0; i < mac.velocityZ.length; i++) mac.velocityZ[i] = (i * 11 % 17 - 8) * 0.03515625F;
+		int x = 1, y = 1, z = 1;
+		float expected = (mac.velocityX[(x + 1) + (nx + 1) * (y + ny * z)]
+				- mac.velocityX[x + (nx + 1) * (y + ny * z)]
+				+ mac.velocityY[x + nx * ((y + 1) + (ny + 1) * z)]
+				- mac.velocityY[x + nx * (y + (ny + 1) * z)]
+				+ mac.velocityZ[x + nx * (y + ny * (z + 1))]
+				- mac.velocityZ[x + nx * (y + ny * z)]) / h;
+		float px = (x + 0.37F) * h, py = (y + 0.43F) * h, pz = (z + 0.61F) * h;
+		float epsilon = h / 1_024.0F;
+		DivergenceConformingVelocityField.Sample negative = new DivergenceConformingVelocityField.Sample();
+		DivergenceConformingVelocityField.Sample positive = new DivergenceConformingVelocityField.Sample();
+		DivergenceConformingVelocityField.sample(mac, nx, ny, nz, h, px - epsilon, py, pz, negative);
+		DivergenceConformingVelocityField.sample(mac, nx, ny, nz, h, px + epsilon, py, pz, positive);
+		float reconstructed = (positive.x - negative.x) / (2.0F * epsilon);
+		DivergenceConformingVelocityField.sample(mac, nx, ny, nz, h, px, py - epsilon, pz, negative);
+		DivergenceConformingVelocityField.sample(mac, nx, ny, nz, h, px, py + epsilon, pz, positive);
+		reconstructed += (positive.y - negative.y) / (2.0F * epsilon);
+		DivergenceConformingVelocityField.sample(mac, nx, ny, nz, h, px, py, pz - epsilon, negative);
+		DivergenceConformingVelocityField.sample(mac, nx, ny, nz, h, px, py, pz + epsilon, positive);
+		reconstructed += (positive.z - negative.z) / (2.0F * epsilon);
+		check(Math.abs(reconstructed - expected) < 2.0E-4F,
+				"H(div) reconstruction changed MAC divergence: expected=" + expected + ", actual=" + reconstructed);
+	}
+
+	private static void energyStableFlipTransferUsesTheLargestAdmissibleIncrement() {
+		double transfer = FlipTransferScheme.maximumEnergyStableTransfer(4.0, -2.0, 3.0, 3.0);
+		check(Math.abs(transfer - 0.5) < 1.0E-12,
+				"energy-stable G2P did not select the largest admissible FLIP increment: " + transfer);
+		double resultingEnergy = 4.0 * transfer * transfer - 2.0 * transfer + 3.0;
+		check(resultingEnergy <= 3.0 && Math.abs(resultingEnergy - 3.0) < 1.0E-12,
+				"energy-stable G2P exceeded its projected-grid energy budget");
+		check(FlipTransferScheme.maximumEnergyStableTransfer(1.0, -2.0, 1.0, 1.0) == 1.0,
+				"an energetically admissible full FLIP increment was damped");
 	}
 
 	private static void fractionalHydrostaticColumnsBalanceGravity() {

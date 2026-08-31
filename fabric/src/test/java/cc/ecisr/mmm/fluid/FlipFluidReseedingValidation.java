@@ -11,7 +11,7 @@ public final class FlipFluidReseedingValidation {
 		boolean fast = java.util.Arrays.asList(args).contains("--fast");
 		underpopulatedCellSplitsConservatively();
 		overpopulatedCellMergesConservatively();
-		nonBinaryVolumesRemainWithinFloatLedgerTolerance();
+		nonBinaryVolumesRefuseInexactConsolidation();
 		hardBudgetSkipsWithoutMutation();
 		reseedingIsBitDeterministic();
 		multiMaterialReseedingPreservesInventories();
@@ -34,8 +34,9 @@ public final class FlipFluidReseedingValidation {
 		Ledger before = fixture.ledger();
 		FlipParticleReseeder.Result result = fixture.reseed(64);
 		Ledger after = fixture.ledger(result.particleCount());
-		check(result.particleCount() == 4 && result.split() == 3 && result.merged() == 0,
-				"full underpopulated cell did not split to four markers: " + result);
+		int target = ConservativeMarkerSampling.targetMarkers(1.0F);
+		check(result.particleCount() == target && result.split() == target - 1 && result.merged() == 0,
+				"full underpopulated cell did not reach its quadrature count: " + result);
 		checkLedger(before, after, 2.0E-7, "split");
 		check(Math.abs(result.ledgerError()) < 1.0E-12, "power-of-two split changed the exact float ledger");
 	}
@@ -54,8 +55,10 @@ public final class FlipFluidReseedingValidation {
 		Ledger before = fixture.ledger();
 		FlipParticleReseeder.Result result = fixture.reseed(64);
 		Ledger after = fixture.ledger(result.particleCount());
-		check(result.particleCount() == 8 && result.merged() == 8 && result.split() == 0,
-				"overpopulated cell did not merge to eight distributed markers: " + result);
+		int target = ConservativeMarkerSampling.targetMarkers((float) before.volume);
+		check(result.particleCount() == target
+				&& result.merged() == fixture.count - target && result.split() == 0,
+				"overpopulated cell did not merge to its volume-derived quadrature count: " + result);
 		checkLedger(before, after, 2.0E-6, "merge");
 		check(Math.abs(result.ledgerError()) < 1.0E-12, "binary-fraction merge changed the exact float ledger");
 	}
@@ -67,12 +70,13 @@ public final class FlipFluidReseedingValidation {
 		Ledger before = fixture.ledger();
 		FlipParticleReseeder.Result result = fixture.reseed(1);
 		Ledger after = fixture.ledger(result.particleCount());
-		check(result.particleCount() == 1 && result.budgetSkipped() == 3,
+		check(result.particleCount() == 1
+				&& result.budgetSkipped() == ConservativeMarkerSampling.targetMarkers(1.0F) - 1,
 				"hard marker budget did not report all skipped splits: " + result);
 		checkLedger(before, after, 0.0, "budget refusal");
 	}
 
-	private static void nonBinaryVolumesRemainWithinFloatLedgerTolerance() {
+	private static void nonBinaryVolumesRefuseInexactConsolidation() {
 		Fixture fixture = new Fixture(64, 17);
 		for (int particle = 0; particle < fixture.count; particle++) {
 			fixture.x[particle] = 1.10F + 0.17F * (particle & 3);
@@ -86,11 +90,14 @@ public final class FlipFluidReseedingValidation {
 		Ledger before = fixture.ledger();
 		FlipParticleReseeder.Result result = fixture.reseed(64);
 		Ledger after = fixture.ledger(result.particleCount());
-		check(result.particleCount() == 8 && result.merged() == 9,
-				"non-binary merge did not reach its bounded target");
+		int target = ConservativeMarkerSampling.targetMarkers((float) before.volume);
+		check(result.particleCount() >= target && result.particleCount() == fixture.count - result.merged(),
+				"non-binary merge count did not match its committed exact consolidations");
+		check(result.conservationSkipped() > 0,
+				"non-binary merge did not report an unrepresentable exact consolidation");
 		checkLedger(before, after, 2.0E-6, "non-binary merge");
-		check(Math.abs(result.ledgerError()) < 2.0E-7,
-				"non-binary merge exceeded the declared float-ledger tolerance: " + result.ledgerError());
+		check(result.ledgerError() == 0.0,
+				"non-binary merge changed the authoritative float ledger: " + result.ledgerError());
 	}
 
 	private static void reseedingIsBitDeterministic() {
@@ -139,7 +146,8 @@ public final class FlipFluidReseedingValidation {
 		MaterialLedger before = fixture.materialLedger(fixture.count);
 		FlipParticleReseeder.Result result = fixture.reseedMaterialAware(64);
 		MaterialLedger after = fixture.materialLedger(result.particleCount());
-		check(result.merged() > 0 && result.particleCount() <= 12,
+		check(result.merged() > 0
+				&& result.particleCount() <= ConservativeMarkerSampling.NOMINAL_MARKERS_PER_FULL_CELL,
 				"multi-material overpopulation did not reduce without crossing labels: " + result);
 		check(Math.abs(result.massLedgerError()) <= 1.0E-12, "multi-material reseeding changed exact mass");
 		check(Math.abs(after.massA - before.massA) <= 1.0E-12
@@ -179,8 +187,8 @@ public final class FlipFluidReseedingValidation {
 				initial.totalVolume(), positions, velocities, initial.copySolidMask()
 		));
 
-		float exactVolume = domain.totalVolume();
-		long merges = 0, splits = 0, budgetSkipped = 0, geometrySkipped = 0;
+		double exactVolume = domain.totalVolumeExact();
+		long merges = 0, splits = 0, budgetSkipped = 0, geometrySkipped = 0, conservationSkipped = 0;
 		double maximumLedgerError = 0.0;
 		for (int step = 0; step < 5_000; step++) {
 			FluidDomain.StepStats stats = domain.step();
@@ -188,6 +196,7 @@ public final class FlipFluidReseedingValidation {
 			splits += stats.reseededSplits();
 			budgetSkipped += stats.reseedBudgetSkipped();
 			geometrySkipped += stats.reseedGeometrySkipped();
+			conservationSkipped += stats.reseedConservationSkipped();
 			maximumLedgerError = Math.max(maximumLedgerError, Math.abs(stats.reseedLedgerError()));
 			check(stats.relativeVolumeError() < 2.0E-6F, "long-run shear step changed marker volume");
 		}
@@ -197,15 +206,18 @@ public final class FlipFluidReseedingValidation {
 				domain.particleCount(), distribution.occupiedCells, distribution.minimumY, distribution.maximumY,
 				distribution.minimumQualifyingMarkers, distribution.maximumMarkers, merges, splits
 		);
-		check(Math.abs(domain.totalVolume() - exactVolume) < 1.0E-4F, "long-run shear changed exact marker volume");
+		check(Double.doubleToRawLongBits(domain.totalVolumeExact()) == Double.doubleToRawLongBits(exactVolume),
+				"long-run shear changed exact marker volume");
 		check(budgetSkipped == 0, "ordinary long-run reseeding exhausted its hard marker budget");
 		check(geometrySkipped == 0, "ordinary long-run reseeding could not place a conservative split");
-		check(maximumLedgerError < 2.0E-7,
-				"ordinary long-run reseeding exceeded float-ledger tolerance: " + maximumLedgerError);
-		check(distribution.maximumMarkers <= 12, "overpopulated cell escaped the merge threshold");
-		check(distribution.minimumQualifyingMarkers >= 4,
+		check(maximumLedgerError == 0.0,
+				"ordinary long-run reseeding changed the exact float ledger: " + maximumLedgerError);
+		check(distribution.maximumMarkers <= ConservativeMarkerSampling.NOMINAL_MARKERS_PER_FULL_CELL,
+				"overpopulated cell escaped the quadrature count");
+		check(distribution.minimumQualifyingMarkers >= ConservativeMarkerSampling.targetMarkers(0.50F),
 				"a cell carrying at least half a cell-volume remained under-sampled");
 		check(distribution.maximumY >= 3, "long-run marker distribution collapsed an entire initialized layer");
+		check(conservationSkipped == 0, "binary-volume shear unexpectedly required a conservation refusal");
 	}
 
 	private static Distribution distribution(FlipParticleState state) {
@@ -248,86 +260,43 @@ public final class FlipFluidReseedingValidation {
 		for (int z = 0; z < sizeZ; z++) for (int y = 1; y <= 6; y++) for (int x = 0; x < 6; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
-		float exactVolume = domain.totalVolume();
-		long merges = 0, splits = 0, budgetSkipped = 0, geometrySkipped = 0;
+		double exactVolume = domain.totalVolumeExact();
+		int initialParticleCount = domain.particleCount();
+		long merges = 0, splits = 0, budgetSkipped = 0, geometrySkipped = 0, conservationSkipped = 0;
 		double maximumLedgerError = 0.0;
-		DamSurface settledReference = null;
 		for (int step = 0; step < 5_000; step++) {
 			FluidDomain.StepStats stats = domain.step();
 			merges += stats.reseededMerges();
 			splits += stats.reseededSplits();
 			budgetSkipped += stats.reseedBudgetSkipped();
 			geometrySkipped += stats.reseedGeometrySkipped();
+			conservationSkipped += stats.reseedConservationSkipped();
 			maximumLedgerError = Math.max(maximumLedgerError, Math.abs(stats.reseedLedgerError()));
 			check(stats.relativeVolumeError() < 2.0E-6F, "long-run dam-break step changed marker volume");
-			if (step + 1 == 1_000) settledReference = damSurface(domain);
 		}
 		FlipParticleState finalState = domain.exportParticleState();
 		Distribution distribution = distribution(finalState);
-		DamSurface finalSurface = damSurface(domain);
 		System.out.printf(
-				"Reseeding dam-break: markers %d, occupied %d, y=%d..%d, min/max %d/%d, "
-						+ "top/above %.3f/%.3f, max/excess %.3f/%.3f, comY %.3f, visible %d, "
-						+ "merge/split %d/%d%n",
+				"Reseeding dam-break: markers %d, occupied %d, y=%d..%d, min/max %d/%d, merge/split %d/%d%n",
 				domain.particleCount(), distribution.occupiedCells, distribution.minimumY, distribution.maximumY,
 				distribution.minimumQualifyingMarkers, distribution.maximumMarkers,
-				finalSurface.targetTopLayerVolume, finalSurface.volumeAboveTarget,
-				finalSurface.maximumCellVolume, finalSurface.excessCellVolume,
-				finalSurface.centerOfMassY, finalSurface.visibleCells, merges, splits
+				merges, splits
 		);
-		check(Math.abs(domain.totalVolume() - exactVolume) < 1.0E-4F, "long-run dam-break changed exact marker volume");
+		check(Double.doubleToRawLongBits(domain.totalVolumeExact()) == Double.doubleToRawLongBits(exactVolume),
+				"long-run dam-break changed exact marker volume");
 		check(budgetSkipped == 0, "long-run dam-break reseeding exhausted its hard marker budget");
 		check(geometrySkipped == 0, "long-run dam-break could not place a conservative split");
-		check(maximumLedgerError < 2.0E-7,
-				"long-run dam-break exceeded float-ledger tolerance: " + maximumLedgerError);
-		check(distribution.maximumMarkers <= 12, "dam-break left an overpopulated marker cell");
-		check(distribution.minimumQualifyingMarkers >= 4,
+		check(maximumLedgerError == 0.0,
+				"long-run dam-break changed the exact float ledger: " + maximumLedgerError);
+		check(domain.particleCount() <= initialParticleCount,
+				"dam-break exact residual markers exceeded the fixture's initial marker population");
+		check(conservationSkipped > 0,
+				"dam-break did not expose any exact-consolidation refusal despite residual markers");
+		check(distribution.minimumQualifyingMarkers >= ConservativeMarkerSampling.targetMarkers(0.50F),
 				"dam-break left a half-full marker cell under-sampled");
 		check(distribution.occupiedCells >= 216,
 				"long-run dam-break compressed 216 cell-volumes into too few pressure cells: "
 						+ distribution.occupiedCells);
-		check(finalSurface.targetTopLayerVolume >= 48.0,
-				"long-run dam-break collapsed its third physical layer: " + finalSurface.targetTopLayerVolume);
-		check(finalSurface.volumeAboveTarget < 2.0,
-				"volume-drift correction sprayed persistent water above the target depth: "
-						+ finalSurface.volumeAboveTarget);
-		check(finalSurface.maximumCellVolume <= 2.0 && finalSurface.excessCellVolume <= 32.0,
-				"long-run dam-break retained severe containing-cell compression: " + finalSurface);
-		check(settledReference != null
-				&& Math.abs(finalSurface.centerOfMassY - settledReference.centerOfMassY) < 0.03
-				&& Math.abs(finalSurface.visibleCells - settledReference.visibleCells) < 16,
-				"dam-break surface continued to sink after the settled reference: at 1000="
-						+ settledReference + ", at 5000=" + finalSurface);
-	}
-
-	private static DamSurface damSurface(FluidDomain domain) {
-		FlipParticleState state = domain.exportParticleState();
-		float[] particles = state.copyPositionVolume();
-		float[] cellVolumes = new float[state.sizeX() * state.sizeY() * state.sizeZ()];
-		double weightedY = 0.0, totalVolume = 0.0;
-		double targetTopLayerVolume = 0.0, volumeAboveTarget = 0.0;
-		for (int particle = 0; particle < state.particleCount(); particle++) {
-			int base = particle * 4;
-			float amount = particles[base + 3];
-			int x = Math.min(state.sizeX() - 1, (int) Math.floor(particles[base] / state.cellSize()));
-			int y = Math.min(state.sizeY() - 1, (int) Math.floor(particles[base + 1] / state.cellSize()));
-			int z = Math.min(state.sizeZ() - 1, (int) Math.floor(particles[base + 2] / state.cellSize()));
-			cellVolumes[(z * state.sizeY() + y) * state.sizeX() + x] += amount;
-			weightedY += particles[base + 1] / state.cellSize() * amount;
-			totalVolume += amount;
-			if (y == 3) targetTopLayerVolume += amount;
-			else if (y > 3) volumeAboveTarget += amount;
-		}
-		double maximumCellVolume = 0.0, excessCellVolume = 0.0;
-		for (float cellVolume : cellVolumes) {
-			maximumCellVolume = Math.max(maximumCellVolume, cellVolume);
-			excessCellVolume += Math.max(0.0, cellVolume - 1.0F);
-		}
-		FluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
-		return new DamSurface(
-				weightedY / totalVolume, targetTopLayerVolume, volumeAboveTarget,
-				maximumCellVolume, excessCellVolume, distribution.visibleCells()
-		);
 	}
 
 	private static void checkLedger(Ledger before, Ledger after, double tolerance, String operation) {
@@ -460,12 +429,4 @@ public final class FlipFluidReseedingValidation {
 			int maximumMarkers
 	) { }
 
-	private record DamSurface(
-			double centerOfMassY,
-			double targetTopLayerVolume,
-			double volumeAboveTarget,
-			double maximumCellVolume,
-			double excessCellVolume,
-			int visibleCells
-	) { }
 }

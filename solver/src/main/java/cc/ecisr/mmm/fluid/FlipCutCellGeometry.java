@@ -23,6 +23,9 @@ final class FlipCutCellGeometry {
 	private final float[] openFaceX;
 	private final float[] openFaceY;
 	private final float[] openFaceZ;
+	private final float[] solidWallAreaX;
+	private final float[] solidWallAreaY;
+	private final float[] solidWallAreaZ;
 	private boolean facesDirty = true;
 
 	FlipCutCellGeometry(int sizeX, int sizeY, int sizeZ) {
@@ -36,6 +39,9 @@ final class FlipCutCellGeometry {
 		openFaceX = new float[(sizeX + 1) * sizeY * sizeZ];
 		openFaceY = new float[sizeX * (sizeY + 1) * sizeZ];
 		openFaceZ = new float[sizeX * sizeY * (sizeZ + 1)];
+		solidWallAreaX = new float[cellCount];
+		solidWallAreaY = new float[cellCount];
+		solidWallAreaZ = new float[cellCount];
 	}
 
 	int mask(int index) {
@@ -93,6 +99,17 @@ final class FlipCutCellGeometry {
 		return openFaceZ[zFaceIndex(x, y, z)];
 	}
 
+	/** Dimensionless solid-wall area owned by an open cell, grouped by wall-normal axis. */
+	float solidWallArea(int cell, int axis) {
+		ensureFaces();
+		return switch (axis) {
+			case 0 -> solidWallAreaX[cell];
+			case 1 -> solidWallAreaY[cell];
+			case 2 -> solidWallAreaZ[cell];
+			default -> throw new IllegalArgumentException("Wall normal axis must be 0, 1 or 2");
+		};
+	}
+
 	boolean pointInsideSolid(float x, float y, float z, float cellSize) {
 		int microX = microCoordinate(x, cellSize, sizeX);
 		int microY = microCoordinate(y, cellSize, sizeY);
@@ -114,6 +131,9 @@ final class FlipCutCellGeometry {
 		Arrays.fill(openFaceX, 0.0F);
 		Arrays.fill(openFaceY, 0.0F);
 		Arrays.fill(openFaceZ, 0.0F);
+		Arrays.fill(solidWallAreaX, 0.0F);
+		Arrays.fill(solidWallAreaY, 0.0F);
+		Arrays.fill(solidWallAreaZ, 0.0F);
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
 			int left = mask(cellIndex(x - 1, y, z));
 			int right = mask(cellIndex(x, y, z));
@@ -141,7 +161,26 @@ final class FlipCutCellGeometry {
 			}
 			openFaceZ[zFaceIndex(x, y, z)] = open * MICRO_FACE_AREA;
 		}
+		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int cell = cellIndex(x, y, z);
+			for (int localZ = 0; localZ < 2; localZ++) for (int localY = 0; localY < 2; localY++) for (int localX = 0; localX < 2; localX++) {
+				if (occupied(mask(cell), localX, localY, localZ)) continue;
+				int microX = 2 * x + localX, microY = 2 * y + localY, microZ = 2 * z + localZ;
+				if (microNeighborSolid(microX - 1, microY, microZ)) solidWallAreaX[cell] += MICRO_FACE_AREA;
+				if (microNeighborSolid(microX + 1, microY, microZ)) solidWallAreaX[cell] += MICRO_FACE_AREA;
+				if (microNeighborSolid(microX, microY - 1, microZ)) solidWallAreaY[cell] += MICRO_FACE_AREA;
+				if (microNeighborSolid(microX, microY + 1, microZ)) solidWallAreaY[cell] += MICRO_FACE_AREA;
+				if (microNeighborSolid(microX, microY, microZ - 1)) solidWallAreaZ[cell] += MICRO_FACE_AREA;
+				if (microNeighborSolid(microX, microY, microZ + 1)) solidWallAreaZ[cell] += MICRO_FACE_AREA;
+			}
+		}
 		facesDirty = false;
+	}
+
+	private boolean microNeighborSolid(int microX, int microY, int microZ) {
+		if (microX < 0 || microX >= 2 * sizeX || microY < 0 || microY >= 2 * sizeY
+				|| microZ < 0 || microZ >= 2 * sizeZ) return true;
+		return microSolid(microX, microY, microZ);
 	}
 
 	private boolean microSolid(int microX, int microY, int microZ) {

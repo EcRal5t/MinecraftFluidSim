@@ -10,7 +10,7 @@
 4. 材料、species、phase、reaction 和热物性数据驱动；除显式 source/sink 外，质量、体积、组成、电荷和能量可审计闭合。
 5. 颗粒覆盖沉淀、细沙等宏观沉降/沉积，不承诺通用刚体、弹性固体或无依据的全套 MPM。
 6. 先把有界 controller 做成可靠、可恢复、可观察、可与其他 Mod 组合的工业流体系统，再评审天然水体和开放世界 ownership。
-7. 以纯 Java `core` 保留 CPU 规范实现，并在量化边界稳定后交付生产 GPU 求解后端；后端切换不得改变库存、事务或失败语义。
+7. 以纯 Java `model` / `solver` / `application` 保留 CPU 规范实现，并在量化边界稳定后交付生产 GPU 求解后端；后端切换不得改变库存、事务或失败语义。
 
 近期不承诺：逐格求解所有开放空气、逐分子/离子粒子、弱酸/活度/完整动力学平衡、通用刚体或弹塑性体、无界洞穴 flood fill、海洋尺度 20 Hz。生产 GPU 后端是明确后续阶段，不与首个 API/原版交互增量绑定。
 
@@ -142,7 +142,11 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 重新接入 full profile 或 backend adoption 前分开的自动门中，正式半满 fixture 的 phase-on logical step 硬预算门已经通过，并在 capture/restore 后保留 gas、总 `U` 和待下一次 projection 消费的 phase volume。纯机械门关闭 phase，但仍绑定正式 thermal/gas/phase registry 并每步经过 backend capture/restore：环境气体按既有半满几何初始化的平面自由面连续通过 500 步；先初始化空腔气体再注液形成的压缩气体场景连续通过 1000 步。两者的动能、质心、gas lineage、总 `U`、绝对 PCG 残差和逐阶段体力-pressure 功均闭合；phase-on 长跑产生的局部沸腾温差与热浮力属于真实非平衡热学，不能作为静水机械自激证据。
 
-无实体停止门已经关闭。除平面半满平衡外，生产注液使用的非平面双 source 轨迹也在隔离 gas 后连续 1000 步衰减，并保持 exact 体积和质量；drift correction 与 pressure component 共享同一守恒 marker footprint，不能再由 PIC/展示平滑场制造目标散度。同一双 source 轨迹现在还以正式 thermal/gas/phase 定义从空闭域开始：`64 m³std` 环境库存只在初始化建立，16/14 BV 注液把 headspace 精确压到 `48/34 m³`，1040 个 backend candidate/capture/restore 后 component、source/sink 与总 `U` 仍闭合，逐节点压力由保留库存、当前容量和温度的 EoS 给出。thermal-off 的生产恢复路径还覆盖 `34 m³std` 密闭库存经 `empty` 扩容到 `64 m³`、再从边界注入 16 BV 的负压起点；只剩部分充液格的有限气泡保留显式 owner，200 个 backend candidate/capture/restore 后库存、source/sink 和 `48 m³` 总容量闭合。相同平面半满状态加入零速度、玩家尺寸的 kinematic boundary 后连续 500 个 backend candidate 也不放大动能，candidate 回报的 liquid impulse 与 held-body 外部约束反作用严格相反；同一夹具另要求以走动速度移动的玩家尺寸 boundary 产生可观察液体响应（峰值动能不低于其附加质量尺度的千分之一），并在停止后保持在注入峰值的有界分数内、不再放大；这条下界门关闭了“moving-body 输入被静默置零”这类接线回归——只约束上界的门无法发现它。该门还按与生产完全相同的顺序（capture → 冻结 body → 完整 candidate → restore）计时，预热后逐步不超过 40 ms。当前求解器还没有黏性阶段，相干晃动只经 PIC/FLIP 混合耗散，会以有界驻波形式长期保留，因此该门不宣称注入能量被完全耗散。lifecycle 门固定 PAUSED、pacing skip 和 due tick 的 liquid-input exactly-once 时序，并固定生产 motion step 只经完整 candidate 原子接受。动态玩家门按 Minecraft 的“本 tick 位移→重力/空气阻力→Mod 响应”顺序运行 2000 game ticks，并每 4 tick 经过一次完整生产 backend capture/restore；连续 AABB 浸没与实际位姿速度使玩家尾段振幅降至微米级，液体瞬态动能回落到静止边界门内。这关闭了离散湿点和反号边界速度造成的正反馈，但不冒充真实玩家侧动量闭合：下一停止门仍须引入实体质量真值和 pressure/drag 分列，在同一事务中验证 liquid/entity 等大反向冲量与实体占位排水。该门完成前不能用 pacing fallback、速度阻尼、材料分支或额外 warmup 代替通过。
+无实体停止门已经关闭。除平面半满平衡外，生产注液使用的非平面双 source 轨迹也在隔离 gas 后连续 1000 步衰减，并保持 exact 体积和质量；pressure PLIC 只由守恒 marker footprint 建立，逐格漂移/过容量不能再由 PIC/展示平滑场制造目标散度。同一双 source 轨迹现在还以正式 thermal/gas/phase 定义从空闭域开始：`64 m³std` 环境库存只在初始化建立，16/14 BV 注液把 headspace 精确压到 `48/34 m³`，1040 个 backend candidate/capture/restore 后 component、source/sink 与总 `U` 仍闭合，逐节点压力由保留库存、当前容量和温度的 EoS 给出。thermal-off 的生产恢复路径还覆盖 `34 m³std` 密闭库存经 `empty` 扩容到 `64 m³`、再从边界注入 16 BV 的负压起点；只剩部分充液格的有限气泡保留显式 owner，200 个 backend candidate/capture/restore 后库存、source/sink 和 `48 m³` 总容量闭合。
+
+相同平面半满状态加入零速度、玩家尺寸的 kinematic boundary 后连续 500 个 backend candidate 也不放大动能，candidate 回报的 liquid impulse 与 held-body 外部约束反作用严格相反；同一夹具另要求以走动速度移动的玩家尺寸 boundary 产生可观察液体响应（峰值动能不低于其附加质量尺度的千分之一），并在停止后保持在注入峰值的有界分数内、不再放大；这条下界门关闭了“moving-body 输入被静默置零”这类接线回归——只约束上界的门无法发现它。该门还按与生产完全相同的顺序（capture → 冻结 body → 完整 candidate → restore）计时，预热后逐步不超过 40 ms。当前求解器还没有黏性阶段，G2P 只施加解析能量可接受约束而不以固定 PIC 比例冒充本构黏性；相干晃动可长期保留，因此该门不宣称注入能量会在指定时限内完全耗散。
+
+lifecycle 门固定 PAUSED、pacing skip 和 due tick 的 liquid-input exactly-once 时序，并固定生产 motion step 只经完整 candidate 原子接受。动态玩家门按 Minecraft 的“本 tick 位移→重力/空气阻力→Mod 响应”顺序运行 2000 game ticks，并每 4 tick 经过一次完整生产 backend capture/restore；连续 AABB 浸没与实际位姿速度使玩家尾段振幅降至微米级，液体瞬态动能回落到静止边界门内。这关闭了离散湿点和反号边界速度造成的正反馈，但不冒充真实玩家侧动量闭合：下一停止门仍须引入实体质量真值和 pressure/drag 分列，在同一事务中验证 liquid/entity 等大反向冲量与实体占位排水。该门完成前不能用 pacing fallback、速度阻尼、材料分支或额外 warmup 代替通过。
 
 若阶段性能不达标，依次采用：缩小 active neighborhood、降低更新频率、增加守恒休眠/宏观 node、限制产品范围，最后才降低空间分辨率。不得先放松 ledger 或使用材料特判跳过昂贵物理。
 

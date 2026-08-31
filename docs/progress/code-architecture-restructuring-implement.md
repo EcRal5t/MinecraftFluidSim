@@ -448,6 +448,15 @@ S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Bri
 * 完整 GPU correctness 仍由既有 long-run surface 门拒绝：GPU 约 1728 cells、当前 CPU conservative reseeding 为 2840 cells；在拆 owner 前的 `7af2590` 独立 worktree 中复现为 1727/2840，排除了 S20 生命周期、scheduler 或 readback 回退。该差异没有通过经验阈值、速度钳制、渲染补偿或特例掩盖；GPU backend 继续不具备生产资格，后续应实现与 CPU 同一守恒不变量下的 GPU reseeding，而不是把它误记为本轮架构迁移已修复。
 * S20 的五个实现提交为 `eec1ccd`（运行时权威流）、`b0af168`（物理模块）、`7af2590`（GPU kernel）、`29c8b0e`（Vulkan owner）与 `d646aee`（adapter 生命周期）。结构重组至此闭合；未把独立的 GPU 数值能力缺口隐藏在架构完成声明中。
 
+### S20 数值收口复审
+
+* 重新从离散守恒与动量方程审计 long-run surface 差异，而不是沿 owner 拆分倒推。根因是 CPU/GPU 已有压力几何、传输、平流、碰撞与重采样语义漂移，同时 CPU 还用 `FlipVolumeDriftCorrection` 把 marker 体积误差写成不可压缩方程的伪源项。最终删除该修正及其配置投影入口；pressure unknown 只取 PLIC 液体占比中心包含的 cell，不再由 marker 存在覆盖，也不再用薄层 `theta` 经验下限掩盖几何退化。
+* P2G 保留按 marker 体积归一的质量/动量守恒；G2P 的 PIC/FLIP 比例改由单步非增动能约束解析取得，不再固定耗散来冒充黏性。网格速度以 H(div) 一致的面场重建，marker 使用 RK4 平流，边界碰撞只移除向外法向速度。CPU 与 GPU 在当前共同能力子集内使用同一离散规则；连续介质黏性扩散仍是尚未实现的独立物理项。
+* 表面张力按拓扑互斥地离散：有 pressure unknown 的已解析液气界面走 sharp ghost-fluid jump，只有亚格 carrier 跨面走互补 balanced-force CSF；液液界面继续走无序材料对的 balanced-force 路径。接触角由 `sigma_sl - sigma_sg = -sigma cos(theta)` 的 Young 固壁表面能产生，固壁面积来自同一 cut-cell microgeometry；曲率法向不再被接触角旋转，也没有材料 ID 特判。
+* 重采样的 split/merge 在 CPU/GPU 上共享守恒条件：只有二进制浮点和能精确回收较小 marker 体积时才合并，否则保留 marker 并登记 conservation refusal。GPU shader 使用 GLSL `precise` 阻止编译器把 `(large + small) - large == small` 重关联成恒真式；1000 步门用每个 raw float 构造的 `BigDecimal` 权威账本验证 CPU/GPU 都保持 `2592.0 BV`，而在线并行归约只在解析舍入界内作为诊断。
+* `GpuCompactDiagnostics` 独占 compact frame 解码、pressure convergence、在线体积误差界与 reseed budget 校验，`VulkanFlipPipeline` 降至 942 行。异步 completion 现在捕获本次 submission 的 substep time，不再读取提交后已复位的可变 `recordingTimeStep`，因此初始化 submission 与四 physical substep 的诊断属于各自帧。
+* 当前 GPU 能力边界明确收窄为单一、常密度 carrier；多材料/变密度、表面张力、空间气体/热力学尚未移植，不能以 CPU fallback 或 probe 通过宣称 production parity。现有集中参数 sealed-cavity 气压边界仍由 CPU 门覆盖，但空间可压缩气体求解留给后续物理切片。最终验证包括 GPU 1000 步 exact ledger、完整短程 solver/memory matrix、CPU `free-surface,reseeding,cut-cell,surface-tension,materials,gas-liquid` 六门、production replay、三个 loader-neutral module 门，以及扫描 425 个生产源的架构门，均通过；无需进游戏观察。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

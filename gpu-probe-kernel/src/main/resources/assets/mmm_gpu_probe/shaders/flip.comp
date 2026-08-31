@@ -1,5 +1,6 @@
 #version 450
 #extension GL_EXT_shader_atomic_float : require
+/*__CONSERVATIVE_MARKER_SAMPLING__*/
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(set=0,binding=0,std430) buffer Positions { vec4 value[]; } positions;
@@ -29,6 +30,25 @@ layout(set=0,binding=23,std430) buffer CoarseDiagonal { float value[]; } coarseD
 layout(set=0,binding=24,std430) buffer CoarseXWeight { float value[]; } coarseXWeight;
 layout(set=0,binding=25,std430) buffer CoarseYWeight { float value[]; } coarseYWeight;
 layout(set=0,binding=26,std430) buffer CoarseZWeight { float value[]; } coarseZWeight;
+layout(set=0,binding=27,std430) buffer ExactCellVolume { float value[]; } exactCellVolume;
+layout(set=0,binding=28,std430) buffer VolumeReductionScratch { float value[]; } volumeReductionScratch;
+layout(set=0,binding=29,std430) buffer ReseedCellHead { uint value[]; } reseedCellHead;
+layout(set=0,binding=30,std430) buffer ReseedCellCount { uint value[]; } reseedCellCount;
+layout(set=0,binding=31,std430) buffer ReseedParticleNext { uint value[]; } reseedParticleNext;
+layout(set=0,binding=32,std430) buffer ReseedFreeParticle { uint value[]; } reseedFreeParticle;
+layout(set=0,binding=33,std430) buffer ReseedState { uint value[]; } reseedState;
+layout(set=0,binding=34,std430) buffer PressureVolume { float value[]; } pressureVolume;
+layout(set=0,binding=35,std430) buffer PressureFluid { uint value[]; } pressureFluid;
+layout(set=0,binding=36,std430) buffer InterfaceGeometry { vec4 value[]; } interfaceGeometry;
+layout(set=0,binding=37,std430) buffer PressureSolveState { uint value[]; } pressureSolveState;
+layout(set=0,binding=38,std430) buffer VelocityAddedU { float value[]; } velocityAddedU;
+layout(set=0,binding=39,std430) buffer VelocityAddedV { float value[]; } velocityAddedV;
+layout(set=0,binding=40,std430) buffer VelocityAddedW { float value[]; } velocityAddedW;
+layout(set=0,binding=41,std430) buffer ReseedParticleOwner { uint value[]; } reseedParticleOwner;
+layout(set=0,binding=42,std430) buffer P2gWeightU { float value[]; } p2gWeightU;
+layout(set=0,binding=43,std430) buffer P2gWeightV { float value[]; } p2gWeightV;
+layout(set=0,binding=44,std430) buffer P2gWeightW { float value[]; } p2gWeightW;
+layout(set=0,binding=45,std430) buffer TransferState { uint value[]; } transferState;
 shared float diagnosticSquared[256];
 shared float diagnosticVolume[256];
 shared float diagnosticWeightedX[256];
@@ -39,7 +59,7 @@ layout(push_constant,std430) uniform Params {
     int particleCount; int iteration; int pressureIterations; int flags;
     float dt; float h; float gravity; float rho; int solver;
     int levelNx; int levelNy; int levelNz; int levelOffset;
-    int otherNx; int otherNy; int otherNz; int otherOffset; int mgPackedCount;
+    int otherNx; int otherNy; int otherNz; int otherOffset; int mgPackedCount; float pressureTolerance;
 } pc;
 
 int cellCount() { return pc.nx * pc.ny * pc.nz; }
@@ -57,7 +77,7 @@ int coarseCi(ivec3 c) { return c.x + coarseNx() * (c.y + coarseNy() * c.z); }
 int ui(ivec3 f) { return f.x + (pc.nx + 1) * (f.y + pc.ny * f.z); }
 int vi(ivec3 f) { return f.x + pc.nx * (f.y + (pc.ny + 1) * f.z); }
 int wi(ivec3 f) { return f.x + pc.nx * (f.y + pc.ny * f.z); }
-bool fluid(ivec3 c) { return insideCell(c) && solids.value[ci(c)] == 0u && markers.value[ci(c)] > 0u; }
+bool fluid(ivec3 c) { return insideCell(c) && solids.value[ci(c)] == 0u && pressureFluid.value[ci(c)] != 0u; }
 bool solid(ivec3 c) { return !insideCell(c) || solids.value[ci(c)] != 0u; }
 bool coarseFluid(ivec3 c) { return insideCoarse(c) && (coarseMask.value[coarseCi(c)] & 1u) != 0u; }
 ivec3 mghCurrentDims() { return ivec3(pc.levelNx,pc.levelNy,pc.levelNz); }
@@ -88,127 +108,228 @@ void splatDensity(vec3 q, float volume) {
     }
 }
 
-void splatU(vec3 q,float velocity) {
+float pressureKernelWeight(float coordinate,int cell) {
+    float distance=abs(coordinate-(float(cell)+0.5));if(distance<=0.25)return 1.0;if(distance>=0.75)return 0.0;
+    float transition=(distance-0.25)*2.0;return 1.0-transition*transition*(3.0-2.0*transition);
+}
+void splatPressureVolume(vec3 q,float volume) {
+    ivec3 center=ivec3(floor(q));ivec3 neighbor=ivec3(q.x-float(center.x)<0.5?center.x-1:center.x+1,q.y-float(center.y)<0.5?center.y-1:center.y+1,q.z-float(center.z)<0.5?center.z-1:center.z+1);
+    float centerX=pressureKernelWeight(q.x,center.x),centerY=pressureKernelWeight(q.y,center.y),centerZ=pressureKernelWeight(q.z,center.z);
+    float neighborX=pressureKernelWeight(q.x,neighbor.x),neighborY=pressureKernelWeight(q.y,neighbor.y),neighborZ=pressureKernelWeight(q.z,neighbor.z);float available=0.0;
+    for(int oz=0;oz<2;oz++)for(int oy=0;oy<2;oy++)for(int ox=0;ox<2;ox++){ivec3 c=ivec3(ox==0?center.x:neighbor.x,oy==0?center.y:neighbor.y,oz==0?center.z:neighbor.z);float weight=(ox==0?centerX:neighborX)*(oy==0?centerY:neighborY)*(oz==0?centerZ:neighborZ);if(insideCell(c)&&!solid(c)&&weight>0.0)available+=weight;}
+    if(!(available>0.0))return;float scale=volume/available;
+    for(int oz=0;oz<2;oz++)for(int oy=0;oy<2;oy++)for(int ox=0;ox<2;ox++){ivec3 c=ivec3(ox==0?center.x:neighbor.x,oy==0?center.y:neighbor.y,oz==0?center.z:neighbor.z);float weight=(ox==0?centerX:neighborX)*(oy==0?centerY:neighborY)*(oz==0?centerZ:neighborZ);if(insideCell(c)&&!solid(c)&&weight>0.0)atomicAdd(pressureVolume.value[ci(c)],weight*scale);}
+}
+
+void splatU(vec3 q,float velocity,float particleVolume) {
     ivec3 base=ivec3(floor(q)); float sum=0.0;
     for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=base+ivec3(x,y,z);if(validU(f))sum+=triWeight(f,q);}
     if(sum<=0.0)return;
-    for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=base+ivec3(x,y,z);if(validU(f)){float a=triWeight(f,q)/sum;atomicAdd(u.value[ui(f)],velocity*a);atomicAdd(uw.value[ui(f)],a);}}
+    for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=base+ivec3(x,y,z);if(validU(f)){float a=particleVolume*triWeight(f,q)/sum;atomicAdd(u.value[ui(f)],velocity*a);atomicAdd(uw.value[ui(f)],a);}}
 }
-void splatV(vec3 q,float velocity) {
+void splatV(vec3 q,float velocity,float particleVolume) {
     ivec3 base=ivec3(floor(q)); float sum=0.0;
     for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=base+ivec3(x,y,z);if(validV(f))sum+=triWeight(f,q);}
     if(sum<=0.0)return;
-    for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=base+ivec3(x,y,z);if(validV(f)){float a=triWeight(f,q)/sum;atomicAdd(v.value[vi(f)],velocity*a);atomicAdd(vw.value[vi(f)],a);}}
+    for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=base+ivec3(x,y,z);if(validV(f)){float a=particleVolume*triWeight(f,q)/sum;atomicAdd(v.value[vi(f)],velocity*a);atomicAdd(vw.value[vi(f)],a);}}
 }
-void splatW(vec3 q,float velocity) {
+void splatW(vec3 q,float velocity,float particleVolume) {
     ivec3 base=ivec3(floor(q)); float sum=0.0;
     for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=base+ivec3(x,y,z);if(validW(f))sum+=triWeight(f,q);}
     if(sum<=0.0)return;
-    for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=base+ivec3(x,y,z);if(validW(f)){float a=triWeight(f,q)/sum;atomicAdd(w.value[wi(f)],velocity*a);atomicAdd(ww.value[wi(f)],a);}}
+    for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=base+ivec3(x,y,z);if(validW(f)){float a=particleVolume*triWeight(f,q)/sum;atomicAdd(w.value[wi(f)],velocity*a);atomicAdd(ww.value[wi(f)],a);}}
 }
 
-float sampleU(vec3 q,bool oldField) { ivec3 b=ivec3(floor(q));float s=0.0,a=0.0;for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=b+ivec3(x,y,z);if(validU(f)){float k=triWeight(f,q);s+=(oldField?uold.value[ui(f)]:u.value[ui(f)])*k;a+=k;}}return a>0.0?s/a:0.0; }
-float sampleV(vec3 q,bool oldField) { ivec3 b=ivec3(floor(q));float s=0.0,a=0.0;for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=b+ivec3(x,y,z);if(validV(f)){float k=triWeight(f,q);s+=(oldField?vold.value[vi(f)]:v.value[vi(f)])*k;a+=k;}}return a>0.0?s/a:0.0; }
-float sampleW(vec3 q,bool oldField) { ivec3 b=ivec3(floor(q));float s=0.0,a=0.0;for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=b+ivec3(x,y,z);if(validW(f)){float k=triWeight(f,q);s+=(oldField?wold.value[wi(f)]:w.value[wi(f)])*k;a+=k;}}return a>0.0?s/a:0.0; }
+float sampleU(vec3 q,bool oldField) { ivec3 b=ivec3(floor(q));float s=0.0,a=0.0;for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=b+ivec3(x,y,z);if(validU(f)&&uw.value[ui(f)]>0.0){float k=triWeight(f,q);s+=(oldField?uold.value[ui(f)]:u.value[ui(f)])*k;a+=k;}}return a>0.0?s/a:0.0; }
+float sampleV(vec3 q,bool oldField) { ivec3 b=ivec3(floor(q));float s=0.0,a=0.0;for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=b+ivec3(x,y,z);if(validV(f)&&vw.value[vi(f)]>0.0){float k=triWeight(f,q);s+=(oldField?vold.value[vi(f)]:v.value[vi(f)])*k;a+=k;}}return a>0.0?s/a:0.0; }
+float sampleW(vec3 q,bool oldField) { ivec3 b=ivec3(floor(q));float s=0.0,a=0.0;for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 f=b+ivec3(x,y,z);if(validW(f)&&ww.value[wi(f)]>0.0){float k=triWeight(f,q);s+=(oldField?wold.value[wi(f)]:w.value[wi(f)])*k;a+=k;}}return a>0.0?s/a:0.0; }
 
+bool pressureAnchor(ivec3 c){return insideCell(c)&&uint(ci(c))==pressureSolveState.value[7];}
+bool pressureUnknown(ivec3 c){return fluid(c)&&!pressureAnchor(c);}
 float pressureAt(ivec3 c) {
-    if(!fluid(c)) return 0.0;
-    int i=ci(c); if(pc.solver!=0)return pa.value[i];return (pc.pressureIterations & 1)==0 ? pa.value[i] : pb.value[i];
+    if(!pressureUnknown(c))return 0.0;int cell=ci(c);return pc.solver==0&&((pc.pressureIterations&1)!=0)?pb.value[cell]:pa.value[cell];
 }
+float positiveSquare(float value){float positive=max(0.0,value);return positive*positive;}
+float positiveCube(float value){float positive=max(0.0,value);return positive*positive*positive;}
+float unitCubeLiquidFraction(vec3 normal,float offset){
+    vec3 magnitude=abs(normal);float transformed=offset;if(normal.x<0.0)transformed+=magnitude.x;if(normal.y<0.0)transformed+=magnitude.y;if(normal.z<0.0)transformed+=magnitude.z;float result;
+    if(magnitude.x>1e-10&&magnitude.y>1e-10&&magnitude.z>1e-10)result=(positiveCube(transformed)-positiveCube(transformed-magnitude.x)-positiveCube(transformed-magnitude.y)-positiveCube(transformed-magnitude.z)+positiveCube(transformed-magnitude.x-magnitude.y)+positiveCube(transformed-magnitude.x-magnitude.z)+positiveCube(transformed-magnitude.y-magnitude.z)-positiveCube(transformed-magnitude.x-magnitude.y-magnitude.z))/(6.0*magnitude.x*magnitude.y*magnitude.z);
+    else if(magnitude.x>1e-10&&magnitude.y>1e-10)result=(positiveSquare(transformed)-positiveSquare(transformed-magnitude.x)-positiveSquare(transformed-magnitude.y)+positiveSquare(transformed-magnitude.x-magnitude.y))/(2.0*magnitude.x*magnitude.y);
+    else if(magnitude.x>1e-10&&magnitude.z>1e-10)result=(positiveSquare(transformed)-positiveSquare(transformed-magnitude.x)-positiveSquare(transformed-magnitude.z)+positiveSquare(transformed-magnitude.x-magnitude.z))/(2.0*magnitude.x*magnitude.z);
+    else if(magnitude.y>1e-10&&magnitude.z>1e-10)result=(positiveSquare(transformed)-positiveSquare(transformed-magnitude.y)-positiveSquare(transformed-magnitude.z)+positiveSquare(transformed-magnitude.y-magnitude.z))/(2.0*magnitude.y*magnitude.z);
+    else{float length=max(magnitude.x,max(magnitude.y,magnitude.z));result=length<=1e-10?(transformed>=0.0?1.0:0.0):transformed/length;}return clamp(result,0.0,1.0);
+}
+float solvePlaneOffset(vec3 normal,float fraction){
+    float minimum=min(0.0,normal.x)+min(0.0,normal.y)+min(0.0,normal.z),maximum=max(0.0,normal.x)+max(0.0,normal.y)+max(0.0,normal.z);float target=clamp(fraction,0.0,1.0);if(target<=0.0)return minimum;if(target>=1.0)return maximum;
+    float lower=minimum,upper=maximum;for(int iteration=0;iteration<32;iteration++){float middle=0.5*(lower+upper);if(unitCubeLiquidFraction(normal,middle)<target)lower=middle;else upper=middle;}return 0.5*(lower+upper);
+}
+float pressureFraction(ivec3 c){return insideCell(c)&&!solid(c)?clamp(pressureVolume.value[ci(c)],0.0,1.0):0.0;}
+float sampledPressureFraction(ivec3 c,float fallback){return !insideCell(c)||solid(c)?fallback:pressureFraction(c);}
+void pressureClassifyStage(uint id){
+	if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);float fraction=pressureFraction(c);vec4 geometry=interfaceGeometry.value[id];pressureFluid.value[id]=!solid(c)&&fraction>0.5&&(fraction>=1.0-1e-6||geometry.w>0.5*(geometry.x+geometry.y+geometry.z))?1u:0u;
+}
+void pressureGeometryStage(uint id){
+	if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);interfaceGeometry.value[id]=vec4(0.0);float center=pressureFraction(c);if(solid(c)||!(center>0.0)||center>=1.0-1e-6)return;
+	vec3 normal=-vec3(sampledPressureFraction(c+ivec3(1,0,0),center)-sampledPressureFraction(c+ivec3(-1,0,0),center),sampledPressureFraction(c+ivec3(0,1,0),center)-sampledPressureFraction(c+ivec3(0,-1,0),center),sampledPressureFraction(c+ivec3(0,0,1),center)-sampledPressureFraction(c+ivec3(0,0,-1),center));float lengthSquared=dot(normal,normal);
+	if(lengthSquared<=1e-10){normal=vec3((insideCell(c+ivec3(1,0,0))&&!solid(c+ivec3(1,0,0))&&pressureFraction(c+ivec3(1,0,0))<=0.5?1.0:0.0)-(insideCell(c+ivec3(-1,0,0))&&!solid(c+ivec3(-1,0,0))&&pressureFraction(c+ivec3(-1,0,0))<=0.5?1.0:0.0),(insideCell(c+ivec3(0,1,0))&&!solid(c+ivec3(0,1,0))&&pressureFraction(c+ivec3(0,1,0))<=0.5?1.0:0.0)-(insideCell(c+ivec3(0,-1,0))&&!solid(c+ivec3(0,-1,0))&&pressureFraction(c+ivec3(0,-1,0))<=0.5?1.0:0.0),(insideCell(c+ivec3(0,0,1))&&!solid(c+ivec3(0,0,1))&&pressureFraction(c+ivec3(0,0,1))<=0.5?1.0:0.0)-(insideCell(c+ivec3(0,0,-1))&&!solid(c+ivec3(0,0,-1))&&pressureFraction(c+ivec3(0,0,-1))<=0.5?1.0:0.0));lengthSquared=dot(normal,normal);}
+    normal=lengthSquared<=1e-10?vec3(0.0,1.0,0.0):normal*inversesqrt(lengthSquared);interfaceGeometry.value[id]=vec4(normal,solvePlaneOffset(normal,center));
+}
+float interfaceTheta(ivec3 fluidCell,ivec3 direction){
+    int cell=ci(fluidCell);float fraction=pressureFraction(fluidCell),distance;if(fraction>=1.0-1e-6)distance=0.5;else{vec4 geometry=interfaceGeometry.value[cell];float outward=dot(geometry.xyz,vec3(direction));if(!(outward>1e-6))return 1.0;distance=(geometry.w-0.5*(geometry.x+geometry.y+geometry.z))/outward;}ivec3 neighbor=fluidCell+direction;if(insideCell(neighbor))distance+=pressureFraction(neighbor);return min(distance,1.0);
+}
+float pressureFaceCoefficient(ivec3 fluidCell,ivec3 neighbor){if(solid(neighbor))return 0.0;if(fluid(neighbor))return 1.0;return 1.0/interfaceTheta(fluidCell,neighbor-fluidCell);}
+float pressureDifference(ivec3 first,ivec3 second,ivec3 direction){bool firstFluid=fluid(first),secondFluid=fluid(second);if(firstFluid&&secondFluid)return pressureAt(second)-pressureAt(first);if(firstFluid)return-pressureAt(first)/interfaceTheta(first,direction);return pressureAt(second)/interfaceTheta(second,-direction);}
 float matrixDiagonal(ivec3 c) {
     ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));float diagonal=0.0;
-    for(int n=0;n<6;n++)if(!solid(c+offsets[n]))diagonal+=1.0;return diagonal;
+    for(int n=0;n<6;n++)diagonal+=pressureFaceCoefficient(c,c+offsets[n]);return diagonal;
 }
 void diagnosticAdd(uint index,float amount) {
     uint previous=diagnostics.value[index];
     for(;;){uint next=floatBitsToUint(uintBitsToFloat(previous)+amount);uint observed=atomicCompSwap(diagnostics.value[index],previous,next);if(observed==previous)return;previous=observed;}
 }
+void pressureSolveAdd(uint index,float amount){uint previous=pressureSolveState.value[index];for(;;){uint next=floatBitsToUint(uintBitsToFloat(previous)+amount);uint observed=atomicCompSwap(pressureSolveState.value[index],previous,next);if(observed==previous)return;previous=observed;}}
+void transferStateAdd(uint index,float amount){uint previous=transferState.value[index];for(;;){uint next=floatBitsToUint(uintBitsToFloat(previous)+amount);uint observed=atomicCompSwap(transferState.value[index],previous,next);if(observed==previous)return;previous=observed;}}
+bool finiteFloat(float value){return !isnan(value)&&!isinf(value);}
+bool pressureSolveActive(){return pressureSolveState.value[1]==0u&&pressureSolveState.value[15]==0u;}
+bool pressureVerificationActive(){return pressureSolveState.value[1]==4u&&pressureSolveState.value[15]==0u;}
+
+void pressureStepBeginStage(uint id){if(id==0u){for(int index=0;index<16;index++)pressureSolveState.value[index]=0u;pressureSolveState.value[7]=0xffffffffu;}}
+void pressureStateClearStage(uint id){if(id==0u){uint failed=pressureSolveState.value[15];for(int index=0;index<15;index++)pressureSolveState.value[index]=0u;pressureSolveState.value[7]=0xffffffffu;pressureSolveState.value[15]=failed;diagnostics.value[7]=0u;diagnostics.value[8]=0u;diagnostics.value[9]=0u;diagnostics.value[10]=0u;diagnostics.value[11]=0u;diagnostics.value[12]=0u;}}
+void pressureTopologyStage(uint id){
+    if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);if(!fluid(c))return;atomicAdd(pressureSolveState.value[0],1u);atomicMin(pressureSolveState.value[7],id);ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));for(int n=0;n<6;n++){ivec3 neighbor=c+offsets[n];if(insideCell(neighbor)&&!solid(neighbor)&&!fluid(neighbor)){atomicOr(pressureSolveState.value[8],1u);break;}}
+}
+void pressureAnchorFinalizeStage(uint id){if(id!=0u)return;if(pressureSolveState.value[8]!=0u)pressureSolveState.value[7]=0xffffffffu;else if(pressureSolveState.value[7]!=0xffffffffu)pressureSolveState.value[0]-=1u;diagnostics.value[13]=pressureSolveState.value[0];}
 
 void clearStage(uint id) {
-    if(id<uint(cellCount())){density.value[id]=0.0;markers.value[id]=0u;pa.value[id]=0.0;pb.value[id]=0.0;divergence.value[id]=0.0;snapshot.value[id]=0u;}
+    if(id<uint(cellCount())){density.value[id]=0.0;markers.value[id]=0u;pa.value[id]=0.0;pb.value[id]=0.0;divergence.value[id]=0.0;snapshot.value[id]=0u;exactCellVolume.value[id]=0.0;volumeReductionScratch.value[id]=0.0;pressureVolume.value[id]=0.0;pressureFluid.value[id]=0u;interfaceGeometry.value[id]=vec4(0.0);}
     if(id<uint(pc.mgPackedCount)){coarseRhs.value[id]=0.0;coarseMask.value[id]=0u;coarsePa.value[id]=0.0;coarsePb.value[id]=0.0;coarseDiagonal.value[id]=0.0;coarseXWeight.value[id]=0.0;coarseYWeight.value[id]=0.0;coarseZWeight.value[id]=0.0;}
-    if(id<uint(uCount())){u.value[id]=0.0;uw.value[id]=0.0;uold.value[id]=0.0;}
-    if(id<uint(vCount())){v.value[id]=0.0;vw.value[id]=0.0;vold.value[id]=0.0;}
-    if(id<uint(wCount())){w.value[id]=0.0;ww.value[id]=0.0;wold.value[id]=0.0;}
-    if(id<16u) diagnostics.value[id]=0u;
+	if(id<uint(uCount())){u.value[id]=0.0;uw.value[id]=0.0;uold.value[id]=0.0;velocityAddedU.value[id]=0.0;p2gWeightU.value[id]=0.0;}
+	if(id<uint(vCount())){v.value[id]=0.0;vw.value[id]=0.0;vold.value[id]=0.0;velocityAddedV.value[id]=0.0;p2gWeightV.value[id]=0.0;}
+	if(id<uint(wCount())){w.value[id]=0.0;ww.value[id]=0.0;wold.value[id]=0.0;velocityAddedW.value[id]=0.0;p2gWeightW.value[id]=0.0;}
+	if(id<16u){diagnostics.value[id]=0u;transferState.value[id]=0u;}
 }
 
 void p2gStage(uint id) {
     if(id>=uint(pc.particleCount))return;
-    vec4 pv=positions.value[id];vec3 q=pv.xyz/pc.h;vec3 vel=velocities.value[id].xyz;
+    vec4 pv=positions.value[id];if(!(pv.w>0.0))return;vec3 q=pv.xyz/pc.h;vec3 vel=velocities.value[id].xyz;
     ivec3 center=ivec3(clamp(floor(q),vec3(0.0),vec3(pc.nx-1,pc.ny-1,pc.nz-1)));
-    if(!solid(center)) atomicAdd(markers.value[ci(center)],1u);
+    if(!solid(center)){atomicAdd(markers.value[ci(center)],1u);atomicAdd(exactCellVolume.value[ci(center)],pv.w);}
     splatDensity(q-vec3(0.5),pv.w);
-    splatU(vec3(q.x,q.y-0.5,q.z-0.5),vel.x);
-    splatV(vec3(q.x-0.5,q.y,q.z-0.5),vel.y);
-    splatW(vec3(q.x-0.5,q.y-0.5,q.z),vel.z);
+    splatPressureVolume(q,pv.w);
+    splatU(vec3(q.x,q.y-0.5,q.z-0.5),vel.x,pv.w);
+    splatV(vec3(q.x-0.5,q.y,q.z-0.5),vel.y,pv.w);
+    splatW(vec3(q.x-0.5,q.y-0.5,q.z),vel.z,pv.w);
 }
 
 void prepStage(uint id) {
-    if(id<uint(uCount())){float value=uw.value[id]>0.0?u.value[id]/uw.value[id]:0.0;uold.value[id]=value;u.value[id]=value;}
-    if(id<uint(vCount())){float value=vw.value[id]>0.0?v.value[id]/vw.value[id]:0.0;vold.value[id]=value;v.value[id]=vw.value[id]>0.0?value-pc.gravity*pc.dt:0.0;}
-    if(id<uint(wCount())){float value=ww.value[id]>0.0?w.value[id]/ww.value[id]:0.0;wold.value[id]=value;w.value[id]=value;}
+	if(pc.flags==0){
+		if(id<uint(uCount())){p2gWeightU.value[id]=uw.value[id];u.value[id]=uw.value[id]>0.0?u.value[id]/uw.value[id]:0.0;}
+		if(id<uint(vCount())){p2gWeightV.value[id]=vw.value[id];v.value[id]=vw.value[id]>0.0?v.value[id]/vw.value[id]:0.0;}
+		if(id<uint(wCount())){p2gWeightW.value[id]=ww.value[id];w.value[id]=ww.value[id]>0.0?w.value[id]/ww.value[id]:0.0;}
+		return;
+	}
+	if(id<uint(uCount()))uold.value[id]=u.value[id];
+	if(id<uint(vCount())){
+		vold.value[id]=v.value[id];int fx=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 f=ivec3(fx,yz%(pc.ny+1),yz/(pc.ny+1));
+		bool carrier=validV(f)&&(markers.value[ci(f+ivec3(0,-1,0))]>0u||markers.value[ci(f)]>0u);if(carrier)v.value[id]-=pc.gravity*pc.dt;
+	}
+	if(id<uint(wCount()))wold.value[id]=w.value[id];
+}
+
+bool carrierU(ivec3 f){return validU(f)&&(markers.value[ci(f+ivec3(-1,0,0))]>0u||markers.value[ci(f)]>0u);}
+bool carrierV(ivec3 f){return validV(f)&&(markers.value[ci(f+ivec3(0,-1,0))]>0u||markers.value[ci(f)]>0u);}
+bool carrierW(ivec3 f){return validW(f)&&(markers.value[ci(f+ivec3(0,0,-1))]>0u||markers.value[ci(f)]>0u);}
+void velocitySeedStage(uint id){
+	if(id<uint(uCount())){int fx=int(id)%(pc.nx+1);int yz=int(id)/(pc.nx+1);ivec3 f=ivec3(fx,yz%pc.ny,yz/pc.ny);uw.value[id]=carrierU(f)?1.0:0.0;velocityAddedU.value[id]=0.0;}
+	if(id<uint(vCount())){int fx=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 f=ivec3(fx,yz%(pc.ny+1),yz/(pc.ny+1));vw.value[id]=carrierV(f)?1.0:0.0;velocityAddedV.value[id]=0.0;}
+	if(id<uint(wCount())){int fx=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 f=ivec3(fx,yz%pc.ny,yz/pc.ny);ww.value[id]=carrierW(f)?1.0:0.0;velocityAddedW.value[id]=0.0;}
+}
+void velocityExtrapolateStage(uint id){
+	ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));
+	if(id<uint(uCount())&&uw.value[id]==0.0){int fx=int(id)%(pc.nx+1);int yz=int(id)/(pc.nx+1);ivec3 f=ivec3(fx,yz%pc.ny,yz/pc.ny);if(validU(f)){float sum=0.0;int count=0;for(int n=0;n<6;n++){ivec3 q=f+offsets[n];if(q.x>=0&&q.x<=pc.nx&&q.y>=0&&q.y<pc.ny&&q.z>=0&&q.z<pc.nz&&uw.value[ui(q)]>0.0){sum+=u.value[ui(q)];count++;}}if(count>0){u.value[id]=sum/float(count);velocityAddedU.value[id]=1.0;}}}
+	if(id<uint(vCount())&&vw.value[id]==0.0){int fx=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 f=ivec3(fx,yz%(pc.ny+1),yz/(pc.ny+1));if(validV(f)){float sum=0.0;int count=0;for(int n=0;n<6;n++){ivec3 q=f+offsets[n];if(q.x>=0&&q.x<pc.nx&&q.y>=0&&q.y<=pc.ny&&q.z>=0&&q.z<pc.nz&&vw.value[vi(q)]>0.0){sum+=v.value[vi(q)];count++;}}if(count>0){v.value[id]=sum/float(count);velocityAddedV.value[id]=1.0;}}}
+	if(id<uint(wCount())&&ww.value[id]==0.0){int fx=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 f=ivec3(fx,yz%pc.ny,yz/pc.ny);if(validW(f)){float sum=0.0;int count=0;for(int n=0;n<6;n++){ivec3 q=f+offsets[n];if(q.x>=0&&q.x<pc.nx&&q.y>=0&&q.y<pc.ny&&q.z>=0&&q.z<=pc.nz&&ww.value[wi(q)]>0.0){sum+=w.value[wi(q)];count++;}}if(count>0){w.value[id]=sum/float(count);velocityAddedW.value[id]=1.0;}}}
+}
+void velocityCommitStage(uint id){
+	if(id<uint(uCount())&&velocityAddedU.value[id]>0.0){uw.value[id]=1.0;velocityAddedU.value[id]=0.0;}
+	if(id<uint(vCount())&&velocityAddedV.value[id]>0.0){vw.value[id]=1.0;velocityAddedV.value[id]=0.0;}
+	if(id<uint(wCount())&&velocityAddedW.value[id]>0.0){ww.value[id]=1.0;velocityAddedW.value[id]=0.0;}
 }
 
 void divergenceStage(uint id) {
-    if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;int iy=yz%pc.ny;int iz=yz/pc.ny;ivec3 c=ivec3(ix,iy,iz);
-    if(!fluid(c)){divergence.value[id]=0.0;return;}
-    float d=(u.value[ui(c+ivec3(1,0,0))]-u.value[ui(c)]+v.value[vi(c+ivec3(0,1,0))]-v.value[vi(c)]+w.value[wi(c+ivec3(0,0,1))]-w.value[wi(c)])/pc.h;
-    divergence.value[id]=d;
-    if(pc.flags==1)atomicMax(diagnostics.value[0],floatBitsToUint(abs(d)));
-    if(pc.flags==2)atomicMax(diagnostics.value[1],floatBitsToUint(abs(d)));
+	if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;int iy=yz%pc.ny;int iz=yz/pc.ny;ivec3 c=ivec3(ix,iy,iz);
+	if(!pressureUnknown(c)){divergence.value[id]=0.0;return;}
+	float right=u.value[ui(c+ivec3(1,0,0))],left=u.value[ui(c)],top=v.value[vi(c+ivec3(0,1,0))],bottom=v.value[vi(c)],front=w.value[wi(c+ivec3(0,0,1))],back=w.value[wi(c)];
+	float d=(right-left+top-bottom+front-back)/pc.h;
+	divergence.value[id]=d;
+	if(pc.flags==1)atomicMax(diagnostics.value[0],floatBitsToUint(abs(divergence.value[id])));
+	if(pc.flags==2){atomicMax(diagnostics.value[1],floatBitsToUint(abs(divergence.value[id])));float unitRoundoff=5.960464477539063e-8;float accumulated=6.0*unitRoundoff;float gamma=accumulated/(1.0-accumulated);float bound=gamma*(abs(right)+abs(left)+abs(top)+abs(bottom)+abs(front)+abs(back))/pc.h;transferStateAdd(2u,bound*bound);}
 }
 
 void jacobiStage(uint id) {
     if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;int iy=yz%pc.ny;int iz=yz/pc.ny;ivec3 c=ivec3(ix,iy,iz);
     bool even=(pc.iteration&1)==0;
-    if(!fluid(c)){if(even)pb.value[id]=0.0;else pa.value[id]=0.0;return;}
+    if(!pressureUnknown(c)){if(even)pb.value[id]=0.0;else pa.value[id]=0.0;return;}
     ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));
     float sum=0.0;float diagonal=0.0;
-    for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(solid(nb))continue;diagonal+=1.0;if(fluid(nb)){int ni=ci(nb);sum+=even?pa.value[ni]:pb.value[ni];}}
+	for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];float coefficient=pressureFaceCoefficient(c,nb);if(!(coefficient>0.0))continue;diagonal+=coefficient;if(pressureUnknown(nb)){int ni=ci(nb);sum+=even?pa.value[ni]:pb.value[ni];}}
     float rhs=(pc.rho/pc.dt)*divergence.value[id];float next=diagonal>0.0?(sum-rhs*pc.h*pc.h)/diagonal:0.0;
     if(even)pb.value[id]=next;else pa.value[id]=next;
 }
 
 void rbgsStage(uint id) {
     if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;int iy=yz%pc.ny;int iz=yz/pc.ny;ivec3 c=ivec3(ix,iy,iz);
-    if(!fluid(c)){pa.value[id]=0.0;return;}if(((ix+iy+iz)&1)!=pc.flags)return;
+    if(!pressureUnknown(c)){pa.value[id]=0.0;return;}if(((ix+iy+iz)&1)!=pc.flags)return;
     ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));
-    float sum=0.0;float diagonal=0.0;for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(solid(nb))continue;diagonal+=1.0;if(fluid(nb))sum+=pa.value[ci(nb)];}
+	float sum=0.0;float diagonal=0.0;for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];float coefficient=pressureFaceCoefficient(c,nb);if(!(coefficient>0.0))continue;diagonal+=coefficient;if(pressureUnknown(nb))sum+=pa.value[ci(nb)];}
     float rhs=(pc.rho/pc.dt)*divergence.value[id];float next=diagonal>0.0?(sum-rhs*pc.h*pc.h)/diagonal:0.0;pa.value[id]=mix(pa.value[id],next,pc.solver>=4?1.0:1.65);
 }
 
 void pcgInitStage(uint id) {
-    if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);float rhs=fluid(c)?-(pc.rho/pc.dt)*divergence.value[id]*pc.h*pc.h:0.0;float diagonal=pc.solver==3?matrixDiagonal(c):1.0;float z=diagonal>0.0?rhs/diagonal:0.0;pa.value[id]=0.0;pb.value[id]=rhs;density.value[id]=z;uw.value[id]=pc.solver==3?z:rhs;vw.value[id]=0.0;
+	if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);bool unknown=pressureUnknown(c);float rhs=unknown?-(pc.rho/pc.dt)*divergence.value[id]*pc.h*pc.h:0.0;float diagonal=unknown?matrixDiagonal(c):0.0;float z=unknown?(pc.solver==3&&diagonal>0.0?rhs/diagonal:rhs):0.0;pa.value[id]=0.0;pb.value[id]=rhs;density.value[id]=z;uw.value[id]=z;vw.value[id]=0.0;if(unknown){diagnosticAdd(8,rhs*z);pressureSolveAdd(3,rhs*rhs);}
 }
-void pcgClearStage(uint id) { if(id==0u){if(pc.flags==0){diagnostics.value[8]=0u;diagnostics.value[9]=0u;}diagnostics.value[10]=0u;} }
+void pcgClearStage(uint id){bool participating=pc.flags==2?pressureVerificationActive():pressureSolveActive();if(id==0u&&participating){if(pc.flags==0){diagnostics.value[9]=0u;pressureSolveState.value[9]=0u;}else{diagnostics.value[10]=0u;pressureSolveState.value[3]=0u;}}}
 void pcgApplyStage(uint id) {
-    if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);if(!fluid(c)){vw.value[id]=0.0;return;}
+    if(id>=uint(cellCount())||!pressureSolveActive())return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);if(!pressureUnknown(c)){vw.value[id]=0.0;return;}
     ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));float sum=0.0;float diagonal=0.0;
-    for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(solid(nb))continue;diagonal+=1.0;if(fluid(nb))sum+=uw.value[ci(nb)];}vw.value[id]=diagonal*uw.value[id]-sum;
+    for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];float coefficient=pressureFaceCoefficient(c,nb);if(!(coefficient>0.0))continue;diagonal+=coefficient;if(pressureUnknown(nb))sum+=uw.value[ci(nb)];}vw.value[id]=diagonal*uw.value[id]-sum;
 }
 void pcgReduceStage(uint id) {
-    uint local=gl_LocalInvocationID.x;float first=0.0;float second=0.0;if(id<uint(cellCount())){float r=pb.value[id];first=r*(pc.solver==3?density.value[id]:r);if(pc.flags==0)second=uw.value[id]*vw.value[id];}
+    uint local=gl_LocalInvocationID.x;float first=0.0,second=0.0;bool participating=pc.flags==2?pressureVerificationActive():pressureSolveActive();if(participating&&id<uint(cellCount())){if(pc.flags==0)first=uw.value[id]*vw.value[id];else{float r=pb.value[id];first=r*density.value[id];second=r*r;}}
     diagnosticSquared[local]=first;diagnosticVolume[local]=second;barrier();for(uint stride=128u;stride>0u;stride>>=1u){if(local<stride){diagnosticSquared[local]+=diagnosticSquared[local+stride];diagnosticVolume[local]+=diagnosticVolume[local+stride];}barrier();}
-    if(local==0u){diagnosticAdd(pc.flags==0?8u:10u,diagnosticSquared[0]);if(pc.flags==0)diagnosticAdd(9u,diagnosticVolume[0]);}
+    if(local==0u&&participating){if(pc.flags==0)diagnosticAdd(9u,diagnosticSquared[0]);else{diagnosticAdd(10u,diagnosticSquared[0]);pressureSolveAdd(3,diagnosticVolume[0]);}}
 }
 void pcgUpdateXrStage(uint id) {
-    if(id>=uint(cellCount()))return;float rr=uintBitsToFloat(diagnostics.value[8]);float pap=uintBitsToFloat(diagnostics.value[9]);float alpha=abs(pap)>1e-20?rr/pap:0.0;pa.value[id]+=alpha*uw.value[id];pb.value[id]-=alpha*vw.value[id];
-    if(pc.solver==3){int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);float diagonal=matrixDiagonal(c);density.value[id]=fluid(c)&&diagonal>0.0?pb.value[id]/diagonal:0.0;}
+	if(id>=uint(cellCount())||!pressureSolveActive())return;float alpha=uintBitsToFloat(pressureSolveState.value[4]);pa.value[id]+=alpha*uw.value[id];pb.value[id]-=alpha*vw.value[id];int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);bool unknown=pressureUnknown(c);float diagonal=unknown?matrixDiagonal(c):0.0;density.value[id]=unknown?(pc.solver==3&&diagonal>0.0?pb.value[id]/diagonal:pb.value[id]):0.0;
 }
 void pcgUpdatePStage(uint id) {
-    if(id>=uint(cellCount()))return;float oldRr=uintBitsToFloat(diagnostics.value[8]);float newRr=uintBitsToFloat(diagnostics.value[10]);float beta=oldRr>1e-20?newRr/oldRr:0.0;uw.value[id]=(pc.solver==3?density.value[id]:pb.value[id])+beta*uw.value[id];
+    if(id>=uint(cellCount())||!pressureSolveActive()||pressureSolveState.value[9]!=0u)return;float beta=uintBitsToFloat(pressureSolveState.value[5]);uw.value[id]=density.value[id]+beta*uw.value[id];
 }
+void pcgControlStage(uint id){
+    if(id!=0u||pressureSolveState.value[15]!=0u)return;uint unknowns=pressureSolveState.value[0];if(pc.flags==0){float squared=uintBitsToFloat(pressureSolveState.value[3]);float residual=unknowns==0u?0.0:sqrt(max(0.0,squared)/float(unknowns))/(pc.h*pc.h);pressureSolveState.value[6]=floatBitsToUint(residual);float rz=uintBitsToFloat(diagnostics.value[8]);if(residual<=pc.pressureTolerance)pressureSolveState.value[1]=1u;else if(!finiteFloat(residual)||!(finiteFloat(rz)&&rz>0.0)){pressureSolveState.value[1]=2u;pressureSolveState.value[15]=1u;}}
+    else if(pc.flags==1&&pressureSolveActive()){float rz=uintBitsToFloat(diagnostics.value[8]),pap=uintBitsToFloat(diagnostics.value[9]);if(!(finiteFloat(rz)&&rz>0.0&&finiteFloat(pap)&&pap>1e-20)){pressureSolveState.value[1]=2u;pressureSolveState.value[15]=1u;}else pressureSolveState.value[4]=floatBitsToUint(rz/pap);}
+    else if(pc.flags==2&&pressureSolveActive()){float squared=uintBitsToFloat(pressureSolveState.value[3]);float residual=unknowns==0u?0.0:sqrt(max(0.0,squared)/float(unknowns))/(pc.h*pc.h);float oldRz=uintBitsToFloat(diagnostics.value[8]),nextRz=uintBitsToFloat(diagnostics.value[10]);pressureSolveState.value[2]=uint(pc.iteration+1);pressureSolveState.value[6]=floatBitsToUint(residual);if(residual<=pc.pressureTolerance)pressureSolveState.value[1]=4u;else if(!finiteFloat(residual)||!(finiteFloat(oldRz)&&oldRz>0.0&&finiteFloat(nextRz)&&nextRz>0.0)){pressureSolveState.value[1]=2u;pressureSolveState.value[15]=1u;}else{pressureSolveState.value[5]=floatBitsToUint(nextRz/oldRz);diagnostics.value[8]=floatBitsToUint(nextRz);}}
+}
+void pcgVerifyBuildStage(uint id){
+	if(id>=uint(cellCount())||!pressureVerificationActive())return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);if(!pressureUnknown(c)){pb.value[id]=0.0;density.value[id]=0.0;uw.value[id]=0.0;return;}
+	ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));float sum=0.0,diagonal=0.0;for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];float coefficient=pressureFaceCoefficient(c,nb);if(!(coefficient>0.0))continue;diagonal+=coefficient;if(pressureUnknown(nb))sum+=coefficient*pa.value[ci(nb)];}
+	float rhs=-(pc.rho/pc.dt)*divergence.value[id]*pc.h*pc.h;float residual=rhs-(diagonal*pa.value[id]-sum);float z=pc.solver==3&&diagonal>0.0?residual/diagonal:residual;pb.value[id]=residual;density.value[id]=z;uw.value[id]=z;
+}
+void pcgVerifyFinalizeStage(uint id){
+	if(id!=0u||!pressureVerificationActive())return;uint unknowns=pressureSolveState.value[0];float squared=uintBitsToFloat(pressureSolveState.value[3]);float residual=unknowns==0u?0.0:sqrt(max(0.0,squared)/float(unknowns))/(pc.h*pc.h);float rz=uintBitsToFloat(diagnostics.value[10]);pressureSolveState.value[6]=floatBitsToUint(residual);
+	if(residual<=pc.pressureTolerance)pressureSolveState.value[1]=1u;else if(!finiteFloat(residual)||!(finiteFloat(rz)&&rz>0.0)){pressureSolveState.value[1]=2u;pressureSolveState.value[15]=1u;}else{diagnostics.value[8]=floatBitsToUint(rz);pressureSolveState.value[1]=0u;pressureSolveState.value[9]=1u;}
+}
+void pcgFinalizeStage(uint id){if(id==0u){if(pressureSolveState.value[1]==0u)pressureSolveState.value[1]=3u;diagnostics.value[7]=pressureSolveState.value[2];diagnostics.value[11]=pressureSolveState.value[6];diagnostics.value[12]=pressureSolveState.value[1];}}
 
 void mgRestrictStage(uint id) {
     if(id>=uint(coarseCount()))return;int ix=int(id)%coarseNx();int yz=int(id)/coarseNx();ivec3 cc=ivec3(ix,yz%coarseNy(),yz/coarseNy());
     float residualSum=0.0;float coarseD=0.0;float xWeight=0.0;float yWeight=0.0;float zWeight=0.0;int childCount=0;bool anyFluid=false;bool anySolid=false;
     ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));
     for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){
-        ivec3 c=cc*2+ivec3(x,y,z);if(!insideCell(c))continue;childCount++;anySolid=anySolid||solid(c);if(!fluid(c))continue;anyFluid=true;
-        float sum=0.0;float diagonal=0.0;for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(solid(nb))continue;diagonal+=1.0;if(fluid(nb))sum+=pa.value[ci(nb)];}
+		ivec3 c=cc*2+ivec3(x,y,z);if(!insideCell(c))continue;childCount++;anySolid=anySolid||solid(c);if(!pressureUnknown(c))continue;anyFluid=true;
+		float sum=0.0;float diagonal=0.0;for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];float coefficient=pressureFaceCoefficient(c,nb);if(!(coefficient>0.0))continue;diagonal+=coefficient;if(pressureUnknown(nb))sum+=pa.value[ci(nb)];}
         float rhs=-(pc.rho/pc.dt)*divergence.value[ci(c)]*pc.h*pc.h;residualSum+=rhs-(diagonal*pa.value[ci(c)]-sum);
-        for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(solid(nb))continue;if(!fluid(nb)){coarseD+=0.25;continue;}ivec3 nc=nb/2;if(all(equal(nc,cc)))continue;coarseD+=0.25;if(n==1)xWeight+=0.25;else if(n==3)yWeight+=0.25;else if(n==5)zWeight+=0.25;}
+        for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];float coefficient=pressureFaceCoefficient(c,nb);if(!(coefficient>0.0))continue;if(!fluid(nb)){coarseD+=0.25*coefficient;continue;}ivec3 nc=nb/2;if(all(equal(nc,cc)))continue;coarseD+=0.25;if(n==1)xWeight+=0.25;else if(n==3)yWeight+=0.25;else if(n==5)zWeight+=0.25;}
     }
     coarseMask.value[id]=(anyFluid?1u:0u)|(anySolid?2u:0u);coarseRhs.value[id]=anyFluid&&childCount>0?4.0*residualSum/float(childCount):0.0;coarsePa.value[id]=0.0;coarsePb.value[id]=0.0;coarseDiagonal.value[id]=coarseD;coarseXWeight.value[id]=xWeight;coarseYWeight.value[id]=yWeight;coarseZWeight.value[id]=zWeight;
 }
@@ -227,7 +348,7 @@ float mgCoarsePressure(ivec3 c) {
     c=clamp(c,ivec3(0),ivec3(coarseNx()-1,coarseNy()-1,coarseNz()-1));if(!coarseFluid(c))return 0.0;return (pc.flags&1)==0?coarsePa.value[coarseCi(c)]:coarsePb.value[coarseCi(c)];
 }
 void mgProlongStage(uint id) {
-    if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);if(!fluid(c))return;
+	if(id>=uint(cellCount()))return;int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 c=ivec3(ix,yz%pc.ny,yz/pc.ny);if(!pressureUnknown(c))return;
     vec3 q=vec3(c)*0.5-vec3(0.25);ivec3 base=ivec3(floor(q));vec3 fraction=fract(q);float correction=0.0;bool nearSolid=false;
     for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec3 sampleCell=clamp(base+ivec3(x,y,z),ivec3(0),ivec3(coarseNx()-1,coarseNy()-1,coarseNz()-1));nearSolid=nearSolid||((coarseMask.value[coarseCi(sampleCell)]&2u)!=0u);}
     if(nearSolid){pa.value[id]+=mgCoarsePressure(c/2);return;}
@@ -259,10 +380,10 @@ void mghRestrictFineStage(uint id) {
     float residualSum=0.0;float coarseD=0.0;float xWeight=0.0;float yWeight=0.0;float zWeight=0.0;int childCount=0;bool anyFluid=false;bool anySolid=false;
     ivec3 offsets[6]=ivec3[6](ivec3(-1,0,0),ivec3(1,0,0),ivec3(0,-1,0),ivec3(0,1,0),ivec3(0,0,-1),ivec3(0,0,1));
     for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++){
-        ivec3 c=cc*2+ivec3(x,y,z);if(!insideCell(c))continue;childCount++;anySolid=anySolid||solid(c);if(!fluid(c))continue;anyFluid=true;
-        float sum=0.0;float diagonal=0.0;for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(solid(nb))continue;diagonal+=1.0;if(fluid(nb))sum+=pa.value[ci(nb)];}
+		ivec3 c=cc*2+ivec3(x,y,z);if(!insideCell(c))continue;childCount++;anySolid=anySolid||solid(c);if(!pressureUnknown(c))continue;anyFluid=true;
+		float sum=0.0;float diagonal=0.0;for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];float coefficient=pressureFaceCoefficient(c,nb);if(!(coefficient>0.0))continue;diagonal+=coefficient;if(pressureUnknown(nb))sum+=pa.value[ci(nb)];}
         float rhs=-(pc.rho/pc.dt)*divergence.value[ci(c)]*pc.h*pc.h;residualSum+=rhs-(diagonal*pa.value[ci(c)]-sum);
-        for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];if(solid(nb))continue;if(!fluid(nb)){coarseD+=0.25;continue;}ivec3 nc=nb/2;if(all(equal(nc,cc)))continue;coarseD+=0.25;if(n==1)xWeight+=0.25;else if(n==3)yWeight+=0.25;else if(n==5)zWeight+=0.25;}
+        for(int n=0;n<6;n++){ivec3 nb=c+offsets[n];float coefficient=pressureFaceCoefficient(c,nb);if(!(coefficient>0.0))continue;if(!fluid(nb)){coarseD+=0.25*coefficient;continue;}ivec3 nc=nb/2;if(all(equal(nc,cc)))continue;coarseD+=0.25;if(n==1)xWeight+=0.25;else if(n==3)yWeight+=0.25;else if(n==5)zWeight+=0.25;}
     }
     coarseMask.value[destination]=(anyFluid?1u:0u)|(anySolid?2u:0u);coarseRhs.value[destination]=anyFluid&&childCount>0?4.0*residualSum/float(childCount):0.0;coarsePa.value[destination]=0.0;coarsePb.value[destination]=0.0;coarseDiagonal.value[destination]=coarseD;coarseXWeight.value[destination]=xWeight;coarseYWeight.value[destination]=yWeight;coarseZWeight.value[destination]=zWeight;
 }
@@ -299,16 +420,39 @@ void mghProlongCoarseStage(uint id) {
 }
 
 void projectStage(uint id) {
-    if(id<uint(uCount())){int fx=int(id)%(pc.nx+1);int yz=int(id)/(pc.nx+1);int fy=yz%pc.ny;int fz=yz/pc.ny;ivec3 f=ivec3(fx,fy,fz);if(!validU(f))u.value[id]=0.0;else{ivec3 l=f+ivec3(-1,0,0),r=f;if(fluid(l)||fluid(r))u.value[id]-=(pc.dt/pc.rho)*(pressureAt(r)-pressureAt(l))/pc.h;}}
-    if(id<uint(vCount())){int fx=int(id)%pc.nx;int yz=int(id)/pc.nx;int fy=yz%(pc.ny+1);int fz=yz/(pc.ny+1);ivec3 f=ivec3(fx,fy,fz);if(!validV(f))v.value[id]=0.0;else{ivec3 b=f+ivec3(0,-1,0),t=f;if(fluid(b)||fluid(t))v.value[id]-=(pc.dt/pc.rho)*(pressureAt(t)-pressureAt(b))/pc.h;}}
-    if(id<uint(wCount())){int fx=int(id)%pc.nx;int yz=int(id)/pc.nx;int fy=yz%pc.ny;int fz=yz/pc.ny;ivec3 f=ivec3(fx,fy,fz);if(!validW(f))w.value[id]=0.0;else{ivec3 b=f+ivec3(0,0,-1),t=f;if(fluid(b)||fluid(t))w.value[id]-=(pc.dt/pc.rho)*(pressureAt(t)-pressureAt(b))/pc.h;}}
+    if(id<uint(uCount())){int fx=int(id)%(pc.nx+1);int yz=int(id)/(pc.nx+1);int fy=yz%pc.ny;int fz=yz/pc.ny;ivec3 f=ivec3(fx,fy,fz);if(!validU(f))u.value[id]=0.0;else{ivec3 l=f+ivec3(-1,0,0),r=f;if(fluid(l)||fluid(r))u.value[id]-=(pc.dt/pc.rho)*pressureDifference(l,r,ivec3(1,0,0))/pc.h;}}
+    if(id<uint(vCount())){int fx=int(id)%pc.nx;int yz=int(id)/pc.nx;int fy=yz%(pc.ny+1);int fz=yz/(pc.ny+1);ivec3 f=ivec3(fx,fy,fz);if(!validV(f))v.value[id]=0.0;else{ivec3 b=f+ivec3(0,-1,0),t=f;if(fluid(b)||fluid(t))v.value[id]-=(pc.dt/pc.rho)*pressureDifference(b,t,ivec3(0,1,0))/pc.h;}}
+    if(id<uint(wCount())){int fx=int(id)%pc.nx;int yz=int(id)/pc.nx;int fy=yz%pc.ny;int fz=yz/pc.ny;ivec3 f=ivec3(fx,fy,fz);if(!validW(f))w.value[id]=0.0;else{ivec3 b=f+ivec3(0,0,-1),t=f;if(fluid(b)||fluid(t))w.value[id]-=(pc.dt/pc.rho)*pressureDifference(b,t,ivec3(0,0,1))/pc.h;}}
 }
 
 void g2pStage(uint id) {
-    if(id>=uint(pc.particleCount))return;vec3 q=positions.value[id].xyz/pc.h;vec3 oldv=velocities.value[id].xyz;
+    if(id>=uint(pc.particleCount)||!(positions.value[id].w>0.0))return;vec3 q=positions.value[id].xyz/pc.h;vec3 oldv=velocities.value[id].xyz;
     vec3 pic=vec3(sampleU(vec3(q.x,q.y-0.5,q.z-0.5),false),sampleV(vec3(q.x-0.5,q.y,q.z-0.5),false),sampleW(vec3(q.x-0.5,q.y-0.5,q.z),false));
     vec3 before=vec3(sampleU(vec3(q.x,q.y-0.5,q.z-0.5),true),sampleV(vec3(q.x-0.5,q.y,q.z-0.5),true),sampleW(vec3(q.x-0.5,q.y-0.5,q.z),true));
-    vec3 flip=oldv+(pic-before);velocities.value[id]=vec4(mix(pic,flip,0.90),0.0);
+	float transfer=uintBitsToFloat(transferState.value[0]);
+	velocities.value[id]=vec4(pic+transfer*(oldv-before),0.0);
+}
+
+void transferEnergyReduceStage(uint id) {
+	uint local=gl_LocalInvocationID.x;float quadratic=0.0,linear=0.0,picEnergy=0.0,gridEnergy=0.0;
+	if(pc.flags==0&&id<uint(pc.particleCount)){vec4 pv=positions.value[id];if(pv.w>0.0){vec3 q=pv.xyz/pc.h;vec3 oldv=velocities.value[id].xyz;
+		vec3 pic=vec3(sampleU(vec3(q.x,q.y-0.5,q.z-0.5),false),sampleV(vec3(q.x-0.5,q.y,q.z-0.5),false),sampleW(vec3(q.x-0.5,q.y-0.5,q.z),false));
+		vec3 before=vec3(sampleU(vec3(q.x,q.y-0.5,q.z-0.5),true),sampleV(vec3(q.x-0.5,q.y,q.z-0.5),true),sampleW(vec3(q.x-0.5,q.y-0.5,q.z),true));
+		vec3 delta=oldv-before;float mass=pc.rho*pv.w;quadratic=0.5*mass*dot(delta,delta);linear=mass*dot(pic,delta);picEnergy=0.5*mass*dot(pic,pic);}}
+	if(id<uint(uCount()))gridEnergy+=0.5*pc.rho*p2gWeightU.value[id]*u.value[id]*u.value[id];
+	if(id<uint(vCount()))gridEnergy+=0.5*pc.rho*p2gWeightV.value[id]*v.value[id]*v.value[id];
+	if(id<uint(wCount()))gridEnergy+=0.5*pc.rho*p2gWeightW.value[id]*w.value[id]*w.value[id];
+	diagnosticSquared[local]=quadratic;diagnosticVolume[local]=linear;diagnosticWeightedX[local]=picEnergy;diagnosticPressure[local]=floatBitsToUint(gridEnergy);barrier();
+	for(uint stride=128u;stride>0u;stride>>=1u){if(local<stride){diagnosticSquared[local]+=diagnosticSquared[local+stride];diagnosticVolume[local]+=diagnosticVolume[local+stride];diagnosticWeightedX[local]+=diagnosticWeightedX[local+stride];diagnosticPressure[local]=floatBitsToUint(uintBitsToFloat(diagnosticPressure[local])+uintBitsToFloat(diagnosticPressure[local+stride]));}barrier();}
+	if(local==0u){uint base=4u*gl_WorkGroupID.x;volumeReductionScratch.value[base]=diagnosticSquared[0];volumeReductionScratch.value[base+1u]=diagnosticVolume[0];volumeReductionScratch.value[base+2u]=diagnosticWeightedX[0];volumeReductionScratch.value[base+3u]=uintBitsToFloat(diagnosticPressure[0]);}
+}
+void transferEnergyFinalizeStage(uint id) {
+	if(id!=0u)return;float quadratic=0.0,linear=0.0,picEnergy=0.0,gridEnergy=0.0;
+	for(uint group=0u;group<uint(pc.iteration);group++){uint base=4u*group;quadratic+=volumeReductionScratch.value[base];linear+=volumeReductionScratch.value[base+1u];picEnergy+=volumeReductionScratch.value[base+2u];gridEnergy+=volumeReductionScratch.value[base+3u];}
+	if(pc.flags==1){transferState.value[1]=floatBitsToUint(gridEnergy);return;}
+	float limit=max(picEnergy,min(gridEnergy,uintBitsToFloat(transferState.value[1]))),fullEnergy=quadratic+linear+picEnergy,transfer=1.0;
+	if(fullEnergy>limit){transfer=0.0;if(quadratic>0.0){float discriminant=linear*linear-4.0*quadratic*(picEnergy-limit);if(discriminant>=0.0&&finiteFloat(discriminant))transfer=clamp((-linear+sqrt(discriminant))/(2.0*quadratic),0.0,1.0);}}
+	transferState.value[0]=floatBitsToUint(transfer);
 }
 
 void constrainToSolidFaces(inout vec3 p,inout vec3 vel) {
@@ -322,14 +466,47 @@ void constrainToSolidFaces(inout vec3 p,inout vec3 vel) {
     if(c.z+1<pc.nz&&local.z>pc.h-radius&&solid(c+ivec3(0,0,1))){p.z=float(c.z)*pc.h+contactMaximum;vel.z=min(0.0,vel.z);}
 }
 
+float hdivU(int x,int y,int z){if(x<0||x>pc.nx)return 0.0;y=clamp(y,0,pc.ny-1);z=clamp(z,0,pc.nz-1);return u.value[ui(ivec3(x,y,z))];}
+float hdivV(int x,int y,int z){if(y<0||y>pc.ny)return 0.0;x=clamp(x,0,pc.nx-1);z=clamp(z,0,pc.nz-1);return v.value[vi(ivec3(x,y,z))];}
+float hdivW(int x,int y,int z){if(z<0||z>pc.nz)return 0.0;x=clamp(x,0,pc.nx-1);y=clamp(y,0,pc.ny-1);return w.value[wi(ivec3(x,y,z))];}
+float hdivUy(int x,int y,int z){return 0.5*(hdivU(x,y+1,z)-hdivU(x,y-1,z));}
+float hdivUz(int x,int y,int z){return 0.5*(hdivU(x,y,z+1)-hdivU(x,y,z-1));}
+float hdivVx(int x,int y,int z){return 0.5*(hdivV(x+1,y,z)-hdivV(x-1,y,z));}
+float hdivVz(int x,int y,int z){return 0.5*(hdivV(x,y,z+1)-hdivV(x,y,z-1));}
+float hdivWx(int x,int y,int z){return 0.5*(hdivW(x+1,y,z)-hdivW(x-1,y,z));}
+float hdivWy(int x,int y,int z){return 0.5*(hdivW(x,y+1,z)-hdivW(x,y-1,z));}
+vec3 sampleGridVelocity(vec3 physicalPoint) {
+	vec3 q=physicalPoint/pc.h;ivec3 c=clamp(ivec3(floor(q)),ivec3(0),ivec3(pc.nx-1,pc.ny-1,pc.nz-1));
+	vec3 local=clamp(q-vec3(c),vec3(0.0),vec3(1.0));vec3 centered=local-vec3(0.5);
+	float leftU=hdivU(c.x,c.y,c.z),rightU=hdivU(c.x+1,c.y,c.z);
+	float leftUy=hdivUy(c.x,c.y,c.z),rightUy=hdivUy(c.x+1,c.y,c.z);
+	float leftUz=hdivUz(c.x,c.y,c.z),rightUz=hdivUz(c.x+1,c.y,c.z);
+	float bottomV=hdivV(c.x,c.y,c.z),topV=hdivV(c.x,c.y+1,c.z);
+	float bottomVx=hdivVx(c.x,c.y,c.z),topVx=hdivVx(c.x,c.y+1,c.z);
+	float bottomVz=hdivVz(c.x,c.y,c.z),topVz=hdivVz(c.x,c.y+1,c.z);
+	float backW=hdivW(c.x,c.y,c.z),frontW=hdivW(c.x,c.y,c.z+1);
+	float backWx=hdivWx(c.x,c.y,c.z),frontWx=hdivWx(c.x,c.y,c.z+1);
+	float backWy=hdivWy(c.x,c.y,c.z),frontWy=hdivWy(c.x,c.y,c.z+1);
+	float leftProfile=leftU+leftUy*centered.y+leftUz*centered.z;
+	float rightProfile=rightU+rightUy*centered.y+rightUz*centered.z;
+	float bottomProfile=bottomV+bottomVx*centered.x+bottomVz*centered.z;
+	float topProfile=topV+topVx*centered.x+topVz*centered.z;
+	float backProfile=backW+backWx*centered.x+backWy*centered.y;
+	float frontProfile=frontW+frontWx*centered.x+frontWy*centered.y;
+	float xSlope=topVx-bottomVx+frontWx-backWx;
+	float ySlope=rightUy-leftUy+frontWy-backWy;
+	float zSlope=rightUz-leftUz+topVz-bottomVz;
+	return vec3(leftProfile+local.x*(rightProfile-leftProfile)-0.5*xSlope*(centered.x*centered.x-0.25),
+		bottomProfile+local.y*(topProfile-bottomProfile)-0.5*ySlope*(centered.y*centered.y-0.25),
+		backProfile+local.z*(frontProfile-backProfile)-0.5*zSlope*(centered.z*centered.z-0.25));
+}
+
 void advectStage(uint id) {
-    if(id>=uint(pc.particleCount))return;vec3 p=positions.value[id].xyz;vec3 vel=velocities.value[id].xyz;vec3 limit=vec3(pc.nx,pc.ny,pc.nz)*pc.h;float radius=0.45*pc.h;
-    float nx=clamp(p.x+vel.x*pc.dt,radius,limit.x-radius);ivec3 cx=ivec3(floor(vec3(nx,p.y,p.z)/pc.h));if(solid(cx))vel.x=0.0;else p.x=nx;
-    float ny=clamp(p.y+vel.y*pc.dt,radius,limit.y-radius);ivec3 cy=ivec3(floor(vec3(p.x,ny,p.z)/pc.h));if(solid(cy))vel.y=0.0;else p.y=ny;
-    float nz=clamp(p.z+vel.z*pc.dt,radius,limit.z-radius);ivec3 cz=ivec3(floor(vec3(p.x,p.y,nz)/pc.h));if(solid(cz))vel.z=0.0;else p.z=nz;
-    if(p.x<=radius+0.001*pc.h)vel.x=max(0.0,vel.x);if(p.x>=limit.x-radius-0.001*pc.h)vel.x=min(0.0,vel.x);
-    if(p.y<=radius+0.001*pc.h)vel.y=max(0.0,vel.y);if(p.y>=limit.y-radius-0.001*pc.h)vel.y=min(0.0,vel.y);
-    if(p.z<=radius+0.001*pc.h)vel.z=max(0.0,vel.z);if(p.z>=limit.z-radius-0.001*pc.h)vel.z=min(0.0,vel.z);
+    if(id>=uint(pc.particleCount)||!(positions.value[id].w>0.0))return;vec3 p=positions.value[id].xyz;vec3 vel=velocities.value[id].xyz;vec3 limit=vec3(pc.nx,pc.ny,pc.nz)*pc.h;float radius=0.45*pc.h;
+	vec3 first=sampleGridVelocity(p);vec3 midpoint=sampleGridVelocity(p+0.5*pc.dt*first);vec3 secondMidpoint=sampleGridVelocity(p+0.5*pc.dt*midpoint);vec3 endpoint=sampleGridVelocity(p+pc.dt*secondMidpoint);vec3 motion=(first+2.0*midpoint+2.0*secondMidpoint+endpoint)/6.0;
+	float proposedX=p.x+motion.x*pc.dt;float nx=clamp(proposedX,radius,limit.x-radius);if(proposedX<radius)vel.x=max(0.0,vel.x);else if(proposedX>limit.x-radius)vel.x=min(0.0,vel.x);ivec3 cx=ivec3(floor(vec3(nx,p.y,p.z)/pc.h));if(solid(cx))vel.x=0.0;else p.x=nx;
+	float proposedY=p.y+motion.y*pc.dt;float ny=clamp(proposedY,radius,limit.y-radius);if(proposedY<radius)vel.y=max(0.0,vel.y);else if(proposedY>limit.y-radius)vel.y=min(0.0,vel.y);ivec3 cy=ivec3(floor(vec3(p.x,ny,p.z)/pc.h));if(solid(cy))vel.y=0.0;else p.y=ny;
+	float proposedZ=p.z+motion.z*pc.dt;float nz=clamp(proposedZ,radius,limit.z-radius);if(proposedZ<radius)vel.z=max(0.0,vel.z);else if(proposedZ>limit.z-radius)vel.z=min(0.0,vel.z);ivec3 cz=ivec3(floor(vec3(p.x,p.y,nz)/pc.h));if(solid(cz))vel.z=0.0;else p.z=nz;
     constrainToSolidFaces(p,vel);
     positions.value[id].xyz=p;velocities.value[id].xyz=vel;
 }
@@ -339,17 +516,102 @@ void snapshotStage(uint id) {
 }
 void clearSurfaceStage(uint id) { if(id<uint(cellCount())){density.value[id]=0.0;snapshot.value[id]=0u;} }
 void surfaceP2gStage(uint id) {
-    if(id>=uint(pc.particleCount))return;vec4 pv=positions.value[id];vec3 q=pv.xyz/pc.h;
+    if(id>=uint(pc.particleCount))return;vec4 pv=positions.value[id];if(!(pv.w>0.0))return;vec3 q=pv.xyz/pc.h;
     ivec3 center=ivec3(clamp(floor(q),vec3(0.0),vec3(pc.nx-1,pc.ny-1,pc.nz-1)));
     if(!solid(center))atomicOr(snapshot.value[ci(center)],1u<<8);splatDensity(q-vec3(0.5),pv.w);
 }
 void diagnosticsStage(uint id) {
     uint local=gl_LocalInvocationID.x;float squared=0.0;float volume=0.0;float weightedX=0.0;uint pressureBits=0u;
     if(id<uint(cellCount())){ivec3 c=ivec3(int(id)%pc.nx,(int(id)/pc.nx)%pc.ny,int(id)/(pc.nx*pc.ny));float d=divergence.value[id];squared=d*d;if(fluid(c))pressureBits=floatBitsToUint(abs(pressureAt(c)));}
-    if(id<uint(pc.particleCount)){vec4 pv=positions.value[id];volume=pv.w;weightedX=(pv.x/pc.h)*pv.w;}
+    if(id<uint(pc.particleCount)){vec4 pv=positions.value[id];volume=pv.w;weightedX=(pv.x/pc.h)*pv.w;if(pv.w>0.0)atomicAdd(diagnostics.value[6],1u);}
     diagnosticSquared[local]=squared;diagnosticVolume[local]=volume;diagnosticWeightedX[local]=weightedX;diagnosticPressure[local]=pressureBits;barrier();
     for(uint stride=128u;stride>0u;stride>>=1u){if(local<stride){diagnosticSquared[local]+=diagnosticSquared[local+stride];diagnosticVolume[local]+=diagnosticVolume[local+stride];diagnosticWeightedX[local]+=diagnosticWeightedX[local+stride];diagnosticPressure[local]=max(diagnosticPressure[local],diagnosticPressure[local+stride]);}barrier();}
-    if(local==0u){diagnosticAdd(3,diagnosticSquared[0]);diagnosticAdd(4,diagnosticVolume[0]);diagnosticAdd(5,diagnosticWeightedX[0]);atomicMax(diagnostics.value[2],diagnosticPressure[0]);}
+	if(local==0u){diagnosticAdd(3,diagnosticSquared[0]);if(pc.flags==0)diagnosticAdd(4,diagnosticVolume[0]);diagnosticAdd(5,diagnosticWeightedX[0]);atomicMax(diagnostics.value[2],diagnosticPressure[0]);}if(id==0u){diagnostics.value[10]=transferState.value[2];diagnostics.value[14]=pressureSolveState.value[14];}
+	if(id==0u)diagnostics.value[8]=reseedState.value[4];
+}
+void volumeAuditStage(uint id){
+	uint local=gl_LocalInvocationID.x;diagnosticVolume[local]=id<uint(pc.particleCount)?positions.value[id].w:0.0;barrier();
+	for(uint stride=128u;stride>0u;stride>>=1u){if(local<stride)diagnosticVolume[local]+=diagnosticVolume[local+stride];barrier();}
+	if(local==0u)volumeReductionScratch.value[gl_WorkGroupID.x]=diagnosticVolume[0];
+}
+void volumeAuditFinalizeStage(uint id){
+	if(id!=0u)return;float total=0.0;uint groups=(uint(pc.particleCount)+255u)/256u;
+	for(uint group=0u;group<groups;group++)total+=volumeReductionScratch.value[group];
+	diagnostics.value[pc.flags==0?15u:(pc.flags==1?9u:4u)]=floatBitsToUint(total);
 }
 
-void main(){uint id=gl_GlobalInvocationID.x;if(pc.stage==0)clearStage(id);else if(pc.stage==1)p2gStage(id);else if(pc.stage==2)prepStage(id);else if(pc.stage==3)divergenceStage(id);else if(pc.stage==4)jacobiStage(id);else if(pc.stage==5)projectStage(id);else if(pc.stage==6)g2pStage(id);else if(pc.stage==7)advectStage(id);else if(pc.stage==8)snapshotStage(id);else if(pc.stage==9)clearSurfaceStage(id);else if(pc.stage==10)surfaceP2gStage(id);else if(pc.stage==11)diagnosticsStage(id);else if(pc.stage==12)rbgsStage(id);else if(pc.stage==13)pcgInitStage(id);else if(pc.stage==14)pcgClearStage(id);else if(pc.stage==15)pcgApplyStage(id);else if(pc.stage==16)pcgReduceStage(id);else if(pc.stage==17)pcgUpdateXrStage(id);else if(pc.stage==18)pcgUpdatePStage(id);else if(pc.stage==19)mgRestrictStage(id);else if(pc.stage==20)mgCoarseJacobiStage(id);else if(pc.stage==21)mgProlongStage(id);else if(pc.stage==22)mghRestrictFineStage(id);else if(pc.stage==23)mghRestrictCoarseStage(id);else if(pc.stage==24)mghJacobiStage(id);else if(pc.stage==25)mghProlongFineStage(id);else if(pc.stage==26)mghProlongCoarseStage(id);}
+float markerDistanceSquared(uint first,uint second) {
+    vec3 delta=positions.value[first].xyz-positions.value[second].xyz;return dot(delta,delta);
+}
+bool reseedRepresentative(uint particle,uint representatives[RESEED_TARGET_MAX],int selected) {
+    for(int i=0;i<selected;i++)if(representatives[i]==particle)return true;return false;
+}
+void reseedClearStage(uint id) {
+    if(id<uint(cellCount())){reseedCellHead.value[id]=0xffffffffu;reseedCellCount.value[id]=0u;exactCellVolume.value[id]=0.0;}
+    if(id<8u)reseedState.value[id]=0u;
+}
+void reseedBuildStage(uint id) {
+	if(id>=uint(pc.particleCount))return;vec4 pv=positions.value[id];if(!(pv.w>0.0))return;
+	ivec3 c=ivec3(clamp(floor(pv.xyz/pc.h),vec3(0.0),vec3(pc.nx-1,pc.ny-1,pc.nz-1)));int cell=ci(c);
+	reseedParticleOwner.value[id]=uint(cell);reseedParticleNext.value[id]=atomicExchange(reseedCellHead.value[cell],id);atomicAdd(reseedCellCount.value[cell],1u);atomicAdd(exactCellVolume.value[cell],pv.w);
+}
+bool exactlyRepresentableVolumeSum(float first,float second) {
+	precise float large=max(first,second);precise float small=min(first,second);
+	precise float sum=large+small;precise float recovered=sum-large;return recovered==small;
+}
+bool mergeMarkerInto(uint target,uint source) {
+    vec4 targetPosition=positions.value[target];vec4 sourcePosition=positions.value[source];
+	if(!exactlyRepresentableVolumeSum(targetPosition.w,sourcePosition.w)){atomicAdd(reseedState.value[4],1u);return false;}
+    float mergedVolume=targetPosition.w+sourcePosition.w;
+    positions.value[target]=vec4((targetPosition.xyz*targetPosition.w+sourcePosition.xyz*sourcePosition.w)/mergedVolume,mergedVolume);
+    velocities.value[target]=vec4((velocities.value[target].xyz*targetPosition.w+velocities.value[source].xyz*sourcePosition.w)/mergedVolume,0.0);
+    positions.value[source].w=0.0;velocities.value[source]=vec4(0.0);atomicAdd(reseedState.value[2],1u);return true;
+}
+void reseedMergeStage(uint id) {
+    if(id>=uint(cellCount()))return;int target=min(RESEED_TARGET_MAX,max(1,int(ceil(exactCellVolume.value[id]/RESEED_NOMINAL_VOLUME))));if(reseedCellCount.value[id]<=uint(target))return;
+    uint representatives[RESEED_TARGET_MAX];uint first=0xffffffffu;
+    for(uint particle=reseedCellHead.value[id];particle!=0xffffffffu;particle=reseedParticleNext.value[particle])if(positions.value[particle].w>0.0)first=min(first,particle);
+    if(first==0xffffffffu)return;representatives[0]=first;int selected=1;
+    while(selected<target){uint best=0xffffffffu;float bestDistance=-1.0;
+        for(uint candidate=reseedCellHead.value[id];candidate!=0xffffffffu;candidate=reseedParticleNext.value[candidate]){
+            if(!(positions.value[candidate].w>0.0)||reseedRepresentative(candidate,representatives,selected))continue;float nearest=3.402823466e+38;
+            for(int existing=0;existing<selected;existing++)nearest=min(nearest,markerDistanceSquared(candidate,representatives[existing]));
+            if(nearest>bestDistance||(nearest==bestDistance&&candidate<best)){bestDistance=nearest;best=candidate;}
+        }
+        if(best==0xffffffffu)break;representatives[selected++]=best;
+    }
+    for(uint source=reseedCellHead.value[id];source!=0xffffffffu;source=reseedParticleNext.value[source]){
+        if(!(positions.value[source].w>0.0)||reseedRepresentative(source,representatives,selected))continue;int targetIndex=0;float bestDistance=markerDistanceSquared(source,representatives[0]);
+        for(int candidate=1;candidate<selected;candidate++){float distance=markerDistanceSquared(source,representatives[candidate]);if(distance<bestDistance||(distance==bestDistance&&representatives[candidate]<representatives[targetIndex])){bestDistance=distance;targetIndex=candidate;}}
+        mergeMarkerInto(representatives[targetIndex],source);
+    }
+}
+void reseedFreeBuildStage(uint id) {
+	if(id>=uint(pc.particleCount)||positions.value[id].w>0.0)return;reseedParticleOwner.value[id]=0xffffffffu;uint slot=atomicAdd(reseedState.value[0],1u);reseedFreeParticle.value[slot]=id;
+}
+int targetReseedMarkers(float exactVolume) {
+    return min(RESEED_TARGET_MAX,max(1,int(ceil(exactVolume/RESEED_NOMINAL_VOLUME))));
+}
+float reseedMinimumCoordinate(int axis,ivec3 cell) {
+    int coordinate=cell[axis];ivec3 neighbor=cell;neighbor[axis]-=1;
+    float inset=coordinate==0?RESEED_DOMAIN_CONTACT:(solid(neighbor)?RESEED_SOLID_CONTACT:RESEED_POSITION_EPSILON);return (float(coordinate)+inset)*pc.h;
+}
+float reseedMaximumCoordinate(int axis,ivec3 cell) {
+    int coordinate=cell[axis];int size=axis==0?pc.nx:(axis==1?pc.ny:pc.nz);ivec3 neighbor=cell;neighbor[axis]+=1;
+    float inset=coordinate+1==size?RESEED_DOMAIN_CONTACT:(solid(neighbor)?RESEED_SOLID_CONTACT:RESEED_POSITION_EPSILON);return (float(coordinate+1)-inset)*pc.h;
+}
+void reseedSplitStage(uint id) {
+	if(id>=uint(cellCount())||reseedCellCount.value[id]==0u)return;uint cellParticles[RESEED_TARGET_MAX];int count=0;
+	for(uint particle=reseedCellHead.value[id];particle!=0xffffffffu;particle=reseedParticleNext.value[particle])if(reseedParticleOwner.value[particle]==id&&positions.value[particle].w>0.0&&count<RESEED_TARGET_MAX)cellParticles[count++]=particle;
+	if(count==0){atomicAdd(pressureSolveState.value[14],1u);return;}
+	int target=targetReseedMarkers(exactCellVolume.value[id]);int ix=int(id)%pc.nx;int yz=int(id)/pc.nx;ivec3 cell=ivec3(ix,yz%pc.ny,yz/pc.ny);
+	while(count<target){uint source=cellParticles[0];for(int candidate=1;candidate<count;candidate++)if(positions.value[cellParticles[candidate]].w>positions.value[source].w)source=cellParticles[candidate];
+		uint freeSlot=atomicAdd(reseedState.value[1],1u);if(freeSlot>=reseedState.value[0]){atomicAdd(pressureSolveState.value[14],uint(target-count));break;}uint destination=reseedFreeParticle.value[freeSlot];reseedParticleOwner.value[destination]=id;
+		vec4 sourcePosition=positions.value[source];vec3 sourcePoint=sourcePosition.xyz;int bestAxis=-1;float bestRoom=0.0;
+		for(int axis=0;axis<3;axis++){float room=min(sourcePoint[axis]-reseedMinimumCoordinate(axis,cell),reseedMaximumCoordinate(axis,cell)-sourcePoint[axis]);if(room>bestRoom){bestRoom=room;bestAxis=axis;}}
+		vec3 firstPoint=sourcePoint;vec3 secondPoint=sourcePoint;if(bestAxis>=0&&bestRoom>0.0){float displacement=0.5*bestRoom;firstPoint[bestAxis]-=displacement;secondPoint[bestAxis]+=displacement;}
+		float firstVolume=sourcePosition.w*0.5;float secondVolume=sourcePosition.w-firstVolume;positions.value[source]=vec4(firstPoint,firstVolume);positions.value[destination]=vec4(secondPoint,secondVolume);velocities.value[destination]=velocities.value[source];cellParticles[count++]=destination;atomicAdd(reseedState.value[3],1u);
+	}
+}
+
+void main(){uint id=gl_GlobalInvocationID.x;if(pressureSolveState.value[15]!=0u&&pc.stage!=47&&pc.stage!=48&&pc.stage!=8&&pc.stage!=11&&pc.stage!=43&&pc.stage!=49)return;if(pc.stage==0)clearStage(id);else if(pc.stage==1)p2gStage(id);else if(pc.stage==2)prepStage(id);else if(pc.stage==3)divergenceStage(id);else if(pc.stage==4)jacobiStage(id);else if(pc.stage==5)projectStage(id);else if(pc.stage==6)g2pStage(id);else if(pc.stage==7)advectStage(id);else if(pc.stage==8)snapshotStage(id);else if(pc.stage==9)clearSurfaceStage(id);else if(pc.stage==10)surfaceP2gStage(id);else if(pc.stage==11)diagnosticsStage(id);else if(pc.stage==12)rbgsStage(id);else if(pc.stage==13)pcgInitStage(id);else if(pc.stage==14)pcgClearStage(id);else if(pc.stage==15)pcgApplyStage(id);else if(pc.stage==16)pcgReduceStage(id);else if(pc.stage==17)pcgUpdateXrStage(id);else if(pc.stage==18)pcgUpdatePStage(id);else if(pc.stage==19)mgRestrictStage(id);else if(pc.stage==20)mgCoarseJacobiStage(id);else if(pc.stage==21)mgProlongStage(id);else if(pc.stage==22)mghRestrictFineStage(id);else if(pc.stage==23)mghRestrictCoarseStage(id);else if(pc.stage==24)mghJacobiStage(id);else if(pc.stage==25)mghProlongFineStage(id);else if(pc.stage==26)mghProlongCoarseStage(id);else if(pc.stage==27)reseedClearStage(id);else if(pc.stage==28)reseedBuildStage(id);else if(pc.stage==29)reseedMergeStage(id);else if(pc.stage==30)reseedFreeBuildStage(id);else if(pc.stage==31)reseedSplitStage(id);else if(pc.stage==32)pressureClassifyStage(id);else if(pc.stage==36)pressureGeometryStage(id);else if(pc.stage==37)pressureStateClearStage(id);else if(pc.stage==38)pressureTopologyStage(id);else if(pc.stage==39)pressureAnchorFinalizeStage(id);else if(pc.stage==40)velocitySeedStage(id);else if(pc.stage==41)velocityExtrapolateStage(id);else if(pc.stage==42)velocityCommitStage(id);else if(pc.stage==43)volumeAuditStage(id);else if(pc.stage==44)pcgControlStage(id);else if(pc.stage==45)transferEnergyReduceStage(id);else if(pc.stage==46)transferEnergyFinalizeStage(id);else if(pc.stage==47)pcgFinalizeStage(id);else if(pc.stage==48)pressureStepBeginStage(id);else if(pc.stage==49)volumeAuditFinalizeStage(id);else if(pc.stage==50)pcgVerifyBuildStage(id);else if(pc.stage==51)pcgVerifyFinalizeStage(id);}

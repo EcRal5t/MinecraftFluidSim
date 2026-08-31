@@ -17,7 +17,7 @@ final class GpuProbeBenchmark {
 		int pressureIterations = switch (pressureSolver) {
 			case JACOBI -> large ? 64 : GpuProbeScenario.PRESSURE_ITERATIONS;
 			case RBGS_SOR -> large ? 64 : 48;
-			case PCG, PCG_DIAGONAL -> large ? 64 : 32;
+			case PCG_DIAGONAL -> large ? 64 : 32;
 			case MULTIGRID_TWO_LEVEL, MULTIGRID_HIERARCHY -> 2;
 		};
 		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(
