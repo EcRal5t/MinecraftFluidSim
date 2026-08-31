@@ -25,7 +25,7 @@ final class PressureBoundaryView {
 		}
 		double volume = domain.gasState.network.availableVolume(node);
 		if (domain.thermalState != null && domain.thermalState.gasModelBound()) {
-			return domain.thermalState.gasVolumeCompliance(node, domain.gasState.network);
+			return FluidThermalBinding.gasVolumeCompliance(domain.thermalState, node, domain.gasState.network);
 		}
 		double absolutePressure = AirNetwork.REFERENCE_PRESSURE + domain.gasState.network.gaugePressure(node);
 		double compliance = volume / absolutePressure;

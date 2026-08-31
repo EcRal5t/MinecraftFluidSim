@@ -141,8 +141,8 @@ public final class MmmGpuProbeMod implements ModInitializer {
 		VulkanFlipPipeline.PressureSolver solver = switch (solverName.toLowerCase(Locale.ROOT)) {
 			case "jacobi" -> VulkanFlipPipeline.PressureSolver.JACOBI;
 			case "rbgs", "sor", "rbgs_sor" -> VulkanFlipPipeline.PressureSolver.RBGS_SOR;
-			case "pcg" -> VulkanFlipPipeline.PressureSolver.PCG;
-			case "pcgdiag", "pcg_diagonal", "diagonal" -> VulkanFlipPipeline.PressureSolver.PCG_DIAGONAL;
+			case "pcg", "pcgdiag", "pcg_diagonal", "diagonal" ->
+					VulkanFlipPipeline.PressureSolver.PCG_DIAGONAL;
 			case "mg", "mg2", "multigrid" -> VulkanFlipPipeline.PressureSolver.MULTIGRID_TWO_LEVEL;
 			case "mgh", "mgfull", "hierarchy" -> VulkanFlipPipeline.PressureSolver.MULTIGRID_HIERARCHY;
 			default -> null;

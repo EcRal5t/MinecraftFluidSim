@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.ThermalDomainState;
+
 import cc.ecisr.mmm.thermal.ThermalCarrierContext;
 import cc.ecisr.mmm.thermal.ThermalTransport;
 
@@ -9,7 +11,7 @@ final class ThermalTransportStage {
 
 	interface Access {
 		void ensureGrid();
-		FlipThermalState thermalState();
+		ThermalDomainState thermalState();
 		double faceArea(int x, int y, int z, int direction);
 		ThermalTransport.FixedBoundary fixedBoundary(int x, int y, int z, int direction);
 	}
@@ -23,7 +25,7 @@ final class ThermalTransportStage {
 	}
 
 	ThermalTransport.Stats step(double dtSeconds) {
-		FlipThermalState thermal = access.thermalState();
+		ThermalDomainState thermal = access.thermalState();
 		if (thermal == null) throw new IllegalStateException("Thermal state is not bound");
 		access.ensureGrid();
 		return thermal.step(state.markers(), access::faceArea, access::fixedBoundary, dtSeconds);

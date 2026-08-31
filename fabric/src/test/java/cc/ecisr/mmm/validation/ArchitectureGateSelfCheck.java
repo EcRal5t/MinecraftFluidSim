@@ -33,7 +33,7 @@ final class ArchitectureGateSelfCheck {
 				"persistence references live runtime type: RegionCodecFixture",
 				"persistence references live runtime type: RegionWildcardFixture",
 				"adapter imports solver mutable domain: SolverImportFixture",
-				"external adapter imports simulation god service: ServiceImportFixture",
+				"source imports removed simulation god service: ServiceImportFixture",
 				"application imports Minecraft adapter type: PayloadImportFixture",
 				"gpu-probe adapter bypasses host integration: ProbeHostBypassFixture");
 		if (violations.size() != expected.size()) {

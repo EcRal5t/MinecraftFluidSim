@@ -39,7 +39,7 @@ final class GranularReactionStage {
 		FlipGranularCollision collision();
 		GranularCouplingFields coupling();
 		GranularDepositDynamics depositDynamics();
-		FlipThermalState thermalState();
+		ThermalDomainState thermalState();
 		int particleCell(int marker);
 		int parcelCell(GranularParcelStore.Parcel parcel);
 		long geometricOpenSvq(int cell);
@@ -210,7 +210,7 @@ final class GranularReactionStage {
 		int material = granular.registry.materialHandle(rule.solidMaterialId());
 		PrecipitationMerge merge = precipitationMerge(
 				cell, material, plan, position, carrierMarker, occupiedBefore);
-		FlipThermalState thermal = access.thermalState();
+		ThermalDomainState thermal = access.thermalState();
 		if (merge != null) {
 			ThermalDomainState.ReactionPlan thermalPlan = thermal == null ? null : thermal.requireGranularReaction(
 					cell, thermalReactionMarkers(plan), new GranularEnergyState.GranularReactionEdit(
@@ -371,7 +371,7 @@ final class GranularReactionStage {
 				: (full ? GranularEnergyState.GranularReactionKind.REMOVE_ACTIVE
 				: GranularEnergyState.GranularReactionKind.REPLACE_ACTIVE);
 		Map<String, Long> finalComposition = full ? Map.of() : remaining.stableAmounts(chemistry.registry());
-		FlipThermalState thermal = access.thermalState();
+		ThermalDomainState thermal = access.thermalState();
 		ThermalDomainState.ReactionPlan thermalPlan = thermal == null ? null : thermal.requireGranularReaction(
 				cell, thermalReactionMarkers(plan), new GranularEnergyState.GranularReactionEdit(
 						thermalKind, solid.deposit() ? -1 : solid.index(), thermalDepositKey,

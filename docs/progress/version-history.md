@@ -66,3 +66,10 @@
 - **0.16.0**：删除区域、配置、容器 WAL 和颗粒 payload 的历史 reader、自动迁移与缺字段补全；删除显式热初始化入口。所有持久载荷必须与本次启动冻结的功能布局和 registry identity 完全一致，否则原样保留并锁定。
 - 保留双槽 checkpoint 的同布局上一完整代恢复；它属于当前事务故障恢复，不是跨版本迁移。
 - 文档重新分为当前架构、未来路线、维护路由和版本历史；后续修订恢复了当前技术架构的组件、公式、数据布局和事务细节，使删除重复进度报告不再损失维护所需知识。
+
+## 0.17.0：架构重整完成
+
+- 将生产代码物理拆为 `api`、`model`、`solver`、`application`、Fabric adapter、GPU kernel 与 GPU adapter；编译和静态门直接约束依赖方向。
+- 删除 `FluidSimulationService`、`FlipThermalState`、`FlipFluidDomain`、`FluidTransferService` 与 `RegionStateFiles` 等过渡层；运行时组合、tick、policy、operator、事务、thermal 与 GPU native 资源均有唯一 owner。
+- `FluidDomain` 保持唯一 public live aggregate，但实现按同一对象的 mechanics、step、inventory、collision、capability 与 gas/granular 责任分区；生产类 1000 行硬门不再含迁移 allowlist。
+- validation 按 scenario 文件拆分且 selector 语义不变；当前 world capability、ACTIVE/REMOVED region、ownership/container fault、CPU milestone/soak 与 GPU probe 门继续使用同一现行格式和不变量。

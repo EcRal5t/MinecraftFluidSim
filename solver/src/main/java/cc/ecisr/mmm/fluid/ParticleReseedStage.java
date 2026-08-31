@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.ThermalDomainState;
+
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 import cc.ecisr.mmm.units.SignedDyadic;
 
@@ -12,7 +14,7 @@ final class ParticleReseedStage {
 	interface Access {
 		void ensureParticleCapacity(int required);
 		ChemicalParcelStore chemicalParcels();
-		FlipThermalState thermalState();
+		ThermalDomainState thermalState();
 		FlipParticleReseeder.ThermalAdapter thermalAdapter();
 		boolean massWeightedDynamics();
 		boolean markerPositionAllowed(float x, float y, float z);
@@ -37,7 +39,7 @@ final class ParticleReseedStage {
 	Outcome step(boolean captureMechanicalAudit) {
 		double initialKinetic = captureMechanicalAudit ? access.particleKineticEnergyJoules() : 0.0;
 		access.ensureParticleCapacity(state.reseeder().capacityUpperBound(state.particles().count()));
-		FlipThermalState thermal = access.thermalState();
+		ThermalDomainState thermal = access.thermalState();
 		SignedDyadic thermalBefore = thermal == null ? SignedDyadic.ZERO : access.exactInternalEnergy();
 		LiquidParticleStore.DirectArrays markers = state.particles().directArrays();
 		FlipParticleReseeder.Result result = state.reseeder().reseed(

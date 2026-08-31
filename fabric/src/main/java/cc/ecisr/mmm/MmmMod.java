@@ -39,16 +39,15 @@ public final class MmmMod implements ModInitializer {
 		ServerLifecycleEvents.SERVER_STARTING.register(MmmRuntimeRegistry::start);
 		PlayerBlockBreakEvents.BEFORE.register((level, player, position, state, blockEntity) -> {
 			if (!(level instanceof net.minecraft.server.level.ServerLevel serverLevel)
-					|| !MmmRuntimeRegistry.require(serverLevel.getServer()).simulation()
+					|| !MmmRuntimeRegistry.require(serverLevel.getServer())
 					.isLifecycleManagedBlock(serverLevel, position)) return true;
 			player.sendSystemMessage(net.minecraft.network.chat.Component.translatable(
 					"message.mmm.controller.break_blocked"));
 			return false;
 		});
-		ServerTickEvents.END_SERVER_TICK.register(server ->
-				MmmRuntimeRegistry.require(server).simulation().tick(server));
+		ServerTickEvents.END_SERVER_TICK.register(server -> MmmRuntimeRegistry.require(server).tick(server));
 		ServerChunkEvents.CHUNK_LOAD.register((level, chunk, newlyGenerated) ->
-				MmmRuntimeRegistry.require(level.getServer()).simulation()
+				MmmRuntimeRegistry.require(level.getServer())
 						.retryUnavailableContainerTransfers(level, chunk.getPos()));
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> MmmRuntimeRegistry.require(server).recoverWorld(server));
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
@@ -87,7 +86,6 @@ public final class MmmMod implements ModInitializer {
 			return result != null ? result : stack;
 		});
 	}
-
 
 	public static Identifier id(String path) {
 		return Identifier.fromNamespaceAndPath(MOD_ID, path);

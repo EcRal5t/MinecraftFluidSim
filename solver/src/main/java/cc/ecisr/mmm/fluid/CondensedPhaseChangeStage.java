@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.ThermalDomainState;
+
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
@@ -32,7 +34,7 @@ final class CondensedPhaseChangeStage {
 	}
 
 	FluidDomain.ThermalPhaseStats step(int maximumOperations, boolean phaseGridPrepared) {
-		FlipThermalState thermal = support.thermal();
+		ThermalDomainState thermal = support.thermal();
 		if (thermal == null) throw new IllegalStateException("Thermal state is not bound");
 		if (maximumOperations < 0 || maximumOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
 			throw new IllegalArgumentException("Thermal phase operation budget is invalid");
@@ -87,7 +89,7 @@ final class CondensedPhaseChangeStage {
 	private PhaseCellInventory phaseCellInventory(int cell, int liquidHandle, String coherentPhaseId) {
 		LiquidParticleStore particles = support.state().particles();
 		ChemicalParcelStore chemistry = support.chemistry();
-		FlipThermalState thermal = support.thermal();
+		ThermalDomainState thermal = support.thermal();
 		double liquidMass = 0.0, coherentMass = 0.0, energy = 0.0, freezableMass = 0.0;
 		long liquidSvq = 0L, coherentSvq = 0L, freezableSvq = 0L;
 		PhaseCompositionBuilder liquidComposition = chemistry == null ? null
@@ -227,7 +229,7 @@ final class CondensedPhaseChangeStage {
 			int cell, int liquidHandle, ThermalPhaseTransition transition,
 			PhaseCellInventory before, boolean freezing, long batches
 	) {
-		FlipThermalState thermal = support.thermal();
+		ThermalDomainState thermal = support.thermal();
 		ChemicalParcelStore chemistry = support.chemistry();
 		LiquidParticleStore particles = support.state().particles();
 		long lowerDelta = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());

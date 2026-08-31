@@ -27,7 +27,7 @@ final class MechanicalStepPipeline {
 		double gridKineticEnergyJoules();
 		double particleKineticEnergyJoules();
 		int lastPressureIterations();
-		FlipThermalState thermalState();
+		ThermalDomainState thermalState();
 		boolean hasPendingPhaseVolumeWork();
 		float pressureReference();
 	}

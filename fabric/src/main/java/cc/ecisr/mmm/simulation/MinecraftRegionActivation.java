@@ -27,7 +27,7 @@ public final class MinecraftRegionActivation {
 	private final FluidSnapshotPublisher snapshots;
 	private final MinecraftRegionTick regionTick;
 	private final MinecraftTakeoverAdapter takeover;
-	private final MinecraftDebugFixtures debugFixtures;
+	private final MinecraftDebugScaffolding debugScaffolding;
 	private final ContainerRecoveryCoordinator containerRecovery;
 	private final BooleanSupplier controllerFeatureEnabled;
 	private final BooleanSupplier defaultEntityPhysics;
@@ -45,7 +45,7 @@ public final class MinecraftRegionActivation {
 			FluidSnapshotPublisher snapshots,
 			MinecraftRegionTick regionTick,
 			MinecraftTakeoverAdapter takeover,
-			MinecraftDebugFixtures debugFixtures,
+			MinecraftDebugScaffolding debugScaffolding,
 			ContainerRecoveryCoordinator containerRecovery,
 			BooleanSupplier controllerFeatureEnabled,
 			BooleanSupplier defaultEntityPhysics,
@@ -62,7 +62,7 @@ public final class MinecraftRegionActivation {
 		this.snapshots = Objects.requireNonNull(snapshots, "Snapshot publisher");
 		this.regionTick = Objects.requireNonNull(regionTick, "Region tick adapter");
 		this.takeover = Objects.requireNonNull(takeover, "Takeover adapter");
-		this.debugFixtures = Objects.requireNonNull(debugFixtures, "Debug fixtures");
+		this.debugScaffolding = Objects.requireNonNull(debugScaffolding, "Debug scaffolding");
 		this.containerRecovery = Objects.requireNonNull(containerRecovery, "Container recovery coordinator");
 		this.controllerFeatureEnabled = Objects.requireNonNull(controllerFeatureEnabled, "Controller feature gate");
 		this.defaultEntityPhysics = Objects.requireNonNull(defaultEntityPhysics, "Default entity physics");
@@ -75,7 +75,7 @@ public final class MinecraftRegionActivation {
 
 	public Result activate(ServerPlayer player, BlockPos controllerPosition, boolean toggleRunning) {
 		ServerLevel level = player.level();
-		debugFixtures.restoreAirDemoScaffolding(level.getServer());
+		debugScaffolding.restore(level.getServer());
 		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) {
 			return Result.failed("目标方块不再是 Matter, Motion & Mechanics 控制器");
 		}

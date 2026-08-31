@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.ThermalDomainState;
+
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 import cc.ecisr.mmm.granular.GranularCouplingFields;
 
@@ -209,7 +211,7 @@ final class MechanicalStageAssembly {
 			@Override public double gridKineticEnergyJoules() { return domain.gridKineticEnergyJoules(); }
 			@Override public double particleKineticEnergyJoules() { return domain.particleKineticEnergyJoules(); }
 			@Override public int lastPressureIterations() { return domain.lastPressureIterations; }
-			@Override public FlipThermalState thermalState() { return domain.thermalState; }
+			@Override public ThermalDomainState thermalState() { return domain.thermalState; }
 			@Override public boolean hasPendingPhaseVolumeWork() { return domain.hasPendingPhaseVolumeWork(); }
 			@Override public float pressureReference() { return domain.pressureReference; }
 		};

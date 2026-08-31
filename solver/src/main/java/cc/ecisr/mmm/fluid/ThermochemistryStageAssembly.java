@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.ThermalDomainState;
+
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.granular.GranularCouplingFields;
@@ -24,7 +26,7 @@ final class ThermochemistryStageAssembly {
 				new ThermalTransportStage.Workspace(domain.thermalMarkerContext()),
 				new ThermalTransportStage.Access() {
 					@Override public void ensureGrid() { domain.ensureGrid(); }
-					@Override public FlipThermalState thermalState() { return domain.thermalState; }
+					@Override public ThermalDomainState thermalState() { return domain.thermalState; }
 					@Override public double faceArea(int x, int y, int z, int direction) {
 						return domain.thermalFaceArea(x, y, z, direction);
 					}
@@ -41,7 +43,7 @@ final class ThermochemistryStageAssembly {
 						return domain.chemicalParcels;
 					}
 					@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
-					@Override public FlipThermalState thermalState() { return domain.thermalState; }
+					@Override public ThermalDomainState thermalState() { return domain.thermalState; }
 				});
 		GranularReactionStage granular = new GranularReactionStage(
 				new GranularReactionStage.Workspace(
@@ -60,7 +62,7 @@ final class ThermochemistryStageAssembly {
 					@Override public GranularDepositDynamics depositDynamics() {
 						return domain.granularDepositDynamics();
 					}
-					@Override public FlipThermalState thermalState() { return domain.thermalState; }
+					@Override public ThermalDomainState thermalState() { return domain.thermalState; }
 					@Override public int particleCell(int marker) { return domain.particleCellIndex(marker); }
 					@Override public int parcelCell(GranularParcelStore.Parcel parcel) {
 						return domain.granularParcelCell(parcel);
@@ -76,7 +78,7 @@ final class ThermochemistryStageAssembly {
 						domain.markerGrid, domain.projection, domain.particles, domain.gasState,
 						domain.pendingPhaseCellVolume, domain.thermalMarkerContext()),
 				new PhaseChangeStageSupport.Access() {
-					@Override public FlipThermalState thermalState() { return domain.thermalState; }
+					@Override public ThermalDomainState thermalState() { return domain.thermalState; }
 					@Override public ChemicalParcelStore chemistry() { return domain.chemicalParcels; }
 					@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
 					@Override public GranularDomainState granularState() { return domain.granularState; }

@@ -52,9 +52,9 @@ public final class TestProfiles {
 		return of(EnumSet.of(WorldCapability.MATERIALS, WorldCapability.THERMAL), chemical, null, thermal, GAS);
 	}
 	public static WorldCapabilityProfile full() {
-		ProductionRegistries.Set registries;
+		FullCapabilityTestFixture.Registries registries;
 		try {
-			registries = ProductionRegistries.load();
+			registries = FullCapabilityTestFixture.load();
 		} catch (Exception unavailable) {
 			throw new AssertionError("Production datapack registries are unavailable", unavailable);
 		}

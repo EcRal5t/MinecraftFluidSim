@@ -30,7 +30,7 @@ public final class FluidDomainStateParityValidation {
 
 	/** capture -> restore -> capture must reproduce every authoritative field bit-for-bit. */
 	private static void captureRestoreCapturePreservesRawBits() throws Exception {
-		ProductionFluidReplayValidation.RegistrySet registries = ProductionFluidReplayValidation.loadProductionRegistries();
+		FullCapabilityTestFixture.Registries registries = ProductionFluidReplayValidation.loadProductionRegistries();
 		FluidDomain domain = ProductionFluidReplayValidation.createFullyBoundHalfFilledDomain(registries);
 		FluidDomainState captured = domain.captureAuthoritativeState();
 		FluidDomain restored = FluidDomain.restoreAuthoritativeState(captured);
@@ -40,7 +40,7 @@ public final class FluidDomainStateParityValidation {
 
 	/** A phase-off backend candidate restored into a fresh domain must re-capture to the same bits. */
 	private static void phaseOffCandidateRestoresToIdenticalState() {
-		ProductionFluidReplayValidation.RegistrySet registries = null;
+		FullCapabilityTestFixture.Registries registries = null;
 		try {
 			registries = ProductionFluidReplayValidation.loadProductionRegistries();
 		} catch (Exception failure) {
@@ -57,7 +57,7 @@ public final class FluidDomainStateParityValidation {
 
 	/** The same round trip with the full phase-on pipeline enabled. */
 	private static void phaseOnCandidateRestoresToIdenticalState() throws Exception {
-		ProductionFluidReplayValidation.RegistrySet registries = ProductionFluidReplayValidation.loadProductionRegistries();
+		FullCapabilityTestFixture.Registries registries = ProductionFluidReplayValidation.loadProductionRegistries();
 		FluidDomain domain = ProductionFluidReplayValidation.createFullyBoundHalfFilledDomain(registries);
 		FluidDomainState base = domain.captureAuthoritativeState();
 		FluidStepCandidate candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
@@ -69,7 +69,7 @@ public final class FluidDomainStateParityValidation {
 
 	/** Hydrostatic thermal work must stay on a private backend domain until its whole successor exists. */
 	private static void thermalOnlyCandidateIsPrivateAndRestorable() throws Exception {
-		ProductionFluidReplayValidation.RegistrySet registries = ProductionFluidReplayValidation.loadProductionRegistries();
+		FullCapabilityTestFixture.Registries registries = ProductionFluidReplayValidation.loadProductionRegistries();
 		FluidDomain live = ProductionFluidReplayValidation.createFullyBoundHalfFilledDomain(registries);
 		FluidDomainState base = live.captureAuthoritativeState();
 		FluidThermalStepCandidate candidate = new CpuFluidSolverBackend().evaluateThermal(

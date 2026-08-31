@@ -3,9 +3,7 @@ package cc.ecisr.mmm.fluid;
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
-import cc.ecisr.mmm.simulation.ProductionRegistries;
-
-import static cc.ecisr.mmm.simulation.ProductionRegistries.load;
+import cc.ecisr.mmm.simulation.FullCapabilityTestFixture;
 
 /**
  * Scenario coverage for the carrier mutation coordinator: append, swap-remove and wholesale
@@ -40,14 +38,9 @@ public final class CarrierMutationValidation {
 		return domain;
 	}
 
-	private static FluidDomain fullCapabilityDomain(ProductionRegistries.Set registries) {
+	private static FluidDomain fullCapabilityDomain(FullCapabilityTestFixture.Registries registries) {
 		FluidDomain domain = emptyMaterialDomain(4_096);
-		FluidMaterialRegistry runtimeLiquids = domain.materialRegistry();
-		domain.bindChemistry(registries.chemical());
-		domain.bindGranular(registries.granular(), runtimeLiquids);
-		domain.setPrecipitationEnabled(true);
-		domain.bindGasRegistry(registries.gas());
-		domain.bindThermal(registries.thermal(), runtimeLiquids,
+		FullCapabilityTestFixture.bindFull(domain, registries,
 				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		return domain;
 	}
@@ -102,7 +95,7 @@ public final class CarrierMutationValidation {
 	}
 
 	private static void sideColumnsSwapWithTheMainColumn() throws Exception {
-		ProductionRegistries.Set registries = load();
+		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
 		FluidDomain domain = fullCapabilityDomain(registries);
 		domain.addVolumeNearBudgeted(1, 1, 1, 0.5F, 1);
 		domain.addVolumeNearBudgeted(2, 2, 2, 0.5F, 1);
@@ -163,7 +156,7 @@ public final class CarrierMutationValidation {
 	}
 
 	private static void stalePlansRejectWithoutStateChange() throws Exception {
-		ProductionRegistries.Set registries = load();
+		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
 		FluidDomain domain = fullCapabilityDomain(registries);
 		domain.addVolumeNearBudgeted(1, 1, 1, 0.5F, 1);
 		long staleRevision = domain.carrierMutationRevision();
@@ -192,7 +185,7 @@ public final class CarrierMutationValidation {
 	}
 
 	private static void wholesaleCountBindsRevisionAndBudget() throws Exception {
-		ProductionRegistries.Set registries = load();
+		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
 		FluidDomain domain = fullCapabilityDomain(registries);
 		domain.addVolumeNearBudgeted(1, 1, 1, 0.5F, 1);
 		int count = domain.particles.count();

@@ -4,7 +4,7 @@
 
 热学不是一张附着在渲染格上的温度场，而是凝聚相载体和气腔库存上的守恒 side column。内部能量单位 `EU` 在内置物性中按 SI 数值标定为焦耳；质量边界按 kg、长度按 m、时间按 s，因此热容为 `EU/K`、导热率为 `EU/(s·m·K)`。参考温度不是零开尔文，故总内能可以为负；符号本身不表示无效。
 
-`ThermalDomainState` 组合液体、气体、active parcel、deposit 和 coherent group 的内能 owner、审计与可重建 LTE grid；`ThermalCellOperations` 只执行局部热平衡、reaction/phase 候选、机械功结算、能量重分配和展示派生，不拥有库存。`GasThermalModel` 负责 gas node 状态函数，`ThermalTransport` 只做 pairwise 有限体积导热；`FlipThermalState` 仅保留与 fluid persistence/reseed 类型绑定的 facade。最终提交仍经明确 owner 入口完成，求解器、持久化和命令不能各自发明温度修复路径。
+`ThermalDomainState` 组合液体、气体、active parcel、deposit 和 coherent group 的内能 owner、审计与可重建 LTE grid；`ThermalCellOperations` 只执行局部热平衡、reaction/phase 候选、机械功结算、能量重分配和展示派生，不拥有库存。`GasThermalModel` 负责 gas node 状态函数，`ThermalTransport` 只做 pairwise 有限体积导热；fluid 层通过无状态 `FluidThermalBinding` 映射 snapshot/restore/reseed 与 gas compliance，运行时和 stage 直接使用 `ThermalDomainState`。最终提交仍经明确 owner 入口完成，求解器、持久化和命令不能各自发明温度修复路径。
 
 ## 权威真值
 

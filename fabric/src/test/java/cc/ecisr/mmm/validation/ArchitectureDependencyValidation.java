@@ -43,29 +43,18 @@ public final class ArchitectureDependencyValidation {
 			"FluidRegionOperations", "ThermalActivity");
 
 	/** Solver mutable domain types that UI/adapter packages must never import. */
-	private static final Set<String> SOLVER_MUTABLE_TYPES = Set.of("FluidDomain", "FlipThermalState");
+	private static final Set<String> SOLVER_MUTABLE_TYPES = Set.of("FluidDomain", "ThermalDomainState");
 
 	/** Thermal mutable state owners that UI/adapter packages must never import (S10). */
 	private static final Set<String> THERMAL_MUTABLE_OWNERS = Set.of(
 			"ThermalDomainState", "LiquidEnergyColumn", "GasEnergyStore", "GranularEnergyState",
 			"ThermalAuditState", "FiniteDeviceExchangeCoordinator");
 
-	/** Classes allowed to keep a static MinecraftServer-keyed locator, with the removing slice. */
-	private static final Map<String, String> LOCATOR_ALLOWLIST = Map.of(
-			"MmmRuntimeRegistry", "server composition root");
+	/** The composition-root registry is the sole server-keyed locator; this is a positive invariant. */
+	private static final String RUNTIME_LOCATOR = "MmmRuntimeRegistry";
 
-	/** Temporary direct imports of the S21 god service, each named by its removal slice. */
-	private static final Map<String, String> SERVICE_IMPORT_ALLOWLIST = Map.of(
-			"MmmCommandHandlers", "S21");
-
-	/** Production classes above the final 1000-line limit, with the slice that closes each. */
-	private static final Map<String, String> SIZE_ALLOWLIST = Map.of(
-			"FluidDomain", "S21");
 	private static final int SIZE_LIMIT = 1000;
 	private static final int SIZE_WARNING = 600;
-
-	/** S17 closed the last persistence-to-live-runtime exception. */
-	private static final Set<String> PERSISTENCE_RUNTIME_ALLOWLIST = Set.of();
 
 	record SourceFile(
 			String module, String simpleName, String packageName, int lines, List<String> imports, boolean hasLocator
@@ -229,8 +218,7 @@ public final class ArchitectureDependencyValidation {
 				String leaf = imported.endsWith(".*") ? "*" : imported.substring(imported.lastIndexOf('.') + 1);
 				boolean referencesLiveType = LIVE_REGION_TYPES.contains(leaf)
 						|| imported.equals("cc.ecisr.mmm.simulation.*");
-				if (imported.startsWith("cc.ecisr.mmm.simulation.") && referencesLiveType
-						&& !PERSISTENCE_RUNTIME_ALLOWLIST.contains(source.simpleName())) {
+			if (imported.startsWith("cc.ecisr.mmm.simulation.") && referencesLiveType) {
 					violations.add("persistence references live runtime type: "
 							+ source.simpleName() + " -> " + imported);
 				}
@@ -262,40 +250,34 @@ public final class ArchitectureDependencyValidation {
 		}
 	}
 
-	/** External adapters must depend on runtime semantic owners, never the transitional god service. */
+	/** The removed transition service must not return through any adapter import. */
 	static void checkAdaptersDoNotImportSimulationService(List<SourceFile> sources, List<String> violations) {
 		for (SourceFile source : sources) {
-			boolean guarded = source.module().equals("fabric/src/client/java")
-					|| source.module().equals("gpu-probe/src/main/java")
-					|| source.module().equals("fabric/src/main/java")
-					&& (source.packageName().startsWith("cc.ecisr.mmm.network")
-						|| source.packageName().startsWith("cc.ecisr.mmm.item")
-						|| source.packageName().startsWith("cc.ecisr.mmm.block")
-						|| source.packageName().startsWith("cc.ecisr.mmm.api")
-						|| source.simpleName().equals("MmmCommands")
-						|| source.simpleName().equals("MmmCommandHandlers"));
-			if (!guarded || SERVICE_IMPORT_ALLOWLIST.containsKey(source.simpleName())) continue;
 			if (source.imports().contains("cc.ecisr.mmm.simulation.FluidSimulationService")) {
-				violations.add("external adapter imports simulation god service: " + source.simpleName());
+				violations.add("source imports removed simulation god service: " + source.simpleName());
 			}
 		}
 	}
 
-	/** Only the allowlisted composition roots may keep a MinecraftServer-keyed static map. */
+	/** Exactly one composition-root registry may keep a MinecraftServer-keyed static map. */
 	private static void checkStaticLocators(List<SourceFile> sources, List<String> violations) {
+		int runtimeLocators = 0;
 		for (SourceFile source : sources) {
-			if (!source.hasLocator() || LOCATOR_ALLOWLIST.containsKey(source.simpleName())) continue;
-			violations.add("static MinecraftServer locator outside allowlist: "
+			if (!source.hasLocator()) continue;
+			if (source.simpleName().equals(RUNTIME_LOCATOR)) runtimeLocators++;
+			else violations.add("static MinecraftServer locator outside composition root: "
 					+ source.simpleName() + " (" + source.module() + ")");
 		}
+		if (runtimeLocators != 1) violations.add("expected exactly one " + RUNTIME_LOCATOR
+				+ " server locator, found " + runtimeLocators);
 	}
 
 	private static void checkClassSize(List<SourceFile> sources, List<String> violations) {
 		for (SourceFile source : sources) {
-			if (source.lines() > SIZE_LIMIT && !SIZE_ALLOWLIST.containsKey(source.simpleName())) {
-				violations.add("production class exceeds " + SIZE_LIMIT + " lines without allowlist entry: "
+			if (source.lines() > SIZE_LIMIT) {
+				violations.add("production class exceeds " + SIZE_LIMIT + " lines: "
 						+ source.simpleName() + " (" + source.lines() + " lines, " + source.module() + ")");
-			} else if (source.lines() > SIZE_WARNING && !SIZE_ALLOWLIST.containsKey(source.simpleName())) {
+			} else if (source.lines() > SIZE_WARNING) {
 				System.out.printf(Locale.ROOT, "architecture warning: %s has %d lines (limit %d)%n",
 						source.simpleName(), source.lines(), SIZE_LIMIT);
 			}

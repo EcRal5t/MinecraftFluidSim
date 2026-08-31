@@ -7,7 +7,6 @@ import cc.ecisr.mmm.granular.GranularStateSnapshot;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 
 /**
  * Read-only carrier state export and display snapshot construction. Every method allocates a
@@ -93,7 +92,7 @@ final class CarrierInventoryReader {
 		if (domain.thermalState == null) {
 			throw new IllegalStateException("Thermal particle handoff requires thermal state");
 		}
-		return domain.thermalState.capture(domain.sizeX, domain.sizeY, domain.sizeZ,
+		return FluidThermalBinding.capture(domain.thermalState, domain.sizeX, domain.sizeY, domain.sizeZ,
 				domain.config.cellSize(), domain.particles.count());
 	}
 

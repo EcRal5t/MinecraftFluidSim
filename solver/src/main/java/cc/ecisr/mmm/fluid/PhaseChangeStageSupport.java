@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.ThermalDomainState;
+
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
@@ -30,7 +32,7 @@ final class PhaseChangeStageSupport {
 	) { }
 
 	interface Access {
-		FlipThermalState thermalState();
+		ThermalDomainState thermalState();
 		ChemicalParcelStore chemistry();
 		FluidMaterialRegistry materialRegistry();
 		GranularDomainState granularState();
@@ -60,7 +62,7 @@ final class PhaseChangeStageSupport {
 	}
 
 	Workspace state() { return state; }
-	FlipThermalState thermal() { return access.thermalState(); }
+	ThermalDomainState thermal() { return access.thermalState(); }
 	ChemicalParcelStore chemistry() { return access.chemistry(); }
 	FluidMaterialRegistry materialRegistry() { return access.materialRegistry(); }
 	GasDomainState gasState() { return state.gasState(); }

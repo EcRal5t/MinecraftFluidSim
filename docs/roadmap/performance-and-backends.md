@@ -48,7 +48,7 @@ Minecraft 世界读取、方块修改和实体快照留在服务器主线程：
 
 评审必须回答 CPU/GPU break-even、pressure 质量、常规/完整 readback 成本、`64³` 容量、20 Hz 可行性和 Minecraft 同时渲染稳定性。只读 probe 的能力结果不能替代生产 profile。
 
-当前 headless capability 已在独立 kernel 中证明 Vulkan、Shaderc、VMA 与 compute dispatch 可用，checkpoint 也能把 GPU binary solid cell 严格提升为 CPU cut-cell full mask。但长跑自由面门仍显示 GPU marker surface 明显低于同场景 CPU 参考，因此 probe 不满足生产后端评审门。该失败是数值工作项；不得通过放宽门限、减少参考步数、速度钳制、渲染增厚或材料特例把它改写成通过。
+当前 headless capability 已在独立 kernel 中证明 Vulkan、Shaderc、VMA 与 compute dispatch 可用，checkpoint 也能把 GPU binary solid cell 严格提升为 CPU cut-cell full mask。CPU/GPU 共同能力子集已统一守恒 P2G/G2P、`H(div)` 平流、碰撞与 raw-float 可表示 reseed 规则；1000 步长跑以逐 marker 精确二进制有理数账本闭合，GPU reduction 只作带解析舍入界的在线诊断。probe 仍不满足生产后端评审门，因为它只有单一常密度 carrier，尚未实现完整 `FluidDomainState` 的材料/变密度、表面张力、气体、热学、化学、颗粒和 phase candidate，也没有生产 checkpoint/readback/fallback 接线。不得用 CPU fallback、放宽门限、减少参考步数、速度钳制、渲染增厚或材料特例把能力缺口改写成通过。
 
 ## 停止与降级顺序
 

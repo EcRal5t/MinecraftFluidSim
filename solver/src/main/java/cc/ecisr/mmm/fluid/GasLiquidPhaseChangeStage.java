@@ -41,7 +41,7 @@ final class GasLiquidPhaseChangeStage {
 	}
 
 	FluidDomain.GasThermalPhaseStats step(int maximumOperations, boolean phaseGridPrepared) {
-		FlipThermalState thermal = support.thermal();
+		ThermalDomainState thermal = support.thermal();
 		if (thermal == null || !thermal.gasModelBound()) {
 			throw new IllegalStateException("Gas phase change requires bound gas thermal state");
 		}
@@ -166,7 +166,7 @@ final class GasLiquidPhaseChangeStage {
 			boolean[] volatileSpecies, double liquidTemperature, long batches
 	) {
 		try {
-			FlipThermalState thermal = support.thermal();
+			ThermalDomainState thermal = support.thermal();
 			ChemicalParcelStore chemistry = support.chemistry();
 			GasDomainState gasState = support.gasState();
 			long removedSvq = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
@@ -202,7 +202,7 @@ final class GasLiquidPhaseChangeStage {
 			int cell, int node, GasBoilPlan plan,
 			ThermalDomainState.PhaseCandidateCell thermalCell
 	) {
-		FlipThermalState thermal = support.thermal();
+		ThermalDomainState thermal = support.thermal();
 		GasDomainState gasState = support.gasState();
 		double gasEnergyBefore = thermal.gasNodeEnergy(node, gasState.network);
 		support.commitLiquidRemoval(cell, plan.removal());
@@ -259,7 +259,7 @@ final class GasLiquidPhaseChangeStage {
 			ThermalDomainState.PhaseCandidateCell thermalCell, long batches
 	) {
 		try {
-			FlipThermalState thermal = support.thermal();
+			ThermalDomainState thermal = support.thermal();
 			ChemicalParcelStore chemistry = support.chemistry();
 			GasDomainState gasState = support.gasState();
 			LiquidParticleStore particles = support.state().particles();
@@ -378,7 +378,7 @@ final class GasLiquidPhaseChangeStage {
 			int cell, int node, int liquidHandle, GasCondensePlan plan,
 			ThermalDomainState.PhaseCandidateCell thermalCell
 	) {
-		FlipThermalState thermal = support.thermal();
+		ThermalDomainState thermal = support.thermal();
 		ChemicalParcelStore chemistry = support.chemistry();
 		GasDomainState gasState = support.gasState();
 		LiquidParticleStore particles = support.state().particles();

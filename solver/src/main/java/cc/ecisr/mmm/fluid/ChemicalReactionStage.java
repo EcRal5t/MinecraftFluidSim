@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.ThermalDomainState;
+
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 import cc.ecisr.mmm.thermal.ThermalCarrierContext;
 
@@ -13,7 +15,7 @@ final class ChemicalReactionStage {
 	interface Access {
 		ChemicalParcelStore chemicalParcels();
 		FluidMaterialRegistry materialRegistry();
-		FlipThermalState thermalState();
+		ThermalDomainState thermalState();
 	}
 
 	private final Workspace state;
@@ -33,7 +35,7 @@ final class ChemicalReactionStage {
 		ChemicalParcelStore chemistry = access.chemicalParcels();
 		if (chemistry == null) return new ChemicalParcelStore.ReactionStats(0, 0, 0);
 		LiquidParticleStore.DirectArrays arrays = state.particles().directArrays();
-		FlipThermalState thermal = access.thermalState();
+		ThermalDomainState thermal = access.thermalState();
 		return chemistry.reactDirtyCells(
 				state.sizeX(), state.sizeY(), state.sizeZ(), state.cellSize(),
 				arrays.positionX, arrays.positionY, arrays.positionZ,

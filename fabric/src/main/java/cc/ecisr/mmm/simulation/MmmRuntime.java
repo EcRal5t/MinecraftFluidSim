@@ -11,7 +11,9 @@ import java.util.Objects;
 
 /** One server's composed runtime; it owns lifecycle coordination, not service convenience methods. */
 public final class MmmRuntime {
-	private final FluidSimulationService simulation;
+	private final MinecraftSimulationLoop simulationLoop;
+	private final MinecraftRegionOperatorActions operatorActions;
+	private final MinecraftContainerTransactionAdapter containerTransactions;
 	private final MinecraftControllerConsole controllerConsole;
 	private final MinecraftRegionActivation regionActivation;
 	private final MinecraftIndicatorEditing indicatorEditing;
@@ -31,7 +33,9 @@ public final class MmmRuntime {
 	private boolean closed;
 
 	MmmRuntime(
-			FluidSimulationService simulation,
+			MinecraftSimulationLoop simulationLoop,
+			MinecraftRegionOperatorActions operatorActions,
+			MinecraftContainerTransactionAdapter containerTransactions,
 			MinecraftControllerConsole controllerConsole,
 			MinecraftRegionActivation regionActivation,
 			MinecraftIndicatorEditing indicatorEditing,
@@ -48,7 +52,9 @@ public final class MmmRuntime {
 			CommittedEventHub committedEvents,
 			WorldStartupCoordinator.Result startup
 	) {
-		this.simulation = Objects.requireNonNull(simulation, "Simulation service");
+		this.simulationLoop = Objects.requireNonNull(simulationLoop, "Simulation loop");
+		this.operatorActions = Objects.requireNonNull(operatorActions, "Region operator actions");
+		this.containerTransactions = Objects.requireNonNull(containerTransactions, "Container transactions");
 		this.controllerConsole = Objects.requireNonNull(controllerConsole, "Controller console");
 		this.regionActivation = Objects.requireNonNull(regionActivation, "Region activation");
 		this.indicatorEditing = Objects.requireNonNull(indicatorEditing, "Indicator editing");
@@ -67,7 +73,7 @@ public final class MmmRuntime {
 		this.startup = Objects.requireNonNull(startup, "World startup result");
 	}
 
-	public FluidSimulationService simulation() { return simulation; }
+	public MinecraftRegionOperatorActions operatorActions() { return operatorActions; }
 	public MinecraftControllerConsole controllerConsole() { return controllerConsole; }
 	public MinecraftRegionActivation regionActivation() { return regionActivation; }
 	public MinecraftIndicatorEditing indicatorEditing() { return indicatorEditing; }
@@ -85,14 +91,36 @@ public final class MmmRuntime {
 	public MmmEventApi events() { return committedEvents; }
 	public WorldStartupCoordinator.Result startup() { return startup; }
 
+	public void tick(MinecraftServer server) { simulationLoop.tick(server); }
+
+	public boolean isLifecycleManagedBlock(
+			net.minecraft.server.level.ServerLevel level, net.minecraft.core.BlockPos position
+	) {
+		return operatorActions.isLifecycleManagedBlock(level, position);
+	}
+
+	public void retryUnavailableContainerTransfers(
+			net.minecraft.server.level.ServerLevel level, net.minecraft.world.level.ChunkPos chunk
+	) {
+		containerRecovery.retryDispenserChunk(level.dimension().identifier().toString(), chunk.x(), chunk.z());
+	}
+
+	public cc.ecisr.mmm.application.ContainerTransferCoordinator.FaultPoint containerTransferFault() {
+		return containerTransactions.fault();
+	}
+
+	public void setContainerTransferFault(
+			cc.ecisr.mmm.application.ContainerTransferCoordinator.FaultPoint point
+	) {
+		containerTransactions.setFault(point);
+	}
+
 	/** World-dependent recovery waits until Fabric reports all server levels started. */
 	public void recoverWorld(MinecraftServer server) {
 		Objects.requireNonNull(server, "Minecraft server");
 		if (closed) throw new IllegalStateException("Matter, Motion & Mechanics runtime is closed");
 		if (worldRecoveryCompleted) return;
-		simulation.recoverTakeoverBackup(server);
-		simulation.recoverWorldOwnership(server);
-		simulation.recoverContainerTransfers(server);
+		simulationLoop.recoverWorld(server);
 		worldRecoveryCompleted = true;
 	}
 
@@ -100,8 +128,8 @@ public final class MmmRuntime {
 		if (closed) return;
 		closed = true;
 		try {
-			simulation.checkpointForShutdown();
-			simulation.restoreTakeover(server);
+			simulationLoop.checkpointForShutdown();
+			simulationLoop.restoreTakeover(server);
 		} finally {
 			protocolSessions.clear();
 			committedEvents.clear();

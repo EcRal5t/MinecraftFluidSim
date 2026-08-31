@@ -11,9 +11,13 @@
 
 后三层不能创建、删除、缩放或修复第一层库存。
 
+`FluidDomain` 仍是唯一 live 对象和唯一 public aggregate surface，但实现不再集中在一个四千行文件。package-private 的 `FluidDomainStorage`、`Contracts`、`MechanicalFields`、`StepCoordinator`、`InventoryTransactions`、`CollisionState`、`Capabilities` 与 `GasAndGranular` 按职责形成同一对象的实现分区；它们不是可独立构造的 owner，也不复制数组、generation 或 commit point。新增行为应落到拥有该不变量的分区或既有 stage，不得把无关 convenience method 重新堆回 public leaf。
+
 力学子步由 `MechanicalStepPipeline` 与各专职 stage 组合。stage 不接收或保存 `FluidDomain`：稳定的 SoA/workspace 引用在构造时显式注入，可能随 lifecycle 重新绑定的状态通过各 stage 自己的窄 `Access` 契约取得。不同 stage 不能借 aggregate 任意读写彼此 scratch；pressure anchor/reference/result 等跨阶段值只能走声明过的写回缝。
 
 非力学轴由 `ThermochemistryPipeline`、`GranularTransitionStage` 与 `ParticleReseedStage` 组合。`ThermochemistryPipeline` 是传导、液相反应、颗粒析出/溶解、凝聚相变和气液相变的唯一生产顺序源；`ThermochemistryStageAssembly` 只接线，各 stage 只持有明确 workspace/capability seam。固液与气液 stage 共享 `PhaseChangeStageSupport` 的 exact composition、carrier removal、pending volume 与受控 marker mutation 操作，但不共享可任意调用的 aggregate 引用。
+
+thermal runtime 直接使用 `ThermalDomainState`。`FluidThermalBinding` 只拥有 fluid carrier snapshot、restore、reseed 与 gas-compliance 的类型映射；它不保存库存，也不提供第二套 thermal mutator。capture/restore 继续由 `FluidDomainStateMapper` 汇总，所以删除旧 thermal facade 不改变 candidate、region HEAD 或账本契约。
 
 ### 后端候选边界
 

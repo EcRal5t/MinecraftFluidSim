@@ -2,6 +2,11 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.application.ContainerRecoveryCoordinator;
+import cc.ecisr.mmm.application.ControllerQueryUseCase;
+import cc.ecisr.mmm.application.RegionApplicationService;
+import cc.ecisr.mmm.application.ThermalReservoirUseCase;
+import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.network.ProtocolSessions;
 import cc.ecisr.mmm.simulation.persistence.ContainerJournalFileStore;
 import cc.ecisr.mmm.transfer.ContainerTransferJournal;
@@ -58,15 +63,85 @@ public final class MmmRuntimeFactory {
 		ContainerRecoveryCoordinator containerRecovery = new ContainerRecoveryCoordinator(containerTransfers,
 				new MinecraftContainerRecoveryAdapter(server, startup, registries, regionManager, regionOperations,
 						committedEvents), containerIndex.journals(), containerIndex.issues());
-		FluidSimulationService simulation = new FluidSimulationService(startup, worldRegistries,
-				regionManager, regionOperations,
-				snapshots, containerRecovery,
-				ownershipIssues, committedEvents);
-		return new MmmRuntime(simulation, simulation.controllerConsole(),
-				simulation.regionActivation(), simulation.indicatorEditing(),
-				simulation.debugFixtures(), simulation.regionAdministration(),
-				simulation.regionDiagnostics(),
-				simulation.playerContainerTransfers(), simulation.dispenserContainerTransfers(),
+		MinecraftOwnershipIssues ownership = new MinecraftOwnershipIssues(ownershipIssues);
+		MinecraftRuntimePolicy policy = new MinecraftRuntimePolicy(startup, regionManager);
+		FluidWorldTargetResolver targets = new FluidWorldTargetResolver(regionManager);
+		RegionApplicationService regionApplication = new RegionApplicationService(new CpuFluidSolverBackend(),
+				new FluidRegionRepository(regionManager), regionOperations);
+		MinecraftMotionExecutor motion = new MinecraftMotionExecutor(regionApplication, worldRegistries, policy);
+		MinecraftTakeoverAdapter takeover = new MinecraftTakeoverAdapter();
+		MinecraftDebugScaffolding scaffolding = new MinecraftDebugScaffolding();
+		MinecraftRegionInputs regionInputs = new MinecraftRegionInputs(
+				worldRegistries.thermalOrNull(), FluidRegionFactory.CELLS_PER_BLOCK);
+		MinecraftRegionTick regionTick = new MinecraftRegionTick(regionApplication, regionInputs, snapshots,
+				worldRegistries.profile(), policy.maximumPhaseOperationsPerStep());
+		MinecraftRegionAvailability availability = new MinecraftRegionAvailability(
+				containerRecovery, regionOperations, policy::controllerEnabled,
+				regionTick, snapshots, worldRegistries);
+		ControllerQueryUseCase controllerQueries = new ControllerQueryUseCase(new ControllerSummaryAdapter(
+				regionManager, regionOperations, worldRegistries.profile(), worldRegistries.thermalOrNull(),
+				containerRecovery::hasPending, startup::authoritativeWritesReady,
+				policy.liveWorldBridgeEnabled()));
+		MinecraftRegionLifecycle regionLifecycle = new MinecraftRegionLifecycle(
+				startup, regionManager, regionOperations, snapshots, targets, controllerQueries,
+				worldRegistries.thermalOrNull(), containerRecovery::hasPending);
+		MinecraftControllerConsole controllerConsole = new MinecraftControllerConsole(
+				targets, controllerQueries, regionLifecycle, new ThermalReservoirUseCase(), regionTick,
+				worldRegistries.thermalOrNull(), startup, regionManager, startup::authoritativeWritesReady,
+				availability::ensure);
+		MinecraftRegionActivation regionActivation = new MinecraftRegionActivation(
+				startup, worldRegistries, regionManager, regionOperations, snapshots, regionTick, takeover,
+				scaffolding, containerRecovery, policy::controllerEnabled, policy::defaultEntityPhysicsEnabled,
+				policy::defaultDebugOverlays, ownership::current, availability,
+				policy.liveWorldBridgeEnabled(), policy.maximumThermalSubstepsPerStep());
+		MinecraftDebugFixtures debugFixtures = new MinecraftDebugFixtures(
+				regionManager, snapshots, takeover, scaffolding, new MinecraftDebugFixtures.Runtime() {
+					@Override public FluidRegion.CollisionStats refreshCollisions(net.minecraft.server.level.ServerLevel level) {
+						FluidRegion region = regionManager.selected();
+						if (region == null) return FluidRegion.CollisionStats.EMPTY;
+						if (!availability.ensure(level, region)) return region.lastCollisionStats();
+						try {
+							return regionTick.refreshRegionInputs(level, region);
+						} catch (FluidDomain.CollisionEditBlockedException blocked) {
+							regionTick.blockCollisionEdit(level, region, blocked);
+							throw blocked;
+						}
+					}
+					@Override public void stepMotion(FluidRegion region) { motion.step(region, List.of()); }
+					@Override public void bindCapabilityState(FluidDomain domain) {
+						worldRegistries.bindConfiguredState(domain, policy.maximumThermalSubstepsPerStep());
+					}
+					@Override public String activateController(
+							net.minecraft.server.level.ServerPlayer player, net.minecraft.core.BlockPos position
+					) {
+						MinecraftRegionActivation.Result result = regionActivation.activate(player, position, false);
+						return result.succeeded() ? null : result.failure();
+					}
+				}, worldRegistries.profile(), policy::defaultEntityPhysicsEnabled, policy::defaultDebugOverlays);
+		MinecraftIndicatorEditing indicatorEditing = new MinecraftIndicatorEditing(
+				worldRegistries, targets, regionOperations, snapshots, availability);
+		MinecraftRegionAdministration regionAdministration = new MinecraftRegionAdministration(
+				regionManager, regionOperations, regionApplication, containerRecovery);
+		RegionDiagnosticsReport regionDiagnostics = new RegionDiagnosticsReport(
+				regionManager, regionOperations, takeover, debugFixtures, worldRegistries,
+				policy::controllerEnabled, policy::liveWorldBridgeEnabled,
+				policy::configuredWorldBridgeEnabled, ownership::current, policy::maximumPhaseOperationsPerStep);
+		MinecraftContainerTransactionAdapter containerTransactions = new MinecraftContainerTransactionAdapter(
+				regionManager, regionOperations, containerRecovery, worldRegistries.profile().profileFingerprint(),
+				worldRegistries.thermalOrNull() == null ? null : worldRegistries.thermalOrNull().fingerprint());
+		PlayerContainerTransferAdapter playerContainerTransfers = new PlayerContainerTransferAdapter(
+				startup, worldRegistries, targets, availability, containerTransactions, snapshots);
+		DispenserContainerTransferAdapter dispenserContainerTransfers = new DispenserContainerTransferAdapter(
+				startup, worldRegistries, targets, availability, containerTransactions, snapshots);
+		MinecraftRegionOperatorActions operatorActions = new MinecraftRegionOperatorActions(
+				startup, regionManager, targets, regionOperations, snapshots, takeover, debugFixtures,
+				availability, regionTick, motion, policy, containerRecovery);
+		MinecraftSimulationLoop simulationLoop = new MinecraftSimulationLoop(
+				regionManager, regionOperations, snapshots, containerRecovery, takeover,
+				availability, regionTick, ownership::replace);
+		return new MmmRuntime(simulationLoop, operatorActions, containerTransactions, controllerConsole,
+				regionActivation, indicatorEditing, debugFixtures, regionAdministration, regionDiagnostics,
+				playerContainerTransfers, dispenserContainerTransfers,
 				new MinecraftRegionObservation(regionManager, snapshots), containerRecovery,
 				new FabricFluidQueryApi(server, regionManager, startup.profileProven()), new ProtocolSessions(),
 				worldRegistries, committedEvents, startup);

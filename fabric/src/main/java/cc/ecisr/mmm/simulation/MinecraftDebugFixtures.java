@@ -14,18 +14,15 @@ import cc.ecisr.mmm.worldprofile.WorldCapability;
 import cc.ecisr.mmm.worldprofile.WorldCapabilityProfile;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -63,18 +60,18 @@ public final class MinecraftDebugFixtures {
 	private final FluidRegionManager regions;
 	private final FluidSnapshotPublisher snapshots;
 	private final MinecraftTakeoverAdapter takeover;
+	private final MinecraftDebugScaffolding scaffolding;
 	private final Runtime runtime;
 	private final WorldCapabilityProfile profile;
 	private final BooleanSupplier defaultEntityPhysics;
 	private final BooleanSupplier defaultDebugOverlays;
-	private final Map<BlockPos, BlockState> airDemoScaffolding = new HashMap<>();
-	private ResourceKey<Level> airDemoScaffoldingDimension;
 	private String lastFailure;
 
 	MinecraftDebugFixtures(
 			FluidRegionManager regions,
 			FluidSnapshotPublisher snapshots,
 			MinecraftTakeoverAdapter takeover,
+			MinecraftDebugScaffolding scaffolding,
 			Runtime runtime,
 			WorldCapabilityProfile profile,
 			BooleanSupplier defaultEntityPhysics,
@@ -83,6 +80,7 @@ public final class MinecraftDebugFixtures {
 		this.regions = regions;
 		this.snapshots = snapshots;
 		this.takeover = takeover;
+		this.scaffolding = scaffolding;
 		this.runtime = runtime;
 		this.profile = profile;
 		this.defaultEntityPhysics = defaultEntityPhysics;
@@ -95,16 +93,7 @@ public final class MinecraftDebugFixtures {
 
 	/** Restores the world blocks the gas-demo glass scaffold replaced; player-edited positions are left alone. */
 	public void restoreAirDemoScaffolding(MinecraftServer server) {
-		if (airDemoScaffoldingDimension == null) return;
-		ServerLevel level = server.getLevel(airDemoScaffoldingDimension);
-		if (level != null) {
-			for (Map.Entry<BlockPos, BlockState> entry : airDemoScaffolding.entrySet()) {
-				if (!level.getBlockState(entry.getKey()).is(Blocks.GLASS)) continue;
-				level.setBlock(entry.getKey(), entry.getValue(), Block.UPDATE_ALL);
-			}
-		}
-		airDemoScaffolding.clear();
-		airDemoScaffoldingDimension = null;
+		scaffolding.restore(server);
 	}
 
 	/**
@@ -272,7 +261,7 @@ public final class MinecraftDebugFixtures {
 		ServerLevel level = player.level();
 		BlockPos newOrigin = aimedOrigin(center);
 		if (!admitTransientRegion(level, newOrigin, true)) return false;
-		placeAirDemoScaffolding(level, newOrigin);
+		scaffolding.placeAirDemo(level, newOrigin);
 		runtime.refreshCollisions(level);
 		FluidDomain domain = regions.selected().domain();
 		fillAirDemoWater(domain);
@@ -298,29 +287,6 @@ public final class MinecraftDebugFixtures {
 		regions.selected().setPaused(true);
 		sendSnapshot(level);
 		return true;
-	}
-
-	/** Glass U-tube layout in region-relative block coordinates: shell, sealed-left roof and a divider with a bottom doorway. */
-	private static boolean isAirDemoScaffoldBlock(int bx, int by, int bz) {
-		boolean shell = bx == 0 || bx == BLOCK_SIZE_X - 1 || bz == 0 || bz == BLOCK_SIZE_Z - 1 || by == 0;
-		boolean roof = by == BLOCK_SIZE_Y - 1 && bx <= 6;
-		boolean divider = bx == 6 && by >= 3;
-		return shell || roof || divider;
-	}
-
-	private void placeAirDemoScaffolding(ServerLevel level, BlockPos origin) {
-		airDemoScaffolding.clear();
-		airDemoScaffoldingDimension = level.dimension();
-		BlockState glass = Blocks.GLASS.defaultBlockState();
-		for (int by = 0; by < BLOCK_SIZE_Y; by++) for (int bz = 0; bz < BLOCK_SIZE_Z; bz++) {
-			for (int bx = 0; bx < BLOCK_SIZE_X; bx++) {
-				if (!isAirDemoScaffoldBlock(bx, by, bz)) continue;
-				BlockPos position = origin.offset(bx, by, bz);
-				BlockState previous = level.getBlockState(position);
-				if (!previous.isAir()) continue;
-				if (level.setBlock(position, glass, Block.UPDATE_ALL)) airDemoScaffolding.put(position, previous);
-			}
-		}
 	}
 
 	/** Fills both chambers to 3.5 blocks; the two-block doorway column stays inside the fill range and submerged. */

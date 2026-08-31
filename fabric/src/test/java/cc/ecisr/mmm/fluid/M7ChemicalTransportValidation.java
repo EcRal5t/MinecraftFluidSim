@@ -266,11 +266,17 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateSplitAndIndicator() {
-		FluidDomain domain = domainWithCell(1, 1, 1, 0.125F);
+		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
+				4, 4, 4, STATIC_CONFIG.cellSize(), 1, 0.25, 250.0, MATERIALS.materials(),
+				new float[] {1.5F, 1.5F, 1.5F, 0.25F}, new float[3], new byte[64],
+				new double[] {250.0}, new int[] {0}));
+		domain.bindChemistry(CHEMISTRY);
 		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1_001L), true);
 		long before = domain.chemicalParcels().totalQuanta();
 		FluidDomain.StepStats stats = domain.step();
-		check(stats.reseededSplits() == 1 && domain.particleCount() == 2, "chemical marker did not split");
+		check(stats.reseededSplits() == 1 && domain.particleCount() == 2,
+				"oversized chemical quadrature marker did not split");
 		check(domain.chemicalParcels().totalQuanta() == before, "split changed total chemical quanta");
 		check(domain.chemicalParcels().record(0).totalQuanta()
 				+ domain.chemicalParcels().record(1).totalQuanta() == before, "split parcel ledgers do not close");

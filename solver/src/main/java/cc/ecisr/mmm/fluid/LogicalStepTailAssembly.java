@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.thermal.ThermalDomainState;
+
 import cc.ecisr.mmm.granular.GranularCouplingFields;
 import cc.ecisr.mmm.granular.GranularDepositDynamics;
 import cc.ecisr.mmm.granular.GranularParcelStore;
@@ -46,7 +48,7 @@ final class LogicalStepTailAssembly {
 					@Override public cc.ecisr.mmm.chemistry.ChemicalParcelStore chemicalParcels() {
 						return domain.chemicalParcels;
 					}
-					@Override public FlipThermalState thermalState() { return domain.thermalState; }
+					@Override public ThermalDomainState thermalState() { return domain.thermalState; }
 					@Override public FlipParticleReseeder.ThermalAdapter thermalAdapter() {
 						return domain.thermalReseedAdapter();
 					}

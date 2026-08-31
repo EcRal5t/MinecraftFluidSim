@@ -43,7 +43,7 @@ final class DomainInventoryLifecyclePlanner {
 		return new FluidDomain.GranularClearPlan(removed, sinkAfter, granular.inventory.totalSolidVolumeSvq(),
 				Double.doubleToRawLongBits(granular.inventory.totalMass()), granular.parcels.count(),
 				granular.deposits.groupCount(), domain.thermalState == null
-						? SignedDyadic.ZERO : domain.thermalState.granularEnergy().exactEnergy(),
+						? SignedDyadic.ZERO : domain.thermalState.granularColumn().exactEnergy(),
 				granularRevision);
 	}
 
