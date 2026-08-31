@@ -56,4 +56,4 @@
 
 ## 性能基线
 
-S21 最大装量复审最终干净运行（JDK 26.0.2、Java 25 target）的 `production-live-budget` 数据：默认 8×8×8 controller、1024 初始 markers，20 个 live logical steps median/max 为 11.641/20.330 ms，低于 40 ms 产品门；空场景最大装量 `/mmm demo` 为 24×16×24、2,592 liquid cells、20,736 初始 markers，20 步最大 193.220 ms，连续超过 200 ms 为 0。JVM 预热单列，不计入 frame budget。性能数字只作本机相对证据。
+S21 开放域气体复审最终干净运行（JDK 26.0.2、Java 25 target）的 `production-live-budget` 数据：默认 8×8×8 controller、1024 初始 markers，20 个 live logical steps median/max 为 11.302/16.863 ms，低于 40 ms 产品门；空场景最大装量 `/mmm demo` 为 24×16×24、2,592 liquid cells、20,736 初始 markers，20 步最大 174.813 ms，连续超过 200 ms 为 0。最大装量轨迹覆盖 1→3 substeps、74→267 aggregate PCG 和一次真实相变。JVM 预热单列，不计入 frame budget；性能数字只作本机无并行 Minecraft 进程时的相对证据。
