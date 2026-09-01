@@ -46,6 +46,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	 * topology exists because changing it would reinterpret authoritative gas inventory.
 	 */
 	public void sealDomainBoundary() {
+		if (gasState.sealedDomainBoundary) return;
 		if (gasState.cellNodeId != null || gasState.network.nodeCount() != 0 || gasState.network.drawnFromAmbientNanos() != 0L) {
 			throw new IllegalStateException("Gas domain boundary cannot change after topology initialization");
 		}

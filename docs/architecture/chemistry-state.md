@@ -70,6 +70,8 @@ pH 是本项目从局部 `H+`/`OH-` 相对库存派生的 0–14 展示刻度，
 
 `ChemicalContents` 使用 canonical group 表，每组绑定 mechanical material、indicator、nanovolume、kg mass/residual 和排序 species 列。物品总量必须与各组 exact sum 一致；部分抽取按体积分配 quanta 和 residual，并把确定性 remainder 留给一侧。容器无法表示完整结果时，在 solver 修改前拒绝。
 
+区域 source/sink 的 group 聚合对 volume、mechanical kg mass 与 chemical kg residual 三列分别按输入 `double` 的精确二进制值求和，最后各自只舍入一次；不能用顺序相关的逐 marker 浮点累加制造 species/mass 审计差额，也不能由 species 质量反算 mechanical mass 或 residual。
+
 区域 source/sink 不只是 species 总量：每个 transfer group 同时保存 material/indicator identity、volume、mass、residual 和 species。collision escape、`empty`、创造放出和创造装取分别走同一 ledger，不允许“只记总质量”后丢失组成证据。
 
 ## 功能布局

@@ -81,6 +81,31 @@ public final class M7ChemicalTransportValidation {
 		} catch (java.io.IOException invalid) {
 			throw new AssertionError("complete internal transfer ledger did not round-trip", invalid);
 		}
+
+		ChemicalTransferLedger.Builder demo = ChemicalTransferLedger.builder(CHEMISTRY);
+		double markerMass = 15.625;
+		ChemicalMixtureRecord acid = chemicalRecordAtMarkerMass(
+				Map.of(BuiltinChemicalDefinitions.HCL, 1_000_000L), markerMass);
+		ChemicalMixtureRecord base = chemicalRecordAtMarkerMass(
+				Map.of(BuiltinChemicalDefinitions.NAOH, 1_000_000L), markerMass);
+		for (int marker = 0; marker < 11_520; marker++) {
+			demo.add(BuiltinFluidMaterials.WATER.id(), true, 0.125, markerMass, acid);
+		}
+		for (int marker = 0; marker < 9_216; marker++) {
+			demo.add(BuiltinFluidMaterials.WATER.id(), false, 0.125, markerMass, base);
+		}
+		ChemicalParcelStore audit = new ChemicalParcelStore(CHEMISTRY,
+				SolverUnitScale.forCellSize(0.5F), 1, 1);
+		audit.requireCanRecordEscapedSink(demo.build());
+	}
+
+	private static ChemicalMixtureRecord chemicalRecordAtMarkerMass(
+			Map<String, Long> stableAmounts, double markerMassKilograms
+	) {
+		ChemicalMixtureRecord zeroResidual = ChemicalMixtureRecord.fromStableAmounts(
+				CHEMISTRY, stableAmounts, 0.0);
+		return ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY, stableAmounts,
+				markerMassKilograms - zeroResidual.exactSpeciesMassKilograms(CHEMISTRY).toDouble());
 	}
 
 	private static void validateMissingPhaseRejectedBeforeBinding() {

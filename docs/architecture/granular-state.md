@@ -93,6 +93,7 @@ reaction/phase candidate 必须先在不可变快照上规划 exact extent，再
 - 干颗粒容器一次只保存一个可完整表示的 SVQ 库存，包含逐材料质量和可选固相组成。
 - 玩家和发射器只作用于 controller 内实际目标格，使用与区域 checkpoint 联合的容器 WAL。
 - `empty` 先联合预检液体、化学、coherent、active 和 deposit sink candidate，再一次提交；气体库存不属于凝聚相清空。
+- reactive solid 的 transfer/audit group 对 mechanical kg mass 与 composition kg residual 分列按输入 `double` 的精确二进制值聚合，最后各自只舍入一次；不得由 species 质量反算机械质量，也不得让 parcel 顺序制造虚假的 composition/mass 审计差额。
 
 ## 审计与可观察量
 

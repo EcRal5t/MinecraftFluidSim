@@ -11,6 +11,7 @@ import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.thermal.GranularEnergyColumn;
 import cc.ecisr.mmm.thermal.ThermalCarrierContext;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -401,14 +402,17 @@ final class GranularTransferPlanner {
 	}
 
 	private static final class MutableGranularGroup {
-		private long svq; private double mass, residual; private TreeMap<Integer, Long> species;
+		private long svq;
+		private SignedDyadic mass = SignedDyadic.ZERO, residual = SignedDyadic.ZERO;
+		private TreeMap<Integer, Long> species;
 		void add(long addedSvq, double addedMass, SolidCompositionRecord composition) {
-			svq = Math.addExact(svq, addedSvq); mass += addedMass;
+			svq = Math.addExact(svq, addedSvq); mass = mass.add(SignedDyadic.of(addedMass));
 			if (composition == null) {
 				if (species != null) throw new IllegalArgumentException("Mixed inert/reactive granular material group");
 				return;
 			}
-			if (species == null) species = new TreeMap<>(); residual += composition.massResidual();
+			if (species == null) species = new TreeMap<>();
+			residual = residual.add(SignedDyadic.of(composition.massResidual()));
 			for (int entry = 0; entry < composition.entryCount(); entry++) species.merge(
 					composition.speciesHandle(entry), composition.amountAt(entry), Math::addExact);
 		}
@@ -419,9 +423,10 @@ final class GranularTransferPlanner {
 				for (Map.Entry<Integer, Long> entry : species.entrySet()) {
 					handles[index] = entry.getKey(); amounts[index++] = entry.getValue();
 				}
-				composition = new SolidCompositionRecord(handles, amounts, Double.doubleToRawLongBits(residual));
+				composition = new SolidCompositionRecord(
+						handles, amounts, Double.doubleToRawLongBits(residual.toDouble()));
 			}
-			return new GranularTransferLedger.Group(materialId, svq, mass, composition);
+			return new GranularTransferLedger.Group(materialId, svq, mass.toDouble(), composition);
 		}
 	}
 

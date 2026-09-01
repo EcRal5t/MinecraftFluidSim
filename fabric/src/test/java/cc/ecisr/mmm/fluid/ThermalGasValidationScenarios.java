@@ -275,7 +275,10 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					"built-in dry-air/water/vapor caloric or conductivity values drifted");
 			require(Math.abs(latentEnthalpy - 2_256_700.0) < 0.01,
 					"water/vapor state-function gap does not reproduce the 1-atm latent enthalpy: " + latentEnthalpy);
-			require(close(melting.equilibriumTemperatureK(101_325.0), 273.15251907976949)
+			require(close(melting.minimumPressurePa(), 611.657)
+					&& close(melting.equilibriumTemperatureK(611.657), 273.16)
+					&& close(melting.equilibriumTemperatureK(2_815.2265625), 273.15983635215986)
+					&& close(melting.equilibriumTemperatureK(101_325.0), 273.15251907976949)
 					&& close(melting.equilibriumTemperatureK(2_000_000.0), 273.01088655470164)
 					&& melting.equilibriumTemperatureK(1_000_000.0)
 					< melting.equilibriumTemperatureK(101_325.0),

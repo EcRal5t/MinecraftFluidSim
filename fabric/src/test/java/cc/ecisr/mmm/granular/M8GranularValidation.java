@@ -303,6 +303,29 @@ public final class M8GranularValidation {
 				&& compactCompositions.speciesTotals()[BuiltinChemicalDefinitions.REGISTRY.speciesHandle(
 						BuiltinChemicalDefinitions.NA_PLUS)] == 2_560L,
 				"bounded active compaction did not preserve reactive composition ownership");
+
+		int bulkCount = GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION;
+		GranularParcelStore bulkParcels = new GranularParcelStore(registry, bulkCount);
+		SolidCompositionPool bulkCompositions = new SolidCompositionPool(
+				BuiltinChemicalDefinitions.REGISTRY, bulkCount);
+		SolidCompositionRecord bulkRecordWithoutResidual = SolidCompositionRecord.fromStableAmounts(
+				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(
+						BuiltinChemicalDefinitions.NA_PLUS, 1L,
+						BuiltinChemicalDefinitions.CL_MINUS, 1L), 0.0);
+		double bulkMass = 1.0;
+		SolidCompositionRecord bulkRecord = SolidCompositionRecord.fromStableAmounts(
+				BuiltinChemicalDefinitions.REGISTRY, bulkRecordWithoutResidual.stableAmounts(
+						BuiltinChemicalDefinitions.REGISTRY),
+				bulkMass - bulkRecordWithoutResidual.exactSpeciesMass(
+						BuiltinChemicalDefinitions.REGISTRY).toDouble());
+		for (int parcel = 0; parcel < bulkCount; parcel++) {
+			bulkParcels.add(new GranularParcelStore.Parcel(0.25F, 0.25F, 0.25F,
+					0.0F, 0.0F, 0.0F, 1L, bulkMass, precipitate,
+					bulkCompositions.create(bulkRecord), 0, (byte) 0));
+		}
+		GranularAuditLedger bulkAudit = GranularAuditLedger.captureInventory(
+				registry, bulkParcels, new GranularDepositStore(registry, 1, 1), bulkCompositions);
+		bulkAudit.validateAgainst(registry, BuiltinChemicalDefinitions.REGISTRY);
 	}
 
 	private static void registryDefinitionsAndWorldSnapshotAreStrict() throws Exception {

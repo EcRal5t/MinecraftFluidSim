@@ -132,7 +132,7 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 - 体积变化与机械功写入 pending phase-work，由下一次 pressure projection exactly-once 消费。
 - 固液规划从最近一次真实 projection 的 cell gauge pressure 加环境压力得到绝对压力，再取 `T_eq(p)`。曲线使用 registry-bound、按压力严格递增的分段线性点，只在端点闭区间内插值；常温曲线也必须显式给出两个端点。固液曲线不必覆盖标准压力，因此可以表达只有高压区有效的相平衡；液气曲线必须覆盖标准压力，以定义其气体标准体积和潜焓参考态。任何曲线都禁止外推或钳制，有相库存的 cell 越界时整个 thermal candidate 安全暂停，不能静默当作无相变。
 
-内置冰/水 transition 每批为 `0.001 kg`，两侧分别为 `146 SVQ` 与 `134 SVQ`。其 `10 kPa–2 MPa` 平衡曲线取自 [IAPWS R14-08(2011) Ice Ih 熔化压力关系](https://iapws.org/documents/release/MeltSub)的反演采样，包含 1 atm 采样点，在当前分段上相对原关系的最大温度插值误差低于 `4e-5 K`；曲线外拒绝候选。规划器在共享 phase-operation 预算内寻找 exact batch lattice 上离 `T_eq(p)` 最近的可表示状态；候选必须严格缩小温差，跨过平台时只在跨越后的格点更近时提交，随后保持稳定，不允许每步冻融往返。由 batch 大小造成的剩余温差是明确量化误差；库存、容量或操作预算先到达时停止。
+内置冰/水 transition 每批为 `0.001 kg`，两侧分别为 `146 SVQ` 与 `134 SVQ`。其 `611.657 Pa–2 MPa` 平衡曲线取自 [IAPWS R14-08(2011) Ice Ih 熔化压力关系](https://iapws.org/documents/release/MeltSub)的反演采样，从普通三相点起并包含 1 atm 采样点，在当前分段上相对原关系的最大温度插值误差低于 `4e-5 K`；曲线外拒绝候选。规划器在共享 phase-operation 预算内寻找 exact batch lattice 上离 `T_eq(p)` 最近的可表示状态；候选必须严格缩小温差，跨过平台时只在跨越后的格点更近时提交，随后保持稳定，不允许每步冻融往返。由 batch 大小造成的剩余温差是明确量化误差；库存、容量或操作预算先到达时停止。
 
 ### 气液
 

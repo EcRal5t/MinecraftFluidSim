@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.granular;
 
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -201,11 +202,15 @@ public record GranularAuditLedger(List<Entry> entries) {
 	}
 
 	private static final class MutableEntry {
-		private long svq; private double mass, residual; private Boolean reactive;
+		private long svq;
+		private SignedDyadic mass = SignedDyadic.ZERO, residual = SignedDyadic.ZERO;
+		private Boolean reactive;
 		private TreeMap<String, Long> species;
 		MutableEntry() { }
 		MutableEntry(Entry source) {
-			svq = source.solidVolumeSvq(); mass = source.mass(); residual = Double.longBitsToDouble(source.massResidualBits());
+			svq = source.solidVolumeSvq();
+			mass = SignedDyadic.of(source.mass());
+			residual = SignedDyadic.of(Double.longBitsToDouble(source.massResidualBits()));
 			reactive = source.reactive();
 			if (source.reactive()) {
 				species = new TreeMap<>(); for (SpeciesAmount amount : source.composition()) species.put(amount.speciesId(), amount.amountQuanta());
@@ -219,7 +224,7 @@ public record GranularAuditLedger(List<Entry> entries) {
 				throw new IllegalArgumentException("Granular audit inventory portion is invalid");
 			}
 			requireKind(composition != null);
-			svq = Math.addExact(svq, addedSvq); mass += addedMass;
+			svq = Math.addExact(svq, addedSvq); mass = mass.add(SignedDyadic.of(addedMass));
 			if (composition == null) {
 				if (species != null) throw new IllegalArgumentException("Mixed inert/reactive granular audit material");
 				return;
@@ -227,20 +232,22 @@ public record GranularAuditLedger(List<Entry> entries) {
 			if (chemistry == null || !massClose(composition.totalMass(chemistry), addedMass)) {
 				throw new IllegalArgumentException("Reactive granular audit inventory mass mismatch");
 			}
-			if (species == null) species = new TreeMap<>(); residual += composition.massResidual();
+			if (species == null) species = new TreeMap<>();
+			residual = residual.add(SignedDyadic.of(composition.massResidual()));
 			for (Map.Entry<String, Long> amount : composition.stableAmounts(chemistry).entrySet()) {
 				species.merge(amount.getKey(), amount.getValue(), Math::addExact);
 			}
 		}
 		void add(Entry entry) {
 			requireKind(entry.reactive());
-			svq = Math.addExact(svq, entry.solidVolumeSvq()); mass += entry.mass();
+			svq = Math.addExact(svq, entry.solidVolumeSvq());
+			mass = mass.add(SignedDyadic.of(entry.mass()));
 			if (!entry.reactive()) {
 				if (species != null) throw new IllegalArgumentException("Mixed inert/reactive granular audit material");
 				return;
 			}
 			if (species == null) species = new TreeMap<>();
-			residual += Double.longBitsToDouble(entry.massResidualBits());
+			residual = residual.add(SignedDyadic.of(Double.longBitsToDouble(entry.massResidualBits())));
 			for (SpeciesAmount amount : entry.composition()) {
 				species.merge(amount.speciesId(), amount.amountQuanta(), Math::addExact);
 			}
@@ -254,8 +261,8 @@ public record GranularAuditLedger(List<Entry> entries) {
 		Entry build(String materialId) {
 			List<SpeciesAmount> composition = species == null ? List.of() : species.entrySet().stream()
 					.map(entry -> new SpeciesAmount(entry.getKey(), entry.getValue())).toList();
-			return new Entry(materialId, svq, Double.doubleToRawLongBits(mass),
-					species == null ? 0L : Double.doubleToRawLongBits(residual), composition);
+			return new Entry(materialId, svq, Double.doubleToRawLongBits(mass.toDouble()),
+					species == null ? 0L : Double.doubleToRawLongBits(residual.toDouble()), composition);
 		}
 	}
 

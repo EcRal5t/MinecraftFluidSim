@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.chemistry;
 
+import cc.ecisr.mmm.units.SignedDyadic;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -139,9 +141,11 @@ public final class ChemicalTransferLedger {
 	private static final class MutableGroup {
 		private final String materialId;
 		private final boolean indicator;
-		private double volume;
-		private double massKilograms;
-		private double residual;
+		// These are independent truth columns. Aggregate their binary values exactly and round once;
+		// ordinary += accumulates enough drift in a full demo region to falsify a closed mass ledger.
+		private SignedDyadic volume = SignedDyadic.ZERO;
+		private SignedDyadic massKilograms = SignedDyadic.ZERO;
+		private SignedDyadic residual = SignedDyadic.ZERO;
 		private final TreeMap<String, Long> species = new TreeMap<>();
 
 		private MutableGroup(String materialId, boolean indicator) {
@@ -149,17 +153,18 @@ public final class ChemicalTransferLedger {
 			this.indicator = indicator;
 		}
 		private void add(Group group) {
-			volume += group.volume();
-			massKilograms += group.massKilograms();
-			residual += group.massResidualKilograms();
-			if (!(Double.isFinite(volume) && Double.isFinite(massKilograms) && Double.isFinite(residual))) {
+			volume = volume.add(SignedDyadic.of(group.volume()));
+			massKilograms = massKilograms.add(SignedDyadic.of(group.massKilograms()));
+			residual = residual.add(SignedDyadic.of(group.massResidualKilograms()));
+			if (!(Double.isFinite(volume.toDouble()) && Double.isFinite(massKilograms.toDouble())
+					&& Double.isFinite(residual.toDouble()))) {
 				throw new IllegalArgumentException("Chemical transfer ledger overflow");
 			}
 			group.speciesQuanta().forEach((id, amount) -> species.merge(id, amount, Math::addExact));
 		}
 		private Group freeze() {
-			return new Group(materialId, indicator, volume, massKilograms,
-					Double.doubleToRawLongBits(residual), species);
+			return new Group(materialId, indicator, volume.toDouble(), massKilograms.toDouble(),
+					Double.doubleToRawLongBits(residual.toDouble()), species);
 		}
 	}
 }

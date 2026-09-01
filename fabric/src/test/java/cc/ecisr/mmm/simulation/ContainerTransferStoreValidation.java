@@ -752,6 +752,9 @@ public final class ContainerTransferStoreValidation {
 					BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, particles.copyParticleVelocities(),
 					particles.copySolidMask(), masses, materials));
 			FluidRegion region = new FluidRegion(regionId, DIMENSION, origin, base, 64L, footprint);
+			base.step(false, 0);
+			check(base.gasBoundary().nodeCount() == 1,
+					"private-target fixture did not initialize one sealed gas topology");
 			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(
 					root, TestProfiles.materials(), null, null, null, null);
 			long baseGeneration = persistence.checkpoint(region);
