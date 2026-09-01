@@ -241,7 +241,10 @@ final class ControllerInventoryDurabilityValidation {
 			}
 		});
 		runScenario("indicator acid-base precipitation", registries, state -> {
-			state.insertAcid(4); state.indicator(true); state.insertBase(4); state.steps(true, 20);
+			for (int bucket = 0; bucket < 15; bucket++) { state.insertAcid(); state.steps(true, 2); }
+			state.indicator(true);
+			for (int bucket = 0; bucket < 15; bucket++) { state.insertBase(); state.steps(true, 2); }
+			state.steps(true, 180);
 		});
 		runScenario("water-diluted acid-base precipitation", registries, state -> {
 			state.insertAcid(4); state.insertWater(); state.insertBase(4); state.steps(true, 20);
@@ -363,7 +366,9 @@ final class ControllerInventoryDurabilityValidation {
 		void insertChemical(ChemicalTransferLedger ledger, double energy, String name) {
 			settle();
 			check(domain.tryInsertExactChemical(7, 7, 7, ledger, 6, true, energy).transferred(),
-					"normal-play " + name + " insertion was rejected");
+					"normal-play " + name + " insertion was rejected at generation " + generation
+							+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
+							+ ", solidSvq=" + domain.totalGranularSolidVolumeSvq());
 			roundTrip();
 		}
 		void insertSand() {

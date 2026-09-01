@@ -13,6 +13,7 @@
 ## 独立真值
 
 - solid volume 使用整数 SVQ；每种材料质量以 kg 独立保存。
+- active/deposit 的 binary64 kg 总账在 snapshot、handoff 与清空计划边界按精确二进制和归约、最后只舍入一次；稀疏槽位分配顺序、cell 规范排序和 parcel swap-remove 不能改变总账 raw bits。
 - reactive solid composition/species 与机械材料身份分开保存。
 - active parcel、deposit group 和 coherent condensed phase 是不同载体，不互相替代；active parcel 的连续支撑接触年龄与支撑标志是沉积状态机的权威侧列。
 - deposit 保存 cell、材料、SVQ、质量、组成、porosity 和孔隙水相关状态。

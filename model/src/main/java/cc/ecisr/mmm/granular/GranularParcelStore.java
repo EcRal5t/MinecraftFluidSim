@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.granular;
 
+import cc.ecisr.mmm.units.SignedDyadic;
+
 /** Fixed-capacity primitive SoA for active granular parcels; every mass column is kilograms. */
 public final class GranularParcelStore {
 	public static final byte FLAG_SUPPORTED = 1;
@@ -149,10 +151,11 @@ public final class GranularParcelStore {
 	}
 
 	public double totalMass() {
-		double total = 0.0;
-		for (int index = 0; index < count; index++) total += mass[index];
-		return total;
+		return exactMass().toDouble();
 	}
+
+	/** Order-independent exact aggregate of the authoritative binary64 mass column. */
+	public SignedDyadic exactMass() { return SignedDyadic.sum(mass, count); }
 
 	private void validate(Parcel parcel) {
 		if (parcel == null) throw new IllegalArgumentException("Granular parcel is missing");

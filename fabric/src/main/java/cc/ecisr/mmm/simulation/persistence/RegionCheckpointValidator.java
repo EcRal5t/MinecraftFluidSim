@@ -415,7 +415,7 @@ final class RegionCheckpointValidator {
 					expected.chemicalRegistryFingerprint(), expected.materialPalette(), expected.solidCompositions(),
 					expected.solidSpeciesTotals(), Arrays.asList(active), deposits,
 					Math.addExact(totalActiveSvq, totalDepositSvq),
-					Double.doubleToRawLongBits(totalActiveMass + totalDepositMass),
+					GranularStateSnapshot.canonicalTotalMassBits(Arrays.asList(active), deposits),
 					expected.externalSource(), expected.escapedSink());
 		} catch (IllegalArgumentException invalid) {
 			throw new IOException("Invalid granular region state: " + invalid.getMessage(), invalid);

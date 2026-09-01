@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.granular;
 
+import cc.ecisr.mmm.units.SignedDyadic;
+
 import java.util.Arrays;
 import java.util.function.Predicate;
 
@@ -200,10 +202,11 @@ public final class GranularDepositStore {
 	}
 
 	public double totalMass() {
-		double total = 0.0;
-		for (int entry = 0; entry < nextUnused; entry++) if (solidVolumeSvq[entry] > 0L) total += mass[entry];
-		return total;
+		return exactMass().toDouble();
 	}
+
+	/** Order-independent exact aggregate; released sparse entries are maintained as positive zero. */
+	public SignedDyadic exactMass() { return SignedDyadic.sum(mass, nextUnused); }
 
 	public void forEachCell(CellConsumer consumer) {
 		if (consumer == null) throw new IllegalArgumentException("Deposit cell consumer is missing");

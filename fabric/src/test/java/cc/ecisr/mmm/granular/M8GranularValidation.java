@@ -12,6 +12,7 @@ import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.simulation.FullCapabilityTestFixture;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.units.SolverUnitScale;
 
 import java.io.StringReader;
@@ -541,6 +542,19 @@ public final class M8GranularValidation {
 		require(!full.tryAdd(0, new GranularDepositStore.SolidPortion(sand, 0, tooMuchSkeleton, 5.0),
 				SolidVolume.SVQ_PER_CELL), "bulk-capacity overflow accepted");
 		require(full.groupCount() == 0 && full.totalSolidVolumeSvq() == 0L, "capacity rejection left residue");
+
+		GranularDepositStore reordered = new GranularDepositStore(registry, 3, 3);
+		require(reordered.tryAdd(2, new GranularDepositStore.SolidPortion(sand, 0, 1L, 1.0e16),
+				SolidVolume.SVQ_PER_CELL), "high-cell order fixture was rejected");
+		require(reordered.tryAdd(0, new GranularDepositStore.SolidPortion(sand, 0, 1L, 1.0),
+				SolidVolume.SVQ_PER_CELL), "first low-cell order fixture was rejected");
+		require(reordered.tryAdd(1, new GranularDepositStore.SolidPortion(sand, 0, 1L, 1.0),
+				SolidVolume.SVQ_PER_CELL), "second low-cell order fixture was rejected");
+		GranularStateSnapshot reorderedSnapshot = GranularStateSnapshot.capture(3, 1, 1, registry,
+				new GranularParcelStore(registry, 1), reordered);
+		require(reorderedSnapshot.totalMassBits() == Double.doubleToRawLongBits(
+				SignedDyadic.sum(new double[] {1.0e16, 1.0, 1.0}).toDouble()),
+				"granular snapshot mass depended on sparse deposit allocation order");
 	}
 
 	private static void parcelDepositCyclesDoNotDrift(int iterations) {

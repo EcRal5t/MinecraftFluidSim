@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.granular;
 
+import cc.ecisr.mmm.units.SignedDyadic;
+
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.function.IntUnaryOperator;
@@ -203,7 +205,8 @@ public final class GranularInventory {
 		return Math.addExact(parcels.totalSolidVolumeSvq(), deposits.totalSolidVolumeSvq());
 	}
 
-	public double totalMass() { return parcels.totalMass() + deposits.totalMass(); }
+	public SignedDyadic exactMass() { return parcels.exactMass().add(deposits.exactMass()); }
+	public double totalMass() { return exactMass().toDouble(); }
 
 	/** Validates unique, complete composition ownership without changing either inventory store. */
 	public void requireCanClear() {

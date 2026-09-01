@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.granular;
 
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -169,14 +170,15 @@ public final class GranularStateSnapshot {
 			throw new IllegalArgumentException("Solid species ledger mismatch");
 		}
 		this.solidSpeciesTotals = java.util.Collections.unmodifiableMap(canonicalTotals);
-		long computedVolume = 0L; double computedMass = 0.0;
+		long computedVolume = 0L;
 		for (ActiveParcel parcel : this.activeParcels) {
-			computedVolume = Math.addExact(computedVolume, parcel.solidVolumeSvq()); computedMass += parcel.mass();
+			computedVolume = Math.addExact(computedVolume, parcel.solidVolumeSvq());
 		}
 		for (DepositGroup group : this.depositGroups) {
-			computedVolume = Math.addExact(computedVolume, group.solidVolumeSvq()); computedMass += group.mass();
+			computedVolume = Math.addExact(computedVolume, group.solidVolumeSvq());
 		}
-		if (computedVolume != totalSolidVolumeSvq || Double.doubleToRawLongBits(computedMass) != totalMassBits) {
+		if (computedVolume != totalSolidVolumeSvq
+				|| canonicalTotalMassBits(this.activeParcels, this.depositGroups) != totalMassBits) {
 			throw new IllegalArgumentException("Granular snapshot total ledger mismatch");
 		}
 		this.totalSolidVolumeSvq = totalSolidVolumeSvq; this.totalMassBits = totalMassBits;
@@ -239,10 +241,10 @@ public final class GranularStateSnapshot {
 		deposit.sort(DepositGroup.ORDER);
 		TreeMap<String, Long> totals = stableTotals(active, deposit, table);
 		long volume = Math.addExact(parcels.totalSolidVolumeSvq(), deposits.totalSolidVolumeSvq());
-		double mass = parcels.totalMass() + deposits.totalMass();
+		long massBits = Double.doubleToRawLongBits(parcels.exactMass().add(deposits.exactMass()).toDouble());
 		return new GranularStateSnapshot(sizeX, sizeY, sizeZ, registry.fingerprint(),
 				pool == null ? "" : pool.registry().fingerprint(), palette, table, totals, active, deposit,
-				volume, Double.doubleToRawLongBits(mass), externalSource, escapedSink);
+				volume, massBits, externalSource, escapedSink);
 	}
 
 	public void restoreInto(
@@ -289,7 +291,8 @@ public final class GranularStateSnapshot {
 			throw new IllegalArgumentException("Persisted deposit porosity is not registry-derived");
 		}
 		if (Math.addExact(parcels.totalSolidVolumeSvq(), deposits.totalSolidVolumeSvq()) != totalSolidVolumeSvq
-				|| Double.doubleToRawLongBits(parcels.totalMass() + deposits.totalMass()) != totalMassBits) {
+				|| Double.doubleToRawLongBits(parcels.exactMass().add(deposits.exactMass()).toDouble())
+				!= totalMassBits) {
 			throw new IllegalStateException("Restored granular inventory does not match snapshot ledger");
 		}
 	}
@@ -417,4 +420,14 @@ public final class GranularStateSnapshot {
 	public double totalMass() { return Double.longBitsToDouble(totalMassBits); }
 	public GranularAuditLedger externalSource() { return externalSource; }
 	public GranularAuditLedger escapedSink() { return escapedSink; }
+
+	/** Canonical one-rounding total over the complete active/deposit binary64 mass truth. */
+	public static long canonicalTotalMassBits(List<ActiveParcel> active, List<DepositGroup> deposits) {
+		if (active == null || deposits == null) throw new IllegalArgumentException("Granular mass inventory is missing");
+		double[] masses = new double[Math.addExact(active.size(), deposits.size())];
+		int index = 0;
+		for (ActiveParcel parcel : active) masses[index++] = parcel.mass();
+		for (DepositGroup group : deposits) masses[index++] = group.mass();
+		return Double.doubleToRawLongBits(SignedDyadic.sum(masses).toDouble());
+	}
 }
