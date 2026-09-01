@@ -201,6 +201,14 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& belowDeclaredRange.finalTemperatureK() >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K
 				&& Math.abs(belowDeclaredRangeReversed.finalInternalEnergy() - piecewiseInitial) < 1.0E-8,
 				"gas isentrope did not continuously extend and reverse below the declared caloric range");
+		GasThermalModel.Compression effectivelyZero = piecewise.compressAdiabatically(
+				inventory, piecewiseInitial, 1.0, 1.0E15);
+		GasThermalModel.Compression effectivelyZeroReversed = piecewise.compressAdiabatically(
+				inventory, effectivelyZero.finalInternalEnergy(), 1.0E15, 1.0);
+		require(effectivelyZero.finalTemperatureK() > 0.0 && effectivelyZero.finalTemperatureK() < 1.0
+				&& Double.isFinite(effectivelyZero.finalInternalEnergy())
+				&& effectivelyZeroReversed.finalTemperatureK() > 250.0,
+				"finite deep expansion still encountered an arbitrary one-kelvin stop wall");
 		List<GasInventory> children = inventory.partition(new long[] { 1L, 2L, 3L });
 		double[] energies = model.partitionEnergy(inventory, initial, children);
 		double partitioned = 0.0;
@@ -726,6 +734,33 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				* config.cellSize() * config.cellSize() * config.cellSize());
 		require(domain.projection.gasStorageCoefficient[1] < isothermalStorage,
 				"thermal gas pressure row silently used isothermal compliance");
+
+		ThermalRegistry deepColdThermal = new ThermalRegistry(List.of(
+				new ThermalMaterialDefinition("test:thermal/deep_cold_water",
+						ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
+						300.0, 0.0, 0.598, List.of(new ThermalMaterialDefinition.CaloricSegment(
+						ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, 1_500.0, 4_184.0))),
+				new ThermalMaterialDefinition("test:thermal/deep_cold_air",
+						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+						300.0, 0.0, 0.026, List.of(new ThermalMaterialDefinition.CaloricSegment(
+						ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, 1_500.0, 718.0)))));
+		FluidDomain deepCold = new FluidDomain(4, 4, 4, config, 128);
+		deepCold.sealDomainBoundary();
+		deepCold.setVolume(1, 1, 1, 1.0F);
+		for (int marker = 0; marker < deepCold.particleCount(); marker++) {
+			deepCold.setMarkerMaterial(marker, liquids, 0);
+		}
+		deepCold.bindGasRegistry(gas);
+		deepCold.bootstrapGasState("");
+		deepCold.bindThermal(deepColdThermal, liquids, 1.0E-40);
+		FluidStepCandidate deepColdCandidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+				0L, deepCold.captureAuthoritativeState(), List.of(), false, 0));
+		deepCold = deepColdCandidate.claimPreparedCpuDomain();
+		double deepColdTemperature = deepCold.thermalState.gasTemperature(1, deepCold.gasState.network);
+		require(!deepCold.projection.gasPressureUnknown[1]
+				&& deepColdTemperature > 0.0 && deepColdTemperature < 1.0
+				&& deepCold.exactInternalEnergy().equals(deepCold.thermalAudit().expectedInventory()),
+				"deep-cold nonempty gas still paused instead of using its actual near-vacuum pressure boundary");
 	}
 
 	static void operatorVentClearsGasAndEnergyTogether() {
@@ -920,15 +955,22 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& vaporAmount != null && close(vaporAmount.mass(), batchMass.toDouble() * stats.operations())
 				&& domain.gasBoundary().standardVolumeNanos(1) > gasNanosBefore
 				&& domain.gasBoundary().auditClosed()
-				&& domain.thermalAudit().mechanicalWork().compareTo(auditBefore.mechanicalWork()) < 0
+				&& domain.thermalAudit().mechanicalWork().equals(auditBefore.mechanicalWork())
 				&& domain.hasPendingPhaseVolumeWork()
 				&& close(domain.exactVolumeNear(1, 1, 1, 0, 1), oilVolumeBefore)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"sealed boiling did not jointly conserve liquid/gas mass, volume and energy truth: stats=" + stats
-						+ " liquidMass=" + domain.totalMass() + "/" + liquidMassBefore
-						+ " vapor=" + vaporAmount + " nanos=" + domain.gasBoundary().standardVolumeNanos(1)
-						+ "/" + gasNanosBefore + " deltaU="
-						+ domain.exactInternalEnergy().subtract(energyBefore));
+					+ " liquidMass=" + domain.totalMass() + "/" + liquidMassBefore
+					+ " expectedLiquidMass=" + (liquidMassBefore - boiledSolverMass * stats.operations())
+					+ " oilVolume=" + domain.exactVolumeNear(1, 1, 1, 0, 1) + "/" + oilVolumeBefore
+					+ " vapor=" + vaporAmount + " expectedVaporMass=" + (batchMass.toDouble() * stats.operations())
+					+ " nanos=" + domain.gasBoundary().standardVolumeNanos(1)
+					+ "/" + gasNanosBefore + " deltaU="
+					+ domain.exactInternalEnergy().subtract(energyBefore)
+					+ " gasAudit=" + domain.gasBoundary().auditClosed()
+					+ " workCompare=" + domain.thermalAudit().mechanicalWork().compareTo(auditBefore.mechanicalWork())
+					+ " pending=" + domain.hasPendingPhaseVolumeWork()
+					+ " thermalAudit=" + domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
 		ThermalAuditLedger beforeBoilingProjection = domain.thermalAudit();
 		domain.step(false, 0);
 		require(!domain.hasPendingPhaseVolumeWork()
@@ -958,8 +1000,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& domain.gasBoundary().standardVolumeNanos(1)
 						== gasNanosBefore + vaporAfterCondensation.standardVolumeNanos()
 				&& domain.gasBoundary().auditClosed()
-				&& domain.thermalAudit().mechanicalWork().compareTo(
-						auditBeforeCondensation.mechanicalWork()) > 0
+				&& domain.thermalAudit().mechanicalWork().equals(
+						auditBeforeCondensation.mechanicalWork())
 				&& domain.hasPendingPhaseVolumeWork()
 				&& close(domain.exactVolumeNear(1, 1, 1, 0, 1), oilVolumeBefore)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),

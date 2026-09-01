@@ -37,6 +37,7 @@ import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.thermal.ThermalTransport;
 import cc.ecisr.mmm.simulation.FluidRegion;
+import cc.ecisr.mmm.simulation.FullCapabilityTestFixture;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
@@ -74,7 +75,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				region.sizeX(), region.sizeY(), region.sizeZ(), granular.fingerprint(),
 				granular.materials().stream().map(cc.ecisr.mmm.granular.ParticulateMaterial::id).toList(),
 				List.of(new GranularStateSnapshot.ActiveParcel(0.75F, 0.75F, 0.75F,
-						0.125F, -0.25F, 0.0625F, activeSvq, activeMass, sand, 0)),
+						0.125F, -0.25F, 0.0625F, activeSvq, activeMass, sand, 0,
+						2, cc.ecisr.mmm.granular.GranularParcelStore.FLAG_SUPPORTED)),
 				List.of(new GranularStateSnapshot.DepositGroup(depositCell, granular.material(sand).restPorosityQ(),
 						sand, 0, depositSvq, depositMass)), Math.addExact(activeSvq, depositSvq),
 				Double.doubleToRawLongBits(activeMass + depositMass));
@@ -208,6 +210,38 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				.filter(extension -> !ThermalBuoyancyCodec.MANIFEST_EXTENSION.equals(extension.type())).toList();
 		expectIOException(() -> new RegionState(manifestWithExtensions(state.manifest(), withoutBuoyancy),
 				state.sections()).validate(), "thermal region without buoyancy identity was accepted");
+
+		validateExplicitVacuumThermalCheckpoint();
+	}
+
+	/** A sealed, inventory-free cavity is durable vacuum, not a malformed gas thermal node. */
+	private static void validateExplicitVacuumThermalCheckpoint() throws Exception {
+		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
+		FluidRegion vacuumRegion = emptyRegion(new UUID(271L, 272L));
+		vacuumRegion.domain().sealDomainBoundary();
+		FullCapabilityTestFixture.bindEmptyMaterialState(vacuumRegion.domain(), registries.liquids());
+		for (int z = 0; z < vacuumRegion.sizeZ(); z++) for (int y = 0; y < vacuumRegion.sizeY(); y++) {
+			for (int x = 0; x < vacuumRegion.sizeX(); x++) vacuumRegion.domain().setSolid(x, y, z, true);
+		}
+		FullCapabilityTestFixture.bindFull(vacuumRegion.domain(), registries,
+				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		vacuumRegion.domain().setSolidMicroMask(1, 1, 1, 0xAA);
+		vacuumRegion.domain().synchronizeGasTopologyForPersistence();
+		require(vacuumRegion.domain().gasBoundary().nodeCount() == 1
+				&& vacuumRegion.domain().gasBoundary().inventory(1).isEmpty()
+				&& vacuumRegion.domain().exactGasInternalEnergy().equals(SignedDyadic.ZERO),
+				"vacuum checkpoint fixture did not contain one zero-U cavity");
+
+		RegionState vacuumState = RegionCheckpointFixtures.captureThermal(vacuumRegion, 1L);
+		Path root = Files.createTempDirectory(Path.of("."), "vacuum-thermal-region-");
+		RegionGenerationStore store = new RegionGenerationStore(root, registries.chemical(), registries.granular(),
+				registries.thermal(), registries.gas());
+		store.publish(vacuumState);
+		RegionCheckpointRestorer restored = restorer(store.read(vacuumRegion.id()));
+		FlipThermalParticleState thermal = restored.reconstructThermal(
+				registries.thermal(), registries.gas(), registries.chemical());
+		require(thermal.copyGasNodeEnergy().length == 1 && thermal.copyGasNodeEnergy()[0] == 0.0,
+				"durable vacuum checkpoint changed its zero-U gas node");
 	}
 
 	static void validateGranularCodec() throws Exception {
@@ -232,7 +266,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		GranularStateSnapshot fixture = new GranularStateSnapshot(region.sizeX(), region.sizeY(), region.sizeZ(),
 				granular.fingerprint(), granular.materials().stream().map(cc.ecisr.mmm.granular.ParticulateMaterial::id).toList(),
 				List.of(new GranularStateSnapshot.ActiveParcel(0.75F, 0.75F, 0.75F,
-						0.125F, -0.25F, 0.0625F, activeSvq, activeMass, sand, 0)),
+						0.125F, -0.25F, 0.0625F, activeSvq, activeMass, sand, 0,
+						2, cc.ecisr.mmm.granular.GranularParcelStore.FLAG_SUPPORTED)),
 				List.of(new GranularStateSnapshot.DepositGroup(depositCell, granular.material(sand).restPorosityQ(),
 						sand, 0, depositSvq, depositMass)), Math.addExact(activeSvq, depositSvq),
 				Double.doubleToRawLongBits(activeMass + depositMass));
@@ -303,7 +338,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				java.util.Map.of(BuiltinChemicalDefinitions.CL_MINUS, 640L, BuiltinChemicalDefinitions.NA_PLUS, 640L),
 				List.of(new GranularStateSnapshot.ActiveParcel(0.75F, 0.75F, 0.75F, 0.0F, 0.0F, 0.0F,
 						10L, composition.totalMass(BuiltinChemicalDefinitions.REGISTRY),
-						granular.materialHandle(BuiltinGranularDefinitions.PRECIPITATE), 1)), List.of(), 10L,
+						granular.materialHandle(BuiltinGranularDefinitions.PRECIPITATE), 1, 0, (byte) 0)), List.of(), 10L,
 				Double.doubleToRawLongBits(composition.totalMass(BuiltinChemicalDefinitions.REGISTRY)));
 		reactiveRegion.domain().restoreGranularState(reactiveFixture, granular, liquids);
 		var removedReactive = reactiveRegion.domain().tryExtractExactGranular(1, 1, 1, 10L, 0, true);

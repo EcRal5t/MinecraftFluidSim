@@ -77,6 +77,16 @@ public final class GasThermalModel {
 		return stateFunction.stateForInventory(portions(inventory), internalEnergy);
 	}
 
+	/** Validates the complete authoritative inventory/U pair, including explicit vacuum. */
+	public void requireInventoryEnergy(GasInventory inventory, double internalEnergy) {
+		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
+		if (inventory.isEmpty()) {
+			if (internalEnergy != 0.0) throw new IllegalArgumentException("Vacuum cannot carry internal energy");
+			return;
+		}
+		state(inventory, internalEnergy);
+	}
+
 	/** Derives the thermodynamic and acoustic closure used by a compressible pressure solve. */
 	public HydrodynamicState hydrodynamicState(
 			GasInventory inventory, double availableVolume, double internalEnergy
@@ -109,7 +119,15 @@ public final class GasThermalModel {
 			if (internalEnergy != 0.0) throw new IllegalArgumentException("Vacuum cannot carry internal energy");
 			return 0.0;
 		}
-		return hydrodynamicState(inventory, availableVolume, internalEnergy).absolutePressurePa();
+		ThermalStateFunction.State thermal = state(inventory, internalEnergy);
+		double standardVolume = AirNetwork.cubicMeters(inventory.standardVolumeNanos());
+		double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * standardVolume
+				/ GasRegistry.STANDARD_TEMPERATURE_K;
+		double pressure = gasConstant * thermal.temperatureK() / availableVolume;
+		if (!(Double.isFinite(pressure) && pressure >= 0.0)) {
+			throw new IllegalArgumentException("Gas pressure is outside the thermal model");
+		}
+		return pressure;
 	}
 
 	public double density(GasInventory inventory, double availableVolume) {

@@ -27,10 +27,10 @@ import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
-import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterial;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.recovery.CrossDomainRecovery;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 
@@ -70,6 +70,10 @@ public final class ContainerTransferStoreValidation {
 			run("ownership sidecar lock blocks loaded checkpoints", ContainerTransferStoreValidation::testOwnershipCheckpointLock);
 			run("committed private target replaces an in-process base solver",
 					ContainerTransferStoreValidation::testCommittedTargetAdoption);
+			run("rapid full-profile pours stage and restart from reconstructible gas topology",
+					ContainerTransferStoreValidation::testRapidFullProfilePourDurability);
+			run("controller inventory operation matrix remains durable",
+					ControllerInventoryDurabilityValidation::run);
 			System.out.println("ContainerTransferStoreValidation passed " + passed + " scenarios");
 		} finally {
 			try (var paths = Files.walk(root)) {
@@ -776,6 +780,104 @@ public final class ContainerTransferStoreValidation {
 					&& region.domain().totalVolumeExact() == targetVolume
 					&& region.solverGeneration() == solverGenerationBefore + 1L,
 					"recovery did not replace live base with the exact committed target");
+		} finally {
+			try (var paths = Files.walk(root)) {
+				for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+			}
+		}
+	}
+
+	private static void testRapidFullProfilePourDurability() throws Exception {
+		Path root = Files.createTempDirectory("mmm-rapid-pour-durability");
+		try {
+			FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
+			FluidSolverConfig config = new FluidSolverConfig(
+					0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+			FluidDomain domain = new FluidDomain(8, 8, 8, config, 4_096);
+			domain.sealDomainBoundary();
+			FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
+			FullCapabilityTestFixture.bindFull(domain, registries, 293.15,
+					cc.ecisr.mmm.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+			BlockPos origin = BlockPos.ZERO;
+			Set<Long> interior = new java.util.HashSet<>();
+			for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) {
+				for (int x = 0; x < 4; x++) interior.add(new BlockPos(x, y, z).asLong());
+			}
+			BlockPos controller = new BlockPos(-1, 1, 1);
+			FluidRegionFootprint footprint = new FluidRegionFootprint(controller, origin, new BlockPos(3, 3, 3),
+					interior, Set.of(controller.asLong()), Set.of(ChunkPos.pack(0, 0), ChunkPos.pack(-1, 0)));
+			FluidRegion region = new FluidRegion(UUID.randomUUID(), DIMENSION, origin, domain, 4_096L, footprint);
+			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.full(),
+					registries.chemical(), registries.granular(), registries.thermal(), registries.gas());
+			check(persistence.checkpoint(region) == 1L,
+					"full-profile rapid-pour fixture did not publish its empty base");
+
+			for (int pour = 0; pour < 24; pour++) {
+				if (region.domain().hasPendingPhaseVolumeWork()) region.domain().step(false, 0);
+				long baseGeneration = region.checkpointGeneration();
+				FluidDomain candidate = FluidDomain.restoreAuthoritativeState(
+						region.domain().captureAuthoritativeState());
+				FluidDomain.ExactVolumeTransfer inserted = candidate.tryInsertExactVolume(
+						7 - pour % 2, 7, 7 - (pour / 2) % 2, 8.0F, 6, 0, true);
+				check(inserted.transferred() && inserted.volume() == 8.0,
+						"rapid full-profile pour " + pour + " did not insert one bucket");
+				long targetGeneration = baseGeneration + 1L;
+				RegionRepositoryAdapter.StagedCheckpoint staged = persistence.stageCandidateCheckpoint(
+						region, candidate, targetGeneration, region.paused());
+				check(persistence.commitStagedLifecycleCheckpoint(staged) == targetGeneration,
+						"rapid full-profile pour " + pour + " did not publish its target HEAD");
+				persistence.adoptCommittedContainerCheckpoint(region, baseGeneration, targetGeneration);
+				check(region.domain().gasBoundary().auditClosed()
+						&& region.domain().exactInternalEnergy().equals(region.domain().thermalAudit().expectedInventory()),
+						"rapid full-profile pour " + pour + " restored an open gas or thermal audit");
+				region.domain().step(true, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP);
+				if ((pour + 1) % 8 == 0) {
+					persistence.checkpointAndUnload(region);
+					persistence.restore(region);
+					check(region.solverLoaded(), "rapid full-profile restart " + pour + " did not restore the solver");
+				}
+			}
+
+			if (region.domain().hasPendingPhaseVolumeWork()) region.domain().step(false, 0);
+			long clearBase = region.checkpointGeneration();
+			FluidDomain cleared = FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
+			cleared.commitOperatorClear(cleared.planOperatorClear());
+			long clearTarget = clearBase + 1L;
+			RegionRepositoryAdapter.StagedCheckpoint clearStage = persistence.stageLifecycleCheckpoint(
+					region, cleared, clearTarget);
+			check(persistence.commitStagedLifecycleCheckpoint(clearStage) == clearTarget,
+					"full-profile condensed clear did not publish its target HEAD");
+			persistence.adoptCommittedContainerCheckpoint(region, clearBase, clearTarget);
+			check(region.domain().totalVolumeExact() == 0.0 && region.domain().totalGranularSolidVolumeSvq() == 0L,
+					"full-profile condensed clear did not survive committed reconstruction");
+
+			long ventBase = region.checkpointGeneration();
+			FluidDomain vented = FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
+			vented.commitOperatorVentSealedGas(vented.planOperatorVentSealedGas());
+			long ventTarget = ventBase + 1L;
+			RegionRepositoryAdapter.StagedCheckpoint ventStage = persistence.stageLifecycleCheckpoint(
+					region, vented, ventTarget);
+			check(persistence.commitStagedLifecycleCheckpoint(ventStage) == ventTarget,
+					"full-profile gas vent did not publish its target HEAD");
+			persistence.adoptCommittedContainerCheckpoint(region, ventBase, ventTarget);
+			check(region.domain().operatorVentedGasTopology()
+					&& region.domain().gasBoundary().nodeCount() == 0,
+					"full-profile gas vent did not survive committed reconstruction");
+
+			long reinsertBase = region.checkpointGeneration();
+			FluidDomain reinserted = FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
+			check(reinserted.tryInsertExactVolume(7, 7, 7, 8.0F, 6, 0, true).transferred(),
+					"vented full-profile region rejected a subsequent water bucket");
+			long reinsertTarget = reinsertBase + 1L;
+			RegionRepositoryAdapter.StagedCheckpoint reinsertStage = persistence.stageCandidateCheckpoint(
+					region, reinserted, reinsertTarget, region.paused());
+			check(persistence.commitStagedLifecycleCheckpoint(reinsertStage) == reinsertTarget,
+					"post-vent water insert did not publish its target HEAD");
+			persistence.adoptCommittedContainerCheckpoint(region, reinsertBase, reinsertTarget);
+			persistence.checkpointAndUnload(region);
+			persistence.restore(region);
+			check(region.solverLoaded() && region.domain().totalVolumeExact() == 8.0,
+					"post-vent water insert did not survive restart");
 		} finally {
 			try (var paths = Files.walk(root)) {
 				for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);

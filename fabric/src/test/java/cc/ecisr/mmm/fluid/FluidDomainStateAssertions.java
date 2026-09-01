@@ -32,10 +32,17 @@ public final class FluidDomainStateAssertions {
 			case CHEMICAL -> compareChemicals(expected.chemicals(), actual.chemicals(),
 					context + " chemical carrier");
 		}
+		require(Arrays.equals(expected.copyChemicalDirtyCells(), actual.copyChemicalDirtyCells()),
+				context + ": chemical dirty-cell schedule changed");
 		compareGranular(expected.granular(), actual.granular(), context);
+		compareGranularDynamics(expected.granularDynamics(), actual.granularDynamics(), context);
 		compareGas(expected.gas(), actual.gas(), context);
 		compareThermal(expected.thermal(), actual.thermal(), context);
 		comparePendingPhaseVolume(expected.pendingPhaseVolume(), actual.pendingPhaseVolume(), context);
+		requireRawDoublesNullable(expected.copyThermalBoundaryTemperaturesK(),
+				actual.copyThermalBoundaryTemperaturesK(), context + " thermal boundary");
+		compareCondensedPhasePressure(expected.condensedPhasePressure(),
+				actual.condensedPhasePressure(), context);
 	}
 
 	private static void compareParticles(FlipParticleState expected, FlipParticleState actual, String context) {
@@ -120,6 +127,20 @@ public final class FluidDomainStateAssertions {
 		require(expected.escapedSink().equals(actual.escapedSink()), context + ": granular sink changed");
 	}
 
+	private static void compareGranularDynamics(
+			cc.ecisr.mmm.granular.GranularDepositDynamics.State expected,
+			cc.ecisr.mmm.granular.GranularDepositDynamics.State actual,
+			String context
+	) {
+		require((expected == null) == (actual == null), context + ": granular scheduler presence changed");
+		if (expected == null) return;
+		require(expected.logicalStep() == actual.logicalStep(), context + ": granular logical step changed");
+		require(Arrays.equals(expected.stableAge(), actual.stableAge()),
+				context + ": granular stable-age schedule changed");
+		require(Arrays.equals(expected.queuedColumns(), actual.queuedColumns()),
+				context + ": granular dirty queue changed");
+	}
+
 	private static void compareGas(GasStateSnapshot expected, GasStateSnapshot actual, String context) {
 		require((expected == null) == (actual == null), context + ": gas presence changed");
 		if (expected == null) return;
@@ -165,6 +186,18 @@ public final class FluidDomainStateAssertions {
 		require(expected.entries().equals(actual.entries()), context + ": pending phase entries changed");
 	}
 
+	private static void compareCondensedPhasePressure(
+			CondensedPhasePressureField expected, CondensedPhasePressureField actual, String context
+	) {
+		require((expected == null) == (actual == null), context + ": phase-pressure presence changed");
+		if (expected == null) return;
+		require(Float.floatToRawIntBits(expected.pressureReferencePa())
+				== Float.floatToRawIntBits(actual.pressureReferencePa()),
+				context + ": phase-pressure reference changed");
+		requireRawFloats(expected.copyRelativeGaugePressurePa(), actual.copyRelativeGaugePressurePa(),
+				context + " phase-pressure field");
+	}
+
 	private static void requireRawFloats(float[] expected, float[] actual, String context) {
 		require(expected.length == actual.length, context + ": length changed");
 		for (int index = 0; index < expected.length; index++) {
@@ -179,6 +212,11 @@ public final class FluidDomainStateAssertions {
 			require(Double.doubleToRawLongBits(expected[index]) == Double.doubleToRawLongBits(actual[index]),
 					context + " raw bits changed at [" + index + "]: " + expected[index] + " vs " + actual[index]);
 		}
+	}
+
+	private static void requireRawDoublesNullable(double[] expected, double[] actual, String context) {
+		require((expected == null) == (actual == null), context + ": presence changed");
+		if (expected != null) requireRawDoubles(expected, actual, context);
 	}
 
 	private static void require(boolean condition, String message) {

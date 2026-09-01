@@ -104,11 +104,7 @@ final class ThermochemistryStageAssembly {
 					}
 					@Override public void ensureGrid() { domain.ensureGrid(); }
 					@Override public void refreshGasTopology() { domain.gasTopologyCoordinator.refresh(); }
-					@Override public void refreshGasGeometry(
-							boolean topologyChanged, int changedCell, double markerVolumeDelta
-					) {
-						domain.refreshGasPhaseGeometry(topologyChanged, changedCell, markerVolumeDelta);
-					}
+					@Override public void refreshGasGeometry() { domain.refreshGasPhaseGeometry(); }
 					@Override public void refreshCoherentOccupancy() { domain.refreshCoherentOccupancy(); }
 					@Override public void markGridDirty() { domain.gridDirty = true; }
 				});

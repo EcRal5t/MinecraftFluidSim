@@ -21,7 +21,8 @@ public final class ThermalLimits {
 	public static final int MAX_DEVICE_OBJECT_ID_LENGTH = 256;
 	public static final int MAX_SERIALIZED_EXTENSION_BYTES = 16 * 1_048_576;
 	public static final int MAX_THERMAL_ID_LENGTH = 128;
-	public static final double MIN_ABSOLUTE_TEMPERATURE_K = 1.0;
+	/** Smallest normal positive binary64 temperature; this is a numeric domain edge, not a calibration clamp. */
+	public static final double MIN_ABSOLUTE_TEMPERATURE_K = Double.MIN_NORMAL;
 
 	private ThermalLimits() { }
 }

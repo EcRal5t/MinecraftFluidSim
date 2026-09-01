@@ -30,7 +30,7 @@ final class GranularRegionStateCodec {
 	static final int KNOWN_CAPABILITIES = CAP_MATERIALS | CAP_GRANULAR | CAP_CHEMISTRY | CAP_PRECIPITATION;
 	private static final int MANIFEST_MAGIC = 0x47524d35;
 	private static final int SECTION_MAGIC = 0x47525335;
-	private static final int PAYLOAD_VERSION = 2;
+	private static final int PAYLOAD_VERSION = 3;
 
 	record MaterialLedger(
 			int activeCount, long activeSvq, long activeMassBits,
@@ -215,6 +215,7 @@ final class GranularRegionStateCodec {
 				out.writeInt(Float.floatToRawIntBits(parcel.velocityY())); out.writeInt(Float.floatToRawIntBits(parcel.velocityZ()));
 				out.writeLong(parcel.solidVolumeSvq()); out.writeLong(Double.doubleToRawLongBits(parcel.mass()));
 				out.writeInt(parcel.materialPaletteIndex()); out.writeInt(parcel.solidCompositionIndex());
+				out.writeInt(parcel.contactAge()); out.writeByte(parcel.flags());
 			}
 			out.writeInt(data.deposits().size());
 			for (GranularStateSnapshot.DepositGroup group : data.deposits()) {
@@ -238,7 +239,8 @@ final class GranularRegionStateCodec {
 				GranularStateSnapshot.ActiveParcel parcel = new GranularStateSnapshot.ActiveParcel(
 						Float.intBitsToFloat(input.readInt()), Float.intBitsToFloat(input.readInt()), Float.intBitsToFloat(input.readInt()),
 						Float.intBitsToFloat(input.readInt()), Float.intBitsToFloat(input.readInt()), Float.intBitsToFloat(input.readInt()),
-						input.readLong(), Double.longBitsToDouble(input.readLong()), input.readInt(), input.readInt());
+						input.readLong(), Double.longBitsToDouble(input.readLong()), input.readInt(), input.readInt(),
+						input.readInt(), input.readByte());
 				active.add(new ActiveEntry(ordinal, parcel));
 			}
 			int depositCount = bounded(input.readInt(), 0, depositBudget, "section deposit entries");

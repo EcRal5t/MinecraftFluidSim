@@ -17,7 +17,8 @@ import java.util.function.IntToLongFunction;
 public final class GranularStateSnapshot {
 	public record ActiveParcel(
 			float x, float y, float z, float velocityX, float velocityY, float velocityZ,
-			long solidVolumeSvq, double mass, int materialPaletteIndex, int solidCompositionIndex
+			long solidVolumeSvq, double mass, int materialPaletteIndex, int solidCompositionIndex,
+			int contactAge, byte flags
 	) { }
 
 	public record DepositGroup(
@@ -230,7 +231,7 @@ public final class GranularStateSnapshot {
 			GranularParcelStore.Parcel parcel = parcels.parcel(index); StableComposition composition = activeStable[index];
 			active.add(new ActiveParcel(parcel.x(), parcel.y(), parcel.z(), parcel.velocityX(), parcel.velocityY(),
 					parcel.velocityZ(), parcel.solidVolumeSvq(), parcel.mass(), parcel.materialHandle(),
-					composition == null ? 0 : indices.get(composition)));
+					composition == null ? 0 : indices.get(composition), parcel.contactAge(), parcel.flags()));
 		}
 		List<DepositGroup> deposit = new ArrayList<>(drafts.size());
 		for (DepositDraft draft : drafts) deposit.add(new DepositGroup(draft.cell(), draft.porosityQ(), draft.material(),
@@ -270,7 +271,7 @@ public final class GranularStateSnapshot {
 			int composition = restoreComposition(parcel.solidCompositionIndex(), parcel.mass(), pool);
 			parcels.add(new GranularParcelStore.Parcel(parcel.x(), parcel.y(), parcel.z(), parcel.velocityX(),
 					parcel.velocityY(), parcel.velocityZ(), parcel.solidVolumeSvq(), parcel.mass(),
-					parcel.materialPaletteIndex(), composition, 0, (byte) 0));
+					parcel.materialPaletteIndex(), composition, parcel.contactAge(), parcel.flags()));
 		}
 		int previousCell = -1, expectedPorosity = 0;
 		for (DepositGroup group : depositGroups) {
@@ -337,7 +338,9 @@ public final class GranularStateSnapshot {
 					&& parcel.z() >= 0.0F && parcel.z() < sizeZ * 0.5F && Float.isFinite(parcel.velocityX())
 					&& Float.isFinite(parcel.velocityY()) && Float.isFinite(parcel.velocityZ())
 					&& parcel.solidVolumeSvq() > 0L && Double.isFinite(parcel.mass()) && parcel.mass() > 0.0
-					&& validMaterial(parcel.materialPaletteIndex()) && validComposition(parcel.solidCompositionIndex()))) {
+					&& validMaterial(parcel.materialPaletteIndex()) && validComposition(parcel.solidCompositionIndex())
+					&& parcel.contactAge() >= 0
+					&& (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED) == 0)) {
 				throw new IllegalArgumentException("Invalid active granular snapshot parcel");
 			}
 		}

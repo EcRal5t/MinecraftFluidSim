@@ -232,6 +232,17 @@ final class MinecraftRegionTick {
 			snapshots.sendToLevel(level, region);
 			return true;
 		}
+		if (failure instanceof FluidSolverBackend.CandidateEvaluationRejectedException rejected) {
+			String detail = "backend-candidate NUMERICAL_PAUSE：" + rejected.getMessage();
+			region.blockNumerical(detail);
+			MmmMod.LOGGER.error("Region {} rejected an incomplete private backend candidate and is paused",
+					region.id(), rejected);
+			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+					"物质、运动与力学私有候选执行失败；在线区域未修改并已安全暂停："
+							+ rejected.getMessage() + "；请查看 /mmm status"));
+			snapshots.sendToLevel(level, region);
+			return true;
+		}
 		if (failure instanceof FluidDomain.PressureSolveBlockedException blocked) {
 			blockNumerical(level, region, blocked);
 			return true;

@@ -188,7 +188,7 @@ final class PressureProjectionStage {
 		int air = firstFluid ? second : first;
 		int node = gasBoundary.gasNodeOfAirCell(air);
 		if (!gasBoundary.gasNodeHasContinuumState(node)) return;
-		activateCompressibleGasNode(node, dt);
+		if (!activateCompressibleGasNode(node, dt)) return;
 
 		int liquidDirectionX = firstFluid ? directionX : -directionX;
 		int liquidDirectionY = firstFluid ? directionY : -directionY;
@@ -209,23 +209,31 @@ final class PressureProjectionStage {
 				- liquidToGas.firstJumpRhs(openArea) * inverseCellSquared;
 	}
 
-	private void activateCompressibleGasNode(int node, float dt) {
-		if (state.projection.gasPressureUnknown[node]) return;
+	private boolean activateCompressibleGasNode(int node, float dt) {
+		if (state.projection.gasPressureUnknown[node]) return true;
 		double cellSize = state.config.cellSize();
 		double storage = state.config.density() * gasBoundary.gasNodeVolumeCompliance(node)
 				/ (dt * (double) dt * cellSize * cellSize * cellSize);
-		double advectedPressure = gasBoundary.gasPressureOfNode(node) - access.pressureReference();
-		double rhs = storage * advectedPressure;
-		if (!(Double.isFinite(storage) && storage > 0.0 && storage <= Float.MAX_VALUE
-				&& Double.isFinite(rhs) && rhs >= -Float.MAX_VALUE && rhs <= Float.MAX_VALUE)) {
+		if (!(storage > 0.0) || Double.isNaN(storage)) {
 			throw new IllegalStateException("Compressible gas-node pressure row exceeds solver precision");
 		}
+		if (!Double.isFinite(storage) || storage > Float.MAX_VALUE) return false;
+		double advectedPressure = gasBoundary.gasPressureOfNode(node) - access.pressureReference();
+		double rhs = storage * advectedPressure;
+		if (Double.isNaN(rhs)) {
+			throw new IllegalStateException("Compressible gas-node pressure row exceeds solver precision");
+		}
+		// A physically near-vacuum node can have a valid EoS pressure but a compliance too large
+		// for the float PCG row. Keep its actual pressure as this projection's Dirichlet boundary;
+		// the following topology remap still settles the exact isentropic volume work.
+		if (!Double.isFinite(rhs) || rhs < -Float.MAX_VALUE || rhs > Float.MAX_VALUE) return false;
 		state.projection.gasPressureUnknown[node] = true;
 		state.projection.gasUnknownNodes[state.projection.gasUnknownCount] = node;
 		state.projection.gasStorageCoefficient[node] = (float) storage;
 		state.projection.gasMatrixDiagonal[node] = (float) storage;
 		state.projection.gasRhs[node] = (float) rhs;
 		state.projection.gasUnknownCount++;
+		return true;
 	}
 
 	private boolean faceActive(int first, int second, float openArea) {

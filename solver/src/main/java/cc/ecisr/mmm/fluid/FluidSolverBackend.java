@@ -10,4 +10,9 @@ public interface FluidSolverBackend {
 	final class StateRestoreRejectedException extends IllegalStateException {
 		public StateRestoreRejectedException(String message, RuntimeException cause) { super(message, cause); }
 	}
+
+	/** A private candidate failed before a complete successor existed; the live owner remains untouched. */
+	final class CandidateEvaluationRejectedException extends IllegalStateException {
+		public CandidateEvaluationRejectedException(String message, RuntimeException cause) { super(message, cause); }
+	}
 }

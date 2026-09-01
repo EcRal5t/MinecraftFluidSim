@@ -3,12 +3,14 @@ package cc.ecisr.mmm.simulation;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidDomainState;
 import cc.ecisr.mmm.fluid.FluidDomainStateAssertions;
+import cc.ecisr.mmm.fluid.FluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.fluid.FluidThermalStepCandidate;
 import cc.ecisr.mmm.fluid.FluidThermalStepRequest;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.thermal.ThermalLimits;
+import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 
 import java.util.List;
 
@@ -25,7 +27,26 @@ public final class FluidDomainStateParityValidation {
 		phaseOffCandidateRestoresToIdenticalState();
 		phaseOnCandidateRestoresToIdenticalState();
 		thermalOnlyCandidateIsPrivateAndRestorable();
+		privateCandidateAssertionIsTypedAndLeavesLiveStateUntouched();
 		System.out.println("Fluid domain state parity characterization passed.");
+	}
+
+	/** An unforeseen private-candidate assertion must pause one region, never escape as a server crash. */
+	private static void privateCandidateAssertionIsTypedAndLeavesLiveStateUntouched() throws Exception {
+		FullCapabilityTestFixture.Registries registries = ProductionFluidReplayValidation.loadProductionRegistries();
+		FluidDomain live = ProductionFluidReplayValidation.createFullyBoundHalfFilledDomain(registries);
+		FluidDomainState base = live.captureAuthoritativeState();
+		boolean typed = false;
+		try {
+			new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0L, base, List.of(
+					new MovingBodyFluidCoupling.Request(0.5F, 0.5F, 0.5F,
+							Double.MAX_VALUE, 0.0, 0.0, 0.01)), false, 0, false));
+		} catch (FluidSolverBackend.CandidateEvaluationRejectedException expected) {
+			typed = expected.getCause() instanceof IllegalArgumentException;
+		}
+		if (!typed) throw new AssertionError("private candidate assertion escaped the typed rejection boundary");
+		FluidDomainStateAssertions.assertSameState(base, live.captureAuthoritativeState(),
+				"rejected private candidate mutated live state");
 	}
 
 	/** capture -> restore -> capture must reproduce every authoritative field bit-for-bit. */

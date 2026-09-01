@@ -198,7 +198,7 @@ public final class RegionCheckpointRestorer {
 		try {
 			GasThermalModel model = new GasThermalModel(thermalRegistry, gasRegistry);
 			for (int node = 0; node < energy.length; node++) {
-				model.state(gas.nodes().get(node).inventory(), energy[node]);
+				model.requireInventoryEnergy(gas.nodes().get(node).inventory(), energy[node]);
 			}
 		} catch (IllegalArgumentException invalid) {
 			throw new IOException("Invalid region-state gas thermal inventory: " + invalid.getMessage(), invalid);

@@ -39,11 +39,17 @@ final class FluidDomainStateMapper {
 		return new FluidDomainState(
 				domain.config, domain.maximumParticleCount, domain.gasState.sealedDomainBoundary,
 				pure, materials, chemicals, chemistry,
+				domain.chemicalParcels == null ? null : domain.chemicalParcels.dirtyCells(),
 				domain.granularState == null ? null : domain.granularState.registry,
-				granular, domain.precipitationEnabled(), domain.gasState.network.registry(), gas,
+				granular, domain.granularDepositDynamics == null ? null
+						: domain.granularDepositDynamics.captureState(),
+				domain.precipitationEnabled(), domain.gasState.network.registry(), gas,
 				domain.thermalState == null ? null : domain.thermalState.registry(), thermal,
 				domain.thermalState == null ? 0 : domain.thermalState.maximumTransportSubsteps(),
-				domain.thermalState == null ? null : domain.exportPendingPhaseVolumeState());
+				domain.thermalState == null ? null : domain.exportPendingPhaseVolumeState(),
+				domain.thermalBoundaryTemperatureK,
+				domain.thermalState == null ? null : new CondensedPhasePressureField(
+						domain.pressureReference, domain.projection.pressure));
 	}
 
 	static FluidDomainState.Layout layout(FluidDomain domain) {
@@ -70,10 +76,14 @@ final class FluidDomainStateMapper {
 		switch (state.carrierKind()) {
 			case PURE -> domain.restoreParticleState(state.particles());
 			case MATERIAL -> domain.restoreMaterialParticleState(state.materials());
-			case CHEMICAL -> domain.restoreChemicalParticleState(state.chemicals(), state.chemicalRegistry());
+			case CHEMICAL -> {
+				domain.restoreChemicalParticleState(state.chemicals(), state.chemicalRegistry());
+				domain.chemicalParcels.restoreDirtyCells(state.copyChemicalDirtyCells());
+			}
 		}
 		if (state.granular() != null) {
 			domain.restoreGranularState(state.granular(), state.granularRegistry(), domain.materialRegistry());
+			domain.granularDepositDynamics.restoreState(state.granularDynamics());
 		}
 		if (state.gas() == null) domain.bindGasRegistry(state.gasRegistry());
 		else domain.restoreGasState(state.gas(), state.gasRegistry());
@@ -81,6 +91,12 @@ final class FluidDomainStateMapper {
 			domain.restoreThermalParticleState(state.thermal(), state.thermalRegistry(),
 					state.maximumThermalTransportSubsteps());
 			domain.restorePendingPhaseVolumeState(state.pendingPhaseVolume());
+			double[] thermalBoundary = state.copyThermalBoundaryTemperaturesK();
+			if (thermalBoundary != null) domain.replaceThermalBoundaryTemperatures(thermalBoundary);
+			CondensedPhasePressureField phasePressure = state.condensedPhasePressure();
+			domain.pressureReference = phasePressure.pressureReferencePa();
+			System.arraycopy(phasePressure.copyRelativeGaugePressurePa(), 0,
+					domain.projection.pressure, 0, domain.cellCount);
 		}
 		if (state.precipitationEnabled()) domain.setPrecipitationEnabled(true);
 		return domain;

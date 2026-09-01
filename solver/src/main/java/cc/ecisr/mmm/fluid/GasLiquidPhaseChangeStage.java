@@ -93,11 +93,8 @@ final class GasLiquidPhaseChangeStage {
 								phase, thermalCell, volatileSpecies, liquidTemperature,
 								saturation.pressureImbalancePa(), remainingBudget);
 						if (plan == null) continue;
-						boolean topologyChanged = plan.removal().carrierTopologyChanged();
-						double volumeDelta = topologyChanged ? 0.0
-								: support.markerVolumeDelta(plan.removal().allocations());
 						commitBoil(cell, node, plan, thermalCell);
-						support.refreshGasGeometry(topologyChanged, cell, volumeDelta);
+						support.refreshGasGeometry();
 						operations = Math.addExact(operations, Math.toIntExact(plan.batches()));
 						boiled++;
 						break;
@@ -106,12 +103,8 @@ final class GasLiquidPhaseChangeStage {
 								cell, node, liquidHandle, transition, phase,
 								thermalCell, gas.carrierId(), saturation.pressureImbalancePa(), remainingBudget);
 						if (plan == null) continue;
-						boolean topologyChanged = plan.target() < 0;
-						double volumeDelta = topologyChanged ? 0.0
-								: (double) plan.targetVolume()
-										- support.state().particles().volume(plan.target());
 						commitCondense(cell, node, liquidHandle, plan, thermalCell);
-						support.refreshGasGeometry(topologyChanged, cell, volumeDelta);
+						support.refreshGasGeometry();
 						operations = Math.addExact(operations, Math.toIntExact(plan.batches()));
 						condensed++;
 						break;

@@ -121,46 +121,30 @@ final class GasTopologyCoordinator {
 				: scanner.scan(domain.geometry.solid, domain.markerGrid.markerCount,
 						domain.markerGrid.exactCellMarkerVolume, domain.geometry.cutCells,
 						domain.pressureGranularCoupling, domain.gasState.sealedDomainBoundary);
-		commit(plan(result));
+		commit(plan(result, false));
 	}
 
-	/** Preserves node membership while updating continuous cavity volume and its adiabatic work candidate. */
-	void refreshAvailableVolume() {
-		if (domain.gasState.cellNodeId == null || domain.gasState.cellLineageNodeId == null
-				|| domain.gasState.previousSealedNodeCount != domain.gasState.network.nodeCount()) {
-			throw new IllegalStateException("Stable gas topology is unavailable");
-		}
-		double[] availableVolumes = scanner.measureSealedAvailableVolumes(
-				domain.geometry.solid, domain.markerGrid.markerCount, domain.markerGrid.exactCellMarkerVolume,
-				domain.geometry.cutCells, domain.pressureGranularCoupling,
-				domain.gasState.cellNodeId, domain.gasState.cellLineageNodeId,
-				domain.gasState.previousSealedNodeCount, domain.gasState.sealedDomainBoundary);
-		ArrayList<GasInventory> inventories = new ArrayList<>(domain.gasState.previousSealedNodeCount);
-		double[] mixedEnergy = new double[domain.gasState.previousSealedNodeCount];
-		double[] inheritedAvailable = new double[domain.gasState.previousSealedNodeCount];
-		for (int node = 1; node <= domain.gasState.previousSealedNodeCount; node++) {
-			inventories.add(domain.gasState.network.inventory(node));
-			mixedEnergy[node - 1] = domain.thermalState.gasNodeEnergy(node, domain.gasState.network);
-			inheritedAvailable[node - 1] = domain.gasState.network.availableVolume(node);
-		}
-		GasEnergyStore.GasRemapPlan thermalPlan = domain.thermalState.planGasRemap(
-				domain.gasState.network, inventories, availableVolumes, mixedEnergy, inheritedAvailable, 0.0, 0.0);
-		AirNetwork.RemapPlan gasPlan = domain.gasState.network.planRemapNodes(
-				availableVolumes, inventories, GasInventory.EMPTY, GasInventory.EMPTY, domain.gasState.network.edges());
-		domain.thermalState.requireCanCommitGasRemap(thermalPlan);
-		domain.gasState.network.requireCanCommitRemap(gasPlan);
-		domain.thermalState.commitGasRemap(thermalPlan);
-		domain.gasState.network.commitRemapNodes(gasPlan);
+	/** Remaps phase-edited membership while leaving its pending {@code -p dV} for the next projection. */
+	void refreshDeferringPhaseVolumeWork() {
+		AirCavityScanner.Result result = domain.gasState.sealedDomainBoundary && domain.gasState.cellLineageNodeId != null
+				? scanner.scanRetainingClosedLineages(domain.geometry.solid, domain.markerGrid.markerCount,
+						domain.markerGrid.exactCellMarkerVolume, domain.geometry.cutCells,
+						domain.pressureGranularCoupling, domain.gasState.cellLineageNodeId,
+						domain.gasState.previousSealedNodeCount)
+				: scanner.scan(domain.geometry.solid, domain.markerGrid.markerCount,
+						domain.markerGrid.exactCellMarkerVolume, domain.geometry.cutCells,
+						domain.pressureGranularCoupling, domain.gasState.sealedDomainBoundary);
+		commit(plan(result, true));
 	}
 
 	/** Plans one topology candidate against the current carrier geometry without committing it. */
 	GasTopologyPlan planFromFreshScan() {
 		return plan(scanner.scan(domain.geometry.solid, new int[domain.cellCount], new double[domain.cellCount],
-				domain.geometry.cutCells, null, domain.gasState.sealedDomainBoundary));
+				domain.geometry.cutCells, null, domain.gasState.sealedDomainBoundary), false);
 	}
 
 	/** Builds the complete gas/energy topology candidate before any owner is mutated. */
-	GasTopologyPlan plan(AirCavityScanner.Result result) {
+	GasTopologyPlan plan(AirCavityScanner.Result result, boolean deferPhaseVolumeWork) {
 		int sealed = result.sealedNodeCount();
 		boolean initialBootstrap = domain.gasState.cellNodeId == null;
 		if (domain.gasState.sealedDomainBoundary && !initialBootstrap
@@ -324,6 +308,11 @@ final class GasTopologyCoordinator {
 		if (domain.gasState.sealedDomainBoundary && !initialBootstrap
 				&& (!sourceDelta.isEmpty() || !sinkDelta.isEmpty())) {
 			throw new GasTopologyBlockedException("Closed gas topology attempted an external source or sink");
+		}
+		if (thermalGas && deferPhaseVolumeWork) {
+			// The phase commit already recorded the exact cell dV. Preserve its post-transfer node U
+			// across this topology-only remap; the next real pressure projection owns the sole p dV.
+			System.arraycopy(availableVolumes, 0, inheritedAvailable, 0, availableVolumes.length);
 		}
 		GasEnergyStore.GasRemapPlan thermalPlan = !thermalGas ? null : domain.thermalState.planGasRemap(
 				domain.gasState.network, inventories, availableVolumes, mixedEnergy, inheritedAvailable, sourceEnergy, sinkEnergy);

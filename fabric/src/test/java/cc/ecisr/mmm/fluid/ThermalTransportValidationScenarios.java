@@ -379,13 +379,17 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(domain.replaceThermalBoundaryTemperatures(boundaries)
 				&& !domain.replaceThermalBoundaryTemperatures(boundaries),
 				"production thermal boundary field did not detect an actual world edit exactly once");
-		ThermalTransport.Stats transport = domain.stepThermalOnly(1.0);
-		double expectedOneCellFlux = 0.598 * (10_000_000.0 - 293.15);
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+				0L, domain.captureAuthoritativeState(), List.of(), false, 0));
+		ThermalTransport.Stats transport = candidate.stats().thermalAxis().transport();
+		domain = candidate.claimPreparedCpuDomain();
+		double expectedOneCellFlux = 0.598 * (10_000_000.0 - 293.15) * config.timeStep();
 		require(transport.reservoirExchange().compareTo(SignedDyadic.ZERO) > 0
 				&& Math.abs(transport.reservoirExchange().toDouble() - expectedOneCellFlux) < 1.0E-6
 				&& domain.thermalTemperatureInCell(0, 1, 1) > 293.15
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
-				"production fixed boundary did not reproduce and audit its finite-volume SI flux");
+				"production fixed boundary did not cross the frozen backend input and audit its finite-volume SI flux");
 	}
 
 	static void fixedBoundaryAuditsCaloricContinuation() {

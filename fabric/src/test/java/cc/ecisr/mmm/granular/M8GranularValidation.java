@@ -2,9 +2,13 @@ package cc.ecisr.mmm.granular;
 
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
+import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomainState;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.fluid.FluidStepCandidate;
+import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.simulation.FullCapabilityTestFixture;
 
 import java.io.StringReader;
@@ -842,13 +846,20 @@ public final class M8GranularValidation {
 				"active granular inventory incorrectly allowed hydrostatic sleep");
 		long exactSvq = Math.multiplyExact(2L, SolidVolume.SVQ_PER_BV);
 		double exactMass = 2.0 * bucket.totalMass();
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		FluidDomainState handoffState = domain.captureAuthoritativeState();
+		long generation = 0L;
 		long previous = granularMotionSignature(domain.exportGranularState());
 		int unchangedSteps = 0;
 		int emptyAt = -1;
 		boolean moved = false, locallyHeld = false;
 		for (int step = 0; step < steps; step++) {
 			try {
-				domain.step();
+				FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+						generation, handoffState, List.of(), false, 0));
+				handoffState = candidate.state();
+				domain = FluidDomain.restoreAuthoritativeState(handoffState);
+				generation++;
 			} catch (RuntimeException failure) {
 				GranularStateSnapshot failed = domain.exportGranularState();
 				throw new AssertionError("whole-bucket congestion failed at logical step " + step
@@ -864,8 +875,7 @@ public final class M8GranularValidation {
 			if (!state.activeParcels().isEmpty() && signature == previous) unchangedSteps++;
 			else unchangedSteps = 0;
 			moved |= signature != previous;
-			locallyHeld |= domain.lastGranularCapacityHeld() > 0
-					&& domain.lastGranularCapacityHeld() < state.activeParcels().size();
+			locallyHeld |= !state.activeParcels().isEmpty() && !state.depositGroups().isEmpty();
 			require(unchangedSteps < 6,
 					"whole-bucket granular inventory froze globally while active parcels remained: step=" + step
 							+ ", active=" + state.activeParcels().size() + ", deposits="
@@ -884,6 +894,8 @@ public final class M8GranularValidation {
 				"two-bucket loose pour left too much active inventory after ten seconds");
 		if (!settled.activeParcels().isEmpty()) require(!domain.granularReadyForHydrostaticSleep(),
 				"unfinished granular settlement incorrectly allowed hydrostatic sleep");
+		else require(domain.granularReadyForHydrostaticSleep() && domain.granularSleepingColumnCount() > 0,
+				"settled granular inventory never reached sleep across production backend handoffs");
 		long floorActive = settled.activeParcels().stream().filter(parcel -> parcel.y() < 0.2F).count();
 		long movingActive = settled.activeParcels().stream().filter(parcel ->
 				parcel.velocityX() * parcel.velocityX() + parcel.velocityY() * parcel.velocityY()
@@ -938,6 +950,18 @@ public final class M8GranularValidation {
 				"single-bucket pour left active display parcels after ten seconds");
 		require(!settled.depositGroups().isEmpty() && domain.granularReadyForHydrostaticSleep(),
 				"completed single-bucket deposit did not reach granular sleep readiness");
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		FluidDomainState sleepingHandoff = domain.captureAuthoritativeState();
+		for (int generation = 0; generation < 3; generation++) {
+			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+					generation, sleepingHandoff, List.of(), false, 0));
+			require(candidate.stats().granularTransition().processedColumns() == 0,
+					"backend reconstruction re-dirtied an already sleeping deposit");
+			sleepingHandoff = candidate.state();
+			domain = FluidDomain.restoreAuthoritativeState(sleepingHandoff);
+			require(domain.granularReadyForHydrostaticSleep(),
+					"backend handoff discarded granular sleep progress");
+		}
 		long bulkSvq = 0L;
 		for (GranularStateSnapshot.DepositGroup group : settled.depositGroups()) {
 			bulkSvq = Math.addExact(bulkSvq,

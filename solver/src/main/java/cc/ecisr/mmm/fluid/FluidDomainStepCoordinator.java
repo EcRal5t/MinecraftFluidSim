@@ -164,23 +164,13 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		}
 	}
 
-	void refreshGasPhaseGeometry(
-			boolean carrierTopologyChanged, int changedCell, double markerVolumeDelta
-	) {
-		if (carrierTopologyChanged) {
-			rebuildGasPhaseGeometryFromParticles();
-			gasTopologyCoordinator.refresh();
-			return;
-		}
-		if (changedCell < 0 || changedCell >= cellCount || !Double.isFinite(markerVolumeDelta)) {
-			throw new IllegalArgumentException("Stable gas phase volume edit is invalid");
-		}
-		double updatedVolume = markerGrid.exactCellMarkerVolume[changedCell] + markerVolumeDelta;
-		if (!(Double.isFinite(updatedVolume) && updatedVolume >= 0.0)) {
-			throw new IllegalStateException("Stable gas phase edit produced invalid liquid volume");
-		}
-		markerGrid.exactCellMarkerVolume[changedCell] = updatedVolume;
-		gasTopologyCoordinator.refreshAvailableVolume();
+	void refreshGasPhaseGeometry() {
+		// A surviving marker ordinal does not prove stable gas membership: condensation can fill a
+		// retained partial-cell cavity, and either direction can cross the gas-centred interface
+		// threshold. Rebuild from carrier truth before jointly remapping gas inventory and U so the
+		// next checkpoint can be reconstructed from its persisted markers alone.
+		rebuildGasPhaseGeometryFromParticles();
+		gasTopologyCoordinator.refreshDeferringPhaseVolumeWork();
 	}
 
 	/** Runs the non-motion logical axis while a region is hydrostatically asleep. */

@@ -14,7 +14,7 @@
 
 - solid volume 使用整数 SVQ；每种材料质量以 kg 独立保存。
 - reactive solid composition/species 与机械材料身份分开保存。
-- active parcel、deposit group 和 coherent condensed phase 是不同载体，不互相替代。
+- active parcel、deposit group 和 coherent condensed phase 是不同载体，不互相替代；active parcel 的连续支撑接触年龄与支撑标志是沉积状态机的权威侧列。
 - deposit 保存 cell、材料、SVQ、质量、组成、porosity 和孔隙水相关状态。
 - external source、escaped sink、boundary impulse 与反应审计独立闭合。
 
@@ -24,7 +24,7 @@
 
 - `1 BV` 是一个 Minecraft 方块体积；生产子格边长为 `0.5 m`，所以每格为 `0.125 BV`。
 - solid volume 以 `SVQ` 整数记账；SVQ 与 BV 的换算常量在存储、网络和容器中一致，禁止先转 `double` 再结算。
-- active parcel 使用结构分离数组保存位置、速度、材料 ordinal、SVQ、逐材料 kg 质量、组成 handle、内能和确定性身份。数组 ordinal 是同代 side column 的共同键。
+- active parcel 使用结构分离数组保存位置、速度、材料 ordinal、SVQ、逐材料 kg 质量、组成 handle、连续支撑接触年龄、支撑标志、内能和确定性身份。数组 ordinal 是同代 side column 的共同键。
 - deposit 以 cell 为定位键，cell 内是有硬上限的规范化 group 列表；相同机械身份、组成和孔隙率的 group 才能合并。
 - coherent condensed group 属于相变层，具有自己的 cell、SVQ、质量、组成和内能；它不占 active parcel 或 deposit 的容量。
 
@@ -67,7 +67,7 @@ Re = rho_f * d * |u_f - u_p| / mu
 
 projection 消费的 phase volume/work 和 granular occupancy delta 都具有 generation 身份；重试不能再次消费，checkpoint 也不能只保存其中一半。
 
-backend/checkpoint handoff 恢复后的容量验证必须重新使用运行时 `GranularCouplingFields` 的同一 positioned-parcel exact attribution：active parcel 按其连续位置的最多八格权重分摊，deposit 与 coherent fixed occupancy 走各自的 cell-local 归属。不得在恢复门把整份 active parcel 临时塞进 floor cell；否则一个运行时合法 generation 会被另一套投影误判为过容量。恢复门只验证统一 solid occupancy 与几何容量，不能把 liquid marker 的短时聚集改写成 solid 库存。
+backend/checkpoint handoff 必须逐列保存 active parcel 的接触年龄与支撑标志；它们决定尚未完成的 active→deposit 状态转换，不能在每次候选交接时清零。恢复后的容量验证必须重新使用运行时 `GranularCouplingFields` 的同一 positioned-parcel exact attribution：active parcel 按其连续位置的最多八格权重分摊，deposit 与 coherent fixed occupancy 走各自的 cell-local 归属。不得在恢复门把整份 active parcel 临时塞进 floor cell；否则一个运行时合法 generation 会被另一套投影误判为过容量。恢复门只验证统一 solid occupancy 与几何容量，不能把 liquid marker 的短时聚集改写成 solid 库存。
 
 ### Deposit 松弛与局部唤醒
 
@@ -76,6 +76,8 @@ backend/checkpoint handoff 恢复后的容量验证必须重新使用运行时 `
 - 单次形态转移有严格 SVQ 上限，直到局部坡度不超过材料安息角或预算耗尽；预算耗尽保留 dirty 状态到后续 step，不丢库存。
 - 液流的 bed shear 以 Shields 判据与材料阈值比较；越阈值时按 registry 侵蚀率把 exact SVQ 唤醒为 active parcel。
 - 无扰动列连续 20 个 logical step 后休眠。几何变化、parcel 碰撞、压力/液流、相变或反应只标脏受影响邻域。
+
+dirty queue、安静年龄和邻居轮转步不是库存，不能用于恢复 SVQ/kg/组成；但它们决定有界局部工作是否完成，必须随每次 immutable backend handoff 交给私有候选，否则每 tick 重建会让沉积列永远无法休眠。region HEAD 冷恢复不信任这些调度值，而是从 committed deposit 重新标脏并完成一次安全重检。
 
 这里的 deposit 是低成本地貌松弛，不声称求解连续颗粒应力、力链或弹塑性。若 fixture 显示安息角、排水或侵蚀误差越过产品停止门，应先量化失败机制，再评审更重模型。
 

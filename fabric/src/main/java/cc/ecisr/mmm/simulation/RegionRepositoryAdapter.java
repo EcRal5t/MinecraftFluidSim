@@ -223,7 +223,7 @@ final class RegionRepositoryAdapter {
 		return new StagedCheckpoint(prepared, prepared.manifestChecksum());
 	}
 
-	/** Stages a private lifecycle result without resynthesizing gas topology from world geometry. */
+	/** Stages a private lifecycle result from its own complete carrier geometry. */
 	StagedCheckpoint stageLifecycleCheckpoint(
 			FluidRegion region, FluidDomain candidateDomain, long targetGeneration
 	) throws IOException {
@@ -241,7 +241,7 @@ final class RegionRepositoryAdapter {
 		if (ownershipLock != null) throw new IOException("Unresolved world ownership state blocks candidate staging: " + ownershipLock);
 		FluidRegion candidate = region.lifecycleCandidate(candidateDomain, operatorPaused);
 		RegionGenerationStore.PreparedGeneration prepared = files.prepare(
-				captureForFeatureGate(candidate, targetGeneration, false), (point, path) -> { });
+				captureForFeatureGate(candidate, targetGeneration, true), (point, path) -> { });
 		return new StagedCheckpoint(prepared, prepared.manifestChecksum());
 	}
 
@@ -525,6 +525,13 @@ final class RegionRepositoryAdapter {
 					restorer.reconstructFiniteThermalDevices(thermalRegistry), thermalRegistry, generation);
 			region.domain().restorePendingPhaseVolumeState(restorer.reconstructPendingPhaseVolume());
 			enablePrecipitationIfConfigured(region);
+			// Pressure is deliberately not checkpoint truth. A running thermal region that was
+			// hydrostatically asleep must rebuild one real mechanical projection before the
+			// thermal-only axis consumes local pressure for condensed equilibrium.
+			if (!region.lifecycle().operatorPaused()
+					&& region.lifecycle().state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP) {
+				region.wakeForActivity();
+			}
 		} catch (IOException | RuntimeException failure) {
 			if (region.solverLoaded() && region.checkpointGeneration() == generation) {
 				region.releaseSolverAfterCheckpoint(generation);

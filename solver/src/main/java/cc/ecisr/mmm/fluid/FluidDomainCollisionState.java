@@ -134,6 +134,11 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		}
 		chemicalParcels = restored;
 		chemicalParcels.restoreAuditLedgers(state.externalSource(), state.escapedSink());
+		// A cold checkpoint restore has no trusted scheduler cursor. Re-evaluate every occupied
+		// cell once; an in-memory backend handoff immediately replaces this with its exact dirty set.
+		for (int marker = 0; marker < particles.count(); marker++) {
+			chemicalParcels.markDirtyCell(particleCellIndex(marker));
+		}
 		chemicalPreviousCells = new int[maximumParticleCount];
 		chemicalMovingMarkers = new int[maximumParticleCount];
 	}

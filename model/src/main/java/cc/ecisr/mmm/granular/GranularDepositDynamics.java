@@ -22,6 +22,29 @@ public final class GranularDepositDynamics {
 	public record Stats(int settledParcels, int relaxedMoves, int wokenParcels,
 	                    int processedColumns, int dirtyColumns) { }
 
+	/** Ephemeral deterministic scheduler state carried between private backend candidates, never inventory. */
+	public record State(long logicalStep, int[] stableAge, int[] queuedColumns) {
+		public State {
+			if (logicalStep < 0L || stableAge == null || queuedColumns == null) {
+				throw new IllegalArgumentException("Granular scheduler state is invalid");
+			}
+			stableAge = stableAge.clone(); queuedColumns = queuedColumns.clone();
+			for (int age : stableAge) if (age < 0 || age > SLEEP_LOGICAL_STEPS) {
+				throw new IllegalArgumentException("Granular scheduler stable age is invalid");
+			}
+			boolean[] seen = new boolean[stableAge.length];
+			for (int column : queuedColumns) {
+				if (column < 0 || column >= stableAge.length || seen[column]) {
+					throw new IllegalArgumentException("Granular scheduler queue is invalid");
+				}
+				seen[column] = true;
+			}
+		}
+
+		@Override public int[] stableAge() { return stableAge.clone(); }
+		@Override public int[] queuedColumns() { return queuedColumns.clone(); }
+	}
+
 	public interface Environment {
 		long geometricOpenSvq(int cell);
 		boolean horizontalPathOpen(int fromCell, int directionX, int directionZ);
@@ -82,6 +105,27 @@ public final class GranularDepositDynamics {
 	}
 
 	public int dirtyColumnCount() { return queueSize; }
+
+	public State captureState() {
+		int[] queue = new int[queueSize];
+		for (int index = 0; index < queueSize; index++) {
+			queue[index] = dirtyQueue[(queueHead + index) % columnCount];
+		}
+		return new State(logicalStep, stableAge, queue);
+	}
+
+	public void restoreState(State state) {
+		if (state == null || state.stableAge().length != columnCount) {
+			throw new IllegalArgumentException("Granular scheduler state dimensions changed");
+		}
+		int[] ages = state.stableAge(); int[] queue = state.queuedColumns();
+		java.util.Arrays.fill(dirtyQueue, 0); java.util.Arrays.fill(queued, false);
+		System.arraycopy(ages, 0, stableAge, 0, columnCount);
+		for (int index = 0; index < queue.length; index++) {
+			dirtyQueue[index] = queue[index]; queued[queue[index]] = true;
+		}
+		queueHead = 0; queueSize = queue.length; logicalStep = state.logicalStep();
+	}
 
 	/** Explicit diagnostic; normal logical steps do not scan sleeping deposit columns. */
 	public int sleepingColumnCount() {

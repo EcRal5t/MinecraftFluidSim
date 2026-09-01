@@ -443,6 +443,19 @@ public final class ChemicalParcelStore {
 		return result;
 	}
 
+	/** Replaces only the bounded reaction scheduler cursor; parcel inventory and audits are untouched. */
+	public void restoreDirtyCells(int[] cells) {
+		if (cells == null) throw new IllegalArgumentException("Chemical dirty-cell state is missing");
+		Arrays.fill(dirtyCellWords, 0L);
+		int previous = -1;
+		for (int cell : cells) {
+			if (cell <= previous || cell < 0 || cell >>> 6 >= dirtyCellWords.length) {
+				throw new IllegalArgumentException("Chemical dirty-cell state is not canonical");
+			}
+			markDirtyCell(cell); previous = cell;
+		}
+	}
+
 	/** Full plan/validate/commit logical step. A failure leaves all parcel records and dirty bits unchanged. */
 	public ReactionStats reactDirtyCells(
 			int sizeX, int sizeY, int sizeZ, float cellSize,

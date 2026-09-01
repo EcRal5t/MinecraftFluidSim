@@ -43,7 +43,7 @@ U_h(T) = m * u_ref,h
        + m * integral(T_ref,h .. T) cv,h(theta) dtheta
 ```
 
-caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线性计算，不用迭代近似。声明的首尾温度是数据标定范围而不是库存可表达性的硬墙：内禀候选落在表外时，状态函数沿用最近端点 segment 的 `cv` 连续延拓 `U(T)`；不钳制温度，也不改变权威 `U`。异质 cell 在所有 carrier 合并后的 segment 边界上反演 `sum U_i(T) = U_cell`，因此即使声明温区不重叠仍有唯一 LTE 温度。只有能量低于严格正温下界、数值非有限或热容量非正才拒绝候选。固定温度 reservoir 等外部设定值仍限于 committed registry 的共同标定闭区间，不能借延拓注入任意边界条件。
+caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线性计算，不用迭代近似。声明的首尾温度是数据标定范围而不是库存可表达性的硬墙：内禀候选落在表外时，状态函数沿用最近端点 segment 的 `cv` 连续延拓 `U(T)`；不钳制温度，也不改变权威 `U`。异质 cell 在所有 carrier 合并后的 segment 边界上反演 `sum U_i(T) = U_cell`，因此即使声明温区不重叠仍有唯一 LTE 温度。严格正温数值域下界是 binary64 的最小正常正数，不是 1 K 或其他经验墙；有限过程可连续逼近并在 UI 舍入显示为 `0 K`。只有能量低于该数学域、数值非有限或热容量非正才拒绝候选。固定温度 reservoir 等外部设定值仍限于 committed registry 的共同标定闭区间，不能借延拓注入任意边界条件。
 
 相变平台由上下相在 `T_eq` 的状态函数能隙定义。能量落在两端之间时，派生温度保持 `T_eq`，相分数由 exact phase inventory 决定；相分数本身不是库存列。
 
@@ -60,7 +60,7 @@ caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线�
 
 - 导热使用有限体积 face flux，同一 face 的两侧能量变化严格相反。
 - 流液接触面积来自 PLIC/cut-face；solid、deposit、coherent 和 gas 使用各自实际 occupancy/available volume。
-- 普通世界边界默认绝热。registry 声明的 fixed-temperature 方块和 `thermal_reservoir` 是无限热浴，但只经相邻 face flux 进入 source/sink。
+- 普通世界边界默认绝热。registry 声明的 fixed-temperature 方块和 `thermal_reservoir` 是无限热浴，但只经相邻 face flux 进入 source/sink。主线程解析得到的 face 温度场不是持久库存，却必须作为本次 immutable backend input 冻结并完整交给候选；候选提交后仍由下一次世界采样替换，region HEAD 不以该派生场恢复热库存。
 - 液体热膨胀使用 registry-bound Boussinesq 定义，只向现有 y-face 动量路径提供派生体力，不改变质量或体积真值。
 - 气体孔流同时搬运组分与能量；species 的 host-gas 状态能进入气体温度反演与相变批能量，压缩/膨胀功进入 mechanical work。
 
@@ -116,7 +116,7 @@ gas node 的共同温度由各 component 的质量、species 和 node `U` 反演
 p = P0 * (Vstd / Vavailable) * (T / T0)
 ```
 
-几何改变使用分段常 `cv` 的理想气体等熵闭式积分：逐段满足 `∫Cv(T)/T dT = R ln(V_initial/V_final)`，在各 component caloric 边界间以指数式求解，必要时精确走过多个 segment，并在首尾标定段之外使用同一端点 `cv` 继续解析路径；`Delta U` 记为进入 gas inventory 的 mechanical work。该过程没有迭代容差、温度钳制或跨标定端点拒答；只有结果低于严格正温下界、指数溢出或状态/能量非有限才拒绝候选。孔流搬运源状态焓 `h = u + p*v`；node 合并时能量相加，分裂时所有 child 保持 parent 温度且最后一个 child 接受浮点余数。
+几何改变使用分段常 `cv` 的理想气体等熵闭式积分：逐段满足 `∫Cv(T)/T dT = R ln(V_initial/V_final)`，在各 component caloric 边界间以指数式求解，必要时精确走过多个 segment，并在首尾标定段之外使用同一端点 `cv` 继续解析路径；`Delta U` 记为进入 gas inventory 的 mechanical work。该过程没有迭代容差、温度钳制、1 K 停止墙或跨标定端点拒答；只有结果低于 binary64 严格正温数值域、指数溢出或状态/能量非有限才拒绝候选。孔流搬运源状态焓 `h = u + p*v`；node 合并时能量相加，分裂时所有 child 保持 parent 温度且最后一个 child 接受浮点余数。
 
 空 component inventory 是显式真空而不是缺失数据：其 `U`、绝对压力、密度和任意无传质体积变化功都严格为零。显示温度使用区域插入温度作为约定值；持久化与 remap 必须保留空 inventory/零 `U`，不能以环境状态补齐。
 
@@ -133,9 +133,9 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 - 联合搬运物理 kg、condensed weight、液体 marker、coherent SVQ、材料身份、可选 chemical composition/species 和 `U`。
 - 每条 transition 只在该 lower coherent phase 或目标 upper liquid 实际存在时查询压力并规划；纯汞等无关 carrier 不能被拿去查询冰/水曲线。同格其他 liquid/coherent carrier 原样保留并作为 LTE heat bath 参与候选温度，不能被拒绝、改材料或并入目标组成。
 - 体积变化与机械功写入 pending phase-work，由下一次 pressure projection exactly-once 消费。
-- 固液规划从最近一次真实 projection 的 cell gauge pressure 加环境压力得到绝对压力，再取 `T_eq(p)`。曲线使用 registry-bound、按压力严格递增的分段线性点，只在端点闭区间内插值；常温曲线也必须显式给出两个端点。固液曲线不必覆盖标准压力，因此可以表达只有高压区有效的相平衡；液气曲线必须覆盖标准压力，以定义其气体标准体积和潜焓参考态。任何曲线都禁止外推或钳制，有相库存的 cell 越界时整个 thermal candidate 安全暂停，不能静默当作无相变。
+- 固液规划从最近一次真实 projection 的 cell gauge pressure 加环境压力得到绝对压力，再取 `T_eq(p)`。hydrostatic thermal-only 私有候选冻结并传递该 projection，但它不是库存列、不进入 checkpoint、也不能反向恢复物质量；冷恢复先执行一次 motion 重建 projection。曲线使用 registry-bound、按压力严格递增的分段线性点，只在端点闭区间内插值；常温曲线也必须显式给出两个端点。固液曲线不必覆盖标准压力，因此可以表达只有高压区有效的相平衡；液气曲线必须覆盖标准压力，以定义其气体标准体积和潜焓参考态。任何曲线都禁止外推或钳制；有限但位于端点外的压力表示这条 transition 在该 cell 不适用，本步原样保留相库存并继续其他 thermal 工作。只有非有限压力才拒绝整个候选。
 
-内置冰/水 transition 每批为 `0.001 kg`，两侧分别为 `146 SVQ` 与 `134 SVQ`。其 `611.657 Pa–2 MPa` 平衡曲线取自 [IAPWS R14-08(2011) Ice Ih 熔化压力关系](https://iapws.org/documents/release/MeltSub)的反演采样，从普通三相点起并包含 1 atm 采样点，在当前分段上相对原关系的最大温度插值误差低于 `4e-5 K`；曲线外拒绝候选。规划器在共享 phase-operation 预算内寻找 exact batch lattice 上离 `T_eq(p)` 最近的可表示状态；候选必须严格缩小温差，跨过平台时只在跨越后的格点更近时提交，随后保持稳定，不允许每步冻融往返。由 batch 大小造成的剩余温差是明确量化误差；库存、容量或操作预算先到达时停止。
+内置冰/水 transition 每批为 `0.001 kg`，两侧分别为 `146 SVQ` 与 `134 SVQ`。其 `611.657 Pa–2 MPa` 平衡曲线取自 [IAPWS R14-08(2011) Ice Ih 熔化压力关系](https://iapws.org/documents/release/MeltSub)的反演采样，从普通三相点起并包含 1 atm 采样点，在当前分段上相对原关系的最大温度插值误差低于 `4e-5 K`；曲线外不执行这条 transition。规划器在共享 phase-operation 预算内寻找 exact batch lattice 上离 `T_eq(p)` 最近的可表示状态；候选必须严格缩小温差，跨过平台时只在跨越后的格点更近时提交，随后保持稳定，不允许每步冻融往返。由 batch 大小造成的剩余温差是明确量化误差；库存、容量或操作预算先到达时停止。
 
 ### 气液
 
@@ -161,7 +161,7 @@ p_partial = p_absolute * Vstd,vapor / Vstd,total
 
 每个 logical step 的固液与气液共享最多 4096 次 phase operation；按 0.05 s step 和 1 g batch，理论数值上限为 `81.92 kg/s`。这是防止无界工作量的预算，不是现实相界动力学。真实速率由传入的有限热通量、库存、容量与饱和条件限制；若量化 fixture 需要界面动力学，应新增有适用域的数据模型，不能把 tick 倍率塞入潜热。
 
-气液候选先用当前 marker geometry 同步 gas topology，再规划 inventory/energy。同一 liquid thermal material 的候选状态函数可把 cell 内剩余 marker 聚合为一份 extensive inventory；实际删除、截断、species 与 residual 搬运仍保留逐 marker exact plan。只截断或扩充既有 marker 时，carrier ordinal 和 air-cell membership 不变：热学只刷新被编辑 cell，气体以实际 float marker 体积差更新该 cell 的 exact marker sum，再沿既有 membership 重新建立 interface lineage、汇总 available volume 并完整规划绝热体积功，不为每个 phase cell 重扫全部 marker 或重建力学平滑场。marker 新增/删除时则重建 cell-marker ordinal 并完整重扫 topology。力学 P2G、pressure footprint/PLIC、表面张力和速度外推统一在 logical step 末重建一次，capture 前也从完整 geometry 重扫。这样任何可发布 logical state 都不会出现 marker 已变而 gas node 仍属于上一拓扑的半代次，也不会在一次相变扫描中重复构造不参与候选的力学派生场。
+气液候选先用当前 marker geometry 同步 gas topology，再规划 inventory/energy。同一 liquid thermal material 的候选状态函数可把 cell 内剩余 marker 聚合为一份 extensive inventory；实际删除、截断、species 与 residual 搬运仍保留逐 marker exact plan。每次真实气液 commit 后都从 carrier truth 重建 cell-marker ordinal 并完整重扫 gas topology：marker ordinal 存活并不能证明 air membership 未变，partial cell 可能被填满或越过 interface 判据。该重扫只联合搬运 gas inventory/U 与 lineage，不消费相变引起的体积功；实际 `ΔV` 继续由 pending phase-work 保存，并只在下一次真实 pressure projection exactly-once 结算。力学 P2G、pressure footprint/PLIC、表面张力和速度外推统一在 logical step 末重建一次，capture 前也从完整 geometry 重扫。这样任何可发布 logical state 都不会出现 marker 已变而 gas node 仍属于上一拓扑的半代次，也不会因容量快路提前结算一次、projection 再重复结算一次体积功。
 
 ## 反应热
 

@@ -67,10 +67,16 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
 		FluidDomain unsupportedPressure = new FluidDomain(2, 2, 2, config, 128);
 		unsupportedPressure.setVolume(0, 0, 0, 0.5F);
+		unsupportedPressure.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
+		unsupportedPressure.bootstrapGasState("");
 		unsupportedPressure.bindThermal(highPressureRegistry,
 				new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)), 273.15);
-		expectFailure(() -> unsupportedPressure.stepInertPhaseChangeOnly(16),
-				"solid/liquid phase silently ignored pressure outside its declared curve");
+		double unsupportedEnergy = unsupportedPressure.totalInternalEnergy();
+		FluidDomain.ThermalPhaseStats unsupported = unsupportedPressure.stepInertPhaseChangeOnly(16);
+		require(unsupported.operations() == 0 && unsupported.signedBatches() == 0L
+				&& Double.doubleToRawLongBits(unsupportedPressure.totalInternalEnergy())
+				== Double.doubleToRawLongBits(unsupportedEnergy),
+				"an inapplicable solid/liquid curve changed inventory or energy");
 
 		ThermalMaterialDefinition mercury = new ThermalMaterialDefinition("mmm:thermal/mercury",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.MERCURY.id(),
@@ -189,6 +195,17 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
 		ThermalRegistry cellRegistry = new ThermalRegistry(
 				List.of(lower, upper), List.of(), List.of(cellTransition), "", "");
+		FluidDomain pressureHandoff = new FluidDomain(2, 2, 2, config, 128);
+		pressureHandoff.setVolume(0, 0, 0, 1.0F);
+		pressureHandoff.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
+		pressureHandoff.bootstrapGasState("");
+		pressureHandoff.bindThermal(cellRegistry, liquids, 295.0);
+		pressureHandoff.pressureReference = 250_000.0F;
+		FluidDomain pressureRestore = FluidDomain.restoreAuthoritativeState(
+				pressureHandoff.captureAuthoritativeState());
+		require(pressureRestore.stepInertPhaseChangeOnly(16).operations() == 0,
+				"thermal-only handoff replaced an out-of-curve real pressure projection with standard pressure");
+
 		FluidDomain phaseDomain = new FluidDomain(2, 2, 2, config, 128);
 		phaseDomain.setVolume(0, 0, 0, 1.0F);
 		phaseDomain.bindThermal(cellRegistry, liquids, 295.0);

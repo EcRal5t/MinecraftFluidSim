@@ -57,14 +57,12 @@ final class CondensedPhaseChangeStage {
 				if (!targetLiquidPresent && coherentGroup < 0) continue;
 				double absolutePressure = AirNetwork.REFERENCE_PRESSURE + support.pressureReference()
 						+ support.state().projection().pressure[cell];
-				if (!(Double.isFinite(absolutePressure)
-						&& absolutePressure >= transition.minimumPressurePa()
-						&& absolutePressure <= transition.maximumPressurePa())) {
-					throw new FluidDomain.ThermalPhaseBlockedException(
-							"Condensed phase pressure " + absolutePressure + " Pa is outside " + transition.id()
-									+ " curve " + transition.minimumPressurePa() + ".."
-									+ transition.maximumPressurePa() + " Pa");
-				}
+				if (!Double.isFinite(absolutePressure)) throw new FluidDomain.ThermalPhaseBlockedException(
+						"Condensed phase pressure is non-finite");
+				// A bounded equilibrium curve declares where this transition is modeled. Outside it the
+				// transition is inapplicable; do not extrapolate it or block unrelated mechanical/thermal work.
+				if (absolutePressure < transition.minimumPressurePa()
+						|| absolutePressure > transition.maximumPressurePa()) continue;
 				double temperature = thermal.phaseScanTemperatureInCell(cell);
 				double equilibrium = transition.equilibriumTemperatureK(absolutePressure);
 				if (temperature == equilibrium

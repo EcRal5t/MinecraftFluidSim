@@ -193,6 +193,7 @@ public final class M7ChemicalTransportValidation {
 			residualBits[marker] = domain.chemicalParcels().record(marker).massResidualKilogramsBits();
 		}
 		double massBefore = domain.totalMass();
+		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		FluidDomain.StepStats stats = domain.step();
 		long[] totals = domain.chemicalParcels().speciesTotals(domain.particleCount());
 		check(totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H_PLUS)] == 0L, "same-cell reaction left H+");
@@ -213,6 +214,9 @@ public final class M7ChemicalTransportValidation {
 		int indicated = 0;
 		for (int marker = 0; marker < domain.particleCount(); marker++) if (domain.chemicalParcels().indicator(marker)) indicated++;
 		check(indicated == 1, "reaction redistributed the indicator bit");
+		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		check(domain.step().chemistryDirtyCells() == 0,
+				"clean chemical backend handoff re-evaluated every occupied cell");
 	}
 
 	private static void validateReactionKeepsTinyParcels() {
