@@ -108,7 +108,7 @@ public final class ContainerTransferStoreValidation {
 				prepared.actor(), before, after, 0x7711L, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(committed);
 		check(store.read(transaction).equals(committed), "committed thermal WAL did not round-trip");
-		ThermalContents.EnergySplit creativeSplit = contents.splitEnergy(500_000_000L,
+			ThermalContents.EnergySplit creativeSplit = contents.splitHomogeneousEnergy(500_000_000L,
 				ContainerFluidLedger.NANOS_PER_BLOCK);
 		double creativeEnergy = contents.internalEnergy() - creativeSplit.remainingEnergy();
 		ContainerTransferJournal creative = ContainerTransferJournal.thermalFluid(

@@ -522,6 +522,13 @@ S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Bri
 * 既有 chemical container round-trip 表征已替换为 production registries、0.5 m cell、HCl/NaOH 对半、40 个完整 logical step 后抽取 8 BV 的场景；它要求下一次 thermal capture 成功、external sink 等于物品能量，并明确证明该场景的 exact carrier/item representation residual 非零且只出现在 roundoff。play disconnect listener 改为可选查找 runtime：正常在线事件仍清理 console viewer/session，shutdown 已先移除 runtime 时不再制造第二个停止异常。
 * JDK 26.0.2 / Java 25 target 下，`chemistry,thermal,containers,protocol,cut-cell` 五个最近 CPU selector、loader-neutral `runModuleValidation` 与扫描 441 个生产源的 architecture gate 全部通过；改动 Java 的 unused-import 审计和 `git diff --check` 通过，architecture baseline 也按当前 441 个生产源回填。该回归现可由自动 capture、item/sink 与 exact roundoff 共同观察，不需要再次进游戏验证。
 
+### S21 材料桶热库存复审
+
+* 复审上一提交后确认材料桶和化学桶已经把 registry-bound 总内能 `U` 写入 `ThermalContents`，并用 underlying hash 绑定精确体积、逐材料质量和完整化学组成；温度从这些真值反演，不应增加独立平均温度字段。热区域还会拒绝缺失、损坏或 registry 不符的热 component，因此完整舀取再倒出不会按环境温度补值。
+* 复审同时发现部分倾倒仍把 `U` 按总纳体积比例拆分。这个关系只对同质且质量随体积同比的库存成立；多材料密度/热容不同，或 chemical split 因 species quantum 产生实际组成差异时，会让两侧温度改变。新增 loader-neutral `LiquidContainerThermodynamics`：从源桶完整库存与 `U` 反演共同温度，再以实际选中材料 kg/species 计算搬运 `U`，item 余量使用减法承接浮点余数；纯水才保留同质体积分拆。材料 insertion 在修改 solver 前冻结完整 selected/remaining settlement，并在提交后 raw 校验同一计划；化学路径复用其已规划的 exact split。没有 region/WAL roundoff owner 的部分水桶工作台合并现在拒绝带热 component 的输入，不再静默剥掉 `U`。
+* 既有 `containers` 常态表征替换为异质材料与 chemical species 两类反例：相同 50% 总体积按旧算法得到 `11000 EU`，实际选中质量/热容要求 `15500 EU`；新路径的 selected/remaining 都反演回源桶 `320 K`，raw `U` 仍由减法闭合，异质库存的体积拆分被拒绝。其余不作为桶内热力学库存保存的量也已明确：marker 空间分布、压力和温度分布在桶内平衡化；流体动量/动能由玩家容器操作作为外部机械边界吸收，当前不会随 item 往返。
+* JDK 26.0.2 / Java 25 target 下，最近 `containers,thermal` 联合门、loader-neutral `runModuleValidation` 与扫描 442 个生产源的架构门通过；材料/部分桶的玩家与发射器入口仍只经受管 transaction，材料桶本身没有原版放置行为。部分水桶工作台合并的生产匹配器显式拒绝 `ThermalContents`，避免配方在没有 region/WAL roundoff owner 时静默丢失 `U`。
+
 ---
 
 revision 列由该切片的下一次提交补记，避免提交引用自身哈希。S10 复审期间曾以 tree-filter 重写未推送历史规范化行尾（CRLF→LF，仓库约定 LF、仅 .bat 为 CRLF）；S10a–S10复审 四行的 revision 列由本次提交按重写后哈希校正，S09e 及更早的哈希不受影响。

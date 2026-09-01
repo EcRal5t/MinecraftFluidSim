@@ -23,16 +23,16 @@
 | 模块 | 文件 | 行数 |
 |---|---:|---:|
 | `api/src/main/java` | 11 | 264 |
-| `model/src/main/java` | 128 | 17506 |
+| `model/src/main/java` | 129 | 17764 |
 | `solver/src/main/java` | 83 | 15865 |
-| `application/src/main/java` | 24 | 1848 |
+| `application/src/main/java` | 24 | 1849 |
 | `core/src/main/java` | 0 | 0 |
-| `fabric/src/main/java` | 158 | 25804 |
+| `fabric/src/main/java` | 158 | 25811 |
 | `fabric/src/client/java` | 14 | 1590 |
 | `gpu-probe-kernel/src/main/java` | 18 | 4129 |
 | `gpu-probe/src/main/java` | 5 | 734 |
 
-共 441 个生产 Java 源；硬门超限类为 0。
+共 442 个生产 Java 源；硬门超限类为 0。
 
 ## 依赖与所有权门
 

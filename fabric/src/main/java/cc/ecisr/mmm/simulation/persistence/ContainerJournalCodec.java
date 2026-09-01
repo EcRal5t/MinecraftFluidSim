@@ -420,7 +420,8 @@ long total = Math.max(pureVolume(journal.beforeItem()), materialVolume(journal.b
 if (total <= 0L) throw new IOException("Unchanged thermal source item has no liquid volume");
 cc.ecisr.mmm.transfer.ThermalContents source = cc.ecisr.mmm.transfer.ThermalContents.decode(
 journal.beforeItem().thermalContents());
-cc.ecisr.mmm.transfer.ThermalContents.EnergySplit split = source.splitEnergy(journal.volumeNanos(), total);
+cc.ecisr.mmm.transfer.ThermalContents.EnergySplit split = source.splitHomogeneousEnergy(
+		journal.volumeNanos(), total);
 moved = source.internalEnergy() - split.remainingEnergy();
 } else {
 moved = journal.operation() == ContainerTransferJournal.Operation.INSERT ? before - after : after - before;

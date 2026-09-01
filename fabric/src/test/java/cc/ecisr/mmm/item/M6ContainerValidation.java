@@ -1,6 +1,8 @@
 package cc.ecisr.mmm.item;
 
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
+import cc.ecisr.mmm.chemistry.ChemicalLimits;
+import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
@@ -15,7 +17,12 @@ import cc.ecisr.mmm.transfer.ContainerFluidLedger;
 import cc.ecisr.mmm.transfer.CreativeSourceDescriptor;
 import cc.ecisr.mmm.transfer.FluidMixture;
 import cc.ecisr.mmm.transfer.GranularContents;
+import cc.ecisr.mmm.transfer.LiquidContainerThermodynamics;
 import cc.ecisr.mmm.transfer.ThermalContents;
+import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
+import cc.ecisr.mmm.thermal.ThermalRegistry;
+import cc.ecisr.mmm.thermal.ThermalSpeciesOffset;
+import cc.ecisr.mmm.thermal.ThermalStateFunction;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -64,26 +71,83 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testThermalContents() {
-		String fingerprint = "a".repeat(64);
+		ThermalMaterialDefinition heavy = thermalLiquid("test:thermal/heavy", "test:heavy", 1.0);
+		ThermalMaterialDefinition light = thermalLiquid("test:thermal/light", "test:light", 1_000.0);
+		ThermalRegistry registry = new ThermalRegistry(List.of(heavy, light));
+		ThermalStateFunction state = new ThermalStateFunction(registry);
 		FluidMixture mixture = new FluidMixture(List.of(
-				new FluidMixture.Component("mmm:water", 750_000_000L,
-						Double.doubleToRawLongBits(750.0)),
-				new FluidMixture.Component("mmm:oil", 250_000_000L,
-						Double.doubleToRawLongBits(200.0))));
-		ThermalContents contents = ThermalContents.forMixture(fingerprint, mixture, -12_345.25);
+				new FluidMixture.Component("test:heavy", 500_000_000L, 100.0),
+				new FluidMixture.Component("test:light", 500_000_000L, 1.0)));
+		double energy = state.internalEnergyAtTemperature(
+				registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, "test:heavy"),
+				100.0, java.util.Map.of(), 320.0)
+				+ state.internalEnergyAtTemperature(
+				registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, "test:light"),
+				1.0, java.util.Map.of(), 320.0);
+		ThermalContents contents = ThermalContents.forMixture(registry.fingerprint(), mixture, energy);
 		check(ThermalContents.decode(contents.encode()).equals(contents),
 				"thermal contents canonical round-trip changed identity or raw U");
-		ThermalContents.EnergySplit split = contents.splitEnergy(333_333_333L, BUCKET);
-		check(Double.doubleToRawLongBits(split.selectedEnergy() + split.remainingEnergy())
-				== Double.doubleToRawLongBits(contents.internalEnergy()),
-				"thermal contents split did not return the raw U remainder");
+		FluidMixture selected = new FluidMixture(List.of(
+				new FluidMixture.Component("test:heavy", 125_000_000L, 25.0),
+				new FluidMixture.Component("test:light", 375_000_000L, 0.75)));
+		FluidMixture remaining = new FluidMixture(List.of(
+				new FluidMixture.Component("test:heavy", 375_000_000L, 75.0),
+				new FluidMixture.Component("test:light", 125_000_000L, 0.25)));
+		ThermalContents.EnergySplit split = LiquidContainerThermodynamics.split(
+				registry, contents, mixture, selected, remaining);
+		check(split.selectedEnergy() == 15_500.0 && split.remainingEnergy() == 6_500.0,
+				"heterogeneous thermal split ignored selected mass and heat capacity");
+		check(LiquidContainerThermodynamics.temperatureK(registry,
+				ThermalContents.forMixture(registry.fingerprint(), selected, split.selectedEnergy()), selected) == 320.0
+				&& LiquidContainerThermodynamics.temperatureK(registry,
+				ThermalContents.forMixture(registry.fingerprint(), remaining, split.remainingEnergy()), remaining) == 320.0,
+				"bucket split did not preserve the source equilibrium temperature on both inventories");
+		assertChemicalThermalSplit();
+		try {
+			contents.splitHomogeneousEnergy(500_000_000L, BUCKET);
+			throw new AssertionError("Expected heterogeneous volume-only energy split rejection");
+		} catch (IllegalArgumentException expected) { }
+		ThermalContents pure = ThermalContents.forPureWater(registry.fingerprint(), BUCKET, -12_345.25);
+		ThermalContents.EnergySplit pureSplit = pure.splitHomogeneousEnergy(333_333_333L, BUCKET);
+		check(Double.doubleToRawLongBits(pureSplit.selectedEnergy() + pureSplit.remainingEnergy())
+				== Double.doubleToRawLongBits(pure.internalEnergy()),
+				"homogeneous thermal split did not return the raw U remainder");
 		FluidMixture changed = new FluidMixture(List.of(
-				new FluidMixture.Component("mmm:water", 750_000_001L,
-						Double.doubleToRawLongBits(750.0)),
-				new FluidMixture.Component("mmm:oil", 249_999_999L,
-						Double.doubleToRawLongBits(200.0))));
-		check(!ThermalContents.forMixture(fingerprint, changed, contents.internalEnergy()).underlyingHash()
-				.equals(contents.underlyingHash()), "thermal contents hash ignored an exact liquid-ledger change");
+				new FluidMixture.Component("test:heavy", 500_000_001L, 100.0),
+				new FluidMixture.Component("test:light", 499_999_999L, 1.0)));
+		check(!ThermalContents.forMixture(registry.fingerprint(), changed, contents.internalEnergy()).underlyingHash()
+					.equals(contents.underlyingHash()), "thermal contents hash ignored an exact liquid-ledger change");
+	}
+
+	private static void assertChemicalThermalSplit() {
+		ThermalMaterialDefinition solution = thermalLiquid("test:thermal/solution", "mmm:water", 100.0);
+		ThermalRegistry registry = new ThermalRegistry(List.of(solution), List.of(new ThermalSpeciesOffset(
+				"test:thermal_offset/water", BuiltinChemicalDefinitions.H2O, solution.id(), ExactRational.of(12))),
+				List.of(), BuiltinChemicalDefinitions.REGISTRY.fingerprint(), "");
+		ChemicalContents source = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
+				ChemicalLimits.QUANTA_PER_AU, List.of(new ChemicalContents.Group("mmm:water", true, BUCKET,
+				Double.doubleToRawLongBits(18.0), Double.doubleToRawLongBits(0.0), List.of(
+				new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU)))));
+		ChemicalContents.Split inventory = source.split(333_333_333L, BuiltinChemicalDefinitions.REGISTRY);
+		ThermalStateFunction state = new ThermalStateFunction(registry);
+		double sourceEnergy = state.internalEnergyAtTemperature(registry.materialHandle(solution.id()),
+				source.totalMass(), java.util.Map.of(BuiltinChemicalDefinitions.H2O,
+				ChemicalLimits.QUANTA_PER_AU), 320.0);
+		ThermalContents thermal = ThermalContents.forChemical(registry.fingerprint(), source, sourceEnergy);
+		ThermalContents.EnergySplit split = LiquidContainerThermodynamics.split(registry, thermal, source,
+				inventory.inserted(), inventory.remaining());
+		check(Double.doubleToRawLongBits(split.selectedEnergy() + split.remainingEnergy())
+				== Double.doubleToRawLongBits(sourceEnergy), "chemical thermal split did not conserve raw U");
+		check(Math.abs(LiquidContainerThermodynamics.temperatureK(registry,
+				ThermalContents.forChemical(registry.fingerprint(), inventory.inserted(), split.selectedEnergy()),
+				inventory.inserted()) - 320.0) < 1.0E-12,
+				"chemical thermal split ignored selected mass or species reference energy");
+	}
+
+	private static ThermalMaterialDefinition thermalLiquid(String id, String carrierId, double heatCapacity) {
+		return new ThermalMaterialDefinition(id, ThermalMaterialDefinition.CarrierKind.LIQUID, carrierId,
+				300.0, 0.0, 0.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 500.0, heatCapacity)));
 	}
 
 	private static void testGranularContents() {

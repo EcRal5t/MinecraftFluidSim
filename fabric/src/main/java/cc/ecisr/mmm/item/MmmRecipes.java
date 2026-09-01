@@ -72,6 +72,8 @@ public final class MmmRecipes {
 				ItemStack stack = input.getItem(i);
 				if (stack.isEmpty()) continue;
 				if (!(stack.getItem() instanceof PartialWaterBucketItem)) return null;
+				// Crafting has no region/WAL roundoff owner. Never erase authoritative U while merging items.
+				if (stack.get(MmmComponents.THERMAL_CONTENTS) != null) return null;
 				long volume = PartialWaterBucketItem.volume(stack);
 				if (volume <= 0L) return null;
 				if (first < 0L) first = volume;

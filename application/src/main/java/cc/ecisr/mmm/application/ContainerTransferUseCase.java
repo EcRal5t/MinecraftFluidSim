@@ -40,7 +40,8 @@ public final class ContainerTransferUseCase {
 					ThermalContents source = ThermalContents.decode(encoded);
 					source.validateRegistryFingerprint(command.thermalRegistryFingerprint());
 					long totalAmount = liquidAmount(command.sourceItem());
-					ThermalContents.EnergySplit split = source.splitEnergy(command.requestedAmount(), totalAmount);
+					ThermalContents.EnergySplit split = source.splitHomogeneousEnergy(
+							command.requestedAmount(), totalAmount);
 					preparedEnergy = source.internalEnergy() - split.remainingEnergy();
 				} catch (RuntimeException invalidThermal) {
 					return Result.rejected(command,

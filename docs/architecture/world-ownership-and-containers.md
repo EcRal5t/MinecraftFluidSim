@@ -88,7 +88,7 @@ typed actual container 与 creative source 的 controller-region 转移只依赖
 
 目标解析发生在事务准备之前。玩家命中壳的外侧、内部格、区域 UUID 和 dimension 必须唯一；dispenser 朝向只参与最初的目标解析，其 dimension、整数 block coordinates 和 slot 构成持久 actor identity。actor identity 与 journal 位于 core，是不引用 `BlockPos`、`ItemStack` 或 loader 类型的封闭数据；各 actor kind 只能携带自己的完整字段，不能用 null 填充无关字段。同一 region 或同一确切 actor identity 存在 WAL 时不得开始另一笔容器事务。恢复时 actor 离线或 owning chunk 未加载是 `UNAVAILABLE`，保留 WAL 等待；slot/block entity 改变或当前 item 既不等于 before 也不等于 after 是 `CONFLICT`，保留 WAL 并 LOCKED，不能每 tick 猜测或把物品塞到其他手/slot。将来增加外部 Mod actor 时必须给它独立的稳定 provider/type identity 和跨重启可解析状态，不能把运行期 callback 写进 WAL。
 
-insert/extract 返回“实际转移量”，WAL 和 after item 必须使用这个量而非请求量。液体用 nanos，颗粒用 SVQ；两个资源域不能共用一个模糊 `amount`。含热液体还要按同一 exact 体积分拆 coupled `U`，最后一个接收浮点余数。
+insert/extract 返回“实际转移量”，WAL 和 after item 必须使用这个量而非请求量。液体用 nanos，颗粒用 SVQ；两个资源域不能共用一个模糊 `amount`。含热纯水可按同质体积分拆 coupled `U`；材料/化学混合物必须按源桶共同温度和实际选中质量/组分计算 coupled `U`，item 余量以源 `U` 减法结算浮点余数，不能把体积比例冒充热容量比例。
 
 ## 跨持久域 WAL
 

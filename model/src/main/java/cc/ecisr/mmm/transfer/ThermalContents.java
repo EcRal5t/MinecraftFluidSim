@@ -62,12 +62,15 @@ public record ThermalContents(
 		}
 	}
 
-	/** Conservative split for a material transfer; the remainder side is subtraction, not a second rounded product. */
-	public EnergySplit splitEnergy(long selectedNanos, long totalNanos) {
+	/** Conservative homogeneous split; heterogeneous material/chemical inventory requires its state function. */
+	public EnergySplit splitHomogeneousEnergy(long selectedNanos, long totalNanos) {
 		if (selectedNanos <= 0L || totalNanos <= 0L || selectedNanos > totalNanos) {
 			throw new IllegalArgumentException("Thermal contents split volume is invalid");
 		}
 		if (selectedNanos == totalNanos) return new EnergySplit(internalEnergy(), 0.0);
+		if (underlyingKind != UnderlyingKind.PURE_WATER) {
+			throw new IllegalArgumentException("Heterogeneous thermal contents cannot be split by volume alone");
+		}
 		double selected = internalEnergy() * ((double) selectedNanos / totalNanos);
 		double remaining = internalEnergy() - selected;
 		if (!Double.isFinite(selected) || !Double.isFinite(remaining)) {

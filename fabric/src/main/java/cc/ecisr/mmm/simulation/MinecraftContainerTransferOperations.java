@@ -11,6 +11,7 @@ import cc.ecisr.mmm.item.PartialWaterBucketItem;
 import cc.ecisr.mmm.item.MmmItems;
 import cc.ecisr.mmm.item.MmmComponents;
 import cc.ecisr.mmm.item.ContainerItemStacks;
+import cc.ecisr.mmm.transfer.LiquidContainerThermodynamics;
 import cc.ecisr.mmm.transfer.ThermalContents;
 import cc.ecisr.mmm.granular.GranularTransferLedger;
 import cc.ecisr.mmm.granular.SolidVolume;
@@ -41,7 +42,7 @@ final class MinecraftContainerTransferOperations {
 		}
 		long plannedNanos = cellVolumeToNanos(requestedCellVolume);
 		ThermalContents.EnergySplit thermalSplit = thermalContents == null ? null
-				: thermalContents.splitEnergy(plannedNanos, volumeNanos);
+				: thermalContents.splitHomogeneousEnergy(plannedNanos, volumeNanos);
 		Double coupledEnergy = thermalSplit == null ? null
 				: thermalContents.internalEnergy() - thermalSplit.remainingEnergy();
 		FluidDomain.ExactVolumeTransfer inserted = thermalSplit == null
@@ -109,11 +110,11 @@ final class MinecraftContainerTransferOperations {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(mixture),
 					"区域材料 registry 不接受该混合物：" + unknownMaterial.getMessage());
 		}
-		long plannedNanos = 0L;
-		for (int index = 0; index < portions.size(); index++) plannedNanos = Math.addExact(plannedNanos,
-				settledNanos(portions.get(index).volume(), mixture.components().get(index).volumeNanos()));
+		MaterialInsertionSettlement plannedSettlement = settleMaterialInsertion(domain, mixture, portions);
+		long plannedNanos = plannedSettlement.insertedNanos();
 		ThermalContents.EnergySplit thermalSplit = thermalContents == null ? null
-				: thermalContents.splitEnergy(plannedNanos, mixture.totalVolumeNanos());
+				: LiquidContainerThermodynamics.split(world.thermalRegistry(), thermalContents, mixture,
+						plannedSettlement.inserted(), plannedSettlement.remaining());
 		Double coupledEnergy = thermalSplit == null ? null
 				: thermalContents.internalEnergy() - thermalSplit.remainingEnergy();
 		FluidDomain.ExactMixtureTransfer inserted = thermalSplit == null
@@ -124,7 +125,7 @@ final class MinecraftContainerTransferOperations {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(mixture), "空间或 marker 预算不足，未能注入混合物");
 		}
 		MaterialInsertionSettlement settlement = settleMaterialInsertion(domain, mixture, inserted.portions());
-		if (settlement.insertedNanos() != plannedNanos) {
+		if (!settlement.equals(plannedSettlement)) {
 			throw new IllegalStateException("Thermal material settlement changed after planning");
 		}
 		ItemStack after = settlement.remaining() == null
@@ -167,7 +168,8 @@ final class MinecraftContainerTransferOperations {
 			cc.ecisr.mmm.chemistry.ChemicalTransferLedger requested = split.inserted().toLedger(
 					domain.chemicalParcels().registry(), FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
 			ThermalContents.EnergySplit thermalSplit = thermalContents == null ? null
-					: thermalContents.splitEnergy(candidate, contents.totalVolumeNanos());
+					: LiquidContainerThermodynamics.split(world.thermalRegistry(), thermalContents, contents,
+							split.inserted(), split.remaining());
 			Double coupledEnergy = thermalSplit == null ? null
 					: thermalContents.internalEnergy() - thermalSplit.remainingEnergy();
 			FluidDomain.ExactChemicalTransfer inserted = thermalSplit == null
@@ -366,6 +368,7 @@ final class MinecraftContainerTransferOperations {
 		if (insertedPortions.size() != sourceMixture.components().size()) {
 			throw new IllegalStateException("材料注入返回的组分数与请求不一致");
 		}
+		java.util.List<FluidMixture.Component> inserted = new java.util.ArrayList<>();
 		java.util.List<FluidMixture.Component> remaining = new java.util.ArrayList<>();
 		long insertedNanos = 0L;
 		for (int i = 0; i < sourceMixture.components().size(); i++) {
@@ -375,6 +378,7 @@ final class MinecraftContainerTransferOperations {
 			insertedNanos = Math.addExact(insertedNanos, componentNanos);
 			long remainingNanos = source.volumeNanos() - componentNanos;
 			double actualMassKilograms = domain.physicalMassKilograms(actual.mass());
+			inserted.add(new FluidMixture.Component(source.materialId(), componentNanos, actualMassKilograms));
 			double remainingMass = source.mass() - actualMassKilograms;
 			if (remainingNanos == 0L) {
 				if (Double.doubleToRawLongBits(actualMassKilograms) != source.massBits()) {
@@ -387,11 +391,11 @@ final class MinecraftContainerTransferOperations {
 				remaining.add(new FluidMixture.Component(source.materialId(), remainingNanos, remainingMass));
 			}
 		}
-		return new MaterialInsertionSettlement(insertedNanos,
+		return new MaterialInsertionSettlement(insertedNanos, new FluidMixture(inserted),
 				remaining.isEmpty() ? null : new FluidMixture(remaining));
 	}
 
-	record MaterialInsertionSettlement(long insertedNanos, FluidMixture remaining) { }
+	record MaterialInsertionSettlement(long insertedNanos, FluidMixture inserted, FluidMixture remaining) { }
 	enum TransferKind {
 		NONE,
 		POUR,
