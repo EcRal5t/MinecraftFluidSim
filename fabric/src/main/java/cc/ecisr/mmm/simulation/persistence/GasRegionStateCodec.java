@@ -26,9 +26,8 @@ final class GasRegionStateCodec {
 	static final int CAP_CHEMISTRY = 1 << 1;
 	static final int CAP_GAS = 1 << 2;
 	private static final int KNOWN_CAPABILITIES = CAP_MATERIALS | CAP_CHEMISTRY | CAP_GAS;
-	private static final int MANIFEST_MAGIC = 0x47534d34;
-	private static final int SECTION_MAGIC = 0x47535334;
-	private static final int PAYLOAD_VERSION = 3;
+	private static final int MANIFEST_MAGIC = 0x4741534d; // GASM
+	private static final int SECTION_MAGIC = 0x47534543; // GSEC
 	private static final int MAX_DYADIC_BYTES = 16 * 1_024;
 
 	record NodeData(int topologyKey, GasInventory inventory) { }
@@ -48,7 +47,7 @@ final class GasRegionStateCodec {
 	byte[] encodeManifest(ManifestData data) throws IOException {
 		validateManifest(data);
 		return encode(out -> {
-			out.writeInt(MANIFEST_MAGIC); out.writeInt(PAYLOAD_VERSION); out.writeInt(data.capabilities());
+			out.writeInt(MANIFEST_MAGIC); out.writeInt(data.capabilities());
 			out.writeUTF(cc.ecisr.mmm.fluid.air.GasRegistry.UNIT_SYSTEM_ID);
 			out.writeLong(Double.doubleToRawLongBits(cc.ecisr.mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA));
 			out.writeLong(Double.doubleToRawLongBits(cc.ecisr.mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K));
@@ -67,10 +66,7 @@ final class GasRegionStateCodec {
 
 	ManifestData decodeManifest(byte[] payload) throws IOException {
 		try (DataInputStream input = input(payload)) {
-			int magic = input.readInt(), version = input.readInt();
-			if (magic != MANIFEST_MAGIC || version != PAYLOAD_VERSION) {
-				throw new IOException("Unknown gas manifest payload");
-			}
+			if (input.readInt() != MANIFEST_MAGIC) throw new IOException("Unknown gas manifest payload");
 			int capabilities = input.readInt();
 			if (!cc.ecisr.mmm.fluid.air.GasRegistry.UNIT_SYSTEM_ID.equals(input.readUTF())
 					|| input.readLong() != Double.doubleToRawLongBits(cc.ecisr.mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA)
@@ -104,7 +100,7 @@ final class GasRegionStateCodec {
 	byte[] encodeSection(SectionData data) throws IOException {
 		if (data == null) throw new IOException("Gas section data is missing");
 		return encode(out -> {
-			out.writeInt(SECTION_MAGIC); out.writeInt(PAYLOAD_VERSION);
+			out.writeInt(SECTION_MAGIC);
 			int[] membership = data.cellNodeOrdinal(); out.writeInt(membership.length);
 			for (int value : membership) out.writeInt(value);
 		});
@@ -112,9 +108,7 @@ final class GasRegionStateCodec {
 
 	SectionData decodeSection(byte[] payload, int expectedCells, int nodeCount) throws IOException {
 		try (DataInputStream input = input(payload)) {
-			if (input.readInt() != SECTION_MAGIC || input.readInt() != PAYLOAD_VERSION) {
-				throw new IOException("Unknown gas section payload");
-			}
+			if (input.readInt() != SECTION_MAGIC) throw new IOException("Unknown gas section payload");
 			int length = count(input.readInt(), expectedCells, "section cells");
 			if (length != expectedCells) throw new IOException("Gas section membership cardinality mismatch");
 			int[] membership = new int[length];

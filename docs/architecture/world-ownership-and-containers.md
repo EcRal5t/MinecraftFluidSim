@@ -55,7 +55,7 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 破坏性操作只通过 controller console 的服务端预览/确认协议进入，要求与 `/mmm` Brigadier 命令相同的 server command-source 内建管理员权限。预览 token 只存在内存、短时有效、绑定玩家和一次确认；确认重新验证 generation、动作、权限、WAL、availability、solver 与有限设备 identity。四个动作的职责严格分开：
 
 - `EMPTY_CONDENSED` 联合清除 liquid、chemical、active/deposit/coherent condensed truth，把实际物质与凝聚相 `U` 记入 operator escaped/external sink；保留 controller、ownership 和 sealed gas。
-- `VENT_SEALED_GAS` 联合清除 sealed component nanos/kg/species/residual 与实际 gas `U`，分别记入 gas escaped sink 和 thermal external sink；几何气格转成 ambient 连接，ambient 本身不是有限库存。
+- `VENT_SEALED_GAS` 联合清除 sealed component nanos/kg/species/residual 与实际 gas `U`，分别记入 gas escaped sink 和 thermal external sink；闭壳的完整 gas membership、available volume 与 edge 保持不变，提交结果是库存与 `U` 严格为零的密闭真空，不是 ambient 连接。显式 resume 后仍可运行，后续库存只能来自真实容器、相变或拓扑 transfer。
 - `RELEASE_OWNERSHIP` 只在凝聚相、气体和有限设备为空且无 WAL/phase work 后恢复 preimage；玩家已经占据的方块优先，不被覆盖。
 - `REMOVE_EMPTY_REGION` 只在上述库存为空、ownership 已释放且 quarantine 可接纳时发布 `REMOVED` HEAD。随后发送 network tombstone、注销 runtime，并把旧 ACTIVE payload 收敛到 `mmm/quarantine/removed-region/`；UUID 永不复用。
 

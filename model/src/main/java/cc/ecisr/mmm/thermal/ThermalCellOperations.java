@@ -231,10 +231,16 @@ final class ThermalCellOperations {
 			}
 			double absolutePressure = AirNetwork.REFERENCE_PRESSURE
 					+ pressureReferencePa + relativeGaugePressurePa[cell];
-			if (!(Double.isFinite(absolutePressure) && absolutePressure >= 0.0)) {
-				throw new IllegalArgumentException("Phase mechanical-work pressure is invalid");
+			if (!Double.isFinite(absolutePressure)) {
+				throw new IllegalArgumentException("Phase mechanical-work pressure is invalid at cell " + cell
+						+ ": absolute=" + absolutePressure + " Pa, referenceGauge=" + pressureReferencePa
+						+ " Pa, relativeGauge=" + relativeGaugePressurePa[cell] + " Pa");
 			}
-			double cellWork = -absolutePressure * signedCellVolume.toDouble() * cellVolumeM3;
+			// The incompressible projection is a Lagrange multiplier and can represent liquid tension.
+			// Thermodynamic boundary work cannot use negative absolute pressure: without a resolved
+			// cavitation inventory the non-tensile complement is vacuum, exactly 0 Pa.
+			double workPressure = Math.max(0.0, absolutePressure);
+			double cellWork = -workPressure * signedCellVolume.toDouble() * cellVolumeM3;
 			if (!Double.isFinite(cellWork) || !Double.isFinite(target[cell] + cellWork)) {
 				throw new IllegalArgumentException("Phase mechanical work is not representable");
 			}

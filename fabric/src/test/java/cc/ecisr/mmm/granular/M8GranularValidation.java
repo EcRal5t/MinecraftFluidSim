@@ -1,6 +1,8 @@
 package cc.ecisr.mmm.granular;
 
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
+import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
+import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidDomain;
@@ -10,6 +12,7 @@ import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.simulation.FullCapabilityTestFixture;
+import cc.ecisr.mmm.units.SolverUnitScale;
 
 import java.io.StringReader;
 import java.nio.file.Files;
@@ -131,6 +134,51 @@ public final class M8GranularValidation {
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		SolverUnitScale unitScale = SolverUnitScale.forCellSize(config.cellSize());
+		ChemicalMixtureRecord clusteredMixture = ChemicalMixtureRecord.fromStableAmounts(
+				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(
+						BuiltinChemicalDefinitions.NA_PLUS, 10_000_000L,
+						BuiltinChemicalDefinitions.CL_MINUS, 10_000_000L), 0.0);
+		SolidLiquidReaction clusteredRule = new SolidLiquidReaction("test:clustered_precipitation",
+				BuiltinChemicalDefinitions.AQUEOUS, java.util.Map.of(
+						BuiltinChemicalDefinitions.NA_PLUS, 64,
+						BuiltinChemicalDefinitions.CL_MINUS, 64), BuiltinGranularDefinitions.PRECIPITATE,
+				java.util.Map.of(BuiltinChemicalDefinitions.NA_PLUS, 64,
+						BuiltinChemicalDefinitions.CL_MINUS, 64), ExactRational.ZERO,
+				281L, 50L, 4_096L, true);
+		double clusteredMass = clusteredMixture.massKilograms(BuiltinChemicalDefinitions.REGISTRY);
+		GranularPhaseTransferEngine.Plan clusteredPlan = new GranularPhaseTransferEngine(
+				BuiltinChemicalDefinitions.REGISTRY, unitScale).plan(clusteredRule, List.of(
+				new GranularPhaseTransferEngine.LiquidParcel(
+						0, 1.1F, unitScale.solverMass(clusteredMass), clusteredMixture),
+				new GranularPhaseTransferEngine.LiquidParcel(
+						1, 1.1F, unitScale.solverMass(clusteredMass), clusteredMixture)), 0L, 22_761L);
+		long clusteredLiquidDelta = clusteredPlan.markerUpdates().stream().mapToLong(update ->
+				Math.round(Math.scalb(1.1 - update.cellVolume(), 24))).sum();
+		require(clusteredPlan.changed() && clusteredPlan.markerUpdates().stream().allMatch(update -> {
+			float before = 1.1F;
+			long delta = Math.round(Math.scalb((double) before - update.cellVolume(), 24));
+			return delta > 0L && SolidVolume.addCellVolumeSvqExact(before, -delta) == update.cellVolume();
+		}) && clusteredLiquidDelta == clusteredPlan.signedSolidSvq(),
+				"clustered liquid did not choose an exact marker-representable precipitation allocation");
+		ChemicalMixtureRecord oneSodium = ChemicalMixtureRecord.fromStableAmounts(
+				BuiltinChemicalDefinitions.REGISTRY,
+				java.util.Map.of(BuiltinChemicalDefinitions.NA_PLUS, 1L), 0.0);
+		SolidLiquidReaction sparseRule = new SolidLiquidReaction("test:sparse_precipitation",
+				BuiltinChemicalDefinitions.AQUEOUS,
+				java.util.Map.of(BuiltinChemicalDefinitions.NA_PLUS, 1),
+				BuiltinGranularDefinitions.PRECIPITATE,
+				java.util.Map.of(BuiltinChemicalDefinitions.NA_PLUS, 1), ExactRational.ZERO,
+				1L, 1L, 1L, true);
+		double sodiumMass = oneSodium.massKilograms(BuiltinChemicalDefinitions.REGISTRY);
+		GranularPhaseTransferEngine.Plan sparsePlan = new GranularPhaseTransferEngine(
+				BuiltinChemicalDefinitions.REGISTRY, unitScale).plan(sparseRule, List.of(
+				new GranularPhaseTransferEngine.LiquidParcel(
+						0, 0.125F, unitScale.solverMass(sodiumMass), oneSodium),
+				new GranularPhaseTransferEngine.LiquidParcel(
+						1, 0.125F, unitScale.solverMass(sodiumMass), oneSodium)), 0L, 1L);
+		require(!sparsePlan.changed(),
+				"quanta-starved phase-transfer candidate should defer without pausing the valid base");
 		FluidDomain domain = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
 		// Real transported/reseeded marker volumes are arbitrary IEEE-754 dyadics, not necessarily
 		// integer SVQ. Exercise the production bridge with such a tail instead of an aligned full cell.
@@ -545,7 +593,7 @@ public final class M8GranularValidation {
 		GranularMechanics.Environment narrowCarrier = new GranularMechanics.Environment() {
 			@Override public GranularMechanics.FluidSample sample(float x, float y, float z) {
 				return new GranularMechanics.FluidSample(true, -10.0, 0.0, 0.0,
-						1_000.0, 1.002e-3, 1.0, 1.0);
+						1_000.0, 1.002e-3, 1.0, 1.0, 1.0);
 			}
 			@Override public GranularMechanics.FluidImpulseApplication addFluidImpulse(
 					float x, float y, float z, double ix, double iy, double iz) {
@@ -568,7 +616,7 @@ public final class M8GranularValidation {
 			@Override public GranularMechanics.FluidSample sample(float x, float y, float z) {
 				samples[0]++;
 				return new GranularMechanics.FluidSample(true, impulseStarted[0] ? -10.0 : 0.0, 0.0, 0.0,
-						1_000.0, 1.002e-3, 300.0, 1.0);
+						1_000.0, 1.002e-3, 300.0, 1.0, 1.0e30);
 			}
 			@Override public GranularMechanics.FluidImpulseApplication addFluidImpulse(
 					float x, float y, float z, double ix, double iy, double iz) {
@@ -595,6 +643,46 @@ public final class M8GranularValidation {
 		double after = mass * store.parcel(0).velocityX() + reaction[0];
 		require(Math.abs(after - before) <= Math.max(1.0e-12, 8.0 * Math.ulp(before)),
 				"two-way granular drag changed total momentum");
+
+		GranularParcelStore full = new GranularParcelStore(registry, 1);
+		GranularParcelStore shallow = new GranularParcelStore(registry, 1);
+		GranularParcelStore.Parcel initial = new GranularParcelStore.Parcel(
+				0.5F, 0.5F, 0.5F, 1.0F, 0.0F, 0.0F,
+				GranularLimits.MAX_PARCEL_VOLUME_SVQ, mass, handle, 0, 0, (byte) 0);
+		full.add(initial); shallow.add(initial);
+		double[] fullReaction = new double[3], shallowReaction = new double[3];
+		GranularMechanics.stepVelocities(full, registry,
+				constantWater(0.0, 0.0, 0.0, 1.0, fullReaction), 0.0, 1.0 / 60.0);
+		GranularMechanics.stepVelocities(shallow, registry,
+				constantWater(0.0, 0.0, 0.0, 0.125, shallowReaction), 0.0, 1.0 / 60.0);
+		require(shallow.parcel(0).velocityX() > full.parcel(0).velocityX()
+				&& Math.abs(shallowReaction[0]) < Math.abs(fullReaction[0]),
+				"partial immersion applied full-parcel drag to a shallow liquid carrier");
+
+		int parcelCount = 32;
+		double parcelMass = 2.0, carrierMass = 125.0;
+		GranularParcelStore crowded = new GranularParcelStore(registry, parcelCount);
+		for (int parcel = 0; parcel < parcelCount; parcel++) crowded.add(new GranularParcelStore.Parcel(
+				0.5F, 0.5F, 0.5F, 1.0F, 0.0F, 0.0F,
+				GranularLimits.MAX_PARCEL_VOLUME_SVQ, parcelMass, handle, 0, 0, (byte) 0));
+		double[] crowdedReaction = new double[3];
+		double crowdedMomentumBefore = parcelCount * parcelMass;
+		double crowdedEnergyBefore = 0.5 * parcelCount * parcelMass;
+		double carrierMassPerImmersedVolume = carrierMass / (parcelCount
+				* (GranularLimits.MAX_PARCEL_VOLUME_SVQ / (double) SolidVolume.SVQ_PER_BV));
+		GranularMechanics.stepVelocities(crowded, registry,
+				constantWater(0.0, 0.0, 0.0, 1.0,
+						carrierMassPerImmersedVolume, crowdedReaction), 0.0, 1.0 / 20.0);
+		double crowdedMomentumAfter = crowdedReaction[0];
+		double crowdedEnergyAfter = 0.5 * carrierMass
+				* Math.pow(crowdedReaction[0] / carrierMass, 2.0);
+		for (int parcel = 0; parcel < crowded.count(); parcel++) {
+			crowdedMomentumAfter += parcelMass * crowded.parcel(parcel).velocityX();
+			crowdedEnergyAfter += 0.5 * parcelMass * Math.pow(crowded.parcel(parcel).velocityX(), 2.0);
+		}
+		require(Math.abs(crowdedMomentumAfter - crowdedMomentumBefore) <= 1.0e-5
+				&& crowdedEnergyAfter <= crowdedEnergyBefore + 1.0e-7,
+				"many parcels coupled to one finite carrier injected momentum or kinetic energy");
 	}
 
 	private static void couplingOccupancyResumsExactly() {
@@ -1083,10 +1171,24 @@ public final class M8GranularValidation {
 	private static GranularMechanics.Environment constantWater(
 			double velocityX, double velocityY, double velocityZ, double[] reaction
 	) {
+		return constantWater(velocityX, velocityY, velocityZ, 1.0, reaction);
+	}
+
+	private static GranularMechanics.Environment constantWater(
+			double velocityX, double velocityY, double velocityZ, double submergedFraction, double[] reaction
+	) {
+		return constantWater(velocityX, velocityY, velocityZ, submergedFraction, 1.0e30, reaction);
+	}
+
+	private static GranularMechanics.Environment constantWater(
+			double velocityX, double velocityY, double velocityZ, double submergedFraction,
+			double coupledFluidMassPerImmersedVolume, double[] reaction
+	) {
 		return new GranularMechanics.Environment() {
 			@Override public GranularMechanics.FluidSample sample(float x, float y, float z) {
 				return new GranularMechanics.FluidSample(true, velocityX, velocityY, velocityZ,
-						1_000.0, 1.002e-3, 100_000.0, 1.0);
+						1_000.0, 1.002e-3, 100_000.0, submergedFraction,
+						coupledFluidMassPerImmersedVolume);
 			}
 			@Override public GranularMechanics.FluidImpulseApplication addFluidImpulse(
 					float x, float y, float z, double ix, double iy, double iz) {

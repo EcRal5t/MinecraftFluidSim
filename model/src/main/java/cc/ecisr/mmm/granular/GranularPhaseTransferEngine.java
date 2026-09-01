@@ -57,6 +57,19 @@ public final class GranularPhaseTransferEngine {
 		magnitude = magnitude / rule.solidExtentPerBatch() * rule.solidExtentPerBatch();
 		if (magnitude <= 0L) return Plan.none();
 		boolean precipitation = signedExtent > 0L;
+		for (; magnitude > 0L; magnitude -= rule.solidExtentPerBatch()) {
+			Plan candidate = planRepresentableMagnitude(rule, liquid, inventory, magnitude, precipitation, ordinals,
+					massWeights);
+			if (candidate != null) return candidate;
+		}
+		return Plan.none();
+	}
+
+	/** Returns null when this exact reaction batch cannot be represented by the current marker lattice. */
+	private Plan planRepresentableMagnitude(
+			SolidLiquidReaction rule, List<LiquidParcel> liquid, long[] inventory, long magnitude,
+			boolean precipitation, int[] ordinals, float[] massWeights
+	) {
 		long solidSvq = Math.multiplyExact(magnitude / rule.solidExtentPerBatch(), rule.solidVolumeSvqPerBatch());
 
 		TreeMap<Integer, Long> transferred = new TreeMap<>();
@@ -76,10 +89,12 @@ public final class GranularPhaseTransferEngine {
 				distributed[index].put(species, allocation[index]);
 			}
 		}
-		repairEmpty(distributed, ordinals);
-		float[] volumeWeights = new float[liquid.size()];
-		for (int index = 0; index < liquid.size(); index++) volumeWeights[index] = liquid.get(index).cellVolume();
-		long[] volumeDeltas = BinaryVolumeAllocator.allocate(solidSvq, volumeWeights, ordinals);
+		if (!repairEmpty(distributed, ordinals)) return null;
+		for (TreeMap<Integer, Long> marker : distributed) {
+			if (marker.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL) return null;
+		}
+		long[] volumeDeltas = representableVolumeAllocation(solidSvq, liquid, ordinals, precipitation);
+		if (volumeDeltas == null) return null;
 		MarkerUpdate[] updates = new MarkerUpdate[liquid.size()];
 		double oldMass = 0.0, newMass = 0.0;
 		for (int index = 0; index < liquid.size(); index++) {
@@ -106,6 +121,61 @@ public final class GranularPhaseTransferEngine {
 		if (!massClose(newMass, expectedNew)) throw new BlockedException("Liquid/solid phase-transfer mass did not close");
 		return new Plan(precipitation ? magnitude : -magnitude, precipitation ? solidSvq : -solidSvq,
 				precipitation ? solidMass : -solidMass, solid, List.of(updates));
+	}
+
+	/**
+	 * Allocates the exact solid SVQ total on the binary32 lattice already owned by each liquid
+	 * marker. A proportional largest-remainder allocation is the preference, not a commit
+	 * invariant: any leftover is deterministically reassigned before the caller tries a smaller
+	 * whole reaction batch.
+	 */
+	private static long[] representableVolumeAllocation(
+			long total, List<LiquidParcel> liquid, int[] ordinals, boolean precipitation
+	) {
+		float[] weights = new float[liquid.size()];
+		for (int index = 0; index < weights.length; index++) weights[index] = liquid.get(index).cellVolume();
+		long[] preferred = BinaryVolumeAllocator.allocate(total, weights, ordinals);
+		long[] result = new long[liquid.size()];
+		long assigned = 0L;
+		for (int index = 0; index < result.length; index++) {
+			long limit = precipitation ? maximumRemovableSvq(liquid.get(index).cellVolume()) : total;
+			result[index] = representableDeltaAtMost(
+					liquid.get(index).cellVolume(), Math.min(preferred[index], limit), precipitation);
+			assigned = Math.addExact(assigned, result[index]);
+		}
+		long remaining = total - assigned;
+		for (int index = 0; index < result.length && remaining > 0L; index++) {
+			long limit = precipitation ? maximumRemovableSvq(liquid.get(index).cellVolume()) : total;
+			long candidate = representableDeltaAtMost(liquid.get(index).cellVolume(),
+					Math.min(limit, Math.addExact(result[index], remaining)), precipitation);
+			if (candidate <= result[index]) continue;
+			remaining -= candidate - result[index];
+			result[index] = candidate;
+		}
+		return remaining == 0L ? result : null;
+	}
+
+	private static long maximumRemovableSvq(float volume) {
+		long maximum = SolidVolume.cellVolumeSvqAtMost(volume);
+		double scaled = Math.scalb((double) volume, 24);
+		return scaled == Math.rint(scaled) ? Math.max(0L, maximum - 1L) : maximum;
+	}
+
+	/** Largest non-negative integer SVQ delta no greater than requested that lands on a float. */
+	private static long representableDeltaAtMost(float volume, long requested, boolean precipitation) {
+		if (requested <= 0L) return 0L;
+		double exact = (double) volume + Math.scalb(precipitation ? -requested : requested, -24);
+		if (!(Double.isFinite(exact) && exact > 0.0 && exact <= Float.MAX_VALUE)) return 0L;
+		float candidate = (float) exact;
+		if (precipitation && candidate < exact) candidate = Math.nextUp(candidate);
+		if (!precipitation && candidate > exact) candidate = Math.nextDown(candidate);
+		while (candidate != volume) {
+			double scaled = Math.scalb(precipitation
+					? (double) volume - candidate : (double) candidate - volume, 24);
+			if (scaled >= 0.0 && scaled <= requested && scaled == Math.rint(scaled)) return (long) scaled;
+			candidate = precipitation ? Math.nextUp(candidate) : Math.nextDown(candidate);
+		}
+		return 0L;
 	}
 
 	private ChemicalMixtureRecord record(Map<Integer, Long> values, long residualBits) {
@@ -155,7 +225,7 @@ public final class GranularPhaseTransferEngine {
 				: new Dyadic((1 << 23) | fraction, exponentBits - 150);
 	}
 
-	private static void repairEmpty(TreeMap<Integer, Long>[] distributed, int[] ordinals) {
+	private static boolean repairEmpty(TreeMap<Integer, Long>[] distributed, int[] ordinals) {
 		long[] totals = new long[distributed.length]; ArrayList<Integer> empty = new ArrayList<>();
 		PriorityQueue<Integer> donors = new PriorityQueue<>((left, right) -> {
 			int total = Long.compare(totals[right], totals[left]);
@@ -167,7 +237,7 @@ public final class GranularPhaseTransferEngine {
 		}
 		for (int target : empty) {
 			Integer donor = donors.poll();
-			if (donor == null) throw new BlockedException("Phase-transfer result has fewer quanta than markers");
+			if (donor == null) return false;
 			Map.Entry<Integer, Long> largest = distributed[donor].entrySet().stream()
 					.max(ComparatorByAmount.INSTANCE).orElseThrow();
 			if (largest.getValue() == 1L) distributed[donor].remove(largest.getKey());
@@ -175,6 +245,7 @@ public final class GranularPhaseTransferEngine {
 			distributed[target].put(largest.getKey(), 1L); totals[donor]--; totals[target] = 1L;
 			if (totals[donor] > 1L) donors.add(donor);
 		}
+		return true;
 	}
 
 	private static boolean massClose(double left, double right) {

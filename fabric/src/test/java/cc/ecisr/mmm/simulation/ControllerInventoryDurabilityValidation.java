@@ -15,6 +15,7 @@ import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
+import cc.ecisr.mmm.units.SolverUnitScale;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.Identifier;
@@ -204,8 +205,10 @@ final class ControllerInventoryDurabilityValidation {
 				registries.chemical(), amounts, 0.0);
 		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registries.chemical(), amounts,
 				mass - withoutResidual.exactSpeciesMassKilograms(registries.chemical()).toDouble());
+		double bucketVolume = 1.0 / SolverUnitScale.forCellSize(
+				productionConfig().cellSize()).cubicMetersPerNormalizedVolume();
 		return new ChemicalTransferLedger(java.util.List.of(new ChemicalTransferLedger.Group(
-				BuiltinFluidMaterials.WATER.id(), false, 1.0, mass,
+				BuiltinFluidMaterials.WATER.id(), false, bucketVolume, mass,
 				mixture.massResidualKilogramsBits(), mixture.stableAmounts(registries.chemical()))));
 	}
 
@@ -221,6 +224,45 @@ final class ControllerInventoryDurabilityValidation {
 
 	/** Crosses normal player actions with full backend handoff after every accepted transition. */
 	private static void runNormalPlayStateMatrix(FullCapabilityTestFixture.Registries registries) throws Exception {
+		runScenario("reported acid-then-base precipitation", registries, state -> {
+			for (int bucket = 0; bucket < 7; bucket++) { state.insertAcid(); state.steps(true, 2); }
+			for (int bucket = 0; bucket < 7; bucket++) { state.insertBase(); state.steps(true, 2); }
+			state.steps(true, 20);
+		});
+		runScenario("base-then-acid precipitation", registries, state -> {
+			state.insertBase(7); state.insertAcid(7); state.steps(true, 20);
+		});
+		runScenario("rapid acid-then-base precipitation", registries, state -> {
+			state.insertAcid(7); state.insertBase(7); state.steps(true, 20);
+		});
+		runScenario("alternating acid-base precipitation", registries, state -> {
+			for (int bucket = 0; bucket < 6; bucket++) {
+				state.insertAcid(); state.insertBase(); state.step(true);
+			}
+		});
+		runScenario("indicator acid-base precipitation", registries, state -> {
+			state.insertAcid(4); state.indicator(true); state.insertBase(4); state.steps(true, 20);
+		});
+		runScenario("water-diluted acid-base precipitation", registries, state -> {
+			state.insertAcid(4); state.insertWater(); state.insertBase(4); state.steps(true, 20);
+		});
+		runScenario("mercury-coexisting acid-base precipitation", registries, state -> {
+			state.insertAcid(4); state.insertMercury(); state.insertBase(4); state.steps(true, 20);
+		});
+		runScenario("sand-coexisting acid-base precipitation", registries, state -> {
+			state.insertAcid(4); state.insertSand(); state.insertBase(4); state.steps(true, 20);
+		});
+		runScenario("acid-base cold-restore before phase", registries, state -> {
+			state.insertAcid(4); state.insertBase(4); state.roundTrip(); state.steps(true, 20);
+		});
+		runScenario("acid-base precipitation then vent", registries, state -> {
+			state.insertAcid(4); state.insertBase(4); state.steps(true, 12);
+			state.vent(); state.roundTrip(); state.step(true);
+		});
+		runScenario("acid-base clear and reinsert", registries, state -> {
+			state.insertAcid(4); state.insertBase(4); state.steps(true, 12); state.clear();
+			state.vent(); state.insertAcid(2); state.insertBase(2); state.steps(true, 8);
+		});
 		runScenario("reported acid-indicator-acid", registries, state -> {
 			state.insertAcid(); state.indicator(true); state.insertAcid(); state.steps(true, 20);
 		});
@@ -274,6 +316,8 @@ final class ControllerInventoryDurabilityValidation {
 		private final int mercury;
 		private final ChemicalTransferLedger acid;
 		private final double acidEnergy;
+		private final ChemicalTransferLedger base;
+		private final double baseEnergy;
 		private final GranularTransferLedger sand;
 		private FluidDomain domain;
 		private long generation;
@@ -289,6 +333,8 @@ final class ControllerInventoryDurabilityValidation {
 			mercury = registries.liquids().handle(BuiltinFluidMaterials.MERCURY.id());
 			acid = reagentBucket(registries, BuiltinChemicalDefinitions.HCL);
 			acidEnergy = reagentEnergy(registries, acid);
+			base = reagentBucket(registries, BuiltinChemicalDefinitions.NAOH);
+			baseEnergy = reagentEnergy(registries, base);
 			int sandHandle = registries.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 			double mass = registries.granular().material(sandHandle).referenceDensity();
 			sand = new GranularTransferLedger(java.util.List.of(new GranularTransferLedger.Group(
@@ -305,9 +351,19 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 		}
 		void insertAcid() {
+			insertAcid(1);
+		}
+		void insertAcid(int buckets) {
+			for (int bucket = 0; bucket < buckets; bucket++) insertChemical(acid, acidEnergy, "acid");
+		}
+		void insertBase() { insertBase(1); }
+		void insertBase(int buckets) {
+			for (int bucket = 0; bucket < buckets; bucket++) insertChemical(base, baseEnergy, "base");
+		}
+		void insertChemical(ChemicalTransferLedger ledger, double energy, String name) {
 			settle();
-			check(domain.tryInsertExactChemical(7, 7, 7, acid, 6, true, acidEnergy).transferred(),
-					"normal-play acid insertion was rejected");
+			check(domain.tryInsertExactChemical(7, 7, 7, ledger, 6, true, energy).transferred(),
+					"normal-play " + name + " insertion was rejected");
 			roundTrip();
 		}
 		void insertSand() {

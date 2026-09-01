@@ -509,6 +509,10 @@ final class GasLiquidPhaseChangeStage {
 			double takeMass = takeSvq == remainingSvq ? remainingMass
 					: support.state().unitScale().kilograms(particles.mass(marker))
 							* ((double) takeSvq / markerSvq);
+			if (!(Double.isFinite(takeMass) && takeMass > 0.0 && takeMass <= remainingMass)) {
+				throw new PhaseCandidateUnavailableException(
+						"Boiling batch mass cannot be allocated across the selected marker volumes");
+			}
 			double takeSolverMass = support.state().unitScale().solverMass(takeMass);
 			boolean full = takeSvq == markerSvq
 					&& markerSvq == SolidVolume.cellVolumeSvqAtLeast(particles.volume(marker));
@@ -521,10 +525,15 @@ final class GasLiquidPhaseChangeStage {
 				throw new PhaseCandidateUnavailableException(
 						"Boiling batch mass/volume split is not representable");
 			}
-			ChemicalParcelStore.SplitPlan chemicalPlan = chemistry == null ? null
-					: chemistry.planSelectivePhaseTruncate(
-							marker, newVolume, SolidVolume.toCellVolume(takeSvq),
-							full ? 0.0 : newMass, takeSolverMass, volatileSpecies);
+			ChemicalParcelStore.SplitPlan chemicalPlan;
+			try {
+				chemicalPlan = chemistry == null ? null : chemistry.planSelectivePhaseTruncate(
+						marker, newVolume, SolidVolume.toCellVolume(takeSvq),
+						full ? 0.0 : newMass, takeSolverMass, volatileSpecies);
+			} catch (cc.ecisr.mmm.chemistry.ChemicalReactionEngine.BudgetExceededException unavailable) {
+				throw new PhaseCandidateUnavailableException(
+						"Boiling batch is below the chemical carrier resolution", unavailable);
+			}
 			ChemicalMixtureRecord kept = chemicalPlan == null ? null : chemicalPlan.kept();
 			LiquidEnergyColumn.Truncation thermalPlan = support.planThermalTruncate(
 					marker, full ? 0.0 : newMass, kept, cellTemperature);

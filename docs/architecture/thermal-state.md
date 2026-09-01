@@ -182,7 +182,7 @@ species reference offset 是组成携带的能量真值。reaction extent 改变
 7. granular transition、reseed 与局部唤醒；
 8. 审计闭合后，pending phase-work 留给下一 projection。
 
-每一步都先在快照上形成候选。相变产生的体积改变不能回头修改已经完成的 projection，因此作为带 generation 的 pending volume/work 保存，并且只由下一次真实 projection 消费一次。marker 已经携带新的几何体积，pending 不作为第二份目标散度；它只用该 projection 的绝对 cell 压力结算 `-p ΔV`。存在 pending work 时，`empty`、不完整 checkpoint 和绕过 projection 的转移会被拒绝。Minecraft 的同步管理员/玩家/发射器物质转移不会绕过该门：adapter 先以关闭新相变的权威 mechanical candidate 消费旧 lien，确认 pending 清空后才进入物质或容器事务。
+每一步都先在快照上形成候选。相变产生的体积改变不能回头修改已经完成的 projection，因此作为带 generation 的 pending volume/work 保存，并且只由下一次真实 projection 消费一次。marker 已经携带新的几何体积，pending 不作为第二份目标散度；它只用该 projection 的绝对 cell 压力结算 `-p ΔV`。不可压 projection 的拉格朗日压力可以给出有限负绝对张力；在尚无 cavitation 库存模型时，热学边界取其无张力补量 `max(0 Pa, p_absolute)`，即真空做功为零，而不是把负绝对压力当成热力学状态或暂停理由；非有限压力仍拒绝整个候选。存在 pending work 时，`empty`、不完整 checkpoint 和绕过 projection 的转移会被拒绝。Minecraft 的同步管理员/玩家/发射器物质转移不会绕过该门：adapter 先以关闭新相变的权威 mechanical candidate 消费旧 lien，确认 pending 清空后才进入物质或容器事务。
 
 ## 能量审计
 

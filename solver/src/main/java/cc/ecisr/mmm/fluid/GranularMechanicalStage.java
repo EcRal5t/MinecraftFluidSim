@@ -6,6 +6,8 @@ import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.granular.GranularCouplingFields;
 import cc.ecisr.mmm.units.SolverUnitScale;
 
+import java.util.Arrays;
+
 /**
  * The granular mechanical stage inside each substep: parcel velocity advance against the
  * sampled carrier flow, collision capacity preview with local geometric resolution, the
@@ -39,16 +41,19 @@ final class GranularMechanicalStage {
 
 	private final Workspace state;
 	private final Access access;
+	private final double[] immersedSolidVolumeByCell;
 
 	GranularMechanicalStage(Workspace state, Access access) {
 		this.state = state;
 		this.access = access;
+		this.immersedSolidVolumeByCell = new double[state.markerGrid().cellCount];
 	}
 
 	/** Runs the whole granular substep; returns null when the domain carries no granular inventory. */
 	GranularMechanics.StepStats stepVelocities(float dt) {
 		if (!access.hasGranularInventory()) return null;
 		GranularDomainState state = access.granularState();
+		prepareCarrierMassPartition(state);
 		GranularMechanics.StepStats stats = GranularMechanics.stepVelocities(
 				state.parcels, state.registry, granularEnvironment(), this.state.config.gravity(), dt);
 		access.granularCollision().preview(state.parcels, state.registry, dt);
@@ -81,7 +86,7 @@ final class GranularMechanicalStage {
 				int liquidMaterial = access.granularCarrierMaterialByCell()[cell];
 				if (state.markerGrid.markerCount[cell] <= 0 || liquidMaterial < 0) {
 					return new GranularMechanics.FluidSample(false, 0.0, 0.0, 0.0,
-							1.225, 1.81e-5, 100_000.0, 0.0);
+							1.225, 1.81e-5, 100_000.0, 0.0, 0.0);
 				}
 				String materialId = access.materialRegistry().material(liquidMaterial).id();
 				GranularCarrier carrier = access.granularState().registry.carrier(
@@ -93,7 +98,9 @@ final class GranularMechanicalStage {
 						access.sampleX(state.mac.velocityX, x, y, z),
 						access.sampleY(state.mac.velocityY, x, y, z),
 						access.sampleZ(state.mac.velocityZ, x, y, z),
-						state.markerGrid.cellDensity[cell], carrier.dynamicViscosity(), carrier.maximumReynolds(), submerged);
+						state.markerGrid.cellDensity[cell], carrier.dynamicViscosity(), carrier.maximumReynolds(), submerged,
+						state.unitScale.kilograms(state.markerGrid.exactCellMarkerMass[cell])
+								/ immersedSolidVolumeByCell[cell]);
 			}
 
 			@Override public GranularMechanics.FluidImpulseApplication addFluidImpulse(float x, float y, float z,
@@ -110,6 +117,21 @@ final class GranularMechanicalStage {
 						appliedX ? 0.0 : impulseX, appliedY ? 0.0 : impulseY, appliedZ ? 0.0 : impulseZ);
 			}
 		};
+	}
+
+	private void prepareCarrierMassPartition(GranularDomainState granular) {
+		Arrays.fill(immersedSolidVolumeByCell, 0.0);
+		int[] carrierMaterial = access.granularCarrierMaterialByCell();
+		for (int parcelIndex = 0; parcelIndex < granular.parcels.count(); parcelIndex++) {
+			var parcel = granular.parcels.parcel(parcelIndex);
+			int cell = access.particleCellIndex(parcel.x(), parcel.y(), parcel.z());
+			if (state.markerGrid.markerCount[cell] <= 0 || carrierMaterial[cell] < 0) continue;
+			float capacity = access.effectiveOpenCellVolume(cell);
+			double submerged = capacity <= 0.0F ? 0.0
+					: Math.max(0.0, Math.min(1.0, state.markerGrid.exactCellMarkerVolume[cell] / capacity));
+			immersedSolidVolumeByCell[cell] += parcel.solidVolumeSvq()
+					/ (double) SolidVolume.SVQ_PER_BV * submerged;
+		}
 	}
 
 	private boolean addFaceImpulse(

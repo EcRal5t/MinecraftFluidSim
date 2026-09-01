@@ -57,7 +57,7 @@ parcel 的物理质量列直接使用 kg，SVQ 通过 `SVQ_PER_BV` 直接给出 
 Re = rho_f * d * |u_f - u_p| / mu
 ```
 
-阻力使用 Schiller–Naumann 相关式：`Re < 1000` 时 `Cd = 24/Re * (1 + 0.15 Re^0.687)`，更高时取其常用高 Reynolds 极限 `0.44`。指数松弛积分避免小质量 parcel 在单步内越过载体速度。超过 carrier 声明的有效 Reynolds 数、非有限物性或负容量会安全暂停，而不是钳制到一个看似稳定的值。
+阻力使用 Schiller–Naumann 相关式：`Re < 1000` 时 `Cd = 24/Re * (1 + 0.15 Re^0.687)`，更高时取其常用高 Reynolds 极限 `0.44`。参与阻力的代表颗粒数按同一格的实际浸没比例缩放；不能让一小层液体对整份 parcel 施加满浸没阻力，再把该反冲写入同一小层液体。同格有限液体质量按各 parcel 的浸没固体体积分配，parcel 与该载体份额做两体指数松弛；因此拆分等价 parcel 不改变总耦合，合计反冲不越过共同动量平衡点，阻力也不能凭显式叠加增加系统动能。超过 carrier 声明的有效 Reynolds 数、非有限物性或负容量会安全暂停，而不是钳制到一个看似稳定的值。
 
 浮力和阻力对 parcel 的冲量有等量反向项写回液体动量；cut-cell 无法承接的部分进入 boundary impulse ledger。碰撞使用与流体一致的几何快照、连续碰撞检测和材料摩擦/恢复定义，不依赖渲染表面。
 
@@ -88,7 +88,7 @@ dirty queue、安静年龄和邻居轮转步不是库存，不能用于恢复 SV
 - 连续凝固相由 coherent store 保存；熔化后恢复到液体 marker。它不借用 active/deposit 表示。
 - pending phase volume/work 由下一次 pressure projection exactly-once 消费；未消费时拒绝 `empty` 和不安全 checkpoint 操作。
 
-reaction/phase candidate 必须先在不可变快照上规划 exact extent，再一次提交所有 side column。规划预算以 cell、reaction 和 batch 操作计数，有硬上限；预算耗尽延期，不允许把半个 extent 留在液相、另一半留在固相。没有可溶 solid 且液相连一个完整 aqueous stoichiometric extent 都不具备时，按 exact species quanta 直接判定为无候选，不进入完整 planner；这不改变任何正向或反向可表示反应。
+reaction/phase candidate 必须先在不可变快照上规划 exact extent，再一次提交所有 side column。规划预算以 cell、reaction 和 batch 操作计数，有硬上限；预算耗尽延期，不允许把半个 extent 留在液相、另一半留在固相。marker 的 binary32 体积列也是候选表示格：优先结果若不能把总 solid SVQ 精确分配到当前 marker，规划器必须确定性重分配或按完整 reaction batch 缩小 extent；剩余 species quanta 无法让每个 marker 保持非空、或任何合法整批都不可表示时，本步延后而不暂停合法 base。没有可溶 solid 且液相连一个完整 aqueous stoichiometric extent 都不具备时，按 exact species quanta 直接判定为无候选，不进入完整 planner；这不改变任何正向或反向可表示反应。
 
 ## 容器与清空
 
