@@ -14,9 +14,4 @@ public interface ContainerJournalRepository {
 
 	void delete(UUID transactionId) throws IOException;
 
-	void markSolverDirty(UUID transactionId);
-
-	void markSolverClean(UUID transactionId);
-
-	void markRegionCommitted(UUID transactionId);
 }

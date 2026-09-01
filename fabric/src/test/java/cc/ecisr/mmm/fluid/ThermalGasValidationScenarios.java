@@ -821,7 +821,9 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	static void sealedInterfaceBoilingCommitsJointInventory() {
 		FluidMaterial waterCarrier = FluidMaterial.withSurfaceTension(
 				"test:boiling_water", 1_000.0, "test:miscible", 0.0, 90.0);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(waterCarrier));
+		FluidMaterial oilCarrier = FluidMaterial.withSurfaceTension(
+				"test:boiling_oil", 850.0, "test:miscible", 0.0, 30.0);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(waterCarrier, oilCarrier));
 		ThermalMaterialDefinition water = new ThermalMaterialDefinition("test:thermal/boiling_water",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, waterCarrier.id(), 373.15, 0.0, 0.6,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 4_180.0)));
@@ -832,6 +834,9 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.WATER_VAPOR,
 				373.15, 2_256_000.0, 0.025,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 1_410.0)));
+		ThermalMaterialDefinition oil = new ThermalMaterialDefinition("test:thermal/boiling_oil",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, oilCarrier.id(), 373.15, 0.0, 0.14,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 2_000.0)));
 		long liquidSvq = SolidVolume.SVQ_PER_CELL / 20_000L;
 		long vaporSvq = liquidSvq * 1_700L;
 		ExactRational batchMass = ExactRational.parse("52375/8388608");
@@ -839,7 +844,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				water.id(), vapor.id(), 373.15, liquidSvq, vaporSvq, batchMass,
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 10_000.0, 3_000_000.0);
 		ThermalRegistry thermal = new ThermalRegistry(
-				List.of(water, air, vapor), List.of(), List.of(boiling), "", "");
+				List.of(water, oil, air, vapor), List.of(), List.of(boiling), "", "");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
 		FluidDomain domain = new FluidDomain(4, 4, 4, config, 512);
@@ -847,6 +852,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			if (x == 0 || x == 3 || y == 0 || y == 3 || z == 0 || z == 3) domain.setSolid(x, y, z, true);
 		}
 		domain.setVolume(1, 1, 1, 1.0F);
+		domain.setMarkerMaterial(0, liquids, 1);
 		domain.bindThermal(thermal, liquids, 500.0);
 		require(domain.gasBoundary().nodeCount() == 1, "boiling fixture did not form one sealed receiver");
 		ThermalDisplaySnapshot display = domain.copyThermalDisplaySnapshot();
@@ -858,6 +864,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& display.gasNodes().size() == 1 && display.gasNodes().getFirst().nodeId() == 1,
 				"thermal display did not derive quantized condensed/gas state in one rebuild");
 		double liquidMassBefore = domain.totalMass();
+		double oilVolumeBefore = domain.exactVolumeNear(1, 1, 1, 0, 1);
 		double boiledSolverMass = SolverUnitScale.forCellSize(config.cellSize())
 				.solverMass(batchMass.toDouble());
 		long gasNanosBefore = domain.gasBoundary().standardVolumeNanos(1);
@@ -874,6 +881,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& domain.gasBoundary().auditClosed()
 				&& domain.thermalAudit().mechanicalWork().compareTo(auditBefore.mechanicalWork()) < 0
 				&& domain.hasPendingPhaseVolumeWork()
+				&& close(domain.exactVolumeNear(1, 1, 1, 0, 1), oilVolumeBefore)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"sealed boiling did not jointly conserve liquid/gas mass, volume and energy truth: stats=" + stats
 						+ " liquidMass=" + domain.totalMass() + "/" + liquidMassBefore
@@ -912,6 +920,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& domain.thermalAudit().mechanicalWork().compareTo(
 						auditBeforeCondensation.mechanicalWork()) > 0
 				&& domain.hasPendingPhaseVolumeWork()
+				&& close(domain.exactVolumeNear(1, 1, 1, 0, 1), oilVolumeBefore)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"sealed condensation did not reverse the exact gas batch with conserved energy: stats=" + condensed
 						+ " mass=" + domain.totalMass() + " vapor=" + vaporAfterCondensation

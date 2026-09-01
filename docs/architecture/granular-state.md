@@ -67,6 +67,8 @@ Re = rho_f * d * |u_f - u_p| / mu
 
 projection 消费的 phase volume/work 和 granular occupancy delta 都具有 generation 身份；重试不能再次消费，checkpoint 也不能只保存其中一半。
 
+backend/checkpoint handoff 恢复后的容量验证必须重新使用运行时 `GranularCouplingFields` 的同一 positioned-parcel exact attribution：active parcel 按其连续位置的最多八格权重分摊，deposit 与 coherent fixed occupancy 走各自的 cell-local 归属。不得在恢复门把整份 active parcel 临时塞进 floor cell；否则一个运行时合法 generation 会被另一套投影误判为过容量。恢复门只验证统一 solid occupancy 与几何容量，不能把 liquid marker 的短时聚集改写成 solid 库存。
+
 ### Deposit 松弛与局部唤醒
 
 - active parcel 连续受到支撑且速度低于阈值满 3 次接触后，才原子转入 deposit；转换保持 SVQ、质量、组成和内能不变。

@@ -54,15 +54,15 @@ public final class ContainerApplicationValidation {
 						"after-prepare fault crossed the solver boundary");
 				case AFTER_SOLVER -> check(journals.current.phase()
 						== ContainerTransferJournal.Phase.PREPARED && regions.executeCount == 1
-						&& regions.stageCount == 0 && journals.dirty,
-						"after-solver fault did not retain dirty PREPARED evidence");
+						&& regions.stageCount == 0,
+						"after-solver fault did not retain clean PREPARED evidence");
 				case AFTER_STAGE -> check(regions.stageCount == 1 && regions.commitCount == 0
 						&& journals.current.phase() == ContainerTransferJournal.Phase.PREPARED,
 						"after-stage fault crossed the committed-WAL boundary");
 				case AFTER_WAL -> check(regions.stageCount == 1 && regions.commitCount == 0
 						&& journals.current.phase() == ContainerTransferJournal.Phase.REGION_COMMITTED,
 						"after-WAL fault changed HEAD");
-				case AFTER_CHECKPOINT -> check(regions.commitCount == 1 && !journals.dirty
+				case AFTER_CHECKPOINT -> check(regions.commitCount == 1
 						&& result.transactionId() != null
 						&& result.committedGeneration() == 5L,
 						"after-checkpoint response loss did not retain committed recovery identity");
@@ -102,10 +102,11 @@ public final class ContainerApplicationValidation {
 		ContainerRecoveryCoordinator recovery = new ContainerRecoveryCoordinator(
 				store, port, Map.of(journal.transactionId(), journal), Set.of());
 		recovery.retryTransaction(journal.transactionId());
-		check(port.applyCount == 1 && port.persistCount == 1 && port.publishCount == 1,
+		check(port.applyCount == 1 && port.persistCount == 1 && port.adoptCount == 1 && port.publishCount == 1,
 				"response-loss recovery did not converge and publish exactly once");
-		check(!store.journals.containsKey(journal.transactionId()) && port.deletedBeforePublish,
-				"response-loss recovery published before deleting the WAL");
+		check(!store.journals.containsKey(journal.transactionId())
+				&& port.adoptedBeforeDelete && port.deletedBeforePublish,
+				"response-loss recovery did not adopt HEAD before WAL deletion and event publication");
 	}
 
 	private static void unavailableActorRetry() {
@@ -167,7 +168,6 @@ public final class ContainerApplicationValidation {
 
 	private static final class FakeJournals implements ContainerJournalRepository {
 		private ContainerTransferJournal current;
-		private boolean dirty;
 		private boolean failDelete;
 
 		@Override public boolean hasPending(UUID regionId, ContainerTransferActor actor) { return current != null; }
@@ -176,9 +176,6 @@ public final class ContainerApplicationValidation {
 			if (failDelete) throw new IOException("injected delete failure");
 			current = null;
 		}
-		@Override public void markSolverDirty(UUID transactionId) { dirty = true; }
-		@Override public void markSolverClean(UUID transactionId) { dirty = false; }
-		@Override public void markRegionCommitted(UUID transactionId) { dirty = false; }
 	}
 
 	private static final class FakeRegionPort implements ContainerTransferCoordinator.RegionPort {
@@ -230,7 +227,9 @@ public final class ContainerApplicationValidation {
 		private CrossDomainRecovery.ExternalTruth truth;
 		private int applyCount;
 		private int persistCount;
+		private int adoptCount;
 		private int publishCount;
+		private boolean adoptedBeforeDelete;
 		private boolean deletedBeforePublish;
 		private FakeStore store;
 
@@ -251,7 +250,10 @@ public final class ContainerApplicationValidation {
 		}
 		@Override public void persistAfterItem(ContainerTransferActor actor) { persistCount++; }
 		@Override public CrossDomainRecovery.ExternalTruth verifyAfterItem(ContainerTransferJournal journal) { return truth; }
-		@Override public void adoptRecoveredCheckpoint(ContainerTransferJournal journal) { }
+		@Override public void adoptRecoveredCheckpoint(ContainerTransferJournal journal) {
+			adoptCount++;
+			adoptedBeforeDelete = store != null && store.journals.containsKey(journal.transactionId());
+		}
 		@Override public void publishCommitted(ContainerTransferJournal journal) {
 			publishCount++;
 			deletedBeforePublish = store != null && !store.journals.containsKey(journal.transactionId());

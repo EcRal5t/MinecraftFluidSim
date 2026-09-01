@@ -360,20 +360,23 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 	}
 
 	void validateCoherentRestoreCapacity(List<CoherentPhaseStore.Group> groups) {
-		long[] occupied = new long[cellCount];
+		long[] fixed = new long[cellCount];
 		for (CoherentPhaseStore.Group group : groups) {
 			if (group.cell() < 0 || group.cell() >= cellCount) {
 				throw new IllegalArgumentException("Restored coherent phase cell is outside the domain");
 			}
-			occupied[group.cell()] = Math.addExact(occupied[group.cell()], group.occupiedVolumeSvq());
+			fixed[group.cell()] = Math.addExact(fixed[group.cell()], group.occupiedVolumeSvq());
 		}
-		ensureGrid();
+		GranularCouplingFields restoredOccupancy = new GranularCouplingFields(
+				sizeX, sizeY, sizeZ, config.cellSize());
+		restoredOccupancy.setFixedCellSvq(fixed);
+		if (granularState == null) restoredOccupancy.rebuildFixed();
+		else restoredOccupancy.rebuild(granularState.parcels, granularState.deposits);
 		for (int cell = 0; cell < cellCount; cell++) {
 			long geometric = SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
 			// FLIP marker clustering may transiently overfill a cell and is resolved by pressure after restore.
-			// Only fixed solid occupancy is required to fit before the solver can safely resume that projection.
-			long fixedSolid = Math.addExact(occupied[cell], phaseGranularSvq(cell));
-			if (fixedSolid > geometric) {
+			// Solid occupancy must use the same exact positioned-parcel projection as runtime pressure coupling.
+			if (restoredOccupancy.solidSvq(cell) > geometric) {
 				throw new IllegalArgumentException("Restored coherent/granular inventory exceeds exact cell capacity");
 			}
 		}

@@ -110,13 +110,9 @@ final class MinecraftContainerRecoveryAdapter implements ContainerRecoveryCoordi
 	@Override
 	public void adoptRecoveredCheckpoint(ContainerTransferJournal journal) throws IOException {
 		for (FluidRegion region : regions.regions()) {
-			if (!region.id().equals(journal.regionId()) || !region.solverLoaded()) continue;
-			if (region.checkpointGeneration() == journal.targetGeneration()) return;
-			if (region.checkpointGeneration() != journal.baseGeneration()
-					|| !region.recordPublishedCheckpoint(journal.targetGeneration())) {
-				throw new IOException("Live region did not adopt recovered container checkpoint "
-							+ journal.targetGeneration());
-			}
+			if (!region.id().equals(journal.regionId())) continue;
+			regionOperations.adoptCommittedContainerCheckpoint(
+					region, journal.baseGeneration(), journal.targetGeneration());
 			return;
 		}
 	}

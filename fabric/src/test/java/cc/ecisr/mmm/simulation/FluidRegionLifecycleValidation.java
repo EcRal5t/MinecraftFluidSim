@@ -351,8 +351,10 @@ public final class FluidRegionLifecycleValidation {
 				&& retryRegion.numericalBlockFailure() == null,
 				"accepted slow steps were misclassified as a numerical solver failure");
 		require(MinecraftRegionAvailability.inventoryDecreaseMayBypass(retryRegion.availabilityReason())
-				&& !MinecraftRegionAvailability.inventoryDecreaseMayBypass(RegionAvailabilityReason.NUMERICAL_PAUSE),
-				"load-shedding writes did not isolate the retryable performance pause");
+				&& MinecraftRegionAvailability.inventoryDecreaseMayBypass(RegionAvailabilityReason.NUMERICAL_PAUSE)
+				&& !MinecraftRegionAvailability.inventoryDecreaseMayBypass(RegionAvailabilityReason.PENDING_WAL)
+				&& !MinecraftRegionAvailability.inventoryDecreaseMayBypass(RegionAvailabilityReason.HEAD_INVALID),
+				"inventory-decreasing recovery did not isolate safe pauses from durable-state locks");
 		MinecraftRegionOperatorActions.clearPerformancePauseForExplicitRetry(retryRegion);
 		require(retryRegion.availabilityReason() == null && retryRegion.performanceBlockFailure() == null
 				&& retryRegion.hardOverrunStreak() == 0 && retryRegion.recoveryStreak() == 0,

@@ -59,7 +59,7 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 - `RELEASE_OWNERSHIP` 只在凝聚相、气体和有限设备为空且无 WAL/phase work 后恢复 preimage；玩家已经占据的方块优先，不被覆盖。
 - `REMOVE_EMPTY_REGION` 只在上述库存为空、ownership 已释放且 quarantine 可接纳时发布 `REMOVED` HEAD。随后发送 network tombstone、注销 runtime，并把旧 ACTIVE payload 收敛到 `mmm/quarantine/removed-region/`；UUID 永不复用。
 
-旧的 `/mmm empty` 只保留给非 controller 开发域；controller 管理的区域必须手持物质场探针普通右击控制器，在控制台按 `EMPTY_CONDENSED`、`VENT_SEALED_GAS`、`RELEASE_OWNERSHIP`、`REMOVE_EMPTY_REGION` 依次预览并确认。纯 wall-time `PERFORMANCE_PAUSE` 不代表库存或账本不可解释，因此仍允许 `drain`、容器装取和上述只减少库存的 lifecycle；操作后保持暂停，需显式 resume。数值、热学、气体、颗粒、边界、ownership、WAL、audit 或 quarantine blocker 仍在预览中明确列出并阻止提交。
+旧的 `/mmm empty` 只保留给非 controller 开发域；controller 管理的区域必须手持物质场探针普通右击控制器，在控制台按 `EMPTY_CONDENSED`、`VENT_SEALED_GAS`、`RELEASE_OWNERSHIP`、`REMOVE_EMPTY_REGION` 依次预览并确认。控制器方块只在真正空手时处理 select/run-intent 激活；任何持物右击都先交还物品入口，不能吞掉探针或容器交互。纯 wall-time `PERFORMANCE_PAUSE` 不代表库存或账本不可解释，因此仍允许 `drain`、容器装取和上述只减少库存的 lifecycle；已加载且 HEAD、registry 与 WAL 均可证明的 `NUMERICAL_PAUSE` 也允许上述私有候选式 lifecycle 减库存，以便清空、排气、释放和移除故障区域。两类操作后都保持暂停，需显式 resume。边界、ownership、pending WAL、无效 HEAD、registry/profile、开放 audit、pending phase work 或 quarantine blocker 仍在预览中明确列出并阻止提交。
 
 ## 容器真值
 
@@ -95,8 +95,8 @@ insert/extract 返回“实际转移量”，WAL 和 after item 必须使用这�
 容器事务覆盖 region generation、actor item 和可选 registry：
 
 1. `PREPARED` 保存 transaction/region/dimension、base/target generation、operation、typed resource、actor 和 before item。
-2. solver 执行 exact transfer。
-3. stage 并回读完整 target generation。
+2. 从 base 冻结状态恢复私有 solver candidate，并只在该 candidate 执行 exact transfer。
+3. 从私有 candidate stage 并回读完整 target generation；live solver 仍保持 base。
 4. `REGION_COMMITTED` 增加实际量、after item 和 target manifest checksum。
 5. 原子发布 region HEAD。
 6. 修改 actor item，并等待玩家存档或 dispenser chunk 完成 durable save。
@@ -110,10 +110,10 @@ loader-neutral `ContainerTransferUseCase` 验证 actor/item/profile/thermal trut
 
 1. 验证目标区域可修改、无其他 WAL、actor item count 为 1，并捕获 before fingerprint。
 2. 原子发布 `PREPARED` WAL；此时 after=before，尚无 target checksum。
-3. 在 live solver 执行 exact transfer，并标记该 transaction 的 solver-dirty。
-4. 构造最终 after item；将 solver 候选 capture 到 inactive region slot并完整回读。
+3. 从 live base capture 恢复一个未注册私有 solver，在私有 solver 上执行 exact transfer；拒答或 after-item 校验失败时删除 PREPARED，live solver 与 HEAD 均保持 base。
+4. 构造最终 after item；从同一个私有 solver candidate capture 到 inactive region slot 并完整回读。
 5. 原子用 `REGION_COMMITTED` WAL 覆盖原 WAL，写入实际量、after fingerprint、coupled energy 和 target manifest checksum。
-6. 仅在这份 WAL 已 durable 后发布 region HEAD。HEAD 一旦指向 target，region 侧不可回滚。
+6. 仅在这份 WAL 已 durable 后发布 region HEAD；发布成功后 server thread 原子接管已验证的私有 domain，并推进 solver generation 使旧 backend candidate 失效。HEAD 一旦指向 target，region 侧不可回滚；若 publish 后的 live 接管异常，则锁定并从 target HEAD 收敛，不能退回 base。
 7. actor adapter 把 item 收敛为 after；`ContainerRecoveryCoordinator` 随即或在对应 player/chunk availability 事件上驱动玩家同步 save 或 owning dimension flushing save。Minecraft 当前没有公开的单 chunk durable save，因此 dispenser 完成路径宁可承担低频的 dimension flush，也不能用非 flush autosave 后提前删除 WAL。
 8. durable save 后回读 exact after truth；只有回读仍为 after 才由 recovery coordinator 删除 WAL 并移出 boot index。删除失败只留下可幂等收敛的 WAL，不重复资源转移；committed event 只能在删除完成后发布。
 
@@ -125,8 +125,8 @@ WAL/WARNING/committed/HEAD 的文件内容在 rename 前 `force`，rename 与事
 
 | Region HEAD | WAL phase | 恢复动作 |
 |---|---|---|
-| `base` | 任意 | live solver 未变且 actor exact before 时丢弃未提交 WAL；actor after/third 或同进程 solver 已变均锁定 |
-| `target` + checksum 相符 | `REGION_COMMITTED` | actor before/after 均可幂等收敛，强制保存并回读 exact after，再删除 WAL；third 锁定 |
+| `base` | 任意 | container 私有 candidate 从未取得 live 提交权；actor exact before 时丢弃未提交 WAL，actor after/third 锁定 |
+| `target` + checksum 相符 | `REGION_COMMITTED` | actor before/after 均可幂等收敛；若同进程 live 仍为 base，先从 target generation 完整恢复并接管，再删除 WAL；actor 强制保存并回读 exact after，third 锁定 |
 | `target` | `PREPARED` | 锁定：region 已提交但 WAL 没有权威 after item |
 | 其他 generation 或 checksum 不符 | 任意 | 锁定：无法证明 region 属于本事务 |
 

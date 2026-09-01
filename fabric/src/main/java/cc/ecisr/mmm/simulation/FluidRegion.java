@@ -453,13 +453,29 @@ public final class FluidRegion {
 	void adoptLifecycleCandidateDomain(
 			FluidDomain candidateDomain, long publishedGeneration, boolean operatorPaused
 	) {
+		adoptPublishedPrivateDomain(candidateDomain, publishedGeneration, operatorPaused);
+	}
+
+	/** Adopts a HEAD-published private container successor and invalidates every older solver candidate. */
+	void adoptContainerCandidateDomain(
+			FluidDomain candidateDomain, long publishedGeneration, boolean operatorPaused
+	) {
+		adoptPublishedPrivateDomain(candidateDomain, publishedGeneration, operatorPaused);
+	}
+
+	private void adoptPublishedPrivateDomain(
+			FluidDomain candidateDomain, long publishedGeneration, boolean operatorPaused
+	) {
 		Objects.requireNonNull(candidateDomain, "candidateDomain");
+		long nextSolverGeneration = Math.addExact(solverGeneration, 1L);
 		if (!controllerManaged() || domain == null || publishedGeneration <= checkpointGeneration
 				|| candidateDomain.sizeX() != sizeX || candidateDomain.sizeY() != sizeY
-				|| candidateDomain.sizeZ() != sizeZ || candidateDomain.maximumParticleCount() != reservedMarkerCapacity) {
-			throw new IllegalStateException("Published lifecycle candidate is incompatible with the live region");
+				|| candidateDomain.sizeZ() != sizeZ || candidateDomain.maximumParticleCount() != reservedMarkerCapacity
+				|| !candidateDomain.config().equals(solverConfig)) {
+			throw new IllegalStateException("Published private candidate is incompatible with the live region");
 		}
 		domain = candidateDomain;
+		solverGeneration = nextSolverGeneration;
 		checkpointGeneration = publishedGeneration;
 		checkpointMarkerCount = candidateDomain.particleCount();
 		checkpointVolume = candidateDomain.totalVolume();

@@ -180,32 +180,34 @@ final class MinecraftContainerTransferPlan {
 				mixture, chemical, granular, thermal), null);
 	}
 
-	MinecraftContainerTransferOperations.TransferOutcome executeExact(long requested, long base) {
+	MinecraftContainerTransferOperations.TransferOutcome executeExact(
+			FluidRegion targetRegion, long requested, long base
+	) {
 		return switch (kind) {
 			case POUR -> MinecraftContainerTransferOperations.pourIntoCell(
-					world, region, cell, requested, 6, 0, externalSource, thermal);
+					world, targetRegion, cell, requested, 6, 0, externalSource, thermal);
 			case SCOOP -> MinecraftContainerTransferOperations.scoopFromCell(
-					world, region, cell, requested, base, 6, 0, thermal);
+					world, targetRegion, cell, requested, base, 6, 0, thermal);
 			case MATERIAL_POUR -> chemical == null
 					? MinecraftContainerTransferOperations.pourMaterialIntoCell(
-							world, region, cell, mixture, 6, externalSource, thermal)
+							world, targetRegion, cell, mixture, 6, externalSource, thermal)
 					: MinecraftContainerTransferOperations.pourChemicalIntoCell(
-							world, region, cell, chemical, 6, externalSource, thermal);
+							world, targetRegion, cell, chemical, 6, externalSource, thermal);
 			case MATERIAL_SCOOP -> chemistryEnabled()
 					? MinecraftContainerTransferOperations.scoopChemicalIntoCell(
-							world, region, cell, requested, 6, world.chemicalRegistry())
+							world, targetRegion, cell, requested, 6, world.chemicalRegistry())
 					: MinecraftContainerTransferOperations.scoopMaterialIntoCell(
-							world, region, cell, requested, 6);
+							world, targetRegion, cell, requested, 6);
 			case GRANULAR_POUR -> MinecraftContainerTransferOperations.pourGranularIntoCell(
-					world, region, cell, granular, 6, externalSource);
+					world, targetRegion, cell, granular, 6, externalSource);
 			case GRANULAR_SCOOP -> MinecraftContainerTransferOperations.scoopGranularIntoCell(
-					world, region, cell, requested, 6);
+					world, targetRegion, cell, requested, 6);
 			case NONE -> null;
 		};
 	}
 
 	MinecraftContainerTransferOperations.TransferOutcome executeUnmanaged() {
-		return executeExact(requestedAmount, baseAmount);
+		return executeExact(region, requestedAmount, baseAmount);
 	}
 
 	MinecraftContainerTransactionAdapter.Result executeManaged(

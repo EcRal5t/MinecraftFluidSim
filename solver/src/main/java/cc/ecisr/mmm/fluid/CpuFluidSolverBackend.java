@@ -10,7 +10,7 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 
 	@Override public FluidStepCandidate evaluate(FluidStepRequest request) {
 		if (request == null) throw new IllegalArgumentException("Step request is missing");
-		FluidDomain candidate = FluidDomain.restoreAuthoritativeState(request.state());
+		FluidDomain candidate = restoreCandidate(request.state());
 		MovingBodyFluidCoupling.Result movingBodyCoupling = MovingBodyFluidCoupling.Result.NONE;
 		for (var movingBody : request.movingBodies()) {
 			movingBodyCoupling = movingBodyCoupling.plus(candidate.applyMovingBodyCoupling(movingBody));
@@ -25,9 +25,18 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 
 	@Override public FluidThermalStepCandidate evaluateThermal(FluidThermalStepRequest request) {
 		if (request == null) throw new IllegalArgumentException("Thermal step request is missing");
-		FluidDomain candidate = FluidDomain.restoreAuthoritativeState(request.state());
+		FluidDomain candidate = restoreCandidate(request.state());
 		FluidDomain.ThermalAxisStats stats = candidate.stepThermalAxis(
 				request.phaseChangeEnabled(), request.maximumPhaseOperations());
 		return FluidThermalStepCandidate.preparedCpu(request.baseGeneration(), candidate, stats);
+	}
+
+	private static FluidDomain restoreCandidate(FluidDomainState state) {
+		try {
+			return FluidDomain.restoreAuthoritativeState(state);
+		} catch (IllegalArgumentException | IllegalStateException | ArithmeticException rejected) {
+			throw new FluidSolverBackend.StateRestoreRejectedException(
+					"Frozen authoritative state failed private backend restore: " + rejected.getMessage(), rejected);
+		}
 	}
 }

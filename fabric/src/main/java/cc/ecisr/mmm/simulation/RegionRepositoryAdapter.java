@@ -227,12 +227,19 @@ final class RegionRepositoryAdapter {
 	StagedCheckpoint stageLifecycleCheckpoint(
 			FluidRegion region, FluidDomain candidateDomain, long targetGeneration
 	) throws IOException {
+		return stageCandidateCheckpoint(region, candidateDomain, targetGeneration, true);
+	}
+
+	/** Stages a complete private solver successor while preserving the supplied operator intent. */
+	StagedCheckpoint stageCandidateCheckpoint(
+			FluidRegion region, FluidDomain candidateDomain, long targetGeneration, boolean operatorPaused
+	) throws IOException {
 		if (!GenerationSequence.isNext(region.checkpointGeneration(), targetGeneration)) {
-			throw new IOException("Lifecycle checkpoint target does not advance the live region by one generation");
+			throw new IOException("Candidate checkpoint target does not advance the live region by one generation");
 		}
 		String ownershipLock = ownershipLockDescription(region);
-		if (ownershipLock != null) throw new IOException("Unresolved world ownership state blocks lifecycle staging: " + ownershipLock);
-		FluidRegion candidate = region.lifecycleCandidate(candidateDomain, true);
+		if (ownershipLock != null) throw new IOException("Unresolved world ownership state blocks candidate staging: " + ownershipLock);
+		FluidRegion candidate = region.lifecycleCandidate(candidateDomain, operatorPaused);
 		RegionGenerationStore.PreparedGeneration prepared = files.prepare(
 				captureForFeatureGate(candidate, targetGeneration, false), (point, path) -> { });
 		return new StagedCheckpoint(prepared, prepared.manifestChecksum());
@@ -288,7 +295,6 @@ final class RegionRepositoryAdapter {
 		if (region.solverLoaded() || region.lifecycle().state() != FluidRegionLifecycle.State.UNLOADED) return;
 		RegionState state = files.read(region.id());
 		RegionManifest manifest = state.manifest();
-		RegionCheckpointRestorer restorer = new RegionCheckpointRestorer(state.checkpoint());
 		validateFeatureShape(manifest);
 		if (manifest.checkpointGeneration() != region.checkpointGeneration() || manifest.networkGeneration() != region.networkGeneration()
 				|| !manifest.dimensionId().equals(region.dimension().identifier().toString())
@@ -309,25 +315,40 @@ final class RegionRepositoryAdapter {
 				throw new IOException("Committed world ownership does not match the region checkpoint");
 			}
 		}
-		if (profile.hasCapability(WorldCapability.THERMAL)) {
-			restoreThermalGeneration(region, state);
-			return;
+		restoreFeatureGeneration(region, state);
+	}
+
+	/** Replaces an in-process base solver with the exact already-committed container target. */
+	void adoptCommittedContainerCheckpoint(
+			FluidRegion region, long baseGeneration, long targetGeneration
+	) throws IOException {
+		if (!region.solverLoaded()) {
+			if (region.checkpointGeneration() == targetGeneration) return;
+			throw new IOException("Unloaded region metadata does not identify the committed container target");
 		}
-		if (profile.hasCapability(WorldCapability.GRANULAR)) {
-			restoreGranularGeneration(region, state);
-			return;
+		if (region.checkpointGeneration() == targetGeneration) return;
+		if (region.checkpointGeneration() != baseGeneration) {
+			throw new IOException("Live region is neither the container base nor target generation");
 		}
-		if (profile.hasCapability(WorldCapability.CHEMISTRY)) {
-			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
-			region.restoreChemicalSolver(restorer.reconstructChemical(chemicalRegistry), chemicalRegistry,
-					manifest.checkpointGeneration());
-			return;
+		RegionState state = files.read(region.id());
+		RegionManifest manifest = state.manifest();
+		validateFeatureShape(manifest);
+		validateRecoveryIdentity(region, manifest);
+		if (manifest.checkpointGeneration() != targetGeneration) {
+			throw new IOException("Committed container HEAD no longer identifies its target generation");
 		}
-		if (profile.hasCapability(WorldCapability.MATERIALS)) {
-			region.restoreMaterialSolver(restorer.reconstructMaterial(), manifest.checkpointGeneration());
-		} else {
-			region.restoreSolver(restorer.reconstruct(), manifest.checkpointGeneration());
+		String ownershipLock = ownershipLockDescription(region);
+		if (ownershipLock != null) {
+			throw new IOException("Unresolved world ownership state blocks container target adoption: "
+					+ ownershipLock);
 		}
+		FluidRegion candidate = unloadedRegion(manifest);
+		restoreFeatureGeneration(candidate, state);
+		if (!candidate.solverLoaded()) {
+			throw new IOException("Committed container target did not restore a complete private solver");
+		}
+		region.adoptContainerCandidateDomain(
+				candidate.domain(), targetGeneration, manifest.runtime().operatorPaused());
 	}
 
 	/**
@@ -525,6 +546,30 @@ final class RegionRepositoryAdapter {
 		}
 		region.restoreGranularState(restorer.reconstructGranular(granularRegistry), granularRegistry, generation);
 		enablePrecipitationIfConfigured(region);
+	}
+
+	private void restoreFeatureGeneration(FluidRegion region, RegionState state) throws IOException {
+		RegionManifest manifest = state.manifest();
+		RegionCheckpointRestorer restorer = new RegionCheckpointRestorer(state.checkpoint());
+		if (profile.hasCapability(WorldCapability.THERMAL)) {
+			restoreThermalGeneration(region, state);
+			return;
+		}
+		if (profile.hasCapability(WorldCapability.GRANULAR)) {
+			restoreGranularGeneration(region, state);
+			return;
+		}
+		if (profile.hasCapability(WorldCapability.CHEMISTRY)) {
+			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
+			region.restoreChemicalSolver(restorer.reconstructChemical(chemicalRegistry), chemicalRegistry,
+					manifest.checkpointGeneration());
+			return;
+		}
+		if (profile.hasCapability(WorldCapability.MATERIALS)) {
+			region.restoreMaterialSolver(restorer.reconstructMaterial(), manifest.checkpointGeneration());
+		} else {
+			region.restoreSolver(restorer.reconstruct(), manifest.checkpointGeneration());
+		}
 	}
 
 	private void enablePrecipitationIfConfigured(FluidRegion region) {

@@ -5,6 +5,7 @@ import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.simulation.FullCapabilityTestFixture;
 
 import java.io.StringReader;
 import java.nio.file.Files;
@@ -41,7 +42,7 @@ public final class M8GranularValidation {
 		System.out.println("M8 granular core gate passed: exact inventory, coupling, repose, sleep and local wake");
 	}
 
-	private static void exactDryContainerTransferIsAtomic() {
+	private static void exactDryContainerTransferIsAtomic() throws Exception {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
@@ -62,6 +63,13 @@ public final class M8GranularValidation {
 		require(inserted.inserted() && domain.totalGranularSolidVolumeSvq() == input.totalSolidVolumeSvq()
 				&& rawClose(domain.totalGranularMass(), input.totalMass()),
 				"dry granular insertion did not preserve exact volume/mass across nearby cells");
+		FullCapabilityTestFixture.Registries production = FullCapabilityTestFixture.load();
+		domain.bindGasRegistry(production.gas());
+		domain.bindThermal(production.thermal(), liquids, 300.0);
+		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		require(domain.totalGranularSolidVolumeSvq() == input.totalSolidVolumeSvq()
+				&& rawClose(domain.totalGranularMass(), input.totalMass()),
+				"thermal backend handoff changed a valid positioned granular container inventory");
 		GranularDisplaySnapshot display = domain.copyGranularDisplaySnapshot();
 		require(display.registryFingerprint().equals(registry.fingerprint())
 				&& display.materials().size() == registry.materials().size()
@@ -778,7 +786,7 @@ public final class M8GranularValidation {
 				"sealed granular insertion did not refuse atomically");
 	}
 
-	private static void wholeBucketCongestionRemainsLocal(int steps) {
+	private static void wholeBucketCongestionRemainsLocal(int steps) throws Exception {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
@@ -793,6 +801,12 @@ public final class M8GranularValidation {
 		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted()
 				&& domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted(),
 				"two-bucket granular congestion fixture could not be inserted");
+		FullCapabilityTestFixture.Registries production = FullCapabilityTestFixture.load();
+		domain.bindGasRegistry(production.gas());
+		domain.bindThermal(production.thermal(), liquids, 300.0);
+		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		require(domain.totalGranularSolidVolumeSvq() == 2L * SolidVolume.SVQ_PER_BV,
+				"thermal backend handoff rejected or changed a two-bucket positioned granular inventory");
 		long releaseCells = domain.exportGranularState().activeParcels().stream()
 				.map(parcel -> cellIndex(
 						Math.min(7, (int) (parcel.x() / 0.5F)),

@@ -8,6 +8,7 @@ import cc.ecisr.mmm.application.command.MotionStepCommand;
 import cc.ecisr.mmm.application.command.ThermalStepCommand;
 import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.fluid.FluidDomain;
+import cc.ecisr.mmm.fluid.FluidSolverBackend;
 import cc.ecisr.mmm.fluid.GasTopologyBlockedException;
 import cc.ecisr.mmm.granular.GranularDepositDynamics;
 import cc.ecisr.mmm.granular.GranularMechanics;
@@ -220,6 +221,17 @@ final class MinecraftRegionTick {
 
 	/** Maps a rejected logical-step candidate through the single runtime pause taxonomy. */
 	boolean blockStepFailure(ServerLevel level, FluidRegion region, RuntimeException failure) {
+		if (failure instanceof FluidSolverBackend.StateRestoreRejectedException rejected) {
+			String detail = "backend-handoff NUMERICAL_PAUSE：" + rejected.getMessage();
+			region.blockNumerical(detail);
+			MmmMod.LOGGER.error("Region {} rejected an unmaterializable private backend handoff and is paused",
+					region.id(), rejected);
+			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+					"物质、运动与力学无法从冻结真值构造私有候选；在线区域未修改并已安全暂停："
+							+ rejected.getMessage() + "；请查看 /mmm status"));
+			snapshots.sendToLevel(level, region);
+			return true;
+		}
 		if (failure instanceof FluidDomain.PressureSolveBlockedException blocked) {
 			blockNumerical(level, region, blocked);
 			return true;

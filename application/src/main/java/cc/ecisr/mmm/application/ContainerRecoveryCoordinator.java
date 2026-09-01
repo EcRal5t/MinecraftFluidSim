@@ -22,7 +22,6 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 	private final Map<UUID, ContainerTransferJournal> indexed = new HashMap<>();
 	private final Set<UUID> audited = new HashSet<>();
 	private final Set<UUID> awaitingActors = new HashSet<>();
-	private final Set<UUID> runtimeDirty = new HashSet<>();
 	private final Map<UUID, String> reportedLocks = new HashMap<>();
 	private final Set<String> storeIssues;
 	private Set<String> reportedStoreIssues = Set.of();
@@ -73,18 +72,8 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 		indexed.remove(transactionId);
 		audited.remove(transactionId);
 		awaitingActors.remove(transactionId);
-		runtimeDirty.remove(transactionId);
 		reportedLocks.remove(transactionId);
 	}
-
-	@Override
-	public void markSolverDirty(UUID transactionId) { runtimeDirty.add(transactionId); }
-
-	@Override
-	public void markSolverClean(UUID transactionId) { runtimeDirty.remove(transactionId); }
-
-	@Override
-	public void markRegionCommitted(UUID transactionId) { runtimeDirty.remove(transactionId); }
 
 	/** Processes only boot-indexed or newly committed entries; unavailable actors remain event-driven. */
 	public void recoverIndexed() {
@@ -143,8 +132,7 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 			long head = port.committedGeneration(journal.regionId());
 			long checksum = port.committedManifestChecksum(journal.regionId());
 			CrossDomainRecovery.ExternalTruth actorTruth = port.classifyActor(journal);
-			CrossDomainRecovery.Decision decision = decide(
-					head, checksum, journal, runtimeDirty.contains(transactionId), actorTruth);
+			CrossDomainRecovery.Decision decision = decide(head, checksum, journal, actorTruth);
 			switch (decision.outcome()) {
 				case DISCARD_UNCOMMITTED -> {
 					delete(transactionId);
@@ -215,7 +203,6 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 			long head,
 			long headManifestChecksum,
 			ContainerTransferJournal journal,
-			boolean liveSolverDirty,
 			CrossDomainRecovery.ExternalTruth actorTruth
 	) {
 		CrossDomainRecovery.Boundary boundary = new CrossDomainRecovery.Boundary(
@@ -224,7 +211,7 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 				journal.phase() == ContainerTransferJournal.Phase.REGION_COMMITTED
 						? CrossDomainRecovery.JournalPhase.REGION_COMMITTED
 						: CrossDomainRecovery.JournalPhase.PREPARED,
-				liveSolverDirty);
+				false);
 		return CrossDomainRecovery.decide(boundary, List.of(actorTruth));
 	}
 

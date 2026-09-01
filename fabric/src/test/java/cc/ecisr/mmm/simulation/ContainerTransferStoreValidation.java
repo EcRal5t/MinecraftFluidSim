@@ -25,6 +25,8 @@ import cc.ecisr.mmm.granular.BuiltinGranularDefinitions;
 import cc.ecisr.mmm.granular.SolidCompositionRecord;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.fluid.FluidDomain;
+import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
+import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterial;
@@ -66,6 +68,8 @@ public final class ContainerTransferStoreValidation {
 			run("material service settlement preserves component residuals", ContainerTransferStoreValidation::testMaterialSettlement);
 			run("partial outlet requests only available marker volume", ContainerTransferStoreValidation::testPartialOutlet);
 			run("ownership sidecar lock blocks loaded checkpoints", ContainerTransferStoreValidation::testOwnershipCheckpointLock);
+			run("committed private target replaces an in-process base solver",
+					ContainerTransferStoreValidation::testCommittedTargetAdoption);
 			System.out.println("ContainerTransferStoreValidation passed " + passed + " scenarios");
 		} finally {
 			try (var paths = Files.walk(root)) {
@@ -472,19 +476,19 @@ public final class ContainerTransferStoreValidation {
 				new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.WATER_BUCKET, -1L, null),
 				0x6789L,
 				ContainerTransferJournal.Phase.REGION_COMMITTED);
-		check(ContainerRecoveryCoordinator.decide(4L, 0L, prepared, false,
+		check(ContainerRecoveryCoordinator.decide(4L, 0L, prepared,
 				CrossDomainRecovery.ExternalTruth.BEFORE).outcome()
 				== CrossDomainRecovery.Outcome.DISCARD_UNCOMMITTED,
 				"clean base HEAD with an exact before actor must discard an uncommitted WAL");
-		check(ContainerRecoveryCoordinator.decide(4L, 0L, committed, false,
+		check(ContainerRecoveryCoordinator.decide(4L, 0L, committed,
 				CrossDomainRecovery.ExternalTruth.AFTER).reason()
 				== CrossDomainRecovery.Reason.BASE_EXTERNAL_CHANGED,
 				"base HEAD accepted an actor that had already changed to after");
-		check(ContainerRecoveryCoordinator.decide(5L, 0x6789L, committed, false,
+		check(ContainerRecoveryCoordinator.decide(5L, 0x6789L, committed,
 				CrossDomainRecovery.ExternalTruth.BEFORE).outcome()
 				== CrossDomainRecovery.Outcome.CONVERGE_AFTER,
 				"target HEAD plus committed journal did not converge a before actor");
-		check(ContainerRecoveryCoordinator.decide(5L, 0x6788L, committed, false,
+		check(ContainerRecoveryCoordinator.decide(5L, 0x6788L, committed,
 				CrossDomainRecovery.ExternalTruth.AFTER).reason()
 				== CrossDomainRecovery.Reason.TARGET_CHECKSUM_MISMATCH,
 				"target HEAD with a different manifest checksum did not lock");
@@ -713,6 +717,62 @@ public final class ContainerTransferStoreValidation {
 					"loaded region published a checkpoint through an ownership lock");
 			check(region.checkpointGeneration() == 1L && persistence.committedGeneration(regionId) == 1L,
 					"refused checkpoint advanced the live or durable generation");
+		} finally {
+			try (var paths = Files.walk(root)) {
+				for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+			}
+		}
+	}
+
+	private static void testCommittedTargetAdoption() throws Exception {
+		Path root = Files.createTempDirectory("mmm-container-target-adoption");
+		try {
+			FluidSolverConfig config = new FluidSolverConfig(
+					0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+			UUID regionId = UUID.randomUUID();
+			BlockPos origin = BlockPos.ZERO;
+			BlockPos controller = new BlockPos(-1, 0, 0);
+			FluidRegionFootprint footprint = new FluidRegionFootprint(
+					controller, origin, origin, Set.of(origin.asLong()), Set.of(controller.asLong()),
+					Set.of(ChunkPos.pack(0, 0)));
+			FluidDomain pure = new FluidDomain(2, 2, 2, config, 64);
+			pure.setVolume(1, 1, 1, 0.25F);
+			FlipParticleState particles = pure.exportParticleState();
+			float[] positionVolume = particles.copyPositionVolume();
+			double[] masses = new double[particles.particleCount()];
+			int[] materials = new int[particles.particleCount()];
+			double totalMass = 0.0;
+			for (int marker = 0; marker < masses.length; marker++) {
+				masses[marker] = positionVolume[marker * 4 + 3] * config.density();
+				totalMass += masses[marker];
+			}
+			FluidDomain base = new FluidDomain(2, 2, 2, config, 64);
+			base.restoreMaterialParticleState(new FlipMaterialParticleState(
+					2, 2, 2, config.cellSize(), particles.particleCount(), particles.totalVolume(), totalMass,
+					BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, particles.copyParticleVelocities(),
+					particles.copySolidMask(), masses, materials));
+			FluidRegion region = new FluidRegion(regionId, DIMENSION, origin, base, 64L, footprint);
+			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(
+					root, TestProfiles.materials(), null, null, null, null);
+			long baseGeneration = persistence.checkpoint(region);
+			FluidDomain candidate = FluidDomain.restoreAuthoritativeState(base.captureAuthoritativeState());
+			check(candidate.tryInsertExactVolume(1, 1, 1, 0.125F, 1).transferred(),
+					"fixture could not form a distinct private container target");
+			double targetVolume = candidate.totalVolumeExact();
+			long targetGeneration = baseGeneration + 1L;
+			RegionRepositoryAdapter.StagedCheckpoint staged = persistence.stageCandidateCheckpoint(
+					region, candidate, targetGeneration, region.paused());
+			check(persistence.commitStagedLifecycleCheckpoint(staged) == targetGeneration,
+					"fixture did not publish the private target HEAD");
+			check(region.checkpointGeneration() == baseGeneration
+					&& region.domain().totalVolumeExact() != targetVolume,
+					"HEAD publication prematurely changed the live base solver");
+			long solverGenerationBefore = region.solverGeneration();
+			persistence.adoptCommittedContainerCheckpoint(region, baseGeneration, targetGeneration);
+			check(region.checkpointGeneration() == targetGeneration
+					&& region.domain().totalVolumeExact() == targetVolume
+					&& region.solverGeneration() == solverGenerationBefore + 1L,
+					"recovery did not replace live base with the exact committed target");
 		} finally {
 			try (var paths = Files.walk(root)) {
 				for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);

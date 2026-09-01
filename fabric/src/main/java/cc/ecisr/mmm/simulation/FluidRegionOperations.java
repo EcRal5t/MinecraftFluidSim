@@ -82,6 +82,10 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 	long checkpoint(FluidRegion region) throws IOException { return persistence.checkpoint(region); }
 	long committedGeneration(UUID regionId) throws IOException { return persistence.committedGeneration(regionId); }
 	long committedManifestChecksum(UUID regionId) throws IOException { return persistence.committedManifestChecksum(regionId); }
+	void adoptCommittedContainerCheckpoint(FluidRegion region, long baseGeneration, long targetGeneration)
+			throws IOException {
+		persistence.adoptCommittedContainerCheckpoint(region, baseGeneration, targetGeneration);
+	}
 	void requireRemovalQuarantineCapacity(FluidRegion region, long maximumEntries, long maximumBytes) throws IOException {
 		persistence.requireRemovalQuarantineCapacity(region, maximumEntries, maximumBytes);
 	}
@@ -113,6 +117,11 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			FluidRegion region, FluidDomain candidateDomain, long target
 	) throws IOException {
 		return persistence.stageLifecycleCheckpoint(region, candidateDomain, target);
+	}
+	RegionRepositoryAdapter.StagedCheckpoint stageContainerCheckpoint(
+			FluidRegion region, FluidDomain candidateDomain, long target, boolean operatorPaused
+	) throws IOException {
+		return persistence.stageCandidateCheckpoint(region, candidateDomain, target, operatorPaused);
 	}
 	long commitStagedLifecycleCheckpoint(RegionRepositoryAdapter.StagedCheckpoint staged) throws IOException {
 		return persistence.commitStagedLifecycleCheckpoint(staged);
@@ -160,31 +169,36 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			CollisionRefresher collisionRefresher,
 			SnapshotSender snapshotSender,
 			RemovalSender removalSender,
-			boolean toleratePerformancePause
+			boolean inventoryDecrease
 	) {
+		String numericalFailure = null;
 		if (region.chemistryBlockFailure() != null) {
-			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, region.chemistryBlockFailure());
-			return false;
+			numericalFailure = region.chemistryBlockFailure();
+		} else if (region.granularBlockFailure() != null) {
+			numericalFailure = region.granularBlockFailure();
+		} else if (region.thermalBlockFailure() != null) {
+			numericalFailure = region.thermalBlockFailure();
+		} else if (region.numericalBlockFailure() != null) {
+			numericalFailure = region.numericalBlockFailure();
 		}
-		if (region.granularBlockFailure() != null) {
-			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, region.granularBlockFailure());
-			return false;
-		}
-		if (region.thermalBlockFailure() != null) {
-			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, region.thermalBlockFailure());
-			return false;
-		}
-		if (region.numericalBlockFailure() != null) {
-			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, region.numericalBlockFailure());
+		boolean numericalPaused = numericalFailure != null;
+		if (numericalPaused && !(inventoryDecrease && MinecraftRegionAvailability.inventoryDecreaseMayBypass(
+				RegionAvailabilityReason.NUMERICAL_PAUSE))) {
+			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, numericalFailure);
 			return false;
 		}
 		boolean performancePaused = region.performanceBlockFailure() != null;
-		if (performancePaused && !toleratePerformancePause) {
+		if (performancePaused && !(inventoryDecrease && MinecraftRegionAvailability.inventoryDecreaseMayBypass(
+				RegionAvailabilityReason.PERFORMANCE_PAUSE))) {
 			region.setAvailabilityFailure(RegionAvailabilityReason.PERFORMANCE_PAUSE, region.performanceBlockFailure());
 			return false;
 		}
 		if (!region.controllerManaged()) {
-			if (!performancePaused) region.setAvailabilityFailure(null);
+			if (numericalPaused) region.setAvailabilityFailure(
+					RegionAvailabilityReason.NUMERICAL_PAUSE, numericalFailure);
+			else if (performancePaused) region.setAvailabilityFailure(
+					RegionAvailabilityReason.PERFORMANCE_PAUSE, region.performanceBlockFailure());
+			else region.setAvailabilityFailure(null);
 			return true;
 		}
 		String ownershipLock = persistence.ownershipLockDescription(region);
@@ -254,7 +268,9 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			collisionRefresher.refresh(level, region);
 			region.markCollisionRefreshed();
 		}
-		if (performancePaused) region.setAvailabilityFailure(
+		if (numericalPaused) region.setAvailabilityFailure(
+				RegionAvailabilityReason.NUMERICAL_PAUSE, numericalFailure);
+		else if (performancePaused) region.setAvailabilityFailure(
 				RegionAvailabilityReason.PERFORMANCE_PAUSE, region.performanceBlockFailure());
 		else region.setAvailabilityFailure(null);
 		return true;

@@ -25,7 +25,7 @@
 - 固液已支持有界、数据化的压力平衡曲线，气液使用绝对压力和 component 分压；更高压力、更多材料和跨相溶解仍需分别验证物性域。
 - 气体已从 exact inventory/volume/`U` 派生完整 ideal-mixture 声学闭合，固定压力钳制已移除；接触液体的有限 cavity node 已以 `V*beta_s` 集总自由度进入同一 pressure solve，环境与真空保持 Dirichlet。当前仍不解析逐 cell 质量、动量、总能量与声波；空间化必须先建立这些唯一真值，再把逐 cell 非零 pressure compliance 接入同一全马赫方程，不能并存两份库存。
 - Query API 已冻结同步只读单格观察，并已有只查询闭壳相邻液体的可选 Jade 适配；container durable completion 已有 committed event。尚无 WAILA/HWYLA、直接自由面目标、稳定 transfer API、其他提交类型事件或其他 loader 发现桥。
-- 主 Mod 已有 field probe 的 server-authored 液体/solid/gas 有界观察、controller 的 select/pause/resume/availability console、管理员 empty/vent/release/remove 预览确认流程，以及 creative-only fixed reservoir setpoint。破坏性动作展示实际移除量和 blocker，以短时同玩家一次性 token 确认，并通过 ACTIVE/REMOVED HEAD、network tombstone 与 quarantine 恢复闭合；这些仍是内部产品界面，不扩展外部 Query/transfer ABI。
+- 主 Mod 已有 field probe 的 server-authored 液体/solid/gas 有界观察、controller 的 select/pause/resume/availability console、管理员 empty/vent/release/remove 预览确认流程，以及 creative-only fixed reservoir setpoint。控制器空手激活与持物入口分离，availability pause 不遮断 summary；在 HEAD、registry 和 WAL 仍可证明时，数值暂停区域仍可用私有候选完成只减库存的清理。破坏性动作展示实际移除量和 blocker，以短时同玩家一次性 token 确认，并通过 ACTIVE/REMOVED HEAD、network tombstone 与 quarantine 恢复闭合；这些仍是内部产品界面，不扩展外部 Query/transfer ABI。
 - section 是一个 region 原子 generation 内的存储分片，不具有独立提交、卸载或 ownership 生命周期。
 - controller 外天然洞穴、河流、海洋和世界生成水不在当前 ownership 范围。
 

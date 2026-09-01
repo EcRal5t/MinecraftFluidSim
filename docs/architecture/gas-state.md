@@ -65,6 +65,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 - 无热状态时使用等温状态方程和有限速率孔流。
 - 热状态存在时，气体总内能与节点库存共同派生温度、绝对压力、密度和声学闭合；孔流同步搬运组分与能量。
 - 气液相变用 water-vapor 分压计算饱和条件，受状态方程、潜热、库存、容量和批预算共同限制。有限非负总压包括真空；它不被误当作固液 `T_eq(p)` 曲线的查询坐标，液气方向只由液温给出的饱和压与实际 vapor partial pressure 决定。
+- 一个界面 cell 可以同时含多种合法 liquid carrier。某条气液 transition 只结算其目标 liquid 的体积、质量、组成和相变能量；同格其他 liquid 原样加入该 cell 的 LTE heat-bath inventory，并计入冷凝容量，但不被改材料、不被并入目标组成，也不能仅因存在就触发候选暂停。
 - 所有 candidate 温度必须落在 world thermal registry 的 caloric 有效域；只有真正以当前压力查询 `T_eq(p)` 的凝聚相候选受对应曲线端点约束，越界安全暂停。
 - 一个 liquid cell 可同时邻接多个独立 sealed node。gas topology 继续保留各 node 的库存和 `U`，phase planner 不合并它们；每个 pressure interval 只向绝对分压失衡最大的可执行 node 提交一次 cell 交换，随后由下一 projection 结算该体积功。
 - mechanics 可从所有液气界面选择一个统一 sealed-node gauge reference，在 PCG 内只求相对压力并在绝对观察/热学边界加回；该数值换元不修改 node inventory、U 或不同 node 间的压差。接触液体的有限 node 会得到当次 projection 的集总可压缩 pressure unknown；它是由同一 EoS 线性化的 scratch，不是新的权威 node pressure 列。

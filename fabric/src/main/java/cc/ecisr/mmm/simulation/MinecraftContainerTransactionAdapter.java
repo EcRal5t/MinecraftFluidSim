@@ -1,11 +1,13 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.application.ContainerRecoveryCoordinator;
 import cc.ecisr.mmm.application.ContainerTransferCoordinator;
 import cc.ecisr.mmm.application.ContainerTransferUseCase;
 import cc.ecisr.mmm.item.ContainerItemMapper;
 import cc.ecisr.mmm.item.ContainerItemStacks;
 import cc.ecisr.mmm.item.MmmComponents;
+import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.transfer.ContainerTransferActor;
 import cc.ecisr.mmm.transfer.ContainerTransferJournal;
 import net.minecraft.server.level.ServerLevel;
@@ -170,7 +172,8 @@ final class MinecraftContainerTransactionAdapter {
 
 	@FunctionalInterface
 	interface TransferExecutor {
-		MinecraftContainerTransferOperations.TransferOutcome execute(long requestedAmount, long baseAmount);
+		MinecraftContainerTransferOperations.TransferOutcome execute(
+				FluidRegion candidate, long requestedAmount, long baseAmount);
 	}
 
 	private final class RegionPort implements ContainerTransferCoordinator.RegionPort {
@@ -178,6 +181,8 @@ final class MinecraftContainerTransactionAdapter {
 		private final ItemStack beforeStack;
 		private final TransferExecutor executor;
 		private final FinalItemResolver finalItemResolver;
+		private FluidDomain candidateDomain;
+		private boolean candidateOperatorPaused;
 
 		private RegionPort(
 				FluidRegion region,
@@ -198,9 +203,14 @@ final class MinecraftContainerTransactionAdapter {
 				return new ContainerTransferCoordinator.Execution(false, null,
 						"容器转移目标在 WAL 准备前后发生变化", 0L, null);
 			}
+			candidateDomain = FluidDomain.restoreAuthoritativeState(
+					region.domain().captureAuthoritativeState());
+			candidateOperatorPaused = region.paused();
+			FluidRegion candidate = region.lifecycleCandidate(candidateDomain, candidateOperatorPaused);
 			MinecraftContainerTransferOperations.TransferOutcome raw =
-					executor.execute(command.requestedAmount(), command.baseAmount());
+					executor.execute(candidate, command.requestedAmount(), command.baseAmount());
 			if (raw == null || !raw.transferred()) {
+				candidateDomain = null;
 				return new ContainerTransferCoordinator.Execution(false, null,
 						raw == null ? "转移未执行" : raw.message(), 0L, null);
 			}
@@ -214,7 +224,9 @@ final class MinecraftContainerTransactionAdapter {
 				UUID transactionId, UUID regionId, long targetGeneration
 		) throws IOException {
 			if (!region.id().equals(regionId)) throw new IOException("Container stage region identity changed");
-			return new Staged(regionOperations.stageCheckpoint(region, targetGeneration));
+			if (candidateDomain == null) throw new IOException("Container stage has no complete private candidate");
+			return new Staged(regionOperations.stageContainerCheckpoint(
+					region, candidateDomain, targetGeneration, candidateOperatorPaused));
 		}
 
 		@Override
@@ -224,7 +236,30 @@ final class MinecraftContainerTransactionAdapter {
 
 		@Override
 		public long commit(ContainerTransferCoordinator.StagedCheckpoint staged) throws IOException {
-			return regionOperations.commitStagedCheckpoint(region, ((Staged) staged).checkpoint);
+			if (candidateDomain == null) throw new IOException("Container commit has no complete private candidate");
+			Staged concrete = (Staged) staged;
+			long targetGeneration = concrete.checkpoint.prepared().generation();
+			long published;
+			try {
+				published = regionOperations.commitStagedLifecycleCheckpoint(concrete.checkpoint);
+			} catch (IOException | RuntimeException failure) {
+				try {
+					long durableGeneration = regionOperations.committedGeneration(region.id());
+					long durableChecksum = regionOperations.committedManifestChecksum(region.id());
+					if (durableGeneration != targetGeneration
+							|| durableChecksum != concrete.checkpoint.manifestChecksum()) throw failure;
+					published = durableGeneration;
+					MmmMod.LOGGER.warn(
+							"Container HEAD {} for region {} committed despite a post-publish exception",
+							published, region.id(), failure);
+				} catch (IOException | RuntimeException inspectionFailure) {
+					if (inspectionFailure != failure) failure.addSuppressed(inspectionFailure);
+					throw failure;
+				}
+			}
+			region.adoptContainerCandidateDomain(candidateDomain, published, candidateOperatorPaused);
+			candidateDomain = null;
+			return published;
 		}
 
 		@Override

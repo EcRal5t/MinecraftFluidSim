@@ -103,7 +103,7 @@ final class GasLiquidPhaseChangeStage {
 						break;
 					} else if (direction == GasLiquidPhaseModel.Direction.CONDENSE) {
 						GasCondensePlan plan = planCondense(
-								cell, node, liquidHandle, transition, inventory, phase,
+								cell, node, liquidHandle, transition, phase,
 								thermalCell, gas.carrierId(), saturation.pressureImbalancePa(), remainingBudget);
 						if (plan == null) continue;
 						boolean topologyChanged = plan.target() < 0;
@@ -188,10 +188,8 @@ final class GasLiquidPhaseChangeStage {
 			double remainingMass = before.upperMass() - removedMass;
 			if (remainingMass < 0.0 && remainingMass >= -massTolerance(before.upperMass())) remainingMass = 0.0;
 			PhaseComposition remainingComposition = before.upperComposition().minus(removal.movedComposition());
-			List<ThermalStateFunction.InventoryPortion> remainingLiquid = remainingMass == 0.0
-					? List.of() : List.of(new ThermalStateFunction.InventoryPortion(
-							thermal.thermalMaterialHandleForFluid(liquidHandle), remainingMass,
-							chemistry == null ? Map.of() : remainingComposition.amounts()));
+			List<ThermalStateFunction.InventoryPortion> remainingLiquid = liquidInventoryAfterBoiling(
+					cell, liquidHandle, remainingMass, remainingComposition);
 			double candidateLiquidTemperature = thermal.requirePhaseCandidateState(
 					thermalCell, remainingLiquid, -batchEnergy);
 			GasInventory candidateGas = gasState.network.inventory(node).merge(batch);
@@ -225,7 +223,7 @@ final class GasLiquidPhaseChangeStage {
 
 	private GasCondensePlan planCondense(
 			int cell, int node, int liquidHandle, ThermalPhaseTransition transition,
-			PhaseCellInventory before, GasLiquidPhaseModel phase,
+			GasLiquidPhaseModel phase,
 			ThermalDomainState.PhaseCandidateCell thermalCell, String gasCarrierId,
 			double initialPressureImbalancePa, long maximumBatches
 	) {
@@ -235,7 +233,7 @@ final class GasLiquidPhaseChangeStage {
 		long nanosPerBatch = phase.gasBatch(transition, 1L).standardVolumeNanos();
 		long byGas = vapor.standardVolumeNanos() / nanosPerBatch;
 		long occupied = Math.addExact(Math.addExact(
-				Math.addExact(before.upperVolumeSvq(), before.lowerVolumeSvq()), support.granularSvq(cell)),
+				liquidCellSvq(cell), support.granularSvq(cell)),
 				support.thermal().coherentPhases().cellOccupiedSvq(cell));
 		long capacity = SolidVolume.fromCellVolumeExact(
 				support.state().geometry().cutCells.openCellVolume(cell));
@@ -243,7 +241,7 @@ final class GasLiquidPhaseChangeStage {
 		long high = Math.min(maximumBatches, Math.min(byGas, byCapacity));
 		if (high <= 0L) return null;
 		GasCondensePlan first = condenseCandidate(
-				cell, node, liquidHandle, transition, before, phase, thermalCell, 1L);
+				cell, node, liquidHandle, transition, phase, thermalCell, 1L);
 		if (first == null) return null;
 		if (first.directionAfter() == GasLiquidPhaseModel.Direction.BOIL) {
 			return first.saturationAfter().closerToEquilibriumThan(initialPressureImbalancePa) ? first : null;
@@ -255,7 +253,7 @@ final class GasLiquidPhaseChangeStage {
 		while (low <= high) {
 			long middle = low + ((high - low) >>> 1);
 			GasCondensePlan candidate = condenseCandidate(
-					cell, node, liquidHandle, transition, before, phase, thermalCell, middle);
+					cell, node, liquidHandle, transition, phase, thermalCell, middle);
 			if (candidate == null || candidate.directionAfter()
 					!= GasLiquidPhaseModel.Direction.CONDENSE) {
 				high = middle - 1L;
@@ -267,14 +265,14 @@ final class GasLiquidPhaseChangeStage {
 		long crossingBatches = best.batches() + 1L;
 		if (crossingBatches > limit) return best;
 		GasCondensePlan crossing = condenseCandidate(
-				cell, node, liquidHandle, transition, before, phase, thermalCell, crossingBatches);
+				cell, node, liquidHandle, transition, phase, thermalCell, crossingBatches);
 		return crossing != null && crossing.saturationAfter().closerToEquilibriumThan(
 				best.saturationAfter().pressureImbalancePa()) ? crossing : best;
 	}
 
 	private GasCondensePlan condenseCandidate(
 			int cell, int node, int liquidHandle, ThermalPhaseTransition transition,
-			PhaseCellInventory before, GasLiquidPhaseModel phase,
+			GasLiquidPhaseModel phase,
 			ThermalDomainState.PhaseCandidateCell thermalCell, long batches
 	) {
 		try {
@@ -309,7 +307,7 @@ final class GasLiquidPhaseChangeStage {
 			}
 			long addedSvq = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
 			long occupied = Math.addExact(Math.addExact(
-					Math.addExact(before.upperVolumeSvq(), before.lowerVolumeSvq()), support.granularSvq(cell)),
+					liquidCellSvq(cell), support.granularSvq(cell)),
 					thermal.coherentPhases().cellOccupiedSvq(cell));
 			long capacity = SolidVolume.fromCellVolumeExact(
 					support.state().geometry().cutCells.openCellVolume(cell));
@@ -431,10 +429,7 @@ final class GasLiquidPhaseChangeStage {
 				: new PhaseCompositionBuilder(chemistry);
 		for (int marker = support.state().markerGrid().cellMarkerHead[cell]; marker >= 0;
 				marker = support.state().markerGrid().particleCellNext[marker]) {
-			if (particles.materialHandle(marker) != liquidHandle) {
-				throw new FluidDomain.ThermalPhaseBlockedException(
-						"Gas phase cell contains another liquid carrier");
-			}
+			if (particles.materialHandle(marker) != liquidHandle) continue;
 			svq = Math.addExact(svq, SolidVolume.cellVolumeSvqAtLeast(particles.volume(marker)));
 			mass += support.state().unitScale().kilograms(particles.mass(marker));
 			energy += support.thermal().liquidInternalEnergy(marker);
@@ -456,13 +451,19 @@ final class GasLiquidPhaseChangeStage {
 		boolean found = false;
 		for (int marker = support.state().markerGrid().cellMarkerHead[cell]; marker >= 0;
 				marker = support.state().markerGrid().particleCellNext[marker]) {
-			if (support.state().particles().materialHandle(marker) != liquidHandle) {
-				throw new FluidDomain.ThermalPhaseBlockedException(
-						"Gas phase cell contains another liquid carrier");
-			}
-			found = true;
+			if (support.state().particles().materialHandle(marker) == liquidHandle) found = true;
 		}
 		return found;
+	}
+
+	private long liquidCellSvq(int cell) {
+		LiquidParticleStore particles = support.state().particles();
+		long total = 0L;
+		for (int marker = support.state().markerGrid().cellMarkerHead[cell]; marker >= 0;
+				marker = support.state().markerGrid().particleCellNext[marker]) {
+			total = Math.addExact(total, SolidVolume.cellVolumeSvqAtLeast(particles.volume(marker)));
+		}
+		return total;
 	}
 
 	private boolean[] gasVolatileSpecies(int gasThermalHandle) {
@@ -558,18 +559,36 @@ final class GasLiquidPhaseChangeStage {
 		ArrayList<ThermalStateFunction.InventoryPortion> result = new ArrayList<>();
 		for (int marker = support.state().markerGrid().cellMarkerHead[cell]; marker >= 0;
 				marker = support.state().markerGrid().particleCellNext[marker]) {
-			if (particles.materialHandle(marker) != liquidHandle) {
-				throw new FluidDomain.ThermalPhaseBlockedException(
-						"Gas phase cell contains another liquid carrier");
-			}
+			int markerLiquidHandle = particles.materialHandle(marker);
 			double mass = marker == target ? targetMass : particles.mass(marker);
 			ChemicalMixtureRecord mixture = chemistry == null ? null
 					: marker == target ? condensedMixture : chemistry.record(marker);
 			result.add(liquidInventoryPortion(
-					liquidHandle, support.state().unitScale().kilograms(mass), mixture));
+					markerLiquidHandle, support.state().unitScale().kilograms(mass), mixture));
 		}
 		if (target < 0) result.add(liquidInventoryPortion(
 				liquidHandle, appendedMass, condensedMixture));
+		return List.copyOf(result);
+	}
+
+	/** Keeps non-transitioning liquid carriers in the same cell as exact LTE heat-bath inventory. */
+	private List<ThermalStateFunction.InventoryPortion> liquidInventoryAfterBoiling(
+			int cell, int liquidHandle, double remainingMass, PhaseComposition remainingComposition
+	) {
+		LiquidParticleStore particles = support.state().particles();
+		ChemicalParcelStore chemistry = support.chemistry();
+		ArrayList<ThermalStateFunction.InventoryPortion> result = new ArrayList<>();
+		for (int marker = support.state().markerGrid().cellMarkerHead[cell]; marker >= 0;
+				marker = support.state().markerGrid().particleCellNext[marker]) {
+			int markerLiquidHandle = particles.materialHandle(marker);
+			if (markerLiquidHandle == liquidHandle) continue;
+			result.add(liquidInventoryPortion(markerLiquidHandle,
+					support.state().unitScale().kilograms(particles.mass(marker)),
+					chemistry == null ? null : chemistry.record(marker)));
+		}
+		if (remainingMass > 0.0) result.add(new ThermalStateFunction.InventoryPortion(
+				support.thermal().thermalMaterialHandleForFluid(liquidHandle), remainingMass,
+				chemistry == null ? Map.of() : remainingComposition.amounts()));
 		return List.copyOf(result);
 	}
 

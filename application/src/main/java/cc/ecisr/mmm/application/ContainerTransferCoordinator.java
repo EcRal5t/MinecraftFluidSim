@@ -7,7 +7,7 @@ import java.io.IOException;
 import java.util.Objects;
 import java.util.UUID;
 
-/** Owns PREPARED WAL -> exact solver mutation -> staged checkpoint -> REGION_COMMITTED WAL -> HEAD. */
+/** Owns PREPARED WAL -> private exact candidate -> staged checkpoint -> REGION_COMMITTED WAL -> HEAD. */
 public final class ContainerTransferCoordinator {
 	private final ContainerJournalRepository journals;
 	private final RegionPort regions;
@@ -64,19 +64,15 @@ public final class ContainerTransferCoordinator {
 					injected.getMessage(), 0L, null, -1L, transactionId);
 		}
 
-		journals.markSolverDirty(transactionId);
 		Execution execution;
 		try {
 			execution = regions.execute(command);
 		} catch (RuntimeException failure) {
-			String diagnostic = "容器转移执行异常，区域已锁定；重启后从 base checkpoint 恢复："
-					+ failure.getMessage();
-			regions.lock(command.regionId(), diagnostic);
-			return result(ContainerTransferUseCase.Status.LOCKED, command, command.beforeItem(),
-					diagnostic, 0L, null, -1L, transactionId);
+			return discardPrivateCandidate(command, transactionId,
+					"容器转移私有候选执行异常；在线区域保持 base 不变：" + failure.getMessage(),
+					ContainerTransferUseCase.Status.REJECTED);
 		}
 		if (execution == null || !execution.transferred()) {
-			journals.markSolverClean(transactionId);
 			try {
 				journals.delete(transactionId);
 			} catch (IOException cleanupFailure) {
@@ -90,10 +86,9 @@ public final class ContainerTransferCoordinator {
 		}
 		if (execution.afterItem() == null || execution.actualAmount() <= 0L
 				|| execution.actualAmount() > command.requestedAmount()) {
-			String diagnostic = "容器转移 solver 返回无效 actual settlement；区域已锁定";
-			regions.lock(command.regionId(), diagnostic);
-			return result(ContainerTransferUseCase.Status.LOCKED, command, command.beforeItem(),
-					diagnostic, 0L, null, -1L, transactionId);
+			return discardPrivateCandidate(command, transactionId,
+					"容器转移私有候选返回无效 actual settlement；在线区域保持不变",
+					ContainerTransferUseCase.Status.REJECTED);
 		}
 		try {
 			String afterProfile = execution.afterItem().profileFingerprint();
@@ -107,18 +102,16 @@ public final class ContainerTransferCoordinator {
 				execution.afterItem().validateThermalRegistry(command.thermalRegistryFingerprint());
 			}
 		} catch (RuntimeException invalidAfter) {
-			String diagnostic = "容器转移 after-item 真值无效；区域已锁定：" + invalidAfter.getMessage();
-			regions.lock(command.regionId(), diagnostic);
-			return result(ContainerTransferUseCase.Status.LOCKED, command, command.beforeItem(),
-					diagnostic, 0L, null, -1L, transactionId);
+			return discardPrivateCandidate(command, transactionId,
+					"容器转移 after-item 真值无效；在线区域保持不变：" + invalidAfter.getMessage(),
+					ContainerTransferUseCase.Status.REJECTED);
 		}
 		boolean thermalTransfer = command.resourceKind() == ContainerTransferJournal.ResourceKind.FLUID_NANOS
 				&& command.regionHasThermalState();
 		if (thermalTransfer != (execution.thermalEnergy() != null)) {
-			String diagnostic = "容器转移 solver 未返回与区域热状态一致的 coupled energy；区域已锁定";
-			regions.lock(command.regionId(), diagnostic);
-			return result(ContainerTransferUseCase.Status.LOCKED, command, command.beforeItem(),
-					diagnostic, 0L, null, -1L, transactionId);
+			return discardPrivateCandidate(command, transactionId,
+					"容器转移私有候选未返回与区域热状态一致的 coupled energy；在线区域保持不变",
+					ContainerTransferUseCase.Status.REJECTED);
 		}
 		try {
 			inject(FaultPoint.AFTER_SOLVER);
@@ -185,7 +178,6 @@ public final class ContainerTransferCoordinator {
 			return result(ContainerTransferUseCase.Status.LOCKED, command, command.beforeItem(),
 					diagnostic, 0L, null, -1L, transactionId);
 		}
-		journals.markRegionCommitted(transactionId);
 		try {
 			inject(FaultPoint.AFTER_CHECKPOINT);
 		} catch (RuntimeException injected) {
@@ -196,6 +188,24 @@ public final class ContainerTransferCoordinator {
 		return result(ContainerTransferUseCase.Status.COMMITTED, command, execution.afterItem(),
 				execution.diagnostic(), execution.actualAmount(), execution.thermalEnergy(),
 				publishedGeneration, transactionId);
+	}
+
+	private ContainerTransferUseCase.Result discardPrivateCandidate(
+			ContainerTransferUseCase.Command command,
+			UUID transactionId,
+			String diagnostic,
+			ContainerTransferUseCase.Status cleanStatus
+	) {
+		try {
+			journals.delete(transactionId);
+			return result(cleanStatus, command, command.beforeItem(), diagnostic, 0L, null, -1L, null);
+		} catch (IOException cleanupFailure) {
+			String locked = diagnostic + "；PREPARED WAL 清理失败，将由恢复流程按 base HEAD 收敛："
+					+ cleanupFailure.getMessage();
+			regions.lock(command.regionId(), locked);
+			return result(ContainerTransferUseCase.Status.LOCKED, command, command.beforeItem(),
+					locked, 0L, null, -1L, transactionId);
+		}
 	}
 
 	private static ContainerTransferUseCase.Result result(
