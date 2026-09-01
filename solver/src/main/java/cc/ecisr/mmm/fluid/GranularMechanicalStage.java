@@ -95,9 +95,9 @@ final class GranularMechanicalStage {
 				double submerged = capacity <= 0.0F ? 0.0
 						: Math.max(0.0, Math.min(1.0, state.markerGrid.exactCellMarkerVolume[cell] / capacity));
 				return new GranularMechanics.FluidSample(true,
-						access.sampleX(state.mac.velocityX, x, y, z),
-						access.sampleY(state.mac.velocityY, x, y, z),
-						access.sampleZ(state.mac.velocityZ, x, y, z),
+						sampleCarrierVelocity(state.mac.velocityX, state.mac.velocityWeightX, 0, x, y, z),
+						sampleCarrierVelocity(state.mac.velocityY, state.mac.velocityWeightY, 1, x, y, z),
+						sampleCarrierVelocity(state.mac.velocityZ, state.mac.velocityWeightZ, 2, x, y, z),
 						state.markerGrid.cellDensity[cell], carrier.dynamicViscosity(), carrier.maximumReynolds(), submerged,
 						state.unitScale.kilograms(state.markerGrid.exactCellMarkerMass[cell])
 								/ immersedSolidVolumeByCell[cell]);
@@ -106,15 +106,18 @@ final class GranularMechanicalStage {
 			@Override public GranularMechanics.FluidImpulseApplication addFluidImpulse(float x, float y, float z,
 			                                      double impulseX, double impulseY, double impulseZ) {
 				MacVelocityGrid mac = state.mac;
-				boolean appliedX = addFaceImpulse(mac.velocityX, mac.velocityWeightX, 0, x, y, z,
+				double appliedSolverX = addFaceImpulse(mac.velocityX, mac.velocityWeightX, 0, x, y, z,
 						state.unitScale.signedSolverMass(impulseX));
-				boolean appliedY = addFaceImpulse(mac.velocityY, mac.velocityWeightY, 1, x, y, z,
+				double appliedSolverY = addFaceImpulse(mac.velocityY, mac.velocityWeightY, 1, x, y, z,
 						state.unitScale.signedSolverMass(impulseY));
-				boolean appliedZ = addFaceImpulse(mac.velocityZ, mac.velocityWeightZ, 2, x, y, z,
+				double appliedSolverZ = addFaceImpulse(mac.velocityZ, mac.velocityWeightZ, 2, x, y, z,
 						state.unitScale.signedSolverMass(impulseZ));
+				double appliedX = state.unitScale.signedKilograms(appliedSolverX);
+				double appliedY = state.unitScale.signedKilograms(appliedSolverY);
+				double appliedZ = state.unitScale.signedKilograms(appliedSolverZ);
 				return new GranularMechanics.FluidImpulseApplication(
-						appliedX ? impulseX : 0.0, appliedY ? impulseY : 0.0, appliedZ ? impulseZ : 0.0,
-						appliedX ? 0.0 : impulseX, appliedY ? 0.0 : impulseY, appliedZ ? 0.0 : impulseZ);
+						appliedX, appliedY, appliedZ,
+						impulseX - appliedX, impulseY - appliedY, impulseZ - appliedZ);
 			}
 		};
 	}
@@ -134,10 +137,13 @@ final class GranularMechanicalStage {
 		}
 	}
 
-	private boolean addFaceImpulse(
-			float[] field, float[] faceMass, int axis, float px, float py, float pz, double impulse
+	/**
+	 * Samples the same finite face-mass kernel that receives the reaction impulse. Extrapolated
+	 * zero-mass faces are not a carrier reservoir and therefore cannot dominate parcel drag.
+	 */
+	private double sampleCarrierVelocity(
+			float[] field, float[] faceMass, int axis, float px, float py, float pz
 	) {
-		if (impulse == 0.0) return true;
 		float h = state.config.cellSize();
 		int nx = axis == 0 ? state.sizeX + 1 : state.sizeX;
 		int ny = axis == 1 ? state.sizeY + 1 : state.sizeY;
@@ -147,23 +153,53 @@ final class GranularMechanicalStage {
 		float gz = pz / h - (axis == 2 ? 0.0F : 0.5F);
 		int x0 = (int) Math.floor(gx), y0 = (int) Math.floor(gy), z0 = (int) Math.floor(gz);
 		float fx = gx - x0, fy = gy - y0, fz = gz - z0;
-		double validWeight = 0.0;
+		double weightedVelocity = 0.0, weightedMass = 0.0;
 		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
 			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
 			if (x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz) continue;
 			int face = (z * ny + y) * nx + x;
-			if (faceMass[face] <= 1.0e-8F) continue;
-			validWeight += access.trilinearWeight(ox, oy, oz, fx, fy, fz);
+			if (!(faceMass[face] > 0.0F)) continue;
+			double massWeight = access.trilinearWeight(ox, oy, oz, fx, fy, fz) * faceMass[face];
+			weightedVelocity += massWeight * field[face];
+			weightedMass += massWeight;
 		}
-		if (!(validWeight > 0.0)) return false;
+		return weightedMass > 0.0 ? weightedVelocity / weightedMass : 0.0;
+	}
+
+	/** Mass-adjoint scatter; returns the actual solver impulse represented by the float writes. */
+	private double addFaceImpulse(
+			float[] field, float[] faceMass, int axis, float px, float py, float pz, double impulse
+	) {
+		if (impulse == 0.0) return 0.0;
+		float h = state.config.cellSize();
+		int nx = axis == 0 ? state.sizeX + 1 : state.sizeX;
+		int ny = axis == 1 ? state.sizeY + 1 : state.sizeY;
+		int nz = axis == 2 ? state.sizeZ + 1 : state.sizeZ;
+		float gx = px / h - (axis == 0 ? 0.0F : 0.5F);
+		float gy = py / h - (axis == 1 ? 0.0F : 0.5F);
+		float gz = pz / h - (axis == 2 ? 0.0F : 0.5F);
+		int x0 = (int) Math.floor(gx), y0 = (int) Math.floor(gy), z0 = (int) Math.floor(gz);
+		float fx = gx - x0, fy = gy - y0, fz = gz - z0;
+		double weightedMass = 0.0;
 		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
 			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
 			if (x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz) continue;
 			int face = (z * ny + y) * nx + x;
-			if (faceMass[face] <= 1.0e-8F) continue;
-			double share = impulse * access.trilinearWeight(ox, oy, oz, fx, fy, fz) / validWeight;
-			field[face] += (float) (share / faceMass[face]);
+			if (!(faceMass[face] > 0.0F)) continue;
+			weightedMass += access.trilinearWeight(ox, oy, oz, fx, fy, fz) * faceMass[face];
 		}
-		return true;
+		if (!(weightedMass > 0.0)) return 0.0;
+		double actual = 0.0;
+		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
+			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
+			if (x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz) continue;
+			int face = (z * ny + y) * nx + x;
+			if (!(faceMass[face] > 0.0F)) continue;
+			double weight = access.trilinearWeight(ox, oy, oz, fx, fy, fz);
+			float before = field[face];
+			field[face] = (float) (before + impulse * weight / weightedMass);
+			actual += (field[face] - before) * faceMass[face];
+		}
+		return actual;
 	}
 }

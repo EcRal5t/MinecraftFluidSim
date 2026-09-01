@@ -162,7 +162,10 @@ final class ControllerInventoryDurabilityValidation {
 	private static void settlePendingVolumeWork(
 			FluidRegion region, RegionRepositoryAdapter persistence
 	) throws Exception {
-		if (region.domain().hasPendingPhaseVolumeWork()) stepAndPublish(region, persistence, false);
+		if (!region.domain().hasPendingPhaseVolumeWork()) return;
+		region.domain().stepMechanicsOnly();
+		persistence.checkpoint(region);
+		restart(region, persistence, "pending phase-work settlement");
 	}
 
 	private static void restart(
@@ -224,6 +227,9 @@ final class ControllerInventoryDurabilityValidation {
 
 	/** Crosses normal player actions with full backend handoff after every accepted transition. */
 	private static void runNormalPlayStateMatrix(FullCapabilityTestFixture.Registries registries) throws Exception {
+		runScenario("sand and precipitate long settlement", registries, state -> {
+			state.insertSand(); state.insertAcid(5); state.insertBase(5); state.steps(true, 120);
+		});
 		runScenario("reported acid-then-base precipitation", registries, state -> {
 			for (int bucket = 0; bucket < 7; bucket++) { state.insertAcid(); state.steps(true, 2); }
 			for (int bucket = 0; bucket < 7; bucket++) { state.insertBase(); state.steps(true, 2); }
@@ -300,6 +306,44 @@ final class ControllerInventoryDurabilityValidation {
 		runScenario("mixed-clear-vent-extract", registries, state -> {
 			state.insertWater(); state.insertMercury(); state.insertSand(); state.steps(false, 3);
 			state.clear(); state.vent(); state.insertWater(); state.extractWater(); state.step(true);
+		});
+		runScenario("settled precipitate reacidification", registries, state -> {
+			state.insertAcid(6); state.insertBase(6); state.steps(true, 80);
+			state.insertAcid(4); state.steps(true, 80);
+		});
+		runScenario("settled precipitate additional base", registries, state -> {
+			state.insertAcid(6); state.insertBase(6); state.steps(true, 80);
+			state.insertBase(4); state.steps(true, 80);
+		});
+		runScenario("indicator toggled during precipitation", registries, state -> {
+			state.insertAcid(6); state.indicator(true); state.insertBase(3); state.steps(true, 10);
+			state.indicator(false); state.insertBase(3); state.steps(true, 80);
+		});
+		runScenario("precipitate vent and reacidify", registries, state -> {
+			state.insertAcid(6); state.insertBase(6); state.steps(true, 40); state.settle();
+			state.vent(); state.roundTrip(); state.insertAcid(2); state.steps(true, 40);
+		});
+		runScenario("precipitate clear vacuum rebuild", registries, state -> {
+			state.insertAcid(6); state.insertBase(6); state.steps(true, 60); state.clear(); state.vent();
+			state.insertAcid(4); state.indicator(true); state.insertBase(4); state.steps(true, 60);
+		});
+		runScenario("mercury and precipitate long settlement", registries, state -> {
+			state.insertMercury(); state.insertAcid(5); state.insertBase(5); state.steps(true, 120);
+		});
+		runScenario("reactive liquid extraction after precipitation", registries, state -> {
+			state.insertAcid(6); state.insertBase(6); state.steps(true, 40);
+			state.extractChemical(); state.steps(true, 80);
+		});
+		runScenario("reactive bed repeated cold handoff", registries, state -> {
+			state.insertAcid(6); state.insertBase(6);
+			for (int cycle = 0; cycle < 40; cycle++) { state.step(true); state.roundTrip(); }
+			state.settle(); state.vent(); state.roundTrip(); state.step(true);
+		});
+		runScenario("long alternating acid base pulses", registries, state -> {
+			for (int pulse = 0; pulse < 10; pulse++) {
+				state.insertAcid(); state.insertBase(); state.steps(true, 5);
+			}
+			state.steps(true, 100);
 		});
 	}
 
@@ -388,6 +432,30 @@ final class ControllerInventoryDurabilityValidation {
 					"normal-play water extraction was rejected");
 			roundTrip();
 		}
+		void extractChemical() {
+			settle();
+			int[] target = maximumNearbyLiquidCell(6);
+			double available = domain.exactVolumeNear(target[0], target[1], target[2], 6, -1);
+			check(domain.tryExtractExactChemical(target[0], target[1], target[2], 8.0F, 6).transferred(),
+					"normal-play chemical extraction was rejected at generation " + generation
+							+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
+							+ ", pending=" + domain.hasPendingPhaseVolumeWork() + ", target="
+							+ java.util.Arrays.toString(target) + ", nearby=" + available);
+			roundTrip();
+		}
+		int[] maximumNearbyLiquidCell(int radius) {
+			int[] selected = new int[3];
+			double maximum = -1.0;
+			for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
+				for (int x = 0; x < domain.sizeX(); x++) {
+					double available = domain.exactVolumeNear(x, y, z, radius, -1);
+					if (available > maximum) {
+						maximum = available; selected[0] = x; selected[1] = y; selected[2] = z;
+					}
+				}
+			}
+			return selected;
+		}
 		void clear() {
 			settle();
 			domain.commitOperatorClear(domain.planOperatorClear());
@@ -398,13 +466,36 @@ final class ControllerInventoryDurabilityValidation {
 			domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
 			roundTrip();
 		}
-		void settle() { if (domain.hasPendingPhaseVolumeWork()) step(false); }
+		void settle() {
+			if (!domain.hasPendingPhaseVolumeWork()) return;
+			try {
+				var candidate = new CpuFluidSolverBackend().evaluate(
+						FluidStepRequest.pendingPhaseSettlement(generation, domain.captureAuthoritativeState()));
+				check(candidate.stats().thermalAxis().granularPhase().transfers() == 0
+							&& candidate.stats().chemistryEvaluations() == 0,
+						"pending phase-work settlement advanced thermochemistry");
+				domain = candidate.claimPreparedCpuDomain();
+				check(!domain.hasPendingPhaseVolumeWork(),
+						"pending phase-work settlement retained the prior lien");
+			} catch (RuntimeException failure) {
+				throw new IllegalStateException("normal-play pending phase-work settlement failed at generation "
+						+ generation, failure);
+			}
+			generation++;
+			roundTrip();
+		}
 		void steps(boolean phase, int count) { for (int step = 0; step < count; step++) step(phase); }
 		void step(boolean phase) {
-			var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
-					generation, domain.captureAuthoritativeState(), java.util.List.of(), phase,
-					phase ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0));
-			domain = candidate.claimPreparedCpuDomain();
+			try {
+				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+						generation, domain.captureAuthoritativeState(), java.util.List.of(), phase,
+						phase ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0));
+				domain = candidate.claimPreparedCpuDomain();
+			} catch (RuntimeException failure) {
+				throw new IllegalStateException("normal-play logical step failed at generation " + generation
+						+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
+						+ ", solidSvq=" + domain.totalGranularSolidVolumeSvq(), failure);
+			}
 			generation++;
 			roundTrip();
 		}

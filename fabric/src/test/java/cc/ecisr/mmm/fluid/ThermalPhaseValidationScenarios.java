@@ -277,6 +277,21 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& quantizedDomain.exactInternalEnergy().equals(quantizedEnergy)
 				&& quantizedDomain.exactInternalEnergy().equals(quantizedDomain.thermalAudit().expectedInventory()),
 				"an unrepresentable exact phase quantum stopped the region instead of leaving inventory unchanged");
+
+		FluidDomain markerBoundMelt = new FluidDomain(2, 2, 2, config, 8);
+		markerBoundMelt.setVolume(1, 1, 1, 1.0F);
+		markerBoundMelt.bindThermal(cellRegistry, liquids, 305.0);
+		double markerBoundEnergy = new ThermalStateFunction(cellRegistry).internalEnergyAtTemperature(
+				cellRegistry.materialHandle(lower.id()), 0.015625, Map.of(), 305.0);
+		markerBoundMelt.addCoherentPhaseExternal(0, 0, 0, lower.id(), batchSvq,
+				0.015625, null, markerBoundEnergy);
+		SignedDyadic markerBoundInventory = markerBoundMelt.exactInternalEnergy();
+		FluidDomain.ThermalPhaseStats markerBound = markerBoundMelt.stepInertPhaseChangeOnly(16);
+		require(markerBound.operations() == 0 && markerBoundMelt.particleCount() == 8
+				&& markerBoundMelt.totalCoherentSolidVolumeSvq() == batchSvq
+				&& markerBoundMelt.exactInternalEnergy().equals(markerBoundInventory),
+				"marker-budget-bound melt paused or changed a valid deferred base");
+
 		require(FluidDomain.minimumPhaseBatchesForCapacity(1_025L, 1_000L, -12L) == 3L,
 				"shrinking phase planning did not clear transient joint-cell overfill before evaluating LTE");
 		long markerSvq = SolidVolume.SVQ_PER_CELL / 8L;
@@ -473,13 +488,17 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 						+ "/" + volumeBeforeBlockedExtraction + " pending="
 						+ lienDomain.exportPendingPhaseVolumeState().entries() + "/" + restoredLien.entries());
 
-		domain.step();
+		FluidDomain.StepStats settlement = domain.stepMechanicsOnly();
 		ThermalAuditLedger after = domain.thermalAudit();
 		require(!domain.hasPendingPhaseVolumeWork()
+				&& settlement.chemistryEvaluations() == 0
+				&& settlement.thermalAxis().granularPhase().transfers() == 0
+				&& settlement.condensedPhase().operations() == 0
+				&& settlement.gasPhase().operations() == 0
 				&& after.mechanicalWork().compareTo(before.mechanicalWork()) < 0
 				&& domain.exactInternalEnergy().equals(after.expectedInventory()),
-				"next mechanical projection did not consume expansion exactly once");
-		domain.step();
+				"mechanics-only projection did not consume expansion exactly once without new phase work");
+		domain.stepMechanicsOnly();
 		require(!domain.hasPendingPhaseVolumeWork()
 				&& domain.thermalAudit().mechanicalWork().equals(after.mechanicalWork()),
 				"cleared phase volume repeated its mechanical work on a later projection");

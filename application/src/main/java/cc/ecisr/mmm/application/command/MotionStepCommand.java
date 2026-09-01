@@ -14,8 +14,22 @@ public record MotionStepCommand(
 		List<MovingBodyFluidCoupling.Request> movingBodies,
 		boolean phaseChangeEnabled,
 		int maximumPhaseOperations,
-		boolean mechanicalAuditEnabled
+		boolean mechanicalAuditEnabled,
+		boolean pendingPhaseSettlementOnly
 ) {
+	public MotionStepCommand(
+			UUID regionId, long expectedSolverGeneration,
+			List<MovingBodyFluidCoupling.Request> movingBodies,
+			boolean phaseChangeEnabled, int maximumPhaseOperations, boolean mechanicalAuditEnabled
+	) {
+		this(regionId, expectedSolverGeneration, movingBodies, phaseChangeEnabled, maximumPhaseOperations,
+				mechanicalAuditEnabled, false);
+	}
+
+	public static MotionStepCommand pendingPhaseSettlement(UUID regionId, long expectedSolverGeneration) {
+		return new MotionStepCommand(regionId, expectedSolverGeneration, List.of(), false, 0, false, true);
+	}
+
 	public MotionStepCommand {
 		Objects.requireNonNull(regionId, "regionId");
 		if (expectedSolverGeneration < 0L) throw new IllegalArgumentException("Expected solver generation is invalid");
@@ -24,6 +38,10 @@ public record MotionStepCommand(
 		}
 		movingBodies = List.copyOf(movingBodies);
 		requirePhaseBudget(phaseChangeEnabled, maximumPhaseOperations);
+		if (pendingPhaseSettlementOnly && (!movingBodies.isEmpty() || phaseChangeEnabled
+				|| maximumPhaseOperations != 0 || mechanicalAuditEnabled)) {
+			throw new IllegalArgumentException("Pending phase settlement command must be mechanics-only");
+		}
 	}
 
 	static void requirePhaseBudget(boolean enabled, int maximumOperations) {

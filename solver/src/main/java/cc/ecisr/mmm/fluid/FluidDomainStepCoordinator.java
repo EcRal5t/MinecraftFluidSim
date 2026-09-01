@@ -24,16 +24,20 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	public StepStats step() { return step(false, 0); }
 
 	public StepStats step(boolean phaseChangeEnabled, int maximumPhaseOperations) {
-		return step(phaseChangeEnabled, maximumPhaseOperations, false);
+		return step(phaseChangeEnabled, maximumPhaseOperations, false, true);
 	}
+
+	/** Consumes existing mechanical liens without advancing conduction, chemistry or any phase transfer. */
+	public StepStats stepMechanicsOnly() { return step(false, 0, false, false); }
 
 	/** Diagnostic production step with a staged mechanical-energy audit; authoritative physics is unchanged. */
 	public StepStats stepWithMechanicalAudit(boolean phaseChangeEnabled, int maximumPhaseOperations) {
-		return step(phaseChangeEnabled, maximumPhaseOperations, true);
+		return step(phaseChangeEnabled, maximumPhaseOperations, true, true);
 	}
 
 	StepStats step(
-			boolean phaseChangeEnabled, int maximumPhaseOperations, boolean captureMechanicalAudit
+			boolean phaseChangeEnabled, int maximumPhaseOperations, boolean captureMechanicalAudit,
+			boolean thermochemistryEnabled
 	) {
 		if (phaseChangeEnabled && (maximumPhaseOperations <= 0
 				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
@@ -65,7 +69,15 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		}
 		double carrierTransferInitialKineticEnergy = captureMechanicalAudit ? particleKineticEnergyJoules() : 0.0;
 		if (precipitationEnabled) markMovedReactiveGranularCells(granularParcelCountBeforeAdvection);
-		ThermalAxisStats thermalAxis = runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations);
+		ThermalAxisStats thermalAxis = thermochemistryEnabled
+				? runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations)
+				: inactiveThermalAxisStats();
+		if (!thermochemistryEnabled) {
+			lastChemicalReactionStats = thermalAxis.chemistry();
+			lastPhaseTransferStats = thermalAxis.granularPhase();
+			lastThermalPhaseStats = thermalAxis.condensedPhase();
+			lastGasThermalPhaseStats = thermalAxis.gasPhase();
+		}
 		ChemicalParcelStore.ReactionStats chemistry = thermalAxis.chemistry();
 		lastGranularDepositStats = granularTransitionStage.step();
 		ParticleReseedStage.Outcome reseedOutcome = particleReseedStage.step(captureMechanicalAudit);
@@ -89,6 +101,15 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 								.subtract(thermalMechanicalWorkBefore)) : MechanicalStepAudit.notCaptured(),
 				thermalAxis, lastGranularDepositStats
 		);
+	}
+
+	private static ThermalAxisStats inactiveThermalAxisStats() {
+		return new ThermalAxisStats(
+				new ThermalTransport.Stats(0, 0, 0.0, SignedDyadic.ZERO, SignedDyadic.ZERO),
+				new ChemicalParcelStore.ReactionStats(0, 0, 0),
+				new PhaseTransferStats(0, 0, 0, 0L),
+				new FluidDomain.ThermalPhaseStats(0, 0, 0, 0L),
+				new FluidDomain.GasThermalPhaseStats(0, 0, 0));
 	}
 
 	double particleKineticEnergyJoules() {

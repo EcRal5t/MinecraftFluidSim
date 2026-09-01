@@ -44,7 +44,8 @@ public final class RegionApplicationService implements RegionTickUseCase.StepExe
 		}
 		FluidStepCandidate candidate = solverBackend.evaluate(new FluidStepRequest(
 				capture.solverGeneration(), capture.state(), command.movingBodies(),
-				command.phaseChangeEnabled(), command.maximumPhaseOperations(), command.mechanicalAuditEnabled()));
+				command.phaseChangeEnabled(), command.maximumPhaseOperations(), command.mechanicalAuditEnabled(),
+				command.pendingPhaseSettlementOnly()));
 		RegionStepStatus invalid = validateCandidate(capture, candidate.backendId(), candidate.baseGeneration(),
 				candidate.candidateGeneration(), candidate.layout());
 		if (invalid != null) return MotionStepResult.rejected(invalid);

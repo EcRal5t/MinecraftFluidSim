@@ -80,12 +80,19 @@ final class GranularReactionStage {
 		}
 		int transfers = 0, precipitated = 0, dissolved = 0, evaluations = 0;
 		long signedSvq = 0L;
-		for (int cell : dirtyCells) {
+		boolean operationBudgetExhausted = false;
+		for (int dirtyIndex = 0; dirtyIndex < dirtyCells.length; dirtyIndex++) {
+			int cell = dirtyCells[dirtyIndex];
 			if (liquidByPhase[cell] == null) continue;
 			for (SolidLiquidReaction rule : granular.registry.reactions()) {
-				if (++evaluations > GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP) {
-					throw new GranularPhaseTransferEngine.BlockedException("Phase-transfer operation budget exceeded");
+				if (evaluations == GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP) {
+					for (int deferred = dirtyIndex; deferred < dirtyCells.length; deferred++) {
+						chemistry.markDirtyCell(dirtyCells[deferred]);
+					}
+					operationBudgetExhausted = true;
+					break;
 				}
+				evaluations++;
 				int phase = chemistry.registry().phaseHandle(rule.liquidPhaseId());
 				List<Integer> markers = liquidByPhase[cell].get(phase);
 				if (markers == null || markers.isEmpty()) continue;
@@ -110,8 +117,17 @@ final class GranularReactionStage {
 							Math.min(perStepExtent, accessible.selected().extent()));
 				}
 				if (!plan.changed()) continue;
-				if (plan.precipitation()) commitPrecipitation(cell, rule, plan);
-				else {
+				if (plan.precipitation()) {
+					if (!commitPrecipitation(cell, rule, plan)) {
+						/*
+						 * Geometry and fixed inventory budgets are candidate resources, not
+						 * authoritative-state validity. Keep the cell dirty so a later generation
+						 * can retry after carriers or active parcels move.
+						 */
+						chemistry.markDirtyCell(cell);
+						continue;
+					}
+				} else {
 					if (accessible == null || accessible.selected() == null) {
 						throw new GranularPhaseTransferEngine.BlockedException(
 								"Dissolution target has no accessible solid inventory");
@@ -122,6 +138,7 @@ final class GranularReactionStage {
 				if (plan.precipitation()) precipitated++; else dissolved++;
 				signedSvq = Math.addExact(signedSvq, plan.signedSolidSvq());
 			}
+			if (operationBudgetExhausted) break;
 		}
 		if (transfers > 0) access.markGridDirty();
 		return new FluidDomain.PhaseTransferStats(transfers, precipitated, dissolved, signedSvq);
@@ -185,7 +202,7 @@ final class GranularReactionStage {
 				? extent : 0L;
 	}
 
-	private void commitPrecipitation(
+	private boolean commitPrecipitation(
 			int cell, SolidLiquidReaction rule, GranularPhaseTransferEngine.Plan plan
 	) {
 		ChemicalParcelStore chemistry = access.chemistry();
@@ -202,8 +219,7 @@ final class GranularReactionStage {
 				x, y, z, plan.signedSolidSvq(), spawnSequence,
 				state.particles().positionX(carrierMarker), state.particles().positionY(carrierMarker),
 				state.particles().positionZ(carrierMarker));
-		if (position == null) throw new GranularPhaseTransferEngine.BlockedException(
-				"Precipitation cell has no collision-valid spawn point");
+		if (position == null) return false;
 		GranularCouplingFields coupling = access.coupling();
 		coupling.rebuild(granular.parcels, granular.deposits);
 		long[] occupiedBefore = coupling.copySolidSvq();
@@ -224,15 +240,14 @@ final class GranularReactionStage {
 			if (thermalPlan != null) thermal.commitGranularReaction(thermalPlan, state.thermalMarkers());
 			commitPendingPhaseVolume(cell, pendingVolume);
 			markPhaseTransferDirty(cell);
-			return;
+			return true;
 		}
 		if (!granular.compositions.hasCapacity(1) || !granular.parcels.hasCapacity(1)) {
-			throw new GranularPhaseTransferEngine.BlockedException("Precipitation parcel/composition budget exceeded");
+			return false;
 		}
 		if (!coupling.tryPlanParcel(
 				occupiedBefore, position, plan.signedSolidSvq(), access::geometricOpenSvq)) {
-			throw new GranularPhaseTransferEngine.BlockedException(
-					"Precipitation active parcel exceeds exact joint occupancy");
+			return false;
 		}
 		int composition = granular.compositions.create(plan.transferredComposition());
 		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(
@@ -262,6 +277,7 @@ final class GranularReactionStage {
 		}
 		commitPendingPhaseVolume(cell, pendingVolume);
 		markPhaseTransferDirty(cell);
+		return true;
 	}
 
 	private PrecipitationMerge precipitationMerge(

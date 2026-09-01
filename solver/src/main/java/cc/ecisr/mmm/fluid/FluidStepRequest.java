@@ -13,14 +13,28 @@ public record FluidStepRequest(
 		List<MovingBodyFluidCoupling.Request> movingBodies,
 		boolean phaseChangeEnabled,
 		int maximumPhaseOperations,
-		boolean mechanicalAuditEnabled
+		boolean mechanicalAuditEnabled,
+		boolean pendingPhaseSettlementOnly
 ) {
 	public FluidStepRequest(
 			long baseGeneration, FluidDomainState state,
 			List<MovingBodyFluidCoupling.Request> movingBodies,
 			boolean phaseChangeEnabled, int maximumPhaseOperations
 	) {
-		this(baseGeneration, state, movingBodies, phaseChangeEnabled, maximumPhaseOperations, false);
+		this(baseGeneration, state, movingBodies, phaseChangeEnabled, maximumPhaseOperations, false, false);
+	}
+
+	public FluidStepRequest(
+			long baseGeneration, FluidDomainState state,
+			List<MovingBodyFluidCoupling.Request> movingBodies,
+			boolean phaseChangeEnabled, int maximumPhaseOperations, boolean mechanicalAuditEnabled
+	) {
+		this(baseGeneration, state, movingBodies, phaseChangeEnabled, maximumPhaseOperations,
+				mechanicalAuditEnabled, false);
+	}
+
+	public static FluidStepRequest pendingPhaseSettlement(long baseGeneration, FluidDomainState state) {
+		return new FluidStepRequest(baseGeneration, state, List.of(), false, 0, false, true);
 	}
 
 	public FluidStepRequest {
@@ -36,6 +50,10 @@ public record FluidStepRequest(
 		}
 		if (!phaseChangeEnabled && maximumPhaseOperations != 0) {
 			throw new IllegalArgumentException("Inactive phase change must not reserve an operation budget");
+		}
+		if (pendingPhaseSettlementOnly && (!movingBodies.isEmpty() || phaseChangeEnabled
+				|| maximumPhaseOperations != 0 || mechanicalAuditEnabled)) {
+			throw new IllegalArgumentException("Pending phase settlement must be a mechanics-only request");
 		}
 	}
 }

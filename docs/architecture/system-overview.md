@@ -145,7 +145,7 @@ Minecraft adapter 负责读取世界、选择区域和提交世界修改。`Mine
 9. 处理沉积/唤醒和 marker reseed，同时搬运材料、化学和内能侧列。
 10. 重建所有账本；只有全部闭合才发布本步诊断并评估 motion/thermal activity。
 
-相变产生的凝聚相体积/功由下一次真实 pressure projection exactly-once 消费。未消费记录存在时，不能用 `empty`、卸载或重排把它绕过。同步管理员命令、玩家桶和发射器转移若撞上该帧间 lien，先通过当前权威 backend 执行一次禁止产生新相变的 mechanical candidate，消费旧 `-pΔV` 后才修改物质库存；CPU/GPU backend 不得各自在 host adapter 复制一套结算算法。
+相变产生的凝聚相体积/功由下一次真实 pressure projection exactly-once 消费。未消费记录存在时，不能用 `empty`、卸载或重排把它绕过。同步管理员命令、玩家桶和发射器转移若撞上该帧间 lien，先通过当前权威 backend 执行一次 mechanics-only candidate：真实 projection 消费旧 `-pΔV`，但 conduction、chemical reaction、granular phase 与 condensed/gas phase 均不运行，因此不会立刻产生另一份 lien；确认清空后才修改物质库存。CPU/GPU backend 不得各自在 host adapter 复制一套结算算法。
 
 ## 生命周期和调度
 

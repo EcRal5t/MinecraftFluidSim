@@ -280,15 +280,25 @@ final class CondensedPhaseChangeStage {
 			coherentTransfer = new CoherentPhaseStore.Group(
 					cell, transition.lowerEnergyMaterialId(), lowerDelta, requestedMass,
 					removal.movedComposition().toCoherent(), removal.movedEnergy());
-			thermal.coherentPhases().previewAdd(coherentTransfer);
+			try {
+				thermal.coherentPhases().previewAdd(coherentTransfer);
+			} catch (IllegalArgumentException | IllegalStateException | ArithmeticException unavailable) {
+				throw new PhaseCandidateUnavailableException(
+						"Freeze cannot represent another coherent carrier group", unavailable);
+			}
 		} else {
 			if (lowerDelta > before.lowerVolumeSvq()
 					|| requestedMass > before.lowerMass() + massTolerance(before.lowerMass())) {
 				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Melt extent exceeds coherent inventory");
 			}
-			coherentTransfer = thermal.coherentPhases().previewTake(
-					cell, transition.lowerEnergyMaterialId(), lowerDelta);
+			try {
+				coherentTransfer = thermal.coherentPhases().previewTake(
+						cell, transition.lowerEnergyMaterialId(), lowerDelta);
+			} catch (IllegalArgumentException | ArithmeticException unavailable) {
+				throw new PhaseCandidateUnavailableException(
+						"Melt cannot represent the coherent carrier split", unavailable);
+			}
 			if (!FluidDomain.massClose(coherentTransfer.mass(), requestedMass)) {
 				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Melt exact batch mass differs from coherent inventory");
@@ -310,7 +320,7 @@ final class CondensedPhaseChangeStage {
 						"Chemical coherent phase cannot melt without chemistry state");
 			}
 			if (particles.count() >= support.state().maximumParticleCount()) {
-				throw new FluidDomain.ThermalPhaseBlockedException(
+				throw new PhaseCandidateUnavailableException(
 						"Melt exceeds the liquid marker budget");
 			}
 			meltSlot = support.firstOpenSlot(cell);

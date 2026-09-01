@@ -134,6 +134,7 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 
 - 联合搬运物理 kg、condensed weight、液体 marker、coherent SVQ、材料身份、可选 chemical composition/species 和 `U`。
 - 每条 transition 只在该 lower coherent phase 或目标 upper liquid 实际存在时查询压力并规划；纯汞等无关 carrier 不能被拿去查询冰/水曲线。同格其他 liquid/coherent carrier 原样保留并作为 LTE heat bath 参与候选温度，不能被拒绝、改材料或并入目标组成。
+- coherent group/组成池、液体 marker 总预算或 coherent exact split 暂时不能表示完整批次时，该批次零修改延期；只有已提交 coherent 几何与 cut-cell 容量矛盾、组成 capability 不匹配或账本不闭合才暂停合法候选链。
 - 体积变化与机械功写入 pending phase-work，由下一次 pressure projection exactly-once 消费。
 - 固液规划从最近一次真实 projection 的 cell gauge pressure 加环境压力得到绝对压力，再取 `T_eq(p)`。hydrostatic thermal-only 私有候选冻结并传递该 projection，但它不是库存列、不进入 checkpoint、也不能反向恢复物质量；冷恢复先执行一次 motion 重建 projection。曲线使用 registry-bound、按压力严格递增的分段线性点，只在端点闭区间内插值；常温曲线也必须显式给出两个端点。固液曲线不必覆盖标准压力，因此可以表达只有高压区有效的相平衡；液气曲线必须覆盖标准压力，以定义其气体标准体积和潜焓参考态。任何曲线都禁止外推或钳制；有限但位于端点外的压力表示这条 transition 在该 cell 不适用，本步原样保留相库存并继续其他 thermal 工作。只有非有限压力才拒绝整个候选。
 
@@ -182,7 +183,7 @@ species reference offset 是组成携带的能量真值。reaction extent 改变
 7. granular transition、reseed 与局部唤醒；
 8. 审计闭合后，pending phase-work 留给下一 projection。
 
-每一步都先在快照上形成候选。相变产生的体积改变不能回头修改已经完成的 projection，因此作为带 generation 的 pending volume/work 保存，并且只由下一次真实 projection 消费一次。marker 已经携带新的几何体积，pending 不作为第二份目标散度；它只用该 projection 的绝对 cell 压力结算 `-p ΔV`。不可压 projection 的拉格朗日压力可以给出有限负绝对张力；在尚无 cavitation 库存模型时，热学边界取其无张力补量 `max(0 Pa, p_absolute)`，即真空做功为零，而不是把负绝对压力当成热力学状态或暂停理由；非有限压力仍拒绝整个候选。存在 pending work 时，`empty`、不完整 checkpoint 和绕过 projection 的转移会被拒绝。Minecraft 的同步管理员/玩家/发射器物质转移不会绕过该门：adapter 先以关闭新相变的权威 mechanical candidate 消费旧 lien，确认 pending 清空后才进入物质或容器事务。
+每一步都先在快照上形成候选。相变产生的体积改变不能回头修改已经完成的 projection，因此作为带 generation 的 pending volume/work 保存，并且只由下一次真实 projection 消费一次。marker 已经携带新的几何体积，pending 不作为第二份目标散度；它只用该 projection 的绝对 cell 压力结算 `-p ΔV`。不可压 projection 的拉格朗日压力可以给出有限负绝对张力；在尚无 cavitation 库存模型时，热学边界取其无张力补量 `max(0 Pa, p_absolute)`，即真空做功为零，而不是把负绝对压力当成热力学状态或暂停理由；非有限压力仍拒绝整个候选。存在 pending work 时，`empty`、不完整 checkpoint 和绕过 projection 的转移会被拒绝。Minecraft 的同步管理员/玩家/发射器物质转移不会绕过该门：adapter 先提交专用 mechanics-only 私有候选，只执行真实力学 projection、颗粒运动/沉积与守恒 reseed，不执行 conduction、chemical reaction、granular phase 或 condensed/gas phase；它消费旧 lien 且不可能在同一代生成新 lien，确认 pending 清空后才进入物质或容器事务。
 
 ## 能量审计
 

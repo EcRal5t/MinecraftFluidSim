@@ -19,7 +19,9 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 			for (var movingBody : request.movingBodies()) {
 				movingBodyCoupling = movingBodyCoupling.plus(candidate.applyMovingBodyCoupling(movingBody));
 			}
-			FluidDomain.StepStats stats = request.mechanicalAuditEnabled()
+			FluidDomain.StepStats stats = request.pendingPhaseSettlementOnly()
+					? candidate.stepMechanicsOnly()
+					: request.mechanicalAuditEnabled()
 					? candidate.stepWithMechanicalAudit(
 							request.phaseChangeEnabled(), request.maximumPhaseOperations())
 					: candidate.step(request.phaseChangeEnabled(), request.maximumPhaseOperations());
