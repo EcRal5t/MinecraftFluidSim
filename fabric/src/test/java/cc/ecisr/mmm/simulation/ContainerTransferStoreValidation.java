@@ -860,8 +860,8 @@ public final class ContainerTransferStoreValidation {
 			check(persistence.commitStagedLifecycleCheckpoint(ventStage) == ventTarget,
 					"full-profile gas vent did not publish its target HEAD");
 			persistence.adoptCommittedContainerCheckpoint(region, ventBase, ventTarget);
-			check(region.domain().operatorVentedGasTopology()
-					&& region.domain().gasBoundary().nodeCount() == 0,
+			check(region.domain().gasBoundary().nodeCount() > 0
+					&& region.domain().gasBoundary().sealedInventory().isEmpty(),
 					"full-profile gas vent did not survive committed reconstruction");
 
 			long reinsertBase = region.checkpointGeneration();

@@ -1,13 +1,20 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
+import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
+import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.FluidDomain;
+import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
+import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.granular.BuiltinGranularDefinitions;
 import cc.ecisr.mmm.granular.GranularTransferLedger;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 import cc.ecisr.mmm.thermal.ThermalLimits;
+import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
+import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.Identifier;
@@ -60,44 +67,58 @@ final class ControllerInventoryDurabilityValidation {
 							new FluidDomain.MaterialPortion(oil, 2.0, 1_600.0),
 							new FluidDomain.MaterialPortion(mercury, 2.0, 27_200.0)),
 					6, true).transferred(), "mixed-material container was rejected"));
-		mutate(region, persistence, candidate -> check(candidate.tryExtractExactMixture(7, 7, 7, 4.0F, 7).transferred(),
-				"mixed-material extraction was rejected"));
-		restart(region, persistence, "mixed extraction");
+			mutate(region, persistence, candidate -> check(
+					candidate.tryExtractExactMixture(7, 7, 7, 4.0F, 7).transferred(),
+					"mixed-material extraction was rejected"));
+			restart(region, persistence, "mixed extraction");
 
-		int sand = registries.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
-		double sandMass = registries.granular().material(sand).referenceDensity();
-		GranularTransferLedger sandBucket = new GranularTransferLedger(java.util.List.of(
-				new GranularTransferLedger.Group(BuiltinGranularDefinitions.FINE_SAND,
-						SolidVolume.SVQ_PER_BV, sandMass, null)));
-		for (int bucket = 0; bucket < 4; bucket++) mutate(region, persistence, candidate -> check(
-				candidate.tryInsertExactGranular(7, 7, 7, sandBucket, 6, true).inserted(),
-				"fine-sand container was rejected"));
-		stepAndPublish(region, persistence, false);
-		restart(region, persistence, "liquid and granular inventory");
+			ChemicalTransferLedger acid = reagentBucket(registries, BuiltinChemicalDefinitions.HCL);
+			double acidEnergy = reagentEnergy(registries, acid);
+			mutate(region, persistence, candidate -> check(candidate.tryInsertExactChemical(
+					7, 7, 7, acid, 6, true, acidEnergy).transferred(), "first acid bucket was rejected"));
+			mutate(region, persistence, candidate -> check(candidate.editIndicatorFloodFill(
+					7, 7, 7, true, 512, 100.0).accepted(), "acid indicator edit was rejected"));
+			mutate(region, persistence, candidate -> check(candidate.tryInsertExactChemical(
+					7, 7, 7, acid, 6, true, acidEnergy).transferred(), "post-indicator acid bucket was rejected"));
+			for (int step = 0; step < 20; step++) stepAndPublish(region, persistence, true);
+			settlePendingVolumeWork(region, persistence);
+			restart(region, persistence, "acid/indicator/post-acid phase replay");
 
-		mutate(region, persistence, candidate -> {
-			candidate.commitOperatorClear(candidate.planOperatorClear());
-			check(candidate.totalVolumeExact() == 0.0 && candidate.totalGranularSolidVolumeSvq() == 0L,
-					"operator clear left condensed inventory");
-		});
-		mutate(region, persistence, candidate -> candidate.commitOperatorVentSealedGas(
-				candidate.planOperatorVentSealedGas()));
-		restart(region, persistence, "clear and vent");
-		insertLiquid(region, persistence, water, 7, 7, 7);
-		restart(region, persistence, "post-vent reinsertion");
-		mutate(region, persistence, candidate -> candidate.commitOperatorClear(candidate.planOperatorClear()));
-		restart(region, persistence, "post-vent second clear");
+			int sand = registries.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+			double sandMass = registries.granular().material(sand).referenceDensity();
+			GranularTransferLedger sandBucket = new GranularTransferLedger(java.util.List.of(
+					new GranularTransferLedger.Group(BuiltinGranularDefinitions.FINE_SAND,
+							SolidVolume.SVQ_PER_BV, sandMass, null)));
+			for (int bucket = 0; bucket < 4; bucket++) mutate(region, persistence, candidate -> check(
+					candidate.tryInsertExactGranular(7, 7, 7, sandBucket, 6, true).inserted(),
+					"fine-sand container was rejected"));
+			stepAndPublish(region, persistence, false);
+			restart(region, persistence, "liquid and granular inventory");
 
-		region.lifecycle().setOperatorPaused(false, 1);
-		for (int quiet = 0; quiet < 200; quiet++) {
-			region.lifecycle().observeCompletedStep(true, 200);
-		}
-		check(region.lifecycle().state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP,
-				"thermal restart fixture did not enter hydrostatic sleep");
-		restart(region, persistence, "running hydrostatic thermal checkpoint");
-		check(region.lifecycle().state() == FluidRegionLifecycle.State.ACTIVE,
-				"cold thermal restore resumed without rebuilding its derived pressure projection");
-	} finally {
+			mutate(region, persistence, candidate -> {
+				candidate.commitOperatorClear(candidate.planOperatorClear());
+				check(candidate.totalVolumeExact() == 0.0 && candidate.totalGranularSolidVolumeSvq() == 0L,
+						"operator clear left condensed inventory");
+			});
+			mutate(region, persistence, candidate -> candidate.commitOperatorVentSealedGas(
+					candidate.planOperatorVentSealedGas()));
+			restart(region, persistence, "clear and vent");
+			insertLiquid(region, persistence, water, 7, 7, 7);
+			restart(region, persistence, "post-vent reinsertion");
+			mutate(region, persistence, candidate -> candidate.commitOperatorClear(candidate.planOperatorClear()));
+			restart(region, persistence, "post-vent second clear");
+
+			region.lifecycle().setOperatorPaused(false, 1);
+			for (int quiet = 0; quiet < 200; quiet++) {
+				region.lifecycle().observeCompletedStep(true, 200);
+			}
+			check(region.lifecycle().state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP,
+					"thermal restart fixture did not enter hydrostatic sleep");
+			restart(region, persistence, "running hydrostatic thermal checkpoint");
+			check(region.lifecycle().state() == FluidRegionLifecycle.State.ACTIVE,
+					"cold thermal restore resumed without rebuilding its derived pressure projection");
+			runNormalPlayStateMatrix(registries);
+		} finally {
 			try (var paths = Files.walk(root)) {
 				for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
 			}
@@ -171,6 +192,169 @@ final class ControllerInventoryDurabilityValidation {
 		return new FluidRegionFootprint(controller, BlockPos.ZERO, new BlockPos(3, 3, 3), interior,
 				Set.of(controller.asLong()), Set.of(ChunkPos.pack(0, 0), ChunkPos.pack(-1, 0)));
 	}
+
+	private static ChemicalTransferLedger reagentBucket(
+			FullCapabilityTestFixture.Registries registries, String reagent
+	) {
+		java.util.Map<String, Long> amounts = java.util.Map.of(
+				BuiltinChemicalDefinitions.H2O, 50_000_000_000L,
+				reagent, 1_000_000_000L);
+		double mass = 1_000.0;
+		ChemicalMixtureRecord withoutResidual = ChemicalMixtureRecord.fromStableAmounts(
+				registries.chemical(), amounts, 0.0);
+		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registries.chemical(), amounts,
+				mass - withoutResidual.exactSpeciesMassKilograms(registries.chemical()).toDouble());
+		return new ChemicalTransferLedger(java.util.List.of(new ChemicalTransferLedger.Group(
+				BuiltinFluidMaterials.WATER.id(), false, 1.0, mass,
+				mixture.massResidualKilogramsBits(), mixture.stableAmounts(registries.chemical()))));
+	}
+
+	private static double reagentEnergy(
+			FullCapabilityTestFixture.Registries registries, ChemicalTransferLedger reagent
+	) {
+		ChemicalTransferLedger.Group group = reagent.groups().getFirst();
+		int material = registries.thermal().materialHandle(
+				ThermalMaterialDefinition.CarrierKind.LIQUID, group.materialId());
+		return new ThermalStateFunction(registries.thermal()).internalEnergyAtTemperature(
+				material, group.massKilograms(), group.speciesQuanta(), 293.15);
+	}
+
+	/** Crosses normal player actions with full backend handoff after every accepted transition. */
+	private static void runNormalPlayStateMatrix(FullCapabilityTestFixture.Registries registries) throws Exception {
+		runScenario("reported acid-indicator-acid", registries, state -> {
+			state.insertAcid(); state.indicator(true); state.insertAcid(); state.steps(true, 20);
+		});
+		runScenario("reported vent-water-resume", registries, state -> {
+			state.vent(); state.insertWater(); state.steps(true, 20);
+		});
+		runScenario("vent-direct-resume", registries, state -> { state.vent(); state.step(true); });
+		runScenario("vent-cold-restore-resume", registries, state -> {
+			state.vent(); state.roundTrip(); state.step(true);
+		});
+		runScenario("vent-then-condensed-clear", registries, state -> {
+			state.vent(); state.clear(); state.insertWater(); state.step(true);
+		});
+		runScenario("repeated-vent", registries, state -> {
+			state.vent(); state.vent(); state.step(true);
+		});
+		runScenario("vacuum-acid-indicator-phase", registries, state -> {
+			state.vent(); state.insertAcid(); state.indicator(true); state.step(true);
+		});
+		runScenario("vacuum-granular-motion", registries, state -> {
+			state.vent(); state.insertSand(); state.steps(false, 4);
+		});
+		runScenario("vacuum-mercury-motion", registries, state -> {
+			state.vent(); state.insertMercury(); state.steps(true, 4);
+		});
+		runScenario("clear-vent-reinsert-clear", registries, state -> {
+			state.insertWater(); state.clear(); state.vent(); state.insertWater(); state.step(true); state.clear();
+		});
+		runScenario("phase-lien-vent-restart", registries, state -> {
+			state.insertWater(); state.steps(true, 8); state.settle(); state.vent(); state.roundTrip(); state.step(true);
+		});
+		runScenario("mixed-clear-vent-extract", registries, state -> {
+			state.insertWater(); state.insertMercury(); state.insertSand(); state.steps(false, 3);
+			state.clear(); state.vent(); state.insertWater(); state.extractWater(); state.step(true);
+		});
+	}
+
+	private static void runScenario(
+			String name, FullCapabilityTestFixture.Registries registries, Scenario scenario
+	) throws Exception {
+		try {
+			scenario.run(new NormalPlayState(registries));
+		} catch (RuntimeException | AssertionError failure) {
+			throw new AssertionError("normal-play state-machine scenario failed: " + name, failure);
+		}
+	}
+
+	private static final class NormalPlayState {
+		private final FullCapabilityTestFixture.Registries registries;
+		private final int water;
+		private final int mercury;
+		private final ChemicalTransferLedger acid;
+		private final double acidEnergy;
+		private final GranularTransferLedger sand;
+		private FluidDomain domain;
+		private long generation;
+
+		NormalPlayState(FullCapabilityTestFixture.Registries registries) throws Exception {
+			this.registries = registries;
+			this.domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
+			domain.sealDomainBoundary();
+			FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
+			FullCapabilityTestFixture.bindFull(domain, registries, 293.15,
+					cc.ecisr.mmm.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+			water = registries.liquids().handle(BuiltinFluidMaterials.WATER.id());
+			mercury = registries.liquids().handle(BuiltinFluidMaterials.MERCURY.id());
+			acid = reagentBucket(registries, BuiltinChemicalDefinitions.HCL);
+			acidEnergy = reagentEnergy(registries, acid);
+			int sandHandle = registries.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+			double mass = registries.granular().material(sandHandle).referenceDensity();
+			sand = new GranularTransferLedger(java.util.List.of(new GranularTransferLedger.Group(
+					BuiltinGranularDefinitions.FINE_SAND, SolidVolume.SVQ_PER_BV, mass, null)));
+			roundTrip();
+		}
+
+		void insertWater() { insertLiquid(water); }
+		void insertMercury() { insertLiquid(mercury); }
+		void insertLiquid(int material) {
+			settle();
+			check(domain.tryInsertExactVolume(7, 7, 7, 8.0F, 6, material, true).transferred(),
+					"normal-play liquid insertion was rejected");
+			roundTrip();
+		}
+		void insertAcid() {
+			settle();
+			check(domain.tryInsertExactChemical(7, 7, 7, acid, 6, true, acidEnergy).transferred(),
+					"normal-play acid insertion was rejected");
+			roundTrip();
+		}
+		void insertSand() {
+			settle();
+			check(domain.tryInsertExactGranular(7, 7, 7, sand, 6, true).inserted(),
+					"normal-play granular insertion was rejected");
+			roundTrip();
+		}
+		void indicator(boolean value) {
+			check(domain.editIndicatorFloodFill(7, 7, 7, value, 512, 100.0).accepted(),
+					"normal-play indicator edit was rejected");
+			roundTrip();
+		}
+		void extractWater() {
+			settle();
+			check(domain.tryExtractExactVolume(7, 7, 7, 8.0F, 6).transferred(),
+					"normal-play water extraction was rejected");
+			roundTrip();
+		}
+		void clear() {
+			settle();
+			domain.commitOperatorClear(domain.planOperatorClear());
+			roundTrip();
+		}
+		void vent() {
+			settle();
+			domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
+			roundTrip();
+		}
+		void settle() { if (domain.hasPendingPhaseVolumeWork()) step(false); }
+		void steps(boolean phase, int count) { for (int step = 0; step < count; step++) step(phase); }
+		void step(boolean phase) {
+			var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+					generation, domain.captureAuthoritativeState(), java.util.List.of(), phase,
+					phase ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0));
+			domain = candidate.claimPreparedCpuDomain();
+			generation++;
+			roundTrip();
+		}
+		void roundTrip() {
+			checkClosed(domain, "normal-play handoff generation " + generation);
+			domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			checkClosed(domain, "normal-play restore generation " + generation);
+		}
+	}
+
+	@FunctionalInterface private interface Scenario { void run(NormalPlayState state) throws Exception; }
 
 	private static FluidSolverConfig productionConfig() {
 		return new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,

@@ -397,7 +397,7 @@ public final class RegionCheckpointRestorer {
 		try {
 			snapshot = new GasStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
 					data.registryFingerprint(), data.chemicalRegistryFingerprint(), nodes, memberships,
-					data.operatorVentedTopology(), data.externalSource(), data.escapedSink(),
+					data.externalSource(), data.escapedSink(),
 					data.massRoundoff(), data.residualRoundoff());
 			AirNetwork audit = new AirNetwork(registry == null
 					? cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions.createRegistry() : registry);

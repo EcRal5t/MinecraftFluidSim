@@ -15,7 +15,6 @@ public final class RegionLifecycleUseCase {
 		ACCEPTED,
 		PERMISSION_DENIED,
 		WRITE_NOT_READY,
-		VENTED_GAS_RESUME_BLOCKED,
 		UNCHANGED
 	}
 
@@ -25,8 +24,6 @@ public final class RegionLifecycleUseCase {
 			boolean pauseRequested,
 			boolean permissionGranted,
 			boolean writesReady,
-			boolean solverLoaded,
-			boolean operatorVentedGasTopology,
 			boolean currentlyPaused
 	) { }
 
@@ -68,9 +65,6 @@ public final class RegionLifecycleUseCase {
 		Objects.requireNonNull(facts, "facts");
 		if (!facts.permissionGranted()) return RunIntentDecision.PERMISSION_DENIED;
 		if (!facts.writesReady()) return RunIntentDecision.WRITE_NOT_READY;
-		if (!facts.pauseRequested() && facts.solverLoaded() && facts.operatorVentedGasTopology()) {
-			return RunIntentDecision.VENTED_GAS_RESUME_BLOCKED;
-		}
 		return facts.currentlyPaused() == facts.pauseRequested()
 				? RunIntentDecision.UNCHANGED : RunIntentDecision.ACCEPTED;
 	}

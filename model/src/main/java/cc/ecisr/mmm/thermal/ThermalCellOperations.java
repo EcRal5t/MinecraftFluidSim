@@ -376,7 +376,7 @@ final class ThermalCellOperations {
 		if (finalInventory.isEmpty()) {
 			double value = energy.toDouble();
 			if (Math.abs(value) > Math.max(1.0E-9, Math.ulp(value) * 16.0)) {
-				throw new IllegalArgumentException("Empty phase cell retains internal energy");
+				throw new ThermalDomainState.EmptyPhaseCandidateEnergyException();
 			}
 			return Double.NaN;
 		}

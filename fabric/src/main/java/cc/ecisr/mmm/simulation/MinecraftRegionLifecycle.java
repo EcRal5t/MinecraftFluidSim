@@ -67,14 +67,11 @@ public final class MinecraftRegionLifecycle {
 	Component changeRunIntent(ServerPlayer player, FluidRegion region, boolean pause) {
 		RegionLifecycleUseCase.RunIntentDecision decision = useCase.decideRunIntent(
 				new RegionLifecycleUseCase.RunIntentFacts(pause, player.isCreative(), startup.authoritativeWritesReady(),
-						region.solverLoaded(), region.solverLoaded() && region.domain().operatorVentedGasTopology(),
 						region.paused()));
 		if (decision != RegionLifecycleUseCase.RunIntentDecision.ACCEPTED) return switch (decision) {
 			case PERMISSION_DENIED -> Component.translatable("message.mmm.controller.creative_required");
 			case WRITE_NOT_READY -> Component.translatable("message.mmm.controller.write_not_ready",
 					authoritativeWriteFailure("修改控制器运行意图"));
-			case VENTED_GAS_RESUME_BLOCKED -> Component.translatable(
-					"message.mmm.controller.vented_gas_resume_blocked");
 			case UNCHANGED -> Component.translatable("message.mmm.controller.intent_changed");
 			case ACCEPTED -> throw new IllegalStateException("Accepted run intent entered failure mapping");
 		};

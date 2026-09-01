@@ -6,13 +6,12 @@ import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.GasInventory;
 import cc.ecisr.mmm.units.SignedDyadic;
 
-import java.util.List;
 
 /**
  * Plans and commits the operator sealed-gas vent as one joint gas-inventory, gas-energy and
  * audit operation: every fallible check (pending projection work, audit closure, stale-plan
- * identity) runs before the first truth change, and the commit converts every sealed cell to
- * inventory-free ambient topology in one pass. Thermal gas energy is planned and settled by
+ * identity) runs before the first truth change, and the commit retains the closed topology while
+ * replacing every node inventory with explicit vacuum. Thermal gas energy is planned and settled by
  * the thermal state owner; no energy truth is copied into the gas side.
  */
 final class GasLifecyclePlanner {
@@ -29,30 +28,37 @@ final class GasLifecyclePlanner {
 		}
 		if (!domain.gasState.network.auditClosed()) throw new IllegalStateException("Gas inventory audit is open");
 		GasInventory removed = domain.gasState.network.sealedInventory();
+		int nodeCount = domain.gasState.network.nodeCount();
+		double[] availableVolumes = new double[nodeCount];
+		java.util.ArrayList<GasInventory> vacuum = new java.util.ArrayList<>(nodeCount);
+		for (int node = 1; node <= nodeCount; node++) {
+			availableVolumes[node - 1] = domain.gasState.network.availableVolume(node);
+			vacuum.add(GasInventory.EMPTY);
+		}
 		AirNetwork.RemapPlan gasPlan = domain.gasState.network.planRemapNodes(
-				new double[0], List.of(), GasInventory.EMPTY, removed, List.of());
+				availableVolumes, vacuum, GasInventory.EMPTY, removed, domain.gasState.network.edges());
 		GasEnergyStore.GasVentPlan thermalPlan = domain.thermalState == null ? null
 				: domain.thermalState.planGasVent(domain.gasState.network, domain.particles.count());
-		return new FluidDomain.OperatorGasVentPlan(domain.gasState.network.nodeCount(), removed, gasPlan, thermalPlan);
+		return new FluidDomain.OperatorGasVentPlan(nodeCount, removed, gasPlan, thermalPlan,
+				domain.thermalState == null ? null : domain.thermalState.thermalRevision());
 	}
 
-	/** Converts every sealed cell to inventory-free ambient topology and books gas plus U to sinks. */
+	/** Leaves a complete sealed vacuum topology and books the removed gas plus U to sinks. */
 	FluidDomain.OperatorGasVent commitVent(FluidDomain.OperatorGasVentPlan plan) {
 		if (plan == null || domain.gasState.network.nodeCount() != plan.nodeCount()
 				|| !domain.gasState.network.sealedInventory().equals(plan.removed())) {
 			throw new IllegalStateException("Sealed gas inventory changed after vent planning");
 		}
+		domain.gasState.network.requireCanCommitRemap(plan.gasPlan());
+		if (domain.thermalState == null ? plan.thermalRevision() != null
+				: !domain.thermalState.thermalRevision().equals(plan.thermalRevision())) {
+			throw new IllegalStateException("Thermal inventory changed after vent planning");
+		}
+		if (plan.thermalPlan() != null) domain.thermalState.requireCanCommitGasVent(plan.thermalPlan());
 		if (plan.thermalPlan() != null) domain.thermalState.commitGasVent(plan.thermalPlan());
 		domain.gasState.network.commitRemapNodes(plan.gasPlan());
-		if (domain.gasState.cellNodeId != null) for (int cell = 0; cell < domain.gasState.cellNodeId.length; cell++) {
-			if (domain.gasState.cellNodeId[cell] > 0) domain.gasState.cellNodeId[cell] = AirNetwork.AMBIENT_NODE;
-		}
-		if (domain.gasState.cellLineageNodeId != null) for (int cell = 0; cell < domain.gasState.cellLineageNodeId.length; cell++) {
-			if (domain.gasState.cellLineageNodeId[cell] > 0) domain.gasState.cellLineageNodeId[cell] = AirNetwork.AMBIENT_NODE;
-		}
-		domain.gasState.previousSealedNodeCount = 0;
-		domain.gasState.pressureActive = false;
-		domain.gasState.operatorVentedTopology = true;
+		domain.gasState.previousSealedNodeCount = plan.nodeCount();
+		domain.gasState.pressureActive = plan.nodeCount() > 0;
 		return new FluidDomain.OperatorGasVent(plan.removed(), plan.thermalPlan() == null
 				? SignedDyadic.ZERO : plan.thermalPlan().removedEnergy(), plan.nodeCount());
 	}

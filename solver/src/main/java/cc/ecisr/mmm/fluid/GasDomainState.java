@@ -12,7 +12,6 @@ import cc.ecisr.mmm.fluid.air.AirNetwork;
 final class GasDomainState {
 	AirNetwork network = new AirNetwork();
 	boolean sealedDomainBoundary;
-	boolean operatorVentedTopology;
 	int previousSealedNodeCount;
 	int[] cellNodeId;
 	int[] cellLineageNodeId;

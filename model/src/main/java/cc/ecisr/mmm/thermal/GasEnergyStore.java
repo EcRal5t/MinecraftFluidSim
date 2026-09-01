@@ -173,12 +173,17 @@ public final class GasEnergyStore {
 	}
 
 	/** Publishes an already validated all-node gas-energy removal using assignments only. */
-	void commitVent(GasVentPlan plan) {
+	void requireCanCommitVent(GasVentPlan plan) {
 		if (plan == null || nodeEnergy.length != plan.nodeCount()
 				|| !SignedDyadic.sum(nodeEnergy).equals(plan.removedEnergy())) {
 			throw new IllegalStateException("Gas energy changed after vent planning");
 		}
-		nodeEnergy = new double[0];
+	}
+
+	/** Publishes an already validated all-node gas-energy removal using assignments only. */
+	void commitVent(GasVentPlan plan) {
+		requireCanCommitVent(plan);
+		nodeEnergy = new double[plan.nodeCount()];
 		audit.replace(plan.auditAfter());
 		revision++;
 	}

@@ -6,6 +6,7 @@ import cc.ecisr.mmm.application.RegionRuntime;
 import cc.ecisr.mmm.application.RegionTickUseCase;
 import cc.ecisr.mmm.application.command.MotionStepCommand;
 import cc.ecisr.mmm.application.command.ThermalStepCommand;
+import cc.ecisr.mmm.application.port.RegionRepository;
 import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverBackend;
@@ -221,6 +222,17 @@ final class MinecraftRegionTick {
 
 	/** Maps a rejected logical-step candidate through the single runtime pause taxonomy. */
 	boolean blockStepFailure(ServerLevel level, FluidRegion region, RuntimeException failure) {
+		if (failure instanceof RegionRepository.StateCaptureRejectedException rejected) {
+			String detail = "state-capture NUMERICAL_PAUSE：" + rejected.getMessage();
+			region.blockNumerical(detail);
+			MmmMod.LOGGER.error("Region {} could not freeze a complete live step base and is paused",
+					region.id(), rejected);
+			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+					"物质、运动与力学无法冻结完整在线真值；区域未修改并已安全暂停："
+							+ rejected.getMessage() + "；请查看 /mmm status"));
+			snapshots.sendToLevel(level, region);
+			return true;
+		}
 		if (failure instanceof FluidSolverBackend.StateRestoreRejectedException rejected) {
 			String detail = "backend-handoff NUMERICAL_PAUSE：" + rejected.getMessage();
 			region.blockNumerical(detail);

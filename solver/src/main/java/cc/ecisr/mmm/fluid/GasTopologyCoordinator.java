@@ -46,8 +46,7 @@ final class GasTopologyCoordinator {
 		if (!domain.gasState.network.auditClosed()) throw new IllegalStateException("Gas component audit does not close");
 		return GasStateSnapshot.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.gasState.cellNodeId,
 				domain.gasState.network,
-				chemicalRegistryFingerprint == null ? "" : chemicalRegistryFingerprint,
-				domain.gasState.operatorVentedTopology);
+				chemicalRegistryFingerprint == null ? "" : chemicalRegistryFingerprint);
 	}
 
 	/** Restores complete gas truth after its matching liquid/material state. */
@@ -69,19 +68,13 @@ final class GasTopologyCoordinator {
 						domain.markerGrid.exactCellMarkerVolume, domain.geometry.cutCells,
 						domain.pressureGranularCoupling, false);
 		int[] expected = state.cellNodeOrdinal(), actual = result.cellNodeId();
-		boolean ventedAmbient = state.operatorVentedTopology();
-		if (ventedAmbient && !state.nodes().isEmpty()) {
-			throw new IllegalArgumentException("Operator-vented gas state contains sealed inventory");
-		}
-		if (!ventedAmbient && result.sealedNodeCount() != state.nodes().size()) {
+		if (result.sealedNodeCount() != state.nodes().size()) {
 			throw new IllegalArgumentException("Restored gas sealed-node count does not match derived topology");
 		}
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			int derived = actual[cell] > 0 ? actual[cell] : 0;
-			if (!ventedAmbient && expected[cell] != derived) throw new IllegalArgumentException(
+			if (expected[cell] != derived) throw new IllegalArgumentException(
 					"Restored gas topology differs from committed membership at cell " + cell);
-			if (ventedAmbient && expected[cell] != 0) throw new IllegalArgumentException(
-					"Operator-vented gas topology contains a sealed membership");
 		}
 		for (int node = 0; node < state.nodes().size(); node++) {
 			int minimum = Integer.MAX_VALUE;
@@ -91,25 +84,17 @@ final class GasTopologyCoordinator {
 			}
 		}
 		AirNetwork restored = new AirNetwork(registry);
-		restored.restoreNodes(ventedAmbient ? new double[0] : result.sealedAvailableVolume(),
+		restored.restoreNodes(result.sealedAvailableVolume(),
 				state.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
 				state.externalSource(), state.escapedSink(), state.massRoundoff(), state.residualRoundoff());
-		for (AirCavityScanner.GeometricEdge edge : ventedAmbient ? List.<AirCavityScanner.GeometricEdge>of()
-				: result.geometricEdges()) {
+		for (AirCavityScanner.GeometricEdge edge : result.geometricEdges()) {
 			restored.addOrMergeEdge(edge.firstNode(), edge.secondNode(), edge.areaSquareMeters(), 0.65);
 		}
 		domain.gasState.network = restored;
 		domain.gasState.cellNodeId = actual;
 		domain.gasState.cellLineageNodeId = result.cellLineageNodeId();
-		if (ventedAmbient) {
-			for (int cell = 0; cell < domain.cellCount; cell++) {
-				if (domain.gasState.cellNodeId[cell] > 0) domain.gasState.cellNodeId[cell] = AirNetwork.AMBIENT_NODE;
-				if (domain.gasState.cellLineageNodeId[cell] > 0) domain.gasState.cellLineageNodeId[cell] = AirNetwork.AMBIENT_NODE;
-			}
-		}
-		domain.gasState.previousSealedNodeCount = ventedAmbient ? 0 : result.sealedNodeCount();
+		domain.gasState.previousSealedNodeCount = result.sealedNodeCount();
 		domain.gasState.pressureActive = domain.gasState.previousSealedNodeCount > 0;
-		domain.gasState.operatorVentedTopology = ventedAmbient;
 	}
 
 	void refresh() {
@@ -569,7 +554,6 @@ final class GasTopologyCoordinator {
 	 * previous HEAD; it may never publish current markers beside a stale gas-node membership table.
 	 */
 	void synchronizeForPersistence() {
-		if (domain.gasState.operatorVentedTopology) return;
 		domain.ensureGrid();
 		refresh();
 	}

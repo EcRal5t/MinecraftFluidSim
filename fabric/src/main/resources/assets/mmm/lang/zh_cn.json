@@ -97,7 +97,6 @@
   "message.mmm.controller.availability_still_blocked": "Availability 仍被阻止：%s",
   "message.mmm.controller.creative_required": "只有创造模式玩家可以修改运行意图。",
   "message.mmm.controller.write_not_ready": "权威写入尚未就绪：%s",
-  "message.mmm.controller.vented_gas_resume_blocked": "密闭气体已由 lifecycle 操作排放；请释放或移除区域，不能从几何重建库存。",
   "message.mmm.controller.intent_changed": "运行意图已经改变；请刷新摘要。",
   "message.mmm.controller.break_blocked": "该方块属于活动 MMM 区域；请先通过控制器界面释放并移除区域。",
   "message.mmm.lifecycle.detail": "%s",

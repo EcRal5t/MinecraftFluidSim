@@ -489,7 +489,7 @@ public final class RegionCheckpointAssembler {
 		if (chemicalState != !snapshot.chemicalRegistryFingerprint().isEmpty()) {
 			throw new IOException("Gas snapshot chemical identity disagrees with liquid generation");
 		}
-		return new GasRegionStateCodec.ManifestData(capabilities, snapshot.operatorVentedTopology(), snapshot.registryFingerprint(),
+		return new GasRegionStateCodec.ManifestData(capabilities, snapshot.registryFingerprint(),
 				snapshot.chemicalRegistryFingerprint(), snapshot.nodes().stream()
 				.map(node -> new GasRegionStateCodec.NodeData(node.topologyKey(), node.inventory())).toList(),
 				snapshot.externalSource(), snapshot.escapedSink(), snapshot.massRoundoff(), snapshot.residualRoundoff(),

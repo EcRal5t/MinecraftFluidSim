@@ -17,6 +17,12 @@ import java.util.List;
  * {@link #thermalRevision()}.
  */
 public final class ThermalDomainState {
+	/** A phase candidate exhausted its last condensed heat bath before its energy could close. */
+	public static final class EmptyPhaseCandidateEnergyException extends IllegalArgumentException {
+		public EmptyPhaseCandidateEnergyException() {
+			super("Empty phase cell retains internal energy");
+		}
+	}
 	/** Exact generation token for the four independently mutable thermal truth owners. */
 	public record Revision(long liquid, long granular, long gas, long audit) { }
 	public record ReactionPlan(int cell, SignedDyadic cellEnergy, SignedDyadic inventoryBefore, double equilibriumTemperatureK) { }
@@ -336,6 +342,9 @@ public final class ThermalDomainState {
 			throw new IllegalStateException("Gas energy is not bound to a closed thermal inventory");
 		}
 		return gasState.planVent();
+	}
+	public void requireCanCommitGasVent(GasEnergyStore.GasVentPlan plan) {
+		gasState.requireCanCommitVent(plan);
 	}
 
 	/** Publishes an already validated all-node gas-energy removal using assignments only. */

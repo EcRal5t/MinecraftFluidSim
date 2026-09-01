@@ -57,6 +57,7 @@ public final class FluidRegionLifecycleValidation {
 		validateHydrostaticSleepAndWake();
 		validateHydrostaticSleepPreservesMarkerLedger();
 		validateBackendCandidateAdoption();
+		validateLiveCaptureFailureIsTyped();
 		validateApplicationCheckpointResults();
 		validateUnloadRequiresPublishedCheckpointAndReleasedSolver();
 		validateMetadataOnlySummaryCannotInventInventory();
@@ -310,22 +311,18 @@ public final class FluidRegionLifecycleValidation {
 	private static void validatePacingAndOperatorPause() {
 		RegionLifecycleUseCase useCase = new RegionLifecycleUseCase();
 		require(useCase.decideRunIntent(new RegionLifecycleUseCase.RunIntentFacts(
-				false, false, true, true, false, true))
+				false, false, true, true))
 				== RegionLifecycleUseCase.RunIntentDecision.PERMISSION_DENIED,
 				"controller resume ignored the frozen permission fact");
 		require(useCase.decideRunIntent(new RegionLifecycleUseCase.RunIntentFacts(
-				false, true, false, true, false, true))
+				false, true, false, true))
 				== RegionLifecycleUseCase.RunIntentDecision.WRITE_NOT_READY,
 				"controller resume ignored the authoritative-write gate");
 		require(useCase.decideRunIntent(new RegionLifecycleUseCase.RunIntentFacts(
-				false, true, true, true, true, true))
-				== RegionLifecycleUseCase.RunIntentDecision.VENTED_GAS_RESUME_BLOCKED,
-				"controller resumed an operator-vented gas topology");
-		require(useCase.decideRunIntent(new RegionLifecycleUseCase.RunIntentFacts(
-				true, true, true, true, false, true))
+				true, true, true, true))
 				== RegionLifecycleUseCase.RunIntentDecision.UNCHANGED
 				&& useCase.decideRunIntent(new RegionLifecycleUseCase.RunIntentFacts(
-				false, true, true, true, false, true))
+				false, true, true, true))
 				== RegionLifecycleUseCase.RunIntentDecision.ACCEPTED,
 				"controller run-intent idempotence/transition decision changed");
 		FluidRegionLifecycle lifecycle = new FluidRegionLifecycle();
@@ -451,6 +448,32 @@ public final class FluidRegionLifecycleValidation {
 		require(queries.consumeActionToken(viewer, region, result.summary().summaryGeneration())
 				&& !queries.consumeActionToken(viewer, region, result.summary().summaryGeneration()),
 				"controller query token did not consume exactly once");
+	}
+
+	private static void validateLiveCaptureFailureIsTyped() {
+		RegionRepository brokenCapture = new RegionRepository() {
+			@Override public Capture captureForStep(UUID regionId) {
+				throw new IllegalArgumentException("broken live capture");
+			}
+			@Override public RegionStepStatus adoptMotion(
+					UUID regionId, FluidStepCandidate candidate, String expectedBackendId
+			) { throw new AssertionError("capture failure reached motion adoption"); }
+			@Override public RegionStepStatus adoptThermal(
+					UUID regionId, FluidThermalStepCandidate candidate, String expectedBackendId
+			) { throw new AssertionError("capture failure reached thermal adoption"); }
+		};
+		RegionApplicationService application = application(new CpuFluidSolverBackend(), brokenCapture,
+				(id, generation) -> new RegionCheckpointPort.Attempt(
+						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null));
+		boolean typed = false;
+		try {
+			application.stepMotion(new MotionStepCommand(
+					new UUID(71L, 73L), 0L, List.of(), false, 0, false));
+		} catch (RegionRepository.StateCaptureRejectedException rejected) {
+			typed = rejected.getCause() instanceof IllegalArgumentException
+					&& rejected.getMessage().contains("broken live capture");
+		}
+		require(typed, "invalid live capture could still escape the typed runtime pause boundary");
 	}
 
 	private static RegionApplicationService application(

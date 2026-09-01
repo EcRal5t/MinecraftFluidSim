@@ -282,7 +282,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			throw new IllegalArgumentException("Thermal registry chemical dependency mismatch");
 		}
 		ensureGrid();
-		if (!gasState.operatorVentedTopology) gasTopologyCoordinator.refresh();
+		gasTopologyCoordinator.refresh();
 		return true;
 	}
 

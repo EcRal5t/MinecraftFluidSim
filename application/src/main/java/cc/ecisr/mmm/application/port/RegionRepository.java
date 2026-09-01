@@ -10,6 +10,11 @@ import java.util.UUID;
 
 /** Narrow runtime repository: immutable step capture and atomic complete-candidate adoption only. */
 public interface RegionRepository {
+	/** Live owner could not produce a complete immutable base; the owner itself was not mutated. */
+	final class StateCaptureRejectedException extends RuntimeException {
+		public StateCaptureRejectedException(String message, Throwable cause) { super(message, cause); }
+	}
+
 	Capture captureForStep(UUID regionId);
 	RegionStepStatus adoptMotion(UUID regionId, FluidStepCandidate candidate, String expectedBackendId);
 	RegionStepStatus adoptThermal(UUID regionId, FluidThermalStepCandidate candidate, String expectedBackendId);

@@ -97,7 +97,6 @@
   "message.mmm.controller.availability_still_blocked": "Availability is still blocked: %s",
   "message.mmm.controller.creative_required": "Creative mode is required to change run intent.",
   "message.mmm.controller.write_not_ready": "Authoritative writes are not ready: %s",
-  "message.mmm.controller.vented_gas_resume_blocked": "Sealed gas was vented by lifecycle operation; release or remove the region instead of rebuilding inventory from geometry.",
   "message.mmm.controller.intent_changed": "Run intent already changed; refresh the summary.",
   "message.mmm.controller.break_blocked": "This block belongs to an active MMM region. Release and remove it through the controller console first.",
   "message.mmm.lifecycle.detail": "%s",

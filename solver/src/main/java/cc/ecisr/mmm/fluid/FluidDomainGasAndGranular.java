@@ -76,9 +76,8 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 		gasTopologyCoordinator.restore(state, registry);
 	}
 
-	/** True when the current grid contains at least one sealed gas cavity with finite inventory. */
+	/** True when the current grid contains at least one sealed gas cavity, including explicit vacuum. */
 	public boolean gasPressureActive() { return gasState.pressureActive; }
-	public boolean operatorVentedGasTopology() { return gasState.operatorVentedTopology; }
 	public double gasNodeTemperatureK(int nodeId) {
 		return thermalState == null || !thermalState.gasModelBound()
 				? GasRegistry.STANDARD_TEMPERATURE_K : thermalState.gasTemperature(nodeId, gasState.network);

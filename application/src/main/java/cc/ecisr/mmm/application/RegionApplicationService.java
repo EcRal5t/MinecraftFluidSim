@@ -36,7 +36,7 @@ public final class RegionApplicationService implements RegionTickUseCase.StepExe
 	@Override
 	public MotionStepResult stepMotion(MotionStepCommand command) {
 		Objects.requireNonNull(command, "command");
-		RegionRepository.Capture capture = regions.captureForStep(command.regionId());
+		RegionRepository.Capture capture = captureForStep(command.regionId());
 		RegionStepStatus unavailable = captureStatus(capture);
 		if (unavailable != null) return MotionStepResult.rejected(unavailable);
 		if (capture.solverGeneration() != command.expectedSolverGeneration()) {
@@ -56,7 +56,7 @@ public final class RegionApplicationService implements RegionTickUseCase.StepExe
 	@Override
 	public ThermalStepResult stepThermal(ThermalStepCommand command) {
 		Objects.requireNonNull(command, "command");
-		RegionRepository.Capture capture = regions.captureForStep(command.regionId());
+		RegionRepository.Capture capture = captureForStep(command.regionId());
 		RegionStepStatus unavailable = captureStatus(capture);
 		if (unavailable != null) return ThermalStepResult.rejected(unavailable);
 		if (capture.solverGeneration() != command.expectedSolverGeneration()) {
@@ -94,6 +94,18 @@ public final class RegionApplicationService implements RegionTickUseCase.StepExe
 			return RegionStepStatus.STALE_GENERATION;
 		}
 		return layout.equals(capture.state().layout()) ? null : RegionStepStatus.LAYOUT_MISMATCH;
+	}
+
+	private RegionRepository.Capture captureForStep(java.util.UUID regionId) {
+		try {
+			return regions.captureForStep(regionId);
+		} catch (RegionRepository.StateCaptureRejectedException rejected) {
+			throw rejected;
+		} catch (RuntimeException invalidLiveState) {
+			throw new RegionRepository.StateCaptureRejectedException(
+					"Live region could not produce a complete authoritative step base: "
+							+ invalidLiveState.getMessage(), invalidLiveState);
+		}
 	}
 
 	private static RegionStepStatus captureStatus(RegionRepository.Capture capture) {

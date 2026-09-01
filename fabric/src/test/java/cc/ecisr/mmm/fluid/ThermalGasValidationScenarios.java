@@ -788,19 +788,46 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		SignedDyadic energyBefore = domain.exactGasInternalEnergy();
 		int nodesBefore = domain.gasBoundary().nodeCount();
 
+		FluidDomain.OperatorGasVentPlan stale = domain.planOperatorVentSealedGas();
+		domain.gasState.network.updateAvailableVolume(1,
+				Math.nextDown(domain.gasBoundary().availableVolume(1)));
+		boolean staleRejected = false;
+		try {
+			domain.commitOperatorVentSealedGas(stale);
+		} catch (IllegalStateException expected) {
+			staleRejected = true;
+		}
+		require(staleRejected && domain.gasBoundary().sealedInventory().equals(gasBefore)
+				&& domain.exactGasInternalEnergy().equals(energyBefore),
+				"stale gas vent partially committed its thermal owner");
+		FluidDomain.OperatorGasVentPlan thermallyStale = domain.planOperatorVentSealedGas();
+		domain.setThermalTemperatureInCell(1, 1, 1, 301.0);
+		GasInventory gasAfterHeating = domain.gasBoundary().sealedInventory();
+		SignedDyadic gasEnergyAfterHeating = domain.exactGasInternalEnergy();
+		var auditAfterHeating = domain.thermalAudit();
+		staleRejected = false;
+		try {
+			domain.commitOperatorVentSealedGas(thermallyStale);
+		} catch (IllegalStateException expected) {
+			staleRejected = true;
+		}
+		require(staleRejected && domain.gasBoundary().sealedInventory().equals(gasAfterHeating)
+				&& domain.exactGasInternalEnergy().equals(gasEnergyAfterHeating)
+				&& domain.thermalAudit().equals(auditAfterHeating),
+				"thermally stale gas vent overwrote a newer thermal audit generation");
 		FluidDomain.OperatorGasVent vented = domain.commitOperatorVentSealedGas(
 				domain.planOperatorVentSealedGas());
 		require(nodesBefore > 0 && vented.sealedNodes() == nodesBefore
 				&& vented.removed().equals(gasBefore) && vented.internalEnergy().equals(energyBefore)
-				&& domain.gasBoundary().nodeCount() == 0 && domain.gasBoundary().sealedInventory().isEmpty()
+				&& domain.gasBoundary().nodeCount() == nodesBefore && domain.gasBoundary().sealedInventory().isEmpty()
 				&& domain.gasBoundary().escapedSink().equals(domain.gasBoundary().externalSource())
 				&& domain.exactGasInternalEnergy().equals(SignedDyadic.ZERO)
 				&& domain.gasBoundary().auditClosed()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"operator vent did not jointly settle sealed gas component and energy truth");
 		FluidDomain restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-		require(restored.gasBoundary().nodeCount() == 0
-				&& restored.operatorVentedGasTopology()
+		require(restored.gasBoundary().nodeCount() == nodesBefore
+				&& restored.gasBoundary().sealedInventory().isEmpty()
 				&& restored.exactGasInternalEnergy().equals(SignedDyadic.ZERO)
 				&& restored.gasBoundary().auditClosed()
 				&& restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),

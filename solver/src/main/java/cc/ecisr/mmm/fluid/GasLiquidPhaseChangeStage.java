@@ -192,6 +192,7 @@ final class GasLiquidPhaseChangeStage {
 			return new GasBoilPlan(
 					batches, removedSvq, removal, batch, candidateGasEnergy, saturationAfter);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
+				| ThermalDomainState.EmptyPhaseCandidateEnergyException
 				| PhaseCandidateUnavailableException unavailable) {
 			return null;
 		}

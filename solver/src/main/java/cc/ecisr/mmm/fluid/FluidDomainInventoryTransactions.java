@@ -254,7 +254,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 		return gasLifecyclePlanner.planVent();
 	}
 
-	/** Converts every sealed cell to inventory-free ambient topology and books gas plus U to sinks. */
+	/** Retains sealed membership as explicit vacuum and books removed gas plus U to sinks. */
 	public OperatorGasVent commitOperatorVentSealedGas(OperatorGasVentPlan plan) {
 		return gasLifecyclePlanner.commitVent(plan);
 	}
@@ -275,7 +275,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 	public record OperatorGasVent(GasInventory removed, SignedDyadic internalEnergy, int sealedNodes) { }
 	public record OperatorGasVentPlan(
 			int nodeCount, GasInventory removed, AirNetwork.RemapPlan gasPlan,
-			GasEnergyStore.GasVentPlan thermalPlan
+			GasEnergyStore.GasVentPlan thermalPlan, ThermalDomainState.Revision thermalRevision
 	) { }
 	public static final class OperatorClearPlan {
 		final CondensedClearPlan condensed;
