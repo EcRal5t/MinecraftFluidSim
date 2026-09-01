@@ -92,7 +92,7 @@ public final class RegionDiagnosticsReport {
 		RegionCatalog.BudgetUsage selectedUsage = regions.usage();
 		if (!region.solverLoaded()) {
 			return String.format(
-					"UNLOADED/PAUSED | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | controller %s | %s | origin %s | grid %dx%dx%d | checkpoint %d, water %.3f cells, markers %d | controller flag %s, bridge %s | takeover lock %s%s",
+					"UNLOADED/PAUSED | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | controller %s | %s | origin %s | grid %dx%dx%d | checkpoint %d, liquid %.3f cells, markers %d | controller flag %s, bridge %s | takeover lock %s%s",
 					region.id().toString().substring(0, 8), selectedUsage.regionCount(), regions.limits().maximumRegions(),
 					selectedUsage.reservedCells(), regions.limits().maximumTotalCells(), selectedUsage.reservedMarkers(),
 					regions.limits().maximumTotalMarkers(), region.footprint().controllerPosition().toShortString(),
@@ -132,7 +132,7 @@ public final class RegionDiagnosticsReport {
 		String gas = gasSummary(domain);
 		String thermal = world.hasCapability(WorldCapability.THERMAL) ? thermalSummary(region, domain) : "";
 		return String.format(
-				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | water %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d, liquid impulse [%.3g,%.3g,%.3g] kg·m/s | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s%s",
+				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | liquid %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d, liquid impulse [%.3g,%.3g,%.3g] kg·m/s | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s%s",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",
 				region.id().toString().substring(0, 8),
 				usage.regionCount(), regions.limits().maximumRegions(),

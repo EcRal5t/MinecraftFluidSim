@@ -146,7 +146,7 @@ public final class GasThermalModel {
 			targetTemperature = isentropicTemperature(
 					portions, initial.temperatureK(), entropyChange);
 		} catch (CaloricRangeException outside) {
-			throw new IllegalArgumentException("Gas isentrope leaves the common caloric validity range: "
+			throw new IllegalArgumentException("Gas isentrope leaves the positive-temperature domain: "
 					+ "T0=" + initial.temperatureK() + " K, V0=" + initialAvailableVolume
 					+ " m^3, V1=" + finalAvailableVolume + " m^3, Vstd="
 					+ AirNetwork.cubicMeters(inventory.standardVolumeNanos()) + " m^3std, components="
@@ -172,15 +172,26 @@ public final class GasThermalModel {
 			double boundary = heating
 					? nextUpperCaloricBoundary(portions, temperature)
 					: nextLowerCaloricBoundary(portions, temperature);
+			if (heating && boundary == Double.POSITIVE_INFINITY) {
+				double heatCapacity = heatCapacityAt(portions, temperature);
+				double result = temperature * Math.exp(remaining / heatCapacity);
+				if (!(Double.isFinite(result) && result > temperature)) {
+					throw new CaloricRangeException(remaining);
+				}
+				return result;
+			}
 			if (!(heating ? boundary > temperature : boundary < temperature)) {
 				throw new CaloricRangeException(remaining);
 			}
 			double sampleTemperature = Math.sqrt(temperature * boundary);
 			double heatCapacity = heatCapacityAt(portions, sampleTemperature);
-			double intervalEntropy = heatCapacity * Math.abs(Math.log(boundary / temperature));
+			double intervalEntropy = heatCapacity
+					* Math.abs(Math.log(boundary) - Math.log(temperature));
 			if (remaining <= intervalEntropy) {
 				double signed = (heating ? 1.0 : -1.0) * remaining / heatCapacity;
-				return temperature * Math.exp(signed);
+				double result = temperature * Math.exp(signed);
+				return heating ? Math.max(temperature, Math.min(boundary, result))
+						: Math.max(boundary, Math.min(temperature, result));
 			}
 			remaining -= intervalEntropy;
 			temperature = boundary;
@@ -202,7 +213,7 @@ public final class GasThermalModel {
 		double boundary = Double.POSITIVE_INFINITY;
 		for (ThermalStateFunction.InventoryPortion portion : portions) {
 			ThermalMaterialDefinition material = thermalRegistry.material(portion.materialHandle());
-			double candidate = material.maximumTemperatureK();
+			double candidate = Double.POSITIVE_INFINITY;
 			for (ThermalMaterialDefinition.CaloricSegment segment
 					: material.caloricSegments()) {
 				if (segment.maximumTemperatureK() > temperatureK) {
@@ -222,7 +233,7 @@ public final class GasThermalModel {
 		for (ThermalStateFunction.InventoryPortion portion : portions) {
 			ThermalMaterialDefinition material = thermalRegistry.material(portion.materialHandle());
 			List<ThermalMaterialDefinition.CaloricSegment> segments = material.caloricSegments();
-			double candidate = material.minimumTemperatureK();
+			double candidate = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
 			for (int index = segments.size() - 1; index >= 0; index--) {
 				ThermalMaterialDefinition.CaloricSegment segment = segments.get(index);
 				if (segment.minimumTemperatureK() < temperatureK) {

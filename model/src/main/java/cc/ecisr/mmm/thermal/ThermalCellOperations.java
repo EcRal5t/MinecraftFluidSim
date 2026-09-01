@@ -464,16 +464,24 @@ final class ThermalCellOperations {
 		ArrayList<ThermalDisplaySnapshot.GasNode> gasNodes = new ArrayList<>(network.nodeCount());
 		for (int node : network.nodeIds()) gasNodes.add(new ThermalDisplaySnapshot.GasNode(node,
 				quantizedTemperature(gas.temperature(node, network)),
-				Math.toIntExact(Math.round(gas.gaugePressure(node, network) / 10.0))));
+				quantizedGaugePressure(gas.gaugePressure(node, network))));
 		return new ThermalDisplaySnapshot(temperatures, coherent, flags, gasNodes);
 	}
 
 	private static int quantizedTemperature(double temperatureK) {
-		long quantized = Math.round(temperatureK * 16.0);
-		if (quantized <= 0L || quantized >= ThermalDisplaySnapshot.EMPTY_TEMPERATURE_Q) {
-			throw new IllegalArgumentException("Thermal display temperature is outside the quantized palette");
+		if (!(Double.isFinite(temperatureK) && temperatureK > 0.0)) {
+			throw new IllegalArgumentException("Thermal display temperature is not finite and positive");
 		}
-		return Math.toIntExact(quantized);
+		long quantized = Math.round(temperatureK * 16.0);
+		return (int) Math.max(1L, Math.min(ThermalDisplaySnapshot.MAX_TEMPERATURE_Q, quantized));
+	}
+
+	private static int quantizedGaugePressure(double pressurePa) {
+		if (!Double.isFinite(pressurePa)) {
+			throw new IllegalArgumentException("Thermal display pressure is not finite");
+		}
+		long decaPascal = Math.round(pressurePa / 10.0);
+		return (int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, decaPascal));
 	}
 
 	private ThermalStateFunction.State phaseCandidateState(

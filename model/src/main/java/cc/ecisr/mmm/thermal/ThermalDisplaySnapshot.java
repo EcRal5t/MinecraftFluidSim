@@ -10,6 +10,7 @@ public record ThermalDisplaySnapshot(
 		List<GasNode> gasNodes
 ) {
 	public static final int EMPTY_TEMPERATURE_Q = 0xffff;
+	public static final int MAX_TEMPERATURE_Q = EMPTY_TEMPERATURE_Q - 1;
 	public static final int FLAG_CONDENSED = 1;
 	public static final int FLAG_COHERENT = 1 << 1;
 

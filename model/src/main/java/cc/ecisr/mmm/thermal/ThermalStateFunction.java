@@ -11,10 +11,10 @@ import java.util.List;
 public final class ThermalStateFunction {
 	public enum PhaseState { LOWER, PLATEAU, UPPER }
 	public record State(double temperatureK, double heatCapacityEuPerK) { }
-	/** A prospective inventory is finite and well-formed but cannot represent its energy inside the data-pack range. */
+	/** A prospective inventory is finite and well-formed but its energy implies no positive-temperature state. */
 	public static final class EnergyOutsideValidityException extends IllegalArgumentException {
 		public EnergyOutsideValidityException() {
-			super("Thermal LTE energy is outside the common validity range");
+			super("Thermal LTE energy is outside the positive-temperature domain");
 		}
 	}
 	public record InventoryPortion(int materialHandle, double massMu, Map<String, Long> speciesQuanta) {
@@ -70,7 +70,7 @@ public final class ThermalStateFunction {
 		return new State(temperature, heatCapacity);
 	}
 
-	/** Closed-form common-temperature inversion for a bounded heterogeneous LTE inventory. */
+	/** Closed-form common-temperature inversion for a heterogeneous LTE inventory. */
 	public State stateForInventory(List<InventoryPortion> portions, double internalEnergy) {
 		if (portions == null || portions.isEmpty()
 				|| portions.size() > ThermalLimits.MAX_THERMAL_CARRIERS_PER_CELL
@@ -78,25 +78,17 @@ public final class ThermalStateFunction {
 			throw new IllegalArgumentException("Thermal LTE inventory is missing, over budget or non-finite");
 		}
 		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
-		double maximum = Double.POSITIVE_INFINITY;
-		for (InventoryPortion portion : portions) {
-			ThermalMaterialDefinition material = registry.material(portion.materialHandle());
-			minimum = Math.max(minimum, material.minimumTemperatureK());
-			maximum = Math.min(maximum, material.maximumTemperatureK());
-		}
-		if (!(maximum >= minimum)) throw new IllegalArgumentException("Thermal LTE carriers have no common validity range");
 		double minimumEnergy = inventoryEnergy(portions, minimum);
-		double maximumEnergy = inventoryEnergy(portions, maximum);
-		double tolerance = energyTolerance(internalEnergy, minimumEnergy, maximumEnergy);
-		if (internalEnergy < minimumEnergy - tolerance || internalEnergy > maximumEnergy + tolerance) {
+		double tolerance = energyTolerance(internalEnergy, minimumEnergy);
+		if (internalEnergy < minimumEnergy - tolerance) {
 			throw new EnergyOutsideValidityException();
 		}
 		if (internalEnergy <= minimumEnergy) return new State(minimum, inventoryHeatCapacity(portions, minimum));
-		if (internalEnergy >= maximumEnergy) return new State(maximum, inventoryHeatCapacity(portions, maximum));
 
-		double cursor = minimum, cursorEnergy = minimumEnergy;
-		while (cursor < maximum) {
-			double next = maximum;
+		double cursor = minimum;
+		double cursorEnergy = minimumEnergy;
+		while (true) {
+			double next = Double.POSITIVE_INFINITY;
 			for (InventoryPortion portion : portions) {
 				for (ThermalMaterialDefinition.CaloricSegment segment
 						: registry.material(portion.materialHandle()).caloricSegments()) {
@@ -105,17 +97,26 @@ public final class ThermalStateFunction {
 					}
 				}
 			}
+			if (next == Double.POSITIVE_INFINITY) {
+				double capacity = inventoryHeatCapacity(portions, cursor);
+				double temperature = cursor + (internalEnergy - cursorEnergy) / capacity;
+				if (!(Double.isFinite(temperature) && temperature >= cursor)) {
+					throw new IllegalArgumentException("Thermal LTE state inversion overflowed");
+				}
+				return new State(temperature, inventoryHeatCapacity(portions, temperature));
+			}
 			double capacity = inventoryHeatCapacity(portions, cursor + (next - cursor) * 0.5);
 			double intervalEnergy = capacity * (next - cursor);
-			if (internalEnergy <= cursorEnergy + intervalEnergy + tolerance) {
+			double nextEnergy = cursorEnergy + intervalEnergy;
+			tolerance = energyTolerance(internalEnergy, cursorEnergy, nextEnergy);
+			if (internalEnergy <= nextEnergy + tolerance) {
 				double temperature = cursor + (internalEnergy - cursorEnergy) / capacity;
 				temperature = Math.max(cursor, Math.min(next, temperature));
 				return new State(temperature, inventoryHeatCapacity(portions, temperature));
 			}
-			cursorEnergy += intervalEnergy;
+			cursorEnergy = nextEnergy;
 			cursor = next;
 		}
-		throw new IllegalArgumentException("Thermal LTE state inversion failed");
 	}
 
 	public EquilibriumState equilibriumState(

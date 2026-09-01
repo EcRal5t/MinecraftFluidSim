@@ -193,6 +193,14 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		require(Math.abs(acrossSegment.finalTemperatureK() - expectedAcrossSegment) < 1.0E-9
 				&& Math.abs(acrossSegmentReversed.finalInternalEnergy() - piecewiseInitial) < 1.0E-8,
 				"piecewise-caloric gas isentrope did not integrate and reverse across its segment boundary");
+		GasThermalModel.Compression belowDeclaredRange = piecewise.compressAdiabatically(
+				inventory, piecewiseInitial, 1.0, 100.0);
+		GasThermalModel.Compression belowDeclaredRangeReversed = piecewise.compressAdiabatically(
+				inventory, belowDeclaredRange.finalInternalEnergy(), 100.0, 1.0);
+		require(belowDeclaredRange.finalTemperatureK() < piecewiseAir.minimumTemperatureK()
+				&& belowDeclaredRange.finalTemperatureK() >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K
+				&& Math.abs(belowDeclaredRangeReversed.finalInternalEnergy() - piecewiseInitial) < 1.0E-8,
+				"gas isentrope did not continuously extend and reverse below the declared caloric range");
 		List<GasInventory> children = inventory.partition(new long[] { 1L, 2L, 3L });
 		double[] energies = model.partitionEnergy(inventory, initial, children);
 		double partitioned = 0.0;
@@ -233,7 +241,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			double vaporDensityAtBoiling = batchMassKg / vaporVolume;
 			double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * standardVaporVolume
 					/ (batchMassKg * GasRegistry.STANDARD_TEMPERATURE_K);
-			ThermalRegistry registry = new ThermalRegistry(List.of(water, vapor), List.of(),
+			ThermalRegistry registry = new ThermalRegistry(List.of(air, water, vapor), List.of(),
 					List.of(transition), "", "");
 			ThermalStateFunction state = new ThermalStateFunction(registry);
 			double liquidU = state.internalEnergyAtTemperature(
@@ -275,6 +283,28 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					"built-in dry-air/water/vapor caloric or conductivity values drifted");
 			require(Math.abs(latentEnthalpy - 2_256_700.0) < 0.01,
 					"water/vapor state-function gap does not reproduce the 1-atm latent enthalpy: " + latentEnthalpy);
+			long airNanos = 140_000_000L;
+			long vaporNanos = 2_967_839L;
+			GasInventory reportedExpansion = new GasInventory(List.of(
+					new GasComponentAmount(BuiltinGasDefinitions.AIR, airNanos,
+							AirNetwork.AIR_DENSITY * AirNetwork.cubicMeters(airNanos),
+							List.of(), 0.0),
+					new GasComponentAmount(BuiltinGasDefinitions.WATER_VAPOR, vaporNanos,
+							BuiltinGasDefinitions.WATER_VAPOR_STANDARD_DENSITY
+									* AirNetwork.cubicMeters(vaporNanos),
+							List.of(), 0.0)));
+			GasThermalModel reportedModel = new GasThermalModel(
+					registry, BuiltinGasDefinitions.createRegistry());
+			double reportedInitial = reportedModel.internalEnergyAtTemperature(reportedExpansion, 306.0691472872192);
+			GasThermalModel.Compression reported = reportedModel.compressAdiabatically(
+					reportedExpansion, reportedInitial, 0.13749912215963653, 0.34265727368591875);
+			GasThermalModel.Compression reportedReverse = reportedModel.compressAdiabatically(
+					reportedExpansion, reported.finalInternalEnergy(), 0.34265727368591875, 0.13749912215963653);
+			require(reported.finalTemperatureK() < vapor.minimumTemperatureK()
+					&& reported.finalTemperatureK() >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K
+					&& reported.workIntoGas() < 0.0
+					&& Math.abs(reportedReverse.finalInternalEnergy() - reportedInitial) < 1.0E-8,
+					"reported water-vapor bubble expansion did not remain a reversible thermal candidate");
 			require(close(melting.minimumPressurePa(), 611.657)
 					&& close(melting.equilibriumTemperatureK(611.657), 273.16)
 					&& close(melting.equilibriumTemperatureK(2_815.2265625), 273.15983635215986)
@@ -786,6 +816,9 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& model.saturation(transition, 363.15, batch,
 				GasRegistry.STANDARD_PRESSURE_PA).direction() == GasLiquidPhaseModel.Direction.CONDENSE,
 				"Clausius-Clapeyron saturation did not select the physical phase direction");
+		require(model.saturation(transition, ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, batch,
+				GasRegistry.STANDARD_PRESSURE_PA).direction() == GasLiquidPhaseModel.Direction.CONDENSE,
+				"near-zero liquid temperature did not retain the condensation path");
 		AirNetwork network = new AirNetwork(gas); int node = network.addNode(1.0, 1.0);
 		network.commitPhaseSource(node, batch);
 		GasInventory.Split take = network.previewComponentTake(node,
@@ -866,6 +899,11 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& Byte.toUnsignedInt(display.coherentFraction()[liquidCell]) == 0
 				&& display.gasNodes().size() == 1 && display.gasNodes().getFirst().nodeId() == 1,
 				"thermal display did not derive quantized condensed/gas state in one rebuild");
+		domain.setThermalTemperatureInCell(1, 1, 1, 5_000.0);
+		require(Short.toUnsignedInt(domain.copyThermalDisplaySnapshot().cellTemperatureQ()[liquidCell])
+				== ThermalDisplaySnapshot.MAX_TEMPERATURE_Q,
+				"bounded display encoding rejected an otherwise valid high-temperature state");
+		domain.setThermalTemperatureInCell(1, 1, 1, 500.0);
 		double liquidMassBefore = domain.totalMass();
 		double oilVolumeBefore = domain.exactVolumeNear(1, 1, 1, 0, 1);
 		double boiledSolverMass = SolverUnitScale.forCellSize(config.cellSize())

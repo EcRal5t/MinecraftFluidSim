@@ -316,18 +316,10 @@ public final class ThermalCellGrid {
 
 	private void solveCell(int cell, double targetEnergy) {
 		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
-		double maximum = Double.POSITIVE_INFINITY;
-		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			ThermalMaterialDefinition material = carrierMaterial[carrier];
-			minimum = Math.max(minimum, material.minimumTemperatureK());
-			maximum = Math.min(maximum, material.maximumTemperatureK());
-		}
-		if (!(maximum >= minimum)) throw new IllegalArgumentException("Thermal cell carriers have no common validity range");
 		double energyAtMinimum = modeledCellEnergy(cell, minimum);
-		double energyAtMaximum = modeledCellEnergy(cell, maximum);
-		double tolerance = energyTolerance(targetEnergy, energyAtMinimum, energyAtMaximum);
-		if (targetEnergy < energyAtMinimum - tolerance || targetEnergy > energyAtMaximum + tolerance) {
-			throw new IllegalArgumentException("Thermal cell energy is outside the common validity range");
+		double tolerance = energyTolerance(targetEnergy, energyAtMinimum);
+		if (targetEnergy < energyAtMinimum - tolerance) {
+			throw new IllegalArgumentException("Thermal cell energy is outside the positive-temperature domain");
 		}
 		if (targetEnergy <= energyAtMinimum) {
 			temperature[cell] = minimum;
@@ -335,17 +327,11 @@ public final class ThermalCellGrid {
 			updateLinearTemperatureInterval(cell);
 			return;
 		}
-		if (targetEnergy >= energyAtMaximum) {
-			temperature[cell] = maximum;
-			heatCapacity[cell] = modeledCellHeatCapacity(cell, maximum);
-			updateLinearTemperatureInterval(cell);
-			return;
-		}
 
 		double cursor = minimum;
 		double cursorEnergy = energyAtMinimum;
-		while (cursor < maximum) {
-			double next = maximum;
+		while (true) {
+			double next = Double.POSITIVE_INFINITY;
 			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
 				for (ThermalMaterialDefinition.CaloricSegment segment : carrierMaterial[carrier].caloricSegments()) {
 					if (segment.maximumTemperatureK() > cursor && segment.maximumTemperatureK() < next) {
@@ -353,20 +339,32 @@ public final class ThermalCellGrid {
 					}
 				}
 			}
+			if (next == Double.POSITIVE_INFINITY) {
+				double capacity = modeledCellHeatCapacity(cell, cursor);
+				double solved = cursor + (targetEnergy - cursorEnergy) / capacity;
+				if (!(Double.isFinite(solved) && solved >= cursor)) {
+					throw new IllegalArgumentException("Thermal cell state inversion overflowed");
+				}
+				temperature[cell] = solved;
+				heatCapacity[cell] = modeledCellHeatCapacity(cell, solved);
+				updateLinearTemperatureInterval(cell);
+				return;
+			}
 			double middle = cursor + (next - cursor) * 0.5;
 			double capacity = modeledCellHeatCapacity(cell, middle);
 			double intervalEnergy = capacity * (next - cursor);
-			if (targetEnergy <= cursorEnergy + intervalEnergy + tolerance) {
+			double nextEnergy = cursorEnergy + intervalEnergy;
+			tolerance = energyTolerance(targetEnergy, cursorEnergy, nextEnergy);
+			if (targetEnergy <= nextEnergy + tolerance) {
 				double solved = cursor + (targetEnergy - cursorEnergy) / capacity;
 				temperature[cell] = Math.max(cursor, Math.min(next, solved));
 				heatCapacity[cell] = modeledCellHeatCapacity(cell, temperature[cell]);
 				updateLinearTemperatureInterval(cell);
 				return;
 			}
-			cursorEnergy += intervalEnergy;
+			cursorEnergy = nextEnergy;
 			cursor = next;
 		}
-		throw new IllegalArgumentException("Thermal cell state inversion failed");
 	}
 
 	private void updateLinearTemperatureInterval(int cell) {
@@ -383,8 +381,12 @@ public final class ThermalCellGrid {
 				}
 			}
 			if (selected == null) throw new IllegalStateException("Thermal cell caloric segment lookup failed");
-			minimum = Math.max(minimum, selected.minimumTemperatureK());
-			maximum = Math.min(maximum, selected.maximumTemperatureK());
+			double carrierMinimum = selected.minimumTemperatureK();
+			double carrierMaximum = selected.maximumTemperatureK();
+			if (selected == segments.getFirst()) carrierMinimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
+			if (selected == segments.getLast()) carrierMaximum = Double.MAX_VALUE;
+			minimum = Math.max(minimum, carrierMinimum);
+			maximum = Math.min(maximum, carrierMaximum);
 		}
 		if (!(maximum > minimum && temperature[cell] >= minimum && temperature[cell] <= maximum)) {
 			throw new IllegalArgumentException("Thermal cell has no common linear caloric interval");

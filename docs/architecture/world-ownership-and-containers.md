@@ -52,14 +52,14 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 
 边界壳、interior set 和 required chunk set 来自持久 footprint。controller 方块存在不等于区域可运行：每次 admission/refresh 都必须核对 dimension、controller identity、完整闭壳和 chunk load。边界打开时停止 step 和修改操作；不会用 chunk ticket 把缺失世界强行加载。
 
-破坏性操作只通过 controller console 的服务端预览/确认协议进入，要求内建管理员权限。预览 token 只存在内存、短时有效、绑定玩家和一次确认；确认重新验证 generation、动作、权限、WAL、availability、solver 与有限设备 identity。四个动作的职责严格分开：
+破坏性操作只通过 controller console 的服务端预览/确认协议进入，要求与 `/mmm` Brigadier 命令相同的 server command-source 内建管理员权限。预览 token 只存在内存、短时有效、绑定玩家和一次确认；确认重新验证 generation、动作、权限、WAL、availability、solver 与有限设备 identity。四个动作的职责严格分开：
 
 - `EMPTY_CONDENSED` 联合清除 liquid、chemical、active/deposit/coherent condensed truth，把实际物质与凝聚相 `U` 记入 operator escaped/external sink；保留 controller、ownership 和 sealed gas。
 - `VENT_SEALED_GAS` 联合清除 sealed component nanos/kg/species/residual 与实际 gas `U`，分别记入 gas escaped sink 和 thermal external sink；几何气格转成 ambient 连接，ambient 本身不是有限库存。
 - `RELEASE_OWNERSHIP` 只在凝聚相、气体和有限设备为空且无 WAL/phase work 后恢复 preimage；玩家已经占据的方块优先，不被覆盖。
 - `REMOVE_EMPTY_REGION` 只在上述库存为空、ownership 已释放且 quarantine 可接纳时发布 `REMOVED` HEAD。随后发送 network tombstone、注销 runtime，并把旧 ACTIVE payload 收敛到 `mmm/quarantine/removed-region/`；UUID 永不复用。
 
-旧的 `/mmm empty` 只保留给非 controller 开发域；controller 管理的区域必须手持物质场探针普通右击控制器，在控制台按 `EMPTY_CONDENSED`、`VENT_SEALED_GAS`、`RELEASE_OWNERSHIP`、`REMOVE_EMPTY_REGION` 依次预览并确认。控制器方块只在真正空手时处理 select/run-intent 激活；任何持物右击都先交还物品入口，不能吞掉探针或容器交互。纯 wall-time `PERFORMANCE_PAUSE` 不代表库存或账本不可解释，因此仍允许 `drain`、容器装取和上述只减少库存的 lifecycle；已加载且 HEAD、registry 与 WAL 均可证明的 `NUMERICAL_PAUSE` 也允许上述私有候选式 lifecycle 减库存，以便清空、排气、释放和移除故障区域。两类操作后都保持暂停，需显式 resume。边界、ownership、pending WAL、无效 HEAD、registry/profile、开放 audit、pending phase work 或 quarantine blocker 仍在预览中明确列出并阻止提交。
+旧的 `/mmm empty` 只保留给非 controller 开发域；controller 管理的区域必须手持物质场探针普通右击控制器，在控制台按 `EMPTY_CONDENSED`、`VENT_SEALED_GAS`、`RELEASE_OWNERSHIP`、`REMOVE_EMPTY_REGION` 依次预览并确认。控制器方块只在真正空手时处理 select/run-intent 激活；任何持物右击都先交还物品入口，不能吞掉探针或容器交互。纯 wall-time `PERFORMANCE_PAUSE` 不代表库存或账本不可解释，因此仍允许 `drain`、容器装取和上述只减少库存的 lifecycle；已加载且 HEAD、registry 与 WAL 均可证明的 `NUMERICAL_PAUSE` 也允许上述私有候选式 lifecycle 减库存，以便清空、排气、释放和移除故障区域。预览冻结事实前先通过共享 phase-work barrier 执行一次 phase-off mechanical successor，exactly-once 消费旧 `-pΔV` lien；只有该结算也失败时才保留 `PENDING_PHASE_WORK` blocker。两类操作后都保持暂停，需显式 resume。边界、ownership、pending WAL、无效 HEAD、registry/profile、开放 audit、无法结算的 phase work 或 quarantine blocker 仍在预览中明确列出并阻止提交。
 
 ## 容器真值
 

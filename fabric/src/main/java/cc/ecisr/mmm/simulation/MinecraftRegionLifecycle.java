@@ -32,6 +32,7 @@ public final class MinecraftRegionLifecycle {
 	private final FluidRegionManager regions;
 	private final FluidRegionOperations operations;
 	private final MinecraftRegionAvailability availability;
+	private final MinecraftPendingPhaseWorkBarrier phaseWorkBarrier;
 	private final FluidSnapshotPublisher snapshots;
 	private final FluidWorldTargetResolver targets;
 	private final ControllerQueryUseCase controllerQueries;
@@ -43,6 +44,7 @@ public final class MinecraftRegionLifecycle {
 			FluidRegionManager regions,
 			FluidRegionOperations operations,
 			MinecraftRegionAvailability availability,
+			MinecraftPendingPhaseWorkBarrier phaseWorkBarrier,
 			FluidSnapshotPublisher snapshots,
 			FluidWorldTargetResolver targets,
 			ControllerQueryUseCase controllerQueries,
@@ -53,6 +55,7 @@ public final class MinecraftRegionLifecycle {
 		this.regions = Objects.requireNonNull(regions, "Region manager");
 		this.operations = Objects.requireNonNull(operations, "Region operations");
 		this.availability = Objects.requireNonNull(availability, "Region availability");
+		this.phaseWorkBarrier = Objects.requireNonNull(phaseWorkBarrier, "Pending phase-work barrier");
 		this.snapshots = Objects.requireNonNull(snapshots, "Snapshot publisher");
 		this.targets = Objects.requireNonNull(targets, "World target resolver");
 		this.controllerQueries = Objects.requireNonNull(controllerQueries, "Controller query use case");
@@ -92,7 +95,7 @@ public final class MinecraftRegionLifecycle {
 		if (!controllerQueries.consumeActionToken(player.getUUID(), region.id(), summaryGeneration)) {
 			return PreviewResult.failed(Component.translatable("message.mmm.controller.summary_expired"));
 		}
-		availability.ensureForInventoryDecrease(player.level(), region);
+		prepareInventoryDecrease(player.level(), region);
 		LifecycleOperationPreview preview = useCase.preview(lifecycleFacts(player, region, operation));
 		return new PreviewResult(preview, null);
 	}
@@ -105,7 +108,7 @@ public final class MinecraftRegionLifecycle {
 		ResolvedController resolved = resolveInteractiveController(player, requestedRegionId, controllerPosition);
 		if (resolved.failure() != null) return CommitResult.failedDetail(resolved.failure());
 		FluidRegion region = resolved.region();
-		availability.ensureForInventoryDecrease(player.level(), region);
+		prepareInventoryDecrease(player.level(), region);
 		RegionLifecycleUseCase.CommitAuthorization authorization = useCase.authorizeCommit(
 				nonce, lifecycleFacts(player, region, operation));
 		if (authorization.decision() == RegionLifecycleUseCase.CommitDecision.TOKEN_INVALID) {
@@ -123,6 +126,19 @@ public final class MinecraftRegionLifecycle {
 	}
 
 	void forgetViewer(UUID playerId) { useCase.forgetViewer(playerId); }
+
+	private void prepareInventoryDecrease(ServerLevel level, FluidRegion region) {
+		if (availability.ensureForInventoryDecrease(level, region) && region.solverLoaded()
+				&& region.domain().hasPendingPhaseVolumeWork()
+				&& phaseWorkBarrier.settle(level, region)) {
+			try {
+				snapshots.sendToLevel(level, region);
+			} catch (RuntimeException failure) {
+				MmmMod.LOGGER.warn("Settled lifecycle phase work for region {} but its snapshot failed",
+						region.id(), failure);
+			}
+		}
+	}
 
 	private CommitResult commitInventory(ServerLevel level, FluidRegion region, LifecycleOperation operation) {
 		FluidDomain candidate;
@@ -280,7 +296,7 @@ public final class MinecraftRegionLifecycle {
 			ServerPlayer player, FluidRegion region, LifecycleOperation operation
 	) {
 		long serverTick = Integer.toUnsignedLong(player.level().getServer().getTickCount());
-		LifecycleOperationPreview.PermissionDecision permission = player.permissions()
+		LifecycleOperationPreview.PermissionDecision permission = player.createCommandSourceStack().permissions()
 				.hasPermission(Permissions.COMMANDS_ADMIN)
 				? LifecycleOperationPreview.PermissionDecision.BUILTIN_ADMIN_GRANTED
 				: LifecycleOperationPreview.PermissionDecision.BUILTIN_ADMIN_DENIED;

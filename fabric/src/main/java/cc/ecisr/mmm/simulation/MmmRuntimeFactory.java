@@ -75,6 +75,8 @@ public final class MmmRuntimeFactory {
 				worldRegistries.thermalOrNull(), FluidRegionFactory.CELLS_PER_BLOCK);
 		MinecraftRegionTick regionTick = new MinecraftRegionTick(regionApplication, regionInputs, snapshots,
 				worldRegistries.profile(), policy.maximumPhaseOperationsPerStep());
+		MinecraftPendingPhaseWorkBarrier phaseWorkBarrier =
+				new MinecraftPendingPhaseWorkBarrier(motion, regionTick);
 		MinecraftRegionAvailability availability = new MinecraftRegionAvailability(
 				containerRecovery, regionOperations, policy::controllerEnabled,
 				regionTick, snapshots, worldRegistries);
@@ -83,7 +85,8 @@ public final class MmmRuntimeFactory {
 				containerRecovery::hasPending, startup::authoritativeWritesReady,
 				policy.liveWorldBridgeEnabled()));
 		MinecraftRegionLifecycle regionLifecycle = new MinecraftRegionLifecycle(
-				startup, regionManager, regionOperations, availability, snapshots, targets, controllerQueries,
+				startup, regionManager, regionOperations, availability, phaseWorkBarrier,
+				snapshots, targets, controllerQueries,
 				worldRegistries.thermalOrNull(), containerRecovery::hasPending);
 		MinecraftControllerConsole controllerConsole = new MinecraftControllerConsole(
 				targets, controllerQueries, regionLifecycle, new ThermalReservoirUseCase(), regionTick,
@@ -129,8 +132,6 @@ public final class MmmRuntimeFactory {
 		MinecraftContainerTransactionAdapter containerTransactions = new MinecraftContainerTransactionAdapter(
 				regionManager, regionOperations, containerRecovery, worldRegistries.profile().profileFingerprint(),
 				worldRegistries.thermalOrNull() == null ? null : worldRegistries.thermalOrNull().fingerprint());
-		MinecraftPendingPhaseWorkBarrier phaseWorkBarrier =
-				new MinecraftPendingPhaseWorkBarrier(motion, regionTick);
 		PlayerContainerTransferAdapter playerContainerTransfers = new PlayerContainerTransferAdapter(
 				startup, worldRegistries, targets, availability, phaseWorkBarrier, containerTransactions, snapshots);
 		DispenserContainerTransferAdapter dispenserContainerTransfers = new DispenserContainerTransferAdapter(

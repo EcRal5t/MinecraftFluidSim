@@ -354,8 +354,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			@Override public void setInternalEnergy(int carrier, double energy) { segmentedCellEnergy[carrier] = energy; }
 		});
 		require(segmentedCell.minimumTemperature(0) == 300.0
-				&& segmentedCell.maximumTemperature(0) == 500.0,
-				"finite thermal contact exposed a non-linear caloric validity interval");
+				&& segmentedCell.maximumTemperature(0) == Double.MAX_VALUE,
+				"finite thermal contact did not expose the endpoint-caloric continuation interval");
 		expectFailure(() -> FiniteThermalExchange.plan(segmentedRegistry, segmentedBody, List.of(
 				new FiniteThermalExchange.Contact(0, 250.0, 1_000.0, 100.0, 250.0, 500.0)
 		), 1.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS),
@@ -388,7 +388,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				"production fixed boundary did not reproduce and audit its finite-volume SI flux");
 	}
 
-	static void fixedBoundaryAuditsAndFailedStepRollsBack() {
+	static void fixedBoundaryAuditsCaloricContinuation() {
 		FluidMaterial liquid = FluidMaterial.withSurfaceTension("test:boundary_liquid", 1.0,
 				"test:miscible", 0.0, 90.0);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
@@ -413,14 +413,13 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				&& heated.reservoirExchange().equals(SignedDyadic.of(12.5))
 				&& thermal.exactEnergy(1).equals(thermal.auditLedger().expectedInventory()),
 				"fixed-temperature boundary did not close source/audit energy");
-		SignedDyadic beforeFailure = thermal.exactEnergy(1);
-		ThermalAuditLedger auditBeforeFailure = thermal.auditLedger();
-		expectFailure(() -> thermal.step(markers, (x, y, z, axis) -> 0.0,
+		ThermalTransport.Stats continued = thermal.step(markers, (x, y, z, axis) -> 0.0,
 				(x, y, z, direction) -> direction == 0
-						? new ThermalTransport.FixedBoundary(0.25, 10_000.0) : null, 10.0),
-				"out-of-range fixed-boundary step was accepted");
-		require(thermal.exactEnergy(1).equals(beforeFailure) && thermal.auditLedger().equals(auditBeforeFailure),
-				"failed thermal transport exposed a partial energy/audit commit");
+						? new ThermalTransport.FixedBoundary(0.25, 10_000.0) : null, 10.0);
+		require(thermal.temperature(0, markers) > definition.maximumTemperatureK()
+				&& continued.reservoirExchange().toDouble() > 0.0
+				&& thermal.exactEnergy(1).equals(thermal.auditLedger().expectedInventory()),
+				"fixed-boundary transport did not conserve energy through caloric continuation");
 	}
 
 	static void reseedingMovesEnergyWithMarkerTruth() {

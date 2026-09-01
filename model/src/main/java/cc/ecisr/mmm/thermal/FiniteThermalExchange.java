@@ -148,7 +148,7 @@ public final class FiniteThermalExchange {
 		}
 		// The body may cross a caloric-segment boundary during this plan. Using only its initial
 		// heat capacity can make a later lower-capacity segment unstable, so bind the whole plan
-		// to the smallest capacity in the registry-frozen validity range.
+		// to the smallest capacity in the registry-frozen declared segments.
 		stableDt = Math.min(stableDt, 0.5 * minimumBodyHeatCapacity / conductanceSum);
 		int substeps = (int) Math.ceil(logicalDtSeconds / stableDt);
 		if (substeps > maximumSubsteps) {
@@ -172,7 +172,7 @@ public final class FiniteThermalExchange {
 				double candidateTemperature = fluidTemperature[index] + transfer / contact.heatCapacityEuPerK();
 				if (!(Double.isFinite(candidateTemperature) && candidateTemperature >= contact.minimumTemperatureK()
 						&& candidateTemperature <= contact.maximumTemperatureK())) {
-					throw new IllegalArgumentException("Finite thermal contact left its caloric validity interval");
+					throw new IllegalArgumentException("Finite thermal contact left its linearization interval");
 				}
 				fluidTemperature[index] = candidateTemperature;
 				fluidDelta[index] += transfer;
@@ -197,7 +197,7 @@ public final class FiniteThermalExchange {
 			double finalTemperature = contact.temperatureK() + fluidDelta[index] / contact.heatCapacityEuPerK();
 			if (!(Double.isFinite(finalTemperature) && finalTemperature >= contact.minimumTemperatureK()
 					&& finalTemperature <= contact.maximumTemperatureK())) {
-				throw new IllegalArgumentException("Finite thermal contact result left its caloric validity interval");
+				throw new IllegalArgumentException("Finite thermal contact result left its linearization interval");
 			}
 			deltas.add(new ContactDelta(contact.ordinal(), fluidDelta[index], finalTemperature));
 			exactChange = exactChange.add(SignedDyadic.of(fluidDelta[index]));

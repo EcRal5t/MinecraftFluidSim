@@ -20,6 +20,7 @@ import cc.ecisr.mmm.units.SolverUnitScale;
 import cc.ecisr.mmm.thermal.ThermalBoundaryDefinition;
 import cc.ecisr.mmm.thermal.ThermalDefinitionCodec;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
+import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalRegistryCodec;
 import cc.ecisr.mmm.thermal.ThermalSpeciesOffset;
@@ -136,15 +137,17 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		ThermalRegistry registry = new ThermalRegistry(List.of(definition));
 		ThermalStateFunction state = new ThermalStateFunction(registry);
 		int handle = registry.materialHandle(definition.id());
-		for (double temperature : new double[]{200.0, 250.0, 300.0, 375.0, 500.0}) {
+		for (double temperature : new double[]{1.0, 100.0, 200.0, 250.0, 300.0, 375.0, 500.0, 750.0}) {
 			double energy = state.internalEnergyAtTemperature(handle, 2.5, Map.of(), temperature);
 			double restored = state.stateForInternalEnergy(handle, 2.5, Map.of(), energy).temperatureK();
 			require(close(restored, temperature), "piecewise thermal state did not round-trip at " + temperature);
 		}
 		double cold = state.internalEnergyAtTemperature(handle, 1.0, Map.of(), 200.0);
 		require(cold < 0.0, "thermal state rejected the valid negative-energy side of its reference");
-		expectFailure(() -> state.stateForInternalEnergy(handle, 1.0, Map.of(), Double.MAX_VALUE),
-				"out-of-range internal energy was extrapolated");
+		double minimumEnergy = state.internalEnergyAtTemperature(
+				handle, 1.0, Map.of(), ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
+		expectFailure(() -> state.stateForInternalEnergy(handle, 1.0, Map.of(), minimumEnergy - 1.0),
+				"thermal state accepted energy below its positive-temperature domain");
 	}
 
 	static void reactionHeatIsPathIndependentStateEnergy() {
@@ -198,16 +201,20 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		List<ThermalSpeciesOffset> offsets = List.of(
 				new ThermalSpeciesOffset("test:offset/a", a, "test:thermal/liquid", ExactRational.ZERO),
 				new ThermalSpeciesOffset("test:offset/b", b, "test:thermal/liquid", ExactRational.of(-100)));
+		List<ThermalSpeciesOffset> invalidOffsets = List.of(
+				new ThermalSpeciesOffset("test:invalid_offset/a", a, "test:thermal/liquid", ExactRational.ZERO),
+				new ThermalSpeciesOffset("test:invalid_offset/b", b, "test:thermal/liquid",
+						ExactRational.of(1_000_000)));
 		ThermalDomainState narrow = FluidThermalBinding.create(new ThermalRegistry(List.of(new ThermalMaterialDefinition(
 				"test:thermal/liquid", ThermalMaterialDefinition.CarrierKind.LIQUID, materialId, 300.0, 0.0, 1.0,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 305.0, 10.0)))), offsets, List.of(),
+				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 305.0, 10.0)))), invalidOffsets, List.of(),
 				chemistry.fingerprint(), ""), liquids, 300.0, 1, 2, 2, 2, 0.5F, markers);
 		expectFailure(() -> parcels.reactDirtyCells(2, 2, 2, 0.5F,
 				new float[]{0.1F}, new float[]{0.1F}, new float[]{0.1F}, mass, new int[]{0},
 				handle -> materialId, 1,
 				(marker, mixture, candidateMass) -> narrow.requireReactionState(
 						marker, mixture, candidateMass, markers)),
-				"out-of-range reaction heat partially committed");
+				"reaction energy below the positive-temperature domain partially committed");
 		require(parcels.record(0).amount(chemistry.speciesHandle(a)) == ChemicalLimits.QUANTA_PER_AU,
 				"failed thermal reaction validation changed chemical truth");
 

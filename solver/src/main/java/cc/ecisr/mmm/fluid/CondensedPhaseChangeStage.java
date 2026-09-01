@@ -52,8 +52,9 @@ final class CondensedPhaseChangeStage {
 					|| upper.carrierKind() != ThermalMaterialDefinition.CarrierKind.LIQUID) continue;
 			int liquidHandle = support.fluidMaterialHandle(upper.carrierId());
 			for (int cell = 0; cell < support.state().cellCount() && operations < maximumOperations; cell++) {
-				long coherentSvq = thermal.coherentPhases().cellOccupiedSvq(cell);
-				if (support.state().markerGrid().markerCount[cell] == 0 && coherentSvq == 0L) continue;
+				int coherentGroup = thermal.coherentPhases().find(cell, lower.id());
+				boolean targetLiquidPresent = targetLiquidPresent(cell, liquidHandle);
+				if (!targetLiquidPresent && coherentGroup < 0) continue;
 				double absolutePressure = AirNetwork.REFERENCE_PRESSURE + support.pressureReference()
 						+ support.state().projection().pressure[cell];
 				if (!(Double.isFinite(absolutePressure)
@@ -67,9 +68,9 @@ final class CondensedPhaseChangeStage {
 				double temperature = thermal.phaseScanTemperatureInCell(cell);
 				double equilibrium = transition.equilibriumTemperatureK(absolutePressure);
 				if (temperature == equilibrium
-						|| temperature < equilibrium && support.state().markerGrid().markerCount[cell] == 0
-						|| temperature > equilibrium && coherentSvq == 0L) continue;
-				PhaseCellInventory inventory = phaseCellInventory(cell, liquidHandle, lower.id());
+						|| temperature < equilibrium && !targetLiquidPresent
+						|| temperature > equilibrium && coherentGroup < 0) continue;
+				CondensedCellInventory inventory = phaseCellInventory(cell, liquidHandle, lower.id());
 				if (inventory == null) continue;
 				JointPhasePlan plan = planJointPhaseChange(
 						cell, liquidHandle, transition, inventory, maximumOperations - operations,
@@ -86,10 +87,19 @@ final class CondensedPhaseChangeStage {
 		return new FluidDomain.ThermalPhaseStats(operations, frozen, melted, signedBatches);
 	}
 
-	private PhaseCellInventory phaseCellInventory(int cell, int liquidHandle, String coherentPhaseId) {
+	private boolean targetLiquidPresent(int cell, int liquidHandle) {
+		for (int marker = support.state().markerGrid().cellMarkerHead[cell]; marker >= 0;
+				marker = support.state().markerGrid().particleCellNext[marker]) {
+			if (support.state().particles().materialHandle(marker) == liquidHandle) return true;
+		}
+		return false;
+	}
+
+	private CondensedCellInventory phaseCellInventory(int cell, int liquidHandle, String coherentPhaseId) {
 		LiquidParticleStore particles = support.state().particles();
 		ChemicalParcelStore chemistry = support.chemistry();
 		ThermalDomainState thermal = support.thermal();
+		ArrayList<ThermalStateFunction.InventoryPortion> unchanged = new ArrayList<>();
 		double liquidMass = 0.0, coherentMass = 0.0, energy = 0.0, freezableMass = 0.0;
 		long liquidSvq = 0L, coherentSvq = 0L, freezableSvq = 0L;
 		PhaseCompositionBuilder liquidComposition = chemistry == null ? null
@@ -99,8 +109,12 @@ final class CondensedPhaseChangeStage {
 		for (int marker = 0; marker < particles.count(); marker++) {
 			if (support.particleCell(marker) != cell) continue;
 			if (particles.materialHandle(marker) != liquidHandle) {
-				throw new FluidDomain.ThermalPhaseBlockedException(
-						"Phase cell contains an unsupported liquid heat-bath carrier");
+				unchanged.add(new ThermalStateFunction.InventoryPortion(
+						thermal.thermalMaterialHandleForFluid(particles.materialHandle(marker)),
+						support.state().unitScale().kilograms(particles.mass(marker)),
+						chemistry == null ? java.util.Map.of() : ThermalStateFunction.stableAmounts(
+								chemistry.record(marker), chemistry.registry())));
+				continue;
 			}
 			liquidSvq = Math.addExact(liquidSvq, SolidVolume.cellVolumeSvqAtLeast(particles.volume(marker)));
 			liquidMass += support.state().unitScale().kilograms(particles.mass(marker));
@@ -116,8 +130,11 @@ final class CondensedPhaseChangeStage {
 		for (CoherentPhaseStore.Group group : thermal.coherentPhases().snapshot()) {
 			if (group.cell() != cell) continue;
 			if (!group.phaseId().equals(coherentPhaseId)) {
-				throw new FluidDomain.ThermalPhaseBlockedException(
-						"Phase cell contains an unsupported coherent heat-bath carrier");
+				unchanged.add(new ThermalStateFunction.InventoryPortion(
+						thermal.registry().materialHandle(group.phaseId()), group.mass(),
+						group.composition() == null ? java.util.Map.of()
+								: group.composition().stableAmounts()));
+				continue;
 			}
 			if (coherentComposition != null) throw new FluidDomain.ThermalPhaseBlockedException(
 					"Phase cell contains duplicate coherent groups");
@@ -132,17 +149,18 @@ final class CondensedPhaseChangeStage {
 			energy += group.internalEnergy();
 			found = true;
 		}
-		return found ? new PhaseCellInventory(
+		return found ? new CondensedCellInventory(new PhaseCellInventory(
 				coherentSvq, liquidSvq, coherentMass, liquidMass, energy,
 				coherentComposition == null ? PhaseComposition.EMPTY : coherentComposition,
 				liquidComposition == null ? PhaseComposition.EMPTY : liquidComposition.build(),
-				freezableSvq, freezableMass) : null;
+				freezableSvq, freezableMass), List.copyOf(unchanged)) : null;
 	}
 
 	private JointPhasePlan planJointPhaseChange(
 			int cell, int liquidHandle, ThermalPhaseTransition transition,
-			PhaseCellInventory before, long maximumBatches, double temperature, double equilibrium
+			CondensedCellInventory inventory, long maximumBatches, double temperature, double equilibrium
 	) {
+		PhaseCellInventory before = inventory.target();
 		if (temperature == equilibrium || maximumBatches == 0L) return null;
 		double batchMass = transition.massMuPerBatch().toDouble();
 		if (!(Double.isFinite(batchMass) && batchMass > 0.0)) {
@@ -170,7 +188,7 @@ final class CondensedPhaseChangeStage {
 		boolean capacityForced = occupied > capacity;
 		JointPhasePlan first;
 		try {
-			first = candidate(cell, liquidHandle, transition, before, freezing, minimumBatches);
+			first = candidate(cell, liquidHandle, transition, inventory, freezing, minimumBatches);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
 				| PhaseCandidateUnavailableException unavailable) {
 			return null;
@@ -184,7 +202,7 @@ final class CondensedPhaseChangeStage {
 			long middle = low + ((high - low) >>> 1);
 			JointPhasePlan candidate;
 			try {
-				candidate = candidate(cell, liquidHandle, transition, before, freezing, middle);
+				candidate = candidate(cell, liquidHandle, transition, inventory, freezing, middle);
 			} catch (ThermalStateFunction.EnergyOutsideValidityException
 					| PhaseCandidateUnavailableException unavailable) {
 				high = middle - 1L;
@@ -227,8 +245,9 @@ final class CondensedPhaseChangeStage {
 
 	private JointPhasePlan candidate(
 			int cell, int liquidHandle, ThermalPhaseTransition transition,
-			PhaseCellInventory before, boolean freezing, long batches
+			CondensedCellInventory inventory, boolean freezing, long batches
 	) {
+		PhaseCellInventory before = inventory.target();
 		ThermalDomainState thermal = support.thermal();
 		ChemicalParcelStore chemistry = support.chemistry();
 		LiquidParticleStore particles = support.state().particles();
@@ -306,13 +325,15 @@ final class CondensedPhaseChangeStage {
 				support.state().geometry().cutCells.openCellVolume(cell));
 		if (occupied > capacity) throw new FluidDomain.ThermalPhaseBlockedException(
 				"Condensed phase extent exceeds joint cell capacity");
-		ArrayList<ThermalStateFunction.InventoryPortion> phaseInventory = new ArrayList<>(2);
+		ArrayList<ThermalStateFunction.InventoryPortion> phaseInventory = new ArrayList<>(
+				2 + inventory.unchanged().size());
 		if (finalLowerMass > 0.0) phaseInventory.add(new ThermalStateFunction.InventoryPortion(
 				thermal.registry().materialHandle(transition.lowerEnergyMaterialId()),
 				finalLowerMass, finalLowerComposition.amounts()));
 		if (finalUpperMass > 0.0) phaseInventory.add(new ThermalStateFunction.InventoryPortion(
 				thermal.thermalMaterialHandleForFluid(liquidHandle),
 				finalUpperMass, finalUpperComposition.amounts()));
+		phaseInventory.addAll(inventory.unchanged());
 		double candidateTemperature = thermal.phaseCandidateTemperature(
 				cell, phaseInventory, support.state().thermalMarkers());
 		long signedVolumeSvq = freezing ? lowerDelta - upperDelta : upperDelta - lowerDelta;
@@ -320,6 +341,10 @@ final class CondensedPhaseChangeStage {
 				batches, freezing, removal, coherentTransfer, meltedMixture,
 				meltSlot, candidateTemperature, signedVolumeSvq);
 	}
+
+	private record CondensedCellInventory(
+			PhaseCellInventory target, List<ThermalStateFunction.InventoryPortion> unchanged
+	) { }
 
 	private PhaseRemovalPlan planLiquidRemoval(
 			int cell, int liquidHandle, long requestedSvq, double requestedMass

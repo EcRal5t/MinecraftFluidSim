@@ -69,7 +69,10 @@ public record ThermalMaterialDefinition(
 	public double maximumTemperatureK() { return caloricSegments.getLast().maximumTemperatureK(); }
 
 	public double specificHeatAt(double temperatureK) {
-		requireTemperature(temperatureK);
+		requireIntrinsicTemperature(temperatureK);
+		if (temperatureK < minimumTemperatureK()) {
+			return caloricSegments.getFirst().specificHeatEuPerMuK();
+		}
 		for (int index = 0; index < caloricSegments.size(); index++) {
 			CaloricSegment segment = caloricSegments.get(index);
 			if (temperatureK < segment.maximumTemperatureK() || index + 1 == caloricSegments.size()) {
@@ -81,15 +84,25 @@ public record ThermalMaterialDefinition(
 
 	/** Integral of specific heat from the frozen reference temperature to {@code temperatureK}. */
 	public double sensibleSpecificEnergyAt(double temperatureK) {
-		requireTemperature(temperatureK);
+		requireIntrinsicTemperature(temperatureK);
 		if (temperatureK == referenceTemperatureK) return 0.0;
 		double low = Math.min(referenceTemperatureK, temperatureK);
 		double high = Math.max(referenceTemperatureK, temperatureK);
 		double total = 0.0;
+		CaloricSegment first = caloricSegments.getFirst();
+		if (low < first.minimumTemperatureK()) {
+			total += (Math.min(high, first.minimumTemperatureK()) - low)
+					* first.specificHeatEuPerMuK();
+		}
 		for (CaloricSegment segment : caloricSegments) {
 			double overlap = Math.min(high, segment.maximumTemperatureK())
 					- Math.max(low, segment.minimumTemperatureK());
 			if (overlap > 0.0) total += overlap * segment.specificHeatEuPerMuK();
+		}
+		CaloricSegment last = caloricSegments.getLast();
+		if (high > last.maximumTemperatureK()) {
+			total += (high - Math.max(low, last.maximumTemperatureK()))
+					* last.specificHeatEuPerMuK();
 		}
 		if (!Double.isFinite(total)) throw new IllegalArgumentException("Thermal sensible energy is not finite");
 		return temperatureK < referenceTemperatureK ? -total : total;
@@ -112,6 +125,9 @@ public record ThermalMaterialDefinition(
 				remaining -= capacity;
 				cursor = segment.maximumTemperatureK();
 			}
+			double temperature = cursor
+					+ remaining / caloricSegments.getLast().specificHeatEuPerMuK();
+			if (Double.isFinite(temperature)) return temperature;
 		} else {
 			double remaining = -sensibleSpecificEnergy;
 			double cursor = referenceTemperatureK;
@@ -124,15 +140,21 @@ public record ThermalMaterialDefinition(
 				remaining -= capacity;
 				cursor = segment.minimumTemperatureK();
 			}
+			double temperature = cursor
+					- remaining / caloricSegments.getFirst().specificHeatEuPerMuK();
+			double tolerance = Math.max(Math.ulp(cursor) * 16.0, Math.ulp(temperature) * 16.0);
+			if (temperature >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K - tolerance) {
+				return Math.max(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, temperature);
+			}
 		}
-		throw new IllegalArgumentException("Internal energy is outside the thermal material validity range");
+		throw new IllegalArgumentException("Internal energy is outside the positive-temperature thermal domain");
 	}
 
-	private void requireTemperature(double temperatureK) {
-		if (!(Double.isFinite(temperatureK) && temperatureK >= minimumTemperatureK()
-				&& temperatureK <= maximumTemperatureK())) {
-			throw new IllegalArgumentException("Temperature " + temperatureK + " K is outside thermal material "
-					+ id + " validity [" + minimumTemperatureK() + ", " + maximumTemperatureK() + "] K");
+	private void requireIntrinsicTemperature(double temperatureK) {
+		if (!(Double.isFinite(temperatureK)
+				&& temperatureK >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)) {
+			throw new IllegalArgumentException("Temperature " + temperatureK
+					+ " K is outside the positive-temperature thermal domain for " + id);
 		}
 	}
 }

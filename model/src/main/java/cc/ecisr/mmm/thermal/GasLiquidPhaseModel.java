@@ -46,7 +46,7 @@ public final class GasLiquidPhaseModel {
 		double exponent = -pair.latentEnthalpyPerMass() / pair.gasConstantPerMass()
 				* (1.0 / liquidTemperatureK - 1.0 / referenceTemperature);
 		double saturation = GasRegistry.STANDARD_PRESSURE_PA * Math.exp(exponent);
-		if (!(Double.isFinite(saturation) && saturation > 0.0)) {
+		if (!(Double.isFinite(saturation) && saturation >= 0.0)) {
 			throw new IllegalArgumentException("Saturation pressure is outside the phase model");
 		}
 		GasComponentAmount component = gasInventory.component(pair.gas().carrierId());

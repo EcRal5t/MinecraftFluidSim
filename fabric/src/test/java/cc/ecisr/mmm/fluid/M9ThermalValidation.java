@@ -41,7 +41,7 @@ public final class M9ThermalValidation {
 		ThermalGasValidationScenarios.worldBoundaryTemperatureRangeExcludesFiniteDevices();
 		ThermalGasValidationScenarios.thermalGridCachesObservedTemperatureRange();
 		ThermalTransportValidationScenarios.productionFixedBoundaryFieldAuditsExchange();
-		ThermalTransportValidationScenarios.fixedBoundaryAuditsAndFailedStepRollsBack();
+		ThermalTransportValidationScenarios.fixedBoundaryAuditsCaloricContinuation();
 		ThermalTransportValidationScenarios.reseedingMovesEnergyWithMarkerTruth();
 		System.out.println("M9 thermal validation passed");
 	}

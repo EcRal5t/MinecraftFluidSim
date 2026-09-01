@@ -177,7 +177,7 @@ availability 采用 `RegionAvailabilityReason` 封闭分类；预算、重叠、
 系统区分两类失败：
 
 - **LOCKED**：磁盘格式、identity、registry fingerprint、generation、checksum 或 WAL 状态无法被唯一解释。原文件保留，拒绝任何会覆盖证据的操作。
-- **PAUSED**：当前库存可解释，但候选数值步越过物性有效域、容量、预算或审计安全门。保留内存/已提交状态，修正物理条件后重试；wall-time 过载使用独立的可清除 `PERFORMANCE_PAUSE`，不能伪装成数值不可解释。
+- **PAUSED**：当前库存可解释，但候选数值步越过相平衡/外部设定物性域、严格正温域、容量、预算或审计安全门。caloric 标定端点由连续状态函数延拓，不单独构成暂停理由。拒绝时保留内存/已提交状态，修正物理条件后重试；wall-time 过载使用独立的可清除 `PERFORMANCE_PAUSE`，不能伪装成数值不可解释。
 
 region HEAD 是区域物理状态唯一提交点。正常库存由 `ACTIVE` HEAD 指向完整 generation；终止区域由严格 `REMOVED` HEAD 指向零库存 tombstone，UUID 永不复用。ownership 与 container WAL 分别把世界方块和 actor item 收敛到该 HEAD；它们不能成为第二个物理真值。`RegionGenerationStore` 是唯一能组合 slot 写入与 HEAD 发布顺序的 coordinator；package-private 子 store 不能被业务层当成独立 writer。任何 publish 都必须遵守“完整写入、回读验证、HEAD 最后替换”。`REMOVED` HEAD 发布后才发送更高 network generation 的移除 tombstone、注销 runtime owner，并把旧 ACTIVE payload 收敛到持久 quarantine；崩溃恢复不能从旧 payload 重建 solver。
 

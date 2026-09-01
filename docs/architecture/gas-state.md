@@ -66,7 +66,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 - 热状态存在时，气体总内能与节点库存共同派生温度、绝对压力、密度和声学闭合；孔流同步搬运组分与能量。
 - 气液相变用 water-vapor 分压计算饱和条件，受状态方程、潜热、库存、容量和批预算共同限制。有限非负总压包括真空；它不被误当作固液 `T_eq(p)` 曲线的查询坐标，液气方向只由液温给出的饱和压与实际 vapor partial pressure 决定。
 - 一个界面 cell 可以同时含多种合法 liquid carrier。某条气液 transition 只结算其目标 liquid 的体积、质量、组成和相变能量；同格其他 liquid 原样加入该 cell 的 LTE heat-bath inventory，并计入冷凝容量，但不被改材料、不被并入目标组成，也不能仅因存在就触发候选暂停。
-- 所有 candidate 温度必须落在 world thermal registry 的 caloric 有效域；只有真正以当前压力查询 `T_eq(p)` 的凝聚相候选受对应曲线端点约束，越界安全暂停。
+- 所有 candidate 必须能由 world thermal registry 的连续状态函数从权威 `U` 唯一反演；声明 caloric 温区之外沿最近端点 `cv` 延拓，不因标定端点暂停。只有真正以当前压力查询 `T_eq(p)` 的凝聚相候选受对应曲线端点约束，pressure curve 越界仍安全暂停。
 - 一个 liquid cell 可同时邻接多个独立 sealed node。gas topology 继续保留各 node 的库存和 `U`，phase planner 不合并它们；每个 pressure interval 只向绝对分压失衡最大的可执行 node 提交一次 cell 交换，随后由下一 projection 结算该体积功。
 - mechanics 可从所有液气界面选择一个统一 sealed-node gauge reference，在 PCG 内只求相对压力并在绝对观察/热学边界加回；该数值换元不修改 node inventory、U 或不同 node 间的压差。接触液体的有限 node 会得到当次 projection 的集总可压缩 pressure unknown；它是由同一 EoS 线性化的 scratch，不是新的权威 node pressure 列。
 
@@ -95,11 +95,11 @@ c = sqrt(K_s / rho_gas)
 beta_s = 1 / K_s
 ```
 
-`GasThermalModel.HydrodynamicState` 是上述局部 ideal-gas mixture 闭合的唯一实现：`C_v,total` 来自同一库存和权威 `U` 所在 caloric segment，`R_total` 来自同一 exact standard volume；绝热体积模量 `K_s`、声速 `c` 与压力 compliance `beta_s` 都是状态方程导数，不是 CFL 调参或材料特例。caloric 数据域仍约束温度；相平衡曲线继续拥有自己的压力数据域。若要支持非理想气体，应扩展数据驱动的状态方程及其导数，不能在 solver 中按 component ID 修正压力。
+`GasThermalModel.HydrodynamicState` 是上述局部 ideal-gas mixture 闭合的唯一实现：`C_v,total` 来自同一库存和权威 `U` 所在 caloric segment 或端点延拓，`R_total` 来自同一 exact standard volume；绝热体积模量 `K_s`、声速 `c` 与压力 compliance `beta_s` 都是状态方程导数，不是 CFL 调参或材料特例。caloric 标定端点不截断内禀温度，相平衡曲线继续拥有自己的压力数据域。若要支持非理想气体，应扩展数据驱动的状态方程及其导数，不能在 solver 中按 component ID 修正压力。
 
 零库存 sealed node 表示真空：`p_abs = 0`、`rho = 0`、`U = 0`，几何体积变化不产生绝热功。真空的温度没有热力学定义；只读显示使用区域插入温度作为约定值，不能据此反算库存。孔流可按有限速率把环境或相邻节点的真实库存搬入真空。
 
-等温与热状态都不钳制派生压力：正 available volume 直接使用状态方程，有限库存落入零 available volume 是奇异候选并显式拒绝。非空库存的绝对压力因而始终为正，可连续逼近真空，也可表达有限的高压状态；算法不再以固定压力窗替代物性有效域。无传质绝热体积变化按分段常 `c_v` 的 exact ideal-gas isentrope 计算新温度与 `delta U`，通过 `∫Cv(T)/T dT = R ln(V_initial/V_final)` 解析穿越共同 caloric segment；只有最终状态越出共同温度有效域才拒绝。
+等温与热状态都不钳制派生压力：正 available volume 直接使用状态方程，有限库存落入零 available volume 是奇异候选并显式拒绝。非空库存的绝对压力因而始终为正，可连续逼近真空，也可表达有限的高压状态；算法不再以固定压力窗替代状态方程。无传质绝热体积变化按分段常 `c_v` 的 exact ideal-gas isentrope 计算新温度与 `delta U`，通过 `∫Cv(T)/T dT = R ln(V_initial/V_final)` 解析穿越所有 caloric segment 及其端点延拓；有限体积比不会得到精确 `0 K`，只有路径低于严格正温数值域或不再有限才拒绝。
 
 ### 孔流
 

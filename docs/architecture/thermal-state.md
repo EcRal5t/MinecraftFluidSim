@@ -9,9 +9,11 @@
 ## 权威真值
 
 - 液体 marker、active parcel、deposit group、coherent condensed group 和 sealed gas node 分别保存总内能 `U`。
-- world thermal registry snapshot 保存材料 caloric segment、参考能、导热系数、有效温区、species offset、transition 和固定温度边界定义。
+- world thermal registry snapshot 保存材料 caloric segment、参考能、导热系数、标定温区、species offset、transition 和固定温度边界定义。
 - external energy source、sink、mechanical work 与 reaction/phase transfer 都有独立审计列。
 - 温度、热容、焓、密度修正、颜色和 tooltip 由状态函数派生，不持有或修复库存。
+
+网络 thermal snapshot 只是有界显示投影：非空温度以 `1/16 K` 量化，超过 16-bit palette 时饱和到最高显示码；gas gauge pressure 同样饱和到 wire integer。该饱和不修改、拒绝或反向解释权威 `U`、真实派生温度与 EoS pressure，因此显示带宽不能成为模拟提交门。
 
 只有 liquid marker mass 是 solver weight，并通过 `SolverUnitScale` 的 `cellSize³` 边界换算为 kg。active parcel、deposit、coherent phase、气体、chemical species/residual 和有限设备的质量已经是 kg，不再缩放；相变只在实际更新 liquid marker 时把搬运的 kg 换回 solver mass。
 
@@ -31,7 +33,7 @@
 
 ## 状态函数
 
-每种载体用分段 caloric definition 计算 `U(T)` 并反演 `T(U)`。同格异质载体使用 bounded LTE common-temperature inversion；状态函数不得读取客户端数据或经验 tick 倍率。
+每种载体用分段 caloric definition 计算 `U(T)` 并反演 `T(U)`。同格异质载体使用 LTE common-temperature inversion；状态函数不得读取客户端数据或经验 tick 倍率。
 
 对质量 `m`、host material `h` 和 species 库存 `n_s`：
 
@@ -41,18 +43,18 @@ U_h(T) = m * u_ref,h
        + m * integral(T_ref,h .. T) cv,h(theta) dtheta
 ```
 
-caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线性计算，不用迭代近似。异质 cell 的 LTE 先取所有 carrier 有效温区交集，再在合并后的 segment 边界上反演 `sum U_i(T) = U_cell`。无共同温区、能量落在共同有效域外或热容量非正都拒绝候选。
+caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线性计算，不用迭代近似。声明的首尾温度是数据标定范围而不是库存可表达性的硬墙：内禀候选落在表外时，状态函数沿用最近端点 segment 的 `cv` 连续延拓 `U(T)`；不钳制温度，也不改变权威 `U`。异质 cell 在所有 carrier 合并后的 segment 边界上反演 `sum U_i(T) = U_cell`，因此即使声明温区不重叠仍有唯一 LTE 温度。只有能量低于严格正温下界、数值非有限或热容量非正才拒绝候选。固定温度 reservoir 等外部设定值仍限于 committed registry 的共同标定闭区间，不能借延拓注入任意边界条件。
 
 相变平台由上下相在 `T_eq` 的状态函数能隙定义。能量落在两端之间时，派生温度保持 `T_eq`，相分数由 exact phase inventory 决定；相分数本身不是库存列。
 
 候选状态必须同时满足：
 
-- 所有材料的温度有效域；
+- 所有材料在严格正温域内都有可逆的 `U(T)`/`T(U)`；
 - transition 的 pressure/temperature 有效域；
 - 有限、正的热容量与密度；
 - 精确库存和能量审计闭合。
 
-越界时报告载体、候选温度/压力和有效区间并安全暂停，不能钳制设定值或丢弃能量。
+相平衡 pressure curve、外部设定值或严格正温域越界时报告载体、候选温度/压力和区间并安全暂停；材料 caloric 标定端点本身不再触发暂停，且任何路径都不能钳温或丢弃能量。
 
 ## 热输运
 
@@ -68,9 +70,9 @@ caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线�
 
 `FiniteThermalBodyState` 是 loader-neutral 设备 body 真值：绑定 world thermal registry fingerprint、稳定 `DEVICE` material ID、generation、kg 和总 `U`。`FiniteThermalDeviceState` 另存 provider ID、provider 内稳定 object ID 和 device type；这些字段只定位世界对象或外部 Mod 端口，不拥有能量。规范排序后的 `FiniteThermalDeviceInventory` 作为 manifest-only extension 随同 region HEAD 提交，空集合用 extension 缺席表示。codec 回读时重新验证 registry fingerprint、`DEVICE` material、material carrier ID 与 device type；BlockEntity 不能另存一份可反向覆盖 `U` 的 setpoint。
 
-`FiniteThermalExchange` 对一个设备 body 和最多 16 个独立流体能量端口做有界显式规划。每个端口提供当前温度、当前 caloric interval 内的热容、包含流体/壁面/接触面积热阻的总 conductance，以及该线性化的温度有效域。每个 substep 使用同一 body 温度计算镜像通量，设备 `U` 的变化与各端口增量加总，并把 IEEE-754 总和差记为 exact dyadic roundoff。稳定步长同时受设备完整物性域内最小 `0.5*C_body/sum(G)` 与每个 `0.5*C_port/G_port` 限制；不能只取设备初始温度的热容，否则跨入低热容 caloric segment 后会失稳。超过冻结 substep 预算或任一方越出物性域时整体拒绝计划。
+`FiniteThermalExchange` 对一个设备 body 和最多 16 个独立流体能量端口做有界显式规划。每个端口提供当前温度、当前 caloric interval 或端点延拓区间内的热容、包含流体/壁面/接触面积热阻的总 conductance，以及该线性化区间。每个 substep 使用同一 body 温度计算镜像通量，设备 `U` 的变化与各端口增量加总，并把 IEEE-754 总和差记为 exact dyadic roundoff。稳定步长同时受设备所有已声明 segment 中最小 `0.5*C_body/sum(G)` 与每个 `0.5*C_port/G_port` 限制；不能只取设备初始温度的热容，否则跨入低热容 caloric segment 后会失稳。超过冻结 substep 预算、温度低于严格正温下界或数值不再有限时整体拒绝计划。
 
-这个 planner 不搬运任何物质，也没有世界、region HEAD 或 block entity 提交权。同一区域路径先批量重建一次 LTE grid，冻结每个独立 cell port 的温度、热容和共同有效域；同一 cell 的多面 conductance 必须先聚合，不能伪装成多个能量 owner。body candidate、所有 cell `delta U`、solver `finiteDeviceExchange` 与两侧 roundoff 全部预检后才修改载体，提交异常会恢复 carrier U；下一 checkpoint 把 body 与流体一起交给 HEAD。接触多个区域时不得调用这条单区域路径，必须先验证全部 candidate，再通过跨 region HEAD 协调提交。当前尚未接入世界对象 enrollment、接触几何生成和生产 tick 调度，因此固定温度 boundary 仍是唯一生产世界热边界。
+这个 planner 不搬运任何物质，也没有世界、region HEAD 或 block entity 提交权。同一区域路径先批量重建一次 LTE grid，冻结每个独立 cell port 的温度、热容和当前线性区间；同一 cell 的多面 conductance 必须先聚合，不能伪装成多个能量 owner。body candidate、所有 cell `delta U`、solver `finiteDeviceExchange` 与两侧 roundoff 全部预检后才修改载体，提交异常会恢复 carrier U；下一 checkpoint 把 body 与流体一起交给 HEAD。接触多个区域时不得调用这条单区域路径，必须先验证全部 candidate，再通过跨 region HEAD 协调提交。当前尚未接入世界对象 enrollment、接触几何生成和生产 tick 调度，因此固定温度 boundary 仍是唯一生产世界热边界。
 
 ### 有限体积离散
 
@@ -93,7 +95,7 @@ dt_stable = min_cell(0.5 * C_cell / sum_faces G_face)
 
 自动分 substep；`0.5` 保证一对相同 cell 单调趋近平衡而非一步交换温度。所需 substep 超过 8 时安全暂停。hot loop 使用 `double`，每个 face 对的增减严格镜像；commit 边界用 `SignedDyadic` 精确求和记录 IEEE-754 有限数，舍入残差单列保存，不能伪装成 source 或 sink。批量求和按 binary64 固有的 2,046 个 dyadic exponent 分桶，每桶以有符号 128-bit 两字累加后只做一次 `BigInteger` 合并；它与逐项 exact add bit-for-bit 等价，不是近似归约，也不会按载体种类跳过审计。
 
-内置 `mmm:air` 按 [NIST 干空气组成](https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=921756)中的 N₂/O₂/Ar（CO₂ 在 registry 中是独立 component）以及 [N₂](https://webbook.nist.gov/cgi/cbook.cgi?ID=7727-37-9&cTG=on)、[O₂](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7782447&Mask=1001&Table=on&Type=JANAFG)、[Ar](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7440371&Mask=11) 的 caloric 数据，在冻结标准态由理想气体关系得到 `rho = 1.2038886846941566 kg/m³`，并把 `Cp-R` 的区间焓积分换算为覆盖 `100–1700 K` 的七段质量比 `cv`；标准态所在的 `250–350 K` 单独成段，其余边界随物性曲率展开，避免宽区间平均值歪曲常温声学闭合，也不把热表查找膨胀到 material 的段数硬上限。数据域外仍拒绝候选，不作常量外推。内置水在 293.15 K 使用 `rho = 1000 kg/m³`、`cv = 4184 J/(kg·K)`、`k = 0.598 W/(m·K)`；水蒸气的 `k = 0.025 W/(m·K)`，`cv` 则按 [NIST water-vapor Shomate 数据](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7732185&Table=on&Type=JANAFG)换算为覆盖 `250–1700 K` 的五段数据，不把常温值外推到压缩后的高温状态。一个 0.5 m cell 满水的热容量约 `523 kJ/K`；4 BV 水约 `16.736 MJ/K`。四个完整 reservoir 接触面总导热为 `2.392 W/K`，因此现实标定下温升本来就慢，极端热源只是高功率边界，不是比热缩放。
+内置 `mmm:air` 按 [NIST 干空气组成](https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=921756)中的 N₂/O₂/Ar（CO₂ 在 registry 中是独立 component）以及 [N₂](https://webbook.nist.gov/cgi/cbook.cgi?ID=7727-37-9&cTG=on)、[O₂](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7782447&Mask=1001&Table=on&Type=JANAFG)、[Ar](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7440371&Mask=11) 的 caloric 数据，在冻结标准态由理想气体关系得到 `rho = 1.2038886846941566 kg/m³`，并把 `Cp-R` 的区间焓积分换算为覆盖 `100–1700 K` 的七段质量比 `cv`；标准态所在的 `250–350 K` 单独成段，其余边界随物性曲率展开，避免宽区间平均值歪曲常温声学闭合，也不把热表查找膨胀到 material 的段数硬上限。表外内禀状态使用首尾 segment 的 `cv` 连续延拓。内置水在 293.15 K 使用 `rho = 1000 kg/m³`、`cv = 4184 J/(kg·K)`、`k = 0.598 W/(m·K)`；水蒸气的 `k = 0.025 W/(m·K)`，`cv` 则按 [NIST water-vapor Shomate 数据](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7732185&Table=on&Type=JANAFG)换算为覆盖 `250–1700 K` 的五段标定数据。一个 0.5 m cell 满水的热容量约 `523 kJ/K`；4 BV 水约 `16.736 MJ/K`。四个完整 reservoir 接触面总导热为 `2.392 W/K`，因此现实标定下温升本来就慢，极端热源只是高功率边界，不是比热缩放。
 
 ### 热浮力
 
@@ -114,7 +116,7 @@ gas node 的共同温度由各 component 的质量、species 和 node `U` 反演
 p = P0 * (Vstd / Vavailable) * (T / T0)
 ```
 
-几何改变使用分段常 `cv` 的理想气体等熵闭式积分：逐段满足 `∫Cv(T)/T dT = R ln(V_initial/V_final)`，在共同 caloric 边界间以指数式求解，必要时精确走过多个 segment；`Delta U` 记为进入 gas inventory 的 mechanical work。该过程没有迭代容差、速度钳制或跨段拒答，只有越出所有 component 的共同 caloric 有效域才拒绝候选。孔流搬运源状态焓 `h = u + p*v`；node 合并时能量相加，分裂时所有 child 保持 parent 温度且最后一个 child 接受浮点余数。
+几何改变使用分段常 `cv` 的理想气体等熵闭式积分：逐段满足 `∫Cv(T)/T dT = R ln(V_initial/V_final)`，在各 component caloric 边界间以指数式求解，必要时精确走过多个 segment，并在首尾标定段之外使用同一端点 `cv` 继续解析路径；`Delta U` 记为进入 gas inventory 的 mechanical work。该过程没有迭代容差、温度钳制或跨标定端点拒答；只有结果低于严格正温下界、指数溢出或状态/能量非有限才拒绝候选。孔流搬运源状态焓 `h = u + p*v`；node 合并时能量相加，分裂时所有 child 保持 parent 温度且最后一个 child 接受浮点余数。
 
 空 component inventory 是显式真空而不是缺失数据：其 `U`、绝对压力、密度和任意无传质体积变化功都严格为零。显示温度使用区域插入温度作为约定值；持久化与 remap 必须保留空 inventory/零 `U`，不能以环境状态补齐。
 
@@ -129,6 +131,7 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 ### 固液
 
 - 联合搬运物理 kg、condensed weight、液体 marker、coherent SVQ、材料身份、可选 chemical composition/species 和 `U`。
+- 每条 transition 只在该 lower coherent phase 或目标 upper liquid 实际存在时查询压力并规划；纯汞等无关 carrier 不能被拿去查询冰/水曲线。同格其他 liquid/coherent carrier 原样保留并作为 LTE heat bath 参与候选温度，不能被拒绝、改材料或并入目标组成。
 - 体积变化与机械功写入 pending phase-work，由下一次 pressure projection exactly-once 消费。
 - 固液规划从最近一次真实 projection 的 cell gauge pressure 加环境压力得到绝对压力，再取 `T_eq(p)`。曲线使用 registry-bound、按压力严格递增的分段线性点，只在端点闭区间内插值；常温曲线也必须显式给出两个端点。固液曲线不必覆盖标准压力，因此可以表达只有高压区有效的相平衡；液气曲线必须覆盖标准压力，以定义其气体标准体积和潜焓参考态。任何曲线都禁止外推或钳制，有相库存的 cell 越界时整个 thermal candidate 安全暂停，不能静默当作无相变。
 

@@ -71,6 +71,49 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)), 273.15);
 		expectFailure(() -> unsupportedPressure.stepInertPhaseChangeOnly(16),
 				"solid/liquid phase silently ignored pressure outside its declared curve");
+
+		ThermalMaterialDefinition mercury = new ThermalMaterialDefinition("mmm:thermal/mercury",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.MERCURY.id(),
+				293.15, 0.0, 8.3,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 140.0)));
+		FluidMaterialRegistry waterAndMercury = new FluidMaterialRegistry(
+				List.of(BuiltinFluidMaterials.WATER, BuiltinFluidMaterials.MERCURY));
+		ThermalRegistry unrelatedTransition = new ThermalRegistry(
+				List.of(water, ice, mercury), List.of(), List.of(highPressure), "", "");
+		FluidDomain mercuryOnly = new FluidDomain(2, 2, 2, config, 128);
+		mercuryOnly.setVolume(0, 0, 0, 0.5F);
+		mercuryOnly.setMaterialInCell(0, 0, 0, waterAndMercury,
+				waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id()));
+		mercuryOnly.bindThermal(unrelatedTransition, waterAndMercury, 293.15);
+		FluidDomain.ThermalPhaseStats unrelated = mercuryOnly.stepInertPhaseChangeOnly(16);
+		require(unrelated.operations() == 0 && unrelated.signedBatches() == 0L,
+				"a mercury-only cell was incorrectly evaluated against the ice/water pressure curve");
+
+		ThermalPhaseTransition mixedMelt = new ThermalPhaseTransition(
+				"mmm:phase/mixed_ice_water", ice.id(), water.id(), 273.15,
+				146L, 134L, ExactRational.parse("0.001"),
+				ThermalPhaseTransition.InterfaceRequirement.NONE, 80_000.0, 120_000.0);
+		ThermalRegistry mixedRegistry = new ThermalRegistry(
+				List.of(water, ice, mercury), List.of(), List.of(mixedMelt), "", "");
+		FluidDomain mixedCell = new FluidDomain(2, 2, 2, config, 128);
+		mixedCell.setVolume(0, 0, 0, 0.25F);
+		mixedCell.setMaterialInCell(0, 0, 0, waterAndMercury,
+				waterAndMercury.handle(BuiltinFluidMaterials.WATER.id()));
+		require(mixedCell.tryInsertExactMaterial(0, 0, 0, 0.25F,
+				0.25 * BuiltinFluidMaterials.MERCURY.referenceDensity(), 0,
+				waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id())).transferred(),
+				"mixed condensed-phase fixture could not insert mercury");
+		mixedCell.bindThermal(mixedRegistry, waterAndMercury, 273.15);
+		mixedCell.setThermalTemperatureInCell(0, 0, 0, 260.0);
+		double mercuryBefore = mixedCell.exactVolumeNear(0, 0, 0, 0,
+				waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id()));
+		FluidDomain.ThermalPhaseStats mixed = mixedCell.stepInertPhaseChangeOnly(16);
+		double mercuryAfter = mixedCell.exactVolumeNear(0, 0, 0, 0,
+				waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id()));
+		require(mixed.operations() > 0 && mixed.frozenCells() == 1
+				&& close(mercuryAfter, mercuryBefore),
+				"ice/water phase change rejected or modified its mercury heat bath: "
+						+ mixed + ", mercury=" + mercuryBefore + " -> " + mercuryAfter);
 	}
 
 	static void coherentPhaseInventoryAndExactBatchPlanning() {
