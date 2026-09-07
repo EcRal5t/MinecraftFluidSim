@@ -1,5 +1,30 @@
 # 世界 ownership 与容器事务契约
 
+修改世界方块接管与释放、桶、发射器、清理区域或事务恢复时读本文。
+
+## 修改入口
+
+| 要改什么 | 代码入口 | 测试选择器 |
+|---|---|---|
+| 世界方块归属 | [OwnershipTransactionCoordinator](../../fabric/src/main/java/cc/ecisr/mmm/simulation/OwnershipTransactionCoordinator.java)、[OwnershipCoordinator](../../fabric/src/main/java/cc/ecisr/mmm/simulation/ownership/OwnershipCoordinator.java) | `ownership` |
+| 容器操作入口 | [PlayerContainerTransferAdapter](../../fabric/src/main/java/cc/ecisr/mmm/simulation/PlayerContainerTransferAdapter.java)、[DispenserContainerTransferAdapter](../../fabric/src/main/java/cc/ecisr/mmm/simulation/DispenserContainerTransferAdapter.java)、[MinecraftContainerTransferPlan](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftContainerTransferPlan.java) | `containers` |
+| 物品数据与日志文件 | [ContainerItemMapper](../../fabric/src/main/java/cc/ecisr/mmm/item/ContainerItemMapper.java)、[ContainerJournalCodec](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/ContainerJournalCodec.java)、[ContainerJournalFileStore](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/ContainerJournalFileStore.java) | `containers` |
+| 事务提交与恢复 | [ContainerTransferCoordinator](../../application/src/main/java/cc/ecisr/mmm/application/ContainerTransferCoordinator.java)、[ContainerRecoveryCoordinator](../../application/src/main/java/cc/ecisr/mmm/application/ContainerRecoveryCoordinator.java)、[CrossDomainRecovery](../../model/src/main/java/cc/ecisr/mmm/recovery/CrossDomainRecovery.java) | `containers` |
+| 清空、排气和移除 | [MinecraftRegionLifecycle](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRegionLifecycle.java)、[RegionLifecycleUseCase](../../application/src/main/java/cc/ecisr/mmm/application/RegionLifecycleUseCase.java) | `lifecycle,region-state` |
+| 转移前结算相变功 | [MinecraftPendingPhaseWorkBarrier](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftPendingPhaseWorkBarrier.java) | `containers,thermal` |
+
+执行方式见 [验证指南](../maintenance/validation.md#cpu)。
+
+## 本文内容
+
+- [三个持久域](#三个持久域)
+- [Ownership 模型](#ownership-模型)
+- [区域生命周期](#区域生命周期)
+- [容器数据](#容器数据)
+- [玩家与发射器路由](#玩家与发射器路由)
+- [跨持久域 WAL](#跨持久域-wal)
+- [守恒边界](#守恒边界)
+
 ## 三个持久域
 
 controller 产品跨越三个彼此不能假装原子的持久域：
@@ -23,9 +48,13 @@ controller 内部由空气和独立 ownership registry 表示。原版水方块�
 5. 发布 region HEAD；
 6. 建立 committed ownership 记录并清理 WAL。
 
-无水接管时同样先 stage、回读并发布首个 region HEAD。只有 HEAD 回读成功后，`MinecraftRegionActivation` 才把 candidate 登记并选入 live catalog、发送 snapshot 和返回创建成功；此前 Query、网络和其他 tick 看不到该区域。失败 candidate 不进入 catalog，也不发送 removal 来掩盖幽灵状态。controller domain 的原版水采样只接受持久 footprint interior 内的纯 `Blocks.WATER`，不会把 waterlogged、相邻其他内腔或 dense bounds 中不归属的水复制成 marker。
+无水接管时同样先 stage、回读并发布首个 region HEAD。只有 HEAD 回读成功后，`MinecraftRegionActivation` 才把 candidate 登记并选入 live catalog、发送 snapshot 和返回创建成功；此前 Query、网络和其他 tick 看不到该区域。
 
-恢复根据 region HEAD 与 WAL 的 base/target generation 判定重放或回滚。`OwnershipTransactionCoordinator` 负责 Minecraft footprint/preimage、live checkpoint capture 与结果写回，并把 WAL→世界→HEAD→committed 状态机委托给既有低层 `OwnershipCoordinator`；它不复制恢复代数。未知文件、损坏 NBT、身份不符、generation 歧义或玩家已放置的非水方块一律保留并锁定，不猜测修复，也不覆盖玩家方块。
+失败 candidate 不进入 catalog，也不发送 removal 来掩盖幽灵状态。controller domain 的原版水采样只接受持久 footprint interior 内的纯 `Blocks.WATER`，不会把 waterlogged、相邻其他内腔或 dense bounds 中不归属的水复制成 marker。
+
+恢复根据 region HEAD 与 WAL 的 base/target generation 判定重放或回滚。`OwnershipTransactionCoordinator` 负责 Minecraft footprint/preimage、live checkpoint capture 与结果写回，并把 WAL→世界→HEAD→committed 状态机委托给既有低层 `OwnershipCoordinator`；它不复制恢复代数。
+
+未知文件、损坏 NBT、身份不符、generation 歧义或玩家已放置的非水方块一律保留并锁定，不猜测修复，也不覆盖玩家方块。
 
 已加载 solver 在 step、empty、checkpoint 和转移前也必须检查自己的 ownership sidecar；锁只作用于对应区域，但无法识别 region 的 store issue 会形成全局创建锁。
 
@@ -33,7 +62,9 @@ controller 内部由空气和独立 ownership registry 表示。原版水方块�
 
 扫描与世界修改在同一个 server tick 内进行，候选只接受纯原版 water，并保存每个 block 的完整 preimage。region target slot 必须先写完、回读并验证，然后才发布 ownership WAL 与醒目的 WARNING 文件。移除每个方块时再次比较 preimage；扫描后被玩家改变的方块导致事务中止，不会被静默跳过。
 
-HEAD 发布前崩溃时，恢复看到 `HEAD == baseGeneration`，把世界尽可能恢复到 preimage；只有 identity、紧邻 generation 与严格文件布局都证明是本事务的 inactive staging 才可丢弃，未知证据保留并锁定。玩家已占据的位置优先，记为 conflict 而不覆盖。HEAD 发布后崩溃时，`HEAD == targetGeneration`，region inventory 已权威，恢复只重建/核对 committed ownership registry，不再恢复水 preimage。
+HEAD 发布前崩溃时，恢复看到 `HEAD == baseGeneration`，把世界尽可能恢复到 preimage；只有 identity、紧邻 generation 与严格文件布局都证明是本事务的 inactive staging 才可丢弃，未知证据保留并锁定。
+
+玩家已占据的位置优先，记为 conflict 而不覆盖。HEAD 发布后崩溃时，`HEAD == targetGeneration`，region inventory 已权威，恢复只重建/核对 committed ownership registry，不再恢复水 preimage。
 
 ### 释放事务
 
@@ -57,11 +88,17 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 - `EMPTY_CONDENSED` 联合清除 liquid、chemical、active/deposit/coherent condensed truth，把实际物质与凝聚相 `U` 记入 operator escaped/external sink；保留 controller、ownership 和 sealed gas。
 - `VENT_SEALED_GAS` 联合清除 sealed component nanos/kg/species/residual 与实际 gas `U`，分别记入 gas escaped sink 和 thermal external sink；闭壳的完整 gas membership、available volume 与 edge 保持不变，提交结果是库存与 `U` 严格为零的密闭真空，不是 ambient 连接。显式 resume 后仍可运行，后续库存只能来自真实容器、相变或拓扑 transfer。
 - `RELEASE_OWNERSHIP` 只在凝聚相、气体和有限设备为空且无 WAL/phase work 后恢复 preimage；玩家已经占据的方块优先，不被覆盖。
-- `REMOVE_EMPTY_REGION` 只在上述库存为空、ownership 已释放且 quarantine 可接纳时发布 `REMOVED` HEAD。随后发送 network tombstone、注销 runtime，并把旧 ACTIVE payload 收敛到 `mmm/quarantine/removed-region/`；UUID 永不复用。
+- `REMOVE_EMPTY_REGION` 只在上述库存为空、ownership 已释放且 quarantine 可接纳时发布 `REMOVED` HEAD。随后发送 network 删除标记、注销 runtime，并把旧 ACTIVE payload 收敛到 `mmm/quarantine/removed-region/`；UUID 永不复用。
 
-旧的 `/mmm empty` 只保留给非 controller 开发域；controller 管理的区域必须手持物质场探针普通右击控制器，在控制台按 `EMPTY_CONDENSED`、`VENT_SEALED_GAS`、`RELEASE_OWNERSHIP`、`REMOVE_EMPTY_REGION` 依次预览并确认。控制器方块只在真正空手时处理 select/run-intent 激活；任何持物右击都先交还物品入口，不能吞掉探针或容器交互。纯 wall-time `PERFORMANCE_PAUSE` 不代表库存或账本不可解释，因此仍允许 `drain`、容器装取和上述只减少库存的 lifecycle；已加载且 HEAD、registry 与 WAL 均可证明的 `NUMERICAL_PAUSE` 也允许上述私有候选式 lifecycle 减库存，以便清空、排气、释放和移除故障区域。预览冻结事实前先通过共享 phase-work barrier 执行一次 phase-off mechanical successor，exactly-once 消费旧 `-pΔV` lien；只有该结算也失败时才保留 `PENDING_PHASE_WORK` blocker。两类操作后都保持暂停，需显式 resume。边界、ownership、pending WAL、无效 HEAD、registry/profile、开放 audit、无法结算的 phase work 或 quarantine blocker 仍在预览中明确列出并阻止提交。
+旧的 `/mmm empty` 只保留给非 controller 开发域；controller 管理的区域必须手持物质场探针普通右击控制器，在控制台按 `EMPTY_CONDENSED`、`VENT_SEALED_GAS`、`RELEASE_OWNERSHIP`、`REMOVE_EMPTY_REGION` 依次预览并确认。
 
-## 容器真值
+控制器方块只在真正空手时处理 select/run-intent 激活；任何持物右击都先交还物品入口，不能吞掉探针或容器交互。纯 wall-time `PERFORMANCE_PAUSE` 不代表库存或账本不可解释，因此仍允许 `drain`、容器装取和上述只减少库存的 lifecycle；已加载且 HEAD、registry 与 WAL 均可证明的 `NUMERICAL_PAUSE` 也允许上述私有候选式 lifecycle 减库存，以便清空、排气、释放和移除故障区域。
+
+预览记录当前状态前，先通过共享的相变功处理器执行一次仅含力学的计算，结清旧的 `-pΔV` 压力功。结算失败时，预览保留 `PENDING_PHASE_WORK` 阻止原因。
+
+两类操作后都保持暂停，需显式 resume。边界、ownership、pending WAL、无效 HEAD、registry/profile、开放 audit、无法结算的 phase work 或 quarantine blocker 仍在预览中明确列出并阻止提交。
+
+## 容器数据
 
 - 液体容量使用 `long` 纳体积，1 block volume = 1,000,000,000 nanos。
 - 材料桶保存每个稳定材料的纳体积与独立 kg 质量。
@@ -71,11 +108,17 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 - 任何非空 MMM actual container 还保存创建它的 world capability profile fingerprint；空容器不伪造 profile 身份。
 - item count 必须为 1；damage、tooltip、durability bar、颜色和温度不参与结算。
 
-item fingerprint 编码实际可结算的整组数据，而非仅 item id：kind、typed amount、stable mixture/chemical/granular contents、raw kg mass bits、可选 ThermalContents 及其 registry/underlying hash，以及 actual inventory 的 world profile fingerprint。`ContainerTransferJournal` 只保存这一数据，Fabric `ContainerItemMapper` 独占 fingerprint 与 `ItemStack` 的双向映射。空桶、部分桶、材料桶、化学桶、颗粒容器和 creative descriptor 是不同 shape；shape 之间缺字段或同时出现冲突 component 都拒绝。actual container 缺失、损坏或不匹配当前世界 profile 时在准备 WAL 前以 `FOREIGN_PROFILE` 拒绝，恢复也必须以已提交世界 profile 复核 WAL；不能按当前数据包重新解释旧世界库存。
+item fingerprint 编码实际可结算的整组数据，而非仅 item id：kind、typed amount、stable mixture/chemical/granular contents、raw kg mass bits、可选 ThermalContents 及其 registry/underlying hash，以及 actual inventory 的 world profile fingerprint。
 
-液体抽取允许生成不足 1 BV 的 partial item；放入已有部分桶时仍按实际剩余容量规划。`FluidMixture`、`ChemicalContents`、`GranularContents` 和 `ThermalContents` 都有自己的规范编码与总账，item component 只是这些真值的载体。
+`ContainerTransferJournal` 只保存这一数据，Fabric `ContainerItemMapper` 独占 fingerprint 与 `ItemStack` 的双向映射。空桶、部分桶、材料桶、化学桶、颗粒容器和 creative descriptor 是不同 shape；shape 之间缺字段或同时出现冲突 component 都拒绝。
 
-创造栏 source template 保存的 `CreativeSourceDescriptor` 只是稳定 source ID、精确 typed amount 和可选温度的意图，不是 actual inventory，也不绑定某个 world profile。每次使用时服务端重新确认玩家仍处于创造模式，按当前已提交 world registry 和封闭 catalog 解析材料/species/SVQ/kg/U，拒绝未知 source、错误数量和越过物性有效域的温度。descriptor item 在事务前后保持相同；对热区域，coordinator 用独立的 server-resolved actual source stack 准备 coupled `U`，不能从 descriptor 猜能量。
+actual container 缺失、损坏或不匹配当前世界 profile 时在准备 WAL 前以 `FOREIGN_PROFILE` 拒绝，恢复也必须以已提交世界 profile 复核 WAL；不能按当前数据包重新解释旧世界库存。
+
+液体抽取允许生成不足 1 BV 的 partial item；放入已有部分桶时仍按实际剩余容量规划。`FluidMixture`、`ChemicalContents`、`GranularContents` 和 `ThermalContents` 都有自己的规范编码与总账，item component 只是这些原始数据的载体。
+
+创造栏 source template 保存的 `CreativeSourceDescriptor` 只是稳定 source ID、精确 typed amount 和可选温度的意图，不是 actual inventory，也不绑定某个 world profile。
+
+每次使用时服务端重新确认玩家仍处于创造模式，按当前已提交 world registry 和封闭 catalog 解析材料/species/SVQ/kg/U，拒绝未知 source、错误数量和越过物性有效域的温度。descriptor item 在事务前后保持相同；对热区域，coordinator 用独立的 server-resolved actual source stack 准备 coupled `U`，不能从 descriptor 猜能量。
 
 ## 玩家与发射器路由
 
@@ -86,7 +129,13 @@ item fingerprint 编码实际可结算的整组数据，而非仅 item id：kind
 
 typed actual container 与 creative source 的 controller-region 转移只依赖世界能力包和区域写入可用，不依赖 world-bridge 政策；world bridge 只决定是否接管或恢复壳内原版世界流体。关闭 bridge 不能把已经由 controller/WAL 持有的 typed inventory 变成不可转移状态。
 
-目标解析发生在事务准备之前。玩家命中壳的外侧、内部格、区域 UUID 和 dimension 必须唯一；dispenser 朝向只参与最初的目标解析，其 dimension、整数 block coordinates 和 slot 构成持久 actor identity。actor identity 与 journal 位于 core，是不引用 `BlockPos`、`ItemStack` 或 loader 类型的封闭数据；各 actor kind 只能携带自己的完整字段，不能用 null 填充无关字段。同一 region 或同一确切 actor identity 存在 WAL 时不得开始另一笔容器事务。恢复时 actor 离线或 owning chunk 未加载是 `UNAVAILABLE`，保留 WAL 等待；slot/block entity 改变或当前 item 既不等于 before 也不等于 after 是 `CONFLICT`，保留 WAL 并 LOCKED，不能每 tick 猜测或把物品塞到其他手/slot。将来增加外部 Mod actor 时必须给它独立的稳定 provider/type identity 和跨重启可解析状态，不能把运行期 callback 写进 WAL。
+目标解析发生在事务准备之前。玩家命中壳的外侧、内部格、区域 UUID 和 dimension 必须唯一；dispenser 朝向只参与最初的目标解析，其 dimension、整数 block coordinates 和 slot 构成持久 actor identity。
+
+actor identity 与 journal 位于 core，是不引用 `BlockPos`、`ItemStack` 或 loader 类型的封闭数据；各 actor kind 只能携带自己的完整字段，不能用 null 填充无关字段。
+
+同一 region 或同一确切 actor identity 存在 WAL 时不得开始另一笔容器事务。恢复时 actor 离线或 owning chunk 未加载是 `UNAVAILABLE`，保留 WAL 等待；slot/block entity 改变或当前 item 既不等于 before 也不等于 after 是 `CONFLICT`，保留 WAL 并 LOCKED，不能每 tick 猜测或把物品塞到其他手/slot。
+
+将来增加外部 Mod actor 时必须给它独立的稳定 provider/type identity 和跨重启可解析状态，不能把运行期 callback 写进 WAL。
 
 insert/extract 返回“实际转移量”，WAL 和 after item 必须使用这个量而非请求量。液体用 nanos，颗粒用 SVQ；两个资源域不能共用一个模糊 `amount`。含热纯水可按同质体积分拆 coupled `U`；材料/化学混合物必须按源桶共同温度和实际选中质量/组分计算 coupled `U`，item 余量以源 `U` 减法结算浮点余数，不能把体积比例冒充热容量比例。
 
@@ -102,11 +151,19 @@ insert/extract 返回“实际转移量”，WAL 和 after item 必须使用这�
 6. 修改 actor item，并等待玩家存档或 dispenser chunk 完成 durable save。
 7. 删除 WAL。
 
-恢复必须核对 HEAD、checksum、actor、before/after item、resource kind、world profile fingerprint、各适用 registry fingerprint 和 generation。`core/recovery/CrossDomainRecovery` 是 region HEAD 与一个或多个外部持久成员的共同判定器；现有 container adapter 只负责把 durable actor readback 分类为 `BEFORE`、`AFTER`、`THIRD` 或 `UNAVAILABLE`，不能复制 commit switch。未来 world action、外部 provider 或设备 journal 也必须委托同一判定器。region、ownership 与 container 的紧邻代次统一拒绝负数和 `long` 溢出，不能让 `Long.MAX_VALUE + 1` 被误认成合法 target。任何歧义都保留 WAL 并锁定；不得因为 item 看起来相似就推断完成状态。
+恢复必须核对 HEAD、checksum、actor、before/after item、resource kind、world profile fingerprint、各适用 registry fingerprint 和 generation。
+
+`core/recovery/CrossDomainRecovery` 是 region HEAD 与一个或多个外部持久成员的共同判定器；现有 container adapter 只负责把 durable actor readback 分类为 `BEFORE`、`AFTER`、`THIRD` 或 `UNAVAILABLE`，不能复制 commit switch。
+
+未来 world action、外部 provider 或设备 journal 也必须委托同一判定器。region、ownership 与 container 的紧邻代次统一拒绝负数和 `long` 溢出，不能让 `Long.MAX_VALUE + 1` 被误认成合法 target。
+
+任何歧义都保留 WAL 并锁定；不得因为 item 看起来相似就推断完成状态。
 
 当前 WAL 有材料布局和含热布局。`ContainerJournalCodec` 只接受当前 writer 产生的完整字段集合：缺字段、错 NBT 类型、额外未知字段和溢出的 generation pair 都保持原文件并锁定，不做补全或忽略。`ContainerJournalFileStore` 只负责 discover/read/write/delete、临时文件回读、atomic replace 与目录同步，不解释 HEAD/actor/recovery 状态。
 
-loader-neutral `ContainerTransferUseCase` 验证 actor/item/profile/thermal truth，`ContainerTransferCoordinator` 独占 WAL、staged checkpoint 与 HEAD 发布顺序；Fabric `MinecraftContainerTransferPlan` 是 player/dispenser 共用的 capability、contents、exact primitive 选择，两个 actor adapter 只分别负责准星/手或朝向/槽位以及最终 Minecraft 输出。mixin 与原版 dispenser registry 分别直连这两个 adapter，不保留旧 transfer service。更精确的运行序列是：
+loader-neutral `ContainerTransferUseCase` 验证 actor/item/profile/thermal truth，`ContainerTransferCoordinator` 独占 WAL、staged checkpoint 与 HEAD 发布顺序；Fabric `MinecraftContainerTransferPlan` 是 player/dispenser 共用的 capability、contents、exact primitive 选择，两个 actor adapter 只分别负责准星/手或朝向/槽位以及最终 Minecraft 输出。
+
+mixin 与原版 dispenser registry 分别直连这两个 adapter，不保留旧 transfer service。更精确的运行序列是：
 
 1. 验证目标区域可修改、无其他 WAL、actor item count 为 1，并捕获 before fingerprint。
 2. 原子发布 `PREPARED` WAL；此时 after=before，尚无 target checksum。
@@ -130,12 +187,18 @@ WAL/WARNING/committed/HEAD 的文件内容在 rename 前 `force`，rename 与事
 | `target` | `PREPARED` | 锁定：region 已提交但 WAL 没有权威 after item |
 | 其他 generation 或 checksum 不符 | 任意 | 锁定：无法证明 region 属于本事务 |
 
-任一外部成员 `UNAVAILABLE` 时不改任何 truth 并保留 WAL。玩家 actor 只在该玩家完成协议加入时重试；dispenser actor 只在其 owning dimension/chunk 加载时重试，不在 tick 中轮询。多成员事务只有每个成员都分别匹配 before 或 after 才能收敛剩余 before；成员索引与顺序由 journal 冻结。恢复在判定前还必须验证 dimension、resource kind、base/target 连续性、actor identity、before/after shape、所有适用 registry fingerprint 和 thermal underlying hash。任一未知内容都原样保留。
+任一外部成员 `UNAVAILABLE` 时不改任何 truth 并保留 WAL。玩家 actor 只在该玩家完成协议加入时重试；dispenser actor 只在其 owning dimension/chunk 加载时重试，不在 tick 中轮询。
+
+多成员事务只有每个成员都分别匹配 before 或 after 才能收敛剩余 before；成员索引与顺序由 journal 冻结。恢复在判定前还必须验证 dimension、resource kind、base/target 连续性、actor identity、before/after shape、所有适用 registry fingerprint 和 thermal underlying hash。
+
+任一未知内容都原样保留。
 
 container-transfer 根目录是严格短期恢复域：未知文件名、目录、残留 `.tmp`、文件名与 transaction UUID 不同或损坏 NBT 会形成全局容器事务锁，因为无法安全得知它属于哪个区域。`empty` 和 region 删除也必须把“存在任何未决或不可读 WAL”视为拒绝条件。
 
 ## 守恒边界
 
-对 insert：item resource 减少量 = region external source 增加量；对 extract：region external sink/transfer ledger 增加量 = item resource 增加量。材料质量、species、solid composition 和总内能分别闭合，不能只凭体积相等通过事务。含热抽取以实际 carrier `U` 的 exact dyadic 变化为物理量，整件物品只舍入一次；external sink 使用物品保存的 raw energy，舍入差单列 thermal roundoff，不能逐 marker 累积近似后令 item 与 region 分叉。
+对 insert：item resource 减少量 = region external source 增加量；对 extract：region external sink/transfer ledger 增加量 = item resource 增加量。
 
-创造放出没有物品侧减少，因此明确记 region external source；创造装取仍必须从 region 删除，只是 Minecraft 不消费/替换玩家物品。这个不对称是显式 actor 语义，不得隐藏在 tooltip 或 item damage 中。
+材料质量、species、solid composition 和总内能分别闭合，不能只凭体积相等通过事务。含热抽取以实际 carrier `U` 的 exact dyadic 变化为物理量，整件物品只舍入一次；external sink 使用物品保存的 raw energy，舍入差单列 thermal roundoff，不能逐 marker 累积近似后令 item 与 region 分叉。
+
+创造放出没有物品侧减少，因此明确记 region external source；创造装取仍必须从 region 删除，只是 Minecraft 保留玩家物品。这个不对称是显式 actor 语义，不得隐藏在 tooltip 或 item damage 中。

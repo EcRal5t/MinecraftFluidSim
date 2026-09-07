@@ -1,211 +1,98 @@
-# 系统架构总览
+# 系统总览
 
-本文说明 Matter, Motion & Mechanics 当前产品基线的组件关系、权威状态、单位、执行顺序和失败模型。具体算法与事务细节由同目录主题文档继续约束。
+本文用于理解模块关系、物理数据和一次计算的顺序。已有明确修改目标时，可以从 [README 需求表](../../README.md)直接进入专题。
 
-## 产品边界
+## 模块职责
 
-当前系统只在显式、闭合、预算受限且 chunk 完整加载的 controller 区域内提供连续流体。边界和控制器可制作并从创造栏取得；普通空手右击控制器会创建或选择区域并立即运行，空手潜行右击切换持久的运行意图。`/mmm` 只承担 fixture、诊断、恢复和管理员操作。天然河流、海洋、无界洞穴空气和永久 chunk ticket 不属于当前运行模型。
-
-CPU `FluidDomain` 是规范求解器聚合根。GPU probe、客户端 renderer、tooltip、命令 status 和外部 Mod Query API 都只能读取已提交状态。
-
-## 模块边界
-
-| 模块 | 职责 | 依赖边界 |
+| 模块 | 保存或执行什么 | 主要依赖 |
 |---|---|---|
-| `api` | stable ID、单位化 Query、committed event 与 typed quantity 契约 | 只依赖 JDK，不暴露 solver 数组或 Minecraft 类型 |
-| `model` | registry、exact ledger、typed container truth、gas/thermal/granular state 与 durable region model | 依赖 `api` 与必要的纯 Java codec 库，不引用活动 solver 或 loader 类型 |
-| `solver` | CPU PIC/FLIP 聚合根、stage pipeline、immutable step request/state/candidate 与规范 backend | 依赖 `model`；不引用 Fabric/Minecraft、NBT 或 network payload |
-| `application` | loader-neutral command/result/use case/port 与 checkpoint export 边界 | 依赖 `solver` / `model`；不取得世界、actor 或 durable store 具体写权 |
-| `core` | 旧 artifact name 的聚合发布模块 | 无生产源码；只以 API 依赖重导出 `api` / `model` / `solver` / `application` |
-| `fabric` | Mod 生命周期、世界读取/写入、NBT、数据包、网络、物品适配与命令 | 依赖并内嵌 `api` / `model` / `solver` / `application`；服务器主线程拥有提交权；`ContainerItemMapper` 独占事务 fingerprint 与 `ItemStack` 的双向映射 |
-| `gpu-probe-kernel` | Vulkan device/resource/binding/scheduler/readback、shader、CPU 对照与 headless 验证 | 依赖 `solver`；禁止 Minecraft/Fabric、主 runtime、network 与 logging adapter |
-| `gpu-probe` | 可选 Mod 生命周期、命令、只读世界碰撞采样和 probe snapshot 适配 | 依赖并内嵌 kernel；compile-only 接入 `fabric`，不取得区域 HEAD、ownership 或世界写权 |
+| [api](../../api/src/main/java/cc/ecisr/mmm/api/) | 外部查询、提交通知和带单位的数量类型 | JDK |
+| [model](../../model/src/main/java/cc/ecisr/mmm/) | 材料定义、物质收支、载体状态、容器数据和存档模型 | api、必要的纯 Java 编解码库 |
+| [solver](../../solver/src/main/java/cc/ecisr/mmm/fluid/) | CPU 物理计算、完整计算输入和候选结果 | model |
+| [application](../../application/src/main/java/cc/ecisr/mmm/application/) | 调度、授权、事务协调，以及读取和提交区域的接口 | solver、model |
+| [fabric](../../fabric/src/main/java/cc/ecisr/mmm/) | 世界与物品操作、持久化、数据包、命令和网络 | api、model、solver、application |
+| [fabric client](../../fabric/src/client/java/cc/ecisr/mmm/) | 快照插值、几何生成和界面显示 | 客户端协议与展示数据 |
+| [gpu-probe-kernel](../../gpu-probe-kernel/src/main/java/cc/ecisr/mmm/gpuprobe/) | Vulkan 计算实验、回读与独立验证 | solver |
+| [gpu-probe](../../gpu-probe/src/main/java/cc/ecisr/mmm/gpuprobe/) | 可选 GPU probe 的 Minecraft 适配 | kernel，编译时引用 fabric |
+| [core](../../core/build.gradle) | 聚合发布 api/model/solver/application | 无生产源码 |
 
-`FluidDomainState` 是完整、不可变的数值后端输入与可物化交接状态。motion 使用 `FluidStepRequest` / `FluidStepCandidate`，静水 thermal-only 轴使用 `FluidThermalStepRequest` / `FluidThermalStepCandidate`；两者都绑定 base generation 且只能返回其紧邻后继。`CpuFluidSolverBackend` 对两类请求都先恢复私有 `FluidDomain`，完整成功后把该私有 aggregate 作为 single-use candidate ownership 交给 adoption；正常成功帧不再先序列化整个 candidate、再重建同一个 aggregate。checkpoint、重播或诊断读取 `candidate.state()` 时仍物化并完整验证 immutable state；aggregate 一旦被 adoption 领取就不能再冒充不变快照。live owner capture、私有恢复或候选求值若发现布局、容量或账本不合法，必须分别返回 typed capture/handoff/candidate rejection；Minecraft tick 保留 live base 并进入数值暂停，不能让这些异常穿透并崩溃服务器。未来 GPU 后端必须消费同一完整输入并返回语义完整、可按需物化的同代 candidate；世界事务、ownership、actor、调度和 HEAD 发布不进入数值后端。
+世界读取、方块修改、物品变化和磁盘提交由 Fabric 在服务器主线程执行。数值模块接收纯 Java 输入，计算私有的下一步状态。客户端和外部查询读取服务端提供的数据。
 
-生产 motion step、静水 thermal-only step 与测试侧 replay 都走完整候选边界。`MinecraftRegionInputs` 先刷新到期的碰撞/热边界，冻结实体观测、实际逐 tick 位移、moving-body request 和只含调度事实的 `RegionRuntime`；`MinecraftRegionTick` 把 region UUID、expected solver generation 与 phase budget 固定进本 tick command，并独占 accepted result 写回、thermal/hydrostatic observation、typed failure 映射与 snapshot 节拍。`RegionTickUseCase` 根据 tick/interval 与正交 motion/thermal readiness 生成唯一 `NONE` / `MOTION` / `THERMAL` plan，motion 到期时不会再执行同 tick 的 thermal-only 轴。到期轴才经该 use case 自有的 `StepExecutor` 进入 `RegionApplicationService`；该用例只在 accepted step 后按注入的单调时钟推进 pacing 与连续过载证据，rejected/typed exception 不改变调度状态。`RegionRepository` 只提供完整 immutable capture 和 atomic adopt，不向 application 暴露 live domain。application 同时验证 backend id、紧邻 generation 与 `FluidDomainState.Layout`（网格/config/预算、sealed boundary、carrier kind、registry fingerprint、capability 与 thermal budget），port 在发布前按当前 live identity 重验；CPU prepared candidate 只在这些门之后转移一次所有权。accepted result 只返回本步统计与 moving-body impulse，不把 candidate 或数组再交给 adapter。后端抛出的 typed 拒答不会改动 live domain，因此失败步既不会留下预先写入的 marker 冲量，也不会留下只完成传导或部分反应/相变的热轴状态。
+依赖方向、包循环、运行时注册点和生产类 1000 行上限由 [ArchitectureDependencyValidation](../../fabric/src/test/java/cc/ecisr/mmm/validation/ArchitectureDependencyValidation.java) 检查。执行方式见 [验证指南](../maintenance/validation.md#architecture)。
 
-每个 `MinecraftServer` 的主运行时只由 `MmmRuntimeRegistry` 索引。`SERVER_STARTING` 显式调用 `MmmRuntimeFactory`：`WorldStartupCoordinator` 依次读取 world policy、在首次发布前验证当前 definitions、证明或恢复 world capability bundle、提取并复验 frozen registries，再由 factory 按固定顺序构造 region repository、收敛 removed quarantine、扫描 ownership 与 container WAL，并显式接好运行策略、单步执行、区域输入/tick、availability、operator、container 与观察 owner。factory 是唯一组合根，不把这些对象藏进第二个 service facade。startup state 和 issue 是 typed data；logger 只在 factory 边界投影它们，不参与状态机。需要已加载 level 的 takeover、ownership 与 container actor 收敛推迟到 `SERVER_STARTED`，停止时由 `MinecraftSimulationLoop` 按 checkpoint→takeover restore 顺序收口，再由 registry 注销并清理 protocol session/event hub。
-
-adapter 查找只能使用 `MmmRuntimeRegistry.require/find`；查找本身不再隐式读取或发布世界状态。`MmmFabricApi.events` 仍允许在 `SERVER_STARTING` 前登记监听器：registry slot 暂存同一个 thread-safe hub，runtime 建立后接管它；只读 Query 的 pre-start lookup 返回 unavailable/wrong-thread，不触发 runtime 初始化。
-
-可选 GPU probe 不加入主 runtime locator。其 Mod initializer 在自身 `SERVER_STARTING`/tick/`SERVER_STOPPING` 回调中持有唯一 service 实例；service 只经 `GpuProbeHostIntegration` 查询主域冲突、发布/删除 probe snapshot 和恢复主域 snapshot。只有 `MmmGpuProbeHostIntegration` 接触主 runtime 与 network implementation。kernel 的 device、storage resources、descriptor/pipeline、submission ring 和 bulk readback 各有唯一 native owner；probe 仍是只读实验后端，不实现生产 `FluidSolverBackend`。
-
-运行时只向外部 adapter 提供按行为命名的 owner：controller console、region activation、indicator editing、debug fixture、region operator/administration/diagnostics/observation、player/dispenser container actor、container recovery、Query、committed world registries 与 protocol sessions。`MinecraftRuntimePolicy` 独占 world-local 可变政策，`MinecraftMotionExecutor` 独占一次同步 motion transaction，`MinecraftSimulationLoop` 独占 server tick、启动恢复与 shutdown 顺序，`MinecraftRegionOperatorActions` 独占管理员写动作；它们都不充当其他 adapter 的通用 locator。协议协商状态由每个 `MmmRuntime` 的 `ProtocolSessions` 按玩家持有；`FluidProtocolServer` 只保留 configuration listener 对应的短期 pending task，不维护 `MinecraftServer` 静态会话表。network、外部 API 与 GPU probe 只能取各自的语义 owner。
-
-## 组件与数据流
+## 从游戏操作到计算结果
 
 ```text
-数据包定义
-  -> WorldStartupCoordinator               policy / capability / typed issues
-  -> RegistryBundleLoader                  pre-publication + frozen-bundle validation
-  -> world-local canonical registry snapshot + fingerprint
-  -> MmmRuntimeFactory / MmmRuntimeRegistry 唯一 server runtime lifetime
-
-Minecraft 命令、方块、物品、容器、协议与 chunk 事件
-  -> MmmRuntime 语义 owner              console / activation / indicator / fixture
-                                          administration / diagnostics / observation
-                                          container actors / recovery / Query / protocol
-  -> 各 owner 自有的 Minecraft 授权、世界事实与事务边界
-
-server tick、实体观测与 operator 写动作
-  -> MinecraftSimulationLoop                全局 maintenance、dimension/availability、恢复与停止顺序
-  -> MinecraftRuntimePolicy                 world-local 功能政策与默认值
-  -> MinecraftRegionOperatorActions         管理员写动作
-  -> MinecraftMotionExecutor                同步 motion candidate transaction
-  -> MinecraftRegionInputs                  碰撞/热边界/实体事实与 RegionRuntime
-  -> MinecraftRegionTick                    单区域 tick command/result、失败映射与输出
-  -> RegionTickUseCase / RegionRuntime       唯一轴计划、step timing 与 pacing
-  -> RegionApplicationService               loader-neutral command/result 编排
-       -> RegionRepository                  step capture/adopt
-       -> RegionCheckpointPort              expected-generation HEAD 发布
-  -> ControllerQueryUseCase                 bounded summary + viewer token
-       -> ControllerSummaryPort             bounded controller read model
-  -> MinecraftRegionLifecycle               controller facts、durable HEAD/ownership/REMOVED 收敛
-       -> RegionLifecycleUseCase             run intent 与 preview/confirm 授权
-  -> RegionCatalog / FluidRegionManager      身份、预算、placement、选择
-  -> FluidRegionOperations                   availability、restore、checkpointed unload
-  -> FluidRegion                            durable metadata、runtime、生命周期
-  -> CollisionWorldPort                     捕获不可变碰撞场
-  -> FluidDomain                            CPU aggregate、mechanics 与载体库存
-       -> AirNetwork                        密闭气体节点与孔流
-       -> ChemicalParcelStore               marker 化学 parcel
-       -> GranularInventory                 active/deposit 固体
-       -> ThermalDomainState                各载体总内能与审计
-       -> FluidThermalBinding               fluid snapshot/reseed 与 thermal owner 的显式映射
-
-MinecraftRegionCheckpointSource            live region → stable checkpoint source
-RegionCheckpointAssembler / Restorer       完整逻辑 checkpoint 装配/immutable state 重建
-RegionRepositoryAdapter                     checkpoint/restore、metadata 与 ownership read guard
-RegionGenerationStore                       ACTIVE/REMOVED 双槽事务与唯一 HEAD 发布者
-Head/Active/Removed/Quarantine stores       package-private 严格 codec、文件与恢复分类
-OwnershipTransactionCoordinator             Minecraft 方块 preimage 与 ownership 事务入口
-ContainerTransferCoordinator                region/item WAL→staged HEAD→HEAD
-ContainerRecoveryCoordinator                boot-indexed actor 收敛与事件重试
-ContainerJournalCodec / FileStore           严格 NBT / durable file 边界
-
-已提交区域状态
-  -> FluidSnapshotPublisher / protocol payload
-  -> 客户端 surface、material、chemical、granular、thermal 重建
-  -> MmmQueryApi / FabricFluidQueryApi
-  -> 外部 Mod 的同步只读单格观察
-
-durable container completion
-  -> MmmEventApi / CommittedEventHub
-  -> 外部 Mod 的易失提交通知（漏失后由 Query API 恢复）
-
-可选 GPU probe adapter
-  -> GpuProbeHostIntegration              主域冲突只读判断与 snapshot bridge
-  -> gpu-probe-kernel                     Vulkan probe / checkpoint / headless gates
-       -> VulkanDeviceContext             instance / device / queue
-       -> FlipGpuResources / Bindings     storage / descriptor / compute pipeline
-       -> GpuStepScheduler / GpuReadback  bounded submission / host transfer
+方块 / 物品 / 命令 / 网络请求
+  → MmmRuntime 中对应的业务处理器
+  → application 用例检查请求与当前状态
+  → solver 在私有状态上计算完整结果
+  → application 与区域仓库核对身份、代次和布局
+  → Fabric 提交区域、世界或物品的变化
+  → 发布客户端快照与适用的提交通知
 ```
 
-Minecraft adapter 负责读取世界、选择区域和提交世界修改。`MinecraftCollisionWorldPort` 把 `VoxelShape` 保守采样成纯 Java `CollisionField` 后再交给世界交互服务；数值核心不持有 `ServerLevel`、ItemStack durable save 或磁盘所有权。持久层保存稳定 ID 和完整库存，不序列化 Java 对象图、GPU buffer 或客户端 mesh。
+服务器 tick 从 [MinecraftSimulationLoop](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftSimulationLoop.java) 开始，经过 [MinecraftRegionInputs](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRegionInputs.java)、[MinecraftRegionTick](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRegionTick.java) 和 [RegionTickUseCase](../../application/src/main/java/cc/ecisr/mmm/application/RegionTickUseCase.java) 进入 [RegionApplicationService](../../application/src/main/java/cc/ecisr/mmm/application/RegionApplicationService.java)。启动顺序、状态提交、暂停、区域预算和控制器授权详见 [运行时与区域操作](runtime-and-lifecycle.md)。
 
-## 权威真值表
+## 哪些数据决定物质库存
 
-| 领域 | 权威真值 | 只读派生或数值状态 |
+| 领域 | 保存的原始数据 | 根据原始数据计算的量 |
 |---|---|---|
-| 液体 | marker 位置、速度、体积、逐材料质量和相身份 | cell volume、density、pressure、PLIC、曲率 |
-| 化学 | species quanta、组成、电荷、质量 residual、indicator provenance、source/sink | pH、Top-N species、颜色 |
-| 颗粒 | active/deposit 的 SVQ、质量、材料、组成、孔隙率和审计 | bulk fill、显示高度、sample |
-| 连续固相 | coherent group 的 SVQ、质量、组成和总内能 | 固相显示 fraction |
-| 气体 | component standard-volume nanos、质量、species/residual、节点总内能和 source/sink | 温度、绝对压力、密度、孔流速度、液体接触面上的集总 pressure scratch |
-| 热学 | 每个物质载体的总内能、external source/sink、mechanical work、finite-device exchange 和 roundoff | 温度、热容、LTE grid、浮力修正 |
-| 有限热设备 | region HEAD 内按 provider/object 定位的 kg、总内能与 generation | 世界位置、接触端口、温度、换热 UI |
-| 世界 | region HEAD、ownership committed/WAL、actor durable item state | controller UI、status、debug layer |
+| 液体 | 粒子位置、速度、体积、逐材料质量和相身份 | 单元体积、密度、压力、界面与曲率 |
+| 化学 | 组分数量、组成、电荷、质量余量、指示剂来源和收支 | pH、主要组分列表、颜色 |
+| 颗粒 | 活动与沉积固体的 SVQ、质量、材料、组成、孔隙率和收支 | 填充率、显示高度和样本 |
+| 连续固相 | 固相组的 SVQ、质量、组成和总内能 | 显示体积分数 |
+| 气体 | 各组分标准体积数量、质量、化学组分、节点内能和收支 | 温度、绝对压力、密度、声速与孔流速度 |
+| 热学 | 各物质载体总内能、外部热量收支、机械功、设备换热和舍入差额 | 温度、热容、单元热平衡与浮力修正 |
+| 有限热设备 | 区域存档中的设备质量、内能和代次 | 温度、接触位置与换热显示 |
+| 世界与物品 | 区域 HEAD、世界归属日志和已存盘物品状态 | 控制台、诊断与调试显示 |
 
-任何“派生”列都不能创建、删除、缩放或恢复“权威”列。状态跨层搬运时必须同时提交所有受影响真值，而不是先改机械库存再尝试补化学或能量。
+库存结算使用左侧的原始数据。一个操作改变多种载体时，它们的物质、组成和能量一起校验、一起提交。温度、颜色和渲染网格可以重新生成。
 
-## 单位与精确量
+### 单位
 
-- `BV`：一个 Minecraft 方块体积；几何上按 `1 m³` 解释。
-- 默认 solver cell edge 为 `0.5 m`，所以 1 BV 包含 `2×2×2` cells，每 cell 为 `0.125 m³`。
-- 液体容器用 `long` nanovolume：`1 BV = 1,000,000,000 nanos`。
-- 固体用整数 SVQ：`1 BV = 2^27 SVQ`，默认 cell 为 `2^24 SVQ`。
-- 化学用整数 quanta：`1 AU = 1,000,000,000 quanta`；AU 是求解器量纲，不宣称等于 mol。
-- marker `particleMass` 是与 solver-cell 体积配对的质量权重；所有 SI、化学与容器边界只通过 `SolverUnitScale` 乘 `cellSize³` 得到 kg。
-- solid mass、chemical species/residual、gas component mass 和容器 mass 都直接保存 kg；只有 liquid marker mass 使用 solver weight。gas component 的 standard-volume nanos 与 kg 分开保存。
-- 热学当前使用 SI-compatible K、Pa、J、W/mK 与 J/(kg K)。内部审计保留 raw double 或 `SignedDyadic`，不从显示小数恢复。
+- `BV` 是一个方块的体积，按 `1 m³` 计算。默认求解单元边长为 `0.5 m`，一个方块包含八个单元。
+- 液体容器用整数纳体积：`1 BV = 1,000,000,000 nanos`。
+- 固体用整数 `SVQ`：`1 BV = 2^27 SVQ`，默认单元为 `2^24 SVQ`。
+- 化学用整数 quanta：`1 AU = 1,000,000,000 quanta`。AU 是本求解器使用的化学数量单位。
+- 液体粒子质量权重通过 [SolverUnitScale](../../model/src/main/java/cc/ecisr/mmm/units/SolverUnitScale.java) 乘以 `cellSize³` 换成 kg。固体、气体、化学组分及容器质量直接保存 kg。
+- 热学使用 K、Pa、J、W/(m·K) 和 J/(kg·K)。内能审计使用原始 double 或 `SignedDyadic` 精确表示。
 
-浮点 marker 尾数、整数 SVQ/nanos/quanta 和独立 residual 都是合法真值。换算必须指定向上、向下或 exact；不能先四舍五入后把差额静默归零。
+浮点粒子数量与整数容器数量之间的转换需要明确舍入方向，并保留不能表示的差额。详细数据布局在 [材料](material-state.md)、[化学](chemistry-state.md)、[颗粒](granular-state.md)、[气体](gas-state.md)和[热学](thermal-state.md)专题中。
 
-## 一个 logical step
+## 一个完整计算步
 
-1. 捕获本步 inventory、source/sink/work 与 pending phase-volume 审计基线。
-2. 根据 world/cut-cell、统一固体 occupancy 和当前 gas topology 建立机械输入。
-3. P2G，施加重力、热浮力、表面张力、气压和颗粒/实体耦合。
-4. 构造物理目标散度，以 PCG 联合求解变系数 liquid pressure 与接触液体的有限 sealed-gas compliance row；环境/真空仍为 Dirichlet，marker 过容量不进入这份机械 RHS。
-5. G2P 解析选择能量可接受的最大 FLIP 增量，随后以散度一致的 `H(div)` 重建/RK4 做 marker advection 与 CCD；颗粒完成运动/碰撞提交，逐格聚集不产生伪 pressure 源或第二位置投影。
-6. 从新载体位置重建 thermal grid，提交内部导热和固定温度边界通量。
-7. 提交化学与固液反应 extent，再提交 reaction heat。
-8. 依次计划并提交固液、气液相变；体积变化写入 pending pressure work。
-9. 处理沉积/唤醒和 marker reseed，同时搬运材料、化学和内能侧列。
-10. 重建所有账本；只有全部闭合才发布本步诊断并评估 motion/thermal activity。
+[FluidDomainStepCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainStepCoordinator.java) 组织下列步骤：
 
-相变产生的凝聚相体积/功由下一次真实 pressure projection exactly-once 消费。未消费记录存在时，不能用 `empty`、卸载或重排把它绕过。同步管理员命令、玩家桶和发射器转移若撞上该帧间 lien，先通过当前权威 backend 执行一次 mechanics-only candidate：真实 projection 消费旧 `-pΔV`，但 conduction、chemical reaction、granular phase 与 condensed/gas phase 均不运行，因此不会立刻产生另一份 lien；确认清空后才修改物质库存。CPU/GPU backend 不得各自在 host adapter 复制一套结算算法。
+1. 记录物质和能量收支，以及待结算的相变体积功。
+2. 根据碰撞形状、固体占据体积和气体拓扑建立力学输入。
+3. 把粒子速度传到网格（P2G），施加重力、浮力、表面张力，以及气体、颗粒和实体作用。
+4. 用 PCG 联合求解液体压力和接触液体的有限密闭气体响应。环境与真空使用给定压力条件。
+5. 把速度传回粒子（G2P），推进粒子位置并处理碰撞，完成颗粒运动。
+6. 在新位置上重建热学网格，计算导热与恒温源热通量。
+7. 执行化学反应和颗粒反应，计入反应热。
+8. 执行固液、气液相变，把体积变化记入待结算压力功。
+9. 处理沉积、唤醒和粒子拆分/合并，同步搬移材料、化学和内能数据。
+10. 核对全部收支，成功后发布本步统计并判断后续活动状态。
 
-## 生命周期和调度
+力学顺序在 [MechanicalStepPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStepPipeline.java)，传热、反应和相变顺序在 [ThermochemistryPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/ThermochemistryPipeline.java)。具体离散方法见 [流体求解器](fluid-solver.md)，相变功的后续处理见 [转移前结算相变功](runtime-and-lifecycle.md#phase-work)。
 
-`FluidRegion` 同时拥有身份、硬预算预留、controller footprint、checkpoint generation、motion lifecycle 和正交 thermal activity：
+## 存档和故障恢复
 
-- `ACTIVE`：按 20 Hz 目标推进。
-- `REDUCED`：wall-time 超过 40 ms 后按 1–4 tick pacing 推进同一个 logical step。
-- `PAUSED`：operator 暂停或边界/身份/数值候选失败；库存仍保留。
-- `PERFORMANCE_PAUSE`：连续三步超过 200 ms 的可重试调度暂停；`/mmm run` 与手动 `/mmm step` 显式清除本次 wall-time 证据并从同一已提交状态重试，不能与不可解释的数值失败共用永久 blocker。
-- `UNLOADED`：solver arrays 已释放，但 metadata 和 catalog reservation 仍保留。
-- motion sleep 与 thermal sleep 独立；静水仍可能导热或相变，静温也可能继续运动。
+服务器首次启动时，把数据包中的材料定义与功能布局保存为世界能力包。已有世界使用已提交的包解释库存。启动后数据包与它不同会报告差异，原存档继续使用原定义。格式、身份或布局无法验证时保留文件并锁定，处理方式见 [区域存档](region-state.md)。
 
-`RegionRuntime` 是 Fabric 在一次 tick 内捕获的 loader-neutral 调度值，不是第二个区域聚合根，也不持有 solver、世界或持久化对象。checkpoint 继续只保存 operator intent、resume state、step interval 与 tick；hard-overrun/recovery streak 是进程内短期证据。`MinecraftRegionInputs` 独占到期的碰撞/热边界刷新、实体观测与逐 tick 响应，并在这些输入可能唤醒区域之后冻结 runtime；`MinecraftRegionTick` 应用 accepted pacing、thermal/hydrostatic post-observation 与 snapshot 输出。`MinecraftSimulationLoop` 只维持全局 maintenance、dimension/availability，并把已可用的单个 region 交给该 adapter；它不拥有单区域数值状态或 operator 规则。
+区域保存使用双槽完整代次。先写完整内容并回读验证，最后替换 `HEAD`，由它指向正式生效的一代。删除区域写入 `REMOVED` 删除标记，然后发送客户端移除消息、注销运行时并隔离旧载荷。
 
-新控制器在首次成功提交后直接进入运行态。玩家的暂停意图随 checkpoint 持久化；边界损坏、chunk 缺失或候选失败造成的 availability pause 不得覆盖该意图，条件恢复后按原意图继续。
+桶和发射器的操作还涉及物品存盘，世界接管涉及原版方块。它们使用 WAL（预写事务日志）记录操作前后状态，再按区域 HEAD 的提交结果完成恢复。具体决策表见 [世界归属与容器事务](world-ownership-and-containers.md)。
 
-controller console 的 Minecraft adapter 先校验 server thread、距离、方块与当前 controller owner，再把 viewer/region identity 交给 `ControllerQueryUseCase`。该用例只从 `ControllerSummaryPort` 的 bounded view 构造 summary，并在 view 存在、identity 匹配且全部字段可投影后才签发同 viewer/region 的一次性 generation；miss、非法 view 和投影失败都不能留下未披露但可消费的 token。动作与 lifecycle preview 都经同一用例消费该 token。
+| 失败类型 | 处理方式 |
+|---|---|
+| `LOCKED` | 格式、身份、校验和或日志无法确定解释，保留磁盘文件并阻止覆盖 |
+| 数值暂停 | 本步容量、温度、压力或收支校验失败，保留上一完整物理状态 |
+| `PERFORMANCE_PAUSE` | 连续计算超时，保留状态并允许显式重试 |
 
-controller console 还提供四个管理员破坏性生命周期动作：清空凝聚相、排放密闭气体、释放 ownership、移除空区域。`MinecraftRegionLifecycle` 冻结 permission、WAL、availability、solver/device、ownership 与实际库存摘要后，`RegionLifecycleUseCase` 生成 200 tick、同玩家的一次性 preview，并在确认时消费 nonce、重验 player/region/generation/action/context 后返回当前 blockers；错 viewer 不消费 owner token，同 owner 的 stale/过期尝试会使 token 失效。只有 `AUTHORIZED` 才进入同一 adapter 内职责分明的 durable 路径。清空与排放先在私有完整 candidate 上联合审计并发布新 HEAD，再替换 live domain、推进 solver generation 使旧后端候选失效；ownership release 调现有 ownership transaction；区域移除按 REMOVED HEAD→network tombstone→runtime unregister→quarantine convergence 收口，commit point 后的输出/收敛失败不会被误报成未提交。
+## 查询和展示
 
-排放提交保留闭壳的完整 gas membership 和 available volume，把所有 node inventory 与 node `U` 联合结算成显式真空；它不是永久 ambient topology 或运行禁令。操作后仍按 lifecycle 规则保持暂停，但玩家可显式 resume，后续只有真实容器/相变 source 能重新建立气体库存。
+[FluidSnapshotPublisher](../../fabric/src/main/java/cc/ecisr/mmm/simulation/FluidSnapshotPublisher.java) 生成展示消息，[ClientRegionSnapshotStore](../../fabric/src/client/java/cc/ecisr/mmm/client/ClientRegionSnapshotStore.java) 按区域代次和序号接收，再交给客户端几何与绘制代码。旧包在区域移除后失效。
 
-容器事务同样不预写 live solver。`PREPARED` 固定 base 后，adapter 从冻结状态恢复私有 domain，在其上完成 transfer、完整 stage/readback，再 durable 写入 committed WAL；只有 region HEAD 成功指向 target 后，服务器主线程才接管已验证的私有 domain 并推进 solver generation。HEAD 前的拒答可删除 PREPARED 且 live/HEAD 均保持 base；HEAD 后的接管异常必须锁定并从 target 收敛，不能回滚 region 或把 actor 当作物理真值。
-
-availability 采用 `RegionAvailabilityReason` 封闭分类；预算、重叠、chunk、边界、WAL、数值拒答、可重试性能暂停和政策停用不再靠错误文本驱动状态。runtime admission 是 `FluidRegionOperations` 内一个按副作用顺序惰性取证的 server-thread 工作流：先检查内在数值失败与非托管 bypass，再读取 ownership/policy、catalog admission 和世界边界；数值失败与 ownership 就地阻断，policy/catalog/boundary 拒答则先发布合法完整 checkpoint 再卸载。已提交 metadata 即使当前 runtime budget 无法 admission 也继续登记并保留 reservation；只有 solver restore/step 被阻止。
-
-调度和后端选择不得改变守恒结果。缺 chunk 或 controller 破损时不能把缺失区域当墙继续半步。
-
-## 原子状态与失败模型
-
-系统区分两类失败：
-
-- **LOCKED**：磁盘格式、identity、registry fingerprint、generation、checksum 或 WAL 状态无法被唯一解释。原文件保留，拒绝任何会覆盖证据的操作。
-- **PAUSED**：当前库存可解释，但候选数值步越过相平衡/外部设定物性域、严格正温域、容量、预算或审计安全门。caloric 标定端点由连续状态函数延拓，不单独构成暂停理由。拒绝时保留内存/已提交状态，修正物理条件后重试；wall-time 过载使用独立的可清除 `PERFORMANCE_PAUSE`，不能伪装成数值不可解释。
-
-region HEAD 是区域物理状态唯一提交点。正常库存由 `ACTIVE` HEAD 指向完整 generation；终止区域由严格 `REMOVED` HEAD 指向零库存 tombstone，UUID 永不复用。ownership 与 container WAL 分别把世界方块和 actor item 收敛到该 HEAD；它们不能成为第二个物理真值。`RegionGenerationStore` 是唯一能组合 slot 写入与 HEAD 发布顺序的 coordinator；package-private 子 store 不能被业务层当成独立 writer。任何 publish 都必须遵守“完整写入、回读验证、HEAD 最后替换”。`REMOVED` HEAD 发布后才发送更高 network generation 的移除 tombstone、注销 runtime owner，并把旧 ACTIVE payload 收敛到持久 quarantine；崩溃恢复不能从旧 payload 重建 solver。
-
-需要把 region HEAD 与一个或多个外部持久成员收敛的 journal 统一委托 JDK-only `CrossDomainRecovery`：adapter 只能把 durable readback 分类为 exact `BEFORE`、`AFTER`、`THIRD` 或 `UNAVAILABLE`。HEAD 为 base 时只接受全 before；HEAD 为 checksum 匹配的 target 且 journal 已提交时才收敛 remaining before；third 锁定，unavailable 等待明确加载事件。normal tick 不轮询 unavailable actor。
-
-world-local chemical、granular、gas 和 thermal registry snapshot 的首次发布同样必须回读验证、atomic rename 并同步目录 entry。reader 只接受当前 writer 的精确 compound 字段集合与 NBT 类型；额外字段也属于未知语义，必须保留 snapshot 并 LOCKED，不能忽略后再按当前定义重建。
-
-## 线程与只读边界
-
-- 世界读取、方块修改、玩家/发射器物品变更和 lifecycle 编排只在服务器主线程发生。
-- 数值代码只消费已冻结的 region arrays、registry 和 boundary sample。
-- checkpoint 捕获的是一个完整 logical state；不发布半步或半个 gas remap。
-- 客户端只接受当前 region generation 的递增 snapshot sequence；迟到包、移除 tombstone 前的包和其他 dimension 的包不能复活状态。
-- Query API 只允许服务器主线程同步调用，只扫描已加载 owner 的权威 marker/side columns；它不建网格、不加载 chunk、不分配 solver、不唤醒、不 checkpoint、不推进 logical step，也不返回 live domain 引用。
-- Query 的 `regionNetworkGeneration` 标识网络中的区域 incarnation，不是 checkpoint generation 或逐 tick revision。观察者需要新鲜值时必须重新查询，不能把它当作缓存时钟。
-- Minecraft 实体发现、世界坐标 AABB、原版响应速度和本 tick 实际位移留在 Fabric。实际位移由 Mod 跨相邻服务器观测自己冻结，不能用 `Entity#oldPosition` 代替：该字段会被 `snapTo`/`absSnapTo` 与 `ServerLevel#tickNonPassenger`（在 `Entity#tick` 之前调用）重写，而客户端移动包由 `MinecraftServer#processPacketsAndTick` 在 level tick 之前应用；在 server tick 末尾读它只会得到 tick 内的残余运动，会系统性丢失走动玩家的主要位移。首次观测或中断一 tick 的实体没有位移，只参与实体侧响应，不产生 moving-body request。loader-neutral solver 只读地积分 AABB 与派生水平液层及已有 cut-micro geometry 的连续湿体积，再由 moving-body request 携带局部 SI 位置、实际当 tick 位移速度和湿体积并只提交 marker 动量。实际液体冲量可诊断，尚未实现的刚体质量/压力面积分/实体动态占位 cut-cell 不能由 Fabric 猜测补齐。
-- renderer、Jade/HWYLA 适配、status 和 GPU probe 都不能唤醒、加载、checkpoint 或回写区域。
-
-## 主题文档
-
-- mechanics、自由面与碰撞：[`fluid-solver.md`](fluid-solver.md)
-- 材料、质量与液液界面：[`material-state.md`](material-state.md)
-- 密闭气体：[`gas-state.md`](gas-state.md)
-- 化学：[`chemistry-state.md`](chemistry-state.md)
-- 颗粒与沉积：[`granular-state.md`](granular-state.md)
-- 热输运、相变和反应热：[`thermal-state.md`](thermal-state.md)
-- checkpoint：[`region-state.md`](region-state.md)
-- ownership、容器与世界事务：[`world-ownership-and-containers.md`](world-ownership-and-containers.md)
-- 外部只读查询：[`external-api.md`](external-api.md)
+[MmmFabricApi](../../fabric/src/main/java/cc/ecisr/mmm/api/fabric/MmmFabricApi.java) 提供同步单格查询和容器提交完成事件。查询读取已加载区域；事件在物品强制保存且事务日志删除后发布。参数、单位、线程和失败状态见 [外部 API](external-api.md)，界面与绘制入口见 [客户端路由](../maintenance/routing.md#client)。

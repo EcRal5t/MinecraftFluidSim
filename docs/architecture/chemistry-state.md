@@ -1,8 +1,30 @@
 # 守恒化学状态契约
 
+修改化学组分、反应、指示剂或 pH 时读本文。
+
+## 修改入口
+
+| 要改什么 | 代码入口 | 测试选择器 |
+|---|---|---|
+| 组分状态和反应 | [ChemicalParcelStore](../../model/src/main/java/cc/ecisr/mmm/chemistry/ChemicalParcelStore.java)、[ChemicalReactionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/ChemicalReactionStage.java) | `chemistry` |
+| 粒子上的化学数据 | [FlipChemicalParticleState](../../model/src/main/java/cc/ecisr/mmm/fluid/FlipChemicalParticleState.java)、[CarrierMutationCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/CarrierMutationCoordinator.java) | `chemistry,reseeding` |
+| 指示剂操作 | [ChemicalIndicatorItem](../../fabric/src/main/java/cc/ecisr/mmm/item/ChemicalIndicatorItem.java)、[MinecraftIndicatorEditing](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftIndicatorEditing.java) | `chemistry` |
+| 化学定义编码 | [ChemicalRegistryCodec](../../fabric/src/main/java/cc/ecisr/mmm/chemistry/ChemicalRegistryCodec.java) | `region-state` |
+
+执行方式见 [验证指南](../maintenance/validation.md#cpu)。
+
+## 本文内容
+
+- [Registry](#registry)
+- [独立保存的数据](#独立保存的数据)
+- [反应模型](#反应模型)
+- [求解顺序](#求解顺序)
+- [跨层边界](#跨层边界)
+- [功能布局](#功能布局)
+
 ## Registry
 
-化学门默认关闭并依赖材料门。首次启用时，数据包定义被规范化为 world-local registry snapshot；此后该 snapshot 的 stable ID、exact rational 定义、预算和 fingerprint 是世界权威。
+化学功能默认关闭并依赖材料功能。首次启用时，数据包定义被规范化为 world-local registry snapshot；此后该 snapshot 的 stable ID、exact rational 定义、预算和 fingerprint 是世界权威。
 
 当前数据包与 snapshot 不一致只报告 definition mismatch，不重解释已有库存。snapshot 未知、损坏或身份不符时区域和容器状态保留并 LOCKED。
 
@@ -16,18 +38,20 @@
 
 exact rational 只接受整数、有限小数或 `numerator/denominator` 文本。解析前先限制 ID 长度、文本长度、小数 scale 和整数位宽，避免用短文本触发无界 `BigInteger` 工作。registry 校验未知 ID、重复 ID、非正质量、组成/电荷/质量不守恒、无界解离和预算，然后按 stable ID 排序并对 canonical UTF-8 bytes 计算 SHA-256。
 
-当前硬边界包括 256 species、64 phases、512 reactions、每 parcel 16 species、每步 131072 次 reaction evaluation 和每区域 `2e15` quanta。所有边界都在分配或部分提交前检查。
+当前数量上限包括 256 species、64 phases、512 reactions、每 parcel 16 species、每步 131072 次 reaction evaluation 和每区域 `2e15` quanta。这些上限都在分配内存和修改状态前检查。
 
-## 独立真值
+## 独立保存的数据
 
 - marker 的材料质量/体积与 chemical parcel 分开保存。
 - parcel 保存 stable species quanta、组成、净电荷、marker mass residual 和 indicator provenance。
 - 区域保存逐 species 总量、组成/电荷审计、external source、escaped sink 与 residual ledger。
-- `FluidMixture` 只保存机械材料库存；`ChemicalContents` 保存完整化学容器库存。两者不能同时作为同一物品的真值。
+- `FluidMixture` 只保存机械材料库存；`ChemicalContents` 保存完整化学容器库存。两者不能同时作为同一物品的原始数据。
 
 `1 AU = 1,000,000,000 quanta`。species 绝对库存是非负 `long`，加减乘和总账使用 checked arithmetic。
 
-marker 只保存 packed mixture handle 与 indicator bit；handle 指向 `PackedChemicalMixturePool` 中按 runtime species handle 排序的 primitive `(species, amountQuanta)` 列和 raw mass-residual bits。相同 record 可共享，修改走 copy-on-write；marker 不持有 `Map` 或对象链。handle、pool refcount、marker ordinal 和 material/chemical-phase 绑定必须同时有效。
+marker 只保存 packed mixture handle 与 indicator bit；handle 指向 `PackedChemicalMixturePool` 中按 runtime species handle 排序的 primitive `(species, amountQuanta)` 列和 raw mass-residual bits。
+
+相同 record 可共享，修改走 copy-on-write；marker 不持有 `Map` 或对象链。handle、pool refcount、marker ordinal 和 material/chemical-phase 绑定必须同时有效。
 
 质量关系为：
 
@@ -48,7 +72,11 @@ particleMass * cellSize^3 = exact_species_mass_kg + massResidual_kg
 
 dirty cell 是反应调度游标而非库存，但尚未求值的 dirty 集必须随紧邻 immutable backend handoff 完整传递；否则容器/碰撞刚提交的反应机会会在私有候选重建时消失。region HEAD 不以 dirty bit 恢复 species：冷恢复从 committed marker 位置把所有占用格标脏并只重检一次，后续 backend handoff 再携带精确 dirty 集，已经清洁的区域不会每 tick 全量重算。
 
-反应后的格总库存再确定性分配回原 marker。最后一个可接收 marker 得到整数 remainder，避免多次均分造成 quanta 漂移；pool 或 marker budget 不足时该 cell 不暴露部分修改。若求值后的逐 species integer inventory 与输入逐位相同，该组只消费求值预算并清除 dirty 状态，不进入分配、热候选验证或 parcel 覆写，marker 的组成、残差、质量和 indicator 原样保留。当前反应是瞬时同格模型，不应用 Arrhenius 速率、平衡常数或跨格搜索。
+反应后的格总库存再确定性分配回原 marker。最后一个可接收 marker 得到整数 remainder，避免多次均分造成 quanta 漂移；pool 或 marker budget 不足时该 cell 不暴露部分修改。
+
+若求值后的逐 species integer inventory 与输入逐位相同，该组只占用求值预算并清除 dirty 状态，不进入分配、热候选验证或 parcel 覆写，marker 的组成、残差、质量和 indicator 原样保留。
+
+当前反应是瞬时同格模型，不应用 Arrhenius 速率、平衡常数或跨格搜索。
 
 ### Indicator 与 pH
 
@@ -78,4 +106,4 @@ pH 是本项目从局部 `H+`/`OH-` 相对库存派生的 0–14 展示刻度，
 
 ## 功能布局
 
-区域载荷中的 chemistry presence 必须与本次启动的 chemistry 门完全一致。门变化不会向既有 checkpoint 添加或删除化学真值。
+区域载荷中的 chemistry presence 必须与本次启动的 chemistry 配置完全一致。功能配置变化不会向既有 checkpoint 添加或删除化学原始数据。

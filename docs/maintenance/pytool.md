@@ -1,9 +1,11 @@
-# pytool 登记表
+# Python 开发工具
 
-可复用 Python 工具脚本；使用 uv python 环境运行。
+在仓库根目录使用 uv 环境运行。分析性能的代码入口见 [性能路由](routing.md#performance)，Java 静态检查见 [验证指南](validation.md#architecture)。
 
-| 脚本 | 用途 | 运行 |
+| 脚本 | 用途 | 运行方式 |
 |---|---|---|
-| `arch_baseline.py` | 扫描生产 Java 源，输出超过 600/1000 行的类表与模块规模，用于更新 [`architecture-baseline.md`](architecture-baseline.md) | `uv run pytool/arch_baseline.py` |
-| `unused_imports.py` | 报告结构搬移后残留的未使用 import；不依赖编译器，只做正则匹配 | `uv run pytool/unused_imports.py <file.java> [...]` |
-| `jfr_hotspots.py` | 聚合 JFR 执行采样，按方法列出 self/inclusive 命中，或查看指定方法的 caller、callee 与代表性调用栈 | `uv run pytool/jfr_hotspots.py <recording.jfr> [--top N] [--module cc.ecisr.mmm]` |
+| [arch_baseline.py](../../pytool/arch_baseline.py) | 统计当前生产 Java 文件和行数，列出超过 600/1000 行的类 | `uv run pytool/arch_baseline.py` |
+| [unused_imports.py](../../pytool/unused_imports.py) | 用正则检查指定文件中可能未使用的 import | `uv run pytool/unused_imports.py <file.java> [...]` |
+| [jfr_hotspots.py](../../pytool/jfr_hotspots.py) | 汇总 JFR 执行采样，查看方法自身耗时、调用链采样和代表性调用栈 | `uv run pytool/jfr_hotspots.py <recording.jfr> [--top N] [--module cc.ecisr.mmm]` |
+
+`arch_baseline.py` 的输出反映运行时的源码。架构重整完成时的数字保存在 [历史基线](../archive/maintenance/architecture-baseline.md)。`unused_imports.py` 的结果供人工核对，Java 编译仍负责检查类型和依赖。

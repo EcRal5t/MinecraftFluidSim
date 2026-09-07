@@ -1,40 +1,45 @@
-# Matter, Motion & Mechanics 文档索引
+# 文档目录
 
-仓库维护当前架构契约、维护路由、尚未实现的产品路线和一份精选发布历史；探索草案与重复完成报告不作为长期入口。
+接到具体需求时，先用 [项目 README 的需求表](../README.md#接到需求后从这里开始)。下表供按主题查阅；每份专题都在开头列出代码入口和测试。
 
-## 当前架构
+## 当前实现
 
-- [系统组件、真值与 logical-step 数据流](architecture/system-overview.md)
-- [CPU 流体求解器](architecture/fluid-solver.md)
-- [材料与独立质量状态](architecture/material-state.md)
-- [区域 checkpoint](architecture/region-state.md)
-- [世界 ownership 与容器事务](architecture/world-ownership-and-containers.md)
-- [气体库存与拓扑](architecture/gas-state.md)
-- [守恒化学](architecture/chemistry-state.md)
-- [颗粒与沉积](architecture/granular-state.md)
-- [内能、热输运与相变](architecture/thermal-state.md)
-- [外部 Query、committed event 与 typed quantity](architecture/external-api.md)
+| 文档 | 什么时候读 |
+|---|---|
+| [系统总览](architecture/system-overview.md) | 需要了解模块依赖、数据归属和完整计算流程 |
+| [运行时与区域操作](architecture/runtime-and-lifecycle.md) | 修改启动、调度、暂停、区域预算、控制器查询或确认操作 |
+| [流体求解器](architecture/fluid-solver.md) | 修改压力、自由面、粒子传递、碰撞或计算后端 |
+| [材料状态](architecture/material-state.md) | 修改材料注册、质量、混合与液液界面 |
+| [气体状态](architecture/gas-state.md) | 修改气腔扫描、气体库存、状态方程或孔流 |
+| [化学状态](architecture/chemistry-state.md) | 修改组分、反应、指示剂或化学输运 |
+| [颗粒状态](architecture/granular-state.md) | 修改颗粒运动、沉积、孔隙水或固液转移 |
+| [热学状态](architecture/thermal-state.md) | 修改内能、导热、相变或有限热设备 |
+| [区域存档](architecture/region-state.md) | 修改世界能力包、存档格式、提交顺序或恢复 |
+| [世界归属与容器事务](architecture/world-ownership-and-containers.md) | 修改接管/释放世界方块、桶、发射器或事务日志 |
+| [外部 API](architecture/external-api.md) | 修改查询、提交通知、探针或 Jade 适配 |
 
-## 维护与未来
+## 开发与发布
 
-- [代码职责和最小验证](maintenance/routing.md)
-- [下一产品工作](roadmap/product-roadmap.md)
-- [性能与后端评审](roadmap/performance-and-backends.md)
-- [验收和发布](roadmap/acceptance-and-release.md)
-- [项目运行与构建](../README.md)
+- [按需求和故障找代码](maintenance/routing.md)：游戏入口、客户端、物理模块和诊断路径。
+- [验证指南](maintenance/validation.md)：按改动选择测试、静态检查与 GPU 验证。
+- [命令速查](maintenance/commands.md)：游戏内开发、诊断和恢复命令。
+- [Python 工具](maintenance/pytool.md)：源码规模、import 和 JFR 分析。
+- [产品路线](roadmap/product-roadmap.md)：后续功能的顺序和完成条件。
+- [性能与后端规划](roadmap/performance-and-backends.md)：性能指标、范围扩张和生产 GPU 要求。
+- [验收与发布](roadmap/acceptance-and-release.md)：发布前检查与部署。
 
-## 历史档案
+## 历史资料
 
-- [主 Mod 版本历史](progress/version-history.md)
+[版本历史](progress/version-history.md)记录各次发布的变化。[归档目录](archive/README.md)保存旧提案、审查记录和已完成的实施报告。查找当前代码时使用上面的专题。
 
-版本历史可以保留发布时使用的旧名称、格式代号和当时的限制，但不定义当前行为。判断现状时只沿当前 architecture 和代码入口。
+## 维护这些文档
 
-## 更新规则
+新增或调整功能时，更新它对应的专题。代码改名、移动或测试入口变化时，同时修正该专题开头的链接；需求分类变化时再调整项目 README 和维护路由。
 
-1. 已生效的状态边界或算法契约只写入 `architecture/`。
-2. 代码入口或最近验证门变化时更新 `maintenance/routing.md`。
-3. 尚未实现且已经决定要做的工作写入 `roadmap/`；探索性草案留在 issue、任务讨论或 Git 分支，不进入规范文档。
-4. 实现完成后，把仍有约束力的结论并入 architecture，然后从 roadmap 删除该任务。
-5. architecture 不能退化成摘要：应记录维护实现所需的组件职责、权威数据布局、单位/公式、logical-step 顺序、预算、事务状态机和失败语义。
-6. `progress/version-history.md` 只记录发布事实，不承担当前规范、路线或迁移说明。
-7. 本地 `maintenance/next-session-initial-prompt.md` 是可随当前工作面整理的会话交接提示，不替代上述三类长期文档。
+当前算法、数据格式和提交步骤写在 `architecture/`。未来工作写在 `roadmap/`，完成后把仍需维护的设计说明移入对应专题，再删去已完成的计划。发布变化记在版本历史中。
+
+路由页负责告诉读者去哪里，专题负责解释那里如何工作。一个规则在最贴近实现的专题中完整说明，其他入口链接到它。链接应指向真实文件或具体章节，代码路径写全。
+
+写作时先说谁负责什么，再分段说明执行顺序、数据和失败处理。一次操作有多个步骤时用列表；比较入口时用表格。保留便于搜索的类名、状态名和公式，并在首次出现时解释意思。
+
+过时文档原样移入 `archive/`，更新当前入口中的引用。`maintenance/next-session-initial-prompt.md` 由仓库所有者维护，整理文档时保持原样。

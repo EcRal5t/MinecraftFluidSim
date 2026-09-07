@@ -1,6 +1,28 @@
 # 材料状态契约
 
-## 权威真值
+修改材料注册、质量、混合物或液液界面时读本文。
+
+## 修改入口
+
+| 要改什么 | 代码入口 | 测试选择器 |
+|---|---|---|
+| 材料定义与单位 | [FluidMaterialRegistry](../../model/src/main/java/cc/ecisr/mmm/fluid/FluidMaterialRegistry.java)、[BuiltinFluidMaterials](../../solver/src/main/java/cc/ecisr/mmm/fluid/BuiltinFluidMaterials.java)、[SolverUnitScale](../../model/src/main/java/cc/ecisr/mmm/units/SolverUnitScale.java) | `materials` |
+| 插入、提取和容器表示 | [MaterialTransferPlanner](../../solver/src/main/java/cc/ecisr/mmm/fluid/MaterialTransferPlanner.java)、[FluidMixture](../../model/src/main/java/cc/ecisr/mmm/transfer/FluidMixture.java) | `materials,containers` |
+| 材料界面和表面张力 | [MaterialSurfaceGeometry](../../fabric/src/client/java/cc/ecisr/mmm/client/MaterialSurfaceGeometry.java)、[SurfaceTensionWorkspace](../../solver/src/main/java/cc/ecisr/mmm/fluid/SurfaceTensionWorkspace.java) | `materials,surface-tension` |
+| 定义的持久化 | [MaterialRegistryCodec](../../fabric/src/main/java/cc/ecisr/mmm/fluid/MaterialRegistryCodec.java) | `region-state` |
+
+执行方式见 [验证指南](../maintenance/validation.md#cpu)。
+
+## 本文内容
+
+- [权威数据](#权威数据)
+- [Registry 与运行时 handle](#registry-与运行时-handle)
+- [求解器边界](#求解器边界)
+- [表面与展示](#表面与展示)
+- [跨层表示](#跨层表示)
+- [功能配置](#功能配置)
+
+## 权威数据
 
 - 每个 marker 独立保存体积、质量和稳定材料身份。
 - 区域总量与逐材料体积/质量账本必须由 marker 精确和闭合。
@@ -33,7 +55,9 @@ mass_kg   = marker_solver_mass * cellSize^3
 volume_m3 = marker_normalized_volume * cellSize^3
 ```
 
-质量和体积跨 SI 边界时都乘同一个 `cellSize³`，所以密度比值中的尺度严格约去。chemical marker 的闭合式为 `particleMass * cellSize³ = exact_species_mass_kg + massResidual_kg`；溶质增加实际质量而体积不变时，机械密度自然上升，因此盐水下沉来自同一权威质量账本，不需要盐材料特判。pressure face 的 `1/rho` 系数按界面距离加权；不得从 material reference density、客户端颜色或平滑 fraction 反推存量质量。热学 Boussinesq 项是参考态附近的温差浮力近似，与这份组成质量密度正交，不能覆盖它。
+质量和体积跨 SI 边界时都乘同一个 `cellSize³`，所以密度比值中的尺度严格约去。chemical marker 的闭合式为 `particleMass * cellSize³ = exact_species_mass_kg + massResidual_kg`；溶质增加实际质量而体积不变时，机械密度自然上升，因此盐水下沉来自同一权威质量账本，不需要盐材料特判。
+
+pressure face 的 `1/rho` 系数按界面距离加权；不得从 material reference density、客户端颜色或平滑 fraction 反推存量质量。热学 Boussinesq 项是参考态附近的温差浮力近似，与这份组成质量密度正交，不能覆盖它。
 
 同一 miscibility group 的材料共享 phase 和速度，但当前没有分子扩散或每 marker 连续浓度场：marker 仍各自保存一种机械材料库存，局部格聚合给出混合比例。不同材料不在 reseed 中互相吞并，因此未解析扩散不会丢失组分。不可互溶材料也共享一个压力/速度框架，不承诺双速度界面动力学。
 
@@ -55,6 +79,6 @@ volume_m3 = marker_normalized_volume * cellSize^3
 
 抽取先以 double 精确量预检，再按整 marker 与必要尾拆分生成实际 settlement；物品必须能表示实际 volume、每材料 mass 和所有附加化学/热侧列。请求量与实际可表示量不一致时，WAL 记录实际量，不用请求量伪造闭合。
 
-## 功能门
+## 功能配置
 
-材料门在启动时冻结。持久区域的载荷形状必须与当前门完全一致；不一致时保留 checkpoint 并锁定，不自动增删材料状态。
+材料功能在启动时冻结。持久区域的载荷形状必须与当前功能配置完全一致；不一致时保留 checkpoint 并锁定，不自动增删材料状态。

@@ -1,6 +1,19 @@
 # Matter, Motion & Mechanics 产品路线
 
-本文件定义产品要走向哪里、阶段依赖和完成条件。它不重复当前 codec 或公式；已生效的组件、真值和 logical-step 数据流见 [`../architecture/system-overview.md`](../architecture/system-overview.md)，主题细节见 [`../architecture/`](../README.md)，代码与最近验证入口见 [`../maintenance/routing.md`](../maintenance/routing.md)。
+本文记录后续功能、实现顺序和完成条件。当前实现见 [系统总览](../architecture/system-overview.md)，具体需求的代码入口从 [项目 README](../../README.md)选择。
+
+## 按计划找实现
+
+| 要推进的工作 | 先看当前实现 |
+|---|---|
+| 外部 Mod 查询、事件与受控转移 | [外部 API](../architecture/external-api.md)、[容器事务](../architecture/world-ownership-and-containers.md) |
+| 化学热力学、相变与有限热设备 | [热学](../architecture/thermal-state.md)、[化学](../architecture/chemistry-state.md) |
+| 实体双向作用 | [实体输入](../architecture/runtime-and-lifecycle.md#world-inputs)、[流体求解器](../architecture/fluid-solver.md) |
+| 性能与生产 GPU | [性能与后端规划](performance-and-backends.md)、[性能代码](../maintenance/routing.md#performance) |
+| 界面与视觉 | [客户端代码](../maintenance/routing.md#client) |
+| 分区、端口和世界范围扩张 | [区域存档](../architecture/region-state.md)、[世界归属](../architecture/world-ownership-and-containers.md) |
+
+先在下文确认本次功能的完成条件，再沿对应专题进入代码。验收方法见 [验证指南](../maintenance/validation.md)和 [验收与发布](acceptance-and-release.md)。
 
 ## 长期产品目标
 
@@ -16,14 +29,20 @@
 
 ## 当前产品基座
 
-当前生产边界是最多 4 个显式闭壳 controller region，CPU `FluidDomain` 为权威求解器聚合根。边界和控制器已有生存配方；自定义创造栏把快速入门、闭壳方块、探针、actual 空容器、server-resolved source templates、指示剂与固定温度源按产品顺序列出。激活后自动运行并持久保存玩家暂停意图，`/mmm` 不再是正常创建、选择和暂停的前置条件。已经具备：连续体积 PIC/FLIP、可变密度材料、液气/液液界面与润湿、密闭气腔、world ownership、profile-bound 玩家/发射器容器事务、守恒化学、active/deposit 颗粒、总内能、导热、反应热以及固液/气液相变。
+当前当前支持范围是最多 4 个显式闭壳 controller region，CPU `FluidDomain` 为权威求解器聚合根。
+
+边界和控制器已有生存配方；自定义创造栏把快速入门、闭壳方块、探针、actual 空容器、server-resolved source templates、指示剂与固定温度源按产品顺序列出。
+
+激活后自动运行并持久保存玩家暂停意图，`/mmm` 不再是正常创建、选择和暂停的前置条件。
+
+已经具备：连续体积 PIC/FLIP、可变密度材料、液气/液液界面与润湿、密闭气腔、world ownership、profile-bound 玩家/发射器容器事务、守恒化学、active/deposit 颗粒、总内能、导热、反应热以及固液/气液相变。
 
 这一基座的限制也必须如实保留：
 
 - 不可互溶相目前共享局部速度场，不声称解析切向滑移、乳化和液滴破碎。
 - 实体运动已通过 loader-neutral moving-body request 扰动 marker 动量；浸没观察已连续积分 AABB、派生液层和既有 cut-micro geometry，liquid boundary 使用实际当 tick 位姿差而非供下一 tick 使用的原版响应速度。当前 kinematic AABB 近似仍不是移动 cut-cell、压力面积积分或严格双向动量/排水闭合。
 - 固液已支持有界、数据化的压力平衡曲线，气液使用绝对压力和 component 分压；更高压力、更多材料和跨相溶解仍需分别验证物性域。
-- 气体已从 exact inventory/volume/`U` 派生完整 ideal-mixture 声学闭合，固定压力钳制已移除；接触液体的有限 cavity node 已以 `V*beta_s` 集总自由度进入同一 pressure solve，环境与真空保持 Dirichlet。当前仍不解析逐 cell 质量、动量、总能量与声波；空间化必须先建立这些唯一真值，再把逐 cell 非零 pressure compliance 接入同一全马赫方程，不能并存两份库存。
+- 气体已从 exact inventory/volume/`U` 派生完整 ideal-mixture 声学闭合，固定压力钳制已移除；接触液体的有限 cavity node 已以 `V*beta_s` 集总自由度进入同一 pressure solve，环境与真空保持 Dirichlet。当前仍不解析逐 cell 质量、动量、总能量与声波；空间化必须先建立这些唯一原始数据，再把逐 cell 非零 pressure compliance 接入同一全马赫方程，不能并存两份库存。
 - Query API 已冻结同步只读单格观察，并已有只查询闭壳相邻液体的可选 Jade 适配；container durable completion 已有 committed event。尚无 WAILA/HWYLA、直接自由面目标、稳定 transfer API、其他提交类型事件或其他 loader 发现桥。
 - 主 Mod 已有 field probe 的 server-authored 液体/solid/gas 有界观察、controller 的 select/pause/resume/availability console、管理员 empty/vent/release/remove 预览确认流程，以及 creative-only fixed reservoir setpoint。控制器空手激活与持物入口分离，availability pause 不遮断 summary；在 HEAD、registry 和 WAL 仍可证明时，数值暂停区域仍可用私有候选完成只减库存的清理。破坏性动作展示实际移除量和 blocker，以短时同玩家一次性 token 确认，并通过 ACTIVE/REMOVED HEAD、network tombstone 与 quarantine 恢复闭合；这些仍是内部产品界面，不扩展外部 Query/transfer ABI。
 - section 是一个 region 原子 generation 内的存储分片，不具有独立提交、卸载或 ownership 生命周期。
@@ -35,7 +54,7 @@
 
 | 层 | 允许持有 | 禁止行为 |
 |---|---|---|
-| 物理真值 | 体积、逐材料质量、species/电荷、solid SVQ/组成、gas inventory、各载体 `U` | 从温度、颜色、density 或 mesh 反算库存 |
+| 物理原始数据 | 体积、逐材料质量、species/电荷、solid SVQ/组成、gas inventory、各载体 `U` | 从温度、颜色、density 或 mesh 反算库存 |
 | 数值离散 | MAC 速度、压力、PLIC/cut fraction、曲率、LTE grid | 把平滑场变成持久 source/sink |
 | 渲染重建 | palette、外表面、液液界面、法线、颜色 | 客户端修改服务端状态或掩盖输运错误 |
 | 调度/后端 | ACTIVE/REDUCED/SLEEP/UNLOADED、CPU/GPU 选择 | 因降频、休眠或后端切换改变守恒结果 |
@@ -50,11 +69,11 @@
 |---|---|---|---|
 | 1 | 只读观察适配与外部 Mod API | Query API、当前 controller/registry/checkpoint | 外部适配查询不加载、不唤醒、不回写；扩展保持 stable ID/单位/线程/失败语义 |
 | 2 | 原版行为与受控转移 API | 查询 API、现有 WAL | 灭火/湿润/岩浆等逐项守恒，外部 actor 可 crash-safe 收敛 |
-| 3 | 物理完整性增量 | 可观察 fixture | 压力相关固液、双向实体等分别有数据域与守恒门，不互相绑架发布 |
+| 3 | 物理完整性增量 | 可观察 fixture | 压力相关固液、双向实体等分别有数据域与守恒测试，不互相绑架发布 |
 | 4 | section 生命周期与显式端口 | profile、事务与网络 API | 跨 section/region 仍只有完整代次，不依赖永久 chunk ticket |
 | 5 | 有界范围扩张 | 高休眠率、恢复/性能基准 | 天然小水体在硬预算内可接管、释放和异常恢复 |
-| 6 | 生产 GPU 后端 | immutable step input、完整 candidate、CPU 对照与 profile | GPU 超时/设备丢失保留上一完整状态；CPU 可恢复；库存和误差门与后端无关 |
-| 7 | 大尺度世界评审 | 前述全部量化 | 河流/海洋方案有成本模型、持久模型和明确停止门后才可开工 |
+| 6 | 生产 GPU 后端 | immutable step input、完整 candidate、CPU 对照与 profile | GPU 超时/设备丢失保留上一完整状态；CPU 可恢复；库存和误差检查与后端无关 |
+| 7 | 大尺度世界评审 | 前述全部量化 | 河流/海洋方案有成本模型、持久模型和明确适用条件后才可开工 |
 
 阶段编号只表达依赖，不绑定发布版本；各阶段应拆成 routing 可选择的小增量。
 
@@ -84,7 +103,7 @@ Query API 的单位、线程、无加载/唤醒和结构化失败语义已经冻
 - 岩浆/高温方块：用材料、热通量和 reaction/phase 事务表达产物，避免在 world event 中直接删一格水、放一格石头。
 - 红石、生物、寻路：使用稳定查询快照和阈值语义，不给 AI 或 comparator 暴露 live solver 数组。
 
-每项行为都归属一个世界能力、有独立数据资源、本地化失败反馈和最近门；不要求把所有原版互动绑成一次发布。能力集由 datapack 在首次启动时冻结为不可变的世界能力包，不是每个世界的运行时开关。
+每项行为都归属一个世界能力、有独立数据资源、本地化失败反馈和相关测试；不要求把所有原版互动绑成一次发布。能力集由 datapack 在首次启动时冻结为不可变的世界能力包，不是每个世界的运行时开关。
 
 ### 阶段关闭条件
 
@@ -112,13 +131,29 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 ### 有限热容量换热器
 
-固定温度 boundary 仍是无限热浴。纯 core 已有有限设备状态与多端口交换 planner：设备保存 registry-bound material、kg、总 `U` 和 generation，两侧只通过各自总 conductance 交换镜像热通量；该路径不平均温度，也没有物质字段。非空设备集合已经作为 region HEAD 的 manifest-only 真值持久化，provider/object 仅提供稳定 locator，不能从 BlockEntity 或外部 Mod 状态反向结算能量。同一区域的 body/cell candidate 已能在修改前联合验证并一次应用，solver/device 分列 exchange 与 roundoff，下一 HEAD 同代发布。尚缺世界对象 enrollment、真实接触几何和生产 tick 调度；跨多个区域的设备还需要 multi-HEAD 协调，所以目前不把这条内核路径伪装成可放置的生产换热器。完成世界端口后，再扩展多方块网络、流向和其他工业 Mod 端口。
+固定温度 boundary 仍是无限热浴。
+
+纯 core 已有有限设备状态与多端口交换 planner：设备保存 registry-bound material、kg、总 `U` 和 generation，两侧只通过各自总 conductance 交换镜像热通量；该路径不平均温度，也没有物质字段。
+
+非空设备集合已经作为 region HEAD 的 manifest-only 原始数据持久化，provider/object 仅提供稳定 locator，不能从 BlockEntity 或外部 Mod 状态反向结算能量。
+
+同一区域的 body/cell candidate 已能在修改前联合验证并一次应用，solver/device 分列 exchange 与 roundoff，下一 HEAD 同代发布。
+
+尚缺世界对象 enrollment、真实接触几何和生产 tick 调度；跨多个区域的设备还需要 multi-HEAD 协调，所以目前不把这条内核路径伪装成可放置的生产换热器。
+
+完成世界端口后，再扩展多方块网络、流向和其他工业 Mod 端口。
 
 ## 实体双向耦合
 
 目标不是立即引入通用刚体求解器，而是把当前运动扰动逐步变成可审计、严格闭合的双向边界：
 
-当前已有 loader-neutral moving-body request：Fabric 冻结实体 AABB 与跨相邻服务器观测得到的本 tick 实际位移，core 连续积分派生湿体积并把该表面运动写入附近 marker 动量，同时报告实际液体冲量，所以实体运动可扰动自由面。原版更新后的 `deltaMovement` 只参与实体侧响应，不能冒充已经发生的边界位移；`Entity#oldPosition` 也不能代表本 tick 位移，它会被 `snapTo` 与 `ServerLevel#tickNonPassenger` 重写，而客户端移动包在 level tick 之前应用。观察每个游戏 tick 冻结，但只在 pacing 到期且 region 可运动的 logical step 消费一次；跳过、PAUSED 和 thermal-only tick 不改写 liquid marker。它仍是 kinematic AABB 近似，不替代以下压力、占位和严格动量闭合工作。
+当前已有 loader-neutral moving-body request：Fabric 冻结实体 AABB 与跨相邻服务器观测得到的本 tick 实际位移，core 连续积分派生湿体积并把该表面运动写入附近 marker 动量，同时报告实际液体冲量，所以实体运动可扰动自由面。
+
+原版更新后的 `deltaMovement` 只参与实体侧响应，不能冒充已经发生的边界位移；`Entity#oldPosition` 也不能代表本 tick 位移，它会被 `snapTo` 与 `ServerLevel#tickNonPassenger` 重写，而客户端移动包在 level tick 之前应用。
+
+观察每个游戏 tick 冻结，但只在 pacing 到期且 region 可运动的 logical step 使用一次；跳过、PAUSED 和 thermal-only tick 不改写 liquid marker。
+
+它仍是 kinematic AABB 近似，不替代以下压力、占位和严格动量闭合工作。
 
 1. 在实体离散表面采样流体压力，验证静水浮力与姿态无关性。
 2. 将黏性和形状阻力与压力力分开，并给出适用 Reynolds 范围。
@@ -132,22 +167,50 @@ sealed gas component 已独立保存 standard volume、kg、species/residual 和
 
 1. 建立代表性 controller profile，分别量化 solver、世界交互、网络快照和 readback。
 2. 占比未知前不修改 40 ms pacing 与连续 3 步 200 ms 暂停阈值。
-3. 只有 profile 证明 CPU 路径达到明确停止门后，才评审生产 GPU backend；CPU 继续作为规范和恢复后端。
+3. 只有 profile 证明 CPU 路径达到明确适用条件后，才评审生产 GPU backend；CPU 继续作为规范和恢复后端。
 4. 活动成本目标随扰动表面积/活动 section 增长；代表性静态域至少 80% 体积可守恒休眠后才扩大范围。
 
-详细停止门见 [`performance-and-backends.md`](performance-and-backends.md)。
+详细适用条件见 [`performance-and-backends.md`](performance-and-backends.md)。
 
-完整 `FluidDomainState` 交接边界已经提取；motion 使用 `FluidStepRequest` / `FluidStepCandidate`，静水热轴使用 `FluidThermalStepRequest` / `FluidThermalStepCandidate`，CPU 规范实现都只在私有副本上生成候选。同进程 CPU 成功帧 single-use 转移已求值 aggregate，只有 checkpoint/replay/diagnostic 才物化完整 immutable candidate state；这与未来 GPU 的 device-resident 常规步、按需完整 readback 是同一所有权语义。profile 决定何时实现和启用生产 GPU backend；世界读写、ownership、actor 和 HEAD 发布留在 server thread；超时保留上一完整 state，不能展示或持久化半步。
+完整 `FluidDomainState` 交接边界已经提取；motion 使用 `FluidStepRequest` / `FluidStepCandidate`，静水热轴使用 `FluidThermalStepRequest` / `FluidThermalStepCandidate`，CPU 规范实现都只在私有副本上生成候选。
 
-当前自动进入门有意分开：默认 `8×8×8` controller 的 20 个 live steps 使用 40 ms 硬预算；空场景最大装量 `/mmm demo` 的 `24×16×24` 完整能力状态另跑 20 步，并要求不形成三步连续超过 200 ms。门内保留完整 phase-operation 预算、exact batch 规划、gas topology/available-volume remap、绝热体积功和总 `U` 审计；CPU 只移除重复 state 往返、等价 exact-sum 分配和同一 pressure projection 内的重复固定矩阵装配，不降低求解精度。该门已经自动闭合，但 9,216-cell CPU 稳态仍远高于 20 Hz 目标，只证明 wall-time guard 不再把合法大域锁死，不构成 full profile 或生产 GPU 的启用许可。
+同进程 CPU 成功帧 single-use 转移已求值 aggregate，只有 checkpoint/replay/diagnostic 才生成完整不可变候选状态；这与未来 GPU 的 device-resident 常规步、按需完整 readback 是同一所有权语义。
 
-重新接入 full profile 或 backend adoption 前分开的自动门中，正式半满 fixture 的 phase-on logical step 硬预算门已经通过，并在 capture/restore 后保留 gas、总 `U` 和待下一次 projection 消费的 phase volume。纯机械门关闭 phase，但仍绑定正式 thermal/gas/phase registry 并每步经过 backend capture/restore：环境气体按既有半满几何初始化的平面自由面连续通过 500 步；先初始化空腔气体再注液形成的压缩气体场景连续通过 1000 步。两者的动能、质心、gas lineage、总 `U`、绝对 PCG 残差和逐阶段体力-pressure 功均闭合；phase-on 长跑产生的局部沸腾温差与热浮力属于真实非平衡热学，不能作为静水机械自激证据。
+profile 决定何时实现和启用生产 GPU backend；世界读写、ownership、actor 和 HEAD 发布留在 server thread；超时保留上一完整 state，不能展示或持久化半步。
 
-无实体停止门已经关闭。除平面半满平衡外，生产注液使用的非平面双 source 轨迹也在隔离 gas 后连续 1000 步衰减，并保持 exact 体积和质量；pressure PLIC 只由守恒 marker footprint 建立，逐格漂移/过容量不能再由 PIC/展示平滑场制造目标散度。同一双 source 轨迹现在还以正式 thermal/gas/phase 定义从空闭域开始：`64 m³std` 环境库存只在初始化建立，16/14 BV 注液把 headspace 精确压到 `48/34 m³`，1040 个 backend candidate/capture/restore 后 component、source/sink 与总 `U` 仍闭合，逐节点压力由保留库存、当前容量和温度的 EoS 给出。thermal-off 的生产恢复路径还覆盖 `34 m³std` 密闭库存经 `empty` 扩容到 `64 m³`、再从边界注入 16 BV 的负压起点；只剩部分充液格的有限气泡保留显式 owner，200 个 backend candidate/capture/restore 后库存、source/sink 和 `48 m³` 总容量闭合。
+当前自动验收测试有意分开：默认 `8×8×8` controller 的 20 个 live steps 使用 40 ms 硬预算；空场景最大装量 `/mmm demo` 的 `24×16×24` 完整能力状态另跑 20 步，并要求不形成三步连续超过 200 ms。
 
-相同平面半满状态加入零速度、玩家尺寸的 kinematic boundary 后连续 500 个 backend candidate 也不放大动能，candidate 回报的 liquid impulse 与 held-body 外部约束反作用严格相反；同一夹具另要求以走动速度移动的玩家尺寸 boundary 产生可观察液体响应（峰值动能不低于其附加质量尺度的千分之一），并在停止后保持在注入峰值的有界分数内、不再放大；这条下界门关闭了“moving-body 输入被静默置零”这类接线回归——只约束上界的门无法发现它。该门还按与生产完全相同的顺序（capture → 冻结 body → 完整 candidate → restore）计时，预热后逐步不超过 40 ms。当前求解器还没有黏性阶段，G2P 只施加解析能量可接受约束而不以固定 PIC 比例冒充本构黏性；相干晃动可长期保留，因此该门不宣称注入能量会在指定时限内完全耗散。
+测试中保留完整 phase-operation 预算、exact batch 规划、gas topology/available-volume remap、绝热体积功和总 `U` 审计；CPU 只移除重复 state 往返、等价 exact-sum 分配和同一 pressure projection 内的重复固定矩阵装配，不降低求解精度。
 
-lifecycle 门固定 PAUSED、pacing skip 和 due tick 的 liquid-input exactly-once 时序，并固定生产 motion step 只经完整 candidate 原子接受。动态玩家门按 Minecraft 的“本 tick 位移→重力/空气阻力→Mod 响应”顺序运行 2000 game ticks，并每 4 tick 经过一次完整生产 backend capture/restore；连续 AABB 浸没与实际位姿速度使玩家尾段振幅降至微米级，液体瞬态动能回落到静止边界门内。这关闭了离散湿点和反号边界速度造成的正反馈，但不冒充真实玩家侧动量闭合：下一停止门仍须引入实体质量真值和 pressure/drag 分列，在同一事务中验证 liquid/entity 等大反向冲量与实体占位排水。该门完成前不能用 pacing fallback、速度阻尼、材料分支或额外 warmup 代替通过。
+该门已经自动闭合，但 9,216-cell CPU 稳态仍远高于 20 Hz 目标，只证明 wall-time guard 不再把合法大域锁死，不构成 full profile 或生产 GPU 的启用许可。
+
+重新接入 full profile 或 backend adoption 前分开的自动门中，正式半满 fixture 的 phase-on logical step 硬预算检查已经通过，并在 capture/restore 后保留 gas、总 `U` 和待下一次 projection 结算的 phase volume。
+
+纯机械门关闭 phase，但仍绑定正式 thermal/gas/phase registry 并每步经过 backend capture/restore：环境气体按既有半满几何初始化的平面自由面连续通过 500 步；先初始化空腔气体再注液形成的压缩气体场景连续通过 1000 步。
+
+两者的动能、质心、gas lineage、总 `U`、绝对 PCG 残差和逐阶段体力-pressure 功均闭合；phase-on 长跑产生的局部沸腾温差与热浮力属于真实非平衡热学，不能作为静水机械自激证据。
+
+无实体适用条件已经关闭。
+
+除平面半满平衡外，生产注液使用的非平面双 source 轨迹也在隔离 gas 后连续 1000 步衰减，并保持 exact 体积和质量；pressure PLIC 只由守恒 marker footprint 建立，逐格漂移/过容量不能再由 PIC/展示平滑场制造目标散度。
+
+同一双 source 轨迹现在还以正式 thermal/gas/phase 定义从空闭域开始：`64 m³std` 环境库存只在初始化建立，16/14 BV 注液把 headspace 精确压到 `48/34 m³`，1040 个 backend candidate/capture/restore 后 component、source/sink 与总 `U` 仍闭合，逐节点压力由保留库存、当前容量和温度的 EoS 给出。
+
+thermal-off 的生产恢复路径还覆盖 `34 m³std` 密闭库存经 `empty` 扩容到 `64 m³`、再从边界注入 16 BV 的负压起点；只剩部分充液格的有限气泡保留显式 owner，200 个 backend candidate/capture/restore 后库存、source/sink 和 `48 m³` 总容量闭合。
+
+相同平面半满状态加入零速度、玩家尺寸的 kinematic boundary 后连续 500 个 backend candidate 也不放大动能，candidate 回报的 liquid impulse 与 held-body 外部约束反作用严格相反；同一夹具另要求以走动速度移动的玩家尺寸 boundary 产生可观察液体响应（峰值动能不低于其附加质量尺度的千分之一），并在停止后保持在注入峰值的有界分数内、不再放大；这条下界门关闭了“moving-body 输入被静默置零”这类组装回归——只约束上界的门无法发现它。
+
+该门还按与生产完全相同的顺序（capture → 冻结 body → 完整 candidate → restore）计时，预热后逐步不超过 40 ms。
+
+当前求解器还没有黏性阶段，G2P 只施加解析能量可接受约束而不以固定 PIC 比例冒充本构黏性；相干晃动可长期保留，因此该门不宣称注入能量会在指定时限内完全耗散。
+
+lifecycle 门固定 PAUSED、pacing skip 和 due tick 的 liquid-input exactly-once 时序，并固定生产 motion step 只经完整 candidate 原子接受。
+
+动态玩家门按 Minecraft 的“本 tick 位移→重力/空气阻力→Mod 响应”顺序运行 2000 game ticks，并每 4 tick 经过一次完整生产 backend capture/restore；连续 AABB 浸没与实际位姿速度使玩家尾段振幅降至微米级，液体瞬态动能回落到静止边界测试中。
+
+这关闭了离散湿点和反号边界速度造成的正反馈，但不冒充真实玩家侧动量闭合：下一适用条件仍须引入实体质量原始数据和 pressure/drag 分列，在同一事务中验证 liquid/entity 等大反向冲量与实体占位排水。
+
+该门完成前不能用 pacing fallback、速度阻尼、材料分支或额外 warmup 代替通过。
 
 若阶段性能不达标，依次采用：缩小 active neighborhood、降低更新频率、增加守恒休眠/宏观 node、限制产品范围，最后才降低空间分辨率。不得先放松 ledger 或使用材料特判跳过昂贵物理。
 
@@ -157,7 +220,7 @@ lifecycle 门固定 PAUSED、pacing skip 和 due tick 的 liquid-input exactly-o
 - 分开评估 mesh 拓扑缺陷、液液物理锐化和逐顶点法线平滑。
 - 不得用 renderer 增厚、强制找平或隐藏三角形掩盖 marker、相输运或 snapshot 问题。
 
-外表面与液液内部界面必须分别重建；不可互溶 pair 的共享面只生成一次并有稳定归属/法向。未来液液锐化属于物理输运，逐顶点法线属于展示，两者需要不同 fixture 和开关。颜色、指示剂与温度映射只读，不成为混合比例或能量真值。
+外表面与液液内部界面必须分别重建；不可互溶 pair 的共享面只生成一次并有稳定归属/法向。未来液液锐化属于物理输运，逐顶点法线属于展示，两者需要不同 fixture 和开关。颜色、指示剂与温度映射只读，不成为混合比例或能量原始数据。
 
 任何正式 gameplay 方块/item/API 入口都需同时提供模型/贴图、取得方式或配方、创造标签、`zh_cn`/`en_us`、tooltip、失败反馈及必要声音/粒子；缺失资源意味着功能仍是开发入口。
 
@@ -199,6 +262,6 @@ lifecycle 门固定 PAUSED、pacing skip 和 due tick 的 liquid-input exactly-o
 
 ## 验证与文档关闭规则
 
-日常小增量只跑 [`../maintenance/routing.md`](../maintenance/routing.md) 指定的最近门；产品阶段关闭或发布才按 [`acceptance-and-release.md`](acceptance-and-release.md) 汇总受影响层。自动门不能观察的视觉或真实 world 行为，才请求一次单场景实机验证。
+日常小增量只跑 [`../maintenance/routing.md`](../maintenance/routing.md) 指定的相关测试；产品阶段关闭或发布才按 [`acceptance-and-release.md`](acceptance-and-release.md) 汇总受影响层。自动门不能观察的视觉或真实 world 行为，才请求一次单场景实机验证。
 
-阶段实现后，把仍有约束力的数据结构、公式、提交顺序、预算和失败语义移入对应 architecture；roadmap 只保留尚未完成的目标、依赖与停止门。历史发布事实进入 [`../progress/version-history.md`](../progress/version-history.md)，不让历史叙述重新成为当前规范。
+阶段实现后，把仍有约束力的数据结构、公式、提交顺序、预算和失败语义移入对应 architecture；roadmap 只保留尚未完成的目标、依赖与适用条件。历史发布事实进入 [`../progress/version-history.md`](../progress/version-history.md)，不让历史叙述重新成为当前规范。

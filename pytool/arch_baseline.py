@@ -5,7 +5,7 @@ Scans production Java sources (api, model, solver, application, core, Fabric and
   1. a markdown table of every production class above the warn threshold (600 lines);
   2. the production class count and total line count per module.
 
-The output feeds docs/maintenance/architecture-baseline.md. It only reads files; run from the
+Current usage is documented in docs/maintenance/pytool.md. It only reads files; run from the
 repository root:
 
     uv run pytool/arch_baseline.py

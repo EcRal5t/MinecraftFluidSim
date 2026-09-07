@@ -1,38 +1,90 @@
 # CPU 流体求解器契约
 
-`FluidDomain` 是唯一活动物理聚合根，CPU 结果是规范真值。Minecraft 编排、世界方块、网络、持久化和 GPU probe 不进入数值核心。
+修改压力、自由面、粒子运动、碰撞或后端状态交接时读本文。
+
+## 修改入口
+
+| 要改什么 | 代码入口 | 测试选择器 |
+|---|---|---|
+| 计算顺序与状态捕获 | [FluidDomainStepCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainStepCoordinator.java)、[MechanicalStepPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStepPipeline.java)、[FluidDomainStateMapper](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainStateMapper.java) | `lifecycle` |
+| 压力和自由面 | [PressureProjectionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureProjectionStage.java)、[PressureProjectionWorkspace](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureProjectionWorkspace.java)、[PressureFaceCoupling](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureFaceCoupling.java) | `free-surface,gas-liquid` |
+| 速度传递与平流 | [FlipTransferScheme](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipTransferScheme.java)、[GridToParticleStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GridToParticleStage.java)、[ParticleAdvectionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/ParticleAdvectionStage.java) | `free-surface` |
+| 局部形状碰撞 | [FlipCutCellGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipCutCellGeometry.java)、[FlipParticleCollision](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipParticleCollision.java) | `cut-cell` |
+| 粒子拆分和合并 | [FlipParticleReseeder](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipParticleReseeder.java)、[CarrierMutationCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/CarrierMutationCoordinator.java) | `reseeding` |
+| 后端结果提交 | [FluidSolverBackend](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidSolverBackend.java)、[RegionApplicationService](../../application/src/main/java/cc/ecisr/mmm/application/RegionApplicationService.java)、[FluidRegionRepository](../../fabric/src/main/java/cc/ecisr/mmm/simulation/FluidRegionRepository.java) | `lifecycle` |
+
+执行方式见 [验证指南](../maintenance/validation.md#cpu)。
+
+## 本文内容
+
+- [状态分层](#状态分层)
+- [网格与 marker](#网格与-marker)
+- [Logical step](#logical-step)
+- [自由面与压力](#自由面与压力)
+- [固体与碰撞](#固体与碰撞)
+- [Reseed 与传输不变量](#reseed-与传输不变量)
+- [客户端重建边界](#客户端重建边界)
+- [调度](#调度)
+- [数值原则](#数值原则)
+
+`FluidDomain` 保存运行中的物理状态，CPU 结果作为计算基准。世界读写、网络与存档由外层模块负责。
 
 ## 状态分层
 
-- **物理真值**：marker 体积、材料质量、化学 parcel、固体 SVQ/质量/组成、气体库存和各载体内能。
-- **数值离散**：MAC 速度/压力、守恒 marker footprint 压力相、平滑 volume、PLIC、cut-cell、曲率和目标散度。
-- **渲染重建**：客户端 density、界面、颜色、颗粒 sample 和温度量化。
-- **调度状态**：ACTIVE、REDUCED、休眠、PAUSED、UNLOADED。
+| 数据 | 内容 | 用途 |
+|---|---|---|
+| 物理原始数据 | 粒子体积与材料质量、化学组分、固体数量与组成、气体库存和各载体内能 | 计算库存与收支 |
+| 数值工作区 | MAC 速度与压力、压力相、PLIC、局部碰撞几何、曲率和目标散度 | 完成本次物理计算 |
+| 展示数据 | 客户端密度、界面、颜色、颗粒样本和量化温度 | 生成画面 |
+| 调度状态 | 运行、降频、休眠、暂停和卸载 | 决定计算时间与内存驻留 |
 
-后三层不能创建、删除、缩放或修复第一层库存。
+库存变化由物理原始数据决定，数值工作区和展示数据按需重建。
 
-`FluidDomain` 仍是唯一 live 对象和唯一 public aggregate surface，但实现不再集中在一个四千行文件。package-private 的 `FluidDomainStorage`、`Contracts`、`MechanicalFields`、`StepCoordinator`、`InventoryTransactions`、`CollisionState`、`Capabilities` 与 `GasAndGranular` 按职责形成同一对象的实现分区；它们不是可独立构造的 owner，也不复制数组、generation 或 commit point。新增行为应落到拥有该不变量的分区或既有 stage，不得把无关 convenience method 重新堆回 public leaf。
+### 实现职责
 
-力学子步由 `MechanicalStepPipeline` 与各专职 stage 组合。stage 不接收或保存 `FluidDomain`：稳定的 SoA/workspace 引用在构造时显式注入，可能随 lifecycle 重新绑定的状态通过各 stage 自己的窄 `Access` 契约取得。不同 stage 不能借 aggregate 任意读写彼此 scratch；pressure anchor/reference/result 等跨阶段值只能走声明过的写回缝。
+`FluidDomain` 的实现按职责分布在包内父类中，共用同一对象和数组：
 
-非力学轴由 `ThermochemistryPipeline`、`GranularTransitionStage` 与 `ParticleReseedStage` 组合。`ThermochemistryPipeline` 是传导、液相反应、颗粒析出/溶解、凝聚相变和气液相变的唯一生产顺序源；`ThermochemistryStageAssembly` 只接线，各 stage 只持有明确 workspace/capability seam。固液与气液 stage 共享 `PhaseChangeStageSupport` 的 exact composition、carrier removal、pending volume 与受控 marker mutation 操作，但不共享可任意调用的 aggregate 引用。`GasPhaseInterfaceResolver` 只解析一个 liquid cell 邻接的 distinct sealed owners 和它们的饱和分压失衡；extent 搜索及 commit 仍唯一属于 `GasLiquidPhaseChangeStage`。
+- `FluidDomainStorage`：存储。
+- `FluidDomainContracts`：状态检查。
+- `FluidDomainMechanicalFields`：力学工作区。
+- `FluidDomainStepCoordinator`：计算顺序。
+- `FluidDomainInventoryTransactions`：库存事务。
+- `FluidDomainCollisionState`：碰撞状态。
+- `FluidDomainCapabilities`：功能配置。
+- `FluidDomainGasAndGranular`：气体与颗粒接入。
 
-thermal runtime 直接使用 `ThermalDomainState`。`FluidThermalBinding` 只拥有 fluid carrier snapshot、restore、reseed 与 gas-compliance 的类型映射；它不保存库存，也不提供第二套 thermal mutator。capture/restore 继续由 `FluidDomainStateMapper` 汇总，所以删除旧 thermal facade 不改变 candidate、region HEAD 或账本契约。
+新增行为放入负责该数据的实现类或计算阶段。`FluidDomainStateMapper` 统一装配捕获和恢复过程。
 
-### 后端候选边界
+`MechanicalStepPipeline` 组织力学阶段。构造时向各阶段注入所需数组和工作区，生命周期中会重新绑定的数据经该阶段的 `Access` 接口取得。跨阶段的压力参考值和结果通过明确的写回接口传递。
 
-完整 backend handoff 除库存真值外还携带仅供紧邻候选继续的冻结输入与有界调度进度：world thermal face field 只属于本次输入，granular dirty/quiet/rotation 只属于局部工作游标；两者都不能反向恢复库存，也不进入 region HEAD。省略它们会分别丢失真实边界通量，或使每 tick 私有重建永远达不到沉积休眠。
+`ThermochemistryPipeline` 按传导、液相反应、颗粒反应、固液相变和气液相变的顺序执行。`ThermochemistryStageAssembly` 负责注入依赖，后续沉积和粒子拆并分别由 `GranularTransitionStage`、`ParticleReseedStage` 执行。
 
-`FluidDomainState` 捕获恰好一种 liquid carrier 布局（pure/material/chemical）及其 registry、颗粒、气体、热学、相变 pending work、求解配置和硬预算；还显式携带只服务本次私有候选的 chemistry/granular 调度列、world-derived thermal face field 与最近一次真实 mechanical pressure projection。后三类不是库存：不进入 region checkpoint，也绝不用于反向恢复 carrier、gas 或 `U`。pressure 之外的平滑 density、mesh 与 Minecraft 对象不在其中；capture/restore 的装配顺序由 `FluidDomainStateMapper` 集中维护。运行中的 hydrostatic thermal checkpoint 冷恢复后先唤醒一次 motion，以重建没有持久化的真实 pressure projection，再允许 thermal-only 相平衡消费它。`FluidStepRequest` 另外携带有硬上限的 moving-body 输入；后端先在私有 state 上提交这些 marker 动量，再执行同一 logical step。其 pending-phase settlement selector 只允许空 moving-body、关闭 phase 与关闭审计的组合，并在同一 backend 内选择 mechanics-only pipeline；它不是 host 对 capability 的临时改写。`FluidSolverBackend.evaluate(FluidStepRequest)` 必须返回 base generation 的紧邻完整后继，并随 candidate 回报该批输入实际写入液体的合计体积和冲量。
+固液与气液相变共用 `PhaseChangeStageSupport` 的组成、载体移除、待结算体积和粒子修改操作。`GasPhaseInterfaceResolver` 查找液体单元相邻的密闭气腔，并按饱和分压失衡排序；`GasLiquidPhaseChangeStage` 决定实际反应量并提交。
 
-hydrostatic sleep 期间的非运动轴使用 `FluidThermalStepRequest` / `FluidThermalStepCandidate` 和同一个 backend id/generation/layout adoption 门。CPU backend 也必须先恢复私有 aggregate，再顺序执行 conduction、reaction 与 phase；任一后序拒答都会丢弃整个私有 candidate，不能在 live domain 留下已提交的前序 stage。成功的 CPU candidate 直接 single-use 转移这份已经求值的私有 aggregate，避免正常帧再做 candidate capture→restore；只有 checkpoint、重播和诊断需要 immutable state 时才在转移前按需物化。转移后 `state()` 必须拒绝，因为 aggregate 已成为可变 live owner，不能生成伪装成该历史 generation 的迟到快照。其他进程或 GPU backend 可以直接提供 eager immutable state，但必须满足同一完整语义。`FluidDomainState.Layout` 固定网格/config/预算、sealed boundary、carrier kind、全部 registry/capability identity 与 thermal budget；后端不得借一次合法 step 替换这些定义。`RegionApplicationService` 在求值后校验，`RegionRepository` 在 atomic adopt 前按 live layout 重验。accepted outcome 明确携带本步实际执行的 transport、chemistry、granular reaction 与 condensed/gas phase 诊断；motion `StepStats` 另携带 granular transition 诊断。调度器不得从 restore 后的默认 diagnostics 读取本步活动。当前 `CpuFluidSolverBackend` 是规范实现，GPU probe 尚不满足这份完整状态契约，不能作为生产后端注册。
+热学状态由 `ThermalDomainState` 保存。`FluidThermalBinding` 负责流体与热学之间的快照、恢复、粒子拆并和气体压缩响应类型映射。
 
-`FluidStepRequest.mechanicalAuditEnabled` 是只读诊断选择器。启用时，CPU candidate 的 `StepStats` 记录 P2G、颗粒/多孔耦合、重力、热浮力、表面张力、固定边界、pressure projection、G2P、碰撞、载体库存转移和 reseed 各阶段的动能变化，并同时报告初末重力势能、热学库存机械功以及逐阶段 telescoping closure。该审计不进入 `FluidDomainState`、HEAD 或任何库存，也不改变正常未启用请求的物理结果。
+### 后端候选接口
+
+`FluidDomainState` 包含一种液体载体布局（pure/material/chemical），以及对应注册表、颗粒、气体、热学、待结算相变功、求解配置和预算。
+
+交给下一次计算的输入还包含三类临时数据：化学与颗粒调度进度、世界热交换面、最近一次真实压力投影。它们随计算状态交接。区域 checkpoint 保存的字段另有定义，见 [区域存档](region-state.md)。丢失热交换面会漏掉实际热通量；反复重置颗粒调度进度会使沉积永远无法休眠。
+
+静水热区域从存档恢复后，先唤醒一次力学计算，重建压力投影，再允许单独热计算使用它判断相平衡。
+
+`FluidStepRequest` 还可携带有数量上限的实体运动输入。后端在私有状态上施加粒子冲量，再执行完整计算步，结果报告实际作用于液体的体积和冲量。用于结算旧相变功的请求要求实体输入为空、相变和机械诊断审计关闭，由同一后端选择仅含力学的流程。
+
+力学结果使用 `FluidStepCandidate`，静水热计算使用 `FluidThermalStepCandidate`。两者都返回原代次的紧邻后继，并接受后端标识、代次和完整布局检查。`FluidDomainState.Layout` 固定网格、配置、预算、外壳、载体种类、注册表、功能身份和热学预算。
+
+CPU 在私有对象上顺序执行计算，任一阶段失败就丢弃整份候选，保留当前区域状态。成功后可直接交接这个对象一次。需要存档或诊断快照时，提交前调用 `state()` 生成不可变状态；提交后该对象已成为活动区域，历史候选的 `state()` 会拒绝调用。完整提交过程见 [运行时与区域操作](runtime-and-lifecycle.md#candidate)。
+
+成功结果携带本步输运、化学、颗粒反应和相变诊断。力学 `StepStats` 另含颗粒沉积与唤醒诊断。调度器据本步结果判断活动状态。
+
+`FluidStepRequest.mechanicalAuditEnabled` 控制可选机械诊断。启用后，`StepStats` 记录速度传递、颗粒与多孔耦合、重力、浮力、张力、固定约束、压力、碰撞、库存转移和粒子拆并各阶段的动能变化，并报告初末重力势能、热学机械功与各项收支的合计误差。该开关增加诊断记录，物理计算和存档库存保持相同规则。
 
 ## 网格与 marker
 
 - 默认 cell size 为 0.5 m；每个 Minecraft block 对应 2×2×2 cells。
-- 每个 marker 的 raw float `particleVolume` 是液体体积真值，物理总量是这些二进制有理数的精确和；逐格 marker sum 只由该真值正向汇总。顺序相关的 float/double reduction 只能作带解析舍入界的诊断，不能替代 exact ledger。
+- 每个 marker 的 raw float `particleVolume` 是液体体积原始数据，物理总量是这些二进制有理数的精确和；逐格 marker sum 只由该原始数据正向汇总。顺序相关的 float/double reduction 只能作带解析舍入界的诊断，不能替代 exact ledger。
 - `volume[]` 是 PIC 平滑、展示和既有表面几何的派生场，不参与库存或 pressure phase 结算；pressure 使用独立的守恒 marker footprint。
 - P2G/G2P 使用共享的 valid face；均匀密度时 face 分子/分母按 marker 体积散射，变密度时按 marker 质量散射，并在归一化前保留同一份 P2G face weight 供动能度量。MAC 空气外推从开放压力面播种，G2P 不采未定义空气零值。三轴 face splat 直接写入固定 SoA，不为每个 marker/axis 创建 callback；上一 logical step 末已完整发布且 `gridDirty == false` 的派生网格可供下一步首个 substep 直接使用，particle advection 与任何 carrier edit 都会重新置 dirty，后续 substep 不能跳过重建。
 - G2P 不使用固定 FLIP/PIC 比例。对全体 marker 写成 `v(alpha) = v_pic + alpha * (v_old - v_p2g)`，解析选择 `[0,1]` 内不超过 `max(E_pic, E_projected_grid)` 的最大 `alpha`；纯 FLIP 能量可接受时严格取 `1`，否则才退到能量可行边界。这是传递算子的全局能量约束，不是逐粒子速度钳制，也不冒充黏性。registry 已保存材料黏度，但当前连续液体动量方程还没有黏性扩散 stage。
@@ -59,14 +111,14 @@ marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新�
 
 1. 读取当前 geometry、cut-cell、carrier occupancy 和边界条件。
 2. 体积/质量加权 P2G，施加重力、热浮力、气压、颗粒和实体的派生力。
-3. 构造物理目标散度并求解 pressure projection；该解是本步对外 pressure/机械功真值。
+3. 构造物理目标散度并求解 pressure projection；该解是本步对外 pressure/机械功原始数据。
 4. 以投影后网格动能约束 G2P 的最大 FLIP 增量；marker 位置沿与 MAC 离散散度一致的二阶 `H(div)` 场以 RK4 推进，再进入 CCD；partial cut-face 暂沿用 cut-cell 插值与 CCD。
 5. 在传导前冻结颗粒反应 dirty cell，随后依次执行有限体积传导、液相反应、颗粒析出/溶解、凝聚相变和气液相变；两类相变共享同一操作预算。
 6. 执行 active/deposit compaction、沉积与局部唤醒。
 7. 经 `CarrierMutationCoordinator` 执行 reseed，同时搬运 chemistry/thermal side column。
 8. 只有整个私有 candidate 成功后才替换诊断并发布完整后继。
 
-相变产生的 pending volume/work 由下一次真实 projection 按该次绝对压力 exactly-once 消费，因此 pressure step 是唯一机械功提交点。相变提交已经改变 marker 几何，pending volume 不再重复写入目标散度。
+相变产生的 pending volume/work 由下一次真实 projection 按该次绝对压力 结算一次，因此 pressure step 是唯一机械功提交点。相变提交已经改变 marker 几何，pending volume 不再重复写入目标散度。
 
 自由面平衡夹具必须区分两种初态：液体几何先建立、随后按剩余空间初始化环境气体，表示无外部做功的半满平衡态；气体先按空腔初始化、随后向密闭域注液，则是压缩气体的 external-source 操作，必须保留相应气体内能和压力功，不能拿前一种夹具的环境态覆盖或归零。
 
@@ -94,7 +146,11 @@ div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 
 ### 液体与可压缩气体的能力边界
 
-当前空间动量网格仍只承载凝聚相；`AirNetwork` 保存密闭气体的组分、质量与 `U`。开放环境和真空仍是液面 Dirichlet pressure，接触液体的有限 sealed node 则以一项集总 pressure unknown 与液体联合求解：无热状态使用 `V/p_abs`，热状态使用 `V*beta_s = V/(gamma*p_abs)` 作为体积 compliance。该 unknown 只是当次 projection scratch；下一次 topology refresh 仍从唯一 inventory/volume/`U` 计算非线性 EoS 与绝热功，不保存或反算第二份气体库存。它消除了把有限气腔整步冻结成 pressure boundary 的显式滞后，但仍不解析腔体内部逐 cell/face 动量、声波或混合层。
+当前空间动量网格仍只承载凝聚相；`AirNetwork` 保存密闭气体的组分、质量与 `U`。开放环境和真空仍是液面 Dirichlet pressure，接触液体的有限 sealed node 则以一项集总 pressure unknown 与液体联合求解：无热状态使用 `V/p_abs`，热状态使用 `V*beta_s = V/(gamma*p_abs)` 作为体积 compliance。
+
+该 unknown 只是当次 projection scratch；下一次 topology refresh 仍从唯一 inventory/volume/`U` 计算非线性 EoS 与绝热功，不保存或反算第二份气体库存。
+
+它消除了把有限气腔整步冻结成 pressure boundary 的显式滞后，但仍不解析腔体内部逐 cell/face 动量、声波或混合层。
 
 液气 face 的有向跳跃约定为 `J = p_liquid(interface) - p_gas(interface) = sigma*kappa`。若两侧 center 到界面的距离（以 cell width 为单位）为 `d_l,d_g`，同一 face mobility 与速度修正为：
 
@@ -103,7 +159,9 @@ m_f = rho_ref / (rho_l*d_l + rho_g*d_g)
 u[n+1] = u* - dt/(rho_ref*h) * m_f * (p_g - p_l + J)
 ```
 
-当前 node 没有空间 gas inertia segment，因此严格取 `d_g = 0`，恰好退化为既有 one-sided ghost-fluid 消元；未来两侧都有 pressure unknown 时使用同一 series mass resistance，而不是按密度比切算法。一个 face 向 liquid/gas 两行加入相同对角与相反 off-diagonal，`J` 以等量反号进入 RHS，所以矩阵保持对称，静态 `p_l-p_g=J` 不产生冲量。集总 node 行另加 `rho_ref*V*beta_s/(dt^2*h^3)` 储存对角；真空没有 continuum unknown。
+当前 node 没有空间 gas inertia segment，因此严格取 `d_g = 0`，恰好退化为既有 one-sided ghost-fluid 消元；未来两侧都有 pressure unknown 时使用同一 series mass resistance，而不是按密度比切算法。
+
+一个 face 向 liquid/gas 两行加入相同对角与相反 off-diagonal，`J` 以等量反号进入 RHS，所以矩阵保持对称，静态 `p_l-p_g=J` 不产生冲量。集总 node 行另加 `rho_ref*V*beta_s/(dt^2*h^3)` 储存对角；真空没有 continuum unknown。
 
 统一气液空间算法复用同一守恒 P2G/G2P、`H(div)` 重建、平流和碰撞算子；相别差异只进入本构闭合。对冻结组分的局部绝热响应，令 `beta_s = 1 / (rho*c²)`；压力隐式步满足：
 
@@ -115,13 +173,17 @@ u[n+1] = u* - dt * (1/rho) * grad(p[n+1])
     = -div(u*)/dt + beta_s/dt² * p[adv]
 ```
 
-这里 `p[adv]` 是随质量/组分/能量一致平流到控制体的热力学压力，不是凭空保留的显示场。`beta_s → 0` 时 Helmholtz 储存项严格退化为当前不可压 Poisson projection；气体使用状态方程给出的非零 `beta_s`，不需要按材料 ID 选择另一套压力算法。空间实现还必须以守恒通量更新质量、组分、动量和**总能量**，并把 pressure work 纳入同一候选；只把该储存项加到当前液体矩阵、却不建立这些权威列，不能记为已实现空间气体。低密度、高密度比、混合与相变必须由这些方程自然产生，不能用固定 FLIP 比例、速度钳制或渲染修补代替可压缩闭合。
+这里 `p[adv]` 是随质量/组分/能量一致平流到控制体的热力学压力，不是凭空保留的显示场。`beta_s → 0` 时 Helmholtz 储存项严格退化为当前不可压 Poisson projection；气体使用状态方程给出的非零 `beta_s`，不需要按材料 ID 选择另一套压力算法。
+
+空间实现还必须以守恒通量更新质量、组分、动量和**总能量**，并把 pressure work 纳入同一候选；只把该储存项加到当前液体矩阵、却不建立这些权威列，不能记为已实现空间气体。低密度、高密度比、混合与相变必须由这些方程自然产生，不能用固定 FLIP 比例、速度钳制或渲染修补代替可压缩闭合。
 
 ### PLIC、表面张力与润湿
 
 自由面由 cell liquid fraction 与局部法向构造 PLIC。ghost-fluid 距离决定 fluid-air pressure face；液液界面则从逐相体积分数字段构造 pairwise 界面。
 
-液气压力跳跃满足 `delta p = sigma * kappa`：有 pressure unknown 的已解析界面走 sharp ghost-fluid jump；两侧都没有 pressure unknown、但 marker carrier 跨面的亚格界面走互补 balanced-force CSF，二者拓扑互斥。液液张力使用 phase 无序对定义，以 balanced-force CSF 接入同一 pressure 路径。液气曲率法向始终只来自液气几何；润湿由 Young 表面能 `sigma_sl - sigma_sg = -sigma cos(theta)` 的切向离散梯度产生，固壁面积取自同一 `2×2×2` cut-cell microgeometry（含域边界），不旋转曲率法向，也不使用浅水吸墙、墙角偏置或材料 ID 特判。
+液气压力跳跃满足 `delta p = sigma * kappa`：有 pressure unknown 的已解析界面走 sharp ghost-fluid jump；两侧都没有 pressure unknown、但 marker carrier 跨面的亚格界面走互补 balanced-force CSF，二者拓扑互斥。
+
+液液张力使用 phase 无序对定义，以 balanced-force CSF 接入同一 pressure 路径。液气曲率法向始终只来自液气几何；润湿由 Young 表面能 `sigma_sl - sigma_sg = -sigma cos(theta)` 的切向离散梯度产生，固壁面积取自同一 `2×2×2` cut-cell microgeometry（含域边界），不旋转曲率法向，也不使用浅水吸墙、墙角偏置或材料 ID 特判。
 
 当前 `gpu-probe-kernel` 只覆盖单一常密度不可压 carrier 的 pressure 几何、P2G/G2P、散度一致平流、碰撞和守恒 reseed。它尚未承载材料质量列、变密度、液气/液液表面张力与 Young 壁能、gas boundary、热化学或完整 immutable candidate，因此这些 CPU 能力不能被记作 GPU 已实现；probe 继续不具备生产资格。
 
@@ -136,9 +198,15 @@ u[n+1] = u* - dt * (1/rho) * grad(p[n+1])
 
 `FlipCutCellGeometry` 从每格 `2×2×2` unsigned micro mask 得到 cell solid volume 和三轴 face aperture。checkpoint 与后端 handoff 保存 raw mask，不能退化为“整格固体/整格空气”；恢复后必须得到相同 aperture。`FlipParticleCollision` 对 marker 轨迹做连续碰撞检测，避免只在步末投影位置造成穿薄墙；碰撞只去除命中法向速度，切向分量保持。
 
-实体交互由 Fabric 每个 Minecraft tick 冻结有界 AABB、原版更新后的实体响应速度、本 tick 实际位姿差和流体观察。core 将 AABB 与当前派生的水平液层逐格求交；每格液层按开放 `2×2×2` micro layer 自下而上分配，所以浸没体积和湿区质心随子格位移连续变化，并排除 `VoxelShape` 已占据的 micro volume。这个观察不改 marker 库存，也不是压力面积分。实体侧响应仍按游戏 tick 应用；liquid moving boundary 使用 `position - oldPosition` 的实际当 tick 位移速度，不能把原版已施加重力/阻力、供下一 tick 使用的 `deltaMovement` 反向当成本 tick 表面运动。moving-body 输入只能在 region 可运动且 pacing 到期的真实 logical step 消费一次，PAUSED、thermal-only 和被 pacing 跳过的 tick 不得提前或重复改写 marker。core 使用紧支撑二次 B-spline 核，在湿体积上把实体运动约束写入附近 marker 速度；返回值由实际 float velocity 写入重新计算 `kg·m/s`，体积、质量、组成和 `U` 不变。该 marker 动量会经过正常 P2G、pressure projection、G2P 和 advection，因此走动、划水和入水速度可以扰动液体，而不是只唤醒调度。
+实体交互由 Fabric 每个 Minecraft tick 冻结有界 AABB、原版更新后的实体响应速度、本 tick 实际位姿差和流体观察。core 将 AABB 与当前派生的水平液层逐格求交；每格液层按开放 `2×2×2` micro layer 自下而上分配，所以浸没体积和湿区质心随子格位移连续变化，并排除 `VoxelShape` 已占据的 micro volume。
 
-当前 AABB 湿体积是有界 kinematic immersed-boundary 近似：Minecraft 实体运动被视为外部 moving body，不声称已有刚体质量真值或严格等量的实体侧反冲 ledger；实体占位也尚未进入 cut-cell 容量。推进到压力面积分和严格双向闭合前，必须验证静水浮力的采样误差、给出黏性/形状阻力有效域、把实体表面速度接入 pressure boundary，并让实体占位通过统一容量路径排开液体。不得用额外速度钳制或材料特判掩盖这些停止门。
+这个观察不改 marker 库存，也不是压力面积分。实体侧响应仍按游戏 tick 应用；liquid moving boundary 使用 `position - oldPosition` 的实际当 tick 位移速度，不能把原版已施加重力/阻力、供下一 tick 使用的 `deltaMovement` 反向当成本 tick 表面运动。
+
+moving-body 输入只能在 region 可运动且 pacing 到期的真实 logical step 使用一次，PAUSED、thermal-only 和被 pacing 跳过的 tick 不得提前或重复改写 marker。
+
+core 使用紧支撑二次 B-spline 核，在湿体积上把实体运动约束写入附近 marker 速度；返回值由实际 float velocity 写入重新计算 `kg·m/s`，体积、质量、组成和 `U` 不变。该 marker 动量会经过正常 P2G、pressure projection、G2P 和 advection，因此走动、划水和入水速度可以扰动液体，而不是只唤醒调度。
+
+当前 AABB 湿体积是有界 kinematic immersed-boundary 近似：Minecraft 实体运动被视为外部 moving body，不声称已有刚体质量原始数据或严格等量的实体侧反冲 ledger；实体占位也尚未进入 cut-cell 容量。推进到压力面积分和严格双向闭合前，必须验证静水浮力的采样误差、给出黏性/形状阻力有效域、把实体表面速度接入 pressure boundary，并让实体占位通过统一容量路径排开液体。不得用额外速度钳制或材料特判掩盖这些适用条件。
 
 ## Reseed 与传输不变量
 
@@ -159,7 +227,7 @@ motion 与 thermal activity 分开评估。调度只决定何时执行相同 log
 - 单步超过 40 ms 后进入 1–4 tick pacing；
 - 连续 3 步超过 200 ms 自动暂停；
 - 平静区域可按守恒条件休眠；
-- checkpoint/UNLOADED 必须保存或恢复完整物理真值。
+- checkpoint/UNLOADED 必须保存或恢复完整物理原始数据。
 
 阈值只在代表性 profile 已分离 solver、世界交互和 readback 成本后评审。
 
@@ -167,4 +235,4 @@ motion 与 thermal activity 分开评估。调度只决定何时执行相同 log
 
 - 优先使用明确的守恒离散、有限体积通量、PLIC、PCG、balanced-force、Boussinesq 等通用算法。
 - 不以墙角偏置、强制找平、渲染增厚或按 tick 百分比源汇掩盖异常。
-- 新近似必须声明适用尺度、停止门和可观测误差；先选择简单有效的模型，再考虑更重框架。
+- 新近似必须声明适用尺度、适用条件和可观测误差；先选择简单有效的模型，再考虑更重框架。
