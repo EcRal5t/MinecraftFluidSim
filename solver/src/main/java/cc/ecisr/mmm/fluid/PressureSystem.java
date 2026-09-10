@@ -47,7 +47,7 @@ final class PressureSystem {
 					domain.projection.matrixDirection, domain.projection.gasMatrixDirection);
 			double denominator = dot(domain.projection.direction, domain.projection.gasDirection,
 					domain.projection.matrixDirection, domain.projection.gasMatrixDirection);
-			if (!(Double.isFinite(denominator) && denominator > 1.0E-20
+			if (!(Double.isFinite(denominator) && denominator > 0.0
 					&& Double.isFinite(rz) && rz > 0.0)) break;
 			float alpha = (float) (rz / denominator);
 			if (!Float.isFinite(alpha)) break;

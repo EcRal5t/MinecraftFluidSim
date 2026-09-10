@@ -29,6 +29,7 @@ final class GranularMechanicalStage {
 		GranularCouplingFields granularNextCoupling();
 		boolean granularOccupancyFitsGeometry(GranularCouplingFields coupling);
 		void setPressureGranularCoupling(GranularCouplingFields coupling);
+		void rebuildPressureGeometry();
 		int particleCellIndex(float x, float y, float z);
 		int[] granularCarrierMaterialByCell();
 		FluidMaterialRegistry materialRegistry();
@@ -69,6 +70,7 @@ final class GranularMechanicalStage {
 			}
 		}
 		access.setPressureGranularCoupling(access.granularNextCoupling());
+		access.rebuildPressureGeometry();
 		return stats;
 	}
 
@@ -84,16 +86,15 @@ final class GranularMechanicalStage {
 			@Override public GranularMechanics.FluidSample sample(float x, float y, float z) {
 				int cell = access.particleCellIndex(x, y, z);
 				int liquidMaterial = access.granularCarrierMaterialByCell()[cell];
-				if (state.markerGrid.markerCount[cell] <= 0 || liquidMaterial < 0) {
+				float capacity = access.effectiveOpenCellVolume(cell);
+				if (state.markerGrid.markerCount[cell] <= 0 || liquidMaterial < 0 || capacity <= 0.0F) {
 					return new GranularMechanics.FluidSample(false, 0.0, 0.0, 0.0,
 							1.225, 1.81e-5, 100_000.0, 0.0, 0.0);
 				}
 				String materialId = access.materialRegistry().material(liquidMaterial).id();
 				GranularCarrier carrier = access.granularState().registry.carrier(
 						access.granularState().registry.carrierHandle(materialId));
-				float capacity = access.effectiveOpenCellVolume(cell);
-				double submerged = capacity <= 0.0F ? 0.0
-						: Math.max(0.0, Math.min(1.0, state.markerGrid.exactCellMarkerVolume[cell] / capacity));
+				double submerged = Math.min(1.0, state.markerGrid.exactCellMarkerVolume[cell] / capacity);
 				return new GranularMechanics.FluidSample(true,
 						sampleCarrierVelocity(state.mac.velocityX, state.mac.velocityWeightX, 0, x, y, z),
 						sampleCarrierVelocity(state.mac.velocityY, state.mac.velocityWeightY, 1, x, y, z),

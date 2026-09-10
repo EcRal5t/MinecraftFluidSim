@@ -8,8 +8,8 @@ import java.util.Arrays;
  * The particle-to-grid stage: clears and rescatters the marker grid, normalizes the PIC
  * velocity with its weights, snapshots the P2G weights, rebuilds the free-surface, pressure
  * classification, granular-coupling, gas-lineage and surface-tension-pressure derived views
- * and finishes with solid-face enforcement and air extrapolation. Every derived view the
- * later stages consume is rebuilt here, exactly once per grid generation.
+ * and finishes with solid-face enforcement and air extrapolation. Pressure views also
+ * refresh after granular motion previews change the occupancy used by projection.
  */
 final class ParticleToGridStage {
 	record Workspace(
@@ -91,13 +91,18 @@ final class ParticleToGridStage {
 			state.freeSurfaceGeometry.rebuild(
 					geometry.solid, markerGrid.markerCount, geometry.cutCells, granularCoupling);
 		}
-		state.pressurePhaseGeometry.rebuild(
-				geometry.solid, projection.pressureVolume, geometry.cutCells,
-				access.pressureGranularCoupling(), projection.pressureFluid);
-		access.rebuildPressureBoundaryLineage();
-		access.rebuildSurfaceTensionPressure();
+		rebuildPressureGeometry();
 		bodyForceStage.enforceSolidFaceVelocities();
 		gridToParticleStage.extrapolateVelocityIntoAir();
 		access.markGridClean();
+	}
+
+	/** Refreshes pressure-derived views against the current solid occupancy and retained marker footprint. */
+	void rebuildPressureGeometry() {
+		state.pressurePhaseGeometry.rebuild(
+				state.geometry.solid, state.projection.pressureVolume, state.geometry.cutCells,
+				access.pressureGranularCoupling(), state.projection.pressureFluid);
+		access.rebuildPressureBoundaryLineage();
+		access.rebuildSurfaceTensionPressure();
 	}
 }

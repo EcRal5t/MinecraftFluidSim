@@ -7,7 +7,7 @@
 | 要改什么 | 代码入口 | 测试选择器 |
 |---|---|---|
 | 计算顺序与状态捕获 | [FluidDomainStepCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainStepCoordinator.java)、[MechanicalStepPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStepPipeline.java)、[FluidDomainStateMapper](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainStateMapper.java) | `lifecycle` |
-| 压力和自由面 | [PressureProjectionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureProjectionStage.java)、[PressureProjectionWorkspace](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureProjectionWorkspace.java)、[PressureFaceCoupling](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureFaceCoupling.java) | `free-surface,gas-liquid` |
+| 压力和自由面 | [PressureProjectionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureProjectionStage.java)、[PressureSystem](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureSystem.java)、[PressureFaceCoupling](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureFaceCoupling.java) | `free-surface,gas-liquid` |
 | 速度传递与平流 | [FlipTransferScheme](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipTransferScheme.java)、[GridToParticleStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GridToParticleStage.java)、[ParticleAdvectionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/ParticleAdvectionStage.java) | `free-surface` |
 | 局部形状碰撞 | [FlipCutCellGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipCutCellGeometry.java)、[FlipParticleCollision](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipParticleCollision.java) | `cut-cell` |
 | 粒子拆分和合并 | [FlipParticleReseeder](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipParticleReseeder.java)、[CarrierMutationCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/CarrierMutationCoordinator.java) | `reseeding` |
@@ -55,7 +55,7 @@
 
 新增行为放入负责该数据的实现类或计算阶段。`FluidDomainStateMapper` 统一装配捕获和恢复过程。
 
-`MechanicalStepPipeline` 组织力学阶段。构造时向各阶段注入所需数组和工作区，生命周期中会重新绑定的数据经该阶段的 `Access` 接口取得。跨阶段的压力参考值和结果通过明确的写回接口传递。
+`MechanicalStepPipeline` 组织力学阶段。构造时向各阶段注入所需数组和工作区，生命周期中会重新绑定的数据经该阶段的 `Access` 接口取得。跨阶段的压力参考值和结果通过明确的写回接口传递。颗粒运动预览更新 solid occupancy 后，复用 `ParticleToGridStage.rebuildPressureGeometry` 同步压力分类、气体边界归属和表面张力压力；压力方程的未知量与流通面使用同一份占用几何。
 
 `ThermochemistryPipeline` 按传导、液相反应、颗粒反应、固液相变和气液相变的顺序执行。`ThermochemistryStageAssembly` 负责注入依赖，后续沉积和粒子拆并分别由 `GranularTransitionStage`、`ParticleReseedStage` 执行。
 
