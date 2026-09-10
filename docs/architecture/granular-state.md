@@ -85,15 +85,15 @@ Re = rho_f * d * |u_f - u_p| / mu
 
 阻力使用 Schiller–Naumann 相关式：`Re < 1000` 时 `Cd = 24/Re * (1 + 0.15 Re^0.687)`，更高时取其常用高 Reynolds 极限 `0.44`。参与阻力的代表颗粒数按同一格的实际浸没比例缩放；不能让一小层液体对整份 parcel 施加满浸没阻力，再把该反冲写入同一小层液体。
 
-各方向的有限载体质量由实际 MAC 采样和反冲核给出：`M_eff = sum(w*m)^2 / sum(w*w*m)`。parcel 按此质量做两体指数松弛，后续 parcel 读取已承接反冲的速度。液体采样要求存在液体 marker 和正孔隙容量；零孔隙格子走干态路径。carrier 的 Reynolds 适用域和物性在预检与每次交换前验证。
+各方向的有限载体质量使用冻结的 P2G 权重；体积权重先按参考密度换成质量。实际 MAC 采样和反冲核给出：`M_eff = sum(w*m)^2 / sum(w*w*m)`。parcel 按此质量做两体指数松弛，后续 parcel 读取已承接反冲的速度。液体采样要求存在液体 marker 和正孔隙容量；零孔隙格子走干态路径。carrier 的 Reynolds 适用域和物性在预检与每次交换前验证。
 
-浮力和阻力对 parcel 的冲量有等量反向项写回液体动量。载体速度采样与反作用散布必须使用同一份 `trilinear weight × P2G face mass` 核：零质量外推 face 不属于有限载体，非零 face 按质量伴随算子共同承接冲量，不能先按纯几何权重分冲量再除以各 face 质量。
+浮力和阻力的两体解直接给出液体反作用冲量，颗粒速度的 binary32 舍入归属于颗粒自身的表示误差。载体速度采样与反作用散布必须使用同一份 `trilinear weight × P2G face mass` 核：零质量外推 face 不属于有限载体，非零 face 按质量伴随算子共同承接冲量，不能先按纯几何权重分冲量再除以各 face 质量。
 
 写入 binary32 MAC velocity 后从实际速度差重算已承接冲量，舍入余量与 cut-cell 无法承接的部分进入 boundary impulse ledger。碰撞使用与流体一致的几何快照、连续碰撞检测和材料摩擦/恢复定义，不依赖渲染表面。
 
 ### 统一排水与压力
 
-每个 logical step 从 active、deposit bulk envelope 和 coherent store 构造统一 solid occupancy。occupancy 的时变差进入压力方程目标散度，固体移动造成的排水因而与液体不可压缩约束在同一次 projection 中闭合。可用体积为几何开放体积减去固体 bulk envelope；负容量、重复占用或未结算的相变体积功都拒绝提交。
+每个 logical step 从 active、deposit 的骨架 SVQ 和 coherent store 构造统一 solid occupancy。目标散度为固体占据率的增加量除以时间步长：固体进入时驱动液体流出，离开时容纳液体流入。可用体积为几何开放体积减去 solid occupancy，排水与液体连续性在同一次 projection 中结算。
 
 projection 结算的 phase volume/work 和 granular occupancy delta 都具有 generation 身份；重试保留已结算记录，checkpoint 也不能只保存其中一半。
 

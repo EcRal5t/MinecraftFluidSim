@@ -31,6 +31,7 @@ final class GranularMechanicalStage {
 		int particleCellIndex(float x, float y, float z);
 		int[] granularCarrierMaterialByCell();
 		FluidMaterialRegistry materialRegistry();
+		boolean massWeightedP2G();
 		float effectiveOpenCellVolume(int cell);
 		float sampleX(float[] field, float x, float y, float z);
 		float sampleY(float[] field, float x, float y, float z);
@@ -91,9 +92,9 @@ final class GranularMechanicalStage {
 				GranularCarrier carrier = access.granularState().registry.carrier(
 						access.granularState().registry.carrierHandle(materialId));
 				double submerged = Math.min(1.0, state.markerGrid.exactCellMarkerVolume[cell] / capacity);
-				CarrierKernel xKernel = sampleCarrier(state.mac.velocityX, state.mac.velocityWeightX, 0, x, y, z);
-				CarrierKernel yKernel = sampleCarrier(state.mac.velocityY, state.mac.velocityWeightY, 1, x, y, z);
-				CarrierKernel zKernel = sampleCarrier(state.mac.velocityZ, state.mac.velocityWeightZ, 2, x, y, z);
+				CarrierKernel xKernel = sampleCarrier(state.mac.velocityX, state.mac.p2gWeightX, 0, x, y, z);
+				CarrierKernel yKernel = sampleCarrier(state.mac.velocityY, state.mac.p2gWeightY, 1, x, y, z);
+				CarrierKernel zKernel = sampleCarrier(state.mac.velocityZ, state.mac.p2gWeightZ, 2, x, y, z);
 				return new GranularMechanics.FluidSample(true, xKernel.velocity(), yKernel.velocity(), zKernel.velocity(),
 						state.markerGrid.cellDensity[cell], carrier.dynamicViscosity(), carrier.maximumReynolds(), submerged,
 						xKernel.mass(), yKernel.mass(), zKernel.mass());
@@ -146,8 +147,10 @@ final class GranularMechanicalStage {
 			squaredWeightMass += massWeight * weight;
 		}
 		return weightedMass > 0.0 ? new CarrierKernel(weightedVelocity / weightedMass,
-				state.unitScale.kilograms(weightedMass * weightedMass / squaredWeightMass)) : new CarrierKernel(0.0, 0.0);
+				state.unitScale.kilograms(weightedMass * weightedMass / squaredWeightMass * faceMassScale())) : new CarrierKernel(0.0, 0.0);
 	}
+
+	private double faceMassScale() { return access.massWeightedP2G() ? 1.0 : state.config.density(); }
 
 	/** Mass-adjoint scatter; returns the actual solver impulse represented by the float writes. */
 	private double addFaceImpulse(
@@ -180,8 +183,8 @@ final class GranularMechanicalStage {
 			if (!(faceMass[face] > 0.0F)) continue;
 			double weight = access.trilinearWeight(ox, oy, oz, fx, fy, fz);
 			float before = field[face];
-			field[face] = (float) (before + impulse * weight / weightedMass);
-			actual += (field[face] - before) * faceMass[face];
+			field[face] = (float) (before + impulse * weight / (weightedMass * faceMassScale()));
+			actual += (field[face] - before) * faceMass[face] * faceMassScale();
 		}
 		return actual;
 	}

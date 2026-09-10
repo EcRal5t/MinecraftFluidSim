@@ -75,15 +75,15 @@ final class BodyForceStage {
 	private float granularPorousFaceDamping(int first, int second, float dt) {
 		double firstK = granularPermeability(first), secondK = granularPermeability(second);
 		if (Double.isInfinite(firstK) && Double.isInfinite(secondK)) return 1.0F;
-		double permeability;
-		if (Double.isInfinite(firstK)) permeability = secondK;
-		else if (Double.isInfinite(secondK)) permeability = firstK;
-		else permeability = 2.0 * firstK * secondK / (firstK + secondK);
+		double resistance;
+		if (Double.isInfinite(firstK)) resistance = 1.0 / secondK;
+		else if (Double.isInfinite(secondK)) resistance = 1.0 / firstK;
+		else resistance = 0.5 / firstK + 0.5 / secondK;
 		CarrierProperties firstCarrier = access.granularCarrierProperties(first),
 				secondCarrier = access.granularCarrierProperties(second);
 		double viscosity = 0.5 * (firstCarrier.viscosity() + secondCarrier.viscosity());
 		double density = 0.5 * (firstCarrier.density() + secondCarrier.density());
-		return (float) (1.0 / (1.0 + dt * viscosity / (density * permeability)));
+		return (float) (1.0 / (1.0 + dt * viscosity / density * resistance));
 	}
 
 	private double granularPermeability(int cell) {

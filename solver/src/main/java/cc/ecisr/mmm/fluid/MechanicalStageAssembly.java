@@ -94,6 +94,7 @@ final class MechanicalStageAssembly {
 
 	private static GranularMechanicalStage.Access granularAccess(FluidDomain domain) {
 		return new GranularMechanicalStage.Access() {
+			@Override public boolean massWeightedP2G() { return domain.variableDensityActive; }
 			@Override public void rebuildPressureGeometry() { domain.particleToGridStage.rebuildPressureGeometry(); }
 			@Override public boolean hasGranularInventory() { return domain.hasGranularInventory(); }
 			@Override public GranularDomainState granularState() { return domain.granularState; }

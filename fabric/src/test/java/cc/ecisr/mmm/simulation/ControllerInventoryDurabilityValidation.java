@@ -255,8 +255,8 @@ final class ControllerInventoryDurabilityValidation {
 		runScenario("water-diluted acid-base precipitation", registries, state -> {
 			state.insertAcid(4); state.insertWater(); state.insertBase(4); state.steps(true, 20);
 		});
-		runScenario("mercury-coexisting acid-base precipitation", registries, state -> {
-			state.insertAcid(4); state.insertMercury(); state.insertBase(4); state.steps(true, 20);
+		runScenario("mercury and sand with acid-base precipitation", registries, state -> {
+			state.insertAcid(4); state.insertMercury(); state.insertSand(); state.insertBase(4); state.steps(true, 60);
 		});
 		runScenario("cold sand-water coupling", registries, state -> {
 			state.insertWater(); state.insertSand(); state.temperature(260.0); state.steps(true, 60);

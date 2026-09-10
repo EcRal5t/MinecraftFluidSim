@@ -37,6 +37,7 @@ public final class GranularMechanics {
 			double fraction = clamp(fluid.submergedFraction(), 0.0, 1.0);
 			double oldX = parcel.velocityX(), oldY = parcel.velocityY(), oldZ = parcel.velocityZ();
 			double newX = oldX, newY = oldY, newZ = oldZ;
+			double fluidX = 0.0, fluidY = 0.0, fluidZ = 0.0;
 			double solidVolumeM3 = parcel.solidVolumeSvq() / (double) SolidVolume.SVQ_PER_BV;
 			double massKg = parcel.mass();
 			if (!(Double.isFinite(massKg) && massKg > 0.0)) throw new IllegalStateException("Invalid parcel mass scale");
@@ -57,12 +58,14 @@ public final class GranularMechanics {
 						? 3.0 * Math.PI * fluid.dynamicViscosity() * diameter * representedGrains
 						: 0.5 * dragCoefficient(reynolds) * fluid.density() * area * slip;
 				dragRate = linearDrag / massKg;
-				newX = coupledParticleVelocity(oldX, massKg, 0.0, fluid.velocityX(),
+				CoupledStep xStep = coupledStep(oldX, massKg, 0.0, fluid.velocityX(),
 						fluid.coupledMassX(), 0.0, dragRate, dt);
-				newY = coupledParticleVelocity(oldY, massKg, externalAccelerationY, fluid.velocityY(),
+				CoupledStep yStep = coupledStep(oldY, massKg, externalAccelerationY, fluid.velocityY(),
 						fluid.coupledMassY(), -massKg * buoyancyAcceleration, dragRate, dt);
-				newZ = coupledParticleVelocity(oldZ, massKg, 0.0, fluid.velocityZ(),
+				CoupledStep zStep = coupledStep(oldZ, massKg, 0.0, fluid.velocityZ(),
 						fluid.coupledMassZ(), 0.0, dragRate, dt);
+				newX = xStep.particleVelocity(); newY = yStep.particleVelocity(); newZ = zStep.particleVelocity();
+				fluidX = xStep.fluidImpulse(); fluidY = yStep.fluidImpulse(); fluidZ = zStep.fluidImpulse();
 			} else {
 				newY += externalAccelerationY * dt;
 			}
@@ -73,18 +76,14 @@ public final class GranularMechanics {
 					nextX, nextY, nextZ, parcel.solidVolumeSvq(), parcel.mass(), parcel.materialHandle(),
 					parcel.solidCompositionHandle(), parcel.contactAge(), parcel.flags()));
 			if (fluid.hasLiquid() && fraction > 0.0) {
-				// Parcel momentum change minus gravity/buoyancy external impulse is the drag impulse.
-				double hydrodynamicX = parcel.mass() * (nextX - oldX);
-				double hydrodynamicY = parcel.mass() * (nextY - oldY + gravity * dt);
-				double hydrodynamicZ = parcel.mass() * (nextZ - oldZ);
-				double fluidX = -hydrodynamicX, fluidY = -hydrodynamicY, fluidZ = -hydrodynamicZ;
 				FluidImpulseApplication application = environment.addFluidImpulse(
 						parcel.x(), parcel.y(), parcel.z(), fluidX, fluidY, fluidZ);
 				if (application == null) throw new IllegalStateException("Granular environment returned no impulse application");
 				totalFluidImpulseX += application.appliedX(); totalFluidImpulseY += application.appliedY();
 				totalFluidImpulseZ += application.appliedZ();
-				boundaryImpulseX += application.boundaryX(); boundaryImpulseY += application.boundaryY();
-				boundaryImpulseZ += application.boundaryZ();
+				boundaryImpulseX += application.boundaryX() + massKg * (newX - nextX);
+				boundaryImpulseY += application.boundaryY() + massKg * (newY - nextY);
+				boundaryImpulseZ += application.boundaryZ() + massKg * (newZ - nextZ);
 			}
 			maximumSpeed = Math.max(maximumSpeed, Math.sqrt(newX * newX + newY * newY + newZ * newZ));
 		}
@@ -128,11 +127,13 @@ public final class GranularMechanics {
 
 	}
 
-	private static double coupledParticleVelocity(
+	private record CoupledStep(double particleVelocity, double fluidImpulse) { }
+
+	private static CoupledStep coupledStep(
 			double particle, double particleMass, double particleAcceleration,
 			double fluid, double fluidMass, double fluidForce, double dragRate, double dt
 	) {
-		if (fluidMass == 0.0) return particle + particleAcceleration * dt;
+		if (fluidMass == 0.0) return new CoupledStep(particle + particleAcceleration * dt, fluidForce * dt);
 		double coupledDragRate = dragRate * (1.0 + particleMass / fluidMass);
 		double relaxation = Math.exp(-coupledDragRate * dt);
 		double response = coupledDragRate == 0.0 ? dt : -Math.expm1(-coupledDragRate * dt) / coupledDragRate;
@@ -142,7 +143,15 @@ public final class GranularMechanics {
 				+ (particleMass * particleAcceleration + fluidForce) / combinedMass * dt;
 		double relative = (particle - fluid) * relaxation
 				+ (particleAcceleration - fluidAcceleration) * response;
-		return center + fluidMass / combinedMass * relative;
+		double fluidFraction = fluidMass / combinedMass;
+		double particleFraction = particleMass / combinedMass;
+		double reducedMass = particleMass * fluidFraction;
+		// Integrate the fluid impulse directly: parcel storage roundoff belongs to the parcel,
+		// and can greatly exceed the physical momentum of a thin fluid carrier.
+		double impulse = reducedMass * (particle - fluid) * -Math.expm1(-coupledDragRate * dt)
+				+ reducedMass * particleAcceleration * (dt - response)
+				+ fluidForce * (fluidFraction * dt + particleFraction * response);
+		return new CoupledStep(center + fluidFraction * relative, impulse);
 	}
 
 	public static double dragCoefficient(double reynolds) {

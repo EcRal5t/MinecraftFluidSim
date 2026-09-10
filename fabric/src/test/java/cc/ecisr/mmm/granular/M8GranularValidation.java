@@ -592,8 +592,20 @@ public final class M8GranularValidation {
 		double before = mass * store.parcel(0).velocityX();
 		GranularMechanics.stepVelocities(store, registry, environment, 1.0 / 60.0);
 		double after = mass * store.parcel(0).velocityX() + reaction[0];
-		require(Math.abs(after - before) <= Math.max(1.0e-12, 8.0 * Math.ulp(before)),
+		require(Math.abs(after - before) <= mass * Math.ulp(store.parcel(0).velocityX()),
 				"two-way granular drag changed total momentum");
+		GranularParcelStore thin = new GranularParcelStore(registry, 1);
+		thin.add(new GranularParcelStore.Parcel(0.5F, 0.5F, 0.5F, 0.0F, 1.0F, 0.0F,
+				svq, mass, handle, 0, 0, (byte) 0));
+		double[] thinReaction = new double[3];
+		var thinStats = GranularMechanics.stepVelocities(thin, registry,
+				constantWater(0, 0, 0, 1, 1.0e-12, thinReaction), 9.81, 0.05);
+		double closedMomentum = mass * thin.parcel(0).velocityY() + thinReaction[1]
+				+ thinStats.boundaryImpulseY();
+		double expectedMomentum = mass * (1.0 - 9.81 * 0.05);
+		require(Math.abs(thinReaction[1] / 1.0e-12) < 1.0
+				&& Math.abs(closedMomentum - expectedMomentum) <= 8.0 * Math.ulp(expectedMomentum),
+				"thin carrier impulse follows the integrated two-body response");
 
 		GranularParcelStore full = new GranularParcelStore(registry, 1);
 		GranularParcelStore shallow = new GranularParcelStore(registry, 1);
