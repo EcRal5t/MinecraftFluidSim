@@ -29,6 +29,7 @@ public final class FluidDomainState {
 	private final FlipChemicalParticleState chemicals;
 	private final ChemicalRegistry chemicalRegistry;
 	private final int[] chemicalDirtyCells;
+	private final int chemicalReactionCursor;
 	private final GranularRegistry granularRegistry;
 	private final GranularStateSnapshot granular;
 	private final GranularDepositDynamics.State granularDynamics;
@@ -45,7 +46,7 @@ public final class FluidDomainState {
 	FluidDomainState(
 			FluidSolverConfig config, int maximumParticleCount, boolean sealedDomainBoundary,
 			FlipParticleState particles, FlipMaterialParticleState materials,
-			FlipChemicalParticleState chemicals, ChemicalRegistry chemicalRegistry, int[] chemicalDirtyCells,
+			FlipChemicalParticleState chemicals, ChemicalRegistry chemicalRegistry, int[] chemicalDirtyCells, int chemicalReactionCursor,
 			GranularRegistry granularRegistry, GranularStateSnapshot granular,
 			GranularDepositDynamics.State granularDynamics,
 			boolean precipitationEnabled, GasRegistry gasRegistry, GasStateSnapshot gas,
@@ -66,6 +67,9 @@ public final class FluidDomainState {
 		this.chemicals = chemicals;
 		this.chemicalRegistry = chemicalRegistry;
 		this.chemicalDirtyCells = chemicalDirtyCells == null ? null : chemicalDirtyCells.clone();
+		this.chemicalReactionCursor = chemicalReactionCursor;
+		if (chemicalReactionCursor < 0 || chemicalReactionCursor >= baseParticles().sizeX()
+				* baseParticles().sizeY() * baseParticles().sizeZ()) throw new IllegalArgumentException("Invalid chemical reaction cursor");
 		if ((chemicals == null) != (chemicalRegistry == null)
 				|| (chemicals == null) != (chemicalDirtyCells == null)
 				|| chemicals != null && !chemicals.registryFingerprint().equals(chemicalRegistry.fingerprint())) {
@@ -163,6 +167,7 @@ public final class FluidDomainState {
 	public int[] copyChemicalDirtyCells() {
 		return chemicalDirtyCells == null ? null : chemicalDirtyCells.clone();
 	}
+	public int chemicalReactionCursor() { return chemicalReactionCursor; }
 	public GranularRegistry granularRegistry() { return granularRegistry; }
 	public GranularStateSnapshot granular() { return granular; }
 	public GranularDepositDynamics.State granularDynamics() { return granularDynamics; }

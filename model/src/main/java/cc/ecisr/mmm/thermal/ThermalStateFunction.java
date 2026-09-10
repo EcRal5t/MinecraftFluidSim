@@ -217,7 +217,7 @@ public final class ThermalStateFunction {
 	}
 
 	private static double energyTolerance(double... values) {
-		double tolerance = 1.0E-9;
+		double tolerance = 0.0;
 		for (double value : values) tolerance = Math.max(tolerance, Math.ulp(value) * 16.0);
 		return tolerance;
 	}

@@ -70,7 +70,7 @@ particleMass * cellSize^3 = exact_species_mass_kg + massResidual_kg
 
 反应引擎对完成 advection 的 marker 按 `(cell, chemicalPhase)` 分组，汇总每个 species 的 integer quanta。对 canonical reaction 顺序计算最大完整 extent：每个反应物库存除以对应计量系数并取最小值。只有完整整数 extent 可提交；products、composition basis、charge 和 exact species mass 必须同时回和。
 
-dirty cell 是反应调度游标而非库存，但尚未求值的 dirty 集必须随紧邻 immutable backend handoff 完整传递；否则容器/碰撞刚提交的反应机会会在私有候选重建时消失。region HEAD 不以 dirty bit 恢复 species：冷恢复从 committed marker 位置把所有占用格标脏并只重检一次，后续 backend handoff 再携带精确 dirty 集，已经清洁的区域不会每 tick 全量重算。
+反应调度保存 dirty 集与轮转起点，backend handoff 完整传递两者。每步预算按完整 cell 分配；额度用尽后保留余下任务，下一步从该 cell 继续。region HEAD 冷恢复从 committed marker 位置标记所有占用格，后续按精确 dirty 集增量求值。
 
 反应后的格总库存按各 marker 的 exact species mass 转成 binary64 权重，以最大余数法确定性分配；余数相同时按 marker ordinal 排序。分配计划验证每个载体的物种槽位、正质量、区域总量与候选温度，再统一提交。载体数、容量或可用内能限制当前候选时，原库存与质量逐位保留，所属 cell 保持 dirty，其他可提交的 cell 继续推进。表示条件改变后沿同一入口重试。
 

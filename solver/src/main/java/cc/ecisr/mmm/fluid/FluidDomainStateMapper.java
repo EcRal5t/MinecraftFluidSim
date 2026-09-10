@@ -40,6 +40,7 @@ final class FluidDomainStateMapper {
 				domain.config, domain.maximumParticleCount, domain.gasState.sealedDomainBoundary,
 				pure, materials, chemicals, chemistry,
 				domain.chemicalParcels == null ? null : domain.chemicalParcels.dirtyCells(),
+				domain.chemicalParcels == null ? 0 : domain.chemicalParcels.reactionCursor(),
 				domain.granularState == null ? null : domain.granularState.registry,
 				granular, domain.granularDepositDynamics == null ? null
 						: domain.granularDepositDynamics.captureState(),
@@ -79,6 +80,7 @@ final class FluidDomainStateMapper {
 			case CHEMICAL -> {
 				domain.restoreChemicalParticleState(state.chemicals(), state.chemicalRegistry());
 				domain.chemicalParcels.restoreDirtyCells(state.copyChemicalDirtyCells());
+				domain.chemicalParcels.restoreReactionCursor(state.chemicalReactionCursor());
 			}
 		}
 		if (state.granular() != null) {

@@ -471,7 +471,34 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				(x, y, z, direction) -> x == 2 && direction == 2 ? new ThermalTransport.FixedBoundary(1.0, 1.0) : null, 10.0);
 		require(grid.temperature(2) >= 1.0 && grid.temperature(2) < 300.0
 				&& SignedDyadic.sum(energies).subtract(before).subtract(boundary.reservoirExchange()).equals(boundary.roundoffResidual()),
-				"stiff boundary crosses caloric intervals with a closed finite heat transfer");
+				"stiff boundary crosses caloric intervals with a closed finite heat transfer");        for (int scenario = 0; scenario < 2; scenario++) {
+			ThermalMaterialDefinition caloric = new ThermalMaterialDefinition("test:thermal/precision",
+					ThermalMaterialDefinition.CarrierKind.LIQUID, "test:precision", 300.0, 0.0, 20.0,
+					List.of(new ThermalMaterialDefinition.CaloricSegment(100.0, 300.0, 10.0),
+							new ThermalMaterialDefinition.CaloricSegment(300.0, 500.0, 100.0)));
+			double carrierMass = scenario == 0 ? 1.0e-14 : 1.0e-8;
+			double initialTemperature = scenario == 0 ? 350.0 : 1.0;
+			double boundaryTemperature = scenario == 0 ? 400.0 : Math.nextUp(1.0);
+			double[] energy = {carrierMass * caloric.sensibleSpecificEnergyAt(initialTemperature)};
+			ThermalCellGrid small = new ThermalCellGrid(1);
+			small.rebuild(new ThermalCellGrid.CarrierAccess() {
+				@Override public int carrierCount() { return 1; }
+				@Override public int cell(int i) { return 0; }
+				@Override public ThermalMaterialDefinition material(int i) { return caloric; }
+				@Override public double mass(int i) { return carrierMass; }
+				@Override public double volume(int i) { return 1.0; }
+				@Override public double baseEnergy(int i) { return 0.0; }
+				@Override public double internalEnergy(int i) { return energy[0]; }
+				@Override public void setInternalEnergy(int i, double value) { energy[0] = value; }
+			});
+			require(Math.abs(small.temperature(0) - initialTemperature) < 1.0e-10,
+					"caloric inversion preserves the tiny carrier temperature");
+			SignedDyadic initial = SignedDyadic.of(energy[0]);
+			var exchange = new ThermalTransport(1, 1, 1, 1.0, 8).step(small, (x,y,z,a) -> 0.0,
+					(x,y,z,d) -> d == 0 ? new ThermalTransport.FixedBoundary(1.0, boundaryTemperature) : null, 0.05);
+			require(SignedDyadic.of(energy[0]).subtract(initial).subtract(exchange.reservoirExchange())
+					.equals(exchange.roundoffResidual()), "tiny and adjacent-temperature contacts close their energy ledger");
+		}
 	}
 
 	static void reseedingMovesEnergyWithMarkerTruth() {

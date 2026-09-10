@@ -14,6 +14,7 @@ final class ChemicalReactionCandidateValidation {
 	private ChemicalReactionCandidateValidation() { }
 
 	static void validate() {
+		evaluationBudgetRotates();
 		ChemicalRegistry builtin = BuiltinChemicalDefinitions.REGISTRY;
 		checkDeferred(builtin, List.of(
 				mixture(builtin, BuiltinChemicalDefinitions.H_PLUS, 1, 0),
@@ -40,6 +41,36 @@ final class ChemicalReactionCandidateValidation {
 		region.mass[1] = region.store.record(1).massKilograms(builtin);
 		require(region.step().changedMarkers() == 1 && !region.store.hasDirtyCells(),
 				"region capacity retry commits after capacity becomes available");
+	}
+
+	private static void evaluationBudgetRotates() {
+		List<ChemicalSpecies> species = new ArrayList<>();
+		List<ChemicalReaction> reactions = new ArrayList<>();
+		List<String> ids = new ArrayList<>();
+		for (int i = 0; i < 256; i++) {
+			String id = "test:s" + i;
+			ids.add(id);
+			species.add(new ChemicalSpecies(id, Map.of("A", 1), 0, ExactRational.ONE, 0));
+			if (i > 0) reactions.add(new ChemicalReaction("test:r" + i, ChemicalReaction.Kind.INSTANTANEOUS,
+					"test:phase", Map.of("test:s" + (i - 1), 1), Map.of(id, 1), ExactRational.ZERO));
+		}
+		ChemicalRegistry registry = new ChemicalRegistry(species, List.of(new ChemicalPhaseDefinition(
+				"test:phase", "test:liquid", ids, Map.of("test:s0", ExactRational.ONE), false)), reactions);
+		int count = ChemicalLimits.MAX_REACTION_EVALUATIONS_PER_STEP / reactions.size() + 1;
+		ChemicalParcelStore store = new ChemicalParcelStore(registry, SolverUnitScale.forCellSize(1), count, count);
+		float[] x = new float[count], zero = new float[count];
+		double[] mass = new double[count];
+		for (int i = 0; i < count; i++) {
+			store.assign(i, mixture(registry, "test:s0", 1, 0), false);
+			x[i] = i + 0.5F; mass[i] = store.record(i).massKilograms(registry); store.markDirtyCell(i);
+		}
+		var first = store.reactDirtyCells(count, 1, 1, 1, x, zero, zero, mass, new int[count], h -> "test:liquid", count);
+		require(first.changedMarkers() == count - 1 && store.reactionCursor() == count - 1,
+				"bounded chemical pass commits complete cells and saves the next cell");
+		for (int i = 0; i < count - 1; i++) store.markDirtyCell(i);
+		store.reactDirtyCells(count, 1, 1, 1, x, zero, zero, mass, new int[count], h -> "test:liquid", count);
+		require(store.record(count - 1).amount(registry.speciesHandle("test:s255")) == 1L,
+				"rotating budget reaches the tail even while earlier cells keep waking");
 	}
 
 	private static void checkDeferred(ChemicalRegistry registry, List<ChemicalMixtureRecord> source) {

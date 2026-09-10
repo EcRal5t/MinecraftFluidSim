@@ -23,6 +23,12 @@ public final class ChemicalParcelStore {
 	private final long[] dirtyCellWords;
 	private long totalQuanta;
 	private long mutationRevision;
+	private int reactionCursor;
+	public int reactionCursor() { return reactionCursor; }
+	public void restoreReactionCursor(int cell) {
+		if (cell < 0 || cell >>> 6 >= dirtyCellWords.length) throw new IllegalArgumentException("Reaction cursor is outside the grid");
+		reactionCursor = cell;
+	}
 	private ChemicalTransferLedger escapedSink = ChemicalTransferLedger.EMPTY;
 	private ChemicalTransferLedger externalSource = ChemicalTransferLedger.EMPTY;
 
@@ -494,15 +500,21 @@ public final class ChemicalParcelStore {
 		long[] deferred = dirtyCellWords.clone();
 		long candidateTotal = totalQuanta;
 		int cells = 0, evaluations = 0, changed = 0;
-		for (int cell = 0; cell < groups.length; cell++) {
+		int nextCursor = reactionCursor;
+		for (int offset = 0; offset < groups.length; offset++) {
+			int cell = (reactionCursor + offset) % groups.length;
 			if (!bit(dirtyCellWords, cell)) continue;
+			int cellCost = 0;
+			if (groups[cell] != null) for (int phase : groups[cell].keySet()) cellCost += phaseCosts[phase];
+			if (cellCost > ChemicalLimits.MAX_REACTION_EVALUATIONS_PER_STEP - evaluations) {
+				nextCursor = cell;
+				break;
+			}
+			nextCursor = (cell + 1) % groups.length;
 			cells++;
 			boolean retry = false;
 			if (groups[cell] != null) for (Map.Entry<Integer, List<Integer>> group : groups[cell].entrySet()) {
 				int cost = phaseCosts[group.getKey()];
-				if (cost > ChemicalLimits.MAX_REACTION_EVALUATIONS_PER_STEP - evaluations) {
-					throw new ChemicalReactionEngine.BudgetExceededException("Logical reaction evaluation budget exceeded");
-				}
 				evaluations += cost;
 				long[] inventory = new long[registry.species().size()];
 				for (int marker : group.getValue()) {
@@ -536,6 +548,7 @@ public final class ChemicalParcelStore {
 			markerMass[marker] = plan.masses()[i];
 		}
 		totalQuanta = candidateTotal;
+		reactionCursor = nextCursor;
 		mutationRevision++;
 		System.arraycopy(deferred, 0, dirtyCellWords, 0, deferred.length);
 		return new ReactionStats(cells, evaluations, changed);

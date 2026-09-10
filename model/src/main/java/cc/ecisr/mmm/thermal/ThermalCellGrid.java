@@ -224,8 +224,7 @@ public final class ThermalCellGrid {
 		double change = 0.0;
 		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
 			ThermalMaterialDefinition material = carrierMaterial[carrier];
-			change += carrierMass[carrier] * (material.sensibleSpecificEnergyAt(target)
-					- material.sensibleSpecificEnergyAt(temperature[cell]));
+			change += carrierMass[carrier] * material.sensibleSpecificEnergyBetween(temperature[cell], target);
 		}
 		return change;
 	}
@@ -483,7 +482,7 @@ public final class ThermalCellGrid {
 	}
 
 	private static double energyTolerance(double... values) {
-		double tolerance = 1.0E-9;
+		double tolerance = 0.0;
 		for (double value : values) tolerance = Math.max(tolerance, Math.ulp(value) * 16.0);
 		return tolerance;
 	}

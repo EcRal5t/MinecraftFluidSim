@@ -84,10 +84,16 @@ public record ThermalMaterialDefinition(
 
 	/** Integral of specific heat from the frozen reference temperature to {@code temperatureK}. */
 	public double sensibleSpecificEnergyAt(double temperatureK) {
+		return sensibleSpecificEnergyBetween(referenceTemperatureK, temperatureK);
+	}
+
+	/** Integrates directly between endpoints, retaining small differences far from the reference. */
+	public double sensibleSpecificEnergyBetween(double fromTemperatureK, double temperatureK) {
+		requireIntrinsicTemperature(fromTemperatureK);
 		requireIntrinsicTemperature(temperatureK);
-		if (temperatureK == referenceTemperatureK) return 0.0;
-		double low = Math.min(referenceTemperatureK, temperatureK);
-		double high = Math.max(referenceTemperatureK, temperatureK);
+		if (temperatureK == fromTemperatureK) return 0.0;
+		double low = Math.min(fromTemperatureK, temperatureK);
+		double high = Math.max(fromTemperatureK, temperatureK);
 		double total = 0.0;
 		CaloricSegment first = caloricSegments.getFirst();
 		if (low < first.minimumTemperatureK()) {
@@ -105,7 +111,7 @@ public record ThermalMaterialDefinition(
 					* last.specificHeatEuPerMuK();
 		}
 		if (!Double.isFinite(total)) throw new IllegalArgumentException("Thermal sensible energy is not finite");
-		return temperatureK < referenceTemperatureK ? -total : total;
+		return temperatureK < fromTemperatureK ? -total : total;
 	}
 
 	/** Closed-form inverse of the continuous piecewise-linear caloric model. */
