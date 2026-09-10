@@ -188,7 +188,7 @@ final class PhaseChangeStageSupport {
 		static final PhaseComposition EMPTY = new PhaseComposition(Map.of(), 0.0);
 
 		PhaseComposition {
-			if (amounts == null || amounts.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL
+			if (amounts == null || amounts.size() > ChemicalLimits.MAX_SPECIES
 					|| !Double.isFinite(massResidual)) {
 				throw new IllegalArgumentException("Condensed phase composition is invalid");
 			}
@@ -200,9 +200,6 @@ final class PhaseChangeStageSupport {
 				}
 				total = Math.addExact(total, entry.getValue());
 				canonical.put(entry.getKey(), entry.getValue());
-			}
-			if (total > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
-				throw new IllegalArgumentException("Condensed phase composition is over budget");
 			}
 			amounts = Map.copyOf(canonical);
 		}
@@ -244,6 +241,7 @@ final class PhaseChangeStageSupport {
 
 		CoherentPhaseStore.Composition toCoherent() {
 			if (isEmpty()) return null;
+			requireParcelCapacity();
 			ArrayList<CoherentPhaseStore.Component> components = new ArrayList<>(amounts.size());
 			for (Map.Entry<String, Long> entry : new TreeMap<>(amounts).entrySet()) {
 				components.add(new CoherentPhaseStore.Component(entry.getKey(), entry.getValue()));
@@ -255,7 +253,17 @@ final class PhaseChangeStageSupport {
 		ChemicalMixtureRecord toMixture(ChemicalRegistry registry) {
 			if (isEmpty()) throw new FluidDomain.ThermalPhaseBlockedException(
 					"Chemical melt produced an empty liquid parcel");
+			requireParcelCapacity();
 			return ChemicalMixtureRecord.fromStableAmounts(registry, amounts, massResidual);
+		}
+
+		private void requireParcelCapacity() {
+			long total = 0L;
+			for (long amount : amounts.values()) total = Math.addExact(total, amount);
+			if (amounts.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL
+					|| total > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
+				throw new PhaseCandidateUnavailableException("Phase transfer awaits carrier composition capacity");
+			}
 		}
 
 		static PhaseComposition fromCoherent(CoherentPhaseStore.Composition composition) {

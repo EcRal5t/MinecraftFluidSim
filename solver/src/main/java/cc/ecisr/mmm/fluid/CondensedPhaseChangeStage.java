@@ -318,6 +318,10 @@ final class CondensedPhaseChangeStage {
 				meltedMixture = moved.toMixture(chemistry.registry());
 				chemistry.requireCompatible(
 						meltedMixture, support.materialRegistry().material(liquidHandle).id(), false);
+				if (meltedMixture.totalQuanta() > cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA
+						- chemistry.totalQuanta()) {
+					throw new PhaseCandidateUnavailableException("Melt awaits liquid chemical capacity");
+				}
 			} else if (!moved.isEmpty()) {
 				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Chemical coherent phase cannot melt without chemistry state");

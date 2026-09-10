@@ -298,6 +298,7 @@ public final class ThermalCellGrid {
 		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
 		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
 			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+				if (carriers.internalEnergy(carrier) == modeledEnergy(carrier, temperature[cell])) continue;
 				ThermalMaterialDefinition material = carrierMaterial[carrier];
 				double sensible = (carriers.internalEnergy(carrier) - cachedBaseEnergy(carrier))
 						/ carrierMass[carrier];
@@ -447,6 +448,7 @@ public final class ThermalCellGrid {
 	}
 
 	private void validateCarrierAtCellTemperature(int carrier, double cellTemperature) {
+		if (carriers.internalEnergy(carrier) == modeledEnergy(carrier, cellTemperature)) return;
 		ThermalMaterialDefinition material = carrierMaterial[carrier];
 		double sensible = (carriers.internalEnergy(carrier) - cachedBaseEnergy(carrier)) / carrierMass[carrier];
 		double restored = material.temperatureForSensibleSpecificEnergy(sensible);

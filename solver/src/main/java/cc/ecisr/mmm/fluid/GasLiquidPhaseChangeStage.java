@@ -312,29 +312,32 @@ final class GasLiquidPhaseChangeStage {
 			double gasTemperature = thermal.gasTemperature(node, gasState.network);
 			double batchEnergy = phase.internalEnergyAtTemperature(transition, take.first(), gasTemperature);
 			double candidateGasEnergy = thermal.gasNodeEnergy(node, gasState.network) - batchEnergy;
+			PhaseComposition movedComposition = PhaseComposition.fromGas(moved);
+			ChemicalMixtureRecord condensedMixture = chemistry == null ? null : movedComposition.toMixture(chemistry.registry());
+			if (chemistry != null) {
+				chemistry.requireCompatible(condensedMixture, support.materialRegistry().material(liquidHandle).id(), false);
+				if (condensedMixture.totalQuanta() > cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA
+						- chemistry.totalQuanta()) {
+					throw new PhaseCandidateUnavailableException("Condensation awaits liquid chemical capacity");
+				}
+			}
 			int target = -1;
 			for (int marker = support.state().markerGrid().cellMarkerHead[cell]; marker >= 0;
 					marker = support.state().markerGrid().particleCellNext[marker]) {
 				if (particles.materialHandle(marker) == liquidHandle
 						&& (chemistry == null || !chemistry.indicator(marker))) {
+					try {
+						PhaseChangeStageSupport.adjustedMarkerVolume(particles.volume(marker), addedSvq, "Condensation");
+						if (chemistry != null) condensedMixture = PhaseComposition.fromMixture(
+								chemistry.record(marker), chemistry.registry()).plus(movedComposition).toMixture(chemistry.registry());
+					} catch (PhaseCandidateUnavailableException unavailable) {
+						continue;
+					}
 					target = marker;
 					break;
 				}
 			}
-			PhaseComposition movedComposition = PhaseComposition.fromGas(moved);
-			ChemicalMixtureRecord condensedMixture = null;
-			if (chemistry != null) {
-				if (movedComposition.isEmpty()) throw new FluidDomain.ThermalPhaseBlockedException(
-						"Composition-bearing condensation has no gas species truth");
-				condensedMixture = target >= 0
-						? PhaseComposition.fromMixture(chemistry.record(target), chemistry.registry())
-								.plus(movedComposition).toMixture(chemistry.registry())
-						: movedComposition.toMixture(chemistry.registry());
-				chemistry.requireCompatible(
-						condensedMixture, support.materialRegistry().material(liquidHandle).id(), false);
-				if (target >= 0) chemistry.requireCanCommitPlannedReplacements(
-						new int[]{target}, new ChemicalMixtureRecord[]{condensedMixture});
-			} else if (!moved.species().isEmpty()) {
+			if (chemistry == null && !moved.species().isEmpty()) {
 				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Gas species require liquid chemistry during condensation");
 			}

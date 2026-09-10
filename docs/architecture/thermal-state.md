@@ -184,7 +184,7 @@ p = P0 * (Vstd / Vavailable) * (T / T0)
 
 ## 相变
 
-相变功能依赖热学功能。每个 transition 用完整最小守恒量子定义，运行时按可用能量、库存、目标容量、饱和条件和统一操作预算求最大整数 extent。
+相变功能依赖热学功能。每个 transition 用完整最小守恒量子定义，运行时按可用能量、库存、目标容量、饱和条件和统一操作预算求最大整数 extent。整格组成按 registry 物种容量聚合，目标载体分别验证物种槽位与量子容量；提交前完成液态区域容量预留，凝结优先选择可承接的已有 marker，再使用可用的新 marker 槽位。
 
 logical thermal axis 在最后一次真实 carrier 修改后从全部载体构造派生 LTE grid；若 chemistry 与 granular phase 统计都证明零提交，后续固液和气液扫描复用导热留下的同代 grid，独立 phase 入口则自行重建。
 

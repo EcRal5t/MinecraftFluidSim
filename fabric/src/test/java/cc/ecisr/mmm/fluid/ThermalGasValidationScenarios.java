@@ -1141,6 +1141,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		require(!domain.hasPendingPhaseVolumeWork(),
 				"species-bearing boiling did not consume pending volume before condensation");
 		setAllCondensedCellTemperatures(domain, 260.0);
+		condensationCapacityRetry(domain);
 		FluidDomain.GasThermalPhaseStats firstCondensed = domain.stepGasPhaseChangeOnly(1);
 		GasComponentAmount vaporRemainder = domain.gasBoundary().inventory(1)
 				.component(BuiltinGasDefinitions.WATER_VAPOR);
@@ -1180,6 +1181,20 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						+ partiallyRestored.residualLedger() + "+" + vaporRemainder.massResidual()
 						+ "/" + initial.residualLedger() + " audit="
 						+ domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
+	}
+
+	private static void condensationCapacityRetry(FluidDomain domain) {
+		var original = domain.chemicalParcels.record(1).stableAmounts(domain.chemicalParcels.registry());
+		long fill = ChemicalLimits.MAX_REGION_TOTAL_QUANTA - domain.chemicalParcels.totalQuanta()
+				+ domain.chemicalParcels.record(1).totalQuanta();
+		domain.setMarkerChemical(1, Map.of(BuiltinChemicalDefinitions.H2O, fill), false);
+		SignedDyadic energy = domain.exactInternalEnergy();
+		long gasNanos = domain.gasBoundary().standardVolumeNanos(1);
+		require(domain.stepGasPhaseChangeOnly(1).operations() == 0
+				&& domain.gasBoundary().standardVolumeNanos(1) == gasNanos
+				&& domain.exactInternalEnergy().equals(energy),
+				"condensation reserves chemical capacity before releasing vapor");
+		domain.setMarkerChemical(1, original, false);
 	}
 
 	static double gasSpeciesMassKilograms(ChemicalRegistry registry, GasComponentAmount component) {

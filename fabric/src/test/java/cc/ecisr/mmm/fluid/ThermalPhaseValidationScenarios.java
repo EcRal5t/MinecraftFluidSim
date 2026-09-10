@@ -304,6 +304,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 	}
 
 	static void compositionAndGranularPhaseChangeConservesJointTruth() {
+		boundedPhaseCandidates();
 		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
@@ -368,6 +369,59 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& Math.abs(domain.exactInternalEnergy().subtract(hotEnergy).toDouble()) <= 1.0E-8
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"composition/granular melt did not restore joint species, solid and energy truth");
+	}
+
+	private static void boundedPhaseCandidates() {
+		var granular = BuiltinGranularDefinitions.createRegistry();
+		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		var species = new java.util.ArrayList<cc.ecisr.mmm.chemistry.ChemicalSpecies>();
+		var ids = new java.util.ArrayList<String>();
+		for (int i = 0; i < 17; i++) {
+			String id = "test:s" + i; ids.add(id);
+			species.add(new cc.ecisr.mmm.chemistry.ChemicalSpecies(id, Map.of("A", 1), 0, ExactRational.ONE, 0));
+		}
+		var chemistry = new ChemicalRegistry(species, List.of(new cc.ecisr.mmm.chemistry.ChemicalPhaseDefinition(
+				"test:phase", "mmm:water", ids, Map.of(ids.getFirst(), ExactRational.ONE), false)),
+				List.of(new cc.ecisr.mmm.chemistry.ChemicalReaction("test:r",
+						cc.ecisr.mmm.chemistry.ChemicalReaction.Kind.INSTANTANEOUS, "test:phase",
+						Map.of("test:s0", 1), Map.of("test:s1", 1), ExactRational.ZERO)));
+		var thermal = compositionPhaseThermalRegistry(liquids, granular, chemistry);
+		for (int divisor = 1; divisor <= 2; divisor++) {
+			var domain = new FluidDomain(3, 3, 3, config, 256);
+			domain.setVolume(0, 0, 0, 0.25F); domain.bindMaterialRegistry(liquids); domain.bindChemistry(chemistry);
+			for (int marker = 0; marker < 2; marker++) {
+				domain.particles.setVolume(marker, 0.0625F); domain.particles.setMass(marker, 62.5);
+				var amounts = new java.util.TreeMap<String, Long>();
+				for (int i = marker * 8; i < (marker == 0 ? 8 : 17); i++) amounts.put(ids.get(i), 10L);
+				domain.setMarkerChemical(marker, amounts, false);
+			}
+			var transition = thermal.transitions().getFirst();
+			var bounded = new ThermalRegistry(thermal.materials(), thermal.speciesOffsets(), List.of(
+					new ThermalPhaseTransition(transition.id(), transition.lowerEnergyMaterialId(), transition.upperEnergyMaterialId(),
+							300.0, transition.lowerVolumeSvqPerBatch() / divisor, transition.upperVolumeSvqPerBatch() / divisor,
+							transition.massMuPerBatch().divide(divisor), transition.interfaceRequirement(), 0, 200_000)),
+					chemistry.fingerprint(), granular.fingerprint());
+			domain.bindThermal(bounded, liquids, 280.0);
+			var energy = domain.exactInternalEnergy();
+			require(domain.stepInertPhaseChangeOnly(1).operations() == divisor - 1
+					&& domain.exactInternalEnergy().equals(energy),
+					"cell aggregate and target carrier enforce their own composition capacities");
+		}
+		var domain = new FluidDomain(3, 3, 3, config, 256);
+		domain.setVolume(2, 2, 2, 0.125F); domain.bindMaterialRegistry(liquids); domain.bindChemistry(chemistry);
+		domain.setMarkerChemical(0, Map.of(ids.getFirst(), cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA), false);
+		domain.bindThermal(thermal, liquids, 320.0);
+		var composition = new CoherentPhaseStore.Composition(List.of(new CoherentPhaseStore.Component(ids.getFirst(), 1L)),
+				Double.doubleToRawLongBits(15.625 - 1.0e-9));
+		domain.addCoherentPhaseExternal(0, 0, 0, "test:thermal/composition_ice", SolidVolume.SVQ_PER_CELL / 8,
+				15.625, composition, 3125.0);
+		var energy = domain.exactInternalEnergy();
+		require(domain.stepInertPhaseChangeOnly(1).operations() == 0 && domain.exactInternalEnergy().equals(energy),
+				"melt reserves liquid chemical capacity before transferring solid inventory");
+		domain.setMarkerChemical(0, Map.of(ids.getFirst(), 1L), false);
+		require(domain.stepInertPhaseChangeOnly(1).operations() == 1, "melt resumes when liquid capacity opens");
 	}
 
 	static ThermalRegistry compositionPhaseThermalRegistry(
