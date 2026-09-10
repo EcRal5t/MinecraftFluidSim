@@ -126,8 +126,8 @@ public final class FiniteThermalExchange {
 			throw new IllegalArgumentException("Finite thermal body material is not a device carrier");
 		}
 		ThermalStateFunction stateFunction = new ThermalStateFunction(registry);
-		stateFunction.stateForInternalEnergy(
-				materialHandle, body.massKilograms(), java.util.Map.of(), body.internalEnergyEu());
+		double initialBodyTemperature = stateFunction.stateForInternalEnergy(
+				materialHandle, body.massKilograms(), java.util.Map.of(), body.internalEnergyEu()).temperatureK();
 		double minimumBodyHeatCapacity = Double.POSITIVE_INFINITY;
 		for (ThermalMaterialDefinition.CaloricSegment segment : material.caloricSegments()) {
 			minimumBodyHeatCapacity = Math.min(minimumBodyHeatCapacity,
@@ -138,7 +138,9 @@ public final class FiniteThermalExchange {
 		}
 		double conductanceSum = 0.0;
 		double stableDt = Double.POSITIVE_INFINITY;
+		boolean exchangeRequired = false;
 		for (Contact contact : canonical) {
+			exchangeRequired |= contact.temperatureK() != initialBodyTemperature;
 			conductanceSum += contact.conductanceEuPerSecondK();
 			stableDt = Math.min(stableDt, 0.5 * contact.heatCapacityEuPerK()
 					/ contact.conductanceEuPerSecondK());
@@ -150,7 +152,7 @@ public final class FiniteThermalExchange {
 		// heat capacity can make a later lower-capacity segment unstable, so bind the whole plan
 		// to the smallest capacity in the registry-frozen declared segments.
 		stableDt = Math.min(stableDt, 0.5 * minimumBodyHeatCapacity / conductanceSum);
-		int substeps = (int) Math.ceil(logicalDtSeconds / stableDt);
+		int substeps = exchangeRequired ? Math.max(1, (int) Math.ceil(logicalDtSeconds / stableDt)) : 1;
 		if (substeps > maximumSubsteps) {
 			throw new IllegalArgumentException("Finite thermal stability substep budget exceeded: " + substeps);
 		}

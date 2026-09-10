@@ -145,7 +145,7 @@ Delta U_b = -Delta U_a
 dt_stable = min_cell(0.5 * C_cell / sum_faces G_face)
 ```
 
-自动分 substep；`0.5` 保证一对相同 cell 单调趋近平衡而非一步交换温度。所需 substep 超过 8 时安全暂停。hot loop 使用 `double`，每个 face 对的增减严格镜像；commit 边界用 `SignedDyadic` 精确求和记录 IEEE-754 有限数，舍入残差单列保存，不能伪装成 source 或 sink。
+自动分 substep；`0.5` 保证一对相同 cell 单调趋近平衡。有温差时，所需 substep 超过 8 会安全暂停。所有导热接触两端温度逐值相等时，系统已处于导热稳态，以一个零交换步骤完成；这条路径先校验接触几何，并继续处理 cell 内各载体的热平衡分配。有限设备与全部端口等温时采用相同规则，保留设备代次和原始内能。hot loop 使用 `double`，每个 face 对的增减严格镜像；commit 边界用 `SignedDyadic` 精确求和记录 IEEE-754 有限数，舍入残差单列保存。
 
 批量求和按 binary64 固有的 2,046 个 dyadic exponent 分桶，每桶以有符号 128-bit 两字累加后只做一次 `BigInteger` 合并；它与逐项 exact add bit-for-bit 等价，不是近似归约，也不会按载体种类跳过审计。
 

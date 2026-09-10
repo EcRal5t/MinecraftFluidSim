@@ -93,12 +93,16 @@ public final class ThermalTransport {
 		for (int cell = 0; cell < initialTemperature.length; cell++) initialTemperature[cell] = grid.temperature(cell);
 
 		Arrays.fill(conductanceSum, 0.0);
+		boolean[] exchangeRequired = {false};
 		int evaluatedFaces = forEachFace(grid, faceArea, (first, second, conductance) -> {
 			conductanceSum[first] += conductance;
 			conductanceSum[second] += conductance;
+			exchangeRequired[0] |= grid.temperature(first) != grid.temperature(second);
 		});
-		evaluatedFaces += forEachBoundary(grid, boundaryFace,
-				(cell, conductance, surfaceTemperature) -> conductanceSum[cell] += conductance);
+		evaluatedFaces += forEachBoundary(grid, boundaryFace, (cell, conductance, surfaceTemperature) -> {
+			conductanceSum[cell] += conductance;
+			exchangeRequired[0] |= grid.temperature(cell) != surfaceTemperature;
+		});
 		double stableDt = Double.POSITIVE_INFINITY;
 		for (int cell = 0; cell < conductanceSum.length; cell++) if (conductanceSum[cell] > 0.0) {
 			// A pair of equal cells both move during one Jacobi update. The usual positivity bound C/sum(G)
@@ -106,7 +110,10 @@ public final class ThermalTransport {
 			// gives monotone approach to LTE without a mesh- or material-specific damping heuristic.
 			stableDt = Math.min(stableDt, 0.5 * grid.heatCapacity(cell) / conductanceSum[cell]);
 		}
-		int substeps = stableDt == Double.POSITIVE_INFINITY ? 1 : (int) Math.ceil(logicalDtSeconds / stableDt);
+		// Equal temperatures on every conducting contact are an exact stationary solution.
+		// One pass still validates carrier LTE and performs any required intracell energy handoff.
+		int substeps = !exchangeRequired[0] ? 1
+				: Math.max(1, (int) Math.ceil(logicalDtSeconds / stableDt));
 		if (substeps > maximumSubsteps) {
 			throw new IllegalArgumentException("Thermal stability substep budget exceeded: " + substeps);
 		}

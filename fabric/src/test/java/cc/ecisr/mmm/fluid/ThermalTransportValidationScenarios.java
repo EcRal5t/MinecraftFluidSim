@@ -187,6 +187,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		domain.setThermalTemperatureInCell(1, 1, 1, 350.0);
 		domain.setThermalTemperatureInCell(2, 1, 1, 250.0);
 		SignedDyadic before = domain.exactInternalEnergy();
+		expectFailure(() -> domain.stepThermalOnly(10_000.0), "active conduction requires its stability budget");
+		require(domain.exactInternalEnergy().equals(before), "rejected conduction preserves carrier energy");
 		domain.stepThermalOnly(1_000.0);
 		double hot = domain.thermalTemperatureInCell(1, 1, 1);
 		double cold = domain.thermalTemperatureInCell(2, 1, 1);
@@ -197,8 +199,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(Math.abs(domain.exactInternalEnergy().subtract(before).toDouble()) <= 1.0E-6,
 				"adiabatic thermal transport changed total internal energy beyond representation residual");
 		double[] equilibratedCarrierEnergy = domain.exportThermalParticleState().copyInternalEnergy();
-		ThermalTransport.Stats noFlux = domain.stepThermalOnly(1.0);
-		require(noFlux.maximumAbsoluteTransferEu() == 0.0
+		ThermalTransport.Stats noFlux = domain.stepThermalOnly(10_000.0);
+		require(noFlux.substeps() == 1 && noFlux.maximumAbsoluteTransferEu() == 0.0
 				&& Arrays.equals(equilibratedCarrierEnergy,
 						domain.exportThermalParticleState().copyInternalEnergy()),
 				"zero-flux LTE transport rewrote authoritative carrier energy");
@@ -326,8 +328,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		FiniteThermalExchange.Plan noOp = FiniteThermalExchange.plan(registry, equilibrium, List.of(
 				new FiniteThermalExchange.Contact(0, 350.0, 2_000.0, 100.0, 250.0, 500.0),
 				new FiniteThermalExchange.Contact(1, 350.0, 1_000.0, 50.0, 250.0, 500.0)
-		), 1.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-		require(!noOp.changed() && noOp.after().equals(equilibrium)
+		), 1_000.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		require(!noOp.changed() && noOp.substeps() == 1 && noOp.after().equals(equilibrium)
 				&& noOp.contacts().stream().allMatch(contact -> contact.internalEnergyDeltaEu() == 0.0),
 				"equilibrated finite thermal body produced a false durable mutation");
 
@@ -410,6 +412,12 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		};
 		ThermalDomainState thermal = FluidThermalBinding.create(new ThermalRegistry(List.of(definition)), liquids,
 				300.0, 1, 2, 2, 2, 0.5F, markers);
+		SignedDyadic equilibriumEnergy = thermal.exactEnergy(1);
+		ThermalTransport.Stats equilibrium = thermal.step(markers, (x, y, z, axis) -> 0.0,
+				(x, y, z, direction) -> direction == 0
+						? new ThermalTransport.FixedBoundary(0.25, 300.0) : null, 1_000.0);
+		require(equilibrium.substeps() == 1 && equilibrium.reservoirExchange().equals(SignedDyadic.ZERO)
+				&& thermal.exactEnergy(1).equals(equilibriumEnergy), "equilibrated boundary preserves energy");
 		ThermalTransport.Stats heated = thermal.step(markers, (x, y, z, axis) -> 0.0,
 				(x, y, z, direction) -> direction == 0
 						? new ThermalTransport.FixedBoundary(0.25, 400.0) : null, 1.0);
