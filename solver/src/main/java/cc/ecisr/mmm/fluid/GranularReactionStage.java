@@ -2,6 +2,7 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
+import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.granular.GranularCouplingFields;
 import cc.ecisr.mmm.granular.GranularDepositDynamics;
 import cc.ecisr.mmm.granular.GranularDepositStore;
@@ -14,6 +15,7 @@ import cc.ecisr.mmm.thermal.GranularEnergyColumn;
 import cc.ecisr.mmm.thermal.GranularEnergyState;
 import cc.ecisr.mmm.thermal.ThermalCarrierContext;
 import cc.ecisr.mmm.thermal.ThermalDomainState;
+import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.math.BigInteger;
@@ -104,8 +106,7 @@ final class GranularReactionStage {
 								rule.solidMaterialId())).maximumActiveParcelSvq())
 						/ rule.solidVolumeSvqPerBatch();
 				long perStepExtent = Math.multiplyExact(perStepBatches, rule.solidExtentPerBatch());
-				if (perStepExtent <= 0L) throw new GranularPhaseTransferEngine.BlockedException(
-						"Solid-liquid rule is below one representable transfer extent");
+				if (perStepExtent <= 0L) continue;
 				List<GranularPhaseTransferEngine.LiquidParcel> liquid = new ArrayList<>(markers.size());
 				for (int marker : markers) liquid.add(new GranularPhaseTransferEngine.LiquidParcel(
 						marker, state.particles().volume(marker), state.particles().mass(marker), chemistry.record(marker)));
@@ -116,7 +117,10 @@ final class GranularReactionStage {
 					plan = access.transferEngine().plan(rule, liquid, existingExtent,
 							Math.min(perStepExtent, accessible.selected().extent()));
 				}
-				if (!plan.changed()) continue;
+				if (!plan.changed()) {
+					if (plan.retryRequired()) chemistry.markDirtyCell(cell);
+					continue;
+				}
 				if (plan.precipitation()) {
 					if (!commitPrecipitation(cell, rule, plan)) {
 						/*
@@ -132,7 +136,10 @@ final class GranularReactionStage {
 						throw new GranularPhaseTransferEngine.BlockedException(
 								"Dissolution target has no accessible solid inventory");
 					}
-					commitDissolution(cell, rule, plan, accessible.selected());
+					if (!commitDissolution(cell, rule, plan, accessible.selected())) {
+						chemistry.markDirtyCell(cell);
+						continue;
+					}
 				}
 				transfers++;
 				if (plan.precipitation()) precipitated++; else dissolved++;
@@ -210,7 +217,7 @@ final class GranularReactionStage {
 		SignedDyadic pendingVolume = planGranularPhaseVolumeEvent(plan);
 		int[] markers = updateMarkers(plan);
 		ChemicalMixtureRecord[] mixtures = updateMixtures(plan);
-		chemistry.requireCanCommitPlannedReplacements(markers, mixtures);
+		if (!canReplaceMarkers(markers, mixtures)) return false;
 		int carrierMarker = precipitationCarrierMarker(cell, plan);
 		int x = cell % state.sizeX(), yz = cell / state.sizeX();
 		int y = yz % state.sizeY(), z = yz / state.sizeY();
@@ -228,11 +235,12 @@ final class GranularReactionStage {
 				cell, material, plan, position, carrierMarker, occupiedBefore);
 		ThermalDomainState thermal = access.thermalState();
 		if (merge != null) {
-			ThermalDomainState.ReactionPlan thermalPlan = thermal == null ? null : thermal.requireGranularReaction(
+			ThermalDomainState.ReactionPlan thermalPlan = thermal == null ? null : planThermalReaction(
 					cell, thermalReactionMarkers(plan), new GranularEnergyState.GranularReactionEdit(
 							GranularEnergyState.GranularReactionKind.REPLACE_ACTIVE, merge.parcelIndex(), null,
 							material, merge.parcel().mass(),
-							merge.composition().stableAmounts(chemistry.registry())), state.thermalMarkers());
+							merge.composition().stableAmounts(chemistry.registry())));
+			if (thermal != null && thermalPlan == null) return false;
 			chemistry.commitPlannedReplacements(markers, mixtures);
 			applyMarkerUpdates(plan);
 			granular.compositions.overwrite(merge.compositionHandle(), merge.composition());
@@ -259,10 +267,14 @@ final class GranularReactionStage {
 			granular.compositions.release(composition);
 			throw new GranularPhaseTransferEngine.BlockedException("Precipitation active parcel budget exceeded");
 		}
-		ThermalDomainState.ReactionPlan thermalPlan = thermal == null ? null : thermal.requireGranularReaction(
+		ThermalDomainState.ReactionPlan thermalPlan = thermal == null ? null : planThermalReaction(
 				cell, thermalReactionMarkers(plan), new GranularEnergyState.GranularReactionEdit(
 						GranularEnergyState.GranularReactionKind.ADD_ACTIVE, -1, null, material, parcel.mass(),
-						plan.transferredComposition().stableAmounts(chemistry.registry())), state.thermalMarkers());
+						plan.transferredComposition().stableAmounts(chemistry.registry())));
+		if (thermal != null && thermalPlan == null) {
+			granular.compositions.release(composition);
+			return false;
+		}
 		try {
 			chemistry.commitPlannedReplacements(markers, mixtures);
 		} catch (RuntimeException failure) {
@@ -344,7 +356,7 @@ final class GranularReactionStage {
 		throw new IllegalStateException("Precipitation carrier selection changed during planning");
 	}
 
-	private void commitDissolution(
+	private boolean commitDissolution(
 			int cell, SolidLiquidReaction rule, GranularPhaseTransferEngine.Plan plan, SolidEntity solid
 	) {
 		ChemicalParcelStore chemistry = access.chemistry();
@@ -365,20 +377,18 @@ final class GranularReactionStage {
 		double remainingMass = solid.mass() - removedMass;
 		if (!full && (!(remainingMass > 0.0)
 				|| !FluidDomain.massClose(remaining.totalMass(chemistry.registry()), remainingMass))) {
-			throw new GranularPhaseTransferEngine.BlockedException(
-					"Dissolution solid mass split is not representable");
+			return false;
 		}
 		if (solid.deposit()) {
 			GranularDepositStore.SolidPortion preview = granular.deposits.peekTakeCompositionAware(
 					cell, solid.materialHandle(), solid.compositionHandle(), removedSvq);
 			if (!FluidDomain.massClose(preview.mass(), removedMass)) {
-				throw new GranularPhaseTransferEngine.BlockedException(
-						"Dissolution deposit mass split is not representable");
+				return false;
 			}
 		}
 		int[] markers = updateMarkers(plan);
 		ChemicalMixtureRecord[] mixtures = updateMixtures(plan);
-		chemistry.requireCanCommitPlannedReplacements(markers, mixtures);
+		if (!canReplaceMarkers(markers, mixtures)) return false;
 		GranularEnergyColumn.DepositKey thermalDepositKey = solid.deposit()
 				? new GranularEnergyColumn.DepositKey(cell, solid.materialHandle(), solid.compositionHandle()) : null;
 		GranularEnergyState.GranularReactionKind thermalKind = solid.deposit()
@@ -388,11 +398,11 @@ final class GranularReactionStage {
 				: GranularEnergyState.GranularReactionKind.REPLACE_ACTIVE);
 		Map<String, Long> finalComposition = full ? Map.of() : remaining.stableAmounts(chemistry.registry());
 		ThermalDomainState thermal = access.thermalState();
-		ThermalDomainState.ReactionPlan thermalPlan = thermal == null ? null : thermal.requireGranularReaction(
+		ThermalDomainState.ReactionPlan thermalPlan = thermal == null ? null : planThermalReaction(
 				cell, thermalReactionMarkers(plan), new GranularEnergyState.GranularReactionEdit(
 						thermalKind, solid.deposit() ? -1 : solid.index(), thermalDepositKey,
-						full ? -1 : solid.materialHandle(), full ? 0.0 : remainingMass, finalComposition),
-				state.thermalMarkers());
+						full ? -1 : solid.materialHandle(), full ? 0.0 : remainingMass, finalComposition));
+		if (thermal != null && thermalPlan == null) return false;
 		if (thermal != null) {
 			if (solid.deposit()) thermal.previewDepositTake(thermalDepositKey, removedSvq, solid.solidSvq());
 			else thermal.previewActiveTake(solid.index(), removedSvq, solid.solidSvq());
@@ -419,6 +429,25 @@ final class GranularReactionStage {
 		if (thermalPlan != null) thermal.commitGranularReaction(thermalPlan, state.thermalMarkers());
 		commitPendingPhaseVolume(cell, pendingVolume);
 		markPhaseTransferDirty(cell);
+		return true;
+	}
+
+	private ThermalDomainState.ReactionPlan planThermalReaction(int cell,
+			List<GranularEnergyState.ReactionMarker> replacements, GranularEnergyState.GranularReactionEdit edit) {
+		try {
+			return access.thermalState().requireGranularReaction(cell, replacements, edit, state.thermalMarkers());
+		} catch (ThermalStateFunction.EnergyOutsideValidityException unavailable) {
+			return null;
+		}
+	}
+
+	private boolean canReplaceMarkers(int[] markers, ChemicalMixtureRecord[] mixtures) {
+		try {
+			access.chemistry().requireCanCommitPlannedReplacements(markers, mixtures);
+			return true;
+		} catch (ChemicalReactionEngine.BudgetExceededException unavailable) {
+			return false;
+		}
 	}
 
 	private SignedDyadic planGranularPhaseVolumeEvent(GranularPhaseTransferEngine.Plan plan) {

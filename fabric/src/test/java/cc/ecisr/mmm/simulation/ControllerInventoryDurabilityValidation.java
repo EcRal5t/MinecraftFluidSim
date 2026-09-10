@@ -238,8 +238,8 @@ final class ControllerInventoryDurabilityValidation {
 		runScenario("base-then-acid precipitation", registries, state -> {
 			state.insertBase(7); state.insertAcid(7); state.steps(true, 20);
 		});
-		runScenario("rapid acid-then-base precipitation", registries, state -> {
-			state.insertAcid(7); state.insertBase(7); state.steps(true, 20);
+		runScenario("cold acid-base precipitation", registries, state -> {
+			state.insertAcid(); state.insertBase(); state.temperature(1.0); state.steps(true, 40);
 		});
 		runScenario("alternating acid-base precipitation", registries, state -> {
 			for (int bucket = 0; bucket < 6; bucket++) {
@@ -258,11 +258,11 @@ final class ControllerInventoryDurabilityValidation {
 		runScenario("mercury-coexisting acid-base precipitation", registries, state -> {
 			state.insertAcid(4); state.insertMercury(); state.insertBase(4); state.steps(true, 20);
 		});
-		runScenario("sand-coexisting acid-base precipitation", registries, state -> {
-			state.insertAcid(4); state.insertSand(); state.insertBase(4); state.steps(true, 20);
+		runScenario("cold sand-water coupling", registries, state -> {
+			state.insertWater(); state.insertSand(); state.temperature(260.0); state.steps(true, 60);
 		});
 		runScenario("acid-base cold-restore before phase", registries, state -> {
-			state.insertAcid(4); state.insertBase(4); state.roundTrip(); state.steps(true, 20);
+			state.insertAcid(); state.insertBase(); state.temperature(1500.0); state.roundTrip(); state.steps(true, 60);
 		});
 		runScenario("acid-base precipitation then vent", registries, state -> {
 			state.insertAcid(4); state.insertBase(4); state.steps(true, 12);
@@ -387,6 +387,12 @@ final class ControllerInventoryDurabilityValidation {
 			sand = new GranularTransferLedger(java.util.List.of(new GranularTransferLedger.Group(
 					BuiltinGranularDefinitions.FINE_SAND, SolidVolume.SVQ_PER_BV, mass, null)));
 			roundTrip();
+		}
+
+		void temperature(double kelvin) {
+			for (int z = 0; z < 8; z++) for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {
+				if (domain.exactVolumeNear(x, y, z, 0, -1) > 0.0) domain.setThermalTemperatureInCell(x, y, z, kelvin);
+			}
 		}
 
 		void insertWater() { insertLiquid(water); }

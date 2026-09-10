@@ -25,14 +25,15 @@ public final class GranularMechanics {
 				&& Double.isFinite(dt) && dt > 0.0)) {
 			throw new IllegalArgumentException("Granular mechanics gravity and dt are invalid");
 		}
-		FluidSample[] fluidSamples = sampleAndValidateCarrierRange(parcels, registry, environment);
+		sampleAndValidateCarrierRange(parcels, registry, environment);
 		double maximumSpeed = 0.0, totalFluidImpulseX = 0.0, totalFluidImpulseY = 0.0, totalFluidImpulseZ = 0.0;
 		double boundaryImpulseX = 0.0, boundaryImpulseY = 0.0, boundaryImpulseZ = 0.0;
 		int submerged = 0;
 		for (int index = 0; index < parcels.count(); index++) {
 			GranularParcelStore.Parcel parcel = parcels.parcel(index);
 			ParticulateMaterial material = registry.material(parcel.materialHandle());
-			FluidSample fluid = fluidSamples[index];
+			FluidSample fluid = environment.sample(parcel.x(), parcel.y(), parcel.z());
+			validateCarrierRange(parcel, material, fluid);
 			double fraction = clamp(fluid.submergedFraction(), 0.0, 1.0);
 			double oldX = parcel.velocityX(), oldY = parcel.velocityY(), oldZ = parcel.velocityZ();
 			double newX = oldX, newY = oldY, newZ = oldZ;
@@ -56,25 +57,12 @@ public final class GranularMechanics {
 						? 3.0 * Math.PI * fluid.dynamicViscosity() * diameter * representedGrains
 						: 0.5 * dragCoefficient(reynolds) * fluid.density() * area * slip;
 				dragRate = linearDrag / massKg;
-				double fluidMassKg = fluid.coupledFluidMassPerImmersedVolume() * solidVolumeM3 * fraction;
-				if (!(Double.isFinite(fluidMassKg) && fluidMassKg > 0.0)) {
-					throw new ValidityExceededException("Granular carrier has no finite coupled liquid mass");
-				}
-				double fluidAccelerationY = -massKg * buoyancyAcceleration / fluidMassKg;
-				double coupledDragRate = dragRate * (1.0 + massKg / fluidMassKg);
-				double relaxation = Math.exp(-coupledDragRate * dt);
-				double relativeAccelerationResponse = coupledDragRate == 0.0
-						? dt : -Math.expm1(-coupledDragRate * dt) / coupledDragRate;
-				double combinedMass = massKg + fluidMassKg;
-				newX = coupledParticleVelocity(
-						oldX, massKg, 0.0, fluid.velocityX(), fluidMassKg, 0.0,
-						combinedMass, relaxation, relativeAccelerationResponse, dt);
-				newY = coupledParticleVelocity(
-						oldY, massKg, externalAccelerationY, fluid.velocityY(), fluidMassKg, fluidAccelerationY,
-						combinedMass, relaxation, relativeAccelerationResponse, dt);
-				newZ = coupledParticleVelocity(
-						oldZ, massKg, 0.0, fluid.velocityZ(), fluidMassKg, 0.0,
-						combinedMass, relaxation, relativeAccelerationResponse, dt);
+				newX = coupledParticleVelocity(oldX, massKg, 0.0, fluid.velocityX(),
+						fluid.coupledMassX(), 0.0, dragRate, dt);
+				newY = coupledParticleVelocity(oldY, massKg, externalAccelerationY, fluid.velocityY(),
+						fluid.coupledMassY(), -massKg * buoyancyAcceleration, dragRate, dt);
+				newZ = coupledParticleVelocity(oldZ, massKg, 0.0, fluid.velocityZ(),
+						fluid.coupledMassZ(), 0.0, dragRate, dt);
 			} else {
 				newY += externalAccelerationY * dt;
 			}
@@ -105,45 +93,55 @@ public final class GranularMechanics {
 				boundaryImpulseX, boundaryImpulseY, boundaryImpulseZ);
 	}
 
-	private static FluidSample[] sampleAndValidateCarrierRange(
+	private static void sampleAndValidateCarrierRange(
 			GranularParcelStore parcels, GranularRegistry registry, Environment environment
 	) {
-		FluidSample[] samples = new FluidSample[parcels.count()];
 		for (int index = 0; index < parcels.count(); index++) {
-			GranularParcelStore.Parcel parcel = parcels.parcel(index);
-			FluidSample fluid = environment.sample(parcel.x(), parcel.y(), parcel.z());
-			if (fluid == null) throw new ValidityExceededException("Granular environment returned no fluid sample");
-			samples[index] = fluid;
-			double fraction = clamp(fluid.submergedFraction(), 0.0, 1.0);
-			if (!fluid.hasLiquid() || fraction <= 0.0) continue;
-			double slipX = parcel.velocityX() - fluid.velocityX();
-			double slipY = parcel.velocityY() - fluid.velocityY();
-			double slipZ = parcel.velocityZ() - fluid.velocityZ();
-			double slip = Math.sqrt(slipX * slipX + slipY * slipY + slipZ * slipZ);
-			double diameter = registry.material(parcel.materialHandle()).primaryGrainDiameterMeters();
-			double reynolds = fluid.density() * diameter * slip / fluid.dynamicViscosity();
-			if (!(Double.isFinite(reynolds) && reynolds <= fluid.maximumReynolds())) {
-				throw new ValidityExceededException("Granular carrier Reynolds validity range exceeded: Re="
-						+ reynolds + ", maximum=" + fluid.maximumReynolds() + ", slip=" + slip
-						+ " m/s, diameter=" + diameter + " m, density=" + fluid.density()
-						+ " kg/m^3, viscosity=" + fluid.dynamicViscosity() + " Pa*s, particle=("
-						+ parcel.velocityX() + "," + parcel.velocityY() + "," + parcel.velocityZ()
-						+ "), fluid=(" + fluid.velocityX() + "," + fluid.velocityY() + ","
-						+ fluid.velocityZ() + ") m/s");
-			}
+			var parcel = parcels.parcel(index);
+			validateCarrierRange(parcel, registry.material(parcel.materialHandle()),
+					environment.sample(parcel.x(), parcel.y(), parcel.z()));
 		}
-		return samples;
+	}
+
+	private static void validateCarrierRange(
+			GranularParcelStore.Parcel parcel, ParticulateMaterial material, FluidSample fluid
+	) {
+		if (fluid == null) throw new ValidityExceededException("Granular environment returned no fluid sample");
+
+		double fraction = clamp(fluid.submergedFraction(), 0.0, 1.0);
+		if (!fluid.hasLiquid() || fraction <= 0.0) return;
+		double slipX = parcel.velocityX() - fluid.velocityX();
+		double slipY = parcel.velocityY() - fluid.velocityY();
+		double slipZ = parcel.velocityZ() - fluid.velocityZ();
+		double slip = Math.sqrt(slipX * slipX + slipY * slipY + slipZ * slipZ);
+		double diameter = material.primaryGrainDiameterMeters();
+		double reynolds = fluid.density() * diameter * slip / fluid.dynamicViscosity();
+		if (!(Double.isFinite(reynolds) && reynolds <= fluid.maximumReynolds())) {
+			throw new ValidityExceededException("Granular carrier Reynolds validity range exceeded: Re="
+					+ reynolds + ", maximum=" + fluid.maximumReynolds() + ", slip=" + slip
+					+ " m/s, diameter=" + diameter + " m, density=" + fluid.density()
+					+ " kg/m^3, viscosity=" + fluid.dynamicViscosity() + " Pa*s, particle=("
+					+ parcel.velocityX() + "," + parcel.velocityY() + "," + parcel.velocityZ()
+					+ "), fluid=(" + fluid.velocityX() + "," + fluid.velocityY() + ","
+					+ fluid.velocityZ() + ") m/s");
+		}
+
 	}
 
 	private static double coupledParticleVelocity(
 			double particle, double particleMass, double particleAcceleration,
-			double fluid, double fluidMass, double fluidAcceleration,
-			double combinedMass, double relaxation, double relativeAccelerationResponse, double dt
+			double fluid, double fluidMass, double fluidForce, double dragRate, double dt
 	) {
+		if (fluidMass == 0.0) return particle + particleAcceleration * dt;
+		double coupledDragRate = dragRate * (1.0 + particleMass / fluidMass);
+		double relaxation = Math.exp(-coupledDragRate * dt);
+		double response = coupledDragRate == 0.0 ? dt : -Math.expm1(-coupledDragRate * dt) / coupledDragRate;
+		double fluidAcceleration = fluidForce / fluidMass;
+		double combinedMass = particleMass + fluidMass;
 		double center = (particleMass * particle + fluidMass * fluid) / combinedMass
-				+ (particleMass * particleAcceleration + fluidMass * fluidAcceleration) / combinedMass * dt;
+				+ (particleMass * particleAcceleration + fluidForce) / combinedMass * dt;
 		double relative = (particle - fluid) * relaxation
-				+ (particleAcceleration - fluidAcceleration) * relativeAccelerationResponse;
+				+ (particleAcceleration - fluidAcceleration) * response;
 		return center + fluidMass / combinedMass * relative;
 	}
 
@@ -167,14 +165,12 @@ public final class GranularMechanics {
 	public record FluidSample(
 			boolean hasLiquid, double velocityX, double velocityY, double velocityZ,
 			double density, double dynamicViscosity, double maximumReynolds, double submergedFraction,
-			double coupledFluidMassPerImmersedVolume
+			double coupledMassX, double coupledMassY, double coupledMassZ
 	) {
 		public FluidSample {
-			boolean couplingValid = hasLiquid
-					? Double.isFinite(coupledFluidMassPerImmersedVolume)
-					&& coupledFluidMassPerImmersedVolume > 0.0
-					: Double.doubleToRawLongBits(coupledFluidMassPerImmersedVolume)
-					== Double.doubleToRawLongBits(0.0);
+			boolean couplingValid = Double.isFinite(coupledMassX) && coupledMassX >= 0.0
+					&& Double.isFinite(coupledMassY) && coupledMassY >= 0.0
+					&& Double.isFinite(coupledMassZ) && coupledMassZ >= 0.0;
 			if (!(Double.isFinite(velocityX) && Double.isFinite(velocityY) && Double.isFinite(velocityZ)
 					&& Double.isFinite(density) && density > 0.0
 					&& Double.isFinite(dynamicViscosity) && dynamicViscosity > 0.0

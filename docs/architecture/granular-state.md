@@ -85,7 +85,7 @@ Re = rho_f * d * |u_f - u_p| / mu
 
 阻力使用 Schiller–Naumann 相关式：`Re < 1000` 时 `Cd = 24/Re * (1 + 0.15 Re^0.687)`，更高时取其常用高 Reynolds 极限 `0.44`。参与阻力的代表颗粒数按同一格的实际浸没比例缩放；不能让一小层液体对整份 parcel 施加满浸没阻力，再把该反冲写入同一小层液体。
 
-同格有限液体质量按各 parcel 的浸没固体体积分配，parcel 与该载体份额做两体指数松弛。液体采样同时要求存在液体 marker 和正孔隙容量；零孔隙格子走干态载体路径。等价 parcel 的拆分保持总耦合，反冲趋向共同动量平衡点。carrier 的 Reynolds 适用域、物性有限性与正容量要求在提交前验证。
+各方向的有限载体质量由实际 MAC 采样和反冲核给出：`M_eff = sum(w*m)^2 / sum(w*w*m)`。parcel 按此质量做两体指数松弛，后续 parcel 读取已承接反冲的速度。液体采样要求存在液体 marker 和正孔隙容量；零孔隙格子走干态路径。carrier 的 Reynolds 适用域和物性在预检与每次交换前验证。
 
 浮力和阻力对 parcel 的冲量有等量反向项写回液体动量。载体速度采样与反作用散布必须使用同一份 `trilinear weight × P2G face mass` 核：零质量外推 face 不属于有限载体，非零 face 按质量伴随算子共同承接冲量，不能先按纯几何权重分冲量再除以各 face 质量。
 
@@ -122,9 +122,9 @@ dirty queue、安静年龄和邻居轮转步不是库存，不能用于恢复 SV
 
 reaction/phase candidate 必须先在不可变快照上规划 exact extent，再一次提交所有 side column。规划预算以 cell、reaction 和 batch 操作计数，有硬上限；预算耗尽保留当前及未扫描 cell 的 dirty 状态并延期，不允许把半个 extent 留在液相、另一半留在固相。
 
-marker 的 binary32 体积列也是候选表示格：优先结果若不能把总 solid SVQ 精确分配到当前 marker，规划器必须确定性重分配或按完整 reaction batch 缩小 extent；剩余 species quanta 无法让每个 marker 保持非空、或任何合法整批都不可表示时，本步延后而不暂停合法 base。
+marker 的 binary32 体积列也是候选表示格：规划器按完整 reaction batch 确定性分配体积与 species，逐个验证 marker 正质量、物种槽位和量子容量。候选受限时缩小整批，保持原库存与 dirty 调度等待下一次求值。单向规则只生成沉淀候选；每步表面额度只结算完整批次。
 
-合法 precipitation extent 暂时找不到 collision-valid active parcel 位置、联合 occupancy 不足，或 active/composition 固定预算已满时，同样零修改并保持 cell dirty；这些是候选资源不足，不是既有库存损坏。
+沉淀与溶解提交前共同检查可用内能、区域量子容量和载体表示。沉淀同时验证碰撞位置、联合 occupancy 与 active/composition 容量。资源受限时保留原库存与 cell dirty，条件满足后重试。
 
 没有可溶 solid 且液相连一个完整 aqueous stoichiometric extent 都不具备时，按 exact species quanta 直接判定为无候选，不进入完整 planner；这不改变任何正向或反向可表示反应。
 

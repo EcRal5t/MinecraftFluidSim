@@ -31,7 +31,7 @@ public final class GranularPhaseTransferEngine {
 		if (rule == null || liquid == null || liquid.isEmpty() || existingAccessibleExtent < 0L
 				|| maximumTransferExtent <= 0L) throw new IllegalArgumentException("Invalid phase-transfer planning input");
 		long[] inventory = new long[chemistry.species().size()];
-		int[] ordinals = new int[liquid.size()]; float[] massWeights = new float[liquid.size()];
+		int[] ordinals = new int[liquid.size()]; double[] massWeights = new double[liquid.size()];
 		for (int index = 0; index < liquid.size(); index++) {
 			LiquidParcel parcel = liquid.get(index); ordinals[index] = parcel.marker();
 			if (index > 0 && ordinals[index - 1] >= ordinals[index]) {
@@ -39,8 +39,8 @@ public final class GranularPhaseTransferEngine {
 			}
 			for (int entry = 0; entry < parcel.mixture().entryCount(); entry++) inventory[parcel.mixture().speciesHandle(entry)] =
 					Math.addExact(inventory[parcel.mixture().speciesHandle(entry)], parcel.mixture().amountAt(entry));
-			double exactMass = parcel.mixture().exactSpeciesMassKilograms(chemistry).toDouble(); massWeights[index] = (float) exactMass;
-			if (!(Float.isFinite(massWeights[index]) && massWeights[index] > 0.0F)) {
+			double exactMass = parcel.mixture().exactSpeciesMassKilograms(chemistry).toDouble(); massWeights[index] = exactMass;
+			if (!(Double.isFinite(massWeights[index]) && massWeights[index] > 0.0)) {
 				throw new BlockedException("Chemical marker exact mass is not a usable phase-transfer weight");
 			}
 		}
@@ -49,26 +49,28 @@ public final class GranularPhaseTransferEngine {
 			available = Math.min(available, inventory[chemistry.speciesHandle(term.getKey())] / term.getValue());
 		}
 		if (available == Long.MAX_VALUE) available = 0L;
-		long capacity = floorCapacity(rule.saturationCapacityExtentPerBv(), liquid);
-		long target = Math.max(0L, Math.subtractExact(Math.addExact(available, existingAccessibleExtent), capacity));
+		long totalExtent = Math.addExact(available, existingAccessibleExtent);
+		long capacity = floorCapacity(rule.saturationCapacityExtentPerBv(), liquid, totalExtent);
+		long target = Math.max(0L, totalExtent - capacity);
 		long signedExtent = target - existingAccessibleExtent;
 		if (signedExtent == 0L) return Plan.none();
+		if (signedExtent < 0L && !rule.reversible()) return Plan.none();
 		long magnitude = Math.min(Math.abs(signedExtent), maximumTransferExtent);
 		magnitude = magnitude / rule.solidExtentPerBatch() * rule.solidExtentPerBatch();
-		if (magnitude <= 0L) return Plan.none();
+		if (magnitude <= 0L) return Plan.deferred();
 		boolean precipitation = signedExtent > 0L;
 		for (; magnitude > 0L; magnitude -= rule.solidExtentPerBatch()) {
 			Plan candidate = planRepresentableMagnitude(rule, liquid, inventory, magnitude, precipitation, ordinals,
 					massWeights);
 			if (candidate != null) return candidate;
 		}
-		return Plan.none();
+		return Plan.deferred();
 	}
 
 	/** Returns null when this exact reaction batch cannot be represented by the current marker lattice. */
 	private Plan planRepresentableMagnitude(
 			SolidLiquidReaction rule, List<LiquidParcel> liquid, long[] inventory, long magnitude,
-			boolean precipitation, int[] ordinals, float[] massWeights
+			boolean precipitation, int[] ordinals, double[] massWeights
 	) {
 		long solidSvq = Math.multiplyExact(magnitude / rule.solidExtentPerBatch(), rule.solidVolumeSvqPerBatch());
 
@@ -92,6 +94,9 @@ public final class GranularPhaseTransferEngine {
 		if (!repairEmpty(distributed, ordinals)) return null;
 		for (TreeMap<Integer, Long> marker : distributed) {
 			if (marker.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL) return null;
+			long quanta = 0L;
+			for (long amount : marker.values()) quanta = Math.addExact(quanta, amount);
+			if (quanta > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) return null;
 		}
 		long[] volumeDeltas = representableVolumeAllocation(solidSvq, liquid, ordinals, precipitation);
 		if (volumeDeltas == null) return null;
@@ -103,7 +108,7 @@ public final class GranularPhaseTransferEngine {
 					distributed[index], source.mixture().massResidualKilogramsBits());
 			double massKilograms = replacement.massKilograms(chemistry);
 			if (!(Double.isFinite(massKilograms) && massKilograms > 0.0)) {
-				throw new BlockedException("Phase transfer produced non-positive marker mass");
+				return null;
 			}
 			double solverMass = unitScale.solverMass(massKilograms);
 			long signedVolumeDelta = precipitation ? -volumeDeltas[index] : volumeDeltas[index];
@@ -120,7 +125,7 @@ public final class GranularPhaseTransferEngine {
 		double expectedNew = precipitation ? oldMass - solidMass : oldMass + solidMass;
 		if (!massClose(newMass, expectedNew)) throw new BlockedException("Liquid/solid phase-transfer mass did not close");
 		return new Plan(precipitation ? magnitude : -magnitude, precipitation ? solidSvq : -solidSvq,
-				precipitation ? solidMass : -solidMass, solid, List.of(updates));
+				precipitation ? solidMass : -solidMass, solid, List.of(updates), false);
 	}
 
 	/**
@@ -197,7 +202,7 @@ public final class GranularPhaseTransferEngine {
 		return new SolidCompositionRecord(species, amounts, Double.doubleToRawLongBits(0.0));
 	}
 
-	private static long floorCapacity(ExactRational capacityPerBv, List<LiquidParcel> liquid) {
+	private static long floorCapacity(ExactRational capacityPerBv, List<LiquidParcel> liquid, long totalExtent) {
 		int minimumExponent = Integer.MAX_VALUE;
 		Dyadic[] volumes = new Dyadic[liquid.size()];
 		for (int index = 0; index < volumes.length; index++) {
@@ -212,8 +217,7 @@ public final class GranularPhaseTransferEngine {
 				SolidVolume.SVQ_PER_BV / SolidVolume.SVQ_PER_CELL));
 		if (minimumExponent >= 0) numerator = numerator.shiftLeft(minimumExponent);
 		else denominator = denominator.shiftLeft(-minimumExponent);
-		try { return numerator.divide(denominator).longValueExact(); }
-		catch (ArithmeticException overBudget) { throw new BlockedException("Liquid saturation capacity is over budget"); }
+		return numerator.divide(denominator).min(BigInteger.valueOf(totalExtent)).longValueExact();
 	}
 
 	private static Dyadic dyadic(float value) {
@@ -262,8 +266,9 @@ public final class GranularPhaseTransferEngine {
 	}
 	public record MarkerUpdate(int marker, ChemicalMixtureRecord mixture, float cellVolume, double mass) { }
 	public record Plan(long signedExtent, long signedSolidSvq, double signedSolidMass,
-	                   SolidCompositionRecord transferredComposition, List<MarkerUpdate> markerUpdates) {
-		static Plan none() { return new Plan(0L, 0L, 0.0, null, List.of()); }
+	                   SolidCompositionRecord transferredComposition, List<MarkerUpdate> markerUpdates, boolean retryRequired) {
+		static Plan none() { return new Plan(0L, 0L, 0.0, null, List.of(), false); }
+		static Plan deferred() { return new Plan(0L, 0L, 0.0, null, List.of(), true); }
 		public boolean changed() { return signedExtent != 0L; }
 		public boolean precipitation() { return signedExtent > 0L; }
 	}

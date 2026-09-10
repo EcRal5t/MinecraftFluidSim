@@ -51,7 +51,7 @@
 | 世界方块归属和恢复 | `ownership` | [M6OwnershipValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ownership/M6OwnershipValidation.java) |
 | 命令日志 | `audit` | [CommandAuditFileValidation](../../fabric/src/test/java/cc/ecisr/mmm/logging/CommandAuditFileValidation.java) |
 | 化学反应和组分输运 | `chemistry` | [M7ChemistryValidation](../../fabric/src/test/java/cc/ecisr/mmm/chemistry/M7ChemistryValidation.java)、[M7ChemicalTransportValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/M7ChemicalTransportValidation.java) |
-| 颗粒运动、沉积和固液转移 | `granular` | [M8GranularValidation](../../fabric/src/test/java/cc/ecisr/mmm/granular/M8GranularValidation.java) |
+| 颗粒运动、沉积和固液转移 | `granular` | [M8GranularValidation](../../fabric/src/test/java/cc/ecisr/mmm/granular/M8GranularValidation.java)、[GranularReactionCandidateValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/GranularReactionCandidateValidation.java) |
 | 内能、导热、反应热、相变和设备换热 | `thermal` | [M9ThermalValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/M9ThermalValidation.java) |
 
 表中是定位场景的入口，完整调用列表以 `CpuValidationSuite` 为准。长场景的注液坐标、循环步数和逐步断言留在测试代码中维护。
