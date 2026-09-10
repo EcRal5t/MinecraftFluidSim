@@ -187,8 +187,11 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		domain.setThermalTemperatureInCell(1, 1, 1, 350.0);
 		domain.setThermalTemperatureInCell(2, 1, 1, 250.0);
 		SignedDyadic before = domain.exactInternalEnergy();
-		expectFailure(() -> domain.stepThermalOnly(10_000.0), "active conduction requires its stability budget");
-		require(domain.exactInternalEnergy().equals(before), "rejected conduction preserves carrier energy");
+		FluidDomain stiff = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		stiff.stepThermalOnly(10_000.0);
+		require(close(stiff.thermalTemperatureInCell(1, 1, 1), 300.0 + 50.0 / 121.0)
+				&& stiff.exactInternalEnergy().equals(stiff.thermalAudit().expectedInventory()),
+				"stiff pair matches two conservative backward-Euler half steps");
 		domain.stepThermalOnly(1_000.0);
 		double hot = domain.thermalTemperatureInCell(1, 1, 1);
 		double cold = domain.thermalTemperatureInCell(2, 1, 1);
@@ -395,6 +398,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 	}
 
 	static void fixedBoundaryAuditsCaloricContinuation() {
+		stiffContactPreservesLocalEnergy();
 		FluidMaterial liquid = FluidMaterial.withSurfaceTension("test:boundary_liquid", 1.0,
 				"test:miscible", 0.0, 90.0);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
@@ -432,6 +436,42 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				&& continued.reservoirExchange().toDouble() > 0.0
 				&& thermal.exactEnergy(1).equals(thermal.auditLedger().expectedInventory()),
 				"fixed-boundary transport did not conserve energy through caloric continuation");
+	}
+
+	private static void stiffContactPreservesLocalEnergy() {
+		ThermalMaterialDefinition material = new ThermalMaterialDefinition("test:thermal/stiff",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, "test:stiff", 350.0, 0.0, 20.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(1.0, 300.0, 1.0),
+						new ThermalMaterialDefinition.CaloricSegment(300.0, 500.0, 1_000.0)));
+		double[] mass = {1.0E-8, 1.0E-8, 1.0, 1.0};
+		double[] temperatures = {300.0, 300.0, 400.0, 250.0};
+		double[] energies = new double[mass.length];
+		for (int i = 0; i < mass.length; i++) energies[i] = mass[i] * material.sensibleSpecificEnergyAt(temperatures[i]);
+		ThermalCellGrid grid = new ThermalCellGrid(mass.length);
+		grid.rebuild(new ThermalCellGrid.CarrierAccess() {
+			@Override public int carrierCount() { return mass.length; }
+			@Override public int cell(int i) { return i; }
+			@Override public ThermalMaterialDefinition material(int i) { return material; }
+			@Override public double mass(int i) { return mass[i]; }
+			@Override public double volume(int i) { return mass[i]; }
+			@Override public double baseEnergy(int i) { return 0.0; }
+			@Override public double internalEnergy(int i) { return energies[i]; }
+			@Override public void setInternalEnergy(int i, double energy) { energies[i] = energy; }
+		});
+		double quietFirst = energies[0], quietSecond = energies[1];
+		SignedDyadic before = SignedDyadic.sum(energies);
+		ThermalTransport transport = new ThermalTransport(4, 1, 1, 1.0, 8);
+		ThermalTransport.Stats internal = transport.step(grid, (x, y, z, axis) -> x == 1 ? 0.0 : 1.0, 0.05);
+		require(energies[0] == quietFirst && energies[1] == quietSecond
+				&& grid.temperature(2) < 400.0 && grid.temperature(3) > 250.0
+				&& SignedDyadic.sum(energies).subtract(before).equals(internal.roundoffResidual()),
+				"isolated equilibrium and active contact retain separate energy balances");
+		before = SignedDyadic.sum(energies);
+		ThermalTransport.Stats boundary = transport.step(grid, (x, y, z, axis) -> 0.0,
+				(x, y, z, direction) -> x == 2 && direction == 2 ? new ThermalTransport.FixedBoundary(1.0, 1.0) : null, 10.0);
+		require(grid.temperature(2) >= 1.0 && grid.temperature(2) < 300.0
+				&& SignedDyadic.sum(energies).subtract(before).subtract(boundary.reservoirExchange()).equals(boundary.roundoffResidual()),
+				"stiff boundary crosses caloric intervals with a closed finite heat transfer");
 	}
 
 	static void reseedingMovesEnergyWithMarkerTruth() {

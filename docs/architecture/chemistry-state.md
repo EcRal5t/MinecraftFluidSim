@@ -6,7 +6,7 @@
 
 | 要改什么 | 代码入口 | 测试选择器 |
 |---|---|---|
-| 组分状态和反应 | [ChemicalParcelStore](../../model/src/main/java/cc/ecisr/mmm/chemistry/ChemicalParcelStore.java)、[ChemicalReactionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/ChemicalReactionStage.java) | `chemistry` |
+| 组分状态和反应 | [ChemicalParcelStore](../../model/src/main/java/cc/ecisr/mmm/chemistry/ChemicalParcelStore.java)、[ChemicalReactionAllocation](../../model/src/main/java/cc/ecisr/mmm/chemistry/ChemicalReactionAllocation.java)、[ChemicalReactionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/ChemicalReactionStage.java) | `chemistry` |
 | 粒子上的化学数据 | [FlipChemicalParticleState](../../model/src/main/java/cc/ecisr/mmm/fluid/FlipChemicalParticleState.java)、[CarrierMutationCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/CarrierMutationCoordinator.java) | `chemistry,reseeding` |
 | 指示剂操作 | [ChemicalIndicatorItem](../../fabric/src/main/java/cc/ecisr/mmm/item/ChemicalIndicatorItem.java)、[MinecraftIndicatorEditing](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftIndicatorEditing.java) | `chemistry` |
 | 化学定义编码 | [ChemicalRegistryCodec](../../fabric/src/main/java/cc/ecisr/mmm/chemistry/ChemicalRegistryCodec.java) | `region-state` |
@@ -72,7 +72,7 @@ particleMass * cellSize^3 = exact_species_mass_kg + massResidual_kg
 
 dirty cell 是反应调度游标而非库存，但尚未求值的 dirty 集必须随紧邻 immutable backend handoff 完整传递；否则容器/碰撞刚提交的反应机会会在私有候选重建时消失。region HEAD 不以 dirty bit 恢复 species：冷恢复从 committed marker 位置把所有占用格标脏并只重检一次，后续 backend handoff 再携带精确 dirty 集，已经清洁的区域不会每 tick 全量重算。
 
-反应后的格总库存再确定性分配回原 marker。最后一个可接收 marker 得到整数 remainder，避免多次均分造成 quanta 漂移；pool 或 marker budget 不足时该 cell 不暴露部分修改。
+反应后的格总库存按各 marker 的 exact species mass 转成 binary64 权重，以最大余数法确定性分配；余数相同时按 marker ordinal 排序。分配计划验证每个载体的物种槽位、正质量、区域总量与候选温度，再统一提交。载体数、容量或可用内能限制当前候选时，原库存与质量逐位保留，所属 cell 保持 dirty，其他可提交的 cell 继续推进。表示条件改变后沿同一入口重试。
 
 若求值后的逐 species integer inventory 与输入逐位相同，该组只占用求值预算并清除 dirty 状态，不进入分配、热候选验证或 parcel 覆写，marker 的组成、残差、质量和 indicator 原样保留。
 

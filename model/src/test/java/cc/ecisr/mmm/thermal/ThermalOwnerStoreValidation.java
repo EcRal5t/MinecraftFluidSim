@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.thermal;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.chemistry.*;
 
 import java.util.List;
 import java.util.Map;
@@ -24,20 +25,33 @@ public final class ThermalOwnerStoreValidation {
 	}
 
 	private static void coherentPhaseMergeSplitConservesInventories() {
+		ChemicalRegistry chemistry = new ChemicalRegistry(List.of(
+				new ChemicalSpecies("test:a", Map.of("A", 1), 0, ExactRational.of(1_000_000_000L), 0),
+				new ChemicalSpecies("test:b", Map.of("A", 2), 0, ExactRational.of(2_000_000_000L), 0)),
+				List.of(new ChemicalPhaseDefinition("test:phase", "test:liquid", List.of("test:a", "test:b"),
+						Map.of("test:a", ExactRational.ONE), false)), List.of(new ChemicalReaction(
+				"test:combine", ChemicalReaction.Kind.INSTANTANEOUS, "test:phase",
+				Map.of("test:a", 2), Map.of("test:b", 1), ExactRational.ZERO)));
 		CoherentPhaseStore store = new CoherentPhaseStore(8, 8);
 		CoherentPhaseStore.Composition first = new CoherentPhaseStore.Composition(List.of(
 				new CoherentPhaseStore.Component("test:a", 8L),
-				new CoherentPhaseStore.Component("test:b", 4L)), Double.doubleToRawLongBits(0.25));
+				new CoherentPhaseStore.Component("test:b", 4L)), Double.doubleToRawLongBits(-12.0));
 		CoherentPhaseStore.Composition second = new CoherentPhaseStore.Composition(List.of(
 				new CoherentPhaseStore.Component("test:a", 8L),
-				new CoherentPhaseStore.Component("test:b", 4L)), Double.doubleToRawLongBits(0.25));
+				new CoherentPhaseStore.Component("test:b", 4L)), Double.doubleToRawLongBits(-12.0));
 		store.add(new CoherentPhaseStore.Group(3, "test:thermal/solid", 8L, 4.0, first, 32.0));
 		store.add(new CoherentPhaseStore.Group(3, "test:thermal/solid", 8L, 4.0, second, 32.0));
-		CoherentPhaseStore.Group removed = store.take(3, "test:thermal/solid", 8L);
-		require(store.groupCount() == 1 && store.group(0).occupiedVolumeSvq() == 8L
-				&& removed.occupiedVolumeSvq() == 8L && close(store.totalMass() + removed.mass(), 8.0)
+		CoherentPhaseStore.Group removed = store.take(3, "test:thermal/solid", 5L, chemistry);
+		for (CoherentPhaseStore.Group part : List.of(removed, store.group(0))) {
+			double represented = ChemicalMixtureRecord.fromStableAmounts(chemistry,
+					part.composition().stableAmounts(), part.composition().massResidual()).massKilograms(chemistry);
+			require(close(represented, part.mass()), "coherent split closes each physical mass column");
+		}
+		require(store.groupCount() == 1 && store.group(0).occupiedVolumeSvq() == 11L
+				&& removed.occupiedVolumeSvq() == 5L && close(store.totalMass() + removed.mass(), 8.0)
 				&& store.exactEnergy().add(SignedDyadic.of(removed.internalEnergy())).equals(SignedDyadic.of(64.0))
-				&& removed.composition().stableAmounts().equals(Map.of("test:a", 8L, "test:b", 4L)),
+				&& removed.composition().stableAmounts().equals(Map.of("test:a", 5L, "test:b", 2L))
+				&& removed.composition().massResidual() + store.group(0).composition().massResidual() == -24.0,
 				"coherent phase merge/split did not conserve its independent inventories");
 	}
 

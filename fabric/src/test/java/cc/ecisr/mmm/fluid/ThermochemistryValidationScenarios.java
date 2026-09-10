@@ -209,14 +209,24 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 				"test:thermal/liquid", ThermalMaterialDefinition.CarrierKind.LIQUID, materialId, 300.0, 0.0, 1.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 305.0, 10.0)))), invalidOffsets, List.of(),
 				chemistry.fingerprint(), ""), liquids, 300.0, 1, 2, 2, 2, 0.5F, markers);
-		expectFailure(() -> parcels.reactDirtyCells(2, 2, 2, 0.5F,
+		ChemicalParcelStore.ReactionStats deferred = parcels.reactDirtyCells(2, 2, 2, 0.5F,
 				new float[]{0.1F}, new float[]{0.1F}, new float[]{0.1F}, mass, new int[]{0},
 				handle -> materialId, 1,
-				(marker, mixture, candidateMass) -> narrow.requireReactionState(
-						marker, mixture, candidateMass, markers)),
-				"reaction energy below the positive-temperature domain partially committed");
-		require(parcels.record(0).amount(chemistry.speciesHandle(a)) == ChemicalLimits.QUANTA_PER_AU,
-				"failed thermal reaction validation changed chemical truth");
+				(marker, mixture, candidateMass) -> ChemicalReactionStage.requireThermalCandidate(narrow,
+						marker, mixture, candidateMass, markers));
+		require(deferred.changedMarkers() == 0 && parcels.hasDirtyCells()
+				&& parcels.record(0).amount(chemistry.speciesHandle(a)) == ChemicalLimits.QUANTA_PER_AU,
+				"energy-limited reaction retains its source and retry state");
+		narrow.setTemperatureInCell(0, 1_000_300.0, markers);
+		SignedDyadic heated = narrow.exactEnergy(1);
+		require(parcels.reactDirtyCells(2, 2, 2, 0.5F,
+				new float[]{0.1F}, new float[]{0.1F}, new float[]{0.1F}, mass, new int[]{0},
+				handle -> materialId, 1, (marker, mixture, candidateMass) ->
+				ChemicalReactionStage.requireThermalCandidate(narrow, marker, mixture, candidateMass, markers))
+				.changedMarkers() == 1 && narrow.exactEnergy(1).equals(heated) && !parcels.hasDirtyCells(),
+				"heating makes the same deferred reaction commit with conserved energy");
+		parcels.assign(0, initial, false);
+		parcels.markDirtyCell(0);
 
 		ThermalDomainState thermal = FluidThermalBinding.create(new ThermalRegistry(List.of(new ThermalMaterialDefinition(
 				"test:thermal/liquid", ThermalMaterialDefinition.CarrierKind.LIQUID, materialId, 300.0, 0.0, 1.0,

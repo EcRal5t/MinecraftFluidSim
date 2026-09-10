@@ -3,6 +3,8 @@ package cc.ecisr.mmm.thermal;
 import cc.ecisr.mmm.units.SignedDyadic;
 
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
+import cc.ecisr.mmm.chemistry.ChemicalRegistry;
+import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -128,8 +130,8 @@ public final class CoherentPhaseStore {
 	}
 
 	/** Proportional exact-SVQ split. The caller may subsequently re-equilibrate energy at cell LTE. */
-	Group take(int cell, String phaseId, long requestedSvq) {
-		Group removed = previewTake(cell, phaseId, requestedSvq);
+	Group take(int cell, String phaseId, long requestedSvq, ChemicalRegistry chemistry) {
+		Group removed = previewTake(cell, phaseId, requestedSvq, chemistry);
 		int index = find(cell, phaseId);
 		Group current = groups.get(index);
 		if (requestedSvq == current.occupiedVolumeSvq()) {
@@ -137,7 +139,7 @@ public final class CoherentPhaseStore {
 			return removed;
 		}
 		long remainingSvq = current.occupiedVolumeSvq() - requestedSvq;
-		Composition[] composition = split(current.composition(), remainingSvq, requestedSvq);
+		Composition[] composition = split(current.composition(), remainingSvq, requestedSvq, removed.mass(), chemistry);
 		Group remaining = new Group(cell, phaseId, remainingSvq,
 				current.mass() - removed.mass(),
 				composition[0],
@@ -147,7 +149,7 @@ public final class CoherentPhaseStore {
 	}
 
 	/** Validates and computes a proportional take without changing authoritative inventory. */
-	public Group previewTake(int cell, String phaseId, long requestedSvq) {
+	public Group previewTake(int cell, String phaseId, long requestedSvq, ChemicalRegistry chemistry) {
 		int index = find(cell, phaseId);
 		if (index < 0) throw new IllegalArgumentException("Unknown coherent phase group");
 		Group current = groups.get(index);
@@ -164,7 +166,7 @@ public final class CoherentPhaseStore {
 				|| !Double.isFinite(removedEnergy) || !Double.isFinite(remainingEnergy)) {
 			throw new IllegalArgumentException("Coherent phase split is not representable");
 		}
-		Composition[] split = split(current.composition(), remainingSvq, requestedSvq);
+		Composition[] split = split(current.composition(), remainingSvq, requestedSvq, removedMass, chemistry);
 		return new Group(cell, phaseId, requestedSvq, removedMass, split[1], removedEnergy);
 	}
 
@@ -254,7 +256,8 @@ public final class CoherentPhaseStore {
 		return new Composition(components, Double.doubleToRawLongBits(residual));
 	}
 
-	private static Composition[] split(Composition composition, long remainingSvq, long removedSvq) {
+	private static Composition[] split(Composition composition, long remainingSvq, long removedSvq,
+	                                   double removedMass, ChemicalRegistry chemistry) {
 		if (composition == null) return new Composition[]{null, null};
 		ArrayList<Component> remaining = new ArrayList<>(), removed = new ArrayList<>();
 		for (Component component : composition.components()) {
@@ -265,7 +268,12 @@ public final class CoherentPhaseStore {
 		if (remaining.isEmpty() || removed.isEmpty()) {
 			throw new IllegalArgumentException("Coherent split is below chemical quantum resolution");
 		}
-		double removedResidual = composition.massResidual() * ((double) removedSvq / (remainingSvq + removedSvq));
+		if (chemistry == null) throw new IllegalArgumentException("Coherent chemical split requires its registry");
+		TreeMap<String, Long> removedAmounts = new TreeMap<>();
+		for (Component component : removed) removedAmounts.put(component.speciesId(), component.amountQuanta());
+		double removedSpeciesMass = ChemicalMixtureRecord.fromStableAmounts(chemistry, removedAmounts, 0.0)
+				.exactSpeciesMassKilograms(chemistry).toDouble();
+		double removedResidual = removedMass - removedSpeciesMass;
 		double remainingResidual = composition.massResidual() - removedResidual;
 		return new Composition[]{
 				new Composition(remaining, Double.doubleToRawLongBits(remainingResidual)),
@@ -279,7 +287,7 @@ public final class CoherentPhaseStore {
 		long first = division[0].longValueExact();
 		long second = total - first;
 		// Largest remainder with stable first-before-second tie break.
-		if (division[1].shiftLeft(1).compareTo(denominator) > 0) { first++; second--; }
+		if (division[1].shiftLeft(1).compareTo(denominator) >= 0) { first++; second--; }
 		return new long[]{first, second};
 	}
 

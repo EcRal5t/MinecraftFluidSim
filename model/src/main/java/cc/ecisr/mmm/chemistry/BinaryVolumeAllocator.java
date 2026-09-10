@@ -3,11 +3,19 @@ package cc.ecisr.mmm.chemistry;
 import java.math.BigInteger;
 import java.util.Arrays;
 
-/** Largest-remainder allocation using the exact dyadic values represented by positive float volumes. */
+/** Largest-remainder allocation using exact dyadic values of positive volume or mass weights. */
 public final class BinaryVolumeAllocator {
 	private BinaryVolumeAllocator() { }
 
 	public static long[] allocate(long total, float[] volumes, int[] markerOrdinals) {
+		if (volumes == null) throw new IllegalArgumentException("Allocation weights are missing");
+		double[] weights = new double[volumes.length];
+		for (int i = 0; i < weights.length; i++) weights[i] = volumes[i];
+		return allocate(total, weights, markerOrdinals);
+	}
+
+	/** Preserves the full binary64 range of physical mass weights. */
+	public static long[] allocate(long total, double[] volumes, int[] markerOrdinals) {
 		if (total < 0L || volumes == null || markerOrdinals == null || volumes.length == 0
 				|| volumes.length != markerOrdinals.length) {
 			throw new IllegalArgumentException("Invalid binary-volume allocation");
@@ -44,14 +52,14 @@ public final class BinaryVolumeAllocator {
 		return result;
 	}
 
-	private static Dyadic dyadic(float value) {
-		if (!(Float.isFinite(value) && value > 0.0F)) throw new IllegalArgumentException("Weight must be finite and positive");
-		int bits = Float.floatToRawIntBits(value);
-		int exponentBits = bits >>> 23 & 0xff;
-		int fraction = bits & 0x7fffff;
-		if (exponentBits == 0) return new Dyadic(fraction, -149);
-		return new Dyadic((1 << 23) | fraction, exponentBits - 150);
+	private static Dyadic dyadic(double value) {
+		if (!(Double.isFinite(value) && value > 0.0)) throw new IllegalArgumentException("Weight must be finite and positive");
+		long bits = Double.doubleToRawLongBits(value);
+		int exponentBits = (int) (bits >>> 52 & 0x7ff);
+		long fraction = bits & 0xfffffffffffffL;
+		if (exponentBits == 0) return new Dyadic(fraction, -1074);
+		return new Dyadic((1L << 52) | fraction, exponentBits - 1075);
 	}
 
-	private record Dyadic(int significand, int exponent) { }
+	private record Dyadic(long significand, int exponent) { }
 }

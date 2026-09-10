@@ -213,6 +213,33 @@ public final class ThermalCellGrid {
 		updateObservedTemperatureRange();
 	}
 
+	void solveTransportCell(int cell, double energy) { solveCell(cell, energy); }
+	void assignTransportCellEnergy(int cell, double energy) {
+		solveCell(cell, energy);
+		assignSolvedCellEnergy(cell, energy);
+	}
+	void finishTransport() { updateObservedTemperatureRange(); }
+
+	double energyChangeToTemperature(int cell, double target) {
+		double change = 0.0;
+		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+			ThermalMaterialDefinition material = carrierMaterial[carrier];
+			change += carrierMass[carrier] * (material.sensibleSpecificEnergyAt(target)
+					- material.sensibleSpecificEnergyAt(temperature[cell]));
+		}
+		return change;
+	}
+
+	double minimumHeatCapacity(int cell) {
+		double capacity = 0.0;
+		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+			double specific = Double.POSITIVE_INFINITY;
+			for (var segment : carrierMaterial[carrier].caloricSegments()) specific = Math.min(specific, segment.specificHeatEuPerMuK());
+			capacity += carrierMass[carrier] * specific;
+		}
+		return capacity;
+	}
+
 	private void assignSolvedCellEnergy(int cell, double requested) {
 		int remainderCarrier = -1;
 		double largestHeatCapacity = Double.NEGATIVE_INFINITY;

@@ -3,7 +3,10 @@ package cc.ecisr.mmm.fluid;
 import cc.ecisr.mmm.thermal.ThermalDomainState;
 
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
+import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
+import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.thermal.ThermalCarrierContext;
+import cc.ecisr.mmm.thermal.ThermalStateFunction;
 
 /** Applies the established same-cell chemical reaction pass after thermal transport. */
 final class ChemicalReactionStage {
@@ -42,7 +45,17 @@ final class ChemicalReactionStage {
 				arrays.mass, arrays.materialHandle,
 				handle -> access.materialRegistry().material(handle).id(), state.particles().count(),
 				thermal == null ? (marker, mixture, mass) -> { }
-						: (marker, mixture, mass) -> thermal.requireReactionState(
-								marker, mixture, mass, state.thermalMarkers()));
+						: (marker, mixture, mass) -> requireThermalCandidate(thermal, marker, mixture, mass, state.thermalMarkers()));
+	}
+
+	static void requireThermalCandidate(ThermalDomainState thermal, int marker,
+	                                   ChemicalMixtureRecord mixture,
+	                                   double mass, ThermalCarrierContext markers) {
+		try {
+			thermal.requireReactionState(marker, mixture, mass, markers);
+		} catch (ThermalStateFunction.EnergyOutsideValidityException unavailable) {
+			throw new ChemicalReactionEngine.BudgetExceededException(
+					"Reaction candidate requires additional thermal energy");
+		}
 	}
 }

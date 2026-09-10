@@ -7,7 +7,7 @@
 | 要改什么 | 代码入口 | 测试选择器 |
 |---|---|---|
 | 内能状态与流体数据映射 | [ThermalDomainState](../../model/src/main/java/cc/ecisr/mmm/thermal/ThermalDomainState.java)、[FluidThermalBinding](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidThermalBinding.java) | `thermal` |
-| 传热与反应顺序 | [ThermochemistryPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/ThermochemistryPipeline.java)、[ThermalTransportStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/ThermalTransportStage.java) | `thermal` |
+| 传热与反应顺序 | [ThermochemistryPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/ThermochemistryPipeline.java)、[ThermalTransport](../../model/src/main/java/cc/ecisr/mmm/thermal/ThermalTransport.java)、[ThermalImplicitTransport](../../model/src/main/java/cc/ecisr/mmm/thermal/ThermalImplicitTransport.java) | `thermal` |
 | 固液和气液相变 | [CondensedPhaseChangeStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/CondensedPhaseChangeStage.java)、[GasLiquidPhaseChangeStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasLiquidPhaseChangeStage.java)、[GasPhaseInterfaceResolver](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasPhaseInterfaceResolver.java) | `thermal` |
 | 有限热容量设备 | [FiniteThermalDeviceInventory](../../model/src/main/java/cc/ecisr/mmm/thermal/FiniteThermalDeviceInventory.java)、[FiniteThermalExchange](../../model/src/main/java/cc/ecisr/mmm/thermal/FiniteThermalExchange.java)、[FiniteThermalDeviceCodec](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/FiniteThermalDeviceCodec.java) | `thermal,region-state` |
 | 恒温源调节 | [ThermalReservoirUseCase](../../application/src/main/java/cc/ecisr/mmm/application/ThermalReservoirUseCase.java)、[ThermalReservoirScreen](../../fabric/src/client/java/cc/ecisr/mmm/client/ThermalReservoirScreen.java) | `protocol,thermal` |
@@ -142,10 +142,12 @@ Delta U_b = -Delta U_a
 显式 Jacobi 更新按
 
 ```text
-dt_stable = min_cell(0.5 * C_cell / sum_faces G_face)
+dt_stable = min_cell(0.5 * C_min_cell / sum_faces G_face)
 ```
 
-自动分 substep；`0.5` 保证一对相同 cell 单调趋近平衡。有温差时，所需 substep 超过 8 会安全暂停。所有导热接触两端温度逐值相等时，系统已处于导热稳态，以一个零交换步骤完成；这条路径先校验接触几何，并继续处理 cell 内各载体的热平衡分配。有限设备与全部端口等温时采用相同规则，保留设备代次和原始内能。hot loop 使用 `double`，每个 face 对的增减严格镜像；commit 边界用 `SignedDyadic` 精确求和记录 IEEE-754 有限数，舍入残差单列保存。
+自动分 substep；`C_min_cell` 汇总各载体在全部 caloric segment 的最小热容，覆盖跨段更新，`0.5` 保证一对相同 cell 单调趋近平衡。所需显式 substep 超过 8 时，采用逐面后向 Euler 求解：正序、逆序各推进半个 logical step，热流由交换后的两端温度确定。每个面的标量能量方程以两端初始温度给出区间，使用当前分段热容求根。这是时间一阶的分裂离散，时间细化控制其截断误差。
+
+所有导热接触两端温度逐值相等时，以一个零交换步骤完成几何校验和 cell 内载体的 LTE 分配。有限设备与全部端口等温时采用相同规则，保留设备代次和原始内能。hot loop 使用 `double`，每个 face 对的增减严格镜像；commit 边界用 `SignedDyadic` 精确求和记录 IEEE-754 有限数，舍入残差单列保存。
 
 批量求和按 binary64 固有的 2,046 个 dyadic exponent 分桶，每桶以有符号 128-bit 两字累加后只做一次 `BigInteger` 合并；它与逐项 exact add bit-for-bit 等价，不是近似归约，也不会按载体种类跳过审计。
 
@@ -196,8 +198,8 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 
 ### 固液
 
-- 联合搬运物理 kg、condensed weight、液体 marker、coherent SVQ、材料身份、可选 chemical composition/species 和 `U`。
-- 每条 transition 只在该 lower coherent phase 或目标 upper liquid 实际存在时查询压力并规划；纯汞等无关 carrier 不能被拿去查询冰/水曲线。同格其他 liquid/coherent carrier 原样保留并作为 LTE heat bath 参与候选温度，不能被拒绝、改材料或并入目标组成。
+- 联合搬运物理 kg、condensed weight、液体 marker、coherent SVQ、材料身份、可选 chemical composition/species 和 `U`。coherent 部分拆分先分配整数 species，再由实际移出质量减去移出 species 质量求残差，保留部分接收剩余残差，各份质量列分别闭合。
+- 每条 transition 在该 lower coherent phase 或目标 upper liquid 存在时查询压力并规划。同格其他 liquid/coherent carrier 保留材料和组成，并以原有体积参与整格容量约束、以内能参与 LTE heat bath。
 - coherent group/组成池、液体 marker 总预算或 coherent exact split 暂时不能表示完整批次时，该批次零修改延期；只有已提交 coherent 几何与 cut-cell 容量矛盾、组成 capability 不匹配或账本不闭合才暂停合法候选链。
 - 体积变化与机械功写入 pending phase-work，由下一次 pressure projection 结算一次。
 - 固液规划从最近一次真实 projection 的 cell gauge pressure 加环境压力得到绝对压力，再取 `T_eq(p)`。hydrostatic thermal-only 私有候选冻结并传递该 projection，但它不是库存列、不进入 checkpoint、也不能反向恢复物质量；冷恢复先执行一次 motion 重建 projection。曲线使用 registry-bound、按压力严格递增的分段线性点，只在端点闭区间内插值；常温曲线也必须显式给出两个端点。固液曲线不必覆盖标准压力，因此可以表达只有高压区有效的相平衡；液气曲线必须覆盖标准压力，以定义其气体标准体积和潜焓参考态。任何曲线都禁止外推或钳制；有限但位于端点外的压力表示这条 transition 在该 cell 不适用，本步原样保留相库存并继续其他 thermal 工作。只有非有限压力才拒绝整个候选。
@@ -308,4 +310,4 @@ thermal activity 与 motion pacing 相互独立：有 face transfer、reservoir 
 
 boundary、容器、管理员 source、有限设备、化学、颗粒、气体、相变或 carrier movement 都是精确唤醒原因。
 
-以下失败属于 PAUSED 而非 LOCKED：候选温度/压力越出已知物性范围、显式传导 substep 超预算、phase candidate 无法闭合或运行时 audit 失败。registry identity、持久 payload、ordinal/generation 身份不明则属于 LOCKED；两者都禁止猜测修复。
+PAUSED 覆盖运行时内能、压力、已提交相库存的守恒或几何不变量失败，以及有限热设备的步数预算耗尽。registry identity、持久 payload、ordinal/generation 身份损坏归入 LOCKED，恢复依据来自权威状态与事务证据。

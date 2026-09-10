@@ -220,6 +220,7 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateReactionKeepsTinyParcels() {
+		ChemicalReactionCandidateValidation.validate();
 		final int markerCount = 3;
 		ChemicalParcelStore parcels = new ChemicalParcelStore(
 				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), markerCount, 64);

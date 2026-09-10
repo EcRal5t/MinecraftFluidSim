@@ -99,7 +99,7 @@ final class CondensedPhaseChangeStage {
 		ThermalDomainState thermal = support.thermal();
 		ArrayList<ThermalStateFunction.InventoryPortion> unchanged = new ArrayList<>();
 		double liquidMass = 0.0, coherentMass = 0.0, energy = 0.0, freezableMass = 0.0;
-		long liquidSvq = 0L, coherentSvq = 0L, freezableSvq = 0L;
+		long liquidSvq = 0L, coherentSvq = 0L, freezableSvq = 0L, unchangedSvq = 0L;
 		PhaseCompositionBuilder liquidComposition = chemistry == null ? null
 				: new PhaseCompositionBuilder(chemistry);
 		PhaseComposition coherentComposition = null;
@@ -107,6 +107,7 @@ final class CondensedPhaseChangeStage {
 		for (int marker = 0; marker < particles.count(); marker++) {
 			if (support.particleCell(marker) != cell) continue;
 			if (particles.materialHandle(marker) != liquidHandle) {
+				unchangedSvq = Math.addExact(unchangedSvq, SolidVolume.cellVolumeSvqAtLeast(particles.volume(marker)));
 				unchanged.add(new ThermalStateFunction.InventoryPortion(
 						thermal.thermalMaterialHandleForFluid(particles.materialHandle(marker)),
 						support.state().unitScale().kilograms(particles.mass(marker)),
@@ -128,6 +129,7 @@ final class CondensedPhaseChangeStage {
 		for (CoherentPhaseStore.Group group : thermal.coherentPhases().snapshot()) {
 			if (group.cell() != cell) continue;
 			if (!group.phaseId().equals(coherentPhaseId)) {
+				unchangedSvq = Math.addExact(unchangedSvq, group.occupiedVolumeSvq());
 				unchanged.add(new ThermalStateFunction.InventoryPortion(
 						thermal.registry().materialHandle(group.phaseId()), group.mass(),
 						group.composition() == null ? java.util.Map.of()
@@ -151,7 +153,7 @@ final class CondensedPhaseChangeStage {
 				coherentSvq, liquidSvq, coherentMass, liquidMass, energy,
 				coherentComposition == null ? PhaseComposition.EMPTY : coherentComposition,
 				liquidComposition == null ? PhaseComposition.EMPTY : liquidComposition.build(),
-				freezableSvq, freezableMass), List.copyOf(unchanged)) : null;
+				freezableSvq, freezableMass), List.copyOf(unchanged), unchangedSvq) : null;
 	}
 
 	private JointPhasePlan planJointPhaseChange(
@@ -177,7 +179,8 @@ final class CondensedPhaseChangeStage {
 				? transition.lowerVolumeSvqPerBatch() - transition.upperVolumeSvqPerBatch()
 				: transition.upperVolumeSvqPerBatch() - transition.lowerVolumeSvqPerBatch();
 		long occupied = Math.addExact(
-				Math.addExact(before.lowerVolumeSvq(), before.upperVolumeSvq()), support.granularSvq(cell));
+				Math.addExact(before.lowerVolumeSvq(), before.upperVolumeSvq()),
+				Math.addExact(support.granularSvq(cell), inventory.unchangedSvq()));
 		long capacity = SolidVolume.fromCellVolumeExact(
 				support.state().geometry().cutCells.openCellVolume(cell));
 		if (signedVolumePerBatch > 0L) high = Math.min(high, (capacity - occupied) / signedVolumePerBatch);
@@ -294,7 +297,7 @@ final class CondensedPhaseChangeStage {
 			}
 			try {
 				coherentTransfer = thermal.coherentPhases().previewTake(
-						cell, transition.lowerEnergyMaterialId(), lowerDelta);
+						cell, transition.lowerEnergyMaterialId(), lowerDelta, chemistry == null ? null : chemistry.registry());
 			} catch (IllegalArgumentException | ArithmeticException unavailable) {
 				throw new PhaseCandidateUnavailableException(
 						"Melt cannot represent the coherent carrier split", unavailable);
@@ -328,7 +331,7 @@ final class CondensedPhaseChangeStage {
 					"Melt has no collision-valid liquid marker slot");
 		}
 		long occupied = Math.addExact(
-				Math.addExact(finalLowerSvq, finalUpperSvq), support.granularSvq(cell));
+				Math.addExact(finalLowerSvq, finalUpperSvq), Math.addExact(support.granularSvq(cell), inventory.unchangedSvq()));
 		long capacity = SolidVolume.fromCellVolumeExact(
 				support.state().geometry().cutCells.openCellVolume(cell));
 		if (occupied > capacity) throw new FluidDomain.ThermalPhaseBlockedException(
@@ -351,7 +354,7 @@ final class CondensedPhaseChangeStage {
 	}
 
 	private record CondensedCellInventory(
-			PhaseCellInventory target, List<ThermalStateFunction.InventoryPortion> unchanged
+			PhaseCellInventory target, List<ThermalStateFunction.InventoryPortion> unchanged, long unchangedSvq
 	) { }
 
 	private PhaseRemovalPlan planLiquidRemoval(
@@ -437,7 +440,8 @@ final class CondensedPhaseChangeStage {
 		long addedSvq = Math.multiplyExact(plan.batches(), transition.upperVolumeSvqPerBatch());
 		SignedDyadic inventoryBefore = support.exactInternalEnergy();
 		CoherentPhaseStore.Group removed = support.thermal().takeCoherentInternal(
-				cell, transition.lowerEnergyMaterialId(), removedSvq);
+				cell, transition.lowerEnergyMaterialId(), removedSvq,
+				support.chemistry() == null ? null : support.chemistry().registry());
 		int marker = support.state().particles().count();
 		support.spawnParticle(
 				cell, plan.meltSlot(), SolidVolume.toCellVolume(addedSvq), liquidHandle,

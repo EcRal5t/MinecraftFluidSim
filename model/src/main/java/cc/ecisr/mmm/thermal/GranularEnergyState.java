@@ -254,8 +254,9 @@ public final class GranularEnergyState {
 		revision++;
 	}
 
-	CoherentPhaseStore.Group takeCoherentInternal(int cell, String phaseId, long occupiedSvq) {
-		CoherentPhaseStore.Group taken = coherentPhases.take(cell, phaseId, occupiedSvq);
+	CoherentPhaseStore.Group takeCoherentInternal(int cell, String phaseId, long occupiedSvq,
+	                                           cc.ecisr.mmm.chemistry.ChemicalRegistry chemistry) {
+		CoherentPhaseStore.Group taken = coherentPhases.take(cell, phaseId, occupiedSvq, chemistry);
 		revision++;
 		return taken;
 	}

@@ -101,25 +101,27 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 80_000.0, 120_000.0);
 		ThermalRegistry mixedRegistry = new ThermalRegistry(
 				List.of(water, ice, mercury), List.of(), List.of(mixedMelt), "", "");
-		FluidDomain mixedCell = new FluidDomain(2, 2, 2, config, 128);
-		mixedCell.setVolume(0, 0, 0, 0.25F);
-		mixedCell.setMaterialInCell(0, 0, 0, waterAndMercury,
-				waterAndMercury.handle(BuiltinFluidMaterials.WATER.id()));
-		require(mixedCell.tryInsertExactMaterial(0, 0, 0, 0.25F,
-				0.25 * BuiltinFluidMaterials.MERCURY.referenceDensity(), 0,
-				waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id())).transferred(),
-				"mixed condensed-phase fixture could not insert mercury");
-		mixedCell.bindThermal(mixedRegistry, waterAndMercury, 273.15);
-		mixedCell.setThermalTemperatureInCell(0, 0, 0, 260.0);
-		double mercuryBefore = mixedCell.exactVolumeNear(0, 0, 0, 0,
-				waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id()));
-		FluidDomain.ThermalPhaseStats mixed = mixedCell.stepInertPhaseChangeOnly(16);
-		double mercuryAfter = mixedCell.exactVolumeNear(0, 0, 0, 0,
-				waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id()));
-		require(mixed.operations() > 0 && mixed.frozenCells() == 1
-				&& close(mercuryAfter, mercuryBefore),
-				"ice/water phase change rejected or modified its mercury heat bath: "
-						+ mixed + ", mercury=" + mercuryBefore + " -> " + mercuryAfter);
+		for (float fill : new float[]{0.25F, 0.5F}) {
+			FluidDomain mixedCell = new FluidDomain(2, 2, 2, config, 128);
+			mixedCell.setVolume(0, 0, 0, fill);
+			mixedCell.setMaterialInCell(0, 0, 0, waterAndMercury,
+					waterAndMercury.handle(BuiltinFluidMaterials.WATER.id()));
+			require(mixedCell.tryInsertExactMaterial(0, 0, 0, fill,
+					fill * BuiltinFluidMaterials.MERCURY.referenceDensity(), 0,
+					waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id())).transferred(),
+					"mixed condensed-phase fixture could not insert mercury");
+			mixedCell.bindThermal(mixedRegistry, waterAndMercury, 273.15);
+			mixedCell.setThermalTemperatureInCell(0, 0, 0, 260.0);
+			double mercuryBefore = mixedCell.exactVolumeNear(0, 0, 0, 0,
+					waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id()));
+			FluidDomain.ThermalPhaseStats mixed = mixedCell.stepInertPhaseChangeOnly(16);
+			double mercuryAfter = mixedCell.exactVolumeNear(0, 0, 0, 0,
+					waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id()));
+			require((fill < 0.5F ? mixed.operations() > 0 && mixed.frozenCells() == 1 : mixed.operations() == 0)
+					&& close(mercuryAfter, mercuryBefore),
+					"mixed-cell phase extent follows shared occupancy and retains the mercury heat bath: "
+							+ mixed + ", mercury=" + mercuryBefore + " -> " + mercuryAfter);
+		}
 	}
 
 	static void coherentPhaseInventoryAndExactBatchPlanning() {

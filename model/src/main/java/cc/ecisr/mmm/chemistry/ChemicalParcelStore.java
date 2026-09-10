@@ -7,7 +7,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.PriorityQueue;
 import java.util.TreeMap;
 import java.util.function.IntFunction;
 
@@ -488,146 +487,58 @@ public final class ChemicalParcelStore {
 			if (groups[cell] == null) groups[cell] = new TreeMap<>();
 			groups[cell].computeIfAbsent(phase, ignored -> new ArrayList<>()).add(marker);
 		}
-		ChemicalMixtureRecord[] replacements = new ChemicalMixtureRecord[particleCount];
-		double[] replacementMass = new double[particleCount];
 		ChemicalReactionEngine engine = new ChemicalReactionEngine(registry);
+		int[] phaseCosts = new int[registry.phases().size()];
+		for (ChemicalReaction rule : registry.reactionOrder()) phaseCosts[registry.phaseHandle(rule.phaseId())]++;
+		ArrayList<ChemicalReactionAllocation.Plan> plans = new ArrayList<>();
+		long[] deferred = dirtyCellWords.clone();
+		long candidateTotal = totalQuanta;
 		int cells = 0, evaluations = 0, changed = 0;
 		for (int cell = 0; cell < groups.length; cell++) {
 			if (!bit(dirtyCellWords, cell)) continue;
 			cells++;
-			if (groups[cell] == null) continue;
-			for (Map.Entry<Integer, List<Integer>> group : groups[cell].entrySet()) {
-				List<Integer> markers = group.getValue();
+			boolean retry = false;
+			if (groups[cell] != null) for (Map.Entry<Integer, List<Integer>> group : groups[cell].entrySet()) {
+				int cost = phaseCosts[group.getKey()];
+				if (cost > ChemicalLimits.MAX_REACTION_EVALUATIONS_PER_STEP - evaluations) {
+					throw new ChemicalReactionEngine.BudgetExceededException("Logical reaction evaluation budget exceeded");
+				}
+				evaluations += cost;
 				long[] inventory = new long[registry.species().size()];
-				for (int marker : markers) {
+				for (int marker : group.getValue()) {
 					ChemicalMixtureRecord record = record(marker);
-					for (int entry = 0; entry < record.entryCount(); entry++) {
-						inventory[record.speciesHandle(entry)] = Math.addExact(
-								inventory[record.speciesHandle(entry)], record.amountAt(entry));
+					for (int entry = 0; entry < record.entryCount(); entry++) inventory[record.speciesHandle(entry)] =
+							Math.addExact(inventory[record.speciesHandle(entry)], record.amountAt(entry));
+				}
+				try {
+					long[] reacted = engine.reactInventory(group.getKey(), inventory).inventory();
+					if (Arrays.equals(inventory, reacted)) continue;
+					ChemicalReactionAllocation.Plan plan = ChemicalReactionAllocation.plan(this, group.getValue(), reacted, markerMass);
+					long nextTotal = Math.addExact(candidateTotal, plan.quantaDelta());
+					if (nextTotal > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
+						retry = true;
+						continue;
 					}
-				}
-				ChemicalReactionEngine.InventoryResult result = engine.reactInventory(group.getKey(), inventory);
-				evaluations = Math.addExact(evaluations, result.evaluations());
-				if (evaluations > ChemicalLimits.MAX_REACTION_EVALUATIONS_PER_STEP) {
-					throw new ChemicalReactionEngine.BudgetExceededException("Logical-step reaction budget exceeded");
-				}
-				long[] reactedInventory = result.inventory();
-				if (Arrays.equals(inventory, reactedInventory)) continue;
-				/*
-				 * A marker residual belongs to that marker, so reaction products must follow the
-				 * incoming exact species-mass share rather than geometric volume. Reactions conserve
-				 * exact species mass; using this share therefore keeps the independently transported
-				 * residual compatible with a positive marker mass without rewriting it.
-				 */
-				float[] weights = new float[markers.size()];
-				int[] ordinals = new int[markers.size()];
-				for (int i = 0; i < markers.size(); i++) {
-					ordinals[i] = markers.get(i);
-					double exactSpeciesMass = record(ordinals[i]).exactSpeciesMassKilograms(registry).toDouble();
-					weights[i] = (float) exactSpeciesMass;
-					if (!(Float.isFinite(weights[i]) && weights[i] > 0.0F)) {
-						throw new ChemicalReactionEngine.BudgetExceededException(
-								"Marker exact species mass cannot be used as a reaction allocation weight");
-					}
-				}
-				@SuppressWarnings("unchecked")
-				TreeMap<Integer, Long>[] distributed = new TreeMap[markers.size()];
-				for (int i = 0; i < distributed.length; i++) distributed[i] = new TreeMap<>();
-				for (int species = 0; species < reactedInventory.length; species++) if (reactedInventory[species] > 0L) {
-					long[] allocation = BinaryVolumeAllocator.allocate(reactedInventory[species], weights, ordinals);
-					for (int i = 0; i < allocation.length; i++) if (allocation[i] > 0L) {
-						distributed[i].put(species, allocation[i]);
-					}
-				}
-				repairEmptyReactionParcels(distributed, ordinals);
-				double previousGroupMass = 0.0, candidateGroupMass = 0.0;
-				for (int i = 0; i < markers.size(); i++) {
-					int marker = ordinals[i];
-					replacements[marker] = recordFromHandlesBits(
-							distributed[i], record(marker).massResidualKilogramsBits());
-					replacementMass[marker] = unitScale.solverMass(replacements[marker].massKilograms(registry));
-					if (!(Double.isFinite(replacementMass[marker]) && replacementMass[marker] > 0.0)) {
-						throw new ChemicalReactionEngine.BudgetExceededException(
-								"Reaction produced a non-positive marker mass: marker=" + marker
-										+ " speciesMass=" + replacements[marker].exactSpeciesMassKilograms(registry).toDouble()
-										+ " residualKg=" + replacements[marker].massResidualKilograms());
-					}
-					previousGroupMass += markerMass[marker];
-					candidateGroupMass += replacementMass[marker];
-					if (!replacements[ordinals[i]].equals(record(ordinals[i]))) changed++;
-				}
-				double massTolerance = Math.max(1.0E-9,
-						Math.max(Math.ulp(previousGroupMass), Math.ulp(candidateGroupMass)) * 8.0);
-				if (!Double.isFinite(previousGroupMass) || !Double.isFinite(candidateGroupMass)
-						|| Math.abs(previousGroupMass - candidateGroupMass) > massTolerance) {
-					throw new ChemicalReactionEngine.BudgetExceededException("Reaction marker-mass redistribution did not close");
+					for (int i = 0; i < plan.markers().length; i++) validator.validate(
+							plan.markers()[i], plan.mixtures()[i], plan.masses()[i]);
+					plans.add(plan);
+					candidateTotal = nextTotal;
+					changed += plan.changed();
+				} catch (ChemicalReactionEngine.BudgetExceededException unavailable) {
+					retry = true;
 				}
 			}
+			if (!retry) deferred[cell >>> 6] &= ~(1L << (cell & 63));
 		}
-		long candidateTotal = totalQuanta;
-		for (int marker = 0; marker < replacements.length; marker++) if (replacements[marker] != null) {
-			candidateTotal = Math.addExact(Math.subtractExact(candidateTotal, record(marker).totalQuanta()),
-					replacements[marker].totalQuanta());
-		}
-		if (candidateTotal > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
-			throw new ChemicalReactionEngine.BudgetExceededException("Reaction exceeds region inventory budget");
-		}
-		for (int marker = 0; marker < replacements.length; marker++) if (replacements[marker] != null) {
-			validator.validate(marker, replacements[marker], replacementMass[marker]);
-		}
-		for (int marker = 0; marker < replacements.length; marker++) if (replacements[marker] != null) {
-			pool.overwrite(markerHandles[marker], replacements[marker]);
-			markerMass[marker] = replacementMass[marker];
+		for (ChemicalReactionAllocation.Plan plan : plans) for (int i = 0; i < plan.markers().length; i++) {
+			int marker = plan.markers()[i];
+			pool.overwrite(markerHandles[marker], plan.mixtures()[i]);
+			markerMass[marker] = plan.masses()[i];
 		}
 		totalQuanta = candidateTotal;
 		mutationRevision++;
-		Arrays.fill(dirtyCellWords, 0L);
+		System.arraycopy(deferred, 0, dirtyCellWords, 0, deferred.length);
 		return new ReactionStats(cells, evaluations, changed);
-	}
-
-	/**
-	 * Independent per-species largest-remainder allocation can leave an extremely small marker
-	 * with no entry at all. Preserve the frozen non-empty parcel invariant with the minimum exact
-	 * repair: move one already allocated quantum to each empty marker, never creating or deleting
-	 * species. Donors and species are selected deterministically from the largest parcel entry.
-	 */
-	private static void repairEmptyReactionParcels(TreeMap<Integer, Long>[] distributed, int[] ordinals) {
-		long[] parcelTotals = new long[distributed.length];
-		ArrayList<Integer> empty = new ArrayList<>();
-		PriorityQueue<Integer> donors = new PriorityQueue<>((left, right) -> {
-			int total = Long.compare(parcelTotals[right], parcelTotals[left]);
-			return total != 0 ? total : Integer.compare(ordinals[left], ordinals[right]);
-		});
-		for (int parcel = 0; parcel < distributed.length; parcel++) {
-			for (long amount : distributed[parcel].values()) {
-				parcelTotals[parcel] = Math.addExact(parcelTotals[parcel], amount);
-			}
-			if (parcelTotals[parcel] == 0L) empty.add(parcel);
-			else if (parcelTotals[parcel] > 1L) donors.add(parcel);
-		}
-		empty.sort((left, right) -> Integer.compare(ordinals[left], ordinals[right]));
-		for (int target : empty) {
-			Integer donor = donors.poll();
-			if (donor == null || parcelTotals[donor] <= 1L) {
-				throw new ChemicalReactionEngine.BudgetExceededException(
-						"Reaction result has fewer chemical quanta than live markers");
-			}
-			int species = -1;
-			long largest = -1L;
-			for (Map.Entry<Integer, Long> entry : distributed[donor].entrySet()) {
-				if (entry.getValue() > largest) {
-					species = entry.getKey();
-					largest = entry.getValue();
-				}
-			}
-			if (species < 0) throw new IllegalStateException("Non-empty reaction donor lost its species entry");
-			if (largest == 1L) distributed[donor].remove(species);
-			else distributed[donor].put(species, largest - 1L);
-			distributed[target].put(species, 1L);
-			parcelTotals[donor]--;
-			parcelTotals[target] = 1L;
-			if (parcelTotals[donor] > 1L) donors.add(donor);
-		}
 	}
 
 	public long[] speciesTotals(int particleCount) {

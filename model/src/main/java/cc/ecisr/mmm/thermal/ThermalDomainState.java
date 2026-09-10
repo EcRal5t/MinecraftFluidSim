@@ -414,8 +414,9 @@ public final class ThermalDomainState {
 	}
 	public void addCoherentExternal(CoherentPhaseStore.Group group) { granularState.addCoherentExternal(group); }
 	public void addCoherentInternal(CoherentPhaseStore.Group group) { granularState.addCoherentInternal(group); }
-	public CoherentPhaseStore.Group takeCoherentInternal(int cell, String phaseId, long occupiedSvq) {
-		return granularState.takeCoherentInternal(cell, phaseId, occupiedSvq);
+	public CoherentPhaseStore.Group takeCoherentInternal(int cell, String phaseId, long occupiedSvq,
+	                                                  cc.ecisr.mmm.chemistry.ChemicalRegistry chemistry) {
+		return granularState.takeCoherentInternal(cell, phaseId, occupiedSvq, chemistry);
 	}
 	public void clearCoherentExternal(List<CoherentPhaseStore.Group> expected, SignedDyadic expectedEnergy) {
 		granularState.clearCoherentExternal(expected, expectedEnergy);

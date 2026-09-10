@@ -147,6 +147,9 @@ public final class LiquidEnergyColumn {
 		double base = stateFunction.baseEnergy(
 				thermalHandle, physicalMass, candidateMixture, markers.chemicalRegistry());
 		double sensible = (internalEnergy[marker] - base) / physicalMass;
+		if (sensible < material.sensibleSpecificEnergyAt(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)) {
+			throw new ThermalStateFunction.EnergyOutsideValidityException();
+		}
 		material.temperatureForSensibleSpecificEnergy(sensible);
 	}
 

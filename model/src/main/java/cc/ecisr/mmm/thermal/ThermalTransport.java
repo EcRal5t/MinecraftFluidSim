@@ -4,7 +4,7 @@ import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.Arrays;
 
-/** Canonical pairwise explicit finite-volume conduction over a rebuilt LTE grid. */
+/** Conservative finite-volume conduction with explicit steps and stiff implicit face solves. */
 public final class ThermalTransport {
 	public static final int DEFAULT_MAXIMUM_SUBSTEPS = 8;
 
@@ -108,19 +108,28 @@ public final class ThermalTransport {
 			// A pair of equal cells both move during one Jacobi update. The usual positivity bound C/sum(G)
 			// permits an exact temperature swap at equality; half that bound preserves pair ordering and
 			// gives monotone approach to LTE without a mesh- or material-specific damping heuristic.
-			stableDt = Math.min(stableDt, 0.5 * grid.heatCapacity(cell) / conductanceSum[cell]);
+			stableDt = Math.min(stableDt, 0.5 * grid.minimumHeatCapacity(cell) / conductanceSum[cell]);
 		}
 		// Equal temperatures on every conducting contact are an exact stationary solution.
 		// One pass still validates carrier LTE and performs any required intracell energy handoff.
 		int substeps = !exchangeRequired[0] ? 1
 				: Math.max(1, (int) Math.ceil(logicalDtSeconds / stableDt));
-		if (substeps > maximumSubsteps) {
-			throw new IllegalArgumentException("Thermal stability substep budget exceeded: " + substeps);
-		}
-		double substepDt = logicalDtSeconds / substeps;
 		SignedDyadic[] reservoirExchange = {SignedDyadic.ZERO};
 		double[] maximumAbsoluteTransfer = {0.0};
-		for (int step = 0; step < substeps; step++) {
+		boolean implicit = substeps > maximumSubsteps;
+		if (implicit) {
+			java.util.ArrayList<ThermalImplicitTransport.Face> faces = new java.util.ArrayList<>(evaluatedFaces);
+			forEachFace(grid, faceArea, (first, second, conductance) ->
+					faces.add(new ThermalImplicitTransport.Face(first, second, conductance, Double.NaN)));
+			forEachBoundary(grid, boundaryFace, (cell, conductance, temperature) ->
+					faces.add(new ThermalImplicitTransport.Face(cell, -1, conductance, temperature)));
+			ThermalImplicitTransport.Exchange exchange = ThermalImplicitTransport.step(grid, faces, logicalDtSeconds);
+			reservoirExchange[0] = exchange.reservoir();
+			maximumAbsoluteTransfer[0] = exchange.maximumTransfer();
+			substeps = 1;
+		}
+		double substepDt = logicalDtSeconds / substeps;
+		for (int step = 0; !implicit && step < substeps; step++) {
 			Arrays.fill(deltaEnergy, 0.0);
 			forEachFace(grid, faceArea, (first, second, conductance) -> {
 				double transfer = conductance * (grid.temperature(second) - grid.temperature(first)) * substepDt;
