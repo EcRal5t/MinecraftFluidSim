@@ -55,7 +55,7 @@
 
 新增行为放入负责该数据的实现类或计算阶段。`FluidDomainStateMapper` 统一装配捕获和恢复过程。
 
-`MechanicalStepPipeline` 组织力学阶段。构造时向各阶段注入所需数组和工作区，生命周期中会重新绑定的数据经该阶段的 `Access` 接口取得。跨阶段的压力参考值和结果通过明确的写回接口传递。颗粒运动预览更新 solid occupancy 后，复用 `ParticleToGridStage.rebuildPressureGeometry` 同步压力分类、气体边界归属和表面张力压力；压力方程的未知量与流通面使用同一份占用几何。
+`MechanicalStepPipeline` 组织力学阶段。构造时向各阶段注入所需数组和工作区，生命周期中会重新绑定的数据经该阶段的 `Access` 接口取得。跨阶段的压力参考值和结果通过明确的写回接口传递。压力分类、流通面与颗粒占据率导数使用子步初态的同一份几何；联合压力求解同时更新液体和颗粒速度，随后预览颗粒碰撞与容量。
 
 `ThermochemistryPipeline` 按传导、液相反应、颗粒反应、固液相变和气液相变的顺序执行。`ThermochemistryStageAssembly` 负责注入依赖，后续沉积和粒子拆并分别由 `GranularTransitionStage`、`ParticleReseedStage` 执行。
 
@@ -76,6 +76,8 @@
 力学结果使用 `FluidStepCandidate`，静水热计算使用 `FluidThermalStepCandidate`。两者都返回原代次的紧邻后继，并接受后端标识、代次和完整布局检查。`FluidDomainState.Layout` 固定网格、配置、预算、外壳、载体种类、注册表、功能身份和热学预算。
 
 CPU 在私有对象上顺序执行计算，任一阶段失败就丢弃整份候选，保留当前区域状态。成功后可直接交接这个对象一次。需要存档或诊断快照时，提交前调用 `state()` 生成不可变状态；提交后该对象已成为活动区域，历史候选的 `state()` 会拒绝调用。完整提交过程见 [运行时与区域操作](runtime-and-lifecycle.md#candidate)。
+
+初始子步数由液体、颗粒速度与重力预测的 Courant 数决定。压力加速后的颗粒速度还要在碰撞预览前复检。超限时，`MechanicalTimeRefinement` 携带所需子步数，CPU 后端丢弃候选，从原请求重新恢复并细化整个力学步；最多细化八次，仍无法满足条件则拒绝候选。重算包含实体输入、气体状态与待结算相变功，成功候选只提交一次。直接调用可变 `FluidDomain.step()` 的诊断代码会收到该细化异常；生产调用统一经过后端。
 
 成功结果携带本步输运、化学、颗粒反应和相变诊断。力学 `StepStats` 另含颗粒沉积与唤醒诊断。调度器据本步结果判断活动状态。
 
@@ -105,7 +107,7 @@ marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新�
 
 ### 时间步与 CFL
 
-配置中的 `timeStep` 是 logical step 时间；mechanical core 根据最大 face speed、cell size 与 `maxCourantNumber` 选择子步。子步只提高数值稳定性，不改变本 logical step 的外部 source/sink 或相变预算。wall-time pacing 只改变 logical step 被调度的 tick 间隔，也不扩大物理 `dt`。
+配置中的 `timeStep` 是 logical step 时间；mechanical core 根据液体 marker、颗粒速度和重力预测、cell size 与 `maxCourantNumber` 选择子步，并复检压力后的颗粒位移。子步细化保持本 logical step 的总时间、外部 source/sink 和相变预算。wall-time pacing 只改变 logical step 被调度的 tick 间隔。
 
 ## Logical step
 
@@ -142,7 +144,7 @@ div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 - 变密度 face coefficient 按两侧界面距离守恒加权；同密度材料必须退化为纯水矩阵。
 - PCG 对活动 liquid cell 与接触液体的有限 sealed gas node 联合求解；`pressureTolerance` 是整个 block system 的绝对 RMS 代数残差，不随 RHS/静水载荷放大。同一次 projection 的 fluid unknown 集、face mobility、diagonal 与 gas storage 在迭代前装配一次，PCG 只在该固定 block operator 上更新向量；迭代中不得重复重建物理系数，也不得改变相分类。迭代预算耗尽、breakdown、非有限残差或无法闭合有限库存/容量 owner 的 gas topology 会以各自 typed failure 拒绝完整候选并把生产区域标记 `NUMERICAL_PAUSE`，不会以未收敛压力或部分 gas remap 继续 advection。其他 `IllegalStateException` 不在该边界被宽泛吞掉。
 - 环境表压为 gauge zero。gas topology 的 runtime lineage 还会沿连通 pressure-air fringe 扩展到实际 ghost face，但不会穿过 pressure-fluid bulk。只有密闭气体边界时，求解器先减去一个统一 gas gauge reference，PCG 只承受相对压力；对外压力观察、相平衡与 pending `-p ΔV` 再加回该 reference。多个 gas lineage 之间的压差不被消除。
-- moving-solid occupancy 只通过物理 `target_divergence` 进入 projection，不直接缩放 marker；相变 pending 只结算已经发生的 marker 几何变化对应的压力功，不能再次制造一份散度源。
+- 活动颗粒通过占据率空间导数和有限质量响应参与压力矩阵，液体与颗粒速度一起满足体积连续性；具体离散式见 [颗粒排水与压力](granular-state.md#统一排水与压力)。相变 pending 结算已发生的 marker 几何变化对应的压力功。
 
 ### 液体与可压缩气体的能力边界
 

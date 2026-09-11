@@ -8,10 +8,8 @@ import cc.ecisr.mmm.units.SolverUnitScale;
 
 /**
  * The granular mechanical stage inside each substep: parcel velocity advance against the
- * sampled carrier flow, collision capacity preview with local geometric resolution, the
- * pressure-coupling swap to the previewed occupancy, and the post-advection collision
- * commit. Returns the typed mechanics stats; boundary-impulse accumulation stays with the
- * step pipeline.
+ * sampled carrier flow, followed by collision/capacity preview after the coupled pressure
+ * solve and collision commit after liquid advection.
  */
 final class GranularMechanicalStage {
 	record Workspace(
@@ -26,16 +24,11 @@ final class GranularMechanicalStage {
 		GranularCouplingFields granularCoupling();
 		GranularCouplingFields granularNextCoupling();
 		boolean granularOccupancyFitsGeometry(GranularCouplingFields coupling);
-		void setPressureGranularCoupling(GranularCouplingFields coupling);
-		void rebuildPressureGeometry();
 		int particleCellIndex(float x, float y, float z);
 		int[] granularCarrierMaterialByCell();
 		FluidMaterialRegistry materialRegistry();
 		boolean massWeightedP2G();
 		float effectiveOpenCellVolume(int cell);
-		float sampleX(float[] field, float x, float y, float z);
-		float sampleY(float[] field, float x, float y, float z);
-		float sampleZ(float[] field, float x, float y, float z);
 		float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz);
 	}
 
@@ -47,13 +40,29 @@ final class GranularMechanicalStage {
 		this.access = access;
 	}
 
-	/** Runs the whole granular substep; returns null when the domain carries no granular inventory. */
+	/** Advances gravity and drag; the shared pressure solve supplies buoyancy and displacement response. */
 	GranularMechanics.StepStats stepVelocities(float dt) {
 		if (!access.hasGranularInventory()) return null;
 		GranularDomainState state = access.granularState();
 
-		GranularMechanics.StepStats stats = GranularMechanics.stepVelocities(
+		return GranularMechanics.stepVelocities(
 				state.parcels, state.registry, granularEnvironment(), this.state.config.gravity(), dt);
+	}
+
+	void previewCollision(float dt) {
+		if (!access.hasGranularInventory()) return;
+		GranularDomainState state = access.granularState();
+		// Pressure can accelerate a resting parcel beyond the initial velocity-based time step.
+		double maximum = 0;
+		for (int index = 0; index < state.parcels.count(); index++) {
+			var parcel = state.parcels.parcel(index);
+			maximum = Math.max(maximum, Math.abs((double) parcel.velocityX())
+					+ Math.abs(parcel.velocityY()) + Math.abs(parcel.velocityZ()));
+		}
+		double distance = this.state.config.cellSize() * this.state.config.maxCourantNumber();
+		if (maximum * dt > distance * (1 + 8 * Math.ulp(1.0F))) {
+			throw new MechanicalTimeRefinement((int) Math.ceil(maximum * this.state.config.timeStep() / distance));
+		}
 		access.granularCollision().preview(state.parcels, state.registry, dt);
 		access.granularNextCoupling().rebuild(state.parcels, state.deposits,
 				access.granularCollision()::previewPosition);
@@ -66,9 +75,6 @@ final class GranularMechanicalStage {
 				throw new IllegalStateException("Locally resolved granular occupancy exceeds geometry");
 			}
 		}
-		access.setPressureGranularCoupling(access.granularNextCoupling());
-		access.rebuildPressureGeometry();
-		return stats;
 	}
 
 	/** Applies the already-previewed collision capacity after marker advection. */
@@ -80,6 +86,7 @@ final class GranularMechanicalStage {
 
 	private GranularMechanics.Environment granularEnvironment() {
 		return new GranularMechanics.Environment() {
+			@Override public boolean buoyancyResolvedByPressure() { return true; }
 			@Override public GranularMechanics.FluidSample sample(float x, float y, float z) {
 				int cell = access.particleCellIndex(x, y, z);
 				int liquidMaterial = access.granularCarrierMaterialByCell()[cell];
@@ -103,11 +110,12 @@ final class GranularMechanicalStage {
 			@Override public GranularMechanics.FluidImpulseApplication addFluidImpulse(float x, float y, float z,
 			                                      double impulseX, double impulseY, double impulseZ) {
 				MacVelocityGrid mac = state.mac;
-				double appliedSolverX = addFaceImpulse(mac.velocityX, mac.velocityWeightX, 0, x, y, z,
+				// velocityWeight is reused as air-extrapolation scratch. Only p2gWeight still holds mass.
+				double appliedSolverX = addFaceImpulse(mac.velocityX, mac.p2gWeightX, 0, x, y, z,
 						state.unitScale.signedSolverMass(impulseX));
-				double appliedSolverY = addFaceImpulse(mac.velocityY, mac.velocityWeightY, 1, x, y, z,
+				double appliedSolverY = addFaceImpulse(mac.velocityY, mac.p2gWeightY, 1, x, y, z,
 						state.unitScale.signedSolverMass(impulseY));
-				double appliedSolverZ = addFaceImpulse(mac.velocityZ, mac.velocityWeightZ, 2, x, y, z,
+				double appliedSolverZ = addFaceImpulse(mac.velocityZ, mac.p2gWeightZ, 2, x, y, z,
 						state.unitScale.signedSolverMass(impulseZ));
 				double appliedX = state.unitScale.signedKilograms(appliedSolverX);
 				double appliedY = state.unitScale.signedKilograms(appliedSolverY);
@@ -184,7 +192,7 @@ final class GranularMechanicalStage {
 			double weight = access.trilinearWeight(ox, oy, oz, fx, fy, fz);
 			float before = field[face];
 			field[face] = (float) (before + impulse * weight / (weightedMass * faceMassScale()));
-			actual += (field[face] - before) * faceMass[face] * faceMassScale();
+			actual += ((double) field[face] - before) * faceMass[face] * faceMassScale();
 		}
 		return actual;
 	}

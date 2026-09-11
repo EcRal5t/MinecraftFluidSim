@@ -227,6 +227,11 @@ final class ControllerInventoryDurabilityValidation {
 
 	/** Crosses normal player actions with full backend handoff after every accepted transition. */
 	private static void runNormalPlayStateMatrix(FullCapabilityTestFixture.Registries registries) throws Exception {
+		for (int seed : new int[]{4, 54, 103}) {
+			Failure failure = runRandomizedNormalPlay(registries, seed, 60);
+			if (failure != null) throw new AssertionError("granular pressure replay seed=" + seed
+					+ ", action=" + failure.actionIndex() + ", trace=" + failure.trace(), failure.cause());
+		}
 		runScenario("sand and precipitate long settlement", registries, state -> {
 			state.insertSand(); state.insertAcid(5); state.insertBase(5); state.steps(true, 120);
 		});
@@ -428,8 +433,10 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 		}
 		void indicator(boolean value) {
-			check(domain.editIndicatorFloodFill(7, 7, 7, value, 512, 100.0).accepted(),
-					"normal-play indicator edit was rejected");
+			var edit = domain.editIndicatorFloodFill(7, 7, 7, value, 512, 100.0);
+			check(edit.accepted(), "normal-play indicator edit was rejected: " + edit.failure()
+					+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
+					+ ", solidSvq=" + domain.totalGranularSolidVolumeSvq());
 			roundTrip();
 		}
 		void extractWater() {
@@ -437,6 +444,16 @@ final class ControllerInventoryDurabilityValidation {
 			check(domain.tryExtractExactVolume(7, 7, 7, 8.0F, 6).transferred(),
 					"normal-play water extraction was rejected");
 			roundTrip();
+		}
+		boolean tryExtractWaterAt(int[] target) {
+			if (!domain.tryExtractExactVolume(target[0], target[1], target[2], 8.0F, 6, water).transferred()) return false;
+			roundTrip();
+			return true;
+		}
+		boolean tryExtractChemicalAt(int[] target) {
+			if (!domain.tryExtractExactChemical(target[0], target[1], target[2], 8.0F, 6).transferred()) return false;
+			roundTrip();
+			return true;
 		}
 		void extractChemical() {
 			settle();
@@ -449,12 +466,13 @@ final class ControllerInventoryDurabilityValidation {
 							+ java.util.Arrays.toString(target) + ", nearby=" + available);
 			roundTrip();
 		}
-		int[] maximumNearbyLiquidCell(int radius) {
+		int[] maximumNearbyLiquidCell(int radius) { return maximumNearbyLiquidCell(radius, -1); }
+		int[] maximumNearbyLiquidCell(int radius, int materialHandle) {
 			int[] selected = new int[3];
 			double maximum = -1.0;
 			for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
 				for (int x = 0; x < domain.sizeX(); x++) {
-					double available = domain.exactVolumeNear(x, y, z, radius, -1);
+					double available = domain.exactVolumeNear(x, y, z, radius, materialHandle);
 					if (available > maximum) {
 						maximum = available; selected[0] = x; selected[1] = y; selected[2] = z;
 					}
@@ -511,6 +529,112 @@ final class ControllerInventoryDurabilityValidation {
 			checkClosed(domain, "normal-play restore generation " + generation);
 		}
 	}
+
+	/** Seeded normal-play fuzzing entry point used to surface forced simulation interruptions. */
+	public static void main(String[] args) throws Exception {
+		int firstSeed = args.length > 0 ? Integer.parseInt(args[0]) : 0;
+		int seeds = args.length > 1 ? Integer.parseInt(args[1]) : 32;
+		int actions = args.length > 2 ? Integer.parseInt(args[2]) : 80;
+		FUZZ_DISABLE_GRANULAR = args.length > 3 && Boolean.parseBoolean(args[3]);
+		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
+		int failed = 0;
+		for (int seed = firstSeed; seed < firstSeed + seeds; seed++) {
+			Failure failure = runRandomizedNormalPlay(registries, seed, actions);
+			if (failure == null) {
+				System.out.println("fuzz seed " + seed + " PASS");
+			} else {
+				failed++;
+				System.out.println("FUZZ FAILURE seed=" + seed + " action=" + failure.actionIndex()
+						+ " cause=" + failure.cause().getClass().getSimpleName() + ": " + failure.cause().getMessage());
+				for (Throwable cause = failure.cause().getCause(); cause != null; cause = cause.getCause()) {
+					System.out.println("    caused by " + cause.getClass().getSimpleName() + ": " + cause.getMessage());
+				}
+				System.out.println("  trace=" + failure.trace());
+				if (failed >= 8) { System.out.println("stopping after 8 failures"); break; }
+			}
+		}
+		System.out.println("randomized normal play finished; failures=" + failed);
+		if (failed > 0) throw new AssertionError("randomized normal play surfaced " + failed + " interruption(s)");
+	}
+
+	private record Failure(int actionIndex, Throwable cause, java.util.List<String> trace) { }
+
+	private static Failure runRandomizedNormalPlay(
+			FullCapabilityTestFixture.Registries registries, int seed, int actionCount
+	) throws Exception {
+		NormalPlayState state = new NormalPlayState(registries);
+		java.util.Random random = new java.util.Random(seed);
+		java.util.List<String> trace = new java.util.ArrayList<>();
+		for (int index = 0; index < actionCount; index++) {
+			String action;
+			try {
+				action = applyRandomAction(state, random);
+			} catch (Throwable failure) {
+				return new Failure(index + 1, failure, java.util.List.copyOf(trace));
+			}
+			trace.add((index + 1) + ":" + action);
+		}
+		return null;
+	}
+
+	private static String applyRandomAction(NormalPlayState state, java.util.Random random) {
+		int pick = random.nextInt(100);
+		if (pick < 6) { state.insertWater(); return "insertWater"; }
+		if (pick < 11) { state.insertMercury(); return "insertMercury"; }
+		if (pick < 18) { state.insertAcid(1 + random.nextInt(2)); return "insertAcid"; }
+		if (pick < 25) { state.insertBase(1 + random.nextInt(2)); return "insertBase"; }
+		if (pick < 30) {
+			if (!FUZZ_DISABLE_GRANULAR) { state.insertSand(); return "insertSand"; }
+			state.step(false);
+			return "step(motion)";
+		}
+		if (pick < 40) { state.step(false); return "step(motion)"; }
+		if (pick < 52) { state.step(true); return "step(phase)"; }
+		if (pick < 60) { int count = 2 + random.nextInt(4); state.steps(true, count); return "steps(phase," + count + ")"; }
+		if (pick < 64) { int count = 2 + random.nextInt(5); state.steps(false, count); return "steps(motion," + count + ")"; }
+		if (pick < 70) {
+			double kelvin = RANDOM_TEMPERATURES[random.nextInt(RANDOM_TEMPERATURES.length)];
+			state.temperature(kelvin);
+			state.roundTrip();
+			return "temperature(" + kelvin + ")";
+		}
+		if (pick < 76) {
+			state.settle();
+			int[] target = state.maximumNearbyLiquidCell(6, state.water);
+			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, state.water) >= 8.0
+					&& state.tryExtractWaterAt(target)) {
+				return "extractWater";
+			}
+			return "skip(noCanonicalWater)";
+		}
+		if (pick < 82) {
+			state.settle();
+			int[] target = state.maximumNearbyLiquidCell(6);
+			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
+					&& state.tryExtractChemicalAt(target)) {
+				return "extractChemical";
+			}
+			return "skip(noCanonicalLiquid)";
+		}
+		if (pick < 87) {
+			var edit = state.domain.editIndicatorFloodFill(7, 7, 7, random.nextBoolean(), 512, 100.0);
+			if (edit.accepted()) {
+				state.roundTrip();
+				return "indicator";
+			}
+			return "skip(indicator:" + edit.failure() + ")";
+		}
+		if (pick < 91) { state.clear(); return "clear"; }
+		if (pick < 96) { state.vent(); return "vent"; }
+		state.settle();
+		return "settle";
+	}
+
+	private static boolean FUZZ_DISABLE_GRANULAR = false;
+
+	private static final double[] RANDOM_TEMPERATURES = {
+			1.0, 50.0, 150.0, 273.15, 293.15, 320.0, 373.15, 600.0, 1_500.0, 3_000.0
+	};
 
 	@FunctionalInterface private interface Scenario { void run(NormalPlayState state) throws Exception; }
 

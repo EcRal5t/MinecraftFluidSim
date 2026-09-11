@@ -40,6 +40,7 @@ public final class M8GranularValidation {
 		parcelDepositCyclesDoNotDrift(fast ? 1_000 : 10_000);
 		mechanicsMatchesTerminalVelocity();
 		twoWayDragPreservesMomentum();
+		cc.ecisr.mmm.fluid.GranularCarrierValidation.validate();
 		couplingOccupancyResumsExactly();
 		porousBedPreservesHydrostatics();
 		settlingRelaxationSleepAndWakeAreLocal();

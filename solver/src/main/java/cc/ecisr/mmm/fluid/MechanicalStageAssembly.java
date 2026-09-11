@@ -74,9 +74,6 @@ final class MechanicalStageAssembly {
 			@Override public float surfaceTensionBoundaryDivergence(int cell, float dt) {
 				return domain.surfaceTensionBoundaryDivergence(cell, dt);
 			}
-			@Override public float granularMovingSolidDivergence(int cell, float dt) {
-				return domain.granularMovingSolidDivergence(cell, dt);
-			}
 			@Override public PressureFaceCoupling pressureFaceCoupling(
 					int first, int second, int dx, int dy, int dz
 			) {
@@ -95,7 +92,6 @@ final class MechanicalStageAssembly {
 	private static GranularMechanicalStage.Access granularAccess(FluidDomain domain) {
 		return new GranularMechanicalStage.Access() {
 			@Override public boolean massWeightedP2G() { return domain.variableDensityActive; }
-			@Override public void rebuildPressureGeometry() { domain.particleToGridStage.rebuildPressureGeometry(); }
 			@Override public boolean hasGranularInventory() { return domain.hasGranularInventory(); }
 			@Override public GranularDomainState granularState() { return domain.granularState; }
 			@Override public FlipGranularCollision granularCollision() { return domain.granularCollision; }
@@ -104,18 +100,12 @@ final class MechanicalStageAssembly {
 			@Override public boolean granularOccupancyFitsGeometry(GranularCouplingFields coupling) {
 				return domain.granularOccupancyFitsGeometry(coupling);
 			}
-			@Override public void setPressureGranularCoupling(GranularCouplingFields coupling) {
-				domain.pressureGranularCoupling = coupling;
-			}
 			@Override public int particleCellIndex(float x, float y, float z) {
 				return domain.particleCellIndex(x, y, z);
 			}
 			@Override public int[] granularCarrierMaterialByCell() { return domain.granularCarrierMaterialByCell; }
 			@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
 			@Override public float effectiveOpenCellVolume(int cell) { return domain.effectiveOpenCellVolume(cell); }
-			@Override public float sampleX(float[] field, float x, float y, float z) { return domain.sampleX(field, x, y, z); }
-			@Override public float sampleY(float[] field, float x, float y, float z) { return domain.sampleY(field, x, y, z); }
-			@Override public float sampleZ(float[] field, float x, float y, float z) { return domain.sampleZ(field, x, y, z); }
 			@Override public float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz) {
 				return domain.trilinearWeight(ox, oy, oz, fx, fy, fz);
 			}

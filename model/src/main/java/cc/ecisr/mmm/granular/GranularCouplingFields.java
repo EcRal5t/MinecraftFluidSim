@@ -101,14 +101,6 @@ public final class GranularCouplingFields {
 		return Math.min(first, second);
 	}
 
-	public float movingSolidTargetDivergence(int cell, long nextSolidSvq, float dt) {
-		requireCell(cell);
-		if (!(Float.isFinite(dt) && dt > 0.0F) || nextSolidSvq < 0L) {
-			throw new IllegalArgumentException("Moving-solid target input is invalid");
-		}
-		return (float) ((nextSolidSvq - solidSvq[cell]) / (double) SolidVolume.SVQ_PER_CELL / dt);
-	}
-
 	/** Plans one positioned parcel against the same exact 8-cell weights used by the production rebuild. */
 	public boolean tryPlanParcel(
 			long[] plannedSolidSvq, Position position, long parcelSvq, IntToLongFunction geometricCapacity

@@ -17,6 +17,9 @@ import java.util.Arrays;
 
 /** Orders complete mechanical and thermochemical logical steps and their audits. */
 abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
+	/** Per-attempt numerical workspace; restored requests and committed candidates start at one. */
+	int minimumMechanicalSubsteps = 1;
+
 	FluidDomainStepCoordinator(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config, int maximumParticleCount) {
 		super(sizeX, sizeY, sizeZ, config, maximumParticleCount);
 	}
@@ -607,7 +610,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 					+ Math.abs(parcel.velocityY()) + Math.abs(parcel.velocityZ()));
 		}
 		maximum += config.gravity() * dt;
-		return Math.max(1, (int) Math.ceil(maximum * dt / (config.cellSize() * config.maxCourantNumber())));
+		return Math.max(minimumMechanicalSubsteps, (int) Math.ceil(maximum * dt / (config.cellSize() * config.maxCourantNumber())));
 	}
 
 	/**
@@ -686,12 +689,6 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	public record PhaseTransferStats(int transfers, int precipitations, int dissolutions, long signedSolidSvq) { }
-
-	float granularMovingSolidDivergence(int index, float dt) {
-		return granularNextCoupling == null || pressureGranularCoupling != granularNextCoupling
-				? 0.0F : granularCoupling.movingSolidTargetDivergence(index,
-						granularNextCoupling.solidSvq(index), dt);
-	}
 
 	boolean granularOccupancyFitsGeometry(GranularCouplingFields coupling) {
 		for (int cell = 0; cell < cellCount; cell++) {

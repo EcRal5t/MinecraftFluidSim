@@ -12,9 +12,11 @@ final class MacVelocityGrid {
 	final float[] p2gVelocityX;
 	final float[] p2gVelocityY;
 	final float[] p2gVelocityZ;
+	// P2G accumulation weights are reused as 0/1 flags during air extrapolation.
 	final float[] velocityWeightX;
 	final float[] velocityWeightY;
 	final float[] velocityWeightZ;
+	// Retained mass/volume weights for physical impulse exchange and kinetic energy.
 	final float[] p2gWeightX;
 	final float[] p2gWeightY;
 	final float[] p2gWeightZ;

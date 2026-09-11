@@ -11,7 +11,7 @@ import cc.ecisr.mmm.granular.SolidVolume;
 import java.util.Arrays;
 import java.util.function.IntToLongFunction;
 
-/** Collision-resolved granular motion preview committed only after the matching pressure projection. */
+/** Collision-resolved granular motion preview from pressure-corrected velocities, committed after liquid advection. */
 final class FlipGranularCollision {
 	private static final int[] SWEEP_AXIS_ORDER = {0, 2, 1};
 	private final int sizeX, sizeY, sizeZ;

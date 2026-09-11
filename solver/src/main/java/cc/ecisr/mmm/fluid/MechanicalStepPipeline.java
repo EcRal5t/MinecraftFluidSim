@@ -128,6 +128,7 @@ final class MechanicalStepPipeline {
 					invalidPendingWork);
 		}
 		pressureStage.projectVelocities(dt);
+		granularMechanicalStage.previewCollision(dt);
 		if (captureAudit) {
 			nextKineticEnergy = access.gridKineticEnergyJoules();
 			audit.pressureProjectionWorkJoules += nextKineticEnergy - stageKineticEnergy;

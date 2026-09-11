@@ -8,25 +8,38 @@ import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 /** Reference backend that evaluates a request on a private restored domain. */
 public final class CpuFluidSolverBackend implements FluidSolverBackend {
 	public static final String ID = "mmm:cpu-flip";
+	private static final int MAXIMUM_TIME_REFINEMENTS = 8;
 
 	@Override public String id() { return ID; }
 
 	@Override public FluidStepCandidate evaluate(FluidStepRequest request) {
 		if (request == null) throw new IllegalArgumentException("Step request is missing");
 		try {
-			FluidDomain candidate = restoreCandidate(request.state());
-			MovingBodyFluidCoupling.Result movingBodyCoupling = MovingBodyFluidCoupling.Result.NONE;
-			for (var movingBody : request.movingBodies()) {
-				movingBodyCoupling = movingBodyCoupling.plus(candidate.applyMovingBodyCoupling(movingBody));
+			int minimumSubsteps = 1;
+			for (int refinement = 0; ; refinement++) {
+				FluidDomain candidate = restoreCandidate(request.state());
+				candidate.minimumMechanicalSubsteps = minimumSubsteps;
+				MovingBodyFluidCoupling.Result movingBodyCoupling = MovingBodyFluidCoupling.Result.NONE;
+				for (var movingBody : request.movingBodies()) {
+					movingBodyCoupling = movingBodyCoupling.plus(candidate.applyMovingBodyCoupling(movingBody));
+				}
+				FluidDomain.StepStats stats;
+				try {
+					stats = request.pendingPhaseSettlementOnly()
+						? candidate.stepMechanicsOnly()
+						: request.mechanicalAuditEnabled()
+						? candidate.stepWithMechanicalAudit(
+								request.phaseChangeEnabled(), request.maximumPhaseOperations())
+						: candidate.step(request.phaseChangeEnabled(), request.maximumPhaseOperations());
+				} catch (MechanicalTimeRefinement finer) {
+					if (refinement >= MAXIMUM_TIME_REFINEMENTS) throw finer;
+					minimumSubsteps = Math.max(Math.multiplyExact(minimumSubsteps, 2), finer.minimumSubsteps);
+					continue;
+				}
+				candidate.minimumMechanicalSubsteps = 1;
+				return FluidStepCandidate.preparedCpu(
+						request.baseGeneration(), candidate, stats, movingBodyCoupling);
 			}
-			FluidDomain.StepStats stats = request.pendingPhaseSettlementOnly()
-					? candidate.stepMechanicsOnly()
-					: request.mechanicalAuditEnabled()
-					? candidate.stepWithMechanicalAudit(
-							request.phaseChangeEnabled(), request.maximumPhaseOperations())
-					: candidate.step(request.phaseChangeEnabled(), request.maximumPhaseOperations());
-			return FluidStepCandidate.preparedCpu(
-					request.baseGeneration(), candidate, stats, movingBodyCoupling);
 		} catch (RuntimeException rejected) {
 			throw candidateFailure("mechanical", rejected);
 		}

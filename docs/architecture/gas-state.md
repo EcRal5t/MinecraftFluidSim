@@ -122,6 +122,8 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 
 当前 `AirNetwork` 是有限体积热力学/孔流网络，不是逐 cell/face 的气体动量求解器；空间 FLIP 网格仍只承载不可压凝聚相。有限 node 与液体接触时已用 `C_V = V*beta_s` 作为集总储存项进入同一对称 pressure block system，液体侵入/退出气腔的面通量与 node 压力响应因而在本子步隐式闭合；等温 `beta=1/p_abs`，热状态 `beta_s=1/(gamma*p_abs)`。
 
+活动颗粒的占据率支撑涉及有限气体节点时，该节点也进入压力系统。多个支撑单元属于同一节点时先合并体积导数，再与颗粒有限质量组成对称压力项；气体容量变化和颗粒受压使用同一份导数。离散方程见 [颗粒压力耦合](granular-state.md#统一排水与压力)。
+
 node 内部仍没有速度自由度，所以这不承诺解析腔体内声学传播或气体混合层。后续若把气体迁入共享空间动量内核，必须保留这里的 exact 组分/质量/能量账，并以状态方程闭合密度和非零散度；不能复用液体零散度 projection 把气体错误地压成不可压，也不能按材料 ID 选择另一套平流/传递算法。
 
 空间化时 node inventory 与逐 cell inventory 不能同时成为原始数据。进入空间内核的连通气体必须由逐控制体的 component nanos/kg/species/residual、动量和总能量唯一持有；`AirNetwork` 只能在未空间解析的腔体继续持有 exact node 总账，或作为逐格总账可证明的 coarse projection。两种表示之间的切换必须是同一候选内的守恒 repartition，不能先复制 node 再让两侧各自演化。

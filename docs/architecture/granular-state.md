@@ -7,7 +7,7 @@
 | 要改什么 | 代码入口 | 测试选择器 |
 |---|---|---|
 | 库存和压力耦合 | [GranularInventory](../../model/src/main/java/cc/ecisr/mmm/granular/GranularInventory.java)、[GranularCouplingFields](../../model/src/main/java/cc/ecisr/mmm/granular/GranularCouplingFields.java) | `granular` |
-| 运动、反应和沉积 | [GranularMechanicalStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularMechanicalStage.java)、[GranularReactionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularReactionStage.java)、[GranularTransitionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularTransitionStage.java) | `granular` |
+| 运动、反应和沉积 | [GranularMechanicalStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularMechanicalStage.java)、[GranularPressureCoupling](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularPressureCoupling.java)、[GranularReactionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularReactionStage.java)、[GranularTransitionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularTransitionStage.java) | `granular` |
 | 定义与存档 | [GranularRegistryCodec](../../fabric/src/main/java/cc/ecisr/mmm/granular/GranularRegistryCodec.java) | `region-state` |
 | 物品转移 | [MinecraftContainerTransferPlan](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftContainerTransferPlan.java)、[ContainerItemMapper](../../fabric/src/main/java/cc/ecisr/mmm/item/ContainerItemMapper.java) | `containers,granular` |
 
@@ -77,7 +77,7 @@ Vpore = Vbulk - Vs
 
 ### Active parcel 力学
 
-parcel 的物理质量列直接使用 kg，SVQ 通过 `SVQ_PER_BV` 直接给出 m³；两者不依赖 liquid solver cell 的质量标度。每步先从同格液相采样速度、压力梯度、密度和载体黏度，再计算重力、浮力和阻力。颗粒反作用冲量只在写入 liquid MAC grid 时经 `SolverUnitScale` 换成 solver momentum。球形颗粒的相对 Reynolds 数为
+parcel 的物理质量列直接使用 kg，SVQ 通过 `SVQ_PER_BV` 直接给出 m³；两者不依赖 liquid solver cell 的质量标度。每步先从同格液相采样速度、密度和载体黏度，积分重力与阻力，再由联合压力求解给出浮力和排水阻力。颗粒阻力的反作用冲量在写入 liquid MAC grid 时经 `SolverUnitScale` 换成 solver momentum。球形颗粒的相对 Reynolds 数为
 
 ```text
 Re = rho_f * d * |u_f - u_p| / mu
@@ -87,15 +87,27 @@ Re = rho_f * d * |u_f - u_p| / mu
 
 各方向的有限载体质量使用冻结的 P2G 权重；体积权重先按参考密度换成质量。实际 MAC 采样和反冲核给出：`M_eff = sum(w*m)^2 / sum(w*w*m)`。parcel 按此质量做两体指数松弛，后续 parcel 读取已承接反冲的速度。液体采样要求存在液体 marker 和正孔隙容量；零孔隙格子走干态路径。carrier 的 Reynolds 适用域和物性在预检与每次交换前验证。
 
-浮力和阻力的两体解直接给出液体反作用冲量，颗粒速度的 binary32 舍入归属于颗粒自身的表示误差。载体速度采样与反作用散布必须使用同一份 `trilinear weight × P2G face mass` 核：零质量外推 face 不属于有限载体，非零 face 按质量伴随算子共同承接冲量，不能先按纯几何权重分冲量再除以各 face 质量。
+阻力的两体解直接给出液体反作用冲量，颗粒速度的 binary32 舍入归属于颗粒自身的表示误差。载体速度采样与反作用散布使用同一份 `trilinear weight × P2G face mass` 核。质量读取 `MacVelocityGrid.p2gWeight*`；`velocityWeight*` 在速度外推时会被复用为 0/1 工作标记。零质量外推面不参与有限载体交换。沿相同核顺序处理多个 parcel 时，每次阻力交换都守恒动量并耗散相对动能。
 
 写入 binary32 MAC velocity 后从实际速度差重算已承接冲量，舍入余量与 cut-cell 无法承接的部分进入 boundary impulse ledger。碰撞使用与流体一致的几何快照、连续碰撞检测和材料摩擦/恢复定义，不依赖渲染表面。
 
 ### 统一排水与压力
 
-每个 logical step 从 active、deposit 的骨架 SVQ 和 coherent store 构造统一 solid occupancy。目标散度为固体占据率的增加量除以时间步长：固体进入时驱动液体流出，离开时容纳液体流入。可用体积为几何开放体积减去 solid occupancy，排水与液体连续性在同一次 projection 中结算。
+每个子步从 active、deposit 的骨架 SVQ 和 coherent store 构造统一 solid occupancy。可用体积为几何开放体积减去 solid occupancy。压力分类、孔隙面面积和颗粒占据率的空间导数均在子步初态上建立，在 PCG 迭代期间保持不变。
 
-projection 结算的 phase volume/work 和 granular occupancy delta 都具有 generation 身份；重试保留已结算记录，checkpoint 也不能只保存其中一半。
+`GranularPressureCoupling` 将每份 active parcel 的有限质量纳入同一个液体单元/密闭气体节点压力系统。设 `G` 为归一化三线性固体占据率对 parcel 位置的导数，`v` 为颗粒速度，`D u` 为液体孔隙面通量的散度，则连续性为 `D u = G v`。对质量矩阵 `M`，颗粒压力响应与其消元项为：
+
+```text
+v_next = v_star - dt * cellVolume * M^-1 * G^T * p
+A_parcel = rho_reference * cellVolume * G * M^-1 * G^T
+rhs_parcel = rho_reference / dt * G * v_star
+```
+
+同一气体节点上的多个支撑单元先合并导数，再加入矩阵与对角预条件器；给定压力的支撑单元计入对应外力。该消元项对称半正定，压力能同时减缓颗粒运动和推动液体排流。静水压力梯度直接给出阿基米德浮力；生产路径的阻力积分不再重复施加解析浮力。
+
+这是一阶时间离散：使用当前位置的空间导数求体积变化率，压力修正后再预览颗粒碰撞与精确容量，最后和液体平流一起提交位置。归一化三线性核的导数总和为零，整数 SVQ 仍由实际新位置重新分配。平滑轨迹的占据率线性化误差随子步缩小而收敛；碰撞和容量约束在后续独立阶段处理。压力矩阵、位置候选和相变功均属于同一完整计算候选，失败时保留上一代状态。
+
+压力后的颗粒位移必须满足配置中的 Courant 限制。高压差造成初始速度预测不足时，后端从原始状态细化重算；Reynolds 守卫继续检查阻力相关式的物理适用范围。细化重算与单次提交规则见 [CPU 后端候选接口](fluid-solver.md#后端候选接口)。
 
 backend/checkpoint handoff 必须逐列保存 active parcel 的接触年龄与支撑标志；它们决定尚未完成的 active→deposit 状态转换，不能在每次候选交接时清零。恢复后的容量验证必须重新使用运行时 `GranularCouplingFields` 的同一 positioned-parcel exact attribution：active parcel 按其连续位置的最多八格权重分摊，deposit 与 coherent fixed occupancy 走各自的 cell-local 归属。
 

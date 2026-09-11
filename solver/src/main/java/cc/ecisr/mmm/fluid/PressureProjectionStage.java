@@ -6,8 +6,8 @@ import java.util.Arrays;
 
 /**
  * The pressure projection stage: gas lineage refresh, reference anchoring, physical target-divergence
- * assembly (surface-tension, lumped sealed-gas compliance and granular-moving-solid
- * contributions), the PCG solve through {@link PressureSystem} and velocity projection.
+ * assembly (surface tension, lumped sealed-gas compliance and finite parcel inertia),
+ * the PCG solve through {@link PressureSystem} and joint liquid/parcel velocity projection.
  * Loop order, float/double
  * typing, the absolute RMS tolerance and the typed non-convergence rejection are kept
  * verbatim; the pending phase-work plan is produced by the step pipeline only after
@@ -32,7 +32,6 @@ final class PressureProjectionStage {
 		boolean isAir(int cell);
 		boolean carrierFaceActive(int first, int second, float openArea);
 		float surfaceTensionBoundaryDivergence(int cell, float dt);
-		float granularMovingSolidDivergence(int cell, float dt);
 		PressureFaceCoupling pressureFaceCoupling(
 				int first, int second, int directionX, int directionY, int directionZ);
 		void pressureAnchor(int cell);
@@ -79,15 +78,18 @@ final class PressureProjectionStage {
 					- access.pressureYFaceOpen(x, y, z) * state.mac.velocityY[access.yFaceIndex(x, y, z)]
 					+ access.pressureZFaceOpen(x, y, z + 1) * state.mac.velocityZ[access.zFaceIndex(x, y, z + 1)]
 					- access.pressureZFaceOpen(x, y, z) * state.mac.velocityZ[access.zFaceIndex(x, y, z)]) * inverseCell;
-			float correctedDivergence = div + access.surfaceTensionBoundaryDivergence(index, dt)
-					- access.granularMovingSolidDivergence(index, dt);
+			float correctedDivergence = div + access.surfaceTensionBoundaryDivergence(index, dt);
 			state.projection.divergence[index] = correctedDivergence;
 			state.projection.rhs[index] = rhsScale * correctedDivergence;
 			state.projection.fluidUnknownCells[state.projection.fluidUnknownCount++] = index;
 			fluidCells++;
 		}
-		if (fluidCells == 0) { access.pressureResult(0, 0.0F); return; }
 		assembleCompressibleGasRows(dt);
+		system.forEachGranularGasNode(node -> {
+			if (gasBoundary.gasNodeHasContinuumState(node)) activateCompressibleGasNode(node, dt);
+		});
+		system.prepareGranular(dt);
+		if (fluidCells + state.projection.gasUnknownCount == 0) { access.pressureResult(0, 0.0F); return; }
 		double target = state.config.pressureTolerance();
 		PressureProjectionResult result = system.solve(fluidCells + state.projection.gasUnknownCount, target);
 		float residual = (float) result.residualRms();
@@ -100,6 +102,7 @@ final class PressureProjectionStage {
 	}
 
 	void projectVelocities(float dt) {
+		system.projectGranular(dt);
 		float scale = dt / (state.config.density() * state.config.cellSize());
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 1; x < state.sizeX; x++) {
 			int left = access.cellIndex(x - 1, y, z), right = access.cellIndex(x, y, z), face = access.xFaceIndex(x, y, z);

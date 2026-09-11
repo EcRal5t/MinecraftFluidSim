@@ -76,6 +76,18 @@ tasks.register('runCpuValidation', JavaExec) {
 	doFirst { validationWorkDir.mkdirs() }
 }
 
+tasks.register('runNormalPlayFuzz', JavaExec) {
+	group = 'verification'
+	dependsOn tasks.named('testClasses')
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = 'cc.ecisr.mmm.simulation.ControllerInventoryDurabilityValidation'
+	enableAssertions = true
+	if (project.hasProperty('fuzzArgs')) args project.property('fuzzArgs').toString().split(',')
+	def validationWorkDir = layout.buildDirectory.dir('cpu-validation-work').get().asFile
+	workingDir validationWorkDir
+	doFirst { validationWorkDir.mkdirs() }
+}
+
 tasks.register('runArchitectureValidation', JavaExec) {
 	group = 'verification'
 	description = 'Scans production sources for dependency-direction, locator, cycle and size regressions.'

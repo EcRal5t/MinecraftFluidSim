@@ -41,7 +41,7 @@ public final class GranularMechanics {
 			double solidVolumeM3 = parcel.solidVolumeSvq() / (double) SolidVolume.SVQ_PER_BV;
 			double massKg = parcel.mass();
 			if (!(Double.isFinite(massKg) && massKg > 0.0)) throw new IllegalStateException("Invalid parcel mass scale");
-			double buoyancyAcceleration = fluid.hasLiquid()
+			double buoyancyAcceleration = fluid.hasLiquid() && !environment.buoyancyResolvedByPressure()
 					? fluid.density() * solidVolumeM3 * fraction * gravity / massKg : 0.0;
 			double externalAccelerationY = -gravity + buoyancyAcceleration;
 			double dragRate = 0.0;
@@ -202,6 +202,7 @@ public final class GranularMechanics {
 	) { }
 
 	public interface Environment {
+		default boolean buoyancyResolvedByPressure() { return false; }
 		FluidSample sample(float x, float y, float z);
 		FluidImpulseApplication addFluidImpulse(
 				float x, float y, float z, double impulseX, double impulseY, double impulseZ);

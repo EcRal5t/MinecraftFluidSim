@@ -1,20 +1,25 @@
 package cc.ecisr.mmm.fluid;
 
 /**
- * Pure pressure numerics: PCG over the symmetric liquid-cell / lumped gas-node block and
- * its diagonal preconditioner. The stage owns physical RHS/storage assembly, anchoring and
- * typed non-convergence rejection; this class owns only matrix application and iteration.
+ * PCG over liquid cells and lumped gas nodes, including the symmetric finite-parcel
+ * inertia contribution and its diagonal preconditioner.
  */
 final class PressureSystem {
 	private final FluidDomain domain;
+	private final GranularPressureCoupling granular;
 
 	PressureSystem(FluidDomain domain) {
 		this.domain = domain;
+		this.granular = new GranularPressureCoupling(domain);
 	}
+	void prepareGranular(float dt) { granular.prepare(dt); }
+	void forEachGranularGasNode(java.util.function.IntConsumer accept) { granular.forEachGasNode(accept); }
+	void projectGranular(float dt) { granular.project(dt); }
 
 	/** Runs PCG on the assembled right-hand side; the pressure vector mutates in the workspace. */
 	PressureProjectionResult solve(int unknownCount, double target) {
 		assembleMatrix();
+		granular.rebuildDiagonal();
 		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
 			int cell = domain.projection.fluidUnknownCells[ordinal];
 			domain.projection.residual[cell] = domain.projection.rhs[cell];
@@ -178,6 +183,7 @@ final class PressureSystem {
 			int node = domain.projection.gasUnknownNodes[ordinal];
 			gasDestination[node] += domain.projection.gasStorageCoefficient[node] * gasSource[node];
 		}
+		granular.apply(source, gasSource, destination, gasDestination);
 	}
 
 	private float neighborValue(int neighbor, float[] source, float[] gasSource) {
@@ -215,12 +221,12 @@ final class PressureSystem {
 		float cellSquared = domain.config.cellSize() * domain.config.cellSize();
 		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
 			int index = domain.projection.fluidUnknownCells[ordinal];
-			float diagonal = domain.projection.matrixDiagonal[index];
+			float diagonal = domain.projection.matrixDiagonal[index] + cellSquared * granular.liquidDiagonal(index);
 			destination[index] = diagonal == 0.0F ? 0.0F : source[index] * cellSquared / diagonal;
 		}
 		for (int ordinal = 0; ordinal < domain.projection.gasUnknownCount; ordinal++) {
 			int node = domain.projection.gasUnknownNodes[ordinal];
-			gasDestination[node] = gasSource[node] / domain.projection.gasMatrixDiagonal[node];
+			gasDestination[node] = gasSource[node] / (domain.projection.gasMatrixDiagonal[node] + granular.gasDiagonal(node));
 		}
 	}
 
