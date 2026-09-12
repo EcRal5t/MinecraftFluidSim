@@ -565,11 +565,16 @@ public final class FluidRegion {
 
 	/** Completes a gas restore after the matching liquid/material generation. */
 	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, long loadedCheckpointGeneration) {
+		restoreGasState(state, registry, loadedCheckpointGeneration, null);
+	}
+
+	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, long loadedCheckpointGeneration,
+	                            FlipThermalParticleState thermal) {
 		Objects.requireNonNull(state, "state"); Objects.requireNonNull(registry, "registry");
 		if (domain == null || loadedCheckpointGeneration != checkpointGeneration || !domain.hasMaterialState()) {
 			throw new IllegalStateException("Gas restore requires the matching loaded material generation");
 		}
-		domain.restoreGasState(state, registry);
+		domain.restoreGasState(state, registry, thermal);
 	}
 
 	/** Completes a current thermal restore after the matching liquid/material generation has been reconstructed. */

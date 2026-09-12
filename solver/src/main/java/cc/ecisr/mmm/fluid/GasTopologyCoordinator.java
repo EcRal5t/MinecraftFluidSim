@@ -51,6 +51,10 @@ final class GasTopologyCoordinator {
 
 	/** Restores complete gas truth after its matching liquid/material state. */
 	void restore(GasStateSnapshot state, GasRegistry registry) {
+		restore(state, registry, null);
+	}
+
+	void restore(GasStateSnapshot state, GasRegistry registry, FlipThermalParticleState thermal) {
 		if (state == null || registry == null || state.sizeX() != domain.sizeX
 				|| state.sizeY() != domain.sizeY || state.sizeZ() != domain.sizeZ
 				|| !state.registryFingerprint().equals(registry.fingerprint())) {
@@ -60,13 +64,26 @@ final class GasTopologyCoordinator {
 			throw new IllegalStateException("Gas restore requires an uninitialized topology");
 		}
 		domain.ensureGrid();
+		var occupancy = domain.pressureGranularCoupling;
+		if (thermal != null && !thermal.coherentGroups().isEmpty()) {
+			thermal.requireCompatible(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.particles.count());
+			domain.validateCoherentRestoreCapacity(thermal.coherentGroups());
+			// Thermal gas energies need the restored network, while gas geometry needs
+			// coherent inventory. Derive geometry from the complete incoming snapshot first.
+			occupancy = new cc.ecisr.mmm.granular.GranularCouplingFields(
+					domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
+			long[] fixed = new long[domain.cellCount];
+			for (var group : thermal.coherentGroups()) fixed[group.cell()] = Math.addExact(fixed[group.cell()], group.occupiedVolumeSvq());
+			occupancy.setFixedCellSvq(fixed);
+			if (domain.granularState != null) occupancy.rebuild(domain.granularState.parcels, domain.granularState.deposits);
+		}
 		AirCavityScanner.Result result = domain.gasState.sealedDomainBoundary
 				? scanner.scanRetainingClosedLineages(domain.geometry.solid, domain.markerGrid.markerCount,
 						domain.markerGrid.exactCellMarkerVolume, domain.geometry.cutCells,
-						domain.pressureGranularCoupling, state.cellLineageOrdinal(), state.nodes().size())
+						occupancy, state.cellLineageOrdinal(), state.nodes().size())
 				: scanner.scan(domain.geometry.solid, domain.markerGrid.markerCount,
 						domain.markerGrid.exactCellMarkerVolume, domain.geometry.cutCells,
-						domain.pressureGranularCoupling, false);
+						occupancy, false);
 		int[] expected = state.cellNodeOrdinal(), actual = result.cellNodeId();
 		if (result.sealedNodeCount() != state.nodes().size()) {
 			throw new IllegalArgumentException("Restored gas sealed-node count does not match derived topology");

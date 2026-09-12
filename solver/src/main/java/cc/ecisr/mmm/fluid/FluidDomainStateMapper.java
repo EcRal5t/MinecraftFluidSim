@@ -88,7 +88,7 @@ final class FluidDomainStateMapper {
 			domain.granularDepositDynamics.restoreState(state.granularDynamics());
 		}
 		if (state.gas() == null) domain.bindGasRegistry(state.gasRegistry());
-		else domain.restoreGasState(state.gas(), state.gasRegistry());
+		else domain.restoreGasState(state.gas(), state.gasRegistry(), state.thermal());
 		if (state.thermal() != null) {
 			domain.restoreThermalParticleState(state.thermal(), state.thermalRegistry(),
 					state.maximumThermalTransportSubsteps());

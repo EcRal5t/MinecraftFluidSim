@@ -169,6 +169,28 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FluidDomain coherentCavity = new FluidDomain(3, 2, 2, config, 128);
+		coherentCavity.sealDomainBoundary();
+		coherentCavity.setVolume(0, 0, 0, 0.5F);
+		coherentCavity.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
+		coherentCavity.bootstrapGasState("");
+		var cavityThermal = new ThermalRegistry(List.of(lower, upper,
+				new ThermalMaterialDefinition("test:thermal/coherent_cavity_air",
+						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+						GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.026,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)))),
+				List.of(), List.of(transition), "", "");
+		coherentCavity.bindThermal(cavityThermal, liquids, 300.0);
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) {
+			coherentCavity.addCoherentPhaseExternal(1, y, z, lower.id(), SolidVolume.SVQ_PER_CELL, 0.125, null, 0);
+		}
+		FluidDomainState coherentSnapshot = coherentCavity.captureAuthoritativeState();
+		require(coherentSnapshot.gas().nodes().size() == 2, "coherent partition must split the sealed cavity");
+		FluidDomain coherentRestored = FluidDomain.restoreAuthoritativeState(coherentSnapshot);
+		require(coherentRestored.gasBoundary().nodeCount() == 2
+				&& coherentRestored.totalCoherentSolidVolumeSvq() == 4 * SolidVolume.SVQ_PER_CELL
+				&& coherentRestored.gasBoundary().auditClosed(),
+				"gas restore must include the incoming coherent geometry before gas-dependent thermal energy");
 		FluidDomain domain = new FluidDomain(2, 2, 2, config, 128);
 		domain.setVolume(0, 0, 0, 0.5F);
 		domain.bindThermal(registry, liquids, 300.0);

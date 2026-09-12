@@ -518,8 +518,9 @@ final class RegionRepositoryAdapter {
 			} else if (profile.hasCapability(WorldCapability.GRANULAR)) {
 				throw new IOException("Thermal checkpoint omits granular truth while the granular gate is enabled");
 			}
-			region.restoreGasState(restorer.reconstructGas(gasRegistry, chemicalRegistry), gasRegistry, generation);
-			region.restoreThermalState(restorer.reconstructThermal(thermalRegistry, gasRegistry, chemicalRegistry),
+			var thermal = restorer.reconstructThermal(thermalRegistry, gasRegistry, chemicalRegistry);
+			region.restoreGasState(restorer.reconstructGas(gasRegistry, chemicalRegistry), gasRegistry, generation, thermal);
+			region.restoreThermalState(thermal,
 					thermalRegistry, generation, maximumThermalSubsteps);
 			region.restoreFiniteThermalDevices(
 					restorer.reconstructFiniteThermalDevices(thermalRegistry), thermalRegistry, generation);

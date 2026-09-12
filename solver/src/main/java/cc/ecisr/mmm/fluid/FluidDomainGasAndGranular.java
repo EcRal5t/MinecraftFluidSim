@@ -76,6 +76,11 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 		gasTopologyCoordinator.restore(state, registry);
 	}
 
+	/** Uses incoming coherent inventory for gas geometry before restoring gas-dependent thermal energy. */
+	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, FlipThermalParticleState thermal) {
+		gasTopologyCoordinator.restore(state, registry, thermal);
+	}
+
 	/** True when the current grid contains at least one sealed gas cavity, including explicit vacuum. */
 	public boolean gasPressureActive() { return gasState.pressureActive; }
 	public double gasNodeTemperatureK(int nodeId) {

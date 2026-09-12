@@ -173,7 +173,7 @@ Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 
 ## 持久化
 
-气体作为完整热区域 generation 的 required payload 发布。快照和逐 section payload 同时保存 `cellNodeOrdinal`（拓扑 membership）与 `cellLineageOrdinal`（包含部分充液格的气体归属）。两列使用同一 minimum-cell 顺序的节点 ordinal；lineage 的 `-1` 表示无归属，`0` 表示 ambient。恢复时从已提交 carrier geometry 重扫，并用完整 lineage 保留仅存在于部分充液格中的气泡。随后要求节点数、minimum-cell key、逐格 membership、库存和能量 ordinal 一致；差异归入状态恢复失败。
+气体作为完整热区域 generation 的 required payload 发布。快照和逐 section payload 同时保存 `cellNodeOrdinal`（拓扑 membership）与 `cellLineageOrdinal`（包含部分充液格的气体归属）。两列使用同一 minimum-cell 顺序的节点 ordinal；lineage 的 `-1` 表示无归属，`0` 表示 ambient。恢复时从已提交的液体、颗粒和 coherent 库存共同推导几何后重扫。气体节点先于其热能恢复，因此重扫直接读取同一输入热快照中的 coherent 体积，避免使用尚未恢复的热状态，并用完整 lineage 保留仅存在于部分充液格中的气泡。随后要求节点数、minimum-cell key、逐格 membership、库存和能量 ordinal 一致；差异归入状态恢复失败。
 
 持久 payload 还包含 registry fingerprint、unit identity、component palette、节点总账和 source/sink/roundoff 审计；显式真空 node 以空 component inventory 原样保存。membership 的正 ordinal 必须与同格 lineage 一致，缺失或越界的 lineage 拒绝恢复。
 

@@ -256,6 +256,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			int maximumTransportSubsteps
 	) {
 		if (!prepareThermalBinding(registry, liquidRegistry, initialTemperatureK)) return;
+		gasTopologyCoordinator.refresh();
 		thermalState = FluidThermalBinding.create(registry, materialRegistry, initialTemperatureK,
 				particles.capacity(), sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), gasState.network,
 				maximumTransportSubsteps);
@@ -282,7 +283,6 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			throw new IllegalArgumentException("Thermal registry chemical dependency mismatch");
 		}
 		ensureGrid();
-		gasTopologyCoordinator.refresh();
 		return true;
 	}
 
@@ -349,6 +349,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		double initialTemperature = registry.material(
 				registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID,
 						materialRegistry.material(0).id())).referenceTemperatureK();
+		// Restore must retain the gas ordinals already derived from the complete checkpoint.
 		if (!prepareThermalBinding(registry, materialRegistry, initialTemperature)) {
 			throw new IllegalStateException("Thermal restore target is already bound");
 		}
