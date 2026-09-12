@@ -45,7 +45,7 @@ final class GasTopologyCoordinator {
 		}
 		if (!domain.gasState.network.auditClosed()) throw new IllegalStateException("Gas component audit does not close");
 		return GasStateSnapshot.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.gasState.cellNodeId,
-				domain.gasState.network,
+				domain.gasState.cellLineageNodeId, domain.gasState.network,
 				chemicalRegistryFingerprint == null ? "" : chemicalRegistryFingerprint);
 	}
 
@@ -63,7 +63,7 @@ final class GasTopologyCoordinator {
 		AirCavityScanner.Result result = domain.gasState.sealedDomainBoundary
 				? scanner.scanRetainingClosedLineages(domain.geometry.solid, domain.markerGrid.markerCount,
 						domain.markerGrid.exactCellMarkerVolume, domain.geometry.cutCells,
-						domain.pressureGranularCoupling, state.cellNodeOrdinal(), state.nodes().size())
+						domain.pressureGranularCoupling, state.cellLineageOrdinal(), state.nodes().size())
 				: scanner.scan(domain.geometry.solid, domain.markerGrid.markerCount,
 						domain.markerGrid.exactCellMarkerVolume, domain.geometry.cutCells,
 						domain.pressureGranularCoupling, false);

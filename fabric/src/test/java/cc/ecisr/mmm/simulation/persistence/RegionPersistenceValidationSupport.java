@@ -92,6 +92,7 @@ abstract class RegionPersistenceValidationSupport {
 				&& expected.chemicalRegistryFingerprint().equals(actual.chemicalRegistryFingerprint())
 				&& expected.nodes().equals(actual.nodes())
 				&& Arrays.equals(expected.cellNodeOrdinal(), actual.cellNodeOrdinal())
+				&& Arrays.equals(expected.cellLineageOrdinal(), actual.cellLineageOrdinal())
 				&& expected.externalSource().equals(actual.externalSource())
 				&& expected.escapedSink().equals(actual.escapedSink())
 				&& expected.massRoundoff().equals(actual.massRoundoff())

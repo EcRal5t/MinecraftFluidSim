@@ -259,3 +259,5 @@ application 的 `RegionRuntime` 只是单次 tick 的不可变调度快照，不
 任何中断都只能恢复到 ACTIVE exact BEFORE、REMOVED 可收敛中间态或 LOCKED third state，不能让旧 payload 重新被 discovery 接纳为 solver。
 
 普通 checkpoint 不删除上一完整 slot，因为它既是原子覆盖的另一半，也是显式 recoverprevious 的唯一候选。清理逻辑绝不能触碰 HEAD 当前指向的 slot。
+
+气体区域载荷同时保存每格当前 membership 和保留封闭气腔归属的 lineage ordinal，两列使用同一规范节点排序并随 section 拆分、组装。部分充液单元可能只持有 lineage；恢复扫描必须读取这一列才能重建原气腔及其库存绑定。具体格式见 [气体状态](gas-state.md)。

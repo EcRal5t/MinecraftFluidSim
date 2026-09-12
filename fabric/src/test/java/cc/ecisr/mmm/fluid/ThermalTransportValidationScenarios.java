@@ -224,7 +224,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		var restoredGas = fullRestore.exportGasState("");
 		boolean energyEqual = fullRestore.exactInternalEnergy().equals(domain.exactInternalEnergy());
 		boolean gasEqual = restoredGas.nodes().equals(expectedGas.nodes())
-				&& Arrays.equals(restoredGas.cellNodeOrdinal(), expectedGas.cellNodeOrdinal());
+				&& Arrays.equals(restoredGas.cellNodeOrdinal(), expectedGas.cellNodeOrdinal())
+				&& Arrays.equals(restoredGas.cellLineageOrdinal(), expectedGas.cellLineageOrdinal());
 		PendingPhaseVolumeState expectedPending = domain.exportPendingPhaseVolumeState();
 		PendingPhaseVolumeState restoredPending = fullRestore.exportPendingPhaseVolumeState();
 		boolean pendingEqual = restoredPending.cellCount() == expectedPending.cellCount()

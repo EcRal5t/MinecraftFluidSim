@@ -372,18 +372,21 @@ public final class RegionCheckpointRestorer {
 		}
 		if (ledgers.size() != sections.size()) throw new IOException("Gas section ledger cardinality mismatch");
 		int[] memberships = new int[Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ())];
+		int[] lineages = new int[memberships.length];
 		for (RegionSectionState section : sections) {
 			GasRegionStateCodec.SectionData sectionData = codec.decodeSection(
 					requiredExtension(section.extensions(), GasRegionStateCodec.SECTION_EXTENSION).payload(),
 					Math.multiplyExact(Math.multiplyExact(section.sizeX(), section.sizeY()), section.sizeZ()), data.nodes().size());
 			int sealed = 0, source = 0;
 			int[] slice = sectionData.cellNodeOrdinal();
+			int[] lineageSlice = sectionData.cellLineageOrdinal();
 			for (int z = 0; z < section.sizeZ(); z++) for (int y = 0; y < section.sizeY(); y++) for (int x = 0; x < section.sizeX(); x++) {
 				int value = slice[source++];
 				if (value > 0) sealed++;
 				int cell = section.localStartX() + x + manifest.sizeX() *
 						(section.localStartY() + y + manifest.sizeY() * (section.localStartZ() + z));
 				memberships[cell] = value;
+				lineages[cell] = lineageSlice[source - 1];
 			}
 			GasRegionStateCodec.SectionLedger ledger = ledgers.remove(section.key());
 			if (ledger == null || ledger.sealedCellCount() != sealed) {
@@ -396,7 +399,7 @@ public final class RegionCheckpointRestorer {
 		GasStateSnapshot snapshot;
 		try {
 			snapshot = new GasStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
-					data.registryFingerprint(), data.chemicalRegistryFingerprint(), nodes, memberships,
+					data.registryFingerprint(), data.chemicalRegistryFingerprint(), nodes, memberships, lineages,
 					data.externalSource(), data.escapedSink(),
 					data.massRoundoff(), data.residualRoundoff());
 			AirNetwork audit = new AirNetwork(registry == null

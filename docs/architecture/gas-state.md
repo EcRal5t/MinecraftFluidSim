@@ -173,11 +173,11 @@ Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 
 ## 持久化
 
-气体只作为完整热区域 generation 的 required payload 发布。恢复时从已提交 carrier geometry 重新扫描 full-air topology；已提交 membership 中的 partial owner 只在同一格仍有正 residual、连通部分仍不接触任何重扫 gas component 时重新建立。随后要求节点数、minimum-cell key、逐格 membership、库存和能量 ordinal 全部一致；任何差异都锁定，不猜测 remap。
+气体作为完整热区域 generation 的 required payload 发布。快照和逐 section payload 同时保存 `cellNodeOrdinal`（拓扑 membership）与 `cellLineageOrdinal`（包含部分充液格的气体归属）。两列使用同一 minimum-cell 顺序的节点 ordinal；lineage 的 `-1` 表示无归属，`0` 表示 ambient。恢复时从已提交 carrier geometry 重扫，并用完整 lineage 保留仅存在于部分充液格中的气泡。随后要求节点数、minimum-cell key、逐格 membership、库存和能量 ordinal 一致；差异归入状态恢复失败。
 
-持久 payload 还包含 registry fingerprint、unit identity、component palette、节点总账、逐 section membership（包括必要的 partial owner cells）和 source/sink/roundoff 审计；显式真空 node 以空 component inventory 原样保存。
+持久 payload 还包含 registry fingerprint、unit identity、component palette、节点总账和 source/sink/roundoff 审计；显式真空 node 以空 component inventory 原样保存。membership 的正 ordinal 必须与同格 lineage 一致，缺失或越界的 lineage 拒绝恢复。
 
-gas registry fingerprint 同时绑定每个 component 的允许 species 集合；不匹配时原样保留并锁定。edge、pressure、temperature、其余 runtime interface lineage 和 flow velocity 可从完整库存与几何重建，不进入 checkpoint。
+gas registry fingerprint 同时绑定每个 component 的允许 species 集合；不匹配时原样保留并锁定。edge、pressure、temperature 和 flow velocity 从完整库存与几何重建。
 
 管理员 `VENT_SEALED_GAS` 是一个联合持久候选：所有 sealed component nanos/kg/species/residual 按实际值进入 gas escaped sink，所有 gas node `U` 按实际值进入 thermal external sink。
 

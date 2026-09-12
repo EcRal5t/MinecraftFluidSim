@@ -51,6 +51,7 @@ import java.util.UUID;
 
 abstract class RegionCodecValidationScenarios extends RegionPersistenceValidationSupport {
 	static void validateThermalCodec() throws Exception {
+		validateGasLineageCodec();
 		FluidRegion region = populatedRegion(new UUID(27L, 28L));
 		FlipParticleState pure = region.domain().exportParticleState();
 		float[] positions = pure.copyPositionVolume();
@@ -212,6 +213,31 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				state.sections()).validate(), "thermal region without buoyancy identity was accepted");
 
 		validateExplicitVacuumThermalCheckpoint();
+	}
+
+	private static void validateGasLineageCodec() throws Exception {
+		var network = new cc.ecisr.mmm.fluid.air.AirNetwork();
+		network.addNode(1.0, 1.0);
+		network.addNode(2.0, 2.0);
+		GasStateSnapshot snapshot = GasStateSnapshot.capture(3, 2, 1,
+				new int[]{2, 0, 0, 1, 0, 0}, new int[]{2, 2, -1, 1, 1, 0}, network, "");
+		require(snapshot.nodes().get(0).inventory().equals(network.inventory(2))
+				&& snapshot.nodes().get(1).inventory().equals(network.inventory(1))
+				&& Arrays.equals(snapshot.cellLineageOrdinal(), new int[]{1, 1, -1, 2, 2, 0}),
+				"canonical gas ordering separated partial-cell lineage from its inventory");
+		GasRegionStateCodec codec = new GasRegionStateCodec();
+		byte[] payload = codec.encodeSection(new GasRegionStateCodec.SectionData(
+				snapshot.cellNodeOrdinal(), snapshot.cellLineageOrdinal()));
+		var restored = codec.decodeSection(payload, 6, 2);
+		require(Arrays.equals(restored.cellNodeOrdinal(), snapshot.cellNodeOrdinal())
+				&& Arrays.equals(restored.cellLineageOrdinal(), snapshot.cellLineageOrdinal()),
+				"gas section lost interface lineage or unowned/ambient distinction");
+		expectIOException(() -> codec.decodeSection(Arrays.copyOf(payload, payload.length - 4), 6, 2),
+				"gas section accepted missing lineage");
+		byte[] wrongOwner = payload.clone();
+		java.nio.ByteBuffer.wrap(wrongOwner).putInt(8 + 6 * Integer.BYTES, 2);
+		expectIOException(() -> codec.decodeSection(wrongOwner, 6, 2),
+				"gas section accepted membership/lineage owner mismatch");
 	}
 
 	/** A sealed, inventory-free cavity is durable vacuum, not a malformed gas thermal node. */

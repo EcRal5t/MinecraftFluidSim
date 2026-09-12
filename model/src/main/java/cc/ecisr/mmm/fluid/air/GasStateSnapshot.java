@@ -15,6 +15,7 @@ public record GasStateSnapshot(
 		String chemicalRegistryFingerprint,
 		List<Node> nodes,
 		int[] cellNodeOrdinal,
+		int[] cellLineageOrdinal,
 		GasAuditLedger externalSource,
 		GasAuditLedger escapedSink,
 		SignedDyadic massRoundoff,
@@ -36,6 +37,7 @@ public record GasStateSnapshot(
 				|| nodes == null || nodes.size() > GasLimits.MAX_NODES_PER_REGION
 				|| cellNodeOrdinal == null
 				|| cellNodeOrdinal.length != Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ)
+				|| cellLineageOrdinal == null || cellLineageOrdinal.length != cellNodeOrdinal.length
 				|| externalSource == null || escapedSink == null || massRoundoff == null || residualRoundoff == null) {
 			throw new IllegalArgumentException("Invalid gas state identity or dimensions");
 		}
@@ -51,6 +53,10 @@ public record GasStateSnapshot(
 		}
 		for (int cell = 0; cell < cellNodeOrdinal.length; cell++) {
 			int ordinal = cellNodeOrdinal[cell];
+			int lineage = cellLineageOrdinal[cell];
+			if (lineage < -1 || lineage > nodes.size() || ordinal > 0 && lineage != ordinal) {
+				throw new IllegalArgumentException("Gas cell lineage ordinal is invalid or disagrees with membership");
+			}
 			if (ordinal < 0 || ordinal > nodes.size()) throw new IllegalArgumentException("Gas cell node ordinal is invalid");
 			if (ordinal > 0) minimumCell[ordinal - 1] = Math.min(minimumCell[ordinal - 1], cell);
 		}
@@ -67,14 +73,20 @@ public record GasStateSnapshot(
 			throw new IllegalArgumentException("Gas species state requires a chemical registry fingerprint");
 		}
 		cellNodeOrdinal = cellNodeOrdinal.clone();
+		cellLineageOrdinal = cellLineageOrdinal.clone();
 	}
 
 	@Override public int[] cellNodeOrdinal() { return cellNodeOrdinal.clone(); }
+	@Override public int[] cellLineageOrdinal() { return cellLineageOrdinal.clone(); }
 
 	/** Captures runtime node ids into canonical minimum-cell topology order. */
-	public static GasStateSnapshot capture(int sizeX, int sizeY, int sizeZ, int[] runtimeCellNodeId, AirNetwork network,
+	public static GasStateSnapshot capture(int sizeX, int sizeY, int sizeZ, int[] runtimeCellNodeId,
+	                                      int[] runtimeCellLineageId, AirNetwork network,
 	                                      String chemicalRegistryFingerprint) {
-		if (runtimeCellNodeId == null || network == null) throw new IllegalArgumentException("Gas runtime topology is unavailable");
+		if (runtimeCellNodeId == null || runtimeCellLineageId == null
+				|| runtimeCellLineageId.length != runtimeCellNodeId.length || network == null) {
+			throw new IllegalArgumentException("Gas runtime topology is unavailable");
+		}
 		int nodeCount = network.nodeCount();
 		int[] keys = new int[nodeCount + 1]; java.util.Arrays.fill(keys, Integer.MAX_VALUE);
 		for (int cell = 0; cell < runtimeCellNodeId.length; cell++) {
@@ -97,11 +109,15 @@ public record GasStateSnapshot(
 			nodes.add(new Node(runtime.key(), runtime.inventory()));
 		}
 		int[] memberships = new int[runtimeCellNodeId.length];
+		int[] lineages = new int[memberships.length];
 		for (int cell = 0; cell < memberships.length; cell++) {
 			int runtime = runtimeCellNodeId[cell]; memberships[cell] = runtime > 0 ? ordinalByRuntime[runtime] : 0;
+			int lineage = runtimeCellLineageId[cell];
+			if (lineage < -1 || lineage > nodeCount) throw new IllegalArgumentException("Gas runtime lineage names an unknown node");
+			lineages[cell] = lineage > 0 ? ordinalByRuntime[lineage] : lineage;
 		}
 		return new GasStateSnapshot(sizeX, sizeY, sizeZ, network.registry().fingerprint(), chemicalRegistryFingerprint,
-				List.copyOf(nodes), memberships, network.externalSource(), network.escapedSink(),
+				List.copyOf(nodes), memberships, lineages, network.externalSource(), network.escapedSink(),
 				network.massRoundoff(), network.residualRoundoff());
 	}
 

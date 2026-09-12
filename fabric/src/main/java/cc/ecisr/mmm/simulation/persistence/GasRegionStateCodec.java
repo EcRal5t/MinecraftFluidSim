@@ -39,9 +39,13 @@ final class GasRegionStateCodec {
 	) {
 		ManifestData { nodes = List.copyOf(nodes); sectionLedgers = List.copyOf(sectionLedgers); }
 	}
-	record SectionData(int[] cellNodeOrdinal) {
-		SectionData { cellNodeOrdinal = cellNodeOrdinal.clone(); }
+	record SectionData(int[] cellNodeOrdinal, int[] cellLineageOrdinal) {
+		SectionData {
+			if (cellNodeOrdinal.length != cellLineageOrdinal.length) throw new IllegalArgumentException("Gas section lineage cardinality mismatch");
+			cellNodeOrdinal = cellNodeOrdinal.clone(); cellLineageOrdinal = cellLineageOrdinal.clone();
+		}
 		@Override public int[] cellNodeOrdinal() { return cellNodeOrdinal.clone(); }
+		@Override public int[] cellLineageOrdinal() { return cellLineageOrdinal.clone(); }
 	}
 
 	byte[] encodeManifest(ManifestData data) throws IOException {
@@ -103,6 +107,7 @@ final class GasRegionStateCodec {
 			out.writeInt(SECTION_MAGIC);
 			int[] membership = data.cellNodeOrdinal(); out.writeInt(membership.length);
 			for (int value : membership) out.writeInt(value);
+			for (int value : data.cellLineageOrdinal()) out.writeInt(value);
 		});
 	}
 
@@ -118,7 +123,15 @@ final class GasRegionStateCodec {
 					throw new IOException("Gas section names an unknown node ordinal");
 				}
 			}
-			requireEnd(input); return new SectionData(membership);
+			int[] lineage = new int[length];
+			for (int cell = 0; cell < length; cell++) {
+				lineage[cell] = input.readInt();
+				if (lineage[cell] < -1 || lineage[cell] > nodeCount
+						|| membership[cell] > 0 && lineage[cell] != membership[cell]) {
+					throw new IOException("Gas section lineage disagrees with node identity");
+				}
+			}
+			requireEnd(input); return new SectionData(membership, lineage);
 		} catch (EOFException truncated) { throw new IOException("Truncated gas section payload", truncated); }
 	}
 
