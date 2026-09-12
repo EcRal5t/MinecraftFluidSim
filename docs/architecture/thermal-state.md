@@ -192,7 +192,9 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 
 气液 extent 的二分候选冻结该 cell 的 exact dyadic 总 `U` 与不变 solid heat-bath inventory，只替换候选 liquid inventory。真实 phase commit 后重建载体 ordinal，但只按守恒余量重新求解被编辑 cell；未编辑 cell 必须已有同代 LTE 状态并原样保留，不能借此反算或改写其 `U`。
 
-若沸腾候选移走最后一个凝聚相载体，而分配给新气体的 `U` 不能同时使该 cell 的剩余 `U` 精确为零，则该 extent 只是没有可用热浴的不可执行候选；二分规划缩小或跳过它，不得把仍然合法的候选前库存暂停为“空 cell 保留能量”。只有已经提交的空 carrier cell 实际持有非零 `U` 才是状态不变量失败。
+若沸腾候选移走最后一个凝聚相载体，而分配给新气体的 `U` 不能同时使该 cell 的剩余 `U` 精确为零，则该 extent 只是没有可用热浴的不可执行候选；二分规划缩小或跳过它，不得把仍然合法的候选前库存暂停为“空 cell 保留能量”。只有已经提交的空 carrier cell 实际持有非零 `U` 才是状态不变量失败。候选热浴逐 marker 使用计划提交的剩余质量与组成构造，完整移除的 marker 不再贡献热容量。气液能量交换按气体前后实际 binary64 内能的精确二进制差计算，避免大气腔的能量舍入掩盖空载体中的余能。
+
+固液和气液相变的容量检查共用 `PhaseChangeStageSupport`：活动颗粒按连续位置的三线性权重分摊整数 SVQ，沉积按所属单元计入；coherent 库存由相变层另行计入。这与运动、沉积及恢复检查使用同一份空间归属规则。
 
 导热若所有 face 与 reservoir 的实际通量都严格为零，并且每个 carrier 从自身 raw `U` 恢复出的温度已位于该 cell 的 LTE 容差内，则保持全部 carrier `U` raw bits 不变；否则仍执行完整 cell 能量分配与验证。这里的短路只识别数学上的零转移，不把小通量钳为零。
 

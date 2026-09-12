@@ -8,7 +8,7 @@ import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.fluid.air.GasComponentAmount;
-import cc.ecisr.mmm.granular.GranularParcelStore;
+import cc.ecisr.mmm.granular.GranularCouplingFields;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.thermal.CoherentPhaseStore;
 import cc.ecisr.mmm.thermal.LiquidEnergyColumn;
@@ -25,7 +25,7 @@ import java.util.TreeMap;
 final class PhaseChangeStageSupport {
 	record Workspace(
 			int sizeX, int sizeY, int sizeZ, int cellCount, int maximumParticleCount,
-			SolverUnitScale unitScale, DomainGeometry geometry, MarkerGridIndex markerGrid,
+			float cellSize, SolverUnitScale unitScale, DomainGeometry geometry, MarkerGridIndex markerGrid,
 			PressureProjectionWorkspace projection, LiquidParticleStore particles,
 			GasDomainState gasState, SignedDyadic[] pendingPhaseCellVolume,
 			ThermalCarrierContext thermalMarkers
@@ -38,7 +38,6 @@ final class PhaseChangeStageSupport {
 		GranularDomainState granularState();
 		float pressureReference();
 		int particleCell(int marker);
-		int parcelCell(GranularParcelStore.Parcel parcel);
 		int firstOpenSlot(int cell, int first);
 		void removeParticle(int marker);
 		void spawnParticle(
@@ -55,10 +54,13 @@ final class PhaseChangeStageSupport {
 
 	private final Workspace state;
 	private final Access access;
+	private final GranularCouplingFields phaseGranularOccupancy;
 
 	PhaseChangeStageSupport(Workspace state, Access access) {
 		this.state = state;
 		this.access = access;
+		this.phaseGranularOccupancy = new GranularCouplingFields(
+				state.sizeX(), state.sizeY(), state.sizeZ(), state.cellSize());
 	}
 
 	Workspace state() { return state; }
@@ -86,16 +88,14 @@ final class PhaseChangeStageSupport {
 	}
 
 	long granularSvq(int cell) {
+		return phaseGranularOccupancy.solidSvq(cell);
+	}
+
+	/** Phase capacity uses the same positioned SVQ attribution as mechanics and restore. */
+	void prepareGranularOccupancy() {
 		GranularDomainState granular = access.granularState();
-		if (granular == null) return 0L;
-		long total = 0L;
-		for (int parcel = 0; parcel < granular.parcels.count(); parcel++) {
-			GranularParcelStore.Parcel carrier = granular.parcels.parcel(parcel);
-			if (access.parcelCell(carrier) == cell) {
-				total = Math.addExact(total, carrier.solidVolumeSvq());
-			}
-		}
-		return Math.addExact(total, granular.deposits.cellSolidVolumeSvq(cell));
+		if (granular == null) phaseGranularOccupancy.clear();
+		else phaseGranularOccupancy.rebuild(granular.parcels, granular.deposits);
 	}
 
 	void commitLiquidRemoval(int cell, PhaseRemovalPlan plan) {

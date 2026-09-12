@@ -95,8 +95,8 @@ public final class ThermalCellGrid {
 		double[] previousTemperature = temperature.clone();
 		int[] previousCarrierCount = carrierCount.clone();
 		rebuildTopology(carrierAccess);
-		if (carrierCount[targetCell] == 0) {
-			throw new IllegalArgumentException("Thermal phase edit emptied its carrier cell");
+		if (carrierCount[targetCell] == 0 && targetEnergy != 0.0) {
+			throw new IllegalArgumentException("Empty thermal phase cell retains energy");
 		}
 		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
 			conductivity[cell] /= totalVolume[cell];

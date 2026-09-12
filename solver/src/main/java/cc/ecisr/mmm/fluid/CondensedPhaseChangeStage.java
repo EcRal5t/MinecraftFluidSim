@@ -34,6 +34,7 @@ final class CondensedPhaseChangeStage {
 	}
 
 	FluidDomain.ThermalPhaseStats step(int maximumOperations, boolean phaseGridPrepared) {
+		support.prepareGranularOccupancy();
 		ThermalDomainState thermal = support.thermal();
 		if (thermal == null) throw new IllegalStateException("Thermal state is not bound");
 		if (maximumOperations < 0 || maximumOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {

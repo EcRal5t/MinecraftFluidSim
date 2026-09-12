@@ -327,11 +327,11 @@ import java.util.TreeMap;
 		for (int cell = 0; cell < cellCount; cell++) {
 			if (!solid[cell]) {
 				float geometricOpen = cutCells.openCellVolume(cell);
-				open += granular == null ? geometricOpen
-						: granular.effectiveOpenCellVolume(cell, geometricOpen);
+				open += geometricOpen;
 			}
 			liquid += cellLiquidVolume[cell];
 		}
+		if (granular != null) open -= granular.totalSolidSvq() / (double) cc.ecisr.mmm.granular.SolidVolume.SVQ_PER_CELL;
 		double expected = (open - liquid) * cellVolumeCubicMeters;
 		if (!(Double.isFinite(expected) && expected >= 0.0)) {
 			throw new GasTopologyBlockedException("Closed gas capacity is smaller than carrier inventory");

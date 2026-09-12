@@ -50,6 +50,8 @@ public final class M7ChemicalTransportValidation {
 		validateChemicalHandoff();
 		validateConcentrationControlsDensity();
 		validateChemicalContainerRoundTrip();
+		validateTransferResolutionIsAtomic();
+		validateInsertionAccountsForDisplacedLiquid();
 		if (!fast) validatePerformanceBudgets();
 		System.out.println("M7 chemical transport gate passed: packed budget, same-cell reaction, separation and reseeding conservation");
 	}
@@ -728,6 +730,52 @@ public final class M7ChemicalTransportValidation {
 
 	private static Map<String, Long> mergedContentsSpecies(ChemicalContents first, ChemicalContents second) {
 		return contentsSpecies(first, second);
+	}
+
+	private static void validateTransferResolutionIsAtomic() {
+		FluidDomain domain = domainWithCell(1, 1, 1, 0.125F);
+		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1L), false);
+		FluidDomainState before = domain.captureAuthoritativeState();
+		check(!domain.tryExtractExactChemical(1, 1, 1, 0.0625F, 0).transferred(),
+				"one chemical quantum was split into two nonempty carriers");
+		FluidDomainStateAssertions.assertSameState(before, domain.captureAuthoritativeState(),
+				"unrepresentable extraction");
+		check(!domain.tryInsertExactMixture(1, 1, 1,
+				List.of(new FluidDomain.MaterialPortion(0, Math.scalb(1.0, -100), Math.scalb(1_000.0, -100))),
+				0, true).transferred(), "subquantum source formed a carrier without species");
+		FluidDomainStateAssertions.assertSameState(before, domain.captureAuthoritativeState(),
+				"unrepresentable insertion");
+
+		FluidDomain alternate = domainWithCell(1, 1, 1, 0.25F);
+		alternate.setMarkerChemical(1, Map.of(BuiltinChemicalDefinitions.H2O, 1L), false);
+		long[] speciesBefore = alternate.exportChemicalParticleState().copySpeciesTotals();
+		var transfer = alternate.tryExtractExactChemical(1, 1, 1, 0.0625F, 0);
+		check(transfer.transferred() && alternate.particles.volume(1) == 0.125F,
+				"quantum-bound marker prevented extraction from another representable carrier");
+		long[] speciesAfter = alternate.exportChemicalParticleState().copySpeciesTotals();
+		for (int species = 0; species < speciesBefore.length; species++) {
+			String speciesId = CHEMISTRY.species(species).id();
+			long removed = transfer.ledger().groups().stream().mapToLong(group ->
+					group.speciesQuanta().getOrDefault(speciesId, 0L)).sum();
+			check(speciesBefore[species] == speciesAfter[species] + removed,
+					"alternate extraction changed exact species inventory");
+		}
+	}
+
+	private static void validateInsertionAccountsForDisplacedLiquid() {
+		FluidDomain domain = new FluidDomain(2, 2, 2, STATIC_CONFIG, 256);
+		domain.setVolume(0, 0, 0, 1.0F);
+		domain.particles.setVolume(0, 6.0F);
+		domain.particles.setMass(0, 6_000.0);
+		domain.gridDirty = true;
+		domain.setMarkerMaterial(0, MATERIALS, 0);
+		domain.bindChemistry(CHEMISTRY);
+		FluidDomainState before = domain.captureAuthoritativeState();
+		check(!domain.tryInsertExactMixture(1, 1, 1,
+				List.of(new FluidDomain.MaterialPortion(0, 2.0, 2_000.0)), 2, true).transferred(),
+				"local empty cells hid globally displaced liquid from insertion capacity");
+		FluidDomainStateAssertions.assertSameState(before, domain.captureAuthoritativeState(),
+				"global capacity rejection");
 	}
 
 	private static FluidDomain domainWithCell(int x, int y, int z, float volume) {

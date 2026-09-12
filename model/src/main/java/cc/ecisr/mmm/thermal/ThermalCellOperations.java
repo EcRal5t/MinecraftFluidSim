@@ -369,19 +369,20 @@ final class ThermalCellOperations {
 
 	double requirePhaseCandidateState(
 			ThermalDomainState.PhaseCandidateCell current,
-			List<ThermalStateFunction.InventoryPortion> liquidInventory, double cellEnergyDelta
+			List<ThermalStateFunction.InventoryPortion> liquidInventory, double gasEnergyBefore, double gasEnergyAfter
 	) {
-		if (current == null || liquidInventory == null || !Double.isFinite(cellEnergyDelta)) {
+		if (current == null || liquidInventory == null
+				|| !Double.isFinite(gasEnergyBefore) || !Double.isFinite(gasEnergyAfter)) {
 			throw new IllegalArgumentException("Thermal gas/liquid candidate is invalid");
 		}
 		ArrayList<ThermalStateFunction.InventoryPortion> finalInventory = new ArrayList<>(
 				liquidInventory.size() + current.unchangedSolids().size());
 		finalInventory.addAll(liquidInventory);
 		finalInventory.addAll(current.unchangedSolids());
-		SignedDyadic energy = current.cellEnergy().add(SignedDyadic.of(cellEnergyDelta));
+		SignedDyadic energy = current.cellEnergy().add(SignedDyadic.of(gasEnergyBefore))
+				.subtract(SignedDyadic.of(gasEnergyAfter));
 		if (finalInventory.isEmpty()) {
-			double value = energy.toDouble();
-			if (Math.abs(value) > Math.max(1.0E-9, Math.ulp(value) * 16.0)) {
+			if (!energy.equals(SignedDyadic.ZERO)) {
 				throw new ThermalDomainState.EmptyPhaseCandidateEnergyException();
 			}
 			return Double.NaN;

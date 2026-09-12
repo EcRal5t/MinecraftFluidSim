@@ -468,9 +468,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		if (granular < 0L || Math.addExact(occupied, occupiedVolumeSvq) > geometric) {
 			throw new IllegalStateException("Coherent phase exceeds exact joint cell occupancy");
 		}
-		if (totalVolumeExact() + SolidVolume.toCellVolume(domain().totalGranularSolidVolumeSvq())
-				+ SolidVolume.toCellVolume(Math.addExact(thermalState.coherentPhases().totalOccupiedSvq(), occupiedVolumeSvq))
-				> totalGeometricOpenVolumeExact() + 1.0E-9) {
+		if (!canAddCarrierVolume(occupiedVolumeSvq / (double) SolidVolume.SVQ_PER_CELL)) {
 			throw new IllegalStateException("Sealed region has no combined liquid/solid capacity");
 		}
 		thermalState.addCoherentExternal(new CoherentPhaseStore.Group(

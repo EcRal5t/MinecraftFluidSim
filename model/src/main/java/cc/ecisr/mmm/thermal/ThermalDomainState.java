@@ -517,9 +517,9 @@ public final class ThermalDomainState {
 	/** Validates one prospective liquid inventory against a frozen same-cell energy/solid context. */
 	public double requirePhaseCandidateState(
 			PhaseCandidateCell current, List<ThermalStateFunction.InventoryPortion> liquidInventory,
-			double cellEnergyDelta
+			double gasEnergyBefore, double gasEnergyAfter
 	) {
-		return cellOperations.requirePhaseCandidateState(current, liquidInventory, cellEnergyDelta);
+		return cellOperations.requirePhaseCandidateState(current, liquidInventory, gasEnergyBefore, gasEnergyAfter);
 	}
 
 	public void setTemperatureInCell(int cell, double temperatureK, ThermalCarrierContext markers) {

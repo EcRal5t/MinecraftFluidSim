@@ -38,6 +38,7 @@ final class GasLiquidPhaseChangeStage {
 	}
 
 	FluidDomain.GasThermalPhaseStats step(int maximumOperations, boolean phaseGridPrepared) {
+		support.prepareGranularOccupancy();
 		ThermalDomainState thermal = support.thermal();
 		if (thermal == null || !thermal.gasModelBound()) {
 			throw new IllegalStateException("Gas phase change requires bound gas thermal state");
@@ -178,15 +179,12 @@ final class GasLiquidPhaseChangeStage {
 					: phase.gasBatch(transition, batches, removal.movedComposition().amounts(),
 							removal.movedComposition().massResidual());
 			double batchEnergy = phase.internalEnergyAtTemperature(transition, batch, liquidTemperature);
-			double remainingMass = before.upperMass() - removedMass;
-			if (remainingMass < 0.0 && remainingMass >= -massTolerance(before.upperMass())) remainingMass = 0.0;
-			PhaseComposition remainingComposition = before.upperComposition().minus(removal.movedComposition());
 			List<ThermalStateFunction.InventoryPortion> remainingLiquid = liquidInventoryAfterBoiling(
-					cell, liquidHandle, remainingMass, remainingComposition);
-			double candidateLiquidTemperature = thermal.requirePhaseCandidateState(
-					thermalCell, remainingLiquid, -batchEnergy);
+					cell, removal);
 			GasInventory candidateGas = gasState.network.inventory(node).merge(batch);
 			double candidateGasEnergy = thermal.gasNodeEnergy(node, gasState.network) + batchEnergy;
+			double candidateLiquidTemperature = thermal.requirePhaseCandidateState(
+					thermalCell, remainingLiquid, thermal.gasNodeEnergy(node, gasState.network), candidateGasEnergy);
 			GasLiquidPhaseModel.Saturation saturationAfter = prospectiveSaturation(
 					node, transition, phase, candidateLiquidTemperature, candidateGas, candidateGasEnergy);
 			return new GasBoilPlan(
@@ -359,7 +357,7 @@ final class GasLiquidPhaseChangeStage {
 			double candidateLiquidTemperature = thermal.requirePhaseCandidateState(
 					thermalCell, liquidInventoryAfterCondensation(
 							cell, liquidHandle, target, targetMass, condensedMixture, moved.mass()),
-					batchEnergy);
+					thermal.gasNodeEnergy(node, support.gasState().network), candidateGasEnergy);
 			GasLiquidPhaseModel.Saturation saturationAfter = prospectiveSaturation(
 					node, transition, phase, candidateLiquidTemperature, take.second(), candidateGasEnergy);
 			return new GasCondensePlan(
@@ -579,22 +577,23 @@ final class GasLiquidPhaseChangeStage {
 
 	/** Keeps non-transitioning liquid carriers in the same cell as exact LTE heat-bath inventory. */
 	private List<ThermalStateFunction.InventoryPortion> liquidInventoryAfterBoiling(
-			int cell, int liquidHandle, double remainingMass, PhaseComposition remainingComposition
+			int cell, PhaseRemovalPlan removal
 	) {
 		LiquidParticleStore particles = support.state().particles();
 		ChemicalParcelStore chemistry = support.chemistry();
 		ArrayList<ThermalStateFunction.InventoryPortion> result = new ArrayList<>();
+		int planned = removal.allocations().size() - 1;
 		for (int marker = support.state().markerGrid().cellMarkerHead[cell]; marker >= 0;
 				marker = support.state().markerGrid().particleCellNext[marker]) {
 			int markerLiquidHandle = particles.materialHandle(marker);
-			if (markerLiquidHandle == liquidHandle) continue;
+			// Removal plans walk the same cell list from tail to head.
+			PhaseMarkerAllocation allocation = planned >= 0 && removal.allocations().get(planned).marker() == marker
+					? removal.allocations().get(planned--) : null;
+			if (allocation != null && allocation.fullRemoval()) continue;
 			result.add(liquidInventoryPortion(markerLiquidHandle,
-					support.state().unitScale().kilograms(particles.mass(marker)),
-					chemistry == null ? null : chemistry.record(marker)));
+					support.state().unitScale().kilograms(allocation == null ? particles.mass(marker) : allocation.newMass()),
+					chemistry == null ? null : allocation == null ? chemistry.record(marker) : allocation.chemicalPlan().kept()));
 		}
-		if (remainingMass > 0.0) result.add(new ThermalStateFunction.InventoryPortion(
-				support.thermal().thermalMaterialHandleForFluid(liquidHandle), remainingMass,
-				chemistry == null ? Map.of() : remainingComposition.amounts()));
 		return List.copyOf(result);
 	}
 

@@ -42,6 +42,9 @@ final class MaterialTransferPlanner {
 						+ portion.materialHandle());
 			}
 		}
+		if (!domain.canAddCarrierVolume(portions.stream().mapToDouble(FluidDomain.MaterialPortion::volume).sum())) {
+			return new FluidDomain.ExactMixtureTransfer(false, List.of());
+		}
 		double[] exactCellVolume = domain.exactCellVolumes();
 		java.util.List<InsertAllocation> plan = new java.util.ArrayList<>();
 		long requiredMarkers = 0L;
@@ -54,7 +57,13 @@ final class MaterialTransferPlanner {
 				int index = candidate.index();
 				double capacity = Math.max(0.0, domain.effectiveOpenCellVolume(index) - exactCellVolume[index]);
 				double allocate = Math.min(capacity, remaining);
+				float represented = (float) allocate;
+				if (represented > allocate) represented = Math.nextDown(represented);
+				allocate = represented;
 				if (allocate <= 0.0) continue;
+				if (domain.chemicalParcels != null && domain.chemicalParcels.tryDefaultRecord(
+						domain.materialRegistry.material(portion.materialHandle()).id(), (float) allocate,
+						domain.config.cellSize(), portion.mass() * allocate / portion.volume(), false) == null) continue;
 				requiredMarkers += (long) Math.ceil(allocate / domain.PARTICLE_VOLUME);
 				if (domain.particles.count() + requiredMarkers > domain.maximumParticleCount) {
 					return new FluidDomain.ExactMixtureTransfer(false, List.of());
@@ -84,13 +93,19 @@ final class MaterialTransferPlanner {
 			while (left > 0.0) {
 				boolean allocationRemainder = left < domain.PARTICLE_VOLUME;
 				float piece = allocationRemainder ? (float) left : domain.PARTICLE_VOLUME;
+				// Split the last two markers evenly so a tiny remainder has a real carrier.
+				if (left > domain.PARTICLE_VOLUME && left < 2.0 * domain.PARTICLE_VOLUME) {
+					piece = (float) (left * 0.5);
+				}
 				if (slot < 0) throw new IllegalStateException("Cut-cell open volume was exhausted while spawning markers");
-				boolean finalPortionPiece = volumeLeft[portionIndex] - piece
-						<= Math.ulp((float) volumeLeft[portionIndex]);
+				boolean finalPortionPiece = volumeLeft[portionIndex] == piece;
 				double pieceMass = finalPortionPiece ? massLeft[portionIndex]
 						: massLeft[portionIndex] * piece / volumeLeft[portionIndex];
-				ChemicalMixtureRecord chemical = domain.chemicalParcels == null ? null : domain.chemicalParcels.defaultRecord(
+				ChemicalMixtureRecord chemical = domain.chemicalParcels == null ? null : domain.chemicalParcels.tryDefaultRecord(
 						domain.materialRegistry.material(allocation.materialHandle()).id(), piece, domain.config.cellSize(), pieceMass, false);
+				if (domain.chemicalParcels != null && chemical == null) {
+					return new FluidDomain.ExactMixtureTransfer(false, List.of());
+				}
 				if (chemical != null) plannedChemicalQuanta = Math.addExact(plannedChemicalQuanta, chemical.totalQuanta());
 				insertPieces.add(new MaterialInsertPiece(allocation.x(), allocation.y(), allocation.z(), slot, piece,
 						allocation.materialHandle(), pieceMass, chemical));
@@ -158,8 +173,11 @@ final class MaterialTransferPlanner {
 			int centerX, int centerY, int centerZ, float amount, int maxRadius) {
 		domain.validateVolumeEdit(amount, maxRadius);
 		if (domain.hasPendingPhaseVolumeWork()) return new FluidDomain.VolumeAddition(0.0F, false);
+		float capacity = (float) Math.min(amount, Math.max(0.0, domain.remainingCarrierVolumeExact()));
+		if (!domain.canAddCarrierVolume(capacity)) capacity = Math.nextDown(capacity);
+		if (!(capacity > 0.0F)) return new FluidDomain.VolumeAddition(0.0F, false);
 		double[] exactCellVolume = domain.exactCellVolumes();
-		float remaining = amount;
+		float remaining = capacity;
 		boolean markerBudgetLimited = false;
 		List<MaterialInsertPiece> insertPieces = new ArrayList<>();
 		long plannedChemicalQuanta = 0L;
@@ -234,7 +252,7 @@ final class MaterialTransferPlanner {
 		}
 		if (!externalAddition.isEmpty()) domain.chemicalParcels.recordExternalSource(externalAddition);
 		domain.gridDirty = true;
-		return new FluidDomain.VolumeAddition(amount - remaining, markerBudgetLimited);
+		return new FluidDomain.VolumeAddition(capacity - remaining, markerBudgetLimited);
 	}
 
 	float removeVolumeNear(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
@@ -281,8 +299,9 @@ final class MaterialTransferPlanner {
 				double previousMass = domain.particles.mass(marker);
 				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
 				double removedMass = previousMass - newMass;
-				ChemicalParcelStore.SplitPlan chemicalPlan = domain.chemicalParcels.planTruncate(
+				ChemicalParcelStore.SplitPlan chemicalPlan = domain.chemicalParcels.tryPlanTruncate(
 						marker, newVolume, previousVolume - newVolume, newMass, removedMass);
+				if (chemicalPlan == null) continue;
 				ledger.add(domain.materialRegistry.material(domain.particles.materialHandle(marker)).id(), domain.chemicalParcels.indicator(marker),
 						actual, domain.unitScale.kilograms(removedMass), chemicalPlan.removed());
 				LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(marker, newMass,
@@ -370,8 +389,9 @@ final class MaterialTransferPlanner {
 				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
 				int handle = domain.particles.materialHandle(i);
 				ChemicalParcelStore.SplitPlan chemicalPlan = domain.chemicalParcels == null ? null
-						: domain.chemicalParcels.planTruncate(i, newVolume, previousVolume - newVolume,
+						: domain.chemicalParcels.tryPlanTruncate(i, newVolume, previousVolume - newVolume,
 						newMass, previousMass - newMass);
+				if (domain.chemicalParcels != null && chemicalPlan == null) continue;
 				LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(i, newMass,
 						chemicalPlan == null ? null : chemicalPlan.kept(),
 						domain.thermalState == null ? Double.NaN : domain.thermalMarkerTemperature(i));
@@ -442,6 +462,9 @@ final class MaterialTransferPlanner {
 		if (ledger == null || ledger.isEmpty()) return new FluidDomain.ExactChemicalTransfer(ledger != null, ChemicalTransferLedger.EMPTY);
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
 		if (domain.hasPendingPhaseVolumeWork()) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		if (!domain.canAddCarrierVolume(ledger.totalVolume())) {
+			return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		}
 		try {
 			if (Math.addExact(domain.chemicalParcels.totalQuanta(), ledger.totalQuanta())
 					> cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {

@@ -952,6 +952,13 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		domain.setVolume(1, 1, 1, 1.0F);
 		domain.setMarkerMaterial(0, liquids, 1);
 		domain.bindThermal(thermal, liquids, 500.0);
+		var emptyCandidate = new ThermalDomainState.PhaseCandidateCell(0, SignedDyadic.of(1.0), List.of());
+		try {
+			domain.thermalState.requirePhaseCandidateState(emptyCandidate, List.of(), 1.0E20, 1.0E20);
+			throw new AssertionError("empty candidate discarded exact energy after rounded gas transfer");
+		} catch (ThermalDomainState.EmptyPhaseCandidateEnergyException expected) { }
+		require(Double.isNaN(domain.thermalState.requirePhaseCandidateState(emptyCandidate, List.of(), 0.0, 1.0)),
+				"exactly empty candidate acquired a fictitious temperature");
 		require(domain.gasBoundary().nodeCount() == 1, "boiling fixture did not form one sealed receiver");
 		ThermalDisplaySnapshot display = domain.copyThermalDisplaySnapshot();
 		int liquidCell = (1 * 4 + 1) * 4 + 1;

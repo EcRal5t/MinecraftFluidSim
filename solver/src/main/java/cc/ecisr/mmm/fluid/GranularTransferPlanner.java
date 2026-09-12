@@ -61,9 +61,7 @@ final class GranularTransferPlanner {
 					domain::granularGeometricOpenSvq)) position = candidate;
 		}
 		if (position == null) return FluidDomain.GranularInsertion.rejected("Target cell has no collision-valid solid capacity");
-		double insertedCellVolume = SolidVolume.toCellVolume(solidVolumeSvq);
-		if (domain.totalVolumeExact() + SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq()) + insertedCellVolume
-				> domain.totalGeometricOpenVolumeExact() + 1.0e-9) {
+		if (!domain.canAddCarrierVolume(solidVolumeSvq / (double) SolidVolume.SVQ_PER_CELL)) {
 			return FluidDomain.GranularInsertion.rejected("Sealed region has no combined fluid/solid capacity");
 		}
 		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(
@@ -89,8 +87,7 @@ final class GranularTransferPlanner {
 		domain.cellIndexChecked(cellX, cellY, cellZ); domain.ensureGrid();
 		domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
 		long insertedSvq = ledger.totalSolidVolumeSvq(); double insertedMass = ledger.totalMass();
-		if (domain.totalVolumeExact() + SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq())
-				+ SolidVolume.toCellVolume(insertedSvq) > domain.totalGeometricOpenVolumeExact() + 1.0e-9) {
+		if (!domain.canAddCarrierVolume(insertedSvq / (double) SolidVolume.SVQ_PER_CELL)) {
 			return FluidDomain.GranularInsertion.rejected("Sealed region has no combined fluid/solid capacity");
 		}
 		ArrayList<GranularParcelDraft> drafts = new ArrayList<>(); int reactiveDrafts = 0;

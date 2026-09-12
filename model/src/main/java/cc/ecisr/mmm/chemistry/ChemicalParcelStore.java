@@ -137,6 +137,15 @@ public final class ChemicalParcelStore {
 	public ChemicalMixtureRecord defaultRecord(
 			String materialId, float cellVolume, float cellSize, double markerMass, boolean indicator
 	) {
+		ChemicalMixtureRecord record = tryDefaultRecord(materialId, cellVolume, cellSize, markerMass, indicator);
+		if (record == null) throw new IllegalArgumentException("Marker is too small for one default carrier quantum");
+		return record;
+	}
+
+	/** Returns null when this volume cannot carry a default species quantum. */
+	public ChemicalMixtureRecord tryDefaultRecord(
+			String materialId, float cellVolume, float cellSize, double markerMass, boolean indicator
+	) {
 		int phaseHandle = registry.phaseHandleForMaterial(materialId);
 		ChemicalPhaseDefinition phase = registry.phase(phaseHandle);
 		if (indicator && !phase.acceptsIndicator()) throw new IllegalArgumentException("Chemical phase rejects indicator");
@@ -150,7 +159,7 @@ public final class ChemicalParcelStore {
 			long quanta = roundNonNegative(exactQuanta);
 			if (quanta > 0L) amounts.put(entry.getKey(), quanta);
 		}
-		if (amounts.isEmpty()) throw new IllegalArgumentException("Marker is too small for one default carrier quantum");
+		if (amounts.isEmpty()) return null;
 		ChemicalMixtureRecord withoutResidual = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0.0);
 		double residual = unitScale.kilograms(markerMass) - withoutResidual.exactSpeciesMassKilograms(registry).toDouble();
 		ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, residual);
@@ -316,6 +325,16 @@ public final class ChemicalParcelStore {
 	public SplitPlan planTruncate(
 			int marker, float keptVolume, float removedVolume, double keptMass, double removedMass
 	) {
+		SplitPlan plan = tryPlanTruncate(marker, keptVolume, removedVolume, keptMass, removedMass);
+		if (plan == null) throw new ChemicalReactionEngine.BudgetExceededException(
+				"Transfer is below the chemical quantum resolution");
+		return plan;
+	}
+
+	/** Returns null when an otherwise valid split would leave either carrier without species. */
+	public SplitPlan tryPlanTruncate(
+			int marker, float keptVolume, float removedVolume, double keptMass, double removedMass
+	) {
 		requireAssigned(marker);
 		if (!(keptVolume >= 0.0F && removedVolume > 0.0F) || !(keptMass >= 0.0 && removedMass > 0.0)) {
 			throw new IllegalArgumentException("Invalid chemical truncation ledger");
@@ -329,9 +348,7 @@ public final class ChemicalParcelStore {
 			if (allocation[0] > 0L) kept.put(original.speciesHandle(entry), allocation[0]);
 			if (allocation[1] > 0L) removed.put(original.speciesHandle(entry), allocation[1]);
 		}
-		if (kept.isEmpty() || removed.isEmpty()) {
-			throw new ChemicalReactionEngine.BudgetExceededException("Transfer is below the chemical quantum resolution");
-		}
+		if (kept.isEmpty() || removed.isEmpty()) return null;
 		ChemicalMixtureRecord keptRecord = recordFromHandles(kept, 0.0);
 		ChemicalMixtureRecord removedRecord = recordFromHandles(removed, 0.0);
 		keptRecord = recordFromHandles(kept,

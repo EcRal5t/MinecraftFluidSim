@@ -74,7 +74,7 @@ final class ThermochemistryStageAssembly {
 		PhaseChangeStageSupport phaseSupport = new PhaseChangeStageSupport(
 				new PhaseChangeStageSupport.Workspace(
 						domain.sizeX, domain.sizeY, domain.sizeZ, domain.cellCount,
-						domain.maximumParticleCount, domain.unitScale, domain.geometry,
+						domain.maximumParticleCount, domain.config.cellSize(), domain.unitScale, domain.geometry,
 						domain.markerGrid, domain.projection, domain.particles, domain.gasState,
 						domain.pendingPhaseCellVolume, domain.thermalMarkerContext()),
 				new PhaseChangeStageSupport.Access() {
@@ -84,9 +84,6 @@ final class ThermochemistryStageAssembly {
 					@Override public GranularDomainState granularState() { return domain.granularState; }
 					@Override public float pressureReference() { return domain.pressureReference; }
 					@Override public int particleCell(int marker) { return domain.particleCellIndex(marker); }
-					@Override public int parcelCell(GranularParcelStore.Parcel parcel) {
-						return domain.granularParcelCell(parcel);
-					}
 					@Override public int firstOpenSlot(int cell, int first) {
 						return domain.firstOpenSlot(cell, first);
 					}

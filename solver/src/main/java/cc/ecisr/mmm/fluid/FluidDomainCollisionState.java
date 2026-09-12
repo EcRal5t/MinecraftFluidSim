@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.granular.SolidVolume;
+
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
@@ -469,6 +471,18 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		double result = 0.0;
 		for (int cell = 0; cell < cellCount; cell++) result += geometry.cutCells.openCellVolume(cell);
 		return result;
+	}
+
+	/** Global complement of all authoritative condensed inventories, including displaced liquid. */
+	double remainingCarrierVolumeExact() {
+		long solid = Math.addExact(domain().totalGranularSolidVolumeSvq(), domain().totalCoherentSolidVolumeSvq());
+		return totalGeometricOpenVolumeExact() - solid / (double) SolidVolume.SVQ_PER_CELL - totalVolumeExact();
+	}
+
+	boolean canAddCarrierVolume(double volume) {
+		double remaining = remainingCarrierVolumeExact() - volume;
+		return remaining > 0.0 || remaining == 0.0
+				&& (!gasState.sealedDomainBoundary || gasState.network.sealedInventoryNanos() == 0L);
 	}
 
 	float effectiveOpenCellVolume(int cell) {
