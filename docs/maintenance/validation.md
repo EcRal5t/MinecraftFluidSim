@@ -83,7 +83,7 @@
 
 `production-replay` 检查长时间注液、清空、气腔归属、相变功结算、实体响应以及后端捕获/恢复。它关注每步物质与能量收支。性能是否达标由上面的独立测试判定。
 
-`granular` 中的 [GranularCarrierValidation](../../solver/src/test/java/cc/ecisr/mmm/fluid/GranularCarrierValidation.java) 检查真实 MAC 面质量下的多 parcel 动量守恒与阻力耗散、有限颗粒质量的压力功和连续性，以及静水梯度给出的浮力。`production-replay` 保留正常操作随机序列的种子 4、54、103，覆盖薄液层反冲、密集颗粒排水与高压下的时间细化。
+`granular` 中的 [GranularCarrierValidation](../../solver/src/test/java/cc/ecisr/mmm/fluid/GranularCarrierValidation.java) 检查多 parcel 阻力交换的动量守恒、能量耗散和顺序无关性、有限颗粒质量的压力功和连续性、跨单元面的连续液体接触、静水梯度给出的浮力、步末阻力有效性检查，以及小时间步下对压力零点的独立性。`containers` 保留正常操作随机序列的种子 4、54、103，覆盖薄液层反冲、密集颗粒排水与高压下的时间细化。
 
 批量排查使用 [ControllerInventoryDurabilityValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ControllerInventoryDurabilityValidation.java) 的带种子操作序列，每次操作后执行完整状态往返。参数依次是起始种子、种子数量、操作数和是否禁用沙粒（可省略，默认 `false`）：
 
@@ -91,7 +91,14 @@
 ./gradlew.bat :fabric:runNormalPlayFuzz '-PfuzzArgs=0,200,60' --offline --no-daemon
 ```
 
-失败报告包含种子、操作序号和完整操作轨迹；确认失败类型后，将最小覆盖种子加入既有生产回放。
+扩展动作包含独立热轴、移动刚体、油、成批注入和随机注入点；容量拒绝记录为 skip，强制仿真中断使任务失败。首参数也可用冒号分隔一组种子，或用 `reported` 运行九类已报告异常的全部 28 个固定种子：
+
+```powershell
+./gradlew.bat :fabric:runNormalPlayFuzz '-PfuzzArgs=reported,1,80' --offline --no-daemon
+./gradlew.bat :fabric:runNormalPlayFuzz '-PfuzzArgs=1393:1433,1,80' --offline --no-daemon
+```
+
+失败报告包含种子、操作序号、完整操作轨迹和根因分类。原动作集的种子 4、54、103 保持在既有 `containers` 回归中。
 
 `controller-gas-lineage` 集中复现清空扩大气体空间后，从外壳附近再次注液的过程。修改扫描几何时先运行 `air-cavity`，修改气压作用时再运行 `gas-liquid`。
 
