@@ -74,7 +74,7 @@ final class MechanicalStepPipeline {
 		System.arraycopy(mac.velocityX, 0, mac.p2gVelocityX, 0, mac.velocityX.length);
 		System.arraycopy(mac.velocityY, 0, mac.p2gVelocityY, 0, mac.velocityY.length);
 		System.arraycopy(mac.velocityZ, 0, mac.p2gVelocityZ, 0, mac.velocityZ.length);
-		GranularMechanics.StepStats granularMechanics = granularMechanicalStage.stepVelocities(dt);
+		GranularMechanics.StepStats granularMechanics = granularMechanicalStage.predictVelocities(dt);
 		double nextKineticEnergy = captureAudit ? access.gridKineticEnergyJoules() : 0.0;
 		if (captureAudit) {
 			audit.granularCouplingWorkJoules += nextKineticEnergy - stageKineticEnergy;
@@ -129,6 +129,7 @@ final class MechanicalStepPipeline {
 		}
 		pressureStage.projectVelocities(dt);
 		granularMechanicalStage.previewCollision(dt);
+		granularMechanicalStage.validateVelocities();
 		if (captureAudit) {
 			nextKineticEnergy = access.gridKineticEnergyJoules();
 			audit.pressureProjectionWorkJoules += nextKineticEnergy - stageKineticEnergy;

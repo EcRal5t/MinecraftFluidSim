@@ -76,9 +76,13 @@ final class GranularPressureCoupling {
 	}
 
 	void rebuildDiagonal() {
+		rebuildDiagonal(parcel -> 1);
+	}
+
+	void rebuildDiagonal(java.util.function.IntToDoubleFunction inertiaRatio) {
 		java.util.Arrays.fill(liquidDiagonal, 0); java.util.Arrays.fill(gasDiagonal, 0);
 		for (int parcel = 0; parcel < count; parcel++) for (int index = parcel * 8; index < (parcel + 1) * 8; index++) {
-			double value = domain.config.density() * inverseMass[parcel]
+			double value = domain.config.density() * inverseMass[parcel] * inertiaRatio.applyAsDouble(parcel)
 					* (gx[index] * gx[index] + gy[index] * gy[index] + gz[index] * gz[index]);
 			int row = rows[index];
 			if (row == Integer.MAX_VALUE) continue;
@@ -119,6 +123,34 @@ final class GranularPressureCoupling {
 			domain.lastGranularBoundaryImpulseX += p.mass() * (vx - (float) vx);
 			domain.lastGranularBoundaryImpulseY += p.mass() * (vy - (float) vy);
 			domain.lastGranularBoundaryImpulseZ += p.mass() * (vz - (float) vz);
+		}
+	}
+
+	void addBoundaryVelocity(double[] vector, int offset, double dt) {
+		for (int parcel = 0; parcel < count; parcel++) {
+			vector[offset + 3 * parcel] -= dt * inverseMass[parcel] * boundaryX[parcel];
+			vector[offset + 3 * parcel + 1] -= dt * inverseMass[parcel] * boundaryY[parcel];
+			vector[offset + 3 * parcel + 2] -= dt * inverseMass[parcel] * boundaryZ[parcel];
+		}
+	}
+
+	void addPressureVelocity(double[] vector, int offset, double[] pressure) {
+		for (int parcel = 0; parcel < count; parcel++) for (int index = parcel * 8; index < (parcel + 1) * 8; index++) {
+			int row = rows[index];
+			if (row == Integer.MAX_VALUE) continue;
+			double scale = inverseMass[parcel] * pressure[row >= 0 ? row : domain.cellCount - row];
+			vector[offset + 3 * parcel] -= scale * gx[index];
+			vector[offset + 3 * parcel + 1] -= scale * gy[index];
+			vector[offset + 3 * parcel + 2] -= scale * gz[index];
+		}
+	}
+
+	void addVelocityDivergence(double[] vector, int offset, double[] result, double scale) {
+		for (int parcel = 0; parcel < count; parcel++) for (int index = parcel * 8; index < (parcel + 1) * 8; index++) {
+			int row = rows[index];
+			if (row == Integer.MAX_VALUE) continue;
+			result[row >= 0 ? row : domain.cellCount - row] -= scale * (gx[index] * vector[offset + 3 * parcel]
+					+ gy[index] * vector[offset + 3 * parcel + 1] + gz[index] * vector[offset + 3 * parcel + 2]);
 		}
 	}
 

@@ -1,25 +1,42 @@
 package cc.ecisr.mmm.fluid;
 
-/**
- * PCG over liquid cells and lumped gas nodes, including the symmetric finite-parcel
- * inertia contribution and its diagonal preconditioner.
- */
+/** Selects the liquid/gas PCG or the double-precision pressure system with shared granular drag. */
 final class PressureSystem {
 	private final FluidDomain domain;
 	private final GranularPressureCoupling granular;
+	private final GranularImplicitDrag drag;
 
 	PressureSystem(FluidDomain domain) {
 		this.domain = domain;
 		this.granular = new GranularPressureCoupling(domain);
+		this.drag = new GranularImplicitDrag(domain, granular);
 	}
-	void prepareGranular(float dt) { granular.prepare(dt); }
+	void prepareGranular(float dt) { granular.prepare(dt); drag.prepare(dt); }
 	void forEachGranularGasNode(java.util.function.IntConsumer accept) { granular.forEachGasNode(accept); }
-	void projectGranular(float dt) { granular.project(dt); }
+	boolean projectGranular(float dt) {
+		if (drag.active()) { drag.project(); return true; }
+		granular.project(dt);
+		return false;
+	}
 
 	/** Runs PCG on the assembled right-hand side; the pressure vector mutates in the workspace. */
 	PressureProjectionResult solve(int unknownCount, double target) {
+		if (unknownCount == 0 && !drag.active()) return new PressureProjectionResult(0, 0, true);
 		assembleMatrix();
-		granular.rebuildDiagonal();
+		int totalIterations = 0;
+		for (int iteration = 0; iteration < 32; iteration++) {
+			granular.rebuildDiagonal(drag::parcelInertiaRatio);
+			java.util.Arrays.fill(domain.projection.pressure, 0);
+			java.util.Arrays.fill(domain.projection.gasPressure, 0);
+			PressureProjectionResult result = drag.active() ? drag.solvePressure(target) : solveLinear(unknownCount, target);
+			totalIterations += result.iterations();
+			if (!result.converged() || !drag.updateResistance()) return new PressureProjectionResult(
+					totalIterations, result.residualRms(), result.converged());
+		}
+		throw new FluidDomain.PressureSolveBlockedException("Nonlinear granular drag did not converge: " + drag.nonlinearResidual());
+	}
+
+	private PressureProjectionResult solveLinear(int unknownCount, double target) {
 		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
 			int cell = domain.projection.fluidUnknownCells[ordinal];
 			domain.projection.residual[cell] = domain.projection.rhs[cell];

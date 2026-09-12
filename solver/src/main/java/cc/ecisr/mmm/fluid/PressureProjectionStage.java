@@ -5,13 +5,9 @@ import cc.ecisr.mmm.fluid.air.AirNetwork;
 import java.util.Arrays;
 
 /**
- * The pressure projection stage: gas lineage refresh, reference anchoring, physical target-divergence
- * assembly (surface tension, lumped sealed-gas compliance and finite parcel inertia),
- * the PCG solve through {@link PressureSystem} and joint liquid/parcel velocity projection.
- * Loop order, float/double
- * typing, the absolute RMS tolerance and the typed non-convergence rejection are kept
- * verbatim; the pending phase-work plan is produced by the step pipeline only after
- * {@code solve} returns and before {@code projectVelocities} runs.
+ * Assembles liquid/gas pressure rows, solves pressure with finite granular inertia and drag,
+ * and projects the joint velocity. Pending phase work is planned after convergence and
+ * before the final velocity write.
  */
 final class PressureProjectionStage {
 	record Workspace(
@@ -89,26 +85,25 @@ final class PressureProjectionStage {
 			if (gasBoundary.gasNodeHasContinuumState(node)) activateCompressibleGasNode(node, dt);
 		});
 		system.prepareGranular(dt);
-		if (fluidCells + state.projection.gasUnknownCount == 0) { access.pressureResult(0, 0.0F); return; }
 		double target = state.config.pressureTolerance();
 		PressureProjectionResult result = system.solve(fluidCells + state.projection.gasUnknownCount, target);
 		float residual = (float) result.residualRms();
 		access.pressureResult(result.iterations(), residual);
 		if (!result.converged()) {
 			throw new FluidDomain.PressureSolveBlockedException("Pressure projection did not converge: residual="
-					+ residual + ", tolerance=" + target + ", iterations=" + result.iterations()
-					+ "/" + state.config.maxPressureIterations());
+					+ residual + ", tolerance=" + target + ", total iterations=" + result.iterations()
+					+ ", linear iteration limit=" + state.config.maxPressureIterations());
 		}
 	}
 
 	void projectVelocities(float dt) {
-		system.projectGranular(dt);
+		boolean coupled = system.projectGranular(dt);
 		float scale = dt / (state.config.density() * state.config.cellSize());
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 1; x < state.sizeX; x++) {
 			int left = access.cellIndex(x - 1, y, z), right = access.cellIndex(x, y, z), face = access.xFaceIndex(x, y, z);
 			float openArea = access.pressureXFaceOpen(x, y, z);
 			if (faceActive(left, right, openArea)) {
-				float difference = pressureDifference(left, right, 1, 0, 0);
+				float difference = coupled ? 0 : pressureDifference(left, right, 1, 0, 0);
 				state.mac.velocityX[face] -= scale * difference;
 			} else if (!access.carrierFaceActive(left, right, openArea)) state.mac.velocityX[face] = 0.0F;
 		}
@@ -116,7 +111,7 @@ final class PressureProjectionStage {
 			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z), face = access.yFaceIndex(x, y, z);
 			float openArea = access.pressureYFaceOpen(x, y, z);
 			if (faceActive(below, above, openArea)) {
-				float difference = pressureDifference(below, above, 0, 1, 0);
+				float difference = coupled ? 0 : pressureDifference(below, above, 0, 1, 0);
 				state.mac.velocityY[face] -= scale * difference;
 			} else if (!access.carrierFaceActive(below, above, openArea)) state.mac.velocityY[face] = 0.0F;
 		}
@@ -124,7 +119,7 @@ final class PressureProjectionStage {
 			int back = access.cellIndex(x, y, z - 1), front = access.cellIndex(x, y, z), face = access.zFaceIndex(x, y, z);
 			float openArea = access.pressureZFaceOpen(x, y, z);
 			if (faceActive(back, front, openArea)) {
-				float difference = pressureDifference(back, front, 0, 0, 1);
+				float difference = coupled ? 0 : pressureDifference(back, front, 0, 0, 1);
 				state.mac.velocityZ[face] -= scale * difference;
 			} else if (!access.carrierFaceActive(back, front, openArea)) state.mac.velocityZ[face] = 0.0F;
 		}

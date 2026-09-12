@@ -77,41 +77,40 @@ Vpore = Vbulk - Vs
 
 ### Active parcel 力学
 
-parcel 的物理质量列直接使用 kg，SVQ 通过 `SVQ_PER_BV` 直接给出 m³；两者不依赖 liquid solver cell 的质量标度。每步先从同格液相采样速度、密度和载体黏度，积分重力与阻力，再由联合压力求解给出浮力和排水阻力。颗粒阻力的反作用冲量在写入 liquid MAC grid 时经 `SolverUnitScale` 换成 solver momentum。球形颗粒的相对 Reynolds 数为
+parcel 的物理质量列使用 kg，SVQ 通过 `SVQ_PER_BV` 给出 m³。每个机械子步先积分重力，再联合求解液体、颗粒阻力与压力。浸没比例、液体密度和黏度按颗粒连续位置的八格支撑采样；中心穿过单元面时，接触随位置连续改变。每份载体定义的有效滑移范围取交集，并转换为混合物的 Reynolds 标度。
+
+球形颗粒的相对 Reynolds 数与阻力相关式为：
 
 ```text
 Re = rho_f * d * |u_f - u_p| / mu
+Cd = max(24/Re * (1 + 0.15 Re^0.687), 0.44)
 ```
 
-阻力使用 Schiller–Naumann 相关式：`Re < 1000` 时 `Cd = 24/Re * (1 + 0.15 Re^0.687)`，更高时取其常用高 Reynolds 极限 `0.44`。参与阻力的代表颗粒数按同一格的实际浸没比例缩放；不能让一小层液体对整份 parcel 施加满浸没阻力，再把该反冲写入同一小层液体。
+低 Reynolds 分支与高 Reynolds 极限在交点连续连接。零滑移使用有限的 Stokes 阻力系数；代表颗粒数按实际浸没比例缩放。Reynolds 守卫保留材料注册表规定的有效范围，在压力与阻力联立求解、Courant 检查后，按同一位置的步末颗粒速度与载体速度检查。旧速度经输运重建后可能具有较大滑移；隐式迭代先求出阻力相关式实际使用的步末状态，超出有效范围的求解结果仍会拒绝整个候选。
 
-各方向的有限载体质量使用冻结的 P2G 权重；体积权重先按参考密度换成质量。实际 MAC 采样和反冲核给出：`M_eff = sum(w*m)^2 / sum(w*w*m)`。parcel 按此质量做两体指数松弛，后续 parcel 读取已承接反冲的速度。液体采样要求存在液体 marker 和正孔隙容量；零孔隙格子走干态路径。carrier 的 Reynolds 适用域和物性在预检与每次交换前验证。
-
-阻力的两体解直接给出液体反作用冲量，颗粒速度的 binary32 舍入归属于颗粒自身的表示误差。载体速度采样与反作用散布使用同一份 `trilinear weight × P2G face mass` 核。质量读取 `MacVelocityGrid.p2gWeight*`；`velocityWeight*` 在速度外推时会被复用为 0/1 工作标记。零质量外推面不参与有限载体交换。沿相同核顺序处理多个 parcel 时，每次阻力交换都守恒动量并耗散相对动能。
-
-写入 binary32 MAC velocity 后从实际速度差重算已承接冲量，舍入余量与 cut-cell 无法承接的部分进入 boundary impulse ledger。碰撞使用与流体一致的几何快照、连续碰撞检测和材料摩擦/恢复定义，不依赖渲染表面。
+`GranularImplicitDrag` 对所有 parcel 共用的载体同时求解。速度采样使用归一化的三线性权重乘 P2G 面质量，反作用使用同一采样矩阵的转置；零 P2G 质量面不参与阻力交换。液体面的惯性与压力算子一致，为 `rho_reference * cellVolume * openArea / mobilityScale`，颗粒惯性为其物理质量。尚未形成压力单元的薄液滴使用实际 P2G 面质量参与阻力交换。这样阻力交换与后续压力响应使用同一个质量矩阵。
 
 ### 统一排水与压力
 
-每个子步从 active、deposit 的骨架 SVQ 和 coherent store 构造统一 solid occupancy。可用体积为几何开放体积减去 solid occupancy。压力分类、孔隙面面积和颗粒占据率的空间导数均在子步初态上建立，在 PCG 迭代期间保持不变。
+每个子步从 active、deposit 的骨架 SVQ 和 coherent store 构造统一 solid occupancy。可用体积为几何开放体积减去 solid occupancy。压力分类、孔隙面面积和颗粒占据率的空间导数均在子步初态上建立，在线性求解期间保持不变。
 
-`GranularPressureCoupling` 将每份 active parcel 的有限质量纳入同一个液体单元/密闭气体节点压力系统。设 `G` 为归一化三线性固体占据率对 parcel 位置的导数，`v` 为颗粒速度，`D u` 为液体孔隙面通量的散度，则连续性为 `D u = G v`。对质量矩阵 `M`，颗粒压力响应与其消元项为：
+`GranularPressureCoupling` 使用归一化三线性固体占据率的位置导数 `G`。设 `D u` 为液体孔隙面通量散度、`v` 为颗粒速度，连续性为 `D u = G v`。令联合速度 `q = (u, v)`、连续性矩阵 `C = (D, -G)`，`B q` 为各颗粒相对载体的滑移。每次非线性迭代固定正阻力系数 `K` 后，联立系统为：
 
 ```text
-v_next = v_star - dt * cellVolume * M^-1 * G^T * p
-A_parcel = rho_reference * cellVolume * G * M^-1 * G^T
-rhs_parcel = rho_reference / dt * G * v_star
+L = M + dt * B^T K B
+q_next = L^-1 (M q_star + dt * cellVolume * C^T p)
+A_pressure = rho_reference * cellVolume * C L^-1 C^T + A_gas_storage
 ```
 
-同一气体节点上的多个支撑单元先合并导数，再加入矩阵与对角预条件器；给定压力的支撑单元计入对应外力。该消元项对称半正定，压力能同时减缓颗粒运动和推动液体排流。静水压力梯度直接给出阿基米德浮力；生产路径的阻力积分不再重复施加解析浮力。
+`M` 包含液体面与活动颗粒的有限惯性。每个颗粒速度先精确消元，再用预条件共轭梯度求解液体面上的正定 Schur 系统。每轮非线性迭代将重复接触汇总到同轴面的 27 邻域稀疏系数，内层矩阵乘法不再逐个扫描 parcel。压力矩阵使用相同的阻力响应，压力修正与阻力反作用一起保留在最终速度中。给定的气压与界面压差参与同一个速度响应；同一密闭节点的多格支撑先合并导数。
 
-这是一阶时间离散：使用当前位置的空间导数求体积变化率，压力修正后再预览颗粒碰撞与精确容量，最后和液体平流一起提交位置。归一化三线性核的导数总和为零，整数 SVQ 仍由实际新位置重新分配。平滑轨迹的占据率线性化误差随子步缩小而收敛；碰撞和容量约束在后续独立阶段处理。压力矩阵、位置候选和相变功均属于同一完整计算候选，失败时保留上一代状态。
+阻力系数按子步末滑移迭代更新，采用阻尼 Picard 迭代检查液体面和颗粒两侧的动量方程残差；按惯性与阻力对角量换算的速度残差须小于当前速度标度的 32 个 binary32 ULP。每次迭代从同一预测速度重建右端项；压力沿用本子步上一轮迭代的解作为初值，并重新计算实际残差。压力预条件器以液体与气腔的稀疏相邻连接进行对称 Gauss–Seidel 三角求解；颗粒对角量使用阻力消元后的惯性响应，随阻力系数一起更新。`GranularCoupledPressureSolver` 用 binary64 直接计算联立压力算子的作用并检查实际残差。气腔未知量取相对本子步初始气压的修正，初始气压先计入预测速度响应；储存项中的初始气压在代数上消去，避免高压小步长下的大数相减。最终速度只舍入写入一次，避免大压力响应与阻力修正分次写入时的精度损失。阻力矩阵对称半正定、惯性矩阵正定；在无外力和无压力做功的封闭系统中，隐式时间离散耗散相对动能。静水压力梯度直接给出阿基米德浮力。
 
-压力后的颗粒位移必须满足配置中的 Courant 限制。高压差造成初始速度预测不足时，后端从原始状态细化重算；Reynolds 守卫继续检查阻力相关式的物理适用范围。细化重算与单次提交规则见 [CPU 后端候选接口](fluid-solver.md#后端候选接口)。
+这是一阶时间离散：使用当前位置的空间导数求体积变化率，压力修正后预览颗粒碰撞与精确容量，最后和液体平流一起提交位置。归一化三线性核的导数总和为零，整数 SVQ 仍由实际新位置重新分配。碰撞使用流体的几何快照、连续碰撞检测和材料摩擦、恢复系数。
 
-backend/checkpoint handoff 必须逐列保存 active parcel 的接触年龄与支撑标志；它们决定尚未完成的 active→deposit 状态转换，不能在每次候选交接时清零。恢复后的容量验证必须重新使用运行时 `GranularCouplingFields` 的同一 positioned-parcel exact attribution：active parcel 按其连续位置的最多八格权重分摊，deposit 与 coherent fixed occupancy 走各自的 cell-local 归属。
+压力后的颗粒位移必须满足配置中的 Courant 限制。高压差造成初始速度预测不足时，后端从原始状态细化重算。压力、阻力、位置候选和相变功属于同一完整计算候选，失败时保留上一代状态。细化重算与单次提交规则见 [CPU 后端候选接口](fluid-solver.md#后端候选接口)。
 
-不得在恢复检查把整份 active parcel 临时塞进 floor cell；否则一个运行时合法 generation 会被另一套投影误判为过容量。恢复检查只验证统一 solid occupancy 与几何容量，不能把 liquid marker 的短时聚集改写成 solid 库存。
+backend/checkpoint handoff 保存 active parcel 的接触年龄与支撑标志。恢复、相变、沉积与运动的容量检查共用 `GranularCouplingFields` 的连续位置整数 SVQ 归属：active parcel 分摊到最多八格，deposit 与 coherent 按所属单元计入。液体 marker 的短时聚集保留在液体输运层中处理。
 
 ### Deposit 松弛与局部唤醒
 

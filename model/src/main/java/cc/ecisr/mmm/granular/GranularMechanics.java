@@ -25,7 +25,7 @@ public final class GranularMechanics {
 				&& Double.isFinite(dt) && dt > 0.0)) {
 			throw new IllegalArgumentException("Granular mechanics gravity and dt are invalid");
 		}
-		sampleAndValidateCarrierRange(parcels, registry, environment);
+		validateCarrierRange(parcels, registry, environment);
 		double maximumSpeed = 0.0, totalFluidImpulseX = 0.0, totalFluidImpulseY = 0.0, totalFluidImpulseZ = 0.0;
 		double boundaryImpulseX = 0.0, boundaryImpulseY = 0.0, boundaryImpulseZ = 0.0;
 		int submerged = 0;
@@ -92,7 +92,7 @@ public final class GranularMechanics {
 				boundaryImpulseX, boundaryImpulseY, boundaryImpulseZ);
 	}
 
-	private static void sampleAndValidateCarrierRange(
+	private static void validateCarrierRange(
 			GranularParcelStore parcels, GranularRegistry registry, Environment environment
 	) {
 		for (int index = 0; index < parcels.count(); index++) {
@@ -102,7 +102,7 @@ public final class GranularMechanics {
 		}
 	}
 
-	private static void validateCarrierRange(
+	public static void validateCarrierRange(
 			GranularParcelStore.Parcel parcel, ParticulateMaterial material, FluidSample fluid
 	) {
 		if (fluid == null) throw new ValidityExceededException("Granular environment returned no fluid sample");
@@ -122,7 +122,8 @@ public final class GranularMechanics {
 					+ " kg/m^3, viscosity=" + fluid.dynamicViscosity() + " Pa*s, particle=("
 					+ parcel.velocityX() + "," + parcel.velocityY() + "," + parcel.velocityZ()
 					+ "), fluid=(" + fluid.velocityX() + "," + fluid.velocityY() + ","
-					+ fluid.velocityZ() + ") m/s");
+					+ fluid.velocityZ() + ") m/s, submerged=" + fraction
+					+ ", position=(" + parcel.x() + "," + parcel.y() + "," + parcel.z() + ") m");
 		}
 
 	}
@@ -154,11 +155,15 @@ public final class GranularMechanics {
 		return new CoupledStep(center + fluidFraction * relative, impulse);
 	}
 
-	public static double dragCoefficient(double reynolds) {
+	/** Continuous connection between Schiller-Naumann and the high-Reynolds sphere limit. */
+	public static double dragResistanceFactor(double reynolds) {
 		if (!(Double.isFinite(reynolds) && reynolds >= 0.0)) throw new IllegalArgumentException("Invalid Reynolds number");
-		if (reynolds <= REYNOLDS_EPSILON) return Double.POSITIVE_INFINITY;
-		return reynolds < 1_000.0
-				? 24.0 / reynolds * (1.0 + 0.15 * Math.pow(reynolds, 0.687)) : 0.44;
+		return Math.max(1.0 + 0.15 * Math.pow(reynolds, 0.687), 0.44 * reynolds / 24.0);
+	}
+
+	public static double dragCoefficient(double reynolds) {
+		double factor = dragResistanceFactor(reynolds);
+		return reynolds <= REYNOLDS_EPSILON ? Double.POSITIVE_INFINITY : 24.0 / reynolds * factor;
 	}
 
 	private static float finiteFloat(double value, String label) {

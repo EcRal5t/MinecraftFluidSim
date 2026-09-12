@@ -668,6 +668,15 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 		return openArea > 0.0F && !geometry.solid[first] && !geometry.solid[second]
 				&& (markerGrid.markerCount[first] > 0 || markerGrid.markerCount[second] > 0);
 	}
+	boolean granularCarrierFaceActive(int axis, int x, int y, int z) {
+		int ax = x - (axis == 0 ? 1 : 0), ay = y - (axis == 1 ? 1 : 0), az = z - (axis == 2 ? 1 : 0);
+		if (!inside(ax, ay, az) || !inside(x, y, z)) return false;
+		int first = cellIndex(ax, ay, az), second = cellIndex(x, y, z);
+		float open = pressureOpenFaceFromCell(first, second, x - ax, y - ay, z - az);
+		return open > 0 && !geometry.solid[first] && !geometry.solid[second]
+				&& (isFluid(first) || isFluid(second) || carrierFaceActive(first, second, open));
+	}
+
 	float pressureInterfaceTheta(int fluid, int directionX, int directionY, int directionZ) {
 		return pressurePhaseGeometry.interfaceTheta(fluid, directionX, directionY, directionZ);
 	}

@@ -92,6 +92,9 @@ final class MechanicalStageAssembly {
 	private static GranularMechanicalStage.Access granularAccess(FluidDomain domain) {
 		return new GranularMechanicalStage.Access() {
 			@Override public boolean massWeightedP2G() { return domain.variableDensityActive; }
+			@Override public boolean granularCarrierFaceActive(int axis, int x, int y, int z) {
+				return domain.granularCarrierFaceActive(axis, x, y, z);
+			}
 			@Override public boolean hasGranularInventory() { return domain.hasGranularInventory(); }
 			@Override public GranularDomainState granularState() { return domain.granularState; }
 			@Override public FlipGranularCollision granularCollision() { return domain.granularCollision; }
@@ -99,9 +102,6 @@ final class MechanicalStageAssembly {
 			@Override public GranularCouplingFields granularNextCoupling() { return domain.granularNextCoupling; }
 			@Override public boolean granularOccupancyFitsGeometry(GranularCouplingFields coupling) {
 				return domain.granularOccupancyFitsGeometry(coupling);
-			}
-			@Override public int particleCellIndex(float x, float y, float z) {
-				return domain.particleCellIndex(x, y, z);
 			}
 			@Override public int[] granularCarrierMaterialByCell() { return domain.granularCarrierMaterialByCell; }
 			@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
