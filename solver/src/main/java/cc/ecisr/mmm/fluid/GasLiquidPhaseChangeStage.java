@@ -298,6 +298,9 @@ final class GasLiquidPhaseChangeStage {
 						"Condensation gas batch mass differs from its exact transition");
 			}
 			long addedSvq = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
+			if (!support.canExpandCondensedVolume(addedSvq)) {
+				throw new PhaseCandidateUnavailableException("Condensation exceeds region carrier capacity");
+			}
 			long occupied = Math.addExact(Math.addExact(
 					liquidCellSvq(cell), support.granularSvq(cell)),
 					thermal.coherentPhases().cellOccupiedSvq(cell));

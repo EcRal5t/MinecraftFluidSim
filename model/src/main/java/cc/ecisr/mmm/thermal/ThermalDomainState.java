@@ -26,14 +26,6 @@ public final class ThermalDomainState {
 	/** Exact generation token for the four independently mutable thermal truth owners. */
 	public record Revision(long liquid, long granular, long gas, long audit) { }
 	public record ReactionPlan(int cell, SignedDyadic cellEnergy, SignedDyadic inventoryBefore, double equilibriumTemperatureK) { }
-	public record PhaseMechanicalWorkPlan(
-			double[] targetCellEnergy, SignedDyadic inventoryBefore, SignedDyadic mechanicalWork
-	) {
-		public PhaseMechanicalWorkPlan {
-			targetCellEnergy = targetCellEnergy.clone();
-		}
-		@Override public double[] targetCellEnergy() { return targetCellEnergy.clone(); }
-	}
 	public record PhaseCandidateCell(
 			int cell, SignedDyadic cellEnergy,
 			List<ThermalStateFunction.InventoryPortion> unchangedSolids
@@ -461,21 +453,10 @@ public final class ThermalDomainState {
 
 	// ---- pending phase mechanical work ----
 
-	public PhaseMechanicalWorkPlan planPhaseMechanicalWork(
-			SignedDyadic[] pendingCellVolume, float[] relativeGaugePressurePa,
-			float pressureReferencePa, float cellSize, ThermalCarrierContext markers
-	) {
-		return cellOperations.planPhaseMechanicalWork(
-				pendingCellVolume, relativeGaugePressurePa, pressureReferencePa, cellSize, markers);
-	}
-
 	public void requirePendingPhaseCells(SignedDyadic[] pendingCellVolume, ThermalCarrierContext markers) {
 		cellOperations.requirePendingPhaseCells(pendingCellVolume, markers);
 	}
 
-	public void commitPhaseMechanicalWork(PhaseMechanicalWorkPlan plan, ThermalCarrierContext markers) {
-		cellOperations.commitPhaseMechanicalWork(plan, markers);
-	}
 
 	// ---- cell grid observations and repartitions ----
 

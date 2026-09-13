@@ -206,51 +206,6 @@ final class ThermalCellOperations {
 		audit.update(ledger -> ledger.withRoundoff(exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore())));
 	}
 
-	ThermalDomainState.PhaseMechanicalWorkPlan planPhaseMechanicalWork(
-			SignedDyadic[] pendingCellVolume, float[] relativeGaugePressurePa,
-			float pressureReferencePa, float cellSize, ThermalCarrierContext markers
-	) {
-		if (pendingCellVolume == null || relativeGaugePressurePa == null
-				|| pendingCellVolume.length != cellGrid.cellCount()
-				|| relativeGaugePressurePa.length != cellGrid.cellCount()
-				|| !Float.isFinite(pressureReferencePa)
-				|| !(Float.isFinite(cellSize) && cellSize > 0.0F)) {
-			throw new IllegalArgumentException("Pending phase mechanical-work input is invalid");
-		}
-		SignedDyadic before = exactEnergy(markers.markerCount());
-		cellGrid.rebuild(carrierAccess(markers));
-		double[] target = cellGrid.copyInternalEnergy();
-		SignedDyadic work = SignedDyadic.ZERO;
-		double cellVolumeM3 = (double) cellSize * cellSize * cellSize;
-		for (int cell = 0; cell < pendingCellVolume.length; cell++) {
-			SignedDyadic signedCellVolume = pendingCellVolume[cell];
-			if (signedCellVolume == null) throw new IllegalArgumentException("Pending phase volume is missing");
-			if (signedCellVolume.equals(SignedDyadic.ZERO)) continue;
-			if (!cellGrid.occupied(cell)) {
-				throw new IllegalArgumentException("Pending phase volume names an empty thermal cell");
-			}
-			double absolutePressure = AirNetwork.REFERENCE_PRESSURE
-					+ pressureReferencePa + relativeGaugePressurePa[cell];
-			if (!Double.isFinite(absolutePressure)) {
-				throw new IllegalArgumentException("Phase mechanical-work pressure is invalid at cell " + cell
-						+ ": absolute=" + absolutePressure + " Pa, referenceGauge=" + pressureReferencePa
-						+ " Pa, relativeGauge=" + relativeGaugePressurePa[cell] + " Pa");
-			}
-			// The incompressible projection is a Lagrange multiplier and can represent liquid tension.
-			// Thermodynamic boundary work cannot use negative absolute pressure: without a resolved
-			// cavitation inventory the non-tensile complement is vacuum, exactly 0 Pa.
-			double workPressure = Math.max(0.0, absolutePressure);
-			double cellWork = -workPressure * signedCellVolume.toDouble() * cellVolumeM3;
-			if (!Double.isFinite(cellWork) || !Double.isFinite(target[cell] + cellWork)) {
-				throw new IllegalArgumentException("Phase mechanical work is not representable");
-			}
-			target[cell] += cellWork;
-			work = work.add(SignedDyadic.of(cellWork));
-		}
-		cellGrid.validateCellInternalEnergies(target);
-		return new ThermalDomainState.PhaseMechanicalWorkPlan(target, before, work);
-	}
-
 	void requirePendingPhaseCells(SignedDyadic[] pendingCellVolume, ThermalCarrierContext markers) {
 		if (pendingCellVolume == null || pendingCellVolume.length != cellGrid.cellCount()) {
 			throw new IllegalArgumentException("Pending phase-volume cells are incompatible");
@@ -262,16 +217,6 @@ final class ThermalCellOperations {
 				throw new IllegalArgumentException("Pending phase volume names an empty thermal cell");
 			}
 		}
-	}
-
-	void commitPhaseMechanicalWork(
-			ThermalDomainState.PhaseMechanicalWorkPlan plan, ThermalCarrierContext markers
-	) {
-		if (plan == null) throw new IllegalArgumentException("Phase mechanical-work plan is missing");
-		cellGrid.setCellInternalEnergies(plan.targetCellEnergy());
-		SignedDyadic actualDelta = exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore());
-		audit.update(ledger -> ledger.withMechanicalWork(plan.mechanicalWork())
-				.withRoundoff(actualDelta.subtract(plan.mechanicalWork())));
 	}
 
 	double temperatureInCell(int cell, ThermalCarrierContext markers) {

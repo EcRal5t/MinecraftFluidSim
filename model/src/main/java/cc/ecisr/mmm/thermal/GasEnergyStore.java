@@ -122,10 +122,13 @@ public final class GasEnergyStore {
 		}
 		double[] result = mixedEnergy.clone();
 		for (int node = 0; node < result.length; node++) {
-			if (!(Double.isFinite(availableVolumes[node]) && availableVolumes[node] > 0.0)
-					|| !(Double.isFinite(inheritedAvailableVolumes[node]) && inheritedAvailableVolumes[node] > 0.0)
+			boolean vacuum = inventories.get(node).isEmpty();
+			if (!(Double.isFinite(availableVolumes[node]) && (availableVolumes[node] > 0.0 || vacuum && availableVolumes[node] == 0.0))
+					|| !(Double.isFinite(inheritedAvailableVolumes[node]) && (inheritedAvailableVolumes[node] > 0.0 || vacuum && inheritedAvailableVolumes[node] == 0.0))
 					|| !Double.isFinite(result[node])) {
-				throw new IllegalArgumentException("Gas thermal remap produced an invalid node");
+				throw new IllegalArgumentException("Gas thermal remap produced an invalid node: node=" + node
+						+ ", available=" + availableVolumes[node] + ", inherited=" + inheritedAvailableVolumes[node]
+						+ ", energy=" + result[node] + ", vacuum=" + inventories.get(node).isEmpty());
 			}
 			if (inventories.get(node).isEmpty()) {
 				if (result[node] != 0.0) throw new IllegalArgumentException("Vacuum remap carries internal energy");

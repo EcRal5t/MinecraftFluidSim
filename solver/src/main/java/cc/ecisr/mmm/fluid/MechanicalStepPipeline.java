@@ -1,7 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.granular.GranularMechanics;
-import cc.ecisr.mmm.thermal.ThermalCarrierContext;
 import cc.ecisr.mmm.thermal.ThermalDomainState;
 import cc.ecisr.mmm.units.SignedDyadic;
 
@@ -11,15 +10,14 @@ import java.util.Arrays;
  * Composes one mechanical substep from the explicit solver stages in the established order:
  * gas topology step, particle-to-grid rebuild, granular mechanics, porous damping, gravity,
  * thermal buoyancy, surface tension, solid-face enforcement, pressure solve, the pending
- * phase-work plan and consumption, velocity projection, grid-to-particle handoff, advection
- * and collision commit. The pipeline returns only typed stats and the pending-work
- * consumption flag; thermal/chemistry/reseed axes stay outside.
+ * phase-geometry synchronization, velocity projection, grid-to-particle handoff, advection
+ * and collision commit. The pipeline returns only typed stats and the pending-geometry
+ * completion flag; thermal/chemistry/reseed axes stay outside.
  */
 final class MechanicalStepPipeline {
 	record Workspace(
 			GasTopologyCoordinator gasTopology, MacVelocityGrid mac,
-			SignedDyadic[] pendingPhaseCellVolume, PressureProjectionWorkspace projection,
-			FluidSolverConfig config, ThermalCarrierContext thermalMarkers
+			SignedDyadic[] pendingPhaseCellVolume, FluidSolverConfig config
 	) { }
 
 	interface Access {
@@ -29,7 +27,6 @@ final class MechanicalStepPipeline {
 		int lastPressureIterations();
 		ThermalDomainState thermalState();
 		boolean hasPendingPhaseVolumeWork();
-		float pressureReference();
 	}
 
 	private final Workspace state;
@@ -117,17 +114,9 @@ final class MechanicalStepPipeline {
 		gridToParticleStage.capturePreProjectionEnergy();
 		pressureStage.solve(dt);
 		int pressureIterations = access.lastPressureIterations();
-		ThermalDomainState.PhaseMechanicalWorkPlan phaseWork = null;
-		if (substep == 0 && access.thermalState() != null && access.hasPendingPhaseVolumeWork()) try {
-			phaseWork = access.thermalState().planPhaseMechanicalWork(
-					state.pendingPhaseCellVolume, state.projection.pressure, access.pressureReference(),
-					state.config.cellSize(), state.thermalMarkers);
-		} catch (IllegalArgumentException invalidPendingWork) {
-			throw new FluidDomain.ThermalPhaseBlockedException(
-					"Pending phase mechanical work cannot be consumed: " + invalidPendingWork.getMessage(),
-					invalidPendingWork);
-		}
+		boolean phaseGeometryPending = substep == 0 && access.hasPendingPhaseVolumeWork();
 		pressureStage.projectVelocities(dt);
+		validateProjectedCourant(dt);
 		granularMechanicalStage.previewCollision(dt);
 		granularMechanicalStage.validateVelocities();
 		if (captureAudit) {
@@ -135,8 +124,9 @@ final class MechanicalStepPipeline {
 			audit.pressureProjectionWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
-		if (phaseWork != null) {
-			access.thermalState().commitPhaseMechanicalWork(phaseWork, state.thermalMarkers);
+		if (phaseGeometryPending) {
+			// Phase inventories already share a conservative fixed-volume energy update.
+			// Their internal displacement is not external work on the whole thermal system.
 			Arrays.fill(state.pendingPhaseCellVolume, SignedDyadic.ZERO);
 		}
 		bodyForceStage.enforceSolidFaceVelocities();
@@ -153,6 +143,24 @@ final class MechanicalStepPipeline {
 		if (captureAudit) audit.particleCollisionWorkJoules +=
 				access.particleKineticEnergyJoules() - particleKineticEnergy;
 		granularMechanicalStage.commitCollision();
-		return new SubstepOutcome(pressureIterations, granularMechanics, phaseWork != null);
+		return new SubstepOutcome(pressureIterations, granularMechanics, phaseGeometryPending);
+	}
+
+	/** Pressure can accelerate a resting liquid beyond the initial marker-based step estimate. */
+	private void validateProjectedCourant(float dt) {
+		double x = maximumMagnitude(state.mac.velocityX);
+		double y = maximumMagnitude(state.mac.velocityY);
+		double z = maximumMagnitude(state.mac.velocityZ);
+		double speed = Math.sqrt(x * x + y * y + z * z);
+		double distance = state.config.cellSize() * state.config.maxCourantNumber();
+		if (speed * dt > distance * (1 + 8 * Math.ulp(1.0F))) {
+			throw new MechanicalTimeRefinement((int) Math.ceil(speed * state.config.timeStep() / distance));
+		}
+	}
+
+	private static double maximumMagnitude(float[] velocity) {
+		double maximum = 0;
+		for (float value : velocity) maximum = Math.max(maximum, Math.abs(value));
+		return maximum;
 	}
 }

@@ -504,6 +504,31 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		}
 	}
 
+	static void crowdedCellEnergyAssignmentPreservesEquilibrium() {
+		var material = material("test:thermal/crowded", "test:crowded", 0.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(100.0, 500.0, 4180.0)));
+		double temperature = 3_117_853.5263624573;
+		double[] energies = new double[2048];
+		Arrays.fill(energies, 0.1 * material.sensibleSpecificEnergyAt(temperature));
+		double requested = SignedDyadic.sum(energies).toDouble();
+		ThermalCellGrid grid = new ThermalCellGrid(1);
+		grid.rebuild(new ThermalCellGrid.CarrierAccess() {
+			@Override public int carrierCount() { return energies.length; }
+			@Override public int cell(int i) { return 0; }
+			@Override public ThermalMaterialDefinition material(int i) { return material; }
+			@Override public double mass(int i) { return 0.1; }
+			@Override public double volume(int i) { return 0.0001; }
+			@Override public double baseEnergy(int i) { return 0.0; }
+			@Override public double internalEnergy(int i) { return energies[i]; }
+			@Override public void setInternalEnergy(int i, double value) { energies[i] = value; }
+		});
+		grid.setCellInternalEnergies(new double[] {requested});
+		require(grid.carriersMatchSolvedTemperature() && close(grid.temperature(0), temperature),
+				"crowded hot cell lost local equilibrium through its carrier sum");
+		require(SignedDyadic.sum(energies).equals(SignedDyadic.of(requested)),
+				"crowded hot cell failed exact energy assignment");
+	}
+
 	static void reseedingMovesEnergyWithMarkerTruth() {
 		int capacity = 64, count = 17;
 		boolean[] solid = new boolean[4 * 4 * 4];

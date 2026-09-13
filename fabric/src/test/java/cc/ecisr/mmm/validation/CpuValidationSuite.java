@@ -121,6 +121,7 @@ public final class CpuValidationSuite {
 		gate(gates, "granular", () -> M8GranularValidation.main(NONE),
 				() -> M8GranularValidation.main(FAST));
 		gate(gates, "thermal", () -> M9ThermalValidation.main(NONE));
+		gate(gates, "thermal-extremes", () -> cc.ecisr.mmm.fluid.ExtremeThermalValidation.main(NONE));
 		gate(gates, "materials", () -> M3ConnectedVesselValidation.main(NONE));
 		gate(gates, "surface-tension", () -> M4SurfaceTensionValidation.main(NONE));
 		gate(gates, "air-network", () -> AirNetworkValidation.main(NONE));

@@ -569,14 +569,14 @@ public final class M8GranularValidation {
 			}
 			@Override public GranularMechanics.FluidImpulseApplication addFluidImpulse(
 					float x, float y, float z, double ix, double iy, double iz) {
-				throw new AssertionError("invalid Reynolds preflight committed an impulse");
+				return new GranularMechanics.FluidImpulseApplication(ix, iy, iz, 0.0, 0.0, 0.0);
 			}
 		};
-		try {
-			GranularMechanics.stepVelocities(invalid, registry, narrowCarrier, 1.0 / 20.0);
-			throw new AssertionError("carrier Reynolds validity overflow was accepted");
-		} catch (GranularMechanics.ValidityExceededException expected) { }
-		require(invalid.parcel(0).equals(before), "carrier validity failure partially changed parcel velocity");
+		GranularMechanics.stepVelocities(invalid, registry, narrowCarrier, 1.0 / 20.0);
+		require(invalid.parcel(0).velocityX() < before.velocityX()
+				&& invalid.parcel(0).velocityX() > -10.0,
+				"continued Newton drag must relax finite high-Reynolds slip without overshooting");
+
 
 	}
 

@@ -115,8 +115,8 @@ public final class GranularMechanics {
 		double slip = Math.sqrt(slipX * slipX + slipY * slipY + slipZ * slipZ);
 		double diameter = material.primaryGrainDiameterMeters();
 		double reynolds = fluid.density() * diameter * slip / fluid.dynamicViscosity();
-		if (!(Double.isFinite(reynolds) && reynolds <= fluid.maximumReynolds())) {
-			throw new ValidityExceededException("Granular carrier Reynolds validity range exceeded: Re="
+		if (!(Double.isFinite(reynolds) && reynolds >= 0.0)) {
+			throw new ValidityExceededException("Granular carrier Reynolds number is not representable: Re="
 					+ reynolds + ", maximum=" + fluid.maximumReynolds() + ", slip=" + slip
 					+ " m/s, diameter=" + diameter + " m, density=" + fluid.density()
 					+ " kg/m^3, viscosity=" + fluid.dynamicViscosity() + " Pa*s, particle=("

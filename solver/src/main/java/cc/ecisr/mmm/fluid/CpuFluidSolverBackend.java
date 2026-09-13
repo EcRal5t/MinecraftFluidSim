@@ -8,7 +8,7 @@ import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 /** Reference backend that evaluates a request on a private restored domain. */
 public final class CpuFluidSolverBackend implements FluidSolverBackend {
 	public static final String ID = "mmm:cpu-flip";
-	private static final int MAXIMUM_TIME_REFINEMENTS = 8;
+	private static final int MAXIMUM_TIME_REFINEMENTS = 16;
 
 	@Override public String id() { return ID; }
 

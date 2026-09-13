@@ -155,7 +155,10 @@ final class ControllerInventoryDurabilityValidation {
 	private static void stepAndPublish(
 			FluidRegion region, RegionRepositoryAdapter persistence, boolean phaseChange
 	) throws Exception {
-		region.domain().step(phaseChange, phaseChange ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0);
+		var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+				region.solverGeneration(), region.domain().captureAuthoritativeState(), java.util.List.of(),
+				phaseChange, phaseChange ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0));
+		region.adoptStepCandidate(candidate, CpuFluidSolverBackend.ID);
 		checkClosed(region.domain(), "step before generation " + (region.checkpointGeneration() + 1L));
 		persistence.checkpoint(region);
 		restart(region, persistence, "published step");
@@ -165,7 +168,9 @@ final class ControllerInventoryDurabilityValidation {
 			FluidRegion region, RegionRepositoryAdapter persistence
 	) throws Exception {
 		if (!region.domain().hasPendingPhaseVolumeWork()) return;
-		region.domain().stepMechanicsOnly();
+		var candidate = new CpuFluidSolverBackend().evaluate(FluidStepRequest.pendingPhaseSettlement(
+				region.solverGeneration(), region.domain().captureAuthoritativeState()));
+		region.adoptStepCandidate(candidate, CpuFluidSolverBackend.ID);
 		persistence.checkpoint(region);
 		restart(region, persistence, "pending phase-work settlement");
 	}
@@ -365,7 +370,11 @@ final class ControllerInventoryDurabilityValidation {
 	}
 
 	private static final class NormalPlayState {
+		private final FuzzScene scene;
 		private final FullCapabilityTestFixture.Registries registries;
+		private final int injectX;
+		private final int injectY;
+		private final int injectZ;
 		private final int water;
 		private final int mercury;
 		private final int oil;
@@ -378,9 +387,19 @@ final class ControllerInventoryDurabilityValidation {
 		private long generation;
 
 		NormalPlayState(FullCapabilityTestFixture.Registries registries) throws Exception {
+			this(registries, BASELINE_SCENE);
+		}
+
+		NormalPlayState(FullCapabilityTestFixture.Registries registries, FuzzScene scene) throws Exception {
+			this.scene = scene;
 			this.registries = registries;
-			this.domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
-			domain.sealDomainBoundary();
+			this.injectX = scene.injectX();
+			this.injectY = scene.injectY();
+			this.injectZ = scene.injectZ();
+			this.domain = new FluidDomain(scene.sizeX(), scene.sizeY(), scene.sizeZ(),
+					productionConfig(), scene.capacity());
+			scene.geometry().accept(domain);
+			if (scene.sealed()) domain.sealDomainBoundary();
 			FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 			FullCapabilityTestFixture.bindFull(domain, registries, 293.15,
 					cc.ecisr.mmm.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
@@ -398,9 +417,27 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 		}
 
+		int cellBudget() { return domain.sizeX() * domain.sizeY() * domain.sizeZ(); }
+
+		int[] randomCorner(java.util.Random random) {
+			return new int[]{
+					upperCorner(random, domain.sizeX()),
+					upperCorner(random, domain.sizeY()),
+					upperCorner(random, domain.sizeZ())};
+		}
+
+		private static int upperCorner(java.util.Random random, int size) {
+			int span = Math.min(3, size);
+			return size - span + random.nextInt(span);
+		}
+
 		void temperature(double kelvin) {
-			for (int z = 0; z < 8; z++) for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {
-				if (domain.exactVolumeNear(x, y, z, 0, -1) > 0.0) domain.setThermalTemperatureInCell(x, y, z, kelvin);
+			for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
+				for (int x = 0; x < domain.sizeX(); x++) {
+					if (domain.exactVolumeNear(x, y, z, 0, -1) > 0.0) {
+						domain.setThermalTemperatureInCell(x, y, z, kelvin);
+					}
+				}
 			}
 		}
 
@@ -408,7 +445,7 @@ final class ControllerInventoryDurabilityValidation {
 		void insertMercury() { insertLiquid(mercury); }
 		void insertLiquid(int material) {
 			settle();
-			check(domain.tryInsertExactVolume(7, 7, 7, 8.0F, 6, material, true).transferred(),
+			check(domain.tryInsertExactVolume(injectX, injectY, injectZ, 8.0F, 6, material, true).transferred(),
 					"normal-play liquid insertion was rejected");
 			roundTrip();
 		}
@@ -424,7 +461,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		void insertChemical(ChemicalTransferLedger ledger, double energy, String name) {
 			settle();
-			check(domain.tryInsertExactChemical(7, 7, 7, ledger, 6, true, energy).transferred(),
+			check(domain.tryInsertExactChemical(injectX, injectY, injectZ, ledger, 6, true, energy).transferred(),
 					"normal-play " + name + " insertion was rejected at generation " + generation
 							+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
 							+ ", solidSvq=" + domain.totalGranularSolidVolumeSvq());
@@ -432,7 +469,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		void insertSand() {
 			settle();
-			check(domain.tryInsertExactGranular(7, 7, 7, sand, 6, true).inserted(),
+			check(domain.tryInsertExactGranular(injectX, injectY, injectZ, sand, 6, true).inserted(),
 					"normal-play granular insertion was rejected");
 			roundTrip();
 		}
@@ -455,7 +492,7 @@ final class ControllerInventoryDurabilityValidation {
 			return true;
 		}
 		void indicator(boolean value) {
-			var edit = domain.editIndicatorFloodFill(7, 7, 7, value, 512, 100.0);
+			var edit = domain.editIndicatorFloodFill(injectX, injectY, injectZ, value, cellBudget(), 100.0);
 			check(edit.accepted(), "normal-play indicator edit was rejected: " + edit.failure()
 					+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
 					+ ", solidSvq=" + domain.totalGranularSolidVolumeSvq());
@@ -463,7 +500,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		void extractWater() {
 			settle();
-			check(domain.tryExtractExactVolume(7, 7, 7, 8.0F, 6).transferred(),
+			check(domain.tryExtractExactVolume(injectX, injectY, injectZ, 8.0F, 6).transferred(),
 					"normal-play water extraction was rejected");
 			roundTrip();
 		}
@@ -582,51 +619,306 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 		}
 		void roundTrip() {
-			checkClosed(domain, "normal-play handoff generation " + generation);
+			if (scene.sealed()) checkClosed(domain, "normal-play handoff generation " + generation);
 			domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-			checkClosed(domain, "normal-play restore generation " + generation);
+			if (scene.sealed()) checkClosed(domain, "normal-play restore generation " + generation);
 		}
 	}
 
 	/** Seeded normal-play fuzzing entry point used to surface forced simulation interruptions. */
 	public static void main(String[] args) throws Exception {
-		int[] selectedSeeds = args.length > 0 && args[0].equals("reported")
+		int[] explicitSeeds = args.length > 0 && args[0].equals("reported")
 				? new int[]{97, 119, 135, 152, 267, 268, 282, 323, 327, 441, 479, 505, 506, 691,
 						702, 807, 876, 880, 1259, 1393, 1433, 1505, 1807, 1864, 1870, 2056, 2075, 3034}
 				: args.length > 0 && args[0].contains(":")
 				? java.util.Arrays.stream(args[0].split(":")).mapToInt(Integer::parseInt).toArray() : null;
-		int firstSeed = selectedSeeds != null ? 0 : args.length > 0 ? Integer.parseInt(args[0]) : 0;
-		int seeds = args.length > 1 ? Integer.parseInt(args[1]) : 32;
-		int actions = args.length > 2 ? Integer.parseInt(args[2]) : 80;
-		FUZZ_DISABLE_GRANULAR = args.length > 3 && Boolean.parseBoolean(args[3]);
 		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
+		if (args.length > 0 && args[0].equals("replay")) {
+			FUZZ_PROGRESS = true;
+			int scene = Integer.parseInt(args[1]);
+			int seed = Integer.parseInt(args[2]);
+			Failure failure = runExpandedRandomPlay(registries, FUZZ_SCENES.get(scene), seed,
+					args.length > 3 ? Integer.parseInt(args[3]) : 80);
+			if (failure != null) throw new AssertionError("scene=" + scene + ", seed=" + seed
+					+ ", trace=" + failure.trace(), failure.cause());
+			System.out.println("replay scene=" + scene + " seed=" + seed + " PASS");
+			return;
+		}
+		if (explicitSeeds != null) {
+			runExplicitSeeds(registries, explicitSeeds, args.length > 1 ? Integer.parseInt(args[1]) : 80);
+			return;
+		}
+		if (args.length > 0 && args[0].equals("minimize")) {
+			FUZZ_PROGRESS = false;
+			int sceneIndex = args.length > 1 ? Integer.parseInt(args[1]) : 1;
+			int seed = args.length > 2 ? Integer.parseInt(args[2]) : 212;
+			int actions = args.length > 3 ? Integer.parseInt(args[3]) : 80;
+			minimize(registries, FUZZ_SCENES.get(sceneIndex), seed, actions);
+			return;
+		}
+		int seedsPerScene = args.length > 0 ? Integer.parseInt(args[0]) : 4;
+		int actions = args.length > 1 ? Integer.parseInt(args[1]) : 80;
+		FUZZ_DISABLE_GRANULAR = args.length > 2 && Boolean.parseBoolean(args[2]);
+		int threads = args.length > 3 ? Math.max(1, Integer.parseInt(args[3]))
+				: Math.max(1, Math.min(Runtime.getRuntime().availableProcessors(), 8));
+		int sceneFrom = args.length > 4 ? Integer.parseInt(args[4]) : 0;
+		int sceneTo = args.length > 5 ? Integer.parseInt(args[5]) : FUZZ_SCENES.size();
+		runSceneFuzz(registries, seedsPerScene, actions, threads, sceneFrom, sceneTo);
+	}
+
+	private static void runExplicitSeeds(
+			FullCapabilityTestFixture.Registries registries, int[] seeds, int actions
+	) throws Exception {
+		FUZZ_PROGRESS = true;
+		for (int seed : seeds) {
+			Failure failure = runExpandedRandomPlay(registries, seed, actions);
+			System.out.println("seed=" + seed + (failure == null ? " PASS" : " FAIL"));
+			if (failure != null) failure.cause().printStackTrace(System.out);
+		}
+	}
+
+	private record RngToken(char kind, int bound, int intValue, double doubleValue, boolean boolValue) { }
+
+	private static final class RecordingRandom extends java.util.Random {
+		private final java.util.List<RngToken> tokens = new java.util.ArrayList<>();
+
+		RecordingRandom(long seed) { super(seed); }
+
+		@Override public int nextInt(int bound) {
+			int value = super.nextInt(bound);
+			tokens.add(new RngToken('i', bound, value, 0.0, false));
+			return value;
+		}
+
+		@Override public boolean nextBoolean() {
+			boolean value = super.nextBoolean();
+			tokens.add(new RngToken('b', 0, 0, 0.0, value));
+			return value;
+		}
+
+		@Override public double nextDouble() {
+			double value = super.nextDouble();
+			tokens.add(new RngToken('d', 0, 0, value, false));
+			return value;
+		}
+	}
+
+	private static final class ScriptedRandom extends java.util.Random {
+		private final java.util.List<RngToken> tokens;
+		private int cursor;
+
+		ScriptedRandom(java.util.List<RngToken> tokens) { this.tokens = tokens; }
+
+		private RngToken take(char kind) {
+			if (cursor >= tokens.size()) throw new IllegalStateException("script exhausted");
+			RngToken token = tokens.get(cursor++);
+			if (token.kind() != kind) throw new IllegalStateException("script kind mismatch");
+			return token;
+		}
+
+		@Override public int nextInt(int bound) {
+			RngToken token = take('i');
+			if (token.bound() != bound) throw new IllegalStateException("script bound mismatch");
+			return token.intValue();
+		}
+
+		@Override public boolean nextBoolean() { return take('b').boolValue(); }
+
+		@Override public double nextDouble() { return take('d').doubleValue(); }
+	}
+
+	private record ScriptedFailure(
+			FuzzScene scene, int seed, String root,
+			java.util.List<java.util.List<RngToken>> slices, java.util.List<String> labels
+	) { }
+
+	private static String failedLabel(java.util.List<RngToken> slice) {
+		if (slice.isEmpty()) return "<failed>";
+		RngToken first = slice.get(0);
+		if (first.kind() != 'i' || first.bound() != 100) return "<failed>";
+		return branchName(first.intValue());
+	}
+
+	private static String branchName(int pick) {
+		if (pick < 5) return "insertWater";
+		if (pick < 10) return "insertMercury";
+		if (pick < 15) return "insertOil";
+		if (pick < 22) return "insertAcid";
+		if (pick < 29) return "insertBase";
+		if (pick < 35) return "insertSand";
+		if (pick < 42) return "burst";
+		if (pick < 48) return "step(motion)";
+		if (pick < 54) return "step(phase)";
+		if (pick < 60) return "steps(phase)";
+		if (pick < 63) return "steps(motion)";
+		if (pick < 68) return "temperature";
+		if (pick < 71) return "thermalStep(motion)";
+		if (pick < 74) return "thermalStep(phase)";
+		if (pick < 78) return "step(movingBody)";
+		if (pick < 82) return "extractWater";
+		if (pick < 88) return "extractChemical";
+		if (pick < 93) return "indicator";
+		if (pick < 96) return "clear";
+		if (pick < 98) return "vent";
+		return "settle";
+	}
+
+	private static ScriptedFailure recordScriptedFailure(
+			FullCapabilityTestFixture.Registries registries, FuzzScene scene, int seed, int maxActions
+	) throws Exception {
+		NormalPlayState state = new NormalPlayState(registries, scene);
+		RecordingRandom random = new RecordingRandom(seed);
+		java.util.List<java.util.List<RngToken>> slices = new java.util.ArrayList<>();
+		java.util.List<String> labels = new java.util.ArrayList<>();
+		for (int index = 0; index < maxActions; index++) {
+			int before = random.tokens.size();
+			try {
+				labels.add(applyExpandedRandomAction(state, random));
+			} catch (Throwable failure) {
+				java.util.List<RngToken> slice =
+						java.util.List.copyOf(random.tokens.subList(before, random.tokens.size()));
+				slices.add(slice);
+				labels.add(failedLabel(slice));
+				return new ScriptedFailure(scene, seed, rootCause(failure), slices, labels);
+			}
+			slices.add(java.util.List.copyOf(random.tokens.subList(before, random.tokens.size())));
+		}
+		return null;
+	}
+
+	private static String replayScript(
+			FullCapabilityTestFixture.Registries registries, ScriptedFailure script, int[] keep
+	) throws Exception {
+		NormalPlayState state = new NormalPlayState(registries, script.scene());
+		for (int index : keep) {
+			applyExpandedRandomAction(state, new ScriptedRandom(script.slices().get(index)));
+		}
+		return null;
+	}
+
+	private static boolean reproduces(
+			FullCapabilityTestFixture.Registries registries, ScriptedFailure script, int[] keep
+	) {
+		try {
+			return script.root().equals(replayScript(registries, script, keep));
+		} catch (Throwable failure) {
+			return script.root().equals(rootCause(failure));
+		}
+	}
+
+	private static void minimize(
+			FullCapabilityTestFixture.Registries registries, FuzzScene scene, int seed, int actions
+	) throws Exception {
+		ScriptedFailure script = recordScriptedFailure(registries, scene, seed, actions);
+		if (script == null) {
+			System.out.println("minimize[" + scene.name() + " seed=" + seed + "]: did not fail");
+			return;
+		}
+		int size = script.slices().size();
+		int[] keep = new int[size];
+		for (int index = 0; index < size; index++) keep[index] = index;
+		System.out.println("minimize[" + scene.name() + " seed=" + seed + "] start actions=" + size
+				+ " root=" + script.root());
+		int granularity = 2;
+		while (keep.length >= 2) {
+			int chunk = (keep.length + granularity - 1) / granularity;
+			int[] reduced = null;
+			for (int start = 0; start < keep.length; start += chunk) {
+				int end = Math.min(keep.length, start + chunk);
+				int[] candidate = new int[keep.length - (end - start)];
+				System.arraycopy(keep, 0, candidate, 0, start);
+				System.arraycopy(keep, end, candidate, start, keep.length - end);
+				if (reproduces(registries, script, candidate)) {
+					reduced = candidate;
+					break;
+				}
+			}
+			if (reduced != null) {
+				keep = reduced;
+				granularity = Math.max(2, granularity - 1);
+			} else if (granularity >= keep.length) {
+				break;
+			} else {
+				granularity = Math.min(keep.length, granularity * 2);
+			}
+		}
+		StringBuilder trace = new StringBuilder("[");
+		for (int index = 0; index < keep.length; index++) {
+			if (index > 0) trace.append(", ");
+			trace.append(keep[index] + 1).append(':').append(script.labels().get(keep[index]));
+		}
+		trace.append("]");
+		System.out.println("minimize[" + scene.name() + " seed=" + seed + "] final actions=" + keep.length);
+		System.out.println("minimize[" + scene.name() + " seed=" + seed + "] trace=" + trace);
+	}
+
+	private record SceneJob(FuzzScene scene, int seed) { }
+
+	private record SceneFailure(SceneJob job, Failure failure) { }
+
+	private static void runSceneFuzz(
+			FullCapabilityTestFixture.Registries registries, int seedsPerScene, int actions, int threads,
+			int sceneFrom, int sceneTo
+	) throws Exception {
+		FUZZ_PROGRESS = false;
+		int lastScene = Math.min(sceneTo, FUZZ_SCENES.size());
+		java.util.List<SceneJob> jobs = new java.util.ArrayList<>();
+		for (int sceneIndex = Math.max(0, sceneFrom); sceneIndex < lastScene; sceneIndex++) {
+			FuzzScene scene = FUZZ_SCENES.get(sceneIndex);
+			for (int ordinal = 0; ordinal < seedsPerScene; ordinal++) {
+				jobs.add(new SceneJob(scene, scene.seedBase() + ordinal));
+			}
+		}
+		System.out.println("running " + jobs.size() + " jobs (scenes [" + sceneFrom + "," + lastScene + ") x "
+				+ seedsPerScene + " seeds, " + actions + " actions) on " + threads + " threads");
+		SceneFailure[] results = new SceneFailure[jobs.size()];
+		java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+		java.util.concurrent.atomic.AtomicInteger completed = new java.util.concurrent.atomic.AtomicInteger();
+		java.util.concurrent.atomic.AtomicInteger failureCount = new java.util.concurrent.atomic.AtomicInteger();
+		java.util.List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
+		for (int index = 0; index < jobs.size(); index++) {
+			int slot = index;
+			SceneJob job = jobs.get(index);
+			futures.add(pool.submit(() -> {
+				Failure failure;
+				try {
+					failure = runExpandedRandomPlay(registries, job.scene(), job.seed(), actions);
+				} catch (Throwable unexpected) {
+					failure = new Failure(0, unexpected, java.util.List.of("scene setup aborted"));
+				}
+				if (failure != null) {
+					results[slot] = new SceneFailure(job, failure);
+					failureCount.incrementAndGet();
+				}
+				int done = completed.incrementAndGet();
+				if (done % 16 == 0) System.out.println("... fuzz progress jobs=" + done + "/" + jobs.size()
+						+ ", failures=" + failureCount.get());
+			}));
+		}
+		for (java.util.concurrent.Future<?> future : futures) future.get();
+		pool.shutdown();
 		java.util.LinkedHashMap<String, Integer> classes = new java.util.LinkedHashMap<>();
 		java.util.LinkedHashMap<String, String> firstWhere = new java.util.LinkedHashMap<>();
 		java.util.LinkedHashMap<String, String> firstTrace = new java.util.LinkedHashMap<>();
 		int failures = 0;
-		FUZZ_PROGRESS = selectedSeeds != null;
-		if (selectedSeeds != null) seeds = selectedSeeds.length;
-		for (int ordinal = 0; ordinal < seeds; ordinal++) {
-			int seed = selectedSeeds == null ? firstSeed + ordinal : selectedSeeds[ordinal];
-			Failure failure = runExpandedRandomPlay(registries, seed, actions);
-			if (selectedSeeds != null) System.out.println("seed=" + seed + (failure == null ? " PASS" : " FAIL"));
-			if ((ordinal + 1) % 32 == 0) System.out.println("... fuzz progress at seed " + seed
-					+ ", failures=" + (failures + (failure == null ? 0 : 1)));
-			if (failure == null) continue;
-			if (selectedSeeds != null) failure.cause().printStackTrace(System.out);
+		for (SceneFailure result : results) {
+			if (result == null) continue;
 			failures++;
-			String root = rootCause(failure.cause());
+			String root = rootCause(result.failure().cause());
+			System.out.println("FUZZ FAIL scene=" + result.job().scene().name() + " seed=" + result.job().seed()
+					+ " action=" + result.failure().actionIndex() + " :: " + root);
 			classes.merge(root, 1, Integer::sum);
-			firstWhere.putIfAbsent(root, "seed=" + seed + " action=" + failure.actionIndex());
-			firstTrace.putIfAbsent(root, failure.trace().toString());
+			firstWhere.putIfAbsent(root, "scene=" + result.job().scene().name() + " seed=" + result.job().seed()
+					+ " action=" + result.failure().actionIndex());
+			firstTrace.putIfAbsent(root, result.failure().trace().toString());
 		}
-		System.out.println("randomized normal play finished; seeds=" + seeds + " failures=" + failures);
+		System.out.println("scenario fuzz finished; jobs=" + jobs.size() + " failures=" + failures);
 		for (var entry : classes.entrySet()) {
 			System.out.println("FUZZ CLASS x" + entry.getValue() + " @ " + firstWhere.get(entry.getKey())
 					+ " :: " + entry.getKey());
 			System.out.println("  first trace=" + firstTrace.get(entry.getKey()));
 		}
-		check(failures == 0, "randomized normal play found " + failures + " interrupted seeds");
+		check(failures == 0, "scenario fuzz found " + failures + " interrupted jobs");
 	}
 
 	private static String rootCause(Throwable failure) {
@@ -651,6 +943,14 @@ final class ControllerInventoryDurabilityValidation {
 				return new Failure(index + 1, failure, java.util.List.copyOf(trace));
 			}
 			trace.add((index + 1) + ":" + action);
+			if (Boolean.getBoolean("mmm.fuzzDebug")) {
+				System.out.println("action=" + (index + 1) + ":" + action + " liquid=" + state.domain.totalVolumeExact());
+				for (int node : state.domain.gasBoundary().nodeIds()) System.out.println("  gas=" + node
+						+ " volume=" + state.domain.gasBoundary().availableVolume(node)
+						+ " std=" + state.domain.gasBoundary().standardVolume(node)
+						+ " T=" + state.domain.gasNodeTemperatureK(node)
+						+ " p=" + state.domain.gasNodeGaugePressurePa(node));
+			}
 		}
 		return null;
 	}
@@ -658,7 +958,13 @@ final class ControllerInventoryDurabilityValidation {
 	private static Failure runExpandedRandomPlay(
 			FullCapabilityTestFixture.Registries registries, int seed, int actionCount
 	) throws Exception {
-		NormalPlayState state = new NormalPlayState(registries);
+		return runExpandedRandomPlay(registries, BASELINE_SCENE, seed, actionCount);
+	}
+
+	private static Failure runExpandedRandomPlay(
+			FullCapabilityTestFixture.Registries registries, FuzzScene scene, int seed, int actionCount
+	) throws Exception {
+		NormalPlayState state = new NormalPlayState(registries, scene);
 		java.util.Random random = new java.util.Random(seed);
 		java.util.List<String> trace = new java.util.ArrayList<>();
 		for (int index = 0; index < actionCount; index++) {
@@ -669,6 +975,14 @@ final class ControllerInventoryDurabilityValidation {
 				return new Failure(index + 1, failure, java.util.List.copyOf(trace));
 			}
 			trace.add((index + 1) + ":" + action);
+			if (Boolean.getBoolean("mmm.fuzzDebug")) {
+				System.out.println("action=" + (index + 1) + ":" + action + " liquid=" + state.domain.totalVolumeExact());
+				for (int node : state.domain.gasBoundary().nodeIds()) System.out.println("  gas=" + node
+						+ " volume=" + state.domain.gasBoundary().availableVolume(node)
+						+ " std=" + state.domain.gasBoundary().standardVolume(node)
+						+ " T=" + state.domain.gasNodeTemperatureK(node)
+						+ " p=" + state.domain.gasNodeGaugePressurePa(node));
+			}
 			if (FUZZ_PROGRESS && (index + 1) % 8 == 0) System.out.println(
 					"seed=" + seed + " actions=" + (index + 1) + "/" + actionCount + " generation=" + state.generation);
 		}
@@ -731,32 +1045,28 @@ final class ControllerInventoryDurabilityValidation {
 	private static String applyExpandedRandomAction(NormalPlayState state, java.util.Random random) {
 		int pick = random.nextInt(100);
 		if (pick < 5) {
-			if (state.tryInsertLiquidAt(randomCorner(random), randomCorner(random), randomCorner(random), state.water)) {
-				return "insertWater";
-			}
-			return "skip(insertWater)";
+			int[] at = state.randomCorner(random);
+			return state.tryInsertLiquidAt(at[0], at[1], at[2], state.water) ? "insertWater" : "skip(insertWater)";
 		}
 		if (pick < 10) {
-			if (state.tryInsertLiquidAt(randomCorner(random), randomCorner(random), randomCorner(random), state.mercury)) {
-				return "insertMercury";
-			}
-			return "skip(insertMercury)";
+			int[] at = state.randomCorner(random);
+			return state.tryInsertLiquidAt(at[0], at[1], at[2], state.mercury) ? "insertMercury" : "skip(insertMercury)";
 		}
 		if (pick < 15) {
-			if (state.tryInsertLiquidAt(randomCorner(random), randomCorner(random), randomCorner(random), state.oil)) {
-				return "insertOil";
-			}
-			return "skip(insertOil)";
+			int[] at = state.randomCorner(random);
+			return state.tryInsertLiquidAt(at[0], at[1], at[2], state.oil) ? "insertOil" : "skip(insertOil)";
 		}
 		if (pick < 22) {
-			int x = randomCorner(random), y = randomCorner(random), z = randomCorner(random);
+			int[] at = state.randomCorner(random);
+			int x = at[0], y = at[1], z = at[2];
 			for (int bucket = 0, count = 1 + random.nextInt(2); bucket < count; bucket++) {
 				if (!state.tryInsertChemicalAt(x, y, z, state.acid, state.acidEnergy)) return "skip(insertAcid)";
 			}
 			return "insertAcid";
 		}
 		if (pick < 29) {
-			int x = randomCorner(random), y = randomCorner(random), z = randomCorner(random);
+			int[] at = state.randomCorner(random);
+			int x = at[0], y = at[1], z = at[2];
 			for (int bucket = 0, count = 1 + random.nextInt(2); bucket < count; bucket++) {
 				if (!state.tryInsertChemicalAt(x, y, z, state.base, state.baseEnergy)) return "skip(insertBase)";
 			}
@@ -764,7 +1074,8 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		if (pick < 35) {
 			if (!FUZZ_DISABLE_GRANULAR) {
-				if (state.tryInsertSandAt(randomCorner(random), randomCorner(random), randomCorner(random))) {
+				int[] at = state.randomCorner(random);
+				if (state.tryInsertSandAt(at[0], at[1], at[2])) {
 					return "insertSand";
 				}
 				return "skip(insertSand)";
@@ -818,7 +1129,8 @@ final class ControllerInventoryDurabilityValidation {
 			return "skip(noCanonicalLiquid)";
 		}
 		if (pick < 93) {
-			var edit = state.domain.editIndicatorFloodFill(7, 7, 7, random.nextBoolean(), 512, 100.0);
+			var edit = state.domain.editIndicatorFloodFill(state.injectX, state.injectY, state.injectZ,
+					random.nextBoolean(), state.cellBudget(), 100.0);
 			if (edit.accepted()) {
 				state.roundTrip();
 				return "indicator";
@@ -831,13 +1143,12 @@ final class ControllerInventoryDurabilityValidation {
 		return "settle";
 	}
 
-	private static int randomCorner(java.util.Random random) { return 5 + random.nextInt(3); }
-
 	private static String burst(NormalPlayState state, java.util.Random random) {
 		int mode = random.nextInt(5);
 		int count = 2 + random.nextInt(mode == 4 ? 4 : 8);
 		for (int bucket = 0; bucket < count; bucket++) {
-			int x = randomCorner(random), y = randomCorner(random), z = randomCorner(random);
+			int[] at = state.randomCorner(random);
+			int x = at[0], y = at[1], z = at[2];
 			boolean accepted;
 			String label;
 			switch (mode) {
@@ -859,11 +1170,81 @@ final class ControllerInventoryDurabilityValidation {
 			1.0, 50.0, 150.0, 273.15, 293.15, 320.0, 373.15, 600.0, 1_500.0, 3_000.0
 	};
 
+	private static final int SCENE_HALF_BOTTOM = 0x33;
+
+	private record FuzzScene(String name, int seedBase, int sizeX, int sizeY, int sizeZ, int capacity,
+			boolean sealed, int injectX, int injectY, int injectZ,
+			java.util.function.Consumer<FluidDomain> geometry) {
+
+		static FuzzScene flat(String name, int seedBase, int sizeX, int sizeY, int sizeZ, boolean sealed,
+				int injectX, int injectY, int injectZ) {
+			return new FuzzScene(name, seedBase, sizeX, sizeY, sizeZ, sizeX * sizeY * sizeZ * 8, sealed,
+					injectX, injectY, injectZ, domain -> { });
+		}
+	}
+
+	private static final FuzzScene BASELINE_SCENE = FuzzScene.flat(
+			"sealed-empty-8", 100, 8, 8, 8, true, 7, 7, 7);
+
+	private static final java.util.List<FuzzScene> FUZZ_SCENES = java.util.List.of(
+			BASELINE_SCENE,
+			FuzzScene.flat("sealed-empty-4", 200, 4, 4, 4, true, 3, 3, 3),
+			FuzzScene.flat("open-empty-8", 300, 8, 8, 8, false, 7, 7, 7),
+			FuzzScene.flat("sealed-tall-6x10x6", 400, 6, 10, 6, true, 3, 8, 3),
+			new FuzzScene("sealed-floor-8", 500, 8, 8, 8, 8 * 8 * 8 * 8, true, 4, 6, 4, domain -> {
+				for (int z = 0; z < 8; z++) for (int x = 0; x < 8; x++) domain.setSolid(x, 0, z, true);
+			}),
+			new FuzzScene("sealed-corridor-8", 600, 8, 8, 8, 8 * 8 * 8 * 8, true, 4, 6, 4, domain -> {
+				for (int z = 0; z < 8; z++) for (int y = 1; y < 7; y++) {
+					domain.setSolid(3, y, z, true);
+					domain.setSolid(5, y, z, true);
+				}
+			}),
+			new FuzzScene("sealed-halfcells-8", 700, 8, 8, 8, 8 * 8 * 8 * 8, true, 4, 6, 4, domain -> {
+				for (int z = 2; z < 6; z++) for (int y = 2; y < 6; y++) {
+					domain.setSolidMicroMask(4, y, z, SCENE_HALF_BOTTOM);
+				}
+			}),
+			new FuzzScene("sealed-obstacle-10x8x8", 800, 10, 8, 8, 10 * 8 * 8 * 8, true, 5, 6, 4, domain -> {
+				for (int z = 0; z < 8; z++) for (int x = 0; x < 10; x++) domain.setSolid(x, 0, z, true);
+				for (int z = 2; z <= 5; z++) for (int y = 1; y <= 3; y++) {
+					domain.setSolidMicroMask(5, y, z, SCENE_HALF_BOTTOM);
+				}
+			}),
+			new FuzzScene("sealed-diagonal-8", 900, 8, 8, 8, 8 * 8 * 8 * 8, true, 1, 6, 4, domain -> {
+				for (int z = 0; z < 8; z++) for (int x = 0; x < 8; x++) {
+					for (int y = 0; y <= x; y++) domain.setSolid(x, y, z, true);
+					if (x + 1 < 8) domain.setSolidMicroMask(x, x + 1, z, SCENE_HALF_BOTTOM);
+				}
+			}),
+			new FuzzScene("sealed-throat-8", 1000, 8, 8, 8, 8 * 8 * 8 * 8, true, 2, 6, 4, domain -> {
+				for (int z = 0; z < 8; z++) for (int y = 0; y < 8; y++) {
+					if (y == 4 && z == 4) continue;
+					domain.setSolid(4, y, z, true);
+				}
+			}),
+			new FuzzScene("sealed-multicavity-8", 1100, 8, 8, 8, 8 * 8 * 8 * 8, true, 2, 6, 4, domain -> {
+				for (int z = 0; z < 8; z++) for (int y = 0; y < 8; y++) domain.setSolid(4, y, z, true);
+				for (int z = 3; z <= 4; z++) for (int y = 1; y <= 2; y++) domain.setSolid(4, y, z, false);
+			}),
+			new FuzzScene("sealed-ledge-8", 1200, 8, 8, 8, 8 * 8 * 8 * 8, true, 4, 4, 4, domain -> {
+				for (int z = 0; z < 8; z++) for (int x = 0; x < 8; x++) {
+					domain.setSolid(x, 0, z, true);
+					domain.setSolid(x, 7, z, true);
+				}
+			}),
+			new FuzzScene("sealed-pillar-8", 1300, 8, 8, 8, 8 * 8 * 8 * 8, true, 4, 6, 4, domain -> {
+				for (int z = 2; z <= 5; z++) for (int y = 0; y <= 5; y++) for (int x = 2; x <= 5; x++) {
+					if (x == 2 || x == 5 || z == 2 || z == 5) domain.setSolid(x, y, z, true);
+				}
+			})
+	);
+
 	@FunctionalInterface private interface Scenario { void run(NormalPlayState state) throws Exception; }
 
 	private static FluidSolverConfig productionConfig() {
 		return new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+				240, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
 	}
 
 	private static void check(boolean condition, String message) {

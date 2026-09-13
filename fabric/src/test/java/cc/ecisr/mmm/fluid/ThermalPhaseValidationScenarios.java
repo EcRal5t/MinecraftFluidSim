@@ -582,9 +582,9 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& settlement.thermalAxis().granularPhase().transfers() == 0
 				&& settlement.condensedPhase().operations() == 0
 				&& settlement.gasPhase().operations() == 0
-				&& after.mechanicalWork().compareTo(before.mechanicalWork()) < 0
+				&& after.mechanicalWork().equals(before.mechanicalWork())
 				&& domain.exactInternalEnergy().equals(after.expectedInventory()),
-				"mechanics-only projection did not consume expansion exactly once without new phase work");
+				"internal phase displacement was incorrectly booked as external pressure work");
 		domain.stepMechanicsOnly();
 		require(!domain.hasPendingPhaseVolumeWork()
 				&& domain.thermalAudit().mechanicalWork().equals(after.mechanicalWork()),

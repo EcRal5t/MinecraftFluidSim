@@ -117,7 +117,7 @@ public final class M5GasLiquidCouplingValidation {
 		check(addition.addedVolume() == 128.0F && !addition.markerBudgetLimited(),
 				"empty controller boundary pour did not add 16 BV");
 		for (int step = 0; step < 200; step++) {
-			try { domain.step(); }
+			try { domain = advance(domain); }
 			catch (RuntimeException failure) {
 				throw new IllegalStateException("empty controller negative-pressure boundary pour failed at step " + step,
 						failure);
@@ -466,5 +466,10 @@ public final class M5GasLiquidCouplingValidation {
 
 	private static void check(boolean condition, String message) {
 		if (!condition) throw new AssertionError(message);
+	}
+
+	private static FluidDomain advance(FluidDomain domain) {
+		return new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+				0, domain.captureAuthoritativeState(), java.util.List.of(), false, 0)).claimPreparedCpuDomain();
 	}
 }

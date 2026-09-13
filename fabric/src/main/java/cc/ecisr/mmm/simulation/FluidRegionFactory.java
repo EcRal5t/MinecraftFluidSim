@@ -58,7 +58,7 @@ final class FluidRegionFactory {
 		float cellSize = 1.0F / CELLS_PER_BLOCK;
 		FluidSolverConfig config = new FluidSolverConfig(
 				cellSize, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F
+				240, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F
 		);
 		return new FluidDomain(
 				Math.multiplyExact(blockSizeX, CELLS_PER_BLOCK),

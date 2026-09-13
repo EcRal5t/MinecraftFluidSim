@@ -64,18 +64,18 @@
 
 [FluidDomainStepCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainStepCoordinator.java) 组织下列步骤：
 
-1. 记录物质和能量收支，以及待结算的相变体积功。
+1. 记录物质和能量收支，以及待同步的相变体积。
 2. 根据碰撞形状、固体占据体积和气体拓扑建立力学输入。
 3. 把粒子速度传到网格（P2G），施加重力、浮力、表面张力，以及气体、颗粒和实体作用。
 4. 用 PCG 联合求解液体压力、接触液体的有限密闭气体响应与活动颗粒的有限质量响应。环境与真空使用给定压力条件。
 5. 把速度传回粒子（G2P），推进粒子位置并处理碰撞，完成颗粒运动。
 6. 在新位置上重建热学网格，计算导热与恒温源热通量。
 7. 执行化学反应和颗粒反应，计入反应热。
-8. 执行固液、气液相变，把体积变化记入待结算压力功。
+8. 执行固液、气液相变，把体积变化记为待同步几何。
 9. 处理沉积、唤醒和粒子拆分/合并，同步搬移材料、化学和内能数据。
 10. 核对全部收支，成功后发布本步统计并判断后续活动状态。
 
-力学顺序在 [MechanicalStepPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStepPipeline.java)，传热、反应和相变顺序在 [ThermochemistryPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/ThermochemistryPipeline.java)。具体离散方法见 [流体求解器](fluid-solver.md)，相变功的后续处理见 [转移前结算相变功](runtime-and-lifecycle.md#phase-work)。
+力学顺序在 [MechanicalStepPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStepPipeline.java)，传热、反应和相变顺序在 [ThermochemistryPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/ThermochemistryPipeline.java)。具体离散方法见 [流体求解器](fluid-solver.md)，相变几何的后续处理见 [转移前同步相变几何](runtime-and-lifecycle.md#phase-work)。
 
 ## 存档和故障恢复
 

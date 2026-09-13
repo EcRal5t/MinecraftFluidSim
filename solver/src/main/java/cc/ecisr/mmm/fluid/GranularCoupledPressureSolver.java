@@ -8,7 +8,6 @@ final class GranularCoupledPressureSolver {
 	private final GranularImplicitDrag drag;
 	private final GranularPressurePreconditioner preconditioner;
 	private final double[] pressure, rhs, residual, direction, product, diagonal, preconditioned;
-	private final double[] reference, resolvedPressure;
 	private final int[] unknowns;
 	private int count;
 
@@ -20,19 +19,12 @@ final class GranularCoupledPressureSolver {
 		pressure = new double[size]; rhs = new double[size]; residual = new double[size];
 		direction = new double[size]; product = new double[size]; diagonal = new double[size];
 		preconditioned = new double[size];
-		reference = new double[size]; resolvedPressure = new double[size];
 		unknowns = new int[size];
 	}
 
-	double[] pressure() { return resolvedPressure; }
-	double[] reference() { return reference; }
+	double[] pressure() { return pressure; }
 	void reset() {
-		Arrays.fill(pressure, 0); Arrays.fill(direction, 0); Arrays.fill(reference, 0);
-		for (int ordinal = 0; ordinal < domain.projection.gasUnknownCount; ordinal++) {
-			int node = domain.projection.gasUnknownNodes[ordinal];
-			reference[domain.cellCount + node] = domain.pressureBoundaryView.gasPressureOfNode(node) - domain.pressureReference;
-		}
-		System.arraycopy(reference, 0, resolvedPressure, 0, reference.length);
+		Arrays.fill(pressure, 0); Arrays.fill(direction, 0);
 	}
 
 	PressureProjectionResult solve(GranularPressureCoupling granular, double target) {
@@ -48,7 +40,7 @@ final class GranularCoupledPressureSolver {
 			unknowns[count++] = row;
 			diagonal[row] = domain.projection.gasMatrixDiagonal[node] + granular.gasDiagonal(node);
 		}
-		preconditioner.prepare(unknowns, count);
+		preconditioner.prepare(unknowns, count, diagonal);
 		drag.buildRhs(rhs);
 		// Geometry is fixed during the nonlinear solve. Reuse its previous pressure,
 		// but recompute the residual against the updated resistance and right-hand side.
@@ -57,7 +49,7 @@ final class GranularCoupledPressureSolver {
 			int row = unknowns[ordinal];
 			residual[row] = rhs[row] - product[row];
 		}
-		preconditioner.apply(unknowns, count, diagonal, residual, direction);
+		preconditioner.apply(unknowns, count, residual, direction);
 		double rz = dot(residual, direction);
 		double rms = norm(residual);
 		int iterations = 0;
@@ -80,11 +72,11 @@ final class GranularCoupledPressureSolver {
 					residual[row] = rhs[row] - product[row];
 				}
 				rms = norm(residual);
-				if (rms <= target) { iterations++; break; }
+				if (rms <= attainableTolerance(target)) { iterations++; break; }
 				for (int ordinal = 0; ordinal < count; ordinal++) direction[unknowns[ordinal]] = 0;
 				rz = Double.POSITIVE_INFINITY;
 			}
-			preconditioner.apply(unknowns, count, diagonal, residual, preconditioned);
+			preconditioner.apply(unknowns, count, residual, preconditioned);
 			double nextRz = dot(residual, preconditioned);
 			double beta = nextRz / rz;
 			for (int ordinal = 0; ordinal < count; ordinal++) {
@@ -93,19 +85,35 @@ final class GranularCoupledPressureSolver {
 			}
 			rz = nextRz;
 		}
+		drag.applyMatrix(pressure, product);
 		for (int ordinal = 0; ordinal < count; ordinal++) {
 			int row = unknowns[ordinal];
-			resolvedPressure[row] = reference[row] + pressure[row];
+			residual[row] = rhs[row] - product[row];
 		}
+		rms = norm(residual);
 		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
 			int cell = domain.projection.fluidUnknownCells[ordinal];
-			domain.projection.pressure[cell] = (float) resolvedPressure[cell];
+			domain.projection.pressure[cell] = (float) pressure[cell];
 		}
 		for (int ordinal = 0; ordinal < domain.projection.gasUnknownCount; ordinal++) {
 			int node = domain.projection.gasUnknownNodes[ordinal];
-			domain.projection.gasPressure[node] = (float) resolvedPressure[domain.cellCount + node];
+			domain.projection.gasPressure[node] = (float) pressure[domain.cellCount + node];
 		}
-		return new PressureProjectionResult(iterations, rms, Double.isFinite(rms) && rms <= target);
+		return new PressureProjectionResult(iterations, rms, Double.isFinite(rms) && rms <= attainableTolerance(target));
+	}
+
+	/** Backward-error floor for the rounded Schur matrix-vector evaluation. */
+	private double attainableTolerance(double target) {
+		double maximumPressure = 0, scale = 0;
+		for (int ordinal = 0; ordinal < count; ordinal++) maximumPressure = Math.max(
+				maximumPressure, Math.abs(pressure[unknowns[ordinal]]));
+		for (int ordinal = 0; ordinal < count; ordinal++) {
+			int row = unknowns[ordinal];
+			double bound = Math.abs(rhs[row]) + 2 * diagonal[row] * maximumPressure;
+			scale = Math.hypot(scale, bound);
+		}
+		double floor = (count + 8.0) * Math.ulp(1.0) * 0.5 * scale / Math.sqrt(Math.max(1, count));
+		return Double.isFinite(floor) ? Math.max(target, floor) : target;
 	}
 
 	private double norm(double[] vector) { return count == 0 ? 0 : Math.sqrt(dot(vector, vector) / count); }

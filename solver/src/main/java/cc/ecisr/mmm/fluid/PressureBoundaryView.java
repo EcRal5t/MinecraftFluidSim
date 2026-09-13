@@ -34,7 +34,7 @@ final class PressureBoundaryView {
 		}
 		return compliance;
 	}
-	double gasPressureOfNode(int node) { return domain.gasPressureOfNode(node); }
+	double gasPressureOfNode(int node) { return domain.gasBoundary.nodeGaugePressurePa(node); }
 	/** Cell-referenced cavity pressure with the ambient/inactive zero gate. */
 	float gasPressureOfAirCell(int airCell) { return domain.gasPressureOfAirCell(airCell); }
 }

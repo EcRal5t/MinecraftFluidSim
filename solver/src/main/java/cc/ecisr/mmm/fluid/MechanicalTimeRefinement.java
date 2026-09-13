@@ -5,7 +5,7 @@ final class MechanicalTimeRefinement extends RuntimeException {
 	final int minimumSubsteps;
 
 	MechanicalTimeRefinement(int minimumSubsteps) {
-		super("Projected granular motion requires at least " + minimumSubsteps + " mechanical substeps");
+		super("Projected motion requires at least " + minimumSubsteps + " mechanical substeps");
 		this.minimumSubsteps = minimumSubsteps;
 	}
 }

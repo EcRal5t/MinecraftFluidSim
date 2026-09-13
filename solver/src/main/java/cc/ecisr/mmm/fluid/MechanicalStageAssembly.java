@@ -51,7 +51,7 @@ final class MechanicalStageAssembly {
 		MechanicalStepPipeline pipeline = new MechanicalStepPipeline(
 				new MechanicalStepPipeline.Workspace(
 						domain.gasTopologyCoordinator, domain.mac, domain.pendingPhaseCellVolume,
-						domain.projection, domain.config, domain.thermalMarkerContext()),
+						domain.config),
 				pipelineAccess(domain), granular, bodyForce, pressure, gridToParticle, advection);
 		return new Stages(pressure, granular, bodyForce, gridToParticle, advection, particleToGrid, pipeline);
 	}
@@ -205,7 +205,6 @@ final class MechanicalStageAssembly {
 			@Override public int lastPressureIterations() { return domain.lastPressureIterations; }
 			@Override public ThermalDomainState thermalState() { return domain.thermalState; }
 			@Override public boolean hasPendingPhaseVolumeWork() { return domain.hasPendingPhaseVolumeWork(); }
-			@Override public float pressureReference() { return domain.pressureReference; }
 		};
 	}
 }

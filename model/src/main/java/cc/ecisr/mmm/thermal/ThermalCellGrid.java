@@ -242,7 +242,7 @@ public final class ThermalCellGrid {
 	private void assignSolvedCellEnergy(int cell, double requested) {
 		int remainderCarrier = -1;
 		double largestHeatCapacity = Double.NEGATIVE_INFINITY;
-		double assigned = 0.0;
+		SignedDyadic assigned = SignedDyadic.ZERO;
 		// Put the exact floating-point conservation remainder on the best-conditioned carrier. Phase commits
 		// append very small coherent batches after much larger liquid parcels; assigning the remainder to that
 		// list tail amplifies an unavoidable cell-sum roundoff into a measurable temperature mismatch.
@@ -257,9 +257,9 @@ public final class ThermalCellGrid {
 			if (carrier == remainderCarrier) continue;
 			double value = modeledEnergy(carrier, temperature[cell]);
 			carriers.setInternalEnergy(carrier, value);
-			assigned += value;
+			assigned = assigned.add(SignedDyadic.of(value));
 		}
-		double remainder = requested - assigned;
+		double remainder = SignedDyadic.of(requested).subtract(assigned).toDouble();
 		if (!Double.isFinite(remainder)) throw new IllegalArgumentException("Thermal carrier energy remainder is invalid");
 		carriers.setInternalEnergy(remainderCarrier, remainder);
 		validateCarrierAtCellTemperature(remainderCarrier, temperature[cell]);
@@ -423,18 +423,23 @@ public final class ThermalCellGrid {
 	}
 
 	private double modeledCellEnergy(int cell, double temperatureK) {
-		double total = 0.0;
+		double total = 0.0, correction = 0.0;
 		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			total += modeledEnergy(carrier, temperatureK);
+			double value = modeledEnergy(carrier, temperatureK), next = total + value;
+			correction += Math.abs(total) >= Math.abs(value) ? (total - next) + value : (value - next) + total;
+			total = next;
 		}
-		return total;
+		return total + correction;
 	}
 
 	private double modeledCellHeatCapacity(int cell, double temperatureK) {
-		double total = 0.0;
+		double total = 0.0, correction = 0.0;
 		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			total += carrierMass[carrier] * carrierMaterial[carrier].specificHeatAt(temperatureK);
+			double value = carrierMass[carrier] * carrierMaterial[carrier].specificHeatAt(temperatureK), next = total + value;
+			correction += Math.abs(total) >= Math.abs(value) ? (total - next) + value : (value - next) + total;
+			total = next;
 		}
+		total += correction;
 		if (!(Double.isFinite(total) && total > 0.0)) throw new IllegalArgumentException("Thermal cell heat capacity is invalid");
 		return total;
 	}

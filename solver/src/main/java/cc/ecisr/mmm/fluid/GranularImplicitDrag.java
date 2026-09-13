@@ -324,13 +324,16 @@ final class GranularImplicitDrag {
 
 	void buildRhs(double[] result) {
 		Arrays.fill(result, 0);
-		// Solve relative to each gas node's advected pressure, so its large storage
-		// contribution cancels algebraically instead of subtracting nearly equal doubles.
-		pressureVelocity(solver.reference());
-		for (int index = 0; index < size; index++) input[index] = forced[index] + dt * input[index];
+		// Assemble storage and advected momentum in one uniform pressure gauge.
+		System.arraycopy(forced, 0, input, 0, size);
 		responseDelta();
 		for (int index = 0; index < size; index++) delta[index] += input[index];
 		addDivergence(delta, result, -domain.config.density() / dt);
+		for (int ordinal = 0; ordinal < domain.projection.gasUnknownCount; ordinal++) {
+			int node = domain.projection.gasUnknownNodes[ordinal];
+			result[domain.cellCount + node] += domain.projection.gasStorageCoefficient[node]
+					* (domain.pressureBoundaryView.gasPressureOfNode(node) - domain.pressureReference);
+		}
 	}
 
 	void applyMatrix(double[] source, double[] result) {

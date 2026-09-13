@@ -133,7 +133,9 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		GasThermalModel model = new GasThermalModel(new ThermalRegistry(List.of(air)), gas);
 		require(model.internalEnergyAtTemperature(GasInventory.EMPTY, GasRegistry.STANDARD_TEMPERATURE_K) == 0.0
 				&& model.absolutePressure(GasInventory.EMPTY, 1.0, 0.0) == 0.0
-				&& model.density(GasInventory.EMPTY, 1.0) == 0.0,
+				&& model.density(GasInventory.EMPTY, 1.0) == 0.0
+				&& model.absolutePressure(GasInventory.EMPTY, 0.0, 0.0) == 0.0
+				&& model.density(GasInventory.EMPTY, 0.0) == 0.0,
 				"thermal vacuum carried inventory, energy, pressure or density");
 		GasThermalModel.Compression vacuum = model.compressAdiabatically(
 				GasInventory.EMPTY, 0.0, 1.0, 0.5);
@@ -227,19 +229,19 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				"/data/mmm/mmm/thermal_materials/air.json");
 		     InputStreamReader waterReader = resourceReader(
 				"/data/mmm/mmm/thermal_materials/water.json");
-		     InputStreamReader vaporReader = resourceReader(
-				     "/data/mmm/mmm/thermal_materials/water_vapor.json");
 		     InputStreamReader iceReader = resourceReader(
 				"/data/mmm/mmm/thermal_materials/ice.json");
+		     InputStreamReader vaporReader = resourceReader(
+				     "/data/mmm/mmm/thermal_materials/water_vapor.json");
 		     InputStreamReader meltingReader = resourceReader(
 				     "/data/mmm/mmm/phase_transitions/ice_water.json");
 		     InputStreamReader transitionReader = resourceReader(
 				     "/data/mmm/mmm/phase_transitions/water_vapor.json")) {
 			ThermalMaterialDefinition air = ThermalDefinitionCodec.decodeMaterial("mmm:air", airReader);
 			ThermalMaterialDefinition water = ThermalDefinitionCodec.decodeMaterial("mmm:water", waterReader);
+			ThermalMaterialDefinition ice = ThermalDefinitionCodec.decodeMaterial("mmm:ice", iceReader);
 			ThermalMaterialDefinition vapor = ThermalDefinitionCodec.decodeMaterial("mmm:water_vapor", vaporReader);
 			ThermalPhaseTransition transition = ThermalDefinitionCodec.decodeTransition(
-			ThermalMaterialDefinition ice = ThermalDefinitionCodec.decodeMaterial("mmm:ice", iceReader);
 					"mmm:water_vapor", transitionReader);
 			ThermalPhaseTransition melting = ThermalDefinitionCodec.decodeTransition(
 					"mmm:ice_water", meltingReader);
@@ -706,6 +708,26 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& close(vacuumMerge.thermalState.gasTemperature(1, vacuumMerge.gasState.network),
 					temperatureBeforeVacuum),
 				"gas/vacuum topology merge created reversible boundary work or changed U");
+
+		// The scanner's local void weights can exceed its globally normalized closed
+		// capacity when liquid markers cluster. An unowned local fringe adds no new
+		// control volume if that global capacity has stayed constant.
+		int[] membership = vacuumMerge.gasState.cellNodeId.clone();
+		int[] lineage = vacuumMerge.gasState.cellLineageNodeId.clone();
+		double[] localVolumes = new double[8];
+		for (int cell = 0; cell < 8; cell++) if (membership[cell] > 0) localVolumes[cell] = 0.0625;
+		int unowned = vacuumMerge.cellIndex(0, 1, 0);
+		require(lineage[unowned] < 0, "normalized remap fixture needs an unowned fringe");
+		membership[unowned] = lineage[unowned] = 1;
+		localVolumes[unowned] = 0.125;
+		var normalizedRemap = vacuumMerge.gasTopologyCoordinator.plan(new AirCavityScanner.Result(
+				membership, lineage, localVolumes, 1,
+				new double[] {vacuumMerge.gasBoundary().availableVolume(1)}, List.of(), 3,
+				AirCavityScanner.StopReason.COMPLETED), false);
+		require(normalizedRemap.thermalPlan().mechanicalWork().equals(SignedDyadic.ZERO)
+				&& normalizedRemap.thermalPlan().nodeEnergy()[0]
+				== vacuumMerge.thermalState.gasNodeEnergy(1, vacuumMerge.gasState.network),
+				"normalized local fringe invented gas compression work at unchanged closed capacity");
 	}
 
 	static void thermalGasPressureRowUsesIsentropicCompliance() {
@@ -1020,11 +1042,13 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					+ " workCompare=" + domain.thermalAudit().mechanicalWork().compareTo(auditBefore.mechanicalWork())
 					+ " pending=" + domain.hasPendingPhaseVolumeWork()
 					+ " thermalAudit=" + domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
-		ThermalAuditLedger beforeBoilingProjection = domain.thermalAudit();
+		FluidDomain referenceBoilingProjection = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		java.util.Arrays.fill(referenceBoilingProjection.pendingPhaseCellVolume, SignedDyadic.ZERO);
+		referenceBoilingProjection.step(false, 0);
 		domain.step(false, 0);
 		require(!domain.hasPendingPhaseVolumeWork()
-				&& domain.thermalAudit().mechanicalWork().compareTo(
-						beforeBoilingProjection.mechanicalWork()) > 0
+				&& domain.exactInternalEnergy().equals(referenceBoilingProjection.exactInternalEnergy())
+				&& domain.thermalAudit().mechanicalWork().equals(referenceBoilingProjection.thermalAudit().mechanicalWork())
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"boiling phase volume was not consumed by the next real pressure projection");
 		domain.setThermalTemperatureInCell(1, 1, 1, 300.0);
@@ -1067,11 +1091,13 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						+ java.util.Arrays.toString(domain.exportThermalParticleState().copyGasNodeEnergy())
 						+ " liquid=" + SignedDyadic.sum(beforeCondensationState.copyInternalEnergy()) + "->"
 						+ SignedDyadic.sum(domain.exportThermalParticleState().copyInternalEnergy()));
-		ThermalAuditLedger beforeCondensationProjection = domain.thermalAudit();
+		FluidDomain referenceCondensationProjection = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		java.util.Arrays.fill(referenceCondensationProjection.pendingPhaseCellVolume, SignedDyadic.ZERO);
+		referenceCondensationProjection.step(false, 0);
 		domain.step(false, 0);
 		require(!domain.hasPendingPhaseVolumeWork()
-				&& domain.thermalAudit().mechanicalWork().compareTo(
-						beforeCondensationProjection.mechanicalWork()) < 0
+				&& domain.exactInternalEnergy().equals(referenceCondensationProjection.exactInternalEnergy())
+				&& domain.thermalAudit().mechanicalWork().equals(referenceCondensationProjection.thermalAudit().mechanicalWork())
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"condensation phase volume was not consumed by the next real pressure projection");
 	}

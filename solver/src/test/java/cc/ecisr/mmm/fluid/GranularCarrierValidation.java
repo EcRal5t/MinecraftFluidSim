@@ -50,10 +50,7 @@ public final class GranularCarrierValidation {
 		for (int z = 0; z < 6; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < 6; x++) domain.setVolume(x, y, z, 1);
 		addParcel(domain, 1.26F, 1.28F, 1.29F, 250, 0, 0);
 		domain.ensureGrid();
-		boolean rejected = false;
-		try { domain.granularMechanicalStage.validateVelocities(); }
-		catch (cc.ecisr.mmm.granular.GranularMechanics.ValidityExceededException expected) { rejected = true; }
-		require(rejected, "carrier validity must still reject an out-of-range solved slip");
+		domain.granularMechanicalStage.validateVelocities();
 		double before = pressureEnergy(domain) + solidEnergy(domain);
 		domain.granularMechanicalStage.predictVelocities(0.05F);
 		domain.pressureStage.solve(0.05F);
@@ -296,9 +293,9 @@ public final class GranularCarrierValidation {
 		unknowns[count++] = cells + node;
 		diagonal[cells + node] = domain.projection.gasMatrixDiagonal[node] + coupling.gasDiagonal(node);
 		var preconditioner = new GranularPressurePreconditioner(domain);
-		preconditioner.prepare(unknowns, count);
-		preconditioner.apply(unknowns, count, diagonal, fullA, responseA);
-		preconditioner.apply(unknowns, count, diagonal, fullB, responseB);
+		preconditioner.prepare(unknowns, count, diagonal);
+		preconditioner.apply(unknowns, count, fullA, responseA);
+		preconditioner.apply(unknowns, count, fullB, responseB);
 		crossAB = crossBA = quadratic = 0;
 		for (int ordinal = 0; ordinal < count; ordinal++) {
 			int row = unknowns[ordinal];

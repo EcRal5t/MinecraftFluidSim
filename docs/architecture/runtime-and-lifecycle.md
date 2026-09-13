@@ -103,11 +103,11 @@ CPU 可以把已算好的私有 `FluidDomain` 交给区域，省去正常帧的�
 排气保留气腔空间，把气体库存与内能结算为零，形成密闭真空。操作后区域保持暂停，玩家可显式恢复运行。
 
 <a id="phase-work"></a>
-## 转移前结算相变功
+## 转移前同步相变几何
 
-相变造成的体积变化会留下待结算的压力功 `-pΔV`，由后续真实压力投影处理。桶、发射器、管理员转移或生命周期操作若遇到这项记录，先调用 [MinecraftPendingPhaseWorkBarrier](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftPendingPhaseWorkBarrier.java)。
+相变造成的体积变化会留下待同步几何记录，由后续真实压力投影处理。相变本身联合守恒内能，内部相界位移不单独计入外部功。桶、发射器、管理员转移或生命周期操作若遇到这项记录，先调用 [MinecraftPendingPhaseWorkBarrier](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftPendingPhaseWorkBarrier.java)。
 
-它通过当前后端执行一次仅含力学的计算，结清已有压力功。该次计算跳过导热、反应和相变，因此不会立即新增相变待结算记录。结算成功后，以新的已提交区域状态准备容器事务或操作预览；失败时保留相应的阻止原因。
+它通过当前后端执行一次仅含力学的计算，完成已有相变几何的力学同步。该次计算跳过导热、反应和相变，因此不会立即新增相变待结算记录。结算成功后，以新的已提交区域状态准备容器事务或操作预览；失败时保留相应的阻止原因。
 
 <a id="world-inputs"></a>
 ## 实体与碰撞输入

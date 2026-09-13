@@ -11,7 +11,7 @@
 | 物品数据与日志文件 | [ContainerItemMapper](../../fabric/src/main/java/cc/ecisr/mmm/item/ContainerItemMapper.java)、[ContainerJournalCodec](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/ContainerJournalCodec.java)、[ContainerJournalFileStore](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/ContainerJournalFileStore.java) | `containers` |
 | 事务提交与恢复 | [ContainerTransferCoordinator](../../application/src/main/java/cc/ecisr/mmm/application/ContainerTransferCoordinator.java)、[ContainerRecoveryCoordinator](../../application/src/main/java/cc/ecisr/mmm/application/ContainerRecoveryCoordinator.java)、[CrossDomainRecovery](../../model/src/main/java/cc/ecisr/mmm/recovery/CrossDomainRecovery.java) | `containers` |
 | 清空、排气和移除 | [MinecraftRegionLifecycle](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRegionLifecycle.java)、[RegionLifecycleUseCase](../../application/src/main/java/cc/ecisr/mmm/application/RegionLifecycleUseCase.java) | `lifecycle,region-state` |
-| 转移前结算相变功 | [MinecraftPendingPhaseWorkBarrier](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftPendingPhaseWorkBarrier.java) | `containers,thermal` |
+| 转移前同步相变几何 | [MinecraftPendingPhaseWorkBarrier](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftPendingPhaseWorkBarrier.java) | `containers,thermal` |
 
 执行方式见 [验证指南](../maintenance/validation.md#cpu)。
 
@@ -94,7 +94,7 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 
 控制器方块只在真正空手时处理 select/run-intent 激活；任何持物右击都先交还物品入口，不能吞掉探针或容器交互。纯 wall-time `PERFORMANCE_PAUSE` 不代表库存或账本不可解释，因此仍允许 `drain`、容器装取和上述只减少库存的 lifecycle；已加载且 HEAD、registry 与 WAL 均可证明的 `NUMERICAL_PAUSE` 也允许上述私有候选式 lifecycle 减库存，以便清空、排气、释放和移除故障区域。
 
-预览记录当前状态前，先通过共享的相变功处理器执行一次仅含力学的计算，结清旧的 `-pΔV` 压力功。结算失败时，预览保留 `PENDING_PHASE_WORK` 阻止原因。
+预览记录当前状态前，先通过共享的相变几何处理器执行一次仅含力学的计算，完成相变后几何与压力的同步。失败时，预览保留 `PENDING_PHASE_WORK` 阻止原因。
 
 两类操作后都保持暂停，需显式 resume。边界、ownership、pending WAL、无效 HEAD、registry/profile、开放 audit、无法结算的 phase work 或 quarantine blocker 仍在预览中明确列出并阻止提交。
 

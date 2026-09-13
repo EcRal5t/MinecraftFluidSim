@@ -25,6 +25,8 @@ import cc.ecisr.mmm.granular.BuiltinGranularDefinitions;
 import cc.ecisr.mmm.granular.SolidCompositionRecord;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.fluid.FluidDomain;
+import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
+import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
@@ -813,7 +815,7 @@ public final class ContainerTransferStoreValidation {
 					"full-profile rapid-pour fixture did not publish its empty base");
 
 			for (int pour = 0; pour < 24; pour++) {
-				if (region.domain().hasPendingPhaseVolumeWork()) region.domain().step(false, 0);
+				if (region.domain().hasPendingPhaseVolumeWork()) advance(region, false);
 				long baseGeneration = region.checkpointGeneration();
 				FluidDomain candidate = FluidDomain.restoreAuthoritativeState(
 						region.domain().captureAuthoritativeState());
@@ -830,7 +832,7 @@ public final class ContainerTransferStoreValidation {
 				check(region.domain().gasBoundary().auditClosed()
 						&& region.domain().exactInternalEnergy().equals(region.domain().thermalAudit().expectedInventory()),
 						"rapid full-profile pour " + pour + " restored an open gas or thermal audit");
-				region.domain().step(true, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP);
+				advance(region, true);
 				if ((pour + 1) % 8 == 0) {
 					persistence.checkpointAndUnload(region);
 					persistence.restore(region);
@@ -838,7 +840,7 @@ public final class ContainerTransferStoreValidation {
 				}
 			}
 
-			if (region.domain().hasPendingPhaseVolumeWork()) region.domain().step(false, 0);
+			if (region.domain().hasPendingPhaseVolumeWork()) advance(region, false);
 			long clearBase = region.checkpointGeneration();
 			FluidDomain cleared = FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
 			cleared.commitOperatorClear(cleared.planOperatorClear());
@@ -883,6 +885,13 @@ public final class ContainerTransferStoreValidation {
 				for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
 			}
 		}
+	}
+
+	private static void advance(FluidRegion region, boolean phase) {
+		var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+				region.solverGeneration(), region.domain().captureAuthoritativeState(), java.util.List.of(),
+				phase, phase ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0));
+		region.adoptStepCandidate(candidate, CpuFluidSolverBackend.ID);
 	}
 
 	private static void run(String name, ThrowingRunnable scenario) throws Exception {

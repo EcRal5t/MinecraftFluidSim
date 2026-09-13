@@ -253,6 +253,9 @@ final class CondensedPhaseChangeStage {
 		LiquidParticleStore particles = support.state().particles();
 		long lowerDelta = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
 		long upperDelta = Math.multiplyExact(batches, transition.upperVolumeSvqPerBatch());
+		if (!support.canExpandCondensedVolume(freezing ? lowerDelta - upperDelta : upperDelta - lowerDelta)) {
+			throw new PhaseCandidateUnavailableException("Condensed phase expansion exceeds region carrier capacity");
+		}
 		double requestedMass = transition.massMuPerBatch().toDouble() * batches;
 		if (!(Double.isFinite(requestedMass) && requestedMass > 0.0)) {
 			throw new FluidDomain.ThermalPhaseBlockedException(

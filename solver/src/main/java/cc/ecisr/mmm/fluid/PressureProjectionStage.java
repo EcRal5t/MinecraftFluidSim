@@ -40,12 +40,15 @@ final class PressureProjectionStage {
 	private final Access access;
 	private final PressureSystem system;
 	private final PressureBoundaryView gasBoundary;
+	private final boolean[] referenceNodes;
+	private int pressureAnchor;
 
 	PressureProjectionStage(Workspace state, Access access, PressureSystem system, PressureBoundaryView gasBoundary) {
 		this.state = state;
 		this.access = access;
 		this.system = system;
 		this.gasBoundary = gasBoundary;
+		referenceNodes = new boolean[state.projection.gasPressureUnknown.length];
 	}
 
 	void solve(float dt) {
@@ -58,12 +61,11 @@ final class PressureProjectionStage {
 		Arrays.fill(state.projection.gasStorageCoefficient, 0.0F);
 		state.projection.fluidUnknownCount = 0;
 		state.projection.gasUnknownCount = 0;
-		int pressureAnchor = findPressureAnchor();
+		pressureAnchor = findPressureAnchor();
 		access.pressureAnchor(pressureAnchor);
 		access.pressureReference(pressureAnchor < 0 ? pressureBoundaryReference() : 0.0F);
 		Arrays.fill(state.projection.pressure, 0.0F);
 		float inverseCell = 1.0F / state.config.cellSize();
-		float rhsScale = -state.config.density() / dt;
 		int fluidCells = 0;
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int index = access.cellIndex(x, y, z);
@@ -76,7 +78,7 @@ final class PressureProjectionStage {
 					- access.pressureZFaceOpen(x, y, z) * state.mac.velocityZ[access.zFaceIndex(x, y, z)]) * inverseCell;
 			float correctedDivergence = div + access.surfaceTensionBoundaryDivergence(index, dt);
 			state.projection.divergence[index] = correctedDivergence;
-			state.projection.rhs[index] = rhsScale * correctedDivergence;
+			// The paired face pass below assembles the pressure RHS without cancellation of gas loads.
 			state.projection.fluidUnknownCells[state.projection.fluidUnknownCount++] = index;
 			fluidCells++;
 		}
@@ -98,12 +100,12 @@ final class PressureProjectionStage {
 
 	void projectVelocities(float dt) {
 		boolean coupled = system.projectGranular(dt);
-		float scale = dt / (state.config.density() * state.config.cellSize());
+		double scale = dt / (state.config.density() * (double) state.config.cellSize());
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 1; x < state.sizeX; x++) {
 			int left = access.cellIndex(x - 1, y, z), right = access.cellIndex(x, y, z), face = access.xFaceIndex(x, y, z);
 			float openArea = access.pressureXFaceOpen(x, y, z);
 			if (faceActive(left, right, openArea)) {
-				float difference = coupled ? 0 : pressureDifference(left, right, 1, 0, 0);
+				double difference = coupled ? 0 : pressureDifference(left, right, 1, 0, 0);
 				state.mac.velocityX[face] -= scale * difference;
 			} else if (!access.carrierFaceActive(left, right, openArea)) state.mac.velocityX[face] = 0.0F;
 		}
@@ -111,7 +113,7 @@ final class PressureProjectionStage {
 			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z), face = access.yFaceIndex(x, y, z);
 			float openArea = access.pressureYFaceOpen(x, y, z);
 			if (faceActive(below, above, openArea)) {
-				float difference = coupled ? 0 : pressureDifference(below, above, 0, 1, 0);
+				double difference = coupled ? 0 : pressureDifference(below, above, 0, 1, 0);
 				state.mac.velocityY[face] -= scale * difference;
 			} else if (!access.carrierFaceActive(below, above, openArea)) state.mac.velocityY[face] = 0.0F;
 		}
@@ -119,28 +121,28 @@ final class PressureProjectionStage {
 			int back = access.cellIndex(x, y, z - 1), front = access.cellIndex(x, y, z), face = access.zFaceIndex(x, y, z);
 			float openArea = access.pressureZFaceOpen(x, y, z);
 			if (faceActive(back, front, openArea)) {
-				float difference = coupled ? 0 : pressureDifference(back, front, 0, 0, 1);
+				double difference = coupled ? 0 : pressureDifference(back, front, 0, 0, 1);
 				state.mac.velocityZ[face] -= scale * difference;
 			} else if (!access.carrierFaceActive(back, front, openArea)) state.mac.velocityZ[face] = 0.0F;
 		}
 	}
 
-	private float pressureDifference(int first, int second, int directionX, int directionY, int directionZ) {
+	private double pressureDifference(int first, int second, int directionX, int directionY, int directionZ) {
 		boolean firstFluid = access.isFluid(first);
 		boolean secondFluid = access.isFluid(second);
 		PressureFaceCoupling coupling = access.pressureFaceCoupling(
 				first, second, directionX, directionY, directionZ);
-		float firstPressure = firstFluid ? state.projection.pressure[first]
+		double firstPressure = firstFluid ? system.liquidPressure(first)
 				: gasPressureOfAirCell(first);
-		float secondPressure = secondFluid ? state.projection.pressure[second]
+		double secondPressure = secondFluid ? system.liquidPressure(second)
 				: gasPressureOfAirCell(second);
-		return coupling.orientedPressureDifference(firstPressure, secondPressure);
+		return coupling.mobilityScale() * (secondPressure - firstPressure + coupling.pressureJumpFirstMinusSecond());
 	}
 
-	private float gasPressureOfAirCell(int airCell) {
+	private double gasPressureOfAirCell(int airCell) {
 		int node = gasBoundary.gasNodeOfAirCell(airCell);
 		return node > 0 && state.projection.gasPressureUnknown[node]
-				? state.projection.gasPressure[node]
+				? system.gasPressure(node)
 				: gasBoundary.gasPressureOfAirCell(airCell) - access.pressureReference();
 	}
 
@@ -181,32 +183,29 @@ final class PressureProjectionStage {
 	) {
 		if (!(openArea > 0.0F) || state.geometry.solid[first] || state.geometry.solid[second]) return;
 		boolean firstFluid = access.isFluid(first), secondFluid = access.isFluid(second);
-		if (firstFluid == secondFluid) return;
+		if (!firstFluid && !secondFluid) return;
+		double h = state.config.cellSize();
+		double flux = state.config.density() * (double) openArea * orientedVelocity / (dt * h);
+		if (firstFluid && first != pressureAnchor) state.projection.rhs[first] -= flux;
+		if (secondFluid && second != pressureAnchor) state.projection.rhs[second] += flux;
+		if (firstFluid && secondFluid) return;
 		int fluid = firstFluid ? first : second;
 		int air = firstFluid ? second : first;
 		int node = gasBoundary.gasNodeOfAirCell(air);
-		if (!gasBoundary.gasNodeHasContinuumState(node)) return;
-		if (!activateCompressibleGasNode(node, dt)) return;
-
-		int liquidDirectionX = firstFluid ? directionX : -directionX;
-		int liquidDirectionY = firstFluid ? directionY : -directionY;
-		int liquidDirectionZ = firstFluid ? directionZ : -directionZ;
-		PressureFaceCoupling liquidToGas = access.pressureFaceCoupling(
-				fluid, air, liquidDirectionX, liquidDirectionY, liquidDirectionZ);
-		float inverseCellSquared = 1.0F / (state.config.cellSize() * state.config.cellSize());
-		float coefficient = liquidToGas.matrixCoefficient(openArea) * inverseCellSquared;
-		float advectedGasPressure = (float) (gasBoundary.gasPressureOfNode(node) - access.pressureReference());
-		// The existing ghost-fluid RHS already contains p_g,adv + jump. Keep the jump, and move
-		// p_g from its Dirichlet RHS into the new symmetric matrix off-diagonal.
-		state.projection.rhs[fluid] -= coefficient * advectedGasPressure;
-		state.projection.gasMatrixDiagonal[node] += coefficient;
-		float liquidToGasVelocity = firstFluid ? orientedVelocity : -orientedVelocity;
-		float compressionRhs = state.config.density() * openArea * liquidToGasVelocity
-				/ (dt * state.config.cellSize());
-		state.projection.gasRhs[node] += compressionRhs
-				- liquidToGas.firstJumpRhs(openArea) * inverseCellSquared;
+		boolean finite = gasBoundary.gasNodeHasContinuumState(node) && activateCompressibleGasNode(node, dt);
+		PressureFaceCoupling coupling = access.pressureFaceCoupling(fluid, air,
+				firstFluid ? directionX : -directionX, firstFluid ? directionY : -directionY,
+				firstFluid ? directionZ : -directionZ);
+		double coefficient = coupling.matrixCoefficient(openArea) / (h * h);
+		double jump = coefficient * coupling.pressureJumpFirstMinusSecond();
+		state.projection.rhs[fluid] += jump;
+		if (finite) {
+			state.projection.gasMatrixDiagonal[node] += coefficient;
+			state.projection.gasRhs[node] += (firstFluid ? flux : -flux) - jump;
+		} else {
+			state.projection.rhs[fluid] += coefficient * (gasBoundary.gasPressureOfAirCell(air) - access.pressureReference());
+		}
 	}
-
 	private boolean activateCompressibleGasNode(int node, float dt) {
 		if (state.projection.gasPressureUnknown[node]) return true;
 		double cellSize = state.config.cellSize();
@@ -215,21 +214,21 @@ final class PressureProjectionStage {
 		if (!(storage > 0.0) || Double.isNaN(storage)) {
 			throw new IllegalStateException("Compressible gas-node pressure row exceeds solver precision");
 		}
-		if (!Double.isFinite(storage) || storage > Float.MAX_VALUE) return false;
+		if (!Double.isFinite(storage)) return false;
 		double advectedPressure = gasBoundary.gasPressureOfNode(node) - access.pressureReference();
 		double rhs = storage * advectedPressure;
 		if (Double.isNaN(rhs)) {
 			throw new IllegalStateException("Compressible gas-node pressure row exceeds solver precision");
 		}
 		// A physically near-vacuum node can have a valid EoS pressure but a compliance too large
-		// for the float PCG row. Keep its actual pressure as this projection's Dirichlet boundary;
+		// for the pressure row. Keep its actual pressure as this projection's Dirichlet boundary;
 		// the following topology remap still settles the exact isentropic volume work.
-		if (!Double.isFinite(rhs) || rhs < -Float.MAX_VALUE || rhs > Float.MAX_VALUE) return false;
+		if (!Double.isFinite(rhs)) return false;
 		state.projection.gasPressureUnknown[node] = true;
 		state.projection.gasUnknownNodes[state.projection.gasUnknownCount] = node;
-		state.projection.gasStorageCoefficient[node] = (float) storage;
-		state.projection.gasMatrixDiagonal[node] = (float) storage;
-		state.projection.gasRhs[node] = (float) rhs;
+		state.projection.gasStorageCoefficient[node] = storage;
+		state.projection.gasMatrixDiagonal[node] = storage;
+		state.projection.gasRhs[node] = rhs;
 		state.projection.gasUnknownCount++;
 		return true;
 	}
@@ -241,7 +240,9 @@ final class PressureProjectionStage {
 
 	private float pressureBoundaryReference() {
 		if (!gasBoundary.pressureActive()) return 0.0F;
-		int referenceNode = Integer.MAX_VALUE;
+		boolean[] seen = referenceNodes;
+		Arrays.fill(seen, false);
+		system.forEachGranularGasNode(node -> seen[Math.max(0, node)] = true);
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int air = access.cellIndex(x, y, z);
 			if (!access.isAir(air)) continue;
@@ -259,11 +260,20 @@ final class PressureProjectionStage {
 					&& access.isFluid(access.cellIndex(x, y, z + 1));
 			if (!touchesFluid) continue;
 			int node = gasBoundary.gasNodeOfAirCell(air);
-			if (node < 0) continue;
-			referenceNode = Math.min(referenceNode, node);
-			if (referenceNode == AirNetwork.AMBIENT_NODE) return 0.0F;
+			seen[Math.max(0, node)] = true;
 		}
-		return referenceNode == Integer.MAX_VALUE ? 0.0F : (float) gasBoundary.gasPressureOfNode(referenceNode);
+		if (seen[AirNetwork.AMBIENT_NODE]) return 0.0F;
+		double compliance = 0, reference = 0;
+		for (int node = 1; node < seen.length; node++) {
+			if (seen[node]) {
+				if (!gasBoundary.gasNodeHasContinuumState(node)) return (float) gasBoundary.gasPressureOfNode(node);
+				double weight = gasBoundary.gasNodeVolumeCompliance(node);
+				if (!Double.isFinite(weight)) return (float) gasBoundary.gasPressureOfNode(node);
+				compliance += weight;
+				reference += (gasBoundary.gasPressureOfNode(node) - reference) * (weight / compliance);
+			}
+		}
+		return (float) reference;
 	}
 
 	private int findPressureAnchor() {

@@ -65,19 +65,19 @@
 
 ### 后端候选接口
 
-`FluidDomainState` 包含一种液体载体布局（pure/material/chemical），以及对应注册表、颗粒、气体、热学、待结算相变功、求解配置和预算。
+`FluidDomainState` 包含一种液体载体布局（pure/material/chemical），以及对应注册表、颗粒、气体、热学、待同步相变几何、求解配置和预算。
 
 交给下一次计算的输入还包含三类临时数据：化学与颗粒调度进度、世界热交换面、最近一次真实压力投影。它们随计算状态交接。区域 checkpoint 保存的字段另有定义，见 [区域存档](region-state.md)。丢失热交换面会漏掉实际热通量；反复重置颗粒调度进度会使沉积永远无法休眠。
 
 静水热区域从存档恢复后，先唤醒一次力学计算，重建压力投影，再允许单独热计算使用它判断相平衡。
 
-`FluidStepRequest` 还可携带有数量上限的实体运动输入。后端在私有状态上施加粒子冲量，再执行完整计算步，结果报告实际作用于液体的体积和冲量。用于结算旧相变功的请求要求实体输入为空、相变和机械诊断审计关闭，由同一后端选择仅含力学的流程。
+`FluidStepRequest` 还可携带有数量上限的实体运动输入。后端在私有状态上施加粒子冲量，再执行完整计算步，结果报告实际作用于液体的体积和冲量。用于同步相变几何的请求要求实体输入为空、相变和机械诊断审计关闭，由同一后端选择仅含力学的流程。
 
 力学结果使用 `FluidStepCandidate`，静水热计算使用 `FluidThermalStepCandidate`。两者都返回原代次的紧邻后继，并接受后端标识、代次和完整布局检查。`FluidDomainState.Layout` 固定网格、配置、预算、外壳、载体种类、注册表、功能身份和热学预算。
 
 CPU 在私有对象上顺序执行计算，任一阶段失败就丢弃整份候选，保留当前区域状态。成功后可直接交接这个对象一次。需要存档或诊断快照时，提交前调用 `state()` 生成不可变状态；提交后该对象已成为活动区域，历史候选的 `state()` 会拒绝调用。完整提交过程见 [运行时与区域操作](runtime-and-lifecycle.md#candidate)。
 
-初始子步数由液体、颗粒速度与重力预测的 Courant 数决定。压力加速后的颗粒速度还要在碰撞预览前复检。超限时，`MechanicalTimeRefinement` 携带所需子步数，CPU 后端丢弃候选，从原请求重新恢复并细化整个力学步；最多细化八次，仍无法满足条件则拒绝候选。重算包含实体输入、气体状态与待结算相变功，成功候选只提交一次。直接调用可变 `FluidDomain.step()` 的诊断代码会收到该细化异常；生产调用统一经过后端。
+初始子步数由液体、颗粒速度与重力预测的 Courant 数决定。压力加速后的液体 MAC 速度与颗粒速度还要在碰撞预览前复检。超限时，`MechanicalTimeRefinement` 携带所需子步数，CPU 后端丢弃候选，从原请求重新恢复并细化整个力学步；最多细化十六次，仍无法满足条件则拒绝候选。重算包含实体输入、气体状态与待同步相变几何，成功候选只提交一次。直接调用可变 `FluidDomain.step()` 的诊断代码会收到该细化异常；生产调用统一经过后端。
 
 成功结果携带本步输运、化学、颗粒反应和相变诊断。力学 `StepStats` 另含颗粒沉积与唤醒诊断。调度器据本步结果判断活动状态。
 
@@ -107,7 +107,7 @@ marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新�
 
 ### 时间步与 CFL
 
-配置中的 `timeStep` 是 logical step 时间；mechanical core 根据液体 marker、颗粒速度和重力预测、cell size 与 `maxCourantNumber` 选择子步，并复检压力后的颗粒位移。子步细化保持本 logical step 的总时间、外部 source/sink 和相变预算。wall-time pacing 只改变 logical step 被调度的 tick 间隔。
+配置中的 `timeStep` 是 logical step 时间；mechanical core 根据液体 marker、颗粒速度和重力预测、cell size 与 `maxCourantNumber` 选择子步，并复检压力后的液体与颗粒位移。子步细化保持本 logical step 的总时间、外部 source/sink 和相变预算。wall-time pacing 只改变 logical step 被调度的 tick 间隔。
 
 ## Logical step
 
@@ -142,9 +142,10 @@ div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 - 重力、热浮力和速度载体 face 仍由实际 marker occupancy 激活，不能因 pressure footprint 变宽而给孤立液滴稀释重力。
 - cut-face aperture、界面距离和 `1/rho` 面系数同时进入矩阵、预条件器和最终投影，避免三个路径使用不同几何。
 - 变密度 face coefficient 按两侧界面距离守恒加权；同密度材料必须退化为纯水矩阵。
-- PCG 对活动 liquid cell 与接触液体的有限 sealed gas node 联合求解；`pressureTolerance` 是整个 block system 的绝对 RMS 代数残差，不随 RHS/静水载荷放大。同一次 projection 的 fluid unknown 集、face mobility、diagonal 与 gas storage 在迭代前装配一次，PCG 只在该固定 block operator 上更新向量；迭代中不得重复重建物理系数，也不得改变相分类。迭代预算耗尽、breakdown、非有限残差或无法闭合有限库存/容量 owner 的 gas topology 会以各自 typed failure 拒绝完整候选并把生产区域标记 `NUMERICAL_PAUSE`，不会以未收敛压力或部分 gas remap 继续 advection。其他 `IllegalStateException` 不在该边界被宽泛吞掉。
-- 环境表压为 gauge zero。gas topology 的 runtime lineage 还会沿连通 pressure-air fringe 扩展到实际 ghost face，但不会穿过 pressure-fluid bulk。只有密闭气体边界时，求解器先减去一个统一 gas gauge reference，PCG 只承受相对压力；对外压力观察、相平衡与 pending `-p ΔV` 再加回该 reference。多个 gas lineage 之间的压差不被消除。
-- 活动颗粒通过占据率空间导数、有限质量和隐式阻力响应参与压力矩阵；阻力按子步末滑移迭代，液体与颗粒速度一起满足体积连续性；具体离散式见 [颗粒排水与压力](granular-state.md#统一排水与压力)。相变 pending 结算已发生的 marker 几何变化对应的压力功。
+- PCG 对活动 liquid cell 与接触液体的有限 sealed gas node 联合求解；`pressureTolerance` 是整个 block system 的目标绝对 RMS 代数残差。先按此目标迭代，再核验实际 `b-Ap`；极大压力下允许 binary64 矩阵求值的后向误差界，按未知量数量、机器精度及 `|b|+2 diag(A) max|p|` 的 RMS 推导，不使用固定相对容差。同一次 projection 的 fluid unknown 集、face mobility、diagonal 与 gas storage 在迭代前装配一次，PCG 只在该固定 block operator 上更新向量；迭代中不得重复重建物理系数，也不得改变相分类。迭代预算耗尽、breakdown、非有限残差或无法闭合有限库存/容量 owner 的 gas topology 会以各自 typed failure 拒绝完整候选并把生产区域标记 `NUMERICAL_PAUSE`，不会以未收敛压力或部分 gas remap 继续 advection。其他 `IllegalStateException` 不在该边界被宽泛吞掉。
+- CPU 压力向量、右端项、储存项和对角量使用 binary64。液体矩阵按每个面的压力差累加，保持常数压力的零梯度；速度修正使用尚未舍入的解。递推残差达到容差后重新计算 `b-Ap`，只有实际残差通过才接受。
+- 环境表压为 gauge zero。gas topology 的 runtime lineage 还会沿连通 pressure-air fringe 扩展到实际 ghost face，但不会穿过 pressure-fluid bulk。只有密闭气体边界时，求解器先减去按气腔 compliance 加权的统一 gas gauge reference，PCG 只承受相对压力；对外压力观察与相平衡再加回该 reference。参考选择同时覆盖液体和颗粒接触的给定压力项；有环境或未归属 fringe 时保持零参考，有真空时优先使用真空压力。多个 gas lineage 之间的压差保留。
+- 活动颗粒通过占据率空间导数、有限质量和隐式阻力响应参与压力矩阵；阻力按子步末滑移迭代，液体与颗粒速度一起满足体积连续性；具体离散式见 [颗粒排水与压力](granular-state.md#统一排水与压力)。相变 pending 记录尚待力学同步的 marker 几何变化。
 
 ### 液体与可压缩气体的能力边界
 

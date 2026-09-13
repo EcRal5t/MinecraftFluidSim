@@ -50,6 +50,7 @@ final class PhaseChangeStageSupport {
 		void refreshGasGeometry();
 		void refreshCoherentOccupancy();
 		void markGridDirty();
+		boolean canAddCarrierVolume(double volume);
 	}
 
 	private final Workspace state;
@@ -76,6 +77,9 @@ final class PhaseChangeStageSupport {
 	void refreshGasGeometry() { access.refreshGasGeometry(); }
 	void refreshCoherentOccupancy() { access.refreshCoherentOccupancy(); }
 	void markGridDirty() { access.markGridDirty(); }
+	boolean canExpandCondensedVolume(long svq) {
+		return svq <= 0 || access.canAddCarrierVolume(svq / (double) SolidVolume.SVQ_PER_CELL);
+	}
 	SignedDyadic exactInternalEnergy() { return access.exactInternalEnergy(); }
 
 	int fluidMaterialHandle(String stableId) {

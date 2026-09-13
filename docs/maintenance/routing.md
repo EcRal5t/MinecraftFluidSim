@@ -66,7 +66,7 @@
 | 修改内容 | 首先打开 | 需要了解的数据和算法 |
 |---|---|---|
 | 力学计算顺序 | [MechanicalStepPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStepPipeline.java)、[MechanicalStageAssembly](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStageAssembly.java) | [流体求解器](../architecture/fluid-solver.md) |
-| 压力矩阵、自由面、气液压力耦合 | [PressureProjectionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureProjectionStage.java)、[PressureProjectionWorkspace](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureProjectionWorkspace.java)、[PressureFaceCoupling](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureFaceCoupling.java) | [自由面与压力](../architecture/fluid-solver.md#自由面与压力) |
+| 压力矩阵、自由面、气液压力耦合 | [PressureProjectionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureProjectionStage.java)、[PressureSystem](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureSystem.java)、[PressureProjectionWorkspace](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureProjectionWorkspace.java)、[PressureFaceCoupling](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureFaceCoupling.java) | [自由面与压力](../architecture/fluid-solver.md#自由面与压力) |
 | 粒子到网格、网格到粒子的速度传递 | [ParticleToGridStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/ParticleToGridStage.java)、[GridToParticleStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GridToParticleStage.java)、[FlipTransferScheme](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipTransferScheme.java) | [流体求解器](../architecture/fluid-solver.md) |
 | 粒子运动和碰撞 | [ParticleAdvectionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/ParticleAdvectionStage.java)、[DivergenceConformingVelocityField](../../solver/src/main/java/cc/ecisr/mmm/fluid/DivergenceConformingVelocityField.java)、[FlipParticleCollision](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipParticleCollision.java) | [固体与碰撞](../architecture/fluid-solver.md#固体与碰撞) |
 | 表面张力和接触角 | [SurfaceTensionWorkspace](../../solver/src/main/java/cc/ecisr/mmm/fluid/SurfaceTensionWorkspace.java)、[BodyForceStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/BodyForceStage.java)、[FlipCutCellGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipCutCellGeometry.java) | [材料与界面](../architecture/material-state.md) |
@@ -97,7 +97,7 @@
 | 玩家和发射器转移物质 | [PlayerContainerTransferAdapter](../../fabric/src/main/java/cc/ecisr/mmm/simulation/PlayerContainerTransferAdapter.java)、[DispenserContainerTransferAdapter](../../fabric/src/main/java/cc/ecisr/mmm/simulation/DispenserContainerTransferAdapter.java)、[MinecraftContainerTransferPlan](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftContainerTransferPlan.java) | [容器事务](../architecture/world-ownership-and-containers.md#玩家与发射器路由) |
 | 物品库存编码 | [ContainerItemMapper](../../fabric/src/main/java/cc/ecisr/mmm/item/ContainerItemMapper.java)、[ContainerItemStacks](../../fabric/src/main/java/cc/ecisr/mmm/item/ContainerItemStacks.java) | [容器数据](../architecture/world-ownership-and-containers.md) |
 | 事务日志和故障恢复 | [ContainerTransferCoordinator](../../application/src/main/java/cc/ecisr/mmm/application/ContainerTransferCoordinator.java)、[ContainerRecoveryCoordinator](../../application/src/main/java/cc/ecisr/mmm/application/ContainerRecoveryCoordinator.java)、[CrossDomainRecovery](../../model/src/main/java/cc/ecisr/mmm/recovery/CrossDomainRecovery.java) | [恢复决策表](../architecture/world-ownership-and-containers.md#恢复决策表) |
-| 转移前结算上一阶段的相变功 | [MinecraftPendingPhaseWorkBarrier](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftPendingPhaseWorkBarrier.java) | [相变功结算](../architecture/runtime-and-lifecycle.md#phase-work) |
+| 转移前同步上一阶段的相变几何 | [MinecraftPendingPhaseWorkBarrier](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftPendingPhaseWorkBarrier.java) | [相变几何同步](../architecture/runtime-and-lifecycle.md#phase-work) |
 
 存档格式和能力包使用 `region-state`，世界归属使用 `ownership`，容器使用 `containers`，开发接管使用 `takeover`。跨区域和物品的改动通常需要同时运行 `region-state,containers`。
 
@@ -161,7 +161,7 @@ GPU probe 分为纯 Java/Vulkan 的 `gpu-probe-kernel` 和 Fabric 适配模块 `
 
 气压先查 [AirCavityScanner](../../solver/src/main/java/cc/ecisr/mmm/fluid/AirCavityScanner.java) 的气腔归属与可用体积，再查 [GasThermalModel](../../model/src/main/java/cc/ecisr/mmm/thermal/GasThermalModel.java) 的库存、内能与状态方程。相关测试为 `air-cavity,air-network,gas-liquid`。
 
-热暂停先读取具体失败状态，再对照 [热学专题](../architecture/thermal-state.md)检查注册表指纹、正温要求、压力有限性、内能收支、相变待结算功和气体拓扑。1 K 与热容标定端点本身都不会触发暂停；端点以外的热容函数使用连续延拓。测试使用 `thermal`。
+热暂停先读取具体失败状态，再对照 [热学专题](../architecture/thermal-state.md)检查注册表指纹、正温要求、压力有限性、内能收支、相变待同步几何和气体拓扑。1 K 与热容标定端点本身都不会触发暂停；端点以外的热容函数使用连续延拓。测试使用 `thermal`。
 
 ### 区域或容器被锁定
 

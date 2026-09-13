@@ -107,12 +107,32 @@ final class GranularPressureCoupling {
 		}
 	}
 
+	void apply(double[] source, double[] gasSource, double[] result, double[] gasResult) {
+		for (int parcel = 0; parcel < count; parcel++) {
+			double x = 0, y = 0, z = 0;
+			for (int index = parcel * 8; index < (parcel + 1) * 8; index++) {
+				double pressure = value(rows[index], source, gasSource);
+				x += gx[index] * pressure; y += gy[index] * pressure; z += gz[index] * pressure;
+			}
+			double scale = domain.config.density() * inverseMass[parcel];
+			for (int index = parcel * 8; index < (parcel + 1) * 8; index++) {
+				add(rows[index], result, gasResult, scale * (gx[index] * x + gy[index] * y + gz[index] * z));
+			}
+		}
+	}
+
 	void project(float dt) {
+		project(dt, null, null);
+	}
+
+	void project(float dt, double[] liquidPressure, double[] gasPressure) {
 		for (int parcel = 0; parcel < count; parcel++) {
 			var p = domain.granularState.parcels.parcel(parcel);
 			double x = boundaryX[parcel], y = boundaryY[parcel], z = boundaryZ[parcel];
 			for (int index = parcel * 8; index < (parcel + 1) * 8; index++) {
-				double pressure = value(rows[index], domain.projection.pressure, domain.projection.gasPressure);
+				double pressure = liquidPressure == null
+						? value(rows[index], domain.projection.pressure, domain.projection.gasPressure)
+						: value(rows[index], liquidPressure, gasPressure);
 				x += gx[index] * pressure; y += gy[index] * pressure; z += gz[index] * pressure;
 			}
 			double scale = dt * inverseMass[parcel];
@@ -189,6 +209,14 @@ final class GranularPressureCoupling {
 	private static void add(int row, float[] liquid, float[] gas, double value) {
 		if (row == Integer.MAX_VALUE) return;
 		if (row >= 0) liquid[row] += (float) value; else gas[-row] += (float) value;
+	}
+
+	private static double value(int row, double[] liquid, double[] gas) {
+		return row == Integer.MAX_VALUE ? 0 : row >= 0 ? liquid[row] : gas[-row];
+	}
+	private static void add(int row, double[] liquid, double[] gas, double value) {
+		if (row == Integer.MAX_VALUE) return;
+		if (row >= 0) liquid[row] += value; else gas[-row] += value;
 	}
 	private void ensureCapacity(int requested) {
 		if (inverseMass.length >= requested) return;

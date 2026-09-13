@@ -192,6 +192,21 @@ final class GasTopologyCoordinator {
 				hasMembershipOverlap[oldMembership] = true;
 				if (now > 0) newNodeHasMembershipOverlap[now] = true;
 			}
+			if (domain.gasState.sealedDomainBoundary) {
+				// Sealed node capacities already account for the entire global complement,
+				// including marker clustering. Newly visible local voids may only inherit
+				// capacity added beyond those old control volumes; otherwise remapping
+				// invents an old volume and charges fictitious compression work each step.
+				double oldCapacity = 0, newCapacity = 0, unownedCapacity = 0;
+				for (int node = 1; node <= previous; node++) oldCapacity += domain.gasState.network.availableVolume(node);
+				for (double volume : availableVolumes) newCapacity += volume;
+				for (double volume : vacuumInheritedAvailable) unownedCapacity += volume;
+				double addedCapacity = Math.max(0, newCapacity - oldCapacity);
+				if (unownedCapacity > addedCapacity) {
+					double scale = addedCapacity / unownedCapacity;
+					for (int node = 1; node <= sealed; node++) vacuumInheritedAvailable[node] *= scale;
+				}
+			}
 			// A newly full-air child can have no same-cell membership overlap when its cell was an
 			// interface residual in the previous topology. It inherits only from provably adjacent
 			// runtime lineages; each old inventory is then split by actual child volume. With no old
@@ -313,7 +328,7 @@ final class GasTopologyCoordinator {
 		}
 		if (thermalGas && deferPhaseVolumeWork) {
 			// The phase commit already recorded the exact cell dV. Preserve its post-transfer node U
-			// across this topology-only remap; the next real pressure projection owns the sole p dV.
+			// across this topology-only remap; the coupled fixed-volume phase update already conserved total U.
 			System.arraycopy(availableVolumes, 0, inheritedAvailable, 0, availableVolumes.length);
 		}
 		GasEnergyStore.GasRemapPlan thermalPlan = !thermalGas ? null : domain.thermalState.planGasRemap(
@@ -454,7 +469,7 @@ final class GasTopologyCoordinator {
 	private static double[] partitionTopologyVolume(double total, long[] weights) {
 		long weightSum = 0L;
 		for (long weight : weights) weightSum = Math.addExact(weightSum, weight);
-		if (!(Double.isFinite(total) && total > 0.0) || weightSum <= 0L) {
+		if (!(Double.isFinite(total) && total >= 0.0) || weightSum <= 0L) {
 			throw new IllegalArgumentException("Gas topology volume partition is invalid");
 		}
 		double[] result = new double[weights.length];

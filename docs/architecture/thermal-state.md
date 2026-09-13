@@ -79,6 +79,8 @@ U_h(T) = m * u_ref,h
 
 caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线性计算，不用迭代近似。声明的首尾温度是数据标定范围而不是库存可表达性的硬墙：内禀候选落在表外时，状态函数沿用最近端点 segment 的 `cv` 连续延拓 `U(T)`；不钳制温度，也不改变权威 `U`。
 
+端点定比热外推保证数值连续，极远处的相态精度仍受热量模型限制。例如内置水、冰的外推内能差在约 112.5 K 以下反号，极冷液态初态可能没有向平衡温度靠近的守恒冻结批次，求解会保留当前相态并继续推进。高压熔点曲线延伸本身不会修正这项低温热量近似。
+
 异质 cell 在所有 carrier 合并后的 segment 边界上反演 `sum U_i(T) = U_cell`，因此即使声明温区不重叠仍有唯一 LTE 温度。严格正温数值域下界是 binary64 的最小正常正数，不是 1 K 或其他经验墙；有限过程可连续逼近并在 UI 舍入显示为 `0 K`。
 
 只有能量低于该数学域、数值非有限或热容量非正才拒绝候选。固定温度 reservoir 等外部设定值仍限于 committed registry 的共同标定闭区间，不能借延拓注入任意边界条件。
@@ -203,7 +205,7 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 - 联合搬运物理 kg、condensed weight、液体 marker、coherent SVQ、材料身份、可选 chemical composition/species 和 `U`。coherent 部分拆分先分配整数 species，再由实际移出质量减去移出 species 质量求残差，保留部分接收剩余残差，各份质量列分别闭合。
 - 每条 transition 在该 lower coherent phase 或目标 upper liquid 存在时查询压力并规划。同格其他 liquid/coherent carrier 保留材料和组成，并以原有体积参与整格容量约束、以内能参与 LTE heat bath。
 - coherent group/组成池、液体 marker 总预算或 coherent exact split 暂时不能表示完整批次时，该批次零修改延期；只有已提交 coherent 几何与 cut-cell 容量矛盾、组成 capability 不匹配或账本不闭合才暂停合法候选链。
-- 体积变化与机械功写入 pending phase-work，由下一次 pressure projection 结算一次。
+- 相变按固定区域体积联合守恒两相内能。体积变化记录为待处理几何，下一次压力投影完成力学同步后清除；内部相界位移不另记外部 `-pΔV` 功。
 - 固液规划从最近一次真实 projection 的 cell gauge pressure 加环境压力得到绝对压力，再取 `T_eq(p)`。hydrostatic thermal-only 私有候选冻结并传递该 projection，但它不是库存列、不进入 checkpoint、也不能反向恢复物质量；冷恢复先执行一次 motion 重建 projection。曲线使用 registry-bound、按压力严格递增的分段线性点；固液相变在数据范围内插值，在范围外沿最近端点的割线斜率延伸，低压端延伸至真空压力。端点表示已知数据的覆盖范围。相变温度必须保持有限且为有效绝对温度；超出热容采样温区时，沿用材料状态函数已有的端点热容延伸。registry 校验采样点的上下相能量差为正。常温曲线也显式给出两个端点。液气曲线仍须覆盖标准压力，用于定义标准体积和潜焓参考态；液气方向通过分压与饱和压力计算，不使用固液线性延伸规则。
 
 内置冰/水 transition 每批为 `0.001 kg`，两侧分别为 `146 SVQ` 与 `134 SVQ`。熔化曲线采样自 [IAPWS R14-08(2011) 方程 1–5](https://iapws.org/public/documents/MdUFK/MeltSub2011.pdf)，覆盖 Ice Ih、III、V、VI、VII 的稳定熔化分支，最高采样温度为 `715 K`；更高压力沿最后两个采样点的割线延伸。低压段保留原有 `611.657 Pa–2 MPa` 细分采样。生成脚本见 [Python 工具](../maintenance/pytool.md)。游戏内各冰相共用一个固态载体及固定体积批；这保留了高压熔点变化，尚未表达各冰相的密度差异。
@@ -217,7 +219,7 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 - liquid water 与 water vapor 使用同一个 transition 的质量、潜热和 exact standard-volume batch。
 - 沸腾/凝结由 water-vapor 分压、温度和 transition 饱和压力关系决定，并受 sealed/ambient gas inventory 容量约束。
 - commit 同时更新 liquid marker、gas component nanos/kg、gas node energy、source/sink 与 topology remap；任何列不闭合则整批拒绝。
-- 每次气液 commit 还按实际增加/删除的 liquid SVQ 写入带 cell 的 exact pending volume；下一次真实 projection 使用加回统一 gas reference 后的绝对压力结算 `-p ΔV`，随后清除该 entry。capture/restore 必须保留尚未结算的原始 pending 值。
+- 每次气液 commit 还按实际增加/删除的 liquid SVQ 写入带 cell 的 exact pending volume；下一次真实 projection 完成力学同步，随后清除该 entry。capture/restore 必须保留尚未结算的原始 pending 值。
 - 同一 transition、gas node 与 exact liquid temperature 在一个 logical step 内只有一个热力学方向；首次观察到的沸腾或凝结方向是该状态点的唯一方向，后续候选若试图在同一状态点反向则不提交。不同温度的热/冷界面仍独立求值。
 - exact batch 搜索以 `|p_sat-p_partial|` 为物理残差；跨越平衡点的最小批只有在严格缩小该残差时才提交，不能因“至少执行一批”在两个可表示状态间往返。
 - 一个液体 cell 同时接触多个互不连通的 sealed node 是合法界面，不得因此暂停或合并气腔。一次 pressure interval 内该 cell 只向一个 node 提交一次守恒交换：按 `|p_sat-p_partial|` 从大到小尝试，最强候选若受库存、能量、组分或容量约束无法执行再尝试下一 node；相同驱动力按稳定 node ID 决定顺序。
@@ -236,11 +238,13 @@ p_partial = p_absolute * Vstd,vapor / Vstd,total
 
 每个 logical step 的固液与气液共享最多 4096 次 phase operation；按 0.05 s step 和 1 g batch，理论数值上限为 `81.92 kg/s`。这是防止无界工作量的预算，不是现实相界动力学。真实速率由传入的有限热通量、库存、容量与饱和条件限制；若量化 fixture 需要界面动力学，应新增有适用域的数据模型，不能把 tick 倍率塞入潜热。
 
-气液候选先用当前 marker geometry 同步 gas topology，再规划 inventory/energy。同一 liquid thermal material 的候选状态函数可把 cell 内剩余 marker 聚合为一份 extensive inventory；实际删除、截断、species 与 residual 搬运仍保留逐 marker exact plan。
+气液候选先用当前 marker geometry 同步 gas topology，再规划 inventory/energy。凝结和固液相变的体积增长须同时满足局部容量与全域凝聚态库存的剩余容量；密闭域仍有气体库存时，必须留下严格正的气体体积。同一 liquid thermal material 的候选状态函数可把 cell 内剩余 marker 聚合为一份 extensive inventory；实际删除、截断、species 与 residual 搬运仍保留逐 marker exact plan。
 
 每次真实气液 commit 后都从 carrier truth 重建 cell-marker ordinal 并完整重扫 gas topology：marker ordinal 存活并不能证明 air membership 未变，partial cell 可能被填满或越过 interface 判据。
 
-该重扫只联合搬运 gas inventory/U 与 lineage，不结算相变引起的体积功；实际 `ΔV` 继续由 pending phase-work 保存，并只在下一次真实 pressure projection exactly-once 结算。
+零库存、零内能的真空节点可在拓扑重映射时缩至零体积，压力和密度保持零；非空气体仍要求严格正体积。密闭全域容量已经包含已有气腔控制体积；未归属局部空隙只能按全域新增容量继承真空空间，避免局部几何权重与归一化体积重复计算压缩功。
+
+该重扫联合搬运 gas inventory/U 与 lineage，保持相变两相总内能不变。固定区域内的相界位移属于内部交换，不能再作为外部机械功单独扣除。随后液体和颗粒真实运动改变气腔容量时，仍按新旧几何执行气体等熵功；相变记录只要求力学同步。
 
 力学 P2G、pressure footprint/PLIC、表面张力和速度外推统一在 logical step 末重建一次，capture 前也从完整 geometry 重扫。这样任何可发布 logical state 都不会出现 marker 已变而 gas node 仍属于上一拓扑的半代次，也不会因容量快路提前结算一次、projection 再重复结算一次体积功。
 
@@ -263,15 +267,15 @@ species reference offset 是组成携带的能量原始数据。reaction extent 
 
 每一步都先在快照上形成候选。相变产生的体积改变不能回头修改已经完成的 projection，因此作为带 generation 的 pending volume/work 保存，并且只由下一次真实 projection 结算一次。
 
-marker 已经携带新的几何体积，pending 不作为第二份目标散度；它只用该 projection 的绝对 cell 压力结算 `-p ΔV`。不可压 projection 的拉格朗日压力可以给出有限负绝对张力；在尚无 cavitation 库存模型时，热学边界取其无张力补量 `max(0 Pa, p_absolute)`，即真空做功为零，而不是把负绝对压力当成热力学状态或暂停理由；非有限压力仍拒绝整个候选。
+marker 已经携带新的几何体积，pending 只记录尚需完成的力学同步，不作为第二份目标散度，也不再次改变内能。两相内部交换已经在相变步骤守恒结算；压力投影后的运动仍照常产生可审计的动能和气体容量变化。
 
-物质转移前需要结清已有的相变功。Minecraft 管理员操作、玩家容器和发射器共用同一处理过程：
+物质转移前需要完成已有相变几何的力学同步。Minecraft 管理员操作、玩家容器和发射器共用同一处理过程：
 
 1. 适配器提交仅含力学的私有候选，完成压力投影、颗粒运动与沉积、守恒粒子拆并。
-2. 这次计算跳过导热、化学反应和相变，结算旧压力功后保持待结算记录为空。
+2. 这次计算跳过导热、化学反应和相变，同步已有几何后清除待处理记录。
 3. 确认结算成功，再进入物质或容器事务。失败时保留待处理记录，并阻止清空、非完整存档和跳过压力投影的转移。
 
-代码入口见 [相变功结算](runtime-and-lifecycle.md#phase-work)。
+代码入口见 [相变几何同步](runtime-and-lifecycle.md#phase-work)。
 
 ## 能量审计
 

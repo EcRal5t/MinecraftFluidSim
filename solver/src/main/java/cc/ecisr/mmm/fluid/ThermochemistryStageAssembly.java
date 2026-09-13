@@ -103,6 +103,7 @@ final class ThermochemistryStageAssembly {
 					@Override public void refreshGasTopology() { domain.gasTopologyCoordinator.refresh(); }
 					@Override public void refreshGasGeometry() { domain.refreshGasPhaseGeometry(); }
 					@Override public void refreshCoherentOccupancy() { domain.refreshCoherentOccupancy(); }
+					@Override public boolean canAddCarrierVolume(double volume) { return domain.canAddCarrierVolume(volume); }
 					@Override public void markGridDirty() { domain.gridDirty = true; }
 				});
 		CondensedPhaseChangeStage condensed = new CondensedPhaseChangeStage(phaseSupport);

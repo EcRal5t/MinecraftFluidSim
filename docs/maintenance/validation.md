@@ -28,6 +28,7 @@
 
 | 改动 | 选择器 | 测试源码入口 |
 |---|---|---|
+| 极端温度、压力与相变连续推进 | `thermal-extremes` | [ExtremeThermalValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/ExtremeThermalValidation.java) |
 | 材料、质量、混合与液液界面 | `materials` | [M3ConnectedVesselValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/M3ConnectedVesselValidation.java) |
 | 表面张力和润湿 | `surface-tension` | [M4SurfaceTensionValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/M4SurfaceTensionValidation.java) |
 | 气体库存、状态方程与孔流 | `air-network` | [AirNetworkValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/air/AirNetworkValidation.java) |
@@ -153,3 +154,10 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 ## 需要进入游戏时
 
 当问题依赖实际画面、Minecraft 方块形状或磁盘重启过程时，准备一个可重复场景，写明操作、预期现象和需要保留的日志。发布构建、产物校验和部署步骤见 [验收与发布](../roadmap/acceptance-and-release.md)。
+
+## 正常操作随机仿真
+
+`./gradlew.bat :fabric:runNormalPlayFuzz '-PfuzzArgs=16,80,false,8,0,13'` 扫描 13 种几何、每种 16 个种子，每个种子 80 步；每步检查库存、能量和 capture/restore。
+单个复现用 `-PfuzzArgs=replay,1,203,80`；严格子序列最小化用 `-PfuzzArgs=minimize,1,203`。`reported` 运行既有历史种子集。
+
+极端温压测试使用正式材料定义，在封闭域设置 `10 Pa / 10^7 K`、`10^12 Pa / 10 K`、`10^12 Pa / 150 K`、`10^12 Pa / 10^7 K` 四组初态，连续执行开启相变的后端步骤并检查气体和内能收支及恢复。低压高温与 150 K 高压用例还要求实际发生相变。10 K 用例检查没有可接受冻结批次时仍能守恒推进。这里的数值是可复现的验证范围，不等同于所有有限浮点输入都能无条件计算。

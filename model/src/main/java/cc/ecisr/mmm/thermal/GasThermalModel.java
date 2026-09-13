@@ -91,7 +91,7 @@ public final class GasThermalModel {
 	public HydrodynamicState hydrodynamicState(
 			GasInventory inventory, double availableVolume, double internalEnergy
 	) {
-		requireAvailableVolume(availableVolume);
+		requireAvailableVolume(availableVolume, inventory);
 		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
 		if (inventory.isEmpty()) {
 			if (internalEnergy != 0.0) throw new IllegalArgumentException("Vacuum cannot carry internal energy");
@@ -113,7 +113,7 @@ public final class GasThermalModel {
 	}
 
 	public double absolutePressure(GasInventory inventory, double availableVolume, double internalEnergy) {
-		requireAvailableVolume(availableVolume);
+		requireAvailableVolume(availableVolume, inventory);
 		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
 		if (inventory.isEmpty()) {
 			if (internalEnergy != 0.0) throw new IllegalArgumentException("Vacuum cannot carry internal energy");
@@ -131,7 +131,7 @@ public final class GasThermalModel {
 	}
 
 	public double density(GasInventory inventory, double availableVolume) {
-		requireAvailableVolume(availableVolume);
+		requireAvailableVolume(availableVolume, inventory);
 		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
 		if (inventory.isEmpty()) return 0.0;
 		double density = requirePositiveMass(inventory) / availableVolume;
@@ -329,8 +329,8 @@ public final class GasThermalModel {
 		return List.copyOf(portions);
 	}
 
-	private static void requireAvailableVolume(double availableVolume) {
-		if (!(Double.isFinite(availableVolume) && availableVolume > 0.0)) {
+	private static void requireAvailableVolume(double availableVolume, GasInventory inventory) {
+		if (!(Double.isFinite(availableVolume) && (availableVolume > 0.0 || availableVolume == 0.0 && inventory != null && inventory.isEmpty()))) {
 			throw new IllegalArgumentException("Gas available volume is outside the thermal model");
 		}
 	}
