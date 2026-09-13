@@ -488,6 +488,18 @@ final class ControllerInventoryDurabilityValidation {
 			}
 		}
 
+		void rampTemperature(double delta) {
+			for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
+				for (int x = 0; x < domain.sizeX(); x++) {
+					if (domain.exactVolumeNear(x, y, z, 0, -1) > 0.0) {
+						double current = domain.thermalTemperatureInCell(x, y, z);
+						domain.setThermalTemperatureInCell(x, y, z,
+								Math.min(20_000.0, Math.max(0.5, current + delta)));
+					}
+				}
+			}
+		}
+
 		void insertWater() { insertLiquid(water); }
 		void insertMercury() { insertLiquid(mercury); }
 		void insertLiquid(int material) {
@@ -559,7 +571,25 @@ final class ControllerInventoryDurabilityValidation {
 			return true;
 		}
 		boolean tryExtractChemicalAt(int[] target) {
-			if (!domain.tryExtractExactChemical(target[0], target[1], target[2], 8.0F, 6).transferred()) return false;
+			float volume = FUZZ_PARTIAL ? partialVolume(target[0], target[1], target[2]) : 8.0F;
+			if (!domain.tryExtractExactChemical(target[0], target[1], target[2], volume, 6).transferred()) return false;
+			roundTrip();
+			return true;
+		}
+		boolean tryInsertMixtureAt(int x, int y, int z) {
+			settle();
+			double portion = FUZZ_PARTIAL ? partialVolume(x, y, z) : 2.0;
+			java.util.List<FluidDomain.MaterialPortion> portions = java.util.List.of(
+					new FluidDomain.MaterialPortion(water, portion, 2_000.0),
+					new FluidDomain.MaterialPortion(mercury, 1.0, 13_600.0),
+					new FluidDomain.MaterialPortion(oil, 1.0, 900.0));
+			if (!domain.tryInsertExactMixture(x, y, z, portions, 6, true).transferred()) return false;
+			roundTrip();
+			return true;
+		}
+		boolean tryExtractMixtureAt(int[] target) {
+			float volume = FUZZ_PARTIAL ? partialVolume(target[0], target[1], target[2]) : 4.0F;
+			if (!domain.tryExtractExactMixture(target[0], target[1], target[2], volume, 7).transferred()) return false;
 			roundTrip();
 			return true;
 		}
@@ -1179,7 +1209,11 @@ final class ControllerInventoryDurabilityValidation {
 			state.step(false);
 			return "step(motion)";
 		}
-		if (pick < 42) return burst(state, random);
+		if (pick < 39) return burst(state, random);
+		if (pick < 42) {
+			int[] at = state.randomCorner(random);
+			return state.tryInsertMixtureAt(at[0], at[1], at[2]) ? "insertMixture" : "skip(insertMixture)";
+		}
 		if (pick < 48) { state.step(false); return "step(motion)"; }
 		if (pick < 54) { state.step(true); return "step(phase)"; }
 		if (pick < 60) { int count = 2 + random.nextInt(4); state.steps(true, count); return "steps(phase," + count + ")"; }
@@ -1191,6 +1225,12 @@ final class ControllerInventoryDurabilityValidation {
 			return "temperature(" + kelvin + ")";
 		}
 		if (pick < 71) {
+			double delta = RAMP_DELTAS[random.nextInt(RAMP_DELTAS.length)];
+			state.rampTemperature(delta);
+			state.roundTrip();
+			return "rampTemperature(" + delta + ")";
+		}
+		if (pick < 74) {
 			if (state.domain.totalVolumeExact() > 0.0 || state.domain.totalGranularSolidVolumeSvq() > 0L
 					|| state.domain.hasAmbientGasCells()) {
 				state.thermalStep(false);
@@ -1198,15 +1238,15 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(thermalStep)";
 		}
-		if (pick < 74) {
+		if (pick < 77) {
 			if (state.domain.totalVolumeExact() > 0.0 || state.domain.totalGranularSolidVolumeSvq() > 0L) {
 				state.thermalStep(true);
 				return "thermalStep(phase)";
 			}
 			return "skip(thermalStep)";
 		}
-		if (pick < 78) { state.stepWithMovingBody(random); return "step(movingBody)"; }
-		if (pick < 82) {
+		if (pick < 81) { state.stepWithMovingBody(random); return "step(movingBody)"; }
+		if (pick < 85) {
 			state.settle();
 			int[] target = state.maximumNearbyLiquidCell(6, state.water);
 			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, state.water) >= 8.0
@@ -1215,7 +1255,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(noCanonicalWater)";
 		}
-		if (pick < 88) {
+		if (pick < 87) {
 			state.settle();
 			int[] target = state.maximumNearbyLiquidCell(6);
 			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
@@ -1224,7 +1264,16 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(noCanonicalLiquid)";
 		}
-		if (pick < 93) {
+		if (pick < 90) {
+			state.settle();
+			int[] target = state.maximumNearbyLiquidCell(6);
+			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
+					&& state.tryExtractMixtureAt(target)) {
+				return "extractMixture";
+			}
+			return "skip(noCanonicalMixture)";
+		}
+		if (pick < 94) {
 			var edit = state.domain.editIndicatorFloodFill(state.injectX, state.injectY, state.injectZ,
 					random.nextBoolean(), state.cellBudget(), 100.0);
 			if (edit.accepted()) {
@@ -1270,7 +1319,11 @@ final class ControllerInventoryDurabilityValidation {
 	}
 
 	private static final double[] RANDOM_TEMPERATURES = {
-			1.0, 50.0, 150.0, 273.15, 293.15, 320.0, 373.15, 600.0, 1_500.0, 3_000.0
+			0.1, 1.0, 50.0, 150.0, 273.15, 293.15, 320.0, 373.15, 600.0, 1_500.0, 3_000.0, 5_000.0, 10_000.0
+	};
+
+	private static final double[] RAMP_DELTAS = {
+			-5_000.0, -1_000.0, -300.0, -50.0, -5.0, 5.0, 50.0, 300.0, 1_000.0, 5_000.0
 	};
 
 	private static final int SCENE_HALF_BOTTOM = 0x33;
