@@ -9,6 +9,8 @@ import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.fluid.FluidThermalStepRequest;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.fluid.FluidStepCandidate;
+import cc.ecisr.mmm.fluid.FluidThermalStepCandidate;
 import cc.ecisr.mmm.granular.BuiltinGranularDefinitions;
 import cc.ecisr.mmm.granular.GranularTransferLedger;
 import cc.ecisr.mmm.granular.SolidVolume;
@@ -383,6 +385,10 @@ final class ControllerInventoryDurabilityValidation {
 		private final ChemicalTransferLedger base;
 		private final double baseEnergy;
 		private final GranularTransferLedger sand;
+		private RegionRepositoryAdapter persistence;
+		private FluidRegion region;
+		private Path diskRoot;
+		private int diskRoundTrips;
 		private FluidDomain domain;
 		private long generation;
 
@@ -414,7 +420,48 @@ final class ControllerInventoryDurabilityValidation {
 			double mass = registries.granular().material(sandHandle).referenceDensity();
 			sand = new GranularTransferLedger(java.util.List.of(new GranularTransferLedger.Group(
 					BuiltinGranularDefinitions.FINE_SAND, SolidVolume.SVQ_PER_BV, mass, null)));
+			if (FUZZ_DISK) {
+				diskRoot = Files.createTempDirectory("mmm-fuzz-disk");
+				persistence = new RegionRepositoryAdapter(diskRoot, TestProfiles.full(), registries.chemical(),
+						registries.granular(), registries.thermal(), registries.gas());
+				region = new FluidRegion(java.util.UUID.randomUUID(), DIMENSION, BlockPos.ZERO, domain,
+						scene.capacity(), footprint());
+				persistence.checkpoint(region);
+			}
 			roundTrip();
+			java.util.function.Consumer<NormalPlayState> prefill = PREFILL.get(scene.name());
+			if (prefill != null) prefill.accept(this);
+		}
+
+		long solverGeneration() { return region != null ? region.solverGeneration() : generation; }
+
+		void adopt(FluidStepCandidate candidate) {
+			if (region != null) {
+				region.adoptStepCandidate(candidate, CpuFluidSolverBackend.ID);
+				domain = region.domain();
+			} else {
+				domain = candidate.claimPreparedCpuDomain();
+			}
+		}
+
+		void adoptThermal(FluidThermalStepCandidate candidate) {
+			if (region != null) {
+				region.adoptThermalStepCandidate(candidate, CpuFluidSolverBackend.ID);
+				domain = region.domain();
+			} else {
+				domain = candidate.claimPreparedCpuDomain();
+			}
+		}
+
+		void close() {
+			if (diskRoot == null) return;
+			try (var paths = Files.walk(diskRoot)) {
+				for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+					Files.deleteIfExists(path);
+				}
+			} catch (java.io.IOException ignored) {
+				// Temporary fuzz checkpoints are best-effort cleaned up.
+			}
 		}
 
 		int cellBudget() { return domain.sizeX() * domain.sizeY() * domain.sizeZ(); }
@@ -475,7 +522,8 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		boolean tryInsertLiquidAt(int x, int y, int z, int material) {
 			settle();
-			if (!domain.tryInsertExactVolume(x, y, z, 8.0F, 6, material, true).transferred()) return false;
+			float volume = FUZZ_PARTIAL ? partialVolume(x, y, z) : 8.0F;
+			if (!domain.tryInsertExactVolume(x, y, z, volume, 6, material, true).transferred()) return false;
 			roundTrip();
 			return true;
 		}
@@ -505,7 +553,8 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 		}
 		boolean tryExtractWaterAt(int[] target) {
-			if (!domain.tryExtractExactVolume(target[0], target[1], target[2], 8.0F, 6, water).transferred()) return false;
+			float volume = FUZZ_PARTIAL ? partialVolume(target[0], target[1], target[2]) : 8.0F;
+			if (!domain.tryExtractExactVolume(target[0], target[1], target[2], volume, 6, water).transferred()) return false;
 			roundTrip();
 			return true;
 		}
@@ -553,11 +602,11 @@ final class ControllerInventoryDurabilityValidation {
 			if (!domain.hasPendingPhaseVolumeWork()) return;
 			try {
 				var candidate = new CpuFluidSolverBackend().evaluate(
-						FluidStepRequest.pendingPhaseSettlement(generation, domain.captureAuthoritativeState()));
+						FluidStepRequest.pendingPhaseSettlement(solverGeneration(), domain.captureAuthoritativeState()));
 				check(candidate.stats().thermalAxis().granularPhase().transfers() == 0
 							&& candidate.stats().chemistryEvaluations() == 0,
 						"pending phase-work settlement advanced thermochemistry");
-				domain = candidate.claimPreparedCpuDomain();
+				adopt(candidate);
 				check(!domain.hasPendingPhaseVolumeWork(),
 						"pending phase-work settlement retained the prior lien");
 			} catch (RuntimeException failure) {
@@ -571,9 +620,9 @@ final class ControllerInventoryDurabilityValidation {
 		void step(boolean phase) {
 			try {
 				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
-						generation, domain.captureAuthoritativeState(), java.util.List.of(), phase,
+						solverGeneration(), domain.captureAuthoritativeState(), java.util.List.of(), phase,
 						phase ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0));
-				domain = candidate.claimPreparedCpuDomain();
+				adopt(candidate);
 			} catch (RuntimeException failure) {
 				throw new IllegalStateException("normal-play logical step failed at generation " + generation
 						+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
@@ -585,9 +634,9 @@ final class ControllerInventoryDurabilityValidation {
 		void thermalStep(boolean phase) {
 			try {
 				var candidate = new CpuFluidSolverBackend().evaluateThermal(new FluidThermalStepRequest(
-						generation, domain.captureAuthoritativeState(), phase,
+						solverGeneration(), domain.captureAuthoritativeState(), phase,
 						phase ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0));
-				domain = candidate.claimPreparedCpuDomain();
+				adoptThermal(candidate);
 			} catch (RuntimeException failure) {
 				throw new IllegalStateException("normal-play thermal-only step failed at generation " + generation
 						+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
@@ -607,9 +656,9 @@ final class ControllerInventoryDurabilityValidation {
 					(random.nextDouble() - 0.5) * 20.0, displaced);
 			try {
 				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
-						generation, domain.captureAuthoritativeState(), java.util.List.of(body), true,
+						solverGeneration(), domain.captureAuthoritativeState(), java.util.List.of(body), true,
 						ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
-				domain = candidate.claimPreparedCpuDomain();
+				adopt(candidate);
 			} catch (RuntimeException failure) {
 				throw new IllegalStateException("normal-play moving-body step failed at generation " + generation
 						+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
@@ -619,9 +668,32 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 		}
 		void roundTrip() {
-			if (scene.sealed()) checkClosed(domain, "normal-play handoff generation " + generation);
-			domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-			if (scene.sealed()) checkClosed(domain, "normal-play restore generation " + generation);
+			if (scene.sealed()) {
+				check(domain.gasBoundary().auditClosed(),
+						"normal-play handoff generation " + generation + " left the gas audit open");
+				check(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+						"normal-play handoff generation " + generation + " left the thermal audit open");
+			}
+			if (region != null) {
+				if (++diskRoundTrips % FUZZ_DISK_ROUND_TRIP_INTERVAL == 0) {
+					try {
+						persistence.checkpointAndUnload(region);
+						persistence.restore(region);
+					} catch (java.io.IOException failure) {
+						throw new IllegalStateException("normal-play disk checkpoint failed at generation "
+								+ generation, failure);
+					}
+					domain = region.domain();
+				}
+			} else {
+				domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			}
+			if (scene.sealed()) {
+				check(domain.gasBoundary().auditClosed(),
+						"normal-play restore generation " + generation + " left the gas audit open");
+				check(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+						"normal-play restore generation " + generation + " left the thermal audit open");
+			}
 		}
 	}
 
@@ -656,14 +728,29 @@ final class ControllerInventoryDurabilityValidation {
 			minimize(registries, FUZZ_SCENES.get(sceneIndex), seed, actions);
 			return;
 		}
+		if (args.length > 0 && (args[0].equals("disk") || args[0].equals("partial")
+				|| args[0].equals("partialdisk"))) {
+			FUZZ_DISK = args[0].contains("disk");
+			FUZZ_PARTIAL = args[0].contains("partial");
+			int seedsPerScene = args.length > 1 ? Integer.parseInt(args[1]) : 4;
+			int actions = args.length > 2 ? Integer.parseInt(args[2]) : 80;
+			int threads = args.length > 3 ? Math.max(1, Integer.parseInt(args[3]))
+					: Math.max(1, Runtime.getRuntime().availableProcessors());
+			int sceneFrom = args.length > 4 ? Integer.parseInt(args[4]) : 0;
+			int sceneTo = args.length > 5 ? Integer.parseInt(args[5]) : FUZZ_SCENES.size();
+			int seedOffset = args.length > 6 ? Integer.parseInt(args[6]) : 0;
+			runSceneFuzz(registries, seedsPerScene, actions, threads, sceneFrom, sceneTo, seedOffset);
+			return;
+		}
 		int seedsPerScene = args.length > 0 ? Integer.parseInt(args[0]) : 4;
 		int actions = args.length > 1 ? Integer.parseInt(args[1]) : 80;
 		FUZZ_DISABLE_GRANULAR = args.length > 2 && Boolean.parseBoolean(args[2]);
 		int threads = args.length > 3 ? Math.max(1, Integer.parseInt(args[3]))
-				: Math.max(1, Math.min(Runtime.getRuntime().availableProcessors(), 8));
+				: Math.max(1, Runtime.getRuntime().availableProcessors());
 		int sceneFrom = args.length > 4 ? Integer.parseInt(args[4]) : 0;
 		int sceneTo = args.length > 5 ? Integer.parseInt(args[5]) : FUZZ_SCENES.size();
-		runSceneFuzz(registries, seedsPerScene, actions, threads, sceneFrom, sceneTo);
+		int seedOffset = args.length > 6 ? Integer.parseInt(args[6]) : 0;
+		runSceneFuzz(registries, seedsPerScene, actions, threads, sceneFrom, sceneTo, seedOffset);
 	}
 
 	private static void runExplicitSeeds(
@@ -858,15 +945,16 @@ final class ControllerInventoryDurabilityValidation {
 
 	private static void runSceneFuzz(
 			FullCapabilityTestFixture.Registries registries, int seedsPerScene, int actions, int threads,
-			int sceneFrom, int sceneTo
+			int sceneFrom, int sceneTo, int seedOffset
 	) throws Exception {
 		FUZZ_PROGRESS = false;
 		int lastScene = Math.min(sceneTo, FUZZ_SCENES.size());
 		java.util.List<SceneJob> jobs = new java.util.ArrayList<>();
 		for (int sceneIndex = Math.max(0, sceneFrom); sceneIndex < lastScene; sceneIndex++) {
 			FuzzScene scene = FUZZ_SCENES.get(sceneIndex);
+			if (FUZZ_DISK && !scene.sealed()) continue;
 			for (int ordinal = 0; ordinal < seedsPerScene; ordinal++) {
-				jobs.add(new SceneJob(scene, scene.seedBase() + ordinal));
+				jobs.add(new SceneJob(scene, scene.seedBase() + seedOffset + ordinal));
 			}
 		}
 		System.out.println("running " + jobs.size() + " jobs (scenes [" + sceneFrom + "," + lastScene + ") x "
@@ -905,12 +993,14 @@ final class ControllerInventoryDurabilityValidation {
 			if (result == null) continue;
 			failures++;
 			String root = rootCause(result.failure().cause());
+			boolean firstOfClass = !classes.containsKey(root);
 			System.out.println("FUZZ FAIL scene=" + result.job().scene().name() + " seed=" + result.job().seed()
 					+ " action=" + result.failure().actionIndex() + " :: " + root);
 			classes.merge(root, 1, Integer::sum);
 			firstWhere.putIfAbsent(root, "scene=" + result.job().scene().name() + " seed=" + result.job().seed()
 					+ " action=" + result.failure().actionIndex());
 			firstTrace.putIfAbsent(root, result.failure().trace().toString());
+			if (firstOfClass) result.failure().cause().printStackTrace(System.out);
 		}
 		System.out.println("scenario fuzz finished; jobs=" + jobs.size() + " failures=" + failures);
 		for (var entry : classes.entrySet()) {
@@ -965,28 +1055,34 @@ final class ControllerInventoryDurabilityValidation {
 			FullCapabilityTestFixture.Registries registries, FuzzScene scene, int seed, int actionCount
 	) throws Exception {
 		NormalPlayState state = new NormalPlayState(registries, scene);
-		java.util.Random random = new java.util.Random(seed);
-		java.util.List<String> trace = new java.util.ArrayList<>();
-		for (int index = 0; index < actionCount; index++) {
-			String action;
-			try {
-				action = applyExpandedRandomAction(state, random);
-			} catch (Throwable failure) {
-				return new Failure(index + 1, failure, java.util.List.copyOf(trace));
+		try {
+			java.util.Random random = new java.util.Random(seed);
+			java.util.List<String> trace = new java.util.ArrayList<>();
+			for (int index = 0; index < actionCount; index++) {
+				String action;
+				try {
+					action = applyExpandedRandomAction(state, random);
+				} catch (Throwable failure) {
+					return new Failure(index + 1, failure, java.util.List.copyOf(trace));
+				}
+				trace.add((index + 1) + ":" + action);
+				if (Boolean.getBoolean("mmm.fuzzDebug")) {
+					System.out.println("action=" + (index + 1) + ":" + action + " liquid="
+							+ state.domain.totalVolumeExact());
+					for (int node : state.domain.gasBoundary().nodeIds()) System.out.println("  gas=" + node
+							+ " volume=" + state.domain.gasBoundary().availableVolume(node)
+							+ " std=" + state.domain.gasBoundary().standardVolume(node)
+							+ " T=" + state.domain.gasNodeTemperatureK(node)
+							+ " p=" + state.domain.gasNodeGaugePressurePa(node));
+				}
+				if (FUZZ_PROGRESS && (index + 1) % 8 == 0) System.out.println(
+						"seed=" + seed + " actions=" + (index + 1) + "/" + actionCount + " generation="
+								+ state.generation);
 			}
-			trace.add((index + 1) + ":" + action);
-			if (Boolean.getBoolean("mmm.fuzzDebug")) {
-				System.out.println("action=" + (index + 1) + ":" + action + " liquid=" + state.domain.totalVolumeExact());
-				for (int node : state.domain.gasBoundary().nodeIds()) System.out.println("  gas=" + node
-						+ " volume=" + state.domain.gasBoundary().availableVolume(node)
-						+ " std=" + state.domain.gasBoundary().standardVolume(node)
-						+ " T=" + state.domain.gasNodeTemperatureK(node)
-						+ " p=" + state.domain.gasNodeGaugePressurePa(node));
-			}
-			if (FUZZ_PROGRESS && (index + 1) % 8 == 0) System.out.println(
-					"seed=" + seed + " actions=" + (index + 1) + "/" + actionCount + " generation=" + state.generation);
+			return null;
+		} finally {
+			state.close();
 		}
-		return null;
 	}
 
 	private static String applyRandomAction(NormalPlayState state, java.util.Random random) {
@@ -1165,12 +1261,57 @@ final class ControllerInventoryDurabilityValidation {
 
 	private static boolean FUZZ_PROGRESS;
 	private static boolean FUZZ_DISABLE_GRANULAR = false;
+	private static boolean FUZZ_DISK = false;
+	private static boolean FUZZ_PARTIAL = false;
+	private static final int FUZZ_DISK_ROUND_TRIP_INTERVAL = 4;
+
+	private static float partialVolume(int x, int y, int z) {
+		return 0.25F + ((x * 31 + y * 17 + z * 7) % 32) * 0.24F;
+	}
 
 	private static final double[] RANDOM_TEMPERATURES = {
 			1.0, 50.0, 150.0, 273.15, 293.15, 320.0, 373.15, 600.0, 1_500.0, 3_000.0
 	};
 
 	private static final int SCENE_HALF_BOTTOM = 0x33;
+
+	private static final java.util.Map<String, java.util.function.Consumer<NormalPlayState>> PREFILL =
+			new java.util.HashMap<>();
+	static {
+		PREFILL.put("prefill-water-8", state -> {
+			for (int i = 0; i < 8; i++) {
+				state.tryInsertLiquidAt(state.injectX, state.injectY, state.injectZ, state.water);
+			}
+			state.steps(false, 3);
+		});
+		PREFILL.put("prefill-sand-8", state -> {
+			for (int i = 0; i < 4; i++) state.tryInsertSandAt(state.injectX, state.injectY, state.injectZ);
+			state.steps(true, 3);
+		});
+		PREFILL.put("prefill-chem-8", state -> {
+			for (int i = 0; i < 3; i++) {
+				state.tryInsertChemicalAt(state.injectX, state.injectY, state.injectZ, state.acid, state.acidEnergy);
+				state.tryInsertChemicalAt(state.injectX, state.injectY, state.injectZ, state.base, state.baseEnergy);
+			}
+			state.steps(true, 4);
+		});
+		PREFILL.put("prefill-mixed-8", state -> {
+			state.tryInsertLiquidAt(state.injectX, state.injectY, state.injectZ, state.water);
+			state.tryInsertLiquidAt(state.injectX, state.injectY, state.injectZ, state.mercury);
+			state.tryInsertLiquidAt(state.injectX, state.injectY, state.injectZ, state.oil);
+			state.tryInsertChemicalAt(state.injectX, state.injectY, state.injectZ, state.acid, state.acidEnergy);
+			state.tryInsertChemicalAt(state.injectX, state.injectY, state.injectZ, state.base, state.baseEnergy);
+			state.tryInsertSandAt(state.injectX, state.injectY, state.injectZ);
+			state.steps(true, 4);
+		});
+		PREFILL.put("prefill-corridor-8", state -> {
+			for (int i = 0; i < 6; i++) {
+				state.tryInsertLiquidAt(state.injectX, state.injectY, state.injectZ, state.water);
+				state.tryInsertSandAt(state.injectX, state.injectY, state.injectZ);
+			}
+			state.steps(true, 3);
+		});
+	}
 
 	private record FuzzScene(String name, int seedBase, int sizeX, int sizeY, int sizeZ, int capacity,
 			boolean sealed, int injectX, int injectY, int injectZ,
@@ -1236,6 +1377,16 @@ final class ControllerInventoryDurabilityValidation {
 			new FuzzScene("sealed-pillar-8", 1300, 8, 8, 8, 8 * 8 * 8 * 8, true, 4, 6, 4, domain -> {
 				for (int z = 2; z <= 5; z++) for (int y = 0; y <= 5; y++) for (int x = 2; x <= 5; x++) {
 					if (x == 2 || x == 5 || z == 2 || z == 5) domain.setSolid(x, y, z, true);
+				}
+			}),
+			FuzzScene.flat("prefill-water-8", 1400, 8, 8, 8, true, 7, 7, 7),
+			FuzzScene.flat("prefill-sand-8", 1500, 8, 8, 8, true, 7, 7, 7),
+			FuzzScene.flat("prefill-chem-8", 1600, 8, 8, 8, true, 7, 7, 7),
+			FuzzScene.flat("prefill-mixed-8", 1700, 8, 8, 8, true, 7, 7, 7),
+			new FuzzScene("prefill-corridor-8", 1800, 8, 8, 8, 8 * 8 * 8 * 8, true, 4, 6, 4, domain -> {
+				for (int z = 0; z < 8; z++) for (int y = 1; y < 7; y++) {
+					domain.setSolid(3, y, z, true);
+					domain.setSolid(5, y, z, true);
 				}
 			})
 	);
