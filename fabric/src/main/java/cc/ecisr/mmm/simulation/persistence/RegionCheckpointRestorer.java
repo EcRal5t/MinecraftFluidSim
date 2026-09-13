@@ -272,13 +272,12 @@ public final class RegionCheckpointRestorer {
 				.thenComparingInt(GranularStateSnapshot.DepositGroup::materialPaletteIndex)
 				.thenComparingInt(GranularStateSnapshot.DepositGroup::solidCompositionIndex));
 		long totalSvq = Math.addExact(granular.activeSvq(), granular.depositSvq());
-		double totalMass = Double.longBitsToDouble(granular.activeMassBits())
-				+ Double.longBitsToDouble(granular.depositMassBits());
+		long totalMassBits = GranularStateSnapshot.canonicalTotalMassBits(Arrays.asList(active), deposits);
 		try {
 			return new GranularStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
 					granular.registryFingerprint(), granular.chemicalRegistryFingerprint(), granular.materialPalette(),
 					granular.solidCompositions(), granular.solidSpeciesTotals(), Arrays.asList(active), deposits,
-					totalSvq, Double.doubleToRawLongBits(totalMass), granular.externalSource(), granular.escapedSink());
+					totalSvq, totalMassBits, granular.externalSource(), granular.escapedSink());
 		} catch (IllegalArgumentException invalid) {
 			throw new IOException("Invalid region-state granular inventory: " + invalid.getMessage(), invalid);
 		}
