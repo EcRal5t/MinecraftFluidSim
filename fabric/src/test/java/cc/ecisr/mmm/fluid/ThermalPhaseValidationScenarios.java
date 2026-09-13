@@ -65,18 +65,18 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				"solid/liquid curve was incorrectly required to cover standard pressure");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
-		FluidDomain unsupportedPressure = new FluidDomain(2, 2, 2, config, 128);
-		unsupportedPressure.setVolume(0, 0, 0, 0.5F);
-		unsupportedPressure.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
-		unsupportedPressure.bootstrapGasState("");
-		unsupportedPressure.bindThermal(highPressureRegistry,
+		FluidDomain continuedPressure = new FluidDomain(2, 2, 2, config, 128);
+		continuedPressure.setVolume(0, 0, 0, 0.5F);
+		continuedPressure.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
+		continuedPressure.bootstrapGasState("");
+		continuedPressure.bindThermal(highPressureRegistry,
 				new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)), 273.15);
-		double unsupportedEnergy = unsupportedPressure.totalInternalEnergy();
-		FluidDomain.ThermalPhaseStats unsupported = unsupportedPressure.stepInertPhaseChangeOnly(16);
-		require(unsupported.operations() == 0 && unsupported.signedBatches() == 0L
-				&& Double.doubleToRawLongBits(unsupportedPressure.totalInternalEnergy())
-				== Double.doubleToRawLongBits(unsupportedEnergy),
-				"an inapplicable solid/liquid curve changed inventory or energy");
+		double continuedEnergy = continuedPressure.totalInternalEnergy();
+		FluidDomain.ThermalPhaseStats continued = continuedPressure.stepInertPhaseChangeOnly(16);
+		require(continued.operations() == 0 && continued.signedBatches() == 0L
+				&& Double.doubleToRawLongBits(continuedPressure.totalInternalEnergy())
+				== Double.doubleToRawLongBits(continuedEnergy),
+				"constant endpoint continuation disturbed phase equilibrium");
 
 		ThermalMaterialDefinition mercury = new ThermalMaterialDefinition("mmm:thermal/mercury",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.MERCURY.id(),
@@ -223,12 +223,21 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		pressureHandoff.setVolume(0, 0, 0, 1.0F);
 		pressureHandoff.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
 		pressureHandoff.bootstrapGasState("");
-		pressureHandoff.bindThermal(cellRegistry, liquids, 295.0);
+		ThermalPhaseTransition continuedTransition = new ThermalPhaseTransition(
+				"test:phase/continued_lower_upper", lower.id(), upper.id(), batchSvq, batchSvq,
+				ExactRational.parse("0.015625"), ThermalPhaseTransition.InterfaceRequirement.NONE,
+				List.of(new ThermalPhaseTransition.EquilibriumPoint(0.0, 310.0),
+						new ThermalPhaseTransition.EquilibriumPoint(200_000.0, 300.0)));
+		pressureHandoff.bindThermal(new ThermalRegistry(
+				List.of(lower, upper), List.of(), List.of(continuedTransition), "", ""), liquids, 295.0);
 		pressureHandoff.pressureReference = 250_000.0F;
 		FluidDomain pressureRestore = FluidDomain.restoreAuthoritativeState(
 				pressureHandoff.captureAuthoritativeState());
 		require(pressureRestore.stepInertPhaseChangeOnly(16).operations() == 0,
-				"thermal-only handoff replaced an out-of-curve real pressure projection with standard pressure");
+				"thermal handoff did not continue the phase curve using the real pressure projection");
+		pressureRestore.setThermalTemperatureInCell(0, 0, 0, 290.0);
+		require(pressureRestore.stepInertPhaseChangeOnly(16).operations() > 0,
+				"continued high-pressure phase curve skipped freezing below its melting point");
 
 		FluidDomain phaseDomain = new FluidDomain(2, 2, 2, config, 128);
 		phaseDomain.setVolume(0, 0, 0, 1.0F);

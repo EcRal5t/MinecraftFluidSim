@@ -287,11 +287,8 @@ public final class ThermalRegistry {
 			}
 			for (ThermalPhaseTransition.EquilibriumPoint point : transition.equilibriumCurve()) {
 				double temperature = point.temperatureK();
-				if (temperature < lower.minimumTemperatureK() || temperature > lower.maximumTemperatureK()
-						|| temperature < upper.minimumTemperatureK() || temperature > upper.maximumTemperatureK()) {
-					throw new IllegalArgumentException("Thermal transition equilibrium is outside a phase validity range: "
-							+ transition.id());
-				}
+				// Material state functions continue the endpoint heat capacity outside tabulated segments.
+				// High-pressure melting data uses the same caloric continuation as runtime equilibrium.
 				double lowerEnergy = lower.referenceSpecificEnergyEuPerMu() + lower.sensibleSpecificEnergyAt(temperature);
 				double upperEnergy = upper.referenceSpecificEnergyEuPerMu() + upper.sensibleSpecificEnergyAt(temperature);
 				if (!(Double.isFinite(lowerEnergy) && Double.isFinite(upperEnergy) && upperEnergy > lowerEnergy)) {

@@ -60,7 +60,7 @@
 - material 定义 carrier kind/id、参考温度、参考比内能、导热率和最多 16 个 caloric segment；`DEVICE` 专用于 region-owned 有限热容量设备，不混入 solver carrier ordinal；
 - species offset 定义某 host material 中每 AU 的参考内能偏移；
 - gas component 允许的 species 在 chemistry 启用时必须全部具有对应 host gas species offset，避免库存先提交、温度反演后失败；
-- transition 定义上下相、有界 `T_eq(p)` 曲线、exact 两侧体积量子、exact 质量批和接口要求；曲线端点是压力有效域的唯一原始数据，不重复保存参考温度或上下限；
+- transition 定义上下相、分段线性 `T_eq(p)` 曲线、exact 两侧体积量子、exact 质量批和接口要求；曲线端点记录压力采样范围，不重复保存参考温度或上下限；
 - boundary 定义哪些世界方块提供固定温度面。
 
 总材料数、segment、species offset、transition、boundary、cell carrier 和 phase operation 均有硬上限。world fingerprint 或引用不一致时保留存档并 LOCKED，不按当前数据包重解释。
@@ -204,9 +204,9 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 - 每条 transition 在该 lower coherent phase 或目标 upper liquid 存在时查询压力并规划。同格其他 liquid/coherent carrier 保留材料和组成，并以原有体积参与整格容量约束、以内能参与 LTE heat bath。
 - coherent group/组成池、液体 marker 总预算或 coherent exact split 暂时不能表示完整批次时，该批次零修改延期；只有已提交 coherent 几何与 cut-cell 容量矛盾、组成 capability 不匹配或账本不闭合才暂停合法候选链。
 - 体积变化与机械功写入 pending phase-work，由下一次 pressure projection 结算一次。
-- 固液规划从最近一次真实 projection 的 cell gauge pressure 加环境压力得到绝对压力，再取 `T_eq(p)`。hydrostatic thermal-only 私有候选冻结并传递该 projection，但它不是库存列、不进入 checkpoint、也不能反向恢复物质量；冷恢复先执行一次 motion 重建 projection。曲线使用 registry-bound、按压力严格递增的分段线性点，只在端点闭区间内插值；常温曲线也必须显式给出两个端点。固液曲线不必覆盖标准压力，因此可以表达只有高压区有效的相平衡；液气曲线必须覆盖标准压力，以定义其气体标准体积和潜焓参考态。任何曲线都禁止外推或钳制；有限但位于端点外的压力表示这条 transition 在该 cell 不适用，本步原样保留相库存并继续其他 thermal 工作。只有非有限压力才拒绝整个候选。
+- 固液规划从最近一次真实 projection 的 cell gauge pressure 加环境压力得到绝对压力，再取 `T_eq(p)`。hydrostatic thermal-only 私有候选冻结并传递该 projection，但它不是库存列、不进入 checkpoint、也不能反向恢复物质量；冷恢复先执行一次 motion 重建 projection。曲线使用 registry-bound、按压力严格递增的分段线性点；固液相变在数据范围内插值，在范围外沿最近端点的割线斜率延伸，低压端延伸至真空压力。端点表示已知数据的覆盖范围。相变温度必须保持有限且为有效绝对温度；超出热容采样温区时，沿用材料状态函数已有的端点热容延伸。registry 校验采样点的上下相能量差为正。常温曲线也显式给出两个端点。液气曲线仍须覆盖标准压力，用于定义标准体积和潜焓参考态；液气方向通过分压与饱和压力计算，不使用固液线性延伸规则。
 
-内置冰/水 transition 每批为 `0.001 kg`，两侧分别为 `146 SVQ` 与 `134 SVQ`。其 `611.657 Pa–2 MPa` 平衡曲线取自 [IAPWS R14-08(2011) Ice Ih 熔化压力关系](https://iapws.org/documents/release/MeltSub)的反演采样，从普通三相点起并包含 1 atm 采样点，在当前分段上相对原关系的最大温度插值误差低于 `4e-5 K`；曲线外不执行这条 transition。
+内置冰/水 transition 每批为 `0.001 kg`，两侧分别为 `146 SVQ` 与 `134 SVQ`。熔化曲线采样自 [IAPWS R14-08(2011) 方程 1–5](https://iapws.org/public/documents/MdUFK/MeltSub2011.pdf)，覆盖 Ice Ih、III、V、VI、VII 的稳定熔化分支，最高采样温度为 `715 K`；更高压力沿最后两个采样点的割线延伸。低压段保留原有 `611.657 Pa–2 MPa` 细分采样。生成脚本见 [Python 工具](../maintenance/pytool.md)。游戏内各冰相共用一个固态载体及固定体积批；这保留了高压熔点变化，尚未表达各冰相的密度差异。
 
 规划器在共享 phase-operation 预算内寻找 exact batch lattice 上离 `T_eq(p)` 最近的可表示状态；候选必须严格缩小温差，跨过平台时只在跨越后的格点更近时提交，随后保持稳定，不允许每步冻融往返。
 
@@ -230,7 +230,7 @@ p_sat(T) = P0 * exp[-L/R * (1/T - 1/T_eq)]
 p_partial = p_absolute * Vstd,vapor / Vstd,total
 ```
 
-`p_sat > p_partial` 允许沸腾，反向允许凝结，相等时不转移。这里 `L` 从上下相 `U(T_eq)` 加 `p*Delta V` 推导，不另存一个可能漂移的潜热常量。transition 的压力曲线只在标准压力处定义参考平衡态；当前总气压不是 Clausius–Clapeyron 的独立输入，因此有限非负总压（包括真空）不会因落在固液曲线端点外而被拒绝，实际方向始终由蒸气分压与液体温度决定。
+`p_sat > p_partial` 允许沸腾，反向允许凝结，相等时不转移。这里 `L` 从上下相 `U(T_eq)` 加 `p*Delta V` 推导，不另存一个可能漂移的潜热常量。transition 的压力曲线只在标准压力处定义参考平衡态；当前总气压不是 Clausius–Clapeyron 的独立输入，因此有限非负总压（包括真空）不会因落在固液曲线端点外而被拒绝，实际方向始终由蒸气分压与液体温度决定。模型不单列临界流体；气体密度直接由库存质量除以实际可用体积得到，可连续接近液体密度，不设置密度上限或额外相图直线。
 
 内置 batch 为 `0.001 kg`：液体体积 `134 SVQ`，沸点体积 `228122 SVQ`，换成标准状态约 `0.001335254 m³std`；这组数给出约 `1000 kg/m³` 液水、`0.588 kg/m³` 沸点蒸气和 `461.52 J/(kg·K)` 水蒸气气体常数。上下相状态函数在 1 atm 给出 `2.2567 MJ/kg` 汽化焓。
 

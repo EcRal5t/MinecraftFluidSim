@@ -229,6 +229,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				"/data/mmm/mmm/thermal_materials/water.json");
 		     InputStreamReader vaporReader = resourceReader(
 				     "/data/mmm/mmm/thermal_materials/water_vapor.json");
+		     InputStreamReader iceReader = resourceReader(
+				"/data/mmm/mmm/thermal_materials/ice.json");
 		     InputStreamReader meltingReader = resourceReader(
 				     "/data/mmm/mmm/phase_transitions/ice_water.json");
 		     InputStreamReader transitionReader = resourceReader(
@@ -237,6 +239,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			ThermalMaterialDefinition water = ThermalDefinitionCodec.decodeMaterial("mmm:water", waterReader);
 			ThermalMaterialDefinition vapor = ThermalDefinitionCodec.decodeMaterial("mmm:water_vapor", vaporReader);
 			ThermalPhaseTransition transition = ThermalDefinitionCodec.decodeTransition(
+			ThermalMaterialDefinition ice = ThermalDefinitionCodec.decodeMaterial("mmm:ice", iceReader);
 					"mmm:water_vapor", transitionReader);
 			ThermalPhaseTransition melting = ThermalDefinitionCodec.decodeTransition(
 					"mmm:ice_water", meltingReader);
@@ -249,8 +252,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			double vaporDensityAtBoiling = batchMassKg / vaporVolume;
 			double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * standardVaporVolume
 					/ (batchMassKg * GasRegistry.STANDARD_TEMPERATURE_K);
-			ThermalRegistry registry = new ThermalRegistry(List.of(air, water, vapor), List.of(),
-					List.of(transition), "", "");
+			ThermalRegistry registry = new ThermalRegistry(List.of(air, water, vapor, ice), List.of(),
+					List.of(transition, melting), "", "");
 			ThermalStateFunction state = new ThermalStateFunction(registry);
 			double liquidU = state.internalEnergyAtTemperature(
 					registry.materialHandle(water.id()), batchMassKg, Map.of(),
@@ -321,8 +324,20 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					&& melting.equilibriumTemperatureK(1_000_000.0)
 					< melting.equilibriumTemperatureK(101_325.0),
 					"IAPWS ice-Ih pressure curve did not lower the melting point");
-			expectFailure(() -> melting.equilibriumTemperatureK(2_000_001.0),
-					"solid/liquid equilibrium curve extrapolated outside its declared pressure range");
+			require(close(melting.equilibriumTemperatureK(208_566_000.0), 251.165)
+					&& close(melting.equilibriumTemperatureK(2_216_000_000.0), 355.0)
+					&& close(melting.equilibriumTemperatureK(melting.maximumPressurePa()), 715.0),
+					"high-pressure melting curve lost its IAPWS branch junctions");
+			var last = melting.equilibriumCurve().getLast();
+			var previous = melting.equilibriumCurve().get(melting.equilibriumCurve().size() - 2);
+			double extendedPressure = last.pressurePa() + 3.0 * (last.pressurePa() - previous.pressurePa());
+			require(close(melting.equilibriumTemperatureK(extendedPressure),
+					last.temperatureK() + 3.0 * (last.temperatureK() - previous.temperatureK()))
+					&& melting.equilibriumTemperatureK(0.0) > 273.16
+					&& melting.equilibriumTemperatureK(1.0E14) > 715.0,
+					"condensed phase endpoint continuation changed slope or rejected finite high pressure");
+			expectFailure(() -> melting.equilibriumTemperatureK(Double.NaN), "nonfinite phase pressure accepted");
+			expectFailure(() -> melting.equilibriumTemperatureK(-1.0), "negative absolute phase pressure accepted");
 			require(Math.abs(fourCellReservoirConductance - 2.392) < 1.0E-12
 					&& Math.abs(extremeReservoirPower - 23_919_298.7852) < 1.0E-6
 					&& Math.abs(maximumPhaseMassPerSimulatedSecond - 81.92) < 1.0E-12,

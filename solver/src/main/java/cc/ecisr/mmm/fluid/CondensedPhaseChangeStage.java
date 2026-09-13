@@ -60,10 +60,8 @@ final class CondensedPhaseChangeStage {
 						+ support.state().projection().pressure[cell];
 				if (!Double.isFinite(absolutePressure)) throw new FluidDomain.ThermalPhaseBlockedException(
 						"Condensed phase pressure is non-finite");
-				// A bounded equilibrium curve declares where this transition is modeled. Outside it the
-				// transition is inapplicable; do not extrapolate it or block unrelated mechanical/thermal work.
-				if (absolutePressure < transition.minimumPressurePa()
-						|| absolutePressure > transition.maximumPressurePa()) continue;
+				// Liquid tension has no positive-pressure thermodynamic phase diagram.
+				absolutePressure = Math.max(0.0, absolutePressure);
 				double temperature = thermal.phaseScanTemperatureInCell(cell);
 				double equilibrium = transition.equilibriumTemperatureK(absolutePressure);
 				if (temperature == equilibrium

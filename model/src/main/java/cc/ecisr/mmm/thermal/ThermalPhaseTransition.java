@@ -74,20 +74,24 @@ public record ThermalPhaseTransition(
 
 	public double maximumPressurePa() { return equilibriumCurve.getLast().pressurePa(); }
 
-	/** Strictly bounded linear interpolation; callers must pause rather than extrapolate. */
+	/** Piecewise linear phase curve with endpoint continuation for condensed phases. */
 	public double equilibriumTemperatureK(double absolutePressurePa) {
-		if (!(Double.isFinite(absolutePressurePa)
-				&& absolutePressurePa >= minimumPressurePa()
-				&& absolutePressurePa <= maximumPressurePa())) {
+		if (!(Double.isFinite(absolutePressurePa) && absolutePressurePa >= 0.0)
+				|| interfaceRequirement == InterfaceRequirement.LIQUID_GAS
+				&& (absolutePressurePa < minimumPressurePa() || absolutePressurePa > maximumPressurePa())) {
 			throw new IllegalArgumentException("Pressure is outside the thermal equilibrium curve");
 		}
 		for (int index = 1; index < equilibriumCurve.size(); index++) {
 			EquilibriumPoint upper = equilibriumCurve.get(index);
-			if (absolutePressurePa > upper.pressurePa()) continue;
+			if (absolutePressurePa > upper.pressurePa() && index + 1 < equilibriumCurve.size()) continue;
 			EquilibriumPoint lower = equilibriumCurve.get(index - 1);
-			double fraction = (absolutePressurePa - lower.pressurePa())
+			double slope = (upper.temperatureK() - lower.temperatureK())
 					/ (upper.pressurePa() - lower.pressurePa());
-			return lower.temperatureK() + fraction * (upper.temperatureK() - lower.temperatureK());
+			double temperature = Math.fma(absolutePressurePa - lower.pressurePa(), slope, lower.temperatureK());
+			if (!(Double.isFinite(temperature) && temperature >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)) {
+				throw new IllegalArgumentException("Continued phase curve has no valid absolute temperature");
+			}
+			return temperature;
 		}
 		return equilibriumCurve.getLast().temperatureK();
 	}
