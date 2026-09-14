@@ -12,6 +12,7 @@ import static cc.ecisr.mmm.simulation.FuzzConfig.MINIMUM_VOLUMES;
 import static cc.ecisr.mmm.simulation.FuzzConfig.RAMP_DELTAS;
 import static cc.ecisr.mmm.simulation.FuzzConfig.RANDOM_TEMPERATURES;
 import static cc.ecisr.mmm.simulation.FuzzConfig.SCENE_HALF_BOTTOM;
+import static cc.ecisr.mmm.simulation.FuzzConfig.actionName;
 import static cc.ecisr.mmm.simulation.FuzzConfig.partialVolume;
 import static cc.ecisr.mmm.simulation.FuzzMetrics.ACTION_COUNTS;
 import static cc.ecisr.mmm.simulation.FuzzMetrics.ACTION_COVERAGE;
@@ -227,17 +228,27 @@ final class ControllerInventoryDurabilityValidation {
 	}
 
 	private static FluidRegionFootprint footprint(int sizeX, int sizeY, int sizeZ) {
+		return footprint(sizeX, sizeY, sizeZ, BlockPos.ZERO);
+	}
+
+	private static FluidRegionFootprint footprint(int sizeX, int sizeY, int sizeZ, BlockPos origin) {
 		int blocksX = Math.max(1, sizeX / 2);
 		int blocksY = Math.max(1, sizeY / 2);
 		int blocksZ = Math.max(1, sizeZ / 2);
 		Set<Long> interior = new HashSet<>();
 		for (int z = 0; z < blocksZ; z++) for (int y = 0; y < blocksY; y++) for (int x = 0; x < blocksX; x++) {
-			interior.add(new BlockPos(x, y, z).asLong());
+			interior.add(origin.offset(x, y, z).asLong());
 		}
-		BlockPos controller = new BlockPos(-1, 1, 1);
-		return new FluidRegionFootprint(controller, BlockPos.ZERO,
-				new BlockPos(blocksX - 1, blocksY - 1, blocksZ - 1), interior,
-				Set.of(controller.asLong()), Set.of(ChunkPos.pack(0, 0), ChunkPos.pack(-1, 0)));
+		BlockPos controller = origin.offset(-1, 1, 1);
+		BlockPos maximum = origin.offset(blocksX - 1, blocksY - 1, blocksZ - 1);
+		Set<Long> requiredChunks = new HashSet<>();
+		for (int chunkZ = origin.getZ() >> 4; chunkZ <= maximum.getZ() >> 4; chunkZ++) {
+			for (int chunkX = origin.getX() >> 4; chunkX <= maximum.getX() >> 4; chunkX++) {
+				requiredChunks.add(ChunkPos.pack(chunkX, chunkZ));
+			}
+		}
+		return new FluidRegionFootprint(controller, origin, maximum, interior,
+				Set.of(controller.asLong()), requiredChunks);
 	}
 
 	private static ChemicalTransferLedger reagentBucket(
@@ -449,6 +460,9 @@ final class ControllerInventoryDurabilityValidation {
 			FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 			FullCapabilityTestFixture.bindFull(domain, registries, 293.15,
 					cc.ecisr.mmm.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+			double[] worldBoundary = new double[scene.sizeX() * scene.sizeY() * scene.sizeZ() * 6];
+			java.util.Arrays.fill(worldBoundary, Double.NaN);
+			domain.replaceThermalBoundaryTemperatures(worldBoundary);
 			water = registries.liquids().handle(BuiltinFluidMaterials.WATER.id());
 			mercury = registries.liquids().handle(BuiltinFluidMaterials.MERCURY.id());
 			oil = registries.liquids().handle(BuiltinFluidMaterials.OIL.id());
@@ -464,8 +478,8 @@ final class ControllerInventoryDurabilityValidation {
 				diskRoot = Files.createTempDirectory("mmm-fuzz-disk");
 				persistence = new RegionRepositoryAdapter(diskRoot, TestProfiles.full(), registries.chemical(),
 						registries.granular(), registries.thermal(), registries.gas());
-				region = new FluidRegion(java.util.UUID.randomUUID(), DIMENSION, BlockPos.ZERO, domain,
-						scene.capacity(), footprint(scene.sizeX(), scene.sizeY(), scene.sizeZ()));
+				region = new FluidRegion(java.util.UUID.randomUUID(), DIMENSION, scene.origin(), domain,
+						scene.capacity(), footprint(scene.sizeX(), scene.sizeY(), scene.sizeZ(), scene.origin()));
 				persistence.checkpoint(region);
 			}
 			roundTrip();
@@ -892,6 +906,34 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			roundTrip();
 			return "insertMinimalVolume(" + volume + ")";
+		}
+
+		/** Toggles one interior collision cell at runtime, the way a placed or broken block would. */
+		String toggleSolid(java.util.Random random) {
+			settle();
+			int x = random.nextInt(domain.sizeX());
+			int y = random.nextInt(domain.sizeY());
+			int z = random.nextInt(domain.sizeZ());
+			if (x == injectX && y == injectY && z == injectZ) return "skip(solidInjectCell)";
+			boolean next = !domain.isSolid(x, y, z);
+			float displaced = domain.setSolid(x, y, z, next);
+			roundTrip();
+			return (next ? "setSolid(" : "clearSolid(") + displaced + ")";
+		}
+
+		/** Drives one face of the world-derived constant-temperature boundary field up or down. */
+		String editBoundarySource(java.util.Random random) {
+			double[] field = domain.captureAuthoritativeState().copyThermalBoundaryTemperaturesK();
+			int cells = domain.sizeX() * domain.sizeY() * domain.sizeZ();
+			if (field == null || field.length != cells * 6) return "skip(noThermalBoundary)";
+			double[] edited = field.clone();
+			int face = random.nextInt(edited.length);
+			edited[face] = random.nextBoolean()
+					? RANDOM_TEMPERATURES[random.nextInt(RANDOM_TEMPERATURES.length)]
+					: Double.NaN;
+			if (!domain.replaceThermalBoundaryTemperatures(edited)) return "skip(boundaryUnchanged)";
+			roundTrip();
+			return "editBoundarySource(" + edited[face] + ")";
 		}
 
 		/** Drives the loader-neutral container-transfer chain: private candidate, staged HEAD, adoption. */
@@ -1431,175 +1473,193 @@ final class ControllerInventoryDurabilityValidation {
 
 	static String applyExpandedRandomAction(NormalPlayState state, java.util.Random random) {
 		int pick = random.nextInt(100);
-		if (FUZZ_PICKS) { System.out.println("pick=" + pick); System.out.flush(); }
-		if (pick < 4) {
-			int[] at = state.randomCorner(random);
-			return state.tryInsertLiquidAt(at[0], at[1], at[2], state.water) ? "insertWater" : "skip(insertWater)";
-		}
-		if (pick < 8) {
-			int[] at = state.randomCorner(random);
-			return state.tryInsertLiquidAt(at[0], at[1], at[2], state.mercury) ? "insertMercury" : "skip(insertMercury)";
-		}
-		if (pick < 12) {
-			int[] at = state.randomCorner(random);
-			return state.tryInsertLiquidAt(at[0], at[1], at[2], state.oil) ? "insertOil" : "skip(insertOil)";
-		}
-		if (pick < 19) {
-			int[] at = state.randomCorner(random);
-			int x = at[0], y = at[1], z = at[2];
-			for (int bucket = 0, count = 1 + random.nextInt(2); bucket < count; bucket++) {
-				if (!state.tryInsertChemicalAt(x, y, z, state.acid, state.acidEnergy)) return "skip(insertAcid)";
-			}
-			return "insertAcid";
-		}
-		if (pick < 26) {
-			int[] at = state.randomCorner(random);
-			int x = at[0], y = at[1], z = at[2];
-			for (int bucket = 0, count = 1 + random.nextInt(2); bucket < count; bucket++) {
-				if (!state.tryInsertChemicalAt(x, y, z, state.base, state.baseEnergy)) return "skip(insertBase)";
-			}
-			return "insertBase";
-		}
-		if (pick < 30) {
-			if (!FUZZ_DISABLE_GRANULAR) {
-				int[] at = state.randomCorner(random);
-				if (state.tryInsertSandAt(at[0], at[1], at[2])) {
-					return "insertSand";
-				}
-				return "skip(insertSand)";
-			}
-			state.step(false);
-			return "step(motion)";
-		}
-		if (pick < 34) return burst(state, random);
-		if (pick < 37) {
-			int[] at = state.randomCorner(random);
-			return state.tryInsertMixtureAt(at[0], at[1], at[2]) ? "insertMixture" : "skip(insertMixture)";
-		}
+		String branch = actionName(pick);
+		if (FUZZ_PICKS) { System.out.println("pick=" + pick + " " + branch); System.out.flush(); }
 		boolean frozen = state.pausedByOperator();
-		if (pick < 42) {
-			if (frozen) return "skip(paused)";
-			state.step(false); return "step(motion)";
-		}
-		if (pick < 47) {
-			if (frozen) return "skip(paused)";
-			state.step(true); return "step(phase)";
-		}
-		if (pick < 52) {
-			if (frozen) return "skip(paused)";
-			int count = 2 + random.nextInt(4); state.steps(true, count); return "steps(phase," + count + ")";
-		}
-		if (pick < 55) {
-			if (frozen) return "skip(paused)";
-			int count = 2 + random.nextInt(5); state.steps(false, count); return "steps(motion," + count + ")";
-		}
-		if (pick < 59) {
-			double kelvin = RANDOM_TEMPERATURES[random.nextInt(RANDOM_TEMPERATURES.length)];
-			state.temperature(kelvin);
-			state.roundTrip();
-			return "temperature(" + kelvin + ")";
-		}
-		if (pick < 62) {
-			double delta = RAMP_DELTAS[random.nextInt(RAMP_DELTAS.length)];
-			state.rampTemperature(delta);
-			state.roundTrip();
-			return "rampTemperature(" + delta + ")";
-		}
-		if (pick < 65) {
-			if (frozen) return "skip(paused)";
-			if (state.domain.totalVolumeExact() > 0.0 || state.domain.totalGranularSolidVolumeSvq() > 0L
-					|| state.domain.hasAmbientGasCells()) {
-				state.thermalStep(false);
-				return "thermalStep(motion)";
+		switch (branch) {
+			case "insertWater": {
+				int[] at = state.randomCorner(random);
+				return state.tryInsertLiquidAt(at[0], at[1], at[2], state.water)
+						? "insertWater" : "skip(insertWater)";
 			}
-			return "skip(thermalStep)";
-		}
-		if (pick < 68) {
-			if (frozen) return "skip(paused)";
-			if (state.domain.totalVolumeExact() > 0.0 || state.domain.totalGranularSolidVolumeSvq() > 0L) {
-				state.thermalStep(true);
-				return "thermalStep(phase)";
+			case "insertMercury": {
+				int[] at = state.randomCorner(random);
+				return state.tryInsertLiquidAt(at[0], at[1], at[2], state.mercury)
+						? "insertMercury" : "skip(insertMercury)";
 			}
-			return "skip(thermalStep)";
-		}
-		if (pick < 72) {
-			if (frozen) return "skip(paused)";
-			int bodies = 1 + random.nextInt(4);
-			state.stepWithMovingBodies(random, bodies);
-			return "step(movingBody," + bodies + ")";
-		}
-		if (pick < 74) {
-			if (state.region == null) return "skip(pause)";
-			if (state.region.paused()) return "skip(alreadyPaused)";
-			state.pause();
-			return "pause";
-		}
-		if (pick < 76) {
-			if (state.region == null) return "skip(resume)";
-			if (!state.region.paused()) return "skip(alreadyRunning)";
-			state.resume();
-			return "resume";
-		}
-		if (pick < 78) {
-			if (state.region == null) return "skip(save)";
-			state.saveWhilePaused();
-			return "saveWhilePaused";
-		}
-		if (pick < 81) {
-			if (state.region == null) return "skip(containerTransfer)";
-			return state.containerTransfer(random) ? "containerTransfer" : "skip(containerTransfer)";
-		}
-		if (pick < 83) {
-			if (state.region == null) return "skip(coldRestart)";
-			state.coldRestart(random);
-			return "coldRestart";
-		}
-		if (pick < 86) {
-			state.settle();
-			int[] target = state.maximumNearbyLiquidCell(6, state.water);
-			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, state.water) >= 8.0
-					&& state.tryExtractWaterAt(target)) {
-				return "extractWater";
+			case "insertOil": {
+				int[] at = state.randomCorner(random);
+				return state.tryInsertLiquidAt(at[0], at[1], at[2], state.oil)
+						? "insertOil" : "skip(insertOil)";
 			}
-			return "skip(noCanonicalWater)";
-		}
-		if (pick < 89) {
-			state.settle();
-			int[] target = state.maximumNearbyLiquidCell(6);
-			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
-					&& state.tryExtractChemicalAt(target)) {
-				return "extractChemical";
+			case "insertAcid": {
+				int[] at = state.randomCorner(random);
+				for (int bucket = 0, count = 1 + random.nextInt(2); bucket < count; bucket++) {
+					if (!state.tryInsertChemicalAt(at[0], at[1], at[2], state.acid, state.acidEnergy)) {
+						return "skip(insertAcid)";
+					}
+				}
+				return "insertAcid";
 			}
-			return "skip(noCanonicalLiquid)";
-		}
-		if (pick < 91) {
-			state.settle();
-			int[] target = state.maximumNearbyLiquidCell(6);
-			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
-					&& state.tryExtractMixtureAt(target)) {
-				return "extractMixture";
+			case "insertBase": {
+				int[] at = state.randomCorner(random);
+				for (int bucket = 0, count = 1 + random.nextInt(2); bucket < count; bucket++) {
+					if (!state.tryInsertChemicalAt(at[0], at[1], at[2], state.base, state.baseEnergy)) {
+						return "skip(insertBase)";
+					}
+				}
+				return "insertBase";
 			}
-			return "skip(noCanonicalMixture)";
-		}
-		if (pick < 92) return state.extractTail();
-		if (pick < 93) return state.extractOverCapacity();
-		if (pick < 94) return state.extractSubBucket(random.nextInt(MINIMUM_VOLUMES.length));
-		if (pick < 95) return state.extractThenRestore();
-		if (pick < 96) return state.insertMinimalVolume(random.nextInt(MINIMUM_VOLUMES.length));
-		if (pick < 97) {
-			var edit = state.domain.editIndicatorFloodFill(state.injectX, state.injectY, state.injectZ,
-					random.nextBoolean(), state.cellBudget(), 100.0);
-			if (edit.accepted()) {
+			case "insertSand": {
+				if (!FUZZ_DISABLE_GRANULAR) {
+					int[] at = state.randomCorner(random);
+					return state.tryInsertSandAt(at[0], at[1], at[2]) ? "insertSand" : "skip(insertSand)";
+				}
+				if (frozen) return "skip(paused)";
+				state.step(false);
+				return "step(motion)";
+			}
+			case "burst":
+				return burst(state, random);
+			case "insertMixture": {
+				int[] at = state.randomCorner(random);
+				return state.tryInsertMixtureAt(at[0], at[1], at[2]) ? "insertMixture" : "skip(insertMixture)";
+			}
+			case "step(motion)":
+				if (frozen) return "skip(paused)";
+				state.step(false);
+				return "step(motion)";
+			case "step(phase)":
+				if (frozen) return "skip(paused)";
+				state.step(true);
+				return "step(phase)";
+			case "steps(phase)": {
+				if (frozen) return "skip(paused)";
+				int count = 2 + random.nextInt(4);
+				state.steps(true, count);
+				return "steps(phase," + count + ")";
+			}
+			case "steps(motion)": {
+				if (frozen) return "skip(paused)";
+				int count = 2 + random.nextInt(5);
+				state.steps(false, count);
+				return "steps(motion," + count + ")";
+			}
+			case "temperature": {
+				double kelvin = RANDOM_TEMPERATURES[random.nextInt(RANDOM_TEMPERATURES.length)];
+				state.temperature(kelvin);
 				state.roundTrip();
-				return "indicator";
+				return "temperature(" + kelvin + ")";
 			}
-			return "skip(indicator:" + edit.failure() + ")";
+			case "rampTemperature": {
+				double delta = RAMP_DELTAS[random.nextInt(RAMP_DELTAS.length)];
+				state.rampTemperature(delta);
+				state.roundTrip();
+				return "rampTemperature(" + delta + ")";
+			}
+			case "thermalStep(motion)":
+				if (frozen) return "skip(paused)";
+				if (state.domain.totalVolumeExact() > 0.0 || state.domain.totalGranularSolidVolumeSvq() > 0L
+						|| state.domain.hasAmbientGasCells()) {
+					state.thermalStep(false);
+					return "thermalStep(motion)";
+				}
+				return "skip(thermalStep)";
+			case "thermalStep(phase)":
+				if (frozen) return "skip(paused)";
+				if (state.domain.totalVolumeExact() > 0.0 || state.domain.totalGranularSolidVolumeSvq() > 0L) {
+					state.thermalStep(true);
+					return "thermalStep(phase)";
+				}
+				return "skip(thermalStep)";
+			case "step(movingBody)": {
+				if (frozen) return "skip(paused)";
+				int bodies = 1 + random.nextInt(4);
+				state.stepWithMovingBodies(random, bodies);
+				return "step(movingBody," + bodies + ")";
+			}
+			case "pause":
+				if (state.region == null) return "skip(pause)";
+				if (state.region.paused()) return "skip(alreadyPaused)";
+				state.pause();
+				return "pause";
+			case "resume":
+				if (state.region == null) return "skip(resume)";
+				if (!state.region.paused()) return "skip(alreadyRunning)";
+				state.resume();
+				return "resume";
+			case "saveWhilePaused":
+				if (state.region == null) return "skip(save)";
+				state.saveWhilePaused();
+				return "saveWhilePaused";
+			case "containerTransfer":
+				if (state.region == null) return "skip(containerTransfer)";
+				return state.containerTransfer(random) ? "containerTransfer" : "skip(containerTransfer)";
+			case "coldRestart":
+				if (state.region == null) return "skip(coldRestart)";
+				state.coldRestart(random);
+				return "coldRestart";
+			case "extractWater": {
+				state.settle();
+				int[] target = state.maximumNearbyLiquidCell(6, state.water);
+				if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, state.water) >= 8.0
+						&& state.tryExtractWaterAt(target)) {
+					return "extractWater";
+				}
+				return "skip(noCanonicalWater)";
+			}
+			case "extractChemical": {
+				state.settle();
+				int[] target = state.maximumNearbyLiquidCell(6);
+				if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
+						&& state.tryExtractChemicalAt(target)) {
+					return "extractChemical";
+				}
+				return "skip(noCanonicalLiquid)";
+			}
+			case "extractMixture": {
+				state.settle();
+				int[] target = state.maximumNearbyLiquidCell(6);
+				if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
+						&& state.tryExtractMixtureAt(target)) {
+					return "extractMixture";
+				}
+				return "skip(noCanonicalMixture)";
+			}
+			case "extractTail":
+				return state.extractTail();
+			case "extractOverCapacity":
+				return state.extractOverCapacity();
+			case "extractSubBucket":
+				return state.extractSubBucket(random.nextInt(MINIMUM_VOLUMES.length));
+			case "extractThenRestore":
+				return state.extractThenRestore();
+			case "insertMinimalVolume":
+				return state.insertMinimalVolume(random.nextInt(MINIMUM_VOLUMES.length));
+			case "toggleSolid":
+				return state.toggleSolid(random);
+			case "editBoundarySource":
+				return state.editBoundarySource(random);
+			case "indicator": {
+				var edit = state.domain.editIndicatorFloodFill(state.injectX, state.injectY, state.injectZ,
+						random.nextBoolean(), state.cellBudget(), 100.0);
+				if (edit.accepted()) {
+					state.roundTrip();
+					return "indicator";
+				}
+				return "skip(indicator:" + edit.failure() + ")";
+			}
+			case "clear":
+				state.clear();
+				return "clear";
+			case "vent":
+				state.vent();
+				return "vent";
+			default:
+				if (frozen) return "skip(paused)";
+				state.settle();
+				return "settle";
 		}
-		if (pick < 98) { state.clear(); return "clear"; }
-		if (pick < 99) { state.vent(); return "vent"; }
-		if (frozen) return "skip(paused)";
-		state.settle();
-		return "settle";
 	}
 
 	private static String burst(NormalPlayState state, java.util.Random random) {
@@ -1661,8 +1721,25 @@ final class ControllerInventoryDurabilityValidation {
 	}
 
 	record FuzzScene(String name, int seedBase, int sizeX, int sizeY, int sizeZ, int capacity,
-			boolean sealed, int injectX, int injectY, int injectZ,
+			boolean sealed, int injectX, int injectY, int injectZ, BlockPos origin,
 			java.util.function.Consumer<FluidDomain> geometry) {
+
+		FuzzScene {
+			if (origin == null) origin = BlockPos.ZERO;
+		}
+
+		FuzzScene(String name, int seedBase, int sizeX, int sizeY, int sizeZ, int capacity,
+				boolean sealed, int injectX, int injectY, int injectZ,
+				java.util.function.Consumer<FluidDomain> geometry) {
+			this(name, seedBase, sizeX, sizeY, sizeZ, capacity, sealed, injectX, injectY, injectZ,
+					BlockPos.ZERO, geometry);
+		}
+
+		/** Places the same scene across a different world origin, for cross-section persistence coverage. */
+		FuzzScene at(BlockPos newOrigin) {
+			return new FuzzScene(name, seedBase, sizeX, sizeY, sizeZ, capacity, sealed, injectX, injectY,
+					injectZ, newOrigin, geometry);
+		}
 
 		static FuzzScene flat(String name, int seedBase, int sizeX, int sizeY, int sizeZ, boolean sealed,
 				int injectX, int injectY, int injectZ) {
@@ -1735,7 +1812,15 @@ final class ControllerInventoryDurabilityValidation {
 					domain.setSolid(3, y, z, true);
 					domain.setSolid(5, y, z, true);
 				}
-			})
+			}),
+			FuzzScene.flat("sealed-netsplit-8", 1900, 8, 8, 8, true, 7, 7, 7)
+					.at(new BlockPos(-2, 64, -2)),
+			new FuzzScene("sealed-netsplit-corridor-8", 2000, 8, 8, 8, 8 * 8 * 8 * 8, true, 4, 6, 4, domain -> {
+				for (int z = 0; z < 8; z++) for (int y = 1; y < 7; y++) {
+					domain.setSolid(3, y, z, true);
+					domain.setSolid(5, y, z, true);
+				}
+			}).at(new BlockPos(-2, 64, -2))
 	);
 
 	@FunctionalInterface private interface Scenario { void run(NormalPlayState state) throws Exception; }

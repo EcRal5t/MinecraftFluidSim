@@ -20,9 +20,10 @@ public final class FluidDomainStateAssertions {
 	/**
 	 * Durable projection of {@link #assertSameState}: excludes transient state that the on-disk wire
 	 * does not carry. The persistence layer serializes chemical mixture/indicator/species truth but
-	 * not the chemistry dirty-cell queue, and it omits the granular deposit scheduler queues and ages
-	 * plus the per-step condensed-phase pressure scratch; those are rebuilt on load. Physical
-	 * inventory, gas ownership, the thermal audit and pending phase work stay bit-compared.
+	 * not the chemistry dirty-cell queue, and it omits the granular deposit scheduler queues and ages,
+	 * the per-step condensed-phase pressure scratch and the world-derived constant-temperature
+	 * boundary field; those are rebuilt on load. Physical inventory, gas ownership, the thermal audit
+	 * and pending phase work stay bit-compared.
 	 */
 	public static void assertSameDurableState(FluidDomainState expected, FluidDomainState actual, String context) {
 		compareState(expected, actual, context, false);
@@ -62,9 +63,9 @@ public final class FluidDomainStateAssertions {
 		compareGas(expected.gas(), actual.gas(), context);
 		compareThermal(expected.thermal(), actual.thermal(), context);
 		comparePendingPhaseVolume(expected.pendingPhaseVolume(), actual.pendingPhaseVolume(), context);
-		requireRawDoublesNullable(expected.copyThermalBoundaryTemperaturesK(),
-				actual.copyThermalBoundaryTemperaturesK(), context + " thermal boundary");
 		if (includeTransient) {
+			requireRawDoublesNullable(expected.copyThermalBoundaryTemperaturesK(),
+					actual.copyThermalBoundaryTemperaturesK(), context + " thermal boundary");
 			compareCondensedPhasePressure(expected.condensedPhasePressure(),
 					actual.condensedPhasePressure(), context);
 		}
