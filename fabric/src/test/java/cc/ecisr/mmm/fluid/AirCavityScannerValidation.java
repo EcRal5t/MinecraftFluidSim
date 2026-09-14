@@ -10,6 +10,7 @@ public final class AirCavityScannerValidation {
 		validateOpenTankIsAmbient();
 		validateControllerExtentIsSealed();
 		validateClosedCapacityComplementsCarrierInventory();
+		validateNewPartialVacuumOwners();
 		validateSealedTankVolume();
 		validateOpenUTubeIsAmbient();
 		validateMultipleSealedCavities();
@@ -46,6 +47,36 @@ public final class AirCavityScannerValidation {
 				"closed controller capacity regression must retain one gas owner");
 		checkRelative(result.sealedAvailableVolume()[0], (n * n * n - 2.0) * 0.125,
 				"closed gas capacity must complement total authoritative liquid volume");
+	}
+
+	private static void validateNewPartialVacuumOwners() {
+		Grid grid = new Grid(4);
+		int[] previous = new int[64];
+		java.util.Arrays.fill(previous, -1);
+		for (int cell = 0; cell < 64; cell++) {
+			grid.solid[cell] = cell % 4 == 1;
+			grid.markerCount[cell] = grid.solid[cell] ? 0 : 1;
+			grid.liquidVolume[cell] = grid.solid[cell] ? 0 : 1;
+		}
+		var scanner = new AirCavityScanner(4, 4, 4, 1, 64);
+		var full = scanner.scanRetainingClosedLineages(grid.solid, grid.markerCount,
+				grid.liquidVolume, grid.cutCells, null, previous, 0);
+		check(full.sealedNodeCount() == 0, "full liquid domain invented a gas owner");
+		for (int cell = 0; cell < 64; cell++) if (!grid.solid[cell]) grid.liquidVolume[cell] = 0.75;
+		var opened = scanner.scanRetainingClosedLineages(grid.solid, grid.markerCount,
+				grid.liquidVolume, grid.cutCells, null, previous, 0);
+		check(opened.sealedNodeCount() == 2, "disconnected partial voids need separate vacuum owners");
+		var orphaned = scanner.scanRetainingClosedLineages(grid.solid, grid.markerCount,
+				grid.liquidVolume, grid.cutCells, null, previous, 2);
+		check(java.util.Arrays.equals(opened.cellNodeId(), orphaned.cellNodeId()),
+				"disappeared old owners prevented new residual topology");
+		checkRelative(java.util.Arrays.stream(opened.sealedAvailableVolume()).sum(), 12,
+				"partial vacuum capacity must equal extracted volume");
+		var restored = scanner.scanRetainingClosedLineages(grid.solid, grid.markerCount,
+				grid.liquidVolume, grid.cutCells, null, opened.cellLineageNodeId(), 2);
+		check(java.util.Arrays.equals(opened.cellNodeId(), restored.cellNodeId())
+				&& java.util.Arrays.equals(opened.sealedAvailableVolume(), restored.sealedAvailableVolume()),
+				"partial vacuum topology changed on persistence rescan");
 	}
 
 	private static void validateOpenTankIsAmbient() {

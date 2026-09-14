@@ -6,6 +6,7 @@ final class PressureSystem {
 	private final GranularPressureCoupling granular;
 	private final GranularImplicitDrag drag;
 	private final double[] liquidPressure, gasPressure;
+	private float substepDuration;
 
 	PressureSystem(FluidDomain domain) {
 		this.domain = domain;
@@ -13,7 +14,7 @@ final class PressureSystem {
 		this.granular = new GranularPressureCoupling(domain);
 		this.drag = new GranularImplicitDrag(domain, granular);
 	}
-	void prepareGranular(float dt) { granular.prepare(dt); drag.prepare(dt); }
+	void prepareGranular(float dt) { substepDuration = dt; granular.prepare(dt); drag.prepare(dt); }
 	void forEachGranularGasNode(java.util.function.IntConsumer accept) { granular.forEachGasNode(accept); }
 	double liquidPressure(int cell) { return liquidPressure[cell]; }
 	double gasPressure(int node) { return gasPressure[node]; }
@@ -37,7 +38,10 @@ final class PressureSystem {
 			if (!result.converged() || !drag.updateResistance()) return new PressureProjectionResult(
 					totalIterations, result.residualRms(), result.converged());
 		}
-		throw new FluidDomain.PressureSolveBlockedException("Nonlinear granular drag did not converge: " + drag.nonlinearResidual());
+		// A smaller implicit step reduces the drag/inertia ratio without changing the drag law.
+		// Retry the complete private candidate, including phase geometry and external impulses.
+		throw new MechanicalTimeRefinement((int) Math.ceil(2.0 * domain.config.timeStep() / substepDuration),
+				"Nonlinear granular drag residual " + drag.nonlinearResidual());
 	}
 
 	private PressureProjectionResult solveLinear(int unknownCount, double target) {

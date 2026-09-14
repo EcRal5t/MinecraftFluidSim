@@ -112,6 +112,8 @@ A_pressure = rho_reference * cellVolume * C L^-1 C^T + A_gas_storage
 
 backend/checkpoint handoff 保存 active parcel 的接触年龄与支撑标志。恢复、相变、沉积与运动的容量检查共用 `GranularCouplingFields` 的连续位置整数 SVQ 归属：active parcel 分摊到最多八格，deposit 与 coherent 按所属单元计入。液体 marker 的短时聚集保留在液体输运层中处理。
 
+非线性外层每个子步最多求解 32 轮。未达到上述动量残差要求时，后端从原始完整请求重新计算，将子步时长至少减半；较小的 `dt K / M` 降低阻力与惯性的刚性比例。重算沿用力学时间细化的统一次数上限，保留相变预算、总推进时间和外部冲量的一次提交语义。
+
 ### Deposit 松弛与局部唤醒
 
 - active parcel 连续受到支撑且速度低于阈值满 3 次接触后，才原子转入 deposit；转换保持 SVQ、质量、组成和内能不变。

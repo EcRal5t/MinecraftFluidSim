@@ -39,6 +39,8 @@ marker bulk 的普通空隙不必被猜成气泡，因为它即使成为 compone
 
 已存在的密闭有限库存若暂时只剩部分充液格，则其旧 lineage 中仍有正 residual volume、且不接触任何本轮 full-air/ambient component 的连通部分成为显式 partial owner component；真实连通时仍按正常 merge 处理。
 
+完整重扫后若仍没有节点，扫描器为具有正残余体积的部分充液连通区建立显式归属，按原规则规范化节点顺序和闭域总容量。这覆盖满液域的分数抽取，以及旧 membership 全部消失、抽取位置没有旧 lineage 的情况。节点通过正常 remap 接受库存：没有可转移库存时保持真空，旧密闭库存仍按既有容量权重转移。持久化与恢复使用相同的扫描规则。
+
 密闭壳内失去全部拓扑去向的库存**不判为丢失**：腔体消失时 `normalizeClosedCapacity` 已经把它的容量重新分给仍然存在的腔体，库存按同一组容量权重随之转移。被载体挤没的气泡、被抬升液面压碎的 headspace 碎片、以及闪断的载体空隙在这里是同一个事件——闭体积里的气，腔体没了；只有守恒决定它去哪。开放域中同样的情形才记 escaped sink。
 
 - controller 已验证闭壳时，solver 外边界不自动判作 ambient；命令临时域和真实缺口仍连接 ambient node 0。

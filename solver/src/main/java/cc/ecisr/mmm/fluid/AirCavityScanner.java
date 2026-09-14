@@ -91,8 +91,8 @@ import java.util.TreeMap;
 	/**
 	 * Rebuilds a closed topology while retaining a proven finite bubble whose current gas volume
 	 * lies entirely in partial liquid cells. The previous lineage is used only when a connected
-	 * residual component has no current full-air/ambient neighbour; it therefore cannot seed a new
-	 * bubble in liquid bulk or prevent a real merge.
+	 * residual component has no current full-air/ambient neighbour. If no owners survive at all,
+	 * residual components establish new owning cells; the remap determines their actual inventory.
 	 */
 	Result scanRetainingClosedLineages(
 			boolean[] solid, int[] markerCount, double[] cellLiquidVolume,
@@ -107,6 +107,13 @@ import java.util.TreeMap;
 		if (scanned.stopReason() == StopReason.COMPLETED) {
 			scanned = retainOrphanedPartialLineages(scanned, solid, cutCells,
 					previousCellLineageNodeId, previousSealedNodeCount);
+			if (scanned.sealedNodeCount() == 0 && previousSealedNodeCount > 0) {
+				// Old memberships can disappear while newly extracted residuals have no lineage.
+				// First retain proven owners; only when none remain, seed the residual geometry.
+				int[] unowned = new int[cellCount];
+				Arrays.fill(unowned, -1);
+				scanned = retainOrphanedPartialLineages(scanned, solid, cutCells, unowned, 0);
+			}
 			normalizeClosedCapacity(solid, cellLiquidVolume, cutCells, granular,
 					scanned.sealedAvailableVolume());
 		}
@@ -183,10 +190,13 @@ import java.util.TreeMap;
 		boolean retained = false;
 		boolean[] previousSurvivesAsAir = survivingAirNodes(
 				membership, cellAvailable, previousLineage, previousSealedNodeCount);
+		// Fractional extraction from a full domain can expose only partial cells.
+		// With no old or full-air owner, their connected residuals are new vacuum cavities.
+		boolean newVacuum = previousSealedNodeCount == 0 && scanned.sealedNodeCount() == 0;
 		for (int seed = 0; seed < cellCount; seed++) {
 			int previousNode = previousLineage[seed];
-			if (visited[seed] || previousNode < 1 || previousNode > previousSealedNodeCount
-					|| previousSurvivesAsAir[previousNode]
+			if (visited[seed] || !newVacuum && (previousNode < 1 || previousNode > previousSealedNodeCount
+					|| previousSurvivesAsAir[previousNode])
 					|| lineage[seed] >= 0 || solid[seed] || !(cellAvailable[seed] > 0.0)) continue;
 			int head = 0, tail = 0;
 			boolean touchesCurrentGas = false;
@@ -209,7 +219,7 @@ import java.util.TreeMap;
 						touchesCurrentGas = true;
 						continue;
 					}
-					if (!visited[neighbor] && previousLineage[neighbor] == previousNode
+					if (!visited[neighbor] && (newVacuum || previousLineage[neighbor] == previousNode)
 							&& !solid[neighbor] && cellAvailable[neighbor] > 0.0) {
 						visited[neighbor] = true;
 						floodStack[tail++] = neighbor;
