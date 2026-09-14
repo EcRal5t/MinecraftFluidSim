@@ -17,6 +17,8 @@ final class FuzzMetrics {
 			new java.util.concurrent.ConcurrentHashMap<>();
 	static final java.util.Map<String, Long> JOB_MILLIS = new java.util.concurrent.ConcurrentHashMap<>();
 	static final java.util.Map<String, Long> JOB_SUBSTEPS = new java.util.concurrent.ConcurrentHashMap<>();
+	static final java.util.Map<String, java.util.concurrent.atomic.LongAdder> EVENT_COUNTS =
+			new java.util.concurrent.ConcurrentHashMap<>();
 
 	static void cover(String action) {
 		ACTION_COVERAGE.computeIfAbsent(coverageLabel(action),
@@ -45,6 +47,57 @@ final class FuzzMetrics {
 		ACTION_COVERAGE.entrySet().stream()
 				.sorted((left, right) -> Long.compare(right.getValue().get(), left.getValue().get()))
 				.forEach(entry -> System.out.println("  " + entry.getValue() + " " + entry.getKey()));
+	}
+
+	private static void addEvent(String name, long delta) {
+		if (delta != 0L) {
+			EVENT_COUNTS.computeIfAbsent(name, key -> new java.util.concurrent.atomic.LongAdder()).add(delta);
+		}
+	}
+
+	/** Records what the solver actually did, so action coverage can be told apart from process coverage. */
+	static void recordEvents(cc.ecisr.mmm.fluid.FluidDomain.StepStats stats) {
+		if (stats == null) return;
+		addEvent("chemistry:evaluations", stats.chemistryEvaluations());
+		addEvent("chemistry:changedMarkers", stats.chemistryChangedMarkers());
+		addEvent("reseed:merges", stats.reseededMerges());
+		addEvent("reseed:splits", stats.reseededSplits());
+		var granular = stats.granularTransition();
+		if (granular != null) {
+			addEvent("granular:settledParcels", granular.settledParcels());
+			addEvent("granular:wokenParcels", granular.wokenParcels());
+		}
+		recordPhaseCounters(stats.thermalAxis(), false);
+	}
+
+	static void recordEvents(cc.ecisr.mmm.fluid.FluidDomain.ThermalAxisStats axis) {
+		recordPhaseCounters(axis, true);
+	}
+
+	private static void recordPhaseCounters(cc.ecisr.mmm.fluid.FluidDomain.ThermalAxisStats axis,
+	                                        boolean withChemistry) {
+		if (axis == null) return;
+		if (axis.condensedPhase() != null) addEvent("phase:condensedOperations", axis.condensedPhase().operations());
+		if (axis.gasPhase() != null) addEvent("phase:gasOperations", axis.gasPhase().operations());
+		if (axis.granularPhase() != null) addEvent("granular:precipitations", axis.granularPhase().precipitations());
+		if (withChemistry && axis.chemistry() != null) addEvent("chemistry:evaluations", axis.chemistry().evaluations());
+	}
+
+	static void printEvents() {
+		System.out.println("process coverage (events that actually occurred):");
+		if (EVENT_COUNTS.isEmpty()) {
+			System.out.println("  <none observed>");
+			return;
+		}
+		EVENT_COUNTS.entrySet().stream()
+				.sorted((left, right) -> Long.compare(right.getValue().sum(), left.getValue().sum()))
+				.forEach(entry -> System.out.println("  " + entry.getValue().sum() + " " + entry.getKey()));
+		for (String required : new String[]{"phase:condensedOperations", "granular:settledParcels",
+				"chemistry:evaluations"}) {
+			if (!EVENT_COUNTS.containsKey(required)) {
+				System.out.println("  WARN no observed process: " + required);
+			}
+		}
 	}
 
 	static void printHotspots() {

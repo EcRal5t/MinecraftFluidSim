@@ -441,6 +441,7 @@ final class ControllerInventoryDurabilityValidation {
 
 		private void recordSubsteps(FluidStepCandidate candidate) {
 			substepsThisAction = Math.addExact(substepsThisAction, candidate.stats().substeps());
+			FuzzMetrics.recordEvents(candidate.stats());
 		}
 
 		NormalPlayState(FullCapabilityTestFixture.Registries registries) throws Exception {
@@ -1061,6 +1062,7 @@ final class ControllerInventoryDurabilityValidation {
 				var candidate = new CpuFluidSolverBackend().evaluateThermal(new FluidThermalStepRequest(
 						solverGeneration(), domain.captureAuthoritativeState(), phase,
 						phase ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0));
+				FuzzMetrics.recordEvents(candidate.stats());
 				adoptThermal(candidate);
 			} catch (RuntimeException failure) {
 				throw new IllegalStateException("normal-play thermal-only step failed at generation " + generation
@@ -1318,6 +1320,7 @@ final class ControllerInventoryDurabilityValidation {
 			System.out.println("  first trace=" + firstTrace.get(entry.getKey()));
 		}
 		FuzzMetrics.printCoverage();
+		FuzzMetrics.printEvents();
 		FuzzMetrics.printHotspots();
 		check(failures == 0, "scenario fuzz found " + failures + " interrupted jobs");
 	}
