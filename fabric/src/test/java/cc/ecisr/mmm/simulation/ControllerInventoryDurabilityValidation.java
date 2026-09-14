@@ -8,6 +8,7 @@ import static cc.ecisr.mmm.simulation.FuzzConfig.FUZZ_PARTIAL;
 import static cc.ecisr.mmm.simulation.FuzzConfig.FUZZ_PICKS;
 import static cc.ecisr.mmm.simulation.FuzzConfig.FUZZ_PROGRESS;
 import static cc.ecisr.mmm.simulation.FuzzConfig.JOB_TIMEOUT_MILLIS;
+import static cc.ecisr.mmm.simulation.FuzzConfig.MINIMUM_VOLUMES;
 import static cc.ecisr.mmm.simulation.FuzzConfig.RAMP_DELTAS;
 import static cc.ecisr.mmm.simulation.FuzzConfig.RANDOM_TEMPERATURES;
 import static cc.ecisr.mmm.simulation.FuzzConfig.SCENE_HALF_BOTTOM;
@@ -28,6 +29,7 @@ import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidDomainState;
 import cc.ecisr.mmm.fluid.FluidDomainStateAssertions;
+import cc.ecisr.mmm.fluid.FluidCellInventoryView;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.fluid.FluidThermalStepRequest;
@@ -421,6 +423,7 @@ final class ControllerInventoryDurabilityValidation {
 		private FluidRegion region;
 		private Path diskRoot;
 		private int diskRoundTrips;
+		private boolean chemistryTouched;
 		private FluidDomain domain;
 		private long generation;
 		long substepsThisAction;
@@ -632,6 +635,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		void insertChemical(ChemicalTransferLedger ledger, double energy, String name) {
 			settle();
+			chemistryTouched = true;
 			check(domain.tryInsertExactChemical(injectX, injectY, injectZ, ledger, 6, true, energy).transferred(),
 					"normal-play " + name + " insertion was rejected at generation " + generation
 							+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
@@ -646,20 +650,33 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		boolean tryInsertLiquidAt(int x, int y, int z, int material) {
 			settle();
+			FluidDomainState before = snapshot();
 			float volume = FUZZ_PARTIAL ? partialVolume(x, y, z) : 8.0F;
-			if (!domain.tryInsertExactVolume(x, y, z, volume, 6, material, true).transferred()) return false;
+			if (!domain.tryInsertExactVolume(x, y, z, volume, 6, material, true).transferred()) {
+				assertUnchanged(before, "liquid insertion at " + x + "," + y + "," + z);
+				return false;
+			}
 			roundTrip();
 			return true;
 		}
 		boolean tryInsertChemicalAt(int x, int y, int z, ChemicalTransferLedger ledger, double energy) {
 			settle();
-			if (!domain.tryInsertExactChemical(x, y, z, ledger, 6, true, energy).transferred()) return false;
+			chemistryTouched = true;
+			FluidDomainState before = snapshot();
+			if (!domain.tryInsertExactChemical(x, y, z, ledger, 6, true, energy).transferred()) {
+				assertUnchanged(before, "chemical insertion at " + x + "," + y + "," + z);
+				return false;
+			}
 			roundTrip();
 			return true;
 		}
 		boolean tryInsertSandAt(int x, int y, int z) {
 			settle();
-			if (!domain.tryInsertExactGranular(x, y, z, sand, 6, true).inserted()) return false;
+			FluidDomainState before = snapshot();
+			if (!domain.tryInsertExactGranular(x, y, z, sand, 6, true).inserted()) {
+				assertUnchanged(before, "granular insertion at " + x + "," + y + "," + z);
+				return false;
+			}
 			roundTrip();
 			return true;
 		}
@@ -677,33 +694,204 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 		}
 		boolean tryExtractWaterAt(int[] target) {
+			FluidDomainState before = snapshot();
 			float volume = FUZZ_PARTIAL ? partialVolume(target[0], target[1], target[2]) : 8.0F;
-			if (!domain.tryExtractExactVolume(target[0], target[1], target[2], volume, 6, water).transferred()) return false;
+			if (!domain.tryExtractExactVolume(target[0], target[1], target[2], volume, 6, water).transferred()) {
+				assertUnchanged(before, "water extraction");
+				return false;
+			}
 			roundTrip();
 			return true;
 		}
 		boolean tryExtractChemicalAt(int[] target) {
+			FluidDomainState before = snapshot();
 			float volume = FUZZ_PARTIAL ? partialVolume(target[0], target[1], target[2]) : 8.0F;
-			if (!domain.tryExtractExactChemical(target[0], target[1], target[2], volume, 6).transferred()) return false;
+			if (!domain.tryExtractExactChemical(target[0], target[1], target[2], volume, 6).transferred()) {
+				assertUnchanged(before, "chemical extraction");
+				return false;
+			}
 			roundTrip();
 			return true;
 		}
 		boolean tryInsertMixtureAt(int x, int y, int z) {
 			settle();
+			FluidDomainState before = snapshot();
 			double portion = FUZZ_PARTIAL ? partialVolume(x, y, z) : 2.0;
 			List<FluidDomain.MaterialPortion> portions = List.of(
 					new FluidDomain.MaterialPortion(water, portion, 2_000.0),
 					new FluidDomain.MaterialPortion(mercury, 1.0, 13_600.0),
 					new FluidDomain.MaterialPortion(oil, 1.0, 900.0));
-			if (!domain.tryInsertExactMixture(x, y, z, portions, 6, true).transferred()) return false;
+			if (!domain.tryInsertExactMixture(x, y, z, portions, 6, true).transferred()) {
+				assertUnchanged(before, "mixture insertion at " + x + "," + y + "," + z);
+				return false;
+			}
 			roundTrip();
 			return true;
 		}
 		boolean tryExtractMixtureAt(int[] target) {
+			FluidDomainState before = snapshot();
 			float volume = FUZZ_PARTIAL ? partialVolume(target[0], target[1], target[2]) : 4.0F;
-			if (!domain.tryExtractExactMixture(target[0], target[1], target[2], volume, 7).transferred()) return false;
+			if (!domain.tryExtractExactMixture(target[0], target[1], target[2], volume, 7).transferred()) {
+				assertUnchanged(before, "mixture extraction");
+				return false;
+			}
 			roundTrip();
 			return true;
+		}
+
+		FluidDomainState snapshot() { return domain.captureAuthoritativeState(); }
+
+		/** Every rejection path must leave the authoritative inventory exactly as it found it. */
+		void assertUnchanged(FluidDomainState before, String what) {
+			FluidDomainStateAssertions.assertSameState(before, domain.captureAuthoritativeState(),
+					"rejected " + what + " mutated authoritative state at generation " + generation);
+		}
+
+		/** Durable per-material inventory, independent of marker order or grid layout. */
+		record AggregateInventory(long particles, double liquidVolume, double liquidMass, long solidSvq,
+				double solidMass, long speciesQuanta, java.util.TreeMap<String, double[]> perMaterial) { }
+
+		AggregateInventory aggregateInventory() {
+			java.util.TreeMap<String, double[]> perMaterial = new java.util.TreeMap<>();
+			for (int z = 0; z < domain.sizeZ(); z++) {
+				for (int y = 0; y < domain.sizeY(); y++) {
+					for (int x = 0; x < domain.sizeX(); x++) {
+						FluidCellInventoryView view = domain.observeCellInventory(x, y, z);
+						if (view == null) continue;
+						for (FluidCellInventoryView.MaterialAmount amount : view.materials()) {
+							double[] totals = perMaterial.computeIfAbsent(amount.materialId(), key -> new double[2]);
+							totals[0] += amount.volumeCubicMetres();
+							totals[1] += amount.massKilograms();
+						}
+					}
+				}
+			}
+			return new AggregateInventory(domain.particleCount(), domain.totalVolumeExact(), domain.totalMass(),
+					domain.totalGranularSolidVolumeSvq(), domain.totalGranularMass(),
+					domain.totalChemicalSpeciesQuanta(), perMaterial);
+		}
+
+		private static boolean inventoryClose(double baseline, double actual) {
+			return Math.abs(baseline - actual)
+					<= 1.0E-9 * Math.max(1.0, Math.max(Math.abs(baseline), Math.abs(actual)));
+		}
+
+		/**
+		 * Compares durable per-material inventory within solver roundoff; marker identity and ordering
+		 * are free. Callers must ensure the compared operation is composition-symmetric: a round trip
+		 * through a solute-bearing mixture removes carrier water together with its solutes and returns
+		 * pure water, so mass need not return to baseline there.
+		 */
+		void checkInventoryMatches(AggregateInventory baseline, String context) {
+			AggregateInventory actual = aggregateInventory();
+			check(baseline.solidSvq() == actual.solidSvq(),
+					context + ": solid inventory changed " + baseline.solidSvq() + " -> " + actual.solidSvq());
+			check(inventoryClose(baseline.liquidVolume(), actual.liquidVolume())
+							&& inventoryClose(baseline.liquidMass(), actual.liquidMass()),
+					context + ": liquid ledger changed " + baseline.liquidVolume() + "/" + baseline.liquidMass()
+							+ " -> " + actual.liquidVolume() + "/" + actual.liquidMass());
+			check(baseline.perMaterial().keySet().equals(actual.perMaterial().keySet()),
+					context + ": material set changed " + baseline.perMaterial().keySet()
+							+ " -> " + actual.perMaterial().keySet());
+			for (var entry : baseline.perMaterial().entrySet()) {
+				double[] before = entry.getValue();
+				double[] after = actual.perMaterial().get(entry.getKey());
+				check(inventoryClose(before[0], after[0]) && inventoryClose(before[1], after[1]),
+						context + ": " + entry.getKey() + " changed " + before[0] + "/" + before[1]
+								+ " -> " + after[0] + "/" + after[1]);
+			}
+		}
+
+		/** Draws exactly the tail available at the fullest cell; the request must not be rejected. */
+		String extractTail() {
+			settle();
+			int[] target = maximumNearbyLiquidCell(6);
+			double available = domain.exactVolumeNear(target[0], target[1], target[2], 6, -1);
+			if (available <= 0.0) return "skip(noLiquid)";
+			float requested = (float) Math.nextDown(available);
+			FluidDomainState before = snapshot();
+			if (!domain.tryExtractExactVolume(target[0], target[1], target[2], requested, 6).transferred()) {
+				assertUnchanged(before, "tail extraction");
+				return "skip(tailRejected)";
+			}
+			roundTrip();
+			return "extractTail";
+		}
+
+		/** Requests marginally more than the fullest cell holds, exercising the capacity threshold. */
+		String extractOverCapacity() {
+			settle();
+			int[] target = maximumNearbyLiquidCell(6);
+			double available = domain.exactVolumeNear(target[0], target[1], target[2], 6, -1);
+			if (available <= 0.0) return "skip(noLiquid)";
+			float requested = available > 1.0E6 ? 1.0E6F : (float) (available * 1.0000001 + 1.0E-3);
+			FluidDomainState before = snapshot();
+			if (!domain.tryExtractExactVolume(target[0], target[1], target[2], requested, 6).transferred()) {
+				assertUnchanged(before, "over-capacity extraction");
+				return "skip(overCapacityRejected)";
+			}
+			roundTrip();
+			return "extractOverCapacity";
+		}
+
+		/** Requests a sub-bucket or minimal-remainder volume, sized against what the cell holds. */
+		String extractSubBucket(int variant) {
+			settle();
+			int[] target = maximumNearbyLiquidCell(6);
+			double available = domain.exactVolumeNear(target[0], target[1], target[2], 6, -1);
+			if (available <= 0.0) return "skip(noLiquid)";
+			float requested = MINIMUM_VOLUMES[variant % MINIMUM_VOLUMES.length];
+			if (requested > available) requested = (float) available;
+			FluidDomainState before = snapshot();
+			if (!domain.tryExtractExactVolume(target[0], target[1], target[2], requested, 6).transferred()) {
+				assertUnchanged(before, "sub-bucket extraction");
+				return "skip(subBucketRejected)";
+			}
+			roundTrip();
+			return "extractSubBucket(" + requested + ")";
+		}
+
+		/** Extracts one bucket then pours it straight back; the durable inventory must return to baseline. */
+		String extractThenRestore() {
+			if (chemistryTouched) return "skip(chemistryTouched)";
+			settle();
+			int[] target = maximumNearbyLiquidCell(6, water);
+			if (domain.exactVolumeNear(target[0], target[1], target[2], 6, water) < 8.0) {
+				return "skip(noCanonicalWaterLoop)";
+			}
+			AggregateInventory baseline = aggregateInventory();
+			FluidDomainState beforeExtract = snapshot();
+			if (!domain.tryExtractExactVolume(target[0], target[1], target[2], 8.0F, 6, water).transferred()) {
+				assertUnchanged(beforeExtract, "closed-loop extraction");
+				return "skip(loopExtractRejected)";
+			}
+			FluidDomainState beforeInsert = snapshot();
+			if (!domain.tryInsertExactVolume(target[0], target[1], target[2], 8.0F, 6, water, true).transferred()) {
+				assertUnchanged(beforeInsert, "closed-loop re-insertion");
+				return "skip(loopInsertRejected)";
+			}
+			roundTrip();
+			checkInventoryMatches(baseline, "closed-loop extract/pour at generation " + generation);
+			return "extractThenRestore";
+		}
+
+		/** Minimal-volume insertion. An empty inject cell is a clear precondition, so rejection fails. */
+		String insertMinimalVolume(int variant) {
+			settle();
+			float volume = MINIMUM_VOLUMES[variant % MINIMUM_VOLUMES.length];
+			boolean preconditionEmpty = domain.exactVolumeNear(injectX, injectY, injectZ, 0, -1) == 0.0
+					&& domain.granularSolidVolumeSvq(injectX, injectY, injectZ) == 0L;
+			FluidDomainState before = snapshot();
+			if (!domain.tryInsertExactVolume(injectX, injectY, injectZ, volume, 6, water, true).transferred()) {
+				if (preconditionEmpty) {
+					throw new AssertionError("empty inject cell rejected a " + volume
+							+ " m3 insertion at generation " + generation);
+				}
+				assertUnchanged(before, "minimal-volume insertion");
+				return "skip(minimalRejected)";
+			}
+			roundTrip();
+			return "insertMinimalVolume(" + volume + ")";
 		}
 
 		/** Drives the loader-neutral container-transfer chain: private candidate, staged HEAD, adoption. */
@@ -1244,19 +1432,19 @@ final class ControllerInventoryDurabilityValidation {
 	static String applyExpandedRandomAction(NormalPlayState state, java.util.Random random) {
 		int pick = random.nextInt(100);
 		if (FUZZ_PICKS) { System.out.println("pick=" + pick); System.out.flush(); }
-		if (pick < 5) {
+		if (pick < 4) {
 			int[] at = state.randomCorner(random);
 			return state.tryInsertLiquidAt(at[0], at[1], at[2], state.water) ? "insertWater" : "skip(insertWater)";
 		}
-		if (pick < 10) {
+		if (pick < 8) {
 			int[] at = state.randomCorner(random);
 			return state.tryInsertLiquidAt(at[0], at[1], at[2], state.mercury) ? "insertMercury" : "skip(insertMercury)";
 		}
-		if (pick < 15) {
+		if (pick < 12) {
 			int[] at = state.randomCorner(random);
 			return state.tryInsertLiquidAt(at[0], at[1], at[2], state.oil) ? "insertOil" : "skip(insertOil)";
 		}
-		if (pick < 22) {
+		if (pick < 19) {
 			int[] at = state.randomCorner(random);
 			int x = at[0], y = at[1], z = at[2];
 			for (int bucket = 0, count = 1 + random.nextInt(2); bucket < count; bucket++) {
@@ -1264,7 +1452,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "insertAcid";
 		}
-		if (pick < 29) {
+		if (pick < 26) {
 			int[] at = state.randomCorner(random);
 			int x = at[0], y = at[1], z = at[2];
 			for (int bucket = 0, count = 1 + random.nextInt(2); bucket < count; bucket++) {
@@ -1272,7 +1460,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "insertBase";
 		}
-		if (pick < 34) {
+		if (pick < 30) {
 			if (!FUZZ_DISABLE_GRANULAR) {
 				int[] at = state.randomCorner(random);
 				if (state.tryInsertSandAt(at[0], at[1], at[2])) {
@@ -1283,41 +1471,41 @@ final class ControllerInventoryDurabilityValidation {
 			state.step(false);
 			return "step(motion)";
 		}
-		if (pick < 39) return burst(state, random);
-		if (pick < 42) {
+		if (pick < 34) return burst(state, random);
+		if (pick < 37) {
 			int[] at = state.randomCorner(random);
 			return state.tryInsertMixtureAt(at[0], at[1], at[2]) ? "insertMixture" : "skip(insertMixture)";
 		}
 		boolean frozen = state.pausedByOperator();
-		if (pick < 47) {
+		if (pick < 42) {
 			if (frozen) return "skip(paused)";
 			state.step(false); return "step(motion)";
 		}
-		if (pick < 52) {
+		if (pick < 47) {
 			if (frozen) return "skip(paused)";
 			state.step(true); return "step(phase)";
 		}
-		if (pick < 57) {
+		if (pick < 52) {
 			if (frozen) return "skip(paused)";
 			int count = 2 + random.nextInt(4); state.steps(true, count); return "steps(phase," + count + ")";
 		}
-		if (pick < 60) {
+		if (pick < 55) {
 			if (frozen) return "skip(paused)";
 			int count = 2 + random.nextInt(5); state.steps(false, count); return "steps(motion," + count + ")";
 		}
-		if (pick < 64) {
+		if (pick < 59) {
 			double kelvin = RANDOM_TEMPERATURES[random.nextInt(RANDOM_TEMPERATURES.length)];
 			state.temperature(kelvin);
 			state.roundTrip();
 			return "temperature(" + kelvin + ")";
 		}
-		if (pick < 67) {
+		if (pick < 62) {
 			double delta = RAMP_DELTAS[random.nextInt(RAMP_DELTAS.length)];
 			state.rampTemperature(delta);
 			state.roundTrip();
 			return "rampTemperature(" + delta + ")";
 		}
-		if (pick < 70) {
+		if (pick < 65) {
 			if (frozen) return "skip(paused)";
 			if (state.domain.totalVolumeExact() > 0.0 || state.domain.totalGranularSolidVolumeSvq() > 0L
 					|| state.domain.hasAmbientGasCells()) {
@@ -1326,7 +1514,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(thermalStep)";
 		}
-		if (pick < 73) {
+		if (pick < 68) {
 			if (frozen) return "skip(paused)";
 			if (state.domain.totalVolumeExact() > 0.0 || state.domain.totalGranularSolidVolumeSvq() > 0L) {
 				state.thermalStep(true);
@@ -1334,39 +1522,39 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(thermalStep)";
 		}
-		if (pick < 77) {
+		if (pick < 72) {
 			if (frozen) return "skip(paused)";
 			int bodies = 1 + random.nextInt(4);
 			state.stepWithMovingBodies(random, bodies);
 			return "step(movingBody," + bodies + ")";
 		}
-		if (pick < 79) {
+		if (pick < 74) {
 			if (state.region == null) return "skip(pause)";
 			if (state.region.paused()) return "skip(alreadyPaused)";
 			state.pause();
 			return "pause";
 		}
-		if (pick < 81) {
+		if (pick < 76) {
 			if (state.region == null) return "skip(resume)";
 			if (!state.region.paused()) return "skip(alreadyRunning)";
 			state.resume();
 			return "resume";
 		}
-		if (pick < 83) {
+		if (pick < 78) {
 			if (state.region == null) return "skip(save)";
 			state.saveWhilePaused();
 			return "saveWhilePaused";
 		}
-		if (pick < 86) {
+		if (pick < 81) {
 			if (state.region == null) return "skip(containerTransfer)";
 			return state.containerTransfer(random) ? "containerTransfer" : "skip(containerTransfer)";
 		}
-		if (pick < 88) {
+		if (pick < 83) {
 			if (state.region == null) return "skip(coldRestart)";
 			state.coldRestart(random);
 			return "coldRestart";
 		}
-		if (pick < 91) {
+		if (pick < 86) {
 			state.settle();
 			int[] target = state.maximumNearbyLiquidCell(6, state.water);
 			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, state.water) >= 8.0
@@ -1375,7 +1563,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(noCanonicalWater)";
 		}
-		if (pick < 94) {
+		if (pick < 89) {
 			state.settle();
 			int[] target = state.maximumNearbyLiquidCell(6);
 			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
@@ -1384,7 +1572,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(noCanonicalLiquid)";
 		}
-		if (pick < 96) {
+		if (pick < 91) {
 			state.settle();
 			int[] target = state.maximumNearbyLiquidCell(6);
 			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
@@ -1393,6 +1581,11 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(noCanonicalMixture)";
 		}
+		if (pick < 92) return state.extractTail();
+		if (pick < 93) return state.extractOverCapacity();
+		if (pick < 94) return state.extractSubBucket(random.nextInt(MINIMUM_VOLUMES.length));
+		if (pick < 95) return state.extractThenRestore();
+		if (pick < 96) return state.insertMinimalVolume(random.nextInt(MINIMUM_VOLUMES.length));
 		if (pick < 97) {
 			var edit = state.domain.editIndicatorFloodFill(state.injectX, state.injectY, state.injectZ,
 					random.nextBoolean(), state.cellBudget(), 100.0);

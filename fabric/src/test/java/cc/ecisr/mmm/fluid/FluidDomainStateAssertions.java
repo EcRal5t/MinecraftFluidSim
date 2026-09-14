@@ -18,17 +18,18 @@ public final class FluidDomainStateAssertions {
 	}
 
 	/**
-	 * Durable projection of {@link #assertSameState}: excludes transient scheduler state that the
-	 * on-disk wire does not carry. The persistence layer serializes chemical mixture/indicator/
-	 * species truth but not the chemistry dirty-cell queue, and it omits the granular deposit
-	 * scheduler queues and ages; those are rebuilt on load. Physical inventory stays bit-compared.
+	 * Durable projection of {@link #assertSameState}: excludes transient state that the on-disk wire
+	 * does not carry. The persistence layer serializes chemical mixture/indicator/species truth but
+	 * not the chemistry dirty-cell queue, and it omits the granular deposit scheduler queues and ages
+	 * plus the per-step condensed-phase pressure scratch; those are rebuilt on load. Physical
+	 * inventory, gas ownership, the thermal audit and pending phase work stay bit-compared.
 	 */
 	public static void assertSameDurableState(FluidDomainState expected, FluidDomainState actual, String context) {
 		compareState(expected, actual, context, false);
 	}
 
 	private static void compareState(FluidDomainState expected, FluidDomainState actual, String context,
-	                                 boolean includeSchedulers) {
+	                                 boolean includeTransient) {
 		require(expected != null && actual != null, context + ": state must not be null");
 		require(expected.config().equals(actual.config()), context + ": solver config changed");
 		require(expected.maximumParticleCount() == actual.maximumParticleCount(),
@@ -47,12 +48,12 @@ public final class FluidDomainStateAssertions {
 			case CHEMICAL -> compareChemicals(expected.chemicals(), actual.chemicals(),
 					context + " chemical carrier");
 		}
-		if (includeSchedulers) {
+		if (includeTransient) {
 			require(Arrays.equals(expected.copyChemicalDirtyCells(), actual.copyChemicalDirtyCells()),
 					context + ": chemical dirty-cell schedule changed");
 		}
 		compareGranular(expected.granular(), actual.granular(), context);
-		if (includeSchedulers) {
+		if (includeTransient) {
 			compareGranularDynamics(expected.granularDynamics(), actual.granularDynamics(), context);
 		} else {
 			require((expected.granularDynamics() == null) == (actual.granularDynamics() == null),
@@ -63,8 +64,10 @@ public final class FluidDomainStateAssertions {
 		comparePendingPhaseVolume(expected.pendingPhaseVolume(), actual.pendingPhaseVolume(), context);
 		requireRawDoublesNullable(expected.copyThermalBoundaryTemperaturesK(),
 				actual.copyThermalBoundaryTemperaturesK(), context + " thermal boundary");
-		compareCondensedPhasePressure(expected.condensedPhasePressure(),
-				actual.condensedPhasePressure(), context);
+		if (includeTransient) {
+			compareCondensedPhasePressure(expected.condensedPhasePressure(),
+					actual.condensedPhasePressure(), context);
+		}
 	}
 
 	private static void compareParticles(FlipParticleState expected, FlipParticleState actual, String context) {

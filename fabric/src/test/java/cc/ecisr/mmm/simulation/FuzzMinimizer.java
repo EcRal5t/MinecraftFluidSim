@@ -69,37 +69,9 @@ final class FuzzMinimizer {
 		return branchName(first.intValue());
 	}
 
-	/** Mirrors the thresholds in the expanded action table; used only to label recorded slices. */
+	/** Mirrors the expanded action table thresholds; used only to label recorded slices. */
 	static String branchName(int pick) {
-		if (pick < 5) return "insertWater";
-		if (pick < 10) return "insertMercury";
-		if (pick < 15) return "insertOil";
-		if (pick < 22) return "insertAcid";
-		if (pick < 29) return "insertBase";
-		if (pick < 34) return "insertSand";
-		if (pick < 39) return "burst";
-		if (pick < 42) return "insertMixture";
-		if (pick < 47) return "step(motion)";
-		if (pick < 52) return "step(phase)";
-		if (pick < 57) return "steps(phase)";
-		if (pick < 60) return "steps(motion)";
-		if (pick < 64) return "temperature";
-		if (pick < 67) return "rampTemperature";
-		if (pick < 70) return "thermalStep(motion)";
-		if (pick < 73) return "thermalStep(phase)";
-		if (pick < 77) return "step(movingBody)";
-		if (pick < 79) return "pause";
-		if (pick < 81) return "resume";
-		if (pick < 83) return "saveWhilePaused";
-		if (pick < 86) return "containerTransfer";
-		if (pick < 88) return "coldRestart";
-		if (pick < 91) return "extractWater";
-		if (pick < 94) return "extractChemical";
-		if (pick < 96) return "extractMixture";
-		if (pick < 97) return "indicator";
-		if (pick < 98) return "clear";
-		if (pick < 99) return "vent";
-		return "settle";
+		return FuzzConfig.actionName(pick);
 	}
 
 	private static ScriptedFailure recordScriptedFailure(
