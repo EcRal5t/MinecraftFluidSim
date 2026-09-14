@@ -870,6 +870,8 @@ final class ControllerInventoryDurabilityValidation {
 
 	/** Seeded normal-play fuzzing entry point used to surface forced simulation interruptions. */
 	public static void main(String[] args) throws Exception {
+		for (String arg : args) if (arg.equals("debug")) FUZZ_DEBUG = true;
+		for (String arg : args) if (arg.equals("picks")) FUZZ_PICKS = true;
 		int[] explicitSeeds = args.length > 0 && args[0].equals("reported")
 				? new int[]{97, 119, 135, 152, 267, 268, 282, 323, 327, 441, 479, 505, 506, 691,
 						702, 807, 876, 880, 1259, 1393, 1433, 1505, 1807, 1864, 1870, 2056, 2075, 3034}
@@ -1274,7 +1276,7 @@ final class ControllerInventoryDurabilityValidation {
 				return new Failure(index + 1, failure, java.util.List.copyOf(trace));
 			}
 			trace.add((index + 1) + ":" + action);
-			if (Boolean.getBoolean("mmm.fuzzDebug")) {
+			if ((FUZZ_DEBUG || Boolean.getBoolean("mmm.fuzzDebug"))) {
 				System.out.println("action=" + (index + 1) + ":" + action + " liquid=" + state.domain.totalVolumeExact());
 				for (int node : state.domain.gasBoundary().nodeIds()) System.out.println("  gas=" + node
 						+ " volume=" + state.domain.gasBoundary().availableVolume(node)
@@ -1312,6 +1314,11 @@ final class ControllerInventoryDurabilityValidation {
 				}
 				long elapsedNanos = System.nanoTime() - actionStartNanos;
 				String label = coverageLabel(action);
+				if (FUZZ_PICKS) {
+					System.out.println("done action=" + (index + 1) + " " + action + " "
+							+ (elapsedNanos / 1_000_000L) + "ms substeps=" + state.substepsThisAction);
+					System.out.flush();
+				}
 				ACTION_NANOS.computeIfAbsent(label, key -> new java.util.concurrent.atomic.LongAdder())
 						.add(elapsedNanos);
 				ACTION_COUNTS.computeIfAbsent(label, key -> new java.util.concurrent.atomic.LongAdder())
@@ -1321,7 +1328,7 @@ final class ControllerInventoryDurabilityValidation {
 				jobSubsteps += state.substepsThisAction;
 				trace.add((index + 1) + ":" + action);
 				cover(action);
-				if (Boolean.getBoolean("mmm.fuzzDebug")) {
+				if ((FUZZ_DEBUG || Boolean.getBoolean("mmm.fuzzDebug"))) {
 					System.out.println("action=" + (index + 1) + ":" + action + " liquid="
 							+ state.domain.totalVolumeExact());
 					for (int node : state.domain.gasBoundary().nodeIds()) System.out.println("  gas=" + node
@@ -1398,6 +1405,7 @@ final class ControllerInventoryDurabilityValidation {
 
 	private static String applyExpandedRandomAction(NormalPlayState state, java.util.Random random) {
 		int pick = random.nextInt(100);
+		if (FUZZ_PICKS) { System.out.println("pick=" + pick); System.out.flush(); }
 		if (pick < 5) {
 			int[] at = state.randomCorner(random);
 			return state.tryInsertLiquidAt(at[0], at[1], at[2], state.water) ? "insertWater" : "skip(insertWater)";
@@ -1584,6 +1592,8 @@ final class ControllerInventoryDurabilityValidation {
 	}
 
 	private static boolean FUZZ_PROGRESS;
+	private static boolean FUZZ_DEBUG;
+	private static boolean FUZZ_PICKS;
 	private static boolean FUZZ_DISABLE_GRANULAR = false;
 	private static boolean FUZZ_DISK = false;
 	private static boolean FUZZ_PARTIAL = false;
