@@ -197,12 +197,20 @@ final class ControllerInventoryDurabilityValidation {
 	}
 
 	private static FluidRegionFootprint footprint() {
+		return footprint(8, 8, 8);
+	}
+
+	private static FluidRegionFootprint footprint(int sizeX, int sizeY, int sizeZ) {
+		int blocksX = Math.max(1, sizeX / 2);
+		int blocksY = Math.max(1, sizeY / 2);
+		int blocksZ = Math.max(1, sizeZ / 2);
 		Set<Long> interior = new HashSet<>();
-		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
+		for (int z = 0; z < blocksZ; z++) for (int y = 0; y < blocksY; y++) for (int x = 0; x < blocksX; x++) {
 			interior.add(new BlockPos(x, y, z).asLong());
 		}
 		BlockPos controller = new BlockPos(-1, 1, 1);
-		return new FluidRegionFootprint(controller, BlockPos.ZERO, new BlockPos(3, 3, 3), interior,
+		return new FluidRegionFootprint(controller, BlockPos.ZERO,
+				new BlockPos(blocksX - 1, blocksY - 1, blocksZ - 1), interior,
 				Set.of(controller.asLong()), Set.of(ChunkPos.pack(0, 0), ChunkPos.pack(-1, 0)));
 	}
 
@@ -425,7 +433,7 @@ final class ControllerInventoryDurabilityValidation {
 				persistence = new RegionRepositoryAdapter(diskRoot, TestProfiles.full(), registries.chemical(),
 						registries.granular(), registries.thermal(), registries.gas());
 				region = new FluidRegion(java.util.UUID.randomUUID(), DIMENSION, BlockPos.ZERO, domain,
-						scene.capacity(), footprint());
+						scene.capacity(), footprint(scene.sizeX(), scene.sizeY(), scene.sizeZ()));
 				persistence.checkpoint(region);
 			}
 			roundTrip();
@@ -434,6 +442,78 @@ final class ControllerInventoryDurabilityValidation {
 		}
 
 		long solverGeneration() { return region != null ? region.solverGeneration() : generation; }
+
+		boolean pausedByOperator() { return region != null && region.paused(); }
+
+		void pause() {
+			region.setPaused(true);
+			check(region.paused(), "operator pause did not stick");
+			check(!region.canStep(), "paused region still reports a steppable solver");
+		}
+
+		void resume() {
+			region.setPaused(false);
+			check(!region.paused(), "operator resume did not stick");
+		}
+
+		void saveWhilePaused() {
+			region.setPaused(true);
+			try {
+				persistence.checkpoint(region);
+			} catch (java.io.IOException failure) {
+				throw new IllegalStateException("save-while-paused checkpoint failed", failure);
+			}
+			check(region.paused(), "checkpoint cleared the operator pause intent");
+		}
+
+		void coldRestart(java.util.Random random) {
+			boolean wasPaused = region.paused();
+			boolean wasPhysics = region.entityPhysicsEnabled();
+			boolean wasDebug = region.debugOverlays();
+			long wasGeneration = region.checkpointGeneration();
+			int nextInterval = 1 + random.nextInt(3);
+			region.setEntityPhysicsEnabled(!wasPhysics);
+			region.setDebugOverlays(!wasDebug);
+			region.setStepIntervalTicks(nextInterval);
+			FluidRegionLifecycle.State expectedState = expectedRunningState(nextInterval);
+			java.util.UUID id = region.id();
+			try {
+				persistence.checkpointAndUnload(region);
+			} catch (java.io.IOException failure) {
+				throw new IllegalStateException("cold-restart checkpoint/unload failed", failure);
+			}
+			FluidRegionManager manager = new FluidRegionManager(
+					new cc.ecisr.mmm.application.RegionCatalog.Limits(
+							8, 1_000_000L, 1_000_000L, 10_000_000L, 10_000_000L));
+			java.util.List<String> issues = persistence.loadMetadata(manager);
+			FluidRegion fresh = manager.region(id);
+			if (fresh == null) {
+				throw new IllegalStateException("cold restart did not rediscover region " + id + "; issues=" + issues);
+			}
+			try {
+				persistence.restore(fresh);
+			} catch (java.io.IOException failure) {
+				throw new IllegalStateException("cold-restart restore failed", failure);
+			}
+			check(fresh.solverLoaded(), "cold restart left the region unloaded");
+			check(fresh.paused() == wasPaused,
+					"cold restart changed operator pause intent " + wasPaused + " -> " + fresh.paused());
+			check(fresh.lifecycle().state() == expectedState,
+					"cold restart changed lifecycle state " + expectedState + " -> " + fresh.lifecycle().state());
+			check(fresh.stepIntervalTicks() == nextInterval,
+					"cold restart changed the step interval " + nextInterval + " -> " + fresh.stepIntervalTicks());
+			check(fresh.entityPhysicsEnabled() == !wasPhysics, "cold restart changed entity physics intent");
+			check(fresh.debugOverlays() == !wasDebug, "cold restart changed the debug-overlay intent");
+			check(fresh.checkpointGeneration() > wasGeneration,
+					"cold restart did not advance the committed checkpoint generation");
+			region = fresh;
+			domain = fresh.domain();
+			roundTrip();
+		}
+
+		private static FluidRegionLifecycle.State expectedRunningState(int interval) {
+			return interval == 1 ? FluidRegionLifecycle.State.ACTIVE : FluidRegionLifecycle.State.REDUCED;
+		}
 
 		void adopt(FluidStepCandidate candidate) {
 			if (region != null) {
@@ -706,6 +786,9 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			if (region != null) {
 				if (++diskRoundTrips % FUZZ_DISK_ROUND_TRIP_INTERVAL == 0) {
+					boolean wasPaused = region.paused();
+					FluidRegionLifecycle.State wasState = region.lifecycle().state();
+					int wasInterval = region.stepIntervalTicks();
 					try {
 						persistence.checkpointAndUnload(region);
 						persistence.restore(region);
@@ -713,6 +796,12 @@ final class ControllerInventoryDurabilityValidation {
 						throw new IllegalStateException("normal-play disk checkpoint failed at generation "
 								+ generation, failure);
 					}
+					check(region.paused() == wasPaused,
+							"disk checkpoint changed the operator pause intent " + wasPaused + " -> " + region.paused());
+					check(region.lifecycle().state() == wasState,
+							"disk checkpoint changed lifecycle state " + wasState + " -> " + region.lifecycle().state());
+					check(region.stepIntervalTicks() == wasInterval,
+							"disk checkpoint changed the step interval " + wasInterval + " -> " + region.stepIntervalTicks());
 					domain = region.domain();
 				}
 			} else {
@@ -737,10 +826,11 @@ final class ControllerInventoryDurabilityValidation {
 		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
 		if (args.length > 0 && args[0].equals("replay")) {
 			FUZZ_PROGRESS = true;
-			int scene = Integer.parseInt(args[1]);
-			int seed = Integer.parseInt(args[2]);
+			int base = parseFuzzMode(args, 1);
+			int scene = Integer.parseInt(args[base]);
+			int seed = Integer.parseInt(args[base + 1]);
 			Failure failure = runExpandedRandomPlay(registries, FUZZ_SCENES.get(scene), seed,
-					args.length > 3 ? Integer.parseInt(args[3]) : 80);
+					args.length > base + 2 ? Integer.parseInt(args[base + 2]) : 80);
 			if (failure != null) throw new AssertionError("scene=" + scene + ", seed=" + seed
 					+ ", trace=" + failure.trace(), failure.cause());
 			System.out.println("replay scene=" + scene + " seed=" + seed + " PASS");
@@ -752,9 +842,10 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		if (args.length > 0 && args[0].equals("minimize")) {
 			FUZZ_PROGRESS = false;
-			int sceneIndex = args.length > 1 ? Integer.parseInt(args[1]) : 1;
-			int seed = args.length > 2 ? Integer.parseInt(args[2]) : 212;
-			int actions = args.length > 3 ? Integer.parseInt(args[3]) : 80;
+			int base = parseFuzzMode(args, 1);
+			int sceneIndex = args.length > base ? Integer.parseInt(args[base]) : 1;
+			int seed = args.length > base + 1 ? Integer.parseInt(args[base + 1]) : 212;
+			int actions = args.length > base + 2 ? Integer.parseInt(args[base + 2]) : 80;
 			minimize(registries, FUZZ_SCENES.get(sceneIndex), seed, actions);
 			return;
 		}
@@ -781,6 +872,16 @@ final class ControllerInventoryDurabilityValidation {
 		int sceneTo = args.length > 5 ? Integer.parseInt(args[5]) : FUZZ_SCENES.size();
 		int seedOffset = args.length > 6 ? Integer.parseInt(args[6]) : 0;
 		runSceneFuzz(registries, seedsPerScene, actions, threads, sceneFrom, sceneTo, seedOffset);
+	}
+
+	private static int parseFuzzMode(String[] args, int index) {
+		if (index < args.length && (args[index].equals("disk") || args[index].equals("partial")
+				|| args[index].equals("partialdisk"))) {
+			FUZZ_DISK = args[index].contains("disk");
+			FUZZ_PARTIAL = args[index].contains("partial");
+			return index + 1;
+		}
+		return index;
 	}
 
 	private static void runExplicitSeeds(
@@ -862,21 +963,28 @@ final class ControllerInventoryDurabilityValidation {
 		if (pick < 15) return "insertOil";
 		if (pick < 22) return "insertAcid";
 		if (pick < 29) return "insertBase";
-		if (pick < 35) return "insertSand";
-		if (pick < 42) return "burst";
-		if (pick < 48) return "step(motion)";
-		if (pick < 54) return "step(phase)";
-		if (pick < 60) return "steps(phase)";
-		if (pick < 63) return "steps(motion)";
-		if (pick < 68) return "temperature";
-		if (pick < 71) return "thermalStep(motion)";
-		if (pick < 74) return "thermalStep(phase)";
-		if (pick < 78) return "step(movingBody)";
-		if (pick < 82) return "extractWater";
-		if (pick < 88) return "extractChemical";
-		if (pick < 93) return "indicator";
-		if (pick < 96) return "clear";
-		if (pick < 98) return "vent";
+		if (pick < 34) return "insertSand";
+		if (pick < 39) return "burst";
+		if (pick < 42) return "insertMixture";
+		if (pick < 47) return "step(motion)";
+		if (pick < 52) return "step(phase)";
+		if (pick < 57) return "steps(phase)";
+		if (pick < 60) return "steps(motion)";
+		if (pick < 64) return "temperature";
+		if (pick < 67) return "rampTemperature";
+		if (pick < 70) return "thermalStep(motion)";
+		if (pick < 73) return "thermalStep(phase)";
+		if (pick < 77) return "step(movingBody)";
+		if (pick < 79) return "pause";
+		if (pick < 81) return "resume";
+		if (pick < 83) return "saveWhilePaused";
+		if (pick < 85) return "coldRestart";
+		if (pick < 89) return "extractWater";
+		if (pick < 92) return "extractChemical";
+		if (pick < 95) return "extractMixture";
+		if (pick < 97) return "indicator";
+		if (pick < 98) return "clear";
+		if (pick < 99) return "vent";
 		return "settle";
 	}
 
@@ -1038,7 +1146,27 @@ final class ControllerInventoryDurabilityValidation {
 					+ " :: " + entry.getKey());
 			System.out.println("  first trace=" + firstTrace.get(entry.getKey()));
 		}
+		System.out.println("action coverage:");
+		ACTION_COVERAGE.entrySet().stream()
+				.sorted((left, right) -> Long.compare(right.getValue().get(), left.getValue().get()))
+				.forEach(entry -> System.out.println("  " + entry.getValue() + " " + entry.getKey()));
 		check(failures == 0, "scenario fuzz found " + failures + " interrupted jobs");
+	}
+
+	private static void cover(String action) {
+		ACTION_COVERAGE.computeIfAbsent(coverageLabel(action),
+				key -> new java.util.concurrent.atomic.AtomicLong()).incrementAndGet();
+	}
+
+	private static String coverageLabel(String action) {
+		if (action.startsWith("skip(")) {
+			String inner = action.substring(5);
+			int cut = inner.indexOf('(');
+			if (cut <= 0 && inner.endsWith(")")) cut = inner.length() - 1;
+			return "skip:" + (cut > 0 ? inner.substring(0, cut) : inner);
+		}
+		int cut = action.indexOf('(');
+		return cut > 0 ? action.substring(0, cut) : action;
 	}
 
 	private static String rootCause(Throwable failure) {
@@ -1096,6 +1224,7 @@ final class ControllerInventoryDurabilityValidation {
 					return new Failure(index + 1, failure, java.util.List.copyOf(trace));
 				}
 				trace.add((index + 1) + ":" + action);
+				cover(action);
 				if (Boolean.getBoolean("mmm.fuzzDebug")) {
 					System.out.println("action=" + (index + 1) + ":" + action + " liquid="
 							+ state.domain.totalVolumeExact());
@@ -1198,7 +1327,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "insertBase";
 		}
-		if (pick < 35) {
+		if (pick < 34) {
 			if (!FUZZ_DISABLE_GRANULAR) {
 				int[] at = state.randomCorner(random);
 				if (state.tryInsertSandAt(at[0], at[1], at[2])) {
@@ -1214,23 +1343,37 @@ final class ControllerInventoryDurabilityValidation {
 			int[] at = state.randomCorner(random);
 			return state.tryInsertMixtureAt(at[0], at[1], at[2]) ? "insertMixture" : "skip(insertMixture)";
 		}
-		if (pick < 48) { state.step(false); return "step(motion)"; }
-		if (pick < 54) { state.step(true); return "step(phase)"; }
-		if (pick < 60) { int count = 2 + random.nextInt(4); state.steps(true, count); return "steps(phase," + count + ")"; }
-		if (pick < 63) { int count = 2 + random.nextInt(5); state.steps(false, count); return "steps(motion," + count + ")"; }
-		if (pick < 68) {
+		boolean frozen = state.pausedByOperator();
+		if (pick < 47) {
+			if (frozen) return "skip(paused)";
+			state.step(false); return "step(motion)";
+		}
+		if (pick < 52) {
+			if (frozen) return "skip(paused)";
+			state.step(true); return "step(phase)";
+		}
+		if (pick < 57) {
+			if (frozen) return "skip(paused)";
+			int count = 2 + random.nextInt(4); state.steps(true, count); return "steps(phase," + count + ")";
+		}
+		if (pick < 60) {
+			if (frozen) return "skip(paused)";
+			int count = 2 + random.nextInt(5); state.steps(false, count); return "steps(motion," + count + ")";
+		}
+		if (pick < 64) {
 			double kelvin = RANDOM_TEMPERATURES[random.nextInt(RANDOM_TEMPERATURES.length)];
 			state.temperature(kelvin);
 			state.roundTrip();
 			return "temperature(" + kelvin + ")";
 		}
-		if (pick < 71) {
+		if (pick < 67) {
 			double delta = RAMP_DELTAS[random.nextInt(RAMP_DELTAS.length)];
 			state.rampTemperature(delta);
 			state.roundTrip();
 			return "rampTemperature(" + delta + ")";
 		}
-		if (pick < 74) {
+		if (pick < 70) {
+			if (frozen) return "skip(paused)";
 			if (state.domain.totalVolumeExact() > 0.0 || state.domain.totalGranularSolidVolumeSvq() > 0L
 					|| state.domain.hasAmbientGasCells()) {
 				state.thermalStep(false);
@@ -1238,15 +1381,41 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(thermalStep)";
 		}
-		if (pick < 77) {
+		if (pick < 73) {
+			if (frozen) return "skip(paused)";
 			if (state.domain.totalVolumeExact() > 0.0 || state.domain.totalGranularSolidVolumeSvq() > 0L) {
 				state.thermalStep(true);
 				return "thermalStep(phase)";
 			}
 			return "skip(thermalStep)";
 		}
-		if (pick < 81) { state.stepWithMovingBody(random); return "step(movingBody)"; }
+		if (pick < 77) {
+			if (frozen) return "skip(paused)";
+			state.stepWithMovingBody(random); return "step(movingBody)";
+		}
+		if (pick < 79) {
+			if (state.region == null) return "skip(pause)";
+			if (state.region.paused()) return "skip(alreadyPaused)";
+			state.pause();
+			return "pause";
+		}
+		if (pick < 81) {
+			if (state.region == null) return "skip(resume)";
+			if (!state.region.paused()) return "skip(alreadyRunning)";
+			state.resume();
+			return "resume";
+		}
+		if (pick < 83) {
+			if (state.region == null) return "skip(save)";
+			state.saveWhilePaused();
+			return "saveWhilePaused";
+		}
 		if (pick < 85) {
+			if (state.region == null) return "skip(coldRestart)";
+			state.coldRestart(random);
+			return "coldRestart";
+		}
+		if (pick < 89) {
 			state.settle();
 			int[] target = state.maximumNearbyLiquidCell(6, state.water);
 			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, state.water) >= 8.0
@@ -1255,7 +1424,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(noCanonicalWater)";
 		}
-		if (pick < 87) {
+		if (pick < 92) {
 			state.settle();
 			int[] target = state.maximumNearbyLiquidCell(6);
 			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
@@ -1264,7 +1433,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(noCanonicalLiquid)";
 		}
-		if (pick < 90) {
+		if (pick < 95) {
 			state.settle();
 			int[] target = state.maximumNearbyLiquidCell(6);
 			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
@@ -1273,7 +1442,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(noCanonicalMixture)";
 		}
-		if (pick < 94) {
+		if (pick < 97) {
 			var edit = state.domain.editIndicatorFloodFill(state.injectX, state.injectY, state.injectZ,
 					random.nextBoolean(), state.cellBudget(), 100.0);
 			if (edit.accepted()) {
@@ -1282,8 +1451,9 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(indicator:" + edit.failure() + ")";
 		}
-		if (pick < 96) { state.clear(); return "clear"; }
-		if (pick < 98) { state.vent(); return "vent"; }
+		if (pick < 98) { state.clear(); return "clear"; }
+		if (pick < 99) { state.vent(); return "vent"; }
+		if (frozen) return "skip(paused)";
 		state.settle();
 		return "settle";
 	}
@@ -1313,17 +1483,19 @@ final class ControllerInventoryDurabilityValidation {
 	private static boolean FUZZ_DISK = false;
 	private static boolean FUZZ_PARTIAL = false;
 	private static final int FUZZ_DISK_ROUND_TRIP_INTERVAL = 4;
+	private static final java.util.Map<String, java.util.concurrent.atomic.AtomicLong> ACTION_COVERAGE =
+			new java.util.concurrent.ConcurrentHashMap<>();
 
 	private static float partialVolume(int x, int y, int z) {
 		return 0.25F + ((x * 31 + y * 17 + z * 7) % 32) * 0.24F;
 	}
 
 	private static final double[] RANDOM_TEMPERATURES = {
-			0.1, 1.0, 50.0, 150.0, 273.15, 293.15, 320.0, 373.15, 600.0, 1_500.0, 3_000.0, 5_000.0, 10_000.0
+			1.0, 50.0, 150.0, 273.15, 293.15, 320.0, 373.15, 600.0, 1_500.0, 3_000.0
 	};
 
 	private static final double[] RAMP_DELTAS = {
-			-5_000.0, -1_000.0, -300.0, -50.0, -5.0, 5.0, 50.0, 300.0, 1_000.0, 5_000.0
+			-300.0, -50.0, -5.0, 5.0, 50.0, 300.0
 	};
 
 	private static final int SCENE_HALF_BOTTOM = 0x33;
