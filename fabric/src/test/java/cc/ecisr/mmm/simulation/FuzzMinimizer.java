@@ -108,24 +108,28 @@ final class FuzzMinimizer {
 	) throws Exception {
 		ControllerInventoryDurabilityValidation.NormalPlayState state =
 				new ControllerInventoryDurabilityValidation.NormalPlayState(registries, scene);
-		RecordingRandom random = new RecordingRandom(seed);
-		java.util.List<java.util.List<RngToken>> slices = new java.util.ArrayList<>();
-		java.util.List<String> labels = new java.util.ArrayList<>();
-		for (int index = 0; index < maxActions; index++) {
-			int before = random.tokens.size();
-			try {
-				labels.add(ControllerInventoryDurabilityValidation.applyExpandedRandomAction(state, random));
-			} catch (Throwable failure) {
-				java.util.List<RngToken> slice =
-						java.util.List.copyOf(random.tokens.subList(before, random.tokens.size()));
-				slices.add(slice);
-				labels.add(failedLabel(slice));
-				return new ScriptedFailure(scene, seed,
-						ControllerInventoryDurabilityValidation.rootCause(failure), slices, labels);
+		try {
+			RecordingRandom random = new RecordingRandom(seed);
+			java.util.List<java.util.List<RngToken>> slices = new java.util.ArrayList<>();
+			java.util.List<String> labels = new java.util.ArrayList<>();
+			for (int index = 0; index < maxActions; index++) {
+				int before = random.tokens.size();
+				try {
+					labels.add(ControllerInventoryDurabilityValidation.applyExpandedRandomAction(state, random));
+				} catch (Throwable failure) {
+					java.util.List<RngToken> slice =
+							java.util.List.copyOf(random.tokens.subList(before, random.tokens.size()));
+					slices.add(slice);
+					labels.add(failedLabel(slice));
+					return new ScriptedFailure(scene, seed,
+							ControllerInventoryDurabilityValidation.rootCause(failure), slices, labels);
+				}
+				slices.add(java.util.List.copyOf(random.tokens.subList(before, random.tokens.size())));
 			}
-			slices.add(java.util.List.copyOf(random.tokens.subList(before, random.tokens.size())));
+			return null;
+		} finally {
+			state.close();
 		}
-		return null;
 	}
 
 	private static String replayScript(
@@ -133,11 +137,15 @@ final class FuzzMinimizer {
 	) throws Exception {
 		ControllerInventoryDurabilityValidation.NormalPlayState state =
 				new ControllerInventoryDurabilityValidation.NormalPlayState(registries, script.scene());
-		for (int index : keep) {
-			ControllerInventoryDurabilityValidation.applyExpandedRandomAction(
-					state, new ScriptedRandom(script.slices().get(index)));
+		try {
+			for (int index : keep) {
+				ControllerInventoryDurabilityValidation.applyExpandedRandomAction(
+						state, new ScriptedRandom(script.slices().get(index)));
+			}
+			return null;
+		} finally {
+			state.close();
 		}
-		return null;
 	}
 
 	private static boolean reproduces(

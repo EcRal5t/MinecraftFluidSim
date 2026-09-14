@@ -7,6 +7,7 @@ import static cc.ecisr.mmm.simulation.FuzzConfig.FUZZ_DISK_ROUND_TRIP_INTERVAL;
 import static cc.ecisr.mmm.simulation.FuzzConfig.FUZZ_PARTIAL;
 import static cc.ecisr.mmm.simulation.FuzzConfig.FUZZ_PICKS;
 import static cc.ecisr.mmm.simulation.FuzzConfig.FUZZ_PROGRESS;
+import static cc.ecisr.mmm.simulation.FuzzConfig.JOB_TIMEOUT_MILLIS;
 import static cc.ecisr.mmm.simulation.FuzzConfig.RAMP_DELTAS;
 import static cc.ecisr.mmm.simulation.FuzzConfig.RANDOM_TEMPERATURES;
 import static cc.ecisr.mmm.simulation.FuzzConfig.SCENE_HALF_BOTTOM;
@@ -25,6 +26,8 @@ import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.FluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomainState;
+import cc.ecisr.mmm.fluid.FluidDomainStateAssertions;
 import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.fluid.FluidThermalStepRequest;
@@ -497,6 +500,7 @@ final class ControllerInventoryDurabilityValidation {
 			boolean wasPhysics = region.entityPhysicsEnabled();
 			boolean wasDebug = region.debugOverlays();
 			long wasGeneration = region.checkpointGeneration();
+			FluidDomainState beforeRestart = domain.captureAuthoritativeState();
 			int nextInterval = 1 + random.nextInt(3);
 			region.setEntityPhysicsEnabled(!wasPhysics);
 			region.setDebugOverlays(!wasDebug);
@@ -534,6 +538,8 @@ final class ControllerInventoryDurabilityValidation {
 					"cold restart did not advance the committed checkpoint generation");
 			region = fresh;
 			domain = fresh.domain();
+			FluidDomainStateAssertions.assertSameDurableState(beforeRestart, domain.captureAuthoritativeState(),
+					"cold restart changed durable authoritative state");
 			roundTrip();
 		}
 
@@ -704,8 +710,9 @@ final class ControllerInventoryDurabilityValidation {
 		boolean containerTransfer(java.util.Random random) {
 			settle();
 			long baseGeneration = region.checkpointGeneration();
-			FluidDomain candidateDomain = FluidDomain.restoreAuthoritativeState(
-					region.domain().captureAuthoritativeState());
+			FluidDomainState liveBefore = region.domain().captureAuthoritativeState();
+			FluidDomain candidateDomain = FluidDomain.restoreAuthoritativeState(liveBefore);
+			FluidDomainState candidateBefore = candidateDomain.captureAuthoritativeState();
 			int x = random.nextInt(candidateDomain.sizeX());
 			int y = random.nextInt(candidateDomain.sizeY());
 			int z = random.nextInt(candidateDomain.sizeZ());
@@ -713,7 +720,12 @@ final class ControllerInventoryDurabilityValidation {
 			boolean transferred = random.nextBoolean()
 					? candidateDomain.tryInsertExactVolume(x, y, z, volume, 6, water, true).transferred()
 					: candidateDomain.tryExtractExactVolume(x, y, z, volume, 6, water).transferred();
-			if (!transferred) return false;
+			if (!transferred) {
+				FluidDomainStateAssertions.assertSameState(candidateBefore, candidateDomain.captureAuthoritativeState(),
+						"rejected container transfer mutated the private candidate");
+				return false;
+			}
+			FluidDomainState candidateAfter = candidateDomain.captureAuthoritativeState();
 			double targetVolume = candidateDomain.totalVolumeExact();
 			long targetGeneration = baseGeneration + 1L;
 			long published;
@@ -728,6 +740,8 @@ final class ControllerInventoryDurabilityValidation {
 					+ " instead of " + targetGeneration);
 			check(region.checkpointGeneration() == baseGeneration,
 					"container transfer mutated the live region before adoption");
+			FluidDomainStateAssertions.assertSameState(liveBefore, region.domain().captureAuthoritativeState(),
+					"container transfer mutated the live region before adoption");
 			try {
 				persistence.adoptCommittedContainerCheckpoint(region, baseGeneration, published);
 			} catch (java.io.IOException failure) {
@@ -735,6 +749,8 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			domain = region.domain();
 			check(region.checkpointGeneration() == published, "container transfer did not adopt the published HEAD");
+			FluidDomainStateAssertions.assertSameDurableState(candidateAfter, domain.captureAuthoritativeState(),
+					"container transfer adoption diverged from the committed candidate");
 			check(domain.totalVolumeExact() == targetVolume,
 					"container transfer adopted volume " + domain.totalVolumeExact() + " instead of " + targetVolume);
 			roundTrip();
@@ -862,6 +878,7 @@ final class ControllerInventoryDurabilityValidation {
 					boolean wasPaused = region.paused();
 					FluidRegionLifecycle.State wasState = region.lifecycle().state();
 					int wasInterval = region.stepIntervalTicks();
+					FluidDomainState beforeHandoff = domain.captureAuthoritativeState();
 					try {
 						persistence.checkpointAndUnload(region);
 						persistence.restore(region);
@@ -876,9 +893,14 @@ final class ControllerInventoryDurabilityValidation {
 					check(region.stepIntervalTicks() == wasInterval,
 							"disk checkpoint changed the step interval " + wasInterval + " -> " + region.stepIntervalTicks());
 					domain = region.domain();
+					FluidDomainStateAssertions.assertSameDurableState(beforeHandoff, domain.captureAuthoritativeState(),
+							"disk checkpoint/restore changed durable authoritative state at generation " + generation);
 				}
 			} else {
-				domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+				FluidDomainState beforeRoundTrip = domain.captureAuthoritativeState();
+				domain = FluidDomain.restoreAuthoritativeState(beforeRoundTrip);
+				FluidDomainStateAssertions.assertSameState(beforeRoundTrip, domain.captureAuthoritativeState(),
+						"in-memory capture/restore changed authoritative state at generation " + generation);
 			}
 			if (scene.sealed()) {
 				check(domain.gasBoundary().auditClosed(),
@@ -963,11 +985,17 @@ final class ControllerInventoryDurabilityValidation {
 			FullCapabilityTestFixture.Registries registries, int[] seeds, int actions
 	) throws Exception {
 		FUZZ_PROGRESS = true;
+		java.util.List<Integer> failedSeeds = new java.util.ArrayList<>();
 		for (int seed : seeds) {
 			Failure failure = runExpandedRandomPlay(registries, seed, actions);
 			System.out.println("seed=" + seed + (failure == null ? " PASS" : " FAIL"));
-			if (failure != null) failure.cause().printStackTrace(System.out);
+			if (failure != null) {
+				failedSeeds.add(seed);
+				failure.cause().printStackTrace(System.out);
+			}
 		}
+		check(failedSeeds.isEmpty(), "explicit-seed fuzz found " + failedSeeds.size() + "/" + seeds.length
+				+ " failing seeds: " + failedSeeds);
 	}
 
 
@@ -1015,7 +1043,26 @@ final class ControllerInventoryDurabilityValidation {
 						+ ", failures=" + failureCount.get());
 			}));
 		}
-		for (java.util.concurrent.Future<?> future : futures) future.get();
+		for (int index = 0; index < futures.size(); index++) {
+			try {
+				futures.get(index).get(JOB_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS);
+			} catch (java.util.concurrent.TimeoutException timeout) {
+				futures.get(index).cancel(true);
+				if (results[index] == null) {
+					results[index] = new SceneFailure(jobs.get(index), new Failure(0, new AssertionError(
+							"fuzz job exceeded " + JOB_TIMEOUT_MILLIS + " ms without completing", timeout),
+							List.of("job timed out")));
+					failureCount.incrementAndGet();
+				}
+			} catch (java.util.concurrent.ExecutionException execution) {
+				if (results[index] == null) {
+					Throwable cause = execution.getCause() == null ? execution : execution.getCause();
+					results[index] = new SceneFailure(jobs.get(index),
+							new Failure(0, cause, List.of("job aborted without a report")));
+					failureCount.incrementAndGet();
+				}
+			}
+		}
 		pool.shutdown();
 		java.util.LinkedHashMap<String, Integer> classes = new java.util.LinkedHashMap<>();
 		java.util.LinkedHashMap<String, String> firstWhere = new java.util.LinkedHashMap<>();

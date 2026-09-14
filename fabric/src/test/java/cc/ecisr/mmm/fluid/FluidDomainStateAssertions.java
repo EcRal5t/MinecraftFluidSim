@@ -14,6 +14,21 @@ public final class FluidDomainStateAssertions {
 	private FluidDomainStateAssertions() { }
 
 	public static void assertSameState(FluidDomainState expected, FluidDomainState actual, String context) {
+		compareState(expected, actual, context, true);
+	}
+
+	/**
+	 * Durable projection of {@link #assertSameState}: excludes transient scheduler state that the
+	 * on-disk wire does not carry. The persistence layer serializes chemical mixture/indicator/
+	 * species truth but not the chemistry dirty-cell queue, and it omits the granular deposit
+	 * scheduler queues and ages; those are rebuilt on load. Physical inventory stays bit-compared.
+	 */
+	public static void assertSameDurableState(FluidDomainState expected, FluidDomainState actual, String context) {
+		compareState(expected, actual, context, false);
+	}
+
+	private static void compareState(FluidDomainState expected, FluidDomainState actual, String context,
+	                                 boolean includeSchedulers) {
 		require(expected != null && actual != null, context + ": state must not be null");
 		require(expected.config().equals(actual.config()), context + ": solver config changed");
 		require(expected.maximumParticleCount() == actual.maximumParticleCount(),
@@ -32,10 +47,17 @@ public final class FluidDomainStateAssertions {
 			case CHEMICAL -> compareChemicals(expected.chemicals(), actual.chemicals(),
 					context + " chemical carrier");
 		}
-		require(Arrays.equals(expected.copyChemicalDirtyCells(), actual.copyChemicalDirtyCells()),
-				context + ": chemical dirty-cell schedule changed");
+		if (includeSchedulers) {
+			require(Arrays.equals(expected.copyChemicalDirtyCells(), actual.copyChemicalDirtyCells()),
+					context + ": chemical dirty-cell schedule changed");
+		}
 		compareGranular(expected.granular(), actual.granular(), context);
-		compareGranularDynamics(expected.granularDynamics(), actual.granularDynamics(), context);
+		if (includeSchedulers) {
+			compareGranularDynamics(expected.granularDynamics(), actual.granularDynamics(), context);
+		} else {
+			require((expected.granularDynamics() == null) == (actual.granularDynamics() == null),
+					context + ": granular scheduler presence changed");
+		}
 		compareGas(expected.gas(), actual.gas(), context);
 		compareThermal(expected.thermal(), actual.thermal(), context);
 		comparePendingPhaseVolume(expected.pendingPhaseVolume(), actual.pendingPhaseVolume(), context);

@@ -13,6 +13,12 @@ final class FuzzConfig {
 	static final int FUZZ_DISK_ROUND_TRIP_INTERVAL = 4;
 	static final int SCENE_HALF_BOTTOM = 0x33;
 
+	/**
+	 * Per-job wall-clock budget. Deliberately generous so the known slow scenes are never misreported
+	 * as hangs; override with -Dmmm.fuzzJobTimeoutMillis=... when narrowing.
+	 */
+	static final long JOB_TIMEOUT_MILLIS = Long.getLong("mmm.fuzzJobTimeoutMillis", 30L * 60L * 1000L);
+
 	static final double[] RANDOM_TEMPERATURES = {
 			1.0, 50.0, 150.0, 273.15, 293.15, 320.0, 373.15, 600.0, 1_500.0, 3_000.0
 	};
